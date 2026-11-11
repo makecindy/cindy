@@ -8,6 +8,7 @@
 
 export { registerScheduleListTool } from './list.js';
 export { registerScheduleGetTool } from './get.js';
+export { registerScheduleWebhookTools } from './webhook.js';
 export { registerScheduleCreateTool } from './create.js';
 export { registerScheduleUpdateTool } from './update.js';
 export { registerScheduleDeleteTool } from './delete.js';
@@ -18,6 +19,13 @@ export { registerScheduleListRunsTool } from './listRuns.js';
 export { registerScheduleSilenceCurrentRunTool } from './silenceCurrentRun.js';
 export { registerScheduleNotifyCurrentRunTool } from './notifyCurrentRun.js';
 export { registerScheduleSetPreRunHookTool } from './setPreRunHook.js';
+export { registerScheduleListModelsTool } from './listModels.js';
 
 export { classifySchedulerError } from './errors.js';
 export type { SchedulerToolError, SchedulerToolErrorCode } from './errors.js';
+export type {
+  SchedulerDevice,
+  SchedulerRemoteDeps,
+  SchedulerRemoteOp,
+  SchedulerRemoteResult,
+} from './_devices.js';

@@ -4,6 +4,7 @@ import {
   insertComposerDocumentForRestore,
   normalizeComposerDocumentJSON,
   plainTextToComposerDocument,
+  stripHostCapabilityChips,
 } from '@/lib/composerListDocument';
 
 const bulletListDocument = (text: string) => ({
@@ -434,4 +435,107 @@ describe('composer list document normalization', () => {
       bulletListDocument('C').content[0],
     ]);
   });
+});
+
+describe('stripHostCapabilityChips', () => {
+  const hostCapabilityChip = () => ({
+    type: 'mentionChip',
+    attrs: {
+      kind: 'plugin-capability',
+      label: 'iOS Simulator',
+      path: 'ios-simulator',
+      pluginId: 'cindy-ios-simulator',
+      sourceLabel: 'iOS Simulator',
+    },
+  });
+
+  it('removes host capability chips while preserving surrounding text', () => {
+    const doc = {
+      type: 'doc',
+      content: [
+        {
+          type: 'paragraph',
+          content: [
+            hostCapabilityChip(),
+            { type: 'text', text: ' ' },
+            { type: 'text', text: '打开模拟器' },
+          ],
+        },
+      ],
+    };
+
+    expect(stripHostCapabilityChips(doc)).toEqual({
+      type: 'doc',
+      content: [
+        {
+          type: 'paragraph',
+          content: [
+            { type: 'text', text: ' ' },
+            { type: 'text', text: '打开模拟器' },
+          ],
+        },
+      ],
+    });
+    expect(normalizeComposerDocumentJSON(doc)).toEqual(stripHostCapabilityChips(doc));
+  });
+
+  it('leaves non-capability chips (slash / session / plugin-resource) untouched', () => {
+    const doc = {
+      type: 'doc',
+      content: [
+        {
+          type: 'paragraph',
+          content: [
+            { type: 'mentionChip', attrs: { kind: 'slash', label: '/plan', path: '/plan' } },
+            { type: 'text', text: '继续' },
+          ],
+        },
+      ],
+    };
+
+    expect(stripHostCapabilityChips(doc)).toEqual(doc);
+  });
+
+  it('recursively strips chips nested inside lists', () => {
+    const doc = {
+      type: 'doc',
+      content: [
+        {
+          type: 'bulletList',
+          content: [
+            {
+              type: 'listItem',
+              content: [
+                {
+                  type: 'paragraph',
+                  content: [hostCapabilityChip(), { type: 'text', text: '第一条' }],
+                },
+              ],
+            },
+          ],
+        },
+      ],
+    };
+
+    expect(stripHostCapabilityChips(doc)).toEqual({
+      type: 'doc',
+      content: [
+        {
+          type: 'bulletList',
+          content: [
+            {
+              type: 'listItem',
+              content: [
+                {
+                  type: 'paragraph',
+                  content: [{ type: 'text', text: '第一条' }],
+                },
+              ],
+            },
+          ],
+        },
+      ],
+    });
+  });
+
 });

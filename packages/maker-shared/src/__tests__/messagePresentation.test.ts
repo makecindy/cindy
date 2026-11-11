@@ -3,6 +3,7 @@ import {
   buildMessageActionBarPresentation,
   countMessageRenderItemDiffs,
   isToolErrorLike,
+  isToolResultFailureLike,
   summarizeToolUseText,
   summarizeMessageBubblePresentation,
   summarizeTodoCardPresentation,
@@ -12,6 +13,8 @@ import {
   todoStatusPresentation,
   type ToolRowWording,
 } from '../messagePresentation';
+import type { PresentationLocalizer } from '../presentationLocalization';
+import { describeToolUse } from '../toolUseDescriptor';
 import type {
   MessageRenderNormalizedMessage,
   MessageRenderSourceMessageLike,
@@ -38,6 +41,28 @@ function message(id: string, patch: Partial<TestMessage> = {}): TestMessage {
 }
 
 describe('messagePresentation', () => {
+  // Unit: plugin/MCP content mentioning errors is data, not execution status.
+  // Previous content-tool cases covered Read/Search only. Preserve explicit MCP
+  // failure signals while a successful skill/document response stays neutral.
+  it.each([
+    ['{"ok":true,"result":"遇到错误时重试；失败记录保留"}', false],
+    ['Available skills\nError handling and timeout recovery', false],
+    ['{"isError":false,"content":[{"type":"text","text":"failure recovery"}]}', false],
+    ['{"isError":true,"content":[{"type":"text","text":"Unavailable"}]}', true],
+    ['{"ok":false,"error":"Unavailable"}', true],
+    ['Error: permission denied', true],
+    // Imported Claude history keeps result text without the original is_error.
+    ['MCP error -32603: request failed', true],
+    ['MCP error: request failed', true],
+    ['Available skills\nMCP error -32603: request failed is a recovery example', false],
+  ])('classifies MCP result %s as failure=%s', (result, failed) => {
+    expect(isToolResultFailureLike(describeToolUse('mcp__helper__call_tool', {}), result)).toBe(failed);
+    const row = message('mcp-result', {
+      label: 'mcp__helper__call_tool', body: '', secondaryBody: result,
+      source: { clientId: 'mcp-result', content: { toolName: 'mcp__helper__call_tool', input: {} }, createdAt: '2026-01-01T00:00:00.000Z' },
+    });
+    expect(summarizeToolRowPresentation(row).hasError).toBe(failed);
+  });
   it('exposes the same compact tool wording to remote channel previews', () => {
     expect(summarizeToolUseText('Read', { file_path: '/repo/src/app.ts' })).toEqual({
       label: '读取 app.ts',
@@ -98,6 +123,7 @@ describe('messagePresentation', () => {
     expect(buildMessageActionBarPresentation({
       align: 'user',
       canCopy: true,
+      canEdit: true,
       canFork: true,
       hasMoreActions: true,
       hasTime: true,
@@ -107,7 +133,8 @@ describe('messagePresentation', () => {
       align: 'right',
       buttonSize: 24,
       iconSize: 14,
-      items: ['time', 'copy', 'fork', 'more'],
+      // Desktop user row: [time][copy][fork][edit][more]; edit only on the last user message.
+      items: ['time', 'copy', 'fork', 'edit', 'more'],
     });
 
     expect(buildMessageActionBarPresentation({
@@ -118,7 +145,7 @@ describe('messagePresentation', () => {
       hasTime: true,
       hasTurnCost: true,
       isStreaming: true,
-    }).items).toEqual(['streaming']);
+    }).items).toEqual([]);
   });
 
   it('summarizes tool groups as desktop-style headers without mobile detail badges', () => {
@@ -450,6 +477,9 @@ describe('messagePresentation', () => {
     expect(isToolErrorLike(message('json', { secondaryBody: '{"status":"failed"}' }))).toBe(true);
     expect(isToolErrorLike(message('text', { secondaryBody: 'process exited with exit code 2' }))).toBe(true);
     expect(isToolErrorLike(message('ok', { secondaryBody: '{"ok":true}' }))).toBe(false);
+    // 成功结果里的空 errors 数组不是失败；非空数组仍是。
+    expect(isToolErrorLike(message('empty-errors', { secondaryBody: '{"ok":true,"errors":[]}' }), false)).toBe(false);
+    expect(isToolErrorLike(message('errors', { secondaryBody: '{"errors":["boom"]}' }), false)).toBe(true);
     // 关闭关键词启发式后只信结构化错误记录。
     expect(isToolErrorLike(message('kw-off', { secondaryBody: 'build failed with error' }), false)).toBe(false);
     expect(isToolErrorLike(message('rec-on', { secondaryBody: '{"status":"failed"}' }), false)).toBe(true);
@@ -581,7 +611,7 @@ describe('messagePresentation', () => {
     };
 
     expect(summarizeWorkGroupPresentation(workGroup)).toEqual({
-      title: '已工作 1m 5s',
+      title: 'Worked for 1m 5s',
       subtitle: '',
       header: {
         chevronPosition: 'trailing',
@@ -590,19 +620,88 @@ describe('messagePresentation', () => {
         iconSize: 14,
         summaryCount: 0,
         subtitle: null,
-        title: '已工作 1m 5s',
+        title: 'Worked for 1m 5s',
         variant: 'plain',
       },
     });
 
     expect(summarizeWorkGroupPresentation({ ...workGroup, isStreaming: true })).toMatchObject({
-      title: '正在工作…',
-      header: { title: '正在工作…' },
+      title: 'Working…',
+      header: { title: 'Working…' },
     });
+
+    expect(summarizeWorkGroupPresentation({ ...workGroup, durationMs: 77_516_000 })).toMatchObject({
+      title: 'Worked for 21h 31m',
+      header: { title: 'Worked for 21h 31m' },
+    });
+    expect(summarizeWorkGroupPresentation({ ...workGroup, durationMs: 183_845_000 }).title)
+      .toBe('Worked for 2d 3h 4m');
+
+    expect(summarizeWorkGroupPresentation({
+      ...workGroup,
+      durationMs: undefined,
+      isStreaming: false,
+    }).title).toBe('Work details');
 
     expect(countMessageRenderItemDiffs([
       { type: 'tool_group', key: 'plain-tools', tools: [editTool] },
       workGroup,
     ])).toBe(2);
+  });
+
+  it('localizes work-group titles and tool-row read verbs through injected i18n', () => {
+    const catalogs: Record<string, Record<string, string>> = {
+      en: {
+        'chat.workGroup.working': 'Working…',
+        'chat.workGroup.worked': 'Worked for {{duration}}',
+        'chat.workGroup.workDetails': 'Work details',
+      },
+      'zh-CN': {
+        'chat.workGroup.working': '正在工作…',
+        'chat.workGroup.worked': '已工作 {{duration}}',
+        'chat.workGroup.workDetails': '工作过程',
+      },
+    };
+    const localizerFor = (locale: 'en' | 'zh-CN'): PresentationLocalizer => ({
+      translate: (key, fallback, values) => {
+        let text = catalogs[locale][key] ?? fallback;
+        if (values) {
+          for (const [name, value] of Object.entries(values)) {
+            text = text.replaceAll(`{{${name}}}`, String(value ?? ''));
+          }
+        }
+        return text;
+      },
+    });
+    const workGroup: MessageRenderWorkGroupItem<TestMessage> = {
+      type: 'work_group',
+      key: 'work-i18n',
+      durationMs: 65_000,
+      children: [],
+    };
+    const readTool = message('read-en', {
+      label: 'Read',
+      source: {
+        clientId: 'read-en',
+        content: { toolName: 'Read', input: { file_path: '/repo/src/app.ts' } },
+        createdAt: '2026-01-01T00:00:00.000Z',
+      },
+    });
+    const enWording: ToolRowWording = {
+      verb: (key) => (key === 'read' ? 'Read' : `verb:${key}`),
+      intentVerb: (action) => `intent:${action}`,
+      updateFilesLabel: (count) => `Updated ${count} files`,
+    };
+
+    expect(summarizeWorkGroupPresentation(workGroup, localizerFor('en')).title).toBe('Worked for 1m 5s');
+    expect(summarizeWorkGroupPresentation({ ...workGroup, isStreaming: true }, localizerFor('en')).title)
+      .toBe('Working…');
+    expect(summarizeWorkGroupPresentation(workGroup, localizerFor('zh-CN')).title).toBe('已工作 1m 5s');
+    expect(summarizeWorkGroupPresentation({ ...workGroup, isStreaming: true }, localizerFor('zh-CN')).title)
+      .toBe('正在工作…');
+
+    expect(summarizeToolRowPresentation(readTool).label).toBe('读取 app.ts');
+    expect(summarizeToolRowPresentation(readTool, { wording: enWording }).label).toBe('Read app.ts');
+    expect(summarizeToolRowPresentation(readTool, { wording: enWording }).label).not.toContain('读取');
   });
 });

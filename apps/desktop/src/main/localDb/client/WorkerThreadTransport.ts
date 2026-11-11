@@ -1,17 +1,45 @@
+import { fastModeToStorage } from '@cindy/maker-shared';
+import { extractToolResultDiagnostics, sanitizeToolResultDiagnostics } from '@cindy/maker-shared/tool-result-compaction';
+import { runPluginUsageTransaction } from '../worker/opHandlers/pluginUsageTx.js';
+import { runSessionImportTransaction } from '../worker/opHandlers/sessionImportTx.js';
+import { runTaskTagsTransaction } from '../worker/opHandlers/taskTagsTx.js';
+import { recordMediaSpend } from '../worker/opHandlers/mediaSpendTx.js';
+import { recordPiUsage } from '../worker/opHandlers/piUsageTx.js';
+import { createAutoReviewIntentProjection } from '@cindy/maker-shared/auto-review-intent';
+import { batchAutoReviewProjection, readAutoReviewProjection } from '../autoReviewProjection.js';
+import { CLOSE_SHARED_TASKS_FOR_SESSION_SQL } from '../sharedTaskClosureSql.js';
 import fs from 'node:fs';
 import path from 'node:path';
 import { Worker } from 'node:worker_threads';
+import { compactToolCardResult } from '../../../shared/toolResultPersistCap.js';
 
-import type {
-  DbTransport,
-  DbTransportTerminationInfo,
-  LogEvent,
-  RpcRequest,
-  VecStatusEvent,
-  WorkerMessage,
+import {
+  createDbTransportError,
+  DB_TRANSPORT_NOT_SENT,
+  DB_TRANSPORT_OUTCOME_UNKNOWN,
+  type DbTransport,
+  type DbTransportTerminationInfo,
+  type LogEvent,
+  type RpcRequest,
+  type VecStatusEvent,
+  type WorkerMessage,
 } from './DbTransport.js';
+import { isBackgroundDbRpc } from './rpcAdmission.js';
 
 const WORKER_CODE = `
+const sanitizeToolResultDiagnostics = ${sanitizeToolResultDiagnostics.toString()};
+const extractToolResultDiagnostics = ${extractToolResultDiagnostics.toString()};
+const compactToolCardResult = ${compactToolCardResult.toString()};
+const createAutoReviewIntentProjection = ${createAutoReviewIntentProjection.toString()};
+const readAutoReviewProjection = ${readAutoReviewProjection.toString()};
+const batchAutoReviewProjection = ${batchAutoReviewProjection.toString()};
+const CLOSE_SHARED_TASKS_FOR_SESSION_SQL = ${JSON.stringify(CLOSE_SHARED_TASKS_FOR_SESSION_SQL)};
+const runPluginUsageTransaction = ${runPluginUsageTransaction.toString()};
+const runSessionImportTransaction = ${runSessionImportTransaction.toString()};
+const runTaskTagsTransaction = ${runTaskTagsTransaction.toString()};
+const recordMediaSpend = ${recordMediaSpend.toString()};
+const recordPiUsage = ${recordPiUsage.toString()};
+const fastModeToStorage = ${fastModeToStorage.toString()};
 // 旧版 inline worker fallback。默认运行时走 .vite/build/dbWorker.js；
 // 这段只作为打包路径回滚口保留，后续验证 macOS / Windows packaged 后删除。
 const { parentPort, workerData } = require('node:worker_threads');
@@ -58,6 +86,86 @@ function applyPragmas(nextDb) {
   nextDb.pragma('mmap_size = 268435456');
   nextDb.pragma('cache_size = -65536');
   nextDb.pragma('busy_timeout = 5000');
+}
+
+function registerCjkSeg(nextDb) {
+  const hanChar = /\\p{Script=Han}/u;
+  const letterOrNumber = /[\\p{L}\\p{N}]/u;
+  const mark = /\\p{M}/u;
+  const whitelist = "('user', 'assistant', 'ask_user', 'plan_review')";
+  nextDb.function('cjk_seg', { deterministic: true }, (value) => {
+    if (value == null) return null;
+    const text = typeof value === 'string' ? value : String(value);
+    if (text.length === 0) return text;
+    const chars = Array.from(text);
+    let out = '';
+    let lastBoundary = '';
+    for (let i = 0; i < chars.length; i += 1) {
+      const ch = chars[i];
+      if (mark.test(ch)) {
+        out += ch;
+        continue;
+      }
+      if (lastBoundary) {
+        const hanNow = hanChar.test(ch);
+        const hanPrev = hanChar.test(lastBoundary);
+        if ((hanNow && hanPrev) || (hanNow && letterOrNumber.test(lastBoundary)) || (hanPrev && letterOrNumber.test(ch))) {
+          out += ' ';
+        }
+      }
+      out += ch;
+      lastBoundary = ch;
+    }
+    return out;
+  });
+  const row = nextDb.prepare("SELECT cjk_seg(?) AS v").get('探针');
+  if (!row || row.v !== '探 针') {
+    throw new Error("cjk_seg probe failed: expected '探 针', got " + JSON.stringify(row && row.v));
+  }
+  const hasMessages = !!nextDb.prepare("SELECT 1 FROM sqlite_master WHERE type='table' AND name=?").get('messages');
+  const hasFts = !!nextDb.prepare("SELECT 1 FROM sqlite_master WHERE type='table' AND name=?").get('messages_fts');
+  const hasRows = !!nextDb.prepare("SELECT 1 FROM sqlite_master WHERE type='table' AND name=?").get('messages_fts_rows');
+  if (!hasMessages || !hasFts || !hasRows) return;
+  nextDb.exec('DROP TRIGGER IF EXISTS temp.messages_fts_insert_cjk;');
+  nextDb.exec('DROP TRIGGER IF EXISTS temp.messages_fts_update_cjk;');
+  nextDb.exec(
+    "CREATE TEMP TRIGGER messages_fts_insert_cjk AFTER INSERT ON messages " +
+    "WHEN new.rewind_at IS NULL AND new.role IN " + whitelist + " BEGIN " +
+    "INSERT OR IGNORE INTO messages_fts_rows(message_id) VALUES (new.id); " +
+    "INSERT OR REPLACE INTO messages_fts(rowid, message_id, session_id, role, content) " +
+    "SELECT fts_rowid, new.id, new.session_id, new.role, cjk_seg(new.content) " +
+    "FROM messages_fts_rows WHERE message_id = new.id; END;",
+  );
+  nextDb.exec(
+    "CREATE TEMP TRIGGER messages_fts_update_cjk AFTER UPDATE OF id, session_id, role, content, rewind_at ON messages " +
+    "WHEN old.id IS NOT new.id OR old.session_id IS NOT new.session_id OR old.role IS NOT new.role " +
+    "OR old.content IS NOT new.content OR old.rewind_at IS NOT new.rewind_at BEGIN " +
+    "DELETE FROM messages_fts WHERE rowid = (SELECT fts_rowid FROM messages_fts_rows WHERE message_id = old.id); " +
+    "UPDATE messages_fts_rows SET message_id = new.id WHERE message_id = old.id AND old.id IS NOT new.id; " +
+    "INSERT OR IGNORE INTO messages_fts_rows(message_id) SELECT new.id " +
+    "WHERE new.rewind_at IS NULL AND new.role IN " + whitelist + "; " +
+    "INSERT OR REPLACE INTO messages_fts(rowid, message_id, session_id, role, content) " +
+    "SELECT fts_rowid, new.id, new.session_id, new.role, cjk_seg(new.content) FROM messages_fts_rows " +
+    "WHERE message_id = new.id AND new.rewind_at IS NULL AND new.role IN " + whitelist + "; END;",
+  );
+}
+
+function cjkFtsTempTriggersInstalled(nextDb) {
+  return nextDb.prepare(
+    "SELECT count(*) AS n FROM temp.sqlite_master WHERE type='trigger' AND name IN ('messages_fts_insert_cjk','messages_fts_update_cjk')",
+  ).get().n === 2;
+}
+
+function ensureCjkFtsTempTriggersInstalled(nextDb) {
+  const hasMessages = !!nextDb.prepare("SELECT 1 FROM sqlite_master WHERE type='table' AND name=?").get('messages');
+  const hasFts = !!nextDb.prepare("SELECT 1 FROM sqlite_master WHERE type='table' AND name=?").get('messages_fts');
+  const hasRows = !!nextDb.prepare("SELECT 1 FROM sqlite_master WHERE type='table' AND name=?").get('messages_fts_rows');
+  if (!hasMessages || !hasFts || !hasRows) return;
+  if (cjkFtsTempTriggersInstalled(nextDb)) return;
+  registerCjkSeg(nextDb);
+  if (!cjkFtsTempTriggersInstalled(nextDb)) {
+    throw new Error('cjk_seg temp triggers failed to install after retry; refusing to start with a silently-unindexed messages table (#3841)');
+  }
 }
 
 function hashMigrationFile(filePath) {
@@ -203,7 +311,12 @@ function createDatabase(opts) {
   const dbOpts = opts && opts.nativeBinding ? { nativeBinding: opts.nativeBinding } : {};
   const nextDb = new Database(dbPath, dbOpts);
   try {
+    // 顺序硬约束（#3841）：temp_store = MEMORY 会立即删除连接上所有已存在的
+    // TEMP 对象（SQLite 文档化语义），pragma 必须先于 TEMP 触发器挂载执行。
+    // 注意：本函数整体位于 WORKER_CODE 模板串内，注释里不能出现反引号。
     applyPragmas(nextDb);
+    registerCjkSeg(nextDb);
+    ensureCjkFtsTempTriggersInstalled(nextDb);
     if (dbPath !== ':memory:') {
       const vec = loadSqliteVec(nextDb, opts.sqliteVecExtPath);
       postLog(vec.loaded ? 'info' : 'warn', 'db-worker', {
@@ -260,18 +373,75 @@ function requireReadyDb() {
   throw err;
 }
 
-const LOCAL_DUPLICATE_WINDOW_MS = 5 * 60 * 1000;
+function worktreeReferenceQuery(nextDb) {
+  const info = nextDb.prepare('PRAGMA table_info(sessions)').all();
+  const columns = new Set(info.map((column) => column.name));
+  const hasWorktree = columns.has('worktree_path');
+  const hasSource = columns.has('source');
+  const hasRemote = columns.has('remote_host_id');
+  if (!['id', 'status', 'working_dir'].every((name) => columns.has(name))
+    || (hasSource && !hasWorktree) || (hasRemote && !hasSource)) {
+    throw new Error('unsupported task reference schema');
+  }
+  const status = hasRemote ? 'status' : 'NULL';
+  return 'SELECT id, ' + status + ' AS status, ' + (hasSource ? 'source' : 'NULL') + ' AS source, '
+    + 'working_dir AS workingDir, ' + (hasWorktree ? 'worktree_path' : 'NULL') + ' AS worktreePath '
+    + 'FROM sessions' + (hasRemote ? ' WHERE remote_host_id IS NULL' : '');
+}
+
+function readLocalWorktreeReferences() {
+  const location = db.prepare('PRAGMA database_list').all();
+  const main = location.find((entry) => entry.name === 'main');
+  const databasePath = main && main.file;
+  if (!databasePath || !path.isAbsolute(databasePath)) throw new Error('task database path unavailable');
+  const currentPath = path.resolve(databasePath);
+  const root = path.dirname(currentPath);
+  const profiles = path.join(root, 'profiles');
+  if (fs.existsSync(profiles) && fs.readdirSync(profiles).length) {
+    throw new Error('profile database catalog requires a compatible reader');
+  }
+  const names = fs.readdirSync(root).filter((name) => /^(?:cindy|xdt)-.+\.db$/.test(name));
+  if (!names.includes(path.basename(currentPath))) throw new Error('unknown task database layout');
+  const rows = [];
+  for (const name of names) {
+    const file = path.join(root, name);
+    if (!fs.lstatSync(file).isFile()) throw new Error('task database is not a regular file');
+    const isCurrent = file === currentPath;
+    const nextDb = isCurrent ? db : new Database(file, {
+      readonly: true, fileMustExist: true,
+      ...(workerData && workerData.nativeBinding ? { nativeBinding: workerData.nativeBinding } : {}),
+    });
+    try {
+      const references = nextDb.transaction(() => nextDb.prepare(worktreeReferenceQuery(nextDb)).all())();
+      rows.push(...references.map((row) => ({ ...row, currentDatabase: isCurrent })));
+    } finally {
+      if (!isCurrent) nextDb.close();
+    }
+  }
+  const after = fs.readdirSync(root).filter((name) => /^(?:cindy|xdt)-.+\.db$/.test(name));
+  if (after.length !== names.length || after.some((name) => !names.includes(name))) {
+    throw new Error('task database catalog changed during scan');
+  }
+  return rows;
+}
+
 const MAX_ATTEMPTS = 5;
 const RETRY_BACKOFF_MS = [1000, 5000, 30000, 5 * 60000, 30 * 60000];
 
 function dispatchTx(readyDb, payload) {
+  return batchAutoReviewProjection(readyDb, expectString(asRecord(payload, 'tx args').name, 'name'), () => dispatchTransaction(readyDb, payload));
+}
+
+function dispatchTransaction(readyDb, payload) {
   const request = asRecord(payload, 'tx args');
   const name = expectString(request.name, 'name');
   switch (name) {
-    case 'codex.importMessages':
-      return codexImportMessages(readyDb, request.args);
-    case 'claude.importMessages':
-      return claudeImportMessages(readyDb, request.args);
+    case 'usage.recordMediaSpend':
+      return recordMediaSpend(readyDb, request.args);
+    case 'usage.recordPiUsage':
+      return recordPiUsage(readyDb, request.args);
+    case 'authorization.readProjection':
+      return readAutoReviewProjection(readyDb, request.args, createAutoReviewIntentProjection);
     case 'rewind.commit':
       return rewindCommit(readyDb, request.args);
     case 'session.treeRehydrate':
@@ -300,23 +470,193 @@ function dispatchTx(readyDb, payload) {
       return orcaRemoveWorker(readyDb, request.args);
     case 'orca.cancelStaleTeams':
       return orcaCancelStaleTeams(readyDb, request.args);
+    case 'orca.archiveWorkersByTeam':
+      return orcaArchiveWorkersByTeam(readyDb, request.args);
+    case 'orca.reconcileInactiveTeamWorkersForLead':
+      return orcaReconcileInactiveTeamWorkersForLead(readyDb, request.args);
     case 'sessions.renameTitles':
       return sessionsRenameTitles(readyDb, request.args);
     case 'sessions.setStatus':
       return sessionsSetStatus(readyDb, request.args);
+    case 'sessions.setTerminalStatus':
+      return sessionsSetTerminalStatus(readyDb, request.args);
+    case 'recentWorkdirs.mergeWindowsIdentity':
+      return recentWorkdirsMergeWindowsIdentity(readyDb, request.args);
+    case 'recentWorkdirs.removeWindowsIdentity':
+      return recentWorkdirsRemoveWindowsIdentity(readyDb, request.args);
+    case 'pluginUsage.execute': return runPluginUsageTransaction(readyDb, request.args);
+    case 'sessionImport.execute': return runSessionImportTransaction(readyDb, request.args);
+    case 'taskTags.execute': return runTaskTagsTransaction(readyDb, request.args);
+    case 'projectAliases.replaceIdentity':
+      return projectAliasesReplaceIdentity(readyDb, request.args);
+    case 'toolResults.compactSession':
+      return compactSessionToolResults(readyDb, request.args);
     case 'session.agentSwitchFallback':
       return sessionAgentSwitchFallback(readyDb, request.args);
+    case 'context.rebuild':
+      return contextRebuild(readyDb, request.args);
+    case 'message.insert':
+      return messageInsert(readyDb, request.args);
+    case 'message.updateContent':
+      return messageUpdateContent(readyDb, request.args);
+    case 'message.leaseMutate':
+      return messageLeaseMutate(readyDb, request.args);
+    case 'message.rewindUserAfterClear':
+      return messageRewindUserAfterClear(readyDb, request.args);
+    case 'message.purgeRewoundSchedulerPrompts':
+      return messagePurgeRewoundSchedulerPrompts(readyDb, request.args);
     case 'message.delete':
       return messageDelete(readyDb, request.args);
     case 'im.deleteBindings':
       return imDeleteBindings(readyDb, request.args);
     case 'im.replaceBinding':
       return imReplaceBinding(readyDb, request.args);
+    case 'skillUsage.applyMutation':
+      return skillUsageApplyMutation(readyDb, request.args);
     case 'session.importShare':
       return sessionImportShare(readyDb, request.args);
     default:
       throw Object.assign(new Error('unknown tx: ' + name), { code: 'UNKNOWN_TX' });
   }
+}
+
+function recentWorkdirsMergeWindowsIdentity(readyDb, args) {
+  const payload = asRecord(args, 'recentWorkdirs.mergeWindowsIdentity args');
+  const path = expectString(payload.path, 'path');
+  const lastUsedAt = expectNumber(payload.lastUsedAt, 'lastUsedAt');
+  return readyDb.transaction(() => {
+    const matches = recentWorkdirWindowsIdentityRows(readyDb, path);
+    const representative = matches
+      .slice()
+      .sort((a, b) => b.lastUsedAt - a.lastUsedAt || a.rowid - b.rowid)[0];
+    const representativePath = representative?.path ?? path;
+    const newestTimestamp = Math.max(lastUsedAt, ...matches.map((row) => row.lastUsedAt));
+    readyDb
+      .prepare(
+        'INSERT INTO recent_workdirs (path, last_used_at) VALUES (?, ?) ON CONFLICT(path) DO UPDATE SET last_used_at = MAX(recent_workdirs.last_used_at, excluded.last_used_at)',
+      )
+      .run(representativePath, newestTimestamp);
+    const removeVariant = readyDb.prepare('DELETE FROM recent_workdirs WHERE path = ?');
+    for (const row of matches) {
+      if (row.path !== representativePath) removeVariant.run(row.path);
+    }
+  })();
+}
+
+function recentWorkdirsRemoveWindowsIdentity(readyDb, args) {
+  const payload = asRecord(args, 'recentWorkdirs.removeWindowsIdentity args');
+  const path = expectString(payload.path, 'path');
+  return readyDb.transaction(() => {
+    const matches = recentWorkdirWindowsIdentityRows(readyDb, path);
+    const removeVariant = readyDb.prepare('DELETE FROM recent_workdirs WHERE path = ?');
+    let changes = 0;
+    for (const row of matches) changes += removeVariant.run(row.path).changes;
+    return { changes };
+  })();
+}
+
+function recentWorkdirWindowsIdentityRows(readyDb, path) {
+  const identity = path.toLowerCase();
+  return readyDb
+    .prepare('SELECT rowid, path, last_used_at AS lastUsedAt FROM recent_workdirs')
+    .all()
+    .filter((row) => row.path.toLowerCase() === identity);
+}
+
+function projectAliasesReplaceIdentity(readyDb, args) {
+  const payload = asRecord(args, 'projectAliases.replaceIdentity args');
+  const projectKey = expectString(payload.projectKey, 'projectKey');
+  const comparisonKey = expectString(payload.comparisonKey, 'comparisonKey');
+  if (typeof payload.foldCase !== 'boolean') throw invalidArgs('foldCase must be a boolean');
+  const alias = nullableString(payload.alias);
+  const updatedAt = expectNumber(payload.updatedAt, 'updatedAt');
+  return readyDb.transaction(() => {
+    const rows = readyDb.prepare('SELECT project_key AS projectKey FROM project_aliases').all();
+    const removeAlias = readyDb.prepare('DELETE FROM project_aliases WHERE project_key = ?');
+    for (const row of rows) {
+      const identity = payload.foldCase ? row.projectKey.toLowerCase() : row.projectKey;
+      if (identity === comparisonKey) removeAlias.run(row.projectKey);
+    }
+    if (alias == null) return null;
+    readyDb
+      .prepare('INSERT INTO project_aliases (project_key, alias, updated_at) VALUES (?, ?, ?)')
+      .run(projectKey, alias, updatedAt);
+    return { projectKey, alias, updatedAt };
+  })();
+}
+
+// Keep in sync with worker/opHandlers/tx.ts:skillUsageApplyMutation.
+function skillUsageApplyMutation(readyDb, args) {
+  const payload = asRecord(args, 'skillUsage.applyMutation args');
+  const kind = expectString(payload.kind, 'kind');
+  if (kind === 'persist') {
+    const rawSource = asRecord(payload.source, 'source');
+    const source = {
+      rawFilePath: expectString(rawSource.rawFilePath, 'source.rawFilePath'),
+      analyzerVersion: expectString(rawSource.analyzerVersion, 'source.analyzerVersion'),
+      agentKind: expectString(rawSource.agentKind, 'source.agentKind'),
+      sessionId: expectString(rawSource.sessionId, 'source.sessionId'),
+      sdkSessionId: expectString(rawSource.sdkSessionId, 'source.sdkSessionId'),
+      mtimeMs: expectNumber(rawSource.mtimeMs, 'source.mtimeMs'),
+      sizeBytes: expectNumber(rawSource.sizeBytes, 'source.sizeBytes'),
+      scannedAt: expectNumber(rawSource.scannedAt, 'source.scannedAt'),
+    };
+    const exposures = expectArray(payload.exposures, 'exposures');
+    const upsertSource = readyDb.prepare(
+      "INSERT INTO skill_usage_sources (raw_file_path, analyzer_version, agent_kind, session_id, sdk_session_id, mtime_ms, size_bytes, last_scanned_at, status, error) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'ok', NULL) ON CONFLICT(raw_file_path) DO UPDATE SET analyzer_version = excluded.analyzer_version, agent_kind = excluded.agent_kind, session_id = excluded.session_id, sdk_session_id = excluded.sdk_session_id, mtime_ms = excluded.mtime_ms, size_bytes = excluded.size_bytes, last_scanned_at = excluded.last_scanned_at, status = 'ok', error = NULL",
+    );
+    const deleteExposure = readyDb.prepare(
+      'DELETE FROM skill_usage_exposures WHERE raw_file_path = ? AND analyzer_version = ?',
+    );
+    const insertExposure = readyDb.prepare(
+      'INSERT INTO skill_usage_exposures (id, analyzer_version, raw_file_path, raw_line_no, session_id, sdk_session_id, agent_kind, skill_name, skill_path, skill_document_hash, exposure_content_hash, document_hash_source, source, tool_use_id, seen_at, tool_call_count, repeated_tool_call_count, tool_error_count, command_call_count, command_failure_count) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
+    );
+    return readyDb.transaction(() => {
+      upsertSource.run(source.rawFilePath, source.analyzerVersion, source.agentKind, source.sessionId, source.sdkSessionId, source.mtimeMs, source.sizeBytes, source.scannedAt);
+      deleteExposure.run(source.rawFilePath, source.analyzerVersion);
+      for (let index = 0; index < exposures.length; index += 1) {
+        const row = asRecord(exposures[index], 'exposures.' + index);
+        insertExposure.run(
+          source.analyzerVersion + ':' + expectString(row.id, 'exposures.' + index + '.id'),
+          source.analyzerVersion,
+          expectString(row.rawFilePath, 'exposures.' + index + '.rawFilePath'),
+          expectNumber(row.rawLineNo, 'exposures.' + index + '.rawLineNo'),
+          expectString(row.sessionId, 'exposures.' + index + '.sessionId'),
+          expectString(row.sdkSessionId, 'exposures.' + index + '.sdkSessionId'),
+          expectString(row.agentKind, 'exposures.' + index + '.agentKind'),
+          expectString(row.skillName, 'exposures.' + index + '.skillName'),
+          nullableString(row.skillPath),
+          nullableString(row.skillDocumentHash),
+          expectString(row.exposureContentHash, 'exposures.' + index + '.exposureContentHash'),
+          expectString(row.documentHashSource, 'exposures.' + index + '.documentHashSource'),
+          expectString(row.source, 'exposures.' + index + '.source'),
+          nullableString(row.toolUseId),
+          expectNumber(row.seenAt, 'exposures.' + index + '.seenAt'),
+          expectNumber(row.toolCallCount, 'exposures.' + index + '.toolCallCount'),
+          expectNumber(row.repeatedToolCallCount, 'exposures.' + index + '.repeatedToolCallCount'),
+          expectNumber(row.toolErrorCount, 'exposures.' + index + '.toolErrorCount'),
+          expectNumber(row.commandCallCount, 'exposures.' + index + '.commandCallCount'),
+          expectNumber(row.commandFailureCount, 'exposures.' + index + '.commandFailureCount'),
+        );
+      }
+    })();
+  }
+  if (kind === 'deleteBefore') {
+    const analyzerVersion = expectString(payload.analyzerVersion, 'analyzerVersion');
+    const recentSince = expectNumber(payload.recentSince, 'recentSince');
+    return readyDb.transaction(() => {
+      readyDb.prepare('DELETE FROM skill_usage_exposures WHERE analyzer_version = ? AND seen_at < ?').run(analyzerVersion, recentSince);
+      readyDb.prepare('DELETE FROM skill_usage_sources WHERE analyzer_version = ? AND mtime_ms < ? AND raw_file_path NOT IN (SELECT raw_file_path FROM skill_usage_exposures)').run(analyzerVersion, recentSince);
+    })();
+  }
+  if (kind === 'promote') {
+    const analyzerVersion = expectString(payload.analyzerVersion, 'analyzerVersion');
+    return readyDb.transaction(() => {
+      readyDb.prepare("INSERT INTO migration_meta (key, value) VALUES ('skill_usage_analyzer_version', ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value").run(analyzerVersion);
+      readyDb.prepare('DELETE FROM skill_usage_exposures WHERE analyzer_version <> ?').run(analyzerVersion);
+    })();
+  }
+  throw invalidArgs('unknown skill usage mutation: ' + kind);
 }
 
 // ⚠️ 与 worker/opHandlers/tx.ts 的 imDeleteBindings 保持一致。
@@ -400,6 +740,233 @@ function sessionAgentSwitchFallback(readyDb, args) {
 }
 
 // ⚠️ 与 worker/opHandlers/tx.ts 的同名事务保持一致。
+function contextRebuild(readyDb, args) {
+  const payload = asRecord(args, 'context.rebuild args');
+  const sessionId = expectString(payload.sessionId, 'sessionId');
+  const markerId = expectString(payload.markerId, 'markerId');
+  const markerClientId = expectString(payload.markerClientId, 'markerClientId');
+  const markerContent = expectString(payload.markerContent, 'markerContent');
+  const markerCreatedAt = expectNumber(payload.markerCreatedAt, 'markerCreatedAt');
+  const updatedAt = expectNumber(payload.updatedAt, 'updatedAt');
+  const expectedClearedAt =
+    payload.expectedClearedAt === undefined || payload.expectedClearedAt === null
+      ? null
+      : expectNumber(payload.expectedClearedAt, 'expectedClearedAt');
+  return readyDb.transaction(() => {
+    const replacement = payload.replacementRoute === undefined
+      ? null : asRecord(payload.replacementRoute, 'replacementRoute');
+    const sessionResult = replacement
+      ? readyDb.prepare(
+          'UPDATE sessions SET sdk_session_id = NULL, context_tokens = 0, updated_at = ?, list_message_count = NULL, model = ?, provider_id = ?, effort = COALESCE(?, effort), fast_mode = ? WHERE id = ? AND ifnull(cleared_at, -1) = ifnull(?, -1) AND sdk_session_id = ? AND status != ?',
+        ).run(updatedAt, expectString(replacement.model, 'replacementRoute.model'),
+          nullableString(replacement.providerId), nullableString(replacement.effort),
+          fastModeToStorage(replacement.fastMode), sessionId, expectedClearedAt,
+          expectString(replacement.expectedSdkSessionId, 'replacementRoute.expectedSdkSessionId'), 'deleted')
+      : readyDb.prepare(
+          'UPDATE sessions SET sdk_session_id = NULL, context_tokens = 0, updated_at = ?, list_message_count = NULL WHERE id = ? AND ifnull(cleared_at, -1) = ifnull(?, -1)',
+        ).run(updatedAt, sessionId, expectedClearedAt);
+    if (sessionResult.changes !== 1) {
+      throw Object.assign(new Error('Session missing or clear-boundary changed: ' + sessionId), {
+        code: 'PRECONDITION_FAILED',
+      });
+    }
+    // 只追加新边界。删掉更早的 context_rebuild 会让 fork 丢掉中间失效点。
+    readyDb.prepare(
+      "INSERT INTO messages (id, client_id, session_id, role, content, created_at, rewind_at) VALUES (?, ?, ?, 'context_rebuild', ?, ?, ?)",
+    ).run(markerId, markerClientId, sessionId, markerContent, markerCreatedAt, markerCreatedAt);
+  })();
+}
+
+// ⚠️ 与 worker/opHandlers/tx.ts 的同名事务保持一致。
+function messageInsert(readyDb, args) {
+  const payload = asRecord(args, 'message.insert args');
+  const sessionId = expectString(payload.sessionId, 'sessionId');
+  const id = expectString(payload.id, 'id');
+  const clientId = expectString(payload.clientId, 'clientId');
+  const role = expectString(payload.role, 'role');
+  const content = expectString(payload.content, 'content');
+  const toolUseId = nullableString(payload.toolUseId);
+  const agentMeta = nullableString(payload.agentMeta);
+  const agentKind = nullableString(payload.agentKind);
+  const createdAt = expectNumber(payload.createdAt, 'createdAt');
+  const guarded = payload.guarded === true;
+  const expected =
+    payload.expectedClearBoundaryMs === undefined || payload.expectedClearBoundaryMs === null
+      ? null
+      : expectNumber(payload.expectedClearBoundaryMs, 'expectedClearBoundaryMs');
+  return readyDb.transaction(() => {
+    let changes = 0;
+    // Connection-local stages never enter history, counts or persistent FTS.
+    // SQLite discards them automatically when this worker exits.
+    if (payload.publication) {
+      readyDb.exec('CREATE TEMP TABLE IF NOT EXISTS cindy_pending_message_publications (id TEXT PRIMARY KEY, client_id TEXT NOT NULL, session_id TEXT NOT NULL, role TEXT NOT NULL, content TEXT NOT NULL, tool_use_id TEXT, agent_meta TEXT, agent_kind TEXT, created_at INTEGER NOT NULL)');
+    }
+    if (payload.publication === 'publish') {
+      changes = readyDb.prepare(
+        'INSERT INTO messages (id, client_id, session_id, role, content, tool_use_id, agent_meta, agent_kind, created_at) SELECT id, client_id, session_id, role, content, tool_use_id, agent_meta, agent_kind, created_at FROM temp.cindy_pending_message_publications WHERE id = ? AND session_id = ? AND client_id = ?',
+      ).run(id, sessionId, clientId).changes;
+      if (changes > 0) readyDb.prepare('DELETE FROM temp.cindy_pending_message_publications WHERE id = ? AND session_id = ?').run(id, sessionId);
+    } else if (payload.publication === 'rollback') {
+      // CAS the complete published row; never remove a replacement or edited row.
+      changes = readyDb.prepare(
+        'DELETE FROM messages WHERE id = ? AND session_id = ? AND client_id = ? AND role = ? AND content = ? AND tool_use_id IS ? AND agent_meta IS ? AND agent_kind IS ? AND created_at = ? AND rewind_at IS NULL',
+      ).run(id, sessionId, clientId, role, content, toolUseId, agentMeta, agentKind, createdAt).changes;
+    } else if (payload.publication === 'discard') {
+      changes = readyDb.prepare('DELETE FROM temp.cindy_pending_message_publications WHERE id = ? AND session_id = ? AND client_id = ?').run(id, sessionId, clientId).changes;
+    } else if (payload.publication === 'stage') {
+      changes = readyDb.prepare(
+        'INSERT INTO temp.cindy_pending_message_publications (id, client_id, session_id, role, content, tool_use_id, agent_meta, agent_kind, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)',
+      ).run(id, clientId, sessionId, role, content, toolUseId, agentMeta, agentKind, createdAt).changes;
+    } else if (guarded) {
+      changes = readyDb.prepare(
+        'INSERT INTO messages (id, client_id, session_id, role, content, tool_use_id, agent_meta, agent_kind, created_at) SELECT ?, ?, ?, ?, ?, ?, ?, ?, ? FROM sessions AS s WHERE s.id = ? AND COALESCE(s.cleared_at, -1) = COALESCE(?, -1) ON CONFLICT(session_id, client_id) DO NOTHING',
+      ).run(id, clientId, sessionId, role, content, toolUseId, agentMeta, agentKind, createdAt, sessionId, expected).changes;
+    } else {
+      changes = readyDb.prepare(
+        'INSERT INTO messages (id, client_id, session_id, role, content, tool_use_id, agent_meta, agent_kind, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)',
+      ).run(id, clientId, sessionId, role, content, toolUseId, agentMeta, agentKind, createdAt).changes;
+    }
+    if (changes > 0 && (!payload.publication || payload.publication === 'publish' || payload.publication === 'rollback')) {
+      if (role === 'user' || role === 'assistant') {
+        readyDb.prepare(
+          'UPDATE sessions SET list_preview = NULL, list_preview_role = NULL, list_message_count = NULL WHERE id = ?',
+        ).run(sessionId);
+      } else {
+        readyDb.prepare('UPDATE sessions SET list_message_count = NULL WHERE id = ?').run(sessionId);
+      }
+    }
+    return { changes };
+  })();
+}
+
+function messageUpdateContent(readyDb, args) {
+  const payload = asRecord(args, 'message.updateContent args');
+  const sessionId = expectString(payload.sessionId, 'sessionId');
+  const clientId = expectString(payload.clientId, 'clientId');
+  const content = expectString(payload.content, 'content');
+  return readyDb.transaction(() => {
+    const changes = readyDb.prepare(
+      'UPDATE messages SET content = ? WHERE session_id = ? AND client_id = ?',
+    ).run(content, sessionId, clientId).changes;
+    if (changes > 0) {
+      const row = readyDb.prepare(
+        'SELECT role, rewind_at FROM messages WHERE session_id = ? AND client_id = ? LIMIT 1',
+      ).get(sessionId, clientId);
+      if (row && row.rewind_at == null && (row.role === 'user' || row.role === 'assistant')) {
+        readyDb.prepare(
+          'UPDATE sessions SET list_preview = NULL, list_preview_role = NULL WHERE id = ?',
+        ).run(sessionId);
+      }
+    }
+    return { changes };
+  })();
+}
+
+function messageLeaseMutate(readyDb, args) {
+  const payload = asRecord(args, 'message.leaseMutate args');
+  const op = expectString(payload.op, 'op');
+  const sessionId = expectString(payload.sessionId, 'sessionId');
+  const clientId = expectString(payload.clientId, 'clientId');
+  return readyDb.transaction(() => {
+    let changes = 0;
+    if (op === 'insert') {
+      const createdAt = expectNumber(payload.createdAt, 'createdAt');
+      changes = readyDb.prepare(
+        "INSERT INTO messages (id, client_id, session_id, role, content, agent_meta, created_at, rewind_at) VALUES (?, ?, ?, 'assistant', ?, ?, ?, ?) ON CONFLICT(session_id, client_id) DO NOTHING",
+      ).run(
+        expectString(payload.id, 'id'),
+        clientId,
+        sessionId,
+        expectString(payload.content, 'content'),
+        nullableString(payload.agentMeta),
+        createdAt,
+        createdAt,
+      ).changes;
+    } else if (op === 'deleteByContent') {
+      changes = readyDb.prepare(
+        'DELETE FROM messages WHERE session_id = ? AND client_id = ? AND content = ?',
+      ).run(sessionId, clientId, expectString(payload.content, 'content')).changes;
+    } else if (op === 'deleteById') {
+      changes = readyDb.prepare(
+        'DELETE FROM messages WHERE id = ? AND session_id = ? AND client_id = ?',
+      ).run(expectString(payload.id, 'id'), sessionId, clientId).changes;
+    } else {
+      throw Object.assign(new Error('unknown message.leaseMutate op: ' + op), { code: 'INVALID_ARGS' });
+    }
+    if (changes > 0) {
+      readyDb.prepare('UPDATE sessions SET list_message_count = NULL WHERE id = ?').run(sessionId);
+    }
+    return { changes };
+  })();
+}
+
+function messageRewindUserAfterClear(readyDb, args) {
+  const payload = asRecord(args, 'message.rewindUserAfterClear args');
+  const sessionId = expectString(payload.sessionId, 'sessionId');
+  const clientId = expectString(payload.clientId, 'clientId');
+  const rewoundAt = expectNumber(payload.rewoundAt, 'rewoundAt');
+  const discard = payload.discard === true;
+  return readyDb.transaction(() => {
+    const changes = readyDb.prepare(
+      "UPDATE messages SET rewind_at = ? WHERE session_id = ? AND client_id = ? AND role = 'user' AND rewind_at IS NULL",
+    ).run(rewoundAt, sessionId, clientId).changes;
+    if (changes > 0 && discard) {
+      readyDb.prepare(
+        "DELETE FROM messages WHERE session_id = ? AND client_id = ? AND role = 'user' AND rewind_at = ?",
+      ).run(sessionId, clientId, rewoundAt);
+      readyDb.prepare(
+        'UPDATE sessions SET list_preview = NULL, list_preview_role = NULL, list_message_count = NULL WHERE id = ?',
+      ).run(sessionId);
+    } else if (changes > 0) {
+      readyDb.prepare(
+        'UPDATE sessions SET list_preview = NULL, list_preview_role = NULL WHERE id = ?',
+      ).run(sessionId);
+    }
+    return { changes };
+  })();
+}
+
+// Mirrors opHandlers/tx.ts: only provably undelivered scheduler prompts (no executionModel,
+// lone rewind_at in the session) are deleted, scanning idx_messages_rewind_at in bounded windows.
+const PURGE_REWOUND_SCAN_WINDOW = 500;
+
+function messagePurgeRewoundSchedulerPrompts(readyDb, args) {
+  const payload = asRecord(args, 'message.purgeRewoundSchedulerPrompts args');
+  const limit = expectNumber(payload.limit, 'limit');
+  if (!Number.isSafeInteger(limit) || limit < 1 || limit > 200) {
+    throw Object.assign(new Error('limit must be an integer from 1 to 200'), { code: 'INVALID_ARGS' });
+  }
+  const cursor = payload.cursor === undefined ? 0 : expectNumber(payload.cursor, 'cursor');
+  const windowSql = 'SELECT rewind_at AS rewindAt FROM messages WHERE rewind_at > ? ORDER BY rewind_at LIMIT ?';
+  const selectSql = (
+    "SELECT m.id, m.session_id AS sessionId FROM messages m "
+    + "WHERE m.rewind_at > ? AND m.rewind_at <= ? AND m.role = 'user' AND json_valid(m.agent_meta) "
+    + "AND json_extract(m.agent_meta, '$.origin.kind') = 'scheduler' "
+    + "AND json_extract(m.agent_meta, '$.executionModel') IS NULL "
+    + 'AND NOT EXISTS (SELECT 1 FROM messages o WHERE o.rewind_at = m.rewind_at AND o.session_id = m.session_id AND o.id <> m.id) '
+    + 'ORDER BY m.rewind_at LIMIT ?'
+  );
+  return readyDb.transaction(() => {
+    const window = readyDb.prepare(windowSql).all(cursor, PURGE_REWOUND_SCAN_WINDOW);
+    if (window.length === 0) return { deleted: 0, sessionIds: [], cursor: null };
+    const windowEnd = window[window.length - 1].rewindAt;
+    const exhausted = window.length < PURGE_REWOUND_SCAN_WINDOW;
+    const rows = readyDb.prepare(selectSql).all(cursor, windowEnd, limit);
+    const nextCursor = rows.length === limit ? cursor : exhausted ? null : windowEnd;
+    if (rows.length === 0) return { deleted: 0, sessionIds: [], cursor: nextCursor };
+    const remove = readyDb.prepare(
+      "DELETE FROM messages WHERE id = ? AND role = 'user' AND rewind_at IS NOT NULL",
+    );
+    for (const row of rows) remove.run(row.id);
+    const sessionIds = [...new Set(rows.map((row) => row.sessionId))];
+    const clearPreview = readyDb.prepare(
+      'UPDATE sessions SET list_preview = NULL, list_preview_role = NULL, list_message_count = NULL WHERE id = ?',
+    );
+    for (const sessionId of sessionIds) clearPreview.run(sessionId);
+    return { deleted: rows.length, sessionIds, cursor: nextCursor };
+  })();
+}
+
 function messageDelete(readyDb, args) {
   const payload = asRecord(args, 'message.delete args');
   const sessionId = expectString(payload.sessionId, 'sessionId');
@@ -419,10 +986,29 @@ function messageDelete(readyDb, args) {
   const markerContent = expectString(marker.content, 'contextMarker.content');
   const markerCreatedAt = expectNumber(marker.createdAt, 'contextMarker.createdAt');
   const updatedAt = expectNumber(payload.updatedAt, 'updatedAt');
+  const rawSubagentTurnWindow = payload.subagentTurnWindow;
+  const subagentTurnWindow = rawSubagentTurnWindow === undefined
+    ? null
+    : (() => {
+        const window = asRecord(rawSubagentTurnWindow, 'subagentTurnWindow');
+        const startedAtInclusive = expectNumber(window.startedAtInclusive, 'subagentTurnWindow.startedAtInclusive');
+        const startedAtExclusive = window.startedAtExclusive === undefined
+          ? undefined
+          : expectNumber(window.startedAtExclusive, 'subagentTurnWindow.startedAtExclusive');
+        if (
+          !Number.isSafeInteger(startedAtInclusive)
+          || startedAtInclusive < 0
+          || (startedAtExclusive !== undefined
+            && (!Number.isSafeInteger(startedAtExclusive) || startedAtExclusive < 0))
+        ) {
+          throw invalidArgs('subagentTurnWindow must contain non-negative integer timestamps');
+        }
+        return { startedAtInclusive, startedAtExclusive };
+      })();
 
   return readyDb.transaction(() => {
     const selectTarget = readyDb.prepare(
-      "SELECT id, client_id AS clientId FROM messages WHERE session_id = ? AND client_id = ? AND role IN ('user', 'assistant', 'tool_use', 'tool_result', 'ask_user', 'plan_review', 'thinking', 'error') AND rewind_at IS NULL LIMIT 1",
+      "SELECT id, client_id AS clientId, tool_use_id AS toolUseId FROM messages WHERE session_id = ? AND client_id = ? AND role IN ('user', 'assistant', 'tool_use', 'tool_result', 'ask_user', 'plan_review', 'thinking', 'error') AND rewind_at IS NULL LIMIT 1",
     );
     const targets = clientIds.map((clientId) => {
       const target = selectTarget.get(sessionId, clientId);
@@ -456,6 +1042,44 @@ function messageDelete(readyDb, args) {
       readyDb.prepare("DELETE FROM embedding_jobs WHERE source = 'chat' AND source_id = ?").run(target.id);
     }
 
+    const subagentRunIds = new Set();
+    const hasSubagentRuns = Boolean(
+      readyDb.prepare("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'subagent_runs'").get(),
+    );
+    if (hasSubagentRuns) {
+      const selectLinkedSubagents = readyDb.prepare(
+        'SELECT id FROM subagent_runs WHERE session_id = ? AND parent_tool_use_id = ? AND rewind_at IS NULL AND deleted_at IS NULL',
+      );
+      const parentToolUseIds = new Set(
+        targets.flatMap((target) => target.toolUseId ? [target.toolUseId] : []),
+      );
+      for (const toolUseId of parentToolUseIds) {
+        const linkedRows = selectLinkedSubagents.all(sessionId, toolUseId);
+        for (const row of linkedRows) subagentRunIds.add(row.id);
+      }
+      if (subagentTurnWindow) {
+        const parentlessRows = subagentTurnWindow.startedAtExclusive === undefined
+          ? readyDb.prepare(
+              'SELECT id FROM subagent_runs WHERE session_id = ? AND parent_tool_use_id IS NULL AND rewind_at IS NULL AND deleted_at IS NULL AND started_at >= ?',
+            ).all(sessionId, subagentTurnWindow.startedAtInclusive)
+          : readyDb.prepare(
+              'SELECT id FROM subagent_runs WHERE session_id = ? AND parent_tool_use_id IS NULL AND rewind_at IS NULL AND deleted_at IS NULL AND started_at >= ? AND started_at < ?',
+            ).all(sessionId, subagentTurnWindow.startedAtInclusive, subagentTurnWindow.startedAtExclusive);
+        for (const row of parentlessRows) subagentRunIds.add(row.id);
+      }
+      const scrubSubagent = readyDb.prepare(
+        "UPDATE subagent_runs SET title = NULL, description = NULL, summary = NULL, activity = '[]', updated_at = MAX(updated_at, ?), deleted_at = ? WHERE id = ? AND session_id = ? AND rewind_at IS NULL AND deleted_at IS NULL",
+      );
+      for (const runId of subagentRunIds) {
+        const scrubbed = scrubSubagent.run(updatedAt, updatedAt, runId, sessionId);
+        if (scrubbed.changes !== 1) {
+          throw Object.assign(new Error('Subagent 删除竞态: ' + runId), {
+            code: 'PRECONDITION_FAILED',
+          });
+        }
+      }
+    }
+
     readyDb.prepare("DELETE FROM messages WHERE role = 'context_rebuild' AND session_id = ?").run(sessionId);
     // 保留不含正文/元数据的最小 tombstone，阻止外部 Claude/Codex transcript
     // importer 下次 messages:list 时把同一 clientId 重新导入；本地有效记录中
@@ -472,7 +1096,7 @@ function messageDelete(readyDb, args) {
       }
     }
     const sessionResult = readyDb.prepare(
-      'UPDATE sessions SET sdk_session_id = NULL, updated_at = ? WHERE id = ?',
+      'UPDATE sessions SET sdk_session_id = NULL, updated_at = ?, list_preview = NULL, list_preview_role = NULL, list_message_count = NULL WHERE id = ?',
     ).run(updatedAt, sessionId);
     if (sessionResult.changes !== 1) {
       throw Object.assign(new Error('Session 不存在: ' + sessionId), { code: 'NOT_FOUND' });
@@ -485,6 +1109,7 @@ function messageDelete(readyDb, args) {
         messageId: target.id,
         clientId: target.clientId,
       })),
+      subagentRunIds: [...subagentRunIds].sort(),
     };
   })();
 }
@@ -544,6 +1169,8 @@ function sessionsRenameTitles(readyDb, args) {
   })();
 }
 
+const TASK_LIST_BOT_LANE_SQL = "SELECT 1 FROM bot_session_links WHERE session_id = ? AND role IN ('routine', 'channel') LIMIT 1";
+
 // ⚠️ 与 worker/opHandlers/tx.ts 的 sessionsSetStatus 必须逐字保持一致。
 function sessionsSetStatus(readyDb, args) {
   const payload = asRecord(args, 'sessions.setStatus args');
@@ -551,14 +1178,15 @@ function sessionsSetStatus(readyDb, args) {
     expectString(id, 'sessionId'),
   );
   const status = expectString(payload.status, 'status');
+  const closeSharedTasks = payload.closeSharedTasks === true;
   if (status !== 'active' && status !== 'archived') {
     throw Object.assign(new Error('invalid status: ' + status), { code: 'INVALID_ARGS' });
   }
   const selectSession = readyDb.prepare(
-    'SELECT id, title, working_dir AS workingDir, workspace_kind AS workspaceKind FROM sessions WHERE id = ? LIMIT 1',
+    'SELECT id, title, working_dir AS workingDir, workspace_kind AS workspaceKind, status, source FROM sessions WHERE id = ? LIMIT 1',
   );
   const updateSession = readyDb.prepare(
-    'UPDATE sessions SET status = ?, updated_at = ? WHERE id = ? RETURNING id, title, working_dir AS workingDir, workspace_kind AS workspaceKind',
+    'UPDATE sessions SET status = ?, updated_at = ? WHERE id = ? RETURNING id, title, working_dir AS workingDir, workspace_kind AS workspaceKind, remote_host_id AS remoteHostId, source',
   );
   return readyDb.transaction(() => {
     const applied = [];
@@ -566,13 +1194,29 @@ function sessionsSetStatus(readyDb, args) {
     for (const sessionId of sessionIds) {
       const existing = selectSession.get(sessionId);
       if (!existing) throw Object.assign(new Error('Session 不存在: ' + sessionId), { code: 'NOT_FOUND' });
+      if (existing.status === 'deleted') {
+        throw Object.assign(new Error('已删除的任务不能恢复或归档: ' + sessionId), {
+          code: 'PRECONDITION_FAILED',
+        });
+      }
+      // Routine/channel lanes follow ordinary task lifecycle; keep in sync with worker/opHandlers/tx.ts.
+      if (existing.source === 'bot' && !readyDb.prepare(TASK_LIST_BOT_LANE_SQL).get(sessionId)) {
+        throw Object.assign(new Error('Bot 任务必须通过 Bot 生命周期管理: ' + sessionId), {
+          code: 'PRECONDITION_FAILED',
+        });
+      }
       const updated = updateSession.get(status, now, sessionId);
+      if (closeSharedTasks && status === 'archived') {
+        readyDb.prepare(CLOSE_SHARED_TASKS_FOR_SESSION_SQL).run(now, sessionId);
+      }
       if (!updated) throw Object.assign(new Error('Session 不存在: ' + sessionId), { code: 'NOT_FOUND' });
       applied.push({
         sessionId: updated.id,
         title: updated.title,
         workingDir: updated.workingDir,
         workspaceKind: updated.workspaceKind,
+        remoteHostId: updated.remoteHostId,
+        source: updated.source,
         status,
       });
     }
@@ -580,10 +1224,91 @@ function sessionsSetStatus(readyDb, args) {
   })();
 }
 
-// 会话分享(.xdtshare)导入落库: 与 worker/opHandlers/tx.ts 的同名 handler 保持一致。
+// Keep this in sync with worker/opHandlers/tx.ts.
+function sessionsSetTerminalStatus(readyDb, args) {
+  const payload = asRecord(args, 'sessions.setTerminalStatus args');
+  const sessionId = expectString(payload.sessionId, 'sessionId');
+  const status = expectString(payload.status, 'status');
+  if (status !== 'archived' && status !== 'deleted') {
+    throw Object.assign(new Error('invalid terminal status: ' + status), { code: 'INVALID_ARGS' });
+  }
+  return readyDb.transaction(() => {
+    const existing = readyDb.prepare('SELECT id, status, source FROM sessions WHERE id = ? LIMIT 1').get(sessionId);
+    if (!existing) throw Object.assign(new Error('Session not found: ' + sessionId), { code: 'NOT_FOUND' });
+    if (existing.status === 'deleted') throw Object.assign(new Error('Deleted session cannot change status: ' + sessionId), { code: 'PRECONDITION_FAILED' });
+    // Routine/channel lanes are listed with ordinary tasks and follow their lifecycle.
+    if (existing.source === 'bot' && !readyDb.prepare(TASK_LIST_BOT_LANE_SQL).get(sessionId)) throw Object.assign(new Error('Bot sessions must use Bot lifecycle: ' + sessionId), { code: 'PRECONDITION_FAILED' });
+    const now = Date.now();
+    readyDb.prepare(CLOSE_SHARED_TASKS_FOR_SESSION_SQL).run(now, sessionId);
+    const updated = readyDb.prepare(
+      'UPDATE sessions SET status = ?, updated_at = ? WHERE id = ? RETURNING id, title, working_dir AS workingDir, workspace_kind AS workspaceKind, remote_host_id AS remoteHostId, source',
+    ).get(status, now, sessionId);
+    if (!updated) throw Object.assign(new Error('Session not found: ' + sessionId), { code: 'NOT_FOUND' });
+    const deletedSideChats = status === 'deleted' && existing.source !== 'side-chat'
+      ? readyDb.prepare("UPDATE sessions SET status = 'deleted', updated_at = ? " +
+          "WHERE parent_session_id = ? AND source = 'side-chat' AND status <> 'deleted' " +
+          'RETURNING id AS sessionId, title, working_dir AS workingDir, workspace_kind AS workspaceKind, ' +
+          'remote_host_id AS remoteHostId, source').all(now, sessionId)
+      : [];
+    for (const child of deletedSideChats) {
+      readyDb.prepare(CLOSE_SHARED_TASKS_FOR_SESSION_SQL).run(now, child.sessionId);
+    }
+    return { ...updated, sessionId: updated.id, status, deletedSideChats };
+  })();
+}
+
+function compactSessionToolResults(readyDb, args) {
+  const payload = asRecord(args, 'toolResults.compactSession args');
+  const sessionId = expectString(payload.sessionId, 'sessionId');
+  const now = expectNumber(payload.now, 'now');
+  readyDb.function('tool_result_diagnostics', { deterministic: true }, content => {
+    const diagnostics = extractToolResultDiagnostics(content);
+    return diagnostics ? JSON.stringify(diagnostics) : null;
+  });
+
+  const selectSession = readyDb.prepare(
+    "SELECT id FROM sessions WHERE id = ? AND status IN ('archived', 'deleted') LIMIT 1",
+  );
+  // Keep this aggregate + bulk update path in sync with worker/opHandlers/tx.ts.
+  // Only prefix-shaped rows pay for JSON validation.
+  const uncompactedContentPredicate = [
+    'CASE',
+    "WHEN content NOT GLOB '{\\\"type\\\":\\\"tool_result_compacted\\\",\\\"version\\\":1,*' THEN 1",
+    'WHEN json_valid(content) = 0 THEN 1',
+    "WHEN json_type(content) = 'object'",
+    "AND json_extract(content, '$.type') = 'tool_result_compacted'",
+    "AND json_extract(content, '$.version') = 1",
+    "AND json_type(content, '$.originalBytes') IN ('integer', 'real')",
+    "AND json_extract(content, '$.originalBytes') >= 0",
+    "AND json_type(content, '$.compactedAt') IN ('integer', 'real')",
+    "AND json_extract(content, '$.compactedAt') >= 0 THEN 0",
+    'ELSE 1 END',
+  ].join(' ');
+  const summarizeCandidates = readyDb.prepare(
+    "SELECT COALESCE(SUM(octet_length(content)), 0) AS originalBytes FROM messages WHERE session_id = ? AND role = 'tool_result' AND (" + uncompactedContentPredicate + ') = 1',
+  );
+  const compactMessages = readyDb.prepare(
+    "UPDATE messages SET content = json_patch(json_object('type', 'tool_result_compacted', 'version', 1, 'originalBytes', octet_length(content), 'compactedAt', ?), json_object('diagnostics', json(tool_result_diagnostics(content)))) WHERE session_id = ? AND role = 'tool_result' AND (" + uncompactedContentPredicate + ') = 1',
+  );
+
+  return readyDb.transaction(() => {
+    const session = selectSession.get(sessionId);
+    if (!session) {
+      return { compactedRows: 0, originalBytes: 0 };
+    }
+    const summary = summarizeCandidates.get(session.id);
+    const compactedRows = compactMessages.run(now, session.id).changes;
+    return {
+      compactedRows,
+      originalBytes: compactedRows > 0 ? summary.originalBytes : 0,
+    };
+  })();
+}
+
 // 单事务插 session 行 + 全量 messages, 任一行非法整体回滚零写入;
 // session 已存在按 ALREADY_EXISTS 抛(并发双导入兜底)。
 // 协同包经可选 orca 段在同一事务追加 Worker 会话 + orca_teams/orca_workers 关系图。
+// 会话分享(.xdtshare)导入落库: 与 worker/opHandlers/tx.ts 的同名 handler 保持一致。
 function sessionImportShare(readyDb, args) {
   const payload = asRecord(args, 'session.importShare args');
   const session = asRecord(payload.session, 'session');
@@ -630,7 +1355,7 @@ function sessionImportShare(readyDb, args) {
       expectNumber(rawSession.totalCostUsd, 'session.totalCostUsd'),
       expectNumber(rawSession.contextTokens, 'session.contextTokens'),
       expectNumber(rawSession.contextWindow, 'session.contextWindow'),
-      rawSession.fastMode ? 1 : 0,
+      fastModeToStorage(rawSession.fastMode),
       rawSession.planModeEnabled ? 1 : 0,
       expectString(rawSession.agentKind, 'session.agentKind'),
       nullableString(rawSession.orcaRole),
@@ -668,6 +1393,7 @@ function sessionImportShare(readyDb, args) {
     const replacementUpdatedAt = expectNumber(session.updatedAt, 'session.updatedAt');
     for (const replacedSession of replaceSessions) {
       deleteReplacedSession.run(replacementUpdatedAt, replacedSession.id);
+      readyDb.prepare(CLOSE_SHARED_TASKS_FOR_SESSION_SQL).run(replacementUpdatedAt, replacedSession.id);
     }
     let count = insertSessionWithMessages(session, messages);
     if (orca) {
@@ -730,15 +1456,20 @@ function orcaRemoveWorker(readyDb, args) {
   const payload = asRecord(args, 'orca.removeWorker args');
   const workerId = expectString(payload.workerId, 'workerId');
   const now = expectNumber(payload.now, 'now');
-  const selectWorker = readyDb.prepare('SELECT session_id AS sessionId FROM orca_workers WHERE id = ? LIMIT 1');
+  const selectWorker = readyDb.prepare('SELECT session_id AS sessionId, execution_device_id AS deviceId, remote_released_at AS releasedAt FROM orca_workers WHERE id = ? LIMIT 1');
   const deleteWorker = readyDb.prepare('DELETE FROM orca_workers WHERE id = ?');
-  const archiveSession = readyDb.prepare("UPDATE sessions SET status = 'archived', orca_role = NULL, updated_at = ? WHERE id = ?");
+  const archiveSession = readyDb.prepare("UPDATE sessions SET status = 'archived', orca_role = NULL, updated_at = ? WHERE id = ? AND status != 'deleted'");
   return readyDb.transaction(() => {
     const row = selectWorker.get(workerId);
     if (!row) return null;
-    deleteWorker.run(workerId);
-    archiveSession.run(now, row.sessionId);
-    return row.sessionId;
+    // 回滚先隐藏代理并释放 label；远端 stop/release 未确认前必须保留持久重试路由。
+    if (row.deviceId && row.releasedAt == null) {
+      readyDb.prepare('UPDATE orca_workers SET label = NULL, updated_at = ? WHERE id = ?').run(now, workerId);
+    } else {
+      deleteWorker.run(workerId);
+    }
+    const archived = archiveSession.run(now, row.sessionId);
+    return archived.changes > 0 ? row.sessionId : null;
   })();
 }
 
@@ -753,6 +1484,48 @@ function orcaCancelStaleTeams(readyDb, args) {
   })();
 }
 
+function orcaArchiveWorkersByTeam(readyDb, args) {
+  const payload = asRecord(args, 'orca.archiveWorkersByTeam args');
+  const teamId = expectString(payload.teamId, 'teamId');
+  const sessionIds = expectArray(payload.sessionIds, 'sessionIds').map((value, index) =>
+    expectString(value, 'sessionIds[' + index + ']'),
+  );
+  const now = expectNumber(payload.now, 'now');
+  const archiveSession = readyDb.prepare(
+    "UPDATE sessions SET status = 'archived', updated_at = ? WHERE id = ? AND status = 'active' AND EXISTS (SELECT 1 FROM orca_workers WHERE orca_workers.session_id = sessions.id AND orca_workers.team_id = ?)",
+  );
+  return readyDb.transaction(() => {
+    const updatedIds = [];
+    for (const id of sessionIds) {
+      if (archiveSession.run(now, id, teamId).changes > 0) updatedIds.push(id);
+    }
+    return updatedIds;
+  })();
+}
+
+function orcaReconcileInactiveTeamWorkersForLead(readyDb, args) {
+  const payload = asRecord(args, 'orca.reconcileInactiveTeamWorkersForLead args');
+  const leadSessionId = expectString(payload.leadSessionId, 'leadSessionId');
+  const sessionIds = expectArray(payload.sessionIds, 'sessionIds').map((value, index) =>
+    expectString(value, 'sessionIds[' + index + ']'),
+  );
+  const now = expectNumber(payload.now, 'now');
+  const finishWorkers = readyDb.prepare(
+    "UPDATE orca_workers SET status = 'done', updated_at = ? WHERE team_id IN (SELECT id FROM orca_teams WHERE lead_session_id = ? AND status != 'active')",
+  );
+  const archiveSession = readyDb.prepare(
+    "UPDATE sessions SET status = 'archived', updated_at = ? WHERE id = ? AND status = 'active' AND EXISTS (SELECT 1 FROM orca_workers INNER JOIN orca_teams ON orca_workers.team_id = orca_teams.id WHERE orca_workers.session_id = sessions.id AND orca_teams.lead_session_id = ? AND orca_teams.status != 'active')",
+  );
+  return readyDb.transaction(() => {
+    finishWorkers.run(now, leadSessionId);
+    const updatedIds = [];
+    for (const id of sessionIds) {
+      if (archiveSession.run(now, id, leadSessionId).changes > 0) updatedIds.push(id);
+    }
+    return updatedIds;
+  })();
+}
+
 function orcaUpsertWorker(readyDb, args) {
   const payload = asRecord(args, 'orca.upsertWorker args');
   const id = expectString(payload.id, 'id');
@@ -760,9 +1533,37 @@ function orcaUpsertWorker(readyDb, args) {
   const sessionId = expectString(payload.sessionId, 'sessionId');
   const now = expectNumber(payload.now, 'now');
   readyDb.transaction(() => {
+    const activeTeam = readyDb.prepare(
+      "SELECT 1 FROM orca_teams WHERE id = ? AND status = 'active' LIMIT 1",
+    ).get(teamId);
+    if (!activeTeam) {
+      throw new Error('Orca team ' + teamId + ' is no longer active');
+    }
+    if (payload.remoteExecution !== undefined) {
+      const remote = asRecord(payload.remoteExecution, 'remoteExecution');
+      if (remote.proxySession !== undefined) {
+        const proxy = asRecord(remote.proxySession, 'remoteExecution.proxySession');
+        readyDb.prepare("INSERT INTO sessions (id, title, working_dir, workspace_kind, model, effort, permission_mode, fast_mode, status, agent_kind, orca_role, source, created_at, updated_at) VALUES (?, ?, NULL, 'project', ?, ?, ?, ?, 'active', ?, 'worker', 'desktop', ?, ?)").run(
+          sessionId, expectString(proxy.title, 'proxySession.title'),
+          expectString(proxy.model, 'proxySession.model'),
+          proxy.effort == null ? 'high' : expectString(proxy.effort, 'proxySession.effort'),
+          expectString(proxy.permissionMode, 'proxySession.permissionMode'), fastModeToStorage(proxy.fastMode),
+          expectString(proxy.agentKind, 'proxySession.agentKind'), now, now,
+        );
+      }
+    }
     if (payload.focused === true) {
       readyDb.prepare('UPDATE orca_workers SET focused = 0, updated_at = ? WHERE team_id = ? AND focused = 1').run(now, teamId);
     }
+    const persistRemoteExecution = () => {
+      if (payload.remoteExecution === undefined) return;
+      const remote = asRecord(payload.remoteExecution, 'remoteExecution');
+      const deviceId = expectString(remote.deviceId, 'remoteExecution.deviceId');
+      const remoteSessionId = expectString(remote.remoteSessionId, 'remoteExecution.remoteSessionId');
+      readyDb.prepare('UPDATE orca_workers SET execution_device_id = ?, remote_session_id = ? WHERE session_id = ?').run(deviceId, remoteSessionId, sessionId);
+      readyDb.prepare("UPDATE sessions SET orca_role = 'worker' WHERE id = ?").run(sessionId);
+      readyDb.prepare('DELETE FROM orca_remote_opens WHERE device_id = ? AND remote_session_id = ?').run(deviceId, remoteSessionId);
+    };
     const existing = readyDb.prepare('SELECT * FROM orca_workers WHERE id = ? LIMIT 1').get(id);
     if (existing) {
       readyDb.prepare('UPDATE orca_workers SET team_id = ?, session_id = ?, status = ?, label = ?, worktree_branch = ?, role = ?, focused = ?, idle_since = ?, updated_at = ? WHERE id = ?').run(
@@ -777,6 +1578,7 @@ function orcaUpsertWorker(readyDb, args) {
         now,
         id,
       );
+      persistRemoteExecution();
       return;
     }
     const bySession = readyDb.prepare('SELECT * FROM orca_workers WHERE session_id = ? LIMIT 1').get(sessionId);
@@ -792,6 +1594,7 @@ function orcaUpsertWorker(readyDb, args) {
         now,
         sessionId,
       );
+      persistRemoteExecution();
       return;
     }
     readyDb.prepare('INSERT INTO orca_workers (id, team_id, session_id, status, label, worktree_branch, role, focused, idle_since, created_at, updated_at) VALUES (?,?,?,?,?,?,?,?,?,?,?)').run(
@@ -807,6 +1610,7 @@ function orcaUpsertWorker(readyDb, args) {
       now,
       now,
     );
+    persistRemoteExecution();
   })();
 }
 
@@ -820,6 +1624,10 @@ function orcaReserveWorkerCreation(readyDb, args) {
   const expiresAt = expectNumber(payload.expiresAt, 'expiresAt');
   return readyDb.transaction(() => {
     readyDb.prepare('DELETE FROM orca_worker_creation_reservations WHERE expires_at <= ?').run(now);
+    // 与 worker/opHandlers/tx.ts 的 orcaReserveWorkerCreation 保持一致：已归档／已删除任务的 Worker 让出名字。
+    readyDb.prepare(\`UPDATE orca_workers SET label = label || '~' || id, updated_at = ?
+      WHERE team_id = ? AND label = ? COLLATE NOCASE
+        AND session_id IN (SELECT id FROM sessions WHERE status != 'active')\`).run(now, teamId, label);
     const duplicateWorker = readyDb.prepare(
       'SELECT 1 FROM orca_workers WHERE team_id = ? AND label = ? COLLATE NOCASE LIMIT 1',
     ).get(teamId, label);
@@ -863,109 +1671,6 @@ function orcaReleaseWorkerCreationReservation(readyDb, args) {
   );
 }
 
-function codexImportMessages(readyDb, args) {
-  const payload = asRecord(args, 'codex.importMessages args');
-  const sessionId = expectString(payload.sessionId, 'sessionId');
-  const importClientIdPrefix = expectString(payload.importClientIdPrefix, 'importClientIdPrefix');
-  const sdkSessionId = expectString(payload.sdkSessionId, 'sdkSessionId');
-  const model = expectString(payload.model, 'model');
-  const rows = expectArray(payload.rows, 'rows');
-  const existing = readExistingMessageFingerprints(readyDb, sessionId, importClientIdPrefix);
-  const existingImportedClientIds = readExistingImportedClientIds(readyDb, sessionId, importClientIdPrefix);
-  const upsert = readyDb.prepare(\`
-    INSERT INTO messages
-      (id, client_id, session_id, role, content, tool_use_id, agent_meta, created_at, rewind_at)
-    VALUES
-      (@id, @clientId, @sessionId, @role, @content, NULL, @agentMeta, @createdAt, NULL)
-    ON CONFLICT(session_id, client_id) DO UPDATE SET
-      role = excluded.role,
-      content = excluded.content,
-      agent_meta = excluded.agent_meta,
-      created_at = excluded.created_at
-    WHERE
-      messages.role != 'message_tombstone' AND
-      messages.rewind_at IS NULL AND
-      (
-        messages.role IS NOT excluded.role OR
-        messages.content IS NOT excluded.content OR
-        messages.agent_meta IS NOT excluded.agent_meta OR
-        messages.created_at IS NOT excluded.created_at
-      )
-  \`);
-  const changed = readyDb.transaction(() => {
-    let count = 0;
-    for (const rawRow of rows) {
-      const row = asRecord(rawRow, 'codex row');
-      const lineNo = expectNumber(row.lineNo, 'row.lineNo');
-      const role = expectString(row.role, 'row.role');
-      const text = expectString(row.text, 'row.text');
-      const createdAt = expectNumber(row.createdAt, 'row.createdAt');
-      const clientId = importClientIdPrefix + lineNo;
-      if (!existingImportedClientIds.has(clientId) && isLikelyLocalDuplicate(existing, { role, text, createdAt })) continue;
-      count += upsert.run({
-        id: 'codex-import-' + sdkSessionId + '-' + lineNo,
-        clientId,
-        sessionId,
-        role,
-        content: stringifyContent(row.content),
-        agentMeta: JSON.stringify({ sdkSessionId, model }),
-        createdAt,
-      }).changes;
-    }
-    return count;
-  })();
-  return { changed };
-}
-
-function claudeImportMessages(readyDb, args) {
-  const payload = asRecord(args, 'claude.importMessages args');
-  const sessionId = expectString(payload.sessionId, 'sessionId');
-  const importClientIdPrefix = expectString(payload.importClientIdPrefix, 'importClientIdPrefix');
-  const sdkSessionId = expectString(payload.sdkSessionId, 'sdkSessionId');
-  const rows = expectArray(payload.rows, 'rows');
-  const upsert = readyDb.prepare(\`
-    INSERT INTO messages
-      (id, client_id, session_id, role, content, tool_use_id, agent_meta, created_at, rewind_at)
-    VALUES
-      (@id, @clientId, @sessionId, @role, @content, @toolUseId, @agentMeta, @createdAt, NULL)
-    ON CONFLICT(session_id, client_id) DO UPDATE SET
-      role = excluded.role,
-      content = excluded.content,
-      tool_use_id = excluded.tool_use_id,
-      agent_meta = excluded.agent_meta,
-      created_at = excluded.created_at
-    WHERE
-      messages.role != 'message_tombstone' AND
-      messages.rewind_at IS NULL AND
-      (
-        messages.role IS NOT excluded.role OR
-        messages.content IS NOT excluded.content OR
-        messages.tool_use_id IS NOT excluded.tool_use_id OR
-        messages.agent_meta IS NOT excluded.agent_meta OR
-        messages.created_at IS NOT excluded.created_at
-      )
-  \`);
-  const changed = readyDb.transaction(() => {
-    let count = 0;
-    for (const rawRow of rows) {
-      const row = asRecord(rawRow, 'claude row');
-      const key = expectNumber(row.lineNo, 'row.lineNo') + '-' + expectNumber(row.partIndex, 'row.partIndex');
-      count += upsert.run({
-        id: 'claude-import-' + sdkSessionId + '-' + key,
-        clientId: importClientIdPrefix + key,
-        sessionId,
-        role: expectString(row.role, 'row.role'),
-        content: stringifyContent(row.content),
-        toolUseId: nullableString(row.toolUseId),
-        agentMeta: row.agentMeta ? stringifyContent(row.agentMeta) : null,
-        createdAt: expectNumber(row.createdAt, 'row.createdAt'),
-      }).changes;
-    }
-    return count;
-  })();
-  return { changed };
-}
-
 function rewindCommit(readyDb, args) {
   const payload = asRecord(args, 'rewind.commit args');
   const sessionId = expectString(payload.sessionId, 'sessionId');
@@ -976,9 +1681,26 @@ function rewindCommit(readyDb, args) {
   const preserveMessageUuid = typeof payload.preserveMessageUuid === 'string' ? payload.preserveMessageUuid : null;
   const sdkSessionId = typeof payload.sdkSessionId === 'string' && payload.sdkSessionId ? payload.sdkSessionId : null;
   const requireLatestUser = payload.requireLatestUser === true;
+  const nativeForkAnchorSessionMap = normalizeNativeForkAnchorSessionMap(payload.nativeForkAnchorSessionMap);
   const now = expectNumber(payload.now, 'now');
+  const expectedClearedAt =
+    payload.expectedClearedAt === undefined || payload.expectedClearedAt === null
+      ? null
+      : expectNumber(payload.expectedClearedAt, 'expectedClearedAt');
+  // Mirror worker/opHandlers/tx.ts: a Claude rewind without a prior reply
+  // clears the native session id and leaves a hidden context_rebuild marker.
+  const resetPayload = payload.nativeContextReset === undefined
+    ? null
+    : asRecord(payload.nativeContextReset, 'nativeContextReset');
+  const nativeContextReset = resetPayload
+    ? {
+        markerId: expectString(resetPayload.markerId, 'nativeContextReset.markerId'),
+        markerClientId: expectString(resetPayload.markerClientId, 'nativeContextReset.markerClientId'),
+        markerContent: expectString(resetPayload.markerContent, 'nativeContextReset.markerContent'),
+      }
+    : null;
   const rows = readyDb.prepare(
-    'SELECT id, client_id, role, created_at, agent_meta FROM messages WHERE session_id = ? AND rewind_at IS NULL',
+    'SELECT id, client_id, role, created_at, agent_meta, tool_use_id FROM messages WHERE session_id = ? AND rewind_at IS NULL',
   ).all(sessionId);
   // edit-last-message 原子守卫(与 worker/opHandlers/tx.ts 镜像同步):软删同一
   // 临界区内断言 target 之后没有更新的可见 user 消息,命中 → 抛错,软删不发生。
@@ -1001,15 +1723,74 @@ function rewindCommit(readyDb, args) {
     targetMessageUuid,
     preserveMessageUuid,
   });
+  const rewoundIds = new Set(idsToRewind);
   const updateMessage = readyDb.prepare('UPDATE messages SET rewind_at = ? WHERE id = ?');
+  const hasSubagentRuns = Boolean(
+    readyDb.prepare("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'subagent_runs'").get(),
+  );
+  const rewindSubagentByParent = hasSubagentRuns
+    ? readyDb.prepare('UPDATE subagent_runs SET rewind_at = ? WHERE session_id = ? AND rewind_at IS NULL AND parent_tool_use_id = ?')
+    : null;
+  const rewindParentlessSubagentTail = hasSubagentRuns
+    ? readyDb.prepare('UPDATE subagent_runs SET rewind_at = ? WHERE session_id = ? AND rewind_at IS NULL AND parent_tool_use_id IS NULL AND started_at >= ?')
+    : null;
+  const updateAgentMeta = readyDb.prepare('UPDATE messages SET agent_meta = ? WHERE id = ?');
   readyDb.transaction(() => {
+    const session = readyDb.prepare('SELECT cleared_at FROM sessions WHERE id = ?').get(sessionId);
+    if (!session) {
+      throw Object.assign(new Error('Session missing: ' + sessionId), { code: 'NOT_FOUND' });
+    }
+    const currentClearedAt = session.cleared_at ?? null;
+    if ((currentClearedAt ?? -1) !== (expectedClearedAt ?? -1)) {
+      throw Object.assign(
+        new Error('CLEAR_GENERATION_CHANGED: clear-boundary changed for ' + sessionId),
+        { code: 'PRECONDITION_FAILED' },
+      );
+    }
+    if (currentClearedAt !== null && targetCreatedAt <= currentClearedAt) {
+      throw Object.assign(
+        new Error('CLEAR_GENERATION_CHANGED: target is at or before /clear for ' + sessionId),
+        { code: 'PRECONDITION_FAILED' },
+      );
+    }
     for (const id of idsToRewind) updateMessage.run(now, id);
-    if (sdkSessionId) {
-      readyDb.prepare('UPDATE sessions SET user_send_at = ?, updated_at = ?, context_tokens = 0, context_window = 0, sdk_session_id = ? WHERE id = ?').run(now, now, sdkSessionId, sessionId);
+    // Mirror worker/opHandlers/tx.ts: surviving rows that still anchor the old
+    // Codex thread are remapped to the replacement thread in the same transaction.
+    if (nativeForkAnchorSessionMap.size > 0) {
+      for (const row of rows) {
+        if (rewoundIds.has(row.id) || !row.agent_meta) continue;
+        const remapped = remapNativeForkAnchorSession(row.agent_meta, nativeForkAnchorSessionMap);
+        if (remapped !== row.agent_meta) updateAgentMeta.run(remapped, row.id);
+      }
+    }
+    if (rewindSubagentByParent && rewindParentlessSubagentTail) {
+      const parentToolUseIds = new Set(
+        rows.flatMap((row) => rewoundIds.has(row.id) && row.tool_use_id ? [row.tool_use_id] : []),
+      );
+      for (const toolUseId of parentToolUseIds) {
+        rewindSubagentByParent.run(now, sessionId, toolUseId);
+      }
+      // Mirror worker/opHandlers/tx.ts: parentless same-ms rows are ambiguous,
+      // so fail closed rather than expose work from a withdrawn branch.
+      rewindParentlessSubagentTail.run(now, sessionId, targetCreatedAt);
+    }
+    if (nativeContextReset) {
+      readyDb.prepare('UPDATE sessions SET user_send_at = ?, updated_at = ?, context_tokens = 0, context_window = 0, codex_plan_json = NULL, sdk_session_id = NULL, list_preview = NULL, list_preview_role = NULL, list_message_count = NULL WHERE id = ?').run(now, now, sessionId);
+      readyDb.prepare("INSERT INTO messages (id, client_id, session_id, role, content, created_at, rewind_at) VALUES (?, ?, ?, 'context_rebuild', ?, ?, ?)").run(
+        nativeContextReset.markerId,
+        nativeContextReset.markerClientId,
+        sessionId,
+        nativeContextReset.markerContent,
+        now,
+        now,
+      );
+    } else if (sdkSessionId) {
+      readyDb.prepare('UPDATE sessions SET user_send_at = ?, updated_at = ?, context_tokens = 0, context_window = 0, codex_plan_json = NULL, sdk_session_id = ?, list_preview = NULL, list_preview_role = NULL WHERE id = ?').run(now, now, sdkSessionId, sessionId);
     } else {
-      readyDb.prepare('UPDATE sessions SET user_send_at = ?, updated_at = ?, context_tokens = 0, context_window = 0 WHERE id = ?').run(now, now, sessionId);
+      readyDb.prepare('UPDATE sessions SET user_send_at = ?, updated_at = ?, context_tokens = 0, context_window = 0, codex_plan_json = NULL, list_preview = NULL, list_preview_role = NULL WHERE id = ?').run(now, now, sessionId);
     }
   })();
+  return rows.filter((row) => rewoundIds.has(row.id)).map((row) => row.client_id);
 }
 
 function parsedTreeObjectJson(value) {
@@ -1150,7 +1931,7 @@ function sessionTreeRehydrate(readyDb, args) {
       }
       upsert.run(row.id, row.clientId, sessionId, row.role, content, row.toolUseId, agentMeta, row.agentKind, row.createdAt);
     }
-    readyDb.prepare('UPDATE sessions SET cleared_at = NULL, context_tokens = ?, context_window = ?, updated_at = ? WHERE id = ?').run(contextTokens, contextWindow, now, sessionId);
+    readyDb.prepare('UPDATE sessions SET cleared_at = NULL, context_tokens = ?, context_window = ?, updated_at = ?, list_preview = NULL, list_preview_role = NULL, list_message_count = NULL WHERE id = ?').run(contextTokens, contextWindow, now, sessionId);
     return captured;
   })();
   return { messageCount: rows.length, hiddenClientIds };
@@ -1211,6 +1992,18 @@ function parseAgentMeta(raw) {
   }
 }
 
+// Keep the inline fallback aligned with localDb/forkRecoverySnapshot.ts.
+function computeForkSourceMessagesDigest(rows) {
+  const hash = crypto.createHash('sha256');
+  for (const row of rows) {
+    hash.update(JSON.stringify([
+      row.client_id, row.role, row.content, row.tool_use_id ?? null,
+      row.agent_meta ?? null, row.agent_kind ?? null, row.created_at,
+    ])).update('\\n');
+  }
+  return hash.digest('hex');
+}
+
 function forkSession(readyDb, args) {
   const payload = asRecord(args, 'fork.session args');
   const sourceSessionId = expectString(payload.sourceSessionId, 'sourceSessionId');
@@ -1219,23 +2012,45 @@ function forkSession(readyDb, args) {
   const targetRowid = nullableNumber(payload.targetRowid);
   const newSession = asRecord(payload.newSession, 'newSession');
   const uuidMap = normalizeUuidMap(payload.uuidMap);
+  const nativeForkAnchorSessionMap = normalizeNativeForkAnchorSessionMap(payload.nativeForkAnchorSessionMap);
   const legacyTranscriptParentUuids = normalizeStringSet(payload.legacyTranscriptParentUuids, 'legacyTranscriptParentUuids');
   const toolParentUuids = normalizeStringSet(payload.toolParentUuids, 'toolParentUuids');
   const detachAgentSwitchSessions = payload.detachAgentSwitchSessions === true;
   const resetHandoffBoundaryClientId = nullableString(payload.resetHandoffBoundaryClientId);
   const newMessageIds = normalizeNewMessageIds(payload.newMessageIds);
-  const sourceMessages = readyDb.prepare(
-    'SELECT client_id, role, content, tool_use_id, agent_meta, agent_kind, created_at FROM messages WHERE session_id = ? AND (? IS NULL OR created_at > ?) AND (created_at < ? OR (? IS NOT NULL AND created_at = ? AND rowid < ?)) AND rewind_at IS NULL ORDER BY created_at ASC, rowid ASC',
-  ).all(sourceSessionId, sourceClearedAt, sourceClearedAt, targetCreatedAt, targetRowid, targetCreatedAt, targetRowid);
-  if (newMessageIds.length !== sourceMessages.length) {
-    throw invalidArgs('newMessageIds length mismatch: expected ' + sourceMessages.length + ', got ' + newMessageIds.length);
-  }
   const insertMessage = readyDb.prepare(
     'INSERT INTO messages (id, client_id, session_id, role, content, tool_use_id, agent_meta, agent_kind, created_at, rewind_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, NULL)',
   );
-  readyDb.transaction(() => {
+  return readyDb.transaction(() => {
+    if (newSession.source === 'side-chat' && !readyDb.prepare(
+      "SELECT 1 FROM sessions WHERE id = ? AND status = 'active' AND cleared_at IS ?",
+    ).get(sourceSessionId, sourceClearedAt)) {
+      throw invalidArgs('Source task changed while opening side chat');
+    }
+    if (payload.recoveryMarker != null && !readyDb.prepare(
+      'SELECT 1 FROM sessions WHERE id = ? AND cleared_at IS ?',
+    ).get(sourceSessionId, sourceClearedAt)) {
+      throw invalidArgs('Source history changed while preparing recovery fork');
+    }
+    const sourceMessages = readyDb.prepare(
+      'SELECT client_id, role, content, tool_use_id, agent_meta, agent_kind, created_at FROM messages WHERE session_id = ? AND (? IS NULL OR created_at > ?) AND (created_at < ? OR (? IS NOT NULL AND created_at = ? AND rowid < ?)) AND rewind_at IS NULL ORDER BY created_at ASC, rowid ASC',
+    ).all(sourceSessionId, sourceClearedAt, sourceClearedAt, targetCreatedAt, targetRowid, targetCreatedAt, targetRowid);
+    if (payload.recoveryMarker != null) {
+      const marker = asRecord(payload.recoveryMarker, 'recoveryMarker');
+      if (computeForkSourceMessagesDigest(sourceMessages) !== expectString(marker.sourceMessagesDigest, 'recoveryMarker.sourceMessagesDigest')) {
+        throw invalidArgs('Source history changed while preparing recovery fork');
+      }
+    }
+    if (newMessageIds.length !== sourceMessages.length) {
+      throw invalidArgs('newMessageIds length mismatch: expected ' + sourceMessages.length + ', got ' + newMessageIds.length);
+    }
+    const childCreatedAt = expectNumber(newSession.createdAt, 'newSession.createdAt');
+    // Keep inherited history before the side-chat boundary, preserving relative order.
+    const historyTimeOffset = newSession.source === 'side-chat'
+      ? sourceMessages.reduce((offset, message) => Math.max(offset, message.created_at - childCreatedAt + 1), 0)
+      : 0;
     readyDb.prepare(
-      'INSERT INTO sessions (id, title, working_dir, model, provider_id, effort, permission_mode, status, sdk_session_id, total_token_usage, total_cost_usd, context_tokens, context_window, fast_mode, cleared_at, pinned_at, user_send_at, agent_kind, workspace_kind, codex_history_has_product_prompt, parent_session_id, forked_at_message_id, created_at, updated_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)',
+      'INSERT INTO sessions (id, title, working_dir, model, provider_id, effort, permission_mode, status, sdk_session_id, total_token_usage, total_cost_usd, context_tokens, context_window, context_window_runtime, fast_mode, cleared_at, pinned_at, user_send_at, agent_kind, workspace_kind, codex_history_has_product_prompt, parent_session_id, forked_at_message_id, agent_device_id, created_at, updated_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)',
     ).run(
       expectString(newSession.id, 'newSession.id'),
       expectString(newSession.title, 'newSession.title'),
@@ -1250,7 +2065,8 @@ function forkSession(readyDb, args) {
       expectNumber(newSession.totalCostUsd, 'newSession.totalCostUsd'),
       expectNumber(newSession.contextTokens, 'newSession.contextTokens'),
       expectNumber(newSession.contextWindow, 'newSession.contextWindow'),
-      newSession.fastMode ? 1 : 0,
+      nullableNumber(newSession.contextWindowRuntime),
+      fastModeToStorage(newSession.fastMode),
       nullableNumber(newSession.clearedAt),
       nullableNumber(newSession.pinnedAt),
       nullableNumber(newSession.userSendAt),
@@ -1259,16 +2075,51 @@ function forkSession(readyDb, args) {
       newSession.codexHistoryHasProductPrompt == null ? null : (newSession.codexHistoryHasProductPrompt ? 1 : 0),
       nullableString(newSession.parentSessionId),
       nullableString(newSession.forkedAtMessageId),
+      nullableString(newSession.agentDeviceId),
       expectNumber(newSession.createdAt, 'newSession.createdAt'),
       expectNumber(newSession.updatedAt, 'newSession.updatedAt'),
     );
+    // Keep this in sync with the worker fork transaction.
+    readyDb.prepare('UPDATE sessions SET project_dir = (SELECT project_dir FROM sessions WHERE id = ?) WHERE id = ?')
+      .run(sourceSessionId, expectString(newSession.id, 'newSession.id'));
+    if (newSession.source === 'side-chat') {
+      readyDb.prepare("UPDATE sessions SET source = 'side-chat', extra_dirs = (SELECT extra_dirs FROM sessions WHERE id = ?), writable_dirs = (SELECT writable_dirs FROM sessions WHERE id = ?) WHERE id = ?")
+        .run(sourceSessionId, sourceSessionId, expectString(newSession.id, 'newSession.id'));
+    }
     for (let i = 0; i < sourceMessages.length; i += 1) {
       const message = sourceMessages[i];
       const ids = newMessageIds[i];
-      insertMessage.run(ids.id, ids.clientId, expectString(newSession.id, 'newSession.id'), message.role, sanitizeForkedMessageContent(message, { detachAgentSwitchSessions, resetHandoffBoundaryClientId }), message.tool_use_id, remapAgentMetaUuid(message.agent_meta, uuidMap, legacyTranscriptParentUuids, toolParentUuids), message.agent_kind, message.created_at);
+      insertMessage.run(ids.id, ids.clientId, expectString(newSession.id, 'newSession.id'), message.role, sanitizeForkedMessageContent(message, { detachAgentSwitchSessions, resetHandoffBoundaryClientId }), message.tool_use_id, remapForkedAgentMeta(message.agent_meta, uuidMap, legacyTranscriptParentUuids, toolParentUuids, nativeForkAnchorSessionMap), message.agent_kind, message.created_at - historyTimeOffset);
     }
+    if (payload.recoveryMarker != null) {
+      const marker = asRecord(payload.recoveryMarker, 'recoveryMarker');
+      const markerCreatedAt = newSession.source === 'side-chat'
+        ? childCreatedAt
+        : expectNumber(marker.createdAt, 'recoveryMarker.createdAt');
+      readyDb.prepare(
+        "INSERT INTO messages (id, client_id, session_id, role, content, agent_kind, created_at, rewind_at) VALUES (?, ?, ?, 'context_rebuild', ?, ?, ?, ?)",
+      ).run(
+        expectString(marker.id, 'recoveryMarker.id'),
+        expectString(marker.clientId, 'recoveryMarker.clientId'),
+        expectString(newSession.id, 'newSession.id'),
+        expectString(marker.content, 'recoveryMarker.content'),
+        expectString(newSession.agentKind, 'newSession.agentKind'),
+        markerCreatedAt,
+        markerCreatedAt,
+      );
+      const content = asRecord(JSON.parse(expectString(marker.content, 'recoveryMarker.content')), 'recoveryMarker content');
+      insertMessage.run(
+        expectString(marker.id, 'recoveryMarker.id') + ':card',
+        expectString(marker.clientId, 'recoveryMarker.clientId') + ':card',
+        expectString(newSession.id, 'newSession.id'),
+        'assistant', '', null,
+        JSON.stringify({ contextRebuild: { reason: content.reason, handoff: content.handoff } }),
+        expectString(newSession.agentKind, 'newSession.agentKind'),
+        markerCreatedAt,
+      );
+    }
+    return { messageCount: sourceMessages.length };
   })();
-  return { messageCount: sourceMessages.length };
 }
 
 function sanitizeForkedMessageContent(message, opts) {
@@ -1391,113 +2242,31 @@ function embeddingEnqueue(readyDb, args) {
   return { inserted, skipped: items.length - inserted };
 }
 
-function readExistingImportedClientIds(readyDb, sessionId, importClientIdPrefix) {
-  const rows = readyDb.prepare('SELECT client_id AS clientId FROM messages WHERE session_id = ? AND client_id LIKE ?').all(sessionId, importClientIdPrefix + '%');
-  return new Set(rows.map((row) => row.clientId));
-}
-
-function readExistingMessageFingerprints(readyDb, sessionId, importClientIdPrefix) {
-  const rows = readyDb.prepare("SELECT role, content, created_at AS createdAt FROM messages WHERE session_id = ? AND role IN ('user', 'assistant') AND client_id NOT LIKE ?").all(sessionId, importClientIdPrefix + '%');
-  const out = [];
-  for (const row of rows) {
-    if (row.role !== 'user' && row.role !== 'assistant') continue;
-    const text = normalizeStoredMessageText(row.content);
-    if (text) out.push(messageFingerprint(row.role, text, row.createdAt));
+// Mirror of worker/opHandlers/tx.ts remapNativeForkAnchorSession: only the
+// nativeForkAnchor.sdkSessionId moves; uuid / parent chains are untouched.
+function remapNativeForkAnchorSession(raw, map) {
+  let parsed;
+  try {
+    parsed = JSON.parse(raw);
+  } catch {
+    return raw;
   }
-  return out;
-}
-
-function isLikelyLocalDuplicate(existing, row) {
-  const next = messageFingerprint(row.role, row.text, row.createdAt);
-  // 普通消息原文精确比较;canon 有损比较只在「至少一侧含原始标记字面量」时启用
-  // (升级前旧标记行 vs 已归一化导入行),避免仅 Markdown 格式不同的正常回复被
-  // 误判成重复。口径同 opHandlers/tx.ts。
-  return existing.some((prev) => prev.role === next.role
-    && Math.abs(prev.createdAt - next.createdAt) <= LOCAL_DUPLICATE_WINDOW_MS
-    && (prev.plain === next.plain
-      || (prev.canonical !== undefined && next.canonical !== undefined
-        && (prev.hasMarker || next.hasMarker)
-        && prev.canonical === next.canonical)));
-}
-
-function messageFingerprint(role, text, createdAt) {
-  const plain = normalizeFingerprintText(text);
-  const hasMarker = role === 'assistant' && text.includes(CODEX_CITATION_OPEN);
-  const canonical = role === 'assistant'
-    ? normalizeFingerprintText(canonicalizeCodexCitations(text))
-    : undefined;
-  const out = { role, plain, hasMarker, createdAt };
-  if (canonical !== undefined) out.canonical = canonical;
-  return out;
-}
-
-// 与 opHandlers/tx.ts 的指纹规范形同构;SSoT 注释见该文件,口径变更需同步。
-const CODEX_CITATION_RE = /:codex-file-citation\\{((?:[^"{}]|"(?:[^"\\\\]|\\\\.)*")*)\\}/g;
-const CODEX_CITATION_OPEN = ':codex-file-citation{';
-
-function codexCitationClose(text, attrsStart) {
-  let inQuote = false;
-  for (let i = attrsStart; i < text.length; i += 1) {
-    const ch = text[i];
-    if (inQuote && ch === '\\\\') i += 1;
-    else if (ch === '"') inQuote = !inQuote;
-    else if (!inQuote && ch === '}') return i;
-    else if (!inQuote && ch === '{') return -2;
+  if (!isRecord(parsed)) return raw;
+  const nativeForkAnchor = parsed.nativeForkAnchor;
+  if (
+    !isRecord(nativeForkAnchor) ||
+    nativeForkAnchor.agentKind !== 'codex' ||
+    nativeForkAnchor.kind !== 'turn' ||
+    typeof nativeForkAnchor.sdkSessionId !== 'string'
+  ) {
+    return raw;
   }
-  return -1;
+  const mapped = map.get(nativeForkAnchor.sdkSessionId);
+  if (!mapped || mapped === nativeForkAnchor.sdkSessionId) return raw;
+  return JSON.stringify({ ...parsed, nativeForkAnchor: { ...nativeForkAnchor, sdkSessionId: mapped } });
 }
 
-function decodeCitationPathForFingerprint(attrs) {
-  const m = /(?:^|\\s)path="((?:[^"\\\\]|\\\\.)*)"/.exec(attrs);
-  if (!m) return '';
-  const raw = m[1];
-  const nativeUnc = raw.startsWith('\\\\\\\\') && raw[2] !== '\\\\';
-  const head = nativeUnc ? '\\\\\\\\' : '';
-  return head + (nativeUnc ? raw.slice(2) : raw).replace(/\\\\([\\\\"])/g, '$1');
-}
-
-function canonicalizeCodexCitations(text) {
-  let out = text;
-  let from = 0;
-  for (;;) {
-    const open = out.indexOf(CODEX_CITATION_OPEN, from);
-    if (open === -1) break;
-    const close = codexCitationClose(out, open + CODEX_CITATION_OPEN.length);
-    if (close === -1) { out = out.slice(0, open); break; }
-    from = close === -2 ? open + CODEX_CITATION_OPEN.length : close + 1;
-  }
-  for (let i = 0; i < 5; i += 1) {
-    const next = out.replace(CODEX_CITATION_RE, (_all, attrs) => decodeCitationPathForFingerprint(attrs));
-    if (next === out) break;
-    out = next;
-  }
-  return out.replace(/\`+/g, '').replace(/\\s+/g, ' ');
-}
-
-function normalizeStoredMessageText(raw) {
-  let value = raw;
-  try { value = JSON.parse(raw); } catch (_) {}
-  return extractContentText(value);
-}
-
-function normalizeFingerprintText(text) {
-  return text.replace(/\\r\\n/g, '\\n').trim();
-}
-
-function extractContentText(content) {
-  if (typeof content === 'string') return content;
-  if (isRecord(content) && typeof content.text === 'string') return content.text;
-  if (!Array.isArray(content)) return '';
-  const parts = [];
-  for (const block of content) {
-    if (!isRecord(block)) continue;
-    const type = typeof block.type === 'string' ? block.type : '';
-    if ((type === 'input_text' || type === 'output_text' || type === 'text') && typeof block.text === 'string') parts.push(block.text);
-  }
-  return parts.join('\\n\\n');
-}
-
-function remapAgentMetaUuid(raw, map, legacyTranscriptParentUuids = new Set(), toolParentUuids = new Set()) {
+function remapForkedAgentMeta(raw, map, legacyTranscriptParentUuids = new Set(), toolParentUuids = new Set(), nativeForkAnchorSessionMap = new Map()) {
   if (!raw || raw === 'null') return raw;
   let parsed;
   try { parsed = JSON.parse(raw); } catch (_) { return raw; }
@@ -1521,6 +2290,19 @@ function remapAgentMetaUuid(raw, map, legacyTranscriptParentUuids = new Set(), t
     if (mapped) next.transcriptParentUuid = mapped;
     else delete next.transcriptParentUuid;
   }
+  const nativeForkAnchor = next.nativeForkAnchor;
+  if (
+    next.turnCompleted === true &&
+    isRecord(nativeForkAnchor) &&
+    nativeForkAnchor.agentKind === 'codex' &&
+    nativeForkAnchor.kind === 'turn' &&
+    typeof nativeForkAnchor.id === 'string' &&
+    nativeForkAnchor.id &&
+    typeof nativeForkAnchor.sdkSessionId === 'string'
+  ) {
+    const mapped = nativeForkAnchorSessionMap.get(nativeForkAnchor.sdkSessionId);
+    if (mapped) next.nativeForkAnchor = { ...nativeForkAnchor, sdkSessionId: mapped };
+  }
   return JSON.stringify(next);
 }
 
@@ -1530,14 +2312,22 @@ function normalizeStringSet(value, label) {
 }
 
 function normalizeUuidMap(value) {
+  return normalizeStringMap(value, 'uuidMap');
+}
+
+function normalizeNativeForkAnchorSessionMap(value) {
+  return value === undefined ? new Map() : normalizeStringMap(value, 'nativeForkAnchorSessionMap');
+}
+
+function normalizeStringMap(value, label) {
   if (Array.isArray(value)) {
     return new Map(value.map((entry) => {
-      if (!Array.isArray(entry) || entry.length !== 2) throw invalidArgs('uuidMap entries must be pairs');
-      return [expectString(entry[0], 'uuidMap.key'), expectString(entry[1], 'uuidMap.value')];
+      if (!Array.isArray(entry) || entry.length !== 2) throw invalidArgs(label + ' entries must be pairs');
+      return [expectString(entry[0], label + '.key'), expectString(entry[1], label + '.value')];
     }));
   }
-  const record = asRecord(value, 'uuidMap');
-  return new Map(Object.entries(record).map(([key, mapped]) => [key, expectString(mapped, 'uuidMap.' + key)]));
+  const record = asRecord(value, label);
+  return new Map(Object.entries(record).map(([key, mapped]) => [key, expectString(mapped, label + '.' + key)]));
 }
 
 function normalizeNewMessageIds(value) {
@@ -1556,11 +2346,6 @@ function assertIdentifier(value) {
 
 function truncate(value, max) {
   return value.length <= max ? value : value.slice(0, max) + '...';
-}
-
-function stringifyContent(value) {
-  const json = JSON.stringify(value);
-  return json === undefined ? 'null' : json;
 }
 
 function asRecord(value, label) {
@@ -1652,6 +2437,8 @@ function invalidArgs(message) {
 async function dispatch(op, args) {
   const readyDb = requireReadyDb();
   switch (op) {
+    case 'worktreeReferences':
+      return readLocalWorktreeReferences();
     case 'query': {
       const { sql, params } = args || {};
       return readyDb.prepare(sql).all(...normalizeParams(params));
@@ -1698,24 +2485,31 @@ async function dispatch(op, args) {
 setDatabase(workerData || {});
 
 parentPort.on('message', async (req) => {
+  const startedAt = performance.timeOrigin + performance.now();
+  const timing = () => ({ startedAt, finishedAt: performance.timeOrigin + performance.now() });
   try {
     const result = await dispatch(req.op, req.args);
-    parentPort.postMessage({ id: req.id, ok: true, result });
+    parentPort.postMessage({ id: req.id, ok: true, result, timing: timing() });
   } catch (err) {
-    parentPort.postMessage({ id: req.id, ok: false, error: rpcError(err) });
+    parentPort.postMessage({ id: req.id, ok: false, error: rpcError(err), timing: timing() });
   }
 });
 `;
 
 interface PendingRpc {
+  op: string;
+  enqueuedAt: number;
+  dispatchedAt: number;
   resolve: (value: unknown) => void;
   reject: (err: Error) => void;
   timeout: ReturnType<typeof setTimeout>;
   /** 当前预算窗口的起点(挂钟)。跨睡眠重武装时会重置,见 evaluateRpcTimeout。 */
   sentAtMs: number;
+  background: boolean;
 }
 
 interface QueuedRpc {
+  enqueuedAt: number;
   req: RpcRequest;
   transferList: unknown[];
   resolve: (value: unknown) => void;
@@ -1723,6 +2517,7 @@ interface QueuedRpc {
   /** RPC 总预算从进入 transport 开始计,而不是等 dispatch 后才开始。 */
   budgetStartedAtMs: number;
   queueTimeout?: ReturnType<typeof setTimeout>;
+  background: boolean;
 }
 
 /**
@@ -1733,8 +2528,7 @@ const SLEEP_DETECTION_SLACK_MS = 5_000;
 
 /** RPC 超时评估结果:reject = 真超时;rearm = 定时器横跨系统睡眠,应重置预算续等。 */
 export type RpcTimeoutVerdict =
-  | { kind: 'reject'; wallElapsedMs: number }
-  | { kind: 'rearm'; wallElapsedMs: number };
+  { kind: 'reject'; wallElapsedMs: number } | { kind: 'rearm'; wallElapsedMs: number };
 
 /**
  * 判定一次 RPC 超时是真超时还是「跨睡眠假超时」。
@@ -1777,12 +2571,19 @@ export interface WorkerThreadTransportOptions {
   maxQueuedRpcs?: number;
   /** 单个 RPC 从入队到完成的总预算；生产默认 30s，测试可缩短。 */
   rpcTimeoutMs?: number;
+  /** 后台读（侧栏/对账）在途上限；写入和发消息走主配额。 */
+  maxBackgroundInFlightRpcs?: number;
+  /** 后台读排队上限；超出只拒后台读，不挡写入。 */
+  maxBackgroundQueuedRpcs?: number;
 }
 
 export class WorkerThreadTransport implements DbTransport {
   private static readonly RPC_TIMEOUT_MS = 30_000;
   private static readonly DEFAULT_MAX_IN_FLIGHT_RPCS = 128;
   private static readonly DEFAULT_MAX_QUEUED_RPCS = 512;
+  /** 一次侧栏索引大约 4 路 rawAll；16 够几路对账并行，占不满 128。 */
+  private static readonly DEFAULT_MAX_BACKGROUND_IN_FLIGHT_RPCS = 16;
+  private static readonly DEFAULT_MAX_BACKGROUND_QUEUED_RPCS = 32;
 
   private worker: Worker;
   private nextId = 1;
@@ -1802,27 +2603,35 @@ export class WorkerThreadTransport implements DbTransport {
 
   send<R = unknown>(op: string, args?: unknown, transferList?: unknown[]): Promise<R> {
     if (this.closed || this.closing) {
-      return Promise.reject(new Error('db worker transport is closed'));
+      return Promise.reject(
+        createDbTransportError(DB_TRANSPORT_NOT_SENT, 'db worker transport is closed'),
+      );
     }
     const id = this.nextId++;
     const req: RpcRequest = { id, op, args };
+    const background = isBackgroundDbRpc();
     return new Promise<R>((resolve, reject) => {
       const queued: QueuedRpc = {
+        enqueuedAt: performance.timeOrigin + performance.now(),
         req,
         transferList: transferList ?? [],
         resolve: resolve as (value: unknown) => void,
         reject,
         budgetStartedAtMs: Date.now(),
+        background,
       };
-      if (this.pending.size < this.maxInFlightRpcs) {
+      if (this.canDispatchImmediately(queued)) {
         this.dispatch(queued);
         return;
       }
-      if (this.queued.length >= this.maxQueuedRpcs) {
+      if (!this.canEnqueue(queued)) {
         reject(
-          new Error(
+          createDbTransportError(
+            DB_TRANSPORT_NOT_SENT,
             `db worker RPC queue overloaded: op="${op}" inFlight=${this.pending.size}` +
-              ` queued=${this.queued.length}`,
+              ` queued=${this.queued.length}` +
+              ` backgroundInFlight=${this.backgroundPendingCount()}` +
+              ` backgroundQueued=${this.backgroundQueuedCount()}`,
           ),
         );
         return;
@@ -1836,9 +2645,7 @@ export class WorkerThreadTransport implements DbTransport {
   on(event: 'vec-status', cb: (payload: VecStatusEvent) => void): void;
   on(
     event: EventName,
-    cb:
-      | ((payload: LogEvent) => void)
-      | ((payload: VecStatusEvent) => void),
+    cb: ((payload: LogEvent) => void) | ((payload: VecStatusEvent) => void),
   ): void {
     const listeners = this.eventListeners.get(event) ?? new Set<(payload: unknown) => void>();
     listeners.add(cb as (payload: unknown) => void);
@@ -1862,7 +2669,10 @@ export class WorkerThreadTransport implements DbTransport {
       // Worker may already be down; terminate below still releases resources.
     } finally {
       this.closed = true;
-      this.rejectAllPending(new Error('db worker transport closed'));
+      this.rejectAllPending(
+        createDbTransportError(DB_TRANSPORT_OUTCOME_UNKNOWN, 'db worker transport closed'),
+        createDbTransportError(DB_TRANSPORT_NOT_SENT, 'db worker transport closed'),
+      );
       await this.worker.terminate();
     }
   }
@@ -1887,15 +2697,57 @@ export class WorkerThreadTransport implements DbTransport {
     return this.opts.rpcTimeoutMs ?? WorkerThreadTransport.RPC_TIMEOUT_MS;
   }
 
+  private get maxBackgroundInFlightRpcs(): number {
+    return Math.min(
+      this.maxInFlightRpcs,
+      this.opts.maxBackgroundInFlightRpcs ?? WorkerThreadTransport.DEFAULT_MAX_BACKGROUND_IN_FLIGHT_RPCS,
+    );
+  }
+
+  private get maxBackgroundQueuedRpcs(): number {
+    return Math.min(
+      this.maxQueuedRpcs,
+      this.opts.maxBackgroundQueuedRpcs ?? WorkerThreadTransport.DEFAULT_MAX_BACKGROUND_QUEUED_RPCS,
+    );
+  }
+
+  private backgroundPendingCount(): number {
+    let count = 0;
+    for (const pending of this.pending.values()) {
+      if (pending.background) count += 1;
+    }
+    return count;
+  }
+
+  private backgroundQueuedCount(): number {
+    let count = 0;
+    for (const item of this.queued) {
+      if (item.background) count += 1;
+    }
+    return count;
+  }
+
+  private canDispatchImmediately(item: QueuedRpc): boolean {
+    if (this.pending.size >= this.maxInFlightRpcs) return false;
+    if (item.background && this.backgroundPendingCount() >= this.maxBackgroundInFlightRpcs) {
+      return false;
+    }
+    return true;
+  }
+
+  private canEnqueue(item: QueuedRpc): boolean {
+    if (this.queued.length >= this.maxQueuedRpcs) return false;
+    if (item.background && this.backgroundQueuedCount() >= this.maxBackgroundQueuedRpcs) {
+      return false;
+    }
+    return true;
+  }
+
   private armQueuedTimeout(item: QueuedRpc): void {
     const onTimeout = (): void => {
       const index = this.queued.indexOf(item);
       if (index < 0) return;
-      const verdict = evaluateRpcTimeout(
-        item.budgetStartedAtMs,
-        Date.now(),
-        this.rpcTimeoutMs,
-      );
+      const verdict = evaluateRpcTimeout(item.budgetStartedAtMs, Date.now(), this.rpcTimeoutMs);
       if (verdict.kind === 'rearm') {
         item.budgetStartedAtMs = Date.now();
         item.queueTimeout = setTimeout(onTimeout, this.rpcTimeoutMs);
@@ -1903,7 +2755,8 @@ export class WorkerThreadTransport implements DbTransport {
       }
       this.queued.splice(index, 1);
       item.reject(
-        new Error(
+        createDbTransportError(
+          DB_TRANSPORT_NOT_SENT,
           `db worker RPC queue timeout: op="${item.req.op}" id=${item.req.id}` +
             ` exceeded ${this.rpcTimeoutMs / 1000}s total budget`,
         ),
@@ -1918,11 +2771,7 @@ export class WorkerThreadTransport implements DbTransport {
     const onTimeout = (): void => {
       const pending = this.pending.get(id);
       if (!pending) return;
-      const verdict = evaluateRpcTimeout(
-        pending.sentAtMs,
-        Date.now(),
-        this.rpcTimeoutMs,
-      );
+      const verdict = evaluateRpcTimeout(pending.sentAtMs, Date.now(), this.rpcTimeoutMs);
       if (verdict.kind === 'rearm') {
         // 跨睡眠假超时:重置预算续等,请求在唤醒后照常完成或在真超时时拒绝。
         this.emitClientLog('warn', {
@@ -1937,7 +2786,8 @@ export class WorkerThreadTransport implements DbTransport {
       }
       this.pending.delete(id);
       pending.reject(
-        new Error(
+        createDbTransportError(
+          DB_TRANSPORT_OUTCOME_UNKNOWN,
           `db worker RPC timeout: op="${op}" id=${id} exceeded ${this.rpcTimeoutMs / 1000}s` +
             ` wallElapsedMs=${verdict.wallElapsedMs}`,
         ),
@@ -1945,30 +2795,47 @@ export class WorkerThreadTransport implements DbTransport {
       this.drainQueue();
     };
     const budgetElapsedMs = Date.now() - item.budgetStartedAtMs;
-    const remainingBudgetMs = Math.max(
-      1,
-      this.rpcTimeoutMs - budgetElapsedMs,
-    );
+    const remainingBudgetMs = Math.max(1, this.rpcTimeoutMs - budgetElapsedMs);
     const timeout = setTimeout(onTimeout, remainingBudgetMs);
     this.pending.set(id, {
+      op,
+      enqueuedAt: item.enqueuedAt,
+      dispatchedAt: performance.timeOrigin + performance.now(),
       resolve: item.resolve,
       reject: item.reject,
       timeout,
       sentAtMs: item.budgetStartedAtMs,
+      background: item.background,
     });
     try {
       this.worker.postMessage(item.req, item.transferList as never);
     } catch (err) {
       clearTimeout(timeout);
       this.pending.delete(id);
-      item.reject(toError(err));
+      item.reject(createDbTransportError(DB_TRANSPORT_NOT_SENT, toError(err).message, err));
       this.drainQueue();
     }
   }
 
+  private takeNextQueued(): QueuedRpc | undefined {
+    const interactiveIndex = this.queued.findIndex((item) => !item.background);
+    if (interactiveIndex >= 0) {
+      const next = this.queued[interactiveIndex];
+      if (!this.canDispatchImmediately(next)) return undefined;
+      this.queued.splice(interactiveIndex, 1);
+      return next;
+    }
+    const backgroundIndex = this.queued.findIndex((item) => item.background);
+    if (backgroundIndex < 0) return undefined;
+    const next = this.queued[backgroundIndex];
+    if (!this.canDispatchImmediately(next)) return undefined;
+    this.queued.splice(backgroundIndex, 1);
+    return next;
+  }
+
   private drainQueue(): void {
     while (!this.closed && this.pending.size < this.maxInFlightRpcs) {
-      const next = this.queued.shift();
+      const next = this.takeNextQueued();
       if (!next) return;
       this.dispatch(next);
     }
@@ -1982,14 +2849,20 @@ export class WorkerThreadTransport implements DbTransport {
       if (workerTerminated) return;
       workerTerminated = true;
       const error = toError(err);
-      this.rejectAllPending(error);
+      this.rejectAllPending(
+        createDbTransportError(DB_TRANSPORT_OUTCOME_UNKNOWN, error.message, error),
+        createDbTransportError(DB_TRANSPORT_NOT_SENT, error.message, error),
+      );
       this.emitTerminated({ code: null, signal: null, error });
     });
     worker.on('exit', (code) => {
       if (workerTerminated) return;
       workerTerminated = true;
       const err = new Error(`db worker exited with code ${code}`);
-      this.rejectAllPending(err);
+      this.rejectAllPending(
+        createDbTransportError(DB_TRANSPORT_OUTCOME_UNKNOWN, err.message, err),
+        createDbTransportError(DB_TRANSPORT_NOT_SENT, err.message, err),
+      );
       this.emitTerminated({ code, signal: null });
     });
     return worker;
@@ -2028,6 +2901,29 @@ export class WorkerThreadTransport implements DbTransport {
       if (!pending) return;
       this.pending.delete(msg.id);
       clearTimeout(pending.timeout);
+      const receivedAt = performance.timeOrigin + performance.now();
+      const totalMs = receivedAt - pending.enqueuedAt;
+      if (totalMs >= 250) {
+        // Local debug only: operation class and durations, never query/args/results.
+        // Delivery includes result transfer and main event-loop scheduling; execution
+        // includes a whole worker operation (possibly a transaction), not only SQL.
+        const ms = (value: number) => Math.round(Math.max(0, value));
+        try {
+          this.emitClientLog('debug', {
+            event: 'rpc.slow', id: msg.id, totalMs: ms(totalMs),
+            op: ['rawAll', 'rawGet', 'query', 'queryOne', 'run', 'exec', 'tx', 'closeDb', 'worktreeReferences'].includes(pending.op) ? pending.op : 'other',
+            queueMs: ms(pending.dispatchedAt - pending.enqueuedAt),
+            ...(msg.timing ? {
+              workerWaitMs: ms(msg.timing.startedAt - pending.dispatchedAt),
+              workerExecutionMs: ms(msg.timing.finishedAt - msg.timing.startedAt),
+              deliveryMs: ms(receivedAt - msg.timing.finishedAt),
+            } : {}),
+            inFlight: this.pending.size, queued: this.queued.length, ok: msg.ok,
+          });
+        } catch {
+          // Debug sinks must not prevent settling the RPC or draining the queue.
+        }
+      }
       if (msg.ok) {
         pending.resolve(msg.result);
       } else {
@@ -2058,15 +2954,15 @@ export class WorkerThreadTransport implements DbTransport {
     for (const cb of listeners) cb(event);
   }
 
-  private rejectAllPending(err: Error): void {
+  private rejectAllPending(pendingError: Error, queuedError: Error = pendingError): void {
     for (const pending of this.pending.values()) {
       clearTimeout(pending.timeout);
-      pending.reject(err);
+      pending.reject(pendingError);
     }
     this.pending.clear();
     for (const queued of this.queued.splice(0)) {
       if (queued.queueTimeout) clearTimeout(queued.queueTimeout);
-      queued.reject(err);
+      queued.reject(queuedError);
     }
   }
 

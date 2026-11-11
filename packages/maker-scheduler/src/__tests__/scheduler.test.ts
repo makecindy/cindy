@@ -19,6 +19,7 @@ import type { Logger } from '../interfaces/logger.js';
 class InMemoryStorage implements ScheduleStorage {
   schedules = new Map<string, Schedule>();
   runs = new Map<string, ScheduleRun>();
+  claimInterruptedRun?: ScheduleStorage['claimInterruptedRun'];
 
   async list(filter?: ListFilter): Promise<Schedule[]> {
     const all = [...this.schedules.values()];
@@ -35,10 +36,15 @@ class InMemoryStorage implements ScheduleStorage {
     this.schedules.set(schedule.id, { ...schedule });
     return { ...schedule };
   }
-  async update(id: string, patch: Partial<Schedule>): Promise<Schedule | null> {
+  async update(id: string, patch: Partial<Schedule>, expected?: Schedule): Promise<Schedule | null> {
     const ex = this.schedules.get(id);
     if (!ex) return null;
+    if (expected && (['lastFiredAt', 'nextFireAt', 'status', 'recurring', 'manual',
+      'cronExpr', 'timezone', 'intervalMs', 'expireAt'] as const).some((key) => ex[key] !== expected[key])) return null;
     const merged: Schedule = { ...ex, ...patch };
+    if (patch.lastFinishedAt !== undefined) {
+      merged.lastFinishedAt = Math.max(ex.lastFinishedAt ?? patch.lastFinishedAt, patch.lastFinishedAt);
+    }
     this.schedules.set(id, merged);
     return { ...merged };
   }
@@ -69,9 +75,13 @@ class InMemoryStorage implements ScheduleStorage {
       (r) => r.status === 'running' && (scheduleId === undefined || r.scheduleId === scheduleId),
     );
   }
-  async deleteRun(id: string): Promise<ScheduleRun | null> {
+  async hasUnfinishedRuns(scheduleId: string): Promise<boolean> {
+    return [...this.runs.values()].some((r) => r.scheduleId === scheduleId &&
+      (r.status === 'running' || r.status === 'interrupted'));
+  }
+  async deleteRun(id: string, options?: { excludeBotSchedules?: boolean }): Promise<ScheduleRun | null> {
     const ex = this.runs.get(id);
-    if (!ex) return null;
+    if (!ex || (options?.excludeBotSchedules && this.schedules.get(ex.scheduleId)?.source === 'bot')) return null;
     this.runs.delete(id);
     return { ...ex };
   }
@@ -114,6 +124,426 @@ class InMemoryStorage implements ScheduleStorage {
   }
 }
 
+// Rule (2026-11-06): a host-triggered run must reach the runner with its trigger so the pre-run
+// check can skip its own pacing; manual runs stay unmarked. Minimal input: two runNow calls (unit).
+it('hands a runNow trigger to the runner and leaves manual runs unmarked', async () => {
+  const h = makeHarness();
+  await h.scheduler.start();
+  const schedule = await h.scheduler.create(baseInput);
+  const trigger = { kind: 'watch' as const, source: 'pr-status', detail: 'https://github.com/o/r/pull/1' };
+  await h.scheduler.runNow(schedule.id, { trigger });
+  await h.scheduler.runNow(schedule.id);
+  expect(h.fireCalls.map((call) => call.ctx.trigger)).toEqual([trigger, undefined]);
+  await h.scheduler.stop();
+});
+
+// Regression: quitting while a runner is active must preserve an interrupted run,
+// even when closing the provider produces a late rejection. Unit, in-memory I/O.
+it('preserves interrupted runs on app exit instead of recording a provider-close failure', async () => {
+  let reject!: (error: Error) => void;
+  let entered!: () => void;
+  const ready = new Promise<void>((resolve) => { entered = resolve; });
+  const h = makeHarness({ runnerImpl: async (_schedule, ctx) => {
+    await ctx.onSessionBound?.('interrupted-session');
+    ctx.onTurnActive?.('interrupted-session');
+    entered();
+    return new Promise<FireResult>((_resolve, fail) => { reject = fail; });
+  } });
+  await h.scheduler.start();
+  const schedule = await h.scheduler.create(baseInput);
+  const pending = h.scheduler.runNow(schedule.id);
+  await ready;
+  const runId = h.fireCalls[0]!.ctx.runId;
+  await h.scheduler.stop({ interrupted: true });
+  expect(h.scheduler.isRunAbandoned(runId)).toBe(true);
+  expect(h.storage.runs.get(runId)).toMatchObject({ status: 'interrupted', sessionId: 'interrupted-session' });
+  reject(new Error('scheduler session ended without a terminal event (closed)'));
+  await pending;
+  expect(h.storage.runs.get(runId)?.status).toBe('interrupted');
+});
+
+// discussion_r4420812417 / unit: a DB snapshot that returns after stop must not
+// create another run, even when the same engine has already started again.
+it.each([false, true])('drops an old tick after stop (restarted=%s)', async (restarted) => {
+  const h = makeHarness();
+  await h.scheduler.start();
+  await h.scheduler.create({ ...baseInput, intervalMs: 90_000 });
+  let release!: () => void;
+  let entered!: () => void;
+  const held = new Promise<void>((resolve) => { release = resolve; });
+  const ready = new Promise<void>((resolve) => { entered = resolve; });
+  const list = h.storage.listActive.bind(h.storage);
+  vi.spyOn(h.storage, 'listActive').mockImplementationOnce(async () => {
+    const snapshot = await list();
+    entered();
+    await held;
+    return snapshot;
+  });
+  h.clock.advance(90_000);
+  const tick = h.scheduler.tick();
+  try {
+    await ready;
+    await h.scheduler.stop({ interrupted: true });
+    if (restarted) await h.scheduler.start();
+    release();
+    await tick;
+    expect(h.fireCalls).toHaveLength(0);
+    expect(h.storage.runs.size).toBe(0);
+    expect(h.scheduler.getRuntimeSnapshot().inFlightRuns).toHaveLength(0);
+  } finally {
+    release();
+    await tick;
+    await h.scheduler.stop();
+  }
+});
+
+// discussion_r4419551671: previous exit tests held the runner, not its terminal
+// storage write. Public stop must drain the latter without losing silence or
+// turning already-ended work into a resumable interruption. Unit, fake timers.
+it.each(['automatic', 'manual', 'recovery'].flatMap((source) =>
+  [false, true].map((failed) => ({ source, failed })),
+))('drains terminal persistence before app exit ($source, failed=$failed)', async ({ source, failed }) => {
+  vi.useFakeTimers();
+  let release!: () => void;
+  let entered!: () => void;
+  const held = new Promise<void>((resolve) => { release = resolve; });
+  const ready = new Promise<void>((resolve) => { entered = resolve; });
+  const h = makeHarness({ runnerImpl: async (_schedule, ctx) => {
+    await ctx.onSessionBound?.('ending-task');
+    ctx.onTurnActive?.('ending-task');
+    h.scheduler.silenceRun(ctx.runId);
+    if (failed) throw new Error('real execution failure');
+    return { sessionId: 'ending-task', resultText: 'finished work' };
+  } });
+  let running: Promise<unknown> | undefined;
+  let stopping: Promise<void> | undefined;
+  try {
+    await h.scheduler.start();
+    const schedule = await h.scheduler.create(baseInput);
+    const update = h.storage.updateRun.bind(h.storage);
+    vi.spyOn(h.storage, 'updateRun').mockImplementation(async (id, patch) => {
+      if (patch.status === 'success' || patch.status === 'failed') { entered(); await held; }
+      return update(id, patch);
+    });
+    if (source === 'recovery') {
+      await h.storage.insertRun({ id: 'old-run', scheduleId: schedule.id, sessionId: 'ending-task',
+        firedAt: h.clock.now() - 1000, status: 'interrupted' });
+      h.storage.claimInterruptedRun = async () => h.storage.updateRun('old-run', { status: 'running' });
+      running = (await h.scheduler.resumeInterruptedRun('ending-task'))!.completion;
+    } else {
+      h.clock.setTo(schedule.nextFireAt!);
+      running = source === 'automatic' ? h.scheduler.tick() : h.scheduler.runNow(schedule.id);
+    }
+    await ready;
+    const runId = h.fireCalls[0]!.ctx.runId;
+    let stopped = false;
+    stopping = h.scheduler.stop({ interrupted: true }).then(() => { stopped = true; });
+    await vi.advanceTimersByTimeAsync(0);
+    expect(stopped).toBe(false);
+    expect(h.storage.runs.get(runId)?.status).toBe('running');
+    release();
+    await running;
+    await vi.advanceTimersByTimeAsync(50);
+    await stopping;
+    expect(h.storage.runs.get(runId)).toMatchObject({
+      status: failed ? 'failed' : 'success',
+      ...(failed ? { errorMsg: 'real execution failure' } : { resultText: 'finished work', readAt: h.clock.now() }),
+    });
+    expect(h.scheduler.getRuntimeSnapshot().inFlightRuns).toHaveLength(0);
+  } finally {
+    release();
+    await running?.catch(() => {});
+    await vi.advanceTimersByTimeAsync(50);
+    await stopping?.catch(() => {});
+    await h.scheduler.stop();
+    vi.useRealTimers();
+  }
+});
+
+// Before dispatch no user turn exists to continue. Stop at each persistence
+// boundary must leave a cancelled row, never a fake resumable interruption.
+it.each(['manual-get', 'manual-insert', 'automatic-claim', 'automatic-insert'] as const)(
+  'cancels undispatched work when app exit wins the %s pre-registration window', async (boundary) => {
+    const h = makeHarness();
+    await h.scheduler.start();
+    const schedule = await h.scheduler.create(baseInput);
+    let release!: () => void;
+    let entered!: () => void;
+    const held = new Promise<void>((resolve) => { release = resolve; });
+    const ready = new Promise<void>((resolve) => { entered = resolve; });
+    const block = async () => { entered(); await held; };
+    if (boundary === 'manual-get') {
+      const get = h.storage.get.bind(h.storage);
+      vi.spyOn(h.storage, 'get').mockImplementationOnce(async (id) => { await block(); return get(id); });
+    } else if (boundary === 'automatic-claim') {
+      const claim = h.storage.claimDueFire.bind(h.storage);
+      vi.spyOn(h.storage, 'claimDueFire').mockImplementationOnce(async (id, at) => { await block(); return claim(id, at); });
+    } else {
+      const insert = h.storage.insertRun.bind(h.storage);
+      vi.spyOn(h.storage, 'insertRun').mockImplementationOnce(async (run) => { await block(); return insert(run); });
+    }
+    h.clock.setTo(schedule.nextFireAt!);
+    const automatic = boundary.startsWith('automatic');
+    const pending = automatic ? h.scheduler.tick() : h.scheduler.runNow(schedule.id);
+    const settled = pending.catch((error) => {
+      if (automatic) throw error;
+      expect(String(error)).toContain('scheduler stopped');
+    });
+    await ready;
+    await h.scheduler.stop({ interrupted: true });
+    expect(h.storage.runs.size).toBe(0);
+    release();
+    await settled;
+    expect([...h.storage.runs.values()]).toEqual([
+      expect.objectContaining({ status: 'aborted', readAt: h.clock.now() }),
+    ]);
+    expect(h.runner.fire).not.toHaveBeenCalled();
+  },
+);
+
+// discussion_r4418886395: a busy target binds a session but has not accepted
+// this run's prompt. Existing active-run tests do not cover this queue boundary.
+// Real tick/runNow/resume + stop must cancel fresh queues and preserve reclaimed
+// original turns, without fabricating a new message or run. In-memory unit I/O.
+it.each(['automatic', 'manual', 'recovery'] as const)(
+  'distinguishes a fresh queued run from its accepted original on exit (%s)', async (source) => {
+    let entered!: () => void;
+    const ready = new Promise<void>((resolve) => { entered = resolve; });
+    const h = makeHarness({ runnerImpl: async (_schedule, ctx) => {
+      await ctx.onSessionBound?.('busy-task');
+      ctx.onQueueWaitStart?.();
+      entered();
+      return new Promise<FireResult>((_resolve, reject) => {
+        ctx.signal.addEventListener('abort', () => reject(new Error('provider closed')), { once: true });
+      });
+    } });
+    await h.scheduler.start();
+    const schedule = await h.scheduler.create(baseInput);
+    if (source === 'recovery') {
+      await h.storage.insertRun({ id: 'old-run', scheduleId: schedule.id, sessionId: 'busy-task',
+        firedAt: h.clock.now() - 5000, status: 'interrupted', errorMsg: 'app restarted' });
+      h.storage.claimInterruptedRun = async () => h.storage.updateRun('old-run', { status: 'running' });
+    }
+    h.clock.setTo(schedule.nextFireAt!);
+    const pending = source === 'recovery'
+      ? (await h.scheduler.resumeInterruptedRun('busy-task'))!.completion
+      : source === 'automatic' ? h.scheduler.tick() : h.scheduler.runNow(schedule.id);
+    await ready;
+    await h.scheduler.stop({ interrupted: true });
+    await pending;
+    expect([...h.storage.runs.values()]).toEqual([expect.objectContaining({
+      status: source === 'recovery' ? 'interrupted' : 'aborted', sessionId: 'busy-task',
+    })]);
+    expect(h.scheduler.resolveInflightRunForSession('busy-task')).toBeUndefined();
+  },
+);
+
+// discussion_r4419242692: a claimed continuation must remain reclaimable if
+// loading fails, while a rejection after completion must not replay settled work.
+// Unit: public resume entry, one original row and a one-shot storage failure.
+it.each(['none', 'read-rejected', 'schedule-missing', 'pre-enqueue-rejected', 'finish-rejected'] as const)(
+  'restores the same run and silence lookup after restart (%s)', async (failure) => {
+  const storage = new InMemoryStorage();
+  const clock = new FakeClock();
+  let finish!: (result: FireResult) => void;
+  let rejectedBeforeAccept = false;
+  const h = makeHarness({ storage, clock, runnerImpl: async (_schedule, ctx) => {
+    if (failure === 'pre-enqueue-rejected' && !rejectedBeforeAccept) {
+      rejectedBeforeAccept = true;
+      throw new Error('continuation enqueue unavailable');
+    }
+    await ctx.onSessionBound?.(ctx.resumeSessionId!);
+    ctx.onTurnActive?.(ctx.resumeSessionId!);
+    return new Promise<FireResult>((resolve) => { finish = resolve; });
+  } });
+  const schedule = await h.scheduler.create(baseInput);
+  const oldRun: ScheduleRun = { id: 'old-run', scheduleId: schedule.id,
+    sessionId: 'original-task', firedAt: clock.now() - 5000,
+    status: 'interrupted', errorMsg: 'app restarted' };
+  await storage.insertRun(oldRun);
+  storage.claimInterruptedRun = vi.fn(async () => {
+    if (storage.runs.get(oldRun.id)?.status !== 'interrupted') return null;
+    return storage.updateRun(oldRun.id, { status: 'running', errorMsg: undefined });
+  });
+  await h.scheduler.start();
+  await h.scheduler.tick();
+  expect(storage.claimInterruptedRun).not.toHaveBeenCalled();
+  expect(h.fireCalls).toHaveLength(0);
+  if (failure === 'read-rejected' || failure === 'schedule-missing' || failure === 'pre-enqueue-rejected') {
+    const get = vi.spyOn(storage, 'get');
+    if (failure === 'read-rejected') get.mockRejectedValueOnce(new Error('storage unavailable'));
+    else if (failure === 'schedule-missing') get.mockResolvedValueOnce(null);
+    const failed = await h.scheduler.resumeInterruptedRun('original-task');
+    await expect(failed!.completion).rejects.toThrow(
+      failure === 'read-rejected' ? 'storage unavailable'
+        : failure === 'schedule-missing' ? 'Schedule not found' : 'continuation enqueue unavailable',
+    );
+    expect(storage.runs.get(oldRun.id)?.status).toBe('interrupted');
+    expect(h.fireCalls).toHaveLength(failure === 'pre-enqueue-rejected' ? 1 : 0);
+    expect(h.scheduler.resolveInflightRunForSession('original-task')).toBeUndefined();
+  }
+  const resumed = await h.scheduler.resumeInterruptedRun('original-task');
+  expect(resumed).not.toBeNull();
+  await expect(h.scheduler.resumeInterruptedRun('original-task')).rejects.toThrow('already continuing');
+  await vi.waitFor(() => expect(finish).toBeTypeOf('function'));
+  expect(h.fireCalls[0]!.ctx).toMatchObject({ runId: oldRun.id, firedAt: oldRun.firedAt, resumeSessionId: oldRun.sessionId });
+  expect(h.scheduler.resolveInflightRunForSession('original-task')).toBe(oldRun.id);
+  expect(h.scheduler.silenceRun(oldRun.id)).toBe(true);
+  if (failure === 'finish-rejected') {
+    vi.spyOn(storage, 'update').mockRejectedValueOnce(new Error('completion metadata unavailable'));
+  }
+  finish({ sessionId: 'original-task', resultText: 'continued and completed' });
+  if (failure === 'finish-rejected') {
+    await expect(resumed!.completion).rejects.toThrow('completion metadata unavailable');
+    expect(await h.scheduler.resumeInterruptedRun('original-task')).toBeNull();
+  } else await resumed!.completion;
+  await vi.waitFor(() => expect(storage.runs.get(oldRun.id)?.status).toBe('success'));
+  expect(storage.runs.size).toBe(1);
+  expect(storage.runs.get(oldRun.id)).toMatchObject({ firedAt: oldRun.firedAt,
+    errorMsg: undefined, resultText: 'continued and completed', readAt: clock.now() });
+  await h.scheduler.stop();
+});
+
+// discussion_r4420812422 / unit: live/stale claims must not be revived by
+// startup or the periodic sweep while the user has not chosen Continue.
+it.each(['running', 'interrupted'] as const)('keeps an unfinished Once idle through startup and sweeps (%s)', async (status) => {
+  const h = makeHarness();
+  const schedule = await h.scheduler.create({ ...baseInput, recurring: false, intervalMs: 90_000 });
+  await h.storage.claimDueFire(schedule.id, schedule.nextFireAt!);
+  await h.storage.insertRun({ id: 'original-once', scheduleId: schedule.id, sessionId: 'original-task',
+    firedAt: h.clock.now(), heartbeatAt: h.clock.now(), status });
+  await h.scheduler.start();
+  try {
+    for (let step = 0; step < 10; step++) {
+      h.clock.advance(30_000);
+      await h.scheduler.tick();
+    }
+    expect(h.fireCalls).toHaveLength(0);
+    expect(h.storage.runs.size).toBe(1);
+    expect(h.storage.runs.get('original-once')?.status).toBe('interrupted');
+    expect(await h.storage.get(schedule.id)).toMatchObject({ status: 'active', nextFireAt: undefined });
+  } finally { await h.scheduler.stop(); }
+});
+
+// Recovery completes the original trigger: automatic Once expires and automatic
+// intervals start at completion; runNow retains its independent schedule slot.
+it.each([
+  ['automatic', false], ['automatic', true],
+  ['manual', false], ['manual', true],
+] as const)('preserves %s completion scheduling after restart (recurring=%s)', async (source, recurring) => {
+  const storage = new InMemoryStorage();
+  const clock = new FakeClock();
+  let reject!: (error: Error) => void;
+  const original = makeHarness({ storage, clock, runnerImpl: async (_schedule, ctx) => {
+    await ctx.onSessionBound?.('original-task');
+    ctx.onTurnActive?.('original-task');
+    return new Promise<FireResult>((_resolve, fail) => { reject = fail; });
+  } });
+  await original.scheduler.start();
+  const schedule = await original.scheduler.create({ ...baseInput, recurring, intervalMs: 120_000 });
+  clock.setTo(schedule.nextFireAt!);
+  const pending = source === 'automatic'
+    ? original.scheduler.tick() : original.scheduler.runNow(schedule.id);
+  await vi.waitFor(() => expect(reject).toBeTypeOf('function'));
+  const interrupted = original.fireCalls[0]!.ctx;
+  await original.scheduler.stop({ interrupted: true });
+  reject(new Error('provider closed'));
+  await pending;
+  storage.claimInterruptedRun = vi.fn(async () =>
+    storage.updateRun(interrupted.runId, { status: 'running', errorMsg: undefined }));
+  const restarted = makeHarness({ storage, clock });
+  await restarted.scheduler.start();
+  const nextBefore = (await storage.get(schedule.id))!.nextFireAt;
+  if (!recurring) {
+    // discussion_r4420812422: before the user clicks Continue, startup/tick
+    // must not send the initial Once prompt again. Recovery retains the run.
+    clock.advance(600_000);
+    await restarted.scheduler.tick();
+    expect(restarted.fireCalls).toHaveLength(0);
+    expect(storage.runs.get(interrupted.runId)?.status).toBe('interrupted');
+  }
+  clock.advance(30_000);
+  const resumed = await restarted.scheduler.resumeInterruptedRun('original-task');
+  await resumed!.completion;
+  const completed = (await storage.get(schedule.id))!;
+  expect(completed.lastFiredAt).toBe(interrupted.firedAt);
+  expect(completed.lastFinishedAt).toBe(clock.now());
+  expect(completed.status).toBe(source === 'automatic' && !recurring ? 'expired' : 'active');
+  expect(completed.nextFireAt).toBe(source === 'automatic'
+    ? recurring ? clock.now() + 120_000 : undefined
+    : nextBefore);
+  if (!recurring) {
+    clock.advance(600_000);
+    await restarted.scheduler.tick();
+    expect(restarted.fireCalls).toHaveLength(1);
+  }
+  expect(storage.runs.size).toBe(1);
+  expect(storage.runs.get(interrupted.runId)?.status).toBe('success');
+  await restarted.scheduler.stop();
+});
+
+// Review discussion_r4418701657: unlike the isolated restart cases above,
+// a newer automatic fire finishes while recovery awaits its runner/host lock.
+// Public tick + resume entries must preserve that newer fire's schedule fields.
+it.each([false, true].flatMap((recurring) => [false, true].flatMap((failed) =>
+  ['before-read', 'after-read'].map((timing) => ({ recurring, failed, timing })),
+)))('keeps newer completion scheduling during recovery ($recurring, $failed, $timing)', async ({ recurring, failed, timing }) => {
+  let finishNewer!: () => void;
+  let finishRecovery!: () => void;
+  const h = makeHarness({ runnerImpl: async (_schedule, ctx) => {
+    await ctx.onSessionBound?.(ctx.resumeSessionId ?? 'newer-task');
+    ctx.onTurnActive?.(ctx.resumeSessionId ?? 'newer-task');
+    if (ctx.resumeSessionId) {
+      await new Promise<void>((resolve) => { finishRecovery = resolve; });
+      if (failed) throw new Error('continuation failed');
+    } else {
+      await new Promise<void>((resolve) => { finishNewer = resolve; });
+    }
+    return { sessionId: ctx.resumeSessionId ?? 'newer-task' };
+  } });
+  await h.scheduler.start();
+  const schedule = await h.scheduler.create({ ...baseInput, recurring, intervalMs: 120_000 });
+  const oldRun: ScheduleRun = { id: 'interrupted-run', scheduleId: schedule.id,
+    sessionId: 'original-task', firedAt: h.clock.now() - 5000,
+    status: 'interrupted', errorMsg: 'app restarted' };
+  await h.storage.insertRun(oldRun);
+  h.storage.claimInterruptedRun = async () => h.storage.updateRun(oldRun.id, { status: 'running' });
+  h.clock.setTo(schedule.nextFireAt!);
+  const newer = h.scheduler.tick();
+  await vi.waitFor(() => expect(finishNewer).toBeTypeOf('function'));
+  const recovered = await h.scheduler.resumeInterruptedRun('original-task');
+  await vi.waitFor(() => expect(finishRecovery).toBeTypeOf('function'));
+  let newerSchedule!: Schedule;
+  const read = h.storage.get.bind(h.storage);
+  const completeNewer = async () => {
+    // The old recovery captured finishedAt before its read yielded. A second
+    // process can finish later before the conditional write, not just fire later.
+    if (timing === 'after-read') h.clock.advance(10_000);
+    finishNewer();
+    await newer;
+    newerSchedule = (await read(schedule.id))!;
+  };
+  if (timing === 'before-read') await completeNewer();
+  else vi.spyOn(h.storage, 'get').mockImplementationOnce(async (id) => {
+    const stale = await read(id);
+    await completeNewer();
+    return stale;
+  });
+  h.clock.advance(30_000);
+  finishRecovery();
+  await recovered!.completion;
+  expect(newerSchedule.lastFiredAt).toBeGreaterThan(oldRun.firedAt);
+  expect(await h.storage.get(schedule.id)).toMatchObject({
+    lastFiredAt: newerSchedule.lastFiredAt,
+    nextFireAt: newerSchedule.nextFireAt,
+    status: newerSchedule.status,
+    lastFinishedAt: h.clock.now(),
+  });
+  expect(h.storage.runs.get(oldRun.id)?.status).toBe(failed ? 'failed' : 'success');
+  expect(h.storage.runs.size).toBe(2);
+  await h.scheduler.stop();
+});
+
 class FakeClock {
   current = Date.UTC(2026, 0, 1, 0, 0, 30); // start at 2026-01-01 00:00:30 UTC
   now(): number {
@@ -127,7 +557,7 @@ class FakeClock {
   }
 }
 
-const baseInput: CreateScheduleInput = {
+const baseInput = {
   name: 'test',
   prompt: 'do thing',
   kind: 'cron',
@@ -137,7 +567,7 @@ const baseInput: CreateScheduleInput = {
   agentKind: 'claude-code',
   useWorktree: false,
   notify: { desktop: false, feishu: false },
-};
+} satisfies CreateScheduleInput;
 
 function makeIdGen(): () => string {
   let n = 0;
@@ -160,6 +590,12 @@ interface Harness {
 function makeHarness(opts?: {
   runnerImpl?: (s: Schedule, ctx: FireContext) => Promise<FireResult>;
   isManagedWorkspaceDir?: (dir: string) => boolean;
+  validateModelSelection?: (schedule: Schedule, previous?: Schedule) => Promise<void>;
+  validateTargetSession?: (
+    targetSessionId: string,
+    operation: 'create' | 'update' | 'fire',
+    selection: Pick<Schedule, 'modelAgentKind'>,
+  ) => Promise<void>;
   /** 传入共享 storage / clock 模拟"两个 app 实例共用同一 DB"的双开场景。 */
   storage?: InMemoryStorage;
   clock?: FakeClock;
@@ -171,6 +607,7 @@ function makeHarness(opts?: {
   /** 默认 0(关闭挂起吸收):假时钟跳表与真实睡眠在壁钟上同形,见 SchedulerOptions.suspendGapMs。 */
   suspendGapMs?: number;
   logger?: Logger;
+  resolvePreRunPlugin?: (pluginId: string) => string;
 }): Harness {
   const storage = opts?.storage ?? new InMemoryStorage();
   const clock = opts?.clock ?? new FakeClock();
@@ -191,12 +628,15 @@ function makeHarness(opts?: {
     generateId: opts?.generateId ?? makeIdGen(),
     tickIntervalMs: 60_000_000, // effectively disabled; tests call tick() manually
     isManagedWorkspaceDir: opts?.isManagedWorkspaceDir,
+    validateTargetSession: opts?.validateTargetSession,
+    validateModelSelection: opts?.validateModelSelection,
     passive: opts?.passive,
     maxConcurrentRuns: opts?.maxConcurrentRuns,
     runStallMs: opts?.runStallMs,
     runStallAbortGraceMs: opts?.runStallAbortGraceMs,
     suspendGapMs: opts?.suspendGapMs ?? 0,
     logger: opts?.logger,
+    resolvePreRunPlugin: opts?.resolvePreRunPlugin,
     instanceId: 'test-scheduler',
     processId: 1234,
   });
@@ -209,6 +649,101 @@ describe('Scheduler', () => {
     h = makeHarness();
   });
 
+
+  it('persists an explicit Harness with its model and clears it when following the target', async () => {
+    const saved = await h.scheduler.create({ ...baseInput, modelAgentKind: 'pi', model: 'grok-4.6' });
+    expect(saved.modelAgentKind).toBe('pi');
+    await expect(h.scheduler.update(saved.id, { model: undefined })).rejects.toThrow(/Harness/);
+    const followed = await h.scheduler.update(saved.id, { modelAgentKind: undefined, model: undefined });
+    expect(followed?.modelAgentKind).toBeUndefined();
+    await expect(h.scheduler.create({ ...baseInput, modelAgentKind: 'pi', model: '' })).rejects.toThrow(/Harness/);
+  });
+
+  // Unit: old-client prompt edits preserve remote routing, but incomplete model
+  // edits cannot silently keep a different device's credentials.
+  it('preserves a saved shared route on partial edits and validates complete changes', async () => {
+    const saved = await h.scheduler.create({ ...baseInput, modelAgentKind: 'pi',
+      modelAgentDeviceId: 'shared:owner', providerId: 'shared-provider', model: 'remote-model' });
+    expect((await h.scheduler.update(saved.id, { prompt: 'new prompt' })).modelAgentDeviceId).toBe('shared:owner');
+    await expect(h.scheduler.update(saved.id, { model: 'other-model' })).rejects.toThrow('newer client');
+    // Main's older location field cannot silently edit a pinned override.
+    await expect(h.scheduler.update(saved.id, { agentDeviceId: 'studio' })).rejects.toThrow('newer client');
+    expect((await h.scheduler.get(saved.id))?.model).toBe('remote-model');
+    expect((await h.scheduler.update(saved.id, { modelAgentDeviceId: '', model: 'local-model' })).modelAgentDeviceId).toBe('');
+    await expect(h.scheduler.create({ ...baseInput, modelAgentDeviceId: 'shared:owner' })).rejects.toThrow('remote model selection');
+  });
+
+  // Unit, PR #6830 review: a legacy bound automation has no explicit Harness.
+  // A location-only local patch used to save successfully but still run remotely.
+  it('rejects an incomplete local selection on a bound automation without changing its saved route', async () => {
+    const legacy = { ...baseInput, agentKind: 'codex' as const, targetSessionId: 'remote-task', model: 'same-model', providerId: 'openai' };
+    const saved = await h.scheduler.create(legacy);
+    await expect(h.scheduler.update(saved.id, { modelAgentDeviceId: '' })).rejects.toThrow('bound task');
+    expect(await h.scheduler.get(saved.id)).toEqual(saved);
+    await expect(h.scheduler.create({ ...legacy, modelAgentDeviceId: '' })).rejects.toThrow('bound task');
+    expect(await h.scheduler.update(saved.id, { modelAgentDeviceId: '', modelAgentKind: 'codex' }))
+      .toMatchObject({ modelAgentDeviceId: '', modelAgentKind: 'codex', model: 'same-model' });
+    const followed = await h.scheduler.update(saved.id, {
+      modelAgentDeviceId: undefined, modelAgentKind: undefined, model: undefined, providerId: undefined,
+    });
+    expect(followed.modelAgentDeviceId).toBeUndefined();
+    expect(followed.modelAgentKind).toBeUndefined();
+  });
+
+  // Unit: persistent schedules become bound after their first run. Accepting an
+  // incomplete local selection must not make that required internal update fail.
+  it('requires an executable local selection before a persistent automation first binds', async () => {
+    const persistent = { ...baseInput, persistentSession: true, modelAgentDeviceId: '', model: 'local-model' };
+    await expect(h.scheduler.create(persistent)).rejects.toThrow('bound task');
+    const saved = await h.scheduler.create({ ...persistent, modelAgentKind: 'codex' });
+    expect(await h.scheduler.update(saved.id, { targetSessionId: 'first-run-task' }))
+      .toMatchObject({ targetSessionId: 'first-run-task', modelAgentDeviceId: '', modelAgentKind: 'codex' });
+  });
+
+  // Unit (model-selector-unified.md §3): update/runNow must preserve an active
+  // run and history while later runs use the saved route. The former one-way
+  // case missed same-model/provider remote -> local -> remote -> local changes,
+  // including clearing effort/Fast; no real timers or vendor calls are needed.
+  it('applies repeated location changes only to later runs', async () => {
+    let finish!: (value: FireResult) => void;
+    let entered!: () => void;
+    const started = new Promise<void>((resolve) => { entered = resolve; });
+    const calls: Schedule[] = [];
+    const local = makeHarness({ runnerImpl: async (schedule) => {
+      calls.push(schedule);
+      if (calls.length > 1) return { sessionId: `task-${calls.length}` };
+      entered();
+      return new Promise<FireResult>((resolve) => { finish = resolve; });
+    } });
+    const saved = await local.scheduler.create({ ...baseInput, model: 'original' });
+    const run = local.scheduler.runNow(saved.id);
+    await started;
+    const remote = { modelAgentKind: 'codex' as const, modelAgentDeviceId: 'shared:owner',
+      model: 'same-model', providerId: 'same-provider', effort: 'xhigh' as const, fastMode: 'ultrafast' as const };
+    const onHost = { ...remote, modelAgentDeviceId: '', effort: undefined, fastMode: false };
+    await local.scheduler.update(saved.id, remote);
+    expect(calls[0]).toMatchObject({ model: 'original' });
+    expect(calls[0].modelAgentDeviceId).toBeUndefined();
+    finish({ sessionId: 'original-task' });
+    await run;
+    await local.scheduler.runNow(saved.id);
+    expect(calls[1]).toMatchObject(remote);
+    const firstHistory = await local.scheduler.listRuns(saved.id, 10);
+    for (const route of [onHost, remote, onHost]) {
+      expect(await local.scheduler.update(saved.id, route)).toMatchObject(route);
+      await local.scheduler.runNow(saved.id);
+      expect(calls.at(-1)).toMatchObject(route);
+    }
+    expect(calls[0]).toMatchObject({ model: 'original' });
+    expect(calls[0].modelAgentDeviceId).toBeUndefined();
+    expect(calls[1]).toMatchObject(remote);
+    for (const previous of firstHistory) {
+      expect((await local.scheduler.listRuns(saved.id, 10)).find((r) => r.id === previous.id)).toEqual(previous);
+    }
+    expect((await local.scheduler.listRuns(saved.id, 10)).map((r) => r.sessionId).sort())
+      .toEqual(['original-task', 'task-2', 'task-3', 'task-4', 'task-5']);
+  });
+
   it('create() computes nextFireAt and adds to active map', async () => {
     const sch = await h.scheduler.create({ ...baseInput });
     // From 00:00:30, next minute boundary = 00:01:00
@@ -218,6 +753,37 @@ describe('Scheduler', () => {
     expect(sch.workspaceKind).toBe('dialogue');
     const list = await h.scheduler.list({ status: 'active' });
     expect(list).toHaveLength(1);
+  });
+
+  // 测试价值
+  // - 生产入口与可观察结果：Scheduler.tick 认领到期任务、运行 runner 并重排 nextFireAt；下一合法槽位前不得重复调用。
+  // - Bug／规则依据：#5924；重排结果必须严格晚于完成时刻。
+  // - 现有覆盖缺口：已有 tick/互斥测试未在 Lord Howe 亚小时回拨时区验证 cron 重排结果。
+  // - 最小失败输入：Lord Howe 回拨后的整点 cron，完成时刻 15:30Z。
+  // - tier：unit；内存 storage、假时钟、无副作用 runner。
+  // - 实测耗时：随现有 scheduler.test.ts 定向运行记录在 PR 验证项。
+  it('Lord Howe 回拨后真实 tick 重排到未来且下一合法槽前不重复', async () => {
+    const local = makeHarness();
+    local.clock.setTo(Date.UTC(2026, 3, 4, 14, 0, 21));
+    const schedule = await local.scheduler.create({
+      ...baseInput,
+      cronExpr: '0 * * * *',
+      timezone: 'Australia/Lord_Howe',
+    });
+    expect(schedule.nextFireAt).toBe(Date.UTC(2026, 3, 4, 15, 30, 0));
+
+    local.clock.setTo(Date.UTC(2026, 3, 4, 15, 30, 0));
+    await local.scheduler.tick();
+    expect(local.runner.fire).toHaveBeenCalledTimes(1);
+    const run = (await local.storage.listRuns(schedule.id))[0];
+    const updated = await local.storage.get(schedule.id);
+    expect(run?.finishedAt).toBeDefined();
+    expect(updated?.nextFireAt).toBeDefined();
+    expect(updated!.nextFireAt!).toBeGreaterThan(run!.finishedAt!);
+
+    local.clock.advance(30_000);
+    await local.scheduler.tick();
+    expect(local.runner.fire).toHaveBeenCalledTimes(1);
   });
 
   it('marks skipped child runs as zero-cost', async () => {
@@ -260,6 +826,133 @@ describe('Scheduler', () => {
     expect(blankDir.workspaceKind).toBe('dialogue');
   });
 
+  // Unit: model admission must fail before persistence, not at the first timer fire.
+  // Previous target validation covered Harness changes, not model/location tuples.
+  it('keeps storage unchanged when model admission rejects create or update', async () => {
+    const validateModelSelection = vi.fn(async (candidate: Schedule, previous?: Schedule) => {
+      if (candidate.model === 'unavailable') throw new Error('invalid model location');
+      if (previous) expect(previous.model).toBe('available');
+    });
+    const h = makeHarness({ validateModelSelection });
+    await expect(h.scheduler.create({ ...baseInput, model: 'unavailable' }))
+      .rejects.toThrow('invalid model location');
+    expect(h.storage.schedules.size).toBe(0);
+    const saved = await h.scheduler.create({ ...baseInput, model: 'available' });
+    await expect(h.scheduler.update(saved.id, { model: 'unavailable' }))
+      .rejects.toThrow('invalid model location');
+    expect(await h.storage.get(saved.id)).toEqual(saved);
+    await h.scheduler.update(saved.id, { name: 'renamed' });
+    expect(validateModelSelection).toHaveBeenLastCalledWith(
+      expect.objectContaining({ name: 'renamed', model: 'available' }), saved);
+    expect(h.fireCalls).toHaveLength(0);
+  });
+
+  it('passes the complete candidate Harness to host validation before saving and firing', async () => {
+    let allowedAgent = 'codex';
+    const validateTargetSession = vi.fn(async (
+      _target: string,
+      _operation: 'create' | 'update' | 'fire',
+      selection: Pick<Schedule, 'modelAgentKind'>,
+    ) => {
+      if (selection.modelAgentKind && selection.modelAgentKind !== allowedAgent) {
+        throw new Error('target Harness is fixed');
+      }
+    });
+    const local = makeHarness({ validateTargetSession });
+    await expect(local.scheduler.create({ ...baseInput, targetSessionId: 'bound',
+      modelAgentKind: 'pi', model: 'test-model' })).rejects.toThrow('Harness is fixed');
+    expect(local.storage.schedules.size).toBe(0);
+    const schedule = await local.scheduler.create({ ...baseInput, targetSessionId: 'bound',
+      modelAgentKind: 'codex', model: 'test-model' });
+    await expect(local.scheduler.update(schedule.id, { modelAgentKind: 'pi' }))
+      .rejects.toThrow('Harness is fixed');
+    expect((await local.storage.get(schedule.id))?.modelAgentKind).toBe('codex');
+    await local.scheduler.update(schedule.id, { name: 'same route' });
+    expect(validateTargetSession).toHaveBeenLastCalledWith('bound', 'update',
+      expect.objectContaining({ modelAgentKind: 'codex' }));
+
+    // A changed host capability must also be checked on automatic and manual runs.
+    allowedAgent = 'pi';
+    local.clock.setTo(Date.UTC(2026, 0, 1, 0, 1, 5));
+    await local.scheduler.tick();
+    expect(local.fireCalls).toHaveLength(0);
+    expect(validateTargetSession).toHaveBeenLastCalledWith('bound', 'fire',
+      expect.objectContaining({ modelAgentKind: 'codex' }));
+    await local.scheduler.runNow(schedule.id);
+    expect(local.fireCalls).toHaveLength(0);
+    const follow = await local.scheduler.update(schedule.id, { modelAgentKind: undefined });
+    expect(follow.modelAgentKind).toBeUndefined();
+  });
+
+  it('rejects persisted Review targets at create, update, automatic fire, and runNow after restart', async () => {
+    const sourceBySessionId = new Map<string, string>([
+      ['session-normal', 'desktop'],
+      ['session-review', 'review'],
+    ]);
+    const operations: Array<{ targetSessionId: string; operation: string }> = [];
+    const validateTargetSession = async (
+      targetSessionId: string,
+      operation: 'create' | 'update' | 'fire',
+    ): Promise<void> => {
+      operations.push({ targetSessionId, operation });
+      if (sourceBySessionId.get(targetSessionId) === 'review') {
+        throw new Error('Review tasks cannot be targets of scheduled automations');
+      }
+    };
+    const local = makeHarness({ validateTargetSession });
+
+    await expect(
+      local.scheduler.create({ ...baseInput, targetSessionId: 'session-review' }),
+    ).rejects.toThrow('Review tasks cannot be targets');
+    expect(local.storage.schedules.size).toBe(0);
+
+    const schedule = await local.scheduler.create({
+      ...baseInput,
+      targetSessionId: 'session-normal',
+    });
+    await expect(
+      local.scheduler.update(schedule.id, { targetSessionId: 'session-review' }),
+    ).rejects.toThrow('Review tasks cannot be targets');
+    expect((await local.storage.get(schedule.id))?.targetSessionId).toBe('session-normal');
+
+    // The source is durable session state, so a target that becomes a Review
+    // task after scheduling must still be rejected by a restarted host.
+    sourceBySessionId.set('session-normal', 'review');
+    const restarted = makeHarness({
+      storage: local.storage,
+      clock: local.clock,
+      validateTargetSession,
+    });
+    await restarted.scheduler.start();
+    try {
+      local.clock.setTo(Date.UTC(2026, 0, 1, 0, 1, 0));
+      await restarted.scheduler.tick();
+      expect(restarted.runner.fire).not.toHaveBeenCalled();
+      expect(await restarted.scheduler.listRuns(schedule.id)).toMatchObject([
+        {
+          status: 'failed',
+          errorMsg: 'Review tasks cannot be targets of scheduled automations',
+        },
+      ]);
+
+      await restarted.scheduler.runNow(schedule.id);
+      expect(restarted.runner.fire).not.toHaveBeenCalled();
+      const runs = await restarted.scheduler.listRuns(schedule.id);
+      expect(runs).toHaveLength(2);
+      expect(runs.every((run) => run.status === 'failed')).toBe(true);
+    } finally {
+      await restarted.scheduler.stop();
+    }
+
+    expect(operations.map((entry) => entry.operation)).toEqual([
+      'create',
+      'create',
+      'update',
+      'fire',
+      'fire',
+    ]);
+  });
+
   it('create()/update() 把 app 管理工作区目录归一成对话任务(host 注入谓词)', async () => {
     const h2 = makeHarness({
       isManagedWorkspaceDir: (dir) => dir.startsWith('/managed/'),
@@ -287,6 +980,87 @@ describe('Scheduler', () => {
       workingDir: '/managed/2026-06-12/sess-3',
     });
     expect(plain.workspaceKind).toBe('project');
+  });
+
+  it('update() 换 agentKind 时丢弃上一引擎的 model / providerId / effort(回到默认路由)', async () => {
+    // 伙伴接管期把任务钉在 Codex 的 gpt-6-astra@openai 上,之后改回 Claude Code 却没法
+    // 清模型 → 任务带着 Claude Code 跑不了的路由,每轮 fire 都被上游拒绝。
+    const sch = await h.scheduler.create({
+      ...baseInput,
+      agentKind: 'codex',
+      model: 'gpt-6-astra',
+      providerId: 'openai',
+      effort: 'medium',
+      fastMode: true,
+    });
+    const switched = await h.scheduler.update(sch.id, { agentKind: 'claude-code' });
+    expect(switched.agentKind).toBe('claude-code');
+    expect(switched.model).toBeUndefined();
+    expect(switched.providerId).toBeUndefined();
+    expect(switched.effort).toBeUndefined();
+    // 旧引擎的 Fast 开关不能潜伏到下次切回 Codex/Pi 时复活
+    expect(switched.fastMode).toBe(false);
+    const back = await h.scheduler.update(sch.id, { agentKind: 'codex' });
+    expect(back.fastMode).toBe(false);
+    expect(back.model).toBeUndefined();
+    // 落库 patch 必须带 key(storage 按 hasOwnProperty 清列),不能只是省略
+    const stored = h.storage.schedules.get(sch.id)!;
+    expect(Object.prototype.hasOwnProperty.call(stored, 'model')).toBe(true);
+    expect(stored.model).toBeUndefined();
+    expect(stored.providerId).toBeUndefined();
+
+    // 反证 1:agentKind 没变 → 路由原样保留
+    const sch2 = await h.scheduler.create({
+      ...baseInput,
+      agentKind: 'codex',
+      model: 'gpt-6-astra',
+      providerId: 'openai',
+      fastMode: true,
+    });
+    const same = await h.scheduler.update(sch2.id, { agentKind: 'codex', prompt: 'p2' });
+    expect(same.model).toBe('gpt-6-astra');
+    expect(same.providerId).toBe('openai');
+    expect(same.fastMode).toBe(true);
+    const untouched = await h.scheduler.update(sch2.id, { prompt: 'p3' });
+    expect(untouched.model).toBe('gpt-6-astra');
+
+    // 反证 2:换引擎同时显式给了新路由 → 按调用方意图
+    const explicit = await h.scheduler.update(sch2.id, {
+      agentKind: 'claude-code',
+      model: 'claude-fable-5-1',
+      providerId: 'anthropic',
+    });
+    expect(explicit.model).toBe('claude-fable-5-1');
+    expect(explicit.providerId).toBe('anthropic');
+    expect(explicit.effort).toBeUndefined();
+    expect(explicit.fastMode).toBe(false);
+    // 显式带 fastMode 按调用方意图
+    const keepFast = await h.scheduler.update(sch2.id, { agentKind: 'codex', fastMode: true });
+    expect(keepFast.fastMode).toBe(true);
+  });
+
+  it('update() 改了模型或来源却没带运行位置时回到本机(旧版远程编辑的全量表单)', async () => {
+    // 来源属于运行位置那台电脑的目录。旧手机端 / 旧桌面远程编辑不认识 agentDeviceId,
+    // 它们选的是本机目录;沿用旧位置会把本机来源派到另一台电脑上。
+    const sch = await h.scheduler.create({
+      ...baseInput,
+      modelAgentKind: 'claude-code',
+      model: 'claude-opus-5-5',
+      providerId: 'remote-sub',
+      agentDeviceId: 'studio',
+    });
+    expect(sch.agentDeviceId).toBe('studio');
+    // 路由原样回传(全量表单只改了名字)→ 位置保留
+    const renamed = await h.scheduler.update(sch.id, {
+      name: 'renamed', agentKind: 'claude-code', model: 'claude-opus-5-5', providerId: 'remote-sub',
+    });
+    expect(renamed.agentDeviceId).toBe('studio');
+    const moved = await h.scheduler.update(sch.id, { model: 'claude-sonnet-5-5', providerId: 'anthropic' });
+    expect(moved.agentDeviceId).toBeUndefined();
+    expect(Object.prototype.hasOwnProperty.call(h.storage.schedules.get(sch.id)!, 'agentDeviceId')).toBe(true);
+    // 远程位置只配显式模型(那台的默认模型本机解析不了)
+    await expect(h.scheduler.create({ ...baseInput, agentDeviceId: 'studio' }))
+      .rejects.toThrow('agentDeviceId requires an explicit model');
   });
 
   it('update() 给了真实 workingDir 时翻成 project(与 create 推断对称)', async () => {
@@ -336,11 +1110,15 @@ describe('Scheduler', () => {
     });
 
     await expect(h.scheduler.update(script.id, { useWorktree: true })).rejects.toThrow(
-      'does not support worktrees or bound sessions',
+      'does not support worktrees or persistent sessions',
     );
     await expect(h.scheduler.update(script.id, { silentWhenIdle: true })).rejects.toThrow(
       'does not support silentWhenIdle',
     );
+
+    const bound = await h.scheduler.update(script.id, { targetSessionId: 'owner-session' });
+    expect(bound.targetSessionId).toBe('owner-session');
+    expect(bound.executionMode).toBe('script');
 
     // 堵 update 逃逸:script 任务(prompt 合法为空)只切 executionMode='agent'
     // 不带 prompt → 会落库空提示词的 agent 任务,必须拒;带 prompt 一起切才放行。
@@ -362,6 +1140,332 @@ describe('Scheduler', () => {
     await expect(
       h.scheduler.create({ ...baseInput, prompt: '   ' }),
     ).rejects.toThrow('prompt is required for agent execution mode');
+  });
+
+  // Review regression (unit): script sessions.dispatch only resolves local
+  // defaults. Reject remote routes before persistence instead of charging a
+  // same-id local provider; prior shape tests did not cover a remote selection.
+  it('rejects remote model routes in scripts and preserves the saved automation', async () => {
+    const remote = { modelAgentKind: 'codex' as const, modelAgentDeviceId: 'shared:owner',
+      model: 'same-model', providerId: 'openai' };
+    const script = { executionMode: 'script' as const, workspaceKind: 'project' as const,
+      workingDir: '/repo', scriptConfig: { command: 'node run.mjs', capabilities: ['sessions.dispatch' as const] } };
+    await expect(h.scheduler.create({ ...baseInput, ...remote, ...script })).rejects.toThrow('script execution does not support remote model sources');
+    const saved = await h.scheduler.create({ ...baseInput, ...remote, agentDeviceId: 'legacy-studio' });
+    await expect(h.scheduler.update(saved.id, script)).rejects.toThrow('script execution does not support remote model sources');
+    expect(await h.scheduler.get(saved.id)).toEqual(saved);
+    // The explicit local choice remains supported; no new gate on local scripts.
+    expect(await h.scheduler.update(saved.id, { ...script, modelAgentDeviceId: '' })).toMatchObject({
+      ...script, ...remote, modelAgentDeviceId: '',
+    });
+  });
+
+  // #8886 / unit: existing cadence tests never set expireAt. Exercise the real
+  // create/update/tick/start entries with a deadline between two minute slots.
+  it.each([undefined, 30_000])('stops automatic fires at expireAt (interval=%s)', async (intervalMs) => {
+    const expireAt = h.clock.now() + 60_000;
+    const sch = await h.scheduler.create({ ...baseInput, intervalMs, expireAt });
+    h.clock.setTo(sch.nextFireAt!);
+    await h.scheduler.tick();
+    expect(h.fireCalls).toHaveLength(1);
+    expect((await h.scheduler.get(sch.id))?.nextFireAt).toBeUndefined();
+    h.clock.setTo(expireAt);
+    await h.scheduler.tick();
+    expect(await h.scheduler.get(sch.id)).toMatchObject({ status: 'expired', nextFireAt: undefined });
+    h.clock.advance(120_000);
+    await h.scheduler.tick();
+    expect(h.fireCalls).toHaveLength(1);
+  });
+
+  it('expires overdue rows on startup without dispatching them', async () => {
+    const sch = await h.scheduler.create(baseInput);
+    await h.storage.update(sch.id, { expireAt: h.clock.now() - 1 });
+    await h.scheduler.start();
+    try {
+      expect(await h.scheduler.get(sch.id)).toMatchObject({ status: 'expired', nextFireAt: undefined });
+      h.clock.advance(120_000);
+      await h.scheduler.tick();
+      expect(h.fireCalls).toHaveLength(0);
+    } finally { await h.scheduler.stop(); }
+  });
+
+  it('does not revive a deadline-expired row on rename or resume, but permits extending it', async () => {
+    const sch = await h.scheduler.create({ ...baseInput, expireAt: h.clock.now() - 1 });
+    expect(sch.status).toBe('expired');
+    expect((await h.scheduler.update(sch.id, { name: 'renamed' })).status).toBe('expired');
+    expect((await h.scheduler.resume(sch.id)).status).toBe('expired');
+    const renewed = await h.scheduler.update(sch.id, { expireAt: h.clock.now() + 120_000 });
+    expect(renewed.status).toBe('active');
+    expect(renewed.nextFireAt).toBeGreaterThan(h.clock.now());
+  });
+
+  // PR #9059 / unit: reactivation covered recurring schedules only. A deadline
+  // before the first Once fire must be reversible, while a consumed Once stays terminal.
+  it.each([
+    { consumed: false, clear: false }, { consumed: false, clear: true },
+    { consumed: true, clear: false }, { consumed: true, clear: true },
+  ])('reactivates only an unconsumed one-shot after a deadline edit (%j)', async ({ consumed, clear }) => {
+    const expireAt = h.clock.now() + (consumed ? 120_000 : 20_000);
+    const sch = await h.scheduler.create({ ...baseInput, recurring: false, expireAt });
+    h.clock.setTo(consumed ? sch.nextFireAt! : expireAt);
+    await h.scheduler.tick();
+    expect((await h.scheduler.get(sch.id))?.status).toBe('expired');
+    const updated = await h.scheduler.update(sch.id, { expireAt: clear ? null : h.clock.now() + 120_000 });
+    expect(updated.status).toBe(consumed ? 'expired' : 'active');
+    if (!consumed) expect(updated.nextFireAt).toBeGreaterThan(h.clock.now());
+    else expect(updated.nextFireAt).toBeUndefined();
+    h.clock.setTo(updated.nextFireAt ?? h.clock.now() + 60_000);
+    await h.scheduler.tick();
+    expect(h.fireCalls).toHaveLength(1);
+    expect((await h.scheduler.get(sch.id))?.status).toBe('expired');
+  });
+
+  it('checks wall time after a due fire waited past its deadline', async () => {
+    const sch = await h.scheduler.create({ ...baseInput, expireAt: h.clock.now() + 60_000 });
+    h.clock.advance(120_000);
+    await h.scheduler.tick();
+    expect(h.fireCalls).toHaveLength(0);
+    expect((await h.scheduler.get(sch.id))?.status).toBe('expired');
+  });
+
+  it('allows an already-started run to finish across the deadline without rescheduling', async () => {
+    let release!: () => void;
+    let entered!: () => void;
+    const ready = new Promise<void>((resolve) => { entered = resolve; });
+    const local = makeHarness({ runnerImpl: async (_schedule, ctx) => {
+      entered();
+      await new Promise<void>((resolve) => { release = resolve; });
+      expect(ctx.signal.aborted).toBe(false);
+      return { sessionId: 'finished' };
+    } });
+    const expireAt = local.clock.now() + 60_000;
+    const sch = await local.scheduler.create({ ...baseInput, expireAt });
+    local.clock.setTo(sch.nextFireAt!);
+    const fire = local.scheduler.tick();
+    await ready;
+    local.clock.setTo(expireAt);
+    await local.scheduler.tick();
+    release();
+    await fire;
+    expect(await local.scheduler.get(sch.id)).toMatchObject({ status: 'expired', nextFireAt: undefined });
+    expect((await local.scheduler.listRuns(sch.id))[0]?.status).toBe('success');
+  });
+
+  // #8886 / unit: a runner can wait for a busy task before dispatching. The
+  // cadence cases above do not exercise edits during that preparation window.
+  it.each(['elapsed', 'shortened', 'cleared'] as const)('checks the latest deadline before queued dispatch (%s)', async (change) => {
+    let release!: () => void;
+    let entered!: () => void;
+    const ready = new Promise<void>((resolve) => { entered = resolve; });
+    let dispatched = false;
+    const local = makeHarness({ runnerImpl: async (_schedule, ctx) => {
+      entered();
+      await new Promise<void>((resolve) => { release = resolve; });
+      dispatched = ctx.canDispatch?.() !== false;
+      return { sessionId: 'busy-task', deferred: !dispatched };
+    } });
+    const expireAt = local.clock.now() + 120_000;
+    const sch = await local.scheduler.create({ ...baseInput, expireAt });
+    local.clock.setTo(sch.nextFireAt!);
+    const fire = local.scheduler.tick();
+    await ready;
+    if (change === 'shortened') await local.scheduler.update(sch.id, { expireAt: local.clock.now() });
+    else {
+      if (change === 'cleared') await local.scheduler.update(sch.id, { expireAt: null });
+      local.clock.setTo(expireAt);
+    }
+    release();
+    await fire;
+    expect(dispatched).toBe(change === 'cleared');
+  });
+
+  // PR #9059 / unit: local edits covered the guard, but DB synchronization did
+  // not. Change the shared row while a real automatic attempt waits to dispatch.
+  it.each(['shortened', 'cleared'] as const)('syncs another instance deadline into a queued dispatch (%s)', async (change) => {
+    let release!: () => void;
+    let entered!: () => void;
+    const ready = new Promise<void>((resolve) => { entered = resolve; });
+    let dispatched = false;
+    const local = makeHarness({ runnerImpl: async (_schedule, ctx) => {
+      entered();
+      await new Promise<void>((resolve) => { release = resolve; });
+      dispatched = ctx.canDispatch?.() !== false;
+      return { sessionId: '', deferred: !dispatched };
+    } });
+    const expireAt = local.clock.now() + 120_000;
+    const sch = await local.scheduler.create({ ...baseInput, expireAt });
+    local.clock.setTo(sch.nextFireAt!);
+    const fire = local.scheduler.tick();
+    await ready;
+    await local.storage.update(sch.id, change === 'cleared'
+      ? { expireAt: undefined }
+      : { expireAt: local.clock.now(), status: 'expired' });
+    local.clock.setTo(change === 'cleared' ? expireAt : local.clock.now() + 30_000);
+    await local.scheduler.tick();
+    release();
+    await fire;
+    expect(dispatched).toBe(change === 'cleared');
+  });
+
+  it.each([false, true])('bounds a deferred retry by the deadline (manual=%s)', async (manual) => {
+    const local = makeHarness({ runnerImpl: async () => ({ sessionId: 'busy', deferred: true, deferRetryMs: 120_000 }) });
+    const expireAt = local.clock.now() + 60_000;
+    const sch = await local.scheduler.create({ ...baseInput, expireAt });
+    local.clock.setTo(sch.nextFireAt!);
+    if (manual) await local.scheduler.runNow(sch.id);
+    else await local.scheduler.tick();
+    expect((await local.scheduler.get(sch.id))?.nextFireAt).toBeUndefined();
+    local.clock.setTo(expireAt);
+    await local.scheduler.tick();
+    expect((await local.scheduler.get(sch.id))?.status).toBe('expired');
+    expect(local.fireCalls).toHaveLength(1);
+  });
+
+  it('uses the claimed deadline when another instance shortens it after the scan', async () => {
+    const sch = await h.scheduler.create({ ...baseInput, expireAt: h.clock.now() + 120_000 });
+    const claim = h.storage.claimDueFire.bind(h.storage);
+    vi.spyOn(h.storage, 'claimDueFire').mockImplementationOnce(async (id, next) => {
+      await h.storage.update(id, { expireAt: h.clock.now() });
+      return claim(id, next);
+    });
+    h.clock.setTo(sch.nextFireAt!);
+    await h.scheduler.tick();
+    expect(h.fireCalls).toHaveLength(0);
+    expect((await h.scheduler.get(sch.id))?.status).toBe('expired');
+  });
+
+  it('does not overwrite a deadline extension made during expiration', async () => {
+    const sch = await h.scheduler.create({ ...baseInput, expireAt: h.clock.now() + 60_000 });
+    const update = h.storage.update.bind(h.storage);
+    const extended = h.clock.now() + 180_000;
+    vi.spyOn(h.storage, 'update').mockImplementationOnce(async (id, patch, expected) => {
+      await update(id, { expireAt: extended });
+      return update(id, patch, expected);
+    });
+    h.clock.advance(60_000);
+    await h.scheduler.tick();
+    expect(await h.scheduler.get(sch.id)).toMatchObject({ status: 'active', expireAt: extended });
+    await h.scheduler.tick();
+    expect(h.fireCalls).toHaveLength(1);
+  });
+
+  it('clears a deadline over JSON while omission preserves it and manual force-fire stays available', async () => {
+    const sch = await h.scheduler.create({ ...baseInput, expireAt: h.clock.now() - 1 });
+    await h.scheduler.runNow(sch.id);
+    expect(h.fireCalls).toHaveLength(1);
+    expect((await h.scheduler.update(sch.id, { name: 'kept' })).expireAt).toBe(sch.expireAt);
+    const cleared = await h.scheduler.update(sch.id, JSON.parse('{"expireAt":null}'));
+    expect(cleared).toMatchObject({ status: 'active', expireAt: undefined });
+    expect(cleared.nextFireAt).toBeGreaterThan(h.clock.now());
+  });
+
+  // PR #9059 / unit: queued-run tests only edited after runner.fire. Hold the
+  // earlier run persistence boundary and observe the actual dispatch decision.
+  it.each(['shortened', 'cleared'] as const)('tracks deadline edits during insertRun (%s)', async (change) => {
+    let dispatched = false;
+    const local = makeHarness({ runnerImpl: async (_schedule, ctx) => {
+      dispatched = ctx.canDispatch?.() !== false;
+      return { sessionId: '', deferred: !dispatched };
+    } });
+    const expireAt = local.clock.now() + 120_000;
+    const sch = await local.scheduler.create({ ...baseInput, expireAt });
+    const insertRun = local.storage.insertRun.bind(local.storage);
+    vi.spyOn(local.storage, 'insertRun').mockImplementationOnce(async (run) => {
+      if (change === 'cleared') local.clock.setTo(expireAt);
+      await local.scheduler.update(sch.id, { expireAt: change === 'cleared' ? null : local.clock.now() });
+      return insertRun(run);
+    });
+    local.clock.setTo(sch.nextFireAt!);
+    await local.scheduler.tick();
+    expect(dispatched).toBe(change === 'cleared');
+  });
+
+  // A rename can read either the due time or the cleared in-flight claim.
+  // Finish a real automatic run before that read returns; neither snapshot may
+  // overwrite its new cadence. Existing rename tests had no concurrent fire.
+  it.each([false, true])('preserves completion scheduling during a rename (claimed=%s)', async (claimed) => {
+    let release!: () => void;
+    let entered!: () => void;
+    const ready = new Promise<void>((resolve) => { entered = resolve; });
+    const held = new Promise<void>((resolve) => { release = resolve; });
+    const local = makeHarness({ runnerImpl: async () => {
+      entered();
+      if (claimed) await held;
+      return { sessionId: 'completed' };
+    } });
+    const sch = await local.scheduler.create(baseInput);
+    local.clock.setTo(sch.nextFireAt!);
+    const fire = claimed ? local.scheduler.tick() : undefined;
+    if (claimed) await ready;
+    const get = local.storage.get.bind(local.storage);
+    let completed!: Schedule;
+    vi.spyOn(local.storage, 'get').mockImplementationOnce(async (id) => {
+      const snapshot = await get(id);
+      release();
+      await (fire ?? local.scheduler.tick());
+      completed = (await get(id))!;
+      return snapshot;
+    });
+    await local.scheduler.update(sch.id, { name: 'renamed' });
+    expect(await local.scheduler.get(sch.id)).toMatchObject({
+      name: 'renamed', nextFireAt: completed.nextFireAt, lastFiredAt: completed.lastFiredAt,
+    });
+    await local.scheduler.tick();
+    expect(local.fireCalls).toHaveLength(1);
+  });
+
+  // PR #9059 / unit: the prior retry tests never changed the deadline between
+  // the read and UPDATE. Simulate another process extending/clearing that row.
+  it.each([false, true])('recalculates a deferred retry after a deadline edit (manual=%s)', async (manual) => {
+    const local = makeHarness({ runnerImpl: async () => {
+      local.clock.setTo(expireAt);
+      return { sessionId: '', deferred: true };
+    } });
+    const expireAt = local.clock.now() + 120_000;
+    const sch = await local.scheduler.create({ ...baseInput, expireAt });
+    const renewed = manual ? undefined : expireAt + 180_000;
+    const update = local.storage.update.bind(local.storage);
+    let raced = false;
+    vi.spyOn(local.storage, 'update').mockImplementation(async (id, patch, expected) => {
+      if (!raced && patch.status === 'expired') {
+        raced = true;
+        await update(id, { expireAt: renewed });
+      }
+      return update(id, patch, expected);
+    });
+    local.clock.setTo(sch.nextFireAt!);
+    if (manual) await local.scheduler.runNow(sch.id);
+    else await local.scheduler.tick();
+    expect(raced).toBe(true);
+    const after = await local.scheduler.get(sch.id);
+    expect(after).toMatchObject({
+      status: 'active', expireAt: renewed, nextFireAt: expireAt + 60_000,
+    });
+    expect(after?.lastFiredAt).toBeUndefined();
+  });
+
+  // PR #9059 / unit: completion CAS failure used to discard the Once-consumed
+  // state. Clear its deadline through update exactly before the terminal write.
+  it('consumes a one-shot even when its deadline changes during completion', async () => {
+    const sch = await h.scheduler.create({ ...baseInput, recurring: false, expireAt: h.clock.now() + 120_000 });
+    const update = h.storage.update.bind(h.storage);
+    let raced = false;
+    vi.spyOn(h.storage, 'update').mockImplementation(async (id, patch, expected) => {
+      if (!raced && patch.lastFinishedAt !== undefined) {
+        raced = true;
+        await h.scheduler.update(id, { expireAt: null });
+      }
+      return update(id, patch, expected);
+    });
+    h.clock.setTo(sch.nextFireAt!);
+    await h.scheduler.tick();
+    expect(raced).toBe(true);
+    expect(await h.scheduler.get(sch.id)).toMatchObject({
+      status: 'expired', nextFireAt: undefined, lastFiredAt: sch.nextFireAt, expireAt: undefined,
+    });
+    h.clock.advance(180_000);
+    await h.scheduler.tick();
+    expect(h.fireCalls).toHaveLength(1);
   });
 
   it('recurring fire updates lastFiredAt and recomputes nextFireAt', async () => {
@@ -416,6 +1520,155 @@ describe('Scheduler', () => {
     h.clock.setTo(Date.UTC(2026, 0, 1, 0, 6, 5));
     await h.scheduler.tick();
     expect(h.runner.fire).toHaveBeenCalledTimes(1);
+  });
+
+  // Bug: resume armed the placeholder cron of a manual schedule, so a webhook-only task
+  // started firing on a timer after pause + resume. Public resume entry; unit.
+  it('resume keeps a manual schedule off the timer', async () => {
+    const sch = await h.scheduler.create({ ...baseInput, manual: true });
+    await h.scheduler.pause(sch.id);
+    await h.scheduler.resume(sch.id);
+    expect((await h.storage.get(sch.id))?.nextFireAt).toBeUndefined();
+    h.clock.setTo(Date.UTC(2026, 0, 2));
+    await h.scheduler.tick();
+    expect(h.runner.fire).not.toHaveBeenCalled();
+  });
+
+  // Rule: docs/product-rules/schedule-webhook-trigger.md. The route must survive edits, or
+  // every forwarder configured with the old address silently stops delivering.
+  it('generates the webhook route itself and keeps it across edits', async () => {
+    const sch = await h.scheduler.create({ ...baseInput, webhookTrigger: { endpointId: 'caller-chosen', events: ['issues'] } });
+    const endpointId = sch.webhookTrigger!.endpointId;
+    expect(endpointId).not.toBe('caller-chosen');
+    const edited = await h.scheduler.update(sch.id, { webhookTrigger: { events: ['pull_request.closed'] } });
+    expect(edited.webhookTrigger).toEqual({ endpointId, events: ['pull_request.closed'] });
+    const cleared = await h.scheduler.update(sch.id, { webhookTrigger: null });
+    expect(cleared.webhookTrigger).toBeUndefined();
+    const reopened = await h.scheduler.update(sch.id, { webhookTrigger: {} });
+    expect(reopened.webhookTrigger?.endpointId).not.toBe(endpointId);
+  });
+
+  it('rejects a webhook on a timed one-shot, which the first event would use up', async () => {
+    await expect(h.scheduler.create({ ...baseInput, recurring: false, webhookTrigger: {} })).rejects.toThrow('recurring');
+    const manual = await h.scheduler.create({ ...baseInput, recurring: false, manual: true, webhookTrigger: {} });
+    expect(manual.webhookTrigger).toBeDefined();
+    const sch = await h.scheduler.create({ ...baseInput, webhookTrigger: {} });
+    await expect(h.scheduler.update(sch.id, { recurring: false })).rejects.toThrow('recurring');
+  });
+
+  it('rejects malformed webhook event filters', async () => {
+    await expect(h.scheduler.create({ ...baseInput, webhookTrigger: { events: ['a b'] } })).rejects.toThrow('filter');
+  });
+
+  // Rule: an edit that omits the sender, such as one from a client that predates senders,
+  // must not reset it; resetting would switch the server back to GitHub and reject every delivery.
+  it('keeps the webhook sender when an edit omits it, and rejects unknown senders', async () => {
+    const source = { preset: 'stripe' as const, signed: false };
+    const sch = await h.scheduler.create({ ...baseInput, webhookTrigger: { events: ['invoice.paid'], source } });
+    const edited = await h.scheduler.update(sch.id, { webhookTrigger: { events: ['pullrequest:created'] } });
+    expect(edited.webhookTrigger).toMatchObject({ events: ['pullrequest:created'], source });
+    await expect(
+      h.scheduler.update(sch.id, { webhookTrigger: { source: { preset: 'unknown' } as never } }),
+    ).rejects.toThrow('invalid webhook source');
+    await expect(
+      h.scheduler.update(sch.id, { webhookTrigger: { source: { preset: 'custom', format: { version: 1 } } as never } }),
+    ).rejects.toThrow('invalid webhook format');
+  });
+
+  // Rule: the event reaches this fire only; a deferred attempt leaves no run and no cron replay.
+  it('passes webhook events to the runner, marks the run, and leaves retries to the caller', async () => {
+    const sch = await h.scheduler.create({ ...baseInput, webhookTrigger: {} });
+    const webhook = { events: [{ deliveryId: 'd1', event: 'issues', receivedAt: 1 }], omitted: 0 };
+    const onRunCreated = vi.fn(async () => {
+      expect((await h.storage.listRuns(sch.id))[0]).toMatchObject({ status: 'running', triggerSource: 'webhook' });
+      expect(h.runner.fire).not.toHaveBeenCalled();
+    });
+    await h.scheduler.runNow(sch.id, { deferToCaller: true, webhook, onRunCreated });
+    expect(onRunCreated).toHaveBeenCalledOnce();
+    expect(h.runner.fire.mock.calls[0]![1].webhook).toEqual(webhook);
+    expect((await h.storage.listRuns(sch.id))[0]?.triggerSource).toBe('webhook');
+
+    const before = (await h.storage.get(sch.id))?.nextFireAt;
+    h.runner.fire.mockResolvedValueOnce({ sessionId: '', deferred: true, deferRetryMs: 1 });
+    const result = await h.scheduler.runNow(sch.id, { deferToCaller: true, webhook });
+    expect(result.deferred).toBe(true);
+    expect((await h.storage.get(sch.id))?.nextFireAt).toBe(before);
+    expect(await h.storage.listRuns(sch.id)).toHaveLength(1);
+  });
+
+  // PR #8470: a durable-queue handoff failure must prevent runner effects. Unit:
+  // insertRun failure never hands off; handoff failure removes the unused run.
+  it.each(['insert', 'handoff'] as const)('does not dispatch a webhook after %s fails', async (phase) => {
+    const sch = await h.scheduler.create({ ...baseInput, manual: true, webhookTrigger: {} });
+    const webhook = { events: [{ deliveryId: 'd1', event: 'issues', receivedAt: 1 }], omitted: 0 };
+    const onRunCreated = vi.fn(async () => { throw new Error('handoff failed'); });
+    if (phase === 'insert') vi.spyOn(h.storage, 'insertRun').mockRejectedValueOnce(new Error('insert failed'));
+    await expect(h.scheduler.runNow(sch.id, { webhook, onRunCreated })).rejects.toThrow(`${phase} failed`);
+    expect(onRunCreated).toHaveBeenCalledTimes(phase === 'insert' ? 0 : 1);
+    expect(h.runner.fire).not.toHaveBeenCalled();
+    expect(await h.storage.listRuns(sch.id)).toHaveLength(0);
+    await h.scheduler.runNow(sch.id, { webhook });
+    expect(h.runner.fire).toHaveBeenCalledOnce();
+  });
+
+  // PR #8470: automatic Webhook calls used manual admission. Unit: one occupied
+  // slot, then two simultaneous Webhook calls; only explicit manual calls bypass.
+  it('gates webhook runs with the shared slots before the first storage await', async () => {
+    const gated = makeHarness({ maxConcurrentRuns: 1 });
+    const a = await gated.scheduler.create({ ...baseInput, manual: true, webhookTrigger: {} });
+    const b = await gated.scheduler.create({ ...baseInput, manual: true, webhookTrigger: {} });
+    const webhook = { events: [{ deliveryId: 'd1', event: 'issues', receivedAt: 1 }], omitted: 0 };
+    let finish!: () => void;
+    gated.runner.fire.mockImplementationOnce(() => new Promise(resolve => { finish = () => resolve({ sessionId: '' }); }));
+    const running = gated.scheduler.runNow(a.id, { webhook, deferToCaller: true });
+    const blocked = await gated.scheduler.runNow(b.id, { webhook, deferToCaller: true });
+    expect(blocked.deferred).toBe(true);
+    expect(await gated.storage.listRuns(b.id)).toHaveLength(0);
+    await vi.waitFor(() => expect(finish).toBeTypeOf('function'));
+    await gated.scheduler.runNow(b.id);
+    expect(gated.runner.fire).toHaveBeenCalledTimes(2);
+    finish();
+    await running;
+    await gated.scheduler.runNow(b.id, { webhook, deferToCaller: true });
+    expect(gated.runner.fire).toHaveBeenCalledTimes(3);
+    await gated.scheduler.stop();
+  });
+
+  it('rechecks an approved resume inside the serialized schedule mutation', async () => {
+    const sch = await h.scheduler.create({ ...baseInput });
+    await h.scheduler.pause(sch.id);
+    const approved = await h.storage.get(sch.id);
+    if (!approved) throw new Error('missing schedule');
+    let releaseUpdate!: () => void;
+    const updateReleased = new Promise<void>((resolve) => { releaseUpdate = resolve; });
+    let enterUpdate!: () => void;
+    const updateEntered = new Promise<void>((resolve) => { enterUpdate = resolve; });
+    const originalUpdate = h.storage.update.bind(h.storage);
+    vi.spyOn(h.storage, 'update').mockImplementation(async (id, patch, expected) => {
+      if (patch.prompt === 'replacement') {
+        enterUpdate();
+        await updateReleased;
+      }
+      return originalUpdate(id, patch, expected);
+    });
+
+    const updatePromise = h.scheduler.update(sch.id, { prompt: 'replacement' });
+    await updateEntered;
+    const resumePromise = h.scheduler.resume(sch.id, approved);
+    releaseUpdate();
+    await updatePromise;
+    await expect(resumePromise).rejects.toThrow('Schedule changed; refresh before executing the approved action');
+    expect((await h.storage.get(sch.id))?.status).toBe('paused');
+  });
+
+  it('accepts an approval snapshot after the device-link JSON round trip', async () => {
+    const sch = await h.scheduler.create({ ...baseInput });
+    await h.scheduler.pause(sch.id);
+    const approved = await h.storage.get(sch.id);
+    if (!approved) throw new Error('missing schedule');
+    const roundTripped = JSON.parse(JSON.stringify(approved)) as Schedule;
+    const resumed = await h.scheduler.resume(sch.id, roundTripped);
+    expect(resumed.status).toBe('active');
   });
 
   it('runner exception marks run failed but schedule stays active', async () => {
@@ -560,6 +1813,58 @@ describe('Scheduler', () => {
     expect(h.fireCalls[0].schedule.targetSessionId).toBe('sess-existing');
   });
 
+  it('pre-bind fire failure persists targetSessionId and emits it on failed (runNow)', async () => {
+    h = makeHarness({
+      validateTargetSession: async (_id, op) => {
+        if (op === 'fire') throw new Error('target session rejected');
+      },
+    });
+    const sch = await h.scheduler.create({
+      ...baseInput,
+      targetSessionId: 'session-bound',
+    });
+    const failedEvents: Array<{ type: string; sessionId?: string; error: string }> = [];
+    h.scheduler.on('failed', (e) => failedEvents.push(e));
+
+    const { runId } = await h.scheduler.runNow(sch.id);
+    const run = (await h.scheduler.listRuns(sch.id)).find((item) => item.id === runId);
+
+    expect(h.fireCalls).toHaveLength(0);
+    expect(run?.status).toBe('failed');
+    expect(run?.sessionId).toBe('session-bound');
+    expect(failedEvents).toEqual([
+      {
+        type: 'failed',
+        scheduleId: sch.id,
+        runId,
+        error: 'target session rejected',
+        sessionId: 'session-bound',
+      },
+    ]);
+  });
+
+  it('pre-bind fire failure persists targetSessionId on the cron path too', async () => {
+    h = makeHarness({
+      validateTargetSession: async (_id, op) => {
+        if (op === 'fire') throw new Error('target session rejected');
+      },
+    });
+    const sch = await h.scheduler.create({
+      ...baseInput,
+      targetSessionId: 'session-bound',
+    });
+    const failedEvents: Array<{ sessionId?: string }> = [];
+    h.scheduler.on('failed', (e) => failedEvents.push(e));
+    h.clock.setTo(Date.UTC(2026, 0, 1, 0, 1, 5));
+    await h.scheduler.tick();
+
+    const runs = await h.scheduler.listRuns(sch.id);
+    expect(runs).toHaveLength(1);
+    expect(runs[0].status).toBe('failed');
+    expect(runs[0].sessionId).toBe('session-bound');
+    expect(failedEvents[0]?.sessionId).toBe('session-bound');
+  });
+
   it('emits fired/completed/changed events', async () => {
     const events: Array<{ type: string; scheduleId: string }> = [];
     h.scheduler.on('fired', (e) => events.push({ type: e.type, scheduleId: e.scheduleId }));
@@ -621,6 +1926,15 @@ describe('Scheduler', () => {
     expect(sawDelete).toBe(true);
   });
 
+  it('delete rejects a missing schedule without emitting changed', async () => {
+    const changed = vi.fn();
+    const missingId = 'does-not-exist';
+    h.scheduler.on('changed', changed);
+
+    await expect(h.scheduler.delete(missingId)).rejects.toThrow(/schedule not found/i);
+    expect(changed).not.toHaveBeenCalled();
+  });
+
   it('start() loads active schedules and recomputes nextFireAt for stale ones', async () => {
     // 用 daily cron 避免触发 interval 自动迁移分支（那是另一个测试覆盖）
     h.storage.schedules.set('preseeded', {
@@ -648,6 +1962,153 @@ describe('Scheduler', () => {
     await h.scheduler.stop();
   });
 
+  it('start() isolates legacy invalid interval cron records instead of blocking valid schedules', async () => {
+    const warn = vi.fn();
+    const local = makeHarness({ logger: { warn } });
+    local.storage.schedules.set('legacy-invalid', {
+      id: 'legacy-invalid',
+      name: 'legacy invalid cron',
+      prompt: 'p',
+      kind: 'cron',
+      cronExpr: '5abc * * * *',
+      timezone: 'UTC',
+      recurring: true,
+      manual: false,
+      intervalMs: 5 * 60_000,
+      agentKind: 'claude-code',
+      workspaceKind: 'project',
+      useWorktree: false,
+      notify: { desktop: false, feishu: false },
+      status: 'active',
+      createdAt: 0,
+      updatedAt: 0,
+      nextFireAt: Date.UTC(2020, 0, 1, 0, 0, 0),
+    });
+    local.storage.schedules.set('valid', {
+      id: 'valid',
+      name: 'valid cron',
+      prompt: 'p',
+      kind: 'cron',
+      cronExpr: '0 9 * * *',
+      timezone: 'UTC',
+      recurring: true,
+      manual: false,
+      agentKind: 'claude-code',
+      workspaceKind: 'project',
+      useWorktree: false,
+      notify: { desktop: false, feishu: false },
+      status: 'active',
+      createdAt: 0,
+      updatedAt: 0,
+      nextFireAt: Date.UTC(2020, 0, 1, 0, 0, 0),
+    });
+
+    await expect(local.scheduler.start()).resolves.toBeUndefined();
+
+    expect((await local.storage.get('legacy-invalid'))?.nextFireAt).toBeUndefined();
+    expect((await local.storage.get('valid'))?.nextFireAt).toBe(
+      Date.UTC(2026, 0, 1, 9, 0, 0),
+    );
+    expect(warn).toHaveBeenCalledWith(
+      'scheduler: skipped invalid active schedule during startup',
+      expect.objectContaining({ scheduleId: 'legacy-invalid' }),
+    );
+
+    await local.scheduler.stop();
+  });
+
+  it('keeps a legacy invalid cron quarantined when clearing its stale fire time fails', async () => {
+    const local = makeHarness({ logger: { warn: vi.fn() } });
+    const staleFireAt = Date.UTC(2020, 0, 1, 0, 0, 0);
+    local.storage.schedules.set('legacy-invalid', {
+      id: 'legacy-invalid',
+      name: 'legacy invalid cron',
+      prompt: 'p',
+      kind: 'cron',
+      cronExpr: '5abc * * * *',
+      timezone: 'UTC',
+      recurring: true,
+      manual: false,
+      agentKind: 'claude-code',
+      workspaceKind: 'project',
+      useWorktree: false,
+      notify: { desktop: false, feishu: false },
+      status: 'active',
+      createdAt: 0,
+      updatedAt: 0,
+      nextFireAt: staleFireAt,
+    });
+    vi.spyOn(local.storage, 'update').mockRejectedValueOnce(new Error('database is locked'));
+
+    await local.scheduler.start();
+    expect((await local.storage.get('legacy-invalid'))?.nextFireAt).toBe(staleFireAt);
+
+    local.clock.advance(30_000);
+    await local.scheduler.tick();
+
+    expect(local.runner.fire).not.toHaveBeenCalled();
+    expect(await local.scheduler.listRuns('legacy-invalid')).toHaveLength(0);
+    await local.scheduler.stop();
+  });
+
+  it('quarantines an invalid interval cron first discovered during periodic DB sync', async () => {
+    const local = makeHarness({ logger: { warn: vi.fn() } });
+    await local.scheduler.start();
+    local.storage.schedules.set('late-invalid', {
+      id: 'late-invalid',
+      name: 'late invalid cron',
+      prompt: 'p',
+      kind: 'cron',
+      cronExpr: '5abc * * * *',
+      timezone: 'UTC',
+      recurring: true,
+      manual: false,
+      intervalMs: 5 * 60_000,
+      agentKind: 'claude-code',
+      workspaceKind: 'project',
+      useWorktree: false,
+      notify: { desktop: false, feishu: false },
+      status: 'active',
+      createdAt: 0,
+      updatedAt: 0,
+      nextFireAt: Date.UTC(2020, 0, 1, 0, 0, 0),
+    });
+
+    local.clock.advance(30_000);
+    await local.scheduler.tick();
+
+    expect(local.runner.fire).not.toHaveBeenCalled();
+    expect(await local.scheduler.listRuns('late-invalid')).toHaveLength(0);
+
+    await local.storage.update('late-invalid', {
+      cronExpr: '* * * * *',
+      nextFireAt: local.clock.now(),
+    });
+    local.clock.advance(30_000);
+    await local.scheduler.tick();
+
+    expect(local.runner.fire).toHaveBeenCalledTimes(1);
+    await local.scheduler.stop();
+  });
+
+  it('does not execute a schedule whose cron becomes malformed after cache sync but before due-fire claim', async () => {
+    const local = makeHarness({ logger: { warn: vi.fn() } });
+    await local.scheduler.start();
+    const sch = await local.scheduler.create({ ...baseInput, intervalMs: 10_000 });
+
+    // Simulate a second instance writing invalid metadata while retaining the
+    // same due time. The first instance still has the valid cached copy and
+    // reaches claimDueFire before its 30s DB refresh.
+    await local.storage.update(sch.id, { cronExpr: '5abc * * * *' });
+    local.clock.advance(10_000);
+    await local.scheduler.tick();
+
+    expect(local.runner.fire).not.toHaveBeenCalled();
+    expect(await local.scheduler.listRuns(sch.id)).toHaveLength(0);
+    expect((await local.storage.get(sch.id))?.nextFireAt).toBeUndefined();
+    await local.scheduler.stop();
+  });
+
   // ── intervalMs（"上次完成 + N" 语义）──
   // 这条线和 cron-槽位 完全分支：fireOne / start / resume / create 都要分别覆盖。
 
@@ -656,6 +2117,61 @@ describe('Scheduler', () => {
     const sch = await h.scheduler.create({ ...baseInput, intervalMs: 5 * 60_000 });
     expect(sch.nextFireAt).toBe(Date.UTC(2026, 0, 1, 0, 5, 30));
     expect(sch.intervalMs).toBe(5 * 60_000);
+  });
+
+  it('create() rejects invalid cron metadata even when intervalMs controls the first fire', async () => {
+    await expect(h.scheduler.create({
+      ...baseInput,
+      cronExpr: '5abc * * * *',
+      intervalMs: 5 * 60_000,
+    })).rejects.toThrow();
+    expect(h.storage.schedules.size).toBe(0);
+  });
+
+  it('rejects enabling a legacy manual interval schedule with malformed cron metadata', async () => {
+    const schedule = await h.scheduler.create({
+      ...baseInput,
+      manual: true,
+      intervalMs: 5 * 60_000,
+    });
+    await h.storage.update(schedule.id, { cronExpr: '5abc * * * *' });
+
+    await expect(h.scheduler.update(schedule.id, { manual: false })).rejects.toThrow();
+    expect(await h.storage.get(schedule.id)).toMatchObject({
+      manual: true,
+      cronExpr: '5abc * * * *',
+    });
+  });
+
+  it('rejects reactivating an expired interval schedule with malformed cron metadata', async () => {
+    const schedule = await h.scheduler.create({
+      ...baseInput,
+      intervalMs: 5 * 60_000,
+    });
+    await h.storage.update(schedule.id, {
+      status: 'expired',
+      cronExpr: '5abc * * * *',
+    });
+
+    await expect(h.scheduler.update(schedule.id, { name: 'try to reactivate' })).rejects.toThrow();
+    expect(await h.storage.get(schedule.id)).toMatchObject({
+      status: 'expired',
+      cronExpr: '5abc * * * *',
+      name: schedule.name,
+    });
+  });
+
+  it('resume() keeps an interval schedule paused when legacy cron metadata is invalid', async () => {
+    const sch = await h.scheduler.create({
+      ...baseInput,
+      cronExpr: '*/10 * * * *',
+      intervalMs: 10 * 60_000,
+    });
+    await h.scheduler.pause(sch.id);
+    await h.storage.update(sch.id, { cronExpr: '5abc * * * *' });
+
+    await expect(h.scheduler.resume(sch.id)).rejects.toThrow();
+    expect((await h.storage.get(sch.id))?.status).toBe('paused');
   });
 
   it('intervalMs recurring fire schedules nextFireAt at finishedAt + intervalMs', async () => {
@@ -830,6 +2346,31 @@ describe('Scheduler', () => {
     expect(after?.nextFireAt).toBe(Date.UTC(2026, 0, 1, 0, 11, 0));
   });
 
+  it('rejects an invalid cronExpr update even when interval scheduling remains authoritative', async () => {
+    const sch = await h.scheduler.create({
+      ...baseInput,
+      cronExpr: '*/10 * * * *',
+      intervalMs: 10 * 60_000,
+    });
+
+    await expect(h.scheduler.update(sch.id, { cronExpr: '5abc * * * *' })).rejects.toThrow();
+
+    const stored = await h.storage.get(sch.id);
+    expect(stored).toMatchObject({
+      cronExpr: '*/10 * * * *',
+      intervalMs: 10 * 60_000,
+    });
+  });
+
+  it('rejects interval-only re-arms when legacy cron metadata is malformed', async () => {
+    const sch = await h.scheduler.create({ ...baseInput, intervalMs: 10 * 60_000 });
+    await h.storage.update(sch.id, { cronExpr: '5abc * * * *' });
+    const before = await h.storage.get(sch.id);
+
+    await expect(h.scheduler.update(sch.id, { intervalMs: 5 * 60_000 })).rejects.toThrow();
+    expect(await h.storage.get(sch.id)).toEqual(before);
+  });
+
   it('update(prompt only) leaves intervalMs and nextFireAt completely untouched', async () => {
     // 2026-07-29 #211 事故形态的回归：改 prompt 绝不能动 interval 语义
     const sch = await h.scheduler.create({ ...baseInput, cronExpr: '*/10 * * * *', intervalMs: 10 * 60_000 });
@@ -907,6 +2448,25 @@ describe('Scheduler', () => {
     expect(restarted.runner.fire).toHaveBeenCalledTimes(1);
     expect((await h.storage.get(sch.id))?.status).toBe('active');
     await restarted.scheduler.stop();
+  });
+
+  // Rule (plugin pre-run check, 2026-10-31): a newly chosen plugin is resolved to its instance id
+  // and rejected when unusable, but keeping the same plugin never re-validates, so a later-disabled
+  // plugin does not lock the user out of editing; null clears it. No prior case covers preRunPlugin.
+  it('resolves a newly chosen pre-run plugin and only re-checks it when the plugin changes', async () => {
+    const resolve = vi.fn((id: string) => {
+      if (id === 'gone') throw new Error('not installed');
+      return `${id}@inst`;
+    });
+    const p = makeHarness({ resolvePreRunPlugin: resolve });
+    const sch = await p.scheduler.create({ ...baseInput, preRunPlugin: { pluginId: 'jev', onFailure: 'skip' } });
+    expect(sch.preRunPlugin).toEqual({ pluginId: 'jev@inst', onFailure: 'skip' });
+    const kept = await p.scheduler.update(sch.id, { preRunPlugin: { pluginId: 'jev@inst', onFailure: 'block' } });
+    expect(kept.preRunPlugin).toEqual({ pluginId: 'jev@inst', onFailure: 'block' });
+    expect(resolve).toHaveBeenCalledTimes(1);
+    await expect(p.scheduler.update(sch.id, { preRunPlugin: { pluginId: 'gone', onFailure: 'block' } })).rejects.toThrow(/not installed/);
+    expect((await p.scheduler.update(sch.id, { preRunPlugin: null })).preRunPlugin).toBeUndefined();
+    await expect(h.scheduler.create({ ...baseInput, preRunPlugin: { pluginId: 'jev', onFailure: 'skip' } })).rejects.toThrow(/not available/);
   });
 
   it('updateFromCurrent 把读取、生成 patch 与写入放在同一任务锁内', async () => {
@@ -1039,6 +2599,7 @@ describe('Scheduler', () => {
     expect(runs).toHaveLength(1);
     expect(runs[0].status).toBe('aborted');
     expect(runs[0].errorMsg).toMatch(/cancelled by user/);
+    expect(runs[0].readAt).toBe(runs[0].finishedAt);
   });
 
   it('pause aborts in-flight run, keeps schedule with status=paused', async () => {
@@ -1064,6 +2625,7 @@ describe('Scheduler', () => {
     const runs = await local.scheduler.listRuns(sch.id);
     expect(runs).toHaveLength(1);
     expect(runs[0].status).toBe('aborted');
+    expect(runs[0].readAt).toBe(runs[0].finishedAt);
     expect(local.scheduler.getInflightCount(sch.id)).toBe(0);
   });
 
@@ -1370,6 +2932,20 @@ describe('Scheduler', () => {
     expect(h.scheduler.isRunSilenced(runId)).toBe(false);
   });
 
+  it('keeps unclassified reminders audible and preserves explicit quiet checks and script mode', async () => {
+    const reminder = await h.scheduler.create({ ...baseInput });
+    expect(reminder.silentWhenIdle).toBe(false);
+    const { runId } = await h.scheduler.runNow(reminder.id);
+    expect((await h.scheduler.listRuns(reminder.id)).find((run) => run.id === runId)?.readAt).toBeUndefined();
+    expect((await h.scheduler.create({ ...baseInput, preRunHook: { command: 'node check.mjs' } })).silentWhenIdle).toBe(false);
+    const check = await h.scheduler.create({ ...baseInput, silentWhenIdle: true });
+    expect(check.silentWhenIdle).toBe(true);
+    expect((await h.scheduler.create({ ...baseInput, executionMode: 'script', workspaceKind: 'project', workingDir: '/repo', scriptConfig: { command: 'node check.mjs', capabilities: [] } })).silentWhenIdle).toBe(false);
+    const scriptPatch = { executionMode: 'script' as const, workspaceKind: 'project' as const, workingDir: '/repo', scriptConfig: { command: 'node check.mjs', capabilities: [] } };
+    await expect(h.scheduler.update(check.id, { ...scriptPatch, silentWhenIdle: true })).rejects.toThrow('does not support silentWhenIdle');
+    expect((await h.scheduler.update(check.id, scriptPatch)).silentWhenIdle).toBe(false);
+  });
+
   it('silentWhenIdle run is silent by default', async () => {
     h = makeHarness({
       runnerImpl: async (_s, ctx) => {
@@ -1385,7 +2961,8 @@ describe('Scheduler', () => {
     h.scheduler.on('session-bound', (e) => events.push(e));
     h.scheduler.on('silenced', (e) => events.push(e));
     h.scheduler.on('completed', (e) => events.push(e));
-    const { runId } = await h.scheduler.runNow(sch.id);
+    const { runId, silenced } = await h.scheduler.runNow(sch.id);
+    expect(silenced).toBe(true);
     const runs = await h.scheduler.listRuns(sch.id);
 
     expect(runs[0].id).toBe(runId);
@@ -1413,7 +2990,8 @@ describe('Scheduler', () => {
     const events: unknown[] = [];
     h.scheduler.on('notified', (e) => events.push(e));
     h.scheduler.on('completed', (e) => events.push(e));
-    const { runId } = await h.scheduler.runNow(sch.id);
+    const { runId, silenced } = await h.scheduler.runNow(sch.id);
+    expect(silenced).not.toBe(true);
     const runs = await h.scheduler.listRuns(sch.id);
 
     expect(runs[0].id).toBe(runId);
@@ -1454,7 +3032,7 @@ describe('Scheduler', () => {
           gates.push(() => resolve({ sessionId: `sess-${ctx.runId}` }));
         }),
     });
-    const sch = await h.scheduler.create({ ...baseInput });
+    const sch = await h.scheduler.create({ ...baseInput, silentWhenIdle: false });
     const p1 = h.scheduler.runNow(sch.id);
     const p2 = h.scheduler.runNow(sch.id);
     await vi.waitFor(() => expect(gates).toHaveLength(2));
@@ -1480,7 +3058,7 @@ describe('Scheduler', () => {
         return { sessionId: 'sess-no-active-turn' };
       },
     });
-    const sch = await h.scheduler.create({ ...baseInput });
+    const sch = await h.scheduler.create({ ...baseInput, silentWhenIdle: false });
     const events: unknown[] = [];
     h.scheduler.on('silenced', (e) => events.push(e));
     const result = await h.scheduler.runNow(sch.id);
@@ -1726,9 +3304,11 @@ describe('Scheduler cross-instance dedupe', () => {
       manual: false,
       persistentSession: false,
       silentWhenIdle: false,
-      // CreateScheduleInput.preRunHook / scriptConfig 允许 null(JSON 边界),Schedule 只有两态
+      // CreateScheduleInput.preRunHook / scriptConfig / webhookTrigger 允许 null(JSON 边界),Schedule 只有两态
       preRunHook: undefined,
+      preRunPlugin: undefined,
       scriptConfig: undefined,
+      webhookTrigger: undefined,
       workspaceKind: 'dialogue',
       status: 'active',
       createdAt: now,
@@ -1745,6 +3325,10 @@ describe('Scheduler cross-instance dedupe', () => {
 
 // ── 被动模式(双开时 dev 端让出自动触发)──────────────────────────────────
 describe('Scheduler passive mode', () => {
+  it('reports passive mode so host triggers can stay out', () => {
+    expect(makeHarness({ passive: true }).scheduler.isPassive()).toBe(true);
+    expect(makeHarness().scheduler.isPassive()).toBe(false);
+  });
   it('start() 不清僵尸、不加载 actives、不装时钟;runNow 照常可用', async () => {
     const storage = new InMemoryStorage();
     const h = makeHarness({ storage, passive: true });
@@ -1904,6 +3488,40 @@ describe('Scheduler preRunHook results', () => {
     const after = await h.storage.get(sch.id);
     expect(after?.status).toBe('expired');
     expect(after?.nextFireAt).toBeUndefined();
+  });
+
+  it.each([
+    { recurring: true, manual: false, intervalMs: undefined },
+    { recurring: true, manual: false, intervalMs: 600_000 },
+    { recurring: false, manual: false, intervalMs: undefined },
+    { recurring: false, manual: true, intervalMs: undefined },
+  ])('settles an undispatched Stop without losing normal scheduling: %j', async (timing) => {
+    const h = makeHarness({
+      runnerImpl: async () => ({
+        sessionId: 'stopped-session',
+        skipped: true,
+        resultText: 'Scheduled turn stopped before vendor dispatch',
+      }),
+    });
+    const sch = await h.scheduler.create({ ...baseInput, ...timing });
+    const firedAt = sch.nextFireAt ?? h.clock.now();
+    h.clock.setTo(firedAt);
+    if (timing.manual) await h.scheduler.runNow(sch.id);
+    else await h.scheduler.tick();
+    const runs = await h.scheduler.listRuns(sch.id);
+    expect(runs).toHaveLength(1);
+    expect(runs[0]).toMatchObject({ status: 'skipped', sessionId: 'stopped-session', readAt: firedAt });
+    const after = await h.storage.get(sch.id);
+    if (timing.recurring) {
+      expect(after?.status).toBe('active');
+      expect(after?.nextFireAt).toBe(firedAt + (timing.intervalMs ?? 60_000));
+      h.clock.setTo(after!.nextFireAt!);
+      await h.scheduler.tick();
+      expect(await h.scheduler.listRuns(sch.id)).toHaveLength(2);
+    } else {
+      expect(after?.nextFireAt).toBeUndefined();
+      if (!timing.manual) expect(after?.status).toBe('expired');
+    }
   });
 
   it('create() 透传 preRunHook 配置', async () => {
@@ -4065,4 +5683,64 @@ describe('Scheduler: attempt 生命周期状态机(#1016)', () => {
     expect(second.runId).toBeTruthy();
     await h.scheduler.stop();
   });
+});
+
+describe('caller-owned deferred dispatch', () => {
+  it('returns deferred without arming a manual schedule or recording a failure', async () => {
+    const canDispatch = vi.fn(() => false);
+    const h = makeHarness({ runnerImpl: async (_schedule, ctx) => {
+      expect(ctx.deferToCaller).toBe(true);
+      expect(ctx.canDispatch).toBe(canDispatch);
+      expect(ctx.canDispatch?.()).toBe(false);
+      return { sessionId: 'bot-task', deferred: true, deferRetryMs: 1000 };
+    } });
+    const schedule = await h.scheduler.create({ ...baseInput, manual: true });
+    await h.scheduler.start();
+    const failed = vi.fn();
+    h.scheduler.on('failed', failed);
+    const result = await h.scheduler.runNow(schedule.id, { deferToCaller: true, canDispatch });
+    expect(result.deferred).toBe(true);
+    expect(await h.storage.listRuns(schedule.id)).toEqual([]);
+    expect(await h.storage.get(schedule.id)).toMatchObject({
+      nextFireAt: undefined, lastFiredAt: undefined,
+    });
+    h.clock.advance(120000);
+    await h.scheduler.tick();
+    expect(h.runner.fire).toHaveBeenCalledTimes(1);
+    expect(failed).not.toHaveBeenCalled();
+    await h.scheduler.stop();
+  });
+});
+
+it('keeps internal routine schedules out of public management while retaining host execution and cleanup', async () => {
+  const h = makeHarness();
+  const publicSchedule = await h.scheduler.create(baseInput);
+  const internal = { ...publicSchedule, id: 'routine-owned', source: 'bot' as const, manual: true, nextFireAt: undefined };
+  await h.storage.insert(internal);
+  expect(await h.scheduler.list()).toEqual([publicSchedule]);
+  expect(await h.scheduler.get(internal.id)).toBeNull();
+  const buildPatch = vi.fn(async () => ({ name: 'changed' }));
+  const actions = [
+    () => h.scheduler.listRuns(internal.id),
+    () => h.scheduler.update(internal.id, { name: 'changed' }),
+    () => h.scheduler.updateFromCurrent(internal.id, buildPatch),
+    () => h.scheduler.pause(internal.id),
+    () => h.scheduler.resume(internal.id),
+    () => h.scheduler.delete(internal.id),
+    () => h.scheduler.runNow(internal.id),
+  ];
+  for (const action of actions) await expect(action()).rejects.toThrow('not found');
+  expect(buildPatch).not.toHaveBeenCalled();
+  expect(h.runner.fire).not.toHaveBeenCalled();
+  expect(await h.storage.get(internal.id)).toEqual(internal);
+  const result = await h.scheduler.runNow(internal.id, { internalRoutine: true, deferToCaller: true });
+  expect(h.runner.fire).toHaveBeenCalledTimes(1);
+  await expect(h.scheduler.deleteRun(result.runId)).rejects.toThrow('not found');
+  expect(await h.storage.listRuns(internal.id)).toHaveLength(1);
+  await h.scheduler.pause(internal.id, { internalRoutine: true });
+  await h.scheduler.delete(internal.id, { internalRoutine: true });
+  expect(await h.storage.get(internal.id)).toBeNull();
+  await h.scheduler.runNow(publicSchedule.id);
+  expect(h.runner.fire).toHaveBeenCalledTimes(2);
+  await h.scheduler.stop();
 });

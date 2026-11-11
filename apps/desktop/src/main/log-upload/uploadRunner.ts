@@ -159,6 +159,7 @@ async function runUploadInner(
     deps.log.warn(
       `log upload failed: code=${uploadCode} status=${result.status} ` +
         `batches=${result.batches} sentRecords=${result.sentRecords}`,
+      result.error,
     );
     return { kind: 'failed', status: result.status };
   }

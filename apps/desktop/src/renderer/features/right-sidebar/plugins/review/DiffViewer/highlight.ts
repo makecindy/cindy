@@ -2,7 +2,9 @@ import type { DiffRenderRow } from './diffRows';
 
 export const HIGHLIGHT_MAX_LINE_LENGTH = 1000;
 export const HIGHLIGHT_MAX_DIFF_CHARS = 200_000;
-export const HIGHLIGHT_MAX_DIFF_LINES = 1200;
+// The highlighter sends one worker request per line. Virtualized medium diffs
+// stay responsive by rendering plain text instead of queueing hundreds at once.
+export const HIGHLIGHT_MAX_DIFF_LINES = 400;
 
 type HighlightRequest = { id: string; code: string; lang: string };
 type HighlightResponse =
@@ -120,10 +122,14 @@ export function shouldSkipHighlightDiff(rows: readonly DiffRenderRow[]): boolean
   return false;
 }
 
+export function getCachedHighlight(language: string, content: string): string | undefined {
+  return highlightCache.get(`${language}\0${content}`);
+}
+
 export async function highlightLine(language: string, content: string): Promise<string | null> {
   if (shouldSkipHighlightLine(content)) return null;
   const cacheKey = `${language}\0${content}`;
-  const cached = highlightCache.get(cacheKey);
+  const cached = getCachedHighlight(language, content);
   if (cached !== undefined) return cached;
   const existing = pending.get(cacheKey);
   if (existing) return existing;

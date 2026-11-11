@@ -1,6 +1,7 @@
 import { performance } from 'node:perf_hooks';
 import { describe, expect, it } from 'vitest';
 import {
+  compareSessionListStrings,
   buildRemoteSessionListContext,
   buildRemoteSessionCardPreview,
   buildRemoteSessionSections,
@@ -16,7 +17,17 @@ import {
   sessionRowMessagePreview,
   summarizeRemoteSessionOverview,
   toRemoteSessionListItem,
+  formatRemoteSessionSidebarTime,
 } from '../sessionList.js';
+
+it('preserves default locale ordering for dates, paths, IDs and multilingual titles', () => {
+  const values = ['', '2026-01-01T00:00:00Z', '2026-09-30T10:00:00.000Z',
+    '/test/History-1', '/test/History-10', 'a', 'A', 'é', 'e', '任务', 'タスク'];
+  for (const left of values) for (const right of values) {
+    expect(Math.sign(compareSessionListStrings(left, right))).toBe(Math.sign(left.localeCompare(right)));
+  }
+});
+import type { PresentationLocalizer } from '../presentationLocalization.js';
 import type { RemoteSchedule, RemoteScheduleRun } from '../scheduleTypes.js';
 import { CONTINUE_AFTER_ERROR_PROMPT } from '../syntheticTrigger.js';
 
@@ -203,7 +214,38 @@ describe('sessionList', () => {
     expect(item).toMatchObject({
       title: '未命名任务',
       subtitle: 'Codex · gpt-5.4 · dialogue',
-      detail: '活跃 · 5 分钟前 · 12 条消息',
+      detail: '活跃 · 5 minutes ago · 12 条消息',
+      messagePreview: null,
+      lastActivityAt: '2026-01-01T00:05:00.000Z',
+    });
+  });
+
+  it('uses handoff activity for remote ordering and row time without changing legacy fallbacks', () => {
+    const now = Date.parse('2026-01-01T00:10:00.000Z');
+    const sessions = [
+      session('legacy', { userSendAt: '2026-01-01T00:04:00.000Z', updatedAt: '2026-01-01T00:09:00.000Z' }),
+      session('handoff', { lastActivityAt: '2026-01-01T00:08:00.000Z', userSendAt: '2026-01-01T00:01:00.000Z' }),
+    ];
+    const sections = buildRemoteSessionSections(sessions, now);
+    expect(sections.flatMap(section => section.data).map(item => item.session.id)).toEqual(['handoff', 'legacy']);
+    expect(toRemoteSessionListItem(sessions[1], now)).toMatchObject({
+      lastActivityAt: '2026-01-01T00:08:00.000Z', detail: expect.stringContaining('2 minutes ago'),
+    });
+  });
+
+  it('caps oversized message counts at 1000+', () => {
+    const item = toRemoteSessionListItem(session('s-big', {
+      title: '大库',
+      workingDir: null,
+      workspaceKind: 'dialogue',
+      agentKind: 'codex',
+      model: 'gpt-5.4',
+      userSendAt: '2026-01-01T00:05:00.000Z',
+      _count: { messages: 1001 },
+    }), new Date('2026-01-01T00:10:00.000Z').getTime());
+
+    expect(item).toMatchObject({
+      detail: '活跃 · 5 minutes ago · 1000+ 条消息',
       messagePreview: null,
       lastActivityAt: '2026-01-01T00:05:00.000Z',
     });
@@ -269,6 +311,22 @@ describe('sessionList', () => {
       session: { ...base.session, source: 'scheduler' },
     }, { running: true })).toBe('自动化执行中');
     expect(buildRemoteSessionCardPreview(base, { running: false })).toBe('旧的消息摘要');
+  });
+
+  it('localizes generated preview states without treating message text as a state marker', () => {
+    const message = toRemoteSessionListItem(
+      session('s1', { title: 'Run tests' }),
+      new Date('2026-01-01T00:10:00.000Z').getTime(),
+      undefined,
+      0,
+      '运行中',
+    );
+    const localizer = {
+      translate: (key: string, fallback: string) => key.endsWith('.running') ? 'Running' : fallback,
+    };
+
+    expect(buildRemoteSessionCardPreview(message, { localizer })).toBe('运行中');
+    expect(buildRemoteSessionCardPreview(message, { localizer, running: true })).toBe('Running');
   });
 
   it('prefers human awaiting copy over stale tool status when interaction is pending', () => {
@@ -390,7 +448,7 @@ describe('sessionList', () => {
     expect(item).toMatchObject({
       title: 'Legacy title',
       subtitle: 'Claude Code · claude-sonnet-4-6',
-      detail: '活跃 · 10 分钟前 · 自动化执行中 · 1 个自动化未读',
+      detail: '活跃 · 10 minutes ago · 自动化执行中 · 1 个自动化未读',
     });
     expect(item.scheduleInfo).toMatchObject({
       scheduleId: 'sched-1',
@@ -399,6 +457,23 @@ describe('sessionList', () => {
       unreadCount: 1,
       running: true,
     });
+  });
+
+  it('carries the latest schedule next run time and omits it when the host has none', () => {
+    const nextFireAt = Date.parse('2026-01-01T00:15:00.000Z');
+    const index = buildSessionScheduleIndex([
+      schedule('sched-1', { nextFireAt }),
+      schedule('sched-2', { status: 'paused', nextFireAt: undefined }),
+      schedule('sched-3', { targetSessionId: 's3', nextFireAt: new Date(nextFireAt).toISOString() }),
+    ], new Map([
+      ['sched-1', [run('run-1', 'sched-1', { sessionId: 's1' })]],
+      ['sched-2', [run('run-2', 'sched-2', { sessionId: 's2' })]],
+    ]));
+
+    expect(index.get('s1')?.nextFireAt).toBe(nextFireAt);
+    expect(index.get('s2')).not.toHaveProperty('nextFireAt');
+    // 持久绑定会话没有 run 也要带上下次运行时间(ISO 时间戳归一为毫秒)。
+    expect(index.get('s3')?.nextFireAt).toBe(nextFireAt);
   });
 
   it('groups multiple automation-generated sessions from the same schedule', () => {
@@ -439,7 +514,7 @@ describe('sessionList', () => {
     expect(group).toMatchObject({
       title: '移动端巡检',
       subtitle: '自动化 · 2 个任务 · Claude Code · claude-sonnet-4-6',
-      detail: '2 个任务 · 4 分钟前 · 自动化执行中 · 1 个自动化未读',
+      detail: '2 个任务 · 4 minutes ago · 自动化执行中 · 1 个自动化未读',
       automationGroup: {
         key: 'schedule:sched-1',
         sessionIds: ['running', 'old'],
@@ -635,7 +710,7 @@ describe('sessionList', () => {
     });
     expect(remoteSessionFilterLabel('waiting', overview)).toBe('待处理 1');
     expect(remoteSessionFilterLabel('all', overview)).toBe('全部 5');
-    expect(remoteSessionControlsSummary('automation', 'date', overview)).toBe('自动化 2 · 时间分组');
+    expect(remoteSessionControlsSummary('automation', overview)).toBe('自动化 2 · 项目分组');
     expect(remoteSessionOverviewCopy(overview)).toBe('1 个置顶 · 3 个项目 · 1 个自动化执行中');
   });
 
@@ -667,7 +742,6 @@ describe('sessionList', () => {
     });
 
     expect(buildRemoteSessionListContext({
-      groupMode: 'project',
       overview: activeOverview,
       searchQuery: 'billing',
       sections: searchSections,
@@ -699,7 +773,6 @@ describe('sessionList', () => {
     });
 
     expect(buildRemoteSessionListContext({
-      groupMode: 'project',
       overview: automationOverview,
       searchQuery: '',
       sections: automationSections,
@@ -800,6 +873,16 @@ describe('sessionList', () => {
     expect(sections[0].data[0].messagePreview).not.toContain('{');
   });
 
+  it('shows only the basename for Windows attachment paths in session previews', () => {
+    const messagePreviewIndex = buildSessionMessagePreviewIndex(['windows-file'], () => [
+      message('windows-file', 'm1', 'user', {
+        files: [{ path: 'C:\\work\\report.pdf' }],
+      }, '2026-01-01T00:01:00.000Z'),
+    ]);
+
+    expect(messagePreviewIndex.get('windows-file')).toBe('附件 report.pdf');
+  });
+
   it('never leaks hidden synthetic trigger prompts into session previews', () => {
     // 桌面「失败后继续」的隐藏续跑 prompt(带 [UI_ACTION_TRIGGER] 前缀)常是会话
     // 最后一条 user 行:预览必须回落到上一条可见消息,而不是把裸英文指令亮出来。
@@ -837,27 +920,6 @@ describe('sessionList', () => {
     expect(genuineContinueIndex.get('s5')).toBe('继续');
   });
 
-  it('can group non-pinned sessions by recent activity date', () => {
-    const now = new Date(2026, 0, 8, 12, 0, 0).getTime();
-    const sections = buildRemoteSessionSections([
-      session('today', { updatedAt: localIso(2026, 0, 8, 1), userSendAt: localIso(2026, 0, 8, 1) }),
-      session('yesterday', { updatedAt: localIso(2026, 0, 7, 23), userSendAt: localIso(2026, 0, 7, 23), workingDir: '/repo/b' }),
-      session('last7', { updatedAt: localIso(2026, 0, 3, 1), userSendAt: localIso(2026, 0, 3, 1), workingDir: '/repo/c' }),
-      session('earlier', { updatedAt: localIso(2025, 11, 1, 1), userSendAt: localIso(2025, 11, 1, 1), workingDir: '/repo/d' }),
-      session('pinned', { pinnedAt: localIso(2026, 0, 8, 2), updatedAt: localIso(2025, 11, 1, 1), userSendAt: localIso(2025, 11, 1, 1) }),
-    ], now, {
-      groupMode: 'date',
-    });
-
-    expect(sections.map((section) => [section.key, section.title, section.data.map((item) => item.session.id)])).toEqual([
-      ['pinned', '置顶', ['pinned']],
-      ['date:today', '今天', ['today']],
-      ['date:yesterday', '昨天', ['yesterday']],
-      ['date:last7', '最近 7 天', ['last7']],
-      ['date:earlier', '更早', ['earlier']],
-    ]);
-  });
-
   it('builds sections for a 1000-session remote device without duplicate rendered rows', () => {
     const now = new Date('2026-01-08T12:00:00.000Z').getTime();
     const sessions = createLargeSessionFixture(1000);
@@ -884,7 +946,6 @@ describe('sessionList', () => {
 
     const start = performance.now();
     const projectSections = buildRemoteSessionSections(sessions, now, {
-      groupMode: 'project',
       scheduleIndex,
     });
     const durationMs = performance.now() - start;
@@ -1046,10 +1107,6 @@ describe('getRemoteSessionPreviewCollapse', () => {
   });
 });
 
-function localIso(year: number, monthIndex: number, day: number, hour: number): string {
-  return new Date(year, monthIndex, day, hour, 0, 0).toISOString();
-}
-
 function createLargeSessionFixture(count: number): RemoteSession[] {
   const base = Date.parse('2026-01-08T12:00:00.000Z');
   return Array.from({ length: count }, (_, index) => {
@@ -1073,3 +1130,96 @@ function createLargeSessionFixture(count: number): RemoteSession[] {
     });
   });
 }
+
+function zhTimeLocalizer(): PresentationLocalizer {
+  const dict: Record<string, string> = {
+    'devices.presentation.sessionList.time.justNow': '刚刚',
+    'devices.presentation.sessionList.time.minutesAgo': '{{count}} 分钟前',
+    'devices.presentation.sessionList.time.hoursAgo': '{{count}} 小时前',
+    'devices.presentation.sessionList.time.daysAgo': '{{count}} 天前',
+    'devices.presentation.sessionList.time.minutes': '{{count}} 分钟',
+    'devices.presentation.sessionList.time.hours': '{{count}} 小时',
+    'devices.presentation.sessionList.time.days': '{{count}} 天',
+    'devices.presentation.sessionList.time.weeks': '{{count}} 周',
+    'devices.presentation.sessionList.time.months': '{{count}} 月',
+    'devices.presentation.sessionList.time.years': '{{count}} 年',
+  };
+  return {
+    translate: (key, fallback, values) => {
+      const template = dict[key] ?? fallback;
+      return template.replace(/\{\{(\w+)\}\}/g, (_, name: string) => String(values?.[name] ?? ''));
+    },
+  };
+}
+
+describe('formatRemoteSessionSidebarTime', () => {
+  const now = new Date('2026-01-01T12:00:00.000Z').getTime();
+
+  it('falls back to English when no localizer is passed', () => {
+    expect(formatRemoteSessionSidebarTime('2026-01-01T11:59:30.000Z', now)).toBe('Just now');
+    expect(formatRemoteSessionSidebarTime('2026-01-01T11:55:00.000Z', now)).toBe('5 min');
+    expect(formatRemoteSessionSidebarTime('2026-01-01T09:00:00.000Z', now)).toBe('3 hr');
+    expect(formatRemoteSessionSidebarTime('2025-12-30T12:00:00.000Z', now)).toBe('2 d');
+  });
+
+  it('uses translated compact strings when a localizer is passed', () => {
+    const t = zhTimeLocalizer();
+    expect(formatRemoteSessionSidebarTime('2026-01-01T11:59:30.000Z', now, t)).toBe('刚刚');
+    expect(formatRemoteSessionSidebarTime('2026-01-01T11:55:00.000Z', now, t)).toBe('5 分钟');
+    expect(formatRemoteSessionSidebarTime('2026-01-01T09:00:00.000Z', now, t)).toBe('3 小时');
+    expect(formatRemoteSessionSidebarTime('2025-12-30T12:00:00.000Z', now, t)).toBe('2 天');
+  });
+});
+
+describe('project sections fold Windows path spelling', () => {
+  const now = new Date('2026-01-01T00:10:00.000Z').getTime();
+
+  it('keeps one section when Windows sessions report the same project differently', () => {
+    const sessions = [
+      session('win-backslash', { workingDir: 'C:\\Repo\\App' }),
+      session('win-forward', { workingDir: 'c:/repo/app' }),
+    ];
+    const sections = buildRemoteSessionSections(sessions, now);
+    const projectSections = sections.filter((section) => section.key.startsWith('project:'));
+    expect(projectSections).toHaveLength(1);
+    expect(projectSections[0].data).toHaveLength(2);
+    // 标题取组内首条会话的原始写法，不能被分组键的小写归一覆盖。
+    expect(projectSections[0].title).toBe('App');
+    expect(summarizeRemoteSessionOverview(sessions, new Map(), new Map()).projectCount).toBe(1);
+  });
+
+  it('folds a trailing separator and a projectDir/workingDir split into one section', () => {
+    const trailing = buildRemoteSessionSections(
+      [session('no-slash', { workingDir: '/repo/app' }), session('slash', { workingDir: '/repo/app/' })],
+      now,
+    );
+    expect(trailing.filter((section) => section.key.startsWith('project:'))).toHaveLength(1);
+
+    const mixed = buildRemoteSessionSections(
+      [
+        session('with-project-dir', { workingDir: 'C:\\Repo\\App', projectDir: 'C:\\Repo\\App' }),
+        session('cwd-only', { workingDir: 'c:/repo/app' }),
+      ],
+      now,
+    );
+    const mixedProjects = mixed.filter((section) => section.key.startsWith('project:'));
+    expect(mixedProjects).toHaveLength(1);
+    expect(mixedProjects[0].title).toBe('App');
+  });
+});
+
+describe('trim whitespace before grouping', () => {
+  const now = new Date('2026-01-01T00:10:00.000Z').getTime();
+
+  it('does not lose the section title when a session reports a padded working dir', () => {
+    const sessions = [
+      session('padded', { workingDir: ' /repo/app/ ' }),
+      session('plain', { workingDir: '/repo/app' }),
+    ];
+    const sections = buildRemoteSessionSections(sessions, now);
+    const projectSections = sections.filter((section) => section.key.startsWith('project:'));
+    expect(projectSections).toHaveLength(1);
+    expect(projectSections[0].title).toBe('app');
+    expect(summarizeRemoteSessionOverview(sessions, new Map(), new Map()).projectCount).toBe(1);
+  });
+});

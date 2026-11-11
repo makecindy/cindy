@@ -11,7 +11,7 @@ const LOCK_PROTOCOL = "cindy-test-workspaces-lock-v1";
 const PROBE_TIMEOUT_MS = 1_000;
 const RETRY_DELAY_MS = 500;
 const WAIT_REPORT_INTERVAL_MS = 60_000;
-const HEAVY_TEST_TIERS = new Set(["unit", "db", "git-integration"]);
+const HEAVY_TEST_TIERS = new Set(["unit", "db", "git-integration", "integration", "e2e"]);
 const BIND_DENIED_ERROR_CODES = new Set(["EACCES", "EPERM"]);
 
 export const TEST_GATE_LOCK_TIMEOUT_EXIT_CODE = 75;
@@ -45,10 +45,11 @@ export function isTestGateCiEnvironment(env = process.env) {
 export function shouldUseTestGateLock({
 	all = false,
 	tier = "unit",
+	lock = false,
 	noLock = false,
 	env = process.env,
 } = {}) {
-	if (noLock || isTestGateCiEnvironment(env)) return false;
+	if (!lock || noLock || isTestGateCiEnvironment(env)) return false;
 	return all || HEAVY_TEST_TIERS.has(tier);
 }
 
@@ -191,6 +192,9 @@ function close(server) {
 
 async function listenForLock(port, banner) {
 	const server = net.createServer((socket) => {
+		// Probes can reset as soon as they recognize the banner. Their socket
+		// failure must not terminate the lock holder or release its test budget.
+		socket.on("error", () => socket.destroy());
 		socket.end(`${banner}\n`);
 	});
 	await listen(server, port);
@@ -306,7 +310,7 @@ export async function acquireTestGateLock({
 		}
 		if (now() - lastReportAt >= waitReportIntervalMs) {
 			output(
-				`WAIT test gate: ${describeOwner(decision.owner)}; waited ${formatWaitDuration(waitedMs)} (timeout ${formatWaitDuration(timeoutMs)}). Do not kill and restart; use --no-lock only when intentional overlap is safe.`,
+				`WAIT test gate (--lock): ${describeOwner(decision.owner)}; waited ${formatWaitDuration(waitedMs)} (timeout ${formatWaitDuration(timeoutMs)}). Run without --lock to use independent test processes.`,
 			);
 			lastReportAt = now();
 		}

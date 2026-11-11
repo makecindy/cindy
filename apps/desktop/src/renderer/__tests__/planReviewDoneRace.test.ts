@@ -126,7 +126,7 @@ function installElectronBridge(): void {
         generateTitle: vi.fn(async () => ({ title: 't' })),
         getPendingInteractions,
         setPlanMode: vi.fn(async () => {}),
-        resolveInteraction: vi.fn(async () => {}),
+        resolveInteraction: vi.fn(async () => ({ accepted: true })),
         abortSession: vi.fn(async () => {}),
         closeSession: vi.fn(async () => {}),
         listActive: vi.fn(async () => []),
@@ -275,7 +275,7 @@ describe('plan_review 与 done 的时序', () => {
     expect(latestPlanStatuses()).toEqual(['in_progress', 'pending']);
   });
 
-  it('codex:成功完成但缺少最终 plan 快照时收口计划卡片', () => {
+  it('codex:成功完成但缺少最终 plan 快照时盖章收口、不改步骤事实', () => {
     const startedAtMs = 1_700_000_000_000;
     const completedAtMs = startedAtMs + 5_000;
     const now = vi.spyOn(Date, 'now').mockReturnValue(startedAtMs);
@@ -285,13 +285,18 @@ describe('plan_review 与 done 的时序', () => {
     now.mockReturnValue(completedAtMs);
     emitDone('codex', undefined, 'turn-1', 'completed');
 
-    expect(latestPlanStatuses()).toEqual(['completed', 'completed']);
-    const completedPlan = makerChatStore
+    // 收口 = 终态章(生命周期),步骤保持 agent 实际报告的状态。
+    expect(latestPlanStatuses()).toEqual(['in_progress', 'pending']);
+    const sealedPlan = makerChatStore
       .getSnapshot(SESSION_ID)
       .messages.findLast(
         (message) => message.role === 'tool_use' && message.toolName === 'update_plan',
       );
-    expect(completedPlan).toMatchObject({ planUpdatedAtMs: completedAtMs });
+    expect(sealedPlan).toMatchObject({
+      terminalPlanSnapshot: true,
+      terminalPlanAtMs: completedAtMs,
+      planUpdatedAtMs: completedAtMs,
+    });
   });
 
   it('claude:done 不改 Codex update_plan 展示状态', () => {
@@ -452,19 +457,17 @@ describe('setPlanMode 乐观时序(勾选后立即发送不丢武装态)', () =>
     expect(makerChatStore.getSnapshot(SESSION_ID).planModeEnabled).toBe(true);
   });
 
-  it('持久化失败 → 回滚乐观值并通知 runtime 还原', async () => {
+  it('Host 提交失败只回滚乐观值，不另写 DB 或发第二次 runtime 回滚', async () => {
     const sessionService = await import('@/lib/sessionService');
-    (sessionService.update as ReturnType<typeof vi.fn>).mockRejectedValueOnce(new Error('db down'));
     const w = globalThis as unknown as {
       window: { electronAPI: { maker: { setPlanMode: ReturnType<typeof vi.fn> } } };
     };
-    w.window.electronAPI.maker.setPlanMode = vi.fn(async () => {});
+    w.window.electronAPI.maker.setPlanMode = vi.fn(async () => { throw new Error('db down'); });
 
     await expect(makerChatStore.setPlanMode(SESSION_ID, true)).rejects.toThrow('db down');
     expect(makerChatStore.getSnapshot(SESSION_ID).planModeEnabled).toBe(false);
-    // 先乐观 true、失败后还原 false 各推送一次。
-    expect(w.window.electronAPI.maker.setPlanMode).toHaveBeenCalledWith(SESSION_ID, true);
-    expect(w.window.electronAPI.maker.setPlanMode).toHaveBeenCalledWith(SESSION_ID, false);
+    expect(w.window.electronAPI.maker.setPlanMode).toHaveBeenCalledExactlyOnceWith(SESSION_ID, true);
+    expect(sessionService.update).not.toHaveBeenCalled();
   });
 });
 
@@ -565,13 +568,14 @@ describe('cancelPlanReview(取消本次审阅)', () => {
     makerChatStore.purgeSession(SESSION_ID);
   });
 
-  it('关卡片、气泡标 cancelled, 决策发 deny + dismissed', () => {
+  it('关卡片、气泡标 cancelled, 决策发 deny + dismissed', async () => {
     makerChatStore.setSessionRuntime(SESSION_ID, { agentKind: 'codex' });
     emitPlanReviewRequest('pr-cancel');
     emitDone('codex');
     expect(makerChatStore.getSnapshot(SESSION_ID).pendingPlanReview?.requestId).toBe('pr-cancel');
 
     makerChatStore.cancelPlanReview(SESSION_ID, 'pr-cancel');
+    await new Promise((resolve) => setTimeout(resolve, 0));
 
     const snap = makerChatStore.getSnapshot(SESSION_ID);
     expect(snap.pendingPlanReview).toBeNull();

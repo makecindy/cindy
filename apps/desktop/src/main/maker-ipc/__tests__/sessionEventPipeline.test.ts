@@ -1,0 +1,3005 @@
+import { beginQuietScheduledOutput } from '../../scheduler-host/silent-output.js';
+import type { TurnUsageContext } from '../turnUsageContext.js';
+import { Session, type AgentEvent, type AgentSessionHandle } from '@cindy/maker-core';
+import { beforeEach, afterEach, describe, expect, it, vi } from 'vitest';
+import { handleSessionEvent, type SessionEventDependencies } from '../sessionEventPipeline.js';
+import { flushSessionPiTurnUsage, retryPendingPiUsageReceipts } from '../piUsageReceipts.js';
+import { setCurrentDbClient, clearCurrentDbClient } from '../../localDb/client/current.js';
+import type { DbClient } from '../../localDb/client/DbClient.js';
+import type { PiUsageWrite } from '../../localDb/worker/opHandlers/piUsageTx.js';
+import * as broadcastTap from '../../device-link/broadcast-tap.js';
+import { createBotCompactRuntimeRefreshCoordinator } from '../botCompactRuntimeRefresh.js';
+import { createContextOverflowRollover } from '../contextOverflowRollover.js';
+import { setMainLocale } from '../../i18n.desktop.js';
+import { installSessionTurnObserver } from '../sessionTurnObserver.js';
+import { onChannelTurn } from '../channelTurnSignal.js';
+import { createSessionBindingLifecycle } from '../sessionBindingLifecycle.js';
+import { SessionListActivityTracker, SessionTurnActivityTracker } from '../sessionTurnActivityTracker.js';
+import { ProductTurnWallClockTracker, ProductTurnUsageTargetTracker } from '../turnWallClock.js';
+import { ClaudeOutputLagTimingGuard } from '../../usage/modelUsageDelta.js';
+import { createWorkerTurnStartSequencer } from '../workerTurnStartSequencer.js';
+import type { BotGroupLaneTerminal } from '../botGroupChatService.js';
+import { AutoResumeBookkeeping, type OrcaSuppressedTerminal } from '../autoResumeBookkeeping.js';
+import { createDeferredProductTurnFailureGate, createProductTurnFailureFinalizer } from '../productTurnFailureOwner.js';
+import { createProviderGroupHeldTurnErrors } from '../../provider-group/heldTurnErrors.js';
+import { createProviderGroupHeldWorkerTerminals } from '../../provider-group/heldWorkerTerminals.js';
+import { isGatewayProxyTokenRecoveryErrorEventForProvider } from '../gatewayProxyTokenRecovery.js';
+import { GATEWAY_PROXY_TOKEN_INVALID_REASON } from '@cindy/maker-shared/error-redaction';
+import { reportCindyGatewayKeyRejectedForCurrentKey } from '../../model-access/gatewayKeyRejection.js';
+
+const effects = vi.hoisted(() => {
+  const calls: string[] = [];
+  const fns = new Map<string, ReturnType<typeof vi.fn>>();
+  function fn(name: string) {
+    if (!fns.has(name))
+      fns.set(
+        name,
+        vi.fn(() => {
+          calls.push(name);
+        }),
+      );
+    return fns.get(name)!;
+  }
+  return { calls, fns, fn };
+});
+// Account discovery persistence is outside this runtime/route fixture.
+vi.mock('../../maker-host/model-discovery/xai.js', () => ({
+  discardXaiModelsDiskCache: vi.fn(async () => {}),
+}));
+
+// register.ts wires the agent-turn dependency to this current-key entry; assert against it.
+vi.mock('../../model-access/gatewayKeyRejection.js', () => ({
+  reportCindyGatewayKeyRejectedForCurrentKey: vi.fn(),
+}));
+vi.mock('../../local-model-runtime/preflight.js', () => ({
+  ensureManagedOllamaReadyForSession: effects.fn('ensureManagedOllamaReadyForSession'),
+}));
+
+vi.mock('../../logger.js', () => ({
+  createLogger: () => ({ debug: vi.fn(), info: vi.fn(), warn: vi.fn(), error: vi.fn() }),
+}));
+vi.mock('../../maker-host/auth-adapters.js', () => ({
+  readClaudeApiKey: effects.fn('readClaudeApiKey'),
+}));
+vi.mock('../../sessionSpendBroadcaster.js', () => ({
+  broadcastSessionSpend: effects.fn('broadcastSessionSpend'),
+  broadcastSessionTokens: effects.fn('broadcastSessionTokens'),
+  recordSessionTurnSpend: effects.fn('recordSessionTurnSpend'),
+  recordSessionTurnTokens: effects.fn('recordSessionTurnTokens'),
+  recordSessionContextSnapshot: effects.fn('recordSessionContextSnapshot'),
+}));
+vi.mock('../../localDb/client/current.js', async importOriginal => ({
+  ...await importOriginal<typeof import('../../localDb/client/current.js')>(),
+  getDbClient: effects.fn('getDbClient'),
+}));
+vi.mock('../../turnCostBroadcaster.js', () => ({
+  recordSchedulerTurnCost: effects.fn('recordSchedulerTurnCost'),
+  recordTurnUsageOnMessage: effects.fn('recordTurnUsageOnMessage'),
+  codexUsageToTokens: effects.fn('codexUsageToTokens'),
+  piUsageToTokens: effects.fn('piUsageToTokens'),
+}));
+vi.mock('../../modelMismatchBroadcaster.js', () => ({
+  recordModelMismatchOnMessage: effects.fn('recordModelMismatchOnMessage'),
+}));
+vi.mock('../../usage/claudeAccountUsage.js', () => ({
+  triggerClaudeAccountUsageRefresh: effects.fn('triggerClaudeAccountUsageRefresh'),
+}));
+vi.mock('../../usage/modelPricing.js', () => ({
+  getGatewayModelPricing: effects.fn('getGatewayModelPricing'),
+  isModelPricingRefreshInFlight: effects.fn('isModelPricingRefreshInFlight'),
+  getGatewayAccountCurrency: effects.fn('getGatewayAccountCurrency'),
+  getGatewayModelPricingForModel: effects.fn('getGatewayModelPricingForModel'),
+  getModelPriceQuote: effects.fn('getModelPriceQuote'),
+}));
+vi.mock('../../usage/referenceModelPricing.js', () => ({
+  readModelPriceOverridesSnapshot: effects.fn('readModelPriceOverridesSnapshot'),
+  getClaudeSubscriptionValuePrice: effects.fn('getClaudeSubscriptionValuePrice'),
+  getCodexSubscriptionValuePrice: effects.fn('getCodexSubscriptionValuePrice'),
+  getReferenceModelPricing: effects.fn('getReferenceModelPricing'),
+  getCodexProviderSubscriptionValuePrice: effects.fn('getCodexProviderSubscriptionValuePrice'),
+  getSubscriptionDirectValuePrice: effects.fn('getSubscriptionDirectValuePrice'),
+}));
+vi.mock('../../usage/ledgerCurrency.js', () => ({
+  currentLedgerCurrency: effects.fn('currentLedgerCurrency'),
+  isLedgerCurrencyKnown: effects.fn('isLedgerCurrencyKnown'),
+  LEDGER_CURRENCY_FALLBACK: 'USD',
+}));
+vi.mock('../usage.js', () => ({
+  triggerClaudeSubscriptionUsageRefresh: effects.fn('triggerClaudeSubscriptionUsageRefresh'),
+  triggerCodexAccountUsageRefresh: effects.fn('triggerCodexAccountUsageRefresh'),
+  triggerXaiSubscriptionUsageRefresh: effects.fn('triggerXaiSubscriptionUsageRefresh'),
+}));
+vi.mock('../../usageBroadcaster.js', () => ({
+  rebroadcastTodaySpend: effects.fn('rebroadcastTodaySpend'),
+  recordModelTurnUsage: effects.fn('recordModelTurnUsage'),
+  recordTurnSpend: effects.fn('recordTurnSpend'),
+  rebroadcastCodexTodayUsage: effects.fn('rebroadcastCodexTodayUsage'),
+  recordCodexTurnUsage: effects.fn('recordCodexTurnUsage'),
+  recordCodexAccountUsageSnapshot: effects.fn('recordCodexAccountUsageSnapshot'),
+}));
+vi.mock('../schedule.js', () => ({
+  broadcastSchedulerChanged: effects.fn('broadcastSchedulerChanged'),
+}));
+vi.mock('../../maker-host/session-provider-store.js', () => ({
+  getSessionProvider: effects.fn('getSessionProvider'),
+}));
+vi.mock('../../maker-host/active-catalog.js', () => ({
+  getActiveCatalog: effects.fn('getActiveCatalog'),
+}));
+vi.mock('../../maker-host/claude-session-route-registry.js', () => ({
+  readClaudeSessionRoute: effects.fn('readClaudeSessionRoute'),
+}));
+vi.mock('../../maker-host/codex-proxy-host.desktop.js', () => ({
+  getCodexProxyAuthInjection: effects.fn('getCodexProxyAuthInjection'),
+}));
+vi.mock('../../maker-host/provider-route.js', () => ({
+  isUserProviderSession: effects.fn('isUserProviderSession'),
+}));
+vi.mock('../../messagePersistBroadcaster.desktop.js', () => ({
+  reserveTurnErrorPersistId: effects.fn('reserveTurnErrorPersistId'),
+  backgroundTurnPredatesSessionClear: effects.fn('backgroundTurnPredatesSessionClear'),
+  noteAgentMeta: effects.fn('noteAgentMeta'),
+  noteTurnStarted: effects.fn('noteTurnStarted'),
+  enqueueDurableWrite: effects.fn('enqueueDurableWrite'),
+  flushAssistantBlock: effects.fn('flushAssistantBlock'),
+  onAssistantTextEvent: effects.fn('onAssistantTextEvent'),
+  onAssistantAttemptFailure: effects.fn('onAssistantAttemptFailure'),
+  onAssistantSamplingAccepted: effects.fn('onAssistantSamplingAccepted'),
+  onStandaloneTextEvent: effects.fn('onStandaloneTextEvent'),
+  onAgentTaskUpdateEvent: effects.fn('onAgentTaskUpdateEvent'),
+  onThinkingEvent: effects.fn('onThinkingEvent'),
+  onToolResultEvent: effects.fn('onToolResultEvent'),
+  onToolResultFullEvent: effects.fn('onToolResultFullEvent'),
+  persistToolProcessMedia: effects.fn('persistToolProcessMedia'),
+  onToolUseEvent: effects.fn('onToolUseEvent'),
+  consumeLastAssistantPersistId: effects.fn('consumeLastAssistantPersistId'),
+  consumeLastTopLevelAssistantPersistId: effects.fn('consumeLastTopLevelAssistantPersistId'),
+  drainPersistQueue: effects.fn('drainPersistQueue'),
+  flushOrphanToolResults: effects.fn('flushOrphanToolResults'),
+  isSuccessfulCodexDoneEventData: effects.fn('isSuccessfulCodexDoneEventData'),
+  markAssistantTurnCompleted: effects.fn('markAssistantTurnCompleted'),
+  markAssistantTurnFailed: effects.fn('markAssistantTurnFailed'),
+  clearCodexPlanRowsForSession: effects.fn('clearCodexPlanRowsForSession'),
+  persistCodexPlanOnDone: effects.fn('persistCodexPlanOnDone'),
+  persistCodexPlanOnTerminalError: effects.fn('persistCodexPlanOnTerminalError'),
+  preserveTurnPersistStateForBackground: effects.fn('preserveTurnPersistStateForBackground'),
+  onTurnErrorEvent: effects.fn('onTurnErrorEvent'),
+  releaseReservedTurnErrorPersistId: effects.fn('releaseReservedTurnErrorPersistId'),
+  resetTurnPersistState: effects.fn('resetTurnPersistState'),
+  saveTurnStartedAtForDeferred: effects.fn('saveTurnStartedAtForDeferred'),
+}));
+vi.mock('../../maker-host/claude-session-background-activity.js', async (importOriginal) => ({
+  hasWorkingBackgroundCommand: (
+    await importOriginal<typeof import('../../maker-host/claude-session-background-activity.js')>()
+  ).hasWorkingBackgroundCommand,
+  noteClaudeSessionBackgroundCommandWork: effects.fn('noteClaudeSessionBackgroundCommandWork'),
+  noteClaudeSessionTurnState: effects.fn('noteClaudeSessionTurnState'),
+}));
+vi.mock('../../subagentObservationRewindFence.js', () => ({
+  noteSubagentObservationTurnStarted: effects.fn('noteSubagentObservationTurnStarted'),
+  captureSubagentObservationGeneration: effects.fn('captureSubagentObservationGeneration'),
+  enqueueSubagentObservationWrite: effects.fn('enqueueSubagentObservationWrite'),
+}));
+vi.mock('../../localDb/ipc/sessions.js', () => ({
+  persistSessionFields: effects.fn('persistSessionFields'),
+}));
+vi.mock('../../localDb/sessionActiveTurn.js', () => ({
+  markSessionTurnStarted: effects.fn('markSessionTurnStarted'),
+}));
+vi.mock('../../remote-ssh/index.js', () => ({
+  isCcMgrUpgradeInFlight: effects.fn('isCcMgrUpgradeInFlight'),
+}));
+vi.mock('../promptPredictionStopLedger.js', () => ({
+  clearPromptPredictionSessionStopped: effects.fn('clearPromptPredictionSessionStopped'),
+}));
+vi.mock('../../turn-change-set/store.js', () => ({
+  finalizeTurnChangeSet: effects.fn('finalizeTurnChangeSet'),
+}));
+vi.mock('../../maker-host/session-effort-store.js', () => ({
+  getSessionFastMode: effects.fn('getSessionFastMode'),
+}));
+vi.mock('../../maker-host/claude-gateway-error-observer.js', () => ({
+  consumeClaudeOpusPlanMismatch: effects.fn('consumeClaudeOpusPlanMismatch'),
+}));
+vi.mock('../../maker-host/catalog-to-descriptors.js', () => ({
+  resolveVerifiedContextWindow: effects.fn('resolveVerifiedContextWindow'),
+}));
+vi.mock('../../localDb/subagentRuns.js', () => ({
+  persistSubagentTaskUpdate: effects.fn('persistSubagentTaskUpdate'),
+}));
+vi.mock('../../localDb/ipc/subagentRuns.js', () => ({
+  broadcastSubagentRunsChanged: effects.fn('broadcastSubagentRunsChanged'),
+}));
+vi.mock('../../sessionTaskSummary.js', () => ({
+  maybeGenerateSessionTaskSummary: effects.fn('maybeGenerateSessionTaskSummary'),
+  refreshSessionListPreview: effects.fn('refreshSessionListPreview'),
+}));
+vi.mock('../../cindy-brain/index.js', () => ({
+  hasEnabledGhostAssistantHook: effects.fn('hasEnabledGhostAssistantHook'),
+  runGhostAssistantReplyHook: effects.fn('runGhostAssistantReplyHook'),
+}));
+vi.mock('../../cindy-brain/subscriptionGateway.js', () => ({
+  withGhostAssistantHookModel: effects.fn('withGhostAssistantHookModel'),
+}));
+vi.mock('../../maker-host/model-route-guard-live.js', () => ({
+  verdictForModelRoute: effects.fn('verdictForModelRoute'),
+}));
+
+function deferred<T = void>() {
+  let resolve!: (value: T) => void;
+  const promise = new Promise<T>((done) => {
+    resolve = done;
+  });
+  return { promise, resolve };
+}
+
+async function microtasks() {
+  for (let i = 0; i < 20; i++) await Promise.resolve();
+}
+
+function event(
+  type: AgentEvent['type'],
+  data: unknown = {},
+  extra: Partial<AgentEvent> = {},
+): AgentEvent {
+  return { type, source: 'codex', data, ...extra } as AgentEvent;
+}
+
+function harness() {
+  const log = {
+    trace: vi.fn(),
+    debug: vi.fn(),
+    info: vi.fn(),
+    warn: vi.fn(),
+    error: vi.fn(),
+    fatal: vi.fn(),
+    child: () => log,
+  };
+  const ended = deferred();
+  const handle = {
+    id: 'provider',
+    agentKind: 'codex',
+    model: 'test-model',
+    send: vi.fn(async () => {}),
+    close: vi.fn(async () => {
+      ended.resolve();
+    }),
+    setInteractionResolver: vi.fn(),
+    async *events() {
+      await ended.promise;
+      yield* [] as AgentEvent[];
+    },
+  } as unknown as AgentSessionHandle;
+  const session = new Session({
+    id: 'task',
+    agentKind: 'codex',
+    workDir: '/unused',
+    handle,
+    capabilities: {} as never,
+    logger: log,
+    turnStallMs: 0,
+  });
+  const activity = new SessionTurnActivityTracker();
+  const listActivity = new SessionListActivityTracker(effects.fn('list-activity'));
+  const failureGate = createDeferredProductTurnFailureGate();
+  const isCurrentOwner = (owner: Parameters<typeof failureGate.defer>[0]) =>
+    owner.session === session && owner.instanceId === session.instanceId &&
+    owner.generation === session.getTurnGeneration();
+  const deps = {
+    onPluginTaskTerminal: vi.fn(),
+    onSuccessfulProductTurn: vi.fn(async () => {}),
+    onUnsuccessfulProductTurn: vi.fn(createProductTurnFailureFinalizer({
+      gate: failureGate,
+      isCurrentOwner,
+      commitActivity: (sessionId) => listActivity.commit(sessionId),
+      settlePluginTasks: () => {},
+      interrupt: async () => {},
+    })),
+    deferUnsuccessfulProductTurn: (owner: Parameters<typeof failureGate.defer>[0]) => failureGate.defer(owner),
+    log,
+    botCompactRuntimeRefreshCoordinator: { noteBoundary: vi.fn() },
+    wireNoteMemory: { reset: vi.fn() },
+    attemptBotCompactRuntimeRefresh: vi.fn(),
+    isFencedStaleSessionTerminal: vi.fn(() => false),
+    redactEventForRenderer: vi.fn((value: AgentEvent): AgentEvent => ({ ...value, data: { redacted: true } })),
+    interruptedTurnAutoResumeGuard: {
+      noteAttemptEvent: vi.fn(),
+      noteTurnStarted: vi.fn(),
+      noteAttemptSettled: vi.fn(),
+      noteProgress: vi.fn(() => true),
+    },
+    handleAgentIslandInteractionDismissed: vi.fn(),
+    clearPendingInteraction: vi.fn(() => null),
+    defaultDecisionForPending: vi.fn(),
+    persistInteractionDecision: vi.fn(),
+    broadcastToAllWindows: effects.fn('broadcast'),
+    deliverCodexGeneratedImage: vi.fn<(sessionId: string, event: AgentEvent) => Promise<readonly AgentEvent[]>>(async () => []),
+    autoResumeBookkeeping: {
+      discardReplacementProvenByProviderEvent: vi.fn(),
+      clearFailedTurnCompletionTail: vi.fn(),
+      settleOutcome: vi.fn(),
+      noteFailedTurnCompletionTail: vi.fn(),
+      stashSuppressedError: vi.fn(),
+      stashOrcaSuppressedTerminal: vi.fn(() => true),
+      stashBotGroupSuppressedTerminal: vi.fn(() => true),
+      consumeFailedTurnCompletionTail: vi.fn(() => false),
+      hasSuppressedError: vi.fn(() => false),
+    },
+    pendingFailedTurnAssistantPersistId: new Map<string, string>(),
+    silentStopAutoResumeGuard: { noteTurnStarted: vi.fn() },
+    sessionTurnActivityTracker: activity,
+    sessionListActivityTracker: listActivity,
+    productTurnWallClockTracker: new ProductTurnWallClockTracker(),
+    productTurnUsageTargetTracker: new ProductTurnUsageTargetTracker(),
+    advanceSessionTurnBoundaryGeneration: vi.fn(() => 1),
+    gitSnapshotCoordinator: {
+      hasPendingTurnStart: vi.fn(() => false),
+      onTurnStart: effects.fn('git-start'),
+      onTurnEnd: effects.fn('git-end'),
+      onTurnAbort: effects.fn('git-abort'),
+    },
+    workerTurnStartSequencer: createWorkerTurnStartSequencer(log),
+    orcaTeamServiceForEvents: {
+      handleWorkerTurnStarted: effects.fn('worker-start'),
+      captureWorkerText: vi.fn(),
+      captureWorkerTerminalTurn: vi.fn(() => ({ owner: 'old-turn' })),
+      noteWorkerProductTerminal: vi.fn(),
+      handleWorkerTerminalTurn: effects.fn('worker-terminal'),
+    },
+    turnModelPromiseBySession: new Map<string, Promise<string>>(),
+    readSessionModelForUsage: vi.fn(async () => 'test-model'),
+    turnUsageContextBySession: new Map<string, TurnUsageContext>(),
+    silentStopTurnLeaseGate: { turnLeaseIdForEvent: vi.fn(() => 'instance:1') },
+    agentInputCoordinatorHolder: {
+      getActiveInputClientId: vi.fn((): string | null => null),
+      getAcceptedInputProvenance: vi.fn((): { clientId: string; autoResume?: boolean; retrySourceClientId?: string } | null => null),
+      getActiveInputClientIds: vi.fn((): string[] => []),
+      isActiveTaskCoordination: vi.fn(() => false),
+      getQueueControlSnapshot: vi.fn(() => ({ pendingQueue: [] as unknown[] })),
+      onTurnEvent: vi.fn(),
+      bindErrorPersistId: vi.fn(),
+      noteSuppressedTerminalError: vi.fn(),
+      onExternalTurnSettled: vi.fn(),
+      isAutoResumePending: vi.fn(() => false),
+      isAutoResumeDeferred: vi.fn(() => false),
+      getProviderGroupSwitchHoldId: vi.fn((): number | null => null),
+      getAutoResumeAttemptToken: vi.fn(() => 5),
+      getAutoResumeDeferredOwner: vi.fn(() => null),
+    },
+    handleSilentStopTurnEnd: vi.fn(async () => {}),
+    isRemoteAuthRetryErrorEvent: vi.fn(() => false),
+    isGatewayProxyTokenRecoveryErrorEvent: vi.fn<(sessionId: string, event: AgentEvent) => boolean>(() => false),
+    reportAgentCindyGatewayKeyRejected: vi.mocked(reportCindyGatewayKeyRejectedForCurrentKey),
+    overflowSuppressedBroadcasts: new Map(),
+    handleAgentIslandEventAfterBroadcast: effects.fn('island'),
+    notifyGoalIdleAfterTurnSettled: vi.fn(() => {
+      expect(activity.isSessionInTurn('task')).toBe(false);
+      effects.calls.push('goal');
+    }),
+    settlePendingCredentialSwitch: effects.fn('credentials'),
+    settlePendingSessionRuntimeControlHolder: effects.fn('runtime'),
+    deferredCodexRestartHolder: null,
+    refreshRemoteCodexMcpOnTurnSettledHolder: null,
+    markTurnEndedAfterPersistDrain: effects.fn('turn-drain'),
+    noteSessionListActivity: effects.fn('list-activity'),
+    contextOverflowRolloverHolder: null,
+    lastReportedModelUsageBySession: new Map(),
+    claudeOutputLagTimingGuard: new ClaudeOutputLagTimingGuard(),
+    lastReportedCostUsdBySession: new Map<string, number>(),
+    unpricedSubscriptionValueMarker: () => ({
+      amount: 0,
+      currency: 'USD',
+      approximate: true,
+      kind: 'value-estimate',
+      estimateReasons: ['subscription-value'],
+    }),
+  };
+  // External services are reduced to their public event-facing methods. Session,
+  // activity, wall clock, usage target and worker sequencing above are real.
+  const dependencies = deps as unknown as SessionEventDependencies;
+  const emit = (value: AgentEvent) => handleSessionEvent(dependencies, session, value);
+  return {
+    deps,
+    dependencies,
+    activity,
+    session,
+    handle,
+    emit,
+    settleDeferredFailure: (data: unknown) => failureGate.settle('task', isCurrentOwner,
+      owner => { void deps.onUnsuccessfulProductTurn('task', owner); }, { data }),
+    dispose: async () => {
+      activity.deleteSession('task');
+      listActivity.deleteSession('task');
+      await session.close();
+    },
+  };
+}
+
+beforeEach(() => {
+  vi.useFakeTimers();
+  for (const [name, fn] of effects.fns)
+    fn.mockReset().mockImplementation(() => {
+      effects.calls.push(name);
+    });
+  effects.calls.length = 0;
+  for (const name of [
+    'drainPersistQueue',
+    'recordModelTurnUsage',
+    'recordTurnUsageOnMessage',
+    'recordSchedulerTurnCost',
+    'persistSessionFields',
+    'getGatewayModelPricingForModel',
+  ])
+    effects.fn(name).mockResolvedValue(undefined);
+  effects.fn('getActiveCatalog').mockReturnValue({ providers: [] });
+  effects.fn('currentLedgerCurrency').mockReturnValue('USD');
+  effects.fn('isLedgerCurrencyKnown').mockReturnValue(true);
+  effects.fn('reserveTurnErrorPersistId').mockImplementation(() => {
+    effects.calls.push('reserve');
+    return 'error-row';
+  });
+  effects.fn('onAssistantTextEvent').mockReturnValue('assistant-row');
+  effects.fn('onToolUseEvent').mockReturnValue('tool-row');
+  effects.fn('isSuccessfulCodexDoneEventData').mockReturnValue(true);
+  effects.fn('verdictForModelRoute').mockResolvedValue({ kind: 'pass' });
+});
+afterEach(() => {
+  setMainLocale('en');
+  vi.clearAllTimers();
+  vi.useRealTimers();
+});
+
+function ordered(...names: string[]) {
+  let previous = -1;
+  for (const name of names) {
+    const index = effects.calls.indexOf(name);
+    expect(index, name).toBeGreaterThan(previous);
+    previous = index;
+  }
+}
+
+describe('production Session event pipeline', () => {
+  // #8147 follow-up: the ID used by live delivery must also be retained by
+  // the coordinator so subsequent projection-only readers can deduplicate.
+  it('binds the reserved error row to the snapshot owner before broadcasting it', async () => {
+    const current = harness();
+    current.deps.redactEventForRenderer.mockImplementation(value => value);
+    try {
+      current.emit(event('error', { message: 'failed', isTerminal: true }));
+      expect(current.deps.agentInputCoordinatorHolder.bindErrorPersistId)
+        .toHaveBeenCalledWith('task', 'error-row', 'failed');
+      const delivered = current.deps.broadcastToAllWindows.mock.calls.find(
+        ([channel]) => channel === 'maker:event',
+      );
+      expect(delivered?.[1]).toMatchObject({ persistId: 'error-row' });
+    } finally { await current.dispose(); }
+  });
+
+  it('accepts only provider-confirmed sampling items and releases the remainder at done', async () => {
+    const current = harness();
+    try {
+      current.emit(event('tool_result_full', { toolUseId: 'command', fullText: 'done', assistantSamplingAccepted: { agentMessageIds: ['item-a'] } }));
+      expect(effects.fn('onAssistantSamplingAccepted')).toHaveBeenCalledWith('task', ['item-a']);
+      expect(current.deps.broadcastToAllWindows).toHaveBeenCalledWith('maker:event', expect.objectContaining({ event: expect.objectContaining({ type: 'tool_result_full' }) }));
+      current.emit(event('tool_result', { toolUseIds: ['search'], summary: 'search done' }));
+      expect(effects.fn('onAssistantSamplingAccepted')).toHaveBeenCalledTimes(1);
+      current.emit(event('done', {}));
+      expect(effects.fn('onAssistantSamplingAccepted')).toHaveBeenLastCalledWith('task');
+    } finally { await current.dispose(); }
+  });
+
+  it.each(['auth', 'gateway', 'overflow'] as const)(
+    'commits held %s activity once at its original end only when recovery finally fails', async recovery => {
+      const current = harness();
+      const result = deferred<boolean>();
+      const failure = { message: 'context length exceeded', reason: 'context_length_exceeded', isTerminal: true };
+      if (recovery === 'auth') current.deps.isRemoteAuthRetryErrorEvent.mockReturnValue(true);
+      if (recovery === 'gateway') current.deps.isGatewayProxyTokenRecoveryErrorEvent.mockReturnValue(true);
+      if (recovery === 'overflow') {
+        (current.deps as { contextOverflowRolloverHolder: unknown }).contextOverflowRolloverHolder = {
+          claim: () => 'claimed', tryRecover: () => result.promise,
+        };
+      }
+      try {
+        vi.setSystemTime(40_000);
+        current.emit(event('error', failure));
+        await microtasks();
+        expect(current.deps.noteSessionListActivity).not.toHaveBeenCalled();
+        vi.setSystemTime(45_000);
+        if (recovery === 'overflow') result.resolve(false);
+        else expect(current.settleDeferredFailure(failure)).toBe(true);
+        await microtasks();
+        expect(current.deps.noteSessionListActivity).toHaveBeenCalledExactlyOnceWith('task', 40_000);
+        expect(current.settleDeferredFailure(failure)).toBe(false);
+        expect(current.deps.noteSessionListActivity).toHaveBeenCalledTimes(1);
+      } finally { await current.dispose(); }
+    },
+  );
+
+  it.each([
+    { recovery: 'auth', recovered: true },
+    { recovery: 'overflow', recovered: true },
+    { recovery: 'overflow', recovered: false },
+  ])('does not commit held activity after a recovery dispatch ($recovery, recovered=$recovered)', async ({ recovery, recovered }) => {
+    const current = harness();
+    const result = deferred<boolean>();
+    const failure = { message: 'context length exceeded', reason: 'context_length_exceeded', isTerminal: true };
+    if (recovery === 'auth') current.deps.isRemoteAuthRetryErrorEvent.mockReturnValue(true);
+    else {
+      (current.deps as { contextOverflowRolloverHolder: unknown }).contextOverflowRolloverHolder = {
+        claim: () => 'claimed', tryRecover: () => result.promise,
+      };
+    }
+    try {
+      current.emit(event('error', failure));
+      await current.session.send('continue');
+      current.emit(event('status', { isRunning: true }, {
+        sessionInstanceId: current.session.instanceId,
+        sessionTurnGeneration: current.session.getTurnGeneration(),
+      }));
+      result.resolve(recovered);
+      await microtasks();
+      expect(current.settleDeferredFailure(failure)).toBe(false);
+      expect(current.deps.noteSessionListActivity).not.toHaveBeenCalled();
+      vi.setSystemTime(45_000);
+      current.emit(event('done', {}, {
+        sessionInstanceId: current.session.instanceId,
+        sessionTurnGeneration: current.session.getTurnGeneration(),
+      }));
+      expect(current.deps.noteSessionListActivity).toHaveBeenCalledExactlyOnceWith('task', 45_000);
+    } finally { await current.dispose(); }
+  });
+
+  it.each([false, true])('records a paired terminal once at the first signal (done first: %s)', async doneFirst => {
+    const current = harness();
+    try {
+      current.emit(event('status', { isRunning: true }));
+      vi.setSystemTime(10_000);
+      current.emit(doneFirst ? event('done') : event('status', { isRunning: false }));
+      await microtasks();
+      vi.setSystemTime(10_100);
+      current.emit(doneFirst ? event('status', { isRunning: false }) : event('done'));
+      await vi.advanceTimersByTimeAsync(0);
+      expect(current.deps.noteSessionListActivity).toHaveBeenCalledExactlyOnceWith('task', 10_000);
+    } finally { await current.dispose(); }
+  });
+
+  it.each([false, true])('settles silent-stop activity only after the continuation decision (resume: %s)', async continued => {
+    const current = harness();
+    current.deps.handleSilentStopTurnEnd.mockImplementation(async () => {
+      if (continued) current.deps.sessionListActivityTracker.captureContinuation('task')();
+      else current.deps.sessionListActivityTracker.commit('task');
+    });
+    try {
+      current.emit(event('status', { isRunning: true }));
+      vi.setSystemTime(20_000);
+      current.emit(event('status', { isRunning: false }));
+      await microtasks();
+      vi.setSystemTime(20_100);
+      current.emit(event('done', { silentStop: true }, { source: 'claude-code' }));
+      await vi.advanceTimersByTimeAsync(0);
+      expect(current.deps.noteSessionListActivity).not.toHaveBeenCalled();
+      await vi.advanceTimersByTimeAsync(1_500);
+      if (continued) {
+        expect(current.deps.noteSessionListActivity).not.toHaveBeenCalled();
+        current.emit(event('status', { isRunning: true }));
+        current.emit(event('done'));
+        expect(current.deps.noteSessionListActivity).toHaveBeenCalledExactlyOnceWith('task', 21_600);
+      } else {
+        expect(current.deps.noteSessionListActivity).toHaveBeenCalledExactlyOnceWith('task', 20_000);
+      }
+    } finally { await current.dispose(); }
+  });
+
+  it('distinguishes a new generation that terminates without a running status', async () => {
+    const current = harness();
+    try {
+      current.emit(event('done', {}, { sessionTurnGeneration: 1 }));
+      current.emit(event('done', {}, { sessionTurnGeneration: 1 }));
+      expect(current.deps.noteSessionListActivity).toHaveBeenCalledTimes(1);
+      current.emit(event('error', {}, { sessionTurnGeneration: 2 }));
+      expect(current.deps.noteSessionListActivity).toHaveBeenCalledTimes(2);
+    } finally { await current.dispose(); }
+  });
+
+  it('commits a status-only stop once and cancels its fallback when the runtime closes', async () => {
+    const current = harness();
+    try {
+      current.emit(event('status', { isRunning: true }));
+      vi.setSystemTime(30_000);
+      current.emit(event('status', { isRunning: false }));
+      await vi.advanceTimersByTimeAsync(0);
+      current.emit(event('status', { isRunning: false }));
+      expect(current.deps.noteSessionListActivity).toHaveBeenCalledExactlyOnceWith('task', 30_000);
+      current.emit(event('status', { isRunning: true }));
+      current.emit(event('status', { isRunning: false }));
+      await current.dispose();
+      await vi.advanceTimersByTimeAsync(0);
+      expect(current.deps.noteSessionListActivity).toHaveBeenCalledTimes(1);
+    } finally { await current.dispose(); }
+  });
+
+  it('ignores idle status without a turn and an interrupted turn reserved for automatic continuation', async () => {
+    const current = harness();
+    try {
+      current.emit(event('status', { isRunning: false }));
+      expect(current.deps.noteSessionListActivity).not.toHaveBeenCalled();
+      current.emit(event('status', { isRunning: true }));
+      current.deps.agentInputCoordinatorHolder.isAutoResumePending.mockReturnValue(true);
+      current.emit(event('status', { isRunning: false }));
+      current.emit(event('done'));
+      await microtasks();
+      expect(current.deps.noteSessionListActivity).not.toHaveBeenCalled();
+    } finally { await current.dispose(); }
+  });
+  it.each(['done', 'error', 'status'] as const)('records the %s handoff but not intermediate goal turns or background work', async terminal => {
+    const current = harness();
+    try {
+      current.emit(event('status', { isRunning: true }));
+      expect(current.deps.noteSessionListActivity).not.toHaveBeenCalled();
+      current.emit(event(terminal, terminal === 'status' ? { isRunning: false } : {}));
+      await microtasks();
+      await vi.advanceTimersByTimeAsync(0);
+      expect(current.deps.noteSessionListActivity).toHaveBeenCalledWith('task', expect.any(Number));
+      current.deps.noteSessionListActivity.mockClear();
+      current.emit(event('status', { isRunning: true }, { turnOrigin: { kind: 'goal' } }));
+      current.emit(event(terminal, terminal === 'status' ? { isRunning: false } : {}, { turnOrigin: { kind: 'goal' } }));
+      await microtasks();
+      expect(current.deps.noteSessionListActivity).not.toHaveBeenCalled();
+      current.emit(event('compact_boundary'));
+      current.emit(event(terminal, terminal === 'status' ? { isRunning: false } : {}, { turnScope: 'background' }));
+      await microtasks();
+      expect(current.deps.noteSessionListActivity).not.toHaveBeenCalled();
+    } finally { await current.dispose(); }
+  });
+  // Regression: a delegated report used to leave only tool rows in the chat.
+  // The real pipeline must persist and broadcast its reply, then settle normally.
+  it('delivers coordination progress and final text through the ordinary message pipeline', async () => {
+    const h = harness();
+    h.deps.redactEventForRenderer.mockImplementation(value => value);
+    h.deps.agentInputCoordinatorHolder.isActiveTaskCoordination.mockReturnValue(true);
+    h.deps.agentInputCoordinatorHolder.getActiveInputClientId.mockReturnValue('coordination');
+    try {
+      h.emit(event('text', { text: 'The new machines are running; checking the test results.', isFinal: false },
+        { agentMeta: { assistantPhase: 'commentary' } }));
+      expect(effects.fn('onAssistantTextEvent')).toHaveBeenCalledWith('task',
+        expect.objectContaining({ text: 'The new machines are running; checking the test results.' }),
+        expect.objectContaining({ botPrivateReply: false, assistantPhase: 'commentary' }), undefined);
+      expect(h.deps.broadcastToAllWindows).toHaveBeenCalledWith('maker:event', expect.objectContaining({
+        event: expect.objectContaining({ type: 'text', data: expect.objectContaining({
+          text: 'The new machines are running; checking the test results.',
+        }) }),
+      }));
+      h.emit(event('text', { text: 'Progress notice' }, { standaloneText: true }));
+      expect(effects.fn('onStandaloneTextEvent')).toHaveBeenCalledWith('task', 'Progress notice', { botPrivateReply: false });
+      h.emit(event('thinking', { text: 'Check the test results' }));
+      expect(effects.fn('onThinkingEvent')).toHaveBeenCalledOnce();
+      h.emit(event('tool_use', { id: 'tool', name: 'read', input: {} }));
+      expect(effects.fn('onToolUseEvent')).toHaveBeenCalledOnce();
+      h.deps.agentInputCoordinatorHolder.onTurnEvent.mockImplementation(() => {
+        h.deps.agentInputCoordinatorHolder.isActiveTaskCoordination.mockReturnValue(false);
+      });
+      h.emit(event('done', { result: 'The tests passed.', finalText: 'The tests passed.' }));
+      expect(h.deps.broadcastToAllWindows).toHaveBeenCalledWith('maker:event', expect.objectContaining({
+        event: expect.objectContaining({ type: 'done', data: expect.objectContaining({ result: 'The tests passed.', finalText: 'The tests passed.' }),
+          agentMeta: expect.objectContaining({ botPrivateReply: false, botTaskCoordination: true }) }),
+      }));
+      expect(h.deps.agentInputCoordinatorHolder.onTurnEvent).toHaveBeenCalled();
+      const persisted = effects.fn('onAssistantTextEvent').mock.calls.length;
+      h.deps.agentInputCoordinatorHolder.getActiveInputClientId.mockReturnValue('bot-delegation-completion:result');
+      h.emit(event('text', { text: 'User requested final result', isFinal: true }));
+      expect(effects.fn('onAssistantTextEvent')).toHaveBeenCalledTimes(persisted + 1);
+    } finally { await h.dispose(); }
+  });
+
+  it('keeps terminal failures and runtime recovery notices visible during coordination', async () => {
+    const h = harness();
+    h.deps.redactEventForRenderer.mockImplementation(value => value);
+    h.deps.agentInputCoordinatorHolder.isActiveTaskCoordination.mockReturnValue(true);
+    h.deps.agentInputCoordinatorHolder.getActiveInputClientId.mockReturnValue('coordination');
+    try {
+      h.emit(event('error', { message: 'User action required' }));
+      expect(h.deps.broadcastToAllWindows).toHaveBeenCalledWith('maker:event', expect.objectContaining({
+        event: expect.objectContaining({ type: 'error', data: expect.objectContaining({ message: 'User action required' }) }),
+      }));
+      h.emit(event('text', { text: 'Recovery requires attention' }, { runtimeRecovery: true }));
+      expect(effects.fn('onAssistantTextEvent')).toHaveBeenCalledOnce();
+    } finally { await h.dispose(); }
+  });
+
+  it('suppresses scheduled content before persistence and delivery while preserving unrelated replies', async () => {
+    const h = harness();
+    const close = beginQuietScheduledOutput('check', 'check-run');
+    const origin = { kind: 'scheduler' as const, scheduleId: 'check', scheduleName: 'Check', runId: 'check-run' };
+    try {
+      h.emit(event('text', { text: 'I will check now', isFinal: false }, { turnOrigin: origin }));
+      h.emit(event('text', { text: 'No changes', isFinal: true }, { turnOrigin: origin }));
+      h.emit(event('text', { text: 'Standalone progress' }, { turnOrigin: origin, standaloneText: true }));
+      h.emit(event('tool_use', { id: 'tool', name: 'check', input: {} }, { turnOrigin: origin }));
+      expect(effects.fn('onAssistantTextEvent')).not.toHaveBeenCalled();
+      expect(effects.fn('onStandaloneTextEvent')).not.toHaveBeenCalled();
+      expect(h.deps.broadcastToAllWindows).not.toHaveBeenCalled();
+      h.emit(event('text', { text: 'Interactive reply', isFinal: true }));
+      expect(effects.fn('onAssistantTextEvent')).toHaveBeenCalledOnce();
+      expect(h.deps.broadcastToAllWindows).toHaveBeenCalled();
+    } finally { close(); await h.dispose(); }
+  });
+
+  it('shows the accepted owner reply during a quiet run without changing scheduler attribution', async () => {
+    const h = harness();
+    const close = beginQuietScheduledOutput('check', 'owner-steer-run');
+    const origin = { kind: 'scheduler' as const, scheduleId: 'check', scheduleName: 'Check', runId: 'owner-steer-run' };
+    const ownerAuthored = vi.fn(() => false);
+    Object.assign(h.deps.agentInputCoordinatorHolder, { isActiveInputOwnerAuthored: ownerAuthored });
+    try {
+      h.emit(event('text', { text: 'Background preamble' }, { turnOrigin: origin }));
+      expect(effects.fn('onAssistantTextEvent')).not.toHaveBeenCalled();
+      ownerAuthored.mockReturnValue(true);
+      h.emit(event('text', { text: 'Here is the progress', isFinal: true }, { turnOrigin: origin }));
+      expect(effects.fn('onAssistantTextEvent')).toHaveBeenCalledOnce();
+      expect(JSON.stringify(h.deps.broadcastToAllWindows.mock.calls)).toContain('owner-steer-run');
+      expect(origin.kind).toBe('scheduler');
+    } finally { close(); await h.dispose(); }
+  });
+
+  it('keeps redacted terminal fields redacted for quiet scheduler output', async () => {
+    const h = harness();
+    const close = beginQuietScheduledOutput('check', 'redaction-run');
+    const origin = { kind: 'scheduler' as const, scheduleId: 'check', scheduleName: 'Check', runId: 'redaction-run' };
+    h.deps.redactEventForRenderer.mockImplementation(value => ({ ...value, data: { result: 'redacted result', metadata: 'safe' } }));
+    try {
+      h.emit(event('done', { result: 'No changes', metadata: 'private diagnostic' }, { turnOrigin: origin }));
+      expect(JSON.stringify(h.deps.broadcastToAllWindows.mock.calls)).not.toContain('private diagnostic');
+      expect(JSON.stringify(h.deps.broadcastToAllWindows.mock.calls)).not.toContain('redacted result');
+      expect(JSON.stringify(h.deps.broadcastToAllWindows.mock.calls)).toContain('safe');
+    } finally { close(); await h.dispose(); }
+  });
+
+  it('delivers Pi notices as durable rows without entering model streaming or turn bookkeeping', async () => {
+    const h = harness();
+    h.deps.redactEventForRenderer.mockImplementation((value) => value);
+    try {
+      h.emit(event('text', { text: 'Plan mode enabled.', isFinal: true }, {
+        source: 'pi', standaloneText: true, turnScope: 'background',
+      }));
+      await microtasks();
+      expect(effects.fn('onStandaloneTextEvent')).toHaveBeenCalledWith('task', 'Plan mode enabled.', null);
+      expect(effects.fn('onAssistantTextEvent')).not.toHaveBeenCalled();
+      expect(effects.fn('flushAssistantBlock')).not.toHaveBeenCalled();
+      expect(effects.fn('noteTurnStarted')).not.toHaveBeenCalled();
+      expect(effects.fn('markAssistantTurnCompleted')).not.toHaveBeenCalled();
+      expect(h.deps.broadcastToAllWindows).not.toHaveBeenCalled();
+      expect(h.deps.orcaTeamServiceForEvents?.captureWorkerText).not.toHaveBeenCalled();
+      h.emit(event('text', { text: 'Actual reply', isFinal: true, isFullText: true }, { source: 'pi' }));
+      expect(effects.fn('onAssistantTextEvent')).toHaveBeenCalledOnce();
+      expect(h.deps.broadcastToAllWindows).toHaveBeenCalled();
+    } finally {
+      await h.dispose();
+    }
+  });
+
+  it('drops a pre-clear Pi notice on delayed delivery while accepting a new notice', async () => {
+    const h = harness();
+    h.deps.redactEventForRenderer.mockImplementation((value) => value);
+    try {
+      effects.fn('backgroundTurnPredatesSessionClear').mockReturnValueOnce(true);
+      h.emit(event('text', { text: 'Old plan notice', isFinal: true }, {
+        source: 'pi', standaloneText: true, turnScope: 'background', backgroundTurnStartedAt: 1000,
+      }));
+      expect(effects.fn('backgroundTurnPredatesSessionClear')).toHaveBeenCalledWith('task', 1000);
+      expect(effects.fn('onStandaloneTextEvent')).not.toHaveBeenCalled();
+      expect(h.deps.broadcastToAllWindows).not.toHaveBeenCalled();
+      effects.fn('backgroundTurnPredatesSessionClear').mockReturnValueOnce(false);
+      h.emit(event('text', { text: 'New plan notice', isFinal: true }, {
+        source: 'pi', standaloneText: true, turnScope: 'background', backgroundTurnStartedAt: 3000,
+      }));
+      expect(effects.fn('onStandaloneTextEvent')).toHaveBeenCalledExactlyOnceWith('task', 'New plan notice', null);
+      expect(effects.fn('onAssistantTextEvent')).not.toHaveBeenCalled();
+    } finally {
+      await h.dispose();
+    }
+  });
+
+  it('keeps independent model notices private after a peer message', async () => {
+    const h = harness();
+    h.deps.redactEventForRenderer.mockImplementation((value) => value);
+    h.deps.agentInputCoordinatorHolder.getActiveInputClientId.mockReturnValue('bot-dm:private-input');
+    h.emit(event('text', { text: 'Extension result', isFinal: true }, {
+      source: 'pi', standaloneText: true, turnScope: 'background',
+    }));
+    expect(effects.fn('onStandaloneTextEvent')).toHaveBeenCalledWith('task', 'Extension result', { botPrivateReply: true });
+    await h.dispose();
+  });
+
+  it.each(['completed', 'failed', 'cancelled', 'interrupted'])(
+    'runs the upstream-merge follow-up only for a successful product boundary: %s', async (status) => {
+      const h = harness();
+      effects.fn('consumeLastTopLevelAssistantPersistId').mockReturnValueOnce('completed-reply');
+      h.emit(event('status', { isRunning: true }));
+      h.emit(event('done', { status }));
+      await microtasks();
+      expect(effects.fn('reviewTeammateLearning')).not.toHaveBeenCalled();
+      expect(h.deps.onSuccessfulProductTurn).toHaveBeenCalledTimes(status === 'completed' ? 1 : 0);
+      expect(h.deps.onUnsuccessfulProductTurn).toHaveBeenCalledTimes(status === 'completed' ? 0 : 1);
+      await h.dispose();
+    },
+  );
+  it.each(['completed', 'failed', 'cancelled', 'interrupted'])(
+    'preserves the plugin terminal %s before generic failure bookkeeping', async status => {
+      const h = harness();
+      h.emit(event('done', { status }, {
+        sessionInstanceId: h.session.instanceId, sessionTurnGeneration: 0,
+      }));
+      await microtasks();
+      expect(h.deps.onPluginTaskTerminal).toHaveBeenCalledWith('task', {
+        instanceId: h.session.instanceId, generation: 0,
+      }, status, undefined, undefined);
+      if (status !== 'completed') {
+        expect(h.deps.onPluginTaskTerminal.mock.invocationCallOrder[0]).toBeLessThan(
+          h.deps.onUnsuccessfulProductTurn.mock.invocationCallOrder[0],
+        );
+      }
+      await h.dispose();
+    },
+  );
+
+  // #6671 persisted product regression (unit): existing hold tests checked error
+  // rows and Worker/group reports, but not plugin/upstream receipts. A terminal
+  // capacity error with only a group hold must retain its real product owner;
+  // success discards failure, abandonment settles once, and async decline hands
+  // ownership back to generic recovery. Drive handleSessionEvent + real stores.
+  it.each([
+    ...(['continued', 'rejected', 'generic-continued', 'generic-rejected', 'unheld'] as const)
+      .map(outcome => ({ outcome, terminal: 'error' as const })),
+    ...(['continued', 'rejected', 'generic-continued', 'generic-rejected'] as const)
+      .flatMap(outcome => (['done', 'failed-done'] as const).map(terminal => ({ outcome, terminal }))),
+  ])(
+    'retains persisted product callers through a group capacity hold: $terminal / $outcome', async ({ outcome, terminal }) => {
+      const h = harness();
+      const gate = createDeferredProductTurnFailureGate();
+      const successful = h.deps.onSuccessfulProductTurn;
+      const unsuccessful = h.deps.onUnsuccessfulProductTurn;
+      const adapters = h.dependencies as {
+        -readonly [K in 'deferUnsuccessfulProductTurn' | 'onSuccessfulProductTurn'
+          | 'onUnsuccessfulProductTurn' | 'stashProviderGroupHeldError']: SessionEventDependencies[K];
+      };
+      const deferOwner = vi.fn((...args: Parameters<typeof gate.defer>) => gate.defer(...args));
+      adapters.deferUnsuccessfulProductTurn = deferOwner;
+      adapters.onSuccessfulProductTurn = async (_sessionId, owner) => {
+        if (owner) gate.clear(owner);
+        await successful();
+      };
+      adapters.onUnsuccessfulProductTurn = createProductTurnFailureFinalizer({
+        gate,
+        isCurrentOwner: owner => owner.session === h.session,
+        commitActivity: () => {},
+        settlePluginTasks: (sessionId, execution, inputClientIds) =>
+          h.deps.onPluginTaskTerminal(sessionId, execution, 'failed', undefined, inputClientIds),
+        interrupt: unsuccessful,
+      });
+      h.deps.agentInputCoordinatorHolder.getActiveInputClientIds.mockReturnValue([
+        'plugin-target:original', 'plugin-target:steered', 'human-steer',
+      ]);
+      const settleFailure = (sessionId: string) => gate.settle(
+        sessionId,
+        owner => owner.session === h.session && owner.instanceId === h.session.instanceId
+          && owner.generation === h.session.getTurnGeneration(),
+        owner => { void h.dependencies.onUnsuccessfulProductTurn?.(sessionId, owner); },
+      );
+      const held = createProviderGroupHeldTurnErrors<unknown>({
+        ownerKey: () => 'account', capture: (_sessionId, data) => data,
+        persist: vi.fn(), surface: vi.fn(), settleFailure,
+        releaseHold: () => {
+          h.deps.agentInputCoordinatorHolder.getProviderGroupSwitchHoldId.mockReturnValue(null);
+          return true;
+        },
+      });
+      adapters.stashProviderGroupHeldError = outcome === 'unheld'
+        ? () => false : (...args) => held.stash(...args);
+      const book = new AutoResumeBookkeeping({
+        persistSuppressedError: vi.fn(), surfaceSuppressedError: settleFailure,
+        markOutcome: vi.fn(), rollbackGuardPendingResume: vi.fn(), abandonTakeover: vi.fn(),
+      });
+      const failure = { message: 'model at capacity', reason: 'upstream-overload' };
+      const generation = h.session.getTurnGeneration();
+      const execution = { sessionInstanceId: h.session.instanceId, sessionTurnGeneration: generation };
+      try {
+        h.deps.agentInputCoordinatorHolder.getProviderGroupSwitchHoldId.mockReturnValue(3);
+        if (terminal !== 'error') {
+          // Coordinator can synthesize its error from this same-generation
+          // snapshot while the outer pipeline receives only the paired done.
+          vi.spyOn(h.session, 'getObservedCurrentTurnTerminal').mockReturnValue({
+            kind: 'error', generation, ...failure,
+          });
+          (h.deps as { stashProviderGroupHeldWorkerTerminal?: unknown }).stashProviderGroupHeldWorkerTerminal = vi.fn();
+        }
+        h.emit(terminal === 'error' ? event('error', failure, execution)
+          : event('done', terminal === 'failed-done' ? { status: 'failed' } : {}, execution));
+        if (outcome === 'unheld') {
+          expect(deferOwner).not.toHaveBeenCalled();
+          expect(unsuccessful).toHaveBeenCalledOnce();
+          expect(h.deps.onPluginTaskTerminal).toHaveBeenCalled();
+          return;
+        }
+        expect(h.deps.onPluginTaskTerminal.mock.calls.length).toBe(0);
+        // Queue ownership can change during recovery; retain the failed inputs.
+        if (!outcome.endsWith('continued')) {
+          h.deps.agentInputCoordinatorHolder.getActiveInputClientIds.mockReturnValue(['plugin-target:next']);
+        }
+        expect(unsuccessful).not.toHaveBeenCalled();
+        expect(successful).not.toHaveBeenCalled();
+        expect(deferOwner).toHaveBeenCalledOnce();
+        expect(gate.pending('task')).toMatchObject({
+          session: h.session, instanceId: execution.sessionInstanceId, generation,
+        });
+        expect(effects.fn('onTurnErrorEvent')).not.toHaveBeenCalled();
+        if (terminal === 'error') {
+          h.deps.autoResumeBookkeeping.consumeFailedTurnCompletionTail.mockReturnValueOnce(true);
+          h.emit(event('done', {}, execution));
+          expect(deferOwner).toHaveBeenCalledOnce();
+          expect(h.deps.onPluginTaskTerminal).not.toHaveBeenCalled();
+        }
+
+        if (outcome.startsWith('generic-')) {
+          book.stashSuppressedError('task', held.takeForRecovery('task', 3));
+          h.deps.agentInputCoordinatorHolder.getProviderGroupSwitchHoldId.mockReturnValue(null);
+          held.release('task', 3);
+          expect(unsuccessful).not.toHaveBeenCalled();
+          expect(gate.pending('task')).toBeDefined();
+        }
+        const continued = outcome.endsWith('continued');
+        if (continued) {
+          held.discard('task', 3);
+          book.discardSuppressedError('task');
+          h.emit(event('done', { status: 'completed', result: 'Recovered reply' }, execution));
+        }
+        held.release('task', 3);
+        held.release('task', 3);
+        book.surfaceSuppressedError('task');
+        book.surfaceSuppressedError('task');
+        await microtasks();
+        expect(h.deps.onPluginTaskTerminal).toHaveBeenCalledExactlyOnceWith('task', expect.objectContaining({
+          instanceId: execution.sessionInstanceId, generation,
+        }), continued ? 'completed' : 'failed', undefined, ['plugin-target:original', 'plugin-target:steered']);
+        expect(successful).toHaveBeenCalledTimes(continued ? 1 : 0);
+        expect(unsuccessful).toHaveBeenCalledTimes(continued ? 0 : 1);
+        expect(gate.pending('task')).toBeUndefined();
+      } finally {
+        await h.dispose();
+      }
+    },
+  );
+  it.each([
+    ['zh-CN', 'Pi 扩展未能完成刷新。请重启 Cindy 后再使用 Pi。'],
+    ['zh-TW', 'Pi 擴充功能未能完成重新整理。請重新啟動 Cindy 後再使用 Pi。'],
+    ['en', 'Pi extensions could not be refreshed. Restart Cindy before using Pi again.'],
+    ['ja', 'Pi 拡張機能を更新できませんでした。Pi を再び使用する前に Cindy を再起動してください。'],
+    ['ko', 'Pi 확장을 새로 고치지 못했습니다. Pi를 다시 사용하기 전에 Cindy를 다시 시작하세요.'],
+  ] as const)('persists and broadcasts localized post-terminal recovery in %s', async (locale, text) => {
+    setMainLocale(locale);
+    const h = harness();
+    // Production redaction preserves text events; the general harness replaces all data.
+    h.deps.redactEventForRenderer.mockImplementation((value: AgentEvent) => value);
+    h.emit(event('done', { status: 'completed', result: 'saved' }, { source: 'pi' }));
+    const data = { isFinal: true, text: '[Cindy Pi package runtime convergence receipt] {"recoveryAction":"restart-cindy-to-refresh-packages"}' };
+    const receipt = event('text', data, {
+      source: 'pi', runtimeRecovery: true,
+      sessionInstanceId: h.session.instanceId, sessionTurnGeneration: 0,
+    });
+    effects.fn('onAssistantTextEvent').mockClear();
+    effects.fn('broadcast').mockClear();
+    h.emit(receipt);
+    expect(effects.fn('onAssistantTextEvent')).toHaveBeenCalledWith('task', { ...data, text }, null, undefined);
+    expect(effects.fn('broadcast')).toHaveBeenCalledWith(expect.any(String), expect.objectContaining({
+      sessionId: 'task', event: { ...receipt, data: { ...data, text } },
+    }));
+    expect(receipt.data).toEqual(data);
+    expect(h.activity.isSessionInTurn('task')).toBe(false);
+    expect(h.handle.send).not.toHaveBeenCalled();
+    await h.dispose();
+  });
+
+  // #4349: the Host recovery notice reaches Desktop through the dedicated
+  // onRuntimeRecovery channel but shares handleSessionEvent with turn text. It is
+  // persisted and broadcast, yet must not be captured as an Orca worker result.
+  it('keeps a Host runtime-recovery notice out of Orca worker capture while still persisting it', async () => {
+    const h = harness();
+    const data = { isFinal: true, text: 'restart-cindy-to-refresh-packages' };
+    h.emit(event('text', data, { source: 'pi', runtimeRecovery: true }));
+    expect(h.deps.orcaTeamServiceForEvents.captureWorkerText).not.toHaveBeenCalled();
+    // Still persisted (with the localized notice text) for the transcript.
+    expect(effects.fn('onAssistantTextEvent')).toHaveBeenCalledOnce();
+    // Ordinary worker text is still captured.
+    h.emit(event('text', { isFinal: true, text: 'real worker reply' }, { source: 'pi' }));
+    expect(h.deps.orcaTeamServiceForEvents.captureWorkerText).toHaveBeenCalledWith('task', 'real worker reply', { isFinal: true });
+    await h.dispose();
+  });
+
+  it('preserves ordinary Pi text without the Host recovery marker', async () => {
+    const h = harness();
+    const data = { isFinal: true, text: 'partial: restart-cindy-to-refresh-packages' };
+    h.emit(event('text', data, { source: 'pi' }));
+    expect(effects.fn('onAssistantTextEvent')).toHaveBeenCalledWith('task', data, null, undefined);
+    await h.dispose();
+  });
+
+  it.each(['claude-code', 'codex'] as const)('keeps %s continuation segments running, then seals the final product boundary', async (source) => {
+    const h = harness();
+    Object.defineProperty(h.session, 'agentKind', { value: source });
+    vi.setSystemTime(1000);
+    h.emit(event('status', { isRunning: true }, { source }));
+    effects.fn('consumeLastAssistantPersistId').mockReturnValueOnce('segment-row');
+    vi.setSystemTime(3000);
+    h.emit(event('done', {}, { source, turnContinuationId: 0 }));
+    expect(h.deps.onSuccessfulProductTurn).not.toHaveBeenCalled();
+    expect(h.deps.onUnsuccessfulProductTurn).not.toHaveBeenCalled();
+    expect(h.activity.isSessionInTurn('task')).toBe(true);
+    expect(h.deps.notifyGoalIdleAfterTurnSettled).not.toHaveBeenCalled();
+    expect(effects.fn('turn-drain')).not.toHaveBeenCalled();
+    expect(h.deps.gitSnapshotCoordinator.onTurnEnd).not.toHaveBeenCalled();
+    expect(effects.fn('clearCodexPlanRowsForSession')).not.toHaveBeenCalled();
+    expect(effects.fn('resetTurnPersistState')).toHaveBeenCalledOnce();
+    await microtasks();
+    expect(h.deps.orcaTeamServiceForEvents.handleWorkerTerminalTurn).not.toHaveBeenCalled();
+    expect(h.deps.orcaTeamServiceForEvents.noteWorkerProductTerminal).not.toHaveBeenCalled();
+    effects.fn('recordTurnUsageOnMessage').mockClear();
+    vi.setSystemTime(5000);
+    h.emit(event('done', { total_cost_usd: 0, duration_ms: 20 }, { source }));
+    expect(h.activity.isSessionInTurn('task')).toBe(false);
+    expect(h.deps.notifyGoalIdleAfterTurnSettled).toHaveBeenCalledOnce();
+    await microtasks();
+    if (source === 'claude-code') {
+      expect(effects.fn('recordTurnUsageOnMessage')).toHaveBeenCalledWith({
+        sessionId: 'task',
+        clientId: 'segment-row',
+        turnUsageDetails: expect.objectContaining({ turnDurationMs: 4000 }),
+      });
+    } else {
+      // A synthetic Codex terminal carries no second copy of SDK usage.
+      expect(effects.fn('recordTurnUsageOnMessage')).not.toHaveBeenCalled();
+    }
+    await h.dispose();
+  });
+
+  it('keeps the silent-stop decision window running and rejects an unowned late terminal', async () => {
+    const h = harness();
+    h.emit(event('done', { silentStop: true }));
+    expect(h.activity.isSessionInTurn('task')).toBe(true);
+    expect(h.deps.notifyGoalIdleAfterTurnSettled).not.toHaveBeenCalled();
+    await vi.advanceTimersByTimeAsync(1500);
+    expect(h.deps.handleSilentStopTurnEnd).toHaveBeenCalledOnce();
+    h.deps.silentStopTurnLeaseGate.turnLeaseIdForEvent.mockReturnValue(undefined as never);
+    effects.fn('broadcast').mockClear();
+    h.emit(event('done', { silentStop: true }));
+    expect(effects.fn('broadcast')).not.toHaveBeenCalled();
+    await h.dispose();
+  });
+
+  it.each(['pi', 'claude-code', 'codex'] as const)(
+    'records the applied %s context after status delivery without catalog substitution',
+    async (agentKind) => {
+      const h = harness();
+      Object.defineProperty(h.session, 'agentKind', { value: agentKind });
+      effects.fn('resolveVerifiedContextWindow').mockReturnValue(1_050_000);
+      for (const contextWindow of [1_000, 32_000, 500_000]) {
+        h.emit(event('status', {
+          isRunning: false, status: 'Done', contextTokens: 6_000, contextWindow,
+        }, { source: agentKind }));
+        ordered('broadcast', 'recordSessionContextSnapshot');
+        expect(effects.fn('recordSessionContextSnapshot'))
+          .toHaveBeenLastCalledWith('task', 6_000, contextWindow);
+      }
+      await h.dispose();
+    },
+  );
+
+  it.each([
+    ['xd', 1],
+    [null, 1],
+    ['openai', 0],
+    ['custom-provider', 0],
+  ] as const)('reports a Cindy AI key rejection at turn end for provider %s (%s times)', async (providerId, reports) => {
+    const h = harness();
+    h.deps.reportAgentCindyGatewayKeyRejected.mockClear();
+    // The production predicate, bound to this session's provider.
+    h.deps.isGatewayProxyTokenRecoveryErrorEvent.mockImplementation((_sessionId, value) =>
+      isGatewayProxyTokenRecoveryErrorEventForProvider(providerId, value));
+    try {
+      h.emit(event('error', {
+        message: 'Authentication failed',
+        reason: GATEWAY_PROXY_TOKEN_INVALID_REASON,
+      }));
+      expect(h.deps.reportAgentCindyGatewayKeyRejected).toHaveBeenCalledTimes(reports);
+      // Agents do not reveal the key they used: the current-key entry takes no key argument.
+      if (reports > 0) expect(h.deps.reportAgentCindyGatewayKeyRejected).toHaveBeenCalledWith();
+    } finally { await h.dispose(); }
+  });
+
+  it('does not report other Cindy AI turn failures or retryable key errors', async () => {
+    const h = harness();
+    h.deps.reportAgentCindyGatewayKeyRejected.mockClear();
+    h.deps.isGatewayProxyTokenRecoveryErrorEvent.mockImplementation((_sessionId, value) =>
+      isGatewayProxyTokenRecoveryErrorEventForProvider('xd', value));
+    try {
+      h.emit(event('error', { message: 'Rate limited' }));
+      h.emit(event('error', {
+        message: 'Authentication failed',
+        reason: GATEWAY_PROXY_TOKEN_INVALID_REASON,
+        isTerminal: false,
+      }));
+      expect(h.deps.reportAgentCindyGatewayKeyRejected).not.toHaveBeenCalled();
+    } finally { await h.dispose(); }
+  });
+
+  it('keeps a retryable error running without resetting persistence', async () => {
+    const h = harness();
+    h.activity.setSessionInTurn('task', true);
+    h.emit(event('error', { message: 'retrying', isTerminal: false }));
+    expect(h.activity.isSessionInTurn('task')).toBe(true);
+    expect(h.deps.notifyGoalIdleAfterTurnSettled).not.toHaveBeenCalled();
+    expect(effects.fn('resetTurnPersistState')).not.toHaveBeenCalled();
+    expect(effects.fn('turn-drain')).not.toHaveBeenCalled();
+    expect(h.deps.gitSnapshotCoordinator.onTurnAbort).not.toHaveBeenCalled();
+    expect(effects.fn('broadcast')).toHaveBeenCalledOnce();
+    await h.dispose();
+  });
+
+  it('reserves the live error identity before delivery, then seals and persists before drain/reset', async () => {
+    const h = harness();
+    h.activity.setSessionInTurn('task', true);
+    effects.fn('consumeLastAssistantPersistId').mockReturnValue('assistant-row');
+    effects.fn('consumeLastTopLevelAssistantPersistId').mockReturnValue('assistant-row');
+    h.emit(event('error', { message: 'provider secret', reason: 'sdk_crash' }));
+    ordered(
+      'reserve',
+      'broadcast',
+      'island',
+      'goal',
+      'credentials',
+      'runtime',
+      'git-abort',
+      'flushAssistantBlock',
+      'flushOrphanToolResults',
+      'markAssistantTurnFailed',
+      'onTurnErrorEvent',
+      'persistCodexPlanOnTerminalError',
+      'turn-drain',
+      'clearCodexPlanRowsForSession',
+      'preserveTurnPersistStateForBackground',
+      'resetTurnPersistState',
+    );
+    expect(effects.fn('broadcast')).toHaveBeenCalledWith(
+      'maker:event',
+      expect.objectContaining({
+        event: expect.objectContaining({ data: { redacted: true } }),
+        persistId: 'error-row',
+      }),
+    );
+    expect(effects.fn('onTurnErrorEvent')).toHaveBeenCalledWith(
+      'task',
+      { message: 'provider secret', reason: 'sdk_crash' },
+      null,
+      'error-row',
+    );
+    await h.dispose();
+  });
+
+  it('keeps a compat self-heal error off the wire while the rollover recovers', async () => {
+    const h = harness();
+    h.activity.setSessionInTurn('task', true);
+    const tryRecover = vi.fn(async () => true);
+    (h.deps as { contextOverflowRolloverHolder: unknown }).contextOverflowRolloverHolder = {
+      claim: vi.fn(() => 'claimed' as const),
+      tryRecover,
+    };
+    h.emit(event('error', {
+      reason: 'unsupported-request-option',
+      message: '400: {"param":"prompt_cache_retention","type":"invalid_request_error"}',
+    }));
+    // 生产路径：claim 成立 → 广播被压住，自愈成功后直接丢弃（不闪错误横幅）。
+    expect(tryRecover).toHaveBeenCalledWith(
+      'task',
+      expect.objectContaining({ reason: 'unsupported-request-option' }),
+      { instanceId: undefined, generation: undefined },
+    );
+    expect(effects.fn('broadcast')).not.toHaveBeenCalled();
+    await Promise.resolve();
+    await Promise.resolve();
+    expect(h.deps.overflowSuppressedBroadcasts.size).toBe(0);
+    await h.dispose();
+  });
+
+  it('flushes a suppressed compat error when no rollover owner can surface it', async () => {
+    const h = harness();
+    h.activity.setSessionInTurn('task', true);
+    h.emit(event('error', {
+      reason: 'unsupported-request-option',
+      message: '400: {"param":"prompt_cache_retention","type":"invalid_request_error"}',
+    }));
+    // holder 未装配（claim=idle）：投递层压住的广播必须在终态层补出去，
+    // 否则错误行写了但用户看不到横幅，map 条目也永不清理。
+    expect(effects.fn('broadcast')).toHaveBeenCalledWith(
+      'maker:event',
+      expect.objectContaining({ persistId: undefined }),
+    );
+    expect(h.deps.overflowSuppressedBroadcasts.size).toBe(0);
+    await h.dispose();
+  });
+
+  it('does not flush a stale suppressed error onto a later unrelated error', async () => {
+    const h = harness();
+    h.activity.setSessionInTurn('task', true);
+    // turn A：autoResume 接管窗口内，投递层压住广播且 idle 分支被跳过 → 条目留在 map。
+    const coordinator = h.deps.agentInputCoordinatorHolder as {
+      isAutoResumeDeferred: ReturnType<typeof vi.fn>;
+    };
+    coordinator.isAutoResumeDeferred.mockReturnValue(true);
+    h.emit(event('error', {
+      reason: 'unsupported-request-option',
+      message: '400: {"param":"prompt_cache_retention","type":"invalid_request_error"}',
+    }));
+    expect(h.deps.overflowSuppressedBroadcasts.size).toBe(1);
+
+    // turn B：普通终态 error，与 A 无关。
+    coordinator.isAutoResumeDeferred.mockReturnValue(false);
+    h.emit(event('error', { message: 'boom', reason: 'sdk_crash' }));
+    // A 不得被当成 B 播出去（否则横幅文案与错误行对不上）；过期条目直接丢弃。
+    expect(h.deps.overflowSuppressedBroadcasts.size).toBe(0);
+    expect(effects.fn('broadcast')).toHaveBeenCalled();
+    for (const call of effects.fn('broadcast').mock.calls) {
+      expect(JSON.stringify(call[1])).not.toContain('prompt_cache_retention');
+    }
+    await h.dispose();
+  });
+
+  it.each([true, false])(
+    'rechecks recovery after delivery changes pending to %s',
+    async (pendingAfter) => {
+      const h = harness();
+      h.deps.agentInputCoordinatorHolder.isAutoResumePending.mockReturnValue(!pendingAfter);
+      h.deps.broadcastToAllWindows.mockImplementation(() => {
+        h.deps.agentInputCoordinatorHolder.isAutoResumePending.mockReturnValue(pendingAfter);
+      });
+      h.emit(event('error', { message: 'failed', reason: 'sdk_crash' }));
+      expect(effects.fn('reserveTurnErrorPersistId')).toHaveBeenCalledTimes(pendingAfter ? 1 : 0);
+      expect(effects.fn('onTurnErrorEvent')).toHaveBeenCalledTimes(pendingAfter ? 0 : 1);
+      expect(effects.fn('releaseReservedTurnErrorPersistId')).toHaveBeenCalledTimes(
+        pendingAfter ? 1 : 0,
+      );
+      expect(h.deps.autoResumeBookkeeping.stashSuppressedError).toHaveBeenCalledTimes(
+        pendingAfter ? 1 : 0,
+      );
+      await h.dispose();
+    },
+  );
+
+  it('holds the error row while a provider group switches computers instead of writing it', async () => {
+    const h = harness();
+    const stashProviderGroupHeldError = vi.fn(() => true);
+    (h.deps as { stashProviderGroupHeldError?: unknown }).stashProviderGroupHeldError = stashProviderGroupHeldError;
+    h.deps.agentInputCoordinatorHolder.getProviderGroupSwitchHoldId.mockReturnValue(3);
+    const agentMeta = { uuid: 'failed-turn-uuid' };
+    h.emit(event('error', { message: "You've hit your session limit", sdkError: 'rate_limit' }, { agentMeta } as Partial<AgentEvent>));
+    expect(effects.fn('reserveTurnErrorPersistId')).not.toHaveBeenCalled();
+    expect(effects.fn('onTurnErrorEvent')).not.toHaveBeenCalled();
+    // 带上失败那一轮的身份：补落时不再读当时正在进行的那一轮。
+    expect(stashProviderGroupHeldError).toHaveBeenCalledWith(
+      'task',
+      3,
+      expect.objectContaining({ message: "You've hit your session limit" }),
+      agentMeta,
+    );
+    // 补落发生在 turn 状态重置之后：先存一份 turn 开始时刻。
+    expect(effects.fn('saveTurnStartedAtForDeferred')).toHaveBeenCalledTimes(1);
+    await h.dispose();
+  });
+
+  it('writes a different error that arrives while a switch is held as usual', async () => {
+    const h = harness();
+    (h.deps as { stashProviderGroupHeldError?: unknown }).stashProviderGroupHeldError = vi.fn(() => false);
+    h.deps.agentInputCoordinatorHolder.getProviderGroupSwitchHoldId.mockReturnValue(3);
+    h.emit(event('error', { message: 'Something else broke', sdkError: 'api_error' }));
+    expect(effects.fn('onTurnErrorEvent')).toHaveBeenCalledTimes(1);
+    await h.dispose();
+  });
+
+  it('holds the Worker report to the Lead with the error row while a provider group switches computers', async () => {
+    const h = harness();
+    (h.deps as { stashProviderGroupHeldError?: unknown }).stashProviderGroupHeldError = vi.fn(() => true);
+    const stashWorker = vi.fn();
+    (h.deps as { stashProviderGroupHeldWorkerTerminal?: unknown }).stashProviderGroupHeldWorkerTerminal = stashWorker;
+    h.deps.agentInputCoordinatorHolder.getProviderGroupSwitchHoldId.mockReturnValue(3);
+    h.emit(event('error', { message: "You've hit your session limit", sdkError: 'rate_limit' }, { sessionTurnGeneration: 4 }));
+    h.deps.autoResumeBookkeeping.consumeFailedTurnCompletionTail.mockReturnValue(true);
+    h.emit(event('done', {}, { sessionTurnGeneration: 4 }));
+    await microtasks();
+    expect(stashWorker).toHaveBeenCalledOnce();
+    expect(stashWorker).toHaveBeenCalledWith('task', 3, expect.objectContaining({
+      status: 'error',
+      diagnostic: "You've hit your session limit",
+    }), null);
+    expect(h.deps.orcaTeamServiceForEvents.handleWorkerTerminalTurn).not.toHaveBeenCalled();
+    await h.dispose();
+  });
+
+  it('holds a failure that ends with only a done event during the switch instead of dropping it', async () => {
+    const h = harness();
+    const settleLaneTurn = vi.fn(async () => true);
+    (h.deps as unknown as { botGroupChatServiceHolder: unknown }).botGroupChatServiceHolder = { settleLaneTurn };
+    h.deps.agentInputCoordinatorHolder.getActiveInputClientId.mockReturnValue('bot-group:g1:turn:bot-a');
+    const stashWorker = vi.fn();
+    (h.deps as { stashProviderGroupHeldWorkerTerminal?: unknown }).stashProviderGroupHeldWorkerTerminal = stashWorker;
+    h.deps.agentInputCoordinatorHolder.getProviderGroupSwitchHoldId.mockReturnValue(5);
+    h.emit(event('done', { result: '' }));
+    await microtasks();
+    expect(stashWorker).toHaveBeenCalledWith('task', 5, expect.objectContaining({ status: 'done' }), expect.objectContaining({
+      activeInputClientId: 'bot-group:g1:turn:bot-a', outcome: 'done',
+    }));
+    expect(settleLaneTurn).not.toHaveBeenCalled();
+    expect(h.deps.orcaTeamServiceForEvents.handleWorkerTerminalTurn).not.toHaveBeenCalled();
+    await h.dispose();
+  });
+
+  it('reports the Worker terminal to the Lead as usual when no switch is held', async () => {
+    const h = harness();
+    const stashWorker = vi.fn();
+    (h.deps as { stashProviderGroupHeldWorkerTerminal?: unknown }).stashProviderGroupHeldWorkerTerminal = stashWorker;
+    h.emit(event('error', { message: 'Something else broke', sdkError: 'api_error' }));
+    await microtasks();
+    expect(stashWorker).not.toHaveBeenCalled();
+    expect(h.deps.orcaTeamServiceForEvents.handleWorkerTerminalTurn).toHaveBeenCalledWith(
+      expect.objectContaining({ sessionId: 'task', status: 'error' }),
+    );
+    await h.dispose();
+  });
+
+  it('keeps deferred error and its paired done out of Orca terminal handling and preserves the failure seal', async () => {
+    const h = harness();
+    h.deps.agentInputCoordinatorHolder.isAutoResumeDeferred.mockReturnValue(true);
+    effects.fn('consumeLastAssistantPersistId').mockReturnValueOnce('failed-row');
+    effects.fn('consumeLastTopLevelAssistantPersistId').mockReturnValue('failed-row');
+    h.emit(event('error', { reason: 'sdk_crash' }, { sessionTurnGeneration: 4 }));
+    h.deps.autoResumeBookkeeping.consumeFailedTurnCompletionTail.mockReturnValue(true);
+    h.emit(event('done', {}, { sessionTurnGeneration: 4 }));
+    await microtasks();
+    expect(effects.fn('markAssistantTurnFailed')).toHaveBeenCalledOnce();
+    expect(effects.fn('markAssistantTurnCompleted')).not.toHaveBeenCalled();
+    expect(h.deps.autoResumeBookkeeping.stashOrcaSuppressedTerminal).toHaveBeenCalledOnce();
+    expect(h.deps.orcaTeamServiceForEvents.handleWorkerTerminalTurn).not.toHaveBeenCalled();
+    expect(h.deps.orcaTeamServiceForEvents.noteWorkerProductTerminal).not.toHaveBeenCalled();
+    expect(h.deps.onUnsuccessfulProductTurn).not.toHaveBeenCalled();
+    await h.dispose();
+  });
+
+  it.each(['failed', 'interrupted'])(
+    'seals a Codex %s done without a preceding error as failed',
+    async (status) => {
+      const h = harness();
+      effects.fn('isSuccessfulCodexDoneEventData').mockReturnValue(false);
+      effects.fn('consumeLastTopLevelAssistantPersistId').mockReturnValueOnce('failed-row');
+      h.emit(event('done', { raw: { id: 'turn', status } }));
+      expect(effects.fn('isSuccessfulCodexDoneEventData')).toHaveBeenCalledWith({
+        raw: { id: 'turn', status },
+      });
+      expect(effects.fn('markAssistantTurnFailed')).toHaveBeenCalledWith('task', 'failed-row');
+      expect(effects.fn('markAssistantTurnCompleted')).not.toHaveBeenCalled();
+      await h.dispose();
+    },
+  );
+
+  it('passes the native fork anchor to the successful assistant seal after flushing tools', async () => {
+    const h = harness();
+    const nativeForkAnchor = {
+      agentKind: 'codex',
+      sdkSessionId: 'thread',
+      kind: 'turn',
+      id: 'turn',
+    };
+    effects.fn('consumeLastTopLevelAssistantPersistId').mockReturnValueOnce('completed-row');
+    h.emit({ ...event('done'), agentMeta: { nativeForkAnchor } } as AgentEvent);
+    expect(effects.fn('markAssistantTurnCompleted')).toHaveBeenCalledWith('task', 'completed-row', {
+      nativeForkAnchor,
+    });
+    expect(effects.fn('markAssistantTurnFailed')).not.toHaveBeenCalled();
+    ordered('flushOrphanToolResults', 'markAssistantTurnCompleted', 'resetTurnPersistState');
+    await h.dispose();
+  });
+
+  it.each([true, false])(
+    'carries remote-auth recovery classification through persistence (%s)',
+    async (retry) => {
+      const h = harness();
+      h.deps.isRemoteAuthRetryErrorEvent.mockReturnValue(retry);
+      h.emit(event('error', { message: 'auth expired', reason: 'sdk_crash' }));
+      expect(effects.fn('reserveTurnErrorPersistId')).toHaveBeenCalledTimes(retry ? 0 : 1);
+      expect(effects.fn('onTurnErrorEvent')).toHaveBeenCalledTimes(retry ? 0 : 1);
+      expect(effects.fn('saveTurnStartedAtForDeferred')).toHaveBeenCalledTimes(retry ? 1 : 0);
+      if (retry) ordered('saveTurnStartedAtForDeferred', 'resetTurnPersistState');
+      await h.dispose();
+    },
+  );
+
+  it.each([true, false])(
+    'only counts foreground substantive output as retry progress (%s)',
+    async (background) => {
+      const h = harness();
+      effects.fn('onToolUseEvent').mockImplementation(() => {
+        effects.calls.push('tool');
+        return 'tool-row';
+      });
+      h.deps.interruptedTurnAutoResumeGuard.noteProgress.mockImplementation(() => {
+        effects.calls.push('progress');
+        return true;
+      });
+      h.emit(
+        event(
+          'tool_use',
+          { toolUseId: 'tool', toolName: 'read' },
+          background ? { turnScope: 'background' } : {},
+        ),
+      );
+      expect(h.deps.interruptedTurnAutoResumeGuard.noteProgress).toHaveBeenCalledTimes(
+        background ? 0 : 1,
+      );
+      if (!background) ordered('progress', 'tool', 'broadcast');
+      await h.dispose();
+    },
+  );
+
+  it.each([
+    ['pi', true, true, true],
+    ['pi', false, true, false],
+    ['pi', true, false, false],
+    ['claude-code', true, true, false],
+    ['codex', true, true, false],
+  ] as const)('commits only Pi authoritative final text (%s, final=%s, full=%s)', async (source, isFinal, isFullText, flush) => {
+    const h = harness();
+    h.emit(event('status', { isRunning: true }, { source }));
+    effects.calls.length = 0;
+    h.emit(event('text', { text: 'complete reply', isFinal, isFullText }, { source }));
+    expect(effects.fn('flushAssistantBlock')).toHaveBeenCalledTimes(flush ? 1 : 0);
+    if (flush) {
+      expect(effects.fn('onAssistantTextEvent').mock.invocationCallOrder[0])
+        .toBeLessThan(effects.fn('flushAssistantBlock').mock.invocationCallOrder[0]);
+      ordered('flushAssistantBlock', 'broadcast');
+    }
+    expect(effects.fn('markAssistantTurnCompleted')).not.toHaveBeenCalled();
+    expect(effects.fn('resetTurnPersistState')).not.toHaveBeenCalled();
+    expect(h.activity.isSessionInTurn('task')).toBe(true);
+    if (flush) {
+      effects.fn('consumeLastTopLevelAssistantPersistId').mockReturnValueOnce('assistant-row');
+      h.emit(event('done', { status: 'completed', result: 'complete reply' }, { source }));
+      expect(h.activity.isSessionInTurn('task')).toBe(false);
+      expect(effects.fn('markAssistantTurnCompleted')).toHaveBeenCalledWith('task', 'assistant-row', undefined);
+      expect(effects.fn('resetTurnPersistState')).toHaveBeenCalledOnce();
+    }
+    await h.dispose();
+  });
+
+  it('flushes assistant before foreground tool use, without flushing the current turn for background tools', async () => {
+    const h = harness();
+    effects.fn('onToolUseEvent').mockImplementation(() => {
+      effects.calls.push('tool');
+      return 'tool-row';
+    });
+    h.emit(event('text', { text: 'hello' }));
+    effects.calls.length = 0;
+    h.emit(event('tool_use', { toolUseId: 'tool', toolName: 'read' }));
+    ordered('flushAssistantBlock', 'tool', 'broadcast');
+    effects.fn('flushAssistantBlock').mockClear();
+    h.emit(event('tool_use', { toolUseId: 'background' }, { turnScope: 'background' }));
+    expect(effects.fn('flushAssistantBlock')).not.toHaveBeenCalled();
+    expect(effects.fn('broadcast')).toHaveBeenLastCalledWith(
+      'maker:event',
+      expect.objectContaining({ persistId: 'tool-row' }),
+    );
+    await h.dispose();
+  });
+
+  it.each(['stale', 'cleared-background', 'turn-diff'] as const)(
+    'drops %s before downstream state and delivery',
+    async (kind) => {
+      const h = harness();
+      if (kind === 'stale') h.deps.isFencedStaleSessionTerminal.mockReturnValue(true);
+      if (kind === 'cleared-background')
+        effects.fn('backgroundTurnPredatesSessionClear').mockReturnValue(true);
+      h.emit(
+        kind === 'turn-diff'
+          ? event('turn_diff')
+          : event(
+              'done',
+              {},
+              kind === 'cleared-background'
+                ? { turnScope: 'background', backgroundTurnStartedAt: 1 }
+                : {},
+            ),
+      );
+      expect(effects.fn('broadcast')).not.toHaveBeenCalled();
+      expect(h.deps.agentInputCoordinatorHolder.onTurnEvent).not.toHaveBeenCalled();
+      expect(effects.fn('flushAssistantBlock')).not.toHaveBeenCalled();
+      await h.dispose();
+    },
+  );
+
+  it('broadcasts background status without starting or settling the product turn', async () => {
+    const h = harness();
+    h.emit(event('status', { isRunning: true }, { turnScope: 'background' }));
+    h.emit(event('status', { isRunning: false }, { turnScope: 'background' }));
+    expect(h.activity.isSessionInTurn('task')).toBe(false);
+    expect(effects.fn('noteTurnStarted')).not.toHaveBeenCalled();
+    expect(effects.fn('turn-drain')).not.toHaveBeenCalled();
+    expect(effects.fn('broadcast')).toHaveBeenCalledTimes(2);
+    await h.dispose();
+  });
+
+  it('waits for accepted persistence and worker start while returning synchronously', async () => {
+    const h = harness(),
+      writes = deferred(),
+      start = deferred();
+    effects.fn('drainPersistQueue').mockReturnValue(writes.promise);
+    h.deps.orcaTeamServiceForEvents.handleWorkerTurnStarted.mockReturnValue(start.promise);
+    h.emit(event('status', { isRunning: true }));
+    effects.calls.length = 0;
+    expect(h.emit(event('done'))).toBeUndefined();
+    ordered(
+      'broadcast',
+      'island',
+      'goal',
+      'git-end',
+      'flushAssistantBlock',
+      'persistCodexPlanOnDone',
+      'turn-drain',
+      'resetTurnPersistState',
+    );
+    expect(effects.fn('refreshSessionListPreview')).not.toHaveBeenCalled();
+    expect(h.deps.orcaTeamServiceForEvents.handleWorkerTerminalTurn).not.toHaveBeenCalled();
+    // Seal A synchronously before the start barrier lets queued B report against A's debt.
+    expect(h.deps.orcaTeamServiceForEvents.noteWorkerProductTerminal).toHaveBeenCalledWith({ owner: 'old-turn' });
+    h.deps.orcaTeamServiceForEvents.captureWorkerTerminalTurn.mockReturnValue({
+      owner: 'new-turn',
+    });
+    start.resolve();
+    writes.resolve();
+    await microtasks();
+    expect(h.deps.orcaTeamServiceForEvents.handleWorkerTerminalTurn).toHaveBeenCalledWith(
+      expect.objectContaining({ capture: { owner: 'old-turn' } }),
+    );
+    expect(effects.fn('refreshSessionListPreview')).toHaveBeenCalledOnce();
+    expect(effects.fn('maybeGenerateSessionTaskSummary')).toHaveBeenCalledWith('task', {
+      force: true,
+    });
+    await h.dispose();
+  });
+
+  // 任务列表的「后台命令仍在工作」来自会话的权威后台任务快照:任务表变化与回合收尾各刷新一次
+  // (收尾先刷新再记回合结束,换代清表不带事件)。SSH 远程任务的终态可能丢在断连窗口里,不参与。
+  it.each([
+    ['local task still running a test command', null, 'work', [true, true]],
+    ['local task that only left a dev server', null, 'service', [false, false]],
+    ['SSH remote task', 'ssh-host', 'work', []],
+  ] as const)(
+    'refreshes background command work from the session snapshot: %s',
+    async (_label, remoteHostId, backgroundCommandKind, expected) => {
+      const h = harness();
+      Object.defineProperty(h.session, 'remoteHostId', { value: remoteHostId });
+      vi.spyOn(h.session, 'listBackgroundTasks').mockReturnValue([
+        { taskId: 'bash-1', taskType: 'local_bash', backgroundCommandKind },
+      ]);
+      h.emit(event('status', { isRunning: true }));
+      h.emit(event('agent_task_update', { provider: 'claude-code', taskId: 'bash-1', status: 'running' }));
+      h.emit(event('done', { reason: 'completed' }));
+      expect(effects.fn('noteClaudeSessionBackgroundCommandWork').mock.calls).toEqual(
+        expected.map((hasWork) => ['task', hasWork]),
+      );
+      if (expected.length > 0) {
+        const calls = effects.calls.filter(
+          (name) => name === 'noteClaudeSessionBackgroundCommandWork' || name === 'noteClaudeSessionTurnState',
+        );
+        expect(calls.slice(-2)).toEqual([
+          'noteClaudeSessionBackgroundCommandWork',
+          'noteClaudeSessionTurnState',
+        ]);
+      }
+      await h.dispose();
+    },
+  );
+
+  it.each([null, 'ssh-host'])(
+    'only records local Codex account snapshots (remote=%s)',
+    async (remoteHostId) => {
+      const h = harness();
+      Object.defineProperty(h.session, 'remoteHostId', { value: remoteHostId });
+      h.emit(event('account_usage', { remaining: 42 }));
+      expect(effects.fn('recordCodexAccountUsageSnapshot')).toHaveBeenCalledTimes(
+        remoteHostId ? 0 : 1,
+      );
+      if (!remoteHostId) ordered('broadcast', 'recordCodexAccountUsageSnapshot');
+      await h.dispose();
+    },
+  );
+});
+
+describe('provider turn observer on real Session.send', () => {
+  function observerDeps() {
+    return {
+      log: { debug: vi.fn() },
+      providerTurnLeaseId: (id: string, turn: number) => `${id}:${turn}`,
+      silentStopTurnLeaseGate: {
+        supersede: vi.fn(),
+        supersedeOwnedBy: vi.fn(),
+        schedule: vi.fn(() => true),
+      },
+      sessionTurnLeaseTracker: {
+        markTurnStarted: vi.fn(async () => {
+          effects.calls.push('lease-start');
+        }),
+        markTurnEnded: vi.fn(async () => {}),
+      },
+    };
+  }
+  it('awaits channel output attachment for direct sends and releases an undispatched turn', async () => {
+    const h = harness();
+    const phases: string[] = [];
+    const dispose = installSessionTurnObserver(observerDeps(), h.session);
+    const unsubscribe = onChannelTurn(async (session, phase) => {
+      expect(session).toBe(h.session);
+      await Promise.resolve();
+      phases.push(phase);
+    });
+    try {
+      await expect(h.session.send('peer message', { beforeProviderStart: async () => {
+        expect(phases).toEqual(['starting']);
+        throw new Error('cancel before dispatch');
+      } })).rejects.toThrow('cancel before dispatch');
+      expect(phases).toEqual(['starting', 'undispatched']);
+      expect(h.handle.send).not.toHaveBeenCalled();
+      await h.session.send('automatic task');
+      expect(phases).toEqual(['starting', 'undispatched', 'starting']);
+      expect(h.handle.send).toHaveBeenCalledOnce();
+    } finally { unsubscribe(); dispose(); await h.dispose(); }
+  });
+
+  it.each([
+    [undefined, 'provider-wake-local', true],
+    [{ kind: 'user' as const, surface: 'im' as const }, 'provider-wake', false],
+    [{ kind: 'scheduler' as const, scheduleId: 'hook:slack', surface: 'im' as const }, 'provider-wake', false],
+  ])('inherits the dispatched origin %j when announcing a harness wake-up', async (origin, expectedSource, zeroOutput) => {
+    const pushed: Array<AgentEvent | null> = [];
+    let wake: (() => void) | null = null;
+    let running = false;
+    const handle = {
+      id: 'provider', agentKind: 'claude-code', model: 'test-model',
+      send: vi.fn(async () => { running = true; }),
+      close: vi.fn(async () => { pushed.push(null); wake?.(); }),
+      isTurnRunning: () => running,
+      setInteractionResolver: vi.fn(),
+      async *events() {
+        for (;;) {
+          while (pushed.length === 0) await new Promise<void>((resolve) => { wake = resolve; });
+          const next = pushed.shift()!;
+          if (next === null) return;
+          yield next;
+        }
+      },
+    } as unknown as AgentSessionHandle;
+    const log = { trace: vi.fn(), debug: vi.fn(), info: vi.fn(), warn: vi.fn(), error: vi.fn(), fatal: vi.fn(),
+      child: () => log };
+    const session = new Session({ id: 'wake-task', agentKind: 'claude-code', workDir: '/unused', handle,
+      capabilities: {} as never, logger: log, turnStallMs: 0 });
+    const emit = async (value: AgentEvent) => {
+      running = value.type !== 'done';
+      pushed.push(value);
+      wake?.();
+      await vi.waitFor(() => expect(pushed).toHaveLength(0));
+      await microtasks();
+    };
+    const order: string[] = [];
+    const dispose = installSessionTurnObserver({ ...observerDeps(), onProviderInitiatedTurn: (target, generation) => {
+      expect(target).toBe(session);
+      expect(generation).toBe(session.getTurnGeneration());
+      order.push('recovery-boundary');
+    } }, session);
+    const unsubscribe = onChannelTurn((target, phase, source) => {
+      if (target === session) order.push(`${phase}:${source ?? 'none'}`);
+    });
+    const off = session.onEvent((value) => order.push(value.type));
+    try {
+      await session.send('launch background work', { origin });
+      await emit(event('text', { text: 'launched agents' }));
+      await emit(event('done'));
+      await emit(zeroOutput
+        ? event('status', { isRunning: true, providerInitiatedTurn: true }, { source: 'claude-code' })
+        : event('text', { text: 'agent result' }));
+      await emit(event('done'));
+      expect(order).toEqual(['starting:none', 'text', 'done', 'recovery-boundary', `starting:${expectedSource}`, zeroOutput ? 'status' : 'text', 'done']);
+    } finally { off(); unsubscribe(); dispose(); await session.close(); }
+  });
+
+  it('channel attachment failure does not block task execution', async () => {
+    const h = harness();
+    const dispose = installSessionTurnObserver(observerDeps(), h.session);
+    const unsubscribe = onChannelTurn(() => { throw new Error('channel unavailable'); });
+    try {
+      await h.session.send('automatic task');
+      expect(h.handle.send).toHaveBeenCalledOnce();
+    } finally { unsubscribe(); dispose(); await h.dispose(); }
+  });
+
+  it('awaits llama.cpp readiness on an existing task before dispatch and propagates startup failure', async () => {
+    const h = harness();
+    const gate = deferred();
+    effects.fn('getSessionProvider').mockReturnValue('cindy-local-llamacpp');
+    const ready = effects.fn('ensureManagedOllamaReadyForSession').mockImplementation(() => gate.promise);
+    const dispose = installSessionTurnObserver(observerDeps(), h.session);
+    try {
+      const sending = h.session.send('continue existing task');
+      await vi.waitFor(() => expect(ready).toHaveBeenCalledOnce());
+      expect(h.handle.send).not.toHaveBeenCalled();
+      gate.resolve();
+      await sending;
+      expect(ready).toHaveBeenCalledWith({ providerId: 'cindy-local-llamacpp', onlyIfStopped: true, signal: expect.any(AbortSignal) });
+      expect(h.handle.send).toHaveBeenCalledOnce();
+      h.emit(event('done', {}));
+      ready.mockRejectedValue(new Error('NOT_INSTALLED'));
+      await expect(h.session.send('next turn')).rejects.toThrow('NOT_INSTALLED');
+      expect(h.handle.send).toHaveBeenCalledOnce();
+    } finally {
+      gate.resolve();
+      dispose();
+      await h.dispose();
+    }
+  });
+
+  // PR #9420: a cold Ollama restore must release the send reservation on Stop.
+  // Unit tier, real Session + observer: previous readiness coverage only settled the service.
+  it.each(['stop', 'pending', 'external'] as const)('cancels Ollama readiness via %s and permits another send', async (cancel) => {
+    const h = harness();
+    h.handle.abort = vi.fn(async () => undefined);
+    const deps = observerDeps();
+    const entered = deferred();
+    const release = deferred();
+    const external = new AbortController();
+    const beforeProviderStart = vi.fn();
+    const onAccepted = vi.fn();
+    let readinessSignal: AbortSignal | undefined;
+    effects.fn('getSessionProvider').mockReturnValue('cindy-local-ollama');
+    const ready = effects.fn('ensureManagedOllamaReadyForSession').mockImplementationOnce(
+      async (opts: { signal?: AbortSignal }) => {
+        readinessSignal = opts.signal;
+        entered.resolve();
+        await new Promise<void>((resolve, reject) => {
+          release.promise.then(resolve);
+          opts.signal?.addEventListener('abort', () => reject(new Error('aborted')), { once: true });
+        });
+      },
+    );
+    const phases: string[] = [];
+    const unsubscribe = onChannelTurn((_session, phase) => { phases.push(phase); });
+    const dispose = installSessionTurnObserver(deps, h.session);
+    const sending = h.session.send('cold start', { signal: external.signal, beforeProviderStart, onAccepted });
+    try {
+      await entered.promise;
+      expect(readinessSignal).toBeInstanceOf(AbortSignal);
+      if (cancel === 'stop') await h.session.abort();
+      else if (cancel === 'pending') expect(h.session.cancelPendingSend()).toBe(true);
+      else external.abort();
+      await expect(sending).resolves.toEqual({ accepted: false, reason: 'cancelled-before-dispatch' });
+      expect(readinessSignal?.aborted).toBe(true);
+      expect(h.handle.send).not.toHaveBeenCalled();
+      expect(beforeProviderStart).not.toHaveBeenCalled();
+      expect(onAccepted).not.toHaveBeenCalled();
+      expect(deps.sessionTurnLeaseTracker.markTurnStarted).not.toHaveBeenCalled();
+      expect(phases).toEqual([]);
+      expect(h.session.isTurnRunning()).toBe(false);
+      await expect(h.session.send('retry')).resolves.toEqual({ accepted: true });
+      expect(ready).toHaveBeenCalledTimes(2);
+      expect(h.handle.send).toHaveBeenCalledOnce();
+      expect(deps.sessionTurnLeaseTracker.markTurnStarted).toHaveBeenCalledOnce();
+      expect(phases).toEqual(['starting']);
+    } finally {
+      release.resolve();
+      await sending.catch(() => undefined);
+      unsubscribe();
+      dispose();
+      await h.dispose();
+    }
+  });
+
+  it('holds the send reservation while waiting for the local project boundary', async () => {
+    const harnessState = harness();
+    const gate = deferred();
+    const onAccepted = vi.fn();
+    const beforeLocalProviderStart = vi.fn(async (session: Session) => {
+      expect(session.isTurnRunning()).toBe(true);
+      await gate.promise;
+      effects.calls.push('project-ready');
+    });
+    const dispose = installSessionTurnObserver(
+      { ...observerDeps(), beforeLocalProviderStart }, harnessState.session,
+    );
+    const sending = harnessState.session.send('test', { onAccepted });
+    try {
+      await microtasks();
+      expect(beforeLocalProviderStart).toHaveBeenCalledWith(harnessState.session);
+      expect(harnessState.session.isTurnRunning()).toBe(true);
+      expect(onAccepted).not.toHaveBeenCalled();
+      expect(harnessState.handle.send).not.toHaveBeenCalled();
+      expect(effects.fn('verdictForModelRoute')).not.toHaveBeenCalled();
+      gate.resolve();
+      await sending;
+      ordered('project-ready', 'lease-start');
+      expect(effects.fn('verdictForModelRoute')).toHaveBeenCalledOnce();
+      expect(onAccepted).toHaveBeenCalledOnce();
+      expect(harnessState.handle.send).toHaveBeenCalledOnce();
+    } finally {
+      gate.resolve();
+      await sending;
+      dispose();
+      await harnessState.dispose();
+    }
+  });
+
+  it('rejects unavailable local projects before persistence, lease and provider dispatch', async () => {
+    const harnessState = harness();
+    const deps = observerDeps();
+    const onAccepted = vi.fn();
+    const beforeLocalProviderStart = vi.fn(async () => {
+      throw new Error('project unavailable');
+    });
+    const dispose = installSessionTurnObserver(
+      { ...deps, beforeLocalProviderStart }, harnessState.session,
+    );
+    try {
+      await expect(harnessState.session.send('test', { onAccepted })).rejects.toThrow('project unavailable');
+      expect(beforeLocalProviderStart).toHaveBeenCalledOnce();
+      expect(onAccepted).not.toHaveBeenCalled();
+      expect(deps.sessionTurnLeaseTracker.markTurnStarted).not.toHaveBeenCalled();
+      expect(harnessState.handle.send).not.toHaveBeenCalled();
+      expect(harnessState.session.isTurnRunning()).toBe(false);
+    } finally {
+      dispose();
+      await harnessState.dispose();
+    }
+  });
+
+  it('does not apply the local project boundary to a remote session', async () => {
+    const harnessState = harness();
+    Object.defineProperty(harnessState.session, 'remoteHostId', { value: 'ssh-host' });
+    effects.fn('getSessionProvider').mockReturnValue('cindy-local-llamacpp');
+    const beforeLocalProviderStart = vi.fn(async () => {});
+    const dispose = installSessionTurnObserver(
+      { ...observerDeps(), beforeLocalProviderStart }, harnessState.session,
+    );
+    try {
+      await harnessState.session.send('test');
+      expect(beforeLocalProviderStart).not.toHaveBeenCalled();
+      expect(effects.fn('ensureManagedOllamaReadyForSession')).not.toHaveBeenCalled();
+      expect(harnessState.handle.send).toHaveBeenCalledOnce();
+    } finally {
+      dispose();
+      await harnessState.dispose();
+    }
+  });
+
+  it.each(['reject', 'reroute'] as const)(
+    'stops a paid-model %s before lease and provider dispatch',
+    async (kind) => {
+      const h = harness(),
+        deps = observerDeps();
+      effects
+        .fn('verdictForModelRoute')
+        .mockResolvedValue({ kind, reason: 'payment-required', providerId: 'other' });
+      const dispose = installSessionTurnObserver(deps, h.session);
+      await expect(h.session.send('test')).rejects.toThrow(
+        kind === 'reject' ? 'requires paid access' : 'must switch',
+      );
+      expect(deps.sessionTurnLeaseTracker.markTurnStarted).not.toHaveBeenCalled();
+      expect(h.handle.send).not.toHaveBeenCalled();
+      dispose();
+      await h.dispose();
+    },
+  );
+  it('waits for permission and lease before dispatch, and tears down the owned lease', async () => {
+    const h = harness(),
+      deps = observerDeps(),
+      permission = deferred();
+    effects.fn('verdictForModelRoute').mockImplementation(async () => {
+      await permission.promise;
+      effects.calls.push('permission');
+      return { kind: 'pass' };
+    });
+    vi.mocked(h.handle.send).mockImplementation(async () => {
+      effects.calls.push('provider-send');
+    });
+    const dispose = installSessionTurnObserver(deps, h.session);
+    const sending = h.session.send('test');
+    await microtasks();
+    expect(h.handle.send).not.toHaveBeenCalled();
+    permission.resolve();
+    await sending;
+    ordered('permission', 'lease-start', 'provider-send');
+    dispose();
+    expect(deps.silentStopTurnLeaseGate.supersedeOwnedBy).toHaveBeenCalledWith(
+      'task',
+      `${h.session.instanceId}:`,
+    );
+    await h.dispose();
+  });
+  it.each(['local', 'remote', 'unowned'] as const)('holds idle closure only for a scheduled Host continuation: %s', async (owner) => {
+    const terminal = deferred(), closed = deferred(), deps = observerDeps();
+    const log = { trace() {}, debug() {}, info() {}, warn() {}, error() {}, fatal() {}, child() { return this; } };
+    const handle = {
+      id: 'provider', agentKind: 'pi', model: 'test-model',
+      send: vi.fn(async () => {}), close: vi.fn(async () => { closed.resolve(); }),
+      isTurnRunning: () => false, setInteractionResolver() {},
+      async *events() {
+        await terminal.promise;
+        yield { type: 'done', source: 'pi', data: { status: 'completed', silentStop: true } } as AgentEvent;
+        await closed.promise;
+      },
+    } as unknown as AgentSessionHandle;
+    const session = new Session({ id: 'task', agentKind: 'pi', workDir: '/unused', handle,
+      capabilities: {} as never, logger: log, turnStallMs: 0 });
+    if (owner === 'remote') Object.defineProperty(session, 'remoteHostId', { value: 'ssh-host' });
+    const dispose = owner === 'unowned' ? () => {} : installSessionTurnObserver(deps, session);
+    const seen: AgentEvent[] = [];
+    session.onEvent(event => seen.push(event));
+    await session.send('work');
+    terminal.resolve();
+    await vi.waitFor(() => expect(seen.some(event => event.type === 'done')).toBe(true));
+    expect(deps.silentStopTurnLeaseGate.schedule).toHaveBeenCalledTimes(owner === 'local' ? 1 : 0);
+    expect(await session.closeIfIdle()).toBe(owner !== 'local');
+    dispose();
+    if (owner === 'local') expect(await session.closeIfIdle()).toBe(true);
+    expect(handle.close).toHaveBeenCalledOnce();
+    expect(handle.send).toHaveBeenCalledOnce();
+  });
+
+  it('stops a removed explicit account before lease and provider dispatch', async () => {
+    const h = harness(), deps = observerDeps();
+    effects.fn('getSessionProvider').mockReturnValue('deleted-account');
+    effects.fn('verdictForModelRoute').mockResolvedValue({ kind: 'reject', reason: 'explicit-source-unavailable' });
+    const dispose = installSessionTurnObserver(deps, h.session);
+    try {
+      await expect(h.session.send('test')).rejects.toThrow('deleted-account');
+      expect(deps.sessionTurnLeaseTracker.markTurnStarted).not.toHaveBeenCalled();
+      expect(h.handle.send).not.toHaveBeenCalled();
+    } finally { dispose(); await h.dispose(); }
+  });
+  it('leaves remote provider admission and leases to the remote host', async () => {
+    const h = harness(),
+      deps = observerDeps();
+    Object.defineProperty(h.session, 'remoteHostId', { value: 'ssh-host' });
+    const dispose = installSessionTurnObserver(deps, h.session);
+    await h.session.send('remote');
+    expect(effects.fn('verdictForModelRoute')).not.toHaveBeenCalled();
+    expect(deps.sessionTurnLeaseTracker.markTurnStarted).not.toHaveBeenCalled();
+    expect(h.handle.send).toHaveBeenCalledOnce();
+    dispose();
+    await h.dispose();
+  });
+});
+
+describe('usage through the production event pipeline', () => {
+  const tokens = { inputTokens: 100, outputTokens: 20, cacheReadTokens: 10, cacheCreateTokens: 0 };
+  const segment = { ...tokens, model: 'test-model', priceVariant: 'standard' };
+  function usage(source: 'codex' | 'pi') {
+    return source === 'codex'
+      ? { promptTokens: 100, completionTokens: 20, cachedTokens: 10, segments: [segment] }
+      : { ...tokens, segments: [segment], segmentsComplete: true };
+  }
+  function pricing(subscription: boolean) {
+    const quote = {
+      providerId: subscription ? 'openai' : 'xd',
+      modelId: 'test-model',
+      currency: 'USD',
+      source: subscription ? 'subscription-reference' : 'gateway',
+      approximate: subscription,
+      inputPerMtok: 1,
+      outputPerMtok: 2,
+      cacheReadPerMtok: 0.1,
+    };
+    effects.fn('getSessionProvider').mockReturnValue(subscription ? 'openai' : 'xd');
+    effects
+      .fn('getCodexProxyAuthInjection')
+      .mockReturnValue(subscription ? 'oauth-bearer' : 'env-key');
+    effects.fn('getGatewayModelPricingForModel').mockResolvedValue({ xd: { 'test-model': quote } });
+    effects.fn('getModelPriceQuote').mockReturnValue(quote);
+    const referenceQuote = {
+      ...quote,
+      providerId: 'openai',
+      source: 'subscription-reference',
+      approximate: true,
+    };
+    for (const name of [
+      'getSubscriptionDirectValuePrice',
+      'getCodexProviderSubscriptionValuePrice',
+    ])
+      effects.fn(name).mockReturnValue(referenceQuote);
+    effects
+      .fn('getReferenceModelPricing')
+      .mockReturnValue({ openai: { 'test-model': referenceQuote } });
+    effects.fn('codexUsageToTokens').mockReturnValue(tokens);
+    effects.fn('piUsageToTokens').mockReturnValue(tokens);
+    effects.fn('consumeLastAssistantPersistId').mockReturnValue('assistant-row');
+  }
+
+  // #8887: production pipeline, unit tier. A request followed by a blocked
+  // price lookup must commit tokens now, retain its owner, and drain at teardown.
+  it('persists Pi requests before settlement and drains the captured owner while pricing waits', async () => {
+    const h = harness();
+    pricing(false);
+    const writes = vi.fn(async () => ({ changed: true }));
+    const otherWrites = vi.fn(async () => ({ changed: true }));
+    effects.fn('getDbClient').mockReturnValue({ tx: writes, queryOne: async () => ({ total: 130, legacy: 0.2, amount: 0.1, currency: 'USD', approximate: 0 }) });
+    let release!: (value: unknown) => void;
+    effects.fn('getGatewayModelPricingForModel').mockReturnValue(new Promise(resolve => { release = resolve; }));
+    const receiptUsage = { ...usage('pi'), settlementId: 'receipt-turn', receipts: [
+      { ...segment, recordedAt: Date.now(), id: 'pi:1' },
+    ] };
+    h.emit(event('account_usage', { type: 'pi/request_usage', usage: receiptUsage }, { source: 'pi' }));
+    await microtasks();
+    expect(writes).toHaveBeenCalledWith('usage.recordPiUsage', [expect.objectContaining({ amount: null, inputTokens: 100 })]);
+    expect(effects.fn('recordModelTurnUsage')).not.toHaveBeenCalled();
+    let drained = false;
+    const draining = flushSessionPiTurnUsage().then(() => { drained = true; });
+    effects.fn('getDbClient').mockReturnValue({ tx: otherWrites });
+    await microtasks();
+    expect(drained).toBe(false);
+    release({ xd: { 'test-model': effects.fn('getModelPriceQuote')() } });
+    await draining;
+    expect(otherWrites).not.toHaveBeenCalled();
+    expect(writes).toHaveBeenCalledTimes(2);
+    expect(writes.mock.calls[1]).toEqual(['usage.recordPiUsage', [expect.objectContaining({ amount: expect.any(Number) })]]);
+    expect(effects.fn('broadcastSessionSpend')).toHaveBeenCalledWith(expect.objectContaining({
+      sessionId: h.session.id, totalCostUsd: expect.closeTo(0.3),
+    }), expect.anything());
+    await h.dispose();
+  });
+
+  it('settles Pi error and done receipts without the legacy aggregate double-count path', async () => {
+    const h = harness();
+    pricing(false);
+    const writes = vi.fn(async () => ({ changed: true }));
+    effects.fn('getDbClient').mockReturnValue({ tx: writes, queryOne: async () => ({ total: 130 }) });
+    const receiptUsage = { ...usage('pi'), settlementId: 'paired-turn', receipts: [
+      { ...segment, recordedAt: Date.now(), id: 'pi:1' },
+    ] };
+    h.emit(event('error', { isTerminal: true, message: 'quota exceeded', usage: receiptUsage }, { source: 'pi' }));
+    h.emit(event('done', { status: 'failed', usage: receiptUsage }, { source: 'pi' }));
+    await flushSessionPiTurnUsage();
+    expect(writes).toHaveBeenCalled();
+    expect(effects.fn('recordModelTurnUsage')).not.toHaveBeenCalled();
+    expect(effects.fn('recordSessionTurnTokens')).not.toHaveBeenCalled();
+    expect(effects.fn('recordTurnSpend')).not.toHaveBeenCalled();
+    expect(effects.fn('recordSchedulerTurnCost')).toHaveBeenCalledTimes(1);
+    await h.dispose();
+  });
+
+  it('leaves unavailable Pi pricing pending so terminal replay can finish it', async () => {
+    const h = harness();
+    pricing(false);
+    const quote = effects.fn('getModelPriceQuote')();
+    effects.fn('getGatewayModelPricingForModel').mockResolvedValue(null);
+    const writes = vi.fn(async () => ({ changed: true }));
+    effects.fn('getDbClient').mockReturnValue({ tx: writes, queryOne: async () => null });
+    const receiptUsage = { ...usage('pi'), settlementId: 'missing-quote', receipts: [
+      { ...segment, recordedAt: Date.now(), id: 'pi:1' },
+    ] };
+    h.emit(event('account_usage', { type: 'pi/request_usage', usage: receiptUsage }, { source: 'pi' }));
+    await flushSessionPiTurnUsage();
+    expect(writes).toHaveBeenCalledTimes(1);
+    expect(writes.mock.calls[0]).toEqual(['usage.recordPiUsage', [expect.objectContaining({ amount: null })]]);
+    effects.fn('getGatewayModelPricingForModel').mockResolvedValue({ xd: { 'test-model': quote } });
+    h.emit(event('done', { usage: receiptUsage }, { source: 'pi' }));
+    await flushSessionPiTurnUsage();
+    expect(writes.mock.calls[2]).toEqual(['usage.recordPiUsage', [expect.objectContaining({ amount: expect.any(Number), actualCost: true })]]);
+    await h.dispose();
+  });
+
+  // #9030 review P2, unit: a resolved managed-provider reference estimate is
+  // intentionally message-only, whereas a missing quote must remain recoverable.
+  it.each(['estimate', 'missing'] as const)('finalizes only resolved managed-provider receipts (%s)', async mode => {
+    const h = harness();
+    pricing(false);
+    effects.fn('getSessionProvider').mockReturnValue('managed-provider');
+    effects.fn('isUserProviderSession').mockReturnValue(true);
+    effects.fn('getActiveCatalog').mockReturnValue({ providers: [
+      { id: 'managed-provider', auth: { method: 'api-key' }, access: { kind: 'managed' } },
+    ] });
+    const quote = {
+      providerId: 'managed-provider', modelId: 'test-model', currency: 'USD',
+      source: 'provider-reference', inputPerMtok: 1, outputPerMtok: 2, cacheReadPerMtok: 0.1,
+    };
+    effects.fn('getReferenceModelPricing').mockReturnValue(mode === 'missing' ? {} : {
+      'managed-provider': { 'test-model': quote },
+    });
+    const writes = vi.fn(async (_name: string, _rows: PiUsageWrite[]) => ({ changed: true }));
+    effects.fn('getDbClient').mockReturnValue({ tx: writes, queryOne: async () => null });
+    h.emit(event('account_usage', { usage: { settlementId: 'managed-turn', receipts: [
+      { ...segment, recordedAt: Date.now(), id: 'pi:managed' },
+    ] } }, { source: 'pi' }));
+    await flushSessionPiTurnUsage();
+    expect(writes).toHaveBeenCalledTimes(mode === 'estimate' ? 2 : 1);
+    expect(writes).toHaveBeenLastCalledWith('usage.recordPiUsage', [expect.objectContaining({
+      amount: mode === 'estimate' ? 0 : null, actualCost: false,
+    })]);
+    expect(effects.fn('broadcastSessionSpend')).not.toHaveBeenCalled();
+    await h.dispose();
+  });
+
+  // #9030 review P1, unit: the existing price-delay test keeps USD throughout.
+  // Use the production pipeline to prove that currency recovery does not freeze
+  // fallback USD into a receipt, either within a write or across product turns.
+  it.each(['during-write', 'next-turn', 'terminal-replay'] as const)(
+    'prices Pi subscription receipts in the recovered account currency (%s)', async mode => {
+      const h = harness();
+      pricing(true);
+      effects.fn('isLedgerCurrencyKnown').mockReturnValue(false);
+      let release!: (result: { changed: boolean }) => void;
+      const writes = vi.fn(async () => ({ changed: true }));
+      if (mode === 'during-write') writes.mockImplementationOnce(() => new Promise(resolve => { release = resolve; }));
+      effects.fn('getDbClient').mockReturnValue({ tx: writes, queryOne: async () => null });
+      const receiptUsage = { ...usage('pi'), settlementId: 'currency-turn-1', receipts: [
+        { ...segment, recordedAt: Date.now(), id: 'pi:1' },
+      ] };
+      h.emit(event('account_usage', { type: 'pi/request_usage', usage: receiptUsage }, { source: 'pi' }));
+      if (mode !== 'during-write') {
+        await flushSessionPiTurnUsage();
+        // Unknown currency is pending, not a final USD estimate.
+        expect(writes.mock.calls.every(call => (call as unknown as [string, Array<{ amount: unknown }>])[1]
+          .every(row => row.amount === null))).toBe(true);
+      }
+      effects.fn('currentLedgerCurrency').mockReturnValue('CNY');
+      effects.fn('isLedgerCurrencyKnown').mockReturnValue(true);
+      if (mode === 'during-write') release({ changed: true });
+      else h.emit(event(mode === 'terminal-replay' ? 'done' : 'account_usage', {
+        usage: { ...receiptUsage, settlementId: mode === 'next-turn' ? 'currency-turn-2' : receiptUsage.settlementId },
+      }, { source: 'pi' }));
+      await flushSessionPiTurnUsage();
+      expect(writes).toHaveBeenLastCalledWith('usage.recordPiUsage', [expect.objectContaining({
+        currency: 'CNY', amount: expect.any(Number), actualCost: false,
+      })]);
+      await h.dispose();
+    },
+  );
+
+  it('keeps a confirmed Pi currency with its owner when a late write crosses an account boundary', async () => {
+    const h = harness();
+    pricing(true);
+    const currentScope = vi.spyOn(broadcastTap, 'isDataOwnerBroadcastScopeCurrent').mockReturnValue(true);
+    let release!: (result: { changed: boolean }) => void;
+    const writes = vi.fn(async () => ({ changed: true }))
+      .mockImplementationOnce(() => new Promise(resolve => { release = resolve; }));
+    effects.fn('getDbClient').mockReturnValue({ tx: writes, queryOne: async () => null });
+    try {
+      h.emit(event('account_usage', { usage: { settlementId: 'owner-currency', receipts: [
+        { ...segment, recordedAt: Date.now(), id: 'pi:1' },
+      ] } }, { source: 'pi' }));
+      currentScope.mockReturnValue(false);
+      effects.fn('currentLedgerCurrency').mockReturnValue('CNY');
+      release({ changed: true });
+      await flushSessionPiTurnUsage();
+      expect(writes).toHaveBeenLastCalledWith('usage.recordPiUsage', [expect.objectContaining({
+        currency: 'USD', amount: expect.any(Number), actualCost: false,
+      })]);
+    } finally { currentScope.mockRestore(); await h.dispose(); }
+  });
+
+  // #9030 P1, unit: exercise the startup/catalog-recovery entry without a live
+  // Session or terminal replay, including owner changes during async pricing.
+  it.each(['recover', 'owner-switch', 'unavailable'] as const)('recovers durable Pi receipts without a terminal event (%s)', async mode => {
+    const h = harness();
+    pricing(false);
+    const quote = effects.fn('getModelPriceQuote')();
+    effects.fn('getGatewayModelPricingForModel').mockResolvedValue(null);
+    const writes = vi.fn(async (_name: string, _rows: PiUsageWrite[]) => ({ changed: true }));
+    effects.fn('getDbClient').mockReturnValue({ tx: writes, queryOne: async () => null });
+    h.emit(event('account_usage', { usage: { settlementId: 'recover-turn', receipts: [
+      { ...segment, recordedAt: Date.now(), id: 'pi:recover' },
+    ] } }, { source: 'pi' }));
+    await flushSessionPiTurnUsage();
+    const saved = JSON.parse(writes.mock.calls[0][1][0].pricingPayload!);
+    // A later timezone change must not move the money to a different day.
+    saved.day = '2020-01-01';
+    await h.dispose();
+    const pendingRow = { rowId: 1, sessionId: 'task', settlementId: 'recover-turn', receiptId: 'pi:recover', payload: JSON.stringify(saved) };
+    const replayWrites = vi.fn(async (_name: string, _rows: PiUsageWrite[]) => ({ changed: true }));
+    const rows = mode === 'unavailable' ? Array.from({ length: 20 }, (_, index) => ({ ...pendingRow, rowId: index + 1 })) : [pendingRow];
+    const query = vi.fn(async (_sql: string, params: number[]) => params[0] === 0 ? rows : []);
+    const db = { tx: replayWrites, query, queryOne: async () => null } as unknown as DbClient;
+    setCurrentDbClient(db, 'pi-recovery-owner');
+    let release!: (value: unknown) => void;
+    effects.fn('getGatewayModelPricing').mockReturnValue(new Promise(resolve => { release = resolve; }));
+    effects.fn('getGatewayModelPricingForModel').mockClear();
+    effects.fn('broadcastSessionTokens').mockClear();
+    effects.fn('rebroadcastTodaySpend').mockClear();
+    try {
+      const recovery = retryPendingPiUsageReceipts();
+      await microtasks();
+      expect(replayWrites).not.toHaveBeenCalled();
+      if (mode === 'owner-switch') clearCurrentDbClient();
+      release(mode === 'unavailable' ? null : { xd: { 'test-model': quote } });
+      await recovery;
+      expect(replayWrites).toHaveBeenCalledTimes(mode === 'recover' ? 1 : 0);
+      expect(effects.fn('getGatewayModelPricing')).toHaveBeenCalledTimes(1);
+      expect(effects.fn('getGatewayModelPricingForModel')).not.toHaveBeenCalled();
+      expect(effects.fn('broadcastSessionTokens')).not.toHaveBeenCalled();
+      expect(effects.fn('rebroadcastTodaySpend')).toHaveBeenCalledTimes(mode === 'recover' ? 1 : 0);
+      if (mode === 'recover') expect(replayWrites).toHaveBeenLastCalledWith('usage.recordPiUsage', [expect.objectContaining({
+        amount: expect.any(Number), actualCost: true, day: '2020-01-01', receiptId: 'pi:recover',
+      })]);
+    } finally { clearCurrentDbClient(db); await flushSessionPiTurnUsage(); }
+  });
+
+  it.each(['priced', 'missing-write-price', 'legacy-summary'] as const)(
+    'preserves Codex cache writes without guessing cost (%s)', async (mode) => {
+      const h = harness();
+      pricing(false);
+      const writes = mode === 'legacy-summary' ? 0 : 50;
+      const allTokens = { ...tokens, cacheCreateTokens: writes };
+      effects.fn('codexUsageToTokens').mockReturnValue(allTokens);
+      effects.fn('getModelPriceQuote').mockReturnValue({
+        providerId: 'xd', modelId: 'test-model', currency: 'USD', source: 'gateway',
+        inputPerMtok: 1, outputPerMtok: 2, cacheReadPerMtok: 0.1,
+        ...(mode !== 'missing-write-price' ? { cacheCreatePerMtok: 1.25 } : {}),
+      });
+      h.emit(event('done', { usage: {
+        promptTokens: 100, completionTokens: 20, cachedTokens: 10,
+        ...(mode !== 'legacy-summary' ? { cacheCreationTokens: 50 } : {}),
+        segments: [{ ...segment, cacheCreateTokens: 50 }],
+      } }, { source: 'codex' }));
+      await microtasks();
+      expect(effects.fn('recordSessionTurnTokens')).toHaveBeenCalledWith('task', 130 + writes);
+      expect(effects.fn('recordModelTurnUsage')).toHaveBeenCalledWith(expect.objectContaining({
+        inputTokensDelta: 100, outputTokensDelta: 20, cacheReadTokensDelta: 10,
+        cacheCreateTokensDelta: writes,
+      }));
+      if (mode === 'priced') {
+        expect(effects.fn('recordSchedulerTurnCost')).toHaveBeenCalledWith(expect.objectContaining({
+          money: expect.objectContaining({ amount: 0.0002035 }),
+          turnUsageDetails: expect.objectContaining({ cacheCreateTokens: 50 }),
+        }));
+        expect(effects.fn('recordModelTurnUsage')).toHaveBeenLastCalledWith(expect.objectContaining({
+          inputTokensDelta: 0, outputTokensDelta: 0, cacheReadTokensDelta: 0, cacheCreateTokensDelta: 0,
+        }));
+      } else {
+        expect(effects.fn('recordTurnSpend')).not.toHaveBeenCalled();
+        expect(effects.fn('recordTurnUsageOnMessage')).toHaveBeenCalledWith(expect.objectContaining({
+          turnUsageDetails: expect.objectContaining({ cacheCreateTokens: writes }),
+        }));
+      }
+      await h.dispose();
+    },
+  );
+
+  it.each([
+    ['codex', false],
+    ['codex', true],
+    ['pi', false],
+    ['pi', true],
+  ] as const)(
+    '%s attributes %s subscription pricing without changing token facts',
+    async (source, subscription) => {
+      const h = harness();
+      pricing(subscription);
+      h.emit(event('done', { usage: usage(source) }, { source }));
+      await microtasks();
+      expect(effects.fn('recordSessionTurnTokens')).toHaveBeenCalledWith('task', 130);
+      expect(effects.fn('recordModelTurnUsage')).toHaveBeenCalledWith(
+        expect.objectContaining({
+          inputTokensDelta: 100,
+          outputTokensDelta: 20,
+          cacheReadTokensDelta: 10,
+        }),
+      );
+      expect(effects.fn('recordSchedulerTurnCost')).toHaveBeenCalledWith(
+        expect.objectContaining({
+          clientId: 'assistant-row',
+          money: expect.objectContaining({ kind: subscription ? 'value-estimate' : 'actual-cost' }),
+        }),
+      );
+      expect(effects.fn('recordTurnSpend')).toHaveBeenCalledTimes(subscription ? 0 : 1);
+      expect(effects.fn('recordSessionTurnSpend')).toHaveBeenCalledTimes(subscription ? 0 : 1);
+      ordered('broadcast', 'recordSessionTurnTokens');
+      await h.dispose();
+    },
+  );
+
+  it.each([
+    ['codex', 'anthropic', 'claude'],
+    ['codex', 'claude-account', 'claude'],
+    ['pi', 'claude-account', 'claude'],
+    ['pi', 'xai-account', 'xai'],
+  ] as const)('records %s subscription usage for %s without actual charges', async (source, providerId, native) => {
+    const h = harness();
+    pricing(true);
+    effects.fn('getSessionProvider').mockReturnValue(providerId);
+    effects.fn('isUserProviderSession').mockReturnValue(providerId !== 'anthropic');
+    effects.fn('getActiveCatalog').mockReturnValue({ providers: [{ id: providerId,
+      auth: { method: 'oauth', native }, access: { kind: 'subscription' } }] });
+    h.emit(event('done', { usage: usage(source) }, { source }));
+    await microtasks();
+    expect(effects.fn('recordModelTurnUsage')).toHaveBeenCalledWith(expect.objectContaining({
+      model: expect.stringContaining('#billing=subscription'),
+      inputTokensDelta: 100, outputTokensDelta: 20, cacheReadTokensDelta: 10,
+      money: expect.objectContaining({ kind: 'value-estimate' }),
+    }));
+    expect(effects.fn(native === 'claude' ? 'triggerClaudeSubscriptionUsageRefresh' : 'triggerXaiSubscriptionUsageRefresh'))
+      .toHaveBeenCalledWith(providerId);
+    expect(effects.fn('recordTurnSpend')).not.toHaveBeenCalled();
+    expect(effects.fn('recordSessionTurnSpend')).not.toHaveBeenCalled();
+    await h.dispose();
+  });
+
+  it.each(([
+    ['pi', 'claude'], ['pi', 'xai'], ['pi', 'codex'],
+    ['codex', 'claude'], ['codex', 'xai'], ['codex', 'codex'],
+  ] as const).flatMap(([source, native]) => [[source, native, false] as const, [source, native, true] as const]))('keeps %s %s subscription identity after deletion (error=%s)', async (source, native, failed) => {
+    const h = harness();
+    pricing(true);
+    effects.fn('getSessionProvider').mockReturnValue('old-account');
+    effects.fn('isUserProviderSession').mockReturnValue(true);
+    effects.fn('getActiveCatalog').mockReturnValue({ providers: [{ id: 'old-account',
+      auth: { method: 'oauth', native }, access: { kind: 'subscription' } }] });
+    h.emit(event('status', { isRunning: true }, { source }));
+    effects.fn('getSessionProvider').mockReturnValue('xd');
+    effects.fn('getActiveCatalog').mockReturnValue({ providers: [] });
+    effects.fn('isUserProviderSession').mockReturnValue(false);
+    h.emit(event('status', { isRunning: true }, { source }));
+    if (failed) h.emit(event('error', { message: 'provider failed', isTerminal: true }, { source }));
+    h.emit(event('done', { usage: usage(source) }, { source }));
+    await microtasks();
+    expect(effects.fn('recordModelTurnUsage')).toHaveBeenCalledWith(expect.objectContaining({
+      model: expect.stringContaining('#billing=subscription'), inputTokensDelta: 100,
+      outputTokensDelta: 20, cacheReadTokensDelta: 10,
+      money: expect.objectContaining({ kind: 'value-estimate' }),
+    }));
+    expect(effects.fn('getCodexProviderSubscriptionValuePrice')).toHaveBeenCalledWith(
+      'old-account', expect.anything(), expect.anything(), ...(source === 'pi' ? [undefined, undefined, 'pi'] : []),
+    );
+    expect(effects.fn('recordTurnSpend')).not.toHaveBeenCalled();
+    expect(effects.fn('recordSessionTurnSpend')).not.toHaveBeenCalled();
+    expect(h.deps.turnUsageContextBySession.has('task')).toBe(false);
+    h.emit(event('status', { isRunning: true }, { source }));
+    expect(h.deps.turnUsageContextBySession.get('task')?.providerId).toBe('xd');
+    await h.dispose();
+  });
+
+  it('overwrites failed-turn billing identity when the next turn starts without a paired done', async () => {
+    const h = harness();
+    pricing(true);
+    h.emit(event('status', { isRunning: true }, { source: 'pi' }));
+    expect(h.deps.turnUsageContextBySession.get('task')?.providerId).toBe('openai');
+    h.emit(event('error', { message: 'provider failed', isTerminal: true }, { source: 'pi' }));
+    effects.fn('getSessionProvider').mockReturnValue('xd');
+    h.emit(event('status', { isRunning: true }, { source: 'pi', turnAttemptToken: 2 }));
+    expect(h.deps.turnUsageContextBySession.get('task')?.providerId).toBe('xd');
+    await h.dispose();
+  });
+
+  it.each([['openai-account', 'codex', 'chatgpt/gpt-5.6-luna'], ['claude-account', 'claude', 'claude-sonnet-4-6'], ['xai-account', 'xai', 'xai/grok-4.6']])('uses the %s Pi subscription price override', async (providerId, native, model) => {
+    const h = harness();
+    pricing(true);
+    effects.fn('getSessionProvider').mockReturnValue(providerId);
+    effects.fn('isUserProviderSession').mockReturnValue(true);
+    effects.fn('getActiveCatalog').mockReturnValue({ providers: [{ id: providerId, source: 'user', auth: { method: 'oauth', native }, access: { kind: 'subscription' } }] });
+    h.emit(event('done', { usage: { ...tokens, segments: [{ ...segment, model }], segmentsComplete: true } }, { source: 'pi' }));
+    await microtasks();
+    expect(effects.fn('getCodexProviderSubscriptionValuePrice')).toHaveBeenCalledWith(providerId, model, expect.anything(), undefined, undefined, 'pi');
+    expect(effects.fn('recordTurnSpend')).not.toHaveBeenCalled();
+    expect(effects.fn('recordSchedulerTurnCost')).toHaveBeenCalledWith(expect.objectContaining({ money: expect.objectContaining({ kind: 'value-estimate' }) }));
+    await h.dispose();
+  });
+
+  it.each(['codex', 'claude-code'] as const)(
+    'keeps remote %s usage out of local gateway charges',
+    async (source) => {
+      const h = harness();
+      pricing(false);
+      Object.defineProperty(h.session, 'remoteHostId', { value: 'ssh-host' });
+      h.deps.lastReportedCostUsdBySession.set('task', 10);
+      h.emit(
+        event(
+          'done',
+          source === 'codex'
+            ? { usage: usage('codex') }
+            : {
+                total_cost_usd: 12,
+                duration_ms: 100,
+                usage: { input_tokens: 100, output_tokens: 20 },
+              },
+          { source },
+        ),
+      );
+      await microtasks();
+      expect(effects.fn('recordTurnSpend')).not.toHaveBeenCalled();
+      expect(effects.fn('recordSessionTurnSpend')).not.toHaveBeenCalled();
+      expect(effects.fn('recordSchedulerTurnCost')).not.toHaveBeenCalledWith(
+        expect.objectContaining({ money: expect.objectContaining({ kind: 'actual-cost' }) }),
+      );
+      if (source === 'codex')
+        expect(effects.fn('recordModelTurnUsage')).toHaveBeenCalledWith(
+          expect.objectContaining({ inputTokensDelta: 100 }),
+        );
+      else
+        expect(effects.fn('recordTurnUsageOnMessage')).toHaveBeenCalledWith(
+          expect.objectContaining({
+            clientId: 'assistant-row',
+            turnUsageDetails: expect.objectContaining({ turnDurationMs: 100 }),
+          }),
+        );
+      await h.dispose();
+    },
+  );
+
+  it.each(['codex', 'pi'] as const)(
+    'retains %s token facts when pricing rejects',
+    async (source) => {
+      const h = harness();
+      pricing(false);
+      effects.fn('getGatewayModelPricingForModel').mockRejectedValue(new Error('offline'));
+      h.emit(event('done', { usage: usage(source) }, { source }));
+      await microtasks();
+      expect(effects.fn('recordTurnSpend')).not.toHaveBeenCalled();
+      expect(effects.fn('recordTurnUsageOnMessage')).toHaveBeenCalledWith(
+        expect.objectContaining({
+          clientId: 'assistant-row',
+          turnUsageDetails: expect.objectContaining({ inputTokens: 100, outputTokens: 20 }),
+        }),
+      );
+      expect(effects.fn('recordModelTurnUsage')).toHaveBeenCalledWith(
+        expect.objectContaining({ inputTokensDelta: 100, outputTokensDelta: 20 }),
+      );
+      await h.dispose();
+    },
+  );
+
+  it('keeps accepted old-turn accounting after replacement and does not block delivery on model lookup', async () => {
+    const h = harness(),
+      replacement = harness(),
+      model = deferred<string>();
+    pricing(false);
+    const lifecycle = createSessionBindingLifecycle<Session, null>({
+      log: h.deps.log,
+      restoreInteractionListener: vi.fn(),
+      beforeReplace: vi.fn(),
+      onBind: vi.fn(),
+      broadcastStatus: vi.fn(),
+      captureCloseContext: () => null,
+      cleanupClosedSession: vi.fn(),
+      beforeCloseTeardown: vi.fn(),
+      finalizeClosedSession: vi.fn(),
+    });
+    const registration = lifecycle.beginBinding(h.session)!;
+    registration.disposers.push(h.session.onEvent(h.emit));
+    lifecycle.attachStatusListener(registration);
+    h.deps.turnModelPromiseBySession.set('task', model.promise);
+    h.emit(event('done', { usage: usage('codex') }));
+    expect(effects.fn('broadcast')).toHaveBeenCalledOnce();
+    expect(effects.fn('recordSchedulerTurnCost')).not.toHaveBeenCalled();
+    lifecycle.beginBinding(replacement.session);
+    effects.fn('consumeLastAssistantPersistId').mockReturnValue('new-row');
+    model.resolve('test-model');
+    await microtasks();
+    expect(effects.fn('recordSchedulerTurnCost')).toHaveBeenCalledWith(
+      expect.objectContaining({ clientId: 'assistant-row' }),
+    );
+    expect(lifecycle.getSession('task')).toBe(replacement.session);
+    await h.dispose();
+    await replacement.dispose();
+  });
+
+  it('uses only the Claude cumulative delta after establishing a baseline', async () => {
+    const h = harness();
+    effects.fn('getSessionProvider').mockReturnValue('custom-api');
+    effects
+      .fn('getActiveCatalog')
+      .mockReturnValue({ providers: [{ id: 'custom-api', auth: { method: 'api_key' }, access: { kind: 'api' } }] });
+    effects.fn('getGatewayAccountCurrency').mockResolvedValue('USD');
+    effects.fn('consumeLastAssistantPersistId').mockReturnValue('assistant-row');
+    h.emit(
+      event(
+        'done',
+        { total_cost_usd: 100, usage: { input_tokens: 5000 } },
+        { source: 'claude-code' },
+      ),
+    );
+    await microtasks();
+    expect(effects.fn('recordTurnSpend')).not.toHaveBeenCalled();
+    h.emit(
+      event(
+        'done',
+        { total_cost_usd: 102, usage: { input_tokens: 6000 } },
+        { source: 'claude-code' },
+      ),
+    );
+    await microtasks();
+    expect(effects.fn('recordTurnSpend')).toHaveBeenCalledWith(
+      expect.objectContaining({ amount: 2, kind: 'actual-cost' }),
+    );
+    expect(effects.fn('recordSchedulerTurnCost')).toHaveBeenCalledWith(
+      expect.objectContaining({ money: expect.objectContaining({ amount: 2 }) }),
+    );
+    await h.dispose();
+  });
+
+  it.each(['subscription', 'unpriced', 'api'] as const)(
+    'records MiMo Claude Code usage using its billing route (%s)', async (mode) => {
+      const h = harness();
+      pricing(true);
+      effects.fn('getSessionProvider').mockReturnValue('mimo-account');
+      effects.fn('getActiveCatalog').mockReturnValue({ providers: [{
+        id: 'mimo-account', auth: { method: 'apiKey' },
+        access: { kind: mode === 'api' ? 'api' : 'subscription' },
+      }] });
+      if (mode === 'unpriced') {
+        effects.fn('getCodexProviderSubscriptionValuePrice').mockReturnValue(undefined);
+        effects.fn('getSubscriptionDirectValuePrice').mockReturnValue(undefined);
+        effects.fn('getModelPriceQuote').mockReturnValue(undefined);
+      }
+      h.emit(event('done', {
+        total_cost_usd: 2,
+        modelUsageCumulativeStartsAtZero: true,
+        modelUsage: { 'mimo-v2-pro': { inputTokens: 100, outputTokens: 20, costUSD: 2 } },
+        usageSegmentsComplete: true,
+        usageSegments: [{ ...segment, model: 'mimo-v2-pro', cacheReadTokens: 0 }],
+      }, { source: 'claude-code' }));
+      await microtasks();
+      expect(effects.fn('recordModelTurnUsage')).toHaveBeenCalledWith(expect.objectContaining({
+        model: mode === 'api' ? 'mimo-v2-pro' : 'mimo-v2-pro#billing=subscription',
+        inputTokensDelta: 100, outputTokensDelta: 20,
+        money: expect.objectContaining({ kind: mode === 'api' ? 'actual-cost' : 'value-estimate' }),
+      }));
+      expect(effects.fn('recordTurnSpend')).toHaveBeenCalledTimes(mode === 'api' ? 1 : 0);
+      expect(effects.fn('recordSessionTurnSpend')).toHaveBeenCalledTimes(mode === 'api' ? 1 : 0);
+      if (mode === 'subscription') {
+        expect(effects.fn('recordSchedulerTurnCost')).toHaveBeenCalledWith(expect.objectContaining({
+          money: expect.objectContaining({ kind: 'value-estimate', amount: expect.any(Number) }),
+        }));
+      }
+      await h.dispose();
+    },
+  );
+
+  it.each([[false, false], [true, false], [false, true], [true, true]])('keeps independent Claude subscription accounting out of actual spend (fallback=%s, deleted=%s)', async (fallback, deleted) => {
+    const h = harness();
+    pricing(true);
+    effects.fn('getSessionProvider').mockReturnValue('claude-account');
+    effects.fn('getActiveCatalog').mockReturnValue({ providers: [{ id: 'claude-account', auth: { method: 'oauth', native: 'claude' }, access: { kind: 'subscription' } }] });
+    h.deps.lastReportedCostUsdBySession.set('task', 10);
+    if (deleted) {
+      h.emit(event('status', { isRunning: true }, { source: 'claude-code' }));
+      effects.fn('getActiveCatalog').mockReturnValue({ providers: [] });
+      effects.fn('getSessionProvider').mockReturnValue('new-api-account');
+    }
+    h.emit(event('done', {
+      total_cost_usd: 12,
+      usage: { input_tokens: 100, output_tokens: 20 },
+      ...(fallback ? {} : {
+        modelUsageCumulativeStartsAtZero: true,
+        modelUsage: { 'claude-sonnet-4-6': { inputTokens: 100, outputTokens: 20, costUSD: 2 } },
+      }),
+    }, { source: 'claude-code' }));
+    await microtasks();
+    expect(effects.fn('recordTurnSpend')).not.toHaveBeenCalled();
+    expect(effects.fn('recordSessionTurnSpend')).not.toHaveBeenCalled();
+    if (!fallback) expect(effects.fn('getCodexProviderSubscriptionValuePrice')).toHaveBeenCalledWith('claude-account', 'claude-sonnet-4-6', expect.anything(), undefined, undefined, 'claude-code');
+    if (!fallback) expect(effects.fn('recordModelTurnUsage')).toHaveBeenCalledWith(expect.objectContaining({
+      model: expect.stringContaining('#billing=subscription'),
+      inputTokensDelta: 100, outputTokensDelta: 20,
+      money: expect.objectContaining({ kind: 'value-estimate' }),
+    }));
+    await h.dispose();
+  });
+});
+
+
+describe('Bot adapters in the shared event pipeline', () => {
+  it('keeps peer replies private in persistence and broadcast before done clears the input', () => {
+    const h = harness();
+    h.deps.agentInputCoordinatorHolder.getActiveInputClientId.mockReturnValue('bot-dm:thread:delivery');
+    h.deps.agentInputCoordinatorHolder.onTurnEvent.mockImplementation(() => {
+      h.deps.agentInputCoordinatorHolder.getActiveInputClientId.mockReturnValue(null);
+    });
+    h.emit(event('text', { text: 'private reply' }));
+    // The reply also records which input it answers (companion chats can show it above the reply).
+    expect(h.deps.broadcastToAllWindows).toHaveBeenLastCalledWith('maker:event', expect.objectContaining({
+      event: expect.objectContaining({ agentMeta: expect.objectContaining({
+        botPrivateReply: true, replyToClientId: 'bot-dm:thread:delivery' }) }),
+    }));
+    h.emit(event('done'));
+    expect(h.deps.broadcastToAllWindows).toHaveBeenCalledWith('maker:event', expect.objectContaining({
+      event: expect.objectContaining({ type: 'done', agentMeta: expect.objectContaining({ botPrivateReply: true }) }),
+    }));
+  });
+
+  // B2B noise regression: accepted input owns visibility, including retry and human steering.
+  it.each([
+    ['bot-dm:thread:delivery', null, true],
+    ['retry-input', { clientId: 'retry-input', autoResume: true, retrySourceClientId: 'bot-dm:thread:delivery' }, true],
+    ['human-steer', { clientId: 'human-steer', autoResume: false }, false],
+    ['task-result:normal', null, false],
+  ] as const)('keeps B2B replies quiet without hiding owner or task replies (%s)', async (inputId, provenance, privateReply) => {
+    const h = harness();
+    h.deps.agentInputCoordinatorHolder.getActiveInputClientId.mockReturnValue(inputId);
+    h.deps.agentInputCoordinatorHolder.getAcceptedInputProvenance.mockReturnValue(provenance);
+    h.emit(event('text', { text: 'Result' }));
+    expect(h.deps.broadcastToAllWindows).toHaveBeenCalledWith('maker:event', expect.objectContaining({
+      event: expect.objectContaining({ agentMeta: expect.objectContaining({ botPrivateReply: privateReply }) }),
+    }));
+    await h.dispose();
+  });
+
+  it('keeps a B2B execution error visible', async () => {
+    const h = harness();
+    h.deps.agentInputCoordinatorHolder.getActiveInputClientId.mockReturnValue('bot-dm:thread:delivery');
+    h.emit(event('error', { message: 'Execution failed', isTerminal: true }));
+    expect(h.deps.broadcastToAllWindows).toHaveBeenCalledWith('maker:event', expect.objectContaining({
+      event: expect.objectContaining({ type: 'error', agentMeta: expect.objectContaining({ botPrivateReply: false }) }),
+    }));
+    await h.dispose();
+  });
+
+  // Unit: target receipts must settle the accepted input even after the queue advances.
+  it.each([false, true])('attributes plugin terminal to the original accepted input (retry=%s)', async retry => {
+    const h = harness();
+    h.deps.agentInputCoordinatorHolder.getActiveInputClientId.mockReturnValue(retry ? 'retry-receipt' : 'plugin-target:original');
+    h.deps.agentInputCoordinatorHolder.getActiveInputClientIds.mockReturnValue(['plugin-target:original', 'human-steer']);
+    if (retry) h.deps.agentInputCoordinatorHolder.getAcceptedInputProvenance.mockReturnValue({
+      clientId: 'retry-receipt', autoResume: true, retrySourceClientId: 'plugin-target:original',
+    });
+    h.deps.agentInputCoordinatorHolder.onTurnEvent.mockImplementation(() => {
+      h.deps.agentInputCoordinatorHolder.getActiveInputClientId.mockReturnValue('plugin-target:next');
+      h.deps.agentInputCoordinatorHolder.getActiveInputClientIds.mockReturnValue(['plugin-target:next']);
+    });
+    h.emit(event('done', { status:'completed' }, {sessionInstanceId:h.session.instanceId,sessionTurnGeneration:0}));
+    await microtasks();
+    expect(h.deps.onPluginTaskTerminal).toHaveBeenCalledExactlyOnceWith('task', {
+      instanceId:h.session.instanceId,generation:0,
+    }, 'completed', undefined, ['plugin-target:original']);
+    await h.dispose();
+  });
+
+  it('attributes group-lane turns as private and hands the terminal to the group chat', async () => {
+    const h = harness();
+    const settleLaneTurn = vi.fn(async () => true);
+    (h.deps as unknown as { botGroupChatServiceHolder: unknown }).botGroupChatServiceHolder = { settleLaneTurn };
+    h.deps.agentInputCoordinatorHolder.getActiveInputClientId.mockReturnValue('bot-group:g1:turn:bot-a');
+    h.emit(event('text', { text: '我来补充' }));
+    expect(h.deps.broadcastToAllWindows).toHaveBeenLastCalledWith('maker:event', expect.objectContaining({
+      event: expect.objectContaining({ agentMeta: expect.objectContaining({ botPrivateReply: true, botGroupLane: true }) }),
+    }));
+    h.emit(event('done', { result: '我来补充' }));
+    await microtasks();
+    expect(settleLaneTurn).toHaveBeenCalledWith(expect.objectContaining({
+      sessionId: 'task', activeInputClientId: 'bot-group:g1:turn:bot-a', outcome: 'done', resultText: '我来补充',
+    }));
+    await h.dispose();
+  });
+
+  it('settles a recovered group reply against its original input and holds recoverable failures', async () => {
+    const h = harness();
+    const settleLaneTurn = vi.fn(async () => true);
+    (h.deps as unknown as { botGroupChatServiceHolder: unknown }).botGroupChatServiceHolder = { settleLaneTurn };
+    h.deps.agentInputCoordinatorHolder.getActiveInputClientId.mockReturnValue('retry-receipt');
+    h.deps.agentInputCoordinatorHolder.getAcceptedInputProvenance.mockReturnValue({
+      clientId: 'retry-receipt', autoResume: true, retrySourceClientId: 'bot-group:g1:turn:bot-a',
+    });
+    h.deps.agentInputCoordinatorHolder.onTurnEvent.mockImplementation(() => {
+      h.deps.agentInputCoordinatorHolder.getActiveInputClientId.mockReturnValue(null);
+    });
+    h.emit(event('done', { result: 'Recovered reply' }));
+    await microtasks();
+    expect(settleLaneTurn).toHaveBeenCalledWith(expect.objectContaining({
+      activeInputClientId: 'bot-group:g1:turn:bot-a', outcome: 'done', resultText: 'Recovered reply',
+    }));
+    settleLaneTurn.mockClear();
+    h.deps.agentInputCoordinatorHolder.getActiveInputClientId.mockReturnValue('retry-receipt');
+    h.deps.agentInputCoordinatorHolder.isAutoResumePending.mockReturnValue(true);
+    h.emit(event('error', { isTerminal: true, codexErrorInfo: 'responseStreamDisconnected' }));
+    await microtasks();
+    expect(settleLaneTurn).not.toHaveBeenCalled();
+    expect(h.deps.autoResumeBookkeeping.stashBotGroupSuppressedTerminal).toHaveBeenCalledWith('task', expect.objectContaining({
+      activeInputClientId: 'bot-group:g1:turn:bot-a', outcome: 'error', failureCode: 'NETWORK_ERROR',
+    }));
+    await h.dispose();
+  });
+
+  // Unit regression for #6671 review / bot-group-chat §4.4: existing tests
+  // covered generic recovery and pre-persist transfer, not the direct group
+  // hold after persistence. Drive the production pipeline and hold store so a
+  // capacity failure cannot finish the group lane before recovery has an outcome.
+  it.each(['continued', 'rejected'] as const)('holds a persisted group capacity terminal through handoff: %s', async outcome => {
+    const h = harness();
+    const settleLaneTurn = vi.fn(async (_terminal: BotGroupLaneTerminal) => true);
+    (h.deps as unknown as { botGroupChatServiceHolder: unknown }).botGroupChatServiceHolder = { settleLaneTurn };
+    const held = createProviderGroupHeldWorkerTerminals<{
+      orcaTerminal: OrcaSuppressedTerminal;
+      groupTerminal: BotGroupLaneTerminal | null;
+    }>({
+      ownerKey: () => 'account',
+      deliver: (_sessionId, terminal) => {
+        if (terminal.groupTerminal) void settleLaneTurn(terminal.groupTerminal);
+      },
+    });
+    const adapters = h.deps as unknown as {
+      stashProviderGroupHeldError: NonNullable<SessionEventDependencies['stashProviderGroupHeldError']>;
+      stashProviderGroupHeldWorkerTerminal: NonNullable<SessionEventDependencies['stashProviderGroupHeldWorkerTerminal']>;
+    };
+    adapters.stashProviderGroupHeldError = () => true;
+    adapters.stashProviderGroupHeldWorkerTerminal = (sessionId, holdId, orcaTerminal, groupTerminal) =>
+      held.stash(sessionId, holdId, { orcaTerminal, groupTerminal: groupTerminal ?? null });
+    const inputId = 'bot-group:g1:turn:bot-a';
+    h.deps.agentInputCoordinatorHolder.getActiveInputClientId.mockReturnValue(inputId);
+    h.deps.agentInputCoordinatorHolder.getProviderGroupSwitchHoldId.mockReturnValue(3);
+    h.emit(event('error', { message: 'model at capacity', reason: 'upstream-overload' }, { sessionTurnGeneration: 4 }));
+    h.deps.agentInputCoordinatorHolder.getActiveInputClientId.mockReturnValue('new-input');
+    h.deps.autoResumeBookkeeping.consumeFailedTurnCompletionTail.mockReturnValueOnce(true);
+    h.emit(event('done', {}, { sessionTurnGeneration: 4 }));
+    await microtasks();
+    expect(settleLaneTurn).not.toHaveBeenCalled();
+    expect(held.has('task', 3)).toBe(true);
+    if (outcome === 'continued') {
+      held.discard('task', 3);
+      h.deps.agentInputCoordinatorHolder.getProviderGroupSwitchHoldId.mockReturnValue(null);
+      h.deps.agentInputCoordinatorHolder.getAcceptedInputProvenance.mockReturnValue({
+        clientId: 'new-input', autoResume: true, retrySourceClientId: inputId,
+      });
+      h.emit(event('done', { result: 'Recovered reply' }, { sessionTurnGeneration: 5 }));
+    }
+    held.release('task', 3);
+    held.release('task', 3);
+    await microtasks();
+    expect(settleLaneTurn).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({
+      activeInputClientId: inputId,
+      ...(outcome === 'continued'
+        ? { outcome: 'done', resultText: 'Recovered reply' }
+        : { outcome: 'error', failureCode: 'UPSTREAM_OVERLOADED' }),
+    }));
+    await h.dispose();
+  });
+
+  it('waits for the streamed group reply to persist and keeps the finished input identity', async () => {
+    const h = harness();
+    let finishWrite!: () => void;
+    const writing = new Promise<void>(resolve => { finishWrite = resolve; });
+    effects.fn('drainPersistQueue').mockReturnValue(writing);
+    effects.fn('consumeLastAssistantPersistId').mockReturnValue('group-reply');
+    const settleLaneTurn = vi.fn(async () => true);
+    (h.deps as unknown as { botGroupChatServiceHolder: unknown }).botGroupChatServiceHolder = { settleLaneTurn };
+    h.deps.agentInputCoordinatorHolder.getActiveInputClientId.mockReturnValue('bot-group:g1:turn:bot-a');
+    h.emit(event('done', { result: '' }));
+    h.deps.agentInputCoordinatorHolder.getActiveInputClientId.mockReturnValue('bot-group:g1:next:bot-a');
+    await microtasks();
+    expect(settleLaneTurn).not.toHaveBeenCalled();
+    finishWrite();
+    await microtasks();
+    expect(settleLaneTurn).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({
+      sessionId: 'task', activeInputClientId: 'bot-group:g1:turn:bot-a', outcome: 'done',
+      resultText: '', resultMessageClientId: 'group-reply',
+    }));
+    await h.dispose();
+  });
+
+  it.each(['reply', 'failure'])('does not delay a group %s that needs no persisted-text fallback', async kind => {
+    const h = harness();
+    let finishWrite!: () => void;
+    effects.fn('drainPersistQueue').mockReturnValue(new Promise<void>(resolve => { finishWrite = resolve; }));
+    effects.fn('consumeLastAssistantPersistId').mockReturnValue('group-reply');
+    const settleLaneTurn = vi.fn(async () => true);
+    (h.deps as unknown as { botGroupChatServiceHolder: unknown }).botGroupChatServiceHolder = { settleLaneTurn };
+    h.emit(kind === 'reply' ? event('done', { result: 'Ready' }) : event('error', { isTerminal: true, errorStatus: 401 }));
+    await microtasks();
+    expect(settleLaneTurn).toHaveBeenCalledOnce();
+    finishWrite();
+    await microtasks();
+    await h.dispose();
+  });
+
+  it.each([
+    [{ message: 'Authorization: [REDACTED]', errorStatus: 429, usageLimit: true }, 'QUOTA_EXCEEDED'],
+    [{ errorStatus: 401 }, 'AUTH_REQUIRED'],
+    [{ sdkError: 'authentication_failed' }, 'AUTH_REQUIRED'],
+    [{ sdkError: 'rate_limit', errorStatus: 429, usageLimit: true }, 'RATE_LIMITED'],
+    [{ codexErrorInfo: 'usageLimitExceeded', message: '[REDACTED]' }, 'QUOTA_EXCEEDED'],
+    [{ codexErrorInfo: 'sessionBudgetExceeded', message: '[REDACTED]' }, 'QUOTA_EXCEEDED'],
+    [{ codexErrorInfo: 'unauthorized', message: '[REDACTED]' }, 'AUTH_REQUIRED'],
+    [{ codexErrorInfo: 'responseStreamDisconnected', message: '[REDACTED]' }, 'NETWORK_ERROR'],
+    [{ reason: 'turn_no_event_timeout', message: '[REDACTED]' }, 'RUNTIME_TIMEOUT'],
+    [{ reason: 'bridge_turn_no_event_timeout', message: '[REDACTED]' }, 'RUNTIME_TIMEOUT'],
+    [{ reason: 'upstream_response_idle_timeout', message: '[REDACTED]' }, 'RUNTIME_TIMEOUT'],
+    [{ reason: 'bridge_upstream_response_idle_timeout', message: '[REDACTED]' }, 'RUNTIME_TIMEOUT'],
+  ])('settles a group terminal error with the safe category from structured signals %j', async (data, failureCode) => {
+    const h = harness();
+    const settleLaneTurn = vi.fn(async () => true);
+    (h.deps as unknown as { botGroupChatServiceHolder: unknown }).botGroupChatServiceHolder = { settleLaneTurn };
+    h.deps.agentInputCoordinatorHolder.getActiveInputClientId.mockReturnValue('bot-group:g1:turn:bot-a');
+    h.emit(event('error', { ...data, isTerminal: true }));
+    await microtasks();
+    expect(settleLaneTurn).toHaveBeenCalledWith(expect.objectContaining({
+      sessionId: 'task', activeInputClientId: 'bot-group:g1:turn:bot-a', outcome: 'error', failureCode,
+    }));
+    await h.dispose();
+  });
+
+  it('keeps native compaction in the current runtime while allowing explicit resource refresh', async () => {
+    const h = harness();
+    const close = vi.fn(async () => {});
+    const bootstrap = vi.fn(async () => {});
+    const coordinator = createBotCompactRuntimeRefreshCoordinator({
+      hasPendingInteraction: () => false,
+      refresh: async () => { await close(); await bootstrap(); return 'refreshed'; },
+    });
+    h.deps.botCompactRuntimeRefreshCoordinator.noteBoundary = vi.fn(coordinator.noteBoundary);
+    h.deps.attemptBotCompactRuntimeRefresh.mockImplementation(() => { void coordinator.attempt(h.session); });
+    h.emit(event('compact_boundary'));
+    expect(h.deps.botCompactRuntimeRefreshCoordinator.noteBoundary).not.toHaveBeenCalled();
+    // 原生摘要可能丢掉了环境说明:下一轮整体重发。
+    expect(h.deps.wireNoteMemory.reset).toHaveBeenCalledWith('task');
+    expect(h.deps.attemptBotCompactRuntimeRefresh).not.toHaveBeenCalled();
+    h.deps.agentInputCoordinatorHolder.getQueueControlSnapshot.mockReturnValue({ pendingQueue: [{}] });
+    h.emit(event('done', { result: 'first result' }));
+    await microtasks();
+    expect(h.deps.attemptBotCompactRuntimeRefresh).toHaveBeenCalledWith(h.session, 'event:done');
+    expect(close).not.toHaveBeenCalled();
+    expect(bootstrap).not.toHaveBeenCalled();
+    coordinator.noteBoundary(h.session);
+    await coordinator.attempt(h.session);
+    expect(close).toHaveBeenCalledOnce();
+    expect(bootstrap).toHaveBeenCalledOnce();
+    await h.dispose();
+  });
+});
+
+it('captures task completion inputs before queue advancement and binds only a successful final', async () => {
+  const h = harness();
+  h.deps.agentInputCoordinatorHolder.getActiveInputClientIds.mockReturnValue(['bot-delegation-completion:a', 'human']);
+  h.deps.agentInputCoordinatorHolder.onTurnEvent.mockImplementation(() => {
+    h.deps.agentInputCoordinatorHolder.getActiveInputClientIds.mockReturnValue(['bot-delegation-completion:next']);
+  });
+  effects.fn('consumeLastTopLevelAssistantPersistId').mockReturnValueOnce('summary');
+  h.emit(event('done', { status: 'completed', result: 'Summary' }));
+  expect(effects.fn('markAssistantTurnCompleted')).toHaveBeenCalledWith('task', 'summary', undefined, ['bot-delegation-completion:a']);
+  await h.dispose();
+});
+
+
+it.each([
+  { sessionInstanceId: 'rebuilt', sessionTurnGeneration: 1, nonCache: false },
+  { sessionInstanceId: 'old', sessionTurnGeneration: 2, nonCache: false },
+  { sessionInstanceId: 'rebuilt', sessionTurnGeneration: 1, nonCache: true },
+])('surfaces a new retry terminal while recovery acceptance is pending: %j', async identity => {
+  const h = harness();
+  h.activity.setSessionInTurn('task', true);
+  const replayAccepted = deferred<boolean>();
+  const rollover = createContextOverflowRollover({} as never);
+  rollover.tryRecover = vi.fn(() => replayAccepted.promise);
+  (h.deps as { contextOverflowRolloverHolder: unknown }).contextOverflowRolloverHolder = rollover;
+  const rejection = { reason: 'unsupported-request-option', message: '400: Unsupported parameter(s): prompt_cache_key' };
+  h.emit(event('error', rejection, { sessionInstanceId: 'old', sessionTurnGeneration: 1 }));
+  h.emit(event('error', rejection, { sessionInstanceId: 'old', sessionTurnGeneration: 1 }));
+  expect(effects.fn('onTurnErrorEvent')).not.toHaveBeenCalled();
+  h.emit(event('error', identity.nonCache ? { isTerminal: true, message: 'Network failure' } : rejection, identity));
+  replayAccepted.resolve(true);
+  await microtasks();
+  expect(effects.fn('onTurnErrorEvent')).toHaveBeenCalledTimes(1);
+  expect(effects.fn('broadcast').mock.calls.some(call => call[1]?.event?.sessionInstanceId === identity.sessionInstanceId
+    && call[1]?.event?.sessionTurnGeneration === identity.sessionTurnGeneration)).toBe(true);
+  expect(rollover.tryRecover).toHaveBeenCalledTimes(1);
+  expect(h.deps.overflowSuppressedBroadcasts.size).toBe(0);
+  await h.dispose();
+});
+
+
+it.each([true, false])('settles only the claimed broadcast after duplicate terminals (recovered=%s)', async recovered => {
+  const h = harness();
+  h.activity.setSessionInTurn('task', true);
+  const result = deferred<boolean>();
+  const rollover = createContextOverflowRollover({} as never);
+  rollover.tryRecover = vi.fn(() => result.promise);
+  (h.deps as { contextOverflowRolloverHolder: unknown }).contextOverflowRolloverHolder = rollover;
+  const rejection = { reason: 'unsupported-request-option', message: '400: Unsupported parameter(s): prompt_cache_key' };
+  const identity = { sessionInstanceId: 'old', sessionTurnGeneration: 1 };
+  h.emit(event('error', rejection, identity));
+  h.emit(event('error', rejection, identity));
+  // Another owner may have stashed its event before the old promise settles.
+  const other = { event: event('error', rejection, { sessionInstanceId: 'other', sessionTurnGeneration: 2 }) };
+  h.deps.overflowSuppressedBroadcasts.set('task', other as never);
+  result.resolve(recovered);
+  await microtasks();
+  expect(h.deps.overflowSuppressedBroadcasts.get('task')).toBe(other);
+  expect(effects.fn('onTurnErrorEvent')).toHaveBeenCalledTimes(recovered ? 0 : 1);
+  if (!recovered) expect(effects.fn('broadcast').mock.calls.some(call => call[1]?.event?.sessionInstanceId === 'old')).toBe(true);
+  await h.dispose();
+});
+
+describe('Codex generated images through the production event pipeline', () => {
+  // IM / hook replies subscribe to the same Session after the wire listener.
+  // The host stores a Codex native image asynchronously; before the stream
+  // hold, `done` reached them first and the image was never attached.
+  function pushableCodexSession(log: SessionEventDependencies['log']) {
+    const pushed: Array<AgentEvent | null> = [];
+    let wake: (() => void) | null = null;
+    let running = false;
+    const handle = {
+      id: 'provider', agentKind: 'codex', model: 'test-model',
+      send: vi.fn(async () => { running = true; }),
+      close: vi.fn(async () => { pushed.push(null); wake?.(); }),
+      isTurnRunning: () => running,
+      setInteractionResolver: vi.fn(),
+      async *events() {
+        for (;;) {
+          while (pushed.length === 0) await new Promise<void>((resolve) => { wake = resolve; });
+          const next = pushed.shift()!;
+          if (next === null) return;
+          yield next;
+        }
+      },
+    } as unknown as AgentSessionHandle;
+    const session = new Session({ id: 'task', agentKind: 'codex', workDir: '/unused', handle,
+      capabilities: {} as never, logger: log as never, turnStallMs: 0 });
+    const queue = (...values: AgentEvent[]) => {
+      for (const value of values) {
+        if (value.type === 'done') running = false;
+        pushed.push(value);
+      }
+      wake?.();
+    };
+    return { session, queue };
+  }
+
+  const image = event('image', { kind: 'generation', blockId: 'ig-1' });
+  const stored = [
+    event('tool_use', { toolUseId: 'codex-image-1', toolName: 'imagegen', input: {} }),
+    event('tool_result_full', {
+      toolUseId: 'codex-image-1',
+      fullText: JSON.stringify({ ok: true, xdt_image_url: 'cindy-media://blobs/a.png' }),
+      isError: false,
+    }),
+    event('tool_result', { toolUseIds: ['codex-image-1'], summary: 'stored' }),
+  ];
+
+  it('delivers the stored image to later listeners before done without persisting it again', async () => {
+    const h = harness();
+    const { session, queue } = pushableCodexSession(h.deps.log);
+    h.deps.deliverCodexGeneratedImage.mockResolvedValue(stored);
+    const offWire = session.onEvent((value) => handleSessionEvent(h.dependencies, session, value));
+    const im: AgentEvent[] = [];
+    const offIm = session.onEvent((value) => im.push(value));
+    try {
+      await session.send('draw the design');
+      effects.fn('broadcast').mockClear();
+      queue(image, event('done', {}));
+      await vi.waitFor(() => expect(im.map((value) => value.type)).toContain('done'));
+
+      expect(im.map((value) => value.type)).toEqual(['image', 'tool_use', 'tool_result_full', 'tool_result', 'done']);
+      expect(im[2].data).toMatchObject({ fullText: expect.stringContaining('cindy-media://blobs/a.png') });
+      expect(h.deps.deliverCodexGeneratedImage).toHaveBeenCalledExactlyOnceWith('task', expect.objectContaining({ type: 'image' }));
+      expect(effects.fn('onToolUseEvent')).not.toHaveBeenCalled();
+      expect(effects.fn('onToolResultFullEvent')).not.toHaveBeenCalled();
+      expect(effects.fn('onToolResultEvent')).not.toHaveBeenCalled();
+      const broadcastTypes = effects.fn('broadcast').mock.calls
+        .map(([, payload]) => (payload as { event?: AgentEvent } | undefined)?.event?.type);
+      expect(broadcastTypes).not.toContain('tool_use');
+      expect(broadcastTypes).not.toContain('tool_result_full');
+    } finally { offIm(); offWire(); await session.close(); await h.dispose(); }
+  });
+
+  it('neither delivers nor holds a quiet scheduled image', async () => {
+    const h = harness();
+    const { session, queue } = pushableCodexSession(h.deps.log);
+    const close = beginQuietScheduledOutput('check', 'image-run');
+    const origin = { kind: 'scheduler' as const, scheduleId: 'check', scheduleName: 'Check', runId: 'image-run' };
+    const offWire = session.onEvent((value) => handleSessionEvent(h.dependencies, session, value));
+    const seen: string[] = [];
+    const offSeen = session.onEvent((value) => seen.push(value.type));
+    try {
+      await session.send('scheduled check', { origin });
+      queue(image, event('done', {}));
+      await vi.waitFor(() => expect(seen).toContain('done'));
+      expect(seen).toEqual(['image', 'done']);
+      expect(h.deps.deliverCodexGeneratedImage).not.toHaveBeenCalled();
+    } finally { close(); offSeen(); offWire(); await session.close(); await h.dispose(); }
+  });
+});

@@ -1,4 +1,4 @@
-export type OrcaManualInterruptReason = 'input_stop' | 'abort_session';
+export type OrcaManualInterruptReason = 'input_stop' | 'abort_session' | 'lead_interrupt';
 
 export interface OrcaManualInterruptMark {
   markedAt: number;
@@ -24,16 +24,33 @@ export function markManualInterrupt(
   now = Date.now(),
 ): void {
   clearExpiredManualInterrupts(now);
+  // A Lead interrupt reserves the next input before it reaches the ordinary
+  // coordinator Stop path. Do not let that path overwrite the stronger reason;
+  // terminal handling must suppress auto-bridge for the interrupted turn.
+  if (manualInterrupts.get(sessionId)?.reason === 'lead_interrupt' && reason !== 'lead_interrupt') {
+    return;
+  }
   manualInterrupts.set(sessionId, { markedAt: now, reason });
 }
 
-export function getManualInterrupt(sessionId: string, now = Date.now()): OrcaManualInterruptMark | null {
+export function getManualInterrupt(
+  sessionId: string,
+  now = Date.now(),
+): OrcaManualInterruptMark | null {
   clearExpiredManualInterrupts(now);
   return manualInterrupts.get(sessionId) ?? null;
 }
 
 export function clearManualInterrupt(sessionId: string): void {
   manualInterrupts.delete(sessionId);
+}
+
+/** Restore the exact mark object captured before a provisional dispatch accepted. */
+export function restoreManualInterrupt(
+  sessionId: string,
+  mark: OrcaManualInterruptMark,
+): void {
+  manualInterrupts.set(sessionId, mark);
 }
 
 export function clearExpiredManualInterrupts(now = Date.now()): number {

@@ -1,11 +1,15 @@
 {
   "site": "weibo.com",
-  "auth": "需要登录态:微博 ajax 接口对未登录会话返回非 JSON 或 ok=false,请在持久浏览器登录 weibo.com 后使用",
+  "auth": "鉴权以具体命令为准：cookie。需要登录的命令复用当前浏览器会话。",
   "entry": {
-    "home": "https://weibo.com",
-    "hotBand": "https://weibo.com/ajax/statuses/hot_band",
-    "searchPage": "https://s.weibo.com/weibo?q=<keyword>"
+    "home": "https://weibo.com"
   },
-  "recipes": ["weibo-hot"],
-  "notes": "关键:不要直接 navigate 到 /ajax/statuses/hot_band——非同源/未登录访问会被喂 SPA HTML。正确姿势是先 navigate 到 https://weibo.com,再用 evaluate 步在页面内 fetch('/ajax/statuses/hot_band', {credentials:'include'}):同源 + 带 cookie。响应结构 {ok:1,data:{band_list:[{realpos,word,num,category,label_name}]}};热词详情可拼 https://s.weibo.com/weibo?q=%23<word>%23(井号包裹的话题搜索)。注意:搜索(s.weibo.com)和首页 feed(/ajax/feed/unreadfriendstimeline,需先取自身 uid)在上游是 DOM 抓取或需额外 uid 推导,稳定性差,本配方只收录干净的 hot_band 热搜读接口。务必使用持久浏览器(带登录态)。"
+  "recipes": [
+    "weibo-hot"
+  ],
+  "notes": "兼容入口 weibo-hot 现执行内置 weibo/hot，原参数名保留；结果采用新版适配器的结构化输出。可用 opencli:<站点>/<命令> 调用完整目录，siteguide 查询参数默认值、类型及 read/write 分类。网站可能变更或要求登录、验证；有 Cookie 不保证绕过风控。",
+  "upstream": {
+    "repository": "https://github.com/jackwener/opencli",
+    "revision": "fe5f1d96aff01c32fd84f86b52af922bfe6ca93f"
+  }
 }

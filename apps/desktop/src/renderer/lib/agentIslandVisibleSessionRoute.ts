@@ -20,21 +20,25 @@ export function resolveAgentIslandVisibleSessionIdFromPath(
   return sessionId;
 }
 
-/**
- * 通知/deep link 的目标路由还没渲染时，直接从完整 route target 解析首个可见
- * session payload。Orca worker query 表示 Lead 与 Worker 会同时可见。
- */
-export function resolveAgentIslandVisibleSessionFromRouteTarget(
-  target: string,
+export function isAgentIslandVisibleSessionOwnedByBotRoute(pathname: string): boolean {
+  const sessionMatch = matchPath('/bots/:botId/session/:sessionId', pathname) ??
+    matchPath('/bots/:botId/history/:sessionId', pathname) ??
+    matchPath('/bots/remote/:deviceId/:botId/session/:sessionId', pathname) ??
+    matchPath('/bots/remote/:deviceId/:botId', pathname);
+  // The matching view must validate ownership before reporting a visible session.
+  return Boolean(sessionMatch);
+}
+
+export function resolveAgentIslandVisibleSessionsFromPath(
+  pathname: string,
+  splitSessionIds: readonly string[],
 ): string | string[] | null {
-  const url = new URL(target, 'https://xdt-maker.invalid');
-  const leadSessionId = resolveAgentIslandVisibleSessionIdFromPath(url.pathname);
-  if (!leadSessionId) return null;
-  const workerSessionId = url.searchParams.get('worker')?.trim();
-  if (!workerSessionId || workerSessionId === 'new' || workerSessionId === leadSessionId) {
-    return leadSessionId;
+  const sessionId = resolveAgentIslandVisibleSessionIdFromPath(pathname);
+  // SplitGroup stays in the store after leaving cc-agent, but is no longer mounted.
+  if (sessionId && splitSessionIds.length >= 2) {
+    return [...new Set([sessionId, ...splitSessionIds])];
   }
-  return [leadSessionId, workerSessionId];
+  return sessionId;
 }
 
 export function resolveAgentIslandVisibleSessionIdForWorkdirBrowseRail({

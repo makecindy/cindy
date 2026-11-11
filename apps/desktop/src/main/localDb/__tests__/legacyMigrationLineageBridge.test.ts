@@ -1,10 +1,9 @@
 import Database from 'better-sqlite3';
 import { describe, expect, it } from 'vitest';
 
-const migration0074 =
-  require('../../../../drizzle/scripts/0074_bridge_legacy_migration_lineage.ts') as {
-    run(db: Database.Database): void;
-  };
+const { default: migration0074 } = (await import(
+  '../../../../drizzle/scripts/0074_bridge_legacy_migration_lineage'
+)) as { default: { run(db: Database.Database): void } };
 
 const LEGACY_LINEAGE = [
   [

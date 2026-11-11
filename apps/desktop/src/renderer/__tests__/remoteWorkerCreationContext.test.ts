@@ -7,17 +7,44 @@ const read = (relativePath: string): string =>
   readFileSync(resolve(__dirname, '..', relativePath), 'utf8').replace(/\r\n/g, '\n');
 
 describe('remote Orca Worker creation context', () => {
+  it('uses SSH-filtered candidates for remote-project models and provider selection', () => {
+    const draft = read('features/cc-agent/NewMakerDraftRoute.tsx');
+    const start = draft.indexOf('const selection = await loadSshSessionModelSelection(');
+    const end = draft.indexOf('const newSession = await createSession(', start);
+    expect(start).toBeGreaterThan(-1);
+    const selection = draft.slice(start, end);
+    expect(selection).toContain('providers: localProviders');
+    expect(selection).toContain('agentKind: capabilityAgentKind');
+    expect(selection).toContain('if (!selection.ok)');
+    // Behavioral filtering and source pinning are covered in sshSessionModelSelection.test.ts.
+    expect(selection).toContain('target.hostId');
+    expect(read('components/settings/RemoteHostDetail.tsx')).toContain('loadSshSessionModelSelection(hostId)');
+  });
+
+  it('writes the SSH no-effort sentinel instead of omitting the session field', () => {
+    const draft = read('features/cc-agent/NewMakerDraftRoute.tsx');
+    const start = draft.indexOf('const newSession = await createSession(');
+    const end = draft.indexOf('if (!newSession)', start);
+    expect(start).toBeGreaterThan(-1);
+    expect(end).toBeGreaterThan(start);
+    expect(draft.slice(start, end)).toContain("effort: sshEffort ?? '',");
+  });
   it('scopes capabilities, providers, and the nested model selector to the controlled device', () => {
     const popover = read('features/cc-agent/CreateWorkerPopover.tsx');
 
-    expect(popover).toContain("useAgentCapabilities('claude-code', deviceId)");
-    expect(popover).toContain("useAgentCapabilities('codex', deviceId)");
-    expect(popover).toContain('useDeviceProviders(deviceId)');
+    // #8010：能力、供应商和嵌套选择器共用宿主作用域；整机执行仍读执行电脑。
+    // 行为与实际提交 ID 由 CreateWorkerPopover.test.tsx 验证，此处保留跨文件接线约束。
+    expect(popover).toContain(
+      'const catalogDeviceId = modelCatalogKey(deviceId, executionDeviceId ? undefined : catalogHostDeviceId);',
+    );
+    expect(popover).toContain("useAgentCapabilities('claude-code', catalogDeviceId)");
+    expect(popover).toContain("useAgentCapabilities('codex', catalogDeviceId)");
+    expect(popover).toContain('useDeviceProviders(catalogDeviceId)');
     expect(popover).toContain(
       'providersUnsupported: deviceId ? remoteProviders.unsupported : false',
     );
     expect(popover).toContain('!remoteModelListBlocked');
-    expect(popover).toContain('deviceId={deviceId}');
+    expect(popover).toContain('deviceId={catalogDeviceId}');
   });
 
   it('blocks existing remote session sends while the model catalog is loading or failed', () => {
@@ -40,11 +67,13 @@ describe('remote Orca Worker creation context', () => {
   it('passes the same device context through both Worker creation entry points', () => {
     const sessionView = read('features/cc-agent/CCAgentSessionView.tsx');
     const workerPanel = read('features/cc-agent/OrcaWorkerPanel.tsx');
-    const workersPlugin = read('features/right-sidebar/plugins/orca-workers/index.tsx');
+    const workersTabBody = read(
+      'features/right-sidebar/plugins/orca-workers/OrcaWorkersTabBody.tsx',
+    );
 
     expect(sessionView).toContain('deviceId={remoteDeviceId}');
-    expect(workerPanel).toContain('deviceId={deviceId}');
-    expect(workersPlugin).toContain('deviceId={leadSession?.deviceLinkDeviceId}');
+    expect(workerPanel).toContain('deviceId={deviceId ?? undefined}');
+    expect(workersTabBody).toContain('deviceId: ctx.deviceLinkDeviceId');
   });
 
   it('never uses the controller API key to gate a remote model row', () => {
@@ -57,13 +86,13 @@ describe('remote Orca Worker creation context', () => {
     // 任一远程路径都不得回退到 controller key 判定。
     expect(selector).toContain('if (!deviceId) {');
     expect(selector).toContain('if (subscriptionDirectDisabledReason(id)) return true;');
-    expect(selector).toContain("if (provider?.source === 'user') return false;");
-    expect(selector).toContain("return id.startsWith('codex/') && !hasSavedKey;");
+    expect(selector).toContain("if (isCustomRoutedProvider(provider)) return false;");
+    expect(selector).toContain('return isCodexGatewayWireModel(id) && !hasSavedKey;');
     expect(selector).toContain("if (remoteModelListStatus !== 'ready') return true;");
     expect(selector).toContain(
       'if (remoteProviders.error) return remoteProviders.unsupported ? false : true;',
     );
-    expect(selector).toContain('const rowAgentKind = resolveVisibleModelAgentKind({');
+    expect(selector).toContain('const rowAgentKind = rowAgent ?? resolveVisibleModelAgentKind({');
     expect(selector).toContain('providerOffersModel(provider, id, rowAgentKind)');
   });
 });

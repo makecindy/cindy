@@ -1,10 +1,18 @@
-import { describe, expect, it } from 'vitest';
+import { beforeAll, describe, expect, it } from 'vitest';
+import { i18n } from '@/i18n';
 import {
   CONTINUE_AFTER_ERROR_PROMPT,
   UI_ACTION_TRIGGER_PREFIX,
 } from '@cindy/maker-shared/synthetic-trigger';
 import { composerDocumentFromSerializedMessage } from '@/session/composerDocument';
+import { buildMobileMessageCopyText } from '@/session/messageActions';
 import { normalizeRemoteMessages } from '@/session/messageNormalize';
+import { isShareableMessage } from '@/session/shareSelectionStore';
+import { buildMobileMessageRenderItems } from '@/session/messageRenderModel';
+import {
+  MOBILE_TOOL_INPUT_PROJECTION_THRESHOLD_BYTES,
+  projectLargeSettledToolInputs,
+} from '@/session/messageToolPayloadProjection';
 import type { RemoteMessage } from '@/session/types';
 
 function message(patch: Partial<RemoteMessage> & Pick<RemoteMessage, 'id' | 'role' | 'content'>): RemoteMessage {
@@ -19,6 +27,130 @@ function message(patch: Partial<RemoteMessage> & Pick<RemoteMessage, 'id' | 'rol
 }
 
 describe('normalizeRemoteMessages', () => {
+  it('localizes reasoning usage in persisted output-limit messages', () => {
+    const items = normalizeRemoteMessages([message({ id: 'limited', role: 'error', content: JSON.stringify({
+      message: 'limit', reason: 'output-limit', outputLimit: { outputTokens: 131072, reasoningTokens: 131064 },
+    }) })]);
+    expect(items[0]).toMatchObject({ kind: 'system', label: 'error' });
+    expect((items[0] as { body: string }).body).toContain('131064');
+    expect((items[0] as { body: string }).body).toContain(i18n.t('session.tail.outputLimitReasoning'));
+  });
+
+  it('renders a host model-change record as one separator, without an empty reply', () => {
+    const output = normalizeRemoteMessages([message({
+      id: 'model-boundary', role: 'assistant', content: '',
+      agentMeta: { modelChange: { fromModel: 'owner-model', toModel: 'automation-model', modelOnly: true } },
+    })]);
+    expect(output).toHaveLength(1);
+    expect(output[0]).toMatchObject({
+      kind: 'system', systemCardType: 'agent-switch',
+      systemCardData: { fromModel: 'owner-model', toModel: 'automation-model', modelOnly: true },
+    });
+  });
+  // #6351: historical failure metadata must survive remote normalization even
+  // when usage accounting is later attached to the same failed text row.
+  it('keeps failed sampling prose readable without inferring a completed reply from its cost', () => {
+    const output = normalizeRemoteMessages([
+      message({ id: 'failed', role: 'assistant', content: 'Opening from a failed attempt',
+        agentMeta: { failedSamplingAttempt: { threadId: 't', turnId: 'turn', attempt: 1, itemId: 'failed' },
+          turnCompleted: false, turnCostUsd: 0.1 } }),
+      message({ id: 'success', role: 'assistant', content: 'Successful reply', agentMeta: { turnCompleted: true } }),
+    ]);
+    expect(output[0]).toMatchObject({ body: 'Opening from a failed attempt', failedSamplingAttempt: true });
+    expect(output[0].turnCompleted).not.toBe(true);
+    expect(output[1]).toMatchObject({ body: 'Successful reply', turnCompleted: true });
+    expect(output[1].failedSamplingAttempt).toBeUndefined();
+  });
+  beforeAll(async () => {
+    await i18n.changeLanguage('zh-CN');
+  });
+
+  it('recognizes host-marked MCP App cards and leaves ordinary assistant content unchanged', () => {
+    const content = { mcpApp: { version: 1, serverId: 'example', serverRevision: 'revision', resourceUri: 'ui://example/app', tool: { name: 'draft', title: '申请表', inputSchema: { type: 'object' } }, arguments: {},
+      result: { content: [{ type: 'text', text: 'Saved form result' }], _meta: { private: 'view-only' } } } };
+    const output = normalizeRemoteMessages([
+      message({ id: 'app', role: 'assistant', content, agentMeta: { mcpApp: true } }),
+      message({ id: 'plain', role: 'assistant', content: '工具返回的文本' }),
+    ]);
+    expect(output[0]).toMatchObject({ systemCardType: 'mcp-app', systemCardData: { title: '申请表', fallbackText: 'Saved form result' } });
+    expect(output[1]).toMatchObject({ body: '工具返回的文本' });
+  });
+
+  it("renders public guest MCP App summaries, including pending cards with no text", () => {
+    const rows = ["", "Saved result"].map((text, index) =>
+      message({
+        id: `guest-app-${index}`,
+        role: "assistant",
+        agentMeta: { mcpApp: true },
+        content: { mcpAppHistory: { version: 1, title: "Draft form", text } },
+      }),
+    );
+    expect(
+      normalizeRemoteMessages(rows).map((row) => [
+        row.systemCardType,
+        row.systemCardData,
+      ]),
+    ).toEqual(
+      ["", "Saved result"].map((fallbackText) => [
+        "mcp-app",
+        { title: "Draft form", fallbackText },
+      ]),
+    );
+  });
+
+  it('renders a projected large tool input from its bounded summary and keeps its result', () => {
+    const projected = projectLargeSettledToolInputs([
+      message({
+        id: 'large-tool',
+        role: 'tool_use',
+        toolUseId: 'toolu-large',
+        content: {
+          input: { payload: 'x'.repeat(MOBILE_TOOL_INPUT_PROJECTION_THRESHOLD_BYTES + 1) },
+          toolName: 'WebFetch',
+          toolUseId: 'toolu-large',
+        },
+      }),
+      message({
+        id: 'large-result',
+        role: 'tool_result',
+        toolUseId: 'toolu-large',
+        content: 'finished',
+        createdAt: '2026-01-01T00:00:01.000Z',
+      }),
+    ]);
+
+    const [item] = normalizeRemoteMessages(projected);
+    expect(item).toMatchObject({
+      kind: 'tool',
+      label: 'WebFetch',
+      secondaryBody: 'finished',
+      toolSettled: true,
+      toolInputProjection: {
+        projected: true,
+        toolUseMessageId: 'large-tool',
+      },
+    });
+    expect(item.body.length).toBeLessThanOrEqual(480);
+  });
+
+  it('projects a persisted agent task terminal state from tool_use metadata', () => {
+    const [item] = normalizeRemoteMessages([
+      message({
+        id: 'agent-tool',
+        role: 'tool_use',
+        toolUseId: 'toolu-agent',
+        content: { toolUseId: 'toolu-agent', toolName: 'Agent', input: { prompt: 'Inspect auth' } },
+        agentMeta: { agentTaskStatus: 'stopped' },
+      }),
+    ]);
+
+    expect(item).toMatchObject({
+      kind: 'tool',
+      label: 'Agent',
+      agentTaskStatus: 'stopped',
+    });
+  });
+
   it('sorts messages and extracts user/assistant text from desktop content shapes', () => {
     const items = normalizeRemoteMessages([
       message({
@@ -39,6 +171,23 @@ describe('normalizeRemoteMessages', () => {
       ['user', 'question', 'user'],
       ['assistant', 'answer', 'agent'],
     ]);
+  });
+
+  it('hides the trailing /goal verdict block from assistant text like desktop', () => {
+    const verdict = '```json\n{"goal_status":"continue","reason":"下一步补齐合并检查。"}\n```';
+    const [assistant, user] = normalizeRemoteMessages([
+      message({ id: 'goal-a', role: 'assistant', content: `已核对现有 CI。\n\n${verdict}` }),
+      message({
+        id: 'goal-u',
+        role: 'user',
+        content: { text: `看这段\n${verdict}`, images: [] },
+        createdAt: '2026-01-01T00:00:01.000Z',
+      }),
+    ]);
+
+    expect(assistant).toMatchObject({ kind: 'assistant', body: '已核对现有 CI。' });
+    expect(buildMobileMessageCopyText(assistant!)).not.toContain('goal_status');
+    expect(user?.body).toContain('goal_status');
   });
 
   it('extracts assistant turn cost from desktop agentMeta', () => {
@@ -453,6 +602,37 @@ describe('normalizeRemoteMessages', () => {
     });
   });
 
+  it('renders and copies compacted tool results without exposing the internal marker', () => {
+    const [item] = normalizeRemoteMessages([
+      message({
+        id: 'tool-compacted',
+        role: 'tool_use',
+        content: {
+          toolUseId: 'tu_compacted',
+          toolName: 'Read',
+          input: { file_path: '/repo/a.ts' },
+        },
+      }),
+      message({
+        id: 'result-compacted',
+        role: 'tool_result',
+        toolUseId: 'tu_compacted',
+        content: {
+          type: 'tool_result_compacted',
+          version: 1,
+          originalBytes: 128 * 1024,
+          compactedAt: 500,
+        },
+      }),
+    ]);
+
+    expect(item.secondaryBody).toBe('完整工具输出已释放（原始大小 128 KB）');
+    expect(buildMobileMessageCopyText(item)).toContain(
+      '完整工具输出已释放（原始大小 128 KB）',
+    );
+    expect(buildMobileMessageCopyText(item)).not.toContain('tool_result_compacted');
+  });
+
   it('marks tools settled by result arrival, including hidden orca empty results', () => {
     const items = normalizeRemoteMessages([
       message({
@@ -609,6 +789,64 @@ describe('normalizeRemoteMessages', () => {
     ]);
   });
 
+  it('keeps tool image fallback unless the same turn embeds that URL as Markdown', () => {
+    const url = `cindy-media://blobs/${'a'.repeat(64)}.png`;
+    const items = normalizeRemoteMessages([
+      message({ id: 'u1', role: 'user', content: 'draw one', createdAt: '2026-01-01T00:00:01.000Z' }),
+      message({
+        id: 'tool-1',
+        role: 'tool_use',
+        toolUseId: 'tu-1',
+        content: { toolUseId: 'tu-1', toolName: 'image_generate', input: {} },
+        createdAt: '2026-01-01T00:00:02.000Z',
+      }),
+      message({
+        id: 'result-1',
+        role: 'tool_result',
+        toolUseId: 'tu-1',
+        content: JSON.stringify({ xdt_image_url: url }),
+        createdAt: '2026-01-01T00:00:03.000Z',
+      }),
+      message({
+        id: 'steer-1',
+        role: 'user',
+        content: 'make it warmer',
+        agentMeta: { delivery: 'steer' },
+        createdAt: '2026-01-01T00:00:03.500Z',
+      }),
+      message({
+        id: 'a1',
+        role: 'assistant',
+        content: `![生成结果](${url})`,
+        createdAt: '2026-01-01T00:00:04.000Z',
+      }),
+      message({ id: 'u2', role: 'user', content: 'draw again', createdAt: '2026-01-01T00:00:05.000Z' }),
+      message({
+        id: 'tool-2',
+        role: 'tool_use',
+        toolUseId: 'tu-2',
+        content: { toolUseId: 'tu-2', toolName: 'image_generate', input: {} },
+        createdAt: '2026-01-01T00:00:06.000Z',
+      }),
+      message({
+        id: 'result-2',
+        role: 'tool_result',
+        toolUseId: 'tu-2',
+        content: JSON.stringify({ xdt_image_url: url }),
+        createdAt: '2026-01-01T00:00:07.000Z',
+      }),
+      message({
+        id: 'a2',
+        role: 'assistant',
+        content: `文件地址：${url}`,
+        createdAt: '2026-01-01T00:00:08.000Z',
+      }),
+    ]);
+
+    expect(items.find((item) => item.source.id === 'tool-1')?.media).toEqual([]);
+    expect(items.find((item) => item.source.id === 'tool-2')?.media).toMatchObject([{ url }]);
+  });
+
   it('keeps desktop media action metadata as mobile read-only actions', () => {
     const items = normalizeRemoteMessages([
       message({
@@ -671,6 +909,38 @@ describe('normalizeRemoteMessages', () => {
     ]);
 
     expect(items).toEqual([]);
+  });
+
+  it('keeps distinct answers in history when question titles are identical', () => {
+    const items = normalizeRemoteMessages([message({ id: 'answered-ids', role: 'ask_user', content: {
+      status: 'answered', questions: [{ id: 'first', question: 'Choose?' }, { id: 'second', question: 'Choose?' }],
+      answers: { first: 'A', second: 'B' },
+    } })]);
+    expect(items[0]).toMatchObject({ kind: 'ask_user', body: 'Q: Choose?\nA: A\n\nQ: Choose?\nA: B' });
+  });
+
+  // Pending history becomes unanswered only after the host has synchronized its live queue.
+  it('keeps orphaned questions readable without duplicating live cards', () => {
+    const row = message({ id: 'orphan', role: 'ask_user', content: {
+      requestId: 'question-id', status: 'pending', questions: [{ question: 'Install this version?' }],
+    } });
+    expect(normalizeRemoteMessages([row])).toEqual([]);
+    expect(normalizeRemoteMessages([row], { pendingQuestionIds: new Set(['question-id']) })).toEqual([]);
+    const expired = normalizeRemoteMessages([row], { pendingQuestionIds: new Set() });
+    expect(expired).toHaveLength(1);
+    expect(expired[0].body).toBe(`Q: Install this version?\n${i18n.t('interaction.panel.questionUnanswered')}`);
+    const cancelled = { ...row, content: { ...row.content as object, status: 'cancelled' } };
+    expect(normalizeRemoteMessages([cancelled])[0].body).toBe(expired[0].body);
+  });
+
+  it('keeps withdrawn history with its reason without inventing an answer', () => {
+    const items = normalizeRemoteMessages([message({ id: 'withdrawn', role: 'ask_user', content: {
+      status: 'cancelled', questions: [{ question: 'Logged in?' }], withdrawalReason: '已从日志确认', answers: {},
+    } })]);
+    expect(items).toHaveLength(1);
+    expect(items[0].body).toContain('Logged in?');
+    expect(items[0].body).toContain('已从日志确认');
+    expect(items[0].body).not.toContain('A:');
   });
 
   it('renders only answered ask_user history as question and answer pairs', () => {
@@ -881,8 +1151,70 @@ describe('normalizeRemoteMessages', () => {
     expect(items[0]).toMatchObject({ kind: 'system', label: 'error' });
     expect(items[0].body).toContain('还没有配置可用的 API Key');
     expect(items[0].body).toContain('设置 → 模型供应商');
-    // 非鉴权错误维持原文
-    expect(items[1].body).toBe('something exploded');
+    // 未分类错误使用本地化摘要，技术原文留给详情。
+    expect(items[1].body).toBe(i18n.t('session.tail.replyFailed'));
+    expect(items[1].rawError).toBe('something exploded');
+  });
+
+  it('localizes a persisted output limit in message history', () => {
+    const items = normalizeRemoteMessages([message({
+      id: 'output-limit', role: 'error',
+      content: JSON.stringify({ message: 'Pi reached the model output limit.', reason: 'output-limit' }),
+    })]);
+    expect(items[0]).toMatchObject({ kind: 'system', label: 'error', body: i18n.t('session.tail.outputLimit') });
+  });
+
+  // Legacy hosts persisted the overflow reason but lost the encrypted-content
+  // code in additionalDetails. The actual history normalizer must recover copy.
+  it('localizes a legacy compact error whose details were discarded', () => {
+    const [item] = normalizeRemoteMessages([message({
+      id: 'compact', role: 'error',
+      content: JSON.stringify({ message: 'Error running remote compact task', reason: 'context-overflow' }),
+    })]);
+    expect(item).toMatchObject({
+      kind: 'system', label: 'error', body: i18n.t('session.tail.remoteCompactEncryptedContent'),
+    });
+  });
+
+  it('localizes persisted tool-loop errors from reason and bounded details', () => {
+    const items = normalizeRemoteMessages([
+      message({
+        id: 'tool-loop-generic',
+        role: 'error',
+        content: JSON.stringify({
+          message: '上游模型疑似陷入死循环，category=missing_required_field',
+          reason: 'tool_use_loop_detected',
+        }),
+      }),
+      message({
+        id: 'tool-loop-contract',
+        role: 'error',
+        content: JSON.stringify({
+          message: 'internal contract failure: missing_required_field',
+          reason: 'tool_use_loop_detected',
+          toolLoop: { kind: 'contract', count: 3 },
+        }),
+        createdAt: '2026-01-01T00:00:01.000Z',
+      }),
+      message({
+        id: 'tool-loop-invalid-details',
+        role: 'error',
+        content: JSON.stringify({
+          message: 'raw malformed loop category=missing_required_field',
+          reason: 'tool_use_loop_detected',
+          toolLoop: { kind: 'unknown', count: 999999999 },
+        }),
+        createdAt: '2026-01-01T00:00:02.000Z',
+      }),
+    ]);
+
+    expect(items[0].body).toBe(i18n.t('session.tail.toolUseLoopDetected'));
+    expect(items[0].body).not.toContain('missing_required_field');
+    expect(items[1].body).toBe(
+      i18n.t('session.tail.toolUseLoopDetectedWithCount', { count: 3 }),
+    );
+    expect(items[1].body).not.toContain('missing_required_field');
+    expect(items[2].body).toBe(i18n.t('session.tail.toolUseLoopDetected'));
   });
 
   it('extracts scheduler automation origin from user agentMeta', () => {
@@ -906,10 +1238,16 @@ describe('normalizeRemoteMessages', () => {
         agentMeta: { origin: { kind: 'something-else', scheduleId: 'sch-3' } },
       }),
       message({
-        id: 'missing-id',
+        id: 'redacted-for-guest',
         role: 'user',
-        content: 'broken origin',
+        content: 'shared-task guest view',
         agentMeta: { origin: { kind: 'scheduler' } },
+      }),
+      message({
+        id: 'name-without-id',
+        role: 'user',
+        content: 'not host-redaction shaped',
+        agentMeta: { origin: { kind: 'scheduler', scheduleName: 'leaked name' } },
       }),
       message({
         id: 'assistant-ignored',
@@ -923,9 +1261,188 @@ describe('normalizeRemoteMessages', () => {
       ['scheduled', { scheduleId: 'sch-1', scheduleName: 'PR 心跳' }],
       ['scheduled-unnamed', { scheduleId: 'sch-2' }],
       ['other-origin', undefined],
-      ['missing-id', undefined],
+      // 共享任务访客收到的脱敏来源:仍是自动化消息(「由自动化发送」+ 自动化收起阈值),不带 id / 名字。
+      ['redacted-for-guest', {}],
+      ['name-without-id', {}],
       ['assistant-ignored', undefined],
     ]);
+  });
+
+  it('keeps redacted scheduler messages on the automation path (labels, plugin header exclusion)', () => {
+    const [item] = normalizeRemoteMessages([
+      message({
+        id: 'redacted',
+        role: 'user',
+        content: 'heartbeat',
+        agentMeta: { origin: { kind: 'scheduler' } },
+      }),
+    ]);
+    expect(item.automationOrigin).toEqual({});
+    expect(item.pluginInvocations).toBeUndefined();
+    expect(isShareableMessage(item)).toBe(true);
+  });
+
+  it('never labels hook channel messages (hook:<conn> scheduler origins) as automation', () => {
+    const items = normalizeRemoteMessages([
+      message({
+        id: 'hook-legacy',
+        role: 'user',
+        content: 'from slack',
+        agentMeta: { origin: { kind: 'scheduler', scheduleId: 'hook:conn-1', scheduleName: 'Hook · Team Slack' } },
+      }),
+      message({
+        id: 'hook-redacted-for-guest',
+        role: 'user',
+        content: 'from slack',
+        agentMeta: { origin: { kind: 'scheduler', scheduleId: 'hook:' } },
+      }),
+    ]);
+    expect(items.map((item) => item.automationOrigin)).toEqual([undefined, undefined]);
+  });
+
+  it('reads host-stamped device, plugin and shared-task author sources', () => {
+    const items = normalizeRemoteMessages([
+      message({
+        id: 'from-phone',
+        role: 'user',
+        content: 'sent from my phone',
+        agentMeta: {
+          sourceDevice: { deviceId: 'phone-1', name: 'Dash 的\niPhone', platform: 'mobile' },
+          sourcePlugin: { pluginId: 'plugin-1', name: '日报' },
+          sharedTaskAuthor: { displayName: '访客甲', memberId: 'm1', accountId: 'acct-guest' },
+        },
+      }),
+      message({
+        id: 'unknown-platform',
+        role: 'user',
+        content: 'x',
+        agentMeta: { sourceDevice: { deviceId: 'tv-1', platform: 'tv' }, sourcePlugin: { name: 'no id' } },
+      }),
+      message({
+        id: 'assistant-ignored',
+        role: 'assistant',
+        content: 'reply',
+        agentMeta: { sourceDevice: { deviceId: 'phone-1', platform: 'mobile' } },
+      }),
+    ]);
+    expect(items.map((item) => [item.source.id, item.sourceDevice, item.sourcePlugin, item.sharedAuthorName]))
+      .toEqual([
+        ['from-phone', { deviceId: 'phone-1', name: 'Dash 的 iPhone', platform: 'mobile' }, { pluginId: 'plugin-1', name: '日报' }, '访客甲'],
+        ['unknown-platform', undefined, undefined, undefined],
+        ['assistant-ignored', undefined, undefined, undefined],
+      ]);
+    // 作者账号只用于判断「是不是我的消息」(气泡配色),不作权限依据。
+    expect(items.map((item) => item.sharedAuthorAccountId)).toEqual(['acct-guest', undefined, undefined]);
+  });
+
+  it('reads the sending session of tool-sent and Orca messages without mixing it into automation', () => {
+    const items = normalizeRemoteMessages([
+      message({
+        id: 'tool-sent',
+        role: 'user',
+        content: 'please review',
+        agentMeta: {
+          origin: {
+            kind: 'session',
+            senderSessionId: 'caller',
+            displayText: 'please review',
+            senderSessionTitle: 'Release checklist',
+          },
+        },
+      }),
+      message({
+        id: 'orca-report',
+        role: 'user',
+        content: JSON.stringify({ orcaSource: 'worker', content: 'Done' }),
+        agentMeta: { origin: { kind: 'orca', senderLabel: 'Reviewer', senderSessionId: 'worker-1' } },
+      }),
+      message({
+        id: 'teammate-sent',
+        role: 'user',
+        content: 'please sort feedback',
+        agentMeta: {
+          origin: {
+            kind: 'session',
+            senderSessionId: 'bot-task',
+            displayText: 'please sort feedback',
+            senderSessionTitle: 'Weekly feedback',
+            senderBotId: 'bot-1',
+            senderBotName: 'Cindy',
+          },
+        },
+      }),
+      message({
+        id: 'shared-guest',
+        role: 'user',
+        content: 'redacted by host',
+        agentMeta: { origin: { kind: 'session' } },
+      }),
+      message({
+        id: 'legacy-orca',
+        role: 'user',
+        content: 'legacy',
+        agentMeta: { origin: { kind: 'orca', senderLabel: 'Lead' } },
+      }),
+    ]);
+
+    expect(items.map((item) => [item.source.id, item.sessionOrigin, item.automationOrigin])).toEqual([
+      ['tool-sent', { senderSessionId: 'caller', senderSessionTitle: 'Release checklist' }, undefined],
+      ['orca-report', { senderSessionId: 'worker-1' }, undefined],
+      ['teammate-sent', { senderSessionId: 'bot-task', senderSessionTitle: 'Weekly feedback', senderBotName: 'Cindy' }, undefined],
+      ['shared-guest', {}, undefined],
+      ['legacy-orca', undefined, undefined],
+    ]);
+  });
+
+  // #9266 unit regression: imSource.im='imessage' used to lose its card/align.
+  // Extend the real normalize entry's existing long-body/attachment matrix.
+  it.each(['telegram', 'slack', 'x', 'feishu', 'lark', 'discord', 'wechat', 'wecom', 'dingtalk', 'imessage'])(
+    'renders local %s IM source as a Cindy card while keeping ordinary user actions and content',
+    (im) => {
+      const text = 'a'.repeat(20_100);
+      const url = 'https://example.invalid/image.png';
+      const [item] = normalizeRemoteMessages([message({
+        id: 'local-im',
+        role: 'user',
+        content: { text, images: [{ url, originalName: 'image.png' }] },
+        agentMeta: {
+          imSource: {
+            im, userText: text, contentFormat: 'user-text',
+            contextSnapshot: { groupContext: 'background', groupMessageCount: 1 },
+          },
+        },
+      })]);
+      // 正文保持完整落库内容(不按 hook 的 20k 上限截断),分叉 / 回退据此恢复草稿;
+      // kind 仍是 user,渲染层保留复制 / 分叉 / 回退 / 删除 / 分享等普通用户操作。
+      expect(item).toMatchObject({ body: text, kind: 'user', label: 'user', align: 'agent' });
+      expect(item.hookSource).toMatchObject({ im, userTextContent: true });
+      expect(item.attachments).toEqual(expect.arrayContaining([expect.objectContaining({ uri: url })]));
+      expect(isShareableMessage(item)).toBe(true);
+    },
+  );
+
+  it('prefers imSource over hookSource and fails closed on unknown IM providers', () => {
+    const [both, unknown] = normalizeRemoteMessages([
+      message({
+        id: 'both',
+        role: 'user',
+        content: 'clean text',
+        agentMeta: {
+          imSource: { im: 'imessage', userText: 'clean text', contentFormat: 'user-text' },
+          hookSource: { im: 'slack', userText: 'legacy' },
+        },
+      }),
+      message({
+        id: 'unknown-im',
+        role: 'user',
+        content: 'plain',
+        agentMeta: { imSource: { im: 'myspace', userText: 'spoofed', contentFormat: 'user-text' } },
+      }),
+    ]);
+    expect(both.hookSource).toMatchObject({ im: 'imessage', userTextContent: true });
+    expect(both.body).toBe('clean text');
+    expect(unknown.hookSource).toBeUndefined();
+    expect(unknown).toMatchObject({ body: 'plain', align: 'user' });
   });
 
   it('normalizes Telegram hook source into a left-aligned Cindy card payload', () => {
@@ -961,6 +1478,7 @@ describe('normalizeRemoteMessages', () => {
         im: 'telegram',
         channelName: 'Release topic',
         userText: 'Please ship the release',
+        userTextContent: false,
         threadContext: [
           { author: 'Chris', text: 'Use the staging checklist' },
           { author: 'Cindy', text: 'Ready', isBot: true },
@@ -1066,6 +1584,52 @@ describe('normalizeRemoteMessages', () => {
       align: 'agent',
     });
   });
+
+  // Unit / PR #6611: quota recovery before the first dispatch must keep the
+  // original bubble and add the same activity as an active-turn continuation.
+  it('keeps the original input alongside a quota-reset activity after reload', () => {
+    const info = { reason: 'usage-limit-reset', attempt: 1, maxAttempts: 3, sessionTotal: 0 };
+    const items = normalizeRemoteMessages([
+      message({ id: 'original', role: 'user', content: 'original task', agentMeta: { autoResumeInfo: info } }),
+    ]);
+    expect(items).toHaveLength(2);
+    expect(items[0]).toMatchObject({ key: 'original', body: 'original task', label: 'user' });
+    expect(items[1]).toMatchObject({ key: 'original:usage-limit-resume', kind: 'system',
+      body: '', systemCardType: 'auto-resume', systemCardData: info });
+  });
+});
+
+describe('context rebuild boundaries', () => {
+  it.each(['context-overflow', 'pi-prompt-timeout', 'codex-history-strip'])('restores %s as a visible standalone boundary', (reason) => {
+    const rows = [
+      message({ id: 'before', role: 'assistant', content: 'Before' }),
+      message({ id: 'rebuild', role: 'assistant', content: '', agentMeta: { contextRebuild: { reason, handoff: 'Private handoff' } } }),
+      message({ id: 'after', role: 'assistant', content: 'After' }),
+    ];
+    const items = buildMobileMessageRenderItems(rows);
+    const boundary = items.find((item) => item.type === 'message' && item.message.systemCardType === 'context-rebuild');
+    expect(boundary).toMatchObject({ type: 'message', message: {
+      kind: 'system', body: '', systemCardData: { reason, handoff: 'Private handoff' },
+    } });
+    // Intermediate assistant work can be folded; the following answer stays outside the marker.
+    expect(items.at(-1)).toMatchObject({ type: 'message', message: { body: 'After' } });
+  });
+
+  it('accepts projected cards and defaults incomplete persisted metadata', () => {
+    expect(normalizeRemoteMessages([
+      message({ id: 'projected', role: 'assistant', content: '', systemCardType: 'context-rebuild', systemCardData: { handoff: 'Summary' } }),
+      message({ id: 'legacy', role: 'assistant', content: '', agentMeta: { contextRebuild: { reason: 12, handoff: false } } }),
+    ])).toMatchObject([
+      { systemCardType: 'context-rebuild', systemCardData: { handoff: 'Summary' } },
+      { systemCardType: 'context-rebuild', systemCardData: { reason: 'context-overflow', handoff: '' } },
+    ]);
+  });
+
+  it.each([null, 'invalid', []])('keeps ordinary assistant text when metadata is invalid: %j', (contextRebuild) => {
+    const [item] = normalizeRemoteMessages([message({ id: 'ordinary', role: 'assistant', content: 'Keep this text', agentMeta: { contextRebuild } })]);
+    expect(item.body).toBe('Keep this text');
+    expect(item.systemCardType).toBeUndefined();
+  });
 });
 
 describe('normalizeRemoteMessages — /goal 持久记录与 plan_review 状态', () => {
@@ -1108,4 +1672,109 @@ describe('normalizeRemoteMessages — /goal 持久记录与 plan_review 状态',
     ]);
     expect(items[0].label).toBe('plan_review:cancelled');
   });
+});
+
+
+describe('companion timeline', () => {
+  it.each([false, true])('keeps task instructions out of live/history display (source order: %s)', (preserveSourceOrder) => {
+    const content = '已向后台任务发送消息：读取 /workspace/project/AGENTS.md 并核对执行授权。';
+    const task = { v: 1, role: 'interjection', delegationId: 'job', fromBotId: 'bot', fromBotName: 'Writer', toBotId: null, toBotName: 'Cindy', parentSessionId: 's1', childSessionId: 'child', objective: 'Write report' };
+    const legacy = message({ id: 'trace', role: 'assistant', content, agentMeta: { botCollaboration: task } });
+    const rows = normalizeRemoteMessages([
+      legacy,
+      message({ id: 'anchor', role: 'assistant', content, agentMeta: { botCollaboration: { ...task, role: 'delegation-request' } } }),
+      message({ id: 'user', role: 'user', content }),
+      message({ id: 'assistant', role: 'assistant', content }),
+      message({ id: 'invalid', role: 'assistant', content, agentMeta: { botCollaboration: { ...task, v: 2 } } }),
+    ], { preserveSourceOrder });
+    expect(rows.find(row => row.source.id === 'trace')).toMatchObject({ body: '', companion: { kind: 'task' } });
+    expect(rows.find(row => row.source.id === 'anchor')).toMatchObject({ body: '', companion: { kind: 'task' } });
+    for (const id of ['user', 'assistant', 'invalid']) expect(rows.find(row => row.source.id === id)?.body).toBe(content);
+    expect(legacy.content).toBe(content);
+  });
+
+  it('preserves empty task anchors and private thread links for the mobile renderer', () => {
+    const task = { v: 1, role: 'delegation-request', delegationId: 'job', fromBotId: 'bot', fromBotName: 'Writer', toBotId: null, toBotName: 'Cindy', parentSessionId: 's1', childSessionId: 'child', objective: 'Write report' };
+    const direct = { v: 1, threadId: 'private', viewerBotId: 'bot', peerBotId: 'peer', peerBotName: 'Dash', direction: 'sent', sequence: 1, preview: 'Discuss report' };
+    const rows = normalizeRemoteMessages([
+      message({ id: 'task', role: 'assistant', content: '', agentMeta: { botCollaboration: task } }),
+      message({ id: 'direct', role: 'assistant', content: '', agentMeta: { botDirectMessage: direct } }),
+      message({ id: 'invalid', role: 'assistant', content: 'Regular reply', agentMeta: { botDirectMessage: { ...direct, v: 2 } } }),
+    ]);
+    expect(rows[0]).toMatchObject({ kind: 'system', companion: { kind: 'task', meta: task }, source: { sessionId: 's1' } });
+    expect(rows[1]).toMatchObject({ kind: 'system', companion: { kind: 'direct', meta: direct } });
+    expect(rows[2]).toMatchObject({ kind: 'assistant', body: 'Regular reply' });
+    expect(rows[2].companion).toBeUndefined();
+  });
+});
+
+it('keeps one companion task after its initiating explanation and before its completion reply', () => {
+  const meta = { v: 1, role: 'delegation-request', delegationId: 'd', fromBotId: 'bot', fromBotName: 'Cindy', toBotId: null, toBotName: 'Cindy', parentSessionId: 's1', childSessionId: 'child', objective: 'Change' };
+  const input = [
+    message({ id: 'start', role: 'user', content: 'Change' }),
+    message({ id: 'task', role: 'assistant', content: '', agentMeta: { botCollaboration: meta } }),
+    message({ id: 'intro', role: 'assistant', content: 'Started' }),
+    message({ id: 'trigger', role: 'user', content: 'finished', agentMeta: { synthetic: true } }),
+    message({ id: 'done', role: 'assistant', content: 'Done' }),
+  ];
+  const items = buildMobileMessageRenderItems(input, { preserveSourceOrder: true, isSessionStreaming: true });
+  expect(items.flatMap((item) => item.type === 'message' ? [item.message.source.id] : [])).toEqual(['start', 'intro', 'task', 'trigger', 'done']);
+});
+
+it.each(['steer', 'new', 'completion'])('pairs companion introduction across steer only: %s', (kind) => {
+  const meta = { v: 1, role: 'delegation-request', delegationId: 'd', fromBotId: 'bot', fromBotName: 'Cindy', toBotId: null, toBotName: 'Cindy', parentSessionId: 's1', childSessionId: 'child', objective: 'Change' };
+  const rows = normalizeRemoteMessages([
+    message({ id: 'start', role: 'user', content: 'Change' }),
+    message({ id: 'task', role: 'assistant', content: '', agentMeta: { botCollaboration: meta } }),
+    message({ id: 'interruption', role: 'user', content: 'Also', agentMeta: kind === 'steer' ? { delivery: 'steer' } : kind === 'completion' ? { synthetic: true } : {} }),
+    message({ id: 'intro', role: 'assistant', content: 'Started' }),
+  ], { preserveSourceOrder: true });
+  const ids = rows.map((row) => row.source.id);
+  expect(ids.indexOf('task') > ids.indexOf('intro')).toBe(kind === 'steer');
+});
+
+// Bug: answering a Codex question added a bubble holding the reply markup sent to the model.
+// The question card already shows the answer, so its row stays out of the conversation;
+// a reply saved in the model format (older rows, supplements) reads as question and answer.
+it('keeps an answer shown on its question card out of the conversation', () => {
+  const modelCopy = '<send_user_message_question_reply>\n[{"questionItemId":"q1","question":"Install?","answer":"Yes"}]\n</send_user_message_question_reply>';
+  const rows = [
+    message({ id: 'answered', clientId: 'question-reply:answered:q1:digest', role: 'user', content: '> Install?\n\nYes' }),
+    message({ id: 'earlier', clientId: 'question-reply:q1:digest', role: 'user', content: modelCopy }),
+  ];
+  const normalized = normalizeRemoteMessages(JSON.parse(JSON.stringify(rows)));
+  expect(normalized[0]).toMatchObject({ isSyntheticTrigger: true, body: '' });
+  expect(normalized[1].body).toBe('> Install?\n\nYes');
+  expect(normalized[1].isSyntheticTrigger).toBeUndefined();
+});
+
+it('keeps durable coordination hidden on phone history without hiding user-facing inputs or results', () => {
+  const rows = [
+    message({ id: 'coordination', role: 'user', content: '[UI_ACTION_TRIGGER]File ownership agreement', agentMeta: { origin: { kind: 'session', senderSessionId: 'child' } } }),
+    message({ id: 'requested-status', role: 'user', content: 'Requested status', agentMeta: { origin: { kind: 'session', senderSessionId: 'child' } } }),
+    message({ id: 'result', role: 'assistant', content: 'Final result', agentMeta: { turnCompleted: true } }),
+  ];
+  const normalized = normalizeRemoteMessages(JSON.parse(JSON.stringify(rows)));
+  expect(normalized[0]).toMatchObject({ isSyntheticTrigger: true, body: '' });
+  const rendered = buildMobileMessageRenderItems(rows);
+  expect(JSON.stringify(rendered)).not.toContain('File ownership agreement');
+  expect(JSON.stringify(rendered)).toContain('Requested status');
+  expect(JSON.stringify(rendered)).toContain('Final result');
+});
+
+
+// Unit regression: historical machine inputs used to expose JSON escapes in bubbles/copy.
+// Same bytes from a human must remain untouched; source content still drives replay.
+it('projects forwarded machine history without rewriting human text or persisted bytes', () => {
+  const content = '[来源] 用户原话由宿主从已接收的输入原样保留。\n用户原话："只检查"\nagent补充："第一段\\n\\n保留 `\\\\n`"';
+  const rows = normalizeRemoteMessages([
+    message({ id: 'forwarded', role: 'user', content, agentMeta: { origin: { kind: 'session', senderSessionId: 'sender' } } }),
+    message({ id: 'human', role: 'user', content }),
+  ]);
+  expect(rows[0].body).toContain('第一段\n\n保留 `\\n`');
+  expect(rows[0].source.content).toBe(content);
+  expect(rows[0].draftBody).toBe(content);
+  expect(composerDocumentFromSerializedMessage(rows[0].draftBody!).nodes).toEqual([{ type: 'text', text: content }]);
+  expect(rows[1].body).toBe(content);
+  expect(rows[1].draftBody).toBeUndefined();
 });

@@ -1,7 +1,7 @@
 /**
  * 把「我的发布」列表按归属(ownership)分组,供 SkillHub Market mine tab 的
  * 分组视图(方案 C)使用。
- * - ownerType === 'org' → 团队组,key = owner.slug(authorId),label = 团队名(authorName)
+ * - ownerType === 'org' / 'organization' → 团队组,key = owner.slug(authorId),label = 团队名(authorName)
  * - 其它(personal / user / 缺省)→ 个人组
  * 只对实际有 item 的 owner 建组(空组天然不出现);个人组排在最前。
  */
@@ -22,7 +22,7 @@ export function groupMineByOwner<T extends {
   const personal: T[] = [];
   const teams = new Map<string, { name: string; skills: T[] }>();
   for (const it of items) {
-    if (it.ownerType === 'org') {
+    if (it.ownerType === 'org' || it.ownerType === 'organization') {
       const g = teams.get(it.authorId) ?? { name: it.authorName, skills: [] };
       g.skills.push(it);
       teams.set(it.authorId, g);

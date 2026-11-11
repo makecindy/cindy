@@ -53,8 +53,11 @@ vi.mock('@/lib/orcaSessionIdentity', () => ({
   resolveSessionRoute: resolveSessionRouteMock,
 }));
 
-vi.mock('@/lib/makerTransport', () => ({
-  getSessionFor: sessionGetMock,
+vi.mock('@/lib/sessionBatchRead', () => ({
+  readSessionBatchFor: (ids: string[]) => Promise.all(ids.map(async (sessionId) => {
+    try { return { sessionId, value: await sessionGetMock(sessionId) }; }
+    catch (error) { return { sessionId, errorCode: (error as { code?: string }).code }; }
+  })),
 }));
 
 vi.mock('../CCAgentSessionView', () => ({
@@ -119,6 +122,12 @@ vi.mock('../CCAgentSessionView', () => ({
         >
           Composer action
         </button>
+        <div
+          data-testid={`composer-drop-target-${sessionIdProp}`}
+          data-split-group-composer-drop-target=""
+        >
+          <span data-testid={`composer-drop-child-${sessionIdProp}`}>Composer drop</span>
+        </div>
       </div>
     );
   },
@@ -1351,6 +1360,29 @@ describe('SplitGroup', () => {
 
     expect(view.container.querySelectorAll('[data-split-direction="column"]')).toHaveLength(1);
     expect(view.container.querySelectorAll('[data-split-pane-key]')).toHaveLength(3);
+  });
+
+  it('任务拖到输入框时不被 pane capture 抢走', async () => {
+    act(() => {
+      splitGroupStore.addSession('session-b', 'session-a', 'right');
+    });
+    const view = renderSplitGroup('session-a');
+    const composerDropChild = screen.getByTestId('composer-drop-child-session-b');
+    const dataTransfer = {
+      types: ['application/x-cindy-session-id', 'application/x-cindy-session-link'],
+      dropEffect: 'none',
+      getData: (format: string) =>
+        format === 'application/x-cindy-session-id' ? 'session-c' : 'cindy://session/session-c',
+    };
+
+    await act(async () => {
+      fireEvent.dragOver(composerDropChild, { clientX: 300, clientY: 340, dataTransfer });
+      fireEvent.drop(composerDropChild, { clientX: 300, clientY: 340, dataTransfer });
+      await Promise.resolve();
+    });
+
+    expect(view.container.querySelectorAll('[data-split-pane-key]')).toHaveLength(2);
+    expect(sessionViewRenderMock).not.toHaveBeenCalledWith('session-c');
   });
 
   it('达到窗格上限时拒绝拖入且不切换路由', async () => {

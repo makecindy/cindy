@@ -10,128 +10,315 @@
 // 的 Metro(配合模拟器里的 __DEV__ build label)。
 //
 // 用法:
-//   pnpm mobile:sim:whoami                     # cn(默认)
-//   pnpm mobile:sim:whoami -- --region=global # global
-//   pnpm mobile:sim:whoami -- --port 8082      # 已手动连接到显式 Metro 端口
+//   pnpm mobile:sim:whoami                     # Global(默认)
+//   pnpm mobile:sim:whoami -- --region=cn      # 中国大陆版
+//   pnpm mobile:sim:whoami -- --json           # Skill 可消费的结构化状态
+//   pnpm mobile:sim:whoami -- --mock           # 核对的是 --mock 启动的模拟数据 Metro
+//
+// 模拟器默认用 Cindy 模拟器(Baguette 插件的独立设备目录)，不可用时才找系统模拟器；
+// CINDY_MOBILE_SIMULATOR=cindy|system|<设备目录绝对路径> 可固定其一。
 
-import { execFileSync, execSync } from 'node:child_process';
-import { dirname, resolve } from 'node:path';
-import { fileURLToPath } from 'node:url';
-import { extractMobileDevRegionArgs } from './lib/mobile-dev-region.mjs';
+import { execFileSync } from "node:child_process";
+import { dirname, resolve } from "node:path";
+import { fileURLToPath } from "node:url";
+import { inspectSimulatorViewer } from "./lib/simulator-viewer.mjs";
+import { inspectSimulatorNativeIdentity } from "./lib/sim-native-identity.mjs";
+import { resolveAndroidSdkTools, inspectAndroidSimulator, inspectAndroidInstalledApp,
+  readAndroidInstalledFingerprint } from "./lib/android-simulator.mjs";
+import { mobileClientBundleEnv } from "../../../scripts/shared/client-endpoint-build-env.mjs";
+import { applySimMockArg, readSimEnvironment } from "./lib/sim-environment.mjs";
+import { withLocalMobileRegionConfig, extractMobileDevRegionArgs } from "./lib/mobile-dev-region.mjs";
 import {
   ensureMobileLocalRegionConfig,
   formatMobileLocalConfigStatus,
-} from './lib/mobile-local-config.mjs';
+} from "./lib/mobile-local-config.mjs";
 import {
+  inspectSimMetroIdentity,
   extractSimMetroPortArgs,
+  extractSimWhoamiUdidArgs,
+  getSimulatorAppContainer,
+  inspectTargetNativeIdentity,
   resolveMobileSimulatorBundleId,
-} from './lib/sim-whoami.mjs';
-import {
-  cwdOfPid,
-  gitSourceIdentity,
-  gitSourceOfPid,
-  isInside,
-} from './sim-metro.mjs';
+  resolveSimulatorDeviceSets,
+  selectBootedSimulator,
+  simctlArgs,
+  simulatorBackendNotice,
+} from "./lib/sim-whoami.mjs";
+import { gitSourceIdentity } from "./sim-metro.mjs";
 
 const PORTS = [8081, 8082, 8083, 8084, 8085, 8086];
-const mobileDir = resolve(dirname(fileURLToPath(import.meta.url)), '..');
-const worktreeRoot = resolve(mobileDir, '../..');
+const mobileDir = resolve(dirname(fileURLToPath(import.meta.url)), "..");
+const worktreeRoot = resolve(mobileDir, "../..");
+const platform = process.platform === 'win32' ? 'android' : 'ios';
 
-/** 解析用户指定的 region 及其实际 Simulator bundle id。 */
-function resolveTarget() {
-  const { region, passthrough } = extractMobileDevRegionArgs(process.argv.slice(2));
-  const portArgs = extractSimMetroPortArgs(passthrough);
-  if (portArgs.passthrough.length > 0) {
-    throw new Error(`mobile:sim:whoami 不支持参数: ${portArgs.passthrough.join(' ')}`);
-  }
-  return { region, port: portArgs.port, bundleId: resolveMobileSimulatorBundleId(region) };
-}
+const cliArgs = applySimMockArg(process.argv.slice(2));
+const jsonOutput = cliArgs.includes("--json");
+const requireViewer = cliArgs.includes("--viewer");
+const startedAt = Date.now();
+const checks = [];
+const probeErrors = [];
 
-let target;
-try {
-  const localConfigResult = ensureMobileLocalRegionConfig({ mobileDir });
-  const localConfigStatus = formatMobileLocalConfigStatus(localConfigResult, worktreeRoot);
-  if (localConfigStatus) console.log(localConfigStatus);
-  target = resolveTarget();
-} catch (error) {
-  console.error(`✗ ${error instanceof Error ? error.message : String(error)}`);
-  process.exit(1);
-}
-const { region, port: expectedPort, bundleId } = target;
-const ports = [...new Set([...PORTS, expectedPort])].sort((a, b) => a - b);
-const expectedSource = gitSourceIdentity(worktreeRoot);
-let healthy = true;
-
-function sh(cmd) {
+// Progress goes to stderr even in --json mode; stdout keeps one result object.
+function timedCheck(stage, run) {
+  const start = Date.now();
+  console.error(`[whoami] ${stage}…`);
   try {
-    return execSync(cmd, { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] }).trim();
-  } catch {
-    return '';
+    const result = run();
+    const elapsedMs = Date.now() - start;
+    checks.push({ stage, elapsedMs });
+    console.error(`[whoami] ${stage}: ${elapsedMs}ms`);
+    return result;
+  } catch (error) {
+    checks.push({ stage, elapsedMs: Date.now() - start });
+    const failure = { healthy: false, pageVerified: false, stage,
+      code: error.code ?? 'CHECK_FAILED', checks, elapsedMs: Date.now() - startedAt,
+      error: `${stage} 检查失败：${error.message ?? 'unknown error'}；检查该阶段的工具/当前 worktree 依赖后重试，不要将检查失败当作未安装 App。` };
+    if (jsonOutput) console.log(JSON.stringify(failure));
+    else console.error(`✗ ${failure.code}: ${failure.error}`);
+    process.exit(1);
   }
 }
+
+function resolveTarget() {
+  const { region, passthrough } = extractMobileDevRegionArgs(
+    cliArgs.filter((arg) => arg !== "--json" && arg !== "--viewer"),
+  );
+  const udidArgs = extractSimWhoamiUdidArgs(passthrough, platform);
+  const portArgs = extractSimMetroPortArgs(udidArgs.passthrough);
+  if (portArgs.passthrough.length > 0) {
+    throw new Error(
+      `mobile:sim:whoami 不支持参数: ${portArgs.passthrough.join(" ")}`,
+    );
+  }
+  return {
+    region,
+    port: portArgs.port,
+    simulatorUdid: udidArgs.simulatorUdid,
+    bundleId: resolveMobileSimulatorBundleId(region, { platform }),
+    deviceSets: platform === 'ios' ? resolveSimulatorDeviceSets() : [],
+  };
+}
+
+const target = timedCheck('configuration', () => {
+  const localConfigResult = ensureMobileLocalRegionConfig({ mobileDir });
+  if (!jsonOutput) {
+    const localConfigStatus = formatMobileLocalConfigStatus(
+      localConfigResult,
+      worktreeRoot,
+    );
+    if (localConfigStatus) console.log(localConfigStatus);
+  }
+  return resolveTarget();
+});
+const { region, port: expectedPort, simulatorUdid, bundleId, deviceSets } = target;
+const { envFingerprint, uiMock } = timedCheck('environment', () => readSimEnvironment(mobileDir,
+  withLocalMobileRegionConfig(mobileClientBundleEnv({ authRegion: region }))));
+const ports = [...new Set([...PORTS, expectedPort])].sort((a, b) => a - b);
+const expectedSource = timedCheck('source-identity', () => gitSourceIdentity(worktreeRoot));
+let healthy = true;
 
 function shFile(command, args) {
   try {
     return execFileSync(command, args, {
-      encoding: 'utf8',
-      stdio: ['ignore', 'pipe', 'ignore'],
+      encoding: "utf8",
+      stdio: ["ignore", "pipe", "ignore"],
+      timeout: 15_000,
+      killSignal: "SIGKILL",
     }).trim();
-  } catch {
-    return '';
+  } catch (error) {
+    if (error.code === 'ETIMEDOUT') {
+      probeErrors.push({ command, code: 'PROBE_TIMEOUT', timeoutMs: 15_000 });
+      console.error(`[whoami] ${command}: PROBE_TIMEOUT (15s)`);
+    }
+    return "";
   }
 }
 
-console.log(`==> Mobile dev region: ${region}`);
-console.log('==== booted 模拟器 ====');
-const booted = sh('xcrun simctl list devices booted').split('\n').filter((l) => /\(Booted\)/.test(l));
+if (!jsonOutput) {
+  console.log(`==> Mobile dev region: ${region}`);
+}
+const androidTools = platform === 'android' ? timedCheck('android-sdk', () => resolveAndroidSdkTools()) : null;
+const selected = timedCheck('simulator', () => androidTools
+  ? inspectAndroidSimulator({ adb: androidTools.adb, serial: simulatorUdid })
+  : selectBootedSimulator(
+  deviceSets,
+  // A failed listing must stay a failure: "" would read as "nothing booted" and pick a backend.
+  (set) => execFileSync("xcrun", simctlArgs(set, ["list", "devices", "booted"]), {
+    encoding: "utf8", stdio: ["ignore", "pipe", "pipe"], timeout: 15_000, killSignal: "SIGKILL",
+  }).trim(),
+  simulatorUdid,
+));
+const { deviceSet, booted, targetBooted } = selected;
+if (!jsonOutput) console.log(`==== booted 模拟器(${deviceSet.name})====`);
 if (booted.length === 0) {
-  console.log('  (没有 booted 模拟器)');
+  if (!jsonOutput) console.log("  (没有 booted 模拟器)");
+  healthy = false;
+} else if (!jsonOutput) booted.forEach((l) => console.log("  " + l.trim()));
+if (targetBooted.length !== 1) {
+  if (!jsonOutput) console.log(`  (需要唯一的已启动目标模拟器；多设备时传 --udid)`);
   healthy = false;
 }
-else booted.forEach((l) => console.log('  ' + l.trim()));
+const backendNotice = androidTools ? null : simulatorBackendNotice({
+  deviceSet, booted, simulatorUdid,
+  listDevices: (set) => shFile("xcrun", simctlArgs(set, ["list", "devices"])),
+});
+if (backendNotice && !jsonOutput) {
+  console.log(`  ⚠️ ${backendNotice.message}`);
+  backendNotice.reusable?.forEach((line) => console.log(`    ${line}`));
+}
 
-console.log(`\n==== 模拟器里装的 ${bundleId}(native 安装包版本)====`);
-const container = shFile('xcrun', ['simctl', 'get_app_container', 'booted', bundleId, 'app']);
+if (!jsonOutput) console.log(`\n==== 模拟器里装的 ${bundleId}(native 安装包版本)====`);
+const androidApp = androidTools ? timedCheck('installed-app', () => targetBooted.length === 1
+  ? inspectAndroidInstalledApp({ adb: androidTools.adb, serial: selected.serial, packageName: bundleId }) : null) : null;
+const container = androidTools ? androidApp?.apk : timedCheck('installed-app', () => targetBooted.length === 1 ? getSimulatorAppContainer(shFile, simulatorUdid, bundleId, deviceSet) : "");
+let installed = androidApp;
 if (!container) {
-  console.log('  (未安装 / 无 booted 设备)');
+  if (!jsonOutput) {
+    console.log(
+      simulatorUdid
+        ? `  (目标模拟器 ${simulatorUdid} 未安装 / 未启动)`
+        : targetBooted.length === 1 ? "  (未安装)" : "  (没有唯一的目标模拟器，未检查)",
+    );
+  }
   healthy = false;
-} else {
+} else if (!androidTools) {
   const plist = `${container}/Info.plist`;
-  const pb = (key) => shFile('/usr/libexec/PlistBuddy', ['-c', `Print :${key}`, plist]);
-  console.log('  version    :', pb('CFBundleShortVersionString'));
-  console.log('  buildNumber:', pb('CFBundleVersion'));
-  console.log('  ⚠️ 版本号只证明装的是哪个 dev client,证明不了 JS bundle 是不是当前分支最新。');
+  const pb = (key) =>
+    shFile("/usr/libexec/PlistBuddy", ["-c", `Print :${key}`, plist]);
+  installed = {
+    version: pb("CFBundleShortVersionString"),
+    buildNumber: pb("CFBundleVersion"),
+  };
+  if (!jsonOutput) {
+    console.log("  version    :", installed.version);
+    console.log("  buildNumber:", installed.buildNumber);
+    console.log(
+      "  ⚠️ 版本号只证明装的是哪个 dev client,证明不了 JS bundle 是不是当前分支最新。",
+    );
+  }
+}
+if (androidApp && !androidApp.debuggable) {
+  healthy = false;
+  if (!jsonOutput) console.error('Android 已安装包不是可连接 Metro 的 debug 开发包。');
 }
 
-console.log('\n==== Metro 端口归属(哪个端口 = 哪个 worktree)====');
-let anyMetro = false;
-let currentSourceOnExpectedPort = false;
-for (const port of ports) {
-  const pids = sh(`lsof -nP -iTCP:${port} -sTCP:LISTEN -t`).split('\n').filter(Boolean);
-  for (const pid of pids) {
-    const cwd = cwdOfPid(pid);
-    // Metro 由 sim:start 以 cwd=<worktree>/apps/mobile 启动,故进程 cwd 即 worktree 位置。
-    const wt = cwd ? cwd.replace(/\/apps\/mobile$/, '') : '(无法读取进程 cwd)';
-    const isMetro = /expo|metro/i.test(sh(`ps -p ${pid} -o command=`));
-    const runningSource = isMetro ? gitSourceOfPid(pid) : null;
-    if (isMetro) anyMetro = true;
-    console.log(`  :${port}  pid ${pid}  →  ${wt}${runningSource ? `  source=${runningSource}` : isMetro ? '  source=(未注入)' : '  (非 Metro?)'}`);
-    if (port === expectedPort && isMetro) {
-      currentSourceOnExpectedPort = Boolean(
-        cwd && isInside(worktreeRoot, cwd) && runningSource === expectedSource,
-      );
-      if (!currentSourceOnExpectedPort) healthy = false;
+const native = timedCheck('native-fingerprint', () => inspectTargetNativeIdentity({
+  targetBooted,
+  probeFailed: probeErrors.length > 0,
+  inspect: () => inspectSimulatorNativeIdentity({
+    appPath: container, projectDir: mobileDir,
+    platform,
+    ...(androidTools ? { readInstalledFingerprint: () => readAndroidInstalledFingerprint({
+      adb: androidTools.adb, serial: selected.serial, apk: container,
+    }) } : {}),
+    env: { ...process.env, ...withLocalMobileRegionConfig(mobileClientBundleEnv({ authRegion: region })) },
+  }),
+}));
+if (!native.healthy) healthy = false;
+if (!jsonOutput) {
+  console.log(`  native: ${native.code}`);
+  if (!native.healthy) {
+    if (native.reason === 'target-not-unique') {
+      console.log('  未检查原生身份：先确定唯一的已启动目标模拟器，这不代表 App 未安装。');
+    } else if (probeErrors.length > 0 || [
+      'installed-fingerprint-timeout', 'installed-fingerprint-unreadable',
+      'native-fingerprint-timeout', 'native-fingerprint-unavailable',
+    ].includes(native.reason)) {
+      const next = androidTools ? '先检查 adb 连接与指纹读取/计算后重试' : '先修复探测/指纹读取或计算后重试';
+      console.log(`  原生身份检查未完成（${native.reason}）；${next}，再决定是否需要 rebuild。`);
+    } else {
+      const mock = uiMock ? ' --mock' : '';
+      if (androidTools) {
+        console.log(`  请运行 pnpm mobile:sim:rebuild -- --region=${region}${mock} --build-only，将生成的 debug APK 安装到目标模拟器后重新检查。`);
+      } else {
+        console.log(`  请运行 pnpm mobile:sim:rebuild -- --region=${region}${simulatorUdid ? ` --udid ${simulatorUdid}` : ''}${mock}，先查询匹配缓存，再检查原生兼容性。`);
+      }
     }
   }
 }
-if (!anyMetro) console.log(`  (检查的端口上没发现 Metro;用 \`pnpm mobile:sim:start -- --port ${expectedPort}\` 启一个)`);
-if (!currentSourceOnExpectedPort) healthy = false;
 
-console.log(`\n当前 worktree 源码指纹:${expectedSource}`);
-console.log(`build label 必须显示这个指纹,且 host:port 必须是当前 worktree 的 ${expectedPort}。`);
-if (healthy) {
-  console.log(`✓ PASS:booted dev client、${expectedPort} Metro 归属和源码指纹一致。`);
-} else {
-  console.error('✗ FAIL:当前模拟器验证链不完整或源码不一致;不要声称“已经启动当前版本”。');
-  process.exitCode = 1;
+if (!jsonOutput) console.log("\n==== Metro 端口归属(哪个端口 = 哪个 worktree)====");
+const metro = inspectSimMetroIdentity({
+  ports, expectedPort, worktreeRoot, expectedSource, region, envFingerprint,
+}, { timedCheck });
+const { anyMetro, currentSourceOnExpectedPort, metros } = metro;
+probeErrors.push(...metro.probeErrors);
+for (const error of metro.probeErrors) {
+  console.error(error.stage === "metro-listeners"
+    ? `[whoami] ${error.code}；端口归属尚未确认，不能当作没有 Metro。`
+    : `[whoami] :${error.port} ${error.stage}: ${error.code}；进程身份检查未完成，请先排查该查询。`);
 }
+if (!jsonOutput) for (const entry of metros)
+  console.log(`  :${entry.port} pid ${entry.pid} → ${entry.worktree || '(unknown)'}: ${entry.identity.code}`);
+if (metro.canSuggestStart && !jsonOutput)
+  console.log(
+    `  (检查的端口上没发现 Metro;用 \`pnpm mobile:sim:start -- --port ${expectedPort}\` 启一个)`,
+  );
+if (!metro.healthy) healthy = false;
+
+// Devices outside the system set are not shown by Device Hub; Cindy's appear in its sidebar.
+const viewerStartedAt = Date.now();
+console.error('[whoami] viewer…');
+const viewer = androidTools
+  ? { available: false, running: false, status: 'android-viewer-unchecked', windowVerified: false,
+      error: 'Android 设备连接已单独检查；窗口与页面需通过真实截图验证，--viewer 暂不支持 Android。' }
+  : deviceSet.path
+  ? { available: false, running: false, status: `${deviceSet.name}-managed`, windowVerified: false,
+      error: "该设备不在系统模拟器中，没有外部窗口；Cindy 模拟器请在 Cindy 侧边栏查看" }
+  : await inspectSimulatorViewer();
+checks.push({ stage: 'viewer', elapsedMs: Date.now() - viewerStartedAt });
+console.error(`[whoami] viewer: ${Date.now() - viewerStartedAt}ms`);
+if (requireViewer && !viewer.running) healthy = false;
+if (probeErrors.length > 0) healthy = false;
+if (!jsonOutput) {
+  console.log(`\nSimulator viewer: ${viewer.status} (${viewer.appPath ?? viewer.error ?? 'not available'})`);
+  console.log('Viewer process status does not verify a visible device window.');
+}
+
+if (!jsonOutput) {
+  console.log(`\n当前 worktree 源码指纹:${expectedSource}`);
+  console.log(
+    `build label 必须显示这个指纹,且 host:port 必须是当前 worktree 的 ${expectedPort}。`,
+  );
+  if (healthy) {
+    console.log(
+      `✓ PASS:原生指纹匹配、${expectedPort} Metro 身份一致；尚未验证 App 加载 bundle 或显示页面。`,
+    );
+  } else {
+    console.error(
+      "✗ FAIL:当前模拟器验证链不完整或源码不一致;不要声称“已经启动当前版本”。",
+    );
+  }
+} else {
+  console.log(
+    JSON.stringify({
+      healthy,
+      checks,
+      probeErrors,
+      elapsedMs: Date.now() - startedAt,
+      pageVerified: false,
+      viewerRequired: requireViewer,
+      viewer,
+      region,
+      uiMock,
+      bundleId,
+      worktree: worktreeRoot,
+      source: expectedSource,
+      expectedSource,
+      expectedPort,
+      currentSourceOnExpectedPort,
+      anyMetro,
+      simulator: deviceSet.name,
+      ...(androidTools ? { avd: selected.avd, targetDeviceSerial: selected.serial } : {}),
+      simulatorNotice: backendNotice,
+      booted: booted.map((line) => line.trim()),
+      installed,
+      native,
+      metros,
+      targetSimulatorUdid: simulatorUdid,
+      targetBooted: simulatorUdid ? targetBooted.length === 1 : null,
+    }),
+  );
+}
+
+if (!healthy) process.exitCode = 1;

@@ -1,3 +1,6 @@
+import { readFileSync } from 'node:fs';
+import { resolve } from 'node:path';
+
 import { describe, expect, it } from 'vitest';
 
 import { defaultDark } from '../builtin/default-dark';
@@ -15,7 +18,16 @@ import { exportThemeColors } from '../theme-service';
  * 全部已注册;新增裸引用时要么注册对应 token、要么给消费点补 fallback,
  * 不允许再制造新的幽灵。清单随修复增补,删条目 = 该幽灵已注册。
  */
-const FORMER_GHOST_TOKENS = ['panel-bg', 'board'] as const;
+const FORMER_GHOST_TOKENS = [
+  'panel-bg',
+  'board',
+  // 伙伴(Bot)界面的状态语义四件套。补注册前它们被 Bot 各面裸引用却读不到值,
+  // 错误文字继承成正文色、成功勾和状态点直接没颜色。
+  'text-danger',
+  'danger-bg-soft',
+  'status-info',
+  'status-success',
+] as const;
 const PROCESS_ICON_TOKENS = [
   'process-agent-task-icon',
   'process-agent-service-icon',
@@ -37,6 +49,20 @@ describe('主题注册表 · 历史幽灵 token 补注册(D1 地基修复)', () 
   it('panel-bg alias 到 --surface(与 ghostPanelTheme 沙箱 body fallback 兜底同源)', () => {
     expect(colorRegistry.resolveDefault('panel-bg', 'light')).toBe('var(--surface)');
     expect(colorRegistry.resolveDefault('panel-bg', 'dark')).toBe('var(--surface)');
+  });
+
+  it('Bot 状态语义 alias 落在既有语义槽上(非默认主题 override 能自动流下来)', () => {
+    for (const base of ['light', 'dark'] as const) {
+      expect(colorRegistry.resolveDefault('text-danger', base)).toBe('var(--error-fg)');
+      expect(colorRegistry.resolveDefault('danger-bg-soft', base)).toBe('var(--error-bg)');
+      expect(colorRegistry.resolveDefault('status-info', base)).toBe('var(--info-700)');
+    }
+  });
+
+  it('status-success 双模式取不同值 — Light 压深到正文可读档,不照搬状态点绿', () => {
+    // 它同时被当正文色用,Light 直接用状态点 #2AAE5B 只有 2.56:1。
+    expect(colorRegistry.resolveDefault('status-success', 'light')).toBe('#177C3C');
+    expect(colorRegistry.resolveDefault('status-success', 'dark')).toBe('#2AAE5B');
   });
 
   it('board alias 到 --border-default', () => {
@@ -82,4 +108,23 @@ describe('主题注册表 · Ask/Plan badge 文字语义', () => {
       expect(colorRegistry.resolveDefault(id, 'dark')).toBe('var(--text-primary)');
     },
   );
+});
+
+/** B 版已移除；已发布的 Token 仍是用户主题兼容合同，不能随组件删除或改值。 */
+describe('主题注册表 · 引擎徽标标识色', () => {
+  const ENGINE_BADGE_TOKENS = {
+    'engine-badge-cc': '#d97757',
+    'engine-badge-codex': '#7a9dff',
+    'engine-badge-pi': '#a78bfa',
+  } as const;
+
+  it.each(Object.entries(ENGINE_BADGE_TOKENS))(
+    '"%s" 注册为 light / dark 同值的跨主题固定功能色',
+    (id, hex) => {
+      expect(colorRegistry.resolveDefault(id, 'light')).toBe(hex);
+      expect(colorRegistry.resolveDefault(id, 'dark')).toBe(hex);
+    },
+  );
+
+
 });

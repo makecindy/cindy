@@ -19,14 +19,14 @@
  * (见 auth-adapters.ts getAuthEnv 的 API 模式分支)。
  */
 
-import { claudeUpstreamEndpoint } from './runtime-configs.js';
+
 
 /** 内部 provider id(codex config 里的 key)。仅 codex 子进程配置的本地标签,不外发。 */
 export const CODEX_GATEWAY_PROVIDER_ID = 'cindy_gateway';
 
 /**
- * OpenAI 身份 provider id(仅 oauth-bearer spawn 定义)。base_url 同样指向本地
- * loopback proxy,但 `name` 必须逐字等于 "OpenAI" —— codex 的
+ * OpenAI 身份 provider id(全部 spawn 都声明,仅 oauth-bearer 会选中)。base_url 同样
+ * 指向本地 loopback proxy,但 `name` 必须逐字等于 "OpenAI" —— codex 的
  * `ModelProviderInfo::supports_remote_compaction()` 按 name 判定,命中后订阅会话
  * 才走 OpenAI 远端压缩(remote compaction v2,经普通 /responses 由服务端压缩),
  * 否则只有低保真的本地 summarization fallback。
@@ -34,8 +34,20 @@ export const CODEX_GATEWAY_PROVIDER_ID = 'cindy_gateway';
  * 只允许「ChatGPT 订阅直连路由」的 thread 用它(thread/start|resume 的
  * modelProvider 覆盖):网关 / xAI / 自定义供应商的上游不实现远端压缩语义,
  * 远端压缩失败在 codex 侧是硬失败(无本地回退),错配会打断长会话。
+ * 非 oauth spawn 里它只是一个不被选中的占位(见 buildCodexProxySpawnArgs 的
+ * else 分支,#8670):老 thread 元数据引用它时让原生校验通过,交给
+ * modelProviderMismatch 分叉(#8171)保留历史。
  */
 export const CODEX_OPENAI_COMPACT_PROVIDER_ID = 'cindy_openai';
+
+/**
+ * Cindy Provider codex/* 的内部 transport identity。产品 Provider 和上游不变；
+ * name="OpenAI" 只用于让 Codex 启用远程压缩，HTTP 与订阅 WS identity 分开冻结。
+ */
+export const CODEX_CINDY_COMPACT_PROVIDER_ID = 'cindy_codex';
+
+/** Sticky per-thread native summary fallback; model and credential routing are unchanged. */
+export const CODEX_SUMMARY_COMPACT_PROVIDER_ID = 'cindy_summary';
 
 /**
  * 注入 codex 子进程的环境变量名 —— codex 通过 config 的 `env_key` 来这里读 API key。
@@ -55,7 +67,7 @@ export type CodexProxySpawnAuthMode = 'oauth-bearer' | 'env-key' | 'provider-oau
  */
 export const CODEX_OAUTH_UPSTREAM = 'https://chatgpt.com/backend-api/codex';
 
-export function buildCodexGatewayBaseUrl(upstream = claudeUpstreamEndpoint()): string {
+export function buildCodexGatewayBaseUrl(upstream: string): string {
   return `${upstream.replace(/\/+$/, '')}/v1`;
 }
 
@@ -71,15 +83,22 @@ export function buildCodexGatewayBaseUrl(upstream = claudeUpstreamEndpoint()): s
  *     proxy 直转 gateway(不破坏现有纯 key 用户)。
  *   - provider-oauth (如 xAI): env_key=XDT_CODEX_API_KEY → codex 带占位 key,
  *     proxy 按会话用供应商 OAuth token 覆盖 Authorization。
- * cindy_gateway 显式冻成 false；仅 oauth-bearer 额外定义的 cindy_openai 打开 WS。
- * 后者的 upgrade 由 loopback proxy 按 thread 转发，任何建连不兼容都会用 426 回到旧 HTTP。
+ * cindy_gateway 显式冻成 false；oauth-bearer 定义的 cindy_openai 始终打开 WS,
+ * 非 oauth spawn 的 cindy_openai 占位(#8670)不发 upgrade。
+ * 独立子代理 Provider 路由由 loopback proxy 根据 upgrade 携带的 thread / subagent 血缘
+ * 单独回 426，使对应子 thread 降到 HTTP；父 thread 继续保留原生 WS。
  */
-export function buildCodexProxySpawnArgs(baseUrl: string, authMode: CodexProxySpawnAuthMode): string[] {
+export function buildCodexProxySpawnArgs(
+  baseUrl: string,
+  authMode: CodexProxySpawnAuthMode,
+): string[] {
   const p = CODEX_GATEWAY_PROVIDER_ID;
   const authArg = authMode === 'oauth-bearer'
     ? `model_providers.${p}.requires_openai_auth=true`
     : `model_providers.${p}.env_key="${CODEX_GATEWAY_ENV_KEY}"`;
   const args = [
+    // 统一使用 CodeModeOnly，解决 Codex namespace tools 发现不及时的问题。
+    '-c', 'features.code_mode_only=true',
     '-c', `model_provider="${p}"`,
     '-c', `model_providers.${p}.name="Cindy Gateway"`,
     '-c', `model_providers.${p}.base_url="${baseUrl}"`,
@@ -91,11 +110,31 @@ export function buildCodexProxySpawnArgs(baseUrl: string, authMode: CodexProxySp
     // 只有不依赖请求体改写的订阅直连 provider(下面的 cindy_openai)才放开 WS。
     '-c', `model_providers.${p}.supports_websockets=false`,
   ];
+  // Same HTTP endpoint and authentication as the normal proxy identity. Its
+  // distinct id is persisted by native Codex so a reopened task stays on summaries.
+  const summary = CODEX_SUMMARY_COMPACT_PROVIDER_ID;
+  args.push(
+    '-c', `model_providers.${summary}.name="Cindy Summary"`,
+    '-c', `model_providers.${summary}.base_url="${baseUrl}"`,
+    '-c', `model_providers.${summary}.wire_api="responses"`,
+    '-c', authArg.replace(`model_providers.${p}.`, `model_providers.${summary}.`),
+    '-c', `model_providers.${summary}.supports_websockets=false`,
+  );
+  const c = CODEX_CINDY_COMPACT_PROVIDER_ID;
+  const cindyCompactAuthArg = authMode === 'oauth-bearer'
+    ? `model_providers.${c}.requires_openai_auth=true`
+    : `model_providers.${c}.env_key="${CODEX_GATEWAY_ENV_KEY}"`;
+  args.push(
+    '-c', `model_providers.${c}.name="OpenAI"`,
+    '-c', `model_providers.${c}.base_url="${baseUrl}"`,
+    '-c', `model_providers.${c}.wire_api="responses"`,
+    '-c', cindyCompactAuthArg,
+    '-c', `model_providers.${c}.supports_websockets=false`,
+  );
   if (authMode === 'oauth-bearer') {
     // OpenAI 身份 provider(见 CODEX_OPENAI_COMPACT_PROVIDER_ID):默认 model_provider
     // 仍是 cindy_gateway(本地压缩,安全缺省),订阅直连 thread 由 maker-core 在
-    // thread/start|resume 用 modelProvider 显式选它。仅 oauth spawn 定义 —— env-key
-    // 进程没有 OAuth token,误选时宁可 thread/start 报 unknown provider 也不能静默降级。
+    // thread/start|resume 用 modelProvider 显式选它。
     const o = CODEX_OPENAI_COMPACT_PROVIDER_ID;
     args.push(
       '-c', `model_providers.${o}.name="OpenAI"`,
@@ -123,12 +162,38 @@ export function buildCodexProxySpawnArgs(baseUrl: string, authMode: CodexProxySp
       //  - prompt 改走原生 developerInstructions:Codex 0.145 自动 compact 会把当前
       //    session 的 canonical developer context 重新注入 replacement history(中途
       //    compact)或下一次正常采样(pre-turn compact),无需 proxy 逐请求重复注入。
+      // Codex 的 WS 会话按 thread 建立；upgrade 带 thread id，collab_spawn 还会带
+      // subagent 身份与 parent thread id。loopback proxy 因此可以只对命中独立
+      // Subagent Provider 路由的子 thread 回 426，让该会话降到 HTTP transform，
+      // 无需牺牲父 thread 的原生 WS。
       '-c', `model_providers.${o}.supports_websockets=true`,
       // is_openai + codex-backend OAuth 命中时 codex 默认对 /responses 请求体做 zstd
       // 压缩(enable_request_compression 默认开);loopback proxy 要整段 JSON.parse
       // 改写请求体,无法解 zstd,必须显式关掉(仅少传输优化,无功能损失)。
-      '-c', 'features.enable_request_compression=false',
+    );
+  } else {
+    // #8670: 订阅期创建的老 thread 元数据保存的 modelProvider 就是 cindy_openai;
+    // 供应商切走后重建的 app-server 若完全不声明它,原生 Codex 在 thread/resume 的
+    // 配置校验阶段直接拒绝(裸 -32600 "no longer configured",无结构化 data),
+    // maker-core 的 modelProviderMismatch 历史分叉(#8171)永远等不到触发。
+    // 占位让校验通过、拿到结构化 mismatch,由既有分叉保留历史开出新 thread。
+    //
+    // 占位不会被选中:非 oauth 路线的默认/远端压缩选择只落在 cindy_gateway /
+    // cindy_codex(maker-core threadModelProvider),误选仍是显式报错而非静默降级;
+    // env_key 指向网关变量(env-key 带真 key,provider-oauth 由 auth-adapters 落
+    // 占位 key),代理按会话覆盖 Authorization,不会把订阅身份带给其他上游。
+    // supports_websockets=false:订阅 WS 语义只属于 oauth spawn,这里连 upgrade 都
+    // 不发起,proxy 侧 null→426 的兜底(见 codex-proxy-host)保持不变。
+    const o = CODEX_OPENAI_COMPACT_PROVIDER_ID;
+    args.push(
+      '-c', `model_providers.${o}.name="OpenAI"`,
+      '-c', `model_providers.${o}.base_url="${baseUrl}"`,
+      '-c', `model_providers.${o}.wire_api="responses"`,
+      '-c', `model_providers.${o}.env_key="${CODEX_GATEWAY_ENV_KEY}"`,
+      '-c', `model_providers.${o}.supports_websockets=false`,
     );
   }
+  // OpenAI identity 可能启用 zstd；loopback proxy 需要解析 JSON 做路由和 prompt 注入。
+  args.push('-c', 'features.enable_request_compression=false');
   return args;
 }

@@ -1,3 +1,4 @@
+import type { DeferredHistoryWork } from '@cindy/maker-shared/message-window';
 import {
   buildMessageRenderItems,
   extractTodosFromSourceMessage,
@@ -14,7 +15,7 @@ import {
   type MessageRenderWorkChildItem,
   type MessageRenderWorkGroupItem,
 } from '@cindy/maker-shared/message-render';
-import type { AgentTaskUpdate } from '@cindy/maker-shared/agent-task';
+import type { AgentTaskStatus, AgentTaskUpdate } from '@cindy/maker-shared/agent-task';
 import type { MobilePendingSendItem } from '@/session/pendingSendItems';
 import { normalizeRemoteMessages, type NormalizedRemoteMessage } from '@/session/messageNormalize';
 import type { RemoteMessage } from '@/session/types';
@@ -42,15 +43,16 @@ export type MobileWorkGroupItem = MessageRenderWorkGroupItem<NormalizedRemoteMes
  */
 export interface MobileSubagentGroupItem {
   type: 'subagent_group';
+  sourceClientId?: string;
+  deferred?: DeferredHistoryWork;
   key: string;
   header: { description: string | null; subagentType: string | null };
   /** 子 agent 内层 render items(递归,可含更深 subagent_group)。 */
   childItems: MobileMessageRenderItem[];
   /** 子 agent 终稿(Agent 的 tool_result,经 tool_use_id 配对);无则 null。 */
   summary: string | null;
-  // 不含 'failed':DB 无可靠失败信号(无 is_error 列、tool_result content 是纯总结字符串),
-  // 绝不用正文关键词假阳性判失败(见 subagentGrouping.computeStatus)。
-  status: 'running' | 'completed';
+  // 终态来自 host 持久化的结构化 Agent/Task 生命周期，绝不解析总结正文。
+  status: AgentTaskStatus;
   durationMs?: number;
 }
 
@@ -77,10 +79,16 @@ export type MobileMessageRenderItem =
 
 export function buildMobileMessageRenderItems(
   messages: readonly RemoteMessage[],
-  options: MessageRenderOptions & { autoResumePending?: Record<string, unknown> | null; sessionId?: string } = {},
+  options: MessageRenderOptions & {
+    autoResumePending?: Record<string, unknown> | null;
+    sessionId?: string;
+    preserveSourceOrder?: boolean;
+    sessionSource?: string | null;
+    pendingQuestionIds?: ReadonlySet<string>;
+  } = {},
   taskUpdates?: ReadonlyMap<string, AgentTaskUpdate>,
 ): MobileMessageRenderItem[] {
-  const normalized = normalizeRemoteMessages(messages);
+  const normalized = normalizeRemoteMessages(messages, options);
   scopeUnsettledToolsToActiveTail(normalized);
   markTurnFinalAssistants(normalized, options.isSessionStreaming === true);
   if (options.autoResumePending) {

@@ -62,6 +62,30 @@
 import { useEffect, useMemo, useRef, type AriaRole, type ReactNode } from 'react';
 import Sortable, { type SortableEvent } from 'sortablejs';
 
+/**
+ * 外部接管:别的手势控制器(页签拖到别的组 / 聊天区边缘)在拖动中途要接走指针时,
+ * 让当前的 Sortable 拖动按"被动取消"收尾(复位 DOM、不提交重排)。
+ * 与窗口失焦兜底同一条清理路径。
+ *
+ * 不能只看 `Sortable.active`:fallback 模式下按下后超过 fallbackTolerance 先进入
+ * "等待开拖"(`awaitingDragStarted`,active 要到下一个宏任务才置位),快速一甩就会在
+ * 这个窗口里被接管 —— 这时 `Sortable.dragged` 已经是被按住的元素,pointercancel
+ * 同样已经注册到 _onDrop,照样能让它干净收尾并取消排队中的开拖。漏掉这一档的后果是
+ * 两套拖拽同时活着:Sortable 稍后开拖给 body 挂上 grabbing 光标并接管指针,
+ * 本次手势结束后光标卡在抓取态、再也拖不动(2026-10-20 Dash 实测)。
+ */
+let externalAbortRequested = false;
+export function cancelActiveSortable(): void {
+  if (!Sortable.active && !Sortable.dragged) return;
+  externalAbortRequested = true;
+  try {
+    document.dispatchEvent(new Event('pointercancel'));
+  } catch {
+    document.dispatchEvent(new MouseEvent('mouseup', { bubbles: true, cancelable: true }));
+  }
+  externalAbortRequested = false;
+}
+
 export interface SortableListProps<T> {
   /** 列表项数据（按当前希望渲染的顺序传入）。 */
   items: readonly T[];
@@ -84,6 +108,9 @@ export interface SortableListProps<T> {
    *  默认 `'button, input, textarea, select, a, [data-no-drag]'`，覆盖
    *  绝大多数会"误把可交互元素当成拖动起点"的场景。 */
   filter?: string;
+  /** 是否强制使用 SortableJS 的 pointer fallback。关闭后使用原生 DnD，
+   *  允许同一个会话行把拖拽交给右侧分屏 drop target。 */
+  forceFallback?: boolean;
   /** 容器额外 class（如 flex-col / gap 等布局）。 */
   className?: string;
   /** 每个 Sortable wrapper 的额外 class，用于非侧栏场景覆盖 drag/ghost 视觉。 */
@@ -111,6 +138,7 @@ export function SortableList<T>({
   handle,
   onDragActiveChange,
   filter,
+  forceFallback = true,
   className,
   rowClassName,
   role,
@@ -133,6 +161,10 @@ export function SortableList<T>({
   // 标记下一次 onEnd 是"窗口失焦兜底"触发的——onEnd 里把 DOM 复位后直接 return,
   // 不调 onReorder, 避免用户切走窗口的瞬间被记下一次未授意的顺序变化。
   const abortNextEndRef = useRef(false);
+  // Native DnD must only persist a reorder when the final drop lands in this
+  // sortable container. Drops on the composer, split panes, or outside Cindy
+  // can still leave Sortable's DOM temporarily moved while the gesture passes.
+  const nativeDropDispositionRef = useRef<'internal' | 'external' | null>(null);
 
   // mount 时创建 Sortable；unmount 时销毁。后续 props 变化通过 option() 更新。
   useEffect(() => {
@@ -155,12 +187,24 @@ export function SortableList<T>({
       dragClass: 'xdt-sortable-drag',
       // 见文件顶部"设计要点 5"：强制 JS fallback，绕开 HTML5 DnD 在 React 19 +
       // 嵌套 click/contextmenu 环境下的不稳定行为。
-      forceFallback: true,
+      forceFallback,
       fallbackOnBody: true,
       fallbackTolerance: 4,
+      setData: (dataTransfer, dragEl) => {
+        // Keep the browser-required plain-text slot empty: DOM text can contain
+        // task titles/previews and would leak if the drag leaves the app.
+        dataTransfer.setData('Text', '');
+        const rect = dragEl.getBoundingClientRect();
+        dataTransfer.setDragImage(
+          dragEl,
+          Math.min(24, Math.max(0, rect.width / 2)),
+          Math.min(24, Math.max(0, rect.height / 2)),
+        );
+      },
       // 真正开拖（移动超过 fallbackTolerance）才触发,不是 pointerdown 即触发——
       // 所以"按下未拖"和"普通 hover"都不会上 grabbing 光标,只有真正拖动中才会。
       onStart: () => {
+        nativeDropDispositionRef.current = null;
         document.body.classList.add(SORTING_BODY_CLASS);
         onDragActiveChangeRef.current?.(true);
       },
@@ -170,8 +214,10 @@ export function SortableList<T>({
         document.body.classList.remove(SORTING_BODY_CLASS);
         onDragActiveChangeRef.current?.(false);
 
-        const aborted = abortNextEndRef.current;
+        const aborted = abortNextEndRef.current || externalAbortRequested;
         abortNextEndRef.current = false;
+        const dropDisposition = nativeDropDispositionRef.current;
+        nativeDropDispositionRef.current = null;
 
         const oldIndex = evt.oldIndex;
         const newIndex = evt.newIndex;
@@ -183,13 +229,12 @@ export function SortableList<T>({
         // 让位时的位置上。
         const parent = evt.from;
         if (parent && evt.item && oldIndex != null) {
+          evt.item.parentNode?.removeChild(evt.item);
           const refNode = parent.children[oldIndex] ?? null;
-          if (evt.item !== refNode) {
-            parent.insertBefore(evt.item, refNode);
-          }
+          parent.insertBefore(evt.item, refNode);
         }
 
-        if (aborted) return;
+        if (aborted || (!forceFallback && dropDisposition !== 'internal')) return;
         if (oldIndex == null || newIndex == null || oldIndex === newIndex) return;
 
         const currentItems = itemsRef.current;
@@ -204,6 +249,17 @@ export function SortableList<T>({
       },
     });
     sortableRef.current = instance;
+
+    // Native Sortable receives the document `drop` event after capture. Record
+    // whether the final target is internal or external before onEnd restores
+    // the transient DOM move.
+    const markDropDisposition = (event: Event) => {
+      if (Sortable.active !== instance) return;
+      const target = event.target;
+      nativeDropDispositionRef.current =
+        target instanceof Node && el.contains(target) ? 'internal' : 'external';
+    };
+    document.addEventListener('drop', markDropDisposition, true);
 
     // 窗口失焦兜底：用户 Alt-Tab / 点窗口外 / 调出系统 UI 时，document 上的
     // pointerup/mouseup/touchend 都不会触发，SortableJS 的 fallback 拖拽会卡住。
@@ -229,6 +285,7 @@ export function SortableList<T>({
     return () => {
       window.removeEventListener('blur', abortIfActive);
       document.removeEventListener('visibilitychange', onVisibilityChange);
+      document.removeEventListener('drop', markDropDisposition, true);
       // 拖动中组件被卸载时兜底清掉标记,避免 grabbing 光标残留到全局。
       document.body.classList.remove(SORTING_BODY_CLASS);
       onDragActiveChangeRef.current?.(false);
@@ -269,7 +326,13 @@ export function SortableList<T>({
   );
 
   return (
-    <div ref={containerRef} role={role} aria-label={ariaLabel} className={className}>
+    <div
+      ref={containerRef}
+      data-sortable-native-dnd={forceFallback ? undefined : 'true'}
+      role={role}
+      aria-label={ariaLabel}
+      className={className}
+    >
       {children}
     </div>
   );

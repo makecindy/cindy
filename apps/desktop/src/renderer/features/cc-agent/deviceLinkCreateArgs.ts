@@ -16,7 +16,7 @@
  * agentKind 归一到 maker-core 形态('cc' → 'claude-code');其余字段原样透传。
  */
 
-import { effectiveSourceIdForModel, type ProviderView } from '@cindy/model-providers';
+import { effectiveSourceIdForModel, getModel, reconcileInvocationEffort, type ProviderView } from '@cindy/model-providers';
 
 import type { Session, WorkspaceKind } from '@/lib/ccAgent.types';
 import type { AgentKind } from '@/hooks/useAgentCapabilities';
@@ -38,9 +38,10 @@ export interface DeviceLinkCreateParams {
    */
   id?: string;
   model: string;
-  effort: Effort;
+  effort: Effort | null;
   permissionMode: PermissionMode;
-  fastMode: boolean;
+  fastMode: boolean | 'ultrafast';
+  planModeEnabled?: boolean;
   /**
    * 附加只读引用目录(草稿期用户选的)。控制端选的是**本机路径**(extraDirs picker 走本机
    * 原生目录对话框),随 create 透传到被控端后,被控端 create 落地在 bootstrapSession 里按
@@ -48,11 +49,17 @@ export interface DeviceLinkCreateParams {
    * 通过的子集 —— 与远程 set-extra-dirs 的既有行为完全一致(控制端路径在被控端常被拒)。
    */
   extraDirs?: string[];
+  writableDirs?: string[];
   /**
    * 草稿选定的来源(**被控端**供应商 id;null / 省略 = 跟随被控端默认路由)。被控端 create 时
    * 落 `sessions.provider_id`,使新远程会话首个请求即按所选来源路由(与会话内切来源对称)。
    */
   providerId?: string | null;
+  /**
+   * 远程 Agent:Agent 在同账号另一台电脑运行(被控电脑支持时才会给)。此时 model / providerId
+   * 属于那台电脑的目录,被控电脑把它记进任务、经那台运行 Agent(与手机新建任务同一个参数)。
+   */
+  agentDeviceId?: string | null;
 }
 
 export interface DeviceLinkCreateArgs {
@@ -64,13 +71,17 @@ export interface DeviceLinkCreateArgs {
   /** 由 workingDir 派生 —— 有目录 'project',无目录 'dialogue'。归属一致的关键。 */
   workspaceKind: WorkspaceKind;
   model: string;
-  effort: Effort;
+  effort: Effort | '';
   permissionMode: PermissionMode;
-  fastMode: boolean;
+  fastMode: boolean | 'ultrafast';
+  planMode?: boolean;
   /** 仅当草稿有非空 extraDirs 时出现;被控端 bootstrapSession 再校验(单一真相源)。 */
   extraDirs?: string[];
+  writableDirs?: string[];
   /** 仅当草稿显式选了非空来源时出现(null/空 = 跟随默认路由 → 不放进 args,provider_id 留 NULL)。 */
   providerId?: string;
+  /** 仅当 Agent 在另一台电脑运行时出现;缺省 = Agent 在被控电脑本身。 */
+  agentDeviceId?: string;
 }
 
 export function buildDeviceLinkCreateArgs(p: DeviceLinkCreateParams): DeviceLinkCreateArgs {
@@ -85,13 +96,18 @@ export function buildDeviceLinkCreateArgs(p: DeviceLinkCreateParams): DeviceLink
     ...(dir ? { workingDir: dir } : {}),
     workspaceKind: dir ? 'project' : 'dialogue',
     model: p.model,
-    effort: p.effort,
+    // Empty string is the wire representation for a model without an effort selector;
+    // the remote host's admission layer treats it as unspecified.
+    effort: p.effort ?? '',
     permissionMode: p.permissionMode,
     fastMode: p.fastMode,
+    ...(p.planModeEnabled ? { planMode: true } : {}),
     // 空 / 缺省不放进 args:payload 干净,且被控端 bootstrapSession 也只在非空时才校验。
     ...(p.extraDirs && p.extraDirs.length > 0 ? { extraDirs: p.extraDirs } : {}),
+    ...(p.writableDirs && p.writableDirs.length > 0 ? { writableDirs: p.writableDirs } : {}),
     // providerId 同理:仅非空显式来源才放进 args;null/空 → 不带 → 被控端 provider_id 留 NULL(默认路由)。
     ...(p.providerId ? { providerId: p.providerId } : {}),
+    ...(p.agentDeviceId ? { agentDeviceId: p.agentDeviceId } : {}),
   };
 }
 
@@ -103,9 +119,10 @@ export function buildDeviceLinkCreateArgs(p: DeviceLinkCreateParams): DeviceLink
  */
 export interface DeviceLinkSubmissionCandidate {
   model: string;
-  effort: Effort;
+  effort: Effort | null;
   permissionMode: PermissionMode;
-  fastMode: boolean;
+  fastMode: boolean | 'ultrafast';
+  planModeEnabled?: boolean;
   /** 用户显式选中的被控端来源;null / 省略 = 跟随被控端默认路由。 */
   providerId?: string | null;
 }
@@ -115,10 +132,16 @@ export interface DeviceLinkSubmissionParams {
   workingDir?: string;
   id?: string;
   extraDirs?: string[];
+  writableDirs?: string[];
   candidate: DeviceLinkSubmissionCandidate;
-  /** **被控端**供应商目录(useDeviceProviders 经隧道拉到的那一份)。 */
+  /**
+   * 模型目录(useDeviceProviders 经隧道拉到的那一份):通常是**被控端**的;Agent 在另一台电脑运行时
+   * 是那台的(来源也在那份目录里解析)。
+   */
   deviceProviders: ProviderView[];
   capabilityAgentKind: AgentKind;
+  /** 远程 Agent:运行 Agent 的另一台电脑;缺省 = 被控电脑本身。 */
+  agentDeviceId?: string | null;
 }
 
 /**
@@ -138,27 +161,44 @@ export interface DeviceLinkSubmissionParams {
  * 组件的实现细节**上。ChatInput 今天恰好会重算,不代表它有义务永远重算;而这里离 `maker:create-session`
  * 只有一步,是「提交什么就校准什么」最后也最可靠的位置。重复校准无副作用:仍有效的来源原样返回。
  *
- * 用 effectiveSourceIdForModel 而不是 actualSourceIdForModel —— 后者的注释明确要求「新路由选择
- * (新会话 / 切模型 / worker / schedule)一律用前者」,而建会话与建目标都是新路由选择。失效时落到
- * 被控端对该模型的原生默认来源(也正是 ChatInput 高亮给用户看的那一个),比一律置 null 更贴合所见即所得。
+ * 显式连接原样传给被控端，由被控端校验；控制端快照失效或未加载不能抹掉账号身份。
+ * 只有未指定连接时，才用 effectiveSourceIdForModel 解析默认来源。
  */
 export function resolveDeviceLinkSubmission(p: DeviceLinkSubmissionParams): DeviceLinkCreateArgs {
-  const providerId = effectiveSourceIdForModel(
+  const providerId = p.candidate.providerId || effectiveSourceIdForModel(
     p.deviceProviders,
-    p.candidate.providerId ?? null,
+    null,
     p.candidate.model,
     p.capabilityAgentKind,
   );
+  const routeProvider = providerId
+    ? p.deviceProviders.find((provider) => provider.id === providerId)
+    : undefined;
+  const routeModel = routeProvider
+    ? getModel(routeProvider, p.candidate.model, p.capabilityAgentKind)
+    : undefined;
+  const effort =
+    !routeModel || routeModel.effortsUnknown === true ||
+      (routeModel.efforts.length === 0 && routeModel.effortsUnknown !== false)
+      ? p.candidate.effort
+      : reconcileInvocationEffort({
+          requested: p.candidate.effort,
+          model: routeModel,
+          noEffortFallback: null,
+        });
   return buildDeviceLinkCreateArgs({
     agentKind: p.agentKind,
     id: p.id,
     workingDir: p.workingDir,
     model: p.candidate.model,
-    effort: p.candidate.effort,
+    effort,
     permissionMode: p.candidate.permissionMode,
     fastMode: p.candidate.fastMode,
+    planModeEnabled: p.candidate.planModeEnabled,
     extraDirs: p.extraDirs,
+    writableDirs: p.writableDirs,
     providerId,
+    agentDeviceId: p.agentDeviceId,
   });
 }
 
@@ -211,15 +251,20 @@ export function buildProvisionalRemoteSession(p: ProvisionalRemoteSessionParams)
     contextTokens: 0,
     contextWindow: 0,
     fastMode: p.args.fastMode,
+    planModeEnabled: p.args.planMode ?? false,
     clearedAt: null,
     pinnedAt: null,
-    // 用户此刻正在发第一条消息 —— 与本机路径建完会话就写 userSendAt 同口径,
-    // 侧边栏按这条时间轴排序,新会话该立刻浮到顶部。
-    userSendAt: p.nowIso,
+    // 与被控端刚建出的行一致:首条还没被收下,userSendAt 为空。「用户正在发第一条」由
+    // remoteProjectsStore 的首条发送叠加层在投影层补上 —— 写进分片的话,随后任何一次列表
+    // 回流都会把它冲回 null,会话就先掉进项目外的草稿区、首条落地后再跳回项目。
+    userSendAt: null,
     status: 'active',
     // Session.agentKind 是本机形态('cc' | 'codex' | 'pi'),args 里是 maker-core 形态,这里转回来。
     agentKind: p.args.agentKind === 'claude-code' ? 'cc' : p.args.agentKind,
+    // 乐观行就带上 Agent 所在电脑:会话页的模型按钮与目录从一开始就按那台显示。
+    ...(p.args.agentDeviceId ? { agentDeviceId: p.args.agentDeviceId } : {}),
     extraDirs: p.args.extraDirs ?? [],
+    writableDirs: p.args.writableDirs ?? [],
     createdAt: p.nowIso,
     updatedAt: p.nowIso,
   };

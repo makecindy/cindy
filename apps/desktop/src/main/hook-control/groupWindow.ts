@@ -24,6 +24,7 @@ import type { GroupMessagePayload, TaskDispatchPayload } from '@cindy/slack-hook
 import {
   assembleGroupWindowContext,
   createFenceNeutralizer,
+  DEFAULT_GROUP_WINDOW_RETENTION,
   recordGroupWindowEntry,
   resetGroupWindowCursors,
   type GroupContextAssembly,
@@ -36,10 +37,17 @@ export type { GroupContextAssembly };
 
 const log = createLogger('hook-group-window');
 
-/** 每个 principal + 群/topic 窗口永久保留的最近行数。 */
-const WINDOW_KEEP_PER_KEY = 500;
-/** 每个 principal 跨全部群/topic 永久保留的最近行数。 */
-export const WINDOW_KEEP_PER_PRINCIPAL = 10_000;
+/**
+ * 官方 bot 这一侧生效的保留上限 —— 数值取共享默认值, 但**这份对象是官方独有的**。
+ *
+ * 额度本来就按 provider 命名空间(`telegram:<principalId>`)各算各的: 统计表以
+ * provider 为主键、回收也按 provider 过滤。两个账号同时在用就是两份独立额度,
+ * 个人 bot 的 `telegram-personal:<botId>` 更是另一块 —— 谁也吃不掉谁的份。
+ *
+ * 做成可变对象只为让测试用小阈值把回收逼出来; 拿 1 GiB 默认值写回归等于在测试
+ * 里灌一 GB 数据。
+ */
+export const GROUP_WINDOW_RETENTION = { ...DEFAULT_GROUP_WINDOW_RETENTION };
 
 /**
  * 从 externalKey 解析 Telegram 群/topic lane。
@@ -90,8 +98,13 @@ function providerOf(principalId: string): string {
  * group.message 帧入窗。返回 true 表示本次确实插入，供调用方在幂等入窗后
  * 执行一次自动通讯录登记；重放/重连的同一条消息返回 false。
  *
- * 消息先落当前主账号的本地数据库，不做 TTL；每个群/topic 只保留最近 500
- * 条，避免未受信任群成员无限占用磁盘。引用与 prompt 仍只从本机窗口读取。
+ * 消息先落当前主账号的本地数据库，不做 TTL。**保留按容量不按条数**：每个
+ * provider 命名空间 1 GiB 正文 + 500 万行安全阀（`GROUP_WINDOW_RETENTION`，
+ * 数值来自共享核心的 `DEFAULT_GROUP_WINDOW_RETENTION`），碰不到才是常态。
+ * 旧注释写的「每个群/topic 只保留最近 500 条」已不是现行策略——按条数在活跃群
+ * 里几天就把去年的内容挤没了（理由见 `groupWindowCore.ts`）。读取上限与存储上限无关；当前采用共享的
+ * `CONTEXT_READ_LIMIT`，拼上下文时的**读取**窗口，不是存储上限。
+ * 引用与 prompt 仍只从本机窗口读取。
  */
 export async function recordGroupMessage(
   payload: GroupMessagePayload,
@@ -107,9 +120,10 @@ export async function recordGroupMessage(
       author: payload.author,
       text: payload.text,
       fileNames: payload.fileNames,
+      imageRefs: payload.imageRefs,
       sentAt: payload.sentAt,
     },
-    { keepPerKey: WINDOW_KEEP_PER_KEY, keepPerNamespace: WINDOW_KEEP_PER_PRINCIPAL },
+    GROUP_WINDOW_RETENTION,
   );
 }
 
@@ -157,13 +171,16 @@ export async function buildGroupContextPrefix(
     cursors: contextCursors,
     cursorKey: cursorKeyOf(payload.externalKey),
     triggerMessageId: payload.source?.triggerMessageId ?? null,
+    replyMessageId: payload.source?.threadContext?.[0]?.messageId,
+    reservedMessages: payload.source?.threadContext?.length ?? 0,
+    reservedChars: payload.source?.threadContext?.reduce((n, entry) => n + `[${entry.author}] ${entry.text}\n`.length, 0) ?? 0,
     // 主群流额外兜一层非空 threadId 的行: server 曾把普通群里 reply 链的
     // message_thread_id 当成 topic 下发(Telegram 对非 forum 群的 reply 链也给这个字段,
     // 值 = reply root), 那些发言因此进了一个个 reply-root 桶 —— 2026-08-03 实机: 172 条在
     // 主群流、另有若干 reply-root 桶(如 52449 桶 7 条), agent 在群里答"我看不到群里的历史
     // 消息"。判据只能在 server 修(客户端拿不到 is_forum / is_topic_message), 这里按"宁可多
     // 读同群发言、不可漏读"兜住存量与老 server。兜底读取排在主群流之后, 但两者共享同一个
-    // 4000 字预算和单值游标; commit 会推进本次两集合读取到的最大行 id, 因而保持既有行为而
+    // 共享字数预算和单值游标; commit 会推进本次两集合读取到的最大行 id, 因而保持既有行为而
     // 不把兜底误认为独立预算/游标。forum 群的 General 也走 group lane, 否则该群其它 topic
     // 的突发流量会把 General 的发言挤出窗口并被游标永久跳过(bot 复审 P1)。server 修复部署后新数据不再分桶,
     // 这条兜底最终只服务存量行。topic lane 不读兜底集(topic 之间严格隔离)。

@@ -37,6 +37,26 @@ beforeEach(() => vi.useFakeTimers());
 afterEach(() => vi.useRealTimers());
 
 describe('createRemoteSessionSyncEngine', () => {
+  it('keeps an offline running view quiet and resumes using the existing recovery path', async () => {
+    let available = false;
+    const deps = { canRead: () => available, subscribe: vi.fn(), unsubscribe: vi.fn(), reconcile: vi.fn(),
+      refreshList: vi.fn(), getLastEventAt: () => 0, isRunningNow: () => true,
+      queryTurnRunning: vi.fn(async () => true), finalize: vi.fn(), reconcileForce: vi.fn(),
+      onSuspectStall: vi.fn(), stallThresholdMs: 1, watchdogIntervalMs: 10 };
+    const engine = createRemoteSessionSyncEngine(() => ({ sessionId: SID, deviceId: DEV }), deps);
+    engine.subscribeHeavy(); engine.reconcileOnMount(); engine.startWatchdog();
+    engine.handleFocus(); engine.resync();
+    await vi.advanceTimersByTimeAsync(2_000);
+    for (const call of [deps.subscribe, deps.reconcile, deps.queryTurnRunning, deps.refreshList, deps.onSuspectStall]) {
+      expect(call).not.toHaveBeenCalled();
+    }
+    available = true;
+    engine.handleOnline();
+    await vi.advanceTimersByTimeAsync(200);
+    expect(deps.subscribe).toHaveBeenCalled();
+    expect(deps.reconcile).toHaveBeenCalled();
+    engine.dispose();
+  });
   it('subscribeHeavy 订阅正确重 topic;无 device/session → no-op', () => {
     const { engine, deps } = setup();
     engine.subscribeHeavy();
@@ -187,6 +207,26 @@ function setupWatchdog(overrides: Partial<RemoteSyncEngineDeps> = {}) {
 }
 
 describe('createRemoteSessionSyncEngine — stall 看门狗', () => {
+  // A replay can refresh lastEventAt while its terminal event is missing. Recovery
+  // must consult the host rather than waiting for another 90 seconds of silence.
+  it.each([false, true, 'unreachable'] as const)('checks host turn state after content recovery: %s', async (hostState) => {
+    const { engine, deps } = setupWatchdog({
+      getLastEventAt: () => 0,
+      queryTurnRunning: vi.fn(async () => {
+        if (hostState === 'unreachable') throw new Error('offline');
+        return hostState;
+      }),
+    });
+    engine.startWatchdog();
+    engine.handleContentRecovered();
+    engine.handleContentRecovered();
+    await vi.advanceTimersByTimeAsync(1_000);
+    expect(deps.queryTurnRunning).toHaveBeenCalledTimes(1);
+    expect(deps.finalize).toHaveBeenCalledTimes(hostState === false ? 1 : 0);
+    expect(deps.reconcileForce).toHaveBeenCalledTimes(hostState === false ? 1 : 0);
+    engine.dispose();
+  });
+
   it('lastEventAt 新鲜(静默 < 阈值)→ 不触发恢复', async () => {
     const { engine, deps, setNow } = setupWatchdog();
     engine.startWatchdog(); // watchdogStartedAt = 0

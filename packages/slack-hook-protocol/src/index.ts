@@ -1,0 +1,64 @@
+/**
+ * @cindy/slack-hook-protocol
+ * ---------------------------------------------------------------------------
+ * hook server <-> desktop 双工任务协议: 类型 + 运行时校验 + 构造器。
+ * desktop(hook-control)与 hook server 两端共用, 协议单一来源。
+ */
+
+export * from './types';
+export { parseHookMessage, isHookMessageType } from './parse';
+export {
+  makeHello,
+  makeWelcome,
+  makePing,
+  makePong,
+  makeTaskDispatch,
+  makeTaskAck,
+  makeTurnEnd,
+  makeTurnDelivery,
+  makeXMediaAbort,
+  makeXMediaAppend,
+  makeXMediaFinalize,
+  makeXMediaInit,
+  makeXMediaResult,
+  makeTurnProgress,
+  makeMessageOp,
+  makeMessageOpResult,
+  makeTurnReopen,
+  makeBindStart,
+  makeBindUpdate,
+  makeBindRevoke,
+  makeBindState,
+  makeProviderBindStart,
+  makeProviderBindCancel,
+  makeProviderBindRevoke,
+  makeProviderBindSelect,
+  makeProviderBindSelection,
+  makeProviderBindUpdate,
+  makeProviderBindState,
+  makeQueryRequest,
+  makeQueryResponse,
+  makeTaskCancel,
+  makeSessionArchive,
+  makeInteractionRequest,
+  makeInteractionDecision,
+  makeInteractionCancel,
+  makePrefsGet,
+  makePrefsSet,
+  makePrefsState,
+  makeProviderPrefsGet,
+  makeProviderPrefsSet,
+  makeProviderPrefsState,
+  makeProviderBehaviorGet,
+  makeProviderBehaviorSet,
+  makeProviderBehaviorState,
+  makeProviderCommandsSet,
+  makeToolRequest,
+  makeToolResponse,
+  makeGroupMessage,
+  makeLifecyclePreference,
+  serializeHookMessage,
+  type HelloInput,
+} from './build';
+
+export * from './channelHistory';

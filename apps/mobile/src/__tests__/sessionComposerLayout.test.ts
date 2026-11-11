@@ -1,6 +1,7 @@
 import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
-import { describe, expect, it } from 'vitest';
+import { beforeAll, describe, expect, it } from 'vitest';
+import { i18n } from '@/i18n';
 import { buildSessionComposerLayout } from '@/session/sessionComposerLayout';
 
 const desktopZhLocale = JSON.parse(readFileSync(
@@ -15,6 +16,10 @@ const desktopZhLocale = JSON.parse(readFileSync(
 };
 
 describe('sessionComposerLayout', () => {
+  beforeAll(async () => {
+    await i18n.changeLanguage('zh-CN');
+  });
+
   it('keeps send disabled until text or attachments exist', () => {
     const empty = buildSessionComposerLayout({
       attachmentBusy: false,
@@ -111,15 +116,15 @@ describe('sessionComposerLayout', () => {
     });
   });
 
-  it('keeps text editable while a restored draft cannot be sent offline', () => {
+  it('keeps text editable while a deterministic remote error blocks sending', () => {
     const layout = buildSessionComposerLayout({
       attachmentBusy: false,
       attachmentCount: 0,
       attachmentPickerOpen: false,
       canStop: false,
-      draftText: '等电脑恢复后发送',
+      draftText: '等待重新授权后发送',
       queueBusy: false,
-      sendUnavailableReason: '网络或被控端暂时不可用，可以稍后重新同步。',
+      sendUnavailableReason: '这台电脑已撤销手机访问权限。',
       sending: false,
       voiceState: 'idle',
     });
@@ -130,11 +135,11 @@ describe('sessionComposerLayout', () => {
     });
     expect(layout.send).toEqual({
       disabled: true,
-      disabledReason: '网络或被控端暂时不可用，可以稍后重新同步。',
+      disabledReason: '这台电脑已撤销手机访问权限。',
       label: '发送',
       visible: true,
     });
-    expect(layout.guidanceText).toBe('网络或被控端暂时不可用，可以稍后重新同步。');
+    expect(layout.guidanceText).toBe('这台电脑已撤销手机访问权限。');
   });
 
   it('summarizes attachment and voice tool state for the compact mobile composer', () => {
@@ -276,7 +281,7 @@ describe('sessionComposerLayout', () => {
       label: '停止',
       visible: true,
     });
-    expect(runningWithDraft.guidanceText).toBe('点发送后会进入桌面端队列，按当前任务设置执行。');
+    expect(runningWithDraft.guidanceText).toBe('点发送后会进入电脑端队列，按当前任务设置执行。');
   });
 
   it('marks busy operations without changing the primary layout shape', () => {
@@ -301,8 +306,9 @@ describe('sessionComposerLayout', () => {
       },
     });
     expect(layout.input).toMatchObject({
-      disabled: true,
-      disabledReason: '消息正在发送到电脑端。',
+      // Keep the native editor focused while send itself remains locked below.
+      disabled: false,
+      disabledReason: null,
       placeholder: '正在转写语音',
     });
     expect(layout.voice).toMatchObject({
@@ -322,7 +328,7 @@ describe('sessionComposerLayout', () => {
       label: '发送中',
       visible: true,
     });
-    expect(layout.guidanceText).toBe('消息正在写入桌面端队列，完成前请不要重复发送。');
+    expect(layout.guidanceText).toBe('消息正在写入电脑端队列，完成前请不要重复发送。');
     expect(layout.statusText).toBe('正在发送到电脑端');
   });
 
@@ -400,6 +406,6 @@ describe('sessionComposerLayout', () => {
       queueBusy: false,
       sending: false,
       voiceState: 'idle',
-    }).guidanceText).toBe('点发送后会进入桌面端队列，按当前任务设置执行。');
+    }).guidanceText).toBe('点发送后会进入电脑端队列，按当前任务设置执行。');
   });
 });

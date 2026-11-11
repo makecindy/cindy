@@ -1,5 +1,10 @@
 import type { CindyRegion } from '@cindy/maker-shared/brand-identity';
 import { normalizeIssuePublicName } from '../../shared/issuePublicName';
+import {
+  normalizeIssueModelId,
+  parseIssueHarness,
+  type IssueHarness,
+} from '../../shared/issueRuntimeMetadata';
 
 /**
  * issue_confirm IPC 里的构建区域。非法或缺失一律返回 undefined —— 确认卡片宁可
@@ -14,7 +19,17 @@ export function parseIssueEnvRegion(raw: unknown): CindyRegion | undefined {
   return raw === 'cn' || raw === 'global' || raw === 'dev' ? raw : undefined;
 }
 
-/** issue_confirm IPC 中的真实 GitHub 提交身份；renderer 只展示，不参与选择。 */
+/** issue_confirm IPC 里的公开 Harness 名称；内部缩写或未知值一律不展示。 */
+export function parseIssueEnvHarness(raw: unknown): IssueHarness | undefined {
+  return parseIssueHarness(raw);
+}
+
+/** 与 Main 使用同一规范化函数，保证确认卡展示的值可安全落入单行 Markdown。 */
+export function parseIssueEnvModelId(raw: unknown): string | undefined {
+  return normalizeIssueModelId(raw);
+}
+
+/** issue_confirm IPC 中可由用户在确认卡选择的实际提交身份。 */
 export type IssueSubmissionIdentity =
   { kind: 'github-user'; login: string } | { kind: 'platform'; login: string };
 
@@ -30,6 +45,14 @@ export function parseIssueSubmissionIdentity(raw: unknown): IssueSubmissionIdent
     return null;
   }
   return { kind: obj.kind, login: obj.login.trim() };
+}
+
+/** 可选 GitHub 用户身份无效时只隐藏该选项，不影响平台确认卡。 */
+export function parseOptionalGithubUserIdentity(
+  raw: unknown,
+): Extract<IssueSubmissionIdentity, { kind: 'github-user' }> | undefined {
+  const identity = parseIssueSubmissionIdentity(raw);
+  return identity?.kind === 'github-user' ? identity : undefined;
 }
 
 /** Main 提供的平台代发建议署名；非法值按缺失处理，由卡片回退为“匿名”。 */

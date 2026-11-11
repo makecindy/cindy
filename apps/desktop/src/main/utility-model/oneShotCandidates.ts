@@ -1,24 +1,65 @@
+import { isProviderModelRouteDisabled } from '../maker-host/model-route-availability.js';
+export { isProviderModelRouteDisabled, isProviderRouteSuspended } from '../maker-host/model-route-availability.js';
+import { readUtilityTextStream, streamTextResult } from './streamText.js';
+import { isOpenAiSubscriptionProvider, providerCatalogId } from '@cindy/model-providers';
 import { randomUUID } from 'node:crypto';
 
-import { toSdkModelString, type AgentKind, type Maker } from '@cindy/maker-core';
-import { appendProviderRequestPath } from '@cindy/model-providers';
+import { type AgentKind, type Maker } from '@cindy/maker-core';
+import { normalizeProviderRequest, type CompatibilityHarness } from '@cindy/model-compat';
+import {
+  appendProviderRequestPath,
+  isModelSelectableForNewRoute,
+  storedCustomProviderId,
+  type CatalogModel,
+} from '@cindy/model-providers';
 
 import { createLogger } from '../logger.js';
+import { getAppCapabilities } from '../appCapabilities.js';
+import { activeOwnerScopeKey, isAppSessionBoundaryPending } from '../appSessionState.js';
 import { readClaudeApiKey } from '../maker-host/auth-adapters.js';
-import { getChatgptBridgeAuth } from '../maker-host/anthropic-responses-bridge-host.js';
-import { getValidClaudeAiOAuth } from '../maker-host/claude-oauth-refresh.js';
-import { getGrokAccessToken } from '../maker-host/grok-oauth-login.js';
-import { readCachedGenericOAuthAccessToken } from '../maker-host/generic-oauth.js';
+import { getChatgptBridgeAuth, getChatgptBridgeAuthForDispatch } from '../maker-host/anthropic-responses-bridge-host.js';
+import { getGrokAccessToken, getGrokOAuthCredentialGeneration } from '../maker-host/grok-oauth-login.desktop.js';
+import { readCachedGenericOAuthAccessToken } from '../maker-host/generic-oauth.desktop.js';
 // undici 的 fetch,但 per-request 现取系统代理(裸 undici 不吃代理设置)。
-import { outboundUndiciFetch as undiciFetch } from '../maker-host/outbound-fetch.js';
+import { outboundUndiciFetch as undiciFetch } from '../maker-host/outbound-fetch.desktop.js';
 import { claudeUpstreamEndpoint } from '../maker-host/runtime-configs.js';
-import { getActiveCatalog } from '../maker-host/active-catalog.js';
+import {
+  getActiveCatalog,
+  isXdGatewayPaymentRequiredRoute,
+} from '../maker-host/active-catalog.js';
 import { readModelDisableOverrides } from '../maker-host/model-disable-store.js';
 import { isModelDisabled, isProviderDisabled } from '@cindy/model-providers';
-import { isProviderRouteMutationInProgress } from '../maker-host/provider-route.js';
+import { getProviderRouteCredentialRevision, isProviderRouteMutationInProgress } from '../maker-host/provider-route.js';
+import { withOpenCodeGoSessionHeader } from '../maker-host/opencode-go-session.js';
+import { withProviderAppAttribution } from '../maker-host/provider-app-attribution.js';
 import { effectiveXdGatewayBaseUrl } from '../model-access/effectiveEndpoint.js';
+import { reportCindyGatewayKeyRejected } from '../model-access/gatewayKeyRejection.js';
 import { readCustomProviderKey } from '../secrets/providerSecretStore.js';
+import { MANAGED_OLLAMA_PROVIDER_ID, isManagedSidecarProviderId } from '../../shared/localModelRuntime.js';
+import { ensureManagedOllamaReadyForSession } from '../local-model-runtime/preflight.js';
+import { parseAuxiliaryModelRef, type ParsedAuxiliaryModelRef } from '../../shared/auxiliaryModelChain.js';
 import { getUtilityModelChainProfiles } from './UtilityModelSelection.js';
+import { getEffectiveAuxiliaryModelChain } from './resolveAuxiliaryModelChain.js';
+import { requestUtilityTextWithinTimeout } from './utilityTextTimeout.js';
+import {
+  MAX_REASONING_REQUESTS,
+  buildUtilityRequestPlan,
+  compatHasReasoningOff,
+  compatMarksNoReasoning,
+  forgetUtilityStep,
+  isUtilityParameterRejection,
+  nextUtilityRequestStep,
+  rememberUtilityStep,
+  rememberedUtilityStepIndex,
+  scopeUtilityMemoryKey,
+  utilityReasoningDeclaration,
+  utilityReasoningMemoryKey,
+  utilityRequestStepKey,
+  type UtilityReasoningDeclaration,
+  type UtilityReasoningMode,
+  type UtilityRequestStep,
+} from './utilityReasoningPlan.js';
+import { resolveDirectTextRoute, usesDirectTextRoute } from './directTextRoute.js';
 import { getUtilityModelProfile, isUtilityModelProviderKind } from '../../shared/utilityModelProfiles.js';
 import type { UtilityModelProfile, UtilityModelTransport } from '../../shared/utilityModelProfiles.js';
 import type {
@@ -29,6 +70,34 @@ import type {
 } from '../../shared/utilityTextResult.js';
 
 const log = createLogger('utility-model:one-shot');
+
+const XD_UTILITY_ROUTE_AGENTS: readonly AgentKind[] = ['claude-code', 'codex', 'pi'];
+
+/**
+ * Utility profiles call the XD chat-completions endpoint directly and therefore
+ * have no Session agent rail. A v5 paid deny on any advertised rail is enough
+ * to block the same gateway model id here; availability is account/model scoped.
+ */
+function isXdUtilityModelPaymentRequired(model: string): boolean {
+  return XD_UTILITY_ROUTE_AGENTS.some((agent) =>
+    isXdGatewayPaymentRequiredRoute(model, agent),
+  );
+}
+
+/**
+ * Shared live entitlement predicate for direct utility consumers. Only XD
+ * LiteLLM routes use the Cindy account catalog; Codex and custom BYOK routes
+ * keep their own credential plane. Organization catalogs are not subject to
+ * personal free/paid gating and arrive as not_applicable with every visible
+ * model available, so they never create this deny state.
+ */
+export function isUtilityRoutePaymentRequired(profile: {
+  transport?: string;
+  model: string;
+}): boolean {
+  return profile.transport === 'litellm-chat-completions'
+    && isXdUtilityModelPaymentRequired(profile.model);
+}
 
 /**
  * 实现了 `Agent.oneShot` 的 agent 集合(当前 claude-code / codex)。PiAgent 继承 BaseAgent
@@ -44,6 +113,12 @@ export type UtilityTextCapability = {
   transports: readonly UtilityModelTransport[];
 };
 
+export interface UtilityTextDispatchRoute {
+  providerId: string;
+  agentKind: AgentKind;
+  model: string;
+}
+
 export type UtilityTextCandidate = {
   providerId: string;
   model: string;
@@ -56,7 +131,25 @@ export type UtilityTextRequestOptions = {
   maxTokens?: number;
   timeoutMs?: number;
   /** Optional lightweight reasoning hint for short internal classifiers. */
-  reasoningEffort?: 'low' | 'medium' | 'high';
+  reasoningEffort?: 'minimal' | 'low' | 'medium' | 'high';
+  /**
+   * Use the least thinking the model allows, for strict short-output budgets.
+   * Messages and chat routes first try turning thinking off; Responses routes
+   * start at the lowest catalog effort because that protocol has no off value.
+   * See utilityReasoningPlan.ts for the fallback rules.
+   */
+  disableReasoning?: boolean;
+  /** Abort an in-flight direct HTTP request when the owning workflow ends. */
+  signal?: AbortSignal;
+  /** Provider-native system/instructions text, kept separate from reference data. */
+  systemPrompt?: string;
+  onText?: (text: string) => void;
+  /** Additional output-shape instruction (mainly for Responses-compatible routes). */
+  responseInstructions?: string;
+  /** Reject unusable output before selecting a winner, so the configured chain can continue. */
+  validateResponse?: (text: string) => boolean;
+  /** Final ownership/config guard immediately before an explicit HTTP dispatch. */
+  beforeDispatch?: (route: UtilityTextDispatchRoute) => Promise<boolean>;
   /** 显式任务来源；存在时禁止跨来源 fallback。 */
   providerId?: string;
   agentKind?: AgentKind;
@@ -85,6 +178,13 @@ type UtilityTextExecutionFailure =
 
 /** Credential-safe error raised by a concrete utility transport. */
 class UtilityTextExecutionError extends Error {
+  /**
+   * Request format actually used when an HTTP route failed. Logs only: the
+   * shared UtilityTextAttempt.transport crosses IPC and scheduler MCP, and its
+   * two-value union cannot describe the Cindy AI native Responses / Messages wires.
+   */
+  wire?: string;
+
   constructor(readonly failure: UtilityTextExecutionFailure) {
     super(failure.reason);
     this.name = 'UtilityTextExecutionError';
@@ -142,27 +242,6 @@ export function isUtilityRouteDisabled(profile: {
   );
 }
 
-/**
- * 供应商级停用的直查入口(voice ASR / embedding 等非目录模型消费方用):这些链路
- * 的模型不在 chat/media 目录里,逐模型停用无从谈起,但「供应商整体停用」必须生效
- * —— 它们同样是经该供应商凭证的新付费调用(PR #744 review 第十六轮)。
- */
-export function isProviderRouteSuspended(providerId: string): boolean {
-  return isProviderDisabled(readModelDisableOverrides(), providerId);
-}
-
-/**
- * (供应商, 模型) 组合判定:供应商级停用或该模型条目被点名停用任一命中即真。
- * embedding 等「模型 id 可被逐条停用但不在 chat 目录」的消费方用
- * (PR #744 review 第十九轮)。
- */
-export function isProviderModelRouteDisabled(providerId: string, modelId: string): boolean {
-  const overrides = readModelDisableOverrides();
-  return (
-    isProviderDisabled(overrides, providerId) ||
-    isModelDisabled(overrides, providerId, modelId)
-  );
-}
 
 async function resolveUtilityTextCandidates(
   maker: Maker,
@@ -171,10 +250,9 @@ async function resolveUtilityTextCandidates(
 ): Promise<{ candidates: UtilityTextCandidate[]; attempts: UtilityTextAttempt[] }> {
   // 钉住某一档时只拿那一个候选:钉了还沿链回落,等于用户的选择被悄悄换掉。
   // 注意不能从链里筛——默认链只有 4 档,而可钉的档位有 9 个,链外的钉不上。
-  const pinned =
-    pinnedProfileId && isUtilityModelProviderKind(pinnedProfileId)
-      ? getUtilityModelProfile(pinnedProfileId)
-      : null;
+  const pinned = pinnedProfileId && isUtilityModelProviderKind(pinnedProfileId)
+    ? getUtilityModelProfile(pinnedProfileId)
+    : null;
   if (pinnedProfileId && !pinned) {
     log.warn('utility text pinned profile unknown, falling back to chain', { pinnedProfileId });
   }
@@ -195,6 +273,15 @@ async function resolveUtilityTextCandidates(
       isModelDisabled(disableOverrides, routeProviderId, profile.model)
     ) {
       log.debug('utility text candidate skipped: disabled in settings', {
+        providerId: routeProviderId,
+        profileId: profile.id,
+        model: profile.model,
+      });
+      attempts.push(skippedAttempt(profile, 'model_unavailable'));
+      continue;
+    }
+    if (isUtilityRoutePaymentRequired(profile)) {
+      log.debug('utility text candidate skipped: paid XD route unavailable', {
         providerId: routeProviderId,
         profileId: profile.id,
         model: profile.model,
@@ -271,6 +358,280 @@ export async function requestUtilityText(
   return requestDefaultUtilityText(maker, prompt, opts);
 }
 
+/** Execute one exact catalog route; failures never enter the default chain. */
+export async function requestExplicitUtilityText(
+  prompt: string,
+  opts: UtilityTextRequestOptions & { providerId: string },
+): Promise<UtilityTextResult> {
+  const providerId = opts.providerId.trim();
+  const explicitModel = opts.model?.trim();
+  if (!providerId) return { ok: false, reason: 'no_candidate', attempts: [] };
+
+  const disableOverrides = readModelDisableOverrides();
+  if (
+    isProviderDisabled(disableOverrides, providerId) ||
+    (explicitModel && isModelDisabled(disableOverrides, providerId, explicitModel))
+  ) {
+    log.warn('utility text route disabled in settings', {
+      providerId,
+      model: explicitModel ?? null,
+    });
+    return { ok: false, reason: 'no_candidate', attempts: [] };
+  }
+  return requestExplicitProviderText(prompt, {
+    ...opts,
+    providerId,
+    ...(explicitModel === undefined ? {} : { model: explicitModel }),
+  });
+}
+
+const DEDICATED_AUTO_REVIEW_MAX_TOKENS = 384;
+
+/**
+ * Auto-review 第一阶段的封闭候选表，不跟随主会话的 provider/model。
+ * 全部不可用后，路由器才尝试用户明确自定义的辅助模型链；自动／环境变量辅助链不参与。
+ * Claude 订阅只供内置 Claude Code CLI 自己使用，Cindy 的直连请求不得借用。
+ */
+export const DEDICATED_AUTO_REVIEW_CANDIDATES = Object.freeze([
+  {
+    id: 'cindy-gateway',
+    providerId: 'xd',
+    agentKind: 'codex',
+    model: 'cindy/auto-review',
+    transport: 'litellm-chat-completions',
+    reasoningEffort: undefined,
+  },
+  {
+    // Codex's own Auto-review model. ChatGPT accounts can call it although it is not a
+    // selectable catalog model (gpt-5.4-nano is listed but rejected for ChatGPT accounts).
+    id: 'chatgpt-auto-review',
+    providerId: 'openai',
+    agentKind: 'codex',
+    model: 'codex-auto-review',
+    transport: 'codex-responses',
+    reasoningEffort: 'low',
+    catalogExempt: true,
+  },
+  {
+    id: 'chatgpt-luna',
+    providerId: 'openai',
+    agentKind: 'codex',
+    model: 'gpt-6-luna',
+    transport: 'codex-responses',
+    reasoningEffort: 'low',
+  },
+] as const satisfies ReadonlyArray<{
+  id: string;
+  providerId: 'xd' | 'openai';
+  agentKind: AgentKind;
+  model: string;
+  transport: UtilityModelTransport;
+  reasoningEffort: 'low' | undefined;
+  /** Review-only model that is reachable without being a selectable catalog entry. */
+  catalogExempt?: boolean;
+}>);
+
+export type DedicatedAutoReviewCandidate = (typeof DEDICATED_AUTO_REVIEW_CANDIDATES)[number];
+
+function splitAutoReviewPrompt(prompt: string): { systemPrompt?: string; evidence: string } {
+  // The reviewer escapes delimiters inside evidence. Keep Host rules on the native
+  // system channel, and action/user strings on the user channel for every candidate.
+  const boundary = prompt.indexOf('\n<review_input>\n');
+  return {
+    systemPrompt: boundary >= 0 ? prompt.slice(0, boundary) : undefined,
+    evidence: boundary >= 0 ? prompt.slice(boundary + 1) : prompt,
+  };
+}
+
+export type AutoReviewAuxiliaryFallback = (
+  prompt: string,
+  opts: { timeoutMs: number; signal?: AbortSignal; validateResponse: (text: string) => boolean },
+) => Promise<UtilityTextResult>;
+
+/** Capture explicit routing consent before the dedicated chain starts awaiting. */
+export function createCustomAutoReviewFallback(): AutoReviewAuxiliaryFallback | undefined {
+  const chain = getEffectiveAuxiliaryModelChain();
+  if (chain.source !== 'custom' || chain.refs.length === 0) return undefined;
+  const ownerScopeKey = activeOwnerScopeKey();
+  const chainSnapshot = stableSnapshot(chain);
+  const snapshotRoute = (route: UtilityTextDispatchRoute): string => {
+    const provider = getActiveCatalog().providers.find((item) => item.id === route.providerId);
+    return stableSnapshot({
+      source: provider?.source,
+      auth: provider?.auth,
+      routing: provider?.routing[route.agentKind],
+      disabled: isProviderModelRouteDisabled(route.providerId, route.model),
+      // The existing revision survives delete/recreate and covers secret-only edits.
+      credentialRevision: getProviderRouteCredentialRevision(route.providerId),
+    });
+  };
+  const routes = chain.refs.flatMap((ref) => {
+    const parsed = parseAuxiliaryModelRef(ref);
+    if (!parsed) return [];
+    const route = auxiliaryRefDispatchRoute(parsed);
+    return [{ route, snapshot: snapshotRoute(route) }];
+  });
+  const stillCurrent = (): boolean => !isAppSessionBoundaryPending()
+    && activeOwnerScopeKey() === ownerScopeKey
+    && stableSnapshot(getEffectiveAuxiliaryModelChain()) === chainSnapshot
+    && routes.every(({ route, snapshot }) =>
+      !isProviderRouteMutationInProgress(route.providerId) && snapshotRoute(route) === snapshot,
+    );
+
+  return async (prompt, opts) => {
+    const { systemPrompt, evidence } = splitAutoReviewPrompt(prompt);
+    const attempts: UtilityTextAttempt[] = [];
+    for (const ref of chain.refs) {
+      if (opts.signal?.aborted || !stillCurrent()) break;
+      const parsed = parseAuxiliaryModelRef(ref);
+      if (!parsed) continue;
+      const route = auxiliaryRefDispatchRoute(parsed);
+      const routing = getActiveCatalog().providers.find((provider) => provider.id === route.providerId)
+        ?.routing[route.agentKind];
+      const failure = (reason: 'timeout' | 'request_failed'): UtilityTextResult => ({
+        ok: false,
+        reason: reason === 'timeout' ? 'timeout' : 'all_candidates_failed',
+        attempts: [{
+          providerId: route.providerId,
+          model: route.model,
+          transport: route.agentKind === 'codex' && routing?.wireProtocol !== 'openai-chat'
+            ? 'codex-responses' : 'litellm-chat-completions',
+          status: 'failed',
+          reason,
+        }],
+      });
+      let result: UtilityTextResult;
+      try {
+        // Normalize legacy profiles into exact catalog HTTP routes too. Never call
+        // Agent.oneShot: approval must not start a development Agent or tool loop.
+        result = await requestUtilityTextWithinTimeout(
+          (signal) => requestExplicitUtilityText(evidence, {
+            ...route,
+            systemPrompt,
+            maxTokens: DEDICATED_AUTO_REVIEW_MAX_TOKENS,
+            timeoutMs: opts.timeoutMs,
+            signal,
+            reasoningEffort: 'low',
+            // Use the auxiliary transport's short-output policy: the least thinking the
+            // model allows (Chat / Messages try off first; Responses starts at the
+            // lowest catalog effort). See utilityReasoningPlan.ts.
+            disableReasoning: true,
+            validateResponse: opts.validateResponse,
+            beforeDispatch: async () => !signal.aborted && stillCurrent(),
+          }),
+          opts.timeoutMs,
+          opts.signal,
+          () => failure('timeout'),
+        );
+      } catch {
+        // A credential/catalog failure must not bypass the next selected model.
+        result = failure('request_failed');
+      }
+      if (opts.signal?.aborted || !stillCurrent()) break;
+      if (result.ok) return result;
+      attempts.push(...result.attempts);
+    }
+    return failedChainResult(attempts);
+  };
+}
+
+/**
+ * 执行一个专用 Auto-review 候选。
+ *
+ * Gateway 别名不属于用户模型目录，必须走这条受限入口绕过普通显式路由的目录
+ * 校验；订阅候选反过来必须存在于实时目录，防止对账号不支持的模型盲发请求。
+ */
+export async function requestDedicatedAutoReviewCandidateText(
+  prompt: string,
+  candidate: DedicatedAutoReviewCandidate,
+  opts: { timeoutMs: number; signal?: AbortSignal },
+): Promise<UtilityTextResult> {
+  const { systemPrompt, evidence } = splitAutoReviewPrompt(prompt);
+  const profile: UtilityModelProfile = {
+    id: candidate.providerId,
+    model: candidate.model,
+    transport: candidate.transport,
+    auth: candidate.providerId === 'xd' ? 'api-key' : 'codex',
+    settingsTab: 'providers',
+    missingCredentialMessage: 'The Auto-review provider is not authenticated.',
+  };
+
+  if (opts.signal?.aborted) return cancelledUtilityTextResult(profile);
+  if (isProviderDisabled(readModelDisableOverrides(), candidate.providerId)) {
+    return { ok: false, reason: 'no_candidate', attempts: [skippedAttempt(profile, 'model_unavailable')] };
+  }
+
+  if (candidate.id === 'cindy-gateway') {
+    if (!getAppCapabilities().canUseCindyGateway) {
+      return { ok: false, reason: 'no_candidate', attempts: [skippedAttempt(profile, 'not_authenticated')] };
+    }
+    const apiKey = readClaudeApiKey();
+    const baseUrl = effectiveXdGatewayBaseUrl().trim();
+    if (!apiKey) {
+      return { ok: false, reason: 'no_candidate', attempts: [skippedAttempt(profile, 'api_key_missing')] };
+    }
+    if (!baseUrl) {
+      return { ok: false, reason: 'no_candidate', attempts: [skippedAttempt(profile, 'endpoint_missing')] };
+    }
+    return executeCandidates([{
+      providerId: candidate.providerId,
+      model: candidate.model,
+      transport: candidate.transport,
+      profile,
+      // The Gateway alias is not a catalog model: keep its fixed Chat request
+      // with no reasoning fields and let the Gateway apply the alias policy.
+      execute: (text, requestOpts) => requestProviderHttpText({
+        targets: {
+          'chat-completions': {
+            endpoint: joinProxyPath(baseUrl, '/v1/chat/completions'),
+            headers: { Authorization: `Bearer ${apiKey}` },
+            model: candidate.model,
+          },
+        },
+        steps: [{ wire: 'chat-completions', rung: { kind: 'omit' } }],
+        prompt: text,
+        systemPrompt,
+        maxTokens: DEDICATED_AUTO_REVIEW_MAX_TOKENS,
+        timeoutMs: requestOpts?.timeoutMs ?? opts.timeoutMs,
+        signal: requestOpts?.signal ?? opts.signal,
+        onUnauthorized: () => reportCindyGatewayKeyRejected(apiKey),
+      }),
+    }], evidence, [], {
+      maxTokens: DEDICATED_AUTO_REVIEW_MAX_TOKENS,
+      timeoutMs: opts.timeoutMs,
+      signal: opts.signal,
+    });
+  }
+
+  const provider = getActiveCatalog().providers.find((item) => item.id === candidate.providerId);
+  const configured = provider?.models[candidate.agentKind] ?? [];
+  if (
+    !provider
+    || !provider.agents.includes(candidate.agentKind)
+    || !provider.routing[candidate.agentKind]
+  ) {
+    return { ok: false, reason: 'no_candidate', attempts: [skippedAttempt(profile, 'agent_unavailable')] };
+  }
+  if (!('catalogExempt' in candidate && candidate.catalogExempt) && !configured.some((model) => model.id === candidate.model)) {
+    return { ok: false, reason: 'no_candidate', attempts: [skippedAttempt(profile, 'model_unavailable')] };
+  }
+  if (isProviderModelRouteDisabled(candidate.providerId, candidate.model)) {
+    return { ok: false, reason: 'no_candidate', attempts: [skippedAttempt(profile, 'model_unavailable')] };
+  }
+
+  return requestBuiltinProviderText(evidence, {
+    systemPrompt,
+    provider,
+    agentKind: candidate.agentKind,
+    model: candidate.model,
+    transport: candidate.transport,
+    maxTokens: DEDICATED_AUTO_REVIEW_MAX_TOKENS,
+    timeoutMs: opts.timeoutMs,
+    reasoningEffort: candidate.reasoningEffort,
+    signal: opts.signal,
+  });
+}
+
 /** Older remote/mobile callers may omit providerId; a model unique to one
  * non-XD provider is still enough to preserve the selected route. */
 function inferUniqueProviderId(agentKind: AgentKind | undefined, model: string | undefined): string | undefined {
@@ -290,31 +651,76 @@ function inferUniqueProviderId(agentKind: AgentKind | undefined, model: string |
   return matches.length === 1 ? matches[0]?.id : undefined;
 }
 
-async function requestDefaultUtilityText(
-  maker: Maker,
-  prompt: string,
-  opts?: UtilityTextRequestOptions & { capability?: UtilityTextCapability },
-): Promise<UtilityTextResult> {
-  const { candidates, attempts } = await resolveUtilityTextCandidates(
-    maker,
-    opts?.capability ?? { transports: ['codex-responses', 'litellm-chat-completions'] },
-    opts?.pinnedProfileId,
-  );
-  if (candidates.length === 0) {
-    return { ok: false, reason: 'no_candidate', attempts };
+function auxiliaryRefDispatchRoute(parsed: ParsedAuxiliaryModelRef): UtilityTextDispatchRoute {
+  if (parsed.kind === 'catalog') {
+    return {
+      providerId: parsed.route.providerId,
+      agentKind: parsed.route.agentKind,
+      model: parsed.route.model,
+    };
   }
+  const profile = getUtilityModelProfile(parsed.id);
+  return {
+    providerId: profile.transport === 'codex-responses' ? 'openai' : 'xd',
+    agentKind: 'codex',
+    model: profile.model,
+  };
+}
 
+async function runDefaultProfileCandidates(
+  prompt: string,
+  candidates: UtilityTextCandidate[],
+  attempts: UtilityTextAttempt[],
+  opts?: UtilityTextRequestOptions,
+): Promise<UtilityTextResult | null> {
   for (const candidate of candidates) {
-      // 逐候选执行前按**当前** override 重查(PR #744 review 第二十一轮):前一个
-      // 候选失败/超时可能耗时数十秒,期间本候选可能已被停用 —— 不再对其付费下单,
-      // 记 model_unavailable 落到下一候选。
-      if (isUtilityRouteDisabled(candidate.profile)) {
-        attempts.push(skippedAttempt(candidate.profile, 'model_unavailable'));
-        continue;
-      }
+    // 逐候选执行前按**当前** override 重查(PR #744 review 第二十一轮):前一个
+    // 候选失败/超时可能耗时数十秒,期间本候选可能已被停用 —— 不再对其付费下单,
+    // 记 model_unavailable 落到下一候选。
+    if (isUtilityRouteDisabled(candidate.profile)) {
+      attempts.push(skippedAttempt(candidate.profile, 'model_unavailable'));
+      continue;
+    }
+    // 前一个 fallback 候选可能运行数十秒；在每个 XD 候选真正执行前重读
+    // owner-scoped v5 deny，避免订阅状态/模型目录刚变化后继续向网关下单。
+    if (isUtilityRoutePaymentRequired(candidate.profile)) {
+      attempts.push(skippedAttempt(candidate.profile, 'model_unavailable'));
+      continue;
+    }
+    // Profile candidates may spend time awaiting credential discovery before
+    // they reach this loop (for example maker.getAgentAuthState for Codex).
+    // Re-check the owning workflow immediately before invoking the candidate;
+    // otherwise a profile route can bypass the catalog HTTP path's final
+    // beforeDispatch fence and send the old owner's prompt after a switch.
+    if (
+      opts?.beforeDispatch
+      && !(await opts.beforeDispatch({
+        providerId: utilityRouteProviderIdFor(candidate.profile.transport, candidate.providerId),
+        agentKind: 'codex',
+        model: candidate.model,
+      }))
+    ) {
+      log.warn('utility text profile candidate aborted before dispatch', {
+        providerId: candidate.providerId,
+        model: candidate.model,
+      });
+      return null;
+    }
+    // The first guard above only covers the time spent resolving the candidate.
+    // Codex candidates can still await host startup inside `oneShot`, so pass a
+    // second guard through to the actual dispatch and re-read the profile's
+    // live disable state after any caller-owned async checks.
+    const candidateOpts: UtilityTextRequestOptions = {
+      ...(opts ?? {}),
+      beforeDispatch: async (route) => {
+        if (isUtilityRouteDisabled(candidate.profile)) return false;
+        if (opts?.beforeDispatch && !(await opts.beforeDispatch(route))) return false;
+        return !isUtilityRouteDisabled(candidate.profile);
+      },
+    };
     try {
-      const text = (await candidate.execute(prompt, opts)).trim();
-      if (!text) throw new UtilityTextExecutionError({ reason: 'empty_response' });
+      const text = (await candidate.execute(prompt, candidateOpts)).trim();
+      validateUtilityResponse(text, opts);
       return {
         ok: true,
         text,
@@ -334,9 +740,132 @@ async function requestDefaultUtilityText(
       });
     }
   }
-  const reason = aggregateFailureReason(attempts.filter((attempt) => attempt.status === 'failed'));
+  return null;
+}
+
+function failedChainResult(attempts: UtilityTextAttempt[]): UtilityTextResult {
+  const failed = attempts.filter((attempt) => attempt.status === 'failed');
+  const reason = failed.length > 0
+    ? aggregateFailureReason(failed)
+    : attempts.length > 0
+      ? 'no_candidate'
+      : 'all_candidates_failed';
   log.warn('all utility text candidates failed', { reason, attempts: attempts.length });
   return { ok: false, reason, attempts };
+}
+
+function validateUtilityResponse(text: string, opts?: UtilityTextRequestOptions): void {
+  if (!text) throw new UtilityTextExecutionError({ reason: 'empty_response' });
+  if (opts?.validateResponse && !opts.validateResponse(text)) {
+    throw new UtilityTextExecutionError({ reason: 'request_failed' });
+  }
+}
+
+async function requestDefaultUtilityText(
+  maker: Maker,
+  prompt: string,
+  opts?: UtilityTextRequestOptions & { capability?: UtilityTextCapability },
+): Promise<UtilityTextResult> {
+  // Default-chain resolution and credential discovery can both await. Capture
+  // the owner before either starts so callers that do not provide their own
+  // workflow guard still fail closed instead of dispatching into a new owner.
+  const ownerScopeKey = activeOwnerScopeKey();
+  // A fallback chain is a user-selected routing decision. If it changes while
+  // an earlier candidate is awaiting credentials or failing, do not dispatch a
+  // later candidate from the stale snapshot into the new configuration.
+  const initialChain = opts?.pinnedProfileId
+    ? null
+    : getEffectiveAuxiliaryModelChain();
+  const chainSnapshot = initialChain ? stableSnapshot(initialChain) : null;
+  const callerBeforeDispatch = opts?.beforeDispatch;
+  const requestSnapshotStillCurrent = (): boolean => {
+    if (isAppSessionBoundaryPending() || activeOwnerScopeKey() !== ownerScopeKey) return false;
+    return chainSnapshot === null
+      || stableSnapshot(getEffectiveAuxiliaryModelChain()) === chainSnapshot;
+  };
+  const requestOpts: UtilityTextRequestOptions & { capability?: UtilityTextCapability } = {
+    ...opts,
+    beforeDispatch: async (route) => {
+      if (!requestSnapshotStillCurrent()) return false;
+      if (callerBeforeDispatch && !(await callerBeforeDispatch(route))) return false;
+      // The caller guard may await account/database state. Re-check the
+      // captured owner, session boundary, and chain after that await so a
+      // concurrent account switch cannot turn a true result into permission
+      // to dispatch the old owner's prompt.
+      return requestSnapshotStillCurrent();
+    },
+    // Short auxiliary budgets cannot afford provider-default thinking. Callers
+    // that need reasoning must pass disableReasoning: false.
+    disableReasoning: opts?.disableReasoning ?? true,
+  };
+  const capability = opts?.capability ?? {
+    transports: ['codex-responses', 'litellm-chat-completions'],
+  };
+
+  if (opts?.pinnedProfileId) {
+    const { candidates, attempts } = await resolveUtilityTextCandidates(
+      maker,
+      capability,
+      opts.pinnedProfileId,
+    );
+    if (candidates.length === 0) {
+      return { ok: false, reason: 'no_candidate', attempts };
+    }
+    const success = await runDefaultProfileCandidates(prompt, candidates, attempts, requestOpts);
+    return success ?? failedChainResult(attempts);
+  }
+
+  const chain = initialChain!;
+  const attempts: UtilityTextAttempt[] = [];
+  for (const ref of chain.refs) {
+    const parsed = parseAuxiliaryModelRef(ref);
+    if (!parsed) continue;
+    if (
+      requestOpts.beforeDispatch
+      && !(await requestOpts.beforeDispatch(auxiliaryRefDispatchRoute(parsed)))
+    ) {
+      log.warn('utility text chain aborted before dispatch', { ref, source: chain.source });
+      return failedChainResult(attempts);
+    }
+    if (parsed.kind === 'profile') {
+      const resolved = await resolveUtilityTextCandidates(maker, capability, parsed.id);
+      attempts.push(...resolved.attempts);
+      if (resolved.candidates.length === 0) continue;
+      const success = await runDefaultProfileCandidates(
+        prompt,
+        resolved.candidates,
+        attempts,
+        requestOpts,
+      );
+      if (success) return success;
+      continue;
+    }
+    const result = await requestExplicitProviderText(prompt, {
+      ...requestOpts,
+      providerId: parsed.route.providerId,
+      agentKind: parsed.route.agentKind,
+      model: parsed.route.model,
+    });
+    if (result.ok) return result;
+    attempts.push(...result.attempts);
+  }
+  return failedChainResult(attempts);
+}
+
+function stableSnapshot(value: unknown): string {
+  const normalize = (entry: unknown): unknown => {
+    if (Array.isArray(entry)) return entry.map(normalize);
+    if (entry && typeof entry === 'object') {
+      return Object.keys(entry as Record<string, unknown>)
+        .sort()
+        .reduce<Record<string, unknown>>((result, key) => {
+          result[key] = normalize((entry as Record<string, unknown>)[key]);
+          return result;
+        }, {});
+    }
+    return entry;
+  };
+  return JSON.stringify(normalize(value));
 }
 
 /**
@@ -355,10 +884,20 @@ async function requestExplicitProviderText(
   // Model resolution is scoped to the selected agent. Never use provider.titleModel
   // here: that legacy field may belong to another runtime (for example Codex),
   // which would silently turn a Claude request into a Codex request.
-  const model = requestedModel || configuredModels[0]?.id || '';
-  const selectedRouting = agentKind ? provider?.routing[agentKind] : undefined;
+  const model = requestedModel || configuredModels.find((item) =>
+    isModelSelectableForNewRoute(item, { userProvider: provider?.source === 'user' }))?.id || '';
+  const catalogModel = configuredModels.find((item) => item.id === model);
+  // 预设身份随模型投影带出：从 OpenCode Go 预设创建后再改地址/复制连接时，运行时 id 与
+  // URL 都可能对不上，补会话头仍要认得出来（见 opencode-go-session.ts 的三路识别）。
+  const catalogPresetId = catalogModel?.catalogPresetId;
+  const selectedRouting = provider && agentKind
+    ? usesDirectTextRoute(provider)
+      ? resolveDirectTextRoute(provider, agentKind, catalogModel)
+      : provider.routing[agentKind]
+    : undefined;
   const transport: UtilityModelTransport =
-    agentKind === 'codex' && selectedRouting?.wireProtocol !== 'openai-chat'
+    selectedRouting?.wireProtocol === 'openai-responses'
+      || (agentKind === 'codex' && selectedRouting?.wireProtocol === undefined)
       ? 'codex-responses'
       : 'litellm-chat-completions';
 
@@ -401,7 +940,9 @@ async function requestExplicitProviderText(
       }],
     };
   }
-  if (requestedModel && !configuredModels.some((item) => item.id === requestedModel)) {
+  if (requestedModel && !configuredModels.some((item) =>
+    item.id === requestedModel
+    && isModelSelectableForNewRoute(item, { userProvider: provider.source === 'user' }))) {
     return {
       ok: false,
       reason: 'no_candidate',
@@ -417,12 +958,42 @@ async function requestExplicitProviderText(
 
   // 自定义供应商目录钉同样钳制到模型声明的输出上限(与 builtin 分支同口径,
   // 见 requestBuiltinProviderText 开头)。Codex 2026-08-06。
-  const catalogModel = provider.models[agentKind]?.find((m) => m.id === model);
+  const routeSnapshot = stableSnapshot({
+    routing: selectedRouting,
+    configuredRouting: provider.routing[agentKind],
+    modelRoute: catalogModel?.route,
+    modelApi: catalogModel?.api ?? catalogModel?.piApi,
+    auth: provider.auth,
+    source: provider.source,
+  });
+  const routeStillCurrent = (): boolean => {
+    if (isProviderRouteMutationInProgress(provider.id)) return false;
+    if (isProviderModelRouteDisabled(provider.id, model)) return false;
+    if (provider.id === 'xd' && isXdGatewayPaymentRequiredRoute(model, agentKind)) return false;
+    const currentProvider = getActiveCatalog().providers.find((item) => item.id === provider.id);
+    if (!currentProvider || !currentProvider.agents.includes(agentKind)) return false;
+    const currentModel = currentProvider.models[agentKind]?.find((item) => item.id === model);
+    if (
+      !currentModel ||
+      !isModelSelectableForNewRoute(currentModel, { userProvider: currentProvider.source === 'user' })
+    ) return false;
+    return stableSnapshot({
+      routing: usesDirectTextRoute(currentProvider)
+        ? resolveDirectTextRoute(currentProvider, agentKind, currentModel)
+        : currentProvider.routing[agentKind],
+      configuredRouting: currentProvider.routing[agentKind],
+      modelRoute: currentModel.route,
+      modelApi: currentModel.api ?? currentModel.piApi,
+      auth: currentProvider.auth,
+      source: currentProvider.source,
+    }) === routeSnapshot;
+  };
+
   if (opts.maxTokens !== undefined && catalogModel?.maxOutput !== undefined) {
     opts = { ...opts, maxTokens: Math.min(opts.maxTokens, catalogModel.maxOutput) };
   }
 
-  if (provider.id === 'xd' || provider.id === 'anthropic' || provider.id === 'openai' || provider.id === 'xai') {
+  if (provider.id === 'xd' || providerCatalogId(provider) === 'anthropic' || isOpenAiSubscriptionProvider(provider) || providerCatalogId(provider) === 'xai') {
     return requestBuiltinProviderText(prompt, {
       provider,
       agentKind,
@@ -431,11 +1002,19 @@ async function requestExplicitProviderText(
       maxTokens: opts.maxTokens,
       timeoutMs: opts.timeoutMs,
       reasoningEffort: opts.reasoningEffort,
+      disableReasoning: opts.disableReasoning,
+      signal: opts.signal,
+      systemPrompt: opts.systemPrompt,
+      onText: opts.onText,
+      responseInstructions: opts.responseInstructions,
+      validateResponse: opts.validateResponse,
+      beforeDispatch: opts.beforeDispatch,
+      routeStillCurrent,
     });
   }
 
-  const routing = provider.routing[agentKind];
-  if (routing?.disabled) {
+  const routing = selectedRouting;
+  if (!routing || routing.disabled) {
     return {
       ok: false,
       reason: 'no_candidate',
@@ -460,7 +1039,7 @@ async function requestExplicitProviderText(
     };
   }
   const authStrategy: 'api-key-header' | 'oauth-token' | 'none' = routing.authStrategy;
-  if (!routing?.upstream) {
+  if (!routing?.upstream || routing.wireProtocol === 'google-generative-ai') {
     return {
       ok: false,
       reason: 'no_candidate',
@@ -468,9 +1047,10 @@ async function requestExplicitProviderText(
     };
   }
   const isOAuth = authStrategy === 'oauth-token';
+  const wireProtocol = routing.wireProtocol;
   const noAuth = authStrategy === 'none';
   const credential = isOAuth
-    ? readCachedGenericOAuthAccessToken(provider.id, provider.auth.oauth)
+    ? readCachedGenericOAuthAccessToken(storedCustomProviderId(provider.id), provider.auth.oauth)
     : noAuth
       ? null
       : readCustomProviderKey(provider.id, agentKind);
@@ -506,25 +1086,61 @@ async function requestExplicitProviderText(
     settingsTab: 'providers',
     missingCredentialMessage: 'API key is required for the selected provider.',
   };
+  const isOllama = isOllamaProviderRoute(provider.id, routing.upstream);
   const candidate: UtilityTextCandidate = {
     providerId: provider.id,
     model,
     transport,
     profile,
-    execute: (text, requestOpts) => requestCustomProviderText({
-      agentKind,
-      baseUrl: routing.upstream,
-      requestPath: routing.requestPath,
-      wireProtocol: routing.wireProtocol,
-      headers: routing.headerOverride,
-      credential: credential ?? '',
-      authStrategy,
-      model,
-      prompt: text,
-      maxTokens: requestOpts?.maxTokens,
-      timeoutMs: requestOpts?.timeoutMs,
-      reasoningEffort: requestOpts?.reasoningEffort,
-    }),
+    execute: async (text, requestOpts) => {
+      if (isManagedSidecarProviderId(provider.id)) {
+        requestOpts?.signal?.throwIfAborted();
+        await ensureManagedOllamaReadyForSession({ providerId: provider.id });
+        requestOpts?.signal?.throwIfAborted();
+      }
+      return requestCustomProviderText({
+        providerId: provider.id,
+        agentKind,
+        catalogModel,
+        baseUrl: routing.upstream,
+        requestPath: routing.requestPath,
+        wireProtocol,
+        isOllama,
+        headers: withOpenCodeGoSessionHeader(routing.headerOverride, {
+          providerId: provider.id,
+          catalogPresetId,
+          upstream: routing.upstream,
+        }),
+        credential: credential ?? '',
+        authStrategy,
+        model,
+        prompt: text,
+        maxTokens: requestOpts?.maxTokens,
+        timeoutMs: requestOpts?.timeoutMs,
+        reasoningEffort: requestOpts?.reasoningEffort,
+        disableReasoning: requestOpts?.disableReasoning,
+        signal: requestOpts?.signal,
+        systemPrompt: requestOpts?.systemPrompt,
+        onText: requestOpts?.onText,
+        responseInstructions: requestOpts?.responseInstructions,
+        beforeDispatch: requestOpts?.beforeDispatch
+          ? () => requestOpts.beforeDispatch!({ providerId: provider.id, agentKind, model })
+          : undefined,
+        credentialStillCurrent: requestOpts?.beforeDispatch
+          ? () => {
+              if (noAuth) return true;
+              if (isOAuth) {
+                return readCachedGenericOAuthAccessToken(
+                  storedCustomProviderId(provider.id),
+                  provider.auth.oauth,
+                ) === credential;
+              }
+              return readCustomProviderKey(provider.id, agentKind) === credential;
+            }
+          : undefined,
+        routeStillCurrent: requestOpts?.beforeDispatch ? routeStillCurrent : undefined,
+      });
+    },
   };
   return executeCandidates([candidate], prompt, [], opts);
 }
@@ -533,13 +1149,36 @@ function inferProviderAgent(provider: ReturnType<typeof getActiveCatalog>['provi
   if (!provider) return undefined;
   if (provider.agents.includes('codex')) return 'codex';
   if (provider.agents.includes('claude-code')) return 'claude-code';
+  if (provider.agents.includes('pi')) return 'pi';
   return undefined;
+}
+
+function isOllamaProviderRoute(providerId: string, upstream: string): boolean {
+  const normalizedId = providerId.trim().toLowerCase();
+  return providerId === MANAGED_OLLAMA_PROVIDER_ID
+    || normalizedId === 'ollama'
+    || normalizedId.includes('ollama')
+    || /(?:127\.0\.0\.1|localhost):11434(?:\/|$)/i.test(upstream);
 }
 
 /** Matches the xAI bridge capability gate: coding/build variants reject `reasoning`. */
 function supportsXaiReasoning(model: string): boolean {
   const normalized = model.replace(/^xai\//, '');
   return !(normalized.startsWith('grok-code') || normalized.startsWith('grok-build'));
+}
+
+function cancelledUtilityTextResult(profile: UtilityModelProfile): UtilityTextResult {
+  return {
+    ok: false,
+    reason: 'timeout',
+    attempts: [{
+      providerId: profile.id,
+      model: profile.model,
+      transport: profile.transport,
+      status: 'failed',
+      reason: 'timeout',
+    }],
+  };
 }
 
 // 内置供应商的执行分支只认下面硬编码的 xd/anthropic/openai/xai 四家;钉档
@@ -554,7 +1193,15 @@ async function requestBuiltinProviderText(
     transport: UtilityModelTransport;
     maxTokens?: number;
     timeoutMs?: number;
-    reasoningEffort?: 'low' | 'medium' | 'high';
+    reasoningEffort?: 'minimal' | 'low' | 'medium' | 'high';
+    disableReasoning?: boolean;
+    signal?: AbortSignal;
+    systemPrompt?: string;
+    onText?: (text: string) => void;
+    responseInstructions?: string;
+    validateResponse?: (text: string) => boolean;
+    beforeDispatch?: (route: UtilityTextDispatchRoute) => Promise<boolean>;
+    routeStillCurrent?: () => boolean;
   },
 ): Promise<UtilityTextResult> {
   const profile: UtilityModelProfile = {
@@ -565,6 +1212,7 @@ async function requestBuiltinProviderText(
     settingsTab: 'providers',
     missingCredentialMessage: 'The selected provider is not authenticated.',
   };
+  if (input.signal?.aborted) return cancelledUtilityTextResult(profile);
   const routing = input.provider.routing[input.agentKind];
   if (!routing) {
     return { ok: false, reason: 'no_candidate', attempts: [skippedAttempt(profile, 'agent_unavailable')] };
@@ -574,6 +1222,12 @@ async function requestBuiltinProviderText(
   // Codex 2026-08-06。
   if (routing.disabled) {
     return { ok: false, reason: 'no_candidate', attempts: [skippedAttempt(profile, 'endpoint_missing')] };
+  }
+  // XD catalog entries can lose entitlement after they are selected. Recheck
+  // the owner-scoped payment snapshot before resolving credentials or creating
+  // an HTTP candidate, matching the profile-chain guard above.
+  if (input.provider.id === 'xd' && isXdGatewayPaymentRequiredRoute(input.model, input.agentKind)) {
+    return { ok: false, reason: 'no_candidate', attempts: [skippedAttempt(profile, 'model_unavailable')] };
   }
 
   // 插件显式传了 maxTokens 时,钳到该模型目录声明的输出上限(maxOutput),
@@ -588,60 +1242,96 @@ async function requestBuiltinProviderText(
     const baseUrl = effectiveXdGatewayBaseUrl().trim();
     if (!apiKey) return { ok: false, reason: 'no_candidate', attempts: [skippedAttempt(profile, 'api_key_missing')] };
     if (!baseUrl) return { ok: false, reason: 'no_candidate', attempts: [skippedAttempt(profile, 'endpoint_missing')] };
+    // Cindy AI serves every model on all three request formats; send each model
+    // in its native format so the Gateway does not have to translate reasoning
+    // parameters, and fall back to Chat on parameter / format errors.
+    const nativeWire: ProviderWire = catalogModel?.nativeApi === 'openai-responses'
+      ? 'responses'
+      : catalogModel?.nativeApi === 'anthropic-messages'
+        ? 'anthropic-messages'
+        : 'chat-completions';
+    const authorization = { Authorization: `Bearer ${apiKey}` };
     return executeCandidates([{
       providerId: input.provider.id,
       model: input.model,
       transport: 'litellm-chat-completions',
       profile,
       execute: (text, requestOpts) => requestProviderHttpText({
-        wire: 'chat-completions',
-        endpoint: joinProxyPath(baseUrl, '/v1/chat/completions'),
-        headers: { Authorization: `Bearer ${apiKey}` },
-        model: input.model,
+        targets: {
+          'chat-completions': {
+            endpoint: joinProxyPath(baseUrl, '/v1/chat/completions'),
+            headers: authorization,
+            model: input.model,
+          },
+          responses: {
+            endpoint: joinProxyPath(baseUrl, '/v1/responses'),
+            headers: authorization,
+            model: input.model,
+          },
+          'anthropic-messages': {
+            endpoint: joinProxyPath(baseUrl, '/v1/messages'),
+            headers: { ...authorization, 'anthropic-version': '2023-06-01' },
+            model: toAnthropicApiModelId(input.model),
+            // Chat sent no output limit when the caller set none; keep Messages'
+            // required max_tokens within the model's own limit.
+            ...(catalogModel?.maxOutput !== undefined ? { defaultMaxTokens: catalogModel.maxOutput } : {}),
+          },
+        },
+        ...utilityRequestPlan({
+          providerId: input.provider.id,
+          agentKind: input.agentKind,
+          model: input.model,
+          catalogModel,
+          wire: nativeWire,
+          upstreamBase: baseUrl,
+          chatFallback: true,
+          disableReasoning: requestOpts?.disableReasoning ?? input.disableReasoning,
+          reasoningEffort: requestOpts?.reasoningEffort ?? input.reasoningEffort,
+        }),
         prompt: text,
         maxTokens: requestOpts?.maxTokens ?? input.maxTokens,
         timeoutMs: requestOpts?.timeoutMs ?? input.timeoutMs,
-        reasoningEffort: requestOpts?.reasoningEffort ?? input.reasoningEffort,
+        signal: requestOpts?.signal ?? input.signal,
+        systemPrompt: requestOpts?.systemPrompt,
+        onText: requestOpts?.onText,
+        responseInstructions: requestOpts?.responseInstructions,
+        beforeDispatch: requestOpts?.beforeDispatch
+          ? () => requestOpts.beforeDispatch!({
+              providerId: input.provider.id,
+              agentKind: input.agentKind,
+              model: input.model,
+            })
+          : undefined,
+        credentialStillCurrent: requestOpts?.beforeDispatch
+          ? () => readClaudeApiKey() === apiKey && effectiveXdGatewayBaseUrl().trim() === baseUrl
+          : undefined,
+        routeStillCurrent: requestOpts?.beforeDispatch ? input.routeStillCurrent : undefined,
+        onUnauthorized: () => reportCindyGatewayKeyRejected(apiKey),
       }),
     }], prompt, [], input);
   }
 
-  if (input.provider.id === 'anthropic') {
-    const oauth = await getValidClaudeAiOAuth();
-    if (!oauth?.accessToken) {
-      return { ok: false, reason: 'no_candidate', attempts: [skippedAttempt(profile, 'not_authenticated')] };
-    }
-    return executeCandidates([{
-      providerId: input.provider.id,
-      model: input.model,
-      transport: 'litellm-chat-completions',
-      profile,
-      execute: (text, requestOpts) => requestProviderHttpText({
-        wire: 'anthropic-messages',
-        endpoint: joinAnthropicMessagesPath(routing.upstream),
-        headers: {
-          Authorization: `Bearer ${oauth.accessToken}`,
-          'anthropic-version': '2023-06-01',
-          'anthropic-beta': 'oauth-2025-04-20',
-        },
-        model: toSdkModelString(input.model, findProviderModel(input.provider, input.agentKind, input.model)?.contextWindow),
-        prompt: text,
-        // Anthropic API 协议必填 max_tokens:缺省时以模型目录声明的 maxOutput
-        // (模型自身输出能力)兜底,没有目录条目才回退 81920——宿主不设政策上限。
-        maxTokens: requestOpts?.maxTokens ?? input.maxTokens ?? catalogModel?.maxOutput ?? 81_920,
-        timeoutMs: requestOpts?.timeoutMs ?? input.timeoutMs,
-        reasoningEffort: requestOpts?.reasoningEffort ?? input.reasoningEffort,
-      }),
-    }], prompt, [], input);
+  if (providerCatalogId(input.provider) === 'anthropic') {
+    // Claude 订阅只供内置 Claude Code CLI 用它自己的登录发起请求;Cindy 进程不持有也不借用
+    // 这份凭证,辅助模型 / 标题等直连调用不走它(调用方按候选链回落到其它来源)。
+    return { ok: false, reason: 'no_candidate', attempts: [skippedAttempt(profile, 'not_authenticated')] };
   }
 
-  if (input.provider.id === 'openai') {
+  if (isOpenAiSubscriptionProvider(input.provider)) {
     let creds: Awaited<ReturnType<typeof getChatgptBridgeAuth>>;
+    let credentialStillCurrent: (() => boolean) | undefined;
     try {
-      creds = await getChatgptBridgeAuth();
+      if (input.beforeDispatch) {
+        const auth = await getChatgptBridgeAuthForDispatch(input.provider.id);
+        creds = auth;
+        credentialStillCurrent = auth.canDispatch;
+      } else {
+        creds = await (input.provider.id === 'openai' ? getChatgptBridgeAuth() : getChatgptBridgeAuth(input.provider.id));
+      }
     } catch {
       return { ok: false, reason: 'no_candidate', attempts: [skippedAttempt(profile, 'not_authenticated')] };
     }
+    if (input.signal?.aborted) return cancelledUtilityTextResult(profile);
     if (!creds.accountId) {
       return { ok: false, reason: 'no_candidate', attempts: [skippedAttempt(profile, 'not_authenticated')] };
     }
@@ -652,51 +1342,119 @@ async function requestBuiltinProviderText(
       transport: 'codex-responses',
       profile,
       execute: (text, requestOpts) => requestProviderHttpText({
-        wire: 'responses',
-        endpoint: joinProxyPath(routing.upstream, '/responses'),
-        headers: {
-          Authorization: `Bearer ${creds.accessToken}`,
-          'chatgpt-account-id': accountId,
-          'OpenAI-Beta': 'responses=experimental',
-          originator: 'codex_cli_rs',
-          session_id: randomUUID(),
-          accept: 'text/event-stream',
+        targets: {
+          responses: {
+            endpoint: joinProxyPath(routing.upstream, '/responses'),
+            headers: {
+              Authorization: `Bearer ${creds.accessToken}`,
+              'chatgpt-account-id': accountId,
+              'OpenAI-Beta': 'responses=experimental',
+              originator: 'codex_cli_rs',
+              session_id: randomUUID(),
+              accept: 'text/event-stream',
+            },
+            // ChatGPT only accepts the bare official model id: drop the bridge prefix
+            // and the `[1m]` context-profile suffix, matching the conversation path
+            // (maker-host/anthropic-responses-bridge-host.ts withOpenaiContextProfileModel).
+            model: input.model.replace(/^chatgpt\//, '').replace(/\[1m\]$/, ''),
+          },
         },
-        model: input.model.replace(/^chatgpt\//, ''),
+        ...utilityRequestPlan({
+          providerId: input.provider.id,
+          agentKind: input.agentKind,
+          model: input.model.replace(/^chatgpt\//, ''),
+          catalogModel,
+          wire: 'responses',
+          upstreamBase: routing.upstream,
+          disableReasoning: requestOpts?.disableReasoning ?? input.disableReasoning,
+          reasoningEffort: requestOpts?.reasoningEffort ?? input.reasoningEffort,
+        }),
         prompt: text,
         maxTokens: requestOpts?.maxTokens ?? input.maxTokens,
         timeoutMs: requestOpts?.timeoutMs ?? input.timeoutMs,
-        reasoningEffort: requestOpts?.reasoningEffort ?? input.reasoningEffort,
         // ChatGPT's private Codex Responses endpoint rejects this public API
         // parameter with HTTP 400. The Auto reviewer enforces its own compact
         // output ceiling after the response instead.
         supportsMaxOutputTokens: false,
+        signal: requestOpts?.signal ?? input.signal,
+        systemPrompt: requestOpts?.systemPrompt,
+        onText: requestOpts?.onText,
+        responseInstructions: requestOpts?.responseInstructions,
+        beforeDispatch: requestOpts?.beforeDispatch
+          ? () => requestOpts.beforeDispatch!({
+              providerId: input.provider.id,
+              agentKind: input.agentKind,
+              model: input.model,
+            })
+          : undefined,
+        credentialStillCurrent: requestOpts?.beforeDispatch ? credentialStillCurrent : undefined,
+        routeStillCurrent: requestOpts?.beforeDispatch ? input.routeStillCurrent : undefined,
       }),
     }], prompt, [], input);
   }
 
-  if (input.provider.id === 'xai') {
+  if (providerCatalogId(input.provider) === 'xai') {
+    const credentialGeneration = input.beforeDispatch
+      ? getGrokOAuthCredentialGeneration(input.provider.id) : undefined;
     let accessToken: string;
     try {
-      accessToken = await getGrokAccessToken();
+      accessToken = await (input.provider.id === 'xai' ? getGrokAccessToken() : getGrokAccessToken(input.provider.id));
     } catch {
       return { ok: false, reason: 'no_candidate', attempts: [skippedAttempt(profile, 'not_authenticated')] };
     }
+    if (input.signal?.aborted) return cancelledUtilityTextResult(profile);
     return executeCandidates([{
       providerId: input.provider.id,
       model: input.model,
       transport: 'codex-responses',
       profile,
       execute: (text, requestOpts) => requestProviderHttpText({
-        wire: 'responses',
-        endpoint: joinProxyPath(routing.upstream, '/responses'),
-        headers: { Authorization: `Bearer ${accessToken}` },
-        model: input.model.replace(/^xai\//, ''),
+        targets: {
+          responses: {
+            endpoint: joinProxyPath(routing.upstream, '/responses'),
+            headers: { Authorization: `Bearer ${accessToken}` },
+            model: input.model.replace(/^xai\//, ''),
+          },
+        },
+        ...utilityRequestPlan({
+          providerId: input.provider.id,
+          agentKind: input.agentKind,
+          model: input.model.replace(/^xai\//, ''),
+          catalogModel,
+          wire: 'responses',
+          upstreamBase: routing.upstream,
+          disableReasoning: requestOpts?.disableReasoning ?? input.disableReasoning,
+          reasoningEffort: requestOpts?.reasoningEffort ?? input.reasoningEffort,
+          supportsReasoning: supportsXaiReasoning(input.model),
+        }),
         prompt: text,
         maxTokens: requestOpts?.maxTokens ?? input.maxTokens,
         timeoutMs: requestOpts?.timeoutMs ?? input.timeoutMs,
-        reasoningEffort: requestOpts?.reasoningEffort ?? input.reasoningEffort,
-        supportsReasoning: supportsXaiReasoning(input.model),
+        signal: requestOpts?.signal ?? input.signal,
+        systemPrompt: requestOpts?.systemPrompt,
+        onText: requestOpts?.onText,
+        responseInstructions: requestOpts?.responseInstructions,
+        beforeDispatch: requestOpts?.beforeDispatch
+          ? () => requestOpts.beforeDispatch!({
+              providerId: input.provider.id,
+              agentKind: input.agentKind,
+              model: input.model,
+            })
+          : undefined,
+        credentialStillCurrent: requestOpts?.beforeDispatch
+          ? async () => {
+              if (getGrokOAuthCredentialGeneration(input.provider.id) !== credentialGeneration) return false;
+              try {
+                await (input.provider.id === 'xai' ? getGrokAccessToken() : getGrokAccessToken(input.provider.id));
+                // Token refresh stays within the same login. Logout/reconnect must
+                // invalidate the request even when a cached token is unchanged.
+                return getGrokOAuthCredentialGeneration(input.provider.id) === credentialGeneration;
+              } catch {
+                return false;
+              }
+            }
+          : undefined,
+        routeStillCurrent: requestOpts?.beforeDispatch ? input.routeStillCurrent : undefined,
       }),
     }], prompt, [], input);
   }
@@ -724,7 +1482,7 @@ async function executeCandidates(
       }
     try {
       const text = (await candidate.execute(prompt, opts)).trim();
-      if (!text) throw new UtilityTextExecutionError({ reason: 'empty_response' });
+      validateUtilityResponse(text, opts);
       log.info('explicit utility text provider succeeded', {
         providerId: candidate.providerId,
         model: candidate.model,
@@ -738,6 +1496,8 @@ async function executeCandidates(
         providerId: candidate.providerId,
         model: candidate.model,
         transport: candidate.transport,
+        // The wire actually used; `transport` above is the coarse shared label.
+        wire: error instanceof UtilityTextExecutionError ? error.wire : undefined,
         reason: failure.reason,
         httpStatus: failure.httpStatus,
       });
@@ -782,6 +1542,16 @@ async function resolveCodexCandidate(
         model: profile.model,
         maxTokens: opts?.maxTokens,
         timeoutMs: opts?.timeoutMs,
+        signal: opts?.signal,
+        systemPrompt: opts?.systemPrompt,
+        responseInstructions: opts?.responseInstructions,
+        beforeDispatch: opts?.beforeDispatch
+          ? () => opts.beforeDispatch!({
+            providerId: utilityProfileRouteProviderId(profile),
+            agentKind,
+            model: profile.model,
+          })
+          : undefined,
       }),
     },
   };
@@ -812,6 +1582,19 @@ function resolveLiteLlmCandidate(profile: UtilityModelProfile): UtilityTextCandi
         maxTokens: opts?.maxTokens,
         timeoutMs: opts?.timeoutMs,
         reasoningEffort: opts?.reasoningEffort,
+        disableReasoning: opts?.disableReasoning,
+        signal: opts?.signal,
+        systemPrompt: opts?.systemPrompt,
+        onText: opts?.onText,
+        responseInstructions: opts?.responseInstructions,
+        beforeDispatch: opts?.beforeDispatch
+          ? () => opts.beforeDispatch!({
+            providerId: utilityProfileRouteProviderId(profile),
+            agentKind: 'codex',
+            model: profile.model,
+          })
+          : undefined,
+        routeStillAllowed: () => !isUtilityRoutePaymentRequired(profile),
       }),
     },
   };
@@ -824,39 +1607,93 @@ async function requestLiteLlmText(input: {
   prompt: string;
   maxTokens?: number;
   timeoutMs?: number;
-  reasoningEffort?: 'low' | 'medium' | 'high';
+  reasoningEffort?: 'minimal' | 'low' | 'medium' | 'high';
+  disableReasoning?: boolean;
+  signal?: AbortSignal;
+  systemPrompt?: string;
+  onText?: (text: string) => void;
+  responseInstructions?: string;
+  /** Async final dispatch fence, including owner/settings checks. */
+  beforeDispatch?: () => Promise<boolean>;
+  /** Synchronous owner entitlement fence immediately before the HTTP request. */
+  routeStillAllowed?: () => boolean;
 }): Promise<string> {
   const controller = new AbortController();
   const timeoutMs = input.timeoutMs ?? 20_000;
+  const abortFromParent = () => controller.abort();
+  if (input.signal?.aborted) abortFromParent();
+  else input.signal?.addEventListener('abort', abortFromParent, { once: true });
   const timeout = setTimeout(() => controller.abort(), timeoutMs);
   try {
-    const response = await undiciFetch(joinProxyPath(input.baseUrl, '/v1/chat/completions'), {
-      method: 'POST',
-      signal: controller.signal,
-      headers: {
-        Authorization: `Bearer ${input.apiKey}`,
-        'Content-Type': 'application/json',
-      },
-      body: JSON.stringify({
-        model: input.model,
-        ...(input.maxTokens !== undefined ? { max_tokens: input.maxTokens } : {}),
-        ...(input.reasoningEffort ? { reasoning_effort: input.reasoningEffort } : {}),
-        messages: [{ role: 'user', content: input.prompt }],
-      }),
-    });
+    const instructions = [input.systemPrompt, input.responseInstructions]
+      .filter((value): value is string => typeof value === 'string' && value.trim().length > 0)
+      .join('\n');
+    let maxTokens = input.maxTokens;
+    const send = async () => {
+      if (input.beforeDispatch && !(await input.beforeDispatch())) {
+        throw new UtilityTextExecutionError({ reason: 'request_failed' });
+      }
+      if (input.routeStillAllowed && !input.routeStillAllowed()) {
+        throw new UtilityTextExecutionError({ reason: 'request_failed' });
+      }
+      return undiciFetch(joinProxyPath(input.baseUrl, '/v1/chat/completions'), {
+        method: 'POST',
+        signal: controller.signal,
+        headers: {
+          Authorization: `Bearer ${input.apiKey}`,
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          model: input.model,
+          ...(maxTokens !== undefined ? { max_tokens: maxTokens } : {}),
+          ...(input.disableReasoning
+            ? { thinking: { type: 'disabled' } }
+            : input.reasoningEffort
+              ? { reasoning_effort: input.reasoningEffort }
+              : {}),
+          messages: [
+            ...(instructions
+              ? [{
+                  role: 'system',
+                  content: instructions,
+                }]
+              : []),
+            { role: 'user', content: input.prompt },
+          ],
+        }),
+      });
+    };
+    let response = await send();
     if (!response.ok) {
+      // This path always carries the Cindy AI key to the Cindy gateway.
+      if (response.status === 401) reportCindyGatewayKeyRejected(input.apiKey);
       // Do not retain or log upstream response bodies: gateways may echo request
       // metadata, while the HTTP status is sufficient for user recovery.
       await response.body?.cancel().catch(() => undefined);
       throw new UtilityTextExecutionError({ reason: 'http_error', httpStatus: response.status });
     }
-    const parsed = await response.json() as {
-      choices?: Array<{ message?: { content?: unknown } }>;
-    };
-    const text = (parsed.choices ?? [])
-      .map((choice) => chatCompletionContentText(choice.message?.content))
-      .join('')
-      .trim();
+    let parsed = await response.json() as ChatCompletionBody;
+    let text = chatCompletionChoicesText(parsed);
+    const retryBudget = !text && maxTokens !== undefined
+      && outputBudgetExhausted('chat-completions', parsed)
+      ? reasoningRetryBudget(parsed, maxTokens)
+      : 0;
+    if (retryBudget > 0) {
+      maxTokens = retryBudget;
+      log.warn('utility text reasoning burned the output budget, retrying larger', {
+        model: input.model,
+        from: input.maxTokens,
+        to: retryBudget,
+      });
+      const budgeted = await send();
+      if (budgeted.ok) {
+        parsed = await budgeted.json() as ChatCompletionBody;
+        text = chatCompletionChoicesText(parsed);
+      } else {
+        if (budgeted.status === 401) reportCindyGatewayKeyRejected(input.apiKey);
+        await budgeted.body?.cancel().catch(() => undefined);
+      }
+    }
     if (!text) {
       log.warn('utility text chat-completions empty content', chatCompletionEmptyFingerprint(parsed));
       throw new UtilityTextExecutionError({ reason: 'empty_response' });
@@ -870,6 +1707,7 @@ async function requestLiteLlmText(input: {
     throw new UtilityTextExecutionError({ reason: 'request_failed' });
   } finally {
     clearTimeout(timeout);
+    input.signal?.removeEventListener('abort', abortFromParent);
   }
 }
 
@@ -905,6 +1743,19 @@ function appendProviderPath(baseUrl: string, suffix: string): string {
   return url.toString();
 }
 
+/**
+ * catalog model id → 内置 Anthropic `/v1/messages` 直连请求体的 API model id。
+ *
+ * `[1m]` 是 Claude Code SDK 的 beta 通道后缀(由 toSdkModelString 按目录
+ * contextWindow 追加),不是 Anthropic API 模型名;直连 Messages API 时携带它
+ * 会被上游以 404 not_found 拒绝,进而让 Auto-review 持续 fail-closed(#2429)。
+ * 该转换仅用于内置 anthropic 直连分支——不对自定义供应商做全局字符串剥离,
+ * 部分兼容网关可能把 `[1m]` 作为自己的路由 id。
+ */
+export function toAnthropicApiModelId(model: string): string {
+  return model.endsWith('[1m]') ? model.slice(0, -'[1m]'.length) : model;
+}
+
 /** Claude providers may configure either the host root or an existing `/v1` base. */
 function joinAnthropicMessagesPath(baseUrl: string): string {
   const url = new URL(baseUrl);
@@ -920,137 +1771,471 @@ function joinAnthropicMessagesPath(baseUrl: string): string {
   return url.toString();
 }
 
-/**
- * Execute one provider-native request and classify failures without retaining
- * arbitrary upstream response bodies. The wire controls both request shape and
- * response parser; callers remain responsible for provider fallback semantics.
- */
-async function requestProviderHttpText(input: {
-  wire: ProviderWire;
+/** Endpoint, headers and model id for one request format of the selected route. */
+type ProviderWireTarget = {
   endpoint: string;
   headers?: Record<string, string>;
   model: string;
+  /** Messages requires max_tokens; the model's declared output limit when the caller sets none. */
+  defaultMaxTokens?: number;
+};
+
+/** OpenAI Responses rejects `max_output_tokens` below this value. */
+const RESPONSES_MIN_OUTPUT_TOKENS = 16;
+
+/**
+ * Execute one provider-native request plan and classify failures without
+ * retaining arbitrary upstream response bodies. Each plan step picks the wire
+ * (request shape and response parser) and the reasoning parameters; only
+ * parameter-class rejections advance the plan (see utilityReasoningPlan.ts).
+ * Callers remain responsible for provider fallback semantics.
+ */
+async function requestProviderHttpText(input: {
+  targets: Partial<Record<ProviderWire, ProviderWireTarget>>;
+  steps: readonly UtilityRequestStep[];
+  /** Remembers the step that succeeded for this route; omitted when there is no choice. */
+  memoryKey?: string;
+  /**
+   * model-compat route facts for Chat / Responses bodies. `chatOffViaCompat`
+   * means the vendor profile has its own spelling for "thinking off".
+   */
+  compat?: { harness: CompatibilityHarness; upstreamBase: string; chatOffViaCompat: boolean };
   prompt: string;
   maxTokens?: number;
   timeoutMs?: number;
-  reasoningEffort?: 'low' | 'medium' | 'high';
-  /** Some coding-specialized models reject their wire's reasoning field. */
-  supportsReasoning?: boolean;
-  /** Unknown custom routes may reject optional fields from an otherwise compatible wire. */
-  retryWithMinimalBodyOnInvalidRequest?: boolean;
+  /** Ollama's OpenAI-compatible chat wire uses `reasoning_effort: "none"` to disable thinking. */
+  isOllama?: boolean;
   /** Some private Responses-compatible endpoints reject max_output_tokens. */
   supportsMaxOutputTokens?: boolean;
+  /** Owning workflow cancellation; linked with the candidate timeout below. */
+  signal?: AbortSignal;
+  /** Provider-native system text, never concatenated with untrusted reference data. */
+  systemPrompt?: string;
+  onText?: (text: string) => void;
+  /** Additional output-shape instructions. */
+  responseInstructions?: string;
+  /** Session/owner/config guard, evaluated immediately before each HTTP dispatch. */
+  beforeDispatch?: () => Promise<boolean>;
+  /** Re-read the credential captured by the request closure after the async guard. */
+  credentialStillCurrent?: () => boolean | Promise<boolean>;
+  /** Synchronous catalog/override snapshot guard. */
+  routeStillCurrent?: () => boolean;
+  /**
+   * Called when a response is HTTP 401. Only the Cindy AI (xd) gateway branches
+   * pass it, so a stale Cindy AI key can be re-synced; other providers keep plain 401s.
+   */
+  onUnauthorized?: () => void;
 }): Promise<string> {
   const controller = new AbortController();
   const timeoutMs = input.timeoutMs ?? 90_000;
+  const abortFromParent = () => controller.abort();
+  if (input.signal?.aborted) abortFromParent();
+  else input.signal?.addEventListener('abort', abortFromParent, { once: true });
   const timeout = setTimeout(() => controller.abort(), timeoutMs);
+  let currentWire: ProviderWire | undefined;
   try {
-    const supportsRequestedReasoning = Boolean(
-      input.wire !== 'anthropic-messages'
-      && input.reasoningEffort
-      && input.supportsReasoning !== false,
-    );
-    const hasOptionalRequestFields = input.wire === 'responses'
-      || input.maxTokens !== undefined
-      || supportsRequestedReasoning;
-    const buildBody = (minimal: boolean) => input.wire === 'responses'
-      ? {
-        model: input.model,
-        input: [{ type: 'message', role: 'user', content: [{ type: 'input_text', text: input.prompt }] }],
-        ...(!minimal ? {
-          tools: [],
-          tool_choice: 'auto',
-          parallel_tool_calls: false,
-          store: false,
-          stream: true,
-        } : {}),
-        ...(!minimal && input.maxTokens !== undefined && input.supportsMaxOutputTokens !== false
-          ? { max_output_tokens: input.maxTokens }
-          : {}),
-        ...(!minimal && supportsRequestedReasoning
-          ? { reasoning: { effort: input.reasoningEffort } }
-          : {}),
-      }
-      : input.wire === 'anthropic-messages'
-        ? {
-          model: input.model,
+    const instructions = [input.systemPrompt, input.responseInstructions]
+      .filter((value): value is string => typeof value === 'string' && value.trim().length > 0)
+      .join('\n');
+    const targetFor = (step: UtilityRequestStep): ProviderWireTarget => {
+      const target = input.targets[step.wire];
+      if (!target) throw new UtilityTextExecutionError({ reason: 'request_failed' });
+      return target;
+    };
+    const buildBody = (step: UtilityRequestStep, raisedBudget?: number): Record<string, unknown> => {
+      const { model, defaultMaxTokens } = targetFor(step);
+      const minimal = step.minimalBody === true;
+      const rung = step.rung;
+      const effort = rung.kind === 'effort' ? rung.effort : undefined;
+      const maxTokens = raisedBudget ?? (minimal ? undefined : input.maxTokens);
+      if (step.wire === 'anthropic-messages') {
+        return {
+          model,
           // Anthropic API 协议必填 max_tokens。缺省由调用方以模型目录声明的
           // maxOutput 兜底(模型自身输出能力);81920 只是模型不在目录时的最后
           // 回退,不是宿主承诺的输出上限。
-          max_tokens: input.maxTokens ?? 81_920,
-          messages: [{ role: 'user', content: input.prompt }],
-        }
-        : {
-          model: input.model,
-          ...(!minimal && input.maxTokens !== undefined ? { max_tokens: input.maxTokens } : {}),
-          ...(!minimal && supportsRequestedReasoning
-            ? { reasoning_effort: input.reasoningEffort }
-            : {}),
+          max_tokens: maxTokens ?? defaultMaxTokens ?? 81_920,
+          ...(instructions ? { system: instructions } : {}),
+          ...(rung.kind === 'off' ? { thinking: { type: 'disabled' } } : {}),
+          ...(effort ? { output_config: { effort } } : {}),
+          ...(input.onText ? { stream: true } : {}),
           messages: [{ role: 'user', content: input.prompt }],
         };
-    const send = (minimal: boolean) => undiciFetch(input.endpoint, {
-      method: 'POST',
-      signal: controller.signal,
-      headers: {
-        ...(input.headers ?? {}),
-        'Content-Type': 'application/json',
-      },
-      body: JSON.stringify(buildBody(minimal)),
-    });
-    let response = await send(false);
-    if (
-      !response.ok
-      && (response.status === 400 || response.status === 422)
-      && input.wire !== 'anthropic-messages'
-      && hasOptionalRequestFields
-      && input.retryWithMinimalBodyOnInvalidRequest
-    ) {
+      }
+      const chatOffViaCompat = step.wire === 'chat-completions'
+        && rung.kind === 'off'
+        && input.isOllama !== true
+        && input.compat?.chatOffViaCompat === true;
+      const body: Record<string, unknown> = step.wire === 'responses'
+        ? {
+          model,
+          input: [{ type: 'message', role: 'user', content: [{ type: 'input_text', text: input.prompt }] }],
+          ...(instructions ? { instructions } : {}),
+          ...(!minimal ? { store: false, stream: true } : {}),
+          ...(maxTokens !== undefined && input.supportsMaxOutputTokens !== false
+            ? { max_output_tokens: Math.max(maxTokens, RESPONSES_MIN_OUTPUT_TOKENS) }
+            : {}),
+          // Responses has no reasoning "off" value; the plan never asks for one here.
+          ...(effort ? { reasoning: { effort } } : {}),
+        }
+        : {
+          model,
+          ...(maxTokens !== undefined ? { max_tokens: maxTokens } : {}),
+          // Keep both off signals: OpenAI-compatible gateways honour one or the
+          // other, and Cindy AI's chat-native models have always received this pair.
+          // A vendor profile with its own "off" spelling gets only `none` and lets
+          // model-compat write the vendor fields, so no generic `thinking` rides along.
+          ...(rung.kind === 'off'
+            ? input.isOllama === true || chatOffViaCompat
+              ? { reasoning_effort: 'none' }
+              : { thinking: { type: 'disabled' }, reasoning_effort: 'minimal' }
+            : {}),
+          ...(effort ? { reasoning_effort: effort } : {}),
+          ...(input.onText ? { stream: true } : {}),
+          messages: [
+            ...(instructions ? [{ role: 'system', content: instructions }] : []),
+            { role: 'user', content: input.prompt },
+          ],
+        };
+      // The minimal body exists to drop fields an endpoint rejected; vendor
+      // normalisation could add some back (for example `store`). Without a
+      // vendor "off" spelling, the off pair is sent as is: effort mapping would
+      // read `minimal` as a request for some thinking (low / budget / enabled).
+      if (minimal || !input.compat) return body;
+      if (step.wire === 'chat-completions' && rung.kind === 'off' && !chatOffViaCompat) return body;
+      const normalized = normalizeProviderRequest(body, {
+        harness: input.compat.harness,
+        protocol: step.wire === 'responses' ? 'openai-responses' : 'openai-chat',
+        upstreamBase: input.compat.upstreamBase,
+        model,
+      });
+      return normalized && typeof normalized === 'object' && !Array.isArray(normalized)
+        ? normalized as Record<string, unknown>
+        : body;
+    };
+    const canDispatch = async (): Promise<boolean> => {
+      if (input.routeStillCurrent && !input.routeStillCurrent()) return false;
+      if (input.beforeDispatch && !(await input.beforeDispatch())) return false;
+      if (input.credentialStillCurrent && !(await input.credentialStillCurrent())) return false;
+      if (input.routeStillCurrent && !input.routeStillCurrent()) return false;
+      if (input.beforeDispatch && !(await input.beforeDispatch())) return false;
+      return !input.routeStillCurrent || input.routeStillCurrent();
+    };
+    const send = async (step: UtilityRequestStep, body: Record<string, unknown>) => {
+      if (!(await canDispatch())) {
+        throw new UtilityTextExecutionError({ reason: 'request_failed' });
+      }
+      const target = targetFor(step);
+      return undiciFetch(target.endpoint, {
+        method: 'POST',
+        signal: controller.signal,
+        headers: {
+          ...withProviderAppAttribution(target.endpoint, target.headers),
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify(body),
+      });
+    };
+
+    // Remembered steps are scoped to this route's endpoints and plan, so an
+    // edited address or changed catalog tiers start from the first step again.
+    const memoryKey = input.memoryKey
+      ? scopeUtilityMemoryKey(input.memoryKey, input.steps, {
+        'chat-completions': input.targets['chat-completions']?.endpoint,
+        responses: input.targets.responses?.endpoint,
+        'anthropic-messages': input.targets['anthropic-messages']?.endpoint,
+      })
+      : undefined;
+    let index = rememberedUtilityStepIndex(memoryKey, input.steps);
+    // A remembered step rejected on its first try means the upstream changed:
+    // forget it and walk its wire's steps again from the first one instead of
+    // only moving on.
+    let restartFromFirst = index > 0;
+    const tried = new Set<number>([index]);
+    let step = input.steps[index];
+    if (!step) throw new UtilityTextExecutionError({ reason: 'request_failed' });
+    currentWire = step.wire;
+    let body = buildBody(step);
+    let response = await send(step, body);
+    let requests = 1;
+    while (!response.ok) {
+      // Only parameter-class rejections advance the plan. Steps already tried
+      // in this call, and bodies identical to the rejected one (for example a
+      // minimal body with nothing to strip), would only be rejected again.
+      let next: number | null = null;
+      if (requests < MAX_REASONING_REQUESTS && isUtilityParameterRejection(step, response.status)) {
+        if (restartFromFirst) {
+          forgetUtilityStep(memoryKey);
+          // Restart at the first step of the rejected step's wire: a remembered
+          // Chat fallback means the native wire was already rejected, so keep the
+          // request budget for Chat. A missing native endpoint stays missing, so
+          // a native 404 restarts on the Chat steps as well.
+          const restartWire = response.status === 404 ? 'chat-completions' : step.wire;
+          const restart = input.steps.findIndex((candidate) => candidate.wire === restartWire);
+          next = restart >= 0 ? restart : null;
+        } else {
+          next = nextUtilityRequestStep(input.steps, index, response.status);
+        }
+      }
+      restartFromFirst = false;
+      let nextBody: Record<string, unknown> | undefined;
+      while (next !== null) {
+        const candidate = input.steps[next]!;
+        if (!tried.has(next)) {
+          const candidateBody = buildBody(candidate);
+          if (candidate.wire !== step.wire || stableSnapshot(candidateBody) !== stableSnapshot(body)) {
+            nextBody = candidateBody;
+            break;
+          }
+        }
+        next = next + 1 < input.steps.length ? next + 1 : null;
+      }
+      if (next === null || !nextBody) break;
+      tried.add(next);
       await response.body?.cancel().catch(() => undefined);
-      response = await send(true);
+      log.debug('utility text request rejected, trying the next reasoning step', {
+        status: response.status,
+        from: utilityRequestStepKey(step),
+        to: utilityRequestStepKey(input.steps[next]!),
+      });
+      index = next;
+      step = input.steps[index]!;
+      currentWire = step.wire;
+      body = nextBody;
+      response = await send(step, body);
+      requests += 1;
     }
     if (!response.ok) {
+      if (response.status === 401) input.onUnauthorized?.();
       await response.body?.cancel().catch(() => undefined);
       throw new UtilityTextExecutionError({ reason: 'http_error', httpStatus: response.status });
     }
 
-    const raw = await response.text();
-    const text = input.wire === 'responses'
-      ? parseCodexResponseText(raw)
-      : input.wire === 'anthropic-messages'
-        ? parseAnthropicResponseText(raw)
-        : parseChatCompletionText(raw);
+    let raw = await readUtilityTextStream(response, input.onText);
+    const parsed = responseStructure(step.wire, raw);
+    let text = wireResponseText(step.wire, raw);
+    // thinking:disabled 只是请求侧建议,BYOM 网关可以无视;max_tokens 是含思考的
+    // 总预算,思考吃光就只剩空正文。放大预算重发一次,而不是直接丢掉这个候选。
+    const budgetIsSent = step.wire !== 'responses' || input.supportsMaxOutputTokens !== false;
+    const retryBudget = !text
+      && input.maxTokens !== undefined
+      && budgetIsSent
+      && outputBudgetExhausted(step.wire, parsed)
+      ? reasoningRetryBudget(parsed, input.maxTokens)
+      : 0;
+    if (retryBudget > 0) {
+      log.warn('utility text reasoning burned the output budget, retrying larger', {
+        wire: step.wire,
+        model: targetFor(step).model,
+        from: input.maxTokens,
+        to: retryBudget,
+      });
+      // 预算重试沿用刚才成功的那一步(写法与档位都不变),只放大预算;已被网关拒过
+      // 的可选字段不重新加回去(原样重来只会再被拒一次)。
+      const budgeted = await send(step, buildBody(step, retryBudget));
+      if (budgeted.ok) {
+        raw = await readUtilityTextStream(budgeted, input.onText);
+        text = wireResponseText(step.wire, raw);
+      } else {
+        if (budgeted.status === 401) input.onUnauthorized?.();
+        await budgeted.body?.cancel().catch(() => undefined);
+      }
+    }
+    // The step was accepted by the provider; remember it even when the model
+    // produced no usable text, because the wording itself was not rejected.
+    if (input.steps.length > 1) rememberUtilityStep(memoryKey, step);
+    log.info('utility text request accepted', {
+      wire: step.wire,
+      step: utilityRequestStepKey(step),
+      requests,
+    });
     if (!text) {
-      if (input.wire === 'chat-completions') {
-        try {
-          log.warn('utility text chat-completions empty content', chatCompletionEmptyFingerprint(JSON.parse(raw)));
-        } catch {
-          // 指纹尽力而为,解析不了就不记。
-        }
+      if (step.wire === 'chat-completions') {
+        log.warn('utility text chat-completions empty content', chatCompletionEmptyFingerprint(parsed));
       }
       throw new UtilityTextExecutionError({ reason: 'empty_response' });
     }
+    // A valid response cannot outlive the route or authorization that sent it.
+    // Recheck credentials and routing after the complete response, including retries.
+    if (
+      (input.credentialStillCurrent && !(await input.credentialStillCurrent()))
+      || (input.routeStillCurrent && !input.routeStillCurrent())
+    ) throw new UtilityTextExecutionError({ reason: 'request_failed' });
     return text;
   } catch (error) {
-    if (error instanceof UtilityTextExecutionError) throw error;
-    if (error instanceof Error && error.name === 'AbortError') {
-      throw new UtilityTextExecutionError({ reason: 'timeout' });
-    }
-    throw new UtilityTextExecutionError({ reason: 'request_failed' });
+    const failure = error instanceof UtilityTextExecutionError
+      ? error
+      : new UtilityTextExecutionError({
+        reason: error instanceof Error && error.name === 'AbortError' ? 'timeout' : 'request_failed',
+      });
+    failure.wire ??= currentWire;
+    throw failure;
   } finally {
     clearTimeout(timeout);
+    input.signal?.removeEventListener('abort', abortFromParent);
   }
+}
+
+/**
+ * Build the request plan for one route: entry wire from the caller, reasoning
+ * values from the model catalog (see utilityReasoningPlan.ts for the rules).
+ */
+function utilityRequestPlan(input: {
+  providerId: string;
+  agentKind: AgentKind;
+  model: string;
+  catalogModel: CatalogModel | undefined;
+  wire: ProviderWire;
+  upstreamBase: string;
+  /** Cindy AI native wires fall back to Chat on parameter / format errors. */
+  chatFallback?: boolean;
+  /** Custom routes keep the legacy "drop every optional field" last resort. */
+  minimalBodyFallback?: boolean;
+  disableReasoning?: boolean;
+  reasoningEffort?: string;
+  /** Some coding-specialized models reject their wire's reasoning field. */
+  supportsReasoning?: boolean;
+}): Pick<Parameters<typeof requestProviderHttpText>[0], 'steps' | 'memoryKey' | 'compat'> {
+  const harness: CompatibilityHarness = input.agentKind;
+  let mode: UtilityReasoningMode;
+  if (input.disableReasoning) {
+    const declaration: UtilityReasoningDeclaration =
+      input.supportsReasoning === false
+      || compatMarksNoReasoning({
+        wire: input.wire,
+        harness,
+        upstreamBase: input.upstreamBase,
+        model: input.model,
+      })
+        ? { kind: 'no-reasoning' }
+        : utilityReasoningDeclaration(input.catalogModel);
+    mode = { kind: 'ladder', declaration };
+  } else {
+    mode = {
+      kind: 'fixed',
+      rung: input.reasoningEffort && input.supportsReasoning !== false
+        ? { kind: 'effort', effort: input.reasoningEffort }
+        : { kind: 'omit' },
+    };
+  }
+  const steps = buildUtilityRequestPlan({
+    wire: input.wire,
+    mode,
+    chatFallback: input.chatFallback,
+    minimalBodyFallback: input.minimalBodyFallback,
+  });
+  return {
+    steps,
+    memoryKey: steps.length > 1
+      ? utilityReasoningMemoryKey({
+        providerId: input.providerId,
+        agentKind: input.agentKind,
+        model: input.model,
+        wire: input.wire,
+        mode,
+        routeRevision: getProviderRouteCredentialRevision(input.providerId),
+        ownerScope: activeOwnerScopeKey(),
+      })
+      : undefined,
+    compat: {
+      harness,
+      upstreamBase: input.upstreamBase,
+      chatOffViaCompat: compatHasReasoningOff({ harness, upstreamBase: input.upstreamBase, model: input.model }),
+    },
+  };
+}
+
+type ChatCompletionBody = { choices?: Array<{ message?: { content?: unknown } }> };
+
+/**
+ * 放大预算的硬上限。辅助调用是短输出任务(自动审查 384、记忆 review 800 tokens),
+ * 放大到几万 token 既不像这类调用该有的量级,也容易越过模型自身输出上限。
+ */
+const REASONING_RETRY_BUDGET_CEILING = 16_384;
+
+function chatCompletionChoicesText(parsed: ChatCompletionBody): string {
+  return (parsed.choices ?? [])
+    .map((choice) => chatCompletionContentText(choice.message?.content))
+    .join('')
+    .trim();
 }
 
 function parseChatCompletionText(raw: string): string {
   try {
-    const json = JSON.parse(raw) as { choices?: Array<{ message?: { content?: unknown } }> };
-    return (json.choices ?? [])
-      .map((choice) => chatCompletionContentText(choice.message?.content))
-      .join('')
-      .trim();
+    return chatCompletionChoicesText(JSON.parse(raw) as ChatCompletionBody);
   } catch {
     return '';
   }
+}
+
+function safeJsonParse(raw: string): unknown {
+  try {
+    return JSON.parse(raw);
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * 只供判据用的响应结构:缓冲 JSON 直接返回;responses wire 的正常形态是 SSE,
+ * 这里取最后一个带 response 对象的终止事件(response.completed / response.incomplete),
+ * 否则 SSE 会被当成「不是 JSON」而看不到截断原因。不读正文,也不记录内容。
+ */
+function responseStructure(wire: ProviderWire, raw: string): unknown {
+  const parsed = safeJsonParse(raw);
+  if (parsed !== null || wire !== 'responses') return parsed;
+  let terminal: unknown = null;
+  for (const line of raw.split('\n')) {
+    if (!line.startsWith('data:')) continue;
+    const event = safeJsonParse(line.slice(5).trim()) as { response?: unknown } | null;
+    if (event?.response) terminal = event.response;
+  }
+  return terminal;
+}
+
+function wireResponseText(wire: ProviderWire, raw: string): string {
+  if (raw.trimStart().startsWith('data:') || raw.trimStart().startsWith('event:')) {
+    const streamed = streamTextResult(raw);
+    if (streamed) return streamed.trim();
+  }
+  return wire === 'responses'
+    ? parseCodexResponseText(raw)
+    : wire === 'anthropic-messages'
+      ? parseAnthropicResponseText(raw)
+      : parseChatCompletionText(raw);
+}
+
+/**
+ * 空正文是否由「输出预算(含思考)被截断」造成——thinking:disabled 只是请求侧建议,
+ * 网关可以无视;此时放大预算重试一次就能拿到正文,不该直接丢掉候选。
+ * 判据只认「输出被长度上限截断」这一个形状(各 wire 的对应字段见下),不猜模型。
+ */
+function outputBudgetExhausted(wire: ProviderWire, parsed: unknown): boolean {
+  if (typeof parsed !== 'object' || parsed === null) return false;
+  if (wire === 'responses') {
+    return (parsed as { incomplete_details?: { reason?: unknown } }).incomplete_details?.reason
+      === 'max_output_tokens';
+  }
+  if (wire === 'anthropic-messages') {
+    return (parsed as { stop_reason?: unknown }).stop_reason === 'max_tokens';
+  }
+  return chatCompletionEmptyFingerprint(parsed).finishReason === 'length';
+}
+
+/**
+ * 放大后的预算:网关给了 usage 就按它烧掉的量给(原值×2 与 观测值+余量 取大);
+ * 多数 BYOM 网关不给 usage,退回 max(原值×4, 4096) 的下限。
+ * 返回 0 = 没有增长空间,不重试:调用方本来就给的是大预算,翻倍会越过模型
+ * maxOutput 被 provider 拒,只会让用户多等一次。
+ */
+function reasoningRetryBudget(parsed: unknown, requested: number): number {
+  const usage = (parsed as { usage?: { completion_tokens?: unknown } } | null)?.usage;
+  const burned = typeof usage?.completion_tokens === 'number' ? usage.completion_tokens : 0;
+  const raised = burned > 0
+    ? Math.max(requested * 2, requested + burned + 512)
+    : Math.max(requested * 4, 4096);
+  const capped = Math.min(raised, REASONING_RETRY_BUDGET_CEILING);
+  return capped > requested ? capped : 0;
 }
 
 /**
@@ -1102,6 +2287,7 @@ function chatCompletionEmptyFingerprint(parsed: unknown): Record<string, unknown
           .map((part) => (typeof part === 'object' && part !== null ? (part as { type?: unknown }).type : typeof part))
       : undefined,
     hasReasoningContent: typeof message.reasoning_content === 'string' && message.reasoning_content.length > 0,
+    hasReasoning: typeof message.reasoning === 'string' && message.reasoning.length > 0,
     finishReason: first?.finish_reason,
     messageKeys: Object.keys(message).slice(0, 8),
   };
@@ -1109,10 +2295,13 @@ function chatCompletionEmptyFingerprint(parsed: unknown): Record<string, unknown
 
 /** Direct request for a user provider runtime selected by the schedule. */
 async function requestCustomProviderText(input: {
+  providerId: string;
   agentKind: AgentKind;
+  catalogModel: CatalogModel | undefined;
   baseUrl: string;
   requestPath?: string;
   wireProtocol?: 'anthropic-messages' | 'openai-responses' | 'openai-chat';
+  isOllama?: boolean;
   headers?: Record<string, string>;
   credential: string;
   authStrategy: 'api-key-header' | 'oauth-token' | 'none';
@@ -1120,12 +2309,27 @@ async function requestCustomProviderText(input: {
   prompt: string;
   maxTokens?: number;
   timeoutMs?: number;
-  reasoningEffort?: 'low' | 'medium' | 'high';
+  reasoningEffort?: 'minimal' | 'low' | 'medium' | 'high';
+  disableReasoning?: boolean;
+  signal?: AbortSignal;
+  systemPrompt?: string;
+  onText?: (text: string) => void;
+  responseInstructions?: string;
+  beforeDispatch?: () => Promise<boolean>;
+  credentialStillCurrent?: () => boolean | Promise<boolean>;
+  routeStillCurrent?: () => boolean;
 }): Promise<string> {
   const headers: Record<string, string> = {
     ...(input.headers ?? {}),
     'Content-Type': 'application/json',
   };
+  const wire: ProviderWire =
+    input.wireProtocol === 'anthropic-messages'
+      || (input.wireProtocol === undefined && input.agentKind === 'claude-code')
+      ? 'anthropic-messages'
+      : input.wireProtocol === 'openai-chat'
+        ? 'chat-completions'
+        : 'responses';
   // safeStorage 有当前凭证时覆盖历史 header；没有时仅 api-key 策略允许保留旧版
   // header-only 配置，以便用户升级后继续可用。OAuth 与 none 仍必须清掉复制进来的凭证头。
   const preserveLegacyApiKeyHeaders =
@@ -1138,35 +2342,50 @@ async function requestCustomProviderText(input: {
   }
   if (input.credential) {
     headers.Authorization = `Bearer ${input.credential}`;
-    if (input.agentKind === 'claude-code' && input.authStrategy === 'api-key-header') {
+    if (wire === 'anthropic-messages' && input.authStrategy === 'api-key-header') {
       headers['x-api-key'] = input.credential;
     }
   }
-  if (input.agentKind === 'claude-code') {
+  if (wire === 'anthropic-messages') {
     headers['anthropic-version'] = headers['anthropic-version'] ?? '2023-06-01';
   }
-  const wire: ProviderWire =
-    input.agentKind === 'claude-code'
-      ? 'anthropic-messages'
-      : input.wireProtocol === 'openai-chat'
-        ? 'chat-completions'
-        : 'responses';
   return requestProviderHttpText({
-    wire,
-    endpoint: input.requestPath
-      ? appendProviderRequestPath(input.baseUrl, input.requestPath)
-      : wire === 'responses'
-        ? joinProxyPath(input.baseUrl, '/responses')
-        : wire === 'chat-completions'
-          ? joinProxyPath(input.baseUrl, '/chat/completions')
-          : joinAnthropicMessagesPath(input.baseUrl),
-    headers,
-    model: input.model,
+    targets: {
+      [wire]: {
+        endpoint: input.requestPath
+          ? appendProviderRequestPath(input.baseUrl, input.requestPath)
+          : wire === 'responses'
+            ? joinProxyPath(input.baseUrl, '/responses')
+            : wire === 'chat-completions'
+              ? joinProxyPath(input.baseUrl, '/chat/completions')
+              : joinAnthropicMessagesPath(input.baseUrl),
+        headers,
+        model: input.model,
+      },
+    },
+    ...utilityRequestPlan({
+      providerId: input.providerId,
+      agentKind: input.agentKind,
+      model: input.model,
+      catalogModel: input.catalogModel,
+      wire,
+      upstreamBase: input.baseUrl,
+      // Unknown custom routes may reject optional fields from an otherwise compatible wire.
+      minimalBodyFallback: true,
+      disableReasoning: input.disableReasoning,
+      reasoningEffort: input.reasoningEffort,
+    }),
     prompt: input.prompt,
     maxTokens: input.maxTokens,
     timeoutMs: input.timeoutMs,
-    reasoningEffort: input.reasoningEffort,
-    retryWithMinimalBodyOnInvalidRequest: true,
+    isOllama: input.isOllama,
+    signal: input.signal,
+    systemPrompt: input.systemPrompt,
+    onText: input.onText,
+    responseInstructions: input.responseInstructions,
+    beforeDispatch: input.beforeDispatch,
+    credentialStillCurrent: input.credentialStillCurrent,
+    routeStillCurrent: input.routeStillCurrent,
   });
 }
 
@@ -1216,6 +2435,7 @@ function parseCodexResponseText(raw: string): string {
 }
 
 function parseAnthropicResponseText(raw: string): string {
+  if (raw.trimStart().startsWith('data:') || raw.includes('\nevent:')) return streamTextResult(raw).trim();
   try {
     const json = JSON.parse(raw) as { content?: Array<{ type?: string; text?: unknown }> };
     return (json.content ?? [])

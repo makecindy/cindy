@@ -13,6 +13,7 @@ import { describe, expect, it } from 'vitest';
 import { i18n } from '@/i18n';
 import {
   GOAL_OVERLOAD_LAST_REASON,
+  GOAL_TOOL_LOOP_LAST_REASON,
   GOAL_STATUS_LABEL,
   goalReasonText,
   goalStatusLabel,
@@ -45,6 +46,12 @@ describe('goalReasonText', () => {
     const text = goalReasonText(GOAL_OVERLOAD_LAST_REASON);
     expect(text).toBe(i18n.t('interaction.contextSheet.goalCapacityHint'));
     expect(text).not.toBe(GOAL_OVERLOAD_LAST_REASON);
+  });
+
+  it('工具循环判据串换成本地化说明, 不外发模型原始 message', () => {
+    const text = goalReasonText(GOAL_TOOL_LOOP_LAST_REASON);
+    expect(text).toBe(i18n.t('session.tail.toolUseLoopDetected'));
+    expect(text).not.toContain('missing_required_field');
   });
 
   it('空 reason 不渲染; 其它 reason 沿用原文(既有行为)', () => {

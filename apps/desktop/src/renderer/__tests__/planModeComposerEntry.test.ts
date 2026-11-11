@@ -41,7 +41,34 @@ import {
   nextEnabledSuggestionIndex,
   type ComposerSuggestionAction,
   type ComposerSuggestionEntry,
+  type ComposerPluginSuggestion,
 } from '@/lib/composerSuggestion';
+
+const iosSimulatorPluginSuggestion: ComposerPluginSuggestion = {
+  item: {
+    type: 'plugin-command',
+    name: 'iOS Simulator',
+    relPath: 'cindy://host-capability/ios-simulator',
+    pluginId: 'ios-simulator',
+  },
+};
+
+const disabledIOSSimulatorPluginSuggestion: ComposerPluginSuggestion = {
+  ...iosSimulatorPluginSuggestion,
+  disabled: true,
+  disabledReason: 'extraDirs.pluginDisabled',
+};
+
+const skillOnlyPluginSuggestion: ComposerPluginSuggestion = {
+  item: {
+    type: 'plugin-command',
+    name: 'Skill only',
+    relPath: 'cindy://plugin/skill-only',
+    pluginId: 'skill-only',
+  },
+  disabled: true,
+  disabledReason: 'extraDirs.pluginAgentInvoked',
+};
 
 afterEach(() => {
   cleanup();
@@ -138,16 +165,22 @@ describe('统一 composer 建议入口', () => {
     expect(screen.getByText('Cindy Art')).toBeTruthy();
     const plan = screen.getByRole('menuitemcheckbox', { name: 'planMode.menuItem' });
     expect(plan.getAttribute('aria-checked')).toBe('true');
-    expect(plan.className).toContain('rounded-[8px]');
+    // Shared menu row (DESIGN §4 Composer dropdown rows): 8px inner tier, the panel's glide
+    // highlight instead of an own hover fill, and the checked row turns 500.
+    expect(plan.className).toContain('rounded-lg');
     expect(plan.className).toContain('px-3');
     expect(plan.className).toContain('py-2');
-    expect(plan.className).toContain('hover:bg-[var(--model-item-hover)]');
+    expect(plan.className).not.toContain('hover:bg-');
+    expect(plan.hasAttribute('data-menu-row')).toBe(true);
+    expect(plan.getAttribute('data-state')).toBe('checked');
     fireEvent.click(plan);
     expect(onPlanToggle).toHaveBeenCalledWith(false);
     expect(
-      (screen.getByRole('menuitemcheckbox', {
-        name: 'newChat.collaboration.modeLabel: policy unavailable',
-      }) as HTMLButtonElement).disabled,
+      (
+        screen.getByRole('menuitemcheckbox', {
+          name: 'newChat.collaboration.modeLabel: policy unavailable',
+        }) as HTMLButtonElement
+      ).disabled,
     ).toBe(true);
   });
 
@@ -199,6 +232,130 @@ describe('统一 composer 建议入口', () => {
     await user.keyboard('{Enter}');
     expect(onRemove).toHaveBeenCalledWith('/repo-shared');
   });
+
+  it('空目录只显示一个添加入口，不显示重复标题或空状态', () => {
+    const run = vi.fn();
+    render(createElement(AtMentionPanel, {
+      query: '',
+      state: { kind: 'ready', items: [], truncated: false },
+      entries: [{ kind: 'action', action: { id: 'add-extra-dir', label: 'extraDirs.add', run } }],
+      focusedIndex: 0,
+      onFocusedIndexChange: vi.fn(),
+      onSelect: (entry) => { if (entry.kind === 'action') entry.action.run(); },
+      onClose: vi.fn(),
+      onRetry: vi.fn(),
+      referenceDirs: { dirs: [], onRemove: vi.fn() },
+      writableDirs: { dirs: [], onRemove: vi.fn() },
+    }));
+    expect(screen.queryByText('extraDirs.sectionTitle')).toBeNull();
+    expect(screen.queryByText('extraDirs.empty')).toBeNull();
+    expect(screen.getAllByRole('button')).toHaveLength(1);
+    fireEvent.click(screen.getByRole('button', { name: 'extraDirs.add' }));
+    expect(run).toHaveBeenCalledOnce();
+  });
+
+  it('没有添加入口时仍能在统一列表移除旧授权，分别调用原来的撤销路径', () => {
+    const removeReference = vi.fn();
+    const removeWritable = vi.fn();
+    render(createElement(AtMentionPanel, {
+      query: '',
+      state: { kind: 'ready', items: [], truncated: false },
+      entries: [],
+      focusedIndex: 0,
+      onFocusedIndexChange: vi.fn(),
+      onSelect: vi.fn(),
+      onClose: vi.fn(),
+      onRetry: vi.fn(),
+      referenceDirs: { dirs: ['/reference'], onRemove: removeReference },
+      writableDirs: { dirs: ['/output'], onRemove: removeWritable },
+    }));
+    expect(screen.getAllByRole('list')).toHaveLength(1);
+    expect(screen.getByText('reference')).toBeTruthy();
+    expect(screen.getByText('output')).toBeTruthy();
+    const buttons = screen.getAllByLabelText('extraDirs.remove');
+    fireEvent.click(buttons[1]!);
+    expect(removeWritable).toHaveBeenCalledWith('/output');
+    expect(removeReference).not.toHaveBeenCalled();
+    fireEvent.click(buttons[0]!);
+    expect(removeReference).toHaveBeenCalledWith('/reference');
+  });
+
+  it('已停用优先显示停用状态；可用但无直接入口的 Skill 标为 Agent 自动调用', () => {
+    const disabledEntries = buildComposerSuggestionEntries({
+      query: '',
+      actions: [],
+      resources: [],
+      plugins: [disabledIOSSimulatorPluginSuggestion],
+    });
+    const { rerender } = render(
+      createElement(AtMentionPanel, {
+        query: '',
+        state: { kind: 'ready', items: [], truncated: false },
+        entries: disabledEntries,
+        focusedIndex: 0,
+        onFocusedIndexChange: vi.fn(),
+        onSelect: vi.fn(),
+        onClose: vi.fn(),
+        onRetry: vi.fn(),
+        embedded: true,
+      }),
+    );
+    expect(screen.getByText('extraDirs.pluginDisabled')).toBeTruthy();
+
+    const skillOnlyEntries = buildComposerSuggestionEntries({
+      query: '',
+      actions: [],
+      resources: [],
+      plugins: [skillOnlyPluginSuggestion],
+    });
+    rerender(
+      createElement(AtMentionPanel, {
+        query: '',
+        state: { kind: 'ready', items: [], truncated: false },
+        entries: skillOnlyEntries,
+        focusedIndex: 0,
+        onFocusedIndexChange: vi.fn(),
+        onSelect: vi.fn(),
+        onClose: vi.fn(),
+        onRetry: vi.fn(),
+        embedded: true,
+      }),
+    );
+    expect(screen.getByText('extraDirs.pluginAgentInvoked')).toBeTruthy();
+  });
+
+  it('embedded 面板跟 Morph 壳等宽且锁死横向滚动;独立 @ 面板仍是 480',
+    () => {
+      const entries = buildComposerSuggestionEntries({
+        query: '',
+        actions: [{ id: 'new-goal', label: 'goal', run: vi.fn() }],
+        resources: [],
+        plugins: [],
+      });
+      const props = {
+        query: '',
+        state: { kind: 'ready' as const, items: [], truncated: false },
+        entries,
+        focusedIndex: 0,
+        onFocusedIndexChange: vi.fn(),
+        onSelect: vi.fn(),
+        onClose: vi.fn(),
+        onRetry: vi.fn(),
+      };
+      const { container, rerender } = render(
+        createElement(AtMentionPanel, { ...props, embedded: true }),
+      );
+      const embeddedScroller = container.querySelector('.overflow-y-auto');
+      expect(embeddedScroller).toBeTruthy();
+      expect(embeddedScroller?.className).toContain('w-full');
+      expect(embeddedScroller?.className).toContain('overflow-x-hidden');
+      expect(embeddedScroller?.className).not.toContain('w-[480px]');
+
+      rerender(createElement(AtMentionPanel, props));
+      const standaloneScroller = container.querySelector('.overflow-y-auto');
+      expect(standaloneScroller?.className).toContain('w-[480px]');
+      expect(standaloneScroller?.className).toContain('overflow-x-hidden');
+    });
 });
 
 describe('PlanModeIndicator 激活 chip', () => {
@@ -227,7 +384,7 @@ describe('PlanActionCard 取消(Esc)与 ⏎ 去重', () => {
     expect(onCancel).toHaveBeenCalledWith('pr-2');
   });
 
-  it('编辑反馈时批准行 ⏎ 隐藏; 反馈 ⏎ 仅在有文字时出现且点击即发送', () => {
+  it('编辑反馈时批准行 ⏎ 隐藏; 发送按钮常驻, 仅在有文字时可点击发送', () => {
     const onRespond = vi.fn();
     const { container } = render(
       createElement(PlanActionCard, { requestId: 'pr-4', onRespond, onCancel: vi.fn() }),
@@ -236,15 +393,18 @@ describe('PlanActionCard 取消(Esc)与 ⏎ 去重', () => {
     const enterIcons = () => container.querySelectorAll('svg.lucide-corner-down-left');
     expect(enterIcons()).toHaveLength(1);
 
-    // 进入反馈编辑:批准行 ⏎ 隐藏,空文本时无发送 ⏎ → 0 个
+    // 进入反馈编辑:批准行 ⏎ 隐藏;输入框内的发送按钮已在,但无文字时禁用
     fireEvent.click(screen.getByText('newChat.planReview.feedbackPlaceholder'));
     expect(enterIcons()).toHaveLength(0);
+    const send = screen.getByLabelText('newChat.planReview.submitFeedbackAria') as HTMLButtonElement;
+    expect(send.disabled).toBe(true);
 
-    // 输入文字 → 发送 ⏎ 出现(全程唯一),点击即提交反馈
+    // 输入文字 → 发送按钮可用,点击即提交反馈
     const textarea = screen.getByPlaceholderText('newChat.planReview.feedbackPlaceholder');
     fireEvent.change(textarea, { target: { value: '再加一步测试' } });
-    expect(enterIcons()).toHaveLength(1);
-    fireEvent.click(screen.getByLabelText('newChat.planReview.submitFeedbackAria'));
+    expect(enterIcons()).toHaveLength(0);
+    expect(send.disabled).toBe(false);
+    fireEvent.click(send);
     expect(onRespond).toHaveBeenCalledWith('pr-4', false, '再加一步测试');
   });
 

@@ -4,6 +4,7 @@ import { AppServerClient, detectAuthInvalidationReason } from './client.js';
 import type { Logger } from '../../../interfaces/logger.js';
 import type { Transport, LineHandler, StderrHandler, CloseHandler } from './transport.js';
 import { Method } from './protocol.js';
+import { readAccountRateLimitsWithRefresh } from './account-rate-limits.js';
 
 class FakeTransport implements Transport {
   readonly lines: string[] = [];
@@ -341,7 +342,81 @@ describe('AppServerClient auth invalidation', () => {
   });
 });
 
+describe('AppServerClient close completion', () => {
+  it.each([false, true])('shares one close result without losing per-call error policy (failure=%s)', async (fails) => {
+    const transport = new FakeTransport();
+    let finish!: () => void;
+    let fail!: (error: Error) => void;
+    const completion = new Promise<void>((resolve, reject) => { finish = resolve; fail = reject; });
+    const close = vi.spyOn(transport, 'close').mockImplementation(() => completion);
+    const client = new AppServerClient({ createTransport: () => transport, logger });
+    client.start();
+    const requestFailure = expect(client.request('initialize')).rejects.toThrow('closed');
+    const settled = vi.fn();
+    const first = client.close().then(settled);
+    const strict = client.close({ throwOnTransportError: true });
+    const strictResult = fails
+      ? expect(strict).rejects.toThrow('exit not confirmed')
+      : expect(strict).resolves.toBeUndefined();
+    await requestFailure;
+    expect(settled).not.toHaveBeenCalled();
+    expect(close).toHaveBeenCalledOnce();
+    if (fails) fail(new Error('exit not confirmed'));
+    else finish();
+    await Promise.all([first, strictResult]);
+    expect(close).toHaveBeenCalledOnce();
+    if (fails) {
+      await expect(client.close({ throwOnTransportError: true })).rejects.toThrow('exit not confirmed');
+      expect(close).toHaveBeenCalledTimes(2);
+      close.mockResolvedValue(undefined);
+      await Promise.all([client.close(), client.close({ throwOnTransportError: true })]);
+      expect(close).toHaveBeenCalledTimes(3);
+      await expect(strict).rejects.toThrow('exit not confirmed');
+    }
+    await expect(client.close({ throwOnTransportError: true })).resolves.toBeUndefined();
+    expect(close).toHaveBeenCalledTimes(fails ? 3 : 1);
+    await expect(client.request('initialize')).rejects.toThrow('after close');
+  });
+});
+
 describe('AppServerClient request timeout', () => {
+  // PR #9916: a renderer deadline cannot release a native request. Drive the
+  // quota reader through the real client with a transport that never replies.
+  it.each([false, true])('settles stalled quota RPCs and permits a fresh read (renewed=%s)', async renewed => {
+    vi.useFakeTimers();
+    const transport = new FakeTransport();
+    const client = new AppServerClient({ createTransport: () => transport, logger });
+    client.start();
+    try {
+      let outcome: unknown;
+      const pending = readAccountRateLimitsWithRefresh((method, params, options) => client.request(method, params, options));
+      void pending.then(value => { outcome = value; }, error => { outcome = error; });
+      if (renewed) {
+        const initial = JSON.parse(transport.lines.at(-1)!);
+        transport.emitLine({ id: initial.id, error: { code: -32603, message: '401 token_expired' } });
+        await vi.advanceTimersByTimeAsync(0);
+        const refresh = JSON.parse(transport.lines.at(-1)!);
+        expect(refresh.method).toBe('account/read');
+        transport.emitLine({ id: refresh.id, result: {} });
+        await vi.advanceTimersByTimeAsync(0);
+      }
+      const stalled = JSON.parse(transport.lines.at(-1)!);
+      expect(stalled.method).toBe(Method.AccountRateLimitsRead);
+      await vi.advanceTimersByTimeAsync(15_000);
+      expect(outcome).toBeInstanceOf(Error);
+      expect((outcome as Error).message).toContain('timed out');
+      // A late old reply cannot fulfill the next caller's request.
+      const retry = readAccountRateLimitsWithRefresh((method, params, options) => client.request(method, params, options));
+      const fresh = JSON.parse(transport.lines.at(-1)!);
+      transport.emitLine({ id: stalled.id, result: { rateLimits: { planType: 'old' } } });
+      transport.emitLine({ id: fresh.id, result: { rateLimits: { planType: 'plus' } } });
+      await expect(retry).resolves.toEqual({ rateLimits: { planType: 'plus' } });
+    } finally {
+      await client.close();
+      vi.useRealTimers();
+    }
+  });
+
   it('rejects and removes a pending request when the server stays connected without responding', async () => {
     vi.useFakeTimers();
     try {
@@ -367,6 +442,89 @@ describe('AppServerClient request timeout', () => {
     } finally {
       vi.useRealTimers();
     }
+  });
+
+  describe('extendWhileProgress (#5764)', () => {
+    function started() {
+      const transport = new FakeTransport();
+      const client = new AppServerClient({ createTransport: () => transport, logger });
+      client.start();
+      const lastId = () => (JSON.parse(transport.lines.at(-1)!) as { id: number }).id;
+      return { transport, client, lastId };
+    }
+
+    it('keeps waiting past the base timeout while the link still has traffic', async () => {
+      vi.useFakeTimers();
+      try {
+        const { transport, client, lastId } = started();
+        let lastProgressAt: number | null = Date.now();
+        const request = client.request('thread/start', {}, {
+          timeoutMs: 50,
+          extendWhileProgress: { lastProgressAt: () => lastProgressAt, idleMs: 30, maxMs: 1_000 },
+        });
+        for (let elapsed = 0; elapsed < 200; elapsed += 10) {
+          lastProgressAt = Date.now();
+          await vi.advanceTimersByTimeAsync(10);
+        }
+        transport.emitLine({ id: lastId(), result: { thread: { id: 't1' } } });
+        await expect(request).resolves.toEqual({ thread: { id: 't1' } });
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+
+    it('times out once the link goes quiet and reports how long it waited and why', async () => {
+      vi.useFakeTimers();
+      try {
+        const { client } = started();
+        let lastProgressAt: number | null = Date.now();
+        const request = client.request('thread/start', {}, {
+          timeoutMs: 50,
+          extendWhileProgress: {
+            lastProgressAt: () => lastProgressAt,
+            idleMs: 30,
+            maxMs: 1_000,
+            describe: () => 'execution environment answered 3/4 requests',
+          },
+        });
+        const rejection = expect(request).rejects.toThrow(
+          'codex app-server thread/start timed out after 100ms (execution environment answered 3/4 requests)',
+        );
+        // 往来持续到 70ms 后停止：50ms 时顺延，最后一次往来后 30ms(100ms)结束。
+        for (let elapsed = 0; elapsed < 70; elapsed += 10) {
+          lastProgressAt = Date.now() + 10;
+          await vi.advanceTimersByTimeAsync(10);
+        }
+        await vi.advanceTimersByTimeAsync(30);
+        await rejection;
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+
+    it('keeps the base timeout when there is no recent traffic, and stops at maxMs even if traffic continues', async () => {
+      vi.useFakeTimers();
+      try {
+        const { client } = started();
+        const quiet = client.request('thread/start', {}, {
+          timeoutMs: 50,
+          extendWhileProgress: { lastProgressAt: () => null, idleMs: 30, maxMs: 1_000 },
+        });
+        const quietRejection = expect(quiet).rejects.toThrow('codex app-server thread/start timed out after 50ms');
+        await vi.advanceTimersByTimeAsync(50);
+        await quietRejection;
+
+        const busy = client.request('thread/start', {}, {
+          timeoutMs: 50,
+          extendWhileProgress: { lastProgressAt: () => Date.now(), idleMs: 30, maxMs: 200 },
+        });
+        const busyRejection = expect(busy).rejects.toThrow('codex app-server thread/start timed out after 200ms');
+        await vi.advanceTimersByTimeAsync(200);
+        await busyRejection;
+      } finally {
+        vi.useRealTimers();
+      }
+    });
   });
 });
 

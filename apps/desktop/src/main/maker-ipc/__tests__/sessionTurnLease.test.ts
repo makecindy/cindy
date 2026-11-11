@@ -1,0 +1,476 @@
+import fs from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
+
+import Database from 'better-sqlite3';
+import { afterEach, describe, expect, it, vi } from 'vitest';
+import { Session, type AgentEvent, type AgentSessionHandle } from '@cindy/maker-core';
+
+import type { DbClient } from '../../localDb/client/DbClient.js';
+import { tx as runDbTx } from '../../localDb/worker/opHandlers/tx.js';
+import {
+  readPersistedSessionTurnLeases,
+  refreshSessionTurnLeaseOwner,
+  releaseSessionTurnLease,
+  replaceSessionTurnLease,
+  SESSION_TURN_LEASE_CLIENT_ID_PREFIX,
+  SilentStopTurnLeaseGate,
+  SessionTurnLeaseTracker,
+  tryAcquireSessionTurnLease,
+} from '../sessionTurnLease.js';
+
+function asLeaseClient(db: Database.Database): Pick<DbClient, 'exec' | 'query' | 'tx'> {
+  return {
+    exec: async (sql, params = []) => db.prepare(sql).run(...params),
+    query: async <T>(sql: string, params: unknown[] = []) => db.prepare(sql).all(...params) as T[],
+    tx: async (name: string, args: unknown) => runDbTx(db, { name, args }) as never,
+  };
+}
+
+describe('shared-process session turn lease', () => {
+  const cleanups: Array<() => void> = [];
+
+  afterEach(() => {
+    for (const cleanup of cleanups.splice(0).reverse()) cleanup();
+  });
+
+  function setup() {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'cindy-turn-lease-'));
+    const dbPath = path.join(dir, 'turn.db');
+    const first = new Database(dbPath);
+    first.exec(`
+      PRAGMA foreign_keys = ON;
+      CREATE TABLE sessions (
+        id TEXT PRIMARY KEY,
+        status TEXT NOT NULL,
+        active_turn_started_at INTEGER,
+        last_turn_ended_at INTEGER,
+        list_preview TEXT,
+        list_preview_role TEXT,
+        list_message_count INTEGER
+      );
+      CREATE TABLE messages (
+        id TEXT PRIMARY KEY,
+        client_id TEXT NOT NULL,
+        session_id TEXT NOT NULL REFERENCES sessions(id) ON DELETE CASCADE,
+        role TEXT NOT NULL,
+        content TEXT NOT NULL,
+        agent_meta TEXT,
+        created_at INTEGER NOT NULL,
+        rewind_at INTEGER
+      );
+      CREATE UNIQUE INDEX uniq_messages_session_client
+        ON messages(session_id, client_id);
+      INSERT INTO sessions
+        (id, status, active_turn_started_at, last_turn_ended_at)
+      VALUES ('source-1', 'active', 20, 10), ('source-2', 'active', 20, 10);
+    `);
+    const second = new Database(dbPath);
+    second.pragma('foreign_keys = ON');
+    cleanups.push(() => {
+      second.close();
+      first.close();
+      fs.rmSync(dir, { recursive: true, force: true });
+    });
+    return {
+      first: asLeaseClient(first),
+      second: asLeaseClient(second),
+      raw: first,
+    };
+  }
+
+  it('lets only the newest silent-stop generation own the delayed decision', () => {
+    const gate = new SilentStopTurnLeaseGate();
+    const firstTerminal = {};
+    const duplicateFirstTerminal = {};
+    const secondTerminal = {};
+
+    expect(gate.schedule('source-1', firstTerminal, 'generation-1')).toBe(true);
+    expect(gate.schedule('source-1', duplicateFirstTerminal, 'generation-1')).toBe(false);
+    expect(gate.turnLeaseIdForEvent(firstTerminal)).toBe('generation-1');
+    expect(gate.turnLeaseIdForEvent(duplicateFirstTerminal)).toBeUndefined();
+
+    expect(gate.schedule('source-1', secondTerminal, 'generation-2')).toBe(true);
+    expect(gate.claim('source-1', 'generation-1')).toBe(false);
+    expect(gate.claim('source-1', 'generation-2')).toBe(true);
+    expect(gate.claim('source-1', 'generation-2')).toBe(false);
+
+    gate.settle('source-1', 'generation-2');
+    expect(gate.schedule('source-1', {}, 'generation-2')).toBe(false);
+    gate.supersede('source-1');
+    expect(gate.schedule('source-1', {}, 'generation-3')).toBe(true);
+  });
+
+  it('keeps every live Desktop process observable while hiding lease rows from history', async () => {
+    const { first, second, raw } = setup();
+    const firstOwner = { instanceId: 'first', processId: 101 };
+    const secondOwner = { instanceId: 'second', processId: 202 };
+
+    await expect(
+      tryAcquireSessionTurnLease(first, {
+        sessionId: 'source-1',
+        turnId: 'turn-1',
+        owner: firstOwner,
+        createdAt: 1,
+      }),
+    ).resolves.toBe(true);
+    await expect(
+      tryAcquireSessionTurnLease(second, {
+        sessionId: 'source-1',
+        turnId: 'turn-2',
+        owner: secondOwner,
+        createdAt: 2,
+      }),
+    ).resolves.toBe(true);
+
+    await expect(readPersistedSessionTurnLeases(first, 'source-1')).resolves.toHaveLength(2);
+    expect(
+      raw
+        .prepare(
+          `SELECT count(*) AS count FROM messages
+            WHERE client_id LIKE ? AND rewind_at IS NULL`,
+        )
+        .get(`${SESSION_TURN_LEASE_CLIENT_ID_PREFIX}%`),
+    ).toEqual({ count: 0 });
+
+    await releaseSessionTurnLease(first, {
+      sessionId: 'source-1',
+      turnId: 'turn-1',
+      owner: firstOwner,
+    });
+    await expect(readPersistedSessionTurnLeases(second, 'source-1')).resolves.toMatchObject([
+      { lease: { turnId: 'turn-2', owner: secondOwner } },
+    ]);
+  });
+
+  it('invalidates list_message_count when a lease row is inserted or deleted, not on no-op', async () => {
+    const { first, raw } = setup();
+    const owner = { instanceId: 'first', processId: 101 };
+    const seedCount = (count: number) => {
+      raw
+        .prepare(
+          'UPDATE sessions SET list_preview = ?, list_preview_role = ?, list_message_count = ? WHERE id = ?',
+        )
+        .run('keep me', 'user', count, 'source-1');
+    };
+    const readProjection = () =>
+      raw
+        .prepare(
+          'SELECT list_preview, list_preview_role, list_message_count FROM sessions WHERE id = ?',
+        )
+        .get('source-1');
+
+    seedCount(7);
+    await expect(
+      tryAcquireSessionTurnLease(first, {
+        sessionId: 'source-1',
+        turnId: 'turn-1',
+        owner,
+        createdAt: 1,
+      }),
+    ).resolves.toBe(true);
+    expect(readProjection()).toEqual({
+      list_preview: 'keep me',
+      list_preview_role: 'user',
+      list_message_count: null,
+    });
+
+    seedCount(8);
+    await expect(
+      tryAcquireSessionTurnLease(first, {
+        sessionId: 'source-1',
+        turnId: 'turn-1b',
+        owner,
+        createdAt: 2,
+      }),
+    ).resolves.toBe(false);
+    expect(readProjection()).toEqual({
+      list_preview: 'keep me',
+      list_preview_role: 'user',
+      list_message_count: 8,
+    });
+
+    seedCount(9);
+    await expect(
+      releaseSessionTurnLease(first, { sessionId: 'source-1', turnId: 'turn-1', owner }),
+    ).resolves.toBe(true);
+    expect(readProjection()).toEqual({
+      list_preview: 'keep me',
+      list_preview_role: 'user',
+      list_message_count: null,
+    });
+
+    seedCount(10);
+    await expect(
+      releaseSessionTurnLease(first, { sessionId: 'source-1', turnId: 'turn-1', owner }),
+    ).resolves.toBe(false);
+    expect(readProjection()).toEqual({
+      list_preview: 'keep me',
+      list_preview_role: 'user',
+      list_message_count: 10,
+    });
+  });
+
+  it('uses exact CAS release so a delayed old end cannot delete a successor', async () => {
+    const { first } = setup();
+    const owner = { instanceId: 'first', processId: 101 };
+    await tryAcquireSessionTurnLease(first, {
+      sessionId: 'source-1',
+      turnId: 'old-turn',
+      owner,
+      createdAt: 1,
+    });
+    await releaseSessionTurnLease(first, { sessionId: 'source-1', turnId: 'old-turn', owner });
+    await tryAcquireSessionTurnLease(first, {
+      sessionId: 'source-1',
+      turnId: 'new-turn',
+      owner,
+      createdAt: 2,
+    });
+
+    await expect(
+      releaseSessionTurnLease(first, { sessionId: 'source-1', turnId: 'old-turn', owner }),
+    ).resolves.toBe(false);
+    await expect(readPersistedSessionTurnLeases(first, 'source-1')).resolves.toMatchObject([
+      { lease: { turnId: 'new-turn' } },
+    ]);
+  });
+
+  it('replaces an active generation atomically with an exact CAS update', async () => {
+    const { first } = setup();
+    const owner = { instanceId: 'first', processId: 101 };
+    await tryAcquireSessionTurnLease(first, {
+      sessionId: 'source-1',
+      turnId: 'old-turn',
+      owner,
+      createdAt: 1,
+    });
+
+    await expect(
+      replaceSessionTurnLease(first, {
+        sessionId: 'source-1',
+        previousTurnId: 'old-turn',
+        nextTurnId: 'new-turn',
+        owner,
+        createdAt: 2,
+      }),
+    ).resolves.toBe(true);
+    await expect(
+      replaceSessionTurnLease(first, {
+        sessionId: 'source-1',
+        previousTurnId: 'old-turn',
+        nextTurnId: 'stale-replacement',
+        owner,
+        createdAt: 3,
+      }),
+    ).resolves.toBe(false);
+    await expect(
+      releaseSessionTurnLease(first, { sessionId: 'source-1', turnId: 'old-turn', owner }),
+    ).resolves.toBe(false);
+    await expect(readPersistedSessionTurnLeases(first, 'source-1')).resolves.toMatchObject([
+      { lease: { turnId: 'new-turn' } },
+    ]);
+  });
+
+  it('ignores a delayed tracker terminal after a newer generation replaces it', async () => {
+    const { first } = setup();
+    const tracker = new SessionTurnLeaseTracker({
+      getDbClient: () => first,
+      owner: { instanceId: 'first', processId: 101 },
+      createTurnId: () => 'fallback',
+      now: () => 1,
+      ownerProcessEnded: () => false,
+    });
+
+    await tracker.markTurnStarted('source-1', 'generation-1');
+    await tracker.markTurnStarted('source-1', 'generation-2');
+    await expect(
+      tracker.markTurnEndedAndCheckIdle('source-1', 'generation-1'),
+    ).resolves.toBe(false);
+
+    await expect(readPersistedSessionTurnLeases(first, 'source-1')).resolves.toMatchObject([
+      { lease: { turnId: 'generation-2' } },
+    ]);
+    await expect(
+      tracker.markTurnEndedAndCheckIdle('source-1', 'generation-2'),
+    ).resolves.toBe(true);
+    await expect(readPersistedSessionTurnLeases(first, 'source-1')).resolves.toEqual([]);
+  });
+
+  it.each([
+    { stage: 'read', successor: false },
+    { stage: 'write', successor: false },
+    { stage: 'read', successor: true },
+  ] as const)('settles retirement after lease $stage failure, preserving successor=$successor', async ({ stage, successor }) => {
+    const { first } = setup();
+    let fail = false;
+    const client = {
+      ...first,
+      query: async <T>(sql: string, params?: unknown[]) => {
+        if (fail && stage === 'read') throw new Error('injected lease read failure');
+        return first.query<T>(sql, params);
+      },
+      tx: async (name: string, args: unknown) => {
+        if (fail && stage === 'write') throw new Error('injected lease write failure');
+        return first.tx(name, args);
+      },
+    } as typeof first;
+    const tracker = new SessionTurnLeaseTracker({
+      getDbClient: () => client, owner: { instanceId: 'first', processId: 101 },
+      createTurnId: () => 'turn', now: () => 1, ownerProcessEnded: () => false,
+    });
+    await tracker.markTurnStarted('source-1', 'turn');
+    let finish!: () => void;
+    let exit!: () => void;
+    const terminal = new Promise<void>(resolve => { finish = resolve; });
+    const closed = new Promise<void>(resolve => { exit = resolve; });
+    const handle = {
+      id: 'runtime', agentKind: 'pi', model: 'm', send: vi.fn(async () => {}),
+      isTurnRunning: () => false, setInteractionResolver() {},
+      close: vi.fn(async () => { exit(); }),
+      async *events() {
+        await terminal;
+        yield { type: 'done', source: 'pi', data: { status: 'completed', silentStop: true } } as AgentEvent;
+        await closed;
+      },
+    } as unknown as AgentSessionHandle;
+    const logger = { trace() {}, debug() {}, info() {}, warn() {}, error() {}, fatal() {}, child() { return this; } };
+    const runtime = new Session({ id: 'source-1', agentKind: 'pi', workDir: '/repo', handle,
+      capabilities: {} as never, logger, turnStallMs: 0 });
+    const seen: AgentEvent[] = [];
+    runtime.setTurnLifecycleObserver({
+      beforeProviderStart() {}, onUndispatched() {},
+      onTerminal({ turnGeneration }) { runtime.claimHostTurnContinuation(turnGeneration); },
+    });
+    runtime.onEvent(event => seen.push(event));
+    await runtime.send('work');
+    const generation = runtime.getTurnGeneration();
+    await runtime.closeAfterCurrentTurn();
+    finish();
+    await vi.waitFor(() => expect(seen).toHaveLength(1));
+    expect(handle.close).not.toHaveBeenCalled();
+    if (successor) await runtime.sendHostTurnContinuation('already authorized continuation');
+    fail = true;
+    await expect(tracker.markTurnEndedAndCheckIdle('source-1', 'turn',
+      () => runtime.settleHostTurnContinuation(generation))).rejects.toThrow(`injected lease ${stage} failure`);
+    if (successor) {
+      expect(handle.close).not.toHaveBeenCalled();
+      expect(handle.send).toHaveBeenCalledTimes(2);
+      await runtime.close();
+    } else {
+      await vi.waitFor(() => expect(runtime.getStatus()).toBe('closed'));
+      expect(handle.send).toHaveBeenCalledOnce();
+    }
+  });
+
+  it('refreshes active PID-only leases with exact liveness without overwriting a successor', async () => {
+    const { first } = setup();
+    const owner = { instanceId: 'first', processId: 101 } as {
+      instanceId: string;
+      processId: number;
+      liveness?: { version: 1; port: number; token: string };
+    };
+    const tracker = new SessionTurnLeaseTracker({
+      getDbClient: () => first,
+      owner,
+      createTurnId: () => 'fallback',
+      now: () => 1,
+      ownerProcessEnded: () => false,
+    });
+
+    await tracker.markTurnStarted('source-1', 'generation-1');
+    const initialLease = (await readPersistedSessionTurnLeases(first, 'source-1'))[0]?.lease;
+    expect(initialLease).toMatchObject({ turnId: 'generation-1' });
+    expect(initialLease?.owner).not.toHaveProperty('liveness');
+
+    owner.liveness = {
+      version: 1,
+      port: 31_337,
+      token: 'current-instance-token',
+    };
+    await tracker.refreshActiveLeaseOwners();
+    await expect(readPersistedSessionTurnLeases(first, 'source-1')).resolves.toMatchObject([
+      { lease: { turnId: 'generation-1', owner: { liveness: owner.liveness } } },
+    ]);
+
+    await tracker.markTurnStarted('source-1', 'generation-2');
+    await expect(
+      refreshSessionTurnLeaseOwner(first, {
+        sessionId: 'source-1',
+        turnId: 'generation-1',
+        owner,
+      }),
+    ).resolves.toBe(false);
+    await expect(readPersistedSessionTurnLeases(first, 'source-1')).resolves.toMatchObject([
+      { lease: { turnId: 'generation-2', owner: { liveness: owner.liveness } } },
+    ]);
+  });
+
+  it('makes a peer turn visible until its exact lifecycle ends', async () => {
+    const { first, second } = setup();
+    const firstTracker = new SessionTurnLeaseTracker({
+      getDbClient: () => first,
+      owner: { instanceId: 'first', processId: 101 },
+      createTurnId: () => 'turn-1',
+      now: () => 1,
+      ownerProcessEnded: () => false,
+    });
+    const secondTracker = new SessionTurnLeaseTracker({
+      getDbClient: () => second,
+      owner: { instanceId: 'second', processId: 202 },
+      createTurnId: () => 'turn-2',
+      now: () => 2,
+      ownerProcessEnded: () => false,
+    });
+
+    await firstTracker.markTurnStarted('source-1');
+    await expect(secondTracker.isTurnActive('source-1')).resolves.toBe(true);
+    await firstTracker.markTurnEnded('source-1');
+    await expect(secondTracker.isTurnActive('source-1')).resolves.toBe(false);
+  });
+
+  it('reclaims dead and malformed leases only for the requested task', async () => {
+    const { first, raw } = setup();
+    const deadOwner = { instanceId: 'dead', processId: 303 };
+    await tryAcquireSessionTurnLease(first, {
+      sessionId: 'source-1',
+      turnId: 'dead-turn',
+      owner: deadOwner,
+      createdAt: 1,
+    });
+    await tryAcquireSessionTurnLease(first, {
+      sessionId: 'source-2',
+      turnId: 'other-dead-turn',
+      owner: deadOwner,
+      createdAt: 1,
+    });
+    raw
+      .prepare(
+        `INSERT INTO messages
+          (id, client_id, session_id, role, content, agent_meta, created_at, rewind_at)
+         VALUES ('bad-row', ?, 'source-1', 'assistant', 'null', '{bad', 2, 2)`,
+      )
+      .run(`${SESSION_TURN_LEASE_CLIENT_ID_PREFIX}malformed`);
+    const tracker = new SessionTurnLeaseTracker({
+      getDbClient: () => first,
+      owner: { instanceId: 'current', processId: 404 },
+      createTurnId: () => 'current-turn',
+      now: () => 3,
+      ownerProcessEnded: (owner) => owner.instanceId === deadOwner.instanceId,
+    });
+
+    await expect(tracker.isTurnActive('source-1')).resolves.toBe(false);
+    expect(
+      raw
+        .prepare(
+          `SELECT active_turn_started_at AS startedAt, last_turn_ended_at AS endedAt
+             FROM sessions WHERE id = 'source-1'`,
+        )
+        .get(),
+    ).toEqual({ startedAt: 20, endedAt: 10 });
+    await expect(readPersistedSessionTurnLeases(first, 'source-1')).resolves.toEqual([]);
+    await expect(readPersistedSessionTurnLeases(first, 'source-2')).resolves.toMatchObject([
+      { lease: { turnId: 'other-dead-turn' } },
+    ]);
+  });
+});

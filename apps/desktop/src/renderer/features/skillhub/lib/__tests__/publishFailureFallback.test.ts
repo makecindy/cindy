@@ -11,6 +11,8 @@ describe('publish failure fallback', () => {
   it('preserves known publish error codes', () => {
     expect(normalizePublishErrorCode('PACK_FAILED')).toBe('PACK_FAILED');
     expect(normalizePublishErrorCode('OSS_PUT_FAILED')).toBe('OSS_PUT_FAILED');
+    expect(normalizePublishErrorCode('SKILL_DELETED')).toBe('SKILL_DELETED');
+    expect(normalizePublishErrorCode('INVALID_PARAMS')).toBe('INVALID_PARAMS');
   });
 
   it('falls back unknown error codes to INTERNAL', () => {

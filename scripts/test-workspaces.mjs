@@ -1,16 +1,23 @@
 #!/usr/bin/env node
-import { spawn } from "node:child_process";
+import { execFileSync, spawn } from "node:child_process";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { createRequire } from "node:module";
 import { fileURLToPath } from "node:url";
+import {
+	electronBinaryCheckSkipReason,
+	findElectronBinaryIssue,
+} from "./ensure-deps.mjs";
 import { resolvePnpmInvocation } from "./shared/pnpm-invocation.mjs";
 import {
 	acquireTestGateLock,
 	shouldUseTestGateLock,
 } from "./test-gate-lock.mjs";
+import { createRelatedUnitPlan } from "./test-related.mjs";
 
 const ROOT = path.resolve(fileURLToPath(new URL("..", import.meta.url)));
+const require = createRequire(import.meta.url);
 const IGNORED_PARTS = new Set([
 	"node_modules",
 	"dist",
@@ -19,6 +26,9 @@ const IGNORED_PARTS = new Set([
 	"coverage",
 	".git",
 	".cache",
+	// 会话工具临时产物（.gitignore 明确忽略 tmp/）。不忽略的话 readAllFiles
+	// 会递归进去，遇到沙箱/工具遗留的不可读子目录抛 EPERM 让整个门禁失败（#3353）。
+	"tmp",
 ]);
 const NESTED_NON_WORKSPACES = ["apps/desktop/cindy-updater", "tools"];
 const VALID_STATUSES = new Set([
@@ -51,7 +61,9 @@ export function parseCliOptions(args) {
 		workspaces: [],
 		excludeWorkspaces: [],
 		workspaceConcurrency: undefined,
+		lock: false,
 		noLock: false,
+		related: false,
 	};
 	for (let index = 0; index < args.length; index += 1) {
 		const arg = args[index];
@@ -60,8 +72,16 @@ export function parseCliOptions(args) {
 			options.all = true;
 			continue;
 		}
+		if (arg === "--lock") {
+			options.lock = true;
+			continue;
+		}
 		if (arg === "--no-lock") {
 			options.noLock = true;
+			continue;
+		}
+		if (arg === "--related") {
+			options.related = true;
 			continue;
 		}
 		if (arg === "--tier") {
@@ -98,6 +118,12 @@ export function parseCliOptions(args) {
 			continue;
 		}
 		throw new Error(`Unknown option: ${arg}`);
+	}
+	if (options.lock && options.noLock) {
+		throw new Error("--lock cannot be combined with --no-lock");
+	}
+	if (options.related && options.all) {
+		throw new Error("--related cannot be combined with --all");
 	}
 	return options;
 }
@@ -461,8 +487,29 @@ function undersizedVitestShardArgs(commandSpec, selectedFiles) {
 		return [];
 
 	// Vitest rejects every shard when there are fewer files than shards, before
-	// it assigns the files. Limit the compatibility flag to that known case.
-	return selectedFiles.length < count ? ["--passWithNoTests"] : [];
+	// it assigns the files. Otherwise it slices ceil(files / count) files per
+	// shard, so trailing shards can still be empty (6 files over 4 shards gives
+	// 2, 2, 2, 0). Limit the compatibility flag to those two known cases.
+	const fileCount = selectedFiles.length;
+	if (fileCount < count) return ["--passWithNoTests"];
+	const shardStart = Math.ceil(fileCount / count) * (index - 1);
+	return shardStart >= fileCount ? ["--passWithNoTests"] : [];
+}
+
+function toWorkspaceRelativeFile(workspace, file) {
+	const workspacePrefix = `${normalizeRelPath(workspace.cwd)}/`;
+	const normalized = normalizeRelPath(file);
+	if (!normalized.startsWith(workspacePrefix)) {
+		throw new Error(
+			`Selected test file is outside workspace ${workspace.cwd}: ${file}`,
+		);
+	}
+	return normalized.slice(workspacePrefix.length);
+}
+
+function vitestRelatedArgs(commandSpec) {
+	const rest = (commandSpec.args ?? []).filter((arg) => arg !== "run");
+	return ["related", "--run", ...rest];
 }
 
 export function buildPnpmArgs(
@@ -471,30 +518,30 @@ export function buildPnpmArgs(
 	commandSpec,
 	tierConfig = {},
 	selectedFiles = [],
+	relatedFiles,
 ) {
 	const workspaceAbs = path.join(root, workspace.cwd);
 	if (commandSpec.type === "packageScript")
 		return ["--dir", workspaceAbs, "run", commandSpec.script];
 	if (commandSpec.type === "packageBin") {
-		const workspacePrefix = `${normalizeRelPath(workspace.cwd)}/`;
-		const selectedArgs = tierConfig.include?.length
-			? selectedFiles.map((file) => {
-					const normalized = normalizeRelPath(file);
-					if (!normalized.startsWith(workspacePrefix)) {
-						throw new Error(
-							`Selected test file is outside workspace ${workspace.cwd}: ${file}`,
-						);
-					}
-					return normalized.slice(workspacePrefix.length);
-				})
-			: [];
+		const useRelated =
+			commandSpec.bin === "vitest" && Array.isArray(relatedFiles);
+		const selectedArgs = useRelated
+			? relatedFiles.map((file) => toWorkspaceRelativeFile(workspace, file))
+			: tierConfig.include?.length
+				? selectedFiles.map((file) => toWorkspaceRelativeFile(workspace, file))
+				: [];
+		const binArgs = useRelated
+			? vitestRelatedArgs(commandSpec)
+			: (commandSpec.args ?? []);
 		const args = [
 			"--dir",
 			workspaceAbs,
 			"exec",
 			commandSpec.bin,
-			...(commandSpec.args ?? []),
+			...binArgs,
 			...undersizedVitestShardArgs(commandSpec, selectedFiles),
+			...(useRelated ? ["--passWithNoTests"] : []),
 			...selectedArgs,
 		];
 		for (const pattern of tierConfig.exclude ?? []) {
@@ -510,6 +557,35 @@ export function buildPreflightArgs(root, workspace, preflight) {
 	if (preflight.type === "packageScript")
 		return ["--dir", workspaceAbs, "run", preflight.script];
 	throw new Error(`Unsupported preflight type: ${preflight.type}`);
+}
+
+export function resolveTestInvocation(pnpmArgs, options = {}) {
+	const platform = options.platform ?? process.platform;
+	if (platform !== "win32" || pnpmArgs[2] !== "exec" || pnpmArgs[3] !== "vitest") {
+		return resolvePnpmInvocation(pnpmArgs, options);
+	}
+	// pnpm exec resolves vitest.cmd on Windows, which crosses cmd.exe's 8191
+	// character limit once the required guard exclusions grow. Start the same
+	// installed JS entry directly; preserve every selection/shard/exclusion arg.
+	const execPath = options.execPath ?? process.execPath;
+	const vitestEntry = options.vitestEntry ?? require.resolve("vitest/vitest.mjs");
+	const env = { ...(options.env ?? process.env) };
+	const pathKeys = Object.keys(env).filter((key) => key.toLowerCase() === "path");
+	const pathKey = pathKeys[0] ?? "Path";
+	const existingPath = env[pathKey] ?? "";
+	for (const key of pathKeys) delete env[key];
+	env[pathKey] = [
+		path.dirname(execPath),
+		path.join(pnpmArgs[1], "node_modules", ".bin"),
+		path.join(ROOT, "node_modules", ".bin"),
+		existingPath,
+	].join(";");
+	return {
+		command: execPath,
+		args: [vitestEntry, ...pnpmArgs.slice(4)],
+		shell: false,
+		env,
+	};
 }
 
 export function createOutputForwarder(stream) {
@@ -732,7 +808,19 @@ export function createWorkspaceRunReporter({
 export function readAllFiles(root) {
 	const files = [];
 	function visit(absDir) {
-		for (const entry of fs.readdirSync(absDir, { withFileTypes: true })) {
+		let entries;
+		try {
+			entries = fs.readdirSync(absDir, { withFileTypes: true });
+		} catch (error) {
+			// 不可读目录（沙箱/本地工具遗留的受限临时目录在 Windows 上抛 EPERM，
+			// 见 #3353）不应让整个测试门禁在收集阶段失败：忽略该子树，继续扫描
+			// 其余可读目录。已跟踪文件与未被忽略的源码不会落在这种目录里。
+			if (error && (error.code === "EPERM" || error.code === "EACCES" || error.code === "ENOENT")) {
+				return;
+			}
+			throw error;
+		}
+		for (const entry of entries) {
 			const abs = path.join(absDir, entry.name);
 			const rel = normalizeRelPath(path.relative(root, abs));
 			if (isIgnoredFile(rel)) continue;
@@ -758,6 +846,7 @@ export async function runPlannedTests({
 	allFiles,
 	runCommandImpl = runCommand,
 	workspaceConcurrency,
+	relatedFilesByWorkspace,
 	reporter,
 	now = Date.now,
 }) {
@@ -855,14 +944,17 @@ export async function runPlannedTests({
 					return result;
 				}
 			}
+			const relatedFiles =
+				relatedFilesByWorkspace?.[normalizeRelPath(run.workspace.cwd)];
 			const pnpmArgs = buildPnpmArgs(
 				root,
 				run.workspace,
 				run.tierConfig.command,
 				run.tierConfig,
 				fileCheck.selected,
+				Array.isArray(relatedFiles) ? relatedFiles : undefined,
 			);
-			const invocation = resolvePnpmInvocation(pnpmArgs);
+			const invocation = resolveTestInvocation(pnpmArgs);
 			const commandResult = await runCommandImpl(
 				invocation.command,
 				invocation.args,
@@ -927,16 +1019,175 @@ export function printSummary(results, manifest) {
 	}
 }
 
+export function createRepoGitRunner(root = ROOT) {
+	return (args) =>
+		execFileSync("git", args, {
+			cwd: root,
+			encoding: "utf8",
+			stdio: ["ignore", "pipe", "pipe"],
+		});
+}
+
+export async function runRootTestRunner({
+	root = ROOT,
+	runCommandImpl = runCommand,
+	now = Date.now,
+} = {}) {
+	console.log("START test:runner");
+	const startedAt = now();
+	const invocation = resolvePnpmInvocation(["run", "test:runner"]);
+	const commandResult = await runCommandImpl(
+		invocation.command,
+		invocation.args,
+		{
+			cwd: root,
+			env: invocation.env ? { ...process.env, ...invocation.env } : undefined,
+			shell: invocation.shell,
+			windowsVerbatimArguments: invocation.windowsVerbatimArguments,
+		},
+	);
+	const status = commandResult.exitCode === 0 ? "PASS" : "FAIL";
+	console.log(
+		`${status} test:runner (${formatElapsed(Math.max(0, now() - startedAt))})`,
+	);
+	return commandResult;
+}
+
+function intersectRelatedRuns(runs, requested, manifestWorkspaces) {
+	if (requested.length === 0) return runs;
+	return runs.filter((run) => {
+		const workspace = manifestWorkspaces.find(
+			(item) => normalizeRelPath(item.cwd) === normalizeRelPath(run.cwd),
+		);
+		return (
+			workspace &&
+			requested.some((selector) => workspaceMatchesSelector(workspace, selector))
+		);
+	});
+}
+
+// 只有选中 Desktop 时才需要 Electron；只跑其他 workspace 不应被桌面依赖拦住。
+export function selectionNeedsElectron(
+	manifestWorkspaces,
+	{ workspaces = [], excludeWorkspaces = [] } = {},
+) {
+	const desktop = manifestWorkspaces.filter(
+		(workspace) => normalizeRelPath(workspace.cwd) === "apps/desktop",
+	);
+	return (
+		filterRunsByWorkspace(
+			desktop.map((workspace) => ({ workspace })),
+			{ workspaces, excludeWorkspaces },
+		).length > 0
+	);
+}
+
+// 新 worktree 没装依赖、或 Electron 没解出 dist 时，vitest 会让几十个文件各自报错，
+// 极易被当成被测代码或「环境问题」放过。开跑前只读检查一次，直接给出处置命令。
+/**
+ * Variables an Agent's shell may carry that change test results without being part of the code
+ * under test. Each caused a false failure when the suite ran inside an agent session:
+ * NODE_ENV / NODE_DEBUG (production or debug branches), CLAUDE_CODE_IDE_SKIP_AUTO_INSTALL
+ * (maker-core harness tests) and CINDY_INPUT_HANDOFF_ROUTE (a remotely controlled Cindy task's
+ * route token; device-hosted guest tests assert it is absent). CI never sets them.
+ */
+export const AGENT_ENV_TEST_POLLUTANTS = Object.freeze([
+	"NODE_ENV",
+	"NODE_DEBUG",
+	"CLAUDE_CODE_IDE_SKIP_AUTO_INSTALL",
+	"CINDY_INPUT_HANDOFF_ROUTE",
+]);
+
+/** Remove those variables before any test child starts; returns the names that were removed. */
+export function stripAgentEnvPollutants(env = process.env) {
+	const removed = AGENT_ENV_TEST_POLLUTANTS.filter((name) => env[name] !== undefined);
+	for (const name of removed) delete env[name];
+	return removed;
+}
+
+export function findDependencyInstallIssues(
+	root = ROOT,
+	env = process.env,
+	{ needsElectron = true } = {},
+) {
+	if (!fs.existsSync(path.join(root, "node_modules", ".modules.yaml"))) {
+		return ["依赖尚未安装：请先在当前 checkout 运行 pnpm install"];
+	}
+	if (!needsElectron || electronBinaryCheckSkipReason(env)) return [];
+	if (!fs.existsSync(path.join(root, "node_modules", "electron", "package.json"))) {
+		return ["依赖安装不完整（缺少 node_modules/electron）：请在当前 checkout 运行 pnpm install"];
+	}
+	const electronIssue = findElectronBinaryIssue(root);
+	if (!electronIssue) return [];
+	return [
+		`Electron 安装不完整（${electronIssue.reason}: ${path.relative(root, electronIssue.missingPath)}）：` +
+			"请运行 pnpm install，或 node scripts/ensure-deps.mjs --electron-binary 单独补装",
+	];
+}
+
 async function main() {
+	const options = parseCliOptions(process.argv.slice(2));
+	const strippedEnv = stripAgentEnvPollutants();
+	if (strippedEnv.length > 0) console.log(`ENV ignored for tests: ${strippedEnv.join(", ")}`);
 	const {
 		all,
 		tier,
-		workspaces,
 		excludeWorkspaces,
 		workspaceConcurrency,
+		lock: useLock,
 		noLock,
-	} = parseCliOptions(process.argv.slice(2));
-	const lock = shouldUseTestGateLock({ all, tier, noLock })
+		related,
+	} = options;
+	let workspaces = options.workspaces;
+	let relatedFilesByWorkspace;
+	let relatedPlan;
+
+	if (related) {
+		const manifest = (await import("./test-workspaces.config.mjs")).default;
+		relatedPlan = createRelatedUnitPlan({
+			root: ROOT,
+			manifest,
+			runGit: createRepoGitRunner(ROOT),
+		});
+		console.log(`RELATED ${relatedPlan.mode}: ${relatedPlan.reason}`);
+		if (relatedPlan.mode === "skip") return;
+		if (relatedPlan.mode === "related") {
+			const selectedRuns = intersectRelatedRuns(
+				relatedPlan.runs,
+				workspaces,
+				manifest.workspaces,
+			);
+			workspaces = selectedRuns.map((run) => run.cwd);
+			relatedFilesByWorkspace = Object.fromEntries(
+				selectedRuns.map((run) => [run.cwd, run.relatedFiles]),
+			);
+		}
+	}
+
+	const willRunWorkspaces =
+		!related ||
+		relatedPlan?.mode === "full" ||
+		workspaces.length > 0;
+	const willRunTestRunner =
+		related &&
+		(relatedPlan?.mode === "full" || relatedPlan?.runTestRunner);
+	if (related && !willRunWorkspaces && !willRunTestRunner) return;
+	if (willRunWorkspaces) {
+		const manifest = (await import("./test-workspaces.config.mjs")).default;
+		const installIssues = findDependencyInstallIssues(ROOT, process.env, {
+			needsElectron: selectionNeedsElectron(manifest.workspaces, {
+				workspaces,
+				excludeWorkspaces,
+			}),
+		});
+		if (installIssues.length > 0) {
+			for (const issue of installIssues) console.error(`DEPENDENCY_SETUP_INCOMPLETE ${issue}`);
+			process.exitCode = 1;
+			return;
+		}
+	}
+
+	const lock = shouldUseTestGateLock({ all, tier, lock: useLock, noLock })
 		? await acquireTestGateLock({
 				repoRoot: ROOT,
 				owner: {
@@ -948,6 +1199,15 @@ async function main() {
 			})
 		: null;
 	try {
+		if (willRunTestRunner) {
+			const runnerResult = await runRootTestRunner();
+			if (runnerResult.exitCode !== 0) {
+				process.exitCode = 1;
+				return;
+			}
+		}
+		if (!willRunWorkspaces) return;
+
 		const manifest = (await import("./test-workspaces.config.mjs")).default;
 		const results = await runPlannedTests({
 			root: ROOT,
@@ -957,6 +1217,7 @@ async function main() {
 			workspaces,
 			excludeWorkspaces,
 			workspaceConcurrency,
+			relatedFilesByWorkspace,
 			reporter: createWorkspaceRunReporter(),
 		});
 		printSummary(results, manifest);

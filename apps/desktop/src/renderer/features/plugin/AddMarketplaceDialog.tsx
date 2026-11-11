@@ -1,9 +1,11 @@
+import { Button } from '@/components/ui/button';
+import { ErrorNotice } from '@/components/ui/error-notice';
 /**
  * 添加插件市场对话框：添加表单（来源 / Git 引用 / 稀疏路径）+ 已添加市场的
  * 管理入口（新开 MarketplaceSourcesDialog，避免本对话框被列表撑长）。
  *
- * 视觉规格遵循 DESIGN.md §4 Dialog & Modal：overlay 用 --overlay-modal token，
- * 容器 12px radius + --confirm-bg + --confirm-shadow，表单对话框放宽到 460px；
+ * 视觉规格遵循 DESIGN.md §4 Dialog & Modal：遮罩与面板用共享的 modal-scrim / modal-panel，
+ * 表单对话框放宽到 460px；
  * 单行输入 pill、多行输入 8px 内层 radius，按钮全部 pill。
  */
 import { useCallback, useEffect, useState } from 'react';
@@ -11,13 +13,13 @@ import * as Dialog from '@radix-ui/react-dialog';
 import { ChevronRight } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
 
-import { Spinner } from '@/components/ui/spinner';
 import { cn } from '@/lib/utils';
 import { useAuth } from '@/contexts/AuthContext';
 import { extractIpcError } from '@/utils/ipcError';
 import type { MarketSourceSummary } from '../../../shared/pluginMarket';
 
 import { marketplaceSourceErrorKey } from './lib/pluginMarketErrorKey';
+import { MarketplaceDiscoveryNotice } from './MarketplaceDiscoveryNotice';
 import { MarketplaceGuideDialog } from './MarketplaceGuideDialog';
 import { MarketplaceSourcesDialog } from './MarketplaceSourcesDialog';
 
@@ -64,6 +66,8 @@ export function AddMarketplaceDialog({
     key: string;
     detail: string | null;
   } | null>(null);
+  // 添加成功的发现回执:插件数 + 跳过/暂不可读提示(与错误互斥,新一轮操作前清空)。
+  const [addedSummary, setAddedSummary] = useState<MarketSourceSummary | null>(null);
 
   // 只有 git 克隆类错误码的 detail 是消毒后的 stderr 摘录,值得原文展示;
   // 其它错误码的 message 是内部英文文案,展示反而会和本地化引导重复。
@@ -97,6 +101,8 @@ export function AddMarketplaceDialog({
     setSources(null);
     setSourcesOpen(false);
     setOperationError(null);
+    // 回执含上一账号的市场名与计数,作用域同来源列表:切号/重开一并清空。
+    setAddedSummary(null);
     if (!open) return;
     void loadSources();
   }, [mode, dataOwnerId, open, loadSources]);
@@ -122,25 +128,29 @@ export function AddMarketplaceDialog({
     if (addDisabled) return;
     setAdding(true);
     setOperationError(null);
+    setAddedSummary(null);
     try {
       // 本地目录的授权必须来自 Main 原生目录选择器(选择即授权):Renderer 直传
       // 绝对路径在 IPC 层会被拒——XSS 控制下的自报路径不构成用户授权。输入的
       // 路径只作为原生框的初始定位提示;用户取消则静默结束。
+      let summary: MarketSourceSummary;
       if (sourceIsLocal) {
         const picked = await window.electronAPI.pluginMarket.pickLocalSource(sourceInput.trim());
         if (picked.canceled) return;
+        summary = picked.summary;
       } else {
         const sparsePaths = sparseInput
           .split('\n')
           .map((entry) => entry.trim())
           .filter((entry) => entry.length > 0);
         const ref = refInput.trim();
-        await window.electronAPI.pluginMarket.addSource({
+        summary = await window.electronAPI.pluginMarket.addSource({
           source: sourceInput.trim(),
           ...(ref ? { ref } : {}),
           ...(sparsePaths.length > 0 ? { sparsePaths } : {}),
         });
       }
+      setAddedSummary(summary);
       setSourceInput('');
       setRefInput('');
       setSparseInput('');
@@ -167,19 +177,15 @@ export function AddMarketplaceDialog({
       <Dialog.Portal>
         <Dialog.Overlay
           className={cn(
-            'fixed inset-0 z-[10000] bg-[var(--overlay-modal)]',
-            'data-[state=open]:animate-confirm-overlay-in',
-            'data-[state=closed]:animate-confirm-overlay-out',
+            'modal-scrim fixed inset-0 z-[10000]',
           )}
           style={{ WebkitAppRegion: 'no-drag' } as React.CSSProperties}
         />
         <Dialog.Content
+          onPointerDownOutside={(event) => event.preventDefault()}
           className={cn(
-            'fixed left-1/2 top-1/2 z-[10000] -translate-x-1/2 -translate-y-1/2',
-            'flex max-h-[85vh] w-full select-none flex-col rounded-xl p-4',
-            'bg-[var(--confirm-bg)] shadow-[var(--confirm-shadow)]',
-            'data-[state=open]:animate-confirm-content-in',
-            'data-[state=closed]:animate-confirm-content-out',
+            'modal-panel fixed left-1/2 top-1/2 z-[10000] -translate-x-1/2 -translate-y-1/2',
+            'flex max-h-[85vh] w-full select-none flex-col p-4',
           )}
           style={
             {
@@ -267,18 +273,17 @@ export function AddMarketplaceDialog({
             </div>
 
             {operationError ? (
-              <div
+              <ErrorNotice
                 role="alert"
-                className="mt-3 rounded-xl border border-[var(--border-default)] bg-[var(--surface-elevated)] px-4 py-3"
-              >
-                <p className="text-12 leading-5 text-[hsl(var(--destructive))]">
-                  {t(operationError.key)}
-                </p>
-                {operationError.detail ? (
-                  <pre className="mt-2 max-h-32 overflow-y-auto whitespace-pre-wrap break-all font-mono text-11 leading-4 text-[var(--text-tertiary)]">
-                    {operationError.detail}
-                  </pre>
-                ) : null}
+                className="mt-3"
+                message={t(operationError.key)}
+                details={operationError.detail ?? undefined}
+              />
+            ) : null}
+
+            {addedSummary ? (
+              <div className="mt-3">
+                <MarketplaceDiscoveryNotice summary={addedSummary} action="added" />
               </div>
             ) : null}
 
@@ -304,34 +309,27 @@ export function AddMarketplaceDialog({
           </div>
 
           <div className="mt-6 flex shrink-0 justify-end gap-2.5">
-            <button
+            <Button
+              variant="secondary"
+              size="lg"
               type="button"
               disabled={adding}
               onClick={() => onOpenChange(false)}
-              className={cn(
-                'inline-flex min-w-[96px] items-center justify-center rounded-full border px-6 py-2.5 text-13 font-medium',
-                'border-[var(--confirm-btn-secondary-border)] bg-transparent text-[var(--confirm-btn-secondary-text)]',
-                'transition-colors hover:bg-[var(--confirm-btn-secondary-hover)]',
-                'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--confirm-btn-secondary-border)]',
-                'active:scale-[0.98] disabled:opacity-50',
-              )}
+              className="min-w-[96px]"
             >
               {t('settings.ghosts.market.sources.close')}
-            </button>
-            <button
+            </Button>
+            <Button
+              variant="cta"
+              size="lg"
+              loading={adding}
               type="button"
               disabled={addDisabled}
               onClick={() => void handleAdd()}
-              className={cn(
-                'inline-flex min-w-[96px] items-center justify-center rounded-full px-6 py-2.5 text-13 font-medium',
-                'bg-[var(--confirm-btn-primary-bg)] text-[var(--confirm-btn-primary-text)]',
-                'transition-colors hover:bg-[var(--confirm-btn-primary-hover)]',
-                'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--confirm-btn-primary-bg)]',
-                'active:scale-[0.98] disabled:cursor-not-allowed disabled:opacity-50 disabled:active:scale-100',
-              )}
+              className="min-w-[96px]"
             >
-              {adding ? <Spinner size={14} /> : t('settings.ghosts.market.sources.add')}
-            </button>
+              { t('settings.ghosts.market.sources.add')}
+            </Button>
           </div>
         </Dialog.Content>
       </Dialog.Portal>

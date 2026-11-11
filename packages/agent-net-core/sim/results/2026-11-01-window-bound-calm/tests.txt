@@ -1,0 +1,96 @@
+   Compiling agent-net-core v0.0.0 (<home>/Documents/Cindy/cindy/.cindy-worktrees/agent-net/packages/agent-net-core)
+   Compiling agent-net-sim v0.0.0 (<home>/Documents/Cindy/cindy/.cindy-worktrees/agent-net/packages/agent-net-core/sim)
+    Finished `sim` profile [optimized] target(s) in 2.24s
+     Running unittests src/lib.rs (target/sim/deps/agent_net_core-646c883e091fb6c6)
+
+running 3 tests
+test parity::tests::repair_share_stays_just_above_the_loss_rate ... ok
+test parity::tests::overlapping_parity_solves_what_it_can ... ok
+test parity::tests::any_lost_segments_can_be_rebuilt_from_any_parity_subset ... ok
+
+test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.12s
+
+     Running unittests src/lib.rs (target/sim/deps/agent_net_sim-09fc32afe6ea4334)
+
+running 2 tests
+test link_tests::burst_calendar_is_independent_of_packet_count ... ok
+test fec::tests::any_three_losses_recover ... ok
+
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.01s
+
+     Running unittests src/bin/compare/main.rs (target/sim/deps/compare-5f582c66e2f6189a)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running unittests src/bin/diagnose.rs (target/sim/deps/diagnose-2e3648e3270a80af)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running unittests src/bin/netperf.rs (target/sim/deps/netperf-0ac4aa0e908e1ddd)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/reliability.rs (target/sim/deps/reliability-9596e5a306619ca9)
+
+running 39 tests
+test acknowledgement_of_unsent_data_is_rejected ... ok
+test initial_timeout_keeps_the_first_flight_available_for_measurement ... ok
+test crafted_flood_cannot_grow_receive_buffers ... ok
+test different_recovery_policies_interoperate ... ok
+test lost_messages_do_not_wait_for_the_next_one ... ok
+test clean_paths_carry_no_redundancy ... ok
+test outages_recover_or_give_up_within_the_deadline ... ok
+test hostile_packets_never_panic_or_grow_memory ... ok
+test outages_cost_little_traffic_and_recover_quickly ... ok
+test parity_is_not_starved_by_piggybacked_acks ... ok
+test parity_with_an_impossible_length_is_ignored ... ok
+test profile_slowest_seeds ... ignored
+test queue_overflow_is_not_mistaken_for_random_loss ... ok
+test bulk_transfers_do_not_keep_the_queue_full ... ok
+test rate_limited_loss_is_not_read_as_random ... ok
+test rate_limiters_are_found_without_any_rtt_signal ... ok
+test first_flight_measures_the_path ... ok
+test reopened_window_is_announced_immediately ... ok
+test reordering_is_learned_and_stops_being_retransmitted ... ok
+test late_packets_are_repaired_like_lost_ones ... ok
+test late_packets_get_acknowledged ... ok
+test same_seed_replays_the_same_run ... ok
+test segments_beyond_the_window_are_retried_not_lost ... ok
+test short_outages_recover_within_a_few_round_trips ... ok
+test slow_reader_stalls_the_sender_and_recovers ... ok
+test repeated_outages_recover_fast ... ok
+test small_messages_stay_covered_on_long_paths ... ok
+test timeouts_do_not_resend_the_whole_window ... ok
+test blocked_windows_are_not_held_up_by_a_lost_retransmission ... ok
+test window_probe_waits_when_an_ack_fills_the_packet ... ok
+test startup_stops_before_overflowing_the_queue ... ok
+test rtt_is_learned_even_when_every_packet_times_out_first ... ok
+test parity_recovers_losses_without_a_round_trip ... ok
+test random_loss_does_not_collapse_the_rate ... ok
+test window_limited_transfers_refill_immediately ... ok
+test forged_parity_never_panics_or_grows_memory ... ok
+test parity_share_stays_close_to_the_loss_rate ... ok
+test recovery_policies_keep_streams_intact_and_make_progress ... ok
+test every_seed_delivers_an_intact_ordered_stream has been running for over 60 seconds
+test every_seed_delivers_an_intact_ordered_stream ... ok
+
+test result: ok. 38 passed; 0 failed; 1 ignored; 0 measured; 0 filtered out; finished in 103.55s
+
+   Doc-tests agent_net_core
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+   Doc-tests agent_net_sim
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+

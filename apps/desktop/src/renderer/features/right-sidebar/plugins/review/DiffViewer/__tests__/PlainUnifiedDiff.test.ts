@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
 
 import { createElement } from 'react';
-import { fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { describe, expect, it, vi } from 'vitest';
 
 vi.mock('react-i18next', () => ({
@@ -13,9 +13,16 @@ vi.mock('react-i18next', () => ({
 
 import { buildHunkRows, hunkActionRevealClass, PlainUnifiedDiff } from '../PlainUnifiedDiff';
 import type { FileDiff, Hunk } from '@/lib/gitReview.types';
-import { buildSplitRows, buildUnifiedRows, shouldVirtualizeDiffRows, shouldVirtualizeFileList } from '../diffRows';
+import {
+  buildSplitRows,
+  buildUnifiedRows,
+  countDiffRows,
+  shouldVirtualizeDiffRows,
+  shouldVirtualizeFileList,
+} from '../diffRows';
 import {
   collectHighlightLines,
+  HIGHLIGHT_MAX_DIFF_LINES,
   HIGHLIGHT_MAX_LINE_LENGTH,
   highlightLineKey,
   LruCache,
@@ -523,14 +530,40 @@ describe('PlainUnifiedDiff split rows', () => {
 
 describe('PlainUnifiedDiff performance helpers', () => {
   it('uses explicit thresholds for diff and file-list virtualization', () => {
-    expect(shouldVirtualizeDiffRows(500)).toBe(false);
-    expect(shouldVirtualizeDiffRows(501)).toBe(true);
+    expect(shouldVirtualizeDiffRows(200)).toBe(false);
+    expect(shouldVirtualizeDiffRows(201)).toBe(true);
     expect(shouldVirtualizeFileList(100)).toBe(false);
     expect(shouldVirtualizeFileList(101)).toBe(true);
+    expect(shouldVirtualizeFileList(13, 200)).toBe(false);
+    expect(shouldVirtualizeFileList(13, 201)).toBe(true);
   });
 
-  it('marks the virtualized diff branch for large diffs', () => {
-    const manyLines = Array.from({ length: 510 }, (_, index) =>
+  it('virtualizes a small file list when its expanded eager rows exceed the shared budget', () => {
+    expect(shouldVirtualizeFileList(13, 13 * 172)).toBe(true);
+  });
+
+  it('counts unified and paired split rows without building render rows', () => {
+    const sourceHunk = {
+      ...hunk(0, 8, 3),
+      lines: [
+        line(0, 'context', 'before', 8, 8),
+        line(1, 'delete', 'old', 9, null),
+        line(2, 'add', 'new', null, 9),
+        line(3, 'context', 'after', 10, 10),
+      ],
+    };
+
+    expect(countDiffRows([sourceHunk], 'unified')).toBe(5);
+    expect(countDiffRows([sourceHunk], 'split')).toBe(4);
+  });
+
+  it('virtualizes files shaped like the two-file whole-file rewrite regression', () => {
+    expect(shouldVirtualizeDiffRows(487)).toBe(true);
+    expect(shouldVirtualizeDiffRows(478)).toBe(true);
+  });
+
+  it('marks the virtualized diff branch for a file from the two-file regression', () => {
+    const manyLines = Array.from({ length: 487 }, (_, index) =>
       line(index, 'context', `line ${index}`, index + 1, index + 1),
     );
     const diff: FileDiff = {
@@ -677,6 +710,19 @@ describe('PlainUnifiedDiff highlighting helpers', () => {
       { key: '0:2', content: 'const b = 2;' },
     ]);
     expect(shouldSkipHighlightDiff(rows)).toBe(false);
+  });
+
+  it('skips per-line worker highlighting for medium whole-file rewrites', () => {
+    const manyLines = Array.from({ length: HIGHLIGHT_MAX_DIFF_LINES + 1 }, (_, index) =>
+      line(index, 'add', `const value${index} = true;`, null, index + 1),
+    );
+    const rows = buildUnifiedRows([{
+      ...hunk(0, 1, manyLines.length),
+      lines: manyLines,
+      selectableLines: manyLines.map((_, index) => index),
+    }]);
+
+    expect(shouldSkipHighlightDiff(rows)).toBe(true);
   });
 
   it('keeps multi-hunk highlight keys from overwriting same local line indices', () => {
@@ -845,6 +891,46 @@ describe('PlainUnifiedDiff inline diff helpers', () => {
     rerender(createElement(PlainUnifiedDiff, { diff, viewMode: 'split' }));
     expect(container.querySelector('[data-review-inline-diff="delete"]')?.textContent).toBe('old');
     expect(container.querySelector('[data-review-inline-diff="add"]')?.textContent).toBe('new');
+  });
+
+  // Unit regression: an unchanged review refresh must preserve highlighted DOM
+  // and text selection. Replacing these nodes flooded Windows accessibility
+  // notifications; existing coverage only checked the resulting text/markup.
+  // Code semantics also retain a parent in the AX tree for newly highlighted
+  // tokens instead of promoting every token to the row (native SHOW-event flood).
+  it.each(['unified', 'split'] as const)('preserves highlighted nodes and selection on unchanged %s refresh', (viewMode) => {
+    const diff = fileDiff({
+      hunks: [{
+        ...hunk(0, 1, 1),
+        lines: [
+          line(0, 'delete', 'const label = "old";', 1, null),
+          line(1, 'add', 'const label = "new";', null, 1),
+        ],
+      }],
+    });
+    const { container, rerender } = render(createElement(PlainUnifiedDiff, { diff, viewMode }));
+    expect(within(container).getAllByRole('code').map((code) => code.textContent)).toEqual([
+      'const label = "old";',
+      'const label = "new";',
+    ]);
+    const highlighted = container.querySelector('[data-review-inline-diff="add"]')!;
+    const selection = window.getSelection()!;
+    const range = document.createRange();
+    range.selectNodeContents(highlighted);
+    selection.removeAllRanges();
+    selection.addRange(range);
+
+    // A refreshed response has new object identities but identical content.
+    const refreshed = structuredClone(diff);
+    rerender(createElement(PlainUnifiedDiff, { diff: refreshed, viewMode, wordWrap: true }));
+    expect(container.querySelector('[data-review-inline-diff="add"]')).toBe(highlighted);
+    expect(selection.toString()).toBe('new');
+
+    refreshed.hunks[0].lines[1] = line(1, 'add', 'const label = "updated";', null, 1);
+    rerender(createElement(PlainUnifiedDiff, { diff: structuredClone(refreshed), viewMode, wordWrap: true }));
+    expect(container.textContent).toContain('const label = "updated";');
+    expect(container.textContent).not.toContain('const label = "new";');
+    selection.removeAllRanges();
   });
 
   it('skips inline emphasis when word diffs are disabled', () => {

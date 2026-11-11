@@ -1,3 +1,5 @@
+import type { ViewInstance } from 'react-native';
+import { FileTypeIcon } from '@/components/FileTypeIcon';
 /**
  * QuoteCapsule — 「N 处引用」胶囊(chat-text-quote,对照桌面 Codex 风格)。
  *
@@ -13,7 +15,7 @@
  */
 import { useCallback, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
-import { FileText, MessageSquareQuote, X } from 'lucide-react-native';
+import { MessageSquareQuote, X } from 'lucide-react-native';
 import { Modal, Pressable, ScrollView, View, useWindowDimensions } from 'react-native';
 import { Text } from '@/components/AppText';
 import { quoteSourceDisplayLabel, type ChatQuote } from '@cindy/maker-shared/chat-quotes';
@@ -44,7 +46,7 @@ export function QuoteCapsule({ quotes, variant, onClear, testIDPrefix = 'quoteCa
   const { colors } = useTheme();
   const { t } = useTranslation();
   const { width: screenWidth, height: screenHeight } = useWindowDimensions();
-  const capsuleRef = useRef<View>(null);
+  const capsuleRef = useRef<ViewInstance>(null);
   // 非空 = 预览浮窗开启(记录胶囊的 window 坐标供浮窗锚定)。
   const [previewAnchor, setPreviewAnchor] = useState<PreviewAnchor | null>(null);
 
@@ -134,7 +136,7 @@ export function QuoteCapsule({ quotes, variant, onClear, testIDPrefix = 'quoteCa
                     </Text>
                     {quote.sourcePath ? (
                       <View style={styles.previewSourceRow}>
-                        <FileText color={colors.textTertiary} size={iconSize.xs} strokeWidth={iconStroke.regular} />
+                        <FileTypeIcon name={quote.sourcePath} color={colors.textTertiary} size={iconSize.xs} strokeWidth={iconStroke.regular} />
                         <Text numberOfLines={1} style={styles.previewSourceText}>
                           {quoteSourceDisplayLabel(quote)}
                         </Text>
@@ -175,6 +177,7 @@ function makeQuoteCapsuleStyles(colors: ThemeColors) {
     capsuleText: {
       color: colors.textSecondary,
       fontSize: typeScale.footnote,
+      lineHeight: lineHeight.caption,
       fontWeight: fontWeight.medium,
     },
     clearButton: {
@@ -222,6 +225,7 @@ function makeQuoteCapsuleStyles(colors: ThemeColors) {
     previewSourceText: {
       color: colors.textTertiary,
       fontSize: typeScale.caption,
+      lineHeight: lineHeight.caption,
     },
     pressed: {
       opacity: 0.7,

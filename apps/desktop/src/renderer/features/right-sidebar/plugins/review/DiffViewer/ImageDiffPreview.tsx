@@ -86,7 +86,7 @@ function ImageSidePanel({
         muted && 'opacity-85',
       )}
     >
-      <div className="flex h-8 items-center justify-between gap-2 border-b border-[var(--border-default)] px-3 text-[11px]">
+      <div className="flex h-8 items-center justify-between gap-2 border-b border-[var(--border-default)] px-3 text-11">
         <span className="font-medium text-[var(--text-primary)]">{label}</span>
         {meta && <span className="truncate text-[var(--text-tertiary)]">{meta}</span>}
       </div>
@@ -104,7 +104,7 @@ function ImageSidePanel({
           />
         </div>
       ) : (
-        <div className="flex min-h-[180px] flex-col items-center justify-center gap-2 px-4 py-6 text-center text-[12px] text-[var(--text-tertiary)]">
+        <div className="flex min-h-[180px] flex-col items-center justify-center gap-2 px-4 py-6 text-center text-12 text-[var(--text-tertiary)]">
           <AlertTriangle size={18} />
           <span>{sideMessage(side, maxBytes, t)}</span>
         </div>
@@ -172,7 +172,7 @@ export function ImageDiffPreview({
 
   if (state.status === 'loading') {
     return (
-      <div className="flex min-h-[160px] items-center justify-center gap-2 rounded-[8px] border border-[var(--border-default)] bg-[var(--surface)] text-[12px] text-[var(--text-tertiary)]">
+      <div className="flex min-h-[160px] items-center justify-center gap-2 rounded-[8px] border border-[var(--border-default)] bg-[var(--surface)] text-12 text-[var(--text-tertiary)]">
         <Spinner size={16} />
         <span>{t('rightSidebar.review.imagePreview.loading')}</span>
       </div>
@@ -181,17 +181,17 @@ export function ImageDiffPreview({
 
   if (state.status === 'error') {
     return (
-      <div className="flex min-h-[160px] flex-col items-center justify-center gap-2 rounded-[8px] border border-[var(--border-default)] bg-[var(--surface)] px-4 py-6 text-center text-[12px] text-[var(--text-tertiary)]">
+      <div className="flex min-h-[160px] flex-col items-center justify-center gap-2 rounded-[8px] border border-[var(--border-default)] bg-[var(--surface)] px-4 py-6 text-center text-12 text-[var(--text-tertiary)]">
         <ImageIcon size={18} />
         <span>{t('rightSidebar.review.imagePreview.loadFailed')}</span>
-        <span className="max-w-full truncate text-[11px]">{state.message}</span>
+        <span className="max-w-full truncate text-11">{state.message}</span>
       </div>
     );
   }
 
   if (panels.length === 0) {
     return (
-      <div className="flex min-h-[160px] items-center justify-center gap-2 rounded-[8px] border border-[var(--border-default)] bg-[var(--surface)] text-[12px] text-[var(--text-tertiary)]">
+      <div className="flex min-h-[160px] items-center justify-center gap-2 rounded-[8px] border border-[var(--border-default)] bg-[var(--surface)] text-12 text-[var(--text-tertiary)]">
         <ImageIcon size={18} />
         <span>{t('rightSidebar.review.imagePreview.missing')}</span>
       </div>

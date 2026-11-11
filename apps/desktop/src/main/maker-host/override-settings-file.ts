@@ -38,11 +38,18 @@ export interface OverrideSettingsFile<T> {
 
 interface CachedState<T> extends OverrideSettingsState<T> {
   overrides: Record<string, unknown>;
+  readStatus: 'missing' | 'readable' | 'unreadable';
 }
 
+/**
+ * Atomic mutations use the ordinary/advisory lock tier and still require the
+ * lock to be held. `scopeKey` guards owner/session drift separately; neither
+ * concern is an authorization decision that should inherit the plugin
+ * security-boundary lock's process-identity and durable-recovery machinery.
+ */
 export function createOverrideSettingsFile<T>(options: {
   filePath: () => string;
-  defaults: T;
+  defaults: T | (() => T);
   normalize: (raw: unknown) => T;
   mergeOverrides?: (args: {
     patch: Partial<T>;
@@ -54,17 +61,22 @@ export function createOverrideSettingsFile<T>(options: {
   label: string;
   /** owner/session 跨 await 切换时让原子写 fail closed。 */
   scopeKey?: () => string;
-  /** 同步读取前的文件大小硬上限；超限按读取失败处理，避免主进程无界分配。 */
+  /** 读写文件的大小硬上限；超限时拒绝读取或落盘，避免主进程无界分配。 */
   maxBytes?: number;
-  /** 读取/解析失败时保留原文件，供用户修复；缺省维持旧 store 的删除坏文件行为。 */
+  /** 读取/解析失败时保留原文件并拒绝普通写入；reset 仍可显式恢复。 */
   preserveUnreadableFile?: boolean;
+  /** 设置值可能含敏感数据时，仅记录加载状态，不把 normalized value 写入日志。 */
+  logLoadedValue?: boolean;
+  /** 读取错误可能带出原文件片段时，不把错误详情写入日志。 */
+  logReadErrorDetails?: boolean;
 }): OverrideSettingsFile<T> {
   let cached: CachedState<T> | null = null;
   let cachedResolvedPath: string | null = null;
   /** 缓存装载时文件的 mtimeMs;null = 装载时文件不存在(默认态)。 */
   let cachedFileMtimeMs: number | null = null;
 
-  const defaults = (): T => clone(options.defaults);
+  const defaults = (): T =>
+    clone(typeof options.defaults === 'function' ? (options.defaults as () => T)() : options.defaults);
 
   /** 当前文件 mtimeMs;文件不存在/不可 stat 时 null(与"无文件"同态)。 */
   function statFileMtimeMs(): number | null {
@@ -80,6 +92,7 @@ export function createOverrideSettingsFile<T>(options: {
     if (cached) return toPublicState(cached);
     const file = options.filePath();
     cachedResolvedPath = file;
+    let readStatus: CachedState<T>['readStatus'] = 'missing';
     try {
       if (fs.existsSync(file)) {
         const stat = fs.statSync(file);
@@ -88,6 +101,9 @@ export function createOverrideSettingsFile<T>(options: {
         }
         const text = fs.readFileSync(file, 'utf-8');
         const parsed = JSON.parse(text);
+        if (options.preserveUnreadableFile && !isLoggableObject(parsed)) {
+          throw new Error('settings file root must be an object');
+        }
         const overrides = isLoggableObject(parsed) ? parsed : {};
         cachedFileMtimeMs = stat.mtimeMs;
         cached = {
@@ -96,17 +112,25 @@ export function createOverrideSettingsFile<T>(options: {
           defaults: defaults(),
           customizedKeys: Object.keys(overrides),
           overrides,
+          readStatus: 'readable',
         };
         options.log.info(`${options.label} settings loaded`, {
-          ...(isLoggableObject(cached.value) ? cached.value : { value: cached.value }),
+          ...(options.logLoadedValue === false
+            ? {}
+            : isLoggableObject(cached.value)
+              ? cached.value
+              : { value: cached.value }),
           path: file,
           isCustomized: cached.isCustomized,
         });
         return toPublicState(cached);
       }
     } catch (err) {
+      if (options.preserveUnreadableFile) readStatus = 'unreadable';
       options.log.warn(`${options.label} settings read failed; falling back to defaults`, {
-        error: err instanceof Error ? err.message : String(err),
+        ...(options.logReadErrorDetails === false
+          ? {}
+          : { error: err instanceof Error ? err.message : String(err) }),
         path: file,
       });
       if (!options.preserveUnreadableFile) {
@@ -120,13 +144,14 @@ export function createOverrideSettingsFile<T>(options: {
 
     // 保留坏文件时记住它的 mtime，避免每次读取重复解析/刷日志；用户修复后
     // invalidateIfChanged 会看到 mtime 变化并自动重试。
-    cachedFileMtimeMs = options.preserveUnreadableFile ? statFileMtimeMs() : null;
+    cachedFileMtimeMs = readStatus === 'unreadable' ? statFileMtimeMs() : null;
     cached = {
       value: defaults(),
       isCustomized: false,
       defaults: defaults(),
       customizedKeys: [],
       overrides: {},
+      readStatus,
     };
     return toPublicState(cached);
   }
@@ -141,7 +166,7 @@ export function createOverrideSettingsFile<T>(options: {
   }
 
   function writePatch(patch: Partial<T>, writeOptions?: { preserveDefaults?: boolean }): void {
-    const current = readState();
+    const current = readWritableState();
     const next = options.normalize({ ...current.value, ...patch });
     const currentDefaults = defaults();
     const currentOverrides = cached?.overrides ?? {};
@@ -212,7 +237,7 @@ export function createOverrideSettingsFile<T>(options: {
           );
         }
         invalidate();
-        const current = readState();
+        const current = readWritableState();
         writePatch(updater(current), writeOptions);
         return readState().value;
       },
@@ -226,8 +251,15 @@ export function createOverrideSettingsFile<T>(options: {
     }
     const file = options.filePath();
     const tmp = `${file}.tmp`;
+    const serialized = JSON.stringify(overrides, null, 2);
+    if (
+      options.maxBytes !== undefined &&
+      Buffer.byteLength(serialized, 'utf-8') > options.maxBytes
+    ) {
+      throw new Error(`file exceeds ${options.maxBytes} byte limit`);
+    }
     fs.mkdirSync(pathDirname(file), { recursive: true });
-    fs.writeFileSync(tmp, JSON.stringify(overrides, null, 2), 'utf-8');
+    fs.writeFileSync(tmp, serialized, 'utf-8');
     fs.renameSync(tmp, file);
     cachedFileMtimeMs = statFileMtimeMs();
     const next = options.normalize({ ...defaults(), ...overrides });
@@ -237,6 +269,7 @@ export function createOverrideSettingsFile<T>(options: {
       defaults: defaults(),
       customizedKeys: Object.keys(overrides),
       overrides,
+      readStatus: 'readable',
     };
   }
 
@@ -261,6 +294,7 @@ export function createOverrideSettingsFile<T>(options: {
       defaults: defaults(),
       customizedKeys: [],
       overrides: {},
+      readStatus: 'missing',
     };
     options.log.info(`${options.label} settings reset to defaults`, { path: file });
     return cached.value;
@@ -312,6 +346,100 @@ export function createOverrideSettingsFile<T>(options: {
     cachedFileMtimeMs = null;
     cachedResolvedPath = currentPath;
   }
+
+  function readWritableState(): OverrideSettingsState<T> {
+    const state = readState();
+    if (cached?.readStatus === 'unreadable') {
+      throw new Error(`${options.label} settings file is unreadable; refusing to overwrite it`);
+    }
+    return state;
+  }
+}
+
+/**
+ * Narrow handle for new-computer setup (docs/product-rules/new-device-setup-migration.md):
+ * read only the values the user changed here, and apply another computer's changed values
+ * through this store's own normalize/merge rules and atomic write. Excluded keys (absolute
+ * paths, device-bound values) are neither exported nor accepted.
+ */
+export interface PortableOverrideSettings {
+  /** Values the user changed on this computer (normalized), minus excluded keys. */
+  readCustomized(): Record<string, unknown>;
+  /**
+   * Writes another computer's changed values; the store still normalizes every key.
+   * `select` runs inside this store's cross-process write lock and receives the values
+   * customized here at that moment, so a key changed after the preview (in any process) is
+   * never overwritten. Resolves whether anything was written.
+   */
+  applyPatch(select: (customizedHere: Record<string, unknown>) => Record<string, unknown>): Promise<boolean>;
+}
+
+/** Thrown inside the write lock to leave the file untouched when nothing remains to write. */
+class NothingToWrite extends Error {}
+
+const PORTABLE_SETTINGS_KEY_RE = /^[A-Za-z][A-Za-z0-9_]{0,127}$/;
+
+export function portableOverrideSettings<T>(
+  file: OverrideSettingsFile<T> | (() => OverrideSettingsFile<T>),
+  options: {
+    omitKeys?: readonly string[];
+    /**
+     * Keys this store accepts that its defaults leave out (optional fields). Without them a
+     * fresh computer would not recognize, and would drop, these values.
+     */
+    optionalKeys?: readonly string[];
+    /** Drops values that only make sense on the source computer. */
+    filter?: (values: Record<string, unknown>) => Record<string, unknown>;
+  } = {},
+): PortableOverrideSettings {
+  const resolve = typeof file === 'function' ? file : () => file;
+  const omitted = new Set(options.omitKeys ?? []);
+  const keep = (values: Record<string, unknown>): Record<string, unknown> => {
+    const out: Record<string, unknown> = {};
+    for (const [key, value] of Object.entries(values)) {
+      if (!omitted.has(key) && PORTABLE_SETTINGS_KEY_RE.test(key) && value !== undefined) {
+        out[key] = clone(value);
+      }
+    }
+    return options.filter ? options.filter(out) : out;
+  };
+  const customizedOf = (state: OverrideSettingsState<T>): Record<string, unknown> => {
+    const value = state.value as Record<string, unknown>;
+    const changed: Record<string, unknown> = {};
+    for (const key of state.customizedKeys) {
+      if (Object.prototype.hasOwnProperty.call(value, key)) changed[key] = value[key];
+    }
+    return keep(changed);
+  };
+  return {
+    readCustomized() {
+      return customizedOf(resolve().readState());
+    },
+    async applyPatch(select) {
+      try {
+        // An explicit choice on the other computer stays explicit here, even when it equals
+        // this version's default.
+        await resolve().updateAtomic((state) => {
+          // Keys this version does not know would normalize to nothing yet still mark the
+          // store as customized; only accept keys this store can represent.
+          const known = new Set([
+            ...Object.keys(state.defaults as Record<string, unknown>),
+            ...Object.keys(state.value as Record<string, unknown>),
+            ...(options.optionalKeys ?? []),
+          ]);
+          const values = keep(
+            Object.fromEntries(Object.entries(select(customizedOf(state))).filter(([key]) => known.has(key))),
+          );
+          if (Object.keys(values).length === 0) throw new NothingToWrite();
+          return values as Partial<T>;
+        }, { preserveDefaults: true });
+        return true;
+      } catch (error) {
+        if (error instanceof NothingToWrite) return false;
+        throw error;
+      }
+    },
+  };
 }
 
 function pathDirname(filePath: string): string {

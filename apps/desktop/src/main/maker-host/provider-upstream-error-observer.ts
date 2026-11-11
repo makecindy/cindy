@@ -37,6 +37,17 @@ export interface ProviderUpstreamErrorEvent {
   status: number;
   /** 上游原始信息摘要（renderer 详情展开用；主文案走 providerError.* i18n）。 */
   detail?: string;
+  /**
+   * 上游 JSON 错误体中的 `error.type`（低风险字段，不含 message —— message 可能
+   * 回显请求字段 / prompt 片段）。用于区分「中转层自身路由拒绝」与官方 400（#2333）。
+   */
+  errorType?: string;
+  /**
+   * 本地代理层请求序号（见 anthropic-compat-proxy ResponseObserverCtx.reqId）。
+   * 供用户对照 `cc-proxy.log` / `agent-*.ndjson` 拉出完整往返；与上游 request ID 无关。
+   * 仅 observer 路径（请求经 compat-proxy 转发）有；localHandler 桥接路径无此值。
+   */
+  reqId?: number;
 }
 
 /** 错误体累积上限（分类只看前几 KB）。 */
@@ -88,6 +99,8 @@ export function reportProviderUpstreamError(params: {
     retryable: cls.retryable,
     status: params.status,
     detail: cls.detail,
+    // localHandler 桥接路径绕开 compat-proxy 转发层，无本地 reqId（与 observer 一致）。
+    errorType: extractErrorTypeFromBody(params.bodyText),
   });
 }
 
@@ -104,6 +117,71 @@ export function decodeUpstreamErrorBody(buf: Buffer, encoding: string | undefine
     /* 解压失败回退原文（截断文本对 pattern 匹配仍可能有效） */
   }
   return buf.toString('utf-8');
+}
+
+/**
+ * 从上游错误体提取低风险 `error.type`。支持两种形态：
+ *  1. Anthropic / OpenAI / litellm 标准：`{ "error": { "type": "...", ... } }`
+ *  2. responses-chat bridge 解包后的 streamed error：`{ "type": "...", ... }`
+ *     （bridge 在 SSE 200 流内的错误帧里把 event.error 解包后 `JSON.stringify`
+ *     传给回调，见 responses-chat-bridge handler.ts）
+ * 只取 type 字符串，不取 message —— message 常回显请求字段值，会泄漏 prompt
+ * 片段（与 proxy 包 extractErrorType 同口径）。
+ * 非 JSON / 字段缺失 / 类型不符一律 undefined，调用方直接省略该字段。
+ *
+ * errorType 是上游（不可信输入）直接进 renderer 的诊断字段，采用 **fail-closed
+ * 白名单**（chatgpt-codex-connector P1）：只接受已知的服务端错误分类枚举值，未知 /
+ * 可疑值一律省略。枚举覆盖 Anthropic / OpenAI / litellm 与常见兼容网关的标准
+ * `error.type`，以及 #2333 的核心诊断信号 `agent_router_api_error`（中转层自身
+ * 路由拒绝，非官方 API 错误）。
+ *
+ * 选白名单而非黑名单 / 启发式的原因：凭证形态无法用前缀或熵穷尽——`ghp_...`、
+ * `sk_ant_...`、任意纯字母不透明 token 都能伪装成「小写 snake_case」。而 errorType
+ * 是增强诊断字段，对未知值保守省略只少一个展示细节，不损失主流程；这正是
+ * `credentials-and-local-storage.md`「日志 / 错误不得包含凭证明文」硬约束要求的。
+ */
+const KNOWN_ERROR_TYPES = new Set([
+  // Anthropic / OpenAI / litellm 标准错误类型
+  'invalid_request_error',
+  'authentication_error',
+  'permission_error',
+  'not_found_error',
+  'request_too_large',
+  'rate_limit_error',
+  'api_error',
+  'overloaded_error',
+  'timeout_error',
+  'invalid_argument',
+  'content_policy_violation',
+  'context_length_exceeded',
+  'insufficient_quota',
+  'model_not_found',
+  'server_error',
+  'connection_error',
+  'bad_gateway',
+  'service_unavailable',
+  'unsupported_feature',
+  // 中转层自身路由拒绝（#2333 核心诊断信号，非官方 API 错误）
+  'agent_router_api_error',
+  'upstream_error',
+]);
+
+function extractErrorTypeFromBody(bodyText: string): string | undefined {
+  const trimmed = bodyText.trim();
+  if (!trimmed.startsWith('{')) return undefined;
+  try {
+    const parsed: unknown = JSON.parse(trimmed);
+    if (typeof parsed !== 'object' || parsed === null || Array.isArray(parsed)) return undefined;
+    const root = parsed as Record<string, unknown>;
+    // 标准包裹形态 { error: { type } }，其次 bridge 解包形态 { type }。
+    const err = root.error ?? root;
+    if (typeof err !== 'object' || err === null || Array.isArray(err)) return undefined;
+    const t = (err as Record<string, unknown>).type;
+    if (typeof t === 'string' && KNOWN_ERROR_TYPES.has(t)) return t;
+  } catch {
+    /* 截断 / 非 JSON：忽略 */
+  }
+  return undefined;
 }
 
 export interface ProviderUpstreamErrorObserverOptions {
@@ -167,6 +245,8 @@ export function createProviderUpstreamErrorObserver(
           retryable: cls.retryable,
           status: ctx.status,
           detail: cls.detail ? redactSensitiveText(cls.detail) : undefined,
+          errorType: extractErrorTypeFromBody(bodyText),
+          reqId: ctx.reqId,
         });
       },
       // 上游流错误：本次观察放弃即可（连接层问题由 proxy 主路径处理与记日志）。

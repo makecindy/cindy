@@ -6,7 +6,7 @@
 
 import { describe, expect, it, vi } from 'vitest';
 
-import { ImageChannelRegistry, decodeImageResponse, type ImageChannel } from '../imageChannelRegistry';
+import { ImageChannelRegistry, decodeImageResponse, assertLibraryEditImageSource, type ImageChannel } from '../imageChannelRegistry';
 
 function channel(ready: boolean, supportsEdit?: boolean): ImageChannel {
   return {
@@ -52,6 +52,22 @@ describe('ImageChannelRegistry', () => {
     expect(registry.isProviderEditReady('unknown')).toBe(false);
   });
 
+  it('unregister releases only the selected provider and allows a new channel for that ID', () => {
+    const registry = new ImageChannelRegistry();
+    const xd = channel(true);
+    registry.register('xd', xd);
+    registry.register('dynamic', channel(true));
+    registry.unregister('dynamic');
+    registry.unregister('dynamic');
+    expect(registry.isProviderReady('dynamic')).toBe(false);
+    expect(registry.isProviderEditReady('dynamic')).toBe(false);
+    expect(() => registry.resolve('dynamic')).toThrow(/没有可用的执行通道/);
+    expect(registry.resolve('xd')).toBe(xd);
+    const replacement = channel(true);
+    registry.register('dynamic', replacement);
+    expect(registry.resolve('dynamic')).toBe(replacement);
+  });
+
   it('supportsEdit: false 的通道 resolve 后仍携带该标记,供派发层拒改图请求', () => {
     const registry = new ImageChannelRegistry();
     const generateOnly: ImageChannel = { ...channel(true), supportsEdit: false };
@@ -90,5 +106,18 @@ describe('decodeImageResponse', () => {
   it('空响应拒绝', () => {
     expect(() => decodeImageResponse({ data: [] })).toThrow(/返回为空/);
     expect(() => decodeImageResponse({ data: [{}] })).toThrow(/返回为空/);
+  });
+});
+
+describe('assertLibraryEditImageSource', () => {
+  const HASH = 'b'.repeat(64);
+  const blob = `assets/${HASH.slice(0, 2)}/${HASH}/blob.png`;
+
+  it('正本 blob 可消费,sidecar 与错误文件名 fail-visible', () => {
+    expect(() => assertLibraryEditImageSource(blob)).not.toThrow();
+    expect(() => assertLibraryEditImageSource(`/abs/library/${blob}`)).not.toThrow();
+    expect(() => assertLibraryEditImageSource(`assets/${HASH.slice(0, 2)}/${HASH}/preview.webp`)).toThrow(/sidecar/);
+    expect(() => assertLibraryEditImageSource(`assets/${HASH.slice(0, 2)}/${HASH}/meta.json`)).toThrow(/sidecar/);
+    expect(() => assertLibraryEditImageSource(`assets/${HASH.slice(0, 2)}/${HASH}.png`)).toThrow(/正本 blob/);
   });
 });

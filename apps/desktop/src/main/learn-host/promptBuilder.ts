@@ -47,9 +47,18 @@ Quality bar:
 /** locale → 自述语言的人类可读名(给模型的确定性指令,不靠它从请求里猜)。 */
 const REPLY_LANGUAGE_BY_LOCALE: Record<string, string> = {
   'zh-CN': 'Simplified Chinese (简体中文)',
+  'zh-TW': 'Traditional Chinese (繁體中文)',
   en: 'English',
   ja: 'Japanese (日本語)',
   ko: 'Korean (한국어)',
+
+  "es": "Spanish (Español)",
+  "fr": "French (Français)",
+  "de": "German (Deutsch)",
+  "pt-PT": "European Portuguese (Português (Portugal))",
+  "pt-BR": "Brazilian Portuguese (Português (Brasil))",
+  "zh-Hant-x-lzh": "Traditional Chinese (繁體中文)",
+  "zh-Hans-x-lzh": "Simplified Chinese (简体中文)",
 };
 
 export interface BuildLearnPromptArgs {

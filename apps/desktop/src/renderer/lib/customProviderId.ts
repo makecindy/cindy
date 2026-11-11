@@ -17,10 +17,13 @@ function slugify(name: string): string {
 }
 
 export function uniqueCustomProviderId(name: string, existing: ReadonlySet<string>): string {
-  const base = slugify(name);
+  // Keep generated IDs within the custom-provider store’s 40-character limit.
+  const maxLength = 40;
+  const base = slugify(name).slice(0, maxLength);
   if (!existing.has(base)) return base;
   for (let i = 2; ; i += 1) {
-    const candidate = `${base}-${i}`;
+    const suffix = `-${i}`;
+    const candidate = `${base.slice(0, maxLength - suffix.length)}${suffix}`;
     if (!existing.has(candidate)) return candidate;
   }
 }

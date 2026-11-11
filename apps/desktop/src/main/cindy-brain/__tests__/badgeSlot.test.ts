@@ -15,10 +15,9 @@ import {
 } from '../../../shared/ghost';
 
 function fakeGhost(
-  overrides: { enabled?: boolean; slots?: string[]; badge?: boolean } = {},
+  overrides: { enabled?: boolean; notify?: boolean; badge?: boolean } = {},
 ): InstalledGhost {
   const badge = overrides.badge ?? true;
-  const slots = overrides.slots ?? ['panel', 'notify'];
   return {
     manifest: {
       schemaVersion: 2,
@@ -27,7 +26,9 @@ function fakeGhost(
       version: '1.0.0',
       kind: 'chip',
       entry: 'main.js',
-      slots: badge ? [...slots, 'badge'] : slots,
+      panel: { html: 'panel.html' },
+      ...(overrides.notify === false ? {} : { notify: true }),
+      ...(badge ? { badge: true } : {}),
     },
     dir: '/fake/brain/inbox',
     enabled: overrides.enabled ?? true,
@@ -62,7 +63,7 @@ describe('GhostBadgeSlot', () => {
     });
   });
 
-  it('资格只看 badge 卡槽:没声明就拒(存量只有 notify 槽的老包不白捡这档能力)', () => {
+  it('资格只看 badge 声明:没声明就拒(存量只有 notify 的老包不白捡这档能力)', () => {
     const noDecl = makeSlot(fakeGhost({ badge: false }));
     const r = noDecl.slot.handleBadge('inbox', { unread: true });
     expect(r).toMatchObject({ ok: false });
@@ -70,8 +71,8 @@ describe('GhostBadgeSlot', () => {
     expect(noDecl.mark).not.toHaveBeenCalled();
   });
 
-  it('不要求 notify 槽:只声明 panel + badge 的意识照样能点亮(两档权限并列)', () => {
-    const { slot, mark } = makeSlot(fakeGhost({ slots: ['panel'] }), { now: () => 1 });
+  it('不要求 notify:只声明 panel + badge 的意识照样能点亮(两档权限并列)', () => {
+    const { slot, mark } = makeSlot(fakeGhost({ notify: false }), { now: () => 1 });
     expect(slot.handleBadge('inbox', { unread: true, summary: '新内容' })).toEqual({ ok: true });
     expect(mark).toHaveBeenCalledWith('inbox', '新内容', 1);
   });

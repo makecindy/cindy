@@ -1,6 +1,10 @@
 import { describe, expect, it, vi } from 'vitest';
 
-import { refreshProviderModelsAfterAccountReady } from '../account-provider-model-refresh.js';
+import {
+  discoverAccountProviderModels,
+  refreshProviderModelsAfterAccountReady,
+  resetAccountProviderRuntimes,
+} from '../account-provider-model-refresh.js';
 
 function deferred() {
   let resolve!: () => void;
@@ -10,17 +14,79 @@ function deferred() {
   return { promise, resolve };
 }
 
+describe('resetAccountProviderRuntimes', () => {
+  it('stops before later destructive steps when the scope changes', async () => {
+    const shutdownCodexEnvironment = vi.fn(async () => {});
+    let allow = true;
+    await resetAccountProviderRuntimes(
+      {
+        restartCodex: async (refresh) => {
+          allow = false;
+          expect(await refresh()).toBe(false);
+        },
+        shutdownCodexEnvironment,
+        log: { warn: vi.fn() },
+      },
+      () => allow,
+    );
+    expect(shutdownCodexEnvironment).not.toHaveBeenCalled();
+  });
+
+  it('still shuts down Codex when only a transient boundary flips during restart', async () => {
+    const shutdownCodexEnvironment = vi.fn(async () => {});
+    let handleLive = true;
+    let boundaryPending = false;
+    await resetAccountProviderRuntimes(
+      {
+        restartCodex: async (refresh) => {
+          boundaryPending = true;
+          await refresh();
+        },
+        shutdownCodexEnvironment,
+        log: { warn: vi.fn() },
+      },
+      () => handleLive,
+    );
+    expect(boundaryPending).toBe(true);
+    expect(shutdownCodexEnvironment).toHaveBeenCalledOnce();
+  });
+});
+
+describe('discoverAccountProviderModels', () => {
+  it('does not start provider refresh after shouldContinue flips', async () => {
+    const refreshProviderModels = vi.fn(async () => {});
+    let allow = true;
+    await discoverAccountProviderModels(
+      {
+        loadXaiLkg: async () => {
+          allow = false;
+          return true;
+        },
+        refreshProviderModels,
+        log: { warn: vi.fn() },
+      },
+      () => allow,
+    );
+    expect(refreshProviderModels).not.toHaveBeenCalled();
+  });
+});
+
 describe('refreshProviderModelsAfterAccountReady', () => {
   it('keeps all account-scoped provider refreshes inside readiness', async () => {
     const anthropicRefresh = deferred();
     const backgroundRefresh = deferred();
     const events: string[] = [];
     const operation = refreshProviderModelsAfterAccountReady({
-      restartCodex: async () => {
+      restartCodex: async (refresh) => {
         events.push('restart');
+        await refresh();
       },
       shutdownCodexEnvironment: async () => {
         events.push('shutdown');
+      },
+      loadXaiLkg: async () => {
+        events.push('xai-lkg');
+        return true;
       },
       refreshProviderModels: async (trigger, providerIds) => {
         events.push(`refresh:${trigger}:${providerIds?.join(',')}`);
@@ -39,6 +105,7 @@ describe('refreshProviderModelsAfterAccountReady', () => {
       expect(events).toEqual([
         'restart',
         'shutdown',
+        'xai-lkg',
         'refresh:startup:xd,openai,xai',
         'refresh:startup:anthropic',
       ]),
@@ -64,6 +131,7 @@ describe('refreshProviderModelsAfterAccountReady', () => {
           throw new Error('restart unavailable');
         },
         shutdownCodexEnvironment: vi.fn(async () => {}),
+        loadXaiLkg: vi.fn(async () => false),
         refreshProviderModels,
         log: { warn },
       }),
@@ -80,8 +148,9 @@ describe('refreshProviderModelsAfterAccountReady', () => {
     const warn = vi.fn();
     await expect(
       refreshProviderModelsAfterAccountReady({
-        restartCodex: vi.fn(async () => {}),
+        restartCodex: vi.fn(async (refresh) => { await refresh(); }),
         shutdownCodexEnvironment: vi.fn(async () => {}),
+        loadXaiLkg: vi.fn(async () => false),
         refreshProviderModels: async () => {
           throw new Error('discovery unavailable');
         },
@@ -95,5 +164,28 @@ describe('refreshProviderModelsAfterAccountReady', () => {
     expect(warn).toHaveBeenCalledWith('Anthropic model startup refresh failed', {
       error: 'discovery unavailable',
     });
+  });
+
+  it('loads the current owner xAI LKG before starting account refreshes', async () => {
+    const releaseLkg = deferred();
+    const events: string[] = [];
+    const operation = refreshProviderModelsAfterAccountReady({
+      restartCodex: async (refresh) => { await refresh(); },
+      shutdownCodexEnvironment: async () => {},
+      loadXaiLkg: async () => {
+        events.push('lkg:start');
+        await releaseLkg.promise;
+        events.push('lkg:end');
+        return true;
+      },
+      refreshProviderModels: async () => {
+        events.push('refresh');
+      },
+      log: { warn: vi.fn() },
+    });
+    await vi.waitFor(() => expect(events).toEqual(['lkg:start']));
+    releaseLkg.resolve();
+    await operation;
+    expect(events).toEqual(['lkg:start', 'lkg:end', 'refresh', 'refresh']);
   });
 });

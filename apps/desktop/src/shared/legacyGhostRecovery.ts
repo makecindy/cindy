@@ -10,6 +10,8 @@ export interface LegacyGhostRecoveryStatus {
   state: LegacyGhostRecoveryState;
   legacyPluginCount: number;
   canRetry: boolean;
+  /** Discovery could not establish the complete legacy source set yet. */
+  deferredReason?: 'legacy-discovery-incomplete';
 }
 
 export const NO_LEGACY_GHOST_RECOVERY: LegacyGhostRecoveryStatus = {

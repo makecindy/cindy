@@ -19,6 +19,10 @@ import type {
   BrowserControlResult,
   BrowserControlRuntime,
 } from './types.js';
+import { parseBrowserProxyServer, redactBrowserProxyText } from './proxy.js';
+import { RecipeBrowserSessions } from './recipe-sessions.js';
+import { openRecipeSocket } from './recipe-socket.js';
+import { resolveTargetIdFromTabs } from './_generated/extension/src/browser/target-id.js';
 
 type Method = 'GET' | 'POST' | 'DELETE';
 interface DispatchPlan {
@@ -46,6 +50,18 @@ const DIAGNOSTIC_ACTIONS: ReadonlySet<BrowserControlAction> = new Set([
  *  Exported (pure) so the param-forwarding can be unit-tested as a regression
  *  net against future vendored re-syncs silently dropping fields. */
 export function planDispatch(req: BrowserControlRequest): DispatchPlan {
+  if (
+    (req.proxyServer !== undefined || req.proxyAllowedHostnames !== undefined)
+    && req.action !== 'start'
+  ) {
+    throw new Error('proxyServer and proxyAllowedHostnames are only valid for action=start');
+  }
+  if (
+    req.action === 'start'
+    && (req.proxyServer !== undefined || req.proxyAllowedHostnames !== undefined)
+  ) {
+    parseBrowserProxyServer(req.proxyServer, req.proxyAllowedHostnames);
+  }
   const profileQuery = req.profile ? { profile: req.profile } : undefined;
   const withProfile = (q?: Record<string, unknown>): Record<string, unknown> | undefined => {
     const merged = { ...profileQuery, ...q };
@@ -53,6 +69,8 @@ export function planDispatch(req: BrowserControlRequest): DispatchPlan {
   };
   const a: BrowserControlAction = req.action;
   switch (a) {
+    case 'recipeCommand':
+      throw new Error('recipeCommand uses the internal adapter transport');
     case 'doctor':
       return { method: 'GET', path: '/doctor', query: withProfile() };
     case 'status':
@@ -70,7 +88,11 @@ export function planDispatch(req: BrowserControlRequest): DispatchPlan {
         method: 'POST',
         path: '/tabs/open',
         query: withProfile(),
-        body: { url: req.url ?? req.targetUrl, label: req.label },
+        body: {
+          url: req.url ?? req.targetUrl,
+          label: req.label,
+          background: req.background ?? true,
+        },
       };
     case 'focus':
       return {
@@ -227,9 +249,35 @@ export function createBrowserControlRuntime(
 ): BrowserControlRuntime {
   if (options.config) setBrowserRuntimeConfig(options.config);
   if (options.logSink) setBrowserRuntimeLogSink(options.logSink);
+  const recipeSessions = new RecipeBrowserSessions();
 
   return {
     async call(request: BrowserControlRequest): Promise<BrowserControlResult> {
+      if (request.action === 'recipeCommand') {
+        try {
+          const command = request.recipeCommand;
+          if (!command || !request.targetId) throw new Error('recipeCommand requires an explicit targetId and command');
+          const scope = JSON.stringify([request.profile ?? '', request.targetId]);
+          if (command.method !== 'Cindy.begin') {
+            const data = await recipeSessions.call(scope, command.sessionId ?? '', command.method, command.params);
+            return { ok: true, action: request.action, data };
+          }
+          const listed = await dispatchBrowserControlRequest({ method: 'GET', path: '/tabs', query: request.profile ? { profile: request.profile } : undefined });
+          if (listed.status >= 400) throw new Error('Cannot resolve browser recipe target');
+          const tabs = (listed.body as { tabs?: Array<{ targetId: string; wsUrl?: string }> }).tabs ?? [];
+          const resolved = resolveTargetIdFromTabs(request.targetId, tabs);
+          if (!resolved.ok) throw new Error(`Selected browser recipe target is ${resolved.reason}`);
+          const tab = tabs.find(item => item.targetId === resolved.targetId);
+          if (!tab?.wsUrl) throw new Error('Selected browser recipe target is unavailable');
+          const data = {
+            targetId: tab.targetId,
+            sessionId: recipeSessions.begin(JSON.stringify([request.profile ?? '', tab.targetId]), await openRecipeSocket(tab.wsUrl)),
+          };
+          return { ok: true, action: request.action, data };
+        } catch (error) {
+          return { ok: false, action: request.action, message: error instanceof Error ? error.message : String(error) };
+        }
+      }
       let plan: DispatchPlan;
       try {
         plan = planDispatch(request);
@@ -276,7 +324,7 @@ export function createBrowserControlRuntime(
               }),
         };
       } catch (err) {
-        const message = err instanceof Error ? err.message : String(err);
+        const message = redactBrowserProxyText(err);
         const disabled = /browser control disabled/i.test(message);
         return {
           ok: false,

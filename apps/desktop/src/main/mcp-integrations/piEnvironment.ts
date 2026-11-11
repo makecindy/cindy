@@ -26,28 +26,40 @@
  * 两类 server 都不可用才返回 null，让 pi 跑纯内置工具。
  */
 
+import { createHmac, randomBytes } from 'node:crypto';
+
 import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
-import type {
-  McpProvider,
-  McpProviderContext,
-  PiExtraSpawnConfig,
-  PiExtraSpawnConfigContext,
+import {
+  isBotMcpServerAllowed,
+  type McpProvider,
+  type McpProviderContext,
+  type PiExtraSpawnConfig,
+  type PiExtraSpawnConfigContext,
 } from '@cindy/maker-core';
 
 import { getLiziMcpSessionContext, type LiziMcpSessionContext } from '@cindy/mcps';
 
 import type { Logger as MakerLogger } from '@cindy/maker-core';
-
+import type { CodexHttpBridge } from './codexHttpBridge.js';
 import {
-  startCodexHttpBridge,
-  type CodexHttpBridge,
-  withMcpRouteIdentity,
-} from './codexHttpBridge.js';
-import { CODEX_DISABLED_BUILTIN_PLUGIN_IDS_KEY } from './codexBuiltinToolPolicy.js';
+  CODEX_ALLOWED_BUILTIN_PLUGIN_IDS_KEY,
+  CODEX_DISABLED_BUILTIN_PLUGIN_IDS_KEY,
+  readAllowedBuiltinPluginIds,
+  readDisabledBuiltinPluginIds,
+} from './codexBuiltinToolPolicy.js';
+import {
+  CINDY_MAKE_MCP_SERVER_NAME,
+  isCindyMakeVendorOptions,
+} from '../../shared/cindyMakeSession.js';
 import { pluginIdForKnownProviderName } from '../maker-host/plugins/builtin-plugins.js';
 // 直接取 plugins 模块的 registry 单例,不经 maker-host/index.ts —— 后者 import pi-host,
 // 从 mcp-integrations 反向 import 会成环。
 import { createPluginRegistry } from '../maker-host/plugins/index.js';
+import { isAllowedRemoteMcpUrl, isDesktopLoopbackMcpUrl } from './piMcpTransport.js';
+import { RUNTIME_MCP_NAMES_KEY } from '../maker-host/agentCapabilityCatalog.js';
+import { hasImChannelVendorOptions } from '../../shared/botImConnection.js';
+import { REMOTE_COLLAB_SERVER_NAMES } from './codexHttpBridge.js';
+
 
 interface StartedPiBridge {
   bridge: CodexHttpBridge | null;
@@ -60,11 +72,28 @@ interface StartedPiBridge {
   shutdownPromise: Promise<void> | null;
 }
 
+/** Shared MCP transport with launcher-owned runtime and credentials. */
+export function createPiEnvironment(ports: { startCodexHttpBridge: ReturnType<typeof import('./codexHttpBridge.js').createCodexHttpBridgeRuntime>['startCodexHttpBridge']; withMcpRouteIdentity: ReturnType<typeof import('./codexHttpBridge.js').createCodexHttpBridgeRuntime>['withMcpRouteIdentity']; }) {
+const { startCodexHttpBridge, withMcpRouteIdentity } = ports;
+
+
 let startPromise: Promise<StartedPiBridge | null> | null = null;
 let activeGeneration: StartedPiBridge | null = null;
 let environmentEpoch = 0;
 let nextGeneration = 0;
 const generations = new Set<StartedPiBridge>();
+// 轮 40-w4-t10 MEDIUM:关停门闩 —— shutdownPiEnvironment 期间 ensureBridge
+// 不得重启 bridge(否则「界面以为已关/旧会话收口, 实际又冒出新 bridge」)。
+let environmentShuttingDown = false;
+// 轮 41 CRITICAL:session token 由「每次 randomBytes」改为「进程级 key + sessionId
+// 确定性派生」—— 修复"正常对话期间突然 kill"根因:旧实现每次重建 spawn env 都生成
+// 新 token → CINDY_PI_MCP_BRIDGE 变 → envHash 必变 → daemon ensure(restart:true)
+// 判定 envHash mismatch → kill + respawn。断链重连(SSH 抖动)一次就杀一次 pi,
+// 「断链保活 / 纯 attach」语义完全失效。
+// 派生 token:同一进程内同 session 重连 → 同 token → envHash 稳定 → attach 保活;
+// 进程重启 → key 变 → 新 token → pi 也随重启重建, 一致。安全性保持 R5 C-2:
+// HMAC 单向, 泄漏一个 session 的 token 推不出 key、伪造不了其它 session。
+const PI_BRIDGE_SESSION_KEY = randomBytes(32);
 const REMOTE_MCP_STARTUP_TIMEOUT_MS = 10_000;
 const REMOTE_MCP_REQUEST_TIMEOUT_MS = 600_000;
 
@@ -79,25 +108,38 @@ function cloneRemoteServers(
   }));
 }
 
-function isLoopbackMcpHostname(hostname: string): boolean {
-  const normalized = hostname.toLowerCase();
-  return normalized === 'localhost'
-    || normalized === '127.0.0.1'
-    || normalized === '::1'
-    || normalized === '[::1]';
-}
-
-function isAllowedRemoteMcpUrl(url: URL): boolean {
-  if (url.username || url.password) return false;
-  if (url.protocol === 'https:') return true;
-  return url.protocol === 'http:' && isLoopbackMcpHostname(url.hostname);
+function selectMcpEnvForServers(
+  servers: NonNullable<PiExtraSpawnConfig['mcpBridge']>['servers'],
+  source: Readonly<Record<string, string>>,
+): Record<string, string> {
+  const referenced = new Set(
+    servers.flatMap((server) => Object.values(server.remote?.headerEnvVars ?? {})),
+  );
+  return Object.fromEntries(
+    Object.entries(source).filter(([name]) => referenced.has(name)),
+  );
 }
 
 function shutdownGeneration(started: StartedPiBridge): Promise<void> {
   if (!started.shutdownPromise) {
-    started.shutdownPromise = (started.bridge?.shutdown() ?? Promise.resolve()).catch(() => {}).finally(() => {
-      generations.delete(started);
-    });
+    started.shutdownPromise = (started.bridge?.shutdown() ?? Promise.resolve())
+      .then(() => {
+        generations.delete(started);
+      })
+      .catch((err) => {
+        // 轮 40-w4-t14 MEDIUM:shutdown 失败不得静默吞掉 —— bridge 进程/端口
+        // 可能仍活着, 直接删 generation 会让调用方误以为已回收, 下次 ensureBridge
+        // 又新建一份形成资源叠加。失败保留 generation(带错误标记), 由后续
+        // shutdownPiEnvironment 的强制收口或诊断路径处理。
+        // 轮 40-w4-t16 MEDIUM(修复的修复):失败后必须**清空 shutdownPromise** ——
+        // 否则 promise 已 settled(reject), 后续 shutdownGeneration 复用同一
+        // promise 永远不重试, 该 generation 残留到进程结束。
+        started.shutdownPromise = null;
+        console.error('[pi-env] bridge shutdown failed — generation retained for retry/diagnosis', {
+          generation: started.generation,
+          error: err instanceof Error ? err.message : String(err),
+        });
+      });
   }
   return started.shutdownPromise;
 }
@@ -118,11 +160,13 @@ function releaseGeneration(started: StartedPiBridge): void {
  * bridge 单例懒启动并缓存;每次调用按传入 sessionCtx 产出 per-session 的
  * server URL(带/不带 `?session=`)并做对应的身份注册。
  */
-export async function getPiExtraSpawnConfig(
+async function getPiExtraSpawnConfig(
   providers: McpProvider[],
   logger: MakerLogger,
   sessionCtx?: PiExtraSpawnConfigContext,
 ): Promise<PiExtraSpawnConfig | null> {
+  const vendorOptions = sessionCtx ? (sessionCtx.vendorOptions ??= {}) : {};
+  vendorOptions[RUNTIME_MCP_NAMES_KEY] = [];
   const started = await ensureBridge(providers, logger);
   if (!started) return null;
   // JS 同步段内完成“确认未退役 + 加 lease”，invalidate 不会插进中间。
@@ -138,18 +182,106 @@ export async function getPiExtraSpawnConfig(
     releaseGeneration(started);
   };
 
+  const disabledPluginIds = sessionId
+    ? (readDisabledBuiltinPluginIds(sessionCtx?.vendorOptions) ??
+      createPluginRegistry().getDisabledRuntimePluginIds(sessionCtx?.workingDir ?? ''))
+    : [];
+  const allowedPluginIds = sessionId
+    ? readAllowedBuiltinPluginIds(sessionCtx?.vendorOptions)
+    : null;
+  // collab 全局禁用时与 CC/Codex 同闸门:剥掉 orca 类协同 server(cindy_orca /
+  // orca_worker_bridge),避免禁用后 pi 仍能建队/发消息(R5 配置审计 H-7)。
+  // 只按名字剥协同 server —— cindy_memory / ghost / 外部 HTTP MCP 与 collab
+  // 无关,照常注入(CC 的 selectRemoteInjectableServerNames 同语义)。
+  // issue #4734: 全局「协同模式」开关只约束**后续新建** Team / Worker(设置页文案:
+  // 关闭后仅影响后续新建的任务, 不会中止当前 Worker)。已经属于 active Team 的
+  // Lead / Worker(start_team / create_worker 写入 vendorOptions.orcaRole)在每一轮
+  // 重建 Pi MCP 描述时必须保留协同 server —— 否则 Worker 下一轮直接失去
+  // orca_worker_bridge, send_to_lead 报 UNKNOWN_SERVER 而文本回复仍被界面桥接,
+  // 失效不易察觉。只有显式结束 Team(orcaRole 被清)才移除。项目级 / 冻结伙伴的
+  // 显式停用列表仍优先: 那是明确的策略, 不是"以后不再协同"的全局开关。
+  const orcaRole = (sessionCtx?.vendorOptions as Record<string, unknown> | undefined)?.orcaRole;
+  const activeTeamMember = orcaRole === 'lead' || orcaRole === 'worker';
+  const collabEnabled =
+    (createPluginRegistry().isEnabled('collab') || activeTeamMember)
+    && !disabledPluginIds.includes('collab');
+  const capabilityGated = (servers: NonNullable<PiExtraSpawnConfig['mcpBridge']>['servers']) =>
+    servers.filter((server) => {
+      if (server.name === 'cindy_memory' && sessionCtx?.memoryEnabled !== true) return false;
+      // Cindy Make 个人版工具只给带标记的任务;匿名会话与普通任务一律不见(fail-closed)。
+      if (
+        server.name === CINDY_MAKE_MCP_SERVER_NAME
+        && !isCindyMakeVendorOptions(sessionCtx?.vendorOptions)
+      ) return false;
+      // Telegram Bot API 直通只给带 Telegram 渠道标记的会话(专线 chat / 伙伴绑了 Telegram);
+      // 共享 bridge 上它常注册, 可见性在这里按会话收。
+      if (
+        server.name === 'cindy_telegram_bot'
+        && !hasImChannelVendorOptions(sessionCtx?.vendorOptions, 'telegram')
+      ) return false;
+      if (server.name === 'cindy_imessage' && !hasImChannelVendorOptions(sessionCtx?.vendorOptions, 'imessage')) return false;
+      if (!isBotMcpServerAllowed(sessionCtx?.botMcpPolicy, server.name)) return false;
+      if (!collabEnabled && REMOTE_COLLAB_SERVER_NAMES.has(server.name)) return false;
+      // Custom HTTP MCPs are `s.remote` and skip the SSH URL rewriter. Desktop
+      // loopback would hit the remote machine itself, not the desktop service.
+      if (sessionCtx?.remoteHostId && server.remote) {
+        try {
+          if (isDesktopLoopbackMcpUrl(new URL(server.url))) return false;
+        } catch {
+          return false;
+        }
+      }
+      const pluginId = pluginIdForKnownProviderName(server.name);
+      if (pluginId) {
+        return !disabledPluginIds.includes(pluginId)
+          && (!allowedPluginIds || allowedPluginIds.includes(pluginId));
+      }
+      // cindy is the always-on plugin gateway (ghost_list / ghost_info / ghost_call).
+      // It has no plugin id on purpose — empty ghost_list, not a missing server.
+      // Frozen Bot allowlists therefore must not treat it as an unknown host provider.
+      if (server.name === 'cindy') return true;
+      // Use the exact frozen capability snapshot for every provider, including
+      // shared host providers without an optional toolset id.
+      if (allowedPluginIds) {
+        const policy = sessionCtx?.botMcpPolicy;
+        const entry = policy?.catalog.find((item) => item.name === server.name);
+        if (!entry || entry.available === false) return false;
+        // Inheritance was resolved at session preparation, keeping this turn stable.
+        return policy?.configured.includes(server.name) === true;
+      }
+      return true;
+    });
+
+  // The legacy flag enables companion facades; the bridge separately checks
+  // whether memory is mounted. Helper capabilities must survive memory being off.
+  const buildSessionBridge = (
+    servers: NonNullable<PiExtraSpawnConfig['mcpBridge']>['servers'],
+  ): NonNullable<PiExtraSpawnConfig['mcpBridge']> => {
+    // The catalog and live bridge context share this runtime's actual descriptor,
+    // after toolset, MCP, session and transport filtering. Do not rederive policy.
+    vendorOptions[RUNTIME_MCP_NAMES_KEY] = servers.map((server) => server.name);
+    return {
+      token: bridge?.token ?? '',
+      servers,
+      ...((sessionCtx?.botMcpPolicy || sessionCtx?.memoryScopeKey?.startsWith('bot:'))
+        && servers.some((server) => server.name === 'cindy_memory' || server.name === 'cindy_helper')
+        ? { botMemoryFacade: true }
+        : {}),
+    };
+  };
+
   // 匿名会话:不注册身份、URL 不带 query。工具 handler 拿不到 ctx 时回落业务
   // 错误码(如 LEAD_NOT_SUPPORTED)—— 与改动前一致,不打 401。
   if (!sessionId) {
+    const servers = capabilityGated([
+      ...(bridge ? serverNames.map((name) => ({ name, url: bridge.url(name) })) : []),
+      ...cloneRemoteServers(remoteServers),
+    ]);
     return {
       mcpBridge: {
-        token: bridge?.token ?? '',
-        servers: [
-          ...(bridge ? serverNames.map((name) => ({ name, url: bridge.url(name) })) : []),
-          ...cloneRemoteServers(remoteServers),
-        ],
+        ...buildSessionBridge(servers),
       },
-      mcpEnv: { ...mcpEnv },
+      mcpEnv: selectMcpEnvForServers(servers, mcpEnv),
       disposeSessionCtx: disposeLease,
     };
   }
@@ -157,9 +289,13 @@ export async function getPiExtraSpawnConfig(
   // 纯外部 HTTP generation 不需要 localhost bridge 的 session 路由；仍持 lease，
   // 让配置变更后的旧活动会话继续使用其启动时快照。
   if (!bridge) {
+    const servers = capabilityGated(cloneRemoteServers(remoteServers));
     return {
-      mcpBridge: { token: '', servers: cloneRemoteServers(remoteServers) },
-      mcpEnv: { ...mcpEnv },
+      mcpBridge: {
+        ...buildSessionBridge(servers),
+        token: '',
+      },
+      mcpEnv: selectMcpEnvForServers(servers, mcpEnv),
       disposeSessionCtx: disposeLease,
     };
   }
@@ -168,22 +304,25 @@ export async function getPiExtraSpawnConfig(
   // 项目级普通工具策略在此按会话 workdir 冻结进 vendorOptions(与 Codex 的
   // registerCodexMcpThreadContext 同键同语义):bridge 的 per-call gate 据此阻断本项目
   // 停用的内置工具,后续 Settings 变更不影响已在跑的会话(codex review)。
-  const disabledPluginIds = createPluginRegistry().getDisabledRuntimePluginIds(
-    sessionCtx?.workingDir ?? '',
-  );
   // PiAgent 传入的是该 session 专属的可变副本。这里必须保留同一引用：start_team
   // 成功后 MakerSession.setVendorOptions 会原地写入 Lead 身份，既有 HTTP MCP handler
   // 要在下一次 create_worker 调用时立即看到。复制对象会把 bridge 永久冻结在启动态。
-  const vendorOptions = sessionCtx?.vendorOptions ?? {};
   vendorOptions[CODEX_DISABLED_BUILTIN_PLUGIN_IDS_KEY] = disabledPluginIds;
+  if (allowedPluginIds) {
+    vendorOptions[CODEX_ALLOWED_BUILTIN_PLUGIN_IDS_KEY] = allowedPluginIds;
+  }
   const liziCtx: LiziMcpSessionContext = {
-    agentKind: 'pi',
+    agentKind: sessionCtx?.agentKind ?? 'pi',
     sessionId,
-    ...(sessionCtx?.sessionInstanceId
-      ? { sessionInstanceId: sessionCtx.sessionInstanceId }
-      : {}),
+    ...(sessionCtx?.sessionInstanceId ? { sessionInstanceId: sessionCtx.sessionInstanceId } : {}),
     workingDir: sessionCtx?.workingDir ?? '',
+    // Maker Memory 作用域键 (Cindy Bot 会话恒为 `bot:<botId>`): cindy_memory 的
+    // withStore 优先用它定位 store。不透传的话工具侧只剩 workingDir 回落 ——
+    // 模型读到的是伙伴记忆索引、写进去的却是项目记忆 (两张皮)。
+    ...(sessionCtx?.memoryScopeKey ? { memoryScopeKey: sessionCtx.memoryScopeKey } : {}),
     vendorOptions,
+    mcpCallerKind: sessionCtx?.mcpCallerKind ?? 'unknown',
+    mcpCallerAttested: sessionCtx?.mcpCallerAttested === true,
   };
   // 同 session 重建(resume/reattach)直接覆盖注册,注册表以 sessionId 为 key,
   // 天然不累积。必须在返回(即 spawn)前完成 —— cindy-bridge extension 一起进程
@@ -194,8 +333,24 @@ export async function getPiExtraSpawnConfig(
     disposeLease();
     throw error;
   }
+  // per-session bridge token:与主 token 同权但按会话隔离 —— 该 token 会随
+  // spawn env 进入 pi 进程(远端场景落入 env-file),单个会话凭证面泄漏不殃及
+  // 其它会话与本地 codex 主 token(R5 安全审计 C-2)。必须与 registerSessionCtx
+  // 成对注册:token 仅当 URL query 命中本 session 时才被 bridge 接受。
+  // 轮 41 CRITICAL:确定性派生(进程级 key + sessionId HMAC, 64 hex 与旧形状一致)
+  // —— 同 session 断链重连/恢复复用同一 token, envHash 稳定, daemon 纯 attach
+  // 保活生效;桌面重启 → key 变 → 新 token → pi 重建, 两两一致。
+  const sessionToken = createHmac('sha256', PI_BRIDGE_SESSION_KEY).update(sessionId).digest('hex');
+  let tokenGeneration: number | undefined;
   try {
-    const servers = [
+    tokenGeneration = bridge.registerSessionToken(sessionId, sessionToken);
+  } catch (error) {
+    bridge.unregisterSessionCtx(sessionId, liziCtx);
+    disposeLease();
+    throw error;
+  }
+  try {
+    const servers = capabilityGated([
       ...serverNames.map((name) => ({
         name,
         url: withMcpRouteIdentity(bridge.url(name), {
@@ -204,17 +359,25 @@ export async function getPiExtraSpawnConfig(
         }),
       })),
       ...cloneRemoteServers(remoteServers),
-    ];
+    ]);
     return {
-      mcpBridge: { token: bridge.token, servers },
-      mcpEnv: { ...mcpEnv },
+      mcpBridge: {
+        ...buildSessionBridge(servers),
+        token: sessionToken,
+      },
+      mcpEnv: selectMcpEnvForServers(servers, mcpEnv),
       // expectedCtx 代际比较由 bridge.unregisterSessionCtx 内部按引用做:同
-      // session 覆盖注册后,旧 close 的迟到 dispose 不误删新 ctx。
+      // session 覆盖注册后,旧 close 的迟到 dispose 不误删新 ctx。token 注销
+      // 同理(expectedToken 比较),成对清理。
       disposeSessionCtx: () => {
         try {
           bridge.unregisterSessionCtx(sessionId, liziCtx);
         } finally {
-          disposeLease();
+          try {
+            bridge.unregisterSessionToken(sessionId, sessionToken, tokenGeneration);
+          } finally {
+            disposeLease();
+          }
         }
       },
     };
@@ -222,6 +385,7 @@ export async function getPiExtraSpawnConfig(
     // 注册后构造失败必须回滚,否则调用方拿不到 dispose,ctx 永久残留(该 id 的
     // `?session=` 路由一直有效)。
     bridge.unregisterSessionCtx(sessionId, liziCtx);
+    bridge.unregisterSessionToken(sessionId, sessionToken, tokenGeneration);
     disposeLease();
     throw err;
   }
@@ -232,7 +396,7 @@ export async function getPiExtraSpawnConfig(
  * 会话 close 后才关桥。这样撤销/新增工具能作用于新会话，又不会把正在执行的工具
  * 请求从脚下切断。
  */
-export function invalidatePiEnvironment(): void {
+function invalidatePiEnvironment(): void {
   environmentEpoch += 1;
   const current = activeGeneration;
   activeGeneration = null;
@@ -240,7 +404,9 @@ export function invalidatePiEnvironment(): void {
   if (current) retireGeneration(current);
 }
 
-export async function shutdownPiEnvironment(): Promise<void> {
+async function shutdownPiEnvironment(): Promise<void> {
+  // 轮 40-w4-t10 MEDIUM:先置关停门闩再收口 —— 关停期间 ensureBridge fail-closed。
+  environmentShuttingDown = true;
   environmentEpoch += 1;
   const pending = startPromise;
   const current = activeGeneration;
@@ -249,19 +415,46 @@ export async function shutdownPiEnvironment(): Promise<void> {
   if (current) current.retired = true;
   await pending?.catch(() => null);
   // 退出/换账号是硬边界：Maker 会话也在关闭，强制收掉所有代际，不等 lease。
-  await Promise.all([...generations].map((generation) => {
-    generation.retired = true;
-    return shutdownGeneration(generation);
-  }));
+  await Promise.all(
+    [...generations].map((generation) => {
+      generation.retired = true;
+      return shutdownGeneration(generation);
+    }),
+  );
+  environmentShuttingDown = false;
+}
+
+/**
+ * @internal 测试钩子:重置模块级单例状态(ensureBridge 的 startPromise /
+ * activeGeneration / generations)。仅在测试文件里调用 —— 生产代码不依赖。
+ */
+function resetPiEnvironmentForTest(): void {
+  startPromise = null;
+  activeGeneration = null;
+  nextGeneration = 0;
+  generations.clear();
+  environmentShuttingDown = false;
 }
 
 /** bridge 单例懒启动(首个会话触发,失败下次重试)。 */
-async function ensureBridge(providers: McpProvider[], logger: MakerLogger): Promise<StartedPiBridge | null> {
+async function ensureBridge(
+  providers: McpProvider[],
+  logger: MakerLogger,
+): Promise<StartedPiBridge | null> {
+  // 轮 40-w4-t10 MEDIUM:关停期间 fail-closed —— 不重启 bridge。
+  if (environmentShuttingDown) return null;
   for (;;) {
     if (!startPromise) {
       const epoch = environmentEpoch;
       const pending = doStart(providers, logger.child('pi-environment'))
         .then((raw) => {
+          // 轮 26 HIGH-2:30s 超时已把 startPromise 清空(调用方拿到 null 返回),
+          // 这里若仍注册 generation 会与下次 doStart 双 bridge + 端口泄漏。
+          // 对称 .catch 的守卫:stale 结果直接 shutdown 丢弃。
+          if (startPromise !== pending) {
+            void raw?.bridge?.shutdown().catch(() => {});
+            return null;
+          }
           if (!raw) return null;
           const started: StartedPiBridge = {
             ...raw,
@@ -285,7 +478,27 @@ async function ensureBridge(providers: McpProvider[], logger: MakerLogger): Prom
       startPromise = pending;
     }
     const pending = startPromise;
-    const started = await pending;
+    // 轮 24 LOW-6:startPromise 挂起(listen 永不回调等罕见 OS 异常)时不能死等
+    // —— 30s 超时后清空 startPromise 返回 null(本次会话无 MCP, 下次会话重试)。
+    // 轮 40-w4 HIGH:成功路径必须先 clearTimeout —— 否则 pending 正常 resolve
+    // 后 timer 30s 迟到仍清空 startPromise, 下次会话重建 bridge, 旧 generation
+    // 不退休泄漏(重复端口/MCP maps)。
+    const started = await Promise.race([
+      new Promise<null>((resolve) => {
+        const timer = setTimeout(() => {
+          if (startPromise === pending) startPromise = null;
+          resolve(null);
+        }, 30_000);
+        timer.unref?.();
+        // pending settle(成功/失败)即取消超时 —— 成功路径 startPromise 保留
+        // 该已完成的 pending(缓存命中), 超时不再触发。
+        void pending.then(
+          () => clearTimeout(timer),
+          () => clearTimeout(timer),
+        );
+      }),
+      pending,
+    ]);
     if (!started) return null;
     if (!started.retired) return started;
     if (startPromise === pending) startPromise = null;
@@ -315,11 +528,13 @@ async function doStart(
       return {
         agentKind: active.agentKind,
         workingDir: active.workingDir,
+        ...(active.memoryScopeKey ? { memoryScopeKey: active.memoryScopeKey } : {}),
+        ...(active.remoteHostId ? { remoteHostId: active.remoteHostId } : {}),
         vendorOptions: active.vendorOptions,
         sessionId: active.sessionId,
-        ...(active.sessionInstanceId
-          ? { sessionInstanceId: active.sessionInstanceId }
-          : {}),
+        mcpCallerKind: active.mcpCallerKind,
+        mcpCallerAttested: active.mcpCallerAttested,
+        ...(active.sessionInstanceId ? { sessionInstanceId: active.sessionInstanceId } : {}),
         getSessionContext: ctx.getSessionContext,
       };
     },
@@ -350,9 +565,12 @@ async function doStart(
       try {
         providerEnv = await provider.getExtraEnv?.(ctx);
       } catch {
-        logger.warn('pi bridge: skipping remote HTTP MCP provider whose environment could not be built', {
-          providerName: provider.name,
-        });
+        logger.warn(
+          'pi bridge: skipping remote HTTP MCP provider whose environment could not be built',
+          {
+            providerName: provider.name,
+          },
+        );
         continue;
       }
 
@@ -371,9 +589,12 @@ async function doStart(
       // mergeLoopbackNoProxy 完全一致，避免 127/8 中其它地址经 HTTP_PROXY 泄密；同时
       // 拒绝 URL 内嵌凭证和非 web 协议。
       if (!isAllowedRemoteMcpUrl(parsedUrl)) {
-        logger.warn('pi bridge: skipping remote HTTP MCP provider outside the URL security boundary', {
-          providerName: provider.name,
-        });
+        logger.warn(
+          'pi bridge: skipping remote HTTP MCP provider outside the URL security boundary',
+          {
+            providerName: provider.name,
+          },
+        );
         continue;
       }
 
@@ -432,7 +653,7 @@ async function doStart(
     if (!toClaudeSdkConfig) continue;
 
     const createServer = (): McpServer => {
-      const cfg = toClaudeSdkConfig(ctx) as { type?: string; instance?: unknown } | null;
+      const cfg = toClaudeSdkConfig.call(provider, ctx) as { type?: string; instance?: unknown } | null;
       if (cfg?.type !== 'sdk' || !cfg.instance) {
         throw new Error(`provider ${provider.name} did not return an SDK McpServer instance`);
       }
@@ -474,8 +695,13 @@ async function doStart(
   if (names.length > 0) {
     try {
       bridge = await startCodexHttpBridge({ serverFactories, pluginIdByServerName, logger });
-    } catch {
-      logger.error('pi bridge: local MCP bridge start failed', { providers: names.length });
+    } catch (err) {
+      // 轮 40-w4-t16 MEDIUM(日志盲区):不带 err 会让端口冲突/factory 异常/
+      // 初始化 bug 折叠成同一种「start failed」, 诊断拿不到根因。
+      logger.error('pi bridge: local MCP bridge start failed', {
+        providers: names.length,
+        error: err instanceof Error ? err.message : String(err),
+      });
       if (remoteServers.length === 0) return null;
     }
   }
@@ -486,4 +712,6 @@ async function doStart(
     ...(bridge ? { port: bridge.port } : {}),
   });
   return { bridge, serverNames, remoteServers, mcpEnv };
+}
+return { getPiExtraSpawnConfig, invalidatePiEnvironment, shutdownPiEnvironment, resetPiEnvironmentForTest };
 }

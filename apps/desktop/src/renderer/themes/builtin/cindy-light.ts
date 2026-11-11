@@ -1,158 +1,208 @@
 import type { Theme } from '../types';
 import cindyLogoLight from '../../assets/cindy-logo-light.png';
+import { CINDY_ACRYLIC_WINDOW_BACKING } from '../../../shared/windowBackdrop';
+import { filledButtonHover, filledButtonPressed } from '../filledButtonStates';
 
 /*
- * CINDY Light — 品牌红 CTA + 中性灰底(#EDEDED)+ AA 正文;U2 二级信息色忠于 Figma 原值。
- * 值的唯一权威: 2026-07-17-cindy-token-decision-table.md §3(用户 U8 批准)。
- * 每个 override 注释来源(直映/插值比例/裁决);零自由裁量。
+ * CINDY Light — 品牌红 CTA + 暖象牙底(#F2F2ED)+ AA 正文。
+ * 值的唯一权威: token-decision-table.md §3(2026-07-17 U8 批准) + §9(2026-08 色阶改版,用户批准)。
+ * §9 要点: 面/边框全暖(B=R-5)、文字渐进暖、二级抬到 >=3.0(取代 U2 light 原值)、
+ * 交互态分页面/卡片双锚定。每个 override 注释来源;零自由裁量。
  */
 
-const overrides = {
-  surface: '#EDEDED', // 直映: 背景
-  'surface-hsl': '0.0 0.0% 92.9%', // 直映: 背景 -> HSL
-  'surface-elevated': '#F8F8F8', // 直映: 卡片/输入框
-  'surface-elevated-soft': '#F4F4F4', // 插值: 背景->卡片 65%
-  'surface-card-ivory': '#F8F8F8', // 直映: 卡片/输入框
-  'surface-chip': '#F1F1F1', // 插值: Light 40% / Dark 75%
-  'surface-chip-alt': '#F4F4F4', // 插值: 65%
-  'surface-hover': '#F1F1F1', // 插值: hover
-  'surface-hover-soft': '#EFEFEF', // 插值: 20%
-  'surface-hover-hsl': '0.0 0.0% 94.5%', // 插值: hover -> HSL
-  'surface-on-card': '#FFFFFF', // 裁决: 中性反相前景,不作红 CTA 专用
-  'switch-track-off': '#888888', // 关闭态轨道:值与依据见决策表(用户调参 2026-08-05)
-  'switch-track-on': '#4A4D51', // 开启态轨道:值与依据见决策表(用户调参 2026-08-05)
-  'status-badge-fg': '#1F1F1F', // §7 必炸点:值经队列震荡后按 HEAD 冻结(#1F1F1F,5.61:1 × #FF6600 ≥4.5),批准依据:用户亲批方案 2026-07-17
-  'border-default': '#DCDFE3', // 直映: 边框
-  'border-default-hsl': '214.3 11.1% 87.6%', // 边框 -> HSL
-  'border-shadcn-hsl': '214.3 11.1% 87.6%', // 边框 -> HSL
-  'border-transparent-mixed': 'transparent', // light transparent / dark 边框
-  'text-primary': '#3C3F43', // 直映: 正文
-  'text-primary-on-dark': '#FFFFFF', // 深底/红底前景白
-  'text-primary-emphasis': '#2E3237', // 强调正文
-  'text-primary-inv': '#FFFFFF', // 反相文字
-  'text-primary-body-strong': '#3C3F43', // 直映: 正文
-  'text-primary-hsl': '214.3 5.5% 24.9%', // 正文 -> HSL
-  'text-secondary': '#8C8E94', // 直映: 二级信息; U2 例外; 用户调参 2026-07-20:#9A9DA3→#919399→#8C8E94 二次加深
-  'text-secondary-cross': '#9A9DA3', // 直映: 二级信息; U2 例外
-  'text-secondary-mid': '#686B72', // 整改: 小正文 AA
-  'text-tertiary': '#686B72', // 整改: 非 U2 token AA
-  'text-tertiary-stone': '#686B72', // 整改: 非 U2 token AA
-  'text-tertiary-mid': '#686B72', // 整改: 非 U2 token AA
-  'text-tertiary-hsl': '222.0 4.6% 42.7%', // tertiary -> HSL
-  'text-disabled': '#686B72', // 整改: 文档矩阵 AA; 禁用视觉用 opacity
-  'text-disabled-tertiary': '#686B72', // 整改: disabled tertiary AA
-  'accent-cta-bg': '#3C3F43', // E1D 反相中性底(用户批准 2026-07-17,不用红)
-  'accent-cta-bg-pure': '#3C3F43', // E1D 反相中性底
-  'accent-emphasis': '#3C3F43', // E1D 反相中性底
-  'accent-soft': '#25282C', // E1D pressed 中性(soft→pressed)
-  'accent-hover': '#2E3237', // E1D hover 中性
-  'accent-pure-cta-fg': '#FCFCFC', // E1D 中性字(非白)
-  accent: '0.0 0.0% 94.5%', // 裁决: shadcn 中性 hover
-  'agent-actions-rail': '#DCDFE3', // 边框/rail
-  'ask-checkbox-border': '#686B72', // AA checkbox border
-  'ask-option-list-bg': '#FFFFFF', // ask 卡选项列表面: 纯白浮在 #F8F8F8 卡底上(2026-07-23 ask 卡整改)
-  background: '0.0 0.0% 92.9%', // 背景 -> HSL
-  'chat-input-bg': '#F8F8F8', // 输入框
-  'chat-input-border-focus': 'rgba(104, 107, 114, 0.30)', // 用户改稿 2026-07-20:输入框聚焦描边降至 30%
-  'chat-input-chip-border': '#DCDFE3', // 边框
-  'chat-input-text': '#3C3F43', // 正文
-  'color-primary': '#3C3F43', // 正文
-  'caret-accent': '#417CDD', // 用户改稿 2026-07-18:光标撤红改回蓝(对齐 focus 蓝 #417CDD)
-  'confirm-bg': '#F8F8F8', // 卡片
-  'confirm-btn-primary-bg': '#3C3F43', // E1D C 类裁决 1:普通确认反相中性(danger 确认另设)
-  'confirm-btn-primary-text': '#FCFCFC', // E1D 反相中性字
-  'confirm-btn-secondary-border': '#DCDFE3', // 边框
-  'confirm-btn-secondary-hover': 'rgba(0, 0, 0, 0.06)', // 中性 alpha hover
-  'confirm-btn-secondary-text': '#3C3F43', // 正文
-  'confirm-title': '#3C3F43', // 正文
-  'file-chip-bg': '#D8D9DB', // neutral chip thumb
-  'file-remove-bg': '#686B72', // AA remove affordance
-  'info-700': '#1D4ED8', // 信息/链接蓝
-  'model-trigger-hover': '#F1F1F1', // hover
-  // 下拉行 hover/选中底:surface-hover(#F1F1F1)相对面板(#F8F8F8)只差 7,行高亮几乎看不清。
-  // 菜单行专用 token 压深一档(-14/通道)使 hover 在面板上清晰,模型/权限/+ 三菜单共用。
-  'model-item-hover': '#EAEAEA', // 下拉行 hover/选中(压深到面板之下,清晰可见)
-  'msg-link': '#1D4ED8', // 链接蓝
-  'msg-scrollbar-hover': '#D8D9DB', // 弱档
-  'msg-user-bg': '#F8F8F8', // 卡片
-  muted: '0.0 0.0% 94.5%', // muted surface
-  'muted-foreground': '222.0 4.6% 42.7%', // AA muted 前景
-  'perm-auto-selected-text': '#417CDD', // auto approval 功能色(E5D 定稿 2026-07-17,light/dark 同值)
-  'perm-allow-btn-bg': '#3C3F43', // E1D C 类裁决 2:反相中性(警示由橙 chip 承担)
-  'perm-allow-btn-text': '#FCFCFC', // E1D 反相中性字
-  'perm-allow-kbd-bg': 'rgba(255, 255, 255, 0.16)', // kbd bg:随反相深钮的浅翻译层(修复 2026-07-19:原页面级浅灰在深钮上字底同亮)
-  'perm-allow-kbd-border': 'rgba(255, 255, 255, 0.30)', // 边框:同上
-  'perm-code-bg': '#F5F5F5', // code bg
-  'perm-item-selected-bg': '#F1F1F1', // selected bg
-  'plan-outline-active-bg': '#F1F1F1', // active bg
-  'plan-toolbar-btn-hover-bg': '#E2E2E2', // hover bg: 原 #F1F1F1 与 chip 静默底同色无反馈、在 #F8F8F8 卡底上也近不可辨,借 settings-menu-bg-hover 同档往暗压(2026-07-23 ask 卡整改)
-  popover: '0.0 0.0% 97.3%', // elevated -> HSL
-  'primary-foreground': '0.0 0.0% 100.0%', // 白前景
-  'search-match-fg': '214.3 5.5% 24.9%', // search fg
-  secondary: '0.0 0.0% 94.5%', // neutral secondary
-  'settings-btn-primary-text': '#FCFCFC', // E1D 中性字
-  'settings-btn-secondary-hover-bg': '#F1F1F1', // secondary hover
-  'text-placeholder': '#686B72', // 整改: placeholder AA; 透明度由组件控制
-  'settings-integration-avatar-bg': '#F8F8F8', // avatar chip
-  'settings-logout-bg': '#F8F8F8', // 卡片
-  'settings-menu-bg-hover': '#E2E2E2', // 用户反馈 2026-07-21:原 #EFEFEF 在 #EDEDED 页底上几乎不可见,改为往暗压 ~5% 亮度差
-  'settings-menu-bg-selected': '#F1F1F1', // menu selected
-  'settings-source-link': '#1D4ED8', // 可访问链接蓝
-  'settings-theme-auto-dark': '#2A2828', // Auto 预览 dark 固定
-  'sidebar-action-icon': '220.0 4.7% 62.2%', // E1D 侧栏层级:二级暗灰 #9A9DA3(时间戳/RemoteProjectIcon)
-  'cmd-palette-item-meta': '#9A9DA3', // E1D 侧栏层级:二级暗灰(分组标签/meta)
-  'sidebar-item-active-foreground': '#FCFCFC', // 用户二次改稿 2026-07-20:反相胶囊,light 深底浅字(同 accent-pure-cta-fg)
-  'sidebar-item-active-border': 'transparent', // 用户三次改稿 2026-07-20:选中胶囊彻底去描边
-  'sidebar-item-active': '214.3 5.5% 24.9%', // 用户二次改稿 2026-07-20:反相胶囊 #3C3F43 深底(同 accent-cta-bg)
-  'splash-bg': '0.0 0.0% 92.9%', // 背景 -> HSL
-  'splash-text': '222.0 4.6% 42.7%', // AA splash text
-  'splash-text-destructive': '214.3 5.5% 24.9%', // destructive splash text
-  'splash-text-muted': '222.0 4.6% 42.7%', // AA splash muted
-  'titlebar-icon': '222.0 4.6% 42.7%', // AA icon
-  'tooltip-bg': '#3C3F43', // tooltip 深底
-  'tooltip-text': '#FFFFFF', // tooltip 白字
-  'update-btn-border': '#3C3F43', // E1D 中性底(实心胶囊,与 bg 同色)
-  'update-btn-bg': '#3C3F43', // E1D §15.10 反相中性:light 深底,承载浅字
-  'update-btn-text': '#FCFCFC', // E1D 中性字(#FCFCFC on #3C3F43 = 10.32:1)
-  'update-btn-hover': '#2E3237', // E1D §15.10 四态 hover(实心,非 alpha 叠加)
-  'accent-foreground': '214.3 5.5% 24.9%', // 裁决: accent 成对中性前景
-  'panel-bg': '#EDEDED', // 依赖 D1: 注册后直映背景
-  primary: '214.3 5.5% 24.9%', // E1D C 类裁决 3:反相中性 HSL
-  ring: '217.3 69.7% 56.1%', // 固定蓝(E5D 定稿 2026-07-17 #417CDD HSL,取代 #3b82f6)
-  'settings-theme-auto-light': '#EDEDED', // Auto 预览 light 固定
-  foreground: '214.3 5.5% 24.9%', // alias closure 直接值
-  border: '214.3 11.1% 87.6%', // alias closure
-  input: '214.3 11.1% 87.6%', // alias closure
-  'secondary-foreground': '214.3 5.5% 24.9%', // alias closure
-  'popover-foreground': '214.3 5.5% 24.9%', // alias closure
-  titlebar: '0.0 0.0% 92.9%', // alias closure: surface
-  'titlebar-border': '214.3 11.1% 87.6%', // alias closure: border
-  'titlebar-button-hover': '0.0 0.0% 94.5%', // alias closure: hover
-  'titlebar-control-hover': '0.0 0.0% 94.5%', // alias closure: hover
-  sidebar: '0.0 0.0% 92.9%', // alias closure: surface
-  'sidebar-border': '214.3 11.1% 87.6%', // alias closure: border
-  'sidebar-item-hover': '0.0 0.0% 0.0% / 0.05', // 玻璃面 hover 半透明化 2026-07-21:黑 5% 叠加(原实色 #F1F1F1 在白底上的等价叠加量),毛玻璃侧栏上壁纸可继续透过
-  'sidebar-search-bg': '0.0 0.0% 92.9%', // alias closure: surface
-  'sidebar-search-input-bg': 'rgba(255, 255, 255, 0.55)', // 玻璃面搜索输入框 2026-07-21:白 55% 提亮字段感(与 hover 黑 5% 方向相反,可区分"可输入")
-  'sidebar-muted': '220.0 4.7% 62.2%', // E1D 侧栏层级:二级暗灰 #9A9DA3(行首图标普通态)
-  'surface-translucent-sidebar': 'rgba(255, 255, 255, 0.80)', // 用户调参 2026-07-20:纯白 85%→80%(透壁纸更多;#F6F6F6 试色后退回纯白)
-  'surface-translucent-main': '#EDEDED', // E4D 主面板:用户勘误 2026-07-17 撤销毛玻璃,改不透明等价 surface(原 rgba(255,255,255,0.93))
-  'surface-translucent-overlay': 'rgba(246, 246, 246, 0.90)', // E4D R1 模式3 浮层半透明
-  'composer-pill-bg': '#FCFCFC', // E2 composer pill 底(light,lead Figma 实测 §2-3;取代错稿 glass-pill)
-  'composer-pill-icon': '#3C3F43', // E2 composer pill 图标(light=text-primary)
-  'send-btn-bg': '#3C3F43', // R4 D1/D2 反相中性可用底(不用红,用户裁决)
-  'send-btn-icon': '#FCFCFC', // R4 反相中性字
-  'send-btn-disabled-bg': '#444242', // R4 唤醒态禁用灰底(§2.6)
-  'send-btn-disabled-icon': '#585555', // R4 禁用灰字(§2.6 send 图标)
-  'send-btn-hover-bg': '#2E3237', // E1D 反相中性 hover(lead 四态)
-  'send-btn-pressed-bg': '#25282C', // E1D 反相中性 pressed(lead 四态)
+// 既有分组/对比度/否决依据：docs/design-rules/design-decision-log.md
+// 「2026-09-11 DS-8 内置主题依据迁移」→ cindy-light（生成区外保留）。
+// BEGIN GENERATED DS-8: theme
+const GENERATED_OVERRIDES = {
+  "surface": "#F2F2ED", // 直映: 页底(暖象牙)
+  "surface-hsl": "60.0 16.1% 93.9%", // 页底 -> HSL
+  "surface-elevated": "#FDFDF8", // 直映: 卡片/输入框(留暖近白)
+  "surface-elevated-soft": "#FAFAF5", // 阶梯: 次级卡片
+  "surface-card-ivory": "#FDFDF8", // 直映: 卡片/输入框(留暖近白)
+  "surface-chip": "rgba(0, 0, 0, 0.05)", // 墨水 黑 5%: 悬停/标签底(2026-10-22 用户裁决,取代实色灰)
+  "surface-chip-alt": "#FAFAF5", // 阶梯: 次级卡片
+  "surface-hover": "rgba(0, 0, 0, 0.05)", // 墨水 黑 5%: 悬停/标签底(2026-10-22 用户裁决,取代实色灰)
+  "surface-hover-soft": "rgba(0, 0, 0, 0.035)", // 墨水 黑 3.5%: 柔和悬停(2026-10-22 用户裁决,取代实色灰)
+  "surface-hover-hsl": "0.0 0.0% 0.0% / 0.05", // 墨水 黑 5%: 悬停/标签底(2026-10-22 用户裁决,取代实色灰)
+  "surface-on-card": "#FFFFFF", // 裁决: 中性反相前景,不作红 CTA 专用
+  "switch-track-off": "#808080", // 关闭态轨道: 悬停底加深后由 #888888 加深到 #808080,压在悬停行上保住 3:1(2026-10-22 用户裁决)
+  "switch-track-on": "#417CDD", // 开启态轨道:蓝色 #417CDD(用户裁决 2026-09-15)
+  "switch-thumb-on": "hsl(var(--background))", // Switch 滑块:用户批准 HTML 效果 2026-09-16;暗色近白,浅色沿用原有别名
+  "switch-thumb-off": "var(--surface-on-card)", // Switch 滑块:用户批准 HTML 效果 2026-09-16;暗色近白,浅色沿用原有别名
+  "fast-toggle-track": "var(--switch-track-off)", // Fast/思考小开关的关闭轨道跟随开关关闭轨道:文字改墨水后不再借用禁用文字色,两类开关关闭态一致并保住 3:1(2026-10-22 用户裁决随附)
+  "status-badge-fg": "#1F1F1F", // §7 必炸点:值经队列震荡后按 HEAD 冻结(#1F1F1F,5.61:1 × #FF6600 ≥4.5),批准依据:用户亲批方案 2026-07-17
+  "border-default": "rgba(0, 0, 0, 0.08)", // 墨水 黑 8%: 边框/分割线(2026-10-22 用户裁决,取代实色灰)
+  "border-default-hsl": "0.0 0.0% 0.0% / 0.08", // 墨水 黑 8%: 边框/分割线(2026-10-22 用户裁决,取代实色灰)
+  "border-shadcn-hsl": "0.0 0.0% 0.0% / 0.08", // 墨水 黑 8%: 边框/分割线(2026-10-22 用户裁决,取代实色灰)
+  "border-transparent-mixed": "transparent", // light transparent / dark 边框
+  "text-primary": "rgba(0, 0, 0, 0.88)", // 墨水 黑 88%: 正文(2026-10-22 用户裁决,取代实色灰)
+  "text-primary-on-dark": "#FFFFFF", // 深底/红底前景白
+  "text-primary-emphasis": "rgba(0, 0, 0, 0.95)", // 墨水 黑 95%: 强调文字(2026-10-22 用户裁决,取代实色灰)
+  "text-primary-inv": "#FFFFFF", // 反相文字
+  "text-primary-body-strong": "rgba(0, 0, 0, 0.88)", // 墨水 黑 88%: 正文(2026-10-22 用户裁决,取代实色灰)
+  "text-primary-hsl": "0.0 0.0% 0.0% / 0.88", // 墨水 黑 88%: 正文(2026-10-22 用户裁决,取代实色灰)
+  "text-secondary": "rgba(0, 0, 0, 0.56)", // 墨水 黑 56%: 次要文字(2026-10-22 用户裁决,取代实色灰)
+  "text-secondary-cross": "rgba(0, 0, 0, 0.44)", // 墨水 黑 44%: 三级文字(2026-10-22 用户裁决,取代实色灰)
+  "text-secondary-mid": "rgba(0, 0, 0, 0.70)", // 墨水 黑 70%: 说明文字(2026-10-22 用户裁决,取代实色灰)
+  "text-tertiary": "rgba(0, 0, 0, 0.44)", // 墨水 黑 44%: 三级文字(2026-10-22 用户裁决,取代实色灰)
+  "text-tertiary-stone": "rgba(0, 0, 0, 0.56)", // 墨水 黑 56%: 次要文字(2026-10-22 用户裁决,取代实色灰)
+  "text-tertiary-mid": "rgba(0, 0, 0, 0.70)", // 墨水 黑 70%: 说明文字(2026-10-22 用户裁决,取代实色灰)
+  "text-tertiary-hsl": "0.0 0.0% 0.0% / 0.56", // 墨水 黑 56%: 次要文字(2026-10-22 用户裁决,取代实色灰)
+  "text-disabled": "rgba(0, 0, 0, 0.32)", // 墨水 黑 32%: 占位/禁用文字(2026-10-22 用户裁决,取代实色灰)
+  "text-disabled-tertiary": "rgba(0, 0, 0, 0.44)", // 墨水 黑 44%: 三级文字(2026-10-22 用户裁决,取代实色灰)
+  "accent-cta-bg": "#3C3F43", // E1D 反相中性底(用户批准 2026-07-17,不用红)
+  "accent-cta-bg-pure": "#3C3F43", // E1D 反相中性底
+  "accent-emphasis": "#3C3F43", // E1D 反相中性底
+  "accent-soft": "#25282C", // E1D pressed 中性(soft→pressed)
+  "accent-hover": "#2E3237", // E1D hover 中性
+  "accent-pure-cta-fg": "#FCFCFC", // E1D 中性字(非白)
+  "accent": "0.0 0.0% 0.0% / 0.05", // 墨水 黑 5%: 悬停/标签底(2026-10-22 用户裁决,取代实色灰)
+  "agent-actions-rail": "rgba(0, 0, 0, 0.08)", // 墨水 黑 8%: 边框/分割线(2026-10-22 用户裁决,取代实色灰)
+  "ask-checkbox-border": "rgba(0, 0, 0, 0.70)", // 墨水 黑 70%: 说明文字(2026-10-22 用户裁决,取代实色灰)
+  "ask-option-list-bg": "#FFFFFF", // ask 卡选项列表面: 纯白浮在 #F8F8F8 卡底上(2026-07-23 ask 卡整改)
+  "background": "60.0 16.1% 93.9%", // 页底 -> HSL
+  "chat-input-bg": "#FDFDF8", // 直映: 卡片/输入框(留暖近白)
+  "chat-input-border-focus": "rgba(107, 107, 103, 0.30)", // 聚焦描边: 三级色 30% 派生
+  "chat-input-chip-border": "rgba(0, 0, 0, 0.08)", // 墨水 黑 8%: 边框/分割线(2026-10-22 用户裁决,取代实色灰)
+  "chat-input-text": "rgba(0, 0, 0, 0.88)", // 墨水 黑 88%: 正文(2026-10-22 用户裁决,取代实色灰)
+  "chat-input-placeholder-subtle": "var(--text-placeholder)", // 聊天输入框占位文字直接用占位档,不再叠 40% 透明度(2026-10-22 用户裁决随附:占位文字统一用占位档)
+  "thinking-body-text": "var(--text-secondary)", // 思考过程正文用次要档(2026-10-23 用户裁决:三级在墨水阶梯里过淡,浅色 3.2、深色 3.8;次要浅色与改前持平 4.8、深色 6.1)
+  "color-primary": "rgba(0, 0, 0, 0.88)", // 墨水 黑 88%: 正文(2026-10-22 用户裁决,取代实色灰)
+  "caret-accent": "#417CDD", // 用户改稿 2026-07-18:光标撤红改回蓝(对齐 focus 蓝 #417CDD)
+  "confirm-bg": "#FDFDF8", // 直映: 卡片/输入框(留暖近白)
+  "confirm-btn-primary-bg": "#3C3F43", // E1D C 类裁决 1:普通确认反相中性(danger 确认另设)
+  "confirm-btn-primary-text": "#FCFCFC", // E1D 反相中性字
+  "confirm-btn-secondary-border": "rgba(0, 0, 0, 0.08)", // 墨水 黑 8%: 边框/分割线(2026-10-22 用户裁决,取代实色灰)
+  "confirm-btn-secondary-hover": "rgba(0, 0, 0, 0.06)", // 中性 alpha hover
+  "confirm-btn-secondary-text": "rgba(0, 0, 0, 0.88)", // 墨水 黑 88%: 正文(2026-10-22 用户裁决,取代实色灰)
+  "confirm-title": "rgba(0, 0, 0, 0.88)", // 墨水 黑 88%: 正文(2026-10-22 用户裁决,取代实色灰)
+  "file-chip-bg": "rgba(0, 0, 0, 0.10)", // 墨水 黑 10%: 加深底(2026-10-22 用户裁决,取代实色灰)
+  "file-remove-bg": "rgba(0, 0, 0, 0.70)", // 墨水 黑 70%: 说明文字(2026-10-22 用户裁决,取代实色灰)
+  "info-700": "#1D4ED8", // 信息/链接蓝
+  "model-trigger-hover": "rgba(0, 0, 0, 0.05)", // 墨水 黑 5%: 悬停/标签底(2026-10-22 用户裁决,取代实色灰)
+  "model-item-hover": "rgba(0, 0, 0, 0.05)", // 墨水 黑 5%: 悬停/标签底(2026-10-22 用户裁决,取代实色灰)
+  "msg-link": "#1D4ED8", // 链接蓝
+  "msg-scrollbar-hover": "rgba(0, 0, 0, 0.10)", // 墨水 黑 10%: 加深底(2026-10-22 用户裁决,取代实色灰)
+  "msg-user-bg": "#FDFDF8", // 直映: 卡片/输入框(留暖近白)
+  "muted": "0.0 0.0% 0.0% / 0.05", // 墨水 黑 5%: 悬停/标签底(2026-10-22 用户裁决,取代实色灰)
+  "muted-foreground": "0.0 0.0% 0.0% / 0.56", // 墨水 黑 56%: 次要文字(2026-10-22 用户裁决,取代实色灰)
+  "perm-auto-selected-text": "#417CDD", // auto approval 功能色(E5D 定稿 2026-07-17,light/dark 同值)
+  "perm-allow-btn-bg": "#3C3F43", // E1D C 类裁决 2:反相中性(警示由橙 chip 承担)
+  "perm-allow-btn-text": "#FCFCFC", // E1D 反相中性字
+  "perm-allow-kbd-bg": "rgba(255, 255, 255, 0.16)", // kbd bg:随反相深钮的浅翻译层(修复 2026-07-19:原页面级浅灰在深钮上字底同亮)
+  "perm-allow-kbd-border": "rgba(255, 255, 255, 0.30)", // 边框:同上
+  "perm-code-bg": "#FAFAF5", // 代码块底: 卡片锚定(比卡片暗 ~2.6%)
+  "perm-item-selected-bg": "rgba(0, 0, 0, 0.08)", // 墨水 黑 8%: 选中/按下(2026-10-22 用户裁决,取代实色灰)
+  "plan-outline-active-bg": "rgba(0, 0, 0, 0.08)", // 墨水 黑 8%: 选中/按下(2026-10-22 用户裁决,取代实色灰)
+  "plan-toolbar-btn-hover-bg": "rgba(0, 0, 0, 0.05)", // 墨水 黑 5%: 悬停/标签底(2026-10-22 用户裁决,取代实色灰)
+  "popover": "60.0 55.6% 98.2%", // 卡片 -> HSL
+  "primary-foreground": "0.0 0.0% 100.0%", // 白前景
+  "search-match-fg": "0.0 0.0% 0.0% / 0.88", // 墨水 黑 88%: 正文(2026-10-22 用户裁决,取代实色灰)
+  "secondary": "0.0 0.0% 0.0% / 0.05", // 墨水 黑 5%: 悬停/标签底(2026-10-22 用户裁决,取代实色灰)
+  "settings-btn-primary-text": "#FCFCFC", // E1D 中性字
+  "settings-btn-secondary-hover-bg": "rgba(0, 0, 0, 0.05)", // 墨水 黑 5%: 悬停/标签底(2026-10-22 用户裁决,取代实色灰)
+  "text-placeholder": "rgba(0, 0, 0, 0.32)", // 墨水 黑 32%: 占位/禁用文字(2026-10-22 用户裁决,取代实色灰)
+  "settings-integration-avatar-bg": "#FDFDF8", // 直映: 卡片/输入框(留暖近白)
+  "settings-logout-bg": "#FDFDF8", // 直映: 卡片/输入框(留暖近白)
+  "settings-menu-bg-hover": "rgba(0, 0, 0, 0.05)", // 墨水 黑 5%: 悬停/标签底(2026-10-22 用户裁决,取代实色灰)
+  "settings-menu-bg-selected": "rgba(0, 0, 0, 0.08)", // 墨水 黑 8%: 选中/按下(2026-10-22 用户裁决,取代实色灰)
+  "settings-source-link": "#1D4ED8", // 可访问链接蓝
+  "settings-theme-auto-dark": "#181818", // Auto 预览: 新暗色底
+  "sidebar-action-icon": "0.0 0.0% 0.0% / 0.44", // 墨水 黑 44%: 三级文字(2026-10-22 用户裁决,取代实色灰)
+  "cmd-palette-item-meta": "rgba(0, 0, 0, 0.56)", // 墨水 黑 56%: 次要文字(2026-10-22 用户裁决,取代实色灰)
+  "sidebar-item-active-foreground": "#292A2C", // Soft selected pill with same-polarity readable foreground.
+  "sidebar-item-active-border": "transparent", // 用户三次改稿 2026-07-20:选中胶囊彻底去描边
+  "sidebar-item-active": "214.3 6.0% 99.0%", // Soft selected pill with same-polarity readable foreground.
+  "splash-bg": "60.0 16.1% 93.9%", // 页底 -> HSL
+  "splash-text": "0.0 0.0% 0.0% / 0.56", // 墨水 黑 56%: 次要文字(2026-10-22 用户裁决,取代实色灰)
+  "splash-text-destructive": "0.0 0.0% 10.2%", // 正文 -> HSL
+  "splash-text-muted": "0.0 0.0% 0.0% / 0.44", // 墨水 黑 44%: 三级文字(2026-10-22 用户裁决,取代实色灰)
+  "titlebar-icon": "0.0 0.0% 0.0% / 0.56", // 墨水 黑 56%: 次要文字(2026-10-22 用户裁决,取代实色灰)
+  "tooltip-bg": "#3C3F43", // tooltip 深底
+  "tooltip-text": "#FFFFFF", // tooltip 白字
+  "update-btn-border": "#3C3F43", // E1D 中性底(实心胶囊,与 bg 同色)
+  "update-btn-bg": "#3C3F43", // E1D §15.10 反相中性:light 深底,承载浅字
+  "update-btn-text": "#FCFCFC", // E1D 中性字(#FCFCFC on #3C3F43 = 10.32:1)
+  "accent-foreground": "0.0 0.0% 0.0% / 0.88", // 墨水 黑 88%: 正文(2026-10-22 用户裁决,取代实色灰)
+  "panel-bg": "#F2F2ED", // 直映: 页底(暖象牙)
+  "primary": "214.3 5.5% 24.9%", // E1D C 类裁决 3:反相中性 HSL
+  "ring": "217.3 69.7% 56.1%", // 固定蓝(E5D 定稿 2026-07-17 #417CDD HSL,取代 #3b82f6)
+  "settings-theme-auto-light": "#F2F2ED", // Auto 预览: 新页底
+  "foreground": "0.0 0.0% 0.0% / 0.88", // 墨水 黑 88%: 正文(2026-10-22 用户裁决,取代实色灰)
+  "border": "0.0 0.0% 0.0% / 0.08", // 墨水 黑 8%: 边框/分割线(2026-10-22 用户裁决,取代实色灰)
+  "input": "0.0 0.0% 0.0% / 0.08", // 墨水 黑 8%: 边框/分割线(2026-10-22 用户裁决,取代实色灰)
+  "secondary-foreground": "0.0 0.0% 0.0% / 0.88", // 墨水 黑 88%: 正文(2026-10-22 用户裁决,取代实色灰)
+  "popover-foreground": "0.0 0.0% 0.0% / 0.88", // 墨水 黑 88%: 正文(2026-10-22 用户裁决,取代实色灰)
+  "titlebar": "60.0 16.1% 93.9%", // 页底 -> HSL
+  "titlebar-border": "0.0 0.0% 0.0% / 0.08", // 墨水 黑 8%: 边框/分割线(2026-10-22 用户裁决,取代实色灰)
+  "titlebar-button-hover": "0.0 0.0% 0.0% / 0.05", // 墨水 黑 5%: 悬停/标签底(2026-10-22 用户裁决,取代实色灰)
+  "titlebar-control-hover": "0.0 0.0% 0.0% / 0.05", // 墨水 黑 5%: 悬停/标签底(2026-10-22 用户裁决,取代实色灰)
+  "sidebar": "60.0 12.8% 92.4%", // 侧栏兜底: 与侧栏玻璃同色(无玻璃平台回落用)
+  "sidebar-border": "0.0 0.0% 0.0% / 0.08", // 墨水 黑 8%: 边框/分割线(2026-10-22 用户裁决,取代实色灰)
+  "sidebar-item-hover": "0.0 0.0% 0.0% / 0.05", // 玻璃面 hover 半透明化 2026-07-21:黑 5% 叠加(原实色 #F1F1F1 在白底上的等价叠加量),毛玻璃侧栏上壁纸可继续透过
+  "sidebar-search-bg": "60.0 12.8% 92.4%", // 侧栏搜索区: 同侧栏面
+  "sidebar-search-input-bg": "rgba(255, 255, 250, 0.55)", // 暖化
+  "sidebar-muted": "0.0 0.0% 0.0% / 0.56", // 墨水 黑 56%: 次要文字(2026-10-22 用户裁决,取代实色灰)
+  "surface-translucent-main": "#F2F2ED", // 直映: 页底(暖象牙)
+  "surface-translucent-overlay": "rgba(251, 251, 246, 0.90)", // 浮层玻璃: 暖化
+  "composer-pill-bg": "#FFFFFA", // 近白档
+  "composer-pill-icon": "rgba(0, 0, 0, 0.88)", // 墨水 黑 88%: 正文(2026-10-22 用户裁决,取代实色灰)
+  "send-btn-bg": "#3C3F43", // R4 D1/D2 反相中性可用底(不用红,用户裁决)
+  "send-btn-icon": "#FCFCFC", // R4 反相中性字
+  "send-btn-disabled-bg": "#444242", // R4 唤醒态禁用灰底(§2.6)
+  "send-btn-disabled-icon": "#585555", // R4 禁用灰字(§2.6 send 图标)
+  "ask-badge-bg": "rgba(0, 0, 0, 0.05)", // 墨水 黑 5%: 悬停/标签底(2026-10-22 用户裁决,取代实色灰)
+  "ask-header-chip-bg": "rgba(0, 0, 0, 0.08)", // 墨水 黑 8%: 选中/按下(2026-10-22 用户裁决,取代实色灰)
+  "cmd-palette-item-hover": "rgba(0, 0, 0, 0.05)", // 墨水 黑 5%: 悬停/标签底(2026-10-22 用户裁决,取代实色灰)
+  "create-agent-control-bg": "#FFFFFA", // 近白档
+  "create-agent-control-border": "rgba(0, 0, 0, 0.08)", // 墨水 黑 8%: 边框/分割线(2026-10-22 用户裁决,取代实色灰)
+  "create-agent-control-icon": "rgba(0, 0, 0, 0.88)", // 墨水 黑 88%: 正文(2026-10-22 用户裁决,取代实色灰)
+  "create-agent-control-text": "rgba(0, 0, 0, 0.88)", // 墨水 黑 88%: 正文(2026-10-22 用户裁决,取代实色灰)
+  "create-agent-quick-card-bg": "#FDFDF8", // 直映: 卡片/输入框(留暖近白)
+  "create-agent-quick-card-bg-hover": "rgba(0, 0, 0, 0.05)", // 墨水 黑 5%: 悬停/标签底(2026-10-22 用户裁决,取代实色灰)
+  "create-agent-quick-card-border": "rgba(0, 0, 0, 0.08)", // 墨水 黑 8%: 边框/分割线(2026-10-22 用户裁决,取代实色灰)
+  "create-agent-quick-card-icon": "rgba(0, 0, 0, 0.88)", // 墨水 黑 88%: 正文(2026-10-22 用户裁决,取代实色灰)
+  "create-agent-quick-card-icon-bg": "#F2F2ED", // 直映: 页底(暖象牙)
+  "create-agent-quick-card-text": "rgba(0, 0, 0, 0.88)", // 墨水 黑 88%: 正文(2026-10-22 用户裁决,取代实色灰)
+  "create-agent-segment-inactive-text": "rgba(0, 0, 0, 0.44)", // 墨水 黑 44%: 三级文字(2026-10-22 用户裁决,取代实色灰)
+  "create-agent-segment-track-bg": "#F2F2ED", // 直映: 页底(暖象牙)
+  "create-agent-send-disabled-bg": "#F2F2ED", // 直映: 页底(暖象牙)
+  "create-agent-send-disabled-icon": "rgba(0, 0, 0, 0.32)", // 墨水 黑 32%: 占位/禁用文字(2026-10-22 用户裁决,取代实色灰)
+  "md-table-bg": "rgba(241, 241, 236, 0.55)", // 表格条纹: 跟页底暖化
+  "settings-integration-avatar-border": "#EDEDE8", // 阶梯: 头像描边
+  "sidebar-list-muted": "rgba(0, 0, 0, 0.44)", // 墨水 黑 44%: 三级文字(2026-10-22 用户裁决,取代实色灰)
+  "sidebar-nav-text": "rgba(0, 0, 0, 0.88)", // 墨水 黑 88%: 正文(2026-10-22 用户裁决,取代实色灰)
+  "sidebar-user-card-bg-hover": "rgba(26, 26, 26, 0.06)", // 正文色 6% 派生
+  "sidebar-user-card-border": "rgba(26, 26, 26, 0.10)", // 正文色 10% 派生
+  "sidebar-user-card-text": "rgba(0, 0, 0, 0.88)", // 墨水 黑 88%: 正文(2026-10-22 用户裁决,取代实色灰)
+  "ask-option-hover": "var(--surface-hover-soft)",
+  "ask-send-disabled-bg": "var(--surface-elevated-soft)",
+  "completion-badge-fg": "#1f1f1e",
+  "create-agent-control-bg-hover": "var(--surface-hover)",
+  "create-agent-control-bg-pressed": "rgba(0, 0, 0, 0.08)", // 墨水 黑 8%: 选中/按下(2026-11-07 用户裁决,按下不再比悬停浅)
+  "create-agent-send-icon": "#FCFCFC",
+  "slider-track": "#A3A39E", // Slider 用户定稿 2026-09-17;与 Switch 独立
+  "slider-fill": "#3C3F43", // Slider 用户定稿 2026-09-17;与 Switch 独立
+  "slider-thumb": "#FDFDF8", // Slider 用户定稿 2026-09-17;与 Switch 独立
+  "segmented-selected-bg": "#FDFDF8",
+  "segmented-selected-border": "#F0F0EB",
+  "segmented-option-fg": "#6B6B67",
+  "segmented-hover-bg": "#E4E4DF",
 } as const;
+// END GENERATED DS-8: theme
+
+
 
 export const cindyLight: Theme = {
   id: 'cindy-light',
   name: 'CINDY Light',
   type: 'light',
-  colors: overrides,
+  colors: {
+    ...GENERATED_OVERRIDES,
+    "surface-translucent-sidebar": CINDY_ACRYLIC_WINDOW_BACKING.light,
+    "update-btn-hover": filledButtonHover('var(--update-btn-bg)'),
+    "update-btn-pressed": filledButtonPressed('var(--update-btn-bg)'),
+  },
   // U5 品牌版横向 logo：黑字+红箭头，浅底可见。
   brand: { logo: { src: cindyLogoLight } },
 };

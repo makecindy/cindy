@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { execFileSync } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
 import test from "node:test";
@@ -12,6 +13,7 @@ const CANONICAL_DOCS = [
 ];
 const CONTRIBUTING_DOCS = ["CONTRIBUTING.md", "CONTRIBUTING.en.md"];
 const CHECKED_DOCS = [...CONTRIBUTING_DOCS, ...CANONICAL_DOCS];
+const COMMAND_CHECKED_DOCS = [...CHECKED_DOCS, "apps/desktop/README.md"];
 const WORKSPACES = new Map([
 	["desktop", "apps/desktop/package.json"],
 	["mobile", "apps/mobile/package.json"],
@@ -24,6 +26,15 @@ function readText(relativePath) {
 
 function readJson(relativePath) {
 	return JSON.parse(readText(relativePath));
+}
+
+function readSupportedLocales(relativePath) {
+	const declaration = readText(relativePath).match(/SUPPORTED_LOCALES\s*=\s*\[([^\]]*)\]/s)?.[1];
+	const locales = declaration
+		? [...declaration.matchAll(/["']([^"']+)["']/g)].map((match) => match[1])
+		: [];
+	assert.ok(locales.length, `${relativePath} must declare SUPPORTED_LOCALES`);
+	return locales;
 }
 
 function workflowJob(workflow, jobId) {
@@ -102,14 +113,21 @@ function localMarkdownLinks(relativePath) {
 }
 
 /**
- * 需要做内链体检的全部文档:根目录规则文件 + `docs/` 下所有 markdown(递归)。
+ * 需要做内链体检的全部文档:根目录与模块 AGENTS + `docs/` 下所有 markdown(递归)。
  *
  * 覆盖面刻意做全 —— 悬空内链最容易出现在深层目录里:文档被删除时,引用它的索引
  * (如 `docs/legal/README.md`、`docs/README.md`)常常漏改。只体检 CHECKED_DOCS 那几篇
  * canonical 文档挡不住这类回归。
  */
 function listLinkCheckedDocs() {
-	const out = ["AGENTS.md", ...CONTRIBUTING_DOCS];
+	// Include newly added, unstaged module rules without traversing node_modules,
+	// runtime binaries or generated build trees. Git is already required by the runner.
+	const agentDocs = execFileSync("git", [
+		"ls-files", "-z", "--cached", "--others", "--exclude-standard", "--",
+		"AGENTS.md", ":(glob)apps/**/AGENTS.md", ":(glob)packages/**/AGENTS.md",
+	], { cwd: ROOT, encoding: "utf8" }).split("\0").filter((relativePath) =>
+		relativePath && fs.existsSync(path.join(ROOT, relativePath)));
+	const out = ["AGENTS.md", ...agentDocs, ...CONTRIBUTING_DOCS];
 	const walk = (relativeDir) => {
 		for (const entry of fs.readdirSync(path.join(ROOT, relativeDir), { withFileTypes: true })) {
 			const relativePath = path.join(relativeDir, entry.name);
@@ -123,7 +141,7 @@ function listLinkCheckedDocs() {
 
 test("developer docs only document pnpm commands that exist", () => {
 	const rootPackage = readJson("package.json");
-	for (const relativePath of CHECKED_DOCS) {
+	for (const relativePath of COMMAND_CHECKED_DOCS) {
 		for (const line of shellLines(relativePath)) {
 			assertPnpmCommandExists(line, rootPackage);
 		}
@@ -171,6 +189,151 @@ test("developer documentation links resolve", () => {
 	}
 });
 
+// 规则依据：docs/dev-rules/protocol-compatibility.md「本页与协议记录的分工」。
+// 失效后果：逐项协议记录重新堆进必读页，通用规则与 Review 清单被埋掉——拆分前该页
+// 555 KB、194 节，文档抬头在第 1290 行，Review 清单在第 3967 行，没有 Agent 能先读完再动手。
+test("protocol compatibility keeps rules on the front page and one record per file", () => {
+	const frontPage = "docs/dev-rules/protocol-compatibility.md";
+	const recordsDir = "docs/dev-rules/protocol-compatibility";
+	const frontPageMaxBytes = 16 * 1024;
+	const frontPageBytes = Buffer.byteLength(readText(frontPage));
+	assert.ok(
+		frontPageBytes <= frontPageMaxBytes,
+		`${frontPage} is the must-read rules page (${frontPageBytes} bytes > ${frontPageMaxBytes}). ` +
+			`Put per-capability protocol records in ${recordsDir}/<area>-<topic>.md instead of appending here.`,
+	);
+	const records = fs.readdirSync(path.join(ROOT, recordsDir));
+	assert.ok(records.length, `${recordsDir} must hold the protocol records`);
+	for (const name of records) {
+		const relativePath = `${recordsDir}/${name}`;
+		assert.match(
+			name,
+			/^[a-z0-9]+(?:-[a-z0-9]+)*\.md$/,
+			`${relativePath}: record files are flat, lower-case <area>-<topic>.md`,
+		);
+		const text = readText(relativePath);
+		const titles = text.replace(/^[ \t]*```[\s\S]*?^[ \t]*```/gm, "").match(/^# .+$/gm) ?? [];
+		assert.ok(
+			text.startsWith("# ") && titles.length === 1,
+			`${relativePath}: one record per file, starting with its level-1 title`,
+		);
+	}
+});
+
+test("login-all-hifi embeds generated truth as a script-safe static literal", () => {
+	const html = readText("docs/design-previews/login-all-hifi/index.html");
+	const match = html.match(/<script id="qa-truth">const RAW = ([\s\S]*?)<\/script>/);
+	assert.ok(match, "login-all-hifi must define RAW directly from its generated truth literal");
+	assert.doesNotMatch(
+		html,
+		/document\.getElementById\(["']qa-truth["']\)\.textContent/,
+		"generated truth must not re-enter HTML rendering through DOM text",
+	);
+	assert.deepEqual(JSON.parse(match[1]), readJson("docs/design-previews/login-all-hifi/truth.json"));
+});
+
+test("login QA preview countdowns match Desktop and Mobile product constants", () => {
+	const desktopMs = Number(readText("apps/desktop/src/renderer/components/login/loginDesignTokens.ts")
+		.match(/RESEND_COUNTDOWN_MS\s*=\s*([\d_]+)/)?.[1].replaceAll("_", ""));
+	const mobileSeconds = Number(readText("apps/mobile/src/auth/loginSkinLayout.ts")
+		.match(/RESEND_COUNTDOWN_SECONDS\s*=\s*([\d_]+)/)?.[1].replaceAll("_", ""));
+	assert.ok(desktopMs > 0 && mobileSeconds > 0);
+	assert.equal(desktopMs, mobileSeconds * 1000);
+	for (const demo of ["login-flow-hifi", "login-all-hifi"]) {
+		const dir = `docs/design-previews/${demo}`;
+		const truth = readJson(`${dir}/truth.json`);
+		const block = readText(`${dir}/index.html`).match(/<script id="qa-truth"[^>]*>([\s\S]*?)<\/script>/);
+		assert.ok(block, `${demo} must embed truth`);
+		assert.deepEqual(JSON.parse(block[1].replace(/^const RAW = /, "")), truth);
+		assert.equal((truth.desk ?? truth).constants.resendCountdownMs.value, desktopMs, demo);
+		if (truth.mobile) assert.equal(truth.mobile.constants.resendSeconds.value, mobileSeconds, demo);
+	}
+});
+
+test("current locale-aware QA artifacts cover every supported locale", () => {
+	const supportedLocales = readSupportedLocales("apps/desktop/src/shared/locale.ts");
+	assert.deepEqual(
+		readSupportedLocales("apps/mobile/src/i18n/locale.ts"),
+		supportedLocales,
+		"Desktop and Mobile must expose the same concrete locale set",
+	);
+	const expectedSet = [...supportedLocales].sort();
+	const currentLoginDemos = [
+		{
+			dir: "docs/design-previews/login-flow-hifi",
+			copyPaths: [["copy"]],
+		},
+		{
+			dir: "docs/design-previews/login-all-hifi",
+			copyPaths: [["desk", "copy"], ["mobile", "copy"]],
+		},
+		{
+			dir: "docs/design-previews/login-deletion-bubble",
+			copyPaths: [["desktop", "copy"], ["mobile", "copy"]],
+		},
+	];
+
+	for (const { dir, copyPaths } of currentLoginDemos) {
+		const spec = readJson(`${dir}/spec.json`);
+		const truth = readJson(`${dir}/truth.json`);
+		assert.deepEqual(spec.matrix.langs, supportedLocales, `${dir} matrix locale order drifted`);
+		assert.deepEqual(
+			truth.supportedLocales.map(({ value }) => value),
+			supportedLocales,
+			`${dir} embedded locale order drifted`,
+		);
+		assert.deepEqual(
+			[...new Set(spec.verify.cases.map(({ prefs }) => prefs.lang))].sort(),
+			expectedSet,
+			`${dir} representative cases must exercise every supported locale`,
+		);
+		for (const copyPath of copyPaths) {
+			const copy = copyPath.reduce((value, key) => value?.[key], truth);
+			assert.deepEqual(
+				Object.keys(copy ?? {}).sort(),
+				expectedSet,
+				`${dir} truth ${copyPath.join(".")} locale coverage drifted`,
+			);
+		}
+	}
+
+	const newMakerDir = "docs/design-previews/newmaker-quickstart-cards";
+	const newMakerSpec = readJson(`${newMakerDir}/spec.json`);
+	const newMakerTruth = readJson(`${newMakerDir}/truth.json`);
+	assert.deepEqual(newMakerSpec.matrix.langs, supportedLocales, `${newMakerDir} matrix locale order drifted`);
+	assert.deepEqual(
+		newMakerTruth.supportedLocales.map(({ value }) => value),
+		supportedLocales,
+		`${newMakerDir} embedded locale order drifted`,
+	);
+	assert.deepEqual(
+		[...new Set(newMakerSpec.verify.cases.map(({ prefs }) => prefs.lang))].sort(),
+		expectedSet,
+		`${newMakerDir} representative cases must exercise every supported locale`,
+	);
+	assert.deepEqual(
+		Object.keys(newMakerTruth.section.titles).sort(),
+		expectedSet,
+		`${newMakerDir} section-title locale coverage drifted`,
+	);
+	for (const [index, card] of newMakerTruth.cards.entries()) {
+		assert.deepEqual(
+			Object.keys(card.labels).sort(),
+			expectedSet,
+			`${newMakerDir} card ${index} locale coverage drifted`,
+		);
+	}
+
+	for (const dir of ["docs/design-previews/login-deletion-bubble", newMakerDir]) {
+		const html = readText(`${dir}/index.html`);
+		const embedded = html.match(
+			/<script id="qa-truth" type="application\/json">([\s\S]*?)<\/script>/,
+		)?.[1];
+		assert.ok(embedded, `${dir} must embed generated truth`);
+		assert.deepEqual(JSON.parse(embedded), readJson(`${dir}/truth.json`), `${dir} embedded truth drifted`);
+	}
+});
+
 test("runtime versions and the docs contract are code-owned", () => {
 	const rootPackage = readJson("package.json");
 	assert.equal(rootPackage.engines.node, ">=22.12");
@@ -179,22 +342,104 @@ test("runtime versions and the docs contract are code-owned", () => {
 	assert.match(rootPackage.scripts["test:runner"], /scripts\/__tests__\/dev-docs-contract\.test\.mjs/);
 });
 
-test("client CI keeps the complete two-shard unit gate on Windows", () => {
+// A shard matrix is complete only when it lists every index 1..N and the
+// runner splits by the same N; a missing index or mismatched count would
+// silently drop part of the unit tier from the gate.
+function assertCompleteShardMatrix(job) {
+	const matrix = /^        shard: \[([\d, ]+)\]$/m.exec(job);
+	assert.ok(matrix, "unit shard job must declare a numeric shard matrix");
+	const indexes = matrix[1].split(",").map((value) => Number(value.trim()));
+	const count = indexes.length;
+	assert.ok(count >= 2, "unit shard job must split the tier across parallel jobs");
+	assert.deepEqual(indexes, Array.from({ length: count }, (_, i) => i + 1));
+	assert.match(job, new RegExp(`^      XDT_UNIT_TEST_SHARD: \\$\\{\\{ matrix\\.shard \\}\\}/${count}$`, "m"));
+	assert.match(job, /^      fail-fast: false$/m);
+}
+
+test("client CI keeps the complete sharded unit gate on Windows", () => {
 	const workflow = readText(".github/workflows/ci.yml");
 	const shards = workflowJob(workflow, "windows-unit-shards");
 	assert.ok(shards, "client CI must define Windows unit shards");
 	assert.match(shards, /^    runs-on: windows-latest$/m);
-	assert.match(shards, /^      fail-fast: false$/m);
-	assert.match(shards, /^        shard: \[1, 2\]$/m);
-	assert.match(shards, /^      XDT_UNIT_TEST_SHARD: \$\{\{ matrix\.shard \}\}\/2$/m);
-	assert.match(shards, /^        run: pnpm test:unit$/m);
-	assert.doesNotMatch(shards, /pnpm test:unit\s+--/);
+	assertCompleteShardMatrix(shards);
+	assert.match(shards, /^        run: pnpm run test:workspaces --tier unit$/m);
+	assert.doesNotMatch(shards, /pnpm test:unit(?:\s|$)/);
+	assert.doesNotMatch(shards, /pnpm test:runner/);
+
+	// One-off Windows checks run once, in parallel, outside the shard critical path.
+	const runnerChecks = workflowJob(workflow, "windows-runner-checks");
+	assert.ok(runnerChecks, "client CI must run Windows runner self-tests once");
+	assert.match(runnerChecks, /^    runs-on: windows-latest$/m);
+	assert.doesNotMatch(runnerChecks, /^    needs:/m);
+	assert.doesNotMatch(runnerChecks, /^    strategy:/m);
+	assert.equal([...runnerChecks.matchAll(/^        run: pnpm test:runner$/gm)].length, 1);
+	assert.match(runnerChecks, /botCanonicalSession\.test\.ts/);
+	// Database safety gate: Linux skips the bundled sqlite-vec replay. Keep the
+	// conditional real-upgrade job on a supported runner behind the required check.
+	assert.match(runnerChecks, /^          lfs: true$/m);
+	assert.match(runnerChecks, /^          fetch-depth: 0$/m);
+	assert.match(runnerChecks, /^        id: database-changes\n        run: node scripts\/ci-database-tests\.mjs detect$/m);
+	assert.match(runnerChecks, /^        if: steps\.database-changes\.outputs\.required == 'true'\n        run: node scripts\/ci-database-tests\.mjs run$/m);
+	assert.doesNotMatch(runnerChecks, /continue-on-error:/);
+	const events = workflow.slice(workflow.indexOf('\non:'), workflow.indexOf('\npermissions:'));
+	for (const event of ['pull_request', 'merge_group', 'push', 'workflow_dispatch']) {
+		assert.match(events, new RegExp(`^  ${event}:`, 'm'));
+	}
+	assert.doesNotMatch(events, /paths(?:-ignore)?:/);
 
 	const gate = workflowJob(workflow, "windows-unit");
 	assert.ok(gate, "client CI must preserve the stable Windows unit check");
 	assert.match(gate, /^    name: Windows unit tests$/m);
 	assert.match(gate, /^    if: \$\{\{ always\(\) \}\}$/m);
-	assert.match(gate, /^    needs: windows-unit-shards$/m);
+	assert.match(gate, /^      - windows-unit-shards$/m);
+	assert.match(gate, /^      - windows-runner-checks$/m);
 	assert.match(gate, /^          WINDOWS_UNIT_SHARDS_RESULT: \$\{\{ needs\.windows-unit-shards\.result \}\}$/m);
-	assert.match(gate, /^        run: test "\$WINDOWS_UNIT_SHARDS_RESULT" = "success"$/m);
+	assert.match(gate, /^          WINDOWS_RUNNER_CHECKS_RESULT: \$\{\{ needs\.windows-runner-checks\.result \}\}$/m);
+	assert.match(gate, /^          test "\$WINDOWS_UNIT_SHARDS_RESULT" = "success"$/m);
+	assert.match(gate, /^          test "\$WINDOWS_RUNNER_CHECKS_RESULT" = "success"$/m);
+});
+
+test("client CI runs Linux checks and complete unit shards in parallel behind stable verify", () => {
+	const workflow = readText(".github/workflows/ci.yml");
+	const checks = workflowJob(workflow, "verify-checks");
+	assert.ok(checks, "client CI must define independent Linux verification checks");
+	assert.doesNotMatch(checks, /^    needs:/m);
+	assert.match(checks, /^        run: pnpm test:runner$/m);
+	assert.match(
+		checks,
+		/^      - name: Run Desktop and Mobile source-contract guards\r?\n        run: pnpm test:guard$/m,
+	);
+	// engineering-conventions.md §3.2 performance budget is only binding while CI
+	// blocks on the hygiene ratchet; without this step the baseline stops mattering.
+	assert.match(checks, /^      - name: Check unit test hygiene\r?\n        run: pnpm check:test-hygiene$/m);
+	assert.doesNotMatch(checks, /node scripts\/test-workspaces\.mjs --tier unit/);
+
+	const shards = workflowJob(workflow, "linux-unit-shards");
+	assert.ok(shards, "client CI must define Linux unit shards");
+	assert.match(shards, /^    runs-on: ubuntu-latest$/m);
+	assert.doesNotMatch(shards, /^    needs:/m);
+	assertCompleteShardMatrix(shards);
+	assert.match(shards, /^        run: pnpm run test:workspaces --tier unit$/m);
+	assert.doesNotMatch(shards, /pnpm test:(?:unit|runner)/);
+	assert.equal([...shards.matchAll(/--tier integration --workspace @cindy\/maker-pi-manager/g)].length, 1);
+	assert.match(shards, /^      - name: Run Pi manager integration tests\r?\n        if: matrix\.shard == 1\r?\n        run: pnpm run test:workspaces --tier integration --workspace @cindy\/maker-pi-manager$/m);
+
+	const gate = workflowJob(workflow, "verify");
+	assert.ok(gate, "client CI must preserve the stable verify check");
+	assert.match(gate, /^    name: verify$/m);
+	assert.match(gate, /^    if: \$\{\{ always\(\) \}\}$/m);
+	assert.match(gate, /^      - verify-checks$/m);
+	assert.match(gate, /^      - linux-unit-shards$/m);
+	assert.match(gate, /^      - host-regressions$/m);
+	assert.match(gate, /^          VERIFY_CHECKS_RESULT: \$\{\{ needs\.verify-checks\.result \}\}$/m);
+	assert.match(gate, /^          LINUX_UNIT_SHARDS_RESULT: \$\{\{ needs\.linux-unit-shards\.result \}\}$/m);
+	assert.match(gate, /^          test "\$VERIFY_CHECKS_RESULT" = "success"$/m);
+	assert.match(gate, /^          test "\$LINUX_UNIT_SHARDS_RESULT" = "success"$/m);
+	assert.match(gate, /^          HOST_REGRESSIONS_RESULT: \$\{\{ needs\.host-regressions\.result \}\}$/m);
+	assert.match(gate, /^      - host-changes$/m);
+	assert.match(gate, /^          test "\$HOST_CHANGES_RESULT" = "success"$/m);
+	assert.match(gate, /true:success\|false:skipped/);
+	const host = workflowJob(workflow, "host-regressions");
+	assert.match(host, /^    needs: host-changes$/m);
+	assert.match(host, /^    if: needs\.host-changes\.outputs\.required == 'true'$/m);
 });

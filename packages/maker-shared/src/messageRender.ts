@@ -1,7 +1,15 @@
+import { hasRichAnswer, richAnswerMediaSources } from './richAnswer';
+import { groupWorkRuns } from './workRunGrouping.js';
+import { isContinuationMessage } from './syntheticTrigger.js';
+export { groupWorkRuns, groupTeammateProcess, type WorkRunGroupingAdapter } from './workRunGrouping.js';
 import {
+  type AgentTaskTerminalStatus,
   type AgentTaskUpdate,
+  deriveAgentTaskStatus,
   findAgentTaskUpdate,
   isAgentTaskToolName,
+  subagentSpawnReceiptName,
+  subagentSpawnResultIndicatesRunning,
 } from './agentTask';
 import { HISTORY_GAP_SPLIT_MS } from './historyGap';
 
@@ -17,8 +25,42 @@ export interface MessageRenderSourceMessageLike {
   toolInput?: unknown;
   /** SDK tool-use id — used to link a Task/collab tool-call to its live `agent_task_update`. */
   toolUseId?: string | null;
+  /**
+   * Owning Agent/Task tool-use id when this message was produced inside a
+   * subagent. Plan scanning treats it as an ownership boundary: subagent plan
+   * calls never compete for the top-level pinned panel.
+   */
+  parentToolUseId?: string | null;
+  /**
+   * Host-persisted message metadata. Plan ownership only reads two keys:
+   * `autoResume` / `origin` — user rows carrying either are internal dispatches
+   * (auto-resume continuation, scheduler runs), not the user opening a new
+   * topic, so they must not cut a plan session boundary.
+   *
+   * Surfaces that strip `agentMeta` during projection (desktop renderer's
+   * ChatMessage) must instead carry the projected flags below.
+   */
+  agentMeta?: Record<string, unknown> | null;
+  /** Desktop renderer projection of synthetic trigger rows (auto-resume 等)。 */
+  isSyntheticTrigger?: boolean;
+  /** Desktop renderer projection of scheduler-originated user rows. */
+  automationOrigin?: unknown;
   /** Host-persisted SDK turn boundary on the final assistant or owning Codex plan row. */
   turnCompleted?: boolean;
+  /**
+   * Host sealed this Codex plan row because its owning turn ended successfully.
+   * The seal closes the plan's lifecycle only — step statuses stay exactly as the
+   * agent last reported them. Interrupted, failed, and auto-resumed turns never
+   * seal, so their plan stays open while the task itself is still alive.
+   */
+  terminalPlanSnapshot?: boolean;
+  /** Host time when the successful turn seal was applied. */
+  terminalPlanAtMs?: number;
+  /**
+   * user 消息投递方式:'steer' 是运行中插话,不开启新 turn——失败印记回扫的
+   * turn 所有权边界只认普通('turn')user 消息。
+   */
+  delivery?: string | null;
 }
 
 export type MessageRenderNormalizedMessageKind =
@@ -60,10 +102,18 @@ export interface MessageRenderNormalizedMessage<
    * `createdAt`。
    */
   settledAt?: string;
-  /** Host 在 SDK done 边界写入；每个 true 都是一条不应折入工作过程的正式回复。 */
+  /** Durable terminal lifecycle for an Agent/Task tool call. */
+  agentTaskStatus?: AgentTaskTerminalStatus;
+  /** Host 在 SDK done 边界写入。同一 user turn 的最后一次 seal 是最终答复；更早的 seal 只在带交付内容时留在工作过程外。 */
   turnCompleted?: boolean;
+  /** SDK-proven failed sampling output remains readable inside the work fold. */
+  failedSamplingAttempt?: boolean;
   /** tool 消息专用:配对 tool_result 提取出的产出媒体(驱动 tool_media 独立渲染项)。 */
   media?: readonly MessageRenderToolMediaLike[];
+  files?: readonly { url: string; title: string }[];
+  cardIds?: readonly string[];
+  /** cardIds 中声明排到本轮末尾的卡(tool_result 的 xdt_card_turn_end)。 */
+  turnEndCardIds?: readonly string[];
 }
 
 export interface MessageRenderOptions {
@@ -165,8 +215,11 @@ export interface MessageRenderWorkGroupItem<
   TMessage extends MessageRenderNormalizedMessage = MessageRenderNormalizedMessage,
 > {
   type: 'work_group';
+  /** Teammate-only continuous public progress, with ordered activity segments. */
+  teammateJournal?: boolean;
   key: string;
   children: MessageRenderWorkChildItem<TMessage>[];
+  deferred?: import('./historyView.js').DeferredHistoryWork;
   durationMs?: number;
   /** True only for the trailing activity run in an active turn. */
   isStreaming?: boolean;
@@ -190,9 +243,25 @@ export type MessageRenderTodoSource = 'todo' | 'codex' | 'task';
 export interface MessageRenderTodoInsertion {
   key: string;
   todos: MessageRenderTodoItem[];
+  /** 组成同一计划 session 的全部工具行，用于历史 prepend 后恢复旧滚动锚点。 */
+  sourceClientIds: string[];
   createdAt?: string;
   updatedAtMs?: number;
   source: MessageRenderTodoSource;
+  /**
+   * 这份计划所属的 turn 已被 host 判定为成功收尾(见
+   * `MessageRenderSourceMessageLike.terminalPlanSnapshot`)。常驻面板据此退场,
+   * 不看勾选状态;未盖章就一直挂着。
+   */
+  sealed?: boolean;
+  /** Persisted host time of the successful terminal seal. */
+  sealedAtMs?: number;
+  /**
+   * host 在中断/失败 turn 给该计划行盖的 `turnCompleted: false`(见
+   * `persistCodexPlanOnDone`):在下一个真实 user turn 取代它前,常驻面板不得按
+   * "全勾完"兜底退场。
+   */
+  turnFailed?: boolean;
 }
 
 export interface MessageRenderLatestTodoState {
@@ -236,6 +305,19 @@ function buildLinearItems<
   includeOrphanTaskUpdates = false,
 ): MessageRenderItem<TMessage>[] {
   const sourceMessages = messages.map((message) => message.source);
+  // Each turn shares one set, filled before projecting tool artifacts. Keep the
+  // original tool rows intact so expanding the work history still shows results.
+  const inlineMediaByMessage = new Map<TMessage, Set<string>>();
+  let inlineMedia = new Set<string>();
+  for (const message of messages) {
+    if (message.kind === 'user' && isPlanUserBoundary({ ...message.source, role: 'user' })) {
+      inlineMedia = new Set<string>();
+    }
+    inlineMediaByMessage.set(message, inlineMedia);
+    if (message.kind === 'assistant' && !message.isStreaming && !message.failedSamplingAttempt) {
+      for (const url of richAnswerMediaSources(message.body)) inlineMedia.add(url);
+    }
+  }
   const todoInsertAt = findMessageTodoInsertions(sourceMessages);
   const agentPlanToolUseIds = collectAgentPlanToolUseIds(sourceMessages);
   const items: MessageRenderItem<TMessage>[] = [];
@@ -253,6 +335,18 @@ function buildLinearItems<
     pendingToolsEndMs = pendingToolsEndMs === null ? ms : Math.max(pendingToolsEndMs, ms);
   };
 
+  // 声明排到本轮末尾的插件卡(如「要发 PR 吗」):不跟所属工具组走,攒到下一条用户消息
+  // 之前(或列表末尾)再出,与桌面把它排在本轮最后同口径。
+  let pendingTurnEndTools: TMessage[] = [];
+  const flushTurnEndCards = () => {
+    if (pendingTurnEndTools.length === 0) return;
+    items.push({
+      type: 'tool_media',
+      key: `turn-end-media-${messageClientId(pendingTurnEndTools[0])}`,
+      tools: pendingTurnEndTools,
+    });
+    pendingTurnEndTools = [];
+  };
   const flushTools = () => {
     pendingToolsEndMs = null;
     if (pendingTools.length === 0) return;
@@ -264,8 +358,19 @@ function buildLinearItems<
     // tool 产出媒体(agent 出图等)提为独立 tool_media 项,紧跟所属 tool_group,
     // 跳出折叠卡可见(对齐桌面 MessageStream flushSegment)。key 派生自组首 tool
     // 的 clientId(与 tool_group 同源、prefix 不同),流式中组内新增 tool 时稳定。
-    const mediaTools = pendingTools.filter((tool) => (tool.media?.length ?? 0) > 0);
-    if (dedupeToolMediaByUrl(mediaTools.flatMap((tool) => tool.media ?? [])).length > 0) {
+    const mediaTools = pendingTools.map((tool) => {
+      // Look the inline URLs up by the original message: splitting off the turn-end card copies it.
+      const urls = inlineMediaByMessage.get(tool);
+      const turnEnd = tool.turnEndCardIds?.length ? new Set(tool.turnEndCardIds) : undefined;
+      if (turnEnd && tool.cardIds?.some((id) => turnEnd.has(id))) {
+        pendingTurnEndTools.push({ ...tool, media: [], files: [], cardIds: tool.cardIds.filter((id) => turnEnd.has(id)) });
+        tool = { ...tool, cardIds: tool.cardIds.filter((id) => !turnEnd.has(id)) };
+      }
+      if (!urls?.size || !tool.media?.some(media => urls.has(media.url))) return tool;
+      return { ...tool, media: tool.media.filter(media => !urls.has(media.url)) };
+    }).filter((tool) => (tool.media?.length ?? 0) > 0 || (tool.files?.length ?? 0) > 0 || (tool.cardIds?.length ?? 0) > 0);
+    if (dedupeToolMediaByUrl(mediaTools.flatMap((tool) => tool.media ?? [])).length > 0
+      || mediaTools.some((tool) => (tool.files?.length ?? 0) > 0 || (tool.cardIds?.length ?? 0) > 0)) {
       items.push({
         type: 'tool_media',
         key: `media-${messageClientId(pendingTools[0])}`,
@@ -334,6 +439,7 @@ function buildLinearItems<
     }
 
     flushTools();
+    if (message.kind === 'user' && !isSteerUserRow(message.source)) flushTurnEndCards();
     if (message.kind === 'thinking') {
       const thinking = parseThinking(message.source);
       items.push({
@@ -353,6 +459,7 @@ function buildLinearItems<
     });
   }
   flushTools();
+  flushTurnEndCards();
   if (includeOrphanTaskUpdates) {
     appendOrphanAgentTasks(items, taskUpdates, renderedTaskKeys);
   }
@@ -416,6 +523,119 @@ export function dedupeToolMediaByUrl<TMedia extends MessageRenderToolMediaLike>(
   return out;
 }
 
+/**
+ * 计划所有权的**唯一** user 边界判据:这个 user 行是不是"用户真的开口"的反面。
+ *
+ * 落在 user 行上但不构成边界的四类:
+ *  - 自动续跑 / scheduler 定时消息(agentMeta.autoResume / origin;desktop 渲染层
+ *    投影成 isSyntheticTrigger / automationOrigin 后丢弃原 meta,两套字段都认):
+ *    同一件事的延续,当边界会把进行中的计划切成新 session、历史里出现重复计划卡;
+ *  - 同轮 steer 插话:turn 还在跑,用户在指挥进行中的活,不是开新话题
+ *    (MessageStream 的 turn 分组同样把 steer 排除在新 turn 边界外);
+ *  - 子代理内部的 user 行(带 parentUuid / parentToolUseId):子任务的输入,当边界
+ *    会顶掉主线程计划、换 key 重挂载 TodoListCard。
+ *
+ * **计划分组(findMessageTodoInsertions)与失败回扫(markCodexPlanTurnFailed)共用
+ * 这一份判据**。两边各自推导过一次,结果是回扫只豁免了 steer:计划之后经过一次
+ * 自动续跑再以 terminal error 收尾时,回扫在合成 user 行上提前 break、够不到本轮
+ * 计划,全勾完的失败计划先按旧数据退场,等 main 的异步印记广播才复活(手机端断连
+ * 则要到重新加载,review P2)。
+ */
+function isSyntheticUserRow(message: MessageRenderSourceMessageLike): boolean {
+  if (isHookUserRow(message)) return false;
+  const meta = message.agentMeta;
+  return (
+    message.isSyntheticTrigger === true ||
+    (message.automationOrigin !== undefined && message.automationOrigin !== null) ||
+    meta?.autoResume === true ||
+    (meta?.origin !== undefined && meta?.origin !== null) ||
+    isSteerUserRow(message) ||
+    hasSubagentParent(message)
+  );
+}
+
+/**
+ * 会为计划开启新所有权 turn 的真实 user 行。
+ *
+ * 计划分组、失败回扫与置顶计划退场必须共用同一判据，避免一个界面已经把
+ * 输入视为新 turn，另一个界面却继续展示上一轮计划。
+ */
+export function isPlanUserBoundary(message: MessageRenderSourceMessageLike): boolean {
+  return message.role === 'user' && !isSyntheticUserRow(message);
+}
+
+function isHookUserRow(message: MessageRenderSourceMessageLike): boolean {
+  const hookSource =
+    (message as Record<string, unknown>).hookSource ??
+    message.agentMeta?.hookSource;
+  return hookSource !== undefined && hookSource !== null;
+}
+
+/**
+ * 子代理归属判定:desktop 投影出顶层 parentToolUseId;mobile / main 原始行只有
+ * agentMeta.parentUuid。二者任一存在即视为子代理内部消息。
+ */
+function hasSubagentParent(message: MessageRenderSourceMessageLike): boolean {
+  const explicit =
+    message.parentToolUseId ??
+    message.agentMeta?.parentToolUseId ??
+    message.agentMeta?.parent_tool_use_id;
+  if (typeof explicit === 'string' && explicit.trim().length > 0) {
+    // 显式的 tool-parent 字段本身就是归属证明,不需要形态消歧。
+    return isSubagentParentId(explicit) || !looksLikeLegacyTranscriptUuid(explicit);
+  }
+  // 裸 parentUuid 不足以证明子代理归属:旧 Claude 导入把普通 transcript 链边
+  // 也存在这个字段(同 latestMessageText.logic.ts 的既定判据),把它一律当子
+  // 代理会让旧会话的顶层计划被面板与对账整段过滤掉。只认 SDK tool-use id 形态。
+  const nested = (message as { source?: { agentMeta?: Record<string, unknown> | null } }).source;
+  for (const candidate of [message.agentMeta?.parentUuid, nested?.agentMeta?.parentUuid]) {
+    if (typeof candidate === 'string' && isSubagentParentId(candidate)) return true;
+  }
+  return false;
+}
+
+/** SDK tool-use ids，含 HY4 的 chatcmpl-tool-*；裸 legacy transcript uuid 不算。 */
+const SUBAGENT_PARENT_ID_RE = /^(?:(?:toolu|call)[_-]|chatcmpl-tool-)/iu;
+/**
+ * 兼容模型(kimi 系等)的 tool-use id 形态:`${ToolName}_${序号}`。resume 前的
+ * 转录归一化(maker-core 的 jsonl-tool-id-normalize)还会把它改写成 `Task_x1`
+ * (移出铸造空间,x 可顺延)与 `Bash_5_dup2`(去重),这些都是**真实 tool-use id**
+ * 并被同步写进子代理行的 parent_tool_use_id。只认 toolu_/call_ 前缀会把这类
+ * 子代理的 TodoWrite 当成顶层计划,而 desktop 实时流因显式投影不受影响 →
+ * 又一次多端分叉(review P2)。
+ *
+ * 与 legacy transcript 链边不会误撞:这条形态要求"下划线 + 可选 x + 末段数字",
+ * RFC uuid 与 `preceding-user-uuid` 都不含下划线数字结尾。
+ *
+ * 残留边界(如实记录):**任意**自定义形态的 tool id(既非 toolu_/call_,也非
+ * `名字_序号`)仍会被判成非 tool parent。彻底的解法是持久化时就记下"这是显式
+ * tool parent"这一位,而不是让每个消费方按字符串形态猜——同 canonical 计划模型
+ * 那笔欠账,留待正式建模时一并收口。
+ */
+const COMPAT_TOOL_USE_ID_RE = /^[A-Za-z][A-Za-z0-9_-]*_x*\d+(?:_dup\d+)?$/u;
+
+/**
+ * 投影侧共用的同一条判据:这个字符串是不是 SDK 的 tool-parent id 形态。
+ *
+ * 把 DB 行的裸 `agentMeta.parentUuid` 提升成显式 `parentToolUseId` 的投影(desktop
+ * 渲染层的历史恢复)必须先过这一关 —— legacy Claude 导入把 transcript 链边
+ * (`preceding-user-uuid` 这类非 RFC 串)存在同一个键上,无条件提升会让顶层计划行
+ * 被判成子代理、普通 user 行被当成合成边界,而保留裸字段的 mobile / main 不会,
+ * 于是同一份历史在两端分组不同(review P2)。
+ */
+export function isSubagentParentToolUseId(value: string): boolean {
+  return isSubagentParentId(value);
+}
+
+function isSubagentParentId(value: string): boolean {
+  const trimmed = value.trim();
+  return SUBAGENT_PARENT_ID_RE.test(trimmed) || COMPAT_TOOL_USE_ID_RE.test(trimmed);
+}
+
+function looksLikeLegacyTranscriptUuid(value: string): boolean {
+  return /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/iu.test(value.trim());
+}
+
 export function findMessageTodoInsertions<TMessage extends MessageRenderSourceMessageLike>(
   messages: readonly TMessage[],
   options: MessageRenderTodoGroupingOptions = {},
@@ -424,17 +644,31 @@ export function findMessageTodoInsertions<TMessage extends MessageRenderSourceMe
   const resultByToolUseId = buildToolResultLookup(messages);
   const sessions: Array<{
     todos: MessageRenderTodoItem[];
+    sourceClientIds: string[];
     firstIndex: number;
     lastIndex: number;
     source: MessageRenderTodoSource;
+    /** 该 session 首条计划调用之前最近一条 user 消息的下标(turn 边界锚点)。 */
+    userBoundaryIndex: number;
   }> = [];
   const lastSessionBySource = new Map<MessageRenderTodoSource, (typeof sessions)[number]>();
   const taskState = new Map<string, MessageRenderTodoItem>();
+  let lastUserIndex = -1;
 
   for (let index = 0; index < messages.length; index++) {
     const message = messages[index];
+    if (message.role === 'user') {
+      if (isPlanUserBoundary(message)) lastUserIndex = index;
+      continue;
+    }
     const source = agentPlanSource(toolNameOf(message));
     if (!source) continue;
+    // 子代理内部的计划调用不属于顶层面板:它们的 owner 是那个 Agent/Task 工具行,
+    // 混进来会顶掉主线程计划(顶层"最新计划"按位置竞争,历史病 §3.1.5)。
+    // 两套字段都认:desktop 投影出顶层 parentToolUseId;mobile 保留原始
+    // agentMeta.parentUuid(normalizeRemoteMessages 不投影,父行滑出分页窗口
+    // 时孤儿子消息回退顶层流,不认 meta 就会把子代理清单当顶层计划)。
+    if (hasSubagentParent(message)) continue;
 
     const resultText = resultByToolUseId.get(toolUseIdOf(message) ?? '');
     const previous = lastSessionBySource.get(source);
@@ -443,7 +677,27 @@ export function findMessageTodoInsertions<TMessage extends MessageRenderSourceMe
       source === 'task'
       && Boolean(previousAllDone)
       && taskToolTargetsExistingTask(message, resultText, taskState);
-    const startsNewSession = !previous || (Boolean(previousAllDone) && !continuesCompletedTaskSession);
+    // 终态章是计划 session 的硬边界:成功收尾的 turn 常留着未勾完的步骤,只看
+    // allDone 会让下一 turn 的计划把上一轮吞成"续写"——历史里上一轮的计划卡
+    // 消失、面板复用旧 key。同 toolUseId 的活跃行被新事件清章(terminalPlanSnapshot
+    // 置 false)后不算边界,sealed-then-updated 的复亮行为不变。
+    const previousSealed =
+      Boolean(previous) && planRowSealOf(messages[previous!.lastIndex]).sealed;
+    // 普通 user turn 也是所有权边界:用户开了新话题,旧的未完成计划不得把新计划
+    // 吞成"续期"(历史病 §3.1.2/3.1.3——串号后新计划复用旧 key、Task 状态跨
+    // turn 拼接)。task source 例外:显式指向已有任务的操作(TaskUpdate/TaskGet
+    // 带已知 id)仍是同一份清单的合法续写,但不能因此把 session 的所有权锚点
+    // 搬进新 turn:后续 TaskCreate 仍应另起清单,否则一个长期未完成项会把跨阶段
+    // 新任务持续吸进来,最终出现几十步历史与陈旧 active 项混在一张卡里。
+    const crossesUserBoundary =
+      Boolean(previous)
+      && lastUserIndex > (previous?.userBoundaryIndex ?? -1)
+      && !(source === 'task' && taskToolTargetsExistingTask(message, resultText, taskState));
+    const startsNewSession =
+      !previous
+      || previousSealed
+      || crossesUserBoundary
+      || (Boolean(previousAllDone) && !continuesCompletedTaskSession);
     if (source === 'task' && startsNewSession) {
       taskState.clear();
     }
@@ -459,9 +713,17 @@ export function findMessageTodoInsertions<TMessage extends MessageRenderSourceMe
 
     if (!startsNewSession && previous) {
       previous.todos = parsed;
+      previous.sourceClientIds.push(sourceClientId(message));
       previous.lastIndex = index;
     } else {
-      const session = { todos: parsed, firstIndex: index, lastIndex: index, source };
+      const session = {
+        todos: parsed,
+        sourceClientIds: [sourceClientId(message)],
+        firstIndex: index,
+        lastIndex: index,
+        source,
+        userBoundaryIndex: lastUserIndex,
+      };
       sessions.push(session);
       lastSessionBySource.set(source, session);
     }
@@ -470,12 +732,22 @@ export function findMessageTodoInsertions<TMessage extends MessageRenderSourceMe
   const out = new Map<number, MessageRenderTodoInsertion>();
   for (const session of sessions) {
     const first = messages[session.firstIndex];
+    const lastRow = messages[session.lastIndex];
+    const seal = planRowSealOf(lastRow);
     out.set(session.lastIndex, {
       key: `${keyPrefix}-${sourceClientId(first)}`,
       todos: session.todos,
-      createdAt: messages[session.lastIndex]?.createdAt,
-      updatedAtMs: messages[session.lastIndex]?.planUpdatedAtMs,
+      sourceClientIds: session.sourceClientIds,
+      createdAt: lastRow?.createdAt,
+      updatedAtMs: lastRow?.planUpdatedAtMs,
       source: session.source,
+      ...(seal.sealed
+        ? {
+            sealed: true,
+            ...(typeof seal.sealedAtMs === 'number' ? { sealedAtMs: seal.sealedAtMs } : {}),
+          }
+        : {}),
+      ...(planRowTurnFailed(lastRow) ? { turnFailed: true } : {}),
     });
   }
   return out;
@@ -503,6 +775,9 @@ export function getLatestMessageTodoState<TMessage extends MessageRenderSourceMe
   for (let index = 0; index < messages.length; index++) {
     const message = messages[index];
     if (!isAgentPlanToolName(toolNameOf(message))) continue;
+    // 与 findMessageTodoInsertions 同一条边界:子代理内部的计划调用不参与
+    // 顶层"最新计划事件"的判定,否则子调用会让顶层 insertion 判为过期。
+    if (hasSubagentParent(message)) continue;
     latestPlanIndex = index;
     latestPlanMessage = message;
   }
@@ -551,28 +826,28 @@ export interface CodexPlanSnapshotApplyResult<
 }
 
 /**
- * Resolve the plan payload that should survive a Codex turn terminal event.
- * A successful turn is authoritative even when Codex only returns its last
- * cached in-progress snapshot: every remaining item belongs to that finished
- * turn and must converge to completed. Other terminal states may only apply an
- * explicit snapshot; they must never infer completion from stale progress.
+ * Close out a Codex plan at its owning turn's terminal event.
+ *
+ * Two independent things happen here, and keeping them separate is the whole
+ * point:
+ *  - **Content**: an explicit `turn/plan/updated` snapshot carried by `done` is
+ *    applied verbatim. Nothing else ever rewrites a step. Codex leaves open
+ *    items on a successful turn routinely (its own prompt asks the model to tick
+ *    them, and the model complies most of the time — not always), and inventing
+ *    the missing ticks makes the transcript claim work that was never reported.
+ *  - **Lifecycle**: a successful, ownership-matched turn *seals* the row. The
+ *    seal is what retires the pinned capsule, so retiring no longer depends on
+ *    the agent having ticked every box.
+ *
+ * Interrupted / failed turns, and any turn whose id does not match, seal
+ * nothing: the task is still alive and the user is usually about to steer it,
+ * so the plan must stay on screen. A matching non-successful terminal `done`
+ * does stamp `turnCompleted:false` on its plan row, immediately in memory —
+ * main's durable stamp (`persistCodexPlanOnDone`) lands asynchronously after
+ * this event is broadcast, and without the in-memory twin an all-done
+ * interrupted plan would be retired by the legacy fallback the moment
+ * streaming ends, then flash back when the durable row arrives.
  */
-export function resolveCodexPlanSnapshotOnDone(
-  currentPlan: readonly unknown[],
-  snapshot: unknown,
-  inferCompletion: boolean,
-): unknown[] | null {
-  const authoritativeSnapshot = Array.isArray(snapshot) ? snapshot : null;
-  if (!authoritativeSnapshot && !inferCompletion) return null;
-
-  const snapshotSource = authoritativeSnapshot ?? currentPlan;
-  if (!inferCompletion) return authoritativeSnapshot;
-  return snapshotSource.map((item) => {
-    const record = readRecord(item);
-    return record ? { ...record, status: 'completed' } : item;
-  });
-}
-
 export function applyCodexPlanSnapshotOnDone<
   TMessage extends MessageRenderSourceMessageLike,
 >(
@@ -581,11 +856,26 @@ export function applyCodexPlanSnapshotOnDone<
   turnId?: string | null,
   terminalStatus?: unknown,
   planUpdatedAtMs?: number,
+  cancelled?: boolean,
 ): CodexPlanSnapshotApplyResult<TMessage> {
   const authoritativeSnapshot = Array.isArray(snapshot) ? snapshot : null;
-  const hasAuthoritativeSnapshot = authoritativeSnapshot !== null;
-  const canInferCompletion = terminalStatus === 'completed' && Boolean(turnId);
-  if (!hasAuthoritativeSnapshot && !canInferCompletion) {
+  // 取消标记优先于 completed:done 可同时带 cancelled:true + raw.status
+  // 'completed'(main 侧 isSuccessfulCodexDoneEventData 同序判定)。渲染端若
+  // 只看 status 会先盖章退场,随后 main 持久化 turnCompleted:false 的 DB 行
+  // 广播到达,计划复活——即时 UI 与落库分叉。
+  // 成功判据与 main 的 isSuccessfulCodexDoneEventData 逐字同序:未取消 +
+  // raw.status === 'completed'。其余一切(status 为别的值、缺失、被 cancelled
+  // 覆盖)在归属明确的 turn 上都是失败终态。
+  //
+  // "缺失也算失败"很关键:main 对缺 status 的 done 同样写 turnCompleted:false,
+  // 若这里不落印记,渲染端会按旧数据兜底先退场,随后落库行带失败印记到达又把
+  // 计划判活 → 消失再闪回(review P2)。
+  const isSuccessfulTerminal = terminalStatus === 'completed' && cancelled !== true;
+  const sealsTurn = isSuccessfulTerminal && Boolean(turnId);
+  // terminalStatus === undefined = 调用方没在描述终态(仅套用权威快照的调用),
+  // 不落任何印记;null / 其它值都来自真实 done,按失败终态处理。
+  const stampsFailed = Boolean(turnId) && terminalStatus !== undefined && !isSuccessfulTerminal;
+  if (!authoritativeSnapshot && !sealsTurn && !stampsFailed) {
     return { messages, changed: false, toolUseId: null };
   }
   const expectedToolUseId = turnId ? `plan:${turnId}` : null;
@@ -600,39 +890,110 @@ export function applyCodexPlanSnapshotOnDone<
 
     const input = readRecord(toolInputOf(message));
     if (!Array.isArray(input?.plan)) continue;
-    // maker-core attaches the latest cached turn/plan/updated snapshot to done.
-    // When Codex omits its final plan update, that array still contains open
-    // items and is in progress rather than a terminal snapshot. Converge that
-    // cached progress (or the persisted row when no snapshot exists) only for a
-    // matching, explicitly successful turn. Without a turn id, an array can
-    // still be applied as supplied but completion must never be inferred for an
-    // unrelated last plan row.
-    const nextSnapshot = resolveCodexPlanSnapshotOnDone(
-      input.plan,
-      authoritativeSnapshot,
-      canInferCompletion,
-    );
-    if (!nextSnapshot) {
-      return { messages, changed: false, toolUseId: null };
-    }
-    if (samePlanSnapshot(input.plan, nextSnapshot)) {
+
+    const nextPlan = authoritativeSnapshot ?? input.plan;
+    const planChanged =
+      authoritativeSnapshot !== null && !samePlanSnapshot(input.plan, authoritativeSnapshot);
+    // Seal an already-sealed row again would be a no-op update that still
+    // restarts the capsule's grace timer, so treat it as unchanged.
+    const sealChanged = sealsTurn && message.terminalPlanSnapshot !== true;
+    const failChanged =
+      stampsFailed && message.terminalPlanSnapshot !== true && message.turnCompleted !== false;
+    if (!planChanged && !sealChanged && !failChanged) {
       return { messages, changed: false, toolUseId };
     }
 
+    // 生命周期印记(章 / 失败标记)同时写进顶层与 content:mobile 的 live-plan
+    // 缓存只保存 content(rememberLivePlanContent),overlay 会用这份缓存覆盖
+    // main 广播里已持久化的带章 content——章只在顶层的话,overlay 一盖计划就
+    // 永远"未盖章",下一 turn 的计划会把上一轮吞进同一 session。
+    const lifecycleStamp = {
+      ...(sealsTurn
+        ? {
+            terminalPlanSnapshot: true,
+            ...(typeof planUpdatedAtMs === 'number' && Number.isFinite(planUpdatedAtMs)
+              ? { terminalPlanAtMs: planUpdatedAtMs }
+              : {}),
+          }
+        : {}),
+      ...(failChanged ? { turnCompleted: false } : {}),
+    };
     const next = [...messages];
     next[index] = {
       ...message,
+      ...lifecycleStamp,
       ...(typeof planUpdatedAtMs === 'number' && Number.isFinite(planUpdatedAtMs)
         ? { planUpdatedAtMs }
         : {}),
       ...(message.toolInput !== undefined
-        ? { toolInput: { ...input, plan: nextSnapshot } }
+        ? { toolInput: { ...input, plan: nextPlan } }
         : {}),
       ...(content
-        ? { content: { ...content, input: { ...input, plan: nextSnapshot } } }
+        ? { content: { ...content, input: { ...input, plan: nextPlan }, ...lifecycleStamp } }
         : {}),
     };
     return { messages: next, changed: true, toolUseId };
+  }
+  return { messages, changed: false, toolUseId: null };
+}
+
+/**
+ * 同轮 steer 插话判定。**两套字段都认**:落库位置是 `agentMeta.delivery`
+ * (mobile 与 main 侧的原始行保持这个形状),desktop 渲染层把它投影成顶层
+ * `delivery` 后丢弃原 meta。只看顶层会让 mobile / main 的所有权回扫在插话行上
+ * 提前收手,全勾完的失败计划先按旧数据退场、等 main 的异步印记广播才复活
+ * (断连时要等到重新加载,review P2)。计划分组、失败回扫与工作过程分组共用
+ * 这一个谓词,不再各自推导"什么算插话"。
+ */
+export function isSteerUserRow(message: { delivery?: string | null; agentMeta?: object | null }): boolean {
+  return message.delivery === 'steer'
+    || (message.agentMeta as { delivery?: unknown } | null)?.delivery === 'steer';
+}
+
+/**
+ * Live-side twin of main's `persistCodexPlanOnTerminalError`: a Codex turn that
+ * dies on a terminal `error` never gets a `done`, so nothing seals its plan row
+ * and nothing stamps `turnCompleted:false` in memory. Stamp the current turn's
+ * plan row here so the pinned capsule sees the task as alive immediately, in
+ * the window before the durable stamp's row broadcast arrives. Step statuses
+ * are untouched; already-sealed or already-stamped rows are left alone.
+ *
+ * Ownership boundary: only rows inside the failing turn's segment — after the
+ * latest turn-starting user message — may be stamped. Codex plan rows are
+ * per-turn (`plan:<turnId>` is created within its own turn), so the scan stops
+ * cold at the first user row that started a turn. What counts as "started a
+ * turn" is `isSyntheticUserRow`'s negation — the same predicate the plan
+ * grouping boundary uses, so steer interjections, auto-resume / scheduler
+ * dispatches, and subagent-internal user rows all keep the scan going instead of
+ * each surface re-deriving its own list. A failed turn that never emitted
+ * `update_plan` stamps nothing;
+ * reaching past the boundary would resurrect an unrelated historical plan
+ * (pre-seal-era all-done rows retire via the legacy fallback, and a stray
+ * failure stamp would flip them back to "alive" with no durable write to
+ * correct it — main's stamper correctly no-ops in that case).
+ */
+export function markCodexPlanTurnFailed<TMessage extends MessageRenderSourceMessageLike>(
+  messages: readonly TMessage[],
+): { messages: readonly TMessage[]; changed: boolean; toolUseId: string | null } {
+  for (let index = messages.length - 1; index >= 0; index -= 1) {
+    const message = messages[index];
+    if (isPlanUserBoundary(message)) break;
+    if (message.role !== 'tool_use' || toolNameOf(message) !== 'update_plan') continue;
+    if (planRowSealOf(message).sealed || planRowTurnFailed(message)) {
+      return { messages, changed: false, toolUseId: null };
+    }
+    const next = [...messages];
+    // 印记同时落 content(与 applyCodexPlanSnapshotOnDone 同口径):mobile 的
+    // live-plan 缓存只存 content 并整体覆盖 overlay 之后的行,只写顶层的话
+    // 缓存一盖就把 main 广播的落库印记抹掉。
+    const content = readRecord(message.content);
+    next[index] = {
+      ...message,
+      turnCompleted: false,
+      ...(content ? { content: { ...content, turnCompleted: false } } : {}),
+    };
+    // toolUseId 回给调用方:mobile 按它把同一份 content 写回 live-plan 缓存。
+    return { messages: next, changed: true, toolUseId: toolUseIdOf(message) ?? null };
   }
   return { messages, changed: false, toolUseId: null };
 }
@@ -770,11 +1131,18 @@ function isTaskPlanWindowResolved<TMessage extends MessageRenderSourceMessageLik
   let previousTaskTodos: MessageRenderTodoItem[] | null = null;
   let sawTaskEvent = false;
   let currentSessionBoundaryKnown = !hasEarlierMessages;
+  let lastUserBoundaryIndex = -1;
+  let currentSessionUserBoundaryIndex = -1;
 
   for (let index = 0; index <= latestPlanIndex; index += 1) {
     const message = messages[index];
+    if (isPlanUserBoundary(message)) {
+      lastUserBoundaryIndex = index;
+      continue;
+    }
     if (agentPlanSource(toolNameOf(message)) !== 'task') continue;
 
+    const toolName = toolNameOf(message);
     const resultText = resultByToolUseId.get(toolUseIdOf(message) ?? '');
     const resultTasks = taskRecordsFromResult(resultText);
     const input = readRecord(toolInputOf(message)) ?? {};
@@ -787,22 +1155,40 @@ function isTaskPlanWindowResolved<TMessage extends MessageRenderSourceMessageLik
       [...unresolvedTaskStatuses.values()].every(
         (status) => status === 'completed' || status === 'deleted',
       );
+    const targetsExistingTask = taskToolTargetsExistingTask(message, resultText, taskState);
     const continuesCompletedTaskSession =
       previousAllDone &&
-      (taskToolTargetsExistingTask(message, resultText, taskState) ||
+      (targetsExistingTask ||
         Boolean(targetTaskId && unresolvedTaskStatuses.has(targetTaskId)));
+    // 与 findMessageTodoInsertions 保持同一条所有权边界：真实 user turn 后的
+    // 新 TaskCreate / 新清单不能继承前一轮的孤儿状态；显式更新当前已知 Task
+    // 仍允许跨 turn 续写，且不移动 session 的原始所有权锚点。
+    const crossesUserBoundary =
+      sawTaskEvent &&
+      lastUserBoundaryIndex > currentSessionUserBoundaryIndex &&
+      !targetsExistingTask;
     const startsNewSession =
       !sawTaskEvent ||
+      crossesUserBoundary ||
       (previousAllDone && !continuesCompletedTaskSession);
     if (startsNewSession) {
+      const startsAfterCompletedSession =
+        sawTaskEvent && previousAllDone && !continuesCompletedTaskSession;
+      const startsWithTaskCreateAfterVisibleUser =
+        toolName === 'TaskCreate' &&
+        lastUserBoundaryIndex >= 0 &&
+        (!sawTaskEvent || crossesUserBoundary);
       taskState.clear();
       unresolvedTaskStatuses.clear();
       previousTaskTodos = null;
-      if (sawTaskEvent) currentSessionBoundaryKnown = true;
+      currentSessionBoundaryKnown =
+        !hasEarlierMessages ||
+        startsAfterCompletedSession ||
+        startsWithTaskCreateAfterVisibleUser;
+      currentSessionUserBoundaryIndex = lastUserBoundaryIndex;
     }
     sawTaskEvent = true;
 
-    const toolName = toolNameOf(message);
     if (toolName === 'TaskList') {
       if (taskListResultIsAuthoritative(resultText)) {
         currentSessionBoundaryKnown = true;
@@ -1177,237 +1563,62 @@ function tryParseJsonRecord(text: string | undefined): Record<string, unknown> |
   }
 }
 
-function groupMessageWorkRuns<
-  TMessage extends MessageRenderNormalizedMessage,
->(
+function groupMessageWorkRuns<TMessage extends MessageRenderNormalizedMessage>(
   items: readonly MessageRenderItem<TMessage>[],
   isSessionStreaming: boolean,
 ): MessageRenderItem<TMessage>[] {
-  const out: MessageRenderItem<TMessage>[] = [];
-  let currentTurn: MessageRenderItem<TMessage>[] = [];
-
-  const flushTurn = (activeTail: boolean) => {
-    if (currentTurn.length === 0) return;
-    if (activeTail && isSessionStreaming) {
-      out.push(...groupActiveWorkRuns(currentTurn));
-      currentTurn = [];
-      return;
-    }
-    const grouped = groupAnsweredTurnItems(currentTurn);
-    out.push(...(grouped.handled ? grouped.items : groupLegacyWorkRuns(currentTurn)));
-    currentTurn = [];
-  };
-
-  // 空洞判定的锚点:上一个 item 的**结束**时间(见 itemEndTimestamp)。用开始时间会让一个
-  // 正常的长时段工具组/thinking 把紧随其后的 item 误判成空洞。取已见过的最大值而非无条件
-  // 覆盖:并行的 Agent/Task 可能乱序完成,锚点回退会让后面的最终答复被误切、时长被低报。
-  // 无时间戳的 item 不重置锚点,让间隔判定跨过它继续比对上一个有时间的动作。
-  let prevEndMs: number | null = null;
-  const noteEnd = (item: MessageRenderItem<TMessage>) => {
-    const endMs = itemEndTimestamp(item);
-    if (endMs === null) return;
-    prevEndMs = prevEndMs === null ? endMs : Math.max(prevEndMs, endMs);
-  };
-
-  for (const item of items) {
-    if (item.type === 'message' && item.message.kind === 'user') {
-      flushTurn(false);
-      out.push(item);
-      noteEnd(item);
-      continue;
-    }
-    // 窗口空洞:user 行是唯一的 turn 边界,窗口里缺了它,两段不相干的历史就会被折进同一个
-    // 「已工作 Xs」并谎报时长(手机端实测一条组吞掉整场会话的 6 轮对话)。相邻动作间隔超过
-    // 阈值时同样切断 —— 见 HISTORY_GAP_SPLIT_MS 的完整理由。
-    const startMs = itemTimestamp(item);
-    if (
-      prevEndMs !== null
-      && startMs !== null
-      && startMs - prevEndMs > HISTORY_GAP_SPLIT_MS
-    ) {
-      flushTurn(false);
-    }
-    currentTurn.push(item);
-    noteEnd(item);
-  }
-  flushTurn(true);
-  return out;
-}
-
-function groupAnsweredTurnItems<
-  TMessage extends MessageRenderNormalizedMessage,
->(items: readonly MessageRenderItem<TMessage>[]): {
-  items: MessageRenderItem<TMessage>[];
-  handled: boolean;
-} {
-  const sealedAnswers = new Set<number>();
-  for (let index = 0; index < items.length; index++) {
-    const item = items[index];
-    if (isAssistantAnswerCandidate(item) && isCompletedAssistantMessage(item.message)) {
-      sealedAnswers.add(index);
-    }
-  }
-
-  let lastAnswerIndex = -1;
-  for (let index = items.length - 1; index >= 0; index--) {
-    if (isAssistantAnswerCandidate(items[index])) {
-      lastAnswerIndex = index;
-      break;
-    }
-  }
-  if (lastAnswerIndex < 0) return { items: [...items], handled: false };
-
-  // 新数据按 SDK done seal 分段；旧数据没有 seal 时保持原有 last-answer 兼容行为。
-  if (sealedAnswers.size > 0) {
-    let segmentStartIndex = 0;
-    for (const sealedIndex of [...sealedAnswers]) {
-      let lastWorkActivityIndex = -1;
-      for (let index = sealedIndex - 1; index >= segmentStartIndex; index--) {
-        if (isWorkActivityItem(items[index])) {
-          lastWorkActivityIndex = index;
-          break;
-        }
-      }
-      let answerStartIndex = sealedIndex;
-      while (
-        answerStartIndex > lastWorkActivityIndex + 1
-        && answerStartIndex > segmentStartIndex
-        && isAssistantAnswerCandidate(items[answerStartIndex - 1])
-      ) {
-        answerStartIndex--;
-      }
-      for (let index = answerStartIndex; index <= sealedIndex; index++) {
-        if (isAssistantAnswerCandidate(items[index])) sealedAnswers.add(index);
-      }
-      segmentStartIndex = sealedIndex + 1;
-    }
-  } else {
-    const hasWorkAfterLastAnswer = items.some(
-      (item, index) => index > lastAnswerIndex && isWorkActivityItem(item),
-    );
-    if (hasWorkAfterLastAnswer) return { items: [...items], handled: false };
-
-    let lastWorkActivityIndex = -1;
-    for (let index = lastAnswerIndex - 1; index >= 0; index--) {
-      if (isWorkActivityItem(items[index])) {
-        lastWorkActivityIndex = index;
-        break;
-      }
-    }
-    let finalAnswerStartIndex = lastAnswerIndex;
-    if (lastWorkActivityIndex >= 0) {
-      while (
-        finalAnswerStartIndex > lastWorkActivityIndex + 1
-        && isAssistantAnswerCandidate(items[finalAnswerStartIndex - 1])
-      ) {
-        finalAnswerStartIndex--;
-      }
-    }
-    for (let index = finalAnswerStartIndex; index <= lastAnswerIndex; index++) {
-      if (isAssistantAnswerCandidate(items[index])) sealedAnswers.add(index);
-    }
-  }
-
-  const out: MessageRenderItem<TMessage>[] = [];
-  let run: MessageRenderWorkChildItem<TMessage>[] = [];
-  const flushRun = (nextItem?: MessageRenderItem<TMessage>) => {
-    if (run.length === 0) return;
-    out.push(createCompletedWorkGroup(run, nextItem));
-    run = [];
-  };
-
-  for (let index = 0; index < items.length; index++) {
-    const item = items[index];
-    if (
-      !sealedAnswers.has(index)
-      && !isRunningAgentTaskItem(item)
-      && !isDeliveryProseItem(item)
-      && isWorkChild(item)
-    ) {
-      run.push(item);
-    } else {
-      flushRun(item);
-      out.push(item);
-    }
-  }
-  flushRun();
-  return { items: out, handled: true };
-}
-
-function groupLegacyWorkRuns<TMessage extends MessageRenderNormalizedMessage>(
-  items: readonly MessageRenderItem<TMessage>[],
-): MessageRenderItem<TMessage>[] {
-  const out: MessageRenderItem<TMessage>[] = [];
-  let run: MessageRenderWorkChildItem<TMessage>[] = [];
-  const flushRun = (nextItem?: MessageRenderItem<TMessage>) => {
-    if (run.length === 0) return;
-    out.push(createWorkGroup(run, nextItem));
-    run = [];
-  };
-  for (const item of items) {
-    if (isWorkActivityItem(item)) run.push(item);
-    else {
-      flushRun(item);
-      out.push(item);
-    }
-  }
-  flushRun();
-  return out;
-}
-
-/** Active turn: assistant text and compact cards close the previous activity run. */
-function groupActiveWorkRuns<TMessage extends MessageRenderNormalizedMessage>(
-  items: readonly MessageRenderItem<TMessage>[],
-): MessageRenderItem<TMessage>[] {
-  let lastCompletedBoundaryIndex = -1;
-  for (let index = 0; index < items.length; index++) {
-    if (isAssistantAnswerCandidate(items[index]) || isCompactBoundaryItem(items[index])) {
-      lastCompletedBoundaryIndex = index;
-    }
-  }
-
-  const out: MessageRenderItem<TMessage>[] = [];
-  let run: MessageRenderWorkChildItem<TMessage>[] = [];
-  let runLastIndex = -1;
-  const flushRun = (nextItem?: MessageRenderItem<TMessage>) => {
-    if (run.length === 0) return;
-    out.push(createWorkGroup(run, nextItem, runLastIndex > lastCompletedBoundaryIndex));
-    run = [];
-  };
-  for (let index = 0; index < items.length; index++) {
-    const item = items[index];
-    if (isWorkActivityItem(item)) {
-      run.push(item);
-      runLastIndex = index;
-    } else {
-      flushRun(item);
-      out.push(item.type === 'todo'
-        ? { ...item, isStreaming: index > lastCompletedBoundaryIndex }
-        : item);
-    }
-  }
-  flushRun();
-  return out;
+  return groupWorkRuns<MessageRenderItem<TMessage>, MessageRenderWorkChildItem<TMessage>>(
+    items, isSessionStreaming, {
+      isUserBoundary: (item) => item.type === 'message' && item.message.kind === 'user' && !isSteerUserRow(item.message.source),
+      isContinuationBoundary: (item) => item.type === 'message' && isContinuationMessage(item.message.source),
+      isAnswer: isAssistantAnswerCandidate,
+      canPrependToAnswer: (item) => item.type !== 'message' || item.message.source.agentMeta?.assistantPhase !== 'commentary',
+      isSealedAnswer: (item) => item.type === 'message' && isCompletedAssistantMessage(item.message),
+      isCompactBoundary: isCompactBoundaryItem,
+      isActivity: isWorkActivityItem,
+      isArchivable: (item): item is MessageRenderWorkChildItem<TMessage> =>
+        !isRunningAgentTaskItem(item) && !isDeliveryProseItem(item) && isWorkChild(item),
+      startTimestamp: itemTimestamp,
+      endTimestamp: itemEndTimestamp,
+      boundaryTimestamp,
+      userBoundaryEnd: (item, previousEnd) => maxTimestamp(previousEnd, itemEndTimestamp(item)),
+      createGroup: createWorkGroup,
+      createCompletedGroup: createCompletedWorkGroup,
+      activeStandalone: (item, isStreaming) => item.type === 'todo' ? { ...item, isStreaming } : item,
+    },
+  );
 }
 
 /**
  * 运行中(未到终态)的子 Agent 卡是折叠时的"可见锚点",绝不折进「工作过程」组:
  * 任务没完成就归档会谎报终态(典型:后台子 agent 仍在跑,父 turn 已产出最终正文)。
  * status 派生口径与 buildAgentTaskCardModel / 桌面 MessageStream 的 isRunningAgentTask
- * 完全一致(update.status 优先;否则有配对工具结果 secondaryBody 视为 completed、
- * 无则 running),保证「卡片显示运行中」与「是否折叠」永远同步。
- * 终态 = completed/failed/stopped。
+ * 完全一致:配对工具结果 secondaryBody 会把 stale running 收敛为 completed,
+ * 但不覆盖 failed/stopped 等明确终态,保证「卡片显示运行中」与「是否折叠」永远同步。
  */
 function isRunningAgentTaskItem<
   TMessage extends MessageRenderNormalizedMessage,
 >(item: MessageRenderItem<TMessage>): boolean {
   if (item.type !== 'agent_task') return false;
-  const status = item.update?.status ?? (item.toolCall?.secondaryBody ? 'completed' : 'running');
+  const status = deriveAgentTaskStatus(item.update?.status, item.toolCall?.secondaryBody, {
+    persistedStatus: item.toolCall?.agentTaskStatus,
+    resultIsLaunchReceipt:
+      item.toolCall !== undefined &&
+      (subagentSpawnReceiptName(
+        toolNameOf(item.toolCall.source),
+        toolInputOf(item.toolCall.source),
+        item.toolCall.secondaryBody,
+      ) !== undefined
+        || subagentSpawnResultIndicatesRunning(
+          toolNameOf(item.toolCall.source),
+          item.toolCall.secondaryBody,
+        )),
+  });
   return status === 'running';
 }
 
 function isCompletedAssistantMessage(message: MessageRenderNormalizedMessage): boolean {
-  return message.turnCompleted === true;
+  return !message.failedSamplingAttempt && message.turnCompleted === true;
 }
 
 function isAssistantAnswerCandidate<
@@ -1415,6 +1626,7 @@ function isAssistantAnswerCandidate<
 >(item: MessageRenderItem<TMessage>): item is MessageRenderMessageItem<TMessage> {
   return item.type === 'message'
     && item.message.kind === 'assistant'
+    && !item.message.failedSamplingAttempt
     && item.message.body.trim().length > 0;
 }
 
@@ -1449,17 +1661,27 @@ const MARKDOWN_LIST_ITEM_RE = /^[ \t]{0,3}(?:[-*+][ \t]+|\d{1,3}[.)][ \t]+)\S/gm
 const DELIVERY_PROSE_MIN_LIST_ITEMS = 3;
 
 /**
+ * 正文里的图片:配一句短说明发出的图也是交付成果。两端渲染器都支持 `![alt](url)` 与
+ * 带 src 的单个 raw HTML `<img>`(桌面 remarkHtmlImages、手机 messageMarkdown)。
+ * 只决定是否折叠,偶尔多认(如代码块里的 <img>)只会多显示一条,方向安全。
+ */
+const MARKDOWN_IMAGE_RE = /!\[[^\]\n]*\]\([^)\s]+(?:\s[^)]*)?\)/;
+const HTML_IMAGE_RE = /<img(?=[\s/>])[^<>]*\ssrc\s*=\s*["']?[^\s"'<>]+[^<>]*>/i;
+
+/**
  * 这段 assistant 正文是不是「交付内容」(而非进度旁白)。
  *
  * 判据刻意与位置无关:长度达阈值,或带块级 markdown 结构(标题 / 表格 /
- * ≥3 项列表)。两端共用这一份口径,不各自实现。
+ * ≥3 项列表),或内嵌图片。两端共用这一份口径,不各自实现。
  */
 export function isDeliveryProseText(text: string): boolean {
   const trimmed = text.trim();
   if (trimmed.length === 0) return false;
+  if (hasRichAnswer(trimmed)) return true;
   if (trimmed.length >= DELIVERY_PROSE_MIN_LENGTH) return true;
   if (MARKDOWN_HEADING_RE.test(trimmed)) return true;
   if (MARKDOWN_TABLE_DIVIDER_RE.test(trimmed)) return true;
+  if (MARKDOWN_IMAGE_RE.test(trimmed) || HTML_IMAGE_RE.test(trimmed)) return true;
   // /g 正则不用 test():lastIndex 会在调用之间残留。
   const listItems = trimmed.match(MARKDOWN_LIST_ITEM_RE);
   return (listItems?.length ?? 0) >= DELIVERY_PROSE_MIN_LIST_ITEMS;
@@ -1479,6 +1701,7 @@ function isDeliveryProseItem<TMessage extends MessageRenderNormalizedMessage>(
 ): boolean {
   return item.type === 'message'
     && item.message.kind === 'assistant'
+    && !item.message.failedSamplingAttempt
     && isDeliveryProseText(item.message.body);
 }
 
@@ -1497,12 +1720,20 @@ function isWorkChild<
   );
 }
 
-/** Assistant progress text remains visible while running and never consumes the latest-five window. */
+/** Normal progress stays visible; proven failed sampling output uses the existing fold. */
 function isWorkActivityItem<TMessage extends MessageRenderNormalizedMessage>(
   item: MessageRenderItem<TMessage>,
-): item is MessageRenderThinkingItem<TMessage> | MessageRenderToolGroupItem<TMessage> | MessageRenderAgentTaskItem<TMessage> {
+): item is Exclude<MessageRenderWorkChildItem<TMessage>, MessageRenderWorkGroupItem<TMessage>> {
   return !isRunningAgentTaskItem(item)
-    && (item.type === 'thinking' || item.type === 'tool_group' || item.type === 'agent_task');
+    && (item.type === 'thinking' || item.type === 'tool_group' || item.type === 'agent_task' ||
+      (item.type === 'message' && item.message.kind === 'assistant' && item.message.failedSamplingAttempt === true));
+}
+
+/** 边界项（用户消息 / assistant 正文）的时间戳；非 message 卡片不作为时间边界。 */
+function boundaryTimestamp<TMessage extends MessageRenderNormalizedMessage>(
+  item: MessageRenderItem<TMessage> | undefined,
+): number | null {
+  return item?.type === 'message' ? itemTimestamp(item) : null;
 }
 
 function createWorkGroup<
@@ -1511,10 +1742,20 @@ function createWorkGroup<
   children: MessageRenderWorkChildItem<TMessage>[],
   nextItem?: MessageRenderItem<TMessage>,
   isStreaming = false,
+  previousBoundaryMs: number | null = null,
 ): MessageRenderWorkGroupItem<TMessage> {
   const firstActivity = children.find((item) => item.type !== 'message' || item.message.kind === 'thinking');
-  const start = itemTimestamp(firstActivity ?? children[0]);
-  const end = nextItem ? itemTimestamp(nextItem) : workRunFallbackEnd(children);
+  const anchor = itemTimestamp(firstActivity ?? children[0]);
+  // 段起点优先锚上一个边界（用户消息 / 上一句正文），与桌面活表口径一致。
+  // 边界缺失（窗口截断）或时序异常时退回段内首个活动。
+  const start =
+    previousBoundaryMs !== null && (anchor === null || previousBoundaryMs <= anchor)
+      ? previousBoundaryMs
+      : anchor;
+  const end =
+    nextItem?.type === 'message'
+      ? itemTimestamp(nextItem)
+      : workRunFallbackEnd(children);
   const durationMs = start !== null && end !== null && end >= start ? end - start : undefined;
   return {
     type: 'work_group',
@@ -1529,17 +1770,21 @@ function createWorkGroup<
 function createCompletedWorkGroup<TMessage extends MessageRenderNormalizedMessage>(
   run: MessageRenderWorkChildItem<TMessage>[],
   nextItem?: MessageRenderItem<TMessage>,
+  previousBoundaryMs: number | null = null,
 ): MessageRenderWorkGroupItem<TMessage> {
   const hasAssistantText = run.some(
-    (item) => item.type === 'message' && item.message.kind === 'assistant',
+    (item) => item.type === 'message' && item.message.kind === 'assistant' && !item.message.failedSamplingAttempt,
   );
-  if (!hasAssistantText) return createWorkGroup(run, nextItem);
+  if (!hasAssistantText) return createWorkGroup(run, nextItem, false, previousBoundaryMs);
 
   const children: MessageRenderWorkChildItem<TMessage>[] = [];
   let activityRun: MessageRenderWorkChildItem<TMessage>[] = [];
+  let innerPreviousBoundaryMs = previousBoundaryMs;
   const flushActivityRun = (activityNextItem?: MessageRenderItem<TMessage>) => {
     if (activityRun.length === 0) return;
-    children.push(createWorkGroup(activityRun, activityNextItem));
+    children.push(
+      createWorkGroup(activityRun, activityNextItem, false, innerPreviousBoundaryMs),
+    );
     activityRun = [];
   };
   for (const item of run) {
@@ -1548,10 +1793,11 @@ function createCompletedWorkGroup<TMessage extends MessageRenderNormalizedMessag
     } else {
       flushActivityRun(item);
       children.push(item);
+      innerPreviousBoundaryMs = boundaryTimestamp(item);
     }
   }
   flushActivityRun(nextItem);
-  const outer = createWorkGroup(run, nextItem);
+  const outer = createWorkGroup(run, nextItem, false, previousBoundaryMs);
   const firstActivity = run.find((item) => item.type !== 'message' || item.message.kind === 'thinking');
   return {
     ...outer,
@@ -1584,12 +1830,43 @@ function workRunFallbackEnd<TMessage extends MessageRenderNormalizedMessage>(
   return latest;
 }
 
-export function formatDuration(ms: number): string {
-  const totalSec = Math.max(1, Math.round(ms / 1000));
+/** Promote long durations to hours/days, always retaining minutes (including zero). */
+export function formatDuration(
+  ms: number,
+  {
+    minimumSeconds = 1,
+    alwaysShowRemainder = false,
+    padRemainder = false,
+    formatLongDuration,
+  }: {
+    minimumSeconds?: number;
+    alwaysShowRemainder?: boolean;
+    padRemainder?: boolean;
+    formatLongDuration?: (parts: { days: number; hours: string; minutes: string }) => string;
+  } = {},
+): string {
+  const totalSec = Math.max(minimumSeconds, Math.round((Number.isFinite(ms) ? ms : 0) / 1000));
   if (totalSec < 60) return `${totalSec}s`;
+  const formatRemainder = (value: number) => padRemainder ? String(value).padStart(2, '0') : String(value);
+  if (totalSec >= 3_600) {
+    const days = Math.floor(totalSec / 86_400);
+    const hours = Math.floor((totalSec % 86_400) / 3_600);
+    const minutes = Math.floor((totalSec % 3_600) / 60);
+    if (formatLongDuration) {
+      return formatLongDuration({
+        days,
+        hours: days > 0 ? formatRemainder(hours) : String(hours),
+        minutes: formatRemainder(minutes),
+      });
+    }
+    return days > 0
+      ? `${days}d ${formatRemainder(hours)}h ${formatRemainder(minutes)}m`
+      : `${hours}h ${formatRemainder(minutes)}m`;
+  }
   const minutes = Math.floor(totalSec / 60);
   const seconds = totalSec % 60;
-  return seconds === 0 ? `${minutes}m` : `${minutes}m ${seconds}s`;
+  if (seconds === 0 && !alwaysShowRemainder) return `${minutes}m`;
+  return `${minutes}m ${formatRemainder(seconds)}s`;
 }
 
 function itemTimestamp<
@@ -1704,6 +1981,37 @@ function toolInputOf(message: MessageRenderSourceMessageLike): unknown {
   if (message.toolInput !== undefined) return message.toolInput;
   const content = readRecord(message.content);
   return content?.input;
+}
+
+/**
+ * host 的终态章可能在顶层字段(desktop live / hydrate 路径),也可能只在持久化
+ * content 里(mobile 直接渲染 main 广播的行,updateDbMessageContent 把章写进
+ * content)。session 边界与 insertion 的 sealed 判定都必须两处都认。
+ */
+function planRowSealOf(
+  message: MessageRenderSourceMessageLike | undefined,
+): { sealed: boolean; sealedAtMs?: number } {
+  if (!message) return { sealed: false };
+  const content = readRecord(message.content);
+  const sealed =
+    message.terminalPlanSnapshot === true ||
+    (message.terminalPlanSnapshot === undefined && content?.terminalPlanSnapshot === true);
+  if (!sealed) return { sealed: false };
+  const sealedAtMs =
+    typeof message.terminalPlanAtMs === 'number'
+      ? message.terminalPlanAtMs
+      : typeof content?.terminalPlanAtMs === 'number'
+        ? content.terminalPlanAtMs
+        : undefined;
+  return { sealed: true, ...(sealedAtMs !== undefined ? { sealedAtMs } : {}) };
+}
+
+/** 同 planRowSealOf:失败印记(turnCompleted:false)也认 content 里的持久化位置。 */
+function planRowTurnFailed(message: MessageRenderSourceMessageLike | undefined): boolean {
+  if (!message) return false;
+  if (message.turnCompleted === false) return true;
+  const content = readRecord(message.content);
+  return message.turnCompleted === undefined && content?.turnCompleted === false;
 }
 
 function toolUseIdOf(message: MessageRenderSourceMessageLike): string | undefined {

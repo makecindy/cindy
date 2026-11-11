@@ -50,6 +50,22 @@ describe('selection context menu platform shape', () => {
     expect(template[0]?.label).toBe('复制');
   });
 
+  it('uses Traditional Chinese labels for zh-TW', () => {
+    const template = buildSelectionContextMenuTemplate('win32', 'zh-TW', params, {
+      addToChat: vi.fn(),
+      lookUp: vi.fn(),
+      searchWeb: vi.fn(),
+    });
+
+    expect(template.map((item) => item.role ?? item.label ?? item.type)).toEqual([
+      'copy',
+      '新增到對話',
+      'separator',
+      '在網頁中搜尋「selected words」',
+    ]);
+    expect(template[0]?.label).toBe('拷貝');
+  });
+
   it('truncates long single-line labels', () => {
     const template = buildSelectionContextMenuTemplate(
       'win32',

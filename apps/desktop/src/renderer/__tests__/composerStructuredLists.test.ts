@@ -1816,4 +1816,63 @@ describe('composer structured list serialization', () => {
       description: 'Open issue',
     }]);
   });
+
+  it('serializes a Bot mention as a structured delegation target, not a filesystem mention', () => {
+    const editor = makeEditor({
+      type: 'doc',
+      content: [{
+        type: 'paragraph',
+        content: [{
+          type: 'mentionChip',
+          attrs: {
+            kind: 'bot',
+            label: 'Dash Bot',
+            path: 'bot-dash-1',
+          },
+        }],
+      }],
+    });
+
+    const serialized = serializeEditorContent(editor);
+    const href = 'cindy://bot/bot-dash-1';
+    expect(serialized.text).toBe(`[Dash Bot](${href})`);
+    expect(serialized.mentions).toEqual([]);
+    expect(serialized.agentReferences).toEqual([{
+      kind: 'bot',
+      start: 0,
+      end: serialized.text.length,
+      href,
+      botId: 'bot-dash-1',
+      name: 'Dash Bot',
+    }]);
+  });
+
+  // 近况里点一条待办插进来的 chip：发出去要带稳定 Todo ID，不能被当成文件提及。
+  it('serializes a teammate Todo chip as a structured reference carrying its id', () => {
+    const href = 'cindy://bot-todo/bot-1/todo-7';
+    const editor = makeEditor({
+      type: 'doc',
+      content: [{
+        type: 'paragraph',
+        content: [
+          { type: 'mentionChip', attrs: { kind: 'todo', label: '回 [MagicLizi] 的邮件', path: href } },
+          { type: 'text', text: ' 按周四回' },
+        ],
+      }],
+    });
+
+    const serialized = serializeEditorContent(editor);
+    const wire = `[回 \\[MagicLizi\\] 的邮件](${href})`;
+    expect(serialized.text).toBe(`${wire} 按周四回`);
+    expect(serialized.mentions).toEqual([]);
+    expect(serialized.agentReferences).toEqual([{
+      kind: 'todo',
+      start: 0,
+      end: wire.length,
+      href,
+      botId: 'bot-1',
+      todoId: 'todo-7',
+      title: '回 [MagicLizi] 的邮件',
+    }]);
+  });
 });

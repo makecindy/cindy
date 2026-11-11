@@ -231,7 +231,10 @@ export async function addKeyToAgent(opts: {
   try {
     await fs.access(privateKeyPath);
   } catch (err) {
-    if ((err as NodeJS.ErrnoException).code === 'ENOENT') {
+    const code = (err as NodeJS.ErrnoException).code;
+    const windowsPathProbeFailed =
+      process.platform === 'win32' && code === 'UNKNOWN' && path.win32.isAbsolute(privateKeyPath);
+    if (code === 'ENOENT' || windowsPathProbeFailed) {
       return {
         success: false,
         failureReason: 'no_such_file',

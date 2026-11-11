@@ -42,8 +42,11 @@ import {
 import { useExpandedBlockMemory } from '@/hooks/useExpandedBlockMemory';
 
 import { AgentActionRow } from './AgentActionRow';
+import type { PluginUiMessageCandidates } from '@/cindy-brain/PluginUiContributions';
 
 export interface AgentActionsBlockProps {
+  pluginUi: PluginUiMessageCandidates;
+  renderItemKey?: string;
   toolCalls: ChatMessage[];
   /** clientId of tool_use → string content of its tool_result. */
   resultMap: Map<string, string>;
@@ -61,6 +64,8 @@ export interface AgentActionsBlockProps {
 }
 
 export function AgentActionsBlock({
+  pluginUi,
+  renderItemKey,
   toolCalls,
   resultMap,
   settledIds,
@@ -103,7 +108,9 @@ export function AgentActionsBlock({
     // data-message-client-ids(空格分隔):后台任务面板「点行跳聊天」的定位锚点。
     // 聚合块内的工具行折叠时不在可视 DOM,精确 clientId 锚点(message wrapper /
     // 任务卡)查不到时,MessageStream 的 focus 用 ~= 属性选择器落到本块容器。
+    // 视口删除补偿不读这个聚合列表，避免把隐藏工具 id 当成活锚点。
     <div
+      data-render-item-key={renderItemKey}
       className="flex w-full justify-start"
       data-message-client-ids={toolCalls.map((c) => c.clientId).join(' ')}
     >
@@ -155,6 +162,7 @@ export function AgentActionsBlock({
           >
             {toolCalls.map((msg) => (
               <AgentActionRow
+                pluginUi={pluginUi}
                 key={msg.clientId}
                 message={msg}
                 toolResult={resultMap.get(msg.clientId)}

@@ -2,6 +2,8 @@ import { describe, expect, it } from 'vitest';
 
 import { resolveBrowserConfig } from '../_generated/extension/src/browser/config.js';
 import { createBrowserControlRuntime } from '../index.js';
+import { assertBrowserNavigationAllowed, assertBrowserNavigationResultAllowed } from '../_generated/extension/src/browser/navigation-guard.js';
+import type { LookupFn } from '../_generated/leaf/src/infra/net/ssrf.js';
 
 // Regression: the host-injected config must actually reach the vendored dispatcher.
 // A shim bug (getRuntimeConfigSourceSnapshot returning a {config,source} wrapper
@@ -9,6 +11,34 @@ import { createBrowserControlRuntime } from '../index.js';
 // fell back to the vendored DEFAULT profiles ("openclaw"/"user") and every
 // host-set profile (name, color, ports) was ignored. This locks the fix in.
 describe('host config application', () => {
+  it.each([
+    ['http://172.20.0.2:8010/form', '172.20.0.2'],
+    ['http://intranet.internal/form', '10.0.0.2'],
+    ['http://localhost/form', '127.0.0.1'],
+    ['http://169.254.169.254/', '169.254.169.254'],
+    ['http://[fd00::1]/', 'fd00::1'],
+    ['http://[fe80::1]/', 'fe80::1'],
+    ['http://proxy.example/form', '198.18.0.1'],
+  ])('honors explicit private-network access for navigation and resulting URL: %s', async (url, address) => {
+    const { ssrfPolicy } = resolveBrowserConfig({ ssrfPolicy: { dangerouslyAllowPrivateNetwork: true } });
+    const options = {
+      url, ssrfPolicy,
+      // The guard always uses lookup({ all: true }); the other DNS overloads
+      // are not exercised by this in-memory resolver.
+      lookupFn: (async () => [{ address, family: address.includes(':') ? 6 : 4 }]) as unknown as LookupFn,
+    };
+    await expect(assertBrowserNavigationAllowed(options)).resolves.toBeUndefined();
+    await expect(assertBrowserNavigationResultAllowed(options)).resolves.toBeUndefined();
+  });
+
+  it('retains scheme validation and the restrictive default for other hosts', async () => {
+    const allowed = resolveBrowserConfig({ ssrfPolicy: { dangerouslyAllowPrivateNetwork: true } });
+    await expect(assertBrowserNavigationAllowed({ url: 'file:///private/example', ssrfPolicy: allowed.ssrfPolicy }))
+      .rejects.toThrow(/unsupported protocol/);
+    await expect(assertBrowserNavigationAllowed({ url: 'http://172.20.0.2/', ssrfPolicy: resolveBrowserConfig(undefined).ssrfPolicy }))
+      .rejects.toThrow(/Blocked/);
+  });
+
   it('preserves narrow fake-IP SSRF allowances through vendored config resolution', () => {
     const resolved = resolveBrowserConfig({
       ssrfPolicy: {

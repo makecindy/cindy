@@ -1,107 +1,75 @@
 import type { TFunction } from 'i18next';
-import type { ReactNode } from 'react';
 
 import { toast } from '@/lib/toast';
 import { extractIpcError } from '@/utils/ipcError';
 import {
-  diffGhostPermissionItems,
-  ghostPermissionItems,
+  ghostInstallApprovalToken,
   type GhostManifest,
-  type GhostTrustInfo,
   type InstalledGhost,
 } from '../../shared/ghost';
-import { GhostInstallReview, GhostUpdateReview } from './GhostPermissionList';
+import {
+  findInstalledGhostByInstanceId,
+  findInstalledLocalGhostForFileImport,
+  installedGhostStoragePart,
+} from '../../shared/pluginIdentity';
 import { ghostInstallErrorKey } from './installErrorKey';
 
 /**
- * 装入/更新意识的统一编排:inspect(验明正身)→ Renderer 权限清单 →
- * install / update。Node 高风险条目在权限清单里如实展示
- * (2026-07-24 起不再有 Main 原生二次确认弹窗)。
- *
- * 「装意识前弹确认」是 README 定下的安全原则:确认框展示的是**意识自称的身份**
- * (名字/版本/形态/是否带面板),不是文件名 —— 文件名可以随便改,身份卡不会陪它演。
- * 设置页按钮 / 窗口拖入 / 双击 .cindy 三个入口共用本流程 —— 双击由 main 侧
- * 转交路径进来(main/cindy-brain/openFileInstall.ts,pending buffer +
- * GlobalDropImportListener 消费),确认弹窗永远是应用内这同一个。
- *
- * 确认框正文是逐项权限清单:由身份卡静态推导(ghostPermissionItems),
- * Cindy 代办按类目、工具逐个、指令/面板/可执行代码各一项,如实展示无黑话。
- *
- * 同 id 已装 → 自动转「更新」分支:确认框展示版本变化(vX → vY)+ 权限 diff
- * (只高亮新增/移除,不变项折叠计数),无"立即开启"勾选(更新延续当前唤醒
- * 状态,不偷偷点亮也不偷偷熄灯)。
+ * 本地 .cindy 的统一安装／更新编排：inspect 验证真实包后交给 Main。首装与权限
+ * 变多的更新由 Main 在落位前向本窗口弹确认（GhostInstallConsentHost），用户取消
+ * 时静默收口、不报错。同 id 已安装时转为原位更新；更新继续由 Main 延续当前启用状态。
  */
 
 interface InstallFlowDeps {
   t: TFunction;
-  /** ui/confirm-dialog-provider 的 confirm(更新确认,无勾选)。 */
-  confirm: (options: {
-    title: string;
-    description?: string;
-    content?: ReactNode;
-    maxWidth?: number;
-    confirmText?: string;
-    cancelText?: string;
-  }) => Promise<boolean>;
-  /** ui/confirm-dialog-provider 的 confirmWithCheckbox(装入确认 + "立即开启"勾选)。 */
-  confirmWithCheckbox: (options: {
-    title: string;
-    description?: string;
-    content?: ReactNode;
-    maxWidth?: number;
-    confirmText?: string;
-    cancelText?: string;
-    checkboxLabel: string;
-    checkboxDefaultChecked?: boolean;
-  }) => Promise<{ ok: boolean; checked: boolean }>;
   /**
    * 打开插件页内的页签面板(面板收束后 tab 型插件的唯一宿主)。只在
-   * 「tab 型插件 + 勾选立即开启」时消费:插件页原地开面板,其它入口
+   * 「tab 型插件安装后」消费:插件页原地开面板,其它入口
    * 导航到 /plugins?panel=<id>。不传 = 该入口不许诺"打开"。
    */
   openPluginPanel?: (ghostId: string) => void;
 }
 
-/** 意识装入/更新确认框统一宽度:权限清单是富内容,默认 400px 折行到累。 */
-const GHOST_CONFIRM_MAX_WIDTH = 520;
+/** 安装事务失败统一走 toast；用户在确认框里取消不算失败。 */
+async function showInstallError(error: unknown, deps: InstallFlowDeps): Promise<void> {
+  const code = extractIpcError(error)?.code;
+  if (code === 'MUTATION_CANCELLED') return;
+  toast.error(deps.t(ghostInstallErrorKey(code)));
+}
 
-/** 同 id 已装清单查询(sendSync,极小)。 */
+/** 详情页更新按实例键精确查找。 */
 function findInstalled(id: string): InstalledGhost | null {
   try {
     const { ghosts } = window.electronAPI.ghosts.listSync();
-    return ghosts.find((g) => g.manifest.id === id) ?? null;
+    return findInstalledGhostByInstanceId(ghosts, id) ?? null;
   } catch {
     return null;
   }
 }
 
-/** 确认 + 原位更新(installed 是当前已装版本,manifest 是新文件的身份卡)。 */
-async function confirmAndRunUpdate(
+/** 拖入或双击只更新 local 开发副本，不选中市场或企业实例。 */
+function findInstalledLocalForFile(ghostId: string): InstalledGhost | null {
+  try {
+    const { ghosts } = window.electronAPI.ghosts.listSync();
+    return findInstalledLocalGhostForFileImport(ghosts, ghostId);
+  } catch {
+    return null;
+  }
+}
+
+/** 原位更新；Main 负责校验包摘要并延续启用状态。 */
+async function runUpdate(
   lizFilePath: string,
-  manifest: GhostManifest,
-  trust: GhostTrustInfo,
   packageSha256: string,
   installed: InstalledGhost,
   deps: InstallFlowDeps,
 ): Promise<void> {
-  const { t, confirm } = deps;
-  // 权限 diff:只把新增/移除的权限亮给用户,不变项折叠计数。
-  const diff = diffGhostPermissionItems(installed.manifest, manifest);
-  const ok = await confirm({
-    title: t('settings.ghosts.updateConfirm.title', { name: manifest.name }),
-    description: t('settings.ghosts.updateConfirm.body', {
-      from: installed.manifest.version,
-      to: manifest.version,
-    }),
-    content: <GhostUpdateReview trust={trust} diff={diff} />,
-    maxWidth: GHOST_CONFIRM_MAX_WIDTH,
-    confirmText: t('settings.ghosts.updateConfirm.confirm'),
-    cancelText: t('settings.ghosts.updateConfirm.cancel'),
-  });
-  if (!ok) return;
+  const { t } = deps;
   try {
     const { ghost } = await window.electronAPI.ghosts.update(lizFilePath, {
       expectedPackageSha256: packageSha256,
+      expectedInstalledApproval: ghostInstallApprovalToken(installed.approval),
+      expectedInstalledInstanceId: installedGhostStoragePart(installed),
     });
     toast.success(
       t('settings.ghosts.toast.updated', {
@@ -110,137 +78,100 @@ async function confirmAndRunUpdate(
       }),
     );
   } catch (err) {
-    toast.error(t(ghostInstallErrorKey(extractIpcError(err)?.code)));
+    await showInstallError(err, deps);
   }
 }
 
-export async function confirmAndInstallGhost(
+export async function installGhostFromFile(
   lizFilePath: string,
   deps: InstallFlowDeps,
 ): Promise<void> {
-  const { t, confirmWithCheckbox } = deps;
+  const { t } = deps;
 
-  // 1) 只验不装,拿身份卡;坏文件在这一步就被拒,不会弹确认。
+  // 1) 只验不装,拿身份卡;坏文件在这一步就被拒,不会产生安装副作用。
   let manifest: GhostManifest;
-  let trust: GhostTrustInfo;
   let packageSha256: string;
   try {
     const inspected = await window.electronAPI.ghosts.inspect(lizFilePath);
     manifest = inspected.manifest;
-    trust = inspected.trust;
     packageSha256 = inspected.packageSha256;
   } catch (err) {
-    toast.error(t(ghostInstallErrorKey(extractIpcError(err)?.code)));
+    await showInstallError(err, deps);
     return;
   }
 
   // 1.5) 同 id 已装 → 转更新分支(拖入/双击/装入按钮选到新版包时不再报
-  // "已经注入",直接给换版确认)。
-  const installed = findInstalled(manifest.id);
+  // "已经注入",直接原位更新)。
+  const installed = findInstalledLocalForFile(manifest.id);
   if (installed) {
-    await confirmAndRunUpdate(lizFilePath, manifest, trust, packageSha256, installed, deps);
+    await runUpdate(lizFilePath, packageSha256, installed, deps);
     return;
   }
 
-  // 2) 确认弹窗:自我介绍、作者/版本、权限清单分层展示。
-  // 作者自由填写的工具长说明默认折叠;敏感权限仍直接展示。详情区限高滚动,
-  // 不再让内容把整个弹窗撑出屏幕。
-  // 身份卡自称的作者也如实展示(有才显示,避免"作者 ·"空段)。
-  const factsLine = manifest.author
-    ? t('settings.ghosts.installConfirm.metaWithAuthor', {
-        author: manifest.author,
-        version: manifest.version,
-      })
-    : t('settings.ghosts.installConfirm.meta', { version: manifest.version });
-  // "立即开启"勾选(2026-07-25 Lizi 定案,改自 2026-07-09 的默认不勾):
-  // 默认勾选 = 装入即带电;用户显式取消勾选才装成沉睡。确认弹窗本身
-  // 仍是授权边界 —— 权限清单如实展示,点"装入"即同意运行。
-  // tab 型插件(panel.position:'tab')在入口能打开插件页面板时,勾选语义
-  // 升级为「立即开启并打开面板」——面板收束后页签面板只住在插件页,
-  // 不再创建右侧栏 ghost 页签;入口给不出面板宿主就不许诺"打开"。
+  // 用户通过文件选择／拖入／双击发起安装，Main 会先弹确认框。安装后默认启用；
+  // tab 型插件在入口能提供页面板宿主时直接打开。
   const willOpenPanel = manifest.panel?.position === 'tab' && deps.openPluginPanel !== undefined;
-  const { ok, checked: enable } = await confirmWithCheckbox({
-    title: t('settings.ghosts.installConfirm.title', { name: manifest.name }),
-    content: (
-      <GhostInstallReview
-        description={manifest.description}
-        meta={factsLine}
-        trust={trust}
-        items={ghostPermissionItems(manifest)}
-      />
-    ),
-    maxWidth: GHOST_CONFIRM_MAX_WIDTH,
-    confirmText: t('settings.ghosts.installConfirm.confirm'),
-    cancelText: t('settings.ghosts.installConfirm.cancel'),
-    checkboxLabel: t(
-      willOpenPanel
-        ? 'settings.ghosts.installConfirm.enableNowOpenPanel'
-        : 'settings.ghosts.installConfirm.enableNow',
-    ),
-    checkboxDefaultChecked: true,
-  });
-  if (!ok) return;
-
-  // 3) 真装(main 侧同一主体:来源校验 + 落盘 + 停靠)。Node 高风险提示
-  // 已在上面的权限清单里如实展示,不再有 Main 原生二次确认。
   try {
     const { ghost } = await window.electronAPI.ghosts.install(lizFilePath, {
-      enable,
+      enable: true,
       expectedPackageSha256: packageSha256,
     });
-    toast.success(
-      enable
-        ? t('settings.ghosts.toast.installed', { name: ghost.manifest.name })
-        : t('settings.ghosts.toast.installedAsleep', { name: ghost.manifest.name }),
-    );
-    if (enable && willOpenPanel) {
-      // 兑现勾选文案:进入插件页并打开该插件的页签面板。
-      deps.openPluginPanel?.(ghost.manifest.id);
+    toast.success(t('settings.ghosts.toast.installed', { name: ghost.manifest.name }));
+    if (willOpenPanel) {
+      deps.openPluginPanel?.(installedGhostStoragePart(ghost));
     }
   } catch (err) {
-    toast.error(t(ghostInstallErrorKey(extractIpcError(err)?.code)));
+    await showInstallError(err, deps);
   }
 }
 
 /**
  * 单意识详情页的「更新版本…」:选文件 → 验身 → 必须与当前意识同 id
- * (选错别的意识的包直接拒,不做"顺手装成新意识"的隐式行为)→ 确认 → 更新。
+ * (选错别的意识的包直接拒,不做"顺手装成新意识"的隐式行为)→ 更新。
  */
 export async function pickAndUpdateGhost(expectedId: string, deps: InstallFlowDeps): Promise<void> {
   const { t } = deps;
   const picked = await window.electronAPI.ghosts.pickFile().catch(() => null);
   if (!picked || 'canceled' in picked) return;
 
+  const installed = findInstalled(expectedId);
   let manifest: GhostManifest;
-  let trust: GhostTrustInfo;
   let packageSha256: string;
   try {
-    const inspected = await window.electronAPI.ghosts.inspect(picked.filePath);
+    const inspected = await window.electronAPI.ghosts.inspect(
+      picked.filePath,
+      installed
+        ? {
+            expectedInstalledInstanceId: installedGhostStoragePart(installed),
+            expectedInstalledApproval: ghostInstallApprovalToken(installed.approval),
+          }
+        : undefined,
+    );
     manifest = inspected.manifest;
-    trust = inspected.trust;
     packageSha256 = inspected.packageSha256;
   } catch (err) {
-    toast.error(t(ghostInstallErrorKey(extractIpcError(err)?.code)));
+    await showInstallError(err, deps);
     return;
   }
-  if (manifest.id !== expectedId) {
+  if (installed && manifest.id !== installed.manifest.id) {
+    toast.error(
+      t('settings.ghosts.errors.updateIdMismatch', {
+        id: manifest.id,
+        expected: installed.manifest.id,
+      }),
+    );
+    return;
+  }
+  if (!installed && manifest.id !== expectedId) {
     toast.error(
       t('settings.ghosts.errors.updateIdMismatch', { id: manifest.id, expected: expectedId }),
     );
     return;
   }
-  const installed = findInstalled(expectedId);
   if (!installed) {
     // 详情页开着的意识刚被别处抽离——极端竞态,按通用错误提示。
     toast.error(t('settings.ghosts.errors.generic'));
     return;
   }
-  await confirmAndRunUpdate(
-    picked.filePath,
-    manifest,
-    trust,
-    packageSha256,
-    installed,
-    deps,
-  );
+  await runUpdate(picked.filePath, packageSha256, installed, deps);
 }

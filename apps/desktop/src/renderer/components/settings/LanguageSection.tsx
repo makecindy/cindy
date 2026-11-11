@@ -1,99 +1,99 @@
 /**
  * LanguageSection — Settings 页"显示语言"区块。
  *
- * 5 个 pill 选项 (Auto + 4 种具体语言) 横排，cardstyle 与 NotificationSection 同级
- * (rounded 12 / Card bg / 1px Board / padding 20)。选中态参考 SettingsView 的 tab：
- * 选中 = 卡片选中色 + 1px 边框 + 中粗；未选 = 透明 + hover 浅底。
- *
- * 设计上与 Theme 不同 —— Theme 是三张大预览卡 (有视觉差异)，Language 是 5 个文本 pill
- * (每项之间无视觉预览差，纯文字)，所以选 pill 而非 ThemeCard。
+ * 语言选项使用单个下拉菜单，避免未来增加语言后设置卡片被横向选项撑开。
+ * 文言（及以后其它古典版本）在菜单里只占一项；选中后同一张卡片下方多出一行，
+ * 选择字形（简体 / 繁體）与 AI 作答的输出风格。
  */
 
-import { useCallback } from 'react';
 import { useTranslation } from 'react-i18next';
+import type { ClassicalReplyStyleId } from '@cindy/maker-shared/classical-reply';
+import { classicalStyleOptions, languageSettings } from './LanguageSection.settings-search';
+import { Select } from '@/components/ui/select';
+import { SettingsCard, SettingsRow, SettingsSection } from '@/components/ui/settings-rows';
 
-import { cn } from '@/lib/utils';
 import { useLocale } from '@/hooks/useLocale';
-import { SUPPORTED_LOCALES, type LocalePreference } from '@/i18n';
+import type { LocalePreference } from '@/i18n';
+import { isClassicalLocale, type ClassicalLocale } from '../../../shared/locale';
 
-const LANGUAGE_OPTIONS: ReadonlyArray<LocalePreference> = ['system', ...SUPPORTED_LOCALES];
+/** The menu's single entry for the classical editions. */
+const CLASSICAL_OPTION = 'classical';
+type LanguageOption = LocalePreference | typeof CLASSICAL_OPTION;
+
+// 「跟随系统」优先,英语作为第一个显式语言,其余语言按支持列表顺序排列;古典版本合为一项放最后。
 
 export function LanguageSection() {
   const { t } = useTranslation();
-  const { locale, setLocale } = useLocale();
+  const { locale, effectiveLocale, setLocale, classicalStyle, setClassicalStyle } = useLocale();
+  const classical = isClassicalLocale(locale) ? locale : null;
 
-  const handleKeyDown = useCallback(
-    (e: React.KeyboardEvent) => {
-      const idx = LANGUAGE_OPTIONS.indexOf(locale);
-      let nextIdx = idx;
-      if (e.key === 'ArrowRight' || e.key === 'ArrowDown') {
-        e.preventDefault();
-        nextIdx = (idx + 1) % LANGUAGE_OPTIONS.length;
-      } else if (e.key === 'ArrowLeft' || e.key === 'ArrowUp') {
-        e.preventDefault();
-        nextIdx = (idx - 1 + LANGUAGE_OPTIONS.length) % LANGUAGE_OPTIONS.length;
-      } else {
-        return;
-      }
-      setLocale(LANGUAGE_OPTIONS[nextIdx]);
-    },
-    [locale, setLocale],
-  );
+  const chooseLanguage = (option: LanguageOption) => {
+    if (option !== CLASSICAL_OPTION) {
+      setLocale(option);
+      return;
+    }
+    if (classical) return;
+    // First switch keeps the script the user already reads.
+    setLocale(effectiveLocale === 'zh-TW' ? 'zh-Hant-x-lzh' : 'zh-Hans-x-lzh');
+  };
 
   return (
-    <div className="flex flex-col gap-[14px]">
-      <h2 className="text-16 font-medium leading-[1.2] text-[var(--settings-section-title)]">
-        {t('settings.language.title')}
-      </h2>
+    <SettingsSection title={t(languageSettings.language.sectionKey)}>
+      <SettingsCard>
+        <SettingsRow
+          id={languageSettings.language.targetId}
+          title={t(languageSettings.language.titleKey)}
+          hint={t(languageSettings.language.descriptionKey)}
+          trailing={
+            <Select
+              data-setting-id={languageSettings.language.id}
+              value={classical ? CLASSICAL_OPTION : locale}
+              options={languageSettings.language.options.map((option) => ({
+                value: option.value,
+                label: t(option.labelKey),
+              }))}
+              onValueChange={(next) => chooseLanguage(next as LanguageOption)}
+              label={t('settings.language.ariaLabel')}
+              width="md"
+              className="shrink-0"
+            />
+          }
+        />
 
-      <div
-        className={cn(
-          'flex flex-col gap-3 rounded-xl p-5',
-          'bg-[var(--settings-theme-card-bg)]',
-          'border border-[var(--settings-theme-card-border)]',
-        )}
-      >
-        <div className="flex flex-col gap-1">
-          <p
-            className="text-13 font-medium text-[var(--settings-section-sublabel)]"
-            style={{ letterSpacing: '0.12px' }}
-          >
-            {t('settings.language.label')}
-          </p>
-          <p className="text-12 leading-[1.4] text-[var(--settings-section-sublabel)] opacity-70">
-            {t('settings.language.hint')}
-          </p>
-        </div>
-
-        <div
-          className="flex flex-wrap gap-2"
-          role="radiogroup"
-          aria-label={t('settings.language.ariaLabel')}
-        >
-          {LANGUAGE_OPTIONS.map((opt) => {
-            const selected = locale === opt;
-            return (
-              <button
-                key={opt}
-                type="button"
-                role="radio"
-                aria-checked={selected}
-                tabIndex={selected ? 0 : -1}
-                onClick={() => setLocale(opt)}
-                onKeyDown={handleKeyDown}
-                className={cn(
-                  'rounded-full px-4 py-1.5 text-13 transition-colors',
-                  selected
-                    ? 'bg-[var(--settings-menu-bg-selected)] font-medium text-[var(--settings-menu-text-selected)] border border-[var(--settings-menu-border-selected)]'
-                    : 'border border-transparent text-[var(--settings-menu-text)] hover:bg-[var(--settings-menu-bg-hover)]',
-                )}
-              >
-                {t(`settings.language.options.${opt}`)}
-              </button>
-            );
-          })}
-        </div>
-      </div>
-    </div>
+        {classical ? (
+          <SettingsRow
+            id={languageSettings.classical.targetId}
+            title={t(languageSettings.classical.titleKey)}
+            hint={t(languageSettings.classical.descriptionKey)}
+            trailing={
+              <div className="flex w-[320px] max-w-full shrink-0 flex-row gap-2">
+                <Select
+                  data-setting-id={languageSettings.classical.id}
+                  value={classical}
+                  options={languageSettings.classical.options.map((script) => ({
+                    value: script.value,
+                    label: t(script.labelKey),
+                  }))}
+                  onValueChange={(next) => setLocale(next as ClassicalLocale)}
+                  label={t('settings.language.classical.scriptAriaLabel')}
+                  className="w-[112px] shrink-0"
+                />
+                <Select
+                  data-setting-id={languageSettings.classical.id}
+                  value={classicalStyle}
+                  options={classicalStyleOptions.map((style) => ({
+                    value: style.value,
+                    label: t(style.labelKey),
+                  }))}
+                  onValueChange={(next) => setClassicalStyle(next as ClassicalReplyStyleId)}
+                  label={t('settings.language.classical.styleAriaLabel')}
+                  className="flex-1"
+                />
+              </div>
+            }
+          />
+        ) : null}
+      </SettingsCard>
+    </SettingsSection>
   );
 }

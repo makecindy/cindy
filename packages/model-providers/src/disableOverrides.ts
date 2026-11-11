@@ -43,3 +43,26 @@ export function isModelDisabled(
 ): boolean {
   return access?.disabledModels?.[modelDisableKey(providerId, modelId)] === true;
 }
+
+/**
+ * 兼容媒体模型从裸 ID 升级为带 namespace 的目录 ID。只有 basename 在当前候选中
+ * 唯一对应一个 namespaced ID 时才继承旧 override；有歧义时保持精确匹配语义。
+ */
+export function isModelDisabledWithUniqueLegacyBasename(
+  access: ModelDisableOverrides | undefined,
+  providerId: string,
+  modelId: string,
+  candidateModelIds: readonly string[],
+): boolean {
+  if (isModelDisabled(access, providerId, modelId)) return true;
+  const slash = modelId.lastIndexOf('/');
+  if (slash < 0 || slash === modelId.length - 1) return false;
+  const basename = modelId.slice(slash + 1);
+  if (!isModelDisabled(access, providerId, basename)) return false;
+  const matches = new Set(
+    candidateModelIds.filter(
+      (candidate) => candidate.slice(candidate.lastIndexOf('/') + 1) === basename,
+    ),
+  );
+  return matches.size === 1 && matches.has(modelId);
+}

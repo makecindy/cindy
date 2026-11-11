@@ -55,7 +55,8 @@ function toFsPath(repoRoot: string, gitPath: string): string {
 }
 
 function baseDirForGitPath(repoRoot: string, gitPath: string): string {
-  return path.dirname(toFsPath(repoRoot, gitPath));
+  const pathApi = path.posix.isAbsolute(repoRoot) ? path.posix : path;
+  return pathApi.dirname(toFsPath(repoRoot, gitPath));
 }
 
 function errorMessage(err: unknown): string {

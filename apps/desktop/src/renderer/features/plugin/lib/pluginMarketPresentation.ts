@@ -5,13 +5,24 @@
  * public Plugin is installed by default is an installation policy, not a source.
  * An installed Ghost without a matching market record remains local.
  */
+import type { GhostInstallApproval } from '../../../../shared/ghost';
+import {
+  createPluginLogicalIdentity,
+  findInstalledGhostByIdentity,
+  hasDeliveryNamespace,
+  installedGhostStoragePart,
+} from '../../../../shared/pluginIdentity';
 import type { PluginMarketItem } from '../../../../shared/pluginMarket';
 
-export type PluginPresentationOrigin =
-  | 'public'
-  | 'organization'
-  | 'local'
-  | 'custom';
+export type PluginPresentationOrigin = 'public' | 'organization' | 'local' | 'custom';
+
+/** Public contributors stay anonymous even when an older payload includes an author. */
+export function pluginPresentationAuthor(
+  item: Pick<PluginMarketItem, 'scope' | 'sourceType' | 'publisherKind' | 'author'>,
+): string | null {
+  return item.sourceType === 'server' && item.scope === 'public' && item.publisherKind !== 'official'
+    ? null : item.author;
+}
 
 export type PluginCatalogPresentationItem<TInstalled> =
   { kind: 'installed'; item: TInstalled } | { kind: 'market'; item: PluginMarketItem };
@@ -41,6 +52,89 @@ export function pluginUpdateForInstalledVersion(
   item: PluginMarketItem | null | undefined,
 ): PluginMarketItem | null {
   return item?.installState === 'update-available' ? item : null;
+}
+
+/**
+ * Whether the market install flow may run against an already-installed Plugin.
+ *
+ * A pending release is the usual case. The same release is also allowed when the
+ * installation record is incomplete: reinstalling that exact release restores
+ * the Host receipt. Without an approved baseline Main cannot prove the previous
+ * permissions, so it asks the user as for a first install. A verified install at
+ * the current release has nothing to recover.
+ */
+export function marketReviewTargetsInstalledGhost(
+  item: Pick<PluginMarketItem, 'installState'> | null | undefined,
+  approvalState: GhostInstallApproval['state'] | undefined,
+): boolean {
+  if (item?.installState === 'update-available') return true;
+  return (
+    item?.installState === 'installed' &&
+    approvalState !== undefined &&
+    approvalState !== 'approved'
+  );
+}
+
+/**
+ * Where an unverifiable install is recovered. Market-owned installs redownload
+ * the bound release; anything else needs the user to point at a `.cindy` package.
+ * Both routes revalidate real bytes and restore the installation record without
+ * creating a separate capability authorization flow.
+ */
+export function ghostReapprovalRoute(
+  item: Pick<PluginMarketItem, 'installState'> | null | undefined,
+): 'market' | 'local-package' {
+  return item?.installState === 'installed' || item?.installState === 'update-available'
+    ? 'market'
+    : 'local-package';
+}
+
+/**
+ * Bind a market row to the installed instance it is allowed to update.
+ *
+ * An explicit namespace must hit that logical identity. A legacy row
+ * (missing namespace) binds the physical root, including an
+ * in-place stamped plugin whose storage part is still the bare ghostId. It must
+ * not fall through to a `_ns/...` twin.
+ */
+export function findInstalledGhostForMarketItem<
+  T extends {
+    manifest: { id: string };
+    dir?: string;
+    namespace?: string | null;
+  },
+>(ghosts: readonly T[], item: Pick<PluginMarketItem, 'ghostId' | 'namespace'>): T | undefined {
+  const sameId = ghosts.filter((ghost) => ghost.manifest.id === item.ghostId);
+  if (sameId.length === 0) return undefined;
+  if (hasDeliveryNamespace(item)) {
+    return findInstalledGhostByIdentity(
+      sameId,
+      createPluginLogicalIdentity(item.namespace, item.ghostId),
+    );
+  }
+  return sameId.find((ghost) => installedGhostStoragePart(ghost) === item.ghostId);
+}
+
+/** True when this market row is the update/origin route for this installed instance. */
+export function marketItemMatchesInstalledGhost(
+  item: Pick<PluginMarketItem, 'ghostId' | 'namespace'>,
+  ghost: { manifest: { id: string }; dir?: string; namespace?: string | null },
+): boolean {
+  if (item.ghostId !== ghost.manifest.id) return false;
+  if (hasDeliveryNamespace(item) && hasDeliveryNamespace(ghost)) {
+    return item.namespace === ghost.namespace;
+  }
+  if (hasDeliveryNamespace(item) && item.namespace !== null) return false;
+  return installedGhostStoragePart(ghost) === item.ghostId;
+}
+
+export function marketItemForInstalledGhost(
+  items: readonly PluginMarketItem[],
+  ghost: { manifest: { id: string }; dir?: string; namespace?: string | null },
+): PluginMarketItem | null {
+  return items.find((item) =>
+    (item.installState === 'installed' || item.installState === 'update-available') &&
+    marketItemMatchesInstalledGhost(item, ghost)) ?? null;
 }
 
 /**
@@ -84,4 +178,13 @@ export function orderPluginCatalogItems<TInstalled extends { id: string }>(
     ordered.push({ kind: 'installed', item: installedItem });
   }
   return ordered;
+}
+
+/** 目录不按名字推测账号依赖；包确认和运行时根据真实声明处理。 */
+export function canOfferMarketInstall(
+  mode: 'signed-out' | 'local' | 'cloud',
+  _ghostId: string,
+): boolean {
+  if (mode === 'signed-out') return false;
+  return true;
 }

@@ -7,19 +7,35 @@
  */
 
 import { EventEmitter } from 'node:events';
+import { OperationBudget } from '../../utils/operationBudget';
+import { enqueueGitRepoWrite } from '../../git-snapshot/gitRepoWriteQueue';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 type ExecCb = (err: Error | null, stdout: string, stderr: string) => void;
 
 const mocks = vi.hoisted(() => ({
   execFile: vi.fn(),
+  spawn: vi.fn(),
   killProcessTree: vi.fn(),
+  withCrossProcessLock: vi.fn(),
 }));
 
-vi.mock('node:child_process', () => ({ execFile: mocks.execFile }));
+vi.mock('node:child_process', () => ({ execFile: mocks.execFile, spawn: mocks.spawn }));
 vi.mock('../../scheduler-host/proc-util', () => ({ killProcessTree: mocks.killProcessTree }));
+vi.mock('../../device-link/crossProcessLock', () => ({
+  withCrossProcessLock: mocks.withCrossProcessLock,
+}));
+vi.mock('../../logger', () => ({
+  createLogger: () => ({ debug: vi.fn(), info: vi.fn(), warn: vi.fn(), error: vi.fn() }),
+}));
 
-import { gitExec, GitExecError } from '../gitExec';
+import {
+  gitExec,
+  GitExecError,
+  isGitProcessTreeAlive,
+  normalizeSafeDirectorySpelling,
+  safeDirectorySpellings,
+} from '../gitExec';
 
 const realPlatform = process.platform;
 
@@ -32,6 +48,8 @@ type FakeChild = EventEmitter & {
   kill: ReturnType<typeof vi.fn>;
   exitCode: number | null;
   signalCode: string | null;
+  stdout: EventEmitter;
+  stderr: EventEmitter;
 };
 
 interface FakeGit {
@@ -57,6 +75,8 @@ function installExecFileMock(): FakeGit {
   child.kill = vi.fn();
   child.exitCode = null;
   child.signalCode = null;
+  child.stdout = new EventEmitter();
+  child.stderr = new EventEmitter();
   const state: FakeGit = {
     child,
     gitOpts: undefined,
@@ -76,7 +96,7 @@ function installExecFileMock(): FakeGit {
         if (state.psHangUntilTimeout) {
           // 模拟 WMI 挂死:只有 execFile 自身的 timeout 到点才以错误收口
           setTimeout(() => cb!(new Error('powershell query timed out'), '', ''), opts?.timeout ?? 3_000);
-          return {};
+          return new EventEmitter();
         }
         const answer = () => {
           if (state.psTable === null) cb!(new Error('powershell unavailable'), '', '');
@@ -87,7 +107,7 @@ function installExecFileMock(): FakeGit {
         } else {
           answer();
         }
-        return {};
+        return new EventEmitter();
       }
       if (file !== 'git') throw new Error(`unexpected execFile: ${file}`);
       state.gitOpts = opts;
@@ -145,7 +165,26 @@ async function flushMicrotasks() {
 beforeEach(() => {
   vi.useFakeTimers();
   mocks.execFile.mockReset();
+  // Drive the same lifecycle fixtures through spawn's actual stream/close API.
+  mocks.spawn.mockReset().mockImplementation((file, args, opts) => {
+    const child = mocks.execFile(file, args, opts, (error: NodeJS.ErrnoException | null, stdout: string, stderr: string) => {
+      if (stdout) child.stdout.emit('data', Buffer.from(stdout));
+      if (stderr) child.stderr.emit('data', Buffer.from(stderr));
+      if (error && typeof error.code !== 'number') child.emit('error', error);
+      else child.emit('close', error?.code ?? 0, null);
+    });
+    child.stdout ??= new EventEmitter();
+    child.stderr ??= new EventEmitter();
+    return child;
+  });
   mocks.killProcessTree.mockReset();
+  mocks.withCrossProcessLock.mockReset();
+  // 默认按「持锁成功」直通, 让 dubious-ownership 的 read+add 序列可逐步驱动;
+  // 需要验证锁被使用时单独断言 mock 调用即可。
+  mocks.withCrossProcessLock.mockImplementation(
+    (_lockPath: string, _opts: unknown, task: (status: unknown) => Promise<unknown>) =>
+      task({ held: true }),
+  );
 });
 
 afterEach(() => {
@@ -155,6 +194,210 @@ afterEach(() => {
 });
 
 describe('gitExec timeoutMs', () => {
+  // #7351 CI: execFile silently discarded detached. Exercise spawn's actual
+  // boundary and byte streams; the old mock only checked the ignored option.
+  it.each([0, 128])('uses a detached POSIX spawn and preserves UTF-8 output for exit %s', async (code) => {
+    setPlatform('linux');
+    const state = installExecFileMock();
+    const pending = gitExec(['status'], '/repo');
+    expect(mocks.spawn).toHaveBeenCalledWith('git', ['status'], expect.objectContaining({ detached: true }));
+    const bytes = Buffer.from('\u4e2d\u6587');
+    state.child.stdout.emit('data', bytes.subarray(0, 2));
+    state.child.stdout.emit('data', bytes.subarray(2));
+    state.child.stderr.emit('data', Buffer.from('diagnostic'));
+    state.child.emit('close', code, null);
+    const output = { stdout: '\u4e2d\u6587', stderr: 'diagnostic' };
+    if (code === 0) await expect(pending).resolves.toEqual(output);
+    else await expect(pending).rejects.toMatchObject({ ...output, exitCode: code });
+  });
+
+  it.each(['stdout', 'stderr'] as const)('bounds POSIX %s and drains the process group on overflow', async (stream) => {
+    setPlatform('linux');
+    const state = installExecFileMock();
+    const { group } = installProcessKillMock();
+    const pending = gitExec(['status'], '/repo');
+    const observed = probe(pending);
+    state.child[stream].emit('data', Buffer.alloc(16 * 1024 * 1024 + 1));
+    await flushMicrotasks();
+    expect(group.signals).toContain('SIGTERM');
+    expect(observed.settled).toBe(false);
+    group.alive = false;
+    await vi.advanceTimersByTimeAsync(100);
+    await expect(pending).rejects.toMatchObject({
+      cleanupUnconfirmed: false, cause: { code: 'ERR_CHILD_PROCESS_STDIO_MAXBUFFER' },
+    });
+  });
+
+  // #7259: unit tier. Explicit abort must kill the tree, not only drop its
+  // promise; a blocked child is the minimal reproduction. No wall-clock waits.
+  it.each(['win32', 'linux'] as const)('abort terminates the %s tree before settling', async (platform) => {
+    setPlatform(platform);
+    const state = installExecFileMock();
+    state.psTable = [];
+    const { group } = installProcessKillMock();
+    let finish!: () => void;
+    mocks.killProcessTree.mockImplementation((_pid, _child, done) => { finish = done; });
+    const controller = new AbortController();
+    const pending = gitExec(['status'], undefined, { signal: controller.signal });
+    const observed = probe(pending);
+    controller.abort();
+    await flushMicrotasks();
+    expect(observed.settled).toBe(false);
+    if (platform === 'win32') {
+      expect(mocks.killProcessTree).toHaveBeenCalledOnce();
+      state.gitCb!(null, 'late success', '');
+      finish();
+    } else {
+      expect(group.signals).toContain('SIGTERM');
+      group.alive = false;
+      await vi.advanceTimersByTimeAsync(100);
+    }
+    await expect(pending).rejects.toMatchObject({ aborted: true, cleanupUnconfirmed: false });
+  });
+
+  it('does not spawn Git for an already-aborted request', async () => {
+    installExecFileMock();
+    const controller = new AbortController();
+    controller.abort(new Error('stopped'));
+    await expect(gitExec(['add', '-A'], undefined, { signal: controller.signal })).rejects.toThrow('stopped');
+    expect(mocks.execFile).not.toHaveBeenCalled();
+  });
+
+  it('cleans the automatic status process tree when its output overflows', async () => {
+    setPlatform('linux');
+    const state = installExecFileMock();
+    const { group } = installProcessKillMock();
+    const pending = gitExec(['status'], undefined, { signal: new AbortController().signal });
+    const observed = probe(pending);
+    state.gitCb!(Object.assign(new Error('maxBuffer exceeded'), { code: 'ERR_CHILD_PROCESS_STDIO_MAXBUFFER' }), '', '');
+    await flushMicrotasks();
+    expect(group.signals).toContain('SIGTERM');
+    expect(observed.settled).toBe(false);
+    group.alive = false;
+    await vi.advanceTimersByTimeAsync(100);
+    await expect(pending).rejects.toMatchObject({
+      cleanupUnconfirmed: false, cause: { code: 'ERR_CHILD_PROCESS_STDIO_MAXBUFFER' },
+    });
+  });
+
+  it('quarantines only the affected repository when automatic cleanup cannot be confirmed', async () => {
+    setPlatform('win32');
+    installExecFileMock();
+    const budget = new OperationBudget(50);
+    const pending = budget.run(() => enqueueGitRepoWrite('/uncertain-snapshot', () => gitExec(['status'], '/uncertain-snapshot')));
+    probe(pending);
+    await vi.advanceTimersByTimeAsync(3_050);
+    await expect(pending).rejects.toThrow('deadline');
+    const write = vi.fn(async () => {});
+    await expect(enqueueGitRepoWrite('/uncertain-snapshot', write)).rejects.toThrow('cleanup unconfirmed');
+    expect(write).not.toHaveBeenCalled();
+    await enqueueGitRepoWrite('/independent-snapshot', write);
+    expect(write).toHaveBeenCalledOnce();
+  });
+  // Regression: manual fetch used to die at 30s even while downloading. Existing
+  // tests only cover absolute deadlines. Unit tier: real gitExec, fake child/time.
+  it('keeps advancing Git progress alive beyond the idle budget, but repeated progress still times out', async () => {
+    setPlatform('win32');
+    const state = installExecFileMock();
+    state.psTable = [];
+    mocks.killProcessTree.mockImplementation((_pid, _child, done) => done?.());
+    const result = gitExec(['fetch', '--progress'], undefined, { idleTimeoutMs: 60_000 });
+    const rejected = expect(result).rejects.toMatchObject({ timedOut: true });
+    await vi.advanceTimersByTimeAsync(50_000);
+    state.child.stderr.emit('data', Buffer.from('Receiving objects: 1% (1/100), 10.00 Ki'));
+    state.child.stderr.emit('data', Buffer.from('B | 1.00 KiB/s\r'));
+    await vi.advanceTimersByTimeAsync(50_000);
+    state.child.stderr.emit('data', Buffer.from('Receiving objects: 1% (1/100), 20.00 KiB | 1.00 KiB/s\r'));
+    await vi.advanceTimersByTimeAsync(50_000);
+    expect(mocks.killProcessTree).not.toHaveBeenCalled();
+    state.child.stderr.emit('data', Buffer.from('Receiving objects: 1% (1/100), 20.00 KiB | 2.00 KiB/s\r'));
+    state.child.stderr.emit('data', Buffer.from('remote: keepalive\n'));
+    await vi.advanceTimersByTimeAsync(10_000);
+    expect(mocks.killProcessTree).toHaveBeenCalledTimes(1);
+    state.gitCb!(new Error('terminated'), '', '');
+    await rejected;
+    expect(mocks.killProcessTree).toHaveBeenCalledTimes(1);
+  });
+
+  it('cleans up an idle watchdog on success and still honors an explicit absolute deadline', async () => {
+    setPlatform('win32');
+    const state = installExecFileMock();
+    state.psTable = [];
+    mocks.killProcessTree.mockImplementation((_pid, _child, done) => done?.());
+    const success = gitExec(['fetch', '--progress'], undefined, { idleTimeoutMs: 60_000 });
+    state.gitCb!(null, 'done', '');
+    await expect(success).resolves.toMatchObject({ stdout: 'done' });
+    await vi.advanceTimersByTimeAsync(60_000);
+    expect(mocks.killProcessTree).not.toHaveBeenCalled();
+    const bounded = gitExec(['fetch', '--progress'], undefined, { idleTimeoutMs: 60_000, timeoutMs: 30_000 });
+    const rejected = expect(bounded).rejects.toMatchObject({ timedOut: true });
+    await vi.advanceTimersByTimeAsync(20_000);
+    state.child.stderr.emit('data', 'Resolving deltas: 10% (1/10)\r');
+    await vi.advanceTimersByTimeAsync(10_000);
+    state.gitCb!(new Error('terminated'), '', '');
+    await rejected;
+  });
+
+  it('keeps a dead checkout root leased while a Windows descendant remains', async () => {
+    setPlatform('win32');
+    const state = installExecFileMock();
+    state.psTable = [{ ProcessId: 4343, ParentProcessId: 4242, CreationDate: 'x' }];
+    vi.spyOn(process, 'kill').mockImplementation(() => {
+      throw Object.assign(new Error('gone'), { code: 'ESRCH' });
+    });
+    await expect(isGitProcessTreeAlive(4242)).resolves.toBe(true);
+  });
+
+  it('keeps a lease when the Windows snapshot has already lost the checkout root', async () => {
+    setPlatform('win32');
+    const state = installExecFileMock();
+    state.psTable = [];
+    vi.spyOn(process, 'kill').mockImplementation(() => {
+      throw Object.assign(new Error('gone'), { code: 'ESRCH' });
+    });
+    await expect(isGitProcessTreeAlive(4242)).resolves.toBe(true);
+  });
+
+  it('records the spawned checkout PID before completion', async () => {
+    const state = installExecFileMock();
+    const onSpawn = vi.fn();
+    const result = gitExec(['checkout', 'HEAD', '--', '.'], undefined, { onSpawn });
+    expect(onSpawn).toHaveBeenCalledExactlyOnceWith(state.child.pid);
+    state.gitCb!(null, '', '');
+    await expect(result).resolves.toEqual({ stdout: '', stderr: '' });
+  });
+
+  it('stdout ENOTCONN 先完成整树清理，再收口为 GitExecError', async () => {
+    setPlatform('win32');
+    const state = installExecFileMock();
+    state.psTable = [];
+    let finishTreeCleanup!: () => void;
+    mocks.killProcessTree.mockImplementation(
+      (_pid: number, _child: unknown, onSettled?: () => void) => {
+        finishTreeCleanup = onSettled ?? (() => undefined);
+      },
+    );
+    const pending = gitExec(['status'], '/repo');
+    const status = probe(pending);
+    state.child.stdout.emit(
+      'error',
+      Object.assign(new Error('read ENOTCONN'), { code: 'ENOTCONN', syscall: 'read' }),
+    );
+    await flushMicrotasks();
+    await flushMicrotasks();
+    expect(mocks.killProcessTree).toHaveBeenCalledWith(4242, state.child, expect.any(Function));
+
+    // execFile 回调只证明继承的 stdio 已放手；树杀尚未确认前不得向调用方返回。
+    state.gitCb!(new Error('killed'), '', '');
+    await flushMicrotasks();
+    expect(status.settled).toBe(false);
+    finishTreeCleanup();
+
+    await expect(pending).rejects.toMatchObject({
+      cause: expect.objectContaining({ code: 'ENOTCONN', syscall: 'read' }),
+    });
+  });
+
   it('Windows 超时 → 快照确认 git 树幸存者(含 git.exe 已退但后代仍活)全部消失才收口', async () => {
     setPlatform('win32');
     const state = installExecFileMock();
@@ -173,6 +416,7 @@ describe('gitExec timeoutMs', () => {
       name: 'GitExecError',
       exitCode: null,
       stderr: expect.stringContaining('timed out after 1000ms'),
+      timedOut: true,
     });
     vi.advanceTimersByTime(1000);
     await flushMicrotasks();
@@ -539,5 +783,269 @@ describe('gitExec timeoutMs', () => {
     state.gitCb!(null, 'ok', '');
     await expect(p).resolves.toEqual({ stdout: 'ok', stderr: '' });
     expect(vi.getTimerCount()).toBe(0);
+  });
+});
+
+describe('gitExec dubious-ownership safe.directory', () => {
+  /**
+   * 只按调用顺序捕获每次 git execFile 的 args 与回调(不 spawn 真进程),
+   * 供 dubious-ownership 的「幂等 add + 重试一次」路径逐步驱动。
+   */
+  function installSequenceMock() {
+    const calls: string[][] = [];
+    const cbs: ExecCb[] = [];
+    mocks.execFile.mockImplementation(
+      (file: string, args: string[], _opts: unknown, cb?: ExecCb) => {
+        if (file !== 'git') throw new Error(`unexpected execFile: ${file}`);
+        calls.push(args as string[]);
+        cbs.push(cb as ExecCb);
+        return new EventEmitter();
+      },
+    );
+    return { calls, cbs };
+  }
+
+  async function flushDeep() {
+    for (let i = 0; i < 20; i += 1) await Promise.resolve();
+  }
+
+  // PR #6544: caller deadlines must include ownership repair, not restart for
+  // config/read/add/retry. Existing timeoutMs tests cover only individual steps.
+  // Production entry gitExec, unit tier: virtual 4999ms realpath + slow repair.
+  it.each(['read', 'add', 'retry'])('shares the absolute deadline through ownership %s', async (stage) => {
+    setPlatform('linux');
+    const { calls, cbs } = installSequenceMock();
+    mocks.withCrossProcessLock.mockImplementation(async (_lp, _opts, task) => {
+      await new Promise((resolve) => setTimeout(resolve, 500));
+      return task({ held: true });
+    });
+    await vi.advanceTimersByTimeAsync(4_999);
+    let failure: unknown;
+    const pending = gitExec(['rev-parse'], '/repo', { timeoutMs: 5_001, deadlineAtMs: 10_000 })
+      .catch((error) => { failure = error; });
+    try {
+      await vi.advanceTimersByTimeAsync(4_000);
+      cbs[0](new Error('dubious'), '', "fatal: detected dubious ownership in repository at '/repo'");
+      await vi.advanceTimersByTimeAsync(500);
+      if (stage !== 'read') {
+        await vi.advanceTimersByTimeAsync(100);
+        cbs[1](Object.assign(new Error('absent'), { code: 1 }), '', '');
+        await flushDeep();
+      }
+      if (stage === 'retry') {
+        await vi.advanceTimersByTimeAsync(100);
+        cbs[2](null, '', '');
+        await flushDeep();
+      }
+      await vi.advanceTimersByTimeAsync(10_000 - performance.now());
+      expect(failure).toMatchObject({ timedOut: true });
+      await pending;
+      expect(calls).toHaveLength(stage === 'read' ? 2 : stage === 'add' ? 3 : 4);
+      expect(vi.getTimerCount()).toBe(0);
+    } finally {
+      cbs.at(-1)?.(null, '/repo\n', '');
+      await vi.runAllTimersAsync();
+      await pending;
+    }
+  });
+
+  it.each([false, true])('caps lock waiting and never starts config after expiry (held=%s)', async (held) => {
+    const { calls, cbs } = installSequenceMock();
+    mocks.withCrossProcessLock.mockImplementation(async (_lp, opts, task) => {
+      await new Promise((resolve) => setTimeout(resolve, opts.waitMs));
+      return task({ held, reason: held ? undefined : 'busy' });
+    });
+    let failure: unknown;
+    const pending = gitExec(['rev-parse'], '/repo', { timeoutMs: 10_000, deadlineAtMs: 10_000 })
+      .catch((error) => { failure = error; });
+    try {
+      await vi.advanceTimersByTimeAsync(9_999);
+      cbs[0](new Error('dubious'), '', "fatal: detected dubious ownership in repository at '/repo'");
+      await vi.advanceTimersByTimeAsync(1);
+      expect(failure).toMatchObject({ timedOut: true });
+      expect(mocks.withCrossProcessLock.mock.calls[0][1].waitMs).toBe(1);
+      expect(calls).toEqual([['rev-parse']]);
+      await pending;
+    } finally {
+      await vi.runAllTimersAsync();
+      await pending;
+    }
+  });
+
+  it('completes ownership repair and retry within the shared deadline', async () => {
+    const { calls, cbs } = installSequenceMock();
+    mocks.withCrossProcessLock.mockImplementation(async (_lp, _opts, task) => {
+      await new Promise((resolve) => setTimeout(resolve, 500));
+      return task({ held: true });
+    });
+    await vi.advanceTimersByTimeAsync(4_999);
+    const pending = gitExec(['rev-parse'], '/repo', { timeoutMs: 5_001, deadlineAtMs: 10_000 });
+    await vi.advanceTimersByTimeAsync(4_000);
+    cbs[0](new Error('dubious'), '', "fatal: detected dubious ownership in repository at '/repo'");
+    await vi.advanceTimersByTimeAsync(500);
+    await vi.advanceTimersByTimeAsync(100);
+    cbs[1](Object.assign(new Error('absent'), { code: 1 }), '', '');
+    await flushDeep();
+    await vi.advanceTimersByTimeAsync(100);
+    cbs[2](null, '', '');
+    await flushDeep();
+    await vi.advanceTimersByTimeAsync(100);
+    cbs[3](null, '/repo\n', '');
+    await expect(pending).resolves.toEqual({ stdout: '/repo\n', stderr: '' });
+    expect(calls).toEqual([
+      ['rev-parse'],
+      ['config', '--global', '--get-all', 'safe.directory'],
+      ['config', '--global', '--add', 'safe.directory', '/repo'],
+      ['rev-parse'],
+    ]);
+    expect(vi.getTimerCount()).toBe(0);
+  });
+
+  it('rejects an expired deadline before starting a Git process', async () => {
+    const { calls, cbs } = installSequenceMock();
+    let failure: unknown;
+    const pending = gitExec(['status'], '/repo', { deadlineAtMs: performance.now() })
+      .catch((error) => { failure = error; });
+    try {
+      await flushDeep();
+      expect(failure).toMatchObject({ timedOut: true });
+      expect(calls).toHaveLength(0);
+      await pending;
+    } finally {
+      cbs.at(-1)?.(null, '', '');
+      await pending;
+    }
+  });
+
+  it.each(['read', 'add', 'retry'])('bounds the safe.directory %s stage with the caller timeout', async (stage) => {
+    setPlatform('linux');
+    const { calls, cbs } = installSequenceMock();
+    const pending = gitExec(['rev-parse'], '/repo', { timeoutMs: 100 });
+    const rejected = expect(pending).rejects.toMatchObject({ timedOut: true });
+    cbs[0](new Error('dubious'), '', "fatal: detected dubious ownership in repository at '/repo'");
+    await flushDeep();
+    if (stage !== 'read') {
+      cbs[1](Object.assign(new Error('absent'), { code: 1 }), '', '');
+      await flushDeep();
+    }
+    if (stage === 'retry') {
+      cbs[2](null, '', '');
+      await flushDeep();
+    }
+    const expectedCalls = stage === 'read' ? 2 : stage === 'add' ? 3 : 4;
+    expect(calls).toHaveLength(expectedCalls);
+    await vi.advanceTimersByTimeAsync(100);
+    await rejected;
+    expect(calls).toHaveLength(expectedCalls);
+  });
+
+  it('首次 dubious ownership → 幂等加入 safe.directory 后重试一次', async () => {
+    const { calls, cbs } = installSequenceMock();
+
+    const p = gitExec(['status'], '/repo');
+    expect(calls).toEqual([['status']]);
+    cbs[0](new Error('boom'), '', "fatal: detected dubious ownership in repository at '/repo'");
+    await flushDeep();
+
+    // read+add 必须包在跨进程锁里, 保证并发实例下仍是原子的
+    expect(mocks.withCrossProcessLock).toHaveBeenCalledTimes(1);
+
+    // 读取现有 safe.directory → 未配置(exit 1)按空处理
+    expect(calls[1]).toEqual(['config', '--global', '--get-all', 'safe.directory']);
+    cbs[1](Object.assign(new Error('exit 1'), { code: 1 }), '', '');
+    await flushDeep();
+
+    // 尚不存在 → 幂等 add 一次
+    expect(calls[2]).toEqual(['config', '--global', '--add', 'safe.directory', '/repo']);
+    cbs[2](null, '', '');
+    await flushDeep();
+
+    // 重试原命令
+    expect(calls[3]).toEqual(['status']);
+    cbs[3](null, 'ok', '');
+    await expect(p).resolves.toEqual({ stdout: 'ok', stderr: '' });
+  });
+
+  it('路径已在 safe.directory 中 → 不重复 --add, 直接重试原命令', async () => {
+    const { calls, cbs } = installSequenceMock();
+
+    const p = gitExec(['status'], '/repo');
+    cbs[0](new Error('boom'), '', "fatal: detected dubious ownership in repository at '/repo'");
+    await flushDeep();
+
+    expect(calls[1]).toEqual(['config', '--global', '--get-all', 'safe.directory']);
+    cbs[1](null, '/repo\n', '');
+    await flushDeep();
+
+    // 已存在 → 跳过 --add, 直接重试
+    expect(calls[2]).toEqual(['status']);
+    cbs[2](null, 'ok', '');
+    await expect(p).resolves.toEqual({ stdout: 'ok', stderr: '' });
+    expect(calls.some((a) => a.includes('--add'))).toBe(false);
+  });
+
+  it('--get-all 读取失败(非「键不存在」) → 不 --add, 原错误上抛', async () => {
+    const { calls, cbs } = installSequenceMock();
+
+    const p = gitExec(['status'], '/repo');
+    cbs[0](new Error('boom'), '', "fatal: detected dubious ownership in repository at '/repo'");
+    await flushDeep();
+
+    expect(calls[1]).toEqual(['config', '--global', '--get-all', 'safe.directory']);
+    // 读取错误(exit 3 = 配置文件损坏/锁冲突)不得被当成「未配置」,后续 --add 不得发生
+    const readErr = Object.assign(new Error('bad config'), { code: 3 });
+    cbs[1](readErr, '', 'error: could not lock config file');
+    await flushDeep();
+
+    expect(calls.some((a) => a.includes('--add'))).toBe(false);
+    // 原 dubious-ownership 错误上抛(不再重试)
+    await expect(p).rejects.toMatchObject({
+      stderr: expect.stringContaining('dubious ownership'),
+    });
+  });
+
+  it('未持锁(held:false) → 不做无锁 read+add, 原错误上抛', async () => {
+    const { calls, cbs } = installSequenceMock();
+    mocks.withCrossProcessLock.mockImplementation((_lp, _opts, task) =>
+      task({ held: false, reason: 'busy' }),
+    );
+
+    const p = gitExec(['status'], '/repo');
+    cbs[0](new Error('boom'), '', "fatal: detected dubious ownership in repository at '/repo'");
+    await flushDeep();
+
+    // 锁未拿到 → 不得执行任何 config 读写, 原 dubious-ownership 错误上抛
+    expect(calls).toEqual([['status']]);
+    await expect(p).rejects.toMatchObject({
+      stderr: expect.stringContaining('dubious ownership'),
+    });
+  });
+});
+
+describe('safe.directory path spelling', () => {
+  it('normalizes Windows backslashes to forward slashes', () => {
+    setPlatform('win32');
+    expect(normalizeSafeDirectorySpelling('C:\\repo\\.xdt-worktrees\\s1')).toBe(
+      'C:/repo/.xdt-worktrees/s1',
+    );
+    expect(normalizeSafeDirectorySpelling('C:/repo/.xdt-worktrees/s1')).toBe(
+      'C:/repo/.xdt-worktrees/s1',
+    );
+  });
+
+  it('returns the native spelling only on POSIX', () => {
+    setPlatform('linux');
+    expect(normalizeSafeDirectorySpelling('/repo/.xdt-worktrees/s1')).toBe(
+      '/repo/.xdt-worktrees/s1',
+    );
+    expect(safeDirectorySpellings('/repo/.xdt-worktrees/s1')).toEqual([
+      '/repo/.xdt-worktrees/s1',
+    ]);
+  });
+
+  it('covers both spellings on Windows for exact --fixed-value cleanup', () => {
+    setPlatform('win32');
+    expect(safeDirectorySpellings('C:\\repo\\s1')).toEqual(['C:/repo/s1', 'C:\\repo\\s1']);
+    expect(safeDirectorySpellings('C:/repo/s1')).toEqual(['C:/repo/s1']);
   });
 });

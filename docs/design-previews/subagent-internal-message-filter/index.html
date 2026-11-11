@@ -1,0 +1,222 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Cindy Desktop · 子代理内部消息不再铺进主聊天流(修复前后对比)</title>
+<style>
+  /* ── 色值 1:1 取自 apps/desktop/src/renderer/themes/colors.ts(代码为真相源) ── */
+  :root {
+    --surface:#f8f8f6; --surface-elevated:#ffffff; --surface-chip:#e5e5e5;
+    --border-default:#e5e5e5;
+    --text-primary:#262626; --text-secondary:#737373; --text-tertiary:#a3a3a3;
+    --agent-actions-rail:#DDD6CB;
+  }
+  .dark {
+    --surface:#1f1f1e; --surface-elevated:#2c2c2a; --surface-chip:#3c3c3a;
+    --border-default:#404040;
+    --text-primary:#d4d4d4; --text-secondary:#a3a3a3; --text-tertiary:#737373;
+    --agent-actions-rail:#404040;
+  }
+  * { box-sizing:border-box; margin:0; padding:0; -webkit-font-smoothing:antialiased; }
+  body {
+    font-family:-apple-system,BlinkMacSystemFont,"PingFang SC","Helvetica Neue",sans-serif;
+    background:#111; padding:24px; color:#ddd; line-height:1.5;
+  }
+  h1 { font-size:18px; font-weight:600; margin-bottom:6px; color:#f0f0f0; }
+  .lede { font-size:13px; color:#999; margin-bottom:20px; max-width:1180px; }
+  .lede code { background:#222; padding:1px 5px; border-radius:3px; font-size:12px; }
+
+  .modes { display:flex; flex-direction:column; gap:24px; }
+  .mode-label {
+    font-size:12px; font-weight:600; letter-spacing:.06em; text-transform:uppercase;
+    color:#888; margin-bottom:8px;
+  }
+  .pair { display:grid; grid-template-columns:1fr 1fr; gap:16px; }
+  @media (max-width:900px) { .pair { grid-template-columns:1fr; } }
+
+  .pane { border-radius:10px; overflow:hidden; border:1px solid #333; }
+  .pane-head {
+    font-size:12px; font-weight:600; padding:8px 12px;
+    display:flex; align-items:center; gap:8px;
+  }
+  .pane-head.before { background:#3a2222; color:#ffb4a8; }
+  .pane-head.after  { background:#1f3326; color:#9fe0b4; }
+  .badge {
+    font-size:10px; font-weight:700; padding:1px 6px; border-radius:99px;
+    background:rgba(255,255,255,.12);
+  }
+
+  /* ── 聊天流(结构与 MessageStream 一致:assistant 正文 / thinking 折叠行 / AgentTaskCard) ── */
+  .stream {
+    background:var(--surface); padding:16px; min-height:430px;
+    display:flex; flex-direction:column; gap:12px;
+  }
+  .msg { font-size:14px; color:var(--text-primary); max-width:100%; }
+  .thinking-row {
+    font-size:13px; color:var(--text-secondary);
+    display:flex; align-items:center; gap:6px;
+  }
+  .thinking-row::before { content:"✦"; color:var(--text-tertiary); font-size:11px; }
+
+  /* AgentTaskCard:圆角卡 + 标题行 + 展开区左侧 rail(对齐 AgentTaskCard.tsx) */
+  .task-card {
+    background:var(--surface-elevated); border:1px solid var(--border-default);
+    border-radius:8px; padding:10px 12px;
+  }
+  .task-head {
+    display:flex; align-items:center; gap:8px;
+    font-size:13px; font-weight:500; color:var(--text-primary);
+  }
+  .chev { color:var(--text-tertiary); font-size:10px; }
+  .dot { width:6px; height:6px; border-radius:50%; background:#2AAE5B; flex:none; }
+  .model-chip {
+    margin-left:auto; font-size:11px; color:var(--text-secondary);
+    background:var(--surface-chip); padding:1px 7px; border-radius:99px;
+  }
+  .task-body {
+    margin-top:8px; border-left:2px solid var(--agent-actions-rail); padding-left:12px;
+    font-size:13px; line-height:1.45; color:var(--text-secondary);
+  }
+  .task-body .meta { font-size:12px; color:var(--text-tertiary); margin-top:4px; }
+
+  /* 泄漏出来的子代理正文(修复前) */
+  .leak {
+    font-size:13px; color:var(--text-primary);
+    border:1px dashed #d9534f; border-radius:6px; padding:10px 12px;
+    background:rgba(217,83,79,.06);
+  }
+  .leak h4 { font-size:13px; font-weight:600; margin:8px 0 4px; }
+  .leak p { margin-bottom:6px; }
+  .leak .cut {
+    color:var(--text-tertiary); font-size:12px; font-style:italic;
+    border-top:1px dashed var(--border-default); margin-top:8px; padding-top:6px;
+  }
+  .leak-tag {
+    display:inline-block; font-size:10px; font-weight:700; color:#d9534f;
+    border:1px solid #d9534f; border-radius:3px; padding:0 4px; margin-bottom:6px;
+  }
+  .note {
+    font-size:12px; color:var(--text-tertiary); font-style:italic;
+    padding:8px 0 0; border-top:1px solid var(--border-default); margin-top:auto;
+  }
+</style>
+</head>
+<body>
+
+<h1>子代理内部消息不再铺进主聊天流</h1>
+<p class="lede">
+  左：修复前 —— 后台 Subagent 的思考、正文与工具调用逐条铺进聊天流（实测单条正文 5559 字符）。
+  右：修复后 —— 同一批消息在 <code>buildRenderItems</code> 入口被剔除，Subagent 的工作仍以
+  AgentTaskCard 呈现在原位置。<strong>本次改动不新增任何视觉元素</strong>，两侧的卡片、间距、
+  颜色 token 完全一致，差异只是「多出来的条目消失了」。
+</p>
+
+<div class="modes">
+
+  <!-- ─────────── Light ─────────── -->
+  <div>
+    <div class="mode-label">Light</div>
+    <div class="pair">
+
+      <div class="pane">
+        <div class="pane-head before">修复前 <span class="badge">main</span></div>
+        <div class="stream">
+          <div class="msg">我先派一个后台调研，同时继续看本地代码。</div>
+          <div class="task-card">
+            <div class="task-head"><span class="chev">▸</span><span class="dot"></span>调研 oh-my-pi 现状
+              <span class="model-chip">claude-opus-5</span></div>
+          </div>
+          <div class="thinking-row">思考 4 秒</div>
+          <div class="leak">
+            <span class="leak-tag">子代理内部消息 · 不该出现在这里</span>
+            <p>调研完成。以下为结构化事实清单，全部来自一手来源（GitHub API + repo 内文件），未编造。</p>
+            <h4># oh-my-pi (omp) 调研报告</h4>
+            <p><strong>Repo 确认：https://github.com/can1357/oh-my-pi</strong> —— 就是猜测中的
+              can1357/oh-my-pi。官网 https://omp.sh，npm 包 <code>@oh-my-pi/pi-coding-agent</code>。
+              README 明确声明是 Mario Zechner (badlogic) 的 pi-mono 的 fork，MIT 协议。</p>
+            <h4>## 1. 相对原版 pi 增加/改造的功能</h4>
+            <p>定位："A coding agent with the IDE wired in"，TypeScript + Bun 运行时 + 约 8 万行
+              Rust 原生核心。README 列了 21 项……</p>
+            <p class="cut">…此处还有约 5000 字符继续铺开（原文 5559 字符）…</p>
+          </div>
+          <div class="msg">调研回来了，结论如下。</div>
+          <div class="note">用户要往上滚很久才能回到自己的对话。</div>
+        </div>
+      </div>
+
+      <div class="pane">
+        <div class="pane-head after">修复后 <span class="badge">本 PR</span></div>
+        <div class="stream">
+          <div class="msg">我先派一个后台调研，同时继续看本地代码。</div>
+          <div class="task-card">
+            <div class="task-head"><span class="chev">▾</span><span class="dot"></span>调研 oh-my-pi 现状
+              <span class="model-chip">claude-opus-5</span></div>
+            <div class="task-body">
+              调研 oh-my-pi 的当前状态、相对原版 pi 的差异，以及对 Cindy 的参考价值。
+              <div class="meta">Agent "调研 oh-my-pi 现状" finished</div>
+            </div>
+          </div>
+          <div class="msg">调研回来了，结论如下。</div>
+          <div class="note">Subagent 的工作收在自己的卡片里，父会话的对话保持连续。</div>
+        </div>
+      </div>
+
+    </div>
+  </div>
+
+  <!-- ─────────── Dark ─────────── -->
+  <div class="dark">
+    <div class="mode-label">Dark</div>
+    <div class="pair">
+
+      <div class="pane">
+        <div class="pane-head before">修复前 <span class="badge">main</span></div>
+        <div class="stream">
+          <div class="msg">我先派一个后台调研，同时继续看本地代码。</div>
+          <div class="task-card">
+            <div class="task-head"><span class="chev">▸</span><span class="dot"></span>调研 oh-my-pi 现状
+              <span class="model-chip">claude-opus-5</span></div>
+          </div>
+          <div class="thinking-row">思考 4 秒</div>
+          <div class="leak">
+            <span class="leak-tag">子代理内部消息 · 不该出现在这里</span>
+            <p>调研完成。以下为结构化事实清单，全部来自一手来源（GitHub API + repo 内文件），未编造。</p>
+            <h4># oh-my-pi (omp) 调研报告</h4>
+            <p><strong>Repo 确认：https://github.com/can1357/oh-my-pi</strong> —— 就是猜测中的
+              can1357/oh-my-pi。官网 https://omp.sh，npm 包 <code>@oh-my-pi/pi-coding-agent</code>。
+              README 明确声明是 Mario Zechner (badlogic) 的 pi-mono 的 fork，MIT 协议。</p>
+            <h4>## 1. 相对原版 pi 增加/改造的功能</h4>
+            <p>定位："A coding agent with the IDE wired in"，TypeScript + Bun 运行时 + 约 8 万行
+              Rust 原生核心。README 列了 21 项……</p>
+            <p class="cut">…此处还有约 5000 字符继续铺开（原文 5559 字符）…</p>
+          </div>
+          <div class="msg">调研回来了，结论如下。</div>
+          <div class="note">用户要往上滚很久才能回到自己的对话。</div>
+        </div>
+      </div>
+
+      <div class="pane">
+        <div class="pane-head after">修复后 <span class="badge">本 PR</span></div>
+        <div class="stream">
+          <div class="msg">我先派一个后台调研，同时继续看本地代码。</div>
+          <div class="task-card">
+            <div class="task-head"><span class="chev">▾</span><span class="dot"></span>调研 oh-my-pi 现状
+              <span class="model-chip">claude-opus-5</span></div>
+            <div class="task-body">
+              调研 oh-my-pi 的当前状态、相对原版 pi 的差异，以及对 Cindy 的参考价值。
+              <div class="meta">Agent "调研 oh-my-pi 现状" finished</div>
+            </div>
+          </div>
+          <div class="msg">调研回来了，结论如下。</div>
+          <div class="note">Subagent 的工作收在自己的卡片里，父会话的对话保持连续。</div>
+        </div>
+      </div>
+
+    </div>
+  </div>
+
+</div>
+
+</body>
+</html>

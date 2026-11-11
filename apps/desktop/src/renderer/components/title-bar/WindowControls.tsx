@@ -8,8 +8,13 @@ import { Spinner } from '@/components/ui/spinner';
 import { ConfirmDialog } from '@/components/ui/confirm-dialog';
 import { isSecondaryWindow } from '@/lib/secondaryWindow';
 import { isSidebarWindow } from '@/lib/sidebarWindow';
-import { isGhostPanelWindow } from '@/lib/ghostPanelWindow';
-import type { WindowsCloseBehavior } from '../../../shared/windowBehavior';
+import { isResourceUsageWindow } from '@/lib/resourceUsageWindow';
+import type {
+  LinuxCloseBehavior,
+  WindowsCloseBehavior,
+} from '../../../shared/windowBehavior';
+
+type DesktopCloseBehavior = LinuxCloseBehavior | WindowsCloseBehavior;
 
 interface WindowControlsProps {
   /**
@@ -19,18 +24,38 @@ interface WindowControlsProps {
    * to match the Stone/Silver tones from docs/design-rules/cindy-design-system.md.
    */
   iconClassName?: string;
+  /** Override the default minimize action for an auxiliary window. */
+  onMinimize?: () => void | Promise<void>;
+  /** Hide minimize when the current surface explicitly opts out of that action. */
+  showMinimize?: boolean;
+  /** Override the default close action for an auxiliary window. */
+  onClose?: () => void | Promise<void>;
 }
 
 const DEFAULT_ICON_CLASS = 'text-titlebar-icon';
 
+/**
+ * True when this renderer is served by `cindy-host` into a browser tab.
+ *
+ * A tab already has the browser's own chrome, so drawing minimize/maximize/close
+ * here would duplicate those buttons and target a window that does not exist.
+ * The flag is set by the host shim before the app module runs.
+ */
+function isHostServedWebClient(): boolean {
+  return Boolean((window as unknown as { __CINDY_HOST_WEB__?: boolean }).__CINDY_HOST_WEB__);
+}
+
 export function WindowControls({
   iconClassName = DEFAULT_ICON_CLASS,
+  onMinimize,
+  showMinimize = true,
+  onClose,
 }: WindowControlsProps = {}) {
   const [showCloseDialog, setShowCloseDialog] = useState(false);
-  const [showWindowsCloseBehaviorDialog, setShowWindowsCloseBehaviorDialog] = useState(false);
-  const [savingWindowsCloseBehavior, setSavingWindowsCloseBehavior] = useState(false);
-  const savingWindowsCloseBehaviorRef = useRef(false);
-  const windowsCloseBehaviorDialogVisibleRef = useRef(false);
+  const [showCloseBehaviorDialog, setShowCloseBehaviorDialog] = useState(false);
+  const [savingCloseBehavior, setSavingCloseBehavior] = useState(false);
+  const savingCloseBehaviorRef = useRef(false);
+  const closeBehaviorDialogVisibleRef = useRef(false);
   // 点 X 后 (无论走确认框还是直接关) 进入不可取消的 closing 态:
   //   - 有 in-flight turn 路径: ConfirmDialog 显示 loading spinner + 锁住关闭
   //   - 无 in-flight 路径:      全屏 ClosingOverlay 显示 spinner + "正在关闭…"
@@ -43,34 +68,53 @@ export function WindowControls({
 
   useEffect(() => {
     if (
-      window.electronAPI.platform !== 'win32' ||
+      onClose ||
+      (window.electronAPI.platform !== 'win32' && window.electronAPI.platform !== 'linux') ||
       isSecondaryWindow() ||
       isSidebarWindow() ||
-      isGhostPanelWindow()
+      isResourceUsageWindow()
     )
       return;
-    return window.electronAPI.windowBehavior.onWindowsCloseBehaviorRequested(() => {
-      if (windowsCloseBehaviorDialogVisibleRef.current) {
-        window.electronAPI.windowBehavior.notifyWindowsCloseBehaviorPromptShown();
+    const onCloseBehaviorRequested = (): void => {
+      if (closeBehaviorDialogVisibleRef.current) {
+        if (window.electronAPI.platform === 'win32') {
+          window.electronAPI.windowBehavior.notifyWindowsCloseBehaviorPromptShown();
+        } else {
+          window.electronAPI.windowBehavior.notifyLinuxCloseBehaviorPromptShown();
+        }
         return;
       }
-      setShowWindowsCloseBehaviorDialog(true);
-    });
-  }, []);
+      setShowCloseBehaviorDialog(true);
+    };
+    return window.electronAPI.platform === 'win32'
+      ? window.electronAPI.windowBehavior.onWindowsCloseBehaviorRequested(onCloseBehaviorRequested)
+      : window.electronAPI.windowBehavior.onLinuxCloseBehaviorRequested(onCloseBehaviorRequested);
+  }, [onClose]);
 
   useEffect(() => {
-    windowsCloseBehaviorDialogVisibleRef.current = showWindowsCloseBehaviorDialog;
-    if (showWindowsCloseBehaviorDialog && window.electronAPI.platform === 'win32') {
+    closeBehaviorDialogVisibleRef.current = showCloseBehaviorDialog;
+    if (!showCloseBehaviorDialog) return;
+    if (window.electronAPI.platform === 'win32') {
       window.electronAPI.windowBehavior.notifyWindowsCloseBehaviorPromptShown();
+    } else if (window.electronAPI.platform === 'linux') {
+      window.electronAPI.windowBehavior.notifyLinuxCloseBehaviorPromptShown();
     }
-  }, [showWindowsCloseBehaviorDialog]);
+  }, [showCloseBehaviorDialog]);
 
   const controlBase = cn(
     'flex items-center justify-center',
-    'h-9 w-[46px]',
+    'h-7 w-7',
     iconClassName,
     'transition-colors',
   );
+
+  const handleMinimizeClick = (): void => {
+    if (onMinimize) {
+      void onMinimize();
+      return;
+    }
+    window.electronAPI.windowMinimize();
+  };
 
   // 进入 closing 态 + 调 main 端关闭。同时被"点 X 无 in-flight 直走"和 ConfirmDialog
   // 的 onConfirm 调用,共用一份语义。幂等: closingRef 守住重复调用。
@@ -81,9 +125,13 @@ export function WindowControls({
     window.electronAPI.windowClose();
   };
 
-  const continueCloseWithBehavior = async (behavior: WindowsCloseBehavior): Promise<void> => {
+  const continueCloseWithBehavior = async (behavior: DesktopCloseBehavior): Promise<void> => {
     if (behavior === 'tray') {
       window.electronAPI.windowClose();
+      return;
+    }
+    if (behavior === 'minimize') {
+      window.electronAPI.windowMinimize();
       return;
     }
 
@@ -100,21 +148,27 @@ export function WindowControls({
     }
   };
 
-  const selectWindowsCloseBehavior = async (
-    behavior: WindowsCloseBehavior,
-  ): Promise<void> => {
-    if (savingWindowsCloseBehaviorRef.current) return;
-    savingWindowsCloseBehaviorRef.current = true;
-    setSavingWindowsCloseBehavior(true);
+  const selectCloseBehavior = async (behavior: DesktopCloseBehavior): Promise<void> => {
+    if (savingCloseBehaviorRef.current) return;
+    savingCloseBehaviorRef.current = true;
+    setSavingCloseBehavior(true);
     try {
-      await window.electronAPI.windowBehavior.setWindowsCloseBehavior(behavior);
-      setShowWindowsCloseBehaviorDialog(false);
+      if (window.electronAPI.platform === 'linux') {
+        await window.electronAPI.windowBehavior.setLinuxCloseBehavior(
+          behavior === 'minimize' ? behavior : 'quit',
+        );
+      } else {
+        await window.electronAPI.windowBehavior.setWindowsCloseBehavior(
+          behavior === 'tray' ? behavior : 'quit',
+        );
+      }
+      setShowCloseBehaviorDialog(false);
       await continueCloseWithBehavior(behavior);
     } catch {
       // 弹窗尚未关闭；持久化失败时保留它，不带着未知行为进入关闭流程。
     } finally {
-      savingWindowsCloseBehaviorRef.current = false;
-      setSavingWindowsCloseBehavior(false);
+      savingCloseBehaviorRef.current = false;
+      setSavingCloseBehavior(false);
     }
   };
 
@@ -127,11 +181,19 @@ export function WindowControls({
   // splash / login 阶段 maker-ipc handler 还没注册, invoke 会 reject ——
   // catch 后当作 false 处理 (那个阶段本来就不可能有 in-flight)。
   const handleCloseClick = async (): Promise<void> => {
+    if (onClose) {
+      await onClose();
+      return;
+    }
     // 「在新窗口打开」的副窗口 / 右侧栏子窗口 / 插件面板子窗口:关闭只关本窗
     // (会话活在主进程,不受影响),不退出 app,也没有 disposer chain,所以跳过
     // in-flight 确认框 + 全屏 closing overlay,直接调 windowClose(main 端按
     // sender 解析为 win.close())。
-    if (isSecondaryWindow() || isSidebarWindow() || isGhostPanelWindow()) {
+    if (
+      isSecondaryWindow() ||
+      isSidebarWindow() ||
+      isResourceUsageWindow()
+    ) {
       window.electronAPI.windowClose();
       return;
     }
@@ -143,7 +205,21 @@ export function WindowControls({
         // Main close handler remains the final authority for the persisted behavior.
       }
       if (!closeBehavior) {
-        setShowWindowsCloseBehaviorDialog(true);
+        setShowCloseBehaviorDialog(true);
+        return;
+      }
+      await continueCloseWithBehavior(closeBehavior);
+      return;
+    }
+    if (window.electronAPI.platform === 'linux') {
+      let closeBehavior: LinuxCloseBehavior | null = null;
+      try {
+        closeBehavior = await window.electronAPI.windowBehavior.getLinuxCloseBehavior();
+      } catch {
+        // Main close handler remains the final authority for the persisted behavior.
+      }
+      if (!closeBehavior) {
+        setShowCloseBehaviorDialog(true);
         return;
       }
       await continueCloseWithBehavior(closeBehavior);
@@ -152,51 +228,86 @@ export function WindowControls({
     await continueCloseWithBehavior('quit');
   };
 
+  const keepRunningBehavior: Exclude<DesktopCloseBehavior, 'quit'> =
+    window.electronAPI.platform === 'linux' ? 'minimize' : 'tray';
+
+  // Browser tab: no desktop window chrome to control (see isHostServedWebClient).
+  if (isHostServedWebClient()) return null;
+
   return (
     <>
-      <div className="flex">
-        <button
-          className={cn(controlBase, 'hover:bg-titlebar-control-hover')}
-          onClick={() => window.electronAPI.windowMinimize()}
-          aria-label={t('titleBar.minimize')}
-        >
-          <Minus size={16} />
-        </button>
+      <div className="flex gap-0.5">
+        {showMinimize && (
+          <button
+            className={cn(controlBase, 'hover:bg-titlebar-control-hover')}
+            onClick={handleMinimizeClick}
+            aria-label={t('titleBar.minimize')}
+            data-tooltip-exempt="windows-system-control"
+          >
+            <Minus size={14} />
+          </button>
+        )}
         <button
           className={cn(controlBase, 'hover:bg-titlebar-control-hover')}
           onClick={() => window.electronAPI.windowMaximize()}
-          aria-label={t('titleBar.maximize')}
+          aria-label={t('titleBar.maximizeOrRestore')}
+          data-tooltip-exempt="windows-system-control"
         >
           <Square size={14} />
         </button>
-        <button
-          className={cn(controlBase, 'hover:bg-[#E81123] hover:text-white')}
-          onClick={() => void handleCloseClick()}
-          aria-label={t('titleBar.close')}
-          disabled={closing}
-        >
-          <X size={16} />
-        </button>
+        {closing ? (
+          <span
+            role="button"
+            aria-disabled="true"
+            aria-label={t('titleBar.closing.title')}
+            tabIndex={0}
+            data-tooltip-exempt="windows-system-control"
+            className="inline-flex focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--focus-ring)]"
+          >
+            <button
+              className={cn(controlBase, 'hover:bg-[#E81123] hover:text-white')}
+              aria-hidden="true"
+              disabled
+            >
+              <X size={14} />
+            </button>
+          </span>
+        ) : (
+          <button
+            className={cn(controlBase, 'hover:bg-[#E81123] hover:text-white')}
+            onClick={() => void handleCloseClick()}
+            aria-label={t('titleBar.close')}
+            data-tooltip-exempt="windows-system-control"
+          >
+            <X size={14} />
+          </button>
+        )}
       </div>
       <ConfirmDialog
-        open={showWindowsCloseBehaviorDialog}
+        open={showCloseBehaviorDialog}
         onOpenChange={(next) => {
-          // 首次关闭必须明确选择；ESC / 点击遮罩不应静默写入默认值或关窗。
-          if (next) setShowWindowsCloseBehaviorDialog(true);
+          // Dismissal cancels this close request without saving a choice or closing the window.
+          if (savingCloseBehaviorRef.current && !next) return;
+          setShowCloseBehaviorDialog(next);
         }}
+        showCloseButton
         title={t('settings.windowBehavior.closePrompt.title')}
         description={t('settings.windowBehavior.closePrompt.message')}
         content={
           <p className="text-sm leading-6 text-[var(--confirm-desc)]">
-            {t('settings.windowBehavior.closePrompt.detail')}
+            {t(
+              window.electronAPI.platform === 'linux'
+                ? 'settings.windowBehavior.closePrompt.linuxDetail'
+                : 'settings.windowBehavior.closePrompt.detail',
+            )}
           </p>
         }
-        confirmText={t('settings.windowBehavior.closeBehavior.tray')}
+        confirmText={t(`settings.windowBehavior.closeBehavior.${keepRunningBehavior}`)}
         cancelText={t('settings.windowBehavior.closeBehavior.quit')}
         autoFocusConfirm
-        loading={savingWindowsCloseBehavior}
-        onConfirm={() => void selectWindowsCloseBehavior('tray')}
-        onCancel={() => void selectWindowsCloseBehavior('quit')}
+        loading={savingCloseBehavior}
+        onConfirm={() => void selectCloseBehavior(keepRunningBehavior)}
+        onCancel={() => void selectCloseBehavior('quit')}
       />
       <ConfirmDialog
         open={showCloseDialog}
@@ -243,13 +354,11 @@ function ClosingOverlay({ visible }: { visible: boolean }) {
       aria-label={t('titleBar.closing.title')}
     >
       <div
-        className="flex items-center gap-2 rounded-full border border-[var(--border-default)] px-4 py-2 shadow-sm"
+        className="flex items-center gap-2 rounded-full border border-[var(--border-default)] px-4 py-2 shadow-[shadow:var(--shadow-menu)]"
         style={{ background: 'var(--surface-elevated)' }}
       >
         <Spinner size={16} className="text-[var(--text-primary)]" />
-        <span className="text-sm text-[var(--text-primary)]">
-          {t('titleBar.closing.title')}
-        </span>
+        <span className="text-sm text-[var(--text-primary)]">{t('titleBar.closing.title')}</span>
       </div>
     </div>,
     document.body,

@@ -35,10 +35,19 @@ describe('NewMakerDraftRoute worktree send flow', () => {
     expect(worktreeCreate).toBeGreaterThan(navigate);
   });
 
+  it('clears starting when the first-message draft is restored after a send-before-start failure', () => {
+    const restore = source.indexOf('const restoreFirstMessageDraft = () => {');
+    const clearStarting = source.indexOf('clearSessionStarting(newSession.id)', restore);
+    const restoreEnd = source.indexOf('};', source.indexOf('emitAutoTitlePreviewCleared(newSession.id)', restore));
+    expect(restore).toBeGreaterThan(-1);
+    expect(clearStarting).toBeGreaterThan(restore);
+    expect(clearStarting).toBeLessThan(restoreEnd);
+  });
+
   it('never silently downgrades an explicit worktree request to a normal session', () => {
     const selected = source.indexOf('const selectedWorktree = { ...wtRef.current };');
     const guard = source.indexOf(
-      'if (selectedWorkingDir && !isRemoteProjectDraft && selectedWorktree.enabled) {',
+      '&& selectedWorktree.confirmedIneligible !== true',
       selected,
     );
     const markInFlight = source.indexOf('markSendInFlight(true);', guard);
@@ -53,18 +62,49 @@ describe('NewMakerDraftRoute worktree send flow', () => {
     expect(guardedSource).toContain('return false;');
   });
 
+  it('lets a confirmed-ineligible directory create a plain session while keeping the ON memory', () => {
+    // 2026-08-07 裁决:探测成功且确认不合格(非 git / 无 git / 已在 worktree 内)时,
+    // 勾选记忆不生效——发送 / Goal 门、worktree 副作用分支全部按普通会话放行;
+    // confirmedIneligible === null(探测中 / 失败)必须仍走 fail closed。
+    // Send 门与 Goal 门各有一处放行条件;Goal 的本地 worktree 使用点同样排除。
+    expect(
+      source.match(/&& selectedWorktree\.confirmedIneligible !== true/g)?.length ?? 0,
+    ).toBeGreaterThanOrEqual(3);
+    // device-link 预创建两条路径(Send / Goal)同样不得对确认不合格目录发起 worktree:create。
+    expect(source).toContain('wt.confirmedIneligible !== true');
+    // 确认态来源:WorktreeChipsRow 的探测回包,null 表示未确认。
+    expect(source).toContain('const [wtConfirmedIneligible, setWtConfirmedIneligible]');
+    expect(source).toContain('onConfirmedIneligibleChange={handleWtConfirmedIneligibleChange}');
+  });
+
   it('keeps the first message as a session draft when background worktree creation fails', () => {
     const worktreeCreate = source.indexOf('window.electronAPI.worktreeCreate');
     const failedCard = source.indexOf("status: 'failed'", worktreeCreate);
     const restoreHelper = source.indexOf('const restoreFirstMessageDraft');
     const saveDraft = source.indexOf('restoreFirstMessageDraft();', failedCard);
-    const restoreText = source.indexOf('plainTextToTiptapDoc(message)', restoreHelper);
+    const restoreText = source.indexOf('plainTextToTiptapDoc(builtInSkillIntent ? builtInSkillDraftMessage : message)', restoreHelper);
 
     expect(worktreeCreate).toBeGreaterThan(-1);
     expect(failedCard).toBeGreaterThan(worktreeCreate);
     expect(restoreHelper).toBeGreaterThan(-1);
     expect(saveDraft).toBeGreaterThan(failedCard);
     expect(restoreText).toBeGreaterThan(restoreHelper);
+    const draftSnapshot = source.indexOf('const preNavDraft = getComposerDraft(');
+    expect(draftSnapshot).toBeGreaterThan(-1);
+    expect(draftSnapshot).toBeLessThan(restoreHelper);
+    expect(source.slice(draftSnapshot, restoreHelper)).toContain(
+      'const preNavDraftDoc = opts?.recoveryDraftDoc ?? preNavDraft?.text ?? null;',
+    );
+    expect(source.slice(restoreHelper, restoreText)).toContain('text: preNavDraftDoc ??');
+    expect(source.slice(restoreHelper, restoreHelper + 500)).toContain(
+      'browserComments: rehomedComments',
+    );
+    expect(source.slice(restoreHelper, failedCard)).toContain(
+      'rewriteBrowserCommentsFromRehomedFiles(',
+    );
+    expect(source.slice(restoreHelper, failedCard)).toContain(
+      'excludeCommentScreenshots(rehomedFiles, rehomedComments)',
+    );
   });
 
   it('does not make the new worktree path the next New Maker default project', () => {
@@ -159,20 +199,8 @@ describe('NewMakerDraftRoute worktree send flow', () => {
     expect(silentCatch).toBeGreaterThan(handoff);
   });
 
-  it('retries remote draft defaults after the relay or selected workstation reconnects', () => {
-    const epochHook = source.indexOf('useDeviceLinkReconnectEpoch(');
-    const defaultsFetch = source.indexOf("'maker:get-new-maker-defaults'", epochHook);
-    const effectDependencies = source.indexOf('remoteDraftRefreshEpoch,', defaultsFetch);
-    const transientPreserve = source.indexOf(
-      'value: unsupported ? null : previous.value',
-      defaultsFetch,
-    );
-
-    expect(epochHook).toBeGreaterThan(-1);
-    expect(defaultsFetch).toBeGreaterThan(epochHook);
-    expect(effectDependencies).toBeGreaterThan(defaultsFetch);
-    expect(transientPreserve).toBeGreaterThan(defaultsFetch);
-  });
+  // Reconnect/default preservation is exercised through the production hooks
+  // in remoteDraftDefaultsCache.test.tsx, rather than source ordering.
 
   it('does not auto-send if the prepared session is no longer active', () => {
     const worktreeCreate = source.indexOf('window.electronAPI.worktreeCreate');

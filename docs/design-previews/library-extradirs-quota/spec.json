@@ -1,0 +1,78 @@
+{
+  "meta": {
+    "name": "library-extradirs-quota",
+    "summary": {
+      "what": "composer 引用目录把 cindy-library: 当系统槽：不占用户 10 名额，显示「Mivo 作品库（只读）」且不可移除。",
+      "how": "ChatInput 配额走 countUserExtraDirs；AtMentionPanel 用 extraDirDisplayLabel，library 槽不画移除按钮。",
+      "accept": "未满员可添加；10 个用户目录 + library 槽时加号禁用且计数仍为 10；系统项文案来自源码。"
+    }
+  },
+  "matrix": {
+    "platforms": ["desktop"],
+    "regions": ["cn"],
+    "systems": ["mac"],
+    "themes": ["light", "dark"],
+    "langs": ["zh-CN", "en"]
+  },
+  "states": [
+    {
+      "id": "mixed",
+      "via": [{ "expect": "mixed" }]
+    },
+    {
+      "id": "full",
+      "via": [
+        { "click": "[data-qa-goto=full]" },
+        { "expect": "full" }
+      ]
+    }
+  ],
+  "verify": {
+    "cases": [
+      {
+        "id": "desk-zh-light",
+        "prefs": {
+          "plat": "desktop",
+          "region": "cn",
+          "os": "mac",
+          "mode": "light",
+          "lang": "zh-CN"
+        }
+      },
+      {
+        "id": "desk-en-dark",
+        "prefs": {
+          "plat": "desktop",
+          "region": "cn",
+          "os": "mac",
+          "mode": "dark",
+          "lang": "en"
+        }
+      }
+    ],
+    "noClip": [".quota-title", ".dir-label", ".add-btn", ".count-badge"],
+    "persistence": {
+      "via": [{ "click": "[data-qa-pref='mode:dark']" }, { "click": "[data-qa-pref='lang:en']" }],
+      "expected": { "plat": "desktop", "region": "cn", "os": "mac", "mode": "dark", "lang": "en" },
+      "storageKey": "qa-hifi:library-extradirs-quota:prefs",
+      "reloads": 1,
+      "initialState": "mixed"
+    }
+  },
+  "bindings": [
+    {
+      "sel": ".quota-title",
+      "prop": "textContent",
+      "truth": "copy.zh-CN.sectionTitle",
+      "kind": "text",
+      "via": [{ "click": "[data-qa-pref='lang:zh-CN']" }]
+    },
+    {
+      "sel": ".quota-title",
+      "prop": "textContent",
+      "truth": "copy.en.sectionTitle",
+      "kind": "text",
+      "via": [{ "click": "[data-qa-pref='lang:en']" }]
+    }
+  ]
+}

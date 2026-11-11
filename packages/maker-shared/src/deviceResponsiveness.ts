@@ -53,6 +53,26 @@ export const BREAKER_FAILURE_THRESHOLD = 3;
 export const BREAKER_PROBE_BACKOFF_BASE_MS = 10_000;
 export const BREAKER_PROBE_BACKOFF_MAX_MS = 120_000;
 
+/**
+ * Automatic recovery presence is tri-state per relay generation:
+ * `true` is explicitly available, `false` is explicitly unavailable, and a
+ * missing value means this generation has not received a presence edge yet.
+ *
+ * Breaker/rehydrate single-flight may probe the unknown state, but must not
+ * send into an explicitly unavailable peer. Callers still own stronger gates
+ * such as relay ownership, revocation, local disablement, and breaker backoff.
+ */
+export function isPresenceValueEligible(available: boolean | undefined): boolean {
+  return available !== false;
+}
+
+export function isPresenceEligibleForRemoteRequest(
+  availabilityByDevice: ReadonlyMap<string, boolean>,
+  deviceId: string,
+): boolean {
+  return isPresenceValueEligible(availabilityByDevice.get(deviceId));
+}
+
 export interface DeviceResponsivenessBreakerOptions {
   /** 连续多少个独立超时批次进入 open;默认 3。 */
   failureThreshold?: number;

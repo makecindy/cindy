@@ -1,5 +1,5 @@
+import { Button } from '@/components/ui/button';
 import * as AlertDialog from '@radix-ui/react-alert-dialog';
-import * as DropdownMenu from '@radix-ui/react-dropdown-menu';
 import { Flame, Zap, Wrench, Flower, ChevronDown } from 'lucide-react';
 import {
   useCallback,
@@ -17,6 +17,13 @@ import type {
   ReleaseNotes,
 } from '@/release-notes';
 import type { UpdateNoticeMode } from '@/hooks/useUpdateNotice';
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuRadioGroup,
+  DropdownMenuRadioItem,
+  DropdownMenuTrigger,
+} from '@/components/ui/dropdown-menu';
 import { Spinner } from '@/components/ui/spinner';
 import { cn } from '@/lib/utils';
 
@@ -354,18 +361,9 @@ function PlaceholderBlock({
           <span className="inline-flex items-center gap-2 text-12 text-[var(--cmd-palette-item-meta)]">
             {t('update.notice.loadFailed')}
             {onRetry && (
-              <button
-                type="button"
-                onClick={onRetry}
-                className={cn(
-                  'rounded-md px-2 py-0.5 text-11',
-                  'bg-[var(--chat-input-chip-bg)] hover:bg-[var(--cmd-palette-item-hover)]',
-                  'text-[var(--chat-input-chip-text)]',
-                  'transition-colors focus-visible:outline-none focus-visible:ring-1',
-                )}
-              >
+              <Button variant="secondary" size="xxs" compact type="button" onClick={onRetry}>
                 {t('update.notice.retry')}
-              </button>
+              </Button>
             )}
           </span>
         )}
@@ -394,15 +392,13 @@ interface VersionDropdownProps {
    */
   triggerAriaLabel: string;
   /**
-   * Bubble open state up so the parent AlertDialog can guard its overlay
-   * onClick — Radix outside-click closes the dropdown but the click continues
-   * to propagate; without the guard it would land on `AlertDialog.Overlay`
-   * and dismiss the whole dialog too.
+   * Bubble open state up so the parent AlertDialog can guard its own
+   * dismissal while the dropdown is open or has just closed.
    */
   onOpenChange?: (open: boolean) => void;
 }
 
-function VersionDropdown({
+export function VersionDropdown({
   versions,
   currentVersion,
   onSelect,
@@ -411,8 +407,8 @@ function VersionDropdown({
   onOpenChange,
 }: VersionDropdownProps) {
   return (
-    <DropdownMenu.Root onOpenChange={onOpenChange} modal>
-      <DropdownMenu.Trigger asChild>
+    <DropdownMenu onOpenChange={onOpenChange} modal>
+      <DropdownMenuTrigger asChild>
         <button
           type="button"
           className="inline-flex outline-none"
@@ -422,50 +418,28 @@ function VersionDropdown({
               flame glyph would be misleading — hence icon={false}. */}
           <VersionBadge label={triggerLabel} clickable icon={false} />
         </button>
-      </DropdownMenu.Trigger>
-      <DropdownMenu.Portal>
-        <DropdownMenu.Content
-          side="bottom"
-          align="end"
-          sideOffset={6}
-          // Stop clicks inside dropdown content from bubbling — belt-and-
-          // suspenders on top of `modal` prop + parent dropdownOpenRef guard.
-          onClick={(e) => e.stopPropagation()}
-          className={cn(
-            'z-[10001] max-h-[400px] w-[180px] overflow-y-auto rounded-lg py-1',
-            'bg-[var(--cmd-palette-bg)] border border-[var(--cmd-palette-border)]',
-            'shadow-[var(--shadow-menu)]',
-            // Animate with the overlay-style pure-fade keyframes; the
-            // confirm-content-in animation has a `translate(-50%,-50%) scale`
-            // transform meant for center-of-screen dialogs, and Radix Popper
-            // applies its own transform for anchor positioning — stacking the
-            // two causes the dropdown to visually "jump" from the middle of
-            // the screen to the trigger during mount. Pure opacity fade
-            // stays neutral to Popper's positioning transform.
-            'data-[state=open]:animate-confirm-overlay-in',
-            'data-[state=closed]:animate-confirm-overlay-out',
-          )}
-        >
+      </DropdownMenuTrigger>
+      <DropdownMenuContent
+        side="bottom"
+        align="end"
+        sideOffset={6}
+        // Stop clicks inside dropdown content from bubbling — belt-and-
+        // suspenders on top of `modal` prop + parent dropdownOpenRef guard.
+        onClick={(e) => e.stopPropagation()}
+        // Above the AlertDialog layer; long version lists scroll.
+        className="z-[10001] max-h-[400px] overflow-y-auto"
+      >
+        {/* The version on screen is the checked radio row. Each row still calls
+            onSelect on activation, the current one included, as before. */}
+        <DropdownMenuRadioGroup value={currentVersion}>
           {versions.map((v) => (
-            <DropdownMenu.Item
-              key={v}
-              onSelect={() => onSelect(v)}
-              className={cn(
-                'flex cursor-pointer items-center gap-2 px-3 py-1.5 text-13 outline-none',
-                'text-[var(--msg-assistant-text)]',
-                'data-[highlighted]:bg-[var(--cmd-palette-item-hover)]',
-                v === currentVersion && 'font-semibold',
-              )}
-            >
+            <DropdownMenuRadioItem key={v} value={v} onSelect={() => onSelect(v)}>
               <span className="tabular-nums">v{v}</span>
-              {v === currentVersion && (
-                <span className="ml-auto text-11 text-[var(--cmd-palette-item-meta)]">•</span>
-              )}
-            </DropdownMenu.Item>
+            </DropdownMenuRadioItem>
           ))}
-        </DropdownMenu.Content>
-      </DropdownMenu.Portal>
-    </DropdownMenu.Root>
+        </DropdownMenuRadioGroup>
+      </DropdownMenuContent>
+    </DropdownMenu>
   );
 }
 
@@ -477,14 +451,92 @@ function VersionDropdown({
 function AutoBody({
   releaseNotes,
   locale,
+  onStickyChange,
 }: {
   releaseNotes: ReleaseNotes[];
   locale: string;
+  onStickyChange: (version: string) => void;
 }) {
+  const scrollRef = useRef<HTMLDivElement | null>(null);
+  const blockRefs = useRef<Map<string, HTMLDivElement>>(new Map());
+
+  // Sticky-header observer: track which version block is at the top of the
+  // scroll area so the header badge can follow. Only active for multi-version
+  // auto mode — single-version stays at its initial value.
+  useEffect(() => {
+    const root = scrollRef.current;
+    if (!root || releaseNotes.length <= 1) return;
+    const observer = new IntersectionObserver(
+      (entries) => {
+        let best: { v: string; top: number } | null = null;
+        for (const entry of entries) {
+          if (!entry.isIntersecting) continue;
+          const v = (entry.target as HTMLElement).dataset.version;
+          if (!v) continue;
+          const top = entry.boundingClientRect.top;
+          // Pick the entry whose top is closest to the container top
+          // (largest top = nearest to 0, i.e. the version the user is reading).
+          if (best === null || top > best.top) best = { v, top };
+        }
+        if (best) onStickyChange(best.v);
+      },
+      { root, rootMargin: '0px 0px -99% 0px', threshold: 0 },
+    );
+    for (const el of blockRefs.current.values()) observer.observe(el);
+    return () => observer.disconnect();
+  }, [releaseNotes, onStickyChange]);
+
+  // Fallback: when scrolled to the bottom, pick the last version so the header
+  // badge updates even if the last version is too short to reach the observation
+  // zone at the top. When leaving the bottom, recompute the visible version so
+  // the badge doesn't stay stuck on the last version.
+  const lastVersion = releaseNotes[releaseNotes.length - 1]?.version;
+  const handleAutoScroll = useCallback(() => {
+    const el = scrollRef.current;
+    if (!el || !lastVersion) return;
+    // Guard: only apply the bottom override when the content is actually
+    // scrollable.  A +1 px threshold prevents sub-pixel rounding at
+    // non-integer zoom from making scrollHeight − clientHeight = 1 while
+    // the content is visually unscrollable; otherwise scrollTop is always
+    // 0 and the condition would trivially hold at the top, causing the
+    // header to show the last version.
+    if (
+      el.scrollHeight > el.clientHeight + 1 &&
+      el.scrollTop + el.clientHeight >= el.scrollHeight - 1
+    ) {
+      onStickyChange(lastVersion);
+      return;
+    }
+    // Leaving the bottom: find the version block currently closest to the
+    // container top. This mirrors the IntersectionObserver's sticky-header
+    // logic but runs on every scroll event when not at the very bottom,
+    // clearing the bottom override that the IO cannot undo on its own.
+    const containerTop = el.getBoundingClientRect().top;
+    let best: { v: string; top: number } | null = null;
+    for (const [version, blockEl] of blockRefs.current.entries()) {
+      const top = blockEl.getBoundingClientRect().top;
+      if (top > containerTop + 9) continue; // block far below container top (9px = py-2 padding + 1px tolerance)
+      if (best === null || top > best.top) best = { v: version, top };
+    }
+    if (best) onStickyChange(best.v);
+  }, [lastVersion, onStickyChange]);
+
   return (
-    <div className="flex flex-1 min-h-0 flex-col overflow-y-auto py-2 select-text">
+    <div
+      ref={scrollRef}
+      onScroll={handleAutoScroll}
+      className="flex flex-1 min-h-0 flex-col overflow-y-auto py-2 select-text"
+    >
       {releaseNotes.map((notes, i) => (
-        <div key={notes.version} className="flex flex-col">
+        <div
+          key={notes.version}
+          ref={(el) => {
+            if (el) blockRefs.current.set(notes.version, el);
+            else blockRefs.current.delete(notes.version);
+          }}
+          data-version={notes.version}
+          className="flex flex-col"
+        >
           {i > 0 && <div className="mx-auto h-px w-full max-w-[800px] bg-[var(--cmd-palette-border)]" />}
           <VersionBlock notes={notes} locale={locale} />
         </div>
@@ -683,16 +735,15 @@ function ManualBody({
     // that band is by definition the topmost currently-scrolled-to element.
     const observer = new IntersectionObserver(
       (entries) => {
-        // Pick the most-recently-crossed intersecting entry. Multiple can
-        // report in a single callback during fast scrolls; take the one with
-        // the smallest positive `top` for stability.
+        // Pick the entry whose top is closest to the container top
+        // (largest top = nearest to 0, i.e. the version the user is reading).
         let best: { v: string; top: number } | null = null;
         for (const entry of entries) {
           if (!entry.isIntersecting) continue;
           const v = (entry.target as HTMLElement).dataset.version;
           if (!v) continue;
           const top = entry.boundingClientRect.top;
-          if (best === null || top < best.top) best = { v, top };
+          if (best === null || top > best.top) best = { v, top };
         }
         if (best) onStickyChange(best.v);
       },
@@ -701,6 +752,41 @@ function ManualBody({
     for (const el of blockRefs.current.values()) observer.observe(el);
     return () => observer.disconnect();
   }, [allVersions, onStickyChange]);
+
+  // Fallback: when scrolled to the bottom, pick the last version so the header
+  // badge updates even if the last version is too short to reach the top
+  // observation zone. When leaving the bottom, recompute the visible version so
+  // the badge doesn't stay stuck on the last version.
+  const lastVersion = allVersions[allVersions.length - 1];
+  const handleManualScroll = useCallback(() => {
+    const el = scrollRef.current;
+    if (!el || !lastVersion) return;
+    // Guard: only apply the bottom override when the content is actually
+    // scrollable.  A +1 px threshold prevents sub-pixel rounding at
+    // non-integer zoom from making scrollHeight − clientHeight = 1 while
+    // the content is visually unscrollable; otherwise scrollTop is always
+    // 0 and the condition would trivially hold at the top, causing the
+    // header to show the last version.
+    if (
+      el.scrollHeight > el.clientHeight + 1 &&
+      el.scrollTop + el.clientHeight >= el.scrollHeight - 1
+    ) {
+      onStickyChange(lastVersion);
+      return;
+    }
+    // Leaving the bottom: find the version block currently closest to the
+    // container top. This mirrors the IntersectionObserver's sticky-header
+    // logic but runs on every scroll event when not at the very bottom,
+    // clearing the bottom override that the IO cannot undo on its own.
+    const containerTop = el.getBoundingClientRect().top;
+    let best: { v: string; top: number } | null = null;
+    for (const [version, blockEl] of blockRefs.current.entries()) {
+      const top = blockEl.getBoundingClientRect().top;
+      if (top > containerTop + 9) continue; // block far below container top (9px = py-2 padding + 1px tolerance)
+      if (best === null || top > best.top) best = { v: version, top };
+    }
+    if (best) onStickyChange(best.v);
+  }, [lastVersion, onStickyChange]);
 
   // Programmatic jump handler exposed to parent (header dropdown).
   useEffect(() => {
@@ -715,7 +801,11 @@ function ManualBody({
   }, [registerJump, startLoad]);
 
   return (
-    <div ref={scrollRef} className="flex flex-1 min-h-0 flex-col overflow-y-auto py-2 select-text">
+    <div
+      ref={scrollRef}
+      onScroll={handleManualScroll}
+      className="flex flex-1 min-h-0 flex-col overflow-y-auto py-2 select-text"
+    >
       {allVersions.map((v, i) => {
         const notes = notesMap.get(v);
         const state = stateMap.get(v) ?? 'idle';
@@ -780,24 +870,10 @@ export function UpdateNoticeDialog({
     jumpRef.current = fn;
   }, []);
 
-  // Track version-dropdown open state + timestamp of most recent close.
-  //
-  // The tricky case: a single user click that starts on an area outside the
-  // dropdown fires pointerdown → pointerup → click in sequence. Radix's
-  // DismissableLayer catches pointerdown outside and synchronously calls
-  // onOpenChange(false), which flips our ref via setTimeout(0). But browser
-  // event dispatch may schedule these three events as separate macrotasks
-  // (spec-legal), so setTimeout(0) can fire BEFORE the trailing click event.
-  // The overlay's onClick then sees ref === false and dismisses the dialog.
-  //
-  // Fix: track a timestamp of when the dropdown was last observed to close;
-  // guard dismissIfDialogOnly by BOTH the ref and a grace window. Any click
-  // within `GRACE_MS` of a dropdown close is treated as "part of the same
-  // dismissal gesture" and bounces. Independent of scheduler ordering.
-  //
-  // 200ms is generous vs typical event cascades (< 20ms) but well below any
-  // human double-click cadence — if the user actually wants to close the
-  // dialog after the dropdown closes, they click again after the grace.
+  // Track version-dropdown open state + timestamp of most recent close, so a
+  // dismissal aimed at the dropdown (e.g. Escape) never cascades into closing
+  // the whole dialog. Any dismissal within `GRACE_MS` of a dropdown close is
+  // treated as part of the same gesture and bounces.
   const DROPDOWN_CLOSE_GRACE_MS = 200;
   const dropdownOpenRef = useRef(false);
   const dropdownClosedAtRef = useRef(0);
@@ -808,8 +884,18 @@ export function UpdateNoticeDialog({
   }, [onDismiss]);
 
   // Reset sticky when dialog re-opens (avoids showing last-session's badge).
+  // Preserve the current sticky version across locale refreshes — when the
+  // dialog is already open and releaseNotes changes only because of a locale
+  // switch, the scroll position in ManualBody remains in place so the badge
+  // should not jump back to the newest version.
+  const wasOpenRef = useRef(false);
   useEffect(() => {
-    if (open) setStickyVersion(releaseNotes?.[0]?.version ?? '');
+    if (open) {
+      if (!wasOpenRef.current) {
+        setStickyVersion(releaseNotes?.[0]?.version ?? '');
+      }
+    }
+    wasOpenRef.current = open;
   }, [open, releaseNotes]);
 
   if (!releaseNotes || !mode || releaseNotes.length === 0) {
@@ -838,64 +924,36 @@ export function UpdateNoticeDialog({
         })
       : t('update.notice.ariaDescription', { version: newest.version });
 
-  // Header's right cell — a version count, and in manual mode the entry point
-  // for jumping across history. Version number, date and contributors all moved
-  // into each version's own block, so there is nothing else left up here.
-  //   - Manual:     "N versions" + dropdown
-  //   - Auto multi: "N versions", static
-  //   - Auto single: nothing (a single version's identity is in its block)
-  const versionCountLabel = isManual
-    ? t('update.notice.versionsSpan', { count: allVersions?.length ?? 1 })
-    : isAutoMulti
-      ? t('update.notice.versionsSpan', { count: releaseNotes.length })
-      : null;
+  // Header's right cell: version badge that follows scroll.
+  //   - Manual multi:   v<version> badge + dropdown for history navigation.
+  //   - Auto multi:     v<version> badge, updates as user scrolls.
+  //   - Auto / manual single: static v<version> badge.
 
   return (
     <AlertDialog.Root
       open={open}
-      // Route Radix-driven dismissal (Escape key) through the same guard as
-      // the manual overlay click: dropdownOpenRef + grace window prevent
-      // spurious closes triggered by the version dropdown's pointerdown
-      // event cascade. This re-enables keyboard (Escape) dismissal without
-      // the race condition that required the previous no-op approach.
+      // Route Radix-driven dismissal (Escape key) through dismissIfDialogOnly:
+      // dropdownOpenRef + grace window prevent spurious closes triggered by
+      // the version dropdown's own dismissal.
       onOpenChange={(v) => { if (!v) dismissIfDialogOnly(); }}
     >
       <AlertDialog.Portal>
         <AlertDialog.Overlay
           className={cn(
-            'fixed inset-0 z-[10000]',
-            'bg-black/40 dark:bg-black/60',
-            'data-[state=open]:animate-confirm-overlay-in',
-            'data-[state=closed]:animate-confirm-overlay-out',
+            'modal-scrim fixed inset-0 z-[10000]',
           )}
           style={{ WebkitAppRegion: 'no-drag' } as React.CSSProperties}
-          // Overlay click-to-dismiss: only when nothing else is claiming the
-          // click. Two guards:
-          //   1. e.target === e.currentTarget — ensures we only respond to a
-          //      click on the overlay itself, not a synthetic-event bubble
-          //      from portaled children (defensive; React's tree bubbling
-          //      shouldn't route Content clicks here, but Radix's nested
-          //      dismissable layers have historically produced surprises).
-          //   2. dropdownOpenRef — dropdown-outside clicks land on the
-          //      overlay while dropdown is closing; we want those to only
-          //      close the dropdown, not cascade into a dialog dismiss.
-          onClick={(e) => {
-            if (e.target !== e.currentTarget) return;
-            dismissIfDialogOnly();
-          }}
+          // No scrim click-to-dismiss (DESIGN.md closing affordance): the
+          // dialog closes only via 「知道了」 or Escape.
         />
 
         <AlertDialog.Content
           className={cn(
-            'fixed left-1/2 top-1/2 z-[10000] -translate-x-1/2 -translate-y-1/2',
+            'modal-panel fixed left-1/2 top-1/2 z-[10000] -translate-x-1/2 -translate-y-1/2',
             // 920px, not the previous 1240px: the body is a single ~800px
             // reading column now, so the extra width only produced dead margins
             // and made the full-width chrome visibly mismatch the narrow body.
-            'w-[920px] h-[838px] max-w-[95vw] max-h-[90vh] rounded-xl flex flex-col',
-            'bg-[var(--cmd-palette-bg)]',
-            'border border-[var(--cmd-palette-border)]',
-            'data-[state=open]:animate-confirm-content-in',
-            'data-[state=closed]:animate-confirm-content-out',
+            'w-[920px] h-[838px] max-w-[95vw] max-h-[90vh] flex flex-col',
           )}
           style={{ WebkitAppRegion: 'no-drag' } as React.CSSProperties}
         >
@@ -916,11 +974,11 @@ export function UpdateNoticeDialog({
               {t('update.notice.title')}
             </AlertDialog.Title>
             <div className="min-w-0 justify-self-end">
-              {isManual && allVersions && allVersions.length > 1 && versionCountLabel ? (
+              {isManual && allVersions && allVersions.length > 1 ? (
                 <VersionDropdown
                   versions={allVersions}
                   currentVersion={stickyVersion || newest.version}
-                  triggerLabel={versionCountLabel}
+                  triggerLabel={`v${stickyVersion || newest.version}`}
                   triggerAriaLabel={t('update.notice.versionJumpAria', {
                     count: allVersions.length,
                     version: stickyVersion || newest.version,
@@ -928,22 +986,15 @@ export function UpdateNoticeDialog({
                   onSelect={(v) => jumpRef.current?.(v)}
                   onOpenChange={(dropOpen) => {
                     dropdownOpenRef.current = dropOpen;
-                    // Record close timestamp so dismissIfDialogOnly can
-                    // recognize any trailing click within the grace window
-                    // as "part of the same close gesture" and bounce. This
-                    // replaces the earlier setTimeout(0) ref-flip trick,
-                    // which was unreliable — the browser is free to schedule
-                    // pointerdown/pointerup/click as separate macrotasks
-                    // with setTimeout(0) sandwiched between, causing the
-                    // guard to release too early.
+                    // Record close timestamp so dismissIfDialogOnly can treat
+                    // a dismissal within the grace window as part of the
+                    // same close gesture and bounce it.
                     if (!dropOpen) dropdownClosedAtRef.current = Date.now();
                   }}
                 />
-              ) : versionCountLabel ? (
-                <span className="whitespace-nowrap text-13 text-[var(--cmd-palette-item-meta)]">
-                  {versionCountLabel}
-                </span>
-              ) : null}
+              ) : (
+                <VersionBadge label={`v${stickyVersion || newest.version}`} />
+              )}
             </div>
           </div>
 
@@ -963,31 +1014,23 @@ export function UpdateNoticeDialog({
               registerJump={registerJump}
             />
           ) : (
-            <AutoBody releaseNotes={releaseNotes} locale={i18n.language} />
+            <AutoBody
+              releaseNotes={releaseNotes}
+              locale={i18n.language}
+              onStickyChange={setStickyVersion}
+            />
           )}
 
           <div className="h-px bg-[var(--cmd-palette-border)]" />
 
           {/* ---- Footer ---- */}
           <div className="flex justify-center px-7 pt-4 pb-5">
-            {/* Plain button rather than AlertDialog.Action: since the root's
-                onOpenChange is a deliberate no-op (see comment there), we
-                can't rely on AlertDialog.Action calling context.onOpenChange
-                to close the dialog. Hand-wired onClick calls our onDismiss
-                directly — bypasses all Radix internal dismissal machinery. */}
-            <button
-              type="button"
-              onClick={onDismiss}
-              className={cn(
-                'rounded-full px-8 py-2.5 text-14 font-medium',
-                'bg-[var(--chat-input-chip-bg)] text-[var(--chat-input-chip-text)]',
-                'hover:bg-[var(--cmd-palette-item-hover)] transition-colors',
-                'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-offset-2',
-                'active:scale-[0.98]',
-              )}
-            >
+            {/* flex-wrap + min-w-0: long titles shrink/wrap and an overlong
+                contributor list drops to its own right-aligned line instead of
+                overflowing the dialog at narrow widths. */}
+            <Button variant="primary" size="lg" type="button" onClick={onDismiss}>
               {t('update.notice.gotIt')}
-            </button>
+            </Button>
           </div>
         </AlertDialog.Content>
       </AlertDialog.Portal>

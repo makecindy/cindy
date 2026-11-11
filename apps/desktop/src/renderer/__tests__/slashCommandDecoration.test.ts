@@ -3,9 +3,11 @@ import { Schema, type Node as PMNode } from '@tiptap/pm/model';
 import { EditorState } from '@tiptap/pm/state';
 
 import {
+  commandPaletteReplacementNames,
   createSlashCommandPlugin,
   findSlashCommandMatches,
   replaceSlashCommandRunWithText,
+  resolveSlashCommandRunEnd,
 } from '../components/new-chat/SlashCommandDecoration';
 
 const schema = new Schema({
@@ -82,6 +84,53 @@ describe('SlashCommandDecoration', () => {
     expect(decorationRanges(plugin, state)).toEqual([]);
   });
 
+  it('palette 选择只替换光标前的命令查询词并保留无空格草稿', () => {
+    let state = EditorState.create({
+      schema,
+      doc: doc(p(txt('/goal已有草稿'))),
+    });
+    const runEnd = resolveSlashCommandRunEnd(state.doc, 1, 'goal', ['goal']);
+
+    state = state.apply(replaceSlashCommandRunWithText(state.tr, schema, 1, runEnd, 'goal'));
+
+    expect(state.doc.textContent).toBe('/goal 已有草稿');
+  });
+
+  it('光标位于带参数命令中间时仍替换匹配的命令后缀', () => {
+    let state = EditorState.create({
+      schema,
+      doc: doc(p(txt('/compact 参数'))),
+    });
+    const runEnd = resolveSlashCommandRunEnd(state.doc, 1, 'compa', ['compact']);
+
+    state = state.apply(replaceSlashCommandRunWithText(state.tr, schema, 1, runEnd, 'compact'));
+
+    expect(state.doc.textContent).toBe('/compact 参数');
+  });
+
+  it('意识指令按显示标签补全光标后的后缀', () => {
+    let state = EditorState.create({
+      schema,
+      doc: doc(p(txt('$draw'))),
+    });
+    const command = {
+      kind: 'desktop' as const,
+      name: 'draw/@root',
+      label: 'draw',
+      description: '',
+    };
+    const runEnd = resolveSlashCommandRunEnd(
+      state.doc,
+      1,
+      'dra',
+      commandPaletteReplacementNames(command),
+    );
+
+    state = state.apply(state.tr.replaceWith(1, runEnd, schema.text('$draw/@root ')));
+
+    expect(state.doc.textContent).toBe('$draw/@root ');
+  });
+
   it('旧草稿的 slash atom 在首个 transaction 自动迁移为纯文本', () => {
     const plugin = createSlashCommandPlugin();
     const legacySlash = schema.nodes.mentionChip.create({
@@ -102,5 +151,35 @@ describe('SlashCommandDecoration', () => {
     expect(state.doc.textContent).toBe('/skill 参数');
     expect(state.doc.firstChild?.firstChild?.isText).toBe(true);
     expect(decorationRanges(plugin, state)).toEqual([{ from: 1, to: 7 }]);
+  });
+
+  it('matches Pi runtime aliases and hides the skill: prefix', () => {
+    const commands = [{
+      kind: 'agent-skill' as const,
+      name: 'git',
+      description: 'git skill',
+      source: 'skill' as const,
+      runtimeCommandName: 'skill:git',
+    }];
+    const source = doc(p(txt('/skill:git follow /git')));
+
+    expect(findSlashCommandMatches(source, commands)).toMatchObject([
+      { from: 1, to: 11, command: { name: 'git' } },
+      { from: 19, to: 23, command: { name: 'git' } },
+    ]);
+
+    const plugin = createSlashCommandPlugin();
+    let state = EditorState.create({
+      schema,
+      doc: source,
+      plugins: [plugin],
+    });
+    state = state.apply(state.tr.setMeta('slashCommandDecoration', commands));
+
+    expect(decorationRanges(plugin, state)).toEqual([
+      { from: 1, to: 11 },
+      { from: 2, to: 8 },
+      { from: 19, to: 23 },
+    ]);
   });
 });

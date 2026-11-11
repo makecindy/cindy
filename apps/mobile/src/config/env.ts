@@ -1,3 +1,4 @@
+import * as Application from 'expo-application';
 import Constants from 'expo-constants';
 
 import {
@@ -10,6 +11,7 @@ import {
 } from '@cindy/maker-shared/client-endpoints';
 
 import type { LoginMessageKey } from '@/auth/loginMessages';
+import { resolveMobileEndpointManifest } from './endpointManifestLoader';
 
 export type CindyAuthRegion = 'cn' | 'global' | 'dev';
 
@@ -31,8 +33,22 @@ const configuredBuildEnv = (configuredExpoExtra.xdtProductionEnv ??
   {}) as Record<string, string>;
 const configuredRegionGoogle = configuredExpoExtra.cindy?.google;
 
-function configuredValue(key: string): string {
-  return process.env[key]?.trim() || configuredBuildEnv[key]?.trim() || '';
+// Expo only inlines static property reads; Hermes has no runtime shell env.
+const configuredPublicEnv = {
+  EXPO_PUBLIC_CINDY_AUTH_REGION: process.env.EXPO_PUBLIC_CINDY_AUTH_REGION,
+  EXPO_PUBLIC_CINDY_AUTH_BASE_URL: process.env.EXPO_PUBLIC_CINDY_AUTH_BASE_URL,
+  EXPO_PUBLIC_XDT_DEVICE_LINK_API_BASE_URL:
+    process.env.EXPO_PUBLIC_XDT_DEVICE_LINK_API_BASE_URL,
+  EXPO_PUBLIC_XDT_MOBILE_VOICE_LITELLM_BASE_URL:
+    process.env.EXPO_PUBLIC_XDT_MOBILE_VOICE_LITELLM_BASE_URL,
+  EXPO_PUBLIC_CINDY_VOICE_API_BASE_URL:
+    process.env.EXPO_PUBLIC_CINDY_VOICE_API_BASE_URL,
+  EXPO_PUBLIC_ENDPOINT_MANIFEST_BASE_URL:
+    process.env.EXPO_PUBLIC_ENDPOINT_MANIFEST_BASE_URL,
+};
+
+function configuredValue(key: keyof typeof configuredPublicEnv): string {
+  return configuredPublicEnv[key]?.trim() || configuredBuildEnv[key]?.trim() || '';
 }
 
 export const AUTH_REGION: CindyAuthRegion = (() => {
@@ -48,7 +64,7 @@ export const MOBILE_REDIRECT_URL = `${APP_SCHEME}://auth`;
 
 // __DEV__ 端点初值来源:metro 构建期按 AUTH_REGION 把仓内
 // config/endpoint.json 或 config/endpoint.global.json require 进 dev bundle
-// (__DEV__ 常量折叠 + DCE 后 prod bundle 不含该 JSON)。与 desktop dev 读同一份
+// 正式包的随包兜底由共享 resolver 负责；这里仅初始化 dev。与 desktop dev 读同一份
 // region 正本同语义;正本非法直接抛错红屏(阻断语义:配置错要炸出来)。
 // 显式 EXPO_PUBLIC_* env 仍然优先——「手机连本地 server」的既有工作流不变。
 // prod(非 __DEV__)此处为空:生效端点由启动闸门拉取的 endpoint.json 回填
@@ -138,10 +154,6 @@ export function resolveEnvFlag(value: string | undefined): boolean {
   const normalized = value?.trim().toLowerCase();
   return normalized === '1' || normalized === 'true' || normalized === 'yes';
 }
-
-export const DEV_LOGIN_ENABLED = resolveEnvFlag(
-  process.env.EXPO_PUBLIC_XDT_DEV_LOGIN_ENABLED,
-);
 
 export const MOBILE_VISUAL_MOCK_ENABLED =
   __DEV__ && resolveEnvFlag(process.env.EXPO_PUBLIC_CINDY_MOBILE_VISUAL_MOCK);
@@ -233,14 +245,65 @@ const GOOGLE_CONFIG = resolveMobileGoogleConfig(
 export const GOOGLE_WEB_CLIENT_ID = GOOGLE_CONFIG.webClientId;
 export const GOOGLE_IOS_CLIENT_ID = GOOGLE_CONFIG.iosClientId;
 export const GOOGLE_IOS_URL_SCHEME = GOOGLE_CONFIG.iosUrlScheme;
-export const WECHAT_APP_ID =
-  process.env.EXPO_PUBLIC_CINDY_WECHAT_APP_ID?.trim() || '';
-export const WECHAT_UNIVERSAL_LINK =
-  process.env.EXPO_PUBLIC_CINDY_WECHAT_UNIVERSAL_LINK?.trim() || '';
+/** 微信配置只属于国内构建；与原生插件选择同源，不受登录后的组织区域影响。 */
+export function resolveMobileWechatConfig(
+  region: CindyAuthRegion,
+  env: {
+    EXPO_PUBLIC_CINDY_WECHAT_APP_ID?: string;
+    EXPO_PUBLIC_CINDY_WECHAT_UNIVERSAL_LINK?: string;
+  },
+): { appId: string; universalLink: string } {
+  if (region === 'global') return { appId: '', universalLink: '' };
+  return {
+    appId: env.EXPO_PUBLIC_CINDY_WECHAT_APP_ID?.trim() || '',
+    universalLink: env.EXPO_PUBLIC_CINDY_WECHAT_UNIVERSAL_LINK?.trim() || '',
+  };
+}
+
+const WECHAT_CONFIG = resolveMobileWechatConfig(AUTH_REGION, {
+  // Metro 只内联静态 process.env.KEY，不能改为动态键或直接传 process.env。
+  EXPO_PUBLIC_CINDY_WECHAT_APP_ID: process.env.EXPO_PUBLIC_CINDY_WECHAT_APP_ID,
+  EXPO_PUBLIC_CINDY_WECHAT_UNIVERSAL_LINK:
+    process.env.EXPO_PUBLIC_CINDY_WECHAT_UNIVERSAL_LINK,
+});
+export const WECHAT_APP_ID = WECHAT_CONFIG.appId;
+export const WECHAT_UNIVERSAL_LINK = WECHAT_CONFIG.universalLink;
 
 export let DEVICE_LINK_API_BASE_URL = resolveDeviceLinkApiBaseUrl(
   configuredValue('EXPO_PUBLIC_XDT_DEVICE_LINK_API_BASE_URL'),
 );
+
+// 官方中转地址:构建清单 / realm 激活写入的值,也是 realm 缓存里的 deviceLinkApiBaseUrl。
+// 自建中转(docs/self-hosted-relay-plan.md §5.3)只覆盖对外的 DEVICE_LINK_API_BASE_URL,
+// 区域函数之后的每次写入都重新套用覆盖值;推送等直接读 realm 缓存的路径仍拿到官方地址。
+let officialDeviceLinkApiBaseUrl = DEVICE_LINK_API_BASE_URL;
+let deviceLinkApiBaseOverride: string | null = null;
+
+function writeOfficialDeviceLinkApiBaseUrl(value: string): void {
+  officialDeviceLinkApiBaseUrl = value;
+  DEVICE_LINK_API_BASE_URL = deviceLinkApiBaseOverride ?? value;
+}
+
+/** 官方中转地址,不受自建中转覆盖:共享任务的接口、附件与跨账号连接都在官方。 */
+export function getOfficialDeviceLinkApiBaseUrl(): string {
+  return officialDeviceLinkApiBaseUrl;
+}
+/** Optional authoritative service origin. Absence keeps official V2 unavailable. */
+export function getOfficialAgentNetApiBaseUrl(): string {
+  const endpoints = realmEndpointCache.get(activeSessionRealm)
+    ?? ((endpointManifestRegion ?? BUILD_AUTH_REGION) === activeSessionRealm ? buildEndpointMap : null);
+  return endpoints?.agentNetApiBaseUrl?.replace(/\/+$/, '') ?? '';
+}
+
+/**
+ * 自建中转的地址覆盖:非空时所有 device-link 消费者(REST、WebSocket)改连这个地址;
+ * null 恢复官方中转。只由 device-link/selfHostedRelayRouting 调用,凭证与鉴权方案在那里一并切换。
+ */
+export function setDeviceLinkApiBaseOverride(baseUrl: string | null): void {
+  const normalized = baseUrl?.trim().replace(/\/+$/, '') ?? '';
+  deviceLinkApiBaseOverride = normalized || null;
+  DEVICE_LINK_API_BASE_URL = deviceLinkApiBaseOverride ?? officialDeviceLinkApiBaseUrl;
+}
 
 /** voice-server 数据面；正式包由启动端点清单回填。 */
 export let VOICE_API_BASE_URL = normalizeBaseUrlWithDefault(
@@ -255,7 +318,7 @@ function syncBuildTokenEndpointCache(): void {
     ...buildEndpointMap,
     authApiBaseUrl: AUTH_API_BASE_URL,
     oauthBrokerApiBaseUrl: OAUTH_BROKER_API_BASE_URL,
-    deviceLinkApiBaseUrl: DEVICE_LINK_API_BASE_URL,
+    deviceLinkApiBaseUrl: officialDeviceLinkApiBaseUrl,
     voiceApiBaseUrl: VOICE_API_BASE_URL,
   };
   realmEndpointCache.set(buildRealm, buildEndpointMap);
@@ -268,9 +331,10 @@ syncBuildTokenEndpointCache();
 
 // 二进制版本号:审核模式匹配基准。优先原生层版本(iOS CFBundleShortVersionString /
 // Android versionName,OTA 热更后不漂移),expoConfig.version 兜底(dev / 测试环境
-// 拿不到原生值)。与 mobileTapdb 的版本上报取值口径一致。
+// 拿不到原生值)。expo-application 已由现有 expo-auth-session / expo-notifications
+// 链进存量整包;这里只消费现成原生模块,不改 package.json / runtime fingerprint。
 export const APP_BINARY_VERSION = (
-  Constants.nativeAppVersion ??
+  Application.nativeApplicationVersion ??
   Constants.expoConfig?.version ??
   ''
 ).trim();
@@ -370,6 +434,18 @@ export const ENDPOINT_MANIFEST_PEER_BASE_URL = (
   ''
 ).replace(/\/+$/, '');
 
+/**
+ * CindyDev 内部包切换到 CN Release 时使用的第二个可信自举地址。
+ * 只经 Metro 环境变量进入 JS，不属于 ExpoConfig / 原生包身份；正式包恒为空串。
+ */
+export const DEV_RELEASE_ENDPOINT_MANIFEST_BASE_URL =
+  AUTH_REGION === 'dev'
+    ? (
+        process.env
+          .EXPO_PUBLIC_CINDY_DEV_RELEASE_ENDPOINT_MANIFEST_BASE_URL?.trim() || ''
+      ).replace(/\/+$/, '')
+    : '';
+
 function trustedMobileRealmManifestBaseUrls(): RealmManifestBaseUrls {
   return BUILD_AUTH_REGION === 'global'
     ? {
@@ -388,18 +464,21 @@ function trustedMobileRealmManifestBaseUrls(): RealmManifestBaseUrls {
  * 构建区域默认值；跨区域组织会话由 activateMobileSessionRealm 整体切换
  * token 消费端点。
  */
-export function applyResolvedClientEndpoints(resolved: {
-  authApiBaseUrl?: string;
-  oauthBrokerApiBaseUrl?: string;
-  deviceLinkApiBaseUrl?: string;
-  voiceApiBaseUrl?: string;
-  mobileUpdateBaseUrl?: string;
-  /** 审核模式送审版本号(parser 产出,null = 清单未填;undefined = 不改动)。 */
-  reviewVersion?: string | null;
-  /** iOS StoreKit 分发环境；TestFlight 保留 OTA、禁用整包外跳。 */
-  isTestFlight?: boolean;
-  region?: ClientEndpointRegion | null;
-}): void {
+export function applyResolvedClientEndpoints(
+  resolved: {
+    authApiBaseUrl?: string;
+    oauthBrokerApiBaseUrl?: string;
+    deviceLinkApiBaseUrl?: string;
+    voiceApiBaseUrl?: string;
+    mobileUpdateBaseUrl?: string;
+    /** 审核模式送审版本号(parser 产出,null = 清单未填;undefined = 不改动)。 */
+    reviewVersion?: string | null;
+    /** iOS StoreKit 分发环境；TestFlight 保留 OTA、禁用整包外跳。 */
+    isTestFlight?: boolean;
+    region?: ClientEndpointRegion | null;
+  },
+  options: { preserveBuildReleaseMetadata?: boolean } = {},
+): void {
   if (resolved.authApiBaseUrl !== undefined) {
     AUTH_API_BASE_URL = normalizeBaseUrlWithDefault(
       resolved.authApiBaseUrl,
@@ -413,7 +492,9 @@ export function applyResolvedClientEndpoints(resolved: {
     );
   }
   if (resolved.deviceLinkApiBaseUrl !== undefined) {
-    DEVICE_LINK_API_BASE_URL = resolved.deviceLinkApiBaseUrl.replace(/\/$/, '');
+    writeOfficialDeviceLinkApiBaseUrl(
+      resolved.deviceLinkApiBaseUrl.replace(/\/$/, ''),
+    );
   }
   if (resolved.voiceApiBaseUrl !== undefined) {
     VOICE_API_BASE_URL = resolved.voiceApiBaseUrl.replace(/\/$/, '');
@@ -423,18 +504,29 @@ export function applyResolvedClientEndpoints(resolved: {
   syncBuildTokenEndpointCache();
   // 仅自建变体吃清单覆写,保住「非自建 ⇒ OTA_SERVER_BASE_URL 恒空串」不变量
   // (调用点虽都有 IS_OTA_SELFHOST 门控,这里再挡一层,变体身份始终由烧包决定)。
-  if (resolved.mobileUpdateBaseUrl !== undefined && IS_OTA_SELFHOST) {
+  if (
+    !options.preserveBuildReleaseMetadata &&
+    resolved.mobileUpdateBaseUrl !== undefined &&
+    IS_OTA_SELFHOST
+  ) {
     OTA_SERVER_BASE_URL = resolved.mobileUpdateBaseUrl.replace(/\/+$/, '');
   }
-  if (resolved.reviewVersion !== undefined) {
+  if (
+    !options.preserveBuildReleaseMetadata &&
+    resolved.reviewVersion !== undefined
+  ) {
     resolvedReviewVersion = resolved.reviewVersion;
   }
-  if (resolved.isTestFlight !== undefined) {
+  if (
+    !options.preserveBuildReleaseMetadata &&
+    resolved.isTestFlight !== undefined
+  ) {
     IS_TESTFLIGHT_BUILD = resolved.isTestFlight;
   }
   if (
-    resolved.reviewVersion !== undefined ||
-    resolved.isTestFlight !== undefined
+    !options.preserveBuildReleaseMetadata &&
+    (resolved.reviewVersion !== undefined ||
+      resolved.isTestFlight !== undefined)
   ) {
     REVIEW_MODE = isReviewModeActive(
       resolvedReviewVersion,
@@ -469,8 +561,6 @@ export function getMobileEndpointRealmConfig(): {
   };
 }
 
-const MOBILE_REALM_MANIFEST_TIMEOUT_MS = 10_000;
-
 /** 当前登录态消费业务请求的区域；与安装包/更新通道所在区域相互独立。 */
 export function getActiveMobileSessionRealm(): ClientEndpointRegion {
   return activeSessionRealm;
@@ -478,33 +568,18 @@ export function getActiveMobileSessionRealm(): ClientEndpointRegion {
 
 export async function loadMobileEndpointsForRealm(
   region: ClientEndpointRegion,
+  options: { refresh?: boolean } = {},
 ): Promise<ClientEndpointMap> {
   const cached = realmEndpointCache.get(region);
-  if (cached) return cached;
+  if (cached && !options.refresh) return cached;
   const baseUrl = trustedMobileRealmManifestBaseUrls()[region];
   if (!baseUrl) {
     throw new Error('realm-manifest-url-unavailable');
   }
-  const controller = new AbortController();
-  const timer = setTimeout(
-    () => controller.abort(),
-    MOBILE_REALM_MANIFEST_TIMEOUT_MS,
-  );
-  try {
-    const response = await fetch(`${baseUrl}/endpoint.json?t=${Date.now()}`, {
-      signal: controller.signal,
-    });
-    if (!response.ok) throw new Error(`http-${response.status}`);
-    const parsed = parseClientEndpointManifest(await response.text());
-    if (!parsed.ok) throw new Error(parsed.reason);
-    if (parsed.region !== null && parsed.region !== region) {
-      throw new Error(`region-mismatch:${region}:${parsed.region}`);
-    }
-    realmEndpointCache.set(region, parsed.endpoints);
-    return parsed.endpoints;
-  } finally {
-    clearTimeout(timer);
-  }
+  const result = await resolveMobileEndpointManifest(region, baseUrl);
+  if (!result.ok) throw new Error(result.reason);
+  realmEndpointCache.set(region, result.parsed.endpoints);
+  return result.parsed.endpoints;
 }
 
 export function getMobileEndpointForRealm(
@@ -525,7 +600,7 @@ export function activateMobileSessionRealm(region: ClientEndpointRegion): void {
   activeSessionRealm = region;
   AUTH_API_BASE_URL = endpoints.authApiBaseUrl;
   OAUTH_BROKER_API_BASE_URL = endpoints.oauthBrokerApiBaseUrl;
-  DEVICE_LINK_API_BASE_URL = endpoints.deviceLinkApiBaseUrl;
+  writeOfficialDeviceLinkApiBaseUrl(endpoints.deviceLinkApiBaseUrl);
   VOICE_API_BASE_URL = endpoints.voiceApiBaseUrl;
 }
 
@@ -536,7 +611,7 @@ export function resetMobileSessionRealm(): void {
   if (!endpoints) return;
   AUTH_API_BASE_URL = endpoints.authApiBaseUrl;
   OAUTH_BROKER_API_BASE_URL = endpoints.oauthBrokerApiBaseUrl;
-  DEVICE_LINK_API_BASE_URL = endpoints.deviceLinkApiBaseUrl;
+  writeOfficialDeviceLinkApiBaseUrl(endpoints.deviceLinkApiBaseUrl);
   VOICE_API_BASE_URL = endpoints.voiceApiBaseUrl;
 }
 

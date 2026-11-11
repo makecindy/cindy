@@ -25,8 +25,85 @@ const DEFAULT_MAX_ENTRIES = 2_000;
 const MAX_ENTRY_BYTES = 8_000_000;
 /** Bound synchronous read/write work on Electron's main thread. */
 const DEFAULT_MAX_FILE_BYTES = 32_000_000;
+/**
+ * How long a completed answer stays worth delivering (≈24h).
+ *
+ * Each terminal result plays two roles, and only one of them should expire:
+ *  - tombstone (`get`): "this request was already answered, do not invoke the
+ *    agent again". Worth keeping as long as capacity allows.
+ *  - outbox item (`listPending`, plus the dispatcher's in-memory queues): "this
+ *    answer still needs a transport attempt". Worth keeping only while sending
+ *    it is still useful.
+ *
+ * Binding the two together is what lets an outbox item become immortal: a
+ * connection that never comes back (unbound account, deleted bot, replaced
+ * machine) leaves a `pending` record that nothing can ever settle, and the
+ * eviction loop below refuses to reclaim undelivered entries. Enough of those
+ * and every subsequent write fails, silently dropping the whole ledger back to
+ * in-memory dedupe — the exact regression this store exists to prevent.
+ *
+ * The horizon matches x-hook-server's reply horizon (OUTBOX_MAX_ATTEMPTS ×
+ * OUTBOX_MAX_DELAY_MS): the server already gives up on publishing a reply this
+ * old, so a client that reconnects later has nothing useful left to hand over.
+ *
+ * INVARIANT: a terminal frame past the horizon is never sent — no exceptions,
+ * whoever asked. The exits are easy to miss one at a time:
+ *  1. the durable outbox here (`listPending`);
+ *  2. the dispatcher's ACK retry timer (`sendPendingDelivery`);
+ *  3. its offline `turn.end` buffer, replayed on reconnect;
+ *  4. its ACK buffer on reconnect — which has *two* consumers, the ACK replay and
+ *     the capability-downgrade fallback that sends the frame directly;
+ *  5. the dispatcher's replay of a persisted terminal when the server explicitly
+ *     re-dispatches the same requestId.
+ *
+ * Because of (4) the age check belongs where the frames are *taken* (a sweep at
+ * the top of `onConnected`), not at each consumer: guarding consumers one by one
+ * is what let the downgrade branch through, and the next consumer added would
+ * slip through the same way. Guarding only (1) additionally makes the behaviour
+ * depend on whether the process happened to restart during the outage.
+ *
+ * (5) briefly carried an exemption — "the server is asking, so answer it" — and
+ * that exemption is why this rule is now unconditional. It had no place in the
+ * persisted record (there is no provenance field here), so every path that could
+ * queue or re-queue a frame had to propagate it by hand, and three consecutive
+ * review rounds each found one more path that had not. Dropping the exemption
+ * deletes that whole class of defect. The cost is bounded: the ACK is still
+ * replayed, so the server learns the requestId was handled and never re-invokes
+ * the agent; it only misses a terminal it had already given up publishing
+ * (server-side give-up is the same ≈24h, and a result is always younger than its
+ * request, so a re-dispatch this old is already past the server's own horizon).
+ */
+export const HOOK_TERMINAL_DELIVERY_TTL_MS = 24 * 60 * 60_000;
+
+/**
+ * The single age predicate behind that invariant. Exported so the dispatcher's
+ * in-memory queues judge staleness exactly like the durable outbox does.
+ *
+ * A clock that moved backwards yields a negative age and keeps the result live,
+ * which is the safe direction (delivering late beats discarding an answer that
+ * is actually fresh).
+ */
+export function terminalDeliveryExpired(
+  completedAt: number,
+  nowMs: number,
+  ttlMs: number = HOOK_TERMINAL_DELIVERY_TTL_MS,
+): boolean {
+  return nowMs - completedAt > ttlMs;
+}
+
+export interface HookMediaReference {
+  url: string;
+  refId: string;
+  name: string | null;
+  mimeType: string;
+  bytes: number;
+}
 
 export interface HookTerminalRecord {
+  /** Managed pins only; Base64 remains a wire/in-memory representation. */
+  media?: HookMediaReference[];
+  /** Delivered/deleted media is a dedupe tombstone, never a text-only replay. */
+  mediaReleased?: true;
   connectionId: string;
   requestId: string;
   ack: TaskAckPayload;
@@ -34,15 +111,18 @@ export interface HookTerminalRecord {
   turnEnd?: TurnEndPayload;
   /** pending = durable outbox still needs a transport attempt; sent = already attempted. */
   delivery: 'pending' | 'sent';
+  /** Wall clock at persist time; also the age used to expire the outbox role. */
   completedAt: number;
 }
 
 export interface HookRequestLedger {
   get(connectionId: string, requestId: string): HookTerminalRecord | null;
+  /** Undelivered answers still worth sending; entries past the horizon are omitted. */
   listPending(connectionId: string): HookTerminalRecord[];
   /** Returns false when persistence failed; callers must fall back to in-memory delivery. */
   set(record: HookTerminalRecord): boolean;
   markSent(connectionId: string, requestId: string): boolean;
+  prune?(): void;
 }
 
 interface LedgerFile {
@@ -91,6 +171,13 @@ function isTerminalRecord(value: unknown): value is HookTerminalRecord {
   ) {
     return false;
   }
+  if (value.mediaReleased !== undefined && value.mediaReleased !== true) return false;
+  if (value.media !== undefined && (!Array.isArray(value.media) || value.media.length > 8
+    || value.media.some((ref) => !isRecord(ref)
+      || typeof ref.url !== 'string' || !/^cindy-media:\/\/blobs\/[a-f0-9]{64}\.[a-z0-9]+$/.test(ref.url)
+      || typeof ref.refId !== 'string' || (ref.name !== null && typeof ref.name !== 'string') || typeof ref.mimeType !== 'string'
+      || typeof ref.bytes !== 'number' || !Number.isInteger(ref.bytes) || ref.bytes <= 0 || ref.bytes > 15 * 1024 * 1024)
+    || value.media.reduce((sum, ref) => sum + ref.bytes, 0) > 30 * 1024 * 1024)) return false;
   if (value.ack.requestId !== value.requestId) return false;
   if (value.ack.result === 'rejected') {
     return value.turnEnd === undefined && value.delivery === 'sent';
@@ -125,10 +212,35 @@ export function createHookRequestLedger(deps: {
   log: { warn(msg: string): void };
   maxEntries?: number;
   maxFileBytes?: number;
+  pendingTtlMs?: number;
+  now?: () => number;
+  releaseMedia?: (media: HookMediaReference[]) => Promise<void>;
 }): HookRequestLedger {
   const maxEntries = Math.max(1, Math.floor(deps.maxEntries ?? DEFAULT_MAX_ENTRIES));
   const maxFileBytes = Math.max(1_024, Math.floor(deps.maxFileBytes ?? DEFAULT_MAX_FILE_BYTES));
+  const pendingTtlMs = Math.max(0, Math.floor(deps.pendingTtlMs ?? HOOK_TERMINAL_DELIVERY_TTL_MS));
+  const now = deps.now ?? Date.now;
   let cachedEntries: HookTerminalRecord[] | undefined;
+
+  /**
+   * A `pending` entry past the horizon is no longer an outbox item: nothing will
+   * be delivered from it.
+   */
+  function pendingExpired(entry: HookTerminalRecord, nowMs: number): boolean {
+    return (
+      entry.delivery === 'pending' &&
+      terminalDeliveryExpired(entry.completedAt, nowMs, pendingTtlMs)
+    );
+  }
+
+  /**
+   * Capacity may be reclaimed from any entry whose only remaining value is
+   * dedupe — already delivered, or undeliverable by age. Live undelivered
+   * answers stay protected.
+   */
+  function reclaimable(entry: HookTerminalRecord, nowMs: number): boolean {
+    return entry.delivery === 'sent' || pendingExpired(entry, nowMs);
+  }
 
   function readEntries(): HookTerminalRecord[] | null {
     if (cachedEntries !== undefined) return cachedEntries;
@@ -165,7 +277,36 @@ export function createHookRequestLedger(deps: {
     return cachedEntries;
   }
 
+  function release(media: HookMediaReference[] | undefined): void {
+    if (media?.length) void deps.releaseMedia?.(media).catch(() => {
+      deps.log.warn('hook media pin cleanup deferred to expiry');
+    });
+  }
+
+  function withoutMedia(record: HookTerminalRecord): HookTerminalRecord {
+    const { media: _media, ...rest } = record;
+    if (!rest.turnEnd) return rest;
+    const { attachments: _bytes, ...turnEnd } = rest.turnEnd;
+    return { ...rest, turnEnd, ...((record.media?.length || _bytes?.length) ? { mediaReleased: true as const } : {}) };
+  }
+
+  function prune(): void {
+    const entries = readEntries();
+    if (!entries) return;
+    for (const record of entries) {
+      if ((record.media?.length || record.turnEnd?.attachments?.length) && reclaimable(record, now()))
+        writeRecord(withoutMedia(record));
+    }
+  }
+
   function writeRecord(record: HookTerminalRecord): boolean {
+    if (reclaimable(record, now())) record = withoutMedia(record);
+    // Refuse a text-only durable success when media staging failed. The
+    // dispatcher still keeps/sends the complete frame in memory.
+    if (record.turnEnd?.attachments?.length) {
+      deps.log.warn('write hook request ledger skipped (unmanaged-media)');
+      return false;
+    }
     if (!isTerminalRecord(record)) {
       deps.log.warn('write hook request ledger skipped (invalid-record)');
       return false;
@@ -178,20 +319,39 @@ export function createHookRequestLedger(deps: {
       return false;
     }
 
+    const nowMs = now();
     const next = entries.filter(
       (entry) => !sameRequest(entry, record.connectionId, record.requestId),
     );
     next.push(record);
     let data: LedgerFile = { version: FILE_VERSION, entries: next };
     let serialized = JSON.stringify(data);
-    while (next.length > maxEntries || utf8ByteLength(serialized) > maxFileBytes) {
-      // Never evict an undelivered outbox entry to make room. Remove the
-      // oldest sent result first; if pending entries alone exceed the bound,
-      // fail this write and let the dispatcher retain its in-memory fallback.
-      const removable = next.findIndex(
-        (entry) =>
-          entry.delivery === 'sent' && !sameRequest(entry, record.connectionId, record.requestId),
-      );
+    // Keep the existing aggregate outbox budget even though JSON now contains
+    // references: otherwise 2,000 pending records could pin gigabytes of media.
+    const mediaBudget = () => next.reduce((sum, entry) => sum +
+      (entry.media ?? []).reduce((bytes, ref) => bytes + Math.ceil(ref.bytes / 3) * 4, 0), 0);
+    while (next.length > maxEntries || utf8ByteLength(serialized) + mediaBudget() > maxFileBytes) {
+      // Never evict a *live* undelivered outbox entry to make room. Reclaim the
+      // oldest entry that is only holding a tombstone — already sent, or pending
+      // past the delivery horizon. Only a burst of live undelivered answers can
+      // still fail this write, and the horizon keeps that bounded instead of
+      // letting unsettleable entries accumulate forever.
+      //
+      // "Oldest" means oldest `completedAt`, not lowest index: an updated record
+      // is re-appended (see the filter + push above, and `markSent`), so array
+      // order tracks the last write rather than age. Picking by index would evict
+      // fresher tombstones while keeping stale ones — the retained tombstone is
+      // the one a redelivery is *least* likely to need.
+      let removable = -1;
+      let oldest = Number.POSITIVE_INFINITY;
+      for (let index = 0; index < next.length; index += 1) {
+        const entry = next[index];
+        if (!reclaimable(entry, nowMs)) continue;
+        if (sameRequest(entry, record.connectionId, record.requestId)) continue;
+        if (entry.completedAt >= oldest) continue;
+        oldest = entry.completedAt;
+        removable = index;
+      }
       if (removable < 0) {
         deps.log.warn('write hook request ledger skipped (pending-outbox-limit)');
         return false;
@@ -204,6 +364,8 @@ export function createHookRequestLedger(deps: {
     try {
       atomicWriteFileSync(deps.filePath, `${serialized}\n`);
       cachedEntries = next;
+      const retained = new Set(next.flatMap((entry) => entry.media?.map((ref) => ref.refId) ?? []));
+      release(entries.flatMap((entry) => entry.media ?? []).filter((ref) => !retained.has(ref.refId)));
       return true;
     } catch (error) {
       deps.log.warn(`write hook request ledger failed (${safeErrorCode(error)})`);
@@ -212,7 +374,9 @@ export function createHookRequestLedger(deps: {
   }
 
   return {
+    prune,
     get(connectionId, requestId) {
+      prune();
       const entries = readEntries();
       if (entries === null) return null;
       for (let index = entries.length - 1; index >= 0; index -= 1) {
@@ -223,10 +387,20 @@ export function createHookRequestLedger(deps: {
     },
 
     listPending(connectionId) {
+      prune();
       const entries = readEntries();
       if (entries === null) return [];
+      const nowMs = now();
       return entries
-        .filter((entry) => entry.connectionId === connectionId && entry.delivery === 'pending')
+        .filter(
+          (entry) =>
+            entry.connectionId === connectionId &&
+            entry.delivery === 'pending' &&
+            // Past the horizon this answer is no longer worth sending. Replaying
+            // it would post a reply to a conversation that moved on a day ago —
+            // and after a long outage there would be a burst of them at once.
+            !pendingExpired(entry, nowMs),
+        )
         .sort((a, b) => a.completedAt - b.completedAt);
     },
 

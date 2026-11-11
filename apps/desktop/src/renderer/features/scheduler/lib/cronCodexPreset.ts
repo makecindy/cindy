@@ -1,3 +1,8 @@
+import type { TFunction } from 'i18next';
+import { SUPPORTED_INTERVAL_MINUTES } from '@cindy/maker-shared';
+
+export { SUPPORTED_INTERVAL_MINUTES } from '@cindy/maker-shared';
+
 /**
  * cronCodexPreset — codex 8 种 schedule mode ↔ 5-field cron 双向转换
  * ---------------------------------------------------------------------------
@@ -42,7 +47,7 @@ export interface CodexScheduleConfig {
   monthDay: number;
   /** 间隔小时数（>=1）。interval 用 */
   intervalHours: number;
-  /** 间隔分钟数（1-59）。intervalMinutes 用；N=1 等价于 cron `* * * * *` */
+  /** 间隔分钟数（能整除 60 的值）。intervalMinutes 用；N=1 等价于 cron `* * * * *` */
   intervalMinutes: number;
   /** 任意 cron 字符串。custom 用 */
   customCron: string;
@@ -81,6 +86,18 @@ export const DEFAULT_CONFIG: CodexScheduleConfig = {
   intervalMinutes: 5,
   customCron: '0 9 * * *',
 };
+
+export function isSupportedIntervalMinutes(value: number): boolean {
+  return (SUPPORTED_INTERVAL_MINUTES as readonly number[]).includes(value);
+}
+
+export function resolveIntervalMinutesPresetValue(
+  config: Pick<CodexScheduleConfig, 'mode' | 'intervalMinutes'>,
+): number {
+  return config.mode === 'intervalMinutes' && isSupportedIntervalMinutes(config.intervalMinutes)
+    ? config.intervalMinutes
+    : 5;
+}
 
 const NUM = /^\d+$/;
 
@@ -225,9 +242,17 @@ function clampIntervalMinutes(n: number): number {
   return Math.max(1, Math.min(59, Math.floor(n)));
 }
 
+/** Parse a legacy minute Cron into an exact interval, including values no longer offered as presets. */
+function cronExprToExactMinuteIntervalMs(expr: string): number | undefined {
+  const match = /^\*\/(\d+) \* \* \* \*$/.exec(expr.trim());
+  if (!match) return undefined;
+  const minutes = Number(match[1]);
+  return minutes >= 1 && minutes <= 59 ? minutes * 60_000 : undefined;
+}
+
 // 把 cron 表达式反推成 interval 毫秒——只识别 UI 的 4 个 interval-style preset：
 //   - `* * * * *`             → 60_000（1 分钟）
-//   - `*\/N * * * *` (N: 2-59) → N * 60_000
+//   - `*\/N * * * *` (N: an interval that divides 60) → N * 60_000
 //   - `0 * * * *`             → 3_600_000（1 小时）
 //   - `0 *\/N * * *` (N: 1-23) → N * 3_600_000
 // 其它任何 cron（daily/weekly/custom）→ undefined，让该任务继续走 cron 槽位语义。
@@ -240,7 +265,7 @@ export function cronExprToIntervalMs(expr: string): number | undefined {
   const minMatch = /^\*\/(\d+) \* \* \* \*$/.exec(trimmed);
   if (minMatch) {
     const n = Number(minMatch[1]);
-    if (n >= 2 && n <= 59) return n * 60_000;
+    if (isSupportedIntervalMinutes(n)) return n * 60_000;
     return undefined;
   }
   const hourMatch = /^0 \*\/(\d+) \* \* \*$/.exec(trimmed);
@@ -253,7 +278,7 @@ export function cronExprToIntervalMs(expr: string): number | undefined {
 }
 
 /**
- * 把当前 UI 可编辑的相对间隔转换成等价 Cron preset，供 interval 回显和显式切回
+ * 把当前 UI 可编辑的相对间隔转换成对应 Cron preset，供 interval 回显和显式切回
  * Cron 使用。返回 undefined 表示该间隔无法由现有“每 N 分钟/小时”控件精确表达。
  */
 export function intervalMsToCronExpr(intervalMs: number): string | undefined {
@@ -264,7 +289,7 @@ export function intervalMsToCronExpr(intervalMs: number): string | undefined {
   }
   if (intervalMs % 60_000 === 0) {
     const minutes = intervalMs / 60_000;
-    if (minutes >= 1 && minutes <= 59) return minutes === 1 ? '* * * * *' : `*/${minutes} * * * *`;
+    if (isSupportedIntervalMinutes(minutes)) return minutes === 1 ? '* * * * *' : `*/${minutes} * * * *`;
   }
   return undefined;
 }
@@ -298,42 +323,67 @@ export function switchScheduleTimingMode(
   nextMode: 'cron' | 'interval',
 ): { cronExpr: string; intervalMs?: number } {
   if (nextMode === 'interval') {
-    const nextIntervalMs = cronExprToIntervalMs(cronExpr) ?? DEFAULT_SCHEDULE_INTERVAL_MS;
+    const nextIntervalMs = cronExprToIntervalMs(cronExpr)
+      ?? cronExprToExactMinuteIntervalMs(cronExpr)
+      ?? intervalMs
+      ?? DEFAULT_SCHEDULE_INTERVAL_MS;
     return {
-      cronExpr: intervalMsToCronExpr(nextIntervalMs) ?? '*/5 * * * *',
+      // Keep an unsupported legacy minute Cron intact so switching modes does not silently reset it.
+      cronExpr: intervalMsToCronExpr(nextIntervalMs) ?? (cronExpr.trim() || '*/5 * * * *'),
       intervalMs: nextIntervalMs,
     };
   }
+  const currentIntervalMs = intervalMs ?? DEFAULT_SCHEDULE_INTERVAL_MS;
+  const minutes = currentIntervalMs / 60_000;
+  // Explicit switching keeps the pre-restriction conversion for legacy whole minutes.
+  // Cron uses hourly slots, not exact elapsed time; this must not enable new presets.
+  const legacyMinuteCron = Number.isInteger(minutes) && minutes >= 1 && minutes <= 59
+    ? (minutes === 1 ? '* * * * *' : `*/${minutes} * * * *`)
+    : undefined;
   return {
-    cronExpr: intervalMsToCronExpr(intervalMs ?? DEFAULT_SCHEDULE_INTERVAL_MS) ?? cronExpr,
+    cronExpr: intervalMsToCronExpr(currentIntervalMs) ?? legacyMinuteCron ?? cronExpr,
     intervalMs: undefined,
   };
 }
 
 /** chip 文案：mode + 关键参数；"每天 09:00" / "工作日 09:00" / "每 2 小时" */
-export function summarizeConfig(c: CodexScheduleConfig): string {
-  const t = `${pad(c.hour)}:${pad(c.minute)}`;
+export function summarizeConfig(c: CodexScheduleConfig, translate?: TFunction): string {
+  const time = `${pad(c.hour)}:${pad(c.minute)}`;
+  const text = (key: string, fallback: string, values?: Record<string, string | number>) =>
+    translate?.(key, { defaultValue: fallback, ...values }) ?? fallback;
   switch (c.mode) {
     case 'minute':
-      return 'Every minute';
+      return text('scheduler.chips.schedulePreview.everyMinute', 'Every minute');
     case 'hourly':
-      return 'Hourly';
+      return text('scheduler.presentation.summary.hourly', 'Hourly');
     case 'daily':
-      return `Daily at ${t}`;
+      return text('scheduler.presentation.summary.daily', `Daily at ${time}`, { time });
     case 'weekly':
-      return `${WEEKDAY_LABELS[c.weekday]} at ${t}`;
+      return text('scheduler.presentation.summary.weekly', `${WEEKDAY_LABELS[c.weekday]} at ${time}`, {
+        weekday: text(`scheduler.presentation.weekday.full.${c.weekday}`, WEEKDAY_LABELS[c.weekday]),
+        time,
+      });
     case 'weekdays':
-      return `Weekdays at ${t}`;
+      return text('scheduler.presentation.summary.weekdays', `Weekdays at ${time}`, { time });
     case 'weekends':
-      return `Weekends at ${t}`;
+      return text('scheduler.presentation.summary.weekends', `Weekends at ${time}`, { time });
     case 'monthly':
-      return `Monthly on day ${c.monthDay} at ${t}`;
+      return text('scheduler.presentation.summary.monthly', `Monthly on day ${c.monthDay} at ${time}`, {
+        day: c.monthDay,
+        time,
+      });
     case 'interval':
-      return `Every ${c.intervalHours} hours`;
+      return text('scheduler.chips.schedulePreview.everyHours', `Every ${c.intervalHours} hours`, {
+        count: c.intervalHours,
+      });
     case 'intervalMinutes':
-      return c.intervalMinutes === 1 ? 'Every minute' : `Every ${c.intervalMinutes} minutes`;
+      return c.intervalMinutes === 1
+        ? text('scheduler.chips.schedulePreview.everyMinute', 'Every minute')
+        : text('scheduler.chips.schedulePreview.everyMinutes', `Every ${c.intervalMinutes} minutes`, {
+            count: c.intervalMinutes,
+          });
     case 'custom':
-      return c.customCron || 'Custom';
+      return c.customCron || text('scheduler.presentation.summary.custom', 'Custom');
   }
 }
 

@@ -8,6 +8,7 @@ import {
   findMessageTodoInsertions,
   formatDuration,
   getLatestMessageTodoState,
+  isSubagentParentToolUseId,
   type MessageRenderItem,
   type MessageRenderNormalizedMessage,
   type MessageRenderSourceMessageLike,
@@ -53,6 +54,135 @@ function at(seconds: number): string {
 }
 
 describe('message render shared model', () => {
+  // Unit regression: a generated video appeared both as a tool artifact and a
+  // cindy-ui video. Existing URL dedupe covered only tools within one segment.
+  it('keeps rich-answer media once per turn without losing other artifacts or tool history', () => {
+    const url = 'cindy-media://blobs/video.mp4';
+    const body = '```cindy-ui\n' + JSON.stringify({ version: 1, seq: 1, op: 'create', id: 'v', kind: 'video', props: { src: url } }) + '\n```';
+    const tool = message({ kind: 'tool', source: source('video', {}, 1), media: [{ kind: 'video', url }, { kind: 'image', url: 'other.png' }] });
+    const answer = message({ kind: 'assistant', source: source('answer', body, 2), body, turnCompleted: true });
+    const artifacts = (rows: FixtureMessage[]) => buildMessageRenderItems(rows).flatMap(item => item.type === 'tool_media' ? item.tools.flatMap(t => t.media ?? []) : []);
+    expect(artifacts([tool, answer]).map(m => m.url)).toEqual(['other.png']);
+    expect(tool.media).toHaveLength(2);
+    expect(artifacts([tool, { ...answer, isStreaming: true }])).toHaveLength(2);
+    expect(artifacts([tool, message({ kind: 'user', source: { ...source('next', 'again', 2), role: 'user' } }), answer])).toHaveLength(2);
+    expect(artifacts([tool, { ...answer, body: '````markdown\n' + body + '\n````' }])).toHaveLength(2);
+    const removed = body.replace('\n```', '\n' + JSON.stringify({ seq: 2, op: 'remove', id: 'v' }) + '\n```');
+    expect(artifacts([tool, { ...answer, body: removed }])).toHaveLength(2);
+  });
+
+  it('still drops media the reply shows when the same tool result also carries a turn-end card', () => {
+    const url = 'cindy-media://blobs/video.mp4';
+    const body = '```cindy-ui\n' + JSON.stringify({ version: 1, seq: 1, op: 'create', id: 'v', kind: 'video', props: { src: url } }) + '\n```';
+    const tool = message({ kind: 'tool', source: source('video', {}, 1), media: [{ kind: 'video', url }, { kind: 'image', url: 'other.png' }],
+      cardIds: ['turn-end-card'], turnEndCardIds: ['turn-end-card'] });
+    const answer = message({ kind: 'assistant', source: source('answer', body, 2), body, turnCompleted: true });
+    const media = buildMessageRenderItems([tool, answer]).flatMap(item => item.type === 'tool_media' ? item.tools.flatMap(t => t.media ?? []) : []);
+    expect(media.map(m => m.url)).toEqual(['other.png']);
+  });
+
+  it('keeps sealed work folded while subsequent work in the same turn remains active', () => {
+    const messages = [
+      message({ kind: 'user', source: source('u1', 'start', 1), body: 'start' }),
+      message({ kind: 'thinking', source: source('think1', 'Checking', 2), body: 'Checking' }),
+      message({ kind: 'assistant', source: source('progress1', 'Checking more', 3), body: 'Checking more' }),
+      message({ kind: 'tool', source: source('read1', { toolName: 'Read', input: {} }, 4), body: 'Read', label: 'Read' }),
+      message({ kind: 'assistant', source: source('final1', 'Done', 5), body: 'Done', turnCompleted: true }),
+    ];
+    const completed = buildMessageRenderItems(messages);
+    expect(completed.map((item) => item.key)).toEqual(['message-u1', 'work-summary-think1', 'message-final1']);
+    expect(buildMessageRenderItems(messages, { isSessionStreaming: true })).toEqual(completed);
+    const continued = buildMessageRenderItems([
+      ...messages,
+      message({ kind: 'thinking', source: source('next-think', 'Continuing', 6), body: 'Continuing', isStreaming: true }),
+    ], { isSessionStreaming: true });
+    expect(continued.slice(0, completed.length)).toEqual(completed);
+    expect(continued.at(-1)).toMatchObject({ key: 'work-next-think', isStreaming: true });
+  });
+
+  /**
+   * thinking 块在结束时才落库，所以一个跨过最终回答的块在消息数组里排在回答之后，尽管它
+   * 早已开始。它属于回答上方那段工作，不应当作回答之后的新一段，在回答下面多折出一个
+   * 「已工作 1s」。(实例：2026-10-30 定时巡检，10:00:39 回答之后紧跟 10:00:40 的 thinking)
+   */
+  function answeredTurnWithTailThinking(tailStart: string, answers = 1): FixtureMessage[] {
+    return [
+      message({ kind: 'user', source: source('u1', 'start', 1), body: 'start' }),
+      message({
+        kind: 'thinking',
+        source: source('think1', { text: 'Checking', durationMs: 3000 }, 2),
+        body: 'Checking',
+      }),
+      {
+        ...message({
+          kind: 'tool',
+          source: source('read1', { toolName: 'Read', input: { file_path: '/repo/a.ts' } }, 5),
+          body: 'Read(/repo/a.ts)',
+          label: 'Read',
+        }),
+        settledAt: '2026-01-01T00:00:08.000Z',
+      },
+      // 多段最终回答:前一段是交付正文(不折叠),后一段是短收尾。
+      message({
+        kind: 'assistant',
+        source: source('final1', answers > 1 ? '# Report\n详情' : 'Done', 9),
+        body: answers > 1 ? '# Report\n详情' : 'Done',
+        turnCompleted: true,
+      }),
+      ...(answers > 1
+        ? [message({ kind: 'assistant', source: source('final2', 'Also done', 10), body: 'Also done', turnCompleted: true })]
+        : []),
+      message({
+        kind: 'thinking',
+        source: {
+          id: 'think2',
+          clientId: 'think2',
+          content: { text: 'Signing off', durationMs: 1200 },
+          createdAt: tailStart,
+        },
+        body: 'Signing off',
+      }),
+    ];
+  }
+
+  it('folds a thinking block persisted after the final answer back into its run', () => {
+    const items = buildMessageRenderItems(answeredTurnWithTailThinking('2026-01-01T00:00:08.700Z'));
+
+    expect(items.map((item) => item.key)).toEqual(['message-u1', 'work-think1', 'message-final1']);
+    const group = expectType(items[1], 'work_group');
+    expect(group.durationMs).toBe(8000);
+    expect(group.children.map((child) => child.key)).toEqual([
+      'thinking-think1',
+      'tools-read1',
+      'thinking-think2',
+    ]);
+  });
+
+  it.each(['2026-01-01T00:00:08.700Z', '2026-01-01T00:00:09.500Z'])(
+    'keeps the fold target across consecutive final answers (tail at %s)',
+    (tailStart) => {
+      const items = buildMessageRenderItems(answeredTurnWithTailThinking(tailStart, 2));
+
+      expect(items.map((item) => item.key)).toEqual([
+        'message-u1',
+        'work-think1',
+        'message-final1',
+        'message-final2',
+      ]);
+    },
+  );
+
+  it('keeps work that starts after the final answer in its own segment', () => {
+    const items = buildMessageRenderItems(answeredTurnWithTailThinking('2026-01-01T00:00:10.000Z'));
+
+    expect(items.map((item) => item.key)).toEqual([
+      'message-u1',
+      'work-think1',
+      'message-final1',
+      'work-think2',
+    ]);
+  });
+
   it('groups consecutive normalized tools before the final answer', () => {
     const items = buildMessageRenderItems([
       message({
@@ -184,8 +314,8 @@ describe('message render shared model', () => {
     expect(todo.todos).toEqual([{ content: 'Implement', status: 'completed', activeForm: undefined }]);
   });
 
-  it('keeps every sealed SDK-turn summary visible across a background auto-continuation', () => {
-    const items = buildMessageRenderItems([
+  function backgroundContinuation(mainSummary: string): MessageRenderItem<FixtureMessage>[] {
+    return buildMessageRenderItems([
       message({ kind: 'user', source: source('user', 'start', 1), body: 'start', label: 'user' }),
       message({
         kind: 'thinking',
@@ -195,8 +325,8 @@ describe('message render shared model', () => {
       }),
       message({
         kind: 'assistant',
-        source: source('main-summary', 'formal summary', 4),
-        body: 'formal summary',
+        source: source('main-summary', mainSummary, 4),
+        body: mainSummary,
         label: 'assistant',
         turnCompleted: true,
       }),
@@ -214,6 +344,19 @@ describe('message render shared model', () => {
         turnCompleted: true,
       }),
     ]);
+  }
+
+  // 后台唤醒(异步子 Agent、后台 shell)会在同一个 user turn 里盖多次 seal;
+  // 只有最后一次是收尾正文,更早的短句按过程文字折叠。
+  it('folds earlier short sealed replies when background work auto-continues the turn', () => {
+    const items = backgroundContinuation('Agents are still running; waiting for them.');
+
+    expect(items.map((item) => item.type)).toEqual(['message', 'work_group', 'message']);
+    expect(expectType(items[2], 'message').message.key).toBe('gate-followup');
+  });
+
+  it('keeps an earlier sealed delivery-prose summary visible across a background auto-continuation', () => {
+    const items = backgroundContinuation('## Summary\n\n- implemented\n- tested\n- verified');
 
     expect(items.map((item) => item.type)).toEqual([
       'message',
@@ -364,6 +507,24 @@ describe('message render shared model', () => {
     // key 派生自组首 tool 的 clientId(与 tool_group 同源、prefix 不同)。
     expect(media.key).toBe('media-gen-1');
     expect(media.tools.map((tool) => tool.source.clientId)).toEqual(['gen-1', 'gen-2']);
+  });
+
+  // The phone fetches a card's HTML only after the list is built, so the host's tool-result hint
+  // decides placement: a turn-end card (the PR question) follows the turn's reply, like desktop.
+  it('moves turn-end plugin cards after the reply, before the next user message', () => {
+    const turn = (id: string, at0: number) => [
+      message({ kind: 'user', source: source(`${id}-user`, 'go', at0), body: 'go', label: 'user' }),
+      message({ kind: 'tool', source: source(`${id}-pr`, { toolName: 'ghost_call', input: {} }, at0 + 1), label: 'ghost_call', body: '',
+        cardIds: [`${id}-card`, `${id}-other`], turnEndCardIds: [`${id}-card`] }),
+      message({ kind: 'assistant', source: source(`${id}-reply`, 'done', at0 + 2), body: 'done', label: 'assistant' }),
+    ];
+    const items = buildMessageRenderItems([...turn('a', 1), ...turn('b', 10)]);
+    const cards = (item: MessageRenderItem<FixtureMessage>) =>
+      item.type === 'tool_media' ? item.tools.flatMap((tool) => tool.cardIds ?? []) : [];
+    expect(items.map((item) => [item.type, ...cards(item)])).toEqual([
+      ['message'], ['work_group'], ['tool_media', 'a-other'], ['message'], ['tool_media', 'a-card'],
+      ['message'], ['work_group'], ['tool_media', 'b-other'], ['message'], ['tool_media', 'b-card'],
+    ]);
   });
 
   it('does not emit tool_media when tools carry no media or only empty urls', () => {
@@ -743,6 +904,27 @@ describe('message render shared model', () => {
     expect(formatDuration(65_000)).toBe('1m 5s');
     expect(formatDuration(120_000)).toBe('2m');
   });
+
+  it.each([
+    [3_599_000, '59m 59s'],
+    [3_599_600, '1h 0m'],
+    [3_661_000, '1h 1m'],
+    [77_516_000, '21h 31m'],
+    [86_399_000, '23h 59m'],
+    [86_399_600, '1d 0h 0m'],
+    [86_700_000, '1d 0h 5m'],
+    [183_845_000, '2d 3h 4m'],
+  ])('keeps long work durations readable (%i ms)', (ms, expected) => {
+    expect(formatDuration(ms)).toBe(expected);
+  });
+
+  it('preserves zero and padded remainder for live counters', () => {
+    const options = { minimumSeconds: 0, alwaysShowRemainder: true, padRemainder: true };
+    expect(formatDuration(0, options)).toBe('0s');
+    expect(formatDuration(60_000, options)).toBe('1m 00s');
+    expect(formatDuration(7_509_000, options)).toBe('2h 05m');
+    expect(formatDuration(86_400_000, options)).toBe('1d 00h 00m');
+  });
 });
 
 function expectType<TType extends MessageRenderItem<FixtureMessage>['type']>(
@@ -868,6 +1050,368 @@ describe('message render todo grouping', () => {
 
   it('findLatestMessageTodoInsertion returns null when the conversation has no plan calls', () => {
     expect(findLatestMessageTodoInsertion([tool('t1', 'Bash', {})])).toBeNull();
+  });
+
+  it('a terminal seal ends the plan session even when steps were left open', () => {
+    // 成功收尾常留未勾完的步骤。章之后的下一 turn 计划必须开新 session:
+    // 否则新计划把上一轮吞成续写,历史里上一轮的卡消失、面板复用旧 key。
+    const sealedOpen = {
+      ...tool('plan1', 'update_plan', {
+        plan: [{ step: 'Ship', status: 'in_progress' }],
+      }),
+      terminalPlanSnapshot: true,
+      terminalPlanAtMs: 1_700_000_000_000,
+    };
+    const nextTurnPlan = tool('plan2', 'update_plan', {
+      plan: [{ step: 'New task', status: 'in_progress' }],
+    });
+
+    expect(findLatestMessageTodoInsertion([sealedOpen, nextTurnPlan])).toMatchObject({
+      key: 'todo-plan2',
+      todos: [{ content: 'New task', status: 'in_progress' }],
+    });
+    // 章在持久化 content 里(mobile 渲染 main 广播行的形态)同样算边界。
+    const sealedInContent = {
+      ...tool('plan3', 'update_plan', { plan: [{ step: 'Ship', status: 'in_progress' }] }),
+      content: {
+        toolUseId: 'plan3',
+        toolName: 'update_plan',
+        input: { plan: [{ step: 'Ship', status: 'in_progress' }] },
+        terminalPlanSnapshot: true,
+        terminalPlanAtMs: 1_700_000_000_000,
+      },
+    };
+    const latest = findLatestMessageTodoInsertion([sealedInContent, nextTurnPlan]);
+    expect(latest).toMatchObject({ key: 'todo-plan2' });
+    expect(
+      findLatestMessageTodoInsertion([sealedInContent]),
+    ).toMatchObject({ sealed: true, sealedAtMs: 1_700_000_000_000 });
+  });
+
+  it('findLatestMessageTodoInsertion marks a plan whose turn failed as turnFailed', () => {
+    // persistCodexPlanOnDone 在中断/失败终态给计划行盖 turnCompleted:false。
+    // 面板据此不走"全勾完"兜底退场:任务还活着,计划必须留在屏幕上。
+    const failedPlan = {
+      ...tool('plan1', 'update_plan', {
+        plan: [{ step: 'Ship it', status: 'completed' }],
+      }),
+      turnCompleted: false,
+    };
+
+    expect(findLatestMessageTodoInsertion([failedPlan])).toMatchObject({
+      source: 'codex',
+      turnFailed: true,
+    });
+    // 正常行没有印记,不应引入该字段。
+    expect(
+      findLatestMessageTodoInsertion([
+        tool('plan2', 'update_plan', { plan: [{ step: 'Ship it', status: 'completed' }] }),
+      ]),
+    ).not.toHaveProperty('turnFailed');
+  });
+
+  /**
+   * 计划归属(ownership)。三个历史病根,都源于"同 source 的上一份计划没勾完
+   * 就无条件当续期":
+   *  1. 跨普通 user turn 串号——用户换了话题,新计划仍复用旧 session/key;
+   *  2. 子代理的计划工具调用与主线程平权,子计划能顶掉主计划;
+   *  3. Codex 不同 turn 的 update_plan 被并成同一 session。
+   */
+  describe('plan ownership boundaries', () => {
+    it('treats a bare legacy transcript parentUuid as top-level, not subagent', () => {
+      // 旧 Claude 导入把普通 transcript 链边也存在 agentMeta.parentUuid(裸 uuid
+      // 形态)。一律当子代理会让旧会话的顶层计划被面板与对账整段过滤掉;只认
+      // SDK tool-use id 形态(toolu_/call_ 前缀),与 latestMessageText 同判据。
+      const legacyTopLevelPlan: MessageRenderSourceMessageLike = {
+        ...tool('todo-legacy', 'TodoWrite', {
+          todos: [
+            { content: 'Legacy step', status: 'in_progress' },
+            { content: 'Legacy follow-up', status: 'pending' },
+          ],
+        }),
+        agentMeta: { parentUuid: '4f1c9a7e-3b2d-4c8a-9e5f-1a2b3c4d5e6f' },
+      };
+
+      expect(findLatestMessageTodoInsertion([legacyTopLevelPlan])).toMatchObject({
+        key: 'todo-todo-legacy',
+        todos: [
+          { content: 'Legacy step', status: 'in_progress' },
+          { content: 'Legacy follow-up', status: 'pending' },
+        ],
+      });
+
+      // 真正的 SDK tool 父级(toolu_ 前缀)仍然按子代理排除。
+      const realSubagentPlan: MessageRenderSourceMessageLike = {
+        ...tool('todo-sub2', 'TodoWrite', {
+          todos: [
+            { content: 'Subagent step', status: 'in_progress' },
+            { content: 'Subagent follow-up', status: 'pending' },
+          ],
+        }),
+        agentMeta: { parentUuid: 'toolu_01ABCDEF' },
+      };
+      expect(findLatestMessageTodoInsertion([realSubagentPlan])).toBeNull();
+
+      // 兼容模型归一化后的父调用 id(Task_x1)同样是真实 tool parent。
+      const compatSubagentPlan: MessageRenderSourceMessageLike = {
+        ...tool('todo-sub3', 'TodoWrite', {
+          todos: [
+            { content: 'Compat subagent step', status: 'in_progress' },
+            { content: 'Compat subagent follow-up', status: 'pending' },
+          ],
+        }),
+        agentMeta: { parentUuid: 'Task_x1' },
+      };
+      expect(findLatestMessageTodoInsertion([compatSubagentPlan])).toBeNull();
+    });
+
+    it('exports the same tool-parent shape check that projection sites must use', () => {
+      // desktop 渲染层的历史恢复会把裸 agentMeta.parentUuid 提升成显式
+      // parentToolUseId。提升前必须过这条判据,否则 legacy transcript 链边被当成
+      // 显式父归属,顶层计划在桌面端被过滤、在 mobile / main 端不被过滤,同一份
+      // 历史两端分组分叉(review P2)。判据与本文件内部的子代理归属同一份。
+      expect(isSubagentParentToolUseId('toolu_01ABCDEF')).toBe(true);
+      expect(isSubagentParentToolUseId('call_abc123')).toBe(true);
+      expect(isSubagentParentToolUseId('chatcmpl-tool-a1b2c3d4e5f60718')).toBe(true);
+      expect(isSubagentParentToolUseId('chatcmpl-message-a1b2c3d4e5f60718')).toBe(false);
+      expect(isSubagentParentToolUseId('4f1c9a7e-3b2d-4c8a-9e5f-1a2b3c4d5e6f')).toBe(false);
+      expect(isSubagentParentToolUseId('preceding-user-uuid')).toBe(false);
+      // 兼容模型(kimi 系)的真实 tool-use id:`名字_序号`,以及 resume 前转录
+      // 归一化的产物 `_x` 顺延 / `_dupN` 去重。只认 toolu_/call_ 会把这类子代理
+      // 的计划当成顶层计划(review P2)。
+      expect(isSubagentParentToolUseId('Task_1')).toBe(true);
+      expect(isSubagentParentToolUseId('Task_x1')).toBe(true);
+      expect(isSubagentParentToolUseId('Bash_xx210')).toBe(true);
+      expect(isSubagentParentToolUseId('Bash_5_dup2')).toBe(true);
+    });
+
+    it('starts a new session when an ordinary user turn intervenes', () => {
+      const staleTodo = tool('todo-old', 'TodoWrite', {
+        todos: [
+          { content: 'Old work', status: 'in_progress' },
+          { content: 'Old follow-up', status: 'pending' },
+        ],
+      });
+      const newUserTurn: MessageRenderSourceMessageLike = {
+        role: 'user',
+        clientId: 'user-2',
+        content: '换个话题:帮我做另一件事',
+        createdAt: at(5),
+      };
+      const freshTodo = tool('todo-new', 'TodoWrite', {
+        todos: [{ content: 'New work', status: 'in_progress' }, { content: 'New follow-up', status: 'pending' }],
+      });
+
+      const latest = findLatestMessageTodoInsertion([staleTodo, newUserTurn, freshTodo]);
+      // 新 user turn 之后的计划是新 session:key 必须锚在新调用上,不复用旧 key。
+      expect(latest).toMatchObject({
+        key: 'todo-todo-new',
+        todos: [
+          { content: 'New work', status: 'in_progress' },
+          { content: 'New follow-up', status: 'pending' },
+        ],
+      });
+    });
+
+    it('does not let an old Task update carry later TaskCreate calls across a user boundary', () => {
+      const staleTask = tool(
+        'task-old',
+        'TaskCreate',
+        { subject: 'Old work' },
+        'create-old',
+      );
+      const newUserTurn: MessageRenderSourceMessageLike = {
+        role: 'user',
+        clientId: 'user-task-boundary',
+        content: '开始另一项工作',
+        createdAt: at(5),
+      };
+      const staleProgress = tool(
+        'task-old-progress',
+        'TaskUpdate',
+        { taskId: 'old', status: 'in_progress' },
+        'update-old',
+      );
+      const freshTask = tool(
+        'task-new',
+        'TaskCreate',
+        { subject: 'Current work' },
+        'create-new',
+      );
+
+      const latest = findLatestMessageTodoInsertion([
+        staleTask,
+        result('create-old', 'Task #old created successfully: Old work'),
+        newUserTurn,
+        // 指向旧 id 的更新可以合法穿过边界,但不能把 session 的所有权锚点
+        // 搬到新 turn,否则紧随其后的新 TaskCreate 会继续并入旧清单。
+        staleProgress,
+        freshTask,
+        result('create-new', 'Task #new created successfully: Current work'),
+      ]);
+
+      expect(latest).toMatchObject({
+        key: 'todo-task-new',
+        source: 'task',
+        todos: [{ content: 'Current work', status: 'pending' }],
+      });
+    });
+
+    it('does not cut a session at synthetic user rows (auto-resume / scheduler)', () => {
+      const staleTodo = tool('todo-live', 'TodoWrite', {
+        todos: [
+          { content: 'Long work', status: 'in_progress' },
+          { content: 'Long follow-up', status: 'pending' },
+        ],
+      });
+      const autoResumeRow: MessageRenderSourceMessageLike = {
+        role: 'user',
+        clientId: 'auto-resume-1',
+        content: '继续',
+        createdAt: at(5),
+        agentMeta: { autoResume: true },
+      };
+      const schedulerRow: MessageRenderSourceMessageLike = {
+        role: 'user',
+        clientId: 'sched-1',
+        content: '定时任务触发',
+        createdAt: at(6),
+        agentMeta: { origin: { kind: 'scheduler', scheduleId: 's1', scheduleName: 'n' } },
+      };
+      // desktop 渲染层投影后 agentMeta 被丢弃,只剩这两个字段——同样不得切边界。
+      const projectedSyntheticRow: MessageRenderSourceMessageLike = {
+        role: 'user',
+        clientId: 'projected-1',
+        content: '',
+        createdAt: at(7),
+        isSyntheticTrigger: true,
+      };
+      const projectedSchedulerRow: MessageRenderSourceMessageLike = {
+        role: 'user',
+        clientId: 'projected-2',
+        content: '定时活',
+        createdAt: at(8),
+        automationOrigin: { kind: 'scheduler', scheduleId: 's1' },
+      };
+      // 子代理内部的 user 行(agentMeta.parentUuid)同样不是用户开新话题。
+      const subagentUserRow: MessageRenderSourceMessageLike = {
+        role: 'user',
+        clientId: 'sub-user-1',
+        content: '子任务内部输入',
+        createdAt: at(9),
+        agentMeta: { parentUuid: 'toolu_parent_1' },
+      };
+      // 同轮 steer 插话(desktop 投影 delivery='steer')也不是新话题边界。
+      const steerUserRow: MessageRenderSourceMessageLike = {
+        role: 'user',
+        clientId: 'steer-1',
+        content: '顺便把日志也看下',
+        createdAt: at(10),
+        delivery: 'steer',
+      };
+      const progress = tool('todo-live-2', 'TodoWrite', {
+        todos: [
+          { content: 'Long work', status: 'completed' },
+          { content: 'Long follow-up', status: 'in_progress' },
+        ],
+      });
+
+      // 自动续跑/scheduler 落的 user 行不是"用户开新话题":同计划的后续更新
+      // 仍并入原 session,key 不变,不产生重复计划卡。
+      expect(
+        findLatestMessageTodoInsertion([
+          staleTodo,
+          autoResumeRow,
+          schedulerRow,
+          projectedSyntheticRow,
+          projectedSchedulerRow,
+          subagentUserRow,
+          steerUserRow,
+          progress,
+        ]),
+      ).toMatchObject({
+        key: 'todo-todo-live',
+        todos: [
+          { content: 'Long work', status: 'completed' },
+          { content: 'Long follow-up', status: 'in_progress' },
+        ],
+      });
+    });
+
+    it('keeps in-turn progress updates merged into one session (no user turn between)', () => {
+      const first = tool('todo-a', 'TodoWrite', {
+        todos: [{ content: 'Step', status: 'in_progress' }],
+      });
+      const second = tool('todo-b', 'TodoWrite', {
+        todos: [{ content: 'Step', status: 'completed' }],
+      });
+
+      // 同一 turn 内的进度更新仍是续期:key 锚定首次调用(现状契约,不能破坏)。
+      expect(findLatestMessageTodoInsertion([first, second])).toMatchObject({
+        key: 'todo-todo-a',
+        todos: [{ content: 'Step', status: 'completed' }],
+      });
+    });
+
+    it.each([
+      { parentToolUseId: 'agent-task-1' },
+      { agentMeta: { parentUuid: 'chatcmpl-tool-a1b2c3d4e5f60718' } },
+    ])('ignores subagent plan calls for the top-level pinned panel (%j)', (parent) => {
+      const mainPlan = tool('plan-main', 'update_plan', {
+        plan: [
+          { step: 'Main step', status: 'in_progress' },
+          { step: 'Main follow-up', status: 'pending' },
+        ],
+      });
+      const subagentTodo: MessageRenderSourceMessageLike = {
+        ...tool('todo-sub', 'TodoWrite', {
+          todos: [
+            { content: 'Subagent internal', status: 'in_progress' },
+            { content: 'Subagent extra', status: 'pending' },
+          ],
+        }),
+        ...parent,
+      };
+
+      // 子代理自己的清单不得顶掉主线程计划。
+      expect(findLatestMessageTodoInsertion([mainPlan, subagentTodo])).toMatchObject({
+        key: 'todo-plan-main',
+        todos: [
+          { content: 'Main step', status: 'in_progress' },
+          { content: 'Main follow-up', status: 'pending' },
+        ],
+      });
+    });
+
+    it('does not merge Codex plans from different turns into one session', () => {
+      const turn1Plan = tool('plan-t1', 'update_plan', {
+        plan: [
+          { step: 'Turn one work', status: 'in_progress' },
+          { step: 'Turn one rest', status: 'pending' },
+        ],
+      }, 'plan:turn-1');
+      const newUserTurn: MessageRenderSourceMessageLike = {
+        role: 'user',
+        clientId: 'user-3',
+        content: '下一个任务',
+        createdAt: at(6),
+      };
+      const turn2Plan = tool('plan-t2', 'update_plan', {
+        plan: [
+          { step: 'Turn two work', status: 'in_progress' },
+          { step: 'Turn two rest', status: 'pending' },
+        ],
+      }, 'plan:turn-2');
+
+      const latest = findLatestMessageTodoInsertion([turn1Plan, newUserTurn, turn2Plan]);
+      expect(latest).toMatchObject({
+        key: 'todo-plan-t2',
+        todos: [
+          { content: 'Turn two work', status: 'in_progress' },
+          { content: 'Turn two rest', status: 'pending' },
+        ],
+      });
+    });
   });
 
   it('does not infer completion from an ambiguous legacy Codex turn seal', () => {
@@ -1027,6 +1571,87 @@ describe('message render todo grouping', () => {
       insertion: {
         todos: [{ content: 'Fix renderer', status: 'in_progress' }],
       },
+    });
+  });
+
+  it('resolves a new Task session after a real user boundary despite an older orphan update', () => {
+    const orphanUpdate = tool(
+      'old-task-update',
+      'TaskUpdate',
+      { taskId: 'old', status: 'in_progress' },
+      'update-old',
+    );
+    const newUserTurn: MessageRenderSourceMessageLike = {
+      role: 'user',
+      clientId: 'user-2',
+      content: 'Start a new plan',
+    };
+    const first = tool('new-task-1', 'TaskCreate', { subject: 'Inspect renderer' }, 'create-new-1');
+    const second = tool('new-task-2', 'TaskCreate', { subject: 'Run tests' }, 'create-new-2');
+
+    expect(getLatestMessageTodoState([
+      orphanUpdate,
+      newUserTurn,
+      first,
+      result('create-new-1', 'Task #new-1 created successfully: Inspect renderer'),
+      second,
+      result('create-new-2', 'Task #new-2 created successfully: Run tests'),
+    ], { taskHistoryMayBeIncomplete: true })).toMatchObject({
+      isResolved: true,
+      insertion: {
+        key: 'todo-new-task-1',
+        todos: [
+          { content: 'Inspect renderer', status: 'pending' },
+          { content: 'Run tests', status: 'pending' },
+        ],
+      },
+    });
+  });
+
+  it('treats a visible real user row as the boundary of the first Task session in a paged window', () => {
+    const newUserTurn: MessageRenderSourceMessageLike = {
+      role: 'user',
+      clientId: 'user-1',
+      content: 'Start a plan',
+    };
+    const first = tool('task-1', 'TaskCreate', { subject: 'Inspect renderer' }, 'create-1');
+    const second = tool('task-2', 'TaskCreate', { subject: 'Run tests' }, 'create-2');
+
+    expect(getLatestMessageTodoState([
+      newUserTurn,
+      first,
+      result('create-1', 'Task #1 created successfully: Inspect renderer'),
+      second,
+      result('create-2', 'Task #2 created successfully: Run tests'),
+    ], { taskHistoryMayBeIncomplete: true })).toMatchObject({
+      isResolved: true,
+      insertion: {
+        key: 'todo-task-1',
+        todos: [
+          { content: 'Inspect renderer', status: 'pending' },
+          { content: 'Run tests', status: 'pending' },
+        ],
+      },
+    });
+  });
+
+  it('keeps a first TaskGet unresolved when a visible user row does not prove the old plan is complete', () => {
+    const newUserTurn: MessageRenderSourceMessageLike = {
+      role: 'user',
+      clientId: 'user-1',
+      content: 'Continue the existing task',
+    };
+    const getExisting = tool('task-get', 'TaskGet', { taskId: 'old' }, 'get-old');
+
+    expect(getLatestMessageTodoState([
+      newUserTurn,
+      getExisting,
+      result('get-old', JSON.stringify({
+        task: { id: 'old', subject: 'Inspect renderer', status: 'in_progress' },
+      })),
+    ], { taskHistoryMayBeIncomplete: true })).toMatchObject({
+      insertion: null,
+      isResolved: false,
     });
   });
 

@@ -25,6 +25,13 @@ interface RectangleLike {
   height: number;
 }
 
+export interface AgentIslandDisplayIdentity {
+  displayName?: string | null;
+  displayIndex?: number | null;
+  displayInternal?: boolean | null;
+  displayBounds?: RectangleLike | null;
+}
+
 export interface AgentIslandGeometryPreference {
   centerXRatio?: number | null;
   contentWidth?: number | null;
@@ -33,7 +40,7 @@ export interface AgentIslandGeometryPreference {
   expandedClampContentWidth?: number | null;
 }
 
-export interface AgentIslandLayoutPreference {
+export interface AgentIslandLayoutPreference extends AgentIslandDisplayIdentity {
   displayId?: number | null;
   centerXRatio?: number | null;
   compactContentWidth?: number | null;

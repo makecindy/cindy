@@ -17,11 +17,15 @@ vi.mock('electron', () => ({ app: { getPath: () => '/tmp/never-used-here' } }));
 vi.mock('../logger-adapter.js', () => ({
   desktopMakerLogger: { child: () => ({ info: () => {}, warn: () => {}, error: () => {} }) },
 }));
-vi.mock('../../appSessionState.js', () => ({
-  ownerScopedUserDataPath: (name: string) => path.join(tmpDir, name),
+vi.mock('../../ownerContext.js', () => ({
+  configureOwnerContext: () => {},
+  ownerScopedPath: (name: string) => path.join(tmpDir, name),
+  ownerGeneration: () => 0,
+  hasCommittedOwner: () => true,
 }));
 
-const { __testing, setModelsDisabled } = await import('../model-disable-store.js');
+const { __testing, migrateLegacyNamespacedModelDisableOverrides, setModelsDisabled } =
+  await import('../model-disable-store.js');
 
 function readPrefsFile(): { disabledModels: Record<string, unknown> } {
   return JSON.parse(
@@ -67,8 +71,33 @@ describe('normalize(坏形态清洗)', () => {
   });
 });
 
+describe('旧媒体 modelId 停用项迁移', () => {
+  it('只把唯一 basename 匹配迁移为完整 modelId', () => {
+    setModelsDisabled('legacy-xd', ['gpt-image-2'], true);
+    migrateLegacyNamespacedModelDisableOverrides('legacy-xd', ['openai/gpt-image-2']);
+    expect(readPrefsFile().disabledModels).toMatchObject({
+      'legacy-xd:openai/gpt-image-2': true,
+    });
+    expect(readPrefsFile().disabledModels['legacy-xd:gpt-image-2']).toBeUndefined();
+
+    setModelsDisabled('ambiguous-xd', ['gpt-image-2'], true);
+    migrateLegacyNamespacedModelDisableOverrides('ambiguous-xd', [
+      'openai/gpt-image-2',
+      'other/gpt-image-2',
+    ]);
+    expect(readPrefsFile().disabledModels['ambiguous-xd:gpt-image-2']).toBe(true);
+    expect(readPrefsFile().disabledModels['ambiguous-xd:openai/gpt-image-2']).toBeUndefined();
+  });
+});
+
 describe('单 section 总量硬上限(深防线)', () => {
   it('disabledModels 超上限的新增被丢弃;删除不受上限影响、可继续腾出空间', () => {
+    setModelsDisabled('legacy-xd', ['gpt-image-2', 'openai/gpt-image-2'], false);
+    setModelsDisabled(
+      'ambiguous-xd',
+      ['gpt-image-2', 'openai/gpt-image-2', 'other/gpt-image-2'],
+      false,
+    );
     // IPC 边界单次 ≤512,但 store 是最后一道防线:未来新增写入口 / 手改文件绕过
     // 边界时,section 不得无界膨胀。一次灌 5000 个 → 只落 4096。
     const ids = Array.from({ length: 5000 }, (_v, i) => `m-${i}`);

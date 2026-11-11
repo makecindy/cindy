@@ -42,7 +42,38 @@ const TooltipProvider = ({
   />
 );
 
-const TooltipRoot = TooltipPrimitive.Root;
+// 受控 open（行级 hover 浮层、按住展示等）的关闭全靠调用方复位,而 Radix 只在
+// trigger 收到 pointerleave / 失焦 / 点击时请求关闭。切到别的窗口后指针事件断在
+// 那边,trigger 收不到 leave,浮层就僵在屏幕上;窗口失活时替它请求一次关闭。
+// 未受控的浮层仍完全交给 Radix,行为不变。
+//
+// 这条关闭不经过 Radix 自己的 setOpen,所以 Provider 的 skipDelay 计时不会被重置:
+// 同一 Provider 下的下一次悬停会立即弹出、不再等 delayDuration。受控浮层本来就靠
+// 调用方改 open 关闭(点击 / Esc / 外部状态),这里不额外模拟 pointerleave 去驱动
+// Radix 的状态机。
+function TooltipRoot({
+  open,
+  onOpenChange,
+  ...props
+}: React.ComponentPropsWithoutRef<typeof TooltipPrimitive.Root>) {
+  const controlled = open !== undefined;
+  const onOpenChangeRef = React.useRef(onOpenChange);
+  onOpenChangeRef.current = onOpenChange;
+  React.useEffect(() => {
+    if (!controlled) return undefined;
+    const close = () => onOpenChangeRef.current?.(false);
+    const onVisibilityChange = () => {
+      if (document.visibilityState === 'hidden') close();
+    };
+    window.addEventListener('blur', close);
+    document.addEventListener('visibilitychange', onVisibilityChange);
+    return () => {
+      window.removeEventListener('blur', close);
+      document.removeEventListener('visibilitychange', onVisibilityChange);
+    };
+  }, [controlled]);
+  return <TooltipPrimitive.Root {...props} open={open} onOpenChange={onOpenChange} />;
+}
 const TooltipTrigger = TooltipPrimitive.Trigger;
 
 const TooltipContent = React.forwardRef<
@@ -61,10 +92,9 @@ const TooltipContent = React.forwardRef<
         // F-PJ-7 视觉规格：12px 圆角 / 13px 文本 / 8px×10px 内边距
         // select-none:tooltip 是 hover 提示 chrome,role="tooltip" 不在
         // globals.css 的全局禁选名单里,不加会让全 app 提示文字可被划选。
-        'z-[60] select-none rounded-xl px-2.5 py-1.5 text-13 leading-snug shadow-lg',
-        // Light：白底深字 + 浅边框；Dark：近黑底白字
-        'border border-[var(--cmd-palette-border)] bg-[var(--tooltip-bg)] text-[var(--tooltip-text)]',
-        'dark:border-transparent',
+        'z-[60] select-none rounded-xl px-2.5 py-1.5 text-13 leading-snug shadow-[shadow:var(--shadow-menu)]',
+        // Cindy tooltip 两模式都是深底白字；Board 浅描边叠在深底上会看成一圈白边。
+        'border border-transparent bg-[var(--tooltip-bg)] text-[var(--tooltip-text)]',
         'max-w-[420px] break-all', // 长路径允许任意位置截断换行
         variant === 'mono' && 'font-mono',
         // 入场/出场动画:tooltip 是信息不是对象,入场纯 opacity 不缩放,
@@ -87,6 +117,32 @@ export const Tooltip = {
   Trigger: TooltipTrigger,
   Content: TooltipContent,
 };
+
+// Radix 不只在 hover 时打开提示，trigger 获得焦点也会打开。菜单 / 弹层关闭会把焦点
+// 还给触发按钮——用鼠标点空白关掉也一样——指针早已不在按钮上，提示却冒出来，而且没有
+// pointerleave / blur 能再把它收掉（会话标题栏「更多操作」就是这么复现的）。
+// 用最近一次输入模态判断这次焦点是不是键盘来的：指针交互之后的焦点不弹，键盘焦点照旧。
+// 初值保持原有行为：应用启动后还没有任何输入时，程序化焦点仍然可以弹提示。
+let focusOpenWanted = true;
+let inputModalityTracked = false;
+function trackInputModality() {
+  if (inputModalityTracked || typeof document === 'undefined') return;
+  inputModalityTracked = true;
+  document.addEventListener(
+    'pointerdown',
+    () => {
+      focusOpenWanted = false;
+    },
+    true,
+  );
+  document.addEventListener(
+    'keydown',
+    () => {
+      focusOpenWanted = true;
+    },
+    true,
+  );
+}
 
 // ── <Tip> ───────────────────────────────────────────────────────────────────
 // 一行包装,替代浏览器原生 title 属性。内部自带 Provider,任何位置都能直接用。
@@ -125,6 +181,10 @@ export interface TipProps {
   forceOpen?: boolean;
   /** 受控开关。提供时优先于 forceOpen,用于需要明确关闭 tooltip 的拖拽态。 */
   controlledOpen?: boolean;
+  /** 受控开关的关闭请求(点别处 / Esc / 窗口失活);受控调用方必须据此复位,否则浮层关不掉。 */
+  onOpenChange?: (open: boolean) => void;
+  /** Discard hover requests while temporarily controlled (e.g. recording). */
+  resetHoverOnControlChange?: boolean;
   /** 自定义 Content 样式(覆盖默认宽度等) */
   contentClassName?: string;
 }
@@ -132,8 +192,8 @@ export interface TipProps {
 // 注意:不写出 React.HTMLAttributes 的具体类型,因为外层 Trigger(Popover/Dropdown 等)
 // 注入的 props 形态各异——用 ...rest 直接转发即可,Radix 的 Slot 会正确合并。
 // ref 类型用 unknown:外层 Trigger 可能是任何元素(button/span/img 等),Tip 不该限定。
-export const Tip = React.forwardRef<unknown, TipProps>(function Tip(
-  {
+export const Tip = React.forwardRef<unknown, TipProps>(function Tip(props, forwardedRef) {
+  const {
     text,
     children,
     mono,
@@ -142,16 +202,34 @@ export const Tip = React.forwardRef<unknown, TipProps>(function Tip(
     disabled,
     forceOpen,
     controlledOpen,
+    onOpenChange,
+    resetHoverOnControlChange = false,
     contentClassName,
     ...rest
-  },
-  forwardedRef,
-) {
+  } = props;
+  const { onFocus: callerOnFocus, ...triggerProps } = rest as React.HTMLAttributes<HTMLElement>;
   const isEmpty =
     disabled ||
     text === null ||
     text === undefined ||
     (typeof text === 'string' && text.length === 0);
+
+  // Radix Tooltip 要求 open 在整个生命周期里要么一直受控、要么一直非受控,来回切换
+  // 会抛 "changing from uncontrolled to controlled"。调用方常按状态临时受控(拖拽、
+  // 录音精修中),之后又交回 hover 驱动 —— 只要调用方**声明了**受控意图(传了
+  // controlledOpen / forceOpen 这两个 prop,哪怕当前值是 undefined),就从挂载起
+  // 走受控路径,交回时用本地 hover 状态模拟非受控行为。
+  const requestedOpen = controlledOpen ?? (forceOpen ? true : undefined);
+  const [hoverOpen, setHoverOpen] = React.useState(false);
+  const controlledRef = React.useRef(
+    'controlledOpen' in props || 'forceOpen' in props || requestedOpen !== undefined,
+  );
+  if (requestedOpen !== undefined) controlledRef.current = true;
+  const open = requestedOpen ?? (controlledRef.current ? hoverOpen : undefined);
+  React.useLayoutEffect(() => {
+    if (resetHoverOnControlChange && requestedOpen !== undefined) setHoverOpen(false);
+  }, [resetHoverOnControlChange, requestedOpen]);
+  React.useEffect(trackInputModality, []);
 
   // 没有 tooltip 内容时,Tip 仍要保持"透明传递":把外层 props/ref 直接合并到 children,
   // 避免在复合 trigger 里成为 ref/事件断点。React 18 的 cloneElement 类型签名不接受 ref
@@ -165,11 +243,23 @@ export const Tip = React.forwardRef<unknown, TipProps>(function Tip(
 
   return (
     <TooltipProvider delayDuration={delay}>
-      <TooltipRoot open={controlledOpen ?? (forceOpen ? true : undefined)}>
+      <TooltipRoot open={open} onOpenChange={(next) => {
+        // A hover callback during forced display must not reopen a different
+        // label when control returns to the pointer after recording stops.
+        setHoverOpen(resetHoverOnControlChange && requestedOpen !== undefined ? false : next);
+        // 只回灌关闭请求。开关状态该由调用方自己的谓词决定,Radix 的打开请求写回去
+        // 会绕过它们(例如行内动作按钮上禁止弹行级浮层)。
+        if (!next) onOpenChange?.(false);
+      }}>
         <TooltipTrigger
           asChild
           ref={forwardedRef as React.Ref<HTMLButtonElement>}
-          {...rest}
+          {...triggerProps}
+          // 指针交互带来的焦点（含菜单关闭后的焦点回收）不弹提示；键盘焦点照旧。
+          onFocus={(event) => {
+            callerOnFocus?.(event);
+            if (!event.defaultPrevented && !focusOpenWanted) event.preventDefault();
+          }}
         >
           {children}
         </TooltipTrigger>

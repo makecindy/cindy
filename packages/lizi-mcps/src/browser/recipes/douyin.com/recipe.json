@@ -1,16 +1,35 @@
 {
   "id": "douyin-user-videos",
-  "match": ["douyin.com"],
-  "description": "读取某抖音用户的公开作品列表(标题/点赞数/时长/视频地址)。先落到 douyin.com 域,再在页面内同源 fetch JSON——带上 cookie 由浏览器签名,规避风控(直接 navigate 到 api 会被喂 SPA HTML 或风控)。输入键 sec_uid 是用户主页 URL https://www.douyin.com/user/<sec_uid> 末段那串长字符。",
-  "inputs": { "sec_uid": { "required": true } },
-  "steps": [
-    { "action": "navigate", "url": "https://www.douyin.com/user/{{sec_uid}}" },
-    { "action": "wait", "loadState": "load" },
-    {
-      "action": "evaluate",
-      "as": "videos",
-      "fn": "async () => { const r = await fetch('https://www.douyin.com/aweme/v1/web/aweme/post/?sec_user_id=' + encodeURIComponent('{{sec_uid|js}}') + '&max_cursor=0&count=20&aid=6383', { credentials: 'include', headers: { referer: 'https://www.douyin.com/' } }); const t = await r.text(); let d; try { d = JSON.parse(t); } catch (e) { throw new Error('抖音返回非 JSON(未登录或被风控),请在持久浏览器登录 douyin.com 后重试'); } if (d && d.status_code && d.status_code !== 0) throw new Error('抖音接口返回异常 status_code=' + d.status_code + '(可能被风控),请在持久浏览器登录 douyin.com 后重试'); const list = (d && d.aweme_list) ? d.aweme_list : []; return list.map((v, i) => ({ index: i + 1, aweme_id: v.aweme_id, title: v.desc || '', duration: v.video && v.video.duration ? Math.round(v.video.duration / 1000) : 0, digg: v.statistics && v.statistics.digg_count || 0, play_url: v.video && v.video.play_addr && v.video.play_addr.url_list && v.video.play_addr.url_list[0] || '' })); }"
-    }
+  "match": [
+    "douyin.com"
   ],
-  "output": "{{videos}}"
+  "description": "获取指定用户的视频列表（含下载地址和热门评论）",
+  "access": "read",
+  "adapter": "douyin/user-videos",
+  "inputs": {
+    "sec_uid": {
+      "required": true,
+      "type": "string",
+      "description": "用户 sec_uid（个人主页 URL 末尾部分，也可直接传整条主页 URL）"
+    },
+    "limit": {
+      "required": false,
+      "type": "int",
+      "default": 20,
+      "description": "获取数量（最大 20）"
+    },
+    "with_comments": {
+      "required": false,
+      "type": "bool",
+      "default": true,
+      "description": "包含热门评论（默认: true）"
+    },
+    "comment_limit": {
+      "required": false,
+      "type": "int",
+      "default": 10,
+      "description": "每个视频获取多少条评论（最大 10）"
+    }
+  },
+  "steps": []
 }

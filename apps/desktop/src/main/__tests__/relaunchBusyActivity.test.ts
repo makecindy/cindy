@@ -21,6 +21,7 @@ const idle = {
   anyGhostSessionBusy: () => false,
   anyBackgroundBashRunning: () => false,
   anyCindySlotJobRunning: () => false,
+  anyPiSubagentRunning: () => false,
   anySchedulerRunRunning: async () => false,
 };
 
@@ -58,6 +59,7 @@ describe('evaluateRelaunchBusyActivity', () => {
       anyGhostSessionBusy: () => true,
       anyBackgroundBashRunning: () => true,
       anyCindySlotJobRunning: () => true,
+      anyPiSubagentRunning: () => true,
     });
     expect(r.busy).toBe(true);
     expect(r.reasons).toEqual([
@@ -66,6 +68,7 @@ describe('evaluateRelaunchBusyActivity', () => {
       'ghost-background-activity',
       'background-bash',
       'cindy-slot-async-job',
+      'pi-subagent',
     ]);
   });
 
@@ -75,6 +78,7 @@ describe('evaluateRelaunchBusyActivity', () => {
     ['anyGhostSessionBusy', 'ghost-background-activity'],
     ['anyBackgroundBashRunning', 'background-bash'],
     ['anyCindySlotJobRunning', 'cindy-slot-async-job'],
+    ['anyPiSubagentRunning', 'pi-subagent'],
   ] as const)('%s 抛错时 fail closed 并标记探针失败', async (key, label) => {
     const r = await evaluateRelaunchBusyActivity({
       ...idle,

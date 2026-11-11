@@ -1,11 +1,16 @@
+import { collaborationSettings } from './CollaborationSection.settings-search';
 /**
  * CollaborationSection — multi-worker 协同设置 (softLimit / hardLimit / idleReleaseMinutes)。
  */
 
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useId } from 'react';
 import { useTranslation } from 'react-i18next';
 import { toast } from '@/lib/toast';
+import { SettingsCard, SettingsRow, SettingsSection } from '@/components/ui/settings-rows';
 import { DefaultOverrideControls } from './DefaultOverrideControls';
+import { SettingsTextInput } from './SettingsTextInput';
+
+/** 数字输入复用标准 Input md 档，设置封装保留旧局部主题覆盖，原生步进器不自绘。 */
 
 interface CollaborationSettings {
   workerSoftLimit: number;
@@ -22,6 +27,7 @@ type CollaborationSettingKey =
 export function CollaborationSection() {
   const { t } = useTranslation();
   const [settings, setSettings] = useState<CollaborationSettings | null>(null);
+  const idPrefix = useId();
 
   useEffect(() => {
     void window.electronAPI.localDb.orcaWorkflows
@@ -52,90 +58,112 @@ export function CollaborationSection() {
   }
 
   return (
-    <div className="flex flex-col gap-6">
-      <div className="flex items-center justify-between gap-3">
-        <h2 className="text-16 font-medium leading-[1.2] text-[var(--settings-section-title)]">
-          {t('settings.collaboration.title')}
-        </h2>
-        <DefaultOverrideControls
-          isCustomized={Boolean(settings.isCustomized)}
-          onReset={() => {
-            void window.electronAPI.localDb.orcaWorkflows
-              .resetCollaborationSettings?.()
-              .then((next) => {
-                setSettings(next as CollaborationSettings);
-                toast.success(t('settings.defaults.restored'));
-              })
-              .catch((err) => {
-                toast.error(err instanceof Error ? err.message : t('settings.defaults.restoreFailed'));
-              });
-          }}
+    <SettingsSection
+      title={t('settings.collaboration.title')}
+      action={
+        // min-h 锁住标题行高度:DefaultOverrideControls 未自定义时返回 null,若不预留
+        // 高度,首次改动让「已自定义」+ 恢复按钮(30px)出现会把整段往下顶,列表抖一下。
+        <div className="flex min-h-[30px] items-center">
+          <DefaultOverrideControls
+            isCustomized={Boolean(settings.isCustomized)}
+            onReset={() => {
+              void window.electronAPI.localDb.orcaWorkflows
+                .resetCollaborationSettings?.()
+                .then((next) => {
+                  setSettings(next as CollaborationSettings);
+                  toast.success(t('settings.defaults.restored'));
+                })
+                .catch((err) => {
+                  toast.error(err instanceof Error ? err.message : t('settings.defaults.restoreFailed'));
+                });
+            }}
+          />
+        </div>
+      }
+    >
+      <SettingsCard>
+        {/* Worker Soft Limit */}
+        <SettingsRow
+          title={
+            <label id={collaborationSettings.workerSoftLimit.targetId} htmlFor={`${idPrefix}-soft`}>
+              {t(collaborationSettings.workerSoftLimit.titleKey)}
+            </label>
+          }
+          hint={<span id={`${idPrefix}-soft-hint`}>{t(collaborationSettings.workerSoftLimit.descriptionKey)}</span>}
+          trailing={
+            <SettingsTextInput data-setting-id={collaborationSettings.workerSoftLimit.id}
+              id={`${idPrefix}-soft`}
+              aria-describedby={`${idPrefix}-soft-hint`}
+              type="number"
+              min={1}
+              max={settings.workerHardLimit}
+              value={String(settings.workerSoftLimit)}
+              onChange={(text) => {
+                const v = Math.max(1, Math.min(settings.workerHardLimit, Number(text) || 1));
+                persist('workerSoftLimit', v);
+              }}
+              size="md"
+              className="w-24 shrink-0"
+            />
+          }
         />
-      </div>
 
-      {/* Worker Soft Limit */}
-      <label className="flex flex-col gap-1.5">
-        <span className="text-12 font-medium text-[var(--text-primary)]">
-          {t('settings.collaboration.workerSoftLimit')}
-        </span>
-        <span className="text-11 text-[var(--text-tertiary)]">
-          {t('settings.collaboration.workerSoftLimitHint')}
-        </span>
-        <input
-          type="number"
-          min={1}
-          max={settings.workerHardLimit}
-          value={settings.workerSoftLimit}
-          onChange={(e) => {
-            const v = Math.max(1, Math.min(settings.workerHardLimit, Number(e.target.value) || 1));
-            persist('workerSoftLimit', v);
-          }}
-          className="mt-0.5 w-20 rounded-lg border border-[var(--border-default)] bg-transparent px-3 py-1.5 text-13 text-[var(--settings-input-text)] outline-none"
+        {/* Worker Hard Limit */}
+        <SettingsRow
+          title={
+            <label id={collaborationSettings.workerHardLimit.targetId} htmlFor={`${idPrefix}-hard`}>
+              {t(collaborationSettings.workerHardLimit.titleKey)}
+            </label>
+          }
+          hint={<span id={`${idPrefix}-hard-hint`}>{t(collaborationSettings.workerHardLimit.descriptionKey)}</span>}
+          trailing={
+            <SettingsTextInput data-setting-id={collaborationSettings.workerHardLimit.id}
+              id={`${idPrefix}-hard`}
+              aria-describedby={`${idPrefix}-hard-hint`}
+              type="number"
+              min={settings.workerSoftLimit}
+              max={20}
+              value={String(settings.workerHardLimit)}
+              onChange={(text) => {
+                const v = Math.max(
+                  settings.workerSoftLimit,
+                  Math.min(20, Number(text) || settings.workerSoftLimit),
+                );
+                persist('workerHardLimit', v);
+              }}
+              size="md"
+              className="w-24 shrink-0"
+            />
+          }
         />
-      </label>
 
-      {/* Worker Hard Limit */}
-      <label className="flex flex-col gap-1.5">
-        <span className="text-12 font-medium text-[var(--text-primary)]">
-          {t('settings.collaboration.workerHardLimit')}
-        </span>
-        <span className="text-11 text-[var(--text-tertiary)]">
-          {t('settings.collaboration.workerHardLimitHint')}
-        </span>
-        <input
-          type="number"
-          min={settings.workerSoftLimit}
-          max={20}
-          value={settings.workerHardLimit}
-          onChange={(e) => {
-            const v = Math.max(settings.workerSoftLimit, Math.min(20, Number(e.target.value) || settings.workerSoftLimit));
-            persist('workerHardLimit', v);
-          }}
-          className="mt-0.5 w-20 rounded-lg border border-[var(--border-default)] bg-transparent px-3 py-1.5 text-13 text-[var(--settings-input-text)] outline-none"
+        {/* Idle Release Minutes */}
+        <SettingsRow
+          title={
+            <label id={collaborationSettings.idleRelease.targetId} htmlFor={`${idPrefix}-idle`}>
+              {t(collaborationSettings.idleRelease.titleKey)}
+            </label>
+          }
+          hint={<span id={`${idPrefix}-idle-hint`}>{t(collaborationSettings.idleRelease.descriptionKey)}</span>}
+          trailing={
+            <SettingsTextInput data-setting-id={collaborationSettings.idleRelease.id}
+              id={`${idPrefix}-idle`}
+              aria-describedby={`${idPrefix}-idle-hint`}
+              type="number"
+              min={0}
+              max={120}
+              value={String(settings.workerIdleReleaseMinutes)}
+              onChange={(text) => {
+                const raw = Number(text);
+                const v = Math.max(0, Math.min(120, Number.isFinite(raw) ? Math.trunc(raw) : 0));
+                persist('workerIdleReleaseMinutes', v);
+              }}
+              size="md"
+              className="w-24 shrink-0"
+            />
+          }
         />
-      </label>
-
-      {/* Idle Release Minutes */}
-      <label className="flex flex-col gap-1.5">
-        <span className="text-12 font-medium text-[var(--text-primary)]">
-          {t('settings.collaboration.idleRelease')}
-        </span>
-        <span className="text-11 text-[var(--text-tertiary)]">
-          {t('settings.collaboration.idleReleaseHint')}
-        </span>
-        <input
-          type="number"
-          min={0}
-          max={120}
-          value={settings.workerIdleReleaseMinutes}
-          onChange={(e) => {
-            const raw = Number(e.target.value);
-            const v = Math.max(0, Math.min(120, Number.isFinite(raw) ? Math.trunc(raw) : 0));
-            persist('workerIdleReleaseMinutes', v);
-          }}
-          className="mt-0.5 w-20 rounded-lg border border-[var(--border-default)] bg-transparent px-3 py-1.5 text-13 text-[var(--settings-input-text)] outline-none"
-        />
-      </label>
-    </div>
+      </SettingsCard>
+    </SettingsSection>
   );
 }

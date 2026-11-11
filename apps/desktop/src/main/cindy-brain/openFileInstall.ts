@@ -7,10 +7,9 @@ import { createLogger } from '../logger.js';
 /**
  * 双击 .cindy 文件的转交通道。
  *
- * 主进程**不在这里装、也不在这里弹窗**:三个装入入口(设置页 / 拖入 / 双击)
- * 统一走 renderer 的同一套编排(installFlow:inspect 验明正身 → 应用内确认
- * 弹窗 → install),双击只是把文件路径递进去 —— 用户看到的确认框永远是同
- * 一个。
+ * 主进程**不在这里装**:三个装入入口(设置页 / 拖入 / 双击)统一走
+ * renderer 的同一套一键编排(installFlow:inspect 验明正身 → install)，
+ * 双击只负责把文件路径递进去。
  *
  * 转交模型(对齐 deepLink 的 pending buffer 成熟套路):
  * - 收到路径 → 存入 pending(仅保留最新一条;双击语义上就是"装这一个")

@@ -84,6 +84,7 @@ const mocks = vi.hoisted(() => {
   const modifierSetShortcut = vi.fn();
   const modifierStop = vi.fn();
   const modifierReleaseShortcut = vi.fn();
+  const modifierReleaseActiveTrigger = vi.fn();
   const modifierIsRunning = vi.fn();
   const modifierIsReady = vi.fn();
   const modifierStartKeyCapture = vi.fn();
@@ -91,6 +92,14 @@ const mocks = vi.hoisted(() => {
   const modifierPendingStartResult = vi.fn((): Promise<unknown> | null => null);
   const inputMonitoringSnapshot = vi.fn();
   const requestInputMonitoring = vi.fn();
+  const windowsSetShortcut = vi.fn();
+  const windowsStop = vi.fn();
+  const windowsReleaseActiveTrigger = vi.fn();
+  const windowsIsReady = vi.fn();
+  const quitDisposers: Array<{ name: string; fn: () => void }> = [];
+  const onQuit = vi.fn((name: string, fn: () => void) => {
+    quitDisposers.push({ name, fn });
+  });
   const assertTrustedAppRenderer = vi.fn();
   const updateSettings = vi.fn();
   // 存盘里的快捷键。global-shortcut:set 只负责「让运行期对上存盘」,所以非 null 的同步
@@ -113,15 +122,52 @@ const mocks = vi.hoisted(() => {
   const listenerOptions: {
     onKeys?: (keys: string[]) => void;
     onTrigger?: (phase: 'tap' | 'start' | 'end') => void;
+    onRestartLimitReached?: () => void;
+  } = {};
+  const windowsListenerOptions: {
+    onTrigger?: (phase: 'tap' | 'start' | 'end') => void;
+    onRestartLimitReached?: () => void;
   } = {};
   const registerShortcut = vi.fn((accelerator: string) => {
     void accelerator;
     return true;
   });
+  // 浮窗预热的可观察结果就是「有没有 new BrowserWindow」。只建模 createOverlayWindow /
+  // setOverlayIdlePresentationState 会碰到的成员。
+  const createdOverlayWindows: unknown[] = [];
+  const createOverlayWindowMock = (): unknown => {
+    const window = {
+      id: 100 + createdOverlayWindows.length,
+      isDestroyed: vi.fn(() => false),
+      isVisible: vi.fn(() => false),
+      isMinimized: vi.fn(() => false),
+      on: vi.fn(),
+      once: vi.fn(),
+      setOpacity: vi.fn(),
+      hide: vi.fn(),
+      setBounds: vi.fn(),
+      setAlwaysOnTop: vi.fn(),
+      setSkipTaskbar: vi.fn(),
+      setVisibleOnAllWorkspaces: vi.fn(),
+      setHiddenInMissionControl: vi.fn(),
+      setFocusable: vi.fn(),
+      loadURL: vi.fn(),
+      loadFile: vi.fn(),
+      webContents: { id: 200, isDestroyed: vi.fn(() => false), send: vi.fn(), on: vi.fn(), once: vi.fn() },
+    };
+    createdOverlayWindows.push(window);
+    return window;
+  };
+  const canOverlayStartDictation = vi.fn(async () => true);
+  const voiceInputReadyListeners: Array<() => void> = [];
 
   return {
     handlers,
     registeredShortcuts,
+    createdOverlayWindows,
+    createOverlayWindowMock,
+    canOverlayStartDictation,
+    voiceInputReadyListeners,
     focusedWindow,
     recordingEvent,
     mainWindow,
@@ -138,16 +184,24 @@ const mocks = vi.hoisted(() => {
     modifierSetShortcut,
     modifierStop,
     modifierReleaseShortcut,
+    modifierReleaseActiveTrigger,
     modifierIsRunning,
     modifierIsReady,
     modifierStartKeyCapture,
     modifierPendingStartResult,
     inputMonitoringSnapshot,
     requestInputMonitoring,
+    windowsSetShortcut,
+    windowsStop,
+    windowsReleaseActiveTrigger,
+    windowsIsReady,
+    quitDisposers,
+    onQuit,
     assertTrustedAppRenderer,
     getMainWindow,
     ipcDeps,
     listenerOptions,
+    windowsListenerOptions,
     updateSettings,
     getSettings,
     setStoredShortcut,
@@ -166,18 +220,23 @@ vi.mock('electron', () => ({
       mocks.appListeners.set(event, callback);
     }),
   },
-  BrowserWindow: {
-    getAllWindows: vi.fn(() => [mocks.focusedWindow, mocks.mainWindow, mocks.ghostPanelWindow]),
-    getFocusedWindow: vi.fn(() => mocks.focusedWindow),
-    // 闸要从 sender 反查它所属的窗口,才能判断「是不是某个窗口自己的顶层 webContents」。
-    fromWebContents: vi.fn((contents: unknown) => {
-      if (contents === mocks.mainWindow.webContents) return mocks.mainWindow;
-      if (contents === mocks.secondaryAppWindowWebContents) return mocks.secondaryAppWindow;
-      if (contents === mocks.focusedWindow.webContents) return mocks.focusedWindow;
-      if (contents === mocks.ghostPanelWindow.webContents) return mocks.ghostPanelWindow;
-      return null;
+  BrowserWindow: Object.assign(
+    vi.fn(function BrowserWindowMock() {
+      return mocks.createOverlayWindowMock();
     }),
-  },
+    {
+      getAllWindows: vi.fn(() => [mocks.focusedWindow, mocks.mainWindow, mocks.ghostPanelWindow]),
+      getFocusedWindow: vi.fn(() => mocks.focusedWindow),
+      // 闸要从 sender 反查它所属的窗口,才能判断「是不是某个窗口自己的顶层 webContents」。
+      fromWebContents: vi.fn((contents: unknown) => {
+        if (contents === mocks.mainWindow.webContents) return mocks.mainWindow;
+        if (contents === mocks.secondaryAppWindowWebContents) return mocks.secondaryAppWindow;
+        if (contents === mocks.focusedWindow.webContents) return mocks.focusedWindow;
+        if (contents === mocks.ghostPanelWindow.webContents) return mocks.ghostPanelWindow;
+        return null;
+      }),
+    },
+  ),
   clipboard: {},
   globalShortcut: {
     register: vi.fn((accelerator: string, callback: () => void) => {
@@ -198,6 +257,7 @@ vi.mock('electron', () => ({
   screen: {
     getPrimaryDisplay: vi.fn(() => ({ workArea: { x: 0, y: 0, width: 1440, height: 900 } })),
     getDisplayNearestPoint: vi.fn(() => ({ workArea: { x: 0, y: 0, width: 1440, height: 900 } })),
+    getCursorScreenPoint: vi.fn(() => ({ x: 0, y: 0 })),
   },
   shell: {
     openExternal: vi.fn(),
@@ -209,28 +269,58 @@ vi.mock('electron', () => ({
 
 vi.mock('../index.js', () => ({
   prewarmVoiceInputProvider: vi.fn(() => Promise.resolve()),
+  canGlobalVoiceInputOverlayStartDictation: mocks.canOverlayStartDictation,
+  onVoiceInputReady: vi.fn((listener: () => void) => {
+    mocks.voiceInputReadyListeners.push(listener);
+    return () => undefined;
+  }),
 }));
 
 vi.mock('../MacModifierShortcutListener.js', () => ({
-  MacModifierShortcutListener: vi.fn().mockImplementation((options: {
-    onKeys?: (keys: string[]) => void;
-    onTrigger?: (phase: 'tap' | 'start' | 'end') => void;
-  }) => {
-    mocks.listenerOptions.onKeys = options?.onKeys;
-    mocks.listenerOptions.onTrigger = options?.onTrigger;
-    return {
-      setShortcut: mocks.modifierSetShortcut,
-      isRunning: mocks.modifierIsRunning,
-      isReady: mocks.modifierIsReady,
-      stop: mocks.modifierStop,
-      releaseShortcutKeepingCapture: mocks.modifierReleaseShortcut,
-      stopKeyCapture: vi.fn(),
-      startKeyCapture: mocks.modifierStartKeyCapture,
-      pendingStartResult: mocks.modifierPendingStartResult,
-    };
-  }),
+  MacModifierShortcutListener: vi
+    .fn()
+    .mockImplementation(
+      (options: {
+        onKeys?: (keys: string[]) => void;
+        onTrigger?: (phase: 'tap' | 'start' | 'end') => void;
+      }) => {
+        mocks.listenerOptions.onKeys = options?.onKeys;
+        mocks.listenerOptions.onTrigger = options?.onTrigger;
+        mocks.listenerOptions.onRestartLimitReached = (
+          options as { onRestartLimitReached?: () => void }
+        )?.onRestartLimitReached;
+        return {
+          setShortcut: mocks.modifierSetShortcut,
+          isRunning: mocks.modifierIsRunning,
+          isReady: mocks.modifierIsReady,
+          stop: mocks.modifierStop,
+          releaseShortcutKeepingCapture: mocks.modifierReleaseShortcut,
+          releaseActiveTrigger: mocks.modifierReleaseActiveTrigger,
+          stopKeyCapture: vi.fn(),
+          startKeyCapture: mocks.modifierStartKeyCapture,
+          pendingStartResult: mocks.modifierPendingStartResult,
+        };
+      },
+    ),
   getMacInputMonitoringPermissionSnapshot: mocks.inputMonitoringSnapshot,
   requestMacInputMonitoringPermission: mocks.requestInputMonitoring,
+}));
+
+vi.mock('../WindowsFunctionKeyShortcutListener.js', () => ({
+  WindowsFunctionKeyShortcutListener: vi
+    .fn()
+    .mockImplementation((options: { onTrigger?: (phase: 'tap' | 'start' | 'end') => void }) => {
+      mocks.windowsListenerOptions.onTrigger = options?.onTrigger;
+      mocks.windowsListenerOptions.onRestartLimitReached = (
+        options as { onRestartLimitReached?: () => void }
+      )?.onRestartLimitReached;
+      return {
+        setShortcut: mocks.windowsSetShortcut,
+        isReady: mocks.windowsIsReady,
+        stop: mocks.windowsStop,
+        releaseActiveTrigger: mocks.windowsReleaseActiveTrigger,
+      };
+    }),
 }));
 
 vi.mock('../VoiceInputDataStore.js', () => ({
@@ -242,6 +332,10 @@ vi.mock('../VoiceInputDataStore.js', () => ({
 
 vi.mock('../../security/trustedAppRenderer.js', () => ({
   assertTrustedAppRendererEvent: mocks.assertTrustedAppRenderer,
+}));
+
+vi.mock('../../lifecycle.js', () => ({
+  onQuit: mocks.onQuit,
 }));
 
 let setTimeoutSpy: { mockRestore: () => void } | null = null;
@@ -276,6 +370,7 @@ describe('voice input global shortcut registration', () => {
     mocks.modifierIsReady.mockImplementation(() => mocks.modifierIsRunning() as boolean);
     mocks.modifierStop.mockClear();
     mocks.modifierReleaseShortcut.mockClear();
+    mocks.modifierReleaseActiveTrigger.mockClear();
     mocks.modifierStartKeyCapture.mockReset();
     mocks.modifierStartKeyCapture.mockResolvedValue({ ok: true });
     // 默认已授权:既有用例断言的是「拿得到权限时」的注册行为。
@@ -283,6 +378,12 @@ describe('voice input global shortcut registration', () => {
     mocks.inputMonitoringSnapshot.mockResolvedValue({ ok: true, status: 'granted' });
     mocks.requestInputMonitoring.mockReset();
     mocks.requestInputMonitoring.mockResolvedValue({ ok: true, status: 'granted' });
+    mocks.windowsSetShortcut.mockReset();
+    mocks.windowsSetShortcut.mockResolvedValue({ ok: true });
+    mocks.windowsStop.mockClear();
+    mocks.windowsReleaseActiveTrigger.mockClear();
+    mocks.windowsIsReady.mockReset();
+    mocks.windowsIsReady.mockReturnValue(true);
     // 默认放行通用 sender 闸；需要验证它本身时在用例里让它抛。
     mocks.assertTrustedAppRenderer.mockReset();
     mocks.mainWindowIsDestroyed.mockReset();
@@ -304,6 +405,12 @@ describe('voice input global shortcut registration', () => {
     mocks.updateSettings.mockImplementation((patch: unknown) => ({ shortcut: null, ...(patch as object) }));
     mocks.registerShortcut.mockReset();
     mocks.registerShortcut.mockReturnValue(true);
+    mocks.onQuit.mockClear();
+    mocks.quitDisposers.length = 0;
+    mocks.createdOverlayWindows.length = 0;
+    mocks.canOverlayStartDictation.mockReset();
+    mocks.canOverlayStartDictation.mockResolvedValue(true);
+    mocks.voiceInputReadyListeners.length = 0;
   });
 
   afterEach(() => {
@@ -312,7 +419,7 @@ describe('voice input global shortcut registration', () => {
     setTimeoutSpy = null;
   });
 
-  it('registers F16 through Electron globalShortcut and routes the press to the focused renderer', async () => {
+  it('uses the macOS native listener for F16 phases and Electron only to reserve the key', async () => {
     setPlatform('darwin');
     const { registerGlobalVoiceInputIpc } = await import('../global.js');
     registerGlobalVoiceInputIpc(mocks.ipcDeps);
@@ -336,15 +443,109 @@ describe('voice input global shortcut registration', () => {
     mocks.setStoredShortcut(f16Shortcut);
     await setShortcut?.({}, f16Shortcut);
 
-    expect(mocks.modifierSetShortcut).not.toHaveBeenCalled();
+    expect(mocks.modifierSetShortcut).toHaveBeenCalledWith(f16Shortcut);
     expect(mocks.registeredShortcuts.has('F16')).toBe(true);
 
+    // The Electron callback only owns reservation/suppression.
     mocks.registeredShortcuts.get('F16')?.();
+    expect(mocks.focusedWindow.webContents.send).not.toHaveBeenCalled();
+
+    // Press/release phases come from the native listener.
+    mocks.listenerOptions.onTrigger?.('start');
 
     expect(mocks.focusedWindow.webContents.send).toHaveBeenCalledWith(
       'voice-input:global-shortcut-trigger',
-      expect.objectContaining({ id: expect.any(String) }),
+      expect.objectContaining({ id: expect.any(String), phase: 'start' }),
     );
+  });
+
+  it('uses the Windows low-level listener for F16 and Electron only to reserve the key', async () => {
+    setPlatform('win32');
+    const { registerGlobalVoiceInputIpc } = await import('../global.js');
+    registerGlobalVoiceInputIpc(mocks.ipcDeps);
+    const setShortcut = mocks.handlers.get('voice-input:global-shortcut:set');
+    const f16Shortcut: VoiceInputShortcut = {
+      trigger: 'keyboard',
+      code: 'F16',
+      key: 'F16',
+      modifiers: { meta: false, ctrl: false, alt: false, shift: false, fn: false },
+    };
+
+    mocks.setStoredShortcut(f16Shortcut);
+    await setShortcut?.({}, f16Shortcut);
+
+    expect(mocks.windowsSetShortcut).toHaveBeenCalledWith(f16Shortcut);
+    expect(mocks.registeredShortcuts.has('F16')).toBe(true);
+
+    mocks.registeredShortcuts.get('F16')?.();
+    expect(mocks.focusedWindow.webContents.send).not.toHaveBeenCalled();
+
+    mocks.windowsListenerOptions.onTrigger?.('start');
+    expect(mocks.focusedWindow.webContents.send).toHaveBeenCalledWith(
+      'voice-input:global-shortcut-trigger',
+      expect.objectContaining({ id: expect.any(String), phase: 'start' }),
+    );
+  });
+
+  it('rejects a Windows F-key that another app already owns', async () => {
+    setPlatform('win32');
+    mocks.registerShortcut.mockImplementationOnce(() => false);
+    const { registerGlobalVoiceInputIpc } = await import('../global.js');
+    registerGlobalVoiceInputIpc(mocks.ipcDeps);
+    const setShortcut = mocks.handlers.get('voice-input:global-shortcut:set');
+    const f16Shortcut: VoiceInputShortcut = {
+      trigger: 'keyboard',
+      code: 'F16',
+      key: 'F16',
+      modifiers: { meta: false, ctrl: false, alt: false, shift: false, fn: false },
+    };
+
+    mocks.setStoredShortcut(f16Shortcut);
+    const result = await setShortcut?.({}, f16Shortcut);
+
+    expect(result).toMatchObject({ ok: false });
+    expect(mocks.windowsSetShortcut).not.toHaveBeenCalled();
+    expect(mocks.registeredShortcuts.has('F16')).toBe(false);
+  });
+
+  it('releases both native listener states on system power transitions', async () => {
+    setPlatform('darwin');
+    const { releaseActiveGlobalVoiceInputShortcut } = await import('../global.js');
+
+    releaseActiveGlobalVoiceInputShortcut();
+
+    expect(mocks.modifierReleaseActiveTrigger).toHaveBeenCalledTimes(1);
+    expect(mocks.windowsReleaseActiveTrigger).toHaveBeenCalledTimes(1);
+  });
+
+  it('releases a reserved Windows F-key when the helper restart budget is exhausted', async () => {
+    setPlatform('win32');
+    const { registerGlobalVoiceInputIpc } = await import('../global.js');
+    registerGlobalVoiceInputIpc(mocks.ipcDeps);
+    const setShortcut = mocks.handlers.get('voice-input:global-shortcut:set');
+    const f16Shortcut: VoiceInputShortcut = {
+      trigger: 'keyboard',
+      code: 'F16',
+      key: 'F16',
+      modifiers: { meta: false, ctrl: false, alt: false, shift: false, fn: false },
+    };
+
+    mocks.setStoredShortcut(f16Shortcut);
+    await setShortcut?.({}, f16Shortcut);
+    expect(mocks.registeredShortcuts.has('F16')).toBe(true);
+
+    mocks.windowsListenerOptions.onRestartLimitReached?.();
+    expect(mocks.registeredShortcuts.has('F16')).toBe(false);
+  });
+
+  it('stops both native listeners through the quit disposer, not will-quit', async () => {
+    const { registerGlobalVoiceInputIpc } = await import('../global.js');
+    registerGlobalVoiceInputIpc(mocks.ipcDeps);
+
+    expect(mocks.onQuit).toHaveBeenCalledWith('voice-input-global-shortcut', expect.any(Function));
+    mocks.quitDisposers[0]?.fn();
+    expect(mocks.modifierStop).toHaveBeenCalledTimes(1);
+    expect(mocks.windowsStop).toHaveBeenCalledTimes(1);
   });
 
   it('does not re-register an unchanged native macOS shortcut from multiple windows', async () => {
@@ -433,6 +634,69 @@ describe('voice input global shortcut registration', () => {
     expect(result).toMatchObject({ ok: false });
     expect(mocks.registeredShortcuts.has('F16')).toBe(true);
     expect(mocks.registeredShortcuts.has('F17')).toBe(false);
+  });
+
+  // 测试价值
+  // - 生产入口与可观察结果：prewarmGlobalVoiceInputOverlay（快捷键注册后 1.5s 调用）是否
+  //   new 出常驻的隐藏浮窗；就绪通知后是否补建。
+  // - 规则依据：本地／未登录且没有可用听写通道时，浮窗只能显示配置错误，不应常驻一个隐藏
+  //   Renderer；变成可用后必须补建，否则可用用户首次按键退回冷启动（录音由浮窗 Renderer
+  //   发起，冷启动会晚开麦）。
+  // - 现有覆盖缺口：此前没有任何用例覆盖浮窗预热。
+  // - 最小失败输入：gate 返回 false；旧实现无条件建窗。
+  // - tier：unit。
+  describe('global overlay prewarm gate', () => {
+    const shortcut: VoiceInputShortcut = {
+      trigger: 'keyboard',
+      code: 'F16',
+      key: 'F16',
+      modifiers: { meta: false, ctrl: false, alt: false, shift: false, fn: false },
+    };
+
+    async function registerShortcutAndImport(): Promise<typeof import('../global.js')> {
+      setPlatform('darwin');
+      vi.stubGlobal('MAIN_WINDOW_VITE_DEV_SERVER_URL', 'http://localhost:5173');
+      const globalModule = await import('../global.js');
+      globalModule.registerGlobalVoiceInputIpc(mocks.ipcDeps);
+      mocks.setStoredShortcut(shortcut);
+      await mocks.handlers.get('voice-input:global-shortcut:set')?.({}, shortcut);
+      expect(mocks.registeredShortcuts.size).toBe(1);
+      return globalModule;
+    }
+
+    afterEach(() => {
+      vi.unstubAllGlobals();
+    });
+
+    it('keeps no hidden overlay without a dictation path and prewarms once one becomes ready', async () => {
+      const { prewarmGlobalVoiceInputOverlay } = await registerShortcutAndImport();
+      mocks.canOverlayStartDictation.mockResolvedValue(false);
+
+      prewarmGlobalVoiceInputOverlay();
+      await vi.waitFor(() => expect(mocks.canOverlayStartDictation).toHaveBeenCalledTimes(1));
+      await new Promise((resolve) => setImmediate(resolve));
+      expect(mocks.createdOverlayWindows).toHaveLength(0);
+
+      mocks.canOverlayStartDictation.mockResolvedValue(true);
+      for (const listener of mocks.voiceInputReadyListeners) listener();
+      await vi.waitFor(() => expect(mocks.createdOverlayWindows).toHaveLength(1));
+
+      // 已补建过：后续就绪通知不再重复建窗。
+      for (const listener of mocks.voiceInputReadyListeners) listener();
+      await new Promise((resolve) => setImmediate(resolve));
+      expect(mocks.createdOverlayWindows).toHaveLength(1);
+    });
+
+    it('prewarms immediately when dictation can start, and ready notifications do not add windows', async () => {
+      const { prewarmGlobalVoiceInputOverlay } = await registerShortcutAndImport();
+
+      prewarmGlobalVoiceInputOverlay();
+      await vi.waitFor(() => expect(mocks.createdOverlayWindows).toHaveLength(1));
+
+      for (const listener of mocks.voiceInputReadyListeners) listener();
+      await new Promise((resolve) => setImmediate(resolve));
+      expect(mocks.createdOverlayWindows).toHaveLength(1);
+    });
   });
 
   // 未授权时用户是设不上裸修饰键的:注册失败 → 设置不落盘 → 权限徽章(显示条件依赖已保存的
@@ -577,13 +841,13 @@ describe('voice input global shortcut registration', () => {
       });
 
       // preflight 那次 await 期间用户完全可能把快捷键改成别的。拿 await 之前抓的那份去
-      // 注册,就会在用户的新变更之后把旧的修饰键装回去 —— 存盘/界面停在 F16,实际生效的
+      // 注册,就会在用户的新变更之后把旧的修饰键装回去 —— 存盘/界面停在 Ctrl+F16,实际生效的
       // 却是旧那个。所以要注册的那个必须在队列里现读现校验。
       it('re-reads the stored shortcut inside the queue instead of using the pre-await snapshot', async () => {
         setPlatform('darwin');
         mocks.setStoredShortcut(bareRightOption);
         mocks.modifierIsRunning.mockReturnValue(false);
-        // preflight 卡住,期间用户改成了 F16(不需要 native listener)。
+        // preflight 卡住,期间用户改成了 Ctrl+F16(不需要 native listener)。
         let settlePreflight: (snapshot: unknown) => void = () => {};
         mocks.inputMonitoringSnapshot.mockImplementationOnce(
           () => new Promise((resolve) => { settlePreflight = resolve; }),
@@ -599,7 +863,7 @@ describe('voice input global shortcut registration', () => {
           trigger: 'keyboard',
           code: 'F16',
           key: 'F16',
-          modifiers: { meta: false, ctrl: false, alt: false, shift: false, fn: false },
+          modifiers: { meta: false, ctrl: true, alt: false, shift: false, fn: false },
         });
         settlePreflight({ ok: true, status: 'granted' });
         await new Promise((resolve) => { setImmediate(resolve); });
@@ -762,7 +1026,7 @@ describe('voice input global shortcut registration', () => {
         expect(consume?.(mocks.settingsEvent)).toEqual({ failed: true });
       });
 
-      // preflight 期间用户把快捷键换成 F16(不需要监听权限)并成功存盘 —— 那条失败态已经被清掉,
+      // preflight 期间用户把快捷键换成 Ctrl+F16(不需要监听权限)并成功存盘 —— 那条失败态已经被清掉,
       // 迟到的 unknown 不该再凭一个已经不存在的目标重新造一条「重启 Cindy 再试」。
       it('does not publish a preflight failure after the pending shortcut was replaced', async () => {
         setPlatform('darwin');
@@ -778,15 +1042,15 @@ describe('voice input global shortcut registration', () => {
         mocks.appListeners.get('browser-window-focus')?.();
         await new Promise((resolve) => { setImmediate(resolve); });
 
-        // 期间用户改成 F16 并成功存盘。
-        const f16: VoiceInputShortcut = {
+        // 期间用户改成 Ctrl+F16 并成功存盘。
+        const ctrlF16: VoiceInputShortcut = {
           trigger: 'keyboard',
           code: 'F16',
           key: 'F16',
-          modifiers: { meta: false, ctrl: false, alt: false, shift: false, fn: false },
+          modifiers: { meta: false, ctrl: true, alt: false, shift: false, fn: false },
         };
-        mocks.setStoredShortcut(f16);
-        await mocks.handlers.get('voice-input:settings:update-shortcut')?.({}, f16);
+        mocks.setStoredShortcut(ctrlF16);
+        await mocks.handlers.get('voice-input:settings:update-shortcut')?.({}, ctrlF16);
 
         // preflight 这才带着 unknown 迟到返回。
         settlePreflight({ ok: false, status: 'unknown', error: 'helper unavailable' });
@@ -1179,7 +1443,7 @@ describe('voice input global shortcut registration', () => {
         expect(mocks.modifierSetShortcut).not.toHaveBeenCalled();
       });
 
-      // 失败之后用户把快捷键换成 F16(或清空), 兜底恢复再也不会跑(没有需要监听权限的快捷键
+      // 失败之后用户把快捷键换成 Ctrl+F16(或清空), 兜底恢复再也不会跑(没有需要监听权限的快捷键
       // 了), 这条失败就永远挂着 —— 此后每开一个应用外壳窗口都会取到它, 弹一条与当前状态无关
       // 的「重启 Cindy 再试」。
       it('clears a stale recovery failure once the user changes the shortcut', async () => {
@@ -1192,13 +1456,16 @@ describe('voice input global shortcut registration', () => {
 
         await focusWindow();
 
-        // 用户改成 F16:走 Electron accelerator,压根不需要监听权限。
-        const update = await mocks.handlers.get('voice-input:settings:update-shortcut')?.({}, {
-          trigger: 'keyboard',
-          code: 'F16',
-          key: 'F16',
-          modifiers: { meta: false, ctrl: false, alt: false, shift: false, fn: false },
-        });
+        // 用户改成 Ctrl+F16:走 Electron accelerator,压根不需要监听权限。
+        const update = await mocks.handlers.get('voice-input:settings:update-shortcut')?.(
+          {},
+          {
+            trigger: 'keyboard',
+            code: 'F16',
+            key: 'F16',
+            modifiers: { meta: false, ctrl: true, alt: false, shift: false, fn: false },
+          },
+        );
         expect(update).toMatchObject({ ok: true });
 
         const consume = mocks.handlers.get('voice-input:consume-shortcut-recovery-failure');
@@ -1489,6 +1756,12 @@ describe('voice input global shortcut registration', () => {
         key: 'F16',
         modifiers: { meta: false, ctrl: false, alt: false, shift: false, fn: false },
       };
+      const ctrlF16: VoiceInputShortcut = {
+        trigger: 'keyboard',
+        code: 'F16',
+        key: 'F16',
+        modifiers: { meta: false, ctrl: true, alt: false, shift: false, fn: false },
+      };
 
       // 构造真实状态: 另一个窗口在录(会话活跃), 这边提交 F16 —— 按本轮改动注册会照常发生,
       // 于是 accelerator 确实是注册着的。直接在挂起之后去取回调是空转断言:挂起会把 accelerator
@@ -1503,7 +1776,7 @@ describe('voice input global shortcut registration', () => {
         expect(mocks.registeredShortcuts.has('F16')).toBe(true);
       }
 
-      it('drops accelerator triggers while another window is recording', async () => {
+      it('drops native F-key activations while another window is recording', async () => {
         setPlatform('darwin');
         const { registerGlobalVoiceInputIpc } = await import('../global.js');
         registerGlobalVoiceInputIpc(mocks.ipcDeps);
@@ -1511,7 +1784,7 @@ describe('voice input global shortcut registration', () => {
         await recordElsewhereThenCommitF16();
         mocks.focusedWindow.webContents.send.mockClear();
 
-        mocks.registeredShortcuts.get('F16')?.();
+        mocks.listenerOptions.onTrigger?.('start');
 
         expect(mocks.focusedWindow.webContents.send).not.toHaveBeenCalledWith(
           'voice-input:global-shortcut-trigger',
@@ -1519,7 +1792,7 @@ describe('voice input global shortcut registration', () => {
         );
       });
 
-      it('resumes triggers once the recorder closes', async () => {
+      it('resumes native F-key activations once the recorder closes', async () => {
         setPlatform('darwin');
         const { registerGlobalVoiceInputIpc } = await import('../global.js');
         registerGlobalVoiceInputIpc(mocks.ipcDeps);
@@ -1528,15 +1801,15 @@ describe('voice input global shortcut registration', () => {
         await mocks.handlers.get('voice-input:modifier-shortcut-recording:stop')?.(mocks.settingsEvent);
         mocks.focusedWindow.webContents.send.mockClear();
 
-        mocks.registeredShortcuts.get('F16')?.();
+        mocks.listenerOptions.onTrigger?.('start');
 
         expect(mocks.focusedWindow.webContents.send).toHaveBeenCalledWith(
           'voice-input:global-shortcut-trigger',
-          expect.objectContaining({ id: expect.any(String) }),
+          expect.objectContaining({ id: expect.any(String), phase: 'start' }),
         );
       });
 
-      // 同一个 helper 既服务常驻监听也服务录制页的 Fn 检测。一边提交 F16(走 accelerator 路径,
+      // 同一个 helper 既服务常驻监听也服务录制页的 Fn 检测。一边提交 Ctrl+F16(走 accelerator 路径,
       // 会停掉 native listener)时不能把另一边的 keys 来源一起杀掉 —— 那个窗口的录制框还开着,
       // 却再也收不到 Fn, 只能关掉重开。
       it('keeps the shared capture alive for other recorders when committing an accelerator', async () => {
@@ -1548,7 +1821,7 @@ describe('voice input global shortcut registration', () => {
         await mocks.handlers.get('voice-input:modifier-shortcut-recording:start')?.(mocks.recordingEvent);
         mocks.modifierStop.mockClear();
 
-        await mocks.handlers.get('voice-input:settings:update-shortcut')?.({}, f16);
+        await mocks.handlers.get('voice-input:settings:update-shortcut')?.({}, ctrlF16);
 
         // 关键:没有 stop 掉共享 helper,只放弃了快捷键。
         expect(mocks.modifierStop).not.toHaveBeenCalled();
@@ -1570,7 +1843,7 @@ describe('voice input global shortcut registration', () => {
         registerGlobalVoiceInputIpc(mocks.ipcDeps);
         mocks.modifierStop.mockClear();
 
-        await mocks.handlers.get('voice-input:settings:update-shortcut')?.({}, f16);
+        await mocks.handlers.get('voice-input:settings:update-shortcut')?.({}, ctrlF16);
 
         expect(mocks.modifierStop).toHaveBeenCalled();
         expect(mocks.modifierReleaseShortcut).not.toHaveBeenCalled();

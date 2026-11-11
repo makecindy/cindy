@@ -1,7 +1,8 @@
 import { beforeEach, describe, expect, it } from 'vitest';
 
 import type { GhostManifest } from '../../../shared/ghost';
-import { setMainLocale } from '../../i18n';
+import { validateGhostManifest } from '../../../shared/ghost';
+import { setMainLocale } from '../../i18n.desktop';
 import { assessGhostHostSetupRequirements } from '../ghostHostSetupRequirements';
 
 function manifest(id: string, cindy = false): GhostManifest {
@@ -12,13 +13,20 @@ function manifest(id: string, cindy = false): GhostManifest {
     version: '1',
     kind: 'chip',
     entry: 'main.js',
-    slots: cindy ? ['tool', 'cindy'] : ['tool'],
     tools: [{ name: 'run', description: 'run' }],
     ...(cindy ? { cindy: { image: ['generate' as const] } } : {}),
   };
 }
 
 describe('assessGhostHostSetupRequirements', () => {
+  it('does not infer model-provider setup from unknown declarations', () => {
+    const parsed = validateGhostManifest({ schemaVersion: 3, minCindyVersion: '0.1.0',
+      id: 'future', name: 'Future', version: '1.0.0', entry: 'main.js',
+      cindy: { future: { enabled: true }, image: ['future-action'] } });
+    expect(parsed.ok).toBe(true);
+    if (!parsed.ok) return;
+    expect(assessGhostHostSetupRequirements(parsed.manifest, { clientConfigReady: () => false })).toEqual([]);
+  });
   beforeEach(() => {
     setMainLocale('en');
   });

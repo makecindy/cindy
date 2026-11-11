@@ -3,6 +3,13 @@ import { describe, expect, it, vi } from 'vitest';
 import { readCreateSessionOpts, withCreateSessionStderr } from '../sessionRequest';
 
 describe('session IPC request parsing', () => {
+  it.each(['cindy-library:/outside', '  cindy-library:/outside  '])(
+    'rejects external Host-owned slots: %s', (dir) => {
+      expect(() => readCreateSessionOpts({
+        agentKind: 'codex', model: 'gpt-5.4', workingDir: '/workspace', extraDirs: [dir],
+      })).toThrow('[INVALID_PARAMS]');
+    },
+  );
   it('reads create-session required fields and preserves opaque options', () => {
     const opts = readCreateSessionOpts({
       agentKind: 'codex',

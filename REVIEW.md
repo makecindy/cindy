@@ -26,6 +26,9 @@ P1／P2。按下表转换，**不要**把仓库口径的 P2 改写成评论里�
 | P1：明显 bug／规范违反／影响面没处理干净 | `P2` | 本次必须修 |
 | P2：可选优化／风格偏好 | 不上报 | 整条略过，不降级也不换个说法上报 |
 
+这里不上报的“仓库 P2”指可选优化／风格偏好，不等于 reviewer 评论中的 `P2` 缺陷。
+服务器通道调用的真实问题应按影响报告，不能因优先级较低或评论标记为 `P2` 而略过。
+
 ## 3. 不要重复机器门禁
 
 以下问题 `client-ci` 与其他 workflow 已经逐条断言，命中即红，自动 reviewer 报了
@@ -54,6 +57,13 @@ P1／P2。按下表转换，**不要**把仓库口径的 P2 改写成评论里�
 
 按 PR 模板的风险分类，优先看这些：
 
+- **服务器通道调用方式与压力**：凡改动直接或间接的请求、订阅、推送、同步、轮询或重试，
+  包括 Renderer／Mobile／业务层调用方，重点读
+  [服务器通道调用审查](docs/dev-rules/server-channel-review.md)。沿调用链核实通道用途、
+  共享范围、上限和已有负载，判断次数、频率、体积、并发及失败恢复是否安全可靠。
+  按实际影响报告有证据的问题，并按第 2 节映射评论标签；P2 缺陷也要报告。
+  指出触发条件、共享约束与用户影响，
+  不以通用性能建议替代缺陷证据，不据此要求新增 CI 或统一限流机制。
 - **凭证与本地存储**：凭证、令牌、授权文件是否写进了仓库或可能被 Git 跟踪的路径；
   用户数据落盘位置是否越界。见 `docs/dev-rules/credentials-and-local-storage.md`。
 - **Electron 进程边界**：renderer／preload／IPC／CSP／WebView／导航与特权能力的改动
@@ -63,10 +73,12 @@ P1／P2。按下表转换，**不要**把仓库口径的 P2 改写成评论里�
   `docs/dev-rules/database-and-migrations.md`。
 - **mobile 冷更边界**：改动是否触碰 `app.json`／`app.config.js`／`eas.json`／
   `apps/mobile/package.json`／`plugins/`／`modules/` 等进入 runtime fingerprint 的输入。
-  命中就在评论里点名——这类 PR 需要把关人对冷更单独确认。见
+  命中就在评论里点名，并核对是否确实必须冷更（能用不动指纹的写法达成时要求改写），
+  以及 PR Description 是否写明冷更原因、存量装机影响与发版节奏；缺项按规范违反上报。
+  这类 PR 可保持 Ready 并正常审查，不需要把关人另外确认。见
   `docs/dev-rules/mobile-development.md`。
-- **协议兼容**：`cindy-protocol` 升级、device-link／relay／隧道 payload、IPC allowlist
-  等跨端 wire protocol 的向后兼容性。见 `docs/dev-rules/protocol-and-submodules.md`。
+- **协议兼容**：本地协议 package、device-link／relay／隧道 payload、IPC allowlist
+  等跨端 wire protocol 的向后兼容性。见 `docs/dev-rules/protocol-compatibility.md`。
 - **device-link 恢复动作的故障半径**：重试／超时／断链／重连路径的改动，恢复动作的
   作用半径是否大于故障半径——被控端一条 relay 连接服务同账号全部控制端，单 peer
   故障不得强拆整条共享连接；扩大半径必须在 PR 描述里给出明确理由，并有多控制端拓扑
@@ -91,13 +103,26 @@ P1／P2。按下表转换，**不要**把仓库口径的 P2 改写成评论里�
   大小，也不因「是 bugfix／纯技术改动」豁免。
 - **UI 双模式**：新增或修改的界面必须同时实现 Light 与 Dark，颜色走语义 token；
   只适配一种模式的硬编码或条件补丁视为未完成。见 `docs/design-rules/DESIGN.md`。
+- **UI 圆角分类与点击目标尺寸**：普通 UI 改动同样先读 `docs/design-rules/DESIGN.md §5` 与
+  `docs/design-rules/design-governance.md §13`，不只在设计系统迁移 PR 中读取。先识别
+  已登记成员覆盖的具体可见层，再核对登记值和交互约束；不得仅凭 DOM 标签、可访问名称
+  或局部样式类推导 pill。未决分类、证据缺口、违反登记值分别报告；已登记的待迁移差异
+  按 `design-inventory.md` 对应条目处理，不用相反的改形建议替代缺失裁决。
+  用量图表的密集日期目标按 §5 的 Hit-target sizing 条款核对 Equivalent 路径；同页等价
+  日期选择控件已实际交付并满足 Equivalent 时，不得仅因单个目标小于 24×24px 就要求逐柱
+  撑宽或横向滚动。控件未交付时按 §5 与台账的登记过渡记录处理——报告欠付的等价控件，
+  不以 24px 撑宽或横向滚动等改形建议替代，也不把 data mark 登记当成尺寸通用豁免。
+  规范修订 PR 应按已授权的新裁决核对正文、摘要与登记的一致性，不把正在被取代的旧
+  措辞当作保留它的理由；新条款自身的实际矛盾、遗漏与越界仍须报告。
 - **跨平台**：macOS 与 Windows 的路径、进程、文件系统差异。
 - **测试**：是否通过 skip、删除或弱化断言制造通过。
+- **罕见边界不要求加机制**：只在极端时序下触发、后果是降级而非数据损坏或安全问题的边界
+  （例如 App 恰好在某几秒内被杀），作者在 PR 描述里登记为已知边界即可；不要据此要求新增
+  持久化、恢复、状态标记、重试这类机制。正确性、安全与常见路径照常要求修
+  （2026-09-27 用户裁决，#5143：「可以简单点，不用那么追求完美」）。
 
 ## 5. 评审环境的已知限制
 
-- `cindy-protocol` submodule **未** checkout，该目录下的文件读不到。不要据此推断
-  文件缺失或引用失效。
 - 只 checkout 了 PR 的 merge ref 与最近 100 条历史，更早的 `git log`／`git blame`
   会不完整。
 - 依赖未安装，无法运行测试或构建；结论只能来自静态阅读。

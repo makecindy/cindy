@@ -14,6 +14,7 @@ import type {
   AgentCustomizationFile,
   ListCustomizationsResult,
 } from '../../types/customizations.js';
+import { shouldPruneSkillScanDirectory } from './skill-scan-limits.js';
 
 export interface SourceDef {
   engine: 'claude-code' | 'codex' | 'pi';
@@ -21,6 +22,9 @@ export interface SourceDef {
   scope: string;
   dir: string;
   workingDir?: string;
+  runtimeStatus?: AgentCustomization['runtimeStatus'];
+  /** Optional physical root that the skill source, folder, and SKILL.md must stay inside. */
+  skillContainWithin?: string;
 }
 
 export function parseFrontmatter(raw: string): {
@@ -44,10 +48,6 @@ export function parseFrontmatter(raw: string): {
   } catch (err) {
     return { parseError: err instanceof Error ? err.message : String(err) };
   }
-}
-
-function direntIsDirectoryOrSymlink(dirent: fs.Dirent): boolean {
-  return dirent.isDirectory() || dirent.isSymbolicLink();
 }
 
 function readChildKind(parent: string, dirent: fs.Dirent): AgentCustomizationFile['kind'] {
@@ -100,6 +100,7 @@ function readFolderSkill(source: SourceDef, folder: string, mdPath: string): Age
     frontmatter,
     parseError,
     ...(source.workingDir ? { workingDir: source.workingDir } : {}),
+    ...(source.runtimeStatus ? { runtimeStatus: source.runtimeStatus } : {}),
   };
 }
 
@@ -128,7 +129,104 @@ function readFileCustomization(source: SourceDef, mdPath: string): AgentCustomiz
     frontmatter,
     parseError,
     ...(source.workingDir ? { workingDir: source.workingDir } : {}),
+    ...(source.runtimeStatus ? { runtimeStatus: source.runtimeStatus } : {}),
   };
+}
+
+type PathContainmentApi = Pick<typeof path, 'relative' | 'isAbsolute'>;
+
+export function isCustomizationPathInside(
+  parent: string,
+  child: string,
+  pathApi: PathContainmentApi = path,
+): boolean {
+  const relative = pathApi.relative(parent, child);
+  return relative === '' || (!relative.startsWith('..') && !pathApi.isAbsolute(relative));
+}
+
+function realPathInside(parentRealPath: string, candidate: string): boolean {
+  try {
+    return isCustomizationPathInside(parentRealPath, fs.realpathSync(candidate));
+  } catch {
+    return false;
+  }
+}
+
+function isSymlinkDirectory(target: string): boolean {
+  try {
+    return fs.lstatSync(target).isSymbolicLink();
+  } catch {
+    return false;
+  }
+}
+
+function findSkillMd(folder: string): string | null {
+  for (const name of ['SKILL.md', 'skill.md']) {
+    const candidate = path.join(folder, name);
+    try {
+      if (fs.statSync(candidate).isFile()) return candidate;
+    } catch {
+      // A missing or inaccessible candidate is not a skill folder.
+    }
+  }
+  return null;
+}
+
+function scanSkillFolders(
+  source: SourceDef,
+  containmentRoot: string | null,
+  items: AgentCustomization[],
+  errors: Array<{ path?: string; message: string }>,
+): void {
+  const pushSkill = (folder: string, mdPath: string): void => {
+    if (
+      containmentRoot &&
+      (!realPathInside(containmentRoot, folder) || !realPathInside(containmentRoot, mdPath))
+    ) {
+      return;
+    }
+    items.push(readFolderSkill(source, folder, mdPath));
+  };
+
+  const readDir = (dir: string): fs.Dirent[] | null => {
+    try {
+      return fs.readdirSync(dir, { withFileTypes: true });
+    } catch (err) {
+      errors.push({ path: dir, message: err instanceof Error ? err.message : String(err) });
+      return null;
+    }
+  };
+
+  const topLevelEntries = readDir(source.dir);
+  if (!topLevelEntries) return;
+  topLevelEntries.sort((a, b) => a.name.localeCompare(b.name));
+
+  for (const ent of topLevelEntries) {
+    if (ent.name.startsWith('.') || /\.bak\.\d+$/.test(ent.name)) continue;
+    const folder = path.join(source.dir, ent.name);
+    const mdPath = findSkillMd(folder);
+    if (mdPath) {
+      pushSkill(folder, mdPath);
+      // A skill's child directories are resources, not discoverable skills.
+      continue;
+    }
+
+    // Dirent can report a Windows junction as a directory; lstat keeps the
+    // no-recursive-symlink guarantee consistent across platforms.
+    const isSymlink = ent.isSymbolicLink() || (ent.isDirectory() && isSymlinkDirectory(folder));
+    if (isSymlink || !ent.isDirectory() || shouldPruneSkillScanDirectory(ent.name)) continue;
+
+    // At most one namespace/author level: <root>/<namespace>/<skill>.
+    const namespaceEntries = readDir(folder);
+    if (!namespaceEntries) continue;
+    namespaceEntries.sort((a, b) => a.name.localeCompare(b.name));
+    for (const nested of namespaceEntries) {
+      if (nested.name.startsWith('.') || /\.bak\.\d+$/.test(nested.name)) continue;
+      const nestedFolder = path.join(folder, nested.name);
+      const nestedMd = findSkillMd(nestedFolder);
+      if (nestedMd) pushSkill(nestedFolder, nestedMd);
+    }
+  }
 }
 
 function scanOneSource(source: SourceDef): {
@@ -140,33 +238,29 @@ function scanOneSource(source: SourceDef): {
     if (!fs.existsSync(source.dir)) return { items: [], errors };
     const stat = fs.statSync(source.dir);
     if (!stat.isDirectory()) return { items: [], errors };
+    let containmentRoot: string | null = null;
+    if (source.skillContainWithin) {
+      try {
+        containmentRoot = fs.realpathSync(source.skillContainWithin);
+      } catch {
+        return { items: [], errors };
+      }
+      if (!realPathInside(containmentRoot, source.dir)) return { items: [], errors };
+    }
+
+    const items: AgentCustomization[] = [];
+    if (source.kind === 'skill') {
+      scanSkillFolders(source, containmentRoot, items, errors);
+      return { items, errors };
+    }
 
     const entries = fs.readdirSync(source.dir, { withFileTypes: true });
-    const items: AgentCustomization[] = [];
-
     for (const ent of entries) {
       if (ent.name.startsWith('.')) continue;
       if (/\.bak\.\d+$/.test(ent.name)) continue;
-
-      if (source.kind === 'skill') {
-        if (!direntIsDirectoryOrSymlink(ent)) continue;
-        const folder = path.join(source.dir, ent.name);
-        const mdPath = path.join(folder, 'SKILL.md');
-        let actualMd = mdPath;
-        if (!fs.existsSync(actualMd) || !fs.statSync(actualMd).isFile()) {
-          const lower = path.join(folder, 'skill.md');
-          if (fs.existsSync(lower) && fs.statSync(lower).isFile()) {
-            actualMd = lower;
-          } else {
-            continue;
-          }
-        }
-        items.push(readFolderSkill(source, folder, actualMd));
-      } else {
-        if (!ent.isFile()) continue;
-        if (!ent.name.toLowerCase().endsWith('.md')) continue;
-        items.push(readFileCustomization(source, path.join(source.dir, ent.name)));
-      }
+      if (!ent.isFile()) continue;
+      if (!ent.name.toLowerCase().endsWith('.md')) continue;
+      items.push(readFileCustomization(source, path.join(source.dir, ent.name)));
     }
 
     return { items, errors };

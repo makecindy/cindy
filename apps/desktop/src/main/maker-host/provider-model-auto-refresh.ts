@@ -18,6 +18,7 @@ import {
   type ProviderModelAutoRefreshTrigger,
 } from '../../shared/providerModelRefresh.js';
 import { createLogger, type Logger } from '../logger.js';
+import { refreshModelsWithCatalog } from './provider-model-refresh.js';
 
 export const PROVIDER_MODEL_AUTO_REFRESH_COOLDOWN_MS = 30 * 60_000;
 export const PROVIDER_MODEL_AUTO_REFRESH_FAILURE_COOLDOWN_MS = 5 * 60_000;
@@ -292,15 +293,9 @@ export function createProviderModelRefreshCoordinator(
       }
 
       const requestedIds = providerIds ?? BUILTIN_REFRESHABLE_PROVIDER_IDS;
-      const ids = requestedIds.filter(
-        (id) =>
-          connectedIds.has(id) &&
-          // xAI's provider refresh reads the same public Catalog as refreshCatalog. The shared
-          // refresh already ran (or was intentionally skipped because splash/cooldown made its
-          // snapshot current), so running the provider hook would fetch the identical source a
-          // second time. Manual xAI refresh still uses refreshProvider and bypasses this path.
-          !(id === 'xai' && deps.refreshCatalog),
-      );
+      // Public Catalog refreshes metadata; each connected account still refreshes its own
+      // authoritative membership independently, including xAI `/user` → `/models`.
+      const ids = requestedIds.filter((id) => connectedIds.has(id));
       // 启动期无视冷却（见 `'startup'` trigger 注释）；in-flight 合并仍生效，所以并发的
       // 启动触发与手动刷新不会各起一次 codex app-server。
       const force = isForcedProviderModelAutoRefreshTrigger(trigger);
@@ -318,8 +313,17 @@ export function createProviderModelRefreshCoordinator(
       });
     },
 
-    refreshManually(providerId): Promise<void> {
-      return refresh(providerId, true);
+    async refreshManually(providerId): Promise<void> {
+      // Subscription media declarations can change independently of chat discovery.
+      // Automatic refresh already loads the shared catalog before calling the provider hook.
+      if ((providerId === 'xai' || providerId === 'openai') && deps.refreshCatalog) {
+        return refreshModelsWithCatalog({
+          refreshCatalog: deps.refreshCatalog,
+          refreshModels: () => refresh(providerId, true),
+          getScopeKey: () => deps.getScopeKey?.(),
+        });
+      }
+      await refresh(providerId, true);
     },
     resetCooldowns,
   };

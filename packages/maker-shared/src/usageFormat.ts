@@ -29,3 +29,5 @@ export function formatCompactTokens(n: number): string {
   const largest = TOKEN_UNITS[TOKEN_UNITS.length - 1];
   return `${(n / largest.divisor).toFixed(1)}${largest.suffix}`;
 }
+
+export * from './runningTokenRateHistory.js';

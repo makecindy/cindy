@@ -58,8 +58,25 @@ describe('enableRemoteCollabForSession', () => {
     expect(enableOrca).not.toHaveBeenCalled();
   });
 
-  it('成功路径:回传 worker session,并 fire-and-forget 刷镜像', async () => {
+  it('首个 Worker 带 Agent 位置时：按被控端一定注册的 Claude Code 复核，降级就失败不静默建错', async () => {
+    const withLocation = { ...params, options: { workerAgent: 'pi' as const, agentDeviceId: 'office' } };
+    getCapabilities.mockResolvedValue({ supportsOrcaWorkerPermissionMode: true });
+    await expect(enableRemoteCollabForSession(withLocation)).rejects.toThrow('DEVICE_LINK_CHANNEL_NOT_ALLOWED');
+    expect(getCapabilities).toHaveBeenCalledWith('dev-1', 'claude-code');
+    expect(enableOrca).not.toHaveBeenCalled();
+
+    getCapabilities.mockResolvedValue({ supportsOrcaWorkerPermissionMode: true, supportsOrcaWorkerAgentDevice: true });
     enableOrca.mockResolvedValue({ workerSessionId: 'worker-1' });
+    await expect(enableRemoteCollabForSession(withLocation)).resolves.toEqual({ focusWorkerSessionId: 'worker-1' });
+    expect(enableOrca).toHaveBeenCalledWith('lead-1', expect.objectContaining({ agentDeviceId: 'office' }));
+  });
+
+  it('成功路径:回传 worker session,并 fire-and-forget 刷镜像', async () => {
+    enableOrca.mockResolvedValue({
+      workerSessionId: 'worker-1',
+      dispatched: false,
+      uiAssignmentSnapshotBeforeMs: 456,
+    });
 
     await expect(enableRemoteCollabForSession(params)).resolves.toEqual({
       focusWorkerSessionId: 'worker-1',
@@ -67,6 +84,78 @@ describe('enableRemoteCollabForSession', () => {
     expect(refreshRemoteDeviceSessions).toHaveBeenCalledWith('dev-1');
     // 成功路径不该去回查:enableOrca 返回即代表被控端 DB 已提交。
     expect(listWorkersByLead).not.toHaveBeenCalled();
+  });
+
+  it('新被控端延后 UI 派单，并返回 accepted 后使用的远程交接凭据', async () => {
+    getCapabilities.mockResolvedValue({
+      supportsOrcaWorkerPermissionMode: true,
+      supportsDeferredOrcaUiAssignment: true,
+    });
+    enableOrca.mockResolvedValue({
+      workerSessionId: 'worker-1',
+      dispatched: false,
+      uiAssignmentSnapshotBeforeMs: 456,
+    });
+    const options = {
+      workerAgent: 'codex' as const,
+      delegateTask: ' Review this PR ',
+      deferDelegateTask: true,
+    };
+
+    await expect(enableRemoteCollabForSession({ ...params, options })).resolves.toEqual({
+      focusWorkerSessionId: 'worker-1',
+      deferredUiAssignment: {
+        workerSessionId: 'worker-1',
+        initialTask: 'Review this PR',
+        snapshotBeforeMs: 456,
+        deviceId: 'dev-1',
+      },
+    });
+    expect(enableOrca).toHaveBeenCalledWith('lead-1', {
+      ...options,
+      delegateTask: 'Review this PR',
+    });
+  });
+
+  it('旧被控端删除 defer 字段并沿用 enableOrca 即时派单', async () => {
+    getCapabilities.mockResolvedValue({ supportsOrcaWorkerPermissionMode: true });
+    enableOrca.mockResolvedValue({ workerSessionId: 'worker-1' });
+
+    await expect(
+      enableRemoteCollabForSession({
+        ...params,
+        pendingLeadInput: 'Continue the sidebar work',
+        options: {
+          workerAgent: 'codex',
+          delegateTask: 'Review this PR',
+          deferDelegateTask: true,
+        },
+      }),
+    ).resolves.toEqual({ focusWorkerSessionId: 'worker-1' });
+    expect(enableOrca).toHaveBeenCalledWith('lead-1', {
+      workerAgent: 'codex',
+      delegateTask: expect.stringContaining(
+        'Review this PR\n\nPending Lead input:',
+      ),
+    });
+  });
+
+  it('capability 与 mutation 间降级时，以实际旧响应为准，不二次派单', async () => {
+    getCapabilities.mockResolvedValue({
+      supportsOrcaWorkerPermissionMode: true,
+      supportsDeferredOrcaUiAssignment: true,
+    });
+    // 旧 handler 会忽略 deferDelegateTask、即时派单，且不会返回新字段。
+    enableOrca.mockResolvedValue({ workerSessionId: 'worker-1', dispatched: true });
+
+    await expect(enableRemoteCollabForSession({
+      ...params,
+      options: {
+        workerAgent: 'codex',
+        delegateTask: 'Review this PR',
+        deferDelegateTask: true,
+      },
+    })).resolves.toEqual({ focusWorkerSessionId: 'worker-1' });
   });
 
   it('权威失败(如 PRECONDITION_FAILED):原样抛出,不回查', async () => {
@@ -86,6 +175,27 @@ describe('enableRemoteCollabForSession', () => {
       focusWorkerSessionId: 'worker-late',
     });
     expect(listWorkersByLead).toHaveBeenCalledWith('lead-1');
+  });
+
+  it('deferred enable 超时后只报告派单终态不确定，不冒险二次派发', async () => {
+    getCapabilities.mockResolvedValue({
+      supportsOrcaWorkerPermissionMode: true,
+      supportsDeferredOrcaUiAssignment: true,
+    });
+    enableOrca.mockRejectedValue(timeoutError());
+    listWorkersByLead.mockResolvedValue([{ sessionId: 'worker-late', id: 'w1', status: 'idle' }]);
+
+    await expect(enableRemoteCollabForSession({
+      ...params,
+      options: {
+        workerAgent: 'codex',
+        delegateTask: 'Review this PR',
+        deferDelegateTask: true,
+      },
+    })).resolves.toEqual({
+      focusWorkerSessionId: 'worker-late',
+      assignmentUnconfirmed: true,
+    });
   });
 
   it('隧道超时 + 被控端确实没建成:fail-closed 抛原始超时', async () => {
@@ -124,6 +234,7 @@ describe('enableRemoteCollabForSession', () => {
     // 链路「可连但每个 invoke 都黑洞」:每次回查自己要走满 30s 隧道超时。只限次数的话
     // 6 次串行 ≈ 3 分钟,而这段时间 composer 是锁住的、首轮压着不发(codex P2 第五轮)。
     enableOrca.mockRejectedValue(timeoutError());
+    vi.useFakeTimers();
     listWorkersByLead.mockImplementation(
       () =>
         new Promise((_resolve, reject) => {
@@ -131,7 +242,6 @@ describe('enableRemoteCollabForSession', () => {
         }),
     );
 
-    vi.useFakeTimers();
     const pending = enableRemoteCollabForSession(params);
     const assertion = expect(pending).rejects.toThrow('DEVICE_LINK_TIMEOUT');
     // 推进远超 6×(30s+3s) 的时间,确认它早就按 deadline 停了而不是跑满次数。

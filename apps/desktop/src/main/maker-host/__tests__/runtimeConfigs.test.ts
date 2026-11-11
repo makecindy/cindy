@@ -7,6 +7,11 @@ let memorySettings = {
   pi: false,
 };
 
+import { configureUserDataDir } from '../../userDataPath.js';
+
+// The settings stores read the profile root from the injected host facts.
+configureUserDataDir('/tmp/xdt-maker-test-user-data');
+
 vi.mock('electron', () => ({
   app: {
     isPackaged: false,
@@ -40,8 +45,11 @@ vi.mock('../../model-access/effectiveEndpoint.js', async () => {
 });
 
 describe('runtime-configs', () => {
-  beforeEach(() => {
+  beforeEach(async () => {
     vi.resetModules();
+    // resetModules clears the injected host facts, so reinstall them per test.
+    const { configureUserDataDir: configure } = await import('../../userDataPath.js');
+    configure('/tmp/xdt-maker-test-user-data');
     memorySettings = {
       maker: true,
       claudeCode: false,
@@ -79,6 +87,29 @@ describe('runtime-configs', () => {
     expect(desktopCodexRuntimeConfig.makerMemoryEnabled).toBe(false);
   });
 
+  it('Claude 订阅会话只注入 Anthropic 一方的子代理覆写;网关会话的覆写语义不变', async () => {
+    let saved = 'chatgpt/gpt-5.5';
+    vi.doMock('../memory-settings-store.js', () => ({
+      readMemorySettings: () => memorySettings,
+    }));
+    vi.doMock('../subagent-model-settings-store.js', () => ({
+      readSubagentModelSettings: () => ({ claudeCode: saved }),
+    }));
+    vi.doMock('../model-disable-store.js', () => ({ readModelDisableOverrides: () => ({}) }));
+    const { buildDesktopClaudeRuntimeConfig } = await import('../runtime-configs.js');
+    const config = buildDesktopClaudeRuntimeConfig(() => 'http://127.0.0.1:1234');
+    const route = config.subagentModelForRoute!;
+
+    // 订阅会话:CLI 直连 Anthropic,订阅桥 / 用户来源的模型用不了。
+    expect(route('anthropic', 'oauth-bearer')).toBeUndefined();
+    expect(route(null, 'oauth-bearer')).toBeUndefined();
+    saved = 'glm-5';
+    expect(route(null, 'oauth-bearer')).toBeUndefined();
+    // 网关会话:订阅前缀由 proxy 按请求路由,照旧注入。
+    saved = 'chatgpt/gpt-5.5';
+    expect(route('xd', 'gateway-key')).toBe('chatgpt/gpt-5.5');
+  });
+
   it('places generic Cindy-side Skill precedence in Claude and Codex only', async () => {
     vi.doMock('../memory-settings-store.js', () => ({
       readMemorySettings: () => memorySettings,
@@ -99,6 +130,9 @@ describe('runtime-configs', () => {
       // 来源判定必须落在可观察的清单标注上，并且无标注时 fail-closed 回落到
       // 「先跑 Cindy 侧 Skill」，否则这条规则对模型不可执行 (#1650 review)。
       expect(prompt).toMatch(/available-Skills listing already labels each Skill/u);
+      // Cindy 自有 Skill 在 Claude 里挂在 `cindy` / `cindy-plugin-<id>` 插件命名空间下
+      // (managed-skills.ts)。规则只写「有插件命名空间即下游」时，会把它们排到下游之后。
+      expect(prompt).toMatch(/`cindy` or\s+`cindy-plugin-\*` namespace marks a Cindy-side Skill/u);
       expect(prompt).toMatch(
         /no usable source\s+label, treat the Skill as downstream and still run the applicable Cindy-side Skill first/u,
       );
@@ -119,8 +153,49 @@ describe('runtime-configs', () => {
 
     for (const prompt of [claudeConfig.systemPrompt, desktopCodexRuntimeConfig.systemPrompt]) {
       expect(prompt).toContain('## User-facing plans');
+      expect(prompt?.match(/## User-facing plans/gu)).toHaveLength(1);
+      expect(prompt).not.toContain('cindy_mcp_list_tools');
       expect(prompt).toContain('Write for a general user, not as internal engineering notes.');
       expect(prompt).toContain('Name the real action and visible result instead.');
     }
   });
+});
+
+it('never treats a retired independent Claude account as a connected subscription for spawn flags', async () => {
+  vi.resetModules();
+  const { configureUserDataDir: configure } = await import('../../userDataPath.js');
+  configure('/tmp/xdt-maker-test-user-data');
+  const readBuiltin = vi.fn(() => true);
+  vi.doMock('../active-catalog.js', () => ({ getActiveCatalog: () => ({ providers: [
+    { id: 'claude-work', auth: { method: 'oauth', native: 'claude' } },
+  ] }) }));
+  vi.doMock('../claude-native-auth.js', () => ({ hasClaudeNativeLogin: readBuiltin }));
+  // 不读开发机真实的 ~/.claude/settings.json(用户显式 ENABLE_TOOL_SEARCH 会改写断言)。
+  const readOverride = vi.fn((): string | undefined => undefined);
+  vi.doMock('../claude-user-tool-search.js', () => ({ readUserToolSearchOverride: readOverride }));
+  try {
+    const { buildDesktopClaudeRuntimeConfig } = await import('../runtime-configs.js');
+    const flags = buildDesktopClaudeRuntimeConfig(() => 'http://localhost').behaviorFlags;
+    if (typeof flags !== 'function') throw new Error('expected spawn flags');
+    expect(flags({ credentialMode: 'provider-oauth', sessionProviderId: 'claude-work' } as never))
+      .toMatchObject({ CLAUDE_CODE_ATTRIBUTION_HEADER: '0', ENABLE_TOOL_SEARCH: 'true' });
+    // 独立账号不借用本机 Claude Code 登录的连接态。
+    expect(readBuiltin).not.toHaveBeenCalled();
+    expect(flags({ credentialMode: 'oauth-bearer', sessionProviderId: 'anthropic' } as never))
+      .toMatchObject({ CLAUDE_CODE_ATTRIBUTION_HEADER: '1', ENABLE_TOOL_SEARCH: 'true' });
+    expect(readBuiltin).toHaveBeenCalledTimes(1);
+    // issue #7524:用户显式的 ENABLE_TOOL_SEARCH 经 runtime-configs 接线压过来源默认值,
+    // 且只对本机 spawn 生效;远端 spawn 不读本机配置。
+    readOverride.mockReturnValue('true');
+    const custom = { credentialMode: 'provider-oauth', sessionProviderId: 'openrouter-custom' };
+    expect(flags({ ...custom, spawnMode: 'local' } as never)).toMatchObject({ ENABLE_TOOL_SEARCH: 'true' });
+    readOverride.mockClear();
+    expect(flags({ ...custom, spawnMode: 'remote' } as never)).toMatchObject({ ENABLE_TOOL_SEARCH: 'false' });
+    expect(readOverride).not.toHaveBeenCalled();
+  } finally {
+    vi.doUnmock('../active-catalog.js');
+    vi.doUnmock('../claude-native-auth.js');
+    vi.doUnmock('../claude-user-tool-search.js');
+    vi.resetModules();
+  }
 });

@@ -34,10 +34,34 @@ describe('chunkDiscordText', () => {
     expect(chunks[1].endsWith('\n```')).toBe(true);
   });
 
+  it('closes an unterminated code fence in the final chunk', () => {
+    const chunks = chunkDiscordText(`\`\`\`ts\n${'x'.repeat(25)}`, 20);
+
+    // 源码末尾仍在代码块内时，出站的最后一段也必须闭合，不能把未闭合围栏交给客户端渲染。
+    expect(chunks.length).toBeGreaterThan(1);
+    expect(chunks.every((chunk) => chunk.length <= 20)).toBe(true);
+    expect(chunks[0].startsWith('```ts\n')).toBe(true);
+    expect(chunks.at(-1)?.endsWith('\n```')).toBe(true);
+  });
+
   it('hard-splits a single line over the limit', () => {
     const chunks = chunkDiscordText('x'.repeat(25), 10);
 
     expect(chunks).toEqual(['x'.repeat(10), 'x'.repeat(10), 'x'.repeat(5)]);
     expect(chunks.every((chunk) => chunk.length <= 10)).toBe(true);
+  });
+
+  it('keeps words and emoji intact when a long line must be split', () => {
+    const words = 'bottomPadding value '.repeat(20);
+    const chunks = chunkDiscordText(words, 30);
+    expect(chunks.join('')).toBe(words);
+    expect(chunks.slice(0, -1).every((chunk) => /\s$/.test(chunk))).toBe(true);
+    const emoji = chunkDiscordText('🙂'.repeat(30), 11);
+    expect(emoji.join('')).toBe('🙂'.repeat(30));
+    expect(
+      emoji.every(
+        (chunk) => chunk.length <= 11 && !/^[\uDC00-\uDFFF]|[\uD800-\uDBFF]$/.test(chunk),
+      ),
+    ).toBe(true);
   });
 });

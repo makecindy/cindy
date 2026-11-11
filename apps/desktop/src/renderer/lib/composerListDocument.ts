@@ -291,7 +291,7 @@ export function normalizeComposerDocumentJSON(document: JSONContent): JSONConten
 
   const normalized: JSONContent[] = [];
   let fence: FenceState | null = null;
-  for (const node of document.content) {
+  for (const node of stripHostCapabilityChips(document).content!) {
     const result: { blocks: JSONContent[]; fence: FenceState | null } =
       node.type === 'paragraph' ? paragraphToBlocks(node, fence) : { blocks: [node], fence };
     fence = result.fence;
@@ -305,6 +305,22 @@ export function normalizeComposerDocumentJSON(document: JSONContent): JSONConten
     }
   }
   return { ...document, content: normalized };
+}
+
+/** Drop retired routing atoms from old drafts, retaining text, files and other mentions. */
+export function stripHostCapabilityChips(document: JSONContent): JSONContent {
+  if (!document || typeof document !== 'object' || !Array.isArray(document.content)) {
+    return document;
+  }
+  const nextContent = document.content
+    .map((node) => {
+      if (node?.type === 'mentionChip' && node.attrs?.kind === 'plugin-capability') {
+        return null;
+      }
+      return stripHostCapabilityChips(node);
+    })
+    .filter((node): node is JSONContent => node !== null);
+  return { ...document, content: nextContent };
 }
 
 export interface ComposerRestoreInsertion {

@@ -2,6 +2,9 @@ name: client-ci
 
 on:
   pull_request:
+  # merge queue 把 PR 与最新 main(及排在前面的 PR)合成临时分支,在上面重跑必需检查
+  # (verify / Windows unit tests),全绿才合入。没有这个触发,队列会一直等到超时再把 PR 移出。
+  merge_group:
   push:
     branches:
       - main
@@ -24,53 +27,21 @@ env:
   NODE_OPTIONS: '--max-old-space-size=8192'
 
 jobs:
-  verify:
+  # 静态检查、类型检查和 runner 自测与 Linux 单测分片并行。这里不装
+  # bundled ripgrep；它只在 Desktop 单测收集时需要，由单测分片自行安装。
+  verify-checks:
     runs-on: ubuntu-latest
     timeout-minutes: 40
 
     steps:
-      # 主仓与公开 submodule 都使用 GitHub 默认的只读访问路径。
       - name: Checkout client
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           fetch-depth: 0
           lfs: true
 
-      # .gitmodules 来自 PR 分支,fork PR 可以把 cindy-protocol 的 url / path 改成
-      # 任意仓库。先钉死来源再 sync/update,避免 CI 拉取并 pnpm install 第三方仓库
-      # 内容。gitlink 的 commit 同样来自 PR,但只能从 makecindy/cindy-protocol 拉取,
-      # 外部无法向该仓库推送,所以来源钉死后取到的一定是本组织的历史。
-      - name: Verify cindy-protocol submodule source
-        run: |
-          set -euo pipefail
-          expected_url='https://github.com/makecindy/cindy-protocol.git'
-          expected_path='cindy-protocol'
-          actual_url="$(git config -f .gitmodules --get submodule.cindy-protocol.url || true)"
-          actual_path="$(git config -f .gitmodules --get submodule.cindy-protocol.path || true)"
-          if [ "$actual_url" != "$expected_url" ] || [ "$actual_path" != "$expected_path" ]; then
-            echo "::error file=.gitmodules::cindy-protocol submodule 来源不符: url='$actual_url' path='$actual_path'(期望 url='$expected_url' path='$expected_path')"
-            exit 1
-          fi
-          echo "cindy-protocol submodule 来源校验通过: $actual_url"
-
-      # 本 job 只做本仓 typecheck / 单测 / 各类 guard。cindy-protocol 是公开的
-      # workspace 依赖,需要 checkout 以供 pnpm install 解析,但不在本 job 运行
-      # 协议仓自己的 CI。
-      # 公开客户端不包含内建插件种子；相关单测只在 os.tmpdir 里自造夹具。
-      # 公开仓不提供官方发布流程。
-      - name: Fetch cindy-protocol submodule
-        run: |
-          git submodule sync -- cindy-protocol
-          git submodule update --init --force --recursive -- cindy-protocol
-
-      - name: Reject cindy-protocol rollback or divergence
-        if: ${{ github.event_name == 'pull_request' }}
-        env:
-          CINDY_PROTOCOL_BASE_REF: ${{ github.event.pull_request.base.sha }}
-        run: node scripts/check-submodule-forward.mjs
-
       - name: Setup pnpm
-        uses: pnpm/action-setup@0ebf47130e4866e96fce0953f49152a61190b271 # v6
+        uses: pnpm/action-setup@0977fd99725f1db4007ccb2928dbb4e90d06cc86 # v6
         with:
           run_install: false
 
@@ -81,17 +52,51 @@ jobs:
           cache: pnpm
           cache-dependency-path: pnpm-lock.yaml
 
+      - name: Check built-in Skill bundle versions
+        env:
+          SKILLS_BASE_REF: ${{ github.event.pull_request.base.sha || github.event.merge_group.base_sha || github.event.before || 'HEAD' }}
+        run: node scripts/check-built-in-skills.mjs --base-ref "$SKILLS_BASE_REF"
+
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
 
-      # XDT_SKIP_AGENT_BIN_INSTALL 跳过了 postinstall 的全部 agent 二进制,但
-      # runtime-configs.ts 模块顶层的 bundledRipgrepDir() 缺 rg 时直接 throw,
-      # 会让 apps/desktop 单测在收集阶段全挂——ripgrep 必须单独装回来。
-      # install:ripgrep 不带 --best-effort,不受上面的 skip 环境变量影响。
-      - name: Install bundled ripgrep
+      # 纯文本扫描、秒级返回：逐用例重置模块、真实等待和普通单测读源码文本只允许
+      # 比基线少（engineering-conventions.md §3.2 性能预算），在耗时步骤前快速失败。
+      - name: Check unit test hygiene
+        run: pnpm check:test-hygiene
+
+      - name: Check settings search coverage
         env:
-          GITHUB_TOKEN: ${{ github.token }}
-        run: pnpm install:ripgrep
+          SETTINGS_BASE_REF: ${{ github.event.pull_request.base.sha || github.event.merge_group.base_sha || github.event.before || 'HEAD^' }}
+        run: pnpm check:settings-search --base-ref "$SETTINGS_BASE_REF"
+
+      # test:unit 的 runner 自测不能跟着 Vitest 分片重复执行；在检查 job 中跑一次，
+      # Linux 单测分片只负责 workspace unit tier。
+      - name: Run test runner self-tests
+        run: pnpm test:runner
+
+      # Cross-file security, permission, and design contracts are intentionally
+      # outside the ordinary behavior-test pool, but remain a required gate.
+      - name: Run Desktop and Mobile source-contract guards
+        run: pnpm test:guard
+
+      # No private service checkout or secrets: exercise production clients over real
+      # loopback WebSockets with bounded fault injection. Failure blocks verify.
+      - name: Run Device Link connection integration tests
+        run: |
+          pnpm --filter desktop exec tsc --project ../../scripts/device-link/tsconfig.json
+          pnpm test:device-link
+
+      # DS-7: candidate merge/head versus the event base; only mature colour
+      # consumers block. Geometry/adoption observations remain report-only.
+      - name: Check added design colours
+        env:
+          DESIGN_BASE_REF: ${{ github.event.pull_request.base.sha || github.event.merge_group.base_sha || github.event.before || 'HEAD^' }}
+          DESIGN_HEAD_REF: ${{ github.sha }}
+        run: pnpm check:design-colors --base-ref "$DESIGN_BASE_REF" --head-ref "$DESIGN_HEAD_REF"
+
+      - name: Check design inventory registration
+        run: pnpm check:design-inventory
 
       - name: Check endpoint literals
         run: pnpm check:endpoints
@@ -123,11 +128,8 @@ jobs:
 
       - name: Validate SQLite migrations
         env:
-          XDT_MIGRATION_BASE_REF: ${{ github.event.pull_request.base.sha || github.event.before || 'origin/main' }}
+          XDT_MIGRATION_BASE_REF: ${{ github.event.pull_request.base.sha || github.event.merge_group.base_sha || github.event.before || 'origin/main' }}
         run: pnpm --filter desktop db:validate
-
-      - name: Run client and package unit tests
-        run: pnpm test:unit
 
       - name: Run scheduler architecture guard
         run: pnpm ci:scheduler-guard
@@ -135,50 +137,29 @@ jobs:
       - name: Run mobile scope guard
         run: pnpm --filter mobile test:scope
 
-  # Linux 全绿不能覆盖 path separator、盘符、大小写和文件系统能力差异。两个
-  # Windows 分片并行运行，分片并集仍完整覆盖 test:unit，不能缩成少量 smoke。
-  windows-unit-shards:
-    name: Windows unit tests (${{ matrix.shard }}/2)
-    runs-on: windows-latest
+  # Linux 单测使用与 Windows 相同的确定性 Vitest 分片。四个分片分别覆盖每个
+  # workspace 经 Vitest 切分后的测试文件，并集等于完整 unit tier；不重复 test:runner。
+  linux-unit-shards:
+    name: Linux unit tests (${{ matrix.shard }}/4)
+    runs-on: ubuntu-latest
     timeout-minutes: 40
     strategy:
       fail-fast: false
       matrix:
-        shard: [1, 2]
+        shard: [1, 2, 3, 4]
     env:
-      XDT_UNIT_TEST_SHARD: ${{ matrix.shard }}/2
+      XDT_UNIT_TEST_SHARD: ${{ matrix.shard }}/4
 
     steps:
       - name: Checkout client
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        # Unit shards only read the working tree; full history and every remote
+        # branch cost ~0.5 min per shard (verify, runner and Git jobs keep depth 0).
         with:
-          fetch-depth: 0
           lfs: true
 
-      # GitHub-hosted Windows 带 Git Bash；复用 Linux job 的 fail-closed 来源校验，
-      # 同时保留 win32 Node / 文件系统语义供后续单测覆盖。
-      - name: Verify cindy-protocol submodule source
-        shell: bash
-        run: |
-          set -euo pipefail
-          expected_url='https://github.com/makecindy/cindy-protocol.git'
-          expected_path='cindy-protocol'
-          actual_url="$(git config -f .gitmodules --get submodule.cindy-protocol.url || true)"
-          actual_path="$(git config -f .gitmodules --get submodule.cindy-protocol.path || true)"
-          if [ "$actual_url" != "$expected_url" ] || [ "$actual_path" != "$expected_path" ]; then
-            echo "::error file=.gitmodules::cindy-protocol source mismatch: url='$actual_url' path='$actual_path' (expected url='$expected_url' path='$expected_path')"
-            exit 1
-          fi
-          echo "cindy-protocol submodule source verified: $actual_url"
-
-      - name: Fetch cindy-protocol submodule
-        shell: bash
-        run: |
-          git submodule sync -- cindy-protocol
-          git submodule update --init --force --recursive -- cindy-protocol
-
       - name: Setup pnpm
-        uses: pnpm/action-setup@0ebf47130e4866e96fce0953f49152a61190b271 # v6
+        uses: pnpm/action-setup@0977fd99725f1db4007ccb2928dbb4e90d06cc86 # v6
         with:
           run_install: false
 
@@ -192,25 +173,268 @@ jobs:
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
 
+      # XDT_SKIP_AGENT_BIN_INSTALL 跳过了 postinstall 的全部 agent 二进制,但
+      # runtime-configs.ts 模块顶层的 bundledRipgrepDir() 缺 rg 时直接 throw,
+      # 会让 apps/desktop 单测在收集阶段全挂——每个分片都必须单独装回来。
+      # 缓存 bundled ripgrep：各分片都要装，GitHub Releases 偶发 504 时会整批变红。
+      # 命中后 install:ripgrep 按 .version 标记直接跳过下载。
+      - name: Cache bundled ripgrep
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: apps/ripgrep-bin
+          key: ripgrep-bin-${{ runner.os }}-${{ hashFiles('tools/ripgrep/latest.json') }}
+
+      - name: Install bundled ripgrep
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        run: pnpm install:ripgrep
+
+      - name: Install Linux user-installer test tools
+        run: |
+          # Ubuntu's archive hostnames have repeatedly failed DNS on runners.
+          # Use the Kernel Archives' Ubuntu mirror without changing Ubuntu's
+          # archive signing keys or the image's security fallback.
+          if [ -f /etc/apt/apt-mirrors.txt ]; then
+            sudo sed -i -e '/azure\.archive\.ubuntu\.com/d' \
+              -e 's|https://archive\.ubuntu\.com/ubuntu/|https://mirrors.kernel.org/ubuntu/|' \
+              /etc/apt/apt-mirrors.txt
+          fi
+          sudo apt-get update
+          sudo apt-get install --yes libarchive-tools binutils desktop-file-utils xdg-utils
+
+      - name: Run client and package unit test shard
+        # package script 会传递 npm_execpath，让子进程复用当前 pnpm 入口。
+        run: pnpm run test:workspaces --tier unit
+
+      # 真实进程与 Unix socket 覆盖独立执行一次，不混入日常 unit 或其他分片。
+      - name: Run Pi manager integration tests
+        if: matrix.shard == 1
+        run: pnpm run test:workspaces --tier integration --workspace @cindy/maker-pi-manager
+
+      # localDb suites are outside the unit tier; exercise these DB boundaries on both OSes.
+      - name: Run companion database regressions
+        if: matrix.shard == 1
+        run: pnpm --filter desktop exec vitest run src/main/localDb/ipc/__tests__/botCanonicalSession.test.ts src/main/localDb/ipc/__tests__/botRemoteResourceProvider.test.ts
+
+  # Detect once without dependency installation; unrelated changes allocate no
+  # Windows/macOS Host runners. All event types retain the stable verify gate.
+  host-changes:
+    name: Select Host regressions
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      required: ${{ steps.changes.outputs.required }}
+    steps:
+      - name: Checkout client
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+      - name: Select Host regressions
+        id: changes
+        run: node scripts/ci-host-tests.mjs
+
+  # Host's Node tests are outside the Vitest workspace tiers. Exercise its
+  # actual loaders, HTTP authorization and worker processes on every desktop OS.
+  # Credential tests use synthetic records; no login or system keychain access.
+  host-regressions:
+    needs: host-changes
+    if: needs.host-changes.outputs.required == 'true'
+    name: Host regressions (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest, macos-latest]
+    steps:
+      - name: Checkout client
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          lfs: true
+      - name: Setup pnpm
+        uses: pnpm/action-setup@0977fd99725f1db4007ccb2928dbb4e90d06cc86 # v6
+        with:
+          run_install: false
+      - name: Setup Node.js
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: 22
+          cache: pnpm
+          cache-dependency-path: pnpm-lock.yaml
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+      - name: Run Host regressions
+        run: pnpm --filter @cindy/host test
+      # Types are platform independent: once is enough. A shared desktop body that
+      # gains a port wired only in the desktop assembly passes the desktop checks
+      # and fails here instead of at runtime in the Host.
+      - name: Typecheck Host
+        if: matrix.os == 'ubuntu-latest'
+        run: pnpm --filter @cindy/host typecheck
+
+  # 保留原 required check 名 verify；Host 仅允许明确无关时跳过，选择失败也阻断。
+  verify:
+    name: verify
+    if: ${{ always() }}
+    needs:
+      - verify-checks
+      - linux-unit-shards
+      - host-changes
+      - host-regressions
+    runs-on: ubuntu-latest
+    steps:
+      - name: Require checks and every Linux unit shard
+        env:
+          VERIFY_CHECKS_RESULT: ${{ needs.verify-checks.result }}
+          LINUX_UNIT_SHARDS_RESULT: ${{ needs.linux-unit-shards.result }}
+          HOST_CHANGES_RESULT: ${{ needs.host-changes.result }}
+          HOST_REQUIRED: ${{ needs.host-changes.outputs.required }}
+          HOST_REGRESSIONS_RESULT: ${{ needs.host-regressions.result }}
+        run: |
+          test "$VERIFY_CHECKS_RESULT" = "success"
+          test "$LINUX_UNIT_SHARDS_RESULT" = "success"
+          test "$HOST_CHANGES_RESULT" = "success"
+          case "$HOST_REQUIRED:$HOST_REGRESSIONS_RESULT" in
+            true:success|false:skipped) ;;
+            *) echo "Host selection or regressions did not pass"; exit 1 ;;
+          esac
+
+  # Linux 全绿不能覆盖 path separator、盘符、大小写和文件系统能力差异。四个
+  # Windows 分片并行运行，分片并集仍完整覆盖 test:unit，不能缩成少量 smoke。
+  # 只需执行一次的检查放在 windows-runner-checks，不压在任一分片的关键路径上。
+  windows-unit-shards:
+    name: Windows unit tests (${{ matrix.shard }}/4)
+    runs-on: windows-latest
+    timeout-minutes: 40
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: [1, 2, 3, 4]
+    env:
+      XDT_UNIT_TEST_SHARD: ${{ matrix.shard }}/4
+
+    steps:
+      - name: Checkout client
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        # Unit shards only read the working tree; full history and every remote
+        # branch cost ~0.5 min per shard (verify, runner and Git jobs keep depth 0).
+        with:
+          lfs: true
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@0977fd99725f1db4007ccb2928dbb4e90d06cc86 # v6
+        with:
+          run_install: false
+
+      - name: Setup Node.js
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: 22
+          cache: pnpm
+          cache-dependency-path: pnpm-lock.yaml
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      # 缓存 bundled ripgrep：各分片都要装，GitHub Releases 偶发 504 时会整批变红。
+      # 命中后 install:ripgrep 按 .version 标记直接跳过下载。
+      - name: Cache bundled ripgrep
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: apps/ripgrep-bin
+          key: ripgrep-bin-${{ runner.os }}-${{ hashFiles('tools/ripgrep/latest.json') }}
+
       - name: Install bundled ripgrep
         env:
           GITHUB_TOKEN: ${{ github.token }}
         run: pnpm install:ripgrep
 
       - name: Run client and package unit tests
-        run: pnpm test:unit
+        # 通过 package script 传递
+        # npm_execpath，避免 Windows 子进程退回 PATH 上的 pnpm.cmd。
+        run: pnpm run test:workspaces --tier unit
 
-  # 保留稳定的必需检查名，并确保任一分片失败或取消都会阻断汇总门禁。
+  # Windows runner 自测和伴侣数据库回归各只需执行一次。单独并行运行，避免给
+  # 某一个 unit 分片额外叠加约 4 分钟、拖长整条关键路径。
+  windows-runner-checks:
+    name: Windows runner and database checks
+    runs-on: windows-latest
+    timeout-minutes: 25
+
+    steps:
+      - name: Checkout client
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          lfs: true
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@0977fd99725f1db4007ccb2928dbb4e90d06cc86 # v6
+        with:
+          run_install: false
+
+      - name: Setup Node.js
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: 22
+          cache: pnpm
+          cache-dependency-path: pnpm-lock.yaml
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      # 缓存 bundled ripgrep：各分片都要装，GitHub Releases 偶发 504 时会整批变红。
+      # 命中后 install:ripgrep 按 .version 标记直接跳过下载。
+      - name: Cache bundled ripgrep
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: apps/ripgrep-bin
+          key: ripgrep-bin-${{ runner.os }}-${{ hashFiles('tools/ripgrep/latest.json') }}
+
+      - name: Install bundled ripgrep
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        run: pnpm install:ripgrep
+
+      # 保留 Windows 路径、进程与锁的自测覆盖。
+      - name: Run Windows test runner self-tests
+        run: pnpm test:runner
+
+      - name: Check Windows Codex credential publication
+        run: node --experimental-strip-types apps/desktop/scripts/check-windows-codex-auth-move.mjs
+
+      # localDb suites are outside the unit tier; exercise these DB boundaries on both OSes.
+      - name: Run companion database regressions
+        run: pnpm --filter desktop exec vitest run src/main/localDb/ipc/__tests__/botCanonicalSession.test.ts src/main/localDb/ipc/__tests__/botRemoteResourceProvider.test.ts
+
+      # Reuse this supported runner and its native dependencies. Do not filter the
+      # workflow itself: PRs, merge queue and main pushes must keep the stable gate.
+      - name: Select database regressions
+        id: database-changes
+        run: node scripts/ci-database-tests.mjs detect
+
+      # Includes real empty/old database upgrades and reopen/idempotency checks.
+      # The runner rejects unsupported platforms and skipped migration replay.
+      - name: Run database and migration regressions
+        if: steps.database-changes.outputs.required == 'true'
+        run: node scripts/ci-database-tests.mjs run
+
+  # 保留稳定的必需检查名，并确保任一分片或一次性检查失败、取消都会阻断汇总门禁。
   windows-unit:
     name: Windows unit tests
     if: ${{ always() }}
-    needs: windows-unit-shards
+    needs:
+      - windows-unit-shards
+      - windows-runner-checks
     runs-on: ubuntu-latest
     steps:
-      - name: Require both Windows unit shards
+      - name: Require every Windows unit shard and runner checks
         env:
           WINDOWS_UNIT_SHARDS_RESULT: ${{ needs.windows-unit-shards.result }}
-        run: test "$WINDOWS_UNIT_SHARDS_RESULT" = "success"
+          WINDOWS_RUNNER_CHECKS_RESULT: ${{ needs.windows-runner-checks.result }}
+        run: |
+          test "$WINDOWS_UNIT_SHARDS_RESULT" = "success"
+          test "$WINDOWS_RUNNER_CHECKS_RESULT" = "success"
 
   git-integration:
     name: Desktop Git integration
@@ -224,28 +448,8 @@ jobs:
           fetch-depth: 0
           lfs: true
 
-      # `.gitmodules` comes from the PR branch. Pin the public protocol source
-      # before recursively initializing it, matching the verify job boundary.
-      - name: Verify cindy-protocol submodule source
-        run: |
-          set -euo pipefail
-          expected_url='https://github.com/makecindy/cindy-protocol.git'
-          expected_path='cindy-protocol'
-          actual_url="$(git config -f .gitmodules --get submodule.cindy-protocol.url || true)"
-          actual_path="$(git config -f .gitmodules --get submodule.cindy-protocol.path || true)"
-          if [ "$actual_url" != "$expected_url" ] || [ "$actual_path" != "$expected_path" ]; then
-            echo "::error file=.gitmodules::cindy-protocol source mismatch: url='$actual_url' path='$actual_path' (expected url='$expected_url' path='$expected_path')"
-            exit 1
-          fi
-          echo "cindy-protocol submodule source verified: $actual_url"
-
-      - name: Fetch cindy-protocol submodule
-        run: |
-          git submodule sync -- cindy-protocol
-          git submodule update --init --force --recursive -- cindy-protocol
-
       - name: Setup pnpm
-        uses: pnpm/action-setup@0ebf47130e4866e96fce0953f49152a61190b271 # v6
+        uses: pnpm/action-setup@0977fd99725f1db4007ccb2928dbb4e90d06cc86 # v6
         with:
           run_install: false
 
@@ -258,6 +462,14 @@ jobs:
 
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
+
+      # 缓存 bundled ripgrep：各分片都要装，GitHub Releases 偶发 504 时会整批变红。
+      # 命中后 install:ripgrep 按 .version 标记直接跳过下载。
+      - name: Cache bundled ripgrep
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: apps/ripgrep-bin
+          key: ripgrep-bin-${{ runner.os }}-${{ hashFiles('tools/ripgrep/latest.json') }}
 
       - name: Install bundled ripgrep
         env:

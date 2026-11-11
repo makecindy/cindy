@@ -42,6 +42,12 @@ const RELEASES_BY_TAG_URL = (tag) => `https://api.github.com/repos/earendil-work
 const CACHE_FILE = path.join(__dirname, 'latest.json');
 const UPDATES_DIR = path.join(__dirname, 'updates');
 const BIN_DIR = path.join(PROJECT_ROOT, 'apps', 'pi-bin');
+const THEME_SOURCE_DIR = path.join(__dirname, 'theme');
+const REQUIRED_THEME_FILES = Object.freeze([
+  'theme/dark.json',
+  'theme/light.json',
+  'theme/theme-schema.json',
+]);
 
 // 每个平台缓存目录记录“产出该缓存的归档 digest”(归一 64-hex)。上游若在同一 tag 下替换
 // 资产(digest 变、版本号不变),快速路径与 downloadAsset 跳过分支据此重新核验并重下 ——
@@ -159,6 +165,35 @@ export function assetDigestMatchesUpstream(recordedDigest, asset) {
   return !!upstream && !!recorded && recorded === upstream;
 }
 
+/**
+ * Pi 0.84.x Windows archives may omit the themes that its startup path still
+ * loads, so keep the small, version-compatible fallback assets in the repo.
+ * Never overwrite a theme supplied by the upstream archive.
+ */
+export function ensurePiThemeAssets(destDir) {
+  for (const relativePath of REQUIRED_THEME_FILES) {
+    const destination = path.join(destDir, relativePath);
+    if (fs.existsSync(destination)) continue;
+    const source = path.join(THEME_SOURCE_DIR, path.basename(relativePath));
+    if (!fs.existsSync(source)) {
+      throw new Error(`Pi fallback theme asset missing: ${source}`);
+    }
+    fs.mkdirSync(path.dirname(destination), { recursive: true });
+    fs.copyFileSync(source, destination);
+  }
+}
+
+export function hasPiThemeAssets(destDir) {
+  return REQUIRED_THEME_FILES.every((relativePath) => {
+    const filePath = path.join(destDir, relativePath);
+    try {
+      return fs.statSync(filePath).isFile();
+    } catch {
+      return false;
+    }
+  });
+}
+
 /** 所有目标平台缓存记录的归档 digest 都与上游一致(同 tag 资产被替换时会不一致)。 */
 function targetsMatchUpstreamDigest(meta, version, targets) {
   return targets.every(({ key, asset: assetName }) => {
@@ -199,19 +234,29 @@ function isUsableCache(filePath) {
 function targetsExist(version, targets) {
   return targets.every(({ key, binFile }) => {
     const dir = path.join(UPDATES_DIR, version, key);
-    return isUsableCache(path.join(dir, binFile)) && verifyDirDistManifest(dir);
+    return isUsableCache(path.join(dir, binFile))
+      && verifyDirDistManifest(dir)
+      && hasPiThemeAssets(dir);
   });
 }
 
 /** 用 tar 解压归档到 destDir；GNU tar 从 stdin 读取 gzip 时必须显式传 -z。 */
 export async function extractArchive(archivePath, destDir) {
-  const args = archivePath.endsWith('.tar.gz') ? ['-xzf', '-'] : ['-xf', '-'];
-  const child = spawn('tar', args, { cwd: destDir, stdio: ['pipe', 'inherit', 'inherit'] });
+  // Windows bsdtar drops the first ZIP entry when the archive is streamed on
+  // stdin (Pi's first entry is pi.exe). Pass ZIP paths directly so every
+  // entry is extracted; keep streaming for tar.gz to support the existing
+  // cross-platform path and avoid shell redirection.
+  const isZip = archivePath.endsWith('.zip');
+  const args = isZip ? ['-xf', archivePath] : ['-xzf', '-'];
+  const child = spawn('tar', args, {
+    cwd: destDir,
+    stdio: isZip ? ['ignore', 'inherit', 'inherit'] : ['pipe', 'inherit', 'inherit'],
+  });
   const exit = new Promise((resolve, reject) => {
     child.once('error', reject);
     child.once('close', (code) => (code === 0 ? resolve() : reject(new Error(`tar exited with code ${code}`))));
   });
-  const input = pipeline(fs.createReadStream(archivePath), child.stdin);
+  const input = isZip ? Promise.resolve() : pipeline(fs.createReadStream(archivePath), child.stdin);
   try {
     await Promise.all([input, exit]);
   } catch (error) {
@@ -270,6 +315,7 @@ async function downloadAsset(meta, version, platformKey, assetName, finalBinName
     if (
       fs.existsSync(sha256Path)
       && verifyDirDistManifest(destDir)
+      && hasPiThemeAssets(destDir)
       && assetDigestMatchesUpstream(readCachedAssetDigest(destDir), asset)
     ) {
       const storedHash = fs.readFileSync(sha256Path, 'utf8').trim();
@@ -317,6 +363,7 @@ async function downloadAsset(meta, version, platformKey, assetName, finalBinName
 
     await extractArchive(tmpArchive, destDir);
     flattenExtractedDir(destDir, finalBinName);
+    ensurePiThemeAssets(destDir);
     fs.writeFileSync(finalBinPath + '.sha256.bin', sha256File(finalBinPath) + '\n');
     // 记录产出该缓存的归档 digest,供后续快速路径 / 跳过分支对上游同 tag 资产替换做核验。
     fs.writeFileSync(path.join(destDir, ASSET_DIGEST_FILE), verifiedDigest + '\n');

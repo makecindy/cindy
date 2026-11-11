@@ -1,7 +1,8 @@
 /**
  * ghostKvStore —— 意识自定义参数的持久化真身(/kv 协议端点的存储层)。
  *
- * File: <rootDir>/<ghostId>.json(生产 rootDir = <userData>/ghost-kv/)
+ * File: <rootDir>/<storagePart>.json(生产 rootDir = <userData>/ghost-kv/;
+ *   root = helper.json, org = _ns__acme__helper.json)
  *
  * 语义(docs/dev-rules/plugin-security-and-authoring.md / FORGE_GUIDE §4.8):
  * - 单意识单文件:损坏只伤一个意识,卸下清理 = unlink 一个文件;
@@ -13,7 +14,7 @@
  *   炸掉设置页;
  * - 写:tmp + rename 原子落盘(override-settings-file 同款),同步 IO
  *   天然串行,≤64KB 量级无阻塞之虞;
- * - ghostId 过 isValidGhostId 双保险(调用方来自分区绑定,理论上已合法;
+ * - storage part 过 isValidPluginStoragePart 双保险(调用方来自分区绑定,理论上已合法;
  *   文件名安全不省这道)。
  *
  * 与 Electron 解耦:rootDir 经工厂注入,单测直接用 os.tmpdir()(规范 14/23)。
@@ -22,7 +23,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 
-import { isValidGhostId } from '../../shared/ghost.js';
+import { isValidPluginStoragePart } from '../../shared/pluginIdentity.js';
 
 /** 单意识 KV 序列化后的字节上限(64KB;超限写入拒 413)。 */
 export const GHOST_KV_MAX_BYTES = 64 * 1024;
@@ -34,21 +35,21 @@ interface GhostKvLogger {
 
 export interface GhostKvStore {
   /** 读某意识的 KV;无文件 / 损坏 → {}(永不抛)。 */
-  read(ghostId: string): Record<string, unknown>;
+  read(instanceKey: string): Record<string, unknown>;
   /**
    * 严格读:无文件 → {},但 IO 异常 / JSON 损坏**原样上抛**。setup 就绪
    * 检查(ghosts:setup-status)专用——「查询失败」≠「未配置」,不能拿
    * read 的宽松口径把存储层故障误判成缺配置去拦用户;设置页协议端点
    * 仍走 read(损坏不炸设置页的语义不变)。
    */
-  readStrict(ghostId: string): Record<string, unknown>;
+  readStrict(instanceKey: string): Record<string, unknown>;
   /**
    * 整体覆盖写;值非 plain object 或序列化超限时抛带 code 的错
    * ('INVALID_VALUE' | 'TOO_LARGE' | 'INVALID_GHOST_ID'),由端点层折叠成状态码。
    */
-  write(ghostId: string, value: Record<string, unknown>): void;
+  write(instanceKey: string, value: Record<string, unknown>): void;
   /** 删除某意识的 KV 文件;幂等,不存在静默。 */
-  remove(ghostId: string): void;
+  remove(instanceKey: string): void;
 }
 
 /**
@@ -57,14 +58,14 @@ export interface GhostKvStore {
  */
 export function removeGhostKvBestEffort(
   store: Pick<GhostKvStore, 'remove'>,
-  ghostId: string,
+  instanceKey: string,
   log: GhostKvLogger,
 ): void {
   try {
-    store.remove(ghostId);
+    store.remove(instanceKey);
   } catch (error) {
     log.warn('ghost KV 清理失败', {
-      ghostId,
+      instanceKey,
       error: error instanceof Error ? error.message : String(error),
     });
   }
@@ -126,18 +127,18 @@ export function createGhostKvStore(options: {
 }): GhostKvStore {
   const { getRootDir, log } = options;
 
-  const fileFor = (ghostId: string): string => {
-    if (!isValidGhostId(ghostId)) {
-      throw new GhostKvError('INVALID_GHOST_ID', `非法 ghostId: ${String(ghostId)}`);
+  const fileFor = (instanceKey: string): string => {
+    if (!isValidPluginStoragePart(instanceKey)) {
+      throw new GhostKvError('INVALID_GHOST_ID', `非法 ghostId: ${String(instanceKey)}`);
     }
-    return path.join(getRootDir(), `${ghostId}.json`);
+    return path.join(getRootDir(), `${instanceKey}.json`);
   };
 
   return {
-    read(ghostId) {
+    read(instanceKey) {
       let file: string;
       try {
-        file = fileFor(ghostId);
+        file = fileFor(instanceKey);
       } catch {
         return {};
       }
@@ -151,13 +152,13 @@ export function createGhostKvStore(options: {
         const parsed: unknown = JSON.parse(text);
         return isPlainObject(parsed) ? parsed : {};
       } catch {
-        log?.warn('ghost KV 文件损坏,按空对象处理', { ghostId });
+        log?.warn('ghost KV 文件损坏,按空对象处理', { instanceKey });
         return {};
       }
     },
 
-    readStrict(ghostId) {
-      const file = fileFor(ghostId);
+    readStrict(instanceKey) {
+      const file = fileFor(instanceKey);
       let text: string;
       try {
         text = fs.readFileSync(file, 'utf8');
@@ -170,8 +171,8 @@ export function createGhostKvStore(options: {
       return isPlainObject(parsed) ? parsed : {};
     },
 
-    write(ghostId, value) {
-      const file = fileFor(ghostId); // 非法 id 抛 INVALID_GHOST_ID
+    write(instanceKey, value) {
+      const file = fileFor(instanceKey); // 非法 id 抛 INVALID_GHOST_ID
       const text = serializeGhostKvValue(value);
       fs.mkdirSync(path.dirname(file), { recursive: true });
       // tmp + rename 原子写(override-settings-file 同款;Windows rename 覆盖已有文件 OK)。
@@ -180,10 +181,10 @@ export function createGhostKvStore(options: {
       fs.renameSync(tmp, file);
     },
 
-    remove(ghostId) {
+    remove(instanceKey) {
       let file: string;
       try {
-        file = fileFor(ghostId);
+        file = fileFor(instanceKey);
       } catch {
         return; // 非法 id 无文件可删,幂等语义直接返回
       }

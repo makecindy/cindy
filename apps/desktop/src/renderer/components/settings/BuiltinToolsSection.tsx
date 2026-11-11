@@ -1,3 +1,4 @@
+import { builtinToolsSettings } from './BuiltinToolsSection.settings-search';
 /**
  * BuiltinToolsSection — Settings → Connections 下的内置工具管理面板。
  * ---------------------------------------------------------------------------
@@ -27,30 +28,30 @@ import { Puzzle, ChevronDown, Check, Folder, UserRound } from 'lucide-react';
 import { basename, cn } from '@/lib/utils';
 import { toast } from '@/lib/toast';
 import { Switch } from '@/components/ui/switch';
+import { SettingsCard, SettingsSection } from '@/components/ui/settings-rows';
 import { createLogger } from '@/lib/logger';
 import { extractIpcError } from '@/utils/ipcError';
 import { recentWorkdirsStore, type RecentWorkdirEntry } from '@/lib/recentWorkdirsStore';
 import { normalizeWorkingDirForProjectSettings } from '../../../shared/workingDir';
-import {
-  DropdownMenu,
-  DropdownMenuContent,
-  DropdownMenuItem,
-  DropdownMenuTrigger,
-} from '@/components/ui/dropdown-menu';
+import { Button } from '@/components/ui/button';
+import { SelectParts, SELECT_WIDTHS } from '@/components/ui/select';
 import { DefaultOverrideControls } from './DefaultOverrideControls';
 
 const log = createLogger('BuiltinToolsSection');
 
-interface PluginListItem {
+export interface BuiltinToolListItem {
   id: string;
   name: string;
   description: string;
-  source: 'builtin' | 'hub' | 'local';
-  essential: boolean;
   effectiveEnabled: boolean;
-  productDefaultEnabled: boolean;
   projectOverride?: { enabled: boolean; workingDir: string } | null;
   userOverride?: { enabled: boolean } | null;
+}
+
+interface PluginListItem extends BuiltinToolListItem {
+  source: 'builtin' | 'hub' | 'local';
+  essential: boolean;
+  productDefaultEnabled: boolean;
   globalOverride?: { enabled: boolean } | null;
 }
 
@@ -62,7 +63,7 @@ interface BuiltinToolsSectionProps {
 /** Resolve a plugin id to its localized display name + description, falling
  *  back to the english strings emitted by builtin-plugins.ts when the i18n
  *  bundle is missing the key (defensive — should not happen in production). */
-function useLocalizedPlugin(plugin: PluginListItem) {
+function useLocalizedPlugin(plugin: Pick<BuiltinToolListItem, 'id' | 'name' | 'description'>) {
   const { t } = useTranslation();
   return useMemo(
     () => ({
@@ -81,10 +82,7 @@ function useRecentWorkdirs(): RecentWorkdirEntry[] {
   // recentWorkdirsStore exposes a snapshot via .get(); .ensure() loads it on
   // first read. useSyncExternalStore handles the re-render when the snapshot
   // flips from null → array, and again whenever main pushes a new session.
-  const snapshot = useSyncExternalStore(
-    recentWorkdirsStore.subscribe,
-    recentWorkdirsStore.get,
-  );
+  const snapshot = useSyncExternalStore(recentWorkdirsStore.subscribe, recentWorkdirsStore.get);
   useEffect(() => {
     void recentWorkdirsStore.ensure().catch(() => {
       /* silent — empty dropdown is an acceptable fallback */
@@ -102,13 +100,11 @@ export function BuiltinToolsSection({ workingDir }: BuiltinToolsSectionProps) {
   const [selectedScope, setSelectedScope] = useState<string | null | undefined>();
 
   const recentWorkdirs = useRecentWorkdirs();
-  const activeProjectWorkingDir =
-    normalizeWorkingDirForProjectSettings(workingDir) ?? undefined;
+  const activeProjectWorkingDir = normalizeWorkingDirForProjectSettings(workingDir) ?? undefined;
   const effectiveWorkingDir =
     normalizeWorkingDirForProjectSettings(
       selectedScope === undefined ? workingDir : selectedScope,
-    ) ??
-    undefined;
+    ) ?? undefined;
 
   const reload = useCallback(async () => {
     try {
@@ -147,9 +143,10 @@ export function BuiltinToolsSection({ workingDir }: BuiltinToolsSectionProps) {
         // plugins; INVALID_PARAMS would only fire on a renderer bug, no need
         // to translate); everything else falls through to the generic toast.
         const ipcError = extractIpcError(err);
-        const message = ipcError?.code === 'PERMISSION_DENIED'
-          ? t('settings.builtinTools.toast.cannotModifyEssential', { name: label })
-          : t('settings.builtinTools.toast.toggleFailed');
+        const message =
+          ipcError?.code === 'PERMISSION_DENIED'
+            ? t('settings.builtinTools.toast.cannotModifyEssential', { name: label })
+            : t('settings.builtinTools.toast.toggleFailed');
         toast.error(message);
       } finally {
         setPendingIds((prev) => {
@@ -177,9 +174,10 @@ export function BuiltinToolsSection({ workingDir }: BuiltinToolsSectionProps) {
       } catch (err) {
         log.warn(`plugins.clearEnabled(${id}) failed`, err);
         const ipcError = extractIpcError(err);
-        const message = ipcError?.code === 'PERMISSION_DENIED'
-          ? t('settings.builtinTools.toast.cannotModifyEssential', { name: label })
-          : t('settings.defaults.restoreFailed');
+        const message =
+          ipcError?.code === 'PERMISSION_DENIED'
+            ? t('settings.builtinTools.toast.cannotModifyEssential', { name: label })
+            : t('settings.defaults.restoreFailed');
         toast.error(message);
       } finally {
         setPendingIds((prev) => {
@@ -196,33 +194,24 @@ export function BuiltinToolsSection({ workingDir }: BuiltinToolsSectionProps) {
   if (!plugins) return null;
 
   return (
-    <div className="flex flex-col gap-[14px]">
-      <div className="flex items-start justify-between gap-3">
-        <div className="flex flex-col gap-1 min-w-0">
-          <h2 className="text-16 font-medium leading-[1.2] text-[var(--settings-section-title)]">
-            {t('settings.builtinTools.title')}
-          </h2>
-          <p className="text-13 leading-[1.5] text-[var(--settings-section-desc)]">
-            {t('settings.builtinTools.description')}
-          </p>
-        </div>
+    <SettingsSection
+      titleId={builtinToolsSettings.title.targetId}
+      title={t(builtinToolsSettings.title.titleKey)}
+      description={t(builtinToolsSettings.title.descriptionKey)}
+      action={
         <ScopePicker
           effectiveWorkingDir={effectiveWorkingDir}
           activeSessionWorkingDir={activeProjectWorkingDir}
           recentWorkdirs={recentWorkdirs}
           onPick={setSelectedScope}
         />
-      </div>
-
-      <div
-        className={cn(
-          'flex flex-col overflow-hidden rounded-xl',
-          'bg-[var(--settings-theme-card-bg)]',
-          'border border-[var(--settings-theme-card-border)]',
-        )}
-      >
+      }
+      caption={t('settings.builtinTools.toggleHint')}
+    >
+      {/* 工具列表自带图标与来源标签，行样式保留 */}
+      <SettingsCard className="flex flex-col">
         {plugins.map((plugin, index) => (
-          <PluginRow
+          <BuiltinToolRow
             key={plugin.id}
             plugin={plugin}
             divider={index > 0}
@@ -240,41 +229,44 @@ export function BuiltinToolsSection({ workingDir }: BuiltinToolsSectionProps) {
             </p>
           </div>
         )}
-      </div>
-
-      <p className="text-12 leading-[1.5] text-[var(--settings-section-desc)]">
-        {t('settings.builtinTools.toggleHint')}
-      </p>
-    </div>
+      </SettingsCard>
+    </SettingsSection>
   );
 }
 
 /** Plugin 行 — 抽出来好让 useLocalizedPlugin hook 在子组件 scope 里调用,
  *  避免在父循环里直接调 hook (违反 rules of hooks)。 */
-function PluginRow({
+export function BuiltinToolRow({
   plugin,
   divider,
   disabled,
   projectScope,
+  checked,
+  showSource = true,
+  badge,
   onToggle,
   onClearOverride,
 }: {
-  plugin: PluginListItem;
+  plugin: BuiltinToolListItem;
   divider: boolean;
   disabled: boolean;
   projectScope: boolean;
+  checked?: boolean;
+  showSource?: boolean;
+  badge?: string;
   onToggle: (id: string, next: boolean, label: string) => void;
-  onClearOverride: (id: string, label: string) => void;
+  onClearOverride?: (id: string, label: string) => void;
 }) {
   const { t } = useTranslation();
   const { name, description } = useLocalizedPlugin(plugin);
   const hasProjectOverride = plugin.projectOverride != null;
   const isCustomized = projectScope ? hasProjectOverride : plugin.userOverride != null;
-  const sourceKey = projectScope && hasProjectOverride
-    ? 'project'
-    : plugin.userOverride != null
-      ? 'user'
-      : 'product';
+  const sourceKey =
+    projectScope && hasProjectOverride
+      ? 'project'
+      : plugin.userOverride != null
+        ? 'user'
+        : 'product';
 
   return (
     <div
@@ -297,15 +289,21 @@ function PluginRow({
             <p className="text-14 font-medium leading-[1.25] text-[var(--settings-section-title)] truncate">
               {name}
             </p>
-            <span
-              className="shrink-0 text-11 leading-none px-1.5 py-0.5 rounded-full
-                bg-[var(--settings-input-bg)] text-[var(--settings-section-desc)]"
-              title={t(`settings.builtinTools.source.${sourceKey}Tooltip`, {
-                dir: plugin.projectOverride?.workingDir,
-              })}
-            >
-              {t(`settings.builtinTools.source.${sourceKey}`)}
-            </span>
+            {showSource || badge ? (
+              <span
+                className="shrink-0 text-11 leading-none px-1.5 py-0.5 rounded-full
+                  bg-[var(--settings-input-bg)] text-[var(--settings-section-desc)]"
+                title={
+                  showSource
+                    ? t(`settings.builtinTools.source.${sourceKey}Tooltip`, {
+                        dir: plugin.projectOverride?.workingDir,
+                      })
+                    : undefined
+                }
+              >
+                {badge ?? t(`settings.builtinTools.source.${sourceKey}`)}
+              </span>
+            ) : null}
           </div>
           <p className="text-12 leading-[1.35] text-[var(--settings-section-desc)] truncate">
             {description}
@@ -314,13 +312,15 @@ function PluginRow({
       </div>
 
       <div className="flex items-center gap-2 shrink-0">
-        <DefaultOverrideControls
-          isCustomized={isCustomized}
-          disabled={disabled}
-          onReset={() => onClearOverride(plugin.id, name)}
-        />
-        <Switch
-          checked={plugin.effectiveEnabled}
+        {onClearOverride ? (
+          <DefaultOverrideControls
+            isCustomized={isCustomized}
+            disabled={disabled}
+            onReset={() => onClearOverride(plugin.id, name)}
+          />
+        ) : null}
+        <Switch data-setting-id={builtinToolsSettings.title.id}
+          checked={checked ?? plugin.effectiveEnabled}
           disabled={disabled}
           onCheckedChange={(v) => onToggle(plugin.id, v, name)}
           aria-label={t('settings.builtinTools.toggleAria', { name })}
@@ -329,6 +329,10 @@ function PluginRow({
     </div>
   );
 }
+
+const USER_DEFAULT_SCOPE = '__user-default';
+const SCOPE_ITEM_CLASS =
+  'relative flex min-h-8 w-full cursor-pointer select-none items-center rounded-lg py-1.5 pl-2 pr-6 text-left outline-none';
 
 /** Scope picker — switches between user defaults and a project's overrides. */
 function ScopePicker({
@@ -363,77 +367,74 @@ function ScopePicker({
     return out;
   }, [effectiveWorkingDir, activeSessionWorkingDir, recentWorkdirs]);
 
-  const triggerLabel = effectiveWorkingDir
-    ? basename(effectiveWorkingDir)
-    : t('settings.builtinTools.scopePicker.userDefault');
-
+  // A single-value field (DESIGN.md §4): shared Select trigger and equal-width panel.
+  // SelectParts keeps the two-line rows (name + description / full path).
   return (
-    <DropdownMenu>
-      <DropdownMenuTrigger asChild>
-        <button
-          type="button"
+    <SelectParts.Root
+      value={effectiveWorkingDir ?? USER_DEFAULT_SCOPE}
+      onValueChange={(value) => onPick(value === USER_DEFAULT_SCOPE ? null : value)}
+    >
+      <SelectParts.Trigger asChild>
+        <Button
+          data-setting-id={builtinToolsSettings.title.id}
+          pressFeedback={false}
+          variant="secondary"
+          size="md"
           aria-label={t('settings.builtinTools.scopePicker.ariaLabel')}
           title={effectiveWorkingDir ?? undefined}
-          className={cn(
-            'flex items-center gap-1.5 shrink-0 max-w-[200px]',
-            'h-7 px-2.5 rounded-full',
-            'bg-[var(--settings-input-bg)] text-[var(--settings-section-title)]',
-            'text-12 font-medium',
-            'hover:bg-[var(--surface-chip)]',
-            'focus:outline-none focus-visible:ring-2 focus-visible:ring-[var(--focus-ring)]',
-            'transition-colors',
+          className={cn(SELECT_WIDTHS.sm, 'min-w-0 max-w-full shrink-0 justify-between gap-1.5 px-3 font-normal')}
+        >
+          {effectiveWorkingDir ? (
+            <Folder size={14} className="shrink-0" aria-hidden />
+          ) : (
+            <UserRound size={14} className="shrink-0" aria-hidden />
           )}
+          <span className="min-w-0 flex-1 truncate text-left">
+            <SelectParts.Value />
+          </span>
+          <SelectParts.Icon asChild>
+            <ChevronDown size={14} className="shrink-0" aria-hidden="true" />
+          </SelectParts.Icon>
+        </Button>
+      </SelectParts.Trigger>
+      <SelectParts.Portal>
+        <SelectParts.Content
+          side="bottom"
+          align="end"
+          className="border border-[var(--border-default)] bg-[var(--surface-elevated)] text-13 text-[var(--text-primary)]"
         >
-          {effectiveWorkingDir
-            ? <Folder size={12} className="shrink-0" />
-            : <UserRound size={12} className="shrink-0" />}
-          <span className="truncate">{triggerLabel}</span>
-          <ChevronDown size={12} className="shrink-0 opacity-60" />
-        </button>
-      </DropdownMenuTrigger>
-      <DropdownMenuContent align="end" className="w-max min-w-0 max-w-[calc(100vw-32px)]">
-        <DropdownMenuItem
-          onClick={() => onPick(null)}
-          className="grid w-full grid-cols-[14px_max-content] items-center gap-x-2.5 pr-4 cursor-pointer"
-        >
-          <Check size={14} className={cn('shrink-0', !effectiveWorkingDir ? 'opacity-100' : 'opacity-0')} />
-          <div className="flex flex-col gap-0.5">
-            <span className="whitespace-nowrap text-13 font-medium">
-              {t('settings.builtinTools.scopePicker.userDefault')}
-            </span>
-            <span className="whitespace-nowrap text-11 text-[var(--settings-section-desc)]">
-              {t('settings.builtinTools.scopePicker.userDefaultDescription')}
-            </span>
-          </div>
-        </DropdownMenuItem>
-        {candidates.map((dir) => {
-            const isCurrent = dir === effectiveWorkingDir;
-            return (
-              <DropdownMenuItem
-                key={dir}
-                onClick={() => onPick(dir)}
-                // minmax(0,max-content):菜单仍按内容自适应宽,但路径超过菜单
-                // max-w 上限时列可收缩、由 truncate 出省略号,不再水平溢出。
-                className="grid w-full grid-cols-[14px_minmax(0,max-content)] items-center gap-x-2.5 pr-4 cursor-pointer"
-              >
-                <Check
-                  size={14}
-                  className={cn('shrink-0', isCurrent ? 'opacity-100' : 'opacity-0')}
-                />
-                <div className="flex min-w-0 flex-col gap-0.5">
-                  <div className="flex items-center gap-1.5">
-                    <span className="truncate text-13 font-medium">
-                      {basename(dir)}
-                    </span>
-                  </div>
-                  <span title={dir} className="truncate text-11 text-[var(--settings-section-desc)]">
+          <SelectParts.Viewport className="max-h-64 min-w-0">
+            <SelectParts.Item value={USER_DEFAULT_SCOPE} className={SCOPE_ITEM_CLASS}>
+              <span className="flex min-w-0 flex-col gap-0.5">
+                <span className="truncate">
+                  <SelectParts.ItemText>{t('settings.builtinTools.scopePicker.userDefault')}</SelectParts.ItemText>
+                </span>
+                <span className="whitespace-normal break-words text-12 leading-[1.33] text-[var(--cmd-palette-item-meta)]">
+                  {t('settings.builtinTools.scopePicker.userDefaultDescription')}
+                </span>
+              </span>
+              <SelectParts.ItemIndicator className="absolute right-1 flex">
+                <Check size={14} aria-hidden="true" />
+              </SelectParts.ItemIndicator>
+            </SelectParts.Item>
+            {candidates.map((dir) => (
+              <SelectParts.Item key={dir} value={dir} title={dir} className={SCOPE_ITEM_CLASS}>
+                <span className="flex min-w-0 flex-col gap-0.5">
+                  <span className="truncate">
+                    <SelectParts.ItemText>{basename(dir)}</SelectParts.ItemText>
+                  </span>
+                  <span className="truncate text-12 leading-[1.33] text-[var(--cmd-palette-item-meta)]">
                     {dir}
                   </span>
-                </div>
-              </DropdownMenuItem>
-            );
-          })}
-      </DropdownMenuContent>
-    </DropdownMenu>
+                </span>
+                <SelectParts.ItemIndicator className="absolute right-1 flex">
+                  <Check size={14} aria-hidden="true" />
+                </SelectParts.ItemIndicator>
+              </SelectParts.Item>
+            ))}
+          </SelectParts.Viewport>
+        </SelectParts.Content>
+      </SelectParts.Portal>
+    </SelectParts.Root>
   );
 }

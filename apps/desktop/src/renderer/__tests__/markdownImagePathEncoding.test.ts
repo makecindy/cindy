@@ -77,6 +77,24 @@ describe('Markdown local image path encoding', () => {
     }
   });
 
+  it('normalizes legacy path-shaped xdt-file image URLs for the custom protocol', () => {
+    const path = 'D:/Users/test/My Pictures/image.png';
+    expect(normalizeMarkdownImageSrc(`xdt-file:///${path}`, '/repo', true)).toBe(
+      `xdt-file://local/?path=${encodeURIComponent(path)}`,
+    );
+  });
+
+  it('keeps legacy POSIX paths and cache-busting revisions intact', () => {
+    const path = '/Users/test/My Pictures/image.png';
+    expect(
+      normalizeMarkdownImageSrc(
+        'xdt-file:///Users/test/My%20Pictures/image.png?v=message%202',
+        '/repo',
+        true,
+      ),
+    ).toBe('xdt-file://local/?path=' + encodeURIComponent(path) + '&v=message%202');
+  });
+
   it('keeps malformed percent sequences instead of throwing during render', () => {
     const path = '/tmp/100%done.png';
     expect(normalizeMarkdownImageSrc(path, '/repo', true)).toBe(
@@ -99,7 +117,15 @@ describe('Markdown local image path encoding', () => {
   });
 
   it('blocks privileged local paths in untrusted Markdown previews', () => {
-    expect(normalizeMarkdownImageSrc('/tmp/private.png', '/repo', false)).toBeUndefined();
+    for (const src of [
+      '/tmp/private.png',
+      'C:\\Users\\alice\\private.png',
+      'relative/private.png',
+      'file:///tmp/private.png',
+      'xdt-file://local/?path=%2Ftmp%2Fprivate.png',
+    ]) {
+      expect(normalizeMarkdownImageSrc(src, '/repo', false)).toBeUndefined();
+    }
     expect(normalizeMarkdownImageSrc('https://example.com/public.png', '/repo', false)).toBe(
       'https://example.com/public.png',
     );

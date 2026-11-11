@@ -1,0 +1,664 @@
+import { Button } from '@/components/ui/button';
+import { useEffect, useMemo, useState, type ReactNode } from 'react';
+import {
+  ArrowLeft,
+  ChevronRight,
+  BatteryCharging,
+  Bluetooth,
+  Gamepad2,
+  RotateCcw,
+  Usb,
+} from 'lucide-react';
+import { useTranslation } from 'react-i18next';
+import * as Dialog from '@radix-ui/react-dialog';
+import { Select, type SelectProps } from '@/components/ui/select';
+
+import { SETTINGS_ROW_LABEL_CLASS, SettingsCard, SettingsPageHeader, SettingsRow } from '@/components/ui/settings-rows';
+import { Switch } from '@/components/ui/switch';
+import { useXboxGamepad } from '@/hooks/useXboxGamepad';
+import { useSkillhub } from '@/features/skillhub/hooks/useSkillhub';
+import {
+  InputDeviceConnectionStatus,
+  inputDeviceConnectionTone,
+  inputDeviceStatusLabelKey,
+  resolveInputDeviceStatusKey,
+} from './InputDeviceConnectionStatus';
+import {
+  workLouderCodexCommandDescription,
+  workLouderCodexCommandName,
+} from './workLouderCodexCommandCopy';
+import { GenericGamepadLayout } from './GenericGamepadLayout';
+import { JoyConGamepadLayout } from './JoyConGamepadLayout';
+import { PlayStationGamepadLayout } from './PlayStationGamepadLayout';
+import { SwitchProGamepadLayout } from './SwitchProGamepadLayout';
+import {
+  XboxGamepadLayout,
+  type XboxGamepadEditablePart,
+  type XboxGamepadKeyHint,
+} from './XboxGamepadLayout';
+import { INPUT_DEVICE_COMMAND_IDS, type InputDeviceCommandId } from '../../../shared/inputDevices';
+import {
+  cloneXboxGamepadLayout,
+  createXboxGamepadDefaultLayout,
+  createXboxGamepadDefaultSettings,
+  isNintendoJoyConDevice,
+  XBOX_GAMEPAD_STICK_DIRECTIONS,
+  type GamepadFamily,
+  type XboxGamepadBinding,
+  type XboxGamepadButtonId,
+  type XboxGamepadConnectionStatus,
+  type XboxGamepadDeviceInfo,
+  type XboxGamepadLayout as XboxGamepadLayoutModel,
+  type XboxGamepadPreviewInput,
+  type XboxGamepadSettings as XboxGamepadSettingsModel,
+  type XboxGamepadState,
+  type XboxGamepadStickId,
+  type XboxGamepadStickMode,
+} from '../../../shared/xboxGamepad';
+
+function ConnectionBadge({
+  state,
+  loading,
+  compact = false,
+}: {
+  state: XboxGamepadState | null;
+  loading: boolean;
+  compact?: boolean;
+}) {
+  const { t } = useTranslation();
+  const key = resolveInputDeviceStatusKey({
+    enabled: state?.settings.deviceEnabled ?? false,
+    present: state?.devicePresent,
+    connectionStatus: state?.connectionStatus,
+    loading,
+  });
+  return (
+    <InputDeviceConnectionStatus
+      label={t(
+        `settings.shortcuts.xboxGamepad.connection.status.${inputDeviceStatusLabelKey(key)}`,
+      )}
+      tone={inputDeviceConnectionTone({ status: key, present: state?.devicePresent })}
+      compact={compact}
+    />
+  );
+}
+
+function DeviceChip({ icon, children }: { icon?: ReactNode; children: ReactNode }) {
+  return (
+    <span className="inline-flex items-center gap-1.5 rounded-full border border-[var(--settings-theme-card-border)] bg-[var(--surface-chip)] px-2 py-1 text-11 text-[var(--text-secondary)]">
+      {icon}
+      {children}
+    </span>
+  );
+}
+
+function XboxDeviceChips({ device }: { device: XboxGamepadDeviceInfo }) {
+  const { t } = useTranslation();
+  const label = deviceTitle(device);
+  return (
+    <div className="flex flex-wrap gap-2 pt-1">
+      {label && <DeviceChip icon={<Gamepad2 size={12} />}>{label}</DeviceChip>}
+      {device.transport === 'usb' && (
+        <DeviceChip icon={<Usb size={12} />}>
+          {t('settings.shortcuts.xboxGamepad.device.usb')}
+        </DeviceChip>
+      )}
+      {device.transport === 'bluetooth' && (
+        <DeviceChip icon={<Bluetooth size={12} />}>
+          {t('settings.shortcuts.xboxGamepad.device.bluetooth')}
+        </DeviceChip>
+      )}
+      {device.batteryPercentage !== null && (
+        <DeviceChip
+          icon={device.batteryState === 'charging' ? <BatteryCharging size={12} /> : undefined}
+        >
+          {device.batteryState === 'charging'
+            ? t('settings.shortcuts.xboxGamepad.device.charging', {
+                percent: device.batteryPercentage,
+              })
+            : t('settings.shortcuts.xboxGamepad.device.battery', {
+                percent: device.batteryPercentage,
+              })}
+        </DeviceChip>
+      )}
+    </div>
+  );
+}
+
+function deviceTitle(device: XboxGamepadDeviceInfo): string | null {
+  const name = device.name?.trim() ?? '';
+  const category = device.category?.trim() ?? '';
+  if (name && name.toLowerCase() !== 'controller') return name;
+  if (category) return category;
+  return name || null;
+}
+
+function gamepadCopyNs(
+  family: GamepadFamily,
+): 'xboxGamepad' | 'playstationGamepad' | 'nintendoGamepad' | 'genericGamepad' {
+  if (family === 'playstation') return 'playstationGamepad';
+  if (family === 'nintendo') return 'nintendoGamepad';
+  if (family === 'generic') return 'genericGamepad';
+  return 'xboxGamepad';
+}
+
+export function XboxGamepadEntry({
+  family = 'xbox',
+  state,
+  loading,
+  grouped = false,
+  onOpen,
+}: {
+  family?: GamepadFamily;
+  state: XboxGamepadState | null;
+  loading: boolean;
+  grouped?: boolean;
+  onOpen(): void;
+}) {
+  const { t } = useTranslation();
+  const ns = gamepadCopyNs(family);
+  // 单独出现时自成一张卡片；配件列表里由外层卡片包住
+  const row = (
+    <SettingsRow
+      onClick={onOpen}
+      aria-label={t(`settings.shortcuts.${ns}.openAria`)}
+      lead={
+        <span className="flex size-10 shrink-0 items-center justify-center rounded-xl bg-[var(--surface-chip)] text-[var(--text-secondary)]">
+          <Gamepad2 size={18} aria-hidden="true" />
+        </span>
+      }
+      title={t(`settings.shortcuts.${ns}.title`)}
+      hint={t(`settings.shortcuts.${ns}.entryDescription`)}
+      trailing={
+        <span className="flex shrink-0 items-center gap-2">
+          <ConnectionBadge state={state} loading={loading} compact />
+          <ChevronRight size={16} className="text-[var(--text-tertiary)]" aria-hidden="true" />
+        </span>
+      }
+    />
+  );
+  return grouped ? row : <SettingsCard>{row}</SettingsCard>;
+}
+
+export function XboxGamepadEntryContainer({
+  family = 'xbox',
+  onOpen,
+}: {
+  family?: GamepadFamily;
+  onOpen(): void;
+}) {
+  const { state, loading } = useXboxGamepad({ family, watchConnection: true });
+  return <XboxGamepadEntry family={family} state={state} loading={loading} onOpen={onOpen} />;
+}
+
+function isStickPart(part: XboxGamepadEditablePart): part is XboxGamepadStickId {
+  return part === 'left' || part === 'right';
+}
+
+function stickClickButton(stick: XboxGamepadStickId): XboxGamepadButtonId {
+  return stick === 'left' ? 'ls' : 'rs';
+}
+
+export function XboxGamepadSettings({ family, onBack }: { family: GamepadFamily; onBack(): void }) {
+  const { t } = useTranslation();
+  const ns = gamepadCopyNs(family);
+  const { state, loading, saving, error, setSettings, resetSettings, reload } = useXboxGamepad({
+    family,
+    watchConnection: true,
+  });
+  const { skills, bootstrapped, refresh: refreshSkills } = useSkillhub();
+  const [preview, setPreview] = useState<XboxGamepadPreviewInput | null>(null);
+  const [editing, setEditing] = useState<XboxGamepadEditablePart | null>(null);
+  const settings = resolveXboxGamepadSettings(state?.settings);
+  const enabled = settings.deviceEnabled;
+  const key = resolveInputDeviceStatusKey({
+    enabled,
+    present: state?.devicePresent,
+    connectionStatus: state?.connectionStatus,
+    loading,
+  });
+  const enabledSkills = useMemo(
+    () => skills.filter((skill) => skill.kind === 'skill' && !skill.parseError),
+    [skills],
+  );
+  const isDefault = state !== null && xboxGamepadSettingsMatchRestoreDefaults(settings);
+
+  useEffect(() => {
+    if (!bootstrapped) void refreshSkills();
+  }, [bootstrapped, refreshSkills]);
+
+  useEffect(() => {
+    const api = window.electronAPI?.xboxGamepad;
+    void api?.setLayoutPreviewActive?.(true, family);
+    return () => {
+      void api?.setLayoutPreviewActive?.(false);
+    };
+  }, [family]);
+
+  useEffect(() => {
+    const unsubscribe = window.electronAPI?.xboxGamepad?.onPreviewInput?.((input) => {
+      if (input.family === family) setPreview(input);
+    });
+    return () => unsubscribe?.();
+  }, [family]);
+
+  const patchLayout = (update: (layout: XboxGamepadLayoutModel) => void): void => {
+    if (!state) return;
+    const layout = cloneXboxGamepadLayout(settings.layout);
+    update(layout);
+    void setSettings({ layout });
+  };
+
+  const hintFor = (part: XboxGamepadEditablePart): XboxGamepadKeyHint => {
+    if (isStickPart(part)) {
+      const stick = settings.layout.sticks[part];
+      return {
+        legend: t(familyControlKey(family, `${part}Stick`)),
+        name: stick
+          ? t(`settings.shortcuts.xboxGamepad.stick.mode.options.${stick.mode}`)
+          : undefined,
+        description: t('settings.shortcuts.xboxGamepad.layout.clickToEdit'),
+      };
+    }
+    const binding = settings.layout.buttons[part] ?? null;
+    return {
+      legend: t(familyControlKey(family, part)),
+      name: bindingLabel(binding, t) ?? t('settings.shortcuts.xboxGamepad.actions.none'),
+      description:
+        binding?.type === 'command'
+          ? workLouderCodexCommandDescription(t, binding.commandId)
+          : binding?.type === 'voice'
+            ? t('settings.shortcuts.xboxGamepad.actions.voiceDescription')
+            : t('settings.shortcuts.xboxGamepad.layout.clickToEdit'),
+    };
+  };
+
+  const layoutProps = {
+    layout: settings.layout,
+    disabled: !state || saving,
+    hintFor,
+    onEdit: setEditing,
+    preview,
+    labels: {
+      leftStick: t(familyControlKey(family, 'leftStick')),
+      rightStick: t(familyControlKey(family, 'rightStick')),
+    },
+  };
+
+  return (
+    <div className="flex flex-col gap-6">
+      <SettingsPageHeader
+        title={t(`settings.shortcuts.${ns}.title`)}
+        onBack={onBack}
+        backLabel={t('settings.shortcuts.xboxGamepad.back')}
+        action={
+          <Button data-settings-search-action="Restore the gamepad page defaults"
+            variant="secondary"
+            size="sm"
+            compact
+            type="button"
+            disabled={!state || saving || isDefault}
+            onClick={() => void resetSettings()}
+          >
+            <RotateCcw size={14} aria-hidden />
+            {t('settings.shortcuts.reset')}
+          </Button>
+        }
+      />
+      <div className="flex flex-col gap-[14px]">
+
+        {error && (
+          <div className="flex items-center justify-between gap-3 text-12 text-[var(--error-fg)]">
+            <span>{t(`settings.shortcuts.xboxGamepad.errors.${error}`)}</span>
+            <button type="button" onClick={() => void reload()} className="underline">
+              {t('settings.shortcuts.xboxGamepad.retry')}
+            </button>
+          </div>
+        )}
+
+        <SettingsCard>
+          <SettingsRow
+            wrap
+            title={t('settings.shortcuts.xboxGamepad.connection.toggle.label')}
+            hint={
+              <span className="flex flex-col gap-2">
+                <span>{t(`settings.shortcuts.${ns}.connection.descriptions.${key}`)}</span>
+                {state?.devicePresent && <XboxDeviceChips device={state.device} />}
+              </span>
+            }
+            trailing={
+              <div className="flex items-center gap-2">
+                <Switch
+                  checked={enabled}
+                  disabled={loading || saving || !state}
+                  onCheckedChange={(next) => {
+                    void setSettings({ deviceEnabled: next });
+                  }}
+                  aria-label={t(`settings.shortcuts.${ns}.connection.toggle.aria`)}
+                />
+                <ConnectionBadge state={state} loading={loading} />
+              </div>
+            }
+          />
+        </SettingsCard>
+
+        <SettingsCard className="flex flex-col gap-3 p-4">
+          <div className="flex flex-col gap-1">
+            <h3 className={SETTINGS_ROW_LABEL_CLASS}>
+              {t('settings.shortcuts.xboxGamepad.layout.title')}
+            </h3>
+            <p className="text-12 leading-[1.45] text-[var(--text-secondary)]">
+              {t('settings.shortcuts.xboxGamepad.layout.description')}
+            </p>
+          </div>
+          <div className="flex justify-center">
+            {family === 'playstation' ? (
+              <PlayStationGamepadLayout {...layoutProps} />
+            ) : family === 'nintendo' ? (
+              isNintendoJoyConDevice(state?.device) ? (
+                <JoyConGamepadLayout {...layoutProps} />
+              ) : (
+                <SwitchProGamepadLayout {...layoutProps} />
+              )
+            ) : family === 'generic' ? (
+              <GenericGamepadLayout {...layoutProps} />
+            ) : (
+              <XboxGamepadLayout {...layoutProps} />
+            )}
+          </div>
+        </SettingsCard>
+
+        <XboxGamepadPartEditor
+          open={editing !== null && !isStickPart(editing)}
+          onOpenChange={(open) => {
+            if (!open) setEditing(null);
+          }}
+          title={
+            editing && !isStickPart(editing)
+              ? t(familyControlKey(family, editing))
+              : t('settings.shortcuts.xboxGamepad.layout.editor.title')
+          }
+          description={t('settings.shortcuts.xboxGamepad.layout.editor.description')}
+          closeLabel={t('settings.shortcuts.xboxGamepad.layout.editor.done')}
+        >
+          {editing && !isStickPart(editing) && settings && (
+            <SettingsRow
+              wrap
+              flush
+              title={t('settings.shortcuts.xboxGamepad.layout.editor.assigned')}
+              hint={t('settings.shortcuts.xboxGamepad.layout.editor.assignedDescription')}
+              trailing={
+                <BindingSelect
+                  binding={settings.layout.buttons[editing]}
+                  skills={enabledSkills}
+                  disabled={!state || saving}
+                  allowVoice
+                  onChange={(binding) =>
+                    patchLayout((layout) => {
+                      layout.buttons[editing] = binding;
+                    })
+                  }
+                />
+              }
+            />
+          )}
+        </XboxGamepadPartEditor>
+
+        <XboxGamepadPartEditor
+          open={editing !== null && isStickPart(editing)}
+          onOpenChange={(open) => {
+            if (!open) setEditing(null);
+          }}
+          title={
+            editing && isStickPart(editing)
+              ? t(familyControlKey(family, `${editing}Stick`))
+              : t('settings.shortcuts.xboxGamepad.layout.editor.title')
+          }
+          description={t('settings.shortcuts.xboxGamepad.stick.description')}
+          closeLabel={t('settings.shortcuts.xboxGamepad.layout.editor.done')}
+        >
+          {editing && isStickPart(editing) && settings && (
+            <div className="flex flex-col">
+              <SettingsRow
+                wrap
+                flush
+                title={t('settings.shortcuts.xboxGamepad.stick.mode.label')}
+                hint={t('settings.shortcuts.xboxGamepad.stick.mode.description')}
+                trailing={
+                  <Select data-settings-search-action="Choose the gamepad stick mode"
+                    width="sm"
+                    value={settings.layout.sticks[editing].mode}
+                    disabled={!state || saving}
+                    label={t('settings.shortcuts.xboxGamepad.stick.mode.label')}
+                    onValueChange={(value) =>
+                      patchLayout((layout) => {
+                        layout.sticks[editing].mode = value as XboxGamepadStickMode;
+                      })
+                    }
+                    options={[
+                      {
+                        value: 'conversation-scroll',
+                        label: t(
+                          'settings.shortcuts.xboxGamepad.stick.mode.options.conversation-scroll',
+                        ),
+                      },
+                      {
+                        value: 'custom',
+                        label: t('settings.shortcuts.xboxGamepad.stick.mode.options.custom'),
+                      },
+                    ]}
+                  />
+                }
+              />
+              {settings.layout.sticks[editing].mode === 'custom' &&
+                XBOX_GAMEPAD_STICK_DIRECTIONS.map((direction) => (
+                  <SettingsRow
+                    key={direction}
+                    wrap
+                    flush
+                    title={t(`settings.shortcuts.xboxGamepad.directions.${direction}`)}
+                    hint={t('settings.shortcuts.xboxGamepad.stick.customDescription')}
+                    trailing={
+                      <BindingSelect
+                        binding={settings.layout.sticks[editing].directions[direction]}
+                        skills={enabledSkills}
+                        disabled={!state || saving}
+                        onChange={(binding) =>
+                          patchLayout((layout) => {
+                            layout.sticks[editing].directions[direction] = binding;
+                          })
+                        }
+                      />
+                    }
+                  />
+                ))}
+              <SettingsRow
+                wrap
+                flush
+                title={t(familyControlKey(family, stickClickButton(editing)))}
+                hint={t('settings.shortcuts.xboxGamepad.layout.editor.assignedDescription')}
+                trailing={
+                  <BindingSelect
+                    binding={settings.layout.buttons[stickClickButton(editing)]}
+                    skills={enabledSkills}
+                    disabled={!state || saving}
+                    allowVoice
+                    onChange={(binding) =>
+                      patchLayout((layout) => {
+                        layout.buttons[stickClickButton(editing)] = binding;
+                      })
+                    }
+                  />
+                }
+              />
+            </div>
+          )}
+        </XboxGamepadPartEditor>
+
+        <SettingsCard>
+          <SettingsRow
+            title={t('settings.shortcuts.xboxGamepad.layout.reset.title')}
+            hint={t('settings.shortcuts.xboxGamepad.layout.reset.description')}
+            trailing={
+              <Button
+                variant="secondary"
+                size="md"
+                compact
+                loading={saving}
+                type="button"
+                disabled={!state || saving}
+                onClick={() => void resetSettings()}
+                className="shrink-0"
+              >
+                <RotateCcw size={13} />
+                {t('settings.shortcuts.xboxGamepad.layout.reset.button')}
+              </Button>
+            }
+          />
+        </SettingsCard>
+      </div>
+    </div>
+  );
+}
+
+function XboxGamepadPartEditor({
+  open,
+  onOpenChange,
+  title,
+  description,
+  closeLabel,
+  children,
+}: {
+  open: boolean;
+  onOpenChange(open: boolean): void;
+  title: string;
+  description: string;
+  closeLabel: string;
+  children: ReactNode;
+}) {
+  return (
+    <Dialog.Root open={open} onOpenChange={onOpenChange}>
+      <Dialog.Portal>
+        <Dialog.Overlay className="modal-scrim fixed inset-0 z-[10000]" />
+        <Dialog.Content onPointerDownOutside={(event) => event.preventDefault()} className="modal-panel fixed left-1/2 top-1/2 z-[10000] flex max-h-[min(700px,calc(100vh-48px))] w-[min(520px,calc(100vw-48px))] -translate-x-1/2 -translate-y-1/2 flex-col overflow-hidden text-[var(--text-primary)] focus:outline-none">
+          <div className="px-6 pb-4 pt-6">
+            <Dialog.Title className="text-18 font-medium leading-[1.3]">{title}</Dialog.Title>
+            <Dialog.Description className="mt-1 text-13 leading-[1.4] text-[var(--text-secondary)]">
+              {description}
+            </Dialog.Description>
+          </div>
+          <div className="min-h-0 flex-1 overflow-y-auto px-6 pb-4">{children}</div>
+          <div className="flex justify-end border-t border-[var(--border-default)] px-6 py-4">
+            <Button variant="cta" size="md" compact type="button" onClick={() => onOpenChange(false)}>
+              {closeLabel}
+            </Button>
+          </div>
+        </Dialog.Content>
+      </Dialog.Portal>
+    </Dialog.Root>
+  );
+}
+
+function BindingSelect({
+  binding,
+  skills,
+  disabled,
+  allowVoice = false,
+  onChange,
+}: {
+  binding: XboxGamepadBinding | null;
+  skills: Array<{ id: string; name: string }>;
+  disabled: boolean;
+  allowVoice?: boolean;
+  onChange(binding: XboxGamepadBinding | null): void;
+}) {
+  const { t } = useTranslation();
+  const groups: NonNullable<SelectProps['groups']>[number][] = [
+    { options: [{ value: 'none', label: t('settings.shortcuts.xboxGamepad.actions.none') }] },
+  ];
+  if (allowVoice) {
+    groups.push({
+      options: [{ value: 'voice', label: t('settings.shortcuts.xboxGamepad.actions.voice') }],
+    });
+  }
+  groups.push({
+    label: t('settings.shortcuts.xboxGamepad.actions.commands'),
+    options: INPUT_DEVICE_COMMAND_IDS.map((commandId) => ({
+      value: `command:${commandId}`,
+      label: workLouderCodexCommandName(t, commandId),
+    })),
+  });
+  if (skills.length > 0) {
+    groups.push({
+      label: t('settings.shortcuts.xboxGamepad.actions.skills'),
+      options: skills.map((skill) => ({
+        value: `skill:${skill.id}`,
+        label: skill.name,
+      })),
+    });
+  }
+  return (
+    <Select
+      data-settings-search-action="Choose the action bound to this device input"
+      label={t('settings.shortcuts.xboxGamepad.actions.choose')}
+      value={bindingValue(binding)}
+      disabled={disabled}
+      onValueChange={(value) => onChange(parseBindingValue(value, skills))}
+      width="sm"
+      groups={groups}
+    />
+  );
+}
+
+function familyControlKey(family: GamepadFamily, part: string): string {
+  return `settings.shortcuts.xboxGamepad.familyControls.${family}.${part}`;
+}
+
+function resolveXboxGamepadSettings(
+  settings: XboxGamepadSettingsModel | undefined,
+): XboxGamepadSettingsModel {
+  if (!settings) return createXboxGamepadDefaultSettings();
+  if (settings.layout?.buttons && settings.layout.sticks) return settings;
+  return { ...settings, layout: createXboxGamepadDefaultLayout() };
+}
+
+function xboxGamepadSettingsMatchRestoreDefaults(settings: XboxGamepadSettingsModel): boolean {
+  return (
+    JSON.stringify({ ...settings, deviceEnabled: false }) ===
+    JSON.stringify({ ...createXboxGamepadDefaultSettings(), deviceEnabled: false })
+  );
+}
+
+function bindingLabel(
+  binding: XboxGamepadBinding | null,
+  t: ReturnType<typeof useTranslation>['t'],
+): string | null {
+  if (!binding) return null;
+  if (binding.type === 'command') return workLouderCodexCommandName(t, binding.commandId);
+  if (binding.type === 'skill') return binding.name;
+  return t('settings.shortcuts.xboxGamepad.actions.voice');
+}
+
+function bindingValue(binding: XboxGamepadBinding | null): string {
+  if (!binding) return 'none';
+  if (binding.type === 'command') return `command:${binding.commandId}`;
+  if (binding.type === 'skill') return `skill:${binding.skillId}`;
+  return 'voice';
+}
+
+function parseBindingValue(
+  value: string,
+  skills: Array<{ id: string; name: string }>,
+): XboxGamepadBinding | null {
+  if (value === 'none') return null;
+  if (value === 'voice') return { type: 'voice' };
+  if (value.startsWith('command:')) {
+    return { type: 'command', commandId: value.slice(8) as InputDeviceCommandId };
+  }
+  if (value.startsWith('skill:')) {
+    const skillId = value.slice(6);
+    const skill = skills.find((item) => item.id === skillId);
+    return skill ? { type: 'skill', skillId, name: skill.name } : null;
+  }
+  return null;
+}

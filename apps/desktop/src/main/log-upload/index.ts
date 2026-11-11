@@ -35,11 +35,11 @@ import {
 } from '../analytics-settings-store';
 import { isFatalShutdownReason, onFatalShutdown, onQuit } from '../lifecycle';
 import { createLogger, getLogDir } from '../logger';
-import { outboundFetch } from '../maker-host/outbound-fetch';
+import { outboundFetch } from '../maker-host/outbound-fetch.desktop';
 import { getPreviousRunReports } from '../startup-diagnostics';
 import { assertTrustedAppRendererEvent } from '../security/trustedAppRenderer.js';
 import { throwIpcError } from '../utils/ipcValidate.js';
-import { collectLogs, type CollectDeps } from './collect';
+import { collectLogsFromDisk } from './collectRuntime';
 import {
   crashAtFromMarker,
   selectBackfillGrouping,
@@ -57,11 +57,13 @@ import {
   refreshLogUploadSettingsFromDisk,
   setCrashAutoUploadEnabled,
 } from './logUploadSettingsStore';
-import type { RandomAccessFile } from './mainLogReader';
 import { PendingMarkerStore, type MarkerFs } from './pendingMarkers';
 import type { LogUploadMeta, LogUploadTarget } from './types';
 import { generateUploadCode } from './uploadCode';
 import { runUpload, type UploadOutcome } from './uploadRunner';
+import { activeOwnerScopeKey } from '../appSessionState';
+import type { TraceReport } from '../performance-trace/report';
+import { submitPerformanceReport } from '../performance-trace/upload';
 
 const log = createLogger('log-upload');
 
@@ -146,52 +148,6 @@ const gateDeps: ConsentGateDeps = {
   },
 };
 
-/** 打开一个只能随机读的文件句柄。不存在 / 不可读返回 null（跳过，不算失败）。 */
-async function openReadOnly(
-  filePath: string,
-): Promise<(RandomAccessFile & { close(): Promise<void> }) | null> {
-  let handle: fs.promises.FileHandle;
-  try {
-    handle = await fs.promises.open(filePath, 'r');
-  } catch {
-    return null;
-  }
-  return {
-    async size() {
-      const stat = await handle.stat();
-      return stat.size;
-    },
-    async read(offset: number, length: number) {
-      if (length <= 0) return Buffer.alloc(0);
-      const buffer = Buffer.alloc(length);
-      let read = 0;
-      // 网络盘 / FUSE 上单次 read 不保证填满请求区间,读满循环避免把内容截断。
-      while (read < length) {
-        const { bytesRead } = await handle.read(buffer, read, length - read, offset + read);
-        if (bytesRead === 0) break;
-        read += bytesRead;
-      }
-      return buffer.subarray(0, read);
-    },
-    async close() {
-      await handle.close();
-    },
-  };
-}
-
-function collectDeps(): CollectDeps {
-  return {
-    logDir: getLogDir(),
-    listDir: (dir) => fs.promises.readdir(dir),
-    openFile: openReadOnly,
-    now: () => Date.now(),
-    homeDir: os.homedir(),
-    // setImmediate 让出一次:采集跑在 main 上,连续同步解析几 MB 会造成可感知的卡顿。
-    yieldToEventLoop: () => new Promise<void>((resolve) => setImmediate(resolve)),
-    joinPath: (...parts) => path.join(...parts),
-  };
-}
-
 function buildMeta(args: {
   uploadCode: string;
   reason: LogUploadReason;
@@ -220,11 +176,11 @@ function runnerDeps() {
     gate: gateDeps,
     resolveTarget: currentTarget,
     collect: (request: { reason: LogUploadReason; anchors: number[] }) =>
-      collectLogs(collectDeps(), request),
+      collectLogsFromDisk(request),
     send: (target: LogUploadTarget, meta: LogUploadMeta, records: Parameters<typeof sendLogs>[3]) =>
       sendLogs({ fetchImpl: outboundFetch }, target, meta, records),
     buildMeta,
-    generateUploadCode: () => generateUploadCode((size) => crypto.randomBytes(size)),
+    generateUploadCode: () => generateUploadCode((size) => crypto.randomBytes(size), CURRENT_CINDY_REGION),
     markers: ensureMarkerStore(),
     now: () => Date.now(),
     log: {
@@ -232,6 +188,27 @@ function runnerDeps() {
       warn: (message: string, ...rest: unknown[]) => log.warn(message, ...rest),
     },
   };
+}
+
+/** Explicit full-file performance upload. Files are selected by the recording controller,
+ * redacted before compression, and sent separately from the ordinary log source allowlist. */
+export async function uploadPerformanceTraceReport(
+  report: TraceReport,
+  note: string,
+  artifacts: () => Promise<import('../performance-trace/artifacts').TraceArtifact[]>,
+): Promise<void> {
+  await submitPerformanceReport(
+    {
+      owner: activeOwnerScopeKey,
+      gate: () => evaluateGate(gateDeps, 'manual'),
+      target: currentTarget,
+      meta: (uploadCode) => buildMeta({ uploadCode, reason: 'manual' }),
+      fetch: outboundFetch,
+      artifacts,
+    },
+    report,
+    note,
+  );
 }
 
 // ── 设置 payload 与广播 ─────────────────────────────────────────────────────

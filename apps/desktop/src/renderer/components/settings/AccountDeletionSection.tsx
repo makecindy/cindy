@@ -3,6 +3,7 @@ import { useTranslation } from 'react-i18next';
 import type { AccountDeletionAvailability } from '@cindy/auth-client';
 
 import { ConfirmDialog } from '@/components/ui/confirm-dialog';
+import { Button } from '@/components/ui/button';
 import { useAuth } from '@/contexts/AuthContext';
 import type { DesktopAccountDeletionChallenge } from '@/lib/authService';
 import { cn } from '@/lib/utils';
@@ -117,22 +118,20 @@ export function AccountDeletionSection() {
 
   return (
     <>
-      <button
+      <Button
+        variant="secondary"
+        size="md"
         type="button"
         onClick={() => {
           resetDraft();
           setOpen(true);
         }}
         aria-label={t('accountDeletion.entryAria')}
-        className={cn(
-          'flex h-8 self-center items-center justify-center rounded-full px-3',
-          'text-12 font-normal text-[var(--text-tertiary)]',
-          'transition-colors hover:bg-[var(--surface-hover)] hover:text-[var(--text-secondary)]',
-          'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--focus-ring-soft)]',
-        )}
+        tone="quiet"
+        className="self-center"
       >
         {t('accountDeletion.entryButton')}
-      </button>
+      </Button>
 
       <ConfirmDialog
         open={open}
@@ -192,18 +191,17 @@ export function AccountDeletionSection() {
                 />
                 <span>{t('accountDeletion.acknowledgement')}</span>
               </label>
-              <button
+              <Button
+                variant="secondary"
+                size="md"
                 type="button"
                 disabled={busy}
                 onClick={() => void requestChallenge()}
-                className={cn(
-                  'self-start rounded-full px-2 py-1 text-12 text-[var(--text-secondary)]',
-                  'transition-colors hover:bg-[var(--surface-hover)] hover:text-[var(--text-primary)]',
-                  'disabled:cursor-not-allowed disabled:opacity-60',
-                )}
+                tone="quiet"
+                className="self-start"
               >
                 {t('accountDeletion.resendCodeButton')}
-              </button>
+              </Button>
               {errorMessage && (
                 <p role="alert" className="text-12 leading-5 text-[var(--error-fg)]">
                   {errorMessage}

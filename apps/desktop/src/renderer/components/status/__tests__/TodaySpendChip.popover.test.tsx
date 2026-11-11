@@ -1,14 +1,35 @@
 // @vitest-environment jsdom
 
-import { act, cleanup, fireEvent, render, screen, within } from '@testing-library/react';
+import { act, cleanup, fireEvent, render as renderUI, screen, within } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
-import type { ClaudeSubscriptionUsageSnapshot } from '../../../../shared/claudeSubscriptionUsage';
+import type { ReactElement } from 'react';
+import type { MobileCodexRateLimitsResult } from '@cindy/maker-shared/device-link-contract';
+import { ConfirmDialogProvider } from '@/components/ui/confirm-dialog-provider';
+
+function render(ui: ReactElement) {
+  return renderUI(ui, { wrapper: ConfirmDialogProvider });
+}
+
+import { mergeClaudeSubscriptionUsageSnapshot, parseClaudeSdkRateLimitInfo, type ClaudeSubscriptionUsageSnapshot } from '../../../../shared/claudeSubscriptionUsage';
+import type { RateLimitSnapshot } from '@/hooks/useAccountUsage';
+import type { XaiSubscriptionUsageSnapshot } from '../../../../shared/xaiSubscriptionUsage';
+import type { ClaudeAccountUsageSnapshot } from '@/hooks/useClaudeAccountUsage';
 import type { RegionalMoney } from '../../../../shared/regionalMoney';
 import type { SessionUsageMoney } from '@/hooks/useSessionUsageMoney';
+import type { ProviderView } from '@cindy/model-providers';
+import type { ModelAccessCreditUsage } from '../../../../shared/modelAccess';
 
 const mocks = vi.hoisted(() => ({
   claudeSnapshot: null as ClaudeSubscriptionUsageSnapshot | null,
+  codexSnapshot: null as RateLimitSnapshot | null,
+  xaiSnapshot: null as XaiSubscriptionUsageSnapshot | null,
+  gatewaySnapshot: null as ClaudeAccountUsageSnapshot | null,
+  creditSnapshot: null as ModelAccessCreditUsage | null,
+  sessionTokens: null as number | null,
+  codexAuthInjection: null as string | null,
+  providers: [] as ProviderView[],
+  accountSnapshots: {} as Record<string, RateLimitSnapshot>,
   displaySnapshot: {
     messages: [] as Array<Record<string, unknown>>,
   },
@@ -19,6 +40,11 @@ const mocks = vi.hoisted(() => ({
   } as SessionUsageMoney,
   openExternal: vi.fn(() => Promise.resolve()),
   refreshCodexRateLimits: vi.fn(),
+  resetSnapshot: null as MobileCodexRateLimitsResult | null,
+  consumeReset: vi.fn(),
+  fetchProviderAccountUsage: vi.fn(),
+  codexQuotaReadFailed: false,
+  codexQuotaRefreshing: false,
 }));
 
 vi.mock('react-i18next', () => ({
@@ -26,9 +52,24 @@ vi.mock('react-i18next', () => ({
     i18n: { language: 'zh-CN', resolvedLanguage: 'zh-CN' },
     t: (key: string, options: Record<string, string | number> = {}) => {
       const templates: Record<string, string> = {
+        'quotaCard.usageTitle': '用量明细',
+        'quotaCard.staleData': '数据更新于 {{minutes}} 分钟前',
+        'todaySpend.openXaiUsage': '打开 Grok 用量页面',
+        'todaySpend.codex.sessionTokensLine': '本任务 Token {{tokens}}',
+        'quotaCard.speedLabel': '速度',
+        'quotaCard.rateValue': '{{rate}} tokens/秒',
         'todaySpend.openClaudeUsage': '打开 Claude 用量页面',
+        'todaySpend.openCodexUsage': '打开 Codex 用量页面',
         'todaySpend.claude.weeklyLabel': '周限',
+        'todaySpend.claude.totalWeeklyLabel': '总周',
+        'todaySpend.claude.temporarilyLimited': '暂时受限',
+        'quotaCard.limitRejected': '已触发套餐限额',
+        'todaySpend.claude.modelWeeklyLabel': '{{model}} 周限',
         'todaySpend.claude.windowSegment': '{{label}} 剩余 {{remaining}}',
+        'todaySpend.codex.weekWindow': '周限',
+        'todaySpend.codex.limitWindow': '限额',
+        'todaySpend.codex.daysWindow': '{{days}}天',
+        'todaySpend.codex.windowSegment': '{{label}} 剩余 {{remaining}}',
         'todaySpend.sessionCostLabel': '本任务 {{cost}}',
         'todaySpend.tooltip.sessionUsed': '本任务已用 {{cost}}',
         'todaySpend.codex.sessionValueLabel': '本任务价值 {{cost}}',
@@ -38,21 +79,28 @@ vi.mock('react-i18next', () => ({
         'todaySpend.unit.second': '秒',
         'quotaCard.fiveHourLabel': '5 小时',
         'quotaCard.weeklyLabel': '周限',
+        'quotaCard.includedLabel': '其中 {{name}}',
         'quotaCard.modelWeeklyLabel': '{{model}} 周限',
         'quotaCard.usedPercent': '已用 {{percent}}%',
+        'quotaCard.remainingPercent': '剩余 {{percent}}%',
         'quotaCard.resetAt': '{{at}} 重置',
+        'quotaCard.resetIn': '{{duration}}后重置',
         'quotaCard.turnCostUnavailable': '本轮费用暂无法估算',
         'quotaCard.tokenLabel': 'Token',
         'quotaCard.tokenBreakdown': '（输入 {{input}} · 输出 {{output}}）',
         'quotaCard.cacheLabel': '缓存',
+        'quotaCard.timeLabel': '耗时',
+        'quotaCard.timeAndRateValue': '{{duration}} 速度：{{rate}} token/秒',
         'quotaCard.modelLabel': '模型',
         'quotaCard.waiting': '等待额度数据',
-        'quotaCard.latestMessageTitle': '最近一轮用户请求累计',
+        'quotaCard.latestMessageTitle': '最近一轮',
         'chat.messageActionBar.userTurnCostDetailsTitle': '本轮明细',
         'quotaCard.costLine': '本轮消耗：{{cost}}',
         'quotaCard.valueLine': '本轮 token 价值：{{cost}}',
         'quotaCard.noBilledCost': '本轮费用暂不可用，仅显示用量',
         'usageDetails.costBreakdownHeader': '按模型拆分：',
+        'usageDetails.durationSeconds': '{{value}}秒',
+        'usageDetails.durationMinutesSeconds': '{{minutes}}分 {{seconds}}秒',
         'usageDetails.modelCostLine': '· {{model}} {{cost}}',
         'usageDetails.cacheLine': '缓存拆分：读取 {{read}} · 写入 {{create}} · 命中率 {{rate}}',
         'usageDetails.cacheLineNoRate': '缓存拆分：读取 {{read}} · 写入 {{create}}',
@@ -69,6 +117,9 @@ vi.mock('react-i18next', () => ({
 vi.mock('@/hooks/useApiKey', () => ({
   useApiKey: () => ({ hasSavedKey: false, isReconciling: false }),
 }));
+vi.mock('@/hooks/useProviders', () => ({
+  useProviders: () => ({ providers: mocks.providers }),
+}));
 vi.mock('@/hooks/useClaudeOAuthConnected', () => ({
   useClaudeOAuthConnected: () => true,
 }));
@@ -78,27 +129,64 @@ vi.mock('@/hooks/useClaudeSessionRoute', () => ({
 vi.mock('@/hooks/useSessionUsageMoney', () => ({
   useSessionUsageMoney: () => mocks.sessionUsage,
 }));
-vi.mock('@/hooks/useSessionTokens', () => ({ useSessionTokens: () => null }));
+vi.mock('@/hooks/useSessionTokens', () => ({ useSessionTokens: () => mocks.sessionTokens }));
 vi.mock('@/hooks/useAccountUsage', () => ({
   requestCodexAccountRefresh: vi.fn(),
-  useAccountUsage: () => null,
+  useAccountUsage: (
+    _: unknown,
+    kind: unknown,
+    _source: unknown,
+    _model: unknown,
+    providerId: string,
+  ) => (kind ? (mocks.accountSnapshots[providerId] ?? mocks.codexSnapshot) : null),
 }));
-vi.mock('@/hooks/useClaudeAccountUsage', () => ({ useClaudeAccountUsage: () => null }));
-vi.mock('@/hooks/useModelAccessCreditUsage', () => ({ useModelAccessCreditUsage: () => null }));
+vi.mock('@/hooks/useClaudeAccountUsage', () => ({
+  useClaudeAccountUsage: (enabled: boolean) => (enabled ? mocks.gatewaySnapshot : null),
+}));
+vi.mock('@/hooks/useModelAccessCreditUsage', () => ({
+  useModelAccessCreditUsage: (enabled: boolean) => (enabled ? mocks.creditSnapshot : null),
+}));
 vi.mock('@/hooks/useClaudeSubscriptionUsage', () => ({
   requestClaudeSubscriptionRefresh: vi.fn(),
   useClaudeSubscriptionUsage: () => mocks.claudeSnapshot,
 }));
 vi.mock('@/hooks/useCodexRuntimeRoute', () => ({
-  useCodexRuntimeRoute: () => ({ authInjection: null }),
+  useCodexRuntimeRoute: () => ({ authInjection: mocks.codexAuthInjection }),
 }));
 vi.mock('@/hooks/useCodexRateLimits', () => ({
   useCodexRateLimits: () => ({
-    snapshot: null,
+    snapshot: mocks.resetSnapshot,
     refresh: mocks.refreshCodexRateLimits,
+    failed: mocks.codexQuotaReadFailed,
+    refreshing: mocks.codexQuotaRefreshing,
   }),
 }));
+// device-link 远程会话读被控端镜像 hook(#3789);本文件不铺隧道 API,镜像一律返回 null →
+// 远程会话只显示任务用量(与「不混入本机配额」的既有断言同义)。
+vi.mock('@/hooks/useRemoteDeviceUsage', () => ({
+  useRemoteCodexAccountUsage: () => null,
+  requestRemoteCodexAccountRefresh: () => undefined,
+  useRemoteClaudeAccountUsage: () => null,
+  useRemoteXaiSubscriptionUsage: () => null,
+  requestRemoteXaiSubscriptionRefresh: () => undefined,
+  useRemoteXaiRateLimit: () => null,
+  selectRemoteCodexAccountUsage: () => null,
+}));
+vi.mock('@/hooks/useRemoteClaudeSubscriptionUsage', () => ({
+  useRemoteClaudeSubscriptionUsage: () => null,
+  requestRemoteClaudeSubscriptionRefresh: () => undefined,
+}));
+vi.mock('@/hooks/useRemoteClaudeSessionRoute', () => ({
+  useRemoteClaudeSessionRoute: () => null,
+}));
+vi.mock('@/hooks/useXaiSubscriptionUsage', () => ({
+  useXaiSubscriptionUsage: (enabled: boolean) => (enabled ? mocks.xaiSnapshot : null),
+  requestXaiSubscriptionRefresh: vi.fn(),
+}));
 vi.mock('@/hooks/useXaiRateLimit', () => ({ useXaiRateLimit: () => null }));
+vi.mock('../QuotaResetConfetti', () => ({
+  QuotaResetConfetti: () => <span data-testid="quota-reset-confetti" />,
+}));
 vi.mock('@/components/chat/ChatDisplaySnapshotContext', () => ({
   useChatDisplaySnapshot: () => mocks.displaySnapshot,
 }));
@@ -110,6 +198,7 @@ vi.mock('@/lib/makerChatStore', () => ({
 }));
 
 import { TodaySpendChip } from '../TodaySpendChip';
+import { QuotaFullCelebrations, quotaFullCelebrations } from '../quotaFullCelebrations';
 
 const CLAUDE_USAGE_URL = 'https://claude.ai/settings/usage';
 const TURN_USAGE_DETAILS = {
@@ -119,6 +208,8 @@ const TURN_USAGE_DETAILS = {
   cacheCreateTokens: 74_000,
   totalTokens: 74_018,
   cacheHitRate: 0,
+  durationMs: 400,
+  turnDurationMs: 12_345,
   model: 'claude-opus-5[1m]',
 };
 
@@ -158,13 +249,15 @@ function renderClaudeSubscriptionChip() {
 }
 
 function openCardFromHover() {
-  const trigger = screen.getByRole('button', { name: '打开 Claude 用量页面' });
+  const trigger = screen.getByTestId('task-usage-trigger');
   fireEvent.mouseEnter(trigger);
   act(() => vi.advanceTimersByTime(300));
   return { trigger, card: screen.getByTestId('quota-hover-card') };
 }
 
 beforeEach(() => {
+  const history = new QuotaFullCelebrations();
+  vi.spyOn(quotaFullCelebrations, 'observe').mockImplementation(history.observe.bind(history));
   vi.useFakeTimers();
   setLatestUsageMessage();
   mocks.sessionUsage = {
@@ -177,9 +270,22 @@ beforeEach(() => {
     subscriptionType: 'max',
     sevenDay: { utilization: 34, resetsAt: Date.now() / 1000 + 86_400 },
   };
+  mocks.codexSnapshot = null;
+  mocks.resetSnapshot = null;
+  mocks.consumeReset.mockReset();
+  mocks.codexQuotaReadFailed = false;
+  mocks.codexQuotaRefreshing = false;
+  mocks.xaiSnapshot = null;
+  mocks.gatewaySnapshot = null;
+  mocks.creditSnapshot = null;
+  mocks.sessionTokens = null;
+  mocks.codexAuthInjection = null;
+  mocks.providers = [];
+  mocks.accountSnapshots = {};
+  mocks.fetchProviderAccountUsage.mockReset();
   Object.defineProperty(window, 'electronAPI', {
     configurable: true,
-    value: { openExternal: mocks.openExternal },
+    value: { openExternal: mocks.openExternal, maker: { fetchProviderAccountUsage: mocks.fetchProviderAccountUsage, usage: { consumeCodexRateLimitReset: mocks.consumeReset } } },
   });
 });
 
@@ -190,10 +296,576 @@ afterEach(() => {
   vi.clearAllMocks();
 });
 
+// PR #7031: replace the brittle three-route source regex with actual navigation.
+// Unit/jsdom: each selected provider has its own observable URL; gateway stays local.
+it.each<{
+  vendorKey: 'cc' | 'codex' | 'pi';
+  providerId: string;
+  upstream?: string;
+  label: string;
+  url: string | null;
+}>([
+  { vendorKey: 'cc', providerId: 'anthropic', label: '打开 Claude 用量页面', url: 'https://claude.ai/settings/usage' },
+  { vendorKey: 'codex', providerId: 'openai', label: '打开 Codex 用量页面', url: 'https://chatgpt.com/settings/usage' },
+  { vendorKey: 'pi', providerId: 'xai', label: '打开 Grok 用量页面', url: 'https://grok.com' },
+  { vendorKey: 'pi', providerId: 'deepseek', upstream: 'https://api.deepseek.com', label: 'providerAccountUsage.openDashboard', url: 'https://platform.deepseek.com/usage' },
+  { vendorKey: 'pi', providerId: 'glm', upstream: 'https://open.bigmodel.cn/api/coding/paas/v4', label: 'providerAccountUsage.zhipuCodingPlan.usage', url: 'https://www.bigmodel.cn/coding-plan/personal/usage' },
+  { vendorKey: 'pi', providerId: 'zai', upstream: 'https://api.z.ai/api/coding/paas/v4', label: 'providerAccountUsage.zhipuCodingPlan.usage', url: 'https://z.ai/manage-apikey/coding-plan/personal/my-plan' },
+  { vendorKey: 'cc', providerId: 'xd', label: '用量明细', url: null },
+])('opens details and keeps the selected $providerId dashboard inside the panel', async ({ vendorKey, providerId, upstream, label, url }) => {
+  if (upstream) {
+    mocks.providers = [{
+      id: providerId, auth: { method: 'apiKey' },
+      routing: { pi: { upstream, authStrategy: 'api-key-header' } },
+    } as ProviderView];
+    mocks.fetchProviderAccountUsage.mockResolvedValue({ status: 'unavailable', error: 'auth', dashboardUrl: url });
+  }
+  render(<TodaySpendChip vendorKey={vendorKey} providerId={providerId} sessionId="session-1" />);
+  await act(async () => {});
+  fireEvent.click(screen.getByTestId('task-usage-trigger'));
+  expect(mocks.openExternal).not.toHaveBeenCalled();
+  const card = screen.getByTestId('quota-hover-card');
+  if (url) {
+    fireEvent.click(within(card).getByRole('button', { name: label }));
+    expect(mocks.openExternal).toHaveBeenCalledExactlyOnceWith(url);
+  }
+});
+
+// PR #7031: service error mapping alone does not verify the real chip's visible
+// result. Unit/jsdom, no saved snapshot + an auth/network failure must end waiting.
+it.each(['auth', 'network'])('shows API account %s errors instead of waiting forever', async (error) => {
+  mocks.providers = [{
+    id: 'deepseek', auth: { method: 'apiKey' },
+    routing: { pi: { upstream: 'https://api.deepseek.com', authStrategy: 'api-key-header' } },
+  } as ProviderView];
+  mocks.fetchProviderAccountUsage.mockResolvedValue({ status: 'unavailable', error });
+  render(<TodaySpendChip vendorKey="pi" providerId="deepseek" sessionId="session-1" />);
+  await act(async () => {});
+  act(() => screen.getByTestId('task-usage-trigger').focus());
+  const card = screen.getByTestId('quota-hover-card');
+  expect(within(card).getByText(`providerAccountUsage.error.${error}`)).toBeTruthy();
+  expect(within(card).queryByText('等待额度数据')).toBeNull();
+});
+
+// #4907: QuotaHoverCard tests cover the threshold, but the real chip never supplied
+// the personal balance observation time. Unit/jsdom: stale balance 60 is sufficient.
+describe('TodaySpendChip credit snapshot time', () => {
+  function creditSnapshot(observedAt: string): ModelAccessCreditUsage {
+    return {
+      available: '60',
+      plan: { remaining: '60', used: '40', total: '100' },
+      purchased: { remaining: '0', used: '0', total: '0' },
+      promotional: { remaining: '0', used: '0', total: '0' },
+      promotionalGrants: [],
+      promotionalGrantsComplete: true,
+      promotionalGrantConsistency: 'OBSERVED',
+      ledgerUpdatedAt: null,
+      scale: 9,
+      observedAt,
+    };
+  }
+
+  function gatewayChip() {
+    return <TodaySpendChip vendorKey="cc" providerId="xd" sessionId="session-1" />;
+  }
+
+  function openUsageCard() {
+    act(() => screen.getByRole('button', { name: '用量明细' }).focus());
+    return screen.getByTestId('quota-hover-card');
+  }
+
+  // Unit regression: the rendered chip and card must distinguish a disabled
+  // enterprise daily limit from a failed daily read; omitted flags retain legacy behavior.
+  it.each([
+    { dailyLimitEnabled: true, todaySpend: 3, daily: true, warning: false },
+    { dailyLimitEnabled: true, todaySpend: null, daily: false, warning: true },
+    { dailyLimitEnabled: false, todaySpend: null, daily: false, warning: false },
+    { dailyLimitEnabled: false, todaySpend: 3, daily: false, warning: false },
+    { dailyLimitEnabled: undefined, todaySpend: 3, daily: true, warning: false },
+    { dailyLimitEnabled: undefined, todaySpend: null, daily: false, warning: true },
+  ])('respects the daily limit state %j', ({ dailyLimitEnabled, todaySpend, daily, warning }) => {
+    mocks.gatewaySnapshot = {
+      spend: 40, maxBudget: 100, currency: 'CNY', fetchedAt: Date.now(),
+      todaySpend, ...(dailyLimitEnabled === undefined ? {} : { dailyLimitEnabled }),
+    };
+    render(gatewayChip());
+    expect(screen.getByRole('button', { name: '用量明细' }).textContent?.includes('todaySpend.dailyLimitLabel')).toBe(daily);
+    const card = openUsageCard();
+    expect(Boolean(within(card).queryByText('quotaCard.dailyLabel'))).toBe(daily);
+    expect(Boolean(within(card).queryByText('todaySpend.tooltip.dailyUnavailable'))).toBe(warning);
+    expect(within(card).getByText('quotaCard.monthlyLabel')).toBeTruthy();
+  });
+
+  it('shows the retained balance observation time and clears it after a fresh snapshot', () => {
+    mocks.creditSnapshot = creditSnapshot(new Date(Date.now() - 10 * 60_000).toISOString());
+    const view = render(gatewayChip());
+    const card = openUsageCard();
+    expect(within(card).getByText('数据更新于 10 分钟前')).toBeTruthy();
+    const balance = within(card).getByRole('progressbar');
+    expect(balance.getAttribute('aria-valuenow')).toBe('60');
+    const balanceText = card.textContent;
+
+    mocks.creditSnapshot = { ...mocks.creditSnapshot, observedAt: new Date().toISOString() };
+    view.rerender(gatewayChip());
+    expect(within(card).queryByText(/数据更新于/)).toBeNull();
+    expect(card.textContent).toBe(balanceText?.replace('数据更新于 10 分钟前', ''));
+  });
+
+  it.each([null, '', 'invalid-time'])(
+    'does not invent a snapshot time for missing or invalid observations (%s)',
+    (observedAt) => {
+      mocks.creditSnapshot = observedAt === null ? null : creditSnapshot(observedAt);
+      render(gatewayChip());
+      expect(within(openUsageCard()).queryByText(/数据更新于/)).toBeNull();
+    },
+  );
+
+  it('keeps the enterprise quota fetchedAt when a credit snapshot is also present', () => {
+    mocks.creditSnapshot = creditSnapshot(new Date(Date.now() - 10 * 60_000).toISOString());
+    mocks.gatewaySnapshot = {
+      spend: 40, maxBudget: 100, currency: 'CNY', todaySpend: 3,
+      fetchedAt: Date.now() - 20 * 60_000,
+    };
+    render(gatewayChip());
+    expect(within(openUsageCard()).getByText('数据更新于 20 分钟前')).toBeTruthy();
+  });
+
+  it.each([
+    { providerId: 'custom-api' },
+    { providerId: 'xd', remoteHostId: 'ssh-host' },
+    { providerId: 'xd', deviceLinkDeviceId: 'remote-device' },
+  ])('does not borrow local balance or observation time for %j', (route) => {
+    mocks.creditSnapshot = creditSnapshot(new Date(Date.now() - 10 * 60_000).toISOString());
+    render(<TodaySpendChip vendorKey="cc" sessionId="session-1" {...route} />);
+    const card = openUsageCard();
+    expect(within(card).queryByRole('progressbar')).toBeNull();
+    expect(within(card).queryByText(/数据更新于/)).toBeNull();
+  });
+});
+
 describe('TodaySpendChip Claude subscription popover', () => {
+  // F13 unit: exercise the task entry, where quota data and read details come
+  // from separate hooks. A detail read failure must keep the available meter.
+  it('keeps task quota visible and connects its failed-read retry action', () => {
+    mocks.codexAuthInjection = 'oauth-bearer';
+    mocks.codexQuotaReadFailed = true;
+    mocks.codexSnapshot = {
+      source: 'codex-app-server',
+      primary: { usedPercent: 25, windowMinutes: 300 },
+    };
+    const props = { vendorKey: 'codex' as const, providerId: 'openai', sessionId: 'f13-codex' };
+    const view = render(<TodaySpendChip {...props} />);
+    fireEvent.mouseEnter(screen.getByRole('button', { name: '用量明细' }));
+    act(() => vi.advanceTimersByTime(300));
+    const card = screen.getByTestId('quota-hover-card');
+    expect(within(card).getByRole('status').textContent).toContain('quotaCard.codexRefreshFailed');
+    expect(within(card).getByRole('progressbar').getAttribute('aria-valuenow')).toBe('75');
+    mocks.refreshCodexRateLimits.mockClear();
+    const retryButton = within(card).getByRole('button', { name: 'quotaCard.retryQuota' });
+    fireEvent.focus(retryButton);
+    expect(mocks.refreshCodexRateLimits).not.toHaveBeenCalled();
+    fireEvent.click(retryButton);
+    expect(mocks.refreshCodexRateLimits).toHaveBeenCalledTimes(1);
+    mocks.codexQuotaReadFailed = false;
+    view.rerender(<TodaySpendChip {...props} />);
+    expect(within(card).queryByRole('status')).toBeNull();
+  });
+
+  it.each(['accountId', 'source', 'limitId'] as const)(
+    'does not celebrate a Codex %s switch as a reset',
+    (field) => {
+      mocks.codexAuthInjection = 'oauth-bearer';
+      mocks.codexSnapshot = {
+        accountId: 'account-a',
+        source: 'codex-app-server',
+        limitId: 'codex',
+        primary: { usedPercent: 40, windowMinutes: 300, resetsAt: Date.now() / 1000 - 1 },
+      };
+      const chip = <TodaySpendChip vendorKey="codex" providerId="openai" sessionId="codex" />;
+      const view = render(chip);
+      mocks.codexSnapshot = {
+        ...mocks.codexSnapshot,
+        [field]: 'another-quota',
+        primary: { usedPercent: 2, windowMinutes: 300, resetsAt: Date.now() / 1000 + 18_000 },
+      };
+      view.rerender(<TodaySpendChip vendorKey="codex" providerId="openai" sessionId="codex" />);
+      expect(screen.getByTestId('task-usage-trigger').textContent).toContain(
+        '98%',
+      );
+      expect(screen.queryByTestId('quota-reset-confetti')).toBeNull();
+    },
+  );
+
+  it.each([false, true])(
+    'does not throw confetti for a partial Claude recovery (account changed: %s)',
+    (changed) => {
+      mocks.claudeSnapshot = {
+        accountFingerprint: 'account-a',
+        source: 'unified-headers',
+        fiveHour: { utilization: 40, resetsAt: Date.now() / 1000 - 1 },
+      };
+      const view = renderClaudeSubscriptionChip();
+      mocks.claudeSnapshot = {
+        accountFingerprint: changed ? 'account-b' : 'account-a',
+        source: 'oauth-endpoint',
+        fiveHour: { utilization: 2, resetsAt: Date.now() / 1000 + 18_000 },
+      };
+      view.rerender(
+        <TodaySpendChip
+          vendorKey="cc"
+          providerId="anthropic"
+          modelId="claude-opus-5[1m]"
+          sessionId="session-1"
+        />,
+      );
+      expect(screen.queryByTestId('quota-reset-confetti')).toBeNull();
+      if (changed) {
+        expect(screen.getByTestId('task-usage-trigger').textContent).toContain(
+          '98%',
+        );
+      }
+    },
+  );
+
+  it('celebrates first 100% once across task switches and remounts', () => {
+    mocks.claudeSnapshot = { source: 'oauth-endpoint', fiveHour: { utilization: 0 } };
+    const view = renderClaudeSubscriptionChip();
+    expect(screen.queryByTestId('quota-reset-confetti')).not.toBeNull();
+    view.unmount();
+    const next = render(
+      <TodaySpendChip vendorKey="cc" providerId="anthropic" sessionId="session-2" />,
+    );
+    expect(screen.queryByTestId('quota-reset-confetti')).toBeNull();
+    mocks.claudeSnapshot = { source: 'oauth-endpoint', fiveHour: { utilization: 30 } };
+    next.rerender(<TodaySpendChip vendorKey="cc" providerId="anthropic" sessionId="session-2" />);
+    mocks.claudeSnapshot = { source: 'oauth-endpoint', fiveHour: { utilization: 0 } };
+    next.rerender(<TodaySpendChip vendorKey="cc" providerId="anthropic" sessionId="session-2" />);
+    expect(screen.queryByTestId('quota-reset-confetti')).not.toBeNull();
+  });
+
+  it('celebrates an official extra reset without changing the deadline and ignores old task snapshots', () => {
+    const resetsAt = Date.now() / 1000 + 18_000;
+    mocks.claudeSnapshot = {
+      source: 'oauth-endpoint',
+      updatedAt: 1000,
+      fiveHour: { utilization: 0, resetsAt },
+    };
+    const first = renderClaudeSubscriptionChip();
+    expect(screen.queryByTestId('quota-reset-confetti')).not.toBeNull();
+    first.unmount();
+    mocks.claudeSnapshot = {
+      source: 'oauth-endpoint',
+      updatedAt: 2000,
+      fiveHour: { utilization: 40, resetsAt },
+    };
+    const next = renderClaudeSubscriptionChip();
+    expect(screen.queryByTestId('quota-reset-confetti')).toBeNull();
+    mocks.claudeSnapshot = {
+      source: 'oauth-endpoint',
+      updatedAt: 3000,
+      fiveHour: { utilization: 0, resetsAt },
+    };
+    next.rerender(<TodaySpendChip vendorKey="cc" providerId="anthropic" sessionId="session-2" />);
+    expect(screen.queryByTestId('quota-reset-confetti')).not.toBeNull();
+    next.unmount();
+    mocks.claudeSnapshot = {
+      source: 'oauth-endpoint',
+      updatedAt: 2000,
+      fiveHour: { utilization: 40, resetsAt },
+    };
+    const stale = renderClaudeSubscriptionChip();
+    mocks.claudeSnapshot = {
+      source: 'oauth-endpoint',
+      updatedAt: 3000,
+      fiveHour: { utilization: 0, resetsAt },
+    };
+    stale.rerender(<TodaySpendChip vendorKey="cc" providerId="anthropic" sessionId="session-2" />);
+    expect(screen.queryByTestId('quota-reset-confetti')).toBeNull();
+  });
+
+  it('skips full-quota confetti under reduced motion', () => {
+    vi.stubGlobal('matchMedia', () => ({ matches: true }));
+    mocks.claudeSnapshot = { source: 'oauth-endpoint', fiveHour: { utilization: 0 } };
+    renderClaudeSubscriptionChip();
+    expect(screen.queryByTestId('quota-reset-confetti')).toBeNull();
+    vi.unstubAllGlobals();
+  });
+
+  it('完整渲染 Claude 的 5h 与当前模型周窗口', () => {
+    mocks.claudeSnapshot = {
+      source: 'oauth-endpoint',
+      fiveHour: { utilization: 12 },
+      sevenDay: { utilization: 25 },
+      scoped: [{ modelDisplayName: 'Opus', utilization: 34 }],
+    };
+
+    renderClaudeSubscriptionChip();
+
+    const trigger = screen.getByTestId('task-usage-trigger');
+    expect(trigger.textContent).toContain('5h 剩余 88%');
+    expect(trigger.textContent).toContain('Opus 周限 剩余 66%');
+  });
+
+  it('只给达到条件的窗口的剩余百分比上色（剩 ≤30% 黄、≤10% 红），其余段与任务价值保持常色', () => {
+    const estimatedValueMoney = usdMoney(7.82, 'value-estimate');
+    mocks.sessionUsage = {
+      actualMoney: null,
+      estimatedValueMoney,
+      totalMoney: estimatedValueMoney,
+    };
+    mocks.claudeSnapshot = {
+      source: 'oauth-endpoint',
+      fiveHour: { utilization: 88, severity: 'warning' },
+      sevenDay: { utilization: 20 },
+    };
+
+    renderClaudeSubscriptionChip();
+
+    const trigger = screen.getByTestId('task-usage-trigger');
+    expect(trigger.className).not.toContain('error-fg');
+    const yellow = Array.from(trigger.querySelectorAll('[class*="quota-bar-warn"]'));
+    expect(yellow.map((el) => el.textContent)).toEqual(['12%']);
+    expect(trigger.querySelector('[class*="quota-bar-crit"]')).toBeNull();
+    expect(trigger.textContent).toContain('5h 剩余 12%');
+    expect(trigger.textContent).toContain('周限 剩余 80%');
+    expect(trigger.textContent).toContain('本任务价值 $7.82');
+  });
+
+  it('服务端拒绝单独标红，额度按自身水位上色且任务价值保持常色', () => {
+    mocks.claudeSnapshot = {
+      source: 'unified-headers',
+      rateLimitStatus: 'rejected',
+      fiveHour: { utilization: 75 },
+      sevenDay: { utilization: 20 },
+    };
+
+    renderClaudeSubscriptionChip();
+
+    const trigger = screen.getByTestId('task-usage-trigger');
+    expect(trigger.className).not.toContain('error-fg');
+    expect(trigger.querySelector('[class*="error-fg"]')?.textContent).toBe('暂时受限');
+    expect(trigger.querySelector('[class*="quota-bar-warn"]')?.textContent).toBe('25%');
+    const { card } = openCardFromHover();
+    expect(within(card).getByText('已触发套餐限额')).toBeTruthy();
+  });
+
+  // Regression: an account-wide rejection caused by Fable must not label an Opus task limited.
+  // Existing coverage only exercised allowed_warning; this uses the real chip (unit/jsdom).
+  it.each(['five_hour', 'seven_day'])('旧 %s 事件后分模型拒绝仍跟随当前模型', (oldClaim) => {
+    const now = Date.now();
+    const endpoint: ClaudeSubscriptionUsageSnapshot = {
+      source: 'oauth-endpoint', updatedAt: now,
+      fiveHour: { utilization: 52 }, sevenDay: { utilization: 61 },
+      scoped: [{ modelDisplayName: 'Fable', utilization: 100 }],
+    };
+    const previous = mergeClaudeSubscriptionUsageSnapshot(endpoint, parseClaudeSdkRateLimitInfo({
+      status: 'allowed', rateLimitType: oldClaim, utilization: oldClaim === 'five_hour' ? 0.52 : 0.61,
+    }, now + 1)!);
+    mocks.claudeSnapshot = mergeClaudeSubscriptionUsageSnapshot(previous, parseClaudeSdkRateLimitInfo({
+      status: 'rejected', rateLimitType: 'seven_day_overage_included',
+    }, now + 2)!);
+    const props = { vendorKey: 'cc' as const, providerId: 'anthropic', sessionId: 'session-1' };
+    const { rerender } = render(<TodaySpendChip {...props} modelId="claude-opus-5-5" />);
+    const trigger = screen.getByTestId('task-usage-trigger');
+    expect(trigger.textContent).not.toContain('暂时受限');
+    expect(trigger.textContent).toContain('5h 剩余 48%');
+    expect(trigger.textContent).toContain('周限 剩余 39%');
+    rerender(<TodaySpendChip {...props} modelId="claude-fable-5[1m]" />);
+    expect(trigger.textContent).toContain('暂时受限');
+    rerender(<TodaySpendChip {...props} modelId="claude-opus-5-5" />);
+    expect(trigger.textContent).not.toContain('暂时受限');
+  });
+
+  it.each([
+    { fiveHour: { utilization: 100 } },
+    { sevenDay: { utilization: 100 } },
+    { representativeClaim: 'five_hour' },
+    { representativeClaim: 'seven_day' },
+  ])('其它模型用满时仍显示公共窗口的拒绝：%j', (sharedLimit) => {
+    mocks.claudeSnapshot = {
+      source: 'unified-headers', rateLimitStatus: 'rejected',
+      fiveHour: { utilization: 52 }, sevenDay: { utilization: 61 },
+      scoped: [{ modelDisplayName: 'Fable', utilization: 100 }],
+      ...sharedLimit,
+    };
+    renderClaudeSubscriptionChip();
+    expect(screen.getByTestId('task-usage-trigger').textContent).toContain('暂时受限');
+  });
+
+  it('显示吃紧的总周额度，恢复后收起，分模型额度和价值不继承颜色', () => {
+    const money = usdMoney(8.15, 'value-estimate');
+    mocks.sessionUsage = { actualMoney: null, estimatedValueMoney: money, totalMoney: money };
+    mocks.claudeSnapshot = {
+      source: 'oauth-endpoint',
+      fiveHour: { utilization: 25 },
+      sevenDay: { utilization: 76, severity: 'warning' },
+      scoped: [{ modelDisplayName: 'Fable', utilization: 10, severity: 'normal' }],
+    };
+    const props = { vendorKey: 'cc' as const, providerId: 'anthropic', modelId: 'claude-fable-5-2', sessionId: 'session-1' };
+    const { rerender } = render(<TodaySpendChip {...props} />);
+    const trigger = screen.getByTestId('task-usage-trigger');
+    expect(trigger.textContent).toContain('Fable 周限 剩余 90%');
+    expect(trigger.textContent).toContain('总周 剩余 24%');
+    expect(trigger.textContent).toContain('本任务价值 $8.15');
+    expect(trigger.className).not.toContain('error-fg');
+    expect(Array.from(trigger.querySelectorAll('[class*="quota-bar-warn"]')).map(el => el.textContent)).toEqual(['24%']);
+    expect(trigger.querySelector('[class*="error-fg"]')).toBeNull();
+    mocks.claudeSnapshot = { ...mocks.claudeSnapshot, sevenDay: { utilization: 20, severity: 'normal' } };
+    rerender(<TodaySpendChip {...props} />);
+    expect(trigger.textContent).not.toContain('总周');
+    expect(trigger.textContent).toContain('Fable 周限');
+  });
+
+  it('没有分模型窗口时不重复总周额度；其它模型的预警不影响当前任务', () => {
+    mocks.claudeSnapshot = {
+      source: 'unified-headers', rateLimitStatus: 'allowed_warning',
+      fiveHour: { utilization: 25 }, sevenDay: { utilization: 76 },
+      scoped: [{ modelDisplayName: 'Fable', utilization: 100, severity: 'critical' }],
+    };
+    renderClaudeSubscriptionChip(); // Opus
+    const trigger = screen.getByTestId('task-usage-trigger');
+    expect(trigger.textContent).not.toContain('总周');
+    expect(trigger.textContent).not.toContain('暂时受限');
+    expect(trigger.className).not.toContain('error-fg');
+    expect(trigger.querySelector('[class*="quota-bar-warn"]')?.textContent).toBe('24%');
+  });
+
+  it.each([true, false])('returns focus after reset confirmation accepted=%s', async accepted => {
+    mocks.codexAuthInjection = 'oauth-bearer';
+    mocks.codexSnapshot = { primary: { usedPercent: 100, windowMinutes: 300 } };
+    mocks.resetSnapshot = {
+      account: { email: 'te***@example.test', accountId: '…123456', planType: 'plus' },
+      rateLimits: { primary: { usedPercent: 100 } }, rateLimitsByLimitId: null,
+      rateLimitResetCredits: { availableCount: 2, credits: null },
+      resetOffer: { idempotencyKey: '00000000-0000-4000-8000-000000000001', expiresAt: null, validUntil: Date.now() + 60_000 },
+    };
+    mocks.consumeReset.mockResolvedValue({ outcome: 'reset', rateLimits: null });
+    render(<TodaySpendChip vendorKey="codex" providerId="openai" sessionId="reset" />);
+    fireEvent.mouseEnter(screen.getByTestId('task-usage-trigger'));
+    act(() => vi.advanceTimersByTime(300));
+    expect(screen.queryByRole('button', { name: 'codexResets.useReset' })).toBeNull();
+    fireEvent.click(screen.getByRole('button', { name: 'codexResets.title' }));
+    expect(screen.queryByTestId('quota-hover-card')).toBeNull();
+    expect(screen.getByRole('dialog')).toBeTruthy();
+    fireEvent.click(screen.getByRole('button', { name: 'codexResets.useReset' }));
+    expect(mocks.consumeReset).not.toHaveBeenCalled();
+    expect(screen.queryByTestId('quota-hover-card')).toBeNull();
+    const dialog = screen.getByRole('alertdialog');
+    expect(dialog.contains(document.activeElement)).toBe(true);
+    await act(async () => fireEvent.click(within(dialog).getByRole('button', { name: accepted ? 'codexResets.consumeOnce' : 'commonUi.confirmDialog.cancel' })));
+    act(() => vi.advanceTimersByTime(250));
+    expect(document.activeElement).toBe(screen.getByTestId('task-usage-trigger'));
+    expect(screen.queryByTestId('quota-hover-card')).toBeNull();
+    if (accepted) {
+      expect(mocks.consumeReset).toHaveBeenCalledExactlyOnceWith(mocks.resetSnapshot.resetOffer!.idempotencyKey, 'openai');
+      expect(mocks.refreshCodexRateLimits).toHaveBeenCalled();
+    } else {
+      expect(mocks.consumeReset).not.toHaveBeenCalled();
+    }
+  });
+
+  it('closes the reset list with X and restores focus without reopening the quota card', async () => {
+    mocks.codexAuthInjection = 'oauth-bearer';
+    mocks.codexSnapshot = { primary: { usedPercent: 100, windowMinutes: 300 } };
+    mocks.resetSnapshot = {
+      account: { email: 'te***@example.test', accountId: '…123456', planType: 'plus' },
+      rateLimits: { primary: { usedPercent: 100 } }, rateLimitsByLimitId: null,
+      rateLimitResetCredits: { availableCount: 2, credits: null },
+      resetOffer: { idempotencyKey: '00000000-0000-4000-8000-000000000001', expiresAt: null, validUntil: Date.now() + 60_000 },
+    };
+    mocks.consumeReset.mockResolvedValue({ outcome: 'reset', rateLimits: null });
+    render(<TodaySpendChip vendorKey="codex" providerId="openai" sessionId="reset" />);
+    const trigger = screen.getByTestId('task-usage-trigger');
+    act(() => trigger.focus());
+    act(() => vi.advanceTimersByTime(300));
+    expect(screen.queryByRole('button', { name: 'codexResets.useReset' })).toBeNull();
+    fireEvent.click(screen.getByRole('button', { name: 'codexResets.title' }));
+    expect(screen.queryByTestId('quota-hover-card')).toBeNull();
+    expect(screen.getByRole('dialog')).toBeTruthy();
+    fireEvent.click(screen.getByRole('button', { name: 'common.dismiss' }));
+    act(() => vi.advanceTimersByTime(0));
+    expect(screen.queryByTestId('quota-hover-card')).toBeNull();
+    expect(screen.queryByRole('dialog')).toBeNull();
+    expect(document.activeElement).toBe(trigger);
+    expect(mocks.consumeReset).not.toHaveBeenCalled();
+  });
+
+  it('uses the clicked reset row and closes the list before confirming', async () => {
+    mocks.codexAuthInjection = 'oauth-bearer';
+    mocks.codexSnapshot = { primary: { usedPercent: 100, windowMinutes: 300 } };
+    mocks.resetSnapshot = {
+      account: { email: 'te***@example.test', accountId: '…123456', planType: 'plus' },
+      rateLimits: { primary: { usedPercent: 100 } }, rateLimitsByLimitId: null,
+      rateLimitResetCredits: { availableCount: 2, credits: [
+        { status: 'available', resetType: 'codexRateLimits', grantedAt: 1, expiresAt: Date.now() / 1000 + 100_000,
+          title: 'Later', description: null, resetOffer: { idempotencyKey: '00000000-0000-4000-8000-000000000002', expiresAt: null, validUntil: Date.now() + 60_000 } },
+        { status: 'available', resetType: 'codexRateLimits', grantedAt: 1, expiresAt: Date.now() / 1000 + 50_000,
+          title: 'Earlier', description: null, resetOffer: { idempotencyKey: '00000000-0000-4000-8000-000000000001', expiresAt: null, validUntil: Date.now() + 60_000 } },
+      ] },
+      resetOffer: { idempotencyKey: '00000000-0000-4000-8000-000000000001', expiresAt: null, validUntil: Date.now() + 60_000 },
+    };
+    mocks.consumeReset.mockResolvedValue({ outcome: 'reset', rateLimits: null });
+    render(<TodaySpendChip vendorKey="codex" providerId="openai" sessionId="reset" />);
+    fireEvent.mouseEnter(screen.getByTestId('task-usage-trigger'));
+    act(() => vi.advanceTimersByTime(300));
+    expect(screen.queryByRole('button', { name: 'codexResets.useReset' })).toBeNull();
+    fireEvent.click(screen.getByRole('button', { name: 'codexResets.title' }));
+    expect(screen.queryByTestId('quota-hover-card')).toBeNull();
+    expect(screen.getByRole('dialog')).toBeTruthy();
+    expect(screen.getByRole('button', { name: 'common.dismiss' })).toBeTruthy();
+    fireEvent.click(screen.getAllByRole('button', { name: 'codexResets.useReset' })[1]);
+    expect(mocks.consumeReset).not.toHaveBeenCalled();
+    expect(screen.queryByTestId('quota-hover-card')).toBeNull();
+    const dialog = screen.getByRole('alertdialog');
+    expect(dialog.contains(document.activeElement)).toBe(true);
+    await act(async () => fireEvent.click(within(dialog).getByRole('button', { name: 'codexResets.consumeOnce' })));
+    expect(mocks.consumeReset).toHaveBeenCalledExactlyOnceWith(mocks.resetSnapshot.rateLimitResetCredits!.credits![0].resetOffer!.idempotencyKey, 'openai');
+    expect(mocks.refreshCodexRateLimits).toHaveBeenCalled();
+  });
+
+  it('完整渲染 Codex app-server 的两个权威窗口', () => {
+    mocks.codexAuthInjection = 'oauth-bearer';
+    mocks.codexSnapshot = {
+      source: 'codex-app-server',
+      limitId: 'codex',
+      primary: { usedPercent: 12, windowMinutes: 300 },
+      secondary: { usedPercent: 34, windowMinutes: 10_080 },
+    };
+
+    render(
+      <TodaySpendChip
+        vendorKey="codex"
+        providerId="openai"
+        modelId="gpt-5.6-sol"
+        sessionId="session-codex"
+      />,
+    );
+
+    const trigger = screen.getByTestId('task-usage-trigger');
+    expect(trigger.textContent).toContain('5h 剩余 88%');
+    expect(trigger.textContent).toContain('7天 剩余 66%');
+  });
+
+  // Regression: Codex windows never colored on the chip, however little was left.
+  it('Codex 窗口也按共用规则上色：剩 ≤10% 红、≤30% 黄', () => {
+    mocks.codexAuthInjection = 'oauth-bearer';
+    mocks.codexSnapshot = {
+      source: 'codex-app-server',
+      limitId: 'codex',
+      primary: { usedPercent: 95, windowMinutes: 300 },
+      secondary: { usedPercent: 75, windowMinutes: 10_080 },
+    };
+
+    render(<TodaySpendChip vendorKey="codex" providerId="openai" modelId="gpt-5.6-sol" sessionId="session-codex" />);
+
+    const trigger = screen.getByTestId('task-usage-trigger');
+    expect(Array.from(trigger.querySelectorAll('[class*="quota-bar-crit"]')).map((el) => el.textContent)).toEqual(['5%']);
+    expect(Array.from(trigger.querySelectorAll('[class*="quota-bar-warn"]')).map((el) => el.textContent)).toEqual(['25%']);
+  });
+
   it('悬停约 300ms 后显示额度卡片', () => {
     renderClaudeSubscriptionChip();
-    const trigger = screen.getByRole('button', { name: '打开 Claude 用量页面' });
+    const trigger = screen.getByTestId('task-usage-trigger');
 
     fireEvent.mouseEnter(trigger);
     act(() => vi.advanceTimersByTime(299));
@@ -206,6 +878,11 @@ describe('TodaySpendChip Claude subscription popover', () => {
     expect(screen.getByText(/^74\.0k/)).toBeTruthy();
     expect(screen.getByText('（输入 2 · 输出 16）')).toBeTruthy();
     expect(screen.getByText('读 0 · 写 74.0k · 命中 0%')).toBeTruthy();
+    const performance = screen.getByTestId('quota-performance');
+    expect(within(performance).getByText('耗时')).toBeTruthy();
+    expect(within(performance).getByText('12.3秒')).toBeTruthy();
+    expect(within(performance).getByText('速度')).toBeTruthy();
+    expect(within(performance).getByText('40 tokens/秒')).toBeTruthy();
     expect(screen.getByText('claude-opus-5[1m]')).toBeTruthy();
     expect(screen.getByText('缓存命中率偏低，本轮较多上下文重新计费')).toBeTruthy();
     expect(document.activeElement).toBe(document.body);
@@ -229,9 +906,34 @@ describe('TodaySpendChip Claude subscription popover', () => {
     expect(screen.queryByText('（输入 74000 · 输出 16）')).toBeNull();
   });
 
+  it('没有可靠耗时时不显示 TPS，现有用量明细保持不变', () => {
+    setLatestUsageMessage({
+      turnUsageDetails: {
+        ...TURN_USAGE_DETAILS,
+        durationMs: undefined,
+        turnDurationMs: undefined,
+      },
+    });
+    renderClaudeSubscriptionChip();
+    openCardFromHover();
+    expect(screen.queryByText('速度')).toBeNull();
+    expect(screen.getByText('（输入 2 · 输出 16）')).toBeTruthy();
+  });
+
+  it('只有整轮耗时时直接显示耗时，不显示缺失速度占位', () => {
+    setLatestUsageMessage({
+      turnUsageDetails: { ...TURN_USAGE_DETAILS, durationMs: undefined },
+    });
+    renderClaudeSubscriptionChip();
+    openCardFromHover();
+    const performance = screen.getByTestId('quota-performance');
+    expect(within(performance).getByText('耗时')).toBeTruthy();
+    expect(within(performance).getByText('12.3秒')).toBeTruthy();
+  });
+
   it('键盘聚焦打开时把焦点移入卡片，关闭后归还 trigger', () => {
     renderClaudeSubscriptionChip();
-    const trigger = screen.getByRole('button', { name: '打开 Claude 用量页面' });
+    const trigger = screen.getByTestId('task-usage-trigger');
 
     act(() => trigger.focus());
     const card = screen.getByTestId('quota-hover-card');
@@ -262,7 +964,7 @@ describe('TodaySpendChip Claude subscription popover', () => {
 
   it('卡片内保持键盘焦点时，鼠标移入再移出不会关闭', () => {
     renderClaudeSubscriptionChip();
-    const trigger = screen.getByRole('button', { name: '打开 Claude 用量页面' });
+    const trigger = screen.getByTestId('task-usage-trigger');
 
     act(() => trigger.focus());
     const card = screen.getByTestId('quota-hover-card');
@@ -279,7 +981,7 @@ describe('TodaySpendChip Claude subscription popover', () => {
 
   it('切出 Claude 订阅形态时关闭卡片、清理定时器并归还焦点', () => {
     const { rerender } = renderClaudeSubscriptionChip();
-    const trigger = screen.getByRole('button', { name: '打开 Claude 用量页面' });
+    const trigger = screen.getByTestId('task-usage-trigger');
 
     act(() => trigger.focus());
     const dashboardButton = within(screen.getByTestId('quota-hover-card')).getByRole('button', {
@@ -299,7 +1001,7 @@ describe('TodaySpendChip Claude subscription popover', () => {
     );
 
     expect(screen.queryByTestId('quota-hover-card')).toBeNull();
-    const gatewayChip = document.querySelector<HTMLElement>('[tabindex="-1"]');
+    const gatewayChip = screen.getByRole('button', { name: '用量明细' });
     expect(gatewayChip).toBeTruthy();
     expect(document.activeElement).toBe(gatewayChip);
 
@@ -327,7 +1029,7 @@ describe('TodaySpendChip Claude subscription popover', () => {
         <button type="button">下一控件</button>
       </>,
     );
-    const trigger = screen.getByRole('button', { name: '打开 Claude 用量页面' });
+    const trigger = screen.getByTestId('task-usage-trigger');
 
     act(() => trigger.focus());
     const dashboardButton = within(screen.getByTestId('quota-hover-card')).getByRole('button', {
@@ -377,7 +1079,7 @@ describe('TodaySpendChip Claude subscription popover', () => {
 
     try {
       const { unmount } = renderClaudeSubscriptionChip();
-      const trigger = screen.getByRole('button', { name: '打开 Claude 用量页面' });
+      const trigger = screen.getByTestId('task-usage-trigger');
 
       fireEvent.mouseEnter(trigger);
       unmount();
@@ -390,10 +1092,12 @@ describe('TodaySpendChip Claude subscription popover', () => {
     }
   });
 
-  it('点击 chip 仍只打开一次 Claude 看板', () => {
+  it('点击 chip 固定明细，只有面板内的看板按钮才打开外部页面', () => {
     renderClaudeSubscriptionChip();
 
-    fireEvent.click(screen.getByRole('button', { name: '打开 Claude 用量页面' }));
+    fireEvent.click(screen.getByTestId('task-usage-trigger'));
+    expect(mocks.openExternal).not.toHaveBeenCalled();
+    fireEvent.click(within(screen.getByTestId('quota-hover-card')).getByRole('button', { name: '打开 Claude 用量页面' }));
     expect(mocks.openExternal).toHaveBeenCalledTimes(1);
     expect(mocks.openExternal).toHaveBeenCalledWith(CLAUDE_USAGE_URL);
   });
@@ -423,7 +1127,7 @@ describe('TodaySpendChip Claude subscription popover', () => {
   it('把混合会话合计及实际费用和价值估算拆分传入卡片', () => {
     mocks.sessionUsage = {
       actualMoney: usdMoney(0.25),
-      estimatedValueMoney: usdMoney(0.50, 'value-estimate'),
+      estimatedValueMoney: usdMoney(0.5, 'value-estimate'),
       totalMoney: {
         ...usdMoney(0.75),
         approximate: true,
@@ -439,6 +1143,24 @@ describe('TodaySpendChip Claude subscription popover', () => {
     expect(within(sessionSection).getByText('本任务已用 $0.25')).toBeTruthy();
     expect(within(sessionSection).getByText('本任务价值 $0.50')).toBeTruthy();
     expect(screen.getByText('本轮消耗：$0.46')).toBeTruthy();
+  });
+
+  it('异币种费用与订阅估值在状态栏和卡片分别显示，无 token 时也保留金额', () => {
+    mocks.sessionUsage = {
+      actualMoney: { ...usdMoney(1), currency: 'CNY' },
+      estimatedValueMoney: usdMoney(0.5, 'value-estimate'),
+      totalMoney: null,
+    };
+    mocks.sessionTokens = null;
+    renderClaudeSubscriptionChip();
+    const chip = screen.getByTestId('task-usage-trigger');
+    expect(chip.textContent).toContain('本任务已用 ¥1.00');
+    expect(chip.textContent).toContain('本任务价值 $0.50');
+    const { card } = openCardFromHover();
+    const section = within(card).getByTestId('quota-session-usage');
+    expect(within(section).getByText('本任务已用 ¥1.00')).toBeTruthy();
+    expect(within(section).getByText('本任务价值 $0.50')).toBeTruthy();
+    expect(section.textContent).not.toContain('1.50');
   });
 
   it('第三方参考价的近似实际费用仍标为本任务已用', () => {
@@ -462,7 +1184,7 @@ describe('TodaySpendChip Claude subscription popover', () => {
   });
 
   it('纯订阅价值估算仍标为本任务价值', () => {
-    const estimatedValueMoney = usdMoney(0.50, 'value-estimate');
+    const estimatedValueMoney = usdMoney(0.5, 'value-estimate');
     mocks.sessionUsage = {
       actualMoney: null,
       estimatedValueMoney,
@@ -470,6 +1192,9 @@ describe('TodaySpendChip Claude subscription popover', () => {
     };
 
     renderClaudeSubscriptionChip();
+    expect(screen.getByTestId('task-usage-trigger').textContent).toContain(
+      '本任务价值 $0.50',
+    );
     const { card } = openCardFromHover();
     const sessionSection = within(card).getByTestId('quota-session-usage');
 
@@ -486,21 +1211,21 @@ describe('TodaySpendChip Claude subscription popover', () => {
     });
     const equalAmount = renderClaudeSubscriptionChip();
     openCardFromHover();
-    expect(screen.getByText('最近一轮用户请求累计')).toBeTruthy();
+    expect(screen.getByText('最近一轮')).toBeTruthy();
     expect(screen.queryByText('最后一个 SDK 分段')).toBeNull();
     expect(screen.getAllByText('本轮 token 价值：$0.46')).toHaveLength(1);
 
     equalAmount.unmount();
     vi.clearAllTimers();
     setLatestUsageMessage({
-      turnMoney: usdMoney(0.20),
-      userTurnMoney: usdMoney(0.70),
+      turnMoney: usdMoney(0.2),
+      userTurnMoney: usdMoney(0.7),
       turnCostIsEstimate: false,
       userTurnCostIsEstimate: false,
     });
     renderClaudeSubscriptionChip();
     openCardFromHover();
-    expect(screen.getByText('最近一轮用户请求累计')).toBeTruthy();
+    expect(screen.getByText('最近一轮')).toBeTruthy();
     expect(screen.getByText('本轮消耗：$0.70')).toBeTruthy();
     expect(screen.queryByText('最后一个 SDK 分段')).toBeNull();
     expect(screen.getByText(/^74\.0k/)).toBeTruthy();
@@ -559,7 +1284,7 @@ describe('TodaySpendChip Claude subscription popover', () => {
     renderClaudeSubscriptionChip();
     openCardFromHover();
 
-    expect(screen.getByText('最近一轮用户请求累计')).toBeTruthy();
+    expect(screen.getByText('最近一轮')).toBeTruthy();
     expect(screen.getByText('本轮消耗：$0.70')).toBeTruthy();
     expect(screen.getByText(/^197/)).toBeTruthy();
     expect(screen.getByText('按模型拆分：')).toBeTruthy();
@@ -599,19 +1324,232 @@ describe('TodaySpendChip Claude subscription popover', () => {
     expect(screen.queryByText('claude-opus-5[1m]')).toBeNull();
   });
 
-  it('非 Claude 订阅形态继续使用旧 Tip，不挂载额度卡片', () => {
+  it.each([
+    ['codex', 'openai', 'gpt-5.6-sol'],
+    ['cc', 'openai', 'chatgpt/gpt-5.6-sol'],
+    ['pi', 'xai', 'grok-4.6'],
+    ['cc', 'xd', 'claude-opus-5'],
+    ['codex', 'custom', 'custom-model'],
+  ] as const)('共用卡片和本轮明细：%s / %s', (vendorKey, providerId, modelId) => {
+    mocks.codexAuthInjection = 'oauth-bearer';
     render(
       <TodaySpendChip
-        vendorKey="cc"
-        providerId="xd"
+        vendorKey={vendorKey}
+        providerId={providerId}
+        modelId={modelId}
         sessionId="session-1"
       />,
     );
+    const trigger = screen.getByTestId('task-usage-trigger');
+    fireEvent.mouseEnter(trigger);
+    act(() => vi.advanceTimersByTime(300));
+    const card = screen.getByTestId('quota-hover-card');
+    expect(within(card).getByText('本轮消耗：$0.46')).toBeTruthy();
+    expect(screen.queryByRole('tooltip')).toBeNull();
+    fireEvent.mouseLeave(trigger);
+    fireEvent.mouseEnter(card);
+    act(() => vi.advanceTimersByTime(250));
+    expect(screen.getByTestId('quota-hover-card')).toBeTruthy();
+  });
 
-    const legacyChip = document.querySelector('.inline-flex.h-5.shrink-0.items-center');
-    expect(legacyChip).toBeTruthy();
-    fireEvent.mouseEnter(legacyChip as HTMLElement);
-    act(() => vi.advanceTimersByTime(1_000));
+  it.each(['env-key', 'provider-oauth', null])(
+    '所选独立账号显示自己的额度，不依赖本机 Codex 路由 %s',
+    (route) => {
+      mocks.codexAuthInjection = route;
+      // 本机 openai 连接已删除；两份独立账号仍能使用自己的订阅。
+      mocks.providers = ['account-a', 'account-b'].map(
+        (id) =>
+          ({
+            id,
+            auth: { method: 'oauth', native: 'codex' },
+            openAiAccount: { source: 'oauth', identity: `${id}@example.com` },
+          }) as ProviderView,
+      );
+      mocks.accountSnapshots = {
+        'account-a': { planType: 'pro', primary: { usedPercent: 16, windowMinutes: 10080 } },
+        'account-b': { planType: 'plus', primary: { usedPercent: 61, windowMinutes: 10080 } },
+      };
+      const view = render(
+        <TodaySpendChip
+          vendorKey="codex"
+          providerId="account-a"
+          modelId="gpt-6-astra"
+          sessionId="session-1"
+        />,
+      );
+      expect(screen.getByTestId('task-usage-trigger').textContent).toContain(
+        '84%',
+      );
+      act(() => screen.getByTestId('task-usage-trigger').focus());
+      expect(within(screen.getByTestId('quota-hover-card')).getByText('Pro')).toBeTruthy();
+      expect(screen.getByText('account-a@example.com')).toBeTruthy();
+      expect(screen.queryByText('account-b@example.com')).toBeNull();
+
+      view.rerender(
+        <TodaySpendChip
+          vendorKey="codex"
+          providerId="account-b"
+          modelId="gpt-6-astra"
+          sessionId="session-1"
+        />,
+      );
+      expect(screen.getByTestId('task-usage-trigger').textContent).toContain(
+        '39%',
+      );
+      expect(screen.queryByTestId('quota-hover-card')).toBeNull();
+
+      fireEvent.mouseEnter(screen.getByTestId('task-usage-trigger'));
+      act(() => vi.advanceTimersByTime(300));
+      expect(screen.getByText('account-b@example.com')).toBeTruthy();
+      expect(screen.queryByText('account-a@example.com')).toBeNull();
+
+      view.rerender(
+        <TodaySpendChip
+          vendorKey="codex"
+          providerId="custom-api"
+          modelId="gpt-6-astra"
+          sessionId="session-1"
+        />,
+      );
+      expect(screen.queryByRole('button', { name: '打开 Codex 用量页面' })).toBeNull();
+      expect(screen.getByRole('button', { name: '用量明细' }).textContent).not.toContain('%');
+    },
+  );
+
+  it('未指定账号仍按运行路由判断，XD 折扣模型与自定义 API 不展示订阅额度', () => {
+    mocks.codexSnapshot = { primary: { usedPercent: 16, windowMinutes: 10080 } };
+    mocks.codexAuthInjection = 'env-key';
+    const view = render(<TodaySpendChip vendorKey="codex" modelId="gpt-6-astra" />);
+    expect(screen.queryByRole('button', { name: '打开 Codex 用量页面' })).toBeNull();
+    mocks.codexAuthInjection = 'oauth-bearer';
+    view.rerender(<TodaySpendChip vendorKey="codex" modelId="gpt-6-astra" />);
+    expect(screen.getByTestId('task-usage-trigger').textContent).toContain(
+      '84%',
+    );
+    for (const providerId of [undefined, 'xd', 'custom-api']) {
+      view.rerender(
+        <TodaySpendChip vendorKey="codex" providerId={providerId} modelId="codex/gpt-6-astra" />,
+      );
+      expect(screen.queryByRole('button', { name: '打开 Codex 用量页面' })).toBeNull();
+    }
+  });
+
+  it.each([
+    ['codex', 'openai', 'gpt-6-astra', 'openAiAccount'],
+    ['cc', 'anthropic', 'claude-opus-5', 'subscriptionAccount'],
+    ['pi', 'xai', 'xai/grok-4.6', 'subscriptionAccount'],
+  ] as const)('默认 %s 订阅显示对应账号身份', (vendorKey, id, modelId, accountField) => {
+    mocks.codexAuthInjection = 'oauth-bearer';
+    mocks.providers = [
+      {
+        id,
+        name: id,
+        source: 'builtin',
+        connected: true,
+        agents: [],
+        auth: { method: 'oauth' },
+        routing: {},
+        models: {},
+        [accountField]: { source: 'oauth', identity: `${id}@example.com` },
+      },
+    ];
+    render(<TodaySpendChip vendorKey={vendorKey} modelId={modelId} />);
+    fireEvent.mouseEnter(screen.getByRole('button'));
+    act(() => vi.advanceTimersByTime(300));
+    expect(screen.getByText(`${id}@example.com`)).toBeTruthy();
+  });
+
+  it('ChatGPT 动态窗口和套餐渲染为与 Claude 相同的进度条', () => {
+    mocks.codexAuthInjection = 'oauth-bearer';
+    mocks.codexSnapshot = {
+      planType: 'plus',
+      primary: { usedPercent: 22, windowMinutes: 120 },
+      secondary: { usedPercent: 48, windowMinutes: 10080 },
+    };
+    render(<TodaySpendChip vendorKey="codex" providerId="openai" sessionId="session-1" />);
+    act(() => screen.getByTestId('task-usage-trigger').focus());
+    const card = screen.getByTestId('quota-hover-card');
+    expect(within(card).getByText('ChatGPT')).toBeTruthy();
+    expect(within(card).getByText('Plus')).toBeTruthy();
+    expect(within(card).getByText('2h')).toBeTruthy();
+    expect(
+      within(card)
+        .getAllByRole('progressbar')
+        .map((bar) => bar.getAttribute('aria-valuenow')),
+    ).toEqual(['78', '52']);
+    expect(within(card).getByText('剩余 52%')).toBeTruthy();
+  });
+
+  it('Grok 共享池只显示真实剩余周限，不将产品贡献伪装成独立额度，过期后移除旧百分比', () => {
+    mocks.xaiSnapshot = {
+      planLabel: 'SuperGrok Heavy',
+      creditUsagePercent: 8,
+      updatedAt: Date.now(),
+      resetsAt: Date.now() / 1000 + 100,
+      productUsage: [{ product: 'GrokBuild', usagePercent: 8 }],
+    };
+    const view = render(
+      <TodaySpendChip vendorKey="pi" providerId="xai" modelId="grok-4.6" sessionId="session-1" />,
+    );
+    act(() => screen.getByTestId('task-usage-trigger').focus());
+    expect(screen.getAllByRole('progressbar')).toHaveLength(1);
+    expect(screen.queryByTestId('quota-window-breakdown')).toBeNull();
+    expect(screen.getByRole('progressbar').getAttribute('aria-valuenow')).toBe('92');
+    expect(screen.getByText('剩余 92%')).toBeTruthy();
+    expect(screen.getAllByText(/重置$/)).toHaveLength(1);
+    mocks.xaiSnapshot = { ...mocks.xaiSnapshot, updatedAt: Date.now() - 31 * 60_000 };
+    view.rerender(
+      <TodaySpendChip vendorKey="pi" providerId="xai" modelId="grok-4.6" sessionId="session-1" />,
+    );
+    expect(screen.queryAllByRole('progressbar')).toHaveLength(0);
+    expect(screen.getByText('SuperGrok Heavy')).toBeTruthy();
+  });
+
+  it('没有看板按钮时键盘进入滚动区并在 Escape 后归还焦点', () => {
+    render(<TodaySpendChip vendorKey="cc" providerId="xd" sessionId="session-1" />);
+    const trigger = screen.getByRole('button', { name: '用量明细' });
+    act(() => trigger.focus());
+    const card = screen.getByTestId('quota-hover-card');
+    expect(document.activeElement).toBe(within(card).getByRole('region'));
+    expect(within(card).queryByRole('button')).toBeNull();
+    fireEvent.keyDown(document, { key: 'Escape' });
     expect(screen.queryByTestId('quota-hover-card')).toBeNull();
+    expect(document.activeElement).toBe(trigger);
+    expect(mocks.openExternal).not.toHaveBeenCalled();
+  });
+
+  it('远程任务只显示任务用量，不混入本机配额', () => {
+    mocks.codexAuthInjection = 'oauth-bearer';
+    mocks.codexSnapshot = { primary: { usedPercent: 99 } };
+    mocks.sessionTokens = 123_000;
+    render(
+      <TodaySpendChip
+        vendorKey="codex"
+        providerId="openai"
+        sessionId="session-1"
+        deviceLinkDeviceId="remote"
+      />,
+    );
+    act(() => screen.getByRole('button', { name: '用量明细' }).focus());
+    const card = screen.getByTestId('quota-hover-card');
+    expect(within(card).queryByRole('progressbar')).toBeNull();
+    expect(within(card).queryByRole('button')).toBeNull();
+    expect(within(card).getByText('本任务 Token 123.0k')).toBeTruthy();
+    expect(within(card).getByText('本轮消耗：$0.46')).toBeTruthy();
+  });
+
+  it('网关月预算与日软限额共用进度条，保留原生币种', () => {
+    mocks.gatewaySnapshot = {
+      spend: 40,
+      maxBudget: 100,
+      currency: 'CNY',
+      todaySpend: 3,
+      fetchedAt: Date.now(),
+    };
+    render(<TodaySpendChip vendorKey="cc" providerId="xd" sessionId="session-1" />);
+    act(() => screen.getByRole('button', { name: '用量明细' }).focus());
+    expect(
+      screen.getAllByRole('progressbar').map((bar) => bar.getAttribute('aria-valuenow')),
+    ).toEqual(['80', '60']);
   });
 });

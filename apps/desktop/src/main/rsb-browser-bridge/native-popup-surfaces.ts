@@ -8,6 +8,7 @@ import {
   type WebContents,
 } from 'electron';
 
+import { selectPersistableFavicon } from '../../shared/faviconPersistence.js';
 import {
   RSB_NATIVE_POPUP_CLAIM_CHANNEL,
   RSB_NATIVE_POPUP_CLOSE_CHANNEL,
@@ -166,7 +167,9 @@ function installSurfaceObservers(record: SurfaceRecord): void {
   wc.on('did-navigate-in-page', publish);
   wc.on('page-title-updated', publish);
   wc.on('page-favicon-updated', (_event, favicons) => {
-    record.favicon = favicons.find((candidate) => candidate.trim().length > 0) ?? null;
+    // 与 renderer WebView 保持三态语义:null = 尚未观测到;'' = Chromium
+    // 明确报告无图标;非空字符串 = 从全部候选中选出的可持久化 URL。
+    record.favicon = selectPersistableFavicon(favicons);
     publish();
   });
   wc.on('audio-state-changed', publish);

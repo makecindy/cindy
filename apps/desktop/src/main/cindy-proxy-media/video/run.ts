@@ -187,11 +187,11 @@ export async function submitAndAwaitVideo(
    * 默认(没登记就说不上来)。**刻意不放进 `submitted`**——那个对象会整体摊进
    * 请求体,推定值一旦漏进去就等于替插件表了态,存量产出的兼容也就破了。
    */
-  const effectiveAudio =
-    params.audio ?? (caps.supportsAudio ? caps.audioDefault : undefined);
+  const effectiveAudio = params.audio ?? caps.audioDefault;
   const req: VideoGenerationRequest = {
     prompt: params.prompt,
     ...submitted,
+    ratioWasExplicit: params.ratio !== undefined,
     // 三态:只有插件显式表态才写这个键,否则请求体里连键都没有。
     ...(params.audio !== undefined ? { audio: params.audio } : {}),
     images: images.length > 0 ? images : undefined,

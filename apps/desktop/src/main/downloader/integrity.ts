@@ -15,10 +15,10 @@
 import crypto from 'node:crypto';
 import fs from 'node:fs';
 
-export function computeHash(filePath: string): Promise<string> {
+export function computeHash(filePath: string, signal?: AbortSignal): Promise<string> {
   return new Promise((resolve, reject) => {
     const hash = crypto.createHash('sha256');
-    const stream = fs.createReadStream(filePath);
+    const stream = fs.createReadStream(filePath, { signal });
     stream.on('data', (chunk: string | Buffer) => {
       hash.update(typeof chunk === 'string' ? Buffer.from(chunk) : chunk);
     });
@@ -51,7 +51,10 @@ export interface StreamingHasher {
  * prime, once via update()), producing a guaranteed CHECKSUM mismatch on every
  * resume — and CHECKSUM is non-retryable, so the whole download dies.
  */
-export function createStreamingHasher(existingPartPath: string | null): StreamingHasher {
+export function createStreamingHasher(
+  existingPartPath: string | null,
+  signal?: AbortSignal,
+): StreamingHasher {
   const hash = crypto.createHash('sha256');
   let primed: Promise<void>;
 
@@ -73,6 +76,7 @@ export function createStreamingHasher(existingPartPath: string | null): Streamin
         return;
       }
       const stream = fs.createReadStream(existingPartPath, {
+        signal,
         start: 0,
         end: priorSize - 1, // inclusive — pins the read to original EOF
       });
@@ -83,6 +87,9 @@ export function createStreamingHasher(existingPartPath: string | null): Streamin
       stream.on('error', reject);
     });
   }
+
+  // Observe early prime rejection even if opening the destination fails first.
+  void primed.catch(() => {});
 
   return {
     /**
@@ -104,10 +111,12 @@ export function createStreamingHasher(existingPartPath: string | null): Streamin
      */
     async update(chunk: Buffer): Promise<void> {
       await primed;
+      signal?.throwIfAborted();
       hash.update(chunk);
     },
     async digest(): Promise<string> {
       await primed;
+      signal?.throwIfAborted();
       return hash.digest('hex');
     },
   };

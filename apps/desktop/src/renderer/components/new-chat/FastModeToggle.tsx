@@ -56,7 +56,7 @@ export function FastModeToggle({
       )}
       <span
         className={cn(
-          'text-[13px] font-normal leading-none',
+          'text-13 font-normal leading-none',
           !enabled && 'text-[var(--fast-toggle-off)]',
         )}
         style={enabled ? { color } : undefined}

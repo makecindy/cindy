@@ -24,9 +24,8 @@ const schema = await import('../../localDb/schema');
 const integrationCache = await import('../integrationCache');
 
 const MIGRATION_0070 = path.resolve(__dirname, '../../../../drizzle/0070_woozy_harpoon.sql');
-// eslint-disable-next-line @typescript-eslint/no-require-imports
-const migration0071 = require('../../../../drizzle/scripts/0071_bright_ultron.ts') as {
-  run: (db: Database.Database) => void;
+const { default: migration0071 } = (await import('../../../../drizzle/scripts/0071_bright_ultron')) as {
+  default: { run: (db: Database.Database) => void };
 };
 
 const BYTES_A = Buffer.from('feishu-image-bytes-a');
@@ -168,6 +167,21 @@ describe('miss 路径', () => {
 });
 
 describe('staged write rollback', () => {
+  it('accepts a file source without buffering it, and guards owner changes before persistent publication', async () => {
+    const file = path.join(tmpUserData, 'received-file');
+    fs.writeFileSync(file, BYTES_A);
+    const key = 'remote-file:source:version';
+    const written = await integrationCache.integrationCachePut({
+      cacheKey: key, integration: 'remote-file', filePath: file, mimeType: 'image/png',
+      assertStillValid: () => {},
+    }, db);
+    expect(fs.readFileSync(written.absPath)).toEqual(BYTES_A);
+    await expect(integrationCache.integrationCachePut({
+      cacheKey: 'remote-file:cancelled', integration: 'remote-file', filePath: file, mimeType: 'image/png',
+      assertStillValid: () => { throw new Error('owner changed'); },
+    }, db)).rejects.toThrow('owner changed');
+    expect(await integrationCache.integrationCacheGet('remote-file:cancelled', db)).toBeNull();
+  });
   it('removes only the integration ref created by that write', async () => {
     const first = await integrationCache.integrationCachePut(
       { cacheKey: KEY, integration: 'feishu', buffer: BYTES_A, mimeType: 'image/png' },

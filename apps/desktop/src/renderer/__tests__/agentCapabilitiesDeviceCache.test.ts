@@ -17,10 +17,12 @@ interface Caps {
     contextWindow: number;
     efforts: string[];
     defaultEffort: string | null;
+    effortsUnknown?: boolean;
   }>;
   hasFastMode: boolean;
   effortLevels: unknown[];
   permissionModes: unknown[];
+  writableDirs?: { supported: boolean };
 }
 const caps = (label: string, ctx = 1): Caps => ({
   availableModels: [
@@ -45,7 +47,9 @@ function stubLocalCatalog() {
   let providerId = 'provider-old';
   let capabilityRevision = 'old';
   let unavailableAgent: string | null = null;
+  let transientError: { agent: string; message: string } | null = null;
   const getCapabilities = vi.fn(async (agent: string) => {
+    if (transientError?.agent === agent) throw new Error(transientError.message);
     if (agent === unavailableAgent) throw new Error(`Agent '${agent}' is not registered`);
     return caps(`${capabilityRevision}:${agent}`);
   });
@@ -64,6 +68,11 @@ function stubLocalCatalog() {
     },
     setUnavailableAgent(agent: string | null): void {
       unavailableAgent = agent;
+      transientError = null;
+    },
+    setAgentError(agent: string | null, message = 'temporary capability failure'): void {
+      transientError = agent ? { agent, message } : null;
+      unavailableAgent = null;
     },
   };
 }
@@ -101,7 +110,10 @@ describe('useAgentCapabilities deviceId-aware cache', () => {
   it('本机目录快照在可选 Pi 不可用时仍返回 Claude Code 与 Codex 能力', async () => {
     const { getCapabilities } = stubElectron();
     getCapabilities.mockImplementation(async (agent: string) => {
-      if (agent === 'pi') throw new Error("Agent 'pi' is not registered");
+      if (agent === 'pi')
+        throw new Error(
+          "[MAKER_NOT_FOUND] Agent 'pi' is not registered (available: claude-code, codex)",
+        );
       return caps(`local:${agent}`);
     });
     const mod = await import('@/hooks/useAgentCapabilities');
@@ -146,12 +158,13 @@ describe('useAgentCapabilities deviceId-aware cache', () => {
     expect(capabilities.getCachedCapabilities('pi')).toBeNull();
   });
 
-  it('Pi 不可用时用新 provider 快照替换 last-valid snapshot', async () => {
+  it('Pi 变为不可用时清除旧能力，并用新 provider 快照替换核心能力', async () => {
     const harness = stubLocalCatalog();
     const catalog = await import('@/lib/localCatalogSnapshot');
     const providers = await import('@/lib/providersSnapshotStore');
     const capabilities = await import('@/hooks/useAgentCapabilities');
     await expect(catalog.refreshLocalCatalogSnapshot()).resolves.toBe(true);
+    expect(capabilities.getCachedCapabilities('pi')?.availableModels[0].displayName).toBe('old:pi');
 
     harness.setSnapshot('provider-new', 'new');
     harness.setUnavailableAgent('pi');
@@ -164,6 +177,28 @@ describe('useAgentCapabilities deviceId-aware cache', () => {
     expect(capabilities.getCachedCapabilities('codex')?.availableModels[0].displayName).toBe(
       'new:codex',
     );
+    expect(capabilities.getCachedCapabilities('pi')).toBeNull();
+  });
+
+  it('Pi 临时能力错误时联合刷新保留旧 provider 与三份 agent 快照', async () => {
+    const harness = stubLocalCatalog();
+    const catalog = await import('@/lib/localCatalogSnapshot');
+    const providers = await import('@/lib/providersSnapshotStore');
+    const capabilities = await import('@/hooks/useAgentCapabilities');
+    await expect(catalog.refreshLocalCatalogSnapshot()).resolves.toBe(true);
+
+    harness.setSnapshot('provider-new', 'new');
+    harness.setAgentError('pi', 'Pi capability IPC failed');
+    await expect(catalog.refreshLocalCatalogSnapshot()).resolves.toBe(false);
+
+    expect(providers.getCachedProvidersSnapshot()?.providers).toEqual([{ id: 'provider-old' }]);
+    expect(capabilities.getCachedCapabilities('claude-code')?.availableModels[0].displayName).toBe(
+      'old:claude-code',
+    );
+    expect(capabilities.getCachedCapabilities('codex')?.availableModels[0].displayName).toBe(
+      'old:codex',
+    );
+    expect(capabilities.getCachedCapabilities('pi')?.availableModels[0].displayName).toBe('old:pi');
   });
 
   it('核心 agent 失败时联合刷新保留 last-valid provider 与能力快照', async () => {
@@ -199,6 +234,106 @@ describe('useAgentCapabilities deviceId-aware cache', () => {
     );
     // 本地缓存不受影响(没预热过)
     expect(mod.getCachedCapabilities('claude-code')).toBeNull();
+  });
+
+  it('旧被控端缺少 writableDirs 时安全降级，新端声明后保留能力', async () => {
+    const getCapabilities = vi.fn(async (k: string) => caps(`local:${k}`));
+    const invoke = vi.fn(async (_deviceId: string, _channel: string, args: unknown[]) =>
+      args[0] === 'codex'
+        ? { ...caps('dev-1:codex'), writableDirs: { supported: true } }
+        : caps(`dev-1:${String(args[0])}`),
+    );
+    vi.stubGlobal('window', {
+      electronAPI: { maker: { getCapabilities }, deviceLink: { invoke } },
+    });
+    const mod = await import('@/hooks/useAgentCapabilities');
+
+    await mod.prefetchDeviceCapabilities('dev-1');
+
+    expect(mod.getCachedCapabilities('claude-code', 'dev-1')?.writableDirs).toBeUndefined();
+    expect(mod.getCachedCapabilities('codex', 'dev-1')?.writableDirs).toEqual({
+      supported: true,
+    });
+    expect(
+      mod.canExposeWritableDirsChange({
+        capabilities: mod.getCachedCapabilities('claude-code', 'dev-1'),
+        deviceId: 'dev-1',
+        remoteHostId: null,
+      }),
+    ).toBe(false);
+    expect(
+      mod.canExposeWritableDirsChange({
+        capabilities: { writableDirs: { supported: false } },
+        deviceId: 'dev-1',
+        remoteHostId: null,
+      }),
+    ).toBe(false);
+    expect(
+      mod.canExposeWritableDirsChange({
+        capabilities: mod.getCachedCapabilities('codex', 'dev-1'),
+        deviceId: 'dev-1',
+        remoteHostId: null,
+      }),
+    ).toBe(true);
+    expect(
+      mod.canExposeWritableDirsChange({
+        capabilities: { writableDirs: { supported: true } },
+        deviceId: null,
+        remoteHostId: 'ssh-host',
+      }),
+    ).toBe(false);
+    expect(
+      mod.canExposeWritableDirsChange({
+        capabilities: null,
+        deviceId: null,
+        remoteHostId: null,
+      }),
+    ).toBe(true);
+  });
+
+  it('拒绝畸形 writableDirs 能力而不开放远端入口', async () => {
+    const getCapabilities = vi.fn(async (k: string) => caps(`local:${k}`));
+    const invoke = vi.fn(async (_deviceId: string, _channel: string, args: unknown[]) => ({
+      ...caps(`dev-1:${String(args[0])}`),
+      writableDirs: true,
+    }));
+    vi.stubGlobal('window', {
+      electronAPI: { maker: { getCapabilities }, deviceLink: { invoke } },
+    });
+    const mod = await import('@/hooks/useAgentCapabilities');
+
+    await mod.prefetchDeviceCapabilities('dev-1');
+
+    expect(mod.getCachedCapabilities('claude-code', 'dev-1')).toBeNull();
+    expect(
+      mod.canExposeWritableDirsChange({
+        capabilities: mod.getCachedCapabilities('claude-code', 'dev-1'),
+        deviceId: 'dev-1',
+        remoteHostId: null,
+      }),
+    ).toBe(false);
+  });
+
+  it.each([undefined, true, false])('preserves remote effort capability marker %s without inferring legacy emptiness', async (effortsUnknown) => {
+    const snapshot: Caps = {
+      ...caps('dev-1:codex'),
+      availableModels: [{
+        id: 'empty-efforts',
+        displayName: 'Empty efforts',
+        contextWindow: 200_000,
+        efforts: [],
+        defaultEffort: null,
+        ...(effortsUnknown === undefined ? {} : { effortsUnknown }),
+      }],
+    };
+    const invoke = vi.fn(async () => snapshot);
+    const getCapabilities = vi.fn(async (agent: string) => caps(`local:${agent}`));
+    vi.stubGlobal('window', { electronAPI: { maker: { getCapabilities }, deviceLink: { invoke } } });
+    const mod = await import('@/hooks/useAgentCapabilities');
+
+    await mod.prefetchDeviceCapabilities('dev-1');
+
+    expect(mod.getCachedCapabilities('codex', 'dev-1')?.availableModels[0]?.effortsUnknown).toBe(effortsUnknown);
   });
 
   it('远程 Pi capabilities 原样保留 BYOM 显式 effort 子集', async () => {
@@ -250,9 +385,9 @@ describe('useAgentCapabilities deviceId-aware cache', () => {
     expect(mod.getCachedCapabilities('codex', 'dev-invalid')).toBeNull();
   });
 
-  it('capabilities 模型数组混入非法元素时整份进入 error，不得部分发布或落缓存', async () => {
+  it('capabilities 模型数组混入非法元素时丢掉坏项，保留合法模型', async () => {
     const invoke = vi.fn(async () => ({
-      ...caps('invalid'),
+      ...caps('valid'),
       availableModels: [...caps('valid').availableModels, null],
     }));
     const getCapabilities = vi.fn(async (k: string) => caps(`local:${k}`));
@@ -265,18 +400,22 @@ describe('useAgentCapabilities deviceId-aware cache', () => {
 
     await mod.prefetchDeviceCapabilities('dev-invalid-item');
 
-    expect(listener).toHaveBeenCalledWith({
-      status: 'error',
-      error: 'Invalid agent capabilities response',
-    });
-    expect(mod.getCachedCapabilities('codex', 'dev-invalid-item')).toBeNull();
+    expect(mod.getCachedCapabilities('codex', 'dev-invalid-item')?.availableModels).toHaveLength(1);
+    expect(listener).toHaveBeenCalledWith(
+      expect.objectContaining({
+        status: 'ready',
+        capabilities: expect.objectContaining({
+          availableModels: [expect.objectContaining({ displayName: 'valid' })],
+        }),
+      }),
+    );
   });
 
   it.each([
     { label: '空数组', value: [] },
-    { label: '未知 agent', value: ['pi'] },
+    { label: '未知 agent', value: ['future-agent'] },
     { label: '重复 agent', value: ['codex', 'codex'] },
-  ])('newSessionDefault 非法（$label）时整份 capabilities fail closed', async ({ value }) => {
+  ])('newSessionDefault 非法（$label）时丢掉该模型，不整表失败', async ({ value }) => {
     const invoke = vi.fn(async () => ({
       ...caps('invalid-default'),
       availableModels: [
@@ -296,14 +435,38 @@ describe('useAgentCapabilities deviceId-aware cache', () => {
 
     await mod.prefetchDeviceCapabilities('dev-invalid-default');
 
-    expect(listener).toHaveBeenCalledWith({
-      status: 'error',
-      error: 'Invalid agent capabilities response',
-    });
-    expect(mod.getCachedCapabilities('codex', 'dev-invalid-default')).toBeNull();
+    expect(mod.getCachedCapabilities('codex', 'dev-invalid-default')?.availableModels).toEqual([]);
+    expect(listener).toHaveBeenCalledWith(
+      expect.objectContaining({
+        status: 'ready',
+        capabilities: expect.objectContaining({ availableModels: [] }),
+      }),
+    );
   });
 
-  it('模型默认 effort 不在可用列表中时不得落缓存', async () => {
+  it('接受 v3 的 Pi 新任务默认标记', async () => {
+    const invoke = vi.fn(async () => ({
+      ...caps('pi-default'),
+      availableModels: [
+        {
+          ...caps('pi-default').availableModels[0],
+          newSessionDefault: ['pi'],
+        },
+      ],
+    }));
+    vi.stubGlobal('window', {
+      electronAPI: { maker: { getCapabilities: vi.fn() }, deviceLink: { invoke } },
+    });
+    const mod = await import('@/hooks/useAgentCapabilities');
+
+    await mod.prefetchDeviceCapabilities('dev-pi-default');
+
+    expect(
+      mod.getCachedCapabilities('pi', 'dev-pi-default')?.availableModels[0]?.newSessionDefault,
+    ).toEqual(['pi']);
+  });
+
+  it('模型默认 effort 不在可用列表中时丢掉该行，不整表失败', async () => {
     const invoke = vi.fn(async () => ({
       ...caps('invalid-effort'),
       availableModels: [
@@ -326,11 +489,13 @@ describe('useAgentCapabilities deviceId-aware cache', () => {
 
     await mod.prefetchDeviceCapabilities('dev-invalid-effort');
 
-    expect(listener).toHaveBeenCalledWith({
-      status: 'error',
-      error: 'Invalid agent capabilities response',
-    });
-    expect(mod.getCachedCapabilities('codex', 'dev-invalid-effort')).toBeNull();
+    expect(mod.getCachedCapabilities('codex', 'dev-invalid-effort')?.availableModels).toEqual([]);
+    expect(listener).toHaveBeenCalledWith(
+      expect.objectContaining({
+        status: 'ready',
+        capabilities: expect.objectContaining({ availableModels: [] }),
+      }),
+    );
   });
 
   it.each(['effortLevels', 'permissionModes'] as const)(
@@ -511,4 +676,61 @@ describe('useAgentCapabilities deviceId-aware cache', () => {
       'fresh:codex',
     );
   });
+});
+
+// Regression: object-form capability replies carry the same bounded metadata stamp
+// as provider lists; the renderer cache must not outlive the forwarded deadline.
+it('expires a remote capabilities snapshot at the forwarded host deadline', async () => {
+  vi.useFakeTimers({ toFake: ['Date', 'performance', 'setTimeout', 'clearTimeout'] });
+  try {
+    const invoke = vi.fn(async (deviceId: string, _channel: string, args: unknown[]) => ({
+      ...caps(`${deviceId}:${String(args[0])}`),
+      providerContinuity: { stale: true, remainingMs: 1000 },
+    }));
+    const getCapabilities = vi.fn(async (kind: string) => caps(`local:${kind}`));
+    vi.stubGlobal('window', { electronAPI: { maker: { getCapabilities }, deviceLink: { invoke } } });
+    const mod = await import('@/hooks/useAgentCapabilities');
+    await mod.prefetchDeviceCapabilities('dev-1');
+    expect(mod.getCachedCapabilities('codex', 'dev-1')).not.toBeNull();
+
+    invoke.mockRejectedValue(new Error('[DEVICE_LINK_NOT_CONNECTED] offline'));
+    await vi.advanceTimersByTimeAsync(1001);
+    expect(mod.getCachedCapabilities('codex', 'dev-1')).toBeNull();
+  } finally {
+    vi.useRealTimers();
+    vi.unstubAllGlobals();
+  }
+});
+
+// Regression: a retained capability refresh keeps the display payload while the
+// new read is in flight, but it must not clear the forwarded deadline. Otherwise
+// a hung refresh can leave the old capabilities on screen indefinitely.
+it('keeps the host deadline across a retained capability refresh', async () => {
+  vi.useFakeTimers({ toFake: ['Date', 'performance', 'setTimeout', 'clearTimeout'] });
+  try {
+    const invoke = vi.fn(async (deviceId: string, _channel: string, args: unknown[]) => ({
+      ...caps(`${deviceId}:${String(args[0])}`),
+      providerContinuity: { stale: true, remainingMs: 1000 },
+    }));
+    const getCapabilities = vi.fn(async (kind: string) => caps(`local:${kind}`));
+    vi.stubGlobal('window', { electronAPI: { maker: { getCapabilities }, deviceLink: { invoke } } });
+    const mod = await import('@/hooks/useAgentCapabilities');
+    await mod.prefetchDeviceCapabilities('dev-1');
+    const events = vi.fn();
+    const off = mod.subscribeDeviceCapabilities('dev-1', 'codex', events);
+    events.mockClear();
+
+    mod.evictDeviceCapabilities('dev-1', { retainDisplaySnapshot: true });
+    expect(events).toHaveBeenCalledWith({ status: 'loading', retainDisplaySnapshot: true });
+    await vi.advanceTimersByTimeAsync(1001);
+    // The deadline now ends the affected cache key with a terminal error, not
+    // an indefinite loading state.
+    expect(events).toHaveBeenCalledWith({ status: 'error',
+      error: '[MODEL_VISIBILITY_NOT_READY] Agent capabilities snapshot expired' });
+    expect(mod.getCachedCapabilities('codex', 'dev-1')).toBeNull();
+    off();
+  } finally {
+    vi.useRealTimers();
+    vi.unstubAllGlobals();
+  }
 });

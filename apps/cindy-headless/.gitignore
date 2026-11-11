@@ -1,0 +1,4 @@
+/.cache/
+/bundle/
+/release/
+/config.local.json

@@ -21,16 +21,21 @@
  */
 
 import { BrowserWindow } from 'electron';
+import { supplementalConversationEstimates } from '@cindy/maker-shared/usage-cost-details';
 import type { SendOrigin } from '@cindy/maker-core';
 
 import type { MessageTurnCostPayload } from '../shared/turnCostPayload.js';
-import type { TurnUsageDetails } from '../shared/turnUsageDetails.js';
+import {
+  mergeTurnUsageDetailsForMessage,
+  normalizeTurnUsageDetails,
+  type TurnUsageDetails,
+} from '../shared/turnUsageDetails.js';
 import {
   patchMessageAgentMetaWithResult,
   readPriorUserRoundCost,
   type MessageAgentMetaPatchResult,
 } from './localDb/ipc/messages.js';
-import { enqueueDurableWrite } from './messagePersistBroadcaster.js';
+import { enqueueDurableWrite } from './messagePersistBroadcaster.desktop.js';
 import { createLogger } from './logger.js';
 import * as broadcastTap from './device-link/broadcast-tap.js';
 import {
@@ -66,9 +71,11 @@ export interface TurnCostDeps {
     next: Record<string, unknown>,
   ): Promise<void>;
   readPriorUserRoundCost(sessionId: string, clientId: string): Promise<{
+    additionalCosts?: RegionalMoney[];
     money: RegionalMoney | null;
     costUsd: number;
     hasEstimatedValue: boolean;
+    isFirstUserRound?: boolean;
   }>;
   enqueue<T>(label: string, fn: () => Promise<T> | T): Promise<T>;
   broadcast(payload: MessageTurnCostPayload): void;
@@ -87,7 +94,7 @@ function isOwnerScopeCurrent(scope: OwnerScope): boolean {
   return scope === null || broadcastTap.isDataOwnerBroadcastScopeCurrent?.(scope) !== false;
 }
 
-function broadcastTurnCostPayload(payload: MessageTurnCostPayload, ownerScope: OwnerScope): void {
+export function broadcastTurnCostPayload(payload: MessageTurnCostPayload, ownerScope: OwnerScope): void {
   if (ownerScope === null) {
     broadcastTap.tapWindowBroadcast(MESSAGE_TURN_COST_CHANGED, payload);
   } else {
@@ -121,6 +128,49 @@ const defaultDeps: TurnCostDeps = {
   },
 };
 
+async function patchAgentMetaPreservingTurnDuration(
+  deps: Pick<TurnCostDeps, 'patchAgentMeta'>,
+  sessionId: string,
+  clientId: string,
+  patch: Record<string, unknown>,
+  turnUsageDetails: TurnUsageDetails | null | undefined,
+): Promise<{
+  result: MessageAgentMetaPatchResult;
+  turnUsageDetails: TurnUsageDetails | null | undefined;
+} | null> {
+  const first = await deps.patchAgentMeta(sessionId, clientId, patch);
+  if (!first) return null;
+  if (!turnUsageDetails) return { result: first, turnUsageDetails };
+
+  const previousUsage = normalizeTurnUsageDetails(first.previous.turnUsageDetails);
+  if (!previousUsage) return { result: first, turnUsageDetails };
+  const mergedUsage = mergeTurnUsageDetailsForMessage(previousUsage, turnUsageDetails);
+  const needsMergePatch =
+    (turnUsageDetails.totalTokens <= 0 && previousUsage.totalTokens > 0) ||
+    (turnUsageDetails.outputTokens <= 0 && previousUsage.outputTokens > 0) ||
+    (previousUsage.turnDurationMs ?? 0) > (turnUsageDetails.turnDurationMs ?? 0);
+  if (!needsMergePatch) return { result: first, turnUsageDetails };
+  const second = await deps.patchAgentMeta(sessionId, clientId, {
+    turnUsageDetails: mergedUsage,
+  });
+  // The first patch already persisted the segment cost/usage. If the message
+  // is rewound between the two writes, keep the original success semantics so
+  // ledger side effects and broadcasts are not silently skipped.
+  if (!second) return { result: first, turnUsageDetails };
+  return {
+    result: { previous: first.previous, next: second.next },
+    turnUsageDetails: mergedUsage,
+  };
+}
+
+/** 第一轮没有可复用的缓存；把这一事实随明细落库，供「缓存命中率偏低」建议排除。 */
+function withFirstUserRound(
+  details: TurnUsageDetails | null | undefined,
+  isFirstUserRound: boolean | undefined,
+): TurnUsageDetails | null | undefined {
+  return details && isFirstUserRound ? { ...details, firstUserRound: true } : details;
+}
+
 /**
  * 把一笔 SDK 分段费用写到指定消息，并同时写入从本轮用户消息累计的展示费用。
  *
@@ -146,19 +196,22 @@ export async function recordTurnCostOnMessage(
   try {
     let userTurnMoney = normalized;
     let userTurnCostIsEstimate = normalized.kind === 'value-estimate';
+    let persistedTurnUsageDetails = turnUsageDetails;
     const patched = await deps.enqueue(`turn-cost:${sessionId}:${clientId}`, async () => {
       // This runs in the durable FIFO after prior assistant cost patches, so
       // the query sees every earlier segment of this user round.
       const prior = await deps.readPriorUserRoundCost(sessionId, clientId);
-      userTurnMoney = prior.money
-        ? (addCompatibleRegionalMoney([prior.money, normalized], normalized.currency) ??
-          normalized)
-        : normalized;
-      userTurnCostIsEstimate =
-        (prior.money?.currency === userTurnMoney.currency &&
-          prior.hasEstimatedValue) ||
-        (normalized.currency === userTurnMoney.currency &&
-          normalized.kind === 'value-estimate');
+      const detailsWithAdditional = withFirstUserRound(prior.additionalCosts?.length
+        ? { ...(turnUsageDetails ?? { inputTokens: 0, outputTokens: 0, cacheReadTokens: 0,
+            cacheCreateTokens: 0, totalTokens: 0, cacheHitRate: null }), additionalCosts: prior.additionalCosts }
+        : turnUsageDetails, prior.isFirstUserRound);
+      userTurnMoney = addCompatibleRegionalMoney([
+        ...(prior.money ? [prior.money] : []), normalized,
+        ...supplementalConversationEstimates({ turnCost: normalized, turnUsageDetails }),
+      ], normalized.currency) ?? normalized;
+      userTurnCostIsEstimate = userTurnMoney.kind === 'value-estimate' ||
+        supplementalConversationEstimates({ turnCost: normalized, turnUsageDetails }).some(value => value.currency === userTurnMoney.currency) ||
+        (prior.money?.currency === userTurnMoney.currency && prior.hasEstimatedValue);
       const patch: Record<string, unknown> = {
         // Keep the raw segment immutable: daily/session/model accounting and
         // scheduler summaries consume this field and must never see a running
@@ -177,9 +230,17 @@ export async function recordTurnCostOnMessage(
       if (turnOrigin?.kind === 'scheduler' && typeof turnOrigin.runId === 'string' && turnOrigin.runId) {
         patch.origin = turnOrigin;
       }
-      if (turnUsageDetails) patch.turnUsageDetails = turnUsageDetails;
-      const result = await deps.patchAgentMeta(sessionId, clientId, patch);
-      if (!result) return null;
+      if (detailsWithAdditional) patch.turnUsageDetails = detailsWithAdditional;
+      const patchedMeta = await patchAgentMetaPreservingTurnDuration(
+        deps,
+        sessionId,
+        clientId,
+        patch,
+        detailsWithAdditional,
+      );
+      if (!patchedMeta) return null;
+      const { result } = patchedMeta;
+      persistedTurnUsageDetails = patchedMeta.turnUsageDetails;
       try {
         await deps.applyScheduleRunCostChange(result.previous, result.next);
       } catch (err) {
@@ -203,7 +264,7 @@ export async function recordTurnCostOnMessage(
       userTurnMoney,
       ...(userTurnMoney.currency === 'USD' ? { userTurnCostUsd: userTurnMoney.amount } : {}),
       userTurnCostIsEstimate,
-      ...(turnUsageDetails ? { turnUsageDetails } : {}),
+      ...(persistedTurnUsageDetails ? { turnUsageDetails: persistedTurnUsageDetails } : {}),
     };
     try {
       if (deps.broadcastWithOwnerScope) {
@@ -249,7 +310,8 @@ export type TurnUsageDeps = Pick<
  * —— 而 readPriorUserRoundCost 的契约本来就是「让收尾消息承载整轮总额」。所以这里读一次
  * 往轮累计,有则连同 userTurnCost 一起投影到消息与 payload(仍不含当前无价 segment)。
  *
- * turnUsageDetails 为空(整轮 0 token)时直接跳过:没有可展示的事实,不写空对象。
+ * turnUsageDetails 为空时直接跳过。0 token 的最终 continuation 仍可携带整轮耗时，
+ * 并与该消息先前已落下的 token 明细合并。
  */
 export async function recordTurnUsageOnMessage(
   args: {
@@ -263,13 +325,17 @@ export async function recordTurnUsageOnMessage(
   if (!sessionId || !clientId || !turnUsageDetails) return false;
   const ownerScope = captureOwnerScope();
   try {
+    let persistedTurnUsageDetails = turnUsageDetails;
     const outcome = await deps.enqueue(`turn-usage:${sessionId}:${clientId}`, async () => {
       // 与 recordTurnCostOnMessage 同一条 durable FIFO,所以这里看得到本用户轮此前
       // 每个 segment 已落库的费用。
       const prior = await deps.readPriorUserRoundCost(sessionId, clientId);
+      const detailsWithAdditional = withFirstUserRound(prior.additionalCosts?.length
+        ? { ...turnUsageDetails, additionalCosts: prior.additionalCosts } : turnUsageDetails,
+      prior.isFirstUserRound) ?? turnUsageDetails;
       const userTurnMoney =
         prior.money && prior.money.amount > 0 ? prior.money : null;
-      const patch: Record<string, unknown> = { turnUsageDetails };
+      const patch: Record<string, unknown> = { turnUsageDetails: detailsWithAdditional };
       if (userTurnMoney) {
         patch.userTurnCost = userTurnMoney;
         patch.userTurnCostIsEstimate = prior.hasEstimatedValue;
@@ -277,8 +343,15 @@ export async function recordTurnUsageOnMessage(
           patch.userTurnCostUsd = userTurnMoney.amount;
         }
       }
-      const patched = await deps.patchAgentMeta(sessionId, clientId, patch);
-      if (!patched) return null;
+      const patchedMeta = await patchAgentMetaPreservingTurnDuration(
+        deps,
+        sessionId,
+        clientId,
+        patch,
+        detailsWithAdditional,
+      );
+      if (!patchedMeta) return null;
+      persistedTurnUsageDetails = patchedMeta.turnUsageDetails ?? turnUsageDetails;
       return { userTurnMoney, userTurnCostIsEstimate: prior.hasEstimatedValue };
     });
     if (!outcome) return false;
@@ -290,7 +363,7 @@ export async function recordTurnUsageOnMessage(
       const payload: MessageTurnCostPayload = {
         sessionId,
         clientId,
-        turnUsageDetails,
+        turnUsageDetails: persistedTurnUsageDetails,
         ...(userTurnMoney
           ? {
               userTurnMoney,
@@ -375,20 +448,21 @@ export async function recordSchedulerTurnCost(
 
 /**
  * Codex done.data.usage → computeGatewayTurnCost 的 TurnTokenDeltas 入参映射。
- * Codex translator 已把 reasoning 合并进 completionTokens, 这里不再重复相加。
- * Codex 无 cache 写入概念, cacheCreateTokens 恒 0。
+ * Provider 的 completionTokens 已包含 reasoning 子集，这里不再重复相加。
+ * 写缓存独立传递；旧版 done 未声明时按 0 兼容。
  */
 export function codexUsageToTokens(usage: {
   promptTokens?: number;
   completionTokens?: number;
   reasoningTokens?: number;
   cachedTokens?: number;
+  cacheCreationTokens?: number;
 }): { inputTokens: number; outputTokens: number; cacheReadTokens: number; cacheCreateTokens: number } {
   return {
     inputTokens: usage.promptTokens || 0,
     outputTokens: usage.completionTokens || 0,
     cacheReadTokens: usage.cachedTokens || 0,
-    cacheCreateTokens: 0,
+    cacheCreateTokens: usage.cacheCreationTokens || 0,
   };
 }
 

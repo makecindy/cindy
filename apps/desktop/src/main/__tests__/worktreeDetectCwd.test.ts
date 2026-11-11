@@ -8,27 +8,47 @@
  *   2) 外部工具 (CC Desktop / 手工 git worktree add) 创建的 worktree (路径不含)
  */
 
-import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import path from 'node:path';
+import fs from 'node:fs/promises';
 import { detectCwd } from '../worktree/WorktreeManager';
+import { GitExecError, type GitExecOpts } from '../worktree/gitExec';
+import { OperationBudget, currentOperationBudget } from '../utils/operationBudget';
 
 // ── mock gitExec, 控制 detectCwd 看到的 git 输出 ──────────────────────────
-const { gitExecMock } = vi.hoisted(() => ({
+const { gitExecMock, realpathMock } = vi.hoisted(() => ({
   gitExecMock: vi.fn(),
+  realpathMock: vi.fn(),
 }));
+vi.mock('node:fs/promises', async () => {
+  const actual = await vi.importActual<typeof import('node:fs/promises')>('node:fs/promises');
+  // Share the fake across default and named imports used by the real probe pool.
+  return { ...actual, realpath: realpathMock, default: { ...actual, realpath: realpathMock } };
+});
 vi.mock('../worktree/gitExec', async () => {
-  const actual = await vi.importActual<typeof import('../worktree/gitExec')>(
-    '../worktree/gitExec',
-  );
+  const actual = await vi.importActual<typeof import('../worktree/gitExec')>('../worktree/gitExec');
   return {
     ...actual,
-    gitExec: (args: readonly string[], cwd?: string) => gitExecMock(args, cwd),
+    gitExec: (args: readonly string[], cwd?: string, opts?: GitExecOpts) => gitExecMock(args, cwd, opts),
   };
 });
 
 beforeEach(() => {
   gitExecMock.mockReset();
+  // Synchronous Git fixtures consume no work budget; fake-timer cases replace this clock.
+  vi.spyOn(performance, 'now').mockReturnValue(0);
+  // Synthetic paths need no filesystem I/O, including fake-timer timeout tests.
+  realpathMock.mockReset().mockRejectedValue(Object.assign(new Error('missing directory'), { code: 'ENOENT' }));
 });
+
+afterEach(() => {
+  vi.useRealTimers();
+  vi.restoreAllMocks();
+});
+
+function timeoutError() {
+  return new GitExecError({ args: ['rev-parse'], exitCode: null, stderr: 'timed out', stdout: '', timedOut: true });
+}
 
 /**
  * 通用 mock builder: 按 args[0] 分派, 让测试用例只关心两个 rev-parse 输出。
@@ -48,7 +68,8 @@ function setupGitMock(opts: {
     const a = args.join(' ');
     if (a === '--version') return { stdout: 'git version 2.45.0\n', stderr: '' };
     if (a === 'rev-parse --show-toplevel') return { stdout: `${opts.toplevel}\n`, stderr: '' };
-    if (a === 'rev-parse --abbrev-ref HEAD') return { stdout: `${opts.branch ?? 'main'}\n`, stderr: '' };
+    if (a === 'rev-parse --abbrev-ref HEAD')
+      return { stdout: `${opts.branch ?? 'main'}\n`, stderr: '' };
     if (a === 'rev-parse --git-dir') return { stdout: `${opts.gitDir}\n`, stderr: '' };
     if (a === 'rev-parse --git-common-dir') return { stdout: `${opts.gitCommonDir}\n`, stderr: '' };
     throw new Error(`unexpected gitExec call: ${a}`);
@@ -56,6 +77,221 @@ function setupGitMock(opts: {
 }
 
 describe('detectCwd → isInsideWorktree (I-1 fix)', () => {
+  // #7259, unit tier: a cancellable snapshot probe must not share a pending UI
+  // probe. The two callers own different lifetimes even for the same directory.
+  it('isolates a cancelled snapshot probe from a pending UI probe of the same directory', async () => {
+    realpathMock.mockResolvedValue(path.resolve('/probe-repo'));
+    let releaseUi!: () => void;
+    let enteredSnapshot!: () => void;
+    const entered = new Promise<void>((resolve) => { enteredSnapshot = resolve; });
+    const budget = new OperationBudget(1_000);
+    const answer = { stdout: '/probe-repo\nmain\n.git\n.git\n', stderr: '' };
+    gitExecMock.mockImplementation(() => {
+      if (currentOperationBudget()) {
+        enteredSnapshot();
+        return new Promise((_resolve, reject) => budget.signal.addEventListener('abort', () => reject(budget.signal.reason), { once: true }));
+      }
+      return new Promise((resolve) => { releaseUi = () => resolve(answer); });
+    });
+    const ui = detectCwd('/probe-repo');
+    const snapshot = budget.run(() => detectCwd('/probe-repo'));
+    await entered;
+    budget.cancel(new Error('snapshot stopped'));
+    await expect(snapshot).rejects.toThrow('snapshot stopped');
+    releaseUi();
+    await expect(ui).resolves.toMatchObject({ isGitRepo: true });
+    expect(gitExecMock).toHaveBeenCalledTimes(2);
+  });
+  // PR #6544: 5s realpath + 10s Git leaves no headroom in Mobile's 15s wait.
+  // Existing coverage bounds each phase separately, not their sum (unit tier).
+  it.each([
+    { fallback: false, realpathMs: 4_999 },
+    { fallback: true, realpathMs: 4_999 },
+    { fallback: true, realpathMs: 4_000 },
+  ])('shares the deadline across slow realpath and Git ($fallback, $realpathMs ms)', async ({ fallback, realpathMs }) => {
+    vi.useFakeTimers();
+    realpathMock.mockImplementation(() => new Promise((resolve) => {
+      setTimeout(() => resolve(path.resolve('/repo')), realpathMs);
+    }));
+    gitExecMock.mockImplementation((args: readonly string[], _cwd: string, opts: GitExecOpts) => {
+      const duration = fallback ? 2_000 : 6_000;
+      return new Promise((resolve, reject) => {
+        setTimeout(() => {
+          if (duration > opts.timeoutMs!) reject(timeoutError());
+          else resolve({ stdout: args.length > 3 && !fallback ? '/repo\nmain\n.git\n.git\n'
+            : args.includes('--show-toplevel') && args.length === 2 ? '/repo' : '.git' });
+        }, Math.min(duration, opts.timeoutMs!));
+      });
+    });
+    let failure: unknown;
+    const probe = detectCwd('/repo').catch((error) => { failure = error; });
+    try {
+      await vi.advanceTimersByTimeAsync(10_000);
+      expect(failure).toMatchObject({ timedOut: true });
+      await probe;
+      expect(gitExecMock.mock.calls[0][2].timeoutMs).toBe(10_000 - realpathMs);
+      for (const [, , opts] of gitExecMock.mock.calls) {
+        expect(opts.deadlineAtMs).toBe(10_000);
+      }
+      if (realpathMs === 4_000) expect(gitExecMock).toHaveBeenCalledTimes(3);
+      expect(vi.getTimerCount()).toBe(0);
+    } finally {
+      await vi.runAllTimersAsync();
+      await probe;
+    }
+  });
+
+  // PR #6544: Git deadlines do not cover a stalled realpath. Four unresolved
+  // lookups must reject as unknown state and release queued probes (unit tier).
+  it('bounds physical-directory lookups and releases queued probes and same-path retries', async () => {
+    vi.useFakeTimers();
+    const finishLookups: Array<() => void> = [];
+    vi.mocked(fs.realpath).mockImplementation((cwd) => new Promise<string>((resolve) => {
+      finishLookups.push(() => resolve(String(cwd)));
+    }));
+    gitExecMock.mockResolvedValue({ stdout: '/repo\nmain\n.git\n.git\n' });
+    const pending = Array.from({ length: 4 }, (_, i) => detectCwd(path.resolve('/tmp', `physical-hung-${i}`)));
+    const errors: unknown[] = [];
+    const failures = pending.map((probe) => probe.catch((error) => { errors.push(error); }));
+    const queued = detectCwd('/tmp/physical-healthy');
+    try {
+      await vi.advanceTimersByTimeAsync(0);
+      expect(gitExecMock).not.toHaveBeenCalled();
+      expect(finishLookups).toHaveLength(2);
+      vi.mocked(fs.realpath).mockResolvedValue(path.resolve('/tmp/physical-healthy'));
+      await vi.advanceTimersByTimeAsync(5_000);
+      expect(errors).toHaveLength(4);
+      expect(errors.every((error) => (error as { code?: string }).code === 'WORKDIR_PROBE_TIMEOUT')).toBe(true);
+      await Promise.all(failures);
+      // Uncancellable I/O retains its bounded pool slots and same-path single flight.
+      await expect(detectCwd('/tmp/physical-hung-0')).rejects.toMatchObject({ code: 'WORKDIR_PROBE_TIMEOUT' });
+      finishLookups.forEach((finish) => finish());
+      await expect(queued).resolves.toMatchObject({ isGitRepo: true });
+      await expect(detectCwd('/tmp/physical-hung-0')).resolves.toMatchObject({ isGitRepo: true });
+      // Timeout never launches Git for the stalled paths or caches a negative result.
+      expect(gitExecMock).toHaveBeenCalledTimes(2);
+      expect(vi.getTimerCount()).toBe(0);
+    } finally {
+      // Settle even the intentionally unresponsive fake I/O after a red run.
+      finishLookups.forEach((finish) => finish());
+      await Promise.allSettled([...pending, queued]);
+    }
+  });
+
+  // #6409: a failed physical-cwd lookup must preserve Git's partial/error result.
+  it.each([true, false])('preserves missing-directory results when gitInstalled=%s', async (gitInstalled) => {
+    gitExecMock.mockImplementation(async (args: readonly string[]) => {
+      if (gitInstalled && args[0] === '--version') return { stdout: 'git version 2.45.0\n', stderr: '' };
+      throw new GitExecError({ args, exitCode: null, stderr: '', stdout: '',
+        cause: Object.assign(new Error('not found'), { code: 'ENOENT' }) });
+    });
+    expect(await detectCwd('/missing')).toMatchObject({
+      isGitRepo: false,
+      isInsideWorktree: false,
+      gitInstalled,
+    });
+  });
+
+  it('releases all four hung probes after Git timeout and allows queued work and same-path retries', async () => {
+    vi.useFakeTimers();
+    gitExecMock.mockImplementation((_args: readonly string[], _cwd: string, opts: GitExecOpts) => (
+      new Promise((_resolve, reject) => setTimeout(() => reject(timeoutError()), opts.timeoutMs))
+    ));
+    const pending = Array.from({ length: 4 }, (_, i) => detectCwd(path.resolve('/tmp', `hung-${i}`)));
+    const failures = pending.map((p) => expect(p).rejects.toMatchObject({ timedOut: true }));
+    const queued = detectCwd('/tmp/healthy');
+    await vi.advanceTimersByTimeAsync(0);
+    expect(gitExecMock).toHaveBeenCalledTimes(4);
+    expect(gitExecMock.mock.calls.every((call) => call[2]?.timeoutMs === 10_000)).toBe(true);
+    gitExecMock.mockResolvedValue({ stdout: '/tmp/healthy\nmain\n.git\n.git\n' });
+    await vi.advanceTimersByTimeAsync(10_000);
+    await Promise.all(failures);
+    await expect(queued).resolves.toMatchObject({ isGitRepo: true });
+    await expect(detectCwd('/tmp/hung-0')).resolves.toMatchObject({ isGitRepo: true });
+    // 超时不进入 fallback，也不缓存拒绝结果。
+    expect(gitExecMock).toHaveBeenCalledTimes(6);
+  });
+
+  it.each(['--version', '--show-toplevel', '--abbrev-ref', '--git-dir', '--git-common-dir'])(
+    'bounds fallback %s and does not report a timeout as a missing directory',
+    async (command) => {
+      gitExecMock.mockImplementation(async (args: readonly string[], _cwd: string, opts: GitExecOpts) => {
+        expect(opts.timeoutMs).toBe(10_000);
+        if (args.length > 3) return { stdout: 'ambiguous' };
+        if (args.includes(command)) throw timeoutError();
+        return { stdout: args.includes('--show-toplevel') ? '/repo' : '.git' };
+      });
+      await expect(detectCwd('/repo')).rejects.toMatchObject({ timedOut: true });
+    },
+  );
+
+  it('waits for both fallback metadata processes to settle before returning a timeout', async () => {
+    let finishOther!: () => void;
+    gitExecMock.mockImplementation(async (args: readonly string[]) => {
+      if (args.length > 3) return { stdout: 'ambiguous' };
+      if (args.includes('--git-dir')) throw timeoutError();
+      if (args.includes('--git-common-dir')) {
+        await new Promise<void>((resolve) => { finishOther = resolve; });
+      }
+      return { stdout: args.includes('--show-toplevel') ? '/repo' : '.git' };
+    });
+    const pending = detectCwd('/repo');
+    let settled = false;
+    void pending.then(() => { settled = true; }, () => { settled = true; });
+    for (let i = 0; i < 20; i++) await Promise.resolve();
+    expect(finishOther).toBeTypeOf('function');
+    expect(settled).toBe(false);
+    finishOther();
+    await expect(pending).rejects.toMatchObject({ timedOut: true });
+  });
+
+  it.each([
+    ['linked', '/repo/.git/worktrees/feature', '/repo/.git', 'feature', true],
+    ['main', '.git', '.git', 'main', false],
+    ['detached', '/repo/.git/worktrees/feature', '/repo/.git', 'HEAD', true],
+  ])(
+    'reads a %s worktree snapshot with one Git process',
+    async (_label, gitDir, commonDir, branch, linked) => {
+      gitExecMock.mockResolvedValue({ stdout: `/repo\n${branch}\n${gitDir}\n${commonDir}\n` });
+      expect(await detectCwd('/repo')).toEqual({
+        isGitRepo: true,
+        isInsideWorktree: linked,
+        gitInstalled: true,
+        supportsRecoveryKeyDiscard: true,
+        repoRoot: path.resolve('/repo'),
+        ...(branch !== 'HEAD' ? { currentBranch: branch } : {}),
+      });
+      expect(gitExecMock).toHaveBeenCalledOnce();
+    },
+  );
+
+  it('retains separate queries when combined output has ambiguous newlines', async () => {
+    setupGitMock({ toplevel: '/repo', gitDir: '.git', gitCommonDir: '.git' });
+    gitExecMock.mockResolvedValueOnce({ stdout: '/repo\nwith-newline\nmain\n.git\n.git\n' });
+    expect(await detectCwd('/repo')).toMatchObject({ isGitRepo: true, isInsideWorktree: false });
+    expect(gitExecMock).toHaveBeenCalledTimes(6);
+  });
+
+  it('coalesces concurrent directory probes but reads fresh Git state after completion', async () => {
+    const wtPath = path.resolve('/tmp/feature');
+    const gitState = {
+      toplevel: wtPath,
+      gitDir: path.resolve('/tmp/repo/.git/worktrees/feature'),
+      gitCommonDir: path.resolve('/tmp/repo/.git'),
+      branch: 'before',
+    };
+    setupGitMock(gitState);
+    const first = detectCwd(wtPath);
+    const duplicate = detectCwd(path.join(wtPath, '.'));
+    expect(duplicate).toBe(first);
+    expect((await first).currentBranch).toBe('before');
+    expect(gitExecMock).toHaveBeenCalledTimes(6);
+
+    setupGitMock({ ...gitState, branch: 'after' });
+    expect((await detectCwd(wtPath)).currentBranch).toBe('after');
+    expect(gitExecMock).toHaveBeenCalledTimes(12);
+  });
+
   it('returns isInsideWorktree=true for a Cindy-created worktree', async () => {
     const baseRepo = path.resolve('/tmp/repo');
     const wtPath = path.join(baseRepo, '.cindy-worktrees', 'jolly-turing');

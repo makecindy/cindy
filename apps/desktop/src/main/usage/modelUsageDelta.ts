@@ -6,8 +6,9 @@
  * daily_model_usage 表必须 cumulative - lastReported (与 register.ts 的
  * lastReportedCostUsdBySession 同款手法)。
  *
- * 钳制: 子进程重 spawn (resume / 崩溃重启) 后累计值归零, delta 会算出负数 —
- * 一律 Math.max(0, ...) 钳到 0 (接受少记一个 turn 的取舍, 与 total_cost_usd 一致)。
+ * 基线: 首次快照或子进程重 spawn 后的回退快照不能直接当成本轮增量。
+ * 先把累计值设为新基线；若独立观察到的完整 request segments 与该快照逐桶一致，
+ * 才保留这轮 token/cost。其余情况宁可只保留可证明的 segment token，也不吞入历史累计。
  *
  * ## 已知上游行为: output 归属可能滞后一轮
  *
@@ -19,7 +20,7 @@
  *
  * 这里不做纠正: 把 output 挪到别处需要知道"本轮真实输出是多少", 而两个可用数据源都
  * 还没结算; 猜一个值会把"归属错位"升级成"金额算错"。detectOutputLag 只把可疑轮次标出
- * 来供日志定位, 不参与任何计费。
+ * 来供日志定位与 TPS 可靠性门禁，不参与任何计费或 token 纠正。
  *
  * 纯函数、零 Electron 依赖 — 可直接单测。
  */
@@ -41,6 +42,13 @@ export interface ModelUsageDeltaEntry {
   outputTokensDelta: number;
   cacheReadTokensDelta: number;
   cacheCreateTokensDelta: number;
+}
+
+export interface ObservedModelTurnUsage {
+  inputTokens: number;
+  outputTokens: number;
+  cacheReadTokens: number;
+  cacheCreateTokens: number;
 }
 
 function num(v: unknown): number {
@@ -70,6 +78,8 @@ function sanitize(raw: unknown): ModelUsageCumulative {
 export function computeModelUsageDeltas(
   prev: Map<string, ModelUsageCumulative> | undefined,
   current: Record<string, unknown>,
+  observedTurnUsage?: ReadonlyMap<string, ObservedModelTurnUsage>,
+  options: { cumulativeStartsAtZero?: boolean } = {},
 ): { next: Map<string, ModelUsageCumulative>; deltas: ModelUsageDeltaEntry[] } {
   const next = new Map<string, ModelUsageCumulative>();
   const deltas: ModelUsageDeltaEntry[] = [];
@@ -88,17 +98,54 @@ export function computeModelUsageDeltas(
         cum.outputTokens < last.outputTokens ||
         cum.cacheReadInputTokens < last.cacheReadInputTokens ||
         cum.cacheCreationInputTokens < last.cacheCreationInputTokens);
-    const base = reset || last === undefined
-      ? { costUSD: 0, inputTokens: 0, outputTokens: 0, cacheReadInputTokens: 0, cacheCreationInputTokens: 0 }
+    const unbaselined = reset || last === undefined;
+    const cumulativeStartsAtZero = options.cumulativeStartsAtZero === true;
+    const observed =
+      observedTurnUsage?.get(model) ?? observedTurnUsage?.get(model.replace(/\[[^\]]*\]\s*$/, ''));
+    const observedMatchesCumulative =
+      observed !== undefined &&
+      cum.inputTokens === observed.inputTokens &&
+      cum.outputTokens === observed.outputTokens &&
+      cum.cacheReadInputTokens === observed.cacheReadTokens &&
+      cum.cacheCreationInputTokens === observed.cacheCreateTokens;
+    const base = unbaselined
+      ? cumulativeStartsAtZero
+        ? {
+            costUSD: 0,
+            inputTokens: 0,
+            outputTokens: 0,
+            cacheReadInputTokens: 0,
+            cacheCreationInputTokens: 0,
+          }
+        : cum
       : last;
 
     const entry: ModelUsageDeltaEntry = {
       model,
-      costUsdDelta: Math.max(0, cum.costUSD - base.costUSD),
-      inputTokensDelta: Math.max(0, cum.inputTokens - base.inputTokens),
-      outputTokensDelta: Math.max(0, cum.outputTokens - base.outputTokens),
-      cacheReadTokensDelta: Math.max(0, cum.cacheReadInputTokens - base.cacheReadInputTokens),
-      cacheCreateTokensDelta: Math.max(0, cum.cacheCreationInputTokens - base.cacheCreationInputTokens),
+      // A first snapshot after desktop restart/reattach may contain the whole
+      // provider session. Only treat its cumulative cost as this turn when the
+      // independently observed request segments prove the token totals match.
+      costUsdDelta: unbaselined
+        ? cumulativeStartsAtZero || observedMatchesCumulative
+          ? cum.costUSD
+          : 0
+        : Math.max(0, cum.costUSD - base.costUSD),
+      inputTokensDelta:
+        observed && unbaselined && !cumulativeStartsAtZero
+          ? observed.inputTokens
+          : Math.max(0, cum.inputTokens - base.inputTokens),
+      outputTokensDelta:
+        observed && unbaselined && !cumulativeStartsAtZero
+          ? observed.outputTokens
+          : Math.max(0, cum.outputTokens - base.outputTokens),
+      cacheReadTokensDelta:
+        observed && unbaselined && !cumulativeStartsAtZero
+          ? observed.cacheReadTokens
+          : Math.max(0, cum.cacheReadInputTokens - base.cacheReadInputTokens),
+      cacheCreateTokensDelta:
+        observed && unbaselined && !cumulativeStartsAtZero
+          ? observed.cacheCreateTokens
+          : Math.max(0, cum.cacheCreationInputTokens - base.cacheCreationInputTokens),
     };
     next.set(model, cum);
     if (
@@ -129,9 +176,15 @@ export function computeModelUsageDeltas(
  * 报回来的 output 却只有个位到几十 —— 真实回复不可能这么短。阈值取得很松，只求把
  * "长回复被记成 7 个 token" 这种量级的异常捞出来，不追求精确。
  *
- * 纯诊断：调用方只应拿它打日志。不参与计费，也不改任何金额。
+ * 只判异常：调用方可据此打日志或隐藏不可靠 TPS，但不得改计费、token 或金额。
  */
-export function detectOutputLag(deltas: readonly ModelUsageDeltaEntry[]): boolean {
+export function detectOutputLag(
+  deltas: readonly ModelUsageDeltaEntry[],
+  requestId?: string,
+): boolean {
+  // A concise high-context reply is legitimate. Only the known Vertex request
+  // family is evidence that this shape means deferred output settlement.
+  if (!requestId?.startsWith('msg_vrtx_')) return false;
   const OUTPUT_FLOOR = 64;
   const INPUT_SIGNIFICANT = 10_000;
   return deltas.some((delta) => {
@@ -139,4 +192,45 @@ export function detectOutputLag(deltas: readonly ModelUsageDeltaEntry[]): boolea
       delta.inputTokensDelta + delta.cacheReadTokensDelta + delta.cacheCreateTokensDelta;
     return inputSide >= INPUT_SIGNIFICANT && delta.outputTokensDelta < OUTPUT_FLOOR;
   });
+}
+
+/**
+ * Suppresses generation timing for both the turn where output settlement is
+ * visibly late and the following turn where the missing output is expected to
+ * be backfilled. Token/cost accounting remains untouched.
+ */
+export class ClaudeOutputLagTimingGuard {
+  private readonly suppressCurrentTurnBySession = new Set<string>();
+  private readonly detectedInCurrentTurnBySession = new Set<string>();
+
+  evaluate(
+    sessionId: string,
+    deltas: readonly ModelUsageDeltaEntry[],
+    isProductTurnFinal: boolean,
+    requestId?: string,
+    allowDetection = true,
+  ): { detected: boolean; suppressTiming: boolean } {
+    const detected = allowDetection && detectOutputLag(deltas, requestId);
+    if (detected) this.detectedInCurrentTurnBySession.add(sessionId);
+    const suppressTiming =
+      this.suppressCurrentTurnBySession.has(sessionId) ||
+      this.detectedInCurrentTurnBySession.has(sessionId);
+    if (isProductTurnFinal) {
+      if (this.detectedInCurrentTurnBySession.has(sessionId)) {
+        this.suppressCurrentTurnBySession.add(sessionId);
+      } else {
+        this.suppressCurrentTurnBySession.delete(sessionId);
+      }
+      this.detectedInCurrentTurnBySession.delete(sessionId);
+    }
+    return {
+      detected,
+      suppressTiming,
+    };
+  }
+
+  clear(sessionId: string): void {
+    this.suppressCurrentTurnBySession.delete(sessionId);
+    this.detectedInCurrentTurnBySession.delete(sessionId);
+  }
 }

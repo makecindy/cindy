@@ -7,11 +7,11 @@
 import { describe, it, expect, vi } from 'vitest';
 
 import {
-  clampErrandPermissionMode,
   createGhostErrandRunner,
   type GhostErrandRunnerDeps,
   type GhostErrandSessionRow,
 } from '../ghostErrandRunner';
+import { clampPluginTaskPermissionMode } from '../../cindy-brain/pluginTaskPrefsStore';
 import type { AgentEvent } from '@cindy/maker-core';
 
 /** 最小可观察会话替身:测试手动放事件。 */
@@ -82,7 +82,12 @@ function makeDeps(overrides: Partial<GhostErrandRunnerDeps> = {}): {
     getSessionRow: async () => ACTIVE_ROW,
     createSession: vi.fn(async () => 'sess-new'),
     getGhostName: () => '帮手',
-    getDraftDefaults: () => ({}),
+    resolveExecution: async (cfg, _caller, row) => ({
+      agentKind: cfg.agentKind === 'cc' ? 'claude-code' : cfg.agentKind ?? (row?.agentKind === 'codex' ? 'codex' : row?.agentKind === 'pi' ? 'pi' : 'claude-code'),
+      model: cfg.model ?? row?.model ?? 'claude-x', providerId: cfg.providerId ?? row?.providerId,
+      effort: cfg.effort ?? undefined, fastMode: cfg.fastMode ?? row?.fastMode ?? false,
+    }),
+    captureOwner: () => () => {},
     normalizeWorkingDir: (dir) => dir.replace(/\/+$/, ''),
     isUserPickedDir: () => false,
     isSessionBusy: () => false,
@@ -97,26 +102,33 @@ function makeDeps(overrides: Partial<GhostErrandRunnerDeps> = {}): {
   return { deps, emitters, writes };
 }
 
-const REQUEST = { ghostId: 'helper', ghostVersion: '1.0.0', message: '干活' };
+const REQUEST = {
+  ghostId: 'helper',
+  ghostVersion: '1.0.0',
+  origin: 'user-action' as const,
+  message: '干活',
+};
 
 describe('权限档钳制', () => {
-  it('白名单外/缺省一律收敛到 plan;bypassPermissions 不存在', () => {
-    expect(clampErrandPermissionMode(undefined)).toBe('plan');
-    expect(clampErrandPermissionMode('bypassPermissions')).toBe('plan');
-    expect(clampErrandPermissionMode('ask')).toBe('plan');
-    expect(clampErrandPermissionMode('acceptEdits')).toBe('acceptEdits');
-    expect(clampErrandPermissionMode('auto')).toBe('auto');
+  it('普通任务使用 ask；保留旧 plan 和用户显式选择的完全访问', () => {
+    expect(clampPluginTaskPermissionMode(undefined)).toBe('ask');
+    expect(clampPluginTaskPermissionMode(undefined, 'plan')).toBe('plan');
+    expect(clampPluginTaskPermissionMode('bypassPermissions')).toBe('bypassPermissions');
+    expect(clampPluginTaskPermissionMode('unknown', 'plan')).toBe('plan');
+    expect(clampPluginTaskPermissionMode('ask')).toBe('ask');
+    expect(clampPluginTaskPermissionMode('acceptEdits')).toBe('acceptEdits');
+    expect(clampPluginTaskPermissionMode('auto')).toBe('auto');
   });
 });
 
 describe('Pi 代办路由', () => {
-  it('读取 Pi 草稿默认并创建 Pi 会话', async () => {
+  it('使用通用任务配置创建 Pi 会话', async () => {
     const createSession = vi.fn(async () => 'sess-pi');
-    const getDraftDefaults = vi.fn(() => ({ model: 'gpt-5.5' }));
+    const resolveExecution = vi.fn(async () => ({ agentKind: 'pi' as const, model: 'gpt-5.5', fastMode: false }));
     const { deps, emitters } = makeDeps({
       readConfig: () => ({ agentKind: 'pi' }),
       createSession,
-      getDraftDefaults,
+      resolveExecution,
     });
     const runner = createGhostErrandRunner(deps);
     const pending = runner(REQUEST);
@@ -124,7 +136,7 @@ describe('Pi 代办路由', () => {
     emitters.get('sess-pi')!.emit(doneEvent());
     await pending;
 
-    expect(getDraftDefaults).toHaveBeenCalledWith('pi');
+    expect(resolveExecution).toHaveBeenCalledWith({ agentKind: 'pi' }, undefined, undefined);
     expect(createSession).toHaveBeenCalledWith(
       expect.objectContaining({ agentKind: 'pi', model: 'gpt-5.5' }),
     );
@@ -132,20 +144,25 @@ describe('Pi 代办路由', () => {
 });
 
 describe('专属会话建/复用', () => {
-  it('无映射时创建会话并写映射,onSession 尽早回报', async () => {
+  it('无映射时创建会话并写映射,onSession 尽早回报,投递成功才 onDispatched', async () => {
     const { deps, emitters, writes } = makeDeps();
     const runner = createGhostErrandRunner(deps);
     const seen: string[] = [];
-    const p = runner(REQUEST, { onSession: (sid) => seen.push(sid) });
+    const dispatched: string[] = [];
+    const p = runner(REQUEST, {
+      onSession: (sid) => seen.push(sid),
+      onDispatched: (sid) => dispatched.push(sid),
+    });
     await vi.waitFor(() => {
       expect(emitters.has('sess-new')).toBe(true);
     });
+    expect(seen).toEqual(['sess-new']);
+    expect(dispatched).toEqual(['sess-new']);
     const e = emitters.get('sess-new')!;
     e.emit(textEvent('答案'));
     e.emit(doneEvent());
     const r = await p;
     expect(r).toMatchObject({ ok: true, sessionId: 'sess-new', text: '答案', agentKind: 'cc' });
-    expect(seen).toEqual(['sess-new']);
     expect(writes).toContainEqual(['helper', 'sess-new']);
   });
 
@@ -177,7 +194,7 @@ describe('专属会话建/复用', () => {
     const e = emitters.get('sess-new')!;
     e.emit(doneEvent());
     await p;
-    expect(writes[0]).toEqual(['helper', null]);
+    expect(writes).not.toContainEqual(['helper', null]);
     expect(writes).toContainEqual(['helper', 'sess-new']);
   });
 
@@ -331,11 +348,20 @@ describe('忙检与投递', () => {
       isSessionBusy: () => true,
       dispatch: dispatch as unknown as GhostErrandRunnerDeps['dispatch'],
     });
-    expect(await createGhostErrandRunner(deps)(REQUEST)).toMatchObject({
+    const seen: string[] = [];
+    const dispatched: string[] = [];
+    expect(
+      await createGhostErrandRunner(deps)(REQUEST, {
+        onSession: (sid) => seen.push(sid),
+        onDispatched: (sid) => dispatched.push(sid),
+      }),
+    ).toMatchObject({
       ok: false,
       errorCode: 'BUSY',
     });
     expect(dispatch).not.toHaveBeenCalled();
+    expect(seen).toEqual(['sess-1']);
+    expect(dispatched).toEqual([]);
   });
 
   it('投递返回 queued(竞态窗口)→ 如实报 BUSY', async () => {
@@ -343,10 +369,33 @@ describe('忙检与投递', () => {
       readSessionId: () => 'sess-1',
       dispatch: async () => ({ ok: true as const, wakeKind: 'queued' as const }),
     });
-    expect(await createGhostErrandRunner(deps)(REQUEST)).toMatchObject({
+    const dispatched: string[] = [];
+    expect(
+      await createGhostErrandRunner(deps)(REQUEST, {
+        onDispatched: (sid) => dispatched.push(sid),
+      }),
+    ).toMatchObject({
       ok: false,
       errorCode: 'BUSY',
     });
+    expect(dispatched).toEqual([]);
+  });
+
+  it('投递成功但会话进程不可观察 → SESSION_UNAVAILABLE,不 onDispatched', async () => {
+    const { deps } = makeDeps({
+      readSessionId: () => 'sess-1',
+      getObservableSession: () => null,
+    });
+    const dispatched: string[] = [];
+    expect(
+      await createGhostErrandRunner(deps)(REQUEST, {
+        onDispatched: (sid) => dispatched.push(sid),
+      }),
+    ).toMatchObject({
+      ok: false,
+      errorCode: 'SESSION_UNAVAILABLE',
+    });
+    expect(dispatched).toEqual([]);
   });
 
   it('投递失败映射:NOT_FOUND/ARCHIVED → SESSION_UNAVAILABLE 并解除映射', async () => {
@@ -394,4 +443,54 @@ describe('收口与取文', () => {
     await vi.waitFor(() => expect(emitters.has('sess-1')).toBe(true));
     expect(await p).toMatchObject({ ok: false, errorCode: 'TIMEOUT' });
   });
+});
+
+ describe('model admission and recovery before legacy execution', () => {
+   it('retains a failed task mapping and never dispatches an unavailable route', async () => {
+     const { deps, writes } = makeDeps({ readSessionId: () => 'old',
+       resolveExecution: async () => { throw Error('供应商未连接，请重新选择'); } });
+     expect(await createGhostErrandRunner(deps)(REQUEST)).toMatchObject({ ok: false, errorCode: 'SESSION_UNAVAILABLE' });
+     expect(deps.createSession).not.toHaveBeenCalled();
+     expect(deps.dispatch).not.toHaveBeenCalled();
+     expect(writes).toEqual([]);
+   });
+   it('retains the old history mapping when replacement creation fails', async () => {
+     const { deps, writes } = makeDeps({ readSessionId: () => 'old',
+       readConfig: () => ({ model: 'new-model' }), createSession: vi.fn(async () => { throw Error('create failed'); }) });
+     expect(await createGhostErrandRunner(deps)(REQUEST)).toMatchObject({ ok: false });
+     expect(writes).toEqual([]);
+     expect(deps.dispatch).not.toHaveBeenCalled();
+   });
+   it('keeps user-repaired Codex tasks and their history when app defaults change', async () => {
+     const repaired = { ...ACTIVE_ROW, agentKind: 'codex', model: 'gpt-6-astra', providerId: 'openai' };
+     const { deps, emitters, writes } = makeDeps({ readSessionId: () => 'repaired', getSessionRow: async () => repaired });
+     const result = createGhostErrandRunner(deps)({ ...REQUEST, sourceSessionId: 'caller' });
+     await vi.waitFor(() => expect(emitters.has('repaired')).toBe(true));
+     emitters.get('repaired')!.emit(doneEvent());
+     expect(await result).toMatchObject({ ok: true, sessionId: 'repaired', model: 'gpt-6-astra' });
+     expect(deps.createSession).not.toHaveBeenCalled();
+     expect(writes).toEqual([]);
+   });
+   it('does not send after the user changes a validated task route', async () => {
+     let reads = 0;
+     const { deps } = makeDeps({ readSessionId: () => 'old', getSessionRow: async () =>
+       ++reads === 1 ? ACTIVE_ROW : { ...ACTIVE_ROW, model: 'changed-model' } });
+     expect(await createGhostErrandRunner(deps)(REQUEST)).toMatchObject({ ok: false, errorCode: 'SESSION_UNAVAILABLE' });
+     expect(deps.dispatch).not.toHaveBeenCalled();
+   });
+ });
+
+it('does not dispatch when plugin permission changes during model admission', async () => {
+  let permissionMode: 'auto' | 'plan' = 'auto';
+  const { deps } = makeDeps({
+    readConfig: () => ({ permissionMode }),
+    resolveExecution: async () => {
+      permissionMode = 'plan';
+      return { agentKind: 'claude-code', model: 'claude-x', fastMode: false };
+    },
+  });
+  const result = await createGhostErrandRunner(deps)(REQUEST);
+  expect(result).toMatchObject({ ok: false, errorCode: 'SESSION_UNAVAILABLE' });
+  expect(deps.createSession).not.toHaveBeenCalled();
+  expect(deps.dispatch).not.toHaveBeenCalled();
 });

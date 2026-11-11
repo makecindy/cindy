@@ -47,6 +47,9 @@ export function classifyMemoryError(err: unknown): MemoryToolError {
       return { code: 'INVALID_PARAMS', message };
     }
     if (code === 'io-error') return { code: 'INTERNAL', message };
+    // owner 作用域守卫抛的 not-ready (见 manager.ts ensureOwnerScope) — 与
+    // 「真空库返回 ok+[]」可区分 (issue #2341)。
+    if (code === 'not-ready') return { code: 'MAKER_MEMORY_NOT_READY', message };
   }
   // manager 显式抛的两种状态错
   if (/manager not (?:available|ready|injected)|memory disabled/i.test(message)) {

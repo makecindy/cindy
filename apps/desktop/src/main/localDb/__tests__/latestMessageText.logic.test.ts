@@ -117,17 +117,21 @@ describe('selectRecentTitleMessages', () => {
     ]);
   });
 
-  it('never selects a subagent assistant as the legacy fallback', () => {
-    const rows = [
-      row('user', 1, '检查协同 UI'),
-      row('assistant', 2, 'subagent 内部播报', { parentUuid: 'toolu-1' }),
-      row('assistant', 3, '主线程最终回复'),
-    ];
-    expect(selectRecentTitleMessages(rows, 8).map((message) => message.text)).toEqual([
-      '检查协同 UI',
-      '主线程最终回复',
-    ]);
-  });
+  // 标题/通知的主回答判据须与消息渲染一致；子代理迟到时也不能顶替主回答。
+  // 旧用例把主回答放在末尾，未暴露兼容 tool parent 被当成顶层的错误。
+  it.each(['toolu-1', 'call_1', 'chatcmpl-tool-a1b2c3d4e5f60718', 'Task_1'])(
+    'never selects a subagent assistant as the legacy fallback (%s)', (parentUuid) => {
+      const rows = [
+        row('user', 1, '检查协同 UI'),
+        row('assistant', 2, '主线程最终回复'),
+        row('assistant', 3, 'subagent 内部播报', { parentUuid }),
+      ];
+      expect(selectRecentTitleMessages(rows, 8).map((message) => message.text)).toEqual([
+        '检查协同 UI',
+        '主线程最终回复',
+      ]);
+    },
+  );
 
   it('keeps legacy Claude transcript parentUuid while excluding confirmed tool parents', () => {
     const rows = [
@@ -262,6 +266,28 @@ describe('selectRecentTitleMessages', () => {
       '第一轮完成',
       '第二轮',
       '第二轮完成',
+    ]);
+  });
+  it('skips teammate collaboration cards but keeps what the guest actually said', () => {
+    const rows = [
+      row('user', 1, '帮我把这活派给策划'),
+      // 协作卡锚点(空正文)与插话留痕是对话的注解,不是主题证据。
+      row('assistant', 2, '', {
+        botCollaboration: { v: 1, role: 'delegation-request', delegationId: 'd1' },
+      }),
+      row('assistant', 3, '先别铺开，我只要三条。', {
+        botCollaboration: { v: 1, role: 'interjection', delegationId: 'd1' },
+      }),
+      // 客座结果是伙伴真说的话,照旧算数 —— 否则刚收到结果的任务预览会凭空变空。
+      row('assistant', 4, '方案定三条。', {
+        botCollaboration: { v: 1, role: 'result-mirror', delegationId: 'd1' },
+        turnCompleted: true,
+      }),
+    ];
+
+    expect(selectRecentTitleMessages(rows, 4).map((message) => message.text)).toEqual([
+      '帮我把这活派给策划',
+      '方案定三条。',
     ]);
   });
 });

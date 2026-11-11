@@ -42,10 +42,30 @@ describe('encodeCatalogPin / decodeCatalogPin', () => {
       agentKind: 'codex',
       model: 'codex/gpt-5.5',
     });
+    expect(decodeCatalogPin(encodeCatalogPin('custom-1', 'claude-code', 'qwen3:8b'))).toEqual({
+      providerId: 'custom-1',
+      agentKind: 'claude-code',
+      model: 'qwen3:8b',
+    });
+    expect(decodeCatalogPin(encodeCatalogPin('opencode-go', 'pi', 'step-5-preview-free'))).toEqual({
+      providerId: 'opencode-go',
+      agentKind: 'pi',
+      model: 'step-5-preview-free',
+    });
     expect(decodeCatalogPin('cat:custom-1:claude-code:qwen3:8b')).toEqual({
       providerId: 'custom-1',
       agentKind: 'claude-code',
       model: 'qwen3:8b',
+    });
+  });
+
+  it('编码包含分隔符的运行期供应商 ID', () => {
+    const pin = encodeCatalogPin('custom:xai', 'codex', 'grok:4');
+    expect(pin).toBe('cat:custom%3Axai:codex:grok:4');
+    expect(decodeCatalogPin(pin)).toEqual({
+      providerId: 'custom:xai',
+      agentKind: 'codex',
+      model: 'grok:4',
     });
   });
 
@@ -58,8 +78,8 @@ describe('encodeCatalogPin / decodeCatalogPin', () => {
       'cat:xd:codex',
       'cat::codex:m',
       'cat:xd::m',
-      'cat:xd:pi:m',
       'cat:xd:codex:',
+      'cat:xd:unknown-agent:m',
     ]) {
       expect(decodeCatalogPin(bad), bad).toBeNull();
     }
@@ -72,7 +92,7 @@ describe('buildTextOneshotPinOptions', () => {
       catalogOf(
         provider({
           id: 'xd',
-          name: 'Cindy Gateway',
+          name: 'Cindy AI · 心动',
           models: { codex: [chat('codex/gpt-5.5', { name: 'GPT 5.5 折扣' })] },
         }),
         provider({
@@ -89,12 +109,13 @@ describe('buildTextOneshotPinOptions', () => {
     expect(options).toEqual([
       {
         id: 'cat:xd:codex:codex/gpt-5.5',
-        label: 'GPT 5.5 折扣 · Cindy Gateway',
-        group: 'Cindy Gateway',
+        label: 'Codex · GPT 5.5 折扣 · Cindy AI · 心动',
+        group: 'Cindy AI · 心动',
         providerId: 'xd',
         agentKind: 'codex',
         modelId: 'codex/gpt-5.5',
         modelName: 'GPT 5.5 折扣',
+        agentSuffix: 'Codex',
         budget: true,
         subscription: false,
         routing: {
@@ -104,12 +125,13 @@ describe('buildTextOneshotPinOptions', () => {
       },
       {
         id: 'cat:openai:codex:gpt-5.5',
-        label: 'GPT 5.5 · OpenAI',
+        label: 'Codex · GPT 5.5 · OpenAI',
         group: 'OpenAI',
         providerId: 'openai',
         agentKind: 'codex',
         modelId: 'gpt-5.5',
         modelName: 'GPT 5.5',
+        agentSuffix: 'Codex',
         budget: false,
         subscription: true,
         routing: { codex: { upstream: 'https://api.example.com', authStrategy: 'oauth-token' } },
@@ -126,6 +148,30 @@ describe('buildTextOneshotPinOptions', () => {
       { disabledProviders: { openai: true }, disabledModels: { 'xd:gpt-a': true } },
     );
     expect(options.map((o) => o.id)).toEqual(['cat:xd:codex:gpt-b']);
+  });
+
+  it('过滤目录视图中已停用的模型并透传默认可见性', () => {
+    const options = buildTextOneshotPinOptions(
+      catalogOf(
+        provider({
+          id: 'xd',
+          models: {
+            codex: [
+              chat('disabled', { disabled: true }),
+              chat('retired', { status: 'retired' }),
+              chat('hidden-by-default', { defaultEnabled: false }),
+            ],
+          },
+        }),
+      ),
+      undefined,
+    );
+
+    expect(options).toHaveLength(1);
+    expect(options[0]).toMatchObject({
+      id: 'cat:xd:codex:hidden-by-default',
+      defaultEnabled: false,
+    });
   });
 
   it('非聊天模型过滤:mode 非聊天能态、mode 缺省但 group 是已知非聊天分类', () => {
@@ -158,24 +204,31 @@ describe('buildTextOneshotPinOptions', () => {
     ]);
   });
 
-  it('pi-only 供应商与缺 routing 的 agent 不进清单', () => {
+  it('pi 档:缺 routing 不进清单;声明完整的 pi runtime 声明即出线(含 anthropic-messages)', () => {
     const options = buildTextOneshotPinOptions(
       catalogOf(
         provider({ id: 'pi-prov', agents: ['pi'], models: { pi: [chat('pi-m')] as never } }),
         provider({
-          id: 'half',
+          id: 'pi-full',
           source: 'user',
-          agents: ['codex', 'claude-code'],
-          routing: { codex: { upstream: 'https://up.example.com', authStrategy: 'api-key-header' } },
-          models: {
-            codex: [chat('gpt-m-codex', { group: 'custom:half' })],
-            'claude-code': [chat('m-cc', { group: 'custom:half' })],
-          },
+          agents: ['pi'],
+          routing: { pi: { upstream: 'https://up.example.com/v1', authStrategy: 'api-key-header', wireProtocol: 'openai-chat' } },
+          models: { pi: [chat('pi-m', { group: 'custom:pi-full' })] },
+        }),
+        provider({
+          id: 'pi-anthropic',
+          source: 'user',
+          agents: ['pi'],
+          routing: { pi: { upstream: 'https://up.example.com', authStrategy: 'api-key-header', wireProtocol: 'anthropic-messages' } },
+          models: { pi: [chat('pi-m2', { group: 'custom:pi-anthropic' })] },
         }),
       ),
       undefined,
     );
-    expect(options.map((o) => o.id)).toEqual(['cat:half:codex:gpt-m-codex']);
+    expect(options.map((o) => [o.id, o.agentSuffix])).toEqual([
+      ['cat:pi-full:pi:pi-m', 'Pi'],
+      ['cat:pi-anthropic:pi:pi-m2', 'Pi'],
+    ]);
   });
 
   it('自定义供应商:routing 禁用 / 鉴权策略不支持 / 缺上游 → 排除;结构完整 → 收', () => {
@@ -214,9 +267,10 @@ describe('buildTextOneshotPinOptions', () => {
   });
 
   it('自定义供应商 wire 与执行侧出线不一致的组合不进清单', () => {
-    // 执行侧:claude-code 恒发 anthropic-messages;codex 发不出 anthropic-messages
-    // (会被静默当 responses)。配置错线的组合钉上恒失败,清单提前过滤。
-    const custom = (id: string, agentKind: 'codex' | 'claude-code', wireProtocol?: string) =>
+    // 执行侧:claude-code 恒发 anthropic-messages;pi 的出线跟随声明(声明的
+    // 协议都发得出);codex 发不出 anthropic-messages(会被静默当 responses);
+    // google-generative-ai 执行路直接拒绝。错线/拒线组合钉上恒失败,清单提前过滤。
+    const custom = (id: string, agentKind: 'codex' | 'claude-code' | 'pi', wireProtocol?: string) =>
       provider({
         id,
         source: 'user',
@@ -237,6 +291,11 @@ describe('buildTextOneshotPinOptions', () => {
         custom('cx-chat', 'codex', 'openai-chat'),
         custom('cx-anthropic', 'codex', 'anthropic-messages'),
         custom('cx-default', 'codex'),
+        custom('cx-google', 'codex', 'google-generative-ai'),
+        custom('pi-chat', 'pi', 'openai-chat'),
+        custom('pi-anthropic', 'pi', 'anthropic-messages'),
+        custom('pi-google', 'pi', 'google-generative-ai'),
+        custom('pi-default', 'pi'),
       ),
       undefined,
     );
@@ -244,10 +303,13 @@ describe('buildTextOneshotPinOptions', () => {
       'cat:cc-anthropic:claude-code:m',
       'cat:cx-chat:codex:m',
       'cat:cx-default:codex:m',
+      'cat:pi-chat:pi:m',
+      'cat:pi-anthropic:pi:m',
+      'cat:pi-default:pi:m',
     ]);
   });
 
-  it('内置供应商同一模型跨 agent 折叠成一行(agent 不影响出线);自定义保留两行补后缀', () => {
+  it('每个 Agent + Model 路由独立成行并始终标注 Agent', () => {
     const options = buildTextOneshotPinOptions(
       catalogOf(
         provider({
@@ -273,11 +335,37 @@ describe('buildTextOneshotPinOptions', () => {
       undefined,
     );
     expect(options.map((o) => [o.id, o.label])).toEqual([
-      // 内置:折叠成 codex 行,无后缀。
-      ['cat:xd:codex:gpt-5.5', 'GPT 5.5 · GW'],
-      // 自定义:两条真路由,都补 agent 后缀。
-      ['cat:dual:codex:gpt-5.5', 'GPT 5.5 · Dual · Codex'],
-      ['cat:dual:claude-code:gpt-5.5', 'GPT 5.5 · Dual · Claude Code'],
+      ['cat:xd:codex:gpt-5.5', 'Codex · GPT 5.5 · Cindy AI'],
+      ['cat:xd:claude-code:gpt-5.5', 'Claude Code · GPT 5.5 · Cindy AI'],
+      ['cat:dual:codex:gpt-5.5', 'Codex · GPT 5.5 · Dual'],
+      ['cat:dual:claude-code:gpt-5.5', 'Claude Code · GPT 5.5 · Dual'],
+    ]);
+    expect(options.map((o) => o.agentSuffix)).toEqual([
+      'Codex',
+      'Claude Code',
+      'Codex',
+      'Claude Code',
+    ]);
+  });
+
+  it('同一供应商下完全相同的 Agent + Model 路由只显示一次', () => {
+    const options = buildTextOneshotPinOptions(
+      catalogOf(
+        provider({
+          id: 'xd',
+          models: {
+            codex: [
+              chat('gpt-5.5', { name: 'GPT 5.5' }),
+              chat('gpt-5.5', { name: 'GPT 5.5 duplicate' }),
+            ],
+          },
+        }),
+      ),
+      undefined,
+    );
+
+    expect(options.map((o) => [o.id, o.label])).toEqual([
+      ['cat:xd:codex:gpt-5.5', 'Codex · GPT 5.5 · Cindy AI'],
     ]);
   });
 
@@ -396,4 +484,37 @@ describe('resolveOneshotCatalogModel', () => {
     expect(resolveOneshotCatalogModel(catalog, undefined, '   ')).toBeNull();
     expect(resolveOneshotCatalogModel(catalog, { disabledProviders: { xd: true } }, 'gpt-a')).toBeNull();
   });
+
+  it('目录视图中已停用的模型不能作为声明路由', () => {
+    const catalog = catalogOf(
+      provider({ id: 'xd', models: { codex: [chat('gpt-disabled', { disabled: true })] } }),
+    );
+    expect(resolveOneshotCatalogModel(catalog, undefined, 'gpt-disabled')).toBeNull();
+  });
+
+  it('目录中已退役的模型不能作为声明路由', () => {
+    const catalog = catalogOf(
+      provider({ id: 'xd', models: { codex: [chat('gpt-retired', { status: 'retired' })] } }),
+    );
+    expect(resolveOneshotCatalogModel(catalog, undefined, 'gpt-retired')).toBeNull();
+  });
+});
+
+it('never lists a retired independent Claude account as a quick-answer pin', () => {
+  const p = provider({ id: 'claude-work', source: 'user', agents: ['codex'],
+    auth: { method: 'oauth', native: 'claude' },
+    routing: { codex: { upstream: 'https://account.example/v1', authStrategy: 'provider-oauth-header' } },
+    models: { codex: [chat('gpt-5.5', { mode: 'chat' })] } });
+  expect(buildTextOneshotPinOptions(catalogOf(p), undefined)).toEqual([]);
+});
+
+it.each(['xai', 'codex'] as const)('lists an independent %s account using its own pin identity', (native) => {
+  const p = provider({ id: `${native}-work`, source: 'user', agents: ['codex'],
+    auth: { method: 'oauth', native },
+    routing: { codex: { upstream: 'https://account.example/v1', authStrategy: 'provider-oauth-header' } },
+    models: { codex: [chat('gpt-5.5', { mode: 'chat' })] } });
+  expect(buildTextOneshotPinOptions(catalogOf(p), undefined)).toEqual([
+    expect.objectContaining({ providerId: p.id, id: encodeCatalogPin(p.id, 'codex', 'gpt-5.5') }),
+  ]);
+  expect(buildTextOneshotPinOptions(catalogOf({ ...p, routing: { codex: { ...p.routing.codex!, disabled: true } } }), undefined)).toEqual([]);
 });

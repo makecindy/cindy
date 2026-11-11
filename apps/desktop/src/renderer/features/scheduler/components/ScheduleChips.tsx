@@ -1,11 +1,13 @@
+import { deviceDisplayName } from '@/lib/deviceName';
+import { Button } from '@/components/ui/button';
+import { useModelPickerAgents } from '@/hooks/useAvailableAgents';
 import * as React from 'react';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { ChevronDown, ExternalLink, Folder, MessageCircle, Timer, SlidersHorizontal } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
 import { Popover, PopoverTrigger, PopoverContent } from '@/components/ui/popover';
+import { Select } from '@/components/ui/select';
 import { Tip } from '@/components/ui/tooltip';
-import { agentKindToVendor } from '@/components/sidebar/VendorIcon';
-import { AgentSelect } from '@/components/new-chat/AgentSelect';
 import {
   addRecentFolder,
   FolderPickerPopover,
@@ -14,13 +16,16 @@ import {
 import { useDetectCwd } from '@/hooks/useWorktreeQueries';
 import { useAgentCapabilities, type ModelDescriptor } from '@/hooks/useAgentCapabilities';
 import { useProviders } from '@/hooks/useProviders';
-import { ModelIconMark, ModelSelectorContent } from '@/components/new-chat/ModelSelector';
+import { useDeviceProviders } from '@/hooks/useDeviceProviders';
+import { useModelRouteDevices } from '@/hooks/useModelRouteDevices';
+import { RemoteSourceMark } from '@/components/icons/RemoteSourceMark';
+import { VendorIcon, agentKindToVendor } from '@/components/sidebar/VendorIcon';
+import { ModelRouteSelectorContent } from '@/components/new-chat/ModelRouteSelector';
 import { useModelDiscoveryPending } from '@/components/new-chat/useModelDiscoveryPending';
 import {
-  connectedProvidersForAgent,
   effectiveSourceIdForModel,
   getModel,
-  nativeDefaultSourceId,
+  isCodexGatewayWireModel,
 } from '@cindy/model-providers';
 import * as sessionService from '@/lib/sessionService';
 import type { Session } from '@/lib/ccAgent.types';
@@ -39,15 +44,19 @@ import {
   switchScheduleTimingMode,
   WEEKDAY_LABELS,
   DEFAULT_CONFIG,
+  isSupportedIntervalMinutes,
+  resolveIntervalMinutesPresetValue,
+  SUPPORTED_INTERVAL_MINUTES,
   type CodexScheduleConfig,
 } from '../lib/cronCodexPreset';
-import { getScheduleDefaultModel, type EffortValue } from '../hooks/useScheduleForm';
+import type { EffortValue } from '../hooks/useScheduleForm';
 import {
   isFollowingSessionSelection,
   PENDING_SESSION_ID,
   usesBoundSessionModel,
 } from '../lib/scheduleFormLogic';
 import type { SessionReference } from '../../../../shared/sessionReference';
+import { isReviewSessionSource } from '../../../../shared/sessionSource';
 
 export type Destination = 'local' | 'worktree' | 'thread';
 export type AgentKind = 'claude-code' | 'codex' | 'pi';
@@ -59,6 +68,8 @@ interface ChipButtonProps {
   active?: boolean;
   variant?: 'toolbar' | 'pill';
   className?: string;
+  /** 悬停 / 读屏的完整说明(label 会被截断时用)。 */
+  title?: string;
   onClick?: () => void;
 }
 
@@ -73,7 +84,7 @@ export const ChipButton = React.forwardRef<HTMLButtonElement, ChipButtonProps>(f
       disabled={disabled}
       onClick={onClick}
       className={cn(
-        'inline-flex h-[34px] shrink-0 items-center rounded-full text-[13px] leading-none transition-colors',
+        'inline-flex h-[34px] shrink-0 items-center rounded-full text-13 leading-none transition-colors',
         'gap-1.5 px-3',
         variant === 'toolbar'
           ? cn(
@@ -91,14 +102,14 @@ export const ChipButton = React.forwardRef<HTMLButtonElement, ChipButtonProps>(f
       {...rest}
     >
       {icon && <span className="shrink-0 -translate-y-px">{icon}</span>}
-      {label && <span className="truncate text-center text-[13px] font-normal leading-[1.33]">{label}</span>}
+      {label && <span className="truncate text-center text-13 font-normal leading-[1.33]">{label}</span>}
       <ChevronDown size={13} className="shrink-0 opacity-60" />
     </button>
   );
 });
 
 const POPOVER_BASE = cn(
-  'z-[10010] rounded-xl border p-2 shadow-lg',
+  'z-[10010] rounded-xl border p-2 shadow-[shadow:var(--shadow-menu)]',
   'border-[var(--cmd-palette-border)] bg-[var(--cmd-palette-bg)] dark:border-[var(--cmd-palette-border)] dark:bg-[var(--cmd-palette-bg)]',
 );
 
@@ -165,28 +176,6 @@ export function ProjectChip({
   );
 }
 
-/**
- * Scheduler compatibility adapter: keep the persisted scheduler kind shape,
- * while sharing the same AgentSelect dropdown used by IM settings and chat.
- */
-export function AgentTabs({ value, onChange, disabled }: { value: AgentKind; onChange: (v: AgentKind) => void; disabled?: boolean }) {
-  return (
-    <AgentSelect
-      value={agentKindToVendor(value)}
-      disabled={disabled}
-      side="top"
-      // ScheduleFormDialog 是 Radix modal。MorphPopover 的 custom portal 不在
-      // Dialog focus scope 内，动画结束聚焦选中项时会被拉回并立即自动收起；
-      // 此处使用 Radix Popover，让嵌套焦点与 outside-interaction 语义正确组合。
-      useMorphPopover={false}
-      overlayContentClassName="z-[10010]"
-      onChange={(vendor) => {
-        onChange(vendor === 'cc' ? 'claude-code' : vendor === 'pi' ? 'pi' : 'codex');
-      }}
-    />
-  );
-}
-
 export function ScheduleSettingsButton({
   cwd,
   enabled,
@@ -238,12 +227,12 @@ export function ScheduleSettingsButton({
         className={cn(POPOVER_BASE, 'w-[240px]')}
         onWheel={stopWheel}
       >
-        <div className="px-2 pt-1.5 pb-1 text-[13px] font-medium text-[var(--cmd-palette-item-meta)] dark:text-[var(--settings-section-desc)]">
+        <div className="px-2 pt-1.5 pb-1 text-13 font-medium text-[var(--cmd-palette-item-meta)] dark:text-[var(--settings-section-desc)]">
           {t('scheduler.chips.advanced')}
         </div>
 
         {enabled && (
-          <p className="px-2 pb-1 text-[11px] leading-4 text-[var(--cmd-palette-item-meta)] dark:text-[var(--settings-section-desc)]">
+          <p className="px-2 pb-1 text-11 leading-4 text-[var(--cmd-palette-item-meta)] dark:text-[var(--settings-section-desc)]">
             {t('scheduler.chips.worktreeHint')}
           </p>
         )}
@@ -255,7 +244,7 @@ export function ScheduleSettingsButton({
             onClick={() => !switchDisabled && onEnabledChange(!enabled)}
             disabled={switchDisabled}
             className={cn(
-              'flex h-8 w-full items-center gap-2 rounded-md px-2 text-[13px] transition-colors',
+              'flex h-8 w-full items-center gap-2 rounded-md px-2 text-13 transition-colors',
               'hover:bg-[var(--surface-hover)] dark:hover:bg-[var(--settings-btn-secondary-hover-bg)]',
               'disabled:cursor-not-allowed disabled:opacity-50',
               enabled ? 'text-[var(--msg-assistant-text)] dark:text-[var(--msg-assistant-text)]' : 'text-[var(--cmd-palette-item-meta)] dark:text-[var(--settings-section-desc)]',
@@ -377,7 +366,7 @@ export function ScheduleChip({
   const intervalIsPreset = timingPresentation.kind !== 'intervalExact';
   const scheduleUnset = intervalMs === undefined && cronExpr.trim() === '';
   const scheduleSummary = intervalMs === undefined
-    ? summarizeConfig(normalizeScheduleConfig(config))
+    ? summarizeConfig(normalizeScheduleConfig(config), t)
     : formatIntervalDuration(intervalMs, i18n.resolvedLanguage ?? i18n.language);
   const chipLabel = scheduleUnset
     ? t('scheduler.chips.chooseTime')
@@ -407,10 +396,15 @@ export function ScheduleChip({
   };
 
   const setMode = (mode: EditableScheduleMenuMode) => {
+    // Re-selecting the visible mode is not an instruction to replace a legacy value.
+    // An exact interval has its own activeMode and can still enter a supported preset.
+    if (mode === 'intervalMinutes' && mode === activeMode) return;
+    // Exact intervals have no preset config; their compatibility Cron is not authoritative.
+    const presetConfig = activeMode === 'exactInterval' ? DEFAULT_CONFIG : config;
     const patch: Partial<CodexScheduleConfig> = { mode };
-    if (mode === 'interval') patch.intervalHours = config.mode === 'interval' ? config.intervalHours : 1;
+    if (mode === 'interval') patch.intervalHours = presetConfig.mode === 'interval' ? presetConfig.intervalHours : 1;
     if (mode === 'intervalMinutes') {
-      patch.intervalMinutes = config.mode === 'intervalMinutes' ? config.intervalMinutes : 5;
+      patch.intervalMinutes = resolveIntervalMinutesPresetValue(presetConfig);
     }
     update(patch);
   };
@@ -433,7 +427,7 @@ export function ScheduleChip({
             if (e.target === e.currentTarget) setOpen(false);
           }}
         >
-          <div className="rounded-xl border border-[var(--cmd-palette-border)] bg-[var(--cmd-palette-bg)] p-2 shadow-lg dark:border-[var(--cmd-palette-border)] dark:bg-[var(--cmd-palette-bg)]">
+          <div className="rounded-xl border border-[var(--cmd-palette-border)] bg-[var(--cmd-palette-bg)] p-2 shadow-[shadow:var(--shadow-menu)] dark:border-[var(--cmd-palette-border)] dark:bg-[var(--cmd-palette-bg)]">
             <div className="flex h-[34px] items-center gap-1 rounded-lg bg-[var(--chat-input-chip-bg)] p-[3px]">
               {(['cron', 'interval'] as const).map((mode) => {
                 const active = timingMode === mode;
@@ -455,7 +449,7 @@ export function ScheduleChip({
                 );
               })}
             </div>
-            <p className="px-1 pt-1.5 text-[11px] leading-4 text-[var(--cmd-palette-item-meta)] dark:text-[var(--settings-section-desc)]">
+            <p className="px-1 pt-1.5 text-11 leading-4 text-[var(--cmd-palette-item-meta)] dark:text-[var(--settings-section-desc)]">
               {t(
                 timingMode === 'interval' && !intervalIsPreset
                   ? 'scheduler.chips.timingMode.intervalUnsupportedHint'
@@ -464,7 +458,7 @@ export function ScheduleChip({
             </p>
           </div>
           <div className="flex items-start gap-2">
-            <div className="w-[260px] shrink-0 rounded-xl border border-[var(--cmd-palette-border)] bg-[var(--cmd-palette-bg)] p-2 shadow-lg dark:border-[var(--cmd-palette-border)] dark:bg-[var(--cmd-palette-bg)]">
+            <div className="w-[260px] shrink-0 rounded-xl border border-[var(--cmd-palette-border)] bg-[var(--cmd-palette-bg)] p-2 shadow-[shadow:var(--shadow-menu)] dark:border-[var(--cmd-palette-border)] dark:bg-[var(--cmd-palette-bg)]">
               <div className="flex flex-col gap-[2px]">
                 {availableModes.map((mode) => {
                 const active = activeMode === mode;
@@ -508,11 +502,11 @@ export function ScheduleChip({
 function ExactIntervalPanel({ summary }: { summary: string }) {
   const { t } = useTranslation();
   return (
-    <div className="min-w-0 flex-1 rounded-xl border border-[var(--cmd-palette-border)] bg-[var(--cmd-palette-bg)] p-3 shadow-lg dark:border-[var(--cmd-palette-border)] dark:bg-[var(--cmd-palette-bg)]">
-      <div className="text-[13px] font-medium text-[var(--msg-assistant-text)]">
+    <div className="min-w-0 flex-1 rounded-xl border border-[var(--cmd-palette-border)] bg-[var(--cmd-palette-bg)] p-3 shadow-[shadow:var(--shadow-menu)] dark:border-[var(--cmd-palette-border)] dark:bg-[var(--cmd-palette-bg)]">
+      <div className="text-13 font-medium text-[var(--msg-assistant-text)]">
         {t('scheduler.chips.timingMode.currentExact', { schedule: summary })}
       </div>
-      <p className="pt-2 text-[11px] leading-4 text-[var(--cmd-palette-item-meta)] dark:text-[var(--settings-section-desc)]">
+      <p className="pt-2 text-11 leading-4 text-[var(--cmd-palette-item-meta)] dark:text-[var(--settings-section-desc)]">
         {t('scheduler.chips.timingMode.exactIntervalPanelHint')}
       </p>
     </div>
@@ -537,18 +531,27 @@ function ScheduleConfigPanel({
   };
 
   return (
-    <div className="min-w-0 flex-1 rounded-xl border border-[var(--cmd-palette-border)] bg-[var(--cmd-palette-bg)] p-2 shadow-lg dark:border-[var(--cmd-palette-border)] dark:bg-[var(--cmd-palette-bg)]">
+    <div className="min-w-0 flex-1 rounded-xl border border-[var(--cmd-palette-border)] bg-[var(--cmd-palette-bg)] p-2 shadow-[shadow:var(--shadow-menu)] dark:border-[var(--cmd-palette-border)] dark:bg-[var(--cmd-palette-bg)]">
       <div className="flex flex-col gap-2">
         {mode === 'intervalMinutes' && (
           <>
             <div className="flex min-h-[34px] w-full items-center gap-1.5">
               <IntervalMinutesInput
                 value={panelConfig.intervalMinutes}
+                label={t('scheduler.chips.scheduleField.intervalMinutesAria')}
                 onFocus={commit}
                 onChange={(intervalMinutes) => onUpdate({ mode: 'intervalMinutes', intervalMinutes })}
               />
-              <span className="text-[13px] text-[var(--cmd-palette-item-meta)] dark:text-[var(--settings-section-desc)]">{t('scheduler.chips.scheduleField.minutesSuffix')}</span>
+              <span className="text-13 text-[var(--cmd-palette-item-meta)] dark:text-[var(--settings-section-desc)]">{t('scheduler.chips.scheduleField.minutesSuffix')}</span>
             </div>
+            <p className="text-11 leading-4 text-[var(--cmd-palette-item-meta)] dark:text-[var(--settings-section-desc)]">
+              {t('scheduler.chips.scheduleField.minuteIntervalHint')}
+            </p>
+            {!isSupportedIntervalMinutes(panelConfig.intervalMinutes) && (
+              <p className="text-11 leading-4 text-[var(--cmd-palette-item-meta)] dark:text-[var(--settings-section-desc)]">
+                {t('scheduler.chips.scheduleField.unsupportedMinuteInterval', { count: panelConfig.intervalMinutes })}
+              </p>
+            )}
             <PreviewPill
               text={
                 panelConfig.intervalMinutes === 1
@@ -566,7 +569,7 @@ function ScheduleConfigPanel({
                 onFocus={commit}
                 onChange={(intervalHours) => onUpdate({ mode: 'interval', intervalHours })}
               />
-              <span className="text-[13px] text-[var(--cmd-palette-item-meta)] dark:text-[var(--settings-section-desc)]">{t('scheduler.chips.scheduleField.hoursSuffix')}</span>
+              <span className="text-13 text-[var(--cmd-palette-item-meta)] dark:text-[var(--settings-section-desc)]">{t('scheduler.chips.scheduleField.hoursSuffix')}</span>
             </div>
             <PreviewPill text={panelConfig.intervalHours === 1 ? t('scheduler.chips.schedulePreview.everyHour') : t('scheduler.chips.schedulePreview.everyHours', { count: panelConfig.intervalHours })} />
           </>
@@ -574,21 +577,21 @@ function ScheduleConfigPanel({
         {(mode === 'daily' || mode === 'weekdays') && (
           <>
             <TimeRow config={panelConfig} onFocus={commit} onUpdate={(patch) => onUpdate({ mode, ...patch })} />
-            <PreviewPill text={summarizeConfig(panelConfig)} />
+            <PreviewPill text={summarizeConfig(panelConfig, t)} />
           </>
         )}
         {mode === 'weekly' && (
           <>
             <WeekdayRow value={panelConfig.weekday} onFocus={commit} onChange={(weekday) => onUpdate({ mode: 'weekly', weekday })} />
             <TimeRow config={panelConfig} onFocus={commit} onUpdate={(patch) => onUpdate({ mode: 'weekly', ...patch })} />
-            <PreviewPill text={summarizeConfig(panelConfig)} />
+            <PreviewPill text={summarizeConfig(panelConfig, t)} />
           </>
         )}
         {mode === 'monthly' && (
           <>
             <MonthDayRow value={panelConfig.monthDay} onFocus={commit} onChange={(monthDay) => onUpdate({ mode: 'monthly', monthDay })} />
             <TimeRow config={panelConfig} onFocus={commit} onUpdate={(patch) => onUpdate({ mode: 'monthly', ...patch })} />
-            <PreviewPill text={summarizeConfig(panelConfig)} />
+            <PreviewPill text={summarizeConfig(panelConfig, t)} />
           </>
         )}
       </div>
@@ -633,35 +636,38 @@ function IntervalHoursInput({
 
 function IntervalMinutesInput({
   value,
+  label,
   onFocus,
   onChange,
 }: {
   value: number;
+  label: string;
   onFocus: () => void;
   onChange: (value: number) => void;
 }) {
-  const [draft, setDraft] = useState(String(value));
-
-  useEffect(() => {
-    setDraft(String(value));
-  }, [value]);
-
+  const valueString = String(value);
+  const isSupported = SUPPORTED_INTERVAL_MINUTES.includes(
+    value as (typeof SUPPORTED_INTERVAL_MINUTES)[number],
+  );
+  const options = [
+    ...(!isSupported
+      ? [{ value: valueString, label: String(value) + '*', disabled: true }]
+      : []),
+    ...SUPPORTED_INTERVAL_MINUTES.map((minutes) => ({
+      value: String(minutes),
+      label: String(minutes),
+    })),
+  ];
   return (
-    <input
-      type="text"
-      inputMode="numeric"
-      pattern="[0-9]*"
-      maxLength={2}
-      value={draft}
-      onFocus={onFocus}
-      onBlur={() => setDraft(String(value))}
-      onChange={(e) => {
-        const digits = e.target.value.replace(/\D/g, '').slice(0, 2);
-        setDraft(digits);
-        if (!digits) return;
-        onChange(clamp(Number(digits), 1, 59));
+    <Select
+      label={label}
+      value={valueString}
+      options={options}
+      onOpenChange={(open) => {
+        if (open) onFocus();
       }}
-      className={inputPillClass('w-[68px] text-center')}
+      onValueChange={(next) => onChange(Number(next))}
+      className="w-[88px] px-2 text-center text-13"
     />
   );
 }
@@ -777,7 +783,7 @@ function TimePicker({
         setOpen(next);
       }}
     >
-      <div className="grid h-[34px] w-[112px] grid-cols-[1fr_24px] items-center rounded-lg border border-[var(--settings-input-border)] bg-background px-2 text-[13px] font-medium text-[var(--settings-input-text)] dark:border-[var(--settings-input-border)] dark:text-[var(--settings-input-text)]">
+      <div className="grid h-[34px] w-[112px] grid-cols-[1fr_24px] items-center rounded-lg border border-[var(--settings-input-border)] bg-background px-2 text-13 font-medium text-[var(--settings-input-text)] dark:border-[var(--settings-input-border)] dark:text-[var(--settings-input-text)]">
         <div className="flex items-center justify-center">
         <input
           ref={hourInputRef}
@@ -809,7 +815,7 @@ function TimePicker({
             }
           }}
           aria-label={t('scheduler.chips.scheduleField.scheduleHourAria')}
-          className="w-5 bg-transparent text-center text-[13px] font-medium outline-none"
+          className="w-5 bg-transparent text-center text-13 font-medium outline-none"
         />
         <span className="select-none text-[var(--cmd-palette-item-meta)] dark:text-[var(--settings-section-desc)]">:</span>
         <input
@@ -842,7 +848,7 @@ function TimePicker({
             }
           }}
           aria-label={t('scheduler.chips.scheduleField.scheduleMinuteAria')}
-          className="w-5 bg-transparent text-center text-[13px] font-medium outline-none"
+          className="w-5 bg-transparent text-center text-13 font-medium outline-none"
         />
         </div>
         <PopoverTrigger asChild>
@@ -894,7 +900,7 @@ function TimeColumn({
 }) {
   return (
     <div className="min-w-0">
-      <div className="px-2 pb-1 text-[11px] text-[var(--cmd-palette-item-meta)] dark:text-[var(--settings-section-desc)]">{label}</div>
+      <div className="px-2 pb-1 text-11 text-[var(--cmd-palette-item-meta)] dark:text-[var(--settings-section-desc)]">{label}</div>
       <div className="max-h-[180px] overflow-y-auto pr-1" onWheel={stopWheel}>
         {options.map((option) => {
           const active = option === value;
@@ -904,7 +910,7 @@ function TimeColumn({
               type="button"
               onClick={() => onChange(option)}
               className={cn(
-                'flex h-7 w-full items-center justify-center rounded-md text-[13px] transition-colors',
+                'flex h-7 w-full items-center justify-center rounded-md text-13 transition-colors',
                 active
                   ? 'bg-[var(--chat-input-chip-bg)] font-medium text-[var(--msg-assistant-text)] dark:bg-[var(--chat-input-chip-bg)] dark:text-[var(--msg-assistant-text)]'
                   : 'text-[var(--cmd-palette-item-meta)] hover:bg-[var(--surface-hover)] dark:text-[var(--settings-section-desc)] dark:hover:bg-[var(--settings-btn-secondary-hover-bg)]',
@@ -930,6 +936,7 @@ function WeekdayRow({
   onFocus: () => void;
   multi?: boolean;
 }) {
+  const { t } = useTranslation();
   const selected = multi ? [1, 2, 3, 4, 5] : [value];
   return (
     <div className="flex min-h-[34px] w-full items-center">
@@ -943,14 +950,16 @@ function WeekdayRow({
               onFocus={onFocus}
               onClick={() => onChange(day)}
               className={cn(
-                'flex h-8 w-[38px] items-center justify-center rounded-full border text-[13px] transition-colors',
+                'flex h-8 w-[38px] items-center justify-center rounded-full border text-13 transition-colors',
                 active
                   ? 'border-transparent bg-[var(--chat-input-chip-bg)] font-medium text-[var(--msg-assistant-text)] dark:bg-[var(--chat-input-chip-bg)] dark:text-[var(--msg-assistant-text)]'
                   : 'border-[var(--cmd-palette-border)] bg-transparent text-[var(--cmd-palette-item-meta)] hover:bg-[var(--confirm-btn-secondary-hover)] dark:border-[var(--cmd-palette-border)] dark:hover:bg-[var(--settings-btn-secondary-hover-bg)]',
               )}
-              aria-label={WEEKDAY_LABELS[day]}
+              aria-label={t(`scheduler.presentation.weekday.full.${day}`)}
             >
-              {WEEKDAY_SHORT[day]}
+              {t(`scheduler.presentation.weekday.short.${day}`, {
+                defaultValue: WEEKDAY_SHORT[day],
+              })}
             </button>
           );
         })}
@@ -977,7 +986,7 @@ function MonthDayRow({
 
   return (
     <div className="flex min-h-[34px] w-full items-center gap-1.5">
-      <span className="text-[13px] text-[var(--cmd-palette-item-meta)] dark:text-[var(--settings-section-desc)]">{t('scheduler.chips.scheduleField.daySuffix')}</span>
+      <span className="text-13 text-[var(--cmd-palette-item-meta)] dark:text-[var(--settings-section-desc)]">{t('scheduler.chips.scheduleField.daySuffix')}</span>
       <input
         type="text"
         inputMode="numeric"
@@ -1003,7 +1012,7 @@ function MonthDayRow({
 
 function PreviewPill({ text }: { text: string }) {
   return (
-    <div className="flex h-[34px] w-full items-center rounded-full bg-background px-3 text-[13px] text-[var(--cmd-palette-item-meta)] dark:text-[var(--settings-section-desc)]">
+    <div className="flex h-[34px] w-full items-center rounded-full bg-background px-3 text-13 text-[var(--cmd-palette-item-meta)] dark:text-[var(--settings-section-desc)]">
       {text}
     </div>
   );
@@ -1011,7 +1020,7 @@ function PreviewPill({ text }: { text: string }) {
 
 function inputPillClass(className?: string) {
   return cn(
-    'h-[34px] rounded-lg border px-3 text-[13px] outline-none',
+    'h-[34px] rounded-lg border px-3 text-13 outline-none',
     'border-[var(--settings-input-border)] bg-background text-[var(--settings-input-text)]',
     'dark:border-[var(--settings-input-border)] dark:text-[var(--settings-input-text)]',
     className,
@@ -1043,7 +1052,10 @@ function previewConfigFor(mode: EditableScheduleMenuMode, current: CodexSchedule
 }
 
 export function ModelEffortChip({
+  onSelect,
+  onFollowSession,
   agentKind,
+  agentDeviceId,
   modelValue,
   onChangeModel,
   effortValue,
@@ -1056,17 +1068,16 @@ export function ModelEffortChip({
   fastMode,
   onChangeFast,
 }: {
+  onSelect: NonNullable<React.ComponentProps<typeof ModelRouteSelectorContent>['onUnifiedSelect']>;
+  onFollowSession: () => void;
   agentKind: AgentKind;
+  agentDeviceId?: string;
   modelValue: string;
   onChangeModel: (v: string) => void;
   effortValue: EffortValue | '';
   onChangeEffort: (v: EffortValue | '') => void;
   disabled?: boolean;
-  /**
-   * heartbeat(绑定会话)形态:下拉顶部加"跟随会话"行(= model 空值),
-   * model 空时显示"跟随会话"而非默认回退模型。false/缺省路径行为零变化
-   * (空值回退默认模型的"所见即所存"逻辑保持原样,防 2026-06 显示≠运行事故复发)。
-   */
+  /** Bound automations may explicitly inherit the session model when modelValue is empty. */
   followSession?: boolean;
   /** 显式选定来源(供应商)id;'' = 跟随该 agent 原生默认来源(no-break)。 */
   providerId: string;
@@ -1074,9 +1085,9 @@ export function ModelEffortChip({
   onChangeProviderId: (providerId: string) => void;
   /** 0 个 / 引导连接来源时跳设置→供应商页;不传则来源轨不显示「连接」入口。 */
   onNavigateToProviders?: () => void;
-  /** Fast 模式状态 + 回调(与聊天一致,收进模型选择器 Edit 配置列)。heartbeat 态不传 → Edit 无 Fast。 */
-  fastMode?: boolean;
-  onChangeFast?: (v: boolean) => void;
+  /** Fast 模式状态 + 回调(与聊天一致,收进模型选择器 Edit 配置列)。绑定任务同样保存，下一次触发时应用。 */
+  fastMode?: boolean | 'ultrafast';
+  onChangeFast?: (v: boolean | 'ultrafast') => void;
 }) {
   const { t } = useTranslation();
   const [open, setOpen] = useState(false);
@@ -1103,23 +1114,32 @@ export function ModelEffortChip({
     },
     [disabled, discovery],
   );
-  const caps = useAgentCapabilities(agentKind);
-  // 触发器(trigger)展示用:仍按 codex/ 折扣模型的 XD 网关来源可见性过滤,算出当前
+  const pickerAgents = useModelPickerAgents(agentKind, agentDeviceId || undefined);
+  const caps = useAgentCapabilities(agentKind, agentDeviceId || undefined);
+  // 触发器(trigger)展示用:仍按 openai-codex/ 与 codex/ 折扣模型的 XD 网关来源可见性过滤,算出当前
   // 选中模型名。下拉内容本体改用聊天的 ModelSelectorContent(它内部按来源/api-key 自行
   // 过滤 + 分组),这里只为 trigger 文案保留最小化 model 解析。
-  const { providers } = useProviders();
+  const localProviders = useProviders();
+  const remoteProviders = useDeviceProviders(agentDeviceId || undefined);
+  const { providers } = agentDeviceId ? remoteProviders : localProviders;
+  // 触发器的位置说明与统一选择器使用相同候选，沿用设备名称的统一回退规则。
+  const routeDevices = useModelRouteDevices({
+    controlledDeviceId: null,
+    leadAgentDeviceId: agentDeviceId,
+  });
+  const agentDeviceName = agentDeviceId
+    ? deviceDisplayName(agentDeviceId, undefined, routeDevices.devices ?? [])
+    : null;
   const xdConnected = providers.some((p) => p.id === 'xd' && p.connected);
   const availableModels = caps.capabilities?.availableModels;
   const models = useMemo(
     () =>
       (availableModels ?? []).filter(
-        (m) => agentKind !== 'codex' || xdConnected || !m.id.startsWith('codex/'),
+        (m) => agentKind !== 'codex' || xdConnected || !isCodexGatewayWireModel(m.id),
       ),
     [availableModels, agentKind, xdConnected],
   );
-  // 只有 model/provider/effort 都为空时才显示「跟随会话」;混合覆盖态必须显式暴露，
-  // 不能把来源或强度覆盖伪装成完整继承。非 followSession 维持原逻辑:空值回退跟实际
-  // 运行语义同源(三级回退默认),绝不回退 models[0]。
+  // A partial bound override must remain visible instead of looking fully inherited.
   const isFollowingSession = isFollowingSessionSelection({
     followSession,
     model: modelValue,
@@ -1127,11 +1147,17 @@ export function ModelEffortChip({
     effort: effortValue,
   });
   const followsSessionModel = usesBoundSessionModel({ followSession, model: modelValue });
-  const effectiveId = followsSessionModel ? '' : modelValue || getScheduleDefaultModel(agentKind);
+  // The form owns default resolution. Empty means no selected model, not permission
+  // to resolve another default from this chip's independent catalog snapshot.
+  const effectiveId = followsSessionModel ? '' : modelValue;
+  const effectiveProviderId = providerId || null;
   const current = models.find((m) => m.id === effectiveId);
-  const allowedEfforts = (current?.efforts ?? []) as readonly EffortValue[];
-  const fallbackEffort = (current?.defaultEffort ?? 'high') as EffortValue;
-  const effectiveEffort: EffortValue = effortValue && allowedEfforts.includes(effortValue) ? effortValue : fallbackEffort;
+  const sourceId = effectiveSourceIdForModel(providers, effectiveProviderId, effectiveId, agentKind);
+  const source = providers.find((provider) => provider.id === sourceId);
+  const catalogModel = source ? getModel(source, effectiveId, agentKind) : undefined;
+  const effectiveEffort = effectiveId ? effortValue || catalogModel?.defaultEffort || current?.defaultEffort || '' : '';
+  const modelLabel = catalogModel?.name || current?.displayName || effectiveId || t('scheduler.chips.model.default');
+  const agentLabel = t(`newChat.modelSelector.trigger.agent.${agentKind === 'claude-code' ? 'claudeCode' : agentKind}`);
   const effortLabel = (e: EffortValue) => t(`effortLevels.${e}`);
   const display = followsSessionModel
     ? [
@@ -1141,54 +1167,27 @@ export function ModelEffortChip({
         : null,
       effortValue ? effortLabel(effortValue) : null,
     ].filter(Boolean).join(' · ')
-    : current
-      ? `${current.displayName} · ${allowedEfforts.length ? effortLabel(effectiveEffort) : t('scheduler.chips.model.effortDefault')}`
-      : t('scheduler.chips.model.default');
+    : [agentLabel, modelLabel, effectiveEffort ? effortLabel(effectiveEffort as EffortValue) : null,
+      effectiveId && fastMode ? '⚡' : null].filter(Boolean).join(' · ');
 
-  // railSources 仅用于 nativeDefault 归一化(下拉宽度由 ModelSelectorContent 内容自适应,见 w-auto)。
   const vendorKey = agentKind === 'claude-code' ? 'cc' : agentKind;
-  const railSources = useMemo(
-    () => connectedProvidersForAgent(providers, agentKind),
-    [providers, agentKind],
-  );
-  // 归一化:选中的来源 == 原生默认 → 存 ''(= 跟随默认,与老数据/未升级字节级一致),
-  // 否则存显式 id。这样只有「钉到非原生来源」才在 schedule 上落非空 providerId。
-  const nativeDefault = useMemo(
-    () => nativeDefaultSourceId(railSources, agentKind),
-    [railSources, agentKind],
-  );
-  // 当前生效来源 —— 与聊天 trigger 同口径(effectiveSourceIdForModel):按「已连接且**确实
-  // 提供当前模型**」收窄后再应用显式选择 / 原生默认。只查「已连接」会在显式来源不提供
-  // effectiveId 时渲染错误来源的标识(如 providerId=openai 而默认模型只有 xd 提供);
-  // followSession(effectiveId 为空)无从收窄,返回 null,icon 分支本就被 isFollowingSession 挡住。
-  const activeSourceId = useMemo(
-    () =>
-      effectiveId
-        ? effectiveSourceIdForModel(providers, providerId || null, effectiveId, agentKind)
-        : null,
-    [providers, providerId, effectiveId, agentKind],
-  );
-  const activeProvider = providers.find((p) => p.id === activeSourceId);
+  // This label starts with the Agent identity; its icon must identify that same
+  // Agent. Model/source branding remains in the model picker.
+  const agentIcon = !followsSessionModel ? (
+    <VendorIcon vendor={agentKindToVendor(agentKind)} size={14} colorClassName="text-current" />
+  ) : undefined;
+
+  const agentDeviceTitle = agentDeviceName
+    ? t('newChat.modelSelector.trigger.agentDevice', { device: agentDeviceName })
+    : null;
 
   return (
     <Popover open={open} onOpenChange={handleOpenChange}>
       <PopoverTrigger asChild>
         <ChipButton
-          icon={
-            !isFollowingSession && activeSourceId ? (
-              // 图标统一规则(与聊天 trigger 同口径):模型条目 icon(AI Gateway / 目录设定)
-              // 优先,缺省回落来源供应商标。
-              <ModelIconMark
-                icon={activeProvider ? getModel(activeProvider, effectiveId, agentKind)?.icon : undefined}
-                providerId={activeSourceId}
-                name={activeProvider?.name}
-                routing={activeProvider?.routing}
-                colorClass=""
-                withMargin={false}
-              />
-            ) : undefined
-          }
+          icon={agentDeviceId && agentIcon ? <RemoteSourceMark markSize={14}>{agentIcon}</RemoteSourceMark> : agentIcon}
           label={display}
+          title={agentDeviceTitle ? `${display} · ${agentDeviceTitle}` : undefined}
           active={open}
           disabled={disabled}
           className="[&>span:last-of-type]:min-w-[106px] max-w-[240px] px-2"
@@ -1201,7 +1200,7 @@ export function ModelEffortChip({
         className={cn(
           // z-[10010]:本 chip 在 ScheduleFormDialog 内,弹层必须盖过对话框(沿用原
           // POPOVER_BASE 的层级——丢了它会渲染在对话框下层、点了"没反应")。
-          'z-[10010] overflow-hidden rounded-[12px] p-0 shadow-lg',
+          'z-[10010] overflow-hidden rounded-[12px] p-0 shadow-[shadow:var(--shadow-menu)]',
           'bg-[var(--model-dropdown-bg)] border border-[var(--model-dropdown-border)]',
           // 宽度由内容自适应(单栏 320;Edit 展开 ~517 向左加宽),与聊天选择器同口径。
           'w-auto',
@@ -1210,7 +1209,11 @@ export function ModelEffortChip({
       >
         {/* 直接复用聊天的下拉内容本体(唯一真源:聊天选择器改了这里跟着变)。
             来源轨 / 模型分组 / 搜索 / effort / 空态全套自带;followSession 行为 opt-in。 */}
-        <ModelSelectorContent
+        <ModelRouteSelectorContent
+          agentDeviceId={agentDeviceId || null}
+          fastModeConfigurable={['codex', 'pi']}
+          unifiedAgents={pickerAgents}
+          onUnifiedSelect={onSelect}
           vendorKey={vendorKey}
           modelId={effectiveId}
           effort={effectiveEffort}
@@ -1220,17 +1223,16 @@ export function ModelEffortChip({
           onFastModeChange={onChangeFast}
           onDismiss={() => setOpenWithoutAutoRefresh(false)}
           currentProviderId={providerId || null}
-          onProviderChange={(pid, reconciledModelId, reconciledEffort) => {
-            onChangeProviderId(pid && pid !== nativeDefault ? pid : '');
+          onProviderChange={(pid, reconciledModelId, reconciledEffort, reconciledFast) => {
+            onChangeProviderId(pid ?? '');
+            if (reconciledFast !== undefined) onChangeFast?.(reconciledFast);
             if (reconciledModelId) onChangeModel(reconciledModelId);
             if (reconciledEffort !== undefined) {
               onChangeEffort(reconciledEffort as EffortValue | '');
             }
           }}
           onNavigateToProviders={onNavigateToProviders}
-          // A stale explicit provider is rendered as the effective fallback row.
-          // Re-selecting that highlighted row must repair the stored provider
-          // before the effort configuration card opens.
+          // An explicit selection always pins the connection, including the native default.
           reselectEmitsChange
           selectedRowClickOpensConfiguration
           overlayContentClassName="z-[10020]"
@@ -1241,9 +1243,7 @@ export function ModelEffortChip({
                   active: isFollowingSession,
                   label: t('scheduler.chips.model.followSession'),
                   onFollow: () => {
-                    onChangeModel('');
-                    onChangeEffort('');
-                    onChangeProviderId('');
+                    onFollowSession();
                   },
                 }
               : undefined
@@ -1278,7 +1278,7 @@ export function ThreadPickerInline({ value, onSelect, onOpen, reference }: {
       .list(50, 'active')
       .then((list) => {
         if (!alive) return;
-        setSessions(list);
+        setSessions(list.filter((session) => !isReviewSessionSource(session.source)));
         setError(null);
       })
       .catch((e: unknown) => {
@@ -1338,19 +1338,18 @@ export function ThreadPickerInline({ value, onSelect, onOpen, reference }: {
             ))}
           </select>
           {onOpen && hasRealValue && !referenceUnavailable && (
-            <button
+            <Button
+              variant="secondary"
+              size="md"
+              compact
+              tone="quiet"
               type="button"
               onClick={() => onOpen(value)}
               title={t('scheduler.editor.runSession.card.open')}
-              className={cn(
-                'inline-flex h-[34px] shrink-0 items-center gap-1 rounded-full px-2.5 text-xs font-medium',
-                'text-[var(--settings-btn-secondary-text)] hover:bg-[var(--surface-hover)]',
-                'transition-colors focus:outline-none',
-              )}
             >
               <ExternalLink size={12} strokeWidth={1.75} aria-hidden />
               {t('scheduler.editor.runSession.card.open')}
-            </button>
+            </Button>
           )}
         </>
       )}

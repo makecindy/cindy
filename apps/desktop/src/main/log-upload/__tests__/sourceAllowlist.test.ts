@@ -11,6 +11,24 @@ import { describe, expect, it } from 'vitest';
 
 import { isAllowedScope, __testing } from '../sourceAllowlist';
 
+describe('working directory diagnostics scope', () => {
+  it('allows only the path-free exact scope, not content-bearing roots or future children', () => {
+    expect(isAllowedScope('workdir-diagnostics')).toBe(true);
+    for (const scope of ['workdir-diagnostics/paths', 'workdir-diagnostics:paths', 'r:workdir-diagnostics', 'maker-ipc', 'workdir-probe-host']) {
+      expect(isAllowedScope(scope)).toBe(false);
+    }
+  });
+});
+
+describe('memory usage scope', () => {
+  it('allows only the numeric sample scope, not future children', () => {
+    expect(isAllowedScope('memory-usage')).toBe(true);
+    for (const scope of ['memory-usage:titles', 'memory-usage/heap', 'r:memory-usage', 'memory']) {
+      expect(isAllowedScope(scope)).toBe(false);
+    }
+  });
+});
+
 describe('放行：基础设施来源', () => {
   it.each([
     ['lifecycle', '退出编排与 render-process-gone'],
@@ -49,6 +67,7 @@ describe('拒绝：会打用户内容的来源', () => {
     ['session-search', '搜索关键词'],
     ['chat-history-search', '搜索关键词'],
     ['maker-ipc', 'agent 编排,带提示词'],
+    ['brain', '插件运行时诊断与第三方标识'],
     ['brain-runtime', '插件运行时,带用户内容'],
     ['skillhub:publishService', '用户内容'],
     ['secrets:builtin-api-key', '凭证相关'],
@@ -150,9 +169,14 @@ describe('排除表优先于放行表', () => {
  * **新增的子 scope 默认放行**——方向与 deny-by-default 相反。
  */
 describe('device-link：精确匹配，子 scope 不跟着放行', () => {
-  it('放行的只有明确列出的那两个', () => {
+  it('只放行明确列出的基础设施诊断，不继承到子 scope', () => {
     expect(isAllowedScope('device-link')).toBe(true);
     expect(isAllowedScope('device-link:cross-process-lock')).toBe(true);
+    for (const scope of ['device-link:ipc-diagnostics', 'device-link:execution-diagnostics', 'device-link-transfer']) {
+      expect(isAllowedScope(scope)).toBe(true);
+      expect(isAllowedScope(`${scope}/payload`)).toBe(false);
+      expect(isAllowedScope(`r:${scope}`)).toBe(false);
+    }
   });
 
   it('⚠️ device-link:ipc 不放行（会把镜像缓存清理的 root / remaining 路径写进日志）', () => {

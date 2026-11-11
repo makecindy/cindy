@@ -2,7 +2,7 @@
  * RightSidebar Shell —— 右侧边栏外壳(与左侧 Sidebar 对称)。
  *
  * 职责:
- *   - 宽度 / 背景 / 折叠-展开 250ms 过渡动画
+ *   - 宽度 / 背景 / 折叠-展开 200ms 过渡动画
  *   - 朝聊天区一侧的 resize handle(拖动改宽,双击复位;边缘由 resizeEdge 决定,
  *     经典布局在左边缘,面板被布局树换到聊天区左侧时在右边缘)
  *
@@ -16,6 +16,7 @@ import {
   type CSSProperties,
   forwardRef,
   useEffect,
+  useContext,
   useImperativeHandle,
   useRef,
   useState,
@@ -24,6 +25,7 @@ import { useTranslation } from 'react-i18next';
 
 import { cn } from '@/lib/utils';
 import { RightSidebarShell } from '@/features/right-sidebar/RightSidebarShell';
+import { SidebarPresentationContext } from '@/layout/sidebarPresentation';
 import { usePanelWidth } from '@/layout/paneWidths';
 import { CHAT_AREA_MIN_WIDTH } from '@/hooks/useRightSidebarResize';
 import { CHROME_ACTIONS_GEOMETRY } from './chromeActionsGeometry';
@@ -34,7 +36,7 @@ import { CHROME_ACTIONS_GEOMETRY } from './chromeActionsGeometry';
  * 设计原则:**动画只在用户主动 toggle 按钮**时跑;sessionId 切换 / 草稿切换 / init / 任何其它
  * isCollapsed prop 变化都**直接同步**不动画。toggle 按钮 onClick 时父层调用
  * `requestAnimateNextChange()` 主动 prime 一次,RightSidebar 看到这个标记后才让下一次 prop
- * 变化走 250ms 动画;不主动 prime → 默认无动画。
+ * 变化走 200ms 动画;不主动 prime → 默认无动画。
  *
  * 避免了之前用 ref / effect 推断"prop 变化是 toggle 还是 cascade"的脆弱逻辑(N+1/N+2 race、
  * sessionChanged 误判等)—— toggle 是事件源,理应由事件源显式声明动画意图。
@@ -54,6 +56,8 @@ interface RightSidebarProps {
   isMac: boolean;
   /** 关闭整个 RightSidebar(走外层 toggle handler);仅 Win 端 TabBar 内会渲染对应按钮(Mac 走 MainLayout 浮层)。 */
   onCloseSidebar?: () => void;
+  /** 固定唤起入口；只负责显示已展开的侧栏，不承担关闭语义。 */
+  onShowSidebar?: () => void;
   /** 最大化 RightSidebar;Phase 6 接真行为,Phase 1 渲染按钮即可。Mac 走 MainLayout 浮层、Win 走 TabBar 右端。 */
   onMaximize?: () => void;
   /** 当前 cc-agent session id;由 MainLayout 持有,CCAgentSessionView ownsRoute 时通过 outlet context 推上来。
@@ -65,6 +69,8 @@ interface RightSidebarProps {
   remoteHostId: string | null;
   /** device-link 会话归属：null = 已确认本机，undefined = 尚未解析。 */
   deviceLinkDeviceId?: string | null;
+  /** Pi-only product gate for the Subagents tab and detail surface. */
+  subagentsAvailable?: boolean;
   /** Maximize 态(Phase 6):RSB 撑满整个非左栏区,主区 hidden。本组件用来隐藏
    *  resize handle(maximize 不允许拖宽)+ 把 TabBar maximize 按钮图标切到"还原"。 */
   isMaximized?: boolean;
@@ -72,9 +78,9 @@ interface RightSidebarProps {
   reserveLeftChromeActions?: boolean;
   /** 工具面板位于最左且左侧栏为 rail 时，顶栏承接 ChromeActions 的 no-drag 命中区。 */
   railChromeActionsHitHole?: boolean;
-  /** 「在新窗口中打开侧边栏」:开偏好 + 弹出子窗口。Win 端 TabBar 内渲染按钮
-   *  (Mac 走 MainLayout 浮层,不经此 prop)。 */
-  onDetach?: () => void;
+  /** 「在独立窗口中打开」某个页签:主窗侧栏继续存在,只把该页签弹出到自己的窗口。
+   *  Shell 的顶栏按钮作用于当前页签,页签右键菜单作用于被点的页签。 */
+  onDetachTab?: (tabId: string, targetWindowId?: string) => void;
   /** M2(mac 交换态):面板当前贴哪条边。透传给 Shell —— 'left' 时 Shell 顶栏
    *  右端渲染 detach / maximize 真按钮(折叠 toggle 恒在 MainLayout 窗口右上浮层)。 */
   panelSide?: 'left' | 'right';
@@ -84,10 +90,11 @@ interface RightSidebarProps {
 
 export const RightSidebar = forwardRef<RightSidebarHandle, RightSidebarProps>(function RightSidebar(
   {
-    isCollapsed,
+    isCollapsed: requestedCollapsed,
     width,
     isMac,
     onCloseSidebar,
+    onShowSidebar,
     onMaximize,
     isMaximized,
     reserveLeftChromeActions = false,
@@ -96,29 +103,35 @@ export const RightSidebar = forwardRef<RightSidebarHandle, RightSidebarProps>(fu
     workdir,
     remoteHostId,
     deviceLinkDeviceId,
-    onDetach,
+    subagentsAvailable,
+    onDetachTab,
     panelSide,
     onAllTabsClosed,
   },
   ref,
 ) {
   const { t } = useTranslation();
+  const presentation = useContext(SidebarPresentationContext);
+  const isCollapsed = presentation?.collapsed ?? requestedCollapsed;
+  const instant = presentation?.instant ?? false;
 
   // 折叠 / 展开过渡动画 —— **只在 toggle 按钮主动 prime 时跑**;其它任何 isCollapsed prop
   // 变化(sessionId 切换 / 草稿切换 / init 等)默认都直接同步 displayCollapsed = isCollapsed,
   // 不动画(用户体验需求:切 session 应"瞬间生效"而不是"看着一栏慢慢展开/收起")。
   //
-  // 动画机制(保留原 250ms transition + rAF 滞后一帧切 displayCollapsed 的方案):
+  // 动画机制(保留原 200ms transition + rAF 滞后一帧切 displayCollapsed 的方案):
   //   1) MainLayout toggle 按钮 onClick → 调 requestAnimateNextChange() 设 animateNextRef=true
   //   2) MainLayout setIsRightSidebarCollapsed → prop 变化触发本 component useEffect
-  //   3) animateNextRef=true → 开 transition、下一帧切 displayCollapsed(width 滑过 250ms),reset ref
+  //   3) animateNextRef=true → 开 transition、下一帧切 displayCollapsed(width 滑过 200ms),reset ref
   //   4) animateNextRef=false(默认) → 直接同步 displayCollapsed = isCollapsed,无动画
   //
-  // 比例模式下窗口缩放只改 width、不翻 isCollapsed,故 transition 默认 off,避免 250ms ease
+  // 比例模式下窗口缩放只改 width、不翻 isCollapsed,故 transition 默认 off,避免 200ms ease
   // 造成"追不上窗口边缘"的橡皮筋滞后。
   const [displayCollapsed, setDisplayCollapsed] = useState(isCollapsed);
   const [animating, setAnimating] = useState(false);
-  const [animationWidthSnapshot, setAnimationWidthSnapshot] = useState<number | null>(null);
+  const [animationWidthSnapshot, setAnimationWidthSnapshot] = useState<
+    CSSProperties['width'] | null
+  >(null);
   const animateNextRef = useRef(false);
   const asideRef = useRef<HTMLElement | null>(null);
   // 宽度优先取引擎实时值(拖引擎缝把手逐帧跟手),未接管回落 prop。
@@ -138,14 +151,15 @@ export const RightSidebar = forwardRef<RightSidebarHandle, RightSidebarProps>(fu
   );
 
   useEffect(() => {
-    if (!animateNextRef.current) {
+    if (instant || !animateNextRef.current) {
+      animateNextRef.current = false;
       // 默认路径:直接同步,不动画(sessionId 切换 / init / 任何非 toggle 引起的变化)
       setAnimating(false);
       setAnimationWidthSnapshot(null);
       setDisplayCollapsed(isCollapsed);
       return;
     }
-    // 显式 toggle 路径:走 250ms 动画。
+    // 显式 toggle 路径:走 200ms 动画。
     animateNextRef.current = false;
     const measuredWidth = asideRef.current?.getBoundingClientRect().width ?? 0;
     setAnimationWidthSnapshot(measuredWidth > 0 ? measuredWidth : widthRef.current);
@@ -159,10 +173,13 @@ export const RightSidebar = forwardRef<RightSidebarHandle, RightSidebarProps>(fu
       window.cancelAnimationFrame(raf);
       window.clearTimeout(timer);
     };
-  }, [isCollapsed]);
+  }, [isCollapsed, instant]);
+
+  const visibleCollapsed = instant ? isCollapsed : displayCollapsed;
+  const visibleAnimating = !instant && animating;
 
   const expandedSidebarStyle: CSSProperties | undefined =
-    !displayCollapsed && !isMaximized
+    !visibleCollapsed && !isMaximized
       ? {
           width: effectiveWidth,
           flexShrink: 1,
@@ -170,7 +187,7 @@ export const RightSidebar = forwardRef<RightSidebarHandle, RightSidebarProps>(fu
         }
       : undefined;
   const contentStyle: CSSProperties | undefined =
-    !isMaximized && animating && animationWidthSnapshot !== null
+    !isMaximized && visibleAnimating && animationWidthSnapshot !== null
       ? { width: animationWidthSnapshot }
       : undefined;
 
@@ -180,30 +197,30 @@ export const RightSidebar = forwardRef<RightSidebarHandle, RightSidebarProps>(fu
       aria-label={t('rightSidebar.ariaLabel')}
       // PanelDragController(拖面板换位,B3 转正)的手势识别根:值标明面板身份。
       data-panel-drag-root="right-tabs"
+      data-plugin-ui-element="tools"
       // 折叠态标记:引擎分割线的 CSS 据此隐藏邻接缝(globals.css .layout-divider-*),
       // 收起到 0 宽时不在窗口边缘留孤线。
-      data-pane-collapsed={displayCollapsed ? '' : undefined}
+      data-pane-collapsed={visibleCollapsed ? '' : undefined}
       className={cn(
         // 侧边分割线由布局引擎统一绘制,aside 与内容层都不自画竖线。
         'relative flex flex-col bg-content-area',
-        animating &&
-          'transition-[width] duration-[250ms] ease-[cubic-bezier(0.4,0,0.2,1)] motion-reduce:duration-0',
+        visibleAnimating &&
+          'transition-[width] duration-[var(--motion-base)] ease-[var(--motion-ease-move)] motion-reduce:duration-0',
         // maximize 态:用 flex-1 撑满 row 内 sidebar 之后的剩余空间,不传 fixed
-        // width —— 否则 MainLayout 的 rightAvailableWidth(基于 main rect)在 main
-        // hidden 后算成"窗口宽"漏算 sidebar,RSB 被算多一个 sidebar 宽度,推 tree
-        // pane 出视口(2026-07-01 用户实测 bug:maximize 后文件树消失)。
+        // width —— 否则普通态的引擎 pane width 在 main hidden 后仍会留下固定宽,
+        // 无法接管全部剩余空间(2026-07-01 用户实测 bug:maximize 后文件树消失)。
         // 非 maximize:width prop 只作为 preferred width。允许 flex shrink,配合 main
         // 的 min-w-[400px] 让极窄窗口下 RSB 温和变窄,避免 280px 目标宽硬顶出窗口。
         isMaximized ? 'flex-1' : 'shrink',
         'min-w-0 max-w-full',
         'overflow-hidden',
-        displayCollapsed && 'w-0',
+        visibleCollapsed && 'w-0',
       )}
       style={expandedSidebarStyle}
       aria-hidden={isCollapsed || undefined}
     >
       {/* 内容容器。稳态跟随 aside 实际宽(w-full),只有折叠 / 展开动画期间钉住开始
-          快照宽防 reflow —— aside 宽度 250ms 收到 0 时,本块保持展开宽度被
+          快照宽防 reflow —— aside 宽度 200ms 收到 0 时,本块保持展开宽度被
           overflow-hidden 裁切,TabBar / 内容区不会因瞬时变窄而抖动(规则 7)。
 
           Mac 端布局(46px 顶 chrome,行高随 #650 全局 50→46):
@@ -258,15 +275,17 @@ export const RightSidebar = forwardRef<RightSidebarHandle, RightSidebarProps>(fu
           workdir={workdir}
           remoteHostId={remoteHostId}
           deviceLinkDeviceId={deviceLinkDeviceId}
-          shellVisible={!displayCollapsed}
+          subagentsAvailable={subagentsAvailable}
+          shellVisible={!visibleCollapsed}
           isMac={isMac}
           unifiedTopbar={isMac}
           onCloseSidebar={onCloseSidebar}
+          onShowSidebar={onShowSidebar}
           onMaximize={onMaximize}
           isMaximized={isMaximized}
           reserveLeftChromeActions={reserveLeftChromeActions}
           railChromeActionsHitHole={railChromeActionsHitHole}
-          onDetach={onDetach}
+          onDetachTab={onDetachTab}
           // B3:主窗口内嵌形态 Tab 条空白处 = 拖面板手势面(窗口拖动走左栏顶行)。
           chromeWindowDrag={false}
           panelSide={panelSide}

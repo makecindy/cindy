@@ -1,4 +1,6 @@
 import Database from 'better-sqlite3';
+import { readFileSync } from 'node:fs';
+import { resolve } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
 import { tx } from '../opHandlers/tx.js';
@@ -13,6 +15,7 @@ function createTables(db: Database.Database): void {
       workspace_kind TEXT NOT NULL DEFAULT 'project',
       worktree_path TEXT,
       model TEXT NOT NULL DEFAULT 'claude-sonnet-4-6',
+      scheduled_model_baseline TEXT,
       effort TEXT NOT NULL DEFAULT 'high',
       permission_mode TEXT NOT NULL DEFAULT 'ask',
       provider_id TEXT,
@@ -68,6 +71,12 @@ function createTables(db: Database.Database): void {
       role TEXT NOT NULL DEFAULT 'developer',
       focused INTEGER NOT NULL DEFAULT 0,
       idle_since INTEGER,
+      execution_device_id TEXT,
+      remote_session_id TEXT,
+      last_bridged_message_id TEXT,
+      remote_released_at INTEGER,
+      pending_remote_report TEXT,
+      remote_stop_confirmed_at INTEGER,
       created_at INTEGER NOT NULL,
       updated_at INTEGER NOT NULL
     );
@@ -151,6 +160,7 @@ describe('tx session.importShare', () => {
   beforeEach(() => {
     db = new Database(':memory:');
     createTables(db);
+    db.exec(readFileSync(resolve(process.cwd(), 'drizzle/0114_shared_task_events.sql'), 'utf8'));
   });
 
   afterEach(() => {
@@ -353,7 +363,11 @@ describe('tx session.importShare', () => {
       replaceSessions?: Array<{ id: string; status: 'active' | 'archived' }>;
     }).replaceSessions = [{ id: 'existing-session', status: 'active' }];
 
+    db.prepare(
+      "INSERT INTO shared_task_events (shared_task_id, session_id, revision, kind, terminal, recorded_at) VALUES ('old-share', 'existing-session', 1, 'authority', 0, 1)",
+    ).run();
     tx(db, args);
+    expect(db.prepare("SELECT terminal FROM shared_task_events WHERE shared_task_id = 'old-share' ORDER BY id DESC LIMIT 1").get()).toEqual({ terminal: 1 });
 
     expect(
       db.prepare('SELECT status FROM sessions WHERE id = ?').get('existing-session'),
@@ -404,7 +418,11 @@ describe('tx session.importShare', () => {
     }).replaceSessions = [{ id: 'existing-session', status: 'active' }];
     (args.args.orca.workers[0].session as Record<string, unknown>).title = 42;
 
+    db.prepare(
+      "INSERT INTO shared_task_events (shared_task_id, session_id, revision, kind, terminal, recorded_at) VALUES ('old-share', 'existing-session', 1, 'authority', 0, 1)",
+    ).run();
     expect(() => tx(db, args)).toThrow();
+    expect(db.prepare("SELECT terminal FROM shared_task_events WHERE shared_task_id = 'old-share' ORDER BY id DESC LIMIT 1").get()).toEqual({ terminal: 0 });
 
     expect(
       db.prepare('SELECT status FROM sessions WHERE id = ?').get('existing-session'),

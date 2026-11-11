@@ -1,15 +1,14 @@
 /**
  * MobileProviderMark —— provider-aware 模型下拉里每行前缀 / trigger 药丸的「来源徽标」。
  *
- * 对齐桌面 ProviderMark:目录供应商用**官方单色 mark**，品牌路径与 provider id/upstream
- * 识别由 @cindy/model-providers/branding 双端共享；未知自定义供应商回退首字母 monogram。与桌面的
- * 一处刻意差异:monogram 容器沿用 pill 圆角(桌面是 4px 方盒)——手机圆角走二元规则
- * (container/pill),不引入中间值。XD mark 非正方形(158:282),渲染时在 size×size 盒内
+ * 对齐桌面 ProviderMark:目录供应商用**品牌 mark**，品牌路径与 provider id/upstream
+ * 识别由 @cindy/model-providers/branding 双端共享；未知自定义供应商回退首字母 monogram，使用与桌面一致的 4px 方盒。XD mark 非正方形(158:282),渲染时在 size×size 盒内
  * 垂直居中,保证与正方形 mark 同行对齐。
  */
+import { useId, type ReactNode } from 'react';
 import { StyleSheet, View } from 'react-native';
 import { Text } from '@/components/AppText';
-import Svg, { Path } from 'react-native-svg';
+import Svg, { Defs, G, LinearGradient, Path, Stop } from 'react-native-svg';
 
 import {
   ANTHROPIC_PROVIDER_PATH,
@@ -19,9 +18,11 @@ import {
   XD_VIEW_BOX,
 } from '@/components/vendorIconPaths';
 import { useTheme, useThemedStyles, type ThemeColors } from '@/theme';
-import { fontWeight as fontWeightToken, radius, typeScale } from '@/theme/tokens';
+import { fontWeight as fontWeightToken, lineHeight, radius, typeScale } from '@/theme/tokens';
 import {
+  MODEL_SPECTRUM_COLORS,
   PROVIDER_LOGO_PATHS,
+  CINDY_MARK_TRANSFORM, CINDY_MARK_PATH, CINDY_MARK_EARRING_PATH, CINDY_MARK_EARRING_COLOR,
   isProviderLogoKind,
   resolveProviderLogoKind,
   type ProviderLogoRouting,
@@ -29,15 +30,40 @@ import {
 import { resolveModelIconKind } from '@cindy/model-providers/sections';
 
 import { providerMonogram } from './providerModelSections';
+import { RemoteSourceMark } from './RemoteSourceMark';
 
 const MARK_SIZE = 18;
+/** 官方 mark 的字形边长:比 monogram 容器缩一档(桌面同比:行内 mark ≈ 12.3 vs 容器 18),避免视觉过重。 */
+const GLYPH_SIZE = 13;
+/** XD mark 横长,宽给一点补偿才与正方形 mark 视觉等重。 */
+const XD_WIDTH = GLYPH_SIZE + 2;
+
+/** 各形态字形右上角相对盒右上角的内缩:远程波纹贴着字形(字形在盒内居中)。 */
+const GLYPH_INSET = { x: (MARK_SIZE - GLYPH_SIZE) / 2, y: (MARK_SIZE - GLYPH_SIZE) / 2 };
+const XD_INSET = { x: (MARK_SIZE - XD_WIDTH) / 2, y: (MARK_SIZE - XD_WIDTH * XD_ASPECT) / 2 };
+const MONOGRAM_INSET = { x: 0, y: 0 };
+
+/** remote → 叠远程标记(右上角波纹 + 点);图形本身大小与位置不变。 */
+function withRemote(
+  node: ReactNode,
+  remote: boolean | undefined,
+  inset: { x: number; y: number },
+  color: string,
+) {
+  if (!remote) return node;
+  return (
+    <RemoteSourceMark color={color} inset={inset} size={MARK_SIZE}>
+      {node}
+    </RemoteSourceMark>
+  );
+}
 
 const makeStyles = (c: ThemeColors) =>
   StyleSheet.create({
     monogram: {
       alignItems: 'center',
       borderColor: c.borderStrong,
-      borderRadius: radius.pill,
+      borderRadius: radius.micro,
       borderWidth: 1,
       height: MARK_SIZE,
       justifyContent: 'center',
@@ -46,6 +72,7 @@ const makeStyles = (c: ThemeColors) =>
     monogramText: {
       color: c.textSecondary,
       fontSize: typeScale.micro,
+      lineHeight: lineHeight.micro,
       fontWeight: fontWeightToken.semibold,
       // CJK / 拉丁字母在小圆点里视觉重心略偏下,nudge -0.5 居中。
       includeFontPadding: false,
@@ -70,15 +97,22 @@ export interface MobileProviderMarkProps {
   name: string;
   /** mark 单色;缺省 textSecondary(列表行口径,trigger 场景可传 textPrimary)。 */
   color?: string;
+  /** true → 另一台电脑上的供应商:右上角叠远程标记(波纹 + 点),图形不缩放不移位。 */
+  remote?: boolean;
 }
 
 /** 渲染单个供应商的来源徽标(官方 mark 或 monogram)。 */
-export function MobileProviderMark({ providerId, routing, logoKind, name, color }: MobileProviderMarkProps) {
+export function MobileProviderMark({
+  providerId,
+  routing,
+  logoKind,
+  name,
+  color,
+  remote,
+}: MobileProviderMarkProps) {
   const styles = useThemedStyles(makeStyles);
   const { colors } = useTheme();
   const fill = color ?? colors.textSecondary;
-  // 官方 mark 比 monogram 容器缩一档(桌面同比:行内 mark ≈ 12.3 vs 容器 18),避免视觉过重。
-  const glyph = 13;
 
   const kind = isProviderLogoKind(logoKind)
     ? logoKind
@@ -86,51 +120,68 @@ export function MobileProviderMark({ providerId, routing, logoKind, name, color 
 
   switch (kind) {
     case 'anthropic':
-      return (
+      return withRemote(
         <View accessible={false} style={styles.markBox}>
-          <Svg width={glyph} height={glyph} viewBox="0 0 24 24">
+          <Svg width={GLYPH_SIZE} height={GLYPH_SIZE} viewBox="0 0 24 24">
             <Path d={ANTHROPIC_PROVIDER_PATH} fill={fill} />
           </Svg>
-        </View>
+        </View>,
+        remote,
+        GLYPH_INSET,
+        fill,
       );
+    case 'openai-spectrum':
+      return withRemote(<View accessible={false} style={styles.markBox}><OpenAISpectrumArtwork fill={fill} /></View>, remote, GLYPH_INSET, fill);
     case 'openai':
-      return (
+      return withRemote(
         <View accessible={false} style={styles.markBox}>
-          <Svg width={glyph} height={glyph} viewBox="0 0 24 24">
+          <Svg width={GLYPH_SIZE} height={GLYPH_SIZE} viewBox="0 0 24 24">
             <Path d={OPENAI_PROVIDER_PATH} fill={fill} />
           </Svg>
-        </View>
+        </View>,
+        remote,
+        GLYPH_INSET,
+        fill,
       );
-    case 'xd': {
-      const w = glyph + 2; // XD mark 横长,宽给一点补偿才与正方形 mark 视觉等重。
-      return (
+    case 'cindy':
+      return withRemote(<View accessible={false} style={styles.markBox}><CindyArtwork fill={fill} /></View>, remote, GLYPH_INSET, fill);
+    case 'xd':
+      return withRemote(
         <View accessible={false} style={styles.markBox}>
-          <Svg width={w} height={w * XD_ASPECT} viewBox={XD_VIEW_BOX}>
+          <Svg width={XD_WIDTH} height={XD_WIDTH * XD_ASPECT} viewBox={XD_VIEW_BOX}>
             {XD_SYMBOL_PATHS.map((p) => (
               <Path key={p} d={p} fill={fill} />
             ))}
           </Svg>
-        </View>
+        </View>,
+        remote,
+        XD_INSET,
+        fill,
       );
-    }
   }
 
   if (kind) {
-    return (
+    return withRemote(
       <View accessible={false} style={styles.markBox}>
-        <Svg width={glyph} height={glyph} viewBox="0 0 24 24">
+        <Svg width={GLYPH_SIZE} height={GLYPH_SIZE} viewBox="0 0 24 24">
           <Path d={PROVIDER_LOGO_PATHS[kind]} fill={fill} />
         </Svg>
-      </View>
+      </View>,
+      remote,
+      GLYPH_INSET,
+      fill,
     );
   }
 
-  return (
-    <View style={styles.monogram}>
+  return withRemote(
+    <View style={[styles.monogram, { borderColor: fill }]}>
       <Text style={[styles.monogramText, color ? { color } : null]}>
         {providerMonogram(name)}
       </Text>
-    </View>
+    </View>,
+    remote,
+    MONOGRAM_INSET,
+    fill,
   );
 }
 
@@ -143,6 +194,8 @@ export interface MobileModelIconMarkProps {
   logoKind?: string;
   name: string;
   color?: string;
+  /** 同 MobileProviderMark.remote。 */
+  remote?: boolean;
 }
 
 /**
@@ -157,34 +210,29 @@ export function MobileModelIconMark({
   logoKind,
   name,
   color,
+  remote,
 }: MobileModelIconMarkProps) {
   const styles = useThemedStyles(makeStyles);
   const { colors } = useTheme();
   const kind = resolveModelIconKind(icon);
   if (kind) {
     const fill = color ?? colors.textSecondary;
-    const glyph = 13;
     if (kind === 'cindy') {
-      const w = glyph + 2; // 同 MobileProviderMark:XD mark 横长,宽给补偿。
-      return (
-        <View accessible={false} style={styles.markBox}>
-          <Svg width={w} height={w * XD_ASPECT} viewBox={XD_VIEW_BOX}>
-            {XD_SYMBOL_PATHS.map((p) => (
-              <Path key={p} d={p} fill={fill} />
-            ))}
-          </Svg>
-        </View>
-      );
+      return withRemote(<View accessible={false} style={styles.markBox}><CindyArtwork fill={fill} /></View>, remote, GLYPH_INSET, fill);
     }
-    return (
+
+    return withRemote(
       <View accessible={false} style={styles.markBox}>
-        <Svg width={glyph} height={glyph} viewBox="0 0 24 24">
+        <Svg width={GLYPH_SIZE} height={GLYPH_SIZE} viewBox="0 0 24 24">
           <Path
             d={kind === 'claude' ? ANTHROPIC_PROVIDER_PATH : OPENAI_PROVIDER_PATH}
             fill={fill}
           />
         </Svg>
-      </View>
+      </View>,
+      remote,
+      GLYPH_INSET,
+      fill,
     );
   }
   return (
@@ -194,6 +242,34 @@ export function MobileModelIconMark({
       providerId={providerId}
       routing={routing}
       logoKind={logoKind}
+      remote={remote}
     />
   );
+}
+
+function CindyArtwork({ fill }: { fill: string }) {
+  return <Svg width={GLYPH_SIZE} height={GLYPH_SIZE} viewBox="0 0 24 24">
+    <G transform={CINDY_MARK_TRANSFORM}>
+      <Path d={CINDY_MARK_PATH} fill={fill} />
+      <Path d={CINDY_MARK_EARRING_PATH} fill={CINDY_MARK_EARRING_COLOR} />
+    </G>
+  </Svg>;
+}
+
+/** Adds spectrum color to the OpenAI blossom only for XD's byok-openai-codex
+ * provider. Temporary stand-in: remove when administrators can upload provider
+ * icons in the backend. Never reuse for other brands or as a general UI gradient. */
+function OpenAISpectrumArtwork({ fill }: { fill: string }) {
+  const { mode } = useTheme();
+  const gradientId = `openai-spectrum-${useId().replace(/:/g, '')}`;
+  const colors = MODEL_SPECTRUM_COLORS[mode];
+  return <Svg width={GLYPH_SIZE} height={GLYPH_SIZE} viewBox="0 0 24 24">
+    <Defs>
+      <LinearGradient id={gradientId} gradientUnits="userSpaceOnUse" x1={2} y1={2} x2={22} y2={22}>
+        {colors.map((color, index) => <Stop key={index} offset={index / (colors.length - 1)} stopColor={color} />)}
+      </LinearGradient>
+    </Defs>
+    <Path d={OPENAI_PROVIDER_PATH} fill={fill} opacity={mode === 'dark' ? 0.30 : 0.35} />
+    <Path d={OPENAI_PROVIDER_PATH} fill={`url(#${gradientId})`} opacity={mode === 'dark' ? 0.78 : 0.72} />
+  </Svg>;
 }

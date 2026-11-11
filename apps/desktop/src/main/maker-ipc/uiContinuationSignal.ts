@@ -30,7 +30,8 @@
  *      (取消 / 失败)。目标轮没起来, 记账该还回去, 而不是等超时。
  *
  * 另有一条与归属无关、但同样必要的信号:
- *   - `sessionIntervention(sessionId)` —— 会话被一条**新**消息推进(enqueue 入口)。
+ *   - `sessionIntervention(sessionId)` —— 会话被一条**新**消息推进(enqueue 或同轮 steer)。
+ *     steer 在主机校验完成后、vendor await 前发布，确保早于可能先于 ack 到达的终态。
  *     记账只按 sessionId 记, 而"重试哪一轮"与"渠道消息对应哪一轮"是两件事: 用户跑过
  *     无关 turn 之后点重试, 重试的是那个无关 turn, 不该把它的输出写进渠道旧消息。
  *     判据是**入口**而不是文本: 零产出重试重发原文, 按文本判会让它撤掉自己。
@@ -102,7 +103,7 @@ export function publishUiTurnUndispatched(sessionId: string, clientId: string): 
   fanout(undispatchedListeners, (l) => l(sessionId, clientId));
 }
 
-/** 订阅「某会话被一条新消息推进了」(enqueue 入口; 见模块注释)。 */
+/** 订阅「某会话被一条新消息推进了」(enqueue / steer; 见模块注释)。 */
 export function onUiSessionIntervention(listener: UiSessionListener): () => void {
   interventionListeners.add(listener);
   return () => {

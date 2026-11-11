@@ -1,49 +1,80 @@
-import { getLocales } from 'expo-localization';
+import { getLocales } from "expo-localization";
 
-import { getManualLocaleOverride } from '@/i18n/appLanguage';
+import { getManualLocaleOverride } from "@/i18n/appLanguage";
+import { resolveSystemLocale, type SupportedLocale } from "@/i18n/locale";
 
-export type NewSessionLocale = 'zh-CN' | 'en' | 'ja' | 'ko';
+export type NewSessionLocale = SupportedLocale;
 
 const messages = {
-  'zh-CN': {
-    showHiddenDirectories: '显示隐藏文件夹',
-    emptyDirectory: '没有可显示的子目录。',
+  "zh-CN": {
+    showHiddenDirectories: "显示隐藏文件夹",
+    emptyDirectory: "没有可显示的子目录。",
+  },
+  "zh-TW": {
+    showHiddenDirectories: "顯示隱藏資料夾",
+    emptyDirectory: "沒有可顯示的子目錄。",
+  },
+  "zh-Hant-x-lzh": {
+    showHiddenDirectories: "顯隱匿之卷匣",
+    emptyDirectory: "無子目錄可示。",
+  },
+  "zh-Hans-x-lzh": {
+    showHiddenDirectories: "显隐匿之卷匣",
+    emptyDirectory: "无子目录可示。",
   },
   en: {
-    showHiddenDirectories: 'Show Hidden Folders',
-    emptyDirectory: 'No folders to show.',
+    showHiddenDirectories: "Show Hidden Folders",
+    emptyDirectory: "No folders to show.",
   },
   ja: {
-    showHiddenDirectories: '隠しフォルダを表示',
-    emptyDirectory: '表示できるサブフォルダはありません。',
+    showHiddenDirectories: "隠しフォルダを表示",
+    emptyDirectory: "表示できるサブフォルダはありません。",
   },
   ko: {
-    showHiddenDirectories: '숨김 폴더 표시',
-    emptyDirectory: '표시할 하위 폴더가 없습니다.',
+    showHiddenDirectories: "숨김 폴더 표시",
+    emptyDirectory: "표시할 하위 폴더가 없습니다.",
+  },
+
+  "es": {
+    "showHiddenDirectories": "Mostrar carpetas ocultas",
+    "emptyDirectory": "No hay carpetas para mostrar."
+  },
+  "fr": {
+    "showHiddenDirectories": "Afficher les dossiers masqués",
+    "emptyDirectory": "Aucun dossier à afficher."
+  },
+  "de": {
+    "showHiddenDirectories": "Versteckte Ordner anzeigen",
+    "emptyDirectory": "Keine Ordner zum Anzeigen vorhanden."
+  },
+  "pt-PT": {
+    "showHiddenDirectories": "Mostrar pastas ocultas",
+    "emptyDirectory": "Não há pastas para mostrar."
+  },
+  "pt-BR": {
+    "showHiddenDirectories": "Mostrar pastas ocultas",
+    "emptyDirectory": "Não há pastas para exibir."
   },
 } as const;
 
-export type NewSessionMessageKey = keyof (typeof messages)['zh-CN'];
+export type NewSessionMessageKey = keyof (typeof messages)["zh-CN"];
 
 export const newSessionMessages: Record<
   NewSessionLocale,
   Record<NewSessionMessageKey, string>
 > = messages;
 
-/** 将系统语言映射到新建会话界面支持的 4 种语言，未覆盖语言回退英文。 */
+/** 将系统语言映射到新建任务界面支持的语言，未覆盖语言回退英文。 */
 export function resolveNewSessionLocale(
   languageTag: string | null | undefined,
 ): NewSessionLocale {
-  const tag = languageTag?.toLowerCase() ?? '';
-  if (tag.startsWith('zh')) return 'zh-CN';
-  if (tag.startsWith('ja')) return 'ja';
-  if (tag.startsWith('ko')) return 'ko';
-  return 'en';
+  return resolveSystemLocale(languageTag);
 }
 
 export function newSessionText(key: NewSessionMessageKey): string {
   // 设置里的手动语言选择优先,未选择时跟随系统语言。
   const locale =
-    getManualLocaleOverride() ?? resolveNewSessionLocale(getLocales()[0]?.languageTag);
+    getManualLocaleOverride() ??
+    resolveNewSessionLocale(getLocales()[0]?.languageTag);
   return newSessionMessages[locale][key];
 }

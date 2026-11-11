@@ -8,23 +8,79 @@ import { fileURLToPath } from "node:url";
 
 import {
 	applyDesktopStartupConfigForPhase,
+	clearInheritedIsolatedAuthAuthorization,
+	clearDesktopDevCaches,
 	commandUsesUserDataDir,
+	createIsolatedAuthLaunchProof,
+	defaultIsolatedUserDataDir,
+	desktopDevCacheDirs,
 	devEnvPrefix,
+	darwinStaleDevEnvUnset,
+	hasIsolationIntent,
+	isTrustedIsolatedAuthUserDataDir,
+	ISOLATED_AUTH_LAUNCH_PROOF_FILE,
+	isOfficialProductionUserDataDir,
 	isRepositoryDesktopDevProcess,
+	officialProductionUserDataDirs,
+	resolveRestartTargetUserDataDir,
+	sanitizeIsolationName,
+	canonicalizeUserDataDir,
 	formatDesktopStartupFailure,
+	inspectSharedUserDataRegion,
 	partitionDesktopDevProcesses,
+	assertNoRestartTargets,
+	commandBelongsToCheckout,
+	darwinTerminalLoggedCommand,
+	desktopDevTerminalLogPath,
+	readDesktopDevLogTail,
+	productionUserDataDir,
 	readDesktopStartupStatus,
 	parseWorktreePaths,
+	scanRestartProcessTable,
 	osascriptLaunchDarwinTerminalArgs,
+	writeDarwinTerminalLaunchScript,
+	darwinTerminalSourceCommand,
+	prepareDarwinTerminalLaunch,
+	currentDarwinTerminal,
 	waitForDesktopStartup,
+	shouldRefuseHostedRestart,
+	commandContainsPath,
+	inheritedUserDataBlocksNamedIsolation,
+	requestWindowsDesktopQuit,
+	stopWindowsDesktopDevProcesses,
 } from "../restart-desktop-remote.mjs";
 import {
+	DESKTOP_DEV_VERDICT_PREFIX,
+	ISOLATED_RESTART_NEXT,
+	WORKTREE_ISOLATED_ARG,
+	SHARED_USERDATA_ARG,
+	DEFAULT_ISOLATED_ARG,
+	UI_MOCK_ISOLATED_ARG,
+	buildDesktopDevVerdictFromFailure,
+	buildDesktopDevVerdictFromWhoami,
+	desktopRestartArgvConflictMessage,
+	formatDesktopDevVerdict,
+	inferDesktopDevFailureCode,
+	isolationNameFromWorktree,
+	isolatedRestartNextCommand,
+	normalizeDesktopRestartArgv,
+	resolveIsolatedArg,
+	restartContextFromArgv,
+	shouldSuggestIsolatedNext,
+} from "../desktop-dev-verdict.mjs";
+import {
+	applyLinuxRendererEvidence,
+	collectDesktopWhoamiReport,
 	identifyDesktopProcesses,
 	mergeDesktopInstanceRecords,
+	parsePosixProcessTable,
 	parseWorktreeEntries,
+	scanProcessTable,
 } from "../desktop-whoami.mjs";
 import {
+	assertDesktopRestartStepSucceeded,
 	buildDesktopRestartSteps,
+	DesktopRestartStepError,
 	runDesktopRestart,
 } from "../desktop-restart-runner.mjs";
 
@@ -41,6 +97,67 @@ function appleScriptLines(args) {
 // macOS / Windows 上都与生产实际所见一致——硬编码 POSIX 字面量只在 *nix 成立。
 const stepScript = (root, name) => path.join(root, "scripts", name);
 
+// Unit: Windows restart must let Electron persist its clean exit before killing
+// any launcher/renderer. Existing tests only covered process selection, not stop order.
+test("Windows stop waits for main disposal, then kills only surviving original targets", async () => {
+	const root = path.resolve("sandbox-repo");
+	const targets = [
+		{ pid: 10, ppid: 0, command: `node "${stepScript(root, "desktop-dev-runner.mjs")}" remote` },
+		{ pid: 11, ppid: 10, command: `"${path.join(root, "node_modules", "electron", "dist", "electron.exe")}" .` },
+		{ pid: 13, ppid: 11, command: `electron --type=crashpad-handler --user-data-dir=${path.join(root, "profile")} /prefetch:4 --no-rate-limit --monitor-self-annotation=ptype=crashpad-handler` },
+		{ pid: 12, ppid: 11, command: `electron --type=renderer --user-data-dir="${path.join(root, "profile")}"` },
+	];
+	for (const outcome of ["clean", "timeout", "legacy"]) {
+		const calls = [];
+		await stopWindowsDesktopDevProcesses(targets, root, {
+			requestQuit: instance => {
+				assert.equal(instance.pid, 11);
+				assert.equal(instance.userDataDir, path.join(root, "profile"));
+				calls.push("request");
+				return outcome === "legacy" ? null : () => calls.push("cleanup");
+			},
+			waitForExit: async (timeout, filter) => {
+				assert.ok(timeout > 20_000);
+				assert.deepEqual(targets.filter(filter).map(p => p.pid), [11]);
+				assert.deepEqual(calls, ["request"]);
+				calls.push("wait");
+			},
+			listProcesses: () => [
+				...(outcome === "clean" ? [targets[0]] : targets),
+				{ pid: 99, ppid: 0, command: "other checkout" },
+			],
+			forceKill: pid => calls.push(`kill:${pid}`), log: () => {},
+		});
+		assert.deepEqual(calls, outcome === "clean"
+			? ["request", "wait", "kill:10", "cleanup"]
+			: outcome === "timeout" ? ["request", "wait", "kill:10", "kill:11", "kill:13", "kill:12", "cleanup"]
+			: ["request", "kill:10", "kill:11", "kill:13", "kill:12"]);
+	}
+});
+
+test("Windows quit request requires matching supported provenance and uses its generation", () => {
+	const dir = fs.mkdtempSync(path.join(os.tmpdir(), "cindy-dev-quit-"));
+	try {
+		const records = path.join(dir, ".dev-instances");
+		fs.mkdirSync(records);
+		const instance = { pid: 123, userDataDir: dir, rootDir: path.join(dir, "repo") };
+		const record = { ...instance, quitRequestProtocol: 1, instanceId: "12345678-1234-1234-1234-123456789abc" };
+		for (const invalid of [{ ...record, quitRequestProtocol: undefined }, { ...record, pid: 456 },
+			{ ...record, rootDir: path.join(dir, "another-repo") }, { ...record, instanceId: "../bad" }]) {
+			fs.writeFileSync(path.join(records, "123.json"), JSON.stringify(invalid));
+			assert.equal(requestWindowsDesktopQuit(instance, 100), null);
+		}
+		fs.writeFileSync(path.join(records, "123.json"), JSON.stringify(record));
+		const cleanup = requestWindowsDesktopQuit(instance, 100);
+		const request = path.join(records, `123-${record.instanceId}.quit`);
+		assert.deepEqual(JSON.parse(fs.readFileSync(request, "utf8")), {
+			action: "quit", pid: 123, instanceId: record.instanceId, expiresAt: 30100,
+		});
+		cleanup();
+		assert.equal(fs.existsSync(request), false);
+	} finally { fs.rmSync(dir, { recursive: true, force: true }); }
+});
+
 test("macOS Terminal launch runs command before activating Terminal", () => {
 	const lines = appleScriptLines(osascriptLaunchDarwinTerminalArgs("echo test"));
 	const doScriptIndex = lines.indexOf("set targetTab to do script devCommand");
@@ -54,12 +171,81 @@ test("macOS Terminal launch runs command before activating Terminal", () => {
 	);
 });
 
+test("macOS Terminal launch sends a short source command for long dev commands", {
+	skip: process.platform === "win32",
+}, () => {
+	const dir = fs.mkdtempSync(path.join(os.tmpdir(), "cindy-terminal-launch-"));
+	const marker = path.join(dir, "ran.txt");
+	// 超过 tty canonical 行上限 1024 字节,模拟长 worktree 路径 + 大量 unset 的真实命令。
+	const command = `PADDING='${"x".repeat(1600)}'; echo "ok $PADDING" > '${marker}'`;
+	const scriptPath = writeDarwinTerminalLaunchScript(command, dir);
+	const sourceCommand = darwinTerminalSourceCommand(scriptPath);
+
+	assert.ok(sourceCommand.length < 1024, "Terminal input must stay under MAX_CANON");
+	assert.equal(fs.statSync(scriptPath).mode & 0o777, 0o600);
+
+	const result = spawnSync("/bin/sh", ["-c", sourceCommand], { encoding: "utf8" });
+	assert.equal(result.status, 0, result.stderr);
+	assert.equal(fs.readFileSync(marker, "utf8").trim(), `ok ${"x".repeat(1600)}`);
+	assert.equal(fs.existsSync(scriptPath), false, "launch script removes itself once sourced");
+	fs.rmSync(dir, { recursive: true, force: true });
+});
+
+test("macOS Terminal launch passes only the short source command to do script", {
+	skip: process.platform === "win32",
+}, () => {
+	const dir = fs.mkdtempSync(path.join(os.tmpdir(), "cindy-terminal-args-"));
+	const command = `echo '${"y".repeat(1600)}'`;
+	const { scriptPath, args } = prepareDarwinTerminalLaunch(command, dir);
+	const devCommand = args.at(-1);
+
+	assert.ok(appleScriptLines(args).includes("set targetTab to do script devCommand"));
+	assert.equal(devCommand, darwinTerminalSourceCommand(scriptPath));
+	assert.ok(devCommand.length < 1024, "Terminal input must stay under MAX_CANON");
+	assert.ok(!args.some((arg) => arg.includes("y".repeat(1600))), "long command must not reach do script");
+	assert.ok(fs.readFileSync(scriptPath, "utf8").includes(command));
+	fs.rmSync(dir, { recursive: true, force: true });
+});
+
 test("desktop restart no longer depends on the retired Feishu build app id", () => {
 	const source = fs.readFileSync(
 		new URL("../restart-desktop-remote.mjs", import.meta.url),
 		"utf8",
 	);
 	assert.equal(source.includes("VITE_FEISHU_APP_ID"), false);
+});
+
+test("desktop restart clears only desktop Vite dev caches", () => {
+	const repo = fs.mkdtempSync(path.join(os.tmpdir(), "cindy-dev-cache-"));
+	const desktopCacheDirs = desktopDevCacheDirs(repo);
+	const preservedDirs = [
+		path.join(repo, "node_modules", ".vite"),
+		path.join(repo, "apps", "mobile", "node_modules", ".vite"),
+		path.join(repo, "packages", "maker-shared", "node_modules", ".vite"),
+	];
+	try {
+		for (const dir of [...desktopCacheDirs, ...preservedDirs]) {
+			fs.mkdirSync(dir, { recursive: true });
+			fs.writeFileSync(path.join(dir, "marker"), "cached\n");
+		}
+
+		const logs = [];
+		const removed = clearDesktopDevCaches(repo, { logger: { log: (message) => logs.push(message) } });
+
+		assert.deepEqual(removed.map((entry) => path.relative(repo, entry)), [
+			path.join("apps", "desktop", "node_modules", ".vite"),
+			path.join("apps", "desktop", ".vite"),
+		]);
+		for (const dir of desktopCacheDirs) {
+			assert.equal(fs.existsSync(dir), false);
+		}
+		for (const dir of preservedDirs) {
+			assert.equal(fs.existsSync(path.join(dir, "marker")), true);
+		}
+		assert.match(logs.join("\n"), /Cleared desktop dev cache/);
+	} finally {
+		fs.rmSync(repo, { recursive: true, force: true });
+	}
 });
 
 test("desktop restart recognizes dev processes from sibling repository worktrees", () => {
@@ -87,6 +273,26 @@ test("desktop restart recognizes dev processes from sibling repository worktrees
 	}, worktrees, 999), false);
 });
 
+test("desktop restart preserves durable PI Subagent runners", () => {
+	const checkoutRoot = path.resolve("/repo/cindy-feature");
+	const electron = path.join(checkoutRoot, "node_modules/electron/dist/Electron");
+	const runner = path.resolve(
+		"/user-data/owners/owner/runtime/pi-subagent-runs/session/run/runner.cjs",
+	);
+	const config = path.resolve(
+		"/user-data/owners/owner/runtime/pi-subagent-runs/session/run/config.json",
+	);
+
+	assert.equal(isRepositoryDesktopDevProcess({
+		pid: 44,
+		command: `${electron} ${runner} ${config}`,
+	}, [checkoutRoot], 999), false);
+	assert.equal(isRepositoryDesktopDevProcess({
+		pid: 45,
+		command: `${electron} .`,
+	}, [checkoutRoot], 999), true);
+});
+
 test("restart kill scope only targets the checkout that runs the script", () => {
 	const ownRoot = path.resolve("/repo/cindy-feature");
 	const otherRoot = path.resolve("/repo/cindy-pi-sandbox");
@@ -99,6 +305,101 @@ test("restart kill scope only targets the checkout that runs the script", () => 
 	const { targets, preserved } = partitionDesktopDevProcesses(processes, ownRoot);
 	assert.deepEqual(targets.map((proc) => proc.pid), [1, 3]);
 	assert.deepEqual(preserved.map((proc) => proc.pid), [2]);
+});
+
+// 借用的 node / pnpm 必须是真实文件：含空格路径与「长得像启动器的目录名」只能靠文件系统区分。
+function makeLauncherFixture(ownDirName = "cindy-src") {
+	const base = fs.mkdtempSync(path.join(os.tmpdir(), "restart-launcher-"));
+	const ownRoot = path.join(base, ownDirName);
+	const otherRoot = path.join(base, "cindy-personal");
+	const binDir = path.join(ownRoot, ".tooling/node-v22/bin");
+	fs.mkdirSync(binDir, { recursive: true });
+	const borrowedNode = path.join(binDir, "node");
+	const borrowedPnpm = path.join(binDir, "pnpm");
+	fs.writeFileSync(borrowedNode, "");
+	fs.writeFileSync(borrowedPnpm, "");
+	const forge = (root) => path.join(root, "node_modules/@electron-forge/cli/dist/electron-forge-start.js");
+	return { base, ownRoot, otherRoot, borrowedNode, borrowedPnpm, forge, checkoutPaths: [ownRoot, otherRoot] };
+}
+
+test("restart kill scope ignores a node runtime borrowed from this checkout by another checkout", () => {
+	// 2026-11-06：另一份 checkout 用本 checkout 的 node 启动 dev，本 checkout restart 把它整组杀掉。
+	const fx = makeLauncherFixture();
+	try {
+		const processes = [
+			{ pid: 1, command: `${fx.borrowedNode} /home/u/.cache/corepack/pnpm/10/bin/pnpm.cjs dev:desktop:remote` },
+			{ pid: 2, command: `node ${fx.borrowedPnpm} --filter desktop dev:remote` },
+			{ pid: 3, command: `${fx.borrowedNode} ${fx.forge(fx.otherRoot)}` },
+			{ pid: 4, command: `${fx.borrowedNode} ${fx.forge(fx.ownRoot)}` },
+			{ pid: 5, command: `${path.join(fx.ownRoot, "node_modules/electron/dist/Electron.app/Contents/MacOS/Electron")} .` },
+		];
+		const devProcesses = processes.filter((proc) => isRepositoryDesktopDevProcess(proc, fx.checkoutPaths, 999));
+
+		const { targets } = partitionDesktopDevProcesses(devProcesses, fx.ownRoot, fx.checkoutPaths);
+		assert.deepEqual(targets.map((proc) => proc.pid), [4, 5]);
+		assert.equal(commandBelongsToCheckout(processes[2].command, fx.otherRoot, fx.checkoutPaths), true);
+	} finally {
+		fs.rmSync(fx.base, { recursive: true, force: true });
+	}
+});
+
+for (const ownDirName of ["cindy src", "cindy src - old"]) {
+	test(`restart kill scope strips a borrowed node whose unquoted path contains spaces (${ownDirName})`, () => {
+		// `ps` 不给带空格的参数补引号：借用的 node 路径含空格（含「空格 + 横线」）时仍要整段剥掉。
+		const fx = makeLauncherFixture(ownDirName);
+		try {
+			const processes = [
+				{ pid: 1, command: `${fx.borrowedNode} ${fx.forge(fx.otherRoot)}` },
+				{ pid: 2, command: `${fx.borrowedNode} ${fx.forge(fx.ownRoot)}` },
+				{ pid: 3, command: `"${fx.borrowedNode}" ${fx.forge(fx.otherRoot)}` },
+			];
+			const { targets } = partitionDesktopDevProcesses(processes, fx.ownRoot, fx.checkoutPaths);
+			assert.deepEqual(targets.map((proc) => proc.pid), [2]);
+		} finally {
+			fs.rmSync(fx.base, { recursive: true, force: true });
+		}
+	});
+}
+
+test("restart kill scope keeps a checkout whose directory name looks like a launcher", () => {
+	// /…/node workspace/cindy 里的 `/…/node` 只是目录名前缀，不是启动器。
+	const base = fs.mkdtempSync(path.join(os.tmpdir(), "restart-launcher-"));
+	try {
+		const ownRoot = path.join(base, "node workspace", "cindy");
+		const electron = path.join(ownRoot, "node_modules/electron/dist/Electron.app/Contents/MacOS/Electron");
+		fs.mkdirSync(path.dirname(electron), { recursive: true });
+		const command = `${electron} .`;
+
+		assert.equal(commandContainsPath(command, ownRoot), true);
+		assert.equal(isRepositoryDesktopDevProcess({ pid: 1, command }, [ownRoot], 999), true);
+	} finally {
+		fs.rmSync(base, { recursive: true, force: true });
+	}
+});
+
+test("restart from the main checkout keeps dev instances of nested managed worktrees", () => {
+	const mainRoot = path.resolve("/repo/cindy-src");
+	const nestedRoot = path.join(mainRoot, ".cindy-worktrees", "fierce-newton");
+	const checkoutPaths = [mainRoot, nestedRoot];
+	const processes = [
+		{ pid: 1, command: `${path.join(mainRoot, "node_modules/electron/dist/Electron.app/Contents/MacOS/Electron")} .` },
+		{ pid: 2, command: `${path.join(nestedRoot, "node_modules/electron/dist/Electron.app/Contents/MacOS/Electron")} .` },
+	];
+
+	const fromMain = partitionDesktopDevProcesses(processes, mainRoot, checkoutPaths);
+	assert.deepEqual(fromMain.targets.map((proc) => proc.pid), [1]);
+	assert.deepEqual(fromMain.preserved.map((proc) => proc.pid), [2]);
+	const fromNested = partitionDesktopDevProcesses(processes, nestedRoot, checkoutPaths);
+	assert.deepEqual(fromNested.targets.map((proc) => proc.pid), [2]);
+	assert.equal(commandBelongsToCheckout(processes[1].command, mainRoot, checkoutPaths), false);
+	assert.equal(
+		shouldRefuseHostedRestart(processes[1], { ownRootDir: mainRoot, isolated: true, checkoutPaths }),
+		false,
+	);
+	assert.equal(
+		shouldRefuseHostedRestart(processes[0], { ownRootDir: mainRoot, isolated: true, checkoutPaths }),
+		true,
+	);
 });
 
 test("userData conflict detection matches exact sandbox dirs only", () => {
@@ -135,22 +436,382 @@ test("userData conflict detection matches exact sandbox dirs only", () => {
 	);
 });
 
+test("shared production userData path is region-aware", () => {
+	assert.equal(path.basename(productionUserDataDir()), "CindyGlobal");
+	assert.equal(path.basename(productionUserDataDir("global")), "CindyGlobal");
+	assert.equal(path.basename(productionUserDataDir("cn")), "Cindy");
+	assert.equal(path.basename(productionUserDataDir("dev")), "CindyDev");
+});
+
+test("default isolated userData path is region-aware", () => {
+	assert.equal(path.basename(defaultIsolatedUserDataDir("", "global")), "CindyGlobal-dev2");
+	assert.equal(path.basename(defaultIsolatedUserDataDir("", "cn")), "Cindy-dev2");
+	assert.equal(path.basename(defaultIsolatedUserDataDir("review", "dev")), "CindyDev-dev2-review");
+});
+
+test("hasIsolationIntent sees argv and ambient XDT_ISOLATED=1", () => {
+	assert.equal(hasIsolationIntent([]), false);
+	assert.equal(hasIsolationIntent(["--isolated"]), true);
+	assert.equal(hasIsolationIntent(["--isolated=review"]), true);
+	assert.equal(hasIsolationIntent([], { XDT_ISOLATED: "1" }), true);
+	assert.equal(hasIsolationIntent([], { XDT_ISOLATED: "0" }), false);
+});
+
+test("normalizeDesktopRestartArgv defaults to one stable sandbox across worktrees", () => {
+	assert.deepEqual(normalizeDesktopRestartArgv(["--wait-ready"], {}), [
+		"--wait-ready",
+		DEFAULT_ISOLATED_ARG,
+	]);
+	assert.deepEqual(
+		normalizeDesktopRestartArgv(["--wait-ready", "--isolated=review"], {}),
+		["--wait-ready", "--isolated=review"],
+	);
+	assert.deepEqual(normalizeDesktopRestartArgv(["--wait-ready"], { XDT_ISOLATED: "1" }), [
+		"--wait-ready",
+	]);
+	assert.deepEqual(normalizeDesktopRestartArgv(["--wait-ready", SHARED_USERDATA_ARG], {}), [
+		"--wait-ready",
+		SHARED_USERDATA_ARG,
+	]);
+	assert.deepEqual(
+		normalizeDesktopRestartArgv(["--wait-ready", "--preserve-running"], {}),
+		["--wait-ready", "--preserve-running"],
+	);
+});
+
+test("--shared conflicts with explicit or ambient isolation", () => {
+	assert.equal(
+		desktopRestartArgvConflictMessage(["--shared", "--isolated"], {}),
+		"--shared cannot be combined with --isolated or XDT_ISOLATED=1",
+	);
+	assert.equal(
+		desktopRestartArgvConflictMessage(["--shared"], { XDT_ISOLATED: "1" }),
+		"--shared cannot be combined with --isolated or XDT_ISOLATED=1",
+	);
+	assert.equal(desktopRestartArgvConflictMessage(["--shared"], {}), null);
+});
+
+// --mock writes demo tasks (docs/dev-rules/ui-mock-data.md): it gets its own sandbox
+// by default and must never reach the shared official profile.
+test("--mock defaults to the ui-mock sandbox and refuses shared userData", () => {
+	assert.deepEqual(normalizeDesktopRestartArgv(["--mock"], {}), ["--mock", UI_MOCK_ISOLATED_ARG]);
+	assert.deepEqual(
+		normalizeDesktopRestartArgv(["--mock", "--isolated=review"], {}),
+		["--mock", "--isolated=review"],
+	);
+	for (const shared of [SHARED_USERDATA_ARG, "--preserve-running"]) {
+		assert.match(
+			desktopRestartArgvConflictMessage(normalizeDesktopRestartArgv(["--mock", shared], {}), {}),
+			/--mock .* isolated sandbox/,
+		);
+	}
+});
+
+test("isOfficialProductionUserDataDir matches every official region profile", () => {
+	assert.equal(isOfficialProductionUserDataDir(productionUserDataDir("cn")), true);
+	assert.equal(isOfficialProductionUserDataDir(productionUserDataDir("global")), true);
+	assert.equal(isOfficialProductionUserDataDir(productionUserDataDir("dev")), true);
+	assert.equal(isOfficialProductionUserDataDir(defaultIsolatedUserDataDir("", "cn")), false);
+	assert.ok(officialProductionUserDataDirs().some((dir) => path.basename(dir) === "Cindy"));
+	assert.ok(officialProductionUserDataDirs().some((dir) => path.basename(dir) === "CindyGlobal"));
+});
+
+test("isolated restart target pointing at the other region's official profile is refused", () => {
+	const cnFromGlobal = resolveRestartTargetUserDataDir({
+		envUserDataDir: productionUserDataDir("cn"),
+		isolatedArg: "--isolated",
+		selectedRegion: "global",
+	});
+	assert.equal(isOfficialProductionUserDataDir(cnFromGlobal), true);
+	const globalFromCn = resolveRestartTargetUserDataDir({
+		envUserDataDir: productionUserDataDir("global"),
+		isolatedArg: "--isolated",
+		selectedRegion: "cn",
+	});
+	assert.equal(isOfficialProductionUserDataDir(globalFromCn), true);
+});
+
+test("env-only XDT_ISOLATED=1 derives the default sandbox, not the official profile", () => {
+	const target = resolveRestartTargetUserDataDir({
+		isolatedEnv: "1",
+		selectedRegion: "cn",
+	});
+	assert.equal(target, defaultIsolatedUserDataDir("", "cn"));
+	assert.equal(isOfficialProductionUserDataDir(target), false);
+	const named = resolveRestartTargetUserDataDir({
+		isolatedEnv: "1",
+		isolatedName: "review",
+		selectedRegion: "global",
+	});
+	assert.equal(named, defaultIsolatedUserDataDir("review", "global"));
+});
+
+test("isolated auth accepts only the epoch sandbox derived by this restart", () => {
+	const isolatedArg = "--isolated=oauth-review";
+	const derived = defaultIsolatedUserDataDir("oauth-review", "global");
+	const trusted = {
+		isolatedArg,
+		userDataDir: derived,
+		userDataDirEpoch: "1",
+		userDataDerivedByRestart: true,
+		selectedRegion: "global",
+	};
+
+	// A freshly derived sandbox does not need an existing credential file.
+	assert.equal(isTrustedIsolatedAuthUserDataDir(trusted), true);
+	assert.equal(isTrustedIsolatedAuthUserDataDir({
+		...trusted,
+		userDataDerivedByRestart: false,
+	}), false);
+	assert.equal(isTrustedIsolatedAuthUserDataDir({
+		...trusted,
+		userDataDirEpoch: undefined,
+	}), false);
+	assert.equal(isTrustedIsolatedAuthUserDataDir({
+		...trusted,
+		userDataDir: path.join(os.tmpdir(), "shared-cindy-profile"),
+	}), false);
+});
+
+test("isolated auth rejects an explicit userData even when it spoofs the derived path and epoch", () => {
+	const isolatedArg = "--isolated=oauth-review";
+	assert.equal(isTrustedIsolatedAuthUserDataDir({
+		isolatedArg,
+		userDataDir: defaultIsolatedUserDataDir("oauth-review", "global"),
+		userDataDirEpoch: "1",
+		userDataDerivedByRestart: false,
+		selectedRegion: "global",
+	}), false);
+});
+
+test("isolated auth rejects a derived userData symlink or junction before minting proof", () => {
+	const root = fs.mkdtempSync(path.join(os.tmpdir(), "cindy-isolated-alias-"));
+	const savedEnv = {
+		APPDATA: process.env.APPDATA,
+		HOME: process.env.HOME,
+		USERPROFILE: process.env.USERPROFILE,
+		XDG_CONFIG_HOME: process.env.XDG_CONFIG_HOME,
+	};
+	try {
+		if (process.platform === "win32") {
+			process.env.APPDATA = path.join(root, "appdata");
+			process.env.USERPROFILE = root;
+		} else if (process.platform === "darwin") {
+			process.env.HOME = root;
+		} else {
+			process.env.XDG_CONFIG_HOME = path.join(root, "config");
+		}
+		const isolatedArg = "--isolated=link-guard";
+		const derived = defaultIsolatedUserDataDir("link-guard", "global");
+		const unrelatedProfile = path.join(root, "unrelated-profile");
+		fs.mkdirSync(path.dirname(derived), { recursive: true });
+		fs.mkdirSync(unrelatedProfile, { recursive: true });
+		fs.symlinkSync(
+			unrelatedProfile,
+			derived,
+			process.platform === "win32" ? "junction" : "dir",
+		);
+
+		assert.equal(isTrustedIsolatedAuthUserDataDir({
+			isolatedArg,
+			userDataDir: derived,
+			userDataDirEpoch: "1",
+			userDataDerivedByRestart: true,
+			selectedRegion: "global",
+		}), false);
+		assert.throws(
+			() => createIsolatedAuthLaunchProof({ userDataDir: derived }),
+			/symlink or junction/,
+		);
+		assert.equal(
+			fs.existsSync(path.join(unrelatedProfile, ISOLATED_AUTH_LAUNCH_PROOF_FILE)),
+			false,
+		);
+	} finally {
+		for (const [key, value] of Object.entries(savedEnv)) {
+			if (value === undefined) delete process.env[key];
+			else process.env[key] = value;
+		}
+		fs.rmSync(root, { recursive: true, force: true });
+	}
+});
+
+test("isolated auth launch proof binds the current derived sandbox and is private", () => {
+	const userDataDir = fs.mkdtempSync(path.join(os.tmpdir(), "cindy-isolated-proof-"));
+	try {
+		const nonce = "b".repeat(64);
+		assert.equal(createIsolatedAuthLaunchProof({
+			userDataDir,
+			isolationName: "oauth-review",
+			now: 123_000,
+			nonce,
+		}), nonce);
+		const proofPath = path.join(userDataDir, ISOLATED_AUTH_LAUNCH_PROOF_FILE);
+		const proof = JSON.parse(fs.readFileSync(proofPath, "utf8"));
+		assert.deepEqual(proof, {
+			version: 1,
+			nonce,
+			userDataDir: canonicalizeUserDataDir(userDataDir),
+			profileKind: "isolated-sandbox",
+			epoch: 1,
+			isolationName: "oauth-review",
+			issuedAtMs: 123_000,
+			expiresAtMs: 723_000,
+		});
+		if (process.platform !== "win32") assert.equal(fs.statSync(proofPath).mode & 0o077, 0);
+		assert.deepEqual(fs.readdirSync(userDataDir), [ISOLATED_AUTH_LAUNCH_PROOF_FILE]);
+	} finally {
+		fs.rmSync(userDataDir, { recursive: true, force: true });
+	}
+});
+
+test("isolated=@worktree derives the named sandbox from the checkout directory", () => {
+	const root = path.join("/repo", "cindy-local-ollama-models");
+	const name = isolationNameFromWorktree(root);
+	const target = resolveRestartTargetUserDataDir({
+		isolatedArg: "--isolated=@worktree",
+		selectedRegion: "global",
+		rootDir: root,
+	});
+	assert.match(name, /^local-ollama-models-[0-9a-f]{6}$/);
+	assert.equal(target, defaultIsolatedUserDataDir(name, "global"));
+});
+
+test("invalid env isolation name falls back to the default sandbox", () => {
+	assert.equal(sanitizeIsolationName("../Cindy"), "");
+	assert.equal(sanitizeIsolationName("我的沙箱"), "");
+	const target = resolveRestartTargetUserDataDir({
+		isolatedEnv: "1",
+		isolatedName: "../Cindy",
+		selectedRegion: "cn",
+	});
+	assert.equal(target, defaultIsolatedUserDataDir("", "cn"));
+	assert.equal(isOfficialProductionUserDataDir(target), false);
+});
+
+test("canonicalizeUserDataDir follows symlink parents when the leaf does not exist yet", () => {
+	const root = fs.mkdtempSync(path.join(os.tmpdir(), "cindy-canon-"));
+	const realParent = path.join(root, "real");
+	const linkParent = path.join(root, "link");
+	try {
+		fs.mkdirSync(realParent);
+		fs.symlinkSync(realParent, linkParent, process.platform === "win32" ? "junction" : "dir");
+		const viaLink = canonicalizeUserDataDir(path.join(linkParent, "Cindy"));
+		const viaReal = canonicalizeUserDataDir(path.join(realParent, "Cindy"));
+		assert.equal(viaLink, viaReal);
+	} finally {
+		fs.rmSync(root, { recursive: true, force: true });
+	}
+});
+
+test("isolated official-profile refuse happens before mkdir in the restart main flow", () => {
+	const source = fs.readFileSync(new URL("../restart-desktop-remote.mjs", import.meta.url), "utf8");
+	const refuseIdx = source.indexOf("isOfficialProductionUserDataDir(targetUserDataDir)");
+	const mkdirIdx = source.indexOf("fs.mkdirSync(process.env.XDT_USER_DATA_DIR");
+	assert.ok(refuseIdx > 0);
+	assert.ok(mkdirIdx > refuseIdx);
+});
+
+test("isolated auth trust gate runs before credential write flags and userData creation", () => {
+	const source = fs.readFileSync(new URL("../restart-desktop-remote.mjs", import.meta.url), "utf8");
+	const trustIdx = source.lastIndexOf("if (!isTrustedIsolatedAuthUserDataDir({");
+	const authFlagIdx = source.indexOf("process.env.XDT_ISOLATED_AUTH = '1';");
+	const mkdirIdx = source.indexOf("fs.mkdirSync(process.env.XDT_USER_DATA_DIR");
+	assert.ok(trustIdx > 0);
+	assert.ok(authFlagIdx > trustIdx);
+	assert.ok(mkdirIdx > authFlagIdx);
+});
+
+test("isolated auth proof is minted only by this invocation's accepted flag path", () => {
+	const source = fs.readFileSync(new URL("../restart-desktop-remote.mjs", import.meta.url), "utf8");
+	const ambientDeleteIdx = source.indexOf("clearInheritedIsolatedAuthAuthorization();");
+	const authorizeIdx = source.indexOf("isolatedAuthAuthorizedByRestart = true;");
+	const mintGuardIdx = source.indexOf("if (isolatedAuthAuthorizedByRestart) {");
+	const mintIdx = source.indexOf("createIsolatedAuthLaunchProof({", mintGuardIdx);
+	assert.ok(ambientDeleteIdx > 0);
+	assert.ok(authorizeIdx > ambientDeleteIdx);
+	assert.ok(mintGuardIdx > authorizeIdx);
+	assert.ok(mintIdx > mintGuardIdx);
+});
+
+test("ordinary restart drops inherited isolated-auth capabilities", () => {
+	const env = {
+		XDT_ISOLATED_AUTH: "1",
+		XDT_ALLOW_DEV_OAUTH_WRITE: "1",
+		XDT_ISOLATED_AUTH_PROOF: "stale-proof",
+		XDT_ISOLATED: "1",
+	};
+	clearInheritedIsolatedAuthAuthorization(env);
+	assert.deepEqual(env, { XDT_ISOLATED: "1" });
+});
+
+test("preserve-running only shares a target with live records from the same region", () => {
+	const userData = fs.mkdtempSync(path.join(os.tmpdir(), "cindy-shared-region-"));
+	const records = path.join(userData, ".dev-instances");
+	const knownRoot = path.resolve("/repo/cindy-global");
+	fs.mkdirSync(records);
+	try {
+		fs.writeFileSync(
+			path.join(records, `${process.pid}.json`),
+			`${JSON.stringify({ schemaVersion: 1, pid: process.pid, region: "global", rootDir: knownRoot })}\n`,
+		);
+		const processes = [{
+			pid: process.pid + 1,
+			command: `electron --type=renderer --user-data-dir=${userData} --app-path=${path.join(knownRoot, "apps", "desktop")}`,
+		}];
+		assert.deepEqual(inspectSharedUserDataRegion(userData, "global", processes), {
+			compatible: true,
+			reason: null,
+		});
+		const mismatch = inspectSharedUserDataRegion(userData, "cn", processes);
+		assert.equal(mismatch.compatible, false);
+		assert.match(mismatch.reason, /pid=.*region=global/);
+
+		fs.writeFileSync(
+			path.join(records, `${process.pid}.json`),
+			`${JSON.stringify({ schemaVersion: 1, pid: process.pid, rootDir: knownRoot })}\n`,
+		);
+		const unknown = inspectSharedUserDataRegion(userData, "global", processes);
+		assert.equal(unknown.compatible, false);
+		assert.match(unknown.reason, /region=unknown/);
+
+		fs.writeFileSync(
+			path.join(records, `${process.pid}.json`),
+			`${JSON.stringify({ schemaVersion: 1, pid: process.pid, region: "global", rootDir: knownRoot })}\n`,
+		);
+		const unrecorded = inspectSharedUserDataRegion(userData, "global", [
+			...processes,
+			{
+				pid: process.pid + 2,
+				command: `electron --type=renderer --user-data-dir=${userData} --app-path=/repo/unknown/apps/desktop`,
+			},
+		]);
+		assert.equal(unrecorded.compatible, false);
+		assert.match(unrecorded.reason, /not covered/);
+		assert.match(unrecorded.reason, new RegExp(`pid=${process.pid + 2}`));
+	} finally {
+		fs.rmSync(userData, { recursive: true, force: true });
+	}
+});
+
 test("desktop restart runner forwards user args (incl. --isolated) into the kill stage", () => {
 	const root = "/repo/cindy";
 	const steps = buildDesktopRestartSteps(
-		["--region=global", "--isolated=tgbot-review", "--wait-ready"],
+		["--region=global", "--isolated=tgbot-review", "--reuse-terminal", "--wait-ready"],
 		root,
 	);
 	assert.deepEqual(steps[0].args, [
 		stepScript(root, "restart-desktop-remote.mjs"),
 		"--region=global",
 		"--isolated=tgbot-review",
+		"--reuse-terminal",
 		"--kill-only",
 	]);
 	assert.deepEqual(steps[steps.length - 1].args, [
 		stepScript(root, "restart-desktop-remote.mjs"),
 		"--region=global",
 		"--isolated=tgbot-review",
+		"--reuse-terminal",
 		"--wait-ready",
 	]);
 });
@@ -163,6 +824,23 @@ test("desktop restart runner keeps the kill-before-deps order by default", () =>
 		[stepScript(root, "ensure-deps.mjs")],
 		[stepScript(root, "ensure-dev-runtime-assets.mjs")],
 		[stepScript(root, "restart-desktop-remote.mjs"), "--wait-ready"],
+	]);
+});
+
+test("desktop restart reports each real step before running it and stops progress on failure", () => {
+	const events = [];
+	const run = (step) => {
+		events.push('run:' + step.progress);
+		if (step.progress === 'assets') throw new Error('missing runtime');
+	};
+	assert.throws(() => runDesktopRestart(
+		['--isolated=progress-test'], '/repo/cindy', run,
+		(step) => events.push('step:' + step),
+	), /missing runtime/);
+	assert.deepEqual(events, [
+		'step:stopping', 'run:stopping',
+		'step:dependencies', 'run:dependencies',
+		'step:assets', 'run:assets',
 	]);
 });
 
@@ -198,7 +876,7 @@ test("desktop restart process-control phase does not initialize startup configur
 	});
 });
 
-test("desktop restart rejects an unmerged migration before the kill step", () => {
+test("desktop restart rejects an unmerged migration before the kill step when --shared is explicit", () => {
 	const repo = fs.mkdtempSync(path.join(os.tmpdir(), "cindy-restart-policy-"));
 	const calls = [];
 	try {
@@ -219,13 +897,23 @@ test("desktop restart rejects an unmerged migration before the kill step", () =>
 		fs.writeFileSync(path.join(repo, "apps", "desktop", "drizzle", "0001_feature.sql"), "SELECT 1;\n");
 
 		assert.throws(
-			() => runDesktopRestart(["--wait-ready"], repo, (step) => calls.push(step)),
+			() => runDesktopRestart(["--wait-ready", "--", "--shared"], repo, (step) => calls.push(step)),
 			/Shared Cindy userData cannot run migration artifacts/,
 		);
 		assert.deepEqual(calls, []);
 	} finally {
 		fs.rmSync(repo, { recursive: true, force: true });
 	}
+});
+
+test("desktop restart defaults to the stable dev sandbox without the shared migration gate", () => {
+	const steps = [];
+	runDesktopRestart(["--wait-ready"], "/repo/cindy", (step) => steps.push(step));
+	assert.equal(steps.length, 4);
+	assert.ok(steps[0].args.includes(DEFAULT_ISOLATED_ARG));
+	assert.equal(steps[0].args.at(-1), "--kill-only");
+	assert.ok(steps.at(-1).args.includes(DEFAULT_ISOLATED_ARG));
+	assert.equal(steps.at(-1).args.at(-1), "--wait-ready");
 });
 
 test("preserve-running skips every kill stage and reaches the readiness start", () => {
@@ -345,6 +1033,26 @@ test("structured startup failures keep their actionable reason", () => {
 	);
 });
 
+// Test value: identifyDesktopProcesses must return the actual profile so whoami
+// can load its ready/source record. Windows Crashpad's /prefetch:4 was included
+// in that path, producing WHOAMI_MISMATCH for a running dev instance. Existing
+// fixtures only used --switch boundaries; the minimum missing input is an
+// unquoted profile path followed by /prefetch:4. Unit tier, in-memory process facts.
+test("desktop whoami excludes Windows prefetch from the Crashpad userData path", () => {
+	const sourceRoot = path.join(os.tmpdir(), "whoami-source");
+	const userData = path.join(os.tmpdir(), "Application Support", "CindyGlobal-dev");
+	const electron = path.join(sourceRoot, "node_modules", "electron", "dist", "electron.exe");
+	const appPath = path.join(sourceRoot, "apps", "desktop");
+	const instances = identifyDesktopProcesses([
+		{ pid: 10, ppid: 9, command: `"${electron}" .` },
+		{ pid: 11, ppid: 10, command: `"${electron}" --type=crashpad-handler --user-data-dir=${userData} /prefetch:4 --no-rate-limit --database=unused` },
+		{ pid: 12, ppid: 10, command: `"${electron}" --type=renderer --app-path="${appPath}" --enable-sandbox` },
+	], [{ rootDir: sourceRoot, branch: null }]);
+
+	assert.equal(instances.length, 1);
+	assert.equal(instances[0].userDataDir, userData);
+});
+
 test("desktop whoami identifies multiple passive previews sharing one userData", () => {
 	const previewRoot = path.resolve("/repo/cindy-preview");
 	const previewRootTwo = path.resolve("/repo/cindy-preview-two");
@@ -438,6 +1146,7 @@ test("desktop whoami prefers launch-time commit metadata over process inference"
 		rootDir: "/repo/cindy-preview",
 		state: "ready",
 		mode: "remote",
+		region: "global",
 		passive: true,
 		isolated: false,
 		userDataDir: "/tmp/Cindy",
@@ -448,6 +1157,7 @@ test("desktop whoami prefers launch-time commit metadata over process inference"
 
 	assert.equal(merged[0].commit, "abc123");
 	assert.equal(merged[0].commitVerified, true);
+	assert.equal(merged[0].region, "global");
 	assert.equal(merged[0].source, "record");
 });
 
@@ -463,7 +1173,7 @@ test("devEnvPrefix passes XDT_LOGIN_SCENARIO and VITE_SPLASH_PHASE_FIXTURE throu
 	);
 	assert.equal(
 		prefix,
-		"XDT_LOGIN_SCENARIO='error:verify-code:INVALID_CODE' VITE_SPLASH_PHASE_FIXTURE='spawn_failed' ",
+		"XDT_LOGIN_SCENARIO='error:verify-code:INVALID_CODE' VITE_SPLASH_PHASE_FIXTURE='spawn_failed' CINDY_CUA_SMOKE='0' ",
 	);
 });
 
@@ -484,12 +1194,80 @@ test("devEnvPrefix passes harness envs through on Windows cmd with quote strippi
 	);
 	assert.equal(
 		prefix,
-		'set "XDT_LOGIN_SCENARIO=providers:both" && set "VITE_SPLASH_PHASE_FIXTURE=updating" && ',
+		'set "XDT_LOGIN_SCENARIO=providers:both" && set "VITE_SPLASH_PHASE_FIXTURE=updating" && set "CINDY_CUA_SMOKE=0" && ',
 	);
 });
 
+test("devEnvPrefix forwards only the requested local relay override and unsets stale macOS values", () => {
+	const env = { XDT_DEVICE_LINK_LOCAL_URL: "http://127.0.0.1:33355", XDT_DEVICE_LINK_CN_LOCAL_URL: "http://127.0.0.1:33355", XDT_DEVICE_LINK_GLOBAL_LOCAL_URL: "http://127.0.0.1:33356" };
+	assert.ok(devEnvPrefix(env, "darwin").includes("XDT_DEVICE_LINK_LOCAL_URL='http://127.0.0.1:33355'"));
+	assert.ok(devEnvPrefix(env, "win32").includes('set "XDT_DEVICE_LINK_LOCAL_URL=http://127.0.0.1:33355"'));
+	assert.ok(darwinStaleDevEnvUnset({}).includes("XDT_DEVICE_LINK_LOCAL_URL"));
+	assert.ok(devEnvPrefix(env, "darwin").includes("XDT_DEVICE_LINK_GLOBAL_LOCAL_URL='http://127.0.0.1:33356'"));
+	assert.ok(devEnvPrefix(env, "win32").includes('set "XDT_DEVICE_LINK_CN_LOCAL_URL=http://127.0.0.1:33355"'));
+	assert.ok(darwinStaleDevEnvUnset({}).includes("XDT_DEVICE_LINK_GLOBAL_LOCAL_URL"));
+});
+
+test("devEnvPrefix carries the Cindy Make test-window marker through restart", () => {
+	assert.equal(
+		devEnvPrefix({ XDT_CINDY_MAKE_TEST: "1" }, "darwin"),
+		"XDT_CINDY_MAKE_TEST='1' CINDY_CUA_SMOKE='0' ",
+	);
+	assert.equal(
+		devEnvPrefix({ XDT_CINDY_MAKE_TEST: "1" }, "win32"),
+		'set "XDT_CINDY_MAKE_TEST=1" && set "CINDY_CUA_SMOKE=0" && ',
+	);
+});
+
+test("devEnvPrefix overrides a stale Computer Use smoke flag in the target shell", () => {
+	for (const value of [
+		undefined,
+		"",
+		"0",
+		"1",
+		"cursor-goal",
+		"desktop-pointer",
+		"folder-picker",
+		"invalid",
+	]) {
+		const env = value === undefined ? {} : { CINDY_CUA_SMOKE: value };
+		const node = process.platform === "win32" ? "%CINDY_TEST_NODE%" : "$CINDY_TEST_NODE";
+		const result = spawnSync(
+			`${devEnvPrefix(env)}"${node}" -p "process.env.CINDY_CUA_SMOKE"`,
+			{
+				shell: true,
+				env: { ...process.env, CINDY_CUA_SMOKE: "1", CINDY_TEST_NODE: process.execPath },
+				encoding: "utf8",
+				timeout: 5000,
+			},
+		);
+		assert.equal(result.status, 0, result.stderr);
+		assert.equal(result.stdout.trim(), [
+			"1",
+			"cursor-goal",
+			"desktop-pointer",
+			"folder-picker",
+		].includes(value) ? value : "0", `caller value: ${value}`);
+	}
+});
+
 test("devEnvPrefix omits harness envs when unset (whitelist stays opt-in)", () => {
-	assert.equal(devEnvPrefix({}, "darwin"), "");
+	assert.equal(devEnvPrefix({}, "darwin"), "CINDY_CUA_SMOKE='0' ");
+});
+
+test("devEnvPrefix passes the explicit isolated OAuth write escape hatch", () => {
+	assert.equal(
+		devEnvPrefix(
+			{
+				XDT_ISOLATED_AUTH: "1",
+				XDT_ALLOW_DEV_OAUTH_WRITE: "1",
+				XDT_ISOLATED_AUTH_PROOF: "proof-nonce",
+			},
+			"darwin",
+		),
+		"XDT_ISOLATED_AUTH='1' XDT_ALLOW_DEV_OAUTH_WRITE='1' " +
+			"XDT_ISOLATED_AUTH_PROOF='proof-nonce' CINDY_CUA_SMOKE='0' ",
+	);
 });
 
 test("devEnvPrefix passes explicit model catalog test controls to Desktop", () => {
@@ -503,7 +1281,703 @@ test("devEnvPrefix passes explicit model catalog test controls to Desktop", () =
 	);
 	assert.equal(
 		prefix,
-		"XDT_MODELS_URL='http://127.0.0.1:43181/api/model-catalog/catalog' " +
+		"CINDY_CUA_SMOKE='0' XDT_MODELS_URL='http://127.0.0.1:43181/api/model-catalog/catalog' " +
 			"XDT_MODELS_PATH='/tmp/model catalog.json' XDT_DISABLE_MODELS_FETCH='1' ",
 	);
+});
+
+test("formatDesktopDevVerdict prints a grepable ready block", () => {
+	const text = formatDesktopDevVerdict({
+		state: "ready",
+		mode: "isolated",
+		sandbox: "local-ollama",
+		root: "/repo/cindy-local-ollama",
+		commit: "abc123",
+		pid: 42,
+		region: "global",
+	});
+	assert.equal(
+		text,
+		[
+			`${DESKTOP_DEV_VERDICT_PREFIX}=ready`,
+			"mode=isolated",
+			"sandbox=local-ollama",
+			"root=/repo/cindy-local-ollama",
+			"commit=abc123",
+			"pid=42",
+			"region=global",
+			"",
+		].join("\n"),
+	);
+});
+
+test("formatDesktopDevVerdict flattens failed messages and keeps next", () => {
+	const text = formatDesktopDevVerdict({
+		state: "failed",
+		code: "MIGRATION_POLICY",
+		message: "Shared Cindy userData cannot run\nmigration artifacts",
+		next: ISOLATED_RESTART_NEXT,
+	});
+	assert.match(text, new RegExp(`^${DESKTOP_DEV_VERDICT_PREFIX}=failed\\n`));
+	assert.match(text, /code=MIGRATION_POLICY/);
+	assert.match(text, /message=Shared Cindy userData cannot run migration artifacts/);
+	assert.match(text, /next=pnpm restart:desktop:remote -- --isolated=@worktree/);
+});
+
+test("isolationNameFromWorktree strips cindy-, adds a path digest, and stays within 32 chars", () => {
+	const named = isolationNameFromWorktree("/Users/dash/Code/Cindy/cindy-local-ollama-models");
+	assert.match(named, /^local-ollama-models-[0-9a-f]{6}$/);
+	assert.notEqual(
+		named,
+		isolationNameFromWorktree("/tmp/cindy-local-ollama-models"),
+	);
+	assert.match(
+		isolationNameFromWorktree("/tmp/cindy-desktop-dev-startup-verdict"),
+		/^desktop-dev-startup-verdi-[0-9a-f]{6}$/,
+	);
+	assert.match(isolationNameFromWorktree("/tmp/!!!"), /^worktree-[0-9a-f]{6}$/);
+	assert.ok(isolationNameFromWorktree(`/tmp/cindy-${"a".repeat(80)}`).length <= 32);
+});
+
+test("resolveIsolatedArg expands @worktree to a named sandbox", () => {
+	const root = "/repo/cindy-local-ollama-models";
+	const expanded = resolveIsolatedArg(WORKTREE_ISOLATED_ARG, root);
+	assert.match(expanded, /^--isolated=local-ollama-models-[0-9a-f]{6}$/);
+	assert.equal(expanded, resolveIsolatedArg(WORKTREE_ISOLATED_ARG, root));
+	assert.equal(resolveIsolatedArg("--isolated=feature-a", "/repo/x"), "--isolated=feature-a");
+	assert.equal(resolveIsolatedArg("--isolated", "/repo/x"), "--isolated");
+});
+
+test("shouldRefuseHostedRestart blocks same-checkout hosts and other-checkout shared starts", () => {
+	const own = "/repo/cindy-feature";
+	const other = "/repo/cindy-other";
+	assert.equal(
+		shouldRefuseHostedRestart(
+			{ pid: 10, command: `electron-forge start ${own}` },
+			{ preserveRunning: false, ownRootDir: own, isolated: true },
+		),
+		true,
+	);
+	assert.equal(
+		shouldRefuseHostedRestart(
+			{ pid: 10, command: `electron-forge start ${other}` },
+			{ preserveRunning: false, ownRootDir: own, isolated: true },
+		),
+		false,
+	);
+	assert.equal(
+		shouldRefuseHostedRestart(
+			{ pid: 10, command: `electron-forge start ${other}` },
+			{ preserveRunning: false, ownRootDir: own, isolated: false },
+		),
+		true,
+	);
+	assert.equal(
+		shouldRefuseHostedRestart(
+			{ pid: 10, command: `electron-forge start ${own}` },
+			{ preserveRunning: true, ownRootDir: own },
+		),
+		false,
+	);
+	assert.equal(
+		shouldRefuseHostedRestart(null, { preserveRunning: false, ownRootDir: own }),
+		false,
+	);
+});
+
+test("whoami match becomes a ready verdict", () => {
+	const root = path.resolve("/repo/cindy-preview");
+	const verdict = buildDesktopDevVerdictFromWhoami({
+		match: true,
+		expected: { rootDir: root, commit: "abc123" },
+		instances: [{
+			pid: 99,
+			rootDir: root,
+			ready: true,
+			commitVerified: true,
+			commit: "abc123",
+			isolated: true,
+			region: "global",
+		}],
+	}, { isolated: true, sandbox: "preview" });
+	assert.deepEqual(verdict, {
+		state: "ready",
+		mode: "isolated",
+		sandbox: "preview",
+		root,
+		commit: "abc123",
+		pid: 99,
+		region: "global",
+	});
+});
+
+test("whoami mismatch on shared start suggests isolated retry", () => {
+	const root = path.resolve("/repo/cindy-preview");
+	const verdict = buildDesktopDevVerdictFromWhoami({
+		match: false,
+		expected: { rootDir: root, commit: "abc123" },
+		instances: [],
+	}, { isolated: false });
+	assert.equal(verdict.state, "failed");
+	assert.equal(verdict.code, "WHOAMI_MISMATCH");
+	assert.equal(verdict.next, ISOLATED_RESTART_NEXT);
+});
+
+test("an unreadable process table is unavailable, not a mismatch", () => {
+	const root = path.resolve("/repo/cindy-preview");
+	const verdict = buildDesktopDevVerdictFromWhoami({
+		match: false,
+		expected: { rootDir: root, commit: "abc123" },
+		processScan: { ok: false, code: "ENOBUFS", message: "spawnSync ps ENOBUFS" },
+		instances: [],
+	}, { isolated: false });
+	assert.equal(verdict.state, "failed");
+	assert.equal(verdict.code, "WHOAMI_UNAVAILABLE");
+	assert.match(verdict.message, /ENOBUFS/);
+	// 重开沙箱解决不了「读不到进程表」，不要再建议重启。
+	assert.equal(verdict.next, undefined);
+});
+
+test("a readable process table keeps the mismatch verdict", () => {
+	const root = path.resolve("/repo/cindy-preview");
+	const verdict = buildDesktopDevVerdictFromWhoami({
+		match: false,
+		expected: { rootDir: root, commit: "abc123" },
+		processScan: { ok: true },
+		instances: [],
+	}, { isolated: false });
+	assert.equal(verdict.code, "WHOAMI_MISMATCH");
+});
+
+test("shared migration policy failure keeps an isolated next command", () => {
+	const verdict = buildDesktopDevVerdictFromFailure(
+		new Error("Shared Cindy userData cannot run migration artifacts that are not canonical on origin/main."),
+		{ isolated: false, rootDir: "/repo/cindy-feature" },
+	);
+	assert.equal(verdict.state, "failed");
+	assert.equal(verdict.code, "MIGRATION_POLICY");
+	assert.equal(verdict.next, ISOLATED_RESTART_NEXT);
+	assert.equal(verdict.root, "/repo/cindy-feature");
+});
+
+test("isolated failures do not suggest another isolated start", () => {
+	assert.equal(shouldSuggestIsolatedNext({ isolated: true, code: "MIGRATE_FAILED" }), false);
+	const verdict = buildDesktopDevVerdictFromFailure(
+		Object.assign(new Error("[MIGRATE_FAILED] applied identity changed"), {
+			startupStatus: { code: "MIGRATE_FAILED", message: "applied identity changed" },
+		}),
+		{ isolated: true, sandbox: "feature" },
+	);
+	assert.equal(verdict.code, "MIGRATE_FAILED");
+	assert.equal(verdict.next, undefined);
+	assert.equal(verdict.mode, "isolated");
+});
+
+test("userData conflicts in the shared dev sandbox suggest a per-worktree sandbox", () => {
+	const verdict = buildDesktopDevVerdictFromFailure(
+		new Error("Target userData is already in use by another checkout's dev instance: /x"),
+		{ isolated: true, sandbox: "dev", code: "USERDATA_IN_USE" },
+	);
+	assert.equal(verdict.code, "USERDATA_IN_USE");
+	assert.equal(verdict.next, ISOLATED_RESTART_NEXT);
+});
+
+test("failure verdict carries the dev terminal log path", () => {
+	const verdict = buildDesktopDevVerdictFromFailure(new Error("boom"), {
+		isolated: true,
+		log: "/repo/cindy-feature/apps/desktop/logs/dev-terminal.log",
+	});
+	assert.match(
+		formatDesktopDevVerdict(verdict),
+		/^log=\/repo\/cindy-feature\/apps\/desktop\/logs\/dev-terminal\.log$/m,
+	);
+});
+
+test("inferDesktopDevFailureCode reads tagged startup failures", () => {
+	assert.equal(inferDesktopDevFailureCode("[SINGLE_INSTANCE_OWNED] owned"), "SINGLE_INSTANCE_OWNED");
+	assert.equal(
+		inferDesktopDevFailureCode("Desktop dev did not finish window/auth/database startup within 120s."),
+		"STARTUP_TIMEOUT",
+	);
+});
+
+test("collectDesktopWhoamiReport can be built from injected process facts", () => {
+	const root = path.resolve("/repo/cindy-preview");
+	const report = collectDesktopWhoamiReport({
+		rootDir: root,
+		commit: "abc123",
+		worktrees: [{ rootDir: root, branch: "dash/preview" }],
+		processes: [],
+		scanned: [{
+			pid: 10,
+			rootDir: root,
+			branch: "dash/preview",
+			state: "ready",
+			ready: true,
+			mode: "remote",
+			passive: true,
+			isolated: null,
+			userDataDir: "/tmp/Cindy",
+			commit: null,
+			commitVerified: false,
+			source: "process-scan",
+		}],
+		records: [{
+			schemaVersion: 1,
+			pid: 10,
+			rootDir: root,
+			state: "ready",
+			mode: "remote",
+			region: "global",
+			passive: true,
+			isolated: false,
+			userDataDir: "/tmp/Cindy",
+			commit: "abc123",
+			startedAtMs: 1,
+			updatedAtMs: 2,
+		}],
+	});
+	assert.equal(report.match, true);
+	assert.deepEqual(report.processScan, { ok: true });
+	assert.equal(buildDesktopDevVerdictFromWhoami(report).state, "ready");
+});
+
+test("process scans report ENOBUFS instead of an empty process table", () => {
+	// Node spawnSync 默认 maxBuffer 是 1 MiB；大进程表上 ps 会 ENOBUFS，status 为 null，
+	// stdout 只有半截。旧实现 return []，等于告诉调用方「系统里一个进程都没有」。
+	const enobufs = {
+		status: null,
+		error: Object.assign(new Error("spawnSync ps ENOBUFS"), { code: "ENOBUFS" }),
+		stdout: "1 0 s001 /sbin/launchd\n",
+	};
+	const runCommand = () => enobufs;
+
+	const posix = scanProcessTable({ platform: "darwin", runCommand });
+	assert.deepEqual(posix.processes, []);
+	assert.equal(posix.error.code, "ENOBUFS");
+	assert.match(posix.error.message, /ENOBUFS/);
+
+	const win32 = scanProcessTable({ platform: "win32", runCommand });
+	assert.equal(win32.error.code, "ENOBUFS");
+
+	assert.throws(
+		() => scanRestartProcessTable({ platform: "darwin", runCommand }),
+		/\[PROCESS_SCAN_FAILED\].*ENOBUFS/,
+	);
+	assert.throws(
+		() => scanRestartProcessTable({ platform: "win32", runCommand }),
+		/\[PROCESS_SCAN_FAILED\].*ENOBUFS/,
+	);
+});
+
+test("restart scan failure gets its own verdict code", () => {
+	assert.equal(
+		inferDesktopDevFailureCode("[PROCESS_SCAN_FAILED] Could not read the process table (ENOBUFS)"),
+		"PROCESS_SCAN_FAILED",
+	);
+	const verdict = buildDesktopDevVerdictFromFailure(
+		new Error("[PROCESS_SCAN_FAILED] Could not read the process table (ENOBUFS)"),
+		{ isolated: false, rootDir: "/repo/cindy-feature" },
+	);
+	assert.equal(verdict.code, "PROCESS_SCAN_FAILED");
+	assert.equal(verdict.next, undefined);
+});
+
+test("process scans ask ps for more than the 1 MiB spawnSync default", () => {
+	const output = [
+		"  501     1 s001 /sbin/launchd",
+		"  777   501 s002 /repo/cindy/node_modules/electron/Electron.app/Contents/MacOS/Electron .",
+	].join("\n");
+	const calls = [];
+	const runCommand = (command, args, options) => {
+		calls.push({ command, args, options });
+		return { status: 0, stdout: output };
+	};
+
+	const whoamiScan = scanProcessTable({ platform: "darwin", runCommand });
+	assert.equal(whoamiScan.error, null);
+	assert.deepEqual(whoamiScan.processes.map((proc) => proc.pid), [501, 777]);
+
+	const restartScan = scanRestartProcessTable({ platform: "darwin", runCommand });
+	assert.equal(restartScan[1].pid, 777);
+	assert.equal(restartScan[1].ppid, 501);
+	assert.equal(restartScan[1].tty, "s002");
+	assert.match(restartScan[1].command, /node_modules\/electron\//);
+
+	assert.deepEqual(calls.map((call) => call.command), ["ps", "ps"]);
+	for (const call of calls) assert.ok(call.options.maxBuffer >= 4 * 1024 * 1024);
+});
+
+test("Windows scans read process tables larger than the spawnSync default", () => {
+	// #6537 / review P1: the existing buffer regression only covered ps. Exercise
+	// both production scanners with >1 MiB JSON; a fake spawn boundary reproduces
+	// ENOBUFS without a real subprocess in the default runner tier.
+	const commandLine = `node ${"x".repeat(1024 * 1024)}`;
+	const stdout = JSON.stringify({ ProcessId: 777, ParentProcessId: 501, CommandLine: commandLine });
+	const runCommand = (command, _args, options = {}) => {
+		assert.equal(command, "powershell.exe");
+		if (Buffer.byteLength(stdout) > (options.maxBuffer ?? 1024 * 1024)) {
+			return {
+				status: null, stdout: "",
+				error: Object.assign(new Error("spawnSync powershell.exe ENOBUFS"), { code: "ENOBUFS" }),
+			};
+		}
+		return { status: 0, stdout };
+	};
+	const expected = [{ pid: 777, ppid: 501, command: commandLine }];
+	const whoami = scanProcessTable({ platform: "win32", runCommand });
+	assert.equal(whoami.error, null);
+	assert.deepEqual(whoami.processes, expected);
+	assert.deepEqual(scanRestartProcessTable({ platform: "win32", runCommand }), expected);
+});
+
+test("posix process rows parse the pid/ppid/command columns", () => {
+	assert.deepEqual(
+		parsePosixProcessTable("  501     1 /sbin/launchd\n   12 501 node script.mjs\n"),
+		[
+			{ pid: 501, ppid: 1, command: "/sbin/launchd" },
+			{ pid: 12, ppid: 501, command: "node script.mjs" },
+		],
+	);
+});
+
+test("isolatedRestartNextCommand keeps region and local mode", () => {
+	assert.equal(isolatedRestartNextCommand(), ISOLATED_RESTART_NEXT);
+	assert.equal(
+		isolatedRestartNextCommand({ region: "cn" }),
+		"pnpm restart:desktop:remote --region=cn -- --isolated=@worktree",
+	);
+	assert.equal(
+		isolatedRestartNextCommand({ local: true }),
+		"pnpm restart:desktop:local -- --isolated=@worktree",
+	);
+	const verdict = buildDesktopDevVerdictFromFailure(
+		new Error("Shared Cindy userData cannot run migration artifacts that are not canonical on origin/main."),
+		{ isolated: false, region: "cn" },
+	);
+	assert.equal(verdict.next, "pnpm restart:desktop:remote --region=cn -- --isolated=@worktree");
+});
+
+test("host identity uses the same conservative path match as kill", () => {
+	const own = "/repo/cindy-feature";
+	assert.equal(commandContainsPath(`electron-forge start ${own} --isolated=feature`, own), false);
+	assert.equal(commandContainsPath(`${own}/node_modules/electron`, own), true);
+	assert.equal(
+		shouldRefuseHostedRestart(
+			{ pid: 10, command: `${own}/node_modules/electron` },
+			{ preserveRunning: false, ownRootDir: own, isolated: true },
+		),
+		true,
+	);
+	assert.equal(
+		shouldRefuseHostedRestart(
+			{ pid: 10, command: `${own} extra/node_modules/electron` },
+			{ preserveRunning: false, ownRootDir: own, isolated: true },
+		),
+		false,
+	);
+});
+
+test("hosted restart sees XDT_ISOLATED as isolation intent", () => {
+	const own = "/repo/cindy-feature";
+	const other = "/repo/cindy-other/node_modules/electron";
+	assert.equal(
+		shouldRefuseHostedRestart(
+			{ pid: 10, command: other },
+			{ preserveRunning: false, ownRootDir: own, isolated: true },
+		),
+		false,
+	);
+});
+
+test("restartContextFromArgv reads --region cn and XDT_ISOLATED", () => {
+	assert.equal(restartContextFromArgv(["--region", "cn"]).region, "cn");
+	assert.equal(restartContextFromArgv([], { XDT_ISOLATED: "1" }).isolated, true);
+	assert.equal(
+		buildDesktopDevVerdictFromFailure(new Error("WHOAMI_MISMATCH"), {
+			...restartContextFromArgv(["--region", "cn"]),
+		}).next,
+		"pnpm restart:desktop:remote --region=cn -- --isolated=@worktree",
+	);
+});
+
+test("worktree sandbox hash follows the foldCase option from the volume", () => {
+	assert.equal(
+		isolationNameFromWorktree("/repo/Foo/cindy-feature", { foldCase: true }),
+		isolationNameFromWorktree("/repo/foo/cindy-feature", { foldCase: true }),
+	);
+	assert.notEqual(
+		isolationNameFromWorktree("/repo/Foo/cindy-feature", { foldCase: false }),
+		isolationNameFromWorktree("/repo/foo/cindy-feature", { foldCase: false }),
+	);
+});
+
+test("named isolated does not keep another checkout's inherited userData dir", () => {
+	const derived = defaultIsolatedUserDataDir("local-ollama-models-abc123", "global");
+	assert.equal(
+		inheritedUserDataBlocksNamedIsolation(
+			"--isolated=local-ollama-models-abc123",
+			defaultIsolatedUserDataDir("other-sandbox", "global"),
+			derived,
+		),
+		true,
+	);
+	assert.equal(
+		inheritedUserDataBlocksNamedIsolation("--isolated=local-ollama-models-abc123", derived, derived),
+		false,
+	);
+	assert.equal(
+		inheritedUserDataBlocksNamedIsolation("--isolated", defaultIsolatedUserDataDir("other-sandbox", "global"), derived),
+		false,
+	);
+	assert.equal(
+		inheritedUserDataBlocksNamedIsolation("--isolated=local-ollama-models-abc123", "/custom/profile", derived),
+		false,
+	);
+});
+
+test("assertDesktopRestartStepSucceeded throws so runner can print a verdict", () => {
+	assert.throws(
+		() => assertDesktopRestartStepSucceeded(
+			{ label: "verify desktop dependencies", args: ["ensure-deps.mjs"] },
+			{ status: 1 },
+		),
+		(error) => error instanceof DesktopRestartStepError
+			&& error.alreadyHasVerdict === false
+			&& error.exitCode === 1,
+	);
+	assert.throws(
+		() => assertDesktopRestartStepSucceeded(
+			{ label: "start desktop and wait for readiness", args: ["restart.mjs", "--wait-ready"] },
+			{ status: 2 },
+		),
+		(error) => error instanceof DesktopRestartStepError && error.alreadyHasVerdict === true,
+	);
+	assert.throws(
+		() => assertDesktopRestartStepSucceeded(
+			{ label: "stop existing desktop dev processes", args: ["restart.mjs", "--kill-only"] },
+			{ status: 1 },
+		),
+		(error) => error instanceof DesktopRestartStepError && error.alreadyHasVerdict === true,
+	);
+});
+
+test('Linux readiness binds the reported renderer to a live descendant in the same checkout', () => {
+  const rootDir = path.resolve('/repo/cindy');
+  const executable = path.join(rootDir, 'node_modules', 'electron', 'dist', 'electron');
+  const scanned = [{ pid: 10, rootDir, ready: false, state: 'starting' }];
+  const records = [{ pid: 10, rootDir, state: 'ready', rendererPid: 12 }];
+  const processes = [
+    { pid: 10, ppid: 1, command: `${executable} .` },
+    { pid: 11, ppid: 10, command: `${executable} --type=zygote` },
+    { pid: 12, ppid: 11, command: `${executable} --type=zygote` },
+  ];
+  assert.equal(applyLinuxRendererEvidence(scanned, records, processes, 'linux')[0].ready, true);
+  for (const recordsVariant of [[], [{ ...records[0], rendererPid: 99 }],
+    [{ ...records[0], rootDir: path.resolve('/other') }], [{ ...records[0], state: 'starting' }]]) {
+    assert.equal(applyLinuxRendererEvidence(scanned, recordsVariant, processes, 'linux')[0].ready, false);
+  }
+  for (const replacement of [
+    { ...processes[2], ppid: 99 },
+    { ...processes[2], command: '/other/electron --type=zygote' },
+    { ...processes[2], command: `${executable} --type=utility` },
+  ]) {
+    assert.equal(applyLinuxRendererEvidence(scanned, records, [...processes.slice(0, 2), replacement], 'linux')[0].ready, false);
+  }
+  assert.equal(applyLinuxRendererEvidence(scanned, records, processes, 'darwin')[0].ready, false);
+  assert.equal(applyLinuxRendererEvidence(scanned, records, processes, 'win32')[0].ready, false);
+});
+
+function unsetKeys(prefix) {
+	const match = /^unset ([^;]+); $/.exec(prefix);
+	return match ? match[1].split(" ") : [];
+}
+
+test("darwinStaleDevEnvUnset clears every forwarded variable this launch did not set", () => {
+	const keys = unsetKeys(darwinStaleDevEnvUnset({}));
+	// 身份与数据目录类:Terminal 残留会让预览落进别的沙箱或认领错误钥匙串身份。
+	for (const key of [
+		"XDT_ISOLATED",
+		"XDT_ISOLATED_NAME",
+		"XDT_USER_DATA_DIR",
+		"XDT_USER_DATA_DIR_EPOCH",
+		"XDT_DEVICE_ID_OVERRIDE",
+		"XDT_SCHEDULER_PASSIVE",
+		"XDT_ISOLATED_AUTH",
+		"XDT_ISOLATED_AUTH_PROOF",
+	]) {
+		assert.ok(keys.includes(key), `${key} should be unset`);
+	}
+	// CINDY_CUA_SMOKE 总由 devEnvPrefix 显式赋值,不需要也不应被清。
+	assert.ok(!keys.includes("CINDY_CUA_SMOKE"));
+});
+
+test("darwinStaleDevEnvUnset keeps variables this launch forwards (isolated without isolated-auth)", () => {
+	const env = {
+		XDT_ISOLATED: "1",
+		XDT_ISOLATED_NAME: "src-feature-1a2b3c",
+		XDT_USER_DATA_DIR: "/tmp/CindyGlobal-dev2-src-feature-1a2b3c",
+	};
+	const keys = unsetKeys(darwinStaleDevEnvUnset(env));
+	for (const key of Object.keys(env)) assert.ok(!keys.includes(key), `${key} must not be unset`);
+	for (const key of ["XDT_USER_DATA_DIR_EPOCH", "XDT_ISOLATED_AUTH", "XDT_ISOLATED_AUTH_PROOF"]) {
+		assert.ok(keys.includes(key), `${key} should be unset`);
+	}
+	// 被转发的值与被清除的键互不重叠:同一次命令里不会先赋值再 unset。
+	const forwarded = devEnvPrefix(env, "darwin");
+	for (const key of keys) assert.ok(!forwarded.includes(`${key}=`), `${key} both forwarded and unset`);
+});
+
+test("darwin dev terminal output is recorded through script(1) under the checkout logs", () => {
+	const logPath = desktopDevTerminalLogPath("/repo/cindy feature");
+	assert.equal(logPath, path.join("/repo/cindy feature", "apps", "desktop", "logs", "dev-terminal.log"));
+	const command = darwinTerminalLoggedCommand("'node' 'runner.mjs' 'remote'", logPath, {
+		envPrefix: "XDT_ISOLATED='1' ",
+		maxBytes: 1024,
+	});
+	assert.match(command, /^\{ /);
+	assert.ok(command.includes(`head -c 1024 > '${logPath}'`), command);
+	// 环境变量前缀必须紧贴 script，才能传给 dev 进程。
+	assert.match(command, /; XDT_ISOLATED='1' \/usr\/bin\/script -q -F '[^']+dev-terminal\.log\.fifo' 'node' 'runner\.mjs' 'remote'; /);
+	assert.match(command, /\(exit \$cindyDevExit\); \}$/);
+});
+
+test("logged terminal command keeps the child exit code and caps the log size", {
+	skip: process.platform !== "darwin" ? "script(1) flags differ outside macOS" : false,
+}, () => {
+	const dir = fs.mkdtempSync(path.join(os.tmpdir(), "cindy-dev-term-"));
+	try {
+		const logPath = path.join(dir, "dev-terminal.log");
+		const child = "sh -c 'i=0; while [ $i -lt 2000 ]; do echo line-$i-$CINDY_PROBE; i=$((i+1)); done; exit 4'";
+		const logged = darwinTerminalLoggedCommand(child, logPath, { envPrefix: "CINDY_PROBE='ok' ", maxBytes: 64 });
+		const result = spawnSync("/bin/sh", ["-c", `cd / && ${logged}; echo exit=$?`], {
+			encoding: "utf8",
+			stdio: ["ignore", "pipe", "pipe"],
+		});
+		assert.match(result.stdout, /exit=4\s*$/);
+		assert.equal(fs.statSync(logPath).size, 64);
+		assert.match(fs.readFileSync(logPath, "utf8"), /line-0-ok/);
+		assert.equal(fs.existsSync(`${logPath}.fifo`), false);
+	} finally {
+		fs.rmSync(dir, { recursive: true, force: true });
+	}
+});
+
+test("reusing a terminal refuses headless input instead of opening a window", () => {
+	if (process.platform !== "darwin" || !process.stdin.isTTY) {
+		assert.throws(() => currentDarwinTerminal(), /requires a live macOS terminal/);
+	}
+});
+
+test("personal coordinator reuses its input terminal with redirected output and drains after ready", {
+	skip: process.platform !== "darwin", timeout: 30_000,
+}, (t) => {
+	const dir = fs.mkdtempSync(path.join(os.tmpdir(), "cindy-one-terminal-"));
+	t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
+	const module = new URL("../restart-desktop-remote.mjs", import.meta.url).href;
+	const quote = value => `'${value.replaceAll("'", "'\\''")}'`;
+	const app = path.join(dir, "app with 'quotes.mjs");
+	fs.writeFileSync(app, `
+import fs from 'node:fs';
+if (!process.stdin.isTTY || !process.stdout.isTTY) process.exit(91);
+console.log('fixture-ready');
+setTimeout(() => {
+  for (let i = 0; i < 144; i++) fs.writeSync(1, 'x'.repeat(65536));
+  console.log('fixture-after-log-cap');
+  process.exit(7);
+}, 150);
+`);
+	const coordinator = path.join(dir, "coordinator.mjs");
+	fs.writeFileSync(coordinator, `
+import fs from 'node:fs';
+import { currentDarwinTerminal, launchDarwinDevInCurrentTerminal } from ${JSON.stringify(module)};
+if (!process.stdin.isTTY || process.stdout.isTTY) process.exit(92);
+const tty = currentDarwinTerminal();
+const child = launchDarwinDevInCurrentTerminal(${JSON.stringify(`${quote(process.execPath)} ${quote(app)}`)}, ${JSON.stringify(path.join(dir, "dev.log"))});
+child.on('error', error => { throw error; });
+child.on('exit', code => { console.log(JSON.stringify({code, tty})); process.exit(code); });
+`);
+	const supervisor = path.join(dir, "supervisor.mjs");
+	fs.writeFileSync(supervisor, `
+import fs from 'node:fs';
+import { spawnSync } from 'node:child_process';
+const output = fs.openSync(${JSON.stringify(path.join(dir, "coordinator.log"))}, 'w');
+const result = spawnSync(process.execPath, [${JSON.stringify(coordinator)}], {
+  detached: true, stdio: ['inherit', output, output], timeout: 20000,
+});
+fs.closeSync(output);
+process.exit(result.status ?? 93);
+`);
+	const display = fs.openSync(path.join(dir, "terminal.log"), "w");
+	let result;
+	try {
+		// A test PTY stands in for an existing Terminal window. The production
+		// coordinator receives its stdin while its stdout is redirected to a file.
+		result = spawnSync("/usr/bin/script", ["-q", "/dev/null", process.execPath, supervisor], {
+			stdio: ["ignore", display, display], timeout: 25000,
+		});
+	} finally { fs.closeSync(display); }
+	assert.equal(result.error, undefined);
+	assert.equal(result.status, 7, fs.readFileSync(path.join(dir, "coordinator.log"), "utf8"));
+	const receipt = JSON.parse(fs.readFileSync(path.join(dir, "coordinator.log"), "utf8"));
+	assert.match(receipt.tty, /^\/dev\/tty/);
+	assert.equal(receipt.code, 7);
+	assert.equal(fs.statSync(path.join(dir, "dev.log")).size, 8 * 1024 * 1024);
+	assert.match(fs.readFileSync(path.join(dir, "dev.log"), "utf8").slice(0, 100), /fixture-ready/);
+	assert.match(fs.readFileSync(path.join(dir, "terminal.log"), "utf8").slice(-200), /fixture-after-log-cap/);
+	assert.equal(fs.existsSync(path.join(dir, "dev.log.fifo")), false);
+});
+
+test("readDesktopDevLogTail strips terminal control sequences and keeps the last lines", () => {
+	const dir = fs.mkdtempSync(path.join(os.tmpdir(), "cindy-dev-log-"));
+	try {
+		const logPath = path.join(dir, "dev-terminal.log");
+		fs.writeFileSync(
+			logPath,
+			"\x04\b\bstart\r\n\x1b[32mvite ready\x1b[0m\r\nprogress 1\rprogress 2\r\n\r\nError: boom\r\n",
+		);
+		assert.deepEqual(readDesktopDevLogTail(logPath), ["start", "vite ready", "progress 2", "Error: boom"]);
+		assert.deepEqual(readDesktopDevLogTail(logPath, 2), ["progress 2", "Error: boom"]);
+		assert.deepEqual(readDesktopDevLogTail(path.join(dir, "missing.log")), []);
+	} finally {
+		fs.rmSync(dir, { recursive: true, force: true });
+	}
+});
+
+// Shared signed runtimes must still identify each release/profile independently;
+// otherwise an upgrade can overlook a running instance or claim another release ready.
+// Minimal input: two releases sharing one binary; only one has a live renderer. Tier: unit + temp receipt.
+test('whoami attributes a shared personal shell to its business checkout', { skip: process.platform !== 'darwin' && 'macOS-only fixed app runtime' }, () => {
+ const dir=fs.mkdtempSync(path.join(os.tmpdir(),'shared-shell-whoami-'));
+ try {
+  const roots=['first','second'].map(n=>path.join(dir,n)), runtime=path.join(dir,'runtime');
+  for(const root of roots){const resources=path.join(root,'apps/desktop/resources');fs.mkdirSync(resources,{recursive:true});
+   fs.writeFileSync(path.join(resources,'personal-native.json'),JSON.stringify({runtime:{directory:runtime,key:'runtime-fixture',digest:'fixture-digest'}}));}
+  const fixed=path.join(dir,'Cindy Personal.app');
+  fs.writeFileSync(fixed+'.personal-install.json',JSON.stringify({key:'runtime-fixture',digest:'fixture-digest'}));
+  const binary=path.join(runtime,'Cindy.app/Contents/MacOS/Electron');
+  const processes=[{pid:11,ppid:1,command:`${binary} ${roots[0]}/apps/desktop`},
+   {pid:12,ppid:11,command:`helper --type=renderer --app-path=${roots[0]}/apps/desktop --user-data-dir=${dir}/sandbox`},
+   {pid:21,ppid:1,command:`${fixed}/Contents/MacOS/Electron ${roots[1]}/apps/desktop`}];
+  const found=identifyDesktopProcesses(processes,roots.map(rootDir=>({rootDir,branch:null})));
+  assert.deepEqual(found.map(i=>[i.pid,i.rootDir,i.ready]),[[11,roots[0],true],[21,roots[1],false]]);
+  assert.equal(isRepositoryDesktopDevProcess(processes[0],[roots[0]],999),true);
+  assert.equal(isRepositoryDesktopDevProcess(processes[0],[roots[1]],999),false);
+  assert.equal(isRepositoryDesktopDevProcess(processes[2],[roots[1]],999),true);
+  assert.ok(devEnvPrefix({CINDY_PERSONAL_FIXED_APP:fixed},'darwin').includes(`CINDY_PERSONAL_FIXED_APP='${fixed}'`));
+  assert.ok(darwinStaleDevEnvUnset({}).includes('CINDY_PERSONAL_FIXED_APP'));
+  fs.unlinkSync(fixed+'.personal-install.json');
+  assert.equal(identifyDesktopProcesses(processes,roots.map(rootDir=>({rootDir,branch:null}))).length,1);
+ } finally {fs.rmSync(dir,{recursive:true,force:true});}
+});
+
+// Real kill partition: changing userData never makes a shared instance in this checkout safe
+// to restart. This is the missing regression behind personal manual-check's unsafe rehearsal.
+test('isolated preview refuses a shared instance in its checkout before stopping or clearing caches', () => {
+ const root='/tmp/fixture-personal-baseline';
+ const processes=[{pid:42,ppid:1,command:`/Users/fixture/Applications/Cindy Personal.app/Contents/MacOS/Electron ${root}/apps/desktop --user-data-dir=/tmp/shared`}];
+ const dev=processes.filter(p=>isRepositoryDesktopDevProcess(p,[root]));
+ assert.equal(dev.length,1);
+ assert.throws(()=>assertNoRestartTargets(dev,root,[root]),/occupied checkout/);
+ assert.doesNotThrow(()=>assertNoRestartTargets(processes,'/tmp/another-candidate',[root,'/tmp/another-candidate']));
 });

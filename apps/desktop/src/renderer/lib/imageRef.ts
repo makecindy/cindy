@@ -13,6 +13,7 @@
  * images / files lists, so no server-side migration is needed.
  */
 
+import { readChatReplyQuote, type ChatReplyQuote } from '../../shared/chatReplyQuote';
 import { isValidAttachmentIntegrity } from '@cindy/device-link';
 import {
   parsePersistedSessionReferenceMetadata,
@@ -79,6 +80,8 @@ export interface UserMessageContent {
   files: FileRef[];
   /** Resolved range summaries for session links present in this user message. */
   sessionReferences?: PersistedSessionReferenceMetadata[];
+  /** Companion-chat quote reply: the message this one replies to (same Session). */
+  replyQuote?: ChatReplyQuote;
   /**
    * chat-text-quote:本消息的开头 blockquote 是"选中文字引用"功能产出,
    * 渲染层据此(且仅据此)把引用块收敛为 "N 处引用" 胶囊。缺省 / 历史消息 /
@@ -194,6 +197,7 @@ export function parseUserContent(content: unknown): UserMessageContent {
       const pastedTextRanges = coercePastedTextRanges(obj.pastedTextRanges, obj.text);
       const slashCommandRanges = coerceSlashCommandRanges(obj.slashCommandRanges, obj.text);
       const agentReferences = readAgentInputReferences(obj.agentReferences, obj.text);
+      const replyQuote = readChatReplyQuote(obj.replyQuote);
       return {
         text: obj.text,
         images,
@@ -203,6 +207,7 @@ export function parseUserContent(content: unknown): UserMessageContent {
         ...(pastedTextRanges.length > 0 ? { pastedTextRanges } : {}),
         ...(slashCommandRanges !== null ? { slashCommandRanges } : {}),
         ...(agentReferences.length > 0 ? { agentReferences } : {}),
+        ...(replyQuote ? { replyQuote } : {}),
       };
     }
     // Truly unknown object shape — preserve old defensive stringify behaviour.
@@ -362,6 +367,7 @@ export function stringifyUserContent(
   slashCommandRanges?: SlashCommandRange[],
   sessionReferences: PersistedSessionReferenceMetadata[] = [],
   agentReferences: AgentInputReference[] = [],
+  replyQuote?: ChatReplyQuote,
 ): string {
   const fifthArgIsSessionReferences =
     pastedTextRangesOrSessionReferences.length > 0 &&
@@ -385,5 +391,6 @@ export function stringifyUserContent(
       ? { sessionReferences: resolvedSessionReferences }
       : {}),
     ...(agentReferences.length > 0 ? { agentReferences } : {}),
+    ...(replyQuote ? { replyQuote } : {}),
   });
 }

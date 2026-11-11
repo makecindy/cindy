@@ -21,6 +21,7 @@ export function findMobileMessageSearchHits(
   items: readonly MobileMessageRenderItem[],
   query: string,
 ): MessageSearchHit[] {
+  if (!query.trim()) return [];
   const hits: MessageSearchHit[] = [];
   for (const item of items) {
     if (item.type === 'fork_origin') {

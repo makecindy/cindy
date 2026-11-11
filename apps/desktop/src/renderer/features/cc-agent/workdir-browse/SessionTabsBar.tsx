@@ -131,12 +131,12 @@ export function SessionTabsBar({
     // 显示标题也算「没改」(与 SessionContentHeader 同口径):未起名的会话 tab 上
     // 预填的是本地化兜底文案,它不等于库里的英文哨兵 —— 只比原始 title 的话,
     // 用户双击后原样回车会把兜底文案写进库、冲掉哨兵,自动起名从此跳过这个会话。
-    const displayed = target ? getSessionDisplayTitle(target, unnamedLabel) : '';
+    const displayed = target ? getSessionDisplayTitle(target, unnamedLabel, t) : '';
     if (!trimmed || trimmed === original || trimmed === displayed) return;
     // 预填是显示标题(legacy automation 会话已剥掉 `[Schedule] ` 前缀),落库前还原,
     // 否则会话会从 automation 分组里消失(PR #1031 review P1)。
     onRename(id, target ? toStoredSessionTitle(target, trimmed) : trimmed);
-  }, [renamingId, editValue, sessions, onRename, unnamedLabel]);
+  }, [renamingId, editValue, sessions, onRename, unnamedLabel, t]);
 
   // 进编辑态后自动 focus + 全选 input。
   useEffect(() => {
@@ -248,7 +248,7 @@ export function SessionTabsBar({
       >
         {sessions.map((session) => {
           const sessionId = session.id;
-          const title = getSessionDisplayTitle(session, unnamedLabel).trim() || unnamedLabel;
+          const title = getSessionDisplayTitle(session, unnamedLabel, t).trim() || unnamedLabel;
           const vendor = session.agentKind;
           const isActive = sessionId === activeSessionId;
           const isRunning = runningMap.has(sessionId);
@@ -269,7 +269,7 @@ export function SessionTabsBar({
                 // 普遍比文件名长,要把横向密度提一档。
                 'group/tab relative flex h-full shrink-0 items-center gap-1.5 px-2',
                 'border-r border-[var(--cmd-palette-border)]',
-                'cursor-pointer text-[12px] transition-colors',
+                'cursor-pointer text-12 transition-colors',
                 isActive
                   ? 'bg-[var(--chat-input-chip-bg)] text-foreground font-medium'
                   : 'text-[var(--cmd-palette-item-meta)] hover:bg-[var(--chat-input-chip-bg)] hover:text-foreground',
@@ -308,7 +308,7 @@ export function SessionTabsBar({
                   onDoubleClick={(e) => e.stopPropagation()}
                   className={cn(
                     'max-w-[160px] h-5 px-1 rounded',
-                    'text-[12px] font-medium text-foreground',
+                    'text-12 font-medium text-foreground',
                     'bg-transparent outline-none',
                     'border-[1.5px] border-[var(--focus-ring)]',
                   )}
@@ -375,25 +375,16 @@ export function SessionTabsBar({
           <DropdownMenuContent
             align="end"
             sideOffset={4}
-            className={cn(
-              // 与 ProjectNode / SessionItem 菜单同款 shadcn 覆盖,统一项目侧
-              // dropdown 视觉。
-              'rounded-xl p-0.5 overflow-hidden min-w-[140px]',
-              'bg-[var(--cmd-palette-bg)]',
-              'border border-[var(--cmd-palette-border)]',
-              'shadow-[var(--shadow-menu)]',
-            )}
+            className="min-w-[140px]"
           >
             <DropdownMenuItem
               onSelect={() => onCreateNew('cc')}
-              className="h-7 px-2.5 rounded-md text-[13px] text-[var(--msg-assistant-text)] focus:bg-[var(--cmd-palette-item-hover)]"
             >
               <VendorIcon vendor="cc" size={14} className="mr-2 text-foreground" />
               Claude
             </DropdownMenuItem>
             <DropdownMenuItem
               onSelect={() => onCreateNew('codex')}
-              className="h-7 px-2.5 rounded-md text-[13px] text-[var(--msg-assistant-text)] focus:bg-[var(--cmd-palette-item-hover)]"
             >
               <VendorIcon vendor="codex" size={14} className="mr-2 text-foreground" />
               Codex

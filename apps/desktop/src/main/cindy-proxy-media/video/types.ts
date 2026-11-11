@@ -51,6 +51,13 @@ export interface VideoGenerationRequest {
   resolution?: string;
   /** 'W:H' aspect ratio string. Provider declares supported set. */
   ratio?: string;
+  /**
+   * Whether the caller explicitly selected `ratio`. The shared runner still
+   * resolves a concrete ratio for receipts/default-capable providers, while
+   * image-to-video adapters may omit an implicit default so the source image
+   * keeps its native aspect ratio.
+   */
+  ratioWasExplicit?: boolean;
   /** Frames per second. Provider declares supported set. */
   fps?: number;
   /**
@@ -81,6 +88,17 @@ export interface VideoTaskHandle {
   modelUsed: string;
   /** ms since epoch when submit completed. */
   submittedAt: number;
+  /**
+   * Optional non-secret owner scope captured at submit time. Account-backed
+   * providers use it to reject poll/download after the active account changes.
+   */
+  ownerScopeKey?: string;
+  /**
+   * Optional provider-owned credential generation captured at submit time.
+   * Long-running account-backed providers use it in addition to ownerScopeKey
+   * so logout/relogin within the same app session invalidates the old task.
+   */
+  credentialGeneration?: number;
 }
 
 export interface VideoResultMeta {
@@ -145,7 +163,8 @@ export interface VideoProviderCapabilities {
    */
   supportsAudio: boolean;
   /**
-   * 不传 `audio` 时上游自己的音轨默认(仅 `supportsAudio` 为 true 时有意义)。
+   * 不传 `audio` 时上游自己的音轨默认。即使没有音频开关也可登记真实默认，
+   * 让回执表达“固定有声/无声”，而不是把“不可切换”误写成“说不上来”。
    * **只用于回执**,不参与请求组装——请求侧缺省必须保持"一个字段都不写"。
    * 例:Seedance 2.0 的 `generate_audio` 默认 true(原生音画同生),所以
    * 不传音频开关的单子本来就是有声的,回执要如实这么报。

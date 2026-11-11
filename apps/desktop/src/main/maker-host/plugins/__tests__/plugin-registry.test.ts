@@ -68,7 +68,7 @@ function realBuiltinProviderNames(): KnownProviderName[] {
     scheduler: {} as never,
     ssh: {} as never,
     memory: {} as never,
-    contacts: {} as never,
+    docs: {} as never,
     xdtHelper: {} as never,
     orca: {} as never,
     lsp: {} as never,
@@ -86,7 +86,11 @@ describe('PluginRegistry — scoped priority', () => {
   });
 
   afterEach(() => {
-    try { fs.rmSync(workingDir, { recursive: true, force: true }); } catch { /* 忽略 */ }
+    try {
+      fs.rmSync(workingDir, { recursive: true, force: true });
+    } catch {
+      /* 忽略 */
+    }
   });
 
   // ── 第 3 层：内置默认值 ────────────────────────────────────────────────
@@ -222,6 +226,7 @@ describe('PluginRegistry — scoped priority', () => {
     expect(disabled).not.toContain('collab');
     expect(disabled).not.toContain('ssh');
     expect(disabled).not.toContain('computer');
+    expect(disabled).not.toContain('ios-simulator');
     for (const essentialId of ESSENTIAL_PLUGIN_IDS) {
       expect(disabled).not.toContain(essentialId);
     }
@@ -350,6 +355,15 @@ describe('PluginRegistry — scoped priority', () => {
 
   // ── listPlugins ───────────────────────────────────────────────────────
 
+  it('exposes hosted and essential tools to capability pickers without changing authorization', async () => {
+    await registry.setProjectEnabled('browser', workingDir, false);
+    const list = await registry.listPlugins(workingDir, true);
+    expect(list.find((item) => item.id === 'browser')).toMatchObject({ effectiveEnabled: false });
+    expect(list.find((item) => item.id === 'scheduler')).toMatchObject({ essential: true, effectiveEnabled: true });
+    expect(list.some((item) => item.id === 'android')).toBe(true);
+    expect((await registry.listPlugins(workingDir)).some((item) => item.id === 'scheduler')).toBe(false);
+  });
+
   it('listPlugins returns project-scoped builtin plugins (essential + hosted-elsewhere hidden)', async () => {
     const list = await registry.listPlugins(workingDir);
     const visiblePluginIds = registry
@@ -368,6 +382,22 @@ describe('PluginRegistry — scoped priority', () => {
     }
   });
 
+  // 文档工坊(cindy_docs)的归置裁决:不是基础设施(不做文档的用户应该能关掉,
+  // 省下两个入口工具的上下文),也没有专属设置页,所以它必须出现在通用「内置工具」
+  // 列表里、默认开启、可由用户在项目或用户默认作用域里关掉。
+  it('exposes the document toolkit as a user-toggleable builtin, enabled by default', async () => {
+    expect(ESSENTIAL_PLUGIN_IDS.has('docs')).toBe(false);
+    expect(HOSTED_ELSEWHERE_PLUGIN_IDS.has('docs')).toBe(false);
+    expect(registry.isEnabled('docs', workingDir)).toBe(true);
+
+    const list = await registry.listPlugins(workingDir);
+    expect(list.map((item) => item.id)).toContain('docs');
+
+    writeProjectSettings(workingDir, { docs: false });
+    registry = createRegistry();
+    expect(registry.isEnabled('docs', workingDir)).toBe(false);
+  });
+
   it('listPlugins exposes browser in the user-default scope', async () => {
     const list = await registry.listPlugins();
 
@@ -378,7 +408,7 @@ describe('PluginRegistry — scoped priority', () => {
     });
     expect(list.find((item) => item.id === 'android')).toBeUndefined();
     expect(list.find((item) => item.id === 'computer')).toBeUndefined();
-    expect(list.find((item) => item.id === 'contacts')).toBeUndefined();
+    expect(list.find((item) => item.id === 'ios-simulator')).toBeUndefined();
   });
 
   it('listPlugins: non-essential defaults to true', async () => {
@@ -463,7 +493,11 @@ describe('isEnabled wrap integration (provider → registry gate)', () => {
   });
 
   afterEach(() => {
-    try { fs.rmSync(workingDir, { recursive: true, force: true }); } catch { /* 忽略 */ }
+    try {
+      fs.rmSync(workingDir, { recursive: true, force: true });
+    } catch {
+      /* 忽略 */
+    }
   });
 
   function wrapIsEnabled(providerName: string, workingDir?: string): boolean {

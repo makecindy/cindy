@@ -1,39 +1,110 @@
+import { localizeOutputLimit } from './outputLimitI18n';
+import { type OutputLimitDetails } from '@cindy/maker-shared';
+import { isMemberBudgetPaused } from '../../../shared/providerShareBudget';
 /**
  * ErrorMessageCard — 消息流里的静态错误记录卡
  * ---------------------------------------------------------------------------
  * 渲染历史里持久化的 role='error' 行(turn 失败终态,main 的 onTurnErrorEvent
  * 落库)。定位是**事后可追溯的时间线记录**,与输入框上方的 ErrorBanner 分工:
  *  - ErrorBanner:live 报错,带 Retry / Cancel / auth 同步等交互;
- *  - 本卡:历史加载时还原"这一轮在这里失败了",纯展示、无任何交互按钮
- *    (历史错误对应的 turn 早已收场,Retry 语义不成立)。
+ *  - 本卡:历史加载时还原"这一轮在这里失败了"。Retry 语义不成立(turn 早已收场),
+ *    唯一交互是友好文案/协议拆封后的「查看原始错误」,与 live ErrorBanner 对齐。
  *
  * 文案:errorReason 是 maker-core 的稳定 key,优先走 i18n(规则 18;与 live
- * ErrorBanner 的 reason → i18n 映射同款);没有 reason 或 key 未知时,回退经
- * decodeRemoteErrorMessage 解码后的 message(与 ErrorBanner 对齐,避免将
- * [REMOTE_*] / [DEVICE_LINK_*] bracket code 以原始文本展示给用户)。
+ * ErrorBanner 的 reason → i18n 映射同款);未知错误使用本地化摘要，
+ * 脱敏后的技术原文仅在用户展开详情后显示。
+ * 未发送的被拦输入由调用方显式标记，直接展示其面向用户的原因。
  *
- * 视觉:走 `--error-bg` / `--error-border` / `--error-fg` 主题 token(规则 16;
- * 错误红属跨主题语义豁免色,token 默认值即语义红,非默认主题可按需 override),
- * 与 ErrorBanner 同语义但去掉按钮区,为随内容的 inline 卡。
+ * 视觉与实时错误共用 ErrorNotice，中性底色与正文，红色仅标识状态图标。
  */
 
-import { AlertCircle } from 'lucide-react';
+import type { ErrorDiagnosisSource } from '@/lib/errorDiagnosisPrompt';
+import { ErrorNotice } from '@/components/ui/error-notice';
 import { useTranslation } from 'react-i18next';
-import { decodeRemoteErrorMessage } from '../../lib/makerChatStore';
-import { ERROR_REASON_I18N_KEYS } from './errorReasonI18n';
+import {
+  isCindyGatewayProxyTokenInvalidError,
+  isResponsesLiteParallelToolCallsError,
+  redactSensitiveText,
+  localizeSubscriptionAccountError,
+} from '@cindy/maker-shared/error-redaction';
+import { isStreamInterruptedErrorMessage } from '@/utils/streamInterruptError';
+import { chatRemoteErrorGuidanceKey } from '../../lib/autoReviewUnavailableGuidance';
+import { decodeRemoteErrorMessage, remoteErrorI18nKey } from '../../lib/makerChatStore';
+import { errorReasonI18nKey } from './errorReasonI18n';
+import { getToolLoopI18nKey } from './toolLoopI18n';
+import type { ToolLoopErrorDetails } from '@cindy/maker-core';
 
-export function ErrorMessageCard({ message, reason }: { message: string; reason?: string }) {
-  const { t } = useTranslation();
-  const i18nKey = reason ? ERROR_REASON_I18N_KEYS[reason] : undefined;
-  const text = i18nKey ? t(i18nKey) : decodeRemoteErrorMessage(message);
+export function ErrorMessageCard({
+  message,
+  reason,
+  providerId,
+  toolLoop,
+  outputLimit,
+  sessionSource,
+  kind = 'reply-error',
+  onDiagnose,
+}: {
+  message: string;
+  onDiagnose?: (error: ErrorDiagnosisSource) => void;
+  /** Blocked input has not reached the agent; its explanation is already user-facing. */
+  kind?: 'reply-error' | 'blocked-input';
+  reason?: string;
+  providerId?: string;
+  /** Structured details for a tool-loop terminal error (optional for legacy rows). */
+  toolLoop?: ToolLoopErrorDetails;
+  outputLimit?: OutputLimitDetails;
+  /** 当前任务来源。个人微信不能建议切到完全访问。 */
+  sessionSource?: string | null;
+}) {
+  const { t, i18n } = useTranslation();
+  const decoded = decodeRemoteErrorMessage(message);
+  const parsedRemoteKey = remoteErrorI18nKey(message);
+  const remoteKey = isMemberBudgetPaused(message) ? 'providerShare.memberBudget.paused' : parsedRemoteKey === 'chat.remoteError.AUTO_REVIEW_UNAVAILABLE'
+    ? chatRemoteErrorGuidanceKey('AUTO_REVIEW_UNAVAILABLE', sessionSource)
+    : parsedRemoteKey;
+  const isAttachmentAccessDenied = kind === 'reply-error'
+    && remoteKey === 'chat.remoteError.DEVICE_LINK_MEDIA_ACCESS_DENIED';
+  const remoteGuidance = remoteKey && i18n.exists(remoteKey) ? t(remoteKey) : undefined;
+  const i18nKey = errorReasonI18nKey(reason, decoded);
+  const isStreamInterrupted = isStreamInterruptedErrorMessage(message, reason);
+  const isGatewayProxyTokenInvalid = isCindyGatewayProxyTokenInvalidError({
+    reason,
+    message: decoded,
+    providerId: providerId ?? null,
+  });
+  const toolLoopI18nKey = reason === 'tool_use_loop_detected' ? getToolLoopI18nKey(toolLoop) : undefined;
+  const localizedReasonError =
+    reason === 'output-limit'
+      ? localizeOutputLimit(t, outputLimit)
+      : toolLoopI18nKey && toolLoop
+        ? t(toolLoopI18nKey, { count: toolLoop.count })
+        : i18nKey
+          ? t(i18nKey)
+          : undefined;
+  const subscriptionGuidance = localizeSubscriptionAccountError(message, t, i18n.resolvedLanguage ?? i18n.language);
+  const fallbackText = isResponsesLiteParallelToolCallsError(decoded)
+    ? t('chat.errorBanner.requestFormatError')
+    : isStreamInterrupted
+      ? t('chat.errorBanner.streamInterruptedNoRetry')
+      : isGatewayProxyTokenInvalid
+        ? t('chat.errorBanner.gatewayProxyTokenInvalidNoRetry')
+        : (parsedRemoteKey?.startsWith('sharedTaskRecovery.') ? remoteGuidance : undefined)
+          ?? localizedReasonError ?? remoteGuidance ?? t('chat.errorBanner.replyFailed');
+  const text = kind === 'blocked-input'
+    ? redactSensitiveText(decoded)
+    : subscriptionGuidance ?? fallbackText;
+  const showRawToggle = kind === 'reply-error' && Boolean(decoded);
+
   if (!text) return null;
   return (
-    <div
-      className="flex items-start gap-2 rounded-md px-3 py-2 border bg-[var(--error-bg)] border-[var(--error-border)]"
+    <ErrorNotice
+      key={`${reason ?? ''}:${kind}`}
+      className="p-2"
+      message={isAttachmentAccessDenied ? t('chat.errorBanner.attachmentAccessDeniedTitle') : text}
+      description={isAttachmentAccessDenied ? t('chat.errorBanner.attachmentAccessDeniedRecovery') : undefined}
+      details={showRawToggle ? message : undefined}
+      onDiagnose={showRawToggle && onDiagnose ? () => onDiagnose({ message: text, details: message, reason }) : undefined}
       data-testid="error-message-card"
-    >
-      <AlertCircle size={14} className="shrink-0 mt-[2px] text-[var(--error-fg)]" />
-      <span className="min-w-0 text-xs break-all text-[var(--error-fg)]">{text}</span>
-    </div>
+    />
   );
 }

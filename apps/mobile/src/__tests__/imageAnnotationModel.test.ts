@@ -1,6 +1,19 @@
 import { describe, expect, it } from 'vitest';
 import {
+  ANNOTATION_CANVAS_SCRIPT,
+  annotationStrokeWidth as sharedAnnotationStrokeWidth,
+} from '@cindy/maker-shared/image-annotation';
+import {
   ANNOTATION_MAX_BURN_DIMENSION,
+  ANNOTATION_MIN_POINT_SCREEN_PX,
+  ANNOTATION_MULTI_TOUCH_DISCARD_SCREEN_PX,
+  MIN_POINT_DISTANCE_RATIO,
+  annotationBurnCanvasSize,
+  annotationMinPointDistanceForRect,
+  annotationStrokesEqual,
+  isAnnotationBurnSourceResultUsable,
+  planAnnotationBurnSource,
+  shouldDiscardInterruptedStroke,
   ANNOTATION_OUTLINE_COLOR,
   ANNOTATION_STROKE_COLOR,
   annotationBaseRect,
@@ -91,11 +104,120 @@ describe('shouldAppendAnnotationPoint(点距抑制)', () => {
   });
 });
 
-describe('annotationStrokeWidth(与桌面同公式:0.5% 短边,4~24px)', () => {
+describe('annotationStrokeWidth(共享核心公式)', () => {
   it('小图走下限、大图走上限、中等图按比例', () => {
     expect(annotationStrokeWidth(200, 200)).toBe(4);
     expect(annotationStrokeWidth(10000, 10000)).toBe(24);
     expect(annotationStrokeWidth(2000, 3000)).toBe(10);
+  });
+
+  it('是共享核心的薄 re-export(超长截图同样加粗)', () => {
+    expect(annotationStrokeWidth).toBe(sharedAnnotationStrokeWidth);
+    expect(annotationStrokeWidth(1000, 8000)).toBe(sharedAnnotationStrokeWidth(1000, 8000));
+  });
+});
+
+describe('normalizeAnnotationPoint 量化(共享核心)', () => {
+  it('坐标量化到 4 位小数', () => {
+    expect(normalizeAnnotationPoint(1, 0, { left: 0, top: 0, width: 3, height: 1 })).toEqual({ x: 0.3333, y: 0 });
+  });
+});
+
+describe('annotationMinPointDistanceForRect(屏幕像素阈值)', () => {
+  it('按显示矩形长边把 1.5 屏幕像素换算成归一化距离', () => {
+    expect(annotationMinPointDistanceForRect({ width: 400, height: 300 }))
+      .toBeCloseTo(ANNOTATION_MIN_POINT_SCREEN_PX / 400);
+    // 放大 4 倍时阈值随之变细,保住放大作画的精度。
+    expect(annotationMinPointDistanceForRect({ width: 1600, height: 1200 })!)
+      .toBeLessThan(MIN_POINT_DISTANCE_RATIO);
+  });
+
+  it('矩形非法时退回共享默认阈值(undefined)', () => {
+    expect(annotationMinPointDistanceForRect({ width: 0, height: 0 })).toBeUndefined();
+    expect(shouldAppendAnnotationPoint(
+      { points: [{ x: 0.5, y: 0.5 }] },
+      { x: 0.5015, y: 0.5 },
+      annotationMinPointDistanceForRect({ width: 0, height: 0 }),
+    )).toBe(false);
+  });
+});
+
+describe('shouldDiscardInterruptedStroke(捏合起手误触)', () => {
+  it('手势被第二根手指取消且路径很短才丢弃', () => {
+    expect(shouldDiscardInterruptedStroke(false, 0)).toBe(true);
+    expect(shouldDiscardInterruptedStroke(false, ANNOTATION_MULTI_TOUCH_DISCARD_SCREEN_PX - 0.1)).toBe(true);
+    expect(shouldDiscardInterruptedStroke(false, ANNOTATION_MULTI_TOUCH_DISCARD_SCREEN_PX)).toBe(false);
+    // 单指点按 / 正常结束的笔画永远保留。
+    expect(shouldDiscardInterruptedStroke(true, 0)).toBe(false);
+  });
+});
+
+describe('annotationStrokesEqual', () => {
+  it('逐条按引用比较', () => {
+    const a = { points: [{ x: 0, y: 0 }] };
+    const b = { points: [{ x: 0, y: 0 }] };
+    expect(annotationStrokesEqual([a], [a])).toBe(true);
+    expect(annotationStrokesEqual([], [])).toBe(true);
+    expect(annotationStrokesEqual([a], [b])).toBe(false);
+    expect(annotationStrokesEqual([a], [])).toBe(false);
+  });
+});
+
+describe('planAnnotationBurnSource(烧录前预处理)', () => {
+  it('小图 / 尺寸未知:原样交给 WebView(既有路径)', () => {
+    expect(planAnnotationBurnSource({ mimeType: 'image/jpeg', platformOS: 'ios', naturalWidth: 2048, naturalHeight: 1536 })).toBeNull();
+    expect(planAnnotationBurnSource({ mimeType: 'image/png', platformOS: 'android' })).toBeNull();
+  });
+
+  it('超大 JPEG 按上传口径预缩,中间产物保持 JPEG 最高质量,笔迹空间 = 未预缩时的 canvas', () => {
+    expect(planAnnotationBurnSource({ mimeType: 'image/jpeg', platformOS: 'ios', naturalWidth: 4032, naturalHeight: 3024 })).toEqual({
+      resize: { width: 2048 },
+      format: 'jpeg',
+      compress: 1,
+      strokeSpace: { width: 4032, height: 3024 },
+    });
+    // 超过 4096 的图,笔迹空间与既有 WebView 安全钳一致。
+    expect(planAnnotationBurnSource({ mimeType: 'image/jpeg', platformOS: 'ios', naturalWidth: 6000, naturalHeight: 8000 })?.strokeSpace)
+      .toEqual(annotationBurnCanvasSize(6000, 8000));
+    expect(annotationBurnCanvasSize(6000, 8000)).toEqual({ width: 3072, height: 4096 });
+  });
+
+  it('PNG / WebP 截图预缩为无损 PNG(不改输出格式)', () => {
+    expect(planAnnotationBurnSource({ mimeType: 'image/png', platformOS: 'ios', naturalWidth: 1290, naturalHeight: 2796 }))
+      .toMatchObject({ resize: { height: 2048 }, format: 'png' });
+    expect(planAnnotationBurnSource({ mimeType: 'image/webp', platformOS: 'android', naturalWidth: 3000, naturalHeight: 1000 }))
+      .toMatchObject({ resize: { width: 2048 }, format: 'png' });
+  });
+
+  it('Android 上 HEIC 即使是小图 / 尺寸未知也先转码为高质量 JPEG,AVIF 转无损 PNG 保留透明;iOS 小图维持原路径', () => {
+    expect(planAnnotationBurnSource({ mimeType: 'image/heic', platformOS: 'android', naturalWidth: 800, naturalHeight: 600 }))
+      .toEqual({ resize: null, format: 'jpeg', compress: 0.92, strokeSpace: null });
+    expect(planAnnotationBurnSource({ mimeType: 'image/avif', platformOS: 'android' }))
+      .toEqual({ resize: null, format: 'png', compress: 1, strokeSpace: null });
+    // 转码 + 预缩同时发生时仍是 JPEG。
+    expect(planAnnotationBurnSource({ mimeType: 'image/heif', platformOS: 'android', naturalWidth: 4032, naturalHeight: 3024 }))
+      .toMatchObject({ resize: { width: 2048 }, format: 'jpeg', compress: 0.92, strokeSpace: { width: 4032, height: 3024 } });
+    // iOS 大 HEIC 只预缩,保持无损 PNG(与既有非 JPEG 源的输出格式一致)。
+    expect(planAnnotationBurnSource({ mimeType: 'image/heic', platformOS: 'ios', naturalWidth: 4032, naturalHeight: 3024 }))
+      .toMatchObject({ format: 'png', compress: 1 });
+    expect(planAnnotationBurnSource({ mimeType: 'image/heic', platformOS: 'ios', naturalWidth: 800, naturalHeight: 600 })).toBeNull();
+  });
+
+  it('未知 / 矢量 / 动图不交给 manipulator', () => {
+    for (const mimeType of ['image/svg+xml', 'image/gif', 'image/bmp', 'application/octet-stream']) {
+      expect(planAnnotationBurnSource({ mimeType, platformOS: 'android', naturalWidth: 9000, naturalHeight: 9000 })).toBeNull();
+    }
+  });
+
+  it('预缩产物必须与提示尺寸同宽高比、不超上限,否则回退原路径', () => {
+    const plan = planAnnotationBurnSource({ mimeType: 'image/jpeg', platformOS: 'ios', naturalWidth: 4032, naturalHeight: 3024 })!;
+    const hint = { width: 4032, height: 3024 };
+    expect(isAnnotationBurnSourceResultUsable(plan, { width: 2048, height: 1536 }, hint)).toBe(true);
+    expect(isAnnotationBurnSourceResultUsable(plan, { width: 2048, height: 2731 }, hint)).toBe(false); // 方向对不上
+    expect(isAnnotationBurnSourceResultUsable(plan, { width: 4032, height: 3024 }, hint)).toBe(false); // 没缩
+    expect(isAnnotationBurnSourceResultUsable(plan, { width: 0, height: 0 }, hint)).toBe(false);
+    const transcode = planAnnotationBurnSource({ mimeType: 'image/heic', platformOS: 'android' })!;
+    expect(isAnnotationBurnSourceResultUsable(transcode, { width: 800, height: 600 }, {})).toBe(true);
   });
 });
 
@@ -120,6 +242,16 @@ describe('annotationStrokeToSvgPath', () => {
 });
 
 describe('烧录 WebView 协议', () => {
+  it('HTML 内联共享核心的 canvas 脚本并调用它,不再维护本地副本', () => {
+    const html = buildAnnotationBurnInHtml();
+    expect(html).toContain(ANNOTATION_CANVAS_SCRIPT);
+    expect(html).toContain('cindyDrawAnnotationStrokes(ctx, request.strokes');
+    expect(html).not.toContain('function strokeWidthFor');
+    expect(html).not.toContain('function drawPass(ctx, strokes');
+    // 编码策略只在 mobileImagePreprocess 维护一份,WebView 不做任何上传定稿。
+    expect(html).not.toContain('finalize');
+  });
+
   it('HTML 内嵌与模型层一致的视觉参数与安全钳', () => {
     const html = buildAnnotationBurnInHtml();
     expect(html).toContain(ANNOTATION_STROKE_COLOR);
@@ -227,5 +359,90 @@ describe('annotationBurnedFileName / canAnnotateImageMime', () => {
     expect(canAnnotateImageMime('image/png')).toBe(true);
     expect(canAnnotateImageMime('image/jpeg')).toBe(true);
     expect(canAnnotateImageMime(undefined)).toBe(true);
+  });
+});
+
+describe('烧录 WebView 脚本(fake DOM 执行)', () => {
+  interface FakeRun {
+    posts: Array<Record<string, unknown>>;
+    ops: unknown[][];
+    dataUrlCalls: Array<[string, number | undefined]>;
+  }
+  function runBurn(
+    request: Record<string, unknown>,
+    image: { width: number; height: number },
+    encodedBytes: (mime: string, quality: number | undefined) => number,
+  ): FakeRun {
+    const run: FakeRun = { posts: [], ops: [], dataUrlCalls: [] };
+    const html = buildAnnotationBurnInHtml();
+    // 只从本模块生成的固定 HTML 里取内联脚本(测试夹具,不是 HTML 过滤)。
+    const scripts: string[] = [];
+    for (let from = html.indexOf('<script>'); from >= 0; from = html.indexOf('<script>', from)) {
+      const end = html.indexOf('</script>', from);
+      scripts.push(html.slice(from + '<script>'.length, end));
+      from = end;
+    }
+    const code = scripts.join('\n');
+    const ctx = new Proxy({} as Record<string, unknown>, {
+      get: (_target, key: string) => (...args: unknown[]) => { run.ops.push([key, ...args]); },
+      set: (_target, key: string, value) => { run.ops.push([`set:${key}`, value]); return true; },
+    });
+    const canvas = {
+      width: 0,
+      height: 0,
+      getContext: () => ctx,
+      toDataURL: (mime: string, quality?: number) => {
+        run.dataUrlCalls.push([mime, quality]);
+        const bytes = encodedBytes(mime, quality);
+        return `data:${mime};base64,${'A'.repeat(Math.ceil(bytes / 3) * 4)}`;
+      },
+    };
+    class FakeImage {
+      onload: (() => void) | null = null;
+      onerror: (() => void) | null = null;
+      naturalWidth = image.width;
+      naturalHeight = image.height;
+      width = image.width;
+      height = image.height;
+      set src(_value: string) { this.onload?.(); }
+    }
+    const window: Record<string, unknown> = {
+      ReactNativeWebView: { postMessage: (raw: string) => run.posts.push(JSON.parse(raw)) },
+    };
+    const document = { createElement: () => canvas };
+    // eslint-disable-next-line @typescript-eslint/no-implied-eval
+    new Function('window', 'document', 'Image', code)(window, document, FakeImage);
+    (window.__xdtBurnIn as (r: unknown) => void)(request);
+    return run;
+  }
+  const strokes = [{ points: [{ x: 0.1, y: 0.1 }, { x: 0.5, y: 0.5 }] }];
+
+  it('编码与既有行为一致:JPEG 源 0.92 JPEG、其余 PNG,输出 canvas 尺寸', () => {
+    const jpeg = runBurn({ id: 'b1', base64: 'x', mimeType: 'image/jpeg', strokes }, { width: 4032, height: 3024 }, () => 3);
+    expect(jpeg.dataUrlCalls).toEqual([['image/jpeg', 0.92]]);
+    expect(jpeg.posts.at(-1)).toMatchObject({ id: 'b1', ok: true, mimeType: 'image/jpeg', width: 4032, height: 3024 });
+    const png = runBurn({ id: 'b2', base64: 'x', mimeType: 'image/webp', strokes }, { width: 5000, height: 2500 }, () => 3);
+    expect(png.dataUrlCalls).toEqual([['image/png', 0.92]]);
+    expect(png.posts.at(-1)).toMatchObject({ mimeType: 'image/png', width: 4096, height: 2048 });
+  });
+
+  it('预缩源在未预缩的逻辑空间重放笔迹:线宽按逻辑尺寸计算,再等比缩到实际 canvas', () => {
+    const run = runBurn(
+      { id: 'b5', base64: 'x', mimeType: 'image/jpeg', strokes, strokeSpace: { width: 4032, height: 3024 } },
+      { width: 2048, height: 1536 },
+      () => 1,
+    );
+    const scale = run.ops.find((op) => op[0] === 'scale');
+    expect(scale?.[1]).toBeCloseTo(2048 / 4032);
+    expect(scale?.[2]).toBeCloseTo(1536 / 3024);
+    const widths = run.ops.filter((op) => op[0] === 'set:lineWidth').map((op) => op[1]);
+    const logicalWidth = annotationStrokeWidth(4032, 3024);
+    expect(widths).toEqual([Math.round(logicalWidth * 1.8), logicalWidth]);
+    expect(run.ops.find((op) => op[0] === 'moveTo')).toEqual(['moveTo', 0.1 * 4032, 0.1 * 3024]);
+    // 不传 strokeSpace:直接在 canvas 尺寸重放(与既有行为一致)。
+    const plain = runBurn({ id: 'b6', base64: 'x', mimeType: 'image/png', strokes }, { width: 800, height: 600 }, () => 1);
+    expect(plain.ops.some((op) => op[0] === 'scale')).toBe(false);
+    expect(plain.ops.filter((op) => op[0] === 'set:lineWidth').map((op) => op[1]))
+      .toEqual([Math.round(annotationStrokeWidth(800, 600) * 1.8), annotationStrokeWidth(800, 600)]);
   });
 });

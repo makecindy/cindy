@@ -1,0 +1,1315 @@
+/**
+ * dispatchMakerEventBatch.test.ts — `maker:event` 微批转发的行为契约。
+ * ---------------------------------------------------------------------------
+ * 微批把「每事件一帧」压成「每窗口一帧」,是这条链路上唯一削减**出站帧数**的
+ * 手段(#2167 只改拥塞取舍、#2185 只推迟重连,都不减帧)。四条不变量:
+ *  1. 能力协商:只有声明 maker-event-batch-v1 的控制端收批,旧控制端照旧逐帧;
+ *  2. 无损与保序:批内事件是原 payload 原样序列,顺序即产生顺序,不跨会话合并;
+ *  3. 到量即发:条数上限不等窗口(长思考不把单帧撑大到需要分片);
+ *  4. 生命周期:退订该会话 / link-close / 控制端离线都不再投递;背压不丢事件。
+ * mock 面与 dispatchSendSafety.test.ts 一致:只 mock electron + settings。
+ */
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
+import {
+  DeviceLinkError,
+  DeviceLinkClient,
+  DEVICE_LINK_CAPABILITY_RELIABLE_TRANSPORT,
+  DEVICE_LINK_TRANSPORT_ACK_CHANNEL,
+  parseTransportPayload,
+  type Envelope,
+  type WsLike,
+  DEVICE_LINK_CAPABILITY_COMPACT_MESSAGE_HISTORY_V1,
+  CONTROLLER_CAPABILITY_MAKER_EVENT_BATCH_V1,
+  CONTROLLER_CAPABILITY_SESSION_TEXT_SNAPSHOT_V1,
+  CONTROLLER_CAPABILITY_SESSION_LIST_MESSAGES_V1,
+  SESSION_SYNC_CHANNEL,
+  DL_SUBSCRIBE_CHANNEL,
+  DL_UNSUBSCRIBE_CHANNEL,
+  MAKER_EVENT_BATCH_CHANNEL,
+  isCoalesciblePushChannel,
+  SESSION_ACTIVITY_CHANNEL,
+  topicForPush,
+  type MakerEventBatchPayload,
+} from '@cindy/device-link';
+
+vi.mock('electron', () => ({
+  app: {
+    getAppPath: () => '/tmp/xdt-maker-test/app',
+    getPath: () => '/tmp/xdt-maker-test',
+    getVersion: () => '0.0.0-test',
+  },
+  powerSaveBlocker: { start: () => 0, stop: () => {}, isStarted: () => false },
+  nativeImage: { createFromPath: () => ({ isEmpty: () => true }) },
+}));
+const deviceLinkSettings = vi.hoisted(() => ({
+  value: {
+    remoteControlEnabled: true,
+    revokedControllers: [] as string[],
+  },
+}));
+vi.mock('../settings-store.desktop', () => ({
+  readDeviceLinkSettings: () => deviceLinkSettings.value,
+}));
+/**
+ * 只替换 createLogger(其余导出保留真实实现):降级路径的「≤64 条 WARN 收敛成一条」
+ * 是 review P1 的核心承诺,得能被断言,否则下次有人去掉 quiet 也不会有测试变红。
+ */
+const logSpy = vi.hoisted(() => ({ warn: vi.fn(), debug: vi.fn() }));
+vi.mock('../../logger', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('../../logger')>()),
+  createLogger: () => ({
+    trace: vi.fn(),
+    debug: logSpy.debug,
+    info: vi.fn(),
+    warn: logSpy.warn,
+    error: vi.fn(),
+    fatal: vi.fn(),
+  }),
+}));
+
+import {
+  __testing,
+  flushMakerEventBatchesOnReconnect,
+  handleControllerOffline,
+  setSessionTextSnapshotReader,
+} from '../dispatch.desktop';
+import * as subscriptions from '../subscriptions';
+import { setRemoteBotSessionLookup } from '../remoteBotSessionBoundary';
+
+/** 微批窗口与退避间隔(dispatch 内部常量);推进定时器用。 */
+const WINDOW_MS = 120;
+const MAKER_EVENT_BATCH_RETRY_MS = 250;
+
+type SentPush = { dst: string; channel: string; payload: unknown; ownerStamp?: unknown };
+
+function mkClient(over: { sendPush?: ReturnType<typeof vi.fn> } = {}) {
+  const sent: SentPush[] = [];
+  const sendPush = over.sendPush
+    ?? vi.fn((dst: string, channel: string, payload: unknown, ownerStamp?: unknown) => {
+      sent.push({ dst, channel, payload, ownerStamp });
+    });
+  return {
+    client: {
+      getStatus: vi.fn(() => 'online'),
+      sendPush,
+      sendInvokeResult: vi.fn(),
+      sendLinkAccept: vi.fn(),
+      closeLink: vi.fn(),
+      onFrame: vi.fn(),
+      getReliableSendQueueDepth: vi.fn(() => 0),
+    },
+    sent,
+    sendPush,
+  };
+}
+
+/** 注册一个声明了微批能力的控制端。 */
+function subscribeBatchController(id: string, topics: string[]): void {
+  subscriptions.subscribe(id, topics, id, [CONTROLLER_CAPABILITY_MAKER_EVENT_BATCH_V1]);
+}
+
+function batchesIn(sent: SentPush[]): MakerEventBatchPayload[] {
+  return sent
+    .filter((s) => s.channel === MAKER_EVENT_BATCH_CHANNEL)
+    .map((s) => s.payload as MakerEventBatchPayload);
+}
+
+it('projects large tool results before batch admission, preserving ordering with terminal pushes', () => {
+  const { client, sent } = mkClient();
+  __testing.setActiveClient(client as never);
+  subscriptions.subscribe('mobile', ['session:s1'], 'mobile', [
+    CONTROLLER_CAPABILITY_MAKER_EVENT_BATCH_V1, DEVICE_LINK_CAPABILITY_COMPACT_MESSAGE_HISTORY_V1,
+  ]);
+  const fullText = 'log'.repeat(100_000);
+  __testing.forwardPush('maker:event', { sessionId: 's1', persistId: 'p', resolvedContent: fullText,
+    event: { type: 'tool_result_full', data: { toolUseId: 'use', fullText } } });
+  expect(sent).toHaveLength(0);
+  __testing.forwardPush('maker:status-changed', { sessionId: 's1', status: 'idle' });
+  expect(sent.map((push) => push.channel)).toEqual([MAKER_EVENT_BATCH_CHANNEL, 'maker:status-changed']);
+  expect(JSON.stringify(sent[0].payload).length).toBeLessThan(10_000);
+  expect(JSON.stringify(sent[0].payload)).not.toContain('resolvedContent');
+});
+
+beforeEach(() => {
+  vi.useFakeTimers();
+  deviceLinkSettings.value = { remoteControlEnabled: true, revokedControllers: [] };
+  logSpy.warn.mockClear();
+  logSpy.debug.mockClear();
+  __testing.reset();
+});
+
+afterEach(() => {
+  vi.useRealTimers();
+});
+
+// Real transport regression: the previous client stub always reported depth zero,
+// hiding both the 32-vs-16 window mismatch and authorization's async admission gap.
+// Unit tier: no sockets or wall-clock waits; forwardPush drives production dispatch.
+class StatePushSocket implements WsLike {
+  sent: Envelope[] = [];
+  bufferedAmount = 0;
+  private handlers = new Map<string, Array<(...args: unknown[]) => void>>();
+  on(event: string, callback: (...args: never[]) => void): void {
+    this.handlers.set(event, [...(this.handlers.get(event) ?? []), callback as (...args: unknown[]) => void]);
+  }
+  send(data: string): void { this.sent.push(JSON.parse(data)); }
+  close(): void { this.emit('close', 1000); }
+  emit(event: string, ...args: unknown[]): void {
+    for (const callback of this.handlers.get(event) ?? []) callback(...args);
+  }
+  push(frame: Envelope): void { this.emit('message', { toString: () => JSON.stringify(frame) }); }
+  acknowledge(dst: string): void {
+    const tail = this.sent.filter(frame => frame.dst === dst && parseTransportPayload(frame.payload)).at(-1);
+    if (!tail) return;
+    const { meta } = parseTransportPayload(tail.payload)!;
+    this.push({ v: 1, kind: 'push', src: dst, payload: {
+      channel: DEVICE_LINK_TRANSPORT_ACK_CHANNEL, payload: { streamId: meta.streamId, ackSeq: meta.seq },
+    } });
+  }
+}
+
+it.each(['sync', 'async'] as const)('reserves real transport slots for replies during %s-authorized activity replay', async (authorization) => {
+  const socket = new StatePushSocket();
+  const client = new DeviceLinkClient({
+    getWsUrl: () => 'ws://fixture', getToken: async () => 'fixture',
+    getHello: () => ({ deviceName: 'host', platform: 'darwin', appVersion: '1', remoteControlEnabled: true, busy: false }),
+    createWebSocket: () => socket,
+  });
+  try {
+    client.start();
+    await vi.advanceTimersByTimeAsync(0);
+    socket.emit('open');
+    socket.push({ v: 1, kind: 'hello-ack', payload: { serverProtocolVersion: 1, deviceId: 'host', userId: 'fixture' } });
+    client.onFrame(frame => {
+      if (frame.kind === 'link-open' && frame.src && frame.id) client.sendLinkAccept(frame.src, frame.id, { appVersion: '1', allowlistHash: 'fixture' });
+    });
+    for (const dst of ['phone', 'desktop']) {
+      socket.push({ v: 1, kind: 'link-open', src: dst, id: `open-${dst}`, payload: {
+        controllerName: dst, protocolVersion: 1, appVersion: '1',
+        capabilities: [DEVICE_LINK_CAPABILITY_RELIABLE_TRANSPORT], transportStreamId: `${dst}-stream`, transportBaseSeq: 1,
+      } });
+      subscriptions.subscribe(dst, ['sessions'], dst);
+    }
+    __testing.setActiveClient(client);
+    if (authorization === 'async') setRemoteBotSessionLookup(async () => 'visible');
+    for (let i = 0; i < 48; i++) __testing.forwardPush(SESSION_ACTIVITY_CHANNEL, { sessionId: `s${i}`, phase: 'working' });
+    await vi.advanceTimersByTimeAsync(0);
+    client.sendInvokeResult('phone', 'subscription-response', { ok: true, result: { ok: true } });
+    expect(socket.sent.some(frame => frame.id === 'subscription-response')).toBe(true);
+    // Phone stops ACKing; the second peer must still drain, without a relay reset.
+    __testing.forwardPush(SESSION_ACTIVITY_CHANNEL, { sessionId: 's47', phase: 'completed' });
+    for (let i = 0; i < 8; i++) {
+      socket.acknowledge('desktop');
+      await vi.advanceTimersByTimeAsync(250);
+    }
+    const activities = (dst: string) => [...new Map(socket.sent.filter(frame => frame.dst === dst)
+      .map(frame => parseTransportPayload(frame.payload))
+      .filter(transport => transport !== null)
+      .map(transport => [transport.meta.seq, JSON.parse(transport.data)] as const)).values()]
+      .filter(body => body?.channel === SESSION_ACTIVITY_CHANNEL)
+      .map(body => body!.payload as { sessionId: string; phase: string });
+    expect(activities('desktop')).toHaveLength(48);
+    expect(activities('desktop').at(-1)).toEqual({ sessionId: 's47', phase: 'completed' });
+    expect(activities('phone').length).toBeLessThan(16);
+    for (let i = 0; i < 8; i++) {
+      socket.acknowledge('phone');
+      await vi.advanceTimersByTimeAsync(250);
+    }
+    expect(activities('phone')).toHaveLength(48);
+    expect(activities('phone').at(-1)).toEqual({ sessionId: 's47', phase: 'completed' });
+    expect(client.getStatus()).toBe('online');
+  } finally { client.stop(); }
+});
+
+it.each([SESSION_ACTIVITY_CHANNEL, 'local-db:sessions:patched'])('rechecks %s capacity after authorization and retains the newer final value', async (channel) => {
+  const h = mkClient();
+  __testing.setActiveClient(h.client as never);
+  subscriptions.subscribe('phone', ['sessions']);
+  let release!: () => void;
+  const pending = new Promise<void>(resolve => { release = resolve; });
+  setRemoteBotSessionLookup(async () => { await pending; return 'visible'; });
+  const payload = (value: string) => channel === SESSION_ACTIVITY_CHANNEL
+    ? { sessionId: 's1', phase: value } : { sessionId: 's1', patch: { title: value } };
+  __testing.forwardPush(channel, payload('working'));
+  await vi.advanceTimersByTimeAsync(250);
+  // Other traffic consumes capacity while SQLite authorization is in flight.
+  h.client.getReliableSendQueueDepth.mockReturnValue(8);
+  release();
+  await vi.advanceTimersByTimeAsync(0);
+  expect(h.sent).toEqual([]);
+  __testing.forwardPush(channel, payload('completed'));
+  h.client.getReliableSendQueueDepth.mockReturnValue(0);
+  await vi.advanceTimersByTimeAsync(500);
+  expect(h.sent.map(push => push.payload)).toEqual([payload('completed')]);
+});
+
+// Review regression (unit): a lifecycle patch can overtake activity still in the
+// stage, including the item awaiting authorization. Existing ordering tests only
+// covered maker-event batches. Observe outgoing pushes through real dispatch.
+it.each(['deleted', 'archived'] as const)('drops older activity before a %s patch across staging boundaries', async (status) => {
+  for (const boundary of ['authorizing', 'queued', 'backpressure'] as const) {
+    const h = mkClient();
+    __testing.setActiveClient(h.client as never);
+    subscriptions.subscribe('phone', ['sessions']);
+    let release!: () => void;
+    const pending = new Promise<void>(resolve => { release = resolve; });
+    setRemoteBotSessionLookup(async () => { await pending; return 'visible'; });
+    if (boundary === 'backpressure') h.client.getReliableSendQueueDepth.mockReturnValue(8);
+    if (boundary === 'queued') __testing.forwardPush(SESSION_ACTIVITY_CHANNEL, { sessionId: 's0', phase: 'working' });
+    __testing.forwardPush(SESSION_ACTIVITY_CHANNEL, { sessionId: 's1', phase: 'working' });
+    __testing.forwardPush('local-db:sessions:patched', { sessionId: 's1', patch: { status } });
+    __testing.forwardPush(SESSION_ACTIVITY_CHANNEL, { sessionId: 's2', phase: 'completed' });
+    h.client.getReliableSendQueueDepth.mockReturnValue(0);
+    release();
+    await vi.advanceTimersByTimeAsync(500);
+    expect(h.sent.filter(push => push.channel === SESSION_ACTIVITY_CHANNEL).map(push => push.payload))
+      .toEqual(boundary === 'queued'
+        ? [{ sessionId: 's0', phase: 'working' }, { sessionId: 's2', phase: 'completed' }]
+        : [{ sessionId: 's2', phase: 'completed' }]);
+    expect(h.sent.filter(push => push.channel === 'local-db:sessions:patched').map(push => push.payload))
+      .toEqual([{ sessionId: 's1', patch: { status } }]);
+    handleControllerOffline('phone');
+  }
+});
+
+it.each(['superseded', 'offline', 'hidden'] as const)('discards %s activity while authorization is pending', async (outcome) => {
+  const h = mkClient();
+  __testing.setActiveClient(h.client as never);
+  subscriptions.subscribe('phone', ['sessions']);
+  let release!: () => void;
+  const pending = new Promise<void>(resolve => { release = resolve; });
+  setRemoteBotSessionLookup(async () => { await pending; return outcome === 'hidden' ? 'hidden' : 'visible'; });
+  __testing.forwardPush(SESSION_ACTIVITY_CHANNEL, { sessionId: 's1', phase: 'working' });
+  if (outcome === 'offline') handleControllerOffline('phone');
+  else __testing.forwardPush(SESSION_ACTIVITY_CHANNEL, { sessionId: 's1', phase: 'completed' });
+  release();
+  await vi.advanceTimersByTimeAsync(1_000);
+  expect(h.sent.map(push => push.payload)).toEqual(outcome === 'superseded' ? [{ sessionId: 's1', phase: 'completed' }] : []);
+});
+
+describe('[1] 能力协商', () => {
+  it('keeps SDK done off the list subscription while retaining full detail events', async () => {
+    const h = mkClient();
+    __testing.setActiveClient(h.client as never);
+    const capabilities = [CONTROLLER_CAPABILITY_SESSION_LIST_MESSAGES_V1, CONTROLLER_CAPABILITY_MAKER_EVENT_BATCH_V1];
+    subscriptions.subscribe('list', ['sessions'], 'list', capabilities);
+    subscriptions.subscribe('detail', ['sessions', 'session:s1'], 'detail', capabilities);
+    const payload = { sessionId: 's1', resolvedContent: 'tool-body', event: { type: 'done', source: 'codex',
+      turnContinuationId: 2, turnScope: 'background', data: { raw: { items: ['tool-body'] }, result: 'tool-body',
+        plan: ['tool-body'], cancelled: true, silentStop: true } } };
+    __testing.forwardPush('maker:event', payload);
+    await vi.advanceTimersByTimeAsync(WINDOW_MS);
+    expect(h.sent.filter(push => push.dst === 'list')).toEqual([]);
+    expect((h.sent.find(push => push.dst === 'detail')!.payload as MakerEventBatchPayload).events).toEqual([payload]);
+  });
+
+  it('prefetches full prose for new list subscribers only, without duplicate delivery or tools', async () => {
+    const h = mkClient();
+    __testing.setActiveClient(h.client as never);
+    const caps = [CONTROLLER_CAPABILITY_SESSION_LIST_MESSAGES_V1, CONTROLLER_CAPABILITY_MAKER_EVENT_BATCH_V1];
+    subscriptions.subscribe('phone', ['sessions'], 'phone', caps);
+    subscriptions.subscribe('desktop', ['sessions', 'session:s1'], 'desktop', caps);
+    subscriptions.subscribe('old', ['sessions'], 'old');
+    const content = '完整长回复'.repeat(2000);
+    __testing.forwardPush('maker:event', { sessionId: 's1', persistId: 'm1', event: { type: 'text', data: { text: content, isFinal: false } } });
+    __testing.forwardPush('local-db:messages:created', { sessionId: 's1', message: { id: 'm1', clientId: 'm1', role: 'assistant', content } });
+    __testing.forwardPush('local-db:messages:created', { sessionId: 's1', message: { id: 'tool', role: 'tool_result', content } });
+    await vi.advanceTimersByTimeAsync(WINDOW_MS);
+    const phone = h.sent.filter(push => push.dst === 'phone');
+    expect(phone.map(push => push.channel)).toEqual(['local-db:messages:created']);
+    expect(phone[0].payload).toMatchObject({ listMessage: true, message: { content, remoteBodyVersion: expect.stringMatching(/^[a-f0-9]{64}$/) } });
+    expect(h.sent.filter(push => push.dst === 'old')).toEqual([]);
+    expect(h.sent.filter(push => push.dst === 'desktop' && push.channel === MAKER_EVENT_BATCH_CHANNEL)).toHaveLength(1);
+    expect(subscriptions.controllerHasTopic('phone', 'session:s1')).toBe(false);
+  });
+
+  it('coalesces task patches even for legacy list subscribers and cancels offline peers', async () => {
+    const h = mkClient();
+    __testing.setActiveClient(h.client as never);
+    subscriptions.subscribe('legacy', ['*'], 'old client');
+    subscriptions.subscribe('mobile', ['sessions'], 'mobile');
+    for (let i = 0; i < 2026; i++) {
+      __testing.forwardPush('local-db:sessions:patched', { sessionId: 's1', patch: { title: String(i) } });
+    }
+    __testing.forwardPush('local-db:sessions:patched', { sessionId: 's1', patch: { extraDirs: [] } });
+    handleControllerOffline('mobile');
+    await vi.advanceTimersByTimeAsync(250);
+    expect(h.sent).toEqual([{ dst: 'legacy', channel: 'local-db:sessions:patched',
+      payload: { sessionId: 's1', patch: { title: '2025', extraDirs: [] } }, ownerStamp: undefined }]);
+  });
+
+  it('keeps engine switch and deletion barriers before subsequent events', async () => {
+    const h = mkClient();
+    __testing.setActiveClient(h.client as never);
+    subscriptions.subscribe('legacy', ['*'], 'old client');
+    __testing.forwardPush('local-db:sessions:patched', { sessionId: 's1', patch: { title: 'new' } });
+    __testing.forwardPush('local-db:sessions:patched', { sessionId: 's1', patch: { agentKind: 'codex' } });
+    __testing.forwardPush('maker:event', { sessionId: 's1', event: { type: 'text', data: { text: 'new engine' } } });
+    __testing.forwardPush('local-db:sessions:patched', { sessionId: 's1', patch: { status: 'deleted' } });
+    await vi.advanceTimersByTimeAsync(500);
+    expect(h.sent.map((item) => item.channel)).toEqual(['local-db:sessions:patched', 'maker:event', 'local-db:sessions:patched']);
+    expect(h.sent[0].payload).toEqual({ sessionId: 's1', patch: { title: 'new', agentKind: 'codex' } });
+  });
+
+  it('drops queued global metadata when legacy subscription narrows to one task', async () => {
+    const h = mkClient();
+    __testing.setActiveClient(h.client as never);
+    subscriptions.subscribe('peer', ['*'], 'peer');
+    __testing.forwardPush('local-db:sessions:patched', { sessionId: 'other', patch: { title: 'private' } });
+    subscriptions.subscribe('peer', ['session:s1'], 'peer');
+    subscriptions.unsubscribe('peer', ['*']);
+    await vi.advanceTimersByTimeAsync(500);
+    expect(h.sent).toEqual([]);
+  });
+
+  it('声明能力的控制端:窗口内多条事件合并成一帧批,不再每事件一帧', () => {
+    const h = mkClient();
+    __testing.setActiveClient(h.client as never);
+    subscribeBatchController('ctrl-batch', ['session:s1']);
+
+    for (let i = 0; i < 5; i++) {
+      __testing.forwardPush('maker:event', { sessionId: 's1', event: { i } });
+    }
+    // 窗口未到:一帧都还没发(这正是削减帧数的来源)
+    expect(h.sent).toHaveLength(0);
+
+    vi.advanceTimersByTime(WINDOW_MS);
+    const batches = batchesIn(h.sent);
+    expect(h.sent).toHaveLength(1);
+    expect(batches).toHaveLength(1);
+    expect(batches[0]!.sessionId).toBe('s1');
+    expect(batches[0]!.events).toHaveLength(5);
+  });
+
+  it('未声明能力的控制端(旧版本):照旧逐帧,零感知', () => {
+    const h = mkClient();
+    __testing.setActiveClient(h.client as never);
+    subscriptions.subscribe('ctrl-legacy', ['session:s1'], 'legacy');
+
+    for (let i = 0; i < 3; i++) {
+      __testing.forwardPush('maker:event', { sessionId: 's1', event: { i } });
+    }
+    expect(h.sent).toHaveLength(3);
+    expect(h.sent.every((s) => s.channel === 'maker:event')).toBe(true);
+    vi.advanceTimersByTime(WINDOW_MS * 3);
+    expect(h.sent).toHaveLength(3); // 没有额外的批帧
+  });
+
+  it('新旧控制端共存:各走各的路径,互不影响', () => {
+    const h = mkClient();
+    __testing.setActiveClient(h.client as never);
+    subscribeBatchController('ctrl-new', ['session:s1']);
+    subscriptions.subscribe('ctrl-old', ['session:s1'], 'old');
+
+    __testing.forwardPush('maker:event', { sessionId: 's1', event: { i: 0 } });
+    __testing.forwardPush('maker:event', { sessionId: 's1', event: { i: 1 } });
+    // 旧控制端已收到两帧;新控制端还在攒批
+    expect(h.sent.filter((s) => s.dst === 'ctrl-old')).toHaveLength(2);
+    expect(h.sent.filter((s) => s.dst === 'ctrl-new')).toHaveLength(0);
+
+    vi.advanceTimersByTime(WINDOW_MS);
+    const newSent = h.sent.filter((s) => s.dst === 'ctrl-new');
+    expect(newSent).toHaveLength(1);
+    expect((newSent[0]!.payload as MakerEventBatchPayload).events).toHaveLength(2);
+  });
+});
+
+describe('[2] 无损与保序', () => {
+  it('批内事件是原 payload 原样序列,顺序即产生顺序', () => {
+    const h = mkClient();
+    __testing.setActiveClient(h.client as never);
+    subscribeBatchController('ctrl-1', ['session:s1']);
+
+    const originals = [0, 1, 2].map((i) => ({ sessionId: 's1', event: { seq: i } }));
+    for (const p of originals) __testing.forwardPush('maker:event', p);
+    vi.advanceTimersByTime(WINDOW_MS);
+
+    const batch = batchesIn(h.sent)[0]!;
+    expect(batch.events).toEqual(originals);
+  });
+
+  it('不跨会话合并:每个会话一帧批(否则 topic 路由算不出)', () => {
+    const h = mkClient();
+    __testing.setActiveClient(h.client as never);
+    subscribeBatchController('ctrl-1', ['session:s1', 'session:s2']);
+
+    __testing.forwardPush('maker:event', { sessionId: 's1', event: { a: 1 } });
+    __testing.forwardPush('maker:event', { sessionId: 's2', event: { b: 1 } });
+    __testing.forwardPush('maker:event', { sessionId: 's1', event: { a: 2 } });
+    vi.advanceTimersByTime(WINDOW_MS);
+
+    const batches = batchesIn(h.sent);
+    expect(batches).toHaveLength(2);
+    expect(batches.find((b) => b.sessionId === 's1')!.events).toHaveLength(2);
+    expect(batches.find((b) => b.sessionId === 's2')!.events).toHaveLength(1);
+  });
+
+  it('批帧的 topic 路由与逐帧一致(顶层 sessionId → session:<id>)', () => {
+    // 微批刻意复用 topicForPush 的 session-scoped 兜底分支,不改 topics.ts。
+    const payload: MakerEventBatchPayload = { sessionId: 's9', events: [{}] };
+    expect(topicForPush(MAKER_EVENT_BATCH_CHANNEL, payload)).toBe('session:s9');
+    expect(topicForPush('maker:event', { sessionId: 's9' })).toBe('session:s9');
+  });
+});
+
+describe('[3] 到量即发', () => {
+  it('条数达上限:立即 flush,不等窗口(不把单帧撑到需要分片)', () => {
+    const h = mkClient();
+    __testing.setActiveClient(h.client as never);
+    subscribeBatchController('ctrl-1', ['session:s1']);
+
+    for (let i = 0; i < 64; i++) {
+      __testing.forwardPush('maker:event', { sessionId: 's1', event: { i } });
+    }
+    // 第 64 条触发上限 flush,定时器还没到点
+    expect(batchesIn(h.sent)).toHaveLength(1);
+    expect(batchesIn(h.sent)[0]!.events).toHaveLength(64);
+
+    // 后续事件进入新批,按窗口发出
+    __testing.forwardPush('maker:event', { sessionId: 's1', event: { i: 64 } });
+    vi.advanceTimersByTime(WINDOW_MS);
+    expect(batchesIn(h.sent)).toHaveLength(2);
+    expect(batchesIn(h.sent)[1]!.events).toHaveLength(1);
+  });
+});
+
+describe('[4] 生命周期与背压', () => {
+  it('退订 session:<id>:该会话待发批不再投递', () => {
+    const h = mkClient();
+    __testing.setActiveClient(h.client as never);
+    subscribeBatchController('ctrl-1', ['session:s1', 'session:s2']);
+
+    __testing.forwardPush('maker:event', { sessionId: 's1', event: {} });
+    __testing.forwardPush('maker:event', { sessionId: 's2', event: {} });
+    __testing.handleSubscriptionFrame('ctrl-1', {
+      channel: DL_UNSUBSCRIBE_CHANNEL,
+      args: [{ topics: ['session:s1'] }],
+    });
+    vi.advanceTimersByTime(WINDOW_MS);
+
+    const batches = batchesIn(h.sent);
+    expect(batches.map((b) => b.sessionId)).toEqual(['s2']); // s1 已丢弃
+  });
+
+  it('控制端离线:待发批清空,不在恢复后补投陈旧事件', () => {
+    const h = mkClient();
+    __testing.setActiveClient(h.client as never);
+    subscribeBatchController('ctrl-1', ['session:s1']);
+
+    __testing.forwardPush('maker:event', { sessionId: 's1', event: {} });
+    handleControllerOffline('ctrl-1');
+    vi.advanceTimersByTime(WINDOW_MS * 3);
+    expect(h.sent).toHaveLength(0);
+  });
+
+  it('批帧被拒即丢这一片:不降级逐帧、不重试、缓冲不跨越失败存在', () => {
+    // 强不变量:flush 返回时缓冲必为空。降级逐帧那条路径已删除(四轮 review 里两位
+    // reviewer 的要求互相抵触,不存在同时满足两侧的取值,推导见 dispatch.ts 的
+    // MakerEventBatchFlushOutcome 注释)——批帧发不出去就丢掉这一片,由控制端 resync
+    // 补偿,与 #2167 对可驱逐档 push 的取舍一致。
+    const sendPush = vi.fn((
+      _dst: string,
+      channel: string,
+      _payload: unknown,
+      _ownerStamp?: unknown,
+    ) => {
+      if (channel === MAKER_EVENT_BATCH_CHANNEL) {
+        throw new DeviceLinkError('BACKPRESSURE', 'reliable transport buffer is full');
+      }
+    });
+    const h = mkClient({ sendPush });
+    __testing.setActiveClient(h.client as never);
+    subscribeBatchController('ctrl-1', ['session:s1']);
+
+    for (let i = 0; i < 5; i += 1) {
+      __testing.forwardPush('maker:event', { sessionId: 's1', event: { i } });
+    }
+    vi.advanceTimersByTime(WINDOW_MS);
+
+    // 一次批帧尝试,零逐帧尝试:不再重放 ≤64 次 admission / 驱逐判定 / throw
+    expect(sendPush.mock.calls.filter((c) => c[1] === MAKER_EVENT_BATCH_CHANNEL)).toHaveLength(1);
+    expect(sendPush.mock.calls.filter((c) => c[1] === 'maker:event')).toHaveLength(0);
+
+    // 告警只有聚合的一条(不是每帧一条),且带上丢弃条数
+    const warns = logSpy.warn.mock.calls.map((c) => String(c[0]));
+    expect(warns.filter((m) => m.includes('maker:event batch flush'))).toHaveLength(1);
+    expect(warns.find((m) => m.includes('maker:event batch flush')))
+      .toContain('dropped 5 event(s)');
+
+    // 缓冲已空:再推进任何时间都不会有第二次投递
+    const before = sendPush.mock.calls.length;
+    vi.advanceTimersByTime(10_000);
+    expect(sendPush.mock.calls.length).toBe(before);
+  });
+
+  it('relay 离线:不做逐帧尝试(逐帧同样发不出去),直接丢弃且不滞留', () => {
+    // NOT_CONNECTED 下逐帧只是把同一次失败重放 ≤64 次 —— 纯日志洪峰、零收益。
+    // 与 BACKPRESSURE 的区别:后者「大批被拒 ≠ 小帧被拒」(#2167 可驱逐档),值得试。
+    let status = 'online';
+    const sendPush = vi.fn();
+    const h = mkClient({ sendPush });
+    h.client.getStatus = vi.fn(() => status) as never;
+    __testing.setActiveClient(h.client as never);
+    subscribeBatchController('ctrl-1', ['session:s1']);
+
+    __testing.forwardPush('maker:event', { sessionId: 's1', event: {} });
+    __testing.forwardPush('maker:event', { sessionId: 's1', event: {} });
+    status = 'connecting';
+    vi.advanceTimersByTime(WINDOW_MS);
+
+    // 一帧都没发:批帧因离线未尝试,逐帧降级也被判据挡掉
+    expect(sendPush).not.toHaveBeenCalled();
+    // 缓冲已空,不会在恢复后突然补投陈旧事件
+    status = 'online';
+    vi.advanceTimersByTime(10_000);
+    expect(sendPush).not.toHaveBeenCalled();
+  });
+});
+
+describe('[5] 与拥塞取舍(#2167)的一致性', () => {
+  it('批 channel 与 maker:event 同属可驱逐档:拥塞时不退回 BACKPRESSURE 风暴', () => {
+    // 漏登记会让启用微批的控制端在拥塞时重新遭遇逐帧 BACKPRESSURE——正是微批要
+    // 消除的那一个。直接问判据函数(client.ts 的唯一入口),不耦合源码文本。
+    expect(isCoalesciblePushChannel('maker:event')).toBe(true);
+    expect(isCoalesciblePushChannel(MAKER_EVENT_BATCH_CHANNEL)).toBe(true);
+    // 反向:不可合并的事件流不得混进该档
+    expect(isCoalesciblePushChannel('local-db:messages:created')).toBe(false);
+    expect(isCoalesciblePushChannel('maker:interaction-request')).toBe(false);
+  });
+});
+
+describe('[7] 归属切换分段(review 首轮 P1)', () => {
+  it('窗口内 ownerStamp 切换:分两段按序发出,各段带自己的水印', () => {
+    const h = mkClient();
+    __testing.setActiveClient(h.client as never);
+    subscribeBatchController('ctrl-1', ['session:s1']);
+    const stampA = { dataOwnerId: 'owner-a', ownerGeneration: 1 };
+    const stampB = { dataOwnerId: 'owner-b', ownerGeneration: 2 };
+
+    __testing.forwardPush('maker:event', { sessionId: 's1', event: { i: 0 } }, stampA);
+    __testing.forwardPush('maker:event', { sessionId: 's1', event: { i: 1 } }, stampB);
+    vi.advanceTimersByTime(WINDOW_MS);
+
+    const batches = batchesIn(h.sent);
+    expect(batches).toHaveLength(2);
+    expect(batches[0]!.events).toEqual([{ sessionId: 's1', event: { i: 0 } }]);
+    expect(batches[1]!.events).toEqual([{ sessionId: 's1', event: { i: 1 } }]);
+    expect(h.sent[0]!.ownerStamp).toEqual(stampA);
+    expect(h.sent[1]!.ownerStamp).toEqual(stampB);
+  });
+});
+
+describe('[8] 跨 channel 顺序(review 首轮 P2)', () => {
+  it('同会话的其它推送先收口事件批:确认卡不会插到攒批的文本前面', () => {
+    const h = mkClient();
+    __testing.setActiveClient(h.client as never);
+    subscribeBatchController('ctrl-1', ['session:s1']);
+
+    __testing.forwardPush('maker:event', { sessionId: 's1', event: { text: 'delta' } });
+    expect(h.sent).toHaveLength(0); // 还在攒批
+
+    // 紧跟一条有顺序语义的同会话推送:必须先把批发出去
+    __testing.forwardPush('maker:interaction-request', { sessionId: 's1', request: { id: 'r1' } });
+    expect(h.sent.map((s) => s.channel)).toEqual([
+      MAKER_EVENT_BATCH_CHANNEL,
+      'maker:interaction-request',
+    ]);
+  });
+
+  it('其它会话的推送不触发本会话收口(按 sessionId 精确)', () => {
+    const h = mkClient();
+    __testing.setActiveClient(h.client as never);
+    subscribeBatchController('ctrl-1', ['session:s1', 'session:s2']);
+
+    __testing.forwardPush('maker:event', { sessionId: 's1', event: {} });
+    __testing.forwardPush('maker:status-changed', { sessionId: 's2', status: 'closed' });
+    // s1 的批未被 s2 的推送带出去
+    expect(h.sent.map((s) => s.channel)).toEqual(['maker:status-changed']);
+
+    vi.advanceTimersByTime(WINDOW_MS);
+    expect(batchesIn(h.sent)).toHaveLength(1);
+  });
+});
+
+describe('[10] 收敛检查点:主动发送闸门的全部入口与边界(review 第二轮)', () => {
+  it('activity 终态也先收口事件批:收口在所有 session-scoped 分支之前', () => {
+    // 第二轮实测漏洞:activity 分支自带 continue,收口放在它之后就永不生效,
+    // 手机端会先收到 completed(结束流式)再收到之前的文本批。
+    const h = mkClient();
+    __testing.setActiveClient(h.client as never);
+    subscribeBatchController('ctrl-1', ['session:s1', 'sessions']);
+
+    __testing.forwardPush('maker:event', { sessionId: 's1', event: { text: 'delta' } });
+    expect(h.sent).toHaveLength(0);
+    __testing.forwardPush(SESSION_ACTIVITY_CHANNEL, { sessionId: 's1', phase: 'completed' });
+
+    // 批必须先于 activity 发出
+    expect(h.sent[0]!.channel).toBe(MAKER_EVENT_BATCH_CHANNEL);
+    expect(h.sent.some((s) => s.channel === SESSION_ACTIVITY_CHANNEL)).toBe(true);
+    expect(h.sent.findIndex((s) => s.channel === MAKER_EVENT_BATCH_CHANNEL))
+      .toBeLessThan(h.sent.findIndex((s) => s.channel === SESSION_ACTIVITY_CHANNEL));
+  });
+
+  it('批发送失败后缓冲即空:交错 push 不会与滞留批产生顺序竞争', () => {
+    // 第四轮的根因:只要缓冲能跨越失败存在,大批被拒而小终态帧通过就会乱序。
+    // 现在 flush 返回即空,交错 push 之前不可能存在"待发批"。
+    const sendPush = vi.fn((
+      _dst: string,
+      channel: string,
+      _payload: unknown,
+      _ownerStamp?: unknown,
+    ) => {
+      if (channel === MAKER_EVENT_BATCH_CHANNEL) {
+        throw new DeviceLinkError('BACKPRESSURE', 'reliable transport buffer is full');
+      }
+    });
+    const h = mkClient({ sendPush });
+    __testing.setActiveClient(h.client as never);
+    subscribeBatchController('ctrl-1', ['session:s1']);
+
+    __testing.forwardPush('maker:event', { sessionId: 's1', event: { text: 'delta' } });
+    // 交错帧触发收口:批被拒 → 降级逐帧,缓冲清空
+    __testing.forwardPush('maker:status-changed', { sessionId: 's1', status: 'closed' });
+
+    const channels = sendPush.mock.calls.map((c) => c[1]);
+    // 顺序:批尝试(被拒 → 整片丢弃,不降级)→ 终态帧
+    expect(channels).toEqual([
+      MAKER_EVENT_BATCH_CHANNEL,
+      'maker:status-changed',
+    ]);
+    // 之后不再有任何滞留投递
+    const before = sendPush.mock.calls.length;
+    vi.advanceTimersByTime(10_000);
+    expect(sendPush.mock.calls.length).toBe(before);
+  });
+
+  it('单会话事件量远超单批上限:按上限切片,每帧不超限且顺序无损', () => {
+    const h = mkClient();
+    __testing.setActiveClient(h.client as never);
+    subscribeBatchController('ctrl-1', ['session:s1']);
+
+    // 200 条:到量 flush 三次(64×3),余 8 条随窗口发出
+    for (let i = 0; i < 200; i++) {
+      __testing.forwardPush('maker:event', { sessionId: 's1', event: { i } });
+    }
+    vi.advanceTimersByTime(WINDOW_MS);
+
+    const batches = batchesIn(h.sent);
+    expect(batches.every((b) => b.events.length <= 64)).toBe(true);
+    expect(batches.reduce((n, b) => n + b.events.length, 0)).toBe(200);
+    const flat = batches.flatMap((b) => b.events) as Array<{ event: { i: number } }>;
+    expect(flat.map((e) => e.event.i)).toEqual([...Array(200).keys()]);
+  });
+
+  it('单条即超批字节上限的事件走逐帧路径(保留 compact 兜底),且排在批之后', () => {
+    const h = mkClient();
+    __testing.setActiveClient(h.client as never);
+    subscribeBatchController('ctrl-1', ['session:s1']);
+
+    __testing.forwardPush('maker:event', { sessionId: 's1', event: { i: 0 } });
+    // 单条 ~300KB UTF-8:不入批,先收口批再逐帧发
+    __testing.forwardPush('maker:event', { sessionId: 's1', event: { big: 'x'.repeat(300_000) } });
+
+    expect(h.sent.map((s) => s.channel)).toEqual([
+      MAKER_EVENT_BATCH_CHANNEL,
+      'maker:event',
+    ]);
+    expect((h.sent[0]!.payload as MakerEventBatchPayload).events).toHaveLength(1);
+  });
+
+  it('越过字节阈值的事件留作下一批的开头,不再每次越界白送一个 1 条的小尾批', () => {
+    // review P2:挤进本批再被 takeMakerEventBatchSlice 切出来,等于每 8 条多一帧
+    // (30KB 级事件流 100 条 → ~23 帧而不是 ~13 帧),直接削掉大半减帧收益。
+    const h = mkClient();
+    __testing.setActiveClient(h.client as never);
+    subscribeBatchController('ctrl-1', ['session:s1']);
+
+    // 每条 ~30KB:8 条 240KB < 256KB 上限,第 9 条会越界
+    const chunk = 'x'.repeat(30_000);
+    for (let i = 0; i < 9; i += 1) {
+      __testing.forwardPush('maker:event', { sessionId: 's1', event: { i, chunk } });
+    }
+
+    // 第 9 条触发收口:发出的**只有一帧**,装着前 8 条(而不是 8 条 + 1 条两帧)
+    let frames = batchesIn(h.sent);
+    expect(frames).toHaveLength(1);
+    expect(frames[0]!.events).toHaveLength(8);
+
+    // 第 9 条成为下一批的开头,等窗口到点才发
+    vi.advanceTimersByTime(WINDOW_MS);
+    frames = batchesIn(h.sent);
+    expect(frames).toHaveLength(2);
+    expect(frames[1]!.events).toHaveLength(1);
+    // 无损:9 条事件按序全部送达
+    expect(frames.flatMap((f) => f.events.map((e) => (e as { event: { i: number } }).event.i)))
+      .toEqual([0, 1, 2, 3, 4, 5, 6, 7, 8]);
+  });
+});
+
+describe('[11] 重连恢复的顺序(review 第三轮)', () => {
+  it.each(['completed offline', '中'.repeat(200_000), '\u0000'.repeat(200_000)])('replays an allowed offline body intact (%#)', (content) => {
+    const h = mkClient();
+    __testing.setActiveClient(h.client as never);
+    const capabilities = [CONTROLLER_CAPABILITY_SESSION_LIST_MESSAGES_V1];
+    subscriptions.subscribe('phone', ['sessions'], 'phone', capabilities);
+    h.client.getStatus.mockReturnValue('connecting');
+    const message = { id: 'final', clientId: 'final', role: 'assistant', content };
+    __testing.forwardPush('local-db:messages:created', { sessionId: 's1', message });
+    expect(h.sent).toEqual([]);
+    h.client.getStatus.mockReturnValue('online');
+    __testing.handleSubscriptionFrame('phone', { channel: DL_SUBSCRIBE_CHANNEL, args: [{ topics: ['sessions'], capabilities }] });
+    expect(h.sent).toHaveLength(1);
+    expect(h.sent[0]).toMatchObject({ channel: 'local-db:messages:created', payload: { listMessage: true, message } });
+  });
+
+  it('订阅重放 drain 离线积压之前先排空断线前的事件批', () => {
+    // 断线期间同会话的新事件/终态进 offlinePushQueue,旧批留在内存等重试;
+    // 不先收口就会让新帧先于断线前的文本送达,重现「终态后冒出文本」。
+    let status = 'online';
+    const h = mkClient();
+    h.client.getStatus = vi.fn(() => status) as never;
+    __testing.setActiveClient(h.client as never);
+    subscribeBatchController('ctrl-1', ['session:s1']);
+
+    // 在线时入批(窗口未到)
+    __testing.forwardPush('maker:event', { sessionId: 's1', event: { text: 'before-drop' } });
+    expect(h.sent).toHaveLength(0);
+
+    // relay 断线:同会话新事件进离线积压
+    status = 'connecting';
+    __testing.forwardPush('maker:status-changed', { sessionId: 's1', status: 'closed' });
+    expect(h.sent).toHaveLength(0);
+
+    // 重连 + 控制端重新订阅:批必须先于积压投递
+    status = 'online';
+    __testing.handleSubscriptionFrame('ctrl-1', {
+      channel: DL_SUBSCRIBE_CHANNEL,
+      args: [{ topics: ['session:s1'], capabilities: [CONTROLLER_CAPABILITY_MAKER_EVENT_BATCH_V1] }],
+    });
+
+    const channels = h.sent.map((s) => s.channel);
+    expect(channels.indexOf(MAKER_EVENT_BATCH_CHANNEL)).toBe(0);
+    expect(channels).toContain('maker:status-changed');
+    expect(channels.indexOf(MAKER_EVENT_BATCH_CHANNEL))
+      .toBeLessThan(channels.indexOf('maker:status-changed'));
+  });
+
+  it('离线积压的 maker:event 在 drain 时也走批:恢复动作不重造洪峰', () => {
+    // review P1(故障半径三问的第 4 问):断线期间事件逐条进 offlinePushQueue,
+    // 重订阅时一次 drain 可能上百条;原先逐条 sendPush 就是同一 tick 内上百帧——
+    // 正是 8/8 招来 relay 1013 的那个形状,而且发生在刚重连、最脆弱的时刻。
+    let status = 'online';
+    const h = mkClient();
+    h.client.getStatus = vi.fn(() => status) as never;
+    __testing.setActiveClient(h.client as never);
+    subscribeBatchController('ctrl-1', ['session:s1']);
+
+    // 断线:30 条同会话事件进离线积压
+    status = 'connecting';
+    for (let i = 0; i < 30; i += 1) {
+      __testing.forwardPush('maker:event', { sessionId: 's1', event: { i } });
+    }
+    expect(h.sent).toHaveLength(0);
+    expect(__testing.queuedPushesFor('ctrl-1').length).toBe(30);
+
+    // 重连 + 重订阅:30 条积压压成 1 帧批,而不是 30 帧逐帧
+    status = 'online';
+    __testing.handleSubscriptionFrame('ctrl-1', {
+      channel: DL_SUBSCRIBE_CHANNEL,
+      args: [{ topics: ['session:s1'], capabilities: [CONTROLLER_CAPABILITY_MAKER_EVENT_BATCH_V1] }],
+    });
+
+    expect(h.sent.filter((x) => x.channel === 'maker:event')).toHaveLength(0);
+    const frames = batchesIn(h.sent);
+    expect(frames).toHaveLength(1);
+    expect(frames[0]!.events).toHaveLength(30);
+    // 无损且保序
+    expect(frames[0]!.events.map((e) => (e as { event: { i: number } }).event.i))
+      .toEqual(Array.from({ length: 30 }, (_, i) => i));
+  });
+
+  it('积压里混有其它 channel:批与非批的相对顺序与在线主路一致', () => {
+    let status = 'online';
+    const h = mkClient();
+    h.client.getStatus = vi.fn(() => status) as never;
+    __testing.setActiveClient(h.client as never);
+    subscribeBatchController('ctrl-1', ['session:s1']);
+
+    status = 'connecting';
+    __testing.forwardPush('maker:event', { sessionId: 's1', event: { i: 0 } });
+    __testing.forwardPush('maker:event', { sessionId: 's1', event: { i: 1 } });
+    __testing.forwardPush('maker:status-changed', { sessionId: 's1', status: 'closed' });
+    __testing.forwardPush('maker:event', { sessionId: 's1', event: { i: 2 } });
+
+    status = 'online';
+    __testing.handleSubscriptionFrame('ctrl-1', {
+      channel: DL_SUBSCRIBE_CHANNEL,
+      args: [{ topics: ['session:s1'], capabilities: [CONTROLLER_CAPABILITY_MAKER_EVENT_BATCH_V1] }],
+    });
+
+    // 终态帧前的两条事件先成一帧,终态帧其后,再一帧带最后一条事件
+    expect(h.sent.map((x) => x.channel)).toEqual([
+      MAKER_EVENT_BATCH_CHANNEL,
+      'maker:status-changed',
+      MAKER_EVENT_BATCH_CHANNEL,
+    ]);
+    const frames = batchesIn(h.sent);
+    expect(frames[0]!.events).toHaveLength(2);
+    expect(frames[1]!.events).toHaveLength(1);
+  });
+
+  it('ws-online 收口入口:窗口内的批在重连后立即投出,不落到积压之后', () => {
+    const h = mkClient();
+    __testing.setActiveClient(h.client as never);
+    subscribeBatchController('ctrl-1', ['session:s1']);
+
+    // 窗口内(尚未到点)发生重连事件:批应被立即收口
+    __testing.forwardPush('maker:event', { sessionId: 's1', event: {} });
+    expect(h.sent).toHaveLength(0);
+    flushMakerEventBatchesOnReconnect();
+    expect(batchesIn(h.sent)).toHaveLength(1);
+  });
+});
+
+describe('[9] 字节估算按 UTF-8(review 首轮)', () => {
+  it('多字节内容按 UTF-8 计:中文事件到量 flush,阈值不被 UTF-16 低估架空', () => {
+    const h = mkClient();
+    __testing.setActiveClient(h.client as never);
+    subscribeBatchController('ctrl-1', ['session:s1']);
+
+    // 每条约 30KB UTF-8(中文 3 字节/字);9 条即越过 256KB 字节阈值,
+    // 而按 UTF-16 码元只有约 90K「长度」——旧估算不会触发 flush。
+    const text = '中'.repeat(10_000);
+    for (let i = 0; i < 9; i++) {
+      __testing.forwardPush('maker:event', { sessionId: 's1', event: { text } });
+    }
+    // 未到条数上限(64)就已发出:证明字节阈值生效(按 UTF-16 计不会触发)
+    const batches = batchesIn(h.sent);
+    expect(batches.length).toBeGreaterThan(0);
+    // 且每帧都在字节上限内(切片保证),事件一条不丢
+    for (const b of batches) {
+      const bytes = Buffer.byteLength(JSON.stringify(b.events), 'utf8');
+      expect(bytes).toBeLessThanOrEqual(256 * 1024);
+    }
+    vi.advanceTimersByTime(WINDOW_MS);
+    expect(batchesIn(h.sent).reduce((n, b) => n + b.events.length, 0)).toBe(9);
+  });
+});
+
+describe('running session recovery on slow links', () => {
+  const capabilities = [CONTROLLER_CAPABILITY_MAKER_EVENT_BATCH_V1, CONTROLLER_CAPABILITY_SESSION_TEXT_SNAPSHOT_V1];
+  const delta = (text: string, persistId = 'p1') => ({
+    sessionId: 's1', persistId,
+    event: { type: 'text', source: 'codex', data: { text, isFinal: false } },
+  });
+  const snapshot = { ...delta('whole prefix'), event: {
+    type: 'text', data: { text: 'whole prefix', isFinal: false, isFullText: true },
+  } };
+
+  it('keeps oversized recovery text on demand for list-only subscribers', async () => {
+    const h = mkClient();
+    __testing.setActiveClient(h.client as never);
+    const oversized = { ...snapshot, event: { ...snapshot.event, data: { ...snapshot.event.data, text: 'x'.repeat(200_001) } } };
+    setSessionTextSnapshotReader(() => oversized);
+    subscriptions.subscribe('list', ['sessions', 'session:s1'], 'list', [...capabilities, CONTROLLER_CAPABILITY_SESSION_LIST_MESSAGES_V1]);
+    __testing.handleSubscriptionFrame('list', { channel: DL_UNSUBSCRIBE_CHANNEL, args: [{ topics: ['session:s1'] }] });
+    await vi.advanceTimersByTimeAsync(250);
+    expect(h.sent).toEqual([]);
+    __testing.handleSubscriptionFrame('detail', { channel: DL_SUBSCRIBE_CHANNEL, args: [{ topics: ['session:s1'], capabilities }] });
+    expect(h.sent.at(-1)).toMatchObject({ channel: SESSION_SYNC_CHANNEL, payload: oversized });
+  });
+
+  it('drops pending detail text when leaving chat and only prefetches the completed body', async () => {
+    const h = mkClient();
+    __testing.setActiveClient(h.client as never);
+    setSessionTextSnapshotReader(() => snapshot);
+    subscriptions.subscribe('phone', ['sessions', 'session:s1'], 'phone',
+      [...capabilities, CONTROLLER_CAPABILITY_SESSION_LIST_MESSAGES_V1]);
+    __testing.forwardPush('maker:event', delta('pending detail suffix'));
+    __testing.handleSubscriptionFrame('phone', { channel: DL_UNSUBSCRIBE_CHANNEL, args: [{ topics: ['session:s1'] }] });
+    await vi.advanceTimersByTimeAsync(250);
+    expect(h.sent).toEqual([]);
+    __testing.forwardPush('maker:event', delta('list suffix'));
+    await vi.advanceTimersByTimeAsync(WINDOW_MS);
+    expect(h.sent).toEqual([]);
+    const message = { id: 'p1', role: 'assistant', content: 'complete durable body' };
+    __testing.forwardPush('local-db:messages:created', { sessionId: 's1', message });
+    expect(h.sent).toHaveLength(1);
+    expect(h.sent[0]).toMatchObject({ payload: { listMessage: true, message } });
+    __testing.forwardPush('maker:event', delta('cancelled suffix'));
+    __testing.handleSubscriptionFrame('phone', { channel: DL_UNSUBSCRIBE_CHANNEL, args: [{ topics: ['sessions'] }] });
+    await vi.advanceTimersByTimeAsync(2_000);
+    expect(h.sent).toHaveLength(1);
+  });
+
+  it('never finalizes a truncated list prefix after cumulative or full-snapshot overflow', async () => {
+    const h = mkClient();
+    __testing.setActiveClient(h.client as never);
+    subscriptions.subscribe('list', ['sessions'], 'list', [...capabilities, CONTROLLER_CAPABILITY_SESSION_LIST_MESSAGES_V1]);
+    // Each delta fits the old per-event check, but together they exceed the body limit.
+    for (let i = 0; i < 3; i++) __testing.forwardPush('maker:event', delta('中'.repeat(100_000)));
+    __testing.forwardPush('maker:event', snapshot);
+    __testing.forwardPush('maker:event', { ...snapshot, event: { ...snapshot.event,
+      data: { ...snapshot.event.data, text: '中'.repeat(200_001) } } });
+    __testing.forwardPush('maker:event', { sessionId: 's1', event: { type: 'done', data: {} } });
+    __testing.forwardPush('local-db:messages:created', { sessionId: 's1',
+      message: { id: 'p1', role: 'assistant', content: '中'.repeat(300_000) } });
+    await vi.advanceTimersByTimeAsync(2_000);
+    expect(h.sent).toEqual([]);
+    // The next bounded message is independent and remains eligible for prefetch.
+    const message = { id: 'p2', role: 'assistant', content: 'next complete reply' };
+    __testing.forwardPush('local-db:messages:created', { sessionId: 's1', message });
+    expect(h.sent).toHaveLength(1);
+    expect(h.sent[0]).toMatchObject({ payload: { listMessage: true, message } });
+  });
+
+  it.each([
+    ['batch', 'queue'], ['batch', 'peer'], ['legacy', 'queue'], ['legacy', 'peer'],
+  ] as const)('restores %s streaming within 250ms after %s recovery without polling the snapshot while blocked', (mode, blocker) => {
+    const h = mkClient();
+    let blocked = true;
+    const canSendPush = vi.fn(() => blocker !== 'peer' || !blocked);
+    h.client.getReliableSendQueueDepth.mockImplementation(() => blocker === 'queue' && blocked ? 16 : 0);
+    __testing.setActiveClient({ ...h.client, canSendPush } as never);
+    subscriptions.subscribe('phone', ['session:s1'], 'phone', mode === 'batch'
+      ? capabilities : [CONTROLLER_CAPABILITY_SESSION_TEXT_SNAPSHOT_V1]);
+    let currentText = 'missing prefix';
+    const readSnapshot = vi.fn(() => ({ ...snapshot, event: {
+      ...snapshot.event, data: { ...snapshot.event.data, text: currentText },
+    } }));
+    setSessionTextSnapshotReader(readSnapshot);
+    __testing.forwardPush('maker:event', delta(currentText));
+    vi.advanceTimersByTime(WINDOW_MS);
+    currentText += ' plus latest text';
+    __testing.forwardPush('maker:event', delta(' plus latest text'));
+    vi.advanceTimersByTime(4_000);
+    expect(h.sent).toHaveLength(0);
+    expect(readSnapshot).not.toHaveBeenCalled();
+    expect(logSpy.debug.mock.calls.filter(([line]) => line.startsWith('session sync repair queued'))).toHaveLength(1);
+    expect(logSpy.debug.mock.calls.some(([line]) => line.startsWith('session sync repair admitted'))).toBe(false);
+
+    blocked = false;
+    // Recovery must not depend on another token arriving: a thinking/tool gap
+    // after the last delta must still reveal the latest accumulated text.
+    vi.advanceTimersByTime(250);
+    expect(h.sent.map(p => p.channel)).toEqual([SESSION_SYNC_CHANNEL]);
+    expect(h.sent[0].payload).toMatchObject({
+      resyncRequired: false, event: { data: { text: currentText, isFullText: true } },
+    });
+    expect(readSnapshot).toHaveBeenCalledTimes(1);
+    __testing.forwardPush('maker:event', delta(' live again'));
+    vi.advanceTimersByTime(WINDOW_MS);
+    expect(h.sent.map(p => p.channel)).toEqual([
+      SESSION_SYNC_CHANNEL, mode === 'batch' ? MAKER_EVENT_BATCH_CHANNEL : 'maker:event',
+    ]);
+    vi.advanceTimersByTime(2_000);
+    expect(readSnapshot).toHaveBeenCalledTimes(1);
+    const repairLogs = logSpy.debug.mock.calls.map(([line]) => line).filter(line => line.startsWith('session sync repair'));
+    expect(repairLogs).toHaveLength(2);
+    expect(repairLogs[1]).toContain('resyncRequired=false');
+    expect(repairLogs.join('\n')).not.toContain(currentText);
+  });
+
+  it.each(['sync', 'async'] as const)('keeps failed snapshot admission paced at two seconds through the %s authorization path', async (authorization) => {
+    const h = mkClient();
+    __testing.setActiveClient(h.client as never);
+    if (authorization === 'async') setRemoteBotSessionLookup(async () => 'visible');
+    subscriptions.subscribe('phone', ['session:s1'], 'phone', capabilities);
+    const readSnapshot = vi.fn(() => snapshot);
+    setSessionTextSnapshotReader(readSnapshot);
+    h.client.getReliableSendQueueDepth.mockReturnValue(16);
+    __testing.forwardPush('maker:event', delta('missed'));
+    await vi.advanceTimersByTimeAsync(WINDOW_MS);
+    h.client.getReliableSendQueueDepth.mockReturnValue(0);
+    h.sendPush.mockImplementationOnce(() => { throw new DeviceLinkError('BACKPRESSURE', 'socket bytes full'); });
+    h.sendPush.mockImplementationOnce(() => { throw new DeviceLinkError('BACKPRESSURE', 'socket bytes full'); });
+    await vi.advanceTimersByTimeAsync(200);
+    // The repair flushes this later batch, which can re-arm the same timer.
+    // A failed admission must still keep the slower pacing in that case.
+    __testing.forwardPush('maker:event', delta('later suffix'));
+    await vi.advanceTimersByTimeAsync(50);
+    expect(readSnapshot).toHaveBeenCalledTimes(1);
+    expect(h.sent).toHaveLength(0);
+    await vi.advanceTimersByTimeAsync(1_999);
+    expect(readSnapshot).toHaveBeenCalledTimes(1);
+    await vi.advanceTimersByTimeAsync(1);
+    expect(readSnapshot).toHaveBeenCalledTimes(2);
+    expect(h.sent).toHaveLength(0);
+    await vi.advanceTimersByTimeAsync(2_000);
+    expect(readSnapshot).toHaveBeenCalledTimes(3);
+    expect(h.sent.map(p => p.channel)).toEqual([SESSION_SYNC_CHANNEL]);
+    await vi.advanceTimersByTimeAsync(2_000);
+    expect(readSnapshot).toHaveBeenCalledTimes(3);
+  });
+
+  it('does not let a late failed admission delay a newer repair stage', async () => {
+    const h = mkClient();
+    __testing.setActiveClient(h.client as never);
+    subscriptions.subscribe('phone', ['session:s1'], 'phone', capabilities);
+    let release!: () => void;
+    const pending = new Promise<void>((resolve) => { release = resolve; });
+    setRemoteBotSessionLookup(async () => { await pending; return 'visible'; });
+    const readSnapshot = vi.fn(() => snapshot);
+    setSessionTextSnapshotReader(readSnapshot);
+    h.client.getReliableSendQueueDepth.mockReturnValue(16);
+    __testing.forwardPush('maker:event', delta('first'));
+    await vi.advanceTimersByTimeAsync(WINDOW_MS);
+    h.client.getReliableSendQueueDepth.mockReturnValue(0);
+    await vi.advanceTimersByTimeAsync(250);
+    expect(readSnapshot).toHaveBeenCalledTimes(1);
+    h.client.getReliableSendQueueDepth.mockReturnValue(16);
+    __testing.forwardPush('maker:event', delta('new stage'));
+    await vi.advanceTimersByTimeAsync(WINDOW_MS);
+    h.client.getReliableSendQueueDepth.mockReturnValue(0);
+    h.sendPush.mockImplementationOnce(() => { throw new DeviceLinkError('BACKPRESSURE', 'full'); });
+    release();
+    await vi.advanceTimersByTimeAsync(0);
+    await vi.advanceTimersByTimeAsync(250);
+    expect(readSnapshot).toHaveBeenCalledTimes(2);
+    expect(h.sent.map(p => p.channel)).toEqual([SESSION_SYNC_CHANNEL]);
+  });
+
+  it('replays only the requested current block after old deltas and before new deltas', () => {
+    const h = mkClient();
+    __testing.setActiveClient(h.client as never);
+    setSessionTextSnapshotReader((sid) => sid === 's1' ? snapshot : null);
+    subscriptions.subscribe('phone', ['session:s1'], 'phone', capabilities);
+    subscribeBatchController('old', ['session:s1']);
+    __testing.forwardPush('maker:event', delta('old suffix'));
+    const result = __testing.handleSubscriptionFrame('phone', {
+      channel: DL_SUBSCRIBE_CHANNEL, args: [{ topics: ['session:s1'], capabilities }],
+    });
+    expect(result.ok).toBe(true);
+    __testing.forwardPush('maker:event', delta('new suffix'));
+    vi.advanceTimersByTime(WINDOW_MS);
+    const phone = h.sent.filter(p => p.dst === 'phone');
+    expect(phone.map(p => p.channel)).toEqual([MAKER_EVENT_BATCH_CHANNEL, SESSION_SYNC_CHANNEL, MAKER_EVENT_BATCH_CHANNEL]);
+    expect(phone[1].payload).toEqual(snapshot);
+    expect(h.sent.filter(p => p.dst === 'old').every(p => p.channel === MAKER_EVENT_BATCH_CHANNEL)).toBe(true);
+  });
+
+  it('retries the final activity update when the async authorization queue is full', async () => {
+    const h = mkClient();
+    __testing.setActiveClient(h.client as never);
+    let finish!: () => void;
+    const pending = new Promise<void>((resolve) => { finish = resolve; });
+    setRemoteBotSessionLookup(async () => { await pending; return 'visible'; });
+    subscriptions.subscribe('phone', ['sessions', 'session:busy']);
+    for (let index = 0; index < 64; index++) {
+      __testing.forwardPush('maker:status-changed', { sessionId: 'busy', status: 'running' });
+    }
+    for (let index = 0; index < 65; index++) {
+      __testing.forwardPush(SESSION_ACTIVITY_CHANNEL, { sessionId: `s${index}`, phase: 'completed' });
+    }
+    expect(h.sent).toHaveLength(0);
+    finish();
+    await vi.advanceTimersByTimeAsync(1_000);
+    expect(h.sent.filter(push => push.channel === SESSION_ACTIVITY_CHANNEL)).toHaveLength(65);
+    expect(h.sent.at(-1)?.payload).toEqual({ sessionId: 's64', phase: 'completed' });
+  });
+
+  it('keeps old deltas, snapshot and new deltas ordered through the async DB gate', async () => {
+    const h = mkClient();
+    __testing.setActiveClient(h.client as never);
+    setRemoteBotSessionLookup(async () => 'visible');
+    setSessionTextSnapshotReader(() => snapshot);
+    subscriptions.subscribe('phone', ['session:s1'], 'phone', capabilities);
+    __testing.forwardPush('maker:event', delta('old suffix'));
+    __testing.handleSubscriptionFrame('phone', {
+      channel: DL_SUBSCRIBE_CHANNEL, args: [{ topics: ['session:s1'], capabilities }],
+    });
+    __testing.forwardPush('maker:event', delta('new suffix'));
+    await vi.advanceTimersByTimeAsync(WINDOW_MS);
+    expect(h.sent.map(p => p.channel)).toEqual([
+      MAKER_EVENT_BATCH_CHANNEL, SESSION_SYNC_CHANNEL, MAKER_EVENT_BATCH_CHANNEL,
+    ]);
+    expect(h.sent[1].payload).toEqual(snapshot);
+  });
+
+  it.each(['subscribe', 'congestion'] as const)('blocks hidden companion snapshots during %s', async (path) => {
+    const h = mkClient();
+    __testing.setActiveClient(h.client as never);
+    setSessionTextSnapshotReader(() => snapshot);
+    setRemoteBotSessionLookup(async () => 'hidden');
+    if (path === 'subscribe') {
+      __testing.handleSubscriptionFrame('phone', {
+        channel: DL_SUBSCRIBE_CHANNEL, args: [{ topics: ['session:s1'], capabilities }],
+      });
+    } else {
+      subscriptions.subscribe('phone', ['session:s1'], 'phone', capabilities);
+      h.client.getReliableSendQueueDepth.mockReturnValue(16);
+      __testing.forwardPush('maker:event', delta('hidden body'));
+      await vi.advanceTimersByTimeAsync(WINDOW_MS);
+      h.client.getReliableSendQueueDepth.mockReturnValue(0);
+    }
+    await vi.advanceTimersByTimeAsync(2_000);
+    expect(h.sent).toHaveLength(0);
+  });
+
+  it('repairs snapshot admission failure after async authorization', async () => {
+    const h = mkClient();
+    __testing.setActiveClient(h.client as never);
+    setRemoteBotSessionLookup(async () => 'visible');
+    setSessionTextSnapshotReader(() => snapshot);
+    h.sendPush.mockImplementationOnce(() => { throw new DeviceLinkError('BACKPRESSURE', 'full'); });
+    __testing.handleSubscriptionFrame('phone', {
+      channel: DL_SUBSCRIBE_CHANNEL, args: [{ topics: ['session:s1'], capabilities }],
+    });
+    await vi.advanceTimersByTimeAsync(2_100);
+    expect(h.sent).toEqual([
+      { dst: 'phone', channel: SESSION_SYNC_CHANNEL, payload: { ...snapshot, resyncRequired: true }, ownerStamp: undefined },
+    ]);
+  });
+
+  it('fails subscription when the snapshot cannot enter the reliable window', () => {
+    const h = mkClient({ sendPush: vi.fn(() => { throw new DeviceLinkError('BACKPRESSURE', 'full'); }) });
+    __testing.setActiveClient(h.client as never);
+    setSessionTextSnapshotReader(() => snapshot);
+    expect(__testing.handleSubscriptionFrame('phone', {
+      channel: DL_SUBSCRIBE_CHANNEL, args: [{ topics: ['session:s1'], capabilities }],
+    })).toMatchObject({ ok: false, error: { code: 'BACKPRESSURE' } });
+  });
+
+  it('coalesces only adjacent same-identity deltas without crossing a tool or final boundary', () => {
+    const h = mkClient();
+    __testing.setActiveClient(h.client as never);
+    subscribeBatchController('phone', ['session:s1']);
+    for (const p of [delta('a'), delta('b'), delta('c', 'p2'),
+      { sessionId: 's1', event: { type: 'tool_use', data: { toolUseId: 't1' } } }, delta('d')]) {
+      __testing.forwardPush('maker:event', p);
+    }
+    vi.advanceTimersByTime(WINDOW_MS);
+    expect(batchesIn(h.sent)[0].events).toEqual([
+      delta('ab'), delta('c', 'p2'),
+      { sessionId: 's1', event: { type: 'tool_use', data: { toolUseId: 't1' } } }, delta('d'),
+    ]);
+  });
+
+  it('bounds one congested peer, repairs its dropped final row, and leaves a healthy peer flowing', () => {
+    const h = mkClient();
+    let congested = true;
+    h.client.getReliableSendQueueDepth = vi.fn((dst: string) => dst === 'slow' && congested ? 16 : 0) as never;
+    __testing.setActiveClient(h.client as never);
+    for (const dst of ['slow', 'healthy']) subscriptions.subscribe(dst, ['session:s1'], dst, capabilities);
+    setSessionTextSnapshotReader(() => snapshot);
+    for (let i = 0; i < 10; i++) {
+      __testing.forwardPush('maker:event', delta(`part-${i}`));
+      vi.advanceTimersByTime(WINDOW_MS);
+    }
+    expect(h.sent.filter(p => p.dst === 'slow')).toHaveLength(0);
+    expect(h.sent.filter(p => p.dst === 'healthy')).toHaveLength(10);
+    // A durable final row can fail admission too; it must leave a repair signal.
+    h.sendPush.mockImplementationOnce(() => { throw new DeviceLinkError('BACKPRESSURE', 'full'); });
+    __testing.forwardPush('local-db:messages:created', { sessionId: 's1', message: { id: 'final' } });
+    setSessionTextSnapshotReader(() => null);
+    congested = false;
+    vi.advanceTimersByTime(2_000);
+    expect(h.sent.filter(p => p.dst === 'slow')).toEqual([
+      { dst: 'slow', channel: SESSION_SYNC_CHANNEL, payload: { sessionId: 's1', resyncRequired: true }, ownerStamp: undefined },
+    ]);
+    expect(h.sent.filter(p => p.dst === 'healthy' && p.channel === SESSION_SYNC_CHANNEL)).toHaveLength(0);
+  });
+
+  it('does not deliver a pending repair after the session is unsubscribed', () => {
+    const h = mkClient();
+    h.client.getReliableSendQueueDepth.mockReturnValue(16);
+    __testing.setActiveClient(h.client as never);
+    subscriptions.subscribe('phone', ['session:s1'], 'phone', capabilities);
+    __testing.forwardPush('maker:event', delta('text'));
+    vi.advanceTimersByTime(WINDOW_MS);
+    __testing.handleSubscriptionFrame('phone', { channel: DL_UNSUBSCRIBE_CHANNEL, args: [{ topics: ['session:s1'] }] });
+    h.client.getReliableSendQueueDepth.mockReturnValue(0);
+    vi.advanceTimersByTime(4_000);
+    expect(h.sent).toHaveLength(0);
+  });
+
+  it('holds deltas and snapshot repair while a known peer is down, then repairs before resuming', () => {
+    const h = mkClient();
+    const canSendPush = vi.fn(() => false);
+    __testing.setActiveClient({ ...h.client, canSendPush } as never);
+    subscriptions.subscribe('phone', ['session:s1'], 'phone', capabilities);
+    setSessionTextSnapshotReader(() => snapshot);
+    __testing.forwardPush('maker:event', delta('missed'));
+    vi.advanceTimersByTime(4_000);
+    expect(h.sent).toHaveLength(0);
+    canSendPush.mockReturnValue(true);
+    vi.advanceTimersByTime(2_000);
+    expect(h.sent.map(p => p.channel)).toEqual([SESSION_SYNC_CHANNEL]);
+    __testing.forwardPush('maker:event', delta('after repair'));
+    vi.advanceTimersByTime(WINDOW_MS);
+    expect(h.sent.map(p => p.channel)).toEqual([SESSION_SYNC_CHANNEL, MAKER_EVENT_BATCH_CHANNEL]);
+  });
+
+  it('repairs text-only loss without repeatedly requesting a large unchanged history page', () => {
+    const h = mkClient();
+    h.client.getReliableSendQueueDepth.mockReturnValue(16);
+    __testing.setActiveClient(h.client as never);
+    subscriptions.subscribe('phone', ['session:s1'], 'phone', capabilities);
+    setSessionTextSnapshotReader(() => snapshot);
+    __testing.forwardPush('maker:event', delta('missed'));
+    vi.advanceTimersByTime(WINDOW_MS);
+    h.client.getReliableSendQueueDepth.mockReturnValue(0);
+    vi.advanceTimersByTime(2_000);
+    expect(h.sent).toEqual([
+      { dst: 'phone', channel: SESSION_SYNC_CHANNEL, payload: { ...snapshot, resyncRequired: false }, ownerStamp: undefined },
+    ]);
+  });
+
+  it('holds later deltas after the window drains until the missing prefix is repaired', () => {
+    const h = mkClient();
+    h.client.getReliableSendQueueDepth.mockReturnValue(16);
+    __testing.setActiveClient(h.client as never);
+    subscriptions.subscribe('phone', ['session:s1'], 'phone', capabilities);
+    setSessionTextSnapshotReader(() => snapshot);
+    __testing.forwardPush('maker:event', delta('missed prefix'));
+    vi.advanceTimersByTime(WINDOW_MS);
+    h.client.getReliableSendQueueDepth.mockReturnValue(0);
+    __testing.forwardPush('maker:event', delta('later suffix'));
+    vi.advanceTimersByTime(WINDOW_MS);
+    __testing.forwardPush('maker:event', delta('x'.repeat(300_000)));
+    expect(h.sent).toHaveLength(0);
+    vi.advanceTimersByTime(2_000);
+    expect(h.sent.map(p => p.channel)).toEqual([SESSION_SYNC_CHANNEL]);
+    expect(h.sent[0].payload).toEqual({ ...snapshot, resyncRequired: false });
+    __testing.forwardPush('maker:event', delta('after snapshot'));
+    vi.advanceTimersByTime(WINDOW_MS);
+    expect(h.sent.map(p => p.channel)).toEqual([SESSION_SYNC_CHANNEL, MAKER_EVENT_BATCH_CHANNEL]);
+    expect(batchesIn(h.sent)[0].events).toEqual([delta('after snapshot')]);
+  });
+
+  it('repairs an oversized event when its compact retry also fails admission', () => {
+    const h = mkClient();
+    __testing.setActiveClient(h.client as never);
+    subscriptions.subscribe('phone', ['session:s1'], 'phone', capabilities);
+    setSessionTextSnapshotReader(() => snapshot);
+    h.sendPush.mockImplementationOnce(() => { throw new DeviceLinkError('PAYLOAD_TOO_LARGE', 'large'); });
+    h.sendPush.mockImplementationOnce(() => { throw new DeviceLinkError('BACKPRESSURE', 'full'); });
+    __testing.forwardPush('maker:event', {
+      sessionId: 's1', event: { type: 'tool_result', data: { text: 'x'.repeat(300_000) } },
+    });
+    vi.advanceTimersByTime(2_000);
+    expect(h.sent).toEqual([
+      { dst: 'phone', channel: SESSION_SYNC_CHANNEL, payload: { ...snapshot, resyncRequired: true }, ownerStamp: undefined },
+    ]);
+  });
+});
+
+describe('[6] 帧数削减度量', () => {
+  it('长思考洪峰:100 条事件从 100 帧压到 2 帧(条数上限 + 窗口各一次)', () => {
+    const h = mkClient();
+    __testing.setActiveClient(h.client as never);
+    subscribeBatchController('ctrl-1', ['session:s1']);
+
+    for (let i = 0; i < 100; i++) {
+      __testing.forwardPush('maker:event', { sessionId: 's1', event: { i } });
+    }
+    vi.advanceTimersByTime(WINDOW_MS);
+
+    const batches = batchesIn(h.sent);
+    expect(h.sent).toHaveLength(2);
+    expect(batches[0]!.events).toHaveLength(64);
+    expect(batches[1]!.events).toHaveLength(36);
+    // 事件一条不丢
+    expect(batches.reduce((n, b) => n + b.events.length, 0)).toBe(100);
+  });
+});

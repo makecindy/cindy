@@ -6,10 +6,13 @@ import type {
   DesktopAccountDeletionConfirmInput,
   DesktopAccountDeletionConfirmResult,
   DesktopAccountDeletionStatusResult,
+  DesktopAccountSwitcherSnapshot,
   DesktopLoginAction,
   DesktopLoginActionResult,
 } from '../../shared/authIpc';
+export type { DesktopSavedAccount } from '../../shared/authIpc';
 import type { Effort } from '@/lib/userPreferences.types';
+import { createLogger } from '@/lib/logger';
 
 /** Renderer-safe projection of the authenticated auth-server membership. */
 // role 已随 /api/user/me、/api/me 退役；isCanary 改由 main 进程从专用
@@ -37,6 +40,8 @@ export interface AuthState {
   mode: 'signed-out' | 'local' | 'cloud';
   dataOwnerId: string | null;
   ownerGeneration: number;
+  /** Main marks the transient signed-out projection while an owner boundary is pending. */
+  ownerBoundaryPending?: boolean;
   canEnterApp: boolean;
   isAuthenticated: boolean;
   isCanary: boolean;
@@ -47,11 +52,23 @@ export interface AuthState {
   credentialStoreUnavailable: boolean;
 }
 
-export interface AuthService {
+export type AuthStateSource = 'initialize' | 'push' | 'snapshot';
+
+export interface AuthStateObserver {
+  getSnapshot(): AuthState | null;
+  onAuthStateChange(callback: (state: AuthState, source: AuthStateSource) => void): () => void;
+}
+
+export interface AuthService extends AuthStateObserver {
   initialize(): Promise<AuthState>;
   getLoginState(): Promise<DesktopLoginActionResult>;
   dispatchLoginAction(action: DesktopLoginAction): Promise<DesktopLoginActionResult>;
   logout(): Promise<void>;
+  listAccounts(): Promise<DesktopAccountSwitcherSnapshot>;
+  syncAccounts(): Promise<DesktopAccountSwitcherSnapshot>;
+  switchAccount(accountKey: string): Promise<void>;
+  beginAddAccount(): Promise<DesktopLoginActionResult>;
+  cancelAddAccount(): Promise<void>;
   enterLocalMode(): Promise<AuthState>;
   exitLocalMode(): Promise<AuthState>;
   getAccountDeletionAvailability(): Promise<DesktopAccountDeletionAvailabilityResult>;
@@ -60,46 +77,87 @@ export interface AuthService {
   getAccountDeletionStatus(): Promise<DesktopAccountDeletionStatusResult>;
   clearAccountDeletionReceipt(): Promise<void>;
   consumeAccountDeletionRestoredNotice(): Promise<boolean>;
-  onAuthStateChange(callback: (state: AuthState) => void): () => void;
   dispose(): void;
 }
 
-/** Thin IPC wrapper. Tokens and transient login tickets never enter the renderer. */
+const log = createLogger('auth-service');
+let rendererService: AuthService | null = null;
+
+function normalizeAuthState(raw: Awaited<ReturnType<typeof window.electronAPI.authInitialize>>): AuthState {
+  return {
+    user: raw.user as User | null,
+    mode: raw.mode,
+    dataOwnerId: raw.dataOwnerId,
+    ownerGeneration: raw.ownerGeneration,
+    ownerBoundaryPending: raw.ownerBoundaryPending === true,
+    canEnterApp: raw.canEnterApp,
+    isAuthenticated: raw.isAuthenticated,
+    isCanary: raw.isCanary === true,
+    deviceId: raw.deviceId,
+    hasAccountDeletionReceipt: raw.hasAccountDeletionReceipt === true,
+    accountDeletionRestored: raw.accountDeletionRestored === true,
+    credentialStoreUnavailable: raw.credentialStoreUnavailable === true,
+  };
+}
+
+/** One Main projection per renderer. Components only own their subscriptions. */
 export function createAuthService(): AuthService {
-  const listeners = new Set<(state: AuthState) => void>();
+  if (rendererService) return rendererService;
+  const listeners = new Set<(state: AuthState, source: AuthStateSource) => void>();
+  let snapshot: AuthState | null = null;
+  let initializeTask: Promise<AuthState> | null = null;
+  let version = 0;
+  let disposed = false;
+  const accept = (raw: Parameters<typeof normalizeAuthState>[0], source: 'push' | 'initialize') => {
+    const state = normalizeAuthState(raw);
+    if (disposed) return state;
+    snapshot = state;
+    version += 1;
+    log.info('accepted auth state', {
+      source,
+      mode: state.mode,
+      pending: state.ownerBoundaryPending,
+      generation: state.ownerGeneration,
+    });
+    listeners.forEach((listener) => listener(state, source));
+    return state;
+  };
   const unsubscribeIpc = window.electronAPI.onAuthStateChange((rawState) => {
-    const normalized: AuthState = {
-      user: rawState.user as User | null,
-      mode: rawState.mode,
-      dataOwnerId: rawState.dataOwnerId,
-      ownerGeneration: rawState.ownerGeneration,
-      canEnterApp: rawState.canEnterApp,
-      isAuthenticated: rawState.isAuthenticated,
-      isCanary: rawState.isCanary === true,
-      deviceId: rawState.deviceId,
-      hasAccountDeletionReceipt: rawState.hasAccountDeletionReceipt === true,
-      accountDeletionRestored: rawState.accountDeletionRestored === true,
-      credentialStoreUnavailable: rawState.credentialStoreUnavailable === true,
-    };
-    listeners.forEach((listener) => listener(normalized));
+    accept(rawState, 'push');
   });
 
-  return {
-    async initialize(): Promise<AuthState> {
-      const raw = await window.electronAPI.authInitialize();
-      return {
-        user: raw.user as User | null,
-        mode: raw.mode,
-        dataOwnerId: raw.dataOwnerId,
-        ownerGeneration: raw.ownerGeneration,
-        canEnterApp: raw.canEnterApp,
-        isAuthenticated: raw.isAuthenticated,
-        isCanary: raw.isCanary === true,
-        deviceId: raw.deviceId,
-        hasAccountDeletionReceipt: raw.hasAccountDeletionReceipt === true,
-        accountDeletionRestored: raw.accountDeletionRestored === true,
-        credentialStoreUnavailable: raw.credentialStoreUnavailable === true,
-      };
+  rendererService = {
+    initialize(): Promise<AuthState> {
+      if (!initializeTask) {
+        const startVersion = version;
+        const startedAt = performance.now();
+        log.info('initialize requested');
+        initializeTask = (async () => {
+          const raw = await window.electronAPI.authInitialize();
+          // Startup may broadcast a pending boundary before returning its
+          // committed owner. A higher Main-owned generation supersedes that
+          // push; same/older generations must still preserve a later boundary.
+          if (version !== startVersion && snapshot
+            && !(raw.ownerGeneration > snapshot.ownerGeneration)) {
+            log.info('discarded stale initialize response');
+            return snapshot;
+          }
+          log.info('initialize returned', { elapsedMs: Math.round(performance.now() - startedAt) });
+          return accept(raw, 'initialize');
+        })();
+      }
+      // Remounts read the current projection, including recovery after an earlier failure.
+      return initializeTask.then(
+        (state) => snapshot ?? state,
+        (error: unknown) => {
+          if (snapshot) return snapshot;
+          throw error;
+        },
+      );
+    },
+
+    getSnapshot() {
+      return snapshot;
     },
 
     getLoginState(): Promise<DesktopLoginActionResult> {
@@ -112,6 +170,26 @@ export function createAuthService(): AuthService {
 
     async logout(): Promise<void> {
       await window.electronAPI.authLogout();
+    },
+
+    listAccounts() {
+      return window.electronAPI.authListAccounts();
+    },
+
+    syncAccounts() {
+      return window.electronAPI.authSyncAccounts();
+    },
+
+    switchAccount(accountKey) {
+      return window.electronAPI.authSwitchAccount(accountKey);
+    },
+
+    beginAddAccount() {
+      return window.electronAPI.authBeginAddAccount();
+    },
+
+    cancelAddAccount() {
+      return window.electronAPI.authCancelAddAccount();
     },
 
     async enterLocalMode(): Promise<AuthState> {
@@ -141,21 +219,27 @@ export function createAuthService(): AuthService {
       return window.electronAPI.authConsumeAccountDeletionRestoredNotice();
     },
 
-    onAuthStateChange(callback: (state: AuthState) => void): () => void {
+    onAuthStateChange(callback: (state: AuthState, source: AuthStateSource) => void): () => void {
       listeners.add(callback);
+      if (snapshot) callback(snapshot, 'snapshot');
       return () => listeners.delete(callback);
     },
 
     dispose(): void {
+      if (disposed) return;
+      disposed = true;
       unsubscribeIpc();
       listeners.clear();
+      rendererService = null;
     },
   };
+  return rendererService;
 }
 
 export type {
   AuthFlowState,
   DesktopAccountDeletionChallenge,
+  DesktopAccountSwitcherSnapshot,
   DesktopLoginAction,
   DesktopLoginActionResult,
 };

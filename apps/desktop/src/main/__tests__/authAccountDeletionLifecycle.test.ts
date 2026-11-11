@@ -79,12 +79,18 @@ describe('desktop auth account-deletion lifecycle', () => {
 
   it('preserves a confirmed receipt on local clear but drops it on ordinary logout', () => {
     const localClearStart = source.indexOf(
-      'export function clearLocalSessionAfterAccountDeletion(): boolean {',
+      'export async function clearLocalSessionAfterAccountDeletion(): Promise<boolean> {',
     );
     const localClearEnd = source.indexOf('\n}\n\n/**\n * 当前展示资料', localClearStart);
     const localClearBody = source.slice(localClearStart, localClearEnd);
-    expect(localClearBody).toContain('clearAuth();');
+    expect(localClearBody).toContain('await withAccountFreeOwnerCommit({');
+    expect(localClearBody).toContain("reason: 'account-deletion'");
+    expect(localClearBody).toContain('validateBeforeCommit: () =>');
     expect(localClearBody).toContain('isConfirmedAccountDeletionSessionCurrent()');
+    expect(localClearBody).toContain("log.warn('failed to remove deleted account");
+    expect(localClearBody.indexOf('await withAccountFreeOwnerCommit({')).toBeGreaterThan(
+      localClearBody.indexOf("log.warn('failed to remove deleted account"),
+    );
     expect(localClearBody).not.toContain('clearAccountDeletionReceipt');
 
     const logoutStart = source.indexOf('export async function logout(): Promise<void> {');
@@ -92,27 +98,37 @@ describe('desktop auth account-deletion lifecycle', () => {
     expect(source.slice(logoutStart, logoutEnd)).toContain('clearAccountDeletionReceipt();');
   });
 
-  it('clears stale receipts as soon as a login selects an account', () => {
+  it('keeps the previous receipt while account selection is still cancellable', () => {
     const start = source.indexOf('async function acceptLoginOutcome');
     const end = source.indexOf('\n}\n\nasync function runLoginAction', start);
     const body = source.slice(start, end);
 
-    expect(body).toContain("if (outcome.status === 'ok' || outcome.status === 'select_account')");
-    expect(body).toContain('removeSafe(ACCOUNT_DELETION_RECEIPT_KEY);');
-    expect(body.indexOf('removeSafe(ACCOUNT_DELETION_RECEIPT_KEY);')).toBeLessThan(
-      body.indexOf("if (outcome.status === 'select_account')"),
-    );
+    expect(body).toContain("outcome.status === 'ok' || outcome.status === 'select_account'");
+    expect(body).not.toContain('removeSafe(ACCOUNT_DELETION_RECEIPT_KEY);');
+    expect(body).not.toContain('commitWithClearedAccountDeletionReceipt(');
   });
 
-  it('emits the restoration notice only after the final login commits', () => {
+  it('strictly clears the old receipt only inside the final login commit', () => {
     const start = source.indexOf('async function completeLogin(');
     const end = source.indexOf('\n}\n\nasync function acceptLoginOutcome', start);
     const body = source.slice(start, end);
+    const helperStart = source.indexOf(
+      'function commitWithClearedAccountDeletionReceipt(',
+    );
+    const helperEnd = source.indexOf('\n}\n\nfunction emptyAuthAccountVault', helperStart);
+    const helper = source.slice(helperStart, helperEnd);
 
-    expect(body).toContain('removeSafe(ACCOUNT_DELETION_RECEIPT_KEY);');
+    expect(body).toContain('commitWithClearedAccountDeletionReceipt(() => {');
     expect(body).toContain('accountDeletionRestoredNoticePending = deletionWasRestored;');
     expect(body.indexOf('accountDeletionRestoredNoticePending =')).toBeLessThan(
       body.indexOf('notifyRenderer();'),
+    );
+    expect(helper).toContain('fs.unlinkSync(filepath);');
+    expect(helper).toContain("code !== 'ENOENT'");
+    expect(helper).toContain("'CREDENTIAL_STORE_UNAVAILABLE'");
+    expect(helper).toContain('atomicWriteFileSync(filepath, previousEncrypted);');
+    expect(helper.indexOf('fs.unlinkSync(filepath);')).toBeLessThan(
+      helper.lastIndexOf('return commit();'),
     );
   });
 
@@ -122,14 +138,11 @@ describe('desktop auth account-deletion lifecycle', () => {
     const body = source.slice(start, end);
 
     expect(body).toContain('if (sessionInvalidationPromise) return sessionInvalidationPromise;');
-    expect(body).toContain('await authSessionTeardown(reason);');
-    expect(body).toContain('closeLocalDb();');
-    expect(body).toContain('clearAuth({ notify: false, deferSessionCommit: true });');
+    expect(body).toContain('await withAccountFreeOwnerCommit({');
+    expect(body).toContain("nextMode: 'signed-out'");
+    expect(body).toContain('clearOnFailure: true');
     expect(body).toContain('notifyAuthListeners();');
     expect(body).toContain('notifySessionExpired(');
-    expect(body.indexOf('clearAuth({ notify: false, deferSessionCommit: true });')).toBeLessThan(
-      body.indexOf('notifySessionExpired('),
-    );
   });
 
   it('restores the localized renderer notification without leaking internal reason codes', () => {

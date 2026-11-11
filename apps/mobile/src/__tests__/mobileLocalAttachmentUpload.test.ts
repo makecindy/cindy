@@ -101,6 +101,138 @@ describe('isCameraUnavailableOnSimulator', () => {
 });
 
 describe('createMobileLocalAttachmentUploadController', () => {
+  it('bounds a durable handoff whose local preparation never settles, then cleans a late result', async () => {
+    vi.useFakeTimers();
+    try {
+      let finish!: (value: { uri: string }) => void;
+      const cleanupLocalUris = vi.fn(async () => {});
+      const { deps, uploaded } = makeDeps();
+      const controller = createMobileLocalAttachmentUploadController(deps);
+      controller.enqueue([{ ...candidate('a.jpg'), cleanupLocalUris,
+        resolve: () => new Promise((resolve) => { finish = resolve; }),
+      }], { token: new Promise(() => {}) });
+      const handoff = controller.beginHandoff();
+      const failed = handoff.prepare().catch((error: Error) => error);
+      await vi.advanceTimersByTimeAsync(180_000);
+      expect(await failed).toBeInstanceOf(Error);
+      handoff.release(false);
+      await vi.advanceTimersByTimeAsync(0);
+      expect(await controller.waitForIdle()).toEqual({ failedCount: 1 });
+      finish({ uri: 'file:///tmp/late-handoff.jpg' });
+      await vi.advanceTimersByTimeAsync(0);
+      expect(cleanupLocalUris).toHaveBeenCalledWith(['file:///tmp/late-handoff.jpg']);
+      expect(uploaded).toEqual([]);
+      controller.dispose();
+    } finally { vi.useRealTimers(); }
+  });
+  it('releases send waiters when credential preparation never settles and preserves the attachment', async () => {
+    vi.useFakeTimers();
+    try {
+      const { deps, pendingSnapshots, uploaded, failed } = makeDeps();
+      const controller = createMobileLocalAttachmentUploadController(deps);
+      controller.enqueue([candidate('a.jpg')], { token: new Promise(() => {}) });
+      const pending = controller.waitForIdle();
+      await vi.advanceTimersByTimeAsync(180_000);
+      expect(await pending).toEqual({ failedCount: 1 });
+      expect(uploaded).toEqual([]);
+      expect(failed).toHaveLength(1);
+      expect(pendingSnapshots.at(-1)?.[0]).toMatchObject({ name: 'a.jpg', failed: true });
+      controller.dispose();
+    } finally { vi.useRealTimers(); }
+  });
+
+  it('fences old preparation when the token delay makes the upload deadline expire first', async () => {
+    vi.useFakeTimers();
+    try {
+      let tokenReady!: (value: string) => void;
+      let sourceReady!: (value: { uri: string }) => void;
+      const cleanupLocalUris = vi.fn(async () => {});
+      const original = { ...candidate('a.jpg'), cleanupLocalUris, resolve: vi.fn()
+        .mockImplementationOnce(() => new Promise((resolve) => { sourceReady = resolve; }))
+        .mockResolvedValueOnce({ uri: 'file:///tmp/retry.jpg' }) };
+      const { deps, uploaded } = makeDeps();
+      const controller = createMobileLocalAttachmentUploadController(deps);
+      controller.enqueue([original], { token: new Promise((resolve) => { tokenReady = resolve; }) });
+      await vi.advanceTimersByTimeAsync(100_000);
+      tokenReady('t');
+      await vi.advanceTimersByTimeAsync(80_000);
+      expect(await controller.waitForIdle()).toEqual({ failedCount: 1 });
+      controller.retry('local-attachment-upload-1', { token: 'new-token' });
+      await vi.advanceTimersByTimeAsync(0);
+      await controller.waitForIdle();
+      sourceReady({ uri: 'file:///tmp/old-source.jpg' });
+      await vi.advanceTimersByTimeAsync(0);
+      expect(uploaded).toHaveLength(1);
+      expect(uploaded[0].candidate.uri).toBe('file:///tmp/retry.jpg');
+      expect(cleanupLocalUris).toHaveBeenCalledWith(['file:///tmp/old-source.jpg']);
+      controller.dispose();
+    } finally { vi.useRealTimers(); }
+  });
+
+  it('a timed-out source cannot publish into a subsequent retry and only its temporary result is cleaned', async () => {
+    vi.useFakeTimers();
+    try {
+      let resolveSource!: (value: { uri: string }) => void;
+      const cleanupLocalUris = vi.fn(async () => {});
+      const source = { ...candidate('a.jpg'), cleanupLocalUris, resolve: vi.fn()
+        .mockImplementationOnce(() => new Promise((resolve) => { resolveSource = resolve; }))
+        .mockResolvedValueOnce({ uri: 'file:///tmp/retry.jpg' }) };
+      const { deps, uploaded, pendingSnapshots } = makeDeps();
+      const controller = createMobileLocalAttachmentUploadController(deps);
+      controller.enqueue([source], { token: 't' });
+      await vi.advanceTimersByTimeAsync(180_000);
+      const id = pendingSnapshots.at(-1)![0].localId;
+      controller.retry(id, { token: 't' });
+      await vi.advanceTimersByTimeAsync(0);
+      await controller.waitForIdle();
+      resolveSource({ uri: 'file:///tmp/late.jpg' });
+      await vi.advanceTimersByTimeAsync(0);
+      expect(uploaded).toHaveLength(1);
+      expect(uploaded[0].candidate.uri).toBe('file:///tmp/retry.jpg');
+      expect(cleanupLocalUris).toHaveBeenCalledWith(['file:///tmp/late.jpg']);
+      expect(cleanupLocalUris.mock.calls.flat(2)).not.toContain(source.uri);
+      controller.dispose();
+    } finally { vi.useRealTimers(); }
+  });
+
+  it('does not apply the total deadline while a large upload is transferring', async () => {
+    vi.useFakeTimers();
+    try {
+      const gate = gatedUpload();
+      const { deps, uploaded, failed } = makeDeps({ upload: gate.upload });
+      const controller = createMobileLocalAttachmentUploadController(deps);
+      controller.enqueue([candidate('a.jpg')], { token: 't' });
+      // 传输层自己按无进度判超时;这里跨过多个 180 秒窗口仍在上传。
+      await vi.advanceTimersByTimeAsync(600_000);
+      expect(gate.inFlight()).toEqual(['a.jpg']);
+      expect(failed).toEqual([]);
+      gate.release('a.jpg');
+      expect(await controller.waitForIdle()).toEqual({ failedCount: 0 });
+      expect(uploaded).toHaveLength(1);
+      controller.dispose();
+    } finally { vi.useRealTimers(); }
+  });
+
+  it('re-arms the deadline after upload and reclaims the attachment when delivery never settles', async () => {
+    vi.useFakeTimers();
+    try {
+      const gate = gatedUpload();
+      const { deps, discarded, failed } = makeDeps({
+        upload: gate.upload,
+        onUploaded: () => new Promise<void>(() => {}),
+      });
+      const controller = createMobileLocalAttachmentUploadController(deps);
+      controller.enqueue([candidate('a.jpg')], { token: 't' });
+      await vi.advanceTimersByTimeAsync(600_000);
+      gate.release('a.jpg');
+      await vi.advanceTimersByTimeAsync(180_000);
+      expect(await controller.waitForIdle()).toEqual({ failedCount: 1 });
+      expect(failed).toHaveLength(1);
+      expect(discarded).toEqual([attachmentFor('a.jpg')]);
+      controller.dispose();
+    } finally { vi.useRealTimers(); }
+  });
+
   it('enqueue 后立即出现在 pending,上传成功后回调宿主并清空 pending', async () => {
     const { deps, pendingSnapshots, uploaded } = makeDeps();
     const controller = createMobileLocalAttachmentUploadController(deps);
@@ -138,11 +270,66 @@ describe('createMobileLocalAttachmentUploadController', () => {
     expect(uploaded[0]?.uploadedUri).toBe('file:///tmp/downsampled.jpg');
   });
 
-  it('resolve 型任务:onUploaded 回传就位后的 candidate(实际上传的 uri),保留 sourceId', async () => {
+  // Regression: the picker returns a tiny thumbnail before resolving the original.
+  // Existing tests only checked onUploaded; unit coverage must observe the preview
+  // while preprocessing/PUT are still pending, and after failure recycles that file.
+  it('upgrades the pending preview before upload and drops recycled originals on retry', async () => {
+    const gate = gatedUpload();
+    let finishResolve!: (value: { uri: string }) => void;
+    let finishPreprocess!: (value: { uri: string; name: string; size: number }) => void;
+    const cleaned: string[] = [];
+    const { deps, pendingSnapshots } = makeDeps({
+      upload: gate.upload,
+      preprocess: () => new Promise((resolve) => { finishPreprocess = resolve; }),
+    });
+    const controller = createMobileLocalAttachmentUploadController(deps);
+    const latest = () => pendingSnapshots.at(-1)![0]!;
+    controller.enqueue([{
+      ...candidate('photo.jpg'),
+      uri: 'data:image/jpeg;base64,tiny-thumbnail',
+      resolve: () => new Promise((resolve) => { finishResolve = resolve; }),
+      cleanupLocalUris: async (uris) => { cleaned.push(...uris); },
+    }], { token: 't' });
+    const initial = latest();
+    try {
+      await flush();
+      expect(latest().previewUri).toBe(initial.previewUri);
+      finishResolve({ uri: 'file:///original.jpg' });
+      await flush();
+      expect(latest().previewUri).toBe('file:///original.jpg');
+      expect(latest().localId).toBe(initial.localId);
+      expect(gate.inFlight()).toEqual([]);
+      finishPreprocess({ uri: 'file:///encoded.jpg', name: 'photo.jpg', size: 500_000 });
+      await flush();
+      expect(gate.inFlight()).toEqual(['photo.jpg']);
+      expect(latest().previewUri).toBe('file:///original.jpg');
+      gate.fail('photo.jpg');
+      await controller.waitForIdle();
+      expect(cleaned).toContain('file:///original.jpg');
+      expect(latest()).toMatchObject({ previewUri: initial.previewUri, failed: true });
+      controller.retry(initial.localId, { token: 't2' });
+      await flush();
+      expect(latest().previewUri).toBe(initial.previewUri);
+      finishResolve({ uri: 'file:///retry-original.jpg' });
+      await flush();
+      expect(latest().previewUri).toBe('file:///retry-original.jpg');
+      finishPreprocess({ uri: 'file:///retry-encoded.jpg', name: 'photo.jpg', size: 500_000 });
+      await flush();
+      gate.release('photo.jpg');
+      expect(await controller.waitForIdle()).toEqual({ failedCount: 0 });
+    } finally {
+      controller.dispose();
+      finishPreprocess?.({ uri: 'file:///cleanup.jpg', name: 'photo.jpg', size: 500_000 });
+    }
+  });
+
+  it('resolve 型任务:onUploaded 回传就位后的 candidate,保留来源与 composer 代际', async () => {
     const { deps, uploaded } = makeDeps();
     const controller = createMobileLocalAttachmentUploadController(deps);
     controller.enqueue([{
       ...candidate('IMG_0001.HEIC'),
+      attachmentScopeGeneration: 7,
+      attachmentScopeKey: 'session-a',
       uri: 'ph://asset-1',
       sourceId: 'asset-1',
       resolve: () => Promise.resolve({ uri: 'file:///tmp/IMG_0001.jpg', name: 'IMG_0001.jpg', skipPreprocess: true }),
@@ -152,6 +339,8 @@ describe('createMobileLocalAttachmentUploadController', () => {
     expect(uploaded[0]?.candidate.uri).toBe('file:///tmp/IMG_0001.jpg');
     expect(uploaded[0]?.candidate.name).toBe('IMG_0001.jpg');
     expect(uploaded[0]?.candidate.sourceId).toBe('asset-1');
+    expect(uploaded[0]?.candidate.attachmentScopeKey).toBe('session-a');
+    expect(uploaded[0]?.candidate.attachmentScopeGeneration).toBe(7);
     expect(uploaded[0]?.candidate.kind).toBe('image');
   });
 
@@ -217,7 +406,7 @@ describe('createMobileLocalAttachmentUploadController', () => {
     expect(discarded.map((item) => item.name)).toEqual(['slow.jpg']);
   });
 
-  it('removeAll:排队任务即刻出队、在途任务完成后回收,controller 仍可继续 enqueue(切换电脑场景)', async () => {
+  it('removeAll:切换任务/电脑时排队任务即刻出队、迟到完成只回收不回调', async () => {
     const gate = gatedUpload();
     const { deps, pendingSnapshots, uploaded, discarded } = makeDeps({ upload: gate.upload });
     const controller = createMobileLocalAttachmentUploadController(deps);
@@ -596,6 +785,7 @@ describe('claim(划归乐观消息)', () => {
       failed: false,
       kind: 'image',
       previewUri: 'file:///tmp/a.jpg',
+      name: 'a.jpg',
     }]);
     controller.claim(claimable.map((task) => task.localId));
     // 托盘同步清空,限额与发送等待不再计入。
@@ -685,6 +875,7 @@ describe('claim(划归乐观消息)', () => {
       failed: true,
       kind: 'image',
       previewUri: 'file:///tmp/a.jpg',
+      name: 'a.jpg',
     }]);
 
     const snapshotCount = pendingSnapshots.length;
@@ -785,5 +976,143 @@ describe('in-flight 取消(abort 传递)', () => {
     expect(uploaded).toHaveLength(1);
     expect(signals).toHaveLength(2);
     expect(signals[0]).not.toBe(signals[1]);
+  });
+  it('hands off prepared bytes without waiting for a network token and fences page disposal', async () => {
+    const token = new Promise<string>(() => undefined);
+    const cleaned: string[] = [];
+    const { deps } = makeDeps();
+    const controller = createMobileLocalAttachmentUploadController(deps);
+    controller.enqueue([{ ...candidate('a.jpg'), cleanupLocalUris: async (uris) => { cleaned.push(...uris); } }], { token });
+    const handoff = controller.beginHandoff();
+    const sources = await handoff.prepare();
+    expect(sources[0]?.source.uri).toBe('file:///tmp/a.jpg');
+    controller.dispose();
+    expect(cleaned).toEqual([]);
+    handoff.release(true);
+  });
+  it('rolls back a handoff when persistence fails and lets the original upload reach the composer', async () => {
+    const gate = gatedUpload();
+    const { deps, uploaded } = makeDeps({ upload: gate.upload });
+    const controller = createMobileLocalAttachmentUploadController(deps);
+    controller.enqueue([candidate('a.jpg')], { token: 't' });
+    const handoff = controller.beginHandoff(); await handoff.prepare(); await flush();
+    gate.release('a.jpg'); await flush(); expect(uploaded).toHaveLength(0);
+    handoff.release(false); await controller.waitForIdle(); expect(uploaded).toHaveLength(1);
+  });
+  it('discards the old PUT when durable ownership commits even if the PUT completed during copying', async () => {
+    const gate = gatedUpload(); const { deps, uploaded, discarded } = makeDeps({ upload: gate.upload });
+    const controller = createMobileLocalAttachmentUploadController(deps);
+    controller.enqueue([candidate('a.jpg')], { token: 't' });
+    const handoff = controller.beginHandoff(); await handoff.prepare(); await flush();
+    gate.release('a.jpg'); await flush(); handoff.release(true); await flush();
+    expect(uploaded).toHaveLength(0); expect(discarded).toHaveLength(1);
+  });
+  it('clears the delivery flag and recycles OSS when local staging fails, allowing a later handoff', async () => {
+    const { deps, discarded } = makeDeps();
+    deps.onUploaded = async () => { throw new Error('disk full'); };
+    const controller = createMobileLocalAttachmentUploadController(deps);
+    controller.enqueue([candidate('a.jpg')], { token: 't' });
+    expect((await controller.waitForIdle()).failedCount).toBe(1);
+    expect(discarded).toHaveLength(1);
+    await controller.waitForDelivering();
+    const handoff = controller.beginHandoff();
+    expect(await handoff.prepare()).toHaveLength(1); handoff.release(false);
+  });
+
+});
+
+describe('onAbandoned(自生成输入文件的生命周期回收)', () => {
+  it('上传失败不算放弃:失败卡可重试;移除失败卡才回调一次', async () => {
+    const abandoned = vi.fn();
+    let attempts = 0;
+    const { deps, pendingSnapshots, uploaded } = makeDeps({
+      upload: (c) => {
+        attempts += 1;
+        return attempts === 1 ? Promise.reject(new Error('network down')) : Promise.resolve(attachmentFor(c.name));
+      },
+    });
+    const controller = createMobileLocalAttachmentUploadController(deps);
+    controller.enqueue([{ ...candidate('a.jpg'), onAbandoned: abandoned }], { token: 't' });
+    await controller.waitForIdle();
+    expect(abandoned).not.toHaveBeenCalled();
+    const failedCard = pendingSnapshots.at(-1)?.[0];
+    controller.retry(failedCard!.localId, { token: 't2' });
+    await controller.waitForIdle();
+    expect(uploaded).toHaveLength(1);
+    expect(abandoned).not.toHaveBeenCalled(); // 成功走 onUploaded
+
+    const second = vi.fn();
+    const failing = makeDeps({ upload: () => Promise.reject(new Error('network down')) });
+    const other = createMobileLocalAttachmentUploadController(failing.deps);
+    other.enqueue([{ ...candidate('b.jpg'), onAbandoned: second }], { token: 't' });
+    await other.waitForIdle();
+    other.remove(failing.pendingSnapshots.at(-1)![0]!.localId);
+    other.remove(failing.pendingSnapshots.at(-1)?.[0]?.localId ?? 'none');
+    expect(second).toHaveBeenCalledTimes(1);
+  });
+
+  it('in-flight 被移除:等任务落定后回调(不在传输读取文件期间回收)', async () => {
+    const gate = gatedUpload();
+    const abandoned = vi.fn();
+    const { deps } = makeDeps({ upload: gate.upload });
+    const controller = createMobileLocalAttachmentUploadController(deps);
+    controller.enqueue([{ ...candidate('a.jpg'), onAbandoned: abandoned }], { token: 't' });
+    await flush();
+    controller.remove('local-attachment-upload-1');
+    expect(abandoned).not.toHaveBeenCalled();
+    gate.release('a.jpg');
+    await flush();
+    expect(abandoned).toHaveBeenCalledTimes(1);
+  });
+
+  it('removeAll / dispose / 退屏后入队 都视为放弃,每个任务恰好回调一次', async () => {
+    const a = vi.fn();
+    const b = vi.fn();
+    const c = vi.fn();
+    const e = vi.fn();
+    const { deps } = makeDeps({ upload: () => new Promise(() => undefined) });
+    const controller = createMobileLocalAttachmentUploadController(deps);
+    controller.enqueue([
+      { ...candidate('a.jpg'), onAbandoned: a },
+      { ...candidate('b.jpg'), onAbandoned: b },
+      { ...candidate('c.jpg'), onAbandoned: c },
+    ], { token: 't' });
+    await flush(); // a / b 开跑(并发 2),c 排队
+    controller.removeAll();
+    expect(c).toHaveBeenCalledTimes(1); // 排队中:立即回调
+    await flush(); // in-flight 的 a / b 在任务落定后回调
+    expect(a).toHaveBeenCalledTimes(1);
+    expect(b).toHaveBeenCalledTimes(1);
+    controller.enqueue([{ ...candidate('e.jpg'), onAbandoned: e }], { token: 't' });
+    await flush();
+    controller.dispose();
+    await flush();
+    controller.removeAll(); // 重复放弃不会二次回调
+    await flush();
+    const d = vi.fn();
+    controller.enqueue([{ ...candidate('d.jpg'), onAbandoned: d }], { token: 't' });
+    for (const fn of [a, b, c, e, d]) expect(fn).toHaveBeenCalledTimes(1);
+  });
+
+  it('交接给持久发件箱:提交后才回调(文件已复制),回滚不回调', async () => {
+    const committed = vi.fn();
+    const rolledBack = vi.fn();
+    const { deps } = makeDeps({ upload: () => new Promise(() => undefined) });
+    const controller = createMobileLocalAttachmentUploadController(deps);
+    controller.enqueue([{ ...candidate('a.jpg'), onAbandoned: rolledBack }], { token: new Promise(() => undefined) });
+    const first = controller.beginHandoff();
+    await first.prepare();
+    first.release(false);
+    await flush();
+    expect(rolledBack).not.toHaveBeenCalled();
+    controller.removeAll();
+    const other = createMobileLocalAttachmentUploadController(makeDeps({ upload: () => new Promise(() => undefined) }).deps);
+    other.enqueue([{ ...candidate('b.jpg'), onAbandoned: committed }], { token: new Promise(() => undefined) });
+    const handoff = other.beginHandoff();
+    await handoff.prepare();
+    expect(committed).not.toHaveBeenCalled();
+    handoff.release(true);
+    await flush();
+    expect(committed).toHaveBeenCalledTimes(1);
   });
 });

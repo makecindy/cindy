@@ -1,6 +1,7 @@
 import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
-import { describe, expect, it } from 'vitest';
+import ts from 'typescript';
+import { describe, expect, it, vi } from 'vitest';
 
 /**
  * 会话失效感知链路的回归守卫(authManager / device-link 依赖 Electron,无法在 node
@@ -12,17 +13,75 @@ import { describe, expect, it } from 'vitest';
  * token 后,正式版进程自以为登录,模型源静默消失、device-link 无限 401。
  */
 describe('desktop auth session-expiry detection', () => {
-  const authSource = readFileSync(resolve(process.cwd(), 'src/main/authManager.ts'), 'utf8').replace(
-    /\r\n/g,
-    '\n',
-  );
+  const authSource = readFileSync(
+    resolve(process.cwd(), 'src/main/authManager.ts'),
+    'utf8',
+  ).replace(/\r\n/g, '\n');
   const deviceLinkSource = readFileSync(
     resolve(process.cwd(), 'src/main/device-link/index.ts'),
     'utf8',
   ).replace(/\r\n/g, '\n');
 
+  // Recovery safety contract (guard harness): execute the real synchronous
+  // callback, not a copied implementation. Before this change timer refresh did
+  // not notify device-link; online/self-hosted/demoted connections must stay intact.
+  const linkSource = ts.createSourceFile(
+    'index.ts',
+    deviceLinkSource,
+    ts.ScriptTarget.Latest,
+    true,
+  );
+  const reconnectDeclaration = linkSource.statements.find(
+    (node) =>
+      ts.isFunctionDeclaration(node) && node.name?.text === 'reconnectAfterAccessTokenRefresh',
+  )!;
+  const reconnectCode = ts.transpileModule(reconnectDeclaration.getText(linkSource), {
+    compilerOptions: { target: ts.ScriptTarget.ES2022 },
+  }).outputText;
+
+  it.each([
+    ['official', false],
+    ['official', true],
+    ['self-hosted', false],
+    ['self-hosted', true],
+    ['demoted', true],
+    ['torn-down', true],
+    ['boundary', true],
+    ['online', true],
+  ] as const)(
+    'token refresh reconnects only current rejected official connections (%s, separate=%s)',
+    (mode, separate) => {
+      const issue = mode === 'online' ? null : { kind: 'auth-failed' };
+      const crossAccount = { getConnectionIssue: () => issue, connectNow: vi.fn() };
+      const client = {
+        getConnectionIssue: () => issue,
+        connectNow: vi.fn(),
+        crossAccountConnection: (): unknown => (separate ? crossAccount : client),
+      };
+      const run = new Function(
+        'client',
+        'linkTornDown',
+        'isAppSessionBoundaryPending',
+        'arbiter',
+        'activeSelfHostedRelay',
+        reconnectCode + '\nreturn reconnectAfterAccessTokenRefresh;',
+      )(
+        client,
+        mode === 'torn-down',
+        () => mode === 'boundary',
+        { isOwner: () => mode !== 'demoted' },
+        () => mode === 'self-hosted',
+      );
+      run();
+      expect(client.connectNow).toHaveBeenCalledTimes(mode === 'official' ? 1 : 0);
+      expect(crossAccount.connectNow).toHaveBeenCalledTimes(
+        separate && ['official', 'self-hosted'].includes(mode) ? 1 : 0,
+      );
+    },
+  );
+
   it('runtime refresh 发现磁盘 token 消失但会话活着时,按确定性失效走会话过期出口', () => {
-    const start = authSource.indexOf('export async function refresh(): Promise<boolean> {');
+    const start = authSource.indexOf('export async function refresh(');
     const end = authSource.indexOf('const diskTokenChangedBeforeRefresh', start);
     const body = authSource.slice(start, end);
 
@@ -40,7 +99,7 @@ describe('desktop auth session-expiry detection', () => {
     expect(body).toContain('treating as transient');
     // 瞬时分支必须重排 refresh 重试:正常 timer 已触发过,不重排则密钥链/IO 抖动
     // 后有效会话在 access token 到期前没有任何后续 refresh(半死)。
-    expect(body).toContain('scheduleRefreshRetryAfterTransientFailure();');
+    expect(body).toContain('scheduleRefreshRetryAfterTransientFailure(refreshEpoch);');
     expect(body.indexOf('isPersistedSecretAbsent(AUTH_SESSION_KEY)')).toBeLessThan(
       body.indexOf("await expireRuntimeAuth(previousUserId, 'credential-lost', {"),
     );
@@ -71,7 +130,9 @@ describe('desktop auth session-expiry detection', () => {
     const expireStart = authSource.indexOf('async function expireRuntimeAuth(');
     const expireEnd = authSource.indexOf('if (accountSwitchTeardown)', expireStart);
     const expireBody = authSource.slice(expireStart, expireEnd);
-    expect(expireBody).toContain('preservePersistedRefreshToken: opts.preservePersistedRefreshToken');
+    expect(expireBody).toContain(
+      'preservePersistedRefreshToken: opts.preservePersistedRefreshToken',
+    );
   });
 
   it('isPersistedSecretAbsent 只在文件确定不存在(ENOENT)时判缺席', () => {
@@ -81,7 +142,13 @@ describe('desktop auth session-expiry detection', () => {
 
     // 加密不可用不判缺席;existsSync 对 EPERM/EACCES 也返回 false,必须用
     // accessSync 并只认 ENOENT 为真缺席,其它错误一律按瞬时故障。
-    expect(body).toContain('if (!safeStorage.isEncryptionAvailable()) return false;');
+    expect(body).toContain('if (!isCredentialEncryptionAvailable()) return false;');
+    const probe = authSource.slice(
+      authSource.indexOf('function isCredentialEncryptionAvailable()'),
+      authSource.indexOf('/** Main-process recovery signal'),
+    );
+    expect(probe).toContain('const available = safeStorage.isEncryptionAvailable();');
+    expect(probe).toContain('return available;');
     expect(body).toContain('fs.accessSync(');
     expect(body).toContain("=== 'ENOENT'");
     expect(body).not.toContain('existsSync');
@@ -94,7 +161,9 @@ describe('desktop auth session-expiry detection', () => {
     const end = authSource.indexOf("} else if (action.kind === 'replacement-retry') {", anchor);
     const body = authSource.slice(start, end);
 
-    expect(body).toContain('await expireRuntimeAuth(previousUserId, resolveSessionExpiredReason(code));');
+    expect(body).toContain(
+      'await expireRuntimeAuth(previousUserId, resolveSessionExpiredReason(code));',
+    );
   });
 
   it('session-expired 广播携带客户端内部分类 reason,不透传服务端原文', () => {
@@ -103,7 +172,9 @@ describe('desktop auth session-expiry detection', () => {
     const body = authSource.slice(start, end);
 
     expect(body).toContain("reason: SessionExpiredReason = 'unknown'");
-    expect(body).toContain("broadcastToRenderers('auth:session-expired', { message: '', reason });");
+    expect(body).toContain(
+      "broadcastToRenderers('auth:session-expired', { message: '', reason });",
+    );
   });
 
   it('invalidateSession 只显式归类 account-unavailable,其余走通用文案', () => {
@@ -114,10 +185,8 @@ describe('desktop auth session-expiry detection', () => {
     expect(body).toContain(
       "notifySessionExpired(reason === 'account-unavailable' ? 'account-unavailable' : 'unknown');",
     );
-    // 弹窗必须发生在清态之后(渲染面保持到用户确认,但 main 侧立即转登出)。
-    expect(body.indexOf('clearAuth({ notify: false });')).toBeLessThan(
-      body.indexOf('notifySessionExpired('),
-    );
+    expect(body).toContain('await withAccountFreeOwnerCommit({');
+    expect(body).toContain('clearOnFailure: true');
   });
 
   it('device-link 收到 relay auth-failed 时主动 refresh,把被顶下线汇入会话过期出口', () => {
@@ -126,10 +195,14 @@ describe('desktop auth session-expiry detection', () => {
     const issueStart = deviceLinkSource.indexOf('client.onConnectionIssue((issue) => {');
     const issueEnd = deviceLinkSource.indexOf('client.onPresenceChanged', issueStart);
     const issueBody = deviceLinkSource.slice(issueStart, issueEnd);
-    expect(issueBody).toContain("if (issue?.kind === 'auth-failed') recoverFromRelayAuthFailure();");
+    expect(issueBody).toContain(
+      "if (issue?.kind === 'auth-failed') recoverFromRelayAuthFailure();",
+    );
 
     // 自救函数:节流(token-rotating 端点不能每次重连都打)+ refresh 成功后立即重连。
-    const recoverStart = deviceLinkSource.indexOf('function recoverFromRelayAuthFailure(): void {');
+    const recoverStart = deviceLinkSource.indexOf(
+      'function recoverFromRelayAuthFailure(crossAccount = false, freshRejection = true): void {',
+    );
     const recoverEnd = deviceLinkSource.indexOf('\n}\n', recoverStart);
     const recoverBody = deviceLinkSource.slice(recoverStart, recoverEnd);
     expect(recoverBody).toContain('elapsed < RELAY_AUTH_RECOVERY_MIN_INTERVAL_MS');
@@ -137,18 +210,88 @@ describe('desktop auth session-expiry detection', () => {
     // 会让自救在首次尝试后永久停摆,退回无限 401。延迟触发前复查 issue 仍在,
     // 避免已自愈后多余轮换 token。
     expect(recoverBody).toContain('relayAuthRecoveryRetryTimer = setTimeout(');
-    expect(recoverBody).toContain("client?.getConnectionIssue()?.kind !== 'auth-failed'");
+    expect(recoverBody).toContain("connection()?.getConnectionIssue()?.kind !== 'auth-failed'");
     expect(recoverBody).toContain('authManager');
-    expect(recoverBody).toContain('.refresh()');
-    expect(recoverBody).toContain("client?.connectNow('relay-auth-recovered');");
-    // refresh 在途期间持有权可能已被别的实例夺走(teardown 已停 client):connectNow
-    // 会把已停的 client 拉活绕过仲裁,重连前必须重新确认 isOwner。
-    expect(recoverBody).toContain('arbiter?.isOwner()');
+    // 只有刚转为 auth-failed 的通知算新 401 证据;延迟自救复用的是旧 401,不能提前快速续期。
+    expect(recoverBody).toContain('recoverFromRelayAuthFailure(crossAccount, false);');
+    expect(recoverBody).toContain('.refresh({ serverRejectedToken: freshRejection })');
+    // Token-rotation notification also covers timer-initiated refresh. Identity
+    // notifications intentionally remain separate from ordinary token rotation.
+    expect(deviceLinkSource).toContain(
+      'authManager.onAccessTokenRefreshed(reconnectAfterAccessTokenRefresh)',
+    );
+    expect(authSource).toContain('notifyAccessTokenRefreshed();');
 
     // teardown 必须清掉延迟自救 timer,避免登出/掉持有权后迟到触发。
     const teardownStart = deviceLinkSource.indexOf('function teardownActiveLink(): void {');
     const teardownEnd = deviceLinkSource.indexOf('\n}\n', teardownStart);
     const teardownBody = deviceLinkSource.slice(teardownStart, teardownEnd);
     expect(teardownBody).toContain('clearTimeout(relayAuthRecoveryRetryTimer);');
+  });
+
+  it('routes replacement refresh through the durable Ghost projection owner boundary', () => {
+    const refreshStart = authSource.indexOf('export async function refresh(');
+    const refreshEnd = authSource.indexOf('\n}\n\nexport async function logout()', refreshStart);
+    const refreshBody = authSource.slice(refreshStart, refreshEnd);
+
+    expect(authSource).toContain('withGhostSkillProjectionOwnerCommit,');
+    expect(authSource).toContain("from './authBoundaryQuarantine.js';");
+    expect(refreshBody).toContain('await commitDesktopRefreshCredentials(');
+    expect(refreshBody).toContain('await withCloudOwnerCommit({');
+    expect(refreshBody).toContain('nextOwnerId: nextUser.id');
+    expect(refreshBody.indexOf('await commitDesktopRefreshCredentials(')).toBeLessThan(
+      refreshBody.indexOf('await withCloudOwnerCommit({'),
+    );
+  });
+
+  it('keeps the Ghost sweep inside the shared owner state machine', () => {
+    const ghostSource = readFileSync(
+      resolve(process.cwd(), 'src/main/cindy-brain/index.ts'),
+      'utf8',
+    ).replace(/\r\n/g, '\n');
+    const start = ghostSource.indexOf('export async function suspendAllGhosts(): Promise<void> {');
+    const end = ghostSource.indexOf('\n}\n', start);
+    const body = ghostSource.slice(start, end);
+
+    expect(body).toContain('const roots = listGhostOwnerProjectionRoots();');
+    expect(body).toContain('withSharedSkillRootsLock);');
+    expect(body).toContain('removeGhostSkillLinksForRoots(roots, undefined,');
+    expect(body).toContain("roots.map((root) => path.join(ghostSkillPluginRoot(root), 'skills'))");
+    expect(body).toContain('throw new Error(`ghost owner skill cleanup incomplete');
+    expect(body).not.toContain('AuthBoundaryQuarantine');
+
+    expect(ghostSource).toContain('await withGhostSkillProjectionReconcile(');
+    expect(ghostSource).toContain('releaseLease = beginGhostMutation(owner);');
+    expect(ghostSource.indexOf('await withGhostSkillProjectionReconcile(')).toBeLessThan(
+      ghostSource.indexOf('releaseLease = beginGhostMutation(owner);'),
+    );
+  });
+
+  it('gates Ghost runtime lookups only on the process-local AppSession boundary', () => {
+    const ghostSource = readFileSync(
+      resolve(process.cwd(), 'src/main/cindy-brain/index.ts'),
+      'utf8',
+    ).replace(/\r\n/g, '\n');
+    const start = ghostSource.indexOf('export function isGhostAvailableForActiveSession(');
+    const end = ghostSource.indexOf('\n}\n', start);
+    const body = ghostSource.slice(start, end);
+    expect(body).toContain('isAppSessionBoundaryPending()');
+    expect(body).toContain('getAppCapabilities().canUseCindyAccountServices');
+    expect(body).not.toContain('isGhostSkillProjectionBoundaryStableForOwner');
+
+    const requireStart = ghostSource.indexOf('function requireGhostAvailableForActiveSession(');
+    const requireEnd = ghostSource.indexOf('\n}\n', requireStart);
+    const requireBody = ghostSource.slice(requireStart, requireEnd);
+    expect(requireBody).toContain("throwIpcError(\n        'PRECONDITION_FAILED'");
+    expect(requireBody).toContain('isAppSessionBoundaryPending()');
+    expect(requireBody).not.toContain('isGhostSkillProjectionBoundaryStableForOwner');
+    // The durable Ghost projection is shared by sibling instances and is not a
+    // runtime authorization source. Only this process's active owner switch is
+    // retryable; a settled session without account capability remains denied.
+    const boundaryPendingIndex = requireBody.indexOf('isAppSessionBoundaryPending()');
+    const permissionDeniedIndex = requireBody.indexOf("'PERMISSION_DENIED'");
+    expect(boundaryPendingIndex).toBeGreaterThan(-1);
+    expect(permissionDeniedIndex).toBeGreaterThan(-1);
+    expect(boundaryPendingIndex).toBeLessThan(permissionDeniedIndex);
   });
 });

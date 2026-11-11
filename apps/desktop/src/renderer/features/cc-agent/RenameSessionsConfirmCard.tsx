@@ -1,3 +1,4 @@
+import { Button } from '@/components/ui/button';
 /**
  * RenameSessionsConfirmCard
  * ---------------------------------------------------------------------------
@@ -61,7 +62,7 @@ export function RenameSessionsConfirmCard({
             {t('renameSessions.confirm.description', { count: pending.changes.length })}
           </p>
         </div>
-        <span className="shrink-0 rounded-[6px] border border-[var(--chat-input-border)] px-2 py-1 text-[12px] font-medium text-[var(--status-bar-meta)]">
+        <span className="shrink-0 rounded-[6px] border border-[var(--chat-input-border)] px-2 py-1 text-12 font-medium text-[var(--status-bar-meta)]">
           {t('renameSessions.confirm.count', { count: pending.changes.length })}
         </span>
       </div>
@@ -101,35 +102,18 @@ export function RenameSessionsConfirmCard({
       </div>
 
       <div className="mt-4 flex items-center justify-end gap-2">
-        <button
-          type="button"
-          onClick={handleCancel}
-          className={cn(
-            'flex items-center gap-2 rounded-[8px] border px-3 py-[7px]',
-            'border-[var(--chat-input-border)] bg-transparent',
-            'text-13 font-medium text-[var(--chat-input-text)]',
-            'transition-colors hover:bg-[var(--perm-code-bg)]',
-          )}
-        >
+        <Button variant="secondary" size="md" compact type="button" onClick={handleCancel}>
           <X className="size-4" />
           <span>{t('renameSessions.confirm.cancel')}</span>
-        </button>
-        <button
-          type="button"
-          onClick={handleSubmit}
-          className={cn(
-            'flex items-center gap-2 rounded-[8px] border px-3 py-[7px]',
-            'border-[var(--chat-input-border)]',
-            'bg-[var(--perm-allow-btn-bg)] text-[var(--perm-allow-btn-text)]',
-            'text-13 font-medium transition-colors hover:opacity-90',
-          )}
-        >
+        </Button>
+        <Button variant="cta"
+          palette="permission" size="md" compact type="button" onClick={handleSubmit}>
           <Check className="size-4" />
           <span>{t('renameSessions.confirm.apply')}</span>
-          <kbd className="rounded-[4px] border border-[var(--perm-allow-kbd-border)] bg-[var(--perm-allow-kbd-bg)] px-1.5 py-[1px] text-[11px] font-normal text-[var(--perm-allow-btn-text)] opacity-70">
+          <kbd className="rounded-[4px] border border-[var(--perm-allow-kbd-border)] bg-[var(--perm-allow-kbd-bg)] px-1.5 py-[1px] text-11 font-normal text-[var(--perm-allow-btn-text)] opacity-70">
             {window.electronAPI?.platform === 'darwin' ? '⌘↵' : 'Ctrl+Enter'}
           </kbd>
-        </button>
+        </Button>
       </div>
     </div>
   );

@@ -19,7 +19,8 @@ const secrets = {
   },
 };
 
-vi.doMock('../moduleScope.js', () => ({
+vi.doMock('../moduleScope.js', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('../moduleScope.js')>()),
   getHost: () => ({ secrets }),
   getLog: () => ({
     trace: vi.fn(),

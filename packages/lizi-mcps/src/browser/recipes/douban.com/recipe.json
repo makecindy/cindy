@@ -1,16 +1,38 @@
 {
   "id": "douban-search",
-  "match": ["douban.com", "search.douban.com"],
-  "description": "搜索豆瓣电影/图书/音乐条目。type 取 movie/book/music。搜索页是客户端渲染,用 evaluate 轮询 .item-root 出现后再扒卡片(标题/评分/简介/链接)。",
-  "inputs": { "type": { "required": true }, "query": { "required": true } },
-  "steps": [
-    { "action": "navigate", "url": "https://search.douban.com/{{type}}/subject_search?search_text={{query|url}}" },
-    { "action": "wait", "loadState": "load" },
-    {
-      "action": "evaluate",
-      "as": "items",
-      "fn": "async () => { const sleep=ms=>new Promise(r=>setTimeout(r,ms)); const norm=v=>(v||'').replace(/\\s+/g,' ').trim(); for(let i=0;i<20;i++){ if(document.querySelector('.item-root .title-text, .item-root .title a')) break; await sleep(300); } const out=[]; const seen=new Set(); for(const el of document.querySelectorAll('.item-root')){ const t=el.querySelector('.title-text, .title a, a[title]'); const title=norm(t&&t.textContent)||norm(t&&t.getAttribute('title')); let url=(t&&t.getAttribute('href'))||''; if(!title||!url||url.indexOf('/subject/')<0||seen.has(url)) continue; seen.add(url); const rating=norm((el.querySelector('.rating_nums')||{}).textContent); const abs=norm((el.querySelector('.meta.abstract, .meta, .abstract, p')||{}).textContent); out.push({ rank: out.length+1, title: title, rating: rating, abstract: abs.slice(0,100), url: url }); if(out.length>=20) break; } if(!out.length){ const bodyText=document.body&&document.body.innerText||''; if(/验证|安全/.test(bodyText)) throw new Error('豆瓣触发风控验证,请在持久浏览器里手动通过验证/登录后重试'); if(!/没有找到|没有符合|暂无|无结果|找不到|沒有找到/.test(bodyText)) throw new Error('豆瓣搜索未扒到任何条目,且页面未出现\"没有找到\"等空结果标识(多半是页面未渲染完/结构变化/被风控),请在持久浏览器里正常访问 search.douban.com 后重试,或改用其它方式'); } return out; }"
-    }
+  "match": [
+    "douban.com",
+    "search.douban.com"
   ],
-  "output": "{{items}}"
+  "description": "搜索豆瓣电影、图书或音乐",
+  "access": "read",
+  "adapter": "douban/search",
+  "adapterInputMap": {
+    "query": "keyword"
+  },
+  "inputs": {
+    "type": {
+      "required": false,
+      "type": "str",
+      "default": "movie",
+      "description": "搜索类型（movie=电影, book=图书, music=音乐）",
+      "choices": [
+        "movie",
+        "book",
+        "music"
+      ]
+    },
+    "query": {
+      "required": true,
+      "type": "str",
+      "description": "搜索关键词"
+    },
+    "limit": {
+      "required": false,
+      "type": "int",
+      "default": 20,
+      "description": "返回结果数量"
+    }
+  },
+  "steps": []
 }

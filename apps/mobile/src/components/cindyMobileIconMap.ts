@@ -68,7 +68,7 @@ export const cindyMobileIconSpecs: readonly CindyMobileIconSpec[] = [
     currentAsset: 'lucide Pencil',
     targetAsset: 'pencil action glyph',
     status: 'mapped',
-    colorToken: 'sheetActionText',
+    colorToken: 'textPrimary',
     figmaNode: '301:1016 / 301:1262',
   },
   {
@@ -76,7 +76,7 @@ export const cindyMobileIconSpecs: readonly CindyMobileIconSpec[] = [
     currentAsset: 'lucide Pin / PinOff',
     targetAsset: 'top-filled action glyph',
     status: 'mapped',
-    colorToken: 'sheetActionText',
+    colorToken: 'textPrimary',
     figmaNode: '301:1019 / 301:1265',
   },
   {
@@ -84,7 +84,7 @@ export const cindyMobileIconSpecs: readonly CindyMobileIconSpec[] = [
     currentAsset: 'lucide Copy',
     targetAsset: 'copy link action glyph',
     status: 'mapped',
-    colorToken: 'sheetActionText',
+    colorToken: 'textPrimary',
     figmaNode: '301:1024 / 301:1270',
   },
   {
@@ -92,7 +92,7 @@ export const cindyMobileIconSpecs: readonly CindyMobileIconSpec[] = [
     currentAsset: 'lucide Archive',
     targetAsset: 'archive action glyph',
     status: 'mapped',
-    colorToken: 'sheetActionText',
+    colorToken: 'textPrimary',
     figmaNode: '301:1029 / 301:1275',
   },
   {
@@ -100,7 +100,7 @@ export const cindyMobileIconSpecs: readonly CindyMobileIconSpec[] = [
     currentAsset: 'lucide Info',
     targetAsset: 'info action glyph',
     status: 'mapped',
-    colorToken: 'sheetActionText',
+    colorToken: 'textPrimary',
     figmaNode: '301:1034 / 301:1280',
   },
   {

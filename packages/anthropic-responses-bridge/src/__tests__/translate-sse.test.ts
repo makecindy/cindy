@@ -470,7 +470,8 @@ describe('SseTranslator', () => {
       (e) => (e.data.delta as Record<string, unknown>).type === 'text_delta',
     );
     expect(textDeltas.map((e) => (e.data.delta as Record<string, unknown>).text).join('')).toBe('半截话');
-    expect(types(out)).toContain('message_stop');
+    expect(types(out)).toContain('error');
+    expect(types(out)).not.toContain('message_stop');
   });
 
   it('既有顺序流(codex 风格)行为不变:块序与内容与修复前一致', () => {
@@ -625,16 +626,56 @@ describe('SseTranslator', () => {
     expect((starts[0].data.content_block as Record<string, unknown>).data).toBe('#id=rs_1#ENC');
   });
 
-  it('finish() 兜底:上游断流也发 message_delta + message_stop', () => {
+  it('clean EOF before response.completed → error without message_stop', () => {
     const t = new SseTranslator('gpt-5.5');
     const out: AnthropicSseEvent[] = [];
     out.push(...t.push({ type: 'response.created', response: { id: 'r', model: 'gpt-5.5' } }));
     out.push(...t.push({ type: 'response.output_item.added', output_index: 0, item: { type: 'message' } }));
     out.push(...t.push({ type: 'response.output_text.delta', output_index: 0, delta: 'x' }));
     out.push(...t.finish());
-    expect(types(out)).toContain('message_delta');
-    expect(types(out)).toContain('message_stop');
+    expect(types(out)).toContain('error');
+    expect(types(out)).not.toContain('message_delta');
+    expect(types(out)).not.toContain('message_stop');
+    expect((byType(out, 'error')[0].data.error as Record<string, unknown>).message).toContain('stream_truncated');
     // finish 幂等
     expect(t.finish()).toHaveLength(0);
+  });
+
+  it('非流式 Responses JSON 复用状态机翻译 text / tool / usage', () => {
+    const t = new SseTranslator('chatgpt/gpt-5.6-sol');
+    const out = t.pushJson({
+      id: 'resp_1',
+      model: 'gpt-5.6-sol',
+      status: 'completed',
+      output: [
+        {
+          id: 'msg_1',
+          type: 'message',
+          role: 'assistant',
+          content: [{ type: 'output_text', text: 'hello' }],
+        },
+        {
+          id: 'fc_1',
+          type: 'function_call',
+          call_id: 'call_1',
+          name: 'Bash',
+          arguments: '{"command":"pwd"}',
+        },
+      ],
+      usage: { input_tokens: 3, output_tokens: 2 },
+    });
+    expect(types(out)).toContain('message_start');
+    expect(types(out)).toContain('message_stop');
+    expect((byType(out, 'message_delta')[0].data.delta as Record<string, unknown>).stop_reason).toBe('tool_use');
+    const text = byType(out, 'content_block_delta')
+      .filter((event) => (event.data.delta as Record<string, unknown>).type === 'text_delta')
+      .map((event) => (event.data.delta as Record<string, unknown>).text)
+      .join('');
+    expect(text).toBe('hello');
+    const toolInput = byType(out, 'content_block_delta')
+      .filter((event) => (event.data.delta as Record<string, unknown>).type === 'input_json_delta')
+      .map((event) => (event.data.delta as Record<string, unknown>).partial_json)
+      .join('');
+    expect(toolInput).toBe('{"command":"pwd"}');
   });
 });

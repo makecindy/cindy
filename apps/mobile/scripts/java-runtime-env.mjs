@@ -6,7 +6,17 @@ const MIN_JAVA_MAJOR = 17;
 
 export function resolveJavaRuntimeEnv(baseEnv = process.env) {
   const current = javaMajor(versionForJavaCommand('java', baseEnv));
-  if (current >= MIN_JAVA_MAJOR) return { ...baseEnv };
+  if (current >= MIN_JAVA_MAJOR) {
+    const env = { ...baseEnv };
+    if (baseEnv.JAVA_HOME) {
+      const javaBin = join(baseEnv.JAVA_HOME, 'bin', process.platform === 'win32' ? 'java.exe' : 'java');
+      const homeMajor = javaMajor(versionForJavaCommand(javaBin, baseEnv));
+      // Gradle prefers JAVA_HOME over PATH. Drop an unusable override so it uses
+      // the supported PATH Java we just checked, without changing the parent env.
+      if (!(homeMajor >= MIN_JAVA_MAJOR)) delete env.JAVA_HOME;
+    }
+    return env;
+  }
 
   for (const javaHome of javaHomeCandidates(baseEnv)) {
     if (!javaHome) continue;
@@ -34,11 +44,22 @@ export function javaRuntimeDetail(env = resolveJavaRuntimeEnv()) {
 function javaHomeCandidates(env) {
   return [
     env.JAVA_HOME,
+    env.ANDROID_STUDIO_JDK,
+    ...(process.platform === 'win32' ? windowsAndroidStudioJavaHomes(env) : []),
     macJavaHome('17'),
     homebrewOpenJdk17Home('/opt/homebrew/opt/openjdk@17'),
     homebrewOpenJdk17Home('/usr/local/opt/openjdk@17'),
     brewPrefixOpenJdk17Home(),
   ].filter(uniqueTruthy);
+}
+
+function windowsAndroidStudioJavaHomes(env) {
+  return [
+    env.ANDROID_STUDIO_HOME ? join(env.ANDROID_STUDIO_HOME, 'jbr') : null,
+    env.ProgramFiles ? join(env.ProgramFiles, 'Android', 'Android Studio', 'jbr') : null,
+    env['ProgramFiles(x86)'] ? join(env['ProgramFiles(x86)'], 'Android', 'Android Studio', 'jbr') : null,
+    env.LOCALAPPDATA ? join(env.LOCALAPPDATA, 'Programs', 'Android Studio', 'jbr') : null,
+  ];
 }
 
 function macJavaHome(version) {

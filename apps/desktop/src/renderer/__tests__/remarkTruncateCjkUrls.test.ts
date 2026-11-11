@@ -143,24 +143,66 @@ describe('remarkTruncateCjkUrls', () => {
     expect(tail.value).toBe('（说明）');
   });
 
-  it('URL + 直接跟中文文字：https://example.com/path这是说明', () => {
+  it('issue comment fragment + 全角说明：…#issuecomment-1（无 @）', () => {
+    const tree = autolinkTree(
+      'https://github.com/example/app/issues/3561#issuecomment-5391602790（无 @）',
+    );
+    transform(tree);
+    const para = tree.children[0] as Paragraph;
+    const link = para.children[0] as Link;
+    const tail = para.children[1] as Text;
+    expect(link.url).toBe(
+      'https://github.com/example/app/issues/3561#issuecomment-5391602790',
+    );
+    expect((link.children[0] as Text).value).toBe(
+      'https://github.com/example/app/issues/3561#issuecomment-5391602790',
+    );
+    expect(tail.value).toBe('（无 @）');
+  });
+
+  it('authority 里的 IDN 点号保留：https://例子。测试/path', () => {
+    const tree = autolinkTree('https://例子。测试/path');
+    transform(tree);
+    const para = tree.children[0] as Paragraph;
+    const link = para.children[0] as Link;
+    expect(link.url).toBe('https://例子。测试/path');
+    expect(para.children).toHaveLength(1);
+  });
+
+  it('URL 路径里的汉字保留：https://example.com/路径', () => {
+    const tree = autolinkTree('https://example.com/路径');
+    transform(tree);
+    const para = tree.children[0] as Paragraph;
+    const link = para.children[0] as Link;
+    expect(link.url).toBe('https://example.com/路径');
+    expect(para.children).toHaveLength(1);
+  });
+
+  it('混合 ASCII/CJK 路径保留：https://example.com/2024年报告', () => {
+    const tree = autolinkTree('https://example.com/2024年报告');
+    transform(tree);
+    const para = tree.children[0] as Paragraph;
+    const link = para.children[0] as Link;
+    expect(link.url).toBe('https://example.com/2024年报告');
+    expect(para.children).toHaveLength(1);
+  });
+
+  it('无标点的汉字跟在 ASCII 词后也保留（IRI，不按脚本猜测）', () => {
     const tree = autolinkTree('https://example.com/path这是说明');
     transform(tree);
     const para = tree.children[0] as Paragraph;
     const link = para.children[0] as Link;
-    const tail = para.children[1] as Text;
-    expect(link.url).toBe('https://example.com/path');
-    expect(tail.value).toBe('这是说明');
+    expect(link.url).toBe('https://example.com/path这是说明');
+    expect(para.children).toHaveLength(1);
   });
 
-  it('URL + 日文假名：https://example.com/fooこんにちは', () => {
+  it('URL + 日文假名路径保留：https://example.com/fooこんにちは', () => {
     const tree = autolinkTree('https://example.com/fooこんにちは');
     transform(tree);
     const para = tree.children[0] as Paragraph;
     const link = para.children[0] as Link;
-    const tail = para.children[1] as Text;
-    expect(link.url).toBe('https://example.com/foo');
-    expect(tail.value).toBe('こんにちは');
+    expect(link.url).toBe('https://example.com/fooこんにちは');
+    expect(para.children).toHaveLength(1);
   });
 
   it('URL + 全角感叹号：https://example.com/path！wow', () => {
@@ -189,15 +231,13 @@ describe('remarkTruncateCjkUrls', () => {
     expect(tail.value).toBe('**(完整');
   });
 
-  it('Markdown 装饰残留仍剥掉 trailing _ 和 ~', () => {
+  it('无标点的 _~ 加汉字视为路径，不按脚本切断', () => {
     const tree = autolinkTree('https://github.com/makecindy/cindy/pull/90_~说明');
     transform(tree);
     const para = tree.children[0] as Paragraph;
     const link = para.children[0] as Link;
-    const tail = para.children[1] as Text;
-    expect(link.url).toBe('https://github.com/makecindy/cindy/pull/90');
-    expect((link.children[0] as Text).value).toBe('https://github.com/makecindy/cindy/pull/90');
-    expect(tail.value).toBe('_~说明');
+    expect(link.url).toBe('https://github.com/makecindy/cindy/pull/90_~说明');
+    expect(para.children).toHaveLength(1);
   });
 
   it('ASCII prose 截断时保留 URL 尾部合法 markdown 字符', () => {
@@ -211,15 +251,13 @@ describe('remarkTruncateCjkUrls', () => {
     expect(tail.value).toBe('(draft');
   });
 
-  it('ASCII prose 截断先于 CJK boundary 时保留 URL 尾部合法 markdown 字符', () => {
+  it('配对括号内的汉字保留：https://example.com/Foo_(draft说明)', () => {
     const tree = autolinkTree('https://example.com/Foo_(draft说明)');
     transform(tree);
     const para = tree.children[0] as Paragraph;
     const link = para.children[0] as Link;
-    const tail = para.children[1] as Text;
-    expect(link.url).toBe('https://example.com/Foo_');
-    expect((link.children[0] as Text).value).toBe('https://example.com/Foo_');
-    expect(tail.value).toBe('(draft说明)');
+    expect(link.url).toBe('https://example.com/Foo_(draft说明)');
+    expect(para.children).toHaveLength(1);
   });
 
   it('ASCII prose 截断时保留 URL 尾部合法多字符 markdown 字符', () => {
@@ -233,24 +271,22 @@ describe('remarkTruncateCjkUrls', () => {
     expect(tail.value).toBe('(draft');
   });
 
-  it('URL 尾部半角句点 + 中文：https://x.com/foo.说明 → 剥掉 .', () => {
+  it('半角句点后的汉字保留在路径里：https://x.com/foo.说明', () => {
     const tree = autolinkTree('https://x.com/foo.说明');
     transform(tree);
     const para = tree.children[0] as Paragraph;
     const link = para.children[0] as Link;
-    const tail = para.children[1] as Text;
-    expect(link.url).toBe('https://x.com/foo');
-    expect(tail.value).toBe('.说明');
+    expect(link.url).toBe('https://x.com/foo.说明');
+    expect(para.children).toHaveLength(1);
   });
 
-  it('URL 尾部半角分号 + 中文：https://x.com/foo;说明 → 剥掉 ;', () => {
+  it('半角分号后的汉字保留在路径里：https://x.com/foo;说明', () => {
     const tree = autolinkTree('https://x.com/foo;说明');
     transform(tree);
     const para = tree.children[0] as Paragraph;
     const link = para.children[0] as Link;
-    const tail = para.children[1] as Text;
-    expect(link.url).toBe('https://x.com/foo');
-    expect(tail.value).toBe(';说明');
+    expect(link.url).toBe('https://x.com/foo;说明');
+    expect(para.children).toHaveLength(1);
   });
 
   it('未配对的 ) 被剥掉：https://x.com/foo)（说明）', () => {
@@ -634,15 +670,12 @@ describe('remarkTruncateCjkUrls', () => {
     expect(tail.value).toBe("'");
   });
 
-  it("有 opening apostrophe 且 URL 后接 CJK 时也剥掉包裹 apostrophe", () => {
+  it("opening apostrophe 后的 path'汉字 视为 IRI，不按脚本切断", () => {
     const tree = apostropheWrappedAutolinkTree("https://example.com/path'说明");
     transform(tree);
     const para = tree.children[0] as Paragraph;
     const link = para.children[1] as Link;
-    const tail = para.children[2] as Text;
-    expect(link.url).toBe('https://example.com/path');
-    expect((link.children[0] as Text).value).toBe('https://example.com/path');
-    expect(tail.value).toBe("'说明");
+    expect(link.url).toBe("https://example.com/path'说明");
   });
 
   it('纯 ASCII autolink 也剥掉尾部分号：https://x.com/foo; next', () => {

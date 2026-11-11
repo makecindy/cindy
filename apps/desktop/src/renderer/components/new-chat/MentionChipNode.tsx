@@ -1,3 +1,4 @@
+import { FileTypeIcon } from '@/components/ui/file-type-icon';
 /**
  * Atomic Tiptap node for file, directory, Agent, command, conversation and
  * project references in the composer. The React NodeView keeps all reference
@@ -8,11 +9,12 @@ import { Node, mergeAttributes } from '@tiptap/core';
 import { NodeViewWrapper, ReactNodeViewRenderer, type NodeViewProps } from '@tiptap/react';
 import { useEffect, useState } from 'react';
 import {
+  Bot,
   CornerDownRight,
-  File,
   Folder,
   FolderOpen,
   Globe2,
+  ListTodo,
   MessageSquareQuote,
   Monitor,
   Plug,
@@ -20,6 +22,9 @@ import {
 } from 'lucide-react';
 
 import { InlineReferenceChip } from '@/components/chat/InlineReferenceChip';
+import { useInstalledGhosts } from '@/cindy-brain/useInstalledGhosts';
+import { findInstalledGhostByInstanceId } from '../../../shared/pluginIdentity';
+import { GhostPluginIcon } from '@/features/plugin/GhostPluginIcon';
 import { parseSessionDeepLinkHref } from '@/lib/deepLink';
 
 import { resolvePastedSessionMessageText } from './sessionLinkPaste';
@@ -35,7 +40,10 @@ export interface MentionChipAttrs {
     | 'project'
     | 'browser-tab'
     | 'desktop-window'
-    | 'plugin-resource';
+    | 'bot'
+    | 'todo'
+    | 'plugin-resource'
+    | 'plugin-capability';
   /** Visible basename, Agent name, command, conversation title/message or project name. */
   label: string;
   /** Serialization path/deep-link. */
@@ -49,6 +57,8 @@ export interface MentionChipAttrs {
   sourceLabel?: string;
   /** Plugin-provided one-line resource summary. */
   sourceDescription?: string;
+  /** Host-verified Plugin identity for a Host capability invocation chip. */
+  pluginId?: string;
 }
 
 function displayLabel(attrs: MentionChipAttrs): string {
@@ -58,13 +68,16 @@ function displayLabel(attrs: MentionChipAttrs): string {
 }
 
 function MentionIcon({ attrs }: { attrs: MentionChipAttrs }) {
+  if (attrs.kind === 'plugin-capability') return <PluginCapabilityIcon attrs={attrs} />;
   if (attrs.kind === 'slash') return null;
-  if (attrs.kind === 'file') return <File aria-hidden />;
+  if (attrs.kind === 'file') return <FileTypeIcon name={attrs.path} />;
   if (attrs.kind === 'dir') return <Folder aria-hidden />;
   if (attrs.kind === 'agent') return <Sparkles aria-hidden />;
   if (attrs.kind === 'project') return <FolderOpen aria-hidden />;
   if (attrs.kind === 'browser-tab') return <Globe2 aria-hidden />;
   if (attrs.kind === 'desktop-window') return <Monitor aria-hidden />;
+  if (attrs.kind === 'bot') return <Bot aria-hidden />;
+  if (attrs.kind === 'todo') return <ListTodo aria-hidden />;
   if (attrs.kind === 'plugin-resource') return <Plug aria-hidden />;
   return parseSessionDeepLinkHref(attrs.path)?.messageClientId ? (
     <MessageSquareQuote aria-hidden />
@@ -73,13 +86,35 @@ function MentionIcon({ attrs }: { attrs: MentionChipAttrs }) {
   );
 }
 
+function PluginCapabilityIcon({ attrs }: { attrs: MentionChipAttrs }) {
+  const installedGhosts = useInstalledGhosts();
+  const pluginId = attrs.pluginId?.trim() || attrs.label;
+  const ghost = findInstalledGhostByInstanceId(installedGhosts, pluginId);
+
+  return (
+    <GhostPluginIcon
+      iconDataUrl={ghost?.iconDataUrl}
+      iconId={pluginId}
+      iconName={ghost?.manifest.name ?? attrs.sourceLabel ?? attrs.label}
+      size="mini"
+    />
+  );
+}
+
 function MentionChipNodeView({ node, selected }: NodeViewProps) {
   const attrs = node.attrs as MentionChipAttrs;
   const label = displayLabel(attrs).replace(/\s+/g, ' ').trim();
-  const [tooltip, setTooltip] = useState(displayLabel(attrs));
+  const initialTooltip =
+    attrs.kind === 'plugin-capability' && attrs.sourceLabel
+      ? attrs.sourceLabel
+      : displayLabel(attrs);
+  const [tooltip, setTooltip] = useState(initialTooltip);
 
   useEffect(() => {
-    const fallback = displayLabel(attrs);
+    const fallback =
+      attrs.kind === 'plugin-capability' && attrs.sourceLabel
+        ? attrs.sourceLabel
+        : displayLabel(attrs);
     const target = attrs.kind === 'session' ? parseSessionDeepLinkHref(attrs.path) : null;
     if (!target?.messageClientId) {
       setTooltip(fallback);
@@ -96,7 +131,7 @@ function MentionChipNodeView({ node, selected }: NodeViewProps) {
     return () => {
       cancelled = true;
     };
-  }, [attrs.kind, attrs.label, attrs.path]);
+  }, [attrs.kind, attrs.label, attrs.path, attrs.sourceLabel]);
 
   return (
     <NodeViewWrapper
@@ -110,6 +145,7 @@ function MentionChipNodeView({ node, selected }: NodeViewProps) {
       data-agent-text-truncated={attrs.agentTextTruncated ? 'true' : undefined}
       data-source-label={attrs.sourceLabel}
       data-source-description={attrs.sourceDescription}
+      data-plugin-id={attrs.pluginId}
       data-drag-handle=""
       draggable={true}
       contentEditable={false}
@@ -134,7 +170,7 @@ function MentionChipNodeView({ node, selected }: NodeViewProps) {
 const FALLBACK_CHIP_CLASS =
   'inline-flex min-w-0 max-w-[min(240px,55vw)] select-none items-center align-middle ' +
   'gap-1.5 rounded-full border border-[var(--border-default)] px-2 py-0.5 ' +
-  'bg-[var(--surface-chip)] text-[var(--text-primary)] text-[12px] font-normal leading-5';
+  'bg-[var(--surface-chip)] text-[var(--text-primary)] text-12 font-normal leading-5';
 
 export const MentionChipNode = Node.create<Record<string, never>, Record<string, never>>({
   name: 'mentionChip',
@@ -169,32 +205,34 @@ export const MentionChipNode = Node.create<Record<string, never>, Record<string,
       agentText: {
         default: undefined,
         parseHTML: (element) => element.getAttribute('data-agent-text'),
-        renderHTML: (attrs) => (
-          typeof attrs.agentText === 'string' ? { 'data-agent-text': attrs.agentText } : {}
-        ),
+        renderHTML: (attrs) =>
+          typeof attrs.agentText === 'string' ? { 'data-agent-text': attrs.agentText } : {},
       },
       agentTextTruncated: {
         default: undefined,
         parseHTML: (element) => element.getAttribute('data-agent-text-truncated') === 'true',
-        renderHTML: (attrs) => (
-          attrs.agentTextTruncated ? { 'data-agent-text-truncated': 'true' } : {}
-        ),
+        renderHTML: (attrs) =>
+          attrs.agentTextTruncated ? { 'data-agent-text-truncated': 'true' } : {},
       },
       sourceLabel: {
         default: undefined,
         parseHTML: (element) => element.getAttribute('data-source-label'),
-        renderHTML: (attrs) => (
-          typeof attrs.sourceLabel === 'string' ? { 'data-source-label': attrs.sourceLabel } : {}
-        ),
+        renderHTML: (attrs) =>
+          typeof attrs.sourceLabel === 'string' ? { 'data-source-label': attrs.sourceLabel } : {},
       },
       sourceDescription: {
         default: undefined,
         parseHTML: (element) => element.getAttribute('data-source-description'),
-        renderHTML: (attrs) => (
+        renderHTML: (attrs) =>
           typeof attrs.sourceDescription === 'string'
             ? { 'data-source-description': attrs.sourceDescription }
-            : {}
-        ),
+            : {},
+      },
+      pluginId: {
+        default: undefined,
+        parseHTML: (element) => element.getAttribute('data-plugin-id'),
+        renderHTML: (attrs) =>
+          typeof attrs.pluginId === 'string' ? { 'data-plugin-id': attrs.pluginId } : {},
       },
     };
   },
@@ -210,7 +248,8 @@ export const MentionChipNode = Node.create<Record<string, never>, Record<string,
       'data-mention-chip': '',
       'aria-label': displayLabel(attrs),
       class: FALLBACK_CHIP_CLASS,
-      style: 'color: var(--text-primary); user-select: none; -webkit-user-select: none; -webkit-user-drag: element;',
+      style:
+        'color: var(--text-primary); user-select: none; -webkit-user-select: none; -webkit-user-drag: element;',
       draggable: 'true',
       contenteditable: 'false',
     });
@@ -277,11 +316,25 @@ const ICON_PATHS: Record<Exclude<MentionChipAttrs['kind'], 'slash'>, string[]> =
     'M8 21h8',
     'M12 17v4',
   ],
-  'plugin-resource': [
-    'M12 22v-5',
-    'M9 8V2',
-    'M15 8V2',
-    'M18 8v5a6 6 0 0 1-12 0V8Z',
+  bot: [
+    'M12 8V4H8',
+    'M2 14h2',
+    'M20 14h2',
+    'M15 13v2',
+    'M9 13v2',
+    'M6 18h12a2 2 0 0 0 2-2v-4a6 6 0 0 0-6-6h-4a6 6 0 0 0-6 6v4a2 2 0 0 0 2 2Z',
+  ],
+  todo: [
+    'M4 5h4a1 1 0 0 1 1 1v4a1 1 0 0 1-1 1H4a1 1 0 0 1-1-1V6a1 1 0 0 1 1-1Z',
+    'm3 17 2 2 4-4',
+    'M13 6h8',
+    'M13 12h8',
+    'M13 18h8',
+  ],
+  'plugin-resource': ['M12 22v-5', 'M9 8V2', 'M15 8V2', 'M18 8v5a6 6 0 0 1-12 0V8Z'],
+  'plugin-capability': [
+    'M18 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V4a2 2 0 0 0-2-2Z',
+    'M9 18h6',
   ],
 };
 

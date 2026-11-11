@@ -27,7 +27,13 @@ import { EmbeddingError } from '@cindy/embedding-client';
 
 import type { createLogger } from '../logger';
 import type { DbClient } from '../localDb/client/DbClient';
-import { getProvider, type EmbeddingJobForProvider } from './providers';
+import {
+  getProvider,
+  isProviderSuspended,
+  listSuspendedProviderSources,
+  setProviderSuspended,
+  type EmbeddingJobForProvider,
+} from './providers';
 
 const TICK_INTERVAL_MS = 5_000;
 const BATCH_SIZE = 32;
@@ -176,15 +182,21 @@ export class EmbeddingWorker {
     this.suspendedWarned = false;
 
     const now = Date.now();
+    const suspendedSources = listSuspendedProviderSources();
+    const sourceFilter =
+      suspendedSources.length === 0
+        ? ''
+        : ` AND source NOT IN (${suspendedSources.map(() => '?').join(',')})`;
 
-    // 1. 取一批 pending job
+    // 1. 取一批 pending job。暂停的 consumer source 在 SQL 层排除,避免它的旧 job
+    // 占满 LIMIT 后饿死仍可用的插件 source。
     const jobs = await this.opts.getDbClient().query<JobRow>(
       `SELECT rowid, source, source_id, chunk_index, model_id, vec_table, attempts
            FROM embedding_jobs
-          WHERE status = 'pending' AND scheduled_at <= ?
+          WHERE status = 'pending' AND scheduled_at <= ?${sourceFilter}
           ORDER BY scheduled_at ASC
           LIMIT ?`,
-      [now, BATCH_SIZE],
+      [now, ...suspendedSources, BATCH_SIZE],
     );
 
     this.lastTickAt = now;
@@ -210,6 +222,8 @@ export class EmbeddingWorker {
     for (const [source, sourceJobs] of bySource.entries()) {
       // 退出检查点: stop() 已触发就立即收手, 不再碰 DB (让出锁给 db.backup)。
       if (this.aborted) return;
+      // query 后 availability 可能变化;动态 gate 防止快照里的旧 source 继续下单。
+      if (isProviderSuspended(source)) continue;
       const provider = getProvider(source);
       if (!provider) {
         // 没注册的 Provider 不动 status, 让用户 / 后续注册路径自然处理
@@ -233,6 +247,7 @@ export class EmbeddingWorker {
         }));
         texts = await provider.getTextsForJobs(arg);
       } catch (err) {
+        if (isProviderSuspended(source)) continue;
         // Provider 抛错: 整批走可重试错误 (与 embedding API 失败同语义)
         this.opts.log.error(
           JSON.stringify({
@@ -251,6 +266,7 @@ export class EmbeddingWorker {
       }
       // 退出检查点: getTextsForJobs 的 await 期间可能已触发 stop(), 写库前再确认。
       if (this.aborted) return;
+      if (isProviderSuspended(source)) continue;
       const textByRowid = new Map(texts.map((t) => [t.rowid, t.text]));
 
       // 3a. text === null 的 job 直接 done (不调 API)
@@ -258,6 +274,8 @@ export class EmbeddingWorker {
       if (noTextJobs.length > 0) {
         await this.markDoneNoVector(noTextJobs);
         doneCount += noTextJobs.length;
+        if (this.aborted) return;
+        if (isProviderSuspended(source)) continue;
       }
 
       const liveJobs = sourceJobs.filter((j) => (textByRowid.get(j.rowid) ?? null) !== null);
@@ -289,6 +307,7 @@ export class EmbeddingWorker {
           // 退出检查点: embed() 网络往返期间可能已触发 stop(), 绝不在 abort 后再开
           // 写事务 (这是保证 db.backup 无争用的关键)。该批 job 保持 pending, 下次续跑。
           if (this.aborted) return;
+          if (isProviderSuspended(source)) break;
           // 5. 同步事务: INSERT vec + UPDATE jobs
           await this.commitEmbeddings(modelJobs, res.embeddings);
           doneCount += modelJobs.length;
@@ -303,6 +322,8 @@ export class EmbeddingWorker {
             }),
           );
         } catch (err) {
+          // availability 可能在网络往返期间丢失;保留 pending,不要把它记成失败重试。
+          if (isProviderSuspended(source)) break;
           const code = err instanceof EmbeddingError ? err.code : 'UNKNOWN';
           const msg = err instanceof Error ? err.message : String(err);
           this.opts.log.error(
@@ -315,11 +336,47 @@ export class EmbeddingWorker {
               count: modelJobs.length,
             }),
           );
-          // AUTH_FAILED / INVALID_MODEL 在 client 内已经判断为不可重试 — 但 worker 这层
-          // 不分代码, 一律走 backoff + attempts 计数, MAX_ATTEMPTS 后 → 'failed'。
-          // 这样 INVALID_MODEL 不会立刻冲 5 次烧 token, 因为 client 抛错前没打 API。
-          const fc = await this.recordFailureBatch(modelJobs, `[${code}] ${msg}`);
+          // #3416:INVALID_MODEL 是确定性失败(模型 id 对当前端点必然 400,
+          // 目录门禁只查打包 catalog、不碰真实端点,自配置网关下必失配)——
+          // 重试永远不可能成功。整批立即终态 + 熔断该 source:后续 tick 的
+          // SQL 过滤(listSuspendedProviderSources)不再取它的 job,语义索引
+          // 停止空转;熔断态可经 isEmbeddingSourceSuspended 查询。挂起是
+          // 内存态,重启后首批失败会再次熔断,端点修好后自然恢复。
+          // 其余错误码(AUTH_FAILED 可因重登恢复、网络/限流为瞬态)维持
+          // 既有 backoff + attempts 计数语义不变。
+          //
+          // 但 INVALID_MODEL 这个 code 本身语义过宽(review #3674 P1):client 的
+          // mapStatusToCode 把 400/404/422 乃至一切未识别状态都映射成它,输入级
+          // 400(单条超长/畸形输入)会被误判成模型级失配。code 不可靠,判据改成
+          // 确定性是否跟着"模型"走 —— 用极小探针输入对同 model 补发一次探测:
+          //   - 探针同样 INVALID_MODEL → 端点确实不吃这个模型(#3416 场景)→ 终态+熔断;
+          //   - 探针成功 → 模型可用,是这批输入的问题 → 维持既有 backoff 语义
+          //     (确定性输入错误按 attempts 上限有界收敛,与修复前行为一致);
+          //   - 探针遇到其它错误(网络/限流)→ 不下结论,fail-open 不熔断。
+          // 成本有界:模型级场景熔断后不再产生新探针;输入级场景每 (source, model)
+          // 每 tick 至多一次。
+          const terminal =
+            code === 'INVALID_MODEL' && !this.aborted
+              ? await this.probeModelLevelInvalidModel(source, modelId as string)
+              : false;
+          // 探针是一次网络往返,期间可能已触发 stop() —— 与 embed 后的检查点同款,
+          // abort 后绝不再开写事务;该批 job 保持 pending,下次启动续跑。
+          if (this.aborted) return;
+          if (isProviderSuspended(source)) break;
+          const fc = await this.recordFailureBatch(modelJobs, `[${code}] ${msg}`, terminal);
           failCount += fc;
+          if (terminal && !isProviderSuspended(source)) {
+            setProviderSuspended(source, true);
+            this.opts.log.error(
+              JSON.stringify({
+                event: 'embeddingWorker.source.suspendedTerminal',
+                source,
+                modelId,
+                code,
+                reason: 'deterministic embedding failure; suspending source until restart or manual resume',
+              }),
+            );
+          }
         }
       }
     }
@@ -332,6 +389,46 @@ export class EmbeddingWorker {
         failCount,
       }),
     );
+  }
+
+  /**
+   * INVALID_MODEL 的模型级/输入级仲裁探针(review #3674 P1)。
+   * 返回 true = 端点对极小合法输入也报 INVALID_MODEL,确认模型级失配,
+   * 调方可安全终态化并熔断;其余一律 false(探针成功 = 输入级;探针遇到
+   * 别的错误 = 不下结论,fail-open 交回既有 backoff)。
+   * 探针文本带时间戳后缀绕开 client 的 LRU 缓存 —— 命中旧缓存的"成功"
+   * 证明不了端点现在的状态。本地 catalog 白名单外的模型在 client 入口
+   * 同步抛 INVALID_MODEL,探针不打网络、零成本得出模型级结论。
+   */
+  private async probeModelLevelInvalidModel(source: string, modelId: string): Promise<boolean> {
+    try {
+      await this.opts.getClient().embed({
+        texts: [`cindy embedding probe ${Date.now()}`],
+        model: modelId as never,
+      });
+      this.opts.log.warn(
+        JSON.stringify({
+          event: 'embeddingWorker.invalidModelProbe.requestLevel',
+          source,
+          modelId,
+          reason: 'probe input embedded fine; batch failure is input-specific, keeping backoff semantics',
+        }),
+      );
+      return false;
+    } catch (probeErr) {
+      const probeCode = probeErr instanceof EmbeddingError ? probeErr.code : 'UNKNOWN';
+      if (probeCode === 'INVALID_MODEL') return true;
+      this.opts.log.warn(
+        JSON.stringify({
+          event: 'embeddingWorker.invalidModelProbe.inconclusive',
+          source,
+          modelId,
+          probeCode,
+          reason: 'probe failed with a different code; not suspending',
+        }),
+      );
+      return false;
+    }
   }
 
   /**
@@ -370,12 +467,17 @@ export class EmbeddingWorker {
    * attempts >= MAX → status='failed' 终态。
    * 返回失败数量 (>= MAX 进 'failed' 终态的部分)。
    */
-  private async recordFailureBatch(jobs: JobRow[], errMsg: string): Promise<number> {
+  private async recordFailureBatch(
+    jobs: JobRow[],
+    errMsg: string,
+    terminal = false,
+  ): Promise<number> {
     const now = Date.now();
     const result = await this.opts.getDbClient().tx('embedding.recordFailures', {
       jobs: jobs.map((job) => ({ rowid: job.rowid, attempts: job.attempts })),
       errMsg: truncate(errMsg, 2000),
       now,
+      terminal,
     });
     return result.failCount;
   }

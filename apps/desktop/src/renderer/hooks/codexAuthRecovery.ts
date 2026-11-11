@@ -13,3 +13,20 @@ export function isCodexOAuthReconnectRequired(reason: string | undefined): boole
     reason,
   );
 }
+
+export type CodexCredentialScope = 'system-shared' | 'instance-isolated' | 'unknown';
+
+export function codexRecoveryDescriptionKey(scope: CodexCredentialScope): string {
+  if (scope === 'system-shared') return 'chatgptAuthRecovery.systemSharedInvalidated';
+  if (scope === 'instance-isolated') return 'chatgptAuthRecovery.instanceIsolatedInvalidated';
+  return 'chatgptAuthRecovery.unknownInvalidated';
+}
+
+export function codexRecoveryActionKey(
+  scope: CodexCredentialScope,
+  check: 'idle' | 'checking' | 'failed',
+): string {
+  if (check === 'checking') return 'chatgptAuthRecovery.checking';
+  if (check === 'failed') return 'chatgptAuthRecovery.recheck';
+  return scope === 'system-shared' ? 'chatgptAuthRecovery.openApp' : 'chatgptAuthRecovery.relogin';
+}

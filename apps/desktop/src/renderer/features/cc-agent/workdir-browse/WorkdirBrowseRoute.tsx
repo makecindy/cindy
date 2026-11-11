@@ -40,12 +40,18 @@ import { useConfirmDialog } from '@/components/ui/confirm-dialog-provider';
 import { makerChatStore } from '@/lib/makerChatStore';
 import { discardDraft as discardComposerDraft } from '@/lib/composerDraftStore';
 import { fetchDirtyWorktreeForRemoval } from '@/lib/worktreeRemovalWarning';
+import {
+  archiveScheduleWarning,
+  loadActiveBoundScheduleNames,
+} from '@/features/scheduler/lib/archiveScheduleWarning';
 import * as sessionService from '@/lib/sessionService';
 import { getDraft, getFastModeForModel } from '@/state/newMakerDraft';
 import { isAgentIslandSupported } from '@/hooks/useAgentIslandSettings';
 import { resolveAgentIslandVisibleSessionIdForWorkdirBrowseRail } from '@/lib/agentIslandVisibleSessionRoute';
 import type { AgentKind } from '@/lib/ccAgent.types';
 import { CCAgentSessionView } from '../CCAgentSessionView';
+import { CindyMakeSessionGate } from '../CindyMakeSessionGate';
+import { CINDY_MAKE_ENABLED, isCindyMakeSource } from '@cindy/maker-shared/cindy-make-feature';
 import {
   comparePinnedByStatusThenPinnedDesc,
   compareSessionsByStatusThenSortTimeDesc,
@@ -75,6 +81,15 @@ import {
 const log = createLogger('cc-agent.workdir-browse.route');
 
 export function WorkdirBrowseRoute() {
+  const { sessionId } = useParams<{ sessionId: string }>();
+  return (
+    <CindyMakeSessionGate sessionId={sessionId}>
+      <WorkdirBrowseContent />
+    </CindyMakeSessionGate>
+  );
+}
+
+function WorkdirBrowseContent() {
   const { t } = useTranslation();
   const { sessionId } = useParams<{ sessionId: string }>();
   const [searchParams, setSearchParams] = useSearchParams();
@@ -93,7 +108,7 @@ export function WorkdirBrowseRoute() {
   // 断链/重连后列表变化会重渲染)。
   const remoteMirrorSessions = useSyncExternalStore(
     remoteProjectsStore.subscribe,
-    remoteProjectsStore.getMergedRemoteSessions,
+    remoteProjectsStore.getVisibleMergedRemoteSessions,
   );
   const currentSession = useMemo(
     () =>
@@ -159,6 +174,7 @@ export function WorkdirBrowseRoute() {
       (s) =>
         projectIdentityKeyForSession(s) === currentProjectKey &&
         s.status === 'active' &&
+        (CINDY_MAKE_ENABLED || !isCindyMakeSource(s.source)) &&
         !isOrcaWorkerSession(s),
     );
     return list.slice().sort((a, b) => {
@@ -344,17 +360,23 @@ export function WorkdirBrowseRoute() {
         // resolveSession 失败不阻断后续 confirm —— 与 sidebar 单条 archive 行为一致。
       }
 
+      const scheduleNames =
+        (await loadActiveBoundScheduleNames([
+          { id: closingId, deviceLinkDeviceId: closing?.deviceLinkDeviceId },
+        ])).get(closingId) ?? [];
       const dirtyWorktree = await fetchDirtyWorktreeForRemoval(
         closingId,
         closing?.deviceLinkDeviceId,
       );
       const ok = await confirmDialog({
         title: t('ccAgent.workdirBrowse.archiveSession.title'),
-        description:
-          t('ccAgent.workdirBrowse.archiveSession.description', { title: closingTitle }) +
-          (dirtyWorktree
-            ? ' ' + t('ccAgent.sidebar.confirmArchive.dirtyWorktreeWarning')
-            : ''),
+        description: [
+          t('ccAgent.workdirBrowse.archiveSession.description', { title: closingTitle }),
+          dirtyWorktree ? t('ccAgent.sidebar.confirmArchive.dirtyWorktreeWarning') : '',
+          archiveScheduleWarning(t, scheduleNames),
+        ]
+          .filter(Boolean)
+          .join(' '),
         confirmText: t('ccAgent.workdirBrowse.archiveSession.confirm'),
         cancelText: t('ccAgent.workdirBrowse.archiveSession.cancel'),
       });
@@ -402,11 +424,11 @@ export function WorkdirBrowseRoute() {
         await sessionService.patchMeta(id, { title: newTitle });
       } catch (err) {
         log.error('[session rename] doc mode', err);
-        toast.error('重命名失败');
+        toast.error(t('ccAgent.sidebar.renameFailed'));
         if (oldTitle !== undefined) sessionsHook.patchLocal(id, { title: oldTitle });
       }
     },
-    [sessionsHook],
+    [sessionsHook, t],
   );
 
   // 关闭最后一个 tab / 关闭无邻居的 active tab → 清空 ?file= + 清空 selectedFile，
@@ -556,7 +578,7 @@ export function WorkdirBrowseRoute() {
           里, 不让它触发 doc 列重新 layout。size 不能加, rail 宽度由
           rail.width style 接管, 高度需要继承父 flex 的 100%。 */}
       {/* 折叠 / 展开 width 过渡:对标 MainLayout / Sidebar 的折叠动画 ——
-          transition-[width] 250ms cubic-bezier(0.4, 0, 0.2, 1)。motion-reduce
+          transition-[width] var(--motion-base) / var(--motion-ease-move)。motion-reduce
           兜住"系统级减少动效"用户。
           width 来源:展开 → useChatRailResize 持久化的宽度;折叠 → 0。
           aria-hidden 在折叠态打开, 让 SR 跳过被裁掉的子树。
@@ -567,7 +589,7 @@ export function WorkdirBrowseRoute() {
         aria-hidden={railCollapse.collapsed || undefined}
         className={cn(
           'h-full shrink-0 flex flex-col min-h-0 [contain:layout_paint_style]',
-          'transition-[width] duration-[250ms] ease-[cubic-bezier(0.4,0,0.2,1)] motion-reduce:duration-0',
+          'transition-[width] duration-[var(--motion-base)] ease-[var(--motion-ease-move)] motion-reduce:duration-0',
           // 拖宽度时禁用 transition, 否则拖动有延迟跟手感受会很糟。useChatRailResize
           // 的 isDragging 已经覆盖这一帧, 加上 !transition 让宽度 1:1 跟随鼠标。
           rail.isDragging && '!transition-none',

@@ -175,6 +175,25 @@ export async function closeOrcaWorkersTabAfterTeamEnd(leadSessionId: string): Pr
   await closeTab(leadSessionId, tab.id, { skipBeforeClose: true });
 }
 
+/**
+ * 在本 renderer 已有的协同 tab 上写入「打开这个 Worker」意图。
+ * 分离窗合并回主窗前使用：意图随 tab 状态(SQLite 或交接快照)到主窗，由主窗协同 tab
+ * 消费并选中该 Worker；不改 Team 级 focused worker。返回写入的意图 revision。
+ */
+export async function writeOrcaWorkersFocusIntent(
+  leadSessionId: string,
+  tabId: string,
+  workerSessionId: string,
+): Promise<number | null> {
+  let revision: number | null = null;
+  await patchTabState(leadSessionId, tabId, (state) => {
+    const next = withWorkerOpenIntent(state, { focusWorkerSessionId: workerSessionId });
+    revision = next.focusWorkerHintRevision ?? null;
+    return next;
+  });
+  return revision;
+}
+
 async function consumeOrcaWorkersIntent(
   leadSessionId: string,
   tabId: string,

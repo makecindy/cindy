@@ -2,11 +2,10 @@
  * rightSidebarWindowState —— 「侧边栏在新窗口中显示」状态的 renderer 端镜像。
  *
  * Source of truth 在 main(right-sidebar-window/controller.ts + settings-store):
- *   - detached: 持久化偏好
+ *   - detached: 当前进程内的分离状态
  *   - open:     子窗口运行时开闭
  * 两者都经 `maker:rsb-window:state-changed` 广播到所有窗口,这里只做内存镜像 +
- * useSyncExternalStore 订阅(open 是运行时状态,**不落 localStorage**——重启后
- * 由 bootstrapRsbWindowState 从 main 拉真值)。
+ * useSyncExternalStore 订阅；两者都不落 localStorage，客户端重启后回到主窗口。
  *
  * MainLayout 用它决定:内嵌右侧栏是否渲染、展开按钮的语义(内嵌展开 vs 开子窗口)。
  */
@@ -18,6 +17,8 @@ export interface RsbWindowUiState {
   loaded: boolean;
   detached: boolean;
   open: boolean;
+  hostSessionId?: string | null;
+  userClose?: boolean;
 }
 
 function initialState(): RsbWindowUiState {
@@ -37,8 +38,15 @@ let bootstrapPromise: Promise<{
 } | null> | null = null;
 
 function setState(next: RsbWindowUiState): void {
-  if (state.loaded === next.loaded && state.detached === next.detached && state.open === next.open)
+  if (
+    state.loaded === next.loaded &&
+    state.detached === next.detached &&
+    state.open === next.open &&
+    state.hostSessionId === next.hostSessionId &&
+    state.userClose === next.userClose
+  ) {
     return;
+  }
   state = next;
   subscribers.forEach((cb) => cb());
 }
@@ -48,7 +56,13 @@ function ensureWired(): void {
   if (wired || isSecondaryWindow()) return;
   wired = true;
   window.electronAPI?.rightSidebarWindow?.onStateChanged((s) => {
-    setState({ loaded: true, detached: s.detached, open: s.open });
+    setState({
+      loaded: true,
+      detached: s.detached,
+      open: s.open,
+      ...(s.hostSessionId ? { hostSessionId: s.hostSessionId } : {}),
+      ...(s.userClose === false ? { userClose: false } : {}),
+    });
   });
 }
 
@@ -65,7 +79,7 @@ export function subscribeRsbWindowUiState(cb: () => void): () => void {
 }
 
 /**
- * 启动期从 main 拉全量 state(含 lastOpen,供重启恢复判断)。
+ * 启动期从 main 拉全量当前进程 state。
  * 失败兜底:静默,保持默认 { detached:false, open:false }(等广播纠正)。
  */
 export async function bootstrapRsbWindowState(): Promise<{
@@ -83,7 +97,12 @@ export async function bootstrapRsbWindowState(): Promise<{
     bootstrapPromise = (async () => {
       try {
         const s = await window.electronAPI.rightSidebarWindow.getState();
-        setState({ loaded: true, detached: s.detached, open: s.open });
+        setState({
+          loaded: true,
+          detached: s.detached,
+          open: s.open,
+          ...(s.hostSessionId ? { hostSessionId: s.hostSessionId } : {}),
+        });
         return s;
       } catch {
         // IPC 异常时明确落到 attached fallback，避免整个会话期永久卡在 unknown。

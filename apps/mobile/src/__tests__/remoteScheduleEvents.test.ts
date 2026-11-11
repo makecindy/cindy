@@ -1,9 +1,44 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { remoteScheduleEventStore } from '@/scheduler/remoteScheduleEvents';
+import { getScheduleIndexInvalidationVersion, loadSessionScheduleIndexThrottled, resetScheduleIndexThrottleForTesting } from '@/session/scheduleIndex';
 
 describe('remote schedule event store', () => {
   beforeEach(() => {
     remoteScheduleEventStore.clearAll();
+    resetScheduleIndexThrottleForTesting();
+  });
+
+  it('invalidates once before consumers reload and preserves unrelated device caches', async () => {
+    const load = vi.fn(async () => new Map());
+    const loadOther = vi.fn(async () => new Map());
+    await loadSessionScheduleIndexThrottled('dev-1', load);
+    await loadSessionScheduleIndexThrottled('dev-2', loadOther);
+    const requests: Promise<unknown>[] = [];
+    const off = remoteScheduleEventStore.subscribe(() => {
+      requests.push(loadSessionScheduleIndexThrottled('dev-1', load));
+      requests.push(loadSessionScheduleIndexThrottled('dev-1', load));
+    });
+    try {
+      remoteScheduleEventStore.apply('dev-1', { type: 'read', scheduleId: 'sched-1' });
+      await Promise.all(requests);
+      await loadSessionScheduleIndexThrottled('dev-2', loadOther);
+      expect(load).toHaveBeenCalledTimes(2);
+      expect(loadOther).toHaveBeenCalledTimes(1);
+      expect(getScheduleIndexInvalidationVersion('dev-1')).toBe(1);
+    } finally { off(); }
+  });
+
+  it('preserves a completed-event probe while read feedback does not request another probe', () => {
+    const probeVersion = () => {
+      const state = remoteScheduleEventStore.getSnapshot('dev-1');
+      return state.unreadVersion - state.unreadClearVersion;
+    };
+    remoteScheduleEventStore.apply('dev-1', { type: 'completed', scheduleId: 'sched-1', runId: 'run-1', sessionId: 'task-1' });
+    const completedVersion = probeVersion();
+    expect(completedVersion).toBeGreaterThan(0);
+    remoteScheduleEventStore.apply('dev-1', { type: 'read', scheduleId: 'sched-1' });
+    remoteScheduleEventStore.apply('dev-1', { type: 'all-read' });
+    expect(probeVersion()).toBe(completedVersion);
   });
 
   it('increments per-device versions for pushed schedule events', () => {
@@ -19,14 +54,16 @@ describe('remote schedule event store', () => {
     expect(remoteScheduleEventStore.getSnapshot('dev-1')).toMatchObject({
       runsVersion: 2,
       scheduleListVersion: 1,
-      sessionIndexVersion: 1,
+      // changed 与 fired 都会重拉侧栏索引(fired:认领清空了下次运行时间并插入运行中)。
+      sessionIndexVersion: 2,
       unreadVersion: 1,
       version: 2,
     });
     expect(remoteScheduleEventStore.getSnapshot('dev-2')).toMatchObject({
       runsVersion: 0,
       scheduleListVersion: 1,
-      sessionIndexVersion: 0,
+      // ready:宿主冷启 / 切账号后重标中断、重算下次运行,索引一并重拉。
+      sessionIndexVersion: 1,
       unreadVersion: 0,
       version: 1,
     });
@@ -44,17 +81,63 @@ describe('remote schedule event store', () => {
 
     const afterFirst = remoteScheduleEventStore.getMirrorInvalidationSnapshot();
     expect(afterFirst).not.toBe(before);
-    expect(afterFirst.get('dev-1')).toBe(1);
+    expect(afterFirst.get('dev-1')).toBeGreaterThan(0);
     expect(remoteScheduleEventStore.getVersion('dev-1')).toBe(0);
     expect(sub).toHaveBeenCalledTimes(1);
 
     remoteScheduleEventStore.invalidateDeviceMirror('dev-1');
     const afterSecond = remoteScheduleEventStore.getMirrorInvalidationSnapshot();
-    expect(afterSecond).not.toBe(afterFirst);
-    expect(afterSecond.get('dev-1')).toBe(2);
-    expect(sub).toHaveBeenCalledTimes(2);
+    expect(afterSecond).toBe(afterFirst);
+    expect(sub).toHaveBeenCalledTimes(1);
 
     off();
+  });
+
+  it.each([40, 80, 100])('batch-invalidates %i devices with a single notification', (count) => {
+    const sub = vi.fn();
+    const off = remoteScheduleEventStore.subscribe(sub);
+    const deviceIds = Array.from({ length: count }, (_, i) => `wave-dev-${i}`);
+
+    remoteScheduleEventStore.invalidateDeviceMirrors(deviceIds);
+
+    // 整波只 notify 一轮,而不是逐台 N 轮——逐台通知在设备数超过 React 嵌套
+    // 更新上限时致命退出(2026-09-10 Android 冷启动,40/80 台隔离复现)。
+    expect(sub).toHaveBeenCalledTimes(1);
+    const snapshot = remoteScheduleEventStore.getMirrorInvalidationSnapshot();
+    expect(snapshot.size).toBe(count);
+    for (const deviceId of deviceIds) expect(snapshot.get(deviceId)).toBeGreaterThan(0);
+
+    // Repeated offline verdicts without fresh data are not new transitions.
+    remoteScheduleEventStore.invalidateDeviceMirrors(deviceIds);
+    expect(sub).toHaveBeenCalledTimes(1);
+    expect(remoteScheduleEventStore.getMirrorInvalidationSnapshot()).toBe(snapshot);
+
+    off();
+  });
+
+  it('re-arms after a fresh event or recovery, with monotonic generations', () => {
+    remoteScheduleEventStore.invalidateDeviceMirrors(['a', 'a', '', 'b']);
+    const first = remoteScheduleEventStore.getMirrorInvalidationSnapshot();
+    const notify = vi.fn();
+    const off = remoteScheduleEventStore.subscribe(notify);
+    try {
+      for (let i = 0; i < 100; i++) remoteScheduleEventStore.invalidateDeviceMirrors(['a', 'b']);
+      expect(notify).not.toHaveBeenCalled();
+      expect(remoteScheduleEventStore.getMirrorInvalidationSnapshot()).toBe(first);
+      remoteScheduleEventStore.apply('a', { type: 'ready' });
+      remoteScheduleEventStore.invalidateDeviceMirrors(['a', 'b']);
+      const second = remoteScheduleEventStore.getMirrorInvalidationSnapshot();
+      expect(second.get('a')).toBeGreaterThan(first.get('a')!);
+      expect(second.get('b')).toBe(first.get('b'));
+      expect(remoteScheduleEventStore.getVersion('a')).toBe(0);
+      expect(notify).toHaveBeenCalledTimes(2);
+      remoteScheduleEventStore.clearDeviceMirrorInvalidation('a');
+      remoteScheduleEventStore.invalidateDeviceMirror('a');
+      expect(remoteScheduleEventStore.getMirrorInvalidationSnapshot().get('a')).toBeGreaterThan(second.get('a')!);
+      expect(notify).toHaveBeenCalledTimes(4);
+      remoteScheduleEventStore.clearDevice('a');
+      expect(remoteScheduleEventStore.getMirrorInvalidationSnapshot().has('a')).toBe(true);
+    } finally { off(); }
   });
 
   it('projects run lifecycle and read events into targeted refresh versions', () => {
@@ -62,7 +145,7 @@ describe('remote schedule event store', () => {
     expect(remoteScheduleEventStore.getSnapshot('dev-1')).toMatchObject({
       runsVersion: 1,
       scheduleListVersion: 0,
-      sessionIndexVersion: 0,
+      sessionIndexVersion: 1,
       unreadVersion: 0,
     });
 
@@ -75,7 +158,7 @@ describe('remote schedule event store', () => {
     expect(remoteScheduleEventStore.getSnapshot('dev-1')).toMatchObject({
       runsVersion: 2,
       scheduleListVersion: 0,
-      sessionIndexVersion: 1,
+      sessionIndexVersion: 2,
       unreadVersion: 1,
     });
     expect(remoteScheduleEventStore.getSnapshot('dev-1').lastProjection).toMatchObject({
@@ -91,10 +174,37 @@ describe('remote schedule event store', () => {
     remoteScheduleEventStore.apply('dev-1', { type: 'all-read' });
     expect(remoteScheduleEventStore.getSnapshot('dev-1')).toMatchObject({
       runsVersion: 3,
-      sessionIndexVersion: 2,
+      sessionIndexVersion: 3,
       unreadVersion: 2,
     });
     expect(remoteScheduleEventStore.getSnapshot('dev-1').lastProjection?.refresh.runRefresh).toEqual({ mode: 'all' });
+  });
+
+  it('ignores runtime-state diagnostics without invalidating, notifying, or replacing the last projection', () => {
+    remoteScheduleEventStore.apply('dev-1', {
+      type: 'completed', scheduleId: 'sched-1', runId: 'run-1', sessionId: 'chat-1',
+    });
+    const before = remoteScheduleEventStore.getSnapshot('dev-1');
+    const invalidationVersion = getScheduleIndexInvalidationVersion('dev-1');
+    const sub = vi.fn();
+    const off = remoteScheduleEventStore.subscribe(sub);
+    try {
+      remoteScheduleEventStore.apply('dev-1', { type: 'runtime-state', snapshot: { inFlight: 0 } });
+      expect(sub).not.toHaveBeenCalled();
+      expect(remoteScheduleEventStore.getSnapshot('dev-1')).toBe(before);
+      expect(getScheduleIndexInvalidationVersion('dev-1')).toBe(invalidationVersion);
+
+      // 未知的新类型仍走保守的全量刷新。
+      remoteScheduleEventStore.apply('dev-1', { type: 'future-event' });
+      expect(sub).toHaveBeenCalledTimes(1);
+      expect(getScheduleIndexInvalidationVersion('dev-1')).toBe(invalidationVersion + 1);
+      expect(remoteScheduleEventStore.getSnapshot('dev-1')).toMatchObject({
+        runsVersion: before.runsVersion + 1,
+        scheduleListVersion: before.scheduleListVersion + 1,
+        sessionIndexVersion: before.sessionIndexVersion + 1,
+        unreadVersion: before.unreadVersion + 1,
+      });
+    } finally { off(); }
   });
 
   it('unreadClearVersion 只随未读清除类事件(read / all-read)递增', () => {

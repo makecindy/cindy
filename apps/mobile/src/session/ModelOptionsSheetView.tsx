@@ -1,33 +1,44 @@
 /**
  * ModelOptionsSheetView —— 模型浮窗二级「模型选项」视图的内容(SheetSurface 的 children)。
  *
- * 承接原先行内 accordion 的配置区语义:顶部元信息行(供应商全名 · 上下文 · 单价 · 极速,
- * 对齐桌面 hover tooltip 口径)+ 「快速模式」Switch + 「推理强度」竖排单选。
+ * 承接原先行内 accordion 的配置区语义:顶部元信息行(供应商全名 · 上下文 · 极速)+
+ * 价格块(折后价 + 可选折扣说明,对齐桌面 ModelConfigFlyout)+
+ * 「快速模式」Switch + 「推理强度」竖排单选(顺序与 iOS 版一致:元信息/价格 → Fast → 强度;
+ * 选中档只用勾号表达,不铺整行底色)。
  * 读写语义与桌面完全一致:目标行是**选中行** → 改 live(onChangeSelectedEffort/FastMode);
  * **非选中行** → 写注入记忆(草稿 = draftModelMemory / 会话 = sessionModelMirror 写穿被控端)。
  * effort 点击后停留(可连续调 Fast),返回/把手下拉由浮窗层负责。
  */
-import { Pressable, StyleSheet, Switch, View } from 'react-native';
-import { useTranslation } from 'react-i18next';
-import { Text } from '@/components/AppText';
-import { Check } from 'lucide-react-native';
+import { Pressable, StyleSheet, View } from "react-native";
+import { useTranslation } from "react-i18next";
+import { Text } from "@/components/AppText";
+import { Check } from "lucide-react-native";
+import { NativeSwitch } from "@/platform/chrome";
+import { mobileInteractionStyles } from "@/components/mobileInteractionStyles";
 
-import type { MobileAgentCapabilities } from '@/session/agentCapabilities';
-import type { MobileModelPricingMap } from '@/device-link/mobileMakerTransport';
-import type { ProviderView } from '@cindy/model-providers/registry';
-import type { AgentKind } from '@cindy/model-providers/types';
-import type { MobileModelMemoryAccessors } from '@/session/draftModelMemory';
-import { useDraftModelMemoryVersion } from '@/session/draftModelMemory';
-import { useSessionModelMirrorVersion } from '@/session/sessionModelMirror';
+import type { MobileAgentCapabilities } from "@/session/agentCapabilities";
+import type { MobileModelPricingMap } from "@/device-link/mobileMakerTransport";
+import type { ProviderView } from "@cindy/model-providers/registry";
+import type { AgentKind } from "@cindy/model-providers/types";
+import type { MobileModelMemoryAccessors } from "@/session/draftModelMemory";
+import { useDraftModelMemoryVersion } from "@/session/draftModelMemory";
+import { useSessionModelMirrorVersion } from "@/session/sessionModelMirror";
 import {
   buildRowMetaLine,
   effortLabelFor,
+  presentPickerPrice,
   rowEffortOf,
   rowFastOn,
   type PickerRowModel,
-} from '@/session/modelPickerRows';
-import { iconSize, iconStroke, useTheme, useThemedStyles, type ThemeColors } from '@/theme';
-import { fontWeight, lineHeight, radius, spacing, typeScale } from '@/theme/tokens';
+} from "@/session/modelPickerRows";
+import {
+  iconSize,
+  iconStroke,
+  useTheme,
+  useThemedStyles,
+  type ThemeColors,
+} from "@/theme";
+import { fontWeight, lineHeight, spacing, typeScale } from "@/theme/tokens";
 
 export interface ModelOptionsSheetViewProps {
   /** 目标行模型(SheetSurface 标题已是 displayName,这里只消费元数据)。 */
@@ -41,9 +52,9 @@ export interface ModelOptionsSheetViewProps {
   /** 目标行是否为当前选中行(live vs 记忆的分界)。 */
   selected: boolean;
   selectedEffort: string;
-  selectedFastMode: boolean;
+  selectedFastMode: boolean | 'ultrafast';
   onChangeSelectedEffort?(effort: string): void;
-  onChangeSelectedFastMode?(enabled: boolean): void | Promise<void>;
+  onChangeSelectedFastMode?(enabled: boolean | 'ultrafast'): void | Promise<void>;
   modelMemory?: MobileModelMemoryAccessors;
   agentKind: AgentKind;
   capabilities: MobileAgentCapabilities | null;
@@ -56,25 +67,48 @@ export interface ModelOptionsSheetViewProps {
 
 const makeStyles = (c: ThemeColors) =>
   StyleSheet.create({
+    headerBlock: {
+      gap: spacing.xs,
+      paddingBottom: spacing.sm,
+      paddingTop: spacing.xs,
+    },
     metaLine: {
       color: c.textTertiary,
       fontSize: typeScale.footnote,
       lineHeight: lineHeight.caption,
-      paddingBottom: spacing.sm,
-      paddingTop: spacing.xs,
     },
-    // 与推理强度选项行同一水平内边距(effortOptionRow 的 pill 内距):
+    priceBlock: {
+      gap: spacing.xs,
+    },
+    priceTitle: {
+      color: c.textTertiary,
+      fontSize: typeScale.footnote,
+      lineHeight: lineHeight.caption,
+    },
+    // 折扣说明用 statusDone(#2AAE5B),与桌面 EFFORT_TIER_COLORS.low / «省 X%» 绿色加粗同源。
+    priceDiscount: {
+      color: c.statusDone,
+      fontWeight: fontWeight.semibold,
+    },
+    priceAmounts: {
+      color: c.textPrimary,
+      fontSize: typeScale.footnote,
+      fontWeight: fontWeight.medium,
+      lineHeight: lineHeight.caption,
+    },
+    // 与推理强度选项行同一水平内边距:
     // label 与选项文字左对齐,Switch 与选项行的 Check 右对齐。
     fastRow: {
-      alignItems: 'center',
-      flexDirection: 'row',
-      justifyContent: 'space-between',
+      alignItems: "center",
+      flexDirection: "row",
+      justifyContent: "space-between",
       minHeight: 48,
       paddingHorizontal: spacing.sm,
     },
     fastRowLabel: {
       color: c.textPrimary,
       fontSize: typeScale.body,
+      lineHeight: lineHeight.body,
       fontWeight: fontWeight.medium,
     },
     divider: {
@@ -84,24 +118,22 @@ const makeStyles = (c: ThemeColors) =>
     sectionLabel: {
       color: c.textTertiary,
       fontSize: typeScale.footnote,
+      lineHeight: lineHeight.caption,
       paddingBottom: spacing.xs,
       paddingTop: spacing.lg,
     },
     effortOptionRow: {
-      alignItems: 'center',
-      borderRadius: radius.pill,
-      flexDirection: 'row',
+      alignItems: "center",
+      flexDirection: "row",
       gap: spacing.sm,
       minHeight: 48,
       paddingHorizontal: spacing.sm,
-    },
-    effortOptionRowSelected: {
-      backgroundColor: c.surfaceChip,
     },
     effortOptionText: {
       color: c.textPrimary,
       flex: 1,
       fontSize: typeScale.body,
+      lineHeight: lineHeight.body,
       fontWeight: fontWeight.medium,
       minWidth: 0,
     },
@@ -124,19 +156,29 @@ export function ModelOptionsSheetView({
   fastEditable,
   pricing = null,
   disabled = false,
-  testID = 'modelOptions',
+  testID = "modelOptions",
 }: ModelOptionsSheetViewProps) {
   const styles = useThemedStyles(makeStyles);
   const { colors } = useTheme();
   const { t } = useTranslation();
   // 非选中行的写入落在记忆 store(不回流 props)—— 订阅版本号即时刷新当前值显示。
-  const storeVersion = useDraftModelMemoryVersion() + useSessionModelMirrorVersion();
+  const storeVersion =
+    useDraftModelMemoryVersion() + useSessionModelMirrorVersion();
   void storeVersion;
 
   const metaLine = buildRowMetaLine({
     provider,
-    model: { id: model.id, contextWindow, supportsFastMode: model.supportsFastMode },
+    model: {
+      id: model.id,
+      contextWindow,
+      supportsFastMode: model.supportsFastMode,
+    },
+  });
+  const price = presentPickerPrice({
     pricing,
+    provider,
+    modelId: model.id,
+    agentKind,
   });
   const currentEffort = rowEffortOf({
     model,
@@ -161,44 +203,99 @@ export function ModelOptionsSheetView({
       onChangeSelectedEffort?.(effort);
       return;
     }
-    if (providerId) modelMemory?.setEffort(agentKind, providerId, model.id, effort);
+    if (providerId)
+      modelMemory?.setEffort(agentKind, providerId, model.id, effort);
   };
-  const setFast = (enabled: boolean): void => {
+  const setFast = (enabled: boolean | 'ultrafast'): void => {
     if (selected) {
       void onChangeSelectedFastMode?.(enabled);
       return;
     }
-    if (providerId) modelMemory?.setFast(agentKind, providerId, model.id, enabled);
+    if (providerId)
+      modelMemory?.setFast(agentKind, providerId, model.id, enabled);
   };
 
   const hasEfforts = model.efforts.length > 0;
 
   return (
     <View testID={testID}>
-      {metaLine ? <Text style={styles.metaLine} testID={`${testID}.meta`}>{metaLine}</Text> : null}
-      {fastEditable ? (
+      {metaLine || price ? (
+        <View style={styles.headerBlock}>
+          {metaLine ? (
+            <Text style={styles.metaLine} testID={`${testID}.meta`}>
+              {metaLine}
+            </Text>
+          ) : null}
+          {price ? (
+            <View style={styles.priceBlock} testID={`${testID}.price`}>
+              <Text style={styles.priceTitle}>
+                {price.title}
+                {price.discountLabel ? (
+                  <Text style={styles.priceDiscount}>
+                    {` · ${price.discountLabel}`}
+                  </Text>
+                ) : null}
+              </Text>
+              <Text
+                style={styles.priceAmounts}
+                testID={`${testID}.priceAmounts`}
+              >
+                {price.amountsLine}
+              </Text>
+            </View>
+          ) : null}
+        </View>
+      ) : null}
+      {fastEditable && agentKind === 'codex' && model.supportsUltrafastMode ? (
+        <View>
+          <Text style={styles.sectionLabel}>{t("models.options.speed.label")}</Text>
+          {(["standard", "fast", "ultrafast"] as const).map(speed => {
+            const value = speed === "ultrafast" ? "ultrafast" : speed === "fast";
+            return (
+              <Pressable
+                key={speed}
+                disabled={disabled}
+                accessibilityRole="radio"
+                accessibilityState={{ checked: fastOn === value, disabled }}
+                style={styles.fastRow}
+                onPress={() => setFast(value)}
+              >
+                <Text style={styles.fastRowLabel}>{t(`models.options.speed.${speed}`)}</Text>
+                {fastOn === value ? <Check size={iconSize.action} color={colors.textPrimary} /> : null}
+              </Pressable>
+            );
+          })}
+        </View>
+      ) : fastEditable ? (
         <View style={styles.fastRow}>
-          <Text style={styles.fastRowLabel}>{t('models.options.fastMode')}</Text>
-          <Switch
-            accessibilityLabel={t('models.options.fastModeAccessibility', { model: displayName })}
+          <Text style={styles.fastRowLabel}>
+            {t("models.options.fastMode")}
+          </Text>
+          <NativeSwitch
+            accessibilityLabel={t("models.options.fastMode")}
             disabled={disabled}
             onValueChange={setFast}
+            seedColor={colors.inputCaret}
             testID={`${testID}.fastToggle`}
-            trackColor={{ false: colors.borderStrong, true: colors.cta }}
-            value={fastOn}
+            value={!!fastOn}
           />
         </View>
       ) : null}
       {fastEditable && hasEfforts ? <View style={styles.divider} /> : null}
       {hasEfforts ? (
         <>
-          <Text style={styles.sectionLabel}>{t('models.options.reasoningEffort')}</Text>
+          <Text style={styles.sectionLabel}>
+            {t("models.options.reasoningEffort")}
+          </Text>
           {model.efforts.map((effortId) => {
             const effortSelected = effortId === currentEffort;
             const label = effortLabelFor(model, effortId, capabilities);
             return (
               <Pressable
-                accessibilityLabel={t('models.options.reasoningEffortAccessibility', { label })}
+                accessibilityLabel={t(
+                  "models.options.reasoningEffortAccessibility",
+                  { label },
+                )}
                 accessibilityRole="button"
                 accessibilityState={{ selected: effortSelected, disabled }}
                 disabled={disabled}
@@ -206,14 +303,19 @@ export function ModelOptionsSheetView({
                 onPress={() => setEffort(effortId)}
                 style={({ pressed }) => [
                   styles.effortOptionRow,
-                  effortSelected && styles.effortOptionRowSelected,
-                  pressed && { opacity: 0.65 },
+                  pressed && mobileInteractionStyles.pressed,
                 ]}
                 testID={`${testID}.effortOption`}
               >
-                <Text numberOfLines={1} style={styles.effortOptionText}>{label}</Text>
+                <Text numberOfLines={1} style={styles.effortOptionText}>
+                  {label}
+                </Text>
                 {effortSelected ? (
-                  <Check color={colors.textPrimary} size={iconSize.lg} strokeWidth={iconStroke.medium} />
+                  <Check
+                    color={colors.textPrimary}
+                    size={iconSize.lg}
+                    strokeWidth={iconStroke.medium}
+                  />
                 ) : null}
               </Pressable>
             );

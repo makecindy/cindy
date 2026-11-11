@@ -97,6 +97,131 @@ export function insertSlashCommand(
   return `${text.slice(0, trigger.from)}/${command.name} `;
 }
 
+/**
+ * Runtime invocation prefixes the composer adds only at dispatch: Pi's `skill:`
+ * and the namespaces Cindy mounts managed Skills under for Claude Code
+ * (`cindy:` built-ins, `cindy-plugin-<plugin>:` plugin Skills). Display layer
+ * always shows `/name`.
+ */
+const SKILL_RUNTIME_PREFIX_RE = /^(?:skill|cindy|cindy-plugin-[^\s:/]+):(?=\S+$)/i;
+
+/** Length of the runtime prefix in a slash command name (`skill:git` → 6); zero when none. */
+function skillRuntimePrefixLength(name: string): number {
+  return SKILL_RUNTIME_PREFIX_RE.exec(name)?.[0].length ?? 0;
+}
+
+/** Project a stored slash token (`/skill:git`, `/cindy-plugin-github:pr` or `/git`) to the human label. */
+export function slashCommandDisplayLabel(commandText: string): string {
+  if (!commandText.startsWith('/')) return commandText;
+  const prefixLength = skillRuntimePrefixLength(commandText.slice(1));
+  return prefixLength > 0 ? `/${commandText.slice(1 + prefixLength)}` : commandText;
+}
+
+/** True when a slash token carries a runtime prefix that the display layer hides. */
+export function isSlashCommandRuntimeAlias(commandText: string): boolean {
+  return commandText.startsWith('/') && skillRuntimePrefixLength(commandText.slice(1)) > 0;
+}
+
+/**
+ * Project confirmed slash runs in a message body to the human label.
+ * Without ranges, leave the text untouched — ordinary `/skill:foo` prose
+ * must not be rewritten.
+ */
+export function projectSlashCommandsInText(
+  text: string,
+  ranges?: readonly { start: number; end: number }[],
+): string {
+  if (!ranges || ranges.length === 0) return text;
+  let result = text;
+  const ordered = [...ranges].sort((a, b) => b.start - a.start);
+  for (const range of ordered) {
+    if (range.start < 0 || range.end > result.length || range.end <= range.start) continue;
+    const token = result.slice(range.start, range.end);
+    const display = slashCommandDisplayLabel(token);
+    if (display === token) continue;
+    result = `${result.slice(0, range.start)}${display}${result.slice(range.end)}`;
+  }
+  return result;
+}
+
+/**
+ * Put a displayed `/git ...` back to the stored `/skill:git ...` when the
+ * user is resending an edited Pi skill message. Leave other commands alone.
+ */
+export function findSlashCommandToken(
+  text: string,
+): { start: number; end: number; name: string } | undefined {
+  const match = /(?:^|\n)[^\S\n]*(\/\S+)/.exec(text);
+  if (!match || match.index === undefined) return undefined;
+  const start = match.index + match[0].length - match[1].length;
+  return { start, end: start + match[1].length, name: match[1].slice(1) };
+}
+
+/** True when a confirmed slash range covers this token. */
+export function slashCommandRangeCoversToken(
+  ranges: readonly { start: number; end: number }[] | undefined,
+  token: { start: number; end: number } | undefined,
+): boolean {
+  if (!ranges || !token) return false;
+  return ranges.some((range) => range.start <= token.start && range.end >= token.end);
+}
+
+export function restoreSlashCommandRuntimeAlias(
+  originalText: string,
+  editedText: string,
+  confirmedRanges?: readonly { start: number; end: number }[],
+): string {
+  const original = findSlashCommandToken(originalText);
+  const edited = findSlashCommandToken(editedText);
+  if (!original || !edited) return editedText;
+  if (!slashCommandRangeCoversToken(confirmedRanges, original)) return editedText;
+  const prefixLength = skillRuntimePrefixLength(original.name);
+  if (prefixLength === 0) return editedText;
+  const humanName = original.name.slice(prefixLength);
+  if (!humanName || edited.name.toLowerCase() !== humanName.toLowerCase()) return editedText;
+  return `${editedText.slice(0, edited.start)}/${original.name}${editedText.slice(edited.end)}`;
+}
+
+/** Range of the first `/command` token in already-restored submit text. */
+export function leadingSlashCommandRange(
+  text: string,
+): { start: number; end: number } | undefined {
+  const token = findSlashCommandToken(text);
+  return token ? { start: token.start, end: token.end } : undefined;
+}
+
+/**
+ * First `/token` after leading whitespace. Same recognition window as Pi
+ * (`text.trimStart().startsWith('/skill:')`): leading spaces/newlines count,
+ * a quote block or other prose before the slash does not.
+ */
+export function leadingSlashInvocation(
+  text: string,
+): { start: number; end: number; name: string } | undefined {
+  const start = text.search(/\S/);
+  if (start < 0 || text[start] !== '/') return undefined;
+  const token = text.slice(start).match(/^\/\S+/)?.[0];
+  if (!token) return undefined;
+  return { start, end: start + token.length, name: token.slice(1) };
+}
+
+/**
+ * Length of the hidden runtime prefix (`skill:`, `cindy-plugin-<plugin>:`) after
+ * `/` when the visible token is the runtime alias. Zero when the document
+ * already uses the human name, or when the palette itself lists the namespaced
+ * name to tell same-named Skills apart.
+ */
+export function slashCommandRuntimePrefixLength(
+  commandText: string,
+  command: { name?: string; runtimeCommandName?: string },
+): number {
+  const runtime = command.runtimeCommandName?.trim();
+  if (!runtime || runtime.toLowerCase() === command.name?.trim().toLowerCase()) return 0;
+  const body = commandText.startsWith('/') ? commandText.slice(1) : commandText;
+  if (body.toLowerCase() !== runtime.toLowerCase()) return 0;
+  return skillRuntimePrefixLength(runtime);
+}
+
 export function insertAtResource(
   text: string,
   trigger: ComposerTrigger,

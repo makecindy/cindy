@@ -1,4 +1,3 @@
 packages:
   - "apps/*"
   - "packages/*"
-  - "cindy-protocol/packages/*"

@@ -1,4 +1,4 @@
-import { ipcMain } from 'electron';
+import { isDeviceLinkInvoke } from '../../device-link/invoke-context.js';
 
 import { searchConversations } from '../conversationSearch.js';
 import type {
@@ -14,11 +14,10 @@ import { optionalEnum, requireObject, throwIpcError } from '../../utils/ipcValid
 const SORT_VALUES = ['relevance', 'activityDesc', 'activityAsc'] as const;
 const SEMANTIC_MODE_VALUES = ['hybrid', 'keyword'] as const;
 const STATUS_VALUES = ['active', 'archived', 'all'] as const;
-const AGENT_VALUES = ['all', 'cc', 'codex'] as const;
+const AGENT_VALUES = ['all', 'cc', 'codex', 'pi'] as const;
 const LAST_ACTIVITY_VALUES = ['all', '1d', '3d', '7d', '30d'] as const;
 
-export function registerSearchIpc(): void {
-  ipcMain.handle('local-db:conversations:search', async (_e, payload: unknown) => {
+export async function executeConversationSearch(payload: unknown) {
     const body = requireObject(payload, 'payload');
     const query = typeof body.query === 'string' ? body.query.trim() : '';
     if (!query) {
@@ -36,7 +35,7 @@ export function registerSearchIpc(): void {
       | undefined;
     const filters = parseFilters(body.filters);
     const unnamedLabel = parseUnnamedLabel(body.unnamedLabel);
-    return searchConversations({
+    const request = {
       query,
       limit,
       includeArchived,
@@ -44,8 +43,10 @@ export function registerSearchIpc(): void {
       semanticMode,
       filters,
       unnamedLabel,
-    });
-  });
+    };
+    return isDeviceLinkInvoke()
+      ? searchConversations(request, { remoteVisibleOnly: true })
+      : searchConversations(request);
 }
 
 /** i18n 文案不可能有这么长;超限说明调用方拼错了,宁可报错也不静默截断(见下)。 */
@@ -102,6 +103,17 @@ function parseFilters(value: unknown): ConversationSearchFilters | undefined {
         throwIpcError('INVALID_PARAMS', `filters.sessionIds[${index}] must be a non-empty string`);
       }
       return id.trim();
+    });
+  }
+  if (body.workingDirs !== undefined && body.workingDirs !== null) {
+    if (!Array.isArray(body.workingDirs)) {
+      throwIpcError('INVALID_PARAMS', 'filters.workingDirs must be an array');
+    }
+    filters.workingDirs = body.workingDirs.map((dir, index) => {
+      if (typeof dir !== 'string' || dir.trim() === '') {
+        throwIpcError('INVALID_PARAMS', `filters.workingDirs[${index}] must be a non-empty string`);
+      }
+      return dir;
     });
   }
   return filters;

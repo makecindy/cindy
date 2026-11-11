@@ -5,9 +5,12 @@
  * verified a real membership for the current process; local mode always uses
  * the reserved owner below and never masquerades as a server user id.
  */
-import { app } from 'electron';
+import os from 'node:os';
+import { getUserDataDir } from './userDataPath.js';
+import fs from 'node:fs';
 import path from 'node:path';
-import crypto from 'node:crypto';
+import { dataOwnerStorageKey } from './dataOwnerPath.js';
+import { configureOwnerContext, ownerScopedPath } from './ownerContext.js';
 
 import { createLogger } from './logger.js';
 import { createOverrideSettingsFile } from './maker-host/override-settings-file.js';
@@ -26,24 +29,27 @@ export interface ActiveAppSession {
 export const LOCAL_DATA_OWNER_ID = LOCAL_PROFILE_DATA_OWNER_ID;
 
 /** Filesystem/storage-safe opaque namespace for a data owner. */
-export function dataOwnerStorageKey(ownerId: string): string {
-  return crypto.createHash('sha256').update(ownerId).digest('hex').slice(0, 20);
-}
+export { dataOwnerStorageKey };
 
 /**
  * Resolve private application state beneath the active owner's namespace.
  * Callers must not silently fall back to the shared userData root: doing so
  * would make signed-out startup or an account switch cross-contaminate data.
  */
+configureOwnerContext({
+  read: () => ({
+    dataOwnerId: getActiveAppSession().dataOwnerId,
+    generation: getActiveAppSession().generation,
+    boundaryPending: isAppSessionBoundaryPending(),
+  }),
+  // Some services register before authentication settles. Give them an
+  // ephemeral process namespace so they can initialize without ever
+  // reading or writing a real owner's private state.
+  fallbackBaseDir: () => path.join(os.tmpdir(), 'cindy-no-session', String(process.pid)),
+});
+
 export function ownerScopedUserDataPath(...parts: string[]): string {
-  const ownerId = getActiveAppSession().dataOwnerId;
-  if (!ownerId) {
-    // Some services register before authentication settles. Give them an
-    // ephemeral process namespace so they can initialize without ever
-    // reading or writing a real owner's private state.
-    return path.join(app.getPath('temp'), 'cindy-no-session', String(process.pid), ...parts);
-  }
-  return path.join(app.getPath('userData'), 'owners', dataOwnerStorageKey(ownerId), ...parts);
+  return ownerScopedPath(...parts);
 }
 
 interface PersistedAppSessionSettings {
@@ -54,7 +60,7 @@ const log = createLogger('appSessionState');
 const DEFAULTS: PersistedAppSessionSettings = { activeMode: 'signed-out' };
 
 function settingsFilePath(): string {
-  return path.join(app.getPath('userData'), 'app-session.json');
+  return path.join(getUserDataDir(), 'app-session.json');
 }
 
 function normalize(raw: unknown): PersistedAppSessionSettings {
@@ -80,6 +86,27 @@ const store = createOverrideSettingsFile<PersistedAppSessionSettings>({
 
 let active: ActiveAppSession | null = null;
 let boundaryDepth = 0;
+let appSessionCommitBoundaryHook: (() => void) | null = null;
+const sessionInvalidationListeners = new Set<() => void>();
+
+/** Cancel owner-bound requests before teardown or a new generation becomes visible. */
+export function onAppSessionInvalidated(listener: () => void): () => void {
+  sessionInvalidationListeners.add(listener);
+  return () => { sessionInvalidationListeners.delete(listener); };
+}
+
+function invalidateSessionRequests(): void {
+  for (const listener of sessionInvalidationListeners) listener();
+}
+
+/**
+ * Register synchronous owner-scoped runtime invalidation at the exact commit edge.
+ * The hook runs after the commit has been accepted but before the new owner is
+ * visible, so stale async work cannot resume into the next owner's process state.
+ */
+export function setAppSessionCommitBoundaryHook(hook: (() => void) | null): void {
+  appSessionCommitBoundaryHook = hook;
+}
 
 function ensureLoaded(): ActiveAppSession {
   if (active) return active;
@@ -93,6 +120,24 @@ function ensureLoaded(): ActiveAppSession {
     generation: 0,
   };
   return active;
+}
+
+/**
+ * Dev UI mock sandbox only: a profile that has never chosen a mode starts
+ * account-free, as if "Skip login" had been chosen once. Any saved choice wins.
+ */
+export function startFreshProfileInLocalMode(): boolean {
+  if (active || fs.existsSync(settingsFilePath())) return false;
+  store.writePatch({ activeMode: 'local' });
+  return true;
+}
+
+/**
+ * The mode persisted by the last stable commit. Unlike the active session, a
+ * `cloud` value here is still only an intent while auth verifies the account.
+ */
+export function getPersistedAppSessionMode(): AppSessionMode {
+  return store.read().activeMode;
 }
 
 /** Read the last committed stable session. */
@@ -133,6 +178,7 @@ export function activeOwnerScopeKey(): string {
  */
 export function beginAppSessionBoundary(): () => void {
   boundaryDepth += 1;
+  invalidateSessionRequests();
   let released = false;
   return () => {
     if (released) return;
@@ -145,6 +191,11 @@ export function isAppSessionBoundaryPending(): boolean {
   return boundaryDepth > 0;
 }
 
+/** Backward-compatible alias for the process-local application transition. */
+export function isAppSessionBoundaryLocallyPending(): boolean {
+  return boundaryDepth > 0;
+}
+
 /**
  * Commit a stable session after its required runtime is ready.
  * Cloud commits require a verified membership id; local uses the reserved id.
@@ -152,6 +203,7 @@ export function isAppSessionBoundaryPending(): boolean {
 export function commitActiveAppSession(
   mode: AppSessionMode,
   cloudOwnerId?: string | null,
+  forceBumpGeneration = false,
 ): ActiveAppSession {
   const previous = ensureLoaded();
   let dataOwnerId: string | null = null;
@@ -162,18 +214,55 @@ export function commitActiveAppSession(
     if (!normalized) throw new Error('cloud app session requires a verified data owner');
     dataOwnerId = normalized;
   }
+  const ownerChanged = previous.mode !== mode || previous.dataOwnerId !== dataOwnerId;
 
-  if (previous.mode === mode && previous.dataOwnerId === dataOwnerId) {
+  if (!ownerChanged && !forceBumpGeneration) {
     return { ...previous };
   }
 
   store.writePatch({ activeMode: mode });
+  invalidateSessionRequests();
+  if (ownerChanged) appSessionCommitBoundaryHook?.();
   active = {
     mode,
     dataOwnerId,
     generation: previous.generation + 1,
   };
   log.info('stable app session committed', {
+    mode,
+    dataOwnerId,
+    generation: active.generation,
+  });
+  return { ...active };
+}
+
+/** Update only this process after a passive instance signs out or is quarantined. */
+export function commitVolatileAppSession(
+  mode: AppSessionMode,
+  cloudOwnerId?: string | null,
+  forceBumpGeneration = false,
+): ActiveAppSession {
+  const previous = ensureLoaded();
+  let dataOwnerId: string | null = null;
+  if (mode === 'local') {
+    dataOwnerId = LOCAL_DATA_OWNER_ID;
+  } else if (mode === 'cloud') {
+    const normalized = cloudOwnerId?.trim();
+    if (!normalized) throw new Error('cloud app session requires a verified data owner');
+    dataOwnerId = normalized;
+  }
+  const ownerChanged = previous.mode !== mode || previous.dataOwnerId !== dataOwnerId;
+  if (!ownerChanged && !forceBumpGeneration) {
+    return { ...previous };
+  }
+  invalidateSessionRequests();
+  if (ownerChanged) appSessionCommitBoundaryHook?.();
+  active = {
+    mode,
+    dataOwnerId,
+    generation: previous.generation + 1,
+  };
+  log.info('volatile app session committed', {
     mode,
     dataOwnerId,
     generation: active.generation,

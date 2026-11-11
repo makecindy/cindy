@@ -1,4 +1,6 @@
+import { asyncQuestionReplyDisplayText, isAsyncQuestionReplyClientId } from './interaction.js';
 import { syntheticTriggerKind } from './syntheticTrigger.js';
+import { presentationText, type PresentationLocalizer } from './presentationLocalization.js';
 
 export interface QueueProjectionLike {
   error: string | null;
@@ -60,6 +62,7 @@ export function buildQueuePanelSummary(
   projection: QueueProjectionLike,
   readOnlyReason?: string | null,
   collapsedVisibleRows = 3,
+  localizer?: PresentationLocalizer,
 ): QueuePanelSummary {
   const queueCount = projection.pendingQueue.length;
   const expanded = projection.queueExpanded || queueCount <= collapsedVisibleRows;
@@ -68,48 +71,56 @@ export function buildQueuePanelSummary(
 
   if (projection.error) {
     return {
-      detail: projection.errorRetryText ? '发送失败 · 可重试' : '发送失败',
+      detail: projection.errorRetryText
+        ? presentationText(localizer, 'message.queuePresentation.panel.sendFailedRetryable', '发送失败 · 可重试')
+        : presentationText(localizer, 'message.queuePresentation.panel.sendFailed', '发送失败'),
       hiddenCount,
-      hint: readOnlyReason ?? '先处理队列错误，再继续发送新的消息。',
-      title: '队列需要处理',
+      hint: readOnlyReason
+        ?? presentationText(localizer, 'message.queuePresentation.panel.errorHint', '先处理队列错误，再继续发送新的消息。'),
+      title: presentationText(localizer, 'message.queuePresentation.panel.errorTitle', '队列需要处理'),
       visibleCount,
     };
   }
   if (projection.queueAbortPending) {
     return {
-      detail: queueCount > 0 ? `${queueCount} 条消息保留在队列里` : '等待桌面端确认停止',
+      detail: queueCount > 0
+        ? presentationText(localizer, 'message.queuePresentation.panel.abortQueued', `${queueCount} 条消息保留在队列里`, { count: queueCount })
+        : presentationText(localizer, 'message.queuePresentation.panel.abortWaiting', '等待桌面端确认停止'),
       hiddenCount,
-      hint: readOnlyReason ?? '停止完成前先不要重复发送，保留的消息会继续显示在这里。',
-      title: '停止处理中',
+      hint: readOnlyReason
+        ?? presentationText(localizer, 'message.queuePresentation.panel.abortHint', '停止完成前先不要重复发送，保留的消息会继续显示在这里。'),
+      title: presentationText(localizer, 'message.queuePresentation.panel.abortTitle', '停止处理中'),
       visibleCount,
     };
   }
   if (projection.queuePaused) {
     return {
-      detail: `${queueCount} 条消息等待恢复`,
+      detail: presentationText(localizer, 'message.queuePresentation.panel.pausedDetail', `${queueCount} 条消息等待恢复`, { count: queueCount }),
       hiddenCount,
-      hint: readOnlyReason ?? '点“继续”后会按当前顺序继续发送到桌面端。',
-      title: '队列已暂停',
+      hint: readOnlyReason
+        ?? presentationText(localizer, 'message.queuePresentation.panel.pausedHint', '点“继续”后会按当前顺序继续发送到桌面端。'),
+      title: presentationText(localizer, 'message.queuePresentation.panel.pausedTitle', '队列已暂停'),
       visibleCount,
     };
   }
   return {
-    detail: `${queueCount} 条消息 · 按桌面端顺序发送`,
+    detail: presentationText(localizer, 'message.queuePresentation.panel.defaultDetail', `${queueCount} 条消息 · 按桌面端顺序发送`, { count: queueCount }),
     hiddenCount,
-    hint: readOnlyReason ?? '可调整顺序、插话、编辑或删除普通队列消息。',
-    title: '待发送队列',
+    hint: readOnlyReason
+      ?? presentationText(localizer, 'message.queuePresentation.panel.defaultHint', '可调整顺序、插话、编辑或删除普通队列消息。'),
+    title: presentationText(localizer, 'message.queuePresentation.panel.defaultTitle', '待发送队列'),
     visibleCount,
   };
 }
 
 export function buildQueueRowPresentation(input: {
   busy?: boolean;
-  item: Pick<{ clientId: string; origin?: unknown; text?: string }, 'clientId' | 'origin' | 'text'>;
+  item: { clientId: string; origin?: unknown; text?: string; sourcePlugin?: unknown };
   originalIndex: number;
   projection: QueueRowProjectionLike;
   queueLength: number;
   readOnlyReason?: string | null;
-}): QueueRowPresentation {
+}, localizer?: PresentationLocalizer): QueueRowPresentation {
   const steering = input.projection.steeringQueueClientIds.includes(input.item.clientId);
   const editLocked = input.projection.queueEditLocks.includes(input.item.clientId);
   const interactionLocked = input.projection.queueInteractionLocks.length > 0;
@@ -121,40 +132,49 @@ export function buildQueueRowPresentation(input: {
     busy: input.busy === true,
     editLocked,
     interactionLocked,
-    orcaOrigin,
     readOnlyReason: input.readOnlyReason,
     steering,
-  });
+  }, localizer);
   // 合成指令行只封 edit / steer(对齐桌面 canEdit / canSteer=false),删除与排序
   // 照常——用户可以取消一条排队中的续跑,但不能改写或抢发它的内容。
-  const syntheticEditReason = syntheticKind ? '系统指令消息不支持编辑或插话发送。' : null;
+  const syntheticEditReason = syntheticKind
+    ? presentationText(localizer, 'message.queuePresentation.row.syntheticEditDisabled', '系统指令消息不支持编辑或插话发送。')
+    : null;
+  // 自动化 / 其他任务经工具 / 插件排进来的消息(对齐桌面 canEdit / canSteer=false):改写后
+  // 落库气泡的来源标签就不再属实;删除与排序照常。
+  const autoSentReason = !orcaOrigin && isAutoSentQueueItem(input.item)
+    ? presentationText(localizer, 'message.queuePresentation.row.autoSentEditDisabled', '自动发送的消息不支持编辑或插话发送。')
+    : null;
+  // 协同成员发来的消息不能改写(对齐桌面 canEdit=false),但可以插话:插话不改正文与来源。
+  const orcaEditReason = orcaOrigin
+    ? presentationText(localizer, 'message.queuePresentation.row.orcaEditDisabled', '协同消息不支持编辑。')
+    : null;
 
   return {
     actions: {
-      moveUp: queueRowAction(baseDisabledReason, moveUpTarget, '已经是队列第一条。'),
-      moveDown: queueRowAction(baseDisabledReason, moveDownTarget, '已经是队列最后一条。'),
-      steer: queueRowAction(baseDisabledReason ?? syntheticEditReason),
-      edit: queueRowAction(baseDisabledReason ?? syntheticEditReason),
+      moveUp: queueRowAction(baseDisabledReason, moveUpTarget, presentationText(localizer, 'message.queuePresentation.row.first', '已经是队列第一条。')),
+      moveDown: queueRowAction(baseDisabledReason, moveDownTarget, presentationText(localizer, 'message.queuePresentation.row.last', '已经是队列最后一条。')),
+      steer: queueRowAction(baseDisabledReason ?? syntheticEditReason ?? autoSentReason),
+      edit: queueRowAction(baseDisabledReason ?? syntheticEditReason ?? autoSentReason ?? orcaEditReason),
       remove: queueRowAction(baseDisabledReason),
     },
     editLocked,
     hint: queueRowHint({
       editLocked,
       interactionLocked,
-      orcaOrigin,
       readOnlyReason: input.readOnlyReason,
       steering,
       syntheticKind,
-    }),
+    }, localizer),
     interactionLocked,
     orcaOrigin,
     steering,
     syntheticKind,
     title: steering
-      ? '插话发送中'
+      ? presentationText(localizer, 'message.queuePresentation.row.steering', '插话发送中')
       : orcaOrigin
-        ? `协作队列 ${input.originalIndex + 1}`
-        : `队列 ${input.originalIndex + 1}`,
+        ? presentationText(localizer, 'message.queuePresentation.row.orcaTitle', `协同队列 ${input.originalIndex + 1}`, { index: input.originalIndex + 1 })
+        : presentationText(localizer, 'message.queuePresentation.row.title', `队列 ${input.originalIndex + 1}`, { index: input.originalIndex + 1 }),
   };
 }
 
@@ -174,6 +194,115 @@ export function isOrcaQueueItem(
 ): boolean {
   const origin = readRecord(item.origin);
   return origin?.kind === 'orca';
+}
+
+/**
+ * 自动化(scheduler)、其他任务经工具(session)或插件任务(主机盖章的 sourcePlugin)
+ * 排进来的消息。Orca 消息另有来源标题与文案。
+ */
+export function isAutoSentQueueItem(
+  item: { origin?: unknown; sourcePlugin?: unknown },
+): boolean {
+  const kind = readRecord(item.origin)?.kind;
+  if (kind === 'scheduler' || kind === 'session') return true;
+  const plugin = readRecord(item.sourcePlugin);
+  return typeof plugin?.pluginId === 'string' && plugin.pluginId.trim().length > 0;
+}
+
+/**
+ * 排队条目给人看的正文。自动化调度或其他任务经工具发来（origin.kind 为 scheduler /
+ * session）的条目，`text` 是发给 Agent 的原文——可能带静默运行协议等只给 Agent 的内容
+ * （来源身份不再写进正文，而是派发时在 wire 消息上另加统一的 `[消息来源]` 说明）——
+ * 可见正文以落库的 `persistedContent` 为准；带附件时落库是主机构造的
+ * `{text, images, files}` 信封，取其中 text（只在确有附件时解包，正文本身是 JSON 的消息
+ * 原样显示）。异步问题的回答同样以落库正文为准：`text` 是发给 Agent 的原生回答格式与
+ * 延迟回答说明，落库的是「题目 + 回答」。其它条目沿用 `text`。桌面排队面板、手机待发送
+ * 气泡与共享访客投影共用此判据。
+ */
+export function queueItemVisibleText(item: QueueVisibleTextItem): string {
+  const { text, replaceRanges } = queueItemVisibleSource(item);
+  return replaceRanges ? replacePastedRanges(text, replaceRanges) : text;
+}
+
+type QueueVisibleTextItem = {
+  clientId?: string;
+  text?: string;
+  persistedContent?: string;
+  files?: readonly unknown[];
+  origin?: unknown;
+  sourcePlugin?: unknown;
+  chatMessage?: { pastedTextRanges?: readonly { start: number; end: number; display: string }[] };
+};
+
+/**
+ * 与 `queueItemVisibleText` 同一判据，但不替换粘贴段：返回未折叠的可见正文，
+ * 以及（正文是信封里的 text 时）它对应的 `pastedTextRanges`。需要自己按范围渲染
+ * 粘贴标签的界面（桌面待发气泡）用它，避免范围与已折叠的正文错位。
+ */
+export function queueItemVisibleSource(item: QueueVisibleTextItem): {
+  text: string;
+  replaceRanges: readonly { start: number; end: number; display: string }[] | null;
+} {
+  const text = item.text ?? '';
+  if (isAsyncQuestionReplyClientId(item.clientId)) {
+    return { text: asyncQuestionReplyDisplayText(persistedUserText(item.persistedContent) ?? text), replaceRanges: null };
+  }
+  if (!isAutoSentQueueItem(item)) return { text, replaceRanges: null };
+  const persisted = item.persistedContent ?? text;
+  const ranges = item.chatMessage?.pastedTextRanges;
+  if (!item.files?.length && !ranges?.length) return { text: persisted, replaceRanges: null };
+  try {
+    const envelope = JSON.parse(persisted) as unknown;
+    const envelopeText = readRecord(envelope)?.text;
+    if (typeof envelopeText === 'string') {
+      return {
+        text: envelopeText,
+        replaceRanges: ranges?.length && rangesFit(envelopeText, ranges) ? ranges : null,
+      };
+    }
+  } catch {
+    // Not an envelope: the persisted row is already the visible text.
+  }
+  return { text: persisted, replaceRanges: null };
+}
+
+/** Queue items from a client wrap their text in a `{text, images, files}` envelope; the Host stores plain text. */
+function persistedUserText(persisted: string | undefined): string | undefined {
+  if (!persisted?.startsWith('{')) return persisted || undefined;
+  try {
+    const envelopeText = readRecord(JSON.parse(persisted) as unknown)?.text;
+    return typeof envelopeText === 'string' ? envelopeText : persisted;
+  } catch {
+    return persisted;
+  }
+}
+
+function rangesFit(
+  text: string,
+  ranges: readonly { start: number; end: number; display: string }[],
+): boolean {
+  let cursor = 0;
+  for (const range of ranges) {
+    if (!Number.isInteger(range.start) || !Number.isInteger(range.end)
+      || range.start < cursor || range.end <= range.start || range.end > text.length
+      || typeof range.display !== 'string') return false;
+    cursor = range.end;
+  }
+  return true;
+}
+
+function replacePastedRanges(
+  text: string,
+  ranges: readonly { start: number; end: number; display: string }[],
+): string {
+  let cursor = 0;
+  const parts: string[] = [];
+  for (const range of ranges) {
+    parts.push(text.slice(cursor, range.start), range.display);
+    cursor = range.end;
+  }
+  parts.push(text.slice(cursor));
+  return parts.join('');
 }
 
 function readRecord(value: unknown): Record<string, unknown> | null {
@@ -212,32 +341,28 @@ function queueRowBaseDisabledReason(input: {
   busy: boolean;
   editLocked: boolean;
   interactionLocked: boolean;
-  orcaOrigin: boolean;
   readOnlyReason?: string | null;
   steering: boolean;
-}): string | null {
+}, localizer?: PresentationLocalizer): string | null {
   if (input.readOnlyReason) return input.readOnlyReason;
-  if (input.orcaOrigin) return '协作消息由桌面端编排，手机端只读显示。';
-  if (input.busy) return '队列操作同步中，完成后再继续操作。';
-  if (input.steering) return '插话正在发送到当前 turn，等待桌面端回流后再操作。';
-  if (input.editLocked) return '这条队列消息正在编辑中，完成后再操作。';
-  if (input.interactionLocked) return '队列正在被其它操作锁定，完成后再操作。';
+  if (input.busy) return presentationText(localizer, 'message.queuePresentation.row.busy', '队列操作同步中，完成后再继续操作。');
+  if (input.steering) return presentationText(localizer, 'message.queuePresentation.row.steeringDisabled', '插话正在发送到当前 turn，等待桌面端回流后再操作。');
+  if (input.editLocked) return presentationText(localizer, 'message.queuePresentation.row.editLocked', '这条队列消息正在编辑中，完成后再操作。');
+  if (input.interactionLocked) return presentationText(localizer, 'message.queuePresentation.row.interactionLocked', '队列正在被其它操作锁定，完成后再操作。');
   return null;
 }
 
 function queueRowHint(input: {
   editLocked: boolean;
   interactionLocked: boolean;
-  orcaOrigin: boolean;
   readOnlyReason?: string | null;
   steering: boolean;
   syntheticKind?: 'continue' | 'generic' | null;
-}): string | null {
+}, localizer?: PresentationLocalizer): string | null {
   if (input.readOnlyReason) return input.readOnlyReason;
-  if (input.orcaOrigin) return '协作消息由桌面端编排,手机端只读显示。';
-  if (input.syntheticKind) return '这是系统自动生成的指令，可以取消，但不能编辑或插话发送。';
-  if (input.steering) return '插话正在发送到当前 turn,暂时不能编辑或移动。';
-  if (input.editLocked) return '这条消息正在编辑中,桌面端会暂停自动发送。';
-  if (input.interactionLocked) return '队列正在被排序或其它交互锁定,暂时不能编辑。';
+  if (input.syntheticKind) return presentationText(localizer, 'message.queuePresentation.row.syntheticHint', '这是系统自动生成的指令，可以取消，但不能编辑或插话发送。');
+  if (input.steering) return presentationText(localizer, 'message.queuePresentation.row.steeringHint', '插话正在发送到当前 turn，暂时不能编辑或移动。');
+  if (input.editLocked) return presentationText(localizer, 'message.queuePresentation.row.editHint', '这条消息正在编辑中，桌面端会暂停自动发送。');
+  if (input.interactionLocked) return presentationText(localizer, 'message.queuePresentation.row.interactionHint', '队列正在被排序或其它交互锁定，暂时不能编辑。');
   return null;
 }

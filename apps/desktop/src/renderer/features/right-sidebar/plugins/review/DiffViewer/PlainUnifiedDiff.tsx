@@ -1,3 +1,4 @@
+import { Button } from '@/components/ui/button';
 import { useEffect, useMemo, useRef } from 'react';
 import { useTranslation } from 'react-i18next';
 import { useVirtualizer } from '@tanstack/react-virtual';
@@ -61,7 +62,7 @@ function prefix(type: DiffLine['type']): string {
 function HunkSeparator({ count }: { count: number }) {
   const { t } = useTranslation();
   return (
-    <div className="flex min-h-[20px] w-full select-none items-center bg-[var(--surface)] font-mono text-[11px] leading-5 text-[var(--text-tertiary)]">
+    <div className="flex min-h-[20px] w-full select-none items-center bg-[var(--surface)] font-mono text-11 leading-5 text-[var(--text-tertiary)]">
       <span className="w-[3.5rem] shrink-0 border-r border-[var(--border-default)] px-2 text-right text-[var(--diff-line-num)]" />
       <span className="w-[3.5rem] shrink-0 border-r border-[var(--border-default)] px-2 text-right text-[var(--diff-line-num)]" />
       <span className="w-5 shrink-0 text-center">⋯</span>
@@ -93,7 +94,7 @@ function HunkActionPill({
       <span
         data-review-action-reveal="hunk"
         className={cn(
-          'pointer-events-auto sticky right-2 flex shrink-0 items-center gap-1 rounded-full border border-[var(--border-default)] bg-[color-mix(in_srgb,var(--surface-elevated)_90%,transparent)] p-1 text-[var(--text-primary)] shadow-[var(--shadow-menu)] backdrop-blur-sm',
+          'pointer-events-auto sticky right-2 flex shrink-0 items-center gap-1 rounded-full border border-[var(--border-default)] bg-[color-mix(in_srgb,var(--surface-elevated)_90%,transparent)] p-1 text-[var(--text-primary)] shadow-[shadow:var(--shadow-menu)] backdrop-blur-sm',
           hunkActionRevealClass(hasPendingAction),
         )}
       >
@@ -106,7 +107,7 @@ function HunkActionPill({
               aria-label={action.label}
               disabled={action.disabled || pending}
               onClick={() => action.onClick(hunk.index)}
-              className="inline-flex h-6 w-6 shrink-0 items-center justify-center rounded-full text-[10px] font-medium text-[var(--text-primary)] hover:bg-[var(--surface-hover)] disabled:cursor-not-allowed disabled:opacity-50"
+              className="inline-flex h-6 w-6 shrink-0 items-center justify-center rounded-full text-10 font-medium text-[var(--text-primary)] hover:bg-[var(--surface-hover)] disabled:cursor-not-allowed disabled:opacity-50"
             >
               {pending ? <Spinner size={11} /> : hunkActionIcon(action.icon)}
               <span className="sr-only">{action.label}</span>
@@ -137,7 +138,7 @@ function UnifiedLineRow({
   wordWrap: boolean;
 }) {
   return (
-    <div className={cn('flex min-h-[20px] w-full font-mono text-[11px] leading-5', lineClass(line.type))}>
+    <div className={cn('flex min-h-[20px] w-full font-mono text-11 leading-5', lineClass(line.type))}>
       <span className="w-[3.5rem] shrink-0 select-none border-r border-[var(--border-default)] px-2 text-right text-[var(--diff-line-num)]">
         {line.oldLineNumber ?? ''}
       </span>
@@ -168,7 +169,7 @@ function SplitLineRow({
   wordWrap: boolean;
 }) {
   return (
-    <div className="grid min-h-[20px] w-full grid-cols-2 font-mono text-[11px] leading-5">
+    <div className="grid min-h-[20px] w-full grid-cols-2 font-mono text-11 leading-5">
       <SplitCell
         cell={left}
         side="left"
@@ -262,6 +263,14 @@ function CodeContent({
       side: line.type === 'add' ? 'add' : 'delete',
     })
     : null;
+  const renderedHtml = inlineHtml || html;
+  // React can rewrite innerHTML when this prop object changes, even if its
+  // content is identical. Keep highlighted nodes (and selection) stable across
+  // review refreshes to avoid flooding Windows with accessibility hide events.
+  const htmlContent = useMemo(
+    () => renderedHtml ? { __html: renderedHtml } : undefined,
+    [renderedHtml],
+  );
 
   return (
     <span className={cn(
@@ -269,10 +278,10 @@ function CodeContent({
       wordWrap ? 'flex-1 whitespace-pre-wrap break-words' : !splitScrollable && 'whitespace-pre',
       compact ? 'pr-3' : 'pr-4',
     )}>
-      {inlineHtml ? (
-        <span dangerouslySetInnerHTML={{ __html: inlineHtml }} />
-      ) : html ? (
-        <span dangerouslySetInnerHTML={{ __html: html }} />
+      {/* Keep code semantics in the AX tree: an ignored span promotes every
+          syntax token to the row and fans out Windows node-show events. */}
+      {htmlContent ? (
+        <code className="font-mono" dangerouslySetInnerHTML={htmlContent} />
       ) : (
         line.content
       )}
@@ -400,27 +409,23 @@ export function PlainUnifiedDiff({
       ? diff.error ?? t('rightSidebar.review.kindNotice.unrenderable')
       : t(`rightSidebar.review.kindNotice.${diff.kind}`, { defaultValue: status });
     return (
-      <div className="flex min-w-0 items-center gap-2 rounded-[8px] border border-[var(--border-default)] bg-[var(--surface)] px-3 py-2 text-[12px] text-[var(--text-secondary)]">
+      <div className="flex min-w-0 items-center gap-2 rounded-[8px] border border-[var(--border-default)] bg-[var(--surface)] px-3 py-2 text-12 text-[var(--text-secondary)]">
         <span className="min-w-0 flex-1">
           <span className="font-medium text-[var(--text-primary)]">{status}</span>
           <span className="ml-2">{notice}</span>
         </span>
         {diff.kind === 'too-large' && onOpenFile && (
-          <button
-            type="button"
-            onClick={() => onOpenFile(diff)}
-            className="inline-flex h-6 shrink-0 items-center gap-1 rounded-[6px] border border-[var(--border-default)] bg-[var(--surface-elevated)] px-2 text-[11px] font-medium text-[var(--text-primary)] hover:bg-[var(--surface-hover)]"
-          >
+          <Button variant="secondary" size="xs" compact type="button" onClick={() => onOpenFile(diff)}>
             <ExternalLink size={12} />
             <span>{t('rightSidebar.review.openFile')}</span>
-          </button>
+          </Button>
         )}
       </div>
     );
   }
   if (diff.hunks.length === 0) {
     return (
-      <div className="rounded-[8px] border border-[var(--border-default)] bg-[var(--surface)] px-3 py-2 text-[12px] text-[var(--text-tertiary)]">
+      <div className="rounded-[8px] border border-[var(--border-default)] bg-[var(--surface)] px-3 py-2 text-12 text-[var(--text-tertiary)]">
         {t('rightSidebar.review.noRenderableDiff')}
       </div>
     );

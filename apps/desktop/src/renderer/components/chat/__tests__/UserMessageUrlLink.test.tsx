@@ -14,6 +14,7 @@ vi.mock('@/components/ui/dropdown-menu', () => ({
   DropdownMenuTrigger: ({ children }: { children: ReactNode }) => <>{children}</>,
   DropdownMenuContent: ({ children }: { children: ReactNode }) => <div>{children}</div>,
   DropdownMenuSeparator: () => <hr />,
+  DropdownMenuShortcut: ({ children }: { children: ReactNode }) => <span aria-hidden>{children}</span>,
   DropdownMenuItem: ({ children, onClick }: { children: ReactNode; onClick?: () => void }) => (
     <button type="button" onClick={onClick}>
       {children}
@@ -39,16 +40,17 @@ import {
 import { UserMessageUrlLink } from '../UserMessageUrlLink';
 
 const URL = 'https://example.com/path';
+const LOCAL_URL = 'http://localhost:3000/app';
 const openExternal = vi.fn(async (url: string) => {
   void url;
   return { success: true };
 });
 
-function ExternalPreferenceButton() {
-  const { setPreference } = useLinkOpenPreference();
+function WebPreferenceButton({ value }: { value: 'sidebar' | 'external' }) {
+  const { setPreference } = useLinkOpenPreference('web');
   return (
-    <button type="button" onClick={() => setPreference('external')}>
-      use external
+    <button type="button" onClick={() => setPreference(value)}>
+      use {value}
     </button>
   );
 }
@@ -64,7 +66,26 @@ describe('UserMessageUrlLink', () => {
     });
   });
 
+  it('opens public web URLs in the system browser by default', async () => {
+    render(<UserMessageUrlLink url={URL} sessionId="session-a" />);
+
+    fireEvent.click(screen.getByRole('link'));
+
+    await waitFor(() => expect(openExternal).toHaveBeenCalledWith(URL));
+    expect(openUrlInSidebarBrowser).not.toHaveBeenCalled();
+  });
+
+  it('opens localhost URLs in the current session sidebar by default', async () => {
+    render(<UserMessageUrlLink url={LOCAL_URL} sessionId="session-a" />);
+
+    fireEvent.click(screen.getByRole('link'));
+
+    await waitFor(() => expect(openUrlInSidebarBrowser).toHaveBeenCalledWith('session-a', LOCAL_URL));
+    expect(openExternal).not.toHaveBeenCalled();
+  });
+
   it('opens the URL in the current session sidebar when sidebar is preferred', async () => {
+    localStorage.setItem('chat.webLinkOpenPreference', 'sidebar');
     render(<UserMessageUrlLink url={URL} sessionId="session-a" />);
 
     fireEvent.click(screen.getByRole('link'));
@@ -74,9 +95,10 @@ describe('UserMessageUrlLink', () => {
   });
 
   it('uses a newly selected external preference without remounting', async () => {
+    localStorage.setItem('chat.webLinkOpenPreference', 'sidebar');
     render(
       <>
-        <ExternalPreferenceButton />
+        <WebPreferenceButton value="external" />
         <UserMessageUrlLink url={URL} sessionId="session-a" />
       </>,
     );
@@ -98,6 +120,7 @@ describe('UserMessageUrlLink', () => {
   });
 
   it('uses the visible session bucket for sidebar-embedded messages', async () => {
+    localStorage.setItem('chat.webLinkOpenPreference', 'sidebar');
     render(
       <SessionNavigationModeProvider mode="sidebar-embedded" sidebarTargetSessionId="lead-a">
         <UserMessageUrlLink url={URL} sessionId="worker-a" />
@@ -119,12 +142,30 @@ describe('UserMessageUrlLink', () => {
     expect(screen.getByText('chat.markdownRenderer.copyLink')).toBeTruthy();
   });
 
-  it('keeps Ctrl-click as a temporary external-browser override', async () => {
+  it.each([{ ctrlKey: true }, { metaKey: true }, { shiftKey: true }])('uses %j as a temporary external-browser override', async (modifier) => {
+    localStorage.setItem('chat.webLinkOpenPreference', 'sidebar');
     render(<UserMessageUrlLink url={URL} sessionId="session-a" />);
 
-    fireEvent.click(screen.getByRole('link'), { ctrlKey: true });
+    fireEvent.click(screen.getByRole('link'), modifier);
 
     await waitFor(() => expect(openExternal).toHaveBeenCalledWith(URL));
     expect(openUrlInSidebarBrowser).not.toHaveBeenCalled();
+    expect(localStorage.getItem('chat.webLinkOpenPreference')).toBe('sidebar');
+  });
+
+  it('supports middle click and Shift+Enter without changing the sidebar preference', async () => {
+    render(<UserMessageUrlLink url={LOCAL_URL} sessionId="session-a" />);
+    fireEvent(screen.getByRole('link'), new MouseEvent('auxclick', { bubbles: true, button: 1 }));
+    fireEvent.keyDown(screen.getByRole('link'), { key: 'Enter', shiftKey: true });
+    await waitFor(() => expect(openExternal).toHaveBeenCalledTimes(2));
+    expect(openUrlInSidebarBrowser).not.toHaveBeenCalled();
+  });
+
+  it('offers copy and system-browser actions without a session, including keyboard access', () => {
+    render(<UserMessageUrlLink url={URL} />);
+    fireEvent.keyDown(screen.getByRole('link'), { key: 'F10', shiftKey: true });
+    expect(screen.getByText('chat.markdownRenderer.copyLink')).toBeTruthy();
+    expect(screen.getByText('chat.markdownRenderer.openInDefaultBrowser')).toBeTruthy();
+    expect(screen.queryByText('chat.markdownRenderer.openInSidebarBrowser')).toBeNull();
   });
 });

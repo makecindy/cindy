@@ -67,6 +67,21 @@ export const ESSENTIAL_PLUGIN_IDS: ReadonlySet<string> = new Set([
   'lsp',
 ]);
 
+/** Companions share the ordinary task's infrastructure; no separate permission tier. */
+export const BOT_BASELINE_PLUGIN_IDS = ESSENTIAL_PLUGIN_IDS;
+
+export function resolveBotAllowedBuiltinPluginIds(
+  catalog: readonly { id: string; available?: boolean }[],
+  configured: readonly string[],
+): string[] {
+  const explicit = new Set(configured);
+  return [...new Set(catalog
+    .filter((item) =>
+      item.available !== false
+      && (BOT_BASELINE_PLUGIN_IDS.has(item.id) || explicit.has(item.id)))
+    .map((item) => item.id))];
+}
+
 /** Plugin ids that have a dedicated Settings home and should NOT appear in the
  *  generic「内置工具」list — but remain user-toggleable (unlike essential ids).
  *  `browser` and `computer` live under Settings →「电脑使用 / Computer Use」,
@@ -76,9 +91,6 @@ export const HOSTED_ELSEWHERE_PLUGIN_IDS: ReadonlySet<string> = new Set([
   'android',
   'browser',
   'computer',
-  // 智能通讯录的开关在 Settings → 智能通讯录 专属页(contacts-settings-store),
-  // 「内置工具」列表再出现一个 toggle 会造成双开关困惑。
-  'contacts',
 ]);
 
 /** Builtin plugins that are intentionally opt-in by default.
@@ -93,7 +105,4 @@ export const DEFAULT_DISABLED_PLUGIN_IDS: ReadonlySet<string> = new Set([
  * Direct desktop control installs a local driver and requires OS-level
  * permissions, so tying it to an arbitrary session workingDir makes the MCP
  * disappear for plain dialogue sessions. */
-export const GLOBAL_PLUGIN_IDS: ReadonlySet<string> = new Set([
-  'android',
-  'computer',
-]);
+export const GLOBAL_PLUGIN_IDS: ReadonlySet<string> = new Set(['android', 'computer']);

@@ -2,13 +2,17 @@
  * 远程端点清单启动解析(clientEndpointStartup)+ env live binding 回写单测。
  *
  * 关键覆盖:
- *  - 正式包只认 CDN 清单;字段缺失/空白不阻断,拉取失败或清单非法仍阻断;
- *  - 不使用包内 endpoint.json 做字段合并或整份回退;
+ *  - 自定义源无官方随包兜底；字段缺失/空白不阻断，配置错误仍阻断；
+ *  - 官方源的缓存/随包恢复见 endpointManifestLoader.test.ts，不做字段合并;
  *  - applyResolvedClientEndpoints 重赋值后,跨模块 ESM live binding 立即可见。
  */
 import { describe, expect, it, vi } from 'vitest';
 
 import type { ManifestFetchResult } from '@/config/clientEndpointStartup';
+
+vi.mock('@react-native-async-storage/async-storage', () => ({
+  default: { getItem: async () => null, setItem: async () => undefined },
+}));
 
 type FetchManifest = (timeoutMs: number) => Promise<ManifestFetchResult>;
 
@@ -35,6 +39,7 @@ const FULL_MANIFEST_OBJECT = {
   voiceApiBaseUrl: 'https://voice-next.example.com',
   githubApiBaseUrl: 'https://github-api-next.example.com',
   skillhubApiBaseUrl: 'https://skillhub-next.example.com',
+  cindySkillHubApiBaseUrl: 'https://cindy-skillhub-next.example.com',
   cdnBaseUrl: 'https://cdn-next.example.com/app',
   mobileUpdateBaseUrl: 'https://mobile-update-next.example.com',
 };
@@ -97,10 +102,117 @@ describe('runStartupEndpointResolve(CDN 解析)', () => {
     ).resolves.toEqual({ ok: true, source: 'cdn' });
   });
 
+  it('可从指定的第二个可信清单基址拉取端点', async () => {
+    const { startup } = await freshModules();
+    const fetchSpy = vi.spyOn(globalThis, 'fetch').mockResolvedValue({
+      ok: true,
+      text: async () => FULL_MANIFEST,
+    } as Response);
+    try {
+      await expect(
+        startup.runStartupEndpointResolve({
+          autoRetryDelaysMs: [],
+          manifestBaseUrl: 'https://release-manifest.example/app',
+        }),
+      ).resolves.toEqual({ ok: true, source: 'cdn' });
+      expect(fetchSpy).toHaveBeenCalledWith(
+        expect.stringMatching(
+          /^https:\/\/release-manifest\.example\/app\/endpoint\.json\?t=\d+$/,
+        ),
+        expect.objectContaining({ signal: expect.any(AbortSignal) }),
+      );
+    } finally {
+      fetchSpy.mockRestore();
+    }
+  });
+
+  it('第二份清单按显式目标区域校验，不受安装包默认区域限制', async () => {
+    const { startup } = await freshModules();
+    const apply = vi.fn();
+
+    await expect(
+      startup.runStartupEndpointResolve({
+        apply,
+        expectedRegion: 'global',
+        fetchManifest: okFetch(
+          JSON.stringify({ ...FULL_MANIFEST_OBJECT, region: 'global' }),
+        ),
+      }),
+    ).resolves.toEqual({ ok: true, source: 'cdn' });
+    expect(apply).toHaveBeenCalledTimes(1);
+  });
+
+  it('切换业务服务器时保留 CindyDev 的 OTA 与审核元数据', async () => {
+    process.env.EXPO_PUBLIC_XDT_OTA_SELFHOST = '1';
+    vi.resetModules();
+    vi.doMock('expo-constants', () => ({
+      default: { expoConfig: { version: '9.9.9' } },
+    }));
+    try {
+      const env = await import('@/config/env');
+      const startup = await import('@/config/clientEndpointStartup');
+      const buildManifest = JSON.stringify({
+        ...FULL_MANIFEST_OBJECT,
+        authApiBaseUrl: 'https://auth.dev.example.com',
+        mobileUpdateBaseUrl: 'https://updates.dev.example.com',
+        review: '9.9.9',
+      });
+      await startup.runStartupEndpointResolve({
+        fetchManifest: okFetch(buildManifest),
+      });
+      expect(env.AUTH_API_BASE_URL).toBe('https://auth.dev.example.com');
+      expect(env.OTA_SERVER_BASE_URL).toBe('https://updates.dev.example.com');
+      expect(env.REVIEW_MODE).toBe(true);
+      expect(env.IS_TESTFLIGHT_BUILD).toBe(false);
+
+      const releaseManifest = JSON.stringify({
+        ...FULL_MANIFEST_OBJECT,
+        authApiBaseUrl: 'https://auth.release.example.com',
+        mobileUpdateBaseUrl: 'https://updates.release.example.com',
+        review: '0.0.0',
+      });
+      await startup.runStartupEndpointResolve({
+        fetchManifest: okFetch(releaseManifest),
+        preserveBuildReleaseMetadata: true,
+        resolveIsTestFlight: async () => true,
+      });
+
+      expect(env.AUTH_API_BASE_URL).toBe('https://auth.release.example.com');
+      expect(env.OTA_SERVER_BASE_URL).toBe('https://updates.dev.example.com');
+      expect(env.REVIEW_MODE).toBe(true);
+      expect(env.IS_TESTFLIGHT_BUILD).toBe(false);
+      expect(
+        env.getMobileEndpointForRealm(env.BUILD_AUTH_REGION, 'authApiBaseUrl'),
+      ).toBe('https://auth.release.example.com');
+    } finally {
+      delete process.env.EXPO_PUBLIC_XDT_OTA_SELFHOST;
+      vi.doUnmock('expo-constants');
+      vi.resetModules();
+    }
+  });
+
+  it('二进制版本优先读原生 0.1.2，不被 OTA manifest 的 0.1.0 覆盖', async () => {
+    vi.resetModules();
+    vi.doMock('expo-application', () => ({
+      nativeApplicationVersion: '0.1.2',
+    }));
+    vi.doMock('expo-constants', () => ({
+      default: { expoConfig: { version: '0.1.0' } },
+    }));
+    try {
+      const env = await import('@/config/env');
+      expect(env.APP_BINARY_VERSION).toBe('0.1.2');
+    } finally {
+      vi.doUnmock('expo-application');
+      vi.doUnmock('expo-constants');
+      vi.resetModules();
+    }
+  });
+
   it('清单 review 命中二进制版本号且非 TestFlight → REVIEW_MODE=true', async () => {
     vi.resetModules();
     vi.doMock('expo-constants', () => ({
-      default: { expoConfig: { version: '9.9.9' }, nativeAppVersion: '9.9.9' },
+      default: { expoConfig: { version: '9.9.9' } },
     }));
     try {
       const env = await import('@/config/env');
@@ -567,6 +679,28 @@ describe('applyResolvedClientEndpoints', () => {
     expect(env.AUTH_API_BASE_URL).toBe('https://auth-new.example.com');
     env.applyResolvedClientEndpoints({ authApiBaseUrl: '' });
     expect(env.AUTH_API_BASE_URL).toBe('');
+  });
+
+  // 自建中转(docs/self-hosted-relay-plan.md §5.3):中转地址必须扛过之后的每一次区域写入,
+  // 而推送注册直接读的 realm 缓存要一直是官方地址(否则会把推送登记发到自建中转)。
+  it('自建中转地址覆盖在区域写入后仍生效,realm 缓存保持官方地址', async () => {
+    const { env, startup } = await freshModules();
+    await expect(
+      startup.runStartupEndpointResolve({ fetchManifest: okFetch(FULL_MANIFEST) }),
+    ).resolves.toEqual({ ok: true, source: 'cdn' });
+    env.setDeviceLinkApiBaseOverride('https://relay.home.example/');
+    expect(env.deviceLinkWsUrl()).toBe('wss://relay.home.example/api/device-link/ws');
+    env.applyResolvedClientEndpoints({
+      deviceLinkApiBaseUrl: 'https://device.override.example.com',
+    });
+    env.activateMobileSessionRealm(env.BUILD_AUTH_REGION);
+    env.resetMobileSessionRealm();
+    expect(env.DEVICE_LINK_API_BASE_URL).toBe('https://relay.home.example');
+    expect(
+      env.getMobileEndpointForRealm(env.BUILD_AUTH_REGION, 'deviceLinkApiBaseUrl'),
+    ).toBe('https://device.override.example.com');
+    env.setDeviceLinkApiBaseOverride(null);
+    expect(env.DEVICE_LINK_API_BASE_URL).toBe('https://device.override.example.com');
   });
 
   it('组织会话切换 token 消费端点,退出后恢复构建区域且不改变更新端点', async () => {

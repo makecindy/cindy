@@ -2,9 +2,9 @@
  * SectionCollapse —— 侧栏段落 / 项目树的展开收起高度动画容器。
  * ---------------------------------------------------------------------------
  * 用 CSS grid-template-rows 0fr ↔ 1fr 技巧做高度过渡:无需测量内容高度,
- * 任意动态内容都能平滑收展;内容保持挂载(列表滚动位置等内部状态默认不因
- * 卸载丢失),收起后由 min-h-0 + overflow-hidden 裁掉。调用方可按业务需要
- * 在收起动画完成后自行复位局部状态。
+ * 任意动态内容都能平滑收展。收起动画进行中仍挂载 children,播完后卸载,
+ * 避免「全部展开再收起」后隐藏子树继续占 React 协调成本。调用方可按业务
+ * 需要在收起动画完成后自行复位局部状态;卸载本身也会丢掉内部 state。
  *
  * 同步做透明度渐变(高度收起的同时文字渐隐,对齐 Codex 的收起手感);
  * visibility 参与过渡 —— 收起动画播完后才隐藏(挡键盘焦点/交互),展开瞬间恢复。
@@ -13,6 +13,8 @@
  *
  * 额外 props(如 data-no-drag)透传到外层 grid 容器。
  */
+
+import { useEffect, useState } from 'react';
 
 import { cn } from '@/lib/utils';
 
@@ -32,6 +34,23 @@ export function SectionCollapse({
   children,
   ...rest
 }: SectionCollapseProps) {
+  const [keepChildren, setKeepChildren] = useState(!collapsed);
+
+  useEffect(() => {
+    if (!collapsed) {
+      setKeepChildren(true);
+      return undefined;
+    }
+    const timeoutId = window.setTimeout(() => {
+      setKeepChildren(false);
+    }, SECTION_COLLAPSE_DURATION_MS);
+    return () => {
+      window.clearTimeout(timeoutId);
+    };
+  }, [collapsed]);
+
+  const mounted = !collapsed || keepChildren;
+
   return (
     <div
       {...rest}
@@ -43,6 +62,7 @@ export function SectionCollapse({
     >
       <div
         aria-hidden={collapsed || undefined}
+        data-sidebar-section-collapsed={collapsed ? 'true' : undefined}
         className={cn(
           'min-h-0 overflow-hidden',
           'transition-[opacity,visibility] duration-[200ms] ease-[cubic-bezier(0.4,0,0.2,1)] motion-reduce:duration-0',
@@ -50,7 +70,7 @@ export function SectionCollapse({
           innerClassName,
         )}
       >
-        {children}
+        {mounted ? children : null}
       </div>
     </div>
   );

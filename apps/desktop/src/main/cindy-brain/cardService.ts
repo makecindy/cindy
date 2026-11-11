@@ -32,8 +32,12 @@ import {
   GHOST_CARD_REOPEN_WINDOW_MS,
   GHOST_CARD_WORKING_WINDOW_MS,
   GHOST_CARD_ID_KEY,
+  GHOST_CARD_TURN_END_KEY,
+  isTurnEndGhostCardHtml,
   type GhostToolCallResult,
 } from '../../shared/ghost.js';
+import { markGhostCardSuperseded } from '@cindy/maker-shared/ghost-card-form';
+
 import type { SanitizeCardResult } from './cardSanitizer.js';
 
 /**
@@ -48,15 +52,17 @@ export function withCardToken(
   result: GhostToolCallResult,
   hasCard: boolean,
   callId: string,
+  turnEnd = false,
 ): GhostToolCallResult {
   if (!hasCard || !result.ok) return result;
+  const token = { [GHOST_CARD_ID_KEY]: callId, ...(turnEnd ? { [GHOST_CARD_TURN_END_KEY]: true } : {}) };
   if (result.result === null || result.result === undefined) {
-    return { ok: true, result: { [GHOST_CARD_ID_KEY]: callId } };
+    return { ok: true, result: token };
   }
   if (typeof result.result === 'object' && !Array.isArray(result.result)) {
     return {
       ok: true,
-      result: { ...(result.result as Record<string, unknown>), [GHOST_CARD_ID_KEY]: callId },
+      result: { ...(result.result as Record<string, unknown>), ...token },
     };
   }
   return result;
@@ -97,7 +103,11 @@ export interface GhostCardRow {
 /** 推送给 renderer 的载荷(带 html,免回查)。 */
 export interface GhostCardPush {
   callId: string;
+  /** Host-owned task scope; older senders may omit it. */
+  sessionId?: string | null;
   ghostId: string;
+  /** 物理键与逻辑身份不同时，供进行中调用按 namespace 精确配对。 */
+  logicalGhostId?: string;
   /** agent 侧 tool_use id(claude 路径有,codex 为 null → renderer 走启发式锚定)。 */
   toolUseId: string | null;
   /** 静态版(settle 后 / 历史回放用;与落库内容一致)。 */
@@ -151,8 +161,17 @@ const SWEEP_MIN_INTERVAL_MS = 30_000;
 
 interface CallEntry {
   ghostId: string;
+  logicalGhostId?: string;
+  /** 被调用的插件工具名(ghost_call 登记时提供；其它通道省略)。 */
+  tool?: string;
   toolUseId: string | null;
   sessionId: string | null;
+  sessionInstanceId?: string;
+  /**
+   * SSH remote 会话的 host id；本地会话必须显式登记 null。省略表示调用方
+   * 没有提供 locality 事实，能力消费方必须 fail closed，不能当成本地。
+   */
+  remoteHostId: string | null | undefined;
   /**
    * 调用通道:'session' = 会话内 ghost_call(默认);'script' = scheduler
    * 「仅运行脚本」broker 直调。显式字段而非由 sessionId/scriptWorkdir 推导
@@ -173,6 +192,8 @@ interface CallEntry {
    */
   scriptWritePath: string | null;
   hasCard: boolean;
+  /** 最新一版卡片声明了排到本轮末尾。 */
+  turnEnd?: boolean;
   lastAcceptedAt: number | null;
   settledAt: number | null;
   /**
@@ -194,6 +215,7 @@ interface CallEntry {
 /** 卡片供片服务(单例装配见 cindy-brain/index.ts)。 */
 export class GhostCardService {
   private readonly calls = new Map<string, CallEntry>();
+  private readonly pendingWrites = new Map<Promise<void>, string>();
   private lastSweepAt = 0;
 
   constructor(private readonly deps: GhostCardServiceDeps) {}
@@ -231,8 +253,14 @@ export class GhostCardService {
     callId: string,
     info: {
       ghostId: string;
+      logicalGhostId?: string;
+      /** 被调用的插件工具名；networkSlot 据此判断是否带 MCP Apps 手册头。 */
+      tool?: string;
       toolUseId: string | null;
       sessionId: string | null;
+      sessionInstanceId?: string;
+      /** SSH remote host；本地会话显式传 null，未知时省略并 fail closed。 */
+      remoteHostId?: string | null;
       /** 脚本通道调用方传入 schedule.workingDir;普通会话调用省略。 */
       scriptWorkdir?: string | null;
       /** 脚本通道调用方传入脚本声明的 out_file(唯一可写相对路径);无写窗时省略。 */
@@ -244,8 +272,12 @@ export class GhostCardService {
     this.sweep();
     this.calls.set(callId, {
       ghostId: info.ghostId,
+      ...(info.logicalGhostId !== undefined ? { logicalGhostId: info.logicalGhostId } : {}),
+      ...(info.tool !== undefined ? { tool: info.tool } : {}),
       toolUseId: info.toolUseId,
       sessionId: info.sessionId,
+      sessionInstanceId: info.sessionInstanceId,
+      remoteHostId: info.remoteHostId,
       channel: info.channel ?? 'session',
       scriptWorkdir: info.scriptWorkdir ?? null,
       scriptWritePath: info.scriptWritePath ?? null,
@@ -268,10 +300,17 @@ export class GhostCardService {
     return entry.hasCard;
   }
 
+  /** 该单最新一版卡片是否声明排到本轮末尾。 */
+  isTurnEnd(callId: string): boolean {
+    return this.calls.get(callId)?.turnEnd === true;
+  }
+
   /** 该单当前是否已有卡(finalize 前后皆可查)。 */
   hasCard(callId: string): boolean {
     return this.calls.get(callId)?.hasCard ?? false;
   }
+
+  async flushWrites(): Promise<void> { await Promise.all(this.pendingWrites.keys()); }
 
   /**
    * 内存归属查询(in-flight + 宽限窗内):callId → ghostId,查无 null。
@@ -279,6 +318,17 @@ export class GhostCardService {
    * 兜底(cardStoreDb.getGhostCard)。 */
   ownerOf(callId: string): string | null {
     return this.calls.get(callId)?.ghostId ?? null;
+  }
+
+  async relocateGhost(fromPart: string, toPart: string): Promise<void> {
+    for (const entry of this.calls.values()) {
+      if (entry.ghostId === fromPart) entry.ghostId = toPart;
+    }
+    await Promise.all(
+      [...this.pendingWrites]
+        .filter(([, ghostId]) => ghostId === fromPart)
+        .map(([pending]) => pending),
+    );
   }
 
   /**
@@ -299,10 +349,19 @@ export class GhostCardService {
    * 结束后继续充当"目录授权上下文"——否则插件记住一个旧 callId 就能跨
    * 调用复用当时会话的 workdir 自动放行。
    */
-  inFlightCallInfoOf(callId: string): { ghostId: string; sessionId: string | null; scriptWorkdir: string | null; scriptWritePath: string | null; channel: 'session' | 'script' } | null {
+  inFlightCallInfoOf(callId: string): { ghostId: string; sessionId: string | null; sessionInstanceId?: string; remoteHostId: string | null | undefined; scriptWorkdir: string | null; scriptWritePath: string | null; channel: 'session' | 'script'; tool?: string } | null {
     const e = this.calls.get(callId);
     if (!e || e.settledAt !== null || e.reopenedAt !== null) return null;
-    return { ghostId: e.ghostId, sessionId: e.sessionId, scriptWorkdir: e.scriptWorkdir, scriptWritePath: e.scriptWritePath, channel: e.channel };
+    return { ghostId: e.ghostId, sessionId: e.sessionId, ...(e.sessionInstanceId ? { sessionInstanceId: e.sessionInstanceId } : {}), remoteHostId: e.remoteHostId, scriptWorkdir: e.scriptWorkdir, scriptWritePath: e.scriptWritePath, channel: e.channel, ...(e.tool !== undefined ? { tool: e.tool } : {}) };
+  }
+
+  /** An active tool may update its own earlier card in the same task. */
+  reopenForTool(sender: string, callId: string, sourceCallId: string, target: { ghostId: string; sessionId: string | null }): boolean {
+    const source = this.inFlightCallInfoOf(sourceCallId);
+    if (!source || source.ghostId !== sender || target.ghostId !== sender ||
+        source.channel !== 'session' || !source.sessionId || source.sessionId !== target.sessionId) return false;
+    this.reopenForAction(callId, target);
+    return true;
   }
 
   /**
@@ -320,12 +379,16 @@ export class GhostCardService {
     if (existing) {
       existing.settledAt = null;
       existing.reopenedAt = now;
+      // A trusted click starts a new operation. Its immediate result must not
+      // be discarded by the previous operation's update interval.
+      existing.lastAcceptedAt = null;
       return;
     }
     this.calls.set(callId, {
       ghostId: info.ghostId,
       toolUseId: null,
       sessionId: info.sessionId,
+      remoteHostId: undefined,
       // 交互卡重开只发生在会话通道(脚本通道条目拒供片,无卡可点)。
       channel: 'session',
       scriptWorkdir: null,
@@ -345,6 +408,7 @@ export class GhostCardService {
   handleCardUpdate(
     senderGhostId: string,
     payload: unknown,
+    hostMail = false,
   ): { accepted: boolean; reason?: string } {
     this.sweep();
     const reject = (reason: string, meta?: Record<string, unknown>) => {
@@ -371,6 +435,13 @@ export class GhostCardService {
       return reject('bad-state');
     }
     const activityState = p.state === 'working' || p.state === 'done' ? p.state : null;
+    // supersededBy: the card the plugin moved this one to. Only the active call that reopened this card
+    // (sourceCallId, verified before this handler) may name itself; views then hide this card.
+    if (p.supersededBy !== undefined && (hostMail || typeof p.supersededBy !== 'string' ||
+        p.supersededBy !== p.sourceCallId || p.supersededBy === p.callId || !/^[A-Za-z0-9_:.-]{1,128}$/.test(p.supersededBy))) {
+      return reject('bad-superseded-by', { callId: p.callId });
+    }
+    const supersededBy = typeof p.supersededBy === 'string' ? p.supersededBy : undefined;
 
     const entry = this.calls.get(p.callId);
     if (!entry) return reject('unknown-call', { callId: p.callId });
@@ -382,7 +453,7 @@ export class GhostCardService {
     // 出去是孤儿卡——供片语义不成立,直接拒(fs 落盘反查不受影响)。判据用显式
     // channel 字段:workingDir 空白(scriptWorkdir null)的脚本条目同样拒。
     if (entry.channel === 'script') return reject('script-call-no-card', { callId: p.callId });
-    if (!this.deps.hasCardSlot(senderGhostId)) return reject('no-card-slot');
+    if (!hostMail && !this.deps.hasCardSlot(senderGhostId)) return reject('no-card-slot');
 
     const now = this.now();
     // working 跨调用窗口内豁免 too-late(生成类流程:提交调用的卡位由后续
@@ -396,7 +467,7 @@ export class GhostCardService {
     }
     if (
       entry.lastAcceptedAt !== null &&
-      now - entry.lastAcceptedAt < GHOST_CARD_MIN_INTERVAL_MS
+      now - entry.lastAcceptedAt < GHOST_CARD_MIN_INTERVAL_MS && !hostMail
     ) {
       // 限速静默丢(首版免罚):意识狂刷不惊动 UI,也不给它节奏反馈。
       return reject('rate-limited', { callId: p.callId });
@@ -407,10 +478,13 @@ export class GhostCardService {
       : GHOST_CARD_HEIGHT_DEFAULT;
     const height = Math.min(GHOST_CARD_HEIGHT_MAX, Math.max(GHOST_CARD_HEIGHT_MIN, heightRaw));
 
-    const sanitized = this.deps.sanitize(p.html);
+    // Host mail HTML is rendered only from validated structured data. Preserve
+    // its private identity marker; plugin-authored HTML never gets this path.
+    const sanitized = hostMail ? { ok: true as const, html: p.html, animatedHtml: undefined } : this.deps.sanitize(p.html);
     if (!sanitized.ok) return reject(`sanitize:${sanitized.reason}`, { callId: p.callId });
 
     entry.hasCard = true;
+    entry.turnEnd = isTurnEndGhostCardHtml(sanitized.html);
     entry.lastAcceptedAt = now;
     // working 窗口记账:首个 working 开窗(固定起点),done 关窗(回到
     // settle 宽限语义,后续更新按旧规则判 too-late)。
@@ -420,28 +494,32 @@ export class GhostCardService {
       entry.workingSince = null;
     }
 
+    const html = supersededBy ? markGhostCardSuperseded(sanitized.html, supersededBy) : sanitized.html;
     const row: GhostCardRow = {
       callId: p.callId,
       ghostId: senderGhostId,
       sessionId: entry.sessionId,
-      html: sanitized.html,
+      html,
       height,
       v: cardVersion,
       updatedAt: now,
     };
     // 落库失败不阻断推送:活卡先见,历史回放缺卡由 renderer missing 降级兜底。
-    void this.deps.persist(row).catch((err) => {
+    const pending = this.deps.persist(row).catch((err) => {
       this.deps.log?.warn('ghost card persist failed', {
         callId: p.callId,
         error: err instanceof Error ? err.message : String(err),
       });
-    });
+    }).finally(() => this.pendingWrites.delete(pending));
+    this.pendingWrites.set(pending, senderGhostId);
     this.deps.broadcast({
       callId: p.callId,
+      sessionId: entry.sessionId,
       ghostId: senderGhostId,
+      ...(entry.logicalGhostId !== undefined ? { logicalGhostId: entry.logicalGhostId } : {}),
       toolUseId: entry.toolUseId,
-      html: sanitized.html,
-      animatedHtml: sanitized.animatedHtml ?? null,
+      html,
+      animatedHtml: supersededBy ? null : sanitized.animatedHtml ?? null,
       height,
       state: activityState,
     });

@@ -1,0 +1,106 @@
+import { Button } from '@/components/ui/button';
+import { useEffect, useRef, useState } from 'react';
+import * as Dialog from '@radix-ui/react-dialog';
+import { X } from 'lucide-react';
+import { useTranslation } from 'react-i18next';
+
+import type { BotProfile } from './botStore';
+import { useBotSettingsTarget } from './useBotSettingsTarget';
+
+/** Shared destructive confirmation for the roster and teammate settings. */
+export function BotDeleteDialog({
+  bot,
+  onOpenChange,
+  onDeleted,
+}: {
+  bot: BotProfile | null;
+  onOpenChange: (open: boolean) => void;
+  onDeleted: (botId: string) => void;
+}) {
+  const { t } = useTranslation();
+  const target = useBotSettingsTarget();
+  const inFlight = useRef(false);
+  const [busy, setBusy] = useState(false);
+  const [failed, setFailed] = useState(false);
+
+  useEffect(() => {
+    setFailed(false);
+  }, [bot?.id]);
+
+  if (!bot) return null;
+
+  const deleteBot = async () => {
+    if (inFlight.current) return;
+    inFlight.current = true;
+    setBusy(true);
+    setFailed(false);
+    try {
+      await target.lifecycle.run({
+        botId: bot.id,
+        action: 'delete',
+        confirmName: bot.name,
+        keepTaskHistory: true,
+        worktreeDisposition: 'retain',
+      });
+      onOpenChange(false);
+      onDeleted(bot.id);
+    } catch {
+      setFailed(true);
+    } finally {
+      inFlight.current = false;
+      setBusy(false);
+    }
+  };
+
+  return (
+    <Dialog.Root open onOpenChange={(open) => !busy && onOpenChange(open)}>
+      <Dialog.Portal>
+        <Dialog.Overlay className="modal-scrim fixed inset-0 z-[70]" />
+        <Dialog.Content onPointerDownOutside={(event) => event.preventDefault()} className="modal-panel fixed left-1/2 top-1/2 z-[71] w-[min(480px,calc(100vw-32px))] -translate-x-1/2 -translate-y-1/2 p-5 outline-none">
+          <div className="flex items-start justify-between gap-4">
+            <div>
+              <Dialog.Title className="text-16 font-medium text-[var(--text-danger)]">
+                {t('bots.lifecycle.deleteTitle')}
+              </Dialog.Title>
+              <Dialog.Description className="mt-1 text-12 leading-5 text-[var(--text-secondary)]">
+                {t('bots.lifecycle.deleteDescription', { name: bot.name })}
+              </Dialog.Description>
+            </div>
+            <Dialog.Close
+              disabled={busy}
+              aria-label={t('bots.close')}
+              className="rounded-lg p-1 text-[var(--text-tertiary)] hover:bg-[var(--surface-hover)] disabled:opacity-50"
+            >
+              <X size={16} />
+            </Dialog.Close>
+          </div>
+          {failed ? (
+            <p className="mt-3 text-11 text-[var(--text-danger)]" role="alert">
+              {t('bots.lifecycle.deleteFailed')}
+            </p>
+          ) : null}
+          <div className="mt-5 flex justify-end gap-2">
+            <Dialog.Close
+              disabled={busy}
+              className="h-9 rounded-lg px-3 text-12 text-[var(--text-secondary)] hover:bg-[var(--surface-hover)] disabled:opacity-50"
+            >
+              {t('bots.cancel')}
+            </Dialog.Close>
+            <Button
+              variant="cta"
+              size="lg"
+              compact
+              tone="danger-solid"
+              loading={busy}
+              type="button"
+              onClick={() => void deleteBot()}
+              disabled={busy}
+            >
+              {busy ? t('bots.lifecycle.working') : t('bots.lifecycle.delete')}
+            </Button>
+          </div>
+        </Dialog.Content>
+      </Dialog.Portal>
+    </Dialog.Root>
+  );
+}

@@ -15,16 +15,20 @@ import type {
   SwipeableMethods,
   SwipeableProps,
 } from 'react-native-gesture-handler/ReanimatedSwipeable';
+import type { SwipeableProps as ClassicSwipeableProps } from './ClassicSwipeable';
 
 type GestureHandlerModule = typeof import('react-native-gesture-handler');
 type ReanimatedSwipeableModule =
   typeof import('react-native-gesture-handler/ReanimatedSwipeable');
+type ClassicSwipeableModule =
+  typeof import('./ClassicSwipeable');
 
 const isStoreClient =
   Constants.executionEnvironment === ExecutionEnvironment.StoreClient;
 
 let gestureHandlerModule: GestureHandlerModule | null | undefined;
 let reanimatedSwipeableModule: ReanimatedSwipeableModule | null | undefined;
+let classicSwipeableModule: ClassicSwipeableModule | null | undefined;
 
 function loadGestureHandler(): GestureHandlerModule | null {
   if (isStoreClient) return null;
@@ -44,6 +48,16 @@ function loadReanimatedSwipeable(): ReanimatedSwipeableModule | null {
     ) as ReanimatedSwipeableModule;
   }
   return reanimatedSwipeableModule;
+}
+
+function loadClassicSwipeable(): ClassicSwipeableModule | null {
+  if (isStoreClient) return null;
+  if (classicSwipeableModule === undefined) {
+    classicSwipeableModule = require(
+      './ClassicSwipeable',
+    ) as ClassicSwipeableModule;
+  }
+  return classicSwipeableModule;
 }
 
 function NoopGestureHandlerRootView(props: ViewProps) {
@@ -83,13 +97,32 @@ const NoopReanimatedSwipeable = forwardRef<SwipeableMethods, SwipeableProps>(
   ({ children, containerStyle, testID }, ref) => {
     useImperativeHandle(ref, () => noopSwipeableMethods, []);
     return (
-      <View style={containerStyle} testID={testID}>
+      <View style={containerStyle as ViewProps["style"]} testID={testID}>
         {children}
       </View>
     );
   },
 );
 NoopReanimatedSwipeable.displayName = 'NoopReanimatedSwipeable';
+
+export interface ClassicSwipeableMethods {
+  close(): void;
+  openLeft(): void;
+  openRight(): void;
+  reset(): void;
+}
+
+const NoopClassicSwipeable = forwardRef<ClassicSwipeableMethods, ClassicSwipeableProps>(
+  ({ children, containerStyle, testID }, ref) => {
+    useImperativeHandle(ref, () => noopSwipeableMethods, []);
+    return (
+      <View style={containerStyle as ViewProps["style"]} testID={testID}>
+        {children}
+      </View>
+    );
+  },
+);
+NoopClassicSwipeable.displayName = 'NoopClassicSwipeable';
 
 export const GestureHandlerRootView =
   loadGestureHandler()?.GestureHandlerRootView ??
@@ -104,6 +137,12 @@ export const Gesture = loadGestureHandler()?.Gesture ?? noopGestureApi;
 export const ReanimatedSwipeable =
   loadReanimatedSwipeable()?.default ??
   (NoopReanimatedSwipeable as unknown as React.ComponentType<SwipeableProps>);
+
+export const ClassicSwipeable = (
+  loadClassicSwipeable()?.default ?? NoopClassicSwipeable
+) as unknown as React.ComponentType<
+  ClassicSwipeableProps & React.RefAttributes<ClassicSwipeableMethods>
+>;
 
 export const SwipeDirection = loadReanimatedSwipeable()?.SwipeDirection ?? {
   LEFT: 'left',

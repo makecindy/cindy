@@ -20,6 +20,7 @@ import en from '@/i18n/locales/en/common.json';
 import zhCN from '@/i18n/locales/zh-CN/common.json';
 import ja from '@/i18n/locales/ja/common.json';
 import ko from '@/i18n/locales/ko/common.json';
+import zhTW from '@/i18n/locales/zh-TW/common.json';
 
 // 与 packages/maker-core/src/agents/codex/compaction-storm.ts 的常量一致。
 // 这里刻意写字面量而不是 import:renderer 不依赖 maker-core,而 reason 是跨进程的
@@ -27,7 +28,7 @@ import ko from '@/i18n/locales/ko/common.json';
 const REASON_GENERIC = 'codex_compaction_not_converging';
 const REASON_MODEL_SWITCH = 'codex_compaction_not_converging_model_switch';
 
-const LOCALES = { en, 'zh-CN': zhCN, ja, ko } as Record<
+const LOCALES = { en, 'zh-CN': zhCN, 'zh-TW': zhTW, ja, ko } as Record<
   string,
   { logic: { errors: Record<string, string> } }
 >;
@@ -36,6 +37,7 @@ const LOCALES = { en, 'zh-CN': zhCN, ja, ko } as Record<
 const SWITCH_CLAIMS: Record<string, readonly string[]> = {
   en: ['switched model', 'Switch back', 'previous model'],
   'zh-CN': ['切换过模型', '切回原模型', '切换前'],
+  'zh-TW': ['切換過模型', '切回原模型', '切換前'],
   ja: ['モデルを切り替え', '元のモデルに戻す', '切り替え前'],
   ko: ['모델을 변경', '원래 모델로', '변경 전'],
 };
@@ -63,10 +65,9 @@ describe('压缩风暴熔断的 reason → 文案映射', () => {
   it.each(Object.keys(LOCALES))('%s:通用文案不得断言切过模型', (locale) => {
     const text = copyFor(locale, REASON_GENERIC);
     for (const claim of SWITCH_CLAIMS[locale]) {
-      expect(
-        text,
-        `${locale} 的通用文案不该出现「${claim}」—— 熔断时并没有切换证据`,
-      ).not.toContain(claim);
+      expect(text, `${locale} 的通用文案不该出现「${claim}」—— 熔断时并没有切换证据`).not.toContain(
+        claim,
+      );
     }
   });
 
@@ -85,13 +86,12 @@ describe('压缩风暴熔断的 reason → 文案映射', () => {
     const nextStep: Record<string, string> = {
       en: 'start a new task',
       'zh-CN': '新开一个任务',
+      'zh-TW': '新開一個任務',
       ja: '新しいセッションを開始',
       ko: '새 세션을 시작',
     };
     for (const reason of [REASON_GENERIC, REASON_MODEL_SWITCH]) {
-      expect(copyFor(locale, reason).toLowerCase()).toContain(
-        nextStep[locale].toLowerCase(),
-      );
+      expect(copyFor(locale, reason).toLowerCase()).toContain(nextStep[locale].toLowerCase());
     }
   });
 });

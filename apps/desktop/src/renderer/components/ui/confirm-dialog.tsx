@@ -1,18 +1,28 @@
 import { useEffect, useId, useRef, useState, type ReactNode } from 'react';
 import * as AlertDialog from '@radix-ui/react-alert-dialog';
 import { useTranslation } from 'react-i18next';
+import { X } from 'lucide-react';
 
 import { flashScrollbar } from '@/lib/scrollbarAutoHide';
 import { cn } from '@/lib/utils';
+import { WINDOW_DRAG_STYLE, WINDOW_NO_DRAG_STYLE } from '@/components/layout/windowDrag';
+import { Button } from '@/components/ui/button';
 import { Spinner } from '@/components/ui/spinner';
+import { Tooltip } from '@/components/ui/tooltip';
 
 export interface ConfirmDialogProps {
+  /** Explicit pilot opt-in; unselected callers retain their existing presentation. */
+  presentation?: 'standard';
+  /** Explicit design opt-in for standard dialogs; existing callers keep confirm-first order. */
+  cancelFirst?: boolean;
   open: boolean;
   onOpenChange: (open: boolean) => void;
   title: string;
   description?: string;
   /** 可选的标题与正文样式；富内容区与按钮不受影响。 */
   textClassName?: string;
+  /** 可选的正文样式；不改变标题字号。 */
+  descriptionClassName?: string;
   /**
    * 富内容区(如装意识的逐项权限清单):渲染在 description 之后、复选框之前。
    * 与 description 独立 —— Radix Description 是 <p>,块级列表不能塞进去。
@@ -23,13 +33,15 @@ export interface ConfirmDialogProps {
    */
   content?: ReactNode;
   /**
-   * 弹窗最大宽度(px),缺省 400。带富内容清单的弹窗(如意识装入确认)
+   * 弹窗最大宽度(px),缺省 400。带富内容清单的弹窗
    * 用默认宽会折行到累,可适度放宽;普通二选一确认别动它。
    */
   maxWidth?: number;
   confirmText?: string;
   cancelText?: string;
   showCancel?: boolean;
+  /** Dismiss without invoking the footer cancel action, which may have its own meaning. */
+  showCloseButton?: boolean;
   /** 可选的第三按钮(如「不保存」)。设了即渲染,在 confirm/cancel 之间。
    *  典型场景:文件未保存时关闭 tab → 保存(primary) / 不保存(tertiary) / 取消(secondary)。 */
   tertiaryText?: string;
@@ -37,8 +49,7 @@ export interface ConfirmDialogProps {
   dontShowAgainLabel?: string;
   /**
    * 复选框初始勾选态,缺省 false。"下次不再提示"类弹窗保持缺省;
-   * 业务复选框(confirmWithCheckbox)按调用方语义决定,如装意识的
-   * "立即开启"默认勾选。
+   * 业务复选框(confirmWithCheckbox)按调用方语义决定初始状态。
    */
   checkboxDefaultChecked?: boolean;
   /**
@@ -49,6 +60,14 @@ export interface ConfirmDialogProps {
   autoFocusConfirm?: boolean;
   /** Disable the primary action until caller-owned validation has passed. */
   confirmDisabled?: boolean;
+  /** 要求逐字输入 expected 才能确认；匹配不做 trim 或大小写折叠。 */
+  requireTypedConfirmation?: {
+    expected: string;
+    label: ReactNode;
+    placeholder?: string;
+  };
+  /** 允许正文和富内容被框选复制；缺省保持普通确认框的防误选行为。 */
+  contentSelectable?: boolean;
   /** 嵌套在其它 Dialog 内时提升层级；普通确认继续使用默认层级。 */
   zIndex?: number;
   /** Destructive actions use the semantic destructive theme tokens. */
@@ -81,20 +100,26 @@ export interface ConfirmDialogProps {
 
 export function ConfirmDialog({
   open,
+  presentation,
+  cancelFirst = false,
   onOpenChange,
   title,
   description,
   textClassName,
+  descriptionClassName,
   content,
   maxWidth,
   confirmText,
   cancelText,
   showCancel = true,
+  showCloseButton = false,
   tertiaryText,
   dontShowAgainLabel,
   checkboxDefaultChecked = false,
   autoFocusConfirm,
   confirmDisabled = false,
+  requireTypedConfirmation,
+  contentSelectable = false,
   confirmVariant = 'default',
   confirmIcon,
   describeContent = false,
@@ -114,7 +139,15 @@ export function ConfirmDialog({
   useEffect(() => {
     if (open) setDontShowAgain(checkboxDefaultChecked);
   }, [open, checkboxDefaultChecked]);
+  const [typedConfirmation, setTypedConfirmation] = useState('');
+  useEffect(() => {
+    if (open) setTypedConfirmation('');
+  }, [open]);
+  const typedConfirmationSatisfied =
+    !requireTypedConfirmation || typedConfirmation === requireTypedConfirmation.expected;
+  const confirmBlocked = loading || confirmDisabled || !typedConfirmationSatisfied;
   const confirmBtnRef = useRef<HTMLButtonElement>(null);
+  const typedConfirmationRef = useRef<HTMLInputElement>(null);
   const scrollRef = useRef<HTMLDivElement>(null);
   // 滚动条 thumb 默认透明(globals.css),不滚不 hover 就看不见"下面还有内容"。
   // 授权确认场景里这不是观感问题:权限清单被折在视口下面而用户不知道,等于
@@ -133,176 +166,288 @@ export function ConfirmDialog({
     });
     return () => cancelAnimationFrame(raf);
   }, [open]);
+  const standardCancel = showCancel && (
+    <AlertDialog.Cancel asChild>
+      <Button size="lg" variant="secondary" disabled={loading} onClick={() => onCancel?.()}
+        palette="confirmation"
+        className="h-auto min-h-9 min-w-[96px] max-w-full whitespace-normal [overflow-wrap:anywhere] py-1.5">
+        {resolvedCancelText}
+      </Button>
+    </AlertDialog.Cancel>
+  );
   return (
     <AlertDialog.Root open={open} onOpenChange={onOpenChange}>
       <AlertDialog.Portal>
+        {/* 遮罩即全屏 drag 区:no-drag 挖洞只在 drag 元素自己的**后代**上
+            可靠生效,浮层/兄弟节点上的 no-drag 不被计入(实机结论,见
+            ContentHeader.tsx:155-157 / FileTabsBar.tsx:421-425)。因此弹窗
+            Content 必须是遮罩的 DOM 后代,不能是与 drag 遮罩平级的 Portal
+            兄弟。遮罩空白区域保留窗口拖动(避免无边框窗口在单屏边缘打开
+            确认框后无法移回),弹窗内按钮、复选框和滚动区照常交互。
+
+            生命周期交给 Radix:遮罩自身带 data-state 与 150ms 退场动画,
+            Portal 的 Presence 会等动画播完再卸载;若换成无 Presence 语义的
+            普通包装层,Portal 会在 open 变 false 时立即卸载它,退场动画被
+            切断、弹窗瞬间消失(react-dialog 对 Portal 的每个直接子元素都
+            套一层 Presence)。 */}
         <AlertDialog.Overlay
           className={cn(
-            'fixed inset-0 z-[10000]',
-            'bg-neutral-900/40 dark:bg-neutral-950/60',
-            'data-[state=open]:animate-confirm-overlay-in',
-            'data-[state=closed]:animate-confirm-overlay-out',
+            'modal-scrim fixed inset-0 z-[10000]',
           )}
-          style={{ WebkitAppRegion: 'no-drag', zIndex } as React.CSSProperties}
-        />
-        <AlertDialog.Content
-          className={cn(
-            'fixed left-1/2 top-1/2 z-[10000] -translate-x-1/2 -translate-y-1/2',
-            'flex max-h-[85vh] flex-col',
-            'w-full select-none rounded-xl p-4',
-            'bg-[var(--confirm-bg)] shadow-[var(--confirm-shadow)]',
-            'data-[state=open]:animate-confirm-content-in',
-            'data-[state=closed]:animate-confirm-content-out',
-          )}
-          style={{ WebkitAppRegion: 'no-drag', maxWidth: maxWidth ?? 400, zIndex } as React.CSSProperties}
-          {...(describeContent && content
-            ? // 指向滚动区(含 description 与 content):开场朗读覆盖清单全文。
-              { 'aria-describedby': bodyId }
-            : !description
-              ? { 'aria-describedby': undefined }
-              : {})}
-          onEscapeKeyDown={(e) => {
-            if (loading) e.preventDefault();
-          }}
-          onOpenAutoFocus={
-            autoFocusConfirm
-              ? (e) => {
-                  // Radix 默认聚焦第一个可聚焦元素 / Cancel —— 这里覆盖,
-                  // 把焦点交给主按钮,避免"取消"天然带 focus ring。
-                  e.preventDefault();
-                  confirmBtnRef.current?.focus();
-                }
-              : undefined
-          }
+          style={{ ...WINDOW_DRAG_STYLE, zIndex }}
         >
-          <AlertDialog.Title
-            className={cn('shrink-0 text-lg font-medium text-[var(--confirm-title)]', textClassName)}
+          <AlertDialog.Content
+            className={cn(
+              // 居中不用 transform（-translate-x/y-1/2）：Electron 的 -webkit-app-region
+              // 命中区域按布局矩形计算、不跟随 transform（ChromeActions.tsx 的既有结论），
+              // transform 定位会让 no-drag 挖洞与弹窗视觉位置错位，点弹窗内容会变成拖窗。
+              // inset-0 + m-auto + h-fit：布局矩形即视觉矩形，挖洞与弹窗严格重合。
+              'modal-panel fixed inset-0 z-[10000] m-auto h-fit',
+              'flex max-h-[85vh] flex-col',
+              'w-full p-4',
+              contentSelectable ? 'select-text' : 'select-none',
+              // 布局居中弹窗用无 translate 的 layout keyframes;共享
+              // confirm-content-in/out 的每一帧都烘 translate(-50%, -50%),
+              // 动画期间会把弹窗整体甩出 no-drag 挖洞。
+            )}
+            style={{ ...WINDOW_NO_DRAG_STYLE, maxWidth: maxWidth ?? 400, zIndex }}
+            {...(describeContent && content
+              ? // 指向滚动区(含 description 与 content):开场朗读覆盖清单全文。
+                { 'aria-describedby': bodyId }
+              : !description
+                ? { 'aria-describedby': undefined }
+                : {})}
+            onEscapeKeyDown={(e) => {
+              if (loading) e.preventDefault();
+            }}
+            onOpenAutoFocus={
+              requireTypedConfirmation || autoFocusConfirm
+                ? (e) => {
+                    e.preventDefault();
+                    if (requireTypedConfirmation) {
+                      typedConfirmationRef.current?.focus();
+                      return;
+                    }
+                    // Radix 默认聚焦第一个可聚焦元素 / Cancel —— 这里覆盖,
+                    // 把焦点交给主按钮,避免"取消"天然带 focus ring。
+                    confirmBtnRef.current?.focus();
+                  }
+                : undefined
+            }
           >
-            {title}
-          </AlertDialog.Title>
-          {(description || content) && (
-            // 富内容 / 长正文可能超过视口高度:包一层限高滚动区,让标题与底部按钮
-            // 固定、中间内容纵向滚动,避免整个弹窗被撑出屏幕后无法滚动到被裁掉的内容
-            // (典型:插件更新确认框的权限变更清单)。
-            <div
-              ref={scrollRef}
-              id={describeContent && content ? bodyId : undefined}
-              // 内容里的折叠区(如权限清单的工具组)展开后高度会变,capture 阶段
-              // 收一次点击、下一帧重新判定是否可滚,让滚动条跟着新高度再闪一下。
-              onClickCapture={revealScrollbar}
+            {showCloseButton && (
+              <Tooltip.Provider>
+                <Tooltip.Root>
+                  <Tooltip.Trigger asChild>
+                    <Button
+                      variant="secondary"
+                      size="md"
+                      className="absolute right-3 top-3 w-8 border-transparent bg-transparent px-0 text-[var(--confirm-desc)]"
+                      disabled={loading}
+                      aria-label={t('common.dismiss')}
+                      onClick={() => onOpenChange(false)}
+                    >
+                      <X size={16} aria-hidden />
+                    </Button>
+                  </Tooltip.Trigger>
+                  <Tooltip.Content style={{ zIndex: zIndex + 1 }}>
+                    {t('common.dismiss')}
+                  </Tooltip.Content>
+                </Tooltip.Root>
+              </Tooltip.Provider>
+            )}
+            <AlertDialog.Title
               className={cn(
-                'min-h-0 flex-1 overflow-y-auto overscroll-contain',
-                // 保持旧间距:有 description 时紧跟标题 mt-2;仅富内容(无正文)
-                // 时沿用原 content 的 mt-3,避免 content-only 弹窗间距变化。
-                description ? 'mt-2' : 'mt-3',
+                'shrink-0 text-lg font-medium text-[var(--confirm-title)]',
+                showCloseButton && 'pr-9',
+                textClassName,
               )}
             >
-              {description && (
-                <AlertDialog.Description
-                  className={cn('text-base text-[var(--confirm-desc)]', textClassName)}
-                >
-                  {description}
-                </AlertDialog.Description>
-              )}
-              {content && <div className={cn(description && 'mt-3')}>{content}</div>}
-            </div>
-          )}
-          {dontShowAgainLabel && (
-            <label
-              className={cn(
-                'mt-4 flex shrink-0 cursor-pointer select-none items-center gap-2 text-13',
-                'text-[var(--confirm-desc)]',
-              )}
-            >
-              <input
-                type="checkbox"
-                checked={dontShowAgain}
-                onChange={(e) => setDontShowAgain(e.target.checked)}
-                className="size-3.5 cursor-pointer accent-[var(--confirm-btn-primary-bg)]"
-              />
-              {dontShowAgainLabel}
-            </label>
-          )}
-          <div className="mt-6 flex shrink-0 justify-end gap-2.5">
-            <AlertDialog.Action asChild>
-              <button
-                ref={confirmBtnRef}
-                disabled={loading || confirmDisabled}
-                onClick={() => onConfirm?.({ dontShowAgain })}
+              {title}
+            </AlertDialog.Title>
+            {(description || content) && (
+              // 富内容 / 长正文可能超过视口高度:包一层限高滚动区,让标题与底部按钮
+              // 固定、中间内容纵向滚动,避免整个弹窗被撑出屏幕后无法滚动到被裁掉的内容
+              // (典型:带分组和折叠区的长确认内容)。
+              <div
+                ref={scrollRef}
+                id={describeContent && content ? bodyId : undefined}
+                // 内容里的折叠区(如权限清单的工具组)展开后高度会变,capture 阶段
+                // 收一次点击、下一帧重新判定是否可滚,让滚动条跟着新高度再闪一下。
+                onClickCapture={revealScrollbar}
                 className={cn(
-                  'inline-flex min-w-[96px] items-center justify-center rounded-full px-6 py-2.5 text-13 font-medium',
-                  'transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-offset-2',
-                  'active:scale-[0.98]',
-                  confirmVariant === 'destructive'
-                    ? 'bg-[hsl(var(--destructive))] text-[var(--accent-pure-cta-fg)] hover:opacity-90 focus-visible:ring-[var(--focus-ring)]'
-                    : 'bg-[var(--confirm-btn-primary-bg)] text-[var(--confirm-btn-primary-text)] hover:bg-[var(--confirm-btn-primary-hover)] focus-visible:ring-[var(--confirm-btn-primary-bg)]',
-                  loading &&
-                    confirmVariant === 'default' &&
-                    'cursor-default opacity-80 active:scale-100 hover:bg-[var(--confirm-btn-primary-bg)]',
-                  loading &&
-                    confirmVariant === 'destructive' &&
-                    'cursor-default opacity-80 active:scale-100 hover:opacity-80',
-                  confirmDisabled && 'cursor-not-allowed opacity-50 active:scale-100',
+                  'min-h-0 flex-1 overflow-y-auto overscroll-contain',
+                  contentSelectable && 'select-text',
+                  // 保持旧间距:有 description 时紧跟标题 mt-2;仅富内容(无正文)
+                  // 时沿用原 content 的 mt-3,避免 content-only 弹窗间距变化。
+                  description ? 'mt-2' : 'mt-3',
                 )}
               >
-                {loading ? (
-                  <Spinner size={14} />
-                ) : (
-                  <>
+                {description && (
+                  <AlertDialog.Description
+                    className={cn('text-base text-[var(--confirm-desc)]', textClassName, descriptionClassName)}
+                  >
+                    {description}
+                  </AlertDialog.Description>
+                )}
+                {content && <div className={cn(description && 'mt-3')}>{content}</div>}
+              </div>
+            )}
+            {dontShowAgainLabel && (
+              <label
+                className={cn(
+                  'mt-4 flex shrink-0 cursor-pointer select-none items-center gap-2 text-13',
+                  'text-[var(--confirm-desc)]',
+                )}
+              >
+                <input
+                  type="checkbox"
+                  checked={dontShowAgain}
+                  onChange={(e) => setDontShowAgain(e.target.checked)}
+                  className="size-3.5 cursor-pointer accent-[var(--confirm-btn-primary-bg)]"
+                />
+                {dontShowAgainLabel}
+              </label>
+            )}
+            {requireTypedConfirmation && (
+              <div className="mt-4 shrink-0">
+                <label
+                  htmlFor={`${bodyId}-typed`}
+                  className="block text-13 leading-[1.5] text-[var(--confirm-desc)]"
+                >
+                  {requireTypedConfirmation.label}
+                </label>
+                <input
+                  ref={typedConfirmationRef}
+                  id={`${bodyId}-typed`}
+                  type="text"
+                  autoComplete="off"
+                  autoCorrect="off"
+                  autoCapitalize="off"
+                  spellCheck={false}
+                  value={typedConfirmation}
+                  disabled={loading}
+                  onChange={(e) => setTypedConfirmation(e.target.value)}
+                  onKeyDown={(e) => {
+                    if (e.key === 'Enter' && !confirmBlocked) {
+                      e.preventDefault();
+                      onConfirm?.({ dontShowAgain });
+                    }
+                  }}
+                  placeholder={
+                    requireTypedConfirmation.placeholder ?? requireTypedConfirmation.expected
+                  }
+                  className={cn(
+                    'mt-1.5 h-9 w-full rounded-lg border px-3 text-13',
+                    'border-[var(--settings-input-border)] bg-[var(--settings-input-bg)]',
+                    'text-[var(--settings-input-text)] placeholder:text-[var(--text-placeholder)]',
+                    'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--focus-ring-soft)]',
+                  )}
+                />
+              </div>
+            )}
+            {presentation === 'standard' ? (
+              <div className="mt-6 flex shrink-0 flex-wrap justify-end gap-2.5">
+                {cancelFirst && standardCancel}
+                <AlertDialog.Action asChild>
+                  <Button
+                    ref={confirmBtnRef}
+                    size="lg"
+                    variant="primary"
+                    disabled={confirmBlocked}
+                    loading={loading}
+                    aria-label={resolvedConfirmText}
+                    onClick={() => onConfirm?.({ dontShowAgain })}
+                    palette="confirmation"
+                    tone={confirmVariant === 'destructive' ? 'danger-solid' : 'default'}
+                    className="h-auto min-h-9 min-w-[96px] max-w-full whitespace-normal [overflow-wrap:anywhere] py-1.5"
+                  >
                     {confirmIcon && (
-                      <span className="mr-1.5 inline-flex shrink-0" aria-hidden="true">
+                      <span aria-hidden="true" className="inline-flex shrink-0">
                         {confirmIcon}
                       </span>
                     )}
                     {resolvedConfirmText}
-                  </>
+                  </Button>
+                </AlertDialog.Action>
+                {tertiaryText && (
+                  <Button
+                    size="lg"
+                    variant="secondary"
+                    disabled={loading}
+                    onClick={() => onTertiary?.()}
+                    palette="confirmation"
+                    className="h-auto min-h-9 min-w-[96px] max-w-full whitespace-normal [overflow-wrap:anywhere] py-1.5"
+                  >
+                    {tertiaryText}
+                  </Button>
                 )}
-              </button>
-            </AlertDialog.Action>
-            {tertiaryText && (
-              // tertiary 走 secondary 同款轮廓样式 —— 视觉上 "中性可选";
-              // 不用 AlertDialog.Action / Cancel,自己 onClick 触发,Radix 不会
-              // 自动关 dialog,因此外层得在 onTertiary 里手动 onOpenChange(false)。
-              <button
-                type="button"
-                disabled={loading}
-                onClick={() => onTertiary?.()}
-                className={cn(
-                  'inline-flex min-w-[96px] items-center justify-center rounded-full px-6 py-2.5 text-13 font-medium',
-                  'transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-offset-2',
-                  'active:scale-[0.98]',
-                  'border bg-transparent',
-                  'border-[var(--confirm-btn-secondary-border)] text-[var(--confirm-btn-secondary-text)]',
-                  'hover:bg-[var(--confirm-btn-secondary-hover)]',
-                  'focus-visible:ring-[var(--confirm-btn-secondary-border)]',
-                  loading && 'cursor-default opacity-50 active:scale-100 hover:bg-transparent',
+                {!cancelFirst && standardCancel}
+              </div>
+            ) : (
+              <div className="mt-6 flex shrink-0 flex-wrap justify-end gap-2.5">
+                <AlertDialog.Action asChild>
+                  <Button
+                    variant="cta"
+                    palette="confirmation"
+                    size="lg"
+                    tone={confirmVariant === 'destructive' ? 'danger-solid' : 'default'}
+                    loading={loading}
+                    ref={confirmBtnRef}
+                    disabled={confirmBlocked}
+                    aria-busy={loading || undefined}
+                    aria-label={resolvedConfirmText}
+                    onClick={() => onConfirm?.({ dontShowAgain })}
+                    className="min-w-[96px] whitespace-nowrap"
+                  >
+                    {loading ? (
+                      <Spinner size={14} />
+                    ) : (
+                      <>
+                        {confirmIcon && (
+                          <span className="mr-1.5 inline-flex shrink-0" aria-hidden="true">
+                            {confirmIcon}
+                          </span>
+                        )}
+                        {resolvedConfirmText}
+                      </>
+                    )}
+                  </Button>
+                </AlertDialog.Action>
+                {tertiaryText && (
+                  // tertiary 走 secondary 同款轮廓样式 —— 视觉上 "中性可选";
+                  // 不用 AlertDialog.Action / Cancel,自己 onClick 触发,Radix 不会
+                  // 自动关 dialog,因此外层得在 onTertiary 里手动 onOpenChange(false)。
+                  <Button
+                    variant="secondary"
+                    palette="confirmation"
+                    size="lg"
+                    type="button"
+                    disabled={loading}
+                    onClick={() => onTertiary?.()}
+                    className="min-w-[96px] whitespace-nowrap"
+                  >
+                    {tertiaryText}
+                  </Button>
                 )}
-              >
-                {tertiaryText}
-              </button>
+                {showCancel && (
+                  <AlertDialog.Cancel asChild>
+                    <Button
+                      variant="secondary"
+                      palette="confirmation"
+                      size="lg"
+                      disabled={loading}
+                      onClick={() => onCancel?.()}
+                      className="min-w-[96px] whitespace-nowrap"
+                    >
+                      {resolvedCancelText}
+                    </Button>
+                  </AlertDialog.Cancel>
+                )}
+              </div>
             )}
-            {showCancel && (
-              <AlertDialog.Cancel asChild>
-                <button
-                  disabled={loading}
-                  onClick={() => onCancel?.()}
-                  className={cn(
-                    'inline-flex min-w-[96px] items-center justify-center rounded-full px-6 py-2.5 text-13 font-medium',
-                    'transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-offset-2',
-                    'active:scale-[0.98]',
-                    'border bg-transparent',
-                    'border-[var(--confirm-btn-secondary-border)] text-[var(--confirm-btn-secondary-text)]',
-                    'hover:bg-[var(--confirm-btn-secondary-hover)]',
-                    'focus-visible:ring-[var(--confirm-btn-secondary-border)]',
-                    loading && 'cursor-default opacity-50 active:scale-100 hover:bg-transparent',
-                  )}
-                >
-                  {resolvedCancelText}
-                </button>
-              </AlertDialog.Cancel>
-            )}
-          </div>
-        </AlertDialog.Content>
+          </AlertDialog.Content>
+        </AlertDialog.Overlay>
       </AlertDialog.Portal>
     </AlertDialog.Root>
   );

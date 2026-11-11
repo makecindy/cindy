@@ -15,8 +15,8 @@
  *
  * 注意: cc 子进程的内部 debug 由 cc 二进制通过 SDK debugFile 选项直接 fopen 写入一个
  * raw 中转文件 (sessions/<id>/cc-debug.raw.log, 路径由 resolveSessionCcDebugFile 给出;
- * 无 session 时回退全局 cc-debug.raw.log), **不经过本 logger 的 emit**。bootstrap 的
- * tailer 扫描这些 raw 文件, 逐行调 writeCcDebugLine() 归一化汇入对应 session 的 agent 流。
+ * 无 session 时回退全局 cc-debug.raw.log), **不经过本 logger 的 emit**。tailer 跟踪当前
+ * CC 进程注册的 raw 文件, 有界读取并调 writeCcDebugLine() 汇入对应 session 的 agent 流。
  *
  * 旧的 maker.log / cc-proxy.log / cc-debug.log 已并入, 启动期由 purgeLegacyAgentLogs()
  * 清掉, 不再生成 (旧 main.log 保留作历史归档, 不删)。
@@ -43,10 +43,11 @@
  * 没法按天) 启动期砍头保尾 (keepRecentSync)。
  */
 
-import { app } from 'electron';
 import path from 'node:path';
 import fs from 'node:fs';
 import util from 'node:util';
+import { BoundedLogWriter } from './bounded-log-writer.js';
+import { CcDebugRawTailer } from './cc-debug-raw-tailer.js';
 
 import { LOG_RETENTION_DAYS } from '../shared/logRetention';
 import {
@@ -75,6 +76,7 @@ function parseLevel(s: string | undefined, fallback: LogLevel): LogLevel {
 let currentLevel: LogLevel = 'info';
 let isDevMode = false;
 let initialized = false;
+let appVersion = 'unknown';
 
 // ── 落盘 slot + 按天 rotate ───────────────────────────────────────────────────
 // 所有最终日志统一按天: main 与 agent 各一个 DailySlot, 跨天开新文件 + 只保留最近
@@ -118,6 +120,18 @@ const SESSIONS_DIR = 'sessions';
 const MAX_OPEN_SESSION_SLOTS = 32;
 const sessionSlots = new Map<string, DailySlot>();
 let logRootDir = '';
+const agentLogWriter = new BoundedLogWriter();
+let droppedAgentRecords = 0;
+const ccDebugRawTailer = new CcDebugRawTailer(writeCcDebugLine);
+
+/** Called once per local CC process; release on that process's exit/error. */
+export function trackSessionCcDebugFile(file: string, sessionId = ''): () => void {
+  return ccDebugRawTailer.register(file, sessionId);
+}
+
+export function setCcDebugTailingEnabled(enabled: boolean): void {
+  ccDebugRawTailer.setEnabled(enabled);
+}
 
 // scope 路由: maker-host adapter 用 'maker' / 'maker/xxx' 作为根 scope,
 // renderer 转发会被加 'r:' 前缀, 所以 'r:maker' / 'r:maker/xxx' 也算。
@@ -339,6 +353,14 @@ export interface InitOptions {
   isDev?: boolean;
   level?: LogLevel;
   logDir?: string;
+  /**
+   * Caller-supplied runtime facts. Keeping them out of an `electron` import is
+   * what lets the same logger (and the modules that depend on it) load in the
+   * Node `cindy-host` process. Desktop passes its Electron values at startup.
+   */
+  isPackaged?: boolean;
+  userDataDir?: string;
+  version?: string;
 }
 
 function readLevelFromConfigFile(userDataDir: string): LogLevel | undefined {
@@ -355,17 +377,26 @@ function readLevelFromConfigFile(userDataDir: string): LogLevel | undefined {
   return undefined;
 }
 
+/** Packaged logging has no safe default: callers must name the real profile. */
+function requireUserDataDir(userDataDir: string | undefined): string {
+  if (!userDataDir) {
+    throw new Error('initLogger: userDataDir is required when packaged (pass logDir instead)');
+  }
+  return userDataDir;
+}
+
 export function initLogger(opts?: InitOptions): void {
   if (initialized) return;
   initialized = true;
+  appVersion = opts?.version ?? 'unknown';
 
-  isDevMode = opts?.isDev ?? !app.isPackaged;
+  isDevMode = opts?.isDev ?? !(opts?.isPackaged ?? true);
   // dev: 仓库内 apps/desktop/logs/ —— vite 把 main 编译到 apps/desktop/.vite/build/,
   // 所以 __dirname 上跳两级正好是 apps/desktop/。
   // packaged: <userData>/logs/ (asar 内不可写,且用户不该去仓库找日志)。
   const logDir = opts?.logDir ?? (isDevMode
     ? path.resolve(__dirname, '../../logs')
-    : path.join(app.getPath('userData'), 'logs'));
+    : path.join(requireUserDataDir(opts?.userDataDir), 'logs'));
 
   // Level resolution: env > config file > opts.level > built-in default.
   // log-config.json: dev 放 apps/desktop/logs/, packaged 放 <userData>/。
@@ -441,7 +472,7 @@ export function initLogger(opts?: InitOptions): void {
   });
 
   emit('info', 'logger', [
-    `=== App started === v${app.getVersion()} level=${currentLevel} isDev=${isDevMode}`,
+    `=== App started === v${appVersion} level=${currentLevel} isDev=${isDevMode}`,
   ]);
 }
 
@@ -563,6 +594,10 @@ function ensureDailySlot(slot: DailySlot, now: Date): void {
   slot.dateKey = key;
   try {
     slot.stream = fs.createWriteStream(dailyLogPath(slot, key), { flags: 'a' });
+    const stream = slot.stream;
+    stream.on('error', () => {
+      if (slot.stream === stream) slot.stream = null;
+    });
   } catch (err) {
     origStderr(`[logger] failed to open ${slot.prefix}${key}${slot.ext}: ${(err as Error).message}\n`);
     slot.stream = null;
@@ -631,20 +666,34 @@ function writeMainLine(line: string): void {
 
 // agent NDJSON 写入点: maker/proxy (经 emit) 与 cc-debug (经 writeCcDebugLine) 都汇到这里。
 // 有 sessionId → 写 sessions/<id>/<date>.ndjson; 无 → 写 logs 根 agent-<date>.ndjson。
-function writeAgentRecord(rec: Omit<AgentLogRecord, 'seq'>): void {
+function writeAgentRecord(rec: Omit<AgentLogRecord, 'seq'>, retryable = false): boolean {
+  // Bound serialization too. Raw debug is already fragmented by the tailer.
+  const msg = rec.msg.length > 128 * 1024
+    ? `${rec.msg.slice(0, 128 * 1024)} [log record truncated]` : rec.msg;
+  const full = { ...rec, msg, seq: agentSeq, ...(droppedAgentRecords ? { droppedRecords: droppedAgentRecords } : {}) };
+  const line = `${JSON.stringify(full)}\n`;
+  const rejected = (): false => {
+    // Raw diagnostics remain on disk and the tailer retries; other synchronous
+    // producers cannot wait, so report omitted records on the next accepted one.
+    if (!retryable) droppedAgentRecords = Math.min(Number.MAX_SAFE_INTEGER, droppedAgentRecords + 1);
+    return false;
+  };
+  // Check before opening a new session stream: LRU eviction must not turn a
+  // saturated writer into an unbounded queue of pending open/close operations.
+  if (!agentLogWriter.canAccept(line)) return rejected();
   const slot = rec.sessionId ? sessionAgentSlot(rec.sessionId) : agentSlot;
-  if (!slot) return;
+  if (!slot) return rejected();
   ensureDailySlot(slot, new Date(rec.ts));
-  if (!slot.stream) return;
-  const full: AgentLogRecord = { ...rec, seq: agentSeq++ };
-  try { slot.stream.write(`${JSON.stringify(full)}\n`); } catch { /* stream broken — silent */ }
+  if (!slot.stream || !agentLogWriter.write(slot.stream, line)) return rejected();
+  agentSeq++;
+  droppedAgentRecords = 0;
+  return true;
 }
 
 // cc 子进程 debug 行 (格式 "<UTC-ISO> [LEVEL] [scope?] msg") 解析归一化后汇入 agent 流。
-// 由 bootstrap-electron 的 cc-debug tailer 逐行调用, sessionId 来自 raw 文件所在的
-// sessions/<id>/ 目录 (per-session debugFile)。无 sessionId 时归根 agent 流。
+// 由进程注册驱动的 cc-debug tailer 调用, sessionId 来自启动参数。无 sessionId 时归根 agent 流。
 const CC_DEBUG_LINE_RE = /^(\d{4}-\d{2}-\d{2}T[\d:.]+Z)\s+\[(\w+)\]\s*(?:\[([^\]]+)\])?\s*([\s\S]*)$/;
-export function writeCcDebugLine(rawLine: string, sessionId = ''): void {
+export function writeCcDebugLine(rawLine: string, sessionId = ''): boolean {
   const m = CC_DEBUG_LINE_RE.exec(rawLine);
   let ts: number;
   let level: LogLevel;
@@ -662,7 +711,7 @@ export function writeCcDebugLine(rawLine: string, sessionId = ''): void {
     scope = 'cc';
     msg = rawLine;
   }
-  writeAgentRecord({ ts, tz: -new Date(ts).getTimezoneOffset(), level, source: 'cc-debug', scope, sessionId, msg });
+  return writeAgentRecord({ ts, tz: -new Date(ts).getTimezoneOffset(), level, source: 'cc-debug', scope, sessionId, msg }, true);
 }
 
 function emit(level: LogLevel, scope: string, args: unknown[]): void {

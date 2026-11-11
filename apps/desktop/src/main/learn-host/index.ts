@@ -12,28 +12,28 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 
-import { BrowserWindow } from 'electron';
-
 import type { Effort, Maker } from '@cindy/maker-core';
 import { isTerminalAgentErrorEvent } from '@cindy/maker-core';
 
-import { tapWindowBroadcast } from '../device-link/broadcast-tap.js';
+import { emitSessionCreated } from '../localDb/ipc/sessionCreatedBroadcast.js';
 import { createLogger } from '../logger.js';
 import { getCurrentDataOwnerId } from '../authManager';
-import { getResolvedMainLocale } from '../i18n.js';
+import { getResolvedMainLocale } from '../i18n.desktop.js';
 import { wireSessionToIpc } from '../maker-ipc/register.js';
 import { createMessage } from '../localDb/ipc/messages.js';
 import { getDbClient } from '../localDb/client/current';
 import { and, desc, eq, isNull, inArray } from 'drizzle-orm';
 import { messages as messagesTable, sessions as sessionsTable } from '../localDb/schema';
 import { getSessionProvider, setSessionProvider } from '../maker-host/session-provider-store.js';
-import { resolveLenientSessionRoute } from '../maker-host/model-route-guard-live.js';
+import {
+  resolveLenientSessionRoute,
+  resolveNewTaskDefaultModelRoute,
+} from '../maker-host/model-route-guard-live.js';
 import { agentHandoffPending } from '../maker-ipc/agentHandoffPendingSingleton.js';
 import { readMemorySettings } from '../maker-host/memory-settings-store.js';
 import { visibleMessageTextForConversationSearch } from '../localDb/conversationSearch.pure';
 import { searchChatHistoryHybrid } from '../localDb/chatHistorySearch';
 import { backfillSessionMeta } from '../scheduler-host/runners/_shared';
-import { defaultModelFor } from '../scheduler-host/model-defaults';
 import { computeTwoDirDiff } from '../skillhub/snapshot';
 import type { LearnEventPayload } from '../../shared/learnTypes';
 import { LearnController, type LearnSessionLike } from './controller';
@@ -42,7 +42,11 @@ import { LearnRunStore } from './runStore';
 import { applyProposal, resolveInstalledSkillDir } from './apply';
 import { collectUserProfile } from './profile';
 import { formatSkillsIndexBlock, listInstalledSkills } from './skillsIndex';
-import { CONVERSATION_MESSAGE_LIMIT, formatConversationBlock } from './evidence.pure';
+import {
+  CONVERSATION_MESSAGE_LIMIT,
+  formatConversationBlock,
+  isBareLearnInvocationText,
+} from './evidence.pure';
 import { redactSensitive } from './redaction';
 import {
   cleanupStaging,
@@ -62,11 +66,11 @@ export interface StartLearnHostDeps {
   maker: Maker;
   /** learn:event 广播到 renderer(bootstrap 注入 broadcastToAllWindows 包装)。 */
   broadcast: (payload: LearnEventPayload) => void;
-  beforeDispatchUserTurn?: (sessionId: string) => void | Promise<void>;
+  beforeDispatchUserTurn?: (sessionId: string, signal?: AbortSignal) => void | Promise<void>;
   onUndispatchedUserTurn?: (sessionId: string) => void;
   /** hub 源:拉市场 skill 详情 + 可用已发布文件(bootstrap 注入,/learn hub:<slug>
    *  与 skill hub「学习此技能」共用)。未注入时 hub 源请求报 INVALID_PARAMS(兜底)。 */
-  fetchHubSkill?: (slug: string) => Promise<{
+  fetchHubSkill?: (slug: string, catalogScope?: 'market' | 'team') => Promise<{
     name: string;
     description: string;
     content: string;
@@ -89,7 +93,7 @@ export function startLearnHost(deps: StartLearnHostDeps): LearnController {
     createSession: async (opts): Promise<LearnSessionLike> => {
       // 蒸馏用什么模型由用户决定:继承触发会话的 agentKind/model/effort
       // (用户在输入框发 /learn 前可随意切模型)。无触发会话(理论上仅
-      // 编程调用)才落到保守兜底。
+      // 编程调用)才按新建任务口径取默认模型。
       const originMeta = opts.originSessionId
         ? await deps.maker.getSessionMeta(opts.originSessionId).catch(() => null)
         : null;
@@ -119,18 +123,19 @@ export function startLearnHost(deps: StartLearnHostDeps): LearnController {
       // model/provider 可能已被用户停用 —— 宽松降级(丢弃被停用的来源/模型,
       // 退回默认路由),不让 /learn 因停用整体失败。
       const agentKind = originMeta?.agentKind ?? 'claude-code';
-      const desiredModel = originMeta?.model ?? defaultModelFor(agentKind);
+      const newTaskDefault = await resolveNewTaskDefaultModelRoute(agentKind).catch(() => null);
+      const desiredModel = originMeta?.model ?? newTaskDefault?.model;
       const route = await resolveLenientSessionRoute(
         agentKind,
         desiredModel,
-        inheritedProviderId,
-        // 保守默认模型同走裁决阶梯:它自己也可能被停用,不能作为未经裁决的兜底
+        originMeta?.model ? inheritedProviderId : (newTaskDefault?.providerId ?? null),
+        // 新建任务默认模型同走裁决阶梯:它自己也可能被停用,不能作为未经裁决的兜底
         // (PR #744 review 第六轮);desiredEffort 让换模型时的 effort 按解析出的
         // 模型条目 reconcile(第十一轮)。
         {
-          fallbackModel: defaultModelFor(agentKind),
+          fallbackModel: newTaskDefault?.model,
           desiredEffort: originMeta?.effort,
-          desiredFastMode: originMeta?.fastMode === true,
+          desiredFastMode: originMeta?.fastMode ?? false,
         },
       );
       if (route.degraded) {
@@ -209,9 +214,16 @@ export function startLearnHost(deps: StartLearnHostDeps): LearnController {
         .orderBy(desc(messagesTable.createdAt))
         .limit(CONVERSATION_MESSAGE_LIMIT);
       const items: Array<{ role: string; text: string }> = [];
-      for (const r of rows.reverse()) {
+      const chronologicalRows = rows.reverse();
+      for (const r of chronologicalRows) {
         const text = visibleMessageTextForConversationSearch(r.role, r.content);
         if (!text) continue;
+        // The built-in Learn Skill reaches the host after its invocation has
+        // entered chat history. Keep every bare trigger out of the evidence,
+        // including when an assistant/tool row was persisted after it.
+        if (r.role === 'user' && isBareLearnInvocationText(text)) {
+          continue;
+        }
         items.push({ role: r.role, text: redactSensitive(text).text });
       }
       return formatConversationBlock(items);
@@ -286,19 +298,9 @@ export function startLearnHost(deps: StartLearnHostDeps): LearnController {
         logger,
       );
       // 侧边栏刷新:直连 maker.createSession 不经 renderer 建会话 funnel,不广播
-      // 的话新蒸馏会话要等无关刷新才出现在侧边栏(Codex review)。与 register.ts
-      // broadcastSessionCreated 同款(该 helper 各模块本地复制是既有惯例,见其
-      // 注释);放在 backfill 之后,renderer 重拉时 source='learn' 已就位,直接
-      // 落自动化分组不跳变。
-      tapWindowBroadcast('local-db:sessions:created', { sessionId });
-      for (const win of BrowserWindow.getAllWindows()) {
-        if (win.isDestroyed()) continue;
-        try {
-          win.webContents.send('local-db:sessions:created', { sessionId });
-        } catch {
-          // best-effort UI refresh,失败不影响业务
-        }
-      }
+      // 的话新蒸馏会话要等无关刷新才出现在侧边栏。统一走 emitSessionCreated;
+      // 放在 backfill 之后,renderer 重拉时 source='learn' 已就位,直接落自动化分组。
+      emitSessionCreated(sessionId);
     },
     ...(deps.fetchHubSkill ? { fetchHubSkill: deps.fetchHubSkill } : {}),
     logger,
@@ -324,7 +326,7 @@ export function startLearnHost(deps: StartLearnHostDeps): LearnController {
   return controller;
 }
 
-/** null-safe 取单例 —— startLearnHost 之前调用返回 null(builtins /learn 用)。 */
+/** null-safe 取单例 —— startLearnHost 之前调用返回 null(cindy_helper Learn 工具使用)。 */
 export function getLearnController(): LearnController | null {
   return _controller;
 }

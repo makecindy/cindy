@@ -1,29 +1,56 @@
+import './personalBuildMonitor.js';
+import { configureWindowsAtomicRename } from './windowsAtomicRename.js';
+import './personalLaunchCwd.js';
 // Entry: Electron startup → bootstrap-electron.ts (dynamic import).
 import fixPath from 'fix-path';
-import { app } from 'electron';
+import { ensureMacPackageManagerPath } from './agentToolPath.js';
+import { app, utilityProcess } from 'electron';
+import { configureGhostSnapshotProcess } from './cindy-brain/ghostSnapshotCapability.js';
 import { execFileSync } from 'node:child_process';
 import path from 'node:path';
+import os from 'node:os';
 import { setDefaultAutoSelectFamilyAttemptTimeout } from 'node:net';
 import { exit, stderr } from 'node:process';
+import { BRAND_IDENTITY } from '@cindy/maker-shared/brand-identity';
+import { refreshBrowserRuntimeConfigDir } from '@cindy/browser-control-runtime/config-dir';
 import { CURRENT_CINDY_REGION } from '../shared/brandRegion.js';
 import { resolveRegionUserDataDirName } from './regionUserData.js';
 import { createLogger, initLogger } from './logger.js';
+import { configureUserDataDir, configureAppDataDir } from './userDataPath.js';
 import { beginDesktopDevInstance, type DesktopDevMode } from './devStartupStatus.js';
 import { ensureSystemBinPathForMachineId } from './deviceId.js';
+import { configureLinuxPasswordStore } from './linuxPasswordStore.js';
+import { recognizeLinuxUserInstallation, linuxUserDesktopName } from './linuxInstallation.js';
+import { prepareCindyVersionStartup, dispatchCindyVersionStartup } from './cindy-make/versionStartup.js';
 
-// 同机双装(cn/global):global 构建把 userData 切到区域目录(CindyGlobal),
-// 与 cn 版(productName 默认 'Cindy')彻底分库;数据库 / 登录态 / 单实例锁 /
-// sessionData 随 userData 目录天然隔离。必须在 initLogger()(packaged 日志
-// 目录)、crashReporter、单实例锁与一切 userData 读取之前执行。cn 构建与
-// dev 返回 null,零行为变化(dev 隔离语义由下方 devCliFlags 的 --isolated 承载)。
+if (process.platform === 'linux' && app.isPackaged) {
+  const installation = recognizeLinuxUserInstallation(app.getPath('exe'), os.homedir(), process.getuid?.() ?? -1);
+  if (installation) app.setDesktopName(linuxUserDesktopName(installation.prefix));
+}
+
+// Backend selection must precede ready and the dynamic bootstrap/auth imports.
+// This default never overrides --password-store; no plaintext fallback is added.
+configureLinuxPasswordStore({
+  platform: process.platform,
+  env: process.env,
+  commandLine: app.commandLine,
+});
+
+// 正式目录保持历史兼容：global 构建继续使用 CindyGlobal，cn 版继续使用
+// productName 默认的 Cindy；dev 也按构建区域选择对应 profile。必须在
+// initLogger()(packaged 日志目录)、crashReporter、单实例锁与一切 userData
+// 读取之前完成区域映射。
 const regionUserDataDirName = resolveRegionUserDataDirName({
   isPackaged: app.isPackaged,
   region: CURRENT_CINDY_REGION,
   argv: process.argv,
+  envUserDataDir: process.env.XDT_USER_DATA_DIR,
 });
 if (regionUserDataDirName) {
   app.setPath('userData', path.join(app.getPath('appData'), regionUserDataDirName));
 }
+// A verified version handoff retains the launching original's profile and keychain identity.
+prepareCindyVersionStartup();
 
 // Node happy-eyeballs(autoSelectFamily)默认每个地址只给 250ms 完成 TCP 握手,
 // VPN/高 RTT 链路上直连海外端点(platform.claude.com 换 token、订阅模式模型流量等)
@@ -32,10 +59,25 @@ if (regionUserDataDirName) {
 // 进程级默认值,兜住 main 里所有不走自建 dispatcher 的 fetch / net.connect。
 setDefaultAutoSelectFamilyAttemptTimeout(2500);
 
-initLogger();
+// Logger 不再直接 import electron：宿主事实由调用方注入，Node 的 cindy-host
+// 因此能加载同一份日志与依赖它的 storage 模块。
+initLogger({
+  isPackaged: app.isPackaged,
+  userDataDir: app.getPath('userData'),
+  version: app.getVersion(),
+});
+configureGhostSnapshotProcess((parentDir) => utilityProcess.fork(
+  path.join(__dirname, 'ghostSnapshotWorkerProcess.js'), [], {
+    cwd: parentDir,
+    stdio: ['ignore', 'ignore', 'pipe'],
+    serviceName: 'cindy-ghost-snapshot',
+  },
+));
+
 const log = createLogger('fix-path');
 log.debug(`[fix-path] before PATH=${process.env.PATH ?? ''}`);
 fixPath();
+ensureMacPackageManagerPath();
 log.debug(`[fix-path] after PATH=${process.env.PATH ?? ''}`);
 
 // Guarantee /usr/sbin:/sbin are on PATH before anything resolves the device id.
@@ -54,6 +96,7 @@ ensureSystemBinPathForMachineId();
 // 这里同步 import 不走动态 import,确保 strip 在任何 module top-level 代码读
 // process.env 之前执行。
 import { stripSensitiveAnthropicEnv } from '@cindy/maker-core';
+import { stripAnthropicEnvPreservingImportDirectory } from './provider-import/local/sourceEnvironment.js';
 
 // device-link 远程控制:必须在任何 ipcMain.handle 调用之前 monkey-patch,
 // 才能捕获到全量 channel → handler 映射(供被控端 dispatch 远程 invoke)。
@@ -61,7 +104,8 @@ import { stripSensitiveAnthropicEnv } from '@cindy/maker-core';
 // 所有 handler)之前完成。
 import { installInvokeCapture } from './device-link/invoke-registry.js';
 
-const stripped = stripSensitiveAnthropicEnv();
+// Retain only the read-only importer's source directory, never engine credentials.
+const stripped = stripAnthropicEnvPreservingImportDirectory(stripSensitiveAnthropicEnv);
 if (stripped.length > 0) {
   stderr.write(`[cindy] stripped user-level Anthropic env: ${stripped.join(', ')}\n`);
 }
@@ -94,6 +138,7 @@ const devFlags = resolveDevCliFlags({
   isPackaged: app.isPackaged,
   envUserDataDir: process.env.XDT_USER_DATA_DIR,
   defaultUserDataDir: app.getPath('userData'),
+  appDataDir: app.getPath('appData'),
   envIsolated: process.env.XDT_ISOLATED,
   envIsolationName: process.env.XDT_ISOLATED_NAME,
   envUserDataDirEpoch: process.env.XDT_USER_DATA_DIR_EPOCH,
@@ -101,6 +146,24 @@ const devFlags = resolveDevCliFlags({
   envSchedulerPassive: process.env.XDT_SCHEDULER_PASSIVE,
   envEndpointsCdn: process.env.XDT_ENDPOINTS_CDN,
 });
+if (devFlags.isolatedOnProductionProfile) {
+  // isolated 身份会换独立 deviceId；正式 profile 上的 refresh token 属于正式版设备。
+  // 两者叠在同一目录 = 必然 DEVICE_MISMATCH，再删盘会把正式版踢下线(2026-08-16)。
+  // 报实际目标目录：可能是当前区域，也可能是另一地区的正式 profile。
+  const targetDir = devFlags.userDataDirOverride ?? app.getPath('userData');
+  stderr.write(
+    `[cindy] FATAL: --isolated cannot use the official Cindy profile (${targetDir}). ` +
+      'Use the default sandbox, --isolated=<name>, or a directory that is not an official userData.\n',
+  );
+  exit(1);
+}
+if (!app.isPackaged && devFlags.profileKind === 'production-shared') {
+  // 正式 profile 上的 unpackaged writer 不得应用 pending migration。
+  // 已合入 main、但安装包还没带上的序号会把安装版打挂（2026-08-16 schema 91）。
+  process.env.XDT_OFFICIAL_SHARED_PROFILE = '1';
+} else {
+  delete process.env.XDT_OFFICIAL_SHARED_PROFILE;
+}
 if (devFlags.schedulerPassive) {
   // 统一收敛到 env:scheduler-host 只认 XDT_SCHEDULER_PASSIVE,不重复解析 argv。
   process.env.XDT_SCHEDULER_PASSIVE = '1';
@@ -109,7 +172,7 @@ if (devFlags.schedulerPassive) {
 if (shouldEnforcePassiveMigrationCompatibility({
   isPackaged: app.isPackaged,
   schedulerPassive: devFlags.schedulerPassive,
-  isolated: devFlags.isolated,
+  profileKind: devFlags.profileKind,
 })) {
   // 内部启动契约：共享 userData 的 passive dev 只能打开与当前 checkout migration
   // 完全一致的数据库，且不得自行迁移。localDb 在用户数据库首次打开时消费本标记。
@@ -197,11 +260,25 @@ if (devFlags.needsIsolatedDeviceId) {
   stderr.write(`[cindy] dev isolated deviceId → ${isolatedDeviceId}\n`);
 }
 
+// UI 模拟数据(restart --mock,见 docs/dev-rules/ui-mock-data.md):只在源码运行的
+// 隔离沙箱里生效。其它任何 profile 一律清掉开关,模拟任务绝不写进正式或共享数据。
+const uiMockData = !app.isPackaged
+  && process.env.XDT_UI_MOCK === '1'
+  && devFlags.profileKind === 'isolated-sandbox';
+if (process.env.XDT_UI_MOCK === '1' && !uiMockData) {
+  stderr.write('[cindy] WARN: XDT_UI_MOCK ignored outside an unpackaged isolated sandbox\n');
+}
+if (uiMockData) {
+  stderr.write('[cindy] dev UI mock data enabled (account-free, demo tasks)\n');
+} else {
+  delete process.env.XDT_UI_MOCK;
+}
+
 // 实例注册表对 dev 与 packaged 一律登记:dev/release 按 flavor 分锁域、共享同一
 // userData 双开是受支持的工作流(bootstrap-electron 单例锁注释),owner-namespace
 // 迁移的独占检查靠本注册表发现「还有谁共享这份 userData」——packaged 不登记的话,
 // dev 实例会在 release 实例仍存活时误判独占并搬走 legacy 配置。
-{
+const desktopDevInstanceOptions = (() => {
   const rootDir = app.isPackaged
     ? path.resolve(app.getAppPath())
     : path.resolve(app.getAppPath(), '..', '..');
@@ -221,18 +298,49 @@ if (devFlags.needsIsolatedDeviceId) {
   const mode: DesktopDevMode = declaredMode === 'remote' || declaredMode === 'local'
     ? declaredMode
     : 'unknown';
-  const cleanupDevInstance = beginDesktopDevInstance({
+  return {
     userDataDir: app.getPath('userData'),
+    dbFilePrefix: BRAND_IDENTITY.dbFilePrefix,
     rootDir,
     commit,
     mode,
+    region: CURRENT_CINDY_REGION,
     passive: devFlags.schedulerPassive,
-    isolated: Boolean(devFlags.userDataDirOverride),
-  });
-  app.once('will-quit', cleanupDevInstance);
+    isolated: devFlags.profileKind === 'isolated-sandbox',
+    isolationIntent: devFlags.isolated,
+    profileKind: devFlags.profileKind,
+  };
+})();
+
+// Pin shared storage after all profile/version/dev overrides. Capturing the
+// regional default above would make an isolated runtime write into that profile.
+configureUserDataDir(app.getPath('userData'));
+configureAppDataDir(app.getPath('appData'));
+configureWindowsAtomicRename({
+  packagedBinary: app.isPackaged ? path.join(process.resourcesPath, 'tools', 'windows-atomic-rename', 'cindy-windows-atomic-rename.exe') : undefined,
+  sourceFile: app.isPackaged ? undefined : path.join(app.getAppPath(), 'native', 'windows-atomic-rename', 'main.rs'),
+  cacheDir: path.join(app.getPath('userData'), 'windows-atomic-rename'),
+});
+
+// Pin after the last userData setPath. Vite's main bundle require()s
+// @cindy/browser-control-runtime at chunk load (before this body), so
+// CONFIG_DIR is already the ~/.xdt-maker fallback. Setting env is not
+// enough — refresh the live binding Chrome launch actually joins.
+if (!process.env.XDT_BROWSER_RUNTIME_DIR) {
+  process.env.XDT_BROWSER_RUNTIME_DIR = path.join(app.getPath('userData'), 'browser-runtime');
 }
+refreshBrowserRuntimeConfigDir();
 
 async function dispatch(): Promise<void> {
+  if (await dispatchCindyVersionStartup()) return;
+  const cleanupDevInstance = await beginDesktopDevInstance(desktopDevInstanceOptions);
+  // Windows updater forceQuit() ends in process.exit(0), which bypasses Electron will-quit.
+  process.once('exit', cleanupDevInstance);
+  app.once('will-quit', cleanupDevInstance);
+  if (uiMockData) {
+    const { startFreshProfileInLocalMode } = await import('./appSessionState.js');
+    startFreshProfileInLocalMode();
+  }
   const mod = await import('./bootstrap-electron.js');
   await mod.bootstrapElectron();
 }

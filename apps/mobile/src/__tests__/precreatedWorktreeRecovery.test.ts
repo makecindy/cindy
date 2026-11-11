@@ -43,6 +43,59 @@ const RESERVATION = {
 };
 
 describe('precreated worktree recovery ledger', () => {
+  it('fences a timed-out reservation before a delayed create arrives', async () => {
+    await registerPendingPrecreatedWorktree(ACCOUNT, RESERVATION);
+    const cancelled = new Set<string>();
+    const directories = new Set<string>();
+    const discardPrecreated = vi.fn(async () => ({ discarded: true }));
+    const result = await recoverPendingPrecreatedWorktrees(ACCOUNT, {
+      openLink: async () => {}, discardPrecreated,
+      cancelPrecreated: async (_device, input) => {
+        cancelled.add(input.sessionId);
+        return { discarded: true };
+      },
+      isSessionClaimed: async () => false,
+    });
+    // The original create is delivered after cancellation's ACK, without a create ACK on mobile.
+    if (!cancelled.has(RESERVATION.sessionId)) directories.add(RESERVATION.sessionId);
+    expect(result).toMatchObject({ recovered: 1 });
+    expect(discardPrecreated).not.toHaveBeenCalled();
+    expect(directories.size).toBe(0);
+    expect(await listPendingPrecreatedWorktrees(ACCOUNT)).toEqual([]);
+  });
+
+  it.each(['reserved', 'precreated', 'session-create-started'] as const)(
+    'retains %s on an old host even when legacy discard could acknowledge absence', async (phase) => {
+      await registerPendingPrecreatedWorktree(ACCOUNT, { ...RESERVATION, phase });
+      const discardPrecreated = vi.fn(async () => ({ discarded: true }));
+      const result = await recoverPendingPrecreatedWorktrees(ACCOUNT, {
+        openLink: async () => {}, discardPrecreated, isSessionClaimed: async () => false,
+      });
+      expect(result).toMatchObject({ recovered: 0, retained: 1 });
+      expect(discardPrecreated).not.toHaveBeenCalled();
+      expect(await listPendingPrecreatedWorktrees(ACCOUNT)).toHaveLength(1);
+    },
+  );
+
+  it('awaits durable draft cancellation and retains the ledger if that write fails', async () => {
+    await registerPendingPrecreatedWorktree(ACCOUNT, RESERVATION);
+    let fail!: (error: Error) => void;
+    let writing!: () => void;
+    const started = new Promise<void>((resolve) => { writing = resolve; });
+    const pending = new Promise<void>((_resolve, reject) => { fail = reject; });
+    const recovery = recoverPendingPrecreatedWorktrees(ACCOUNT, {
+      openLink: async () => {}, discardPrecreated: vi.fn(),
+      cancelPrecreated: async () => ({ discarded: true }),
+      isSessionClaimed: async () => false,
+      onDiscarded: () => { writing(); return pending; },
+    });
+    await started;
+    expect(await listPendingPrecreatedWorktrees(ACCOUNT)).toHaveLength(1);
+    fail(new Error('disk full'));
+    expect(await recovery).toMatchObject({ recovered: 0, retained: 1 });
+    expect(await listPendingPrecreatedWorktrees(ACCOUNT)).toHaveLength(1);
+  });
+
   beforeEach(async () => {
     await __testing.drainMutations();
     storage.clear();
@@ -103,11 +156,12 @@ describe('precreated worktree recovery ledger', () => {
       RESERVATION,
     ]);
 
-    const discardPrecreated = vi.fn(async () => ({ discarded: true }));
+    const cancelPrecreated = vi.fn(async () => ({ discarded: true }));
     await expect(
       recoverPendingPrecreatedWorktrees(ACCOUNT, {
+        discardPrecreated: vi.fn(),
         openLink: vi.fn(async () => undefined),
-        discardPrecreated,
+        cancelPrecreated,
         isSessionClaimed: vi.fn(async () => false),
         sleep: async () => undefined,
       }),
@@ -117,7 +171,7 @@ describe('precreated worktree recovery ledger', () => {
       retained: 0,
       storageReadable: true,
     });
-    expect(discardPrecreated).toHaveBeenCalledWith('device-1', {
+    expect(cancelPrecreated).toHaveBeenCalledWith('device-1', {
       sessionId: RESERVATION.sessionId,
       recoveryKey: RESERVATION.recoveryKey,
     });
@@ -160,14 +214,15 @@ describe('precreated worktree recovery ledger', () => {
     await expect(listPendingPrecreatedWorktrees(ACCOUNT)).resolves.toEqual([
       RESERVATION,
     ]);
-    const discardPrecreated = vi.fn(async () => ({ discarded: true }));
+    const cancelPrecreated = vi.fn(async () => ({ discarded: true }));
     await recoverPendingPrecreatedWorktrees(ACCOUNT, {
+        discardPrecreated: vi.fn(),
       openLink: vi.fn(async () => undefined),
-      discardPrecreated,
+      cancelPrecreated,
       isSessionClaimed: vi.fn(async () => false),
       sleep: async () => undefined,
     });
-    expect(discardPrecreated).toHaveBeenCalledWith('device-1', {
+    expect(cancelPrecreated).toHaveBeenCalledWith('device-1', {
       sessionId: RESERVATION.sessionId,
       recoveryKey: RESERVATION.recoveryKey,
     });
@@ -256,12 +311,13 @@ describe('precreated worktree recovery ledger', () => {
     await registerPendingPrecreatedWorktree(ACCOUNT, RECORD);
     __testing.resetVolatileLedgers();
     asyncStorage.getItem.mockRejectedValueOnce(new Error('read unavailable'));
-    const discardPrecreated = vi.fn();
+    const cancelPrecreated = vi.fn();
 
     await expect(
       recoverPendingPrecreatedWorktrees(ACCOUNT, {
+        discardPrecreated: vi.fn(),
         openLink: vi.fn(),
-        discardPrecreated,
+        cancelPrecreated,
         isSessionClaimed: vi.fn(),
         sleep: async () => undefined,
       }),
@@ -271,7 +327,7 @@ describe('precreated worktree recovery ledger', () => {
       retained: 0,
       storageReadable: false,
     });
-    expect(discardPrecreated).not.toHaveBeenCalled();
+    expect(cancelPrecreated).not.toHaveBeenCalled();
     expect(storage.size).toBe(1);
   });
 
@@ -279,12 +335,13 @@ describe('precreated worktree recovery ledger', () => {
     const key = __testing.storageKeyForAccount(ACCOUNT);
     expect(key).not.toBeNull();
     storage.set(key as string, '{{{');
-    const discardPrecreated = vi.fn();
+    const cancelPrecreated = vi.fn();
 
     await expect(
       recoverPendingPrecreatedWorktrees(ACCOUNT, {
+        discardPrecreated: vi.fn(),
         openLink: vi.fn(),
-        discardPrecreated,
+        cancelPrecreated,
         isSessionClaimed: vi.fn(),
         sleep: async () => undefined,
       }),
@@ -294,7 +351,7 @@ describe('precreated worktree recovery ledger', () => {
       retained: 0,
       storageReadable: false,
     });
-    expect(discardPrecreated).not.toHaveBeenCalled();
+    expect(cancelPrecreated).not.toHaveBeenCalled();
     expect(storage.get(key as string)).toBe('{{{');
     expect(asyncStorage.removeItem).not.toHaveBeenCalled();
 
@@ -315,12 +372,13 @@ describe('precreated worktree recovery ledger', () => {
   it('recovers successfully and defers records owned by a live creation task', async () => {
     await registerPendingPrecreatedWorktree(ACCOUNT, RECORD);
     const openLink = vi.fn(async () => undefined);
-    const discardPrecreated = vi.fn(async () => ({ discarded: true }));
+    const cancelPrecreated = vi.fn(async () => ({ discarded: true }));
 
     await expect(
       recoverPendingPrecreatedWorktrees(ACCOUNT, {
+        discardPrecreated: vi.fn(),
         openLink,
-        discardPrecreated,
+        cancelPrecreated,
         isSessionClaimed: vi.fn(async () => false),
         sleep: async () => undefined,
       }),
@@ -329,7 +387,7 @@ describe('precreated worktree recovery ledger', () => {
       recovered: 1,
       retained: 0,
     });
-    expect(discardPrecreated).toHaveBeenCalledWith('device-1', {
+    expect(cancelPrecreated).toHaveBeenCalledWith('device-1', {
       sessionId: 'session-1',
       path: RECORD.path,
     });
@@ -338,8 +396,9 @@ describe('precreated worktree recovery ledger', () => {
     await registerPendingPrecreatedWorktree(ACCOUNT, RECORD);
     await expect(
       recoverPendingPrecreatedWorktrees(ACCOUNT, {
+        discardPrecreated: vi.fn(),
         openLink,
-        discardPrecreated,
+        cancelPrecreated,
         isSessionClaimed: vi.fn(async () => false),
         shouldDefer: () => true,
         sleep: async () => undefined,
@@ -361,8 +420,9 @@ describe('precreated worktree recovery ledger', () => {
       .mockResolvedValueOnce(true);
     await expect(
       recoverPendingPrecreatedWorktrees(ACCOUNT, {
+        discardPrecreated: vi.fn(),
         openLink: vi.fn(async () => undefined),
-        discardPrecreated: vi.fn(async () => {
+        cancelPrecreated: vi.fn(async () => {
           throw Object.assign(new Error('session claimed'), {
             code: 'PRECONDITION_FAILED',
           });
@@ -377,8 +437,9 @@ describe('precreated worktree recovery ledger', () => {
     await registerPendingPrecreatedWorktree(ACCOUNT, RECORD);
     await expect(
       recoverPendingPrecreatedWorktrees(ACCOUNT, {
+        discardPrecreated: vi.fn(),
         openLink: vi.fn(async () => undefined),
-        discardPrecreated: vi.fn(async () => {
+        cancelPrecreated: vi.fn(async () => {
           throw Object.assign(new Error('worktree has changes'), {
             code: 'PRECONDITION_FAILED',
           });
@@ -394,20 +455,21 @@ describe('precreated worktree recovery ledger', () => {
 
   it('clears an already claimed record before calling an unsupported discard channel', async () => {
     await registerPendingPrecreatedWorktree(ACCOUNT, RECORD);
-    const discardPrecreated = vi.fn();
+    const cancelPrecreated = vi.fn();
     const isSessionClaimed = vi.fn(async () => true);
 
     await expect(
       recoverPendingPrecreatedWorktrees(ACCOUNT, {
+        discardPrecreated: vi.fn(),
         openLink: vi.fn(async () => undefined),
-        discardPrecreated,
+        cancelPrecreated,
         isSessionClaimed,
         sleep: async () => undefined,
       }),
     ).resolves.toMatchObject({ recovered: 1, retained: 0 });
 
     expect(isSessionClaimed).toHaveBeenCalledWith('device-1', 'session-1');
-    expect(discardPrecreated).not.toHaveBeenCalled();
+    expect(cancelPrecreated).not.toHaveBeenCalled();
     await expect(listPendingPrecreatedWorktrees(ACCOUNT)).resolves.toEqual([]);
   });
 
@@ -416,7 +478,7 @@ describe('precreated worktree recovery ledger', () => {
     const isSessionClaimed = vi.fn()
       .mockResolvedValueOnce(false)
       .mockResolvedValueOnce(true);
-    const discardPrecreated = vi.fn(async () => {
+    const cancelPrecreated = vi.fn(async () => {
       throw Object.assign(new Error('old desktop'), {
         code: 'CHANNEL_NOT_ALLOWED',
       });
@@ -424,14 +486,15 @@ describe('precreated worktree recovery ledger', () => {
 
     await expect(
       recoverPendingPrecreatedWorktrees(ACCOUNT, {
+        discardPrecreated: vi.fn(),
         openLink: vi.fn(async () => undefined),
-        discardPrecreated,
+        cancelPrecreated,
         isSessionClaimed,
         sleep: async () => undefined,
       }),
     ).resolves.toMatchObject({ recovered: 1, retained: 0 });
 
-    expect(discardPrecreated).toHaveBeenCalledTimes(1);
+    expect(cancelPrecreated).toHaveBeenCalledTimes(1);
     expect(isSessionClaimed).toHaveBeenCalledTimes(2);
     await expect(listPendingPrecreatedWorktrees(ACCOUNT)).resolves.toEqual([]);
   });
@@ -440,8 +503,9 @@ describe('precreated worktree recovery ledger', () => {
     await registerPendingPrecreatedWorktree(ACCOUNT, RECORD);
     await expect(
       recoverPendingPrecreatedWorktrees(ACCOUNT, {
+        discardPrecreated: vi.fn(),
         openLink: vi.fn(async () => undefined),
-        discardPrecreated: vi.fn(async () => {
+        cancelPrecreated: vi.fn(async () => {
           throw Object.assign(new Error('old desktop'), {
             code: 'CHANNEL_NOT_ALLOWED',
           });
@@ -457,8 +521,9 @@ describe('precreated worktree recovery ledger', () => {
     await registerPendingPrecreatedWorktree(ACCOUNT, RECORD);
     await expect(
       recoverPendingPrecreatedWorktrees(ACCOUNT, {
+        discardPrecreated: vi.fn(),
         openLink: vi.fn(async () => undefined),
-        discardPrecreated: vi.fn(async () => {
+        cancelPrecreated: vi.fn(async () => {
           throw Object.assign(new Error('registered path mismatch'), {
             code: 'PERMISSION_DENIED',
           });
@@ -474,8 +539,9 @@ describe('precreated worktree recovery ledger', () => {
     await registerPendingPrecreatedWorktree(ACCOUNT, RECORD);
     await expect(
       recoverPendingPrecreatedWorktrees(ACCOUNT, {
+        discardPrecreated: vi.fn(),
         openLink: vi.fn(async () => undefined),
-        discardPrecreated: vi.fn(async () => {
+        cancelPrecreated: vi.fn(async () => {
           throw Object.assign(new Error('device offline'), {
             code: 'DEVICE_OFFLINE',
           });
@@ -489,7 +555,7 @@ describe('precreated worktree recovery ledger', () => {
     ]);
   });
 
-  it('never discards a session-create-started or legacy phase-less obligation', async () => {
+  it('retains started and legacy obligations when host cancellation is unavailable', async () => {
     const started = {
       ...RECORD,
       recoveryKey: 'recovery-key-started-123456',
@@ -533,22 +599,72 @@ describe('precreated worktree recovery ledger', () => {
     ]);
   });
 
+  it.each(['session-create-started', undefined] as const)('recovers %s only after a host cancellation ACK', async (phase) => {
+    const record = { ...RECORD, phase };
+    storage.set(__testing.storageKeyForAccount(ACCOUNT)!, JSON.stringify({ version: 1, records: [record] }));
+    const discardPrecreated = vi.fn();
+    const cancelPrecreated = vi.fn(async () => ({ discarded: true }));
+    const onDiscarded = vi.fn();
+    const result = await recoverPendingPrecreatedWorktrees(ACCOUNT, {
+      openLink: async () => {}, discardPrecreated, cancelPrecreated, onDiscarded,
+      isSessionClaimed: async () => false,
+    });
+    expect(result).toMatchObject({ recovered: 1, retained: 0 });
+    expect(cancelPrecreated).toHaveBeenCalledWith(RECORD.deviceId, { sessionId: RECORD.sessionId, path: RECORD.path });
+    expect(discardPrecreated).not.toHaveBeenCalled();
+    expect(onDiscarded).toHaveBeenCalledTimes(1);
+    expect(await listPendingPrecreatedWorktrees(ACCOUNT)).toEqual([]);
+  });
+
+  it.each(['unsupported', 'malformed', 'occupied'])('retains the record when cancellation is %s', async (failure) => {
+    const record = { ...RECORD, phase: 'session-create-started' as const };
+    await registerPendingPrecreatedWorktree(ACCOUNT, record);
+    const onDiscarded = vi.fn();
+    const discardPrecreated = vi.fn();
+    const result = await recoverPendingPrecreatedWorktrees(ACCOUNT, {
+      openLink: async () => {}, discardPrecreated, onDiscarded,
+      cancelPrecreated: async () => {
+        if (failure === 'malformed') return {};
+        throw Object.assign(new Error(failure), { code: failure === 'unsupported' ? 'CHANNEL_NOT_ALLOWED' : 'PRECONDITION_FAILED' });
+      },
+      isSessionClaimed: async () => false,
+    });
+    expect(result).toMatchObject({ recovered: 0, retained: 1 });
+    expect(discardPrecreated).not.toHaveBeenCalled();
+    expect(onDiscarded).not.toHaveBeenCalled();
+    expect(await listPendingPrecreatedWorktrees(ACCOUNT)).toEqual([record]);
+  });
+
+  it('does not cancel or hide an exact-id task that was already created', async () => {
+    await registerPendingPrecreatedWorktree(ACCOUNT, { ...RECORD, phase: 'session-create-started' });
+    const cancelPrecreated = vi.fn();
+    const onDiscarded = vi.fn();
+    await recoverPendingPrecreatedWorktrees(ACCOUNT, {
+      openLink: async () => {}, discardPrecreated: vi.fn(), cancelPrecreated, onDiscarded,
+      isSessionClaimed: async () => true,
+    });
+    expect(cancelPrecreated).not.toHaveBeenCalled();
+    expect(onDiscarded).not.toHaveBeenCalled();
+    expect(await listPendingPrecreatedWorktrees(ACCOUNT)).toEqual([]);
+  });
+
   it('requires a strict discard ACK and prefers recoveryKey over path', async () => {
     const record = {
       ...RECORD,
       recoveryKey: 'recovery-key-preferred-123456',
     };
     await registerPendingPrecreatedWorktree(ACCOUNT, record);
-    const discardPrecreated = vi.fn(async () => ({}));
+    const cancelPrecreated = vi.fn(async () => ({}));
     await expect(
       recoverPendingPrecreatedWorktrees(ACCOUNT, {
+        discardPrecreated: vi.fn(),
         openLink: vi.fn(async () => undefined),
-        discardPrecreated,
+        cancelPrecreated,
         isSessionClaimed: vi.fn(async () => false),
         sleep: async () => undefined,
       }),
     ).resolves.toMatchObject({ recovered: 0, retained: 1 });
-    expect(discardPrecreated).toHaveBeenCalledWith('device-1', {
+    expect(cancelPrecreated).toHaveBeenCalledWith('device-1', {
       sessionId: record.sessionId,
       recoveryKey: record.recoveryKey,
     });
@@ -597,16 +713,17 @@ describe('precreated worktree recovery ledger', () => {
       const raw = JSON.stringify(payload);
       storage.set(key, raw);
       __testing.resetVolatileLedgers();
-      const discardPrecreated = vi.fn();
+      const cancelPrecreated = vi.fn();
       await expect(
         recoverPendingPrecreatedWorktrees(ACCOUNT, {
+        discardPrecreated: vi.fn(),
           openLink: vi.fn(),
-          discardPrecreated,
+          cancelPrecreated,
           isSessionClaimed: vi.fn(),
           sleep: async () => undefined,
         }),
       ).resolves.toMatchObject({ storageReadable: false, attempted: 0 });
-      expect(discardPrecreated).not.toHaveBeenCalled();
+      expect(cancelPrecreated).not.toHaveBeenCalled();
       expect(storage.get(key)).toBe(raw);
     }
   });
@@ -634,8 +751,9 @@ describe('precreated worktree recovery ledger', () => {
 
     await expect(
       recoverPendingPrecreatedWorktrees(ACCOUNT, {
+        discardPrecreated: vi.fn(),
         openLink: openLinkA,
-        discardPrecreated: discardA,
+        cancelPrecreated: discardA,
         isSessionClaimed: isSessionClaimedA,
         sleep: sleepA,
         isCurrent: () => currentOwner === ACCOUNT,
@@ -655,8 +773,9 @@ describe('precreated worktree recovery ledger', () => {
     const discardB = vi.fn(async () => ({ discarded: true }));
     await expect(
       recoverPendingPrecreatedWorktrees(accountB, {
+        discardPrecreated: vi.fn(),
         openLink: vi.fn(async () => undefined),
-        discardPrecreated: discardB,
+        cancelPrecreated: discardB,
         isSessionClaimed: vi.fn(async () => false),
         sleep: async () => undefined,
         isCurrent: () => currentOwner === accountB,

@@ -235,6 +235,22 @@ export function buildExportOptionsPlist({ teamId, bundleId, profileName, signing
 `;
 }
 
+/**
+ * 把 archive 里的 dSYM 打成一个 zip 放到 .ipa 旁边,返回 zip 路径;archive 没带符号时返回 null。
+ * archive 建在临时目录里,不另留这一份,线上崩溃日志里 App 自身的调用帧就只剩地址,
+ * Xcode Organizer 无法还原成函数名(Apple 不替未上传符号的包做符号化)。
+ * `zip(fromDir, toFile)` 与 `fs` 由调用方注入,本函数不直接起进程。
+ */
+export function archiveIosSymbols({ archivePath, ipaPath, zip, fs }) {
+  if (!archivePath || !ipaPath) throw new Error('archiveIosSymbols requires archivePath / ipaPath');
+  const dsymDir = `${String(archivePath).replace(/\/+$/, '')}/dSYMs`;
+  const hasSymbols = fs.existsSync(dsymDir) && fs.readdirSync(dsymDir).some((name) => name.endsWith('.dSYM'));
+  if (!hasSymbols) return null;
+  const zipPath = `${String(ipaPath).replace(/\.ipa$/i, '')}.dSYMs.zip`;
+  zip(dsymDir, zipPath);
+  return zipPath;
+}
+
 /** 组装写入 CDN 的整包版本记录(/latest 返回体)。 */
 export function buildReleaseRecord({ version, buildNumber, runtimeVersion, installUrl, itmsUrl, releaseNotes, minVersion }) {
   if (!runtimeVersion) throw new Error('buildReleaseRecord requires runtimeVersion');

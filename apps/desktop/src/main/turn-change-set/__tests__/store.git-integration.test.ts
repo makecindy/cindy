@@ -13,15 +13,6 @@ const mocks = vi.hoisted(() => ({
   ownerScopeKey: 'owner-a',
 }));
 
-vi.mock('electron', () => ({
-  app: { getPath: () => mocks.userDataRoot },
-  BrowserWindow: {
-    getAllWindows: () => [{
-      isDestroyed: () => false,
-      webContents: { send: mocks.rendererSend },
-    }],
-  },
-}));
 vi.mock('../../localDb/client/current.js', () => ({
   getDbClient: () => ({ query: mocks.query }),
 }));
@@ -35,7 +26,9 @@ vi.mock('../../device-link/broadcast-tap.js', () => ({
   tapWindowBroadcast: mocks.send,
 }));
 
+import { configureUserDataDir } from '../../userDataPath';
 import {
+  setTurnChangeSetWindowBroadcast,
   TurnChangeSetActionError,
   applyTurnChangeSetAction,
   beginTurnChangeSet,
@@ -59,6 +52,8 @@ describe('turn change-set sidecar store', () => {
     workdir = path.join(root, 'workspace');
     await fs.mkdir(workdir);
     mocks.userDataRoot = path.join(root, 'user-data');
+    configureUserDataDir(mocks.userDataRoot);
+    setTurnChangeSetWindowBroadcast((payload) => mocks.rendererSend(payload));
     mocks.query.mockReset();
     mocks.send.mockReset();
     mocks.rendererSend.mockReset();
@@ -79,6 +74,7 @@ describe('turn change-set sidecar store', () => {
   });
 
   afterEach(async () => {
+    setTurnChangeSetWindowBroadcast(null);
     clearPendingTurnChangeSets('session-1');
     clearPendingTurnChangeSets('session-2');
     await fs.rm(root, { recursive: true, force: true });
@@ -113,6 +109,11 @@ describe('turn change-set sidecar store', () => {
 
     await vi.waitFor(async () => expect(await listTurnChangeSets('session-1')).toHaveLength(1));
     const [summary] = await listTurnChangeSets('session-1');
+    expect(mocks.send).toHaveBeenCalledWith(
+      'maker:turn-change-set:updated',
+      expect.objectContaining({ sessionId: 'session-1', summary }),
+      undefined,
+    );
     expect(summary).toMatchObject({
       anchorClientId: 'user-1',
       provider: 'codex',
@@ -476,6 +477,26 @@ describe('turn change-set sidecar store', () => {
     expect(await fs.readFile(target, 'utf8')).toBe('head\ntail\n');
   });
 
+  it('checks write admission after preflight and preserves files when access was revoked', async () => {
+    const target = path.join(workdir, 'access.txt');
+    await fs.writeFile(target, 'before\n');
+    await beginTurnChangeSet({ sessionId: 'session-1', anchorClientId: 'user-1', provider: 'pi', cwd: workdir });
+    await captureKnownFileBefore({ sessionId: 'session-1', provider: 'pi', cwd: workdir, targetPath: 'access.txt' });
+    await fs.writeFile(target, 'after\n');
+    await finalizeTurnChangeSet('session-1', null, 'complete');
+    const [recorded] = await listTurnChangeSets('session-1');
+    const assertAccess = vi.fn(async () => { throw new Error('access revoked'); });
+    await expect(applyTurnChangeSetAction('session-1', recorded!.id, 'undo', undefined, assertAccess))
+      .rejects.toThrow('access revoked');
+    expect(assertAccess).toHaveBeenCalledOnce();
+    expect(await fs.readFile(target, 'utf8')).toBe('after\n');
+    expect((await listTurnChangeSets('session-1'))[0]?.workspaceState).toBe('applied');
+    await applyTurnChangeSetAction('session-1', recorded!.id, 'undo');
+    expect(await fs.readFile(target, 'utf8')).toBe('before\n');
+    await applyTurnChangeSetAction('session-1', recorded!.id, 'reapply');
+    expect(await fs.readFile(target, 'utf8')).toBe('after\n');
+  });
+
   it('reports a missing Git executable without changing the workspace', async () => {
     const target = path.join(workdir, 'missing-git.ts');
     await fs.writeFile(target, 'new\n', 'utf8');
@@ -760,6 +781,7 @@ describe('turn change-set sidecar store', () => {
     await finalizeTurnChangeSet('session-1', 'turn-owner', 'complete');
     const [recorded] = await listTurnChangeSets('session-1');
     mocks.ownerCurrent = false;
+    mocks.send.mockClear();
 
     await expect(applyTurnChangeSetAction('session-1', recorded!.id, 'undo'))
       .rejects.toMatchObject({ kind: 'busy' } satisfies Partial<TurnChangeSetActionError>);

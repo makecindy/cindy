@@ -21,6 +21,7 @@ vi.mock('../../logger.js', () => ({
 import {
   importSharedCodexThread,
   removeSharedCodexThread,
+  reserveCodexForkCleanup,
 } from '../codex-local-sessions';
 
 const THREAD_ID = '019dcd5a-6e54-7960-95e0-aa68117a28f1';
@@ -87,6 +88,31 @@ describe('importSharedCodexThread', () => {
     threadSpawnEdges: [],
   });
 
+  it('atomically replaces an interrupted migration-owned rollout on retry', async () => {
+    const target = path.join(codexHome, 'sessions', 'migration.jsonl');
+    fs.mkdirSync(path.dirname(target), { recursive: true });
+    fs.writeFileSync(target, '{partial');
+    const bytes = Buffer.from('{"complete":true}\n');
+    const write = fs.writeFileSync.bind(fs);
+    const partial = vi.spyOn(fs, 'writeFileSync').mockImplementationOnce((file, _data, options) => {
+      write(file, '{partial-temp', options);
+      throw Object.assign(new Error('disk full'), { code: 'ENOSPC' });
+    });
+    try {
+      await expect(importSharedCodexThread({
+        migration: true, threadId: THREAD_ID, stateRows: stateRows(),
+        rolloutBuffer: bytes, rolloutFilename: 'migration.jsonl', newCwd: '/target', title: 'migrated', updatedAt: 1,
+      })).rejects.toMatchObject({ code: 'ENOSPC' });
+      expect(fs.readFileSync(target, 'utf8')).toBe('{partial');
+      expect(fs.readdirSync(path.dirname(target))).toEqual(['migration.jsonl']);
+    } finally { partial.mockRestore(); }
+    const result = await importSharedCodexThread({
+      migration: true, threadId: THREAD_ID, stateRows: stateRows(),
+      rolloutBuffer: bytes, rolloutFilename: 'migration.jsonl', newCwd: '/target', title: 'migrated', updatedAt: 1,
+    });
+    expect(fs.readFileSync(target)).toEqual(bytes);
+    expect(result.rolloutWritten).toBe(true);
+  });
   it('writes rollout + state rows with cwd/rollout_path overrides and appends session index', async () => {
     const result = await importSharedCodexThread({
       threadId: THREAD_ID,
@@ -253,5 +279,32 @@ describe('importSharedCodexThread', () => {
     const db = new Database(stateDbPath, { readonly: true });
     expect(db.prepare('SELECT COUNT(*) AS n FROM thread_dynamic_tools').get()).toEqual({ n: 0 });
     db.close();
+  });
+
+  it('removes only the exact reserved fork rollout and state rows', async () => {
+    const sourceThreadId = '019dcd5a-6e54-7960-95e0-aa68117a28f2';
+    const rolloutPath = path.join(
+      codexHome,
+      'sessions',
+      '2026',
+      '08',
+      '29',
+      `rollout-2026-08-29T00-00-00-${THREAD_ID}.jsonl`,
+    );
+    fs.mkdirSync(path.dirname(rolloutPath), { recursive: true });
+    fs.writeFileSync(rolloutPath, '{"type":"session_meta"}\n');
+    const db = new Database(stateDbPath);
+    db.prepare('INSERT INTO threads (id, rollout_path) VALUES (?, ?)').run(THREAD_ID, rolloutPath);
+    db.prepare('INSERT INTO thread_dynamic_tools (thread_id, tool_name) VALUES (?, ?)')
+      .run(THREAD_ID, 'browser');
+    db.close();
+
+    const reservation = reserveCodexForkCleanup(THREAD_ID, sourceThreadId);
+    expect(reservation).not.toBeNull();
+    await reservation!();
+
+    expect(fs.existsSync(rolloutPath)).toBe(false);
+    expect(desktopThreadExists(THREAD_ID)).toBe(false);
+    expect(reserveCodexForkCleanup(sourceThreadId, sourceThreadId)).toBeNull();
   });
 });

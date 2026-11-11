@@ -31,8 +31,19 @@ import {
   buildRenderItems,
   groupWorkRuns,
   snapRenderWindowStartIdx,
+  resolveSavedViewportKey,
+  resolveRestoredRenderWindow,
+  restoreClientIdFromKey,
+  restoreClientIdForItem,
+  viewportRestoreNeedsMoreContent,
+  resolveAnchoredWindowItemCount,
+  resolveDefaultWindowStartIdx,
+  shouldBoostDefaultWindow,
+  clampTailWindowStartByBudget,
+  estimateRenderItemMountCost,
   RENDER_WINDOW_INITIAL_ITEMS,
   RENDER_WINDOW_FIRST_PAINT_ITEMS,
+  RENDER_WINDOW_FIRST_PAINT_BUDGET,
 } from '../components/chat/MessageStream';
 import {
   decideAutoFillAction,
@@ -471,5 +482,192 @@ describe('two-phase first-paint window', () => {
     expect(firstPaint[firstPaint.length - 1]?.key).toBe(
       allRenderItems[allRenderItems.length - 1]?.key,
     );
+  });
+});
+
+describe('anchored bounded window includes its target', () => {
+  it('adds boundary lookback distance to the desired forward count', () => {
+    // target 位于 turn 起点后第 24 个 item；15-item 窗口若不补 lookback 会漏掉 target。
+    const startIdx = 10;
+    const anchorIdx = startIdx + 24;
+    expect(resolveAnchoredWindowItemCount(startIdx, anchorIdx, 15)).toBe(39);
+    expect(startIdx + resolveAnchoredWindowItemCount(startIdx, anchorIdx, 15)).toBeGreaterThan(
+      anchorIdx,
+    );
+  });
+
+  it('does not inflate a window when snapping keeps the anchor as start', () => {
+    expect(resolveAnchoredWindowItemCount(20, 20, 15)).toBe(15);
+  });
+});
+
+describe('budget-clamped default window boost', () => {
+  it('boosts a short session when the byte budget hid some items', () => {
+    expect(
+      shouldBoostDefaultWindow({
+        allItemCount: 10,
+        visibleItemCount: 5,
+        defaultWindowItems: 15,
+      }),
+    ).toBe(true);
+  });
+
+  it('does not boost a genuinely complete short session', () => {
+    expect(
+      shouldBoostDefaultWindow({
+        allItemCount: 10,
+        visibleItemCount: 10,
+        defaultWindowItems: 15,
+      }),
+    ).toBe(false);
+  });
+
+  it('does not boost after the default window already reached INITIAL', () => {
+    expect(
+      shouldBoostDefaultWindow({
+        allItemCount: RENDER_WINDOW_INITIAL_ITEMS + 20,
+        visibleItemCount: RENDER_WINDOW_INITIAL_ITEMS,
+        defaultWindowItems: RENDER_WINDOW_INITIAL_ITEMS,
+      }),
+    ).toBe(false);
+  });
+});
+
+describe('budget-clamped default window user expansion', () => {
+  it('uses the actual visible start when byte budget hid early items', () => {
+    expect(
+      resolveDefaultWindowStartIdx({
+        allItemCount: 10,
+        defaultWindowItems: 15,
+        visibleStartIdx: 5,
+        visibleItemCount: 5,
+      }),
+    ).toBe(5);
+  });
+
+  it('uses the declared tail capacity when the visible window is complete', () => {
+    expect(
+      resolveDefaultWindowStartIdx({
+        allItemCount: 100,
+        defaultWindowItems: 15,
+        visibleStartIdx: 85,
+        visibleItemCount: 15,
+      }),
+    ).toBe(85);
+  });
+});
+
+describe('first-paint content budget (clampTailWindowStartByBudget)', () => {
+  const mkItem = (id: string, contentSize: number) => ({
+    key: `message-${id}`,
+    type: 'message' as const,
+    message: mkAssistant(id, 'x'.repeat(contentSize)),
+  });
+
+  it('small messages never hit the budget — start index unchanged', () => {
+    const items = Array.from({ length: 15 }, (_, i) => mkItem(`s-${i}`, 500));
+    expect(clampTailWindowStartByBudget(items, 0)).toBe(0);
+  });
+
+  it('large messages shrink the window from the front', () => {
+    // 每条 12KB:64k 预算 ≈ 5 条(200 固定开销 + 12000)。15 条起点应收窄到只渲染约 5 条。
+    const items = Array.from({ length: 15 }, (_, i) => mkItem(`l-${i}`, 12_000));
+    const clamped = clampTailWindowStartByBudget(items, 0);
+    expect(clamped).toBeGreaterThan(0);
+    const rendered = items.length - clamped;
+    const cost = items.slice(clamped).reduce((acc, it) => acc + estimateRenderItemMountCost(it), 0);
+    expect(cost).toBeLessThanOrEqual(RENDER_WINDOW_FIRST_PAINT_BUDGET + 12_200);
+    expect(rendered).toBeGreaterThanOrEqual(5);
+    expect(rendered).toBeLessThan(8);
+  });
+
+  it('always keeps at least the last item even when a single item busts the budget', () => {
+    const items = [mkItem('huge', RENDER_WINDOW_FIRST_PAINT_BUDGET * 2)];
+    expect(clampTailWindowStartByBudget(items, 0)).toBe(0);
+  });
+
+  it('window tail is always the latest item', () => {
+    const items = Array.from({ length: 10 }, (_, i) => mkItem(`t-${i}`, 20_000));
+    const clamped = clampTailWindowStartByBudget(items, 0);
+    const rendered = items.slice(clamped);
+    expect(rendered[rendered.length - 1]?.key).toBe(items[items.length - 1]?.key);
+  });
+
+  it('non-message items use flat estimates and stay cheap', () => {
+    const seg = {
+      key: 'seg-a',
+      type: 'tool_segment' as const,
+      toolCalls: [mkTool('a')],
+      resultMap: new Map<string, string>(),
+      settledIds: new Set<string>(),
+      resultTsMap: new Map<string, number>(),
+    };
+    expect(estimateRenderItemMountCost(seg)).toBeLessThan(1000);
+  });
+});
+
+describe('restored reading position', () => {
+  it('grows a short restored window when overflow still cannot accommodate the saved offset', () => {
+    // Regression: 98 px of overflow existed, but restoring needed 330 px.
+    expect(viewportRestoreNeedsMoreContent(330, 1242, 1144, false)).toBe(true);
+    expect(viewportRestoreNeedsMoreContent(330, 1600, 1144, false)).toBe(false);
+    expect(viewportRestoreNeedsMoreContent(330, 1242, 1144, true)).toBe(false);
+    expect(viewportRestoreNeedsMoreContent(0, 900, 1144, false)).toBe(false);
+  });
+
+  it('retains real source identifiers for synthetic cards and compound keys', () => {
+    expect(restoreClientIdFromKey('genfiles-user-with-dashes')).toBe('user-with-dashes');
+    expect(restoreClientIdFromKey('work-summary-tool-with-dashes')).toBe('tool-with-dashes');
+    expect(restoreClientIdFromKey('subagent-media-tool-with-dashes')).toBe('tool-with-dashes');
+    expect(restoreClientIdFromKey('ghostcard-tool-with-dashes')).toBe('tool-with-dashes');
+    expect(restoreClientIdFromKey('fork-origin-session')).toBeUndefined();
+    expect(restoreClientIdForItem({ type: 'agent_plan', key: 'plan-changing', todos: [], sourceClientIds: ['plan-source'] }))
+      .toBe('plan-source');
+    expect(restoreClientIdForItem({ type: 'generated_files', key: 'genfiles-user', files: [], turnStartMs: null, turnEndMs: null }))
+      .toBe('user');
+  });
+
+  const items = Array.from({ length: RENDER_WINDOW_INITIAL_ITEMS + 40 }, (_, i) => ({
+    key: `message-m-${i}`,
+    type: 'message' as const,
+    message: mkAssistant(`m-${i}`),
+  }));
+
+  it('restores an old anchor outside the tail using a bounded window', () => {
+    const snapshot = { windowAnchorKey: null, viewportTopKey: items[0].key, offset: 18, isNearBottom: false };
+    expect(resolveSavedViewportKey(items, snapshot)).toBe(items[0].key);
+    expect(resolveAnchoredWindowItemCount(0, 0, RENDER_WINDOW_FIRST_PAINT_ITEMS))
+      .toBe(RENDER_WINDOW_FIRST_PAINT_ITEMS);
+    expect(resolveSavedViewportKey(items.slice(1), snapshot)).toBeNull();
+  });
+
+  it('remounts around the viewport instead of the entire previously expanded history', () => {
+    const snapshot = { windowAnchorKey: items[0].key, viewportTopKey: items[70].key,
+      anchoredForwardCount: 120, offset: 18, isNearBottom: false };
+    const window = resolveRestoredRenderWindow(snapshot);
+    const anchorIndex = items.findIndex(item => item.key === window.anchor);
+    const start = snapRenderWindowStartIdx(items, anchorIndex);
+    const visible = items.slice(start, start + resolveAnchoredWindowItemCount(start, anchorIndex, window.forwardItems));
+    expect(window.forwardItems).toBe(RENDER_WINDOW_FIRST_PAINT_ITEMS);
+    expect(visible).toContain(items[70]);
+    expect(visible).not.toContain(items[0]);
+    expect(visible.length).toBeLessThan(snapshot.anchoredForwardCount);
+  });
+
+  it('retains legacy window fallback and resets near-bottom snapshots to the tail', () => {
+    const legacy = { windowAnchorKey: items[0].key, viewportTopKey: '',
+      anchoredForwardCount: 120, offset: 18, isNearBottom: false };
+    expect(resolveRestoredRenderWindow(legacy)).toEqual({ anchor: items[0].key, forwardItems: 120 });
+    expect(resolveRestoredRenderWindow({ ...legacy, isNearBottom: true }))
+      .toEqual({ anchor: null, forwardItems: RENDER_WINDOW_FIRST_PAINT_ITEMS });
+  });
+
+  it('prefers a saved generated-files card over its earlier source user row', () => {
+    const source = { type: 'message' as const, key: 'msg-user', message: mkUser('user') };
+    const card = { type: 'generated_files' as const, key: 'genfiles-user', files: [], turnStartMs: null, turnEndMs: null };
+    const snapshot = { windowAnchorKey: null, viewportTopKey: card.key, restoreClientId: 'user', offset: 12, isNearBottom: false };
+    expect(resolveSavedViewportKey([source, card], snapshot)).toBe(card.key);
+    expect(resolveSavedViewportKey([source], snapshot)).toBe(source.key);
+    expect(resolveSavedViewportKey([], snapshot)).toBeNull();
   });
 });

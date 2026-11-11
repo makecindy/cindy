@@ -155,15 +155,19 @@ describe('legacy → v1 refresh token migration window', () => {
     expect(guardCalls.length).toBe(2);
   });
 
-  it('读侧:交出 v1 与 legacy 两个来源且不在此折叠,v1 排前', () => {
+  it('读侧:交出 compatibility、vault 与 legacy 三个来源且不在此折叠', () => {
     const body = sliceBody('function readStoredRefreshTokenCandidates(', '\n}\n');
 
     const v1Idx = body.indexOf('readPersistedRefreshToken(realm)');
+    const vaultIdx = body.indexOf('activeResource.refreshToken');
     const legacyIdx = body.indexOf('readSafe(LEGACY_RESOURCE_REFRESH_TOKEN_KEY)');
     expect(v1Idx).toBeGreaterThan(-1);
+    expect(vaultIdx).toBeGreaterThan(-1);
     expect(legacyIdx).toBeGreaterThan(-1);
-    // v1 带 realm、是本版本权威记录,必须排在 legacy 之前。
-    expect(v1Idx).toBeLessThan(legacyIdx);
+    // compatibility 先覆盖回滚版本刚轮换的代次,vault 再覆盖新版本中断写留下的代次;
+    // legacy 裸 token 风险最高,只作为构建区的最后兜底。
+    expect(v1Idx).toBeLessThan(vaultIdx);
+    expect(vaultIdx).toBeLessThan(legacyIdx);
     // legacy 同样只在与安装包区域一致时可解释。
     expect(body).toContain(
       'realm === AUTH_REGION ? readSafe(LEGACY_RESOURCE_REFRESH_TOKEN_KEY) : null',

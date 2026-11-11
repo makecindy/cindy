@@ -1,0 +1,14 @@
+{
+  "platforms": ["apple", "android"],
+  "apple": {
+    "podspecPath": [
+      "./ios/CindyRemoteCredentialsModule.podspec",
+      "../../../../packages/remote-credentials-native/CindyRemoteCredentials.podspec"
+    ],
+    "swiftModuleName": "CindyRemoteCredentialsModule",
+    "modules": ["CindyRemoteCredentialsModule"]
+  },
+  "android": {
+    "modules": ["app.cindy.credentials.CindyRemoteCredentialsModule"]
+  }
+}

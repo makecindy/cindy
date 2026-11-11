@@ -1,15 +1,9 @@
 /**
  * sentAttachmentThumbStore — 已发送本机图片附件的本地缩略图兜底映射。
  * ---------------------------------------------------------------------------
- * 手机端上传的图片在消息里持久化为 `cindy-oss-attach://` 中转引用;该引用要等被控端
- * (桌面)取走消息、物化进 image cache 后才被改写成可远程取件的 `xdt-image://`。
- * 改写结果不会回推,所以「发出后停留在当前界面」期间(以及桌面端离线、消息压在
- * 队列里的整个窗口)气泡只能显示「暂不能直接预览」占位卡——图明明就在手机本地。
- *
- * 本 store 补上这个空档:上传成功时把实际 PUT 的文件(降采样产物,通常几百 KB)
- * 拷贝进 app 自有目录,记录「ossRef → 本地相对文件名」映射并持久化;渲染用户消息
- * 图片时 url 仍是 `cindy-oss-attach://` 且映射命中 → 用本地图当缩略图。桌面端物化后
- * url 变成 `xdt-image://`,兜底自然退场,条目由过期清理回收。
+ * 上传成功后保留实际发送的图片字节，同时接受 OSS 与直传引用。
+ * 原引用继续持久化；从其中的完整性指纹重建查询索引，让消息换成 cindy-media
+ * 内容地址后仍能使用同一副本。缩略图与原图查看共用这份已上传的完整图片。
  *
  * 设计要点:
  *   - 映射存**相对文件名**:iOS app 容器绝对路径会随更新变化,不能持久化绝对路径;
@@ -21,29 +15,22 @@
  */
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { useSyncExternalStore } from 'react';
-import { isAttachmentOssRef } from '@/session/attachmentOssRef';
+import { getMobileAuthOwner, isMobileAuthOwnerCurrent, subscribeMobileAuthOwner } from '@/auth/authOwnerGeneration';
+import { isAttachmentOssRef, parseAttachmentOssRef, isPeerAttachmentRef, parsePeerAttachmentRef } from '@cindy/device-link';
 import { isPayloadDesktopLocalMediaUrl } from '@cindy/maker-shared/payload-summary';
+import { extOfMime, imageMimeFromUrl, type RemoteMediaDiskCacheHit } from '@/session/remoteMediaDiskCache';
 
 const STORAGE_KEY = 'xdt.sentAttachmentThumbs.v1';
 /** documentDirectory 下的自有子目录(不放 cache:系统清缓存会把兜底图清裂)。 */
 const THUMB_DIR_NAME = 'sent-attachment-thumbs';
-/** 条目上限(LRU,按注册时间淘汰)。窗口期本来就短,64 条覆盖极端连发场景。 */
-const MAX_ENTRIES = 64;
-/** 过期时长:桌面端物化通常秒级完成,7 天足够覆盖「电脑长期离线」的长尾。 */
-const MAX_AGE_MS = 7 * 24 * 60 * 60 * 1000;
-/**
- * 单文件体积上限:降采样产物典型几百 KB;gif / 原样直传可到 30MB(上传上限),
- * 超限的不做本地兜底(气泡回落占位卡,可接受降级),防兜底目录无界膨胀。
- */
-const MAX_SOURCE_BYTES = 8 * 1024 * 1024;
-
 /** 拷贝产物扩展名白名单(其余回落 .jpg;只影响文件名,不影响渲染)。 */
 const KNOWN_EXTS = new Set(['jpg', 'jpeg', 'png', 'gif', 'webp']);
 
 interface ThumbEntry {
+  accountKey: string;
   /** THUMB_DIR_NAME 下的相对文件名。 */
   file: string;
-  /** 注册时间戳(LRU 淘汰 + 过期清理用)。 */
+  /** 注册时间戳。 */
   at: number;
 }
 
@@ -86,6 +73,8 @@ const defaultFsDeps: SentAttachmentThumbFsDeps = {
 };
 
 const entries = new Map<string, ThumbEntry>();
+/** Derived from the existing persisted refs; no second copy or persistence format. */
+const entriesByHash = new Map<string, ThumbEntry>();
 const listeners = new Set<() => void>();
 let version = 0;
 /** hydrate 后缓存的 documentDirectory(以 / 结尾),同步查询拼路径用。 */
@@ -98,13 +87,34 @@ function bump(): void {
   version += 1;
   for (const listener of [...listeners]) listener();
 }
+subscribeMobileAuthOwner(bump);
+
+function scopedKey(accountKey: string, ref: string): string {
+  return JSON.stringify([accountKey, ref]);
+}
 
 function thumbDir(): string | null {
   return cachedDocDir ? `${cachedDocDir}${THUMB_DIR_NAME}` : null;
 }
 
+function contentHash(ref: string): string | undefined {
+  return /^cindy-media:\/\/blobs\/([a-f0-9]{64})\.[a-z0-9]+$/.exec(ref)?.[1]
+    ?? parseAttachmentOssRef(ref)?.sha256 ?? parsePeerAttachmentRef(ref)?.sha256;
+}
+
+function imageMimeForRef(ref: string): string | undefined {
+  return parseAttachmentOssRef(ref)?.mimeType ?? parsePeerAttachmentRef(ref)?.mimeType
+    ?? imageMimeFromUrl(ref) ?? undefined;
+}
+
+function rememberEntry(ref: string, entry: ThumbEntry): void {
+  entries.set(scopedKey(entry.accountKey, ref), entry);
+  const hash = contentHash(ref);
+  if (hash) entriesByHash.set(scopedKey(entry.accountKey, hash), entry);
+}
+
 /**
- * 冷启动回填:读持久化映射进内存,顺带清过期条目与目录孤儿文件。幂等,
+ * 冷启动回填:读持久化映射进内存,顺带清目录孤儿文件。幂等,
  * 首次查询 / 注册时惰性触发。
  */
 export function ensureSentAttachmentThumbsHydrated(
@@ -119,22 +129,13 @@ export function ensureSentAttachmentThumbsHydrated(
 async function hydrateInternal(deps: SentAttachmentThumbFsDeps): Promise<void> {
   cachedDocDir = await deps.documentDirectory().catch(() => null);
   const raw = await AsyncStorage.getItem(STORAGE_KEY).catch(() => null);
-  const now = Date.now();
-  const keep: Array<[string, ThumbEntry]> = [];
-  let dropped = 0;
-  for (const [ossRef, entry] of parseStoredEntries(raw)) {
-    if (now - entry.at > MAX_AGE_MS) {
-      dropped += 1;
-      continue;
-    }
-    keep.push([ossRef, entry]);
-  }
+  const keep = parseStoredEntries(raw);
   // 内存以磁盘为底、保留 hydrate 期间已注册的新条目(register 先 await hydrate,
   // 实际不会先写;防御性合并保证后写胜)。
   for (const [ossRef, entry] of keep) {
-    if (!entries.has(ossRef)) entries.set(ossRef, entry);
+    if (!entries.has(scopedKey(entry.accountKey, ossRef))) rememberEntry(ossRef, entry);
   }
-  // 目录孤儿清理:磁盘上存在但映射不再引用的文件(过期条目的文件也在此统一删)。
+  // 目录孤儿清理:磁盘上存在但映射不再引用的文件。
   const dir = thumbDir();
   if (dir) {
     const kept = new Set([...entries.values()].map((entry) => entry.file));
@@ -143,7 +144,6 @@ async function hydrateInternal(deps: SentAttachmentThumbFsDeps): Promise<void> {
       if (!kept.has(name)) void deps.remove(`${dir}/${name}`).catch(() => undefined);
     }
   }
-  if (dropped > 0) schedulePersist();
   bump();
 }
 
@@ -157,7 +157,7 @@ async function hydrateInternal(deps: SentAttachmentThumbFsDeps): Promise<void> {
  * 引用,应当当场记下对应关系 —— 留底之后气泡第一帧就有图,远端取件退化为后备。
  */
 function isThumbBackedRef(value: unknown): value is string {
-  return isAttachmentOssRef(value) || isPayloadDesktopLocalMediaUrl(value);
+  return isAttachmentOssRef(value) || isPeerAttachmentRef(value) || isPayloadDesktopLocalMediaUrl(value);
 }
 
 /**
@@ -168,36 +168,31 @@ export async function registerSentAttachmentThumb(
   ossRef: string | undefined,
   sourceUri: string,
   deps: SentAttachmentThumbFsDeps = defaultFsDeps,
+  isActive: () => boolean = () => true,
 ): Promise<void> {
   if (!isThumbBackedRef(ossRef) || !sourceUri) return;
+  const owner = getMobileAuthOwner();
+  const current = () => !!owner.accountKey && isMobileAuthOwnerCurrent(owner) && isActive();
+  if (!current()) return;
   try {
     await ensureSentAttachmentThumbsHydrated(deps);
-    if (entries.has(ossRef)) return;
+    if (!current() || entries.has(scopedKey(owner.accountKey, ossRef))) return;
     const dir = thumbDir();
     if (!dir) return;
-    const size = await deps.statSize(sourceUri).catch(() => 0);
-    if (size > MAX_SOURCE_BYTES) return;
     const at = Date.now();
     fileSeq += 1;
-    const file = `thumb-${at}-${fileSeq}.${extForUri(sourceUri)}`;
+    // Upload snapshots intentionally have no extension. Keep the image's actual
+    // format so sharing a retained PNG/GIF does not label its bytes as JPEG.
+    const mime = imageMimeForRef(ossRef);
+    const file = `thumb-${at}-${fileSeq}.${mime?.startsWith('image/') ? extOfMime(mime) : extForUri(sourceUri)}`;
     await deps.makeDirectory(dir);
+    if (!current()) return;
     await deps.copy(sourceUri, `${dir}/${file}`);
-    // LRU 淘汰:超上限先删最老条目(含其文件),再入新条目。
-    while (entries.size >= MAX_ENTRIES) {
-      let oldestKey: string | null = null;
-      let oldestAt = Number.POSITIVE_INFINITY;
-      for (const [key, entry] of entries) {
-        if (entry.at < oldestAt) {
-          oldestAt = entry.at;
-          oldestKey = key;
-        }
-      }
-      if (!oldestKey) break;
-      const evicted = entries.get(oldestKey);
-      entries.delete(oldestKey);
-      if (evicted) void deps.remove(`${dir}/${evicted.file}`).catch(() => undefined);
+    if (!current()) {
+      await deps.remove(`${dir}/${file}`);
+      return;
     }
-    entries.set(ossRef, { file, at });
+    rememberEntry(ossRef, { file, at, accountKey: owner.accountKey });
     schedulePersist();
     bump();
   } catch {
@@ -210,11 +205,32 @@ export async function registerSentAttachmentThumb(
  * 未 hydrate 时顺带惰性触发,完成后经版本订阅驱动重渲染。
  */
 export function getSentAttachmentThumbUri(ossRef: string): string | null {
+  const { accountKey } = getMobileAuthOwner();
+  if (!accountKey) return null;
   if (!hydratePromise) void ensureSentAttachmentThumbsHydrated();
   const dir = thumbDir();
   if (!dir) return null;
-  const entry = entries.get(ossRef);
+  const hash = contentHash(ossRef);
+  const entry = entries.get(scopedKey(accountKey, ossRef))
+    ?? (hash ? entriesByHash.get(scopedKey(accountKey, hash)) : undefined);
   return entry ? `${dir}/${entry.file}` : null;
+}
+
+/** Original-image reads must wait for hydration and verify the retained file still exists. */
+export async function resolveSentAttachmentThumb(
+  ref: string,
+  deps: SentAttachmentThumbFsDeps = defaultFsDeps,
+): Promise<RemoteMediaDiskCacheHit | null> {
+  const owner = getMobileAuthOwner();
+  if (!owner.accountKey) return null;
+  await ensureSentAttachmentThumbsHydrated(deps);
+  if (!isMobileAuthOwnerCurrent(owner)) return null;
+  const uri = getSentAttachmentThumbUri(ref);
+  if (!uri) return null;
+  const size = await deps.statSize(uri).catch(() => 0);
+  if (size <= 0 || !isMobileAuthOwnerCurrent(owner)) return null;
+  const mimeType = imageMimeForRef(ref) ?? imageMimeFromUrl(uri);
+  return mimeType?.startsWith('image/') ? { uri, size, mimeType } : null;
 }
 
 /**
@@ -225,7 +241,8 @@ export function getSentAttachmentThumbUri(ossRef: string): string | null {
 export function applySentAttachmentThumbOverlay<
   T extends { kind: string; uri?: string; previewable: boolean },
 >(item: T): T {
-  if (item.kind !== 'image' || item.previewable || !item.uri || !isAttachmentOssRef(item.uri)) {
+  if (item.kind !== 'image' || item.previewable || !item.uri
+    || !(isAttachmentOssRef(item.uri) || isPeerAttachmentRef(item.uri))) {
     return item;
   }
   const local = getSentAttachmentThumbUri(item.uri);
@@ -278,8 +295,10 @@ function parseStoredEntries(raw: string | null): Array<[string, ThumbEntry]> {
         && record.file.length > 0
         && typeof record.at === 'number'
         && Number.isFinite(record.at)
+        && typeof record.accountKey === 'string'
+        && record.accountKey.length > 0
       ) {
-        out.push([record.ossRef, { file: record.file, at: record.at }]);
+        out.push([record.ossRef, { file: record.file, at: record.at, accountKey: record.accountKey }]);
       }
     }
     return out;
@@ -289,8 +308,9 @@ function parseStoredEntries(raw: string | null): Array<[string, ThumbEntry]> {
 }
 
 function schedulePersist(): void {
-  const snapshot = [...entries.entries()].map(([ossRef, entry]) => ({
-    ossRef,
+  const snapshot = [...entries.entries()].map(([key, entry]) => ({
+    ossRef: (JSON.parse(key) as [string, string])[1],
+    accountKey: entry.accountKey,
     file: entry.file,
     at: entry.at,
   }));
@@ -301,9 +321,6 @@ function schedulePersist(): void {
 }
 
 export const __testing = {
-  maxAgeMs: MAX_AGE_MS,
-  maxEntries: MAX_ENTRIES,
-  maxSourceBytes: MAX_SOURCE_BYTES,
   storageKey: STORAGE_KEY,
   thumbDirName: THUMB_DIR_NAME,
   /** 等持久化队列排空(测试断言 AsyncStorage 内容前调用)。 */
@@ -312,6 +329,7 @@ export const __testing = {
   },
   reset(): void {
     entries.clear();
+    entriesByHash.clear();
     listeners.clear();
     version = 0;
     cachedDocDir = null;

@@ -1,3 +1,9 @@
+// Keep authenticated HTTP and cross-process I/O outside this in-memory filesystem fixture.
+// The production policy queue remains active; its real lock ordering is covered by providerHandlers.
+vi.mock('../device-link/crossProcessLock.js', () => ({
+  withCrossProcessLock: async (_file: string, _options: unknown, work: (status: { held: true }) => unknown) => work({ held: true }),
+}));
+vi.mock('../device-link/providerShareAvailabilityTransport.js', () => ({ disableShareAvailability: vi.fn() }));
 /**
  * deviceLinkSettingsStore.test.ts —— 被控开关持久化的读/写健壮性。
  * 覆盖:文件缺失 → 默认;合法 JSON → normalize;**损坏 JSON → unlink + 回落默认(不崩)**;
@@ -62,9 +68,13 @@ const h = vi.hoisted(() => {
 const SETTINGS_PATH = path.join('/tmp/userdata', 'device-link-settings.json');
 
 const DEFAULT_SETTINGS = {
+  agentNetEnabled: false,
+  agentNetOnlyEncrypted: false,
+  remoteDesktopEnabled: false,
   remoteControlEnabled: false,
   keepAwake: false,
   revokedControllers: [],
+  modelUseRevokedControllers: [],
   disabledControlDeviceIds: [],
   lastKnownDeviceNames: {},
 };
@@ -72,6 +82,7 @@ const DEFAULT_SETTINGS = {
 vi.mock('electron', () => ({ app: { getPath: () => '/tmp/userdata' } }));
 vi.mock('node:fs', () => ({
   default: {
+    mkdirSync: vi.fn(),
     existsSync: h.existsSync,
     readFileSync: h.readFileSync,
     unlinkSync: h.unlinkSync,
@@ -89,7 +100,12 @@ vi.mock('../logger', () => ({
 
 async function load() {
   vi.resetModules(); // 清模块级 cached / writeChain
-  return import('../device-link/settings-store.js');
+  const { configureUserDataDir } = await import('../userDataPath.js');
+  configureUserDataDir('/tmp/userdata');
+  const { commitVolatileAppSession } = await import('../appSessionState.js');
+  commitVolatileAppSession('cloud', 'settings-test-account', true);
+  h.readFileSync.mockClear();
+  return import('../device-link/settings-store.desktop.js');
 }
 
 beforeEach(() => {
@@ -127,9 +143,13 @@ describe('readDeviceLinkSettings', () => {
     );
     const { readDeviceLinkSettings } = await load();
     expect(readDeviceLinkSettings()).toEqual({
+      agentNetEnabled: false,
+      agentNetOnlyEncrypted: false,
       remoteControlEnabled: true,
+      remoteDesktopEnabled: false,
       keepAwake: false,
       revokedControllers: ['dev-1', 'dev-2'],
+      modelUseRevokedControllers: [],
       disabledControlDeviceIds: [],
       lastKnownDeviceNames: {},
     });
@@ -233,6 +253,58 @@ describe('writeDeviceLinkSetting', () => {
 
     await expect(rememberLastKnownDeviceName('dev-1', 'MacBook')).resolves.toBe(false);
     expect(h.writeFileSync).not.toHaveBeenCalled();
+  });
+
+  it('forgetLastKnownDeviceName 删除已清空的数据库展示名缓存', async () => {
+    h.seed(SETTINGS_PATH, JSON.stringify({ lastKnownDeviceNames: { 'dev-1': 'MacBook' } }));
+    const { forgetLastKnownDeviceName, readDeviceLinkSettings } = await load();
+
+    await expect(forgetLastKnownDeviceName('dev-1')).resolves.toBe(true);
+    expect(readDeviceLinkSettings().lastKnownDeviceNames).toEqual({});
+  });
+
+  it('空名删除排在尚未完成的旧名称写入之后，最终不残留旧缓存', async () => {
+    const {
+      forgetLastKnownDeviceName,
+      readDeviceLinkSettings,
+      rememberLastKnownDeviceName,
+    } = await load();
+
+    const remember = rememberLastKnownDeviceName('dev-1', '旧名称');
+    const forget = forgetLastKnownDeviceName('dev-1');
+    await expect(Promise.all([remember, forget])).resolves.toEqual([true, true]);
+    expect(readDeviceLinkSettings().lastKnownDeviceNames).toEqual({});
+  });
+
+  it('空名删除尚未完成时，同名有效名称恢复会排在删除后重新写回', async () => {
+    h.seed(SETTINGS_PATH, JSON.stringify({ lastKnownDeviceNames: { 'dev-1': 'MacBook' } }));
+    const {
+      forgetLastKnownDeviceName,
+      readDeviceLinkSettings,
+      rememberLastKnownDeviceName,
+    } = await load();
+
+    const forget = forgetLastKnownDeviceName('dev-1');
+    const remember = rememberLastKnownDeviceName('dev-1', 'MacBook');
+    await expect(Promise.all([forget, remember])).resolves.toEqual([true, true]);
+    expect(readDeviceLinkSettings().lastKnownDeviceNames).toEqual({ 'dev-1': 'MacBook' });
+  });
+
+  it('remember/forget 待落盘时，同步读取先合并最新内存意图供重连 seed 使用', async () => {
+    h.seed(SETTINGS_PATH, JSON.stringify({ lastKnownDeviceNames: { 'dev-1': '旧名称' } }));
+    const {
+      forgetLastKnownDeviceName,
+      readLastKnownDeviceNames,
+      rememberLastKnownDeviceName,
+    } = await load();
+
+    const remember = rememberLastKnownDeviceName('dev-1', '新名称');
+    expect(readLastKnownDeviceNames()).toEqual({ 'dev-1': '新名称' });
+    await expect(remember).resolves.toBe(true);
+
+    const forget = forgetLastKnownDeviceName('dev-1');
+    expect(readLastKnownDeviceNames()).toEqual({});
+    await expect(forget).resolves.toBe(true);
   });
 
   it('rememberLastKnownDeviceName 写缓存失败时不影响调用方', async () => {

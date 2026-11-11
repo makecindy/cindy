@@ -3,6 +3,8 @@ import type { MobileMarkdownInline, MobileMarkdownTableRow } from '@/session/mes
 export interface MobileMarkdownTableColumnWidthInput {
   header: readonly MobileMarkdownInline[][];
   rows: readonly MobileMarkdownTableRow[];
+  /** 表格所在消息正文的可用宽度；短表会扩展到这里，宽表继续横向滚动。 */
+  availableWidth?: number;
   minWidth: number;
   maxWidth?: number;
 }
@@ -16,6 +18,7 @@ const DEFAULT_IMAGE_INLINE_WIDTH = 150;
 export function buildMobileMarkdownTableColumnWidths({
   header,
   rows,
+  availableWidth,
   minWidth,
   maxWidth = DEFAULT_MAX_COLUMN_WIDTH,
 }: MobileMarkdownTableColumnWidthInput): number[] {
@@ -24,7 +27,8 @@ export function buildMobileMarkdownTableColumnWidths({
     ...rows.map((row) => row.cells.length),
   );
   if (columnCount <= 0) return [];
-  return Array.from({ length: columnCount }, (_, columnIndex) => {
+  const normalizedMaxWidth = Math.max(minWidth, maxWidth);
+  const widths = Array.from({ length: columnCount }, (_, columnIndex) => {
     const contentWidth = Math.max(
       estimateInlineWidth(header[columnIndex] ?? []),
       ...rows.map((row) => estimateInlineWidth(row.cells[columnIndex] ?? [])),
@@ -32,9 +36,28 @@ export function buildMobileMarkdownTableColumnWidths({
     return clampWidth(
       Math.ceil(contentWidth + CELL_HORIZONTAL_PADDING),
       minWidth,
-      Math.max(minWidth, maxWidth),
+      normalizedMaxWidth,
     );
   });
+  return expandColumnWidthsToAvailableSpace(widths, availableWidth);
+}
+
+/**
+ * 内容较短时把正文里的剩余空间平均分给仍可扩展的列，避免表格缩在左侧；
+ * 内容已经更宽时保持估算宽度，由外层横向 ScrollView 承担溢出。
+ */
+function expandColumnWidthsToAvailableSpace(
+  widths: readonly number[],
+  availableWidth: number | undefined,
+): number[] {
+  if (availableWidth === undefined || !Number.isFinite(availableWidth) || availableWidth <= 0) {
+    return [...widths];
+  }
+  const remaining = Math.max(0, Math.floor(availableWidth) - sum(widths));
+  if (remaining <= 0) return [...widths];
+  const share = Math.floor(remaining / widths.length);
+  const remainder = remaining % widths.length;
+  return widths.map((width, index) => width + share + (index < remainder ? 1 : 0));
 }
 
 function estimateInlineWidth(inlines: readonly MobileMarkdownInline[]): number {
@@ -65,4 +88,8 @@ function isWideGlyph(char: string): boolean {
 
 function clampWidth(value: number, min: number, max: number): number {
   return Math.max(min, Math.min(max, value));
+}
+
+function sum(values: readonly number[]): number {
+  return values.reduce((total, value) => total + value, 0);
 }

@@ -1,10 +1,14 @@
 import { describe, expect, it } from 'vitest';
 import { formatQuoteForSend } from '@cindy/maker-shared/chat-quotes';
+import { buildTodoReferenceHref } from '@cindy/maker-shared/agent-input-projection';
 import {
   appendComposerNode,
   composerDocumentFromEncodedMessage,
   composerDocumentFromSerializedMessage,
   composerDocumentProjectedText,
+  composerCaretPosition,
+  composerSelectionOffset,
+  displayComposerSlashRuntimeAliases,
   hydrateComposerMessageReferenceBodies,
   isLongComposerPaste,
   mentionComposerNode,
@@ -13,8 +17,11 @@ import {
   pastedTextComposerNode,
   parseStoredComposerDocument,
   reconcileComposerProjectedText,
+  reconcileComposerVoiceDraft,
+  type ComposerDocument,
   removeComposerNode,
   replaceComposerTextRange,
+  restoreComposerSlashRuntimeAliases,
   serializeComposerDocument,
   sessionLinkComposerNode,
   slashCommandTextNode,
@@ -22,6 +29,77 @@ import {
 } from '@/session/composerDocument';
 
 describe('mobile composer document', () => {
+  it.each([
+    [0, 2, 0, 1, 'voice'],
+    [1, 1, 0, 1, 'avoiceb'],
+    [1, 1, 0, 0, 'avoice|b'],
+    [1, 1, 1, 1, 'a|voiceb'],
+    [0, 1, 0, 0, 'voice|b'],
+    [1, 2, 1, 1, 'a|voice'],
+  ])('replaces structural voice selection [%i, %i] atoms [%i, %i]', (start, end, atomStart, atomEnd, expected) => {
+    const initialDocument: ComposerDocument = { version: 1, nodes: [
+      { type: 'text', text: 'a' }, { type: 'quote', quote: { text: 'quote' } }, { type: 'text', text: 'b' },
+    ] };
+    const result = reconcileComposerVoiceDraft(initialDocument, {
+      draft: 'ab'.slice(0, start) + 'voice' + 'ab'.slice(end), initialDocument,
+      initialSelection: { start, end, atomRange: { start: atomStart, end: atomEnd } }, insertionEnd: start + 5,
+    });
+    expect(result.nodes.map((node) => node.type === 'quote' ? '|' : node.type === 'text' ? node.text : '?').join('')).toBe(expected);
+  });
+
+  it('removes only the selected quote among consecutive zero-width atoms', () => {
+    const initialDocument: ComposerDocument = { version: 1, nodes: ['one', 'two', 'three'].map((text) => ({ type: 'quote', quote: { text } })) };
+    const result = reconcileComposerVoiceDraft(initialDocument, {
+      draft: 'voice', initialDocument, initialSelection: { start: 0, end: 0, atomRange: { start: 1, end: 2 } }, insertionEnd: 5,
+    });
+    expect(result.nodes).toEqual([initialDocument.nodes[0], { type: 'text', text: 'voice' }, initialDocument.nodes[2]]);
+    expect(serializeComposerDocument(result).text).not.toContain('two');
+  });
+
+  it('keeps repeated streaming text on the original side of an unselected quote', () => {
+    const initialDocument: ComposerDocument = { version: 1, nodes: [
+      { type: 'text', text: 'a' }, { type: 'quote', quote: { text: 'quote' } }, { type: 'text', text: 'a' },
+    ] };
+    const update = { draft: 'aa', initialDocument, initialSelection: { start: 0, end: 1, atomRange: { start: 0, end: 0 } }, insertionEnd: 1 };
+    const first = reconcileComposerVoiceDraft(initialDocument, update);
+    const next = reconcileComposerVoiceDraft(first, { ...update, draft: 'aaa', replacement: { start: 0, end: 1, text: 'aa' } });
+    expect(next.nodes).toEqual([{ type: 'text', text: 'aa' }, initialDocument.nodes[1], { type: 'text', text: 'a' }]);
+  });
+
+  it('does not reuse captured atom selection after the document was edited', () => {
+    const initialDocument: ComposerDocument = { version: 1, nodes: [{ type: 'quote', quote: { text: 'keep' } }] };
+    const edited = appendComposerNode(initialDocument, { type: 'text', text: 'typed' });
+    const result = reconcileComposerVoiceDraft(edited, {
+      draft: 'typed\nvoice', initialDocument, initialSelection: { start: 0, end: 0, atomRange: { start: 0, end: 1 } }, insertionEnd: 11,
+    });
+    expect(result.nodes[0]).toEqual(initialDocument.nodes[0]);
+    expect(composerDocumentProjectedText(result)).toBe('typed\nvoice');
+  });
+
+  it('resolves compact prefixes through long pasted content and semantic reference projections', () => {
+    const document = { version: 1 as const, nodes: [
+      { type: 'text' as const, text: '前🙂后' },
+      { type: 'quote' as const, quote: { text: '引用' } },
+      { type: 'pasted-text' as const, text: '文'.repeat(4_000_000), display: '长文本' },
+      { type: 'session-link' as const, href: 'https://example.com/task', label: '标题', titled: true },
+    ] };
+    expect(composerSelectionOffset(document, { textLength: 3, atomCount: 1 })).toBe(3);
+    expect(composerSelectionOffset(document, { textLength: 4, atomCount: 2 })).toBe(4_000_004);
+    expect(composerSelectionOffset(document, { textLength: 4, atomCount: 3 }))
+      .toBe(composerDocumentProjectedText(document).length);
+    expect(composerSelectionOffset(document, { textLength: 5, atomCount: 0 })).toBeNull();
+    expect(composerSelectionOffset(document, { textLength: 0, atomCount: 4 })).toBeNull();
+  });
+  it('locates a dictated caret using projected chip lengths and skips zero-width quotes', () => {
+    const document = { version: 1 as const, nodes: [
+      { type: 'quote' as const, quote: { text: '引用' } },
+      { type: 'session-link' as const, href: 'https://example.com/task', label: '标题', titled: true },
+      { type: 'text' as const, text: '插入后文' },
+    ] };
+    const prefix = '[标题](https://example.com/task)';
+    expect(composerCaretPosition(document, prefix.length + 2)).toEqual({ nodeIndex: 2, offset: 2 });
+    expect(composerCaretPosition(textComposerDocument('甲🙂乙'), 3)).toEqual({ nodeIndex: 0, offset: 3 });
+  });
   it('roundtrips interleaved quote and text nodes without leaking private markers', () => {
     const quoteA = { text: 'alpha' };
     const quoteB = { text: 'beta', sourcePath: 'src/b.ts', startLine: 4, endLine: 5 };
@@ -106,6 +184,45 @@ describe('mobile composer document', () => {
     const edited = replaceComposerTextRange(document, 7, 8, [{ type: 'text', text: 'x' }]);
     expect(serializeComposerDocument(edited).slashCommandRanges).toEqual([]);
     expect(serializeComposerDocument(edited).text).toBe('/compacx now');
+  });
+
+  it('edits sent runtime slash aliases by their label and resends the wire name', () => {
+    const wire = '/cindy-plugin-cindy-github:pr';
+    const sent = composerDocumentFromSerializedMessage(`${wire} 跟进`, {
+      slashCommandRanges: [{ start: 0, end: wire.length }],
+    });
+    const { document, aliases } = displayComposerSlashRuntimeAliases(sent);
+    expect(composerDocumentProjectedText(document)).toBe('/pr 跟进');
+
+    const edited = replaceComposerTextRange(document, 4, 6, [{ type: 'text', text: '看看' }]);
+    expect(serializeComposerDocument(restoreComposerSlashRuntimeAliases(edited, aliases))).toMatchObject({
+      text: `${wire} 看看`,
+      slashCommandRanges: [{ start: 0, end: wire.length }],
+    });
+    // Typing over the command drops its mark; whatever the user typed is sent as-is.
+    const retyped = replaceComposerTextRange(document, 1, 3, [{ type: 'text', text: 'help' }]);
+    expect(serializeComposerDocument(restoreComposerSlashRuntimeAliases(retyped, aliases)).text)
+      .toBe('/help 跟进');
+  });
+
+  it('keeps each same-named plugin command on its own wire name when editing', () => {
+    const first = '/cindy-plugin-a:pr';
+    const second = '/cindy-plugin-b:pr';
+    const text = `${first} then ${second}`;
+    const sent = composerDocumentFromSerializedMessage(text, {
+      slashCommandRanges: [
+        { start: 0, end: first.length },
+        { start: first.length + 6, end: text.length },
+      ],
+    });
+    const { document, aliases } = displayComposerSlashRuntimeAliases(sent);
+    expect(composerDocumentProjectedText(document)).toBe('/pr then /pr');
+    expect(serializeComposerDocument(restoreComposerSlashRuntimeAliases(document, aliases)).text).toBe(text);
+
+    // Removing one of two ambiguous `/pr` commands must not guess which plugin is left.
+    const removed = replaceComposerTextRange(document, 0, 3, [{ type: 'text', text: '' }]);
+    expect(composerDocumentProjectedText(restoreComposerSlashRuntimeAliases(removed, aliases)))
+      .toBe(' then /pr');
   });
 
   it('serializes long paste atoms with exact presentation ranges', () => {
@@ -213,6 +330,23 @@ describe('mobile composer document', () => {
       agentReferences: serialized.agentReferences,
     });
     expect(serializeComposerDocument(restored)).toEqual(serialized);
+  });
+
+  // 旧消息里的待办引用（V1 伙伴近况引用的，[标题](cindy://bot-todo/…)）照常序列化并还原以便编辑。
+  it('keeps an older quoted todo as the same structured reference as Desktop and restores it for editing', () => {
+    const href = buildTodoReferenceHref('bot-1', 't 1');
+    const node = { type: 'mention' as const, kind: 'todo' as const, label: 'Reply [Lizi]', raw: `[Reply \\[Lizi\\]](${href})`, href };
+    const serialized = serializeComposerDocument({ version: 1, nodes: [node, { type: 'text', text: ' 改到周五' }] });
+    expect(serialized.text).toBe(`[Reply \\[Lizi\\]](${node.href}) 改到周五`);
+    expect(serialized.agentReferences).toEqual([expect.objectContaining({
+      kind: 'todo', botId: 'bot-1', todoId: 't 1', title: 'Reply [Lizi]', start: 0,
+    })]);
+    const restored = composerDocumentFromSerializedMessage(serialized.text, { agentReferences: serialized.agentReferences });
+    expect(restored.nodes[0]).toMatchObject({ type: 'mention', kind: 'todo', label: 'Reply [Lizi]' });
+    expect(serializeComposerDocument(restored)).toEqual(serialized);
+    // A stored draft keeps the chip; a forged link is not accepted as a todo.
+    expect(parseStoredComposerDocument({ version: 1, nodes: [node] })?.nodes[0]).toMatchObject({ kind: 'todo' });
+    expect(parseStoredComposerDocument({ version: 1, nodes: [{ ...node, href: 'https://example.com' }] })?.nodes).toEqual([]);
   });
 
   it('keeps unsupported Desktop Plugin references as exact editable wire text', () => {

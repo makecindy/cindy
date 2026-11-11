@@ -2,12 +2,15 @@ import { describe, expect, it, vi } from "vitest";
 
 import {
   AuthApiError,
+  captchaRequiredActionForVerificationKind,
   CindyAuthClient,
   discoverSsoOrgRealm,
   parseAccountDeletionReceiptRecord,
   parseAuthSessionRecord,
   reduceAuthFlow,
   serializeAccountDeletionReceiptRecord,
+  soleAutoStartSsoMethod,
+  soleLoginMethod,
   ssoOrgDiscoveryToMethods,
   serializeAuthSessionRecord,
   type AuthFetch,
@@ -18,7 +21,10 @@ function response(status: number, data: unknown): AuthFetchResponse {
   return { ok: status >= 200 && status < 300, status, json: async () => data };
 }
 
-function client(fetch = vi.fn(async () => response(200, {}))) {
+/** 拼接出与真实密钥同形、内容无意义的夹具，避免密钥形态字面量进入仓库历史。 */
+const fakeSecret = (...parts: string[]) => parts.join("-");
+
+function client(fetch: AuthFetch = vi.fn(async () => response(200, {}))) {
   return new CindyAuthClient({
     baseUrl: "https://auth.example.com/",
     region: "cn",
@@ -30,6 +36,321 @@ function client(fetch = vi.fn(async () => response(200, {}))) {
 }
 
 describe("CindyAuthClient", () => {
+  it.each(["request", "response"] as const)("reports the original %s error before mapping it", async (stage) => {
+    const original = new TypeError("socket closed", { cause: new Error("proxy rejected CONNECT") });
+    const onRequestError = vi.fn();
+    const instance = new CindyAuthClient({
+      baseUrl: "https://auth.example.com", region: "cn", deviceId: "device-1", clientType: "desktop",
+      fetch: async () => {
+        if (stage === "request") throw original;
+        return { ok: true, status: 200, json: async () => { throw original; } };
+      },
+      onRequestError,
+    });
+    await expect(instance.refresh("unused-token")).rejects.toMatchObject({
+      code: stage === "request" ? "NETWORK_ERROR" : "INVALID_RESPONSE",
+    });
+    expect(onRequestError).toHaveBeenCalledExactlyOnceWith(
+      "/api/auth/refresh", stage === "request" ? 0 : 200, original,
+    );
+  });
+
+  it("ignores a failing error logger without changing the mapped request error", async () => {
+    const onRequestError = vi.fn(() => { throw new Error("logger unavailable"); });
+    const original = new TypeError("proxy refused tunnel");
+    const instance = new CindyAuthClient({
+      baseUrl: "https://auth.example.com", region: "cn", deviceId: "device-1", clientType: "desktop",
+      fetch: async () => { throw original; },
+      onRequestError,
+    });
+    await expect(instance.refresh("unused-token")).rejects.toMatchObject({
+      code: "NETWORK_ERROR",
+    });
+    expect(onRequestError).toHaveBeenCalledExactlyOnceWith(
+      "/api/auth/refresh", 0, original,
+    );
+  });
+
+  it("returns parsed HTTP error text to the caller without sending it to the exception logger", async () => {
+    const onRequestError = vi.fn();
+    const instance = new CindyAuthClient({
+      baseUrl: "https://auth.example.com", region: "cn", deviceId: "device-1", clientType: "desktop",
+      fetch: async () => response(400, { error: { code: "INVALID_PARAMS", message: "private display name rejected" } }),
+      onRequestError,
+    });
+    await expect(instance.refresh("unused-token")).rejects.toMatchObject({
+      code: "INVALID_PARAMS", message: "private display name rejected",
+    });
+    expect(onRequestError).not.toHaveBeenCalled();
+  });
+
+  // #9574 Codex P2: correlation-id redaction must not rewrite AuthApiError.code.
+  // runLoginAction treats TOKEN_EXPIRED as a dead ticket and clears private
+  // state; folding it into AUTH_REQUEST_FAILED leaves that ticket in place.
+  // 测试价值
+  // - 生产入口与可观察结果：CindyAuthClient.refresh；非 429 的 error.code 原样成为 AuthApiError.code，被拒时变成 AUTH_REQUEST_FAILED
+  // - Bug／规则依据：PR #9574 Codex P2；authManager runLoginAction 依赖 TOKEN_EXPIRED
+  // - 现有覆盖缺口：相邻用例只覆盖 INVALID_PARAMS 透传，没有覆盖会被 Token 前缀误伤的码，也没有覆盖错误码上的密钥与手机号形态
+  // - 最小失败输入：401 + error.code=TOKEN_EXPIRED（修复前变成 AUTH_REQUEST_FAILED）；sk- 与纯数字手机号仍必须变成 AUTH_REQUEST_FAILED
+  // - tier：unit，进程内注入 fetch，不打网络
+  it.each([
+    {
+      label: "keeps TOKEN_EXPIRED instead of treating the Token prefix as a credential",
+      code: "TOKEN_EXPIRED",
+      expected: "TOKEN_EXPIRED",
+    },
+    {
+      label: "keeps INVALID_OTP",
+      code: "INVALID_OTP",
+      expected: "INVALID_OTP",
+    },
+    {
+      label: "drops an sk- shaped error code",
+      code: fakeSecret("sk", "proj", "not-an-error-code"),
+      expected: "AUTH_REQUEST_FAILED",
+    },
+    {
+      label: "drops a phone-shaped error code",
+      code: "13800138000",
+      expected: "AUTH_REQUEST_FAILED",
+    },
+  ])("server error code filter: $label", async ({ code, expected }) => {
+    const fetch: AuthFetch = async () =>
+      response(401, { error: { code, message: "unused" } });
+    await expect(client(fetch).refresh("unused-token")).rejects.toMatchObject({
+      code: expected,
+      statusCode: 401,
+    });
+  });
+
+  // Native SyntaxError.message includes body excerpts even when no response object is logged.
+  it.each([200, 400])("logs only the JSON error type for a malformed %s response", async (status) => {
+    const onRequestError = vi.fn();
+    const instance = new CindyAuthClient({
+      baseUrl: "https://auth.example.com", region: "cn", deviceId: "device-1", clientType: "desktop",
+      fetch: async () => new Response("private display name", { status }),
+      onRequestError,
+    });
+    await expect(instance.refresh("unused-token")).rejects.toMatchObject({
+      code: "INVALID_RESPONSE", statusCode: status,
+    });
+    expect(onRequestError).toHaveBeenCalledExactlyOnceWith(
+      "/api/auth/refresh", status, "SyntaxError",
+    );
+  });
+
+  it.each([
+    ["120", 120_000],
+    ["Wed, 07 Oct 2026 06:02:00 GMT", 120_000],
+    ["Wed, 07 Oct 2026 05:00:00 GMT", 0],
+    ["0", 0],
+    ["-2", undefined],
+    ["1.5", undefined],
+    ["junk", undefined],
+    ["999999999999999999999999", undefined],
+    ["", undefined],
+  ])(
+    "preserves a valid Retry-After without guessing: %s",
+    async (value, delay) => {
+      const now = Date.parse("2026-10-07T06:00:00Z");
+      const clock = vi.spyOn(Date, "now").mockReturnValue(now);
+      try {
+        const fetch: AuthFetch = async () => ({
+          ...response(429, {}),
+          headers: {
+            get: (name) =>
+              name === "retry-after" ? value : "Wed, 07 Oct 2026 06:00:00 GMT",
+          },
+        });
+        await expect(
+          client(fetch).requestCode("phone", "13800138000"),
+        ).rejects.toMatchObject({
+          code: "RATE_LIMITED",
+          retryAt: delay === undefined ? undefined : now + delay,
+        });
+      } finally {
+        clock.mockRestore();
+      }
+    },
+  );
+
+  it("keeps a non-JSON 429 actionable and corrects HTTP-date for server clock skew", async () => {
+    const now = Date.now();
+    const clock = vi.spyOn(Date, "now").mockReturnValue(now);
+    try {
+      const fetch: AuthFetch = async () => ({
+        ok: false,
+        status: 429,
+        headers: {
+          get: (name) =>
+            name === "retry-after"
+              ? "Wed, 07 Oct 2026 06:02:00 GMT"
+              : "Wed, 07 Oct 2026 06:00:00 GMT",
+        },
+        json: async () => {
+          throw new SyntaxError("HTML response");
+        },
+      });
+      await expect(client(fetch).getProviders()).rejects.toMatchObject({
+        code: "RATE_LIMITED",
+        retryAt: now + 120_000,
+      });
+    } finally {
+      clock.mockRestore();
+    }
+  });
+
+  // #9356: RATE_LIMITED stays the client category. The server's own code and a
+  // correlation id must survive so a failed send can be matched later; a missing
+  // or unsafe id is recorded as absent instead of guessed.
+  type RateLimitDiagnosticRow = {
+    label: string;
+    body: unknown;
+    headers: Record<string, string | undefined>;
+    serverCode: string | undefined;
+    requestId: string | undefined;
+    hasRetryAt: boolean;
+  };
+
+  it.each<RateLimitDiagnosticRow>([
+    {
+      label: "keeps a daily-quota code beside the category",
+      body: { error: { code: "SMS_DAILY_LIMIT", message: "daily limit" } },
+      headers: { "x-request-id": "req-9356", "retry-after": "3600" },
+      serverCode: "SMS_DAILY_LIMIT",
+      requestId: "req-9356",
+      hasRetryAt: true,
+    },
+    {
+      label: "records a short retry window without inventing a server code",
+      body: { error: { code: "RETRY_TOO_SOON", message: "retry later" } },
+      headers: { "x-litellm-call-id": "call-60", "retry-after": "60" },
+      serverCode: "RETRY_TOO_SOON",
+      requestId: "call-60",
+      hasRetryAt: true,
+    },
+    {
+      label: "marks a 429 with no wait and no correlation id as absent",
+      body: { message: "slow down" },
+      headers: {},
+      serverCode: undefined,
+      requestId: undefined,
+      hasRetryAt: false,
+    },
+    {
+      label: "drops a request id that could carry a credential or phone number",
+      body: { error: { code: "not a code", message: "unused" } },
+      headers: { "x-request-id": "+8615100000000" },
+      serverCode: undefined,
+      requestId: undefined,
+      hasRetryAt: false,
+    },
+    {
+      // #9574: the charset whitelist alone accepts a bare phone number. That value
+      // must stay out of the error object the desktop log copies verbatim.
+      label: "drops a digit-only phone number that the charset whitelist would keep",
+      body: { error: { code: "RATE_LIMITED", message: "slow down" } },
+      headers: { "x-request-id": "13800138000" },
+      serverCode: "RATE_LIMITED",
+      requestId: undefined,
+      hasRetryAt: false,
+    },
+    {
+      // Spaced numbers and "Bearer ..." already fail the charset whitelist. These
+      // shapes pass it (digits, or a credential prefix plus the allowed charset)
+      // and must still drop.
+      label: "drops a spaced-looking digit phone and an sk- key the charset whitelist accepts",
+      body: { error: { code: "RATE_LIMITED", message: "slow down" } },
+      headers: {
+        "x-request-id": "138-0013-8000",
+        "x-litellm-call-id": fakeSecret("sk", "proj", "not-a-request-id"),
+      },
+      serverCode: "RATE_LIMITED",
+      requestId: undefined,
+      hasRetryAt: false,
+    },
+    {
+      label: "drops a pk- key and a Bearer token written without a space",
+      body: { error: { code: "RATE_LIMITED", message: "slow down" } },
+      headers: {
+        "x-request-id": fakeSecret("pk", "live", "not-a-request-id"),
+        "x-litellm-call-id": "Bearer" + fakeSecret("sk", "not-a-request-id"),
+      },
+      serverCode: "RATE_LIMITED",
+      requestId: undefined,
+      hasRetryAt: false,
+    },
+  ])("preserves 429 diagnostics: $label", async (row) => {
+    const now = Date.parse("2026-10-07T06:00:00Z");
+    const clock = vi.spyOn(Date, "now").mockReturnValue(now);
+    try {
+      const fetch: AuthFetch = async () => ({
+        ...response(429, row.body),
+        headers: { get: (name) => row.headers[name.toLowerCase()] ?? null },
+      });
+      await expect(
+        client(fetch).requestCode("phone", "13800138000"),
+      ).rejects.toMatchObject({
+        code: "RATE_LIMITED",
+        statusCode: 429,
+        serverCode: row.serverCode,
+        requestId: row.requestId,
+        retryAt: row.hasRetryAt ? expect.any(Number) : undefined,
+      });
+    } finally {
+      clock.mockRestore();
+    }
+  });
+
+  // #9574: HTTP 200 with `{}` fails the sent-body contract. The id was already
+  // read from the header and must ride along on INVALID_RESPONSE, same as a
+  // non-JSON body. A phone-shaped or key-shaped header still counts as absent,
+  // and the thrown error must not echo the response body.
+  it.each([
+    {
+      label: "keeps a safe request id when the sent body is empty",
+      header: "req-empty-body",
+      requestId: "req-empty-body",
+    },
+    {
+      label: "drops a phone-shaped request id when the sent body is empty",
+      header: "13800138000",
+      requestId: undefined,
+    },
+  ])("request-code contract failure: $label", async (row) => {
+    const fetch: AuthFetch = async () => ({
+      ...response(200, {}),
+      headers: { get: (name) => (name.toLowerCase() === "x-request-id" ? row.header : null) },
+    });
+    await expect(
+      client(fetch).requestCode("phone", "13800138000"),
+    ).rejects.toMatchObject({
+      code: "INVALID_RESPONSE",
+      statusCode: 200,
+      requestId: row.requestId,
+      message: "Authentication server response did not match the client contract",
+    });
+  });
+
+  it("propagates SMS request-code rate limits instead of reporting a successful send", async () => {
+    const fetch = vi.fn<AuthFetch>(async () =>
+      response(429, {
+        error: { code: "RATE_LIMITED", message: "Too many requests" },
+      }),
+    );
+    await expect(
+      client(fetch).requestCode("phone", "13800138000"),
+    ).rejects.toMatchObject({
+      code: "RATE_LIMITED",
+      statusCode: 429,
+      serverCode: "RATE_LIMITED",
+    });
+    expect(fetch).toHaveBeenCalledTimes(1);
+    expect(fetch.mock.calls[0]?.[0]).toBe(
+      "https://auth.example.com/api/auth/phone/request-code",
+    );
+  });
+
   it("validates provider region and normalizes the base URL", async () => {
     const fetch = vi.fn(async () =>
       response(200, {
@@ -61,6 +382,113 @@ describe("CindyAuthClient", () => {
     );
     await expect(client(fetch).getProviders()).rejects.toMatchObject({
       code: "REGION_MISMATCH",
+    });
+  });
+
+  it("parses the optional captcha config from providers", async () => {
+    const fetch = vi.fn(async () =>
+      response(200, {
+        region: "cn",
+        attribution: "phone",
+        email: true,
+        phone: true,
+        social: [],
+        captcha: {
+          provider: "turnstile",
+          siteKey: "scenario-captcha-sitekey",
+          requiredFor: ["email_request_code"],
+        },
+      }),
+    );
+    await expect(client(fetch).getProviders()).resolves.toMatchObject({
+      captcha: { provider: "turnstile", requiredFor: ["email_request_code"] },
+    });
+    // 客户端预认短信发码动作；服务端以后仅需下发该值即可启用，无需客户端发版。
+    // 其他 append-only 未知动作仍忽略，不让整份 providers 解析失败。
+    const extendedFetch = vi.fn(async () =>
+      response(200, {
+        region: "cn",
+        attribution: "phone",
+        email: true,
+        phone: true,
+        social: [],
+        captcha: {
+          provider: "turnstile",
+          siteKey: "scenario-captcha-sitekey",
+          requiredFor: [
+            "email_request_code",
+            "phone_request_code",
+            "future_request_code",
+          ],
+        },
+      }),
+    );
+    const extended = await client(extendedFetch).getProviders();
+    expect(extended.captcha?.requiredFor).toEqual([
+      "email_request_code",
+      "phone_request_code",
+    ]);
+    expect(captchaRequiredActionForVerificationKind("email")).toBe(
+      "email_request_code",
+    );
+    expect(captchaRequiredActionForVerificationKind("phone")).toBe(
+      "phone_request_code",
+    );
+    // 旧 server 缺字段 → undefined(可选字段,不整份拒绝)
+    const legacyFetch = vi.fn(async () =>
+      response(200, {
+        region: "cn",
+        attribution: "phone",
+        email: true,
+        phone: true,
+        social: [],
+      }),
+    );
+    const legacy = await client(legacyFetch).getProviders();
+    expect(legacy.captcha).toBeUndefined();
+  });
+
+  it("keeps recognized discovery methods when the server appends an unknown type", async () => {
+    const fetch = vi.fn(async () =>
+      response(200, {
+        methods: [{ type: "email_code" }, { type: "passkey", id: "future-1" }],
+      }),
+    );
+    await expect(client(fetch).discover("user@example.com")).resolves.toEqual([
+      { type: "email_code" },
+    ]);
+  });
+
+  it("fails closed when discovery returns only unrecognized methods", async () => {
+    const fetch = vi.fn(async () =>
+      response(200, { methods: [{ type: "passkey", id: "future-1" }] }),
+    );
+    await expect(
+      client(fetch).discover("user@example.com"),
+    ).rejects.toMatchObject({
+      code: "INVALID_RESPONSE",
+    });
+  });
+
+  it("carries captchaToken in the email request-code body only when provided", async () => {
+    const fetch = vi.fn<AuthFetch>(async () =>
+      response(200, { status: "sent" }),
+    );
+    await client(fetch).requestCode("email", "user@example.com");
+    const bare = JSON.parse(
+      (fetch.mock.calls[0]?.[1] as { body: string }).body,
+    ) as Record<string, unknown>;
+    expect(bare).toEqual({ email: "user@example.com", locale: "zh-CN" });
+    await client(fetch).requestCode("email", "user@example.com", {
+      captchaToken: "captcha-token-1",
+    });
+    const withToken = JSON.parse(
+      (fetch.mock.calls[1]?.[1] as { body: string }).body,
+    ) as Record<string, unknown>;
+    expect(withToken).toEqual({
+      email: "user@example.com",
+      locale: "zh-CN",
+      captchaToken: "captcha-token-1",
     });
   });
 
@@ -246,21 +674,43 @@ describe("CindyAuthClient", () => {
             orgName: "Corp",
           },
         }),
-      );
+      )
+      .mockResolvedValueOnce(
+        response(200, {
+          accountToken: "rotated-account-access",
+          accountRefreshToken: "rotated-account-refresh",
+        }),
+      )
+      .mockResolvedValueOnce(response(200, { status: "ok" }));
     const auth = client(fetch);
-    expect(auth).not.toHaveProperty("refreshAccount");
-    expect(auth).not.toHaveProperty("logoutAccount");
     await expect(
       auth.getAccountMemberships("account-access"),
     ).resolves.toHaveLength(1);
     await expect(
       auth.exchangeAccountMembership("account-access", "org-membership"),
     ).resolves.toMatchObject({ accessToken: "org-access" });
+    await expect(auth.refreshAccount("account-refresh")).resolves.toEqual({
+      accountToken: "rotated-account-access",
+      accountRefreshToken: "rotated-account-refresh",
+    });
+    await expect(
+      auth.logoutAccount("rotated-account-access"),
+    ).resolves.toBeUndefined();
     expect(fetch.mock.calls[0]?.[1]?.headers).toMatchObject({
       Authorization: "Bearer account-access",
     });
     expect(fetch.mock.calls[1]?.[1]?.headers).toMatchObject({
       Authorization: "Bearer account-access",
+    });
+    expect(fetch.mock.calls[2]?.[0]).toBe(
+      "https://auth.example.com/api/auth/account/refresh",
+    );
+    expect(fetch.mock.calls[3]?.[1]?.headers).toMatchObject({
+      Authorization: "Bearer rotated-account-access",
+    });
+    expect(fetch.mock.calls[3]?.[1]).toMatchObject({
+      method: "POST",
+      body: "{}",
     });
   });
 
@@ -300,6 +750,12 @@ describe("CindyAuthClient", () => {
         ssoRequired: false,
       },
     ]);
+    expect(
+      soleAutoStartSsoMethod(ssoOrgDiscoveryToMethods(discovery)),
+    ).toMatchObject({
+      type: "sso",
+      connectionId: "conn-1",
+    });
   });
 
   it("maps an empty SSO connection list to the precise ORG_SSO_NOT_FOUND error", async () => {
@@ -357,6 +813,73 @@ describe("CindyAuthClient", () => {
     expect(url.pathname).toBe("/api/auth/sso/conn%2Fa/authorize");
     expect(url.searchParams.get("client_state")).toBe("state-1");
     expect(url.searchParams.get("device_id")).toBe("device-1");
+  });
+});
+
+describe("soleLoginMethod", () => {
+  it("returns the only method when discovery has no real choice", () => {
+    expect(soleLoginMethod([{ type: "email_code" }])).toEqual({
+      type: "email_code",
+    });
+  });
+
+  it("returns null when enterprise and personal methods both exist", () => {
+    expect(
+      soleLoginMethod([
+        { type: "email_code" },
+        {
+          type: "sso",
+          connectionId: "conn-1",
+          protocol: "oidc",
+          orgName: "心动网络",
+          connectionName: "心动",
+          ssoRequired: false,
+        },
+      ]),
+    ).toBeNull();
+  });
+});
+
+describe("soleAutoStartSsoMethod", () => {
+  const ssoA = {
+    type: "sso" as const,
+    connectionId: "conn-1",
+    protocol: "oidc" as const,
+    orgName: "心动网络",
+    connectionName: "心动",
+    ssoRequired: false,
+  };
+  const ssoB = {
+    ...ssoA,
+    connectionId: "conn-2",
+    connectionName: "Okta",
+  };
+
+  it("auto-starts a lone SSO connection from the org entry", () => {
+    expect(soleAutoStartSsoMethod([ssoA])).toEqual(ssoA);
+  });
+
+  it("auto-starts when enterprise email discovery only offers SSO", () => {
+    expect(soleAutoStartSsoMethod([{ ...ssoA, ssoRequired: true }])).toEqual({
+      ...ssoA,
+      ssoRequired: true,
+    });
+  });
+
+  it("keeps method-choice when the user can still pick personal email", () => {
+    expect(soleAutoStartSsoMethod([{ type: "email_code" }, ssoA])).toBeNull();
+  });
+
+  it("keeps method-choice when multiple SSO connections remain", () => {
+    expect(soleAutoStartSsoMethod([ssoA, ssoB])).toBeNull();
+  });
+
+  it("does not treat personal-only email as an SSO auto-start", () => {
+    expect(soleAutoStartSsoMethod([{ type: "email_code" }])).toBeNull();
+  });
+
+  it("does not auto-start an empty method list", () => {
+    expect(soleAutoStartSsoMethod([])).toBeNull();
   });
 });
 

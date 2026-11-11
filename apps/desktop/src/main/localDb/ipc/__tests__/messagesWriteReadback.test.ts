@@ -1,0 +1,383 @@
+/**
+ * messagesWriteReadback.test.ts
+ * ---------------------------------------------------------------------------
+ * 写路径去大字段回读(perf):createMessage happy path 与 updateMessageContent
+ * 不再把整行 content 从 DB worker 读回主进程。这里守住两条不变量:
+ *   1. 返回值语义与"整行回读 + messageToCamel"完全一致(JSON.parse 失败回退
+ *      裸串、字符串 '123' 解析成数字、assistant 引文剥离);
+ *   2. 写后的 SELECT 不再包含 content 列(updateMessageContent 窄回读),
+ *      createMessage happy path 在 INSERT 之后没有任何 SELECT。
+ */
+import Database from 'better-sqlite3';
+import { drizzle } from 'drizzle-orm/better-sqlite3';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+
+import { messages, sessions } from '../../schema';
+import { tx as runInprocTx } from '../../worker/opHandlers/tx';
+
+const h = vi.hoisted(() => ({
+  db: null as ReturnType<typeof drizzle> | null,
+  sqlite: null as Database.Database | null,
+  client: null as any,
+  queries: [] as string[],
+  mediaRefCalls: [] as Array<{ sessionId: string; role: string; content: unknown }>,
+}));
+
+vi.mock('electron', () => ({
+  ipcMain: { handle: vi.fn() },
+  BrowserWindow: { getAllWindows: () => [] },
+}));
+vi.mock('../../../logger', () => ({
+  createLogger: () => ({ debug: vi.fn(), info: vi.fn(), warn: vi.fn(), error: vi.fn() }),
+}));
+vi.mock('../../../logger.js', () => ({
+  createLogger: () => ({ debug: vi.fn(), info: vi.fn(), warn: vi.fn(), error: vi.fn() }),
+}));
+vi.mock('../../../session-import/legacy', () => ({
+  adoptLegacySessionBeforeOpen: vi.fn(async () => undefined),
+}));
+vi.mock('../../../embedders/chat-history-embedder', () => ({
+  onMessageCreated: vi.fn(async () => undefined),
+}));
+vi.mock('../../../git-context/prRefsStore', () => ({
+  recomputePrRefsForSession: vi.fn(async () => undefined),
+  recordPrRefsForMessage: vi.fn(async () => undefined),
+}));
+vi.mock('../../../cindy-media/chatAttachments', () => ({
+  commitMessageMediaRefs: vi.fn(async (params: { sessionId: string; role: string; content: unknown }) => {
+    h.mediaRefCalls.push(params);
+    return null;
+  }),
+  collectCindyMediaHashes: vi.fn(() => []),
+}));
+vi.mock('../../../cindy-media/ledger', () => ({
+  removeRefs: vi.fn(async () => undefined),
+  removeSessionAttachmentRefIfUnreferencedByLiveMessage: vi.fn(async () => undefined),
+}));
+vi.mock('../../../device-link/invoke-context', () => ({
+  isDeviceLinkInvoke: vi.fn(() => false),
+}));
+vi.mock('../../../device-link/broadcast-tap', () => ({
+  captureDataOwnerBroadcastScope: vi.fn(() => null),
+  getSafeDataOwnerPushStamp: vi.fn(() => undefined),
+  tapWindowBroadcast: vi.fn(),
+}));
+vi.mock('../../client/current', () => ({
+  getDbClient: () => h.client,
+}));
+
+import { broadcastMessageRow, createMessage, updateMessageContent } from '../messages';
+import { messageToCamel } from '../../mapper';
+
+function setupDb(): void {
+  const sqlite = new Database(':memory:', { verbose: (sql) => h.queries.push(String(sql)) });
+  sqlite.exec(`
+    CREATE TABLE sessions (
+      id TEXT PRIMARY KEY,
+      list_preview TEXT,
+      list_preview_role TEXT,
+      list_message_count INTEGER,
+      cleared_at INTEGER,
+      status TEXT NOT NULL DEFAULT 'active'
+    );
+    CREATE TABLE messages (
+      id TEXT PRIMARY KEY,
+      client_id TEXT NOT NULL,
+      session_id TEXT NOT NULL,
+      role TEXT NOT NULL,
+      content TEXT NOT NULL,
+      tool_use_id TEXT,
+      agent_meta TEXT,
+      agent_kind TEXT,
+      created_at INTEGER NOT NULL,
+      rewind_at INTEGER
+    );
+    CREATE UNIQUE INDEX uniq_messages_session_client ON messages(session_id, client_id);
+  `);
+  sqlite.prepare("INSERT INTO sessions (id, cleared_at, status) VALUES ('s1', NULL, 'active')").run();
+  const db = drizzle(sqlite, {
+    schema: { messages, sessions },
+  });
+  h.sqlite = sqlite;
+  h.db = db;
+  h.client = {
+    drizzle: db,
+    tx: vi.fn(async (name: string, args: unknown) => {
+      return runInprocTx(sqlite, { name, args });
+    }),
+    exec: vi.fn(async (sql: string, params: unknown[] = []) => h.sqlite!.prepare(sql).run(...params)),
+    query: vi.fn(async (sql: string, params: unknown[] = []) => h.sqlite!.prepare(sql).all(...params)),
+  };
+}
+
+afterEach(() => { h.sqlite?.close(); });
+
+describe('message write paths avoid large-content readback', () => {
+  beforeEach(() => {
+    h.queries.length = 0;
+    h.mediaRefCalls.length = 0;
+    setupDb();
+  });
+
+  it('keeps View-only MCP App data out of create, reload and owner broadcasts', async () => {
+    const { tapWindowBroadcast } = await import('../../../device-link/broadcast-tap');
+    vi.mocked(tapWindowBroadcast).mockClear();
+    const content = { mcpApp: {
+      version: 1, serverId: 'private-server', serverRevision: 'private-revision',
+      resourceUri: 'ui://private/app',
+      tool: { name: 'form', title: 'Draft', inputSchema: { type: 'object', private: 'schema' } },
+      arguments: { private: 'input' },
+      result: { content: [{ type: 'text', text: 'Saved', _meta: { private: 'block' } }],
+        structuredContent: { private: 'structured' }, _meta: { private: 'view-only' } },
+    } };
+    const publicContent = { mcpAppHistory: { version: 1, title: 'Draft', text: 'Saved' } };
+    const created = await createMessage('s1', { clientId: 'app-card', role: 'assistant', content, agentMeta: { mcpApp: true } });
+    expect(created.content).toEqual(publicContent);
+    const row = (await h.db!.select().from(messages))[0]!;
+    expect(JSON.parse(row.content)).toEqual(content);
+    expect(messageToCamel(row).content).toEqual(publicContent);
+    expect(tapWindowBroadcast).toHaveBeenCalledWith('local-db:messages:created',
+      expect.objectContaining({ message: expect.objectContaining({ clientId: 'app-card', content: publicContent }) }));
+    vi.mocked(tapWindowBroadcast).mockClear();
+    // The shared broadcaster also accepts Main-created rows without the DB mapper.
+    broadcastMessageRow('s1', { ...created, content });
+    expect(tapWindowBroadcast).toHaveBeenLastCalledWith('local-db:messages:created',
+      expect.objectContaining({ message: expect.objectContaining({ content: publicContent }) }));
+    expect(content.mcpApp.result._meta).toEqual({ private: 'view-only' });
+  });
+
+  it.each([false, true])('publishes only after the post-write guard succeeds (revoked=%s)', async revoked => {
+    const { tapWindowBroadcast } = await import('../../../device-link/broadcast-tap');
+    const { onMessageCreated } = await import('../../../embedders/chat-history-embedder');
+    const { recordPrRefsForMessage } = await import('../../../git-context/prRefsStore');
+    vi.mocked(tapWindowBroadcast).mockClear();
+    vi.mocked(onMessageCreated).mockClear();
+    vi.mocked(recordPrRefsForMessage).mockClear();
+    const beforePublish = vi.fn(async () => {
+      const published = beforePublish.mock.calls.length === 2;
+      expect(h.sqlite!.prepare('SELECT count(*) FROM messages').pluck().get()).toBe(published ? 1 : 0);
+      expect(h.sqlite!.prepare('SELECT count(*) FROM temp.cindy_pending_message_publications').pluck().get()).toBe(published ? 0 : 1);
+      expect(tapWindowBroadcast).not.toHaveBeenCalled();
+      expect(h.mediaRefCalls).toEqual([]);
+      expect(onMessageCreated).not.toHaveBeenCalled();
+      expect(recordPrRefsForMessage).not.toHaveBeenCalled();
+      if (revoked) throw new Error('revoked at server');
+    });
+    const sending = createMessage('s1', { clientId: 'private-message', role: 'assistant', content: 'Private result' }, { beforePublish });
+    if (revoked) {
+      await expect(sending).rejects.toThrow('revoked at server');
+      expect(h.sqlite!.prepare('SELECT count(*) FROM messages').pluck().get()).toBe(0);
+      expect(tapWindowBroadcast).not.toHaveBeenCalled();
+      expect(h.mediaRefCalls).toEqual([]);
+      expect(onMessageCreated).not.toHaveBeenCalled();
+      expect(recordPrRefsForMessage).not.toHaveBeenCalled();
+    } else {
+      await expect(sending).resolves.toMatchObject({ clientId: 'private-message', content: 'Private result' });
+      expect(h.sqlite!.prepare('SELECT client_id, rewind_at FROM messages').get()).toEqual({ client_id: 'private-message', rewind_at: null });
+      expect(tapWindowBroadcast).toHaveBeenCalledWith('local-db:messages:created', expect.anything());
+      expect(h.mediaRefCalls).toHaveLength(1);
+      await createMessage('s1', { clientId: 'private-message', role: 'assistant', content: 'Private result' }, { beforePublish });
+      expect(beforePublish).toHaveBeenCalledTimes(2);
+      expect(h.sqlite!.prepare('SELECT count(*) FROM messages').pluck().get()).toBe(1);
+    }
+    expect(h.sqlite!.prepare('SELECT count(*) FROM temp.cindy_pending_message_publications').pluck().get()).toBe(0);
+  });
+
+  // #6420: native delivery commits refs under its own task guard; the generic async hook must not race it.
+  it('defers automatic attachment refs only for the Host writer that owns their guarded commit', async () => {
+    const content = `cindy-media://blobs/${'a'.repeat(64)}.png`;
+    await createMessage('s1', { clientId: 'native-image', role: 'tool_result', content }, {
+      beforePublish: async () => {}, deferMediaRefs: true,
+    });
+    expect(h.mediaRefCalls).toEqual([]);
+    expect(h.sqlite!.prepare('SELECT content FROM messages WHERE client_id = ?').pluck().get('native-image'))
+      .toBe(content);
+    await createMessage('s1', { clientId: 'ordinary-image', role: 'tool_result', content });
+    expect(h.mediaRefCalls).toEqual([{ sessionId: 's1', role: 'tool_result', content }]);
+  });
+
+  it.each([false, true])('rolls back a publication revoked during commit before delivery hooks (lostReceipt=%s)', async lostReceipt => {
+    const { tapWindowBroadcast } = await import('../../../device-link/broadcast-tap');
+    const { onMessageCreated } = await import('../../../embedders/chat-history-embedder');
+    const { recordPrRefsForMessage } = await import('../../../git-context/prRefsStore');
+    vi.mocked(tapWindowBroadcast).mockClear();
+    vi.mocked(onMessageCreated).mockClear();
+    vi.mocked(recordPrRefsForMessage).mockClear();
+    let revoked = false;
+    h.client.tx.mockImplementation(async (name: string, args: { publication?: string }) => {
+      const result = runInprocTx(h.sqlite!, { name, args });
+      if (args.publication === 'publish') {
+        revoked = true;
+        if (lostReceipt) throw new Error('Publication receipt lost');
+      }
+      return result;
+    });
+    const beforePublish = vi.fn(async () => {
+      if (revoked) throw new Error('revoked during commit');
+    });
+    const body = { clientId: 'revoked-publication', role: 'assistant' as const, content: 'Private result' };
+    await expect(createMessage('s1', body, { beforePublish })).rejects.toThrow('revoked during commit');
+    expect(beforePublish).toHaveBeenCalledTimes(2);
+    expect(h.sqlite!.prepare('SELECT count(*) FROM messages').pluck().get()).toBe(0);
+    expect(h.sqlite!.prepare('SELECT count(*) FROM temp.cindy_pending_message_publications').pluck().get()).toBe(0);
+    expect(tapWindowBroadcast).not.toHaveBeenCalled();
+    expect(h.mediaRefCalls).toEqual([]);
+    expect(onMessageCreated).not.toHaveBeenCalled();
+    expect(recordPrRefsForMessage).not.toHaveBeenCalled();
+    // The same client receipt can be retried once permission is available again.
+    h.client.tx.mockImplementation(async (name: string, args: unknown) => runInprocTx(h.sqlite!, { name, args }));
+    revoked = false;
+    await expect(createMessage('s1', body, { beforePublish })).resolves.toMatchObject(body);
+    expect(h.sqlite!.prepare('SELECT count(*) FROM messages').pluck().get()).toBe(1);
+    expect(onMessageCreated).toHaveBeenCalledOnce();
+  });
+
+  it.each(['committed', 'not-committed', 'mismatched'] as const)('recovers only an exact committed publication after a lost receipt: %s', async outcome => {
+    const { tapWindowBroadcast } = await import('../../../device-link/broadcast-tap');
+    const { onMessageCreated } = await import('../../../embedders/chat-history-embedder');
+    const { recordPrRefsForMessage } = await import('../../../git-context/prRefsStore');
+    vi.mocked(tapWindowBroadcast).mockClear();
+    vi.mocked(onMessageCreated).mockClear();
+    vi.mocked(recordPrRefsForMessage).mockClear();
+    h.client.tx.mockImplementation(async (name: string, args: { publication?: string }) => {
+      if (args.publication !== 'publish') return runInprocTx(h.sqlite!, { name, args });
+      if (outcome !== 'not-committed') {
+        runInprocTx(h.sqlite!, { name, args });
+        if (outcome === 'mismatched') h.sqlite!.prepare("UPDATE messages SET content='Different result'").run();
+      }
+      throw new Error('Publication receipt lost');
+    });
+    const beforePublish = vi.fn(async () => {});
+    const body = { clientId: 'lost-receipt', role: 'assistant' as const, content: 'Private result' };
+    const sending = createMessage('s1', body, { beforePublish });
+    if (outcome === 'committed') {
+      const receipt = await sending;
+      expect(receipt).toMatchObject(body);
+      expect(await createMessage('s1', body, { beforePublish })).toEqual(receipt);
+      expect(beforePublish).toHaveBeenCalledTimes(2);
+      expect(vi.mocked(tapWindowBroadcast).mock.calls.filter(([channel]) => channel === 'local-db:messages:created')).toHaveLength(1);
+      expect(h.mediaRefCalls).toHaveLength(1);
+      expect(onMessageCreated).toHaveBeenCalledOnce();
+      expect(recordPrRefsForMessage).toHaveBeenCalledOnce();
+    } else {
+      await expect(sending).rejects.toThrow('Publication receipt lost');
+      expect(tapWindowBroadcast).not.toHaveBeenCalled();
+      expect(h.mediaRefCalls).toEqual([]);
+      expect(onMessageCreated).not.toHaveBeenCalled();
+      expect(recordPrRefsForMessage).not.toHaveBeenCalled();
+    }
+    expect(h.sqlite!.prepare('SELECT count(*) FROM messages').pluck().get()).toBe(outcome === 'not-committed' ? 0 : 1);
+    expect(h.sqlite!.prepare('SELECT count(*) FROM temp.cindy_pending_message_publications').pluck().get()).toBe(0);
+  });
+
+  describe('createMessage happy path', () => {
+    it('issues no SELECT after the INSERT and returns the inserted row', async () => {
+      const msg = await createMessage('s1', {
+        clientId: 'c1',
+        role: 'tool_result',
+        content: 'big tool output',
+        toolUseId: 'tu1',
+        createdAt: 1000,
+      });
+
+      const insertIdx = h.queries.findIndex((q) => /^insert into ["`]?messages["`]?\s/i.test(q));
+      expect(insertIdx).toBeGreaterThanOrEqual(0);
+      expect(
+        h.queries.slice(insertIdx + 1).filter((q) => /\bfrom ["`]?messages["`]?\b/i.test(q)),
+      ).toEqual([]);
+
+      expect(msg.clientId).toBe('c1');
+      expect(msg.content).toBe('big tool output');
+      expect(msg.toolUseId).toBe('tu1');
+      expect(msg.createdAt).toBe(new Date(1000).toISOString());
+      const stored = h.sqlite!
+        .prepare('SELECT content, rewind_at FROM messages WHERE client_id = ?')
+        .get('c1') as { content: string; rewind_at: number | null };
+      expect(stored).toEqual({ content: 'big tool output', rewind_at: null });
+    });
+
+    it('keeps messageToCamel parse semantics on the constructed return value', async () => {
+      const numericLike = await createMessage('s1', {
+        clientId: 'c-num',
+        role: 'user',
+        content: '123',
+      });
+      expect(numericLike.content).toBe(123);
+
+      const objectContent = await createMessage('s1', {
+        clientId: 'c-obj',
+        role: 'user',
+        content: { text: 'hi', files: [] },
+      });
+      expect(objectContent.content).toEqual({ text: 'hi', files: [] });
+
+      const cited = await createMessage('s1', {
+        clientId: 'c-cite',
+        role: 'assistant',
+        content: 'answerciteopaque tail',
+      });
+      expect(cited.content).toBe('answer tail');
+    });
+
+    it('still returns the existing row on idempotent duplicate create', async () => {
+      await createMessage('s1', { clientId: 'dup', role: 'user', content: 'first' });
+      const again = await createMessage('s1', { clientId: 'dup', role: 'user', content: 'second' });
+      expect(again.content).toBe('first');
+    });
+  });
+
+  describe('updateMessageContent narrow readback', () => {
+    it('re-reads the row without the content column and backfills from the input', async () => {
+      await createMessage('s1', {
+        clientId: 'u1',
+        role: 'tool_result',
+        content: 'summary',
+        toolUseId: 'tu1',
+      });
+      h.queries.length = 0;
+
+      const updated = await updateMessageContent('s1', 'u1', 'full text output');
+      expect(updated?.content).toBe('full text output');
+      expect(updated?.role).toBe('tool_result');
+
+      const postUpdateSelects = h.queries.filter(
+        (q) => /^select\b/i.test(q) && /\bfrom ["`]?messages["`]?\b/i.test(q),
+      );
+      expect(postUpdateSelects.length).toBeGreaterThan(0);
+      for (const q of postUpdateSelects) {
+        expect(q).not.toMatch(/select[^]*\bcontent\b[^]*from ["`]?messages/i);
+      }
+
+      const stored = h.sqlite!
+        .prepare('SELECT content FROM messages WHERE client_id = ?')
+        .get('u1') as { content: string };
+      expect(stored.content).toBe('full text output');
+    });
+
+    it('feeds the media-ref hook with the DB role and the just-written content', async () => {
+      await createMessage('s1', { clientId: 'u2', role: 'tool_result', content: 'summary' });
+      h.mediaRefCalls.length = 0;
+
+      await updateMessageContent('s1', 'u2', 'full text with cindy-media url');
+      expect(h.mediaRefCalls).toEqual([
+        { sessionId: 's1', role: 'tool_result', content: 'full text with cindy-media url' },
+      ]);
+    });
+
+    it('returns null when the row does not exist', async () => {
+      const updated = await updateMessageContent('s1', 'missing', 'anything');
+      expect(updated).toBeNull();
+      expect(h.mediaRefCalls).toEqual([]);
+    });
+
+    it('keeps object-content serialization identical to a full readback', async () => {
+      await createMessage('s1', { clientId: 'u3', role: 'ask_user', content: { status: 'pending' } });
+      const updated = await updateMessageContent('s1', 'u3', { status: 'answered', answers: { q: 'a' } });
+      expect(updated?.content).toEqual({ status: 'answered', answers: { q: 'a' } });
+      const stored = h.sqlite!
+        .prepare('SELECT content FROM messages WHERE client_id = ?')
+        .get('u3') as { content: string };
+      expect(JSON.parse(stored.content)).toEqual({ status: 'answered', answers: { q: 'a' } });
+    });
+  });
+});

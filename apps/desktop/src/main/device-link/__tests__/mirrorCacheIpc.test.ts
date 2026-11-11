@@ -6,6 +6,7 @@
  * 「一条里塞任意大字符串」)。`clear` 只接受非空 deviceId、绝不触发整体清,也在这里钉住。
  */
 import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { sharedTaskGuestPeer, sharedTaskHostPeer } from '@cindy/device-link';
 
 vi.mock('electron', () => ({
   app: {
@@ -30,7 +31,10 @@ vi.mock('../mirrorCachePurgeQueue', () => ({
   },
 }));
 vi.mock('../../appSessionState', () => ({
+  getActiveAppSession: () => ({ dataOwnerId: ownerKey, generation: ownerGeneration }),
+  onAppSessionInvalidated: () => () => {},
   activeOwnerScopeKey: (): string => `cloud:${ownerKey}:${ownerGeneration}`,
+  isAppSessionBoundaryPending: (): boolean => false,
   ownerScopedUserDataPath: (...parts: string[]): string =>
     ['/data/owners', ownerKey, ...parts].join('/'),
 }));
@@ -479,6 +483,57 @@ describe('读期间账号边界推进', () => {
 });
 
 describe('标量 id 长度上界', () => {
+  const longPeers = [
+    sharedTaskHostPeer('task-1', '\\'.repeat(128)),
+    sharedTaskGuestPeer('task-1', 'member-1', '\u0000'.repeat(128)),
+  ];
+
+  it.each(longPeers)('long scoped device key %# supports message read/write and device cleanup', async (deviceId) => {
+    expect(deviceId.length).toBeGreaterThan(256);
+    const messages = [{ id: 'm1', clientId: 'c1', content: 'cached' }];
+    await expect(handleMirrorCacheGetMessages(cache, deviceId, 'sess-1')).resolves.toMatchObject({
+      messages: [{ id: 'm1' }],
+    });
+    expect(cache.readMessagesWithInvalidation).toHaveBeenCalledWith(deviceId, 'sess-1');
+    await expect(handleMirrorCachePutMessages(cache, deviceId, 'sess-1', messages)).resolves.toMatchObject({ ok: true });
+    expect(cache.writeMessages).toHaveBeenCalledWith(
+      deviceId, 'sess-1', messages, undefined, undefined, undefined,
+    );
+    await expect(handleMirrorCacheClear(cache, deviceId)).resolves.toEqual({ ok: true });
+    expect(cache.clearDevice).toHaveBeenCalledWith(deviceId);
+    expect(cache.clearAll).not.toHaveBeenCalled();
+  });
+
+  it.each(longPeers)('long scoped device key %# is preserved in session list persistence', async (deviceId) => {
+    const devices = [{ deviceId, deviceName: 'Shared host', sessions: [{ id: 's1', status: 'active' }] }];
+    await handleMirrorCachePutSessionList(cache, devices);
+    expect(cache.writeSessionList).toHaveBeenCalledWith(devices, undefined, undefined);
+  });
+
+  it.each(longPeers)('long scoped key %# does not bypass the session ID limit', async (sessionId) => {
+    await expect(handleMirrorCacheGetMessages(cache, 'dev-1', sessionId)).rejects.toThrow(/INVALID_PARAMS/);
+    await expect(handleMirrorCachePutMessages(cache, 'dev-1', sessionId, [])).rejects.toThrow(/INVALID_PARAMS/);
+    expect(cache.readMessagesWithInvalidation).not.toHaveBeenCalled();
+    expect(cache.writeMessages).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    'x'.repeat(300),
+    longPeers[0] + '~', // Non-canonical padding must not grant a larger budget.
+    longPeers[0].padEnd(2049, '~'),
+  ])('invalid or oversized device key %# stays rejected by every cache entry point', async (deviceId) => {
+    await expect(handleMirrorCacheGetMessages(cache, deviceId, 'sess-1')).rejects.toThrow(/INVALID_PARAMS/);
+    await expect(handleMirrorCachePutMessages(cache, deviceId, 'sess-1', [])).rejects.toThrow(/INVALID_PARAMS/);
+    await expect(handleMirrorCacheClear(cache, deviceId)).rejects.toThrow(/INVALID_PARAMS/);
+    expect(cache.readMessagesWithInvalidation).not.toHaveBeenCalled();
+    expect(cache.writeMessages).not.toHaveBeenCalled();
+    expect(cache.clearDevice).not.toHaveBeenCalled();
+    await handleMirrorCachePutSessionList(cache, [{ deviceId, deviceName: 'Invalid', sessions: [] }]);
+    expect(cache.writeSessionList).toHaveBeenCalledWith(
+      [{ deviceName: 'Invalid', sessions: [] }], undefined, undefined,
+    );
+  });
+
   // review(codex P1):数组与单条字节预算管不到标量字段,而 store 会对**完整字符串**做
   // trim + 正则改写 + sha256(同步)—— 一次调用就能拖住 main。
   it('超长 deviceId / sessionId → INVALID_PARAMS,不碰 store', async () => {
@@ -565,6 +620,32 @@ describe('session list get / put', () => {
     }));
     await handleMirrorCachePutSessionList(cache, devices);
     expect((cache.writeSessionList.mock.calls[0]?.[0] as unknown[]).length).toBe(64);
+  });
+
+  it('先投影会话字段再做预算,未缓存的大字段不会阻塞有效会话', async () => {
+    await handleMirrorCachePutSessionList(cache, [
+      {
+        deviceId: 'dev-1',
+        deviceName: 'Mac',
+        sessions: [{
+          id: 's1',
+          status: 'active',
+          title: 'Keep me',
+          summary: 'x'.repeat(600 * 1024),
+          extraRuntimeState: { nested: 'also ignored' },
+        }],
+      },
+    ]);
+
+    expect(cache.writeSessionList).toHaveBeenCalledWith(
+      [{
+        deviceId: 'dev-1',
+        deviceName: 'Mac',
+        sessions: [{ id: 's1', status: 'active', title: 'Keep me' }],
+      }],
+      undefined,
+      undefined,
+    );
   });
 
   it('列表账号代际只接受非负整数,opaque token 验证后才还原内部 root', async () => {

@@ -1,12 +1,24 @@
+import { configureAppDataDir } from '../userDataPath';
 import os from 'node:os';
 import path from 'node:path';
-import { promises as fs } from 'node:fs';
-import { afterEach, describe, expect, it } from 'vitest';
+import nodeFs, { promises as fs } from 'node:fs';
+import { randomUUID } from 'node:crypto';
+import { afterAll, afterEach, describe, expect, it, vi } from 'vitest';
+
+const lockRoot = nodeFs.mkdtempSync(path.join(os.tmpdir(), 'cindy-projection-locks-'));
+configureAppDataDir(lockRoot);
+vi.mock('electron', () => ({ app: { getPath: () => lockRoot } }));
+vi.mock('../logger', () => ({ createLogger: () => ({ warn: vi.fn(), info: vi.fn(), debug: vi.fn(), error: vi.fn() }) }));
+import { acquireSharedSkillMutationLease } from '../skillhub/sharedMutationLease';
 
 import {
   prepareSharedGlobalSkillLinks,
   prepareSharedProjectSkillLinks,
   projectWorkingDirFromSkillPath,
+  shouldProjectToClaudeSkills,
+  markClaudeSessionObserved,
+  resetClaudeSessionObservedForTest,
+  sharedGlobalSkillLinksFingerprint,
   sharedGlobalSkillsPaths,
   sharedProjectSkillsPaths,
 } from '../maker-host/shared-global-skills';
@@ -38,23 +50,366 @@ async function sameRealPath(a: string, b: string): Promise<boolean> {
 }
 
 afterEach(async () => {
+  vi.restoreAllMocks();
+  resetClaudeSessionObservedForTest();
   const dirs = tmpDirs;
   tmpDirs = [];
   await Promise.all(dirs.map((dir) => fs.rm(dir, { recursive: true, force: true })));
 });
+afterAll(() => nodeFs.rmSync(lockRoot, { recursive: true, force: true }));
+
+describe('shared Skill projection mutations', () => {
+  it.each(['global', 'project'] as const)('blocks %s projection for a pending uninstall, then permits its installing caller', async (scope) => {
+    const root = await makeTmpDir();
+    const name = randomUUID();
+    const paths = sharedGlobalSkillsPaths(root);
+    // 本地已有 ~/.claude：Claude 投影门打开（#9282），本用例只考察租约。
+    await fs.mkdir(path.join(root, '.claude'), { recursive: true });
+    const source = await writeSkill(paths.sharedSkillsDir, name);
+    const project = async () => scope === 'global'
+      ? prepareSharedGlobalSkillLinks({ homeDir: root, isCrossAgentSyncEnabled: () => false })
+      : prepareSharedProjectSkillLinks({ workingDir: root });
+    const token = randomUUID();
+    const initial = (await acquireSharedSkillMutationLease([name]))!;
+    initial.retainUntilComplete(token);
+    await initial();
+    expect((await project()).changed).toBe(false);
+    await expect(fs.lstat(path.join(paths.claudeSkillsDir, name))).rejects.toMatchObject({ code: 'ENOENT' });
+    const owner = (await acquireSharedSkillMutationLease([name], token))!;
+    try {
+      owner.complete(token);
+      expect((await project()).changed).toBe(false); // An independent window still cannot write.
+      expect((await owner.run(project)).changed).toBe(true);
+      expect(await sameRealPath(source, path.join(paths.claudeSkillsDir, name))).toBe(true);
+    } finally { await owner(); }
+  });
+
+  it('locks the physical basename when projecting a differently named external alias', async () => {
+    const root = await makeTmpDir();
+    const paths = sharedGlobalSkillsPaths(root);
+    const name = randomUUID();
+    const alias = randomUUID();
+    const source = await writeSkill(path.join(root, 'external'), name);
+    // 打开 Claude 投影门，否则整个链接循环被 #9282 跳过，租约断言变成空跑。
+    await fs.mkdir(path.join(root, '.claude'), { recursive: true });
+    await fs.mkdir(paths.sharedSkillsDir, { recursive: true });
+    await fs.symlink(source, path.join(paths.sharedSkillsDir, alias), process.platform === 'win32' ? 'junction' : 'dir');
+    const lease = (await acquireSharedSkillMutationLease([name]))!;
+    try {
+      const result = await prepareSharedGlobalSkillLinks({ homeDir: root, isCrossAgentSyncEnabled: () => false });
+      expect(result.changed).toBe(false);
+      await expect(fs.lstat(path.join(paths.claudeSkillsDir, alias))).rejects.toMatchObject({ code: 'ENOENT' });
+    } finally { await lease(); }
+    // 租约释放后，按物理 basename 的锁不再挡投影。
+    const after = await prepareSharedGlobalSkillLinks({ homeDir: root, isCrossAgentSyncEnabled: () => false });
+    expect(after.changed).toBe(true);
+    expect(await sameRealPath(path.join(paths.claudeSkillsDir, alias), source)).toBe(true);
+  });
+
+  it('revalidates the source after the final awaited mkdir before linking', async () => {
+    const root = await makeTmpDir();
+    const paths = sharedGlobalSkillsPaths(root);
+    const name = randomUUID();
+    const source = await writeSkill(paths.sharedSkillsDir, name);
+    const mkdir = fs.mkdir;
+    vi.spyOn(fs, 'mkdir').mockImplementation(async (...args: Parameters<typeof mkdir>) => {
+      const result = await mkdir(...args);
+      if (String(args[0]) === paths.claudeSkillsDir) {
+        await fs.rename(source, `${source}-old`);
+        await mkdir(source);
+      }
+      return result;
+    });
+    await expect(prepareSharedProjectSkillLinks({ workingDir: root })).rejects.toThrow('Skill source changed');
+    await expect(fs.lstat(path.join(paths.claudeSkillsDir, name))).rejects.toMatchObject({ code: 'ENOENT' });
+  });
+
+  it('preserves a broken link replaced while the cleanup reads its previous target', async () => {
+    const root = await makeTmpDir();
+    const paths = sharedGlobalSkillsPaths(root);
+    const name = randomUUID();
+    const link = path.join(paths.claudeSkillsDir, name);
+    const nextTarget = path.join(paths.sharedSkillsDir, `${name}-new`);
+    await fs.mkdir(paths.claudeSkillsDir, { recursive: true });
+    await fs.symlink(path.join(paths.sharedSkillsDir, name), link, process.platform === 'win32' ? 'junction' : 'dir');
+    const readlink = fs.readlink;
+    let replaced = false;
+    vi.spyOn(fs, 'readlink').mockImplementation(async (...args: Parameters<typeof readlink>) => {
+      const result = await readlink(...args);
+      if (!replaced && String(args[0]) === link) {
+        replaced = true;
+        await fs.unlink(link);
+        await fs.symlink(nextTarget, link, process.platform === 'win32' ? 'junction' : 'dir');
+      }
+      return result;
+    });
+    await prepareSharedProjectSkillLinks({ workingDir: root });
+    expect(replaced).toBe(true);
+    expect((await fs.lstat(link)).isSymbolicLink()).toBe(true);
+    expect(await readlink(link)).toContain(`${name}-new`);
+  });
+});
+
+describe('shouldProjectToClaudeSkills (#9282)', () => {
+  it('opens only for opt-in, a pre-existing ~/.claude, or an observed Claude session', async () => {
+    const root = await makeTmpDir();
+    expect(await shouldProjectToClaudeSkills({ homeDir: root, isCrossAgentSyncEnabled: () => false })).toBe(false);
+    expect(await shouldProjectToClaudeSkills({ homeDir: root, isCrossAgentSyncEnabled: () => true })).toBe(true);
+    await fs.mkdir(path.join(root, '.claude'));
+    expect(await shouldProjectToClaudeSkills({ homeDir: root, isCrossAgentSyncEnabled: () => false })).toBe(true);
+    resetClaudeSessionObservedForTest();
+    const clean = await makeTmpDir();
+    expect(await shouldProjectToClaudeSkills({ homeDir: clean, isCrossAgentSyncEnabled: () => false })).toBe(false);
+    markClaudeSessionObserved();
+    expect(await shouldProjectToClaudeSkills({ homeDir: clean, isCrossAgentSyncEnabled: () => false })).toBe(true);
+  });
+
+  it('projects on the first Claude launch even before ~/.claude exists', async () => {
+    const root = await makeTmpDir();
+    const paths = sharedGlobalSkillsPaths(root);
+    const sharedSkill = await writeSkill(paths.sharedSkillsDir, 'first-launch');
+
+    markClaudeSessionObserved();
+    const result = await prepareSharedGlobalSkillLinks({ homeDir: root, isCrossAgentSyncEnabled: () => false });
+
+    expect(result.changed).toBe(true);
+    expect(nodeFs.existsSync(path.join(root, '.claude'))).toBe(true);
+    expect(await sameRealPath(path.join(paths.claudeSkillsDir, 'first-launch'), sharedSkill)).toBe(true);
+  });
+
+  it('bumps the preparation fingerprint when Claude projection first becomes allowed', async () => {
+    const root = await makeTmpDir();
+    const homeDir = path.join(root, 'home');
+    const before = await sharedGlobalSkillLinksFingerprint({
+      homeDir,
+      isCrossAgentSyncEnabled: () => false,
+    });
+    markClaudeSessionObserved();
+    const after = await sharedGlobalSkillLinksFingerprint({
+      homeDir,
+      isCrossAgentSyncEnabled: () => false,
+    });
+    expect(after).not.toBe(before);
+  });
+});
+
+describe('home directory as a project working dir (#9282)', () => {
+  it('never creates ~/.claude for a user who does not use Claude', async () => {
+    const root = await makeTmpDir();
+    vi.spyOn(os, 'homedir').mockReturnValue(root);
+    const paths = sharedGlobalSkillsPaths(root);
+    await writeSkill(paths.sharedSkillsDir, 'home-skill');
+
+    const result = await prepareSharedProjectSkillLinks({ workingDir: root });
+
+    expect(result.changed).toBe(false);
+    expect(nodeFs.existsSync(path.join(root, '.claude'))).toBe(false);
+    expect(nodeFs.existsSync(path.join(root, '.claude', 'skills'))).toBe(false);
+  });
+
+  it('projects into ~/.claude once a Claude session has been observed', async () => {
+    const root = await makeTmpDir();
+    vi.spyOn(os, 'homedir').mockReturnValue(root);
+    const paths = sharedGlobalSkillsPaths(root);
+    const source = await writeSkill(paths.sharedSkillsDir, 'home-skill');
+
+    markClaudeSessionObserved();
+    const result = await prepareSharedProjectSkillLinks({ workingDir: root });
+
+    expect(result.changed).toBe(true);
+    expect(await sameRealPath(path.join(paths.claudeSkillsDir, 'home-skill'), source)).toBe(true);
+  });
+});
 
 describe('prepareSharedGlobalSkillLinks', () => {
+  it('projects a nested namespace Skill into the Claude discovery root', async () => {
+    const root = await makeTmpDir();
+    const homeDir = path.join(root, 'home');
+    const paths = sharedGlobalSkillsPaths(homeDir);
+    await fs.mkdir(path.dirname(paths.claudeSkillsDir), { recursive: true });
+    const nested = path.join(paths.sharedSkillsDir, '@scope', 'nested');
+    await fs.mkdir(nested, { recursive: true });
+    await fs.writeFile(
+      path.join(nested, 'SKILL.md'),
+      '---\nname: nested\ndescription: Nested skill\n---\nBody\n',
+      'utf8',
+    );
+
+    const result = await prepareSharedGlobalSkillLinks({ homeDir });
+
+    expect(result.changed).toBe(true);
+    expect(await sameRealPath(path.join(paths.claudeSkillsDir, 'nested'), nested)).toBe(true);
+  });
+
+  it('prefers a direct Skill over a same-named nested namespace Skill', async () => {
+    const root = await makeTmpDir();
+    const homeDir = path.join(root, 'home');
+    const paths = sharedGlobalSkillsPaths(homeDir);
+    await fs.mkdir(path.dirname(paths.claudeSkillsDir), { recursive: true });
+    const direct = await writeSkill(paths.sharedSkillsDir, 'same-name');
+    const nested = await writeSkill(paths.sharedSkillsDir, path.join('@scope', 'same-name'));
+
+    const result = await prepareSharedGlobalSkillLinks({ homeDir });
+
+    expect(result.changed).toBe(true);
+    expect(await sameRealPath(path.join(paths.claudeSkillsDir, 'same-name'), direct)).toBe(true);
+    expect(await sameRealPath(path.join(paths.claudeSkillsDir, 'same-name'), nested)).toBe(false);
+  });
+
+  it('resolves a project root for a nested project Skill path', () => {
+    const projectRoot = path.join(os.tmpdir(), 'cindy-nested-project-root', 'repo');
+    const skillPath = path.join(projectRoot, '.agents', 'skills', '@scope', 'nested');
+    expect(projectWorkingDirFromSkillPath(skillPath)).toBe(projectRoot);
+  });
+
+  it('does not walk generated dependency trees during projection', async () => {
+    const root = await makeTmpDir();
+    const homeDir = path.join(root, 'home');
+    const paths = sharedGlobalSkillsPaths(homeDir);
+    await fs.mkdir(path.dirname(paths.claudeSkillsDir), { recursive: true });
+    const direct = await writeSkill(paths.sharedSkillsDir, 'direct');
+    const generatedDirs = [
+      'node_modules',
+      'dist',
+      'build',
+      'out',
+      'coverage',
+      'target',
+      '__macosx',
+      '__pycache__',
+      'Node_Modules',
+      'DIST',
+    ];
+    for (const generatedDir of generatedDirs) {
+      await writeSkill(paths.sharedSkillsDir, path.join(generatedDir, 'ignored'));
+    }
+
+    const result = await prepareSharedGlobalSkillLinks({ homeDir });
+
+    expect(result.changed).toBe(true);
+    expect(await sameRealPath(path.join(paths.claudeSkillsDir, 'direct'), direct)).toBe(true);
+    for (const generatedDir of generatedDirs) {
+      await expect(fs.lstat(path.join(paths.claudeSkillsDir, generatedDir, 'ignored'))).rejects.toMatchObject({
+        code: 'ENOENT',
+      });
+    }
+  });
+
+  it('keeps a direct Skill whose folder name matches a pruned directory', async () => {
+    const root = await makeTmpDir();
+    const homeDir = path.join(root, 'home');
+    const paths = sharedGlobalSkillsPaths(homeDir);
+    await fs.mkdir(path.dirname(paths.claudeSkillsDir), { recursive: true });
+    const distSkill = await writeSkill(paths.sharedSkillsDir, 'dist');
+    await writeSkill(paths.sharedSkillsDir, path.join('node_modules', 'ignored'));
+
+    const result = await prepareSharedGlobalSkillLinks({ homeDir });
+
+    expect(result.changed).toBe(true);
+    expect(await sameRealPath(path.join(paths.claudeSkillsDir, 'dist'), distSkill)).toBe(true);
+  });
+
+  it('does not pull other-agent skills into the shared index by default (opt-in gate, #2930)', async () => {
+    const root = await makeTmpDir();
+    const homeDir = path.join(root, 'home');
+    const paths = sharedGlobalSkillsPaths(homeDir);
+    await writeSkill(paths.claudeSkillsDir, 'claude-only');
+
+    const result = await prepareSharedGlobalSkillLinks({ homeDir });
+
+    expect(result.changed).toBe(false);
+    expect(result.actions).toEqual([]);
+    expect(result.warnings).toEqual([
+      'cross-agent global skill sync is disabled; set crossAgentSyncEnabled to opt in',
+    ]);
+    // Stable opt-out state: callers cache past it instead of retrying every launch.
+    expect(result.persistentWarnings).toEqual(result.warnings);
+    // 未 opt-in 时，不把 Claude 的用户技能拉进 ~/.agents/skills。
+    await expect(fs.lstat(path.join(paths.sharedSkillsDir, 'claude-only'))).rejects.toMatchObject({
+      code: 'ENOENT',
+    });
+  });
+
+  it('does not create ~/.claude when sync is disabled and Claude home is absent (#9282)', async () => {
+    const root = await makeTmpDir();
+    const homeDir = path.join(root, 'home');
+    const paths = sharedGlobalSkillsPaths(homeDir);
+    await writeSkill(paths.sharedSkillsDir, 'shared-only');
+
+    const result = await prepareSharedGlobalSkillLinks({ homeDir });
+
+    // 未 opt-in 且本地从未有 ~/.claude：不建目录、不建链接（存量也绝不删）。
+    expect(result.changed).toBe(false);
+    expect(result.actions).toEqual([]);
+    expect(nodeFs.existsSync(path.join(homeDir, '.claude'))).toBe(false);
+    await expect(fs.lstat(path.join(paths.claudeSkillsDir, 'shared-only'))).rejects.toMatchObject({
+      code: 'ENOENT',
+    });
+    // 纯对账无其它 Agent 用户技能可同步时，不打扰。
+    expect(result.warnings).toEqual([]);
+  });
+
+  it('projects shared skills into a pre-existing ~/.claude without opt-in (#9282)', async () => {
+    const root = await makeTmpDir();
+    const homeDir = path.join(root, 'home');
+    const paths = sharedGlobalSkillsPaths(homeDir);
+    const sharedSkill = await writeSkill(paths.sharedSkillsDir, 'existing-home');
+    await fs.mkdir(path.dirname(paths.claudeSkillsDir), { recursive: true });
+
+    const result = await prepareSharedGlobalSkillLinks({ homeDir });
+
+    expect(result.changed).toBe(true);
+    expect(result.warnings).toEqual([]);
+    expect(await sameRealPath(path.join(paths.claudeSkillsDir, 'existing-home'), sharedSkill)).toBe(true);
+  });
+
   it('links existing Claude skills into the shared skills root for Codex visibility', async () => {
     const root = await makeTmpDir();
     const homeDir = path.join(root, 'home');
     const paths = sharedGlobalSkillsPaths(homeDir);
     const claudeSkill = await writeSkill(paths.claudeSkillsDir, 'claude-only');
 
-    const result = await prepareSharedGlobalSkillLinks({ homeDir });
+    const result = await prepareSharedGlobalSkillLinks({ homeDir, isCrossAgentSyncEnabled: () => true });
 
     expect(result.changed).toBe(true);
     expect(result.warnings).toEqual([]);
     expect(await sameRealPath(path.join(paths.sharedSkillsDir, 'claude-only'), claudeSkill)).toBe(true);
+  });
+
+  it('stops before the next shared-root write when the owner changes mid-fanout', async () => {
+    const root = await makeTmpDir();
+    const homeDir = path.join(root, 'home');
+    const paths = sharedGlobalSkillsPaths(homeDir);
+    await writeSkill(paths.claudeSkillsDir, 'a-first');
+    await writeSkill(paths.claudeSkillsDir, 'b-second');
+
+    let ownerStable = true;
+    const realSymlink = fs.symlink;
+    const symlinkSpy = vi.spyOn(fs, 'symlink').mockImplementation(async (...args) => {
+      await realSymlink(...args);
+      ownerStable = false;
+    });
+    try {
+      await expect(
+        prepareSharedGlobalSkillLinks({
+          homeDir,
+          isCrossAgentSyncEnabled: () => true,
+          assertOwnerStable: () => {
+            if (!ownerStable) throw new Error('owner changed');
+          },
+        }),
+      ).rejects.toThrow('owner changed');
+    } finally {
+      symlinkSpy.mockRestore();
+    }
+
+    expect(await sameRealPath(
+      path.join(paths.sharedSkillsDir, 'a-first'),
+      path.join(paths.claudeSkillsDir, 'a-first'),
+    )).toBe(true);
+    await expect(fs.lstat(path.join(paths.sharedSkillsDir, 'b-second'))).rejects.toMatchObject({
+      code: 'ENOENT',
+    });
   });
 
   it('links shared skills into Claude skills so Claude Code can load them', async () => {
@@ -63,28 +418,132 @@ describe('prepareSharedGlobalSkillLinks', () => {
     const paths = sharedGlobalSkillsPaths(homeDir);
     const sharedSkill = await writeSkill(paths.sharedSkillsDir, 'shared-only');
 
-    const result = await prepareSharedGlobalSkillLinks({ homeDir });
+    const result = await prepareSharedGlobalSkillLinks({ homeDir, isCrossAgentSyncEnabled: () => true });
 
     expect(result.changed).toBe(true);
     expect(result.warnings).toEqual([]);
     expect(await sameRealPath(path.join(paths.claudeSkillsDir, 'shared-only'), sharedSkill)).toBe(true);
   });
 
-  it('links existing Codex skills into Claude without creating a shared duplicate', async () => {
+  it('links existing Codex skills into Claude and the shared skills root', async () => {
     const root = await makeTmpDir();
     const homeDir = path.join(root, 'home');
     const paths = sharedGlobalSkillsPaths(homeDir);
     const codexSkill = await writeSkill(paths.codexSkillsDir, 'codex-only');
 
-    await prepareSharedGlobalSkillLinks({ homeDir });
-    const secondResult = await prepareSharedGlobalSkillLinks({ homeDir });
+    await prepareSharedGlobalSkillLinks({ homeDir, isCrossAgentSyncEnabled: () => true });
+    const secondResult = await prepareSharedGlobalSkillLinks({ homeDir, isCrossAgentSyncEnabled: () => true });
 
     expect(secondResult.changed).toBe(false);
     expect(secondResult.warnings).toEqual([]);
     expect(await sameRealPath(path.join(paths.claudeSkillsDir, 'codex-only'), codexSkill)).toBe(true);
-    await expect(fs.lstat(path.join(paths.sharedSkillsDir, 'codex-only'))).rejects.toMatchObject({
+    expect(await sameRealPath(path.join(paths.sharedSkillsDir, 'codex-only'), codexSkill)).toBe(true);
+  });
+
+  it('stops before the Codex-to-shared write when the owner changes after Claude fanout', async () => {
+    const root = await makeTmpDir();
+    const homeDir = path.join(root, 'home');
+    const paths = sharedGlobalSkillsPaths(homeDir);
+    await writeSkill(paths.codexSkillsDir, 'codex-owner-change');
+
+    let ownerStable = true;
+    const realSymlink = fs.symlink;
+    const symlinkSpy = vi.spyOn(fs, 'symlink').mockImplementation(async (...args) => {
+      await realSymlink(...args);
+      ownerStable = false;
+    });
+    try {
+      await expect(
+        prepareSharedGlobalSkillLinks({
+          homeDir,
+          isCrossAgentSyncEnabled: () => true,
+          assertOwnerStable: () => {
+            if (!ownerStable) throw new Error('owner changed');
+          },
+        }),
+      ).rejects.toThrow('owner changed');
+    } finally {
+      symlinkSpy.mockRestore();
+    }
+
+    expect(await sameRealPath(
+      path.join(paths.claudeSkillsDir, 'codex-owner-change'),
+      path.join(paths.codexSkillsDir, 'codex-owner-change'),
+    )).toBe(true);
+    await expect(
+      fs.lstat(path.join(paths.sharedSkillsDir, 'codex-owner-change')),
+    ).rejects.toMatchObject({ code: 'ENOENT' });
+  });
+
+  it('does not overwrite a conflicting shared skill directory with a Codex skill', async () => {
+    const root = await makeTmpDir();
+    const homeDir = path.join(root, 'home');
+    const paths = sharedGlobalSkillsPaths(homeDir);
+    const sharedSkill = await writeSkill(paths.sharedSkillsDir, 'duplicate');
+    const codexSkill = await writeSkill(paths.codexSkillsDir, 'duplicate');
+
+    const result = await prepareSharedGlobalSkillLinks({ homeDir, isCrossAgentSyncEnabled: () => true });
+
+    expect(result.warnings.some((warning) => warning.includes('duplicate'))).toBe(true);
+    expect(await sameRealPath(path.join(paths.sharedSkillsDir, 'duplicate'), sharedSkill)).toBe(true);
+    expect(await sameRealPath(path.join(paths.sharedSkillsDir, 'duplicate'), codexSkill)).toBe(false);
+  });
+
+  it('does not overwrite a user-owned shared symlink with a Codex skill', async () => {
+    const root = await makeTmpDir();
+    const homeDir = path.join(root, 'home');
+    const paths = sharedGlobalSkillsPaths(homeDir);
+    const codexSkill = await writeSkill(paths.codexSkillsDir, 'user-link');
+    const externalSkill = await writeSkill(path.join(root, 'external-skills'), 'user-link');
+    const sharedLink = path.join(paths.sharedSkillsDir, 'user-link');
+    await fs.mkdir(paths.sharedSkillsDir, { recursive: true });
+    await fs.symlink(externalSkill, sharedLink, process.platform === 'win32' ? 'junction' : 'dir');
+
+    const result = await prepareSharedGlobalSkillLinks({ homeDir, isCrossAgentSyncEnabled: () => true });
+
+    expect(result.warnings.some((warning) => warning.includes('user-link'))).toBe(true);
+    expect(await sameRealPath(sharedLink, externalSkill)).toBe(true);
+    expect(await sameRealPath(sharedLink, codexSkill)).toBe(false);
+  });
+
+  it('cleans up shared and Claude links after a Codex source skill is removed', async () => {
+    const root = await makeTmpDir();
+    const homeDir = path.join(root, 'home');
+    const paths = sharedGlobalSkillsPaths(homeDir);
+    const codexSkill = await writeSkill(paths.codexSkillsDir, 'removed-codex-skill');
+
+    await prepareSharedGlobalSkillLinks({ homeDir, isCrossAgentSyncEnabled: () => true });
+    expect(await sameRealPath(path.join(paths.sharedSkillsDir, 'removed-codex-skill'), codexSkill)).toBe(true);
+    expect(await sameRealPath(path.join(paths.claudeSkillsDir, 'removed-codex-skill'), codexSkill)).toBe(true);
+
+    await fs.rm(codexSkill, { recursive: true, force: true });
+    const result = await prepareSharedGlobalSkillLinks({ homeDir, isCrossAgentSyncEnabled: () => true });
+
+    expect(result.changed).toBe(true);
+    await expect(fs.lstat(path.join(paths.sharedSkillsDir, 'removed-codex-skill'))).rejects.toMatchObject({
       code: 'ENOENT',
     });
+    await expect(fs.lstat(path.join(paths.claudeSkillsDir, 'removed-codex-skill'))).rejects.toMatchObject({
+      code: 'ENOENT',
+    });
+  });
+
+  it('filters Codex links that already point into the shared root', async () => {
+    const root = await makeTmpDir();
+    const homeDir = path.join(root, 'home');
+    const paths = sharedGlobalSkillsPaths(homeDir);
+    const sharedSkill = await writeSkill(paths.sharedSkillsDir, 'shared-backlink');
+    const codexLink = path.join(paths.codexSkillsDir, 'shared-backlink');
+    await fs.mkdir(paths.codexSkillsDir, { recursive: true });
+    await fs.symlink(sharedSkill, codexLink, process.platform === 'win32' ? 'junction' : 'dir');
+
+    await prepareSharedGlobalSkillLinks({ homeDir, isCrossAgentSyncEnabled: () => true });
+    const secondResult = await prepareSharedGlobalSkillLinks({ homeDir, isCrossAgentSyncEnabled: () => true });
+
+    expect(secondResult.changed).toBe(false);
+    expect(secondResult.warnings).toEqual([]);
+    expect(await sameRealPath(codexLink, sharedSkill)).toBe(true);
+    expect(await sameRealPath(path.join(paths.claudeSkillsDir, 'shared-backlink'), sharedSkill)).toBe(true);
   });
 
   it('does not overwrite conflicting real skill directories', async () => {
@@ -94,9 +553,11 @@ describe('prepareSharedGlobalSkillLinks', () => {
     const sharedSkill = await writeSkill(paths.sharedSkillsDir, 'duplicate');
     const claudeSkill = await writeSkill(paths.claudeSkillsDir, 'duplicate');
 
-    const result = await prepareSharedGlobalSkillLinks({ homeDir });
+    const result = await prepareSharedGlobalSkillLinks({ homeDir, isCrossAgentSyncEnabled: () => true });
 
     expect(result.warnings.some((warning) => warning.includes('duplicate'))).toBe(true);
+    // A user-owned path we never overwrite is persistent, not a retryable failure.
+    expect(result.persistentWarnings).toEqual(result.warnings);
     expect(await sameRealPath(path.join(paths.sharedSkillsDir, 'duplicate'), sharedSkill)).toBe(true);
     expect(await sameRealPath(path.join(paths.claudeSkillsDir, 'duplicate'), claudeSkill)).toBe(true);
     expect(await sameRealPath(path.join(paths.sharedSkillsDir, 'duplicate'), path.join(paths.claudeSkillsDir, 'duplicate'))).toBe(false);
@@ -112,11 +573,29 @@ describe('prepareSharedGlobalSkillLinks', () => {
     await fs.mkdir(paths.claudeSkillsDir, { recursive: true });
     await fs.symlink(externalSkill, claudeLink, process.platform === 'win32' ? 'junction' : 'dir');
 
-    const result = await prepareSharedGlobalSkillLinks({ homeDir });
+    const result = await prepareSharedGlobalSkillLinks({ homeDir, isCrossAgentSyncEnabled: () => true });
 
     expect(result.warnings.some((warning) => warning.includes('user-link'))).toBe(true);
     expect(await sameRealPath(claudeLink, externalSkill)).toBe(true);
     expect(await sameRealPath(claudeLink, sharedSkill)).toBe(false);
+  });
+
+  // Cache-key contract for the 30s completion cache in auth-adapters: without it a cached
+  // run would hide a crossAgentSyncEnabled toggle or a newly added global skill.
+  it('changes the preparation fingerprint on a sync toggle or a root listing change only', async () => {
+    const root = await makeTmpDir();
+    const homeDir = path.join(root, 'home');
+    const paths = sharedGlobalSkillsPaths(homeDir);
+    await writeSkill(paths.claudeSkillsDir, 'existing');
+    const fingerprint = (enabled: boolean) =>
+      sharedGlobalSkillLinksFingerprint({ homeDir, isCrossAgentSyncEnabled: () => enabled });
+
+    const before = await fingerprint(false);
+    expect(await fingerprint(false)).toBe(before);
+    expect(await fingerprint(true)).not.toBe(before);
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    await writeSkill(paths.claudeSkillsDir, 'added');
+    expect(await fingerprint(false)).not.toBe(before);
   });
 
   it('cleans up broken managed links after the source skill is removed', async () => {
@@ -125,11 +604,11 @@ describe('prepareSharedGlobalSkillLinks', () => {
     const paths = sharedGlobalSkillsPaths(homeDir);
     const claudeSkill = await writeSkill(paths.claudeSkillsDir, 'removed-later');
 
-    await prepareSharedGlobalSkillLinks({ homeDir });
+    await prepareSharedGlobalSkillLinks({ homeDir, isCrossAgentSyncEnabled: () => true });
     expect(await sameRealPath(path.join(paths.sharedSkillsDir, 'removed-later'), claudeSkill)).toBe(true);
 
     await fs.rm(claudeSkill, { recursive: true, force: true });
-    const result = await prepareSharedGlobalSkillLinks({ homeDir });
+    const result = await prepareSharedGlobalSkillLinks({ homeDir, isCrossAgentSyncEnabled: () => true });
 
     expect(result.changed).toBe(true);
     await expect(fs.lstat(path.join(paths.sharedSkillsDir, 'removed-later'))).rejects.toMatchObject({
@@ -217,6 +696,28 @@ describe('prepareSharedProjectSkillLinks', () => {
     expect(await sameRealPath(staleSharedLink, claudeSkill)).toBe(true);
   });
 
+  it('repairs a broken absolute nested project link after the checkout moves', async () => {
+    const root = await makeTmpDir();
+    const oldWorkingDir = path.join(root, 'old-checkout');
+    const workingDir = path.join(root, 'moved-checkout');
+    const oldPaths = sharedProjectSkillsPaths(oldWorkingDir);
+    const paths = sharedProjectSkillsPaths(workingDir);
+    const claudeSkill = await writeSkill(paths.claudeSkillsDir, path.join('@scope', 'nested'));
+    const staleSharedLink = path.join(paths.sharedSkillsDir, 'nested');
+    await fs.mkdir(paths.sharedSkillsDir, { recursive: true });
+    await fs.symlink(
+      path.join(oldPaths.claudeSkillsDir, '@scope', 'nested'),
+      staleSharedLink,
+      process.platform === 'win32' ? 'junction' : 'dir',
+    );
+
+    const result = await prepareSharedProjectSkillLinks({ workingDir });
+
+    expect(result.changed).toBe(true);
+    expect(result.warnings).toEqual([]);
+    expect(await sameRealPath(staleSharedLink, claudeSkill)).toBe(true);
+  });
+
   it('does not replace an unrelated broken project skill symlink', async () => {
     const root = await makeTmpDir();
     const workingDir = path.join(root, 'checkout');
@@ -235,6 +736,35 @@ describe('prepareSharedProjectSkillLinks', () => {
 
     expect(result.changed).toBe(false);
     expect(result.warnings.some((warning) => warning.includes('user-link'))).toBe(true);
+    expect(await fs.readlink(userLink)).toBe(externalTarget);
+  });
+
+  it('does not treat a deeper broken link as a moved project Skill link', async () => {
+    const root = await makeTmpDir();
+    const workingDir = path.join(root, 'checkout');
+    const paths = sharedProjectSkillsPaths(workingDir);
+    await writeSkill(paths.claudeSkillsDir, 'deep-link');
+    const userLink = path.join(paths.sharedSkillsDir, 'deep-link');
+    const externalTarget = path.join(
+      root,
+      'archive',
+      '.claude',
+      'skills',
+      'group',
+      'sub',
+      'deep-link',
+    );
+    await fs.mkdir(paths.sharedSkillsDir, { recursive: true });
+    await fs.symlink(
+      externalTarget,
+      userLink,
+      process.platform === 'win32' ? 'junction' : 'dir',
+    );
+
+    const result = await prepareSharedProjectSkillLinks({ workingDir });
+
+    expect(result.changed).toBe(false);
+    expect(result.warnings.some((warning) => warning.includes('deep-link'))).toBe(true);
     expect(await fs.readlink(userLink)).toBe(externalTarget);
   });
 });

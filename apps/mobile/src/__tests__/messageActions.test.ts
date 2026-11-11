@@ -50,20 +50,21 @@ describe('messageActions', () => {
 
   it('hangs the completed action bar only on real turn-final utterances', () => {
     const base = {
+      role: 'assistant' as const,
       hasSystemCard: false,
       isStreamingAssistant: false,
       isTurnFinalAssistant: false,
     };
 
     // user 消息与本轮收尾正文照常挂。
-    expect(mobileMessageShowsActionBar({ ...base, kind: 'user' })).toBe(true);
+    expect(mobileMessageShowsActionBar({ ...base, role: 'user', kind: 'user' })).toBe(true);
     expect(mobileMessageShowsActionBar({
       ...base,
       kind: 'assistant',
       isTurnFinalAssistant: true,
     })).toBe(true);
 
-    // turn 中间句不挂;流式 assistant 只显示「生成中」也不挂。
+    // turn 中间句与流式 assistant 都不挂操作行。
     expect(mobileMessageShowsActionBar({ ...base, kind: 'assistant' })).toBe(false);
     expect(mobileMessageShowsActionBar({
       ...base,
@@ -74,14 +75,49 @@ describe('messageActions', () => {
 
     // 系统边界卡整行不挂:跨 Agent 切换分隔线(kind='system')、goal 卡(role
     // assistant 派生),以及「user 行渲染系统卡」被渲染层降级前后的 auto-resume 行。
-    expect(mobileMessageShowsActionBar({ ...base, hasSystemCard: true, kind: 'system' })).toBe(false);
+    expect(mobileMessageShowsActionBar({ ...base, role: 'system', hasSystemCard: true, kind: 'system' })).toBe(false);
     expect(mobileMessageShowsActionBar({
       ...base,
       hasSystemCard: true,
       kind: 'assistant',
       isTurnFinalAssistant: true,
     })).toBe(false);
-    expect(mobileMessageShowsActionBar({ ...base, hasSystemCard: true, kind: 'user' })).toBe(false);
+    expect(mobileMessageShowsActionBar({ ...base, role: 'user', hasSystemCard: true, kind: 'user' })).toBe(false);
+  });
+
+  // unit regression: persisted errors normalize to kind=system without a system card.
+  // Boundary-card coverage above missed the copy/reply/more bar under these notices.
+  it('omits completed-message actions on error notices, matching desktop', () => {
+    expect(mobileMessageShowsActionBar({
+      kind: 'system',
+      role: 'error',
+      hasSystemCard: false,
+      isStreamingAssistant: false,
+      isTurnFinalAssistant: false,
+    })).toBe(false);
+  });
+
+  it('projects confirmed Pi runtime /skill: aliases when copying a user message', () => {
+    expect(buildMobileMessageCopyText(normalizedMessage({
+      body: '/skill:git follow-up review',
+      slashCommandRanges: [{ start: 0, end: 10 }],
+    }))).toBe('/git follow-up review');
+    expect(buildMobileMessageCopyText(normalizedMessage({
+      body: '/skill:git is just prose here',
+    }))).toBe('/skill:git is just prose here');
+    const quoted = [
+      '> <!-- cindy-composer-quote -->',
+      '> quoted',
+      '',
+      '/skill:git follow-up review',
+    ].join('\n');
+    expect(buildMobileMessageCopyText(normalizedMessage({
+      body: quoted,
+      quotesEncoded: true,
+      slashCommandRanges: [
+        { start: quoted.indexOf('/skill:git'), end: quoted.indexOf('/skill:git') + 10 },
+      ],
+    }))).toBe(['> quoted', '', '/git follow-up review'].join('\n'));
   });
 
   it('builds desktop-compatible copy text with attachment names', () => {
@@ -147,6 +183,18 @@ describe('messageActions', () => {
     expect(formatMessageRelativeTime('2026-06-16T09:00:00.000Z', now)).toBe('3 小时前');
     expect(formatMessageRelativeTime('2026-06-15T09:00:00.000Z', now)).toContain('06-15');
     expect(formatMessageAbsoluteTime('2026-06-16T09:00:05.000Z')).toContain('2026-06-16');
+  });
+
+  it('formats relative message times in English when the app language is English', async () => {
+    const now = new Date('2026-06-16T12:00:00.000Z').getTime();
+    await i18n.changeLanguage('en');
+    try {
+      expect(formatMessageRelativeTime('2026-06-16T11:59:31.000Z', now)).toBe('Just now');
+      expect(formatMessageRelativeTime('2026-06-16T11:42:00.000Z', now)).toBe('18 min ago');
+      expect(formatMessageRelativeTime('2026-06-16T09:00:00.000Z', now)).toBe('3 h ago');
+    } finally {
+      await i18n.changeLanguage('zh-CN');
+    }
   });
 
   it('formats per-turn cost like the desktop action bar', () => {

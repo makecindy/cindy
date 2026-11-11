@@ -1,3 +1,4 @@
+import { normalizeProviderRequest } from '@cindy/model-compat';
 /**
  * Bridge handler ——
  *
@@ -7,7 +8,7 @@
  *   1. strip model 前缀 → 真实 model id
  *   2. translateRequest → OpenAI Responses 请求
  *   3. 注入 OAuth headers(provider.buildHeaders 拿最新凭证)→ POST 上游 /responses
- *   4. 逐条把上游 Responses SSE 翻译成 Anthropic Messages SSE 写回 res
+ *   4. 按调用方的 stream 模式把上游 Responses SSE / JSON 翻译成 Anthropic Messages SSE / JSON
  *
  * 会话态(effort / Fast)由 host 的 routingTransform 在决策点解析后经 `prefs` 闭包传入,
  * 不走任何伪 header。响应是**翻译流**(非字节透传)——这是本包与 compat-proxy 引擎的分工:
@@ -19,8 +20,10 @@
 
 import type { ServerResponse } from 'node:http';
 
+import { AnthropicMessageCollector } from './anthropic-message-collector.js';
 import { translateRequest, type ResponsesReasoningEffort } from './translate-request.js';
 import { SseTranslator, type AnthropicSseEvent } from './translate-sse.js';
+import { WireDiagnosticsSession } from './wire-diagnostics.js';
 import type {
   AnthropicMessagesRequest,
   BridgeLogger,
@@ -29,12 +32,13 @@ import type {
 } from './types.js';
 
 /**
- * maker 的 effort 档(minimal/low/medium/high/xhigh/max)→ Responses 端点接受的 4 档。
- * Responses(codex / api.x.ai)只认 low/medium/high/xhigh:minimal 收敛到 low、max 收敛到 xhigh。
+ * Higher efforts require an explicit per-model capability; providers without one keep the
+ * historical xhigh ceiling. Codex subscription capabilities differ from the public API.
  * 无输入 / 无法识别 → undefined(translateRequest 回退默认档)。
  */
-function normalizeReasoningEffort(raw: string | undefined): ResponsesReasoningEffort | undefined {
-  switch ((raw ?? '').trim().toLowerCase()) {
+function normalizeReasoningEffort(raw: string | undefined, supported?: readonly string[]): ResponsesReasoningEffort | undefined {
+  const effort = (raw ?? '').trim().toLowerCase();
+  switch (effort) {
     case 'minimal':
     case 'low':
       return 'low';
@@ -43,8 +47,11 @@ function normalizeReasoningEffort(raw: string | undefined): ResponsesReasoningEf
     case 'high':
       return 'high';
     case 'xhigh':
+      return 'xhigh';
     case 'max':
     case 'ultra':
+      if (supported?.includes(effort)) return effort;
+      if (effort === 'ultra' && supported?.includes('max')) return 'max';
       return 'xhigh';
     default:
       return undefined;
@@ -95,8 +102,91 @@ function writeJson(res: ServerResponse, status: number, body: unknown): void {
   res.end(buf);
 }
 
+/** 与 desktop `OwnerBoundaryPendingError` 对齐:本包不能 import desktop,按 name/code/message 认。 */
+const OWNER_BOUNDARY_PENDING_MESSAGE =
+  'App session is switching; retry after the owner boundary settles.';
+
+function isOwnerBoundaryPendingError(err: unknown): boolean {
+  if (!(err instanceof Error)) return false;
+  if (err.name === 'OwnerBoundaryPendingError') return true;
+  if ((err as { code?: unknown }).code === 'owner_boundary_pending') return true;
+  return err.message === OWNER_BOUNDARY_PENDING_MESSAGE;
+}
+
+function writeOwnerBoundaryPending(res: ServerResponse, err: unknown): void {
+  const message = err instanceof Error ? err.message : OWNER_BOUNDARY_PENDING_MESSAGE;
+  const buf = Buffer.from(JSON.stringify({
+    type: 'error',
+    error: {
+      type: 'owner_boundary_pending',
+      code: 'owner_boundary_pending',
+      message,
+    },
+  }), 'utf8');
+  res.writeHead(503, {
+    'content-type': 'application/json; charset=utf-8',
+    'content-length': String(buf.length),
+    'cache-control': 'no-store',
+    'retry-after': '1',
+  });
+  res.end(buf);
+}
+
 function writeSseEvent(res: ServerResponse, ev: AnthropicSseEvent): void {
   res.write(`event: ${ev.event}\ndata: ${JSON.stringify(ev.data)}\n\n`);
+}
+
+const MAX_NON_STREAM_BODY_BYTES = 16 * 1024 * 1024;
+// Bound decoded UTF-16 storage (at most 32 MiB of text per SSE event).
+const MAX_SSE_EVENT_CHARS = 16 * 1024 * 1024;
+
+async function readBodyWithLimit(response: Response, limitBytes: number): Promise<string> {
+  if (!response.body) return '';
+  const reader = response.body.getReader();
+  const decoder = new TextDecoder();
+  let body = '';
+  let bytesRead = 0;
+  try {
+    for (;;) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      bytesRead += value.byteLength;
+      if (bytesRead > limitBytes) {
+        await reader.cancel();
+        throw new Error(`upstream response exceeds ${limitBytes} bytes`);
+      }
+      body += decoder.decode(value, { stream: true });
+    }
+    body += decoder.decode();
+    return body;
+  } finally {
+    reader.releaseLock();
+  }
+}
+
+/**
+ * 按 SSE 规范切事件:空行分隔事件,**同一事件的多条 `data:` 行先以 `\n` 拼成一个负载**
+ * 再解析。逐行独立 JSON.parse 会把「合法但跨多行」的事件当成坏帧,整个非流式 fallback
+ * 被判成 502(review 反馈)。与 responses-anthropic-bridge 的 parseSseBlock 同口径。
+ */
+function parseSsePayloads(body: string): unknown[] {
+  const payloads: unknown[] = [];
+  for (const block of body.split(/\r?\n\r?\n/)) {
+    const data: string[] = [];
+    for (const line of block.split(/\r?\n/)) {
+      if (line.startsWith('data:')) data.push(line.slice(5).trimStart());
+    }
+    if (data.length === 0) continue;
+    const payload = data.join('\n').trim();
+    if (!payload || payload === '[DONE]') continue;
+    payloads.push(JSON.parse(payload) as unknown);
+  }
+  return payloads;
+}
+
+/** 缺少 Content-Type 时仅识别 SSE 起始字段；正文已受非流式 16 MiB 上限保护。 */
+function looksLikeSse(body: string): boolean {
+  return /^(?:(?:event|data|id|retry):|:)/.test(body.trimStart());
 }
 
 /** image block 的粗估 token 占位(Anthropic 图像典型 ~1100-1600 tok;粗估用中值,免 stringify 整段 base64)。 */
@@ -145,13 +235,19 @@ export interface BridgeSessionPrefs {
   /** 用户选定的思维深度档(maker 6 档,handler 内收敛到 Responses 4 档);缺省走默认档。 */
   reasoningEffort?: string;
   /** Fast 模式;仅 provider 声明了 fastServiceTier 时映射成 service_tier。 */
-  fast?: boolean;
+  fast?: boolean | 'ultrafast';
 }
 
 /** createResponsesHandler 的 handle 入参 —— 与 compat-proxy LocalRequestHandler 的 args 同形 + prefs。 */
 export interface BridgeHandleArgs {
   parsedBody: unknown;
-  ctx: { readonly method: string; readonly url: string; readonly headers: Readonly<Record<string, string>> };
+  ctx: {
+    /** compat-proxy reqId; optional for direct handler tests and non-proxy callers. */
+    readonly reqId?: number;
+    readonly method: string;
+    readonly url: string;
+    readonly headers: Readonly<Record<string, string>>;
+  };
   res: ServerResponse;
   prefs?: BridgeSessionPrefs;
 }
@@ -171,6 +267,10 @@ export interface ResponsesHandlerOptions {
    * responses-chat-bridge 的同名选项一致。
    */
   fetchImpl?: typeof fetch;
+  /** Explicit, temporary, xAI/Grok-only shape probe. Disabled by default. */
+  wireDiagnostics?: boolean;
+  /** Explicit, temporary strict-tool spike; only meaningful with wireDiagnostics. */
+  wireDiagnosticsStrict?: boolean;
 }
 
 // 去尾部斜杠。不用 /\/+$/ 正则——超长 '/' 串上会 O(n²) 回溯(CodeQL js/polynomial-redos)。
@@ -236,6 +336,10 @@ export function createResponsesHandler(opts: ResponsesHandlerOptions): Responses
     try {
       providerHeaders = await provider.buildHeaders({ sessionId });
     } catch (err) {
+      if (isOwnerBoundaryPendingError(err)) {
+        writeOwnerBoundaryPending(res, err);
+        return;
+      }
       log.error?.('buildHeaders failed', { reqId, prefix: provider.prefix, err: err instanceof Error ? err.message : String(err) });
       writeJson(res, 502, {
         type: 'error',
@@ -247,25 +351,59 @@ export function createResponsesHandler(opts: ResponsesHandlerOptions): Responses
     // reasoning 档:host 经 prefs 闭包传入用户选定 effort(CC 不会把非 Anthropic 模型的 effort
     // 放进请求体,由 host 从会话态解析);模型不支持 reasoning → 'none'。
     const reasoningSupported = provider.supportsReasoning ? provider.supportsReasoning(realModel) : true;
-    const prefEffort = normalizeReasoningEffort(prefs?.reasoningEffort);
+    const prefEffort = normalizeReasoningEffort(prefs?.reasoningEffort, provider.supportedReasoningEfforts?.(realModel));
     const reasoningEffort = !reasoningSupported ? 'none' : prefEffort;
 
     // Fast 模式:prefs.fast × provider.fastServiceTier(codex='priority')。
-    const serviceTier = prefs?.fast === true && provider.fastServiceTier ? provider.fastServiceTier : undefined;
+    const fastModel = prefs?.fast === true ? provider.fastModel?.(realModel) : undefined;
+    const serviceTier = !fastModel && prefs?.fast === true ? provider.fastServiceTier : undefined;
+    // Cindy's existing usage variant uses priority for Fast pricing, independently of wire service_tier.
+    const priceTier = fastModel ? 'priority' : serviceTier ?? 'default';
 
     // 上游服务端工具(如 xAI x_search):只由 provider 按 model 静态声明,不受会话态影响,
     // 保证同一会话逐轮请求带同一份工具列表(前缀稳定)。
     const serverSideTools = provider.serverSideTools?.(realModel);
 
+    // Anthropic Messages 语义:**只有显式 `stream:true` 才是 SSE**,字段缺失等同非流式。
+    // Claude Code 的非流式 fallback 走 SDK 的 `messages.create()`,它**不带 stream 字段**
+    // (2026-08-10 用随包 cc 二进制实测),按 `stream !== false` 判会把 fallback 误当流式、
+    // 回一个 SSE,CLI 随即报 "empty or malformed response (HTTP 200)"。
+    const downstreamStreaming = parsed.stream === true;
+    const wireDiagnosticsEnabled = opts.wireDiagnostics === true
+      && provider.prefix === 'xai/'
+      && realModel === 'grok-4.6';
     const responsesReq = translateRequest(parsed, {
-      model: realModel,
+      model: fastModel ?? realModel,
       promptCacheKey: sessionId,
       maxOutputTokensSupported: provider.maxOutputTokensSupported,
       reasoningEffort,
       serviceTier,
-      providerPrefix: provider.prefix,
+      providerPrefix: provider.reasoningNamespace ?? provider.prefix,
+      preserveReasoningState: provider.preserveReasoningState,
       serverSideTools,
+      // 生产控制面 = provider 配置(按 model 恒定,前缀稳定);dev-only strict spike
+      // 仅作诊断证据路径叠加,默认关闭,不得当生产开关用。
+      strictFunctionTools: provider.strictFunctionTools?.(realModel) === true
+        || (wireDiagnosticsEnabled && opts.wireDiagnosticsStrict === true),
     });
+    let finalRequest: unknown;
+    try {
+      finalRequest = normalizeProviderRequest(responsesReq, { harness: 'claude-code', protocol: 'openai-responses', upstreamBase: provider.upstreamBase, model: responsesReq.model });
+    } catch {
+      writeJson(res, 400, { type: 'error', error: { type: 'invalid_request_error', message: 'request cannot be represented by the selected provider protocol' } });
+      return;
+    }
+    const diagnostics = wireDiagnosticsEnabled
+      ? new WireDiagnosticsSession(log, {
+        requestId: ctx.reqId ?? reqId,
+        bridgeReqId: reqId,
+        wireModel,
+        realModel,
+        providerPrefix: provider.reasoningNamespace ?? provider.prefix,
+        downstreamStreaming,
+      })
+      : null;
+    diagnostics?.recordRequest(parsed, responsesReq);
 
     const abort = new AbortController();
     res.on('close', () => abort.abort());
@@ -277,13 +415,19 @@ export function createResponsesHandler(opts: ResponsesHandlerOptions): Responses
         headers: {
           ...providerHeaders,
           'content-type': 'application/json',
+          // 恒 SSE:上游只接受流式(见 translateRequest 的 stream 注释),非流式调用方
+          // 由下游缓冲满足。
           accept: 'text/event-stream',
         },
-        body: JSON.stringify(responsesReq),
+        body: JSON.stringify(finalRequest),
         signal: abort.signal,
       });
     } catch (err) {
-      if (abort.signal.aborted) return;
+      if (abort.signal.aborted) {
+        diagnostics?.finish({ reason: 'client-aborted-before-upstream-response' });
+        return;
+      }
+      diagnostics?.finish({ reason: 'upstream-fetch-error' });
       log.error?.('upstream fetch failed', { reqId, err: err instanceof Error ? err.message : String(err) });
       writeJson(res, 502, { type: 'error', error: { type: 'api_error', message: `upstream unreachable: ${String(err)}` } });
       return;
@@ -291,7 +435,13 @@ export function createResponsesHandler(opts: ResponsesHandlerOptions): Responses
 
     if (!upstream.ok || !upstream.body) {
       const text = upstream.body ? await upstream.text().catch(() => '') : '';
-      log.warn?.('upstream non-2xx', { reqId, status: upstream.status, body: text.slice(0, 2000) });
+      const status = upstream.ok ? 502 : upstream.status;
+      diagnostics?.finish({ status, reason: upstream.ok ? 'upstream-2xx-without-body' : 'upstream-http-error' });
+      log.warn?.(upstream.ok ? 'upstream 2xx without response body' : 'upstream non-2xx', {
+        reqId,
+        status: upstream.status,
+        body: text.slice(0, 2000),
+      });
       if (!upstream.ok && provider.onUpstreamError) {
         try {
           await provider.onUpstreamError({
@@ -308,9 +458,16 @@ export function createResponsesHandler(opts: ResponsesHandlerOptions): Responses
           });
         }
       }
-      writeJson(res, upstream.status, {
+      writeJson(res, status, {
         type: 'error',
-        error: { type: anthropicErrorType(upstream.status), message: text.slice(0, 2000) || `upstream ${upstream.status}` },
+        error: {
+          type: anthropicErrorType(status),
+          message: text.slice(0, 2000) || (
+            upstream.ok
+              ? 'provider returned a successful response without a body'
+              : `upstream ${upstream.status}`
+          ),
+        },
       });
       return;
     }
@@ -320,19 +477,70 @@ export function createResponsesHandler(opts: ResponsesHandlerOptions): Responses
       const rateLimit = parseRateLimitHeaders(upstream.headers);
       if (rateLimit) {
         try {
-          provider.onRateLimit(rateLimit);
+          provider.onRateLimit(rateLimit, providerHeaders);
         } catch {
           /* 回调异常不影响流转发 */
         }
       }
     }
 
+    const upstreamContentType = upstream.headers.get('content-type') ?? '';
+    const upstreamIsSse = upstreamContentType.toLowerCase().includes('event-stream');
+
+    // 非流式调用方(Claude Code 流式失败后的 fallback,请求体不带 stream 字段)要求一个
+    // 完整的 Anthropic Message JSON。上游恒回 SSE(只接受流式),所以这里缓冲整流后组装;
+    // 同时兼容个别上游直接给 Responses JSON 的情况。
+    if (!downstreamStreaming) {
+      const translator = new SseTranslator(wireModel, priceTier, provider.reasoningNamespace);
+      const collector = new AnthropicMessageCollector();
+      const collect = (event: AnthropicSseEvent): void => {
+        diagnostics?.recordDownstreamEvent(event);
+        collector.push(event);
+      };
+      try {
+        const body = await readBodyWithLimit(upstream, MAX_NON_STREAM_BODY_BYTES);
+        if (!body.trim()) throw new Error('provider returned an empty response body');
+        if (upstreamIsSse || (!upstreamContentType && looksLikeSse(body))) {
+          for (const event of parseSsePayloads(body)) {
+            diagnostics?.recordUpstreamEvent(event);
+            for (const output of translator.push(event)) collect(output);
+          }
+          for (const output of translator.finish()) collect(output);
+        } else {
+          const responseJson = JSON.parse(body) as unknown;
+          for (const output of translator.pushJson(responseJson)) collect(output);
+        }
+      } catch (err) {
+        // 客户端已断开(res close → abort):上游读取抛错只是取消的副作用,不写响应。
+        if (abort.signal.aborted) {
+          diagnostics?.finish({ status: upstream.status, reason: 'client-aborted-while-buffering' });
+          return;
+        }
+        const message = err instanceof Error ? err.message : String(err);
+        diagnostics?.finish({ status: upstream.status, reason: 'invalid-upstream-non-stream-response' });
+        log.warn?.('upstream non-stream response invalid', { reqId, error: message });
+        writeJson(res, 502, {
+          type: 'error',
+          error: { type: 'api_error', message: `invalid upstream response: ${message}` },
+        });
+        return;
+      }
+
+      const result = collector.finish();
+      diagnostics?.finish({ status: 200, reason: result.ok ? 'completed-non-stream' : 'collector-error' });
+      if (!result.ok) {
+        writeJson(res, 502, { type: 'error', error: result.error });
+        return;
+      }
+      writeJson(res, 200, result.message);
+      return;
+    }
+
     // 上游 2xx 但 content-type 不是 SSE(反代/网关吐 JSON 或 HTML):大概率整流翻不出
     // 任何事件,先留一条 warn ——零事件收尾时的合成 error 会带上正文前缀(#941)。
     // 判定大小写不敏感(HTTP header 值的 media type 不区分大小写);真实状态码进日志,
     // 本路径接受任意 2xx,不硬编码 200(review 反馈)。
-    const upstreamContentType = upstream.headers.get('content-type') ?? '';
-    if (!upstreamContentType.toLowerCase().includes('event-stream')) {
+    if (!upstreamIsSse) {
       log.warn?.('upstream 2xx with non-SSE content-type', {
         reqId,
         status: upstream.status,
@@ -349,10 +557,17 @@ export function createResponsesHandler(opts: ResponsesHandlerOptions): Responses
 
     // 用 wireModel(带前缀,如 chatgpt/gpt-5.5)而非 realModel 构造 —— message_start 回显带前缀 id,
     // CC 的 modelUsage 据此记账,下游 usage 可按前缀区分订阅轮,不与真网关同名裸模型混淆。
-    const translator = new SseTranslator(wireModel);
+    const translator = new SseTranslator(wireModel, priceTier, provider.reasoningNamespace);
     const reader = upstream.body.getReader();
     const decoder = new TextDecoder();
     let buf = '';
+    let eventData: string[] = [];
+    let eventChars = 0;
+    const checkEventSize = (chars: number): void => {
+      if (chars <= MAX_SSE_EVENT_CHARS) return;
+      void reader.cancel().catch((error) => log.warn?.('upstream cancel failed', { reqId, error: String(error) }));
+      throw new Error(`upstream SSE event exceeds ${MAX_SSE_EVENT_CHARS} characters`);
+    };
     // 零事件诊断:整流一条 Anthropic 事件都没写回时,CLI 只能报
     // "empty or malformed response (HTTP 200)" 并盲目重试,真实错误被完全掩盖(#941)。
     // 记录写回事件数与上游正文前缀,收尾时合成一条带上游信息的 error 事件 + warn 日志。
@@ -361,29 +576,34 @@ export function createResponsesHandler(opts: ResponsesHandlerOptions): Responses
     const RAW_PREFIX_LIMIT = 500;
     const writeOut = (ev: AnthropicSseEvent): void => {
       eventsWritten += 1;
+      diagnostics?.recordDownstreamEvent(ev);
       writeSseEvent(res, ev);
     };
     const finalizeStream = (): void => {
-      for (const outEv of translator.finish()) writeOut(outEv);
-      if (eventsWritten > 0) return;
-      const bodyPrefix = rawPrefix.trim().slice(0, 300);
-      log.warn?.('upstream stream yielded no translatable events', {
-        reqId,
-        contentType: upstreamContentType || '(missing)',
-        bodyPrefix,
-      });
-      writeOut({
-        event: 'error',
-        data: {
-          type: 'error',
-          error: {
-            type: 'api_error',
-            message:
-              `upstream returned HTTP ${upstream.status} but produced no translatable SSE events ` +
-              `(content-type: ${upstreamContentType || 'missing'}${bodyPrefix ? `; body: ${bodyPrefix}` : ''})`,
+      if (eventsWritten === 0) {
+        const bodyPrefix = rawPrefix.trim().slice(0, 300);
+        log.warn?.('upstream stream yielded no translatable events', {
+          reqId,
+          contentType: upstreamContentType || '(missing)',
+          bodyPrefix,
+        });
+        writeOut({
+          event: 'error',
+          data: {
+            type: 'error',
+            error: {
+              type: 'api_error',
+              message:
+                `upstream returned HTTP ${upstream.status} but produced no translatable SSE events ` +
+                `(content-type: ${upstreamContentType || 'missing'}${bodyPrefix ? `; body: ${bodyPrefix}` : ''})`,
+            },
           },
-        },
-      });
+        });
+        return;
+      }
+      // 至少有一个事件但没有 response.completed / response.incomplete:finish() 产出
+      // stream_truncated error,绝不把 clean EOF 伪装成正常 message_stop。
+      for (const outEv of translator.finish()) writeOut(outEv);
     };
     try {
       for (;;) {
@@ -394,15 +614,24 @@ export function createResponsesHandler(opts: ResponsesHandlerOptions): Responses
           rawPrefix = (rawPrefix + chunkText).slice(0, RAW_PREFIX_LIMIT);
         }
         buf += chunkText;
-        // SSE 事件以空行分隔;逐行取 `data:` 负载。用游标扫描、chunk 末尾一次性 slice ——
+        // SSE 事件以空行分隔，多条 data 行合并为一个负载；chunk 不是事件边界。
+        // 用游标扫描、chunk 末尾一次性 slice ——
         // 避免每行 slice 整个剩余缓冲(大 chunk 数百行时是 O(n²) 拷贝,这是每 token 热路径)。
         let start = 0;
         let nl: number;
         while ((nl = buf.indexOf('\n', start)) >= 0) {
+          eventChars += nl - start + 1;
+          checkEventSize(eventChars);
           const line = buf.slice(start, nl).replace(/\r$/, '');
           start = nl + 1;
-          if (!line.startsWith('data:')) continue;
-          const payload = line.slice(5).trim();
+          if (line.startsWith('data:')) {
+            eventData.push(line.slice(5).trimStart());
+            continue;
+          }
+          if (line !== '') continue;
+          eventChars = 0;
+          const payload = eventData.join('\n').trim();
+          eventData = [];
           if (!payload || payload === '[DONE]') continue;
           let ev: unknown;
           try {
@@ -410,12 +639,14 @@ export function createResponsesHandler(opts: ResponsesHandlerOptions): Responses
           } catch {
             continue;
           }
+          diagnostics?.recordUpstreamEvent(ev);
           for (const outEv of translator.push(ev)) writeOut(outEv);
         }
         if (start > 0) buf = buf.slice(start);
+        checkEventSize(eventChars + buf.length);
       }
-      // 上游正常结束但没走 response.completed(极少)→ 兜底收尾;整流零事件时合成
-      // 带上游信息的 error 事件,绝不空 200 收尾。
+      // 上游干净结束:零事件时合成带上游信息的 error 事件;有事件但没走
+      // response.completed 时按截断报错。两条路径都绝不以空 200 / 伪装完成收尾。
       finalizeStream();
     } catch (err) {
       if (!abort.signal.aborted) {
@@ -428,6 +659,7 @@ export function createResponsesHandler(opts: ResponsesHandlerOptions): Responses
         for (const outEv of translator.fail(`upstream stream error: ${errMsg}`)) writeOut(outEv);
       }
     } finally {
+      diagnostics?.finish({ status: upstream.status, reason: 'stream-finished' });
       res.end();
     }
   }

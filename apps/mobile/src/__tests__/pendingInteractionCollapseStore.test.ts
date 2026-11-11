@@ -1,5 +1,6 @@
 import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
+import ts from 'typescript';
 import { afterEach, describe, expect, it } from 'vitest';
 import {
   clearAllPendingInteractionCollapse,
@@ -22,6 +23,21 @@ afterEach(() => {
 });
 
 describe('pendingInteractionCollapseStore', () => {
+  it('starts async questions expanded and preserves only explicit collapse', () => {
+    // Regression: the first async snapshot must expose the question, not hide it.
+    const card = askCard('async-visible');
+    card.request.delivery = 'async';
+    prunePendingInteractionCollapse('session', [card], AUTHORITATIVE);
+    expect(getCollapsedPendingRequestIds('session')).toEqual([]);
+    togglePendingInteractionCollapse('session', 'async-visible');
+    const next = askCard('async-next');
+    next.request.delivery = 'async';
+    prunePendingInteractionCollapse('session', [card, next], AUTHORITATIVE);
+    expect(getCollapsedPendingRequestIds('session')).toEqual(['async-visible']);
+    togglePendingInteractionCollapse('session', 'async-visible');
+    prunePendingInteractionCollapse('session', [card, next], AUTHORITATIVE);
+    expect(getCollapsedPendingRequestIds('session')).toEqual([]);
+  });
   it('keeps the collapse intent across page unmount and remount', () => {
     // 「收起 → 离开任务(页面卸载) → 再进来」在 store 层就是「写入 → 重新读取」:
     // 契约要求同一条仍在 pending 的请求依旧是收起的,不能因为页面重挂载又展开占满屏。
@@ -96,9 +112,22 @@ describe('pendingInteractionCollapseStore', () => {
     const sessionScreenSource = readFileSync(resolve(process.cwd(), 'app/sessions/[sessionId].tsx'), 'utf8');
 
     // 页面组件不得再自持收起态:它会随「离开任务」卸载一起丢(#1493 review)。
-    expect(sessionScreenSource).toContain('useCollapsedPendingRequestIds(sessionId)');
-    expect(sessionScreenSource).toContain('prunePendingInteractionCollapse(sessionId, pending, {');
-    expect(sessionScreenSource).not.toContain('setCollapsedPendingRequestIds');
-    expect(sessionScreenSource).not.toContain('useState<readonly string[]>([])');
+    const tree = ts.createSourceFile('session.tsx', sessionScreenSource, ts.ScriptTarget.Latest, true, ts.ScriptKind.TSX);
+    let read: ts.Expression | undefined, prune: ts.Expression | undefined;
+    function visit(node: ts.Node) {
+      if (ts.isVariableDeclaration(node) && node.name.getText(tree) === 'collapsedPendingRequestIds') read = node.initializer;
+      if (ts.isCallExpression(node) && node.expression.getText(tree) === 'prunePendingInteractionCollapse') prune = node;
+      ts.forEachChild(node, visit);
+    }
+    visit(tree);
+    if (!read || !prune) throw new Error('Missing production collapse store consumers');
+    const readPage = new Function('useCollapsedPendingRequestIds', 'sessionId', `return (${read.getText(tree)});`);
+    const prunePage = new Function('prunePendingInteractionCollapse', 'sessionId', 'pending', 'pendingInteractionsAuthoritative', `${prune.getText(tree)};`);
+    togglePendingInteractionCollapse('session-1', 'ask-1');
+    expect(readPage(getCollapsedPendingRequestIds, 'session-1')).toEqual(['ask-1']);
+    prunePage(prunePendingInteractionCollapse, 'session-1', [], false);
+    expect(readPage(getCollapsedPendingRequestIds, 'session-1')).toEqual(['ask-1']);
+    prunePage(prunePendingInteractionCollapse, 'session-1', [], true);
+    expect(readPage(getCollapsedPendingRequestIds, 'session-1')).toEqual([]);
   });
 });

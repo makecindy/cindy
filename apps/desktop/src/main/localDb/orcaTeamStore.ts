@@ -1,13 +1,20 @@
 import { BrowserWindow } from 'electron';
-import { and, desc, eq, inArray, ne, sql } from 'drizzle-orm';
+import { and, desc, eq, gt, inArray, isNotNull, isNull, ne, sql } from 'drizzle-orm';
 import { createId } from '@paralleldrive/cuid2';
+import { orcaWorkerSessionTitle } from '@cindy/maker-shared/orca-team';
+import type { OrcaRemotePendingReport } from '../../shared/orcaRemoteWorker.js';
+import { parseOrcaRemoteLead } from '../../shared/orcaRemoteWorker.js';
 
-import { getDbClient } from './client/current.js';
-import { orcaWorkers, orcaTeams, sessions } from './schema.js';
+import { getDbClient, getCurrentDbClientSnapshot, type CurrentDbClientSnapshot } from './client/current.js';
+import type { OrcaRemoteWorkerProxySessionSeed } from './client/tx/types.js';
+import { orcaWorkers, orcaTeams, orcaWorkerCreationReservations, orcaRemoteOpens, sessions } from './schema.js';
 import { createLogger } from '../logger.js';
 import { throwIpcError } from '../utils/ipcValidate.js';
 import { tapWindowBroadcast } from '../device-link/broadcast-tap.js';
 import { notifyAgentIslandSessionPatch } from './agentIslandSessionPatch.js';
+import { withSessionRouteLock, withSessionRouteLocks } from './sessionRouteLock.js';
+import { cleanupSessionRuntimeForTerminalStatus } from './sessionRuntimeCleanup.js';
+import { compactSessionToolResultsBestEffort } from './toolResultCompaction.js';
 
 const log = createLogger('orca-team-store');
 
@@ -55,9 +62,35 @@ export interface OrcaWorkerRecord {
     model: string;
     effort: string;
     permissionMode: string;
-    fastMode: boolean;
+    fastMode: boolean | 'ultrafast';
     sdkSessionId?: string;
+    /** Worker 的 Agent 在另一台电脑或分享上运行(远程供应商)；null = 任务所在电脑。旧端缺省。 */
+    agentDeviceId?: string | null;
   };
+  /**
+   * Worker 在同账号另一台电脑运行时的运行设备与那台上的真实任务 id；缺省 = 本机 Worker。
+   * 此时 sessionId / session 指本机不跑 Agent 的代理任务行。
+   */
+  executionDevice?: {
+    deviceId: string;
+    remoteSessionId: string;
+    /** 以下为运行期投影(本机轮询所得)，未装配宿主时缺省。 */
+    deviceName?: string;
+    reachable?: boolean;
+    /** 运行设备上的工作目录；尚未读到时缺省。 */
+    workingDir?: string;
+  };
+}
+
+/** 远端 Worker 的运行期状态由宿主注入(轮询所得)，读模型投影时附带，不落库。 */
+type RemoteWorkerStatusProvider = (
+  proxySessionId: string,
+  deviceId: string,
+) => { deviceName: string; reachable: boolean; workingDir?: string };
+let remoteWorkerStatusProvider: RemoteWorkerStatusProvider | null = null;
+
+export function setRemoteWorkerStatusProvider(provider: RemoteWorkerStatusProvider | null): void {
+  remoteWorkerStatusProvider = provider;
 }
 
 export interface OrcaWorkerLinkRecord {
@@ -73,7 +106,7 @@ export interface OrcaWorkerLinkRecord {
     providerId?: string | null;
     effort: string;
     permissionMode: string;
-    fastMode: boolean;
+    fastMode: boolean | 'ultrafast';
     sdkSessionId?: string;
     title: string;
     /** SSH 远端 lead 的 host id;bridge rehydrate 必须带回 createSession。 */
@@ -199,6 +232,47 @@ export async function getActiveTeamByLead(
 }
 
 /**
+ * #3555:判定 active team 是否为「初始化被进程退出打断」遗留的孤儿。
+ * 判据取最保守的一档:该 team 从未挂上任何 worker 行(任意状态,含归档——
+ * 全员归档的 team 是用户可继续 create_worker 的合法状态,不算孤儿),且没有
+ * 仍在租期内的创建 reservation(有则说明另一进程正在为它建 worker)。两条都
+ * 满足的 team 不可能承载任何用户状态,调用方可安全按 failed 收口重新启用。
+ */
+/** #3555 review:太年轻的 team 视为「可能仍在别处初始化」,不判孤儿。 */
+const ORPHAN_TEAM_MIN_AGE_MS = 60_000;
+
+export async function isOrphanedTeamInit(teamId: string): Promise<boolean> {
+  const db = getDbClient().drizzle;
+  // 并发初始化兜底(同进程窗口已由 lifecycle 的 in-flight 集合覆盖,这里
+  // 挡住其余场景):创建后不足 ORPHAN_TEAM_MIN_AGE_MS 的 team 不判孤儿——
+  // 进程中断遗留的孤儿在用户重启重试时天然老于该地板,收敛性不受影响。
+  const [team] = await db
+    .select({ createdAt: orcaTeams.createdAt })
+    .from(orcaTeams)
+    .where(eq(orcaTeams.id, teamId))
+    .limit(1);
+  if (!team) return false;
+  if (Date.now() - team.createdAt < ORPHAN_TEAM_MIN_AGE_MS) return false;
+  const [worker] = await db
+    .select({ id: orcaWorkers.id })
+    .from(orcaWorkers)
+    .where(eq(orcaWorkers.teamId, teamId))
+    .limit(1);
+  if (worker) return false;
+  const [reservation] = await db
+    .select({ id: orcaWorkerCreationReservations.id })
+    .from(orcaWorkerCreationReservations)
+    .where(
+      and(
+        eq(orcaWorkerCreationReservations.teamId, teamId),
+        gt(orcaWorkerCreationReservations.expiresAt, Date.now()),
+      ),
+    )
+    .limit(1);
+  return !reservation;
+}
+
+/**
  * F-COLLAB: 直接插入新的 active team。
  * 跟 createOrGetTeamForLead 不同 — 不查 existing,任何已有的同 lead team
  * 必须先被显式 markTeamEnded(completed/cancelled/failed)。调用方 (OrcaLifecycleService)
@@ -245,21 +319,24 @@ export async function markTeamEnded(
  * sessions.status='archived' 让 sidebar 自然隐藏(其他列表 / 历史搜索仍可查到)。
  * orca_role 字段保留 'worker' 不动 — 历史上下文识别需要它。
  */
-export async function archiveWorkersByTeam(teamId: string): Promise<string[]> {
-  const db = getDbClient().drizzle;
-  const rows = await db
-    .select({ sessionId: orcaWorkers.sessionId })
-    .from(orcaWorkers)
-    .where(eq(orcaWorkers.teamId, teamId));
-  const ids = rows.map((r) => r.sessionId);
-  if (ids.length === 0) return [];
-  const now = Date.now();
-  await db
-    .update(sessions)
-    .set({ status: 'archived', updatedAt: now })
-    .where(sql`${sessions.id} IN (${sql.join(ids.map((id) => sql`${id}`), sql`, `)})`);
-  for (const id of ids) broadcastSessionPatch(id, { status: 'archived' });
-  return ids;
+export async function archiveWorkersByTeam(teamId: string, beforeMutation?: () => Promise<void>): Promise<string[]> {
+  const client = getDbClient();
+  const candidateIds = await listActiveWorkerSessionIdsForTeam(teamId);
+  const updatedIds = await withSessionRouteLocks(candidateIds, async () => {
+    await beforeMutation?.();
+    const ids = await client.tx('orca.archiveWorkersByTeam', {
+      teamId,
+      sessionIds: candidateIds,
+      now: Date.now(),
+    });
+    for (const id of ids) cleanupSessionRuntimeForTerminalStatus(id, 'archived');
+    return ids;
+  });
+  for (const id of updatedIds) {
+    broadcastSessionPatch(id, { status: 'archived' });
+    void compactSessionToolResultsBestEffort({ client, sessionId: id });
+  }
+  return updatedIds;
 }
 
 /**
@@ -290,38 +367,25 @@ export async function markWorkersStatusByTeam(
  */
 export async function reconcileInactiveTeamWorkersForLead(
   leadSessionId: string,
+  beforeMutation?: () => Promise<void>,
 ): Promise<string[]> {
-  const db = getDbClient().drizzle;
-  const teamRows = await db
-    .select({ id: orcaTeams.id })
-    .from(orcaTeams)
-    .where(and(eq(orcaTeams.leadSessionId, leadSessionId), ne(orcaTeams.status, 'active')));
-  const teamIds = teamRows.map((r) => r.id);
-  if (teamIds.length === 0) return [];
-
-  // 这些非 active team 下仍 active 的孤儿 worker session。只取 status='active':已 archived 的
-  // 无需再动,已被用户软删除的 status='deleted' 必须原样保留(不能借 reconcile 复活)。
-  const workerRows = await db
-    .select({ sessionId: orcaWorkers.sessionId })
-    .from(orcaWorkers)
-    .innerJoin(sessions, eq(orcaWorkers.sessionId, sessions.id))
-    .where(and(inArray(orcaWorkers.teamId, teamIds), eq(sessions.status, 'active')));
-  const ids = workerRows.map((r) => r.sessionId);
-
-  const now = Date.now();
-  // orca_workers 收敛 done(对齐 markWorkersStatusByTeam;已 done 的重写无副作用)。
-  await db
-    .update(orcaWorkers)
-    .set({ status: 'done', updatedAt: now })
-    .where(inArray(orcaWorkers.teamId, teamIds));
-
-  if (ids.length === 0) return [];
-  await db
-    .update(sessions)
-    .set({ status: 'archived', updatedAt: now })
-    .where(inArray(sessions.id, ids));
-  for (const id of ids) broadcastSessionPatch(id, { status: 'archived' });
-  return ids;
+  const client = getDbClient();
+  const candidateIds = await listActiveWorkerSessionIdsForInactiveTeams(leadSessionId);
+  const updatedIds = await withSessionRouteLocks(candidateIds, async () => {
+    await beforeMutation?.();
+    const ids = await client.tx('orca.reconcileInactiveTeamWorkersForLead', {
+      leadSessionId,
+      sessionIds: candidateIds,
+      now: Date.now(),
+    });
+    for (const id of ids) cleanupSessionRuntimeForTerminalStatus(id, 'archived');
+    return ids;
+  });
+  for (const id of updatedIds) {
+    broadcastSessionPatch(id, { status: 'archived' });
+    void compactSessionToolResultsBestEffort({ client, sessionId: id });
+  }
+  return updatedIds;
 }
 
 export async function getTeamByWorkerSession(
@@ -381,6 +445,76 @@ export async function addOrUpdateWorker(input: {
   const worker = workers.find((w) => w.id === input.id || w.sessionId === input.sessionId);
   if (!worker) throwIpcError('INTERNAL', `Orca worker ${input.id} was not found after save`);
   return worker;
+}
+
+/** Worker label 唯一性由 uniq_orca_workers_team_label 保证；约束错误翻译成稳定业务码。 */
+function isWorkerLabelConstraintError(err: unknown): boolean {
+  if (!(err instanceof Error)) return false;
+  return err.message.includes('uniq_orca_workers_team_label');
+}
+
+export type OrcaWorkerIdentityUpdateResult =
+  | { ok: true }
+  | { ok: false; errorCode: 'NOT_FOUND' | 'DUPLICATE_LABEL' };
+
+/**
+ * 更新 worker 的 role/label；当 worker session 的标题仍是「上一个生成标题」时同步改写。
+ *
+ * 标题同步只认 `Worker · role · label` 这一生成形态：用户自定义/重命名过的标题保持不动。
+ * label 唯一性由 `uniq_orca_workers_team_label` 在 UPDATE 时最终把关；已归档／已删除任务的 Worker
+ * 先让出同名 label（改成带自身 id 的唯一值），所以只会与仍在团队里的 Worker 冲突。
+ */
+export async function updateWorkerIdentity(input: {
+  workerId: string;
+  role: string;
+  label: string | null;
+  previousRole: string;
+  previousLabel: string | null;
+}): Promise<OrcaWorkerIdentityUpdateResult> {
+  const db = getDbClient().drizzle;
+  const now = Date.now();
+  const [existing] = await db
+    .select({ id: orcaWorkers.id, sessionId: orcaWorkers.sessionId, teamId: orcaWorkers.teamId })
+    .from(orcaWorkers)
+    .where(eq(orcaWorkers.id, input.workerId))
+    .limit(1);
+  if (!existing) return { ok: false, errorCode: 'NOT_FOUND' };
+
+  if (input.label !== null) {
+    // 与创建时一致（orca.reserveWorkerCreation）：已归档／已删除任务的 Worker 让出名字。
+    await db
+      .update(orcaWorkers)
+      .set({ label: sql`${orcaWorkers.label} || '~' || ${orcaWorkers.id}`, updatedAt: now })
+      .where(and(
+        eq(orcaWorkers.teamId, existing.teamId),
+        ne(orcaWorkers.id, input.workerId),
+        sql`lower(${orcaWorkers.label}) = ${input.label.toLowerCase()}`,
+        sql`${orcaWorkers.sessionId} IN (SELECT id FROM sessions WHERE status != 'active')`,
+      ));
+  }
+
+  try {
+    await db
+      .update(orcaWorkers)
+      .set({ role: input.role, label: input.label, updatedAt: now })
+      .where(eq(orcaWorkers.id, input.workerId));
+  } catch (err) {
+    if (isWorkerLabelConstraintError(err)) return { ok: false, errorCode: 'DUPLICATE_LABEL' };
+    throw err;
+  }
+
+  // previousLabel 为空（旧行/已清空）时无法证明旧标题是生成标题，跳过标题同步。
+  if (input.label !== null && input.previousLabel !== null) {
+    const previousTitle = orcaWorkerSessionTitle(input.previousRole, input.previousLabel);
+    const nextTitle = orcaWorkerSessionTitle(input.role, input.label);
+    const updated = await db
+      .update(sessions)
+      .set({ title: nextTitle, updatedAt: now })
+      .where(and(eq(sessions.id, existing.sessionId), eq(sessions.title, previousTitle)))
+      .returning({ id: sessions.id });
+    if (updated.length > 0) broadcastSessionPatch(existing.sessionId, { title: nextTitle });
+  }
+  return { ok: true };
 }
 
 export async function listWorkersByLead(
@@ -449,7 +583,7 @@ export async function getWorkerLink(input: {
       providerId: row.leadSession.providerId ?? null,
       effort: row.leadSession.effort,
       permissionMode: row.leadSession.permissionMode,
-      fastMode: !!row.leadSession.fastMode,
+      fastMode: (row.leadSession.fastMode ?? false),
       sdkSessionId: row.leadSession.sdkSessionId ?? undefined,
       title: row.leadSession.title,
       remoteHostId: row.leadSession.remoteHostId ?? null,
@@ -465,6 +599,14 @@ export async function getSessionOrcaRole(sessionId: string): Promise<OrcaRole | 
     .where(eq(sessions.id, sessionId))
     .limit(1);
   return row?.orcaRole === 'lead' || row?.orcaRole === 'worker' ? row.orcaRole : null;
+}
+
+/** Persisted execution-device identity; never inferred from model-supplied vendor options. */
+export async function getRemoteOrcaSession(sessionId: string) {
+  const [row] = await getDbClient().drizzle
+    .select({ status: sessions.status, orcaRemoteLead: sessions.orcaRemoteLead })
+    .from(sessions).where(eq(sessions.id, sessionId)).limit(1);
+  return row ? { status: row.status, orcaRemoteLead: parseOrcaRemoteLead(row.orcaRemoteLead) } : null;
 }
 
 /**
@@ -515,16 +657,19 @@ export async function restoreWorkerDoneIfIdle(workerId: string): Promise<boolean
 }
 
 /**
- * create_worker 派发失败补偿：移除尚未成功 dispatch 的 worker link，并归档对应 session。
+ * create_worker 派发失败补偿：归档代理并移除 worker link；未释放的远端路由留待补发，
+ * 通过已归档 session 的空 orcaRole 区分回滚清理与正常保留历史的协同结束。
  * 这条路径只服务失败清理，不影响正常协同结束时保留历史 worker link 的语义。
  */
 export async function removeWorker(workerId: string): Promise<void> {
-  const removedSessionId = await getDbClient().tx('orca.removeWorker', {
+  const client = getDbClient();
+  const removedSessionId = await client.tx('orca.removeWorker', {
     workerId,
     now: Date.now(),
   });
   if (removedSessionId) {
     broadcastSessionPatch(removedSessionId, { status: 'archived', orcaRole: null });
+    void compactSessionToolResultsBestEffort({ client, sessionId: removedSessionId });
   }
 }
 
@@ -542,19 +687,70 @@ export async function setWorkerFocus(teamId: string, workerId: string): Promise<
 /**
  * 归档单个 worker session, 不牵连同 team 其他 worker。
  */
-export async function archiveSingleWorkerSession(sessionId: string): Promise<void> {
-  const db = getDbClient().drizzle;
-  const now = Date.now();
-  await db.update(sessions).set({ status: 'archived', updatedAt: now }).where(eq(sessions.id, sessionId));
-  broadcastSessionPatch(sessionId, { status: 'archived' });
+export async function archiveSingleWorkerSession(sessionId: string, beforeMutation?: () => Promise<void>): Promise<void> {
+  const client = getDbClient();
+  const changed = await withSessionRouteLock(sessionId, async () => {
+    await beforeMutation?.();
+    const result = await client.drizzle
+      .update(sessions)
+      .set({ status: 'archived', updatedAt: Date.now() })
+      .where(and(eq(sessions.id, sessionId), ne(sessions.status, 'deleted')))
+      .run();
+    if (result.changes === 0) return false;
+    cleanupSessionRuntimeForTerminalStatus(sessionId, 'archived');
+    return true;
+  });
+  if (changed) {
+    broadcastSessionPatch(sessionId, { status: 'archived' });
+    void compactSessionToolResultsBestEffort({ client, sessionId });
+  }
+}
+
+async function listActiveWorkerSessionIdsForTeam(teamId: string): Promise<string[]> {
+  const rows = await getDbClient().drizzle
+    .select({ id: sessions.id })
+    .from(orcaWorkers)
+    .innerJoin(sessions, eq(orcaWorkers.sessionId, sessions.id))
+    .where(and(eq(orcaWorkers.teamId, teamId), eq(sessions.status, 'active')))
+    .orderBy(sessions.id);
+  return rows.map((row) => row.id);
+}
+
+async function listActiveWorkerSessionIdsForInactiveTeams(
+  leadSessionId: string,
+): Promise<string[]> {
+  const rows = await getDbClient().drizzle
+    .select({ id: sessions.id })
+    .from(orcaWorkers)
+    .innerJoin(orcaTeams, eq(orcaWorkers.teamId, orcaTeams.id))
+    .innerJoin(sessions, eq(orcaWorkers.sessionId, sessions.id))
+    .where(and(
+      eq(orcaTeams.leadSessionId, leadSessionId),
+      ne(orcaTeams.status, 'active'),
+      eq(sessions.status, 'active'),
+    ))
+    .orderBy(sessions.id);
+  return rows.map((row) => row.id);
 }
 
 export async function setSessionOrcaRole(
   sessionId: string,
   role: OrcaRole | null,
+  options: { owner?: CurrentDbClientSnapshot; assertCurrent?: () => void } = {},
 ): Promise<void> {
-  const db = getDbClient().drizzle;
+  const owner = options.owner ?? getCurrentDbClientSnapshot();
+  const assertCurrent = () => {
+    options.assertCurrent?.();
+    if (!owner || getCurrentDbClientSnapshot() !== owner) {
+      throw new Error('[REMOTE_AGENT_EXPIRED] The task owner has changed.');
+    }
+  };
+  assertCurrent();
+  const db = owner!.client.drizzle;
   await db.update(sessions).set({ orcaRole: role }).where(eq(sessions.id, sessionId));
+  // The issued write belongs to the captured DB. Never broadcast its result
+  // into another account, or after the owning creation has been cancelled.
+  assertCurrent();
   broadcastSessionPatch(sessionId, { orcaRole: role });
 }
 
@@ -605,10 +801,184 @@ function workerToRecord(
       model: session.model,
       effort: session.effort,
       permissionMode: session.permissionMode,
-      fastMode: !!session.fastMode,
+      fastMode: (session.fastMode ?? false),
       sdkSessionId: session.sdkSessionId ?? undefined,
+      agentDeviceId: session.agentDeviceId && !session.remoteHostId ? session.agentDeviceId : null,
     },
+    ...(worker.executionDeviceId && worker.remoteSessionId
+      ? {
+          executionDevice: {
+            deviceId: worker.executionDeviceId,
+            remoteSessionId: worker.remoteSessionId,
+            ...(remoteWorkerStatusProvider?.(worker.sessionId, worker.executionDeviceId) ?? {}),
+          },
+        }
+      : {}),
   };
+}
+
+// ─── 协同远端 Worker(运行在同账号另一台电脑) ─────────────────────────────────
+
+export interface RemoteWorkerRow {
+  workerId: string;
+  teamId: string;
+  leadSessionId: string;
+  proxySessionId: string;
+  deviceId: string;
+  remoteSessionId: string;
+  lastBridgedMessageId: string | null;
+  pendingReport: OrcaRemotePendingReport | null;
+  remoteStopConfirmedAt: number | null;
+}
+
+/** Worker、远端路由、代理身份和 open 收据在同一事务内提交。 */
+export async function addRemoteWorker(input: {
+  workerId: string; teamId: string; proxySessionId: string;
+  deviceId: string; remoteSessionId: string; label: string; role: string;
+  proxySession?: OrcaRemoteWorkerProxySessionSeed;
+}): Promise<void> {
+  await getDbClient().tx('orca.upsertWorker', {
+    id: input.workerId, teamId: input.teamId, sessionId: input.proxySessionId,
+    label: input.label, role: input.role, status: 'idle', focused: false,
+    remoteExecution: { deviceId: input.deviceId, remoteSessionId: input.remoteSessionId, proxySession: input.proxySession },
+    now: Date.now(),
+  });
+}
+
+export async function setWorkerRemoteExecution(
+  workerId: string,
+  input: { deviceId: string; remoteSessionId: string },
+): Promise<void> {
+  const db = getDbClient();
+  await db
+    .drizzle.update(orcaWorkers)
+    .set({ executionDeviceId: input.deviceId, remoteSessionId: input.remoteSessionId, updatedAt: Date.now() })
+    .where(eq(orcaWorkers.id, workerId));
+  await db.drizzle.delete(orcaRemoteOpens).where(eq(orcaRemoteOpens.remoteSessionId, input.remoteSessionId));
+}
+
+export async function saveWorkerRemoteReport(
+  workerId: string,
+  pending: OrcaRemotePendingReport | null,
+  lastBridgedMessageId?: string,
+  markWorkerDone = false,
+): Promise<void> {
+  const db = getDbClient();
+  await db
+    .drizzle.update(orcaWorkers)
+    .set({ pendingRemoteReport: pending ? JSON.stringify(pending) : null,
+      ...(lastBridgedMessageId ? { lastBridgedMessageId } : {}),
+      // One SQL update commits retirement and status together; neither can succeed alone.
+      ...(markWorkerDone ? { status: 'done' as const, updatedAt: Date.now() } : {}) })
+    .where(eq(orcaWorkers.id, workerId));
+}
+
+export async function saveRemoteWorkerOpen(deviceId: string, remoteSessionId: string): Promise<void> {
+  await getDbClient().drizzle.insert(orcaRemoteOpens).values({ deviceId, remoteSessionId, createdAt: Date.now() });
+}
+
+export async function removeRemoteWorkerOpen(remoteSessionId: string): Promise<void> {
+  await getDbClient().drizzle.delete(orcaRemoteOpens).where(eq(orcaRemoteOpens.remoteSessionId, remoteSessionId));
+}
+
+export async function listOrphanRemoteWorkerOpens(remoteSessionId?: string) {
+  return getDbClient().drizzle.select({ deviceId: orcaRemoteOpens.deviceId,
+    remoteSessionId: orcaRemoteOpens.remoteSessionId, createdAt: orcaRemoteOpens.createdAt })
+    .from(orcaRemoteOpens).leftJoin(orcaWorkers, and(
+      eq(orcaWorkers.remoteSessionId, orcaRemoteOpens.remoteSessionId),
+      eq(orcaWorkers.executionDeviceId, orcaRemoteOpens.deviceId),
+    )).where(and(isNull(orcaWorkers.id),
+      remoteSessionId ? eq(orcaRemoteOpens.remoteSessionId, remoteSessionId) : undefined));
+}
+
+export async function markWorkerRemoteStopConfirmed(workerId: string, at = Date.now()): Promise<void> {
+  await getDbClient().drizzle.update(orcaWorkers)
+    .set({ remoteStopConfirmedAt: at }).where(eq(orcaWorkers.id, workerId));
+}
+
+export async function getWorkerRemoteReleaseState(workerId: string) {
+  const [row] = await getDbClient().drizzle.select({
+    remoteStopConfirmedAt: orcaWorkers.remoteStopConfirmedAt, remoteReleasedAt: orcaWorkers.remoteReleasedAt,
+    sessionStatus: sessions.status, orcaRole: sessions.orcaRole,
+  }).from(orcaWorkers).innerJoin(sessions, eq(sessions.id, orcaWorkers.sessionId))
+    .where(eq(orcaWorkers.id, workerId)).limit(1);
+  return row ? { remoteStopConfirmedAt: row.remoteStopConfirmedAt, remoteReleasedAt: row.remoteReleasedAt,
+    removeAfterRelease: row.sessionStatus !== 'active' && row.orcaRole === null } : null;
+}
+
+function parsePendingReport(raw: string | null): OrcaRemotePendingReport | null {
+  if (!raw) return null;
+  try {
+    const value = JSON.parse(raw) as OrcaRemotePendingReport;
+    if (!Array.isArray(value.clientIds) || value.clientIds.length === 0 || value.clientIds.length > 64 ||
+      !value.clientIds.every((id) => typeof id === 'string' && id.length > 0) ||
+      !(value.baselineMessageId === null || typeof value.baselineMessageId === 'string')) return null;
+    return { clientIds: value.clientIds, baselineMessageId: value.baselineMessageId };
+  } catch { return null; }
+}
+
+export async function markWorkerRemoteReleased(workerId: string, at = Date.now()): Promise<void> {
+  await getDbClient()
+    .drizzle.update(orcaWorkers)
+    .set({ remoteReleasedAt: at })
+    .where(eq(orcaWorkers.id, workerId));
+}
+
+function remoteWorkerRow(
+  worker: typeof orcaWorkers.$inferSelect,
+  team: typeof orcaTeams.$inferSelect,
+): RemoteWorkerRow | null {
+  if (!worker.executionDeviceId || !worker.remoteSessionId) return null;
+  return {
+    workerId: worker.id,
+    teamId: worker.teamId,
+    leadSessionId: team.leadSessionId,
+    proxySessionId: worker.sessionId,
+    deviceId: worker.executionDeviceId,
+    remoteSessionId: worker.remoteSessionId,
+    lastBridgedMessageId: worker.lastBridgedMessageId,
+    pendingReport: parsePendingReport(worker.pendingRemoteReport),
+    remoteStopConfirmedAt: worker.remoteStopConfirmedAt,
+  };
+}
+
+/** 仍在协同中的远端 Worker(团队与代理任务都处于活跃状态)，启动时据此恢复轮询。 */
+export async function listActiveRemoteWorkers(): Promise<RemoteWorkerRow[]> {
+  const rows = await getDbClient()
+    .drizzle.select({ worker: orcaWorkers, team: orcaTeams })
+    .from(orcaWorkers)
+    .innerJoin(orcaTeams, eq(orcaTeams.id, orcaWorkers.teamId))
+    .innerJoin(sessions, eq(sessions.id, orcaWorkers.sessionId))
+    .where(and(
+      eq(orcaTeams.status, 'active'),
+      eq(sessions.status, 'active'),
+      isNotNull(orcaWorkers.executionDeviceId),
+    ));
+  return rows.flatMap((row) => remoteWorkerRow(row.worker, row.team) ?? []);
+}
+
+/** 已结束协同(归档或团队结束)但还没通知到运行设备的远端 Worker，重连后补发。 */
+export async function listUnreleasedEndedRemoteWorkers(): Promise<RemoteWorkerRow[]> {
+  const rows = await getDbClient()
+    .drizzle.select({ worker: orcaWorkers, team: orcaTeams, session: sessions })
+    .from(orcaWorkers)
+    .innerJoin(orcaTeams, eq(orcaTeams.id, orcaWorkers.teamId))
+    .innerJoin(sessions, eq(sessions.id, orcaWorkers.sessionId))
+    .where(and(isNotNull(orcaWorkers.executionDeviceId), isNull(orcaWorkers.remoteReleasedAt)));
+  return rows
+    .filter((row) => row.team.status !== 'active' || row.session.status !== 'active')
+    .flatMap((row) => remoteWorkerRow(row.worker, row.team) ?? []);
+}
+
+/** 按代理任务 id 查远端 Worker；不论团队是否仍活跃。 */
+export async function getRemoteWorkerByProxySession(proxySessionId: string): Promise<RemoteWorkerRow | null> {
+  const [row] = await getDbClient()
+    .drizzle.select({ worker: orcaWorkers, team: orcaTeams })
+    .from(orcaWorkers)
+    .innerJoin(orcaTeams, eq(orcaTeams.id, orcaWorkers.teamId))
+    .where(eq(orcaWorkers.sessionId, proxySessionId))
+    .limit(1);
+  return row ? remoteWorkerRow(row.worker, row.team) : null;
 }
 
 function fromDbAgentKind(agentKind: string): MakerAgentKind {

@@ -7,10 +7,47 @@ const readTextLf = (...args: Parameters<typeof readFileSync>): string =>
   String(readFileSync(...args)).replace(/\r\n/g, '\n');
 
 describe('mobile session header desktop-first surface', () => {
+  it('preserves title status in the iOS branch, not only in the legacy header', () => {
+    const source = readTextLf(resolve(process.cwd(), 'app/sessions/[sessionId].tsx'), 'utf8');
+    const start = source.indexOf('nativeHeader ? <SessionHeaderNativeTitle');
+    const nativeBranch = source.slice(start, source.indexOf('/> : (', start));
+    expect(start).toBeGreaterThan(-1);
+    for (const prop of ['syncing={syncing}', 'syncingImmediately={syncingImmediately}',
+      'pinned={!messageOnly && !!currentSession?.pinnedAt}', 'notice={notice}']) {
+      expect(nativeBranch).toContain(prop);
+    }
+    const native = readTextLf(resolve(process.cwd(), 'src/session/SessionHeaderNativeControls.ios.tsx'), 'utf8');
+    expect(native).toContain('<QuietSyncIndicator active={syncing} immediate={syncingImmediately} />');
+    expect(native).toContain('{pinned ? <Pin');
+    expect(native).toContain('testID="session.headerNotice"');
+    expect(native).toContain('flexShrink: 1');
+  });
+
+  it('shows task tags right after the title in every header branch', () => {
+    const source = readTextLf(resolve(process.cwd(), 'app/sessions/[sessionId].tsx'), 'utf8');
+    const titles = source.split('<SessionHeaderNativeTitle').slice(1)
+      .map((branch) => branch.slice(0, branch.indexOf('/>')));
+    // 竖屏原生标题栏与横屏／折叠屏系统标题栏都要带标签,不能只有一条分支显示。
+    expect(titles).toHaveLength(2);
+    for (const title of titles) {
+      expect(title).toContain('tags={isDeviceAccessRevoked ? undefined : currentSession?.tags}');
+      expect(title).toContain('onTagsPress={onOpenSettings}');
+    }
+    const native = readTextLf(resolve(process.cwd(), 'src/session/SessionHeaderNativeControls.ios.tsx'), 'utf8');
+    const titleRow = native.slice(native.indexOf('{label}'), native.indexOf('<QuietSyncIndicator'));
+    expect(titleRow).toContain('<TaskTagDots');
+  });
+
   it('releases the new-session handoff heavy topic when the session screen unmounts', () => {
     const source = readTextLf(resolve(process.cwd(), 'app/sessions/[sessionId].tsx'), 'utf8');
+    const layout = readTextLf(resolve(process.cwd(), 'src/session/SessionTaskLayout.tsx'), 'utf8');
+    const gate = readTextLf(resolve(process.cwd(), 'src/session/CindyMakeSessionGate.tsx'), 'utf8');
 
-    expect(source).toMatch(
+    expect(source).toContain('<SessionTaskLayout>');
+    expect(layout).toMatch(/<CindyMakeSessionGate\b[^>]*\bownsSessionSubscription[\s>]/);
+    expect(gate).toContain('useEffect(() => () => {');
+    expect(gate).toContain('if (!ownsSessionSubscription || !deviceId || !sessionId) return;');
+    expect(gate).toMatch(
       /unsubscribe\(`session:\$\{sessionId\}`, deviceId, \['sessions', `session:\$\{sessionId\}`\]\)/,
     );
   });
@@ -23,10 +60,11 @@ describe('mobile session header desktop-first surface', () => {
     expect(source).not.toContain('sessionHeaderIconBadgeText');
     expect(source).not.toContain('badge={');
     expect(source).not.toContain("if (queueCount > 0) return `队列 ${queueCount}`;");
-    expect(source).toContain("if (!session) return syncing ? i18n.t('session.screen.syncingSession') : null;\n  if (syncing) return i18n.t('session.screen.syncing');");
-    // 后台静默刷新:同步提示由 showSyncingIndicator gate —— 仅首次加载、还没有任何内容时显示,
-    // 已有 messages(重开已看过的会话)时后台对账静默,不再弹"正在同步"。
-    expect(source).toContain('const showSyncingIndicator = loading && messages.length === 0;');
+    expect(source).toContain('if (!session) return null;');
+    // Routine work uses the trailing title indicator, without an extra subtitle.
+    expect(source).toContain('const showSyncingIndicator = !showConnectionBanner && !showCachedHistoryNotice');
+    expect(source).toContain('<QuietSyncIndicator active={syncing} immediate={syncingImmediately} />');
+    expect(source).not.toContain("if (syncing) return i18n.t('session.screen.syncing');");
     expect(source).toContain("if (queuePaused) return i18n.t('session.screen.queuePausedNotice');\n  return null;");
     expect(source).toContain('attention ? (');
   });
@@ -36,22 +74,41 @@ describe('mobile session header desktop-first surface', () => {
 
     // 返回自愈:canGoBack 与真实栈不一致(reload 恢复深路由 / 重复压栈残留)时 GO_BACK
     // 会被静默吞掉,收敛到 useGuardedBack(back 后校验 pathname,没走成 replace 兜底)。
-    expect(source).toContain('const goBackToHome = useGuardedBack();');
+    expect(source).toContain('const goBackOneLevel = useGuardedBack();');
+    expect(source).toContain('const goBackToHome = companionChat && !companionEntry.threadRootSessionId ? backToTaskList : goBackOneLevel;');
     expect(source).toContain("import { useGuardedBack } from '@/utils/useGuardedBack';");
-    expect(source).toContain('onBack={goBackToHome}');
+    expect(source).toContain('onBack={sessionListDrawerOverlayMounted ? closeSessionListDrawer : goBackToHome}');
     expect(source).toContain('<Icon color={color} size={iconSize.action} strokeWidth={iconStroke.regular} />');
     expect(source).toContain('testID="session.controlsToggle"');
-    expect(source).toContain('const insets = useSafeAreaInsets();');
+    expect(source).toContain('const insets = adaptiveWindow.insets;');
     expect(source).toContain('<View style={styles.safeArea} testID="session.screen">');
     expect(source).not.toContain('<SafeAreaView style={styles.safeArea} testID="session.screen">');
     expect(source).not.toContain("import { BlurView } from 'expo-blur';");
-    expect(source).toContain("import { BlurBackdrop } from '@/session/BlurBackdrop';");
-    expect(source).toContain("function TranslucentBackdrop()");
-    expect(source).toContain("<TranslucentBackdrop />");
-    expect(source).toContain('return <BlurBackdrop intensity={40} overlayColor={colors.chatHeaderSurface} style={styles.translucentBackdrop} />;');
-    expect(source).toContain('<View onLayout={handleTopOverlayLayout} pointerEvents="box-none" style={styles.sessionChrome} testID="session.chrome">');
-    expect(source).toContain('<View style={[styles.sessionChromeContent, { paddingTop: insets.top }]}>');
-    expect(source).toContain("sessionChrome: {\n    left: 0,\n    overflow: 'hidden',\n    position: 'absolute',");
+    expect(source).toContain("import { BlurBackdrop, FLOATING_CHROME_BLUR_INTENSITY } from '@/session/BlurBackdrop';");
+    // iOS floats individual glass capsules over the message canvas.
+    expect(source).not.toContain('<TranslucentBackdrop />');
+    expect(source).not.toContain('colors.chatHeaderSurface');
+    expect(source).toContain('safeArea: { flex: 1, backgroundColor: colors.surface }');
+    const chromeStyle = source.slice(source.indexOf('  sessionChrome: {'), source.indexOf('  sessionChromeContent: {'));
+    // Android 顶栏与首页顶栏同一底:半透明 surface + 模糊,并经根浮层盖在常驻消息层之上。
+    expect(chromeStyle).toContain("backgroundColor: 'transparent'");
+    expect(source).toContain('<BlurBackdrop intensity={50} overlayColor={colors.surfaceTranslucent} />');
+    expect(source).toContain('<SessionChromeLayer');
+    expect(source).toContain("topInset={Platform.OS === 'android' ? 0 : topOverlayHeight}");
+    // 输入区同理:安卓整块经根浮层盖在消息层上,外框高度取键盘避让容器的实测高度。
+    expect(source).toContain("const androidFrostedComposer = Platform.OS === 'android' && !companionChat;");
+    expect(source).toContain('bottomInset={androidFrostedComposer ? 0 : bottomOverlayHeight}');
+    expect(source).toContain('height={keyboardAreaHeight ?? windowDimensions.height}');
+    expect(source).toContain('<View onLayout={handleKeyboardAreaLayout} pointerEvents="none" style={StyleSheet.absoluteFill} />');
+    expect(source).toContain('testID="session.composerFrost"');
+    expect(source).toContain('<View ref={topOverlayRef} onLayout={handleTopOverlayLayout} pointerEvents="box-none" style={styles.sessionChrome} testID="session.chrome">');
+    expect(source).toContain('<View style={[styles.sessionChromeContent, { paddingTop: horizontalSystemHeader ? nativeHeaderHeight : insets.top + (paneLayout.persistent ? spacing.lg : 0) }, companionChat && Platform.OS !== \'ios\' && { backgroundColor: colors.surface }]}>');
+    // iOS 临时任务列表抽屉放进独立窗口盖住系统栏;系统栏不随抽屉开合收起。
+    expect(source).toContain("aboveSystemBar={Platform.OS === 'ios'}");
+    expect(source).not.toContain('systemBarHidden');
+    expect(chromeStyle).toContain("position: 'absolute'");
+    // Let native glass press feedback extend beyond the 44pt iOS header.
+    expect(chromeStyle).toContain("overflow: Platform.OS === 'ios' ? 'visible' : 'hidden'");
     expect(source).toContain('sessionChromeContent: {');
     expect(source).not.toContain("colors.glassTint");
     expect(source).not.toContain("colors.glassHighlight");
@@ -68,66 +125,201 @@ describe('mobile session header desktop-first surface', () => {
     expect(source).not.toContain('minHeight: 54');
   });
 
-  it('switches the leading control to the session-list hamburger on wide-screen navigation', () => {
-    const source = readTextLf(resolve(process.cwd(), 'app/sessions/[sessionId].tsx'), 'utf8');
+  it('keeps narrow navigation back-only and the persistent Home column', () => {
+    const source = readTextLf(resolve(process.cwd(), 'app/sessions/[sessionId].tsx'), 'utf8')
+      + readTextLf(resolve(process.cwd(), 'src/session/useConversationTaskDrawer.ts'), 'utf8');
+    const layout = readTextLf(resolve(process.cwd(), 'src/session/SessionTaskLayout.tsx'), 'utf8');
 
-    // 宽屏(iPad / 折叠屏展开 / 横屏手机)导航形态:断点判定走 wideSessionNav 纯函数,
-    // 左上角三条杠替代返回,抽屉原地 replace 切任务;窄屏保持 ScreenBackButton(上一用例已锁)。
+    // 窄窗口仅保留返回；主页列仅在宽窗口常驻。
+    expect(source).toContain('onOpenSessionList={!paneLayout.persistent && wideSessionNav.enabled ? openSessionListDrawer : undefined}');
+    expect(source).toContain('setSessionListDrawerOverlayMounted(true);');
+    expect(source).toContain('setSessionListDrawerOpen(true);');
+    expect(source).toContain('session.sessionListButton');
+    expect(source).toContain('{sessionListButton ? <Stack.Toolbar.View hidesSharedBackground>{sessionListButton}</Stack.Toolbar.View> : null}');
     expect(source).toContain("import { buildWideSessionNavLayout } from '@/session/wideSessionNav';");
-    expect(source).toContain("import { SessionListDrawer } from '@/session/SessionListDrawer';");
-    // 按平台分闸(发布策略):iOS 只发 iPad,iPhone 横屏也保持返回键;安卓纯宽度闸。
+    expect(source).toContain("import { useConversationTaskDrawer } from '@/session/useConversationTaskDrawer';");
+    expect(source).toContain('switchDrawerSessionInPlace,');
+    expect(source).toContain("from '@/session/sessionDrawerNavigation';");
+    // 同一宽度计算兼容现有调用参数。
     expect(source).toContain('iosPad: Platform.OS === \'ios\' && Platform.isPad,');
     expect(source).toContain('platform: Platform.OS,');
-    expect(source).toContain('onOpenSessionList={wideSessionNav.enabled ? openSessionListDrawer : undefined}');
-    expect(source).toContain('icon={Menu}');
-    expect(source).toContain('testID="session.sessionListButton"');
-    expect(source).toContain('{onOpenSessionList ? (');
-    // 抽屉切任务是「原地切换」:replace 保持导航栈 [主页, 会话],不逐层压栈。
-    expect(source).toContain("pathname: '/sessions/[sessionId]'");
+    expect(source).toContain('{systemBack ? null : nativeHeader ? (');
+    expect(source).toContain('onBack={sessionListDrawerOverlayMounted ? closeSessionListDrawer : goBackToHome}');
+    expect(source).toContain('gestureEnabled: !sessionListDrawerOverlayMounted');
+    // 抽屉切任务只替换当前 route params：不压栈，也不派发会创建新 route key 的
+    // NativeStack REPLACE（后者正是 Android crash / 白屏仍存的生命周期入口）。
     expect(source).toContain('const handleDrawerSelectSession = useCallback((item: RemoteSessionListItem) => {');
-    expect(source).toContain('router.replace({');
-    // Android 原生换屏必须等 drawer overlay 完整卸载;三个导航入口共用同一延后队列。
+    const drawerSelectionStart = source.indexOf('const handleDrawerSelectSession = useCallback');
+    const drawerSelectionEnd = source.indexOf('// 前进导航防连点', drawerSelectionStart);
+    const drawerSelectionSource = source.slice(drawerSelectionStart, drawerSelectionEnd);
+    expect(drawerSelectionSource).toContain('switchDrawerSessionInPlace(navigation, destination);');
+    expect(drawerSelectionSource).not.toContain('router.replace');
+    expect(drawerSelectionSource).not.toContain("pathname: '/sessions/[sessionId]'");
+    // Root-owned drawers switch concurrently; route-local fallbacks retain their
+    // unmount fence. taskDrawerPresentation.test.tsx and
+    // conversationTaskDrawer.test.tsx exercise the two lifetimes.
     expect(source).toContain('const pendingDrawerNavigationRef = useRef<(() => void) | null>(null);');
     expect(source).toContain('const sessionListDrawerClosingRef = useRef(false);');
     expect(source).toContain('const [sessionListDrawerOverlayMounted, setSessionListDrawerOverlayMounted] = useState(false);');
     expect(source).toContain('const queueDrawerNavigation = useCallback((action: () => void) => {');
     // 纯关闭(遮罩/back/左滑/当前任务)的 pending 仍为空,必须由独立 closing 闸门
     // 同步锁住约 200ms 退场期;快速二次导航不能登记或改写首次关闭意图。
-    expect(source).toContain('if (sessionListDrawerClosingRef.current || pendingDrawerNavigationRef.current) return;');
-    expect(source).toContain('sessionListDrawerClosingRef.current = true;\n    pendingDrawerNavigationRef.current = action;');
-    expect(source).toContain('const closeSessionListDrawer = useCallback(() => {\n    if (sessionListDrawerClosingRef.current) return;\n    sessionListDrawerClosingRef.current = true;');
-    expect(source).toContain('if (targetSession.id === sessionId) {\n      closeSessionListDrawer();');
+    // The first intent and close-only gate are checked through the real hook in
+    // conversationTaskDrawer.test.tsx, without requiring adjacent assignments.
+    expect(source).toContain('const closeSessionListDrawer = useCallback(() => {\n    if (!sessionListDrawerOverlayMounted) return;\n    if (sessionListDrawerClosingRef.current) return;\n    sessionListDrawerClosingRef.current = true;');
+    // Same-task selection versus search navigation is exercised through the actual
+    // layout callback in sideChatTaskBoundary.test.tsx, rather than a source literal.
     expect(source).toContain('onClosed={handleSessionListDrawerClosed}');
-    expect(source).toContain('const action = pendingDrawerNavigationRef.current;\n    sessionListDrawerClosingRef.current = false;\n    if (!action) returnDrawerFocusAfterCloseRef.current = true;\n    setSessionListDrawerOverlayMounted(false);');
+    expect(source).toContain('const action = pendingDrawerNavigationRef.current;\n    sessionListDrawerClosingRef.current = false;\n    setSessionListDrawerOpen(false);\n    setSessionListDrawerPulling(false);\n    setSessionListDrawerOverlayMounted(false);');
     expect(source).toContain('pendingDrawerNavigationRef.current = null;\n    action();');
-    expect(source).toContain('queueDrawerNavigation(() => {\n      router.replace({');
+    expect(source).toContain('queueDrawerNavigation(() => {\n      // 必须早于 replaceParams');
     expect(source).toContain('queueDrawerNavigation(() => {\n      guardedPush({');
-    expect(source).toContain("queueDrawerNavigation(() => router.dismissTo('/'));");
+    expect(source).not.toContain('handleDrawerGoHome');
     // 旋转 / 分屏收窄回窄屏时抽屉必须自动收起(没有入口的悬空 overlay)。
-    expect(source).toContain('if (!wideSessionNav.enabled && sessionListDrawerOverlayMounted) closeSessionListDrawer();');
+    expect(source).toContain('if (!enabled && sessionListDrawerOverlayMounted) closeSessionListDrawer();');
     // Android 退场期(open=false 但 overlay 仍 mounted)必须临时吞掉系统返回;
     // onClosed 解除 mounted 后 effect cleanup 恢复 useGuardedBack 等正常返回链。
     expect(source).toContain("if (Platform.OS !== 'android' || !sessionListDrawerOverlayMounted || sessionListDrawerOpen) return;");
     expect(source).toContain("BackHandler.addEventListener('hardwareBackPress', () => true)");
     expect(source).toContain('}, [sessionListDrawerOpen, sessionListDrawerOverlayMounted]);');
-    // 打开抽屉先收键盘(树内 overlay 盖不住键盘)。
-    expect(source).toContain('Keyboard.dismiss();\n    setSessionListDrawerOverlayMounted(true);\n    setSessionListDrawerOpen(true);');
     // 读屏模态语义双平台配对:iOS accessibilityElementsHidden + Android importantForAccessibility
     // (accessibilityViewIsModal 只对 iOS 生效,安卓优先发布不能漏 TalkBack);必须覆盖完整退场期。
     expect(source).toContain('accessibilityElementsHidden={sessionListDrawerOverlayMounted}');
     expect(source).toContain("importantForAccessibility={sessionListDrawerOverlayMounted ? 'no-hide-descendants' : 'auto'}");
-    // 非导航关闭的焦点归还必须由父级在背景隔离解除后的 commit effect 执行;
-    // 导航型关闭及页面已失焦时都不能把焦点抢回旧页面。
-    expect(source).toContain('if (sessionListDrawerOverlayMounted || !returnDrawerFocusAfterCloseRef.current) return;');
-    expect(source).toContain('if (!navigation.isFocused()) return;');
-    expect(source).toContain('AccessibilityInfo.setAccessibilityFocus(returnNode)');
     // 退场期间旋转/折叠/收窄不能直接卸载 Drawer:保留到 onClosed,三类 pending 导航
     // 才都能执行;宽屏 layout 失效后 drawerWidth=0,退场继续用最后有效宽度。
-    expect(source).toContain('{wideSessionNav.enabled || sessionListDrawerOverlayMounted ? (');
-    expect(source).toContain('if (wideSessionNav.enabled) sessionListDrawerWidthRef.current = wideSessionNav.drawerWidth;');
+    expect(layout).toContain('persistent={paneLayout.persistent}');
+    expect(source).toContain('{!paneLayout.persistent || sessionListDrawerOverlayMounted ? (');
+    expect(source).toContain('if (enabled) sessionListDrawerWidthRef.current = width;');
+    expect(layout).toContain('width={paneLayout.sidebarWidth}');
     expect(source).toContain('width={sessionListDrawerWidthRef.current}');
+    // 拖到满屏即返回首页:不播返回动画;iOS 抽屉在本路由内,随页面一起弹出,中间不露出任务;
+    // Android 抽屉画在路由之上,仍须先卸载再换页。
+    expect(source).toContain("navigation.setOptions({ animation: 'none' });");
+    expect(source).toContain("if (Platform.OS !== 'ios') { queueDrawerNavigation(goHomeFromDrawer); return; }");
+    // 回首页按栈里首页的位置弹出,而不是只退一层:从伙伴聊天点进任务时下面还压着伙伴聊天页。
+    // The shared hook owns stack dismissal; taskListBack.test.tsx exercises the actual button.
+    expect(source).toContain('const backToTaskList = useTaskListBack();');
+    expect(source).toContain('const goHomeFromDrawer = backToTaskList;');
+    // 拉出手势在抽屉首次渲染 open 前就被取消(JS 线程忙时 open 与 cancel 同批提交):
+    // 抽屉从未挂载,没有 onClosed 来释放父级的遮罩/读屏/返回键占用,必须由父级直接释放。
+    expect(source).toContain('if (!sessionListDrawerOpenCommittedRef.current) {');
+    // 悬浮模式下右滑任务页拉出任务栏,不再触发系统返回;拉动期间手势保持启用,否则会被取消。
+    expect(source).toContain('gestureEnabled: !sessionListDrawerOverlayMounted && !sessionListDrawerFloating');
+    expect(source).toContain('<GestureDetector gesture={sessionListDrawerPullGesture}>');
+    expect(source).toContain('enabled: sessionListDrawerFloating && (!sessionListDrawerOverlayMounted || sessionListDrawerPulling)');
     // 选任务失败路径:校验先于关闭动画——先关再弹 Alert 会让焦点归还抢走弹窗焦点。
-    expect(source).toContain("Alert.alert(t('devices.list.error.sessionDeviceNotFound'));\n      return;\n    }\n    // replace");
+    expect(source).toContain("Alert.alert(t('devices.list.error.sessionDeviceNotFound'));\n      return;\n    }\n    // 不派发 NativeStack REPLACE");
+  });
+
+  it('clears the complete composer attachment scope before switching session params', () => {
+    const source = readTextLf(resolve(process.cwd(), 'app/sessions/[sessionId].tsx'), 'utf8');
+    const boundaryStart = source.indexOf('discardSessionComposerAttachmentStateRef.current = () => {');
+    const boundaryEnd = source.indexOf('// 抽屉入口会在 replaceParams 前同步调用', boundaryStart);
+    expect(boundaryStart).toBeGreaterThan(-1);
+    expect(boundaryEnd).toBeGreaterThan(boundaryStart);
+    const boundary = source.slice(boundaryStart, boundaryEnd);
+
+    // 一处完整封口：上传控制器 / 已完成附件 / 预览 / 相册映射 / 未提交选择 / lightbox
+    // 与标注本地文件一起退场；排队编辑 stash 也属于旧任务，不能恢复进新任务。
+    expect(boundary).toContain('const currentAttachments = [...attachmentsRef.current];');
+    expect(boundary).toContain('for (const attachment of currentAttachments)');
+    expect(boundary).toContain('for (const attachment of editing?.stashedAttachments ?? [])');
+    expect(boundary).toContain('attachmentsRef.current = [];');
+    expect(boundary).toContain('setAttachments([]);');
+    expect(boundary).toContain('setAttachmentPreviews({});');
+    expect(boundary).toContain('setMediaAssetAttachments({});');
+    // Thumbnail selections are committed immediately; task switches clear the
+    // canonical attachment collection instead of a separate pending-media list.
+    expect(boundary).toContain('attachmentsRef.current = [];');
+    expect(boundary).toContain('setComposerPreviewAttachmentId(null);');
+    expect(boundary).toContain('composerAnnotationsRef.current?.forgetAllAttachments();');
+    expect(boundary).toContain('discardMobileUploadedAttachment(attachment');
+    // 排队编辑保存中的附件不能和 update-content 抢跑回收：界面同步清空，
+    // A 的附件快照交给 A cleanup 等保存落定后再判断。
+    expect(boundary).toContain('const deferQueueEditAttachments = !!editing && !!queueEditSaveInFlightRef.current;');
+    expect(boundary).toContain('queueEditScopeExitAttachmentsRef.current = {');
+    expect(boundary).toContain('if (!deferQueueEditAttachments) {');
+
+    // 抽屉动作必须先封住 A 的迟到上传回调，再让 route params 变成 B。
+    const drawerSelectionStart = source.indexOf('const handleDrawerSelectSession = useCallback');
+    const drawerSelectionEnd = source.indexOf('// 前进导航防连点', drawerSelectionStart);
+    const drawerSelection = source.slice(drawerSelectionStart, drawerSelectionEnd);
+    const invalidateAt = drawerSelection.indexOf('discardAllPendingUploadsForScopeChange();');
+    const discardAt = drawerSelection.indexOf('discardSessionComposerAttachmentStateRef.current();');
+    const switchAt = drawerSelection.indexOf('switchDrawerSessionInPlace(navigation, destination);');
+    expect(invalidateAt).toBeGreaterThan(-1);
+    expect(discardAt).toBeGreaterThan(invalidateAt);
+    expect(switchAt).toBeGreaterThan(discardAt);
+    expect(source).toContain('discardAllPendingUploadsForScopeChange();\n    discardSessionComposerAttachmentStateRef.current();');
+
+    // 复用页面实例时输入原生子树也按 sessionId 换代，旧粘贴异步事件没有新任务入口。
+    expect(source).toContain('<ResizableComposerInputRow resize={composerResize}\n                    key={sessionId}');
+    // key 重挂载前必须在 render 阶段把 composer state 归属切到 B；不能先拿 A 文档
+    // 创建 B 的 WebView，再等被动 effect 才纠正。同步缓存缺失时 B 首帧为空态。
+    const draftScopeStart = source.indexOf('const activeComposerDraftScopeKey = composerDraftScopeKey(sessionId, routeDraft);');
+    const draftScopeEnd = source.indexOf('// chat-text-quote:', draftScopeStart);
+    const draftScope = source.slice(draftScopeStart, draftScopeEnd);
+    expect(draftScopeStart).toBeGreaterThan(-1);
+    expect(draftScopeEnd).toBeGreaterThan(draftScopeStart);
+    expect(draftScope).toContain('if (composerDraftStateKey !== activeComposerDraftScopeKey) {');
+    expect(draftScope).toContain('const nextScope = readImmediateComposerDraftScope(sessionId, routeDraft);');
+    expect(draftScope).toContain('setComposerDraftSource(createComposerDraftSource(nextScope.document));');
+    expect(draftScope).toContain('draftRef.current = nextDraft;');
+    expect(draftScope).toContain('setComposerDraftHydrated(false);');
+    expect(draftScope).toContain('appliedRouteDraftRef.current = null;');
+    expect(draftScope).toContain('composerDocumentRef.current = nextScope.document;');
+    expect(draftScope).toContain('draftRef.current = nextDraft;');
+
+    const immediateScopeStart = source.indexOf('function readImmediateComposerDraftScope(');
+    const immediateScopeEnd = source.indexOf('function composerDraftScopeKey(', immediateScopeStart);
+    const immediateScope = source.slice(immediateScopeStart, immediateScopeEnd);
+    expect(immediateScope).toContain('readComposerDraftSync(sessionId) ?? routeDraft ??');
+    expect(immediateScope).toContain('readComposerDocumentDraftSync(sessionId);');
+    expect(immediateScope).toContain('const quotes = getQuotes(sessionId);');
+    expect(immediateScope).toContain('resolveOrderedQuoteDraft(sessionId, visibleText, quotes);');
+
+    // render-phase 换代先把旧 promise 的 key 作废，但保留 null 让 B effect 继续读取
+    // 仅磁盘草稿；effect 内原有 live-ref 比对继续保证用户新输入不被迟到读取覆盖。
+    const hydrationStart = source.indexOf('useEffect(() => {\n    const key = activeComposerDraftScopeKey;');
+    const hydrationEnd = source.indexOf('useEffect(() => {\n    if (!composerDraftHydrated', hydrationStart);
+    const hydration = source.slice(hydrationStart, hydrationEnd);
+    expect(hydration).toContain('const immediateScope = readImmediateComposerDraftScope(sessionId, routeDraft);');
+    expect(hydration).toContain('if (cancelled || appliedRouteDraftRef.current !== key) return;');
+    expect(hydration).toContain('if (!composerDocumentsEqual(composerDocumentRef.current, immediateDocumentSnapshot)) {');
+    const queueCleanupStart = source.indexOf('// 切会话 / 卸载时收尾上一个会话的排队编辑态');
+    const queueCleanupEnd = source.indexOf(
+      'useEffect(() => {\n    if (canUseRemoteSessionControls)',
+      queueCleanupStart,
+    );
+    const queueCleanup = source.slice(queueCleanupStart, queueCleanupEnd);
+    expect(queueCleanup).toContain('attachmentsRef.current = [];\n      setAttachments([]);');
+    expect(queueCleanup).not.toContain('setAttachments([...editing.stashedAttachments])');
+    expect(queueCleanup).toContain('const scopeExitSnapshot = queueEditScopeExitAttachmentsRef.current;');
+    expect(queueCleanup).toContain('const discardQueueEditTransientAttachmentResources =\n        discardQueueEditTransientAttachmentResourcesRef.current;');
+    expect(queueCleanup).toContain('discardQueueEditTransientAttachmentResources?.(editing, attachmentsSnapshot);');
+
+    // A 保存落定后的迟到 finalize 只能回收 A 的附件快照，不得触碰复用 controller
+    // 或组件级映射；否则 B 在切换后新开的上传会被 A 的 removeAll 一并取消。
+    const scopedCleanupStart = source.indexOf('const discardQueueEditTransientAttachmentResources = useCallback');
+    const scopedCleanupEnd = source.indexOf('const discardQueueEditTransientAttachments = useCallback', scopedCleanupStart);
+    const scopedCleanup = source.slice(scopedCleanupStart, scopedCleanupEnd);
+    expect(scopedCleanupStart).toBeGreaterThan(-1);
+    expect(scopedCleanupEnd).toBeGreaterThan(scopedCleanupStart);
+    expect(scopedCleanup).toContain('remoteSessionStore.getInputProjection(sessionId)');
+    expect(scopedCleanup).toContain('discardMobileUploadedAttachment(attachment');
+    expect(scopedCleanup).not.toContain('discardAllPendingUploads');
+    expect(scopedCleanup).not.toContain('setAttachmentPreviews');
+    expect(scopedCleanup).not.toContain('setMediaAssetAttachments');
+
+    // 同任务内放弃 / 切换编辑目标仍需完整清理自己的在途上传与附件映射。
+    const localCleanupStart = scopedCleanupEnd;
+    const localCleanupEnd = source.indexOf('useEffect(() => {\n    discardQueueEditTransientAttachmentResourcesRef.current', localCleanupStart);
+    const localCleanup = source.slice(localCleanupStart, localCleanupEnd);
+    expect(localCleanup).toContain('discardAllPendingUploads();');
+    expect(localCleanup).toContain('discardQueueEditTransientAttachmentResources(editing, attachmentsAtExit);');
+    expect(localCleanup).toContain('setAttachmentPreviews');
+    expect(localCleanup).toContain('setMediaAssetAttachments');
   });
 
   it('keeps pending history access as a lightweight control without message counters', () => {

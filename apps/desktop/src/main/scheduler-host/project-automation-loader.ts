@@ -17,17 +17,17 @@ import { projectAutomationConsents, schedules, sessions } from '../localDb/schem
 import { projectAutomationConsentToRow } from '../localDb/mapper';
 import { PROJECT_AUTOMATION_REL_SEGMENTS } from '../../shared/projectAutomationPaths';
 import { migrateLegacyXdmakerDir } from '../utils/legacyXdmakerMigration';
-import type { DrizzleScheduleStorage, SchedulerDrizzleDb } from './storage';
+import type { DrizzleScheduleStorage, SchedulerDrizzleDb } from './storage.desktop';
 
 /**
  * ProjectAutomationLoader reads .cindy/automations/schedules.json and syncs it
  * into the scheduler DB.
  *
- * Project schedules are mandatory project-lead configuration, similar to lint
- * rules. Users cannot reject them; opt-out is deleting the file or pausing a
- * single schedule. The project_automation_consents table now only records the
- * last successfully reconciled hash so renderer toasts can be deduped. The old
- * consent meaning is deprecated.
+ * Repository changes are previews until the user confirms that exact snapshot.
+ * Explicit editor writes apply only the selected schedule, never import siblings.
+ * Existing schedules keep their saved definition; repository contents cannot
+ * mutate it in the background. The legacy consent table is toast bookkeeping,
+ * not evidence that the user approved an import.
  */
 const AUTOMATIONS_REL_PATH = path.join(...PROJECT_AUTOMATION_REL_SEGMENTS);
 const CACHE_TTL_MS = 5_000;
@@ -47,13 +47,19 @@ export interface ProjectScheduleConfig {
   recurring?: boolean;
   manual?: boolean;
   intervalMs?: number;
+  expireAt?: number;
   agentKind?: 'claude-code' | 'codex' | 'pi';
+  /** 显式模型选择的 Harness；省略时保留旧配置的跟随绑定任务语义。 */
+  modelAgentKind?: 'claude-code' | 'codex' | 'pi';
+  modelAgentDeviceId?: string;
   model?: string;
   /** 可选：显式来源(供应商)id。省略 → 走原生默认来源（与旧配置字节级一致）。详见 Schedule.providerId。 */
   providerId?: string;
+  /** Agent 运行位置，相对项目自动化所在电脑；省略 = 本机。 */
+  agentDeviceId?: string;
   effort?: string;
   /** Codex Fast 模式开关，仅 Codex 有意义。详见 Schedule.fastMode。 */
-  fastMode?: boolean;
+  fastMode?: boolean | 'ultrafast';
   useWorktree?: boolean;
   persistentSession?: boolean;
   silentWhenIdle?: boolean;
@@ -71,6 +77,14 @@ export interface ReconcileResult {
   updated: number;
   deleted: number;
   skipped: 'no-file' | 'parse-error' | 'migration-incomplete' | null;
+  pendingImport?: ProjectAutomationImport;
+}
+
+export interface ProjectAutomationImport {
+  workingDir: string;
+  configHash: string;
+  schedules: ProjectScheduleConfig[];
+  removedNames: string[];
 }
 
 export type ProjectAutomationEvent = {
@@ -81,7 +95,7 @@ export type ProjectAutomationEvent = {
   deleted: number;
   isFirstTime: boolean;
   hashChanged: boolean;
-};
+} | { type: 'import-required'; pendingImport: ProjectAutomationImport };
 
 type CachedRead =
   | { kind: 'loaded'; content: string; configHash: string; schedules: ProjectScheduleConfig[] }
@@ -102,6 +116,8 @@ export class ProjectAutomationLoader {
       storage: DrizzleScheduleStorage;
       getDb: () => SchedulerDrizzleDb;
       logger: Logger;
+      /** A project of one of this account's teammates: Cindy's own folder, synced without asking. */
+      isOwnTeammateProject?: (workingDir: string) => Promise<boolean>;
     },
   ) {}
 
@@ -141,33 +157,28 @@ export class ProjectAutomationLoader {
       });
   }
 
-  async reconcile(workingDir: string): Promise<ReconcileResult> {
-    const read = await this.readProjectAutomations(workingDir);
+  async listPendingImports(): Promise<ProjectAutomationImport[]> {
+    const pending: ProjectAutomationImport[] = [];
+    for (const workingDir of await this.listKnownWorkingDirs()) {
+      const result = await this.reconcile(workingDir);
+      if (result.pendingImport) pending.push(result.pendingImport);
+    }
+    return pending;
+  }
+
+  async reconcile(workingDir: string, approvedHash?: string): Promise<ReconcileResult> {
+    // Never accept a cached snapshot for an approval: the file may have changed
+    // while its confirmation was visible.
+    const read = await this.readProjectAutomations(workingDir, { force: true });
     if (read.kind === 'migration-incomplete') {
       return { workingDir, inserted: 0, updated: 0, deleted: 0, skipped: 'migration-incomplete' };
     }
     if (read.kind !== 'loaded') {
-      const lastReconciledHash = await this.getLastHash(workingDir);
-      const deleted = await this.deleteProjectSchedules(workingDir);
-      if (lastReconciledHash !== null) {
-        await this.deleteLastHash(workingDir);
-      }
-      if (deleted > 0) {
-        this.emit({
-          type: 'reconciled',
-          workingDir,
-          inserted: 0,
-          updated: 0,
-          deleted,
-          isFirstTime: false,
-          hashChanged: true,
-        });
-      }
       return {
         workingDir,
         inserted: 0,
         updated: 0,
-        deleted,
+        deleted: 0,
         skipped: read.kind === 'missing' ? 'no-file' : 'parse-error',
       };
     }
@@ -184,6 +195,23 @@ export class ProjectAutomationLoader {
         .map((schedule) => [schedule.projectConfigId as string, schedule]),
     );
     const configIds = new Set(read.schedules.map((config) => config.id));
+
+    const removed = existing.filter((s) => !s.projectConfigId || !configIds.has(s.projectConfigId));
+    const changed = removed.length > 0 || read.schedules.some((config) => {
+      const current = byConfigId.get(config.id);
+      return !current || schedulesDiffer(current, config, workingDir);
+    });
+    // A teammate's project is Cindy's own folder, not something brought in from elsewhere: sync it
+    // directly. Only a real teammate project of this account: a folder that merely looks like one asks.
+    if (changed && approvedHash !== read.configHash
+      && !(await this.deps.isOwnTeammateProject?.(workingDir).catch(() => false))) {
+      const pendingImport = {
+        workingDir, configHash: read.configHash, schedules: read.schedules,
+        removedNames: removed.map((s) => s.name),
+      };
+      this.emit({ type: 'import-required', pendingImport });
+      return { workingDir, inserted: 0, updated: 0, deleted: 0, skipped: null, pendingImport };
+    }
 
     let inserted = 0;
     let updated = 0;
@@ -237,6 +265,8 @@ export class ProjectAutomationLoader {
   async upsertSchedule(
     workingDir: string,
     config: ProjectScheduleConfig,
+    /** Host writers (a teammate's own automations) must not replace a file they cannot read whole. */
+    options: { keepUnreadable?: boolean } = {},
   ): Promise<ReconcileResult> {
     if (!isProjectScheduleConfig(config)) {
       throwInvalidParams('invalid project schedule config');
@@ -245,6 +275,11 @@ export class ProjectAutomationLoader {
       throwInvalidParams('project schedule id must be kebab-case ascii');
     }
     const read = await this.readProjectAutomationsFromDisk(workingDir);
+    if (options.keepUnreadable && read.kind !== 'loaded' && read.kind !== 'missing') {
+      const err = new Error(`project automations unreadable (${read.kind}); left as it is`);
+      (err as { code?: string }).code = 'PRECONDITION_FAILED';
+      throw err;
+    }
     const schedules = read.kind === 'loaded' ? read.schedules : [];
     const next: ProjectAutomationsFile = {
       version: 1,
@@ -253,8 +288,24 @@ export class ProjectAutomationLoader {
         config,
       ],
     };
-    await this.writeProjectAutomationsFile(workingDir, next);
-    return this.reconcileAfterWrite(workingDir);
+    const writtenContent = await this.writeProjectAutomationsFile(workingDir, next);
+    // The save action approves this one definition, not unrelated repository data.
+    const current = (await this.deps.storage.list()).find((s) => s.source === 'project'
+      && sameWorkingDir(s.workingDir, workingDir) && s.projectConfigId === config.id);
+    const inserted = current ? 0 : 1;
+    const updated = current && schedulesDiffer(current, config, workingDir) ? 1 : 0;
+    try {
+      if (!current) await this.deps.scheduler.create(scheduleConfigToCreateInput(config, workingDir));
+      else if (updated) await this.deps.scheduler.update(current.id, scheduleConfigToUpdateInput(config, workingDir));
+    } catch (err) {
+      // A rejected save (e.g. a model its computer cannot run) must not leave the rejected
+      // choice in the project file while the saved automation keeps its old configuration.
+      await this.restoreProjectAutomationsFile(workingDir, read, writtenContent);
+      throw err;
+    }
+    this.emit({ type: 'reconciled', workingDir, inserted, updated, deleted: 0,
+      isFirstTime: !current, hashChanged: true });
+    return { workingDir, inserted, updated, deleted: 0, skipped: null };
   }
 
   async removeSchedule(workingDir: string, id: string): Promise<ReconcileResult> {
@@ -262,15 +313,15 @@ export class ProjectAutomationLoader {
       throwInvalidParams('project schedule id is required');
     }
     const read = await this.readProjectAutomationsFromDisk(workingDir);
-    if (read.kind !== 'loaded') {
-      return this.reconcileAfterWrite(workingDir);
+    if (read.kind === 'loaded') {
+      await this.writeProjectAutomationsFile(workingDir, {
+        version: 1, schedules: read.schedules.filter((item) => item.id !== id),
+      });
     }
-    const next: ProjectAutomationsFile = {
-      version: 1,
-      schedules: read.schedules.filter((item) => item.id !== id),
-    };
-    await this.writeProjectAutomationsFile(workingDir, next);
-    return this.reconcileAfterWrite(workingDir);
+    const selected = (await this.deps.storage.list()).filter((s) => s.source === 'project'
+      && sameWorkingDir(s.workingDir, workingDir) && s.projectConfigId === id);
+    for (const schedule of selected) await this.deps.scheduler.delete(schedule.id);
+    return { workingDir, inserted: 0, updated: 0, deleted: selected.length, skipped: null };
   }
 
   async reconcileAll(): Promise<void> {
@@ -320,11 +371,6 @@ export class ProjectAutomationLoader {
     return value;
   }
 
-  private async reconcileAfterWrite(workingDir: string): Promise<ReconcileResult> {
-    await this.readProjectAutomations(workingDir, { force: true });
-    return this.reconcile(workingDir);
-  }
-
   private async readProjectAutomationsFromDisk(workingDir: string): Promise<CachedRead> {
     const migration = await migrateLegacyXdmakerDir(workingDir);
     if (!migration.complete) return { kind: 'migration-incomplete' };
@@ -364,10 +410,48 @@ export class ProjectAutomationLoader {
     }
   }
 
+  /** Best effort: restore only our own write, never a later edit seen after validation settles. */
+  private async restoreProjectAutomationsFile(
+    workingDir: string, read: CachedRead, writtenContent: string,
+  ): Promise<void> {
+    const filePath = path.join(workingDir, AUTOMATIONS_REL_PATH);
+    let tmpPath: string | undefined;
+    try {
+      if (read.kind !== 'loaded' && read.kind !== 'missing') return;
+      if (read.kind === 'loaded') {
+        tmpPath = `${filePath}.tmp.${randomUUID()}`;
+        await fs.writeFile(tmpPath, read.content, 'utf8');
+      }
+      // Compare raw bytes, not parsed configs: even a partial external edit must survive.
+      // Stage the restoration before this check so its I/O cannot hide a newer write.
+      if (await fs.readFile(filePath, 'utf8') !== writtenContent) return;
+      if (tmpPath) {
+        await fs.rename(tmpPath, filePath);
+      } else {
+        await fs.rm(filePath, { force: true });
+      }
+    } catch (restoreErr) {
+      // Deleting the file while validation was pending is also a later user decision.
+      if ((restoreErr as NodeJS.ErrnoException).code === 'ENOENT') return;
+      this.deps.logger.warn?.('[project-automation] restore after rejected save failed', {
+        workingDir,
+        error: restoreErr instanceof Error ? restoreErr.message : String(restoreErr),
+      });
+    } finally {
+      this.cache.delete(path.resolve(workingDir));
+      if (tmpPath) await fs.rm(tmpPath, { force: true }).catch((cleanupErr: unknown) => {
+        this.deps.logger.warn?.('[project-automation] restore temp cleanup failed', {
+          workingDir,
+          error: cleanupErr instanceof Error ? cleanupErr.message : String(cleanupErr),
+        });
+      });
+    }
+  }
+
   private async writeProjectAutomationsFile(
     workingDir: string,
     file: ProjectAutomationsFile,
-  ): Promise<void> {
+  ): Promise<string> {
     const filePath = path.join(workingDir, AUTOMATIONS_REL_PATH);
     const dir = path.dirname(filePath);
     await fs.mkdir(dir, { recursive: true });
@@ -375,6 +459,9 @@ export class ProjectAutomationLoader {
     const content = `${JSON.stringify(file, null, 2)}\n`;
     await fs.writeFile(tmpPath, content, 'utf8');
     await fs.rename(tmpPath, filePath);
+    // A read cached before this write (e.g. "no file yet") must not hide it.
+    this.cache.delete(path.resolve(workingDir));
+    return content;
   }
 
   private async listKnownWorkingDirs(): Promise<string[]> {
@@ -406,12 +493,6 @@ export class ProjectAutomationLoader {
       .where(eq(projectAutomationConsents.workingDir, workingDir))
       .limit(1);
     return row?.configHash ?? null;
-  }
-
-  private async deleteLastHash(workingDir: string): Promise<void> {
-    await this.deps.getDb()
-      .delete(projectAutomationConsents)
-      .where(eq(projectAutomationConsents.workingDir, workingDir));
   }
 
   private emit(event: ProjectAutomationEvent): void {
@@ -452,9 +533,15 @@ function scheduleConfigToCreateInput(
     recurring: config.recurring ?? true,
     manual: config.manual ?? false,
     intervalMs: config.intervalMs,
+    expireAt: config.expireAt,
     agentKind: config.agentKind ?? 'claude-code',
+    // 恒带 key：配置删除显式选择后，reconcile 清除已保存的标记。
+    modelAgentKind: config.modelAgentKind,
+    modelAgentDeviceId: config.modelAgentDeviceId,
     model: config.model,
     providerId: config.providerId,
+    // 恒带 key：配置删掉运行位置时清除已保存的位置。
+    agentDeviceId: config.agentDeviceId,
     effort: config.effort,
     fastMode: config.fastMode,
     workspaceKind: 'project',
@@ -492,11 +579,15 @@ export function schedulesDiffer(
     schedule.recurring !== expected.recurring ||
     schedule.manual !== expected.manual ||
     schedule.intervalMs !== expected.intervalMs ||
+    schedule.expireAt !== expected.expireAt ||
     schedule.agentKind !== expected.agentKind ||
+    schedule.modelAgentKind !== expected.modelAgentKind ||
+    schedule.modelAgentDeviceId !== expected.modelAgentDeviceId ||
     schedule.model !== expected.model ||
     (schedule.providerId ?? undefined) !== (expected.providerId ?? undefined) ||
+    (schedule.agentDeviceId ?? undefined) !== (expected.agentDeviceId ?? undefined) ||
     schedule.effort !== expected.effort ||
-    !!schedule.fastMode !== !!expected.fastMode ||
+    (schedule.fastMode ?? false) !== (expected.fastMode ?? false) ||
     schedule.workspaceKind !== expected.workspaceKind ||
     !sameWorkingDir(schedule.workingDir, workingDir) ||
     schedule.useWorktree !== expected.useWorktree ||
@@ -560,11 +651,21 @@ function isProjectScheduleConfig(value: unknown): value is ProjectScheduleConfig
     optionalBoolean(config.recurring) &&
     optionalBoolean(config.manual) &&
     optionalNumber(config.intervalMs) &&
+    optionalNumber(config.expireAt) &&
     optionalAgentKind(config.agentKind) &&
+    optionalAgentKind(config.modelAgentKind) &&
+    (config.modelAgentDeviceId === undefined || (typeof config.modelAgentDeviceId === 'string' &&
+      (config.modelAgentDeviceId === '' || (config.modelAgentDeviceId.trim() !== '' &&
+        !!config.modelAgentKind && typeof config.providerId === 'string' && config.providerId.trim() !== '')))) &&
+    (config.modelAgentKind === undefined || (typeof config.model === 'string' && config.model.trim() !== '')) &&
     optionalString(config.model) &&
     optionalString(config.providerId) &&
+    (config.agentDeviceId === undefined || (
+      typeof config.agentDeviceId === 'string' && /^[A-Za-z0-9_.:-]{1,128}$/.test(config.agentDeviceId) &&
+      typeof config.model === 'string' && config.model.trim() !== ''
+    )) &&
     optionalString(config.effort) &&
-    optionalBoolean(config.fastMode) &&
+    (optionalBoolean(config.fastMode) || config.fastMode === 'ultrafast') &&
     optionalBoolean(config.useWorktree) &&
     optionalBoolean(config.persistentSession) &&
     optionalBoolean(config.silentWhenIdle) &&

@@ -1,0 +1,359 @@
+/**
+ * PiRpcProcess 单元测试 —— fake transport 驱动 handleStdoutLine 的协议语义。
+ *
+ * 重点覆盖轮 40-w4-t4 CRITICAL:response envelope 集中校验 —— success 必须
+ * boolean、command 必须匹配 pending request, 畸形/不匹配响应 reject 而非
+ * resolve(防 get_state 失败被当成启动成功 + 伪 session id)。
+ */
+
+import { describe, expect, it, vi } from 'vitest';
+
+import {
+  PI_RPC_OVERSIZED_FRAME_ERROR,
+  PiRpcProcess,
+  PiRpcRequestTimeoutError,
+  type PiRpcSpawnOptions,
+} from '../rpc-client.js';
+import type { PiTransport, PiLineHandler, PiCloseHandler, PiOversizedFrameHandler } from '../transport.js';
+
+// ── Fake transport:捕获 writeLine,手动触发 onLine/onClose ─────────────
+function makeFakeTransport() {
+  const written: Array<{ line: string; resolve: () => void; reject: (e: Error) => void }> = [];
+  let lineHandler: PiLineHandler | undefined;
+  let closeHandler: PiCloseHandler | undefined;
+  let oversizedHandler: PiOversizedFrameHandler | undefined;
+  const transport = {
+    writeLine: vi.fn((line: string) => {
+      return new Promise<void>((resolve, reject) => {
+        written.push({ line, resolve, reject });
+      });
+    }),
+    onLine: vi.fn((h: PiLineHandler) => { lineHandler = h; return () => { lineHandler = undefined; }; }),
+    onClose: vi.fn((h: PiCloseHandler) => { closeHandler = h; return () => { closeHandler = undefined; }; }),
+    onOversizedFrame: vi.fn((h: PiOversizedFrameHandler) => { oversizedHandler = h; return () => { oversizedHandler = undefined; }; }),
+    onStderr: vi.fn(() => () => undefined),
+    close: vi.fn(async () => { closeHandler?.({ code: 0, signal: null, reason: 'test close' }); }),
+    isClosed: vi.fn(() => false),
+    get pid() { return 1234; },
+  } satisfies PiTransport;
+  const emitLine = (line: string) => lineHandler?.(line);
+  const emitOversized = () => oversizedHandler?.();
+  const drain = () => {
+    for (const w of written.splice(0)) w.resolve();
+  };
+  return { transport, emitLine, emitOversized, drain, written };
+}
+
+function makeProc(overrides: Partial<PiRpcSpawnOptions> = {}) {
+  const logger = {
+    trace: vi.fn(), debug: vi.fn(), info: vi.fn(), warn: vi.fn(), error: vi.fn(), fatal: vi.fn(),
+    child: () => logger,
+  };
+  const onEvent = vi.fn();
+  const onExit = vi.fn();
+  const proc = new PiRpcProcess({
+    transport: undefined as never,
+    logger,
+    onEvent,
+    onExit,
+    ...overrides,
+  });
+  return { proc, logger, onEvent, onExit };
+}
+
+describe('PiRpcProcess response envelope validation', () => {
+  it('resolves a well-formed response (success boolean + matching command)', async () => {
+    const { transport, emitLine } = makeFakeTransport();
+    const { proc } = makeProc({ transport });
+
+    const p = proc.request({ type: 'get_state' });
+    const sent = transport.writeLine.mock.calls[0][0] as string;
+    const sentFrame = JSON.parse(sent) as { id: string; type: string };
+    emitLine(JSON.stringify({
+      type: 'response', id: sentFrame.id, command: 'get_state', success: true,
+      data: { sessionFile: '/sessions/abc.jsonl' },
+    }));
+
+    const resp = await p;
+    expect(resp.success).toBe(true);
+    expect(resp.data).toMatchObject({ sessionFile: '/sessions/abc.jsonl' });
+  });
+
+  it('rejects when success is not a boolean (round 40-w4-t4 CRITICAL)', async () => {
+    const { transport, emitLine } = makeFakeTransport();
+    const { proc } = makeProc({ transport });
+
+    const p = proc.request({ type: 'get_state' });
+    const sentFrame = JSON.parse(transport.writeLine.mock.calls[0][0] as string) as { id: string };
+    emitLine(JSON.stringify({
+      type: 'response', id: sentFrame.id, command: 'get_state', success: 'yes',
+      data: { sessionFile: '/sessions/abc.jsonl' },
+    }));
+
+    await expect(p).rejects.toThrow(/missing boolean success/);
+  });
+
+  it('rejects when response command mismatches pending request (round 40-w4-t4 CRITICAL)', async () => {
+    const { transport, emitLine } = makeFakeTransport();
+    const { proc } = makeProc({ transport });
+
+    const p = proc.request({ type: 'get_state' });
+    const sentFrame = JSON.parse(transport.writeLine.mock.calls[0][0] as string) as { id: string };
+    // 语义失败但 success:true 的畸形帧 —— 必须 reject, 不能 resolve 成 get_state 成功。
+    emitLine(JSON.stringify({
+      type: 'response', id: sentFrame.id, command: 'prompt', success: true, data: {},
+    }));
+
+    await expect(p).rejects.toThrow(/command mismatch/);
+  });
+
+  it('still resolves success:false (caller decides) — but envelope is intact', async () => {
+    const { transport, emitLine } = makeFakeTransport();
+    const { proc } = makeProc({ transport });
+
+    const p = proc.request({ type: 'prompt' });
+    const sentFrame = JSON.parse(transport.writeLine.mock.calls[0][0] as string) as { id: string };
+    emitLine(JSON.stringify({
+      type: 'response', id: sentFrame.id, command: 'prompt', success: false, error: 'session load failed',
+    }));
+
+    const resp = await p;
+    expect(resp.success).toBe(false);
+    expect(resp.error).toBe('session load failed');
+  });
+
+  it('reports request timeouts with a stable command-aware error', async () => {
+    vi.useFakeTimers();
+    try {
+      const { transport } = makeFakeTransport();
+      const { proc } = makeProc({ transport });
+
+      const pending = proc.request({ type: 'prompt' }, { timeoutMs: 75_000 });
+      const rejected = expect(pending).rejects.toEqual(expect.objectContaining({
+        name: 'PiRpcRequestTimeoutError',
+        code: 'PI_RPC_TIMEOUT',
+        commandType: 'prompt',
+        timeoutMs: 75_000,
+      } satisfies Partial<PiRpcRequestTimeoutError>));
+      await vi.advanceTimersByTimeAsync(75_000);
+
+      await rejected;
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  // 测试价值
+  // - 生产入口与结果：PiRpcProcess.request；慢恢复成功、60s 超时和迟到响应会影响启动结果。
+  // - Bug／缺口：#7740；原有 RPC 测试只验证自定义预算，未覆盖 31.3s 恢复或超时后的响应。
+  // - 最小失败输入：switch_session 在 31.3s 回应，或在 60s 截止后回应。
+  // - tier／实测耗时：unit；本文件单跑 0.66s。
+  it('accepts a startup resume response after 31.3 seconds within its absolute budget', async () => {
+    vi.useFakeTimers();
+    try {
+      const { transport, emitLine, written } = makeFakeTransport();
+      const { proc } = makeProc({ transport });
+      const pending = proc.request({ type: 'switch_session' }, { timeoutMs: 60_000 });
+      const sentFrame = JSON.parse(written[0]!.line) as { id: string };
+
+      await vi.advanceTimersByTimeAsync(31_300);
+      emitLine(JSON.stringify({
+        type: 'response', id: sentFrame.id, command: 'switch_session', success: true,
+      }));
+
+      await expect(pending).resolves.toMatchObject({ success: true });
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('times out startup resume at 60 seconds and discards a late success', async () => {
+    vi.useFakeTimers();
+    try {
+      const { transport, emitLine, written } = makeFakeTransport();
+      const { proc, logger } = makeProc({ transport });
+      const pending = proc.request({ type: 'switch_session' }, { timeoutMs: 60_000 });
+      const sentFrame = JSON.parse(written[0]!.line) as { id: string };
+      const rejected = expect(pending).rejects.toEqual(expect.objectContaining({
+        name: 'PiRpcRequestTimeoutError',
+        code: 'PI_RPC_TIMEOUT',
+        commandType: 'switch_session',
+        timeoutMs: 60_000,
+      } satisfies Partial<PiRpcRequestTimeoutError>));
+
+      await vi.advanceTimersByTimeAsync(60_000);
+      await rejected;
+      emitLine(JSON.stringify({
+        type: 'response', id: sentFrame.id, command: 'switch_session', success: true,
+      }));
+      expect(logger.warn).toHaveBeenCalledWith(
+        expect.stringContaining('unmatched response'), expect.anything(),
+      );
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('keeps the default timeout for ordinary RPC requests at 30 seconds', async () => {
+    vi.useFakeTimers();
+    try {
+      const { transport } = makeFakeTransport();
+      const { proc } = makeProc({ transport });
+      const pending = proc.request({ type: 'get_state' });
+      const rejected = expect(pending).rejects.toEqual(expect.objectContaining({
+        name: 'PiRpcRequestTimeoutError',
+        code: 'PI_RPC_TIMEOUT',
+        commandType: 'get_state',
+        timeoutMs: 30_000,
+      } satisfies Partial<PiRpcRequestTimeoutError>));
+
+      await vi.advanceTimersByTimeAsync(30_000);
+      await rejected;
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('refreshes a request idle timeout on matching progress events', async () => {
+    vi.useFakeTimers();
+    try {
+      const { transport, emitLine, written } = makeFakeTransport();
+      const { proc } = makeProc({ transport });
+      const pending = proc.request(
+        { type: 'prompt' },
+        {
+          timeoutMs: 100,
+          refreshTimeoutOnEvent: (event) => event.type === 'compaction_start',
+        },
+      );
+      const sentFrame = JSON.parse(written[0]!.line) as { id: string };
+
+      await vi.advanceTimersByTimeAsync(90);
+      emitLine(JSON.stringify({ type: 'compaction_start', reason: 'threshold' }));
+      await vi.advanceTimersByTimeAsync(90);
+      emitLine(JSON.stringify({
+        type: 'response',
+        id: sentFrame.id,
+        command: 'prompt',
+        success: true,
+      }));
+
+      await expect(pending).resolves.toMatchObject({ success: true });
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('unmatched response (late/wrong id) is dropped with a warn, not resolved', async () => {
+    const { transport, emitLine } = makeFakeTransport();
+    const { proc, logger } = makeProc({ transport });
+
+    const p = proc.request({ type: 'get_state' });
+    emitLine(JSON.stringify({
+      type: 'response', id: 'c999', command: 'get_state', success: true, data: {},
+    }));
+
+    // 迟到/错 id:不 resolve, 只 warn;原 pending 仍等(测试后清理)。
+    expect(logger.warn).toHaveBeenCalledWith(expect.stringContaining('unmatched response'), expect.anything());
+    // 防止测试悬挂:关掉 proc 触发 failAllPending。
+    await proc.close();
+    await expect(p).rejects.toThrow(/pi process exited/);
+  });
+});
+
+describe('PiRpcProcess close semantics (bridge-disconnect vs explicit close)', () => {
+  it('still kills the remote session when the bridge closed first (onClose)', async () => {
+    // 轮 42 P2(codex-connector):bridge 断链(onClose 置 closed)后, 用户显式
+    // close() 仍必须执行 killRemoteSession —— 它走独立 SSH RPC 可送达 daemon;
+    // 复用 closed 做 close() 守卫会让显式关闭直接 return, 远端 pi 带凭证跑到
+    // idle 回收。成功 close 的共享 Promise 跟踪「已经明确关闭」。
+    const killRemoteSession = vi.fn(async () => {});
+    const { transport } = makeFakeTransport();
+    const { proc } = makeProc({ transport });
+    (transport as unknown as { killRemoteSession: unknown }).killRemoteSession = killRemoteSession;
+
+    // 模拟 SSH 断链: transport 触发 onClose(bridge 死)。
+    const closeHandler = (transport.onClose as unknown as { mock: { calls: unknown[][] } }).mock.calls[0][0] as (info: { code: number | null; signal: string | null }) => void;
+    closeHandler({ code: null, signal: null });
+    expect(proc.isClosed).toBe(true);
+
+    // 用户显式关闭: 必须 kill 远端(不能因 closed 跳过)。
+    await proc.close();
+    expect(killRemoteSession).toHaveBeenCalledTimes(1);
+
+    // 重复 close 幂等: 不再二次 kill。
+    await proc.close();
+    expect(killRemoteSession).toHaveBeenCalledTimes(1);
+  });
+
+  it('retries transport shutdown after an unconfirmed local close', async () => {
+    const { transport } = makeFakeTransport();
+    const transportClose = vi.mocked(transport.close);
+    transportClose
+      .mockRejectedValueOnce(new Error('pi process did not confirm exit after SIGKILL'))
+      .mockResolvedValueOnce(undefined);
+    const { proc } = makeProc({ transport });
+
+    await expect(proc.close()).rejects.toThrow(/did not confirm exit after SIGKILL/);
+    await expect(proc.close()).resolves.toBeUndefined();
+
+    expect(transportClose).toHaveBeenCalledTimes(2);
+  });
+
+  it('retries remote termination after a failed close instead of reporting false success', async () => {
+    const killRemoteSession = vi
+      .fn()
+      .mockRejectedValueOnce(new Error('relay offline'))
+      .mockResolvedValueOnce(undefined);
+    const { transport } = makeFakeTransport();
+    const { proc } = makeProc({ transport });
+    (transport as unknown as { killRemoteSession: unknown }).killRemoteSession = killRemoteSession;
+
+    await expect(proc.close()).rejects.toThrow(/remote daemon session may still be running/);
+    await expect(proc.close()).resolves.toBeUndefined();
+
+    expect(killRemoteSession).toHaveBeenCalledTimes(2);
+  });
+
+  it('fails a pending get_entries immediately when the transport drops an oversized frame', async () => {
+    const { transport, emitOversized, drain } = makeFakeTransport();
+    const { proc } = makeProc({ transport });
+    const pending = proc.request({ type: 'get_entries' });
+    drain();
+    emitOversized();
+    await expect(pending).resolves.toMatchObject({
+      success: false,
+      command: 'get_entries',
+      error: PI_RPC_OVERSIZED_FRAME_ERROR,
+    });
+  });
+
+  it('fails a pending get_tree immediately when the transport drops an oversized frame', async () => {
+    const { transport, emitOversized, drain } = makeFakeTransport();
+    const { proc } = makeProc({ transport });
+    const pending = proc.request({ type: 'get_tree' });
+    drain();
+    emitOversized();
+    await expect(pending).resolves.toMatchObject({
+      success: false,
+      command: 'get_tree',
+      error: PI_RPC_OVERSIZED_FRAME_ERROR,
+    });
+  });
+
+  it('does not fail a lone pending steer when an oversized event frame is dropped', async () => {
+    const { transport, emitLine, emitOversized, drain } = makeFakeTransport();
+    const { proc } = makeProc({ transport });
+    const pending = proc.request({ type: 'steer', message: 'keep going' });
+    drain();
+    emitOversized();
+    const sentFrame = JSON.parse(transport.writeLine.mock.calls[0][0] as string) as { id: string };
+    emitLine(JSON.stringify({
+      type: 'response', id: sentFrame.id, command: 'steer', success: true,
+    }));
+    await expect(pending).resolves.toMatchObject({
+      success: true,
+      command: 'steer',
+    });
+  });
+});

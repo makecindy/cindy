@@ -2,10 +2,10 @@
 /**
  * i18n key 一致性校验(issue #49)。
  *
- * 校验 apps/desktop/src/renderer/i18n/locales/<locale>/common.json:
- *  - 错误(exit 1):某 locale 缺少其它 locale 已有的 key(含孤儿 key——只存在于部分
- *    locale 的 key 在其余 locale 视角下即缺失)、同一 key 在不同 locale 类型冲突
- *    (一边是字符串叶子、一边是嵌套对象)、JSON 解析失败。
+ * 校验 apps/desktop/src/renderer/i18n/locales/<locale>/*.json:
+ *  - 错误(exit 1):某 locale 缺少其它 locale 已有的 namespace / key(含孤儿 key——
+ *    只存在于部分 locale 的 key 在其余 locale 视角下即缺失)、同一 key 在不同 locale
+ *    类型冲突(一边是字符串叶子、一边是嵌套对象)、JSON 解析失败。
  *  - 复数 key(i18next `_one` / `_other` 等后缀)按家族校验:每个 locale 只要求
  *    具备 Intl.PluralRules 给出的本语言复数类别(en 需 one+other,zh/ja/ko 只需
  *    other),en 独有 `_one` 不算缺失。
@@ -15,12 +15,16 @@
  *
  * locale 列表与默认语言从 apps/desktop/src/shared/locale.ts 的 SUPPORTED_LOCALES /
  * DEFAULT_LOCALE 解析,新增语言或改默认语言无需改本脚本。
+ *  - 错误(exit 1):跨语言常驻文案表 crossLocaleStrings.generated.json 与各 locale 不一致
+ *    (由 scripts/i18n-cross-locale.mjs 生成)。
  *
  * 用法:node scripts/check-i18n.mjs(root: pnpm check:i18n)
  */
 import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+
+import { isCrossLocaleStringsFresh } from './i18n-cross-locale.mjs';
 
 const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const localeTsPath = path.join(repoRoot, 'apps', 'desktop', 'src', 'shared', 'locale.ts');
@@ -64,17 +68,32 @@ const { locales, defaultLocale } = parseLocaleConfig();
 const flatByLocale = new Map();
 let hasError = false;
 
+const namespaceFiles = new Set(
+  locales.flatMap((locale) => {
+    const dir = path.join(localesDir, locale);
+    return fs.existsSync(dir) ? fs.readdirSync(dir).filter((file) => file.endsWith('.json')) : [];
+  }),
+);
+
 for (const locale of locales) {
-  const file = path.join(localesDir, locale, 'common.json');
-  let parsed;
-  try {
-    parsed = JSON.parse(fs.readFileSync(file, 'utf8'));
-  } catch (err) {
-    console.error(`[check-i18n] 读取 / 解析失败: ${file}\n  ${err.message}`);
-    hasError = true;
-    continue;
+  const flat = new Map();
+  for (const namespaceFile of [...namespaceFiles].sort()) {
+    const file = path.join(localesDir, locale, namespaceFile);
+    if (!fs.existsSync(file)) {
+      console.error(`[check-i18n] ${locale} 缺少 namespace: ${namespaceFile}`);
+      hasError = true;
+      continue;
+    }
+    try {
+      const parsed = JSON.parse(fs.readFileSync(file, 'utf8'));
+      const namespace = path.basename(namespaceFile, '.json');
+      flatten(parsed, namespace === 'common' ? '' : namespace, flat);
+    } catch (err) {
+      console.error(`[check-i18n] 读取 / 解析失败: ${file}\n  ${err.message}`);
+      hasError = true;
+    }
   }
-  flatByLocale.set(locale, flatten(parsed, '', new Map()));
+  flatByLocale.set(locale, flat);
 }
 
 if (hasError) process.exit(1);
@@ -212,6 +231,14 @@ if (missingTotal > 0 || typeConflicts.length > 0) {
   console.error(
     `\n[check-i18n] 失败:缺失 ${missingTotal} / 类型冲突 ${typeConflicts.length}。` +
       `${locales.length} 种语言的 common.json 必须 key 完全一致(CLAUDE.md 规则 17)。`,
+  );
+  process.exit(1);
+}
+
+if (!isCrossLocaleStringsFresh()) {
+  console.error(
+    '\n[check-i18n] 失败:crossLocaleStrings.generated.json 与 locale 文案不一致,' +
+      '运行 node scripts/i18n-cross-locale.mjs 重新生成。',
   );
   process.exit(1);
 }

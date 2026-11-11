@@ -1,3 +1,5 @@
+import { Button } from '@/components/ui/button';
+import { ErrorNotice } from '@/components/ui/error-notice';
 /**
  * BrowserTabBody —— web-browser tab 的 TabBody。
  *
@@ -12,8 +14,9 @@
  *
  * webview slot 是一个 `<div ref>` —— useBrowserWebview 给我们 wrapper(模块级
  * pool 持有的同一个 DOM 节点),useLayoutEffect 里用 vanilla `appendChild` 把
- * wrapper 搬过来。TabBody 卸载时 cleanup 把 wrapper 挪回 pool container(
- * off-screen),保证 webContents 不被销毁。
+ * wrapper 首次附着到 slot。之后由 Shell 保持池内存活浏览器的宿主与祖先位置，
+ * 切换只隐藏宿主。真正卸载时 cleanup 把仍归 pool 的 wrapper 停回 container
+ * 暂存 DOM；这次跨父节点移动可能重建 guest，不保证页面运行上下文保留。
  *
  * webview 事件 → 同步 plugin state:
  *   - did-navigate / did-navigate-in-page → state.url
@@ -28,22 +31,21 @@
  */
 
 import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react';
-import { AlertTriangle, Gauge, RotateCw, X } from 'lucide-react';
+import { Gauge, RotateCw, X } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
 
+import { normalizePersistableFavicon } from '../../../../../shared/faviconPersistence';
 import { useAppShortcut } from '@/hooks/useAppShortcut';
 import { createLogger } from '@/lib/logger';
 import { isSidebarWindow } from '@/lib/sidebarWindow';
 import { toast } from '@/lib/toast';
 import { cn } from '@/lib/utils';
+import { Tip } from '@/components/ui/tooltip';
 import { mapIpcErrorToI18nKey } from '@/utils/ipcError';
 
 import { browserWebviewPool } from '../../lib/browserWebviewPool';
 import { findNativePopupSurfaceForTab } from '../../lib/nativePopupTabs';
-import {
-  forceKillBrowserTab,
-  setForegroundBrowserTab,
-} from '../../lib/rsbBrowserBridge';
+import { forceKillBrowserTab, setForegroundBrowserTab } from '../../lib/rsbBrowserBridge';
 import { isLocalHtmlFileUrl } from '../../lib/openInSidebarBrowser';
 import { closeTab } from '../../store';
 import { useBrowserWebview } from '../../hooks/useBrowserWebview';
@@ -133,15 +135,12 @@ export function BrowserTabBody({ state, ctx, active, shellVisible }: BrowserTabB
     url: browser.url || state.url,
     reload: browser.reload,
     enabled:
-      active === true &&
-      ctx.remoteHostId === null &&
-      deviceLinkDeviceId === null &&
-      !browser.crash,
+      active === true && ctx.remoteHostId === null && deviceLinkDeviceId === null && !browser.crash,
   });
 
   // 把 pool 的 wrapper 挂进 slot —— useLayoutEffect(在 paint 前移 DOM,避免闪)。
-  // Shell 会常驻挂载所有 TabBody，并用父节点 display:none 隐藏后台 tab；wrapper
-  // 一旦进入自己的 slot 就不要再随 active 切换搬回 parking。Electron 的 webview
+  // Shell 常驻挂载池内存活的浏览器 TabBody，后台仅隐藏；wrapper 一旦进入
+  // 自己的 slot 就不要再随 active 切换搬回 parking。Electron 的 webview
   // 在跨父节点 reparent 时可能重建 guest WebContents，这会销毁 window.open 的
   // opener browsing context，连带 outlivesOpener:false 的原生 popup 一起销毁。
   // 只有 TabBody 真正卸载或 wrapper 代际变化时 effect cleanup 才停回 parking。
@@ -198,10 +197,20 @@ export function BrowserTabBody({ state, ctx, active, shellVisible }: BrowserTabB
   }, [browser.title, ctx, state.title]);
 
   useEffect(() => {
-    // null 表示当前 webview 代际尚未观测到 favicon，不能据此清掉持久化图标；
-    // 空串才是 page-favicon-updated 明确报告 "无图标"。
+    // null 表示当前 webview 代际尚未观测到 favicon,或观测到但全部候选不可
+    // 持久化(如只有 blob:)——两种都不能据此清掉 / 覆盖已持久化图标。
     if (browser.favicon === null) return;
-    const nextFavicon = browser.favicon || null;
+    // 空串才是 page-favicon-updated 明确报告 "页面无图标" → 清空持久化 favicon。
+    if (browser.favicon === '') {
+      if (state.favicon === null) return;
+      ctx.patchState({ favicon: null });
+      return;
+    }
+    // 非空候选:WebView 和原生 popup 两套事件源必须在共用写入边界再做一次
+    // 过滤,避免 blob: / 超长 / 非白名单 scheme 进入 tab state。
+    // 不可持久化 → 保留已有图标,不写不清。
+    const nextFavicon = normalizePersistableFavicon(browser.favicon);
+    if (nextFavicon === null) return;
     if (nextFavicon === state.favicon) return;
     ctx.patchState({ favicon: nextFavicon });
   }, [browser.favicon, ctx, state.favicon]);
@@ -391,7 +400,7 @@ export function BrowserTabBody({ state, ctx, active, shellVisible }: BrowserTabB
   const pageUrlRef = useRef(browser.url || state.url || 'about:blank');
   pageUrlRef.current = browser.url || state.url || 'about:blank';
   const getPageUrl = useCallback(() => pageUrlRef.current, []);
-  const comment = useBrowserComment(tabId, sessionId, browser.webview, getPageUrl);
+  const comment = useBrowserComment(tabId, sessionId, browser.webview, getPageUrl, tabVisible);
   // 页面评论的落点是主窗 composer 的「N 条注释」胶囊。detached 独立子窗口
   // (SidebarWindowLayout)只挂 RightSidebarShell、不挂 ChatInput,评论写进
   // 子窗口自己的 composerDraftStore 无处可发(还会误报成功 toast),故子窗口里
@@ -402,10 +411,7 @@ export function BrowserTabBody({ state, ctx, active, shellVisible }: BrowserTabB
   // 主线程被打断重启),对 crashed/killed/oom 走 navigate(等价于 reload,但能
   // 容忍 webContents 已经死掉的情况)。两种都会触发 did-start-loading → 清 crash。
   const handleRecover = useCallback(() => {
-    if (
-      browser.crash?.reason === 'unresponsive' ||
-      browser.crash?.reason === 'navigation-loop'
-    ) {
+    if (browser.crash?.reason === 'unresponsive' || browser.crash?.reason === 'navigation-loop') {
       browser.reload();
     } else {
       browser.navigate(state.url || 'about:blank');
@@ -473,6 +479,7 @@ export function BrowserTabBody({ state, ctx, active, shellVisible }: BrowserTabB
     <div ref={rootRef} className="flex h-full w-full flex-col bg-content-area">
       <BrowserChrome
         ref={chromeRef}
+        visible={tabVisible}
         url={state.url || 'about:blank'}
         isLoading={browser.isLoading}
         canGoBack={browser.canGoBack}
@@ -520,29 +527,34 @@ export function BrowserTabBody({ state, ctx, active, shellVisible }: BrowserTabB
             className={cn(
               'absolute left-1/2 top-2 z-10 flex -translate-x-1/2 items-center gap-2',
               'rounded-full border border-[var(--border-default)] bg-[var(--surface-elevated)]',
-              'py-1 pl-3 pr-1 text-[11px] text-[var(--text-secondary)] shadow-sm',
+              'py-1 pl-3 pr-1 text-11 text-[var(--text-secondary)] shadow-[shadow:var(--shadow-menu)]',
             )}
           >
             <Gauge size={12} strokeWidth={2} className="shrink-0 text-[var(--warning-fg)]" />
             <span>{t('rightSidebar.browser.resourceAlert.cpuHint')}</span>
-            <button
+            <Button
+              variant="secondary"
+              size="xxs"
+              compact
+              tone="danger"
               type="button"
               onClick={() => {
                 browser.dismissResourceAlert();
                 void forceKillBrowserTab(tabId);
               }}
-              className="rounded-full px-2 py-0.5 text-[11px] font-medium text-[var(--error-fg)] hover:bg-[var(--surface-hover)]"
             >
               {t('rightSidebar.browser.resourceAlert.terminate')}
-            </button>
-            <button
-              type="button"
-              aria-label={t('rightSidebar.browser.resourceAlert.dismiss')}
-              onClick={browser.dismissResourceAlert}
-              className="flex size-5 items-center justify-center rounded-full text-[var(--text-tertiary)] hover:bg-[var(--surface-hover)] hover:text-[var(--text-secondary)]"
-            >
-              <X size={12} strokeWidth={2} />
-            </button>
+            </Button>
+            <Tip text={t('rightSidebar.browser.resourceAlert.dismiss')} side="bottom" disabled={!tabVisible}>
+              <button
+                type="button"
+                aria-label={t('rightSidebar.browser.resourceAlert.dismiss')}
+                onClick={browser.dismissResourceAlert}
+                className="flex size-5 items-center justify-center rounded-full text-[var(--text-tertiary)] hover:bg-[var(--surface-hover)] hover:text-[var(--text-secondary)]"
+              >
+                <X size={12} strokeWidth={2} />
+              </button>
+            </Tip>
           </div>
         )}
         {/* 评论模式提示条:点选中显示操作说明,固定在 slot 顶部居中,不挡 chrome。 */}
@@ -551,7 +563,7 @@ export function BrowserTabBody({ state, ctx, active, shellVisible }: BrowserTabB
             className={cn(
               'pointer-events-none absolute left-1/2 top-2 z-10 -translate-x-1/2',
               'rounded-full border border-[var(--border-default)] bg-[var(--surface-elevated)]',
-              'px-3 py-1 text-[11px] text-[var(--text-secondary)]',
+              'px-3 py-1 text-11 text-[var(--text-secondary)]',
             )}
           >
             {t('rightSidebar.browser.commentModeHint')}
@@ -607,44 +619,31 @@ function BrowserCrashBanner({
     cause === 'resource-memory'
       ? 'rightSidebar.browser.crash.resourceKilledTitle'
       : reason === 'navigation-loop'
-      ? 'rightSidebar.browser.crash.navigationLoopTitle'
-      : reason === 'unresponsive'
-      ? 'rightSidebar.browser.crash.unresponsiveTitle'
-      : 'rightSidebar.browser.crash.crashedTitle';
+        ? 'rightSidebar.browser.crash.navigationLoopTitle'
+        : reason === 'unresponsive'
+          ? 'rightSidebar.browser.crash.unresponsiveTitle'
+          : 'rightSidebar.browser.crash.crashedTitle';
   const descKey =
     cause === 'resource-memory'
       ? 'rightSidebar.browser.crash.resourceKilledDesc'
       : reason === 'navigation-loop'
-      ? 'rightSidebar.browser.crash.navigationLoopDesc'
-      : reason === 'unresponsive'
-      ? 'rightSidebar.browser.crash.unresponsiveDesc'
-      : 'rightSidebar.browser.crash.crashedDesc';
+        ? 'rightSidebar.browser.crash.navigationLoopDesc'
+        : reason === 'unresponsive'
+          ? 'rightSidebar.browser.crash.unresponsiveDesc'
+          : 'rightSidebar.browser.crash.crashedDesc';
   return (
-    <div className="absolute inset-0 flex items-center justify-center bg-[var(--overlay-modal)] backdrop-blur-sm">
-      <div className="flex max-w-xs flex-col items-center gap-3 rounded-lg border border-[var(--border-default)] bg-[var(--surface-elevated)] px-6 py-5 text-center">
-        <AlertTriangle size={28} strokeWidth={1.5} className="text-[var(--error-fg)]" />
-        <div className="text-[13px] font-medium text-[var(--text-primary)]">{t(titleKey)}</div>
-        <div className="text-[12px] text-[var(--text-secondary)]">{t(descKey)}</div>
-        <div className="mt-1 flex items-center gap-2">
-          <button
-            type="button"
-            onClick={onRecover}
-            className="flex h-7 items-center gap-1.5 rounded-md bg-[var(--accent-cta-bg)] px-3 text-[12px] font-medium text-[var(--accent-pure-cta-fg)] hover:bg-[var(--accent-hover)]"
-          >
+    <div className="modal-scrim absolute inset-0 flex items-center justify-center">
+      <ErrorNotice className="modal-panel max-w-xs" message={t(titleKey)} description={t(descKey)} actions={<>
+          <Button size="sm" compact type="button" onClick={onRecover}>
             <RotateCw size={12} strokeWidth={2.5} />
             {t('rightSidebar.browser.crash.reload')}
-          </button>
+          </Button>
           {onForceKill && (
-            <button
-              type="button"
-              onClick={onForceKill}
-              className="flex h-7 items-center rounded-md border border-[var(--border-default)] px-3 text-[12px] font-medium text-[var(--error-fg)] hover:bg-[var(--surface-hover)]"
-            >
+            <Button variant="secondary" size="sm" compact tone="danger" type="button" onClick={onForceKill}>
               {t('rightSidebar.browser.crash.forceKill')}
-            </button>
+            </Button>
           )}
-        </div>
-      </div>
+        </>} />
     </div>
   );
 }

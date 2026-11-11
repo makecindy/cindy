@@ -1,3 +1,4 @@
+import { setSearchDraft } from '@/features/cc-agent/sidebar/conversationSearchDraft';
 // @vitest-environment jsdom
 
 /**
@@ -33,6 +34,7 @@ vi.mock('@/lib/orcaSessionIdentity', () => ({
 }));
 
 beforeEach(() => {
+  setSearchDraft('');
   Object.defineProperty(window, 'electronAPI', {
     configurable: true,
     value: { platform: 'linux' },
@@ -127,7 +129,7 @@ describe('useConversationSearch sort persistence', () => {
 });
 
 describe('useConversationSearch visibility scope', () => {
-  it('keeps global search unbounded while bounding an explicit project selection', async () => {
+  it('keeps global search unbounded while scoping an explicit local project by session ids', async () => {
     vi.useFakeTimers();
     const searchMock = vi.mocked(searchConversations);
     const project: ProjectNodeData = {
@@ -164,6 +166,9 @@ describe('useConversationSearch visibility scope', () => {
         semanticMode: 'keyword',
         filters: expect.objectContaining({ sessionIds: null }),
       }),
+      expect.objectContaining({
+        origins: [expect.objectContaining({ kind: 'local', sessionIds: null })],
+      }),
     );
 
     searchMock.mockClear();
@@ -173,7 +178,17 @@ describe('useConversationSearch visibility scope', () => {
     });
     expect(searchMock).toHaveBeenLastCalledWith(
       expect.objectContaining({
-        filters: expect.objectContaining({ sessionIds: ['loaded'] }),
+        filters: expect.objectContaining({
+          sessionIds: ['loaded', 'outside-sidebar-cache'],
+        }),
+      }),
+      expect.objectContaining({
+        origins: [
+          expect.objectContaining({
+            kind: 'local',
+            sessionIds: ['loaded', 'outside-sidebar-cache'],
+          }),
+        ],
       }),
     );
   });

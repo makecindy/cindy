@@ -60,6 +60,45 @@ const PROVIDERS: ProviderView[] = [
 ];
 
 describe('shouldFallbackVendorModel', () => {
+  const subscriptionRoutes = [
+    provider('openai', 'builtin', {
+      codex: ['gpt-6-astra'],
+      pi: ['chatgpt/gpt-6-astra'],
+    }),
+    provider('xd', 'builtin', { pi: ['glm-5.3'] }),
+  ];
+
+  it('does not repair the old model while a cross-engine intent masks it', () => {
+    // This exact mixed-generation comparison previously selected the Pi seed.
+    expect(shouldFallbackVendorModel(subscriptionRoutes, 'gpt-6-astra', 'pi')).toBe(true);
+    expect(shouldFallbackVendorModel(subscriptionRoutes, 'gpt-6-astra', 'pi', {
+      hasSwitchIntent: true,
+    })).toBe(false);
+    // Persisted fields still belong to Codex until Main commits the switch.
+    expect(shouldFallbackVendorModel(subscriptionRoutes, 'gpt-6-astra', 'codex')).toBe(false);
+  });
+
+  it('preserves a bound route after intent consumption, even with a partial catalog', () => {
+    expect(shouldFallbackVendorModel(subscriptionRoutes, 'chatgpt/gpt-6-astra', 'pi', {
+      providerId: 'openai',
+    })).toBe(false);
+    // A delayed snapshot/other controller must not turn openai + GPT into openai + GLM.
+    expect(shouldFallbackVendorModel(subscriptionRoutes, 'gpt-6-astra', 'pi', {
+      providerId: 'openai',
+    })).toBe(false);
+  });
+
+  it('preserves host-authoritative selection when a phone or remote desktop switches it', () => {
+    // Host Renderer sees an intent registered elsewhere, not a local click flag.
+    expect(shouldFallbackVendorModel(subscriptionRoutes, 'gpt-6-astra', 'pi', {
+      hasSwitchIntent: true,
+    })).toBe(false);
+    // Control-side and SSH catalogs cannot establish that a host route is invalid.
+    expect(shouldFallbackVendorModel(subscriptionRoutes, 'gpt-6-astra', 'pi', {
+      isRemote: true,
+    })).toBe(false);
+  });
+
   it('keeps a custom (mimo) codex model in a codex session (the fixed bug)', () => {
     expect(shouldFallbackVendorModel(PROVIDERS, 'mimo-codex', 'codex')).toBe(false);
   });

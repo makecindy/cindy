@@ -2,6 +2,17 @@ import { describe, expect, it } from 'vitest';
 import { isIgnoredSkillPackagePath } from '../packageIgnore';
 
 describe('skillhub/packageIgnore', () => {
+  it('excludes internal rename backups and staging files without hiding ordinary backup fixtures', () => {
+    const backup = 'SKILL.md.xdt-rename-94a2109f-0344-4c8e-b61e-372140d20848';
+    // Package paths accept both separators, independently of the host OS.
+    for (const file of [backup, `nested/${backup}`, `nested\\${backup.toUpperCase()}`, 'SKILL.md.xdt-tmp', 'docs/example.json.xdt-tmp']) {
+      expect(isIgnoredSkillPackagePath(file), file).toBe(true);
+    }
+    for (const file of ['SKILL.md', 'SKILL.md.bak', 'SKILL.md.xdt-rename-example', `${backup}.md`, 'docs/.backup/example.md']) {
+      expect(isIgnoredSkillPackagePath(file), file).toBe(false);
+    }
+  });
+
   it('keeps declared dotfile fixtures and dot directories', () => {
     expect(isIgnoredSkillPackagePath('.cca-bindings.json')).toBe(false);
     expect(isIgnoredSkillPackagePath('.cca-state/task/current-goal.md')).toBe(false);

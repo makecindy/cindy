@@ -185,6 +185,8 @@ describe('desktop send outcome helper', () => {
     });
   });
 
+  // Protocol contract: selected-plugin skip/block failures must survive the
+  // same sanitizer as other host failures, without exposing their raw message.
   it('exports the host failure code list used for sanitizer allow-listing', async () => {
     expect(HOST_SEND_FAILURE_CODES).toEqual([
       'WORKDIR_MISSING',
@@ -195,6 +197,8 @@ describe('desktop send outcome helper', () => {
       'SESSION_RUNNING',
       'CREDENTIAL_SWITCH_BUSY',
       'SEND_FAILED',
+      'PLUGIN_TURN_SKIPPED',
+      'PLUGIN_TURN_BLOCKED',
     ]);
     for (const code of HOST_SEND_FAILURE_CODES) {
       const err = new Error(code) as Error & { code?: string };
@@ -216,6 +220,27 @@ describe('desktop send outcome helper', () => {
       reason: 'cancelled-before-dispatch',
       context: 'SEND/session-4/send',
       message: 'Session send was cancelled before vendor dispatch: SEND/session-4/send',
+    });
+  });
+
+  it('preserves provider rejection through Desktop compatibility outcomes', async () => {
+    const outcome = toDesktopSessionDispatchOutcome(
+      { accepted: false, reason: 'provider-rejected-before-dispatch' },
+      { source: 'goal', context: 'GOAL/session-4/continuation' },
+    );
+
+    expect(outcome).toEqual({
+      kind: 'session-dispatch',
+      source: 'goal',
+      dispatched: false,
+      reason: 'provider-rejected-before-dispatch',
+      context: 'GOAL/session-4/continuation',
+      message: 'Provider rejected the Session send before dispatch: GOAL/session-4/continuation',
+    });
+    expect(toCompatibleMakerSendResult(outcome)).toEqual({
+      accepted: false,
+      reason: 'provider-rejected-before-dispatch',
+      outcome,
     });
   });
 

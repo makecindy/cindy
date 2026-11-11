@@ -106,10 +106,20 @@ export interface TgDocument {
   file_size?: number;
 }
 
+/** voice / audio / video / video_note 共有的可下载字段(Bot API 均带 file_id)。 */
+export interface TgMediaFile {
+  file_id: string;
+  file_unique_id?: string;
+  mime_type?: string;
+  file_size?: number;
+}
+
 export interface TgMessageEntity {
   type: string;
   offset: number;
   length: number;
+  /** 仅 `text_mention`: 被提及的用户(按 id 认人, 不依赖 username)。 */
+  user?: TgUser;
 }
 
 export interface TgMessage {
@@ -123,7 +133,23 @@ export interface TgMessage {
   media_group_id?: string;
   /** 仅当消息真的属于某个 forum topic 时为 true — 普通回复也会带 thread_id。 */
   is_topic_message?: boolean;
+  /**
+   * 群开启「禁止保存内容」时 Telegram 给每条消息带上 true。
+   *
+   * 它是**隐私边界的唯一信号**, 拦的是「内容留存」而不是「响应」——
+   *   - 带标的群消息不落进本地群历史池, bot 自己的出站回复也不回流进窗口;
+   *   - 被**引用**的消息带标时, 它的正文与附件不进 prompt 的 reply_context;
+   *   - 但 owner @ 机器人**仍照常起 turn** —— 触发消息是用户此刻说给 bot 的话,
+   *     不是要被留存的群内容, 它的正文照常进 prompt。
+   *
+   * 与官方 bot 服务端「has_protected_content 的消息不中继」同一语义
+   * (docs/telegram-hook-server.md「群消息中继」节)。字段缺失按未保护处理:
+   * Telegram 只在保护开启时下发它。
+   */
+  has_protected_content?: boolean;
   reply_to_message?: TgMessage;
+  quote?: { text: string; position?: number };
+  rich_message?: { blocks?: unknown };
   text?: string;
   caption?: string;
   entities?: TgMessageEntity[];
@@ -131,10 +157,10 @@ export interface TgMessage {
   photo?: TgPhotoSize[];
   document?: TgDocument;
   sticker?: { emoji?: string; set_name?: string };
-  voice?: { duration?: number };
-  audio?: { file_name?: string };
-  video?: { file_name?: string };
-  video_note?: { duration?: number };
+  voice?: TgMediaFile & { duration?: number };
+  audio?: TgMediaFile & { file_name?: string };
+  video?: TgMediaFile & { file_name?: string };
+  video_note?: TgMediaFile & { duration?: number };
   new_chat_members?: TgUser[];
   left_chat_member?: TgUser;
   /**
@@ -151,10 +177,29 @@ export interface TgCallbackQuery {
   data?: string;
 }
 
+/** 机器人自身在某个 chat 里的成员状态变化(`my_chat_member` update)。 */
+export interface TgChatMemberUpdated {
+  chat: TgChat;
+  /** 做出这次变更的用户(拉 bot 进群 / 踢出 / 拉黑的人)。 */
+  from: TgUser;
+  date: number;
+  old_chat_member: { status: TgChatMemberStatus; user: TgUser };
+  new_chat_member: { status: TgChatMemberStatus; user: TgUser };
+}
+
+export type TgChatMemberStatus =
+  | 'creator'
+  | 'administrator'
+  | 'member'
+  | 'restricted'
+  | 'left'
+  | 'kicked';
+
 export interface TgUpdate {
   update_id: number;
   message?: TgMessage;
   callback_query?: TgCallbackQuery;
+  my_chat_member?: TgChatMemberUpdated;
 }
 
 export interface TgFile {

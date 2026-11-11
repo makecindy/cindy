@@ -29,8 +29,26 @@ vi.mock('react-i18next', () => ({
   }),
 }));
 
+// These fixtures render other SystemCard variants; companion synchronization is tested separately.
+vi.mock('@/features/bots/useRemoteBots', () => ({ useRemoteBots: () => [] }));
+// Partner task cards have their own integration suite; isolate this sibling variant.
+vi.mock('@/features/bots/BotCollaborationCard', () => ({
+  BotSessionTaskCard: () => null,
+  BotSessionTaskMessageTrace: () => null,
+}));
+vi.mock('@/features/bots/BotSessionTaskResultCard', () => ({
+  BotSessionTaskResultCard: () => null,
+}));
+
 vi.mock('@/features/learn/LearnStatusCard', () => ({
   LearnStatusCard: () => null,
+}));
+
+// This suite exercises only the auto-resume rows. Keep the Review card's
+// Markdown dependency out of the fixture so its i18n/bootstrap imports do not
+// leak into this focused component test.
+vi.mock('@/components/chat/MarkdownRenderer', () => ({
+  MarkdownRenderer: () => null,
 }));
 
 import { SystemCard } from '@/components/chat/SystemCard';
@@ -51,7 +69,10 @@ describe('SystemCard auto-resume 行', () => {
       'chat.systemCard.autoResume.labelNeutral',
       'chat.systemCard.autoResume.labelFailed',
     ]) {
-      expect(screen.queryByText(reconnectKey), `${reconnectKey} 属于重连行,不该出现在分隔条上`).toBeNull();
+      expect(
+        screen.queryByText(reconnectKey),
+        `${reconnectKey} 属于重连行,不该出现在分隔条上`,
+      ).toBeNull();
     }
   });
 
@@ -84,12 +105,58 @@ describe('SystemCard auto-resume 行', () => {
       />,
     );
     expect(
-      screen.getByText('chat.systemCard.autoResumePending.labelWithProgress({"attempt":1,"total":5})'),
+      screen.getByText(
+        'chat.systemCard.autoResumePending.labelWithProgress({"attempt":1,"total":5})',
+      ),
     ).toBeTruthy();
     expect(
       screen.queryByText('chat.systemCard.autoResume.labelNeutral'),
       '正在飞的时候不该显示中性静态文案',
     ).toBeNull();
+  });
+
+  it('供应商组换电脑进行中 → 「正在换一台电脑继续」,不带先不呈现的原始错误', () => {
+    render(
+      <SystemCard
+        cardType="auto-resume-pending"
+        data={{
+          error: "You've hit your session limit",
+          attempt: 0,
+          maxAttempts: 0,
+          sessionTotal: 0,
+          groupSwitchPending: { cause: 'usage-limit' },
+        }}
+      />,
+    );
+    expect(screen.getByText('chat.systemCard.autoResumePending.groupSwitch')).toBeTruthy();
+    expect(screen.queryByText(/session limit/)).toBeNull();
+    expect(screen.queryByText('chat.systemCard.autoResumePending.label')).toBeNull();
+  });
+
+  it('供应商组等回原电脑后在原电脑继续 → 「已重新连上 {电脑}，继续运行」,读不到名称时不写电脑名', () => {
+    const { unmount } = render(
+      <SystemCard
+        cardType="auto-resume"
+        data={{
+          reason: 'usage-limit-reset',
+          attempt: 1,
+          maxAttempts: 1,
+          sessionTotal: 0,
+          agentReconnect: { computer: 'Mac mini' },
+        }}
+      />,
+    );
+    expect(
+      screen.getByText('chat.systemCard.autoResume.agentReconnect.named({"computer":"Mac mini"})'),
+    ).toBeTruthy();
+    unmount();
+    render(
+      <SystemCard
+        cardType="auto-resume"
+        data={{ reason: 'usage-limit-reset', attempt: 1, maxAttempts: 1, sessionTotal: 0, agentReconnect: {} }}
+      />,
+    );
+    expect(screen.getByText('chat.systemCard.autoResume.agentReconnect.unnamed')).toBeTruthy();
   });
 
   it('已回填时 inFlight 不参与:终态优先,仍定格 ✓ / ✗', () => {
@@ -102,13 +169,18 @@ describe('SystemCard auto-resume 行', () => {
     );
     expect(screen.getByText('chat.systemCard.autoResume.label')).toBeTruthy();
     expect(
-      screen.queryByText('chat.systemCard.autoResumePending.labelWithProgress({"attempt":2,"total":5})'),
+      screen.queryByText(
+        'chat.systemCard.autoResumePending.labelWithProgress({"attempt":2,"total":5})',
+      ),
     ).toBeNull();
   });
 
   it('带中断信息但 outcome 未回填 → 中性文案(落库记录永不显示"进行中",不变量 I6)', () => {
     render(
-      <SystemCard cardType="auto-resume" data={{ error: 'socket hang up', attempt: 1, maxAttempts: 5 }} />,
+      <SystemCard
+        cardType="auto-resume"
+        data={{ error: 'socket hang up', attempt: 1, maxAttempts: 5 }}
+      />,
     );
     expect(screen.getByText('chat.systemCard.autoResume.labelNeutral')).toBeTruthy();
   });
@@ -118,7 +190,7 @@ describe('SystemCard auto-resume 行', () => {
   // 就是把 autoResume.label 的值改成了「已重新连接」,第一次修的时候只换回了组件、
   // 没换 key,回归就藏在 i18n 层活了下来。这条直接读四个 locale 的 JSON 补上那一层。
   it('四个 locale 里分隔条文案与重连文案是两条独立的 key(值不得相同)', () => {
-    const locales = ['zh-CN', 'en', 'ja', 'ko'] as const;
+    const locales = ['zh-CN', 'zh-TW', 'en', 'ja', 'ko'] as const;
     for (const locale of locales) {
       const raw = readFileSync(
         resolve(__dirname, '..', 'i18n', 'locales', locale, 'common.json'),
@@ -137,13 +209,31 @@ describe('SystemCard auto-resume 行', () => {
     render(
       <SystemCard
         cardType="auto-resume"
-        data={{ error: 'API Error: 502 upstream unreachable', attempt: 1, maxAttempts: 5, outcome: 'succeeded' }}
+        data={{
+          error: 'API Error: 502 upstream unreachable',
+          attempt: 1,
+          maxAttempts: 5,
+          outcome: 'succeeded',
+        }}
       />,
     );
     const button = screen.getByRole('button');
+    expect(button.className.split(/\s+/)).toContain('group');
     expect(button.getAttribute('aria-label')).toBeNull();
     // 可见文本 = 结论 + 摘要,读屏据此拼出无障碍名。
     expect(button.textContent).toContain('chat.systemCard.autoResume.label');
     expect(button.textContent).toContain('502 upstream unreachable');
+  });
+
+  it('仅有 outcome 时仍保留 18px 三角槽,不画三角,也不挂 group', () => {
+    render(<SystemCard cardType="auto-resume" data={{ outcome: 'succeeded' }} />);
+    const button = screen.getByRole('button');
+    expect((button as HTMLButtonElement).disabled).toBe(true);
+    expect(button.className.split(/\s+/)).not.toContain('group');
+    const slot = button.lastElementChild;
+    expect(slot?.className).toContain('w-[18px]');
+    expect(slot?.className).toContain('h-[18px]');
+    expect(slot?.className).toContain('ml-auto');
+    expect(slot?.querySelector('svg')).toBeNull();
   });
 });

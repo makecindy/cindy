@@ -1,3 +1,5 @@
+import type { PiRuntimeCapabilityStatus } from './pi-runtime-capabilities.js';
+
 /**
  * AgentCustomization —— "agent 自己认识的本地 customization" 的统一描述。
  *
@@ -63,6 +65,9 @@ export interface AgentCustomization {
 
   /** Codex 'enabled' 字段; Claude 视为始终 true (不填即 true)。 */
   enabled?: boolean;
+
+  /** Pi scanner/runtime state. Omitted by engines without a runtime truth layer. */
+  runtimeStatus?: PiRuntimeCapabilityStatus;
 
   /** Folder-shaped customization 的一级文件清单; 文件型空数组或不填。 */
   files?: AgentCustomizationFile[];

@@ -10,6 +10,27 @@ export const CHROME_ACTIONS_GEOMETRY = {
   defaultLeft: 8,
   /** macOS 非全屏时，按钮簇为红绿灯预留空间后的左偏移。 */
   macTrafficLightLeft: 78,
-  /** 两个 28px 按钮加 4px 间距的总宽度。 */
-  clusterWidth: 60,
+  /**
+   * 四个 28px 按钮加 4px 间距的总宽度：折叠、菜单、浏览历史后退与前进。
+   * 加删按钮时同步改这里，挖洞与占位都跟着它。
+   */
+  clusterWidth: 124,
 } as const;
+
+/** macOS 非全屏时浮动按钮簇的右缘（窗口坐标）。 */
+export const CHROME_ACTIONS_MAC_RIGHT_EDGE =
+  CHROME_ACTIONS_GEOMETRY.macTrafficLightLeft + CHROME_ACTIONS_GEOMETRY.clusterWidth;
+
+/**
+ * 左侧面板顶栏必须为浮动按钮簇补挖的 no-drag 宽度。
+ *
+ * 按钮簇钉死在窗口左上（mac 非全屏 x=78），而面板顶栏里的洞会被面板自己的
+ * overflow-hidden 按面板宽度裁掉。面板宽度小于簇右缘时（如侧栏拖到 180 的展开
+ * 最小宽），簇的右半截就悬在右侧顶栏的拖拽区上 —— 点前进会被当成拖窗口。这里
+ * 算出「超出面板右缘的那一截」，由右侧顶栏补挖；面板够宽（>= 簇右缘）或簇整个
+ * 落在面板外（rail 宽 78）时退回边界值。
+ */
+export function chromeActionsHitHoleWidth(panelRightEdge: number): number {
+  const overflow = CHROME_ACTIONS_MAC_RIGHT_EDGE - panelRightEdge;
+  return Math.min(CHROME_ACTIONS_GEOMETRY.clusterWidth, Math.max(0, overflow));
+}

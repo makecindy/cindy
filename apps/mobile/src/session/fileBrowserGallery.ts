@@ -144,8 +144,12 @@ export function createFileBrowserMediaResolver(deps: MobileRemoteMediaResolverDe
     // cachedOnly(lightbox 垫底预取):只吃缓存,未命中不触发取件——本 resolver 不区分
     // 缩略图变体,放行会变成一次装饰性的整图导出+下载,与主取件叠成双下载。
     if (opts?.cachedOnly) throw new Error(i18n.t('files.gallery.cacheMiss'));
-    // forceRefresh(Image 加载失败自愈)映射为被控端 skipCache,穿透上传去重缓存。
-    const resolved = await resolveMobileRemoteMedia(media, deps, opts?.forceRefresh ? { skipCache: true } : undefined);
+    // forceRefresh(Image 加载失败自愈)映射为被控端 skipCache,穿透上传去重缓存;
+    // signal(长按导出/分享的「取消」)中止取件。
+    const resolved = await resolveMobileRemoteMedia(media, deps, {
+      ...(opts?.forceRefresh ? { skipCache: true } : {}),
+      ...(opts?.signal ? { signal: opts.signal } : {}),
+    });
     cache.set(media.url, resolved);
     return resolved;
   };

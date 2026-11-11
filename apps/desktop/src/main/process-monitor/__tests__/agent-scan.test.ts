@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 
 import { allUserDataDirNames } from '@cindy/maker-shared/brand-identity';
 
@@ -9,6 +9,7 @@ import {
   buildPosixProcessScanEnv,
   classifyMonitoredAgentCommandLine,
   collectDescendantPids,
+  createWindowsProcessScanner,
   parsePosixProcessTable,
   parseWindowsProcessTable,
   registerPiUserDataMarkers,
@@ -75,11 +76,33 @@ describe('parseWindowsProcessTable', () => {
   });
 });
 
+describe('createWindowsProcessScanner', () => {
+  it('失败后熔断 30s，期间返回空快照且不重复拉起 worker', async () => {
+    let nowMs = 1_000;
+    const runWorker = vi
+      .fn<() => Promise<string>>()
+      .mockRejectedValueOnce(Object.assign(new Error('read ENOTCONN'), { code: 'ENOTCONN' }))
+      .mockResolvedValue('4321|100|1024|0|638901092960000000|C:\\bin\\claude.exe');
+    const scan = createWindowsProcessScanner({ runWorker, now: () => nowMs });
+
+    await expect(scan()).rejects.toMatchObject({ code: 'ENOTCONN' });
+    expect(runWorker).toHaveBeenCalledOnce();
+
+    nowMs += 29_999;
+    await expect(scan()).resolves.toEqual({ rows: [], childrenByParent: new Map() });
+    expect(runWorker).toHaveBeenCalledOnce();
+
+    nowMs += 1;
+    await expect(scan()).resolves.toMatchObject({ rows: [expect.objectContaining({ pid: 4321 })] });
+    expect(runWorker).toHaveBeenCalledTimes(2);
+  });
+});
+
 describe('classifyMonitoredAgentCommandLine', () => {
   it('识别 pi 静态品牌 marker,不影响 claude/codex 委托', () => {
     const piMarkers = buildPiPathMarkers(['cindy']);
     expect(piMarkers).toContain('appdata\\roaming\\cindy\\pi\\');
-    // 品牌目录名随构建配置变化(如 CindyGlobal / 历史 xdt-maker),测试从真实
+    // 品牌目录名随构建配置变化(如 Cindy / CindyGlobal / 历史 xdt-maker),测试从真实
     // 品牌清单派生 probe,不写死品牌名。
     const brandDir = allUserDataDirNames(CURRENT_CINDY_REGION)[0].toLowerCase();
     expect(

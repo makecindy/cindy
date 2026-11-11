@@ -16,6 +16,7 @@ import {
   signGhostPackage,
   verifyGhostZipSignatures,
   type GhostSignatureDocument,
+  type GhostTrustRegistry,
 } from '../ghostSignature';
 
 const MANIFEST: GhostManifest = {
@@ -52,6 +53,30 @@ async function readSignature(buffer: Buffer): Promise<GhostSignatureDocument> {
 }
 
 describe('ghostSignature · 发布者签名', () => {
+  it('signing and review preserve safe Unix executable metadata', async () => {
+    const source = new JSZip();
+    source.file('ghost.json', JSON.stringify(MANIFEST), { unixPermissions: 0o100644 });
+    source.file('main.js', '// browser brain', { unixPermissions: 0o100755 });
+    source.file('linked-dir/', null, { dir: true, unixPermissions: 0o120777 });
+    const unsigned = await source.generateAsync({ type: 'nodebuffer', platform: 'UNIX' });
+    const publisher = crypto.generateKeyPairSync('ed25519');
+    const reviewer = crypto.generateKeyPairSync('ed25519');
+
+    const signed = await signGhostPackage(unsigned, {
+      publisherName: 'Publisher',
+      privateKey: publisher.privateKey,
+    });
+    const signedZip = await JSZip.loadAsync(signed);
+    expect(Number(signedZip.files['main.js'].unixPermissions) & 0o7777).toBe(0o755);
+    expect(Number(signedZip.files['linked-dir/'].unixPermissions) & 0o7777).toBe(0o755);
+
+    const reviewed = await reviewGhostPackage(signed, {
+      reviewerPrivateKey: reviewer.privateKey,
+    });
+    const reviewedZip = await JSZip.loadAsync(reviewed);
+    expect(Number(reviewedZip.files['main.js'].unixPermissions) & 0o7777).toBe(0o755);
+  });
+
   it('无签名可以安装，但明确标为未验证', async () => {
     const zip = await JSZip.loadAsync(await unsignedPackage());
     const result = await verifyGhostZipSignatures(zip, '', MANIFEST);
@@ -99,6 +124,36 @@ describe('ghostSignature · 发布者签名', () => {
         publisherVerified: true,
         publisherName: 'Verified TapTap Publisher',
       },
+    });
+  });
+
+  // Unit: unchanged package bytes must not retain revoked publisher trust through
+  // inspect's parse cache. Existing signature tests only verified fresh ZIPs.
+  it('refreshes inspection trust when the publisher registry changes', async () => {
+    const { privateKey } = crypto.generateKeyPairSync('ed25519');
+    const signed = await signGhostPackage(await unsignedPackage(), {
+      publisherName: 'Publisher',
+      privateKey,
+    });
+    const doc = await readSignature(signed);
+    const file = path.join(workDir, 'registry-change.cindy');
+    await fs.promises.writeFile(file, signed);
+    const trustRegistry: GhostTrustRegistry = {
+      publishers: {
+        [doc.publisher.keyId]: { name: 'Trusted publisher', publicKey: doc.publisher.publicKey },
+      },
+    };
+    const manager = new GhostManager({
+      getRootDir: () => path.join(workDir, 'ghosts'),
+      trustRegistry,
+    });
+
+    expect(await manager.inspect(file)).toMatchObject({
+      trust: { level: 'verified-publisher', publisherVerified: true },
+    });
+    delete trustRegistry.publishers![doc.publisher.keyId];
+    expect(await manager.inspect(file)).toMatchObject({
+      trust: { level: 'unverified', publisherVerified: false },
     });
   });
 

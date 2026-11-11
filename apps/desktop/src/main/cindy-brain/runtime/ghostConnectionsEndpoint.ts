@@ -30,6 +30,7 @@
  */
 
 import { GhostKvError } from '../ghostKvStore.js';
+import { assertGhostProtocolTargetCurrent, GhostProtocolTargetChangedError } from './ghostProtocolTargetGuard.js';
 import { GHOST_SECRET_VALUE_MAX_CHARS } from './ghostSecretsEndpoint.js';
 import { normalizeGhostConnectionHost } from '../ghostConnections.js';
 import type { GhostConnectionUpsertResult, GhostConnectionView } from '../ghostConnections.js';
@@ -62,6 +63,7 @@ export async function handleGhostConnectionsRequest(args: {
   decls: ReadonlyMap<string, { label: string; maxConnections: number }>;
   manager: GhostConnectionsEndpointManager;
   ghostId: string;
+  isCurrent?: () => boolean;
   /**
    * 新增地址的主机受信确认(main 侧模态弹窗;index.ts 注入)。返回 false =
    * 用户拒绝。弹窗抛错按拒绝收(fail-closed:确认不了就不扩白名单)。
@@ -74,6 +76,7 @@ export async function handleGhostConnectionsRequest(args: {
   log?: { warn(message: string, meta?: Record<string, unknown>): void };
 }): Promise<GhostConnectionsRequestOutcome> {
   const { method, pathname, readBodyText, decls, manager, ghostId, log } = args;
+  if (args.isCurrent?.() === false) return { status: 403 };
   const notifyChanged = (declKey: string): void => {
     try {
       args.onChanged?.(declKey);
@@ -121,9 +124,11 @@ export async function handleGhostConnectionsRequest(args: {
     try {
       text = await readBodyText();
     } catch (err) {
+      if (args.isCurrent?.() === false || err instanceof GhostProtocolTargetChangedError) return { status: 403 };
       if (err instanceof GhostKvError && err.code === 'TOO_LARGE') return { status: 413 };
       return { status: 400 };
     }
+    if (args.isCurrent?.() === false) return { status: 403 };
     let parsed: unknown;
     try {
       parsed = JSON.parse(text);
@@ -162,8 +167,10 @@ export async function handleGhostConnectionsRequest(args: {
           log?.warn('ghost connections 受信确认弹窗异常(按拒绝收)', { ghostId, declKey, err: String(err) });
           allowed = false;
         }
+        assertGhostProtocolTargetCurrent(args.isCurrent);
         if (!allowed) return json(200, { ok: false, error: 'CONFIRM_DENIED' });
       }
+      assertGhostProtocolTargetCurrent(args.isCurrent);
       const result = manager.upsert(ghostId, declKey, {
         host,
         token,
@@ -179,6 +186,7 @@ export async function handleGhostConnectionsRequest(args: {
       }
       return json(200, { ok: true, connection: result.connection });
     } catch (err) {
+      if (err instanceof GhostProtocolTargetChangedError) return { status: 403 };
       log?.warn('ghost connections 入库意外失败', { ghostId, declKey, err: String(err) });
       return { status: 500 };
     }
@@ -192,9 +200,11 @@ export async function handleGhostConnectionsRequest(args: {
       try {
         text = await readBodyText();
       } catch (err) {
+        if (args.isCurrent?.() === false || err instanceof GhostProtocolTargetChangedError) return { status: 403 };
         if (err instanceof GhostKvError && err.code === 'TOO_LARGE') return { status: 413 };
         return { status: 400 };
       }
+      if (args.isCurrent?.() === false) return { status: 403 };
       let parsed: unknown;
       try {
         parsed = JSON.parse(text);
@@ -207,10 +217,12 @@ export async function handleGhostConnectionsRequest(args: {
           : undefined;
       if (typeof connectionId !== 'string' || connectionId.length === 0) return { status: 400 };
       try {
+        assertGhostProtocolTargetCurrent(args.isCurrent);
         if (!manager.setDefault(ghostId, declKey, connectionId)) return { status: 404 };
         notifyChanged(declKey);
         return { status: 204 };
       } catch (err) {
+        if (err instanceof GhostProtocolTargetChangedError) return { status: 403 };
         log?.warn('ghost connections 设默认连接意外失败', { ghostId, declKey, err: String(err) });
         return { status: 500 };
       }
@@ -220,10 +232,12 @@ export async function handleGhostConnectionsRequest(args: {
     const connectionId = segments[1];
     if (!connectionId) return { status: 404 };
     try {
+      assertGhostProtocolTargetCurrent(args.isCurrent);
       manager.remove(ghostId, declKey, connectionId);
       notifyChanged(declKey);
       return { status: 204 };
     } catch (err) {
+      if (err instanceof GhostProtocolTargetChangedError) return { status: 403 };
       log?.warn('ghost connections 删除连接意外失败', { ghostId, declKey, err: String(err) });
       return { status: 500 };
     }

@@ -12,6 +12,8 @@ export function printHelp(log = console.log) {
   log('    pnpm restart:desktop:remote --region=cn');
   log('    # Cindy，读取 Global 线上 CDN 端点清单');
   log('    pnpm restart:desktop:remote --endpoints-cdn');
+  log('    # 共享正式版登录态/数据（旧行为；默认已是固定的 dev 独立沙箱）');
+  log('    pnpm restart:desktop:remote -- --shared');
   log('    # Human 可直接启动；不会先清旧进程，Agent 不要使用');
   log('    pnpm dev:desktop:remote');
   log('    pnpm dev:desktop:remote --region=cn');
@@ -30,6 +32,7 @@ export function printHelp(log = console.log) {
   log('    # 升级到上游最新版：下载全平台二进制，并修改对应 latest.json pin');
   log('    pnpm update:claude');
   log('    pnpm update:codex');
+  log('    pnpm update:codex-package');
   log('    pnpm update:ripgrep');
   log('    pnpm update:pi');
   log('    # 依次把四种二进制全部升级到上游最新版');
@@ -37,6 +40,7 @@ export function printHelp(log = console.log) {
   log('    # 固定到指定版本：下面是完整示例，会修改 latest.json pin');
   log('    pnpm update:claude 2.1.199');
   log('    pnpm update:codex 0.144.1');
+  log('    pnpm update:codex-package 0.145.0');
   log('    pnpm update:ripgrep 15.1.0');
   log('    pnpm update:pi 0.83.0');
   log('    # 发布到 CDN 不在本仓：见同级 cindy-binary-release 工程（pnpm release:<kind>）');
@@ -46,14 +50,25 @@ export function printHelp(log = console.log) {
   log('    pnpm mobile:xcode');
   log('    # 中国大陆版：生成 iOS 工程、打开 Xcode 并启动 Metro');
   log('    pnpm mobile:xcode --region=cn');
-  log('    # Cindy 模拟器：先 rebuild 安装，再 start 启动 Metro');
+  log('    # macOS：一条命令在 iOS 模拟器上启动当前 worktree（只看界面加 -- --mock；可重复运行）');
+  log('    pnpm mobile:sim:up');
+  log('    # 分步：先 rebuild 安装，再 start 启动 Metro');
   log('    pnpm mobile:sim:rebuild');
   log('    pnpm mobile:sim:start');
   log('    # 中国大陆版模拟器：先 rebuild 安装，再 start 启动 Metro');
   log('    pnpm mobile:sim:rebuild -- --region=cn');
+  log('    # Windows 一键复用/启动 cindy-api36、配置 adb reverse，并启动中国大陆版 Metro');
+  log('    pnpm mobile:sim:start:cn');
+  log('    # 等价的显式区域写法；--no-emulator 可只启动 Metro');
   log('    pnpm mobile:sim:start -- --region=cn');
   log('    # 查看当前 Metro 对应的 checkout / branch');
   log('    pnpm mobile:sim:whoami');
+  log('    # 验证后检查 Metro 日志：最近一次打包后的 ERROR 和新 WARN（并行设备加 -- --port 8082）');
+  log('    pnpm mobile:sim:logcheck');
+  log('    # macOS：打开唯一已启动设备的 Device Hub / Simulator 窗口（多设备时加 -- --udid <UDID>）');
+  log('    pnpm mobile:sim:open');
+  log('    # 外部窗口验收：额外检查所选 Xcode 的窗口程序是否运行');
+  log('    pnpm mobile:sim:whoami -- --viewer --json');
 
   log('\n  Mobile 构建(纯构建,无上传/发布;region 必填,无默认值):');
   log('    # 配置:按 apps/mobile/scripts/self-host-regions.json.example 复制填写');
@@ -69,9 +84,12 @@ export function printHelp(log = console.log) {
   log('\n  开发检查:');
   log('    pnpm lint');
   log('    pnpm test:runner');
+  log('    pnpm test:unit:related');
   log('    pnpm test:unit');
   log('    # 排查并发相关问题时，可把 workspace runner 临时退回串行');
   log('    pnpm test:unit -- --workspace-concurrency=1');
+  log('    # 仅在需要跨 worktree 排队时主动开启；默认各任务独立运行');
+  log('    pnpm test:unit:related -- --lock');
   log('    pnpm benchmark:desktop-workers -- --workers=1,2,4,8 --output=<report.json>');
   log('    pnpm test:all');
   log('    pnpm test:db');

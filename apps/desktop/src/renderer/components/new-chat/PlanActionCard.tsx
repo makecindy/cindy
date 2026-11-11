@@ -10,9 +10,9 @@
  *                   then belongs to the editor — two identical hints were
  *                   confusing, see issue #475 review feedback).
  *   Feedback Row  — pencil icon + placeholder → becomes an inline editor.
- *                   Enter with text → onRespond(false, feedback). The ⏎ send
- *                   affordance only appears when there is text, and is a real
- *                   button (click submits).
+ *                   Enter with text → onRespond(false, feedback). A full-width
+ *                   input contains the same icon send button as the composer;
+ *                   it stays disabled until there is feedback.
  *
  * Cancel(取消本次审阅)是次级动作,不与批准/反馈同级成行:可见入口收在
  * PlanViewerCard 工具条的 X;这里只保留全局 Esc 快捷键(onCancel)。
@@ -25,7 +25,10 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { CornerDownLeft, Pencil } from 'lucide-react';
 
+import { shouldCardShortcutYield } from '@/lib/editableKeyboardTarget';
 import { cn } from '@/lib/utils';
+import { Tip } from '@/components/ui/tooltip';
+import { SendButton } from './SendButton';
 import { ListComposerTextarea } from './ListComposerTextarea';
 
 // ---------------------------------------------------------------------------
@@ -53,6 +56,7 @@ export function PlanActionCard({ requestId, onRespond, onCancel }: PlanActionCar
   // Important #3: once the user triggers Approve or Feedback, freeze the card
   // so rapid double-clicks can't fire two IPC responses for the same requestId.
   const [submitted, setSubmitted] = useState(false);
+  const cardRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLTextAreaElement>(null);
 
   const handleApprove = useCallback(() => {
@@ -83,7 +87,13 @@ export function PlanActionCard({ requestId, onRespond, onCancel }: PlanActionCar
   const handleFeedbackInput = useCallback((e: React.FormEvent<HTMLTextAreaElement>) => {
     const el = e.currentTarget;
     el.style.height = 'auto';
-    const maxHeight = 6 * 22; // ~6 rows at line-height ~22px
+    // 行高改成无单位比例后会随「外观 → UI 字号」缩放,6 行上限必须按实际计算值算:
+    // 写死 6×22 会让放大字号时仍按 132px 截断,可见行数反而变少。取不到计算值
+    // (如 jsdom 返回 'normal')时回落到默认字号下的 22px。
+    const computedLineHeight = Number.parseFloat(window.getComputedStyle(el).lineHeight);
+    const rowHeight =
+      Number.isFinite(computedLineHeight) && computedLineHeight > 0 ? computedLineHeight : 22;
+    const maxHeight = 6 * rowHeight;
     el.style.height = `${Math.min(el.scrollHeight, maxHeight)}px`;
   }, []);
 
@@ -101,19 +111,11 @@ export function PlanActionCard({ requestId, onRespond, onCancel }: PlanActionCar
   useEffect(() => {
     const handler = (e: KeyboardEvent) => {
       if (isEditing || submitted) return;
-      // Avoid hijacking keys when any other input / textarea / button /
-      // contenteditable on the page has focus — e.g. the search bar, toolbar
-      // buttons, settings forms, etc.
-      const target = e.target as HTMLElement | null;
-      const tag = target?.tagName;
-      if (
-        tag === 'INPUT' ||
-        tag === 'TEXTAREA' ||
-        tag === 'BUTTON' ||
-        (target && (target as HTMLElement).isContentEditable)
-      ) {
-        return;
-      }
+      if (e.key !== 'Enter' && e.key !== 'Escape') return;
+      // Yield when the key already belongs to something else: typing in any
+      // field, a menu item chosen with Enter, a menu or popover closed with
+      // Escape, or a toolbar button elsewhere on the page.
+      if (shouldCardShortcutYield(e, e.key === 'Escape' ? 'dismiss' : 'activate', cardRef.current)) return;
       if (e.key === 'Enter' && !e.shiftKey && !e.metaKey && !e.ctrlKey) {
         e.preventDefault();
         handleApprove();
@@ -131,6 +133,7 @@ export function PlanActionCard({ requestId, onRespond, onCancel }: PlanActionCar
 
   return (
     <div
+      ref={cardRef}
       className={cn(
         'flex w-full max-w-[914px] flex-col overflow-hidden rounded-[12px] border',
         'border-[var(--plan-card-border)] bg-[var(--plan-card-bg)]',
@@ -184,60 +187,48 @@ export function PlanActionCard({ requestId, onRespond, onCancel }: PlanActionCar
 
       {/* Feedback Row */}
       {isEditing ? (
-        <div className="flex items-start gap-[10px] px-[16px] py-[14px]">
-          <Pencil
-            size={16}
-            className="mt-[2px] shrink-0 text-[var(--plan-action-fb-icon)]"
-          />
-          <ListComposerTextarea
-            ref={inputRef}
-            value={feedback}
-            onChange={(e) => setFeedback(e.target.value)}
-            onInput={handleFeedbackInput}
-            onKeyDown={(e) => {
-              if (e.key === 'Enter' && !e.shiftKey && !e.nativeEvent.isComposing) {
-                e.preventDefault();
-                handleSubmitFeedback();
-              }
-              if (e.key === 'Escape') {
-                e.preventDefault();
-                setIsEditing(false);
-                setFeedback('');
-              }
-            }}
-            onBlur={() => {
-              // Keep editing state even on blur — users may click back in.
-              // Only collapse when there is no content at all.
-              if (!feedback) setIsEditing(false);
-            }}
-            placeholder={t('newChat.planReview.feedbackPlaceholder')}
-            rows={1}
-            disabled={submitted}
-            className={cn(
-              'flex-1 resize-none bg-transparent text-14 outline-none',
-              'text-[var(--plan-action-fb-text)]',
-              'placeholder:text-[var(--plan-action-fb-placeholder)]',
-              'leading-[22px]', // lock line-height so auto-grow math stays accurate
-              submitted && 'cursor-not-allowed opacity-60',
-            )}
-          />
-          {/* 发送 ⏎:有文字才出现,且是真按钮(点击即发送)。textarea 的 onBlur 在
-               mousedown 后、click 前触发会把空文本行折叠掉,但有文字时行保持展开,
-               点击顺序安全。 */}
-          {hasFeedbackText && (
-            <button
-              type="button"
-              onClick={handleSubmitFeedback}
+        <div className="p-3">
+          <div data-testid="interaction-answer-composer" className="flex w-full min-w-0 flex-col gap-2 rounded-[8px] border border-[var(--plan-card-border)] bg-[var(--chat-input-bg)] p-3 focus-within:border-[var(--chat-input-border-focus)]">
+            <ListComposerTextarea
+              ref={inputRef}
+              value={feedback}
+              onChange={(e) => setFeedback(e.target.value)}
+              onInput={handleFeedbackInput}
+              onKeyDown={(e) => {
+                if (e.key === 'Enter' && !e.shiftKey && !e.nativeEvent.isComposing) {
+                  e.preventDefault();
+                  handleSubmitFeedback();
+                }
+                if (e.key === 'Escape') {
+                  e.preventDefault();
+                  setIsEditing(false);
+                  setFeedback('');
+                }
+              }}
+              onBlur={() => {
+                // Keep editing state even on blur — users may click back in.
+                // Only collapse when there is no content at all.
+                if (!feedback) setIsEditing(false);
+              }}
+              placeholder={t('newChat.planReview.feedbackPlaceholder')}
+              rows={1}
               disabled={submitted}
-              aria-label={t('newChat.planReview.submitFeedbackAria')}
-              className="ml-auto mt-[2px] shrink-0 rounded p-0 transition-opacity hover:opacity-75"
-            >
-              <CornerDownLeft
-                size={16}
-                className="translate-y-[0.5px] text-[var(--plan-action-approve-text)]"
-              />
-            </button>
-          )}
+              className={cn(
+                'min-h-[44px] w-full min-w-0 resize-none bg-transparent text-14 outline-none',
+                'text-[var(--plan-action-fb-text)]',
+                'placeholder:text-[var(--plan-action-fb-placeholder)]',
+                // 22 ÷ 14:与 text-14 等比,随 UI 字号缩放(auto-grow 上限按计算值取)
+                'leading-[1.571]',
+                submitted && 'cursor-not-allowed opacity-60',
+              )}
+            />
+            <div className="flex w-full items-center justify-end gap-2">
+              <Tip text={t('newChat.planReview.submitFeedbackAria')}>
+                <SendButton onClick={handleSubmitFeedback} disabled={submitted || !hasFeedbackText}
+                  ariaLabel={t('newChat.planReview.submitFeedbackAria')} />
+              </Tip>
+            </div>
+          </div>
         </div>
       ) : (
         <button

@@ -181,13 +181,17 @@ describe('main-owned RSB native popup surfaces', () => {
     expect(electronMocks.views[0]?.visible).toBe(true);
   });
 
-  it('publishes null when a favicon update has no usable URL', async () => {
+  it('publishes an empty string when Chromium explicitly reports no favicon', async () => {
     const host = makeContents(1);
     const popup = makeContents(42);
     electronMocks.windows.set(host, makeWindow());
     const surfaceId = createRsbNativePopupSurface(host as never, popup as never)!;
     const claim = electronMocks.handlers.get(RSB_NATIVE_POPUP_CLAIM_CHANNEL)!;
-    await claim({ sender: host }, { surfaceId, sessionId: 'session-a', tabId: 'tab-popup' });
+    const claimed = await claim(
+      { sender: host },
+      { surfaceId, sessionId: 'session-a', tabId: 'tab-popup' },
+    );
+    expect(claimed).toMatchObject({ alive: true, snapshot: { favicon: null } });
 
     popup.emit('page-favicon-updated', {}, ['', '   ']);
 
@@ -196,7 +200,33 @@ describe('main-owned RSB native popup surfaces', () => {
       payload: {
         surfaceId,
         type: 'state',
-        snapshot: expect.objectContaining({ favicon: null }),
+        snapshot: expect.objectContaining({ favicon: '' }),
+      },
+    });
+  });
+
+  it('skips non-persistable popup favicon candidates and publishes a safe fallback', async () => {
+    const host = makeContents(1);
+    const popup = makeContents(42);
+    electronMocks.windows.set(host, makeWindow());
+    const surfaceId = createRsbNativePopupSurface(host as never, popup as never)!;
+    const claim = electronMocks.handlers.get(RSB_NATIVE_POPUP_CLAIM_CHANNEL)!;
+    await claim({ sender: host }, { surfaceId, sessionId: 'session-a', tabId: 'tab-popup' });
+
+    popup.emit('page-favicon-updated', {}, [
+      'blob:https://accounts.example.test/favicon',
+      `data:image/png;base64,${'x'.repeat(3 * 1024)}`,
+      'https://accounts.example.test/favicon.ico',
+    ]);
+
+    expect(host.sent.at(-1)).toEqual({
+      channel: 'rsb-native-popup:event',
+      payload: {
+        surfaceId,
+        type: 'state',
+        snapshot: expect.objectContaining({
+          favicon: 'https://accounts.example.test/favicon.ico',
+        }),
       },
     });
   });

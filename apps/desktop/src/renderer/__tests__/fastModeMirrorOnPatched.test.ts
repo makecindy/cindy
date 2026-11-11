@@ -5,7 +5,7 @@
  * 幂等(值未变 = no-op,不与本机乐观切换打架);patch 不含 fastMode 时不动。
  */
 import { describe, it, expect } from 'vitest';
-import { makerChatStore } from '@/lib/makerChatStore';
+import { buildCreateOptsForCurrentSession, makerChatStore } from '@/lib/makerChatStore';
 
 // 模块级 sessions Map 跨用例持久 → 每个用例用唯一 sessionId 隔离。
 let n = 0;
@@ -59,6 +59,58 @@ describe('makerChatStore.mirrorSessionFields', () => {
     makerChatStore.mirrorSessionFields(s, { agentKind: 'codex' });
     expect(makerChatStore.getSnapshot(s).agentKind).toBe('codex');
     expect(makerChatStore.getSnapshot(s).agentSwitchIntent).toBeNull();
+  });
+
+  it('applies the switched provider snapshot so later createOpts do not keep the old source', () => {
+    const s = sid();
+    makerChatStore.mirrorSessionFields(s, { providerId: 'xd' });
+    makerChatStore.noteAgentSwitchIntent(s, 'codex', {
+      model: 'gpt-5.5',
+      providerId: 'openai',
+    });
+    makerChatStore.mirrorSessionFields(s, { agentKind: 'codex' });
+    expect(makerChatStore.getSnapshot(s).sessionProviderId).toBe('openai');
+    expect(makerChatStore.getSnapshot(s).agentSwitchIntent).toBeNull();
+    expect(buildCreateOptsForCurrentSession(s, 'gpt-5.5', 'high', 'default', '/tmp').providerId).toBe(
+      'openai',
+    );
+  });
+
+  it('keeps a newer model choice for the same agent until the host explicitly consumes it', () => {
+    const s = sid();
+    makerChatStore.setSessionRuntime(s, { agentKind: 'claude-code' });
+    makerChatStore.noteAgentSwitchIntent(s, 'pi', { model: 'newer-model', providerId: 'newer-source' });
+    const revision = makerChatStore.getAgentSwitchIntentRev(s);
+    makerChatStore.mirrorSessionFields(s, {
+      agentKind: 'pi', providerId: 'xai',
+      runtimeEffective: { agentKind: 'pi', model: 'grok-4.6', providerId: 'xai', effort: 'low', fastMode: false },
+    });
+    expect(makerChatStore.getSnapshot(s).agentKind).toBe('pi');
+    expect(makerChatStore.getSnapshot(s).sessionProviderId).toBe('xai');
+    expect(makerChatStore.getAgentSwitchIntent(s)).toMatchObject({ model: 'newer-model', providerId: 'newer-source' });
+    expect(makerChatStore.getAgentSwitchIntentRev(s)).toBe(revision);
+    makerChatStore.mirrorSessionFields(s, { agentSwitchIntent: null });
+    expect(makerChatStore.getAgentSwitchIntent(s)).toBeNull();
+  });
+
+  it('does not infer consumption when a patch explicitly retains an intent for the same agent', () => {
+    const s = sid();
+    makerChatStore.mirrorSessionFields(s, {
+      agentKind: 'pi',
+      agentSwitchIntent: { targetAgentKind: 'pi', model: 'next-pi-model', providerId: null },
+    });
+    expect(makerChatStore.getSnapshot(s).agentKind).toBe('pi');
+    expect(makerChatStore.getAgentSwitchIntent(s)?.model).toBe('next-pi-model');
+  });
+
+  it('mirrors an explicit same-agent provider patch into later createOpts', () => {
+    const s = sid();
+    makerChatStore.mirrorSessionFields(s, { providerId: 'xd' });
+    makerChatStore.mirrorSessionFields(s, { providerId: 'custom-litellm' });
+    expect(makerChatStore.getSnapshot(s).sessionProviderId).toBe('custom-litellm');
+    expect(
+      buildCreateOptsForCurrentSession(s, 'gpt-5.5', 'high', 'default', '/tmp').providerId,
+    ).toBe('custom-litellm');
   });
 
   it('SET_MODEL 取消广播只清展示 intent,不改真实引擎', () => {

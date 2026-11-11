@@ -1,6 +1,11 @@
-import { describe, expect, it } from 'vitest';
+import { beforeAll, describe, expect, it } from 'vitest';
+import { i18n } from '@/i18n';
 import { summarizeSessionOverview } from '@/session/sessionOverview';
 import type { RemoteSession } from '@/session/types';
+
+beforeAll(async () => {
+  await i18n.changeLanguage('zh-CN');
+});
 
 function session(patch: Partial<RemoteSession> = {}): RemoteSession {
   return {
@@ -84,7 +89,7 @@ describe('sessionOverview', () => {
     expect(overview.stateChips).toEqual([
       { id: 'read-only', label: '只读', strong: true },
     ]);
-    expect(overview.runtimeSubtitle).toBe('协作 Worker · Worktree app-worker · Codex · claude-sonnet-4-6 · plan · Fast');
+    expect(overview.runtimeSubtitle).toBe('协同 Worker · Worktree app-worker · Codex · claude-sonnet-4-6 · plan · Fast');
   });
 
   it('marks archived sessions without surfacing usage in the main overview', () => {
@@ -102,7 +107,7 @@ describe('sessionOverview', () => {
     });
 
     expect(overview.attentionLabel).toBe('已归档');
-    expect(overview.actionCopy).toBe('任务已归档，恢复后才能继续发送。');
+    expect(overview.actionCopy).toBe('任务已归档，发送消息会自动取消归档。');
     expect(overview.stateChips).toEqual([
       { id: 'status', label: '已归档', strong: true },
     ]);

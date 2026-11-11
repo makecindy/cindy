@@ -7,7 +7,7 @@
 
 import { z } from 'zod';
 
-import { withScheduler } from './_shared.js';
+import { resolveSchedulerRunIdCandidates, withScheduler } from './_shared.js';
 import type { LiziMcpSessionContext, SchedulerMcpDeps } from '../types.js';
 import type { SchedulerToolRegistry } from '../cindy_schedulerToolRegistry.js';
 
@@ -32,31 +32,24 @@ export function registerScheduleNotifyCurrentRunTool(
     },
     handler: async ({ runId }) =>
       withScheduler(deps, async (scheduler) => {
-        const sessionId = getSessionContext?.().sessionId;
-        let targetRunId: string | undefined;
-        if (sessionId) {
-          targetRunId = scheduler.resolveInflightRunForSession(sessionId);
-          if (!targetRunId) {
-            throw new Error(
-              'in-flight run not found for current session — notify can only be called while this session has an automation run executing',
-            );
-          }
-        } else {
-          targetRunId = runId;
-          if (!targetRunId) {
-            throw new Error(
-              'in-flight run not found: cannot resolve current session and no runId provided',
-            );
+        const { sessionId, runIds } = resolveSchedulerRunIdCandidates(
+          scheduler,
+          getSessionContext?.(),
+          runId,
+        );
+        for (const targetRunId of runIds) {
+          if (scheduler.notifyRun(targetRunId)) {
+            return { notified: true, runId: targetRunId };
           }
         }
-
-        const ok = scheduler.notifyRun(targetRunId);
-        if (!ok) {
+        if (sessionId) {
           throw new Error(
-            `in-flight run not found: ${targetRunId} — notify can only be called while this run is executing`,
+            'in-flight run not found for current session — notify can only be called while this session has an automation run executing',
           );
         }
-        return { notified: true, runId: targetRunId };
+        throw new Error(
+          `in-flight run not found: ${runIds[0] ?? 'unknown'} — notify can only be called while this run is executing`,
+        );
       }),
   });
 }

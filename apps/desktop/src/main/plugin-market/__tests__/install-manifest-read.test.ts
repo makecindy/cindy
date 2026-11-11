@@ -15,12 +15,51 @@ vi.mock('electron', () => ({
 }));
 
 const brain = vi.hoisted(() => ({
-  installOrUpdateMarketGhostPackage: vi.fn(async () => ({}) as never),
+  inspect: vi.fn(),
+  installOrUpdateMarketGhostPackage: vi.fn(
+    async (filePath: string, options: unknown) => {
+      if (filePath.length === 0 || options === undefined) throw new Error('invalid install call');
+      return {} as never;
+    },
+  ),
   rejectReservedGhostIdForCustomMarket: vi.fn(),
-  packGhostDirToFile: vi.fn(async () => ({ ok: true as const, manifest: {} })),
+  packGhostDirToFile: vi.fn(
+    async (pluginDir: string, tempPath: string, expectedRoot: string) => {
+      void pluginDir;
+      void tempPath;
+      void expectedRoot;
+      return {
+        ok: true as const,
+        manifest: {},
+      };
+    },
+  ),
 }));
 vi.mock('../../cindy-brain/index.js', () => ({
-  installOrUpdateMarketGhostPackage: brain.installOrUpdateMarketGhostPackage,
+  refreshPluginUsageBindings: vi.fn(async () => undefined),
+  confirmLegacyLibraryReattach: async () => false,
+  getGhostManager: () => ({ inspect: brain.inspect }),
+  installOrUpdateMarketGhostPackage: async (
+    filePath: string,
+    options: {
+      afterCommitInLock?: (
+        installed: unknown,
+        evidence: {
+          rawManifestSha256: string;
+          legacyManifestDigest: string;
+          canonicalManifest: GhostManifest;
+        },
+      ) => void | Promise<void>;
+    },
+  ) => {
+    const installed = await brain.installOrUpdateMarketGhostPackage(filePath, options);
+    await options.afterCommitInLock?.(installed, {
+      rawManifestSha256: 'b'.repeat(64),
+      legacyManifestDigest: 'c'.repeat(64),
+      canonicalManifest: (installed as { manifest: GhostManifest }).manifest,
+    });
+    return installed;
+  },
   rejectReservedGhostIdForCustomMarket: brain.rejectReservedGhostIdForCustomMarket,
 }));
 vi.mock('../../cindy-brain/forge.js', () => ({
@@ -32,22 +71,51 @@ vi.mock('../../logger.js', () => ({ createLogger: () => logger }));
 import type { GhostManifest } from '../../../shared/ghost.js';
 import { installCustomMarketPlugin } from '../install';
 
-const GOOD_MANIFEST = {
-  schemaVersion: 2,
+const GOOD_MANIFEST: GhostManifest = {
+  schemaVersion: 3,
+  minCindyVersion: '0.1.61',
   id: 'demo',
   name: '演示插件',
   version: '1.0.0',
   kind: 'chip',
   entry: 'main.js',
-  slots: ['tool'],
   tools: [{ name: 'do_thing', description: '做点事' }],
+};
+const GOOD_IDENTITY = {
+  expectedGhostId: GOOD_MANIFEST.id,
+  expectedVersion: GOOD_MANIFEST.version,
+  // 用户确认本身由 ghostInstallConsent 的用例覆盖；这里只验读取与打包闸。
+  resolveConsent: async () => ({ mode: 'unprompted' as const }),
 };
 
 let workDir: string;
 
 beforeEach(async () => {
   workDir = await fs.promises.mkdtemp(path.join(os.tmpdir(), 'cindy-market-install-'));
-  brain.packGhostDirToFile.mockClear();
+  brain.packGhostDirToFile.mockReset();
+  brain.packGhostDirToFile.mockResolvedValue({
+    ok: true as const,
+    manifest: GOOD_MANIFEST,
+  });
+  brain.installOrUpdateMarketGhostPackage.mockReset();
+  brain.installOrUpdateMarketGhostPackage.mockResolvedValue({
+    manifest: GOOD_MANIFEST,
+    dir: path.join(workDir, 'installed'),
+    enabled: true,
+  } as never);
+  brain.inspect.mockReset();
+  brain.inspect.mockResolvedValue({
+    manifest: GOOD_MANIFEST,
+    canonicalManifest: GOOD_MANIFEST,
+    unsupportedLegacySlots: [],
+    trust: {
+      level: 'unverified',
+      publisherSigned: false,
+      publisherVerified: false,
+      reviewed: false,
+    },
+    packageSha256: 'a'.repeat(64),
+  });
   logger.warn.mockClear();
 });
 
@@ -69,7 +137,7 @@ describe('installCustomMarketPlugin · 身份卡读取闸', () => {
       await expect(
         installCustomMarketPlugin({
           pluginDir,
-          expected: GOOD_MANIFEST as unknown as GhostManifest,
+          ...GOOD_IDENTITY,
         }),
       ).rejects.toMatchObject({ code: 'GHOST_FILE_INVALID' });
       expect(brain.packGhostDirToFile).not.toHaveBeenCalled();
@@ -89,10 +157,31 @@ describe('installCustomMarketPlugin · 身份卡读取闸', () => {
     await expect(
       installCustomMarketPlugin({
         pluginDir,
-        expected: GOOD_MANIFEST as unknown as GhostManifest,
+        ...GOOD_IDENTITY,
       }),
     ).rejects.toMatchObject({ code: 'GHOST_FILE_INVALID' });
     expect(brain.packGhostDirToFile).not.toHaveBeenCalled();
+  });
+
+  it('目录身份在发现后变化 → 拒绝安装另一个插件', async () => {
+    const pluginDir = path.join(workDir, 'plugin-changed-identity');
+    await fs.promises.mkdir(pluginDir, { recursive: true });
+    await fs.promises.writeFile(
+      path.join(pluginDir, 'ghost.json'),
+      JSON.stringify({ ...GOOD_MANIFEST, id: 'other-plugin', version: '2.0.0' }),
+    );
+
+    await expect(
+      installCustomMarketPlugin({
+        pluginDir: await fs.promises.realpath(pluginDir),
+        ...GOOD_IDENTITY,
+      }),
+    ).rejects.toMatchObject({
+      code: 'PRECONDITION_FAILED',
+      message: expect.stringContaining('identity changed'),
+    });
+    expect(brain.packGhostDirToFile).not.toHaveBeenCalled();
+    expect(brain.installOrUpdateMarketGhostPackage).not.toHaveBeenCalled();
   });
 
   it('把已校验的规范根同时作为打包输入与打包器锚点传下去', async () => {
@@ -115,7 +204,7 @@ describe('installCustomMarketPlugin · 身份卡读取闸', () => {
 
     await installCustomMarketPlugin({
       pluginDir: canonical,
-      expected: GOOD_MANIFEST as unknown as GhostManifest,
+      ...GOOD_IDENTITY,
     });
 
     expect(brain.packGhostDirToFile).toHaveBeenCalledWith(
@@ -123,6 +212,80 @@ describe('installCustomMarketPlugin · 身份卡读取闸', () => {
       expect.stringContaining('.cindy'),
       canonical, // ← 锚点必须是上游校验过的规范根
     );
+  });
+
+  it('真实临时包只提交一次，并以发现清单作为能力上限', async () => {
+    const pluginDir = path.join(workDir, 'plugin-commit');
+    await fs.promises.mkdir(pluginDir, { recursive: true });
+    await fs.promises.writeFile(
+      path.join(pluginDir, 'ghost.json'),
+      JSON.stringify(GOOD_MANIFEST),
+    );
+    const canonical = await fs.promises.realpath(pluginDir);
+    brain.packGhostDirToFile.mockImplementationOnce(async (_pluginDir, tempPath) => {
+      await fs.promises.writeFile(tempPath, 'verified-package');
+      return { ok: true as const, manifest: GOOD_MANIFEST };
+    });
+    let committedTempPath = '';
+    brain.installOrUpdateMarketGhostPackage.mockImplementationOnce(async (tempPath: string) => {
+      committedTempPath = tempPath;
+      expect(fs.existsSync(tempPath)).toBe(true);
+      return {
+        manifest: GOOD_MANIFEST,
+        dir: path.join(workDir, 'installed'),
+        enabled: true,
+      } as never;
+    });
+    const afterCommit = vi.fn(async () => undefined);
+
+    await installCustomMarketPlugin({
+      pluginDir: canonical,
+      ...GOOD_IDENTITY,
+      afterCommit,
+    });
+
+    expect(brain.installOrUpdateMarketGhostPackage).toHaveBeenCalledTimes(1);
+    const [commitPath, commitOptions] = brain.installOrUpdateMarketGhostPackage.mock.calls[0] ?? [];
+    expect(commitPath).toBe(committedTempPath);
+    expect(commitOptions).toMatchObject({
+      ghostId: GOOD_IDENTITY.expectedGhostId,
+      version: GOOD_IDENTITY.expectedVersion,
+      manifestCap: GOOD_MANIFEST,
+    });
+    expect(afterCommit).toHaveBeenCalledWith(
+      expect.objectContaining({ manifest: GOOD_MANIFEST }),
+      GOOD_MANIFEST,
+      {
+        rawManifestSha256: 'b'.repeat(64),
+        legacyManifestDigest: 'c'.repeat(64),
+        canonicalManifest: GOOD_MANIFEST,
+      },
+    );
+    expect(fs.existsSync(String(commitPath))).toBe(false);
+  });
+
+  it('提交失败后清理临时包', async () => {
+    const pluginDir = path.join(workDir, 'plugin-failure');
+    await fs.promises.mkdir(pluginDir, { recursive: true });
+    await fs.promises.writeFile(
+      path.join(pluginDir, 'ghost.json'),
+      JSON.stringify(GOOD_MANIFEST),
+    );
+    brain.installOrUpdateMarketGhostPackage.mockRejectedValueOnce(new Error('commit failed'));
+    const afterCommit = vi.fn(async () => undefined);
+
+    await expect(
+      installCustomMarketPlugin({
+        pluginDir: await fs.promises.realpath(pluginDir),
+        ...GOOD_IDENTITY,
+        afterCommit,
+      }),
+    ).rejects.toThrow('commit failed');
+
+    expect(brain.installOrUpdateMarketGhostPackage).toHaveBeenCalledTimes(1);
+    expect(afterCommit).not.toHaveBeenCalled();
+    const [tempPath] = brain.installOrUpdateMarketGhostPackage.mock.calls[0] ?? [];
+    expect(fs.existsSync(String(tempPath))).toBe(false);
   });
 
   it.runIf(process.platform !== 'win32')(
@@ -154,7 +317,7 @@ describe('installCustomMarketPlugin · 身份卡读取闸', () => {
       await expect(
         installCustomMarketPlugin({
           pluginDir: discovered, // 传发现时的规范路径
-          expected: GOOD_MANIFEST as unknown as GhostManifest,
+          ...GOOD_IDENTITY,
         }),
       ).rejects.toMatchObject({
         code: 'GHOST_FILE_INVALID',
@@ -176,7 +339,7 @@ describe('installCustomMarketPlugin · 身份卡读取闸', () => {
     await expect(
       installCustomMarketPlugin({
         pluginDir: await fs.promises.realpath(pluginDir),
-        expected: GOOD_MANIFEST as unknown as GhostManifest,
+        ...GOOD_IDENTITY,
       }),
     ).rejects.toMatchObject({
       code: 'GHOST_FILE_INVALID',

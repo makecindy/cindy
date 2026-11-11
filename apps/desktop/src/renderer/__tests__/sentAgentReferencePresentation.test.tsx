@@ -10,7 +10,10 @@ import {
   projectSentInlinePlainText,
   projectSentRanges,
 } from '@/components/chat/UserMessage';
-import { SentAgentReferenceChip } from '@/components/chat/SentAgentReferenceChip';
+import {
+  SentAgentReferenceChip,
+  sentAgentReferenceDisplayLabel,
+} from '@/components/chat/SentAgentReferenceChip';
 import { formatQuoteForSend, parseChatQuoteSegments } from '@/lib/chatQuotes';
 
 afterEach(cleanup);
@@ -101,6 +104,17 @@ describe('sent structured reference chips', () => {
       } satisfies AgentInputReference,
     },
     {
+      label: 'Dash Bot',
+      reference: {
+        kind: 'bot',
+        start: 0,
+        end: 5,
+        href: 'cindy://bot/bot-dash-1',
+        botId: 'bot-dash-1',
+        name: 'Dash Bot',
+      } satisfies AgentInputReference,
+    },
+    {
       label: '客户 ACME',
       reference: {
         kind: 'plugin-resource',
@@ -158,5 +172,28 @@ describe('sent structured reference chips', () => {
     expect(container.textContent).toContain('Quoted message');
     expect(container.querySelector('[data-inline-reference-chip]')).not.toBeNull();
     expect(container.querySelector('button')).toBeNull();
+  });
+
+  it('falls back to neutral labels instead of internal ids when text or title is missing', () => {
+    const messageLabel = sentAgentReferenceDisplayLabel({
+      kind: 'message',
+      start: 0,
+      end: 16,
+      href: 'cindy://session/session-1?message=message-1',
+      sessionId: 'session-1',
+      messageClientId: 'message-1',
+    });
+    const sessionLabel = sentAgentReferenceDisplayLabel({
+      kind: 'session',
+      start: 0,
+      end: 16,
+      href: 'cindy://session/session-1',
+      sessionId: 'session-1',
+    });
+
+    expect(messageLabel).toBeTruthy();
+    expect(messageLabel).not.toContain('message-1');
+    expect(sessionLabel).toBeTruthy();
+    expect(sessionLabel).not.toContain('session-1');
   });
 });

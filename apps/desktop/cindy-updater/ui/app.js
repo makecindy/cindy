@@ -2,41 +2,54 @@
 const { invoke } = window.__TAURI__.core;
 const { listen } = window.__TAURI__.event;
 
-const PHASE_LABEL = {
-  waiting: "等待",
-  requesting_elevation: "请求授权",
-  backing_up: "备份",
-  extracting: "解压中",
-  replacing: "替换文件",
-  launching: "启动新版",
-  rolling_back: "回滚",
-  done: "完成",
-  failed: "失败",
-};
+const copy = window.updaterCopy(navigator.language);
 
 const INDETERMINATE_PHASES = new Set(["waiting", "launching", "requesting_elevation"]);
+const retryCopy = window.retryCopy(navigator.language);
 
 const els = {
+  title: document.getElementById("title"),
+  details: document.getElementById("error-details"),
+  detailsLabel: document.getElementById("error-details-label"),
+  diagnostic: document.getElementById("error-diagnostic"),
   chip: document.getElementById("phase-chip"),
   message: document.getElementById("message"),
   fill: document.getElementById("progress-fill"),
   track: document.getElementById("progress-track"),
   errorBar: document.getElementById("error-bar"),
   errorText: document.getElementById("error-text"),
+  btnRetry: document.getElementById("btn-retry"),
   btnLog: document.getElementById("btn-log"),
   btnQuit: document.getElementById("btn-quit"),
 };
 
+els.btnRetry.textContent = retryCopy.retry;
+document.title = copy.title;
+document.documentElement.lang = copy.locale;
+els.title.textContent = copy.title;
+els.chip.textContent = copy.waiting;
+els.message.textContent = copy.waitingMessage;
+els.btnLog.textContent = copy.log;
+els.btnQuit.textContent = copy.close;
+els.detailsLabel.textContent = copy.details;
+
+let retrying = false;
+let canRetry = false;
+
 function applyStatus(payload) {
   const phase = payload.phase || "waiting";
-  els.chip.textContent = PHASE_LABEL[phase] || phase;
+  els.chip.textContent = copy[phase] || copy.waiting;
   els.chip.className = `chip phase-${phase}`;
-  els.message.textContent = payload.message || "";
+  els.message.textContent = window.updaterMessage(copy, { ...payload, phase });
+  els.details.hidden = true;
+  els.diagnostic.textContent = "";
 
   if (phase === "failed") {
     els.track.hidden = true;
     els.errorBar.hidden = !payload.error;
-    els.errorText.textContent = payload.error || "";
+    els.errorText.textContent = payload.error ? retryCopy[payload.error] || copy.failureAdvice : "";
+    els.details.hidden = !payload.error || Boolean(retryCopy[payload.error]);
+    els.diagnostic.textContent = els.details.hidden ? "" : payload.error;
   } else {
     els.track.hidden = false;
     els.errorBar.hidden = true;
@@ -67,7 +80,40 @@ function applyStatus(payload) {
   // Close button only appears in terminal states — there's nothing to abort
   // mid-update without leaving the install dir half-rewritten.
   els.btnQuit.hidden = phase !== "done" && phase !== "failed";
+  // In-process retry keeps this flag set between the click and the next
+  // installer event. Any later status, including another Failed, belongs to
+  // the new attempt.
+  retrying = false;
+  canRetry = phase === "failed" && payload.can_retry === true;
+  els.btnRetry.hidden = !canRetry;
+  els.btnRetry.disabled = false;
 }
+
+els.btnRetry.addEventListener("click", async () => {
+  if (retrying || !canRetry) return;
+
+  retrying = true;
+  els.btnRetry.hidden = true;
+  els.btnRetry.disabled = true;
+  // Hide Close until the worker reports a terminal state. retry_update returns
+  // before the worker finishes; quitting here would kill an in-flight install.
+  els.btnQuit.hidden = true;
+
+  try {
+    await invoke("retry_update");
+  } catch (err) {
+    retrying = false;
+    const code = String(err?.message || err);
+    if (code === "archive_unavailable" || code === "unavailable") {
+      canRetry = false;
+    }
+    els.btnRetry.hidden = !canRetry;
+    els.btnRetry.disabled = false;
+    els.btnQuit.hidden = false;
+    els.errorBar.hidden = false;
+    els.errorText.textContent = retryCopy[code] || retryCopy.spawn_failed;
+  }
+});
 
 els.btnLog.addEventListener("click", () => {
   invoke("open_log_dir").catch((err) => {

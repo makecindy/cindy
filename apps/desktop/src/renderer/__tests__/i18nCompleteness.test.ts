@@ -28,17 +28,18 @@ const PLURAL_SUFFIXES = ['_zero', '_one', '_two', '_few', '_many', '_other'] as 
  * 记录在案以免阻断 device-link 工作;后续按文件 owner 逐条补齐后从这里删除。
  */
 const KNOWN_MISSING: ReadonlySet<string> = new Set([
-  'ccAgent.workdirBrowse.fileBody.drawioLoading',
-  'ccAgent.workdirBrowse.fileBody.pdfLoading',
-  'chat.media.clickToZoom',
 ]);
 
 function loadLocales(): Record<string, unknown>[] {
   const dirs = readdirSync(LOCALES_DIR, { withFileTypes: true })
     .filter((d) => d.isDirectory())
     .map((d) => d.name);
-  return dirs.map((d) =>
-    JSON.parse(readFileSync(resolve(LOCALES_DIR, d, 'common.json'), 'utf8')) as Record<string, unknown>,
+  return dirs.map(
+    (d) =>
+      JSON.parse(readFileSync(resolve(LOCALES_DIR, d, 'common.json'), 'utf8')) as Record<
+        string,
+        unknown
+      >,
   );
 }
 
@@ -82,35 +83,81 @@ interface Scan {
   templateCount: number;
 }
 
-async function scanSource(): Promise<Scan> {
+// A literal prefix followed by concatenation is not a complete static key.
+const STATIC_KEY_RE = /\bt\(\s*['"]([A-Za-z0-9_][A-Za-z0-9_.]*)['"]\s*(?=[,)])/g;
+
+function scanText(txt: string): Scan {
   const used = new Set<string>();
   const withDefault = new Set<string>();
   let templateCount = 0;
 
-  // 静态 t('a.b') / t("a.b");捕获 key 与其后是否紧跟逗号(可能是默认值)。
-  const keyRe = /\bt\(\s*['"]([A-Za-z0-9_][A-Za-z0-9_.]*)['"]\s*(,)?/g;
   // 位置参默认:t('k', '默认')
   const posDefaultRe = /\bt\(\s*['"]([A-Za-z0-9_][A-Za-z0-9_.]*)['"]\s*,\s*['"]/g;
   // 选项默认:t('k', { ... defaultValue ... })
   const optDefaultRe = /\bt\(\s*['"]([A-Za-z0-9_][A-Za-z0-9_.]*)['"]\s*,\s*\{[^}]*defaultValue/g;
   const templateRe = /\bt\(\s*`/g;
 
-  for await (const entry of glob('**/*.{ts,tsx}', { cwd: RENDERER })) {
-    if (entry.includes('__tests__') || entry.startsWith('i18n/')) continue;
-    const txt = readFileSync(resolve(RENDERER, entry), 'utf8');
-    for (const m of txt.matchAll(keyRe)) used.add(m[1]);
-    for (const m of txt.matchAll(posDefaultRe)) withDefault.add(m[1]);
-    for (const m of txt.matchAll(optDefaultRe)) withDefault.add(m[1]);
-    templateCount += [...txt.matchAll(templateRe)].length;
-  }
+  for (const m of txt.matchAll(STATIC_KEY_RE)) used.add(m[1]);
+  for (const m of txt.matchAll(posDefaultRe)) withDefault.add(m[1]);
+  for (const m of txt.matchAll(optDefaultRe)) withDefault.add(m[1]);
+  templateCount += [...txt.matchAll(templateRe)].length;
   return { used, withDefault, templateCount };
 }
 
+async function scanSource(): Promise<Scan> {
+  const result: Scan = { used: new Set(), withDefault: new Set(), templateCount: 0 };
+  for await (const entry of glob('**/*.{ts,tsx}', { cwd: RENDERER })) {
+    if (entry.includes('__tests__') || entry.startsWith('i18n/')) continue;
+    const scan = scanText(readFileSync(resolve(RENDERER, entry), 'utf8'));
+    for (const key of scan.used) result.used.add(key);
+    for (const key of scan.withDefault) result.withDefault.add(key);
+    result.templateCount += scan.templateCount;
+  }
+  return result;
+}
+
+describe('static translation key scanner', () => {
+  it('does not treat a dynamic concatenation prefix as a complete key', () => {
+    const scan = scanText(`
+      t('cindyMake.code.phases.' + phase);
+      t("settings.cindyMake.tasks." + action + 'Confirm', { count });
+      t('settings.cindyMake.tasks.status.'
+        + statusOf(selected, taskAction));
+      t('cindyMake.source.errors.' + code, 'Fallback');
+      t('cindyMakeDoctor.checks.' + check.id, { defaultValue: 'Fallback' });
+    `);
+    expect([...scan.used]).toEqual([]);
+    expect([...scan.withDefault]).toEqual([]);
+  });
+
+  it('retains complete static keys, options and inline defaults', () => {
+    const scan = scanText(`
+      t('missing.key');
+      t("plural.key", { count });
+      t('positional.key', 'Fallback');
+      t('options.key', { count, defaultValue: 'Fallback' });
+    `);
+    expect([...scan.used]).toEqual([
+      'missing.key', 'plural.key', 'positional.key', 'options.key',
+    ]);
+    expect([...scan.withDefault]).toEqual(['positional.key', 'options.key']);
+    expect(present({}, 'missing.key')).toBe(false);
+  });
+});
+
 describe('i18n completeness (static keys present in all locales)', () => {
-  it('every static t() key (no inline default) exists in all 4 locales', async () => {
+  it('checks complete literal keys without treating dynamic prefixes as keys', () => {
+    const source = `t('static.key'); t("static.options", { count: 2 });
+      t('dynamic.' + phase); t('multiline.'
+ + status);`;
+    expect([...source.matchAll(STATIC_KEY_RE)].map(match => match[1]))
+      .toEqual(['static.key', 'static.options']);
+  });
+
+  it('every static t() key (no inline default) exists in all supported locales', async () => {
     const locales = localeNames();
     const trees = loadLocales();
-    expect(locales.length).toBeGreaterThanOrEqual(4); // zh-CN / en / ja / ko
+    expect(locales.length).toBeGreaterThanOrEqual(5); // zh-CN / zh-TW / en / ja / ko
 
     const { used, withDefault, templateCount } = await scanSource();
 

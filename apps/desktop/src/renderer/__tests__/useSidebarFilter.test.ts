@@ -15,34 +15,67 @@
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
 import {
+  CREATORS_KEY,
+  loadCreators,
+  persistCreators,
+  nextCreatorsAfterToggle,
   STATUS_KEY,
+  VENDOR_KEY,
+  loadVendor,
+  persistVendor,
   PROJECTS_KEY,
   GROUP_BY_KEY,
   LAST_ACTIVITY_KEY,
   SORT_BY_KEY,
+  PROJECT_ORDER_KEY,
+  TASK_INFO_KEY,
   MANUAL_PROJECT_ORDER_KEY,
+  DEVICE_GROUP_COLLAPSED_KEY,
+  loadDeviceGroupCollapsedKeys,
+  DIALOGUE_GROUP_COLLAPSED_KEY,
+  DIALOGUE_GROUP_ALL_KEY,
   loadStatus,
   loadProjects,
   loadGroupBy,
   loadLastActivity,
   loadSortBy,
+  loadTaskInfoFields,
   loadManualProjectOrder,
+  loadDialogueGroupCollapsedKeys,
+  persistDialogueGroupCollapsedKeys,
+  loadPinnedSectionCollapsed,
+  persistPinnedSectionCollapsed,
   persistStatus,
   persistProjects,
   persistGroupBy,
   persistLastActivity,
   persistSortBy,
+  persistProjectOrder,
+  persistTaskInfoFields,
+  nextTaskInfoAfterToggle,
   persistManualProjectOrder,
+  DIALOGUE_FILTER_KEY,
   nextProjectsAfterToggle,
   includeProjectInFilter,
+  loadProjectOrder,
+  migrateLegacyManualSort,
+  projectFilterIncludes,
   removeProjectsFromFilter,
   gcProjectsAgainstActive,
   normalizeManualProjectOrder,
   moveManualProjectOrder,
   normalizeManualPinnedOrder,
   mergeVisibleReorder,
+  snapshotManualProjectOrder,
   type FilterProjects,
 } from '@/features/cc-agent/hooks/helpers/sidebarFilterCore';
+import { sidebarOwnerStorageKey } from '@/lib/sidebarOwnerStorage';
+
+const OWNER_ID = 'owner-a';
+
+function ownerKey(baseKey: string): string {
+  return sidebarOwnerStorageKey(baseKey, OWNER_ID);
+}
 
 /* ------------ in-memory localStorage shim ------------ */
 
@@ -115,45 +148,47 @@ describe('loadProjects', () => {
   afterEach(() => uninstallLocalStorage());
 
   it("defaults to 'all' when storage is empty", () => {
-    expect(loadProjects()).toBe('all');
+    expect(loadProjects(OWNER_ID)).toBe('all');
   });
 
   it("returns 'all' when persisted as the literal 'all'", () => {
     localStorage.setItem(PROJECTS_KEY, JSON.stringify('all'));
-    expect(loadProjects()).toBe('all');
+    expect(loadProjects(OWNER_ID)).toBe('all');
   });
 
   it('returns the persisted array', () => {
     localStorage.setItem(PROJECTS_KEY, JSON.stringify(['/a/b', '/c/d']));
-    expect(loadProjects()).toEqual(['local:/a/b', 'local:/c/d']);
+    expect(loadProjects(OWNER_ID)).toEqual(['local:/a/b', 'local:/c/d']);
   });
 
   it("falls back to 'all' on empty array", () => {
     localStorage.setItem(PROJECTS_KEY, JSON.stringify([]));
-    expect(loadProjects()).toBe('all');
+    expect(loadProjects(OWNER_ID)).toBe('all');
+  });
+
+  it('preserves the dialogue sentinel in persisted project filters', () => {
+    persistProjects([DIALOGUE_FILTER_KEY, '/a/b'], OWNER_ID);
+    expect(loadProjects(OWNER_ID)).toEqual([DIALOGUE_FILTER_KEY, 'local:/a/b']);
   });
 
   it('cleans non-string entries from a mixed array', () => {
-    localStorage.setItem(
-      PROJECTS_KEY,
-      JSON.stringify(['/a/b', 42, null, '/c/d', '']),
-    );
-    expect(loadProjects()).toEqual(['local:/a/b', 'local:/c/d']);
+    localStorage.setItem(PROJECTS_KEY, JSON.stringify(['/a/b', 42, null, '/c/d', '']));
+    expect(loadProjects(OWNER_ID)).toEqual(['local:/a/b', 'local:/c/d']);
   });
 
   it("falls back to 'all' on broken JSON", () => {
     localStorage.setItem(PROJECTS_KEY, '{not-json');
-    expect(loadProjects()).toBe('all');
+    expect(loadProjects(OWNER_ID)).toBe('all');
   });
 
   it("falls back to 'all' on shape mismatch (object instead of array)", () => {
     localStorage.setItem(PROJECTS_KEY, JSON.stringify({ foo: 'bar' }));
-    expect(loadProjects()).toBe('all');
+    expect(loadProjects(OWNER_ID)).toBe('all');
   });
 
   it("returns 'all' when localStorage is unavailable", () => {
     uninstallLocalStorage();
-    expect(loadProjects()).toBe('all');
+    expect(loadProjects(OWNER_ID)).toBe('all');
   });
 });
 
@@ -165,9 +200,9 @@ describe('loadGroupBy', () => {
     expect(loadGroupBy()).toBe('project');
   });
 
-  it("returns 'date' / 'project' when persisted", () => {
-    localStorage.setItem(GROUP_BY_KEY, 'date');
-    expect(loadGroupBy()).toBe('date');
+  it("returns 'flat' / 'project' when persisted", () => {
+    localStorage.setItem(GROUP_BY_KEY, 'flat');
+    expect(loadGroupBy()).toBe('flat');
     localStorage.setItem(GROUP_BY_KEY, 'project');
     expect(loadGroupBy()).toBe('project');
   });
@@ -182,10 +217,10 @@ describe('loadGroupBy', () => {
     expect(loadGroupBy()).toBe('project');
   });
 
-  // 用户显式选过 'date' → 持久化生效,下次启动仍是 'date'(不被默认值覆盖)。
-  it("respects an explicit persisted 'date' across reloads", () => {
+  // 侧边栏重设计 D 期:按日期分组已删除;老用户存量 'date' 静默回退默认。
+  it("falls back to 'project' on the removed 'date' legacy value", () => {
     localStorage.setItem(GROUP_BY_KEY, 'date');
-    expect(loadGroupBy()).toBe('date');
+    expect(loadGroupBy()).toBe('project');
   });
 });
 
@@ -224,12 +259,8 @@ describe('loadSortBy', () => {
   });
 
   it('returns persisted sort modes', () => {
-    localStorage.setItem(SORT_BY_KEY, 'time');
-    expect(loadSortBy()).toBe('time');
-    localStorage.setItem(SORT_BY_KEY, 'manual');
-    expect(loadSortBy()).toBe('manual');
-    localStorage.setItem(SORT_BY_KEY, 'alphabetic');
-    expect(loadSortBy()).toBe('alphabetic');
+    localStorage.setItem(SORT_BY_KEY, 'priority');
+    expect(loadSortBy()).toBe('priority');
     localStorage.setItem(SORT_BY_KEY, 'recency');
     expect(loadSortBy()).toBe('recency');
   });
@@ -239,9 +270,212 @@ describe('loadSortBy', () => {
     expect(loadSortBy()).toBe('recency');
   });
 
+  it("falls back to 'recency' on the removed 'alphabetic' legacy value", () => {
+    // 侧边栏重设计裁决:按名称排序已删除;老用户存量值静默回退默认。
+    localStorage.setItem(SORT_BY_KEY, 'alphabetic');
+    expect(loadSortBy()).toBe('recency');
+  });
+
+  it("falls back to 'recency' on the removed 'time' (oldest-first) legacy value", () => {
+    // 2026-08-12 用户裁决:「最早优先」删除,时间排序只保留最近活动在前一档;
+    // 存量值静默回退到 recency(菜单文案「按时间排序」)。
+    localStorage.setItem(SORT_BY_KEY, 'time');
+    expect(loadSortBy()).toBe('recency');
+  });
+
   it("returns 'recency' when localStorage is unavailable", () => {
     uninstallLocalStorage();
     expect(loadSortBy()).toBe('recency');
+  });
+});
+
+describe('loadProjectOrder', () => {
+  beforeEach(() => installMemoryLocalStorage());
+  afterEach(() => uninstallLocalStorage());
+
+  it("defaults to 'activity' when storage is empty", () => {
+    expect(loadProjectOrder()).toBe('activity');
+  });
+
+  it('returns persisted project order', () => {
+    persistProjectOrder('custom');
+    expect(loadProjectOrder()).toBe('custom');
+    persistProjectOrder('activity');
+    expect(loadProjectOrder()).toBe('activity');
+  });
+
+  it('maps leftover sortBy=manual to custom when projectOrder is unset', () => {
+    localStorage.setItem(SORT_BY_KEY, 'manual');
+    expect(loadProjectOrder()).toBe('custom');
+    expect(loadSortBy()).toBe('recency');
+  });
+});
+
+describe('migrateLegacyManualSort', () => {
+  beforeEach(() => installMemoryLocalStorage());
+  afterEach(() => uninstallLocalStorage());
+
+  it('rewrites sortBy=manual to recency + custom project order', () => {
+    localStorage.setItem(SORT_BY_KEY, 'manual');
+    migrateLegacyManualSort();
+    expect(localStorage.getItem(SORT_BY_KEY)).toBe('recency');
+    expect(localStorage.getItem(PROJECT_ORDER_KEY)).toBe('custom');
+    expect(loadSortBy()).toBe('recency');
+    expect(loadProjectOrder()).toBe('custom');
+  });
+
+  it('does not overwrite an explicit projectOrder', () => {
+    localStorage.setItem(SORT_BY_KEY, 'manual');
+    persistProjectOrder('activity');
+    migrateLegacyManualSort();
+    expect(loadSortBy()).toBe('recency');
+    expect(loadProjectOrder()).toBe('activity');
+  });
+
+  it('still maps leftover sortBy=manual if only projectOrder was written', () => {
+    localStorage.setItem(SORT_BY_KEY, 'manual');
+    persistProjectOrder('custom');
+    expect(loadProjectOrder()).toBe('custom');
+    expect(loadSortBy()).toBe('recency');
+  });
+
+  it('keeps sortBy=manual when projectOrder write fails so the next launch can retry', () => {
+    localStorage.setItem(SORT_BY_KEY, 'manual');
+    const originalSetItem = localStorage.setItem.bind(localStorage);
+    localStorage.setItem = (key: string, value: string) => {
+      if (key === PROJECT_ORDER_KEY) throw new Error('quota');
+      originalSetItem(key, value);
+    };
+    try {
+      migrateLegacyManualSort();
+    } finally {
+      localStorage.setItem = originalSetItem;
+    }
+    expect(localStorage.getItem(SORT_BY_KEY)).toBe('manual');
+    expect(localStorage.getItem(PROJECT_ORDER_KEY)).toBeNull();
+    expect(loadProjectOrder()).toBe('custom');
+  });
+});
+
+describe('snapshotManualProjectOrder', () => {
+  it('merges the pre-switch visual order into the full baseline without moving hidden keys', () => {
+    expect(
+      snapshotManualProjectOrder(['local:b', 'local:a'], ['local:a', 'local:hidden', 'local:b']),
+    ).toEqual(['local:b', 'local:hidden', 'local:a']);
+  });
+
+  it('falls back to the baseline when there is no visual snapshot', () => {
+    expect(snapshotManualProjectOrder([], ['local:a', 'local:b'])).toEqual(['local:a', 'local:b']);
+  });
+});
+
+describe('taskInfoFields（任务行右侧信息复选）', () => {
+  beforeEach(() => installMemoryLocalStorage());
+  afterEach(() => uninstallLocalStorage());
+
+  it("defaults to ['time'] when storage is empty", () => {
+    expect(loadTaskInfoFields()).toEqual(['time']);
+  });
+
+  it('空数组是合法状态（用户显式全不选），不回落默认', () => {
+    persistTaskInfoFields([]);
+    expect(loadTaskInfoFields()).toEqual([]);
+  });
+
+  it('persist → load round-trips and drops illegal / duplicate entries', () => {
+    persistTaskInfoFields(['pr', 'worktree', 'tokens', 'cost', 'time']);
+    expect(loadTaskInfoFields()).toEqual(['pr', 'worktree', 'tokens', 'cost', 'time']);
+    localStorage.setItem(TASK_INFO_KEY, JSON.stringify(['time', 'bogus', 'time', 42, 'cost']));
+    expect(loadTaskInfoFields()).toEqual(['time', 'cost']);
+  });
+
+  it('标签不再是任务信息项：旧存储里的 tags 静默丢弃，其余选择与顺序保留', () => {
+    localStorage.setItem(TASK_INFO_KEY, JSON.stringify(['cost', 'time', 'pr']));
+    expect(loadTaskInfoFields()).toEqual(['cost', 'time', 'pr']);
+    localStorage.setItem(TASK_INFO_KEY, '[]');
+    expect(loadTaskInfoFields()).toEqual([]);
+    localStorage.setItem(TASK_INFO_KEY, JSON.stringify(['time', 'tags']));
+    expect(loadTaskInfoFields()).toEqual(['time']);
+    localStorage.setItem(TASK_INFO_KEY, JSON.stringify({ version: 1, fields: ['tags', 'time'] }));
+    expect(loadTaskInfoFields()).toEqual(['time']);
+    localStorage.setItem(TASK_INFO_KEY, JSON.stringify({ version: 1, fields: ['tags'] }));
+    expect(loadTaskInfoFields()).toEqual([]);
+  });
+
+  it('falls back to default on broken JSON or shape mismatch', () => {
+    localStorage.setItem(TASK_INFO_KEY, '{not-json');
+    expect(loadTaskInfoFields()).toEqual(['time']);
+    localStorage.setItem(TASK_INFO_KEY, JSON.stringify({ fields: ['cost'] }));
+    expect(loadTaskInfoFields()).toEqual(['time']);
+  });
+
+  it('nextTaskInfoAfterToggle toggles membership and allows empty', () => {
+    expect(nextTaskInfoAfterToggle(['time'], 'cost')).toEqual(['time', 'cost']);
+    expect(nextTaskInfoAfterToggle(['time', 'cost'], 'time')).toEqual(['cost']);
+    expect(nextTaskInfoAfterToggle(['cost'], 'cost')).toEqual([]);
+    expect(nextTaskInfoAfterToggle([], 'pr')).toEqual(['pr']);
+  });
+});
+
+// #6615: component remount tests cover valid device preferences; this unit test
+// protects the storage boundary against malformed values before mounting React.
+describe('deviceGroupCollapsedKeys', () => {
+  beforeEach(() => installMemoryLocalStorage());
+  afterEach(() => uninstallLocalStorage());
+
+  it.each([
+    { raw: '{not-json', expected: [] },
+    { raw: '{"local":true}', expected: [] },
+    { raw: '["local",42,null,"device-1"]', expected: ['local', 'device-1'] },
+  ])('safely restores device collapse preferences from $raw', ({ raw, expected }) => {
+    localStorage.setItem(DEVICE_GROUP_COLLAPSED_KEY, raw);
+    expect([...loadDeviceGroupCollapsedKeys()]).toEqual(expected);
+  });
+});
+
+describe('dialogueGroupCollapsedKeys（对话组按分组 key 独立折叠）', () => {
+  beforeEach(() => installMemoryLocalStorage());
+  afterEach(() => uninstallLocalStorage());
+
+  it('defaults to empty set when storage is empty', () => {
+    expect([...loadDialogueGroupCollapsedKeys()]).toEqual([]);
+  });
+
+  it("migrates legacy boolean: 'true' → [DIALOGUE_GROUP_ALL_KEY], 'false' → empty", () => {
+    localStorage.setItem(DIALOGUE_GROUP_COLLAPSED_KEY, 'true');
+    expect([...loadDialogueGroupCollapsedKeys()]).toEqual([DIALOGUE_GROUP_ALL_KEY]);
+    localStorage.setItem(DIALOGUE_GROUP_COLLAPSED_KEY, 'false');
+    expect([...loadDialogueGroupCollapsedKeys()]).toEqual([]);
+  });
+
+  it('persist → load round-trips per-device keys independently', () => {
+    persistDialogueGroupCollapsedKeys(new Set(['local', 'device-1']));
+    const keys = loadDialogueGroupCollapsedKeys();
+    expect(keys.has('local')).toBe(true);
+    expect(keys.has('device-1')).toBe(true);
+    expect(keys.has('device-2')).toBe(false);
+  });
+
+  it('falls back to empty on broken JSON / shape mismatch and drops non-string entries', () => {
+    localStorage.setItem(DIALOGUE_GROUP_COLLAPSED_KEY, '{not-json');
+    expect([...loadDialogueGroupCollapsedKeys()]).toEqual([]);
+    localStorage.setItem(DIALOGUE_GROUP_COLLAPSED_KEY, JSON.stringify({ all: true }));
+    expect([...loadDialogueGroupCollapsedKeys()]).toEqual([]);
+    localStorage.setItem(DIALOGUE_GROUP_COLLAPSED_KEY, JSON.stringify(['local', 42, 'device-1']));
+    expect([...loadDialogueGroupCollapsedKeys()]).toEqual(['local', 'device-1']);
+  });
+});
+
+describe('pinnedSectionCollapsed（置顶段收起跨重启保留）', () => {
+  beforeEach(() => installMemoryLocalStorage());
+  afterEach(() => uninstallLocalStorage());
+
+  it('defaults to expanded and restores the last toggle', () => {
+    expect(loadPinnedSectionCollapsed()).toBe(false);
+    persistPinnedSectionCollapsed(true);
+    expect(loadPinnedSectionCollapsed()).toBe(true);
+    persistPinnedSectionCollapsed(false);
+    expect(loadPinnedSectionCollapsed()).toBe(false);
   });
 });
 
@@ -250,7 +484,7 @@ describe('loadManualProjectOrder', () => {
   afterEach(() => uninstallLocalStorage());
 
   it('defaults to an empty array when storage is empty', () => {
-    expect(loadManualProjectOrder()).toEqual([]);
+    expect(loadManualProjectOrder(OWNER_ID)).toEqual([]);
   });
 
   it('returns a cleaned unique order array', () => {
@@ -258,14 +492,14 @@ describe('loadManualProjectOrder', () => {
       MANUAL_PROJECT_ORDER_KEY,
       JSON.stringify(['local:/b', 42, 'local:/a', 'local:/b', '', null]),
     );
-    expect(loadManualProjectOrder()).toEqual(['local:/b', 'local:/a']);
+    expect(loadManualProjectOrder(OWNER_ID)).toEqual(['local:/b', 'local:/a']);
   });
 
   it('falls back to an empty array on broken JSON or shape mismatch', () => {
     localStorage.setItem(MANUAL_PROJECT_ORDER_KEY, '{not-json');
-    expect(loadManualProjectOrder()).toEqual([]);
+    expect(loadManualProjectOrder(OWNER_ID)).toEqual([]);
     localStorage.setItem(MANUAL_PROJECT_ORDER_KEY, JSON.stringify({ order: ['local:/a'] }));
-    expect(loadManualProjectOrder()).toEqual([]);
+    expect(loadManualProjectOrder(OWNER_ID)).toEqual([]);
   });
 });
 
@@ -285,18 +519,22 @@ describe('persist round-trip', () => {
   });
 
   it("persistProjects('all') → loadProjects() returns 'all'", () => {
-    persistProjects('all');
-    expect(loadProjects()).toBe('all');
+    persistProjects('all', OWNER_ID);
+    expect(loadProjects(OWNER_ID)).toBe('all');
   });
 
   it('persistProjects([…]) → loadProjects() returns the array', () => {
-    persistProjects(['local:/foo', 'local:/bar']);
-    expect(loadProjects()).toEqual(['local:/foo', 'local:/bar']);
+    persistProjects(['local:/foo', 'local:/bar'], OWNER_ID);
+    expect(loadProjects(OWNER_ID)).toEqual(['local:/foo', 'local:/bar']);
+    expect(localStorage.getItem(ownerKey(PROJECTS_KEY))).toBe(
+      JSON.stringify(['local:/foo', 'local:/bar']),
+    );
+    expect(loadProjects('owner-b')).toBe('all');
   });
 
   it('persistGroupBy → loadGroupBy returns the same value', () => {
-    persistGroupBy('date');
-    expect(loadGroupBy()).toBe('date');
+    persistGroupBy('flat');
+    expect(loadGroupBy()).toBe('flat');
     persistGroupBy('project');
     expect(loadGroupBy()).toBe('project');
   });
@@ -309,19 +547,20 @@ describe('persist round-trip', () => {
   });
 
   it('persistSortBy → loadSortBy returns the same value', () => {
-    persistSortBy('time');
-    expect(loadSortBy()).toBe('time');
-    persistSortBy('manual');
-    expect(loadSortBy()).toBe('manual');
-    persistSortBy('alphabetic');
-    expect(loadSortBy()).toBe('alphabetic');
+    persistSortBy('created');
+    expect(loadSortBy()).toBe('created');
+    persistSortBy('priority');
+    expect(loadSortBy()).toBe('priority');
     persistSortBy('recency');
     expect(loadSortBy()).toBe('recency');
   });
 
   it('persistManualProjectOrder → loadManualProjectOrder returns the same order', () => {
-    persistManualProjectOrder(['local:/b', 'local:/a']);
-    expect(loadManualProjectOrder()).toEqual(['local:/b', 'local:/a']);
+    persistManualProjectOrder(['local:/b', 'local:/a'], OWNER_ID);
+    expect(loadManualProjectOrder(OWNER_ID)).toEqual(['local:/b', 'local:/a']);
+    expect(localStorage.getItem(ownerKey(MANUAL_PROJECT_ORDER_KEY))).toBe(
+      JSON.stringify(['local:/b', 'local:/a']),
+    );
   });
 });
 
@@ -340,7 +579,10 @@ describe('nextProjectsAfterToggle', () => {
 
   it('removing one of multiple keeps order of the remaining', () => {
     const prev: FilterProjects = ['local:/proj-a', 'local:/proj-b', 'local:/proj-c'];
-    expect(nextProjectsAfterToggle(prev, 'local:/proj-b')).toEqual(['local:/proj-a', 'local:/proj-c']);
+    expect(nextProjectsAfterToggle(prev, 'local:/proj-b')).toEqual([
+      'local:/proj-a',
+      'local:/proj-c',
+    ]);
   });
 
   it("removing the last entry falls back to 'all'", () => {
@@ -353,6 +595,36 @@ describe('nextProjectsAfterToggle', () => {
     const snapshot = [...prev];
     nextProjectsAfterToggle(prev, 'local:/proj-c');
     expect(prev).toEqual(snapshot);
+  });
+
+  it('removes every equivalent Windows local key in one toggle', () => {
+    const prev: FilterProjects = [
+      'local:C:/Workspace/Cindy',
+      'local:c:/workspace/cindy',
+      'remote:host:C:/Workspace/Cindy',
+    ];
+
+    expect(nextProjectsAfterToggle(prev, 'local:c:/WORKSPACE/CINDY', 'win32')).toEqual([
+      'remote:host:C:/Workspace/Cindy',
+    ]);
+    expect(
+      nextProjectsAfterToggle(
+        ['local:C:/Workspace/Cindy', 'local:c:/workspace/cindy'],
+        'local:c:/WORKSPACE/CINDY',
+        'win32',
+      ),
+    ).toBe('all');
+  });
+
+  it('toggles the dialogue sentinel without treating it as a project path', () => {
+    expect(nextProjectsAfterToggle('all', DIALOGUE_FILTER_KEY)).toEqual([DIALOGUE_FILTER_KEY]);
+    expect(nextProjectsAfterToggle([DIALOGUE_FILTER_KEY], 'local:/proj-a')).toEqual([
+      DIALOGUE_FILTER_KEY,
+      'local:/proj-a',
+    ]);
+    expect(
+      nextProjectsAfterToggle([DIALOGUE_FILTER_KEY, 'local:/proj-a'], DIALOGUE_FILTER_KEY),
+    ).toEqual(['local:/proj-a']);
   });
 });
 
@@ -370,6 +642,34 @@ describe('includeProjectInFilter', () => {
   it('is idempotent when the project is already included', () => {
     const prev: FilterProjects = ['local:/a', 'local:/b'];
     expect(includeProjectInFilter(prev, '/a')).toBe(prev);
+  });
+
+  it('treats equivalent Windows local paths as the same filter entry', () => {
+    const prev: FilterProjects = ['local:C:/Workspace/Cindy'];
+    expect(includeProjectInFilter(prev, 'local:c:/workspace/cindy', 'win32')).toBe(prev);
+    expect(nextProjectsAfterToggle(prev, 'local:c:/workspace/cindy', 'win32')).toBe('all');
+  });
+
+  it('collapses stored Windows aliases when ensuring the project is included', () => {
+    const prev: FilterProjects = [
+      'local:C:/Workspace/Cindy',
+      'local:c:/workspace/cindy',
+      'remote:host:C:/Workspace/Cindy',
+    ];
+
+    expect(includeProjectInFilter(prev, 'local:c:/WORKSPACE/CINDY', 'win32')).toEqual([
+      'local:C:/Workspace/Cindy',
+      'remote:host:C:/Workspace/Cindy',
+    ]);
+  });
+});
+
+describe('projectFilterIncludes', () => {
+  it('matches Windows local project keys case-insensitively without folding remote keys', () => {
+    const projects = new Set(['local:C:/Workspace/Cindy', 'remote:host:C:/Workspace/Cindy']);
+
+    expect(projectFilterIncludes(projects, 'local:c:/workspace/cindy', 'win32')).toBe(true);
+    expect(projectFilterIncludes(projects, 'remote:host:c:/workspace/cindy', 'win32')).toBe(false);
   });
 });
 
@@ -403,23 +703,15 @@ describe('removeProjectsFromFilter', () => {
         ]),
         'win32',
       ),
-    ).toEqual([
-      'remote:host-a:C:/Repo',
-      'device:device-a:C:/Repo',
-      'local:/Users/Lee/Repo',
-    ]);
+    ).toEqual(['remote:host-a:C:/Repo', 'device:device-a:C:/Repo', 'local:/Users/Lee/Repo']);
   });
 
   it('keeps a different-cased POSIX double-slash project in the filter', () => {
     const prev: FilterProjects = ['local://mnt/Repo', 'local://mnt/repo'];
 
-    expect(
-      removeProjectsFromFilter(
-        prev,
-        new Set(['local://mnt/Repo']),
-        'linux',
-      ),
-    ).toEqual(['local://mnt/repo']);
+    expect(removeProjectsFromFilter(prev, new Set(['local://mnt/Repo']), 'linux')).toEqual([
+      'local://mnt/repo',
+    ]);
   });
 
   it("falls back to 'all' after removing the final explicit project", () => {
@@ -427,11 +719,16 @@ describe('removeProjectsFromFilter', () => {
     expect(removeProjectsFromFilter(prev, new Set(['local:/a']), 'linux')).toBe('all');
   });
 
+  it('keeps the dialogue sentinel when hidden-project snapshots arrive', () => {
+    const prev: FilterProjects = [DIALOGUE_FILTER_KEY, 'local:/a'];
+    expect(removeProjectsFromFilter(prev, new Set(['local:/a']), 'linux')).toEqual([
+      DIALOGUE_FILTER_KEY,
+    ]);
+  });
+
   it('is idempotent for unrelated and repeated hidden snapshots', () => {
     const unrelated: FilterProjects = ['local:/b'];
-    expect(
-      removeProjectsFromFilter(unrelated, new Set(['local:/a']), 'linux'),
-    ).toBe(unrelated);
+    expect(removeProjectsFromFilter(unrelated, new Set(['local:/a']), 'linux')).toBe(unrelated);
 
     const afterFirstRemoval = removeProjectsFromFilter(
       ['local:/a', 'local:/b'],
@@ -439,9 +736,9 @@ describe('removeProjectsFromFilter', () => {
       'linux',
     );
     expect(afterFirstRemoval).toEqual(['local:/b']);
-    expect(
-      removeProjectsFromFilter(afterFirstRemoval, new Set(['local:/a']), 'linux'),
-    ).toBe(afterFirstRemoval);
+    expect(removeProjectsFromFilter(afterFirstRemoval, new Set(['local:/a']), 'linux')).toBe(
+      afterFirstRemoval,
+    );
   });
 });
 
@@ -480,39 +777,60 @@ describe('gcProjectsAgainstActive', () => {
     const prev: FilterProjects = ['local:/a'];
     expect(gcProjectsAgainstActive(prev, [])).toBe('all');
   });
+
+  it('keeps the dialogue sentinel when GC drops stale projects', () => {
+    const prev: FilterProjects = [DIALOGUE_FILTER_KEY, 'local:/gone'];
+    expect(gcProjectsAgainstActive(prev, ['local:/a'])).toEqual([DIALOGUE_FILTER_KEY]);
+  });
+
+  it('keeps dialogue-only filters even when no projects remain', () => {
+    expect(gcProjectsAgainstActive([DIALOGUE_FILTER_KEY], [])).toEqual([DIALOGUE_FILTER_KEY]);
+  });
+
+  it('keeps Windows local projects when the active path only differs by case', () => {
+    const prev: FilterProjects = ['local:C:/Workspace/Cindy'];
+    expect(gcProjectsAgainstActive(prev, ['local:c:/workspace/cindy'], 'win32')).toBe(prev);
+  });
 });
 
 describe('manual project ordering', () => {
   it('normalizes by removing stale entries and appending new active dirs', () => {
-    expect(normalizeManualProjectOrder(['local:/b', 'local:/stale', 'local:/a'], ['local:/a', 'local:/b', '/c'])).toEqual([
-      'local:/b',
-      'local:/a',
-      'local:/c',
-    ]);
+    expect(
+      normalizeManualProjectOrder(
+        ['local:/b', 'local:/stale', 'local:/a'],
+        ['local:/a', 'local:/b', '/c'],
+      ),
+    ).toEqual(['local:/b', 'local:/a', 'local:/c']);
   });
 
   it('moves a project before a target', () => {
-    expect(moveManualProjectOrder(['local:/a', 'local:/b', '/c'], ['local:/a', 'local:/b', '/c'], 'local:/c', 'local:/a', 'before')).toEqual([
-      'local:/c',
-      'local:/a',
-      'local:/b',
-    ]);
+    expect(
+      moveManualProjectOrder(
+        ['local:/a', 'local:/b', '/c'],
+        ['local:/a', 'local:/b', '/c'],
+        'local:/c',
+        'local:/a',
+        'before',
+      ),
+    ).toEqual(['local:/c', 'local:/a', 'local:/b']);
   });
 
   it('moves a project after a target, seeding from active dirs when no order exists', () => {
-    expect(moveManualProjectOrder([], ['local:/a', 'local:/b', '/c'], 'local:/a', 'local:/c', 'after')).toEqual([
-      'local:/b',
-      'local:/c',
-      'local:/a',
-    ]);
+    expect(
+      moveManualProjectOrder([], ['local:/a', 'local:/b', '/c'], 'local:/a', 'local:/c', 'after'),
+    ).toEqual(['local:/b', 'local:/c', 'local:/a']);
   });
 
   it('keeps the order unchanged for an adjacent no-op drop', () => {
-    expect(moveManualProjectOrder(['local:/a', 'local:/b', '/c'], ['local:/a', 'local:/b', '/c'], 'local:/a', 'local:/b', 'before')).toEqual([
-      'local:/a',
-      'local:/b',
-      'local:/c',
-    ]);
+    expect(
+      moveManualProjectOrder(
+        ['local:/a', 'local:/b', '/c'],
+        ['local:/a', 'local:/b', '/c'],
+        'local:/a',
+        'local:/b',
+        'before',
+      ),
+    ).toEqual(['local:/a', 'local:/b', 'local:/c']);
   });
 });
 
@@ -563,5 +881,49 @@ describe('项目拖拽(机器过滤态):mergeVisibleReorder + normalizeManualPro
     expect(merged).toEqual([p2, h1, p1, h2]);
     // setManualProjectOrder 内部会再归一化一次 → 必须幂等(不追加、不打乱)。
     expect(normalizeManualProjectOrder(merged, all)).toEqual([p2, h1, p1, h2]);
+  });
+});
+
+describe('Harness filter persistence', () => {
+  beforeEach(() => installMemoryLocalStorage());
+  afterEach(() => uninstallLocalStorage());
+
+  it.each(['all', 'cc', 'codex', 'pi'] as const)(
+    'restores %s from the existing preference key',
+    (vendor) => {
+      persistVendor(vendor);
+      expect(localStorage.getItem(VENDOR_KEY)).toBe(vendor);
+      expect(loadVendor()).toBe(vendor);
+    },
+  );
+
+  it('keeps the all default for absent or unknown harness values', () => {
+    expect(loadVendor()).toBe('all');
+    localStorage.setItem(VENDOR_KEY, 'unknown');
+    expect(loadVendor()).toBe('all');
+  });
+});
+
+describe('creator filter selection and owner persistence', () => {
+  beforeEach(() => installMemoryLocalStorage());
+  afterEach(() => uninstallLocalStorage());
+  it('starts at all, selects one or several, and returns to all when the last choice is removed', () => {
+    expect(loadCreators(OWNER_ID)).toBe('all');
+    expect(nextCreatorsAfterToggle('all', 'a')).toEqual(['a']);
+    expect(nextCreatorsAfterToggle(['a'], 'b')).toEqual(['a', 'b']);
+    expect(nextCreatorsAfterToggle(['a', 'b'], 'a')).toEqual(['b']);
+    expect(nextCreatorsAfterToggle(['b'], 'b')).toBe('all');
+    persistCreators(['a', 'b'], OWNER_ID);
+    expect(loadCreators(OWNER_ID)).toEqual(['a', 'b']);
+    expect(loadCreators('owner-b')).toBe('all');
+    persistCreators('none', OWNER_ID);
+    expect(loadCreators(OWNER_ID)).toBe('none');
+    expect(nextCreatorsAfterToggle('none', 'a')).toEqual(['a']);
+    persistCreators('all', OWNER_ID);
+    expect(loadCreators(OWNER_ID)).toBe('all');
+  });
+  it('recovers from an invalid saved choice', () => {
+    localStorage.setItem(ownerKey(CREATORS_KEY), '{');
+    expect(loadCreators(OWNER_ID)).toBe('all');
   });
 });

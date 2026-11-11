@@ -9,24 +9,63 @@
  * installQuitHandler 只覆盖不触发真实退出的异常分支；真实 process / app 信号路径仍走集成验证。
  */
 
+import { existsSync, mkdtempSync, readFileSync, rmSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import ts from 'typescript';
+import { EventEmitter } from 'node:events';
+
+const scanFork = vi.hoisted(() => vi.fn());
+const electronPaths = vi.hoisted(() => ({ userData: '' }));
 
 // lifecycle.ts 里 import { app } from 'electron' —— 用最小 stub 喂给它。
-// 真实退出路径 (信号 / before-quit) 不在本文件覆盖。
+// 真实退出路径 (信号 / before-quit) 不在本文件覆盖。getPath / getVersion /
+// crashReporter 只供 session-end 用例初始化真实 run marker。
 vi.mock('electron', () => ({
+  utilityProcess: { fork: scanFork },
   app: {
     on: vi.fn(),
     isReady: () => false,
     quit: vi.fn(),
     exit: vi.fn(),
+    getPath: () => electronPaths.userData,
+    getVersion: () => '0.0.0-test',
   },
+  BrowserWindow: { getAllWindows: () => [] },
+  crashReporter: { start: vi.fn() },
 }));
 
 const nativePopupWebContentsIds = vi.hoisted(() => new Set<number>());
+const resourceUsageWebContentsIds = vi.hoisted(() => new Set<number>());
+const rsbWindowWebContentsIds = vi.hoisted(() => new Set<number>());
+const reviewArtifactConfirmWebContentsIds = vi.hoisted(() => new Set<number>());
 
 vi.mock('../rsb-browser-bridge/native-popup-surfaces', () => ({
   isRsbNativePopupWebContentsId: (webContentsId: number) =>
     nativePopupWebContentsIds.has(webContentsId),
+}));
+
+vi.mock('../resource-usage-window/registry.js', () => ({
+  isResourceUsageWebContentsId: (webContentsId: number) =>
+    resourceUsageWebContentsIds.has(webContentsId),
+}));
+
+vi.mock('../right-sidebar-window/registry.js', () => ({
+  isRsbWindowWebContentsId: (webContentsId: number) => rsbWindowWebContentsIds.has(webContentsId),
+}));
+
+
+vi.mock('../reviewer/reviewArtifactConfirmWindowRegistry.js', () => ({
+  isReviewArtifactConfirmWebContentsId: (webContentsId: number) =>
+    reviewArtifactConfirmWebContentsIds.has(webContentsId),
+}));
+
+// lifecycle 只消费这个查询函数；owner-scoped Electron session 会让 adapter
+// 依赖 owner 持久化与进程锁，不应把整条运行时链带进退出编排单测。
+vi.mock('../cindy-brain/runtime/electronSandboxAdapter', () => ({
+  isGhostSandboxWebContentsId: () => false,
 }));
 
 const mocks = vi.hoisted(() => ({
@@ -55,11 +94,26 @@ vi.mock('../logger', async () => {
   };
 });
 
+// 每个用例独立的 watchdog 脚本落盘目录 (mkdtemp 唯一路径, 用完即删)。既满足
+// 测试资源规则, 也让 win32 宿主上 installQuitHandler 的启动期预生成不会写入
+// 真实 os.tmpdir (freshLifecycle 里用本目录预 seed 缓存)。
+let watchdogTmpDir: string;
+beforeEach(() => {
+  watchdogTmpDir = mkdtempSync(join(tmpdir(), 'lifecycle-wd-'));
+});
+afterEach(() => {
+  rmSync(watchdogTmpDir, { recursive: true, force: true });
+});
+
 // 因为 registry 是 module-level state, 每个用例需要 reset。简单做法: 用
 // vi.resetModules + 动态 import, 拿一份全新的 module 实例。
 async function freshLifecycle() {
   vi.resetModules();
-  return import('../lifecycle');
+  const lifecycle = await import('../lifecycle');
+  // win32 宿主上把 watchdog 脚本缓存 seed 到本用例的 mkdtemp 目录; 非 win32
+  // 宿主上是 no-op (需要 win32 路径的用例自己显式传 platform + tmpDir)。
+  lifecycle.prepareShutdownWatchdogScript({ tmpDir: watchdogTmpDir });
+  return lifecycle;
 }
 
 type ProcessEventName =
@@ -91,6 +145,43 @@ function snapshotProcessListeners(events: ProcessEventName[]) {
 }
 
 describe('runQuitDisposers', () => {
+  it('disposes pending Skill discovery through the real quit registry', async () => {
+    const lifecycle = await freshLifecycle();
+    const child = new EventEmitter();
+    const kill = vi.fn(() => true);
+    scanFork.mockReturnValue(Object.assign(child, { kill, postMessage: vi.fn() }));
+    const { scanLocalCustomizations } = await import('../skillhub/customizationScanHost');
+    const scan = scanLocalCustomizations('pi', {});
+    expect(kill).not.toHaveBeenCalled();
+    await lifecycle.runQuitDisposers();
+    expect((await scan).errors[0].message).toContain('stopped');
+    expect(kill).toHaveBeenCalledOnce();
+    expect((await scanLocalCustomizations('pi', {})).errors[0].message).toContain('stopped');
+    expect(scanFork).toHaveBeenCalledOnce();
+  });
+
+  it('keeps the bootstrap quit budget open for an in-flight mode write and restoration', async () => {
+    vi.useFakeTimers();
+    const { onQuit, runQuitDisposers, SHUTDOWN_HARD_KILL_GRACE_SECONDS } = await freshLifecycle();
+    const source = readFileSync(join(__dirname, '../bootstrap-electron.ts'), 'utf8');
+    const budget = Number(source.match(/installQuitHandler\((\d+)\);/)?.[1]);
+    expect(budget).toBeLessThan(SHUTDOWN_HARD_KILL_GRACE_SECONDS * 1000);
+    const events: string[] = [];
+    onQuit('remote-desktop-restore', async () => {
+      for (const step of ['in-flight-write', 'restore-mode', 'display-projection']) {
+        await new Promise((resolve) => setTimeout(resolve, 5000));
+        events.push(step);
+      }
+    }, 'async');
+    onQuit('after-restoration', () => { events.push('post-async'); }, 'post-async');
+    const quitting = runQuitDisposers(budget);
+    await vi.advanceTimersByTimeAsync(14_999);
+    expect(events).toEqual(['in-flight-write', 'restore-mode']);
+    await vi.advanceTimersByTimeAsync(1);
+    await quitting;
+    expect(events).toEqual(['in-flight-write', 'restore-mode', 'display-projection', 'post-async']);
+  });
+
   beforeEach(() => {
     vi.useRealTimers();
     vi.clearAllMocks();
@@ -116,6 +207,42 @@ describe('runQuitDisposers', () => {
     await runQuitDisposers(1000);
 
     expect(log).toEqual(['a-sync', 'b-async', 'c-post']);
+  });
+
+  it.each([false, true])('keeps real bootstrap Codex and DB dependencies until Maker settles or times out (timeout=%s)', async (timesOut) => {
+    vi.useFakeTimers();
+    const { onQuit, runQuitDisposers } = await freshLifecycle();
+    // 读取真实注册顺序和 phase，避免测试中的手写编排与 bootstrap 漂移。
+    const source = ts.createSourceFile('bootstrap-electron.ts', readFileSync(join(__dirname, '../bootstrap-electron.ts'), 'utf8'), ts.ScriptTarget.Latest, true);
+    const names = new Set(['shutdown-maker', 'lsp-pool', 'pi-subagent-final-sweep', 'codex-env', 'codex-proxy', 'remote-ssh-pool', 'db-client', 'local-db-close']);
+    const registrations: Array<{ name: string; phase: 'sync' | 'async' | 'post-async' }> = [];
+    for (const node of source.statements) {
+      if (!ts.isExpressionStatement(node) || !ts.isCallExpression(node.expression)) continue;
+      const call = node.expression;
+      if (!ts.isIdentifier(call.expression) || call.expression.text !== 'onQuit') continue;
+      const [name, , phase] = call.arguments;
+      if (!name || !phase || !ts.isStringLiteral(name) || !ts.isStringLiteral(phase) || !names.has(name.text)) continue;
+      if (phase.text !== 'sync' && phase.text !== 'async' && phase.text !== 'post-async') throw new Error('invalid quit phase');
+      registrations.push({ name: name.text, phase: phase.text });
+    }
+    expect(registrations).toHaveLength(names.size);
+    const events: string[] = [];
+    let finish!: () => void;
+    const maker = new Promise<void>((resolve) => { finish = resolve; });
+    for (const { name, phase } of registrations) {
+      onQuit(name, name === 'shutdown-maker' ? async () => { await maker; events.push(name); } : () => { events.push(name); }, phase);
+    }
+    const quit = runQuitDisposers(100);
+    await vi.advanceTimersByTimeAsync(10);
+    expect(events).toEqual(['lsp-pool']);
+    if (timesOut) await vi.advanceTimersByTimeAsync(100);
+    else finish();
+    await quit;
+    expect(events).toEqual([
+      'lsp-pool', ...(timesOut ? [] : ['shutdown-maker']), 'pi-subagent-final-sweep',
+      'codex-env', 'codex-proxy', 'remote-ssh-pool', 'db-client', 'local-db-close',
+    ]);
+    finish();
   });
 
   it('sync disposer that throws does not block subsequent disposers', async () => {
@@ -244,16 +371,18 @@ describe('armShutdownHardKillWatchdog', () => {
     );
   });
 
-  it('win32: PowerShell 捕获 StartTime → Start-Sleep → StartTime+Path 双校验后 Stop-Process — windowsHide + unref', async () => {
-    const { armShutdownHardKillWatchdog, SHUTDOWN_HARD_KILL_GRACE_SECONDS } =
+  it('win32: wscript 单进程 watchdog — CreationDate+ExecutablePath 双校验, 无 PowerShell、无子进程', async () => {
+    const { armShutdownHardKillWatchdog, prepareShutdownWatchdogScript, SHUTDOWN_HARD_KILL_GRACE_SECONDS } =
       await freshLifecycle();
     const { spawn, child } = fakeSpawn();
+    const scriptPath = prepareShutdownWatchdogScript({ platform: 'win32', tmpDir: watchdogTmpDir })!;
 
     armShutdownHardKillWatchdog({
       spawn,
       pid: 67890,
       platform: 'win32',
       execPath: 'C:\\Cindy\\Cindy.exe',
+      tmpDir: watchdogTmpDir,
     });
 
     expect(spawn).toHaveBeenCalledTimes(1);
@@ -262,34 +391,95 @@ describe('armShutdownHardKillWatchdog', () => {
       string[],
       Record<string, unknown>,
     ];
-    // cmd/tasklist 只能比映像名, 区分不了两次运行;换 Windows PowerShell 5.1
-    // (SystemRoot 绝对路径, 不依赖 PATH) 以进程创建时间为身份锚点。
+    // wscript 是 GUI 子系统程序: 天生无控制台、无窗口, detached 逃出 libuv 的
+    // kill-on-close job 才能活过父进程。SystemRoot 绝对路径, 不依赖 PATH。
     expect(cmd).toBe(
-      `${process.env.SystemRoot ?? 'C:\\Windows'}\\System32\\WindowsPowerShell\\v1.0\\powershell.exe`,
+      `${process.env.SystemRoot ?? 'C:\\Windows'}\\System32\\wscript.exe`,
     );
-    expect(args.slice(0, 5)).toEqual([
-      '-NoProfile',
-      '-NonInteractive',
-      '-WindowStyle',
-      'Hidden',
-      '-Command',
+    // 路径在 mkdtemp 唯一目录下, 不可被同 tmpdir 下其他进程预测或篡改。
+    expect(scriptPath).toMatch(/cindy-wd-/);
+    expect(scriptPath).toMatch(/watchdog\.js$/);
+    expect(args).toEqual([
+      '//B',
+      '//E:JScript',
+      scriptPath,
+      '67890',
+      String(SHUTDOWN_HARD_KILL_GRACE_SECONDS * 1000),
+      'C:\\Cindy\\Cindy.exe',
     ]);
-    const script = args[5];
-    // 布防时捕获创建时间;取不到 (进程已死) 则直接退出, 失败方向永远是"少杀"。
-    expect(script).toContain(
-      '$started = Get-Process -Id 67890 | Select-Object -ExpandProperty StartTime; if (-not $started) { exit }; ',
-    );
-    expect(script).toContain(`Start-Sleep -Seconds ${SHUTDOWN_HARD_KILL_GRACE_SECONDS}; `);
-    // 补刀前 StartTime + Path 双校验;属性读取走 Select-Object -ExpandProperty
-    // 兼容 Constrained Language Mode。
-    expect(script).toContain(
-      '$p = Get-Process -Id 67890; '
-      + 'if ($p -and ($p | Select-Object -ExpandProperty StartTime) -eq $started '
-      + "-and ($p | Select-Object -ExpandProperty Path) -eq 'C:\\Cindy\\Cindy.exe') "
-      + '{ Stop-Process -Id 67890 -Force }',
-    );
     expect(opts).toEqual({ detached: true, windowsHide: true, stdio: 'ignore' });
     expect(child.unref).toHaveBeenCalledTimes(1);
+
+    // 脚本已预生成落盘, 且保留原 PowerShell 实现同强度的身份校验 (review P1
+    // 两轮的 PID 复用防线): 布防时捕获 CreationDate, 杀前重取比对 + execPath。
+    expect(existsSync(scriptPath)).toBe(true);
+    const content = readFileSync(scriptPath, 'utf8');
+    expect(content).toContain('CreationDate');
+    expect(content).toContain('ExecutablePath');
+    expect(content).toContain('WScript.Sleep(graceMs)');
+    expect(content).toContain('.Terminate()');
+    // 回归锁 (2026-08 实证): 隐藏拉起 PowerShell 会被 360 等安全软件当高危动作
+    // 拦截, 每次正常退出都弹风控 —— 这条路径永远不许再出现 powershell。
+    expect(content.toLowerCase()).not.toContain('powershell');
+    // WSH 按系统 ANSI 代码页读文件 + JScript 只有 ES3: 必须纯 ASCII, 且不能有
+    // const/let/箭头函数 (踩坑实证: 尾逗号/新语法在 //B 下静默失败, 兜底形同虚设)。
+    expect(content).toMatch(/^[\x00-\x7f]*$/);
+    expect(content).not.toMatch(/\b(const|let)\b|=>/);
+  });
+
+  it('prepareShutdownWatchdogScript: 非 win32 no-op; win32 幂等复用同一路径 (mkdtemp 唯一目录)', async () => {
+    const { prepareShutdownWatchdogScript } = await freshLifecycle();
+
+    expect(
+      prepareShutdownWatchdogScript({ platform: 'darwin', tmpDir: watchdogTmpDir }),
+    ).toBeNull();
+
+    const first = prepareShutdownWatchdogScript({ platform: 'win32', tmpDir: watchdogTmpDir });
+    expect(first).not.toBeNull();
+    expect(first!).toMatch(/cindy-wd-/);
+    expect(first!).toMatch(/watchdog\.js$/);
+    expect(existsSync(first!)).toBe(true);
+    // 幂等: 第二次 (即使传别的目录) 复用已生成的路径, 不重复写盘
+    expect(
+      prepareShutdownWatchdogScript({ platform: 'win32', tmpDir: join(watchdogTmpDir, 'other') }),
+    ).toBe(first);
+  });
+
+  it('win32: 缓存路径被外部删除后重新生成到新目录', async () => {
+    const { prepareShutdownWatchdogScript } = await freshLifecycle();
+    const first = prepareShutdownWatchdogScript({ platform: 'win32', tmpDir: watchdogTmpDir })!;
+    expect(existsSync(first)).toBe(true);
+    rmSync(first);
+    const second = prepareShutdownWatchdogScript({ platform: 'win32', tmpDir: watchdogTmpDir })!;
+    expect(second).not.toBe(first);
+    expect(existsSync(second)).toBe(true);
+    expect(second).toMatch(/watchdog\.js$/);
+  });
+
+  it('win32: watchdog 脚本写盘失败 → 共享 spawn 失败预算, 耗尽打缺席标记, 不 throw', async () => {
+    // 不走 freshLifecycle: 那里会预 seed 脚本缓存, 而本用例要的就是"prepare
+    // 一直失败"(目标目录不存在) 的路径。
+    vi.resetModules();
+    const { armShutdownHardKillWatchdog } = await import('../lifecycle');
+    const child = { once: vi.fn(), unref: vi.fn() };
+    const spawn = vi.fn(() => child);
+
+    expect(() =>
+      armShutdownHardKillWatchdog({
+        spawn,
+        pid: 1,
+        platform: 'win32',
+        execPath: 'C:\\Cindy\\Cindy.exe',
+        tmpDir: join(watchdogTmpDir, 'missing', 'deep'),
+      }),
+    ).not.toThrow();
+
+    // 写盘失败发生在 spawn 之前: spawn 从未被调用, 预算耗尽后打缺席标记
+    expect(spawn).not.toHaveBeenCalled();
+    expect(mocks.logger.error).toHaveBeenCalledWith(
+      expect.stringContaining('external kill backstop ABSENT'),
+      expect.any(Error),
+    );
   });
 
   it('is idempotent — a second arm does not spawn again', async () => {
@@ -400,6 +590,9 @@ describe('installQuitHandler render-process-gone', () => {
   beforeEach(() => {
     vi.clearAllMocks();
     nativePopupWebContentsIds.clear();
+    resourceUsageWebContentsIds.clear();
+    rsbWindowWebContentsIds.clear();
+    reviewArtifactConfirmWebContentsIds.clear();
   });
 
   type RenderGoneHandler = (
@@ -469,6 +662,66 @@ describe('installQuitHandler render-process-gone', () => {
     }
   });
 
+  it('recoverable auxiliary renderer crashes do NOT shut the app down', async () => {
+    resourceUsageWebContentsIds.add(44);
+    const { handler, app, restore } = await installAndGrabHandler();
+    try {
+      handler(undefined, { id: 44, getType: () => 'window' }, { reason: 'crashed', exitCode: 5 });
+      await new Promise((r) => setTimeout(r, 20));
+      expect(app.exit).not.toHaveBeenCalled();
+      expect(mocks.logger.warn).toHaveBeenCalledWith(
+        expect.stringContaining('resource usage render-process-gone'),
+      );
+      expect(mocks.logger.error).not.toHaveBeenCalled();
+      // Unit regression for the real Windows direct-renderer crash: local
+      // cleanup ran, but the app-wide event still disposed DB/device-link.
+      // Other auxiliary tests never registered the transport factory's owner.
+      const { markCaptureWindowWebContents } = await import('../remote-desktop/captureWindowRegistry');
+      const capture = { id: 46, getType: () => 'window' };
+      markCaptureWindowWebContents(capture as unknown as Electron.WebContents);
+      handler(undefined, capture, { reason: 'crashed', exitCode: 5 });
+      await Promise.resolve();
+      expect(app.exit).not.toHaveBeenCalled();
+      expect(mocks.spawn).not.toHaveBeenCalled();
+      expect(mocks.logger.warn).toHaveBeenCalledWith(
+        expect.stringContaining('capture transport render-process-gone'),
+      );
+    } finally {
+      restore();
+    }
+  });
+
+  it('right sidebar renderer crash does NOT shut the app down', async () => {
+    rsbWindowWebContentsIds.add(45);
+    const { handler, app, restore } = await installAndGrabHandler();
+    try {
+      handler(undefined, { id: 45, getType: () => 'window' }, { reason: 'crashed', exitCode: 5 });
+      await new Promise((r) => setTimeout(r, 20));
+      expect(app.exit).not.toHaveBeenCalled();
+      expect(mocks.logger.warn).toHaveBeenCalledWith(
+        expect.stringContaining('right sidebar render-process-gone'),
+      );
+    } finally {
+      restore();
+    }
+  });
+
+  it('Review artifact consent renderer crash denies locally without shutting the app down', async () => {
+    reviewArtifactConfirmWebContentsIds.add(47);
+    const { handler, app, restore } = await installAndGrabHandler();
+    try {
+      handler(undefined, { id: 47, getType: () => 'window' }, { reason: 'oom', exitCode: 5 });
+      await new Promise((r) => setTimeout(r, 20));
+      expect(app.exit).not.toHaveBeenCalled();
+      expect(mocks.logger.warn).toHaveBeenCalledWith(
+        expect.stringContaining('Review artifact consent render-process-gone'),
+      );
+      expect(mocks.logger.error).not.toHaveBeenCalled();
+    } finally {
+      restore();
+    }
+  });
+
   it('main window renderer crash still shuts the app down with exit(1)', async () => {
     const { handler, app, restore } = await installAndGrabHandler();
     try {
@@ -520,6 +773,50 @@ describe('installQuitHandler', () => {
         err,
       );
     } finally {
+      snapshot.restore();
+    }
+  });
+
+  // Issue #9600: Electron terminates the process right after 'session-end' returns, so the
+  // handler's own marker write is the only exit record the next start will see.
+  it('win32 session-end records the exit reason so the next start does not see a crash', async () => {
+    const snapshot = snapshotProcessListeners(['SIGINT', 'SIGTERM', 'exit', 'uncaughtException', 'unhandledRejection']);
+    const sigbreakBefore = new Set(process.listeners('SIGBREAK'));
+    const platform = Object.getOwnPropertyDescriptor(process, 'platform')!;
+    electronPaths.userData = watchdogTmpDir;
+    vi.useFakeTimers({ toFake: ['setInterval'] }); // run-marker heartbeat must not outlive the tmp dir
+    try {
+      const lifecycle = await freshLifecycle();
+      const diagnostics = await import('../startup-diagnostics');
+      diagnostics.initStartupDiagnostics();
+      lifecycle.prepareShutdownWatchdogScript({ platform: 'win32', tmpDir: watchdogTmpDir });
+      Object.defineProperty(process, 'platform', { ...platform, value: 'win32' });
+      lifecycle.installQuitHandler();
+      Object.defineProperty(process, 'platform', platform);
+
+      const { app } = await import('electron');
+      const [, onWindowCreated] = (vi.mocked(app.on).mock.calls as unknown as Array<[string, (e: unknown, w: EventEmitter) => void]>)
+        .find(([event]) => event === 'browser-window-created')!;
+      const win = new EventEmitter();
+      onWindowCreated({}, win);
+      win.emit('session-end', { reasons: ['shutdown'] });
+
+      const nextStart = new diagnostics.RunMarkerStore({
+        dir: join(watchdogTmpDir, 'diagnostics', 'run-markers'),
+        pid: process.pid + 1,
+        version: 'next',
+        isPidAlive: () => false,
+      });
+      expect(nextStart.analyzePreviousRuns()).toMatchObject([
+        { kind: 'shutdown-incomplete', marker: { pid: process.pid, shutdownReason: 'session-end' } },
+      ]);
+      expect(app.exit).not.toHaveBeenCalled();
+    } finally {
+      Object.defineProperty(process, 'platform', platform);
+      vi.useRealTimers();
+      for (const listener of process.listeners('SIGBREAK')) {
+        if (!sigbreakBefore.has(listener)) process.removeListener('SIGBREAK', listener);
+      }
       snapshot.restore();
     }
   });

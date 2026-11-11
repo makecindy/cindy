@@ -2,9 +2,40 @@ import { describe, expect, it } from 'vitest';
 
 import {
   resolveDeviceLinkDraftDefaults,
+  resolveDeviceLinkWorktreeEnabled,
   shouldReseedDeviceLinkDraftDefaults,
 } from '../deviceLinkDraftDefaults';
 import type { AgentCapabilities } from '@/hooks/useAgentCapabilities';
+import type { CatalogModel, ProviderView } from '@cindy/model-providers';
+
+function providerModel(
+  id: string,
+  efforts: CatalogModel['efforts'],
+  defaultEffort: CatalogModel['defaultEffort'],
+): CatalogModel {
+  return {
+    id,
+    name: id,
+    contextWindow: 200_000,
+    efforts,
+    defaultEffort,
+    effortsUnknown: false,
+    supportsFastMode: false,
+  } as CatalogModel;
+}
+
+function provider(id: string, model: CatalogModel): ProviderView {
+  return {
+    id,
+    name: id,
+    source: 'user',
+    agents: ['pi'],
+    models: { pi: [model] },
+    routing: { pi: { upstream: 'https://provider.test', authStrategy: 'none' } },
+    auth: { method: 'api-key' },
+    connected: true,
+  } as unknown as ProviderView;
+}
 
 // 最小被控端 capabilities:两模型(Opus 支持 fast + 多 effort 档;Haiku 无 effort/fast)。
 function caps(overrides: Partial<AgentCapabilities> = {}): AgentCapabilities {
@@ -24,6 +55,7 @@ function caps(overrides: Partial<AgentCapabilities> = {}): AgentCapabilities {
         contextWindow: 200_000,
         efforts: [],
         defaultEffort: null,
+        effortsUnknown: false,
         supportsFastMode: false,
         sortOrder: 10,
         newSessionDefault: ['claude-code'],
@@ -135,14 +167,26 @@ describe('resolveDeviceLinkDraftDefaults', () => {
     expect(sel.model).toBe('claude-opus-4-8');
   });
 
-  it('Pi 的远程新任务默认沿用 claude-code wire 标记', () => {
+  it('Pi 的远程新任务默认接受 v3 的 pi 标记', () => {
+    const capabilities = caps();
+    capabilities.availableModels[1]!.newSessionDefault = ['pi'];
+    const sel = resolveDeviceLinkDraftDefaults(
+      capabilities,
+      { model: 'claude-opus-4-8', modelChosenByUser: false },
+      undefined,
+      'pi',
+    );
+    expect(sel.model).toBe('claude-haiku-4-5');
+  });
+
+  it('Pi 的远程新任务不借用 claude-code 默认标记', () => {
     const sel = resolveDeviceLinkDraftDefaults(
       caps(),
       { model: 'claude-opus-4-8', modelChosenByUser: false },
       undefined,
       'pi',
     );
-    expect(sel.model).toBe('claude-haiku-4-5');
+    expect(sel.model).toBe('claude-opus-4-8');
   });
 
   it('effort 不被目标模型支持 → 落该模型 defaultEffort', () => {
@@ -151,6 +195,95 @@ describe('resolveDeviceLinkDraftDefaults', () => {
       effort: 'low', // Opus 只支持 high/xhigh
     });
     expect(sel.effort).toBe('high');
+  });
+
+  it('已知无 effort 模型清掉远端草稿里的旧档位', () => {
+    const sel = resolveDeviceLinkDraftDefaults(caps(), {
+      model: 'claude-haiku-4-5',
+      effort: 'high',
+      fastMode: true,
+    });
+    expect(sel.effort).toBeNull();
+  });
+
+  it('按选中的供应商校准 effort,不被同名其他来源的空档位清掉', () => {
+    const model = 'qwen3:14b';
+    const capabilities = caps({
+      availableModels: [
+        {
+          id: model,
+          displayName: model,
+          contextWindow: 200_000,
+          efforts: [],
+          defaultEffort: null,
+        },
+      ],
+    });
+    const sel = resolveDeviceLinkDraftDefaults(
+      capabilities,
+      { model, providerId: 'ollama', effort: 'medium' },
+      undefined,
+      'pi',
+      [
+        provider('ollama', providerModel(model, ['medium', 'high'], 'high')),
+        provider('other', providerModel(model, [], null)),
+      ],
+    );
+    expect(sel.effort).toBe('medium');
+  });
+
+  it('选中的供应商明确无 effort 时才清掉旧档位', () => {
+    const model = 'qwen3:14b';
+    const sel = resolveDeviceLinkDraftDefaults(
+      caps({
+        availableModels: [
+          {
+            id: model,
+            displayName: model,
+            contextWindow: 200_000,
+            efforts: ['medium', 'high'],
+            defaultEffort: 'high',
+          },
+        ],
+      }),
+      { model, providerId: 'ollama', effort: 'medium' },
+      undefined,
+      'pi',
+      [
+        provider('ollama', providerModel(model, [], null)),
+        provider('other', providerModel(model, ['medium', 'high'], 'high')),
+      ],
+    );
+    expect(sel.effort).toBeNull();
+  });
+
+  it('档位能力尚未声明时保留远端草稿档位', () => {
+    const capabilities = caps();
+    capabilities.availableModels[1]!.effortsUnknown = true;
+    const sel = resolveDeviceLinkDraftDefaults(capabilities, {
+      model: 'claude-haiku-4-5',
+      effort: 'high',
+    });
+    expect(sel.effort).toBe('high');
+  });
+
+  it.each(['medium', 'high'])('旧主机缺少能力标记时保留远端草稿档位 (%s)', (effort) => {
+    const capabilities = caps();
+    delete capabilities.availableModels[1]!.effortsUnknown;
+    const sel = resolveDeviceLinkDraftDefaults(capabilities, {
+      model: 'claude-haiku-4-5', effort,
+    });
+    expect(sel.effort).toBe(effort);
+  });
+
+  it.each(['medium', 'high'])('旧主机来源条目缺少能力标记时不借用扁平目录清空档位 (%s)', (effort) => {
+    const model = providerModel('claude-haiku-4-5', [], null);
+    delete model.effortsUnknown;
+    const sel = resolveDeviceLinkDraftDefaults(
+      caps(), { model: model.id, providerId: 'legacy', effort }, undefined, 'pi',
+      [provider('legacy', model)],
+    );
+    expect(sel.effort).toBe(effort);
   });
 
   it('模型不支持 fast(或被控端 agent 无 fast 能力)→ fastMode 强制 false', () => {
@@ -240,6 +373,33 @@ describe('resolveDeviceLinkDraftDefaults', () => {
     expect(sel.effort).toBe('xhigh');
     expect(sel.fastMode).toBe(true);
   });
+
+  it('* 权威槽优先于 provider 兼容副本', () => {
+    const sel = resolveDeviceLinkDraftDefaults(
+      caps(),
+      {
+        model: 'claude-opus-4-8',
+        providerId: 'anthropic',
+        effort: 'high',
+        fastMode: false,
+        providerModelMemory: {
+          'claude-code:*': {
+            effortByModel: { 'claude-opus-4-8': 'xhigh' },
+            fastByModel: {},
+          },
+          'claude-code:anthropic': {
+            effortByModel: { 'claude-opus-4-8': 'high' },
+            fastByModel: { 'claude-opus-4-8': true },
+          },
+        },
+      },
+      undefined,
+      'claude-code',
+    );
+    // effort 取权威槽;fast 权威槽没记 → 回落来源副本。
+    expect(sel.effort).toBe('xhigh');
+    expect(sel.fastMode).toBe(true);
+  });
 });
 
 describe('shouldReseedDeviceLinkDraftDefaults', () => {
@@ -304,6 +464,77 @@ describe('shouldReseedDeviceLinkDraftDefaults', () => {
         remoteModelChosenByUser: true,
       }),
     ).toBe(true);
+  });
+
+  /**
+   * 统一面板的跨引擎选择(2026-08-17 review 第三轮 G1)。
+   *
+   * 「新目标一律重种」这条本身没错 —— 错的是**谁先到**:控制端在远程草稿里跨引擎选了一行,
+   * switchVendor 让下一帧的 agent 变成目标引擎,seed key 随之变新,于是这条规则拿被控端的
+   * 远程默认值把用户刚点的模型盖掉。修法是让那次显式选择**前置**把 key 推到目标引擎,
+   * 这一组就是那前后两种输入的对照。
+   */
+  it('treats a cross-engine pick as its own seed once the key was advanced', () => {
+    // 没前置(旧行为):agent 一变就是「新目标」→ 无条件重种 → 用户刚选的模型被远程默认覆盖。
+    expect(
+      shouldReseedDeviceLinkDraftDefaults({
+        currentSeedKey: 'device-a:claude-code',
+        nextSeedKey: 'device-a:codex',
+        capabilitiesChanged: true,
+        controllerTouched: true,
+        remoteModelChosenByUser: true,
+      }),
+    ).toBe(true);
+    // 前置之后:同一目标 + 控制端已编辑 → 不重种。目标引擎的 capabilities 到货那一帧只做
+    // 合法性夹紧(保留 current.model),用户的选择留在草稿里。
+    expect(
+      shouldReseedDeviceLinkDraftDefaults({
+        currentSeedKey: 'device-a:codex',
+        nextSeedKey: 'device-a:codex',
+        capabilitiesChanged: true,
+        controllerTouched: true,
+        remoteModelChosenByUser: true,
+      }),
+    ).toBe(false);
+    // 重复渲染 / 重复播种窗口:key 已被显式选择占住,后续每一帧都判成同一目标,同样不重种。
+    expect(
+      shouldReseedDeviceLinkDraftDefaults({
+        currentSeedKey: 'device-a:codex',
+        nextSeedKey: 'device-a:codex',
+        capabilitiesChanged: false,
+        controllerTouched: true,
+        remoteModelChosenByUser: false,
+      }),
+    ).toBe(false);
+    // 换设备仍然照常重种(这次前置只影响「同设备换引擎」,不能顺手把换机也挡掉)。
+    expect(
+      shouldReseedDeviceLinkDraftDefaults({
+        currentSeedKey: 'device-a:codex',
+        nextSeedKey: 'device-b:codex',
+        capabilitiesChanged: true,
+        controllerTouched: true,
+        remoteModelChosenByUser: true,
+      }),
+    ).toBe(true);
+  });
+});
+
+// 回归:在远程电脑上选项目(设备域浏览器)时，新设备快照与切设备同批到达，旧实现的
+// 「先镜像、后重置」两段 effect 把被控端已勾选的 worktree 压回未勾选，会话于是不建
+// worktree、落在被控端仓库当前(默认)分支上，用户选的源分支被静默忽略。
+describe('resolveDeviceLinkWorktreeEnabled', () => {
+  const ready = (worktreeEnabled?: boolean) => ({
+    status: 'ready' as const,
+    value: worktreeEnabled === undefined ? {} : { worktreeEnabled },
+  });
+  const deviceA = { deviceId: 'device-a', remoteDraftState: ready(false) };
+
+  it.each([
+    ['切设备且同批带来新设备快照 → 采用被控端勾选记忆', deviceA, { deviceId: 'device-b', remoteDraftState: ready(true) }, true],
+    ['切设备但快照仍是上一台那份 → 回到未勾选，不串台', deviceA, { deviceId: 'device-b', remoteDraftState: deviceA.remoteDraftState }, false],
+    ['同设备快照缺字段 → 保持当前显示', deviceA, { deviceId: 'device-a', remoteDraftState: ready() }, null],
+  ] as const)('%s', (_name, previous, current, expected) => {
+    expect(resolveDeviceLinkWorktreeEnabled(previous, current)).toBe(expected);
   });
 });
 

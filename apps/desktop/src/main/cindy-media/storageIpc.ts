@@ -4,8 +4,10 @@
  * 依赖全部注入(规则 14):Electron 接线在 bootstrap-electron.ts 只做
  * ipcMain.handle 适配,测试用内存 harness 直接调 handler body。
  *
- * 交互契约(一律先报数后动手):
- *   - stats:占用总览(账面统计 + 历史兼容层只读占用 + 死目录);
+ * 交互契约:
+ *   - 两个固定缓存目录只允许打开或整目录清理;清理前由 main 原生对话框做破坏性确认,
+ *     main 不接受路径,也不读取消息数据库或媒体账本;
+ *   - stats:占用总览(账面统计 + 死目录；不在设置页挂载时遍历历史图片目录);
  *   - scan:清理预检——renderer 随参带草稿附件 URL(§4 暂存区 (1)),这里
  *     叠加内存队列 (2) 与崩溃快照 (3) 组成活引用集,产出各类可清理项报数;
  *   - cleanup:执行清理——只认 scan 返回并经用户确认的指纹/目录清单,执行
@@ -19,11 +21,14 @@
 
 import { createLogger } from '../logger';
 import { throwIpcError } from '../utils/ipcValidate';
-import * as blobStore from './blobStore';
+import * as blobStore from './blobStore.desktop';
 import * as ledger from './ledger';
 import * as recycler from './recycler';
 import * as legacyDeadDirs from './legacyDeadDirs';
+import type { FixedDirectoryStats } from './fixedDirectory';
 import type { LiveHashSources } from './recycler';
+import { getDbClient } from '../localDb/client/current';
+import { beginRemoteMediaCacheCleanup, captureRemoteMediaOwner, REMOTE_MEDIA_INTEGRATION } from '../device-link/remoteMediaPersistentCache';
 
 const log = createLogger('cindy-media-storage-ipc');
 
@@ -41,17 +46,34 @@ export interface StorageIpcDeps {
   db?: ledger.LedgerDb;
   /** 测试注入死目录根;生产缺省 userData/cc-agent。 */
   legacyRootDir?: string;
+  /** Fixed-purpose directory opener. It returns false when the fixed path is not a directory. */
+  openLegacyImagesDir?: () => Promise<boolean>;
+  /** Delete only the fixed legacy image cache directory; no ledger or message lookup. */
+  clearLegacyImagesDir?: () => Promise<void>;
+  /** Fixed-purpose directory opener for the active owner's staged chat attachments. */
+  openChatAttachmentsDir?: () => Promise<boolean>;
+  /** Delete only the active owner's staged attachment root; no ledger or message lookup. */
+  clearChatAttachmentsDir?: () => Promise<void>;
+  getLegacyImagesDirStats?: () => Promise<FixedDirectoryStats>;
+  getChatAttachmentsDirStats?: () => Promise<FixedDirectoryStats>;
+  clearRemoteMediaMemory?: () => void;
 }
 
 export interface StorageStatsResult {
   success: boolean;
   error?: string;
   blobs: ledger.MediaStorageStats;
+  remoteMedia?: FixedDirectoryStats;
   legacy: { bytes: number; fileCount: number };
+  fixedCaches: {
+    legacyImages: FixedDirectoryStats;
+    chatAttachments: FixedDirectoryStats;
+  };
   deadDirs: legacyDeadDirs.DeadDirStatus[];
 }
 
 export interface StorageScanParams {
+  scope?: 'remote-media';
   /** renderer 收集的全部会话草稿附件 URL(活引用暂存区 (1))。 */
   draftUrls: string[];
 }
@@ -66,6 +88,7 @@ export interface StorageScanResult {
 }
 
 export interface StorageCleanupParams {
+  scope?: 'remote-media';
   draftUrls: string[];
   /** scan 给出、用户确认的零引用候选指纹。 */
   zeroRefHashes: string[];
@@ -127,22 +150,91 @@ async function collectLive(deps: StorageIpcDeps, draftUrls: string[]): Promise<S
 
 export function createStorageIpcHandlers(deps: StorageIpcDeps) {
   return {
+    async openLegacyImagesDir(): Promise<{ opened: boolean }> {
+      if (!deps.openLegacyImagesDir) {
+        throwIpcError('INTERNAL', 'legacy image directory opener is unavailable');
+      }
+      try {
+        return { opened: await deps.openLegacyImagesDir() };
+      } catch (err) {
+        log.warn('open legacy image directory failed', {
+          error: err instanceof Error ? err.message : String(err),
+        });
+        throwIpcError('INTERNAL', 'failed to open legacy image directory');
+      }
+    },
+
+    async clearLegacyImagesDir(): Promise<void> {
+      if (!deps.clearLegacyImagesDir) {
+        throwIpcError('INTERNAL', 'legacy image directory cleaner is unavailable');
+      }
+      try {
+        await deps.clearLegacyImagesDir();
+      } catch (err) {
+        log.warn('clear legacy image directory failed', {
+          error: err instanceof Error ? err.message : String(err),
+        });
+        throwIpcError('INTERNAL', 'failed to clear legacy image directory');
+      }
+    },
+
+    async openChatAttachmentsDir(): Promise<{ opened: boolean }> {
+      if (!deps.openChatAttachmentsDir) {
+        throwIpcError('INTERNAL', 'chat attachment directory opener is unavailable');
+      }
+      try {
+        return { opened: await deps.openChatAttachmentsDir() };
+      } catch (err) {
+        log.warn('open chat attachment directory failed', {
+          error: err instanceof Error ? err.message : String(err),
+        });
+        throwIpcError('INTERNAL', 'failed to open chat attachment directory');
+      }
+    },
+
+    async clearChatAttachmentsDir(): Promise<void> {
+      if (!deps.clearChatAttachmentsDir) {
+        throwIpcError('INTERNAL', 'chat attachment directory cleaner is unavailable');
+      }
+      try {
+        await deps.clearChatAttachmentsDir();
+      } catch (err) {
+        log.warn('clear chat attachment directory failed', {
+          error: err instanceof Error ? err.message : String(err),
+        });
+        throwIpcError('INTERNAL', 'failed to clear chat attachment directory');
+      }
+    },
+
     async stats(): Promise<StorageStatsResult> {
       try {
-        const [blobs, legacy, deadDirs] = await Promise.all([
+        const [blobs, deadDirs, legacyImages, chatAttachments, remoteMedia] = await Promise.all([
           ledger.getStorageStats(deps.db),
-          legacyDeadDirs.getLegacyRootUsage(deps.legacyRootDir),
           legacyDeadDirs.scanDeadDirs(deps.legacyRootDir),
+          deps.getLegacyImagesDirStats?.() ?? Promise.resolve({ bytes: 0, fileCount: 0 }),
+          deps.getChatAttachmentsDirStats?.() ?? Promise.resolve({ bytes: 0, fileCount: 0 }),
+          ledger.listCacheBlobsByLru(deps.db, REMOTE_MEDIA_INTEGRATION),
         ]);
-        return { success: true, blobs, legacy, deadDirs };
+        return {
+          success: true,
+          blobs,
+          remoteMedia: { bytes: remoteMedia.reduce((sum, row) => sum + row.bytes, 0), fileCount: remoteMedia.length },
+          legacy: { bytes: 0, fileCount: 0 },
+          fixedCaches: { legacyImages, chatAttachments },
+          deadDirs,
+        };
       } catch (err) {
         const message = err instanceof Error ? err.message : String(err);
         log.warn('storage stats failed', { error: message });
         return {
           success: false,
-          error: message,
+          error: 'storage statistics unavailable',
           blobs: EMPTY_STATS,
           legacy: { bytes: 0, fileCount: 0 },
+          fixedCaches: {
+            legacyImages: { bytes: 0, fileCount: 0 },
+            chatAttachments: { bytes: 0, fileCount: 0 },
+          },
           deadDirs: [],
         };
       }
@@ -150,6 +242,15 @@ export function createStorageIpcHandlers(deps: StorageIpcDeps) {
 
     async scan(params: StorageScanParams): Promise<StorageScanResult> {
       try {
+        if (params?.scope === 'remote-media') {
+          const assertCurrent = captureRemoteMediaOwner();
+          const db = deps.db ?? getDbClient().drizzle;
+          const live = await collectLive(deps, params.draftUrls ?? []);
+          assertCurrent();
+          const cache = await recycler.scanCache({ live, limitBytes: 0, integration: REMOTE_MEDIA_INTEGRATION }, db);
+          assertCurrent();
+          return { success: true, zeroRef: EMPTY_ZERO_REF, cache, tmpFileCount: 0, deadDirs: [] };
+        }
         const live = await collectLive(deps, params?.draftUrls ?? []);
         const [zeroRef, cache, staleTmp, deadDirs] = await Promise.all([
           recycler.scanZeroRef({ live }, deps.db),
@@ -192,6 +293,28 @@ export function createStorageIpcHandlers(deps: StorageIpcDeps) {
         throwIpcError('INVALID_PARAMS', 'cindy-media storage cleanup: params required');
       }
       try {
+        if (params.scope === 'remote-media') {
+          const assertCurrent = captureRemoteMediaOwner();
+          const db = deps.db ?? getDbClient().drizzle;
+          const finishCleanup = beginRemoteMediaCacheCleanup();
+          try {
+            deps.clearRemoteMediaMemory?.();
+            const live = await collectLive(deps, params.draftUrls ?? []);
+            assertCurrent();
+            const cacheEvicted = await recycler.evictCacheBlobs({
+              hashes: params.evictCacheHashes ?? [], live,
+              integration: REMOTE_MEDIA_INTEGRATION, assertStillValid: assertCurrent,
+            }, db);
+            assertCurrent();
+            return { zeroRef: { deleted: 0, freedBytes: 0, skipped: 0 }, cacheEvicted,
+              deadDirs: { removed: [], skipped: [], freedBytes: 0 }, tmpFilesRemoved: 0,
+              freedBytes: cacheEvicted.freedBytes };
+          } finally {
+            // Release this cleanup's fence and invalidate old projections even on failure.
+            finishCleanup();
+            deps.clearRemoteMediaMemory?.();
+          }
+        }
         // 执行时重新取证:扫描→确认之间用户可能又粘了图/发了排队消息。
         const live = await collectLive(deps, params.draftUrls ?? []);
         const zeroRef = await recycler.deleteZeroRefBlobs(

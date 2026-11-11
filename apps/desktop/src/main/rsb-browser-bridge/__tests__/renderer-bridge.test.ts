@@ -285,6 +285,7 @@ describe('dispatchTabOp — ensureHost(detached 侧边栏子窗口)', () => {
 
     const pending = dispatchTabOp({ op: 'open', sessionId: 's1', url: 'https://x.dev' }, opts);
     expect(ensureHost).toHaveBeenCalledTimes(1);
+    expect(ensureHost).toHaveBeenCalledWith('s1');
     expect(wc.send).not.toHaveBeenCalled();
 
     releaseEnsure();

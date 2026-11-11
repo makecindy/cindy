@@ -1,9 +1,14 @@
-import { useLocalSearchParams, useRouter } from 'expo-router';
-import { useCallback, useEffect, useMemo, useState } from 'react';
-import { ChevronRight } from 'lucide-react-native';
+import { getMobileAuthOwner, isMobileAuthOwnerCurrent } from '@/auth/authOwnerGeneration';
+import { readTeammateTasks } from '@/session/readTeammateTasks';
+import { deviceDisplayName } from '@/device-link/deviceName';
+import { useIsFocused, useLocalSearchParams, useRouter } from 'expo-router';
+import { withNewSessionCreationRemoval } from '@/session/newSessionCreation';
+import { useHeaderHeight } from 'expo-router/react-navigation';
+import { useCallback, useContext, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
+import { useSharedValue } from 'react-native-reanimated';
 import {
   ActivityIndicator,
-  Pressable,
+  AppState,
   RefreshControl,
   ScrollView,
   SectionList,
@@ -11,14 +16,14 @@ import {
   View,
   useWindowDimensions,
 } from 'react-native';
-import { Text, TextInput } from '@/components/AppText';
-import { SafeAreaView } from 'react-native-safe-area-context';
+import { Text } from '@/components/AppText';
+import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useTranslation } from 'react-i18next';
 import type { TFunction } from 'i18next';
 import { ConnectionBanner, useShowConnectionBanner } from '@/components/ConnectionBanner';
+import { resolveEffectiveConnectionError } from '@/components/connectionBannerVisibility';
 import { unresponsiveDevicesStore, useUnresponsiveDevices } from '@/device-link/unresponsiveDevicesStore';
 import { goBackGuarded } from '@/utils/backGuard';
-import { configureCollapseAnimation } from '@/utils/collapseAnimation';
 import { useGuardedPush } from '@/utils/useGuardedPush';
 import { mapContentEqual } from '@/utils/valueEquality';
 import { useStableValue } from '@/utils/useStableValue';
@@ -28,29 +33,32 @@ import {
   MainWindowEmptyState,
   MainWindowMetric,
   MainWindowOptionButton,
-  MainWindowRowButton,
   RemoteListSyncingPlaceholder,
-  ScreenHeader,
   SummaryStrip,
 } from '@/components/MobilePrimitives';
+import {
+  SimpleStackHeader,
+  simpleScrollInsetProps,
+  simpleScrollScreenSafeAreaEdges,
+  usesNativeStackHeader,
+} from '@/platform/chrome';
 import { buildMainWindowLayout } from '@/components/mainWindowLayout';
 import { useDeviceLink } from '@/device-link/DeviceLinkContext';
 import { formatRemoteError } from '@/device-link/remoteStatus';
+import { isExplicitRemoteNotFoundError } from '@/session/newSessionWorktree';
 import { withTransientRemoteRetry } from '@/device-link/remoteRetry';
 import { useRemoteSyncTask } from '@/device-link/remoteSyncTask';
+import { useRemoteProjectAliases } from '@/session/remoteProjectAliases';
+import { resolveMobileProjectRouteTitle } from '@/session/projectAliasPresentation';
 import {
   automationGroupKey,
-  buildSessionMessagePreviewIndex,
   buildRemoteSessionListContext,
   buildRemoteSessionSections,
   deviceSessionEmptyState,
-  getRemoteSessionPreviewCollapse,
   remoteSessionControlsSummary,
   remoteSessionFilterLabel,
   summarizeRemoteSessionOverview,
-  type RemoteAutomationGroupChild,
   type RemoteAutomationSessionGroup,
-  type RemoteSessionGroupMode,
   type RemoteSessionListItem,
   type RemoteSessionScheduleInfo,
   type RemoteSessionStatusFilter,
@@ -66,10 +74,28 @@ import {
   type MobileSessionBulkAction,
 } from '@/session/sessionSelection';
 import { serializeNewSessionDeviceOptions } from '@/session/newSession';
-import { sessionMatchesProjectDir } from '@/session/mobileHome';
-import { HomeSessionRow, PROJECT_PREVIEW_LIMIT } from './index';
+import { ConversationSearchFilterSheet } from '@/session/ConversationSearchFilterSheet';
+import { useConversationSearchFilterMenu } from '@/session/useConversationSearchFilterMenu';
+import { HomeSearchBar } from '@/session/HomeSearchBar';
+import {
+  conversationSearchAllowsLocalWrites,
+  listConversationSearchProjects,
+  shouldReplaceListWithSearchResults,
+} from '@/session/conversationSearch';
+import { useConversationSearch } from '@/session/useConversationSearch';
+import { selectVisibleDeviceSessions, sessionMatchesProjectDir } from '@/session/mobileHome';
+import { HomeListViewportContext, HomeSessionRow } from '@/session/HomeSurface';
+import { useTeammateRoster } from '@/session/useTeammateRoster';
+import { createDisclosureListCell, ListDisclosureScope, useListDisclosureTransition } from '@/session/listDisclosureTransition';
+import { RenameSessionModal } from '@/session/RenameSessionModal';
+import { SessionImportSheet } from '@/session/SessionImportSheet';
+import { SessionOptionsPresenter } from '@/session/SessionOptionsExpoSheet';
+import { SwipeableSessionRow, type SessionSwipeControls } from '@/session/SwipeableSessionRow';
+import type { SessionSwipeAction } from '@/session/swipeRowRegistry';
+import { useSessionListActions } from '@/session/useSessionListActions';
 import { useMobileMakerTransport } from '@/device-link/useMobileMakerTransport';
 import {
+  RemoteSessionStoreSubscriptionGate,
   remoteSessionStore,
   useRemoteMessageVersion,
   useRemoteSessions,
@@ -84,13 +110,13 @@ import {
   getScheduleIndexInvalidationVersion,
   invalidateOfflineScheduleIndexFailureFor,
   invalidateRunningSessionScheduleEntries,
-  loadSessionScheduleIndex,
-  loadSessionScheduleIndexThrottled,
+  loadSharedSessionScheduleIndex,
 } from '@/session/scheduleIndex';
 import { shouldSuppressRemoteListEmptyState } from '@/session/sessionEmptyState';
+import { anyMayHaveBoundSchedules, countSessionsWithActiveBoundSchedules } from '@/session/archiveScheduleConfirm';
 import type { RemoteSession } from '@/session/types';
 import { useTheme, useThemedStyles, type ThemeColors } from '@/theme';
-import { fontWeight, iconSize, iconStroke, lineHeight, radius, spacing, typeScale } from '@/theme/tokens';
+import { fontWeight, lineHeight, radius, spacing, typeScale } from '@/theme/tokens';
 
 const LIST_LIMIT = 200;
 // label 走 i18n key(在使用点 t() 求值),不在模块顶层冻结语言。
@@ -101,16 +127,41 @@ const STATUS_FILTERS: Array<{ value: RemoteSessionStatusFilter; labelKey: string
   { value: 'archived', labelKey: 'devices.detail.filter.archived' },
   { value: 'all', labelKey: 'devices.detail.filter.all' },
 ];
-const GROUP_MODES: Array<{ value: RemoteSessionGroupMode; labelKey: string }> = [
-  { value: 'project', labelKey: 'devices.detail.group.project' },
-  { value: 'date', labelKey: 'devices.detail.group.date' },
-];
 type RemoteListStatusFilter = Extract<RemoteSessionStatusFilter, 'active' | 'archived' | 'all'>;
 
 export default function DeviceDetailScreen() {
+  const screenFocused = useIsFocused();
+  const scrollY = useSharedValue(0);
+  const { height: viewportHeight } = useWindowDimensions();
+  const viewport = useMemo(() => ({ scrollY, viewportHeight }), [scrollY, viewportHeight]);
+  return (
+    <RemoteSessionStoreSubscriptionGate enabled={screenFocused}>
+      <HomeListViewportContext.Provider value={viewport}>
+        <DeviceDetailScreenContent />
+      </HomeListViewportContext.Provider>
+    </RemoteSessionStoreSubscriptionGate>
+  );
+}
+
+// 设备页列表的 cell 与首页同一套展开 / 收起过渡;组内子行由 DisclosureItem 负责收起。
+const DeviceListCell = createDisclosureListCell();
+
+function DeviceDetailScreenContent() {
+  const viewport = useContext(HomeListViewportContext);
+  const screenFocused = useIsFocused();
+  // Task rows mark the teammate looking after them from the roster cache; keep it current here too.
+  useTeammateRoster(screenFocused);
+  const screenFocusedRef = useRef(screenFocused);
+  screenFocusedRef.current = screenFocused;
+  const [appStateActive, setAppStateActive] = useState(AppState.currentState === 'active');
+  useEffect(() => {
+    const subscription = AppState.addEventListener('change', (state) => setAppStateActive(state === 'active'));
+    return () => subscription.remove();
+  }, []);
+  const canLoadScheduleIndex = useCallback(() => screenFocusedRef.current && AppState.currentState === 'active', []);
   const styles = useThemedStyles(makeStyles);
   const { colors } = useTheme();
-  const { t } = useTranslation();
+  const { t, i18n: i18nInstance } = useTranslation();
   const params = useLocalSearchParams<{
     deviceId: string;
     deviceName?: string;
@@ -121,12 +172,14 @@ export default function DeviceDetailScreen() {
     automationName?: string;
     automationWorkingDir?: string;
     automationSessionIds?: string;
+    statusFilter?: string;
+    search?: string;
   }>();
   const deviceId = readRouteString(params.deviceId) ?? '';
-  const deviceName = readRouteString(params.name) ?? readRouteString(params.deviceName) ?? deviceId;
+  const deviceName = deviceDisplayName(deviceId, readRouteString(params.name) ?? readRouteString(params.deviceName));
   // 从首页「查看全部 N 条对话」进来时带 workingDir + 项目名 → 仅显示该项目的会话(项目作用域)。
   const projectWorkingDir = readRouteString(params.workingDir);
-  const projectName = readRouteString(params.projectName);
+  const routeProjectName = readRouteString(params.projectName);
   // 从自动化组「查看全部 N 次运行」进来时带组键 + 任务名 → 仅显示该任务的运行(自动化任务作用域)。
   const automationScopeKey = readRouteString(params.automationGroupKey);
   const automationScopeName = readRouteString(params.automationName);
@@ -147,38 +200,126 @@ export default function DeviceDetailScreen() {
   const scheduleEventSnapshot = useRemoteScheduleEventSnapshot(deviceId);
   const scheduleMirrorInvalidations = useRemoteScheduleMirrorInvalidations();
   const allSessions = useRemoteSessions();
+  const projectAliases = useRemoteProjectAliases();
   // filter 必须 memo:裸 filter 每次渲染都产新数组,会让下游全部 [sessions, ...] 依赖的
   // useMemo 逐 emit 失效,派生链(索引 → sections → 全列表行)整体重建(2026-07-18
   // 重渲染风暴)。store 层已保证 allSessions 引用在内容未变时稳定,这里不能亲手打破。
-  const sessions = useMemo(() => allSessions.filter((s) =>
-    // 用展示用 canonicalDeviceId(设备归并结果)匹配,与首页项目卡一致 —— 被认领的 stale 会话也能显示,
-    // 数量与卡片相符。deviceLinkDeviceId 仍是物理路由 key(openSession / patch 用它),不参与此处判断。
-    (s.canonicalDeviceId ?? s.deviceLinkDeviceId) === deviceId
-    && (!projectWorkingDir || sessionMatchesProjectDir(s.workingDir, projectWorkingDir))),
-  [allSessions, deviceId, projectWorkingDir]);
+  // 列表隐藏 Orca worker 子会话(本期不支持进 worker 聊天);Lead + 普通会话保留。仅 mobile 侧过滤。
+  // 与首页卡片口径对齐:首页已 exclude worker,「查看全部 N 条」不能再把它们露出来。
+  // 用展示用 canonicalDeviceId(设备归并结果)匹配 —— 被认领的 stale 会话也能显示,数量与卡片相符。
+  const sessions = useMemo(
+    () => selectVisibleDeviceSessions(allSessions, deviceId, projectWorkingDir),
+    [allSessions, deviceId, projectWorkingDir],
+  );
+  const projectName = useMemo(() => resolveMobileProjectRouteTitle({
+    deviceId,
+    workingDir: projectWorkingDir,
+    routeTitle: routeProjectName,
+    sessions,
+    projectAliases,
+  }), [deviceId, projectAliases, projectWorkingDir, routeProjectName, sessions]);
   const messageVersion = useRemoteMessageVersion();
   const storeVersion = useRemoteSessionStoreVersion();
-  const [statusFilter, setStatusFilter] = useState<RemoteSessionStatusFilter>('active');
-  const [groupMode, setGroupMode] = useState<RemoteSessionGroupMode>('project');
+  const [statusFilter, setStatusFilter] = useState<RemoteSessionStatusFilter>(
+    () => parseRouteStatusFilter(readRouteString(params.statusFilter)),
+  );
+  const requestedListFilter = automationScopeKey ? 'all' : remoteListStatusFilter(statusFilter);
+  const listQueryScope = useMemo(() => ({ deviceId, filter: requestedListFilter }), [deviceId, requestedListFilter]);
+  const listQueryScopeRef = useRef(listQueryScope);
+  listQueryScopeRef.current = listQueryScope;
+  const [syncedListQueryScope, setSyncedListQueryScope] = useState<typeof listQueryScope | null>(null);
   const [filtersOpen, setFiltersOpen] = useState(false);
-  const [searchOpen, setSearchOpen] = useState(false);
-  const [searchQuery, setSearchQuery] = useState('');
+  const [searchOpen, setSearchOpen] = useState(() => readRouteString(params.search) === '1');
+  const [searchFilterOpen, setSearchFilterOpen] = useState(false);
+  const [sessionImportOpen, setSessionImportOpen] = useState(false);
+  const insets = useSafeAreaInsets();
+  const headerHeight = useHeaderHeight();
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  useLayoutEffect(() => { setError(null); }, [listQueryScope]);
   // 熔断 open(电脑端未响应):relay 可能仍 online,可见性与 banner 文案单独入参。
   const unresponsiveDevices = useUnresponsiveDevices();
   const deviceUnresponsive = !!deviceId && unresponsiveDevices.has(deviceId);
+  const effectiveError = resolveEffectiveConnectionError(error, deviceUnresponsive);
+  const searchOrigins = useMemo(() => (deviceId ? [{
+    deviceId,
+    deviceName,
+    reachable: !deviceUnresponsive,
+  }] : []), [deviceId, deviceName, deviceUnresponsive]);
+  const searchProjects = useMemo(
+    () => listConversationSearchProjects(sessions, deviceId ? new Set([deviceId]) : undefined, projectAliases),
+    [deviceId, sessions, projectAliases],
+  );
+  const indexedSearch = useConversationSearch({
+    enabled: !automationScopeKey && !!deviceId,
+    lockedWorkingDirs: projectWorkingDir ? [projectWorkingDir] : null,
+    origins: searchOrigins,
+    projects: searchProjects,
+    projectAliases,
+  });
+  const searchQuery = indexedSearch.query;
+  const setSearchQuery = indexedSearch.setQuery;
+  const searchFilterA11y = t('devices.list.search.filterAria', {
+    agent: t(`devices.list.search.filter.agent.${indexedSearch.agentFilter}`),
+    lastActivity: t(`devices.list.search.filter.lastActivity.${indexedSearch.lastActivityFilter}`),
+    projects: projectWorkingDir
+      ? (projectName ?? projectWorkingDir)
+      : indexedSearch.projectSelection === 'all'
+        ? t('devices.list.search.filter.allProjects')
+        : t('devices.list.search.filter.selectedProjects', { count: indexedSearch.projectSelection.length }),
+    sort: t(`devices.list.search.filter.sort.${indexedSearch.sortBy}`),
+    status: t(`devices.list.search.filter.status.${indexedSearch.statusFilter}`),
+  });
+  const searchFilterMenu = useConversationSearchFilterMenu({
+    activeCount: indexedSearch.activeFilterCount,
+    agentKind: indexedSearch.agentFilter,
+    lastActivity: indexedSearch.lastActivityFilter,
+    lockedProjects: !!projectWorkingDir,
+    onAgentKindChange: indexedSearch.setAgentFilter,
+    onLastActivityChange: indexedSearch.setLastActivityFilter,
+    onProjectsChange: indexedSearch.setProjectSelection,
+    onReset: indexedSearch.resetFilters,
+    onSortChange: indexedSearch.setSortBy,
+    onStatusChange: indexedSearch.setStatusFilter,
+    projectSelection: indexedSearch.projectSelection,
+    projects: searchProjects,
+    sortBy: indexedSearch.sortBy,
+    status: indexedSearch.statusFilter,
+  });
   // 自动化 / 项目分支视图的条件挂载 banner:普通弱网断线也要有可见信号(防闪延迟后)
   const showConnectionBanner = useShowConnectionBanner(status, error, connectionIssue, deviceUnresponsive);
   const [lastSyncedAt, setLastSyncedAt] = useState<number | null>(null);
   const [selectedSessionIds, setSelectedSessionIds] = useState<string[]>([]);
+  const [selectionRequested, setSelectionRequested] = useState(false);
   const [expandedAutomationGroups, setExpandedAutomationGroups] = useState<string[]>([]);
   const [bulkActionPending, setBulkActionPending] = useState<MobileSessionBulkAction | null>(null);
   const [bulkConfirmAction, setBulkConfirmAction] = useState<MobileSessionBulkAction | null>(null);
+  // 批量归档确认里「绑定了自动化的任务数」;按请求序号丢弃过期结果。
+  const [bulkScheduleCount, setBulkScheduleCount] = useState(0);
+  // 查询返回(成功或失败)前不允许确认归档,否则提醒还没出现任务就已归档。
+  const [bulkScheduleLoading, setBulkScheduleLoading] = useState(false);
+  const bulkScheduleRequestRef = useRef(0);
   const [bulkNotice, setBulkNotice] = useState<string | null>(null);
   const [scheduleIndex, setScheduleIndex] = useState<Map<string, RemoteSessionScheduleInfo>>(
     () => new Map(),
   );
+  // 与首页共用同一套展开 / 收起过渡(listDisclosureTransition);行的归档、置顶移位也走它。
+  const disclosure = useListDisclosureTransition();
+  const runDisclosure = disclosure.run;
+  const animateListChange = useCallback((apply: () => void) => runDisclosure(apply, { nested: true }), [runDisclosure]);
+  const {
+    actionSheetSession,
+    closeRenameSession,
+    confirmRenameSession,
+    handleSessionSheetAction,
+    handleSessionSheetClosed,
+    renameSessionDraft,
+    renameSessionTarget,
+    sessionSwipeControls,
+    setActionSheetSession,
+    setRenameSessionDraft,
+    swipeRegistry,
+  } = useSessionListActions({ animateListChange });
 
   useEffect(() => {
     if (!deviceId || !scheduleMirrorInvalidations.has(deviceId)) return;
@@ -190,19 +331,39 @@ export default function DeviceDetailScreen() {
 
   const syncSessions = useCallback(async () => {
     if (!deviceId) return;
+    const owner = getMobileAuthOwner();
+    const isCurrentQuery = () => listQueryScopeRef.current === listQueryScope && isMobileAuthOwnerCurrent(owner);
+    if (!isCurrentQuery()) return;
     setLoading(true);
     setError(null);
     try {
+      const mutationEpoch = remoteSessionStore.captureDeviceSessionListMutationEpoch(deviceId);
       const list = await withTransientRemoteRetry(async () => {
         await subscribe(`device:${deviceId}`, deviceId, ['sessions']);
-        return invoke<RemoteSession[]>(deviceId, 'local-db:sessions:list', [
+        const sessions = await invoke<RemoteSession[]>(deviceId, 'local-db:sessions:list', [
           LIST_LIMIT,
           // 自动化任务作用域页承诺展示"该任务的全部 N 次运行",归档的 run 也算,
           // 必须拉全量;其余模式仍按当前筛选拉取。
-          automationScopeKey ? 'all' : remoteListStatusFilter(statusFilter),
-          { includePinned: true },
+          requestedListFilter,
+          // 首拉 / reseed / 筛选重拉都是权威快照，不并入被控端写前查询。
+          { includePinned: true, fresh: true },
         ]);
+        return readTeammateTasks({ invoke, deviceId, deviceName, scope: JSON.stringify([owner, deviceId, listQueryScope]),
+          sessions: Array.isArray(sessions) ? sessions : [], previous: remoteSessionStore.getHomeSessions(),
+          status: requestedListFilter, limit: LIST_LIMIT, current: isCurrentQuery,
+          publishInitial: rows => {
+            if (isCurrentQuery() && remoteSessionStore.isDeviceSessionListMutationEpochCurrent(deviceId, mutationEpoch)) {
+              remoteSessionStore.setDeviceSessions(deviceId, deviceName, rows);
+            }
+          },
+        });
       });
+      if (!isCurrentQuery()) return;
+      if (!remoteSessionStore.isDeviceSessionListMutationEpochCurrent(deviceId, mutationEpoch)) {
+        // The existing sync runner queues one follow-up after this stale read.
+        remoteSessionStore.requestReseed(deviceId);
+        return;
+      }
       remoteSessionStore.setDeviceSessions(deviceId, deviceName, Array.isArray(list) ? list : []);
       // A successful sessions:list is authoritative reachability evidence even when relay
       // presence was not replayed. Retire both offline caches before the schedule reload.
@@ -211,22 +372,24 @@ export default function DeviceDetailScreen() {
       // 节流缓存与首页共用同一 key(deviceId):两页交替浏览时不重复全量拉取(单飞 + TTL,
       // 拥塞背景见 scheduleIndex 注释)。
       const invalidationVersion = getScheduleIndexInvalidationVersion(deviceId);
-      void loadSessionScheduleIndexThrottled(deviceId, () => loadSessionScheduleIndex(maker, { isDeviceUnresponsive: () => unresponsiveDevicesStore.has(deviceId) }))
+      void loadSharedSessionScheduleIndex(deviceId, maker, canLoadScheduleIndex)
         .then((nextIndex) => {
           if (getScheduleIndexInvalidationVersion(deviceId) !== invalidationVersion) return;
           setScheduleIndex(nextIndex);
         })
         .catch(() => {
+          if (!canLoadScheduleIndex()) return;
           if (getScheduleIndexInvalidationVersion(deviceId) !== invalidationVersion) return;
           setScheduleIndex(new Map());
         });
       setLastSyncedAt(Date.now());
+      setSyncedListQueryScope(listQueryScope);
     } catch (err) {
-      setError(formatRemoteError(err));
+      if (isCurrentQuery()) setError(formatRemoteError(err));
     } finally {
-      setLoading(false);
+      if (isCurrentQuery()) setLoading(false);
     }
-  }, [automationScopeKey, deviceId, deviceName, invoke, maker, statusFilter, subscribe]);
+  }, [canLoadScheduleIndex, deviceId, deviceName, invoke, listQueryScope, maker, requestedListFilter, subscribe]);
   const loadSessions = useRemoteSyncTask(syncSessions);
 
   useEffect(() => {
@@ -239,25 +402,24 @@ export default function DeviceDetailScreen() {
 
   useEffect(() => {
     void loadSessions();
-  }, [loadSessions, statusFilter]);
+  }, [loadSessions, listQueryScope]);
 
   useEffect(() => {
-    if (scheduleEventSnapshot.sessionIndexVersion > 0) void loadSessions();
-  }, [loadSessions, scheduleEventSnapshot.sessionIndexVersion]);
+    if (screenFocused && appStateActive && scheduleEventSnapshot.sessionIndexVersion > 0) void loadSessions();
+  }, [appStateActive, loadSessions, scheduleEventSnapshot.sessionIndexVersion, screenFocused]);
 
-  // schedule 列表变化(changed,含 pause / resume / 改绑)与 read / all-read 都 force
-  // 刷新节流缓存——否则 30s TTL 内会继续显示旧 Pause / 未读状态。依赖专用 version
-  // 计数而非 lastProjection 引用:后者每个事件都换新,会让 fired / deferred 等无关事件
-  // 也重跑本 effect(review P1)。
-  // 上方 loadSessions effect 随 sessionIndexVersion 同步触发,其内部 throttled 调用会
-  // 单飞复用本次 force 拉起的在途 promise,不产生第二次全量拉取。
+  // Once sessions have loaded, visibility alone must resume a cancelled index
+  // even before the first schedule event. Keep the initial list-first ordering.
+  // The event store invalidates once; all visible consumers share its next scan.
   useEffect(() => {
+    if (!screenFocused || !appStateActive) return;
     if (
-      scheduleEventSnapshot.scheduleListVersion === 0
+      lastSyncedAt === null
+      && scheduleEventSnapshot.scheduleListVersion === 0
       && scheduleEventSnapshot.unreadClearVersion === 0
     ) return;
     const invalidationVersion = getScheduleIndexInvalidationVersion(deviceId);
-    void loadSessionScheduleIndexThrottled(deviceId, () => loadSessionScheduleIndex(maker, { isDeviceUnresponsive: () => unresponsiveDevicesStore.has(deviceId) }), { force: true })
+    void loadSharedSessionScheduleIndex(deviceId, maker, canLoadScheduleIndex)
       .then((nextIndex) => {
         if (getScheduleIndexInvalidationVersion(deviceId) !== invalidationVersion) return;
         setScheduleIndex(nextIndex);
@@ -266,20 +428,21 @@ export default function DeviceDetailScreen() {
         // 失败保留旧徽标,与整页 load 的容错口径一致。
       });
   }, [
+    appStateActive,
+    canLoadScheduleIndex,
     deviceId,
     maker,
+    lastSyncedAt,
     scheduleEventSnapshot.scheduleListVersion,
     scheduleEventSnapshot.unreadClearVersion,
+    screenFocused,
   ]);
 
   // 派生索引依赖全局 messageVersion / storeVersion,逐 emit 重建出内容相同的新 Map;
   // useStableValue 在内容未变时保留旧引用,阻断 sections 派生链的无谓全量重建
   // (与首页同款处理,风暴背景见 devices/index.tsx 对应注释)。
   const messagePreviewIndexRaw = useMemo(
-    () => buildSessionMessagePreviewIndex(
-      sessions.map((session) => session.id),
-      (sessionId) => remoteSessionStore.getMessages(sessionId),
-    ),
+    () => remoteSessionStore.getSessionListMessagePreviewIndex(sessions),
     [messageVersion, sessions],
   );
   const messagePreviewIndex = useStableValue(messagePreviewIndexRaw, mapContentEqual);
@@ -296,7 +459,8 @@ export default function DeviceDetailScreen() {
 
   const sections = useMemo(
     () => buildRemoteSessionSections(sessions, Date.now(), {
-      groupMode,
+      projectAliases,
+      projectAliasDeviceId: deviceId,
       messagePreviewIndex,
       pendingInteractionIndex,
       scheduleIndex,
@@ -306,23 +470,40 @@ export default function DeviceDetailScreen() {
       statusFilter: automationScopeKey ? 'all' : statusFilter,
       // 未起名会话的显示文案:共享层不兜中文串,由这里给已解析的 i18n 值。
       unnamedLabel: t('session.menu.unnamedTitle'),
-      // 项目作用域精简页与完整设备详情页都折叠自动化组(HomeSessionRow / SessionRow 均支持组行
+      // 项目作用域精简页与完整设备详情页都折叠自动化组(HomeSessionRow 支持组行
       // 展开,与首页交互一致);自动化任务作用域页本身就是"某任务的全部运行",必须平铺不折叠。
       groupAutomations: !automationScopeKey,
     }),
-    [automationScopeKey, groupMode, messagePreviewIndex, pendingInteractionIndex, scheduleIndex, searchQuery, sessions, statusFilter, t],
+    [
+      automationScopeKey,
+      deviceId,
+      projectAliases,
+      i18nInstance.language,
+      messagePreviewIndex,
+      pendingInteractionIndex,
+      scheduleIndex,
+      searchQuery,
+      sessions,
+      statusFilter,
+      t,
+    ],
   );
+  const displaySections = useMemo(() => {
+    if (automationScopeKey || !shouldReplaceListWithSearchResults(searchQuery, indexedSearch.status)) {
+      return sections;
+    }
+    return [{ key: 'search', title: '', data: indexedSearch.results }];
+  }, [automationScopeKey, indexedSearch.results, indexedSearch.status, searchQuery, sections]);
   const listContext = useMemo(
     () => buildRemoteSessionListContext({
-      groupMode,
       overview: filterCounts,
       searchQuery,
-      sections,
+      sections: displaySections,
       statusFilter,
     }),
-    [filterCounts, groupMode, searchQuery, sections, statusFilter],
+    [displaySections, filterCounts, searchQuery, statusFilter],
   );
-  const visibleSessionIds = useMemo(() => visibleSessionIdsFromSections(sections), [sections]);
+  const visibleSessionIds = useMemo(() => visibleSessionIdsFromSections(displaySections), [displaySections]);
   const selectedSessionIdSet = useMemo(() => new Set(selectedSessionIds), [selectedSessionIds]);
   const selectedSessions = useMemo(() => {
     const selected = new Set(selectedSessionIds);
@@ -334,17 +515,16 @@ export default function DeviceDetailScreen() {
     pin: summarizeMobileSessionBulkAction(selectedSessions, 'pin'),
     restore: summarizeMobileSessionBulkAction(selectedSessions, 'restore'),
     unpin: summarizeMobileSessionBulkAction(selectedSessions, 'unpin'),
-  }), [selectedSessions]);
+  }), [i18nInstance.language, selectedSessions]);
   const bulkActionLayout = useMemo(
     () => visibleMobileSessionBulkActions(bulkActionSummaries),
     [bulkActionSummaries],
   );
   const bulkConfirmSummary = bulkConfirmAction ? bulkActionSummaries[bulkConfirmAction] : null;
-  const selectionMode = selectedSessionIds.length > 0;
-  const runningAutomationCount = filterCounts.runningAutomation;
+  const selectionMode = selectionRequested || selectedSessionIds.length > 0;
   const controlsSummary = useMemo(
-    () => remoteSessionControlsSummary(statusFilter, groupMode, filterCounts),
-    [filterCounts, groupMode, statusFilter],
+    () => remoteSessionControlsSummary(statusFilter, filterCounts),
+    [filterCounts, statusFilter, t],
   );
   const windowLayout = buildMainWindowLayout({
     actionCount: 3,
@@ -354,15 +534,19 @@ export default function DeviceDetailScreen() {
   });
   const emptyState = useMemo(
     () => deviceSessionEmptyState(statusFilter, searchQuery),
-    [searchQuery, statusFilter],
+    [searchQuery, statusFilter, t],
   );
-  // 首同步完成前(lastSyncedAt === null)抑制"还没有对话"空状态,避免冷进(deep link)先闪空态
-  // 再跳成真列表(规则 7:不闪空白/不跳变)。同步失败时 ConnectionBanner 已有错误 + 重试入口。
+  // 当前设备和筛选同步完成前抑制空状态，旧筛选的成功不能证明新筛选为空。
+  // 同步失败时 ConnectionBanner 已有错误提示，不再同时显示 loading 或空结果。
   // 抑制期渲染 RemoteListSyncingPlaceholder(800ms 内空白,超时浮现「正在同步」),
   // 慢链路 / 连接翻覆下首同步拖长时不再是无限期纯白。
   const suppressListEmptyState = shouldSuppressRemoteListEmptyState({
-    itemCount: visibleSessionIds.length,
-    hasSyncedThisOpen: lastSyncedAt !== null,
+    // Used only by ListEmptyComponent. An automation group may be empty even
+    // when the host's unfiltered sections contain other tasks.
+    itemCount: 0,
+    hasSyncedThisOpen: syncedListQueryScope === listQueryScope,
+    loading: loading || indexedSearch.status === 'searching',
+    failed: !!effectiveError,
   });
   useEffect(() => {
     setSelectedSessionIds((prev) => {
@@ -372,39 +556,42 @@ export default function DeviceDetailScreen() {
   }, [visibleSessionIds]);
 
   const clearSelection = useCallback(() => {
+    setSelectionRequested(false);
     setSelectedSessionIds([]);
     setBulkConfirmAction(null);
     setBulkNotice(null);
   }, []);
 
-  const openSession = useCallback((targetSessionId: string) => {
+  const openSession = useCallback((targetSessionId: string, focusClientId?: string) => {
+    if (swipeRegistry.closeOpenRow()) return;
     // 打开会话是远端交互,用当前(可达)设备 endpoint = 页面级 deviceId(对被认领会话即 canonical 当前设备,
     // 其物理机就是当前设备、可达)。不用会话物理旧 shard id:re-link 后旧设备不可达会导致会话根本打不开。
     // 本地 store 乐观更新(bulk applySessionPatch)另按会话物理 shard 路由;纯 stale 会话(current shard 无
     // 副本)的本地乐观回显不完美是已知限制,与 Home 页固有一致(见 PR 描述「已知限制」)。
     guardedPush({
       pathname: '/sessions/[sessionId]',
-      params: { sessionId: targetSessionId, deviceId, deviceName },
+      params: {
+        sessionId: targetSessionId,
+        deviceId,
+        deviceName,
+        ...(focusClientId ? { focusClientId } : {}),
+      },
     });
-  }, [deviceId, deviceName, guardedPush]);
+  }, [deviceId, deviceName, guardedPush, swipeRegistry]);
 
   const toggleAutomationGroup = useCallback((key: string) => {
-    // 与首页组展开共用同一条折叠动画,保持视觉连续性。
-    configureCollapseAnimation();
-    setExpandedAutomationGroups((prev) =>
+    runDisclosure(() => setExpandedAutomationGroups((prev) =>
       prev.includes(key) ? prev.filter((item) => item !== key) : [...prev, key],
-    );
-  }, []);
+    ));
+  }, [runDisclosure]);
 
   // 自动化组「查看全部 N 次运行」:与项目「查看全部」一致,进入该任务的专属列表页
   // (本路由的自动化任务作用域模式)。
   const openAutomationGroup = useCallback((group: RemoteAutomationSessionGroup) => {
-    // 项目分组模式下组内同项目,带上项目维度(baseKey 不含项目 scope,跨项目任务只显示
-    // 本项目的 run,与组行标称的 N 一致);时间分组模式的组本就跨项目聚合,不带。
-    const primaryWorkingDir = groupMode === 'project'
-      ? (group.items.find((item) => item.session.id === group.primarySessionId) ?? group.items[0])
-        ?.session.workingDir?.trim()
-      : undefined;
+    // 组内同项目时带上项目维度(baseKey 不含项目 scope,跨项目任务只显示
+    // 本项目的 run,与组行标称的 N 一致)。
+    const primaryWorkingDir = (group.items.find((item) => item.session.id === group.primarySessionId) ?? group.items[0])
+      ?.session.workingDir?.trim();
     guardedPush({
       pathname: '/devices/[deviceId]',
       params: {
@@ -416,7 +603,7 @@ export default function DeviceDetailScreen() {
         automationSessionIds: JSON.stringify(group.sessionIds),
       },
     });
-  }, [deviceId, deviceName, groupMode, guardedPush]);
+  }, [deviceId, deviceName, guardedPush]);
 
   const toggleSelection = useCallback((sessionIds: readonly string[]) => {
     setBulkConfirmAction(null);
@@ -462,13 +649,20 @@ export default function DeviceDetailScreen() {
     }
     setBulkConfirmAction(null);
     setSelectedSessionIds([]);
-    try {
+      setSelectionRequested(false);
+      try {
       const failed: typeof rows = [];
       await Promise.all(rows.map(async (row) => {
         try {
-          const updated = await maker.patchSessionMeta(row.session.id, patch);
+          const updated = await withNewSessionCreationRemoval(row.session.id, deviceId, patch.status,
+            () => maker.patchSessionMeta(row.session.id, patch));
           if (updated) remoteSessionStore.applySessionPatch(row.rowDeviceId, row.session.id, updated);
-        } catch {
+        } catch (err) {
+          if (isExplicitRemoteNotFoundError(err) && patch.status !== undefined) {
+            remoteSessionStore.applySessionPatch(row.rowDeviceId, row.session.id, { status: 'deleted' });
+            remoteSessionStore.requestReseed(row.rowDeviceId);
+            return;
+          }
           failed.push(row);
         }
       }));
@@ -489,6 +683,14 @@ export default function DeviceDetailScreen() {
     }
   }, [bulkActionPending, deviceId, loadSessions, maker, t]);
 
+  // 确认卡打开后所选任务变了:提醒是按打开时的候选算的,关掉卡片让用户重新发起,
+  // 避免确认时归档了从未被查询过的任务。
+  useEffect(() => {
+    bulkScheduleRequestRef.current += 1;
+    setBulkScheduleLoading(false);
+    setBulkConfirmAction(null);
+  }, [selectedSessionIds]);
+
   const requestBulkAction = useCallback((action: MobileSessionBulkAction) => {
     const summary = bulkActionSummaries[action];
     if (summary.candidates.length === 0) {
@@ -505,8 +707,64 @@ export default function DeviceDetailScreen() {
       );
       return;
     }
+    const scheduleRequest = ++bulkScheduleRequestRef.current;
+    setBulkScheduleCount(0);
+    // 全部已知无绑定时不查询、不禁用确认(与单条路径同一个快路径)。
+    const needsLookup = action === 'archive' && anyMayHaveBoundSchedules(deviceId, summary.candidates);
+    setBulkScheduleLoading(needsLookup);
+    if (needsLookup) {
+      void countSessionsWithActiveBoundSchedules(deviceId, invoke, summary.candidates)
+        .then((count) => {
+          if (bulkScheduleRequestRef.current !== scheduleRequest) return;
+          setBulkScheduleCount(count);
+          setBulkScheduleLoading(false);
+        });
+    }
     setBulkConfirmAction(action);
-  }, [bulkActionSummaries, t]);
+  }, [bulkActionSummaries, deviceId, invoke, t]);
+
+  const actionOverlays = (
+    <>
+      <ConversationSearchFilterSheet
+        activeCount={indexedSearch.activeFilterCount}
+        agentKind={indexedSearch.agentFilter}
+        lastActivity={indexedSearch.lastActivityFilter}
+        lockedProjects={!!projectWorkingDir}
+        onAgentKindChange={indexedSearch.setAgentFilter}
+        onClose={() => setSearchFilterOpen(false)}
+        onLastActivityChange={indexedSearch.setLastActivityFilter}
+        onProjectsChange={indexedSearch.setProjectSelection}
+        onReset={indexedSearch.resetFilters}
+        onSortChange={indexedSearch.setSortBy}
+        onStatusChange={indexedSearch.setStatusFilter}
+        projectSelection={indexedSearch.projectSelection}
+        projects={searchProjects}
+        sortBy={indexedSearch.sortBy}
+        status={indexedSearch.statusFilter}
+        topOffset={insets.top + 56}
+        visible={searchFilterOpen}
+      />
+      <SessionListActionOverlays
+        actionSheetSession={actionSheetSession}
+        closeRenameSession={closeRenameSession}
+        confirmRenameSession={confirmRenameSession}
+        handleSessionSheetAction={handleSessionSheetAction}
+        handleSessionSheetClosed={handleSessionSheetClosed}
+        renameSessionDraft={renameSessionDraft}
+        renameSessionTarget={renameSessionTarget}
+        setActionSheetSession={setActionSheetSession}
+        setRenameSessionDraft={setRenameSessionDraft}
+      />
+      <SessionImportSheet
+        deviceId={deviceId}
+        deviceName={deviceName}
+        online={status === 'online' && !deviceUnresponsive}
+        onClose={() => setSessionImportOpen(false)}
+        onOpenSession={(id) => openSession(id)}
+        visible={sessionImportOpen}
+      />
+    </>
+  );
 
   // 自动化任务作用域(从组行「查看全部 N 次运行」进入):干净布局 —— 头部 + 该任务全部运行的
   // 平铺列表,交互与项目作用域页同构。运行归属 = 入口 sessionId 快照 ∪ 组键匹配(scheduleIndex
@@ -529,15 +787,14 @@ export default function DeviceDetailScreen() {
       if (!key || !scopeKeys.has(key)) return false;
       // 入口带项目维度时,组键匹配的行还要落在同一项目(与首页项目分桶同一归一化语义);
       // 快照内的 id 是入口组的精确成员,不受此过滤影响。
-      return !automationScopeDir || sessionMatchesProjectDir(item.session.workingDir, automationScopeDir);
+      return !automationScopeDir || sessionMatchesProjectDir(item.session, automationScopeDir);
     });
     return (
-      <SafeAreaView style={styles.safeArea} testID="deviceDetail.screen">
-        <ScreenHeader
+      <SafeAreaView edges={simpleScrollScreenSafeAreaEdges()} style={styles.safeArea} testID="deviceDetail.screen">
+        <SimpleStackHeader
+          syncing={!showConnectionBanner && (loading || status === 'connecting')}
           backTestID="deviceDetail.backButton"
-          eyebrow={t('devices.detail.automationScope.eyebrow')}
           onBack={() => goBackGuarded(router)}
-          subtitle={deviceName}
           title={automationScopeName ?? t('devices.detail.automationScope.title')}
           titleTestID="deviceDetail.title"
         />
@@ -553,21 +810,28 @@ export default function DeviceDetailScreen() {
           />
         ) : null}
         <SectionList
+          {...simpleScrollInsetProps}
           sections={runItems.length > 0 ? [{ key: 'automation-runs', title: '', data: runItems }] : []}
           keyExtractor={(item) => item.session.id}
-          refreshControl={<RefreshControl refreshing={loading} onRefresh={loadSessions} />}
+          refreshControl={<RefreshControl refreshing={loading} onRefresh={loadSessions} tintColor={colors.textSecondary} />}
           stickySectionHeadersEnabled={false}
           renderSectionHeader={() => null}
           contentContainerStyle={[styles.listContent, { paddingBottom: spacing.xxl }]}
           testID="deviceDetail.automationRunList"
           renderItem={({ item }) => (
-            <HomeSessionRow
+            <DeviceDetailSessionRow
               item={item}
-              onOpenSession={(it) => openSession(it.session.id)}
+              onOpenSession={(it) => openSession(
+                it.session.id,
+                'searchFocusClientId' in it ? (it as { searchFocusClientId?: string }).searchFocusClientId : undefined,
+              )}
+              swipe={sessionSwipeControls}
               testID={`deviceDetail.automationRunRow.${item.session.id}`}
             />
           )}
-          ListEmptyComponent={
+          ListEmptyComponent={(suppressListEmptyState ? (
+            effectiveError ? null : <RemoteListSyncingPlaceholder testID="deviceDetail.automationSyncing" />
+          ) : (
             <MainWindowEmptyState
               centered
               copy={t('devices.detail.automationScope.emptyCopy')}
@@ -579,8 +843,9 @@ export default function DeviceDetailScreen() {
               testID="deviceDetail.automationEmpty"
               title={t('devices.detail.automationScope.emptyTitle')}
             />
-          }
+          )) ?? undefined}
         />
+        {actionOverlays}
       </SafeAreaView>
     );
   }
@@ -590,9 +855,24 @@ export default function DeviceDetailScreen() {
   // 整台电脑模式(无 workingDir)继续走下面完整的 console 布局。
   if (projectWorkingDir) {
     const projectItems = sections.flatMap((section) => section.data);
+    const connectionBanner = showConnectionBanner ? (
+      <ConnectionBanner
+        deviceUnresponsive={deviceUnresponsive}
+        error={error}
+        issue={connectionIssue}
+        lastSyncedAt={lastSyncedAt}
+        loading={loading}
+        onSync={() => void loadSessions()}
+        status={status}
+      />
+    ) : null;
+    // iOS 顶栏透明、内容铺到顶栏下:搜索入口放进列表头,由列表让出顶栏高度;不透明顶栏在
+    // iOS 26+ 会被 react-native-screens 再垫一层顶部安全区,标题栏下方出现大块空白。
     return (
-      <SafeAreaView style={styles.safeArea} testID="deviceDetail.screen">
-        <ScreenHeader
+      <SafeAreaView edges={simpleScrollScreenSafeAreaEdges()} style={styles.safeArea} testID="deviceDetail.screen">
+        <SimpleStackHeader
+          scrollEdge
+          syncing={!showConnectionBanner && (loading || status === 'connecting')}
           action={{
             label: t('devices.common.create'),
             // 在这个项目里建新对话:预填 workingDir。
@@ -608,69 +888,112 @@ export default function DeviceDetailScreen() {
             testID: 'deviceDetail.newSessionButton',
           }}
           backTestID="deviceDetail.backButton"
-          eyebrow={t('devices.detail.projectScope.eyebrow')}
           onBack={() => goBackGuarded(router)}
-          subtitle={`${projectWorkingDir} · ${deviceName}`}
           title={projectName ?? deviceName}
           titleTestID="deviceDetail.title"
         />
-        {showConnectionBanner ? (
-          <ConnectionBanner
-            deviceUnresponsive={deviceUnresponsive}
-            error={error}
-            issue={connectionIssue}
-            lastSyncedAt={lastSyncedAt}
-            loading={loading}
-            onSync={() => void loadSessions()}
-            status={status}
+        {/* 连接提示只是零高度锚点;iOS 内容区从屏幕顶开始,锚点挪到顶栏下沿。 */}
+        {usesNativeStackHeader()
+          ? <View pointerEvents="box-none" style={[styles.projectConnectionAnchor, { top: headerHeight }]}>{connectionBanner}</View>
+          : connectionBanner}
+        <ListDisclosureScope controller={disclosure.controller}>
+          <SectionList
+            CellRendererComponent={DeviceListCell}
+            onScroll={(event) => { if (viewport) viewport.scrollY.value = event.nativeEvent.contentOffset.y; }}
+            scrollEventThrottle={16}
+            {...simpleScrollInsetProps}
+            sections={displaySections}
+            keyExtractor={(item) => item.automationGroup?.key ?? item.session.id}
+            // Fabric can reattach a clipped Swipeable child before its old native parent removes it.
+            // Keep JS virtualization, but avoid the Android native detach/reattach race for this list.
+            removeClippedSubviews={false}
+            refreshControl={<RefreshControl refreshing={loading} onRefresh={loadSessions} tintColor={colors.textSecondary} />}
+            stickySectionHeadersEnabled={false}
+            renderSectionHeader={() => null}
+            contentContainerStyle={[styles.listContent, { paddingBottom: spacing.xxl }]}
+            testID="deviceDetail.projectSessionList"
+            ListHeaderComponent={<View style={styles.projectSearchChrome}>
+              {searchOpen || !!searchQuery.trim() ? (
+                <HomeSearchBar
+                  autoFocus={searchOpen && !searchQuery}
+                  filterA11y={searchFilterA11y}
+                  filterActions={searchFilterMenu.filterActions}
+                  filterActive={indexedSearch.activeFilterCount > 0}
+                  searching={indexedSearch.status === 'searching'}
+                  onChangeQuery={setSearchQuery}
+                  onDismiss={() => setSearchOpen(false)}
+                  onFilterAction={searchFilterMenu.onFilterAction}
+                  onOpenFilter={() => setSearchFilterOpen(true)}
+                  padded={false}
+                  query={searchQuery}
+                  testIDs={{
+                    clear: 'deviceDetail.projectSearchCloseButton',
+                    filter: 'deviceDetail.projectSearchFilterButton',
+                    input: 'deviceDetail.projectSearchInput',
+                    row: 'deviceDetail.projectSearchRow',
+                  }}
+                />
+              ) : (
+                <MainWindowActionGroup
+                  density="compact"
+                  secondaryActions={[
+                    {
+                      accessibilityLabel: t('devices.detail.search.openA11y'),
+                      active: false,
+                      label: t('devices.detail.search.label'),
+                      onPress: () => setSearchOpen(true),
+                      testID: 'deviceDetail.projectSearchToggleButton',
+                    },
+                  ]}
+                  testID="deviceDetail.projectSearchActions"
+                />
+              )}
+            </View>}
+            renderItem={({ item, index, section }) => (
+              <DeviceDetailSessionRow
+                asBlock
+                expandedAutomationGroups={expandedAutomationGroups}
+                // 分割线唯一化(与首页同规则):紧邻自动化块上边界的行不画自己的缩进线,
+                // 相邻两个块之间只保留一根全宽线(后块不画顶线)。
+                hideDivider={!!section.data[index + 1]?.automationGroup}
+                item={item}
+                onOpenAutomationGroup={openAutomationGroup}
+                onOpenSession={(it) => openSession(
+                  it.session.id,
+                  'searchFocusClientId' in it ? (it as { searchFocusClientId?: string }).searchFocusClientId : undefined,
+                )}
+                onToggleAutomationGroup={toggleAutomationGroup}
+                suppressBlockTopBorder={!!section.data[index - 1]?.automationGroup}
+                swipe={sessionSwipeControls}
+                testID={`deviceDetail.projectSessionRow.${item.session.id}`}
+              />
+            )}
+            ListEmptyComponent={(suppressListEmptyState ? (
+              effectiveError ? null : <RemoteListSyncingPlaceholder testID="deviceDetail.projectSyncing" />
+            ) : (
+              <MainWindowEmptyState
+                centered
+                copy={searchQuery.trim() ? deviceSessionEmptyState(statusFilter, searchQuery).copy : t('devices.detail.projectScope.emptyCopy')}
+                style={{
+                  marginTop: spacing.xxl,
+                  minHeight: windowLayout.emptyMinHeight,
+                  padding: windowLayout.emptyPadding,
+                }}
+                testID="deviceDetail.projectEmpty"
+                title={searchQuery.trim() ? deviceSessionEmptyState(statusFilter, searchQuery).title : t('devices.detail.projectScope.emptyTitle')}
+              />
+            )) ?? undefined}
           />
-        ) : null}
-        <SectionList
-          sections={sections}
-          keyExtractor={(item) => item.automationGroup?.key ?? item.session.id}
-          refreshControl={<RefreshControl refreshing={loading} onRefresh={loadSessions} />}
-          stickySectionHeadersEnabled={false}
-          renderSectionHeader={() => null}
-          contentContainerStyle={[styles.listContent, { paddingBottom: spacing.xxl }]}
-          testID="deviceDetail.projectSessionList"
-          renderItem={({ item, index, section }) => (
-            <HomeSessionRow
-              asBlock
-              expandedAutomationGroups={expandedAutomationGroups}
-              // 分割线唯一化(与首页同规则):紧邻自动化块上边界的行不画自己的缩进线,
-              // 相邻两个块之间只保留一根全宽线(后块不画顶线)。
-              hideDivider={!!section.data[index + 1]?.automationGroup}
-              item={item}
-              onOpenAutomationGroup={openAutomationGroup}
-              onOpenSession={(it) => openSession(it.session.id)}
-              onToggleAutomationGroup={toggleAutomationGroup}
-              suppressBlockTopBorder={!!section.data[index - 1]?.automationGroup}
-              testID={`deviceDetail.projectSessionRow.${item.session.id}`}
-            />
-          )}
-          ListEmptyComponent={suppressListEmptyState ? (
-            <RemoteListSyncingPlaceholder testID="deviceDetail.projectSyncing" />
-          ) : (
-            <MainWindowEmptyState
-              centered
-              copy={t('devices.detail.projectScope.emptyCopy')}
-              style={{
-                marginTop: spacing.xxl,
-                minHeight: windowLayout.emptyMinHeight,
-                padding: windowLayout.emptyPadding,
-              }}
-              testID="deviceDetail.projectEmpty"
-              title={t('devices.detail.projectScope.emptyTitle')}
-            />
-          )}
-        />
+        </ListDisclosureScope>
+        {actionOverlays}
       </SafeAreaView>
     );
   }
 
   return (
-    <SafeAreaView style={styles.safeArea} testID="deviceDetail.screen">
-      <ScreenHeader
+    <SafeAreaView edges={simpleScrollScreenSafeAreaEdges()} style={styles.safeArea} testID="deviceDetail.screen">
+      <SimpleStackHeader
+        syncing={!showConnectionBanner && (loading || status === 'connecting')}
         action={{
           label: t('devices.common.create'),
           onPress: () => guardedPush({
@@ -684,11 +1007,7 @@ export default function DeviceDetailScreen() {
           testID: 'deviceDetail.newSessionButton',
         }}
         backTestID="deviceDetail.backButton"
-        eyebrow="Remote Device"
         onBack={() => goBackGuarded(router)}
-        subtitle={projectWorkingDir
-          ? t('devices.detail.subtitle.deviceActive', { deviceName, count: filterCounts.active })
-          : t('devices.detail.subtitle.activeAndProjects', { count: filterCounts.active, projects: filterCounts.projectCount })}
         title={projectName ?? deviceName}
         titleTestID="deviceDetail.title"
       />
@@ -711,6 +1030,18 @@ export default function DeviceDetailScreen() {
         }}
         testID="deviceDetail.summary"
       >
+        <View style={[styles.summaryActions, { gap: windowLayout.metricGap }]}>
+          <MainWindowActionButton action={{
+            label: t('remoteDesktop.title'),
+            onPress: () => guardedPush({ pathname: '/devices/desktop/[deviceId]', params: { deviceId, deviceName } }),
+            testID: 'deviceDetail.remoteDesktop',
+          }} />
+          <MainWindowActionButton action={{
+            label: t('devices.sessionImport.entry'),
+            onPress: () => setSessionImportOpen(true),
+            testID: 'deviceDetail.sessionImport',
+          }} />
+        </View>
         <View style={[styles.summaryTopRow, { gap: windowLayout.metricGap }]}>
           <MainWindowMetric
             accessibilityLabel={t('devices.detail.metric.activeA11y')}
@@ -743,27 +1074,6 @@ export default function DeviceDetailScreen() {
             variant="pill"
             value={filterCounts.automation}
           />
-          <View
-            style={{ minWidth: windowLayout.metricMinWidth }}
-            testID="deviceDetail.automationActions"
-          >
-            <MainWindowActionButton
-              action={{
-                accessibilityLabel: t('devices.detail.automationsButtonA11y'),
-                label: `${t('devices.detail.plan')}${runningAutomationCount > 0 ? ` · ${runningAutomationCount}` : ''}`,
-                onPress: () => guardedPush({
-                  pathname: '/automations/[deviceId]',
-                  params: { deviceId, name: deviceName },
-                }),
-                testID: 'deviceDetail.automationsButton',
-              }}
-              density="compact"
-              style={{
-                minHeight: windowLayout.metricMinHeight,
-                minWidth: windowLayout.metricMinWidth,
-              }}
-            />
-          </View>
           {loading ? <ActivityIndicator color={colors.textSecondary} /> : null}
         </View>
       </SummaryStrip>
@@ -806,42 +1116,41 @@ export default function DeviceDetailScreen() {
                 onPress: () => setFiltersOpen((value) => !value),
                 testID: 'deviceDetail.filtersToggleButton',
               },
+              {
+                label: t('session.new.select'),
+                accessibilityLabel: t('session.new.select'),
+                active: selectionMode,
+                onPress: () => {
+                  swipeRegistry.closeOpenRow();
+                  if (selectionMode) clearSelection();
+                  else setSelectionRequested(true);
+                },
+                testID: 'deviceDetail.selectionToggleButton',
+              },
             ]}
             testID="deviceDetail.toolbarActions"
           />
         </View>
 
         {searchOpen || !!searchQuery.trim() ? (
-          <View style={styles.searchRow}>
-            <TextInput
-              accessibilityLabel={t('devices.detail.search.openA11y')}
-              autoCapitalize="none"
-              autoCorrect={false}
-              autoFocus={searchOpen && !searchQuery}
-              onChangeText={setSearchQuery}
-              placeholder={t('devices.detail.search.placeholder')}
-              placeholderTextColor={colors.textTertiary}
-              style={styles.searchInput}
-              testID="deviceDetail.searchInput"
-              value={searchQuery}
-            />
-            <MainWindowActionButton
-              action={{
-                accessibilityLabel: searchQuery.trim() ? t('devices.detail.search.clearA11y') : t('devices.detail.search.closeInputA11y'),
-                label: searchQuery.trim() ? t('devices.detail.search.clear') : t('devices.detail.search.close'),
-                onPress: () => {
-                  if (searchQuery.trim()) {
-                    setSearchQuery('');
-                    return;
-                  }
-                  setSearchOpen(false);
-                },
-                testID: 'deviceDetail.searchCloseButton',
-              }}
-              density="compact"
-              style={styles.searchCloseButton}
-            />
-          </View>
+          <HomeSearchBar
+            autoFocus={searchOpen && !searchQuery}
+            filterA11y={searchFilterA11y}
+            filterActions={searchFilterMenu.filterActions}
+            filterActive={indexedSearch.activeFilterCount > 0}
+            searching={indexedSearch.status === 'searching'}
+            onChangeQuery={setSearchQuery}
+            onFilterAction={searchFilterMenu.onFilterAction}
+            onOpenFilter={() => setSearchFilterOpen(true)}
+            padded={false}
+            query={searchQuery}
+            testIDs={{
+              clear: 'deviceDetail.searchCloseButton',
+              filter: 'deviceDetail.searchFilterButton',
+              input: 'deviceDetail.searchInput',
+              row: 'deviceDetail.searchRow',
+            }}
+          />
         ) : null}
 
         {filtersOpen ? (
@@ -866,25 +1175,6 @@ export default function DeviceDetailScreen() {
                 );
               })}
             </ScrollView>
-            <View style={styles.groupModeRow}>
-              <Text style={styles.groupModeLabel}>{t('devices.detail.group.label')}</Text>
-              <View style={styles.groupModeButtons}>
-                {GROUP_MODES.map((item) => {
-                  const label = t(item.labelKey);
-                  return (
-                    <MainWindowOptionButton
-                      accessibilityLabel={t('devices.detail.group.a11y', { label })}
-                      key={item.value}
-                      label={label}
-                      onPress={() => setGroupMode(item.value)}
-                      selected={groupMode === item.value}
-                      testID={`deviceDetail.groupMode.${item.value}`}
-                      variant="segmented"
-                    />
-                  );
-                })}
-              </View>
-            </View>
           </>
         ) : null}
         {selectionMode ? (
@@ -947,11 +1237,17 @@ export default function DeviceDetailScreen() {
               <View style={styles.bulkConfirmCard} testID="deviceDetail.bulkConfirmCard">
                 <Text style={styles.bulkConfirmTitle}>{bulkConfirmSummary.title}</Text>
                 <Text style={styles.bulkConfirmText}>{bulkConfirmSummary.description}</Text>
+                {bulkConfirmSummary.action === 'archive' && bulkScheduleCount > 0 ? (
+                  <Text style={styles.bulkConfirmText}>
+                    {t('session.menu.archiveScheduleBulkNotice', { count: bulkScheduleCount })}
+                  </Text>
+                ) : null}
                 <MainWindowActionGroup
                   primaryActions={[
                     {
                       accessibilityLabel: bulkActionAccessibilityLabel(bulkConfirmSummary.action, t),
-                      disabled: bulkActionPending !== null || bulkConfirmSummary.candidates.length === 0,
+                      disabled: bulkActionPending !== null || bulkConfirmSummary.candidates.length === 0
+                        || (bulkConfirmSummary.action === 'archive' && bulkScheduleLoading),
                       label: bulkActionPending === bulkConfirmSummary.action
                         ? bulkActionPendingLabel(bulkConfirmSummary.action, t)
                         : bulkConfirmSummary.confirmText,
@@ -998,278 +1294,190 @@ export default function DeviceDetailScreen() {
         </View>
       </View>
 
-      <SectionList
-        sections={sections}
-        keyExtractor={(item) => item.automationGroup?.key ?? item.session.id}
-        refreshControl={<RefreshControl refreshing={loading} onRefresh={loadSessions} />}
-        stickySectionHeadersEnabled={false}
-        contentContainerStyle={[
-          styles.listContent,
-          {
-            paddingHorizontal: windowLayout.listPaddingHorizontal,
-            paddingVertical: windowLayout.listPaddingVertical,
-          },
-        ]}
-        testID="deviceDetail.sessionList"
-        renderSectionHeader={({ section }) => (
-          <Text style={styles.sectionTitle}>{section.title}</Text>
-        )}
-        ListEmptyComponent={suppressListEmptyState ? (
-          <RemoteListSyncingPlaceholder testID="deviceDetail.syncing" />
-        ) : (
-          <MainWindowEmptyState
-            centered
-            copy={emptyState.copy}
-            style={{
-              marginTop: spacing.xxl,
-              minHeight: windowLayout.emptyMinHeight,
-              padding: windowLayout.emptyPadding,
-            }}
-            testID="deviceDetail.empty"
-            title={emptyState.title}
-          />
-        )}
-        renderItem={({ item }) => (
-          <SessionRow
-            item={item}
-            deviceId={deviceId}
-            deviceName={deviceName}
-            automationGroupExpanded={!!item.automationGroup && expandedAutomationGroups.includes(item.automationGroup.key)}
-            onLongPress={() => beginSelection(sessionIdsForListItem(item))}
-            onOpenAutomationGroup={item.automationGroup ? () => openAutomationGroup(item.automationGroup!) : undefined}
-            onOpenSession={openSession}
-            onPressSelection={() => toggleSelection(sessionIdsForListItem(item))}
-            onToggleAutomationGroup={item.automationGroup ? () => toggleAutomationGroup(item.automationGroup!.key) : undefined}
-            selected={sessionIdsForListItem(item).every((id) => selectedSessionIdSet.has(id))}
-            selectionMode={selectionMode}
-          />
-        )}
-      />
+      <ListDisclosureScope controller={disclosure.controller}>
+        <SectionList
+          CellRendererComponent={DeviceListCell}
+          onScroll={(event) => { if (viewport) viewport.scrollY.value = event.nativeEvent.contentOffset.y; }}
+          scrollEventThrottle={16}
+          {...simpleScrollInsetProps}
+          sections={displaySections}
+          keyExtractor={(item) => item.automationGroup?.key ?? item.session.id}
+          refreshControl={<RefreshControl refreshing={loading} onRefresh={loadSessions} tintColor={colors.textSecondary} />}
+          stickySectionHeadersEnabled={false}
+          contentContainerStyle={[
+            styles.listContent,
+            {
+              paddingHorizontal: windowLayout.listPaddingHorizontal,
+              paddingVertical: windowLayout.listPaddingVertical,
+            },
+          ]}
+          testID="deviceDetail.sessionList"
+          renderSectionHeader={({ section }) => (
+            section.title ? <Text style={styles.sectionTitle}>{section.title}</Text> : null
+          )}
+          ListEmptyComponent={(suppressListEmptyState ? (
+            effectiveError ? null : <RemoteListSyncingPlaceholder testID="deviceDetail.syncing" />
+          ) : (
+            <MainWindowEmptyState
+              centered
+              copy={emptyState.copy}
+              style={{
+                marginTop: spacing.xxl,
+                minHeight: windowLayout.emptyMinHeight,
+                padding: windowLayout.emptyPadding,
+              }}
+              testID="deviceDetail.empty"
+              title={emptyState.title}
+            />
+          )) ?? undefined}
+          renderItem={({ item }) => (
+            <DeviceDetailSessionRow
+              expandedAutomationGroups={expandedAutomationGroups}
+              item={item}
+              onLongPress={conversationSearchAllowsLocalWrites(item)
+                ? () => beginSelection(sessionIdsForListItem(item))
+                : undefined}
+              onOpenAutomationGroup={item.automationGroup ? openAutomationGroup : undefined}
+              onOpenSession={(it) => openSession(
+                  it.session.id,
+                  'searchFocusClientId' in it ? (it as { searchFocusClientId?: string }).searchFocusClientId : undefined,
+                )}
+              onPressSelection={conversationSearchAllowsLocalWrites(item)
+                ? () => toggleSelection(sessionIdsForListItem(item))
+                : undefined}
+              onToggleAutomationGroup={toggleAutomationGroup}
+              selected={sessionIdsForListItem(item).every((id) => selectedSessionIdSet.has(id))}
+              selectionMode={selectionMode}
+              swipe={conversationSearchAllowsLocalWrites(item) ? sessionSwipeControls : undefined}
+              testID="deviceDetail.sessionRow"
+            />
+          )}
+        />
+      </ListDisclosureScope>
+      {actionOverlays}
     </SafeAreaView>
   );
 }
 
-function SessionRow({
-  automationGroupExpanded,
+function DeviceDetailSessionRow({
+  asBlock = false,
+  expandedAutomationGroups,
+  hideDivider = false,
   item,
-  deviceId,
-  deviceName,
   onLongPress,
   onOpenAutomationGroup,
   onOpenSession,
   onPressSelection,
   onToggleAutomationGroup,
-  selected,
-  selectionMode,
+  selected = false,
+  selectionMode = false,
+  suppressBlockTopBorder = false,
+  swipe,
+  testID,
 }: {
-  automationGroupExpanded: boolean;
+  asBlock?: boolean;
+  expandedAutomationGroups?: readonly string[];
+  hideDivider?: boolean;
   item: RemoteSessionListItem;
-  deviceId: string;
-  deviceName: string;
-  onLongPress(): void;
-  /** 子运行超过限量时,点「查看全部 N 次运行」进入该任务的专属列表页(与项目「查看全部」一致)。 */
-  onOpenAutomationGroup?: () => void;
-  onOpenSession(sessionId: string): void;
-  onPressSelection(): void;
-  onToggleAutomationGroup?: () => void;
-  selected: boolean;
-  selectionMode: boolean;
+  onLongPress?: () => void;
+  onOpenAutomationGroup?: (group: RemoteAutomationSessionGroup) => void;
+  onOpenSession(item: RemoteSessionListItem): void;
+  onPressSelection?: () => void;
+  onToggleAutomationGroup?: (key: string) => void;
+  selected?: boolean;
+  selectionMode?: boolean;
+  suppressBlockTopBorder?: boolean;
+  swipe?: SessionSwipeControls;
+  testID: string;
 }) {
-  const styles = useThemedStyles(makeStyles);
-  const { colors } = useTheme();
-  const { t } = useTranslation();
-  const isAutomationGroup = !!item.automationGroup;
-  // 与首页组行同语义:收起且有需关注内容(未读运行 / 待处理)时点行直开 primary 会话,
-  // 展开走行尾「展开」独立热区;其余情况点行仍是展开 / 收起。
-  const groupAttention = isAutomationGroup
-    && (item.pendingInteractionCount > 0 || (item.scheduleInfo?.unreadCount ?? 0) > 0);
-  const onPress = selectionMode
-    ? onPressSelection
-    : isAutomationGroup
-      ? groupAttention && !automationGroupExpanded
-        ? () => onOpenSession(item.automationGroup!.primarySessionId)
-        : onToggleAutomationGroup
-      : () => onOpenSession(item.session.id);
-  // 自动化组展开的子行折叠与首页同一策略(前 N 条 + 24h 活动 / 需关注 / 运行中豁免)。
-  // children 摘要行无时间戳,用同序同源的 items 计算豁免,再按 sessionId 映射回摘要行;
-  // 行首序号保留全量列表中的原始位次(豁免可能跳行,不能按可见索引重新编号)。
-  const visibleAutomationChildren = ((): { child: RemoteAutomationGroupChild; ordinal: number }[] => {
-    const group = item.automationGroup;
-    if (!group) return [];
-    const view = getRemoteSessionPreviewCollapse(group.items, {
-      limit: PROJECT_PREVIEW_LIMIT,
-      isSessionRunning: (sessionId) => remoteSessionStore.isSessionRunning(sessionId),
-    });
-    const ordinalBySessionId = new Map(group.children.map((child, index) => [child.sessionId, index]));
-    return view.visibleItems.flatMap((entry) => {
-      const ordinal = ordinalBySessionId.get(entry.session.id);
-      return ordinal === undefined ? [] : [{ child: group.children[ordinal], ordinal }];
-    });
-  })();
-  const hiddenAutomationChildCount = item.automationGroup
-    ? Math.max(0, item.automationGroup.children.length - visibleAutomationChildren.length)
-    : 0;
+  const consoleList = testID === 'deviceDetail.sessionRow';
   const row = (
-    <View>
-      <MainWindowRowButton
-        accessibilityLabel={isAutomationGroup ? t('devices.detail.row.a11yAutomationGroup', { title: item.title }) : t('devices.detail.row.a11ySession', { title: item.title })}
-        expanded={isAutomationGroup ? automationGroupExpanded : undefined}
-        onLongPress={onLongPress}
-        onPress={onPress}
-        selected={selected}
-        style={styles.sessionRow}
-        testID={isAutomationGroup ? 'deviceDetail.automationGroupRow' : 'deviceDetail.sessionRow'}
-      >
-        {selectionMode ? (
-          <View style={[styles.selectionMark, selected && styles.selectionMarkSelected]} testID="deviceDetail.sessionSelectionMark">
-            {selected ? <Text style={styles.selectionMarkText}>✓</Text> : null}
-          </View>
-        ) : null}
-        <View style={[styles.statusRail, rowStatusRailStyle(item, styles)]} />
-        <View style={styles.sessionText}>
-          <View style={styles.sessionTitleRow}>
-            <Text
-              style={styles.sessionTitle}
-              numberOfLines={1}
-              onPress={onPress}
-              testID={isAutomationGroup ? 'deviceDetail.automationGroupTitle' : `deviceDetail.sessionRowTitle.${item.session.id}`}
-            >
-              {item.title}
-            </Text>
-            {item.pendingInteractionCount > 0 ? (
-              <Text style={styles.waitingBadge} testID="deviceDetail.sessionWaitingBadge">
-                {t('devices.detail.badge.waiting', { count: item.pendingInteractionCount })}
-              </Text>
-            ) : null}
-          </View>
-          <Text style={styles.sessionMeta} numberOfLines={1}>
-            {item.subtitle}
-          </Text>
-          {item.scheduleInfo ? (
-            <View style={styles.badgeRow}>
-              <Text style={styles.scheduleBadge} numberOfLines={1} testID="deviceDetail.sessionScheduleBadge">
-                {t('devices.detail.badge.automationPrefix')} · {item.scheduleInfo.scheduleName}
-                {item.automationGroup ? ` · ${t('devices.detail.badge.sessionCount', { count: item.automationGroup.sessionCount })}` : ''}
-              </Text>
-              {item.automationGroup ? (
-                <Text style={styles.scheduleBadge} testID="deviceDetail.automationGroupBadge">
-                  {t('devices.detail.badge.aggregate')}
-                </Text>
-              ) : null}
-              {item.scheduleInfo.running ? (
-                <Text style={styles.runningBadge} testID="deviceDetail.sessionScheduleRunning">
-                  {t('devices.detail.badge.running')}
-                </Text>
-              ) : null}
-              {item.scheduleInfo.unreadCount > 0 ? (
-                <Text style={styles.unreadBadge} testID="deviceDetail.sessionScheduleUnread">
-                  {t('devices.detail.badge.unread', { count: item.scheduleInfo.unreadCount })}
-                </Text>
-              ) : null}
-            </View>
-          ) : null}
-          {item.worktreeLabel ? (
-            <View style={styles.badgeRow}>
-              <Text style={styles.worktreeBadge} numberOfLines={1} testID="deviceDetail.sessionWorktreeBadge">
-                {item.worktreeLabel}
-              </Text>
-            </View>
-          ) : null}
-          {item.messagePreview ? (
-            <Text style={styles.sessionPreview} numberOfLines={1} testID="deviceDetail.sessionMessagePreview">
-              {item.messagePreview}
-            </Text>
-          ) : null}
-          <Text style={styles.sessionDetail} numberOfLines={1}>
-            {item.detail}
-          </Text>
-        </View>
-        {selectionMode ? null : isAutomationGroup ? (
-          <Pressable
-            accessibilityLabel={automationGroupExpanded ? t('devices.detail.row.a11yCollapse', { title: item.title }) : t('devices.detail.row.a11yExpand', { title: item.title })}
-            accessibilityRole="button"
-            hitSlop={{ bottom: 12, left: 8, right: 12, top: 12 }}
-            onPress={(event) => {
-              // 防御性阻断:避免「展开 / 收起」点击同时触发父行 onPress(有需关注内容时
-              // 父行是"直开 primary 会话")。与首页组行 chevron 同款处理。
-              event.stopPropagation();
-              onToggleAutomationGroup?.();
-            }}
-            testID="deviceDetail.automationGroupToggle"
-          >
-            <Text style={styles.groupExpandText}>{automationGroupExpanded ? t('devices.detail.row.collapse') : t('devices.detail.row.expand')}</Text>
-          </Pressable>
-        ) : (
-          <ChevronRight color={colors.textTertiary} size={iconSize.xl} strokeWidth={iconStroke.regular} />
-        )}
-      </MainWindowRowButton>
-      {!selectionMode && item.automationGroup && automationGroupExpanded ? (
-        <View style={styles.automationChildren} testID="deviceDetail.automationGroupChildren">
-          {visibleAutomationChildren.map(({ child, ordinal }) => (
-            <MainWindowRowButton
-              accessibilityLabel={t('devices.detail.child.openA11y', { title: child.title })}
-              key={child.sessionId}
-              onPress={() => onOpenSession(child.sessionId)}
-              style={styles.automationChildRow}
-              testID="deviceDetail.automationGroupChild"
-            >
-              <Text style={styles.automationChildIndex}>{ordinal + 1}</Text>
-              <View style={styles.automationChildText}>
-                <View style={styles.automationChildTitleRow}>
-                  <Text style={styles.automationChildTitle} numberOfLines={1}>{child.title}</Text>
-                  {child.running ? (
-                    <Text style={styles.runningBadge} testID="deviceDetail.automationChildRunning">{t('devices.detail.badge.running')}</Text>
-                  ) : null}
-                  {child.unreadCount > 0 ? (
-                    <Text style={styles.unreadBadge} testID="deviceDetail.automationChildUnread">
-                      {t('devices.detail.badge.unread', { count: child.unreadCount })}
-                    </Text>
-                  ) : null}
-                  {child.pendingInteractionCount > 0 ? (
-                    <Text style={styles.waitingBadge} testID="deviceDetail.automationChildWaiting">
-                      {t('devices.detail.badge.waiting', { count: child.pendingInteractionCount })}
-                    </Text>
-                  ) : null}
-                </View>
-                <Text style={styles.automationChildMeta} numberOfLines={1}>{child.detail}</Text>
-              </View>
-              <ChevronRight color={colors.textTertiary} size={iconSize.xl} strokeWidth={iconStroke.regular} />
-            </MainWindowRowButton>
-          ))}
-          {hiddenAutomationChildCount > 0 ? (
-            <Pressable
-              accessibilityLabel={t('devices.detail.viewAllRuns', { count: item.automationGroup.sessionCount })}
-              accessibilityRole="button"
-              onPress={onOpenAutomationGroup}
-              style={({ pressed }) => [styles.automationViewAllRow, pressed && styles.pressedRow]}
-              testID="deviceDetail.automationViewAll"
-            >
-              <Text style={styles.automationViewAllText} numberOfLines={1}>
-                {t('devices.detail.viewAllRuns', { count: item.automationGroup.sessionCount })}
-              </Text>
-              <ChevronRight color={colors.textTertiary} size={iconSize.action} strokeWidth={iconStroke.regular} />
-            </Pressable>
-          ) : null}
-        </View>
-      ) : null}
-    </View>
+    <HomeSessionRow
+      asBlock={asBlock}
+      automationChildTestID={consoleList ? 'deviceDetail.automationGroupChild' : undefined}
+      automationChildrenTestID={consoleList ? 'deviceDetail.automationGroupChildren' : undefined}
+      expandedAutomationGroups={expandedAutomationGroups}
+      groupRowTestID={consoleList ? 'deviceDetail.automationGroupRow' : undefined}
+      hideDivider={hideDivider}
+      item={item}
+      onLongPress={onLongPress}
+      onOpenAutomationGroup={onOpenAutomationGroup}
+      onOpenSession={onOpenSession}
+      onPressSelection={onPressSelection}
+      onToggleAutomationGroup={onToggleAutomationGroup}
+      selected={selected}
+      selectionMarkTestID={consoleList ? 'deviceDetail.sessionSelectionMark' : undefined}
+      selectionMode={selectionMode}
+      suppressBlockTopBorder={suppressBlockTopBorder}
+      swipe={selectionMode ? undefined : swipe}
+      testID={testID}
+      titleTestIDPrefix="deviceDetail.sessionRowTitle"
+    />
   );
+  if (!swipe || selectionMode || item.automationGroup) return row;
+  return (
+    <SwipeableSessionRow
+      onArchive={swipe.onArchive}
+      onShowOptions={swipe.onShowOptions}
+      onTogglePin={swipe.onTogglePin}
+      onMarkRead={swipe.onMarkRead}
+      registry={swipe.registry}
+      session={item.session as RemoteSession}
+      testID={`${testID}.swipe`}
+    >
+      {row}
+    </SwipeableSessionRow>
+  );
+}
 
-  return row;
+function SessionListActionOverlays({
+  actionSheetSession,
+  closeRenameSession,
+  confirmRenameSession,
+  handleSessionSheetAction,
+  handleSessionSheetClosed,
+  renameSessionDraft,
+  renameSessionTarget,
+  setActionSheetSession,
+  setRenameSessionDraft,
+}: {
+  actionSheetSession: RemoteSession | null;
+  closeRenameSession(): void;
+  confirmRenameSession(): void;
+  handleSessionSheetAction(action: SessionSwipeAction): void;
+  handleSessionSheetClosed(): void;
+  renameSessionDraft: string;
+  renameSessionTarget: RemoteSession | null;
+  setActionSheetSession(session: RemoteSession | null): void;
+  setRenameSessionDraft(value: string): void;
+}) {
+  return (
+    <>
+      <SessionOptionsPresenter
+        session={actionSheetSession}
+        onAction={handleSessionSheetAction}
+        onClose={() => setActionSheetSession(null)}
+        onClosed={handleSessionSheetClosed}
+        pinnedAt={actionSheetSession?.pinnedAt}
+        status={actionSheetSession?.status}
+        visible={actionSheetSession !== null}
+      />
+      <RenameSessionModal
+        draft={renameSessionDraft}
+        onCancel={closeRenameSession}
+        onChangeDraft={setRenameSessionDraft}
+        onConfirm={confirmRenameSession}
+        saving={false}
+        visible={renameSessionTarget !== null}
+      />
+    </>
+  );
 }
 
 function remoteListStatusFilter(filter: RemoteSessionStatusFilter): RemoteListStatusFilter {
   if (filter === 'archived') return 'archived';
   if (filter === 'all' || filter === 'waiting' || filter === 'automation') return 'all';
   return 'active';
-}
-
-function rowStatusRailStyle(item: RemoteSessionListItem, styles: ReturnType<typeof makeStyles>) {
-  if (item.pendingInteractionCount > 0) return styles.statusRailWaiting;
-  if (item.scheduleInfo?.running) return styles.statusRailRunning;
-  if (item.scheduleInfo) return styles.statusRailAutomation;
-  if (item.session.status === 'archived') return styles.statusRailMuted;
-  return styles.statusRailDefault;
 }
 
 function bulkActionPendingLabel(action: MobileSessionBulkAction, t: TFunction): string {
@@ -1307,6 +1515,19 @@ function parseSessionIdsParam(value: string | null): string[] {
   }
 }
 
+function parseRouteStatusFilter(value: string | null): RemoteSessionStatusFilter {
+  if (
+    value === 'active'
+    || value === 'waiting'
+    || value === 'automation'
+    || value === 'archived'
+    || value === 'all'
+  ) {
+    return value;
+  }
+  return 'active';
+}
+
 function readRouteString(value: unknown): string | null {
   if (Array.isArray(value)) {
     const first = value.find((item) => typeof item === 'string' && item.trim().length > 0);
@@ -1317,6 +1538,10 @@ function readRouteString(value: unknown): string | null {
 
 const makeStyles = (colors: ThemeColors) => StyleSheet.create({
   safeArea: { flex: 1, backgroundColor: colors.surface },
+  summaryActions: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+  },
   summaryTopRow: {
     alignItems: 'stretch',
     flexDirection: 'row',
@@ -1340,54 +1565,19 @@ const makeStyles = (colors: ThemeColors) => StyleSheet.create({
   controlsSummary: {
     color: colors.textSecondary,
     flex: 1,
-    fontSize: typeScale.caption,
-    fontWeight: fontWeight.medium,
+    fontSize: typeScale.footnote,
+    lineHeight: lineHeight.caption,
+    fontWeight: fontWeight.regular,
     minWidth: 0,
   },
-  searchRow: {
-    alignItems: 'center',
-    flexDirection: 'row',
-    gap: spacing.sm,
-  },
-  searchInput: {
-    backgroundColor: colors.surfaceElevated,
-    borderColor: colors.border,
-    borderRadius: radius.container,
-    borderWidth: StyleSheet.hairlineWidth,
-    color: colors.textPrimary,
-    flex: 1,
-    fontSize: typeScale.body,
-    minHeight: 44,
-    paddingHorizontal: spacing.lg,
-  },
-  searchCloseButton: {
-    minHeight: 38,
-  },
+  projectConnectionAnchor: { left: 0, position: 'absolute', right: 0 },
+  projectSearchChrome: { paddingBottom: spacing.sm },
   segmentScroll: {
     marginHorizontal: -spacing.lg,
   },
   segmentScrollContent: {
     gap: spacing.sm,
     paddingHorizontal: spacing.lg,
-  },
-  groupModeRow: {
-    alignItems: 'center',
-    flexDirection: 'row',
-    gap: spacing.sm,
-    justifyContent: 'space-between',
-  },
-  groupModeLabel: {
-    color: colors.textTertiary,
-    fontSize: typeScale.caption,
-    fontWeight: fontWeight.medium,
-  },
-  groupModeButtons: {
-    backgroundColor: colors.surfaceElevated,
-    borderColor: colors.border,
-    borderRadius: radius.pill,
-    borderWidth: StyleSheet.hairlineWidth,
-    flexDirection: 'row',
-    padding: 2,
   },
   selectionBar: {
     backgroundColor: colors.surfaceElevated,
@@ -1408,8 +1598,8 @@ const makeStyles = (colors: ThemeColors) => StyleSheet.create({
     gap: 2,
     minWidth: 0,
   },
-  selectionText: { color: colors.textPrimary, fontSize: typeScale.body, fontWeight: fontWeight.medium },
-  selectionMeta: { color: colors.textTertiary, fontSize: typeScale.caption, fontWeight: fontWeight.medium },
+  selectionText: { color: colors.textPrimary, fontSize: typeScale.body, lineHeight: lineHeight.body, fontWeight: fontWeight.medium },
+  selectionMeta: { color: colors.textTertiary, fontSize: typeScale.caption, lineHeight: lineHeight.caption, fontWeight: fontWeight.regular },
   bulkConfirmCard: {
     backgroundColor: colors.surfaceElevated,
     borderColor: colors.border,
@@ -1426,10 +1616,10 @@ const makeStyles = (colors: ThemeColors) => StyleSheet.create({
   },
   bulkConfirmText: {
     color: colors.textSecondary,
-    fontSize: typeScale.caption,
+    fontSize: typeScale.footnote,
     lineHeight: lineHeight.caption,
   },
-  bulkNotice: { color: colors.textSecondary, fontSize: typeScale.caption, lineHeight: lineHeight.caption },
+  bulkNotice: { color: colors.textSecondary, fontSize: typeScale.footnote, lineHeight: lineHeight.caption },
   listContextCard: {
     backgroundColor: colors.surfaceElevated,
     borderColor: colors.border,
@@ -1448,207 +1638,33 @@ const makeStyles = (colors: ThemeColors) => StyleSheet.create({
     color: colors.textPrimary,
     flex: 1,
     fontSize: typeScale.body,
+    lineHeight: lineHeight.body,
     fontWeight: fontWeight.medium,
     minWidth: 0,
   },
   listContextCount: {
     color: colors.textPrimary,
     fontSize: typeScale.body,
+    lineHeight: lineHeight.body,
     fontWeight: fontWeight.medium,
   },
   listContextDetail: {
     color: colors.textSecondary,
-    fontSize: typeScale.caption,
-    fontWeight: fontWeight.medium,
+    fontSize: typeScale.footnote,
+    lineHeight: lineHeight.caption,
+    fontWeight: fontWeight.regular,
   },
   listContextHint: {
     color: colors.textTertiary,
-    fontSize: typeScale.caption,
+    fontSize: typeScale.footnote,
     lineHeight: lineHeight.caption,
   },
   sectionTitle: {
     color: colors.textTertiary,
-    fontSize: typeScale.caption,
-    fontWeight: fontWeight.medium,
+    fontSize: typeScale.footnote,
+    lineHeight: lineHeight.caption,
+    fontWeight: fontWeight.semibold,
     paddingBottom: spacing.xs,
     paddingTop: spacing.md,
-  },
-  sessionRow: {
-    alignItems: 'flex-start',
-    borderBottomColor: colors.border,
-    borderBottomWidth: StyleSheet.hairlineWidth,
-    flexDirection: 'row',
-    minHeight: 104,
-    paddingVertical: spacing.md,
-  },
-  selectionMark: {
-    alignItems: 'center',
-    borderColor: colors.borderStrong,
-    borderRadius: radius.pill,
-    borderWidth: StyleSheet.hairlineWidth,
-    height: 24,
-    justifyContent: 'center',
-    marginRight: spacing.md,
-    width: 24,
-  },
-  selectionMarkSelected: { backgroundColor: colors.cta, borderColor: colors.cta },
-  selectionMarkText: { color: colors.ctaText, fontSize: typeScale.caption, fontWeight: fontWeight.medium },
-  statusRail: {
-    borderRadius: radius.pill,
-    height: 42,
-    marginTop: 2,
-    marginRight: spacing.md,
-    width: 4,
-  },
-  statusRailDefault: { backgroundColor: colors.border },
-  statusRailMuted: { backgroundColor: colors.surfaceChip },
-  statusRailAutomation: { backgroundColor: colors.borderStrong },
-  statusRailRunning: { backgroundColor: colors.textPrimary },
-  statusRailWaiting: { backgroundColor: colors.cta },
-  sessionText: { flex: 1, gap: 3, paddingRight: spacing.md },
-  sessionTitleRow: {
-    alignItems: 'flex-start',
-    flexDirection: 'row',
-    gap: spacing.sm,
-  },
-  sessionTitle: {
-    color: colors.textPrimary,
-    flex: 1,
-    fontSize: typeScale.body,
-    fontWeight: fontWeight.medium,
-    lineHeight: lineHeight.body,
-    minWidth: 0,
-  },
-  sessionMeta: { color: colors.textSecondary, fontSize: typeScale.caption, lineHeight: lineHeight.caption },
-  sessionPreview: {
-    color: colors.textSecondary,
-    fontSize: typeScale.caption,
-    lineHeight: lineHeight.caption,
-  },
-  sessionDetail: { color: colors.textTertiary, fontSize: typeScale.caption, lineHeight: lineHeight.caption },
-  badgeRow: {
-    flexDirection: 'row',
-    flexWrap: 'wrap',
-    gap: spacing.xs,
-  },
-  scheduleBadge: {
-    backgroundColor: colors.surfaceElevated,
-    borderColor: colors.border,
-    borderRadius: radius.pill,
-    borderWidth: StyleSheet.hairlineWidth,
-    color: colors.textSecondary,
-    fontSize: typeScale.caption,
-    fontWeight: fontWeight.medium,
-    overflow: 'hidden',
-    paddingHorizontal: spacing.sm,
-    paddingVertical: 3,
-  },
-  worktreeBadge: {
-    backgroundColor: colors.surfaceElevated,
-    borderColor: colors.borderStrong,
-    borderRadius: radius.pill,
-    borderWidth: StyleSheet.hairlineWidth,
-    color: colors.textPrimary,
-    fontSize: typeScale.caption,
-    fontWeight: fontWeight.medium,
-    lineHeight: lineHeight.caption,
-    overflow: 'hidden',
-    paddingHorizontal: spacing.sm,
-    paddingVertical: 3,
-  },
-  runningBadge: {
-    backgroundColor: colors.cta,
-    borderRadius: radius.pill,
-    color: colors.ctaText,
-    fontSize: typeScale.caption,
-    fontWeight: fontWeight.medium,
-    paddingHorizontal: spacing.sm,
-    paddingVertical: 3,
-  },
-  unreadBadge: {
-    backgroundColor: colors.cta,
-    borderRadius: radius.pill,
-    color: colors.ctaText,
-    fontSize: typeScale.caption,
-    fontWeight: fontWeight.medium,
-    paddingHorizontal: spacing.sm,
-    paddingVertical: 3,
-  },
-  waitingBadge: {
-    backgroundColor: colors.cta,
-    borderRadius: radius.pill,
-    color: colors.ctaText,
-    fontSize: typeScale.caption,
-    fontWeight: fontWeight.medium,
-    overflow: 'hidden',
-    paddingHorizontal: spacing.sm,
-    paddingVertical: 3,
-  },
-  groupExpandText: {
-    color: colors.textPrimary,
-    fontSize: typeScale.caption,
-    fontWeight: fontWeight.medium,
-    minWidth: 36,
-    textAlign: 'right',
-  },
-  automationChildren: {
-    borderBottomColor: colors.border,
-    borderBottomWidth: StyleSheet.hairlineWidth,
-    marginLeft: spacing.lg,
-  },
-  automationChildRow: {
-    alignItems: 'center',
-    borderBottomColor: colors.border,
-    borderBottomWidth: StyleSheet.hairlineWidth,
-    flexDirection: 'row',
-    gap: spacing.sm,
-    minHeight: 64,
-    paddingVertical: spacing.sm,
-  },
-  automationViewAllRow: {
-    // 「查看全部 N 次运行」:左缩进对齐子行文字(序号列 24 + gap)。
-    alignItems: 'center',
-    flexDirection: 'row',
-    minHeight: 48,
-    paddingLeft: 24 + spacing.sm,
-    paddingRight: spacing.lg,
-  },
-  automationViewAllText: {
-    color: colors.textSecondary,
-    flex: 1,
-    fontSize: typeScale.caption,
-    fontWeight: fontWeight.medium,
-  },
-  pressedRow: {
-    opacity: 0.6,
-  },
-  automationChildIndex: {
-    color: colors.textTertiary,
-    fontSize: typeScale.caption,
-    fontWeight: fontWeight.medium,
-    textAlign: 'center',
-    width: 24,
-  },
-  automationChildText: {
-    flex: 1,
-    gap: spacing.xs,
-    minWidth: 0,
-  },
-  automationChildTitleRow: {
-    alignItems: 'center',
-    flexDirection: 'row',
-    gap: spacing.xs,
-    minWidth: 0,
-  },
-  automationChildTitle: {
-    color: colors.textPrimary,
-    flex: 1,
-    fontSize: typeScale.caption,
-    fontWeight: fontWeight.medium,
-    minWidth: 0,
-  },
-  automationChildMeta: {
-    color: colors.textTertiary,
-    fontSize: typeScale.caption,
   },
 });

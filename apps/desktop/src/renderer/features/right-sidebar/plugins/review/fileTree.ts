@@ -47,11 +47,6 @@ export interface ReviewFileJumpPreciseScrollStep {
 
 export type ReviewDiffExpansionToggleAction = 'expand' | 'collapse' | 'disabled';
 
-export interface ReviewDiffExpansionToggle {
-  action: ReviewDiffExpansionToggleAction;
-  nextCollapsedPaths: string[];
-}
-
 export interface ReviewFileTreeVisibility {
   effectiveVisible: boolean;
   temporarilyHidden: boolean;
@@ -234,13 +229,15 @@ export function moveReviewFileJumpSelection(
 }
 
 export function isReviewFileTreeScrollKey(key: string): boolean {
-  return key === 'ArrowDown' ||
+  return (
+    key === 'ArrowDown' ||
     key === 'ArrowUp' ||
     key === 'PageDown' ||
     key === 'PageUp' ||
     key === 'Home' ||
     key === 'End' ||
-    key === ' ';
+    key === ' '
+  );
 }
 
 export function nextReviewFileJumpPreciseScrollStep({
@@ -258,28 +255,12 @@ export function nextReviewFileJumpPreciseScrollStep({
   return { action: 'stop', nextAttemptsLeft: 0 };
 }
 
-export function getReviewDiffExpansionToggle(
+export function getReviewDiffExpansionAction(
   diffIds: readonly string[],
-  collapsedPaths: ReadonlySet<string>,
-): ReviewDiffExpansionToggle {
-  const currentIds = [...new Set(diffIds)];
-  if (currentIds.length === 0) {
-    return { action: 'disabled', nextCollapsedPaths: Array.from(collapsedPaths) };
-  }
-
-  const allExpanded = currentIds.every((id) => !collapsedPaths.has(id));
-  if (allExpanded) {
-    return {
-      action: 'collapse',
-      nextCollapsedPaths: Array.from(new Set([...collapsedPaths, ...currentIds])),
-    };
-  }
-
-  const currentIdSet = new Set(currentIds);
-  return {
-    action: 'expand',
-    nextCollapsedPaths: Array.from(collapsedPaths).filter((id) => !currentIdSet.has(id)),
-  };
+  diffsExpanded: boolean,
+): ReviewDiffExpansionToggleAction {
+  if (diffIds.length === 0) return 'disabled';
+  return diffsExpanded ? 'collapse' : 'expand';
 }
 
 function materializeDirectory(dir: MutableDirectory): ReviewFileTreeDirectoryNode {

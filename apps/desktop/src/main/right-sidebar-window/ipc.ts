@@ -8,58 +8,133 @@
 
 import { ipcMain } from 'electron';
 import type { BrowserWindow } from 'electron';
+import type { SubagentProvider } from '@cindy/maker-shared/subagent-workspace';
 
 import { MAKER_INVOKE, MAKER_SEND } from '../maker-ipc/channels.js';
 import { createLogger } from '../logger.js';
-import { requireObject, throwIpcError } from '../utils/ipcValidate.js';
+import { requireEnum, requireObject, throwIpcError } from '../utils/ipcValidate.js';
 import type {
   RsbWindowCommand,
   RsbWindowCommandRouteRequest,
   RsbWindowContext,
+} from '../../shared/rightSidebarWindow.js';
+import {
+  MAX_STATE_JSON_BYTES,
+} from '../../shared/rightSidebarTabState.js';
+import {
+  RSB_WINDOW_PRESENTATION_READY_CHANNEL,
+  RSB_WINDOW_REFRESH_CONTEXT_CHANNEL,
+  RSB_WINDOW_RENDERER_READY_CHANNEL,
+  type RsbWindowTabHandoff,
 } from '../../shared/rightSidebarWindow.js';
 import { parseConversationSearchJump } from '../../shared/conversationSearchJump.js';
 import { hasActiveRsbNativePopupSurfaces } from '../rsb-browser-bridge/native-popup-surfaces.js';
 import type { RsbWindowController } from './controller.js';
 
 const log = createLogger('right-sidebar-window-ipc');
+const SUBAGENT_PROVIDERS = [
+  'claude-code',
+  'codex',
+  'pi',
+] as const satisfies readonly SubagentProvider[];
+
+const MAX_CONTEXT_SESSION_ID_LENGTH = 128;
+const MAX_CONTEXT_PATH_LENGTH = 4096;
 
 function parseContext(raw: unknown): RsbWindowContext {
   const r = requireObject(raw, 'context');
-  const nullableString = (v: unknown, name: string): string | null => {
+  const nullableString = (v: unknown, name: string, maxLength: number): string | null => {
     if (v === null || v === undefined) return null;
     if (typeof v !== 'string') throwIpcError('INVALID_PARAMS', `${name} must be string | null`);
+    if (v.length > maxLength) {
+      throwIpcError('INVALID_PARAMS', `${name} must be at most ${maxLength} characters`);
+    }
     return v;
   };
-  const optionalNullableString = (v: unknown, name: string): string | null | undefined => {
+  const optionalNullableString = (
+    v: unknown,
+    name: string,
+    maxLength: number,
+  ): string | null | undefined => {
     if (v === undefined) return undefined;
-    return nullableString(v, name);
+    return nullableString(v, name, maxLength);
   };
   if (typeof r.available !== 'boolean') {
     throwIpcError('INVALID_PARAMS', 'available must be boolean');
   }
-  const deviceLinkDeviceId = optionalNullableString(r.deviceLinkDeviceId, 'deviceLinkDeviceId');
+  if (r.subagentsAvailable !== undefined && typeof r.subagentsAvailable !== 'boolean') {
+    throwIpcError('INVALID_PARAMS', 'subagentsAvailable must be boolean when provided');
+  }
+  const deviceLinkDeviceId = optionalNullableString(
+    r.deviceLinkDeviceId,
+    'deviceLinkDeviceId',
+    MAX_CONTEXT_SESSION_ID_LENGTH,
+  );
+  const botOwner = r.botOwner === undefined || r.botOwner === null
+    ? r.botOwner
+    : requireObject(r.botOwner, 'botOwner');
+  if (botOwner && (typeof botOwner.botId !== 'string' || !botOwner.botId ||
+      botOwner.botId.length > MAX_CONTEXT_SESSION_ID_LENGTH || typeof botOwner.canonical !== 'boolean')) {
+    throwIpcError('INVALID_PARAMS', 'botOwner must contain a valid botId and canonical flag');
+  }
   return {
-    sessionId: nullableString(r.sessionId, 'sessionId'),
-    workdir: nullableString(r.workdir, 'workdir'),
-    remoteHostId: nullableString(r.remoteHostId, 'remoteHostId'),
+    sessionId: nullableString(r.sessionId, 'sessionId', MAX_CONTEXT_SESSION_ID_LENGTH),
+    workdir: nullableString(r.workdir, 'workdir', MAX_CONTEXT_PATH_LENGTH),
+    remoteHostId: nullableString(r.remoteHostId, 'remoteHostId', MAX_CONTEXT_SESSION_ID_LENGTH),
     ...(deviceLinkDeviceId === undefined ? {} : { deviceLinkDeviceId }),
+    ...(r.subagentsAvailable === undefined
+      ? {}
+      : { subagentsAvailable: r.subagentsAvailable }),
+    ...(botOwner === undefined ? {} : { botOwner: botOwner === null ? null : {
+      botId: botOwner.botId as string, canonical: botOwner.canonical as boolean,
+    } }),
     available: r.available,
   };
 }
 
+function parsePluginResource(r: Record<string, unknown>) {
+  if (typeof r.instanceId !== 'string' || !r.instanceId || r.instanceId.length > 256)
+    throwIpcError('INVALID_PARAMS', 'Invalid plugin instance');
+  if (r.resourceViewId !== undefined && (typeof r.resourceViewId !== 'string' || !/^[a-z][a-z0-9_-]{0,63}$/.test(r.resourceViewId)))
+    throwIpcError('INVALID_PARAMS', 'Invalid plugin resource view');
+  if (r.resourceInput !== undefined && (!r.resourceInput || typeof r.resourceInput !== 'object' || Array.isArray(r.resourceInput) ||
+    Buffer.byteLength(JSON.stringify(r.resourceInput), 'utf8') > MAX_STATE_JSON_BYTES)) throwIpcError('INVALID_PARAMS', 'Invalid plugin resource input');
+  return { instanceId: r.instanceId,
+    ...(r.resourceViewId === undefined ? {} : { resourceViewId: r.resourceViewId as string }),
+    ...(r.resourceInput === undefined ? {} : { resourceInput: r.resourceInput as Record<string, unknown> }) };
+}
+
 function parseCommand(raw: unknown): RsbWindowCommand {
   const r = requireObject(raw, 'command');
-  if (typeof r.sessionId !== 'string' || r.sessionId.length === 0) {
-    throwIpcError('INVALID_PARAMS', 'command.sessionId required');
+  if (r.type === 'open-plugin-view') {
+    if (r.sessionId !== undefined || r.resourceViewId === undefined)
+      throwIpcError('INVALID_PARAMS', 'Global plugin views require a resource and no task');
+    return { type: 'open-plugin-view', ...parsePluginResource(r), resourceViewId: r.resourceViewId as string };
+  }
+  if (
+    typeof r.sessionId !== 'string' ||
+    r.sessionId.length === 0 ||
+    r.sessionId.length > 128
+  ) {
+    throwIpcError('INVALID_PARAMS', 'command.sessionId must be a 1–128 character string');
   }
   if (r.type === 'open-terminal') {
     return { type: 'open-terminal', sessionId: r.sessionId };
   }
-  if (r.type === 'open-web-browser') {
+  if (r.type === 'toggle-review-tab') {
+    return { type: 'toggle-review-tab', sessionId: r.sessionId };
+  }
+  if (r.type === 'open-web-browser' || r.type === 'open-mail-preview') {
     if (typeof r.url !== 'string' || r.url.length === 0) {
       throwIpcError('INVALID_PARAMS', 'command.url required');
     }
-    return { type: 'open-web-browser', sessionId: r.sessionId, url: r.url };
+    return { type: r.type, sessionId: r.sessionId, url: r.url };
+  }
+  if (r.type === 'open-mail-card') {
+    if (typeof r.callId !== 'string' || !r.callId || r.callId.length > 128) {
+      throwIpcError('INVALID_PARAMS', 'command.callId must be a 1–128 character string');
+    }
+    return { type: r.type, sessionId: r.sessionId, callId: r.callId };
   }
   if (r.type === 'ensure-orca-workers-tab') {
     const hasFocusWorkerSessionId =
@@ -93,6 +168,9 @@ function parseCommand(raw: unknown): RsbWindowCommand {
   if (r.type === 'close-orca-workers-tab') {
     return { type: 'close-orca-workers-tab', sessionId: r.sessionId };
   }
+  if (r.type === 'open-plugin-task') {
+    return { type: 'open-plugin-task', sessionId: r.sessionId, ...parsePluginResource(r) };
+  }
   if (r.type === 'open-background-tasks-tab') {
     const hasFocusTaskId =
       Object.prototype.hasOwnProperty.call(r, 'focusTaskId') && r.focusTaskId !== undefined;
@@ -103,6 +181,48 @@ function parseCommand(raw: unknown): RsbWindowCommand {
       type: 'open-background-tasks-tab',
       sessionId: r.sessionId,
       ...(hasFocusTaskId ? { focusTaskId: r.focusTaskId as string | null } : {}),
+    };
+  }
+  if (r.type === 'open-subagents-tab') {
+    const hasFocusRunId =
+      Object.prototype.hasOwnProperty.call(r, 'focusRunId') && r.focusRunId !== undefined;
+    const hasFocusProvider =
+      Object.prototype.hasOwnProperty.call(r, 'focusProvider') && r.focusProvider !== undefined;
+    if (hasFocusRunId && r.focusRunId !== null && typeof r.focusRunId !== 'string') {
+      throwIpcError('INVALID_PARAMS', 'command.focusRunId must be string | null');
+    }
+    const focusProvider = r.focusProvider === null || !hasFocusProvider
+      ? r.focusProvider as null | undefined
+      : requireEnum(r.focusProvider, SUBAGENT_PROVIDERS, 'command.focusProvider');
+    const hasRunFocus = typeof r.focusRunId === 'string' && r.focusRunId.length > 0;
+    const hasProviderFocus = typeof focusProvider === 'string';
+    if (hasRunFocus !== hasProviderFocus) {
+      throwIpcError(
+        'INVALID_PARAMS',
+        'command.focusRunId and command.focusProvider must be provided together',
+      );
+    }
+    if (
+      Object.prototype.hasOwnProperty.call(r, 'focusTab') &&
+      r.focusTab !== undefined &&
+      typeof r.focusTab !== 'boolean'
+    ) {
+      throwIpcError('INVALID_PARAMS', 'command.focusTab must be boolean');
+    }
+    if (
+      Object.prototype.hasOwnProperty.call(r, 'revealSidebar') &&
+      r.revealSidebar !== undefined &&
+      typeof r.revealSidebar !== 'boolean'
+    ) {
+      throwIpcError('INVALID_PARAMS', 'command.revealSidebar must be boolean');
+    }
+    return {
+      type: 'open-subagents-tab',
+      sessionId: r.sessionId,
+      ...(hasFocusRunId ? { focusRunId: r.focusRunId as string | null } : {}),
+      ...(hasFocusProvider ? { focusProvider } : {}),
+      ...(typeof r.focusTab === 'boolean' ? { focusTab: r.focusTab } : {}),
+      ...(typeof r.revealSidebar === 'boolean' ? { revealSidebar: r.revealSidebar } : {}),
     };
   }
   if (r.type === 'open-turn-review') {
@@ -192,13 +312,80 @@ function parseCommandRouteRequest(raw: unknown): RsbWindowCommandRouteRequest {
 }
 
 /** open 的可选 payload:缺省(旧签名 / 无参调用)= 用户手势,保持既有聚焦行为。 */
-function parseOpenUserInitiated(raw: unknown): boolean {
-  if (raw === undefined || raw === null) return true;
+function parseOpenOptions(raw: unknown): { userInitiated: boolean; sessionId?: string } {
+  if (raw === undefined || raw === null) return { userInitiated: true };
   const r = requireObject(raw, 'options');
   if (r.userInitiated !== undefined && typeof r.userInitiated !== 'boolean') {
     throwIpcError('INVALID_PARAMS', 'options.userInitiated must be boolean');
   }
-  return r.userInitiated !== false;
+  if (
+    r.sessionId !== undefined &&
+    (typeof r.sessionId !== 'string' || r.sessionId.length === 0 || r.sessionId.length > 128)
+  ) {
+    throwIpcError('INVALID_PARAMS', 'options.sessionId must be a 1–128 character string');
+  }
+  return {
+    userInitiated: r.userInitiated !== false,
+    ...(typeof r.sessionId === 'string' ? { sessionId: r.sessionId } : {}),
+  };
+}
+
+const MAX_HANDOFF_SNAPSHOTS = 8;
+const MAX_HANDOFF_TABS = 20;
+const MAX_HANDOFF_STRING_LENGTH = 512;
+
+function parseTabHandoff(raw: unknown): RsbWindowTabHandoff | undefined {
+  if (raw === undefined) return undefined;
+  const root = requireObject(raw, 'tab handoff');
+  if (!Array.isArray(root.snapshots) || root.snapshots.length > MAX_HANDOFF_SNAPSHOTS) {
+    throwIpcError('INVALID_PARAMS', 'tab handoff snapshots must be an array');
+  }
+  const snapshots = root.snapshots.map((rawSnapshot, snapshotIndex) => {
+    const snapshot = requireObject(rawSnapshot, `tab handoff snapshots[${snapshotIndex}]`);
+    const sessionId = snapshot.sessionId;
+    if (
+      typeof sessionId !== 'string' ||
+      sessionId.length === 0 ||
+      sessionId.length > MAX_HANDOFF_STRING_LENGTH
+    ) {
+      throwIpcError('INVALID_PARAMS', 'tab handoff sessionId is invalid');
+    }
+    if (snapshot.persistable !== false) {
+      throwIpcError('INVALID_PARAMS', 'tab handoff snapshot must be non-persistable');
+    }
+    if (!Array.isArray(snapshot.tabs) || snapshot.tabs.length > MAX_HANDOFF_TABS) {
+      throwIpcError('INVALID_PARAMS', 'tab handoff tabs must be an array');
+    }
+    const activeTabId = snapshot.activeTabId;
+    if (activeTabId !== null && (typeof activeTabId !== 'string' || activeTabId.length > MAX_HANDOFF_STRING_LENGTH)) {
+      throwIpcError('INVALID_PARAMS', 'tab handoff activeTabId is invalid');
+    }
+    const tabs = snapshot.tabs.map((rawTab, tabIndex) => {
+      const tab = requireObject(rawTab, `tab handoff tabs[${tabIndex}]`);
+      if (
+        typeof tab.id !== 'string' ||
+        tab.id.length === 0 ||
+        tab.id.length > MAX_HANDOFF_STRING_LENGTH ||
+        typeof tab.kind !== 'string' ||
+        tab.kind.length === 0 ||
+        tab.kind.length > MAX_HANDOFF_STRING_LENGTH
+      ) {
+        throwIpcError('INVALID_PARAMS', 'tab handoff tab identity is invalid');
+      }
+      let stateJson: string | undefined;
+      try {
+        stateJson = JSON.stringify(tab.state);
+      } catch {
+        throwIpcError('INVALID_PARAMS', 'tab handoff tab state is not JSON-serializable');
+      }
+      if (typeof stateJson !== 'string' || Buffer.byteLength(stateJson, 'utf8') > MAX_STATE_JSON_BYTES) {
+        throwIpcError('RIGHT_SIDEBAR_STATE_TOO_LARGE', 'tab handoff tab state is too large');
+      }
+      return { id: tab.id, kind: tab.kind, state: tab.state };
+    });
+    return { sessionId, tabs, activeTabId, persistable: false };
+  });
+  return { snapshots };
 }
 
 export function registerRsbWindowIpc(opts: {
@@ -209,8 +396,14 @@ export function registerRsbWindowIpc(opts: {
 
   ipcMain.handle(MAKER_INVOKE.RSB_WINDOW_GET_STATE, () => controller.getState());
 
-  ipcMain.handle(MAKER_INVOKE.RSB_WINDOW_OPEN, (_e, payload: unknown) => {
-    controller.open({ userInitiated: parseOpenUserInitiated(payload) });
+  ipcMain.handle(MAKER_INVOKE.RSB_WINDOW_OPEN, (event, payload: unknown) => {
+    const options = parseOpenOptions(payload);
+    const main = getMainWindow();
+    if (!main || main.isDestroyed() || event.sender !== main.webContents) {
+      log.warn('RSB_WINDOW_OPEN from non-main-window sender, dropped');
+      return;
+    }
+    controller.open(options);
   });
 
   ipcMain.handle(MAKER_INVOKE.RSB_WINDOW_CLOSE, () => {
@@ -220,27 +413,74 @@ export function registerRsbWindowIpc(opts: {
     controller.close();
   });
 
-  ipcMain.handle(MAKER_INVOKE.RSB_WINDOW_SET_DETACHED, (_e, detached: unknown) => {
+  ipcMain.handle(MAKER_INVOKE.RSB_WINDOW_SET_DETACHED, (event, detached: unknown, rawHandoff: unknown) => {
     if (typeof detached !== 'boolean') {
       throwIpcError('INVALID_PARAMS', 'detached required (boolean)');
+    }
+    const handoff = parseTabHandoff(rawHandoff);
+    if (handoff) {
+      const main = getMainWindow();
+      const sidebarWc = controller.getSidebarWebContents();
+      const validSender = detached
+        ? Boolean(main && !main.isDestroyed() && event.sender === main.webContents)
+        : Boolean(sidebarWc && event.sender === sidebarWc);
+      if (!validSender) {
+        throwIpcError(
+          'PERMISSION_DENIED',
+          detached
+            ? 'tab handoff sender is not the main window'
+            : 'tab handoff sender is not the detached sidebar',
+        );
+      }
     }
     if (detached !== controller.getState().detached && hasActiveRsbNativePopupSurfaces()) {
       throwIpcError('PRECONDITION_FAILED', 'active browser popup must be completed or closed first');
     }
-    return controller.setDetached(detached);
+    return controller.setDetached(detached, handoff);
   });
 
   ipcMain.handle(MAKER_INVOKE.RSB_WINDOW_GET_CONTEXT, () => controller.getContext());
 
   ipcMain.handle(MAKER_INVOKE.RSB_WINDOW_READY, (event) => {
-    // 只有子窗口 renderer 的握手才算数,主窗误调不置 ready(避免 ensureOpen 提前放行)
+    // 存量 READY 握手映射到 renderer-ready:renderer shell 已挂载。
     const sidebarWc = controller.getSidebarWebContents();
     if (!sidebarWc || event.sender !== sidebarWc) {
       log.warn('RSB_WINDOW_READY from non-sidebar sender, ignored');
       return;
     }
-    controller.markReady();
+    controller.markRendererReady(event.sender);
   });
+
+  // ── 双阶段就绪 + context 刷新(对齐 PR #2434 基线) ────────────────
+
+  ipcMain.handle(RSB_WINDOW_RENDERER_READY_CHANNEL, (event) => {
+    const sidebarWc = controller.getSidebarWebContents();
+    if (!sidebarWc || event.sender !== sidebarWc) {
+      log.warn('RSB_WINDOW_RENDERER_READY from non-sidebar sender, ignored');
+      return;
+    }
+    controller.markRendererReady(event.sender);
+  });
+
+  ipcMain.handle(RSB_WINDOW_PRESENTATION_READY_CHANNEL, (event) => {
+    const sidebarWc = controller.getSidebarWebContents();
+    if (!sidebarWc || event.sender !== sidebarWc) {
+      log.warn('RSB_WINDOW_PRESENTATION_READY from non-sidebar sender, ignored');
+      return;
+    }
+    controller.markPresentationReady(event.sender);
+  });
+
+  ipcMain.handle(RSB_WINDOW_REFRESH_CONTEXT_CHANNEL, (event) => {
+    const sidebarWc = controller.getSidebarWebContents();
+    if (!sidebarWc || event.sender !== sidebarWc) {
+      log.warn('RSB_WINDOW_REFRESH_CONTEXT from non-sidebar sender, ignored');
+      return;
+    }
+    controller.refreshContext(event.sender);
+  });
+
+  // ── 命令路由 ─────────────────────────────────────────────────────
 
   ipcMain.handle(MAKER_INVOKE.RSB_WINDOW_SEND_COMMAND, async (event, payload: unknown) => {
     // 参数错误无论 sender 身份都按 IPC 契约抛 INVALID_PARAMS。

@@ -50,10 +50,10 @@ export function registerLayoutIpc(): void {
     if ('rejection' in result) {
       throwIpcError('INVALID_PARAMS', `invalid layout: ${result.rejection}`);
     }
-    return { layout: result.layout };
+    return result;
   });
 
-  ipcMain.handle('layout:reset', () => ({ layout: store.reset() }));
+  ipcMain.handle('layout:reset', () => store.reset());
 }
 
 function broadcastLayoutChanged(layout: Layout): void {

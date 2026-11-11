@@ -5,16 +5,44 @@
 
 import { describe, expect, it } from 'vitest';
 
-import { classifyPiToolForAutoReview } from '../auto-review-policy.js';
+import { classifyPiToolForAutoReview, normalizePiToolForAutoReview } from '../auto-review-policy.js';
 
 const WS = '/Users/t/ws';
 const roots = [WS];
 
-function verdict(toolName: string, input: Record<string, unknown>) {
-  return classifyPiToolForAutoReview({ toolName, input, workspaceRoots: roots });
+function verdict(
+  toolName: string,
+  input: Record<string, unknown>,
+  resolvedCredentialPaths?: readonly string[] | null,
+) {
+  return classifyPiToolForAutoReview({
+    toolName,
+    input,
+    resolvedCredentialPaths,
+    workspaceRoots: roots,
+  });
 }
 
 describe('classifyPiToolForAutoReview', () => {
+  it.each(['read', 'grep', 'find', 'ls', 'bash', 'powershell'])(
+    'preserves the complete %s operation and all canonical credential evidence', (toolName) => {
+      const input = toolName === 'bash' || toolName === 'powershell'
+        ? { command: 'cat innocent.txt; rm -rf /outside/report', timeout: 30 }
+        : { path: `${WS}/innocent.txt`, pattern: 'token', nested: { paths: ['second.txt'] } };
+      for (const [resolvedCredentialPaths, credentialEvidenceStatus] of [
+        [null, 'unverifiable'],
+        [['/etc/hosts'], 'host-policy-mismatch'],
+        [['/Users/t/.ssh/id_rsa', '/Users/t/.aws/credentials'], 'credential-paths'],
+      ] as const) {
+        const action = normalizePiToolForAutoReview({ toolName, input, workspaceRoots: roots, resolvedCredentialPaths });
+        expect(action).toMatchObject({ kind: 'other', requireConsent: true });
+        expect(JSON.parse((action as { description: string }).description)).toEqual({
+          toolName, input, resolvedCredentialPaths, credentialEvidenceStatus,
+        });
+      }
+    },
+  );
+
   it('approves file writes inside the workspace, escalates outside or pathless', () => {
     expect(verdict('edit', { path: `${WS}/src/a.ts` })).toBe('auto-approve');
     expect(verdict('write', { path: `${WS}/README.md` })).toBe('auto-approve');
@@ -33,10 +61,30 @@ describe('classifyPiToolForAutoReview', () => {
       toolName: 'write', input: { path: '/Users/t/reference/spec.md' }, workspaceRoots: roots, readRoots,
     })).toBe('prompt');
   });
+  it('allows structured writes only in explicitly writable extra roots', () => {
+    const readRoots = [WS, '/Users/t/reference', '/Users/t/output'];
+    const writableRoots = [WS, '/Users/t/output'];
+    expect(classifyPiToolForAutoReview({
+      toolName: 'write', input: { path: '/Users/t/output/result.md' },
+      workspaceRoots: roots, readRoots, writableRoots,
+    })).toBe('auto-approve');
+    expect(classifyPiToolForAutoReview({
+      toolName: 'write', input: { path: '/Users/t/reference/spec.md' },
+      workspaceRoots: roots, readRoots, writableRoots,
+    })).toBe('prompt');
+  });
 
   it('routes bash through the shell classifier', () => {
     expect(verdict('bash', { command: 'ls -la' })).toBe('auto-approve');
     expect(verdict('bash', { command: 'git status' })).toBe('auto-approve');
+    expect(verdict('bash', { command: 'git status --verb' })).toBe('prompt-each-time');
+    expect(verdict('bash', { command: 'git status --no-v' })).toBe('auto-approve');
+    expect(verdict('bash', { command: 'git log -L1,1:.env' })).toBe('prompt-each-time');
+    expect(verdict('bash', { command: 'git log -L 1,1:.env.local' })).toBe('prompt-each-time');
+    expect(verdict('bash', { command: 'git log -L1,1:README.md' })).toBe('auto-approve');
+    expect(verdict('bash', { command: 'ag -u API_KEY .' })).toBe('prompt-each-time');
+    expect(verdict('bash', { command: 'ag --hidden API_KEY .' })).toBe('prompt-each-time');
+    expect(verdict('bash', { command: 'ag API_KEY ordinary.txt' })).toBe('auto-approve');
     expect(verdict('bash', { command: 'sudo whoami' })).toBe('prompt-each-time');
     // Destructive but replaceable actions are gray: the current-model reviewer
     // should block or ask with the actual user intent instead of always interrupting.
@@ -47,13 +95,51 @@ describe('classifyPiToolForAutoReview', () => {
     expect(verdict('bash', {})).not.toBe('auto-approve');
   });
 
+  it('routes Pi 0.84.3 powershell through the same shell classifier, not unknown-tool gray', () => {
+    expect(verdict('powershell', { command: 'git status' })).toBe('auto-approve');
+    expect(verdict('powershell', { command: 'sudo whoami' })).toBe('prompt-each-time');
+    expect(verdict('powershell', { command: 'rm -rf /' })).toBe('prompt-each-time');
+    expect(verdict('powershell', {})).not.toBe('auto-approve');
+    expect(verdict(
+      'powershell',
+      { command: 'Get-Content innocent.txt' },
+      ['/Users/t/.ssh/id_rsa'],
+    )).toBe('prompt-each-time');
+  });
+
   it('approves plain reads but always prompts for credential paths (bridge-drift defense)', () => {
     expect(verdict('read', { path: `${WS}/src/a.ts` })).toBe('auto-approve');
     expect(verdict('read', { path: '/Users/t/.ssh/id_rsa' })).toBe('prompt-each-time');
+    expect(verdict('read', { path: `${WS}/.env.local` })).toBe('prompt-each-time');
+    expect(verdict('read', { path: `${WS}/.environment` })).toBe('auto-approve');
     expect(verdict('grep', { path: '/Users/t/.aws' })).toBe('prompt-each-time');
     // 凭证特征在非 path 字段(grep pattern / find 表达式)同样必问 —— 与 bridge 全字段扫描同口径
     expect(verdict('grep', { pattern: 'token', path: '/Users/t/.gnupg' })).toBe('prompt-each-time');
     expect(verdict('find', { expression: '~/.ssh/id_ed25519' })).toBe('prompt-each-time');
+  });
+
+  it('uses bridge-resolved credential paths and fails closed on invalid evidence', () => {
+    const innocentLink = `${WS}/innocent.txt`;
+    expect(verdict(
+      'read',
+      { path: innocentLink },
+      ['/Users/t/.ssh/id_rsa'],
+    )).toBe('prompt-each-time');
+    expect(verdict(
+      'bash',
+      { command: `cat<${innocentLink}` },
+      [`${WS}/secrets/.env`],
+    )).toBe('prompt-each-time');
+
+    // Normal symlinks produce no credential evidence and keep their existing fast paths.
+    expect(verdict('read', { path: innocentLink }, [])).toBe('auto-approve');
+    expect(verdict('bash', { command: `cat<${innocentLink}` }, [])).toBe('auto-approve');
+    // Non-empty evidence that no longer matches Host policy indicates protocol drift.
+    expect(verdict('read', { path: innocentLink }, [`${WS}/ordinary.txt`])).toBe(
+      'prompt-each-time',
+    );
+    expect(verdict('read', { path: innocentLink }, null)).toBe('prompt-each-time');
+    expect(verdict('bash', { command: `cat<${innocentLink}` }, null)).toBe('prompt-each-time');
   });
 
   it('catches /proc environ variants including task/<tid> (env dump = credentials)', () => {
@@ -101,6 +187,14 @@ describe('classifyPiToolForAutoReview', () => {
 
   it('fails closed for MCP and unknown tools', () => {
     expect(verdict('mcp__cindy_orca__start_team', { anything: 1 })).toBe('prompt');
+    expect(verdict('some_future_tool', {})).toBe('prompt');
+  });
+
+  it('auto-approves first-party durable Subagent spawn without opening unknown tools', () => {
+    expect(verdict('subagent', {
+      agent: 'worker',
+      task: 'implement the fix',
+    })).toBe('auto-approve');
     expect(verdict('some_future_tool', {})).toBe('prompt');
   });
 });

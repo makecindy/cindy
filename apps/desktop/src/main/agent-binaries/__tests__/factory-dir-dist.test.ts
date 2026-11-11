@@ -14,6 +14,8 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { create as createTar } from 'tar';
+import { createHash, randomUUID } from 'node:crypto';
+import { app } from 'electron';
 
 import type { VendorAsset } from '../manifest.js';
 
@@ -21,6 +23,7 @@ const FAKE_SHA = 'b'.repeat(64);
 
 const mocks = vi.hoisted(() => ({
   download: vi.fn(),
+  backgroundDownload: vi.fn(),
   fetchManifest: vi.fn(async () => ({ app: {} })),
   cachedManifest: { current: { app: {} } as { app: Record<string, never> } | null },
   // 每个用例把要打包进 tar.gz 的源目录塞进来,download mock 现打包成归档落盘。
@@ -37,6 +40,7 @@ const mocks = vi.hoisted(() => ({
 
 vi.mock('../../downloader/index.js', () => ({
   download: mocks.download,
+  createDownloader: () => mocks.backgroundDownload,
   DownloadError: class DownloadError extends Error {
     code: string;
     constructor(code: string, message: string) {
@@ -81,13 +85,14 @@ async function fulfillDownloadWithTarGz(opts: DownloadOpts) {
   };
 }
 
-function makeProvisioner(overrides?: { optionalAsset?: boolean }) {
+function makeProvisioner(overrides?: { optionalAsset?: boolean; binaryName?: string }) {
+  const { binaryName = BIN_NAME, ...configOverrides } = overrides ?? {};
   return createBinaryProvisioner({
     vendorKey: 'pi',
     manifestField: 'pi',
     installSubdir: `dir-dist-test-${Date.now()}-${Math.random().toString(36).slice(2)}`,
-    artifact: { kind: 'tar-gz-dir', binaryName: BIN_NAME },
-    ...overrides,
+    artifact: { kind: 'tar-gz-dir', binaryName },
+    ...configOverrides,
   });
 }
 
@@ -117,6 +122,48 @@ beforeEach(() => {
 });
 
 describe('createBinaryProvisioner tar-gz-dir', () => {
+  // A cached Codex archive has a nested bin/codex entrypoint. Unlike download(),
+  // copying a local archive does not create its parent; retain real extraction
+  // and auxiliary files in this regression. Tier: unit, unique temporary files.
+  it('adopts a prefetched directory package with a nested entrypoint without downloading on startup', async () => {
+    const source = fs.mkdtempSync(path.join(os.tmpdir(), 'codex-prefetch-'));
+    const binaryName = path.join('bin', process.platform === 'win32' ? 'codex.exe' : 'codex');
+    const installSubdir = 'prefetch-dist-' + randomUUID();
+    const installRoot = path.join(app.getPath('userData'), installSubdir);
+    let cacheDirectory: string | undefined;
+    try {
+      fs.mkdirSync(path.join(source, 'bin'));
+      fs.writeFileSync(path.join(source, binaryName), 'codex-runtime', { mode: 0o755 });
+      fs.writeFileSync(path.join(source, 'codex-package.json'), '{}');
+      const archivePath = path.join(source, 'payload.tar.gz');
+      await createTar({ gzip: true, cwd: source, file: archivePath }, ['bin', 'codex-package.json']);
+      const bytes = fs.readFileSync(archivePath);
+      const sha256 = createHash('sha256').update(bytes).digest('hex');
+      mocks.asset.current = { version: '9.0.0', file: 'codex-package/9.0.0/darwin-arm64/dist.tar.gz', sha256, size: bytes.length };
+      cacheDirectory = path.join(app.getPath('userData'), 'agent-binary-downloads', 'codex', sha256);
+      mocks.backgroundDownload.mockImplementation(async ({ targetPath }: DownloadOpts) => {
+        fs.mkdirSync(path.dirname(targetPath), { recursive: true });
+        fs.writeFileSync(targetPath, bytes);
+        return { path: targetPath, sha256, size: bytes.length };
+      });
+      const provisioner = createBinaryProvisioner({
+        vendorKey: 'codex', manifestField: 'codexPackage', installSubdir,
+        artifact: { kind: 'tar-gz-dir', binaryName },
+      });
+      await expect(provisioner.prefetch({ manifest: { app: { version: '1.0.0' } } })).resolves.toBe(true);
+      const result = await provisioner.prepare({ checkForUpdates: false });
+      expect(result).toEqual({ ready: true, binaryPath: path.join(installRoot, '9.0.0', binaryName) });
+      expect(fs.readFileSync(result.binaryPath, 'utf8')).toBe('codex-runtime');
+      expect(fs.readFileSync(path.join(installRoot, '9.0.0', 'codex-package.json'), 'utf8')).toBe('{}');
+      expect(mocks.download).not.toHaveBeenCalled();
+      expect(fs.existsSync(cacheDirectory)).toBe(false);
+    } finally {
+      fs.rmSync(source, { recursive: true, force: true });
+      fs.rmSync(installRoot, { recursive: true, force: true });
+      if (cacheDirectory) fs.rmSync(cacheDirectory, { recursive: true, force: true });
+    }
+  });
+
   it('平铺归档:解压出完整目录、写 .verified、清理归档中间文件', async () => {
     mocks.archiveState.srcDir = stageDist('flat');
     mocks.download.mockImplementation(fulfillDownloadWithTarGz);
@@ -133,6 +180,33 @@ describe('createBinaryProvisioner tar-gz-dir', () => {
     expect(fs.existsSync(path.join(versionDir, `${BIN_NAME}.dist.tar.gz`))).toBe(false);
     if (process.platform !== 'win32') {
       expect(fs.statSync(result.binaryPath).mode & 0o111).not.toBe(0);
+    }
+  });
+
+  it('supports a nested package entrypoint such as bin/codex', async () => {
+    const binaryName = path.join('bin', process.platform === 'win32' ? 'codex.exe' : 'codex');
+    const sourceRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'codex-package-src-'));
+    const sourceBinary = path.join(sourceRoot, binaryName);
+    fs.mkdirSync(path.dirname(sourceBinary), { recursive: true });
+    fs.writeFileSync(sourceBinary, '#!/bin/sh\necho codex\n', { mode: 0o755 });
+    fs.writeFileSync(path.join(sourceRoot, 'codex-package.json'), '{}');
+    mocks.archiveState.srcDir = sourceRoot;
+    mocks.download.mockImplementation(fulfillDownloadWithTarGz);
+
+    let installRoot: string | undefined;
+    try {
+      const result = await makeProvisioner({ binaryName }).prepare();
+
+      expect(result.ready).toBe(true);
+      const versionDir = path.dirname(path.dirname(result.binaryPath));
+      installRoot = path.dirname(versionDir);
+      expect(result.binaryPath).toBe(path.join(versionDir, binaryName));
+      expect(fs.existsSync(path.join(versionDir, 'codex-package.json'))).toBe(true);
+      expect(fs.existsSync(path.join(versionDir, '.verified'))).toBe(true);
+      expect(fs.existsSync(path.join(versionDir, `${binaryName}.dist.tar.gz`))).toBe(false);
+    } finally {
+      fs.rmSync(sourceRoot, { recursive: true, force: true });
+      if (installRoot) fs.rmSync(installRoot, { recursive: true, force: true });
     }
   });
 

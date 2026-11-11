@@ -27,6 +27,24 @@ describe('session send outcome', () => {
     });
   });
 
+  it('preserves an explicit provider rejection as safely undispatched', () => {
+    const result: SessionSendResult = {
+      accepted: false,
+      reason: 'provider-rejected-before-dispatch',
+    };
+    const context = 'goal/session-2/continuation';
+
+    expect(toSessionDispatchOutcome(result, context)).toEqual({
+      dispatched: false,
+      reason: 'provider-rejected-before-dispatch',
+      context,
+      message: 'Provider rejected the Session send before dispatch: goal/session-2/continuation',
+    });
+    expect(() => assertSendDispatched(result, context)).toThrow(
+      'Provider rejected the Session send before dispatch: goal/session-2/continuation',
+    );
+  });
+
   it('asserts dispatched only when send result was accepted', () => {
     const accepted: SessionSendResult = { accepted: true };
     const cancelled: SessionSendResult = {

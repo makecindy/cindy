@@ -6,12 +6,14 @@
  * 交互 —— 但旧实现只返回 boolean, 卡片地址被丢掉, 于是私聊里那张卡原样留着、按钮
  * 照旧可点。用户点下去不会有任何反应, 群里也不会动。
  */
+import { isSystemPermissionDenialReason } from '@cindy/maker-core';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 import {
   cancelPending,
   getPendingCount,
   registerPendingExternal,
+  rejectAllPending,
   resolvePending,
 } from '../pendingInteractions';
 
@@ -48,6 +50,28 @@ describe('cancelPending 交还卡片地址', () => {
     expect(getPendingCount()).toBe(0);
   });
 
+  it('permission: 登记原始卡片正文, resolve 时交还供收口卡保留决策正文', () => {
+    const { resolve } = register('req-perm', 'permission', 'chat|555');
+    // register 走了默认 extras; 这里补登记带 permissionCard 的版本(新 requestId)。
+    const resolve2 = vi.fn();
+    registerPendingExternal('req-perm2', 'permission', 'chat|666', resolve2, vi.fn(), {
+      permissionRequest: { toolName: 'Bash' },
+      permissionCard: { title: '🔧 工具调用：Bash', body: '**参数预览**\n```json\n{"cmd": "ls"}\n```' },
+    });
+
+    const resolved = resolvePending('req-perm2', { kind: 'permission', behavior: 'allow' });
+
+    expect(resolved).toEqual({
+      messageId: 'chat|666',
+      permissionCard: {
+        title: '🔧 工具调用：Bash',
+        body: '**参数预览**\n```json\n{"cmd": "ls"}\n```',
+      },
+    });
+    expect(getPendingCount()).toBe(1); // 只剩 req-perm 那条
+    cancelPending('req-perm', 'cleanup');
+  });
+
   it('plan_review 与 ask_user_question 同样交还地址', () => {
     register('req-plan', 'plan_review', 'chat|556');
     register('req-ask', 'ask_user_question', 'chat|557');
@@ -71,5 +95,65 @@ describe('cancelPending 交还卡片地址', () => {
 
     register('req-perm', 'permission', 'chat|559');
     expect(cancelPending('req-perm', 'turn_terminal')).toEqual({ messageId: 'chat|559' });
+  });
+});
+
+describe('rejectAllPending', () => {
+  it('logout 收口用稳定系统码，迁移确认不会被当成用户拒绝', () => {
+    const resolve = vi.fn();
+    const reject = vi.fn((err: Error) => {
+      // Desktop→IM 迁移卡的 reject-callback：把 Error.message 收成 deny reason。
+      resolve({ kind: 'permission', behavior: 'deny', reason: err.message });
+    });
+    registerPendingExternal('req-perm', 'permission', 'chat|560', resolve, reject);
+
+    rejectAllPending('session_disposed');
+
+    expect(resolve).toHaveBeenCalledWith({
+      kind: 'permission',
+      behavior: 'deny',
+      reason: 'session_disposed',
+    });
+    expect(isSystemPermissionDenialReason('session_disposed')).toBe(true);
+    expect(isSystemPermissionDenialReason('session disposed')).toBe(true);
+    expect(getPendingCount()).toBe(0);
+  });
+});
+
+
+describe('runner-owned disposal', () => {
+  it('returns only the disposing runner cards and keeps other channels and legacy requests live', () => {
+    const owner = Symbol('runner');
+    const other = Symbol('runner');
+    const foreignReject = vi.fn();
+    const legacyReject = vi.fn();
+    const rejects = [vi.fn(), vi.fn(), vi.fn()];
+    for (const [i, kind] of (['permission', 'plan_review', 'ask_user_question'] as const).entries()) {
+      registerPendingExternal(`owned-${i}`, kind, `own-card-${i}`, vi.fn(), rejects[i]!, { owner });
+    }
+    registerPendingExternal('foreign', 'permission', 'same-id', vi.fn(), foreignReject, { owner: other });
+    registerPendingExternal('legacy', 'permission', 'same-id', vi.fn(), legacyReject);
+    expect(rejectAllPending('session_disposed', owner)).toEqual([
+      { requestId: 'owned-0', messageId: 'own-card-0' },
+      { requestId: 'owned-1', messageId: 'own-card-1' },
+      { requestId: 'owned-2', messageId: 'own-card-2' },
+    ]);
+    for (const reject of rejects) expect(reject).toHaveBeenCalledWith(new Error('session_disposed'));
+    expect(foreignReject).not.toHaveBeenCalled();
+    expect(legacyReject).not.toHaveBeenCalled();
+    expect(getPendingCount()).toBe(2);
+    expect(rejectAllPending('session_disposed', owner)).toEqual([]);
+    cancelPending('foreign', 'cleanup');
+    cancelPending('legacy', 'cleanup');
+  });
+
+  it('does not erase a new request registered by a rejection callback', () => {
+    const owner = Symbol('runner');
+    registerPendingExternal('old', 'permission', 'old-card', vi.fn(), () => {
+      registerPendingExternal('new', 'permission', 'new-card', vi.fn(), vi.fn(), { owner });
+    }, { owner });
+    expect(rejectAllPending('session_disposed', owner)).toEqual([{ requestId: 'old', messageId: 'old-card' }]);
+    expect(getPendingCount()).toBe(1);
+    expect(cancelPending('new', 'cleanup')).toEqual({ messageId: 'new-card' });
   });
 });

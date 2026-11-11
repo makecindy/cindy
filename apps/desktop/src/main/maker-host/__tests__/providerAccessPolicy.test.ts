@@ -6,7 +6,7 @@ import { deriveAvailableModels } from '../catalog-to-descriptors.js';
 import {
   filterProviderCatalogForAccount,
   isProviderSelectable,
-  projectProviderCatalogForBuildRegion,
+  projectUnverifiedCatalogFallbackForBuildRegion,
 } from '../provider-access-policy.js';
 
 function model(id: string): CatalogModel {
@@ -96,127 +96,8 @@ describe('provider access policy', () => {
     expect(filterProviderCatalogForAccount(input, {})).toBe(input);
   });
 
-  it('preserves the full media catalog and object identity for Global', () => {
-    const input = catalog();
-    expect(projectProviderCatalogForBuildRegion(input, 'global')).toBe(input);
-  });
-
-  it.each(['cn', 'dev'] as const)(
-    'projects the Cindy AI media catalog to Mainland capabilities for %s',
-    (region) => {
-      const projected = projectProviderCatalogForBuildRegion(catalog(), region);
-      const xd = projected.providers.find((item) => item.id === 'xd');
-
-      expect(xd?.imageModels).toEqual([]);
-      expect(xd?.imageDefaults).toBeUndefined();
-      // 向量与图像同口径:整段清空 —— 该 endpoint 后面全是境外模型,
-      // 留着清单只会让插件拿到"可选但必失败"的型号。
-      expect(xd?.embeddingModels).toEqual([]);
-      expect(xd?.embeddingDefaults).toBeUndefined();
-      expect(xd?.videoModels?.map((item) => item.id)).toEqual([
-        'seedance-fast',
-        'seedance-pro',
-        'bytedance/seedance-2.5',
-      ]);
-      expect(xd?.videoDefaults).toEqual({
-        standard: 'seedance-fast',
-        best: 'seedance-pro',
-      });
-      // 聊天目录里被归到 embedding 的条目也一并滤掉(设置页的「向量」分组同样清空)。
-      expect(xd?.models['claude-code']?.map((item) => item.id)).toEqual([
-        'shared-model',
-        'xd-only-model',
-        'seedance-fast',
-        'seedance-pro',
-        'bytedance/seedance-2.5',
-      ]);
-      expect(xd?.models.codex).toEqual([]);
-    },
-  );
-});
-
-describe('projectProviderCatalogForBuildRegion — 用户自有媒体来源', () => {
-  it('非 global 区域只投影 Cindy AI,保留用户连接的图像来源', () => {
-    const gemini: Provider = {
-      id: 'gemini',
-      name: 'Google Gemini',
-      source: 'builtin',
-      agents: ['claude-code'],
-      auth: { method: 'oauth' },
-      routing: {},
-      models: { 'claude-code': [] },
-      imageModels: [{ id: 'gemini/gemini-3-pro-image', name: 'Gemini 3 Pro Image' }],
-    };
-    const openai: Provider = {
-      id: 'openai',
-      name: 'OpenAI',
-      source: 'builtin',
-      agents: ['claude-code'],
-      auth: { method: 'oauth' },
-      routing: {},
-      models: { 'claude-code': [] },
-      imageModels: [{ id: 'openai/gpt-image-2', name: 'GPT Image 2' }],
-      // 防御对象:即使未来用户来源声明 defaults,区域投影也不应改写它。
-      imageDefaults: { standard: 'openai/gpt-image-2' },
-    };
-    const base = catalog();
-    const projected = projectProviderCatalogForBuildRegion(
-      { ...base, providers: [...base.providers, gemini, openai] },
-      'cn',
-    );
-    expect(projected.providers.find((p) => p.id === 'gemini')).toBe(gemini);
-    expect(projected.providers.find((p) => p.id === 'openai')).toBe(openai);
-    const xd = projected.providers.find((p) => p.id === 'xd');
-    expect(xd?.imageModels).toEqual([]);
-    expect(xd?.imageDefaults).toBeUndefined();
-    expect(xd?.videoModels?.map((m) => m.id)).toEqual([
-      'seedance-fast',
-      'seedance-pro',
-      'bytedance/seedance-2.5',
-    ]);
-  });
-
-  it.each(['cn', 'dev'] as const)(
-    '非 xd 供应商在 %s 保留图像与聊天能力,暂不暴露视频能力',
-    (region) => {
-      const thirdParty: Provider = {
-        id: 'third',
-        name: 'Third Party',
-        source: 'builtin',
-        agents: ['claude-code'],
-        auth: { method: 'oauth' },
-        routing: {},
-        models: {
-          'claude-code': [
-            { ...model('seedance-fast'), group: 'video' },
-            { ...model('third/image'), group: 'image' },
-            model('chat-model'),
-          ],
-          codex: undefined,
-        },
-        imageModels: [{ id: 'third/image', name: 'Third Image' }],
-        imageDefaults: { standard: 'third/image' },
-        videoModels: [{ id: 'seedance-fast', name: 'Seedance Fast' }],
-        videoDefaults: { standard: 'seedance-fast' },
-      };
-      const base = catalog();
-      const projected = projectProviderCatalogForBuildRegion(
-        { ...base, providers: [...base.providers, thirdParty] },
-        region,
-      );
-      const third = projected.providers.find((p) => p.id === 'third');
-      expect(third).not.toBe(thirdParty);
-      expect(third?.models['claude-code']?.map((m) => m.id)).toEqual(['third/image', 'chat-model']);
-      expect(third?.models.codex).toEqual([]);
-      expect(third?.imageModels).toBe(thirdParty.imageModels);
-      expect(third?.imageDefaults).toBe(thirdParty.imageDefaults);
-      expect(third?.videoModels).toEqual([]);
-      expect(third?.videoDefaults).toBeUndefined();
-    },
-  );
-
-  it('mode: image_generation 的用户模型在 cn 区域保持可用', () => {
-    const modeOnly: Provider = {
+  it('keeps Gateway and locally connected xAI models verbatim; account-free mode only removes XD', () => {
+    const xai: Provider = {
       id: 'xai',
       name: 'xAI',
       source: 'builtin',
@@ -225,43 +106,106 @@ describe('projectProviderCatalogForBuildRegion — 用户自有媒体来源', ()
       routing: {},
       models: {
         'claude-code': [
-          { ...model('xai/aurora'), mode: 'image_generation' },
-          model('xai/grok-chat'),
+          model('xai/grok-4'),
+          { ...model('xai/grok-imagine-image'), group: 'image' },
+          { ...model('xai/grok-imagine-video'), group: 'video' },
+          { ...model('xai/grok-imagine-video-1.5'), group: 'video' },
         ],
       },
+      imageModels: [{ id: 'xai/grok-imagine-image', name: 'Grok Imagine Image' }],
+      videoModels: [
+        { id: 'xai/grok-imagine-video', name: 'Grok Imagine Video' },
+        { id: 'xai/grok-imagine-video-1.5', name: 'Grok Imagine Video 1.5' },
+      ],
     };
     const base = catalog();
-    const projected = projectProviderCatalogForBuildRegion(
-      { ...base, providers: [...base.providers, modeOnly] },
-      'cn',
-    );
-    const xai = projected.providers.find((p) => p.id === 'xai');
-    expect(xai).toBe(modeOnly);
-    expect(xai?.models['claude-code']?.map((m) => m.id)).toEqual([
-      'xai/aurora',
-      'xai/grok-chat',
+    const input: Catalog = { ...base, providers: [...base.providers, xai] };
+
+    expect(filterProviderCatalogForAccount(input, { canUseCindyGateway: true })).toBe(input);
+
+    const local = filterProviderCatalogForAccount(input, { canUseCindyGateway: false });
+    expect(local.providers.map((item) => item.id)).toEqual(['anthropic', 'xai']);
+    expect(local.providers.find((item) => item.id === 'xai')).toBe(xai);
+    expect(xai.models['claude-code']?.map((item) => item.id)).toEqual([
+      'xai/grok-4',
+      'xai/grok-imagine-image',
+      'xai/grok-imagine-video',
+      'xai/grok-imagine-video-1.5',
+    ]);
+    expect(xai.imageModels?.map((item) => item.id)).toEqual(['xai/grok-imagine-image']);
+    expect(xai.videoModels?.map((item) => item.id)).toEqual([
+      'xai/grok-imagine-video',
+      'xai/grok-imagine-video-1.5',
     ]);
   });
 
-  it('global 区域原样返回(含新来源的媒体清单)', () => {
-    const gemini: Provider = {
-      id: 'gemini',
-      name: 'Google Gemini',
+  it('projects only unverified XD fallback media in CN/dev and preserves xAI discovery verbatim', () => {
+    const xai: Provider = {
+      id: 'xai',
+      name: 'xAI',
       source: 'builtin',
       agents: ['claude-code'],
       auth: { method: 'oauth' },
       routing: {},
-      models: { 'claude-code': [] },
-      imageModels: [{ id: 'gemini/gemini-3-pro-image', name: 'Gemini 3 Pro Image' }],
+      models: {
+        'claude-code': [
+          { ...model('xai/grok-imagine-image'), group: 'image' },
+          { ...model('xai/grok-imagine-video'), group: 'video' },
+        ],
+      },
+      imageModels: [{ id: 'xai/grok-imagine-image', name: 'Grok Imagine Image' }],
+      videoModels: [{ id: 'xai/grok-imagine-video', name: 'Grok Imagine Video' }],
     };
-    const base = catalog();
-    const input = { ...base, providers: [...base.providers, gemini] };
-    const projected = projectProviderCatalogForBuildRegion(input, 'global');
-    expect(projected).toBe(input);
+    const input = catalog();
+    input.providers.push(xai);
+
+    expect(projectUnverifiedCatalogFallbackForBuildRegion(input, 'global')).toBe(input);
+    for (const region of ['cn', 'dev'] as const) {
+      const projected = projectUnverifiedCatalogFallbackForBuildRegion(input, region);
+      const xd = projected.providers.find((item) => item.id === 'xd');
+      expect(xd?.imageModels).toEqual([]);
+      expect(xd?.embeddingModels).toEqual([]);
+      expect(xd?.videoModels?.map((item) => item.id)).toEqual([
+        'seedance-fast',
+        'seedance-pro',
+        'bytedance/seedance-2.5',
+      ]);
+      expect(xd?.videoDefaults).toEqual({ standard: 'seedance-fast', best: 'seedance-pro' });
+      expect(xd?.models['claude-code']?.map((item) => item.id)).toEqual([
+        'shared-model',
+        'xd-only-model',
+        'seedance-fast',
+        'seedance-pro',
+        'bytedance/seedance-2.5',
+      ]);
+      expect(projected.providers.find((item) => item.id === 'xai')).toBe(xai);
+    }
   });
 
-  it('目录没有 Cindy AI 时非 global 也保持原对象', () => {
-    const input: Catalog = { version: 'test', providers: [] };
-    expect(projectProviderCatalogForBuildRegion(input, 'cn')).toBe(input);
+  it('projects only the XD media fields that were inherited from bundled', () => {
+    const input = catalog();
+    const projected = projectUnverifiedCatalogFallbackForBuildRegion(
+      input,
+      'cn',
+      new Set(['embedding']),
+    );
+    const originalXd = input.providers.find((provider) => provider.id === 'xd');
+    const xd = projected.providers.find((provider) => provider.id === 'xd');
+
+    expect(xd?.imageModels).toEqual(originalXd?.imageModels);
+    expect(xd?.imageDefaults).toEqual(originalXd?.imageDefaults);
+    expect(xd?.videoModels).toEqual(originalXd?.videoModels);
+    expect(xd?.videoDefaults).toEqual(originalXd?.videoDefaults);
+    expect(xd?.embeddingModels).toEqual([]);
+    expect(xd?.embeddingDefaults).toBeUndefined();
+    expect(xd?.models['claude-code']?.map((model) => model.id)).toEqual([
+      'shared-model',
+      'xd-only-model',
+      'gpt-image-2',
+      'seedance-fast',
+      'seedance-pro',
+      'bytedance/seedance-2.5',
+      'happyhorse',
+    ]);
   });
 });

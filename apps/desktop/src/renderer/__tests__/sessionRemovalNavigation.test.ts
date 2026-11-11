@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 
 import {
   getVisibleSidebarSessionIds,
@@ -34,6 +34,32 @@ describe('pickSessionIdAfterRemoval', () => {
 });
 
 describe('getVisibleSidebarSessionIds', () => {
+  it('checks shared ancestors once per scan and observes later visibility changes', () => {
+    const root = document.createElement('div');
+    const group = document.createElement('section');
+    root.append(group);
+    for (let i = 0; i < 1000; i++) {
+      const row = document.createElement('div');
+      row.dataset.sidebarSessionRow = 'true';
+      row.dataset.sessionId = String(i);
+      group.append(row);
+    }
+    document.body.append(root);
+    const spy = vi.spyOn(window, 'getComputedStyle');
+    try {
+      expect(getVisibleSidebarSessionIds(root)).toHaveLength(1000);
+      expect(spy.mock.calls.filter(([node]) => node === group)).toHaveLength(1);
+      expect(spy.mock.calls.filter(([node]) => node === root)).toHaveLength(1);
+      group.style.opacity = '0';
+      expect(getVisibleSidebarSessionIds(root)).toEqual([]);
+      group.style.opacity = '1';
+      expect(getVisibleSidebarSessionIds(root)).toHaveLength(1000);
+    } finally {
+      spy.mockRestore();
+      root.remove();
+    }
+  });
+
   it('reads sidebar row ids in DOM order and de-duplicates repeated rows', () => {
     const root = {
       querySelectorAll: () => [
@@ -153,5 +179,62 @@ describe('getVisibleSidebarSessionIds', () => {
       'visible-under-aria-hidden',
       'visible-under-pointer-suppression',
     ]);
+  });
+
+  it('reads search hits and ignores the list underneath a search overlay', () => {
+    const aside = document.createElement('aside');
+    const list = document.createElement('div');
+    const covered = document.createElement('div');
+    covered.dataset.sidebarSessionRow = 'true';
+    covered.dataset.sessionId = 'old';
+    list.append(covered);
+
+    const overlay = document.createElement('div');
+    overlay.dataset.conversationSearchSurface = '';
+    overlay.dataset.conversationSearchOverlay = '';
+    const hit = document.createElement('div');
+    hit.dataset.sidebarSessionRow = 'true';
+    hit.dataset.sessionId = 'hit';
+    overlay.append(hit);
+
+    aside.append(list, overlay);
+    document.body.append(aside);
+    try {
+      expect(getVisibleSidebarSessionIds()).toEqual(['hit']);
+    } finally {
+      aside.remove();
+    }
+  });
+
+  it('skips rows inside a collapsed sidebar section without walking computed style', () => {
+    const root = document.createElement('div');
+    const collapsed = document.createElement('div');
+    collapsed.dataset.sidebarSectionCollapsed = 'true';
+    const hidden = document.createElement('div');
+    hidden.dataset.sidebarSessionRow = 'true';
+    hidden.dataset.sessionId = 'hidden';
+    collapsed.append(hidden);
+    const visible = document.createElement('div');
+    visible.dataset.sidebarSessionRow = 'true';
+    visible.dataset.sessionId = 'visible';
+    root.append(collapsed, visible);
+
+    expect(getVisibleSidebarSessionIds(root)).toEqual(['visible']);
+  });
+
+  it('keeps the real sidebar list when only the resident search input is marked', () => {
+    const aside = document.createElement('aside');
+    const search = document.createElement('div');
+    search.dataset.conversationSearchSurface = '';
+    const row = document.createElement('div');
+    row.dataset.sidebarSessionRow = 'true';
+    row.dataset.sessionId = 'visible';
+    aside.append(search, row);
+    document.body.append(aside);
+    try {
+      expect(getVisibleSidebarSessionIds()).toEqual(['visible']);
+    } finally {
+      aside.remove();
+    }
   });
 });

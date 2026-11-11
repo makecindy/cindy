@@ -1,3 +1,5 @@
+import type { TFunction } from 'i18next';
+import { formatSessionDuration } from '@/lib/sessionDurationFormat';
 /**
  * BackgroundTasksBody —— 「后台任务」tab 的内容区。
  *
@@ -50,13 +52,14 @@ import type { LucideIcon } from 'lucide-react';
 
 import { cn } from '@/lib/utils';
 import { Spinner } from '@/components/ui/spinner';
+import { Tip } from '@/components/ui/tooltip';
 import { isSidebarWindow } from '@/lib/sidebarWindow';
-import {
-  getSessionDeviceId,
-  useRemoteDevices,
-} from '@/features/device-link/remoteProjectsStore';
+import { getSessionDeviceId, useRemoteDevices } from '@/features/device-link/remoteProjectsStore';
+import { useSubagentRunStatusIndex } from '@/hooks/useSubagentRunStatusIndex';
 import { makerChatStore, EMPTY_TASK_UPDATES } from '@/lib/makerChatStore';
 import type { AgentTaskUpdate, ChatMessage } from '@/lib/makerChatStore';
+import { canManageBackgroundTasks, stopBackgroundTask } from '@/lib/backgroundTaskStop';
+import { reportBackgroundTaskStopFailure } from '@/lib/backgroundTaskStopFailure';
 import {
   getWorkflowProgressFor,
   isRemoteSessionSticky,
@@ -169,15 +172,11 @@ function statusIcon(status: string): LucideIcon {
   return LoaderCircle;
 }
 
-/** 毫秒 → 紧凑时长文案(与 AgentTaskCard 同口径;该实现未导出,此处内联)。 */
-function formatDuration(ms: number | undefined): string | undefined {
+/** 与 AgentTaskCard 共用长耗时换算,保留亚秒精度。 */
+function formatDuration(ms: number | undefined, t?: TFunction): string | undefined {
   if (typeof ms !== 'number' || !Number.isFinite(ms) || ms < 0) return undefined;
   if (ms < 1000) return `${ms}ms`;
-  const seconds = Math.round(ms / 1000);
-  if (seconds < 60) return `${seconds}s`;
-  const minutes = Math.floor(seconds / 60);
-  const rest = seconds % 60;
-  return rest > 0 ? `${minutes}m ${rest}s` : `${minutes}m`;
+  return formatSessionDuration(ms, t);
 }
 
 /** workflow 行副标题:workflow_agent 条目 done/error 计数 / 总数。 */
@@ -200,19 +199,18 @@ function workflowAgentCounts(
 }
 
 /** 停止按钮 gating(与 AgentTaskCard 同口径):running + claude-code + 有 taskId +
- *  非远程。远程判定用粘滞版:relay 瞬断窗口误判本机会放出假 Stop(本地调用假成功,
- *  任务在被控端继续跑),与水合的粘滞归属同口径。 */
+ *  有后台任务管理权(共享任务访客没有)。远程会话由 stopBackgroundTask 按会话归属
+ *  隧道到被控端执行。 */
 function canStopItem(item: SessionTaskItem, sessionId: string | null): boolean {
   return (
     item.status === 'running' &&
     item.provider === 'claude-code' &&
     Boolean(item.update?.taskId) &&
-    Boolean(sessionId) &&
-    !(sessionId && isRemoteSessionSticky(sessionId))
+    Boolean(sessionId && canManageBackgroundTasks(sessionId))
   );
 }
 
-/** 停止按钮:在飞防连点、失败静默,状态翻转由事件流收口(不改本地状态)。 */
+/** 停止按钮:在飞防连点,状态翻转由事件流收口(不改本地状态)。 */
 function StopButton({ sessionId, taskId }: { sessionId: string; taskId: string }) {
   const { t } = useTranslation();
   const [stopping, setStopping] = useState(false);
@@ -220,32 +218,54 @@ function StopButton({ sessionId, taskId }: { sessionId: string; taskId: string }
     (e: MouseEvent) => {
       // 行点击(进详情 / 聊天定位)不该被停止按钮触发。
       e.stopPropagation();
-      const api = window.electronAPI?.maker;
-      if (!api?.stopAgentTask || stopping) return;
+      if (stopping) return;
       setStopping(true);
-      void api
-        .stopAgentTask(sessionId, taskId)
-        .catch(() => {
-          // 静默:真失败时状态仍是 running,按钮保留可重试。
+      void stopBackgroundTask(sessionId, taskId)
+        .catch((error: unknown) => {
+          // 真失败时状态仍是 running,按钮保留可重试;只有远程电脑版本过旧时提示升级。
+          reportBackgroundTaskStopFailure(error, t);
         })
         .finally(() => setStopping(false));
     },
-    [sessionId, taskId, stopping],
+    [sessionId, taskId, stopping, t],
   );
-  return (
+  const actionLabel = t('rightSidebar.backgroundTasks.stop');
+  const label = stopping
+    ? `${actionLabel} — ${t('rightSidebar.backgroundTasks.stopping')}`
+    : actionLabel;
+  const button = (
     <button
       type="button"
       onClick={handleStop}
       disabled={stopping}
-      aria-label={t('rightSidebar.backgroundTasks.stop')}
-      title={t('rightSidebar.backgroundTasks.stop')}
+      aria-label={actionLabel}
+      aria-hidden={stopping ? true : undefined}
       className={cn(
         'inline-flex h-6 w-6 shrink-0 items-center justify-center rounded-lg text-[var(--text-secondary)] transition-colors hover:bg-[var(--surface-hover)] hover:text-[var(--text-primary)]',
+        'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--focus-ring)]',
         stopping && 'cursor-default opacity-50',
       )}
     >
       <Square size={12} aria-hidden="true" />
     </button>
+  );
+
+  return (
+    <Tip text={label} side="bottom">
+      {stopping ? (
+        <span
+          role="button"
+          aria-disabled="true"
+          aria-label={label}
+          tabIndex={0}
+          className="inline-flex rounded-lg focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--focus-ring)]"
+        >
+          {button}
+        </span>
+      ) : (
+        button
+      )}
+    </Tip>
   );
 }
 
@@ -288,7 +308,7 @@ function TaskRow({
       }
     }
     const usage = item.update?.usage;
-    const duration = formatDuration(usage?.durationMs);
+    const duration = formatDuration(usage?.durationMs, t);
     if (duration) parts.push(duration);
     if (typeof usage?.totalTokens === 'number') {
       parts.push(
@@ -443,15 +463,16 @@ function WorkflowDetail({
   return (
     <div className="flex min-h-0 flex-1 flex-col">
       <div className="flex shrink-0 items-center gap-1.5 border-b border-[var(--border-default)] px-2 py-1.5">
-        <button
-          type="button"
-          onClick={onBack}
-          aria-label={t('rightSidebar.backgroundTasks.back')}
-          title={t('rightSidebar.backgroundTasks.back')}
-          className="inline-flex h-6 w-6 shrink-0 items-center justify-center rounded-lg text-[var(--text-secondary)] transition-colors hover:bg-[var(--surface-hover)] hover:text-[var(--text-primary)]"
-        >
-          <ArrowLeft size={14} aria-hidden="true" />
-        </button>
+        <Tip text={t('rightSidebar.backgroundTasks.back')} side="bottom">
+          <button
+            type="button"
+            onClick={onBack}
+            aria-label={t('rightSidebar.backgroundTasks.back')}
+            className="inline-flex h-6 w-6 shrink-0 items-center justify-center rounded-lg text-[var(--text-secondary)] transition-colors hover:bg-[var(--surface-hover)] hover:text-[var(--text-primary)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--focus-ring)]"
+          >
+            <ArrowLeft size={14} aria-hidden="true" />
+          </button>
+        </Tip>
         <span className="inline-flex h-5 w-5 shrink-0 items-center justify-center rounded-full bg-[var(--surface-chip)] text-[var(--text-secondary)]">
           <Workflow size={12} aria-hidden="true" />
         </span>
@@ -529,6 +550,11 @@ export function BackgroundTasksBody({
   // 本机会话恒 'local',零开销;断连翻转的那次重跑失败降级空表,无害。
   const remoteDevices = useRemoteDevices();
   const sessionDeviceId = sessionId ? getSessionDeviceId(sessionId) : undefined;
+  const subagentRunStatuses = useSubagentRunStatusIndex({
+    sessionId,
+    deviceId: sessionDeviceId,
+    enabled: visible,
+  });
   const deviceConnectivity = sessionDeviceId
     ? `${sessionDeviceId}:${
         remoteDevices.find((d) => d.deviceId === sessionDeviceId)?.connected ? '1' : '0'
@@ -581,8 +607,9 @@ export function BackgroundTasksBody({
         messages: inputs.messages as unknown as readonly Message[],
         taskUpdates: inputs.taskUpdates,
         isSessionStreaming: inputs.isStreaming,
+        subagentRunStatuses,
       }),
-    [inputs],
+    [inputs, subagentRunStatuses],
   );
 
   // 历史 workflow 行的终态修正:workflow 的 tool_result 是启动回执(失败也存在),

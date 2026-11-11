@@ -34,7 +34,8 @@ vi.mock('electron', () => ({
 // remoteMediaProtocol pulls in device-link runtime deps; stub the boundary
 // modules so importing the privilege constant stays side-effect free.
 vi.mock('../device-link/index', () => ({ remoteInvoke: vi.fn() }));
-vi.mock('../device-link/mediaTransfer', () => ({
+vi.mock('../device-link/filePeer', () => ({ tryPeerFile: vi.fn(async () => null) }));
+vi.mock('../device-link/mediaTransfer.desktop', () => ({
   downloadToBuffer: vi.fn(),
   openMediaStream: vi.fn(),
   removeRemote: vi.fn(),

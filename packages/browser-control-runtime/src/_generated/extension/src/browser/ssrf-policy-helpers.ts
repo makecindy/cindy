@@ -15,5 +15,14 @@ export function withAllowedHostname(
   return {
     ...ssrfPolicy,
     allowedHostnames: uniqueStrings([...(ssrfPolicy?.allowedHostnames ?? []), hostname]),
+    // A one-off grant must grant through BOTH policy fields: exact-host trust
+    // (allowedHostnames) and, when a strict hostnameAllowlist is active, the
+    // allowlist match itself. Otherwise a per-start proxyAllowedHostnames
+    // blocks the browser's own loopback CDP endpoint, and every proxied
+    // navigation fails before it starts. An absent/empty allowlist stays
+    // empty: it means "no allowlist", not "allow only this host".
+    ...(ssrfPolicy?.hostnameAllowlist?.length
+      ? { hostnameAllowlist: uniqueStrings([...ssrfPolicy.hostnameAllowlist, hostname]) }
+      : {}),
   };
 }

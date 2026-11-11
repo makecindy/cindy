@@ -1,12 +1,13 @@
 /**
  * device-link 客户端完整协议(desktop / mobile 共享)。
  *
- * relay 能理解的信封、连接层 payload 与错误码来自 cindy-protocol submodule；
+ * relay 能理解的信封、连接层 payload 与错误码来自本仓 device-link-protocol；
  * 本文件只补充 relay 不解析的端到端隧道 payload、客户端本地错误与 REST 视图。
  */
 import {
   MAX_FRAME_BYTES,
   NOTIFY_BODY_MAX_LENGTH,
+  NOTIFY_AVATAR_JPEG_MAX_LENGTH,
   NOTIFY_COLLAPSE_ID_MAX_LENGTH,
   NOTIFY_DEEP_LINK_MAX_LENGTH,
   NOTIFY_TITLE_MAX_LENGTH,
@@ -19,15 +20,38 @@ import {
   type HelloPayload,
   type NotifyCategory,
   type NotifyPayload,
+  type NotifySender,
   type PresenceSetPayload,
   type PresenceSnapshot,
   type RelayErrorCode,
   type RelayErrorPayload,
 } from '@cindy/device-link-protocol';
+import type { InvokeResultTransfer, InvokeTransferOptions } from './invokeTransfer.js';
+import { isProviderSharePeer as isProviderSharePeerLocal } from './providerSharePeer.js';
+import { isSharedTaskPeer as isSharedTaskPeerLocal } from './sharedTaskPeer.js';
+
+export { SHARED_TASK_RELAY_CAPABILITY, sharedTaskDeviceId, parseSharedTaskScope, type SharedTaskScope } from '@cindy/device-link-protocol';
+export { sharedTaskHostPeer, sharedTaskGuestPeer, isSharedTaskPeer, parseSharedTaskPeer } from './sharedTaskPeer.js';
+export type { SharedTaskPeer } from './sharedTaskPeer.js';
+export {
+  PROVIDER_SHARE_RELAY_CAPABILITY,
+  parseProviderShareScope,
+  providerShareIdentifier,
+  type ProviderShareEndpoint,
+  type ProviderShareScope,
+} from '@cindy/device-link-protocol';
+export { providerShareHostPeer, providerShareGuestPeer, isProviderSharePeer, parseProviderSharePeer } from './providerSharePeer.js';
+export type { ProviderSharePeer } from './providerSharePeer.js';
+
+/** Any cross-account scoped peer (shared task or provider share): never treat as a same-account device. */
+export function isScopedPeer(value: unknown): boolean {
+  return isSharedTaskPeerLocal(value) || isProviderSharePeerLocal(value);
+}
 
 export {
   MAX_FRAME_BYTES,
   NOTIFY_BODY_MAX_LENGTH,
+  NOTIFY_AVATAR_JPEG_MAX_LENGTH,
   NOTIFY_COLLAPSE_ID_MAX_LENGTH,
   NOTIFY_DEEP_LINK_MAX_LENGTH,
   NOTIFY_TITLE_MAX_LENGTH,
@@ -42,6 +66,7 @@ export type {
   HelloPayload,
   NotifyCategory,
   NotifyPayload,
+  NotifySender,
   PresenceSetPayload,
   PresenceSnapshot,
   RelayErrorCode,
@@ -58,6 +83,7 @@ export type DeviceLinkErrorCode = RelayErrorCode
   | 'CHANNEL_NOT_ALLOWED' // channel 不在远程调用白名单
   | 'ACCESS_REVOKED' // 被控端已撤销该控制端的访问权限(逐设备黑名单,被控端本地强制)
   | 'INVOKE_TIMEOUT' // 控制端等待 invoke-result 超时
+  | 'PEER_RESET' // peer 传输复位；仅用于可安全重试的幂等读请求
   | 'LINK_NOT_OPEN' // 控制链路未建立
   | 'NOT_CONNECTED' // 本端尚未连上 relay
   | 'BACKPRESSURE' // 本端可靠传输缓冲已满，拒绝继续制造积压
@@ -118,6 +144,28 @@ export const CONTROLLER_CAPABILITY_PROVIDER_LOGO_KINDS_V2 = 'provider-logo-kinds
 export const CONTROLLER_CAPABILITY_SET_MODEL_EXPLICIT_PROVIDER_NULL_V1 =
   'set-model-explicit-provider-null-v1';
 
+/** 控制端会为有损模型换窗携带用户明确确认过的精确窗口。 */
+export const CONTROLLER_CAPABILITY_MODEL_WINDOW_CONFIRMATION_V1 =
+  'model-window-confirmation-v1';
+
+/**
+ * 控制端能消费 `maker:event:batch` 微批帧(拆包后逐条按原路消费)。
+ * 被控端只对声明了本能力的控制端发批,未声明者照旧逐帧转发——旧控制端
+ * 因此永远收不到该 channel,无需为未知 channel 做任何兼容。
+ */
+export const CONTROLLER_CAPABILITY_MAKER_EVENT_BATCH_V1 = 'maker-event-batch-v1';
+
+/** Accepts ordered current-text snapshots and history repair hints, including after backpressure. */
+export const CONTROLLER_CAPABILITY_SESSION_TEXT_SNAPSHOT_V1 = 'session-text-snapshot-v1';
+
+/**
+ * 后台链路(link-open / link-accept 双向声明)。控制端在本机没有订阅对端任何 topic 时建链
+ * 即声明:被控端不装 legacy `'*'` 兼容订阅 —— 不亮被控横幅、不转发推送、不挡无人值守更新
+ * 重启 —— 直到控制端显式 subscribe。被控端在 link-accept 声明支持;旧被控端忽略该能力,
+ * 照旧装 legacy `'*'`,只读类后台请求须先确认对端支持(见 desktop remoteBackgroundInvoke)。
+ */
+export const DEVICE_LINK_CAPABILITY_BACKGROUND_LINK_V1 = 'background-link-v1';
+
 export interface LinkAcceptPayload {
   appVersion: string;
   /** 被控端 allowlist 的指纹,便于控制端探测版本差异 */
@@ -158,6 +206,8 @@ export interface LinkClosePayload {
 export interface InvokePayload {
   channel: string;
   args: unknown[];
+  /** 可选结果传输编码声明（见 invokeTransfer.ts）；旧被控端忽略。 */
+  transfer?: InvokeTransferOptions;
 }
 
 /**
@@ -166,7 +216,12 @@ export interface InvokePayload {
  * 控制端 renderer 继续用现有 extractIpcError 解码,错误协议全链路免改。
  */
 export type InvokeResultPayload =
-  | { ok: true; result: unknown }
+  | {
+      ok: true;
+      result: unknown;
+      /** 仅在请求声明了 transfer 时出现；控制端 DeviceLinkClient 在交给调用方前还原。 */
+      transfer?: InvokeResultTransfer;
+    }
   | {
       ok: false;
       error: { code: DeviceLinkErrorCode | 'IPC_ERROR'; message: string };

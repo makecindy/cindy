@@ -18,7 +18,9 @@
  */
 
 import { useEffect, useMemo, useRef } from 'react';
-import { Outlet } from 'react-router-dom';
+import { Outlet, useMatch } from 'react-router-dom';
+import { skillhubCatalogKey } from '../../../shared/skillhubCatalog';
+import { normalizeWorkingDirForStorage } from '../../../shared/workingDir';
 
 import { useCCSessions } from '@/hooks/useCCSessions';
 import { groupSessions } from '@/features/cc-agent/lib/projectGrouping';
@@ -37,15 +39,17 @@ import {
 import { useSkillSync } from './hooks/useSkillSync';
 import { projectHash } from './lib/projectHash';
 import { useAuth } from '@/contexts/AuthContext';
+import { useCatalogDevice } from '@/features/plugin/useCatalogDevice';
 
-export function SkillhubFeatureLayout() {
+export function LocalSkillhubStoreSync() {
+  useSkillhubStoreSync();
+  return null;
+}
+
+/** Shared SkillHub store sync. Settings embeds the home view without the route layout. */
+export function useSkillhubStoreSync(): void {
   const { dataOwnerId, mode } = useAuth();
   const cloudSyncEnabled = mode === 'cloud';
-  // 技能改为右侧整页(无左树导航),左侧 app 侧栏沿用 cc-agent 项目/对话列表。
-  // 显式注册同一个 CCAgentSidebarUpper:warm 导航时与 cc-agent 注册的是同一组件
-  // 类型,只 reconcile、不 remount(实例状态保留);冷启动直接进 /skillhub 时则首次
-  // 播种,避免左栏空白(详见 useRegisterCCAgentSidebar)。
-  useRegisterCCAgentSidebar();
 
   // v0.2.1: trigger batch sync whenever the skill list changes
   const { skills, syncResults, bootstrapped } = useSkillhub();
@@ -63,11 +67,19 @@ export function SkillhubFeatureLayout() {
   useEffect(() => {
     if (!cloudSyncEnabled || !bootstrapped) return;
     if (syncResults.size === 0) return; // sync 还没完成
-    const items: Array<{ name: string; absolutePath: string; version: string; authorId: string; folderHash?: string }> = [];
+    const items: Array<{
+      name: string;
+      absolutePath: string;
+      version: string;
+      authorId: string;
+      folderHash?: string;
+    }> = [];
     const itemKeys: Array<{ name: string; key: string }> = [];
     for (const s of skills) {
       if (s.kind !== 'skill') continue;
-      const sync = syncResults.get(s.name);
+      const name = s.registrySkillName ?? s.name;
+      const catalogKey = skillhubCatalogKey(name, s.registryEntry?.catalogScope);
+      const sync = syncResults.get(catalogKey);
       if (!sync?.exists || !sync.isMine) continue;
       const serverAuthorId = sync.authorId ?? '';
       if (!serverAuthorId) continue; // server 没回 authorId 就别回填
@@ -84,16 +96,18 @@ export function SkillhubFeatureLayout() {
         );
         if (!needsAuthorId && !needsOrigin) continue;
       }
-      const key = `${s.name}\u0000${s.absolutePath}\u0000${serverAuthorId}`;
+      const key = `${catalogKey}\u0000${s.absolutePath}\u0000${serverAuthorId}`;
       if (reconciledKeysRef.current.has(key)) continue;
       items.push({
-        name: s.name,
+        name,
         absolutePath: s.absolutePath,
         version: latestVersion,
         authorId: serverAuthorId,
-        ...(typeof sync.folderHash === 'string' && sync.folderHash ? { folderHash: sync.folderHash } : {}),
+        ...(typeof sync.folderHash === 'string' && sync.folderHash
+          ? { folderHash: sync.folderHash }
+          : {}),
       });
-      itemKeys.push({ name: s.name, key });
+      itemKeys.push({ name, key });
     }
     if (items.length === 0) {
       return;
@@ -129,12 +143,17 @@ export function SkillhubFeatureLayout() {
 
   const skillhubProjects = useMemo<SkillhubProject[] | null>(() => {
     if (sessionsLoading) return null;
-    const { projects } = groupSessions(sessions);
-    return projects.map((p) => ({
-      projectRoot: p.workingDir,
-      hash: projectHash(p.workingDir),
-      displayName: p.displayName,
-    }));
+    const { projects } = groupSessions(sessions, { includePinnedInProjects: true, includeDraftsInProjects: true });
+    const catalogue = new Map<string, SkillhubProject>();
+    for (const project of projects.filter((p) => p.scope === 'local')) {
+      const roots = [project.workingDir, ...project.sessions.map((s) => normalizeWorkingDirForStorage(s.workingDir))];
+      for (const root of roots) {
+        if (!root || catalogue.has(root)) continue;
+        catalogue.set(root, { projectRoot: root, hash: projectHash(root),
+          displayName: root === project.workingDir ? project.displayName : `${project.displayName} · ${root.split('/').at(-1)}` });
+      }
+    }
+    return [...catalogue.values()];
   }, [sessions, sessionsLoading]);
 
   useEffect(() => {
@@ -146,9 +165,20 @@ export function SkillhubFeatureLayout() {
     // list is unchanged or empty.
     bootstrapSkillhub();
   }, [dataOwnerId, skillhubProjects]);
+}
+
+export function SkillhubFeatureLayout() {
+  // 技能改为右侧整页(无左树导航),左侧 app 侧栏沿用 cc-agent 项目/对话列表。
+  // 显式注册同一个 CCAgentSidebarUpper:warm 导航时与 cc-agent 注册的是同一组件
+  // 类型,只 reconcile、不 remount(实例状态保留);冷启动直接进 /skillhub 时则首次
+  // 播种,避免左栏空白(详见 useRegisterCCAgentSidebar)。
+  useRegisterCCAgentSidebar();
+  const { device } = useCatalogDevice();
+  const showingCatalog = useMatch({ path: '/skillhub/local', end: true }) !== null;
 
   return (
     <div className="flex h-full w-full flex-col">
+      {!device || !showingCatalog ? <LocalSkillhubStoreSync /> : null}
       <Outlet />
     </div>
   );

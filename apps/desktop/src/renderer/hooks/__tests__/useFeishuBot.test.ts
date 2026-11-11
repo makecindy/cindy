@@ -1,6 +1,7 @@
 // @vitest-environment jsdom
 import { act, renderHook, waitFor } from '@testing-library/react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { useFeishuBot, type FeishuBotStatus } from '../useFeishuBot';
 
 vi.mock('react-i18next', () => ({
   useTranslation: () => ({
@@ -40,6 +41,7 @@ type RegistrationListener = (payload: {
 
 type FeishuState = {
   status: FeishuBotStatus;
+  error?: string;
   appId: string | null;
   appSecret: string | null;
   hasSecret: boolean;
@@ -82,15 +84,77 @@ function installFeishuApi() {
   return { api, statusListeners, registrationListeners };
 }
 
-let useFeishuBot: typeof import('../useFeishuBot').useFeishuBot;
-
 describe('useFeishuBot', () => {
-  beforeEach(async () => {
-    vi.resetModules();
+  beforeEach(() => {
     vi.clearAllMocks();
     delete (window as unknown as { electronAPI?: unknown }).electronAPI;
-    ({ useFeishuBot } = await import('../useFeishuBot'));
   });
+
+  // Unit regression: reconnect previously overwrote newer transport status and
+  // only toasted failures. These cases drive the real hook through the IPC API;
+  // existing coverage only checks initial hydration and registration races.
+  it.each(['error', 'connected'] as const)(
+    'uses the latest %s state and reason after a failed reconnect verdict',
+    async (status) => {
+      const { api } = installFeishuApi();
+      const hook = renderHook(() => useFeishuBot());
+      await waitFor(() => expect(hook.result.current.hasLoadedState).toBe(true));
+      api.reconnect.mockResolvedValueOnce({ verdict: 'error' });
+      api.getState.mockResolvedValueOnce({
+        status,
+        error: status === 'error' ? 'connect ETIMEDOUT' : undefined,
+        appId: 'cli_test',
+        appSecret: null,
+        hasSecret: true,
+        ownerOpenId: null,
+        lifecycleAnnouncement: true,
+      });
+      await act(async () => {
+        await hook.result.current.reconnect();
+      });
+      expect(hook.result.current.status).toBe(status);
+      expect(hook.result.current.errorMessage).toBe(
+        status === 'error' ? 'connect ETIMEDOUT' : null,
+      );
+      expect(hook.result.current.hasSavedCreds).toBe(true);
+    },
+  );
+
+  it.each([false, true])(
+    'keeps a rejected reconnect visible (connecting push: %s)',
+    async (pushConnecting) => {
+      const { api, statusListeners } = installFeishuApi();
+      const hook = renderHook(() => useFeishuBot());
+      await waitFor(() => expect(hook.result.current.hasLoadedState).toBe(true));
+      api.reconnect.mockImplementationOnce(async () => {
+        if (pushConnecting) {
+          for (const listener of statusListeners)
+            listener({
+              status: 'testing',
+              botAppId: 'cli_test',
+              ownerOpenId: null,
+            });
+        }
+        throw new Error('connection failed');
+      });
+      await act(async () => {
+        await hook.result.current.reconnect();
+      });
+      expect(hook.result.current.status).toBe('error');
+      expect(hook.result.current.errorMessage).toBe('logic.toasts.feishuBotReconnectFailed');
+      expect(hook.result.current.isReconnecting).toBe(false);
+      act(() => {
+        for (const listener of statusListeners)
+          listener({
+            status: 'connected',
+            botAppId: 'cli_test',
+            ownerOpenId: null,
+          });
+      });
+      expect(hook.result.current.status).toBe('connected');
+      expect(hook.result.current.errorMessage).toBeNull();
+    },
+  );
 
   it('updates the live owner and module cache when main claims the first sender', async () => {
     const { api, statusListeners } = installFeishuApi();
@@ -140,6 +204,7 @@ describe('useFeishuBot', () => {
     const hook = renderHook(() => useFeishuBot());
 
     await waitFor(() => expect(hook.result.current.service).toBe('lark'));
+    expect(hook.result.current.hasLoadedState).toBe(true);
     act(() => {
       hook.result.current.setAppId('cli_1234567890');
       hook.result.current.setAppSecret('sec_test');

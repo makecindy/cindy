@@ -1,3 +1,5 @@
+import { teammateFolderName, teammateFolderOfProjectPath } from '@cindy/maker-shared/teammate-project';
+
 import type { Session } from '@/lib/ccAgent.types';
 
 import {
@@ -8,7 +10,7 @@ import {
 
 type SidebarProjectSession = Pick<
   Session,
-  'workingDir' | 'remoteHostId' | 'deviceLinkDeviceId' | 'workspaceKind'
+  'workingDir' | 'projectDir' | 'remoteHostId' | 'deviceLinkDeviceId' | 'workspaceKind'
 >;
 
 /**
@@ -63,17 +65,71 @@ export function projectKeyComparisonSetHas(
   return comparisonKey != null && comparisonKeys.has(comparisonKey);
 }
 
+/** Resolve an external/deep-link key to the exact representative rendered in the sidebar. */
+export function findProjectRepresentativeKey(
+  projects: readonly Pick<ProjectNode, 'projectKey'>[],
+  projectKey: string,
+  localPlatform: string,
+): string | null {
+  const comparisonKey = projectKeyComparisonKey(projectKey, localPlatform);
+  if (comparisonKey == null) return null;
+  return (
+    projects.find(
+      (project) => projectKeyComparisonKey(project.projectKey, localPlatform) === comparisonKey,
+    )?.projectKey ?? null
+  );
+}
+
+/** Session-level project selectors must use the same comparison identity as project nodes. */
+export function isSessionInProjectComparisonSet(
+  session: SidebarProjectSession,
+  projectComparisonKeys: ReadonlySet<string>,
+  localPlatform: string,
+): boolean {
+  if (session.workspaceKind === 'dialogue') return false;
+  return projectKeyComparisonSetHas(
+    projectComparisonKeys,
+    projectIdentityKeyForSession(session),
+    localPlatform,
+  );
+}
+
+/** Single-project action membership using the same local Windows comparison identity. */
+export function isSessionInProject(
+  session: SidebarProjectSession,
+  projectKey: string,
+  localPlatform: string,
+): boolean {
+  if (session.workspaceKind === 'dialogue') return false;
+  const sessionProjectKey = projectIdentityKeyForSession(session);
+  const sessionComparisonKey = projectKeyComparisonKey(sessionProjectKey, localPlatform);
+  const projectComparisonKey = projectKeyComparisonKey(projectKey, localPlatform);
+  return sessionComparisonKey != null && sessionComparisonKey === projectComparisonKey;
+}
+
 function isSessionInHiddenProjectComparisonSet(
   session: SidebarProjectSession,
   hiddenProjectComparisonKeys: ReadonlySet<string>,
   localPlatform: string,
 ): boolean {
-  if (session.workspaceKind === 'dialogue') return false;
-  return projectKeyComparisonSetHas(
-    hiddenProjectComparisonKeys,
-    projectIdentityKeyForSession(session),
-    localPlatform,
-  );
+  return isSessionInProjectComparisonSet(session, hiddenProjectComparisonKeys, localPlatform);
+}
+
+/**
+ * A teammate's project on this computer while the teammate runs on another computer (its copy here
+ * is demoted, cloud-companions.md §2.1): hidden, its files stay; shown again once it comes back.
+ */
+export function withoutTeammateProjectsElsewhere(
+  projects: readonly ProjectNode[],
+  demotedBotIds: readonly string[],
+): ProjectNode[] {
+  if (demotedBotIds.length === 0) return Array.from(projects);
+  const folders = new Set(demotedBotIds.map(teammateFolderName));
+  return projects.filter((project) => {
+    if (project.remoteHostId || project.deviceLinkDeviceId) return true;
+    const folder = teammateFolderOfProjectPath(project.workingDir);
+    return !folder || !folders.has(folder);
+  });
 }
 
 export function visibleSidebarProjects(

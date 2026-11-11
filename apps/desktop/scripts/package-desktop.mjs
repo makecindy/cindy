@@ -38,7 +38,8 @@
 //   cindy-<version|unversioned>-Setup.exe / -<arch>.dmg /
 //              -<amd64|arm64>.deb                        安装包
 //   cindy-<version>-hotfix.zip                           热更包(仅有版本时)
-//   build-info.json                                      发布侧唯一输入
+//   build-info.json                                      发布侧唯一输入(含 mcpAppsManual:
+//                                                        安装包内手册的 sha256/size,无则 null)
 // =============================================================================
 
 import { execFileSync, execSync } from 'node:child_process';
@@ -59,6 +60,7 @@ import {
   writePackageVersion,
   runDbValidate,
   verifyPackagedDrizzle,
+  verifyPackagedSkillVersionRecords,
   runSmokeTest,
   fetchExistingManifestIfAvailable,
   findInstallerArtifact,
@@ -81,7 +83,10 @@ import {
   artifactBaseName,
   buildBuildInfo,
   debianArch,
+  pageManualBuildInfo,
+  assertPageManualCommitted,
 } from './ci/package-lib.mjs';
+import { PLUGIN_PAGE_MANUAL_SKILL_PATH } from '../src/shared/pluginPageManual.mjs';
 import { applyMacSigningConfigToEnv, applyReleaseCdnBaseUrlToEnv } from './ci/release-regions.mjs';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -114,6 +119,39 @@ function collectBuildMeta() {
   } catch { /* ignore */ }
 
   return { schemaVersionMax, migrationFiles, commitSha, electronVersion };
+}
+
+function verifyPackagedSourceMetadata({ appName, platform, arch, expectedCommit }) {
+  const packagedDir = path.join(DESKTOP_ROOT, 'out', `${appName}-${platform}-${arch}`);
+  const metadataPath =
+    platform === 'darwin'
+      ? path.join(packagedDir, `${appName}.app`, 'Contents', 'Resources', 'cindy-source.json')
+      : path.join(packagedDir, 'resources', 'cindy-source.json');
+  if (!fs.existsSync(metadataPath)) {
+    throw new Error(`packaged Cindy source metadata missing at ${metadataPath}`);
+  }
+  let metadata;
+  try {
+    metadata = JSON.parse(fs.readFileSync(metadataPath, 'utf8'));
+  } catch (err) {
+    throw new Error(`packaged Cindy source metadata is invalid JSON: ${err.message}`);
+  }
+  if (
+    !metadata ||
+    typeof metadata.sourceCommit !== 'string' ||
+    !metadata.sourceCommit ||
+    typeof metadata.builtAt !== 'string' ||
+    !metadata.builtAt ||
+    Number.isNaN(Date.parse(metadata.builtAt))
+  ) {
+    throw new Error(`packaged Cindy source metadata has invalid sourceCommit/builtAt: ${metadataPath}`);
+  }
+  if (expectedCommit && metadata.sourceCommit !== expectedCommit) {
+    throw new Error(
+      `packaged Cindy source metadata commit mismatch: expected ${expectedCommit}, got ${metadata.sourceCommit}`,
+    );
+  }
+  console.log(`    verified packaged source metadata: ${metadata.sourceCommit}`);
 }
 
 // ── CDN 基线(仅 --version major/minor/patch 时调用,只读)─────────────────────
@@ -183,7 +221,9 @@ function runForgeMake({ platform, arch, region, version, versionless, noSign, we
   // --no-sign:摘掉 CINDY_WIN_SIGN_CMD,让 forge postPackage 的内部 exe 签名一并
   // 跳过(forge.config.ts 只认这个 env;不摘的话外部签名命令失败会挂整个 make)。
   if (noSign) delete forgeEnv.CINDY_WIN_SIGN_CMD;
-  execSync(`npx electron-forge make --platform ${platform} --arch ${arch}`, {
+  execFileSync(process.execPath, [
+    path.join(__dirname, 'forge-cli.mjs'), 'make', '--platform', platform, '--arch', arch,
+  ], {
     cwd: DESKTOP_ROOT,
     stdio: 'inherit',
     env: forgeEnv,
@@ -393,12 +433,11 @@ async function finishDarwin({
       });
     }
     console.log('==> Signing (Developer ID)...');
-    signMacAppWithIdentity(appPath, helperEntitlementsPath, mainEntitlementsPath, identity, {
-      keychainAccessGroup,
-    });
+    signMacAppWithIdentity(appPath, helperEntitlementsPath, mainEntitlementsPath, identity, { keychainAccessGroup, arch });
     console.log('==> Notarizing...');
     notarizeMacApp(appPath, identity);
     signingMode = 'developer-id+notarized';
+    verifyMacBinaryArch(appName, arch);
 
     const dmgPath = path.join(artifactDir, `${baseName}-${arch}.dmg`);
     console.log('==> Creating DMG...');
@@ -417,7 +456,8 @@ async function finishDarwin({
     // 版本无关(或显式放行)→ ad-hoc 签名,产出 .app 的 zip 供本机/内部试用。
     writeMacEntitlements(helperEntitlementsPath);
     writeMacEntitlements(mainEntitlementsPath, { appleEvents: true });
-    adhocSignMacApp(appPath, helperEntitlementsPath, mainEntitlementsPath);
+    adhocSignMacApp(appPath, helperEntitlementsPath, mainEntitlementsPath, arch);
+    verifyMacBinaryArch(appName, arch);
     const appZipPath = path.join(artifactDir, `${baseName}-${arch}.zip`);
     console.log('==> Creating app ZIP (ad-hoc signed)...');
     if (fs.existsSync(appZipPath)) fs.unlinkSync(appZipPath);
@@ -439,7 +479,8 @@ async function finishLinux({ artifactDir, baseName, arch }) {
   // 包一致:归集时写死 amd64 会让 arm64 产物顶着 amd64 的名字发出去。
   const installerPath = path.join(artifactDir, `${baseName}-${debianArch(arch)}.deb`);
   fs.copyFileSync(debPath, installerPath);
-  // Linux 首发无热更链路(见 ci/lib.mjs createLinuxFirstReleaseManifest),只出安装包。
+  // One verified payload: Debian uses pkexec; managed user installs on Arch /
+  // Omarchy extract it without elevation and atomically switch releases.
   return { files: [fileEntry('installer', installerPath)], signing: { mode: 'none' } };
 }
 
@@ -527,6 +568,16 @@ async function main() {
 
   runDbValidate();
 
+  // 有版本的包会内置《Cindy MCP Apps 页面生成手册》并按其 sha256 发布,手册必须与提交一致。
+  const pageManualRepoPath = path.join('resources', 'system-skills', ...PLUGIN_PAGE_MANUAL_SKILL_PATH.split('/'));
+  assertPageManualCommitted({
+    porcelain: versionless
+      ? ''
+      : execFileSync('git', ['status', '--porcelain', '--', pageManualRepoPath], { cwd: DESKTOP_ROOT, encoding: 'utf8' }),
+    versionless,
+    manualPath: `apps/desktop/${pageManualRepoPath}`,
+  });
+
   // 版本号临时写入 package.json(asar 内 app.getVersion() 的来源),退出自动恢复。
   writePackageVersion(version);
 
@@ -562,12 +613,24 @@ async function main() {
       webAuthnAppleTeamId: webAuthnProvisioningProfile ? macSigningIdentity?.teamId : undefined,
     });
 
+    verifyPackagedSourceMetadata({
+      appName,
+      platform,
+      arch,
+      expectedCommit: meta.commitSha,
+    });
+
     // drizzle 资源校验(平台差异只在 packaged 内路径)。
     const drizzleOut =
       platform === 'darwin'
         ? path.join(DESKTOP_ROOT, 'out', `${appName}-darwin-${arch}`, `${appName}.app`, 'Contents', 'Resources', 'drizzle')
         : path.join(DESKTOP_ROOT, 'out', `${appName}-${platformKey}`, 'resources', 'drizzle');
     verifyPackagedDrizzle(drizzleOut);
+    verifyPackagedSkillVersionRecords(path.join(path.dirname(drizzleOut), 'system-skills'));
+
+    // 读安装包里实际打进去的手册(与 drizzle 同在 Resources 下),写入 build-info。
+    const packagedManual = path.join(path.dirname(drizzleOut), 'system-skills', ...PLUGIN_PAGE_MANUAL_SKILL_PATH.split('/'));
+    const mcpAppsManual = pageManualBuildInfo(fs.existsSync(packagedManual) ? fs.readFileSync(packagedManual) : null);
 
     if (skipSmoke) {
       console.log('==> Skipping packaged smoke test (--skip-smoke)');
@@ -612,6 +675,7 @@ async function main() {
         migrationFiles: meta.migrationFiles,
         files,
         signing,
+        mcpAppsManual,
       });
       buildInfoPath = path.join(artifactDir, 'build-info.json');
       fs.writeFileSync(buildInfoPath, JSON.stringify(buildInfo, null, 2) + '\n');

@@ -26,6 +26,7 @@
  */
 
 import { normalizeGhostConnectionHost } from './ghostConnections.js';
+import type { LegacyMigrationRead } from './legacyMigrationRead.js';
 
 /** cindy-gitlab 意识与其多连接声明 key(与 ghost.json network.connections 一致,搬账目的地)。 */
 export const CINDY_GITLAB_GHOST_ID = 'cindy-gitlab';
@@ -60,17 +61,25 @@ export interface GitlabAccountsMigrationManager {
 }
 
 export interface GitlabAccountsMigrationDeps {
-  /** 读老 PAT 明文(safeStorage 解密 gitlab_token.enc;不存在 / 解密失败回 null)。 */
-  readLegacyToken(): string | null;
+  /** 读老 PAT 明文，并区分确实缺失与可重试读取失败。 */
+  readLegacyToken(): LegacyMigrationRead<string>;
   /**
    * 老 token 文件是否在场(existsSync,不解密)。只服务幂等跳过分支的留痕
    * 日志——跳过时保持"连老 token 都不解密"的纪律,又不让重试链被静默截断。
    */
   legacyTokenExists(): boolean;
-  /** 读老连接信息(gitlab_connection.json;消费 baseUrl + username,坏形态回 null)。 */
-  readLegacyConnection(): { baseUrl?: string | null; username?: string | null } | null;
+  /** 读老连接信息，并区分确实缺失与可重试读取失败。 */
+  readLegacyConnection(): LegacyMigrationRead<{
+    baseUrl?: string | null;
+    username?: string | null;
+  }>;
   manager: GitlabAccountsMigrationManager;
   log?: { info(msg: string, meta?: Record<string, unknown>): void; warn(msg: string, meta?: Record<string, unknown>): void };
+}
+
+export interface GitlabAccountsMigrationResult {
+  migrated: number;
+  retryPending: boolean;
 }
 
 /**
@@ -113,7 +122,9 @@ function legacyBaseUrlToHost(
  * 执行一次搬账。返回迁移的连接数(老集成是单账号形态,只会是 0 或 1)。
  * 在内置意识对账完成后、确认 cindy-gitlab 已装入时调用(见 index.ts 启动序列)。
  */
-export function migrateGitlabAccounts(deps: GitlabAccountsMigrationDeps): number {
+export function migrateGitlabAccountsWithResult(
+  deps: GitlabAccountsMigrationDeps,
+): GitlabAccountsMigrationResult {
   const { readLegacyToken, readLegacyConnection, manager, log } = deps;
 
   // 该 decl 名下已有连接(用户手动加过 / 上次已迁)→ 不碰,防覆盖。
@@ -123,31 +134,38 @@ export function migrateGitlabAccounts(deps: GitlabAccountsMigrationDeps): number
     if (deps.legacyTokenExists()) {
       log?.info('cindy-gitlab 搬账跳过:意识侧已有连接清单(老 token 文件仍在,按防覆盖纪律不迁)');
     }
-    return 0;
+    return { migrated: 0, retryPending: false };
   }
 
   const token = readLegacyToken();
-  if (!token) return 0;
+  if (token.status === 'retryable-failure') return { migrated: 0, retryPending: true };
+  if (token.status === 'missing') return { migrated: 0, retryPending: false };
 
   // 老集成 addAccount 必写 connection.json;读不到 = 半身位残留,保守不迁。
   const connection = readLegacyConnection();
-  const baseUrl = typeof connection?.baseUrl === 'string' ? connection.baseUrl : '';
+  if (connection.status === 'retryable-failure') return { migrated: 0, retryPending: true };
+  const baseUrl =
+    connection.status === 'available' && typeof connection.value.baseUrl === 'string'
+      ? connection.value.baseUrl
+      : '';
   if (!baseUrl) {
     log?.info('cindy-gitlab 搬账跳过:老连接信息缺失(半身位残留,保守不迁)', {
-      hasConnection: connection !== null,
+      hasConnection: connection.status === 'available',
     });
-    return 0;
+    return { migrated: 0, retryPending: false };
   }
   const host = legacyBaseUrlToHost(baseUrl, log);
-  if (host === null) return 0;
+  if (host === null) return { migrated: 0, retryPending: false };
 
   const username =
-    typeof connection?.username === 'string' && connection.username.length > 0
-      ? connection.username
+    connection.status === 'available'
+    && typeof connection.value.username === 'string'
+    && connection.value.username.length > 0
+      ? connection.value.username
       : null;
   const result = manager.upsert(CINDY_GITLAB_GHOST_ID, CINDY_GITLAB_CONNECTION_KEY, {
     host,
-    token,
+    token: token.value,
     ...(username !== null ? { label: username } : {}),
     max: UPSERT_MAX,
   });
@@ -155,7 +173,7 @@ export function migrateGitlabAccounts(deps: GitlabAccountsMigrationDeps): number
     log?.warn('cindy-gitlab 搬账:连接写入失败,放弃本轮(下次启动重试)', {
       error: result.error,
     });
-    return 0;
+    return { migrated: 0, retryPending: true };
   }
   // 空清单上的新增本就自动成为默认连接;显式设一次是防御性收口(setDefault
   // 幂等),失败也不回退迁移结果(连接已可用,默认位下次启动无从修——但
@@ -164,5 +182,10 @@ export function migrateGitlabAccounts(deps: GitlabAccountsMigrationDeps): number
     log?.warn('cindy-gitlab 搬账:设默认连接失败(单连接场景不影响使用)');
   }
   log?.info('cindy-gitlab 搬账完成:老 GitLab 集成账号已迁入意识', { host });
-  return 1;
+  return { migrated: 1, retryPending: false };
+}
+
+/** Compatibility wrapper for callers that only need the migrated count. */
+export function migrateGitlabAccounts(deps: GitlabAccountsMigrationDeps): number {
+  return migrateGitlabAccountsWithResult(deps).migrated;
 }

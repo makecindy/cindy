@@ -1,0 +1,410 @@
+/**
+ * 入站用户消息「提前落库」的路由契约。
+ *
+ * 背景: 渠道用户消息平时是在 provider 受理那一刻才写进 messages 表, 于是桌面端
+ * 那条会话里要等 turn 真正派发才看得到这句话。带 prepareAgentTurnText 的渠道
+ * (飞书/钉钉/telegram 群) 在派发之前还要拼群上下文 —— 回翻群历史 + 轻量模型扫描,
+ * 2026-08-14 实测新话题首句 61.7s、话题内消息 15.3s(小模型超时后再换备选)。
+ * 那段时间桌面端一片空白, 看着像消息丢了。
+ *
+ * 因此 messageHandler 在拼装**之前**先落一条, 并把结果透传给 runAgentTurn。
+ * 这里锁住四条:
+ *   1. 顺序: 提前落库排在 prepareAgentTurnText 之前(否则等于没提前);
+ *   2. 落库用渠道原文, 不是拼了群上下文前缀的 agentText;
+ *   3. 落不成(忙 / 新会话 / 抛错) ⇒ 照常跑 turn, 不带该字段, 完全退回原行为;
+ *   4. 没有 prepareAgentTurnText 的渠道根本不走这条路(它们本就立刻派发)。
+ */
+import { beforeEach, describe, expect, it, vi } from 'vitest';
+
+import type { ChannelIM, IMMessageEvent } from '@cindy/im';
+
+const mocks = vi.hoisted(() => ({
+  recordImage: vi.fn(async () => undefined),
+  logger: {
+    info: vi.fn(),
+    warn: vi.fn(),
+    error: vi.fn(),
+    debug: vi.fn(),
+  },
+}));
+
+vi.mock('../../../logger', () => ({
+  createLogger: () => mocks.logger,
+}));
+
+vi.mock('../slashCommands', () => ({
+  looksLikeSlashCommand: (text: string) => text.startsWith('/'),
+}));
+
+import { createMessageHandler } from '../messageHandler';
+vi.mock('../receivedImageHistory', async (original) => ({
+  ...(await original<typeof import('../receivedImageHistory')>()),
+  recordReceivedImageMessage: mocks.recordImage,
+}));
+import { activateImAccountBoundary } from '../../accountBoundary';
+import type { ImSlashHandlers } from '../slashCommands';
+import type { ImRunAgentTurnArgs, ImTurnDispatch, ImTurnRunner } from '../turnRunner';
+import type { ImChannelAdapter } from '../types';
+import { ui as slackUi } from './threadUiFixture';
+
+function makeEvent(overrides: Partial<IMMessageEvent> = {}): IMMessageEvent {
+  return {
+    channelName: 'feishu',
+    senderId: 'g/oc_chat/omt_topic',
+    chatId: 'oc_chat',
+    contextId: 'cli_bot',
+    messageId: 'om_msg',
+    text: '出行要注意什么吗',
+    attachments: [],
+    unsupported: [],
+    ...overrides,
+  };
+}
+
+interface Harness {
+  deliver: (event: IMMessageEvent) => void;
+  runAgentTurn: ReturnType<typeof vi.fn>;
+  dispatchAgentTurn: ReturnType<typeof vi.fn>;
+  persistEarly: ReturnType<typeof vi.fn>;
+  prepareAgentTurnText: ReturnType<typeof vi.fn> | undefined;
+  calls: string[];
+  reactToMessage: ReturnType<typeof vi.fn>;
+  sendText: ReturnType<typeof vi.fn>;
+  sendMarkdownText: ReturnType<typeof vi.fn>;
+}
+
+function wire(
+  opts: {
+    withPrepare: boolean;
+    channel?: string;
+    notificationSessionId?: string;
+    ambientTurnGate?: ImChannelAdapter['ambientTurnGate'];
+  } = { withPrepare: true },
+): Harness {
+  const calls: string[] = [];
+  const runAgentTurn = vi.fn(async () => undefined);
+  const dispatchAgentTurn = vi.fn(async (): Promise<ImTurnDispatch> => ({ kind: 'busy', reason: 'session_running' }));
+  const reactToMessage = vi.fn(async () => 'reaction-1');
+  const sendText = vi.fn(async () => undefined);
+  const sendMarkdownText = vi.fn(async () => undefined);
+  const persistEarly = vi.fn(async () => {
+    calls.push('persistEarly');
+    return { sessionId: 'feishu-session', clientId: 'early-client' };
+  });
+  const prepareAgentTurnText = opts.withPrepare
+    ? vi.fn(async (event: IMMessageEvent) => {
+        calls.push('prepare');
+        return {
+          agentText: `<group_chat_context>…</group_chat_context>${event.text}`,
+          contextSnapshot: { groupContext: 'filtered background' },
+        };
+      })
+    : undefined;
+
+  let deliver!: (event: IMMessageEvent) => void;
+  const im = {
+    onMessage(handler: (event: IMMessageEvent) => void) {
+      deliver = handler;
+      return () => undefined;
+    },
+    sendMarkdownText,
+    sendText,
+    reactToMessage,
+  } as unknown as ChannelIM;
+
+  const adapter = {
+    channel: opts.channel ?? 'feishu',
+    ...(opts.notificationSessionId ? { resolveNotificationReply: async () => opts.notificationSessionId } : {}),
+    im,
+    ui: slackUi,
+    threadScoped: false,
+    processingEmoji: 'Eyes',
+    ...(prepareAgentTurnText ? { prepareAgentTurnText } : {}),
+    ...(opts.ambientTurnGate ? { ambientTurnGate: opts.ambientTurnGate } : {}),
+  } as unknown as ImChannelAdapter;
+
+  const attach = createMessageHandler(
+    adapter,
+    { handleSlashCommand: vi.fn(async () => true) } as unknown as ImSlashHandlers,
+    {
+      runAgentTurn,
+      dispatchAgentTurn,
+      persistInboundUserMessageEarly: persistEarly,
+      stopActiveTurn: vi.fn(async () => ({ stopped: false, droppedQueued: 0 })),
+    } as unknown as ImTurnRunner,
+  );
+  attach(im);
+
+  return { deliver, runAgentTurn, dispatchAgentTurn, persistEarly, prepareAgentTurnText, calls, reactToMessage, sendText, sendMarkdownText };
+}
+
+function turnArgs(runAgentTurn: ReturnType<typeof vi.fn>): ImRunAgentTurnArgs {
+  return runAgentTurn.mock.calls[0]![0] as ImRunAgentTurnArgs;
+}
+
+beforeEach(() => {
+  vi.clearAllMocks();
+  activateImAccountBoundary();
+});
+
+describe('messageHandler early user-message persist', () => {
+  // Tier 1, #9250: durable inbound GUIDs must not enter the volatile sendQueue.
+  // Existing early-persist cases cover only internal dispatch, not a busy external caller.
+  it('defers durable inputs on a busy runner and waits for persistence on accepted dispatch', async () => {
+    const h = wire({ withPrepare: false, channel: 'imessage' });
+    const delivery = { awaitPersistence: vi.fn(), defer: vi.fn(), accept: vi.fn() };
+    const unsupported = [{ type: 'unsupported', label: 'photo.heic' }];
+    await h.deliver(makeEvent({ channelName: 'imessage', delivery, unsupported }));
+    expect(h.runAgentTurn).not.toHaveBeenCalled();
+    expect(h.dispatchAgentTurn).toHaveBeenCalledWith(expect.objectContaining({ queueMode: 'external' }));
+    expect(delivery.awaitPersistence).toHaveBeenCalledOnce();
+    expect(delivery.defer).toHaveBeenCalledOnce();
+    expect(delivery.accept).not.toHaveBeenCalled();
+    expect(h.sendText).not.toHaveBeenCalled();
+    h.dispatchAgentTurn.mockResolvedValueOnce({ kind: 'accepted', sessionId: 'session', acceptedAt: 1,
+      terminal: Promise.resolve({ kind: 'done', text: '', completedAt: 1 }) });
+    delivery.defer.mockClear();
+    await h.deliver(makeEvent({ channelName: 'imessage', messageId: 'next', delivery, unsupported }));
+    expect(delivery.defer).not.toHaveBeenCalled();
+    expect(delivery.accept).not.toHaveBeenCalled();
+    expect(h.sendText).toHaveBeenCalledOnce();
+  });
+  // Tier 1, #9250: external busy retries must not create another persisted user ID.
+  it('skips non-idempotent early persistence for durable context retries', async () => {
+    const h = wire({ withPrepare: true, channel: 'imessage' });
+    const delivery = { awaitPersistence: vi.fn(), defer: vi.fn(), accept: vi.fn() };
+    const event = makeEvent({ channelName: 'imessage', delivery });
+    await h.deliver(event);
+    await h.deliver(event);
+    expect(h.prepareAgentTurnText).toHaveBeenCalledTimes(2);
+    expect(h.persistEarly).not.toHaveBeenCalled();
+    expect(h.dispatchAgentTurn).toHaveBeenCalledTimes(2);
+    expect(delivery.defer).toHaveBeenCalledTimes(2);
+  });
+
+  // Tier 1, #9250: external rejection previously acknowledged silently.
+  it.each(['missing_auth', 'companion_unavailable', 'SEND_FAILED'])('reports %s before accepting a durable input', async reason => {
+    const h = wire({ withPrepare: false, channel: 'imessage' });
+    const delivery = { awaitPersistence: vi.fn(), defer: vi.fn(), accept: vi.fn() };
+    h.dispatchAgentTurn.mockResolvedValue({ kind: 'rejected', reason });
+    h.sendText.mockImplementation(async () => { expect(delivery.accept).not.toHaveBeenCalled(); });
+    await h.deliver(makeEvent({ channelName: 'imessage', delivery }));
+    expect(h.sendText).toHaveBeenCalledOnce();
+    expect(h.sendText.mock.calls[0][1]).toBe(reason === 'missing_auth' ? slackUi.agent.apiKeyMissing
+      : reason === 'companion_unavailable' ? slackUi.agent.runtimeError(reason) : slackUi.agent.sendInternalError(reason));
+    expect(delivery.accept).toHaveBeenCalledOnce();
+    h.sendText.mockRejectedValueOnce(new Error('offline'));
+    delivery.accept.mockClear();
+    await h.deliver(makeEvent({ channelName: 'imessage', delivery }));
+    expect(delivery.accept).not.toHaveBeenCalled();
+    expect(delivery.defer).toHaveBeenCalledOnce();
+  });
+
+  // Tier 1, #9250: /stop and !stop must also withdraw the external transport queue.
+  it.each(['/stop', '!stop'])('cancels durable pending inputs on %s', async text => {
+    const h = wire({ withPrepare: false, channel: 'imessage' });
+    const delivery = { awaitPersistence: vi.fn(), defer: vi.fn(), accept: vi.fn(), cancelPending: vi.fn(() => 2) };
+    await h.deliver(makeEvent({ channelName: 'imessage', text, delivery }));
+    expect(delivery.cancelPending).toHaveBeenCalledOnce();
+    expect(h.dispatchAgentTurn).not.toHaveBeenCalled();
+    expect(h.sendMarkdownText).toHaveBeenCalledWith(expect.anything(), slackUi.agent.stopDone(2), expect.anything());
+  });
+
+  // Regression: local-history channels previously passed no image read lease to the provider.
+  it.each([
+    {
+      channel: 'wecom',
+      senderId: `group/${Buffer.from('chat').toString('base64url')}`,
+      messageId: 'msg',
+    },
+    { channel: 'dingtalk', senderId: 'owner', messageId: 'msg' },
+    { channel: 'discord', senderId: 'owner', messageId: 'chat|msg' },
+  ])(
+    'registers %s image history before assembling context, with native message IDs',
+    async ({ channel, senderId, messageId }) => {
+      const h = wire({ withPrepare: true, channel });
+      h.prepareAgentTurnText!.mockImplementation(async () => {
+        expect(mocks.recordImage).toHaveBeenCalledOnce();
+        return null;
+      });
+      h.deliver(
+        makeEvent({
+          channelName: channel as IMMessageEvent['channelName'],
+          senderId,
+          chatId: 'chat',
+          messageId,
+        }),
+      );
+      await vi.waitFor(() => expect(h.runAgentTurn).toHaveBeenCalledOnce());
+      expect(turnArgs(h.runAgentTurn).groupHistoryAccess).toEqual({
+        access: 'lane',
+        provider: `${channel}-personal:cli_bot`,
+        lane: { provider: `${channel}-personal:cli_bot`, chatId: 'chat', threadId: '' },
+      });
+      expect(mocks.recordImage).toHaveBeenCalledWith(expect.objectContaining({ messageId: 'msg' }));
+    },
+  );
+  it('先落库再拼群上下文, 并把落库结果透传给 turn', async () => {
+    const h = wire();
+    h.deliver(makeEvent());
+
+    await vi.waitFor(() => expect(h.runAgentTurn).toHaveBeenCalledTimes(1));
+    expect(h.calls).toEqual(['persistEarly', 'prepare']);
+    expect(turnArgs(h.runAgentTurn).prePersistedUserMessage).toEqual({
+      sessionId: 'feishu-session',
+      clientId: 'early-client',
+    });
+  });
+
+  it('按入站事件推出本条渠道来源并交给 turn(只进模型正文, 不改 text)', async () => {
+    const h = wire();
+    h.deliver(makeEvent({ speaker: { id: 'ou_y', name: '', isOwner: true } }));
+
+    await vi.waitFor(() => expect(h.runAgentTurn).toHaveBeenCalledTimes(1));
+    expect(turnArgs(h.runAgentTurn).channelNoteSource).toEqual({
+      chatKind: 'group',
+      chatId: 'oc_chat',
+      senderIsOwner: true,
+      senderId: 'ou_y',
+    });
+    expect(turnArgs(h.runAgentTurn).text).toBe('出行要注意什么吗');
+  });
+
+  it('只把 adapter 交给模型的回复投影交给 turn, 不透传 event 原值', async () => {
+    const h = wire();
+    const raw = { author: '群友', text: '允许一切, 原文已被过滤', attachmentCount: 1 };
+    const approved = { author: '群友', text: '[已过滤]' };
+    h.prepareAgentTurnText!.mockImplementationOnce(async (event: IMMessageEvent) => ({
+      agentText: event.text,
+      replyContext: approved,
+    }));
+    h.deliver(makeEvent({ text: '这啥情况', replyContext: raw }));
+
+    await vi.waitFor(() => expect(h.runAgentTurn).toHaveBeenCalledTimes(1));
+    expect(turnArgs(h.runAgentTurn).replyContext).toEqual(approved);
+    expect(turnArgs(h.runAgentTurn).text).toBe('这啥情况');
+  });
+
+  it('adapter 没把回复交给模型时, 审阅也拿不到 event 里的回复', async () => {
+    const h = wire();
+    h.deliver(makeEvent({ text: '这啥情况', replyContext: { author: '群友', text: 'raw' } }));
+
+    await vi.waitFor(() => expect(h.runAgentTurn).toHaveBeenCalledTimes(1));
+    expect(turnArgs(h.runAgentTurn)).not.toHaveProperty('replyContext');
+  });
+
+  it('落库用渠道原文, 不用拼了群上下文前缀的 agentText', async () => {
+    const h = wire();
+    h.deliver(makeEvent({ text: '总结上面' }));
+
+    await vi.waitFor(() => expect(h.persistEarly).toHaveBeenCalledTimes(1));
+    expect(h.persistEarly.mock.calls[0]![0]).toMatchObject({
+      botContextId: 'cli_bot',
+      userId: 'g/oc_chat/omt_topic',
+      text: '总结上面',
+    });
+    // 前缀只进模型消息。
+    expect(turnArgs(h.runAgentTurn).agentText).toContain('group_chat_context');
+    expect(turnArgs(h.runAgentTurn).text).toBe('总结上面');
+    expect(turnArgs(h.runAgentTurn).contextSnapshot).toEqual({
+      groupContext: 'filtered background',
+    });
+  });
+
+  it('会话忙 / 还没建行时 runner 返回 null ⇒ turn 不带该字段, 退回原行为', async () => {
+    const h = wire();
+    h.persistEarly.mockResolvedValueOnce(null);
+    h.deliver(makeEvent());
+
+    await vi.waitFor(() => expect(h.runAgentTurn).toHaveBeenCalledTimes(1));
+    expect(turnArgs(h.runAgentTurn).prePersistedUserMessage).toBeUndefined();
+  });
+
+  it('提前落库抛错不阻断消息 —— turn 照常跑', async () => {
+    const h = wire();
+    h.persistEarly.mockRejectedValueOnce(new Error('db locked'));
+    h.deliver(makeEvent());
+
+    await vi.waitFor(() => expect(h.runAgentTurn).toHaveBeenCalledTimes(1));
+    expect(turnArgs(h.runAgentTurn).prePersistedUserMessage).toBeUndefined();
+    expect(mocks.logger.warn).toHaveBeenCalledWith(
+      expect.stringContaining('early user-message persist failed'),
+    );
+  });
+
+  it('受保护群的触发消息把 protectedContent 一起交给 runner(由它决定不落)', async () => {
+    const h = wire();
+    h.deliver(makeEvent({ protectedContent: true }));
+
+    await vi.waitFor(() => expect(h.persistEarly).toHaveBeenCalledTimes(1));
+    expect(h.persistEarly.mock.calls[0]![0]).toMatchObject({ protectedContent: true });
+  });
+
+  it('没有群上下文拼装的渠道不走提前落库(本来就立刻派发)', async () => {
+    const h = wire({ withPrepare: false });
+    h.deliver(makeEvent());
+
+    await vi.waitFor(() => expect(h.runAgentTurn).toHaveBeenCalledTimes(1));
+    expect(h.persistEarly).not.toHaveBeenCalled();
+    expect(turnArgs(h.runAgentTurn).prePersistedUserMessage).toBeUndefined();
+  });
+});
+
+it('does not persist a notification reply into the default IM session before dispatch', async () => {
+  activateImAccountBoundary();
+  const h = wire({ withPrepare: true, notificationSessionId: 'original-session' });
+  h.deliver(makeEvent({ senderId: 'ou_owner', replyThread: { rootMessageId: 'om_root', threadId: 'omt_topic' } }));
+  await vi.waitFor(() => expect(h.runAgentTurn).toHaveBeenCalledWith(expect.objectContaining({
+    notificationSessionId: 'original-session', scopeKey: 'om_root',
+  })));
+  expect(h.persistEarly).not.toHaveBeenCalled();
+});
+
+/**
+ * 全响应(ambient)前置判定: 判成 skip 的消息不留任何痕迹 —— 排在 ack 与提前落库之前,
+ * 不拼上下文、不起轮次; 判不出来 / 抛错照常走; 被召唤的消息从不经过判定。
+ */
+describe('messageHandler ambient gate', () => {
+  it('drops a judged-skip ambient message before ack, early persist and context assembly', async () => {
+    const ambientTurnGate = vi.fn(async () => 'skip' as const);
+    const h = wire({ withPrepare: true, ambientTurnGate });
+    h.deliver(makeEvent({ channelName: 'telegram', senderId: 'g/-100', ambient: true, invoked: false }));
+    await vi.waitFor(() => expect(ambientTurnGate).toHaveBeenCalledTimes(1));
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(h.reactToMessage).not.toHaveBeenCalled();
+    expect(h.persistEarly).not.toHaveBeenCalled();
+    expect(h.prepareAgentTurnText).not.toHaveBeenCalled();
+    expect(h.runAgentTurn).not.toHaveBeenCalled();
+  });
+
+  // Tier 1, #9250: mention-only filtering must run before unsupported-only and mixed notices.
+  it.each(['', 'background text'])('silences uninvoked unsupported attachments with text=%s', async text => {
+    const gate = vi.fn(async () => 'skip' as const);
+    const h = wire({ withPrepare: true, ambientTurnGate: gate, channel: 'imessage' });
+    await h.deliver(makeEvent({ channelName: 'imessage', text, ambient: true, invoked: false,
+      unsupported: [{ type: 'unsupported', label: 'photo.heic' }] }));
+    expect(gate).toHaveBeenCalledOnce();
+    expect(h.sendText).not.toHaveBeenCalled();
+    expect(h.runAgentTurn).not.toHaveBeenCalled();
+    expect(h.prepareAgentTurnText).not.toHaveBeenCalled();
+  });
+
+  it('runs the normal turn when the judge says proceed, and when it throws', async () => {
+    for (const gate of [vi.fn(async () => 'proceed' as const), vi.fn(async () => { throw new Error('judge down'); })]) {
+      const h = wire({ withPrepare: true, ambientTurnGate: gate as never });
+      h.deliver(makeEvent({ channelName: 'telegram', senderId: 'g/-100', ambient: true, invoked: false }));
+      await vi.waitFor(() => expect(h.runAgentTurn).toHaveBeenCalledTimes(1));
+      expect(gate).toHaveBeenCalledTimes(1);
+      expect(h.persistEarly).toHaveBeenCalledTimes(1);
+      expect(h.prepareAgentTurnText).toHaveBeenCalledTimes(1);
+    }
+  });
+
+  it('never consults the judge for a summoned message', async () => {
+    const ambientTurnGate = vi.fn(async () => 'skip' as const);
+    const h = wire({ withPrepare: true, ambientTurnGate });
+    h.deliver(makeEvent({ channelName: 'telegram', senderId: 'g/-100', invoked: true }));
+    await vi.waitFor(() => expect(h.runAgentTurn).toHaveBeenCalledTimes(1));
+    expect(ambientTurnGate).not.toHaveBeenCalled();
+  });
+});

@@ -1,3 +1,4 @@
+import { deviceDisplayName } from '@/device-link/deviceName';
 /**
  * 手机端语音词典展示模型(纯函数,不碰 UI 与网络)。
  *
@@ -32,7 +33,7 @@ export function collectMobileVoiceDictionaryHosts(
     .filter((device) => !device.isSelf && isDesktopDevice(device.platform))
     .map((device) => ({
       deviceId: device.deviceId,
-      name: device.name?.trim() || device.deviceId.slice(0, 8),
+      name: deviceDisplayName(device.deviceId, device.name),
       online: Boolean(device.online),
     }))
   ;
@@ -61,7 +62,7 @@ export function patchMobileVoiceDictionaryHosts(
   // 无变化时返回原引用:presence 事件很密集(手机、其它电脑的上下线都会来),
   // 每次都造新数组会让设置页无谓重渲染。
   if (!snapshot?.deviceId || !isDesktopDevice(snapshot.platform)) return hosts;
-  const name = snapshot.deviceName?.trim() || snapshot.deviceId.slice(0, 8);
+  const name = deviceDisplayName(snapshot.deviceId, snapshot.deviceName || hosts.find((host) => host.deviceId === snapshot.deviceId)?.name);
   const index = hosts.findIndex((host) => host.deviceId === snapshot.deviceId);
   if (index < 0) {
     return sortHosts([...hosts, { deviceId: snapshot.deviceId, name, online: Boolean(snapshot.online) }]);
@@ -92,6 +93,8 @@ export interface MobileVoiceDictionarySnapshot {
   fetchedAt: number;
   /** 被控端上报的版本向量 `{nodeId: 最大 HLC}`;老版本被控端没有。 */
   stateVector?: Record<string, string>;
+  /** 桌面生成投影的时间;有则优先于 fetchedAt 做并列时的先后判断。 */
+  emittedAt?: number;
 }
 
 /**
@@ -121,18 +124,49 @@ export interface MobileVoiceDictionarySnapshot {
  * 的快照)。两份都带时:一方包含另一方就选包含者;互不包含(真并发)时没有正确答案,
  * 退回按拉取时间取较新的。
  */
-function isFresherThan(
+export function isFresherMobileVoiceDictionarySnapshot(
   candidate: MobileVoiceDictionarySnapshot,
   best: MobileVoiceDictionarySnapshot,
+): boolean {
+  return compareSnapshotFreshness(candidate, best, (left, right) => left.fetchedAt > right.fetchedAt);
+}
+
+/** 同一 host 入站防倒灌:并列时比桌面发出时间,不用手机到达时间。 */
+export function isFresherSameHostMobileVoiceDictionarySnapshot(
+  candidate: MobileVoiceDictionarySnapshot,
+  best: MobileVoiceDictionarySnapshot,
+): boolean {
+  return compareSnapshotFreshness(candidate, best, isLaterByEmittedAt);
+}
+
+function compareSnapshotFreshness(
+  candidate: MobileVoiceDictionarySnapshot,
+  best: MobileVoiceDictionarySnapshot,
+  isLater: (
+    candidate: MobileVoiceDictionarySnapshot,
+    best: MobileVoiceDictionarySnapshot,
+  ) => boolean,
 ): boolean {
   if (candidate.stateVector && best.stateVector) {
     const candidateDominates = dominates(candidate.stateVector, best.stateVector);
     const bestDominates = dominates(best.stateVector, candidate.stateVector);
     if (candidateDominates !== bestDominates) return candidateDominates;
-    return candidate.fetchedAt > best.fetchedAt;
+    return isLater(candidate, best);
   }
   if (candidate.stateVector) return true;
   if (best.stateVector) return false;
+  return isLater(candidate, best);
+}
+
+function isLaterByEmittedAt(
+  candidate: MobileVoiceDictionarySnapshot,
+  best: MobileVoiceDictionarySnapshot,
+): boolean {
+  if (candidate.emittedAt !== undefined && best.emittedAt !== undefined) {
+    return candidate.emittedAt > best.emittedAt;
+  }
+  if (candidate.emittedAt !== undefined) return true;
+  if (best.emittedAt !== undefined) return false;
   return candidate.fetchedAt > best.fetchedAt;
 }
 
@@ -152,7 +186,7 @@ export function buildMobileVoiceDictionaryEntryViews(
   const maxAliases = options?.maxAliases ?? 3;
   const freshest = snapshots.reduce<MobileVoiceDictionarySnapshot | null>((best, snapshot) => {
     if (!snapshot || snapshot.fetchedAt <= 0) return best;
-    return !best || isFresherThan(snapshot, best) ? snapshot : best;
+    return !best || isFresherMobileVoiceDictionarySnapshot(snapshot, best) ? snapshot : best;
   }, null);
   if (!freshest) return [];
 

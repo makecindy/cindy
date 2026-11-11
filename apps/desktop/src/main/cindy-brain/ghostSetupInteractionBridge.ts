@@ -1,3 +1,6 @@
+import { readBotAuthorizationCard } from '../../shared/botAuthorization.js';
+import { notifyOauthCardClosed } from '../plugin-oauth/context.js';
+import { supportsRemotePluginOauth } from '../plugin-oauth/runtime.js';
 /**
  * Desktop interaction bridge for Host-owned plugin setup cards.
  *
@@ -11,8 +14,13 @@ import type {
   GhostSetupErrorCode,
   GhostSetupStepPhase,
 } from '../../shared/ghost.js';
+import { randomUUID } from 'node:crypto';
 import { GHOST_SECRET_VALUE_MAX_CHARS, isGhostSetupErrorCode } from '../../shared/ghost.js';
 import { MAKER_PUSH } from '../maker-ipc/channels.js';
+import {
+  isDesktopOnlyConfirmationRequestId,
+  projectDesktopOnlyConfirmationRequestId,
+} from './desktopOnlyConfirmationProjection.js';
 
 export interface GhostSetupInteractionStep {
   id: string;
@@ -30,6 +38,12 @@ export interface GhostSetupInteractionStep {
 }
 
 export interface GhostSetupInteractionSnapshot {
+  /** Presentation hint; only the dedicated Main bridge may execute OAuth remotely. */
+  remoteOauth?: true;
+  /** Only the ordinary Host-owned inline setup executor supports the signed input bridge. */
+  remoteSecret?: true;
+  /** Dedicated exact-host connection form; never generic remote settings access. */
+  remoteConnection?: true;
   kind: 'plugin_setup';
   requestId: string;
   revision: number;
@@ -100,6 +114,8 @@ interface PendingSetupInteraction {
     responseTarget?: GhostSetupInteractionResponseTarget,
   ) => Promise<void> | void;
   onInlineSubmit?: (submit: GhostSetupInlineSubmit) => Promise<void> | void;
+  onConnectionCommitted?: (actionId: string) => void;
+  isTargetCurrent?: () => boolean;
 }
 
 export class GhostSetupInteractionBridge {
@@ -112,6 +128,8 @@ export class GhostSetupInteractionBridge {
     snapshot: GhostSetupInteractionSnapshot,
     onCommand: PendingSetupInteraction['onCommand'],
     onInlineSubmit?: PendingSetupInteraction['onInlineSubmit'],
+    onConnectionCommitted?: PendingSetupInteraction['onConnectionCommitted'],
+    isTargetCurrent?: PendingSetupInteraction['isTargetCurrent'],
   ): void {
     if (this.pending.has(snapshot.requestId)) {
       throw new Error(`plugin setup interaction already exists: ${snapshot.requestId}`);
@@ -122,6 +140,8 @@ export class GhostSetupInteractionBridge {
       completed: false,
       onCommand,
       ...(onInlineSubmit ? { onInlineSubmit } : {}),
+      ...(onConnectionCommitted ? { onConnectionCommitted } : {}),
+      ...(isTargetCurrent ? { isTargetCurrent } : {}),
     });
     try {
       this.broadcastSnapshot(sessionId, snapshot);
@@ -169,7 +189,7 @@ export class GhostSetupInteractionBridge {
    */
   submitInline(requestId: string, rawSubmit: unknown): boolean {
     const entry = this.pending.get(requestId);
-    if (!entry || entry.completed) return false;
+    if (!entry || entry.completed || entry.isTargetCurrent?.() === false) return false;
     const submit = parseGhostSetupInlineSubmit(rawSubmit);
     if (!submit || !entry.onInlineSubmit) {
       this.deps.logger?.warn('plugin setup interaction received invalid inline submission', {
@@ -186,14 +206,26 @@ export class GhostSetupInteractionBridge {
     return true;
   }
 
-  /**
-   * Retire a settled request from pending/actionable semantics while keeping
-   * its last snapshot addressable for a delayed visual dismissal.
-   */
+  /** Main-only receipt after the exact connection card has committed its vault write. */
+  connectionCommitted(requestId: string, actionId: string, expectedRevision: number): boolean {
+    const entry = this.pending.get(requestId);
+    if (!entry || entry.completed || entry.snapshot.terminal ||
+        entry.snapshot.revision !== expectedRevision || !entry.onConnectionCommitted ||
+        entry.isTargetCurrent?.() === false) return false;
+    const step = entry.snapshot.steps.find(step => step.action?.id === actionId &&
+      step.action.kind === 'manage_connection' && (step.phase === 'pending' || step.phase === 'failed'));
+    if (!step) return false;
+    // Main-only commit receipt. Never exposed through resolve or a Renderer command.
+    entry.onConnectionCommitted(actionId);
+    return true;
+  }
+
+  /** Retire a settled request while retaining its snapshot for delayed dismissal. */
   complete(requestId: string): boolean {
     const entry = this.pending.get(requestId);
     if (!entry || entry.completed) return false;
     entry.completed = true;
+    notifyOauthCardClosed(requestId);
     return true;
   }
 
@@ -201,6 +233,7 @@ export class GhostSetupInteractionBridge {
     const entry = this.pending.get(requestId);
     if (!entry) return false;
     this.pending.delete(requestId);
+    notifyOauthCardClosed(requestId);
     try {
       this.deps.broadcast(MAKER_PUSH.INTERACTION_DISMISSED, {
         sessionId: entry.sessionId,
@@ -237,13 +270,35 @@ export class GhostSetupInteractionBridge {
     }
   }
 
+  /** Account/data-owner boundary: cancel every actionable setup request before lease drain. */
+  cleanupAll(reason: 'session_closed' | 'session_aborted'): void {
+    for (const entry of Array.from(this.pending.values())) {
+      if (entry.completed) continue;
+      void Promise.resolve(
+        entry.onCommand({
+          kind: 'plugin_setup',
+          action: 'cancel',
+          expectedRevision: entry.snapshot.revision,
+          cleanupReason: reason,
+        }),
+      ).catch((error) => {
+        this.deps.logger?.warn('plugin setup account-boundary cleanup failed', {
+          requestId: entry.snapshot.requestId,
+          reason,
+          error: error instanceof Error ? error.message : String(error),
+        });
+      });
+    }
+  }
+
   pendingSnapshots(sessionId?: string): Array<{
     sessionId: string;
     request: GhostSetupInteractionSnapshot;
   }> {
     return Array.from(this.pending.values())
       .filter(
-        (entry) => !entry.completed && (sessionId === undefined || entry.sessionId === sessionId),
+        (entry) => !entry.completed && entry.isTargetCurrent?.() !== false &&
+          (sessionId === undefined || entry.sessionId === sessionId),
       )
       .map((entry) => ({ sessionId: entry.sessionId, request: entry.snapshot }));
   }
@@ -256,106 +311,10 @@ export class GhostSetupInteractionBridge {
   }
 }
 
-/**
- * Device-link only projection of a Host-owned setup snapshot.
- *
- * Desktop keeps richer presentation helpers (for example an external URL next
- * to a Secret field). Remote clients only receive the stable interaction
- * contract. Rebuilding every nested object from an allowlist also keeps future
- * Desktop-only helper metadata from crossing the device-link boundary.
- */
-export function sanitizeGhostSetupSnapshotForRemote(
-  snapshot: GhostSetupInteractionSnapshot,
-): GhostSetupInteractionSnapshot {
-  return {
-    kind: snapshot.kind,
-    requestId: snapshot.requestId,
-    revision: snapshot.revision,
-    ...(snapshot.terminal ? { terminal: true as const } : {}),
-    ghost: {
-      id: snapshot.ghost.id,
-      name: snapshot.ghost.name,
-      ...(snapshot.ghost.iconDataUrl ? { iconDataUrl: snapshot.ghost.iconDataUrl } : {}),
-    },
-    ...(snapshot.intro !== undefined ? { intro: snapshot.intro } : {}),
-    steps: snapshot.steps.map((step) => ({
-      id: step.id,
-      groupId: step.groupId,
-      groupMode: step.groupMode,
-      title: step.title,
-      description: step.description,
-      phase: step.phase,
-      ...(isGhostSetupErrorCode(step.errorCode) ? { errorCode: step.errorCode } : {}),
-      ...(step.action
-        ? {
-            action:
-              step.action.kind === 'inline_form'
-                ? {
-                    id: step.action.id,
-                    kind: step.action.kind,
-                    form: {
-                      fields: [
-                        {
-                          id: step.action.form.fields[0].id,
-                          type: step.action.form.fields[0].type,
-                          label: step.action.form.fields[0].label,
-                          ...(step.action.form.fields[0].description !== undefined
-                            ? { description: step.action.form.fields[0].description }
-                            : {}),
-                          ...(step.action.form.fields[0].placeholder !== undefined
-                            ? { placeholder: step.action.form.fields[0].placeholder }
-                            : {}),
-                          required: step.action.form.fields[0].required,
-                          maxLength: step.action.form.fields[0].maxLength,
-                        },
-                      ],
-                    },
-                  }
-                : {
-                    id: step.action.id,
-                    kind: step.action.kind,
-                  },
-          }
-        : {}),
-    })),
-  };
-}
+import { createInteractionProjection } from './interactionProjection.js';
+export const { sanitizeGhostSetupSnapshotForDesktop, sanitizeBotAuthorizationMetaForRemote, sanitizeGhostSetupSnapshotForRemote, sanitizeGhostSetupRequestForRemote, projectInteractionRequestForRemote } = createInteractionProjection(supportsRemotePluginOauth);
 
-/**
- * Preserve non-plugin interactions by identity while projecting plugin setup
- * snapshots at a remote transport boundary.
- */
-export function sanitizeGhostSetupRequestForRemote<T>(request: T): T {
-  if (
-    !request ||
-    typeof request !== 'object' ||
-    (request as { kind?: unknown }).kind !== 'plugin_setup'
-  ) {
-    return request;
-  }
-  return sanitizeGhostSetupSnapshotForRemote(
-    request as unknown as GhostSetupInteractionSnapshot,
-  ) as T;
-}
-
-function isDesktopOnlyConfirmationRequest(request: unknown): boolean {
-  if (!request || typeof request !== 'object' || Array.isArray(request)) return false;
-  const kind = (request as { kind?: unknown }).kind;
-  return (
-    kind === 'issue_confirm' || kind === 'rename_sessions_confirm' || kind === 'ghost_grant_confirm'
-  );
-}
-
-/**
- * Host-owned confirmations stay on the trusted Desktop. This keeps their
- * request ids and local payload details (for example file paths and previews)
- * out of Device Link while preserving the existing sanitized plugin-setup
- * projection used for remote status/cancellation.
- */
-export function projectInteractionRequestForRemote<T>(request: T): T | null {
-  if (isDesktopOnlyConfirmationRequest(request)) return null;
-  return sanitizeGhostSetupRequestForRemote(request);
-}
+export { projectInteractionDismissedForRemote } from './interactionProjection.js';
 
 export function projectPendingInteractionsForRemote<T extends { request: unknown }>(
   pending: T[],

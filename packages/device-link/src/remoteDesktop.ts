@@ -1,0 +1,837 @@
+import {
+  parseClipboardContentRequest,
+  type ClipboardContentRequest,
+} from "./remoteClipboard";
+import {
+  isDesktopAttemptId,
+  isDesktopIceCursor,
+  parseDesktopIceCandidates,
+  type RemoteDesktopIceRequest,
+} from "./remoteDesktopIce";
+/** Additive, same-account business channel. Never broadcast screen data or input. */
+export const REMOTE_DESKTOP_CHANNEL = "device-link:remote-desktop:v1";
+export const REMOTE_DESKTOP_LEASE_MS = 12_000;
+/** Human inactivity, independent of transport heartbeats. Zero disables it. */
+export const REMOTE_DESKTOP_IDLE_MINUTES = [0, 1, 5, 10, 15, 30] as const;
+export const REMOTE_DESKTOP_DEFAULT_IDLE_MINUTES = 5;
+export function isRemoteDesktopIdleMinutes(value: unknown): value is number {
+  return (
+    typeof value === "number" &&
+    REMOTE_DESKTOP_IDLE_MINUTES.some((minutes) => minutes === value)
+  );
+}
+export const REMOTE_DESKTOP_MAX_FRAME_BYTES = 180_000;
+
+export const REMOTE_DESKTOP_MAX_CLIPBOARD_CHARS = 16_384;
+
+export type DesktopInput =
+  | { kind: "move"; x: number; y: number }
+  | { kind: "button"; button: 0 | 1 | 2; down: boolean; x: number; y: number }
+  | { kind: "scroll"; dx: number; dy: number }
+  | { kind: "key"; code: string; down: boolean }
+  | { kind: "text"; text: string }
+  | { kind: "release" }
+  /** Live screen leases only: every current contact, 0..1 in the shown picture. */
+  | {
+      kind: "touch";
+      touches: LiveScreenTouch[];
+      edge?: LiveScreenEdge;
+    }
+  /** Live screen leases only: a button the screen's descriptor lists. */
+  | { kind: "press"; button: string };
+
+export type LiveScreenTouchPhase =
+  "began" | "moved" | "stationary" | "ended" | "cancelled";
+export type LiveScreenEdge = "bottom" | "top" | "left" | "right";
+export interface LiveScreenTouch {
+  id: number;
+  x: number;
+  y: number;
+  phase: LiveScreenTouchPhase;
+}
+const TOUCH_PHASES: readonly string[] = [
+  "began",
+  "moved",
+  "stationary",
+  "ended",
+  "cancelled",
+];
+const EDGES: readonly string[] = ["bottom", "top", "left", "right"];
+export const LIVE_SCREEN_MAX_TOUCHES = 10;
+export const LIVE_SCREEN_BUTTON_ID = /^[a-z0-9-]{1,32}$/;
+
+export const DESKTOP_KEY_CODES = [
+  ..."ABCDEFGHIJKLMNOPQRSTUVWXYZ".split("").map((key) => `Key${key}`),
+  ..."0123456789".split("").map((key) => `Digit${key}`),
+  ...Array.from({ length: 12 }, (_, i) => `F${i + 1}`),
+  "Enter",
+  "Escape",
+  "Tab",
+  "Space",
+  "Backspace",
+  "Delete",
+  "Insert",
+  "Home",
+  "End",
+  "PageUp",
+  "PageDown",
+  "ArrowUp",
+  "ArrowDown",
+  "ArrowLeft",
+  "ArrowRight",
+  "ShiftLeft",
+  "ControlLeft",
+  "AltLeft",
+  "MetaLeft",
+  "Minus",
+  "Equal",
+  "BracketLeft",
+  "BracketRight",
+  "Backslash",
+  "Semicolon",
+  "Quote",
+  "Backquote",
+  "Comma",
+  "Period",
+  "Slash",
+] as const;
+const codes = new Set<string>(DESKTOP_KEY_CODES);
+const unit = (v: unknown): v is number =>
+  typeof v === "number" && Number.isFinite(v) && v >= 0 && v <= 1;
+const delta = (v: unknown): v is number =>
+  typeof v === "number" && Number.isFinite(v) && Math.abs(v) <= 2000;
+
+export function isDesktopInput(value: unknown): value is DesktopInput {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return false;
+  const v = value as Record<string, unknown>;
+  switch (v.kind) {
+    case "release":
+      return true;
+    case "move":
+      return unit(v.x) && unit(v.y);
+    case "button":
+      return (
+        unit(v.x) &&
+        unit(v.y) &&
+        [0, 1, 2].includes(v.button as number) &&
+        typeof v.down === "boolean"
+      );
+    case "scroll":
+      return delta(v.dx) && delta(v.dy);
+    case "key":
+      return (
+        typeof v.code === "string" &&
+        codes.has(v.code) &&
+        typeof v.down === "boolean"
+      );
+    case "text":
+      return typeof v.text === "string" && v.text.length <= 4096;
+    case "press":
+      return (
+        typeof v.button === "string" && LIVE_SCREEN_BUTTON_ID.test(v.button)
+      );
+    case "touch": {
+      if (v.edge !== undefined && !EDGES.includes(v.edge as string))
+        return false;
+      if (
+        !Array.isArray(v.touches) ||
+        v.touches.length > LIVE_SCREEN_MAX_TOUCHES
+      )
+        return false;
+      const ids = new Set<number>();
+      return v.touches.every((touch: unknown) => {
+        if (!touch || typeof touch !== "object") return false;
+        const t = touch as Record<string, unknown>;
+        if (
+          !Number.isInteger(t.id) ||
+          (t.id as number) < 0 ||
+          (t.id as number) >= LIVE_SCREEN_MAX_TOUCHES ||
+          ids.has(t.id as number)
+        )
+          return false;
+        ids.add(t.id as number);
+        return (
+          unit(t.x) && unit(t.y) && TOUCH_PHASES.includes(t.phase as string)
+        );
+      });
+    }
+    default:
+      return false;
+  }
+}
+
+/** Input kinds that act on a plugin-provided live screen, never the desktop. */
+export function isLiveScreenOnlyInput(input: DesktopInput): boolean {
+  return input.kind === "touch" || input.kind === "press";
+}
+
+/** Viewer intent; the host owns the concrete encoder and capture parameters. */
+export type RemoteDesktopVideoQuality = "auto" | "saver" | "hd";
+export const REMOTE_DESKTOP_VIDEO_QUALITIES: readonly RemoteDesktopVideoQuality[] =
+  ["auto", "saver", "hd"];
+export interface RemoteDesktopVideoSettings {
+  fps: 30 | 60;
+  quality: RemoteDesktopVideoQuality;
+  audio: boolean;
+}
+type LegacyVideoBitrate = 0 | 2_000_000 | 8_000_000 | 20_000_000;
+const LEGACY_BITRATES: readonly number[] = [
+  0, 2_000_000, 8_000_000, 20_000_000,
+];
+/** Older hosts only accept `bitrate` and ignore `quality`; send both. */
+export function remoteDesktopVideoSettingsWire(
+  settings: RemoteDesktopVideoSettings,
+): RemoteDesktopVideoSettings & { bitrate: LegacyVideoBitrate } {
+  const bitrate =
+    settings.quality === "saver"
+      ? 2_000_000
+      : settings.quality === "hd"
+        ? 20_000_000
+        : 0;
+  return { ...settings, bitrate };
+}
+function legacyVideoQuality(bitrate: number): RemoteDesktopVideoQuality {
+  return bitrate === 0 ? "auto" : bitrate === 2_000_000 ? "saver" : "hd";
+}
+export interface RemoteDesktopDisplayMode {
+  id: string;
+  width: number;
+  height: number;
+  current: boolean;
+  /** Reported by the host OS; absent on older hosts or when unknown. */
+  native?: boolean;
+}
+export interface RemoteDesktopDisplay {
+  id: string;
+  name: string;
+  width: number;
+  height: number;
+}
+export interface RemoteDesktopWindow {
+  id: string;
+  title: string;
+  app: string;
+}
+export interface RemoteDesktopCapabilities {
+  version: 1;
+  enabled: boolean;
+  canControl: boolean;
+  platform: string;
+  displays: RemoteDesktopDisplay[];
+  /** Optional so older desktops retain their original connection behavior. */
+  permissions?: RemoteDesktopPermissions;
+  /** Supports resume and preserves explicit local disconnects during recovery. */
+  automaticReconnect?: boolean;
+  /** Explicit same-account replacement of the active viewer. */
+  connectionTakeover?: boolean;
+  /** Can lock the host on exit. New hosts also honor the lease's lockOnExit policy. */
+  lockOnExit?: boolean;
+  /** Host enforces human inactivity and locks before ending the lease. */
+  idleLock?: boolean;
+  videoSettings?: boolean;
+  trickleIce?: boolean;
+  systemAudio?: boolean;
+  displayModes?: boolean;
+  /** System mode changes can keep the lease and restore on disconnect. */
+  resolutionRestore?: boolean;
+  /** Can temporarily lay out the desktop at the viewer's requested dimensions. */
+  viewerDisplay?: boolean;
+  viewerDisplayRestore?: boolean;
+  /**
+   * Small control requests may also arrive over the media peer's `input-v1`
+   * data channel (see {@link isRemoteDesktopChannelRequest}). Viewers must not
+   * send them otherwise: older hosts end the session on unknown channel data.
+   */
+  channelRequests?: boolean;
+  /** Display changes requested with `keepVideo` may keep the live video stream. */
+  liveDisplaySwitch?: boolean;
+  /**
+   * `start` and display changes accept `control: true`: the host takes control
+   * (starts input) within the same request and replies `controlling: true`, so
+   * the viewer needs no separate `control` request.
+   */
+  autoControl?: boolean;
+  backgroundViewing?: boolean;
+  cursorOverlay?: boolean;
+  clipboardText?: boolean;
+  clipboardContent?: boolean;
+  clipboardSync?: boolean;
+  /** Bounded single-message clipboard payloads, with legacy chunk fallback. */
+  clipboardInline?: boolean;
+  privacyScreen?: boolean;
+  hostMute?: boolean;
+  /**
+   * Accepts `viewerHidden`: the host stops sending video while the viewer is
+   * hidden, keeping audio, input and the lease. Each new offer starts unpaused.
+   */
+  viewerHidden?: boolean;
+  /** Explicit host actions, independent of user-configured keyboard bindings. */
+  windowActions?: boolean;
+  workspaceNavigation?: boolean;
+  omarchyMenu?: boolean;
+  /**
+   * Accepts `start` with `handoff`: a live view of only the window a pending
+   * 代输入 step is about, with input confined to that window. The host picks the
+   * window; a viewer can never name one.
+   */
+  handoffWindow?: boolean;
+  /**
+   * Accepts `screens` and `start` with `screen`: a live view of a device screen
+   * a plugin provides (for example a simulator), with `touch` / `press` input
+   * routed to that plugin. Older hosts drop `screen` and end sessions on the
+   * new input kinds, so viewers send neither without this flag.
+   */
+  liveScreens?: boolean;
+}
+export type LiveScreenPlatform =
+  "ios" | "ipados" | "tvos" | "visionos" | "android";
+export const LIVE_SCREEN_PLATFORMS: readonly LiveScreenPlatform[] = [
+  "ios",
+  "ipados",
+  "tvos",
+  "visionos",
+  "android",
+];
+/** One screen offered by an enabled plugin, as listed by `screens`. */
+export interface RemoteLiveScreen {
+  plugin: string;
+  pluginName: string;
+  id: string;
+  name: string;
+  platform: LiveScreenPlatform;
+  state: "running" | "starting" | "off";
+  /** Tasks the plugin has bound this screen to. */
+  taskIds: string[];
+}
+export const LIVE_SCREEN_BUTTON_ICONS = [
+  "home",
+  "back",
+  "recents",
+  "lock",
+  "power",
+  "volume-up",
+  "volume-down",
+  "rotate-left",
+  "rotate-right",
+  "menu",
+  "play-pause",
+  "siri",
+  "shake",
+  "screenshot",
+] as const;
+export type LiveScreenButtonIcon = (typeof LIVE_SCREEN_BUTTON_ICONS)[number];
+export interface LiveScreenButton {
+  id: string;
+  icon: LiveScreenButtonIcon;
+  label: string;
+}
+/** Host-verified description of the plugin screen a live screen lease shows. */
+export interface RemoteDesktopLeaseScreen {
+  plugin: string;
+  id: string;
+  name: string;
+  platform: LiveScreenPlatform;
+  /** Share of the shorter side, 0..0.5. */
+  cornerRadius: number;
+  maxTouches: number;
+  keyboard: boolean;
+  buttons: LiveScreenButton[];
+}
+export const LIVE_SCREEN_ID = /^[A-Za-z0-9._:-]{1,128}$/;
+export const LIVE_SCREEN_PLUGIN_ID = /^[A-Za-z0-9._-]{1,160}$/;
+export type DesktopPermission = "screenRecording" | "accessibility";
+export type DesktopPermissionStatus =
+  "granted" | "missing" | "unknown" | "notRequired";
+export interface RemoteDesktopPermissions {
+  screenRecording: DesktopPermissionStatus;
+  accessibility: DesktopPermissionStatus;
+}
+export function isDesktopPermission(
+  value: unknown,
+): value is DesktopPermission {
+  return value === "screenRecording" || value === "accessibility";
+}
+export function desktopPermissionReady(
+  status: DesktopPermissionStatus,
+): boolean {
+  return status === "granted" || status === "notRequired";
+}
+export interface RemoteDesktopLease {
+  lease: string;
+  display: RemoteDesktopDisplay;
+  controlling: boolean;
+  /** Acknowledges the requested virtual mode when OS logical geometry differs. */
+  viewerDisplayRequest?: { width: number; height: number };
+  /** The display change kept the existing video stream; no new offer is needed. */
+  videoKept?: boolean;
+  /** A 代输入 live view: the video is this one window, and input stays inside it. */
+  window?: RemoteDesktopLeaseWindow;
+  /** A plugin live screen: the video is that screen, and input goes to the plugin. */
+  screen?: RemoteDesktopLeaseScreen;
+}
+/** Host-verified description of the single window a 代输入 live view shows. */
+export interface RemoteDesktopLeaseWindow {
+  app: string;
+  title?: string;
+}
+export type RemoteDesktopRequest =
+  | { op: "windowAction"; lease: string; action: "list" | "desktop" }
+  | {
+      op: "windowAction";
+      lease: string;
+      action: "workspaceLeft" | "workspaceRight" | "omarchyMenu";
+    }
+  | { op: "windowAction"; lease: string; action: "activate"; id: string }
+  | {
+      op: "privacyScreen";
+      lease: string;
+      enabled: boolean;
+      lockOnExit?: boolean;
+    }
+  | { op: "hostMute"; lease: string; enabled: boolean }
+  | { op: "viewerHidden"; lease: string; hidden: boolean }
+  | { op: "clipboardSync"; lease: string; enabled: boolean }
+  | { op: "clipboardVersion"; lease: string }
+  | RemoteDesktopIceRequest
+  | ClipboardContentRequest
+  | { op: "capabilities" }
+  /** Only to hosts advertising `liveScreens`. */
+  | { op: "screens" }
+  | { op: "permissions"; action: "check" | "guide" }
+  | {
+      op: "start";
+      displayId: string;
+      resume?: boolean;
+      takeover?: boolean;
+      control?: boolean;
+      lockOnExit?: boolean;
+      idleTimeoutMinutes?: number;
+      /** 代输入 request id; only to hosts advertising `handoffWindow`. */
+      handoff?: string;
+      /** A listed plugin screen; only to hosts advertising `liveScreens`. */
+      screen?: { plugin: string; id: string };
+    }
+  | {
+      op: "heartbeat";
+      lease: string;
+      lockOnExit?: boolean;
+      idleTimeoutMinutes?: number;
+    }
+  | { op: "stop"; lease: string; lockScreen?: boolean }
+  /**
+   * A live screen's upright size, answered once it differs from `known` (or
+   * after a few seconds), so the viewer follows a turn as it happens.
+   */
+  | {
+      op: "screenShape";
+      lease: string;
+      known?: { width: number; height: number };
+    }
+  | { op: "frame"; lease: string; cursorOverlay?: boolean }
+  | { op: "control" | "presentation"; lease: string; enabled: boolean }
+  | { op: "input"; lease: string; sequence: number; events: DesktopInput[] }
+  | {
+      op: "offer";
+      lease: string;
+      sdp: string;
+      attemptId?: string;
+      cursorOverlay?: boolean;
+      settings?: RemoteDesktopVideoSettings;
+    }
+  | { op: "clipboard"; lease: string; action: "copy" }
+  | { op: "clipboard"; lease: string; action: "paste"; text: string }
+  | { op: "displayModes"; lease: string }
+  | {
+      op: "viewerDisplay";
+      lease: string;
+      width: number;
+      height: number;
+      keepVideo?: boolean;
+      control?: boolean;
+    }
+  | {
+      op: "restoreViewerDisplay";
+      lease: string;
+      keepVideo?: boolean;
+      control?: boolean;
+    }
+  | {
+      op: "resolution";
+      lease: string;
+      modeId: string;
+      temporary?: boolean;
+      keepVideo?: boolean;
+      control?: boolean;
+    };
+
+export function parseRemoteDesktopRequest(
+  value: unknown,
+): RemoteDesktopRequest {
+  if (!value || typeof value !== "object" || Array.isArray(value))
+    throw new Error("INVALID_REQUEST");
+  const v = value as Record<string, unknown>;
+  const idleTimeout = () => {
+    if (v.idleTimeoutMinutes === undefined) return {};
+    if (!isRemoteDesktopIdleMinutes(v.idleTimeoutMinutes))
+      throw new Error("INVALID_REQUEST");
+    return { idleTimeoutMinutes: v.idleTimeoutMinutes };
+  };
+  const lockOnExit = () => {
+    if (v.lockOnExit !== undefined && typeof v.lockOnExit !== "boolean")
+      throw new Error("INVALID_REQUEST");
+    return typeof v.lockOnExit === "boolean"
+      ? { lockOnExit: v.lockOnExit }
+      : {};
+  };
+  // Optional on start and display changes; older hosts drop it and the viewer
+  // asks for control separately.
+  const control = () => {
+    if (v.control !== undefined && typeof v.control !== "boolean")
+      throw new Error("INVALID_REQUEST");
+    return v.control === true ? { control: true as const } : {};
+  };
+  if (v.op === "capabilities" || v.op === "screens") return { op: v.op };
+  if (v.op === "permissions" && (v.action === "check" || v.action === "guide"))
+    return { op: v.op, action: v.action };
+  if (
+    v.op === "start" &&
+    typeof v.displayId === "string" &&
+    v.displayId.length <= 128
+  ) {
+    if (v.resume !== undefined && typeof v.resume !== "boolean")
+      throw new Error("INVALID_REQUEST");
+    if (v.takeover !== undefined && typeof v.takeover !== "boolean")
+      throw new Error("INVALID_REQUEST");
+    if (v.takeover === true && v.resume === true)
+      throw new Error("INVALID_REQUEST");
+    if (
+      v.handoff !== undefined &&
+      (typeof v.handoff !== "string" ||
+        !/^[A-Za-z0-9_-]{1,128}$/.test(v.handoff))
+    )
+      throw new Error("INVALID_REQUEST");
+    const screen = v.screen as Record<string, unknown> | undefined;
+    if (
+      screen !== undefined &&
+      (!screen ||
+        typeof screen !== "object" ||
+        typeof screen.plugin !== "string" ||
+        !LIVE_SCREEN_PLUGIN_ID.test(screen.plugin) ||
+        typeof screen.id !== "string" ||
+        !LIVE_SCREEN_ID.test(screen.id) ||
+        v.handoff !== undefined)
+    )
+      throw new Error("INVALID_REQUEST");
+    return {
+      op: v.op,
+      displayId: v.displayId,
+      ...(typeof v.handoff === "string" ? { handoff: v.handoff } : {}),
+      ...(screen
+        ? {
+            screen: {
+              plugin: screen.plugin as string,
+              id: screen.id as string,
+            },
+          }
+        : {}),
+      ...(v.takeover === true ? { takeover: true } : {}),
+      ...(typeof v.resume === "boolean" ? { resume: v.resume } : {}),
+      ...control(),
+      ...lockOnExit(),
+      ...idleTimeout(),
+    };
+  }
+  if (typeof v.lease !== "string" || v.lease.length > 128 || !v.lease)
+    throw new Error("INVALID_LEASE");
+  const lease = v.lease;
+  if (v.op === "windowAction") {
+    if (
+      v.action === "list" ||
+      v.action === "desktop" ||
+      v.action === "workspaceLeft" ||
+      v.action === "workspaceRight" ||
+      v.action === "omarchyMenu"
+    )
+      return { op: v.op, lease, action: v.action };
+    if (
+      v.action === "activate" &&
+      typeof v.id === "string" &&
+      /^0x[a-f0-9]{1,16}$/.test(v.id)
+    )
+      return { op: v.op, lease, action: v.action, id: v.id };
+    throw new Error("INVALID_REQUEST");
+  }
+  if (v.op === "privacyScreen" && typeof v.enabled === "boolean") {
+    if (v.lockOnExit !== undefined && typeof v.lockOnExit !== "boolean")
+      throw new Error("INVALID_REQUEST");
+    return {
+      op: v.op,
+      lease,
+      enabled: v.enabled,
+      ...(typeof v.lockOnExit === "boolean"
+        ? { lockOnExit: v.lockOnExit }
+        : {}),
+    };
+  }
+  if (
+    (v.op === "privacyScreen" ||
+      v.op === "clipboardSync" ||
+      v.op === "hostMute") &&
+    typeof v.enabled === "boolean"
+  )
+    return { op: v.op, lease, enabled: v.enabled };
+  if (v.op === "clipboardVersion") return { op: v.op, lease };
+  if (v.op === "viewerHidden" && typeof v.hidden === "boolean")
+    return { op: v.op, lease, hidden: v.hidden };
+  if (v.op === "ice") {
+    if (!isDesktopAttemptId(v.attemptId) || !isDesktopIceCursor(v.after))
+      throw new Error("INVALID_REQUEST");
+    return {
+      op: "ice",
+      lease,
+      attemptId: v.attemptId,
+      after: v.after,
+      candidates: parseDesktopIceCandidates(v.candidates),
+    };
+  }
+  if (v.op === "clipboardContent")
+    return parseClipboardContentRequest(v, lease);
+  if (v.op === "clipboard") {
+    if (v.action === "copy") return { op: v.op, lease, action: "copy" };
+    if (
+      v.action === "paste" &&
+      typeof v.text === "string" &&
+      v.text.length > 0 &&
+      v.text.length <= REMOTE_DESKTOP_MAX_CLIPBOARD_CHARS
+    )
+      return { op: v.op, lease, action: "paste", text: v.text };
+    throw new Error("INVALID_REQUEST");
+  }
+  if (v.op === "frame") {
+    if (v.cursorOverlay !== undefined && typeof v.cursorOverlay !== "boolean")
+      throw new Error("INVALID_REQUEST");
+    return {
+      op: v.op,
+      lease,
+      ...(v.cursorOverlay === true ? { cursorOverlay: true } : {}),
+    };
+  }
+  if (v.op === "stop") {
+    if (v.lockScreen !== undefined && typeof v.lockScreen !== "boolean")
+      throw new Error("INVALID_REQUEST");
+    return {
+      op: v.op,
+      lease,
+      ...(v.lockScreen === true ? { lockScreen: true } : {}),
+    };
+  }
+  if (v.op === "heartbeat")
+    return { op: v.op, lease, ...lockOnExit(), ...idleTimeout() };
+  if (v.op === "screenShape") {
+    if (v.known === undefined) return { op: v.op, lease };
+    const known = v.known as { width?: unknown; height?: unknown } | null;
+    if (
+      !known ||
+      typeof known !== "object" ||
+      ![known.width, known.height].every(
+        (size) =>
+          typeof size === "number" &&
+          Number.isInteger(size) &&
+          size > 0 &&
+          size <= 16384,
+      )
+    )
+      throw new Error("INVALID_REQUEST");
+    return {
+      op: v.op,
+      lease,
+      known: { width: known.width as number, height: known.height as number },
+    };
+  }
+  if (
+    (v.op === "control" || v.op === "presentation") &&
+    typeof v.enabled === "boolean"
+  )
+    return { op: v.op, lease, enabled: v.enabled };
+  // Optional on display changes only; older hosts drop it and tear down video.
+  const keepVideo = () => {
+    if (v.keepVideo !== undefined && typeof v.keepVideo !== "boolean")
+      throw new Error("INVALID_REQUEST");
+    return v.keepVideo === true ? { keepVideo: true as const } : {};
+  };
+  if (v.op === "restoreViewerDisplay")
+    return { op: v.op, lease, ...keepVideo(), ...control() };
+  if (v.op === "displayModes") return { op: v.op, lease };
+  if (v.op === "viewerDisplay") {
+    if (
+      ![v.width, v.height].every(
+        (size) =>
+          typeof size === "number" &&
+          Number.isInteger(size) &&
+          size >= 320 &&
+          size <= 2560,
+      )
+    )
+      throw new Error("INVALID_REQUEST");
+    return {
+      op: v.op,
+      lease,
+      width: v.width as number,
+      height: v.height as number,
+      ...keepVideo(),
+      ...control(),
+    };
+  }
+  if (
+    v.op === "resolution" &&
+    typeof v.modeId === "string" &&
+    /^[0-9]{1,10}$/.test(v.modeId)
+  ) {
+    if (v.temporary !== undefined && typeof v.temporary !== "boolean")
+      throw new Error("INVALID_REQUEST");
+    return {
+      op: v.op,
+      lease,
+      modeId: v.modeId,
+      ...(v.temporary === true ? { temporary: true, ...control() } : {}),
+      ...keepVideo(),
+    };
+  }
+  if (v.op === "offer" && typeof v.sdp === "string" && v.sdp.length <= 64_000) {
+    if (v.cursorOverlay !== undefined && typeof v.cursorOverlay !== "boolean")
+      throw new Error("INVALID_REQUEST");
+    if (v.attemptId !== undefined && !isDesktopAttemptId(v.attemptId))
+      throw new Error("INVALID_REQUEST");
+    const overlay = {
+      ...(v.cursorOverlay === true ? { cursorOverlay: true } : {}),
+      ...(v.attemptId === undefined ? {} : { attemptId: v.attemptId }),
+    };
+    if (v.settings === undefined)
+      return { op: v.op, lease, sdp: v.sdp, ...overlay };
+    const settings = v.settings as Record<string, unknown> | null;
+    // Older viewers send only `bitrate`; newer ones send `quality` plus a
+    // legacy bitrate, which also covers tiers this host does not know yet.
+    const quality = REMOTE_DESKTOP_VIDEO_QUALITIES.includes(
+      settings?.quality as RemoteDesktopVideoQuality,
+    )
+      ? (settings!.quality as RemoteDesktopVideoQuality)
+      : LEGACY_BITRATES.includes(settings?.bitrate as number)
+        ? legacyVideoQuality(settings!.bitrate as number)
+        : null;
+    if (
+      !settings ||
+      (settings.fps !== 30 && settings.fps !== 60) ||
+      !quality ||
+      typeof settings.audio !== "boolean"
+    )
+      throw new Error("INVALID_REQUEST");
+    return {
+      op: v.op,
+      lease,
+      sdp: v.sdp,
+      ...overlay,
+      settings: { fps: settings.fps, quality, audio: settings.audio },
+    };
+  }
+  if (
+    v.op === "input" &&
+    Number.isSafeInteger(v.sequence) &&
+    (v.sequence as number) >= 0 &&
+    Array.isArray(v.events) &&
+    v.events.length <= 64 &&
+    v.events.every(isDesktopInput) &&
+    JSON.stringify(v.events).length <= 16_384
+  ) {
+    return {
+      op: v.op,
+      lease,
+      sequence: v.sequence as number,
+      events: v.events,
+    };
+  }
+  throw new Error("INVALID_REQUEST");
+}
+
+/**
+ * Control requests the viewer may send over the media data channel instead of
+ * the device-link relay. They are small, lease-scoped and keep their ordering
+ * with input. Lease setup, signalling, frames, credentials, display changes
+ * (which restart the channel) and large listings stay on the relay.
+ */
+export const REMOTE_DESKTOP_CHANNEL_OPS: ReadonlySet<string> = new Set([
+  "control",
+  "presentation",
+  "hostMute",
+  "privacyScreen",
+  "windowAction",
+  "displayModes",
+  "clipboardSync",
+  "clipboardVersion",
+  "screenShape",
+]);
+export const REMOTE_DESKTOP_CHANNEL_MAX_ID_CHARS = 64;
+/** Fits one SCTP message on every shipped receiver. */
+export const REMOTE_DESKTOP_CHANNEL_MAX_BYTES = 32_768;
+export const REMOTE_DESKTOP_CHANNEL_TIMEOUT_MS = 8_000;
+
+export function isRemoteDesktopChannelRequest(
+  request: RemoteDesktopRequest,
+): boolean {
+  return (
+    REMOTE_DESKTOP_CHANNEL_OPS.has(request.op) &&
+    !(request.op === "windowAction" && request.action === "list")
+  );
+}
+
+/** Viewer to host, over `input-v1`. */
+export interface RemoteDesktopChannelRequestMessage {
+  type: "request";
+  id: string;
+  request: RemoteDesktopRequest;
+}
+/** Host to viewer, over `input-v1`. `error` is a stable code. */
+export type RemoteDesktopChannelReply =
+  | { type: "reply"; id: string; ok: true; result: unknown }
+  | { type: "reply"; id: string; ok: false; error: string };
+
+export function isRemoteDesktopChannelId(value: unknown): value is string {
+  return (
+    typeof value === "string" &&
+    value.length > 0 &&
+    value.length <= REMOTE_DESKTOP_CHANNEL_MAX_ID_CHARS &&
+    /^[A-Za-z0-9_-]+$/.test(value)
+  );
+}
+
+/** Parses an incoming channel request; null when it is not one. */
+export function parseRemoteDesktopChannelRequest(
+  value: unknown,
+): RemoteDesktopChannelRequestMessage | null {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return null;
+  const v = value as Record<string, unknown>;
+  if (v.type !== "request" || !isRemoteDesktopChannelId(v.id)) return null;
+  const request = parseRemoteDesktopRequest(v.request);
+  if (!isRemoteDesktopChannelRequest(request))
+    throw new Error("INVALID_REQUEST");
+  return { type: "request", id: v.id, request };
+}
+
+/** Parses a channel reply; null when it is not one. */
+export function parseRemoteDesktopChannelReply(
+  value: unknown,
+): RemoteDesktopChannelReply | null {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return null;
+  const v = value as Record<string, unknown>;
+  if (v.type !== "reply" || !isRemoteDesktopChannelId(v.id)) return null;
+  if (v.ok === true)
+    return { type: "reply", id: v.id, ok: true, result: v.result };
+  return {
+    type: "reply",
+    id: v.id,
+    ok: false,
+    error:
+      typeof v.error === "string" && /^[A-Z][A-Z0-9_]{0,63}$/.test(v.error)
+        ? v.error
+        : "DESKTOP_REQUEST_FAILED",
+  };
+}

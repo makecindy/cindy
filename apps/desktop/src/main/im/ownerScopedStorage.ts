@@ -11,8 +11,10 @@ import path from 'node:path';
 import type { IMHost, IMSecretReadResult } from '@cindy/im';
 
 import {
+  activeOwnerScopeKey,
   dataOwnerStorageKey,
   getActiveAppSession,
+  isAppSessionBoundaryPending,
   ownerScopedUserDataPath,
 } from '../appSessionState.js';
 import { hasLegacyOwnerNamespaceClaim } from '../ownerNamespaceMigration.js';
@@ -36,6 +38,19 @@ function currentVerifiedCloudOwnerKey(): string | null {
   const session = getActiveAppSession();
   if (session.mode !== 'cloud' || !session.dataOwnerId) return null;
   return dataOwnerStorageKey(session.dataOwnerId);
+}
+
+/**
+ * 写 owner 域设置前的账号边界校验(PR #5155 review P1): 进入 handler 时快照的
+ * owner scope 仍未变、且没有登出/切号 boundary 在途, 才允许把本次保存写进 owner
+ * 域存储 —— boundary 在途时「当前 owner」处于 A→B 的过渡, 写入会落进登出命名空间
+ * 或下一个账号; 不满足即抛错失败重试(与 botModelRouteReconciler / SUBAGENT 设置
+ * 同口径: boundary 在途一律 fail-closed)。
+ */
+export function assertOwnerScopeSettledForWrite(expectedScopeKey: string): void {
+  if (isAppSessionBoundaryPending() || activeOwnerScopeKey() !== expectedScopeKey) {
+    throw new Error('app session owner boundary active or changed; retry the save');
+  }
 }
 
 function readLegacyOwnerKey(): string | null | undefined {

@@ -1,37 +1,57 @@
-/**
- * TextLightbox
- * ---------------------------------------------------------------------------
- * Full-screen text-file preview overlay rendered via React Portal.
- *
- * text-lightbox spec (2026-04-19):
- *   F3  Overlay via --overlay-lightbox + centered Doc Card (80vw/80vh, 12px radius)
- *   F4  Toolbar (file-text · name · · · size · external-link · copy) +
- *       scrollable body containing the plain-text content.
- *   F5  超限状态（> OVERSIZE_LIMIT_MB）：triangle-alert + title + dynamic copy +
- *       单个 Black-Pill 系统打开 CTA。
- *   F6  Esc OR click on Overlay backdrop closes; clicks inside Doc Card stay.
- *
- * Sibling: ImageLightbox.tsx — same Portal/scroll-lock/Esc/fade pattern.
- * Difference: this lightbox has interactive widgets (Toolbar, body), so the
- * backdrop is a separate background button behind the Doc Card. Per F6, only
- * the backdrop and Esc close.
- */
-
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { usePreviewFocusReturn } from './PreviewChrome';
+import { MarkdownMermaidBlock } from './MarkdownMermaidBlock';
+import { openHtmlFileByPreference } from './useOpenWithMenu';
+import { DocSearchBar } from '@/features/cc-agent/workdir-browse/DocSearchBar';
+import {
+  AttachmentCollectionPreview,
+  useOpeningCollection,
+  ActivePreviewCollection,
+} from './AttachmentCollection';
+import { attachmentPreviewKind } from '@cindy/maker-shared/attachment-preview';
+import { FocusScope } from '@radix-ui/react-focus-scope';
+import { toLocalFileUrl } from '@/lib/localPathResolver';
+import {
+  PREVIEW_PANEL_CLASS,
+  PREVIEW_PANEL_STYLE,
+  PreviewHeader,
+  PreviewFooter,
+  PreviewButton,
+  PreviewScrim,
+} from './PreviewChrome';
+import { DropdownMenuItem } from '@/components/ui/dropdown-menu';
+import { Button } from '@/components/ui/button';
+import { shouldShowOpenPathError } from '../../../shared/openPathResult';
+import {
+  lazy,
+  Suspense,
+  useCallback,
+  useContext, useEffect, useMemo, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
-import { Copy, ExternalLink, FileText, Folder, TriangleAlert, X } from 'lucide-react';
+import { isLightboxCovered } from '@/lib/lightboxLayer';
+import { acquireFindInPage, isPreviewPopupKeyEvent } from '@/components/find-in-page/findInPageOwnership';
+import { useAppShortcut } from '@/hooks/useAppShortcut';
+import { Copy, Search, WrapText, ListOrdered, ExternalLink, TriangleAlert } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
 
 import { cn, basename } from '@/lib/utils';
+import { formatBytes } from './formatBytes';
 import { Spinner } from '@/components/ui/spinner';
 import { toast } from '@/lib/toast';
-import { Tooltip } from '@/components/ui/tooltip';
 import { detectRenderable } from '@/lib/textPreview';
 import { isRemoteFileOrigin } from '@/lib/sessionFileOrigin';
-import { chatFileErrorText, fetchChatFileToCache } from '@/lib/remoteFileOpen';
+import { observeFileTransferProgressText } from '@/lib/fileTransferProgress';
+import {
+  chatFileErrorText,
+  downloadRemoteChatEntry,
+  fetchChatFileToCache,
+} from '@/lib/remoteFileOpen';
 import { useChatSessionFile } from './ChatSessionFileContext';
 import { PlaintextEditor, type PlaintextEditorHandle } from '@/components/markdown/PlaintextEditor';
 import { MarkdownRenderer } from './MarkdownRenderer';
+
+const FileLightbox = lazy(() =>
+  import('./FileLightbox').then((module) => ({ default: module.FileLightbox })),
+);
 
 interface TextLightboxProps {
   /** Absolute path of the file being previewed. */
@@ -55,24 +75,6 @@ interface TextLightboxProps {
 const OVERSIZE_LIMIT_MB = 10;
 const OVERSIZE_LIMIT = OVERSIZE_LIMIT_MB * 1024 * 1024;
 const TEXT_LIGHTBOX_OVERLAY_Z_INDEX = 9999;
-const TEXT_LIGHTBOX_TOOLTIP_STYLE = {
-  zIndex: TEXT_LIGHTBOX_OVERLAY_Z_INDEX + 1,
-} as const;
-
-/**
- * Format a byte count for display in the toolbar (`3.4 MB`, `812 KB`, `73 B`).
- * Mirrors the spec wording — no thin-space, no parentheses, just "<n> <unit>".
- */
-export function formatBytes(bytes: number): string {
-  if (!Number.isFinite(bytes) || bytes < 0) return '0 B';
-  if (bytes < 1024) return `${bytes} B`;
-  const kb = bytes / 1024;
-  if (kb < 1024) return `${kb < 10 ? kb.toFixed(1) : Math.round(kb)} KB`;
-  const mb = kb / 1024;
-  if (mb < 1024) return `${mb < 10 ? mb.toFixed(1) : mb.toFixed(1)} MB`;
-  const gb = mb / 1024;
-  return `${gb.toFixed(1)} GB`;
-}
 
 /**
  * Markdown line-scroll anchor selection (pure, unit-tested).
@@ -104,8 +106,52 @@ type LoadState =
   | { phase: 'oversize'; size: number; limitMb: number }
   | { phase: 'error'; message: string };
 
-export function TextLightbox({ filePath, fileName, initialLine, triggerRef, onClose }: TextLightboxProps) {
+export function TextLightbox(props: TextLightboxProps) {
+  const items = useOpeningCollection(props.filePath);
+  if (items)
+    return (
+      <AttachmentCollectionPreview
+        items={items}
+        source={props.filePath}
+        initialLine={props.initialLine}
+        triggerRef={props.triggerRef}
+        onClose={props.onClose}
+      />
+    );
+  const kind = attachmentPreviewKind(props.filePath);
+  return kind === 'text' ||
+    kind === 'markdown' ||
+    kind === 'html' ||
+    /\.(mmd|mermaid)$/i.test(props.filePath) ? (
+    <TextDocumentLightbox {...props} />
+  ) : (
+    <Suspense
+      fallback={createPortal(
+        <>
+          <PreviewScrim onClose={props.onClose} />
+          <div
+            className={cn('z-[9999] flex items-center justify-center', PREVIEW_PANEL_CLASS)}
+            style={PREVIEW_PANEL_STYLE}
+          >
+            <PreviewHeader
+              name={props.fileName ?? basename(props.filePath)}
+              onClose={props.onClose}
+            />
+            <Spinner />
+          </div>
+        </>,
+        document.body,
+      )}
+    >
+      <FileLightbox {...props} />
+    </Suspense>
+  );
+}
+
+function TextDocumentLightbox({ filePath, fileName, initialLine, triggerRef, onClose }: TextLightboxProps) {
   const { t } = useTranslation();
+  const restorePreviewFocus = usePreviewFocusReturn();
+  const collection = useContext(ActivePreviewCollection);
   const [isVisible, setIsVisible] = useState(false);
   const [loadState, setLoadState] = useState<LoadState>({ phase: 'loading' });
   // 远程会话(device-link / SSH):filePath 是远端绝对路径,内容经 chat-file:fetch
@@ -114,9 +160,9 @@ export function TextLightbox({ filePath, fileName, initialLine, triggerRef, onCl
   const sessionFileCtx = useChatSessionFile();
   const remoteOrigin = isRemoteFileOrigin(sessionFileCtx.origin) ? sessionFileCtx.origin : null;
   const [remoteCopy, setRemoteCopy] = useState<{ cachePath: string; stale: boolean } | null>(null);
-  // 远端取回进度(chat-file:fetch 的 TRANSFER push,relPath 键 = 原始 absPath)。
-  const [fetchProgress, setFetchProgress] = useState<{ received: number; total: number } | null>(null);
+  const [fetchProgressText, setFetchProgressText] = useState<string | null>(null);
   const isClosingRef = useRef(false);
+  const overlayRef = useRef<HTMLDivElement | null>(null);
   const bodyScrollRef = useRef<HTMLDivElement | null>(null);
   const editorRef = useRef<PlaintextEditorHandle>(null);
   const initialLineScrollKeyRef = useRef<string | null>(null);
@@ -136,6 +182,37 @@ export function TextLightbox({ filePath, fileName, initialLine, triggerRef, onCl
   }, [filePath]);
 
   const [showSpinner, setShowSpinner] = useState(false);
+
+  const [showSource, setShowSource] = useState(false);
+  const [wordWrap, setWordWrap] = useState(true);
+  const [lineNumbers, setLineNumbers] = useState(true);
+  const [search, setSearch] = useState(false);
+  const [query, setQuery] = useState('');
+  const [matches, setMatches] = useState(0);
+  const [match, setMatch] = useState(0);
+  const searchInput = useRef<HTMLInputElement>(null);
+  const [retry, setRetry] = useState(0);
+  const openSearch = () => {
+    setShowSource(true);
+    setSearch(true);
+  };
+  useEffect(() => {
+    if (!search) {
+      editorRef.current?.search.clear();
+      return;
+    }
+    searchInput.current?.focus();
+    const count = editorRef.current?.search.findAll(query) ?? 0;
+    setMatches(count);
+    setMatch(0);
+    if (count) editorRef.current?.search.setActive(0);
+  }, [search, query, showSource, loadState.phase]);
+  const selectMatch = (delta: number) => {
+    if (!matches) return;
+    const next = (match + delta + matches) % matches;
+    setMatch(next);
+    editorRef.current?.search.setActive(next);
+  };
 
   const contentReady =
     loadState.phase === 'oversize' ||
@@ -178,14 +255,68 @@ export function TextLightbox({ filePath, fileName, initialLine, triggerRef, onCl
     return () => cancelAnimationFrame(raf);
   }, []);
 
-  // F6: Esc key listener
+  // Rendered Markdown delegates to the shared search host. Source/plain text
+  // owns editor search; the claim makes global window-capture find yield first.
+  useEffect(acquireFindInPage, []);
+  const isCovered = useCallback(() => !overlayRef.current || isLightboxCovered(overlayRef.current) ||
+    overlayRef.current.contains(document.fullscreenElement), []);
+  useAppShortcut('find-in-page', (event) => {
+    if (event.defaultPrevented || event.keyCode === 229 || isCovered() ||
+        (renderable.kind === 'markdown' && !showSource)) return false;
+    setShowSource(true);
+    setSearch(true);
+    queueMicrotask(() => {
+      searchInput.current?.focus();
+      searchInput.current?.select();
+    });
+    return true;
+  }, { stopImmediate: true });
+
+  // Escape runs after menus/tooltips have claimed it.
   useEffect(() => {
-    const handler = (e: KeyboardEvent) => {
-      if (e.key === 'Escape') handleClose();
+    let fullscreen = Boolean(overlayRef.current?.contains(document.fullscreenElement));
+    let exitedFullscreenAt = -Infinity;
+    let handledFullscreenExit = false;
+    const onFullscreenChange = () => {
+      const next = Boolean(overlayRef.current?.contains(document.fullscreenElement));
+      if (fullscreen && !next) {
+        exitedFullscreenAt = handledFullscreenExit ? -Infinity : performance.now();
+      }
+      fullscreen = next;
+      handledFullscreenExit = false;
     };
-    document.addEventListener('keydown', handler);
-    return () => document.removeEventListener('keydown', handler);
-  }, [handleClose]);
+    const onKeyUp = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') exitedFullscreenAt = -Infinity;
+    };
+    const onEscape = (e: KeyboardEvent) => {
+      if (e.key !== 'Escape' || e.repeat || e.defaultPrevented || e.isComposing || e.keyCode === 229) return;
+      const overlay = overlayRef.current;
+      if (!overlay || isLightboxCovered(overlay)) return;
+      if (isPreviewPopupKeyEvent(e, overlay)) return;
+      const ownsNativeFullscreen = overlay.contains(document.fullscreenElement);
+      // Chromium may exit fullscreen before delivering this same keydown,
+      // even with find closed. Preserve the document in either event order.
+      if (fullscreen || ownsNativeFullscreen || performance.now() - exitedFullscreenAt < 250) {
+        exitedFullscreenAt = -Infinity;
+        handledFullscreenExit = fullscreen || ownsNativeFullscreen;
+        return;
+      }
+      if (search) {
+        e.preventDefault();
+        setSearch(false);
+        return;
+      }
+      handleClose();
+    };
+    document.addEventListener('keydown', onEscape);
+    document.addEventListener('fullscreenchange', onFullscreenChange);
+    window.addEventListener('keyup', onKeyUp, true);
+    return () => {
+      document.removeEventListener('keydown', onEscape);
+      document.removeEventListener('fullscreenchange', onFullscreenChange);
+      window.removeEventListener('keyup', onKeyUp, true);
+    };
+  }, [handleClose, search, renderable.kind, showSource]);
 
   // F6: Scroll lock on the message stream's scroll container.
   // Same selector ImageLightbox uses; keeping it in sync prevents the page
@@ -211,11 +342,17 @@ export function TextLightbox({ filePath, fileName, initialLine, triggerRef, onCl
   // response so we don't have to re-statically encode the MB number in two places.
   useEffect(() => {
     let cancelled = false;
+    setLoadState({ phase: 'loading' });
+    setFetchProgressText(null);
+    const progress = remoteOrigin ? observeFileTransferProgressText(setFetchProgressText) : null;
     (async () => {
       try {
         // 远程:先取回缓存副本(同 identity 与侧边栏共享,命中秒回),再读副本。
         if (remoteOrigin) {
-          const fetched = await fetchChatFileToCache(remoteOrigin, sessionFileCtx.workingDir, filePath);
+          const fetched = await fetchChatFileToCache(
+            remoteOrigin, sessionFileCtx.workingDir, filePath, progress?.requestId,
+          );
+          progress?.dispose();
           if (cancelled) return;
           if (!fetched.ok) {
             setLoadState({ phase: 'error', message: chatFileErrorText(fetched.code) });
@@ -264,21 +401,15 @@ export function TextLightbox({ filePath, fileName, initialLine, triggerRef, onCl
           phase: 'error',
           message: err instanceof Error ? err.message : String(err),
         });
+      } finally {
+        progress?.dispose();
       }
     })();
     return () => {
       cancelled = true;
+      progress?.dispose();
     };
-  }, [filePath, remoteOrigin, sessionFileCtx.workingDir, t]);
-
-  // 远程取回进度:大文件首拉可能秒级到分钟级,spinner 区显示百分比。
-  useEffect(() => {
-    if (!remoteOrigin || contentReady) return;
-    const off = window.electronAPI.fileBrowser.onTransferProgress((e) => {
-      if (e.relPath === filePath) setFetchProgress({ received: e.received, total: e.total });
-    });
-    return off;
-  }, [remoteOrigin, contentReady, filePath]);
+  }, [filePath, remoteOrigin, sessionFileCtx.workingDir, t, retry]);
 
 
   useEffect(() => {
@@ -335,22 +466,24 @@ export function TextLightbox({ filePath, fileName, initialLine, triggerRef, onCl
     }
   }
 
-  // 远程会话:系统打开 / 目录定位一律对**本地缓存副本**进行(远端路径在本机
-  // 无意义,直呼 openPath 是误开本机同路径文件的隐患);copyPath 仍复制远端
-  // 原始路径(用户要的是"这个文件在远端哪里")。
+  // 远程会话:系统打开对**本地缓存副本**进行(远端路径在本机无意义,直呼
+  // openPath 是误开本机同路径文件的隐患),定位改为「下载到本地」(落到系统下载
+  // 文件夹);copyPath 仍复制远端原始路径(用户要的是"这个文件在远端哪里")。
   async function openInSystem() {
     const target = remoteOrigin ? remoteCopy?.cachePath : filePath;
     if (!target) return;
     const res = await window.electronAPI.openPath(target);
-    if (!res.success) {
+    if (shouldShowOpenPathError(res)) {
       toast.error(res.error || t('chat.textLightbox.openSystemFailed'));
     }
   }
 
   async function showInFolder() {
-    const target = remoteOrigin ? remoteCopy?.cachePath : filePath;
-    if (!target) return;
-    const res = await window.electronAPI.showItemInFolder({ filePath: target });
+    if (remoteOrigin) {
+      await downloadRemoteChatEntry(remoteOrigin, sessionFileCtx.workingDir, filePath);
+      return;
+    }
+    const res = await window.electronAPI.showItemInFolder({ filePath });
     if (!res.success) {
       toast.error(res.error || t('chat.textLightbox.openSystemFailed'));
     }
@@ -374,11 +507,12 @@ export function TextLightbox({ filePath, fileName, initialLine, triggerRef, onCl
   const overlay = (
     <div
       data-text-lightbox-overlay
+      data-lightbox-layer
+      ref={overlayRef}
       style={{
         position: 'fixed',
         inset: 0,
         zIndex: TEXT_LIGHTBOX_OVERLAY_Z_INDEX,
-        background: 'var(--overlay-lightbox)',
         display: 'flex',
         flexDirection: 'column',
         alignItems: 'center',
@@ -388,160 +522,110 @@ export function TextLightbox({ filePath, fileName, initialLine, triggerRef, onCl
         cursor: 'default',
       }}
     >
-      <button
-        type="button"
-        aria-label={t('chat.lightbox.close')}
-        style={{
-          position: 'absolute',
-          inset: 0,
-          border: 0,
-          padding: 0,
-          background: 'transparent',
-          cursor: 'default',
-        }}
-        onClick={handleClose}
-      />
+      {/* 遮罩在根节点的层叠上下文里,压在预览窗(zIndex 1)之下。 */}
+      <PreviewScrim onClose={handleClose} zIndex={0} />
       {/* F3: Doc Card — clicks inside MUST NOT close (per F6 异常流). */}
       <div
         data-text-lightbox-card
+        data-text-lightbox-search-host={renderable.kind === 'markdown' && !showSource ? '' : undefined}
         className={cn(
-          'cursor-auto flex flex-col overflow-hidden rounded-[12px]',
-          'border border-[var(--msg-tool-card-border)]',
-          'bg-[var(--msg-tool-card-bg)]',
+          'cursor-auto flex flex-col pt-16',
+          collection && 'pb-16',
+          PREVIEW_PANEL_CLASS,
         )}
-        style={{
-          width: '80vw',
-          height: '80vh',
-          maxWidth: '1600px',
-          maxHeight: '1200px',
-          position: 'relative',
-          zIndex: 1,
-        }}
+        style={{ ...PREVIEW_PANEL_STYLE, zIndex: 1 }}
       >
-        {/* Toolbar — file-text · name · · · size · open · copy */}
-        <div
-          className={cn(
-            'flex items-center justify-between',
-            'h-14 shrink-0 px-5',
-            'border-b border-[var(--msg-tool-card-border)]',
-          )}
-        >
-          {/* Left — clicking filename copies the FULL path (F3 toolbar 三段). */}
-          {/* v5: 原生 title 替换为 Radix Tooltip(默认 sans) — 短文案提示。 */}
-          <Tooltip.Root>
-            <Tooltip.Trigger asChild>
-              <button
-                type="button"
-                onClick={copyPath}
-                className={cn(
-                  'flex items-center gap-2 min-w-0',
-                  'rounded-[6px] px-1 -mx-1 py-0.5',
-                  'hover:bg-[var(--msg-code-inline-bg)] transition-colors',
-                  'text-left cursor-pointer',
-                )}
+        <PreviewHeader
+          name={displayName}
+          detail={[displaySize, remoteCopy?.stale ? t('chat.remoteFile.staleBadge') : null]
+            .filter(Boolean)
+            .join(' · ')}
+          onClose={handleClose}
+          onSave={
+            localActionsReady
+              ? () => {
+                  void window.electronAPI
+                    .saveMediaAs({ url: toLocalFileUrl(remoteCopy?.cachePath ?? filePath) })
+                    .catch(() => toast.error(t('chat.media.saveFailed')));
+                }
+              : undefined
+          }
+          actions={
+            <>
+              <PreviewButton
+                label={t('attachmentPreview.find')}
+                onClick={openSearch}
+                disabled={loadState.phase !== 'ready'}
               >
-                <FileText size={16} className="shrink-0 text-[var(--msg-tool-card-chevron)]" />
-                <span
-                  className={cn(
-                    'font-semibold text-[14px]',
-                    'text-[var(--msg-tool-card-text)]',
-                    'truncate',
-                  )}
-                >
-                  {displayName}
-                </span>
-                {displaySize && (
-                  <>
-                    <span className="shrink-0 text-14 text-[var(--cmd-palette-item-meta)]">·</span>
-                    <span className="shrink-0 text-12 text-[var(--msg-tool-card-chevron)]">
-                      {displaySize}
-                    </span>
+                <Search className="h-4 w-4" />
+              </PreviewButton>
+              <PreviewButton
+                label={t('chat.textLightbox.copyAll')}
+                onClick={copyContent}
+                disabled={loadState.phase !== 'ready'}
+              >
+                <Copy className="h-4 w-4" />
+              </PreviewButton>
                   </>
-                )}
-                {remoteCopy?.stale && (
-                  // 断线兜底的历史副本:提示内容可能不是远端最新版本。
-                  <span
-                    className={cn(
-                      'shrink-0 rounded-[4px] border border-[var(--msg-tool-card-border)]',
-                      'px-1.5 py-[1px] text-11 text-[var(--msg-tool-card-chevron)]',
-                    )}
+          }
+          menu={
+            <>
+              {attachmentPreviewKind(filePath) === 'html' ? (
+                <DropdownMenuItem
+                  onClick={() => {
+                    void openHtmlFileByPreference(
+                      sessionFileCtx.sessionId ?? '',
+                      filePath,
+                      t,
+                      sessionFileCtx,
+                      'sidebar',
+                    );
+                  }}
+                >
+                  {t('attachmentPreview.rendered')}
+                </DropdownMenuItem>
+              ) : null}
+              {renderable.kind === 'markdown' ? (
+                <DropdownMenuItem onClick={() => setShowSource((value) => !value)}
                   >
-                    {t('chat.remoteFile.staleBadge')}
-                  </span>
-                )}
-              </button>
-            </Tooltip.Trigger>
-            <Tooltip.Content style={TEXT_LIGHTBOX_TOOLTIP_STYLE}>
+                    {t(showSource ? 'attachmentPreview.rendered' : 'attachmentPreview.source')}
+                  </DropdownMenuItem>
+              ) : null}
+              <DropdownMenuItem onClick={() => setWordWrap((value) => !value)}>
+                <WrapText className="mr-2 h-4 w-4" />
+                {t('attachmentPreview.wrap')}
+                {wordWrap ? ' ✓' : ''}
+              </DropdownMenuItem>
+              <DropdownMenuItem onClick={() => setLineNumbers((value) => !value)}>
+                <ListOrdered className="mr-2 h-4 w-4" />
+                {t('attachmentPreview.lineNumbers')}
+                {lineNumbers ? ' ✓' : ''}
+              </DropdownMenuItem>
+              <DropdownMenuItem onClick={copyPath}>
               {t('chat.lightbox.clickToCopyPath')}
-            </Tooltip.Content>
-          </Tooltip.Root>
+            </DropdownMenuItem>
+              <DropdownMenuItem onClick={showInFolder}
+                  disabled={!localActionsReady}>
+                {remoteOrigin ? t('chat.remoteFile.downloadToLocal') : t('chat.lightbox.openInExplorer')}
+              </DropdownMenuItem>
+            </>
+          }
+        />
 
-          {/* Right — Show in folder + Copy content + Close (Open in System moved to Oversize CTA only). */}
-          {/* v5: 原生 title 替换为 Radix Tooltip(默认 sans) — 短文案提示。 */}
-          <div className="flex items-center gap-1">
-            <Tooltip.Root>
-              <Tooltip.Trigger asChild>
-                <button
-                  type="button"
-                  onClick={showInFolder}
-                  disabled={!localActionsReady}
-                  className={cn(
-                    'flex h-8 w-8 items-center justify-center rounded-[6px]',
-                    'transition-colors',
-                    localActionsReady
-                      ? 'hover:bg-[var(--msg-code-inline-bg)] cursor-pointer'
-                      : 'opacity-40 cursor-not-allowed',
-                  )}
-                >
-                  <Folder size={18} className="text-[var(--msg-tool-card-chevron)]" />
-                </button>
-              </Tooltip.Trigger>
-              <Tooltip.Content style={TEXT_LIGHTBOX_TOOLTIP_STYLE}>
-                {remoteOrigin ? t('chat.remoteFile.revealLocalCopy') : t('chat.lightbox.openInExplorer')}
-              </Tooltip.Content>
-            </Tooltip.Root>
-            <Tooltip.Root>
-              <Tooltip.Trigger asChild>
-                <button
-                  type="button"
-                  onClick={copyContent}
-                  disabled={loadState.phase !== 'ready'}
-                  className={cn(
-                    'flex h-8 w-8 items-center justify-center rounded-[6px]',
-                    'transition-colors cursor-pointer',
-                    loadState.phase === 'ready'
-                      ? 'hover:bg-[var(--msg-code-inline-bg)]'
-                      : 'opacity-40 cursor-not-allowed',
-                  )}
-                >
-                  <Copy size={18} className="text-[var(--msg-tool-card-chevron)]" />
-                </button>
-              </Tooltip.Trigger>
-              <Tooltip.Content style={TEXT_LIGHTBOX_TOOLTIP_STYLE}>
-                {t('chat.textLightbox.copyAll')}
-              </Tooltip.Content>
-            </Tooltip.Root>
-            <Tooltip.Root>
-              <Tooltip.Trigger asChild>
-                <button
-                  type="button"
-                  onClick={handleClose}
-                  className={cn(
-                    'flex h-8 w-8 items-center justify-center rounded-[6px]',
-                    'hover:bg-[var(--msg-code-inline-bg)] transition-colors',
-                    'cursor-pointer',
-                  )}
-                >
-                  <X size={20} className="text-[var(--msg-tool-card-chevron)]" />
-                </button>
-              </Tooltip.Trigger>
-              <Tooltip.Content style={TEXT_LIGHTBOX_TOOLTIP_STYLE}>
-                {t('chat.lightbox.close')}
-              </Tooltip.Content>
-            </Tooltip.Root>
+        {search ? (
+          <div className="absolute right-4 top-[72px] z-20">
+            <DocSearchBar
+              ref={searchInput}
+              query={query}
+              total={matches}
+              activeIndex={match}
+              onChange={setQuery}
+              onNext={() => selectMatch(1)}
+              onPrev={() => selectMatch(-1)}
+              onClose={() => setSearch(false)}
+            />
           </div>
-        </div>
-
+        ) : null}
         {/* Body */}
         {!contentReady &&
           (showSpinner ? (
@@ -554,10 +638,9 @@ export function TextLightbox({ filePath, fileName, initialLine, triggerRef, onCl
             >
               <Spinner size={32} className="text-[var(--msg-tool-card-chevron)]" />
               <div>
-                {remoteOrigin ? t('chat.remoteFile.fetching') : t('chat.textLightbox.loading')}
-                {remoteOrigin && fetchProgress && fetchProgress.total > 0
-                  ? ` ${Math.min(100, Math.round((fetchProgress.received / fetchProgress.total) * 100))}%`
-                  : null}
+                {remoteOrigin
+                  ? (fetchProgressText ?? t('chat.remoteFile.fetching'))
+                  : t('chat.textLightbox.loading')}
               </div>
             </div>
           ) : (
@@ -580,6 +663,9 @@ export function TextLightbox({ filePath, fileName, initialLine, triggerRef, onCl
             <div className="text-13 text-[var(--msg-tool-card-chevron)]">
               {loadState.message}
             </div>
+            <Button onClick={() => setRetry((value) => value + 1)}>
+              {t('attachmentPreview.retry')}
+            </Button>
           </div>
         )}
 
@@ -602,33 +688,30 @@ export function TextLightbox({ filePath, fileName, initialLine, triggerRef, onCl
             >
               {t('chat.textLightbox.oversizeBody', { size: oversizeSizeText, limit: oversizeLimitMb })}
             </div>
-            <button
+            <Button
+              variant="cta"
+              size="lg"
+              compact
               type="button"
               onClick={openInSystem}
               disabled={!localActionsReady}
-              className={cn(
-                'mt-2 inline-flex items-center gap-2 rounded-[9999px]',
-                'bg-[var(--lightbox-cta-bg)] px-5 py-[10px]',
-                'text-14 font-medium text-[var(--lightbox-cta-fg)]',
-                'transition-colors',
-                localActionsReady
-                  ? 'hover:bg-[var(--lightbox-cta-hover)] cursor-pointer'
-                  : 'opacity-40 cursor-not-allowed',
-              )}
+              className="mt-2"
             >
               <ExternalLink size={14} />
               {t('chat.textLightbox.openInSystem')}
-            </button>
+            </Button>
           </div>
         )}
 
         {contentReady &&
           loadState.phase === 'ready' &&
-          (renderable.kind === 'text' || renderable.kind === 'code') && (
+          (renderable.kind === 'text' || renderable.kind === 'code' || showSource) && (
             <PlaintextEditor
               key={filePath}
               ref={editorRef}
               readOnly
+              wordWrap={wordWrap}
+              showLineNumbers={lineNumbers}
               initialValue={loadState.content}
               language={renderable.kind === 'code' ? renderable.lang : undefined}
               className="min-h-0 flex-1 text-[var(--msg-tool-card-text)]"
@@ -637,13 +720,15 @@ export function TextLightbox({ filePath, fileName, initialLine, triggerRef, onCl
 
         {contentReady &&
           loadState.phase === 'ready' &&
-          renderable.kind === 'markdown' && (
+          renderable.kind === 'markdown' &&
+          !showSource && (
             // Markdown body — same MarkdownRenderer used by chat bubbles, so the
             // visual (headings, tables, fenced code, GFM checklists) stays in
             // lockstep. Wrapper owns scroll + padding because MarkdownRenderer
             // emits flow content with its own margins.
             <div
               ref={bodyScrollRef}
+              data-text-lightbox-search-root
               className={cn(
                 'flex-1 overflow-y-auto overflow-x-hidden',
                 'text-14 leading-[1.6]',
@@ -668,28 +753,18 @@ export function TextLightbox({ filePath, fileName, initialLine, triggerRef, onCl
             </div>
           )}
 
-      </div>
-
-      {/* F6 提示 footer：位于 backdrop 上，不压到卡片内部。 */}
-      <div
-        className="mt-5 flex items-center gap-2 select-none"
-        style={{ position: 'relative', zIndex: 1 }}
-      >
-        <span
-          className={cn(
-            'rounded-[4px] border px-1.5 py-[2px]',
-            'text-11 font-medium',
-            'text-white/60 border-white/40',
-          )}
-        >
-          Esc
-        </span>
-        <span className="text-12 text-white/40">{t('chat.textLightbox.closeHint')}</span>
+        {collection ? <PreviewFooter /> : null}
       </div>
     </div>
   );
 
-  return createPortal(overlay, document.body);
+  const documentView = createPortal(
+    <FocusScope onUnmountAutoFocus={restorePreviewFocus} trapped loop asChild>
+      {overlay}
+    </FocusScope>, document.body);
+  if (/\.(mmd|mermaid)$/i.test(filePath) && loadState.phase === 'ready' && !showSource)
+    return <MarkdownMermaidBlock raw={loadState.content} fullscreen fullscreenFallback={documentView} onClose={handleClose} />;
+  return documentView;
 }
 
 export const __test_internals = {

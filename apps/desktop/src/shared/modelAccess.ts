@@ -1,3 +1,4 @@
+import type { ModelDisplayPricing } from '@cindy/model-providers';
 /**
  * modelAccess.ts — 网关凭据自动下发(model-access-server)的 main / renderer 共享类型。
  *
@@ -25,6 +26,9 @@ export type ModelAccessSyncState =
 /** 当前生效的 XD 网关凭据来源:服务端下发 / 用户手填;null = 无标记(历史手填或未配置)。 */
 export type ModelAccessCredentialSource = 'server' | 'manual';
 
+/** 当前个人账号的 Cindy AI 模型权益；组织与未登录请求不适用个人档位。 */
+export type ModelAccessAccountTier = 'free' | 'paid' | 'not_applicable';
+
 export interface ModelAccessStatus {
   state: ModelAccessSyncState;
   /** state='failed' 时的错误码(ServerApiError code / 'SAFE_STORAGE_UNAVAILABLE')。 */
@@ -33,6 +37,8 @@ export interface ModelAccessStatus {
   source: ModelAccessCredentialSource | null;
   /** source='server' 时下发的推理 endpoint(展示用;消费一律走 main 侧 getter)。 */
   endpoint: string | null;
+  /** 最近一次当前账号 v5 模型目录成功响应的用户级身份；未知或已失效时为 null。 */
+  accountTier: ModelAccessAccountTier | null;
 }
 
 /** 当前登录身份在 AIGateway Credit Ledger 中的同一时点余额快照。 */
@@ -94,6 +100,12 @@ export interface ModelAccessAgentOverride {
   defaultEffort?: string | null;
   supportsFastMode?: boolean;
   defaultEnabled?: boolean;
+  /** v3+ runtime transport; Pi accepts every native API while Claude/Codex stay fixed. */
+  wireProtocol?:
+    | 'anthropic-messages'
+    | 'openai-responses'
+    | 'openai-completions'
+    | 'google-generative-ai';
 }
 
 export interface ModelGroupTieredPricing {
@@ -162,7 +174,10 @@ export interface ModelGroupPricing {
  * currently mirrors maxInputTokens),统一由 contextWindow 表达。
  */
 export interface ModelAccessGatewayModel extends ModelGroupPricing {
+  displayPricing?: ModelDisplayPricing;
   id: string;
+  /** v5 entitlement projection; missing only on persisted/legacy snapshots. */
+  availability?: 'available' | 'requires_payment';
   /**
    * Gateway 原生 mode(issue #882:权威分类字段,字段值不改名)。原样透传,可能
    * 缺省(旧缓存 / 服务端尚未覆盖到的模型)——**不代表**本条目已被服务端判定
@@ -177,8 +192,8 @@ export interface ModelAccessGatewayModel extends ModelGroupPricing {
    * 消费方一律以本字段(或其派生的 currentLedgerCurrency)为准,不按区域推断。
    */
   currency?: 'USD' | 'CNY';
-  /** 进哪些 runtime tab;缺省 = 仅 claude-code(网关 /v1/messages 翻译覆盖面最广)。 */
-  agents?: ('claude-code' | 'codex')[];
+  /** 进哪些 runtime tab；Desktop 固定使用 v3，本字段由服务端明确下发。 */
+  agents?: ('claude-code' | 'codex' | 'pi')[];
   name?: string;
   group?: string;
   description?: string;
@@ -189,21 +204,40 @@ export interface ModelAccessGatewayModel extends ModelGroupPricing {
   efforts?: string[];
   defaultEffort?: string | null;
   sortOrder?: number;
-  /** Fast(加速档)支持;缺省按 false 处理(上游未声明时不猜测能力)。 */
+  /** Fast(加速档)支持；缺省表示服务端未声明，客户端不物化能力。 */
   supportsFastMode?: boolean;
   /** 是否默认出现在模型选择器;缺省按 true(默认可见)。 */
   defaultEnabled?: boolean;
   /**
    * 该模型是哪些 agent 的**新对话默认种子**（源自协议 ListModels v2 的 newSessionDefault，
    * 服务端权威、按区域下发)。与 sortOrder / defaultEnabled 独立;客户端据它选新对话默认。
-   * 缺省 = 不作为任何 agent 的默认。pi 由客户端从 'claude-code' 投影(见 active-catalog)。
+   * 缺省 = 不作为任何 agent 的默认。
    */
-  newSessionDefault?: ('claude-code' | 'codex')[];
+  newSessionDefault?: ('claude-code' | 'codex' | 'pi')[];
   /**
    * 展示图标 id(AI Gateway 侧登记,见 @cindy/model-providers CatalogModel.icon /
    * resolveModelIconKind);缺省或未知值客户端回落来源供应商标。
    */
   icon?: string;
   /** per-tab 能力覆盖(基线字段之上按 agent 应用)。 */
-  perAgent?: Partial<Record<'claude-code' | 'codex', ModelAccessAgentOverride>>;
+  perAgent?: Partial<Record<'claude-code' | 'codex' | 'pi', ModelAccessAgentOverride>>;
+}
+
+/**
+ * Consumer-side Bean for `GET /api/model-access/models`.
+ *
+ * The client intentionally owns this tolerant view: legacy responses may omit
+ * fields that the current server always emits, while unknown schema versions
+ * remain a runtime-parser concern.
+ */
+export interface ModelAccessModelsResponse {
+  schemaVersion: 1 | 2 | 3 | 4 | 5;
+  accountTier?: ModelAccessAccountTier;
+  models: ModelAccessGatewayModel[];
+}
+
+/** Secret-free enterprise connection status exposed to Settings. */
+export interface ByokStatus {
+  state: 'idle' | 'syncing' | 'ready' | 'failed';
+  providers: { providerId: string; state: 'ready' | 'pending' | 'unavailable' }[];
 }

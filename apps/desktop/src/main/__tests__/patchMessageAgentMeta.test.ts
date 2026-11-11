@@ -29,11 +29,8 @@ vi.mock('../logger.js', () => ({
 vi.mock('../logger', () => ({
   createLogger: () => ({ debug: vi.fn(), info: vi.fn(), warn: vi.fn(), error: vi.fn() }),
 }));
-vi.mock('../maker-host/codex-local-sessions', () => ({
-  importExternalCodexMessagesForSession: vi.fn(),
-}));
-vi.mock('../maker-host/claude-local-sessions', () => ({
-  importExternalClaudeCodeMessagesForSession: vi.fn(),
+vi.mock('../session-import/legacy', () => ({
+  adoptLegacySessionBeforeOpen: vi.fn(async () => undefined),
 }));
 vi.mock('../embedders/chat-history-embedder', () => ({
   onMessageCreated: vi.fn(async () => undefined),
@@ -48,7 +45,9 @@ const updateSetCalls: Array<Record<string, unknown>> = [];
 
 function makeSelectChain(rows: unknown[]): SelectChain {
   const chain = {} as SelectChain;
-  for (const k of ['from', 'where', 'limit']) chain[k] = vi.fn(() => chain);
+  for (const k of ['from', 'innerJoin', 'where', 'orderBy', 'limit']) {
+    chain[k] = vi.fn(() => chain);
+  }
   chain.then = (resolve: (v: unknown) => unknown) => Promise.resolve(rows).then(resolve);
   return chain;
 }
@@ -76,6 +75,7 @@ vi.mock('../localDb/client/current', () => ({
 import {
   broadcastMessageAgentMetaUpdate,
   extractEstimatedSessionValueEntries,
+  findVisibleToolUseMessageByAliases,
   patchMessageAgentMeta,
 } from '../localDb/ipc/messages.js';
 
@@ -86,6 +86,23 @@ beforeEach(() => {
 });
 
 describe('patchMessageAgentMeta', () => {
+  it('finds the latest visible tool_use row by a persisted event alias', async () => {
+    selectQueue.push([{ clientId: 'persisted-agent-row', toolUseId: 'toolu-agent-rehydrated' }]);
+
+    await expect(findVisibleToolUseMessageByAliases('s1', [
+      'toolu-agent-rehydrated',
+      'agent-runtime-id',
+    ])).resolves.toEqual({
+      clientId: 'persisted-agent-row',
+      toolUseId: 'toolu-agent-rehydrated',
+    });
+  });
+
+  it('skips the database lookup when no usable event alias is available', async () => {
+    await expect(findVisibleToolUseMessageByAliases('s1', ['', ''])).resolves.toBeNull();
+    expect(fakeDb.select).not.toHaveBeenCalled();
+  });
+
   it('merge:保留已有 meta 字段(uuid 等 fork/rewind 锚点),合并 patch 字段', async () => {
     selectQueue.push([{ agentMeta: JSON.stringify({ uuid: 'sdk-u1', model: 'claude-fable-5' }) }]);
     const ok = await patchMessageAgentMeta('s1', 'm1', {

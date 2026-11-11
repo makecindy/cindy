@@ -10,7 +10,9 @@ describe('renderOrcaLeadSystemPrompt', () => {
   const channelDisclosureRule =
     'label every delegated task with its actual execution channel: Orca Worker or native subagent.';
   const toolSurfaceRule =
-    'Tools: get_workspace_info, create_worker, create_workers, send_to_worker.';
+    'Tools: get_workspace_info, create_worker, create_workers, send_to_worker, interrupt_worker, get_worker_queue_status, update_queued_message, cancel_queued_message, merge_queued_messages, steer_queued_message, move_queued_message, update_worker.';
+  const queueOrderRule =
+    'Queue order: the worker queue is FIFO, so a later order runs after the earlier ones. To run an order sooner: steer_queued_message inserts a queued message into the worker\'s current turn, move_queued_message moves it to position 0 (front), and a more urgent order you send while the worker is busy should go out with delivery=steer instead of queueing. A send_to_worker reply carrying steer_fallback_reason was queued, not steered — it is not prioritized yet: promote it with move_queued_message to position 0 before you end the turn. merge_queued_messages combines related messages but keeps the earliest position and never reorders. QUEUE_CHANGED from merge_queued_messages means the queue moved under you: re-read get_worker_queue_status and retry.';
   const explicitCreationBoundary =
     'Use create_worker only when the user explicitly asks to open one new worker, and use create_workers only when the user explicitly asks to open multiple new workers.';
   const missingWorkerBoundary =
@@ -25,6 +27,8 @@ describe('renderOrcaLeadSystemPrompt', () => {
     'Treat send_to_worker as dispatched only when its payload has ok=true and wake_kind=resumed, already-active, or queued.';
   const createDispatchSignals =
     'Treat create_worker, and each created result from create_workers, as dispatched only when it has dispatched=true, a queued_message_id, or dispatch_outcome.kind=session-dispatch with dispatch_outcome.dispatched=true (including dispatch_outcome.wakeKind=queued).';
+  const interruptDispatchSignals =
+    'Treat interrupt_worker as dispatched only when its payload has ok=true and queued_message_id; stop_outcome reports the graceful-stop result and never means the replacement was dropped.';
   const batchResultRule =
     'After a multi-role tool-call batch returns, always relay create_workers.user_report verbatim when present, summarize every create_workers per-item result or error, and report every other failed/no-dispatch tool result.';
 
@@ -38,40 +42,81 @@ describe('renderOrcaLeadSystemPrompt', () => {
     expect(prompt.indexOf(workerRoutingRule)).toBeLessThan(prompt.indexOf(nativeSubagentBoundary));
   });
 
-  it('forbids substituting an Orca Worker for a subagent, and demands honesty when the harness has none', () => {
-    // Orca Worker 是 session 级协同者,subagent 是 agent 内部的一次性执行体 —— 两者
-    // 不可互换。此前引导只写了「native subagent 不满足 Orca 派单」这一半,缺了反方向,
-    // 且只列举 Codex / Claude Code 两家机制;没有原生机制的 harness(如 pi)因此被推向
-    // 它唯一看得见的 Orca 工具,表现为「误开协同模式」。
+  it('forbids substituting an Orca Worker for a subagent or improvising one', () => {
+    // Orca Worker 是 session 级协同者，subagent 是 agent 内部的一次性执行体；
+    // 两者不可互换，也不允许自己起进程冒充任一执行通道。
     const prompt = renderOrcaLeadSystemPrompt(null);
 
     expect(prompt).toContain('An Orca Worker is NEVER a substitute for a subagent.');
-    expect(prompt).toContain(
-      'If you have no native subagent mechanism, say so plainly and ask the user how to proceed',
-    );
-    expect(prompt).toContain('do NOT open or reuse an Orca Worker to satisfy a subagent request');
-    // 兜底路径也不许自己起进程冒充 subagent。
+    expect(prompt).toContain('Do NOT open or reuse an Orca Worker to satisfy a subagent request');
     expect(prompt).toContain('do NOT improvise one by spawning processes yourself');
+    expect(prompt).not.toContain('If you have no native subagent mechanism');
   });
 
   it('requires execution-channel disclosure and terminal-state verification', () => {
     const prompt = renderOrcaLeadSystemPrompt(null);
 
     expect(prompt).toContain(
-      'Show the native subagent identifier, assigned task, and actual terminal status',
-    );
-    expect(prompt).toContain(
       'A native subagent result is not evidence that an Orca Worker ran or completed.',
     );
     expect(prompt).toContain(channelDisclosureRule);
+    expect(prompt).not.toContain(
+      'Show the native subagent identifier, assigned task, and actual terminal status',
+    );
+  });
+
+  it('keeps native subagent lifecycle tools away from Orca Workers', () => {
+    const prompt = renderOrcaLeadSystemPrompt(null);
+
+    expect(prompt).toContain('Orca Workers are not native subagents');
+    expect(prompt).toContain('native subagent lifecycle tools');
+    expect(prompt).toContain('wait_agent or equivalents');
+    expect(prompt).toContain('wait for or manage Orca Workers');
+    expect(prompt).toContain('Orca reports arrive automatically as new messages');
+    expect(prompt).toContain(
+      'Use those lifecycle tools only for native subagents that the user explicitly requested',
+    );
+    expect(prompt).toContain('If other Orca Workers are still working, do not wait for them');
+    expect(prompt).not.toContain('/simplify');
+  });
+
+  it('preserves async delivery, terminal routing, and emergency diagnostics boundaries', () => {
+    const prompt = renderOrcaLeadSystemPrompt(null);
+
+    expect(prompt).toContain(
+      '(worker_status and read_worker also exist but are for emergency diagnostics only — do NOT use them for normal polling.)',
+    );
+    expect(prompt).toContain(
+      'You will be automatically woken up when the worker responds — you do NOT need to check on it.',
+    );
+    expect(prompt).toContain(
+      'For a single-role request, after create_worker, send_to_worker, or interrupt_worker returns with the concrete dispatch signals above, your turn is OVER. Produce ZERO output',
+    );
+    expect(prompt).toContain(
+      'The one exception: a send_to_worker reply with steer_fallback_reason still needs the queue promotion above before you end.',
+    );
+    expect(prompt).toContain(
+      'Produce the final summary only after every relevant task has a terminal result from its own execution channel (rule 8).',
+    );
+  });
+
+  // 规则：orca-team-architecture.md「消息派发与 auto-bridge」1d；用户已批准的最小 system prompt 调整。
+  // 合批必须由宿主批次头触发，避免把单个 Worker 正文里偶然出现的 --- / 多个前缀误判成批次。
+  it('processes host-marked auto-bridge batches in one turn', () => {
+    const prompt = renderOrcaLeadSystemPrompt(null);
+    expect(prompt).toContain('When a worker message starts with [Auto-bridged batch: <n> worker reports]');
+    expect(prompt).toContain('Review every report in this turn and issue only necessary follow-ups');
+    expect(prompt).toContain('do not wait for those reports to arrive separately');
   });
 
   it('declares create_workers while preserving batch result reporting boundaries', () => {
     const prompt = renderOrcaLeadSystemPrompt(null);
 
     expect(prompt).toContain(toolSurfaceRule);
+    expect(prompt).toContain(queueOrderRule);
     expect(prompt).toContain(sendDispatchSignals);
     expect(prompt).toContain(createDispatchSignals);
+    expect(prompt).toContain(interruptDispatchSignals);
     expect(prompt).toContain(batchResultRule);
     expect(prompt).toContain(multiRoleBatchBoundary);
     expect(prompt).toContain(
@@ -95,7 +140,7 @@ describe('renderOrcaLeadSystemPrompt', () => {
     const prompt = renderOrcaLeadSystemPrompt(null);
 
     expect(prompt).toContain(
-      'If create_worker or send_to_worker fails or lacks those dispatch signals, report the result immediately instead of ending silently.',
+      'If create_worker, send_to_worker, or interrupt_worker fails or lacks those dispatch signals, report the result immediately instead of ending silently.',
     );
     expect(prompt).toContain(
       'Silence is tied to the concrete dispatch signals above, not merely to calling a tool.',
@@ -115,6 +160,41 @@ describe('renderOrcaLeadSystemPrompt', () => {
     expect(prompt).toContain(multiRoleReadinessBoundary);
   });
 
+  it('states the queue inspection, atomic interrupt, atomic merge, steer, and supersession rules verbatim', () => {
+    const prompt = renderOrcaLeadSystemPrompt(null);
+
+    expect(prompt).toContain(
+      'Use interrupt_worker only when the active task must not continue and the new instruction must replace it. To correct or add to a running order, use send_to_worker with delivery=steer plus an explicit "supersedes <what>" note; a steered message cannot be recalled — make it complete. For later work on an idle worker, plain send_to_worker.',
+    );
+    expect(prompt).toContain(
+      'If get_workspace_info shows queued_count > 0 or queue_paused=true, call get_worker_queue_status first, then revise or withdraw one pending message, merge related messages, or send a separate task.',
+    );
+    expect(prompt).toContain(
+      'Orders are self-contained: state, premises, acceptance, and a "supersedes earlier orders" header when replacing one — never assume the worker just read your previous message. A message that queues is consumed only after every earlier one, so never describe the queue or pending work inside it ("one order left") — that snapshot is stale on arrival; give status to the user, not to the worker.',
+    );
+    expect(prompt).toContain(
+      'When you invalidate your own premise (history rewrite, retracted decision, overturned finding), sweep the team before your own work: in one parallel tool-call batch, steer-correct or interrupt every running order built on that premise and revise or withdraw queued ones (update_queued_message / cancel_queued_message), then continue your own work; rule 5\'s parallel-batch semantics apply.',
+    );
+    expect(prompt).toContain(
+      'Never simulate an interrupt or merge with multiple stop, update, cancel, or send calls because the queue may advance between calls.',
+    );
+  });
+
+  it('describes the worker report prefix with role and worker_id', () => {
+    // 与 formatAgentMessage 的 worker 前缀同步：改了任一侧都要改另一侧。
+    const prompt = renderOrcaLeadSystemPrompt(null);
+
+    expect(prompt).toContain(
+      'Messages from workers arrive prefixed with [From Orca Worker <role> (worker_id: <id>)] (role omitted when unknown). Treat them as worker reports or questions, not user messages.',
+    );
+    expect(prompt).toContain(
+      '[New message arrives: "[From Orca Worker Backend (worker_id: w-1)] Feature X is done. Changes: ..."]',
+    );
+    expect(prompt).toContain('6. When a worker report arrives (prefixed with [From Orca Worker ...]), review it');
+    expect(prompt).toContain('If you see "[Auto-bridged: ...]" in a worker message');
+    expect(prompt).not.toContain('prefixed with [From Orca Worker].');
+  });
+
   it('keeps Worker routing and disclosure rules when an initial worker exists', () => {
     const prompt = renderOrcaLeadSystemPrompt({ workerId: 'worker-1', sessionId: 'session-1' });
 
@@ -126,7 +206,9 @@ describe('renderOrcaLeadSystemPrompt', () => {
 
 describe('renderOrcaWorkerSystemPrompt', () => {
   const subagentHint =
-    'If the user asks for a "subagent" / "子代理", use your own native subagent mechanism (for example Codex spawn_agent, or the Claude Code Agent/Task tool) to handle it yourself — do NOT escalate to the lead for it, and do NOT call start_team / create_worker (you cannot create Orca workers). If you have no native subagent mechanism, tell the user so instead of substituting an Orca Worker or spawning processes yourself; an Orca Worker is never a substitute for a subagent.';
+    'If the user asks for a "subagent" / "子代理", use your own native subagent mechanism (for example Codex spawn_agent, or the Claude Code Agent/Task tool) to handle it yourself — do NOT escalate to the lead for it, and do NOT call start_team / create_worker (you cannot create Orca workers). An Orca Worker is never a substitute for a subagent.';
+  const workerSubagentReportingBoundary =
+    'If you use native subagents, have them return findings only to you. Never tell them to contact the Lead or call send_to_lead; aggregate their results and report to the Lead yourself.';
 
   const workerMeta = {
     workerId: 'worker-1',
@@ -141,6 +223,20 @@ describe('renderOrcaWorkerSystemPrompt', () => {
     expect(prompt).toContain(subagentHint);
   });
 
+  it('keeps native subagent reporting with the Orca Worker', () => {
+    const prompt = renderOrcaWorkerSystemPrompt(workerMeta);
+    expect(prompt).toContain(workerSubagentReportingBoundary);
+    expect(prompt).toContain('3. ALWAYS call send_to_lead when complete or blocked.');
+    expect(prompt).toContain('4. Report once; do not send progress updates.');
+    expect(prompt).toContain('10. If the user asks for a "subagent" / "子代理"');
+    expect(prompt.indexOf('3. ALWAYS call send_to_lead')).toBeLessThan(
+      prompt.indexOf(workerSubagentReportingBoundary),
+    );
+    expect(prompt.indexOf(workerSubagentReportingBoundary)).toBeLessThan(
+      prompt.indexOf('4. Report once; do not send progress updates.'),
+    );
+  });
+
   it('keeps the subagent routing hint with worker identity metadata', () => {
     const prompt = renderOrcaWorkerSystemPrompt(workerMeta);
 
@@ -148,13 +244,28 @@ describe('renderOrcaWorkerSystemPrompt', () => {
     expect(prompt).toContain(subagentHint);
   });
 
-  it('tells a worker without a native subagent mechanism to be honest rather than substitute Orca', () => {
-    // worker 侧同规:没有原生机制时如实告知,不拿 Orca 顶替、不自己起进程。
+  it('teaches token hygiene to both lead and workers', () => {
+    // Orca worker 会话反复冷启、门禁类命令输出巨大：不复读已知 schema、
+    // 不重复发起仍然新鲜的调用、验证类命令只回摘要行，是协同模式 token 浪费的主要止血点。
+    // 措辞必须保留“结果已过期/改码后重验/失败重试”的豁免，否则会挡住合法的状态刷新。
+    const leadPrompt = renderOrcaLeadSystemPrompt(null);
+    expect(leadPrompt).toContain('10. Token hygiene: do not re-issue a tool call just to re-fetch a result you already have and that is still current');
+    expect(leadPrompt).toContain('Re-running a state read after something changed, re-running verification after new edits, and retrying a failed call are not repetition.');
+    expect(leadPrompt).toContain('require gate/verification commands (build/test/smoke/LSP/md5/git) to be answered with a one-line pass/fail summary naming the command, the outcome and the log file path');
+
+    const workerPrompt = renderOrcaWorkerSystemPrompt(workerMeta);
+    expect(workerPrompt).toContain('12. Token hygiene: do not re-issue a tool call just to re-fetch a result you already have and that is still current');
+    expect(workerPrompt).toContain('Re-running a state read after something changed, re-running verification (build/test/smoke/LSP) after new edits, and retrying a failed call are not repetition.');
+    expect(workerPrompt).toContain('report only a one-line pass/fail summary to the lead — command, outcome and the log file path');
+  });
+
+  it('keeps the Worker rule concise without the unreachable fallback', () => {
     const prompt = renderOrcaWorkerSystemPrompt(workerMeta);
 
-    expect(prompt).toContain(
-      'If you have no native subagent mechanism, tell the user so instead of substituting an Orca Worker or spawning processes yourself',
+    expect(prompt).toContain('An Orca Worker is never a substitute for a subagent');
+    expect(prompt).not.toContain('If you have no native subagent mechanism');
+    expect(prompt).not.toContain(
+      'Show the native subagent identifier, assigned task, and actual terminal status',
     );
-    expect(prompt).toContain('an Orca Worker is never a substitute for a subagent');
   });
 });

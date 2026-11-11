@@ -1,6 +1,6 @@
 /**
  * Shared Plugin icon renderer for catalog, detail, and composer surfaces.
- * Package assets win; missing assets use a theme-aware functional symbol.
+ * Real package assets win; missing assets and the legacy scaffold use a theme-aware functional symbol.
  * [PROTOCOL]: 变更时更新此头部，然后检查 CLAUDE.md
  */
 
@@ -14,10 +14,14 @@ import {
   Workflow,
   type LucideIcon,
 } from 'lucide-react';
-import { useEffect, useState } from 'react';
+import { useEffect, useState, type Ref } from 'react';
 
 import { cn } from '@/lib/utils';
-import { ghostFallbackIconKind, type GhostFallbackIconKind } from './lib/ghostPluginViewModel';
+import {
+  ghostFallbackIconKind,
+  ghostPluginIconSource,
+  type GhostFallbackIconKind,
+} from './lib/ghostPluginViewModel';
 import './plugin-motion.css';
 
 const FALLBACK_ICONS: Record<GhostFallbackIconKind, LucideIcon> = {
@@ -30,11 +34,12 @@ const FALLBACK_ICONS: Record<GhostFallbackIconKind, LucideIcon> = {
   generic: Puzzle,
 };
 
-type GhostPluginIconSize = 'mini' | 'menu' | 'md' | 'detail';
+type GhostPluginIconSize = 'mini' | 'menu' | 'sm' | 'md' | 'detail';
 
 const CONTAINER_CLASSES: Record<GhostPluginIconSize, string> = {
   mini: 'size-full rounded-[5px] border-0 shadow-none',
   menu: 'size-5 rounded-[7px] border-0 shadow-none',
+  sm: 'size-8 rounded-[22%]',
   md: 'size-12 rounded-[22%]',
   detail: 'size-16 rounded-xl',
 };
@@ -42,6 +47,7 @@ const CONTAINER_CLASSES: Record<GhostPluginIconSize, string> = {
 const SVG_ICON_CLASSES: Record<GhostPluginIconSize, string> = {
   mini: 'size-2.5 object-contain',
   menu: 'size-3 object-contain',
+  sm: 'size-5 object-contain',
   md: 'size-8 object-contain',
   detail: 'size-10 object-contain',
 };
@@ -49,6 +55,7 @@ const SVG_ICON_CLASSES: Record<GhostPluginIconSize, string> = {
 const FALLBACK_ICON_CLASSES: Record<GhostPluginIconSize, string> = {
   mini: 'size-3',
   menu: 'size-3',
+  sm: 'size-4',
   md: 'size-5',
   detail: 'size-7',
 };
@@ -61,12 +68,16 @@ export function GhostPluginIcon({
   iconDataUrl,
   iconId,
   iconName,
+  iconContainerRef,
+  onIconLoad,
   onIconLoadError,
   size = 'md',
 }: {
   iconDataUrl?: string;
   iconId: string;
   iconName: string;
+  iconContainerRef?: Ref<HTMLSpanElement>;
+  onIconLoad?: () => void;
   onIconLoadError?: () => void;
   size?: GhostPluginIconSize;
 }) {
@@ -74,18 +85,19 @@ export function GhostPluginIcon({
   useEffect(() => {
     setFailedSrc(null);
   }, [iconDataUrl]);
-  const resolvedIconDataUrl = iconDataUrl && failedSrc !== iconDataUrl ? iconDataUrl : undefined;
+  const resolvedIconDataUrl = failedSrc !== iconDataUrl ? ghostPluginIconSource(iconDataUrl) : undefined;
   const svg = resolvedIconDataUrl ? isSvgIconSrc(resolvedIconDataUrl) : false;
   const fallbackKind = ghostFallbackIconKind(iconName, iconId);
   const FallbackIcon = FALLBACK_ICONS[fallbackKind];
 
   return (
     <span
+      ref={iconContainerRef}
       className={cn(
         'inline-flex shrink-0 items-center justify-center overflow-hidden border-[0.5px] border-[var(--border-default)]',
         resolvedIconDataUrl
-          ? 'bg-[var(--plugin-icon-surface)] shadow-[var(--plugin-icon-shadow)]'
-          : 'bg-[var(--surface-elevated)] text-[var(--text-secondary)] shadow-none',
+          ? 'bg-[var(--plugin-icon-surface)]'
+          : 'bg-[var(--surface-elevated)] text-[var(--text-secondary)]',
         CONTAINER_CLASSES[size],
       )}
     >
@@ -95,6 +107,7 @@ export function GhostPluginIcon({
           alt=""
           draggable={false}
           referrerPolicy="no-referrer"
+          onLoad={onIconLoad}
           onError={() => {
             setFailedSrc(resolvedIconDataUrl);
             onIconLoadError?.();

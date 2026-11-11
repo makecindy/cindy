@@ -118,6 +118,32 @@ describe('MarketSourceManager local sources', () => {
     });
   });
 
+  it('surfaces the submodule-shaped empty market (entries declared, dirs empty) in add and refresh summaries', async () => {
+    // Git submodule 未递归检出的典型形态:清单合法、插件目录存在但没有 ghost.json。
+    // 不触发任何错误码,summary 必须给出 pluginCount 0 + 全额 skippedCount,
+    // renderer 才有依据展示"插件目录为空(submodule)"的专门提示(B3)。
+    const root = makeRoot();
+    const market = path.join(root, 'my-market');
+    writeMarketplace(market, 'local-lib', [{ rel: 'plugins/a', id: 'alpha' }]);
+    // 掏空插件目录:目录保留,ghost.json 与入口都不在(= submodule 空壳)。
+    fs.rmSync(path.join(market, 'plugins', 'a', 'ghost.json'));
+    fs.rmSync(path.join(market, 'plugins', 'a', 'main.js'));
+    const manager = makeManager(root);
+
+    const added = await manager.addSource({ source: market });
+    expect(added).toMatchObject({
+      name: 'local-lib',
+      pluginCount: 0,
+      skippedCount: 1,
+      unreadableCount: 0,
+      status: 'ok',
+      errorCode: null,
+    });
+
+    const refreshed = await manager.refreshSource('local-lib');
+    expect(refreshed).toMatchObject({ pluginCount: 0, skippedCount: 1, unreadableCount: 0 });
+  });
+
   it('rejects a local source that is not a directory', async () => {
     const manager = makeManager(makeRoot());
     await expect(

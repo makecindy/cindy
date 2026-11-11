@@ -5,18 +5,17 @@ import { describe, expect, it } from 'vitest';
 
 // register.ts wires disableOrcaInternal inside one large closure with many runtime
 // deps (maker, stores, caches), so the repo tests its IPC-boundary invariants via
-// source assertion (see makerOrcaRoleMarking.test.ts / orcaWorkflowRoute.test.ts).
+// source assertion (see makerOrcaRoleMarking.test.ts / the Orca route behavior tests).
 // The *behavioral* predicate (clear lead role iff no active team) is covered by
 // orcaStrandedLeadReconcile.test.ts; here we lock down that disableOrcaInternal's
 // "no active team" branch is no longer an unconditional no-op.
-const registerSource = readFileSync(
-  resolve(__dirname, '..', 'maker-ipc', 'register.ts'),
-  'utf8',
-);
+const registerSource = readFileSync(resolve(__dirname, '..', 'maker-ipc', 'register.ts'), 'utf8');
 
 describe('disableOrcaInternal stranded-lead recovery', () => {
   it('extracts a shared clearLeadOrcaRoleState helper', () => {
-    expect(registerSource).toContain('async function clearLeadOrcaRoleState(leadSessionId: string)');
+    expect(registerSource).toContain(
+      'async function clearLeadOrcaRoleState(leadSessionId: string, assertCurrent?: () => Promise<void>)',
+    );
   });
 
   it('reconciles a stranded lead in the "no active team" branch instead of plain no-op', () => {
@@ -28,11 +27,66 @@ describe('disableOrcaInternal stranded-lead recovery', () => {
   it('also archives orphaned workers from non-active teams in the recovery branch', () => {
     // If the prior disable was interrupted before archiveWorkersByTeam, the lead's worker
     // sessions stay active+hidden+unreachable; the recovery must reconcile them too.
-    expect(registerSource).toContain('await reconcileInactiveTeamWorkersForLead(leadSessionId)');
+    const reconcileIndex = registerSource.indexOf(
+      'await reconcileInactiveTeamWorkersForLead(leadSessionId, assertCurrent)',
+    );
+    const recycleIndex = registerSource.indexOf(
+      "await recycleSessionWorktreeForStatusChange(sid, 'archived', workerRecycleScope)",
+      reconcileIndex,
+    );
+    const scopeIndex = registerSource.lastIndexOf(
+      'const workerRecycleScope = captureSessionRecycleScope();',
+      reconcileIndex,
+    );
+    expect(scopeIndex).toBeGreaterThanOrEqual(0);
+    expect(scopeIndex).toBeLessThan(reconcileIndex);
+    expect(reconcileIndex).toBeGreaterThanOrEqual(0);
+    expect(recycleIndex).toBeGreaterThan(reconcileIndex);
+  });
+
+  it('fully cleans Host-owned worker runtimes after normal team archival', () => {
+    const archiveIndex = registerSource.indexOf(
+      'const archivedWorkerSessionIds = await archiveWorkersByTeam(team.id, assertCurrent)',
+    );
+    const recycleIndex = registerSource.indexOf(
+      "recycleSessionWorktreeForStatusChange(sessionId, 'archived', workerRecycleScope)",
+      archiveIndex,
+    );
+    const scopeIndex = registerSource.lastIndexOf(
+      'const workerRecycleScope = captureSessionRecycleScope();',
+      archiveIndex,
+    );
+    expect(scopeIndex).toBeGreaterThanOrEqual(0);
+    expect(scopeIndex).toBeLessThan(archiveIndex);
+    expect(archiveIndex).toBeGreaterThanOrEqual(0);
+    expect(recycleIndex).toBeGreaterThan(archiveIndex);
+  });
+
+  it('schedules full removed-session cleanup after archiving one worker without awaiting it', () => {
+    const archiveIndex = registerSource.indexOf('await archiveSingleWorkerSession(sessionId, beforeMutation);');
+    const blockEnd = registerSource.indexOf('getManualInterrupt,', archiveIndex);
+    const block = registerSource.slice(archiveIndex, blockEnd);
+    const scopeIndex = registerSource.lastIndexOf(
+      'const workerRecycleScope = captureSessionRecycleScope();',
+      archiveIndex,
+    );
+    expect(scopeIndex).toBeGreaterThanOrEqual(0);
+    expect(scopeIndex).toBeLessThan(archiveIndex);
+    expect(archiveIndex).toBeGreaterThanOrEqual(0);
+    expect(blockEnd).toBeGreaterThan(archiveIndex);
+    // Like ordinary archive, the reply must not wait for quiesce + git worktree removal.
+    // Awaiting here would also self-wait on the send lock held by plugin releaseWorker.
+    expect(block).toContain(
+      "scheduleWorktreeRecycleForStatusChange(sessionId, 'archived', workerRecycleScope);",
+    );
+    expect(block).not.toContain('await recycleSessionWorktreeForStatusChange');
+    expect(block.indexOf('await beforeMutation?.();')).toBeLessThan(
+      block.indexOf('scheduleWorktreeRecycleForStatusChange('),
+    );
   });
 
   it('reuses clearLeadOrcaRoleState on BOTH the normal-close and stranded-recovery paths', () => {
-    const calls = registerSource.match(/await clearLeadOrcaRoleState\(leadSessionId\)/g) ?? [];
+    const calls = registerSource.match(/await clearLeadOrcaRoleState\(leadSessionId, assertCurrent\)/g) ?? [];
     expect(calls.length).toBeGreaterThanOrEqual(2);
   });
 });

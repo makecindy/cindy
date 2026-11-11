@@ -1,3 +1,4 @@
+import { ErrorNotice } from '@/components/ui/error-notice';
 /**
  * FileBodyView — middle pane of the workdir-browse view.
  *
@@ -39,20 +40,27 @@
 
 import {
   forwardRef,
+  lazy,
+  Suspense,
   useCallback,
   useEffect,
   useImperativeHandle,
   useLayoutEffect,
   useRef,
   useState,
+  type ComponentProps,
 } from 'react';
 import { createPortal } from 'react-dom';
 import { Save, Table2 } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
 import { fileBrowserApiFor } from '@/lib/fileBrowserTransport';
+import { createFileTransferProgressValues } from '@/lib/fileTransferProgress';
 
 import { Spinner } from '@/components/ui/spinner';
-import { acquireFindInPage } from '@/components/find-in-page/findInPageOwnership';
+import {
+  acquireFindInPage,
+  getTextPreviewHost,
+} from '@/components/find-in-page/findInPageOwnership';
 import { useAppShortcut } from '@/hooks/useAppShortcut';
 import {
   PlaintextEditor,
@@ -71,7 +79,6 @@ import type { FileContent } from './hooks/useFileContent';
 import { useDelayedFlag } from './hooks/useDelayedFlag';
 import { DrawioPreview } from './DrawioPreview';
 import { ImagePreview } from './ImagePreview';
-import { PdfPreview } from './PdfPreview';
 import { UnrenderablePlaceholder } from './UnrenderablePlaceholder';
 import { DocSearchBar } from './DocSearchBar';
 import { setActiveFileBodyHandle } from './lib/activeFileBodyHandle';
@@ -88,29 +95,28 @@ import {
   type MarkdownAutosaveHandle,
 } from './lib/markdownAutosave';
 
-/**
- * 数 source text 中 `query`(case-insensitive) 在 `targetLine`(1-indexed) 之前
- * 出现了多少次。用作 project-search 跳转: 知道目标行后, 这个计数 = 在 in-file
- * 搜索结果列表里目标行第一个匹配的 0-based index(因为 in-file 搜索也是按
- * 文档顺序、case-insensitive 排出来的)。
- */
-function countMatchesBeforeLine(content: string, query: string, targetLine: number): number {
-  if (!query) return 0;
-  const lines = content.split(/\r?\n/);
-  const target = Math.min(Math.max(targetLine, 1), lines.length);
-  const needle = query.toLowerCase();
-  if (!needle) return 0;
-  let count = 0;
-  for (let i = 0; i < target - 1; i++) {
-    const text = lines[i].toLowerCase();
-    let pos = 0;
-    while ((pos = text.indexOf(needle, pos)) !== -1) {
-      count++;
-      pos += needle.length;
-    }
-  }
-  return count;
+// pdf.js (~0.45 MB) would otherwise ride along with every window that can show
+// a file body, including the main window's first screen. PdfPreview renders its
+// own loading state, so the brief chunk load only needs an empty fallback.
+const LazyPdfPreview = lazy(() =>
+  import('./PdfPreview').then((module) => ({ default: module.PdfPreview })),
+);
+
+function PdfPreview(props: ComponentProps<typeof LazyPdfPreview>) {
+  return (
+    <Suspense fallback={null}>
+      <LazyPdfPreview {...props} />
+    </Suspense>
+  );
 }
+
+/**
+ * project-search 跳转要的是「目标行第一个**可见**命中的下标」。
+ * 它由 PlaintextEditor.search.indexOfLine 从 findAll() 的同一份命中集合里算
+ * (findAll 已剔除图片 alt / mermaid 块 / conceal 标记等看不见的命中),所以这里
+ * 不再对源码计数 —— 源码计数会把那些被剔除的同词命中一起算进去,序号偏大,
+ * 跳到后面的另一处。
+ */
 
 const MARKDOWN_AUTOSAVE_DELAY_MS = 900;
 const CONTEXT_MENU_VIEWPORT_PADDING = 8;
@@ -551,7 +557,7 @@ export const FileBodyView = forwardRef<FileBodyHandle, FileBodyViewProps>(functi
   useAppShortcut(
     'find-in-page',
     () => {
-      if (mermaidModalOpen()) return false;
+      if (mermaidModalOpen() || getTextPreviewHost()) return false;
       setBarVisible(true);
       queueMicrotask(() => {
         searchInputRef.current?.focus();
@@ -624,7 +630,7 @@ export const FileBodyView = forwardRef<FileBodyHandle, FileBodyViewProps>(functi
     ) {
       const jumpKey = `${relPath}|${jumpQuery}|${jumpLine}`;
       if (lastJumpKeyRef.current !== jumpKey) {
-        const idx = countMatchesBeforeLine(content.content, jumpQuery, jumpLine);
+        const idx = editorRef.current?.search.indexOfLine(jumpLine) ?? 0;
         initialActive = Math.min(idx, total - 1);
         // 这里不立刻消费 jumpKey —— 留给下面 jumpEffect 兜底(防止 runner 在
         // 某些 race 下没跑到 scroll 那段时, jumpEffect 还能补一次)。
@@ -676,7 +682,7 @@ export const FileBodyView = forwardRef<FileBodyHandle, FileBodyViewProps>(functi
   useEffect(() => {
     if (!barVisible) return;
     const handler = (e: KeyboardEvent) => {
-      if (e.key !== 'Escape') return;
+      if (e.key !== 'Escape' || getTextPreviewHost()) return;
       e.preventDefault();
       e.stopPropagation();
       e.stopImmediatePropagation();
@@ -727,10 +733,7 @@ export const FileBodyView = forwardRef<FileBodyHandle, FileBodyViewProps>(functi
     }
 
     const targetLine = jumpLine ?? null;
-    const idx =
-      targetLine !== null
-        ? countMatchesBeforeLine(content.content, jumpQuery, targetLine)
-        : 0;
+    const idx = targetLine !== null ? (editorRef.current?.search.indexOfLine(targetLine) ?? 0) : 0;
     const active = Math.min(idx, lastRun.total - 1);
     setSearchActive(active);
     editorRef.current?.search.setActive(active);
@@ -779,10 +782,13 @@ export const FileBodyView = forwardRef<FileBodyHandle, FileBodyViewProps>(functi
           : null;
     return (
       <div
-        className="flex h-full w-full items-center justify-center px-8 text-center text-13 text-[var(--cmd-palette-item-meta)]"
+        className="flex h-full min-h-0 w-full min-w-0 flex-col overflow-y-auto p-4 text-center text-13 text-[var(--cmd-palette-item-meta)]"
         title={content.message}
       >
-        {friendly ?? t('ccAgent.workdirBrowse.fileBody.readFailed', { message: content.message })}
+        {/* Auto margins center short errors without scrolling the start of tall errors out of reach. */}
+        <div className="my-auto w-full shrink-0 select-text [overflow-wrap:anywhere]">
+          {friendly ?? t('ccAgent.workdirBrowse.fileBody.readFailed', { message: content.message })}
+        </div>
       </div>
     );
   }
@@ -984,18 +990,11 @@ export const FileBodyView = forwardRef<FileBodyHandle, FileBodyViewProps>(functi
 
       {/* 保存错误 toast —— 出现在按钮组下方,主动重试或切文件后清掉。 */}
       {saveError && (
-        <div
+        <ErrorNotice
           role="alert"
-          className={cn(
-            'absolute right-[18px] top-[54px] z-10 max-w-[360px]',
-            'rounded-md border px-3 py-1.5 text-12',
-            'border-red-300/70 bg-red-50/95 text-red-700',
-            'dark:border-red-800/60 dark:bg-red-950/80 dark:text-red-300',
-            'shadow-sm',
-          )}
-        >
-          {t('ccAgent.workdirBrowse.fileBody.saveFailed', { message: saveError })}
-        </div>
+          className="absolute right-[18px] top-[54px] z-10 max-w-[360px]"
+          message={t('ccAgent.workdirBrowse.fileBody.saveFailed', { message: saveError })}
+        />
       )}
 
       {
@@ -1093,7 +1092,7 @@ export const FileBodyView = forwardRef<FileBodyHandle, FileBodyViewProps>(functi
               'fixed z-[9999] w-[168px] rounded-xl p-0.5 overflow-hidden',
               'bg-[var(--cmd-palette-bg)]',
               'border border-[var(--cmd-palette-border)]',
-              'shadow-[var(--shadow-menu)]',
+              'shadow-[shadow:var(--shadow-menu)]',
             )}
             style={{ left: menuPos.x, top: menuPos.y }}
           >
@@ -1193,7 +1192,7 @@ function EditingChip({
       aria-live="polite"
       className={cn(
         'inline-flex items-center gap-1.5 rounded-full border px-2.5 h-7 text-12 font-medium',
-        'shadow-sm backdrop-blur',
+        'shadow-[shadow:var(--shadow-menu)] backdrop-blur',
         showAmber
           ? cn(
               'border-amber-300/70 bg-amber-50/95 text-amber-800',
@@ -1354,7 +1353,7 @@ function CachedFileBody({
             </>
           )}
         </div>
-        <OpenInSystemActions absPath={cachePath} folderPath={cacheDir} className="shrink-0" />
+        <OpenInSystemActions absPath={cachePath} className="shrink-0" />
       </div>
     );
   }
@@ -1373,7 +1372,7 @@ function CachedFileBody({
             </div>
           </div>
         )}
-        <pre className="whitespace-pre-wrap break-words px-6 py-4 font-mono text-[12.5px] leading-relaxed text-foreground">
+        <pre className="whitespace-pre-wrap break-words px-6 py-4 font-mono text-12 leading-relaxed text-foreground">
           {text}
         </pre>
       </div>
@@ -1415,40 +1414,23 @@ function FetchingProgress({
   phase?: 'upload' | 'download';
 }) {
   const { t } = useTranslation();
-  const sample = useRef<{ t: number; bytes: number; speed: number; phase?: string }>({
-    t: 0,
-    bytes: 0,
-    speed: 0,
-    phase: undefined,
-  });
-  const now = performance.now();
-  const st = sample.current;
-  if (st.phase !== phase) {
-    st.phase = phase;
-    st.t = now;
-    st.bytes = received;
-    st.speed = 0;
-  } else if (now - st.t >= 800) {
-    const inst = Math.max(0, received - st.bytes) / ((now - st.t) / 1000);
-    st.speed = st.speed > 0 ? st.speed * 0.6 + inst * 0.4 : inst;
-    st.t = now;
-    st.bytes = received;
-  }
-  const pct = total > 0 ? Math.floor((received / total) * 100) : 0;
+  const sample = useRef(createFileTransferProgressValues());
+  const values = sample.current({ received, total, phase });
   return (
     <div className="flex h-full w-full flex-col items-center justify-center gap-3">
       <Spinner size={18} className="text-[var(--cmd-palette-item-meta)]" />
       <span className="text-13 text-[var(--cmd-palette-item-meta)]">
         {t(
-          phase === 'upload'
-            ? 'ccAgent.workdirBrowse.fileBody.fetchingRemoteUpload'
-            : 'ccAgent.workdirBrowse.fileBody.fetchingRemote',
-          {
-            percent: pct,
-            received: formatBytes(received),
-            total: formatBytes(total),
-            speed: st.speed > 0 ? `${formatBytes(st.speed)}/s` : '—',
-          },
+          values.preparing
+            ? 'chat.remoteFile.fetching'
+            : total <= 0
+              ? phase === 'upload'
+                ? 'chat.remoteFile.uploadProgressUnknown'
+                : 'chat.remoteFile.downloadProgressUnknown'
+              : phase === 'upload'
+                ? 'ccAgent.workdirBrowse.fileBody.fetchingRemoteUpload'
+                : 'ccAgent.workdirBrowse.fileBody.fetchingRemote',
+          values,
         )}
       </span>
     </div>

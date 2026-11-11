@@ -33,6 +33,52 @@ describe('maker Orca role marking IPC boundary', () => {
     expectOrder(roleMarkingSource, 'markKnownOrcaWorkerSession(sessionId);', 'clearSuppressedOrcaWorkerAgentIslandSession(sessionId);');
   });
 
+  it('rejects Review sessions before either Orca entry point can mutate state', () => {
+    const roleMarkingSource = registerSource.slice(
+      registerSource.indexOf('async function markOrcaRoleIfNeeded'),
+      registerSource.indexOf('async function bootstrapSession'),
+    );
+    const collabGuardSource = registerSource.slice(
+      registerSource.indexOf('async function assertLeadCollabProjectEnabled'),
+      registerSource.indexOf('async function sendUserMessageWithAwaitedGitBaseline'),
+    );
+
+    expectOrder(
+      roleMarkingSource,
+      'await assertReviewSettingsUnlocked(sessionId);',
+      'await setSessionOrcaRole(sessionId, orcaRole, { owner: owner!, assertCurrent });',
+    );
+    expectOrder(
+      collabGuardSource,
+      'await assertReviewSettingsUnlocked(leadSessionId);',
+      'const lead = maker.getSession(leadSessionId);',
+    );
+  });
+
+  it('routes IPC and MCP team/worker creation through the shared Review guard', () => {
+    const workerIpcSource = registerSource.slice(
+      registerSource.indexOf('ipcMain.handle(MAKER_INVOKE.WORKER_CREATE'),
+      registerSource.indexOf('ipcMain.handle(MAKER_INVOKE.WORKER_LIST'),
+    );
+    const collabHolderSource = registerSource.slice(
+      registerSource.indexOf('orcaCollabServiceHolder = {'),
+      registerSource.indexOf('// ─── Agent Team heartbeat watcher'),
+    );
+
+    expect(workerIpcSource).toContain('await assertLeadCollabProjectEnabled(b.leadSessionId);');
+    const sharedStart = registerSource.slice(
+      registerSource.indexOf('const startOrcaTeamForCaller ='),
+      registerSource.indexOf('const pluginPermissionRequests ='),
+    );
+    expectOrder(sharedStart, 'await assertLeadCollabProjectEnabled(leadSessionId);', 'return await startOrcaTeamWithPermissionGate(');
+    expect(collabHolderSource).toContain('startOrcaTeamForCaller(leadSessionId, workerPermissionMode)');
+    expect(collabHolderSource).toContain('createWorker: async');
+    expect(collabHolderSource).toContain('createWorkerFromTask: async');
+    expect(
+      collabHolderSource.match(/await assertLeadCollabProjectEnabled\(/g)?.length ?? 0,
+    ).toBeGreaterThanOrEqual(2);
+  });
+
   it('registers rehydrated worker sessions as known before Maker publishes them', () => {
     const successHookSource = makerHostSource.slice(
       makerHostSource.indexOf('onStartSucceeded:'),
@@ -41,6 +87,18 @@ describe('maker Orca role marking IPC boundary', () => {
 
     expect(successHookSource).toContain("if (createOpts.orcaRole === 'worker') {");
     expect(successHookSource).toContain('markKnownOrcaWorkerSession(sessionId);');
+  });
+
+  it('rejects Review sessions before thinking can be flipped', () => {
+    const thinkingSource = registerSource.slice(
+      registerSource.indexOf('MAKER_INVOKE.SET_THINKING_ENABLED'),
+      registerSource.indexOf('MAKER_INVOKE.SET_EXTRA_DIRS'),
+    );
+    expectOrder(
+      thinkingSource,
+      'await assertReviewSettingsUnlocked(sessionId);',
+      'await sess.setThinkingEnabled(enabled);',
+    );
   });
 });
 

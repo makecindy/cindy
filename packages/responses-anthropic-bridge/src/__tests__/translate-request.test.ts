@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest';
+import { InvalidResponsesRequestError } from '../types.js';
 
 import {
   decodeThinkingBlock,
@@ -54,6 +55,135 @@ describe('Responses → Anthropic request translation', () => {
       instructions: [{ type: 'input_image', image_url: 'https://example.com/a.png' }],
       input: 'hello',
     })).toThrowError('instructions[0].input_image');
+  });
+
+  it('replays collab agent messages as Anthropic assistant text', () => {
+    const result = translateResponsesRequest({
+      model: 'claude',
+      input: [
+        { role: 'user', content: 'delegate this' },
+        {
+          type: 'agent_message',
+          author: '/root/\r\n researcher',
+          content: [
+            { type: 'input_text', text: 'first finding' },
+            { type: 'encrypted_content', data: 'provider-secret' },
+            { type: 'output_text', text: 'second finding' },
+          ],
+        },
+        {
+          role: 'user',
+          content: [{ type: 'input_image', image_url: 'data:image/png;base64,abc' }],
+        },
+      ],
+    });
+
+    expect(result.request.messages[1]).toEqual({
+      role: 'assistant',
+      content: [{
+        type: 'text',
+        text: '[collab /root/ researcher]\nfirst finding\nsecond finding',
+      }],
+    });
+    expect(result.request.messages[2].content).toEqual([{
+      type: 'image',
+      source: { type: 'base64', media_type: 'image/png', data: 'abc' },
+    }]);
+    expect(JSON.stringify(result.request)).not.toContain('agent_message');
+    expect(JSON.stringify(result.request)).not.toContain('encrypted_content');
+    expect(JSON.stringify(result.request)).not.toContain('provider-secret');
+  });
+
+  it('keeps collab string, empty, and encrypted-only history distinguishable', () => {
+    const result = translateResponsesRequest({
+      model: 'claude',
+      input: [
+        { role: 'user', content: 'delegate this' },
+        { type: 'agent_message', content: 'plain result' },
+        { type: 'agent_message', author: '', content: [] },
+        {
+          type: 'agent_message',
+          author: 'worker',
+          content: [{ type: 'encrypted_content', data: 'opaque' }],
+        },
+        { role: 'user', content: 'continue' },
+      ],
+    });
+
+    expect(result.request.messages[1].content).toEqual([
+      { type: 'text', text: '[collab agent]\nplain result' },
+      { type: 'text', text: '[collab message from agent; empty content]' },
+      { type: 'text', text: '[collab message from worker; encrypted payload omitted]' },
+    ]);
+  });
+
+  it('rejects malformed collab content with its input path', () => {
+    expect(() => translateResponsesRequest({
+      model: 'claude',
+      input: [{ type: 'agent_message', content: [{ type: 'image_url' }] }],
+    })).toThrowError('input[0].content.image_url');
+
+    expect(() => translateResponsesRequest({
+      model: 'claude',
+      input: [{ type: 'agent_message', content: [{ type: 'text' }] }],
+    })).toThrowError('input[0].content.text');
+
+    expect(() => translateResponsesRequest({
+      model: 'claude',
+      input: [{ type: 'agent_message', content: null }],
+    })).toThrowError('input[0].content');
+  });
+
+  it('skips empty assistant messages with null content without dropping other input', () => {
+    const result = translateResponsesRequest({
+      model: 'claude',
+      input: [
+        {
+          type: 'message',
+          id: 'msg_empty',
+          role: 'assistant',
+          status: 'completed',
+          phase: 'final',
+          content: null,
+        },
+        { role: 'assistant', content: null },
+        { type: 'message', role: 'user', content: [{ type: 'input_text', text: 'continue' }] },
+      ],
+    });
+
+    expect(result.request.messages).toEqual([{
+      role: 'user',
+      content: [{ type: 'text', text: 'continue' }],
+    }]);
+    expect(() => translateResponsesRequest({
+      model: 'claude',
+      input: [{ type: 'message', role: 'assistant', content: null, encrypted_content: 'opaque' }],
+    })).toThrowError('message.content');
+    expect(() => translateResponsesRequest({
+      model: 'claude',
+      input: [{ type: 'message', role: 'user', content: null }],
+    })).toThrowError('message.content');
+  });
+
+  it('keeps collab text inside a valid tool-use round', () => {
+    const result = translateResponsesRequest({
+      model: 'claude',
+      input: [
+        { role: 'user', content: 'run it' },
+        { type: 'function_call', call_id: 'c1', name: 'run', arguments: '{}' },
+        { type: 'agent_message', author: 'worker', content: 'working result' },
+        { type: 'function_call_output', call_id: 'c1', output: 'ok' },
+      ],
+      tools: [{ type: 'function', name: 'run', parameters: { type: 'object' } }],
+    });
+
+    expect(result.request.messages[1].content).toEqual([
+      expect.objectContaining({ type: 'tool_use', id: 'c1', name: 'run' }),
+      { type: 'text', text: '[collab worker]\nworking result' },
+    ]);
+    expect(result.request.messages[2].content).toEqual([
+      expect.objectContaining({ type: 'tool_result', tool_use_id: 'c1' }),
+    ]);
   });
 
   it('rejects structured-output constraints instead of silently dropping them', () => {
@@ -868,8 +998,8 @@ describe('Responses → Anthropic request translation', () => {
     expect(result.request.thinking).toBeUndefined();
   });
 
-  it('cannot disable thinking on fable and mythos models', () => {
-    for (const model of ['claude-fable-5', 'claude-mythos-5']) {
+  it('cannot disable thinking on always-on models', () => {
+    for (const model of ['claude-fable-5', 'claude-mythos-5', 'claude-opus-5-5']) {
       const result = translateResponsesRequest({
         model,
         reasoning: { effort: 'none' },
@@ -879,6 +1009,42 @@ describe('Responses → Anthropic request translation', () => {
       expect(result.request.output_config).toEqual({ effort: 'low' });
     }
   });
+
+  it('uses adaptive thinking for Opus 5.5 with default and explicit efforts', () => {
+    for (const model of ['claude-opus-5-5', 'anthropic/claude-opus-5.5', 'claude-opus-5-5-20260922']) {
+      for (const effort of [undefined, 'low', 'medium', 'high', 'xhigh', 'max']) {
+        const result = translateResponsesRequest({
+          model,
+          ...(effort ? { reasoning: { effort } } : {}),
+          input: [{ role: 'user', content: 'hi' }],
+        });
+        expect(result.request.thinking).toEqual({ type: 'adaptive' });
+        if (effort) expect(result.request.output_config).toEqual({ effort });
+        else expect(result.request.output_config).toBeUndefined();
+      }
+    }
+  });
+
+  it.each(['claude-opus-5-5', 'anthropic/claude-opus-5.5', 'claude-opus-5-5-20260922'])(
+    'rejects incompatible tool requests without disabling thinking for %s', (model) => {
+      const tools = [{ type: 'function', name: 'run', parameters: { type: 'object' } }];
+      const expected = new InvalidResponsesRequestError(
+        'This Anthropic model requires signed thinking history for tool continuation or forced tool choice',
+      );
+      for (const effort of [undefined, 'none', 'high']) {
+        const request = { model, tools, ...(effort ? { reasoning: { effort } } : {}) };
+        for (const tool_choice of ['required', { type: 'function', name: 'run' }]) {
+          expect(() => translateResponsesRequest({ ...request,
+            input: [{ role: 'user', content: 'run the tool' }], tool_choice,
+          })).toThrowError(expected);
+        }
+        expect(() => translateResponsesRequest({ ...request, input: [
+          { type: 'function_call', call_id: 'c1', name: 'run', arguments: '{}' },
+          { type: 'function_call_output', call_id: 'c1', output: 'ok' },
+        ] })).toThrowError(expected);
+      }
+    },
+  );
 
   it('keeps automatic prompt caching off the moving last user block', () => {
     const result = translateResponsesRequest({

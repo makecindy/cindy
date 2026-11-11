@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import {
+  collectProjectDevices,
   projectDisplayLabelWithMachine,
   resolveRemoteProjectMachineIdentity,
 } from '@/features/cc-agent/lib/remoteProjectIdentity';
@@ -18,7 +19,9 @@ function sshHost(
       user: 'alice',
       authMethod: 'agent',
       source: 'ssh-config',
+      managedByCindy: false,
       ...overrides,
+      identityFileConfigured: overrides.identityFileConfigured ?? false,
     },
     status: 'ready',
     statusChangedAt: 0,
@@ -52,11 +55,20 @@ describe('resolveRemoteProjectMachineIdentity', () => {
     expect(identity?.displayLabel).toBe('gpu-box · root@example.test:2202');
   });
 
+  it('shows a custom display name while retaining the SSH alias', () => {
+    const identity = resolveRemoteProjectMachineIdentity(remoteProject, [
+      sshHost('gpu-box', { displayName: 'Build box' }),
+    ]);
+    expect(identity?.displayLabel).toBe('Build box (gpu-box) · alice@10.0.0.8');
+  });
+
   it('falls back to the persisted remoteHostId when config is missing', () => {
     expect(resolveRemoteProjectMachineIdentity(remoteProject, [])?.displayLabel).toBe('gpu-box');
   });
 
-  it('shows a device-link friendly name and keeps the stable device id visible', () => {
+  // 2026-08-12 用户裁决:设备 ID 是机器指纹哈希,对用户没有可读意义,默认不显示;
+  // 同名设备使用简短序号区分。
+  it('shows only the device-link friendly name when the name is unambiguous', () => {
     const identity = resolveRemoteProjectMachineIdentity(
       {
         scope: 'remote',
@@ -69,8 +81,46 @@ describe('resolveRemoteProjectMachineIdentity', () => {
     expect(identity).toEqual({
       kind: 'device-link',
       label: 'Office Mac',
-      detail: 'device-123',
-      displayLabel: 'Office Mac · device-123',
+      detail: null,
+      displayLabel: 'Office Mac',
+    });
+  });
+
+  it('uses an ordinal for names shared by more than one device', () => {
+    const identity = resolveRemoteProjectMachineIdentity(
+      {
+        scope: 'remote',
+        remoteHostId: null,
+        deviceLinkDeviceId: 'device-123',
+        deviceLinkDeviceName: 'Office Mac',
+      },
+      [],
+      { devices: [{ deviceId: 'device-123', name: 'Office Mac' }, { deviceId: 'device-456', name: 'Office Mac' }] },
+    );
+    expect(identity).toEqual({
+      kind: 'device-link',
+      label: 'Office Mac (1)',
+      detail: null,
+      displayLabel: 'Office Mac (1)',
+    });
+  });
+
+  it('uses a readable fallback when no device name resolved', () => {
+    const identity = resolveRemoteProjectMachineIdentity(
+      {
+        scope: 'remote',
+        remoteHostId: null,
+        deviceLinkDeviceId: 'device-123',
+        deviceLinkDeviceName: null,
+      },
+      [],
+    );
+    // 无名称也不暴露机器指纹。
+    expect(identity).toEqual({
+      kind: 'device-link',
+      label: 'another computer',
+      detail: null,
+      displayLabel: 'another computer',
     });
   });
 
@@ -86,6 +136,17 @@ describe('resolveRemoteProjectMachineIdentity', () => {
         [sshHost('gpu-box')],
       ),
     ).toBeNull();
+  });
+});
+
+describe('collectProjectDevices', () => {
+  it('deduplicates project hosts without losing unnamed devices used for display fallback', () => {
+    expect(collectProjectDevices([
+      { deviceLinkDeviceId: 'b', deviceLinkDeviceName: 'Mac' },
+      { deviceLinkDeviceId: 'a', deviceLinkDeviceName: null },
+      { deviceLinkDeviceId: 'b', deviceLinkDeviceName: 'Mac' },
+      { deviceLinkDeviceId: null, deviceLinkDeviceName: null },
+    ])).toEqual([{ deviceId: 'a', name: null }, { deviceId: 'b', name: 'Mac' }]);
   });
 });
 

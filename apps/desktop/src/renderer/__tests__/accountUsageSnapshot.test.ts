@@ -1,6 +1,6 @@
 import { readFileSync } from 'node:fs';
 
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 
 import {
   CODEX_DEFAULT_LIMIT_BUCKET,
@@ -13,6 +13,42 @@ import {
 } from '@/hooks/useAccountUsage';
 
 describe('mergeCodexAccountUsageSnapshot', () => {
+  it('preserves the sibling app-server window during a one-window sparse update', () => {
+    const previous = {
+      source: 'codex-app-server',
+      limitId: 'codex',
+      primary: { usedPercent: 24, windowMinutes: 300 },
+      secondary: { usedPercent: 31, windowMinutes: 10_080 },
+    };
+
+    const merged = mergeCodexAccountUsageSnapshot(previous, {
+      source: 'codex-app-server',
+      limitId: 'codex',
+      primary: { usedPercent: 25, windowMinutes: 300 },
+    });
+
+    expect(merged.primary?.usedPercent).toBe(25);
+    expect(merged.secondary).toEqual(previous.secondary);
+  });
+
+  it('clears an explicitly null app-server window but preserves an omitted sibling', () => {
+    const previous = {
+      source: 'codex-app-server',
+      limitId: 'codex',
+      primary: { usedPercent: 24, windowMinutes: 300 },
+      secondary: { usedPercent: 31, windowMinutes: 10_080 },
+    };
+
+    const merged = mergeCodexAccountUsageSnapshot(previous, {
+      source: 'codex-app-server',
+      limitId: 'codex',
+      secondary: null,
+    });
+
+    expect(merged.primary).toEqual(previous.primary);
+    expect(merged.secondary ?? null).toBeNull();
+  });
+
   it('preserves the last known credit balance when a later snapshot omits credits', () => {
     const previous = {
       credits: {
@@ -201,15 +237,20 @@ describe('mergeCodexAccountUsageSnapshot', () => {
       new URL('../../preload/preload.ts', import.meta.url),
       'utf8',
     );
-    const hookSource = readFileSync(new URL('../hooks/useAccountUsage.ts', import.meta.url), 'utf8');
+    const hookSource = readFileSync(
+      new URL('../hooks/useAccountUsage.ts', import.meta.url),
+      'utf8',
+    );
 
     expect(mainSource).toContain("USAGE_CODEX_ACCOUNT_CHANGED = 'usage:codex-account-changed'");
-    expect(mainSource).toContain('broadcastCodexAccountUsage(payload);');
+    expect(mainSource).toContain('broadcastCodexAccountUsage(payload, providerId);');
     expect(mainSource).toContain('isCodexZeroWindowFallback(incoming)');
     expect(mainSource).toContain('isCodexWindowlessFallback(incoming)');
-    expect(mainSource).toContain('broadcastCodexAccountUsage(null);');
+    expect(mainSource).toContain('broadcastCodexAccountUsage(null, providerId);');
     expect(preloadSource).toContain("createIpcFanOut('usage:codex-account-changed')");
-    expect(preloadSource).toContain('onCodexAccountChanged: fanOutMakerUsageCodexAccount');
+    expect(preloadSource).toMatch(
+      /providerId === 'openai'\s*\? fanOutMakerUsageCodexAccount\(cb\)/,
+    );
     expect(hookSource).toContain('api.onCodexAccountChanged');
     expect(hookSource).toContain('options: { clearOnNull?: boolean } = {}');
     expect(hookSource).toContain('selectCodexSlot(quotaSource');
@@ -238,20 +279,23 @@ describe('splitCodexAccountUsagePayload', () => {
       webSnapshot: { primary: { usedPercent: 0 }, source: 'openai-web' },
     } as never);
     expect(parts.appServer?.primary?.usedPercent).toBe(82);
-    expect((parts.appServer as { webSnapshot?: unknown } | undefined)?.webSnapshot)
-      .toBeUndefined();
+    expect((parts.appServer as { webSnapshot?: unknown } | undefined)?.webSnapshot).toBeUndefined();
     expect(parts.web?.primary?.usedPercent).toBe(0);
   });
 
   it('routes bare snapshots by their source field (per-turn events vs WHAM)', () => {
-    expect(splitCodexAccountUsagePayload({
-      primary: { usedPercent: 40 },
-      source: 'codex-app-server',
-    }).appServer?.primary?.usedPercent).toBe(40);
-    expect(splitCodexAccountUsagePayload({
-      primary: { usedPercent: 5 },
-      source: 'openai-web',
-    }).web?.primary?.usedPercent).toBe(5);
+    expect(
+      splitCodexAccountUsagePayload({
+        primary: { usedPercent: 40 },
+        source: 'codex-app-server',
+      }).appServer?.primary?.usedPercent,
+    ).toBe(40);
+    expect(
+      splitCodexAccountUsagePayload({
+        primary: { usedPercent: 5 },
+        source: 'openai-web',
+      }).web?.primary?.usedPercent,
+    ).toBe(5);
   });
 
   it('treats combined payloads as authoritative: empty slots clear explicitly', () => {
@@ -300,8 +344,8 @@ describe('module subscription install (behavior)', () => {
       },
     };
     try {
-      const { resetModules } = await import('vitest').then((m) => ({ resetModules: m.vi.resetModules }));
-      resetModules();
+      // reset-modules: observe first installation of the module-level usage listener in this initialization test.
+      vi.resetModules();
       const [{ useAccountUsage: freshUseAccountUsage }, { renderToString }, React] =
         await Promise.all([
           import('@/hooks/useAccountUsage'),
@@ -424,7 +468,10 @@ describe('bucket key safety and authoritative top-level slot', () => {
   it('marks combined payloads authoritative so the top-level slot is replaced, not merged', () => {
     // 跨桶 merge 会造出「B 的 limitId + A 的窗口」杂交体(windowless 兜底保留旧窗口),
     // 冷启动会话回退顶层时显示错桶数据(review 反馈)。组合 payload 必须直接替换。
-    const hookSource = readFileSync(new URL('../hooks/useAccountUsage.ts', import.meta.url), 'utf8');
+    const hookSource = readFileSync(
+      new URL('../hooks/useAccountUsage.ts', import.meta.url),
+      'utf8',
+    );
     expect(hookSource).toContain("const isAuthoritative = 'appServerBuckets' in parts;");
     expect(hookSource).toContain('? parts.appServer');
   });
@@ -472,8 +519,9 @@ describe('bucket selection safety (review follow-up)', () => {
     expect(isCodexBucketStale(expiredSpark, NOW)).toBe(true);
     expect(isCodexBucketStale(MAIN, NOW)).toBe(false);
     // 促销结束后的过期 Spark 桶不再被同名模型选中
-    expect(matchCodexBucketForModel({ codex_bengalfox: expiredSpark }, 'gpt-5.3-codex-spark', NOW))
-      .toBeNull();
+    expect(
+      matchCodexBucketForModel({ codex_bengalfox: expiredSpark }, 'gpt-5.3-codex-spark', NOW),
+    ).toBeNull();
   });
 
   it('does not treat window-less or reset-less buckets as stale', () => {
@@ -505,14 +553,23 @@ describe('nextCodexBucketStaleAtMs', () => {
   const resetsAtSec = (offsetMs: number) => Math.floor((NOW + offsetMs) / 1000);
 
   it('returns the soonest upcoming stale moment (reset + 24h grace)', () => {
-    const soon = { limitId: 'codex_bengalfox', primary: { usedPercent: 0, resetsAt: resetsAtSec(60_000) } };
-    const later = { limitId: 'codex', primary: { usedPercent: 30, resetsAt: resetsAtSec(10 * 60_000) } };
+    const soon = {
+      limitId: 'codex_bengalfox',
+      primary: { usedPercent: 0, resetsAt: resetsAtSec(60_000) },
+    };
+    const later = {
+      limitId: 'codex',
+      primary: { usedPercent: 30, resetsAt: resetsAtSec(10 * 60_000) },
+    };
     const staleAt = nextCodexBucketStaleAtMs({ a: soon, b: later }, NOW);
     expect(staleAt).toBe(resetsAtSec(60_000) * 1000 + DAY_MS);
   });
 
   it('ignores already-stale buckets and reset-less windows', () => {
-    const alreadyStale = { limitId: 'x', primary: { usedPercent: 0, resetsAt: resetsAtSec(-3 * DAY_MS) } };
+    const alreadyStale = {
+      limitId: 'x',
+      primary: { usedPercent: 0, resetsAt: resetsAtSec(-3 * DAY_MS) },
+    };
     const resetless = { limitId: 'y', primary: { usedPercent: 10 } };
     expect(nextCodexBucketStaleAtMs({ a: alreadyStale }, NOW)).toBeNull();
     expect(nextCodexBucketStaleAtMs({ b: resetless }, NOW)).toBeNull();
@@ -534,7 +591,10 @@ describe('bucket table keeps a null prototype across incremental updates', () =>
   it('never re-attaches Object.prototype when merging a turn event bucket', () => {
     // sanitize 建立 null 原型后, 增量写入若用对象字面量 spread 会把原型换回来,
     // 削弱防御(review 反馈)。这里用源码断言锁定实现选择。
-    const hookSource = readFileSync(new URL('../hooks/useAccountUsage.ts', import.meta.url), 'utf8');
+    const hookSource = readFileSync(
+      new URL('../hooks/useAccountUsage.ts', import.meta.url),
+      'utf8',
+    );
     expect(hookSource).toContain('function emptyBucketTable(');
     expect(hookSource).toContain('function withCodexBucket(');
     // 增量分支不得再出现桶表字面量 spread
@@ -548,12 +608,17 @@ describe('renderer sparse update bucket routing', () => {
     // main 侧已按 app-server 契约把缺 limitId 的稀疏更新并入最近观察到的桶;
     // renderer 增量路径若仍按缺省桶归类, 模型专属窗口会被当通用桶暴露给其它
     // 会话(review 反馈)。这里锁定实现选择。
-    const hookSource = readFileSync(new URL('../hooks/useAccountUsage.ts', import.meta.url), 'utf8');
-    expect(hookSource).toContain('let lastCodexAppServerBucketKey: string | null = null;');
+    const hookSource = readFileSync(
+      new URL('../hooks/useAccountUsage.ts', import.meta.url),
+      'utf8',
+    );
+    expect(hookSource).toContain('latestBucketKey: string | null;');
     expect(hookSource).toContain('function resolveIncrementalBucketKey(');
-    expect(hookSource).toContain('return lastCodexAppServerBucketKey ?? codexLimitBucketKey(incoming);');
+    expect(hookSource).toContain('return state.latestBucketKey ?? codexLimitBucketKey(incoming);');
     // 增量分支必须走 resolveIncrementalBucketKey, 不能直接用 codexLimitBucketKey
-    expect(hookSource).toContain('resolveIncrementalBucketKey(parts.appServer),');
-    expect(hookSource).not.toContain('codexLimitBucketKey(parts.appServer),\n              parts.appServer,');
+    expect(hookSource).toContain('resolveIncrementalBucketKey(parts.appServer, state),');
+    expect(hookSource).not.toContain(
+      'codexLimitBucketKey(parts.appServer),\n              parts.appServer,',
+    );
   });
 });

@@ -9,10 +9,11 @@
  * 2. 所有消费者读到同一引用(getSnapshot 引用稳定);
  * 3. ghosts:changed 推送后全体刷新,仍不重扫(payload 自带全量清单)。
  */
-import { act, cleanup, render, screen } from '@testing-library/react';
+import { act, cleanup, render, renderHook, screen } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import type { InstalledGhost } from '../../../shared/ghost';
+import { useWorkdirDisabledGhostIds } from '../ghostWorkdirFilter';
 import {
   __resetInstalledGhostsStoreForTest,
   useInstalledGhosts,
@@ -26,10 +27,10 @@ const ghost = (id: string, name = id): InstalledGhost => ({
     version: '1.0.0',
     kind: 'chip',
     entry: 'main.js',
-    slots: ['tool'],
   },
   dir: `/brain/${id}`,
   enabled: true,
+  approval: { state: 'approved', revision: '00000000-0000-4000-8000-000000000001' },
 });
 
 type ChangedCb = (payload: { ghosts: InstalledGhost[] }) => void;
@@ -62,12 +63,87 @@ afterEach(() => {
   __resetInstalledGhostsStoreForTest();
 });
 
+// KFJS unit regression: old-directory responses must not expose commands in a
+// newly selected directory; this asynchronous display path must not sendSync.
+it('loads directory policy asynchronously and discards stale directory responses', async () => {
+  const pending = new Map<string, (value: { disabled: string[] }) => void>();
+  const workdirPrefs = vi.fn((dir: string) => new Promise<{ disabled: string[] }>((resolve) => pending.set(dir, resolve)));
+  const workdirPrefsSync = vi.fn(() => { throw new Error('blocking IPC'); });
+  Object.assign(window.electronAPI.ghosts, { workdirPrefs, workdirPrefsSync });
+  const ghosts = [ghost('a')];
+  const { result, rerender } = renderHook(({ dir }) => useWorkdirDisabledGhostIds(dir, ghosts), { initialProps: { dir: 'first' } });
+  expect(result.current).toBeNull();
+  await act(async () => {});
+  rerender({ dir: 'second' });
+  await act(async () => {});
+  await act(async () => { pending.get('second')!({ disabled: ['a'] }); });
+  expect([...result.current!]).toEqual(['a']);
+  await act(async () => { pending.get('first')!({ disabled: [] }); });
+  expect([...result.current!]).toEqual(['a']);
+  expect(workdirPrefsSync).not.toHaveBeenCalled();
+});
+
+// Unit regression: scoped policy pushes replace global roster refreshes. They
+// must update matching aliases, ignore other projects, and win over stale reads.
+it('updates only the matching canonical directory without reloading the roster or policy', async () => {
+  let changed!: (policy: { workdirKey: string; disabled: string[] }, stamp?: unknown) => void;
+  const unsubscribe = vi.fn();
+  const workdirPrefs = vi.fn(async () => ({ workdirKey: 'c:\\project', disabled: [] as string[] }));
+  Object.assign(window.electronAPI.ghosts, {
+    workdirPrefs,
+    onWorkdirPrefsChanged: (callback: typeof changed) => { changed = callback; return unsubscribe; },
+  });
+  const ghosts = [ghost('a')];
+  const { result, unmount } = renderHook(() => useWorkdirDisabledGhostIds('C:/Project/', ghosts));
+  await act(async () => {});
+  act(() => changed({ workdirKey: 'c:\\project', disabled: ['a'] }, { dataOwnerId: 'old-owner', ownerGeneration: 0 }));
+  expect([...result.current!]).toEqual([]);
+  act(() => changed({ workdirKey: '/other', disabled: ['a'] }));
+  expect([...result.current!]).toEqual([]);
+  act(() => changed({ workdirKey: 'c:\\project', disabled: ['a'] }));
+  expect([...result.current!]).toEqual(['a']);
+  expect(workdirPrefs).toHaveBeenCalledOnce();
+  expect(listSync).not.toHaveBeenCalled();
+  unmount();
+  expect(unsubscribe).toHaveBeenCalledOnce();
+});
+
+it('rechecks a policy push racing the initial read and discards the earlier response', async () => {
+  type Policy = { workdirKey: string; disabled: string[] };
+  let changed!: (policy: Policy) => void;
+  const requests: Array<(policy: Policy) => void> = [];
+  Object.assign(window.electronAPI.ghosts, {
+    workdirPrefs: () => new Promise<Policy>(resolve => requests.push(resolve)),
+    onWorkdirPrefsChanged: (callback: typeof changed) => { changed = callback; return () => {}; },
+  });
+  const ghosts = [ghost('a')];
+  const { result } = renderHook(() => useWorkdirDisabledGhostIds('/project', ghosts));
+  await act(async () => {});
+  await act(async () => changed({ workdirKey: '/project', disabled: ['a'] }));
+  expect(requests).toHaveLength(2);
+  await act(async () => requests[1]!({ workdirKey: '/project', disabled: ['a'] }));
+  await act(async () => requests[0]!({ workdirKey: '/project', disabled: [] }));
+  expect([...result.current!]).toEqual(['a']);
+});
+
 function Probe({ label }: { label: string }) {
   const ghosts = useInstalledGhosts();
   return <div data-testid={label}>{ghosts.map((g) => g.manifest.id).join(',')}</div>;
 }
 
 describe('useInstalledGhosts(窗口级共享缓存)', () => {
+  it('remote composers can opt out of local synchronous IPC and subscriptions', () => {
+    const { result, rerender } = renderHook(({ enabled }) => useInstalledGhosts(enabled), {
+      initialProps: { enabled: false },
+    });
+    expect(result.current).toEqual([]);
+    expect(listSync).not.toHaveBeenCalled();
+    expect(onChanged).not.toHaveBeenCalled();
+    rerender({ enabled: true });
+    expect(result.current[0].manifest.id).toBe('cindy-art');
+    rerender({ enabled: false });
+    expect(result.current).toEqual([]);
+  });
   it('多个消费者只触发一次 listSync,清单一致', () => {
     render(
       <>

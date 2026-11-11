@@ -13,5 +13,28 @@
   "upToDateBody": "当前已是最新整包版本。",
   "checkFailedTitle": "检查失败",
   "checkFailedBody": "无法连接更新服务器，请稍后重试。",
-  "latestRequestFailed": "latest 请求失败：HTTP {{status}}"
+  "latestRequestFailed": "latest 请求失败：HTTP {{status}}",
+  "android": {
+    "versionChange": "{{current}} → {{version}}",
+    "version": "版本 {{version}}",
+    "notesLabel": "更新内容",
+    "updateNow": "立即更新",
+    "permissionTitle": "需要允许 Cindy 安装应用",
+    "permissionBody": "在系统设置中开启后返回，更新会自动继续。",
+    "grantAndUpdate": "允许并更新",
+    "deniedTitle": "尚未开启安装权限",
+    "deniedBody": "可以重新开启，或改用浏览器下载。",
+    "grantAgain": "重新允许安装",
+    "downloading": "正在下载…",
+    "percent": "{{percent}}%",
+    "installing": "正在打开安装器…",
+    "ready": "已下载完成，可以随时安装",
+    "install": "安装更新",
+    "failedTitle": "更新没有完成",
+    "failedBody": "下载或打开安装器时出错。",
+    "retry": "重试更新",
+    "cancel": "取消更新",
+    "browser": "改用浏览器下载",
+    "browserFailed": "无法打开下载链接，请稍后重试。"
+  }
 }

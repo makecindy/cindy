@@ -21,6 +21,8 @@ import { ChatBridgeToolContext } from './tool-context.js';
 const TOOL_CALL_REASONING_PLACEHOLDER = 'tool call';
 const GOOGLE_THOUGHT_SIGNATURE_PLACEHOLDER = 'skip_thought_signature_validator';
 const TOOL_RESULT_MEDIA_MOVED_MARKER = '[media moved to the following user message]';
+const TOOL_RESULT_MEDIA_OMITTED_MARKER =
+  '[media omitted: the current model route does not accept this content type]';
 
 interface ChatMediaCapabilities {
   imageInput?: ChatImageInput;
@@ -30,6 +32,21 @@ interface ChatMediaCapabilities {
 
 function isPlainObject(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value);
+}
+
+/** Collect system/developer messages in order and emit a single leading system message. */
+export function coalesceLeadingSystemMessages(messages: ChatMessage[]): ChatMessage[] {
+  const systems: string[] = [];
+  const rest: ChatMessage[] = [];
+  for (const message of messages) {
+    if (message.role === 'system' || message.role === 'developer') {
+      if (message.content) systems.push(message.content);
+      continue;
+    }
+    rest.push(message);
+  }
+  if (systems.length === 0) return messages;
+  return [{ role: 'system', content: systems.join('\n\n') }, ...rest];
 }
 
 function cloneToolCallExtraContent(value: unknown): ChatToolCallExtraContent | undefined {
@@ -118,33 +135,47 @@ function hasAudioSource(part: Record<string, unknown>): boolean {
 function mediaPart(
   part: Record<string, unknown>,
   capabilities: ChatMediaCapabilities,
-  failClosed = false,
 ): ChatUserContentPart | undefined {
   if (isResponsesImageContentPartType(part.type)) {
     if (!hasImageSource(part)) return undefined;
-    if (capabilities.imageInput !== 'image_url') {
-      if (failClosed) throw new UnsupportedResponsesFeatureError(String(part.type));
-      return undefined;
-    }
+    if (capabilities.imageInput !== 'image_url') return undefined;
     return imagePart(part);
   }
   if (part.type === 'input_file' || part.type === 'file') {
     if (!hasFileSource(part)) return undefined;
-    if (capabilities.fileInput !== 'file') {
-      if (failClosed) throw new UnsupportedResponsesFeatureError(String(part.type));
-      return undefined;
-    }
+    if (capabilities.fileInput !== 'file') return undefined;
     return filePart(part);
   }
   if (part.type === 'input_audio') {
     if (!hasAudioSource(part)) return undefined;
-    if (capabilities.audioInput !== 'input_audio') {
-      if (failClosed) throw new UnsupportedResponsesFeatureError(String(part.type));
-      return undefined;
-    }
+    if (capabilities.audioInput !== 'input_audio') return undefined;
     return audioPart(part);
   }
   return undefined;
+}
+
+/**
+ * 只含合法元数据且 content 为 null 的 assistant 历史项。
+ *
+ * Codex 在历史回放里会把「上一轮只有工具调用、没有正文」的产物写成
+ * `{ type: 'message', role: 'assistant', content: null }`。messageContent 对既非字符串
+ * 也非数组的 content 一律抛 unsupported_feature,于是这条无害的历史项会让后续每一轮
+ * 续聊都被拒(#9344)。Anthropic 桥接已在 #6676 对同一形状做跳过,这里对齐。
+ */
+function isEmptyAssistantMessageWithSupportedMetadata(item: Record<string, unknown>): boolean {
+  if (item.role !== 'assistant' || item.content !== null) return false;
+  if (item.type !== undefined && item.type !== 'message') return false;
+  if (['id', 'status', 'phase'].some((fieldName) => (
+    item[fieldName] !== undefined && typeof item[fieldName] !== 'string'
+  ))) return false;
+  return Object.keys(item).every((fieldName) => (
+    fieldName === 'type'
+    || fieldName === 'id'
+    || fieldName === 'role'
+    || fieldName === 'content'
+    || fieldName === 'status'
+    || fieldName === 'phase'
+  ));
 }
 
 function messageContent(
@@ -226,23 +257,56 @@ function stringifyToolOutput(output: unknown): string {
   }
 }
 
+/** 带媒体来源但当前路由能力不支持、无法翻译的媒体 part。 */
+function isUntranslatableMediaPart(
+  part: Record<string, unknown>,
+  capabilities: ChatMediaCapabilities,
+): boolean {
+  if (isResponsesImageContentPartType(part.type)) {
+    return hasImageSource(part) && !isImagePartTranslatable(part, capabilities);
+  }
+  if (part.type === 'input_file' || part.type === 'file') {
+    return hasFileSource(part) && capabilities.fileInput !== 'file';
+  }
+  if (part.type === 'input_audio') {
+    return hasAudioSource(part) && capabilities.audioInput !== 'input_audio';
+  }
+  return false;
+}
+
+interface ToolMediaSink {
+  media: ChatUserContentPart[];
+  /** 发生过任何替换(搬运或占位)时为 true:序列化必须用替换后的结构。 */
+  substituted: boolean;
+}
+
 function replaceToolMedia(
   value: unknown,
-  media: ChatUserContentPart[],
+  sink: ToolMediaSink,
   mediaCapabilities: ChatMediaCapabilities,
 ): unknown {
   if (Array.isArray(value)) {
-    return value.map((part) => replaceToolMedia(part, media, mediaCapabilities));
+    return value.map((part) => replaceToolMedia(part, sink, mediaCapabilities));
   }
   if (!isPlainObject(value)) return value;
-  const translated = mediaPart(value, mediaCapabilities, true);
+  const translated = mediaPart(value, mediaCapabilities);
   if (translated) {
-    media.push(translated);
+    sink.media.push(translated);
+    sink.substituted = true;
     return { type: 'text', text: TOOL_RESULT_MEDIA_MOVED_MARKER };
+  }
+  if (isUntranslatableMediaPart(value, mediaCapabilities)) {
+    // 路由不支持该媒体类型时降级为占位文本而不是 fail-closed 拒绝整单:
+    // 上下文压缩 / 历史重放会把此前由视觉桥等机制拦下的图片以 input_image
+    // 重新带进工具输出,一票否决会让会话此后每一轮都被拒、彻底卡死,只能
+    // 新建任务(#2805)。文本模型本就无法接收这类媒体,占位丢弃是唯一可
+    // 继续的表达;当轮媒体拦截 / 转换仍由上游(视觉桥)负责。
+    sink.substituted = true;
+    return { type: 'text', text: TOOL_RESULT_MEDIA_OMITTED_MARKER };
   }
   return Object.fromEntries(
     Object.entries(value).map(
-      ([key, child]) => [key, replaceToolMedia(child, media, mediaCapabilities)],
+      ([key, child]) => [key, replaceToolMedia(child, sink, mediaCapabilities)],
     ),
   );
 }
@@ -251,11 +315,11 @@ function splitToolOutput(
   output: unknown,
   mediaCapabilities: ChatMediaCapabilities,
 ): { content: string; media: ChatUserContentPart[] } {
-  const media: ChatUserContentPart[] = [];
-  const replaced = replaceToolMedia(output, media, mediaCapabilities);
+  const sink: ToolMediaSink = { media: [], substituted: false };
+  const replaced = replaceToolMedia(output, sink, mediaCapabilities);
   return {
-    content: stringifyToolOutput(media.length > 0 ? replaced : output),
-    media,
+    content: stringifyToolOutput(sink.substituted ? replaced : output),
+    media: sink.media,
   };
 }
 
@@ -328,6 +392,10 @@ function agentMessageText(item: Record<string, unknown>, itemIndex: number): str
       throw new UnsupportedResponsesFeatureError(`input[${itemIndex}].content.${part.type}`);
     }
     body = parts.join('\n');
+  } else if (item.content === null || item.content === undefined) {
+    // 无正文的协作消息没有可翻译的内容(Codex 回放里会出现 content: null),
+    // 按「空内容」降级,而不是把整单判成 unsupported_feature 让会话卡死(#9344)。
+    body = '';
   } else {
     throw new UnsupportedResponsesFeatureError(`input[${itemIndex}].content`);
   }
@@ -551,6 +619,8 @@ function translateInput(input: ResponsesRequest['input'], opts: TranslateInputOp
     const record = item as Record<string, unknown>;
 
     if ('role' in item && typeof item.role === 'string') {
+      // 只有工具调用、没有正文的 assistant 历史项整条跳过(#9344,与 Anthropic 桥接 #6676 对齐)。
+      if (isEmptyAssistantMessageWithSupportedMetadata(record)) continue;
       const content = messageContent(
         item as Extract<ResponsesInputItem, { role: string }>,
         index,
@@ -610,6 +680,25 @@ function translateInput(input: ResponsesRequest['input'], opts: TranslateInputOp
     if (item.type === 'reasoning') {
       if (opts.reasoningHistoryField === 'reasoning_content') {
         pendingReasoning += reasoningText(item);
+      }
+      continue;
+    }
+
+    if (item.type === 'web_search_call') {
+      if (
+        record.status !== 'completed'
+        || !isPlainObject(record.action)
+        || typeof record.action.type !== 'string'
+        || !record.action.type.trim()
+      ) throw new UnsupportedResponsesFeatureError("input item 'web_search_call'");
+      const message: ChatMessage = {
+        role: 'assistant',
+        content: '[completed web search]\n' + JSON.stringify(record.action),
+      };
+      if ((assistant?.tool_calls?.length ?? 0) > 0 || pendingToolCalls.length > 0) {
+        deferredBarriers.push(message);
+      } else {
+        pushBarrier(message);
       }
       continue;
     }
@@ -690,6 +779,55 @@ function reportDroppedTools(
     ) return;
     onDropped?.(isPlainObject(tool) ? String(tool.type) : typeof tool, index);
   });
+}
+
+function hasDroppedWebSearchTool(tools: ResponsesRequest['tools']): boolean {
+  return (tools ?? []).some((tool) => (
+    isPlainObject(tool) && tool.type === 'web_search'
+  ));
+}
+
+function hasRetainedTool(
+  tools: ResponsesRequest['tools'],
+  kind: 'function' | 'custom',
+  name: string,
+  namespace?: string,
+): boolean {
+  for (const tool of tools ?? []) {
+    if (typeof tool === 'string') {
+      if (kind === 'custom' && namespace === undefined && tool === name) return true;
+      continue;
+    }
+    if (!isPlainObject(tool)) continue;
+    const nested = isPlainObject(tool.function) ? tool.function : undefined;
+    const toolName = typeof tool.name === 'string'
+      ? tool.name
+      : typeof nested?.name === 'string'
+        ? nested.name
+        : undefined;
+    if (tool.type === kind && toolName === name && namespace === undefined) return true;
+    if (tool.type === 'namespace' && tool.name === namespace) {
+      const children = Array.isArray(tool.tools) ? tool.tools : tool.children;
+      if (Array.isArray(children) && children.some((child) => (
+        isPlainObject(child) && child.type === kind && child.name === name
+      ))) return true;
+    }
+  }
+  return false;
+}
+
+function explicitlySelectsDroppedWebSearch(
+  tools: ResponsesRequest['tools'],
+  choice: unknown,
+): boolean {
+  if (!isPlainObject(choice)) return false;
+  if (choice.type === 'web_search') return true;
+  if (choice.type !== 'function' && choice.type !== 'custom') return false;
+  const nestedFunction = isPlainObject(choice.function) ? choice.function : undefined;
+  const name = typeof choice.name === 'string' ? choice.name : nestedFunction?.name;
+  if (name !== 'web_search') return false;
+  const namespace = typeof choice.namespace === 'string' ? choice.namespace : undefined;
+  return !hasRetainedTool(tools, choice.type, name, namespace);
 }
 
 function translateToolChoice(
@@ -806,6 +944,23 @@ export function translateResponsesRequestWithContext(
   const developerRole = capabilities.developerRole ?? 'system';
   const toolContext = ChatBridgeToolContext.fromRequest(input);
   reportDroppedTools(input.tools, opts.onDroppedTool);
+  if (hasDroppedWebSearchTool(input.tools)) {
+    // Ordinary/auto requests keep degrading (web_search removed, other tools preserved). Stay
+    // fail-closed only when the request can be satisfied *solely* by the dropped web_search:
+    // either it explicitly selects web_search, or it demands `required` while every convertible
+    // tool was dropped, leaving no tool the upstream could call. Otherwise `required` is silently
+    // relaxed and a search-less provider answers as though no tool were requested.
+    const requiresDroppedWebSearch =
+      explicitlySelectsDroppedWebSearch(input.tools, input.tool_choice)
+      || (
+        input.tool_choice === 'required'
+        && capabilities.forceAutoToolChoice !== true
+        && toolContext.chatTools === undefined
+      );
+    if (requiresDroppedWebSearch) {
+      throw new UnsupportedResponsesFeatureError('tool_choice.web_search');
+    }
+  }
   const messages = translateInput(input.input, {
     developerRole,
     mediaCapabilities: capabilities,
@@ -833,6 +988,10 @@ export function translateResponsesRequestWithContext(
         throw new UnsupportedResponsesFeatureError(`instructions[${index}].${part.type}`);
       }).join('');
     if (instructions) messages.unshift({ role: developerRole, content: instructions });
+  }
+  if (capabilities.systemMessagePolicy === 'coalesce-leading') {
+    const coalesced = coalesceLeadingSystemMessages(messages);
+    messages.splice(0, messages.length, ...coalesced);
   }
 
   const request: ChatCompletionsRequest = {

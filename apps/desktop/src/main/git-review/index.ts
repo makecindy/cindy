@@ -1,4 +1,5 @@
 export { registerGitReviewIpc, GIT_REVIEW_INVOKE } from './ipc.js';
+export { registerGitReviewDeviceOp } from './device-op.js';
 export { runGit, GitRunError } from './gitRunner.js';
 export { resolveReviewScope } from './scopeResolver.js';
 export { readStatus, parsePorcelainV2Status } from './statusReader.js';

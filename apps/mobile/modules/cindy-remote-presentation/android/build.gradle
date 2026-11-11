@@ -1,0 +1,15 @@
+plugins {
+  id 'com.android.library'
+  id 'expo-module-gradle-plugin'
+}
+group = 'com.cindy.remotepresentation'
+version = '0.1.0'
+android {
+  namespace 'com.cindy.remotepresentation'
+  defaultConfig {
+    minSdkVersion 24
+    versionCode 1
+    versionName '0.1.0'
+  }
+}
+dependencies { implementation 'androidx.core:core:1.15.0' }

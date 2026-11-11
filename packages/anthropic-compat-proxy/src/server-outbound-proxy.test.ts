@@ -87,6 +87,52 @@ describe('anthropic-compat-proxy outbound proxy wiring', () => {
     expect(connects).toEqual(['upstream.invalid:443']);
   });
 
+  it('classifies a closed loopback HTTP CONNECT proxy port as upstream_loopback_refused (#4100)', async () => {
+    // 先拿一个刚释放的回环端口:代理进程 / SSH 隧道没起来的形态。
+    const placeholder = createHttpServer();
+    const closedPort = await listenOnAvailableLoopbackPort(placeholder);
+    await new Promise<void>((r) => placeholder.close(() => r()));
+
+    proxy = await createAnthropicCompatProxy({
+      upstream: 'https://upstream.invalid',
+      transformRequest: [],
+      resolveOutboundProxy: () => `http://127.0.0.1:${closedPort}`,
+    });
+
+    const res = await fetch(`${proxy.url}/v1/messages`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ model: 'x', messages: [] }),
+    });
+    expect(res.status).toBe(502);
+    const body = await res.json() as { error: { code?: string; message: string } };
+    expect(body.error.code).toBe('upstream_loopback_refused');
+    expect(body.error.message).toContain(`outbound proxy at 127.0.0.1:${closedPort}`);
+    expect(body.error.message).toContain('nothing is listening');
+  });
+
+  it('classifies a closed loopback SOCKS5 proxy port as upstream_loopback_refused (#4100)', async () => {
+    const placeholder = createHttpServer();
+    const closedPort = await listenOnAvailableLoopbackPort(placeholder);
+    await new Promise<void>((r) => placeholder.close(() => r()));
+
+    proxy = await createAnthropicCompatProxy({
+      upstream: 'http://upstream.invalid:8080/v1',
+      transformRequest: [],
+      resolveOutboundProxy: () => `socks5://127.0.0.1:${closedPort}`,
+    });
+
+    const res = await fetch(`${proxy.url}/messages`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ model: 'x', messages: [] }),
+    });
+    expect(res.status).toBe(502);
+    const body = await res.json() as { error: { code?: string; message: string } };
+    expect(body.error.code).toBe('upstream_loopback_refused');
+    expect(body.error.message).toContain(`outbound proxy at 127.0.0.1:${closedPort}`);
+  });
+
   it('tunnels upstreams through SOCKS5 and hands the domain to the proxy unresolved', async () => {
     const seen: Array<{ url: string; host?: string }> = [];
     const upstream = createHttpServer((req, res) => {

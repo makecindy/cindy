@@ -1,3 +1,6 @@
+import { Button } from '@/components/ui/button';
+import { ChevronDown, Globe2, Pencil } from 'lucide-react';
+import { MarkdownRenderer } from '@/components/chat/MarkdownRenderer';
 /**
  * IssueConfirmCard
  * ---------------------------------------------------------------------------
@@ -9,11 +12,11 @@
  * 视觉对齐 PermissionPrompt(替换 ChatInput 的占位卡片)。
  *
  * Keyboard shortcuts:
- *   Ctrl/Cmd+Enter → 提交
- *   Esc            → 取消
+ *   Ctrl/Cmd+Enter → 编辑时回到预览；预览时提交
+ *   Esc            → 编辑时回到预览；预览时取消
  */
 
-import { useCallback, useEffect, useId, useState } from 'react';
+import { useCallback, useId, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 
 import {
@@ -22,6 +25,7 @@ import {
   type IssueConfirmDraft,
 } from '@/lib/issueConfirmDraftStore';
 import { cn } from '@/lib/utils';
+import { SegmentedControl } from '@/components/ui/segmented-control';
 import type { PendingIssueConfirm } from '@/lib/makerChatStore';
 import { shouldLabelRegion } from '../../../shared/regionCode';
 import { ISSUE_PUBLIC_NAME_MAX, normalizeIssuePublicName } from '../../../shared/issuePublicName';
@@ -36,6 +40,7 @@ interface IssueConfirmCardProps {
           title: string;
           body: string;
           type: 'bug' | 'feature';
+          submissionIdentity: PendingIssueConfirm['submissionIdentity'];
           publicName?: string;
           uiLanguage: string;
         }
@@ -51,28 +56,48 @@ const BODY_MAX = 4500;
 
 export function IssueConfirmCard({ sessionId, pending, onRespond }: IssueConfirmCardProps) {
   const { t, i18n } = useTranslation();
+  const cardRef = useRef<HTMLDivElement>(null);
   const titleInputId = useId();
   const bodyInputId = useId();
   const publicNameInputId = useId();
-  const [draft, setDraft] = useState<IssueConfirmDraft>(
-    () =>
-      getIssueConfirmDraft(sessionId, pending.requestId) ?? {
+  const [editing, setEditing] = useState(false);
+  const legacyFixedGithubIdentity =
+    pending.submissionIdentity.kind === 'github-user' ? pending.submissionIdentity : null;
+  const [draft, setDraft] = useState<IssueConfirmDraft>(() => {
+    const saved = getIssueConfirmDraft(sessionId, pending.requestId);
+    if (legacyFixedGithubIdentity) {
+      return {
+        ...(saved ?? pending.draft),
+        submissionIdentityKind: 'github-user',
+        publicName: undefined,
+      };
+    }
+    return (
+      saved ?? {
         ...pending.draft,
-        ...(pending.submissionIdentity.kind === 'platform'
-          ? {
-              publicName: pending.suggestedPublicName ?? t('issueAgent.confirm.anonymous'),
-            }
-          : {}),
-      },
-  );
+        submissionIdentityKind: 'platform',
+        publicName: pending.suggestedPublicName ?? t('issueAgent.confirm.anonymous'),
+      }
+    );
+  });
   const { title, body, type, publicName = '' } = draft;
+  const hasRelatedLogs = body.includes('## 相关日志');
+  const selectedIdentity =
+    legacyFixedGithubIdentity ??
+    (draft.submissionIdentityKind === 'github-user' && pending.githubUserIdentity
+      ? pending.githubUserIdentity
+      : pending.submissionIdentity);
 
   const confirmedPublicName =
-    pending.submissionIdentity.kind === 'platform' ? normalizeIssuePublicName(publicName) : null;
+    selectedIdentity.kind === 'platform' ? normalizeIssuePublicName(publicName) : null;
+  const [identityExpanded, setIdentityExpanded] = useState(
+    () => selectedIdentity.kind === 'platform' && confirmedPublicName === null,
+  );
   const canSubmit =
+    !editing &&
     title.trim().length > 0 &&
     body.trim().length > 0 &&
-    (pending.submissionIdentity.kind !== 'platform' || confirmedPublicName !== null);
+    (selectedIdentity.kind !== 'platform' || confirmedPublicName !== null);
 
   const updateDraft = useCallback(
     (patch: Partial<IssueConfirmDraft>) => {
@@ -81,6 +106,7 @@ export function IssueConfirmCard({ sessionId, pending, onRespond }: IssueConfirm
         next.title === draft.title &&
         next.body === draft.body &&
         next.type === draft.type &&
+        next.submissionIdentityKind === draft.submissionIdentityKind &&
         next.publicName === draft.publicName
       ) {
         return;
@@ -114,222 +140,332 @@ export function IssueConfirmCard({ sessionId, pending, onRespond }: IssueConfirm
       title: title.trim(),
       body: body.trim(),
       type,
+      submissionIdentity: selectedIdentity,
       ...(confirmedPublicName ? { publicName: confirmedPublicName } : {}),
       uiLanguage: i18n.language,
     });
-  }, [canSubmit, confirmedPublicName, onRespond, title, body, type, i18n.language]);
+  }, [
+    canSubmit,
+    confirmedPublicName,
+    onRespond,
+    title,
+    body,
+    type,
+    selectedIdentity,
+    i18n.language,
+  ]);
 
   const handleCancel = useCallback(() => {
     onRespond({ confirmed: false });
   }, [onRespond]);
 
-  // ── Keyboard shortcuts(textarea 内 Enter 正常换行,只有带修饰键才提交)──
-  useEffect(() => {
-    const handler = (e: KeyboardEvent) => {
-      if (e.key === 'Enter' && (e.ctrlKey || e.metaKey)) {
-        e.preventDefault();
-        handleSubmit();
-      } else if (e.key === 'Escape') {
-        e.preventDefault();
-        handleCancel();
-      }
-    };
-    window.addEventListener('keydown', handler);
-    return () => window.removeEventListener('keydown', handler);
-  }, [handleSubmit, handleCancel]);
+  const finishEditing = () => {
+    setEditing(false);
+    // The focused editor unmounts. Keep keyboard ownership on this card so a
+    // subsequent explicit shortcut can act on its preview, never another pane.
+    cardRef.current?.focus({ preventScroll: true });
+  };
 
-  const typeButton = (value: 'bug' | 'feature', label: string) => (
-    <button
-      type="button"
-      aria-pressed={type === value}
-      onClick={() => updateDraft({ type: value })}
-      className={cn(
-        'rounded-[6px] border px-2.5 py-[3px] text-12 font-medium transition-colors',
-        type === value
-          ? 'border-[var(--chat-input-border)] bg-[var(--perm-allow-btn-bg)] text-[var(--perm-allow-btn-text)]'
-          : 'border-[var(--chat-input-border)] bg-transparent text-[var(--status-bar-meta)] hover:bg-[var(--perm-code-bg)]',
-      )}
-    >
-      {label}
-    </button>
-  );
+  const identityButton = (identity: PendingIssueConfirm['submissionIdentity'], label: string) => {
+    const selected =
+      selectedIdentity.kind === identity.kind && selectedIdentity.login === identity.login;
+    return (
+      <button
+        type="button"
+        aria-pressed={selected}
+        onClick={() => updateDraft({ submissionIdentityKind: identity.kind })}
+        className={cn(
+          'rounded-full border px-3 py-2 text-13 font-medium transition-colors',
+          selected
+            ? 'border-[var(--chat-input-border)] bg-[var(--perm-allow-btn-bg)] text-[var(--perm-allow-btn-text)]'
+            : 'border-[var(--chat-input-border)] bg-transparent text-[var(--chat-input-text)] hover:bg-[var(--chat-input-bg)]',
+        )}
+      >
+        {label}
+      </button>
+    );
+  };
 
   return (
     <div
+      ref={cardRef}
+      tabIndex={-1}
+      onKeyDown={(e) => {
+        // Scoped bubbling excludes other panes and portalled Markdown content.
+        if (e.repeat || e.nativeEvent.isComposing || !e.currentTarget.contains(e.target as Node))
+          return;
+        if (e.key === 'Enter' && (e.ctrlKey || e.metaKey)) {
+          e.preventDefault();
+          e.stopPropagation();
+          if (editing) finishEditing();
+          else handleSubmit();
+        } else if (e.key === 'Escape') {
+          e.preventDefault();
+          e.stopPropagation();
+          if (editing) finishEditing();
+          else handleCancel();
+        }
+      }}
       className={cn(
-        'w-full max-w-[914px] rounded-[12px] border p-4',
+        'w-full max-w-[914px] overflow-hidden rounded-[12px] border',
         'border-[var(--chat-input-border)] bg-[var(--chat-input-bg)]',
       )}
     >
-      {/* Title row: heading + type toggle */}
-      <div className="flex items-center justify-between gap-3">
-        <p className="text-15 font-semibold leading-tight text-[var(--chat-input-text)]">
-          {t('issueAgent.confirm.title')}
+      <div className="flex min-h-11 items-center justify-between gap-3 px-5 pt-3">
+        <p className="flex items-center gap-2 text-12 text-[var(--status-bar-meta)]">
+          <Globe2 size={14} aria-hidden="true" />
+          {t('issueAgent.confirm.previewLabel')}
         </p>
-        <div className="flex items-center gap-1.5">
-          {typeButton('bug', t('issueAgent.confirm.typeBug'))}
-          {typeButton('feature', t('issueAgent.confirm.typeFeature'))}
-        </div>
+        {!editing && (
+          <Button
+            variant="secondary"
+            tone="quiet"
+            size="md"
+            compact
+            type="button"
+            onClick={() => setEditing(!editing)}
+          >
+            <Pencil size={14} aria-hidden="true" />
+            {t('issueAgent.confirm.edit')}
+          </Button>
+        )}
       </div>
-
-      {/* Issue title input */}
-      <label
-        htmlFor={titleInputId}
-        className="mt-3 block text-12 font-medium text-[var(--status-bar-meta)]"
-      >
-        {t('issueAgent.confirm.titleLabel')}
-      </label>
-      <input
-        id={titleInputId}
-        type="text"
-        value={title}
-        maxLength={TITLE_MAX}
-        onChange={(e) => updateDraft({ title: e.target.value })}
-        className={cn(
-          'mt-1 w-full rounded-[8px] border px-3 py-2',
-          'border-[var(--perm-code-border)] bg-[var(--perm-code-bg)]',
-          'text-13 leading-tight text-[var(--chat-input-text)]',
-          'focus:outline-none focus:ring-1 focus:ring-[var(--focus-ring)]',
-        )}
-      />
-
-      {/* Issue body textarea */}
-      <label
-        htmlFor={bodyInputId}
-        className="mt-3 block text-12 font-medium text-[var(--status-bar-meta)]"
-      >
-        {t('issueAgent.confirm.bodyLabel')}
-      </label>
-      <textarea
-        id={bodyInputId}
-        value={body}
-        maxLength={BODY_MAX}
-        onChange={(e) => updateDraft({ body: e.target.value })}
-        rows={8}
-        className={cn(
-          'mt-1 w-full resize-y rounded-[8px] border px-3 py-2',
-          'border-[var(--perm-code-border)] bg-[var(--perm-code-bg)]',
-          'font-mono text-13 leading-relaxed text-[var(--chat-input-text)]',
-          'focus:outline-none focus:ring-1 focus:ring-[var(--focus-ring)]',
-        )}
-      />
-
-      {/* 发布方式由 Main 预先选定；确认阶段只展示实际通道，不提供不可用切换。 */}
-      <div
-        className={cn(
-          'mt-3 rounded-[8px] border p-3',
-          'border-[var(--perm-code-border)] bg-[var(--perm-code-bg)]',
-        )}
-      >
-        <p className="select-none text-12 font-medium text-[var(--status-bar-meta)]">
-          {t('issueAgent.confirm.submissionMethodLabel')}
-        </p>
-        <p className="mt-1 text-13 leading-snug text-[var(--chat-input-text)]">
-          {pending.submissionIdentity.kind === 'github-user'
-            ? t('issueAgent.confirm.identityGithubUser', {
-                login: pending.submissionIdentity.login,
-              })
-            : t('issueAgent.confirm.identityPlatform', {
-                login: pending.submissionIdentity.login,
-              })}
-        </p>
-        <p className="mt-1 text-12 leading-snug text-[var(--status-bar-meta)]">
-          {pending.submissionIdentity.kind === 'github-user'
-            ? t('issueAgent.confirm.identityGithubUserHint')
-            : t('issueAgent.confirm.identityPlatformHint')}
-        </p>
-
-        {pending.submissionIdentity.kind === 'platform' && (
+      <div className="max-h-[50vh] overflow-y-auto px-5 pb-4">
+        {editing ? (
           <>
-            <label
-              htmlFor={publicNameInputId}
-              className="mt-3 block select-none text-12 font-medium text-[var(--status-bar-meta)]"
-            >
-              {t('issueAgent.confirm.publicNameLabel')}
-            </label>
-            <div className="mt-1 flex flex-wrap items-center gap-2">
-              <input
-                id={publicNameInputId}
-                type="text"
-                value={publicName}
-                maxLength={ISSUE_PUBLIC_NAME_MAX}
-                onChange={(event) => updateDraft({ publicName: event.target.value })}
-                className={cn(
-                  'min-w-0 flex-[1_1_220px] rounded-full border px-3 py-2',
-                  'border-[var(--chat-input-border)] bg-[var(--chat-input-bg)]',
-                  'text-13 leading-tight text-[var(--chat-input-text)]',
-                  'focus:outline-none focus:ring-1 focus:ring-[var(--focus-ring)]',
-                )}
+            <div className="mt-3 flex justify-end">
+              <SegmentedControl
+                aria-label={[
+                  t('issueAgent.confirm.typeBug'),
+                  t('issueAgent.confirm.typeFeature'),
+                ].join(' / ')}
+                value={type}
+                onValueChange={(next) => updateDraft({ type: next })}
+                height={28}
+                optionHeight={24}
+                optionClassName="px-2.5"
+                options={[
+                  { value: 'bug', label: t('issueAgent.confirm.typeBug') },
+                  { value: 'feature', label: t('issueAgent.confirm.typeFeature') },
+                ]}
               />
-              <button
-                type="button"
-                onClick={() => updateDraft({ publicName: t('issueAgent.confirm.anonymous') })}
-                className={cn(
-                  'shrink-0 rounded-full border px-3 py-2',
-                  'border-[var(--chat-input-border)] bg-transparent',
-                  'select-none text-13 font-medium text-[var(--chat-input-text)]',
-                  'transition-colors hover:bg-[var(--chat-input-bg)]',
-                )}
-              >
-                {t('issueAgent.confirm.useAnonymous')}
-              </button>
             </div>
-            <p className="mt-1 text-12 leading-snug text-[var(--status-bar-meta)]">
-              {t('issueAgent.confirm.publicNameHint')}
-            </p>
-          </>
-        )}
-      </div>
 
-      {/* 只读环境信息(main 侧自动附进 issue body) */}
-      {regionCode && (
-        <p className="mt-1 text-12 leading-tight text-[var(--status-bar-meta)]">
-          {t('issueAgent.confirm.regionLine', { region: regionCode })}
-        </p>
-      )}
-      <p className="mt-1 text-12 leading-tight text-[var(--status-bar-meta)]">
-        {t('issueAgent.confirm.envLine', {
-          appVersion: pending.env.appVersion,
-          platform: pending.env.platform,
-          arch: pending.env.arch,
-          uiLanguage: i18n.language,
-        })}
-      </p>
+            {/* Issue title input */}
+            <label
+              htmlFor={titleInputId}
+              className="mt-3 block text-12 font-medium text-[var(--status-bar-meta)]"
+            >
+              {t('issueAgent.confirm.titleLabel')}
+            </label>
+            <input
+              id={titleInputId}
+              type="text"
+              value={title}
+              maxLength={TITLE_MAX}
+              onChange={(e) => updateDraft({ title: e.target.value })}
+              className={cn(
+                'mt-1 w-full rounded-[8px] border px-3 py-2',
+                'border-[var(--perm-code-border)] bg-[var(--perm-code-bg)]',
+                'text-13 leading-tight text-[var(--chat-input-text)]',
+                'focus:outline-none focus:ring-1 focus:ring-[var(--focus-ring)]',
+              )}
+            />
+
+            {/* Issue body textarea */}
+            <label
+              htmlFor={bodyInputId}
+              className="mt-3 block text-12 font-medium text-[var(--status-bar-meta)]"
+            >
+              {t('issueAgent.confirm.bodyLabel')}
+            </label>
+            <textarea
+              id={bodyInputId}
+              value={body}
+              maxLength={BODY_MAX}
+              onChange={(e) => updateDraft({ body: e.target.value })}
+              rows={8}
+              className={cn(
+                'mt-1 w-full resize-y rounded-[8px] border px-3 py-2',
+                'border-[var(--perm-code-border)] bg-[var(--perm-code-bg)]',
+                'font-mono text-13 leading-relaxed text-[var(--chat-input-text)]',
+                'focus:outline-none focus:ring-1 focus:ring-[var(--focus-ring)]',
+              )}
+            />
+          </>
+        ) : (
+          <article className="pb-4 pt-2 [overflow-wrap:anywhere]">
+            <h2 className="mb-4 text-18 font-semibold leading-snug text-[var(--chat-input-text)]">
+              {title}
+            </h2>
+            <MarkdownRenderer
+              content={body}
+              workingDir=""
+              allowPrivilegedLinks={false}
+              renderRichAnswers={false}
+            />
+          </article>
+        )}
+        {hasRelatedLogs && (
+          <p className="mt-1 text-12 leading-snug text-[var(--status-bar-meta)]">
+            {t('issueAgent.confirm.relatedLogsHint')}
+          </p>
+        )}
+
+        {/*
+        新版 Main:平台 Bot 默认 + 可选 GitHub 用户。旧版 Main 可能已固定为 GitHub
+        用户，此时只能如实展示该单一身份，不能提供旧 Main 不会执行的平台切换。
+      */}
+        <details
+          className="group border-t border-[var(--chat-input-border)] py-2"
+          open={identityExpanded}
+          onToggle={(event) => setIdentityExpanded(event.currentTarget.open)}
+        >
+          <summary className="flex min-h-9 cursor-pointer list-none flex-wrap items-center gap-x-3 gap-y-1 text-13 text-[var(--chat-input-text)] [&::-webkit-details-marker]:hidden">
+            <span className="flex-1">
+              {selectedIdentity.kind === 'platform'
+                ? t('issueAgent.confirm.attribution', { name: publicName })
+                : `@${selectedIdentity.login}`}
+            </span>
+            <span className="text-12 text-[var(--status-bar-meta)]">
+              {t('issueAgent.confirm.identitySettings')}
+            </span>
+            <ChevronDown
+              size={14}
+              className="shrink-0 transition-transform group-open:rotate-180"
+              aria-hidden="true"
+            />
+          </summary>
+          <div className="mt-2 flex flex-wrap items-center gap-2">
+            {pending.submissionIdentity.kind === 'platform'
+              ? identityButton(
+                  pending.submissionIdentity,
+                  t('issueAgent.confirm.identityPlatform', {
+                    login: pending.submissionIdentity.login,
+                  }),
+                )
+              : identityButton(
+                  pending.submissionIdentity,
+                  t('issueAgent.confirm.identityGithubUser', {
+                    login: pending.submissionIdentity.login,
+                  }),
+                )}
+            {pending.githubUserIdentity &&
+              identityButton(
+                pending.githubUserIdentity,
+                t('issueAgent.confirm.identityGithubUser', {
+                  login: pending.githubUserIdentity.login,
+                }),
+              )}
+          </div>
+          <p className="mt-1 text-12 leading-snug text-[var(--status-bar-meta)]">
+            {selectedIdentity.kind === 'github-user'
+              ? t('issueAgent.confirm.identityGithubUserHint')
+              : t('issueAgent.confirm.identityPlatformHint')}
+          </p>
+
+          {selectedIdentity.kind === 'platform' && (
+            <>
+              <label
+                htmlFor={publicNameInputId}
+                className="mt-3 block select-none text-12 font-medium text-[var(--status-bar-meta)]"
+              >
+                {t('issueAgent.confirm.publicNameLabel')}
+              </label>
+              <div className="mt-1 flex flex-wrap items-center gap-2">
+                <input
+                  id={publicNameInputId}
+                  type="text"
+                  value={publicName}
+                  maxLength={ISSUE_PUBLIC_NAME_MAX}
+                  onChange={(event) => updateDraft({ publicName: event.target.value })}
+                  className={cn(
+                    'min-w-0 flex-[1_1_220px] rounded-full border px-3 py-2',
+                    'border-[var(--chat-input-border)] bg-[var(--chat-input-bg)]',
+                    'text-13 leading-tight text-[var(--chat-input-text)]',
+                    'focus:outline-none focus:ring-1 focus:ring-[var(--focus-ring)]',
+                  )}
+                />
+                <Button
+                  variant="secondary"
+                  size="md"
+                  compact
+                  type="button"
+                  onClick={() => updateDraft({ publicName: t('issueAgent.confirm.anonymous') })}
+                  className="shrink-0 select-none"
+                >
+                  {t('issueAgent.confirm.useAnonymous')}
+                </Button>
+              </div>
+              <p className="mt-1 text-12 leading-snug text-[var(--status-bar-meta)]">
+                {t('issueAgent.confirm.publicNameHint')}
+              </p>
+            </>
+          )}
+        </details>
+
+        {/* 只读环境信息(main 侧自动附进 issue body) */}
+        <details className="group border-t border-[var(--chat-input-border)] py-2">
+          <summary className="flex min-h-9 cursor-pointer list-none items-center justify-between gap-2 text-12 text-[var(--status-bar-meta)] [&::-webkit-details-marker]:hidden">
+            {t('issueAgent.confirm.environment')}
+            <ChevronDown
+              size={14}
+              className="shrink-0 transition-transform group-open:rotate-180"
+              aria-hidden="true"
+            />
+          </summary>
+          {regionCode && (
+            <p className="mt-1 text-12 leading-tight text-[var(--status-bar-meta)]">
+              {t('issueAgent.confirm.regionLine', { region: regionCode })}
+            </p>
+          )}
+          <p className="mt-1 text-12 leading-tight text-[var(--status-bar-meta)]">
+            {t('issueAgent.confirm.envLine', {
+              appVersion: pending.env.appVersion,
+              platform: pending.env.platform,
+              arch: pending.env.arch,
+              osVersion: pending.env.osVersion,
+              uiLanguage: i18n.language,
+            })}
+          </p>
+          {pending.env.harness && pending.env.modelId && (
+            <p className="mt-1 [overflow-wrap:anywhere] text-12 leading-tight text-[var(--status-bar-meta)]">
+              {t('issueAgent.confirm.runtimeLine', {
+                harness: pending.env.harness,
+                modelId: pending.env.modelId,
+              })}
+            </p>
+          )}
+        </details>
+      </div>
 
       {/* Action buttons */}
-      <div className="mt-4 flex items-center justify-end gap-2">
-        <button
-          type="button"
-          onClick={handleCancel}
-          className={cn(
-            'flex items-center gap-2 rounded-[8px] border px-3 py-[7px]',
-            'border-[var(--chat-input-border)] bg-transparent',
-            'text-13 font-medium text-[var(--chat-input-text)]',
-            'transition-colors hover:bg-[var(--perm-code-bg)]',
+      <div className="flex flex-wrap items-center justify-end gap-3 border-t border-[var(--chat-input-border)] px-5 py-3">
+        <p className="min-w-0 flex-[1_1_220px] text-12 leading-relaxed text-[var(--status-bar-meta)]">
+          {t('issueAgent.confirm.publicationNotice')}
+        </p>
+        <div className="flex shrink-0 items-center gap-2">
+          <Button variant="secondary" size="md" compact type="button" onClick={handleCancel}>
+            <span>{t('issueAgent.confirm.cancel')}</span>
+          </Button>
+          {editing ? (
+            <Button variant="cta" size="md" compact type="button" onClick={finishEditing}>
+              {t('issueAgent.confirm.doneEditing')}
+            </Button>
+          ) : (
+            <Button
+              variant="cta"
+              palette="permission"
+              size="md"
+              compact
+              type="button"
+              onClick={handleSubmit}
+              disabled={!canSubmit}
+            >
+              <span>{t('issueAgent.confirm.publicSubmit')}</span>
+            </Button>
           )}
-        >
-          <span>{t('issueAgent.confirm.cancel')}</span>
-          <kbd className="rounded-[4px] border border-[var(--chat-input-border)] bg-[var(--perm-code-bg)] px-1.5 py-[1px] text-[11px] font-normal text-[var(--status-bar-meta)]">
-            Esc
-          </kbd>
-        </button>
-        <button
-          type="button"
-          onClick={handleSubmit}
-          disabled={!canSubmit}
-          className={cn(
-            'flex items-center gap-2 rounded-[8px] border px-3 py-[7px]',
-            'border-[var(--chat-input-border)]',
-            'bg-[var(--perm-allow-btn-bg)] text-[var(--perm-allow-btn-text)]',
-            'text-13 font-medium',
-            'transition-colors hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-50',
-          )}
-        >
-          <span>{t('issueAgent.confirm.submit')}</span>
-          <kbd className="rounded-[4px] border border-[var(--perm-allow-kbd-border)] bg-[var(--perm-allow-kbd-bg)] px-1.5 py-[1px] text-[11px] font-normal text-[var(--perm-allow-btn-text)] opacity-70">
-            {window.electronAPI?.platform === 'darwin' ? '⌘↵' : 'Ctrl+Enter'}
-          </kbd>
-        </button>
+        </div>
       </div>
     </div>
   );

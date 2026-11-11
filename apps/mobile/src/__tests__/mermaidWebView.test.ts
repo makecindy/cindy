@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import {
-  MOBILE_MERMAID_SCRIPT_URL,
-  MOBILE_MERMAID_SCRIPT_URLS,
+  MOBILE_MERMAID_VERSION,
+  buildMermaidLoaderJs,
   buildMermaidWebViewHtml,
 } from '@/session/mermaidWebViewHtml';
 
@@ -9,10 +9,15 @@ describe('mermaidWebView', () => {
   it('builds a self-contained WebView document that loads Mermaid in strict mode', () => {
     const html = buildMermaidWebViewHtml('graph TD\nA --> B');
 
-    expect(html).toContain(MOBILE_MERMAID_SCRIPT_URL);
+    expect(MOBILE_MERMAID_VERSION).toMatch(/^11\./);
+    expect(html).toContain('script.textContent =');
+    expect(html).not.toContain('cdn.jsdelivr.net');
+    expect(html).not.toContain('registry.npmmirror.com');
     expect(html).toContain("securityLevel: 'strict'");
     // htmlLabels:false 是导出 PNG 的前提(foreignObject 在 WebKit canvas 里丢文字)
-    expect(html).toContain('flowchart: { useMaxWidth: false, htmlLabels: false }');
+    expect(html).toContain(
+      'flowchart: { useMaxWidth: false, htmlLabels: false }',
+    );
     expect(html).toContain('graph TD\\nA --\\u003e B');
   });
 
@@ -25,13 +30,15 @@ describe('mermaidWebView', () => {
   });
 
   it('escapes source before injecting it into the script tag', () => {
-    const html = buildMermaidWebViewHtml('graph TD\nA["</script><img src=x>"] --> B');
+    const html = buildMermaidWebViewHtml(
+      'graph TD\nA["</script><img src=x>"] --> B',
+    );
 
     expect(html).not.toContain('"</script><img src=x>"');
     expect(html).toContain('\\u003c/script\\u003e\\u003cimg src=x\\u003e');
   });
 
-  it('弱网加固:零阻塞外链 + 源码首屏 + CDN 超时降级(jsdelivr → npmmirror)', () => {
+  it('离线加固:零外链 + 源码首屏 + 本地资源失败降级', () => {
     const html = buildMermaidWebViewHtml('graph TD\nA --> B');
 
     // 不允许出现阻塞式外链 <script src=...>:CDN 挂起会让页面停在 loading 几十秒
@@ -39,18 +46,27 @@ describe('mermaidWebView', () => {
     // 首屏内容是图表源码(而非 "Loading Mermaid..." 占位)
     expect(html).not.toContain('Loading Mermaid');
     expect(html).toContain('<div id="root" class="source"><pre>graph TD');
-    // 动态注入含完整降级序列与超时
-    expect(MOBILE_MERMAID_SCRIPT_URLS.length).toBeGreaterThanOrEqual(2);
-    expect(MOBILE_MERMAID_SCRIPT_URLS[1]).toContain('registry.npmmirror.com');
-    for (const url of MOBILE_MERMAID_SCRIPT_URLS) {
-      expect(html).toContain(url);
-    }
-    expect(html).toContain('setTimeout(fail, 6000)');
+    // 动态注入固定版本的本地资源,执行失败仍停留在源码
+    expect(html).toContain('script.textContent =');
+    expect(html).not.toContain('cdn.jsdelivr.net');
+    expect(html).not.toContain('registry.npmmirror.com');
+    expect(html).toContain('setTimeout(fail, 1000)');
+  });
+
+  it('渲染回调异常时仍进入源码降级', () => {
+    const js = buildMermaidLoaderJs('renderMermaid();', 'showSource();');
+
+    expect(js).toContain(
+      'try { renderMermaid(); } catch (error) { fail(); return; }',
+    );
+    expect(js).not.toContain('</script>');
   });
 
   it('parse 失败兜底:注入 mermaidAutofix 修复版;合法源码注入空串跳过重试', () => {
     const broken = buildMermaidWebViewHtml('flowchart TD\nA → B');
-    expect(broken).toContain('const repairedSource = "flowchart TD\\nA --\\u003e B"');
+    expect(broken).toContain(
+      'const repairedSource = "flowchart TD\\nA --\\u003e B"',
+    );
     expect(broken).toContain('mobile-mermaid-diagram-fixed');
 
     const ok = buildMermaidWebViewHtml('graph TD\nA --> B');
@@ -63,8 +79,10 @@ describe('mermaidWebView', () => {
     expect(html).toContain('&lt;b&gt;x&lt;/b&gt;');
   });
 
-  it('deferSource:首屏留空背景不闪源码,CDN 耗尽 / 空源码显式降级到源码', () => {
-    const html = buildMermaidWebViewHtml('graph TD\nA --> B', { deferSource: true });
+  it('deferSource:首屏留空背景不闪源码,本地资源失败 / 空源码显式降级到源码', () => {
+    const html = buildMermaidWebViewHtml('graph TD\nA --> B', {
+      deferSource: true,
+    });
     // 首屏无源码 pre(干净背景等 SVG 浮现,观感同图片加载)
     expect(html).toContain('<div id="root" class="source"></div>');
     // 「静默停留首屏」的两条路径必须显式 showSource,否则永远空白
@@ -76,12 +94,17 @@ describe('mermaidWebView', () => {
   });
 
   it('zoomable:详情视口放开双指缩放,内联锁定', () => {
-    expect(buildMermaidWebViewHtml('graph TD\nA --> B', { zoomable: true }))
-      .toContain('maximum-scale=5');
-    expect(buildMermaidWebViewHtml('graph TD\nA --> B')).toContain('maximum-scale=1');
+    expect(
+      buildMermaidWebViewHtml('graph TD\nA --> B', { zoomable: true }),
+    ).toContain('maximum-scale=5');
+    expect(buildMermaidWebViewHtml('graph TD\nA --> B')).toContain(
+      'maximum-scale=1',
+    );
   });
 
   it('gantt 钉固定宽画布:布局与打开时的屏幕朝向解耦(竖屏打开不再挤叠日期轴)', () => {
-    expect(buildMermaidWebViewHtml('gantt\ntitle x')).toContain('useWidth: 760');
+    expect(buildMermaidWebViewHtml('gantt\ntitle x')).toContain(
+      'useWidth: 760',
+    );
   });
 });

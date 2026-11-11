@@ -1,0 +1,807 @@
+// @vitest-environment jsdom
+import { act, createElement, forwardRef, useImperativeHandle, type ReactNode } from "react";
+import { createRoot } from "react-dom/client";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import { PluginCardActions } from "../plugins/PluginCardActions";
+import { pluginCardPlainText } from "../plugins/pluginCardText";
+import { pendingGhostCardFormDelivery } from "@cindy/maker-shared/ghost-card-form";
+import { MobileMailHtmlPreview } from '../plugins/MobileMailHtmlPreview';
+
+vi.mock('react-native-webview', () => ({ WebView: forwardRef((props: any, ref) => {
+  h.web = props;
+  useImperativeHandle(ref, () => ({ injectJavaScript: h.inject }));
+  return createElement('div', { 'data-testid': 'html-preview', 'data-html': props.source.html });
+}) }));
+vi.mock("@/auth/AuthContext", () => ({ useAuth: () => ({ getAccessToken: async () => 'test-token' }) }));
+vi.mock("../plugins/mobileMailAttachment", () => ({ pickMobileMailAttachment: (...args: unknown[]) => h.pick(...args) }));
+vi.mock("@/session/useBotGroupRemoteMedia", () => ({ useBotGroupRemoteMedia: () => h.resolve }));
+vi.mock('@/components/FileTypeIcon', () => ({ FileTypeIcon: () => null }));
+vi.mock('lucide-react-native', async () => {
+  const { createElement: el } = await import('react');
+  const icon = (name: string) => () => el('i', { 'data-icon': name });
+  return Object.fromEntries(['Settings', 'ChevronDown', 'ExternalLink', 'GitPullRequest', 'GitMerge', 'GitPullRequestClosed', 'GitPullRequestDraft', 'Check', 'CircleMinus', 'CircleX', 'Clock'].map((name) => [name, icon(name)]));
+});
+
+const h = vi.hoisted(() => ({ noticeFrame: { y: 400, height: 24 }, invoke: vi.fn(), pick: vi.fn(), resolve: vi.fn(), inject: vi.fn(), web: {} as any, mode: 'light' }));
+vi.mock("react-native", () => {
+  // The notice's frame comes from h.noticeFrame; every other View ignores its ref.
+  const View = ({ children, ref }: { children?: ReactNode; ref?: { current: unknown } }) =>
+    createElement("div", { ref: (el: HTMLElement | null) => {
+      if (ref) ref.current = el && Object.assign(el, { measureInWindow: (cb: (x: number, y: number, w: number, h: number) => void) => cb(0, h.noticeFrame.y, 300, h.noticeFrame.height) });
+    } }, children);
+  return {
+    View,
+    KeyboardAvoidingView: View,
+    Pressable: ({
+      children,
+      onPress,
+      disabled,
+      accessibilityLabel,
+      accessibilityRole,
+      accessibilityState,
+    }: {
+      children?: ReactNode;
+      onPress(): void;
+      disabled: boolean;
+      accessibilityLabel?: string;
+      accessibilityRole?: string;
+      accessibilityState?: { checked?: boolean; expanded?: boolean };
+    }) => createElement("button", { onClick: onPress, disabled, 'aria-label': accessibilityLabel,
+      role: accessibilityRole, 'aria-checked': accessibilityState?.checked, 'aria-expanded': accessibilityState?.expanded }, children),
+    Modal: ({
+      children,
+      visible,
+    }: {
+      children?: ReactNode;
+      visible: boolean;
+    }) => (visible ? createElement("div", {}, children) : null),
+    Platform: { OS: "ios" },
+    useWindowDimensions: () => ({ width: 400, height: 800 }),
+    StyleSheet: { create: (value: unknown) => value },
+    AppState: {
+      currentState: "active",
+      addEventListener: () => ({ remove: () => {} }),
+    },
+    Alert: { alert: vi.fn() },
+    Linking: { openURL: vi.fn(async () => true) },
+    Switch: ({ value, onValueChange, accessibilityLabel }: { value: boolean; onValueChange(): void; accessibilityLabel?: string }) =>
+      createElement("input", { type: "checkbox", checked: value, onChange: onValueChange, "aria-label": accessibilityLabel }),
+    AccessibilityInfo: { isReduceMotionEnabled: async () => true },
+    Animated: {
+      Value: class { interpolate() { return 0; } },
+      View,
+      loop: () => ({ start() {}, stop() {} }),
+      timing: () => ({}),
+    },
+    Keyboard: { addListener: () => ({ remove: () => {} }) },
+  };
+});
+vi.mock("@/components/AppText", () => ({
+  Text: ({ children }: { children?: ReactNode }) =>
+    createElement("span", {}, children),
+  TextInput: ({
+    value,
+    onChangeText,
+    editable,
+    accessibilityLabel,
+  }: {
+    value: string;
+    onChangeText(value: string): void;
+    editable?: boolean;
+    accessibilityLabel?: string;
+  }) =>
+    createElement("textarea", {
+      value,
+      disabled: editable === false,
+      "aria-label": accessibilityLabel,
+      onInput: (event: React.FormEvent<HTMLTextAreaElement>) =>
+        onChangeText(event.currentTarget.value),
+      onChange: () => {},
+    }),
+}));
+vi.mock("@/theme", async () => ({
+  ...(await import("../theme/tokens")),
+  useThemedStyles: () => ({}),
+  useTheme: () => ({ mode: h.mode, colors: { surface: '#181818', textPrimary: '#eeeeee' } }),
+}));
+vi.mock("react-i18next", () => ({
+  useTranslation: () => ({ t: (key: string) => key }),
+}));
+vi.mock("expo-router", () => ({ useIsFocused: () => true }));
+vi.mock("@/device-link/DeviceLinkContext", () => ({
+  useDeviceLink: () => ({ invoke: h.invoke, status: "online" }),
+}));
+vi.mock("@/auth/authOwnerGeneration", () => ({
+  getMobileAuthOwner: () => ({ accountKey: "owner" }),
+  isMobileAuthOwnerCurrent: () => true,
+}));
+(globalThis as Record<string, unknown>).IS_REACT_ACT_ENVIRONMENT = true;
+let unmount: (() => void) | undefined;
+afterEach(() => {
+  unmount?.();
+  unmount = undefined;
+  h.mode = 'light';
+  h.noticeFrame = { y: 400, height: 24 };
+  vi.clearAllMocks();
+});
+// Unit: the phone used to show the PR card as a raw URL, identical grey buttons and "开启「…」"
+// buttons. A rich host now sends switches, the primary action, a live state and the title bar's
+// PR status; the phone draws them natively and a switch still goes through the card action.
+// Unit: the PR card on the phone read "\\#42 …", "cindy\\-demo/web" and turned "feat\\(mobile\\)" into a
+// formula: the desktop's escaped card text went through the Markdown renderer.
+it('shows desktop card text as plain text without its Markdown escapes', () => {
+  expect(pluginCardPlainText('\\#7290 feat\\(mobile\\): a\\_b \\*c\\* 5\\.5\ncindy\\-demo/web \\\\ \\[x\\]')).toBe('#7290 feat(mobile): a_b *c* 5.5\ncindy-demo/web \\ [x]');
+});
+
+describe("rich plugin card hints", () => {
+  // Unit regression: the merged PR settings were flattened into the summary/footer. Existing
+  // tests cover switches but not model choice state or the settings disclosure. Render the real
+  // component with a rich merged card and verify accessible state + unchanged remote actions.
+  it('groups merged PR settings and routes the model and disclosure controls to the host', async () => {
+    h.invoke.mockImplementation(async (_d: string, _c: string, args: any[]) => {
+      if (args[0].collectionId === 'plugin-results') return { effects: [] };
+      return { result: { confirms: [] } };
+    });
+    const container = document.createElement('div'), root = createRoot(container);
+    unmount = () => act(() => root.unmount());
+    const data = { pluginId: 'cindy-github', revision: '1', items: [
+      { id: 'prui:settings', label: 'Hide PR settings', disabled: false },
+      { id: 'prset:archive', label: 'Archive', disabled: false, toggle: { on: true, title: 'Archive after merge' } },
+      { id: 'prset:modelTask', label: 'Follow task', disabled: false },
+      { id: 'prset:model', label: 'Custom (current)', disabled: false },
+      { id: 'prset:modelPick', label: 'Change model: Sonnet', disabled: false },
+    ] };
+    await act(async () => root.render(createElement(PluginCardActions, { deviceId: 'device', sessionId: 's', callId: 'c',
+      text: '#42 Fix layout\no/r · Merged\nfeature → main\nPR settings\nFollow-up model', data })));
+    expect(container.querySelector('[aria-expanded=true]')?.getAttribute('aria-label')).toBe('Hide PR settings');
+    expect(container.querySelector('[role=radio][aria-checked=true]')?.textContent).toBe('Custom (current)');
+    expect(container.textContent?.indexOf('Archive after merge')).toBeLessThan(container.textContent!.indexOf('Follow-up model'));
+    for (const [label, actionId] of [['Change model: Sonnet', 'prset:modelPick'], ['Hide PR settings', 'prui:settings']]) {
+      await act(async () => container.querySelector<HTMLButtonElement>(`[aria-label="${label}"]`)!.click());
+      expect(h.invoke).toHaveBeenCalledWith('device', expect.any(String), [expect.objectContaining({ actionId })], expect.any(Object));
+    }
+    await act(async () => root.render(createElement(PluginCardActions, { deviceId: 'device', sessionId: 's', callId: 'c',
+      text: '#42 Fix layout\no/r · Merged\nPR settings\nFollow-up model\nUses the task model',
+      data: { ...data, revision: '2', items: data.items.filter(item => item.id !== 'prset:modelPick') } })));
+    expect(container.querySelector('[role=radio][aria-checked=true]')?.textContent).toBe('Follow task');
+    expect(container.textContent?.indexOf('Archive after merge')).toBeLessThan(container.textContent!.indexOf('Uses the task model'));
+    await act(async () => root.render(createElement(PluginCardActions, { deviceId: 'device', sessionId: 's', callId: 'c',
+      text: '#42 Fix layout\no/r · Merged',
+      data: { ...data, revision: '3', items: [{ id: 'prui:settings', label: 'PR settings', disabled: false }] } })));
+    expect(container.querySelector('[aria-expanded=false]')?.getAttribute('aria-label')).toBe('PR settings');
+    expect(container.querySelector('[role=radio]')).toBeNull();
+    expect(container.textContent).not.toContain('Follow-up model');
+  });
+
+  // Bug (2026-11-08): after a merge the phone card had no archive button, no auto-archive notice and no way to
+  // cancel it, unlike Desktop. Minimal input: a card whose host says the task is done, with and without auto.
+  it('offers the archive button and the cancellable auto-archive notice the host allows', async () => {
+    const { taskAutoArchive } = await import('../plugins/taskAutoArchive');
+    const requested = vi.fn();
+    const offRequest = taskAutoArchive.onArchiveRequest(requested);
+    const disable = taskAutoArchive.enable('s-archive');
+    const container = document.createElement('div'), root = createRoot(container);
+    unmount = () => { act(() => root.unmount()); disable(); offRequest(); };
+    const card = (taskArchive?: { auto: boolean }) => act(async () => root.render(createElement(PluginCardActions, {
+      deviceId: 'device', sessionId: 's-archive', callId: 'c', text: '#9 Fix login',
+      data: { pluginId: 'cindy-github', revision: '1', items: [], ...(taskArchive ? { taskArchive } : {}) } })));
+    await card({ auto: true });
+    expect(container.textContent).toContain('plugins.taskArchive.pending');
+    await act(async () => container.querySelector<HTMLButtonElement>('[aria-label="plugins.taskArchive.now"]')!.click());
+    expect(requested).toHaveBeenCalledWith('s-archive');
+    // Shown in the focused task page: leaving would archive. Cancelling keeps the result visible and the button usable.
+    expect(taskAutoArchive.takeSeen('s-archive')).toBe(true);
+    await act(async () => container.querySelector<HTMLButtonElement>('[aria-label="plugins.taskArchive.cancel"]')!.click());
+    expect(container.textContent).toContain('plugins.taskArchive.cancelled');
+    expect(container.querySelector('[aria-label="plugins.taskArchive.cancel"]')).toBeNull();
+    expect(container.querySelector('[aria-label="plugins.taskArchive.now"]')).not.toBeNull();
+    expect(taskAutoArchive.takeSeen('s-archive')).toBe(false);
+    // The host no longer says done (e.g. a PR reopened): no button, and the cancellation is forgotten.
+    await card();
+    expect(container.querySelector('[aria-label="plugins.taskArchive.now"]')).toBeNull();
+    expect(taskAutoArchive.getState('s-archive')).toBe('inactive');
+    // Without auto (or with an IM channel attached) only the manual button shows.
+    await card({ auto: false });
+    expect(container.querySelector('[aria-label="plugins.taskArchive.now"]')).not.toBeNull();
+    expect(container.textContent).not.toContain('plugins.taskArchive.pending');
+    // Bug (review of #9325): a cancellation kept from an earlier visit survived a card that mounts without auto.
+    taskAutoArchive.setArmed('s-archive', 'c', true);
+    taskAutoArchive.cancel('s-archive');
+    act(() => root.unmount());
+    const remount = createRoot(container);
+    unmount = () => { act(() => remount.unmount()); disable(); offRequest(); };
+    await act(async () => remount.render(createElement(PluginCardActions, { deviceId: 'device', sessionId: 's-archive', callId: 'c', text: '#9 Fix login',
+      data: { pluginId: 'cindy-github', revision: '1', items: [] } })));
+    expect(taskAutoArchive.getState('s-archive')).toBe('inactive');
+    await act(async () => remount.render(createElement(PluginCardActions, { deviceId: 'device', sessionId: 's-archive', callId: 'c', text: '#9 Fix login',
+      data: { pluginId: 'cindy-github', revision: '2', items: [], taskArchive: { auto: true } } })));
+    expect(container.textContent).toContain('plugins.taskArchive.pending');
+  });
+
+  // Bug (review of #9325): a row passes the list's 5% visibility with a tall neighbour card on screen, so an armed card
+  // below the window was marked "seen" and archived without its notice or Cancel ever being shown.
+  it('marks the task seen only when the notice itself is inside the window', async () => {
+    const { taskAutoArchive } = await import('../plugins/taskAutoArchive');
+    const disable = taskAutoArchive.enable('s-seen');
+    const container = document.createElement('div'), root = createRoot(container);
+    unmount = () => { act(() => root.unmount()); disable(); taskAutoArchive.setArmed('s-seen', 'c', false); };
+    const card = () => act(async () => root.render(createElement(PluginCardActions, {
+      deviceId: 'device', sessionId: 's-seen', callId: 'c', text: '#9 Fix login',
+      data: { pluginId: 'cindy-github', revision: '1', items: [], taskArchive: { auto: true } } })));
+    h.noticeFrame = { y: 1200, height: 24 };
+    await card();
+    expect(container.textContent).toContain('plugins.taskArchive.pending');
+    expect(taskAutoArchive.takeSeen('s-seen')).toBe(false);
+    h.noticeFrame = { y: -60, height: 24 };
+    await card();
+    expect(taskAutoArchive.takeSeen('s-seen')).toBe(false);
+    // Back on screen (a fresh mount measures again): now the notice is really seen.
+    act(() => root.unmount());
+    h.noticeFrame = { y: 300, height: 24 };
+    const again = createRoot(container);
+    unmount = () => { act(() => again.unmount()); disable(); taskAutoArchive.setArmed('s-seen', 'c', false); };
+    await act(async () => again.render(createElement(PluginCardActions, {
+      deviceId: 'device', sessionId: 's-seen', callId: 'c', text: '#9 Fix login',
+      data: { pluginId: 'cindy-github', revision: '1', items: [], taskArchive: { auto: true } } })));
+    expect(taskAutoArchive.takeSeen('s-seen')).toBe(true);
+  });
+
+  it('draws PR checks, a live state, a primary action, a link by its host and settings as switches', async () => {
+    const dispatch = vi.fn(async (_input: unknown) => ({ effects: [] }));
+    h.invoke.mockImplementation(async (_d: string, _c: string, args: any[]) => {
+      if (args[0].collectionId === 'plugin-results') return dispatch(args[0]);
+      if (args[0].actionId === 'open-interaction') return { result: { pageId: 'page' } };
+      return { result: { confirms: [] } };
+    });
+    const container = document.createElement('div'), root = createRoot(container);
+    unmount = () => act(() => root.unmount());
+    const status = { ok: true, status: 'open', unresolvedCount: 2, checks: { total: 1, passed: 1, failed: 0, pending: 0, skipped: 0 }, mergeState: 'BLOCKED', reviewDecision: 'REVIEW_REQUIRED' };
+    await act(async () => root.render(createElement(PluginCardActions, { deviceId: 'device', sessionId: 's', callId: 'c', data: {
+      pluginId: 'github', revision: '1', form: null, live: '跟进中',
+      prStatus: [{ key: 'o/r#9', fallback: ['CI 运行中'], status }],
+      items: [
+        { id: 'link:0', label: '#9 Fix login', url: 'https://github.com/o/r/pull/9', disabled: false },
+        { id: 'pr:ready', label: '转为正式 PR', disabled: false, primary: true },
+        { id: 'prset:rename', label: '关闭「自动改名」', disabled: false, toggle: { on: true, title: '自动改名', hint: '改成 PR 号' } },
+      ],
+    } })));
+    const text = container.textContent ?? '';
+    for (const part of ['plugins.prStatus.checksPassed', 'plugins.prStatus.threadsOpen', 'plugins.prStatus.mergeApproval', '跟进中', '自动改名', '改成 PR 号', 'plugins.openLinkHost', '转为正式 PR'])
+      expect(text).toContain(part);
+    expect(text).not.toContain('CI 运行中');
+    expect(text).not.toContain('关闭「自动改名」');
+    const toggle = container.querySelector<HTMLInputElement>('input[type=checkbox]')!;
+    expect(toggle.checked).toBe(true);
+    await act(async () => { toggle.click(); });
+    expect(dispatch).toHaveBeenCalledWith(expect.objectContaining({ actionId: 'prset:rename' }));
+  });
+
+  it('draws a PR link with its own status, never another PR\'s', async () => {
+    h.invoke.mockImplementation(async () => ({ result: { confirms: [] } }));
+    const container = document.createElement('div'), root = createRoot(container);
+    unmount = () => act(() => root.unmount());
+    const merged = { ok: true, status: 'merged', unresolvedCount: 0, checks: { total: 0, passed: 0, failed: 0, pending: 0, skipped: 0 } };
+    const render = async (url: string) => {
+      await act(async () => root.render(createElement(PluginCardActions, { deviceId: 'device', sessionId: 's', callId: 'c', text: '#9 Fix login\n\no/r', data: {
+        pluginId: 'github', revision: '1', form: null, prStatus: [{ key: 'o/r#10', fallback: [], status: merged }],
+        items: [{ id: 'link:0', label: '#9 Fix login', url, disabled: false }],
+      } })));
+      return Array.from(container.querySelectorAll('i')).map((node) => node.getAttribute('data-icon'));
+    };
+    expect(await render('https://github.com/o/r/pull/9')).toContain('GitPullRequest');
+    expect(await render('https://github.com/o/r/pull/9')).not.toContain('GitMerge');
+    expect(await render('https://github.com/O/R/pull/10')).toContain('GitMerge');
+  });
+
+  // Unit: on the phone the PR card's title, repo and branch were one loose block above a separate
+  // "open github.com" button. With the card text the title becomes the card's own link.
+  it('draws the card text as a title that opens the card link, without a separate link button', async () => {
+    h.invoke.mockImplementation(async () => ({ result: { confirms: [] } }));
+    const container = document.createElement('div'), root = createRoot(container);
+    unmount = () => act(() => root.unmount());
+    await act(async () => root.render(createElement(PluginCardActions, { deviceId: 'device', sessionId: 's', callId: 'c',
+      text: '#9 Fix login\n\no/r · 草稿', data: {
+        pluginId: 'github', revision: '1', form: null,
+        items: [
+          { id: 'link:0', label: '#9 Fix login', url: 'https://github.com/o/r/pull/9', disabled: false },
+          { id: 'pr:ready', label: '转为正式 PR', disabled: false, primary: true },
+        ],
+      } })));
+    const text = container.textContent ?? '';
+    expect(text.split('#9 Fix login')).toHaveLength(2);
+    expect(text).toContain('o/r · 草稿');
+    expect(text).not.toContain('plugins.openLinkHost');
+    // GitHub pages open directly (owner's choice); other addresses still ask first.
+    const { Alert, Linking } = await import('react-native');
+    const title = [...container.querySelectorAll('button')].find((button) => button.textContent === '#9 Fix login')!;
+    await act(async () => { title.click(); });
+    expect(Linking.openURL).toHaveBeenCalledWith('https://github.com/o/r/pull/9');
+    expect(Alert.alert).not.toHaveBeenCalled();
+  });
+});
+
+describe("native plugin card deliberate actions", () => {
+  // Mobile parity regression: typing must use the real form delivery, update
+  // both MIME alternatives and retain the authored HTML/CID bytes (unit).
+  it('autosaves direct HTML typing through the shared card without reloading the editing document', async () => {
+    const dispatch = vi.fn(async (_input: unknown) => ({ effects: [] }));
+    h.invoke.mockImplementation(async (_d: string, _c: string, args: any[]) => {
+      if (args[0].collectionId === 'plugin-results') return dispatch(args[0]);
+      if (args[0].actionId === 'open-interaction') return { result: { pageId: 'page' } };
+      return { result: { confirms: [] } };
+    });
+    const container = document.createElement('div'), root = createRoot(container);
+    unmount = () => act(() => root.unmount());
+    const key = '12345678-1234-1234-1234-123456789abc';
+    const html = '<style>p{color:red}</style><p>Hello</p><img src="cid:card">';
+    const fields = [...['to','cc','bcc','subject','body'].map(name => ({ name, label: name, value: '', kind: 'hidden' })),
+      { name: 'bodyHtml', label: 'HTML', kind: 'mail-html', value: html }];
+    await act(async () => root.render(createElement(PluginCardActions, { deviceId: 'device', sessionId: 's', callId: 'text', data: {
+      pluginId: 'mail', revision: '1', form: fields, changeAction: `mail:change:${key}`, items: [],
+      mail: { key, accountId: 'a', draftId: 'd', from: '', fields, state: 'draft', status: 'Draft', sendLabel: 'Send', fromLabel: 'From', attachments: [] },
+    } })));
+    const source = h.web.source;
+    expect(source.html).toContain("script-src 'none'");
+    expect(container.textContent).not.toContain('plugins.mailEditText');
+    expect(container.querySelector('textarea')).toBeNull();
+    const message = (data: unknown) => h.web.onMessage({ nativeEvent: { data: JSON.stringify(data) } });
+    await act(async () => {
+      message({ type: 'mail-text', documentId: 99, id: '0', text: 'stale' });
+      message({ type: 'mail-text', documentId: 0, id: '99', text: 'forged' });
+    });
+    expect(dispatch).not.toHaveBeenCalled();
+    await act(async () => {
+      message({ type: 'mail-text', documentId: 0, id: '0', text: '你好\nCherry' });
+    });
+    expect(dispatch).toHaveBeenCalledWith(expect.objectContaining({ input: expect.objectContaining({ formValues: expect.objectContaining({
+      body: '你好\nCherry', bodyHtml: '<style>p{color:red}</style><p>你好<br>Cherry</p><img src="cid:card">',
+    }) }) }));
+    expect(h.web.source).toBe(source);
+    expect(h.web.source.html).toContain("script-src 'none'");
+  });
+  // Inline images must not duplicate attachment tiles; ordinary files remain
+  // removable. Exercise real form delivery while preserving the inline MIME part.
+  it('opens an image and hides its attachment tile after insertion while retaining its MIME part and head styles', async () => {
+    const dispatch = vi.fn(async (_input: unknown) => ({ effects: [] })), open = vi.fn();
+    h.invoke.mockImplementation(async (_d: string, _c: string, args: any[]) => {
+      if (args[0].collectionId === 'plugin-results') return dispatch(args[0]);
+      if (args[0].actionId === 'open-interaction') return { result: { pageId: 'page' } };
+      return { result: { confirms: [] } };
+    });
+    const container = document.createElement('div'), root = createRoot(container);
+    unmount = () => act(() => root.unmount());
+    const url = `cindy-media://blobs/${'a'.repeat(64)}.png`, key = '12345678-1234-1234-1234-123456789abc';
+    const fields = [...['to','cc','bcc','subject','body'].map(name => ({ name, label: name, value: '' })),
+      { name: 'bodyHtml', label: 'HTML', kind: 'hidden', value: '<style>.card{color:red}</style><p>Keep</p>' },
+      { name: 'attachmentItems', label: 'Files', kind: 'mail-attachments', value: JSON.stringify([
+        { key: 'image', filename: 'photo.png', mimeType: 'image/png', previewUrl: url, bytes: 1000 },
+        { key: 'pdf', filename: 'notes.pdf', mimeType: 'application/pdf' },
+      ]) }];
+    await act(async () => root.render(createElement(PluginCardActions, { deviceId: 'device', sessionId: 's', callId: 'image', onOpenAttachment: open, data: {
+      pluginId: 'mail', revision: '1', form: fields, changeAction: `mail:change:${key}`, items: [],
+      mail: { key, accountId: 'a', draftId: 'd', from: '', fields, state: 'draft', status: 'Draft', sendLabel: 'Send', fromLabel: 'From', attachments: [] },
+    } })));
+    await act(async () => [...container.querySelectorAll('button')].find(b => b.textContent?.includes('photo.png'))!.click());
+    expect(open).toHaveBeenCalledWith(url, 'photo.png');
+    expect(dispatch).not.toHaveBeenCalled();
+    await act(async () => [...container.querySelectorAll('button')].find(b => b.textContent === 'plugins.mailInsertImage')!.click());
+    const inserted = dispatch.mock.calls.at(-1)![0] as any;
+    expect(inserted.input.formValues.bodyHtml).toContain('src="cid:image-1@cindy.local"');
+    expect(inserted.input.formValues.bodyHtml).not.toContain('cindy-media:');
+    expect(JSON.parse(inserted.input.formValues.attachmentItems)).toHaveLength(2);
+    expect(container.textContent).not.toContain('plugins.mailInsertImage');
+    expect(container.textContent).not.toContain('photo.png');
+    expect(container.textContent).toContain('notes.pdf');
+    expect(inserted.input.formValues.bodyHtml).toContain('<style>.card{color:red}</style>');
+    await act(async () => [...container.querySelectorAll('button')].find(b => b.textContent === '×')!.click());
+    const removed = (dispatch.mock.calls.at(-1)![0] as any).input.formValues;
+    expect(JSON.parse(removed.attachmentItems).map((file: any) => file.key)).toEqual(['image']);
+    expect(removed.bodyHtml).toBe(inserted.input.formValues.bodyHtml);
+    expect(container.textContent).not.toContain('notes.pdf');
+  });
+  it('resolves inline images for an inert phone preview and keeps the saved CID HTML intact', async () => {
+    const container = document.createElement('div'), root = createRoot(container);
+    unmount = () => act(() => root.unmount());
+    const html = '<p>Hello</p><img src="cid:logo">';
+    h.resolve.mockResolvedValue({ url: 'data:image/png;base64,aGVsbG8=', previewable: true });
+    await act(async () => root.render(createElement(MobileMailHtmlPreview, {
+      html, deviceId: 'device', images: [{ cid: 'logo', url: `cindy-media://blobs/${'a'.repeat(64)}.png` }],
+    })));
+    const preview = container.querySelector('[data-testid="html-preview"]')!;
+    expect(h.inject.mock.calls.some(([script]) => script.includes('data:image/png;base64,aGVsbG8='))).toBe(true);
+    expect(preview.getAttribute('data-html')).toContain("script-src 'none'");
+    expect(preview.getAttribute('data-html')).not.toMatch(/data-cindy-mail-run|pre-wrap/);
+    expect(html).toContain('src="cid:logo"');
+    expect(h.invoke).not.toHaveBeenCalled();
+  });
+  it('repaints native reading colors on theme changes without replacing the document or changing mail', async () => {
+    const container = document.createElement('div'), root = createRoot(container);
+    unmount = () => act(() => root.unmount());
+    const html = '<p style="background:rgb(249,154,60);color:black">Ticket</p><section style="background:linear-gradient(#fff,#eee);color:#000">Gradient</section>';
+    const render = () => act(async () => root.render(createElement(MobileMailHtmlPreview, { html, deviceId: 'device' })));
+    await render();
+    const source = h.web.source;
+    const frame = document.createElement('iframe'); document.body.append(frame);
+    try {
+      const doc = frame.contentDocument!;
+      doc.open(); doc.write(source.html); doc.close();
+      const view = Object.assign(doc.defaultView!, { ReactNativeWebView: { postMessage: () => undefined } });
+      // Height fitting needs real layout; this test covers color repainting only.
+      h.inject.mockImplementation(script => new Function('document', 'window', 'getComputedStyle', 'requestAnimationFrame', 'setTimeout', script)(doc, view, view.getComputedStyle.bind(view), () => 0, () => 0));
+      for (const mode of ['dark', 'light', 'dark']) {
+        h.mode = mode;
+        await render();
+        expect(h.web.source).toBe(source);
+        expect(doc.querySelector('p')!.style.backgroundColor).toBe(mode === 'dark' ? 'rgb(129, 71, 14)' : 'rgb(249, 154, 60)');
+        expect(doc.querySelector('section')!.style.backgroundImage).toBe(mode === 'dark' ? 'none' : 'linear-gradient(rgb(255, 255, 255), rgb(238, 238, 238))');
+        expect(doc.querySelector('[data-cindy-mail-run]')).toBeNull();
+      }
+      expect(h.invoke).not.toHaveBeenCalled();
+    } finally { h.inject.mockReset(); frame.remove(); }
+  });
+  it('uploads from the phone then attaches to the same card; cancellation never dispatches', async () => {
+    const dispatch = vi.fn(async (_input: unknown) => ({ effects: [] }));
+    h.invoke.mockImplementation(async (_device: string, _channel: string, args: any[]) => {
+      if (args[0].collectionId === 'plugin-results') return dispatch(args[0]);
+      if (args[0].actionId === 'open-interaction') return { result: { pageId: 'page' } };
+      return { result: { confirms: [] } };
+    });
+    const container = document.createElement('div'), root = createRoot(container);
+    unmount = () => act(() => root.unmount());
+    const key = '12345678-1234-1234-1234-123456789abc';
+    const fields = [...['to', 'cc', 'bcc', 'subject', 'body'].map(name => ({ name, label: name, value: name })),
+      { name: 'attachmentItems', label: 'Files', value: '[]', kind: 'mail-attachments' }];
+    await act(async () => root.render(createElement(PluginCardActions, { deviceId: 'device', sessionId: 's', callId: 'upload', data: {
+      pluginId: 'mail', revision: '1', form: fields, mailUpload: true, changeAction: `mail:change:${key}`, items: [],
+      mail: { accountId: 'a', draftId: 'd', key, from: 'a@example.test', fields, state: 'draft', status: 'Draft',
+        sendLabel: 'Send', fromLabel: 'From', attachments: [] },
+    } })));
+    const button = () => [...container.querySelectorAll('button')].find(b => b.textContent === 'plugins.mailAttach')!;
+    h.pick.mockResolvedValueOnce(null);
+    await act(async () => button().click());
+    expect(dispatch).not.toHaveBeenCalled();
+    const upload = { url: 'xdt-attach-oss://test-reference', name: 'plan.pdf' };
+    h.pick.mockImplementationOnce(async ({ deliver }: { deliver(file: typeof upload): Promise<boolean> }) => {
+      await deliver(upload);
+      return upload;
+    });
+    await act(async () => button().click());
+    expect(h.pick).toHaveBeenLastCalledWith(expect.objectContaining({ deviceId: 'device', isActive: expect.any(Function) }));
+    expect(dispatch).toHaveBeenCalledWith(expect.objectContaining({ actionId: `mail:attach:${key}`,
+      input: expect.objectContaining({ mailAttachment: upload, formValues: expect.objectContaining({ subject: 'subject' }) }) }));
+  });
+  it('deletes without saving fields and replaces the editor with a compact status and subject', async () => {
+    const dispatch = vi.fn(async (_input: unknown) => ({ effects: [] }));
+    h.invoke.mockImplementation(async (_device: string, _channel: string, args: any[]) => {
+      if (args[0].collectionId === 'plugin-results') return dispatch(args[0]);
+      if (args[0].actionId === 'open-interaction') return { result: { pageId: 'page' } };
+      return { result: { confirms: [] } };
+    });
+    const container = document.createElement('div'), root = createRoot(container);
+    unmount = () => act(() => root.unmount());
+    const key = '12345678-1234-1234-1234-123456789abc';
+    const fields = ['to', 'cc', 'bcc', 'subject', 'body'].map(name => ({ name, label: name, value: name }));
+    const id = `mail:delete:${key}`;
+    const render = (state: 'draft' | 'deleted') => root.render(createElement(PluginCardActions, {
+      deviceId: 'device', sessionId: 's', callId: 'delete', data: {
+        pluginId: 'mail', revision: state, form: fields, items: [{ id, label: 'Delete draft', disabled: false }],
+        mail: { accountId: 'a', draftId: 'd', key, from: 'a@example.test', fields, state, status: state,
+          sendLabel: 'Send', fromLabel: 'From', deleteLabel: 'Delete draft', attachments: [] },
+      },
+    }));
+    await act(async () => render('draft'));
+    await act(async () => [...container.querySelectorAll('button')].find(b => b.textContent === 'Delete draft')!.click());
+    expect(dispatch).toHaveBeenCalledWith(expect.objectContaining({ actionId: id }));
+    expect(dispatch.mock.calls[0][0]).not.toHaveProperty('input.formValues');
+    await act(async () => render('deleted'));
+    expect(container.querySelectorAll('textarea,button')).toHaveLength(0);
+    expect(container.textContent).toContain('deleted');
+    expect(container.textContent).toContain('subject');
+    expect(container.textContent).not.toContain('body');
+    expect(container.textContent).not.toContain('a@example.test');
+    expect(dispatch).toHaveBeenCalledTimes(1);
+  });
+  it.each(['cancel', 'now'])('allows %s during a locked send countdown without resubmitting fields', async (operation) => {
+    const dispatch = vi.fn(async (_input: unknown) => ({ effects: [] }));
+    h.invoke.mockImplementation(async (_device: string, _channel: string, args: any[]) => {
+      if (args[0].collectionId === 'plugin-results') return dispatch(args[0]);
+      if (args[0].actionId === 'open-interaction') return { result: { pageId: 'page' } };
+      return { result: { confirms: [] } };
+    });
+    const container = document.createElement('div'), root = createRoot(container);
+    unmount = () => act(() => root.unmount());
+    const key = '12345678-1234-1234-1234-123456789abc';
+    const fields = ['to', 'cc', 'bcc', 'subject', 'body'].map(name => ({ name, label: name, value: name }));
+    const id = `mail:${operation}:${key}`;
+    await act(async () => root.render(createElement(PluginCardActions, { deviceId: 'device', sessionId: 's', callId: 'waiting', data: {
+      pluginId: 'mail', revision: '1', form: fields, items: [{ id, label: operation, disabled: false }],
+      mail: { accountId: 'a', draftId: 'd', key, from: 'a@example.test', fields, state: 'sending', status: 'Waiting',
+        sendLabel: 'Send', fromLabel: 'From', attachments: [], pendingSend: { deadline: Date.now() + 10000, label: '{seconds}s', cancelLabel: 'cancel', sendNowLabel: 'now' } },
+    } })));
+    expect([...container.querySelectorAll('textarea')].every(el => el.disabled)).toBe(true);
+    await act(async () => [...container.querySelectorAll('button')].find(b => b.textContent === operation)!.click());
+    expect(dispatch).toHaveBeenCalledWith(expect.objectContaining({ actionId: id }));
+    expect(dispatch.mock.calls[0][0]).not.toHaveProperty('input.formValues');
+  });
+  it("publishes edits without a click and keeps newer typing through an autosave card update", async () => {
+    const dispatch = vi.fn(async (_input: unknown) => ({ effects: [] }));
+    h.invoke.mockImplementation(
+      async (_device: string, _channel: string, args: any[]) => {
+        if (args[0].collectionId === "plugin-results")
+          return dispatch(args[0].input);
+        if (args[0].actionId === "open-interaction")
+          return { result: { pageId: "page" } };
+        return { result: { confirms: [] } };
+      },
+    );
+    const container = document.createElement("div"),
+      root = createRoot(container);
+    unmount = () => act(() => root.unmount());
+    const renderCard = (revision: string, value: string) =>
+      root.render(
+        createElement(PluginCardActions, {
+          deviceId: "device",
+          sessionId: "edit-task",
+          callId: "card",
+          data: {
+            pluginId: "practice",
+            revision,
+            changeAction: "change:one",
+            form: [
+              {
+                name: "to",
+                label: "To",
+                value: "Jane <jane@example.test>, Rigo <rigo@example.test>",
+                kind: "recipients",
+                row: "recipients",
+              },
+              {
+                name: "cc",
+                label: "Cc",
+                value: "Emma <emma@example.test>",
+                kind: "recipients",
+                row: "recipients",
+              },
+              { name: "bcc", label: "Bcc", value: "Hidden <hidden@example.test>", kind: "recipients", collapsed: true },
+              { name: "body", label: "Message", value, multiline: true },
+            ],
+            items: [
+              { id: "send", label: "Send", submit: true, disabled: false },
+            ],
+          },
+        }),
+      );
+    await act(async () => renderCard("one", "Initial"));
+    expect(container.textContent).not.toContain("Bcc");
+    await act(async () =>
+      [...container.querySelectorAll("button")]
+        .find((b) => b.textContent === "plugins.expandFields")!
+        .click(),
+    );
+    expect(
+      [...container.querySelectorAll("span")].filter(
+        (el) => el.textContent === "To",
+      ),
+    ).toHaveLength(1);
+    expect(container.querySelector('textarea[aria-label="Bcc"]')).toBeTruthy();
+    const cc = container.querySelector<HTMLTextAreaElement>(
+      'textarea[aria-label="Cc"]',
+    )!;
+    await act(async () => {
+      Object.getOwnPropertyDescriptor(
+        HTMLTextAreaElement.prototype,
+        "value",
+      )!.set!.call(cc, "Latest <latest@example.test>");
+      cc.dispatchEvent(new Event("input", { bubbles: true }));
+    });
+    const input = container.querySelector<HTMLTextAreaElement>(
+      'textarea[aria-label="Message"]',
+    )!;
+    await act(async () => {
+      Object.getOwnPropertyDescriptor(
+        HTMLTextAreaElement.prototype,
+        "value",
+      )!.set!.call(input, "Latest edit");
+      input.dispatchEvent(new Event("input", { bubbles: true }));
+      const barrier = pendingGhostCardFormDelivery(
+        JSON.stringify(["device", "edit-task"]),
+      );
+      expect(barrier).toBeDefined();
+      expect(await barrier).toBe(true);
+    });
+    expect(dispatch).toHaveBeenCalledWith(
+      expect.objectContaining({
+        formChange: true,
+        formValues: expect.objectContaining({
+          body: "Latest edit",
+          cc: "Latest <latest@example.test>",
+          bcc: "Hidden <hidden@example.test>",
+        }),
+      }),
+    );
+    expect(input.disabled).toBe(false);
+    await act(async () => renderCard("two", "Older autosave receipt"));
+    expect(input.value).toBe("Latest edit");
+    await act(async () =>
+      [...container.querySelectorAll("button")]
+        .find((b) => b.textContent === "Send")!
+        .click(),
+    );
+    expect(dispatch).toHaveBeenLastCalledWith(
+      expect.objectContaining({
+        formKey: "change:one",
+        formValues: expect.objectContaining({
+          body: "Latest edit",
+          cc: "Latest <latest@example.test>",
+          bcc: "Hidden <hidden@example.test>",
+        }),
+      }),
+    );
+  });
+  it("submits edited text and holds all fields until the card revision changes", async () => {
+    const dispatch = vi.fn(async (_input: unknown) => ({ effects: [] }));
+    h.invoke.mockImplementation(
+      async (_device: string, _channel: string, args: any[]) => {
+        if (args[0].collectionId === "plugin-results")
+          return dispatch(args[0].input);
+        if (args[0].actionId === "open-interaction")
+          return { result: { pageId: "page" } };
+        if (args[0].actionId === "poll") return { result: { confirms: [] } };
+        return { effects: [] };
+      },
+    );
+    const container = document.createElement("div");
+    document.body.append(container);
+    const root = createRoot(container);
+    unmount = () => {
+      act(() => root.unmount());
+      container.remove();
+    };
+    const renderCard = (revision: string, value: string) =>
+      root.render(
+        createElement(PluginCardActions, {
+          deviceId: "device",
+          sessionId: "session",
+          callId: "call",
+          data: {
+            pluginId: "practice",
+            revision,
+            form: [{ name: "body", label: "Message", value, multiline: true }],
+            items: [
+              { id: "send", label: "Send", disabled: false, submit: true },
+            ],
+          },
+        }),
+      );
+    await act(async () => renderCard("one", "Initial"));
+    expect(container.textContent).not.toContain("Bcc");
+    const input = container.querySelector("textarea")!;
+    await act(async () => {
+      Object.getOwnPropertyDescriptor(
+        HTMLTextAreaElement.prototype,
+        "value",
+      )!.set!.call(input, "Edited\n\nMessage");
+      input.dispatchEvent(new Event("input", { bubbles: true }));
+    });
+    await act(async () => renderCard("one", "Initial"));
+    expect(container.textContent).not.toContain("Bcc");
+    expect(input.value).toBe("Edited\n\nMessage");
+    const button = container.querySelector("button")!;
+    await act(async () => button.click());
+    expect(dispatch).toHaveBeenCalledWith(
+      expect.objectContaining({ formValues: { body: "Edited\n\nMessage" } }),
+    );
+    expect(button.disabled).toBe(true);
+    expect(input.disabled).toBe(true);
+    await act(async () => button.click());
+    expect(dispatch).toHaveBeenCalledTimes(1);
+    await act(async () => renderCard("two", "Saved reply"));
+    expect(input.value).toBe("Saved reply");
+    expect(input.disabled).toBe(false);
+    expect(button.disabled).toBe(false);
+  });
+  it.each([false, true])(
+    "releases only a known successful delivery (unknown=%s)",
+    async (unknown) => {
+      const dispatch = vi.fn(async () => {
+        if (unknown) throw new Error("lost receipt");
+        return { effects: [] };
+      });
+      h.invoke.mockImplementation(
+        async (_device: string, _channel: string, args: any[]) => {
+          if (args[0].collectionId === "plugin-results") return dispatch();
+          if (args[0].actionId === "open-interaction")
+            return { result: { pageId: "page" } };
+          if (args[0].actionId === "poll") return { result: { confirms: [] } };
+          return { effects: [] };
+        },
+      );
+      const container = document.createElement("div");
+      document.body.append(container);
+      const root = createRoot(container);
+      unmount = () => {
+        act(() => root.unmount());
+        container.remove();
+      };
+      await act(async () =>
+        root.render(
+          createElement(PluginCardActions, {
+            deviceId: "device",
+            sessionId: "session",
+            callId: "call",
+            data: {
+              pluginId: "practice",
+              revision: "unchanged",
+              items: [{ id: "again", label: "Again", disabled: false }],
+            },
+          }),
+        ),
+      );
+      const button = container.querySelector("button")!;
+      await act(async () => button.click());
+      expect(dispatch).toHaveBeenCalledTimes(1);
+      expect(button.disabled).toBe(unknown);
+      await act(async () => button.click());
+      expect(dispatch).toHaveBeenCalledTimes(unknown ? 1 : 2);
+    },
+  );
+});
+
+it('hides empty recipient add controls in sent mail but keeps existing addresses readable', async () => {
+  const container = document.createElement('div'), root = createRoot(container);
+  unmount = () => act(() => root.unmount());
+  const fields = [
+    { name: 'to', label: 'To', value: 'to@example.test', kind: 'recipients' as const },
+    { name: 'cc', label: 'Cc', value: '', kind: 'recipients' as const },
+    { name: 'bcc', label: 'Bcc', value: 'hidden@example.test', kind: 'recipients' as const, collapsed: true },
+    { name: 'subject', label: 'Subject', value: 'Sent mail' },
+    { name: 'body', label: 'Message', value: 'Sent body', multiline: true },
+  ];
+  await act(async () => root.render(createElement(PluginCardActions, { deviceId: 'device', sessionId: 's', callId: 'sent', data: {
+    pluginId: 'mail', revision: '1', form: fields, items: [],
+    mail: { accountId: 'a', draftId: 'd', key: '12345678-1234-1234-1234-123456789abc', from: 'a@example.test', fields,
+      state: 'sent', status: 'Sent', sendLabel: 'Send', fromLabel: 'From', attachments: [] },
+  } })));
+  expect(container.textContent).not.toContain('Cc');
+  await act(async () => [...container.querySelectorAll('button')].find(b => b.textContent === 'plugins.expandFields')!.click());
+  expect(container.querySelector('textarea[aria-label="Cc"]')).toBeNull();
+  const bcc = container.querySelector<HTMLTextAreaElement>('textarea[aria-label="Bcc"]')!;
+  expect(bcc.value).toBe('hidden@example.test');
+  expect(bcc.disabled).toBe(true);
+  expect(h.invoke).not.toHaveBeenCalled();
+});
+
+it('hides superseded mail entirely instead of showing another draft-updated card', async () => {
+  const container = document.createElement('div'), root = createRoot(container);
+  unmount = () => act(() => root.unmount());
+  const fields = ['to', 'cc', 'bcc', 'subject', 'body'].map(name => ({ name, label: name, value: name === 'body' ? 'Historical body' : name }));
+  await act(async () => root.render(createElement(PluginCardActions, { deviceId: 'device', sessionId: 's', callId: 'old', data: {
+    pluginId: 'mail', revision: '1', form: fields, items: [{ id: 'send', label: 'Send', disabled: false }],
+    mail: { accountId: 'a', draftId: 'd', key: '12345678-1234-1234-1234-123456789abc', from: 'a@example.test', fields,
+      state: 'draft', status: 'Saved', sendLabel: 'Send', fromLabel: 'From', attachments: [], supersededBy: 'new' },
+  } })));
+  expect(container.innerHTML).toBe('');
+  expect(h.invoke).not.toHaveBeenCalled();
+});
+
+
+it('opens in-card task links through task navigation without a browser or plugin action', async () => {
+  h.invoke.mockImplementation(async () => ({ result: { confirms: [] } }));
+  const onOpenSessionLink = vi.fn();
+  const container = document.createElement('div'), root = createRoot(container);
+  unmount = () => act(() => root.unmount());
+  await act(async () => root.render(createElement(PluginCardActions, { deviceId: 'device', sessionId: 's', callId: 'c', onOpenSessionLink,
+    data: { pluginId: 'github', revision: '1', form: null,
+      items: [{ id: 'link:0', label: '打开原任务', url: 'cindy://session/original-task', disabled: false }] } })));
+  const { Alert, Linking } = await import('react-native');
+  vi.mocked(Linking.openURL).mockClear();
+  vi.mocked(Alert.alert).mockClear();
+  h.invoke.mockClear();
+  const button = [...container.querySelectorAll('button')].find(button => button.textContent === '打开原任务')!;
+  expect(button).toBeTruthy();
+  await act(async () => button.click());
+  expect(onOpenSessionLink).toHaveBeenCalledWith('cindy://session/original-task');
+  expect(Linking.openURL).not.toHaveBeenCalled();
+  expect(Alert.alert).not.toHaveBeenCalled();
+  expect(h.invoke).not.toHaveBeenCalled();
+});

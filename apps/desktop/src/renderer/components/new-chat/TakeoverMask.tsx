@@ -1,3 +1,4 @@
+import { Button } from '@/components/ui/button';
 /**
  * TakeoverMask
  * ---------------------------------------------------------------------------
@@ -77,31 +78,29 @@ export function TakeoverMask({ sessionId, channel, userId, displayName }: Takeov
           <RadioTower size={16} className="text-[var(--workingdir-icon)]" />
         </div>
         <div className="flex flex-col gap-[2px]">
-          <div className="text-[14px] font-medium leading-tight text-[var(--msg-assistant-text)]">
+          <div className="text-14 font-medium leading-tight text-[var(--msg-assistant-text)]">
             {t('newChat.takeoverMask.heading', { user: userLabel, channel: channelLabel })}
           </div>
-          <div className="text-[12px] font-normal leading-tight text-[var(--workingdir-text)]">
+          <div className="text-12 font-normal leading-tight text-[var(--workingdir-text)]">
             {t('newChat.takeoverMask.subtitle')}
           </div>
         </div>
       </div>
-      <button
+      <Button
+        variant="secondary"
+        size="md"
+        compact
+        loading={revoking}
         type="button"
         onClick={handleRevoke}
         disabled={revoking}
-        className={cn(
-          'flex h-8 shrink-0 items-center gap-1.5 rounded-full px-4',
-          'bg-[hsl(var(--sidebar-item-hover))]',
-          'text-[13px] font-medium text-[var(--msg-assistant-text)]',
-          'transition-colors hover:opacity-85',
-          revoking && 'cursor-not-allowed opacity-60',
-        )}
         aria-label={t('newChat.takeoverMask.revokeAria')}
+        className="shrink-0"
       >
         <Undo2 size={14} />
         {/* relative top-[2px]: 中文字面视觉中心略偏上, 下移 2px 跟 icon 视觉对齐 */}
-        <span className="relative top-[2px]">{revoking ? t('newChat.takeoverMask.revoking') : t('newChat.takeoverMask.revoke')}</span>
-      </button>
+        <span className="relative top-[2px]">{t('newChat.takeoverMask.revoke')}</span>
+      </Button>
     </div>
   );
 }

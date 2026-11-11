@@ -1,11 +1,23 @@
 import { readFileSync } from 'node:fs';
 import { dirname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { describe, expect, it } from 'vitest';
+import { beforeEach, describe, expect, it } from 'vitest';
+import { setDataOwnerGeneration } from '@/contexts/dataOwnerGeneration';
 
 import { shouldHandlePublishProgressEvent } from '../publishProgressFilter';
 
 describe('publish progress event filter', () => {
+  beforeEach(() => setDataOwnerGeneration('owner-a', 1));
+
+  it('rejects queued progress frames from another owner or generation', () => {
+    const event = { name: 'helper', ownerStamp: { dataOwnerId: 'owner-a', ownerGeneration: 1 } };
+    expect(shouldHandlePublishProgressEvent(event, 'helper')).toBe(true);
+    setDataOwnerGeneration('owner-b', 2);
+    expect(shouldHandlePublishProgressEvent(event, 'helper')).toBe(false);
+    setDataOwnerGeneration('owner-a', 3);
+    expect(shouldHandlePublishProgressEvent(event, 'helper')).toBe(false);
+    expect(shouldHandlePublishProgressEvent({ name: 'helper', ownerStamp: {} }, 'helper')).toBe(false);
+  });
   it('ignores background scan events when the dialog has no active publish', () => {
     expect(shouldHandlePublishProgressEvent({ name: 'lark-task' }, null)).toBe(false);
     expect(shouldHandlePublishProgressEvent({}, null)).toBe(false);
@@ -26,5 +38,21 @@ describe('publish progress event filter', () => {
     expect(scanningCloseBranch).toContain('activePublishNameRef.current = null;');
     expect(scanningCloseBranch).toContain("dispatch({ type: 'CLOSE' });");
     expect(scanningCloseBranch).not.toContain('stopScanPoll');
+  });
+
+  it('preserves the lexical discovery path for rename safety checks', () => {
+    const here = dirname(fileURLToPath(import.meta.url));
+    const source = readFileSync(resolve(here, '../../PublishDialog.tsx'), 'utf8')
+      .replace(/\r\n/g, '\n');
+
+    expect(source).toContain('absolutePath: renamedToRef.current ? eff.absolutePath : skill.discoveredPath ?? eff.absolutePath');
+  });
+
+  it('uses the owner-aware event filter in both result consumers', () => {
+    const here = dirname(fileURLToPath(import.meta.url));
+    for (const file of ['PublishDialog.tsx', 'SkillhubDetailView.tsx']) {
+      const source = readFileSync(resolve(here, '../../', file), 'utf8');
+      expect(source).toContain('if (!shouldHandlePublishProgressEvent(event,');
+    }
   });
 });

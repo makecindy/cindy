@@ -25,7 +25,7 @@ export type NewSessionWorktreeIneligibleReason =
 
 /**
  * worktree 开关的资格状态:
- *  - probing:探测中(目录/设备刚变化,结果未回)→ 开关禁用 + 「检测环境中…」;
+ *  - probing:探测中(目录/设备刚变化,结果未回)→ 首次探测不显示开关行，重探沿用上次定论;
  *  - recovering:瞬时断连/超时，页面会自动重试 → 开关禁用 + 恢复连接 caption;
  *  - eligible:可用,携带 create 所需的 baseRepo(repoRoot)与 sourceBranch(当前分支);
  *  - ineligible:环境不满足 → 开关禁用 + 原因 caption;
@@ -40,9 +40,14 @@ export type NewSessionWorktreeEligibility =
   | { status: 'unsupported' }
   | { status: 'detect-failed' };
 
-export interface NewSessionWorktreeProbeTarget {
+export interface NewSessionWorktreeBranchTarget {
   deviceId: string;
   workingDir: string;
+}
+
+export interface NewSessionWorktreeProbeTarget extends NewSessionWorktreeBranchTarget {
+  /** 设备连接/在线存在变化时递增；同目录旧探测结果不能跨 generation 复用。 */
+  probeGeneration: string;
 }
 
 /** 探测结果与发起时的设备/目录绑定，防切换目标后的首帧误用上一仓库结果。 */
@@ -55,7 +60,7 @@ export interface NewSessionWorktreeProbeSnapshot {
 
 /** 用户显式选择的源分支只属于发起选择时的设备 + 工作目录，不得跨目标复用。 */
 export interface NewSessionWorktreeBranchSelectionSnapshot {
-  target: NewSessionWorktreeProbeTarget;
+  target: NewSessionWorktreeBranchTarget;
   sourceBranch: string;
 }
 
@@ -63,8 +68,8 @@ export interface NewSessionWorktreeBranchSelectionSnapshot {
 export function shouldAcceptWorktreeBranchListResult(input: {
   requestSeq: number;
   latestSeq: number;
-  requestTarget: NewSessionWorktreeProbeTarget;
-  latestTarget: NewSessionWorktreeProbeTarget;
+  requestTarget: NewSessionWorktreeBranchTarget;
+  latestTarget: NewSessionWorktreeBranchTarget;
 }): boolean {
   return input.requestSeq === input.latestSeq
     && input.requestTarget.deviceId === input.latestTarget.deviceId
@@ -72,8 +77,9 @@ export function shouldAcceptWorktreeBranchListResult(input: {
 }
 
 /**
- * 只向当前选择暴露同 target 的结果。React effect 要到 commit 后才会把 state 重置为
- * probing；render 阶段先做这道同步 fence，用户切项目/设备后立即创建也不会拿旧 baseRepo。
+ * 只向当前选择与连接代次暴露同 target 的结果。React effect 要到 commit 后才会把 state
+ * 重置为 probing；render 阶段先做这道同步 fence，用户切项目/设备或同目标重连后立即创建
+ * 也不会拿旧资格。
  */
 export function worktreeEligibilityForTarget(
   snapshot: NewSessionWorktreeProbeSnapshot | null,
@@ -83,6 +89,7 @@ export function worktreeEligibilityForTarget(
     !snapshot
     || snapshot.target.deviceId !== target.deviceId
     || snapshot.target.workingDir.trim() !== target.workingDir.trim()
+    || snapshot.target.probeGeneration !== target.probeGeneration
   ) {
     return { status: 'probing' };
   }
@@ -96,7 +103,7 @@ export function worktreeEligibilityForTarget(
  */
 export function worktreeSourceBranchForTarget(
   snapshot: NewSessionWorktreeBranchSelectionSnapshot | null,
-  target: NewSessionWorktreeProbeTarget,
+  target: NewSessionWorktreeBranchTarget,
   eligibility: NewSessionWorktreeEligibility,
 ): string {
   if (
@@ -179,6 +186,13 @@ export async function isExactRemoteSessionClaimed(
  * proves absence. Incidental text containing NOT_FOUND remains unknown.
  */
 export function isExplicitRemoteNotFoundError(error: unknown): boolean {
+  const message = error instanceof Error ? error.message : '';
+  // Missing invoke handlers reuse the transport's NOT_FOUND code while the
+  // host is starting or an older host lacks the channel; that is not proof
+  // that the remote session row was deleted.
+  if (/(?:no local IPC handler|handler not registered|no handler registered)/i.test(message)) {
+    return false;
+  }
   if (error && typeof error === 'object' && !Array.isArray(error)) {
     const code = (error as { code?: unknown }).code;
     if (typeof code === 'string' && code.trim().toUpperCase() === 'NOT_FOUND') {
@@ -186,8 +200,7 @@ export function isExplicitRemoteNotFoundError(error: unknown): boolean {
     }
   }
   if (!(error instanceof Error)) return false;
-  return /^(?:\[NOT_FOUND\]|Error invoking remote method(?: '[^']+')?: Error: \[NOT_FOUND\])(?:\s|$)/
-    .test(error.message);
+  return /^(?:\[NOT_FOUND\]|Error invoking remote method(?: '[^']+')?: Error: \[NOT_FOUND\])(?:\s|$)/.test(message);
 }
 
 /**
@@ -237,6 +250,24 @@ export function worktreeEligibilityFromError(error: unknown): NewSessionWorktree
   if (remoteErrorText(error).includes('DEVICE_UNRESPONSIVE')) return { status: 'recovering' };
   if (isTransientRemoteError(error)) return { status: 'recovering' };
   return { status: 'detect-failed' };
+}
+
+/**
+ * 探测 effect 的**起始**状态(#4046):
+ *  - 设备或目录还没选全 → probing(探测尚未开始,UI 不暴露该行);
+ *  - 设备与目录都在、但链路不在 online → recovering(「连接恢复中,正在自动重试…」)。
+ *    完全断网时 effect 会在发请求前直接返回,永远进不了 catch,若仍停在 probing 就是
+ *    永久的「检测环境中…」;online / connectionEpoch / presenceVersion 变化即重探。
+ *  - 三者齐备 → probing,随后由请求结果 / 抛错归并覆盖。
+ * 创建门禁不变:probing / recovering 都 fail-closed(shouldBlockNewSessionCreateForWorktree)。
+ */
+export function initialWorktreeProbeEligibility(input: {
+  hasDevice: boolean;
+  hasWorkingDir: boolean;
+  online: boolean;
+}): NewSessionWorktreeEligibility {
+  if (input.hasDevice && input.hasWorkingDir && !input.online) return { status: 'recovering' };
+  return { status: 'probing' };
 }
 
 /**
@@ -320,25 +351,82 @@ export function isWorktreeChannelNotAllowedError(error: unknown): boolean {
   return remoteErrorText(error).includes('CHANNEL_NOT_ALLOWED');
 }
 
+/** 已有定论的资格(探测中 / 恢复中 / 探测失败都不算定论)。 */
+export type NewSessionWorktreeSettledEligibility = Extract<
+  NewSessionWorktreeEligibility,
+  { status: 'eligible' | 'ineligible' | 'unsupported' }
+>;
+
+/** 某个设备 + 目录最近一次有定论的探测结果；不含连接代次，重连重探时仍可沿用。 */
+export interface NewSessionWorktreeSettledSnapshot {
+  target: NewSessionWorktreeBranchTarget;
+  eligibility: NewSessionWorktreeSettledEligibility;
+}
+
+function isSettledWorktreeEligibility(
+  eligibility: NewSessionWorktreeEligibility,
+): eligibility is NewSessionWorktreeSettledEligibility {
+  return eligibility.status === 'eligible'
+    || eligibility.status === 'ineligible'
+    || eligibility.status === 'unsupported';
+}
+
 /**
- * 开关行是否显示:正常情况下是 project + workingDir + 通道可用；若老端不支持但
- * 镜像仍为 ON，保留已勾选的关闭入口，不能把用户锁在 fail-closed 状态。
+ * 开关行展示用的定论:当前探测已有定论就用当前的；还没有时(重连 / presence 变化
+ * 触发的重探、恢复中重试)沿用同设备 + 目录上一次定论，避免开关行闪掉再出现。
+ * 只决定显示，不参与创建门禁——门禁仍按实时资格 fail closed。
+ */
+export function settleWorktreeEligibilityForDisplay(
+  eligibility: NewSessionWorktreeEligibility,
+  target: NewSessionWorktreeBranchTarget,
+  previous: NewSessionWorktreeSettledSnapshot | null,
+): NewSessionWorktreeSettledSnapshot | null {
+  if (isSettledWorktreeEligibility(eligibility)) return { target, eligibility };
+  if (
+    previous
+    && previous.target.deviceId === target.deviceId
+    && previous.target.workingDir.trim() === target.workingDir.trim()
+  ) {
+    return previous;
+  }
+  return null;
+}
+
+/**
+ * 开关行是否显示(2026-10-11 用户裁决:宁可检测出来再出现，也不要先出现再消失):
+ *  - 必须是 project + 已选目录;
+ *  - 定论为 eligible 才显示；从未有定论(首次探测中)不显示;
+ *  - 确认不合格(ineligible)隐藏，创建按普通会话放行(2026-08-07 裁决);
+ *  - 已勾选但创建被拦住时(老端 unsupported、恢复中、探测失败)必须显示，
+ *    让用户看到原因并能关掉，不把用户锁在 fail-closed 状态。实时恢复中 / 探测失败
+ *    优先于沿用的旧定论(含旧 ineligible)，因为创建门禁按实时资格拦截。
  */
 export function shouldShowWorktreeToggle(input: {
   workspaceKind: 'project' | 'dialogue';
   workingDir: string;
+  /** 实时资格。 */
   eligibility: NewSessionWorktreeEligibility;
+  /** settleWorktreeEligibilityForDisplay 的结果。 */
+  settled: NewSessionWorktreeSettledEligibility | null;
   enabled: boolean;
 }): boolean {
-  return input.workspaceKind === 'project'
-    && input.workingDir.trim().length > 0
-    && (input.eligibility.status !== 'unsupported' || input.enabled);
+  if (input.workspaceKind !== 'project' || input.workingDir.trim().length === 0) return false;
+  if (input.settled?.status === 'eligible') return true;
+  if (!input.enabled) return false;
+  return input.eligibility.status === 'recovering'
+    || input.eligibility.status === 'detect-failed'
+    || input.settled?.status === 'unsupported';
 }
 
 /**
- * checkbox 正在写工作端时不能按旧镜像创建；已勾选且当前目标尚未确认 eligible 时，
+ * checkbox 正在写工作端时不能按旧镜像创建；已勾选且当前目标**探测未定**时,
  * 也不能静默退化为普通目录会话。unsupported + ON 仍 fail closed，但保留显式关闭
  * 入口，不能绕过 worktree:create 落到 base repo，也不能把用户永久锁住。
+ *
+ * ineligible(探测成功、确认不合格)放行(2026-08-07 裁决):勾选记忆只对合格
+ * 目录生效,确认非 git 等三种资格缺失时按普通会话创建,开关行同步隐藏
+ * (shouldShowWorktreeToggle)。probing / recovering / detect-failed 仍拦截——
+ * 「确认不是 git」和「探测不出来」不是一回事。
  */
 export function shouldBlockNewSessionCreateForWorktree(input: {
   /** 当前草稿是否真的会使用 worktree：仅 project + 已选目录。 */
@@ -350,6 +438,9 @@ export function shouldBlockNewSessionCreateForWorktree(input: {
   // 对话工作区 / 尚未选目录时 worktree 控件本就隐藏，工作端记忆不能反向卡住
   // 普通会话创建；切回具体项目后再按该项目资格决定是否阻止。
   if (!input.applicable) return false;
+  // ineligible 目标不创建 worktree,preference 写入在途也不该卡住普通会话
+  // 创建(2026-08-07 裁决);仅 eligible/probing/detect-failed/unsupported 需要等。
+  if (input.eligibility.status === 'ineligible') return false;
   if (input.preferenceSaving) return true;
   return input.enabled
     && input.eligibility.status !== 'eligible';
@@ -383,12 +474,12 @@ export function worktreeEligibilityCaptionKey(
   }
 }
 
-/** suggest-name 失败时的兜底名(对齐桌面 `auto-` + 时间戳 base36 后 6 位;过工作端 [a-z0-9-] 白名单)。 */
+/** suggest-name 失败时的兼容兜底名；旧 Desktop host 仍要求 create 的 name 非空且合法。 */
 export function fallbackWorktreeName(now = Date.now()): string {
   return `auto-${now.toString(36).slice(-6)}`;
 }
 
-/** 归一工作端 suggest-name 回包:非空字符串取 trim,其余走兜底名。 */
+/** 归一工作端 suggest-name 回包:非空字符串取 trim,其余走兼容 auto-* 兜底。 */
 export function normalizeSuggestedWorktreeName(value: unknown, now?: number): string {
   if (typeof value === 'string' && value.trim().length > 0) return value.trim();
   return fallbackWorktreeName(now);
@@ -458,6 +549,7 @@ export function buildWorktreeCreateRequest(input: {
   sourceBranch?: string | null;
   suggestedName: string | null | undefined;
   recoveryKey: string;
+  /** 仅供测试固定 fallback；不进入 wire request。 */
   now?: number;
 }): WorktreeCreateRequest {
   return {

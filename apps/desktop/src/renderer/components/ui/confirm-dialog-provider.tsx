@@ -3,6 +3,7 @@ import { createContext, useCallback, useContext, useEffect, useRef, useState, ty
 import { ConfirmDialog } from '@/components/ui/confirm-dialog';
 
 export interface ConfirmOptions {
+  presentation?: 'standard';
   title: string;
   description?: string;
   /** 可选的标题与正文样式；仅调用方显式传入时生效。 */
@@ -35,6 +36,14 @@ export interface ConfirmOptions {
    * 破坏性确认(删除/重置等)请保持默认。
    */
   autoFocusConfirm?: boolean;
+  /** 逐字输入 expected 才可确认；由 ConfirmDialog 持有本轮输入状态。 */
+  requireTypedConfirmation?: {
+    expected: string;
+    label: ReactNode;
+    placeholder?: string;
+  };
+  /** 允许确认正文与富内容被框选复制。 */
+  contentSelectable?: boolean;
 }
 
 const DONT_SHOW_AGAIN_PREFIX = 'confirm-dialog.skip:';
@@ -72,7 +81,7 @@ export interface ConfirmWithCheckboxOptions extends Omit<ConfirmOptions, 'dontSh
 }
 
 interface ConfirmDialogContextValue {
-  confirm: (options: ConfirmOptions) => Promise<boolean>;
+  confirm: (options: ConfirmOptions, signal?: AbortSignal) => Promise<boolean>;
   /** 三状态 confirm — 用于「保存 / 不保存 / 取消」这类需要区分 cancel 与 negative 的场景。 */
   confirmThree: (options: ConfirmThreeOptions) => Promise<ConfirmThreeResult>;
   /** 带业务复选框(初始勾选态由 checkboxDefaultChecked 决定,缺省不勾;取消时 checked 恒为 false)。 */
@@ -116,6 +125,7 @@ export function ConfirmDialogProvider({ children }: { children: ReactNode }) {
     clearStaleSkipsOnce();
   }
   const queueRef = useRef<QueueItem[]>([]);
+  const currentItemRef = useRef<QueueItem | null>(null);
   const [currentItem, setCurrentItem] = useState<QueueItem | null>(null);
   const [open, setOpen] = useState(false);
   const isShowingRef = useRef(false);
@@ -124,6 +134,7 @@ export function ConfirmDialogProvider({ children }: { children: ReactNode }) {
   const processNext = useCallback(() => {
     const next = queueRef.current.shift();
     if (next) {
+      currentItemRef.current = next;
       setCurrentItem(next);
       setOpen(true);
       isShowingRef.current = true;
@@ -132,24 +143,47 @@ export function ConfirmDialogProvider({ children }: { children: ReactNode }) {
   }, []);
 
   const confirm = useCallback(
-    (options: ConfirmOptions): Promise<boolean> => {
+    (options: ConfirmOptions, signal?: AbortSignal): Promise<boolean> => {
+      if (signal?.aborted) return Promise.resolve(false);
       // 用户曾勾过"下次不再提示" → 直接当成 confirm,不弹窗、不入队。
       if (options.dontShowAgainKey && isSkipped(options.dontShowAgainKey)) {
         return Promise.resolve(true);
       }
       return new Promise<boolean>((resolve) => {
+        let settled = false;
         // 二状态调用复用同一队列:把 'confirm'→true,其它→false 透传给原 boolean 契约。
         // 用户勾上"下次不再提示"且点 confirm 时,把 key 写入 localStorage。
         const item: QueueItem = {
           options,
           resolve: (r, dontShowAgain) => {
+            if (settled) return;
+            settled = true;
+            signal?.removeEventListener('abort', abort);
             if (r === 'confirm' && dontShowAgain && options.dontShowAgainKey) {
               markSkipped(options.dontShowAgainKey);
             }
             resolve(r === 'confirm');
           },
         };
+        const abort = () => {
+          const queuedIndex = queueRef.current.indexOf(item);
+          if (queuedIndex >= 0) {
+            queueRef.current.splice(queuedIndex, 1);
+            item.resolve('cancel');
+            return;
+          }
+          if (currentItemRef.current === item && !resolvedRef.current) {
+            resolvedRef.current = true;
+            item.resolve('cancel');
+            setOpen(false);
+          }
+        };
         queueRef.current.push(item);
+        signal?.addEventListener('abort', abort, { once: true });
+        if (signal?.aborted) {
+          abort();
+          return;
+        }
         if (!isShowingRef.current) {
           processNext();
         }
@@ -227,6 +261,7 @@ export function ConfirmDialogProvider({ children }: { children: ReactNode }) {
     if (!open && currentItem !== null) {
       const timer = setTimeout(() => {
         isShowingRef.current = false;
+        currentItemRef.current = null;
         setCurrentItem(null);
         processNext();
       }, 200);
@@ -239,6 +274,7 @@ export function ConfirmDialogProvider({ children }: { children: ReactNode }) {
       {children}
       {currentItem && (
         <ConfirmDialog
+          presentation={currentItem.options.presentation}
           open={open}
           onOpenChange={handleOpenChange}
           title={currentItem.options.title}
@@ -256,6 +292,8 @@ export function ConfirmDialogProvider({ children }: { children: ReactNode }) {
           showCancel={currentItem.options.showCancel}
           tertiaryText={currentItem.options.tertiaryText}
           autoFocusConfirm={currentItem.options.autoFocusConfirm}
+          requireTypedConfirmation={currentItem.options.requireTypedConfirmation}
+          contentSelectable={currentItem.options.contentSelectable}
           dontShowAgainLabel={
             currentItem.options.dontShowAgainKey
               ? currentItem.options.dontShowAgainLabel ?? '下次不再提示'
@@ -276,4 +314,13 @@ export function useConfirmDialog(): ConfirmDialogContextValue {
     throw new Error('useConfirmDialog must be used within ConfirmDialogProvider');
   }
   return context;
+}
+
+/**
+ * 可选读取全局确认框。仅供既能独立渲染、又能挂在完整应用壳内的复用组件使用：
+ * 正式窗口都由 ConfirmDialogProvider 提供共享弹窗；Story / 单测等裸渲染环境返回 null，
+ * 避免为了展示一个纯列表就强制复制整套应用 Provider。
+ */
+export function useOptionalConfirmDialog(): ConfirmDialogContextValue | null {
+  return useContext(ConfirmDialogContext);
 }

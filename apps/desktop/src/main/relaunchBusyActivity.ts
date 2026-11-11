@@ -66,6 +66,8 @@ export interface RelaunchBusyActivitySources {
    * Ghost Node runtime 一起销毁 —— 正在生成的付费结果直接丢掉。
    */
   anyCindySlotJobRunning: () => boolean;
+  /** Detached PI runners continue after parent navigation and need an explicit restart warning. */
+  anyPiSubagentRunning: () => boolean;
   /**
    * scheduler 里是否有 run 处于 running。**必须单独查**:script 模式与 pre-run hook 阶段
    * 都不创建 session,内存来源全看不到它们,而重启会让 run 来不及落终态、脚本子进程变成
@@ -74,7 +76,7 @@ export interface RelaunchBusyActivitySources {
   anySchedulerRunRunning: () => Promise<boolean>;
 }
 
-/** 判定出的忙闲,附带命中的来源(只用于日志/诊断,不进 UI 文案)。 */
+/** 判定出的忙闲,附带命中的来源。reasons 仍只进日志;给用户的类别在 IPC 边界另算,不把 reasons 原样送进界面。 */
 export interface RelaunchBusyActivity {
   busy: boolean;
   /** 命中的来源标签;fail-closed 时是抛错的那个来源。 */
@@ -104,6 +106,7 @@ export async function evaluateRelaunchBusyActivity(
     probe('ghost-background-activity', () => sources.anyGhostSessionBusy());
     probe('background-bash', () => sources.anyBackgroundBashRunning());
     probe('cindy-slot-async-job', () => sources.anyCindySlotJobRunning());
+    probe('pi-subagent', () => sources.anyPiSubagentRunning());
     return hits;
   };
 

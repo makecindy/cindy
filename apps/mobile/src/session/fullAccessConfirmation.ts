@@ -1,27 +1,21 @@
-import { Alert, type AlertButton, type AlertOptions } from 'react-native';
-import { getLocales } from 'expo-localization';
-import { requiresFullAccessConfirmation } from '@cindy/maker-shared/permission-mode';
+import { Alert, type AlertButton, type AlertOptions } from "react-native";
+import { getLocales } from "expo-localization";
+import { requiresFullAccessConfirmation } from "@cindy/maker-shared/permission-mode";
 
-import { getManualLocaleOverride } from '@/i18n/appLanguage';
+import { getManualLocaleOverride } from "@/i18n/appLanguage";
+import { resolveSystemLocale } from "@/i18n/locale";
 import {
   FULL_ACCESS_CONFIRMATION_COPY,
   type FullAccessConfirmationCopy,
-} from './fullAccessConfirmationCopy';
-
-
+} from "./fullAccessConfirmationCopy";
 
 /** 生效语言(手动选择优先,否则系统语言)选择手机端 Full access 确认文案;未覆盖的语言使用英文。 */
 export function getFullAccessConfirmationCopy(
-  languageCode = getManualLocaleOverride() ?? getLocales()[0]?.languageCode,
+  languageTag = getManualLocaleOverride() ??
+    getLocales()[0]?.languageTag ??
+    getLocales()[0]?.languageCode,
 ): FullAccessConfirmationCopy {
-  const normalized = languageCode?.toLowerCase() ?? '';
-  const language = normalized.startsWith('zh')
-    ? 'zh'
-    : normalized.startsWith('ja')
-      ? 'ja'
-      : normalized.startsWith('ko')
-        ? 'ko'
-        : 'en';
+  const language = resolveSystemLocale(languageTag);
   return FULL_ACCESS_CONFIRMATION_COPY[language];
 }
 
@@ -47,7 +41,10 @@ export function confirmFullAccessChange(
   nextMode: unknown,
   options: FullAccessConfirmationOptions = {},
 ): Promise<boolean> {
-  if (options.restoringRememberedChoice || !requiresFullAccessConfirmation(currentMode, nextMode)) {
+  if (
+    options.restoringRememberedChoice ||
+    !requiresFullAccessConfirmation(currentMode, nextMode)
+  ) {
     return Promise.resolve(true);
   }
 
@@ -64,8 +61,12 @@ export function confirmFullAccessChange(
       copy.title,
       copy.description,
       [
-        { text: copy.cancel, style: 'cancel', onPress: () => finish(false) },
-        { text: copy.confirm, style: 'destructive', onPress: () => finish(true) },
+        { text: copy.cancel, style: "cancel", onPress: () => finish(false) },
+        {
+          text: copy.confirm,
+          style: "destructive",
+          onPress: () => finish(true),
+        },
       ],
       { cancelable: true, onDismiss: () => finish(false) },
     );

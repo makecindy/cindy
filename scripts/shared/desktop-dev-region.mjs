@@ -1,5 +1,55 @@
+import os from "node:os";
+import path from "node:path";
+
 /** Desktop dev 支持的区域身份。 */
 export const DESKTOP_DEV_REGIONS = Object.freeze(["cn", "global", "dev"]);
+
+/**
+ * 与 packages/maker-shared/src/brandIdentity.ts 的 userDataDirNameByRegion 镜像。
+ * .mjs 启动器不能直接 import TS；同步关系由 brand-identity-sync.test.mjs 锁住。
+ */
+export const DESKTOP_USER_DATA_DIR_NAME_BY_REGION = Object.freeze({
+  cn: "Cindy",
+  global: "CindyGlobal",
+  dev: "CindyDev",
+});
+
+/** 共享 Desktop profile 的区域目录名；省略区域时遵循产品规则默认 Global。 */
+export function desktopUserDataDirNameForRegion(region = "global") {
+  if (!DESKTOP_DEV_REGIONS.includes(region)) {
+    throw new Error(
+      `invalid desktop dev region: ${region}; expected cn, global or dev`,
+    );
+  }
+  return DESKTOP_USER_DATA_DIR_NAME_BY_REGION[region];
+}
+
+/** 计算与 Electron app.getPath('userData') 对齐的区域 profile 路径。 */
+export function desktopUserDataDirForRegion(
+  region = "global",
+  platform = process.platform,
+  env = process.env,
+  homeDir = os.homedir(),
+) {
+  const dirName = desktopUserDataDirNameForRegion(region);
+  const pathImpl = platform === "win32" ? path.win32 : path.posix;
+  switch (platform) {
+    case "darwin":
+      return pathImpl.join(homeDir, "Library", "Application Support", dirName);
+    case "win32":
+      return pathImpl.join(
+        env.APPDATA || pathImpl.join(homeDir, "AppData", "Roaming"),
+        dirName,
+      );
+    case "linux":
+      return pathImpl.join(
+        env.XDG_CONFIG_HOME || pathImpl.join(homeDir, ".config"),
+        dirName,
+      );
+    default:
+      throw new Error(`unsupported platform: ${platform}`);
+  }
+}
 
 /**
  * 解析 desktop dev 区域。命令行显式值优先，保留 CINDY_AUTH_REGION 作为
@@ -19,7 +69,8 @@ export function resolveDesktopDevRegion(argv, env = process.env) {
       index += 1;
     } else if (arg.startsWith("--region=")) {
       value = arg.slice("--region=".length);
-      if (!value) throw new Error("--region requires a value: cn, global or dev");
+      if (!value)
+        throw new Error("--region requires a value: cn, global or dev");
     } else {
       continue;
     }
@@ -55,7 +106,8 @@ export function stripDesktopDevRegionArgs(argv) {
 }
 
 /**
- * 计算 desktop dev 启动配置。remote dev 默认读取同区域仓内清单；
+ * 计算 desktop dev 启动配置。remote dev 始终读取同区域仓内清单，
+ * 不把父进程继承的端点文件当成用户覆盖；local 模式保留本地服务文件。
  * --endpoints-cdn / XDT_ENDPOINTS_CDN=1 时不注入默认文件，让主进程走区域化 CDN。
  */
 export function resolveDesktopDevStartupConfig({
@@ -66,12 +118,12 @@ export function resolveDesktopDevStartupConfig({
   const region = resolveDesktopDevRegion(argv, env);
   const endpointsCdn =
     argv.includes("--endpoints-cdn") || env.XDT_ENDPOINTS_CDN === "1";
-  const configuredManifestFile = env.XDT_ENDPOINT_MANIFEST_FILE?.trim();
   const endpointManifestFile =
-    configuredManifestFile ||
-    (mode === "remote" && !endpointsCdn
-      ? `config/${{ cn: "endpoint.json", global: "endpoint.global.json", dev: "endpoint.dev.json" }[region]}`
-      : undefined);
+    mode === "remote"
+      ? endpointsCdn
+        ? undefined
+        : `config/${{ cn: "endpoint.json", global: "endpoint.global.json", dev: "endpoint.dev.json" }[region]}`
+      : env.XDT_ENDPOINT_MANIFEST_FILE?.trim() || undefined;
   return { region, endpointsCdn, endpointManifestFile };
 }
 
@@ -84,6 +136,8 @@ export function applyDesktopDevStartupConfig(options) {
   if (config.endpointsCdn) env.XDT_ENDPOINTS_CDN = "1";
   if (config.endpointManifestFile) {
     env.XDT_ENDPOINT_MANIFEST_FILE = config.endpointManifestFile;
+  } else if (options.mode !== "local") {
+    delete env.XDT_ENDPOINT_MANIFEST_FILE;
   }
   return config;
 }

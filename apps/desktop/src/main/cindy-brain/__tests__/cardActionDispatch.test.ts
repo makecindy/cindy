@@ -9,7 +9,7 @@ import { describe, it, expect, vi } from 'vitest';
 import { GhostCardActionDispatcher, type CardActionDispatchDeps } from '../cardActionDispatch';
 import type { InstalledGhost } from '../../../shared/ghost';
 
-function fakeGhost(overrides: { enabled?: boolean; slots?: string[] } = {}): InstalledGhost {
+function fakeGhost(overrides: { enabled?: boolean; card?: boolean } = {}): InstalledGhost {
   return {
     manifest: {
       schemaVersion: 2,
@@ -18,7 +18,7 @@ function fakeGhost(overrides: { enabled?: boolean; slots?: string[] } = {}): Ins
       version: '1.0.0',
       kind: 'chip',
       entry: 'main.js',
-      slots: overrides.slots ?? ['tool', 'card', 'network'],
+      ...(overrides.card === false ? {} : { card: {} }),
     },
     dir: '/fake/cindy-mivo',
     enabled: overrides.enabled ?? true,
@@ -42,6 +42,71 @@ function makeDispatcher(overrides: Partial<CardActionDispatchDeps> = {}) {
   };
   return { dispatcher: new GhostCardActionDispatcher(deps), wake, sendToGhost, reopenForAction };
 }
+
+describe('cardActionDispatch owner boundary', () => {
+  it('delivers passive edits without minting a send/Agent ticket or starting activity', async () => {
+    const issueUserActionToken = vi.fn(() => 'ticket'), onActivityStart = vi.fn();
+    const { dispatcher, sendToGhost, reopenForAction } = makeDispatcher({
+      resolveLiveInfo: () => ({ ghostId: 'cindy-mivo', sessionId: 's' }), issueUserActionToken, onActivityStart,
+    });
+    expect(await dispatcher.dispatch('c', 'change', undefined, undefined, { body: 'latest' }, true)).toEqual({ ok: true });
+    expect(sendToGhost.mock.calls[0][1]).toMatchObject({ formChange: true, formValues: { body: 'latest' }, spawnCallId: 'c' });
+    expect(sendToGhost.mock.calls[0][1]).not.toHaveProperty('userActionToken');
+    expect(issueUserActionToken).not.toHaveBeenCalled();
+    expect(onActivityStart).not.toHaveBeenCalled();
+    expect(reopenForAction).toHaveBeenCalledTimes(1);
+  });
+  it('validates form fields and settles form activity on the original card', async () => {
+    const onActivityStart = vi.fn();
+    const { dispatcher, sendToGhost } = makeDispatcher({ resolveLiveInfo: () => ({ ghostId: 'cindy-mivo', sessionId: 'session' }), onActivityStart });
+    expect(await dispatcher.dispatch('call', 'save', undefined, undefined, { body: '  exact\n' })).toEqual({ ok: true });
+    expect(sendToGhost.mock.calls[0][1].formValues).toEqual({ body: '  exact\n' });
+    expect(onActivityStart).toHaveBeenCalledWith('call', 'session');
+    expect(await dispatcher.dispatch('call', 'save', undefined, undefined, { body: 'x'.repeat(16001) })).toEqual({ ok: false, reason: 'bad-form-values' });
+    expect(sendToGhost).toHaveBeenCalledTimes(1);
+  });
+  it('delivers a model choice only for a declared dropdown and an available model', async () => {
+    const route = { agentKind: 'cc', providerId: 'anthropic', model: 'm', effort: 'low', fastMode: false };
+    const html = '<button data-ghost-action="pick" data-ghost-model-select="" type="button">x</button>';
+    const isModelRouteAvailable = vi.fn(async () => true);
+    const { dispatcher, sendToGhost } = makeDispatcher({
+      resolvePersistedCard: async () => ({ ghostId: 'cindy-mivo', sessionId: null, html }), isModelRouteAvailable,
+    });
+    expect(await dispatcher.dispatch('c', 'pick', undefined, undefined, undefined, false, undefined, route)).toEqual({ ok: true });
+    expect(sendToGhost.mock.calls[0][1].modelSelection).toEqual(route);
+    // A plain button cannot be fed a model, and an unavailable model is not handed over.
+    expect(await dispatcher.dispatch('c', 'other', undefined, undefined, undefined, false, undefined, route)).toEqual({ ok: false, reason: 'no-model-select' });
+    isModelRouteAvailable.mockResolvedValueOnce(false);
+    expect(await dispatcher.dispatch('c', 'pick', undefined, undefined, undefined, false, undefined, route)).toEqual({ ok: false, reason: 'model-unavailable' });
+    expect(await dispatcher.dispatch('c', 'pick', undefined, undefined, undefined, false, undefined, { ...route, x: 1 })).toEqual({ ok: false, reason: 'bad-model-selection' });
+    expect(sendToGhost).toHaveBeenCalledTimes(1);
+  });
+  it('rechecks the owner after wake and never sends to a stale Ghost', async () => {
+    let releaseWake!: () => void;
+    let ownerValid = true;
+    const onInvalidated = vi.fn();
+    const wake = vi.fn(() => new Promise<void>((resolve) => { releaseWake = resolve; }));
+    const { dispatcher, sendToGhost } = makeDispatcher({
+      isRunning: () => false,
+      wake,
+      ownerScope: {
+        capture: () => ({ ownerId: 'owner-a', generation: 1 }),
+        isCurrent: () => ownerValid,
+        isStable: () => ownerValid,
+        onInvalidated,
+      },
+    });
+
+    const resultPromise = dispatcher.dispatch('call-abc', CUSTOM_ID);
+    await vi.waitFor(() => expect(wake).toHaveBeenCalledOnce());
+    ownerValid = false;
+    releaseWake();
+
+    await expect(resultPromise).resolves.toEqual({ ok: false, reason: 'owner-boundary' });
+    expect(sendToGhost).not.toHaveBeenCalled();
+    expect(onInvalidated).toHaveBeenCalledWith('cindy-mivo');
+  });
+});
 
 const CALL_ID = 'call-abc';
 const CUSTOM_ID = 'MJ::JOB::upsample::1::0f3a2b1c-4d5e-6f70-8a9b-0c1d2e3f4a5b';
@@ -176,7 +241,7 @@ describe('cardActionDispatch · 资格审 + 投递', () => {
     const gone = makeDispatcher({ getGhost: () => null });
     expect((await gone.dispatcher.dispatch(CALL_ID, CUSTOM_ID)).ok).toBe(false);
 
-    const noSlot = makeDispatcher({ getGhost: () => fakeGhost({ slots: ['tool'] }) });
+    const noSlot = makeDispatcher({ getGhost: () => fakeGhost({ card: false }) });
     const r = await noSlot.dispatcher.dispatch(CALL_ID, CUSTOM_ID);
     expect(r.ok).toBe(false);
     if (!r.ok) expect(r.reason).toBe('no-card-slot');
@@ -244,4 +309,156 @@ describe('cardActionDispatch · 资格审 + 投递', () => {
     expect((await failed.dispatcher.dispatch(CALL_ID, CUSTOM_ID)).ok).toBe(false);
     expect(onActivityStart).not.toHaveBeenCalled();
   });
+});
+
+it('mail sends need the current host-owned view and complete fields, without a generic card slot', async () => {
+  const { renderMailCard } = await import('../mailCards');
+  const ghost = fakeGhost({ card: false }); ghost.manifest.mail = true;
+  const mail = { accountId: 'a', draftId: 'd', key: '12345678-1234-1234-1234-123456789abc', from: 'a@example.test',
+    fields: ['to', 'cc', 'bcc', 'subject', 'body'].map(name => ({ name, label: name, value: name })), attachments: [], state: 'draft' as const,
+    status: 'Synced', sendLabel: 'Send', fromLabel: 'From' };
+  let html = renderMailCard(mail);
+  const f = makeDispatcher({ getGhost: () => ghost,
+    resolvePersistedCard: async () => ({ ghostId: 'cindy-mivo', sessionId: null, html }) });
+  const values = Object.fromEntries(mail.fields.map(f => [f.name, f.value]));
+  const send = () => f.dispatcher.dispatch('call', `mail:send:${mail.key}`, undefined, undefined, values);
+  expect(await send()).toEqual({ ok: true });
+  expect(f.sendToGhost.mock.calls[0][1].spawnCallId).toBe('call');
+  expect((await f.dispatcher.dispatch('call', `mail:send:${mail.key}`)).ok).toBe(false);
+  expect((await f.dispatcher.dispatch('call', `mail:now:${mail.key}`)).ok).toBe(false);
+  html = renderMailCard({ ...mail, state: 'sending', pendingSend: { deadline: Date.now() + 10000, label: '{seconds}s', cancelLabel: 'Undo', sendNowLabel: 'Send now' } });
+  expect((await send()).ok).toBe(false);
+  expect((await f.dispatcher.dispatch('call', `mail:cancel:${mail.key}`)).ok).toBe(true);
+  expect((await f.dispatcher.dispatch('call', `mail:now:${mail.key}`)).ok).toBe(true);
+  html = renderMailCard({ ...mail, state: 'sending' });
+  expect((await f.dispatcher.dispatch('call', `mail:cancel:${mail.key}`)).ok).toBe(false);
+  html = renderMailCard({ ...mail, supersededBy: 'new' });
+  expect(await send()).toEqual({ ok: false, reason: 'mail-view-expired' });
+  html = renderMailCard({ ...mail, state: 'sent' });
+  expect(await send()).toEqual({ ok: false, reason: 'mail-view-readonly' });
+  html = '<p>Legacy card</p>';
+  expect(await send()).toEqual({ ok: false, reason: 'mail-view-expired' });
+  expect(f.sendToGhost).toHaveBeenCalledTimes(3);
+});
+
+it('deletion requires an active host draft with provider support and rejects all terminal edits', async () => {
+  const { renderMailCard } = await import('../mailCards');
+  const ghost = fakeGhost({ card: false }); ghost.manifest.mail = true;
+  const mail = { accountId: 'a', draftId: 'd', key: '12345678-1234-1234-1234-123456789abc', from: 'a@example.test',
+    fields: ['to', 'cc', 'bcc', 'subject', 'body'].map(name => ({ name, label: name, value: name })), attachments: [], state: 'draft' as const,
+    status: 'Synced', sendLabel: 'Send', fromLabel: 'From', deleteLabel: 'Delete draft' };
+  let html = renderMailCard(mail);
+  const f = makeDispatcher({ getGhost: () => ghost,
+    resolvePersistedCard: async () => ({ ghostId: 'cindy-mivo', sessionId: null, html }) });
+  const remove = () => f.dispatcher.dispatch('call', `mail:delete:${mail.key}`);
+  expect((await remove()).ok).toBe(true);
+  for (const state of ['sent', 'deleted', 'deleting', 'unconfirmed', 'sending'] as const) {
+    html = renderMailCard({ ...mail, state });
+    expect((await remove()).ok).toBe(false);
+    const values = Object.fromEntries(mail.fields.map(f => [f.name, f.value]));
+    expect((await f.dispatcher.dispatch('call', `mail:send:${mail.key}`, undefined, undefined, values)).ok).toBe(false);
+  }
+  html = renderMailCard({ ...mail, deleteLabel: undefined });
+  expect((await remove()).ok).toBe(false);
+  html = renderMailCard({ ...mail, supersededBy: 'new' });
+  expect((await remove()).ok).toBe(false);
+  expect(f.sendToGhost).toHaveBeenCalledTimes(1);
+});
+
+// PR #6404 P1: picker/upload + wake can yield while the other draft view edits.
+// Existing tests covered terminal states after picking, but not changed fields
+// or a terminal state reached during wake. Unit: DI dispatch, no OS or sleeps.
+it('attachment delivery rebases disjoint edits after selection and wake, and rejects conflicts or terminal drafts', async () => {
+  const { renderMailCard } = await import('../mailCards');
+  for (const source of ['file', 'image', 'phone'] as const) for (const phase of ['selection', 'wake'] as const) {
+    for (const outcome of ['merge', 'conflict', 'sent', 'superseded'] as const) {
+      const ghost = fakeGhost({ card: false }); ghost.manifest.mail = true;
+      const mail = { accountId: 'a', draftId: 'd', key: '12345678-1234-1234-1234-123456789abc', from: 'a@example.test',
+        fields: [...['to', 'cc', 'bcc', 'subject', 'body'].map(name => ({ name, label: name, value: name })),
+          { name: 'attachmentItems', label: 'Files', value: '[]', kind: 'mail-attachments' as const }],
+        attachments: [], state: 'draft' as const, status: 'Synced', sendLabel: 'Send', fromLabel: 'From' };
+      let html = renderMailCard(mail);
+      const values = Object.fromEntries(mail.fields.map(f => [f.name, f.value]));
+      values.subject = 'unsynced click edit';
+      const newer = { ...mail, fields: mail.fields.map(f => ({ ...f, value: f.name === 'body' ? 'other view body' :
+        f.name === 'attachmentItems' ? '[{"key":"existing-file","filename":"existing.pdf"}]' :
+        outcome === 'conflict' && f.name === 'subject' ? 'other view subject' : f.value })),
+        ...(outcome === 'sent' ? { state: 'sent' as const } : {}), ...(outcome === 'superseded' ? { supersededBy: 'new-call' } : {}) };
+      const staged = { attachment: { path: '/selected/file.pdf', filename: 'file.pdf', bytes: 12, sha256: 'a'.repeat(64) },
+        accepted: vi.fn(), discard: vi.fn(async () => {}) };
+      const select = async () => { if (phase === 'selection') html = renderMailCard(newer); return staged; };
+      const f = makeDispatcher({ getGhost: () => ghost, pickMailAttachment: select, prepareMailUpload: select,
+        isRunning: () => false, wake: async () => { if (phase === 'wake') html = renderMailCard(newer); },
+        resolveLiveInfo: () => ({ ghostId: 'cindy-mivo', sessionId: 's' }),
+        resolvePersistedCard: async () => ({ ghostId: 'cindy-mivo', sessionId: 's', html }) });
+      const result = await f.dispatcher.dispatch('call', `mail:${source === 'image' ? 'image' : 'attach'}:${mail.key}`, undefined,
+        source === 'phone' ? 'phone-page' : undefined, values, false,
+        source === 'phone' ? { url: 'provider-validated-reference', name: 'file.pdf' } : undefined);
+      if (outcome === 'merge') {
+        expect(result).toEqual({ ok: true });
+        expect(f.sendToGhost.mock.calls[0][1]).toMatchObject({ formValues: { body: 'other view body', subject: 'unsynced click edit',
+          attachmentItems: '[{"key":"existing-file","filename":"existing.pdf"}]' }, mailAttachment: staged.attachment });
+        expect(staged.accepted).toHaveBeenCalledOnce(); expect(staged.discard).not.toHaveBeenCalled();
+      } else {
+        expect(result).toEqual({ ok: false, reason: 'mail-view-expired' });
+        expect(f.sendToGhost).not.toHaveBeenCalled(); expect(staged.accepted).not.toHaveBeenCalled();
+        expect(staged.discard).toHaveBeenCalledOnce();
+      }
+    }
+  }
+});
+
+it('only a live draft can open the host file picker, and a superseded view cannot deliver its selected file', async () => {
+  const { renderMailCard } = await import('../mailCards');
+  const ghost = fakeGhost({ card: false }); ghost.manifest.mail = true;
+  const mail = { accountId: 'a', draftId: 'd', key: '12345678-1234-1234-1234-123456789abc', from: 'a@example.test',
+    fields: [...['to', 'cc', 'bcc', 'subject', 'body'].map(name => ({ name, label: name, value: name })),
+      { name: 'attachmentItems', label: 'Attachments', value: '[]', kind: 'mail-attachments' as const }], attachments: [], state: 'draft' as const,
+    status: 'Synced', sendLabel: 'Send', fromLabel: 'From' };
+  let html = renderMailCard(mail);
+  const chosen = { path: '/selected/file.pdf', filename: 'file.pdf', bytes: 12, sha256: 'a'.repeat(64) };
+  const staged = { attachment: chosen, accepted: vi.fn(), discard: vi.fn(async () => {}) };
+  const pickMailAttachment = vi.fn(async () => staged);
+  const f = makeDispatcher({ getGhost: () => ghost, pickMailAttachment,
+    resolveLiveInfo: () => ({ ghostId: 'cindy-mivo', sessionId: 's' }),
+    resolvePersistedCard: async () => ({ ghostId: 'cindy-mivo', sessionId: 's', html }) });
+  const values = Object.fromEntries(mail.fields.map(f => [f.name, f.value]));
+  const attach = () => f.dispatcher.dispatch('call', `mail:attach:${mail.key}`, undefined, undefined, values);
+  expect(await attach()).toEqual({ ok: true });
+  expect(f.sendToGhost.mock.calls[0][1].mailAttachment).toEqual(chosen);
+  expect(pickMailAttachment).toHaveBeenCalledWith(false, 's');
+  expect(staged.accepted).toHaveBeenCalledTimes(1);
+  html = renderMailCard({ ...mail, state: 'sent', continueLabel: 'Continue' });
+  expect((await attach()).ok).toBe(false); expect(pickMailAttachment).toHaveBeenCalledTimes(1);
+  html = renderMailCard(mail);
+  pickMailAttachment.mockImplementation(async () => { html = renderMailCard({ ...mail, supersededBy: 'new' }); return staged; });
+  expect((await attach()).ok).toBe(false); expect(f.sendToGhost).toHaveBeenCalledTimes(1);
+  expect(staged.discard).toHaveBeenCalledTimes(1);
+});
+
+it('phone uploads use the task materializer and discard late files when the draft becomes readonly', async () => {
+  const { renderMailCard } = await import('../mailCards');
+  const ghost = fakeGhost({ card: false }); ghost.manifest.mail = true;
+  const mail = { accountId: 'a', draftId: 'd', key: '12345678-1234-1234-1234-123456789abc', from: 'a@example.test',
+    fields: [...['to', 'cc', 'bcc', 'subject', 'body'].map(name => ({ name, label: name, value: name })),
+      { name: 'attachmentItems', label: 'Files', value: '[]', kind: 'mail-attachments' as const }], attachments: [], state: 'draft' as const,
+    status: 'Synced', sendLabel: 'Send', fromLabel: 'From' };
+  let html = renderMailCard(mail);
+  const staged = { attachment: { path: '/host/cache/upload.pdf', filename: 'plan.pdf', bytes: 10, sha256: 'a'.repeat(64) },
+    accepted: vi.fn(), discard: vi.fn(async () => {}) };
+  const prepareMailUpload = vi.fn(async () => staged);
+  const f = makeDispatcher({ getGhost: () => ghost, prepareMailUpload,
+    resolveLiveInfo: () => ({ ghostId: 'cindy-mivo', sessionId: 's' }),
+    resolvePersistedCard: async () => ({ ghostId: 'cindy-mivo', sessionId: 's', html }) });
+  const values = Object.fromEntries(mail.fields.map(f => [f.name, f.value]));
+  const upload = { url: 'provider-validated-reference', name: 'plan.pdf' };
+  const attach = () => f.dispatcher.dispatch('call', `mail:attach:${mail.key}`, undefined, 'phone-page', values, false, upload);
+  expect((await attach()).ok).toBe(true);
+  expect(prepareMailUpload).toHaveBeenCalledWith(upload, 's');
+  expect(f.sendToGhost.mock.calls[0][1]).toMatchObject({ mailAttachment: staged.attachment, mobilePageId: 'phone-page' });
+  expect(staged.accepted).toHaveBeenCalledTimes(1);
+  prepareMailUpload.mockImplementation(async () => { html = renderMailCard({ ...mail, state: 'sent' }); return staged; });
+  expect((await attach()).ok).toBe(false);
+  expect(staged.discard).toHaveBeenCalledTimes(1);
+  expect(f.sendToGhost).toHaveBeenCalledTimes(1);
 });

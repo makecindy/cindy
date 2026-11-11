@@ -4,9 +4,16 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import {
+  desktopUserDataDirNameForRegion,
+  resolveDesktopDevRegion,
+} from './shared/desktop-dev-region.mjs';
+import {
+  buildDesktopDevVerdictFromWhoami,
+  printDesktopDevVerdict,
+} from './desktop-dev-verdict.mjs';
 
 const rootDir = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
-const PRODUCT_USER_DATA_NAME = 'Cindy';
 
 function run(command, args, options = {}) {
   return spawnSync(command, args, {
@@ -15,6 +22,83 @@ function run(command, args, options = {}) {
     windowsHide: true,
     ...options,
   });
+}
+
+/**
+ * 进程表可以很大：`ps -eo …` 在这台机器上已经输出 1.6 MB（约 930 行），而
+ * spawnSync 默认 maxBuffer 只有 1 MiB。溢出时 status 变成 null、stdout 只剩半截，
+ * 旧实现把这种失败当成「系统里一个进程都没有」，于是基于进程归属的结论全部失真。
+ */
+export const PROCESS_TABLE_MAX_BYTES = 64 * 1024 * 1024;
+
+function processScanFailure(result, message) {
+  return {
+    code: result?.error?.code ?? `EXIT_${result?.status ?? 'UNKNOWN'}`,
+    message: result?.error?.message || message,
+  };
+}
+
+export function parsePosixProcessTable(text) {
+  return text
+    .split('\n')
+    .map((line) => line.trim())
+    .filter(Boolean)
+    .map((line) => {
+      const match = line.match(/^(\d+)\s+(\d+)\s+(.+)$/);
+      return match
+        ? { pid: Number(match[1]), ppid: Number(match[2]), command: match[3] }
+        : null;
+    })
+    .filter(Boolean);
+}
+
+/**
+ * 读全量进程表。失败时返回 error 而不是空数组：调用方必须能区分
+ * 「确实没有相关进程」和「进程表根本读不到」，后者不能拿来下任何结论。
+ */
+export function scanProcessTable({ platform = process.platform, runCommand = run } = {}) {
+  if (platform === 'win32') {
+    const script = `
+$ErrorActionPreference = 'SilentlyContinue'
+Get-CimInstance Win32_Process |
+  Where-Object { $_.CommandLine } |
+  Select-Object ProcessId,ParentProcessId,CommandLine |
+  ConvertTo-Json -Compress
+`;
+    const result = runCommand('powershell.exe', [
+      '-NoProfile', '-ExecutionPolicy', 'Bypass', '-Command', script,
+    ], { maxBuffer: PROCESS_TABLE_MAX_BYTES });
+    if (result.error || result.status !== 0) {
+      return {
+        processes: [],
+        error: processScanFailure(result, 'powershell.exe did not return a process table'),
+      };
+    }
+    try {
+      const parsed = JSON.parse(result.stdout);
+      return {
+        processes: (Array.isArray(parsed) ? parsed : [parsed]).map((item) => ({
+          pid: Number(item.ProcessId),
+          ppid: Number(item.ParentProcessId) || 0,
+          command: String(item.CommandLine ?? ''),
+        })),
+        error: null,
+      };
+    } catch {
+      return {
+        processes: [],
+        error: { code: 'PROCESS_LIST_UNPARSABLE', message: 'powershell.exe output was not valid JSON' },
+      };
+    }
+  }
+
+  const result = runCommand('ps', ['-eo', 'pid=,ppid=,command='], {
+    maxBuffer: PROCESS_TABLE_MAX_BYTES,
+  });
+  if (result.error || result.status !== 0) {
+    return { processes: [], error: processScanFailure(result, 'ps did not return a process table') };
+  }
+  return { processes: parsePosixProcessTable(result.stdout), error: null };
 }
 
 function normalize(value) {
@@ -50,55 +134,16 @@ export function parseWorktreeEntries(text) {
   return entries;
 }
 
-function repositoryWorktrees() {
-  const result = run('git', ['worktree', 'list', '--porcelain']);
-  if (result.status !== 0) return [{ rootDir, branch: null }];
+function repositoryWorktrees(cwd = rootDir) {
+  const result = run('git', ['worktree', 'list', '--porcelain'], { cwd });
+  if (result.status !== 0) return [{ rootDir: path.resolve(cwd), branch: null }];
   const entries = parseWorktreeEntries(result.stdout);
-  return entries.length > 0 ? entries : [{ rootDir, branch: null }];
-}
-
-function listProcesses() {
-  if (process.platform === 'win32') {
-    const script = `
-$ErrorActionPreference = 'SilentlyContinue'
-Get-CimInstance Win32_Process |
-  Where-Object { $_.CommandLine } |
-  Select-Object ProcessId,ParentProcessId,CommandLine |
-  ConvertTo-Json -Compress
-`;
-    const result = run('powershell.exe', [
-      '-NoProfile', '-ExecutionPolicy', 'Bypass', '-Command', script,
-    ]);
-    if (result.status !== 0 || !result.stdout.trim()) return [];
-    try {
-      const parsed = JSON.parse(result.stdout);
-      return (Array.isArray(parsed) ? parsed : [parsed]).map((item) => ({
-        pid: Number(item.ProcessId),
-        ppid: Number(item.ParentProcessId) || 0,
-        command: String(item.CommandLine ?? ''),
-      }));
-    } catch {
-      return [];
-    }
-  }
-
-  const result = run('ps', ['-eo', 'pid=,ppid=,command=']);
-  if (result.status !== 0) return [];
-  return result.stdout
-    .split('\n')
-    .map((line) => line.trim())
-    .filter(Boolean)
-    .map((line) => {
-      const match = line.match(/^(\d+)\s+(\d+)\s+(.+)$/);
-      return match
-        ? { pid: Number(match[1]), ppid: Number(match[2]), command: match[3] }
-        : null;
-    })
-    .filter(Boolean);
+  return entries.length > 0 ? entries : [{ rootDir: path.resolve(cwd), branch: null }];
 }
 
 function extractArgumentPath(command, name) {
-  const match = command.match(new RegExp(`--${name}=(.*?)(?=\\s--[A-Za-z0-9-]+=|\\s--[A-Za-z0-9-]+\\s|$)`));
+  // Windows Crashpad puts /prefetch:N between the profile path and --switches.
+  const match = command.match(new RegExp(`--${name}=(.*?)(?=\\s--[A-Za-z0-9-]+=|\\s--[A-Za-z0-9-]+\\s|\\s/prefetch:\\d+(?:\\s|$)|$)`));
   return match?.[1]?.replace(/^['"]|['"]$/g, '') ?? null;
 }
 
@@ -186,15 +231,16 @@ export function identifyDesktopProcesses(processes, worktrees) {
   return result;
 }
 
-function defaultUserDataDir() {
+function defaultUserDataDir(region = 'global') {
+  const dirName = desktopUserDataDirNameForRegion(region);
   if (process.platform === 'win32') {
     const appData = process.env.APPDATA || path.join(process.env.USERPROFILE || '', 'AppData', 'Roaming');
-    return path.join(appData, PRODUCT_USER_DATA_NAME);
+    return path.join(appData, dirName);
   }
   if (process.platform === 'darwin') {
-    return path.join(os.homedir(), 'Library', 'Application Support', PRODUCT_USER_DATA_NAME);
+    return path.join(os.homedir(), 'Library', 'Application Support', dirName);
   }
-  return path.join(process.env.XDG_CONFIG_HOME || path.join(os.homedir(), '.config'), PRODUCT_USER_DATA_NAME);
+  return path.join(process.env.XDG_CONFIG_HOME || path.join(os.homedir(), '.config'), dirName);
 }
 
 function isProcessAlive(pid) {
@@ -264,8 +310,11 @@ export function mergeDesktopInstanceRecords(scanned, records, worktrees) {
       // main + renderer process scan as a second, independent signal.
       ready: record.state === 'ready' && scannedItem?.ready === true,
       mode: record.mode,
+      region: record.region ?? null,
       passive: Boolean(record.passive),
       isolated: Boolean(record.isolated),
+      isolationIntent: record.isolationIntent === true,
+      profileKind: typeof record.profileKind === 'string' ? record.profileKind : null,
       userDataDir: record.userDataDir,
       commit: record.commit ?? null,
       commitVerified: typeof record.commit === 'string' && record.commit.length > 0,
@@ -295,6 +344,9 @@ function printText(report) {
   console.log(report.match ? 'Desktop source: MATCH' : 'Desktop source: NO MATCH');
   console.log(`expected root: ${report.expected.rootDir}`);
   console.log(`expected HEAD: ${report.expected.commit ?? 'unknown'}`);
+  if (report.processScan?.ok === false) {
+    console.log(`process table: unavailable (${report.processScan.code}: ${report.processScan.message})`);
+  }
   if (report.instances.length === 0) {
     console.log('active dev instances: none');
     return;
@@ -302,41 +354,83 @@ function printText(report) {
   console.log('active dev instances:');
   for (const instance of report.instances) {
     console.log(
-      `- pid=${instance.pid} state=${instance.state} mode=${instance.mode} passive=${instance.passive}` +
+      `- pid=${instance.pid} state=${instance.state} mode=${instance.mode} region=${instance.region ?? 'unknown'} passive=${instance.passive}` +
       ` root=${instance.rootDir} commit=${instance.commit ?? 'unverified'} userData=${instance.userDataDir ?? 'unknown'}`,
     );
   }
 }
 
-function main() {
-  const options = parseArgs(process.argv.slice(2));
-  const worktrees = repositoryWorktrees();
-  const processes = listProcesses();
-  const preliminary = identifyDesktopProcesses(processes, worktrees);
+/** Linux sandboxed renderers can retain their zygote argv. Require a PID from
+ * the main-window readiness report AND a live descendant from the same binary. */
+export function applyLinuxRendererEvidence(scanned, records, processes, platform = process.platform) {
+  if (platform !== 'linux') return scanned;
+  return scanned.map((instance) => {
+    if (instance.ready) return instance;
+    const record = records.find((record) => record.pid === instance.pid
+      && typeof record.rootDir === 'string'
+      && normalize(record.rootDir) === normalize(instance.rootDir));
+    if (record?.state !== 'ready' || !Number.isSafeInteger(record.rendererPid) || record.rendererPid <= 0)
+      return instance;
+    const renderer = descendants(instance.pid, processes).find((child) => child.pid === record.rendererPid);
+    if (!renderer || !/(?:^|\s)--type=zygote(?:\s|$)/.test(renderer.command)
+      || !commandContainsPath(renderer.command, path.join(instance.rootDir, 'node_modules', 'electron')))
+      return instance;
+    return { ...instance, ready: true, state: 'ready' };
+  });
+}
+
+export function collectDesktopWhoamiReport(options = {}) {
+  const expectedRoot = path.resolve(options.rootDir ?? rootDir);
+  const env = options.env ?? process.env;
+  const region = resolveDesktopDevRegion([], env);
+  const worktrees = options.worktrees ?? repositoryWorktrees(expectedRoot);
+  const scan = options.processScan
+    ?? (options.processes
+      ? { processes: options.processes, error: null }
+      : scanProcessTable());
+  const processes = scan.processes;
+  const preliminary = options.scanned ?? identifyDesktopProcesses(processes, worktrees);
   const userDataDirs = new Set([
-    path.resolve(options.userDataDir ?? process.env.XDT_USER_DATA_DIR ?? defaultUserDataDir()),
+    path.resolve(options.userDataDir ?? env.XDT_USER_DATA_DIR ?? defaultUserDataDir(region)),
     ...preliminary.map((item) => item.userDataDir).filter(Boolean).map((item) => path.resolve(item)),
   ]);
-  const scanned = preliminary;
-  const records = readInstanceRecords(userDataDirs, worktrees);
+  const records = options.records ?? readInstanceRecords(userDataDirs, worktrees);
+  const scanned = applyLinuxRendererEvidence(preliminary, records, processes, options.platform);
   const allInstances = mergeDesktopInstanceRecords(scanned, records, worktrees);
-  const expectedCommit = gitHead(rootDir);
+  const expectedCommit = options.commit === undefined ? gitHead(expectedRoot) : options.commit;
   const match = allInstances.some((instance) =>
-    normalize(instance.rootDir) === normalize(rootDir) &&
+    normalize(instance.rootDir) === normalize(expectedRoot) &&
     instance.ready &&
     instance.commitVerified &&
     instance.commit === expectedCommit);
-  const report = {
+  return {
     schemaVersion: 1,
-    expected: { rootDir, commit: expectedCommit },
+    expected: { rootDir: expectedRoot, commit: expectedCommit },
+    // 进程表读不到时 match 一定是 false；把原因带出去，让 verdict 能区分
+    // 「没起」和「查不了」，而不是都塌成 WHOAMI_MISMATCH。
+    processScan: scan.error
+      ? { ok: false, code: scan.error.code, message: scan.error.message }
+      : { ok: true },
     match,
     instances: options.all
       ? allInstances
-      : allInstances.filter((instance) => normalize(instance.rootDir) === normalize(rootDir)),
+      : allInstances.filter((instance) => normalize(instance.rootDir) === normalize(expectedRoot)),
   };
-  if (options.json) console.log(JSON.stringify(report, null, 2));
-  else printText(report);
-  process.exitCode = match ? 0 : 1;
+}
+
+function main() {
+  const options = parseArgs(process.argv.slice(2));
+  const report = collectDesktopWhoamiReport({
+    all: options.all,
+    userDataDir: options.userDataDir,
+  });
+  const verdict = buildDesktopDevVerdictFromWhoami(report);
+  if (options.json) console.log(JSON.stringify({ ...report, verdict }, null, 2));
+  else {
+    printText(report);
+    printDesktopDevVerdict(verdict);
+  }
+  process.exitCode = verdict.state === 'ready' ? 0 : 1;
 }
 
 if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {

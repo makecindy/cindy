@@ -182,9 +182,13 @@ describe('loginHandoff 接线(Provider/reporter 拓扑 + 清理,读源码断言)
     expect(loginSource).toContain("handoffDispatch?.({ type: 'panel-mounted' })");
     expect(stageSource).toContain("handoff?.dispatch({ type: 'assets-ready' })");
     // endpoint→OTA→auth 既有挂载顺序不变:OTA 上报在 RootAfterEndpoints、auth 桥在 AuthProvider 内
-    expect(layoutSource.indexOf('useStartupOtaGate()')).toBeLessThan(
-      layoutSource.indexOf('<AuthHandoffBridge />'),
-    );
+    const otaIndex = layoutSource.indexOf('useStartupOtaGate(');
+    const authBridgeIndex = layoutSource.indexOf('<AuthHandoffBridge />');
+    // 两处都必须真实存在(indexOf >= 0),否则顺序比较会因 -1 而空转;
+    // 再断言 OTA 调用先于 auth 桥挂载(与上文注释的既有顺序一致)。
+    expect(otaIndex).toBeGreaterThanOrEqual(0);
+    expect(authBridgeIndex).toBeGreaterThanOrEqual(0);
+    expect(otaIndex).toBeLessThan(authBridgeIndex);
   });
 
   it('reduced-motion:AccessibilityInfo 拉取 + 订阅,unmount 移除;直落终态由 Provider 收敛', () => {
@@ -213,10 +217,11 @@ describe('loginHandoff 接线(Provider/reporter 拓扑 + 清理,读源码断言)
   });
 
   it('gate 屏内容层退化:endpoint error 层可交互 retry(错误层文案 key 化不变)', () => {
-    expect(layoutSource).toContain('<MobileLoginHandoffStage>');
+    expect(layoutSource).toContain('<MobileLoginHandoffStage staticBrand>');
     // 内容层的动作 prop 已从 retry 专用改为通用 action(端点重试 / 强更去更新共用同一层),
     // 端点错误屏的接线与文案 key 化契约不变。
-    expect(layoutSource).toContain('onAction={endpointGate.retry}');
+    expect(layoutSource).toContain('? endpointGate.resetToDev');
+    expect(layoutSource).toContain(': endpointGate.retry');
     expect(layoutSource).toContain("loginText('endpointGateTitle')");
   });
 
@@ -225,4 +230,143 @@ describe('loginHandoff 接线(Provider/reporter 拓扑 + 清理,读源码断言)
     expect(loginSource).toContain('testID="login.configPanel"');
     expect(loginSource).toContain("loginText('configTitle')");
   });
+});
+
+// guard: credentials-and-local-storage and engineering-conventions section 3.2.
+// Captcha must gate every auth request; scenario credentials must remain excluded from production.
+describe("loginScenarioHarness authentication call-site boundary", () => {
+const authContextSource = readFileSync(
+  resolve(process.cwd(), 'src/auth/AuthContext.tsx'),
+  'utf8',
+);
+const metroConfigSource = readFileSync(resolve(process.cwd(), 'metro.config.js'), 'utf8');
+describe('AuthContext 注入点(静态源码断言)', () => {
+  it('经静态 import 使用 fixtures', () => {
+    expect(authContextSource).toContain(
+      "import { resolveLoginScenarioFetch } from '@cindy/auth-client/fixtures'",
+    );
+  });
+
+  it('guard 写死为 __DEV__ + EXPO_PUBLIC_LOGIN_SCENARIO(附录 A 值域 env)', () => {
+    expect(authContextSource).toContain('devModeActive: __DEV__');
+    expect(authContextSource).toContain('scenario: process.env.EXPO_PUBLIC_LOGIN_SCENARIO');
+  });
+
+  it('注入形态 = 真实 CindyAuthClient + fetch 构造参数(scenarioFetch ?? 真 fetch)', () => {
+    expect(authContextSource).toContain(
+      'fetch: scenarioFetch ?? (async (input, init) => fetch(input, init))',
+    );
+    expect(authContextSource.match(/new CindyAuthClient\(/g)).toHaveLength(1);
+  });
+
+  it('metro.config 挂了生产 stub resolveRequest(build-time 排除双保险)', () => {
+    expect(metroConfigSource).toContain("'@cindy/auth-client/fixtures'");
+    expect(metroConfigSource).toContain("process.env.NODE_ENV === 'production'");
+    expect(metroConfigSource).toContain('loginScenarios.production-stub.ts');
+  });
+});
+});
+
+// guard: credentials-and-local-storage and engineering-conventions section 3.2.
+// Captcha must gate every auth request; scenario credentials must remain excluded from production.
+describe("loginCaptcha authentication call-site boundary", () => {
+describe('AuthContext captcha 闸接线(静态源码断言)', () => {
+  const authContextSource = readFileSync(
+    resolve(process.cwd(), 'src/auth/AuthContext.tsx'),
+    'utf8',
+  );
+  const loginSource = readFileSync(resolve(process.cwd(), 'app/(auth)/login.tsx'), 'utf8');
+  const captchaWebViewSource = readFileSync(
+    resolve(process.cwd(), 'src/auth/LoginCaptchaWebView.tsx'),
+    'utf8',
+  );
+
+  it('discover 的 sole email_code 自动串发路径先过 ensureCaptchaGate', () => {
+    const soleBranch = authContextSource.slice(
+      authContextSource.indexOf("sole?.type === 'email_code'"),
+      authContextSource.indexOf("updateLoginState(\n                reduceAuthFlow(currentState, {\n                  type: 'code-requested'"),
+    );
+    expect(soleBranch).toContain("ensureCaptchaGate('email')");
+    expect(soleBranch).toContain('requestCodeWithCaptchaFallback');
+  });
+
+  it('request-code 的 email/phone 都按 requiredFor 动作过闸,取消不派发', () => {
+    const branch = authContextSource.slice(
+      authContextSource.indexOf("if (action.type === 'request-code')"),
+      authContextSource.indexOf("if (action.type === 'verify-code')"),
+    );
+    expect(branch).toContain('ensureCaptchaGate(action.kind)');
+    expect(branch).toContain('if (!gate.proceed) return false;');
+    expect(branch).toContain('requestCodeWithCaptchaFallback');
+    expect(authContextSource).toContain('captchaRequiredActionForVerificationKind(kind)');
+    expect(authContextSource).toContain('?action=${encodeURIComponent(action)}&lang=');
+  });
+
+  it('挑战页地址由构建区域 authApiBaseUrl + 共享路径常量拼出', () => {
+    expect(authContextSource).toContain('CAPTCHA_CHALLENGE_PAGE_PATH');
+    expect(authContextSource).toContain(
+      "getMobileEndpointForRealm(BUILD_AUTH_REGION, 'authApiBaseUrl')",
+    );
+  });
+
+  it('显示 captcha WebView 前先收起软键盘', () => {
+    const challengeBranch = authContextSource.slice(
+      authContextSource.indexOf('const runCaptchaChallenge'),
+      authContextSource.indexOf('const ensureCaptchaGate'),
+    );
+    expect(authContextSource).toMatch(
+      /import \{[^}]*\bKeyboard\b[^}]*\} from 'react-native';/,
+    );
+    expect(challengeBranch.indexOf('Keyboard.dismiss();')).toBeGreaterThan(-1);
+    expect(challengeBranch.indexOf('Keyboard.dismiss();')).toBeLessThan(
+      challengeBranch.indexOf('setCaptchaChallenge({ url });'),
+    );
+  });
+
+  it('login.tsx 渲染 captcha WebView 模态并接回 resolveCaptchaChallenge', () => {
+    expect(loginSource).toContain('auth.captchaChallenge');
+    expect(loginSource).toContain('LoginCaptchaWebView');
+    expect(loginSource).toContain('auth.resolveCaptchaChallenge');
+  });
+
+  it('captcha WebView 限制导航但不把客户端消息来源当作认证边界', () => {
+    expect(captchaWebViewSource).toContain("originWhitelist={['*']}");
+    expect(captchaWebViewSource).toContain('setSupportMultipleWindows={false}');
+    expect(captchaWebViewSource).toContain('isAllowedLoginCaptchaNavigation(request, themedUrl)');
+    expect(captchaWebViewSource).not.toContain('event.nativeEvent.url');
+    expect(captchaWebViewSource).not.toMatch(/^\s*incognito(?:\s|=)/m);
+    expect(captchaWebViewSource).toContain(
+      'parseCaptchaWebViewMessage(event.nativeEvent.data)',
+    );
+    expect(captchaWebViewSource).not.toContain('`${pageOrigin}/*`');
+  });
+
+  it('captcha WebView 使用 ThemeOverrideProvider 内的有效登录主题', () => {
+    expect(captchaWebViewSource).toContain('const { colors, mode } = useTheme()');
+    expect(captchaWebViewSource).toContain('withLoginCaptchaTheme(url, mode)');
+    expect(captchaWebViewSource).toContain('source={{ uri: themedUrl }}');
+  });
+
+  it('captcha WebView 的 iOS/Android 渲染进程异常都进入失败重试态', () => {
+    expect(captchaWebViewSource).toContain('onContentProcessDidTerminate={() => setFailed(true)}');
+    expect(captchaWebViewSource).toContain('onRenderProcessGone={() => setFailed(true)}');
+  });
+
+  it('captcha WebView 超时后进入重试态，并在完成、重试或卸载时清理计时器', () => {
+    expect(captchaWebViewSource).toContain('const CHALLENGE_TIMEOUT_MS = 120_000;');
+    expect(captchaWebViewSource).toContain('const timeoutTimer = setTimeout(() => {');
+    expect(captchaWebViewSource).toContain('return () => clearTimeout(timeoutTimer);');
+    expect(captchaWebViewSource).toContain('}, [failed, generation, themedUrl]);');
+  });
+
+  it('captcha 打开时从 Android TalkBack 隐藏背景登录组与注销气泡', () => {
+    expect(loginSource).toContain('const captchaChallengeOpen = auth.captchaChallenge !== null');
+    expect(loginSource).toContain(
+      'consentDialogOpen || realmConsentOpen || captchaChallengeOpen || handoffPhase',
+    );
+    expect(loginSource).toContain(
+      'consentDialogOpen || realmConsentOpen || captchaChallengeOpen',
+    );
+  });
+});
 });

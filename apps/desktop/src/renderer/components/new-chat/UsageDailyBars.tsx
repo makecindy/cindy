@@ -191,7 +191,7 @@ export function UsageDailyBars({
           {ticks.map((v) => (
             <span
               key={v}
-              className="absolute right-0 translate-y-1/2 text-[9px] leading-none tabular-nums text-[var(--text-tertiary)]"
+              className="absolute right-0 translate-y-1/2 text-10 leading-none tabular-nums text-[var(--text-tertiary)]"
               style={{ bottom: (v / bars.max) * CHART_HEIGHT_PX }}
             >
               {tickLabel(v, currency)}

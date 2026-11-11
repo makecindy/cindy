@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { buildMessageContentLayout } from '@/session/messageContentLayout';
+import { buildMessageContentLayout, nextSettledContentWidth } from '@/session/messageContentLayout';
 
 describe('messageContentLayout', () => {
   it('compacts attachment and markdown content for iPhone SE width', () => {
@@ -20,6 +20,7 @@ describe('messageContentLayout', () => {
       markdownBodyGap: 12,
       markdownListGap: 6,
       markdownListMarkerWidth: 20,
+      markdownTableAvailableWidth: 280,
       markdownTableCellMinWidth: 96,
       mediaGap: 6,
       mediaPlaceholderMinHeight: 84,
@@ -36,6 +37,7 @@ describe('messageContentLayout', () => {
       fileChipMaxWidth: 228,
       imagePreviewHeight: 96,
       imagePreviewWidth: 148,
+      markdownTableAvailableWidth: 329,
       markdownTableCellMinWidth: 112,
       mediaPreviewWidth: 160,
       toolResultMaxLines: 8,
@@ -48,5 +50,19 @@ describe('messageContentLayout', () => {
       imagePreviewWidth: 148,
       mediaPreviewWidth: 160,
     });
+  });
+});
+
+describe('nextSettledContentWidth', () => {
+  it('pins the first positive measured width and ignores sub-pixel jitter', () => {
+    expect(nextSettledContentWidth(0, 0)).toBe(0);
+    expect(nextSettledContentWidth(0, 360)).toBe(360);
+    expect(nextSettledContentWidth(360, 361)).toBe(360);
+    expect(nextSettledContentWidth(360, 359)).toBe(360);
+  });
+
+  it('updates when the container really changes width', () => {
+    expect(nextSettledContentWidth(360, 328)).toBe(328);
+    expect(nextSettledContentWidth(328, 390)).toBe(390);
   });
 });

@@ -98,7 +98,7 @@ export function DeviceSwitcherPill({
           className={cn(
             'inline-flex h-[30px] items-center justify-center gap-1.5 rounded-full',
             'border border-[var(--create-agent-control-border)] bg-[var(--create-agent-control-bg)]',
-            'text-[12px] font-medium leading-[14px] text-[var(--create-agent-control-text)]',
+            'text-12 font-medium leading-[1.167] text-[var(--create-agent-control-text)]',
             'transition-colors hover:bg-[var(--create-agent-control-bg-hover)]',
             'active:bg-[var(--create-agent-control-bg-pressed)]',
             'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--create-agent-focus-ring)]',

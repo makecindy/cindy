@@ -25,7 +25,7 @@ describe('canUseLocalAttachmentPicker', () => {
     ).toBe(true);
   });
 
-  it('rejects SSH and device-link execution contexts', () => {
+  it('keeps SSH excluded and allows device-link uploads', () => {
     expect(
       canUseLocalAttachmentPicker({
         sessionId: 'session-ssh',
@@ -38,6 +38,6 @@ describe('canUseLocalAttachmentPicker', () => {
         runtimeAgentKind: 'codex',
         deviceLinkDeviceId: 'remote-device',
       }),
-    ).toBe(false);
+    ).toBe(true);
   });
 });

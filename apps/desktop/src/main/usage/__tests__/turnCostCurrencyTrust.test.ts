@@ -138,7 +138,10 @@ describe('output lag detection', () => {
     // 实测形态:40 万 token 的上下文写进 cache,output 只报 7 —— 真实的长回复被上游
     // 结算延后到了下一轮。
     expect(
-      detectOutputLag([delta({ inputTokensDelta: 131, cacheCreateTokensDelta: 404_534, outputTokensDelta: 7 })]),
+      detectOutputLag(
+        [delta({ inputTokensDelta: 131, cacheCreateTokensDelta: 404_534, outputTokensDelta: 7 })],
+        'msg_vrtx_1',
+      ),
     ).toBe(true);
   });
 
@@ -150,5 +153,11 @@ describe('output lag detection', () => {
 
   it('does not flag a genuinely tiny turn', () => {
     expect(detectOutputLag([delta({ inputTokensDelta: 120, outputTokensDelta: 4 })])).toBe(false);
+  });
+
+  it('does not flag a concise high-context reply without Vertex evidence', () => {
+    expect(
+      detectOutputLag([delta({ cacheReadTokensDelta: 404_771, outputTokensDelta: 7 })]),
+    ).toBe(false);
   });
 });

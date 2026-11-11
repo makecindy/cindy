@@ -9,9 +9,9 @@
  *   - Pinned Items 容器：padding [4, 12, 0, 12], gap 2
  *
  * 段标题右侧的 chevron（hover 时浮现）折叠/展开整段，与 DialogueSection 同款。
- * 段头另带"显示样式"弹层（ViewStyleMenu，文字版 / 卡片版）：卡片模式下挂在
- * 图钉 icon 上，列表模式下挂在 hover 浮现的 LayoutGrid 钮上——双向均可一键
- * 切换 sidebar.cardMode，与 Settings → 外观 的开关同源。
+ * 段头为纯文字标题，与伙伴、全部任务保持相同的文字起点与颜色。
+ * 右侧 hover 浮现的显示样式钮打开 ViewStyleMenu（文字 / 卡片 / 列表），
+ * 与 Settings → 外观 的开关同源。
  * 置顶**不做"最多显示 N 条"折叠**——置顶是用户主动钉住的内容,三种模式都全部显示。
  *
  * 拖拽：文字 / list 模式通过 SortableList 整行可拖；card 模式由 CardMasonry 在多列时
@@ -21,7 +21,7 @@
  * 受控组件——entries 为空时返回 null（不渲染段）。
  */
 
-import { useCallback, useMemo, useState, type ReactNode } from 'react';
+import { useCallback, useEffect, useMemo, useState, type ReactNode } from 'react';
 import {
   AlignJustify,
   ChevronDown,
@@ -44,7 +44,7 @@ import {
 } from '@/components/ui/dropdown-menu';
 import { useReducedMotion } from '@/hooks/useReducedMotion';
 import { useSidebarCardMode, type SidebarViewMode } from '@/hooks/useSidebarCardMode';
-import { MENU_CONTENT_CLASS, MENU_ITEM_CLASS } from '../menuStyles';
+import { MENU_ITEM_CLASS } from '../menuStyles';
 import { SectionCollapse } from '../SectionCollapse';
 import { CardMasonry } from '../CardMasonry';
 import { SessionItem } from '../SessionItem';
@@ -55,6 +55,17 @@ import { buildSessionSourceLabelMap } from '../../lib/sessionSourceLabel';
 import type { Session } from '@/lib/ccAgent.types';
 import type { FolderPickerOption } from '@/components/new-chat/FolderPickerPopover';
 import type { SessionMoveTarget } from '../sessionMoveTarget';
+import {
+  loadPinnedSectionCollapsed,
+  persistPinnedSectionCollapsed,
+} from '../../hooks/helpers/sidebarFilterCore';
+import {
+  getRemoteSessionActivity,
+  isRemoteSessionActivityActive,
+  subscribeRemoteSessionActivity,
+} from '@/features/device-link/remoteSessionActivityStore';
+import { getSessionDeviceId } from '@/features/device-link/remoteProjectsStore';
+import { absorbSessionStarting } from '@/lib/sessionStartingStore';
 
 const HEADER_HOVER_ACTION_CLASS = cn(
   'pointer-events-none opacity-0 transition-opacity duration-150',
@@ -66,8 +77,30 @@ const HEADER_HOVER_ACTION_CLASS = cn(
 );
 
 /**
+ * 每种模式配一个直观图标:文字=密排文本行(AlignJustify)、卡片=网格(LayoutGrid)、
+ * 列表=带内容块的行(LayoutList)。三者视觉区分明显,一眼能对上。
+ * 模块级常量:菜单项与段头 trigger 共用同一张表——trigger 显示**当前选中模式**的
+ * 图标(2026-08-12 用户裁决,此前恒为 LayoutGrid,与实际选中项不符)。
+ * 整理菜单(SidebarFilterPopover)的主列表显示模式复用同一套 text / list 字形。
+ */
+const VIEW_STYLE_OPTIONS: ReadonlyArray<{
+  value: SidebarViewMode;
+  labelKey: string;
+  Icon: LucideIcon;
+}> = [
+  { value: 'text', labelKey: 'ccAgent.sidebar.viewStyleList', Icon: AlignJustify },
+  { value: 'card', labelKey: 'ccAgent.sidebar.viewStyleCard', Icon: LayoutGrid },
+  { value: 'list', labelKey: 'ccAgent.sidebar.viewStyleListWide', Icon: LayoutList },
+];
+
+/** 当前显示模式对应的图标(供段头 trigger 用);未知值兜底到文字版字形。 */
+function viewStyleIcon(mode: SidebarViewMode): LucideIcon {
+  return VIEW_STYLE_OPTIONS.find((opt) => opt.value === mode)?.Icon ?? AlignJustify;
+}
+
+/**
  * ViewStyleMenu — Pinned 段头的"显示样式"切换弹层(文字版 / 卡片版 / 列表)。
- * trigger 由调用方提供(段头右侧 hover 出现的 LayoutGrid 钮),菜单写回全局
+ * trigger 由调用方提供(段头右侧 hover 出现、图标随当前模式变化),菜单写回全局
  * sidebar 显示模式(useSidebarCardMode 的 mode),与 Settings → 外观 同源。
  */
 function ViewStyleMenu({
@@ -80,22 +113,11 @@ function ViewStyleMenu({
   children: ReactNode;
 }) {
   const { t } = useTranslation();
-  // 每种模式配一个直观图标:文字=密排文本行(AlignJustify)、卡片=网格(LayoutGrid)、
-  // 列表=带内容块的行(LayoutList)。三者视觉区分明显,一眼能对上。
-  const OPTIONS: Array<{ value: SidebarViewMode; labelKey: string; Icon: LucideIcon }> = [
-    { value: 'text', labelKey: 'ccAgent.sidebar.viewStyleList', Icon: AlignJustify },
-    { value: 'card', labelKey: 'ccAgent.sidebar.viewStyleCard', Icon: LayoutGrid },
-    { value: 'list', labelKey: 'ccAgent.sidebar.viewStyleListWide', Icon: LayoutList },
-  ];
+  const OPTIONS = VIEW_STYLE_OPTIONS;
   return (
     <DropdownMenu>
       <DropdownMenuTrigger asChild>{children}</DropdownMenuTrigger>
-      <DropdownMenuContent
-        side="bottom"
-        align="end"
-        sideOffset={4}
-        className={cn(MENU_CONTENT_CLASS, 'min-w-[128px]')}
-      >
+      <DropdownMenuContent side="bottom" align="end" sideOffset={4} className="min-w-[128px]">
         {OPTIONS.map((opt) => (
           <DropdownMenuItem
             key={opt.value}
@@ -129,9 +151,8 @@ export interface PinnedSectionProps {
   /** 已按筛选和持久化顺序排好的置顶对话与项目。 */
   entries: PinnedSidebarEntry[];
   /**
-   * 已知项目全集,用于 hover 时把 pinned session 映射到项目 displayName(与
-   * ProjectNode 表头同口径消歧)。文字模式渲染 SessionItem 时才用到,card / list
-   * 模式当前不消费。
+   * 已知项目全集,用于把 pinned session 映射到项目 displayName(与
+   * ProjectNode 表头同口径消歧)。文字 / 列表模式画在标题旁;卡片模式不消费。
    */
   allKnownProjects: readonly ProjectNodeData[];
   /** 复用 ProjectNode 渲染项目，确保展开/收起和项目操作与普通项目段一致。 */
@@ -177,11 +198,41 @@ export function PinnedSection({
   const { t } = useTranslation();
   const reducedMotion = useReducedMotion();
   const { mode, setMode } = useSidebarCardMode();
-  // 卡片视觉(card 瀑布流 / list 单列满宽)统称"卡片态";text 为紧凑行。
-  const isCardLike = mode !== 'text';
-  const [collapsed, setCollapsed] = useState(false);
+  // 段头 trigger 的图标 = 当前选中的显示模式(用户一眼看出现在是哪种)。
+  const ViewStyleTriggerIcon = viewStyleIcon(mode);
+  const [collapsed, setCollapsed] = useState(loadPinnedSectionCollapsed);
+  const toggleCollapsed = useCallback(() => {
+    const next = !collapsed;
+    setCollapsed(next);
+    persistPinnedSectionCollapsed(next);
+  }, [collapsed]);
 
   const visibleEntries = entries;
+  const pinnedSessions = useMemo(
+    () =>
+      visibleEntries.flatMap((entry) =>
+        entry.kind === 'session' ? [entry.session] : entry.displaySessions,
+      ),
+    [visibleEntries],
+  );
+  // Pinned rows are absent from ProjectsSection's starting settlement.
+  // Settle only the activity being pushed, never an old waiting phase on rerender.
+  useEffect(
+    () =>
+      subscribeRemoteSessionActivity((deviceId, sessionId) => {
+        if (!deviceId || !sessionId || getSessionDeviceId(sessionId) !== deviceId) return;
+        if (
+          !pinnedSessions.some(
+            (session) => session.id === sessionId && session.deviceLinkDeviceId === deviceId,
+          )
+        )
+          return;
+        if (isRemoteSessionActivityActive(getRemoteSessionActivity(sessionId, deviceId))) {
+          absorbSessionStarting([sessionId]);
+        }
+      }),
+    [pinnedSessions],
+  );
   const visibleSessions = useMemo(
     () => visibleEntries.flatMap((entry) => (entry.kind === 'session' ? [entry.session] : [])),
     [visibleEntries],
@@ -190,12 +241,16 @@ export function PinnedSection({
   // 置顶不做"最多显示 N 条"折叠——置顶是用户主动钉住的,全部显示(三种模式一致)。
   const slicedEntries = visibleEntries;
 
-  // 文字模式 SessionItem hover 时右侧浮层展示的"项目来源"标签(口径见
-  // buildSessionSourceLabelMap),与时间排序视图同口径。card / list 模式视觉自成一体,
-  // 当前不注入。置顶视图传 visibleSessions。
+  // 平铺时标题旁的"项目来源"标签(口径见 buildSessionSourceLabelMap)。
+  // 置顶视图传 visibleSessions;文字 / 列表都画,card 变体不画这个标签。
   const sourceLabelMap = useMemo(
     () =>
-      buildSessionSourceLabelMap(visibleSessions, allKnownProjects, t('ccAgent.sidebar.dialogues')),
+      buildSessionSourceLabelMap(
+        visibleSessions,
+        allKnownProjects,
+        t('ccAgent.sidebar.dialogues'),
+        t('settings.cindyMake.title'),
+      ),
     [visibleSessions, allKnownProjects, t],
   );
 
@@ -250,6 +305,7 @@ export function PinnedSection({
           onTogglePin={onTogglePin}
           onMoveSession={onMoveSession}
           projectOptions={projectOptions}
+          sourceLabel={sourceLabelMap.get(session.id)}
         />
       );
     },
@@ -269,6 +325,7 @@ export function PinnedSection({
       onTogglePin,
       onMoveSession,
       projectOptions,
+      sourceLabelMap,
     ],
   );
 
@@ -280,7 +337,7 @@ export function PinnedSection({
   if (visibleEntries.length === 0) return null;
 
   return (
-    <div className="flex flex-col gap-0.5 w-full">
+    <div className="flex flex-col w-full">
       {/* Section Title — height 24, padding [0,12,0,24]
           颜色规格（2026-04-20 二次确认对标设计稿 ZVIpx/WazkW）：
             Light #262626 / Dark #f5f0e8（深色文本，非 Stone 灰）
@@ -295,9 +352,9 @@ export function PinnedSection({
           {/* 段标题:与 项目/对话 段头同款,2026-07 用户定稿。 */}
           <button
             type="button"
-            onClick={() => setCollapsed((value) => !value)}
+            onClick={toggleCollapsed}
             aria-expanded={!collapsed}
-            className="text-sm font-medium text-[var(--sidebar-list-muted)] transition-colors hover:text-[var(--sidebar-nav-text)]"
+            className="text-sm leading-5 font-medium text-[var(--sidebar-list-muted)] transition-colors hover:text-[var(--sidebar-nav-text)]"
           >
             {t('ccAgent.sidebar.pinned')}
           </button>
@@ -305,7 +362,7 @@ export function PinnedSection({
             <Tip text={toggleLabel} side="bottom">
               <button
                 type="button"
-                onClick={() => setCollapsed((value) => !value)}
+                onClick={toggleCollapsed}
                 aria-label={toggleLabel}
                 aria-expanded={!collapsed}
                 className={cn(
@@ -320,20 +377,23 @@ export function PinnedSection({
             </Tip>
           </div>
         </div>
-        {/* 显示样式切换:固定最右,hover 浮现(菜单打开时保持可见)。 */}
+        {/* 显示样式切换:固定最右,hover 浮现(菜单打开时保持可见)。
+            图标 = 当前选中的显示模式(2026-08-12 用户裁决),不再恒为网格。 */}
         <div className={cn(HEADER_HOVER_ACTION_CLASS, 'flex items-center gap-0.5')}>
           <ViewStyleMenu mode={mode} setMode={setMode}>
-            <button
-              type="button"
-              aria-label={t('ccAgent.sidebar.viewStyle')}
-              className={cn(
-                'flex h-5 w-5 shrink-0 items-center justify-center rounded-md',
-                'text-[var(--sidebar-list-muted)]',
-                'transition-colors hover:text-[var(--sidebar-nav-text)]',
-              )}
-            >
-              <LayoutGrid size={13} strokeWidth={2} />
-            </button>
+            <Tip text={t('ccAgent.sidebar.viewStyle')} side="bottom">
+              <button
+                type="button"
+                aria-label={t('ccAgent.sidebar.viewStyle')}
+                className={cn(
+                  'flex h-5 w-5 shrink-0 items-center justify-center rounded-md',
+                  'text-[var(--sidebar-list-muted)]',
+                  'transition-colors hover:text-[var(--sidebar-nav-text)]',
+                )}
+              >
+                <ViewStyleTriggerIcon size={13} strokeWidth={2} />
+              </button>
+            </Tip>
           </ViewStyleMenu>
         </div>
       </div>
@@ -343,9 +403,15 @@ export function PinnedSection({
           scrollbar-gutter:stable 预留的 12px(= pl-3,与全局 12px 滚动条等宽)补齐,
           两侧视觉对称。卡片模式原先用 px-[11px],右侧在 gutter 之外又叠了 11px padding,
           导致右留白(~23px)明显宽于左(11px)——改为 pr-0 后两侧都≈12px 且更窄。 */}
-      {/* 段级收起走 SectionCollapse 高度动画(内容保持挂载)。 */}
+      {/* 段级收起走 SectionCollapse 高度动画,播完卸载子树。 */}
       <SectionCollapse collapsed={collapsed}>
-        <div className={cn('flex flex-col gap-0.5', isCardLike ? 'pr-0 pl-3' : 'pt-1 pr-0 pl-3')}>
+        {/* 留白放进折叠内容，收起后不残留；列表和卡片按自身内边距补偿。 */}
+        <div
+          className={cn(
+            'flex flex-col gap-0.5 pr-0 pl-3',
+            mode === 'text' ? 'pt-1.5' : mode === 'list' ? 'pt-1' : 'pt-0.5',
+          )}
+        >
           {/* 三种显示模式:
               - card:CardMasonry 响应式分栏(侧栏 ~258px 起 2 列、~424px 起 3 列,错落瀑布);
               - list:卡片视觉但**单列满宽**(不分栏、铺满左侧,类灵动岛),走单列 SortableList;
@@ -356,6 +422,7 @@ export function PinnedSection({
               getId={getEntryId}
               onReorder={onReorder}
               reducedMotion={reducedMotion}
+              forceFallback={false}
               renderItem={renderCard}
             />
           ) : mode === 'list' ? (
@@ -368,6 +435,7 @@ export function PinnedSection({
               getId={getEntryId}
               onReorder={onReorder}
               reducedMotion={reducedMotion}
+              forceFallback={false}
               className="flex flex-col gap-0.5"
               renderItem={renderCard}
             />
@@ -377,6 +445,7 @@ export function PinnedSection({
               getId={getEntryId}
               onReorder={onReorder}
               reducedMotion={reducedMotion}
+              forceFallback={false}
               className="flex flex-col gap-0.5"
               renderItem={(entry) =>
                 entry.kind === 'project' ? (

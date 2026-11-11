@@ -1,0 +1,139 @@
+import type { DialogueDeviceTarget } from './dialogueCreateTarget';
+
+export interface NewMakerDialogueTargetRequest {
+  requestId: string;
+  deviceId: string | null;
+  deviceName: string | null;
+  /** 通用新建只继承电脑；同机时保留草稿项目及用户选择。 */
+  preserveWorkspaceIfSameDevice?: boolean;
+}
+
+export interface NewMakerFolderPickerRequest {
+  requestId: string;
+}
+
+export interface NewMakerRouteState {
+  workspacePrompt: 'generic' | 'dialogue';
+  dialogueTargetRequest?: NewMakerDialogueTargetRequest;
+  folderPickerRequest?: NewMakerFolderPickerRequest;
+}
+
+/** A saved local default only fills a generic draft with no explicit target. */
+export function shouldPrefillDefaultNewTaskWorkingDir(
+  state: unknown,
+  draft: {
+    workingDir: string | null;
+    explicitNoProject?: boolean;
+    remoteHostId?: string | null;
+    deviceLinkDeviceId?: string | null;
+  },
+): boolean {
+  if (
+    !state ||
+    typeof state !== 'object' ||
+    (state as NewMakerRouteState).workspacePrompt !== 'generic'
+  ) {
+    return false;
+  }
+  const request = readNewMakerDialogueTargetRequest(state);
+  return (
+    (!request || request.deviceId === null) &&
+    !draft.workingDir &&
+    !draft.explicitNoProject &&
+    !draft.remoteHostId &&
+    !draft.deviceLinkDeviceId
+  );
+}
+
+let dialogueTargetRequestSequence = 0;
+let folderPickerRequestSequence = 0;
+
+/** These requests select local/device-link execution, never an SSH workspace. */
+export function isSameNewMakerDevice(
+  deviceId: string | null,
+  draft: { deviceLinkDeviceId?: string | null; remoteHostId?: string | null },
+): boolean {
+  return !draft.remoteHostId && deviceId === (draft.deviceLinkDeviceId ?? null);
+}
+
+/**
+ * “对话”分组每次点击都生成新 requestId。同路由重复 navigate 不会 remount 创建页，
+ * 但 location.state 会更新，创建页可据此再次执行完整 target transition。
+ */
+export function makeDialogueNewMakerRouteState(
+  target: DialogueDeviceTarget | null,
+): NewMakerRouteState & { dialogueTargetRequest: NewMakerDialogueTargetRequest } {
+  dialogueTargetRequestSequence += 1;
+  return {
+    workspacePrompt: 'dialogue',
+    dialogueTargetRequest: {
+      requestId: `${Date.now()}-${dialogueTargetRequestSequence}`,
+      deviceId: target?.deviceId ?? null,
+      deviceName: target?.deviceName ?? null,
+    },
+  };
+}
+
+export function makeFolderPickerNewMakerRouteState(): NewMakerRouteState {
+  folderPickerRequestSequence += 1;
+  return {
+    workspacePrompt: 'generic',
+    folderPickerRequest: {
+      requestId: `${Date.now()}-${folderPickerRequestSequence}`,
+    },
+  };
+}
+
+export function readNewMakerFolderPickerRequest(
+  state: unknown,
+): NewMakerFolderPickerRequest | null {
+  if (!state || typeof state !== 'object') return null;
+  const request = (state as Record<string, unknown>).folderPickerRequest;
+  if (!request || typeof request !== 'object') return null;
+  const requestId = (request as Record<string, unknown>).requestId;
+  if (typeof requestId !== 'string' || requestId.length === 0) return null;
+  return { requestId };
+}
+
+export function consumeNewMakerFolderPickerRequest(state: unknown): unknown {
+  if (!state || typeof state !== 'object' || Array.isArray(state)) return state;
+  if (!Object.prototype.hasOwnProperty.call(state, 'folderPickerRequest')) return state;
+  const remainingState = { ...(state as Record<string, unknown>) };
+  delete remainingState.folderPickerRequest;
+  return remainingState;
+}
+
+export function readNewMakerDialogueTargetRequest(
+  state: unknown,
+): NewMakerDialogueTargetRequest | null {
+  if (!state || typeof state !== 'object') return null;
+  const request = (state as Record<string, unknown>).dialogueTargetRequest;
+  if (!request || typeof request !== 'object') return null;
+  const record = request as Record<string, unknown>;
+  if (typeof record.requestId !== 'string' || record.requestId.length === 0) return null;
+  const deviceId = record.deviceId;
+  const deviceName = record.deviceName;
+  if (deviceId !== null && (typeof deviceId !== 'string' || deviceId.length === 0)) return null;
+  if (deviceName !== null && typeof deviceName !== 'string') return null;
+  if (deviceId === null && deviceName !== null) return null;
+  return {
+    requestId: record.requestId,
+    deviceId,
+    deviceName,
+    ...(record.preserveWorkspaceIfSameDevice === true
+      ? { preserveWorkspaceIfSameDevice: true }
+      : {}),
+  };
+}
+
+/**
+ * dialogueTargetRequest 是一次性导航指令。首次应用后从当前 history entry 移除，避免用户
+ * 浏览器后退到旧的 /cc-agent/new 记录时再次迁移草稿目标；其它 route state 必须原样保留。
+ */
+export function consumeNewMakerDialogueTargetRequest(state: unknown): unknown {
+  if (!state || typeof state !== 'object' || Array.isArray(state)) return state;
+  if (!Object.prototype.hasOwnProperty.call(state, 'dialogueTargetRequest')) return state;
+  const remainingState = { ...(state as Record<string, unknown>) };
+  delete remainingState.dialogueTargetRequest;
+  return remainingState;
+}

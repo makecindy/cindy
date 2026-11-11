@@ -7,6 +7,9 @@
  * （`mcp_token_<id>`，见 providerSecrets 的 customMcpSecretStorageKey）。
  */
 
+import type { AgentKind } from '@cindy/maker-core';
+import type { BotModelRoute } from './botModelChain.js';
+
 /** 支持的 transport 类型。 */
 export const MCP_TRANSPORTS = ['http', 'sse'] as const;
 export type McpTransport = (typeof MCP_TRANSPORTS)[number];
@@ -23,4 +26,61 @@ export interface CustomMcpConfig {
   url: string;
   /** 额外请求头（不含鉴权 token）。 */
   headers: Record<string, string>;
+}
+
+/** Optional runtime projection for capability pickers; omitted for configuration CRUD. */
+export interface CustomMcpListContext {
+  agentKind: AgentKind;
+  /** Preview a canonical Bot's next turn, optionally including an unsaved model chain. */
+  botSessionId?: string;
+  modelChain?: BotModelRoute[];
+}
+
+export interface CustomMcpListEntry extends CustomMcpConfig {
+  /** Present only when a runtime context was requested. */
+  available?: boolean;
+}
+
+export interface CustomMcpListResult {
+  servers: CustomMcpListEntry[];
+  /** Authoritative route used for this catalog; absent for raw configuration queries. */
+  agentKind?: AgentKind;
+}
+
+export type McpDuplicateChoice = 'cindy' | 'claude' | 'both';
+/** Diagnostic projection: never includes native headers, tokens, or URL query strings. */
+export interface McpDuplicateConnection {
+  id: string;
+  cindyId: string;
+  cindyName: string;
+  claudeName: string;
+  origin: string;
+  reason: 'endpoint' | 'similar';
+  choice?: McpDuplicateChoice;
+}
+export interface McpDuplicateReport {
+  connections: McpDuplicateConnection[];
+  complete: boolean;
+}
+
+/** Display exactly the connected group affected by one saved choice. */
+export function groupMcpDuplicateConnections(connections: McpDuplicateConnection[]): McpDuplicateConnection[][] {
+  const remaining = [...connections];
+  const groups: McpDuplicateConnection[][] = [];
+  while (remaining.length) {
+    const group = [remaining.shift()!];
+    const hosts = new Set([group[0]!.cindyId]);
+    const natives = new Set([group[0]!.claudeName]);
+    for (let changed = true; changed;) {
+      changed = false;
+      for (let i = remaining.length - 1; i >= 0; i--) {
+        const pair = remaining[i]!;
+        if (!hosts.has(pair.cindyId) && !natives.has(pair.claudeName)) continue;
+        hosts.add(pair.cindyId); natives.add(pair.claudeName); group.push(pair);
+        remaining.splice(i, 1); changed = true;
+      }
+    }
+    groups.push(group);
+  }
+  return groups;
 }

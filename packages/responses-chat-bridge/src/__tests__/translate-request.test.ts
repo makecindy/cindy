@@ -75,6 +75,29 @@ describe('translateResponsesRequest', () => {
     expect(keep.messages[1]).toEqual({ role: 'developer', content: 'mid-conversation dev note' });
   });
 
+  it('coalesces mid-conversation system/developer into one leading system when asked', () => {
+    const source = base({
+      instructions: 'top-level',
+      input: [
+        { type: 'message', role: 'user', content: 'first' },
+        { type: 'message', role: 'assistant', content: 'ok' },
+        { type: 'message', role: 'developer', content: [{ type: 'input_text', text: 'later note' }] },
+        { type: 'message', role: 'user', content: 'second' },
+      ],
+    });
+    const out = translateResponsesRequest(source, {
+      capabilities: { systemMessagePolicy: 'coalesce-leading' },
+    });
+    expect(out.messages).toEqual([
+      { role: 'system', content: 'top-level\n\nlater note' },
+      { role: 'user', content: 'first' },
+      { role: 'assistant', content: 'ok' },
+      { role: 'user', content: 'second' },
+    ]);
+    const unchanged = translateResponsesRequest(source);
+    expect(unchanged.messages.filter((message) => message.role === 'system')).toHaveLength(2);
+  });
+
   it.each([
     { type: 'input_image', image_url: 'https://example.com/image.png' },
     { type: 'input_file', file_data: 'data:text/plain;base64,eA==' },
@@ -134,6 +157,73 @@ describe('translateResponsesRequest', () => {
       { role: 'tool', tool_call_id: 'call_1', content: '{"ok":true}' },
       { role: 'user', content: 'continue' },
     ]);
+  });
+
+  it('degrades untranslatable tool-output media to a placeholder instead of failing the request (#2805)', () => {
+    // 上下文压缩 / 历史重放会把此前被拦截的图片以 input_image 重新带进工具
+    // 输出:纯文本路由(无 imageInput 能力)此前 fail-closed 拒绝整单,会话
+    // 从此每轮都被拒 —— 应降级为占位文本,保会话可用。
+    const out = translateResponsesRequest(base({
+      input: [
+        { type: 'function_call', call_id: 'call_img', name: 'ReadImage', arguments: '{}' },
+        {
+          type: 'function_call_output',
+          call_id: 'call_img',
+          output: [
+            { type: 'input_text', text: 'here is the screenshot' },
+            { type: 'input_image', image_url: 'data:image/png;base64,QUJD' },
+          ],
+        },
+        { type: 'message', role: 'user', content: 'continue after compaction' },
+      ],
+    }));
+    const tool = out.messages.find((m) => m.role === 'tool') as { content: string };
+    expect(tool.content).toContain('here is the screenshot');
+    expect(tool.content).toContain('[media omitted');
+    expect(tool.content).not.toContain('base64');
+    expect(out.messages.at(-1)).toEqual({ role: 'user', content: 'continue after compaction' });
+  });
+
+  it('still moves translatable tool-output media to a user message on image routes', () => {
+    // 对照组:路由支持图片时维持既有「搬运到后续 user 消息」语义。
+    const out = translateResponsesRequest(base({
+      input: [
+        { type: 'function_call', call_id: 'call_img', name: 'ReadImage', arguments: '{}' },
+        {
+          type: 'function_call_output',
+          call_id: 'call_img',
+          output: [{ type: 'input_image', image_url: 'https://img.example/a.png' }],
+        },
+        { type: 'message', role: 'user', content: 'go on' },
+      ],
+    }), { capabilities: { imageInput: 'image_url' } });
+    const tool = out.messages.find((m) => m.role === 'tool') as { content: string };
+    expect(tool.content).toContain('[media moved to the following user message]');
+    const mediaMessage = out.messages.find(
+      (m) => m.role === 'user' && Array.isArray((m as { content: unknown }).content),
+    ) as { content: Array<{ type: string }> };
+    expect(mediaMessage.content.some((part) => part.type === 'image_url')).toBe(true);
+  });
+
+  it('degrades untranslatable audio and file tool-output media the same way', () => {
+    const out = translateResponsesRequest(base({
+      input: [
+        { type: 'function_call', call_id: 'call_m', name: 'Fetch', arguments: '{}' },
+        {
+          type: 'function_call_output',
+          call_id: 'call_m',
+          output: [
+            { type: 'input_audio', input_audio: { data: 'QUJD', format: 'wav' } },
+            { type: 'input_file', file_id: 'file_123' },
+          ],
+        },
+        { type: 'message', role: 'user', content: 'continue' },
+      ],
+    }));
+    const tool = out.messages.find((m) => m.role === 'tool') as { content: string };
+    expect(tool.content).toContain('[media omitted');
+    expect(tool.content).not.toContain('QUJD');
+    expect(tool.content).not.toContain('file_123');
   });
 
   it('injects a reasoning_content placeholder on tool-call assistant messages for thinking models', () => {
@@ -349,6 +439,108 @@ describe('translateResponsesRequest', () => {
     }))).toThrowError(UnsupportedResponsesFeatureError);
   });
 
+  it.each([
+    { type: 'search', query: 'image editor', queries: ['image editor', 'canvas export'], sources: [{ url: 'https://example.com/docs' }] },
+    { type: 'open_page', url: 'https://example.com/docs' },
+    { type: 'find_in_page', url: 'https://example.com/docs', pattern: 'export' },
+  ])('preserves completed web search $type history as assistant text', (action) => {
+    const input: ResponsesRequest = base({
+      input: [
+        { type: 'message', role: 'user', content: 'Research image editors' },
+        { type: 'web_search_call', id: 'ws_history', status: 'completed', action },
+        { type: 'message', role: 'assistant', content: 'Findings: https://example.com/docs' },
+        { type: 'message', role: 'user', content: 'Continue' },
+      ],
+    });
+    const original = JSON.stringify(input);
+    const out = translateResponsesRequest(input);
+
+    expect(out.messages).toEqual([
+      { role: 'user', content: 'Research image editors' },
+      { role: 'assistant', content: '[completed web search]\n' + JSON.stringify(action) },
+      { role: 'assistant', content: 'Findings: https://example.com/docs' },
+      { role: 'user', content: 'Continue' },
+    ]);
+    expect(JSON.stringify(input)).toBe(original);
+    expect(out.tools).toBeUndefined();
+  });
+
+  it.each([
+    { status: 'in_progress', action: { type: 'search', query: 'image editor' } },
+    { status: 'searching', action: { type: 'search', query: 'image editor' } },
+    { status: 'failed', action: { type: 'search', query: 'image editor' } },
+    { action: { type: 'search', query: 'image editor' } },
+    { status: 'completed' },
+    { status: 'completed', action: 'image editor' },
+    { status: 'completed', action: {} },
+  ])('rejects unfinished or malformed web search history: %j', (item) => {
+    expect(() => translateResponsesRequest(base({
+      input: [
+        { type: 'web_search_call', ...item },
+        { type: 'message', role: 'user', content: 'Continue' },
+      ],
+    }))).toThrow("input item 'web_search_call'");
+  });
+
+  it('keeps completed web search history after a pending function result', () => {
+    const action = { type: 'search', query: 'image editor' };
+    const out = translateResponsesRequest(base({
+      input: [
+        { type: 'function_call', call_id: 'call_1', name: 'shell', arguments: '{}' },
+        { type: 'web_search_call', id: 'ws_history', status: 'completed', action },
+        { type: 'function_call_output', call_id: 'call_1', output: 'done' },
+        { type: 'message', role: 'user', content: 'Continue' },
+      ],
+    }));
+
+    expect(out.messages).toEqual([
+      {
+        role: 'assistant', content: null,
+        tool_calls: [{ id: 'call_1', type: 'function', function: { name: 'shell', arguments: '{}' } }],
+      },
+      { role: 'tool', tool_call_id: 'call_1', content: 'done' },
+      { role: 'assistant', content: '[completed web search]\n' + JSON.stringify(action) },
+      { role: 'user', content: 'Continue' },
+    ]);
+  });
+
+  it.each([
+    { outputIds: ['call_1'] },
+    { outputIds: ['call_1', 'call_2'] },
+    { outputIds: ['call_2', 'call_1'] },
+  ])('preserves real results when web search interleaves calls: $outputIds', ({ outputIds }) => {
+    const action = { type: 'search', query: 'image editor' };
+    const out = translateResponsesRequest(base({
+      input: [
+        { type: 'function_call', call_id: 'call_1', name: 'shell', arguments: '{}' },
+        { type: 'web_search_call', id: 'ws_history', status: 'completed', action },
+        { type: 'function_call', call_id: 'call_2', name: 'shell', arguments: '{}' },
+        ...outputIds.map((callId) => ({
+          type: 'function_call_output', call_id: callId, output: 'result for ' + callId,
+        })),
+        { type: 'message', role: 'user', content: 'Continue' },
+      ],
+    }));
+
+    expect(out.messages[0]).toEqual({
+      role: 'assistant', content: null,
+      tool_calls: ['call_1', 'call_2'].map((callId) => ({
+        id: callId, type: 'function', function: { name: 'shell', arguments: '{}' },
+      })),
+    });
+    const results = out.messages.filter((message) => message.role === 'tool');
+    for (const callId of outputIds) {
+      expect(results.find((message) => message.tool_call_id === callId)?.content)
+        .toBe('result for ' + callId);
+    }
+    expect(out.messages.slice(-2)).toEqual([
+      { role: 'assistant', content: '[completed web search]\n' + JSON.stringify(action) },
+      { role: 'user', content: 'Continue' },
+    ]);
+    expect(out.messages.map((message) => message.role))
+      .toEqual(['assistant', 'tool', 'tool', 'assistant', 'user']);
+  });
+
   it('converts replayed agent messages to assistant text', () => {
     const out = translateResponsesRequest(base({
       input: [
@@ -404,6 +596,43 @@ describe('translateResponsesRequest', () => {
     expect(() => translateResponsesRequest(base({
       input: [{ type: 'agent_message', content: [{ type: 'image_url' }] }],
     }))).toThrow('input[0].content.image_url');
+  });
+
+  it('skips an assistant history item that has no content and only supported metadata (#9344)', () => {
+    const out = translateResponsesRequest(base({
+      input: [
+        { type: 'message', role: 'user', content: 'start' },
+        { type: 'message', role: 'assistant', content: null, id: 'msg_0', status: 'completed' },
+        { type: 'message', role: 'user', content: 'again' },
+      ],
+    }));
+
+    expect(out.messages).toEqual([
+      { role: 'user', content: 'start' },
+      { role: 'user', content: 'again' },
+    ]);
+  });
+
+  it('keeps an assistant history item whose empty content carries unsupported fields (#9344)', () => {
+    expect(() => translateResponsesRequest(base({
+      input: [
+        { type: 'message', role: 'assistant', content: null, tool_calls: [{ id: 'call_1' }] },
+      ],
+    }))).toThrow('input[0].content');
+  });
+
+  it('degrades an agent message without content instead of rejecting the request (#9344)', () => {
+    const out = translateResponsesRequest(base({
+      input: [
+        { type: 'message', role: 'user', content: 'start' },
+        { type: 'agent_message', author: 'researcher', content: null },
+      ],
+    }));
+
+    expect(out.messages).toEqual([
+      { role: 'user', content: 'start' },
+      { role: 'assistant', content: '[collab message from researcher; empty content]' },
+    ]);
   });
 
   it('keeps agent messages after the preceding tool result', () => {
@@ -828,6 +1057,79 @@ describe('translateResponsesRequest', () => {
     });
   });
 
+  it('compacts only oversized top-level custom exec descriptions', () => {
+    const execCatalog = `EXEC_CATALOG_START:${'nested-tool-doc;'.repeat(40_000)}:EXEC_CATALOG_END`;
+    const ordinaryFunctionDescription = `FUNCTION_DOCS_START:${'function-doc;'.repeat(8_000)}`;
+    const ordinaryCustomDescription = `CUSTOM_DOCS_START:${'custom-doc;'.repeat(8_000)}`;
+    const out = translateResponsesRequest(base({
+      tools: [
+        { type: 'custom', name: 'exec', description: execCatalog },
+        {
+          type: 'function',
+          name: 'large_function',
+          description: ordinaryFunctionDescription,
+          parameters: { type: 'object' },
+        },
+        { type: 'custom', name: 'large_custom', description: ordinaryCustomDescription },
+      ],
+      tool_choice: { type: 'custom', name: 'exec' },
+    }));
+
+    const execTool = out.tools?.[0]?.function;
+    expect(execTool).toMatchObject({
+      name: 'exec',
+      parameters: {
+        type: 'object',
+        properties: { input: { type: 'string', description: expect.any(String) } },
+        required: ['input'],
+      },
+    });
+    expect(execTool?.description).not.toContain('EXEC_CATALOG_START');
+    expect(execTool?.description).toContain('global `tools`');
+    expect(execTool?.description).toContain('`ALL_TOOLS`');
+    for (const protocol of [
+      '`await tools.<name>(...)`',
+      '`await tools.<namespace>__<name>(...)`',
+      '`yield_control()`',
+      '`exit()`',
+      '`text(...)`',
+      '`image(...)`',
+      '`audio(...)`',
+      '`generatedImage(...)`',
+      '`store(key, value)`',
+      '`load(key)`',
+      '`notify(value)`',
+    ]) {
+      expect(execTool?.description).toContain(protocol);
+    }
+    expect(execTool?.description).not.toContain('`await tools.<namespace>.<name>(...)`');
+    expect(Buffer.byteLength(JSON.stringify(out.tools?.[0]), 'utf8')).toBeLessThan(4_096);
+    expect(out.tool_choice).toEqual({ type: 'function', function: { name: 'exec' } });
+
+    expect(out.tools?.[1]?.function.description).toBe(ordinaryFunctionDescription);
+    const customDescription = out.tools?.[2]?.function.description ?? '';
+    expect(customDescription).toContain(ordinaryCustomDescription);
+    expect(customDescription.indexOf(ordinaryCustomDescription)).toBe(
+      customDescription.lastIndexOf(ordinaryCustomDescription),
+    );
+  });
+
+  it('does not apply the top-level exec adapter to a namespaced custom exec', () => {
+    const namespacedDescription = `NAMESPACED_EXEC:${'namespace-doc;'.repeat(4_000)}`;
+    const out = translateResponsesRequest(base({
+      tools: [{
+        type: 'namespace',
+        name: 'plugin',
+        tools: [{ type: 'custom', name: 'exec', description: namespacedDescription }],
+      }],
+    }));
+
+    expect(out.tools?.[0]?.function).toMatchObject({
+      name: 'plugin__exec',
+      description: expect.stringContaining(namespacedDescription),
+    });
+  });
+
   it('keeps the built-in tool-search adapter distinct from a user tool_search name', () => {
     const out = translateResponsesRequest(base({
       tools: [
@@ -843,6 +1145,22 @@ describe('translateResponsesRequest', () => {
     expect((out.messages[0] as {
       tool_calls?: Array<{ function: { name: string } }>;
     }).tool_calls?.[0]?.function.name).not.toBe('tool_search');
+  });
+
+  it('does not duplicate a large custom tool description in Chat metadata', () => {
+    const description = 'x'.repeat(200);
+    const out = translateResponsesRequest(base({
+      tools: [{
+        type: 'custom',
+        name: 'exec',
+        description,
+        format: { type: 'text' },
+      }],
+    }));
+    const chatDescription = out.tools?.[0]?.function.description ?? '';
+    expect(chatDescription.split(description)).toHaveLength(2);
+    expect(chatDescription).toContain('"format":{"type":"text"}');
+    expect(chatDescription).not.toContain(`"description":"${description}"`);
   });
 
   it('keeps function and custom tools with the same name distinct', () => {
@@ -1172,18 +1490,26 @@ describe('translateResponsesRequest', () => {
     }), { capabilities: { imageInput: 'image_url' } })).toThrow('input_image.file_id');
   });
 
-  it('rejects unsupported media inside tool results instead of serializing it as text', () => {
+  it('replaces unsupported media inside tool results with a placeholder instead of rejecting (#2805)', () => {
+    // 行为变更(#2805):此前对工具结果里的不支持媒体 fail-closed 抛错,
+    // 压缩 / 重放历史带回的媒体会让会话每轮被拒、彻底卡死 —— 改为占位
+    // 降级,且不把原始媒体数据序列化进文本。
     for (const part of [
       { type: 'input_image', image_url: 'https://example.com/image.png' },
       { type: 'input_file', file_data: 'BASE64' },
       { type: 'input_audio', input_audio: { data: 'BASE64', format: 'wav' } },
     ]) {
-      expect(() => translateResponsesRequest(base({
+      const out = translateResponsesRequest(base({
         input: [
           { type: 'function_call', call_id: 'c1', name: 'inspect', arguments: '{}' },
           { type: 'function_call_output', call_id: 'c1', output: [part] },
+          { type: 'message', role: 'user', content: 'continue' },
         ],
-      }))).toThrow(part.type);
+      }));
+      const tool = out.messages.find((m) => m.role === 'tool') as { content: string };
+      expect(tool.content).toContain('[media omitted');
+      expect(tool.content).not.toContain('BASE64');
+      expect(tool.content).not.toContain('example.com');
     }
   });
 

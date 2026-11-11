@@ -10,8 +10,8 @@
  *      (foreignObject 序列化)光栅化;web font(KaTeX 字体等)必须内联,
  *      否则 SVG-as-image 渲染时回退系统字体——首次收集后模块级缓存。
  *
- * 剪贴板走 `copyPngBlobToClipboard`(纯内存 ClipboardItem,不落盘,不涉及
- * cindy-media 总仓;与 ImageLightbox.handleCopyImage 同一范式)。
+ * 剪贴板走 `copyPngBlobToClipboard`(原生剪贴板,纯内存,不落盘,
+ * 不涉及 cindy-media 总仓)。
  */
 
 import { getFontEmbedCSS, toBlob as domNodeToBlob } from 'html-to-image';
@@ -29,38 +29,45 @@ export const EXPORT_PNG_SCALE = 3;
  */
 export const EXPORT_MAX_EDGE_PX = 4096;
 
+/** 输出像素总量上限:与 4096×4096 位图保持同一约 64MB 内存预算。 */
+export const EXPORT_MAX_OUTPUT_PIXELS = EXPORT_MAX_EDGE_PX * EXPORT_MAX_EDGE_PX;
+
 /**
- * 倍率收敛(纯函数,单测覆盖):目标倍率对 4096 边长上限取 min。maxEdge 是
- * **硬上限**(内存保护是第一目标):内容本身超长时倍率允许任意小,产物是
- * 一张有界的整体缩略图——绝不为可读性抬高倍率突破上限(review P1:钳 0.1
- * 下界会让 50000px 内容导出 5000px 位图,内存峰值超设计值)。
+ * 倍率收敛(纯函数,单测覆盖):目标倍率同时受最长边与输出像素总量约束。
+ * 两个限制都是**硬上限**(内存保护是第一目标):内容本身超长时倍率允许任意小,
+ * 产物是一张有界的整体缩略图——绝不为可读性抬高倍率突破上限(review P1:
+ * 钳 0.1 下界会让 50000px 内容导出 5000px 位图,内存峰值超设计值)。
  */
 export function computeExportScale(
   width: number,
   height: number,
   desiredScale: number = EXPORT_PNG_SCALE,
   maxEdge: number = EXPORT_MAX_EDGE_PX,
+  maxOutputPixels: number = EXPORT_MAX_OUTPUT_PIXELS,
 ): number {
   if (!Number.isFinite(width) || !Number.isFinite(height) || width <= 0 || height <= 0) {
     return 1;
   }
-  return Math.min(desiredScale, maxEdge / Math.max(width, height));
+  const edgeScale = maxEdge / Math.max(width, height);
+  const pixelScale = Math.sqrt(maxOutputPixels / (width * height));
+  return Math.min(desiredScale, edgeScale, pixelScale);
 }
 
 /**
  * 从 SVG 字符串解析固有尺寸(纯函数,单测覆盖):viewBox 优先(与显示期
  * CSS 收缩无关),缺 viewBox 时回退 width/height 属性(剥掉 px 单位)。
  */
-export function parseSvgIntrinsicSize(
-  svgText: string,
-): { width: number; height: number } | null {
+export function parseSvgIntrinsicSize(svgText: string): { width: number; height: number } | null {
   const container = document.createElement('div');
   container.innerHTML = svgText;
   const el = container.querySelector('svg');
   if (!el) return null;
   const vb = el.getAttribute('viewBox');
   if (vb) {
-    const parts = vb.trim().split(/[\s,]+/).map(Number);
+    const parts = vb
+      .trim()
+      .split(/[\s,]+/)
+      .map(Number);
     if (parts.length === 4 && parts[2] > 0 && parts[3] > 0) {
       return { width: parts[2], height: parts[3] };
     }
@@ -71,6 +78,20 @@ export function parseSvgIntrinsicSize(
     return { width: w, height: h };
   }
   return null;
+}
+
+/** 半透明背景(壁纸模式下的页面内面)叠在主题页底上合成为不透明色。 */
+function flattenOverSurface(bg: string): string {
+  if (bg.startsWith('rgb(')) return bg;
+  const ctx = document.createElement('canvas').getContext('2d', { willReadFrequently: true });
+  const surface = window.getComputedStyle(document.documentElement).getPropertyValue('--surface').trim();
+  if (!ctx || !surface) return bg;
+  ctx.fillStyle = surface;
+  ctx.fillRect(0, 0, 1, 1);
+  ctx.fillStyle = bg;
+  ctx.fillRect(0, 0, 1, 1);
+  const [r, g, b] = ctx.getImageData(0, 0, 1, 1).data;
+  return `rgb(${r}, ${g}, ${b})`;
 }
 
 /**
@@ -84,7 +105,7 @@ export function resolveExportBackground(from?: Element | null): string {
   while (el) {
     const bg = window.getComputedStyle(el).backgroundColor;
     if (bg && bg !== 'transparent' && !/^rgba\(\s*\d+\s*,\s*\d+\s*,\s*\d+\s*,\s*0\s*\)$/.test(bg)) {
-      return bg;
+      return flattenOverSurface(bg);
     }
     el = el.parentElement;
   }
@@ -104,7 +125,7 @@ export function resolveExportBackground(from?: Element | null): string {
  */
 export async function svgToPngBlob(
   svgText: string,
-  opts?: { scale?: number; background?: string },
+  opts?: { scale?: number; background?: string; fontFamily?: string },
 ): Promise<Blob> {
   const size = parseSvgIntrinsicSize(svgText);
   if (!size) throw new Error('svg has no usable size');
@@ -112,8 +133,22 @@ export async function svgToPngBlob(
   const outW = Math.max(1, Math.round(size.width * scale));
   const outH = Math.max(1, Math.round(size.height * scale));
 
+  // Mermaid returns HTML-serialized SVG: foreignObject labels can contain
+  // HTML void tags (<br>) that render inline but are invalid SVG/XML images.
+  // Parse in an inert template, then serialize namespaces and void elements
+  // as XML. Keep the rendered labels/styles; do not re-render with htmlLabels
+  // disabled or weaken Mermaid's securityLevel / the image CSP.
+  const template = document.createElement('template');
+  template.innerHTML = svgText;
+  const svg = template.content.querySelector('svg');
+  if (!svg) throw new Error('svg missing');
+  svg.setAttribute('width', String(size.width));
+  svg.setAttribute('height', String(size.height));
+  // SVG-as-image has no surrounding document to inherit its label font from.
+  svg.style.fontFamily = opts?.fontFamily ?? window.getComputedStyle(document.body).fontFamily;
+  const imageSvg = new XMLSerializer().serializeToString(svg);
   const image = new Image();
-  image.src = `data:image/svg+xml;charset=utf-8,${encodeURIComponent(svgText)}`;
+  image.src = `data:image/svg+xml;charset=utf-8,${encodeURIComponent(imageSvg)}`;
   await image.decode();
 
   const canvas = document.createElement('canvas');
@@ -125,9 +160,7 @@ export async function svgToPngBlob(
   ctx.fillRect(0, 0, outW, outH);
   ctx.drawImage(image, 0, 0, outW, outH);
 
-  const blob = await new Promise<Blob | null>((resolve) =>
-    canvas.toBlob(resolve, 'image/png'),
-  );
+  const blob = await new Promise<Blob | null>((resolve) => canvas.toBlob(resolve, 'image/png'));
   if (!blob) throw new Error('png encode failed');
   return blob;
 }
@@ -156,18 +189,29 @@ function getCachedFontEmbedCss(node: HTMLElement): Promise<string> {
 /**
  * HTML DOM 节点 → PNG Blob(表格 / 块级公式路径)。
  * - 尺寸取 `scrollWidth/scrollHeight`(宽表格取完整内容宽,不被可视口截断);
- * - 倍率经 computeExportScale 收敛(默认 2x——DOM 块以文字为主,2x 已够
- *   清晰,比 3x 省一半以上内存);
+ * - 倍率经 computeExportScale 按最长边与输出像素预算收敛(默认 2x——DOM 块以
+ *   文字为主,2x 已够清晰,比 3x 省一半以上内存);
  * - `await document.fonts.ready` + 内联 @font-face,保证 KaTeX 字形不回退。
  */
 export async function domToPngBlob(
   node: HTMLElement,
-  opts?: { scale?: number; background?: string },
+  opts?: {
+    scale?: number;
+    background?: string;
+    maxEdge?: number;
+    maxOutputPixels?: number;
+  },
 ): Promise<Blob> {
   const width = node.scrollWidth;
   const height = node.scrollHeight;
   if (width <= 0 || height <= 0) throw new Error('node has no size');
-  const scale = computeExportScale(width, height, opts?.scale ?? 2);
+  const scale = computeExportScale(
+    width,
+    height,
+    opts?.scale ?? 2,
+    opts?.maxEdge,
+    opts?.maxOutputPixels,
+  );
 
   await document.fonts.ready;
   const fontEmbedCSS = await getCachedFontEmbedCss(node);
@@ -184,21 +228,14 @@ export async function domToPngBlob(
 }
 
 /**
- * PNG Blob → 系统剪贴板。位图侧 ClipboardItem 仅接受 image/png(Chromium
- * 限制,与 ImageLightbox 同注);Electron/Chromium 跨平台统一实现,
- * macOS/Windows 无平台分叉。纯内存操作、不落盘。
+ * PNG Blob → 原生系统剪贴板。生成长图期间页面可能失焦,因此不能使用
+ * 要求 document focus 的 navigator.clipboard.write。macOS/Windows 共用
+ * Electron bridge,不抢焦点、不落盘。
  *
- * `plainText`(可选)与图片写进**同一个** ClipboardItem 作为 text/plain 备选
+ * `plainText`(可选)与图片在同一次原生写入中作为 text/plain 备选
  * 表示:粘贴目标按自己的偏好取格式——飞书/文档吃图片,代码编辑器/输入框吃
  * 源码(mermaid 源码 / 表格 TSV / 公式 LaTeX),一次复制两头可用。
  */
-export async function copyPngBlobToClipboard(
-  blob: Blob,
-  plainText?: string,
-): Promise<void> {
-  const representations: Record<string, Blob> = { 'image/png': blob };
-  if (plainText) {
-    representations['text/plain'] = new Blob([plainText], { type: 'text/plain' });
-  }
-  await navigator.clipboard.write([new ClipboardItem(representations)]);
+export async function copyPngBlobToClipboard(blob: Blob, plainText?: string): Promise<void> {
+  await window.electronAPI.copyPngToClipboard({ png: await blob.arrayBuffer(), plainText });
 }

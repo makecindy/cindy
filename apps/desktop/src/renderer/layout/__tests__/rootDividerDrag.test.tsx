@@ -1,11 +1,16 @@
 // @vitest-environment jsdom
-import { cleanup, fireEvent, render, screen } from '@testing-library/react';
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { createDefaultLayout, type Layout, type SplitNode } from '../../../shared/layoutTree';
-import { BuiltinPanelBridgeProvider, type BuiltinPanelBridge } from '../../panels/BuiltinPanelBridge';
+import {
+  BuiltinPanelBridgeProvider,
+  type BuiltinPanelBridge,
+} from '../../panels/BuiltinPanelBridge';
 import { __resetBuiltinPanelsForTest } from '../../panels/builtinPanels';
-import { __resetPanelRegistryForTest } from '../../panels/registry';
+import { __resetPanelRegistryForTest, registerPanelKind } from '../../panels/registry';
+import type { BrowserWindow } from 'electron';
+import { SidebarWindowExpansion } from '../../../main/sidebarWindowExpansion';
 import { LayoutRoot } from '../LayoutRoot';
 import { ContentAvailableWidthProvider, usePanelWidth } from '../paneWidths';
 
@@ -49,7 +54,12 @@ function treeWithUninstalledResidue(): Layout {
   split.children[1].fraction = 0.32108649782155757; // right-tabs
   split.children.unshift({
     fraction: 0.22,
-    node: { type: 'pane', id: 'ghost-project-opener', panelKind: 'ghost:project-opener', minWidth: 240 },
+    node: {
+      type: 'pane',
+      id: 'ghost-project-opener',
+      panelKind: 'ghost:project-opener',
+      minWidth: 240,
+    },
   });
   return layout;
 }
@@ -70,16 +80,41 @@ const bridge: BuiltinPanelBridge = {
   ),
 };
 
-function renderLayoutRoot() {
+function renderLayoutRoot(availableWidth = AVAIL) {
   return render(
     <BuiltinPanelBridgeProvider value={bridge}>
-      <ContentAvailableWidthProvider value={AVAIL}>
+      <ContentAvailableWidthProvider value={availableWidth}>
         <div data-testid="row">
           <LayoutRoot />
         </div>
       </ContentAvailableWidthProvider>
     </BuiltinPanelBridgeProvider>,
   );
+}
+
+function renderLayoutRootWithoutWidthHint() {
+  return render(
+    <BuiltinPanelBridgeProvider value={bridge}>
+      <div data-testid="row">
+        <LayoutRoot />
+      </div>
+    </BuiltinPanelBridgeProvider>,
+  );
+}
+
+function mockElementWidth(element: HTMLElement, width: number): void {
+  element.getBoundingClientRect = () =>
+    ({
+      width,
+      height: 0,
+      top: 0,
+      left: 0,
+      right: width,
+      bottom: 0,
+      x: 0,
+      y: 0,
+      toJSON: () => ({}),
+    }) as DOMRect;
 }
 
 /**
@@ -89,14 +124,19 @@ function renderLayoutRoot() {
 function mockPaneWidth(kind: string, width: number): void {
   const el = document.querySelector(`[data-panel-drag-root="${kind}"]`) as HTMLElement | null;
   expect(el).not.toBeNull();
-  el!.getBoundingClientRect = () =>
-    ({ width, height: 0, top: 0, left: 0, right: width, bottom: 0, x: 0, y: 0, toJSON: () => ({}) }) as DOMRect;
+  mockElementWidth(el!, width);
 }
 
 /** 把缝一路拖向左(右侧面板变宽)到抓不动为止,松手。 */
 function dragDividerLeft(container: HTMLElement, byPx: number): void {
-  const grab = container.querySelector('[data-testid="layout-divider"] > div');
-  expect(grab).not.toBeNull();
+  dragDividerLeftAt(container, byPx, 0);
+}
+
+/** 同上,指定第几条缝(多面板在场时缝不止一条)。 */
+function dragDividerLeftAt(container: HTMLElement, byPx: number, dividerIndex: number): void {
+  const grabs = container.querySelectorAll('[data-testid="layout-divider"] > div');
+  const grab = grabs[dividerIndex];
+  expect(grab).not.toBeFalsy();
   fireEvent.pointerDown(grab!, { button: 0, pointerId: 1, clientX: 1000 });
   fireEvent.pointerMove(document, { pointerId: 1, clientX: 1000 - byPx });
   fireEvent.pointerUp(document, { pointerId: 1, clientX: 1000 - byPx });
@@ -132,11 +172,31 @@ afterEach(() => {
 });
 
 describe('RootDivider 拖宽 · 在场份额口径', () => {
+  it('生产路径没有宽度提示时按内容区宽度换算拖动份额', () => {
+    const { container } = renderLayoutRootWithoutWidthHint();
+    mockElementWidth(screen.getByTestId('layout-root-content'), AVAIL);
+    const divider = screen.getByTestId('layout-divider');
+    mockElementWidth(divider, 1);
+
+    dragDividerLeft(container, AVAIL * 0.1);
+
+    expect(setCalls).toHaveLength(1);
+    const children = (setCalls[0].content as SplitNode).children;
+    expect(children[0].fraction).toBeCloseTo(0.4, 6);
+    expect(children[1].fraction).toBeCloseTo(0.6, 6);
+  });
+
   it('已卸载插件的残留份额不参与分配:右栏宽按在场份额算', () => {
     currentLayout = treeWithUninstalledResidue();
     renderLayoutRoot();
     // 在场份额 0.3211 / 0.78 = 0.4117 → 683px。按树上原始 fraction 只有 533px。
-    expect(Number(screen.getByTestId('w-right-tabs').textContent)).toBe(683);
+    const width = screen.getByTestId('w-right-tabs').textContent ?? '';
+    const preferredPercent = width.match(
+      /^clamp\(120px, ([\d.]+)cqw, calc\(100cqw - 400px\)\)$/,
+    )?.[1];
+    expect(preferredPercent).toBeDefined();
+    expect((Number(preferredPercent) / 100) * AVAIL).toBeCloseTo(683, 0);
+    expect(screen.getByTestId('layout-root-content').style.containerType).toBe('inline-size');
   });
 
   it('有卸载残留时把右栏拖到最大:松手后写树成功(不回弹),聊天流正好落在最小宽', () => {
@@ -153,6 +213,34 @@ describe('RootDivider 拖宽 · 在场份额口径', () => {
     expect(after['ghost:project-opener'].fraction).toBe(0.22);
     const sum = (setCalls[0].content as SplitNode).children.reduce((s, c) => s + c.fraction, 0);
     expect(sum).toBeCloseTo(1, 6);
+  });
+
+  it('120px clamp 自愈尚未执行时起拖，也从眼前宽度第一像素跟手', () => {
+    const layout = createDefaultLayout();
+    const split = layout.content as SplitNode;
+    split.children[0].fraction = 0.9;
+    split.children[1].fraction = 0.1;
+    currentLayout = layout;
+    const { container } = renderLayoutRoot(800);
+    mockPaneWidth('chat-main', 680);
+    mockPaneWidth('right-tabs', 120);
+
+    const grab = container.querySelector('[data-testid="layout-divider"] > div');
+    expect(grab).not.toBeNull();
+    fireEvent.pointerDown(grab!, { button: 0, pointerId: 1, clientX: 1000 });
+    fireEvent.pointerMove(document, { pointerId: 1, clientX: 992 });
+
+    const liveWidth = screen.getByTestId('w-right-tabs').textContent ?? '';
+    const liveShare = liveWidth.match(
+      /^clamp\(120px, ([\d.]+)cqw, calc\(100cqw - 400px\)\)$/,
+    )?.[1];
+    expect(Number(liveShare)).toBeCloseTo(16, 6);
+
+    fireEvent.pointerUp(document, { pointerId: 1, clientX: 992 });
+    expect(setCalls).toHaveLength(1);
+    const committed = (setCalls[0].content as SplitNode).children;
+    expect(committed[0].fraction).toBeCloseTo(0.84, 6);
+    expect(committed[1].fraction).toBeCloseTo(0.16, 6);
   });
 
   it('干净的两栏树:同样能把聊天流拖到最小宽,且写树成功', () => {
@@ -196,4 +284,194 @@ describe('RootDivider 拖宽 · 在场份额口径', () => {
     const givenShare = (realChatPx - CHAT_MIN) / AVAIL;
     expect(committedShares()['chat-main'].fraction).toBeCloseTo(0.6 - givenShare, 3);
   });
+
+  // 2026-08-17 实测:装了带面板的插件(insertRootSplitPane 把 chat 份额 0.5→0.4)
+  // 且右栏折叠成 0 宽 —— 右栏的 0.4 份额还记在账上,画面那块被弹性 chat 吸收
+  // (chat 实测 1328px)。旧口径里 chat 的可让空间被自己的 0.05 账本地板提前夹死,
+  // 缝停在 chat ≈ 747px 处,压不到 400px 产品下限;修复后差额由折叠右栏接力出账。
+  it('装插件 + 右栏折叠:chat 压到 400px,差额从折叠右栏的账上接力出账', () => {
+    const layout = createDefaultLayout();
+    const split = layout.content as SplitNode;
+    split.children[0].fraction = 0.4; // chat(装入 ghost ×0.8)
+    split.children[1].fraction = 0.4; // right-tabs
+    split.children.splice(1, 0, {
+      fraction: 0.2,
+      node: { type: 'pane', id: 'ghost-repro', panelKind: 'ghost:repro' },
+    });
+    currentLayout = layout;
+    registerPanelKind({
+      kind: 'ghost:repro',
+      collapseMemory: 'global',
+      Component: () => <div data-panel-drag-root="ghost:repro" />,
+    });
+    const { container } = renderLayoutRoot();
+    mockPaneWidth('chat-main', 1328); // 吸收了折叠右栏的空间
+    mockPaneWidth('right-tabs', 0); // 折叠成 0 宽,账上仍占 0.4
+    mockPaneWidth('ghost:repro', 332);
+    dragDividerLeft(container, 1000);
+
+    expect(setCalls).toHaveLength(1); // 接力写树成功,没回弹
+    const children = (setCalls[0].content as SplitNode).children;
+    expect(children[0].fraction).toBeCloseTo(0.05, 3); // chat 先扣到账本下限
+    expect(children[1].fraction).toBeCloseTo(0.759, 3); // 收方全额进账
+    expect(children[2].fraction).toBeCloseTo(0.191, 3); // 折叠右栏接力出账,仍 ≥ 0.05
+    expect(children.reduce((s, c) => s + c.fraction, 0)).toBeCloseTo(1, 6);
+    // 画面:chat = AVAIL − ghost 1260 − 折叠右栏 0 = 400,正好产品下限。
+    expect((1 - children[1].fraction) * AVAIL).toBeCloseTo(CHAT_MIN, 0);
+  });
+
+  // 用户现场树:chat 树份额已被历史拖动顶死在 0.05 下限,右栏折叠着(0.206)。
+  // 旧口径下压缩 chat 的账本余量为 0,缝一个像素都拖不动;修复后差额全部由
+  // 折叠右栏出账,chat 保住下限、画面落到 400px。
+  it('chat 树份额已顶死 0.05 的现场树:缝解冻,差额全部由折叠右栏出账', () => {
+    const layout = createDefaultLayout();
+    (layout.content as SplitNode).children = [
+      { fraction: 0.206, node: { type: 'pane', id: 'right', panelKind: 'right-tabs' } },
+      { fraction: 0.122, node: { type: 'pane', id: 'ghost-pr', panelKind: 'ghost:pr' } },
+      { fraction: 0.05, node: { type: 'pane', id: 'chat', panelKind: 'chat-main', minWidth: 400 } },
+      { fraction: 0.622, node: { type: 'pane', id: 'ghost-canvas', panelKind: 'ghost:canvas' } },
+    ];
+    currentLayout = layout;
+    for (const kind of ['ghost:pr', 'ghost:canvas']) {
+      registerPanelKind({
+        kind,
+        collapseMemory: 'global',
+        Component: () => <div data-panel-drag-root={kind} />,
+      });
+    }
+    const { container } = renderLayoutRoot();
+    mockPaneWidth('right-tabs', 0); // 折叠
+    mockPaneWidth('ghost:pr', 202);
+    mockPaneWidth('ghost:canvas', 1033);
+    mockPaneWidth('chat-main', 425); // 高于 400,但旧口径一个像素都拖不动
+    dragDividerLeftAt(container, 1000, 2); // 第 3 条缝 = chat | ghost:canvas
+
+    expect(setCalls).toHaveLength(1);
+    const children = (setCalls[0].content as SplitNode).children;
+    const moved = 25 / AVAIL; // chat 实测 425 → 只让 25px 就到产品下限
+    expect(children[2].fraction).toBeCloseTo(0.05, 6); // chat 无账可出,保下限
+    expect(children[0].fraction).toBeCloseTo(0.206 - moved, 6); // 折叠右栏接力出账
+    expect(children[3].fraction).toBeCloseTo(0.622 + moved, 6);
+    expect(children.reduce((s, c) => s + c.fraction, 0)).toBeCloseTo(1, 6);
+  });
+});
+
+
+it('keeps chat width during native resize, then drags the divider from the resized geometry', async () => {
+  let resolve!: (delta: number) => void;
+  window.electronAPI.windowSidebarExpansion = vi.fn(() => new Promise<number>((done) => { resolve = done; }));
+  const viewport = window.innerWidth;
+  const view = (collapsed: boolean) => (
+    <BuiltinPanelBridgeProvider value={bridge}>
+      <LayoutRoot rightTabsCollapsed={collapsed} />
+    </BuiltinPanelBridgeProvider>
+  );
+  const rendered = render(view(true));
+  const root = screen.getByTestId('layout-root-content');
+  mockElementWidth(root, 800);
+  rendered.rerender(view(false));
+  await act(async () => {
+    window.innerWidth = viewport + 800;
+    mockElementWidth(root, 1600);
+    resolve(800);
+  });
+  await waitFor(() => expect(screen.getByTestId('w-right-tabs').textContent)
+    .toBe('clamp(120px, calc(100cqw - 800px), calc(100cqw - 400px))'));
+
+  // Native resize grows the right pane from 800 to 1200; the CSS remainder
+  // keeps chat at 799px (including the 1px divider), without React resize state.
+  mockElementWidth(root, 2000);
+  window.innerWidth += 400;
+  fireEvent(window, new Event('resize'));
+  expect(screen.getByTestId('w-right-tabs').textContent)
+    .toBe('clamp(120px, calc(100cqw - 800px), calc(100cqw - 400px))');
+  mockPaneWidth('chat-main', 799);
+  mockPaneWidth('right-tabs', 1200);
+  dragDividerLeft(rendered.container, 100);
+  const content = setCalls.at(-1)!.content as SplitNode;
+  const right = content.children.find((child) => child.node.type === 'pane' && child.node.panelKind === 'right-tabs')!;
+  expect(right.fraction).toBeCloseTo(0.65); // 1300 / 2000, not the old 50% + 5%.
+  expect(screen.getByTestId('w-right-tabs').textContent)
+    .toBe('clamp(120px, calc(100cqw - 700px), calc(100cqw - 400px))');
+  window.innerWidth = viewport;
+});
+
+it('remembers native edge resizing and reopens at the saved pixel width', async () => {
+  let nativeResized: () => void = () => undefined;
+  window.electronAPI.onSidebarWindowUserResize = (callback) => { nativeResized = callback; return () => undefined; };
+  const expand = vi.fn(async () => 0);
+  window.electronAPI.windowSidebarExpansion = expand;
+  const view = (collapsed: boolean) => (
+    <BuiltinPanelBridgeProvider value={bridge}><LayoutRoot rightTabsCollapsed={collapsed} /></BuiltinPanelBridgeProvider>
+  );
+  const rendered = render(view(true));
+  const root = screen.getByTestId('layout-root-content');
+  mockElementWidth(root, 1200);
+  await act(async () => { rendered.rerender(view(false)); });
+  mockPaneWidth('chat-main', 699);
+  mockPaneWidth('right-tabs', 500);
+  act(() => nativeResized());
+  await waitFor(() => expect(setCalls.length).toBeGreaterThan(0));
+  const saved = setCalls.at(-1)!;
+  expect((saved.content as SplitNode).children[1].node).toHaveProperty('preferredWidth', 500);
+  await act(async () => { rendered.rerender(view(true)); });
+  await act(async () => { rendered.rerender(view(false)); });
+  expect(expand).toHaveBeenLastCalledWith(501);
+  expect(screen.getByTestId('w-right-tabs').textContent).toContain('calc(100cqw - 700px)');
+  // A constrained open/fullscreen resize alone never rewrites the explicit preference.
+  const count = setCalls.length;
+  mockElementWidth(root, 850);
+  mockPaneWidth('right-tabs', 350);
+  fireEvent(window, new Event('resize'));
+  expect(setCalls).toHaveLength(count);
+});
+
+// Unit regression for the full open → divider drag → close → reopen path.
+// Existing tests stubbed native growth to zero or never reopened after dragging,
+// so they could not detect a changed total width despite saved panel pixels.
+it('reopens with the same combined width and divider allocation', async () => {
+  const viewport = window.innerWidth;
+  let bounds = { x: 0, y: 0, width: 800, height: 800 };
+  const native = {
+    isDestroyed: () => false, isMaximized: () => false,
+    isFullScreen: () => false, isSimpleFullScreen: () => false,
+    getBounds: () => ({ ...bounds }),
+    setBounds: (next: typeof bounds) => { bounds = next; window.innerWidth = next.width; },
+  } as unknown as BrowserWindow;
+  const controller = new SidebarWindowExpansion();
+  window.innerWidth = bounds.width;
+  window.electronAPI.windowSidebarExpansion = async (width) =>
+    controller.update(native, width, { x: 0, y: 0, width: 3000, height: 1200 });
+  const frames: FrameRequestCallback[] = [];
+  const raf = vi.spyOn(window, 'requestAnimationFrame').mockImplementation((callback) => {
+    frames.push(callback); return frames.length;
+  });
+  const view = (collapsed: boolean) => (
+    <BuiltinPanelBridgeProvider value={bridge}><LayoutRoot rightTabsCollapsed={collapsed} /></BuiltinPanelBridgeProvider>
+  );
+  try {
+    const rendered = render(view(true));
+    const root = screen.getByTestId('layout-root-content');
+    root.getBoundingClientRect = () => ({ width: bounds.width }) as DOMRect;
+    const toggle = async (collapsed: boolean) => {
+      await act(async () => { rendered.rerender(view(collapsed)); });
+      act(() => { frames.splice(0).forEach((callback) => callback(0)); });
+    };
+    await toggle(false);
+    const expanded = bounds.width;
+    mockPaneWidth('chat-main', expanded / 2 - 1);
+    mockPaneWidth('right-tabs', expanded / 2);
+    dragDividerLeft(rendered.container, 100);
+    const allocation = screen.getByTestId('w-right-tabs').textContent;
+    const saved = structuredClone(currentLayout);
+    await toggle(true);
+    expect(bounds.width).toBe(800);
+    await toggle(false);
+    expect(bounds.width).toBe(expanded);
+    expect(screen.getByTestId('w-right-tabs').textContent).toBe(allocation);
+    expect(currentLayout).toEqual(saved);
+  } finally {
+    raf.mockRestore();
+    window.innerWidth = viewport;
+  }
 });

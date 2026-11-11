@@ -12,6 +12,7 @@ export interface TurnContinuationEventLike {
   type?: unknown;
   data?: unknown;
   turnContinuationId?: unknown;
+  turnScope?: unknown;
 }
 
 export function isTurnContinuationBoundaryEvent(
@@ -34,6 +35,7 @@ export function isProductTurnCompletionTailEvent(
   event: TurnContinuationEventLike | null | undefined,
 ): boolean {
   if (!event || isTurnContinuationBoundaryEvent(event)) return false;
+  if (event.turnScope === 'background') return false;
   if (event.type === 'done') return true;
   if (event.type !== 'status' || !isRecord(event.data)) return false;
   return event.data.isRunning === false && event.data.status === 'Done';

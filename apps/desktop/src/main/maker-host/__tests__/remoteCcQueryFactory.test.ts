@@ -24,6 +24,19 @@ const ccManagerClientSource = readFileSync(
 ).replace(/\r\n?/g, '\n');
 
 describe('remoteCcQueryFactory cleanup wiring', () => {
+  it('finalizes OAuth Auto after MCP injection and before opening the remote query', () => {
+    const injection = source.indexOf('mutableParams.mcpServers =');
+    const finalize = source.indexOf(
+      'routeInjectedRemoteMcpApprovalsThroughCindy(startParams, injectedServerCount)',
+      injection,
+    );
+    const openCall = source.indexOf('return await openCcManagerSession({', finalize);
+
+    expect(injection).toBeGreaterThan(-1);
+    expect(finalize).toBeGreaterThan(injection);
+    expect(openCall).toBeGreaterThan(finalize);
+  });
+
   it('calls mcpCleanup before rethrowing when openCcManagerSession fails', () => {
     const openCall = source.indexOf('return await openCcManagerSession({');
     expect(openCall).toBeGreaterThan(-1);
@@ -46,8 +59,17 @@ describe('remoteCcQueryFactory cleanup wiring', () => {
     // 验收实锤回归:factory 必须把 maker-core 透传的 vendorOptions 交给
     // buildCcRemoteHttpMcpServers — worker 首次创建时 DB 标记未写, 现场
     // 查库会 fail-closed 掉 send_to_lead。
-    const destructure = source.indexOf('startParams, vendorOptions, onApprovalRequest');
-    expect(destructure).toBeGreaterThan(-1);
+    const destructureStart = source.indexOf('remoteCcQueryFactory: async ({');
+    const destructureEnd = source.indexOf('}) => {', destructureStart);
+    expect(destructureStart).toBeGreaterThan(-1);
+    expect(destructureEnd).toBeGreaterThan(destructureStart);
+    const destructure = source.slice(destructureStart, destructureEnd);
+    const startParams = destructure.indexOf('startParams,');
+    const vendorOptions = destructure.indexOf('vendorOptions,');
+    const approvalRequest = destructure.indexOf('onApprovalRequest,');
+    expect(startParams).toBeGreaterThan(-1);
+    expect(vendorOptions).toBeGreaterThan(startParams);
+    expect(approvalRequest).toBeGreaterThan(vendorOptions);
     const buildArgs = source.indexOf("workingDir: typeof startParams.cwd === 'string' ? startParams.cwd : '',");
     expect(buildArgs).toBeGreaterThan(-1);
     const passDown = source.indexOf('vendorOptions,', buildArgs);

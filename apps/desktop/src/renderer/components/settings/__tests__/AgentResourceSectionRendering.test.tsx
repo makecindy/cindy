@@ -33,6 +33,19 @@ vi.mock('@/components/ui/switch', () => ({
   ),
 }));
 
+/**
+ * 档位提示的四段文案全部常挂载(叠在同一 grid 格里防布局抖动),只有当前档位那段
+ * 可见 —— 因此断言必须看可见性,不能看存在性(getByText 对四段一律成立)。
+ * 同时校验"有且仅有一段可见",防止叠放层的显隐条件写错导致两段同时露出。
+ */
+function visiblePresetHint(): string | null {
+  const shown = Array.from(document.querySelectorAll('[data-preset-hint]')).filter(
+    (el) => el.getAttribute('aria-hidden') !== 'true',
+  );
+  expect(shown).toHaveLength(1);
+  return shown[0]?.textContent ?? null;
+}
+
 type WireShape = {
   maxConcurrentCommands: number;
   processPriority: 'normal' | 'low' | 'lowest';
@@ -93,9 +106,13 @@ describe('AgentResourceSection', () => {
     });
     const fullBtn = screen.getByText('settings.agentResource.presets.full');
     expect(fullBtn.getAttribute('aria-checked')).toBe('true');
-    expect(screen.getByText('settings.agentResource.presetHints.full')).toBeTruthy();
+    expect(visiblePresetHint()).toBe('settings.agentResource.presetHints.full');
     const numberInput = screen.getByRole('spinbutton') as HTMLInputElement;
     expect(numberInput.value).toBe('0');
+    // DS-4 前数字框消费过这些局部主题键；迁标准件不能丢掉用户覆盖。
+    expect(numberInput.className).toContain('text-[var(--settings-input-text)]');
+    expect(numberInput.className).toContain('border-[var(--settings-input-border)]');
+    expect(numberInput.className).toContain('focus:border-[var(--settings-input-border-focus)]');
     expect(screen.getByRole('switch').getAttribute('aria-checked')).toBe('false');
   });
 
@@ -133,7 +150,7 @@ describe('AgentResourceSection', () => {
     render(<AgentResourceSection />);
 
     await waitFor(() => {
-      expect(screen.getByText('settings.agentResource.presetHints.custom')).toBeTruthy();
+      expect(visiblePresetHint()).toBe('settings.agentResource.presetHints.custom');
     });
     for (const preset of ['full', 'balanced', 'background']) {
       expect(

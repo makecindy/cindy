@@ -15,7 +15,13 @@ import type { InstalledGhost } from '../../../shared/ghost';
 
 function ghost(
   id: string,
-  opts: { enabled?: boolean; slots?: string[]; badge?: boolean } = {},
+  opts: {
+    enabled?: boolean;
+    notify?: boolean;
+    badge?: boolean;
+    namespace?: string | null;
+    dir?: string;
+  } = {},
 ): InstalledGhost {
   const badge = opts.badge ?? true;
   return {
@@ -26,11 +32,14 @@ function ghost(
       version: '1.0.0',
       kind: 'chip',
       entry: 'main.js',
-      slots: badge ? [...(opts.slots ?? ['panel', 'notify']), 'badge'] : (opts.slots ?? ['panel', 'notify']),
+      panel: { html: 'panel.html' },
+      ...(opts.notify === false ? {} : { notify: true }),
+      ...(badge ? { badge: true } : {}),
 
     },
-    dir: `/fake/${id}`,
+    dir: opts.dir ?? `/fake/${id}`,
     enabled: opts.enabled ?? true,
+    ...(Object.hasOwn(opts, 'namespace') ? { namespace: opts.namespace } : {}),
   } as InstalledGhost;
 }
 
@@ -39,8 +48,8 @@ describe('ghostUnreadProjection', () => {
     expect(ghostDeclaresBadge(ghost('a'))).toBe(true);
     expect(ghostDeclaresBadge(ghost('a', { enabled: false }))).toBe(true);
     expect(ghostDeclaresBadge(ghost('a', { badge: false }))).toBe(false);
-    // 没有 notify 槽照样算数——绿点与 toast 是并列的两档权限。
-    expect(ghostDeclaresBadge(ghost('a', { slots: ['panel'] }))).toBe(true);
+    // 没有 notify 能力照样算数——绿点与 toast 是并列的两档权限。
+    expect(ghostDeclaresBadge(ghost('a', { notify: false }))).toBe(true);
     expect(ghostDeclaresBadge(null)).toBe(false);
   });
 
@@ -56,12 +65,37 @@ describe('ghostUnreadProjection', () => {
     expect(selectRevokedGhostUnreadIds(entries, [ghost('a', { enabled: false })])).toEqual([]);
   });
 
+  it.each([true, false])('已迁移的组织插件按物理实例保留未读, enabled=%s', (enabled) => {
+    const installed = ghost('helper', {
+      enabled, namespace: 'acme', dir: '/fake/_ns/acme/helper',
+    });
+    expect(selectRevokedGhostUnreadIds([{ ghostId: '_ns__acme__helper' }], [installed], true))
+      .toEqual([]);
+  });
+
+  it.each([undefined, null, 'acme'])('未搬迁的实例按原物理键保留未读, namespace=%s', (namespace) => {
+    const installed = ghost('helper', { namespace });
+    expect(selectRevokedGhostUnreadIds([{ ghostId: 'helper' }], [installed], true)).toEqual([]);
+  });
+
+  it('同名 root 与组织实例的权限分别撤销,不会互相保留或误删', () => {
+    const entries = [{ ghostId: 'helper' }, { ghostId: '_ns__acme__helper' }];
+    const root = ghost('helper', { namespace: null });
+    const organization = ghost('helper', { namespace: 'acme', dir: '/fake/_ns/acme/helper' });
+    expect(selectRevokedGhostUnreadIds(entries, [
+      ghost('helper', { namespace: null, badge: false }), organization,
+    ], true)).toEqual(['helper']);
+    expect(selectRevokedGhostUnreadIds(entries, [
+      root, ghost('helper', { namespace: 'acme', dir: '/fake/_ns/acme/helper', badge: false }),
+    ], true)).toEqual(['_ns__acme__helper']);
+  });
+
   it('能力撤销进撤销名单:更新后不再声明 badge / 包已卸载', () => {
     const entries = [{ ghostId: 'revoked' }, { ghostId: 'noslot' }, { ghostId: 'gone' }, { ghostId: 'ok' }];
     const ids = selectRevokedGhostUnreadIds(entries, [
       ghost('revoked', { badge: false }),
-      // 只丢了 notify 槽但 badge 还在 → **不算**撤销(两档权限彼此独立)。
-      ghost('noslot', { slots: ['panel'] }),
+      // 只丢了 notify 但 badge 还在 → **不算**撤销(两档权限彼此独立)。
+      ghost('noslot', { notify: false }),
       ghost('ok'),
     ]);
     expect(ids.sort()).toEqual(['gone', 'revoked']);

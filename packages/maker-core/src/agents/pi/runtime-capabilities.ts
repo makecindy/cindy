@@ -1,10 +1,13 @@
 import type { PiRpcResponse } from './rpc-client.js';
+import fs from 'node:fs';
+import path from 'node:path';
 import type {
   PiRuntimeCapabilityError,
   PiRuntimeCapabilityErrorStage,
   PiRuntimeCapabilityManifest,
   PiRuntimeCommand,
   PiRuntimeCommandSourceInfo,
+  PiManagedPackageSkillRuntimeSnapshot,
 } from '../../types/pi-runtime-capabilities.js';
 
 const MAX_RESPONSE_BYTES = 256_000;
@@ -70,7 +73,6 @@ export function parsePiRuntimeCommands(data: unknown): RuntimeCommandParseResult
   }
   if (serializedLength > MAX_RESPONSE_BYTES) return { ok: false };
 
-  const seen = new Set<string>();
   const parsed: PiRuntimeCommand[] = [];
   for (const value of commands) {
     if (typeof value !== 'object' || value === null || Array.isArray(value)) return { ok: false };
@@ -81,12 +83,11 @@ export function parsePiRuntimeCommands(data: unknown): RuntimeCommandParseResult
     const name = boundedString(raw.name, MAX_NAME_LENGTH);
     const source = boundedString(raw.source, MAX_SOURCE_LENGTH);
     const sourceInfo = parseSourceInfo(raw.sourceInfo);
-    if (!name || !source || !sourceInfo || seen.has(name)) return { ok: false };
+    if (!name || !source || !sourceInfo) return { ok: false };
     const description = raw.description === undefined
       ? undefined
       : boundedString(raw.description, MAX_DESCRIPTION_LENGTH);
     if (raw.description !== undefined && !description) return { ok: false };
-    seen.add(name);
     parsed.push({
       name,
       ...(description ? { description } : {}),
@@ -97,9 +98,155 @@ export function parsePiRuntimeCommands(data: unknown): RuntimeCommandParseResult
   return { ok: true, commands: parsed };
 }
 
+function isPathWithin(root: string, candidate: string): boolean {
+  if (!path.isAbsolute(root) || !path.isAbsolute(candidate)) return false;
+  const relative = path.relative(path.resolve(root), path.resolve(candidate));
+  return relative === '' || (!relative.startsWith(`..${path.sep}`) && !path.isAbsolute(relative));
+}
+
+function commandSourcePaths(sourceInfo: PiRuntimeCommandSourceInfo): string[] {
+  const values = [sourceInfo.path, sourceInfo.source, sourceInfo.origin]
+    .filter((value): value is string => typeof value === 'string' && path.isAbsolute(value));
+  if (sourceInfo.baseDir && path.isAbsolute(sourceInfo.baseDir)) {
+    values.push(sourceInfo.baseDir);
+    if (sourceInfo.path && !path.isAbsolute(sourceInfo.path)) {
+      values.push(path.resolve(sourceInfo.baseDir, sourceInfo.path));
+    }
+  }
+  return values;
+}
+
+/**
+ * Mark only commands whose Pi-owned provenance points inside an enabled
+ * Cindy-managed package root. The result is later used both by the palette and
+ * by the prompt escape boundary; static filenames alone never authorize an
+ * extension command.
+ */
+export function identifyManagedPiPackageCommandNames(
+  commands: readonly PiRuntimeCommand[],
+  packageRoots: readonly string[],
+): string[] {
+  const roots = packageRoots.filter(path.isAbsolute).map((root) => path.resolve(root));
+  if (roots.length === 0) return [];
+  const provenanceByName = new Map<string, boolean[]>();
+  for (const command of commands) {
+    const managed = commandSourcePaths(command.sourceInfo)
+      .some((candidate) => roots.some((root) => isPathWithin(root, candidate)));
+    const provenance = provenanceByName.get(command.name) ?? [];
+    provenance.push(managed);
+    provenanceByName.set(command.name, provenance);
+  }
+  // Pi may legitimately expose an Extension command and a Prompt with the
+  // same name. Authorize that name only when every colliding catalog entry is
+  // from a managed package; mixed provenance could dispatch a Cindy internal
+  // or user command instead of the package command shown in the menu.
+  return [...provenanceByName.entries()].flatMap(([name, provenance]) => (
+    provenance.length > 0 && provenance.every(Boolean) ? [name] : []
+  ));
+}
+
+function canonicalRuntimePath(value: string): string {
+  const resolved = path.resolve(value);
+  return process.platform === 'win32' ? resolved.toLowerCase() : resolved;
+}
+
+function managedSkillCommandMatchesSource(command: PiRuntimeCommand, sourcePath: string): boolean {
+  if (command.source !== 'skill' || !command.name.startsWith('skill:') || !path.isAbsolute(sourcePath)) return false;
+  const expectedFile = canonicalRuntimePath(sourcePath);
+  const commandFile = command.sourceInfo.path;
+  if (commandFile && path.isAbsolute(commandFile) && canonicalRuntimePath(commandFile) === expectedFile) return true;
+  const commandBaseDir = command.sourceInfo.baseDir;
+  return path.basename(sourcePath).toLowerCase() === 'skill.md'
+    && typeof commandBaseDir === 'string'
+    && path.isAbsolute(commandBaseDir)
+    && canonicalRuntimePath(commandBaseDir) === canonicalRuntimePath(path.dirname(sourcePath));
+}
+
+function canonicalExistingRuntimePath(value: string): string {
+  let resolved: string;
+  try {
+    resolved = fs.realpathSync.native(value);
+  } catch {
+    resolved = path.resolve(value);
+  }
+  return process.platform === 'win32' ? resolved.toLowerCase() : resolved;
+}
+
+function piSkillCommandMatchesPinnedPath(command: PiRuntimeCommand, skillFile: string): boolean {
+  if (command.source !== 'skill' || !path.isAbsolute(skillFile)) return false;
+  const expected = canonicalExistingRuntimePath(skillFile);
+  const candidates = [
+    command.sourceInfo.path,
+    typeof command.sourceInfo.baseDir === 'string'
+      ? path.join(command.sourceInfo.baseDir, 'SKILL.md')
+      : undefined,
+  ];
+  return candidates.some((candidate) => (
+    typeof candidate === 'string'
+    && path.isAbsolute(candidate)
+    && canonicalExistingRuntimePath(candidate) === expected
+  ));
+}
+
+/**
+ * Bind one Host-attested invocation to Pi's frozen runtime catalog. Pi only
+ * executes Skills through /skill:name, so normalize Cindy's aliases after
+ * proving that the sole runtime winner has the same physical SKILL.md path.
+ */
+export function preparePinnedPiSkillInvocation(
+  text: string,
+  pinnedSkill: { readonly name: string; readonly path: string },
+  manifest: PiRuntimeCapabilityManifest | undefined,
+): string {
+  const invocation = /^\/(?:(?:skill|cindy):)?([^\s/]+)([\s\S]*)$/i.exec(text.trim());
+  if (!invocation?.[1] || invocation[1].toLowerCase() !== pinnedSkill.name.toLowerCase()) {
+    throw new Error('The pinned Skill does not match the Pi command');
+  }
+  if (manifest?.status !== 'loaded') {
+    throw new Error('Pi runtime Skill provenance is unavailable');
+  }
+  const runtimeName = `skill:${pinnedSkill.name}`.toLowerCase();
+  const winners = manifest.commands.filter((command) => command.name.toLowerCase() === runtimeName);
+  if (
+    winners.length !== 1
+    || !piSkillCommandMatchesPinnedPath(winners[0]!, pinnedSkill.path)
+  ) {
+    throw new Error('The pinned Skill does not match the Pi runtime winner');
+  }
+  return `/${winners[0]!.name}${invocation[2] ?? ''}`;
+}
+
+/**
+ * Freeze the managed-skill roster passed to one runtime and attach a command
+ * name only when that runtime's own catalog proves an unambiguous loaded match.
+ */
+export function snapshotManagedPiPackageSkills(
+  skills: readonly { path: string; name: string; description?: string }[],
+  commands: readonly PiRuntimeCommand[],
+  managedPackageCommandNames: readonly string[],
+): PiManagedPackageSkillRuntimeSnapshot[] {
+  const managedNames = new Set(managedPackageCommandNames);
+  return skills.map((skill) => {
+    const matches = [...new Set(commands.flatMap((command) => (
+      managedNames.has(command.name) && managedSkillCommandMatchesSource(command, skill.path)
+        ? [command.name]
+        : []
+    )))];
+    return {
+      sourcePath: skill.path,
+      name: skill.name,
+      ...(skill.description ? { description: skill.description } : {}),
+      ...(matches.length === 1 ? { runtimeCommandName: matches[0] } : {}),
+    };
+  });
+}
+
 function classifyExplicitRpcFailure(raw: string): Pick<PiRuntimeCapabilityError, 'code' | 'message'> {
-  const text = raw.toLowerCase();
-  if (text.includes('unknown command') || text.includes('unsupported') || text.includes('not supported')) {
+  // Pi answers an unrecognized RPC type with exactly `Unknown command: ${type}`
+  // (coding-agent rpc-mode.ts). That is the only "this build has no get_commands"
+  // signal. Matching "unsupported" or "not supported" anywhere also catches
+  // provider parameter errors and extension UI failures.
+  if (raw.trim().toLowerCase() === 'unknown command: get_commands') {
     return { code: 'unsupported', message: 'Pi does not support runtime command discovery' };
   }
   return { code: 'rpc_failed', message: 'Pi runtime command discovery was rejected' };
@@ -212,4 +359,52 @@ export async function capturePiRuntimeCapabilityManifest(
     const failure = classifyTransportFailure(error instanceof Error ? error.message : 'rpc failed');
     return errorManifest(identity, generation, stage, failure, statusForFailureCode(failure.code));
   }
+}
+
+/**
+ * Bridge MCP 初始化在扩展加载期内同步占用 ready 窗口:每个 server 的 startup
+ * 预算默认 10s(可配至 30s),而单次采集的请求超时只有 5s —— 宿主侧任何
+ * 慢/黑洞 MCP 都会让首次采集超时(2026-11-09 实报:新任务打字预热后项目
+ * Skill 永远灰)。所以在非 loaded 结果上带退避重试,覆盖 bridge 的预算上界。
+ * 每个 attempt 的结果都经 onAttemptFailed 即时上报(调用方应即时发布,
+ * 让面板先看到 failed/unknown 而不是长时间 undefined);isFinalAttempt=true
+ * 表示重试已耗尽且不会再有下一次采集,调用方应升级为 warn。
+ */
+export const PI_RUNTIME_CAPABILITY_RETRY_DELAYS_MS = [4_000, 10_000, 20_000] as const;
+
+export async function capturePiRuntimeCapabilitiesWithRetry(
+  requester: Parameters<typeof capturePiRuntimeCapabilityManifest>[0],
+  identity: { sessionId?: string; sdkSessionId?: string },
+  generation: number,
+  stage: PiRuntimeCapabilityErrorStage,
+  opts: {
+    retryDelaysMs?: readonly number[];
+    sleep?: (delayMs: number) => Promise<void>;
+    /** 会话已关闭或刷新已被更新代接替时中止重试。 */
+    isCurrent?: () => boolean;
+    onAttemptFailed?: (manifest: PiRuntimeCapabilityManifest, attempt: number, isFinalAttempt: boolean) => void;
+  } = {},
+): Promise<PiRuntimeCapabilityManifest> {
+  const retryDelaysMs = opts.retryDelaysMs ?? PI_RUNTIME_CAPABILITY_RETRY_DELAYS_MS;
+  const sleep = opts.sleep
+    ?? ((delayMs: number) => new Promise<void>((resolve) => {
+      // 后台自愈重试不应托住进程退出。
+      const timer = setTimeout(resolve, delayMs);
+      timer.unref?.();
+    }));
+  let manifest = await capturePiRuntimeCapabilityManifest(requester, identity, generation, stage);
+  let attempt = 0;
+  while (manifest.status !== 'loaded') {
+    attempt += 1;
+    // 每次失败的采集都要上报(含最后一次);isFinalAttempt 只在不会再有
+    // 下一次采集时为 true —— 否则「放弃」日志先于真正的末次尝试出现,
+    // 末次成功留下错误的放弃记录、末次失败反而无日志(Greptile/Codex P2)。
+    const isFinalAttempt = attempt > retryDelaysMs.length;
+    opts.onAttemptFailed?.(manifest, attempt, isFinalAttempt);
+    if (isFinalAttempt || (opts.isCurrent && !opts.isCurrent())) return manifest;
+    await sleep(retryDelaysMs[attempt - 1]!);
+    if (opts.isCurrent && !opts.isCurrent()) return manifest;
+    manifest = await capturePiRuntimeCapabilityManifest(requester, identity, generation, stage);
+  }
+  return manifest;
 }

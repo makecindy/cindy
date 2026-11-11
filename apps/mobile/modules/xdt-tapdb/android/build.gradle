@@ -15,6 +15,7 @@ android {
 
   defaultConfig {
     minSdkVersion 23
+    consumerProguardFiles 'consumer-rules.pro'
   }
 }
 

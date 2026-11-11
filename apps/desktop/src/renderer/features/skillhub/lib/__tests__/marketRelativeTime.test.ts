@@ -18,6 +18,11 @@ describe('market relative time i18n', () => {
       expect(formatMarketRelativeTime('2026-06-11T09:00:00.000Z', i18n.t, NOW)).toBe('3 小时前');
       expect(formatMarketRelativeTime('2026-06-10T09:00:00.000Z', i18n.t, NOW)).toBe('昨天');
       expect(formatMarketRelativeTime('2026-06-11T11:59:45.000Z', i18n.t, NOW)).toBe('刚刚');
+
+      await i18n.changeLanguage('en');
+      expect(formatMarketRelativeTime('2026-06-11T09:00:00.000Z', i18n.t, NOW)).toBe('3 hours ago');
+      expect(formatMarketRelativeTime('2026-06-10T09:00:00.000Z', i18n.t, NOW)).toBe('yesterday');
+      expect(formatMarketRelativeTime('2026-06-11T11:59:45.000Z', i18n.t, NOW)).toBe('just now');
     } finally {
       await i18n.changeLanguage(previousLanguage);
     }

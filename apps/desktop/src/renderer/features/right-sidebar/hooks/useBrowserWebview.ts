@@ -4,8 +4,9 @@
  * 给定 tabId,从模块级 BrowserWebviewPool 取 / 创建对应的 wrapper + webview 实例,
  * 返回:
  *   - `wrapper`: webview 外层 DOM 节点;caller 应在自己的 body slot 里用
- *     `useLayoutEffect` + `slot.appendChild(wrapper)` 挂上,return cleanup 时
- *     把 wrapper 挪回 pool 的停车区(`pool.acquire().wrapper.parentNode = pool.container`)。
+ *     `useLayoutEffect` + `slot.appendChild(wrapper)` 首次附着。切换时保持宿主
+ *     常驻、wrapper 留在原 slot；真正卸载时仅把仍归 pool 的 wrapper 停回
+ *     停车区暂存 DOM，不能以此保证 guest / 页面状态保留。
  *   - 命令式 actions:`navigate / reload / goBack / goForward / stop`
  *   - 反应式 state:`url / title / favicon / isLoading / canGoBack / canGoForward`,
  *     变更触发 React re-render
@@ -29,6 +30,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import type { WebviewTag } from 'electron';
 
+import { selectPersistableFavicon } from '../../../../shared/faviconPersistence';
 import { browserWebviewPool } from '../lib/browserWebviewPool';
 import {
   consumePendingKillCause,
@@ -56,7 +58,7 @@ export interface UseBrowserWebviewResult {
   /** webview 外层 wrapper DOM;caller appendChild 到自己的 body slot。 */
   wrapper: HTMLDivElement | null;
   /**
-   * 当前 Pool entry 的 WebView 代际句柄。隐藏但仍由 Pool 保活时保持非空；
+   * 当前 Pool entry 的 WebView DOM 代际句柄。隐藏且 Pool 仍持有 entry 时非空；
    * entry 被淘汰 / 释放时变 null，重建后变为新的对象。依赖 guest 事件或
    * 通信的功能必须以它为 effect dependency，不能只按 tabId 绑定。
    */
@@ -66,8 +68,9 @@ export interface UseBrowserWebviewResult {
   /** 当前页面 title(`page-title-updated`)。 */
   title: string;
   /**
-   * 当前页面 favicon URL。null = 当前 webview 代际尚未观测到 favicon；
-   * 空串 = 已明确观测到页面没有 favicon。
+   * 当前页面 favicon URL。null = 当前 webview 代际尚未观测到 favicon,或观测到
+   * 但全部候选不可持久化(blob: / 超大 / 非白名单协议)——两种都不覆盖已持久化
+   * 图标;空串 = 已明确观测到页面没有 favicon。
    */
   favicon: string | null;
   /** 正在加载中(`did-start-loading` 翻 true,`did-stop-loading` 翻 false)。 */
@@ -245,7 +248,7 @@ export function useBrowserWebview(
 
     const onTitle = (e: Electron.PageTitleUpdatedEvent) => setTitle(e.title);
     const onFavicon = (e: Electron.PageFaviconUpdatedEvent) => {
-      setFavicon(e.favicons.find((candidate) => candidate.trim().length > 0) ?? '');
+      setFavicon(selectPersistableFavicon(e.favicons));
     };
     const onDidNavigate = (e: Electron.DidNavigateEvent) => {
       const previousUrl = urlRef.current;
@@ -427,8 +430,9 @@ export function useBrowserWebview(
       entry.webview.removeEventListener('unresponsive', onUnresponsive);
       entry.webview.removeEventListener('responsive', onResponsive);
       unsubResourceEvent();
-      // **不**释放 pool entry —— webview DOM 节点继续保活,切回该 tab 时可直接
-      // 复用。释放是 plugin 在用户主动关闭 tab 时显式调 pool.release(tabId)。
+      // 不在监听器 cleanup 中释放 pool entry。DOM 仍可复用，但 guest 状态
+      // 只有宿主/祖先不被移走时才能保留；真正卸载停回 parking 不提供该保证。
+      // 释放仍由关闭、LRU 或宿主交接等 pool 生命周期路径负责。
     };
   }, [enabled, tabId, sessionId, setObservedUrl, entryEpoch, visible]);
 

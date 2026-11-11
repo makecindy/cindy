@@ -23,12 +23,23 @@
  * PreToolUse 闸门。旧 daemon 会无声忽略未知字段，导致 capability routing
  * fail-open，因此这项表面上的字段新增必须按不兼容协议升级处理。
  *
+ * v3: toolGuards 增加 root-only，使用 SDK agent_id 阻止远端 subagent
+ * 调用受保护工具。旧 daemon 无法证明调用来源，因此必须升级协议。
+ *
+ * v4: 增加 subagent/model-access 反向请求，并要求 daemon 在 Full access
+ * 之前执行 Agent/Task 实时模型准入预检。旧 daemon 没有该执行边界，
+ * 会继续发起无权限请求，因此必须升级协议。
+ *
+ * v5: root-only toolGuards now accept the native `AskUserQuestion` tool name.
+ * Older daemons reject that exact guard as an invalid root-only tool and must
+ * be upgraded before remote queries send it.
+ *
  * v1 (redesign): 删除 dead-session drain/archive 握手,对齐 codex 模式。
  * reattach 只接新 events (live-only subscription),不 replay 旧 ring buffer。
  * ring buffer 降级为纯内存 fast-path(同一 daemon 进程生命周期内的 mid-turn 续流)。
  * 断开期间跑完的输出暂不自动补回 chat(follow-up: jsonl recovery 统一 cc + codex)。
  */
-export const PROTOCOL_VERSION = 2 as const;
+export const PROTOCOL_VERSION = 5 as const;
 
 /**
  * cc-mgr bundle 版本号 — 手动 bump。
@@ -37,7 +48,9 @@ export const PROTOCOL_VERSION = 2 as const;
  * 无关依赖变化而变。desktop 用这个（而非 bundle sha256）判断远端 daemon
  * 是否需要 upgrade,避免无关的 pnpm install 触发全量远端重装。
  */
-export const CC_MGR_BUNDLE_VERSION = '0.0.6' as const;
+// SDK 0.3 migration: explicit remote OS-env merge at the SDK boundary.
+// Existing installs must pick up this runtime change; the wire stays at v5.
+export const CC_MGR_BUNDLE_VERSION = '0.0.11' as const;
 
 export type RpcId = number;
 
@@ -134,6 +147,8 @@ export const NOTIFICATIONS = {
 export const SERVER_METHODS = {
   /** SDK's canUseTool fired — daemon needs desktop to approve/deny a tool use. */
   APPROVAL_REQUEST: 'approval/request',
+  /** Agent/Task PreToolUse 向 desktop 查询当前账号与路由的模型准入状态。 */
+  SUBAGENT_MODEL_ACCESS: 'subagent/model-access',
   /**
    * SDK's getOAuthToken fired — remote cc hit a 401 on its subscription OAuth
    * token and the daemon needs desktop to mint a fresh one
@@ -207,11 +222,11 @@ export interface QueryStartParams {
 }
 
 export interface QueryToolGuard {
-  /** Exact SDK tool-name prefix, for example `mcp__plugin_x_server__`. */
+  /** Exact SDK tool name for root-only guards, or a tool-name prefix otherwise. */
   toolNamePrefix: string;
   /** Exact harness-owned MCP server id before Claude normalizes punctuation. */
   sourceServerId?: string;
-  invocation: 'auto' | 'explicit-only' | 'disabled';
+  invocation: 'auto' | 'explicit-only' | 'disabled' | 'root-only';
   /** Explicit command tokens that select this source for the active turn. */
   explicitSelectors?: string[];
   /** Optional user-facing denial reason returned by the PreToolUse hook. */
@@ -222,6 +237,17 @@ export interface QueryStartResult {
   sessionId: string;
   /** SDK-assigned session UUID once the first message arrives. May be empty initially. */
   sdkSessionId?: string;
+}
+
+export interface SubagentModelAccessParams {
+  sessionId: string;
+  /** 已按 CLAUDE_CODE_SUBAGENT_MODEL 优先级及 [1m] 后缀归一化。 */
+  model: string;
+}
+
+export interface SubagentModelAccessResult {
+  status: 'allowed' | 'denied' | 'unknown';
+  reason?: string;
 }
 
 export interface QuerySendParams {

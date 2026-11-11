@@ -16,6 +16,8 @@
  * allowlist.ts 的 PUSH_FORWARD_ALLOWLIST 同源约定)。
  */
 
+import { REMOTE_RESOURCE_CHANGED_CHANNEL } from './remoteResources.js';
+
 /**
  * 订阅 / 路由的 topic。
  *  - `sessions` = 列表读模型;
@@ -33,6 +35,9 @@ export const FILE_BROWSER_EVENT_CHANNEL = 'maker:file-browser:event';
 /** 远程文件浏览的聚合 invoke channel(单 channel:老被控端 CHANNEL_NOT_ALLOWED 即全无能力)。 */
 export const FILE_BROWSER_REMOTE_OP_CHANNEL = 'file-browser:remote-op';
 
+/** 远程 git 审查(只读)的聚合 invoke channel(单 channel:老被控端 CHANNEL_NOT_ALLOWED 即全无能力)。 */
+export const GIT_REVIEW_REMOTE_OP_CHANNEL = 'git-review:remote-op';
+
 const FS_WATCH_TOPIC_PREFIX = 'fs-watch:';
 
 export function fsWatchTopic(workdir: string): Topic {
@@ -49,6 +54,15 @@ export function parseFsWatchTopic(topic: string): string | null {
 export type SessionActivityPhase = 'running' | 'needs-interaction' | 'completed' | 'error';
 
 export interface SessionActivityPayload {
+  /** Optional display-text marker; absent/unknown uses legacy Markdown recovery. */
+  summaryFormat?: 'plain-text';
+  /** Optional owner-issued completion identity. Old hosts omit it; never infer one. */
+  completionToken?: string;
+  /** Completion notification policy only; activity/attention remains unchanged.
+   * Absent on older hosts. Unknown values use ordinary completion semantics. */
+  completionNotification?: 'pending' | 'teammate' | 'silent';
+  /** Optional public generation category; unknown values must use a generic caption. */
+  workingPhase?: string;
   sessionId: string;
   phase: SessionActivityPhase;
   compactDetail: string;
@@ -60,6 +74,78 @@ export interface SessionActivityPayload {
 export const SESSION_ACTIVITY_CHANNEL = 'local-db:sessions:activity';
 
 /**
+ * Opt-in recovery for session-text-snapshot-v1 controllers. Payload has sessionId,
+ * optional persistId/event (text, isFullText:true, isFinal:false, data.createdAt
+ * is the block's ISO host timestamp), and optional
+ * resyncRequired. The event replaces that in-flight block; the flag invalidates
+ * history independently. Host flushes older batches before sending, then sends
+ * newer deltas on the same reliable stream. Not coalescible/evictable: dropping
+ * the repair itself would leave the controller silently incomplete again.
+ * Old hosts ignore the capability; old controllers never receive this channel.
+ */
+export const SESSION_SYNC_CHANNEL = 'maker:session-sync';
+
+/**
+ * `maker:event` 的**微批**转发 channel(同一会话的连续事件合并成一帧)。
+ *
+ * 为什么要它:agent 长思考期间 `maker:event` 逐帧直冲 per-peer 可靠传输窗口
+ * (64 槽单 FIFO),2026-08-08 线上单毫秒 119 帧、8-07 单小时 5168 次
+ * `BACKPRESSURE`,聚合出站速率还会招来 relay 的 1013 拥塞断连。批把「每事件
+ * 一帧」压成「每窗口一帧」,是本条链路上唯一的**出站帧数**削减手段(#2167 的
+ * latest-wins 只改拥塞时的取舍,#2185 只推迟重连,都不减少帧数)。
+ *
+ * payload 顶层带 `sessionId`,因此 topicForPush 的 session-scoped 兜底分支
+ * 自动把它路由到 `session:<id>`——批**不得**跨会话合并,否则 topic 算不出。
+ * 批内 `events` 是原 `maker:event` payload 的**原样**序列,顺序即产生顺序;
+ * 控制端拆开后逐条按原路消费,语义与逐帧完全一致。
+ *
+ * 兼容:被控端只对声明了
+ * CONTROLLER_CAPABILITY_MAKER_EVENT_BATCH_V1 的控制端发批,其余照旧逐帧,
+ * 因此旧控制端永远收不到本 channel。
+ */
+export const MAKER_EVENT_BATCH_CHANNEL = 'maker:event:batch';
+
+/** 微批帧 payload:同一会话的连续 `maker:event` payload 原样序列。 */
+export interface MakerEventBatchPayload {
+  sessionId: string;
+  /** 原 `maker:event` payload 序列(至少 1 条),顺序即产生顺序。 */
+  events: unknown[];
+}
+
+/** 解析微批帧;形状不符返回 null(旧/坏帧一律不当批处理)。 */
+export function parseMakerEventBatchPayload(
+  payload: unknown,
+): MakerEventBatchPayload | null {
+  if (!payload || typeof payload !== 'object') return null;
+  const sessionId = (payload as { sessionId?: unknown }).sessionId;
+  const events = (payload as { events?: unknown }).events;
+  if (typeof sessionId !== 'string' || sessionId.length === 0) return null;
+  if (!Array.isArray(events) || events.length === 0) return null;
+  return { sessionId, events };
+}
+
+/**
+ * 拆开微批帧,返回**可安全消费**的原 `maker:event` payload 序列(形状不符 / 无条目
+ * 返回空数组)。
+ *
+ * 只保留 `sessionId` 与批顶层一致的条目:topic 隔离是按**顶层** sessionId 路由的,
+ * 批内混入其它会话的事件会绕过隔离,把接收端未订阅的会话数据投进来(坏帧 / 恶意帧
+ * 场景)。fail-closed 逐条跳过,不整批丢。
+ *
+ * 放在共享包里是因为**两个控制端都要拆**:mobile 直接喂自己的 store,desktop 作为
+ * 控制端时在 main 里展开成原样的 `maker:event` 广播(renderer 的多个按 channel 过滤
+ * 的订阅者因此零改动)。同一条 fail-closed 判据只能有一份。
+ */
+export function expandMakerEventBatchPayload(payload: unknown): unknown[] {
+  const batch = parseMakerEventBatchPayload(payload);
+  if (!batch) return [];
+  return batch.events.filter((event) => {
+    if (!event || typeof event !== 'object') return false;
+    return (event as { sessionId?: unknown }).sessionId === batch.sessionId;
+  });
+}
+
+/**
  * 会话**列表级**读模型 channel:会话行的增 / 改。归 `sessions` topic。
  * `sessions:created` 只带 {sessionId}(无 row 数据)→ 控制端据此重拉列表;
  * `sessions:patched` 带 {sessionId, patch} → 控制端可直接 apply。
@@ -69,6 +155,7 @@ export const SESSION_ACTIVITY_CHANNEL = 'local-db:sessions:activity';
  */
 const SESSION_LIST_CHANNELS: ReadonlySet<string> = new Set([
   'local-db:sessions:created',
+  'local-db:task-tags:changed',
   'local-db:sessions:patched',
   'local-db:session:error-persisted',
   SESSION_ACTIVITY_CHANNEL,
@@ -87,16 +174,46 @@ const SESSION_LIST_CHANNELS: ReadonlySet<string> = new Set([
 const ACCOUNT_CHANNELS: ReadonlySet<string> = new Set([
   // provider 目录是设备级快照；控制端订阅 sessions 后按来源 deviceId 精确刷新。
   'maker:provider:changed',
+  // runtime Agent roster is a device-level snapshot; controllers refresh after this push.
+  'maker:agents:changed',
+  'maker:model-catalog:changed',
+  // 模块中立的资源集合失效通知；控制端已有 sessions 常驻订阅可直接接收，
+  // 不为每个新模块扩张一档 topic。
+  REMOTE_RESOURCE_CHANGED_CHANNEL,
+  'maker:bot-direct-message:changed',
+  // 伙伴自主跟进状态变化：账号级、无 sessionId，节流 ≤1 次/秒。
+  'maker:bot-autonomy:changed',
   'maker:schedule:event',
   'maker:project-automation:event',
   // 被控端「当前 New Maker 草稿」全量变更:账号 / 全局级(无 sessionId),并入 `sessions` topic
   // 随设备列表订阅一起走(控制端打开远程项目草稿时据此实时刷新),不另开一档 topic。
   'maker:new-maker-draft:changed',
+  'maker:model-favorites:changed',
   'maker:new-maker-worktree-branch:changed',
   // /learn run 状态机流转:payload = { type, run },run 同时关联触发会话与蒸馏会话
   // (状态卡两处都渲染),按单一 sessionId 路由会漏一边 → 按账号级并入 `sessions` topic
   // (低频状态机事件,量极小)。
   'learn:event',
+  // 被控端项目手动顺序变化:无 sessionId,并入 sessions topic 随设备列表订阅到达。
+  'sidebar-settings:project-order-changed',
+  // Project aliases invalidate a device-level display snapshot, without a sessionId.
+  'local-db:project-aliases:changed',
+  // Claude 订阅账号余量快照(账号级,无 sessionId):控制端打开远程订阅会话时 chip
+  // 据此实时刷新;并入 sessions topic 随设备列表订阅到达,低频(签名去抖 + 节流)。
+  'usage:claude-subscription-changed',
+  'subscription-accounts:changed',
+  // Codex 账号订阅用量 / Claude 网关配额 / xAI 订阅与限流头:同上定位,账号级
+  // 无 sessionId,并入 sessions topic。频率上限见 allowlist.ts 对应条目注释。
+  // (maker:claude-session-route-changed 不在此表 —— payload 带 sessionId,走
+  // topicForPush 的 session-scoped 兜底路由到 session:<id>。)
+  'usage:codex-account-changed',
+  // Same provider-scoped payloads consumed by the local usage hooks.
+  'usage:codex-provider-account-changed',
+  'usage:subscription-provider-account-changed',
+  'usage:claude-account-changed',
+  'usage:xai-subscription-changed',
+  'usage:xai-rate-limit-changed',
+  'usage:xai-provider-rate-limit-changed',
 ]);
 
 /** 从 unknown payload 安全读一个字符串字段。 */
@@ -127,6 +244,10 @@ export function topicForPush(channel: string, payload: unknown): Topic | null {
     // 文件树变更是 workdir 域(payload 无 sessionId),路由到 fs-watch:<workdir>。
     const workdir = readStringField(payload, 'workdir');
     return workdir ? fsWatchTopic(workdir) : null;
+  }
+  if (channel === 'maker:bot-delegation:changed') {
+    const parent = readStringField(payload, 'parentSessionId');
+    return parent ? `session:${parent}` : null;
   }
   if (channel === 'maker:orca:worker-changed') {
     const lead = readStringField(payload, 'leadSessionId');

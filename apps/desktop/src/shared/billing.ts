@@ -7,11 +7,57 @@
 
 import type { ModelAccessBalance, ModelAccessCreditUsage } from './modelAccess';
 
+export const BILLING_SUPPORT_EMAIL = 'xd-billing@xd.com';
+export const BILLING_FEEDBACK_EMAIL = 'feedback@cindy.app';
+
+/**
+ * Validates mailto URLs for the fixed billing and feedback inboxes.
+ * Subject/body are display data from the renderer; recipient-affecting headers
+ * must stay outside this capability boundary.
+ */
+export function isAllowedBillingMailto(value: unknown): value is string {
+  if (typeof value !== 'string') return false;
+  try {
+    const parsed = new URL(value);
+    const recipient = decodeURIComponent(parsed.pathname).toLowerCase();
+    const queryKeys = [...parsed.searchParams.keys()];
+    const hasDuplicateQueryKey = new Set(queryKeys).size !== queryKeys.length;
+    const subject = parsed.searchParams.get('subject');
+    const hasSubjectControlCharacter =
+      subject !== null && /[\u0000-\u001f\u007f-\u009f]/u.test(subject);
+    return (
+      parsed.protocol === 'mailto:' &&
+      (recipient === BILLING_SUPPORT_EMAIL || recipient === BILLING_FEEDBACK_EMAIL) &&
+      !parsed.username &&
+      !parsed.password &&
+      !parsed.host &&
+      !parsed.hash &&
+      !hasDuplicateQueryKey &&
+      !hasSubjectControlCharacter &&
+      queryKeys.every((key) => key === 'subject' || key === 'body')
+    );
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Keeps the sender check explicit at the main-process adapter boundary. The
+ * URL policy alone is not sufficient authorization for a privileged shell call.
+ */
+export function isAllowedBillingMailtoRequest(
+  value: unknown,
+  isTrustedSender: boolean,
+): value is string {
+  return isTrustedSender && isAllowedBillingMailto(value);
+}
+
 export const BILLING_INVOKE = {
   GET_BALANCE: 'billing:get-balance',
   GET_CREDIT_USAGE: 'billing:get-credit-usage',
   GET_CATALOG: 'billing:get-catalog',
   LIST_ORDERS: 'billing:list-orders',
+  LIST_PAYMENT_HISTORY: 'billing:list-payment-history',
   GET_ORDER: 'billing:get-order',
   CREATE_TOPUP: 'billing:create-topup',
   REFRESH_TOPUP: 'billing:refresh-topup',
@@ -20,6 +66,7 @@ export const BILLING_INVOKE = {
   CREATE_SUBSCRIPTION: 'billing:create-subscription',
   GET_CURRENT_SUBSCRIPTION: 'billing:get-current-subscription',
   CANCEL_CURRENT_SUBSCRIPTION: 'billing:cancel-current-subscription',
+  RESUME_CURRENT_SUBSCRIPTION: 'billing:resume-current-subscription',
   REFRESH_SUBSCRIPTION_PURCHASE: 'billing:refresh-subscription-purchase',
   QUOTE_PLAN_CHANGE: 'billing:quote-plan-change',
   CONFIRM_PLAN_CHANGE: 'billing:confirm-plan-change',
@@ -34,8 +81,7 @@ export type BillingPaymentAction =
   | { type: 'REDIRECT'; url: string; expiresAt: string };
 
 export type BillingSubscriptionPortalResult =
-  | { success: true }
-  | { success: false; timedOut?: true };
+  { success: true } | { success: false; timedOut?: true };
 
 export type BillingFulfillmentStatus = 'NOT_STARTED' | 'PENDING' | 'SUCCEEDED' | 'FAILED';
 
@@ -117,6 +163,14 @@ export type BillingSubscriptionStatus =
   | 'CANCELED'
   | 'PAUSED';
 
+/**
+ * 这些状态视为已有生效订阅：计费页阻断再买新套餐；供应商页据此把右侧主动作从
+ * 「购买套餐」换成「升级套餐」或「余额充值」。INCOMPLETE / INCOMPLETE_EXPIRED 属于
+ * 未完成首购，只活在当前 checkout 会话里，不算。
+ */
+export const BILLING_SUBSCRIPTION_PURCHASE_BLOCKING_STATUSES: readonly BillingSubscriptionStatus[] =
+  ['TRIALING', 'ACTIVE', 'PAST_DUE', 'UNPAID', 'PAUSED'];
+
 export type BillingPlanChangeType = 'UPGRADE' | 'DOWNGRADE';
 
 /**
@@ -165,6 +219,8 @@ export type BillingSubscription = {
   currentPeriodEndAt: string | null;
   entitlementValidUntil: string | null;
   cancelAtPeriodEnd: boolean;
+  /** 取消待到期且账期未过的订阅是否可恢复（服务端下发；旧服务端无此字段）。 */
+  resumable?: boolean;
   effectivePlan: {
     version: 1;
     product: {
@@ -199,6 +255,35 @@ export type BillingOrderList = {
   nextCursor: string | null;
 };
 
+/** Settled payment facts; independent of checkout, contract and fulfillment state. */
+export type BillingPaymentHistoryRecord = {
+  recordId: string;
+  sourceType: 'CREDIT_TOPUP' | 'SUBSCRIPTION_INVOICE';
+  sourceId: string;
+  subscriptionId: string | null;
+  productName: string | null;
+  billingReason: string | null;
+  amountPaidMinor: number | null;
+  amount: string | null;
+  currency: string;
+  provider: string | null;
+  providerTransactionId: string | null;
+  paidAt: string | null;
+  createdAt: string;
+  periodStartAt: string | null;
+  periodEndAt: string | null;
+  refundSummary: {
+    status: 'UNREFUNDED' | 'PARTIALLY_REFUNDED' | 'REFUNDED' | null;
+    refundedMinor: number;
+    refundedAmount: string;
+  };
+};
+
+export type BillingPaymentHistory = {
+  records: BillingPaymentHistoryRecord[];
+  nextCursor: string | null;
+};
+
 export type BillingCurrentSubscription = {
   subscription: BillingSubscription | null;
 };
@@ -219,6 +304,7 @@ export interface BillingRendererApi {
   getCreditUsage: () => Promise<ModelAccessCreditUsage>;
   getCatalog: () => Promise<BillingCatalog>;
   listOrders: (payload: { limit: number }) => Promise<BillingOrderList>;
+  listPaymentHistory: (payload: { limit: number; cursor?: string }) => Promise<BillingPaymentHistory>;
   getOrder: (payload: { orderId: string }) => Promise<BillingPaymentOrder>;
   createTopup: (payload: {
     request: CreateBillingTopupRequest;
@@ -236,6 +322,7 @@ export interface BillingRendererApi {
   }) => Promise<BillingSubscription>;
   getCurrentSubscription: () => Promise<BillingCurrentSubscription>;
   cancelCurrentSubscription: () => Promise<BillingSubscription>;
+  resumeCurrentSubscription: () => Promise<BillingSubscription>;
   refreshSubscriptionPurchase: (payload: {
     purchaseAttemptId: string;
   }) => Promise<BillingSubscription>;

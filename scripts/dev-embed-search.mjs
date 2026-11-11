@@ -33,6 +33,10 @@ import os from 'node:os';
 import path from 'node:path';
 import process from 'node:process';
 import { fileURLToPath } from 'node:url';
+import {
+  desktopUserDataDirForRegion,
+  resolveDesktopDevRegion,
+} from './shared/desktop-dev-region.mjs';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -49,6 +53,7 @@ function parseArgs(argv) {
     to: null,
     userId: process.env.XDT_USER_ID ?? null,
     dbPath: null,
+    regionArgs: [],
   };
   for (let i = 0; i < argv.length; i++) {
     const a = argv[i];
@@ -65,6 +70,10 @@ function parseArgs(argv) {
       out.userId = argv[++i];
     } else if (a === '--db') {
       out.dbPath = argv[++i];
+    } else if (a === '--region') {
+      out.regionArgs.push('--region', argv[++i]);
+    } else if (a.startsWith('--region=')) {
+      out.regionArgs.push(a);
     } else if (a === '-h' || a === '--help') {
       printHelp();
       process.exit(0);
@@ -80,6 +89,7 @@ function parseArgs(argv) {
     printHelp();
     process.exit(1);
   }
+  out.region = resolveDesktopDevRegion(out.regionArgs, process.env);
   return out;
 }
 
@@ -93,6 +103,8 @@ Options:
   --to <iso>         不晚于该时间
   --user-id <id>     显式指定 user_id (默认从 XDT_USER_ID 读, 或 glob 匹配)
   --db <path>        覆盖 db 路径 (绕过 user-id 解析)
+  --region <cn|global|dev>
+                     选择 userData 区域 (默认读取 CINDY_AUTH_REGION, 再默认 global)
 
 环境变量:
   ANTHROPIC_API_KEY  必填 — 与 desktop 同一个 LiteLLM bearer token
@@ -120,29 +132,16 @@ function fail(msg) {
 /**
  * Electron app.getPath('userData') 在不同平台的等价路径 — 与
  * apps/desktop/src/main/localDb/index.ts 中 dbPath() 的拼接逻辑一致。
- * userData 子目录名来自 productName(2026-07-17 身份翻转后为 'Cindy',
- * 与 @cindy/maker-shared/brand-identity 的 userDataDirName 同源;本脚本是
- * 零依赖 dev CLI,不 import TS 包,字面量与之保持一致)。
+ * userData 子目录名由 shared/desktop-dev-region.mjs 镜像区域映射；本脚本
+ * 复用该路径函数，默认 Global → CindyGlobal，避免辅助工具读错 profile。
  */
-const USER_DATA_DIR_NAME = 'Cindy';
 const DB_FILE_PREFIX = 'cindy';
 
-function userDataDir() {
-  switch (process.platform) {
-    case 'darwin':
-      return path.join(os.homedir(), 'Library', 'Application Support', USER_DATA_DIR_NAME);
-    case 'win32':
-      return path.join(
-        process.env.APPDATA ?? path.join(os.homedir(), 'AppData', 'Roaming'),
-        USER_DATA_DIR_NAME,
-      );
-    case 'linux':
-      return path.join(
-        process.env.XDG_CONFIG_HOME ?? path.join(os.homedir(), '.config'),
-        USER_DATA_DIR_NAME,
-      );
-    default:
-      fail(`unsupported platform: ${process.platform}`);
+function userDataDir(region) {
+  try {
+    return desktopUserDataDirForRegion(region);
+  } catch (error) {
+    fail(error instanceof Error ? error.message : String(error));
   }
 }
 
@@ -151,7 +150,7 @@ function resolveDbPath(args) {
     if (!fs.existsSync(args.dbPath)) fail(`db not found: ${args.dbPath}`);
     return args.dbPath;
   }
-  const dir = userDataDir();
+  const dir = userDataDir(args.region);
   if (!fs.existsSync(dir)) {
     fail(
       `userData dir not found: ${dir}\n` +

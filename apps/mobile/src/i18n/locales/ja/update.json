@@ -13,5 +13,28 @@
   "upToDateBody": "すでに最新のパッケージです。",
   "checkFailedTitle": "確認に失敗しました",
   "checkFailedBody": "更新サーバーに接続できません。しばらくしてからもう一度お試しください。",
-  "latestRequestFailed": "latest リクエスト失敗: HTTP {{status}}"
+  "latestRequestFailed": "latest リクエスト失敗: HTTP {{status}}",
+  "android": {
+    "versionChange": "{{current}} → {{version}}",
+    "version": "バージョン {{version}}",
+    "notesLabel": "更新内容",
+    "updateNow": "今すぐ更新",
+    "permissionTitle": "Cindy にアプリのインストールを許可",
+    "permissionBody": "システム設定で許可して戻ると、更新が自動的に続きます。",
+    "grantAndUpdate": "許可して更新",
+    "deniedTitle": "インストールがまだ許可されていません",
+    "deniedBody": "もう一度許可するか、ブラウザーでダウンロードしてください。",
+    "grantAgain": "インストールを再度許可",
+    "downloading": "ダウンロード中…",
+    "percent": "{{percent}}%",
+    "installing": "インストーラーを開いています…",
+    "ready": "ダウンロード完了。いつでもインストールできます",
+    "install": "更新をインストール",
+    "failedTitle": "更新を完了できませんでした",
+    "failedBody": "ダウンロードまたはインストーラーの起動中にエラーが発生しました。",
+    "retry": "更新を再試行",
+    "cancel": "更新をキャンセル",
+    "browser": "ブラウザーでダウンロード",
+    "browserFailed": "ダウンロードリンクを開けませんでした。後でもう一度お試しください。"
+  }
 }

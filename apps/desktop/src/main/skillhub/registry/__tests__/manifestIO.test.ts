@@ -62,6 +62,8 @@ function makeManifest(skillName: string, overrides?: Partial<StoredManifest>): S
         folderHash: 'abc123',
         installedAt: 1714000000,
         updatedAt: 1714000000,
+        catalogScope: 'team',
+        catalogScopeMigrated: true,
       },
     },
     ...overrides,
@@ -90,7 +92,7 @@ describe('manifestIO', () => {
       expect(result).toBeNull();
     });
 
-    it('老 manifest 缺 authorId 字段 → 读取后兜底为空串，旧 isMine 字段被剥离', async () => {
+    it('旧 registry 读取保持纯 IO，不在未加锁路径写回迁移', async () => {
       const root = manifestsRoot();
       fs.mkdirSync(root, { recursive: true });
       // 模拟一份只含 isMine 没 authorId 的老数据
@@ -115,8 +117,11 @@ describe('manifestIO', () => {
       const result = await readFile('legacy-skill');
       expect(result).not.toBeNull();
       const installEntry = result!.installs[path.normalize('/home/sam/.claude/skills/legacy-skill')];
-      expect(installEntry.authorId).toBe('');
-      expect((installEntry as unknown as Record<string, unknown>).isMine).toBeUndefined();
+      expect(installEntry.authorId).toBeUndefined();
+      expect(installEntry.catalogScope).toBeUndefined();
+      expect((installEntry as unknown as Record<string, unknown>).isMine).toBe(true);
+      const persisted = JSON.parse(fs.readFileSync(path.join(root, 'legacy-skill.json'), 'utf-8'));
+      expect(persisted).toEqual(legacyManifest);
     });
 
     it('skillName 字段不符 → 抛 RegistryError CORRUPTED', async () => {

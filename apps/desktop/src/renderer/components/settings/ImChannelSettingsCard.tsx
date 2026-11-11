@@ -72,8 +72,9 @@ export function ImChannelSettingsCard({
 
   return (
     <section
+      id={id}
       className={cn(
-        'overflow-hidden rounded-xl',
+        'overflow-hidden rounded-xl [container-type:inline-size]',
         'border border-[var(--settings-theme-card-border)]',
         'bg-[var(--settings-theme-card-bg)]',
       )}
@@ -88,24 +89,31 @@ export function ImChannelSettingsCard({
           aria-controls={panelId}
           onClick={onToggle}
           className={cn(
-            'flex min-h-[76px] min-w-0 flex-1 select-none items-center gap-4 px-4 py-3 text-left',
+            'flex min-h-[76px] min-w-0 flex-1 select-none flex-wrap items-center gap-x-4 gap-y-2 px-4 py-3 text-left',
             'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-[var(--focus-ring)]',
           )}
         >
-          <span className="min-w-0 flex-1">
-            <span className="block text-[14px] font-medium leading-[1.3] text-[var(--settings-section-title)]">
+          <span className="min-w-0 flex-[1_1_12rem] [overflow-wrap:anywhere]">
+            <span className="block text-14 font-medium leading-[1.3] text-[var(--settings-section-title)]">
               {title}
             </span>
-            <span className="mt-1 block text-[12px] leading-[1.45] text-[var(--settings-section-desc)]">
+            <span className="mt-1 block text-12 leading-[1.45] text-[var(--settings-section-desc)]">
               {description}
             </span>
           </span>
 
-          <span className="flex min-w-0 shrink-0 items-center gap-3">
-            <span className="hidden w-[220px] truncate text-right text-[12px] text-[var(--text-secondary)] md:block">
-              {routeSummary}
-            </span>
-            {status}
+          {/* Wrap using the trigger's available width, including any sibling
+              headerAction, rather than the window width of a narrow sidebar. */}
+          <span className={cn(
+            'ml-auto flex min-w-0 max-w-full items-center justify-end gap-3',
+            routeSummary ? 'flex-[1_1_18rem]' : 'shrink-0',
+          )}>
+            {routeSummary ? (
+              <span className="min-w-0 max-w-[220px] flex-1 text-right text-12 text-[var(--text-secondary)] [overflow-wrap:anywhere]">
+                {routeSummary}
+              </span>
+            ) : null}
+            <span className="inline-flex shrink-0 whitespace-nowrap">{status}</span>
             <ChevronDown
               size={17}
               aria-hidden

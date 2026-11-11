@@ -20,7 +20,7 @@
  * Theme: re-renders when <html class="dark"> toggles, via MutationObserver.
  */
 
-import { memo, useEffect, useId, useRef, useState } from 'react';
+import { memo, useEffect, useId, useRef, useState, type ReactNode } from 'react';
 import { Check, Code2, Copy, Expand, Eye, Pen } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
 import { repairMermaidSource } from '@cindy/maker-shared/mermaid-autofix';
@@ -28,14 +28,23 @@ import { repairMermaidSource } from '@cindy/maker-shared/mermaid-autofix';
 import { cn } from '@/lib/utils';
 import { toast } from '@/lib/toast';
 import { resolveExportBackground, svgToPngBlob } from '@/lib/rasterizeToImage';
-import { MermaidLightbox } from './MermaidLightbox';
+import { MermaidLightbox } from './lazyPreviewLightboxes';
 import { useCopyAsImage } from './useCopyAsImage';
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuTrigger,
+} from '@/components/ui/dropdown-menu';
 
 interface MarkdownMermaidBlockProps {
   raw: string;
+  fullscreen?: boolean;
+  fullscreenFallback?: ReactNode;
+  onClose?: () => void;
 }
 
-type MermaidModule = typeof import('mermaid')['default'];
+type MermaidModule = (typeof import('mermaid'))['default'];
 
 let mermaidPromise: Promise<MermaidModule> | null = null;
 
@@ -51,6 +60,9 @@ function isDarkMode(): boolean {
 
 export const MarkdownMermaidBlock = memo(function MarkdownMermaidBlock({
   raw,
+  fullscreen = false,
+  fullscreenFallback,
+  onClose,
 }: MarkdownMermaidBlockProps) {
   const { t } = useTranslation();
   const reactId = useId();
@@ -64,6 +76,7 @@ export const MarkdownMermaidBlock = memo(function MarkdownMermaidBlock({
   const [dark, setDark] = useState<boolean>(isDarkMode);
   const [copied, setCopied] = useState(false);
   const [lightboxOpen, setLightboxOpen] = useState(false);
+  const [menuPos, setMenuPos] = useState<{ x: number; y: number } | null>(null);
   const copyTimerRef = useRef<number | null>(null);
   const blockRef = useRef<HTMLDivElement>(null);
 
@@ -80,6 +93,7 @@ export const MarkdownMermaidBlock = memo(function MarkdownMermaidBlock({
       if (!current) throw new Error('no svg rendered');
       const blob = await svgToPngBlob(current, {
         background: resolveExportBackground(blockRef.current),
+        fontFamily: window.getComputedStyle(blockRef.current ?? document.body).fontFamily,
       });
       return { blob, plainText: rawRef.current };
     });
@@ -202,6 +216,21 @@ export const MarkdownMermaidBlock = memo(function MarkdownMermaidBlock({
   // a hard error (not just streaming-partial).
   const showSourceView = showSource || (svg == null && error != null);
 
+  if (fullscreen && !svg && fullscreenFallback) return fullscreenFallback;
+
+  if (fullscreen && svg)
+    return (
+      <>
+        <MermaidLightbox
+          svg={svg}
+          source={raw}
+          onClose={onClose ?? (() => {})}
+          onAnnotate={canAnnotate ? openAnnotate : undefined}
+        />
+        {annotateNode}
+      </>
+    );
+
   return (
     <div ref={blockRef} className="group relative my-3">
       {showSourceView ? (
@@ -218,9 +247,15 @@ export const MarkdownMermaidBlock = memo(function MarkdownMermaidBlock({
         </pre>
       ) : svg != null ? (
         <div
+          data-chat-mermaid
           role="button"
           tabIndex={0}
           onClick={() => setLightboxOpen(true)}
+          onContextMenu={(event) => {
+            event.preventDefault();
+            event.stopPropagation();
+            setMenuPos({ x: event.clientX, y: event.clientY });
+          }}
           onKeyDown={(e) => {
             if (e.key === 'Enter' || e.key === ' ') {
               e.preventDefault();
@@ -271,6 +306,7 @@ export const MarkdownMermaidBlock = memo(function MarkdownMermaidBlock({
       ) : null}
 
       <div
+        data-chat-copy-exclude
         className={cn(
           'absolute right-2 top-2 flex gap-1',
           'opacity-0 transition-opacity duration-150',
@@ -360,6 +396,35 @@ export const MarkdownMermaidBlock = memo(function MarkdownMermaidBlock({
         </button>
       </div>
 
+      {svg != null && !showSourceView ? (
+        <DropdownMenu
+          open={menuPos !== null}
+          onOpenChange={(open) => {
+            if (!open) setMenuPos(null);
+          }}
+        >
+          <DropdownMenuTrigger asChild>
+            <span
+              aria-hidden
+              data-fixed-menu-anchor
+              style={{
+                position: 'fixed',
+                left: menuPos?.x ?? 0,
+                top: menuPos?.y ?? 0,
+                width: 0,
+                height: 0,
+                pointerEvents: 'none',
+              }}
+            />
+          </DropdownMenuTrigger>
+          <DropdownMenuContent align="start" sideOffset={2}>
+            <DropdownMenuItem onClick={copyAsImage}>
+              <Copy className="mr-2 h-4 w-4" />
+              {t('chat.media.copyImage')}
+            </DropdownMenuItem>
+          </DropdownMenuContent>
+        </DropdownMenu>
+      ) : null}
       {lightboxOpen && svg != null ? (
         <MermaidLightbox
           svg={svg}

@@ -6,6 +6,11 @@
  * cards.ts (which puts business id+payload into `value`) and the orchestrator
  * (which reads them back here).
  *
+ * senderId is always the operator's raw open_id here; wsClient additionally
+ * resolves group cards to their lane id via the outbound messageId→lane
+ * registry (see outbound.resolveCardLane) — callback context carries no thread
+ * info, so the registry is the only way to recover the topic lane.
+ *
  * Returns null when the payload is malformed or when the sender is not on the
  * whitelist (caller should drop silently).
  */

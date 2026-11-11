@@ -41,21 +41,24 @@ describe('auth loopback callback page', () => {
       htmlLang: 'zh-CN',
       variant: 'success',
       title: '登录成功',
-      body: '你可以关闭此页面，回到 Cindy 继续。',
+      body: '登录已成功，现在可以关闭此页面了。',
+      closeCountdown: '{{count}}秒后自动关闭',
     });
     expect(html).toContain('<html lang="zh-CN">');
     expect(html).toContain('<h1>登录成功</h1>');
-    expect(html).toContain('你可以关闭此页面，回到 Cindy 继续。');
+    expect(html).toContain('登录已成功，现在可以关闭此页面了。');
+    expect(html).toContain('3秒后自动关闭');
+    expect(html).toContain('id="close-countdown"');
     expect(html).not.toContain('class="detail"');
     expect(html).not.toContain('class="cta"');
   });
 
-  it('renders the return-to-app CTA when an action is provided', () => {
+  it('renders the return-to-app CTA on an error page when an action is provided', () => {
     const html = renderAuthLoopbackPage({
       htmlLang: 'zh-CN',
-      variant: 'success',
-      title: '登录成功',
-      body: '你可以关闭此页面，回到 Cindy 继续。',
+      variant: 'error',
+      title: '登录未完成',
+      body: '请回到 Cindy 重新登录。',
       action: { href: 'cindy://focus/desktop-login', label: '回到 Cindy' },
     });
     expect(html).toContain('<a class="cta" href="cindy://focus/desktop-login">回到 Cindy</a>');
@@ -129,11 +132,14 @@ describe('auth loopback page brand wiring (PR3)', () => {
       htmlLang: 'zh-CN',
       variant: 'success',
       title: '登录成功',
-      body: '你可以关闭此页面，回到 Cindy 继续。',
+      body: '登录已成功，现在可以关闭此页面了。',
+      closeCountdown: '{{count}}秒后自动关闭',
     });
     expect(html).toContain('data-cindy-oauth-visual="success"');
     expect(html).toContain('data-cindy-oauth-copy="login.browserCallback"');
-    expect(html).toContain('width:680px;height:680px');
+    expect(html).toContain('data-cindy-oauth-layout="compact"');
+    expect(html).toContain('data-card-width="560" data-card-height="500"');
+    expect(html).toContain('3秒后自动关闭');
   });
 });
 

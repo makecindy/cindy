@@ -1,3 +1,6 @@
+import { presentationText, type PresentationLocalizer } from './presentationLocalization.js';
+export { splitQuestionReferences } from './questionReferences.js';
+
 export interface InteractionRequestLike {
   kind?: string;
   requestId?: string;
@@ -5,15 +8,137 @@ export interface InteractionRequestLike {
 }
 
 export interface PendingInteractionLike {
+  /** Local presentation only: an answer already being edited keeps focus. */
+  retainedDraft?: boolean;
   request: InteractionRequestLike;
   persistId?: string;
 }
 
+/** Only server-authored form fields carry these restrictions. */
+export interface AskAnswerConstraints {
+  required: boolean;
+  choices?: string[];
+  minLength?: number;
+  maxLength?: number;
+}
+
 export interface AskQuestion {
+  /** Stable provider identity; absent on legacy questions. */
+  id?: string;
   question: string;
   header?: string;
   options?: Array<{ label: string; description?: string }>;
   multiSelect?: boolean;
+  answerConstraints?: AskAnswerConstraints;
+}
+
+const NATIVE_REPLY_OPEN = '<send_user_message_question_reply>\n';
+const NATIVE_REPLY_CLOSE = '\n</send_user_message_question_reply>';
+const LATE_ANSWER_CONTEXT = `\n\n<cindy_question_context>\nThis is a delayed answer to an earlier question. Check the current task state and whether the question still applies before acting; do not repeat work already completed. This context is added by Cindy, not part of the user's answer or new authorization.\n</cindy_question_context>`;
+
+/** Every answer to an async question is delivered under this input identity. */
+export const ASYNC_QUESTION_REPLY_CLIENT_ID_PREFIX = 'question-reply:';
+/** The answer already shows on its question card, so the conversation does not repeat it. */
+export const ASYNC_QUESTION_ANSWERED_CLIENT_ID_PREFIX = `${ASYNC_QUESTION_REPLY_CLIENT_ID_PREFIX}answered:`;
+
+export function isAsyncQuestionReplyClientId(clientId: unknown): boolean {
+  return typeof clientId === 'string' && clientId.startsWith(ASYNC_QUESTION_REPLY_CLIENT_ID_PREFIX);
+}
+
+export function isAnsweredAsyncQuestionClientId(clientId: unknown): boolean {
+  return typeof clientId === 'string' && clientId.startsWith(ASYNC_QUESTION_ANSWERED_CLIENT_ID_PREFIX);
+}
+
+function asyncQuestionReplies(questions: readonly AskQuestion[], answers: Record<string, string>) {
+  return questions.flatMap((q) => {
+    const answer = answers[answerKey(q)] ?? answers[q.question] ?? (q.header ? answers[q.header] : undefined);
+    return typeof answer === 'string' && answer.trim()
+      ? [{ ...(q.id ? { questionItemId: q.id } : {}), question: q.question, answer: answer.trim() }] : [];
+  });
+}
+
+function readableQuestionReplies(replies: readonly { question: string; answer: string }[]): string {
+  return replies.map(({ question, answer }) => `${question.split('\n').map((line) => `> ${line}`).join('\n')}\n\n${answer}`).join('\n\n');
+}
+
+/** A late answer is ordinary user input, with the original question attached. This is the text the model receives. */
+export function formatAsyncQuestionSupplement(
+  questions: readonly AskQuestion[],
+  answers: Record<string, string>,
+  context?: { late?: boolean },
+): string {
+  const replies = asyncQuestionReplies(questions, answers);
+  if (!replies.length) return '';
+  const message = questions.length && questions.every((q) => q.id?.startsWith('["request_user_input_async",'))
+    ? `${NATIVE_REPLY_OPEN}${JSON.stringify(replies)}${NATIVE_REPLY_CLOSE}`
+    : readableQuestionReplies(replies);
+  return context?.late ? `${message}${LATE_ANSWER_CONTEXT}` : message;
+}
+
+/** The same answer as people read it in history and queues: the question, then the answer. */
+export function formatAsyncQuestionReplyDisplay(
+  questions: readonly AskQuestion[],
+  answers: Record<string, string>,
+): string {
+  return readableQuestionReplies(asyncQuestionReplies(questions, answers));
+}
+
+/** Rows saved before the display text existed hold the model's copy; read them back as question and answer. */
+export function asyncQuestionReplyDisplayText(text: string): string {
+  const body = text.endsWith(LATE_ANSWER_CONTEXT) ? text.slice(0, -LATE_ANSWER_CONTEXT.length) : text;
+  if (!body.startsWith(NATIVE_REPLY_OPEN) || !body.endsWith(NATIVE_REPLY_CLOSE)) return body;
+  try {
+    const replies: unknown = JSON.parse(body.slice(NATIVE_REPLY_OPEN.length, -NATIVE_REPLY_CLOSE.length));
+    if (Array.isArray(replies) && replies.length && replies.every((reply): reply is { question: string; answer: string } =>
+      isRecord(reply) && typeof reply.question === 'string' && typeof reply.answer === 'string')) {
+      return readableQuestionReplies(replies);
+    }
+  } catch { /* Not the native reply format: show the text as written. */ }
+  return body;
+}
+
+/** Keep selected choices and typed text editable when an obsolete card becomes a supplement. */
+export function withdrawnQuestionDraftText(customInput: string, selectedLabels: Iterable<string>, savedAnswer?: string): string {
+  const selected = [...selectedLabels];
+  if (selected.length) return [...selected.filter((label) => label !== customInput.trim()), ...(customInput ? [customInput] : [])].join('\n');
+  if (customInput) return customInput;
+  if (!savedAnswer) return '';
+  try {
+    const decoded = JSON.parse(savedAnswer);
+    if (Array.isArray(decoded) && decoded.every((value) => typeof value === 'string')) return decoded.join('\n');
+  } catch { /* A plain single answer needs no decoding. */ }
+  return savedAnswer;
+}
+
+/** Only a confirmed cancellation permits delivery as a new user message. A
+ * missing pending request alone cannot distinguish expiry from an accepted
+ * answer whose receipt was lost (including an answer on another device). */
+export async function asyncQuestionNeedsSupplement(
+  resolve: () => Promise<{ accepted: boolean } | void>,
+  readMessage: () => Promise<unknown>,
+  requestId: string,
+): Promise<boolean> {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  try {
+    const receipt = await Promise.race([
+      resolve(),
+      new Promise<never>((_, reject) => {
+        timer = setTimeout(() => reject(new Error('Interaction receipt timeout')), 15_000);
+      }),
+    ]);
+    if (receipt && receipt.accepted === true) return false;
+  } catch {
+    // Read the original Host row before deciding whether another delivery is safe.
+  } finally {
+    if (timer) clearTimeout(timer);
+  }
+  const raw = await readMessage();
+  const content = typeof raw === 'string' ? JSON.parse(raw) : raw;
+  if (content && typeof content === 'object' && 'requestId' in content && content.requestId === requestId && 'status' in content) {
+    if (content.status === 'answered') return false;
+    if (content.status === 'cancelled') return true;
+  }
+  throw new Error('Interaction decision was not confirmed');
 }
 
 export interface IssueDraft {
@@ -27,6 +152,8 @@ export interface IssueEnv {
   platform: string;
   arch: string;
   osVersion?: string;
+  harness?: 'Claude Code' | 'Codex' | 'Pi';
+  modelId?: string;
 }
 
 export interface IssueConfirmPayload {
@@ -35,6 +162,10 @@ export interface IssueConfirmPayload {
 }
 
 export interface PermissionReviewPresentation {
+  sourceDescription?: string;
+  autoReviewUnavailable: boolean;
+  /** Why Auto-review asked; null for ordinary Ask-mode prompts. */
+  autoReviewReason: string | null;
   canAlwaysAllow: boolean;
   code: string;
   description: string | null;
@@ -126,7 +257,7 @@ export function buildInteractionResolveActionPresentation(input: {
   label: string;
   readOnlyReason?: string | null;
   requestId?: string | null;
-}): InteractionResolveActionPresentation {
+}, localizer?: PresentationLocalizer): InteractionResolveActionPresentation {
   if (input.readOnlyReason) {
     return {
       disabled: true,
@@ -137,15 +268,16 @@ export function buildInteractionResolveActionPresentation(input: {
   if (!input.requestId) {
     return {
       disabled: true,
-      disabledReason: '这个远程交互缺少 requestId，无法回传决定。',
+      disabledReason: presentationText(localizer, 'interaction.panel.missingRequestId', '这个远程交互缺少 requestId，无法回传决定。'),
       label: input.label,
     };
   }
   if (input.busy) {
     return {
       disabled: true,
-      disabledReason: '正在把决定回传到电脑端，请不要重复提交。',
-      label: input.busyLabel ?? '提交中',
+      disabledReason: presentationText(localizer, 'interaction.panel.submittingHint', '正在把决定回传到电脑端，请不要重复提交。'),
+      label: input.busyLabel
+        ?? presentationText(localizer, 'interaction.presentation.action.submitting', '提交中'),
     };
   }
   if (input.invalidReason) {
@@ -173,40 +305,53 @@ export function buildPermissionDecisionSummary(input: {
   toolName: string;
   riskSummary: string | null;
   canAlwaysAllow: boolean;
-}): InteractionDecisionSummary {
+}, localizer?: PresentationLocalizer): InteractionDecisionSummary {
   if (input.riskSummary) {
     return {
-      title: '高风险授权需要二次确认',
-      detail: '先核对命令内容，再点一次确认允许；不确定就拒绝。',
+      title: presentationText(localizer, 'interaction.presentation.permission.highRiskTitle', '高风险授权需要二次确认'),
+      detail: presentationText(localizer, 'interaction.presentation.permission.highRiskDetail', '先核对命令内容，再点一次确认允许；不确定就拒绝。'),
     };
   }
   if (input.canAlwaysAllow) {
     return {
-      title: '可以只允许一次，也可以本任务总是允许',
-      detail: `工具: ${input.toolName}`,
+      title: presentationText(localizer, 'interaction.presentation.permission.sessionAllowTitle', '可以只允许一次，也可以本任务总是允许'),
+      detail: presentationText(localizer, 'interaction.presentation.permission.tool', `工具: ${input.toolName}`, { tool: input.toolName }),
     };
   }
   return {
-    title: '允许后电脑端会继续执行',
-    detail: `工具: ${input.toolName}`,
+    title: presentationText(localizer, 'interaction.presentation.permission.allowTitle', '允许后电脑端会继续执行'),
+    detail: presentationText(localizer, 'interaction.presentation.permission.tool', `工具: ${input.toolName}`, { tool: input.toolName }),
   };
 }
 
 export function buildPermissionReviewPresentation(
   request: InteractionRequestLike,
+  localizer?: PresentationLocalizer,
 ): PermissionReviewPresentation {
   const toolName = permissionToolName(request);
   const input = permissionInput(request);
-  const riskSummary = permissionRiskSummary(request);
+  const riskSummary = permissionRiskSummary(request, localizer);
   const canAlwaysAllow = sessionScopedPermissionSuggestions(request.suggestions).length > 0;
+  const sourceDescription = permissionSourceDescription(request);
+  let description = permissionDescription(request);
+  // IM retains its combined body; UI titles must describe the operation only.
+  if (sourceDescription && description?.startsWith(sourceDescription)) {
+    if (description === sourceDescription) description = null;
+    else if (description.startsWith(`${sourceDescription}\n\n`)) {
+      description = readString(description.slice(sourceDescription.length + 2));
+    }
+  }
 
   return {
+    autoReviewUnavailable: permissionAutoReviewUnavailable(request),
+    autoReviewReason: permissionAutoReviewUnavailable(request) ? null : permissionAutoReviewReason(request),
+    ...(sourceDescription ? { sourceDescription } : {}),
     canAlwaysAllow,
     code: formatPermissionInput(toolName, input),
-    description: permissionDescription(request),
+    description,
     riskSummary,
-    summary: buildPermissionDecisionSummary({ toolName, riskSummary, canAlwaysAllow }),
-    title: permissionTitle(request),
+    summary: buildPermissionDecisionSummary({ toolName, riskSummary, canAlwaysAllow }, localizer),
+    title: permissionTitle(request, localizer),
     toolName,
   };
 }
@@ -215,19 +360,24 @@ export function buildAskQuestionProgressSummary(input: {
   currentIndex: number;
   total: number;
   multiSelect: boolean;
-}): InteractionDecisionSummary {
+}, localizer?: PresentationLocalizer): InteractionDecisionSummary {
   const total = Math.max(1, input.total);
   const current = Math.min(Math.max(0, input.currentIndex), total - 1) + 1;
   return {
-    title: `第 ${current}/${total} 个问题`,
-    detail: input.multiSelect ? '可多选，也可以输入其他回答。' : '选择一个回答，或输入其他回答。',
+    title: presentationText(localizer, 'interaction.presentation.ask.progress', `第 ${current}/${total} 个问题`, {
+      current,
+      total,
+    }),
+    detail: input.multiSelect
+      ? presentationText(localizer, 'interaction.presentation.ask.multiSelect', '可多选，也可以输入其他回答。')
+      : presentationText(localizer, 'interaction.presentation.ask.singleSelect', '选择一个回答，或输入其他回答。'),
   };
 }
 
 export function buildAskQuestionReviewPresentation(input: {
   currentIndex: number;
   questions: readonly AskQuestion[];
-}): AskQuestionReviewPresentation {
+}, localizer?: PresentationLocalizer): AskQuestionReviewPresentation {
   const totalCount = input.questions.length;
   if (totalCount === 0) {
     return {
@@ -240,10 +390,10 @@ export function buildAskQuestionReviewPresentation(input: {
       optionCount: 0,
       pageLabel: '0/0',
       summary: {
-        title: '没有具体问题',
-        detail: '可以提交空回答让电脑端继续。',
+        title: presentationText(localizer, 'interaction.presentation.ask.emptyTitle', '没有具体问题'),
+        detail: presentationText(localizer, 'interaction.presentation.ask.emptyDetail', '可以提交空回答让电脑端继续。'),
       },
-      title: 'Agent 正在等待确认',
+      title: presentationText(localizer, 'interaction.presentation.ask.waiting', 'Agent 正在等待确认'),
       totalCount: 0,
     };
   }
@@ -267,8 +417,9 @@ export function buildAskQuestionReviewPresentation(input: {
       currentIndex,
       total: totalCount,
       multiSelect,
-    }),
-    title: current?.question || 'Agent 正在等待确认',
+    }, localizer),
+    title: current?.question
+      || presentationText(localizer, 'interaction.presentation.ask.waiting', 'Agent 正在等待确认'),
     totalCount,
   };
 }
@@ -277,11 +428,17 @@ export function buildPlanReviewDecisionSummary(input: {
   outlineCount: number;
   hasFilePath: boolean;
   edited: boolean;
-}): InteractionDecisionSummary {
-  const outline = input.outlineCount > 0 ? `${input.outlineCount} 个章节` : '无章节目录';
-  const file = input.hasFilePath ? '有计划文件' : '无计划文件路径';
+}, localizer?: PresentationLocalizer): InteractionDecisionSummary {
+  const outline = input.outlineCount > 0
+    ? presentationText(localizer, 'interaction.presentation.plan.outlineCount', `${input.outlineCount} 个章节`, { count: input.outlineCount })
+    : presentationText(localizer, 'interaction.presentation.plan.noOutline', '无章节目录');
+  const file = input.hasFilePath
+    ? presentationText(localizer, 'interaction.presentation.plan.hasFile', '有计划文件')
+    : presentationText(localizer, 'interaction.presentation.plan.noFile', '无计划文件路径');
   return {
-    title: input.edited ? '已编辑计划，批准后按当前版本执行' : '批准后电脑端会按计划继续执行',
+    title: input.edited
+      ? presentationText(localizer, 'interaction.presentation.plan.editedTitle', '已编辑计划，批准后按当前版本执行')
+      : presentationText(localizer, 'interaction.presentation.plan.approveTitle', '批准后电脑端会按计划继续执行'),
     detail: `${outline} · ${file}`,
   };
 }
@@ -291,7 +448,7 @@ export function buildPlanReviewEvidencePresentation(input: {
   filePath?: string | null;
   maxOutlineItems?: number;
   plan: string;
-}): PlanReviewEvidencePresentation {
+}, localizer?: PresentationLocalizer): PlanReviewEvidencePresentation {
   const outline = extractPlanOutline(input.plan);
   const maxOutlineItems = Math.max(0, Math.floor(input.maxOutlineItems ?? 3));
   const filePath = input.filePath?.trim() || null;
@@ -309,7 +466,7 @@ export function buildPlanReviewEvidencePresentation(input: {
       edited: input.edited,
       hasFilePath: !!filePath,
       outlineCount: outline.length,
-    }),
+    }, localizer),
   };
 }
 
@@ -336,6 +493,8 @@ export function buildIssueConfirmReviewPresentation(input: {
     input.env.platform,
     input.env.arch,
     input.env.osVersion,
+    input.env.harness,
+    input.env.modelId,
     input.uiLanguage,
   ].filter((part): part is string => typeof part === 'string' && part.trim().length > 0);
 
@@ -356,41 +515,63 @@ export function interactionKind(item: PendingInteractionLike): string {
   return typeof item.request.kind === 'string' ? item.request.kind : 'interaction';
 }
 
-export function interactionDisplayTitle(kind: string): string {
-  if (kind === 'plan_review') return '需要确认执行计划';
-  if (kind === 'permission') return '需要授权电脑端操作';
-  if (kind === 'ask_user_question') return '需要回答 Agent 问题';
-  if (kind === 'issue_confirm') return '需要确认 Issue 内容';
-  if (kind === 'plugin_setup') return '需要在电脑端配置插件';
-  return '需要处理远程请求';
+export function interactionDisplayTitle(kind: string, localizer?: PresentationLocalizer): string {
+  const known = ['plan_review', 'permission', 'ask_user_question', 'issue_confirm', 'plugin_setup', 'input_handoff'];
+  const key = known.includes(kind) ? kind : 'fallback';
+  const fallback: Record<string, string> = {
+    plan_review: '需要确认执行计划',
+    permission: '需要授权电脑端操作',
+    ask_user_question: '需要回答 Agent 问题',
+    issue_confirm: '需要确认 Issue 内容',
+    plugin_setup: '需要在电脑端配置插件',
+    input_handoff: '需要你代为输入',
+    fallback: '需要处理远程请求',
+  };
+  return presentationText(localizer, `interaction.kinds.${key}.title`, fallback[key]);
 }
 
-export function interactionDisplayHint(kind: string, readOnly = false): string {
-  if (readOnly) return '协作只读模式，仅展示电脑端请求。';
-  if (kind === 'plan_review') return '先看计划，必要时反馈修改，确认后电脑端才继续执行。';
-  if (kind === 'permission') return '只把本次决定回传给当前电脑端任务。';
-  if (kind === 'ask_user_question') return '回答会保存草稿,提交后电脑端继续。';
-  if (kind === 'issue_confirm') return '确认标题和正文后再提交。';
-  if (kind === 'plugin_setup') return '配置要在电脑端完成，这里可以取消这次请求。';
-  return '手机版会按桌面端的请求顺序处理。';
+export function interactionDisplayHint(
+  kind: string,
+  readOnly = false,
+  localizer?: PresentationLocalizer,
+): string {
+  if (readOnly) {
+    return presentationText(localizer, 'interaction.presentation.queue.readOnlyHint', '协同只读模式，仅展示电脑端请求。');
+  }
+  const fallback: Record<string, string> = {
+    plan_review: '先看计划，必要时反馈修改，确认后电脑端才继续执行。',
+    permission: '只把本次决定回传给当前电脑端任务。',
+    ask_user_question: '回答会保存草稿，提交后电脑端继续。',
+    issue_confirm: '确认标题和正文后再提交。',
+    plugin_setup: '配置要在电脑端完成，这里可以取消这次请求。',
+    fallback: '手机版会按桌面端的请求顺序处理。',
+  };
+  const key = Object.prototype.hasOwnProperty.call(fallback, kind) ? kind : 'fallback';
+  return presentationText(localizer, `interaction.presentation.queue.hint.${key}`, fallback[key]);
 }
 
-export function interactionKindLabel(kind: string): string {
-  if (kind === 'plan_review') return '计划';
-  if (kind === 'permission') return '授权';
-  if (kind === 'ask_user_question') return '问题';
-  if (kind === 'issue_confirm') return 'Issue';
-  if (kind === 'plugin_setup') return '插件';
-  return '请求';
+export function interactionKindLabel(kind: string, localizer?: PresentationLocalizer): string {
+  const known = ['plan_review', 'permission', 'ask_user_question', 'issue_confirm', 'plugin_setup', 'input_handoff'];
+  const key = known.includes(kind) ? kind : 'fallback';
+  const fallback: Record<string, string> = {
+    plan_review: '计划',
+    permission: '授权',
+    ask_user_question: '问题',
+    issue_confirm: 'Issue',
+    plugin_setup: '插件',
+    input_handoff: '代输入',
+    fallback: '请求',
+  };
+  return presentationText(localizer, `interaction.kinds.${key}.label`, fallback[key]);
 }
 
 /**
  * 控制端(手机 / 另一台桌面)对一张待处理交互卡实际能做什么。
  *
  * 被控桌面会把**所有** pending interaction 经 device-link 推给控制端,但控制端
- * 能给出终局决定的只有权限 / 提问 / 计划三类。其余必须回被控端完成:
+ * 权限 / 提问 / 计划和显式声明支持远程确认的反馈可以在控制端完成:
  * plugin_setup 的 run_action 要开 OAuth 或写可信本地设置(被控端 IPC 边界只放
- * cancel 过来,见 desktop `interactionResolveOrigin`),issue_confirm 只在桌面提交。
+ * cancel 过来,见 desktop `interactionResolveOrigin`);旧宿主的 issue_confirm 仍须回电脑提交。
  *
  * - `resolvable`:控制端能终结这张卡。
  * - `cancel-only`:控制端做不完,但能取消,把会话从等待里放出来。
@@ -403,6 +584,10 @@ const REMOTE_RESOLVABLE_KINDS = new Set(['permission', 'ask_user_question', 'pla
 export function remoteInteractionHandling(item: PendingInteractionLike): RemoteInteractionHandling {
   const kind = interactionKind(item);
   if (REMOTE_RESOLVABLE_KINDS.has(kind)) return 'resolvable';
+  if (kind === 'issue_confirm' && item.request.remoteConfirmSupported === true) return 'resolvable';
+  // 代输入: the controller fills each step through the signed per-step channel
+  // and sends value-less decisions (done / cancel / stay / refresh) through resolve.
+  if (kind === 'input_handoff') return item.request.terminal === true ? 'desktop-only' : 'resolvable';
   // `cancel-only` 必须与 buildPluginSetupCancelDecision 判定一致,否则调用方只看
   // handling 就以为「能取消」,而实际拿不到 decision(#530 review):
   // - terminal 快照是被控端收尾展示用的最后一帧,已经不 actionable;
@@ -422,6 +607,9 @@ export function remoteInteractionHandling(item: PendingInteractionLike): RemoteI
  * 死锁:任何被控端新增的 interaction kind 默认都落进「不阻塞」这一侧。
  */
 export function interactionBlocksRemoteComposer(item: PendingInteractionLike | null | undefined): boolean {
+  // Host-owned input and feedback review keep normal conversation available.
+  // Sending a message does not resolve either confirmation.
+  if (item && ['input_handoff', 'issue_confirm'].includes(interactionKind(item))) return false;
   return !!item && remoteInteractionHandling(item) === 'resolvable';
 }
 
@@ -431,12 +619,16 @@ export function interactionBlocksRemoteComposer(item: PendingInteractionLike | n
  * 判据必须是**整个 pending 集合**,不能是「当前正在看的那张卡」:队列里同时有
  * 权限卡和 plugin_setup 时,用户切到 plugin_setup 只是换了查看对象,那张权限卡
  * 仍在等回答 —— 若按当前卡放开 composer,用户就绕过了仍待处理的阻塞交互
- * (#530 review P1)。只有整批都是本端终结不了的卡时,输入框才回来。
+ * (#530 review P1)。只有整批都是不独占输入的卡（含反馈审阅）时,输入框才回来。
  */
 export function pendingInteractionsBlockRemoteComposer(
   interactions: readonly PendingInteractionLike[],
+  collapsedQuestionIds: readonly string[] = [],
 ): boolean {
-  return interactions.some((item) => interactionBlocksRemoteComposer(item));
+  return interactions.some((item) => {
+    if (interactionKind(item) === 'ask_user_question' && collapsedQuestionIds.includes(readRequestId(item) ?? '')) return false;
+    return interactionBlocksRemoteComposer(item);
+  });
 }
 
 /**
@@ -687,6 +879,7 @@ export function buildPendingInteractionQueuePresentation(
     maxVisible?: number;
     readOnly?: boolean;
   } = {},
+  localizer?: PresentationLocalizer,
 ): PendingInteractionQueuePresentation {
   const sorted = sortPendingInteractions(interactions);
   const totalCount = sorted.length;
@@ -697,10 +890,10 @@ export function buildPendingInteractionQueuePresentation(
     return {
       active: index === 0,
       kind,
-      label: interactionKindLabel(kind),
-      positionLabel: interactionPositionLabel(index),
+      label: interactionKindLabel(kind, localizer),
+      positionLabel: interactionPositionLabel(index, localizer),
       requestId: readRequestId(item),
-      title: interactionDisplayTitle(kind),
+      title: interactionDisplayTitle(kind, localizer),
     };
   });
   const active = items[0] ?? null;
@@ -708,12 +901,16 @@ export function buildPendingInteractionQueuePresentation(
 
   return {
     active,
-    countLabel: totalCount > 1 ? `${totalCount} 个` : '当前',
-    hint: interactionDisplayHint(activeKind, readOnly),
+    countLabel: totalCount > 1
+      ? presentationText(localizer, 'interaction.presentation.queue.count', `${totalCount} 个`, { count: totalCount })
+      : presentationText(localizer, 'interaction.panel.queuePositionCurrent', '当前'),
+    hint: interactionDisplayHint(activeKind, readOnly, localizer),
     items,
     overflowCount: Math.max(0, totalCount - items.length),
     readOnly,
-    title: active ? active.title : '没有待处理请求',
+    title: active
+      ? active.title
+      : presentationText(localizer, 'interaction.presentation.queue.empty', '没有待处理请求'),
     totalCount,
   };
 }
@@ -727,9 +924,12 @@ const INTERACTION_PRIORITY: Record<string, number> = {
   // 只能回电脑端处理的卡上(手机侧另有不阻塞输入框的兜底,见
   // interactionBlocksRemoteComposer)。
   plugin_setup: 4,
+  // Answerable on the controller, but never ahead of a question the turn is blocked on.
+  input_handoff: 3,
 };
 
 export function interactionPriority(item: PendingInteractionLike): number {
+  if (interactionKind(item) === 'ask_user_question' && item.request.delivery === 'async') return 2.5;
   return INTERACTION_PRIORITY[interactionKind(item)] ?? 100;
 }
 
@@ -738,7 +938,8 @@ export function sortPendingInteractions(
 ): PendingInteractionLike[] {
   return interactions
     .map((item, index) => ({ item, index }))
-    .sort((a, b) => interactionPriority(a.item) - interactionPriority(b.item) || a.index - b.index)
+    .sort((a, b) => interactionPriority(a.item) - interactionPriority(b.item)
+      || Number(b.item.retainedDraft === true) - Number(a.item.retainedDraft === true) || a.index - b.index)
     .map(({ item }) => item);
 }
 
@@ -753,40 +954,202 @@ export function readRequestId(item: PendingInteractionLike): string | null {
   return typeof requestId === 'string' && requestId.length > 0 ? requestId : null;
 }
 
-function interactionPositionLabel(index: number): string {
-  if (index === 0) return '当前';
-  if (index === 1) return '接着';
-  return `第 ${index + 1}`;
+function interactionPositionLabel(index: number, localizer?: PresentationLocalizer): string {
+  if (index === 0) return presentationText(localizer, 'interaction.panel.queuePositionCurrent', '当前');
+  if (index === 1) return presentationText(localizer, 'interaction.panel.queuePositionNext', '接着');
+  return presentationText(localizer, 'interaction.panel.queuePositionNth', `第 ${index + 1}`, {
+    index: index + 1,
+  });
+}
+
+/** What a permission card asks about, independent of harness tool naming. */
+export type PermissionActionKind = 'command' | 'file-read' | 'file-write' | 'plugin' | 'mcp' | 'browser' | 'tool';
+
+export interface PermissionActionSummary {
+  kind: PermissionActionKind;
+  /** Plugin or MCP server the call goes to, when known. */
+  subject?: string;
+  /** The exact operation in readable form: command line, paths, or arguments. */
+  preview: string;
+}
+
+const COMMAND_TOOLS = new Set(['bash', 'powershell', 'exec', 'shell', 'run_command', 'local_shell']);
+const FILE_READ_TOOLS = new Set(['read', 'glob', 'grep', 'find', 'ls']);
+const FILE_WRITE_TOOLS = new Set(['edit', 'write', 'multiedit', 'notebookedit', 'file_change', 'apply_patch', 'patch']);
+
+function previewOf(value: unknown): string {
+  const text = typeof value === 'string' ? value : stringifyCompact(value);
+  return text.length > 500 ? `${text.slice(0, 500)}...` : text;
+}
+
+/** Progressive `call_tool.args` may arrive as a JSON string (issue #350); approval parses it the same way. */
+function argsObject(value: unknown): Record<string, unknown> {
+  if (typeof value === 'string') {
+    try { value = JSON.parse(value); } catch { return {}; }
+  }
+  return isRecord(value) ? value : {};
+}
+
+/** One-line arguments after the tool name; empty when there are none. */
+function argsPreview(args: Record<string, unknown>): string {
+  if (!Object.keys(args).length) return '';
+  const text = JSON.stringify(args) ?? '';
+  return text.length > 500 ? `${text.slice(0, 500)}...` : text;
+}
+
+/** `mcp__server__tool` or `mcp:server:tool`; plain string scan, no backtracking on model-controlled names. */
+function parseMcpToolName(toolName: string): { server: string; tool: string } | null {
+  const rest = toolName.startsWith('mcp__') ? toolName.slice(5) : toolName.startsWith('mcp:') ? toolName.slice(4) : null;
+  if (!rest) return null;
+  const underscore = rest.indexOf('__');
+  const colon = rest.indexOf(':');
+  const cut = underscore < 0 ? colon : colon < 0 ? underscore : Math.min(underscore, colon);
+  if (cut <= 0) return null;
+  const sepLength = rest.startsWith('__', cut) ? 2 : 1;
+  const server = rest.slice(0, cut);
+  const tool = rest.slice(cut + sepLength);
+  return tool ? { server, tool } : null;
+}
+
+function shellQuote(arg: string): string {
+  return /^[A-Za-z0-9_\/.:=@%+,-]+$/.test(arg) ? arg : `'${arg.replaceAll("'", `'\\''`)}'`;
+}
+
+function commandText(input: Record<string, unknown>): string | null {
+  const command = input.command ?? input.cmd;
+  if (typeof command === 'string' && command.trim()) return command;
+  // argv arrays: quote each element so "one value with a space" and "two values" stay distinguishable.
+  if (Array.isArray(command) && command.length > 0 && command.every((part) => typeof part === 'string')) {
+    return command.map(shellQuote).join(' ');
+  }
+  return null;
+}
+
+function filePaths(input: Record<string, unknown>, search: boolean): string | null {
+  const path = readString(input.file_path) ?? readString(input.path) ?? readString(input.notebook_path);
+  // A search reads everything under its path: show the query and where it looks.
+  const query = search ? readString(input.pattern) ?? readString(input.query) : null;
+  const direct = query ? (path ? `${query} \u2192 ${path}` : query) : path;
+  if (direct) return direct;
+  const changes = Array.isArray(input.changes) ? input.changes : isRecord(input.changes) ? Object.keys(input.changes) : [];
+  const lines = changes.map((change) => {
+    if (typeof change === 'string') return change;
+    if (!isRecord(change) || !readString(change.path)) return null;
+    // Keep what distinguishes delete / update / move and the patch itself.
+    const kind = isRecord(change.kind) ? readString(change.kind.type) : readString(change.kind);
+    const move = isRecord(change.kind) ? readString(change.kind.move_path) : null;
+    const head = `${kind ? `${kind} ` : ''}${change.path}${move ? ` \u2192 ${move}` : ''}`;
+    const diff = readString(change.diff);
+    return diff ? `${head}\n${diff}` : head;
+  }).filter((line): line is string => !!line);
+  if (!lines.length) return null;
+  const text = lines.join('\n');
+  return text.length > 500 ? `${text.slice(0, 500)}...` : text;
+}
+
+/** Browser step: the action plus every other argument, so recipes, typed text and sites stay visible. */
+function browserStep(args: Record<string, unknown>): string {
+  const action = readString(args.action);
+  if (!action) return previewOf(args);
+  const { action: _action, ...rest } = args;
+  return [action, argsPreview(rest)].filter(Boolean).join(' ');
+}
+
+/**
+ * Classify a permission request so every surface can say in plain words what is
+ * being confirmed. Unknown tools keep their name and compact JSON arguments.
+ */
+export function describePermissionAction(toolName: string, input: Record<string, unknown>): PermissionActionSummary {
+  const name = toolName.toLowerCase();
+  // Progressive MCP dispatchers: mcp__server__call_tool / mcp:server:call_tool → inner tool.
+  const innerName = readString(input.name);
+  const innerArgs = argsObject(input.args);
+  if (name.includes('browser') || innerName === 'browser') {
+    return { kind: 'browser', preview: browserStep(innerName === 'browser' ? innerArgs : input) };
+  }
+  if (/(^|[_:])ghost_call$/.test(name) && readString(input.ghost_id)) {
+    // ghost_call { tool: 'call_tool', args: { name, args } } dispatches one level deeper.
+    const tool = readString(input.tool);
+    const dispatched = tool === 'call_tool' && readString(innerArgs.name);
+    const call = dispatched || tool;
+    const args = dispatched ? argsObject(innerArgs.args) : innerArgs;
+    return { kind: 'plugin', subject: readString(input.ghost_id)!, preview: [call, argsPreview(args)].filter(Boolean).join(' ') || previewOf(input) };
+  }
+  if (COMMAND_TOOLS.has(name)) {
+    const command = commandText(input);
+    // The same relative command in two repositories is not the same operation: keep the cwd.
+    const cwd = readString(input.cwd) ?? readString(input.workdir);
+    if (command) {
+      const context = [cwd && `# cwd: ${cwd}`,
+        input.environmentId && `# environment: ${String(input.environmentId)}`,
+        input.networkApprovalContext && `# network: ${JSON.stringify(input.networkApprovalContext)}`,
+        input.approvalKind === 'humanCommand' && '# humanCommand'];
+      return { kind: 'command', preview: [command, ...context.filter(Boolean)].join('\n') };
+    }
+  }
+  if (FILE_READ_TOOLS.has(name) || FILE_WRITE_TOOLS.has(name)) {
+    const paths = filePaths(input, FILE_READ_TOOLS.has(name) && name !== 'read');
+    if (paths) return { kind: FILE_READ_TOOLS.has(name) ? 'file-read' : 'file-write', preview: paths };
+  }
+  const mcp = parseMcpToolName(toolName);
+  if (mcp) {
+    const dispatched = mcp.tool === 'call_tool' && innerName;
+    const args = dispatched ? innerArgs : input;
+    return { kind: 'mcp', subject: mcp.server, preview: [dispatched || mcp.tool, argsPreview(args)].filter(Boolean).join(' ') };
+  }
+  return { kind: 'tool', preview: previewOf(input) };
 }
 
 export function formatPermissionInput(toolName: string, input: Record<string, unknown>): string {
-  switch (toolName) {
-    case 'Bash':
-      return typeof input.command === 'string' ? input.command : stringifyCompact(input);
-    case 'Read':
-    case 'Edit':
-    case 'Write':
-      return typeof input.file_path === 'string' ? input.file_path : stringifyCompact(input);
-    case 'Glob':
-    case 'Grep':
-      return typeof input.pattern === 'string' ? input.pattern : stringifyCompact(input);
-    default: {
-      const text = stringifyCompact(input);
-      return text.length > 500 ? `${text.slice(0, 500)}...` : text;
-    }
-  }
+  return describePermissionAction(toolName, input).preview;
 }
 
-export function permissionTitle(request: InteractionRequestLike): string {
+export function permissionTitle(
+  request: InteractionRequestLike,
+  localizer?: PresentationLocalizer,
+): string {
+  if (permissionToolName(request) === 'write_stdin') {
+    return presentationText(localizer, 'interaction.presentation.permission.titleStdin', '允许向终端发送输入？');
+  }
+  if (permissionToolName(request) === 'mcp_url') {
+    return presentationText(localizer, 'interaction.presentation.permission.titleMcpUrl', '完成 {{server}} 的请求', { server: String(permissionInput(request).serverName ?? 'MCP') });
+  }
+  // Harness titles are often English or name an internal tool ("exec"); say what happens instead.
+  const action = describePermissionAction(permissionToolName(request), permissionInput(request));
+  if (action.kind === 'plugin' && action.subject) {
+    return presentationText(localizer, 'interaction.presentation.permission.titlePlugin', `允许使用插件「${action.subject}」？`, { plugin: action.subject });
+  }
+  if (action.kind !== 'tool' && action.kind !== 'plugin' && action.kind !== 'mcp') {
+    const key = { command: 'titleCommand', 'file-read': 'titleFileRead', 'file-write': 'titleFileWrite', browser: 'titleBrowser' }[action.kind];
+    const fallback = { command: '允许运行这条命令？', 'file-read': '允许读取文件？', 'file-write': '允许修改文件？', browser: '允许浏览器执行这一步？' }[action.kind];
+    return presentationText(localizer, `interaction.presentation.permission.${key}`, fallback);
+  }
   const explicit = readString(request.title);
   if (explicit) return explicit;
   const displayName = readString(request.displayName);
   const toolName = readString(request.toolName) || 'tool';
-  return `允许使用 ${displayName || toolName}?`;
+  const tool = displayName || action.subject || toolName;
+  return presentationText(localizer, 'interaction.presentation.permission.title', `允许使用 ${tool}?`, { tool });
+}
+
+export function permissionSourceDescription(request: InteractionRequestLike): string | null {
+  const metadata = request.metadata;
+  if (!metadata || typeof metadata !== 'object' || Array.isArray(metadata)) return null;
+  const source = (metadata as Record<string, unknown>).imSourceDescription;
+  return typeof source === 'string' ? source : null;
 }
 
 export function permissionDescription(request: InteractionRequestLike): string | null {
   return readString(request.description);
+}
+
+/** Auto-review's own explanation for asking (metadata.autoReviewReason), shown as the card's "why". */
+export function permissionAutoReviewReason(request: InteractionRequestLike): string | null {
+  return isRecord(request.metadata) ? readString(request.metadata.autoReviewReason) : null;
+}
+
+export function permissionAutoReviewUnavailable(request: InteractionRequestLike): boolean {
+  return isRecord(request.metadata) && request.metadata.autoReviewUnavailable === true;
 }
 
 export function permissionToolName(request: InteractionRequestLike): string {
@@ -797,14 +1160,16 @@ export function permissionInput(request: InteractionRequestLike): Record<string,
   return isRecord(request.input) ? request.input : {};
 }
 
-export function permissionRiskSummary(request: InteractionRequestLike): string | null {
-  const toolName = permissionToolName(request);
-  const input = permissionInput(request);
-  if (toolName !== 'Bash') return null;
-  const command = typeof input.command === 'string' ? input.command.trim() : '';
+export function permissionRiskSummary(
+  request: InteractionRequestLike,
+  localizer?: PresentationLocalizer,
+): string | null {
+  const action = describePermissionAction(permissionToolName(request), permissionInput(request));
+  if (action.kind !== 'command') return null;
+  const command = action.preview.trim();
   if (!command) return null;
   if (!isHighRiskShellCommand(command)) return null;
-  return '这个命令可能修改系统、仓库或外部服务状态。允许前请确认你信任当前任务和命令内容。';
+  return presentationText(localizer, 'interaction.presentation.permission.risk', '这个命令可能修改系统、仓库或外部服务状态。允许前请确认你信任当前任务和命令内容。');
 }
 
 export function sessionScopedPermissionSuggestions(suggestions: unknown): unknown[] {
@@ -844,26 +1209,55 @@ export function normalizeAskQuestions(value: unknown): AskQuestion[] {
     if (!isRecord(item)) return [];
     const question = readString(item.question);
     if (!question) return [];
+    const answerConstraints = normalizeAskAnswerConstraints(item.answerConstraints);
     const options = Array.isArray(item.options)
       ? item.options.flatMap((option) => {
         if (!isRecord(option)) return [];
-        const label = readString(option.label);
+        const label = answerConstraints?.choices && typeof option.label === 'string' ? option.label : readString(option.label);
         if (!label) return [];
         const description = readString(option.description);
         return [{ label, ...(description ? { description } : {}) }];
       })
       : undefined;
     return [{
+      ...(readString(item.id) ? { id: readString(item.id)! } : {}),
       question,
       header: readString(item.header) ?? undefined,
       options,
       multiSelect: item.multiSelect === true,
+      ...(answerConstraints ? { answerConstraints } : {}),
     }];
   });
 }
 
+function normalizeAskAnswerConstraints(value: unknown): AskAnswerConstraints | undefined {
+  if (!isRecord(value) || typeof value.required !== 'boolean') return undefined;
+  return {
+    required: value.required,
+    ...(Array.isArray(value.choices) && value.choices.every((v) => typeof v === 'string')
+      ? { choices: value.choices as string[] } : {}),
+    ...(Number.isSafeInteger(value.minLength) && Number(value.minLength) >= 0 ? { minLength: Number(value.minLength) } : {}),
+    ...(Number.isSafeInteger(value.maxLength) && Number(value.maxLength) >= 0 ? { maxLength: Number(value.maxLength) } : {}),
+  };
+}
+
+export function askQuestionOptions(question: AskQuestion | undefined): Array<{ label: string; description?: string }> {
+  return question?.answerConstraints?.choices ? [...(question.options ?? [])] : visibleAskOptions(question?.options);
+}
+
+export function askAnswerError(question: AskQuestion, answer: string): { key: 'required' | 'choice' | 'tooShort' | 'tooLong'; count?: number } | undefined {
+  const rules = question.answerConstraints;
+  if (!rules) return undefined;
+  if (!answer.trim()) return rules.required ? { key: 'required' } : undefined;
+  if (rules.choices && !rules.choices.includes(answer)) return { key: 'choice' };
+  const length = Array.from(answer).length;
+  if (rules.minLength !== undefined && length < rules.minLength) return { key: 'tooShort', count: rules.minLength };
+  if (rules.maxLength !== undefined && length > rules.maxLength) return { key: 'tooLong', count: rules.maxLength };
+  return undefined;
+}
+
 export function answerKey(question: AskQuestion): string {
-  return question.question;
+  return question.id || question.question;
 }
 
 export function encodeMultiSelectAnswer(
@@ -909,6 +1303,44 @@ export function selectionFromAnswer(question: AskQuestion, answer: string | unde
     return { selectedLabels: new Set(), customInput: answer, showCustomInput: true };
   }
   return { selectedLabels: new Set([answer]), customInput: '', showCustomInput: false };
+}
+
+/**
+ * Option labels that are really the model's own "none of these fit" escape
+ * hatch. Claude Code's native AskUserQuestion prompt tells the model not to add
+ * an "Other" option (the host UI provides a free-text entry automatically), but
+ * harnesses whose tool schema carries no such note still produce labels like
+ * "其他（回复说明）" or "Other (please specify)".
+ *
+ * A host question card must replace such an option with its own free-text
+ * entry instead of rendering (and submitting) the literal label: the model wrote
+ * the option expecting the user's explanation, so receiving only the label back
+ * reads as an empty answer. See `visibleAskOptions`.
+ *
+ * Only a leading "other"-style token is recognized, so labels that merely
+ * mention an explanation inside a substantive choice (e.g. "sensor_height 要改
+ * （回复说明数值）" or "其他任务") are not escape hatches and stay selectable.
+ */
+export function isFreeTextAskOptionLabel(label: string): boolean {
+  const normalized = label.trim().toLowerCase();
+  if (!normalized) return false;
+  // "Other" / "Other (please specify)" / "其他（回复说明）" are escape hatches;
+  // "Other tasks" / "その他の質問" are substantive options. A bare space must not
+  // count as the boundary — only end-of-label or a separator/parenthesis does.
+  return /^(?:其他(?:答案|选项)?|其它(?:答案|选项)?|other|others|something else|その他|기타)(?=$|\s*[（(【[：:，,、.。\-—－…])/.test(normalized);
+}
+
+/**
+ * Options one host question card should render.
+ *
+ * Model-authored free-text entries are dropped: they mean the same thing as the
+ * host's own "type your own answer" row, so rendering both would show duplicate
+ * escape hatches and let a click submit the placeholder label as an answer. The
+ * host row is the single entry that remains (it also covers the case where the
+ * filtered list becomes empty — callers fall back to free-form input).
+ */
+export function visibleAskOptions<T extends { label: string }>(options: readonly T[] | undefined): T[] {
+  return (options ?? []).filter((option) => !isFreeTextAskOptionLabel(option.label));
 }
 
 export function buildAskUserQuestionDecision(answers: Record<string, string>): Record<string, unknown> {
@@ -1009,8 +1441,20 @@ export function normalizeIssueConfirm(request: InteractionRequestLike): IssueCon
       platform: readString(env.platform) ?? 'unknown',
       arch: readString(env.arch) ?? 'unknown',
       osVersion: readString(env.osVersion) ?? undefined,
+      harness: readIssueHarness(env.harness),
+      modelId: normalizeIssueModelId(env.modelId),
     },
   };
+}
+
+function readIssueHarness(value: unknown): IssueEnv['harness'] {
+  return value === 'Claude Code' || value === 'Codex' || value === 'Pi' ? value : undefined;
+}
+
+function normalizeIssueModelId(value: unknown): string | undefined {
+  if (typeof value !== 'string') return undefined;
+  const normalized = value.trim().replace(/\s+/g, ' ').slice(0, 200).trim();
+  return normalized || undefined;
 }
 
 export function buildIssueConfirmDecision(

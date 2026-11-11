@@ -1,8 +1,21 @@
 import { describe, expect, it } from 'vitest';
+import { readFileSync } from 'node:fs';
 
 import { marketVisibilityLabelKey, marketVisibilitySubtitleKey } from '../marketVisibility';
 
+const SKILLHUB_LOCALES = ['zh-CN', 'zh-TW', 'en', 'ja', 'ko'] as const;
+
 describe('marketVisibilityLabelKey', () => {
+  it('does not expose legacy XD branding in SkillHub copy', () => {
+    for (const locale of SKILLHUB_LOCALES) {
+      const common = JSON.parse(readFileSync(
+        new URL(`../../../../i18n/locales/${locale}/common.json`, import.meta.url),
+        'utf8',
+      )) as { skillhub: unknown };
+      expect(JSON.stringify(common.skillhub)).not.toMatch(/XD\.Inc/i);
+    }
+  });
+
   it('keeps existing public and department labels', () => {
     expect(marketVisibilityLabelKey({
       visibility: 'PUBLIC',

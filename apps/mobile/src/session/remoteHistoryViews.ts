@@ -1,0 +1,134 @@
+import { HistoryViewController, isHistoryViewUnavailable } from '@cindy/maker-shared/message-window';
+import type { MobileMakerTransport } from '@/device-link/mobileMakerTransport';
+import type { RemoteMessage } from './types';
+import { clearHistoryDisk, historyDiskAuthority, readHistoryDisk, writeHistoryDisk } from './remoteHistoryDiskCache';
+import { getRecentTasks, recentTaskKey, subscribeRecentTasks } from './recentTasks';
+import { clearMessageReadingPositions } from './messageReadingPosition';
+import { mobileDebugLog } from '@/debug/mobileDebugLog';
+
+// Data and resident message lists share the same five-task retention policy.
+type Reader = Pick<MobileMakerTransport, 'readHistoryView' | 'readWorkDetails' | 'setHistoryExpanded'>;
+type Entry = { deviceId: string; sessionId: string; reader: Reader;
+  view: HistoryViewController<RemoteMessage>; consumers: number };
+const views = new Map<string, Entry>();
+const keyFor = (deviceId: string, sessionId: string) => JSON.stringify([deviceId, sessionId]);
+
+function pruneDetachedViews() {
+  const retained = new Set(getRecentTasks().map(task => recentTaskKey(task.params)));
+  for (const [key, entry] of views) {
+    // A live route still owns its controller. Release it when that route unmounts;
+    // never create a second controller for an existing consumer.
+    if (!entry.consumers && !retained.has(key)) views.delete(key);
+  }
+}
+subscribeRecentTasks(pruneDetachedViews);
+
+export function findRemoteHistoryView(deviceId: string, sessionId: string) {
+  return views.get(keyFor(deviceId, sessionId))?.view;
+}
+
+/** Read-ahead never races a mounted page: that page reads and persists its own view. */
+export function isRemoteHistoryViewMounted(deviceId: string, sessionId: string): boolean {
+  return (views.get(keyFor(deviceId, sessionId))?.consumers ?? 0) > 0;
+}
+
+/** A retained, unmounted view's snapshot; it is newer than disk until it is dropped. */
+export function detachedRemoteHistorySnapshot(deviceId: string, sessionId: string) {
+  const entry = views.get(keyFor(deviceId, sessionId));
+  return entry && !entry.consumers && entry.view.getSnapshot().ready ? entry.view.getSnapshot() : null;
+}
+
+/** After a read ahead reaches disk, the next mount restores it instead of the older retained view. */
+export function dropDetachedRemoteHistoryView(deviceId: string, sessionId: string): void {
+  const key = keyFor(deviceId, sessionId);
+  if (!views.get(key)?.consumers) views.delete(key);
+}
+
+export function getRemoteHistoryView(deviceId: string, sessionId: string, reader: Reader): Entry {
+  const key = keyFor(deviceId, sessionId);
+  const existing = views.get(key);
+  if (existing) return existing;
+  const entry: Entry = { deviceId, sessionId, reader, consumers: 0,
+    view: new HistoryViewController<RemoteMessage>({
+      refreshOnResume: false,
+      page: (before) => entry.reader.readHistoryView(sessionId, before),
+      details: (ref, after) => entry.reader.readWorkDetails(sessionId, ref, after),
+      expanded: (refs) => entry.reader.setHistoryExpanded(sessionId, refs),
+      diagnostic: (event) => mobileDebugLog('debug', 'recovery', 'history view changed', {
+        hostRef: deviceId.slice(0, 8), sessionRef: sessionId.slice(0, 8), ...event,
+      }),
+    }) };
+  return entry;
+}
+
+export function mountRemoteHistoryView(entry: Entry, reader: Reader, active: boolean) {
+  // Register only after React commits. An abandoned render must not retain a
+  // controller or replace the transport used by the currently visible page.
+  views.set(keyFor(entry.deviceId, entry.sessionId), entry);
+  entry.reader = reader;
+  entry.consumers++;
+  const authority = historyDiskAuthority(entry.deviceId, entry.sessionId);
+  let writeAuthority = authority;
+  let pendingSnapshot = entry.view.getSnapshot();
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const persist = () => {
+    if (timer) clearTimeout(timer);
+    timer = undefined;
+    void writeHistoryDisk(writeAuthority, pendingSnapshot);
+  };
+  const onSnapshot = () => {
+    if (timer) clearTimeout(timer);
+    const snapshot = entry.view.getSnapshot();
+    if (!snapshot.ready) pendingSnapshot = snapshot;
+    if (!authority.ownerCurrent()) return;
+    if (isHistoryViewUnavailable(snapshot.error)) {
+      void clearHistoryDisk(entry.deviceId, entry.sessionId);
+      return;
+    }
+    if (!snapshot.ready || snapshot.loading || snapshot.error) return;
+    pendingSnapshot = snapshot;
+    // A new authoritative snapshot after rewind gets new write authority. Old timers/unmounts
+    // keep their old authority and cannot repopulate a cleared snapshot.
+    writeAuthority = historyDiskAuthority(entry.deviceId, entry.sessionId);
+    if (!entry.view.isActive()) { persist(); return; }
+    timer = setTimeout(persist, 1200);
+  };
+  const unsubscribe = entry.view.subscribe(onSnapshot);
+  // Retire an existing downgrade (clearing its disk projection), then retry the
+  // projection once per entry: a refresh never leaves raw fallback on its own,
+  // and the Host may since have become able to serve this history.
+  onSnapshot();
+  if (isHistoryViewUnavailable(entry.view.getSnapshot().error)) entry.view.reset();
+  entry.view.setActive(active);
+  void entry.view.restoreCachedView(() => readHistoryDisk(authority));
+  return () => {
+    unsubscribe();
+    persist();
+    if (--entry.consumers > 0) return;
+    entry.view.setActive(false);
+    const key = keyFor(entry.deviceId, entry.sessionId);
+    if (views.get(key) !== entry) return;
+    pruneDetachedViews();
+  };
+}
+
+/** Hard boundaries also invalidate reads already held by mounted consumers. */
+export function resetRemoteHistoryViews(deviceId: string | undefined, sessionId: string): void {
+  clearMessageReadingPositions(deviceId, sessionId);
+  for (const entry of views.values()) {
+    if (entry.sessionId === sessionId && (deviceId === undefined || entry.deviceId === deviceId)) entry.view.reset();
+  }
+}
+
+export function clearRemoteHistoryViews(deviceId?: string, sessionId?: string): void {
+  clearMessageReadingPositions(deviceId, sessionId);
+  for (const [key, entry] of views) {
+    if (deviceId !== undefined && entry.deviceId !== deviceId) continue;
+    if (sessionId !== undefined && entry.sessionId !== sessionId) continue;
+    // A blurred screen may remain mounted. Keep its registration so later focus
+    // and ingress address the same (now empty) controller.
+    if (!entry.consumers) views.delete(key);
+    entry.view.setActive(false);
+    entry.view.reset();
+  }
+}

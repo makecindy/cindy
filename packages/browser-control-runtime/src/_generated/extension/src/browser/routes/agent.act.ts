@@ -39,8 +39,11 @@ import {
 } from "./agent.act.errors.js";
 import { registerBrowserAgentActHookRoutes } from "./agent.act.hooks.js";
 import { normalizeActRequest, validateBatchTargetIds } from "./agent.act.normalize.js";
+import { resolveActionTargetIds } from "../../../../../shim/browser-action-targets.js";
+import { readBrowserDom } from "../../../../../shim/browser-dom-read.js";
 import { type ActKind, isActKind } from "./agent.act.shared.js";
 import {
+  browserNavigationPolicyForProfile,
   readBody,
   requirePwAi,
   resolveTargetIdFromBody,
@@ -91,11 +94,14 @@ async function assertExistingSessionPostInteractionNavigationAllowed(params: {
   userDataDir?: string;
   targetId: string;
   ssrfPolicy?: BrowserNavigationPolicyOptions["ssrfPolicy"];
+  browserProxyMode?: BrowserNavigationPolicyOptions["browserProxyMode"];
   listTabs: () => Promise<Array<{ targetId: string; url: string }>>;
   initialTabTargetIds: ReadonlySet<string>;
 }): Promise<void> {
-  const ssrfPolicyOpts = withBrowserNavigationPolicy(params.ssrfPolicy);
-  if (!ssrfPolicyOpts.ssrfPolicy) {
+  const ssrfPolicyOpts = withBrowserNavigationPolicy(params.ssrfPolicy, {
+    browserProxyMode: params.browserProxyMode,
+  });
+  if (!ssrfPolicyOpts.ssrfPolicy && !ssrfPolicyOpts.browserProxyMode) {
     return;
   }
   const listTabs = params.listTabs;
@@ -402,6 +408,7 @@ export function registerBrowserAgentActRoutes(
         );
       }
 
+      const requestedAction = action;
       await withRouteTabContext({
         req,
         res,
@@ -409,11 +416,20 @@ export function registerBrowserAgentActRoutes(
         targetId,
         enforceCurrentUrlAllowed: shouldEnforceCurrentUrlForAct(action),
         run: async ({ profileCtx, cdpUrl, tab, resolveTabUrl }) => {
+          let resolvedAction: BrowserActRequest;
+          try {
+            resolvedAction = resolveActionTargetIds(requestedAction, targetId, tab.targetId);
+          } catch {
+            return jsonActError(res, 403, ACT_ERROR_CODES.targetIdMismatch,
+              "action targetId must match request targetId");
+          }
+          const action = resolvedAction;
           const evaluateEnabled = ctx.state().resolved.evaluateEnabled;
-          const ssrfPolicy = ctx.state().resolved.ssrfPolicy;
+          const navigationPolicy = browserNavigationPolicyForProfile(ctx, profileCtx);
+          const ssrfPolicy = navigationPolicy.ssrfPolicy;
           const isExistingSession = getBrowserProfileCapabilities(profileCtx.profile).usesChromeMcp;
           const hasNavigationResultPolicy = Boolean(
-            withBrowserNavigationPolicy(ssrfPolicy).ssrfPolicy,
+            navigationPolicy.ssrfPolicy || navigationPolicy.browserProxyMode,
           );
           const jsonOk = async (
             extra?: Record<string, unknown>,
@@ -444,13 +460,22 @@ export function registerBrowserAgentActRoutes(
               ...extra,
             });
           };
-          if (action.targetId && action.targetId !== tab.targetId) {
-            return jsonActError(
-              res,
-              403,
-              ACT_ERROR_CODES.targetIdMismatch,
-              "action targetId must match request targetId",
-            );
+          // Only structured host reads enter this path. Arbitrary fn is
+          // ignored here, never trusted as a promise of read-only behavior.
+          if (action.kind === "evaluate" && body.domRead !== undefined && !isExistingSession) {
+            if (!evaluateEnabled) {
+              return jsonActError(res, 403, ACT_ERROR_CODES.evaluateDisabled,
+                browserEvaluateDisabledMessage("evaluate"));
+            }
+            const observed = await readBrowserDom({
+              cdpUrl, targetId: tab.targetId, spec: body.domRead,
+              timeoutMs: action.timeoutMs, ssrfPolicy,
+              browserProxyMode: navigationPolicy.browserProxyMode, signal: req.signal,
+            });
+            if ("blockedByDialog" in observed) {
+              return res.json({ ok: true, targetId: tab.targetId, ...observed });
+            }
+            return res.json({ ok: true, targetId: tab.targetId, url: observed.url, result: observed.value });
           }
           const profileName = profileCtx.profile.name;
           if (isExistingSession) {
@@ -462,6 +487,7 @@ export function registerBrowserAgentActRoutes(
               profile: profileCtx.profile,
               targetId: tab.targetId,
               ssrfPolicy,
+              browserProxyMode: navigationPolicy.browserProxyMode,
               listTabs: () => profileCtx.listTabs(),
               initialTabTargetIds,
             };
@@ -676,6 +702,7 @@ export function registerBrowserAgentActRoutes(
             targetId: tab.targetId,
             evaluateEnabled,
             ssrfPolicy,
+            browserProxyMode: navigationPolicy.browserProxyMode,
             signal: req.signal,
           });
           if (result.blockedByDialog) {

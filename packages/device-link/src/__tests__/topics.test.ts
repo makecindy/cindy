@@ -5,9 +5,34 @@
  * 都依赖这份映射,回归必须显式。
  */
 import { describe, it, expect } from 'vitest';
-import { SESSION_ACTIVITY_CHANNEL, fsWatchTopic, parseFsWatchTopic, topicForPush } from '../topics.js';
+import {
+  MAKER_EVENT_BATCH_CHANNEL,
+  SESSION_ACTIVITY_CHANNEL,
+  expandMakerEventBatchPayload,
+  fsWatchTopic,
+  parseFsWatchTopic,
+  topicForPush,
+} from '../topics.js';
 
 describe('topicForPush', () => {
+  it('routes historical file summaries only to the owning task', () => {
+    expect(topicForPush('maker:turn-change-set:updated', { sessionId: 's1' })).toBe('session:s1');
+    expect(topicForPush('maker:turn-change-set:updated', {})).toBeNull();
+  });
+  it('routes delayed model-provider outcomes to the owning task', () => {
+    expect(topicForPush('maker:session-credential-switch-applied', {
+      sessionId: 's1', model: 'model', providerId: 'xd',
+    })).toBe('session:s1');
+    expect(topicForPush('maker:session-credential-switch-failed', {
+      sessionId: 's1', reason: 'apply-failed',
+    })).toBe('session:s1');
+    expect(topicForPush('maker:session-credential-switch-failed', { reason: 'apply-failed' })).toBeNull();
+  });
+  it('delivers companion task state to the parent and private-thread changes to the account topic', () => {
+    expect(topicForPush('maker:bot-delegation:changed', { parentSessionId: 'parent', childSessionId: 'child' })).toBe('session:parent');
+    expect(topicForPush('maker:bot-delegation:changed', { parentSessionId: null })).toBeNull();
+    expect(topicForPush('maker:bot-direct-message:changed', { threadId: 'private' })).toBe('sessions');
+  });
   it('会话列表级 channel → sessions', () => {
     expect(topicForPush('local-db:sessions:created', { sessionId: 's1' })).toBe('sessions');
     expect(
@@ -26,7 +51,10 @@ describe('topicForPush', () => {
   });
 
   it('账号 / 全局级 channel → sessions(随列表订阅走)', () => {
+    expect(topicForPush('local-db:project-aliases:changed', {})).toBe('sessions');
     expect(topicForPush('maker:provider:changed', { revision: 42 })).toBe('sessions');
+    expect(topicForPush('maker:agents:changed', {})).toBe('sessions');
+    expect(topicForPush('local-db:project-aliases:changed', undefined)).toBe('sessions');
     expect(topicForPush('maker:schedule:event', { kind: 'x' })).toBe('sessions');
     expect(topicForPush('maker:project-automation:event', {})).toBe('sessions');
     // 被控端当前草稿全量变更(无 sessionId)→ 并入 sessions topic。
@@ -38,6 +66,32 @@ describe('topicForPush', () => {
       sourceBranch: 'feature/mobile',
       revision: 2,
     })).toBe('sessions');
+    expect(topicForPush('sidebar-settings:project-order-changed', {
+      projectOrder: 'custom',
+      manualProjectOrder: ['local:/a'],
+    })).toBe('sessions');
+    // Claude 订阅余量快照(账号级,无 sessionId;null = 登出清除)→ 并入 sessions topic。
+    expect(topicForPush('usage:claude-subscription-changed', {
+      fiveHour: { utilization: 4, resetsAt: 1788345000 },
+    })).toBe('sessions');
+    expect(topicForPush('usage:claude-subscription-changed', null)).toBe('sessions');
+    expect(topicForPush('subscription-accounts:changed', { providerId: 'anthropic' })).toBe('sessions');
+    // 其余账号级用量快照同口径。
+    expect(topicForPush('usage:codex-account-changed', {
+      primary: { usedPercent: 3 }, webSnapshot: null,
+    })).toBe('sessions');
+    expect(topicForPush('usage:claude-account-changed', {
+      spend: 0.06, maxBudget: 10000,
+    })).toBe('sessions');
+    expect(topicForPush('usage:xai-subscription-changed', { creditUsagePercent: 2 })).toBe('sessions');
+    expect(topicForPush('usage:xai-rate-limit-changed', null)).toBe('sessions');
+  });
+
+  it('claude-session-route-changed → session:<id>(payload 顶层 sessionId 兜底路由)', () => {
+    expect(topicForPush('maker:claude-session-route-changed', {
+      sessionId: 'sess-1',
+      route: 'subscription',
+    })).toBe('session:sess-1');
   });
 
   it('learn:event → sessions(账号级:run 关联触发/蒸馏两个任务,单 sessionId 路由会漏)', () => {
@@ -128,3 +182,42 @@ describe('topicForPush', () => {
     expect(topicForPush('maker:event', undefined)).toBeNull();
   });
 });
+
+describe('expandMakerEventBatchPayload', () => {
+  // 两个控制端(mobile store / desktop main)共用这一份拆包与 fail-closed 判据,
+  // 所以它的契约在这里定,不在任何一端的实现里。
+  it('原样返回批内事件,顺序即批内顺序', () => {
+    const events = [{ sessionId: 's1', event: { i: 0 } }, { sessionId: 's1', event: { i: 1 } }];
+    expect(expandMakerEventBatchPayload({ sessionId: 's1', events })).toEqual(events);
+  });
+
+  it('sessionId 与顶层不一致的条目跳过(topic 隔离不被绕过),其余照常消费', () => {
+    // 坏帧 / 恶意帧:批内混入未订阅会话的事件,会绕过按顶层 sessionId 的 topic 路由。
+    const ok = { sessionId: 's1', event: { keep: true } };
+    expect(expandMakerEventBatchPayload({
+      sessionId: 's1',
+      events: [ok, { sessionId: 's2', event: { leak: true } }, { event: { noSession: true } }],
+    })).toEqual([ok]);
+  });
+
+  it('形状不符 / 空批 → 空数组(不抛、不当批处理)', () => {
+    expect(expandMakerEventBatchPayload(null)).toEqual([]);
+    expect(expandMakerEventBatchPayload({ sessionId: 's1', events: [] })).toEqual([]);
+    expect(expandMakerEventBatchPayload({ sessionId: '', events: [{ sessionId: '' }] })).toEqual([]);
+    expect(expandMakerEventBatchPayload({ events: [{}] })).toEqual([]);
+    expect(expandMakerEventBatchPayload({ sessionId: 's1', events: 'nope' })).toEqual([]);
+  });
+
+  it('批 channel 常量与 topic 路由一致(顶层 sessionId → session:<id>)', () => {
+    expect(topicForPush(MAKER_EVENT_BATCH_CHANNEL, { sessionId: 's7', events: [{}] }))
+      .toBe('session:s7');
+  });
+});
+
+
+it.each(['usage:codex-provider-account-changed', 'usage:subscription-provider-account-changed', 'usage:xai-provider-rate-limit-changed'])(
+  '%s forwards both scoped usage and account clears on the sessions topic', channel => {
+    expect(topicForPush(channel, { providerId: 'account-2', snapshot: { primary: { usedPercent: 10 } } })).toBe('sessions');
+    expect(topicForPush(channel, { providerId: 'account-2', snapshot: null })).toBe('sessions');
+  },
+);

@@ -7,7 +7,8 @@
  *   - 资格审只看 `badge` 卡槽——它与 `notify` 卡槽**并列**,不要求也不捆绑
  *     notify(绿点比 toast 克制,只想点绿点的意识不该被迫连"能弹全屏顶部提示"
  *     一起申请)。装入时 validateGhostManifest 已强制 badge 必须同时声明 panel,
- *     这里不重复判;`slots` 是硬白名单,老包不可能带这个槽,天然拒绝;
+ *     这里不重复判；`badge` 引入前的旧版校验会拒绝未知 slot，所以更早安装的
+ *     老包不可能带这个槽；当前运行时仍以 Manifest 声明作为强制边界；
  *   - 意识只供**纯文本** summary:与 notify 共用 sanitizeGhostNoticeText 剥控制
  *     字符,换行坍缩成空格(摘要占卡片一行,换行没有正当用途),超限拒收——
  *     不静默截断,作者需要知道自己超了;
@@ -72,10 +73,10 @@ export class GhostBadgeSlot {
     if (!ghost || !ghost.enabled) {
       return { ok: false, message: '意识不在可用状态' };
     }
-    if (!ghost.manifest.slots?.includes('badge')) {
+    if (ghost.manifest.badge !== true) {
       return {
         ok: false,
-        message: '本意识未声明 badge 卡槽,无权点亮未读角标(需在 ghost.json 的 slots 里加 "badge" 并重新装入)',
+        message: '本意识未声明 badge 能力,无权点亮未读角标(需在 ghost.json 中声明 "badge": true 并重新装入)',
       };
     }
 

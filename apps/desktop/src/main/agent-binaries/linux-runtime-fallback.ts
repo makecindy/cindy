@@ -16,6 +16,7 @@ import { app } from 'electron';
 import claudeLatest from '../../../../../tools/claude/latest.json';
 import codexLatest from '../../../../../tools/codex/latest.json';
 import { download, type ProgressEvent } from '../downloader/index.js';
+import { parseBinaryVersionOutput, readBinaryVersionOutput } from './binary-version-probe.js';
 
 export type LinuxRuntimeFallbackKind = 'claude-code' | 'codex';
 
@@ -250,12 +251,9 @@ async function readExecutableVersion(
   signal?: AbortSignal,
 ): Promise<string | null> {
   try {
+    if (signal?.aborted) throw probeCancelledError(binaryPath);
     fs.accessSync(binaryPath, fs.constants.X_OK);
-    const result = await execProbe(binaryPath, ['--version'], {
-      signal,
-      timeoutMs: VERIFY_TIMEOUT_MS,
-    });
-    return result.stdout || result.stderr;
+    return await readBinaryVersionOutput(binaryPath, signal, VERIFY_TIMEOUT_MS);
   } catch {
     if (signal?.aborted) throw probeCancelledError(binaryPath);
     return null;
@@ -355,10 +353,12 @@ async function migrateLegacyManagedBinary(
  */
 export function findCachedLinuxRuntimeFallbackBinary(
   kind: LinuxRuntimeFallbackKind,
+  checkForUpdates = true,
 ): string | null {
   if (!app.isPackaged || process.platform !== 'linux') return null;
   const userDataPath = app.getPath('userData');
-  if (readText(runtimeVersionMarkerPath(userDataPath, kind)) === CONFIG[kind].version) {
+  const installedVersion = readText(runtimeVersionMarkerPath(userDataPath, kind));
+  if (installedVersion && (!checkForUpdates || installedVersion === CONFIG[kind].version)) {
     for (const candidate of privateBinaryCandidates(userDataPath, kind)) {
       try {
         fs.accessSync(candidate, fs.constants.X_OK);
@@ -528,6 +528,19 @@ async function installCodexFromOfficialAsset(
   }
   writeRuntimeVersionMarker(app.getPath('userData'), 'codex');
   return binaryPath;
+}
+
+export async function findUsableLinuxRuntimeFallbackBinary(
+  kind: LinuxRuntimeFallbackKind,
+  signal?: AbortSignal,
+): Promise<string | null> {
+  if (!app.isPackaged || process.platform !== 'linux') return null;
+  const cachedPath = findCachedLinuxRuntimeFallbackBinary(kind, false);
+  if (cachedPath) {
+    const versionOutput = await readExecutableVersion(cachedPath, signal);
+    if (versionOutput && parseBinaryVersionOutput(versionOutput, '')) return cachedPath;
+  }
+  return findSystemBinaryAsync(kind, signal);
 }
 
 export async function prepareLinuxRuntimeFallback(

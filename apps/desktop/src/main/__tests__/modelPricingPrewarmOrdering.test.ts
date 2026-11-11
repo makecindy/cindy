@@ -14,19 +14,30 @@ const source = readFileSync(resolve(__dirname, '..', 'bootstrap-electron.ts'), '
 
 describe('model pricing prewarm ordering', () => {
   it('only prewarms model pricing once', () => {
-    const calls = source.match(/void prewarmModelPricing\(\);/g) ?? [];
+    const calls = source.match(/void prewarmModelPricing\(\)/g) ?? [];
     expect(calls).toHaveLength(1);
   });
 
   it('prewarms after localDb user takeover succeeds', () => {
     const localDbReady = source.indexOf('const dbClientTakeover = await ensureLifecycleDbClient(userId);');
     const failedGuard = source.indexOf("dbClientTakeover.mode === 'failed'");
+    const unchangedGuard = source.indexOf("dbClientTakeover.mode === 'unchanged'");
+    const takeoverStart = source.indexOf(
+      'if (dbClientTakeover.shouldReleaseMainDb',
+      unchangedGuard,
+    );
+    const lifecycleStartupBlock = source.slice(localDbReady, takeoverStart);
     const earlyUsageIpc = source.indexOf('registerMakerUsageIpc(ipcMaker);');
-    const prewarm = source.indexOf('void prewarmModelPricing();');
+    const prewarm = source.indexOf('void prewarmModelPricing()');
     const refreshCatalog = source.indexOf('await refreshCustomProvidersIntoCatalog(');
 
     expect(localDbReady).toBeGreaterThanOrEqual(0);
     expect(failedGuard).toBeGreaterThan(localDbReady);
+    expect(unchangedGuard).toBeGreaterThan(failedGuard);
+    expect(takeoverStart).toBeGreaterThan(unchangedGuard);
+    expect(lifecycleStartupBlock).not.toContain(
+      'BrowserWindow.getAllWindows().some(isSecondaryAppWindow)',
+    );
     expect(earlyUsageIpc).toBeGreaterThanOrEqual(0);
     expect(prewarm).toBeGreaterThan(failedGuard);
     expect(prewarm).toBeGreaterThan(earlyUsageIpc);
@@ -39,5 +50,15 @@ describe('model pricing prewarm ordering', () => {
     expect(earlyUsageIpc).toBeGreaterThanOrEqual(0);
     expect(nextIpc).toBeGreaterThan(earlyUsageIpc);
     expect(source.slice(earlyUsageIpc, nextIpc)).not.toContain('prewarmModelPricing');
+  });
+
+  it('does not run staged attachment bookkeeping during owner startup', () => {
+    const onReady = source.slice(
+      source.indexOf('onReady: async (userId) => {'),
+      source.indexOf('onReadyError:'),
+    );
+    expect(onReady).not.toContain('chat-attachment-cache');
+    expect(onReady).not.toContain('listPersistedChatAttachmentPaths');
+    expect(onReady).not.toContain('sweepStagedChatAttachmentsOnStartup');
   });
 });

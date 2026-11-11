@@ -17,7 +17,15 @@ const DEFAULTS: TestSettings = {
   nested: { a: 1, b: 2 },
 };
 
-function createTempStore(existing?: { dir: string; file: string }) {
+function createTempStore(
+  existing?: { dir: string; file: string },
+  options: {
+    logLoadedValue?: boolean;
+    logReadErrorDetails?: boolean;
+    maxBytes?: number;
+    preserveUnreadableFile?: boolean;
+  } = {},
+) {
   const dir = existing?.dir ?? fs.mkdtempSync(path.join(os.tmpdir(), 'xdt-override-settings-'));
   const file = existing?.file ?? path.join(dir, 'settings.json');
   const log = {
@@ -32,23 +40,30 @@ function createTempStore(existing?: { dir: string; file: string }) {
       return {
         enabled: typeof r.enabled === 'boolean' ? r.enabled : DEFAULTS.enabled,
         limit: typeof r.limit === 'number' ? r.limit : DEFAULTS.limit,
-        nested: r.nested && typeof r.nested === 'object' && !Array.isArray(r.nested)
-          ? {
-              a: typeof (r.nested as Record<string, unknown>).a === 'number'
-                ? (r.nested as Record<string, number>).a
-                : DEFAULTS.nested.a,
-              b: typeof (r.nested as Record<string, unknown>).b === 'number'
-                ? (r.nested as Record<string, number>).b
-                : DEFAULTS.nested.b,
-            }
-          : DEFAULTS.nested,
+        nested:
+          r.nested && typeof r.nested === 'object' && !Array.isArray(r.nested)
+            ? {
+                a:
+                  typeof (r.nested as Record<string, unknown>).a === 'number'
+                    ? (r.nested as Record<string, number>).a
+                    : DEFAULTS.nested.a,
+                b:
+                  typeof (r.nested as Record<string, unknown>).b === 'number'
+                    ? (r.nested as Record<string, number>).b
+                    : DEFAULTS.nested.b,
+              }
+            : DEFAULTS.nested,
       };
     },
     log,
     label: 'test',
+    maxBytes: options.maxBytes,
+    preserveUnreadableFile: options.preserveUnreadableFile,
+    logLoadedValue: options.logLoadedValue,
+    logReadErrorDetails: options.logReadErrorDetails,
   });
 
-  return { dir, file, store };
+  return { dir, file, store, log };
 }
 
 describe('createOverrideSettingsFile', () => {
@@ -76,6 +91,101 @@ describe('createOverrideSettingsFile', () => {
         defaults: DEFAULTS,
         customizedKeys: ['enabled'],
       });
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it('can log load metadata without exposing normalized setting values', () => {
+    const { dir, file, store, log } = createTempStore(undefined, {
+      logLoadedValue: false,
+    });
+    try {
+      fs.writeFileSync(file, JSON.stringify({ limit: 918_273 }), 'utf-8');
+      expect(store.read().limit).toBe(918_273);
+      expect(log.info).toHaveBeenCalledWith('test settings loaded', {
+        path: file,
+        isCustomized: true,
+      });
+      expect(JSON.stringify(log.info.mock.calls)).not.toContain('918273');
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it('can omit malformed setting contents from read failure logs', () => {
+    const { dir, file, store, log } = createTempStore(undefined, {
+      logReadErrorDetails: false,
+    });
+    const sensitiveValue = 'private-settings-sentinel';
+    try {
+      fs.writeFileSync(file, `{"limit":${sensitiveValue}}`, 'utf-8');
+      expect(store.read()).toEqual(DEFAULTS);
+      expect(log.warn).toHaveBeenCalledWith('test settings read failed; falling back to defaults', {
+        path: file,
+      });
+      expect(JSON.stringify(log.warn.mock.calls)).not.toContain(sensitiveValue);
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it('preserves unreadable settings and rejects mutations until the file is repaired', async () => {
+    const { dir, file, store } = createTempStore(undefined, {
+      preserveUnreadableFile: true,
+    });
+    const malformed = '{"limit":private-settings-sentinel}';
+    const updater = vi.fn(() => ({ limit: 9 }));
+    try {
+      fs.writeFileSync(file, malformed, 'utf-8');
+      expect(store.read()).toEqual(DEFAULTS);
+
+      expect(() => store.writePatch({ enabled: false })).toThrow(/unreadable/);
+      await expect(store.writePatchAtomic({ limit: 8 })).rejects.toThrow(/unreadable/);
+      await expect(store.updateAtomic(updater)).rejects.toThrow(/unreadable/);
+      expect(updater).not.toHaveBeenCalled();
+      expect(fs.readFileSync(file, 'utf-8')).toBe(malformed);
+
+      fs.writeFileSync(file, JSON.stringify({ enabled: false }), 'utf-8');
+      await expect(store.writePatchAtomic({ limit: 8 })).resolves.toBeUndefined();
+      expect(JSON.parse(fs.readFileSync(file, 'utf-8'))).toEqual({
+        enabled: false,
+        limit: 8,
+      });
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it.each([
+    ['a non-object root', 'null', undefined],
+    ['an oversized file', '{"limit":8}', 4],
+  ])('treats %s as unreadable when preservation is enabled', (_label, contents, maxBytes) => {
+    const { dir, file, store } = createTempStore(undefined, {
+      maxBytes,
+      preserveUnreadableFile: true,
+    });
+    try {
+      fs.writeFileSync(file, contents, 'utf-8');
+      expect(store.read()).toEqual(DEFAULTS);
+      expect(() => store.writePatch({ limit: 9 })).toThrow(/unreadable/);
+      expect(fs.readFileSync(file, 'utf-8')).toBe(contents);
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it('rejects writes over maxBytes before touching the target or temp file', () => {
+    const { dir, file, store } = createTempStore(undefined, { maxBytes: 32 });
+    try {
+      const original = JSON.stringify({ enabled: false });
+      fs.writeFileSync(file, original, 'utf-8');
+
+      expect(() => store.writePatch({ nested: { a: 123_456_789, b: 987_654_321 } })).toThrow(
+        /file exceeds 32 byte limit/,
+      );
+      expect(fs.readFileSync(file, 'utf-8')).toBe(original);
+      expect(fs.existsSync(`${file}.tmp`)).toBe(false);
     } finally {
       fs.rmSync(dir, { recursive: true, force: true });
     }

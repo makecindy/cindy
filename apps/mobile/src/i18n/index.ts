@@ -10,16 +10,24 @@
  * - 不接 LanguageDetector backend,偏好全部走 languagePreferenceStore(AsyncStorage)。
  */
 
-import i18n from 'i18next';
-import { initReactI18next } from 'react-i18next';
-import { BRAND_NAME } from '@cindy/maker-shared/branding';
+import esCommon from "./locales/es";
+import frCommon from "./locales/fr";
+import deCommon from "./locales/de";
+import ptPTCommon from "./locales/pt-PT";
+import ptBRCommon from "./locales/pt-BR";
+import lzhCommon from "./locales/zh-Hant-x-lzh";
+import lzhHansCommon from "./locales/zh-Hans-x-lzh";
+import i18n from "i18next";
+import { initReactI18next } from "react-i18next";
+import { BRAND_NAME } from "@cindy/maker-shared/branding";
 
-import enCommon from './locales/en';
-import zhCNCommon from './locales/zh-CN';
-import jaCommon from './locales/ja';
-import koCommon from './locales/ko';
-import { DEFAULT_LOCALE } from './locale';
-import { detectSystemLocale } from './systemLocale';
+import enCommon from "./locales/en";
+import zhCNCommon from "./locales/zh-CN";
+import zhTWCommon from "./locales/zh-TW";
+import jaCommon from "./locales/ja";
+import koCommon from "./locales/ko";
+import { DEFAULT_LOCALE } from "./locale";
+import { detectSystemLocale } from "./systemLocale";
 
 export {
   DEFAULT_LOCALE,
@@ -27,13 +35,21 @@ export {
   isSupportedLocale,
   resolveSystemLocale,
   SUPPORTED_LOCALES,
-} from './locale';
-export type { LocalePreference, SupportedLocale } from './locale';
-export { detectSystemLocale } from './systemLocale';
+} from "./locale";
+export type { LocalePreference, SupportedLocale } from "./locale";
+export { detectSystemLocale } from "./systemLocale";
 
 const resources = {
+  "es": { common: esCommon },
+  "fr": { common: frCommon },
+  "de": { common: deCommon },
+  "pt-PT": { common: ptPTCommon },
+  "pt-BR": { common: ptBRCommon },
+  "zh-Hant-x-lzh": { common: lzhCommon },
+  "zh-Hans-x-lzh": { common: lzhHansCommon },
   en: { common: enCommon },
-  'zh-CN': { common: zhCNCommon },
+  "zh-CN": { common: zhCNCommon },
+  "zh-TW": { common: zhTWCommon },
   ja: { common: jaCommon },
   ko: { common: koCommon },
 } as const;
@@ -42,14 +58,33 @@ const resources = {
 void i18n.use(initReactI18next).init({
   resources,
   lng: detectSystemLocale(),
-  // 缺 key 回退英文(主干 4 语,无繁体 catalog)。
-  fallbackLng: { default: [DEFAULT_LOCALE] },
-  defaultNS: 'common',
-  ns: ['common'],
+  // 缺 key 回退英文。
+  // 文言版缺 key 先落其现代底本(繁體 / 简体),再落英文。
+  fallbackLng: {
+    "zh-Hant-x-lzh": ["zh-TW", DEFAULT_LOCALE],
+    "zh-Hans-x-lzh": ["zh-CN", DEFAULT_LOCALE],
+    default: [DEFAULT_LOCALE],
+  },
+  defaultNS: "common",
+  ns: ["common"],
   interpolation: {
     escapeValue: false, // React 已转义
     // 品牌名单一事实源:文案里的 {{appName}} 全部由此注入(与 desktop 同约定)。
     defaultVariables: { appName: BRAND_NAME },
+  },
+  parseMissingKeyHandler(key: string, defaultValue?: string) {
+    if (
+      key.startsWith('session.remoteError.') ||
+      key.startsWith('deviceLink.remoteError.') ||
+      key.startsWith('apiErrors.')
+    ) {
+      const lng = i18n.resolvedLanguage || i18n.language;
+      const fallback =
+        i18n.getResource(lng, 'common', 'session.tail.replyFailed') ??
+        i18n.getResource('en', 'common', 'session.tail.replyFailed');
+      if (typeof fallback === 'string' && key !== 'session.tail.replyFailed') return fallback;
+    }
+    return defaultValue ?? key;
   },
   returnNull: false,
 });

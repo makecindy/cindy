@@ -1,0 +1,122 @@
+// @vitest-environment jsdom
+import { act, cleanup, render, screen } from '@testing-library/react';
+import { afterEach, describe, expect, it, vi } from 'vitest';
+import { i18n, SUPPORTED_LOCALES } from '@/i18n';
+import { SystemCard } from '../SystemCard';
+
+// Unrelated card variants have their own integration tests.
+vi.mock('@/features/bots/useRemoteBots', () => ({ useRemoteBots: () => [] }));
+vi.mock('@/features/bots/BotCollaborationCard', () => ({
+  BotSessionTaskCard: () => null,
+  BotSessionTaskMessageTrace: () => null,
+}));
+vi.mock('@/features/learn/LearnStatusCard', () => ({ LearnStatusCard: () => null }));
+vi.mock('@/components/chat/MarkdownRenderer', () => ({ MarkdownRenderer: () => null }));
+
+afterEach(async () => {
+  cleanup();
+  await i18n.changeLanguage('en');
+});
+
+it('shows a model-only boundary without inventing a Harness change', () => {
+  render(<SystemCard cardType="agent-switch" data={{
+    fromModel: 'owner-model', toModel: 'automation-model', modelOnly: true,
+  }} />);
+  expect(screen.getByRole('separator').getAttribute('aria-label')).toBe('owner-model → automation-model');
+  expect(screen.getAllByText('owner-model → automation-model')).toHaveLength(1);
+  expect(screen.queryByText(/Claude Code/)).toBeNull();
+});
+
+// provider-groups.md §6.2：用户确认为了先用那台的配额换号时，分隔条在位置后写明原因(手机端同一句)。
+it('says why the task moved when the user switched accounts to use quota first', async () => {
+  await i18n.changeLanguage('zh-CN');
+  render(<SystemCard cardType="agent-switch" data={{
+    fromAgentKind: 'cc', toAgentKind: 'cc', toModel: 'claude-opus-5-5',
+    fromAgentDeviceId: null, toAgentDeviceId: 'office-pc', toAgentDeviceName: 'Office PC', switchReason: 'quota-rebalance',
+  }} />);
+  expect(screen.getByRole('separator').getAttribute('aria-label')).toBe('Agent 已改到 Office PC 上运行 · 这个账号的配额更该先用');
+});
+
+describe('command card localization boundaries', () => {
+  it.each(SUPPORTED_LOCALES)('localizes card labels while preserving command data: %s', async (locale) => {
+    await i18n.changeLanguage(locale);
+    const workingDir = 'D:\\work\\原始目录';
+    const commandDescription = 'User-defined description / 原始说明';
+    const { container } = render(<>
+      <SystemCard cardType="help" data={{ commands: [
+        { name: 'help', source: 'desktop', description: commandDescription },
+        { name: 'custom-command --flag', source: 'user', description: commandDescription },
+        { name: 'status', source: 'agent-builtin', description: commandDescription },
+      ] }} />
+      <SystemCard cardType="cost" data={{ tokenUsage: 1234 }} />
+      <SystemCard cardType="pwd" data={{ workingDir }} />
+      <SystemCard cardType="status" data={{
+        model: 'custom-model-v1', effort: 'high', permissionMode: 'bypassPermissions',
+        workingDir, isRunning: true,
+      }} />
+    </>);
+    for (const key of [
+      'help.title', 'help.builtInCommands', 'help.projectCommands',
+      'cost.title', 'cost.tokensUsed', 'pwd.title', 'status.title',
+      'status.agent', 'status.model', 'status.effort', 'status.permissionMode', 'status.running',
+    ]) {
+      const fullKey = `chat.systemCard.${key}`;
+      expect(i18n.exists(fullKey, { lng: locale, fallbackLng: false })).toBe(true);
+      expect(screen.getAllByText(i18n.t(fullKey)).length).toBeGreaterThan(0);
+    }
+    expect(screen.getByText('/help')).toBeTruthy();
+    expect(screen.getByText('/custom-command --flag')).toBeTruthy();
+    expect(screen.getByText('/status')).toBeTruthy();
+    expect(screen.getAllByText(commandDescription)).toHaveLength(3);
+    expect(screen.getAllByText(workingDir)).toHaveLength(2);
+    for (const value of ['custom-model-v1', 'high', 'bypassPermissions', '1.2k']) {
+      expect(screen.getByText(value)).toBeTruthy();
+    }
+    expect(container.textContent).not.toContain('chat.systemCard.');
+  });
+
+  it('updates labels and empty states when the language changes', async () => {
+    await i18n.changeLanguage('en');
+    render(<>
+      <SystemCard cardType="help" />
+      <SystemCard cardType="pwd" />
+      <SystemCard cardType="status" />
+    </>);
+    expect(screen.getByText('Available Commands')).toBeTruthy();
+    expect(screen.getByText('Idle')).toBeTruthy();
+    await act(async () => { await i18n.changeLanguage('zh-CN'); });
+    expect(screen.getByText('可用命令')).toBeTruthy();
+    expect(screen.getByText('暂无可用命令')).toBeTruthy();
+    expect(screen.getByText('空闲')).toBeTruthy();
+    expect(screen.getAllByText('（未设置）')).toHaveLength(2);
+    expect(screen.queryByText('Available Commands')).toBeNull();
+  });
+
+  it.each(SUPPORTED_LOCALES)('keeps shell command and output bytes unchanged: %s', async (locale) => {
+    await i18n.changeLanguage(locale);
+    const cmdLine = 'printf "hello" && echo 原样';
+    const stdout = '  original output\n原始输出\t{{size}}\n';
+    const stderr = ' error: --flag\n';
+    const spawnError = 'ENOENT: original error';
+    const { container } = render(<SystemCard cardType="cmd" data={{
+      cmdLine, stdout, stderr, spawnError, cwd: '/repo/raw-path', exitCode: 1,
+    }} />);
+    expect([...container.querySelectorAll('pre')].map(node => node.textContent))
+      .toEqual([cmdLine, spawnError, stdout, stderr]);
+  });
+});
+
+
+it.each(SUPPORTED_LOCALES)('distinguishes a summary fallback from native resume: %s', async locale => {
+  await i18n.changeLanguage(locale);
+  const { rerender } = render(<SystemCard cardType="agent-switch" data={{
+    fromAgentKind: 'codex', toAgentKind: 'codex', toAgentDeviceId: 'mini', nativeHistory: 'fallback', resumed: false,
+  }} />);
+  expect(screen.getByText(i18n.t('chat.systemCard.agentSwitch.fallbackBadge'))).toBeTruthy();
+  expect(screen.queryByText(i18n.t('chat.systemCard.agentSwitch.resumedBadge'))).toBeNull();
+  rerender(<SystemCard cardType="agent-switch" data={{
+    fromAgentKind: 'codex', toAgentKind: 'codex', toAgentDeviceId: 'mini', nativeHistory: 'restored', resumed: true,
+  }} />);
+  expect(screen.getByText(i18n.t('chat.systemCard.agentSwitch.resumedBadge'))).toBeTruthy();
+  expect(screen.queryByText(i18n.t('chat.systemCard.agentSwitch.fallbackBadge'))).toBeNull();
+});

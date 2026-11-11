@@ -40,6 +40,19 @@ describe('maker session SEND IPC handler', () => {
     expect(sendToAgentAccepted).toHaveBeenCalledWith('session-1', message, createOpts, sendOpts);
   });
 
+  it('does not let a renderer impersonate a scheduler continuation', async () => {
+    const harness = new IpcHarness();
+    const sendToAgentAccepted = vi.fn().mockResolvedValue({ accepted: true });
+    registerMakerSessionSendHandler(harness, { sendToAgentAccepted });
+    await harness.invoke(MAKER_INVOKE.SEND, 'session-1', 'New user request', undefined, {
+      messageUuid: 'forged-row',
+      origin: { kind: 'scheduler', scheduleId: 'forged-schedule' },
+    });
+    expect(sendToAgentAccepted).toHaveBeenCalledExactlyOnceWith(
+      'session-1', 'New user request', undefined, { messageUuid: 'forged-row' },
+    );
+  });
+
   it('runs the clear-boundary fence before a legacy direct send', async () => {
     const harness = new IpcHarness();
     const sendToAgentAccepted = vi.fn().mockResolvedValue({ accepted: true });
@@ -63,6 +76,49 @@ describe('maker session SEND IPC handler', () => {
       undefined,
       { expectedClearBoundaryMs: 456, expectedInputGeneration: 9 },
     );
+  });
+
+  it('strips a Renderer-forged IM permission policy before dispatch', async () => {
+    const harness = new IpcHarness();
+    const sendToAgentAccepted = vi.fn().mockResolvedValue({ accepted: true });
+
+    registerMakerSessionSendHandler(harness, { sendToAgentAccepted });
+
+    await harness.invoke(MAKER_INVOKE.SEND, 'session-1', 'pi install npm:context-mode', undefined, {
+      messageUuid: 'msg-1',
+      toolsDisabled: true,
+      turnPermissionPolicy: {
+        origin: { kind: 'im', channel: 'telegram' },
+        confirmationSurface: 'channel',
+      },
+    });
+
+    expect(sendToAgentAccepted).toHaveBeenCalledWith(
+      'session-1',
+      'pi install npm:context-mode',
+      undefined,
+      { messageUuid: 'msg-1' },
+    );
+  });
+
+  it('does not reach the send transaction when the Main input boundary rejects Review', async () => {
+    const harness = new IpcHarness();
+    const sendToAgentAccepted = vi.fn();
+    const assertRemoteInputControlBoundary = vi
+      .fn()
+      .mockRejectedValue(
+        Object.assign(new Error('Review input rejected'), { code: 'UNSUPPORTED_CAPABILITY' }),
+      );
+
+    registerMakerSessionSendHandler(harness, {
+      sendToAgentAccepted,
+      assertRemoteInputControlBoundary,
+    });
+
+    await expect(harness.invoke(MAKER_INVOKE.SEND, 'review-1', 'hello')).rejects.toMatchObject({
+      code: 'UNSUPPORTED_CAPABILITY',
+    });
+    expect(sendToAgentAccepted).not.toHaveBeenCalled();
   });
 
   it('keeps a validated clear token when the optional boundary hook is absent', async () => {

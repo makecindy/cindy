@@ -27,7 +27,7 @@ import type { LearnEventPayload } from '../../../shared/learnTypes';
 
 type FullLearn = typeof window.electronAPI.learn;
 
-/** 状态卡 / 审查面板消费的 learn 操作子集(start 不在此:/learn 统一走 desktop 命令路径)。 */
+/** 状态卡 / 审查面板消费的 learn 操作子集(start 由内置 Learn Skill 通过宿主工具触发)。 */
 export interface RoutableLearn {
   listRuns: FullLearn['listRuns'];
   getProposalDiff: FullLearn['getProposalDiff'];

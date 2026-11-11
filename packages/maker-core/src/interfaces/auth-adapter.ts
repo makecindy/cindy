@@ -9,7 +9,7 @@
 import type { AuthState } from '../types/common.js';
 
 export type AgentCredentialMode = 'gateway-key' | 'oauth-bearer' | 'provider-oauth';
-export type AgentLoginMode = 'browser' | 'device-code';
+export type AgentLoginMode = 'browser' | 'device-code' | 'local';
 
 export interface AuthLoginOptions {
   mode?: AgentLoginMode;
@@ -17,6 +17,8 @@ export interface AuthLoginOptions {
 }
 
 export interface AuthAdapterOptions {
+  /** Trusted host-selected CLI profile. Never accepted from a serialized request. */
+  nativeSubscriptionAccount?: NativeSubscriptionAccount;
   /**
    * 本次 agent 子进程期望使用的凭证形态。
    *
@@ -30,7 +32,28 @@ export interface AuthAdapterOptions {
    * 用它检查对应连接态；未传保持既有 adapter fallback。
    */
   providerId?: string | null;
+  /**
+   * 未指定来源(credentialMode 为 undefined)时本次会话的模型。claude-code 的 adapter 用它
+   * 判断能否交给本机 Claude Code 登录:订阅只服务 Anthropic 一方模型,其它模型仍经宿主路由。
+   * 显式来源不传。
+   */
+  model?: string;
 }
+
+/** A directory capability, minted by the executing host after owner/route checks. */
+export interface NativeSubscriptionAccount {
+  id: string;
+  configDir: string;
+  defaultProfile?: boolean;
+  assertCurrent(): void;
+  readState(): Promise<AuthState>;
+  /** Codex-only existing host bridge; credentials never leave the executing host. */
+  readCodexTokens?(refresh?: boolean): Promise<{ accessToken: string; chatgptAccountId: string; canDispatch?: () => boolean }>;
+  invalidateAuth?(reason: string, failedAccessToken: string): void;
+}
+
+/** Symbol deliberately prevents JSON/device-link clients from selecting local homes. */
+export const NATIVE_SUBSCRIPTION_ACCOUNT = Symbol('native-subscription-account');
 
 export interface AuthAdapter {
   /** 检查当前鉴权状态，不触发登录 */
@@ -53,9 +76,8 @@ export interface AuthAdapter {
    *
    * 与 getAuthEnv() 正交:getAuthEnv() 是给 **spawn 出的 agent 子进程** 用的 env;
    * 本方法是给 **maker-core 进程内** 的轻量直连请求用的。两者在某些鉴权模式下凭证不同 ——
-   * 典型:Claude 'oauth' 模式下 getAuthEnv() 注入用户订阅 token(子进程按 model 分流),
-   * 但 oneShot 是无 system-prompt 的轻任务,不能走订阅(会被 claude.ai OAuth 策略拒),
-   * 应固定走 gateway key + gateway endpoint。实现侧返回 `{ apiKey, baseURL }`。
+   * 典型:连了 Claude 订阅时,订阅只归 CLI 子进程(host 不持有它),oneShot 这类 host 直连
+   * 请求应固定走 gateway key + gateway endpoint。实现侧返回 `{ apiKey, baseURL }`。
    *
    * 返回 null = 没有可用的直连凭证(调用方应跳过 / 优雅降级)。
    * 不实现 = 调用方回退到 getAuthEnv().ANTHROPIC_API_KEY + runtimeConfig.endpoint(旧行为)。
@@ -63,20 +85,18 @@ export interface AuthAdapter {
   getOneShotAuth?(): Promise<{ apiKey: string; baseURL?: string } | null>;
 
   /**
-   * 订阅 OAuth access token 的强制刷新(可选;仅 Claude 订阅模式的 host 实现)。
+   * 订阅 OAuth access token 的强制刷新(可选)。
    *
-   * 背景: cc >= 2.1.198 下 CLAUDE_CODE_PROVIDER_MANAGED_BY_HOST 令子进程不再自读
-   * 系统凭证库,订阅 token 由 host 经 getAuthEnv() 注入(CLAUDE_CODE_OAUTH_TOKEN);
-   * 注入的是纯 access token,cc 无法自行续期。turn 中途 token 失效(401)时 cc 经
-   * SDK oauth_token_refresh control 请求向宿主要新 token —— agent runtime 把该回调
-   * 接到本方法。实现侧应按需刷新并返回当前有效的 access token;刷新失败返回 null
-   * (调用方把 null 透传给 SDK,cc 按无 token 报 auth 错)。
+   * 仅当 host 经 getAuthEnv() 注入了 CLAUDE_CODE_OAUTH_TOKEN 时才会被接线(agent runtime
+   * 把 SDK oauth_token_refresh 回调接到本方法)。Desktop 的 Claude 订阅会话由 CLI 自己读取、
+   * 刷新登录凭证(env-builder nativeCliAuth),不注入 token,因此不实现本方法。
+   * 实现侧应按需刷新并返回当前有效的 access token;刷新失败返回 null。
    *
    * @param staleToken 该会话实际撞 401 的那枚 token(spawn 注入 / 上次回调返回)。
    *   实现侧凭它区分「凭证库早已换代(直接返回库值,不消耗刷新轮换)」与「库值就是
    *   失效的那枚(才真正刷新)」—— 防多个长会话对同一枚旧 token 群体 401 时连环旋转。
    */
-  getFreshSubscriptionToken?(staleToken?: string): Promise<string | null>;
+  getFreshSubscriptionToken?(staleToken?: string, providerId?: string): Promise<string | null>;
 
   /**
    * 取消正在进行的登录流程（可选）。
@@ -90,6 +110,12 @@ export interface AuthAdapter {
   cancelLogin?(): void;
 
   /**
+   * Capture an opaque credential generation at agent-host spawn time. The runtime must only carry
+   * this value back to invalidate(); it must not inspect or persist its contents.
+   */
+  captureCredentialGeneration?(): string | null;
+
+  /**
    * agent runtime 检测到当前凭证已被服务端作废 (e.g. OAuth refresh token 已被旋转,
    * 401 reauth_required 等) 时调用一次。实现侧应等价于 logout() + 通知 UI 重登,
    * 让用户立刻能感知到状态变化, 而不是任由 agent 持续撞失败。
@@ -97,5 +123,13 @@ export interface AuthAdapter {
    * 可选 — 没实现时 runtime 至少会自己 dispose 当前 agent host 防御性收尾,
    * 但 UI 端不会自动跳出 "请重新登录" 的提示。
    */
-  invalidate?(reason: string): Promise<void>;
+  invalidate?(
+    reason: string,
+    context?: {
+      providerId?: string;
+      credentialGeneration?: string | null;
+      /** The child reported auth failure, but the protocol did not identify its credential. */
+      credentialAttribution?: 'unproven';
+    },
+  ): Promise<void>;
 }

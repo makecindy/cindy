@@ -14,15 +14,34 @@
  *
  * 纯函数、无 RN 依赖,node 可单测。
  */
-import type { MobileLearnStartRequest, MobileSlashCommand } from '@/device-link/mobileMakerTransport';
+import { parseGoalCommand } from '@cindy/maker-shared/goal-command';
+import { mergeSlashCommands } from '@cindy/maker-shared/composer-palette';
+import type { MobileLearnStartRequest, MobileSlashCommand, MobileMakerTransport } from '@/device-link/mobileMakerTransport';
+import { composerDocumentProjectedText, normalizeComposerDocument, type ComposerDocument } from './composerDocument';
+
+/** Remove only the command prefix; reference bodies and quote positions belong to the draft. */
+export function buildMobileSideChatDraft(document: ComposerDocument): ComposerDocument {
+  const prefix = /^\s*\/side(?:\s+|$)/.exec(composerDocumentProjectedText(document));
+  if (!prefix) return document;
+  let remaining = prefix[0].length;
+  return normalizeComposerDocument({ version: 1, nodes: document.nodes.map(node => {
+    // Quotes have zero projected width and must survive even inside the prefix.
+    if (!remaining || (node.type !== 'text' && node.type !== 'pasted-text')) return node;
+    const removed = Math.min(remaining, node.text.length);
+    remaining -= removed;
+    return { ...node, text: node.text.slice(removed) };
+  }) });
+}
 
 /**
  * 移动端可执行的 desktop 命令白名单。只放行已实现分流的命令:
+ * - goal:现有目标面板与 maker:goal:* 业务。
  * - learn:直调被控端 `learn:start`(评审 UI 暂在桌面端,移动端出系统卡提示)。
+ * - side:创建追问并打开浮层，参数保留为追问草稿，不发送到主任务。
  * 其余 desktop 命令(/help /clear /issue /workflows /jump-session 等)是控制端
  * UI 动作,移动端没有对应实现,展示了也执行不了 → 不放行。
  */
-export const MOBILE_SUPPORTED_DESKTOP_COMMANDS: ReadonlySet<string> = new Set(['learn']);
+export const MOBILE_SUPPORTED_DESKTOP_COMMANDS: ReadonlySet<string> = new Set(['learn', 'goal', 'side']);
 
 /** palette 展示用:被控端 desktop 命令清单 → 只保留移动端可执行子集。 */
 export function filterMobileDesktopCommands(
@@ -30,6 +49,15 @@ export function filterMobileDesktopCommands(
 ): MobileSlashCommand[] {
   return commands.filter(
     (command) => command.kind === 'desktop' && MOBILE_SUPPORTED_DESKTOP_COMMANDS.has(command.name),
+  );
+}
+
+/** Available before the host command catalogue arrives; preserve skill precedence. */
+export function mergeMobileSideChatCommand(commands: readonly MobileSlashCommand[], description: string): MobileSlashCommand[] {
+  return mergeSlashCommands(
+    commands.filter(command => command.kind === 'agent-builtin'),
+    commands.filter(command => command.kind === 'agent-skill'),
+    [{ name: 'side', kind: 'desktop', description }, ...commands.filter(command => command.kind === 'desktop' && command.name !== 'side')],
   );
 }
 
@@ -61,20 +89,22 @@ export function parseMobileDesktopCommand(
 }
 
 /**
- * `/learn [hub:<slug>] [要求]` → learn:start 请求。语义对齐桌面 builtins.ts:
- * - `hub:<slug>` 前缀 → hub 蒸馏(slug 规则 [a-z0-9-],与市场一致);
+ * `/learn [hub:[market|team:]<slug>] [要求]` → learn:start 请求。语义对齐桌面 builtins.ts:
+ * - `hub:<slug>` 前缀 → 公开目录 hub 蒸馏(slug 规则 [a-z0-9-],与市场一致);
+ * - `hub:<scope>:<slug>` → 显式目录 hub 蒸馏;
  * - 有参数 → freetext;无参数 → 蒸馏当前会话(session)。
  * 移动端总在会话内触发,originSessionId 恒有值,因此裸 /learn 不需要桌面
  * 草稿态的 usage 报错分支。
  */
 export function buildLearnStartRequest(args: string, sessionId: string): MobileLearnStartRequest {
   const arg = args.trim();
-  const hubMatch = /^hub:([a-z0-9][a-z0-9-]*)\s*/.exec(arg);
+  const hubMatch = /^hub:(?:(market|team):)?([a-z0-9][a-z0-9-]*)\s*/.exec(arg);
   if (hubMatch) {
     return {
       input: arg.slice(hubMatch[0].length).trim(),
       sourceKind: 'hub',
-      hubSlug: hubMatch[1],
+      hubSlug: hubMatch[2],
+      hubCatalogScope: (hubMatch[1] as 'market' | 'team' | undefined) ?? 'market',
       originSessionId: sessionId,
     };
   }
@@ -100,4 +130,24 @@ export function buildLearnCardData(
     error: codeMatch?.[1] === 'LEARN_BUSY' ? 'learn-busy' : 'learn-failed',
     detail: outcome.errorMessage,
   };
+}
+
+/** Goal stays discoverable even before the remote command roster has loaded. */
+export function mergeMobileGoalCommand(commands: readonly MobileSlashCommand[], description: string): MobileSlashCommand[] {
+  return mergeSlashCommands(
+    commands.filter(command => command.kind === 'agent-builtin'),
+    commands.filter(command => command.kind === 'agent-skill'),
+    [{ kind: 'desktop', name: 'goal', description }, ...commands.filter(command => command.kind === 'desktop' && command.name !== 'goal')],
+  );
+}
+
+/** No text is enqueued; writes are attempted exactly once, then status is read. */
+export async function executeMobileGoalCommand(args: string, sessionId: string, goal: MobileMakerTransport['goal']) {
+  const command = parseGoalCommand(args);
+  if (command.action === 'open-dialog') return { command, status: await goal.getStatus(sessionId) };
+  if (command.action === 'clear') await goal.clear(sessionId);
+  else await goal.set({ sessionId, objective: command.objective });
+  // A failed status refresh must never cause replay of an already accepted write.
+  const status = await goal.getStatus(sessionId).catch(() => undefined);
+  return { command, status };
 }

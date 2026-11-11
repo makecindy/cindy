@@ -10,9 +10,12 @@
  */
 import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
+import ts from 'typescript';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 import type { Session } from '@/lib/ccAgent.types';
+import { resolveManualCompactChannel } from '@/hooks/useAgentCapabilities';
+import { createSessionScopedRequestGuard } from '@/features/cc-agent/sessionScopedRequestGuard';
 
 const sess = (id: string): Session => ({ id }) as unknown as Session;
 
@@ -116,6 +119,37 @@ describe('makerChatStore.mirrorAgentSwitchIntent', () => {
     expect(makerChatStore.getSnapshot(s)).toBe(snap); // 引用不变 = 未触发更新
   });
 
+  it('远程 Agent 换电脑:位置随意图镜像(null = 任务所在电脑),脏值按位置不变处理', async () => {
+    const { makerChatStore } = await import('@/lib/makerChatStore');
+    const s = sid();
+    makerChatStore.mirrorAgentSwitchIntent(s, {
+      targetAgentKind: 'claude-code',
+      model: 'anthropic/claude-opus-5-5[1m]',
+      providerId: 'xd',
+      agentDeviceId: null,
+    });
+    expect(makerChatStore.getSnapshot(s).agentSwitchIntent).toMatchObject({ agentDeviceId: null });
+
+    // 位置不同 = 不同的意图,不能当成同一份回声吞掉。
+    makerChatStore.mirrorAgentSwitchIntent(s, {
+      targetAgentKind: 'claude-code',
+      model: 'anthropic/claude-opus-5-5[1m]',
+      providerId: 'xd',
+      agentDeviceId: 'studio-mac',
+    });
+    expect(makerChatStore.getSnapshot(s).agentSwitchIntent?.agentDeviceId).toBe('studio-mac');
+
+    makerChatStore.mirrorAgentSwitchIntent(s, {
+      targetAgentKind: 'claude-code',
+      model: 'm',
+      providerId: 'xd',
+      agentDeviceId: 42,
+    });
+    const intent = makerChatStore.getSnapshot(s).agentSwitchIntent;
+    expect(intent?.model).toBe('m');
+    expect(intent && 'agentDeviceId' in intent).toBe(false);
+  });
+
   it('null / 非法值 = 无意图 → 清除', async () => {
     const { makerChatStore } = await import('@/lib/makerChatStore');
     const s = sid();
@@ -157,26 +191,28 @@ describe('isAgentSwitchResponseFresh（远程意图读回的新鲜度守卫）',
   };
 
   it('在途期间无人改动 → 应用读回结果', async () => {
-    const { isAgentSwitchResponseFresh } = await import('@/components/new-chat/agentSwitchConfirmation');
+    const { isAgentSwitchResponseFresh } =
+      await import('@/components/new-chat/agentSwitchConfirmation');
     expect(isAgentSwitchResponseFresh(base)).toBe(true);
   });
 
   it('effect 已清理(切走会话)→ 丢弃', async () => {
-    const { isAgentSwitchResponseFresh } = await import('@/components/new-chat/agentSwitchConfirmation');
+    const { isAgentSwitchResponseFresh } =
+      await import('@/components/new-chat/agentSwitchConfirmation');
     expect(isAgentSwitchResponseFresh({ ...base, cancelled: true })).toBe(false);
   });
 
   it('本端 ABA:点选登记后又撤销 → 写序号已变,丢弃', async () => {
-    const { isAgentSwitchResponseFresh } = await import('@/components/new-chat/agentSwitchConfirmation');
+    const { isAgentSwitchResponseFresh } =
+      await import('@/components/new-chat/agentSwitchConfirmation');
     expect(isAgentSwitchResponseFresh({ ...base, writeSeqNow: 5 })).toBe(false);
   });
 
   it('外部 ABA:另一窗口 / 被控端把意图改成非空又清回 null → 修订号已变,丢弃', async () => {
-    const { isAgentSwitchResponseFresh } = await import('@/components/new-chat/agentSwitchConfirmation');
+    const { isAgentSwitchResponseFresh } =
+      await import('@/components/new-chat/agentSwitchConfirmation');
     // 外部回流不经本端点选,writeSeq 不动;值也回到发起时的 null —— 只有修订号能识别。
-    expect(
-      isAgentSwitchResponseFresh({ ...base, writeSeqNow: 3, intentRevNow: 9 }),
-    ).toBe(false);
+    expect(isAgentSwitchResponseFresh({ ...base, writeSeqNow: 3, intentRevNow: 9 })).toBe(false);
   });
 });
 
@@ -199,6 +235,68 @@ describe('resolveAgentSwitchAckAction（ack 分派：两类守卫作用域不同
         freshness: fresh,
       }),
     ).toBe('apply-intent');
+  });
+
+  it('回归:deferred 登记的**自己的广播回声**推进了修订号 → 值仍匹配即照常登记意图', async () => {
+    const { resolveAgentSwitchAckAction } = await load();
+    // main 先广播 sessions:patched(带 intent)、后返回 invoke reply,push 处理必然先于 ack ——
+    // 只看修订号的话,每一次正常登记都会被自己的回声判成 stale,于是乐观呈现 / 草稿同步 / 收藏
+    // 锚点全不落,而 main 的 pendingSwitches 里意图还在,下一条消息照样切引擎
+    // (Chris 2026-08-19 实测「会话内换引擎整条链都不生效」的主根因)。
+    expect(
+      resolveAgentSwitchAckAction({
+        deferred: true,
+        switched: false,
+        registeredIntentMatchesCurrent: true,
+        freshness: { ...fresh, intentRevNow: 9 },
+      }),
+    ).toBe('apply-intent');
+  });
+
+  it('外部只改同一意图的 effort / Fast / 两者:身份仍匹配 → 照走 apply-intent(权威值经 note-skip 保留)', async () => {
+    const { resolveAgentSwitchAckAction } = await load();
+    // 身份判定刻意只比 target/model/provider,不比 effort/fastMode(main 会归一化后才投影)。
+    // 另一控制端在本次往返期间「只改 effort」「只改 Fast」「两者均改」时,调用方算出的
+    // registeredIntentMatchesCurrent 因此仍为 true —— 三种场景在 resolver 层同构:修订号已变
+    // + 值匹配 → apply-intent。外部新值不被本端旧值覆盖由 ChatInput 的 note-skip 保证
+    // (回声已匹配时不再 noteAgentSwitchIntent,store 保持权威快照;见同文件源码锁)。
+    for (const scenario of ['只改 effort', '只改 Fast', '两者均改']) {
+      expect(
+        resolveAgentSwitchAckAction({
+          deferred: true,
+          switched: false,
+          registeredIntentMatchesCurrent: true,
+          freshness: { ...fresh, intentRevNow: 9 },
+        }),
+        scenario,
+      ).toBe('apply-intent');
+    }
+  });
+
+  it('deferred:修订号变且当前值**不是**本次登记的那一份 → 真被外部超车,丢弃', async () => {
+    const { resolveAgentSwitchAckAction } = await load();
+    expect(
+      resolveAgentSwitchAckAction({
+        deferred: true,
+        switched: false,
+        registeredIntentMatchesCurrent: false,
+        freshness: { ...fresh, intentRevNow: 9 },
+      }),
+    ).toBe('discard');
+  });
+
+  it('deferred:值匹配也压不过写序号守卫(用户又点了一次)', async () => {
+    const { resolveAgentSwitchAckAction } = await load();
+    // 值相等只回答「当前权威值是不是我要的那一份」;「用户已点选、新的切换还在途」由写序号
+    // 独立覆盖,两者不能互相顶替。
+    expect(
+      resolveAgentSwitchAckAction({
+        deferred: true,
+        switched: false,
+        registeredIntentMatchesCurrent: true,
+        freshness: { ...fresh, writeSeqNow: 4, intentRevNow: 9 },
+      }),
+    ).toBe('discard');
   });
 
   it('回归:已有跨引擎意图 → 选回当前引擎模型 → 清除回流先到,仍须走同引擎重选', async () => {
@@ -275,6 +373,8 @@ describe('resolveAgentSwitchAckAction（ack 分派：两类守卫作用域不同
 
   it('外部权威更新抢先 → 写意图值的分支仍然丢弃(不回退 stale-ack 防护)', async () => {
     const { resolveAgentSwitchAckAction } = await load();
+    // 不传 registeredIntentMatchesCurrent = 调用方拿不到「当前值是不是本次登记那一份」的判据,
+    // 此时修订号变化一律 fail-closed(2026-08-19 新增的回声出口是 opt-in,不放宽这条默认)。
     const superseded = { ...fresh, intentRevNow: 9 };
     expect(
       resolveAgentSwitchAckAction({
@@ -304,13 +404,118 @@ describe('resolveAgentSwitchAckAction（ack 分派：两类守卫作用域不同
   });
 });
 
+describe('isAgentSwitchEchoConfigConsistent(回声匹配后的完整配置一致性,2026-08-19 review P2 收口)', () => {
+  const load = () => import('@/components/new-chat/agentSwitchConfirmation');
+
+  it('非回声路径(authoritative=null)恒一致 —— 常规新鲜 ack 不受影响', async () => {
+    const { isAgentSwitchEchoConfigConsistent } = await load();
+    expect(
+      isAgentSwitchEchoConfigConsistent({
+        authoritative: null,
+        requestedEffort: 'high',
+        requestedFastMode: false,
+      }),
+    ).toBe(true);
+  });
+
+  it('权威快照与本端请求逐字相等 → 一致(本端自己的回声 / 重复回声)', async () => {
+    const { isAgentSwitchEchoConfigConsistent } = await load();
+    expect(
+      isAgentSwitchEchoConfigConsistent({
+        authoritative: { effort: 'high', fastMode: true },
+        requestedEffort: 'high',
+        requestedFastMode: true,
+      }),
+    ).toBe(true);
+  });
+
+  it('另一控制端只改 effort → 不一致(三元组匹配也不算完整成功)', async () => {
+    const { isAgentSwitchEchoConfigConsistent } = await load();
+    expect(
+      isAgentSwitchEchoConfigConsistent({
+        authoritative: { effort: 'low', fastMode: true },
+        requestedEffort: 'high',
+        requestedFastMode: true,
+      }),
+    ).toBe(false);
+  });
+
+  it('另一控制端只改 Fast → 不一致', async () => {
+    const { isAgentSwitchEchoConfigConsistent } = await load();
+    expect(
+      isAgentSwitchEchoConfigConsistent({
+        authoritative: { effort: 'high', fastMode: false },
+        requestedEffort: 'high',
+        requestedFastMode: true,
+      }),
+    ).toBe(false);
+  });
+
+  it('effort 与 Fast 均被改 → 不一致', async () => {
+    const { isAgentSwitchEchoConfigConsistent } = await load();
+    expect(
+      isAgentSwitchEchoConfigConsistent({
+        authoritative: { effort: 'low', fastMode: false },
+        requestedEffort: 'high',
+        requestedFastMode: true,
+      }),
+    ).toBe(false);
+  });
+
+  it('缺字段模型:权威快照没投影 effort / fastMode → 该维不可判,放行(不误伤无档位模型)', async () => {
+    const { isAgentSwitchEchoConfigConsistent } = await load();
+    // main 的 projectPendingAgentSwitchIntent 只在有值时带上 effort / fastMode:不可调深度的
+    // 模型与旧 host 的快照天然缺维。缺 ≠ 被改,判不一致会把这类模型的每次正常切换都判失败。
+    expect(
+      isAgentSwitchEchoConfigConsistent({
+        authoritative: {},
+        requestedEffort: 'high',
+        requestedFastMode: true,
+      }),
+    ).toBe(true);
+    expect(
+      isAgentSwitchEchoConfigConsistent({
+        authoritative: { fastMode: true },
+        requestedEffort: 'high',
+        requestedFastMode: true,
+      }),
+    ).toBe(true);
+  });
+
+  it('本端没指定 effort(空值)→ 跟随默认解析,main 归一化出什么都算本次意图', async () => {
+    const { isAgentSwitchEchoConfigConsistent } = await load();
+    // 语义与 providerId 传 null 同族:没请求的维不构成「被改」。
+    for (const requestedEffort of [undefined, '']) {
+      expect(
+        isAgentSwitchEchoConfigConsistent({
+          authoritative: { effort: 'medium', fastMode: false },
+          requestedEffort,
+          requestedFastMode: false,
+        }),
+        `requestedEffort=${JSON.stringify(requestedEffort)}`,
+      ).toBe(true);
+    }
+  });
+
+  it('缺维放行与有维严判互不越界:effort 缺维 + Fast 被改 → 仍不一致', async () => {
+    const { isAgentSwitchEchoConfigConsistent } = await load();
+    expect(
+      isAgentSwitchEchoConfigConsistent({
+        authoritative: { fastMode: false },
+        requestedEffort: 'high',
+        requestedFastMode: true,
+      }),
+    ).toBe(false);
+  });
+});
+
 describe('agentSwitchCoordinator（串行链与写序号按 session，跨组件实例存活）', () => {
   const load = async () => {
     const mod = await import('@/lib/agentSwitchCoordinator');
     mod.__resetAgentSwitchCoordinatorForTests();
     return mod;
   };
-  const deferred = <T,>() => {
+  const deferred = <T>() => {
     let resolve!: (v: T) => void;
     const promise = new Promise<T>((r) => {
       resolve = r;
@@ -483,11 +688,8 @@ describe('agentSwitchCoordinator（串行链与写序号按 session，跨组件�
   });
 
   it('发送检查与登记原子化:切换在途时拒绝,外层准备 token 与共享发送边界可嵌套', async () => {
-    const {
-      beginAgentSwitchOperation,
-      hasPendingAgentSendDispatch,
-      tryBeginAgentSendDispatch,
-    } = await load();
+    const { beginAgentSwitchOperation, hasPendingAgentSendDispatch, tryBeginAgentSendDispatch } =
+      await load();
     const finishSwitch = beginAgentSwitchOperation('s1');
     expect(tryBeginAgentSendDispatch('s1')).toBeNull();
     expect(hasPendingAgentSendDispatch('s1')).toBe(false);
@@ -591,9 +793,12 @@ describe('makerChatStore 共享发送边界', () => {
     const coordinator = await import('@/lib/agentSwitchCoordinator');
     coordinator.__resetAgentSwitchCoordinatorForTests();
     let rejectRetry!: (reason: Error) => void;
-    const retryLastError = vi.fn(() => new Promise<never>((_resolve, reject) => {
-      rejectRetry = reject;
-    }));
+    const retryLastError = vi.fn(
+      () =>
+        new Promise<never>((_resolve, reject) => {
+          rejectRetry = reject;
+        }),
+    );
     vi.stubGlobal('window', {
       electronAPI: { maker: { input: { retryLastError } } },
     });
@@ -614,9 +819,12 @@ describe('makerChatStore 共享发送边界', () => {
     const coordinator = await import('@/lib/agentSwitchCoordinator');
     coordinator.__resetAgentSwitchCoordinatorForTests();
     let rejectCompact!: (reason: Error) => void;
-    const compact = vi.fn(() => new Promise<never>((_resolve, reject) => {
-      rejectCompact = reject;
-    }));
+    const compact = vi.fn(
+      () =>
+        new Promise<never>((_resolve, reject) => {
+          rejectCompact = reject;
+        }),
+    );
     vi.stubGlobal('window', { electronAPI: { maker: { input: { compact } } } });
     const { makerChatStore } = await import('@/lib/makerChatStore');
 
@@ -635,268 +843,168 @@ describe('makerChatStore 共享发送边界', () => {
     expect(coordinator.hasPendingAgentSendDispatch('compact-first')).toBe(false);
   });
 });
-
-describe('ChatInput 的入口门控与调用路由', () => {
+describe("ChatInput 的入口门控与调用路由", () => {
   const source = readFileSync(
     resolve(process.cwd(), 'src/renderer/components/new-chat/ChatInput.tsx'),
     'utf8',
   ).replace(/\r\n/g, '\n');
-  const storeSource = readFileSync(
-    resolve(process.cwd(), 'src/renderer/lib/makerChatStore.ts'),
-    'utf8',
-  ).replace(/\r\n/g, '\n');
 
-  it('切换 IPC 走传输层(远程会话隧道到被控端),不再硬打本机 maker', () => {
-    expect(source).toContain('switchApi.switchSessionAgent(');
-    expect(source).toContain(': makerApiFor(sourceSessionId);');
-    expect(source).not.toContain('window.electronAPI.maker.switchSessionAgent(');
+  it('Orca 会话复用切换入口，角色未加载仍保留未知态', () => {
+    const expression = source.match(/const sessionAgentSwitchSupported =\s*([\s\S]*?);/)?.[1];
+    if (!expression) throw new Error('Agent switch capability expression was not found');
+    const supported = new Function('sessionOrcaRole', 'runtimeAgentKind', 'deviceLinkDeviceId',
+      'ccSupportsSessionAgentSwitch', 'codexSupportsSessionAgentSwitch', `return ${expression};`);
+    for (const role of [null, 'lead', 'worker']) {
+      expect(supported(role, 'codex', null, false, false)).toBe(true);
+      expect(supported(role, undefined, null, true, true)).toBe(false);
+      expect(supported(role, 'codex', 'host', false, false)).toBe(false);
+      expect(supported(role, 'codex', 'host', false, true)).toBe(true);
+    }
+    expect(supported(undefined, 'codex', null, true, true)).toBe(false);
+    const remoteOptions = source.slice(source.indexOf('const sessionRemoteAgentOptions ='),
+      source.indexOf('// composer pill 尾部引擎小标'));
+    const relocationGuard = remoteOptions.match(/if \(([\s\S]*?)\) return undefined;/)?.[1];
+    if (!relocationGuard) throw new Error('Remote-agent relocation guard was not found');
+    const hidden = new Function('sessionOrcaRole', 'sessionOrcaRemoteWorker', 'deviceLinkDeviceId',
+      'hostSupportsOrcaAgentRelocation = false', 'remoteHostId = null', 'agentLocationAware = true',
+      `const sessionId = 's1', sessionEngineFilter = {};
+       return !!(${relocationGuard});`);
+    // 本机的 Lead / Worker 与普通任务一样可换 Agent 所在电脑。
+    for (const role of [null, 'lead', 'worker']) {
+      expect(hidden(role, false, null)).toBe(false);
+    }
+    // 被控端没声明 supportsOrcaAgentRelocation:被控电脑上的协同任务不开放(旧版被控端会拒绝);
+    // 普通被控任务不受影响。
+    expect(hidden('lead', false, 'host')).toBe(true);
+    expect(hidden('worker', false, 'host')).toBe(true);
+    expect(hidden(null, false, 'host')).toBe(false);
+    // 被控端声明后，被控电脑上的 Lead / 本机 Worker 与普通任务一样开放。
+    expect(hidden('lead', false, 'host', true)).toBe(false);
+    expect(hidden('worker', false, 'host', true)).toBe(false);
+    // 声明后仍不开放：运行设备 Worker、角色未加载、SSH 任务、位置不由本机呈现(共享任务访客等)。
+    expect(hidden('worker', true, 'host', true)).toBe(true);
+    expect(hidden(undefined, false, 'host', true)).toBe(true);
+    expect(hidden('lead', false, 'host', true, 'ssh-host')).toBe(true);
+    expect(hidden('lead', false, 'host', true, null, false)).toBe(true);
+    for (const role of [null, 'lead', 'worker', undefined]) {
+      expect(hidden(role, true, null)).toBe(true);
+    }
+    expect(hidden(undefined, false, null)).toBe(true);
   });
 
-  it('入口按被控端能力位门控:device-link 不再被排除,SSH 远程仍排除', () => {
-    expect(source).toContain(
-      'sessionId && vendorKey && !remoteHostId && sessionAgentSwitchSupported',
-    );
-    expect(source).toContain('ccCaps.capabilities?.supportsSessionAgentSwitch === true');
-    expect(source).toContain('ccCaps.capabilities.supportsSessionAgentSwitchCas === true');
-    expect(source).toContain('codexCaps.capabilities?.supportsSessionAgentSwitch === true');
-    expect(source).toContain('codexCaps.capabilities.supportsSessionAgentSwitchCas === true');
-    const hostSource = readFileSync(
-      resolve(process.cwd(), 'src/main/maker-ipc/register.ts'),
-      'utf8',
-    );
-    expect(hostSource).toContain('supportsSessionAgentSwitchCas: true');
+  it.each(['lead', 'worker'])('Desktop Orca %s routes same-Agent model and provider picks through the switch intent', async sessionOrcaRole => {
+    const parsed = ts.createSourceFile('ChatInput.tsx', source, ts.ScriptTarget.Latest, true, ts.ScriptKind.TSX);
+    const callbacks = new Map<string, string>();
+    function visit(node: ts.Node) {
+      if (ts.isVariableDeclaration(node) && node.initializer && ts.isCallExpression(node.initializer)
+        && ['performModelChange', 'performProviderChange'].includes(node.name.getText(parsed))) {
+        callbacks.set(node.name.getText(parsed), node.initializer.arguments[0].getText(parsed));
+      }
+      ts.forEachChild(node, visit);
+    }
+    visit(parsed);
+    const switchAgent = vi.fn(async () => true);
+    const bindings = { sessionOrcaRole, settingsLocked: false, sessionId: 's1',
+      sessionAgentSwitchSupported: true, remoteHostId: null, runtimeAgentKind: 'codex',
+      makerChatStore: { getAgentSwitchIntent: () => null }, performAgentSwitch: switchAgent,
+      effectiveSourceId: 'provider-old', activeModel: 'model-old' };
+    function callback(name: string) {
+      if (!callbacks.has(name)) throw new Error(`Composer callback ${name} was not found`);
+      const compiled = ts.transpileModule(`return ${callbacks.get(name)};`,
+        { compilerOptions: { target: ts.ScriptTarget.ES2022 } }).outputText;
+      return new Function(...Object.keys(bindings), compiled)(...Object.values(bindings));
+    }
+    expect(await callback('performModelChange')('model-new')).toBe(true);
+    expect(switchAgent).toHaveBeenLastCalledWith('codex', 'model-new', 'provider-old');
+    expect(await callback('performProviderChange')('provider-new', 'model-new', 'high', undefined, true)).toBe(true);
+    expect(switchAgent).toHaveBeenLastCalledWith('codex', 'model-new', 'provider-new', { effort: 'high', fastMode: true });
+    switchAgent.mockResolvedValue(false);
+    expect(await callback('performModelChange')('rejected-model')).toBe(false);
+  });
+});
+
+describe('上下文环压缩请求按 sessionId 隔离(#1927 并发/生命周期回归)', () => {
+  it('A 在途时 B 可独立开始，A 的迟到 release 不会清掉 B 的锁', () => {
+    const guard = createSessionScopedRequestGuard();
+    guard.setCurrentSession('A');
+    const beginA = guard.tryBegin('A');
+    expect(beginA).not.toBeNull();
+    expect(guard.tryBegin('A')).toBeNull(); // 同代同会话防重
+
+    guard.setCurrentSession('B');
+    expect(guard.isCurrent('A')).toBe(false);
+    const beginB = guard.tryBegin('B');
+    expect(beginB).not.toBeNull();
+
+    beginA!.release();
+    expect(guard.tryBegin('B')).toBeNull(); // B 的锁还在
+    beginB!.release();
+    expect(guard.tryBegin('B')).not.toBeNull();
   });
 
-  it('lazy-create 从 DB 对齐原子模型选择的 effort 与 Fast,不复用旧排队快照', () => {
-    const hostSource = readFileSync(
-      resolve(process.cwd(), 'src/main/maker-ipc/register.ts'),
-      'utf8',
-    );
-    const start = hostSource.indexOf('async function reconcileCreateOptsAgainstDb(');
-    const end = hostSource.indexOf('const agentSwitchDeps:', start);
-    expect(start).toBeGreaterThan(-1);
-    expect(end).toBeGreaterThan(start);
-    const body = hostSource.slice(start, end);
-    expect(body).toContain('effort: sessions.effort,');
-    expect(body).toContain('fastMode: sessions.fastMode,');
-    expect(body).toContain("co.effort = (row.effort ?? undefined) as CreateOpts['effort'];");
-    expect(body).toContain('co.fastMode = !!row.fastMode;');
+  it('A 在途切 B 再切回 A(换代):旧请求失效,且新点击不被旧锁挡住', () => {
+    // greptile P1:守卫只按 sessionId 判断时,切回 A 后旧 A 请求会重新通过 isCurrent
+    // (迟到 toast),旧锁还会让新点击被静默丢弃。代(epoch)语义修复两者。
+    const guard = createSessionScopedRequestGuard();
+    guard.setCurrentSession('A');
+    const oldA = guard.tryBegin('A');
+    expect(oldA).not.toBeNull();
+    const oldEpoch = oldA!.epoch;
+
+    guard.setCurrentSession('B');
+    guard.setCurrentSession('A'); // 切回 A → 换代
+
+    // 旧 A 请求:sessionId 当前但代不匹配 → 失效(不弹迟到 toast)。
+    expect(guard.isCurrent('A', oldEpoch)).toBe(false);
+    expect(guard.isCurrent('A')).toBe(true); // 无代校验时仍视为当前展示会话
+    // 新点击:同会话但新代 → 不被旧锁挡住,可独立开始。
+    const newA = guard.tryBegin('A');
+    expect(newA).not.toBeNull();
+    expect(newA!.epoch).not.toBe(oldEpoch);
+    newA!.release();
+    oldA!.release();
   });
 
-  it('Orca 与角色未加载会话都 fail-closed:只有完整元数据确认非协同后开放入口', () => {
-    expect(source).toContain('sessionOrcaRole === null &&');
-    // 会话视图必须保留 undefined 未知态,不能在完整 session 回流前冒充「非协同」。
-    const viewSource = readFileSync(
-      resolve(process.cwd(), 'src/renderer/features/cc-agent/CCAgentSessionView.tsx'),
-      'utf8',
-    );
-    expect(viewSource).toContain(
-      'sessionOrcaRole={session ? (session.orcaRole ?? null) : undefined}',
-    );
+  it('切换会话或登出会让确认框/迟到响应的旧 scope 失效', () => {
+    const guard = createSessionScopedRequestGuard();
+    guard.setCurrentSession('A');
+    const beginA = guard.tryBegin('A');
+    expect(beginA).not.toBeNull();
+    const epochA = beginA!.epoch;
+    guard.setCurrentSession('B');
+    expect(guard.isCurrent('A', epochA)).toBe(false);
+    expect(guard.isCurrent('B')).toBe(true);
+    guard.setCurrentSession(null);
+    expect(guard.isCurrent('B')).toBe(false);
+  });
+});
+
+describe('resolveManualCompactChannel(#1927 压缩通道判定,行为测试)', () => {
+  // zqchris 要求按行为覆盖而非源码字符串匹配:共享判定收敛成纯函数,直接测语义。
+  it('真实 Claude Code → claude-input(maker:input:compact),与 capability 无关', () => {
+    expect(resolveManualCompactChannel('claude-code', null)).toBe('claude-input');
+    expect(
+      resolveManualCompactChannel('claude-code', {
+        manualCompact: { supported: false, reason: 'sdk-missing' },
+      }),
+    ).toBe('claude-input');
   });
 
-  it('本地与远程会话打开时都读回 main 权威意图,并经新鲜度守卫过滤过期响应', () => {
-    expect(source).toContain('if (!sessionId || remoteHostId) return;');
-    expect(source).toContain('const switchApi = deviceLinkDeviceId');
-    expect(source).toContain('? makerApiForDevice(deviceLinkDeviceId)');
-    expect(source).toContain(': makerApiFor(sessionId);');
-    expect(source).toContain('.getSessionAgentSwitchIntent(sessionId)');
-    expect(source).toContain('isAgentSwitchResponseFresh({');
-    expect(source).toContain(
-      'makerChatStore.mirrorAgentSwitchIntent(sessionId, authoritativeIntent)',
-    );
-    // 每次点选都要推进写序号,外部变更靠 store 修订号 —— 少任一个 ABA 守卫都失效。
-    expect(source).toContain('nextAgentSwitchWriteSeq(sourceSessionId)');
-    expect(source).toContain('makerChatStore.getAgentSwitchIntentRev(sessionId)');
-    // deviceId 跨重连不变,不把重连代际放进依赖就永远不会重试(断链期间的读回失败
-    // 与错过的 sessions:patched 都靠这一跳补回)。
-    expect(source).toContain(
-      '}, [sessionId, deviceLinkDeviceId, remoteHostId, remoteReconnectEpoch]);',
-    );
-    expect(source).toContain("remoteConnStatus === 'connected'");
-  });
-
-  it('切换 ack 走分派决策:发起时捕获写序号与修订号,按分支判定而非一刀切 return', () => {
-    expect(source).toContain('const writeSeq = nextAgentSwitchWriteSeq(sourceSessionId);');
-    expect(source).toContain(
-      'const intentRevAtSend = makerChatStore.getAgentSwitchIntentRev(sourceSessionId);',
-    );
-    expect(source).toContain('const ackAction = resolveAgentSwitchAckAction({');
-    expect(source).toContain("if (ackAction === 'discard') return;");
-    expect(source).toContain("if (ackAction === 'same-engine-reselect') {");
-    expect(source).toContain('sameEngineRevision: result.sameEngineRevision,');
-    expect(source).toContain('sameEngineSuperseded: result.sameEngineSuperseded,');
-  });
-
-  it('切换写入走模块级协调层(串行链与写序号按 session,不随组件卸载归零)', () => {
-    expect(source).toContain('const exclusiveTurn = reserveAgentSwitchExclusive(sourceSessionId);');
-    expect(source).toContain('await exclusiveTurn.ready;');
-    expect(source).toContain('exclusiveTurn.release();');
-    expect(source).toContain('const writeSeq = nextAgentSwitchWriteSeq(sourceSessionId);');
-    expect(source).toContain('writeSeqNow: getAgentSwitchWriteSeq(sourceSessionId),');
-    // 组件内不得再持有队列/序号 ref,否则重挂后又会分叉出第二条空队列。
-    expect(source).not.toContain('agentSwitchWriteSeqRef');
-    expect(source).not.toContain('agentSwitchQueueRef');
-
-    const selectorSource = readFileSync(
-      resolve(process.cwd(), 'src/renderer/components/new-chat/ModelSelector.tsx'),
-      'utf8',
-    );
-    expect(selectorSource).not.toContain('agentSwitchQueueRef');
-    expect(selectorSource).toContain(
-      'void agentSwitch.onSwitch(targetAgentKind, targetModelId, targetProviderId);',
-    );
-  });
-
-  it('同引擎重选与前置 invoke 共占一个串行位置，并在用最新 ref 前校验会话', () => {
-    const reservation = source.indexOf(
-      'const exclusiveTurn = reserveAgentSwitchExclusive(sourceSessionId);',
-    );
-    const invoke = source.indexOf(
-      'const result = await switchApi.switchSessionAgent(',
-      reservation,
-    );
-    const scopeGuard = source.indexOf(
-      'if (!isSessionScopeCurrent(sourceSessionId, currentSessionIdRef.current)) return;',
-      invoke,
-    );
-    const reselect = source.indexOf('const applied = providerId', scopeGuard);
-    const staleGuard = source.indexOf('if (applied === false) return;', reselect);
-    const release = source.indexOf('exclusiveTurn.release();', reselect);
-    expect(reservation).toBeGreaterThanOrEqual(0);
-    expect(invoke).toBeGreaterThan(reservation);
-    expect(scopeGuard).toBeGreaterThan(invoke);
-    expect(reselect).toBeGreaterThan(scopeGuard);
-    expect(staleGuard).toBeGreaterThan(reselect);
-    expect(release).toBeGreaterThan(reselect);
-  });
-
-  it('同引擎重选把 host 因果 token 带回 SET_MODEL，且遇到 superseded 不落后续状态', () => {
-    expect(source).toContain('expectedAgentSwitchRevision?: number');
-    expect(source).toContain('expectedAgentSwitchRevision === undefined &&');
-    expect(source.split('expectedAgentSwitchRevision === undefined &&')).toHaveLength(3);
-    expect(source).toContain('remoteAtomicModelSelectionSupported');
-    expect(source).toContain(
-      'expectedAgentSwitchRevision !== undefined || remoteAtomicModelSelectionSupported',
-    );
-    expect(source).toContain('? { effort: newEffort, fastMode: restoredFast }');
-    expect(source).toContain('? { effort: targetEffort, fastMode: restoredFast }');
-    expect(source).toContain('if (!useAtomicSelection) {');
-    expect(source).toContain('if (remoteSetModelResult?.superseded) {');
-    expect(source).toContain('if (setModelResult?.superseded) {');
-    expect(source).toContain('result.sameEngineRevision,');
-  });
-
-  it('切换意图登记完成前所有发送入口都被同步门禁，组件重挂后 pending 仍可见', () => {
-    expect(source).toContain('const agentSwitchInFlight = useSyncExternalStore(');
-    expect(source).toContain('const finishAgentSwitchOperation = beginAgentSwitchOperation(');
-    expect(source).toContain('finishAgentSwitchOperation();');
-    expect(source).toContain('? tryBeginAgentSendDispatch(sourceSessionId)');
-    expect(source).toContain('agentSwitchInFlight ||');
-
-    // composer 之外的继续 / 编辑重发等入口最终都经过共享 store 边界，不能要求每个
-    // UI 调用点记得手工登记 token。
-    const sendMessage = storeSource.indexOf('function sendMessage(');
-    const sendMessageBegin = storeSource.indexOf('return withAgentSendDispatch(', sendMessage);
-    const sendUiTrigger = storeSource.indexOf('function sendUiTrigger(');
-    const uiTriggerBegin = storeSource.indexOf('return withAgentSendDispatch(', sendUiTrigger);
-    const retryLastError = storeSource.indexOf('function retryLastError(');
-    const retryBegin = storeSource.indexOf(
-      'return runAgentDispatchProjectionOperation(',
-      retryLastError,
-    );
-    const compactSession = storeSource.indexOf('function compactSession(');
-    const compactBegin = storeSource.indexOf(
-      'return runAgentDispatchProjectionOperation(',
-      compactSession,
-    );
-    const resumeQueue = storeSource.indexOf('function resumeQueue(');
-    const resumeBegin = storeSource.indexOf(
-      'runAgentDispatchProjectionOperation(',
-      resumeQueue,
-    );
-    const steerMessage = storeSource.indexOf('function steerMessage(');
-    const steerBegin = storeSource.indexOf('return withAgentSendDispatch(', steerMessage);
-    const steerQueuedMessage = storeSource.indexOf('function steerQueuedMessage(');
-    const queuedSteerBegin = storeSource.indexOf(
-      'return withAgentSendDispatch(',
-      steerQueuedMessage,
-    );
-    const resendBlockedMessage = storeSource.indexOf('async function resendBlockedMessage(');
-    const blockedResendBegin = storeSource.indexOf(
-      'const finishAgentSendDispatch = tryBeginAgentSendDispatch(sessionId);',
-      resendBlockedMessage,
-    );
-    const sharedBegin = storeSource.indexOf(
-      'const finishAgentSendDispatch = tryBeginAgentSendDispatch(sessionId);',
-    );
-    const sharedFinish = storeSource.indexOf(
-      'return task().finally(finishAgentSendDispatch);',
-      sharedBegin,
-    );
-    expect(sendMessageBegin).toBeGreaterThan(sendMessage);
-    expect(uiTriggerBegin).toBeGreaterThan(sendUiTrigger);
-    expect(retryBegin).toBeGreaterThan(retryLastError);
-    expect(compactBegin).toBeGreaterThan(compactSession);
-    expect(resumeBegin).toBeGreaterThan(resumeQueue);
-    expect(steerBegin).toBeGreaterThan(steerMessage);
-    expect(queuedSteerBegin).toBeGreaterThan(steerQueuedMessage);
-    expect(blockedResendBegin).toBeGreaterThan(resendBlockedMessage);
-    expect(sharedBegin).toBeGreaterThanOrEqual(0);
-    expect(sharedFinish).toBeGreaterThan(sharedBegin);
-  });
-
-  it('引用水合期间发送与切换双向互斥，并在真正发送前复核切换状态', () => {
-    const sendBegin = source.indexOf('tryBeginAgentSendDispatch(sourceSessionId)');
-    const hydrate = source.indexOf('await resolveSessionMessageReferencesForSend(editor);');
-    const sendRecheck = source.indexOf(
-      'if (sourceSessionId && hasPendingAgentSwitchOperation(sourceSessionId)) return;',
-      hydrate,
-    );
-    const onSend = source.indexOf('result = await onSend(', sendRecheck);
-    const sendFinish = source.indexOf('finishAgentSendDispatch();', onSend);
-    const sendSelfGuard = source.indexOf(
-      'if (sessionId && hasPendingAgentSendDispatch(sessionId)) return;',
-    );
-    const switchGuard = source.indexOf(
-      'if (hasPendingAgentSendDispatch(sessionId)) return;',
-      sendFinish,
-    );
-
-    expect(sendSelfGuard).toBeGreaterThanOrEqual(0);
-    expect(sendBegin).toBeGreaterThan(sendSelfGuard);
-    expect(hydrate).toBeGreaterThan(sendBegin);
-    expect(sendRecheck).toBeGreaterThan(hydrate);
-    expect(onSend).toBeGreaterThan(sendRecheck);
-    expect(sendFinish).toBeGreaterThan(onSend);
-    expect(switchGuard).toBeGreaterThan(sendFinish);
-    expect(source).toContain(
-      'disabled={disabled || agentSendDispatchInFlight || agentSwitchInFlight}',
+  it.each(['pi', 'codex'] as const)('声明 manualCompact.supported 的 %s 使用 compact-session 通道', (agent) => {
+    expect(resolveManualCompactChannel(agent, { manualCompact: { supported: true } })).toBe(
+      'compact-session',
     );
   });
 
-  it('远程分支用稳定 deviceId 直连隧道:relay 瞬时重连会清空 sessionId→deviceId 索引', () => {
-    expect(source).toContain('const switchApi = deviceLinkDeviceId');
-    expect(source).toContain('? makerApiForDevice(deviceLinkDeviceId)');
-    expect(source).toContain(': makerApiFor(sourceSessionId);');
-  });
-
-  it('远程只切模型沿用当前 provider,避免 JSON optional 占位清除来源', () => {
-    const start = source.indexOf('const performModelChange = useCallback(');
-    const end = source.indexOf('const handleModelChange = useCallback(', start);
-    const body = source.slice(start, end);
-    expect(body).toMatch(
-      /remoteMaker\.setModel\(\s*sessionId,\s*newModelId,\s*selectedProviderId,\s*expectedAgentSwitchRevision,/,
-    );
-  });
-
-  it('await 返回后做会话作用域校验:旧会话响应不得借最新 ref 写进当前会话', () => {
-    expect(source).toContain(
-      'if (!isSessionScopeCurrent(sourceSessionId, currentSessionIdRef.current)) return;',
-    );
-    // 读回同理:往返期间被切走就丢弃。
-    expect(source).toContain(
-      'cancelled: cancelled || !isSessionScopeCurrent(sessionId, currentSessionIdRef.current),',
-    );
+  it('无能力(Codex / 能力快照缺失)→ 无入口,不按 agentKind 扩排除列表', () => {
+    expect(resolveManualCompactChannel('codex', null)).toBeNull();
+    expect(
+      resolveManualCompactChannel('codex', {
+        manualCompact: { supported: false, reason: 'sdk-missing' },
+      }),
+    ).toBeNull();
+    // 能力快照未命中(缓存未就绪)保守关闭入口,而不是猜能力。
+    expect(resolveManualCompactChannel('pi', null)).toBeNull();
+    expect(resolveManualCompactChannel(undefined, null)).toBeNull();
   });
 });

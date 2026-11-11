@@ -1,11 +1,15 @@
 {
   "site": "store.steampowered.com",
-  "auth": "公开,无需登录;Steam 商店搜索 / 精选分类接口对匿名请求开放",
+  "auth": "鉴权以具体命令为准：public。需要登录的命令复用当前浏览器会话。",
   "entry": {
-    "home": "https://store.steampowered.com/",
-    "search": "https://store.steampowered.com/api/storesearch/?cc=us&l=english&term=<keyword>",
-    "featured": "https://store.steampowered.com/api/featuredcategories/?cc=us&l=english"
+    "home": "https://store.steampowered.com"
   },
-  "recipes": ["steam-search"],
-  "notes": "策略 PUBLIC。两个干净的只读接口:(1) /api/storesearch/?cc=<国家码>&l=english&term=<词> 返回 {total, items:[{id(=AppID), type, name, price:{currency, initial, final}, metascore, platforms:{windows,mac,linux}, tiny_image, controller_support}]};price.final 是货币最小单位整数(999 = $9.99)。(2) /api/featuredcategories/?cc=&l= 返回首页精选,其中 top_sellers.items:[{id, name, final_price, original_price, discount_percent, currency, header_image}] 是热销榜。cc 控制区域定价(us/cn/jp 等),l 控制语言。两接口对匿名都直接返回 JSON,但封装成「先 navigate 到 store.steampowered.com 再同源 evaluate fetch」以规避偶发区域门/风控。详情页统一拼 https://store.steampowered.com/app/<AppID>。"
+  "recipes": [
+    "steam-search"
+  ],
+  "notes": "兼容入口 steam-search 现执行内置 steam/search，原参数名保留；结果采用新版适配器的结构化输出。可用 opencli:<站点>/<命令> 调用完整目录，siteguide 查询参数默认值、类型及 read/write 分类。网站可能变更或要求登录、验证；有 Cookie 不保证绕过风控。",
+  "upstream": {
+    "repository": "https://github.com/jackwener/opencli",
+    "revision": "fe5f1d96aff01c32fd84f86b52af922bfe6ca93f"
+  }
 }

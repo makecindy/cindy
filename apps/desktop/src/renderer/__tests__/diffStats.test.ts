@@ -9,6 +9,7 @@ import { describe, it, expect } from 'vitest';
 import {
   computeDiffStats,
   computeUnifiedDiffStats,
+  requestToolDiffDetails,
   statsForToolCall,
 } from '@/lib/agent-actions/diffStats';
 
@@ -50,6 +51,11 @@ describe('computeUnifiedDiffStats', () => {
   it('returns null when the unified diff has no changed rows', () => {
     expect(computeUnifiedDiffStats('')).toBeNull();
     expect(computeUnifiedDiffStats('@@ -1 +1 @@\n context')).toBeNull();
+  });
+
+  it('keeps counting a unified diff larger than the Edit input guard', () => {
+    const largeLine = 'x'.repeat(1_000_100);
+    expect(computeUnifiedDiffStats(`+${largeLine}\n-${largeLine}`)).toEqual({ add: 1, del: 1 });
   });
 });
 
@@ -162,5 +168,40 @@ describe('statsForToolCall', () => {
   it('file_change: returns null when no valid unified diff is available', () => {
     expect(statsForToolCall('file_change', { changes: [{ diff: '' }] })).toBeNull();
     expect(statsForToolCall('file_change', { changes: [{ nope: true }] })).toBeNull();
+  });
+
+  it('file_change: keeps counting all changes beyond the Edit segment cap', () => {
+    const changes = Array.from({ length: 201 }, (_, index) => ({ diff: `+line-${index}` }));
+    expect(statsForToolCall('file_change', { changes })).toEqual({ add: 201, del: 0 });
+  });
+});
+
+describe('requestToolDiffDetails worker fallback', () => {
+  it('uses bounded previews when the worker is unavailable', async () => {
+    const workerGlobal = globalThis as typeof globalThis & { Worker?: typeof Worker };
+    const previousWorker = workerGlobal.Worker;
+    Object.defineProperty(workerGlobal, 'Worker', {
+      configurable: true,
+      value: undefined,
+      writable: true,
+    });
+    try {
+      const edits = Array.from({ length: 12 }, (_, index) => ({
+        old_string: `old-${index}\n`.repeat(700),
+        new_string: `new-${index}\n`.repeat(700),
+      }));
+      const result = await requestToolDiffDetails('MultiEdit', { edits });
+      expect(result).not.toBeNull();
+      expect(result?.truncated).toBe(true);
+      expect(result?.segments).toHaveLength(edits.length);
+      expect(result?.segments.every(({ details }) => details.truncated === true)).toBe(true);
+      expect(result?.segments.every(({ details }) => details.rows.length <= 1_200)).toBe(true);
+    } finally {
+      Object.defineProperty(workerGlobal, 'Worker', {
+        configurable: true,
+        value: previousWorker,
+        writable: true,
+      });
+    }
   });
 });

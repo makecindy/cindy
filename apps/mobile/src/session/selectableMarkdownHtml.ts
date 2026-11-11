@@ -3,25 +3,31 @@ import {
   parseMobileMarkdown,
   type MobileMarkdownBlock,
   type MobileMarkdownInline,
+  type MobileMarkdownInlineMark,
 } from '@/session/messageMarkdown';
 import { tokenizeCode } from '@/session/codeHighlight';
-import { parseSessionDeepLinkUrl, shortSessionId } from '@/session/sessionLinks';
+import { parseSessionDeepLinkUrl } from '@/session/sessionLinks';
 import { buildKatexLoaderJs } from '@/session/mathWebViewHtml';
+import { repairMermaidSource } from '@cindy/maker-shared/mermaid-autofix';
 // lineHeight 取别名:本模块内 `lineHeight` 是正文行高的局部变量(来自 options)。
 import { lightColors, lineHeight as lineHeightScale, typeScale } from '@/theme/tokens';
 import { i18n } from '@/i18n';
 
 /**
- * 全屏 markdown 文档 HTML 构建器 —— 当前唯一消费方是文件预览的 MarkdownFileReader
- * (WebView 自身滚动的阅读态)。聊天消息气泡已全面切换为原生 markdown 渲染,
+ * 全屏 markdown 文档 HTML 构建器 —— 文件预览的 MarkdownFileReader 使用完整文档
+ * (WebView 自身滚动的阅读态)，会话分享复用 CSS 与内容片段。聊天消息气泡已全面切换为原生 markdown 渲染,
  * 本模块随之瘦身:气泡专用的 segments 拼装 / bridge 脚本 / 测高估算已删除,
- * 只保留「markdown → 完整 HTML 文档」这一条能力。
+ * 不承担聊天气泡的布局与手势。
  */
 export interface SelectableMarkdownHtmlOptions {
+  /** When supplied, export only these embedded images; never expose source URLs. */
+  imageSources?: ReadonlyMap<string, { uri: string }>;
   bodyGap?: number;
   borderColor?: string;
   chipColor?: string;
   fontSize?: number;
+  /** 文件预览正文左右边距；调用方传入共享 spacing.lg。 */
+  horizontalPadding?: number;
   /** 行内 code 文字色(压暗档,不是底色;见 css 里的说明)。 */
   inlineCodeColor?: string;
   lineHeight?: number;
@@ -41,6 +47,7 @@ export interface SelectableMarkdownHtmlOptions {
     property?: string;
     string?: string;
   };
+  /** 显式指定时保留列宽并在表内横向滚动（会话分享）；省略时按文件预览视口换行。 */
   tableCellMinWidth?: number;
   textColor?: string;
   /**
@@ -53,6 +60,7 @@ export interface SelectableMarkdownHtmlOptions {
 
 /** renderBlocks/renderInline 的渲染上下文(目前只有会话 chip 标题 map)。 */
 interface RenderContext {
+  imageSources?: SelectableMarkdownHtmlOptions['imageSources'];
   sessionLinkTitles?: Readonly<Record<string, string>>;
 }
 
@@ -69,7 +77,7 @@ export function buildSelectableMarkdownHtml(
   // KaTeX runtime 只在文档确实含公式时注入(绝大多数文档没有,不为它们付
   // CDN 请求;失败降级由占位内容天然承担——块级是源码 <pre>、行内是斜体源码)。
   // CSS/JS 一律由 loader 动态注入,不放静态 <link>/<script src>:阻塞式外链在
-  // CDN 挂起时会让 WebView 永久白屏(见 mathWebViewHtml.ts 的硬约束说明)。
+  // 资源请求挂起时会让 WebView 永久白屏(见 mathWebViewHtml.ts 的硬约束说明)。
   const hasMath = blocksContainMath(blocks);
   return [
     '<!doctype html>',
@@ -81,13 +89,23 @@ export function buildSelectableMarkdownHtml(
     '</head>',
     '<body>',
     `<main id="xdt-content" role="article" aria-label="${escapeAttribute(i18n.t('message.renderer.markdownDocAriaLabel'))}">`,
-    renderBlocks(blocks, { sessionLinkTitles: options.sessionLinkTitles }),
+    renderBlocks(blocks, { sessionLinkTitles: options.sessionLinkTitles, imageSources: options.imageSources }),
     '</main>',
     hasMath ? buildMathRuntimeScript() : '',
     buildTargetLineScript(options.targetLine),
     '</body>',
     '</html>',
   ].join('');
+}
+
+export function buildSelectableMarkdownFragmentHtml(
+  markdown: string,
+  options: SelectableMarkdownHtmlOptions = {},
+): string {
+  return renderBlocks(parseMobileMarkdown(markdown), {
+    imageSources: options.imageSources,
+    sessionLinkTitles: options.sessionLinkTitles,
+  });
 }
 
 /** 文档内是否存在 math 块或 inline math(决定要不要注入 KaTeX runtime)。 */
@@ -106,7 +124,7 @@ function blocksContainMath(blocks: readonly MobileMarkdownBlock[]): boolean {
 
 /**
  * KaTeX 原位渲染脚本:KaTeX 就绪后把所有 data-latex 元素替换成 KaTeX 输出。
- * CSS/JS 经 buildKatexLoaderJs 动态注入(双 CDN failover + 超时,不阻塞首屏),
+ * CSS/JS 经 buildKatexLoaderJs 动态注入(固定本地资源 + 超时,不阻塞首屏),
  * 全部失败时占位源码(块级 <pre> / 行内斜体)保持可读;渲染失败(非法 LaTeX)
  * 由 throwOnError:false 消化,不抛错不留半截 DOM。
  */
@@ -150,7 +168,7 @@ best.addEventListener('animationend',function(){best.classList.remove('xdt-line-
 })();</script>`;
 }
 
-function buildSelectableMarkdownCss(options: SelectableMarkdownHtmlOptions): string {
+export function buildSelectableMarkdownCss(options: SelectableMarkdownHtmlOptions): string {
   // 缺省走 light hex(调用方一般从 useTheme().colors 显式注入,见 MarkdownFileReader)。
   const textColor = cssValue(options.textColor ?? lightColors.textPrimary);
   const mutedColor = cssValue(options.mutedColor ?? lightColors.textSecondary);
@@ -159,7 +177,7 @@ function buildSelectableMarkdownCss(options: SelectableMarkdownHtmlOptions): str
   const inlineCodeColor = cssValue(options.inlineCodeColor ?? lightColors.chatInlineCodeText);
   const fontSize = cssNumber(options.fontSize ?? 16);
   const lineHeight = cssNumber(options.lineHeight ?? 23);
-  const codeFontSize = cssNumber(typeScale.code);
+  const codeFontSize = cssNumber(typeScale.bodySmall);
   // 标题两档大号 + 共用行高(20/28、18/28 都是 lineHeight 阶梯里的既有配对)。
   const headingLargeFontSize = cssNumber(typeScale.title);
   const headingMediumFontSize = cssNumber(typeScale.subtitle);
@@ -173,19 +191,33 @@ function buildSelectableMarkdownCss(options: SelectableMarkdownHtmlOptions): str
     string: cssValue(options.syntaxColors?.string ?? lightColors.syntaxString),
   };
   const bodyGap = cssNumber(options.bodyGap ?? 10);
+  const horizontalPadding = cssNumber(options.horizontalPadding ?? 16);
   const markerWidth = cssNumber(options.markerWidth ?? 24);
-  const tableCellMinWidth = cssNumber(options.tableCellMinWidth ?? 112);
+  const tableCellMinWidth = cssNumber(options.tableCellMinWidth ?? 0);
+  // 分享沿用原有的最小列宽；文件阅读器未指定列宽，才启用窄屏等分布局。
+  const tableLayout = options.tableCellMinWidth === undefined
+    ? 'table-layout: fixed; width: 100%;'
+    : 'display: block; max-width: 100%; overflow-x: auto;';
 
   return `
-    html, body {
+    html {
       margin: 0;
-      padding: 0;
+      overflow-x: hidden;
+      overscroll-behavior-x: none;
+      touch-action: auto;
+    }
+    body {
+      box-sizing: border-box;
+      margin: 0;
+      min-width: 0;
+      padding: 0 ${horizontalPadding}px;
       background: transparent;
       color: ${textColor};
       font-family: -apple-system, BlinkMacSystemFont, "Inter", "Segoe UI", sans-serif;
       font-size: ${fontSize}px;
       line-height: ${lineHeight}px;
-      overflow: visible;
+      overflow-x: hidden;
+      overflow-y: visible;
       overflow-wrap: anywhere;
       cursor: text;
       touch-action: auto;
@@ -201,6 +233,9 @@ function buildSelectableMarkdownCss(options: SelectableMarkdownHtmlOptions): str
       display: flex;
       flex-direction: column;
       gap: ${bodyGap}px;
+      max-width: 100%;
+      min-width: 0;
+      width: 100%;
       -webkit-touch-callout: default !important;
       -webkit-user-select: text !important;
       user-select: text !important;
@@ -229,6 +264,7 @@ function buildSelectableMarkdownCss(options: SelectableMarkdownHtmlOptions): str
     p, h1, h2, h3, h4, h5, h6, blockquote, pre, table, .list-row {
       margin: 0;
     }
+    /* 正文横滑切文件；宽公式保留内部横移，文档手势识别器按触点让路。 */
     /* 标题分三档。改前 h1–h6 全部等于正文字号(只有 font-weight:500 撑),文档里
        完全读不出层级 —— 与聊天消息流同一个缺陷、同一套修法:
          h1  20/28 = 1.400(= desktop h1 比例)
@@ -325,7 +361,7 @@ function buildSelectableMarkdownCss(options: SelectableMarkdownHtmlOptions): str
       color: inherit;
       text-decoration: underline;
     }
-    /* 直连图片:本模块的唯一消费方 MarkdownFileReader 没有 postMessage bridge,
+    /* 直连图片:MarkdownFileReader 的 bridge 只接翻页，图片没有点击处理，
        生成的 <img> 也不在链接内 —— 点它毫无响应,所以**不带 pointer**(与下面的
        .xdt-image-chip 同一条判据:这个面上「像能点」的反馈一律不给)。
        上一轮只清了 chip、漏了直连图片这对称的另一半,PR #1144 review 实捉。 */
@@ -366,16 +402,16 @@ function buildSelectableMarkdownCss(options: SelectableMarkdownHtmlOptions): str
       border-left: 1px solid ${borderColor};
       border-spacing: 0;
       border-top: 1px solid ${borderColor};
-      display: block;
-      max-width: 100%;
-      overflow-x: auto;
+      ${tableLayout}
     }
     th, td {
       border-bottom: 1px solid ${borderColor};
       border-right: 1px solid ${borderColor};
       box-sizing: border-box;
       min-width: ${tableCellMinWidth}px;
+      overflow-wrap: anywhere;
       padding: 4px 8px;
+      word-break: break-word;
       text-align: left;
       vertical-align: top;
     }
@@ -383,7 +419,15 @@ function buildSelectableMarkdownCss(options: SelectableMarkdownHtmlOptions): str
       color: ${mutedColor};
       font-weight: 500;
     }
+    .xdt-math-inline {
+      display: inline-block;
+      max-width: 100%;
+      overflow-x: auto;
+      vertical-align: middle;
+    }
     .xdt-math-block {
+      max-width: 100%;
+      min-width: 0;
       overflow-x: auto;
       text-align: center;
     }
@@ -427,8 +471,13 @@ function renderBlock(block: MobileMarkdownBlock, ctx: RenderContext): string {
       // 与聊天消息流同一个 tokenizer(session/codeHighlight),着色口径一致;
       // 每个非 plain 片段包一层 <span class="syn-*">,颜色见 css 里的 .syn-* 规则。
       return `<pre><code>${highlightCodeHtml(block.text, block.language)}</code></pre>`;
-    case 'mermaid':
-      return `<pre><code>${escapeHtml(`// mermaid\n${block.text}`)}</code></pre>`;
+    case 'mermaid': {
+      const repaired = repairMermaidSource(block.text);
+      const repairedAttribute = repaired === block.text
+        ? ''
+        : ` data-mermaid-repaired-source="${escapeAttribute(repaired)}"`;
+      return `<pre><code data-mermaid-source="${escapeAttribute(block.text)}"${repairedAttribute}>${escapeHtml(`// mermaid\n${block.text}`)}</code></pre>`;
+    }
     case 'math':
       // display 公式:data-latex 存源码,文档级 KaTeX runtime(见
       // buildMathRuntimeScript)加载后原位渲染;CDN 失败时保持源码 <pre> 展示。
@@ -451,7 +500,20 @@ function renderInlines(inlines: readonly MobileMarkdownInline[], ctx: RenderCont
   return inlines.map((inline) => renderInline(inline, ctx)).join('');
 }
 
+const MARK_TAGS: Record<MobileMarkdownInlineMark, string> = {
+  strong: 'strong',
+  emphasis: 'em',
+  strikethrough: 'del',
+};
+
 function renderInline(inline: MobileMarkdownInline, ctx: RenderContext = {}): string {
+  // 强调里的链接 / 代码等:先按原类型渲染,再由内到外套上外层强调标签。
+  if (inline.marks?.length) {
+    return inline.marks.reduceRight(
+      (html, mark) => `<${MARK_TAGS[mark]}>${html}</${MARK_TAGS[mark]}>`,
+      renderInline({ ...inline, marks: undefined }, ctx),
+    );
+  }
   switch (inline.type) {
     case 'text':
       return escapeHtml(inline.text);
@@ -474,7 +536,7 @@ function renderInline(inline: MobileMarkdownInline, ctx: RenderContext = {}): st
           const title =
             explicit ??
             ctx.sessionLinkTitles?.[session.sessionId] ??
-            i18n.t('message.renderer.sessionChipFallback', { id: shortSessionId(session.sessionId) });
+            i18n.t('message.renderer.sessionChipFallback');
           return `<span class="xdt-session-chip">›&nbsp;${escapeHtml(title)}</span>`;
         }
         // 本地路径(`[README.md](/abs/README.md:17)` 与正文裸写的路径)、mailto 等:
@@ -497,6 +559,13 @@ function renderInline(inline: MobileMarkdownInline, ctx: RenderContext = {}): st
       // 关闭),加载失败保持斜体源码。
       return `<span class="xdt-math-inline" data-latex="${escapeAttribute(inline.text)}"><em>${escapeHtml(inline.text)}</em></span>`;
     case 'image': {
+      if (ctx.imageSources) {
+        const image = ctx.imageSources.get(inline.url);
+        const alt = inline.alt || i18n.t('message.renderer.imageFallbackTitle');
+        return image?.uri.startsWith('data:image/')
+          ? `<img src="${escapeAttribute(image.uri)}" alt="${escapeAttribute(alt)}">`
+          : `<span class="xdt-image-chip">${escapeHtml(alt)}</span>`;
+      }
       // xdt 系非直连图:WebView 无法解析 xdt-image:// 等内部 scheme,渲染占位 chip,
       // 点击经 data-xdt-src 上报后由 ImageLightbox 走 remote-media resolver 取图。
       if (!isMobileMarkdownImageDirectUrl(inline.url)) {
@@ -515,7 +584,8 @@ function renderInline(inline: MobileMarkdownInline, ctx: RenderContext = {}): st
       ].join('');
       // data-xdt-src 保留解析层原始 URL:target.src 会被 WebView percent-encode(中文文件名等),
       // 与图集里存的原始 URL 精确匹配不上会丢横滑翻页,点击上报以 data-xdt-src 为准。
-      return `<img src="${escapeAttribute(inline.url)}" data-xdt-src="${escapeAttribute(inline.url)}" alt="${escapeAttribute(inline.alt)}"${size}>`;
+      const alt = inline.alt || i18n.t('message.renderer.imageFallbackTitle');
+      return `<img src="${escapeAttribute(inline.url)}" data-xdt-src="${escapeAttribute(inline.url)}" alt="${escapeAttribute(alt)}"${size}>`;
     }
   }
 }

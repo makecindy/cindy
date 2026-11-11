@@ -6,12 +6,15 @@
  * 消息的 `agentMeta.parentUuid`;Agent 的最终 tool_result(子 agent 终稿)经 tool_use_id 配对;codex
  * 无 parentUuid → 自然不触发;嵌套真实存在(深度通常 1,极少 2)。
  *
- * 纯函数,可单测。归一化 / 分桶不靠模型判断(规则 9):全程按 parentUuid 精确归属 + createdAt 定序。
+ * 纯函数,可单测。按 parentUuid 精确归属;历史视图保留来源顺序,旧路径按 createdAt 定序。
  */
 import {
   buildMessageRenderItems,
+  isSteerUserRow,
   type MessageRenderOptions,
 } from '@cindy/maker-shared/message-render';
+import { isSubagentResultError } from '@cindy/maker-shared/agent-task';
+import { isContinuationMessage } from '@cindy/maker-shared/synthetic-trigger';
 import type { NormalizedRemoteMessage } from '@/session/messageNormalize';
 import type { RemoteMessage } from '@/session/types';
 import type { MobileMessageRenderItem, MobileSubagentGroupItem } from '@/session/messageRenderModel';
@@ -23,6 +26,27 @@ export const MAX_SUBAGENT_NEST_DEPTH = 5;
 
 export interface SubagentResultMeta {
   createdAtMs: number;
+  /** 配对 tool_result 是否为 Claude 协议级错误(`<tool_use_error>` 开头,与共享 deriveAgentTaskStatus 同口径)。 */
+  isError?: boolean;
+}
+
+/** 从原始 tool_result 行抽文本(与共享 messageContentToPreview 同形态:字符串 / block 数组 / {text} / {content} 对象)。 */
+function resultTextOf(content: unknown): string | undefined {
+  if (typeof content === 'string') return content;
+  if (Array.isArray(content)) {
+    const joined = content
+      .map((block) => {
+        const record = readRecord(block);
+        return typeof record?.text === 'string' ? record.text : '';
+      })
+      .filter(Boolean)
+      .join('\n');
+    return joined || undefined;
+  }
+  const record = readRecord(content);
+  return typeof record?.text === 'string'
+    ? record.text
+    : typeof record?.content === 'string' ? record.content : undefined;
 }
 
 /** 从原始消息建 `toolUseId → tool_result.createdAt(ms)` 映射(归一化层会丢弃 tool_result,故从 raw 取)。 */
@@ -33,7 +57,11 @@ export function buildSubagentResultMeta(messages: readonly RemoteMessage[]): Map
     const id = rawToolUseId(message);
     if (!id) continue;
     const ms = Date.parse(message.createdAt);
-    if (Number.isFinite(ms)) map.set(id, { createdAtMs: ms });
+    if (!Number.isFinite(ms)) continue;
+    // 同一 toolUseId 多行时保留最后一条(与共享 buildMessageToolResultPairing 的
+    // 覆盖语义一致),避免回放多条结果时取到旧的中间态;协议错误判定与共享
+    // deriveAgentTaskStatus 同口径。
+    map.set(id, { createdAtMs: ms, isError: isSubagentResultError(resultTextOf(message.content)) });
   }
   return map;
 }
@@ -50,7 +78,7 @@ export function hasSubagentMessages(normalized: readonly NormalizedRemoteMessage
 export function buildSubagentAwareRenderItems(
   normalized: readonly NormalizedRemoteMessage[],
   resultMeta: ReadonlyMap<string, SubagentResultMeta>,
-  options: MessageRenderOptions,
+  options: MessageRenderOptions & { preserveSourceOrder?: boolean },
 ): MobileMessageRenderItem[] {
   // 不变量:每条 normalized 消息在输出里恰好出现一次。
   // 生产是 80 条最近窗口(分页),Agent tool_use 的 createdAt 早于其 children → 窗口边界可能把某子 agent
@@ -77,20 +105,23 @@ export function buildSubagentAwareRenderItems(
       topLevel.push(message);
     }
   }
-  // 各桶按 createdAt 稳定定序,保证确定性(归一化已大致有序,这里兜底)。
-  for (const bucket of byParent.values()) bucket.sort(compareByCreatedAt);
+  // 历史视图已给出权威顺序,不能再按流式消息的临时时间排序。
+  if (!options.preserveSourceOrder) {
+    for (const bucket of byParent.values()) bucket.sort(compareByCreatedAt);
+  }
 
   const consumed = new Set<string>();
   const out = buildLevel(topLevel, byParent, resultMeta, options, 0, consumed);
 
   // F2 兜底:深度上限(MAX_SUBAGENT_NEST_DEPTH)导致未被任何 subagent_group 消费的桶。真实嵌套 ≤2 够不到
   // cap=5,纯防御异常数据;但绝不 silent drop —— 把这些 children 追加 flat 渲染,保住"恰好出现一次"不变量。
-  const leftover: NormalizedRemoteMessage[] = [];
-  for (const [parentId, bucket] of byParent) {
-    if (!consumed.has(parentId)) leftover.push(...bucket);
-  }
+  // 从原序列取回未消费行,避免拼接多个 parent 桶打乱交错段落。
+  const leftover = normalized.filter((message) => {
+    const parent = parentUuidOf(message);
+    return parent !== null && byParent.has(parent) && !consumed.has(parent);
+  });
   if (leftover.length > 0) {
-    leftover.sort(compareByCreatedAt);
+    if (!options.preserveSourceOrder) leftover.sort(compareByCreatedAt);
     out.push(...buildMessageRenderItems(leftover, options));
   }
   return out;
@@ -107,21 +138,36 @@ function buildLevel(
 ): MobileMessageRenderItem[] {
   const out: MobileMessageRenderItem[] = [];
   let run: NormalizedRemoteMessage[] = [];
-  const flushRun = () => {
+  let nextUserIndex = 0;
+  const flushRun = (endIndex: number) => {
     if (run.length === 0) return;
-    out.push(...buildMessageRenderItems(run, options));
+    // Agent cards split presentation, not user turns. Let the shared grouper see
+    // the next real recovery boundary even when it lies beyond one or more cards.
+    // The monotonic cursor stops at an ordinary user row and scans each row once.
+    nextUserIndex = Math.max(nextUserIndex, endIndex);
+    while (nextUserIndex < level.length
+      && (level[nextUserIndex].kind !== 'user' || isSteerUserRow(level[nextUserIndex].source))) nextUserIndex++;
+    const boundary = level[nextUserIndex];
+    if (boundary && isContinuationMessage(boundary.source)) {
+      out.push(...buildMessageRenderItems([...run, boundary], options).filter(
+        item => !(item.type === 'message' && item.message === boundary),
+      ));
+    } else {
+      out.push(...buildMessageRenderItems(run, options));
+    }
     run = [];
   };
-  for (const message of level) {
+  for (let index = 0; index < level.length; index++) {
+    const message = level[index];
     if (isAgentToolUse(message) && depth < MAX_SUBAGENT_NEST_DEPTH) {
-      flushRun();
+      flushRun(index);
       out.push(buildSubagentGroup(message, byParent, resultMeta, options, depth, consumed));
     } else {
       // 深度上限处的 Agent 走 flat(其 children 桶由上层 leftover 兜底 flush,不丢)。
       run.push(message);
     }
   }
-  flushRun();
+  flushRun(level.length);
   return out;
 }
 
@@ -142,13 +188,28 @@ function buildSubagentGroup(
   const subagentType = readString(input?.subagent_type);
   const summary = agent.secondaryBody && agent.secondaryBody.trim() ? agent.secondaryBody : null;
   const result = id ? resultMeta.get(id) : undefined;
-  const status = computeStatus(!!result, options.isSessionStreaming === true);
+  // 历史 Agent 缺 toolUseId 时 buildSubagentResultMeta 无条目,但归一化层已通过
+  // adjacency 把配对 tool_result 放进 secondaryBody —— 这份兜底只对无 ID 的旧任务
+  // 生效:带 ID 的任务必须等待精确配对结果,否则邻接借用(可能是另一工具的 result)
+  // 会在真正结果到达前把任务误判为 completed/failed。
+  const legacyAdjacencyFallback = !id;
+  const hasResult = !!result || (legacyAdjacencyFallback && !!summary);
+  const resultIsError =
+    result?.isError === true
+    || (legacyAdjacencyFallback && isSubagentResultError(agent.secondaryBody ?? undefined));
+  const status = computeStatus(
+    agent.agentTaskStatus,
+    hasResult,
+    options.isSessionStreaming === true,
+    resultIsError,
+  );
   const startMs = Date.parse(agent.createdAt);
   const durationMs = result && Number.isFinite(startMs) && result.createdAtMs >= startMs
     ? result.createdAtMs - startMs
     : undefined;
   return {
     type: 'subagent_group',
+    sourceClientId: agent.source.clientId,
     key: `subagent-${id ?? agent.key}`,
     header: { description, subagentType },
     childItems,
@@ -158,15 +219,16 @@ function buildSubagentGroup(
   };
 }
 
-// status:有 closing tool_result → 完成;无 result → 仍流式则运行中,否则按完成兜底。
-// 不再产出 'failed':坐实自被控机 local DB —— Agent 的 tool_result 既无 is_error 结构化列、content 也是
-// 纯总结字符串(833 条 0 个 JSON 对象 / 0 个结构化 isError),没有可靠的失败信号。此前用关键词扫总结正文
-// 判失败会把 code-review/research 类(正文天然讨论 error/失败)误判成失败(规则 9:别靠正文启发式猜状态)。
-// 桌面同样不判失败。宁可不标失败,也绝不假阳性。
+// 精确结构化终态优先；协议错误结果(`<tool_use_error>`)恢复 failed;存量历史缺字段时
+// 保留原有 result/streaming 兼容兜底(普通结果不误判,与 Desktop deriveAgentTaskStatus 同口径)。
 function computeStatus(
+  persistedStatus: MobileSubagentGroupItem['status'] | undefined,
   hasResult: boolean,
   streaming: boolean,
+  resultIsError: boolean,
 ): MobileSubagentGroupItem['status'] {
+  if (persistedStatus) return persistedStatus;
+  if (resultIsError && hasResult) return 'failed';
   if (hasResult) return 'completed';
   return streaming ? 'running' : 'completed';
 }

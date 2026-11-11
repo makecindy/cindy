@@ -2,9 +2,15 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { prewarmVoiceInputAudio } from '../audioContextPool';
 import {
+  COMPOSER_LONG_PRESS_VOICE_INPUT_MS,
+  createComposerLongPressVoiceGesture,
+} from '../composerLongPressGesture';
+import {
   disposeKeepAliveVoiceInputMicrophone,
   isMicrophoneDeviceUnavailableError,
+  noteVoiceInputUse,
   prewarmVoiceInputMicrophoneWithAutomaticFallback,
+  prepareVoiceInputMicrophone,
   WebMicAudioEngine,
 } from '../WebMicAudioEngine';
 
@@ -106,12 +112,129 @@ describe('prewarmVoiceInputMicrophoneWithAutomaticFallback', () => {
       workletReady: Promise.resolve(),
       workletUrl: 'https://app.local/pcm16k-worklet.js',
     });
+    // Establish the renderer before recording intent: it also subscribes to
+    // power releases, even if no microphone has been opened yet.
+    noteVoiceInputUse();
   });
 
   afterEach(async () => {
     await disposeKeepAliveVoiceInputMicrophone('test_cleanup');
     vi.unstubAllGlobals();
     vi.restoreAllMocks();
+  });
+
+  // User report 2026-10-26: short clicks switch Bluetooth headphones into mic
+  // mode. Existing preparation tests only checked eventual track cleanup.
+  // Unit: run the real gesture + preparation with getUserMedia as the device
+  // boundary; cancelling before the hold threshold must never open that device.
+  it.each(['release', 'move', 'dispose'] as const)(
+    'does not open the microphone when a pending composer hold ends via %s',
+    async (cancel) => {
+      vi.useFakeTimers();
+      const start = vi.fn();
+      const gesture = createComposerLongPressVoiceGesture({
+        getState: () => 'idle',
+        prepare: () => prepareVoiceInputMicrophone({
+          workletUrl: 'https://app.local/pcm16k-worklet.js',
+        }),
+        start,
+        stop: vi.fn(),
+      });
+      try {
+        gesture.press({ x: 0, y: 0 });
+        await vi.advanceTimersByTimeAsync(COMPOSER_LONG_PRESS_VOICE_INPUT_MS - 1);
+        expect(getUserMedia).not.toHaveBeenCalled();
+        if (cancel === 'move') gesture.move({ x: 20, y: 0 });
+        else gesture[cancel]();
+        await vi.advanceTimersByTimeAsync(1);
+        expect(getUserMedia).not.toHaveBeenCalled();
+        expect(start).not.toHaveBeenCalled();
+      } finally {
+        gesture.dispose();
+        vi.useRealTimers();
+      }
+    },
+  );
+
+  it('prepares without activating PCM and closes a cancelled press', async () => {
+    const release = prepareVoiceInputMicrophone({ workletUrl: 'https://app.local/pcm16k-worklet.js' });
+    await vi.waitFor(() => expect(AudioWorkletNode).toHaveBeenCalledOnce());
+    const node = vi.mocked(AudioWorkletNode).mock.results[0].value;
+    expect(node.port.postMessage).toHaveBeenCalledWith({ type: 'setActive', active: false, reset: true });
+    expect(node.port.postMessage).not.toHaveBeenCalledWith(expect.objectContaining({ active: true }));
+    release?.();
+    await vi.waitFor(() => expect(track.stopped).toBe(true));
+  });
+
+  it('reuses press preparation for capture and closes it after recording', async () => {
+    const options = { workletUrl: 'https://app.local/pcm16k-worklet.js' };
+    const release = prepareVoiceInputMicrophone(options);
+    const engine = new WebMicAudioEngine({ ...options, keepAlive: true });
+    const started = engine.start();
+    release?.();
+    await started;
+    expect(getUserMedia).toHaveBeenCalledOnce();
+    expect(track.stopped).toBe(false);
+    expect(prepareVoiceInputMicrophone(options)).toBeUndefined();
+    await engine.stop();
+    expect(track.stopped).toBe(true);
+  });
+
+  it('closes a late microphone when the press was already cancelled', async () => {
+    let finish!: (stream: unknown) => void;
+    getUserMedia.mockImplementation(() => new Promise((resolve) => { finish = resolve; }));
+    const release = prepareVoiceInputMicrophone({ workletUrl: 'https://app.local/pcm16k-worklet.js' });
+    await vi.waitFor(() => expect(getUserMedia).toHaveBeenCalledOnce());
+    release?.();
+    finish({ getAudioTracks: () => [track], getTracks: () => [track] });
+    await vi.waitFor(() => expect(track.stopped).toBe(true));
+    expect(AudioWorkletNode).not.toHaveBeenCalled();
+  });
+
+  it('closes a temporary replacement device even when preparation could not open the selected one', async () => {
+    getUserMedia.mockRejectedValueOnce(new DOMException('Device missing', 'NotFoundError'));
+    const release = prepareVoiceInputMicrophone({
+      workletUrl: 'https://app.local/pcm16k-worklet.js', deviceId: 'missing-device',
+    });
+    await vi.waitFor(() => expect(getUserMedia).toHaveBeenCalledOnce());
+    release?.();
+    const engine = new WebMicAudioEngine({
+      workletUrl: 'https://app.local/pcm16k-worklet.js', keepAlive: true, releaseAfterUse: true,
+    });
+    await engine.start();
+    expect(track.stopped).toBe(false);
+    await engine.stop();
+    expect(track.stopped).toBe(true);
+  });
+
+  it('does not reopen a failed device after the next preparation was cancelled', async () => {
+    let rejectDevice!: (error: Error) => void;
+    getUserMedia.mockImplementationOnce(() => new Promise((_resolve, reject) => { rejectDevice = reject; }));
+    const options = { workletUrl: 'https://app.local/pcm16k-worklet.js' };
+    const release = prepareVoiceInputMicrophone(options);
+    await vi.waitFor(() => expect(getUserMedia).toHaveBeenCalledOnce());
+    rejectDevice(new DOMException('Device unavailable', 'NotReadableError'));
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    release?.();
+    prepareVoiceInputMicrophone(options)?.();
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(getUserMedia).toHaveBeenCalledOnce();
+    const engine = new WebMicAudioEngine({ ...options, keepAlive: true, releaseAfterUse: true });
+    await engine.start();
+    expect(getUserMedia).toHaveBeenCalledTimes(2);
+    await engine.stop();
+    expect(track.stopped).toBe(true);
+  });
+
+  it('requests microphone permission only once when keep-alive capture is denied', async () => {
+    getUserMedia.mockRejectedValue(new DOMException('Permission denied', 'NotAllowedError'));
+    const engine = new WebMicAudioEngine({
+      workletUrl: 'https://app.local/pcm16k-worklet.js',
+      keepAlive: true,
+    });
+    await expect(engine.start()).rejects.toMatchObject({ name: 'NotAllowedError' });
+    expect(getUserMedia).toHaveBeenCalledTimes(1);
+    await engine.stop();
   });
 
   it('defers keep-alive disposal when the active microphone receives a devicechange event', async () => {
@@ -139,6 +262,7 @@ describe('prewarmVoiceInputMicrophoneWithAutomaticFallback', () => {
 
   it('falls back to automatic microphone prewarm when the selected device is unavailable', async () => {
     const onFallback = vi.fn();
+    getUserMedia.mockRejectedValueOnce(new DOMException('Device missing', 'OverconstrainedError'));
 
     await prewarmVoiceInputMicrophoneWithAutomaticFallback({
       workletUrl: 'https://app.local/pcm16k-worklet.js',
@@ -146,8 +270,9 @@ describe('prewarmVoiceInputMicrophoneWithAutomaticFallback', () => {
     }, onFallback);
 
     expect(onFallback).toHaveBeenCalledTimes(1);
-    expect(enumerateDevices).toHaveBeenCalledTimes(1);
-    expect(getUserMedia).toHaveBeenCalledTimes(1);
+    expect(enumerateDevices).not.toHaveBeenCalled();
+    expect(getUserMedia).toHaveBeenCalledTimes(2);
+    expect(getUserMedia.mock.calls[0][0].audio.deviceId).toEqual({ exact: 'missing-device' });
     expect(getUserMedia).toHaveBeenCalledWith({
       audio: {
         autoGainControl: true,

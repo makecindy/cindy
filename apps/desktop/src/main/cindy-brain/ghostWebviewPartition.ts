@@ -1,0 +1,55 @@
+import { createHash } from 'node:crypto';
+import { isValidPluginNamespace } from '@cindy/plugin-protocol';
+import { GHOST_PARTITION_PREFIX, ghostInstallApprovalToken, parseGhostPartition, type GhostInstallApproval } from '../../shared/ghost.js';
+import { installedGhostStoragePart, isPluginInstanceKey } from '../../shared/pluginIdentity.js';
+import { dataOwnerStorageKey, type ActiveAppSession } from '../appSessionState.js';
+
+const GHOST_OWNER_PARTITION_PREFIX = `${GHOST_PARTITION_PREFIX}owner:`;
+
+export interface ResolvedGhostWebviewPartition {
+  ghostId: string;
+  partition: string;
+}
+
+/** Main 持有的真实 owner → 不透明、稳定的插件 Electron session 分区。 */
+export function ownerScopedGhostPartition(
+  ghostId: string,
+  owner: Pick<ActiveAppSession, 'mode' | 'dataOwnerId'>,
+  namespace?: string | null,
+): string | null {
+  if (!isPluginInstanceKey(ghostId) || owner.mode === 'signed-out' || !owner.dataOwnerId) return null;
+  // 原地确认的旧安装沿用目录键；namespace 段让它离开迁移时撤销的旧分区。
+  const scope = namespace === null ? ':root' : isValidPluginNamespace(namespace) ? `:ns:${namespace}` : '';
+  return `${GHOST_OWNER_PARTITION_PREFIX}${owner.mode}:${dataOwnerStorageKey(owner.dataOwnerId)}:${ghostId}${scope}`;
+}
+
+export function ownerScopedGhostPartitionForInstalledGhost(
+  ghost: { manifest: { id: string }; namespace?: string | null; approval?: GhostInstallApproval; dir?: string },
+  owner: Pick<ActiveAppSession, 'mode' | 'dataOwnerId'> & Partial<Pick<ActiveAppSession, 'generation'>>,
+): string | null {
+  const partition = ownerScopedGhostPartition(
+    installedGhostStoragePart(ghost),
+    owner,
+    ghost.namespace,
+  );
+  if (!partition || ghost.approval?.state !== 'approved') return partition;
+  const receipt = createHash('sha256')
+    .update(JSON.stringify([ghostInstallApprovalToken(ghost.approval), ghost.dir ?? null, owner.generation ?? null]))
+    .digest('hex');
+  return partition + ':receipt:' + receipt;
+}
+
+/**
+ * Main 侧 WebView attach 的 owner 决策原语。
+ * Renderer 的 ghost-only partition 只是 attach claim；实际 partition 由 Main
+ * 根据当前已提交 owner 生成，Renderer 无法挑选另一个 owner 的 session。
+ */
+export function resolveGhostWebviewPartitionClaim(
+  partitionClaim: unknown,
+  activeOwner: Pick<ActiveAppSession, 'mode' | 'dataOwnerId'>,
+): ResolvedGhostWebviewPartition | null {
+  const ghostId = parseGhostPartition(partitionClaim);
+  if (!ghostId) return null;
+  const partition = ownerScopedGhostPartition(ghostId, activeOwner);
+  return partition ? { ghostId, partition } : null;
+}

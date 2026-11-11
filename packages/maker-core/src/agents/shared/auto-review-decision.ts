@@ -1,6 +1,11 @@
+import { createAutoReviewIntentProjection, type AutoReviewUserIntent } from '@cindy/maker-shared/auto-review-intent';
+import { redactSensitiveText } from '@cindy/maker-shared/error-redaction';
 import type { AgentKind, UserMessage } from '../../types/common.js';
+import { AUTO_REVIEW_DELEGATED_CONTINUATION, AUTO_REVIEW_SOURCE_CONTENT, AUTO_REVIEW_USER_INTENT, MAIN_OWNED_SEND_CONTEXT, type SendOptions } from '../base-agent.js';
 
 import {
+  MAX_AUTO_REVIEW_ACTION_TEXT_CHARS,
+  MAX_AUTO_REVIEW_STATIC_TEXT_CHARS,
   reviewAction,
   type ReviewableAction,
   type ReviewVerdict,
@@ -11,15 +16,15 @@ export type AutoReviewDecision = {
   verdict: 'allow' | 'block' | 'ask';
   reason?: string;
   /**
-   * `true` = 这个 `block` 来自**审阅器没跑起来**（delegate 缺失 / 超时 / 抛错 / 返回非法），
+   * `true` = 这个 `ask` 来自**审阅器没跑起来**（delegate 缺失 / 超时 / 抛错 / 返回非法），
    * 不是模型判定动作危险。
    *
    * 两件事以前被压成同一个 `block`（issue #1574），于是「模型让我换个安全做法」和
    * 「基础设施故障，Auto 档整个不工作了」在上层完全无法区分 —— 后者是用户有权知道并接管的，
    * 却和前者一样对 UI 静默。区分之后：
    * - 模型判定的 `block` 继续静默，只把 reason 喂给模型（Auto 档的本意就是不打扰）；
-   * - `unavailable` 的 `block` 额外触发一条**会话级一次性**提示（见
-   *   createAutoReviewUnavailableNotice），动作本身仍然 deny —— 安全边界不变。
+   * - `unavailable` 降级成 `ask`，弹确认卡让用户接管；另外发一条会话级一次性提示
+   *   （见 createAutoReviewUnavailableNotice）。
    *
    * 注意：证据不足（缺路径 / 命令、动作文本超限）**不算** unavailable。那时审阅器是好的，
    * 是这次请求没法审，属于正常判定。
@@ -35,16 +40,18 @@ export type AutoReviewDecision = {
 export const AUTO_REVIEW_UNAVAILABLE_CODE = 'AUTO_REVIEW_UNAVAILABLE';
 
 /**
- * 未落地 i18n 的宿主看到的兜底英文。用词与 desktop 权限选择器的档位标签对齐
- * （Auto-review / Default permissions），避免同一件事在两处叫不同名字。
+ * 未落地 i18n 的宿主看到的兜底英文。三条 Harness 共用这一句。少打断只能指向
+ * Full access：默认权限在 Pi 上问得更多，在 Claude / Codex 上也不会少问联网和提权。
+ * 完全访问风险更高，文案必须点明。
  *
  * IM 渠道（Slack / Telegram / 飞书）**不**读它 —— 渠道文案硬编码中文、不进 renderer
  * 的 locale（见 docs/dev-rules/engineering-conventions.md §5），映射在
  * apps/desktop/src/main/im/shared/turnRetryNotice.ts。
  */
 const AUTO_REVIEW_UNAVAILABLE_FALLBACK_TEXT =
-  'Auto-review is temporarily unavailable, so actions that need review are being denied. '
-  + 'Switch this task to Default permissions if you want to approve them yourself.';
+  'Auto-review could not reach a decision, so actions that need review now need your '
+  + 'confirmation. Switch this task to Full access if you would rather not be interrupted. '
+  + 'That mode is higher risk.';
 
 /**
  * 判定一条 AgentEvent 的 error message 是否就是「自动审批不可用」提示。
@@ -81,30 +88,343 @@ export function createAutoReviewUnavailableNotice(
   };
 }
 
-/** 交给 host 侧轻量 reviewer 的最小上下文；不含历史、工具结果、Skill 或 Memory。 */
+/**
+ * 确认卡上的兜底英文：审阅器故障后改由用户点这一次。
+ * Desktop renderer 见到 metadata 标记后会换成 i18n；IM / 无 locale 的宿主直接显示它。
+ */
+export const AUTO_REVIEW_UNAVAILABLE_PROMPT_TEXT =
+  'Automatic review could not finish, so this action needs your confirmation.';
+
+/** InteractionRequest.metadata 标记：这张确认卡是 Auto-review 故障降级，不是普通 Ask。 */
+export const AUTO_REVIEW_UNAVAILABLE_METADATA_KEY = 'autoReviewUnavailable';
+
+/**
+ * 确认卡没送到 / 没被点 / 超时后的错误码。Codex vendor 会把所有 decline 打成
+ * `rejected by user`，这条提示用来纠正归因：不是用户点了拒绝。
+ */
+export const AUTO_REVIEW_CONFIRM_UNDELIVERED_CODE = 'AUTO_REVIEW_CONFIRM_UNDELIVERED';
+
+const AUTO_REVIEW_CONFIRM_UNDELIVERED_FALLBACK_TEXT =
+  'Automatic review was unavailable, and the confirmation request was not completed. '
+  + 'This is not a user rejection — do not retry the same action as if the user declined.';
+
+export function isAutoReviewConfirmUndeliveredNotice(message: unknown): boolean {
+  return typeof message === 'string'
+    && message.startsWith(`[${AUTO_REVIEW_CONFIRM_UNDELIVERED_CODE}]`);
+}
+
+export function createAutoReviewConfirmUndeliveredNotice(
+  emit: (message: string) => void,
+): { notify(): void; reset(): void } {
+  let sent = false;
+  return {
+    notify(): void {
+      if (sent) return;
+      sent = true;
+      emit(
+        `[${AUTO_REVIEW_CONFIRM_UNDELIVERED_CODE}] ${AUTO_REVIEW_CONFIRM_UNDELIVERED_FALLBACK_TEXT}`,
+      );
+    },
+    reset(): void {
+      sent = false;
+    },
+  };
+}
+
+/**
+ * Desktop / IM / router 在确认失败时写下的系统 reason。
+ * 这些不是用户点击「拒绝」，不能当成 `user-denied`。
+ *
+ * 必须覆盖所有会走到 permission deny 的系统码：漏一个，Codex 就会把这次系统拒绝
+ * 显示成用户点了拒绝。Hook 超时、路由释放、turn 收口、卡片没发出去都属于这一类。
+ */
+export const SYSTEM_PERMISSION_DENIAL_REASONS: ReadonlySet<string> = new Set([
+  'no_interaction_resolver',
+  'no_resolver_attached',
+  'no_interaction_route',
+  'no_listener_attached',
+  'interaction_resolver_error',
+  'resolver_threw',
+  'approval_timeout',
+  'interaction_handler_failed',
+  'interaction_timeout',
+  'hook_interaction_timeout',
+  'timeout',
+  'stale_turn',
+  'stale_route',
+  'duplicate_request_id',
+  'session_closed',
+  'session_aborted',
+  'session_cleanup',
+  'session_disposed',
+  'session disposed',
+  'interaction_route_released',
+  'hook_turn_terminal',
+  'turn_terminal',
+  'not_renderable',
+  'headless_interaction_unavailable',
+  'no_card',
+  'rich_output_not_supported',
+  'replaced_by_new_request',
+  'wecom_interaction_disconnected',
+  'wecom_interaction_timeout',
+  'wecom_interaction_send_failed',
+  'wecom_interaction_cancelled_by_stop',
+  'wechat_interaction_timeout',
+  'wechat_interaction_send_failed',
+  'wechat_binding_stopped',
+  'wechat_user_stopped',
+  'turn_idle_reconcile',
+  'orca_disable',
+  'session_running_race',
+  'turn_not_dispatched',
+]);
+
+/**
+ * IM turnRunner 会把投递失败写成 `prefix: ${msg}`，不能靠精确集合命中。
+ * 只认确认卡没送到 / 没登记完这类前缀；用户拒绝和 destructiveGuard 不在这里。
+ */
+export const SYSTEM_PERMISSION_DENIAL_PREFIXES: readonly string[] = Object.freeze([
+  'card send failed:',
+  'pending failed:',
+  'text interaction failed:',
+  'register failed:',
+  'permission_mode_changed_to_',
+  'plan_mode_',
+  'wecom_interaction_',
+  'wechat_interaction_',
+]);
+
+export function isSystemPermissionDenialReason(reason: unknown): boolean {
+  if (typeof reason !== 'string' || reason.length === 0) return false;
+  if (SYSTEM_PERMISSION_DENIAL_REASONS.has(reason)) return true;
+  return SYSTEM_PERMISSION_DENIAL_PREFIXES.some((prefix) => reason.startsWith(prefix));
+}
+
+/** Denial provenance for tool results and Codex's same-turn host feedback. */
+export function formatPermissionDenial(source: 'auto' | 'user' | 'system', reason?: string): string {
+  const label = source === 'auto' ? 'Cindy Auto-review denied this tool call'
+    : source === 'user' ? 'User denied this tool call via Cindy'
+      : 'Cindy could not approve this tool call';
+  const detail = reason?.trim().slice(0, 240);
+  return detail ? `${label}: ${detail}` : `${label}.`;
+}
+
+export function isAutoReviewUnavailableMetadata(
+  metadata: Record<string, unknown> | undefined,
+): boolean {
+  return metadata?.[AUTO_REVIEW_UNAVAILABLE_METADATA_KEY] === true;
+}
+
+/** 给确认卡打上「自动审批失败，请你确认这一次」的说明，不重新跑审阅器。 */
+export function annotatePermissionRequestForUnavailableReview<
+  T extends {
+    kind: 'permission';
+    description?: string;
+    metadata?: Record<string, unknown>;
+  },
+>(req: T): T {
+  return {
+    ...req,
+    description: AUTO_REVIEW_UNAVAILABLE_PROMPT_TEXT,
+    metadata: {
+      ...req.metadata,
+      [AUTO_REVIEW_UNAVAILABLE_METADATA_KEY]: true,
+    },
+  };
+}
+
+/** InteractionRequest.metadata：审阅器判定「需要用户决定」时写给用户的原因（已脱敏、限长）。 */
+export const AUTO_REVIEW_REASON_METADATA_KEY = 'autoReviewReason';
+
+export function autoReviewReasonFromMetadata(
+  metadata: Record<string, unknown> | undefined,
+): string | undefined {
+  const reason = metadata?.[AUTO_REVIEW_REASON_METADATA_KEY];
+  return typeof reason === 'string' && reason.trim() ? reason.trim() : undefined;
+}
+
+/**
+ * 确认卡说明「为什么问你」：故障降级用固定文案；审阅器的 ask 原因挂在 metadata 上，
+ * 不覆盖 Agent／SDK 自带的 description。其余确认（Ask 档、逐次确认策略）原样返回。
+ */
+export function annotatePermissionRequestForAutoReview<
+  T extends {
+    kind: 'permission';
+    description?: string;
+    metadata?: Record<string, unknown>;
+  },
+>(req: T, review: { unavailable?: boolean; reason?: string } | undefined): T {
+  if (review?.unavailable) return annotatePermissionRequestForUnavailableReview(req);
+  const reason = review?.reason?.trim().slice(0, MAX_AUTO_REVIEW_REASON_CHARS);
+  if (!reason) return req;
+  return { ...req, metadata: { ...req.metadata, [AUTO_REVIEW_REASON_METADATA_KEY]: reason } };
+}
+
+/**
+ * 有界用户原话与宿主动作事实；不含助手历史、工具结果、Skill 或 Memory。
+ * `userIntent.currentUserReferences` 是宿主盖章的「用户本条明确指向的内容」（被回复／引用的消息、
+ * 附件数），只作低信任证据，审阅器单独呈现，不算用户原话、不构成授权。
+ */
 export interface AutoReviewRequest {
   sessionId?: string;
   agentKind: AgentKind;
   providerId?: string | null;
   model: string;
-  userIntent: string;
+  userIntent: AutoReviewUserIntent;
+  /** Actual blocked calls preceding the latest user input; reference evidence, never consent. */
+  precedingBlockedActions?: readonly ReviewableAction[];
+  /** The agent's own public words (no thinking, no tool output); untrusted, never consent. */
+  agentContext?: AutoReviewAgentContext;
+  /** Host-verified requester authority, separate from model-visible/quoted text. */
+  authorizationContext?: {
+    requesterAuthority: 'owner' | 'guest' | 'unknown';
+    source: 'group' | 'direct';
+  };
+  /** Host-resolved plugin delegation, distinct from user-authored intent. */
+  delegatedTask?: {
+    source: 'approved-plugin';
+    pluginId: string;
+    role: 'coordinator' | 'worker';
+    task: string;
+    workingDir: string;
+    authorizationRevision: string;
+  };
+  /** A recognized delegation whose current authority could not be established. */
+  authorizationError?: string;
   action: ReviewableAction;
-  /**
-   * 位置语义(reviewAction 同契约):`[0]` 是唯一可写的工作目录,其余是只读引用目录
-   * (additionalDirectories)。所有 agent 一律传 `[workingDir, ...extraDirs]`;host 侧
-   * reviewer prompt 依赖该顺序区分可写/只读,不得打乱或拍平。
-   */
+  /** 全部可读根；首项必须是主工作目录，供相对路径解析。 */
   workspaceRoots: string[];
+  /**
+   * 显式可写根。旧请求缺省时仍仅 workspaceRoots[0] 可写，保证跨版本 fail-closed。
+   */
+  writableRoots?: string[];
   platform: NodeJS.Platform;
 }
 
-export type AutoReviewDelegate = (
-  request: AutoReviewRequest,
-) => Promise<AutoReviewDecision | null>;
+export type AutoReviewDelegate = ((request: AutoReviewRequest) => Promise<AutoReviewDecision | null>) & {
+  /** Re-resolve live Host authority before cache lookup and after any awaited decision. */
+  prepareRequest?: (request: AutoReviewRequest) => Promise<AutoReviewRequest>;
+};
 
-export const MAX_AUTO_REVIEW_ACTION_TEXT_CHARS = 4_096;
+export async function withAutoReviewContext(
+  request: AutoReviewRequest,
+  delegate: AutoReviewDelegate | undefined,
+  evaluate: (prepared: AutoReviewRequest) => Promise<AutoReviewDecision>,
+  finalize: (decision: AutoReviewDecision) => AutoReviewDecision = decision => decision,
+): Promise<AutoReviewDecision> {
+  try {
+    const prepared = delegate?.prepareRequest ? await delegate.prepareRequest(request) : request;
+    if (prepared.authorizationError) return { verdict: 'block', reason: prepared.authorizationError };
+    const fingerprint = JSON.stringify(prepared);
+    const decision = await evaluate(prepared);
+    if (delegate?.prepareRequest) {
+      const current = await delegate.prepareRequest(request);
+      if (current.authorizationError || JSON.stringify(current) !== fingerprint) {
+        return { verdict: 'block', reason: 'Delegated authorization changed; retry against the current scope.' };
+      }
+    }
+    // No await after the live runtime fence: Host lookup may outlive accepted input.
+    return finalize(decision);
+  } catch {
+    return { verdict: 'ask', unavailable: true, reason: 'Host could not verify the current authorization; this action needs your confirmation.' };
+  }
+}
+
+/** Preserve the actual tool identity and arguments across progressive/Host approval entrypoints. */
+export function toolAutoReviewAction(
+  toolName: string,
+  input: unknown,
+  context?: string,
+  executionEvidence?: unknown,
+): ReviewableAction {
+  // Structured file writes are reviewed by destination/canonical scope. Do not
+  // reintroduce file bodies when a channel policy or resumed child wraps them.
+  const evidence = executionEvidence && typeof executionEvidence === 'object'
+    ? executionEvidence as Record<string, unknown> : undefined;
+  const action = evidence?.action && typeof evidence.action === 'object'
+    ? evidence.action as Record<string, unknown> : evidence;
+  if (action?.kind === 'file-write') {
+    input = undefined;
+  }
+  return { kind: 'other', description: JSON.stringify({ toolName, input, context, executionEvidence }) };
+}
+
+export { MAX_AUTO_REVIEW_ACTION_TEXT_CHARS } from './auto-review.js';
 const MAX_AUTO_REVIEW_REASON_CHARS = 240;
-const AUTO_REVIEW_DELEGATE_TIMEOUT_MS = 8_000;
+/**
+ * Auto-review is deliberately bounded: a reviewer outage must still resolve the
+ * gray action instead of hanging the tool callback. Keep the host request
+ * deadline below the core guard so a valid answer at the request deadline can
+ * return before the outer guard fires.
+ *
+ * **两个数必须一起改。** delegate 侧现在会做重试(见 desktop 的
+ * createAutoPermissionReviewer),而重试全部发生在 `delegateTimeoutMs` 之内 ——
+ * 外层守卫若先触发,重试就完全失去意义(白等、白花钱,结果照样是不可用)。
+ * 上限取「宿主侧最慢的一档 × 重试次数 + 退避」再留余量。
+ */
+export interface AutoReviewTimeoutPolicy {
+  requestTimeoutMs: number;
+  delegateTimeoutMs: number;
+}
+
+/**
+ * 紧凑档(能关思考的模型)的默认策略。宿主侧每次尝试都用完整的
+ * `requestTimeoutMs`(不按次数切分 —— 切分会把本来能成功的慢响应也判成超时),
+ * 总耗时由 AUTO_REVIEW_DELEGATE_HARD_CEILING_MS 兜住。
+ */
+export const DEFAULT_AUTO_REVIEW_TIMEOUT_POLICY: Readonly<AutoReviewTimeoutPolicy> = Object.freeze({
+  requestTimeoutMs: 12_000,
+  delegateTimeoutMs: 13_000,
+});
+
+/** 宿主侧的重试次数与退避。核心侧据此推总预算,两边必须同源,否则守卫会截断重试。 */
+export const AUTO_REVIEW_RETRY_ATTEMPTS = 3;
+export const AUTO_REVIEW_RETRY_BACKOFF_MS: readonly number[] = Object.freeze([100, 200]);
+
+/** 宿主侧单次请求的最宽一档(强制思考模型),核心侧守卫按它推上界。 */
+export const AUTO_REVIEW_MAX_REQUEST_TIMEOUT_MS = 30_000;
+
+/**
+ * 调度余量:prompt 构造、`setTimeout` 抖动、事件循环排队都计入总耗时但不属于任何
+ * 一次请求。宿主的时间兜底与核心守卫都要加上它 —— 不留余量等于要求这些开销恰好
+ * 为零,真机上必然差那么几毫秒,于是最后一次重试恒定被自己的护栏挡掉
+ * (PR #2474 review 两轮都指向这一点)。
+ */
+export const AUTO_REVIEW_RETRY_SCHEDULING_SLACK_MS = 2_000;
+
+/**
+ * 一轮审阅(含全部重试与退避)的总预算。
+ *
+ * 宿主用它决定"还够不够再跑一次",核心用它推外层守卫的上界 —— **必须同一个算法**,
+ * 否则守卫会在重试跑完前触发,宽裕额度形同虚设(PR #2474 review:固定 35s 盖不住
+ * 30s 档的三次尝试,第二次约 5s 就被丢弃且请求未取消、继续消耗额度)。
+ */
+export function autoReviewRetryBudgetMs(
+  requestTimeoutMs: number,
+  attempts: number = AUTO_REVIEW_RETRY_ATTEMPTS,
+): number {
+  const backoffTotal = AUTO_REVIEW_RETRY_BACKOFF_MS
+    .slice(0, Math.max(0, attempts - 1))
+    .reduce((sum, ms) => sum + ms, 0);
+  return requestTimeoutMs * attempts + backoffTotal;
+}
+
+/**
+ * 核心侧守卫的绝对上界:按最宽一档 + 全部重试与退避推出,再加**两份**调度余量 ——
+ * 一份对应宿主时间兜底自己放宽的那份,另一份留给守卫与兜底之间的竞态。
+ * 守卫必须严格晚于宿主的兜底触发,否则宿主刚放宽的余量会被守卫吃掉。
+ *
+ * 这是**兜底**不是常态:绝大多数请求 2s 内返回(实测 p95 ≈ 2.5s)。
+ */
+const AUTO_REVIEW_DELEGATE_HARD_CEILING_MS =
+  autoReviewRetryBudgetMs(AUTO_REVIEW_MAX_REQUEST_TIMEOUT_MS)
+  + AUTO_REVIEW_RETRY_SCHEDULING_SLACK_MS * 2;
+
+/** 暴露给测试:守卫必须容得下最宽一档的全部重试,常量漂移时要红。 */
+export function getAutoReviewDelegateHardCeilingMs(): number {
+  return AUTO_REVIEW_DELEGATE_HARD_CEILING_MS;
+}
 const AUTO_REVIEW_TIMEOUT = Symbol('auto-review-timeout');
 
 export function getAutoReviewActionTextLength(action: ReviewableAction): number {
@@ -112,8 +432,10 @@ export function getAutoReviewActionTextLength(action: ReviewableAction): number 
     case 'exec':
       return action.command.length + (action.cwd?.length ?? 0);
     case 'read':
-    case 'file-write':
       return action.path?.length ?? 0;
+    case 'file-write':
+      return (action.path?.length ?? 0) + (action.resolvedPath?.length ?? 0)
+        + (action.resolvedWritableRoots?.reduce((total, root) => total + root.length, 0) ?? 0);
     case 'network':
       return (action.target?.length ?? 0) + (action.operation?.length ?? 0);
     case 'other':
@@ -132,10 +454,12 @@ export type LocalAutoReviewTier = Exclude<ReviewVerdict, 'prompt'> | 'needs-revi
 export function classifyLocalAutoReviewTier(
   request: AutoReviewRequest,
 ): LocalAutoReviewTier {
+  // Large payloads bypass synchronous parsing, not permission review.
+  if (getAutoReviewActionTextLength(request.action) > MAX_AUTO_REVIEW_STATIC_TEXT_CHARS) return 'needs-review';
   const verdict = reviewAction(
     request.action,
     request.workspaceRoots,
-    { platform: request.platform },
+    { platform: request.platform, writableRoots: request.writableRoots },
   );
   return verdict === 'prompt' ? 'needs-review' : verdict;
 }
@@ -155,32 +479,70 @@ function missingReviewEvidence(action: ReviewableAction): string | null {
         ? null
         : 'Network review needs a concrete destination or query.';
     case 'other':
-      return action.description?.trim()
-        ? null
-        : 'Unknown actions cannot be reviewed without concrete action details.';
+      if (!action.description?.trim()) return 'Unknown actions cannot be reviewed without concrete action details.';
+      return fileChangeWithoutPaths(action.description)
+        ? 'File-change review needs concrete paths.'
+        : null;
     default:
       return null;
   }
 }
 
+/** A risk-first reviewer would wave a pathless patch through as "low risk"; never approve unseen writes. */
+function fileChangeWithoutPaths(description: string): boolean {
+  let envelope: unknown;
+  try { envelope = JSON.parse(description); } catch { return false; }
+  if (!envelope || typeof envelope !== 'object') return false;
+  const { toolName, input } = envelope as { toolName?: unknown; input?: unknown };
+  if (toolName !== 'file_change') return false;
+  const changes = input && typeof input === 'object' ? (input as { changes?: unknown }).changes : undefined;
+  const paths = Array.isArray(changes)
+    ? changes.map((change) => (change && typeof change === 'object' ? (change as { path?: unknown }).path : undefined))
+    : changes && typeof changes === 'object' ? Object.keys(changes) : [];
+  return !paths.some((path) => typeof path === 'string' && path.trim().length > 0);
+}
+
 function oversizedReviewEvidence(action: ReviewableAction): string | null {
   return getAutoReviewActionTextLength(action) > MAX_AUTO_REVIEW_ACTION_TEXT_CHARS
-    ? `Automatic review requires action text at most ${MAX_AUTO_REVIEW_ACTION_TEXT_CHARS} characters.`
+    ? 'This action is too large for automatic review in full, so it needs your confirmation.'
     : null;
 }
 
 /**
- * 原生 reviewer 不可用时的统一裁决入口：明显安全和明显红线仍由本地规则确定，
- * 只有中间灰区才调用当前会话模型。delegate 缺失、超时、抛错或返回非法结果时
- * 灰区一律 `block`，不会退化成逐条弹窗。
+ * Auto 的统一裁决入口：本地规则只可免审明显安全的动作；其余风险等级均交给
+ * 审阅器结合用户授权判断。风险分类不等于用户尚未授权，不能直接转换成人工确认。
+ *
+ * **审阅器故障时降级为 `ask`，不再静默 `block`。** 宿主侧已先做过重试
+ * （见 desktop 的 createAutoPermissionReviewer），走到这里意味着重试也没救回来。
+ * 此时静默拒绝是最差的选择：用户既看不到发生了什么，一批本来完全正常的灰区操作
+ * 又被连续否掉，Auto 档表现得像坏了。降级成 `ask` 把决定权交回用户 ——
+ * 安全边界不降低（未经用户点头仍然不会执行），但用户至少知道该点头还是拒绝。
+ *
+ * 与「模型判定危险」的 `block` 仍然严格区分：那个继续静默，因为 Auto 的本意
+ * 就是不打扰；模型 ask、完整证据超出预算与 unavailable 才交用户。
  */
 export async function resolveAutoReviewDecision(
   request: AutoReviewRequest,
   delegate: AutoReviewDelegate | undefined,
+  hostAutoApprove = false,
+  hostShortcutOnly = false,
 ): Promise<AutoReviewDecision> {
+  // Host trust skips model review only after live context preparation has
+  // established that this is not a delegated task with a narrower scope.
+  if (hostAutoApprove && !request.delegatedTask) return { verdict: 'allow' };
+  // Outside Auto, only establish whether Host trust can skip confirmation.
+  // A delegated request must use the existing human approval path, never AI.
+  if (hostShortcutOnly) return { verdict: 'ask' };
+  // Never review a truncated action or deny routine work merely for its length.
+  // Beyond the complete model-review budget, retain the existing confirmation path.
+  const oversizedEvidenceReason = oversizedReviewEvidence(request.action);
+  if (oversizedEvidenceReason) {
+    return { verdict: 'ask', reason: oversizedEvidenceReason };
+  }
   const localTier = classifyLocalAutoReviewTier(request);
-  if (localTier === 'auto-approve') return { verdict: 'allow' };
-  if (localTier === 'prompt-each-time') return { verdict: 'ask' };
+  // The registered task can constrain reads as well as writes. No delegated
+  // action bypasses scope review merely because the workspace tier is safe.
+  if (localTier === 'auto-approve' && !request.delegatedTask) return { verdict: 'allow' };
   // Never ask the model to approve an action whose material target/text is absent.
   // It has no evidence to distinguish routine work from an unsafe side effect.
   const missingEvidenceReason = missingReviewEvidence(request.action);
@@ -190,19 +552,10 @@ export async function resolveAutoReviewDecision(
       reason: missingEvidenceReason,
     };
   }
-  // The model must see the complete material action. Character sampling can hide
-  // a dangerous middle segment, so oversized gray actions must be retried in smaller form.
-  const oversizedEvidenceReason = oversizedReviewEvidence(request.action);
-  if (oversizedEvidenceReason) {
-    return {
-      verdict: 'block',
-      reason: oversizedEvidenceReason,
-    };
-  }
   if (!delegate) {
     return {
-      verdict: 'block',
-      reason: 'Automatic review is unavailable. Choose a safer, workspace-scoped alternative.',
+      verdict: 'ask',
+      reason: 'Automatic review is unavailable, so this action needs your confirmation.',
       unavailable: true,
     };
   }
@@ -211,9 +564,12 @@ export async function resolveAutoReviewDecision(
     const decision = await Promise.race([
       delegate(request),
       new Promise<typeof AUTO_REVIEW_TIMEOUT>((resolve) => {
+        // 用硬上界而非紧凑档的 delegateTimeoutMs:宿主侧对强制思考的模型会放宽
+        // 单次超时并叠加重试,守卫必须容得下最慢的那一档,否则重试与放宽额度
+        // 都会被这里提前切断。
         timeout = setTimeout(
           () => resolve(AUTO_REVIEW_TIMEOUT),
-          AUTO_REVIEW_DELEGATE_TIMEOUT_MS,
+          AUTO_REVIEW_DELEGATE_HARD_CEILING_MS,
         );
       }),
     ]);
@@ -236,40 +592,145 @@ export async function resolveAutoReviewDecision(
       };
     }
   } catch {
-    // Reviewer outages must not turn Auto into Ask or hold the tool callback open.
+    // 审阅器故障不得吊住 tool callback;下面统一降级收口。
   } finally {
     if (timeout) clearTimeout(timeout);
   }
-  // 走到这里 = delegate 存在但没给出可用结果(超时 / 抛错 / 返回非法)。与「模型判定危险」
-  // 不同,这是审阅器本身没跑起来,必须让上层能区分出来。
+  // 走到这里 = delegate 存在但没给出可用结果(重试后仍超时 / 抛错 / 返回非法)。
+  // 与「模型判定危险」不同,这是审阅器本身没跑起来 —— 交给用户确认,而不是替他拒绝。
   return {
-    verdict: 'block',
-    reason: 'Automatic review could not complete. Choose a safer, workspace-scoped alternative.',
+    verdict: 'ask',
+    reason: 'Automatic review could not complete, so this action needs your confirmation.',
     unavailable: true,
   };
 }
 
-const MAX_USER_INTENT_CHARS = 2_000;
-const USER_INTENT_TRUNCATION_MARKER = '\n…[middle omitted]…\n';
-
-function compactCurrentUserIntent(text: string): string {
-  const normalized = text.trim();
-  if (normalized.length <= MAX_USER_INTENT_CHARS) return normalized;
-  const remaining = MAX_USER_INTENT_CHARS - USER_INTENT_TRUNCATION_MARKER.length;
-  const headChars = Math.ceil(remaining * 0.75);
-  const tailChars = remaining - headChars;
-  return `${normalized.slice(0, headChars)}${USER_INTENT_TRUNCATION_MARKER}${normalized.slice(-tailChars)}`;
-}
-
-/** 只取当前用户消息文本并设硬上限，保留末尾的最终要求或更正。 */
-export function extractAutoReviewUserIntent(content: UserMessage['content']): string {
-  const text = typeof content === 'string'
+export type { AutoReviewUserIntent, AutoReviewUserReferences } from '@cindy/maker-shared/auto-review-intent';
+const intentProjection = createAutoReviewIntentProjection();
+const compactCurrentUserIntent = intentProjection.compact;
+function userIntentText(content: UserMessage['content']): string {
+  return (typeof content === 'string'
     ? content
     : content
       .filter((block): block is Extract<typeof block, { type: 'text' }> => block.type === 'text')
       .map((block) => block.text)
-      .join('\n');
-  return compactCurrentUserIntent(text);
+      .join('\n')).trim();
+}
+
+/** Authorization text is atomic: never sample away a restriction within a message. */
+export function extractAutoReviewUserIntent(content: UserMessage['content']): string {
+  return compactCurrentUserIntent(userIntentText(content));
+}
+
+/** Enforce the budget without interpreting strings as Host-generated structure. */
+export const normalizeAutoReviewUserIntent = intentProjection.normalize;
+
+/** Preserve chronological user messages; scope is assessed, never assumed permanent. */
+export function appendAutoReviewUserIntent(previous: AutoReviewUserIntent | undefined, content: UserMessage['content'], sendOpts?: SendOptions): AutoReviewUserIntent {
+  // A continuation is not a new human input. A live empty reset is authoritative too.
+  if (sendOpts?.[AUTO_REVIEW_DELEGATED_CONTINUATION] && previous !== undefined) return normalizeAutoReviewUserIntent(previous);
+  // The authenticated Host snapshot already includes this input; never append it twice.
+  if (sendOpts?.[AUTO_REVIEW_USER_INTENT] !== undefined) {
+    return normalizeAutoReviewUserIntent(sendOpts[AUTO_REVIEW_USER_INTENT]);
+  }
+  const sourceContent = sendOpts?.[AUTO_REVIEW_SOURCE_CONTENT] ?? content;
+  // Only Main's Symbol carries authenticated channel text, never decorated assistant replies.
+  const latest = userIntentText(sendOpts?.[MAIN_OWNED_SEND_CONTEXT]?.rawChannelText ?? sourceContent);
+  // A new attachment changes what "send this" refers to; it cannot renew an earlier grant.
+  const hasAttachments = Array.isArray(sourceContent) && sourceContent.some((block) => block.type !== 'text');
+  // References belong to this message only and travel with Main's Symbol, never a wire field.
+  return intentProjection.withReferences(
+    intentProjection.append(hasAttachments ? '' : previous, latest),
+    sendOpts?.[MAIN_OWNED_SEND_CONTEXT]?.autoReviewReferences,
+  );
+}
+
+/** A host-synthesized continuation re-sends the same user intent; it is not a new user input. */
+export function isAutoReviewNewUserInput(sendOpts?: SendOptions): boolean {
+  return !sendOpts?.[AUTO_REVIEW_DELEGATED_CONTINUATION];
+}
+
+export interface AutoReviewAgentContext {
+  /** The agent's last public message before the user's current message: what a short "yes" answers. */
+  lastReplyToUser?: string;
+  /** The agent's latest public explanation and the tool's own description for this call. */
+  statedPurpose?: string;
+}
+
+/** Each field is kept at its end, where the question or the step being started usually sits. */
+export const MAX_AUTO_REVIEW_AGENT_CONTEXT_CHARS = 2_000;
+
+/** Raw window kept per field; far larger than what is sent, so cutting it never touches the sent tail. */
+const MAX_AGENT_TEXT_WINDOW_CHARS = 32_000;
+
+/** Redaction needs the text around a credential, so it always runs before any cut that drops text. */
+function tailOf(text: string): string {
+  const trimmed = redactSensitiveText(text).trim();
+  return trimmed.length <= MAX_AUTO_REVIEW_AGENT_CONTEXT_CHARS
+    ? trimmed
+    : `…${trimmed.slice(-(MAX_AUTO_REVIEW_AGENT_CONTEXT_CHARS - 1))}`;
+}
+
+/**
+ * Tracks the agent's public text in the main scope, mirroring the tool-loop explanation: text
+ * accumulates, the first text after a tool call starts a new explanation, and a final text block
+ * replaces it. Subagent and background text is ignored, so it is never attributed to a main call.
+ */
+export function createAutoReviewAgentTextTracker() {
+  let explanation = '';
+  let afterTool = false;
+  let lastReplyToUser = '';
+  // The intent can be re-resolved for the same input; only new text moves the reply forward.
+  let textSinceInput = false;
+  return {
+    observe(event: { type: string; data?: unknown; turnScope?: string; agentMeta?: Record<string, unknown> | null }): void {
+      if (event.turnScope === 'background' || event.agentMeta?.parentUuid || event.agentMeta?.parentToolUseId) return;
+      if (event.type === 'tool_use') { afterTool = true; return; }
+      if (event.type !== 'text') return;
+      const data = event.data && typeof event.data === 'object' ? event.data as { text?: unknown; isFinal?: unknown; runtimeActivity?: unknown } : {};
+      if (typeof data.text !== 'string' || data.runtimeActivity === 'snapshot') return;
+      if (afterTool || data.isFinal === true) explanation = '';
+      afterTool = false;
+      textSinceInput = true;
+      explanation = (explanation + data.text).slice(-MAX_AGENT_TEXT_WINDOW_CHARS);
+    },
+    /** A new user input: the latest text becomes the message it replies to. */
+    beginUserInput(): void {
+      if (textSinceInput) lastReplyToUser = explanation;
+      textSinceInput = false;
+      explanation = '';
+      afterTool = false;
+    },
+    snapshot(toolDescription?: unknown, mainScope = true): AutoReviewAgentContext | undefined {
+      const purpose = [typeof toolDescription === 'string' ? toolDescription.slice(-MAX_AGENT_TEXT_WINDOW_CHARS).trim() : '', mainScope ? explanation.trim() : '']
+        .filter(Boolean).join('\n');
+      const context = {
+        ...(lastReplyToUser.trim() ? { lastReplyToUser: tailOf(lastReplyToUser) } : {}),
+        ...(purpose ? { statedPurpose: tailOf(purpose) } : {}),
+      };
+      return Object.keys(context).length ? context : undefined;
+    },
+  };
+}
+
+/** Keep actual denied actions across one user follow-up, without assistant explanations or grants. */
+export function createAutoReviewActionContext() {
+  let blocked: ReviewableAction[] = [];
+  let preceding: readonly ReviewableAction[] = [];
+  return {
+    advance(sameAuthority: boolean): void {
+      preceding = sameAuthority ? blocked : [];
+      blocked = [];
+    },
+    record(action: ReviewableAction, decision: AutoReviewDecision): void {
+      if (decision.verdict !== 'block' || getAutoReviewActionTextLength(action) > MAX_AUTO_REVIEW_STATIC_TEXT_CHARS) return;
+      const snapshot = JSON.parse(JSON.stringify(action)) as ReviewableAction;
+      const key = JSON.stringify(snapshot);
+      blocked = [...blocked.filter((item) => JSON.stringify(item) !== key), snapshot].slice(-3);
+      while (blocked.length && JSON.stringify(blocked).length > MAX_AUTO_REVIEW_STATIC_TEXT_CHARS) blocked.shift();
+    },
+    get precedingBlockedActions(): readonly ReviewableAction[] { return preceding; },
+  };
 }
 
 /**
@@ -278,15 +739,12 @@ export function extractAutoReviewUserIntent(content: UserMessage['content']): st
  * lightweight reviewer beyond its existing intent budget.
  */
 export function composeAutoReviewIntentWithApprovedPlan(
-  currentUserIntent: string,
+  currentUserIntent: AutoReviewUserIntent,
   approvedPlan: string,
-): string {
+): AutoReviewUserIntent {
   const plan = approvedPlan.trim();
-  if (!plan) return compactCurrentUserIntent(currentUserIntent);
-  return compactCurrentUserIntent([
-    currentUserIntent.trim(),
-    `Approved plan:\n${plan}`,
-  ].filter(Boolean).join('\n\n'));
+  if (!plan) return normalizeAutoReviewUserIntent(currentUserIntent);
+  return appendAutoReviewUserIntent(currentUserIntent, `Approved plan:\n${plan}`);
 }
 
 /**
@@ -295,9 +753,9 @@ export function composeAutoReviewIntentWithApprovedPlan(
  * 有界 intent,不扩大轻量 reviewer 的输入预算。
  */
 export function composeAutoReviewIntentWithClarification(
-  currentUserIntent: string,
+  currentUserIntent: AutoReviewUserIntent,
   clarifications: readonly { question?: string; answer?: string }[],
-): string {
+): AutoReviewUserIntent {
   const lines = clarifications
     .map(({ question, answer }) => {
       const q = (question ?? '').trim();
@@ -306,9 +764,6 @@ export function composeAutoReviewIntentWithClarification(
       return q ? `- ${q} → ${a}` : `- ${a}`;
     })
     .filter(Boolean);
-  if (lines.length === 0) return compactCurrentUserIntent(currentUserIntent);
-  return compactCurrentUserIntent([
-    currentUserIntent.trim(),
-    `Clarifications:\n${lines.join('\n')}`,
-  ].filter(Boolean).join('\n\n'));
+  if (lines.length === 0) return normalizeAutoReviewUserIntent(currentUserIntent);
+  return appendAutoReviewUserIntent(currentUserIntent, `Clarifications:\n${lines.join('\n')}`);
 }

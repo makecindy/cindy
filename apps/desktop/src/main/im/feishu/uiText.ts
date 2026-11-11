@@ -13,6 +13,7 @@
 
 import type { IMUnsupportedEntry } from '@cindy/im';
 
+import { t } from '../../i18n.desktop';
 import type { ImUiTextPack } from '../shared/types';
 
 export const ui = {
@@ -36,6 +37,12 @@ export const ui = {
     detachedBySlash: '🚪 接管结束，咱们回到私聊频道。下次想远程操控 desktop 再 /ctr',
     detachedByRevoke: '⚠️ 你在 desktop 那边把接管收回去了，后续消息回到我们俩的私聊。',
     notAttached: '🤷 你现在没在接管任何任务，/exctr 闲着也没事可干。',
+    // 连接已交给伙伴(伙伴即 IM 本体)时的命令提示。
+    companionDmNew:
+      '🧭 这里是伙伴的主对话，会一直接着聊，不会另开新任务。想换个话题直接说就好；需要单独做的事，伙伴会自己开后台任务。',
+    companionLaneNew: '🌱 已为这个群开始一段新对话，之前的上下文收起来了，从头开始吧~',
+    companionManagedCommand:
+      '🧭 这个连接已交给伙伴，模型、权限和工作目录跟随伙伴设置。请在 Cindy 的伙伴设置里修改。',
   },
 
   // ── agent runtime feedback ─────────────────────────────────────────────────
@@ -58,7 +65,7 @@ export const ui = {
       const message = `⚠️ 当前对话使用供应商「${provider}」（${model}），${reason}。`;
       return attached
         ? `${message}\n请在 desktop 的 Settings → 模型供应商中修复认证后，直接继续发送消息。`
-        : `${message}\n“新对话配置”只影响新对话；修改后请发送 \`/new\`，再继续聊天。`;
+        : `${message}\n修改“新对话配置”后直接继续发送消息即可；若当前对话单独选过模型，请发送 \`/model\` 重新选择。`;
     },
     controlInProgress:
       '🎮 你 /ctr 还在选择中呢 — 先把上面那张卡片操作完（或点 🚪 退出），再来发别的~',
@@ -86,6 +93,15 @@ export const ui = {
     unsupportedNotice: (entries: IMUnsupportedEntry[]) =>
       `ℹ️ 以下内容我消化不了，先丢一边了：\n${entries.map((e) => `• ${e.label}`).join('\n')}\n\n` +
       `其它部分收到啦，正在处理~`,
+    companionUnavailable: (reason: string) => `⏸ 伙伴现在接不了消息：${reason.slice(0, 200)}`,
+  },
+
+  // ── pre-dispatch 失败细分文案 ──────────────────────────────────────────────
+  error: {
+    agentUnsupported:
+      '🤔 当前选择的 Agent 在这个渠道需要逐条权限确认，暂时上不了场，换一个 Agent 再试~',
+    permissionModeUnsupported: () =>
+      t('settings.imBot.defaults.permissionModeUnsupportedOnChannelHint'),
   },
 
   // ── card text (sent via @cindy/im InteractiveCardSpec) ──────────────────────
@@ -96,6 +112,9 @@ export const ui = {
       btnAllowOnce: '✅ 仅本次允许',
       btnAllowAlways: '✅ 总是允许',
       btnDeny: '❌ 拒绝',
+      /** 授权卡转投 owner 私聊后, 在原群/话题里留的指路提示 — 带工具名, 点出具体是什么操作。 */
+      dmRoutedNotice: (toolName: string) =>
+        `🔐 \`${toolName}\` 这个操作需要你确认 — 授权卡片已经发到你的私聊，去那里点一下继续~`,
       resolvedAllowOnce: '✅ 已允许（仅本次）',
       resolvedAllowAlways: '✅ 已允许（这个工具以后都放行）',
       resolvedDeny: '❌ 已拒绝',
@@ -104,6 +123,14 @@ export const ui = {
       title: (header: string) => `❓ ${header}`,
       noOptionsHint: '_（这个问题没有预设选项，直接发文字回我吧）_',
       resolved: (optionLabel: string) => `✅ 已选：${optionLabel}`,
+      // 多题/多选打勾卡: 依赖飞书卡片原地更新(im.v1.message.patch), 提供
+      // 这份文案即启用 buildAskUserCard 的多题分发(见 cardBuilders)。
+      multi: {
+        title: '❓ 需要你确认几件事',
+        multiSelectHint: '（可多选）',
+        submitLabel: '提交答案',
+        selectedMark: '✓ ',
+      },
     },
     plan: {
       title: '📋 我打算这么干',
@@ -139,6 +166,20 @@ export const ui = {
       btnCancelFullAccess: '保留当前权限',
       fullAccessCancelled: '已取消，保留当前权限',
     },
+    /**
+     * 群会话「完全访问」档被强确认策略拒绝时, 发到 owner 私聊的一键修复卡 —
+     * 点按钮把该会话切回 auto(自动审批), 群里就能继续发消息了。
+     */
+    permissionModeFix: {
+      title: '🛡️ 把群会话切回「自动审批」',
+      body: (sessionTitle: string) =>
+        `刚才在群里/话题里的消息没能开跑：**${sessionTitle}** 用的是「完全访问」权限档，` +
+        '但群上下文里有成员可控的内容，必须保留操作确认。\n\n点下面按钮把它切到「自动审批」（auto），' +
+        '切完回群里继续发消息就行。',
+      btnFix: '✅ 切到自动审批',
+      resolved: '✅ 已切到「自动审批」— 回群里继续发消息吧~',
+      failed: (reason: string) => `❌ 没切过去：${reason}。可以发 /permission auto 手动切换`,
+    },
     control: {
       title: '🎮 挑个工作区上号',
       emptyBody: '_暂时还没有可接管的工作区~ 在 desktop 端打开/创建一个任务再来_',
@@ -159,6 +200,11 @@ export const ui = {
       resolvedNewSession: (workspaceName: string) =>
         `✨ 新存档已建 + 接管完成（在 **${workspaceName}** 里）\n直接发指令开聊；想退就 \`/exctr\``,
       attachFailed: (reason: string) => `❌ 没接上：${reason}`,
+      // 群卡认不出自己在哪条话题(应用重启过, 卡片和话题的对应关系只存在内存里)。
+      // 这时候按回调身份接管会把绑定挂到私聊上, 所以宁可不接, 让用户重发一次。
+      staleGroupCard:
+        '❌ 没接上：这张卡片是应用重启前发的，已经认不出它属于哪条话题了。\n' +
+        '请在你想接管的那条话题里重新发一次 `/ctr`（绑定只跟话题走，不会串到别处）',
       /** 旧卡片(被点了 busy session 那张)被 freeze 时的占位文字, 让用户知道这张
        *  卡片不再活跃, 下面会新发一张可重选的卡片。 */
       sessionBusyOldCardPlaceholder: '⏳ 那个任务还在跑——下方给你刷了张新卡片，重选一下吧',
@@ -217,5 +263,5 @@ export const ui = {
   // owned by the streaming-card subsystem there, not duplicated in host.
 } satisfies ImUiTextPack;
 
-/** Feishu emoji_type for "I see this" reaction (most ack-friendly). */
-export const REACTION_PROCESSING = 'SMUG';
+/** Feishu native processing marker; the transport selects a work/thinking variant. */
+export const REACTION_PROCESSING = 'Typing';

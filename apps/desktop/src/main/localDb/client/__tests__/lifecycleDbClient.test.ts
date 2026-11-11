@@ -1,12 +1,43 @@
 import { describe, expect, it, vi } from 'vitest';
 
 import type { DbClient } from '../DbClient.js';
+import { retainDbClient } from '../pendingOperations.js';
 import {
   createLifecycleDbClientManager,
   type LifecycleDbClientLog,
 } from '../lifecycleDbClient.js';
 
 describe('lifecycle DbClient manager', () => {
+  it.each(['worker', 'inproc-fallback'])('keeps the outgoing %s database open until all paid operations settle', async mode => {
+    const worker = makeClient('worker');
+    const fallback = makeClient('fallback');
+    if (mode === 'inproc-fallback') worker.query.mockRejectedValueOnce(new Error('worker unavailable'));
+    const clearCurrent = vi.fn();
+    const manager = createLifecycleDbClientManager({
+      getCurrentDbPath: () => '/tmp/owner-a.db',
+      createWorkerClient: vi.fn(async () => worker),
+      createInprocClient: vi.fn(async () => fallback),
+      setCurrentDbClient: vi.fn(),
+      clearCurrentDbClient: clearCurrent,
+      log: makeLog(),
+    });
+    await manager.ensure('owner-a', {});
+    const client = mode === 'worker' ? worker : fallback;
+    const first = retainDbClient(client);
+    const second = retainDbClient(client);
+    const disposing = manager.dispose('user-switch');
+    expect(clearCurrent).toHaveBeenCalledWith(client);
+    await Promise.resolve();
+    expect(client.dispose).not.toHaveBeenCalled();
+    first();
+    first();
+    await Promise.resolve();
+    expect(client.dispose).not.toHaveBeenCalled();
+    second();
+    await disposing;
+    expect(client.dispose).toHaveBeenCalledOnce();
+  });
+
   it('keeps main db active and installs inproc fallback when worker smoke fails', async () => {
     const worker = makeClient('worker');
     const fallback = makeClient('fallback');

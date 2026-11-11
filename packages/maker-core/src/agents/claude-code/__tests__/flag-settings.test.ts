@@ -2,6 +2,11 @@ import { describe, expect, it } from 'vitest';
 
 import { buildClaudeFlagSettings } from '../flag-settings.js';
 
+it('a subscription prohibition writes explicit false over native Fast defaults', () => {
+  expect(buildClaudeFlagSettings({ showThinkingSummaries: false, fastMode: true, fastModeAllowed: false }).fastMode).toBe(false);
+  expect(buildClaudeFlagSettings({ showThinkingSummaries: false, fastMode: false, fastModeAllowed: false })).toHaveProperty('fastMode', false);
+});
+
 describe('buildClaudeFlagSettings', () => {
   it('恒置空 apiKeyHelper — 屏蔽用户级 helper 对 oauth-spawn 订阅鉴权的劫持(回归锚点)', () => {
     // 用户 ~/.claude/settings.json 配了 apiKeyHelper 时,cc 鉴权优先级里它高于 claude.ai
@@ -15,16 +20,18 @@ describe('buildClaudeFlagSettings', () => {
           fastMode,
         });
         expect(settings.apiKeyHelper).toBe('');
+        expect(settings.attribution).toEqual({ commit: '', pr: '' });
       }
     }
   });
 
-  it('默认形态(无 memory override / fast 关)只含 showThinkingSummaries + apiKeyHelper', () => {
+  it('默认形态(无 memory override / fast 关)只含 showThinkingSummaries + apiKeyHelper + 空 attribution', () => {
     expect(
       buildClaudeFlagSettings({ showThinkingSummaries: true, fastMode: false }),
     ).toEqual({
       showThinkingSummaries: true,
       apiKeyHelper: '',
+      attribution: { commit: '', pr: '' },
     });
   });
 
@@ -34,6 +41,7 @@ describe('buildClaudeFlagSettings', () => {
     ).toEqual({
       showThinkingSummaries: false,
       apiKeyHelper: '',
+      attribution: { commit: '', pr: '' },
       autoMemoryEnabled: true,
       autoDreamEnabled: true,
     });
@@ -49,6 +57,16 @@ describe('buildClaudeFlagSettings', () => {
     expect(
       'fastMode' in buildClaudeFlagSettings({ showThinkingSummaries: false, fastMode: false }),
     ).toBe(false);
+  });
+
+  it('uses host-provided Claude SDK wire models over a user availableModels allowlist', () => {
+    const settings = buildClaudeFlagSettings({
+      showThinkingSummaries: false,
+      fastMode: false,
+      availableModels: ['claude-opus-4-6[1m]', 'claude-sonnet-5'],
+    });
+
+    expect(settings.availableModels).toEqual(['claude-opus-4-6[1m]', 'claude-sonnet-5']);
   });
 
   it('adds namespaced plugin skill overrides from the host routing policy', () => {
@@ -73,6 +91,51 @@ describe('buildClaudeFlagSettings', () => {
 
     expect(settings.skillOverrides).toEqual({
       'feishu-delegate:message-feishu-coworkers': 'user-invocable-only',
+    });
+  });
+
+  it('denies disabled downstream MCP servers from the host routing policy', () => {
+    const settings = buildClaudeFlagSettings({
+      showThinkingSummaries: false,
+      fastMode: false,
+      capabilityRouting: {
+        overrides: [
+          {
+            capabilityId: 'output-delivery',
+            source: {
+              kind: 'harness-builtin',
+              harness: 'claude-code',
+              surface: 'mcp',
+              id: 'claude.ai Claude Docs',
+            },
+            invocation: 'disabled',
+          },
+        ],
+      },
+    });
+
+    expect(settings.deniedMcpServers).toEqual([{ serverName: 'claude.ai Claude Docs' }]);
+    expect(buildClaudeFlagSettings({ showThinkingSummaries: false, fastMode: false }))
+      .not.toHaveProperty('deniedMcpServers');
+  });
+
+  it('enforces a Bot Skill allowlist with native Claude skill overrides', () => {
+    const settings = buildClaudeFlagSettings({
+      showThinkingSummaries: false,
+      fastMode: false,
+      botSkillPolicy: {
+        mode: 'allowlist',
+        configured: ['release'],
+        catalog: [
+          { name: 'release-notes', runtimeCommandName: 'release' },
+          { name: 'incident-response' },
+        ],
+      },
+    });
+
+    expect(settings.skillOverrides).toEqual({
+      'release-notes': 'on',
+      'incident-response': 'off',
     });
   });
 });

@@ -13,6 +13,7 @@
  * `assertInsideWorkdir` — renderer cannot ask for `../../etc/passwd`.
  */
 
+import { randomBytes } from 'node:crypto';
 import { promises as fs, type Stats, type Dirent } from 'node:fs';
 import path from 'node:path';
 
@@ -21,13 +22,43 @@ import { loadIgnoreMatcher, type Matcher } from './ignore.js';
 
 const log = scopedLogger('file-browser/scanner');
 
+// Reuse the locale-aware comparator across lazy directory expansions.
+const entryNameCollator = new Intl.Collator(undefined, { numeric: true });
+
 /** Hard cap on file size we'll send to the renderer. Anything larger gets
  *  truncated; renderer shows a "file truncated, open in OS to see more"
  *  banner. 2 MiB is enough for any realistic markdown/code file. */
 const MAX_FILE_BYTES = 2 * 1024 * 1024;
 
+/** PDF 文件头。规范允许其前面有少量垃圾字节,pdf.js 也只在前 1 KiB 内找它,这里同口径。 */
+const PDF_SIGNATURE = Buffer.from('%PDF-', 'latin1');
+const PDF_SIGNATURE_WINDOW = 1024;
+
 /**
- * 原子写中间产物的后缀。writeFile 把内容先落到 `${target}.xdt-tmp`,fsync 后
+ * 文本读取 / 覆写前的二进制判定,readFile 与 writeFile 共用:
+ *   - 前 4 KiB 含 NUL → PNG/FBX/DLL 等常见二进制;
+ *   - `.pdf` 文件前 1 KiB 内出现 `%PDF-` → PDF。合法 PDF 不一定含 NUL(对象流未压缩、
+ *     纯 ASCII 时整份文件都可能没有 NUL),只靠 NUL 探测会把它当 UTF-8 文本交给渲染层,
+ *     显示成 `%PDF-1.4 ... obj ... stream` 原始语法(issue #4158)。判成二进制后渲染层按
+ *     扩展名走既有 PdfPreview 分支。
+ *     文件头判定只对 `.pdf` 扩展名生效:渲染层的 PDF 预览本来就以扩展名为准,其他扩展名
+ *     判成二进制只会得到不可渲染占位、还会让编辑器拒绝保存;而 markdown / 日志 / 源码
+ *     在开头引用 `%PDF-` 很常见,不能误伤。
+ */
+function isBinaryProbe(probe: Buffer, relPath: string): boolean {
+  if (probe.includes(0)) return true;
+  if (!hasPdfExtension(relPath)) return false;
+  return probe.subarray(0, PDF_SIGNATURE_WINDOW).includes(PDF_SIGNATURE);
+}
+
+function hasPdfExtension(relPath: string): boolean {
+  const name = relPath.slice(relPath.lastIndexOf('/') + 1);
+  const dot = name.lastIndexOf('.');
+  return dot > 0 && name.slice(dot).toLowerCase() === '.pdf';
+}
+
+/**
+ * 原子写中间产物的后缀。writeFile 把内容先落到 `${target}.<随机>.xdt-tmp`,fsync 后
  * rename 成正式名。这个临时文件理论上只活一两毫秒,但在边栏 listDir 路径上仍
  * 可能被瞥见 → 一闪而过的 ghost row,视觉上像"刷一下"。
  *
@@ -128,6 +159,8 @@ async function assertRealParentInsideWorkdir(
 }
 
 export interface ListDirOptions {
+  /** Optional transfer budget; exceeding it fails instead of returning a partial list. */
+  maxEntries?: number;
   /**
    * "Doc mode": only show doc/config text files (see DOC_MODE_EXTS); only
    * show directories that have at least one such file as a descendant.
@@ -170,14 +203,37 @@ function isDocModeFile(name: string): boolean {
  * Implementation:
  *   - Sibling subdirs are walked in parallel (Promise.all over the level)
  *     so a top-level dir like apps/desktop/ doesn't serialize 50 subwalks.
- *   - A shared `Found` cell short-circuits: any walk that's about to start
- *     bails if some other branch has already returned true.
+ *   - Overlapping probes share only the in-flight `readdir` for each absolute
+ *     directory. Traversals keep their own `Found` cell, preserving sibling
+ *     short-circuiting without allowing one probe's result to contaminate
+ *     another; completed directory reads are never cached.
  *
  * Worst case (deep subtree with no matching file): walks the whole subtree
  * once, but in parallel. BUILTIN_IGNORE prunes node_modules / Library /
  * etc., which are the only realistic huge subtrees.
  */
 type Found = { v: boolean };
+
+/** In-flight-only sharing for overlapping doc-mode directory reads. */
+const docDirentsInFlight = new Map<string, Promise<Dirent[]>>();
+
+function readDocDirents(abs: string): Promise<Dirent[]> {
+  const key = path.resolve(abs);
+  const current = docDirentsInFlight.get(key);
+  if (current) return current;
+
+  const read = fs.readdir(abs, { withFileTypes: true });
+  docDirentsInFlight.set(key, read);
+  void read.then(
+    () => {
+      if (docDirentsInFlight.get(key) === read) docDirentsInFlight.delete(key);
+    },
+    () => {
+      if (docDirentsInFlight.get(key) === read) docDirentsInFlight.delete(key);
+    },
+  );
+  return read;
+}
 
 async function hasDocDescendantInner(
   abs: string,
@@ -188,7 +244,7 @@ async function hasDocDescendantInner(
   if (found.v) return true;
   let dirents: Dirent[];
   try {
-    dirents = await fs.readdir(abs, { withFileTypes: true });
+    dirents = await readDocDirents(abs);
   } catch {
     return false;
   }
@@ -208,8 +264,8 @@ async function hasDocDescendantInner(
     }
   }
   if (subdirs.length === 0 || found.v) return found.v;
-  // Pass 2: recurse all subdirs in parallel. Each child re-checks `found`
-  // at entry, so a fast hit anywhere in the tree stops new work cheaply.
+  // Pass 2: recurse all subdirs in parallel. Each traversal keeps the same
+  // `Found` cell, so a fast hit stops deeper work in sibling branches.
   const results = await Promise.all(
     subdirs.map((s) =>
       hasDocDescendantInner(path.join(abs, s.name), s.childRel, matcher, found),
@@ -228,19 +284,32 @@ async function hasDocDescendant(
 
 /**
  * List entries of one directory (single-layer, no recursion). Filtered
- * through the workdir's ignore matcher. Sort: directories before files,
- * each group case-insensitive lexicographic — same convention as VSCode
- * Explorer / Obsidian.
+ * through an optional presentation matcher. Without a matcher all ordinary
+ * files are listed, including hidden files and build outputs. Sort: directories before files,
+ * each group case-insensitive natural order (chapter2 before chapter10).
  */
 export async function listDir(
   workdir: string,
   relPath: string,
-  matcher: Matcher,
+  matcher: Matcher | null = null,
   opts: ListDirOptions = {},
 ): Promise<DirEntry[]> {
+  if (opts.maxEntries !== undefined && (!Number.isSafeInteger(opts.maxEntries) || opts.maxEntries < 1)) {
+    throw new Error('Invalid directory entry limit');
+  }
   const sub = assertInsideWorkdir(workdir, relPath);
   const abs = sub === '' ? workdir : path.join(workdir, sub);
-  const dirents = await fs.readdir(abs, { withFileTypes: true });
+  await assertRealPathInsideWorkdir(workdir, abs);
+  // In doc mode this top-level read participates in the same in-flight map as
+  // recursive descendant probes. An overlapping `listDir('src')` can thus
+  // reuse the read already started while listing the root, without retaining
+  // a completed snapshot.
+  const dirents = opts.docMode
+    ? await readDocDirents(abs)
+    : await fs.readdir(abs, { withFileTypes: true });
+  if (opts.maxEntries !== undefined && dirents.length > opts.maxEntries) {
+    throw new Error('DIRECTORY_TOO_LARGE');
+  }
 
   // Process all entries in parallel. With docMode on, each surviving subdir
   // triggers a recursive hasDocDescendant probe — running siblings in
@@ -250,24 +319,27 @@ export async function listDir(
     dirents.map(async (d): Promise<DirEntry | null> => {
       const childRel = sub === '' ? d.name : `${sub}/${d.name}`;
       const isDir = d.isDirectory();
-      if (matcher.ignores(childRel, isDir)) return null;
+      if (matcher?.ignores(childRel, isDir)) return null;
       // 原子写中间产物 — 隐藏不让前端看到一闪而过的临时行。
-      if (!isDir && d.name.endsWith(XDT_TMP_SUFFIX)) return null;
+      if (matcher && !isDir && d.name.endsWith(XDT_TMP_SUFFIX)) return null;
       // We need stats for size + mtime; use lstat to avoid following symlinks
       // into Library/ et al. (some Unity setups symlink huge caches in).
       let st: Stats;
       try {
         st = await fs.lstat(path.join(abs, d.name));
-      } catch {
-        // Permission denied or removed mid-scan — skip silently.
+      } catch (error) {
+        // Complete enumeration must not silently return a partial snapshot.
+        if (!matcher) throw error;
+        // Presentation mode tolerates files removed mid-scan or inaccessible entries.
         return null;
       }
       // Skip symlinks unless they point inside the workdir; cheaper to just
       // skip than to chase them. User can open via OS if needed.
       if (st.isSymbolicLink()) return null;
+      if (!st.isDirectory() && !st.isFile()) return null;
       if (opts.docMode) {
         if (isDir) {
-          if (!(await hasDocDescendant(path.join(abs, d.name), childRel, matcher))) {
+          if (!(await hasDocDescendant(path.join(abs, d.name), childRel, matcher ?? { ignores: () => false }))) {
             return null;
           }
         } else if (!isDocModeFile(d.name)) {
@@ -285,10 +357,13 @@ export async function listDir(
   );
   const out: DirEntry[] = candidates.filter((e): e is DirEntry => e !== null);
 
-  // dirs first (case-insensitive a-z), then files (same)
+  // Directories first, then natural name order within each group.
   out.sort((a, b) => {
     if (a.type !== b.type) return a.type === 'directory' ? -1 : 1;
-    return a.name.toLocaleLowerCase().localeCompare(b.name.toLocaleLowerCase());
+    const aName = a.name.toLocaleLowerCase();
+    const bName = b.name.toLocaleLowerCase();
+    // Keep the legacy text order for numeric ties such as 001, 01 and 1.
+    return entryNameCollator.compare(aName, bName) || aName.localeCompare(bName);
   });
 
   return out;
@@ -296,8 +371,8 @@ export async function listDir(
 
 /**
  * Read one file, capped at MAX_FILE_BYTES. Returns UTF-8 string + truncation
- * flag. Binary files (NULL byte in first 4KB) raise an error so the renderer
- * can render the unrenderable-placeholder card instead.
+ * flag. Binary files (NULL byte in first 4KB, or a `.pdf` with a PDF header)
+ * raise an error so the renderer can render the placeholder / PDF preview instead.
  */
 export async function readFile(
   workdir: string,
@@ -317,11 +392,12 @@ export async function readFile(
     if (buf.length > 0) {
       await handle.read(buf, 0, buf.length, 0);
     }
-    // Quick binary detection: NULL byte in first 4 KiB. Catches PNG/FBX/DLL
-    // etc. UTF-16 text files contain NULL bytes too but are rare in dev
-    // workflows; renderer can still fall back to "open in OS" if needed.
+    // Quick binary detection: NULL byte in first 4 KiB (PNG/FBX/DLL etc.) or a
+    // PDF header in a `.pdf` file (see isBinaryProbe). UTF-16 text files contain
+    // NULL bytes too but are rare in dev workflows; renderer can still fall back
+    // to "open in OS" if needed.
     const probe = buf.subarray(0, Math.min(buf.length, 4096));
-    if (probe.includes(0)) {
+    if (isBinaryProbe(probe, sub)) {
       const err = new Error(`binary file: ${relPath}`);
       (err as Error & { code?: string }).code = 'BINARY_FILE';
       throw err;
@@ -396,7 +472,7 @@ export async function readFileChunk(
 
 /**
  * Atomically write text content to a file inside workdir. Pattern: write to
- * `${target}.xdt-tmp`, fsync handle, rename → target. Crash-safe (consumer
+ * `${target}.<random>.xdt-tmp`, fsync handle, rename → target. Crash-safe (consumer
  * either sees old content or new, never partial).
  *
  * Constraints:
@@ -406,8 +482,8 @@ export async function readFileChunk(
  *   - Refuses files >MAX_FILE_BYTES on disk (the read path truncates large
  *     files; saving back would silently lose data).
  *   - Refuses content >MAX_FILE_BYTES (defense against giant paste).
- *   - Refuses binary files (NULL byte in first 4KB) — same probe as readFile,
- *     so the editor never opens binaries to begin with.
+ *   - Refuses binary files (NULL byte in first 4KB, or a `.pdf` with a PDF
+ *     header) — same probe as readFile, so the editor never opens binaries.
  */
 export async function writeFile(
   workdir: string,
@@ -440,24 +516,32 @@ export async function writeFile(
   try {
     const probe = Buffer.alloc(Math.min(st.size, 4096));
     if (probe.length > 0) await probeHandle.read(probe, 0, probe.length, 0);
-    if (probe.includes(0)) {
+    if (isBinaryProbe(probe, sub)) {
       throw new Error(`binary file: ${relPath}`);
     }
   } finally {
     await probeHandle.close();
   }
 
-  const tmp = `${realAbs}${XDT_TMP_SUFFIX}`;
-  const handle = await fs.open(tmp, 'w');
+  // 临时名带随机段并以 'wx' 独占创建:固定名可被工作目录里预置的符号链接
+  // 占位,'w' 会跟随链接写到工作目录外,rename 还会把链接本身搬成目标文件。
+  // 仍以 XDT_TMP_SUFFIX 结尾,listDir / watcher 的过滤照旧生效。
+  const tmp = `${realAbs}.${randomBytes(6).toString('hex')}${XDT_TMP_SUFFIX}`;
+  const handle = await fs.open(tmp, 'wx');
   try {
-    await handle.writeFile(buf);
-    await handle.sync();
-  } finally {
-    await handle.close();
+    try {
+      await handle.writeFile(buf);
+      await handle.sync();
+    } finally {
+      await handle.close();
+    }
+    // rename is atomic on same filesystem (which .xdt-tmp guarantees since
+    // we wrote it in the same directory).
+    await fs.rename(tmp, realAbs);
+  } catch (err) {
+    await fs.rm(tmp, { force: true }).catch(() => {});
+    throw err;
   }
-  // rename is atomic on same filesystem (which .xdt-tmp guarantees since
-  // we wrote it in the same directory).
-  await fs.rename(tmp, realAbs);
 
   const after = await fs.stat(realAbs);
   return { size: after.size, mtimeMs: after.mtimeMs };
@@ -507,10 +591,9 @@ export async function createFolder(
  * to 都走 assertInsideWorkdir 防越界。
  *
  * 冲突策略:
- *   - 目标已存在 → 抛错(留给上层 toast)。EXCEPT 大小写仅改写的情况:
- *     NTFS / HFS+ 默认是 case-insensitive,'Foo.md' → 'foo.md' 时 access 会
- *     误报"存在",但 fs.rename 本身能正确改名。所以仅在大小写不同时跳过冲突
- *     检查。
+ *   - 目标已存在 → 抛错(留给上层 toast)。大小写仅改写时比较文件身份:
+ *     NTFS / HFS+ 默认是 case-insensitive,'Foo.md' → 'foo.md' 指向同一文件,
+ *     可以放行;case-sensitive FS 上两个名字也可能是不同文件,不能静默覆盖。
  *   - source 不存在 → fs.rename 自然抛 ENOENT,上层 toast。
  *   - 跨卷不会发生,因为 from/to 都在同一 workdir 下。
  */
@@ -539,10 +622,18 @@ export async function renameEntry(
   const absTo = path.join(workdir, toSub);
   const realFrom = await assertRealPathInsideWorkdir(workdir, absFrom);
   await assertRealParentInsideWorkdir(workdir, absTo);
-  // 大小写仅改写检查:若 normalize 后小写相同,跳过 conflict 检查 — case-only
-  // rename 在 case-insensitive FS 上需要直接 rename。
   const caseOnly = fromSub.toLowerCase() === toSub.toLowerCase();
-  if (!caseOnly) {
+  if (caseOnly) {
+    try {
+      const [fromStat, toStat] = await Promise.all([fs.stat(realFrom), fs.stat(absTo)]);
+      if (fromStat.dev !== toStat.dev || fromStat.ino !== toStat.ino) {
+        throw new Error(`目标已存在: ${toSub}`);
+      }
+    } catch (err) {
+      const code = (err as NodeJS.ErrnoException).code;
+      if (code !== 'ENOENT') throw err;
+    }
+  } else {
     try {
       await fs.access(absTo);
       throw new Error(`目标已存在: ${toSub}`);

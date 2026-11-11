@@ -2,8 +2,10 @@ import { describe, expect, it } from 'vitest';
 import {
   buildDeviceListPresentation,
   deviceAccessState,
+  deviceDisplayName,
   isControllableDevice,
   platformLabel,
+  toDeviceListItem,
   toDeviceListItems,
   type DeviceListDeviceLike,
   visibleDeviceListItems,
@@ -51,6 +53,15 @@ describe('shared device list presentation model', () => {
     expect(deviceAccessState(device({ online: false, remoteControlEnabled: false }))).toBe('offline');
     expect(deviceAccessState(device({ remoteControlEnabled: false }))).toBe('remote_disabled');
     expect(deviceAccessState(device({ isSelf: true }))).toBe('self');
+  });
+
+  // Regression: the singular projection must reuse controllability so ready mobile clients cannot be opened.
+  // Minimal unit inputs: online, remote-enabled iOS/Android; desktop ready/busy retain their existing projection.
+  it('keeps ready mobile clients closed while preserving desktop ready and busy projections', () => {
+    expect(toDeviceListItem(device({ platform: 'ios' }))).toMatchObject({ state: 'ready', canOpen: false });
+    expect(toDeviceListItem(device({ platform: 'android' }))).toMatchObject({ state: 'ready', canOpen: false });
+    expect(toDeviceListItem(device())).toMatchObject({ state: 'ready', canOpen: true });
+    expect(toDeviceListItem(device({ busy: true }))).toMatchObject({ state: 'busy', canOpen: true });
   });
 
   it('omits the current mobile device and other mobile clients while keeping unavailable peers with actionable details', () => {
@@ -195,5 +206,22 @@ describe('shared device list presentation model', () => {
     expect(empty.filterMeta).toBe('等待电脑端上线');
     expect(empty.toggleLabel).toBeNull();
     expect(empty.emptyTitle).toBe('还没有可显示的电脑');
+  });
+});
+
+// Regression: full device fingerprints crowded teammate/project labels, including cached ID-as-name values.
+describe('device display names', () => {
+  it('recovers missing or cached ID names from the roster, otherwise uses localized copy', () => {
+    const id = 'eb2ad08b24c63a9e818609e29057ca8d1a4';
+    expect(deviceDisplayName(id, id, '未命名设备', [{ deviceId: id, name: ' Mac Studio ' }])).toBe('Mac Studio');
+    expect(deviceDisplayName(id, ' ', '未命名设备')).toBe('未命名设备');
+    expect(deviceDisplayName(id, id, '未命名设备')).toBe('未命名设备');
+  });
+  it('uses deterministic ordinals for distinct duplicate hosts without changing routing identities', () => {
+    const devices = [{ deviceId: 'b', name: 'Studio' }, { deviceId: 'a', name: ' studio ' }];
+    expect(deviceDisplayName('b', 'Studio', 'Computer', devices)).toBe('Studio (2)');
+    expect(deviceDisplayName('b', 'Studio', 'Computer', [...devices].reverse())).toBe('Studio (2)');
+    expect(deviceDisplayName('b', 'Studio', 'Computer', [devices[0], devices[0]])).toBe('Studio');
+    expect(devices.map((device) => device.deviceId)).toEqual(['b', 'a']);
   });
 });

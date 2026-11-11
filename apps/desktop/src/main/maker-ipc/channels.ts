@@ -1,3 +1,5 @@
+
+
 /**
  * maker:* IPC channel 名常量。统一收口，禁止 hardcode 字符串。
  *
@@ -5,8 +7,15 @@
  * Push channel（main → renderer）以 'maker:event:' 前缀。
  */
 
+import {
+  RSB_WINDOW_COMMAND_CHANNEL,
+  RSB_WINDOW_CONTEXT_CHANGED_CHANNEL,
+  RSB_WINDOW_STATE_CHANGED_CHANNEL,
+} from '../../shared/rightSidebarWindow.js';
+
 export const MAKER_INVOKE = {
   CREATE_SESSION: 'maker:create-session',
+  START_REVIEW: 'maker:review:start',
   TURN_CHANGE_SETS_LIST: 'maker:turn-change-sets:list',
   TURN_CHANGE_SETS_GET: 'maker:turn-change-sets:get',
   TURN_CHANGE_SET_APPLY: 'maker:turn-change-set:apply',
@@ -22,6 +31,19 @@ export const MAKER_INVOKE = {
    */
   SESSION_ENABLE_ORCA: 'maker:session:enable-orca',
   SESSION_DISABLE_ORCA: 'maker:session:disable-orca',
+  /** renderer 回填「该会话是否真的在 turn 中」的权威运行态(#4513 中断横幅假阳性)。 */
+  SESSION_TURN_ACTIVE: 'maker:session:turn-active',
+  /**
+   * 输入框开始打字时提前启动该任务的 Agent（尽力而为，无返回约定之外的副作用）。
+   * 本机 renderer 与 device-link 控制端共用；旧被控端没有该 channel 时控制端静默忽略。
+   */
+  SESSION_PREWARM: 'maker:session:prewarm',
+  /**
+   * 新建页的未发送任务（本机 renderer 专用，不进 device-link）：清空输入时删除，
+   * 第一次发送前转为普通任务。见 localDb/provisionalSessions.ts。
+   */
+  SESSION_DISCARD_PROVISIONAL: 'maker:session:discard-provisional',
+  SESSION_COMMIT_PROVISIONAL: 'maker:session:commit-provisional',
   CLOSE_SESSION: 'maker:close-session',
   /**
    * 单条 user / assistant 消息本地内容删除。保留后续可见消息，但清当前原生
@@ -38,8 +60,11 @@ export const MAKER_INVOKE = {
   INPUT_STEER: 'maker:input:steer',
   INPUT_STOP: 'maker:input:stop',
   INPUT_RESUME: 'maker:input:resume',
+  IMAGES_RETRY: 'maker:images:retry',
   INPUT_RETRY_LAST_ERROR: 'maker:input:retry-last-error',
   INPUT_CLEAR_ERROR: 'maker:input:clear-error',
+  /** 取消账号限额重置后的自动继续(只撤等待,错误与手动重试保留)。 */
+  INPUT_CANCEL_USAGE_LIMIT_WAIT: 'maker:input:cancel-usage-limit-wait',
   /**
    * Renderer 侧 auth-retry 放弃（catch 或 guard fall-through）时调用，告知 main 补落持久化。
    * main 侧在相同 isRemoteAuthRetry 条件下跳过了 onTurnErrorEvent；此 IPC 覆盖"未重试/重试失败"两路。
@@ -83,6 +108,12 @@ export const MAKER_INVOKE = {
    */
   LIST_SESSION_BACKGROUND_ACTIVITY: 'maker:session-background-activity:list',
   /**
+   * 列出「回合已结束但后台命令仍在工作」的全部会话 id（会自己结束的后台命令，不含长驻服务）。
+   * 只读；任务列表全局 store 挂载时的初始快照，后续靠 SESSION_BACKGROUND_WORK_CHANGED 增量维护。
+   * 只覆盖本机 Claude Code 任务；maker 未 init → { sessionIds: [] }。
+   */
+  LIST_SESSION_BACKGROUND_WORK: 'maker:session-background-work:list',
+  /**
    * 一键停止指定会话的全部任务:关闭该会话的常驻 agent 进程(maker.closeSession)，
    * 当前 turn 与进程内后台子 agent 一并终止。会话本身可续 —— 下次发消息按 resume 自动重建。
    * 这是 renderer/main 运行态不一致时仍须可用的最终止损入口，不受 isTurnRunning 限制。
@@ -96,6 +127,8 @@ export const MAKER_INVOKE = {
    * → UNSUPPORTED_CAPABILITY。
    */
   STOP_AGENT_TASK: 'maker:agent-task:stop',
+  /** Send a message to one active Cindy-owned PI Subagent run. */
+  CONTROL_PI_SUBAGENT: 'maker:pi-subagent:control',
   /**
    * 列出会话当前仍在运行的后台任务({taskId, taskType?, toolUseId?, title?})。只读;
    * renderer 挂载或 reloadMessages 清空 taskUpdates 后,用它补回「订阅前已启动」的
@@ -109,6 +142,13 @@ export const MAKER_INVOKE = {
    * 读不到 / 解析失败一律返回 null,renderer 据此回退到 workflow 级卡片。
    */
   GET_WORKFLOW_PROGRESS: 'maker:get-workflow-progress',
+  /**
+   * 读取后台命令(local_bash 任务)输出文件的末尾一段 + mtime,供任务卡展开区显示
+   * 「最近输出」,让用户确认任务仍在推进。只读;入参 (sessionId, taskId),输出路径由主进程
+   * 从该会话仍在运行的后台任务登记中取,调用方不能传路径。任务已终态 / SSH 远程工作区
+   * 会话返回 unavailable。
+   */
+  READ_BACKGROUND_TASK_OUTPUT_TAIL: 'maker:background-task:output-tail',
   GET_CAPABILITIES: 'maker:get-capabilities',
   /**
    * device-link 远程草稿镜像:控制端为被控设备新建项目草稿时,经隧道读被控端**当前
@@ -166,6 +206,8 @@ export const MAKER_INVOKE = {
   EXECUTE_DESKTOP_COMMAND: 'maker:execute-desktop-command',
   LIST_AGENT_COMMANDS: 'maker:list-agent-commands',
   LIST_AGENT_SKILLS: 'maker:list-agent-skills',
+  PI_PACKAGES_LIST: 'maker:pi-packages:list',
+  PI_PACKAGES_MUTATE: 'maker:pi-packages:mutate',
   SCAN_AT_RESOURCES: 'maker:scan-at-resources',
   /**
    * "agent 自己认识的本地 customization 全集"。
@@ -199,8 +241,25 @@ export const MAKER_INVOKE = {
   SET_EFFORT: 'maker:set-effort',
   SET_PERMISSION_MODE: 'maker:set-permission-mode',
   SET_FAST_MODE: 'maker:set-fast-mode',
+  SET_THINKING_ENABLED: 'maker:set-thinking-enabled',
   /** 计划模式一级开关(与 permissionMode 正交), runtime-only; 持久化由 renderer sessions:update / device-link 回流负责 */
   SET_PLAN_MODE: 'maker:set-plan-mode',
+  /**
+   * 任务级工作上下文窗口档位（tokens；null = 跟随模型默认）。
+   *
+   * 被控端落库并应用到活实例（空闲关 handle 冷重建 / 回合中登记 pending）。
+   * 与 SET_PLAN_MODE 同类：会话级设置、无本机 shell/UI 副作用。控制端用
+   * `deviceLink.invoke(deviceId, …)` 调；老被控端无此 channel →
+   * CHANNEL_NOT_ALLOWED → 控制端提示「该设备版本不支持」。
+   */
+  SET_CONTEXT_WINDOW_BUDGET: 'maker:set-context-window-budget',
+  /**
+   * 会话级窗口边界的**只读**查询（路由默认 / 路由物理上限 / 该路由的模型级上限）。
+   * 控制端在远程任务上打开档位菜单时按需拉取：只有被控端本地目录 + 本地上限 store 才知道
+   * 该路由能放到多大，控制端据此才敢提供「更大」的档位。老被控端无此 channel →
+   * CHANNEL_NOT_ALLOWED → 控制端退回「只允许收紧」并如实说明。
+   */
+  GET_CONTEXT_WINDOW_BOUNDS: 'maker:get-context-window-bounds',
   /** 会话导出 HTML(pi 原生 export_html)。主进程弹保存对话框 + 导出 + 在文件管理器中显示;返回写入路径或 null(取消)。 */
   EXPORT_SESSION_HTML: 'maker:export-session-html',
   /** 手动压缩会话上下文(pi 原生 compact,可带聚焦指令)。返回 {tokensBefore?, estimatedTokensAfter?} 或 null(会话不在/不支持)。 */
@@ -219,9 +278,12 @@ export const MAKER_INVOKE = {
   /**
    * renderer → main 单向镜像「模型显示/隐藏」override(modelVisibilityPrefs)。
    * override 真源仍在 renderer localStorage;main 只缓存一份内存副本,供 IM `/model`
-   * 派生模型列表时复用同一套可见性过滤(两端列表口径一致)。fire-and-forget,不落盘。
+   * 派生模型列表时复用同一套可见性过滤(两端列表口径一致)。入参带 dataOwnerId +
+   * ownerGeneration，Main 拒绝账号切换期间的迟到快照。fire-and-forget,不落盘。
    */
   MODEL_VISIBILITY_SYNC: 'maker:model-visibility:sync',
+  /** Sync read: which stable local/cloud owner may import the pre-account Renderer preference key. */
+  MODEL_VISIBILITY_LEGACY_OWNER_CLAIM_SYNC: 'maker:model-visibility:legacy-owner-claim-sync',
   /**
    * 「模型 / 供应商停用」override 写入(model-disable-store,main 侧持久化真源)。
    * 入参 = { kind:'model', providerId, modelIds: string[], disabled: boolean }
@@ -231,20 +293,39 @@ export const MAKER_INVOKE = {
    * **不进 device-link allowlist**(远程改被控端全局设置越权,见 allowlist.ts 准入判据)。
    */
   MODEL_DISABLE_SET: 'maker:model-disable:set',
+  /** 本机供应商是否允许同账号另一台电脑的远程 Agent 调用；仅本机可信 renderer 可写。 */
+  PROVIDER_REMOTE_ACCESS_SET: 'maker:provider:remote-access:set',
+  PROVIDER_RUN_LOCATION_SET: 'maker:provider:run-location:set',
   /**
    * Owner-scoped provider display-order override.
    * Input = { dataOwnerId: string | null; ownerGeneration: number; providerIds: string[] }.
    * Settings mutation: local trusted renderer only; deliberately excluded from the
    * device-link allowlist.
    */
+  PROVIDER_CUSTOM_DISCONNECT: 'maker:provider:custom:disconnect',
+  PROVIDER_PRESENTATION_SET: 'maker:provider:presentation:set',
   PROVIDER_ORDER_SET: 'maker:provider:order:set',
   /** Visual Settings UI only: read/write/reset a per-provider × runtime × model price estimate. */
   MODEL_PRICE_OVERRIDE_GET: 'maker:model-price-override:get',
   MODEL_PRICE_OVERRIDE_SET: 'maker:model-price-override:set',
   MODEL_PRICE_OVERRIDE_RESET: 'maker:model-price-override:reset',
+  /**
+   * 单模型上下文上限 override(设置 → 模型 → 高级设置)。窗口是自动压缩比例的分母,
+   * 调小它让压缩按用户设的长度提前触发。与价格 override 同一个 (providerId, agent,
+   * modelId) 目标形状。设置类写操作:仅本机主页面可调,**不进 device-link allowlist**
+   * (远程改被控端全局设置越权)。
+   */
+  MODEL_CONTEXT_LIMIT_GET: 'maker:model-context-limit:get',
+  MODEL_IMAGE_INPUT_GET: 'maker:model-image-input:get',
+  MODEL_IMAGE_INPUT_SET: 'maker:model-image-input:set',
+  MODEL_COMPACTION_SET: 'maker:model-compaction:set',
+  MODEL_CONTEXT_LIMIT_SET: 'maker:model-context-limit:set',
+  MODEL_CONTEXT_LIMIT_RESET: 'maker:model-context-limit:reset',
   // 附加只读引用目录 — 走 closure 推送; DB 持久化由 renderer 同步调
   // local-db:sessions:update (跟 SET_MODEL / sessionService.update 双 IPC 协调先例一致)
   SET_EXTRA_DIRS: 'maker:set-extra-dirs',
+  // 附加可读写目录；与 SET_EXTRA_DIRS 的只读授权严格分离。
+  SET_WRITABLE_DIRS: 'maker:set-writable-dirs',
   // 未来 MetaAgent 入口（占位）
   RUN: 'maker:run',
   // Chat utility (Stage 2 C1) — 不是 session 级 API,但走 maker.* 命名空间统一管理
@@ -254,6 +335,9 @@ export const MAKER_INVOKE = {
   AUTO_TITLE: 'maker:auto-title',
   // 重命名输入框 Magic 按钮:按会话最新对话内容重新生成标题(读 DB 素材,失败返 null)
   REGENERATE_TITLE: 'maker:regenerate-title',
+  /** 输入框推荐提示词:turn 结束后预测用户下一步输入(走 titleModel 轻量 one-shot)。 */
+  PREDICT_PROMPT: 'maker:predict-prompt',
+  WORKING_STATUS: 'maker:working-status',
   HELP_ASK: 'maker:help:ask',
   /**
    * Help-assistant 反馈草稿 (Phase 1):用户对某条回答不满时,点 👎 → 弹小表单 →
@@ -281,6 +365,8 @@ export const MAKER_INVOKE = {
   REWIND_PREVIEW: 'maker:rewind:preview',
   REWIND_COMMIT: 'maker:rewind:commit',
   FORK: 'maker:fork',
+  SIDE_CHAT: 'maker:side-chat:v1',
+  SIDE_CHAT_LIST: 'maker:side-chat:list:v1',
   FORK_STRIP_ENCRYPTED: 'maker:fork-strip-encrypted',
   // Agent 鉴权 (取代老 codex:auth:*) —— 走 Maker.{getAgentAuthState/triggerAgentLogin/...}
   AUTH_GET_STATE: 'maker:auth:get-state',
@@ -295,14 +381,19 @@ export const MAKER_INVOKE = {
   AGENT_STATUS: 'maker:agent:status',
   // Agent 二进制 --version 输出 (About 面板用) —— spawn binary, 进程内缓存
   AGENT_BINARY_VERSION: 'maker:agent:binary-version',
+  PI_KERNEL_STATE: 'maker:agent:pi-kernel-state',
+  PI_KERNEL_INSTALL: 'maker:agent:pi-kernel-install',
   // Agent 今日累计 (取代老 codex:usage:today) —— 走 host 的 readAgentTodayUsage
   USAGE_TODAY: 'maker:usage:today',
   USAGE_ACCOUNT: 'maker:usage:account',
   // Codex app-server 官方控制面:完整额度/reset 次数读取 + desktop 预签发幂等 offer 消耗。
   USAGE_CODEX_RATE_LIMITS: 'maker:usage:codex-rate-limits',
+  USAGE_CODEX_RESET_AUTO_USE: 'maker:usage:codex-reset-auto-use',
   USAGE_CODEX_RATE_LIMIT_RESET: 'maker:usage:codex-rate-limit-reset',
   // Claude 订阅账号余量 (oauth/usage 端点 + unified headers 双源, cached-first) — 状态栏 chip 用
   USAGE_CLAUDE_SUBSCRIPTION: 'maker:usage:claude-subscription',
+  // SuperGrok 账号周用量 (cli-chat-proxy settings + billing?format=credits)
+  USAGE_XAI_SUBSCRIPTION: 'maker:usage:xai-subscription',
   // device-link v1 模型单价表:保留 modelId → USD/Mtok 扁平形状,旧控制端继续可读。
   USAGE_MODEL_PRICING: 'maker:usage:model-pricing',
   // Desktop renderer v2:Cindy AI `/models` 下发的 XD 原生报价。
@@ -311,6 +402,9 @@ export const MAKER_INVOKE = {
   USAGE_REFERENCE_MODEL_PRICING: 'maker:usage:reference-model-pricing',
   // 用量历史聚合 (daily_spend + daily_model_usage, main 侧算好 streak/异常/估算) — 首页仪表盘用
   USAGE_HISTORY: 'maker:usage:history',
+  // 本机原始用量行 (daily_spend + daily_model_usage) — 仅供同账号其它电脑经 device-link
+  // 拉取后合并进它们的用量历史; 本机 renderer 不调用。wire 契约见 usage/usageDeviceRows.ts
+  USAGE_DEVICE_ROWS: 'maker:usage:device-rows',
   // Memory 控制 — 走 Maker.{getAgentMemoryStatus/setAgentMemory/resetAgentMemory},
   // 各 agent 子类落地 (Claude 改 SDK Settings.autoMemoryEnabled, Codex 调 app-server
   // experimentalFeature/enablement/set + memory/reset RPC)。
@@ -342,17 +436,32 @@ export const MAKER_INVOKE = {
   SUBAGENT_MODEL_SETTINGS_GET: 'maker:subagent-model-settings:get',
   SUBAGENT_MODEL_SETTINGS_SET: 'maker:subagent-model-settings:set',
   SUBAGENT_MODEL_SETTINGS_RESET: 'maker:subagent-model-settings:reset',
+  /** Global exact-model choices for short host-generated text tasks. */
+  AUXILIARY_MODEL_SETTINGS_GET: 'maker:auxiliary-model-settings:get',
+  AUXILIARY_MODEL_SETTINGS_SET: 'maker:auxiliary-model-settings:set',
+  /** 视觉桥设置（两个清单：目标模型 + 视觉后端）。 */
+  VISION_BRIDGE_SETTINGS_GET: 'maker:vision-bridge-settings:get',
+  VISION_BRIDGE_SETTINGS_SET: 'maker:vision-bridge-settings:set',
+  VISION_BRIDGE_SETTINGS_RESET: 'maker:vision-bridge-settings:reset',
   SILENT_ENCRYPTED_RETRY_GET: 'maker:silent-encrypted-retry:get',
   SILENT_ENCRYPTED_RETRY_SET: 'maker:silent-encrypted-retry:set',
   SILENT_ENCRYPTED_RETRY_RESET: 'maker:silent-encrypted-retry:reset',
+  SESSION_RUNTIME_FALLBACK_GET: 'maker:session-runtime-fallback:get',
+  SESSION_RUNTIME_FALLBACK_SET: 'maker:session-runtime-fallback:set',
+  SESSION_RUNTIME_FALLBACK_RESET: 'maker:session-runtime-fallback:reset',
   /**
-   * Claude Code 自动上下文压缩触发阈值 —— 存在 <userData>/compaction-settings.json。
-   * SET 后仅对新 session 生效, 已运行的 Claude Code 子进程 env 不变。
+   * Claude Code 的自动上下文压缩触发阈值 —— <userData>/compaction-settings.json。
+   * 经 runtimeConfig.autoCompactThresholdPct getter 热读，当前会话下一轮结束即按新值判断。
    */
   COMPACTION_GET_PCT: 'maker:compaction:get-pct',
   COMPACTION_GET_STATE: 'maker:compaction:get-state',
   COMPACTION_SET_PCT: 'maker:compaction:set-pct',
   COMPACTION_RESET_PCT: 'maker:compaction:reset-pct',
+  /** Pi 原生自动上下文压缩触发阈值。下次 startSession / 恢复任务时读取。 */
+  PI_COMPACTION_GET_PCT: 'maker:pi-compaction:get-pct',
+  PI_COMPACTION_GET_STATE: 'maker:pi-compaction:get-state',
+  PI_COMPACTION_SET_PCT: 'maker:pi-compaction:set-pct',
+  PI_COMPACTION_RESET_PCT: 'maker:pi-compaction:reset-pct',
   /**
    * LSP Beta 开关 ——
    *  - GET: renderer 启动期同步 localStorage 镜像
@@ -363,63 +472,23 @@ export const MAKER_INVOKE = {
   LSP_MODE_GET: 'maker:lsp-mode:get',
   LSP_MODE_SET: 'maker:lsp-mode:set',
   /**
-   * 聊天嵌入开关 (Phase 1.2 chat-history-embedder) ——
-   *  - GET: 启动期 renderer 同步 localStorage 镜像
-   *  - SET: 用户 toggle 时落 <userData>/chat-embedding-settings.json, 立即触发
-   *         chat-history-embedder.setChatEmbeddingEnabled(); 第一次开启时
-   *         初始化 cutoff (embedding_meta.chat_embedding_started_at)。
-   * 默认 false (新装包不会自动产生 ~¥0.09/天 embedding 费用)。
+   * 对话语义索引开关 (chat-history-embedder) ——
+   *  - GET: 启动期及账号切换时同步 owner-scoped renderer 镜像
+   *  - SET: 用户 toggle 时写入当前 owner 的明确 override，并立即 reconcile runtime；
+   *         第一次开启时初始化 cutoff (embedding_meta.chat_embedding_started_at)。
+   *  - 默认:已认证企业组织账号开启，其余账号 / 本地模式 / 未登录关闭。
    */
   CHAT_EMBEDDING_GET: 'maker:chat-embedding:get',
   CHAT_EMBEDDING_SET: 'maker:chat-embedding:set',
   CHAT_EMBEDDING_RESET: 'maker:chat-embedding:reset',
   /**
-   * Git safety workflow: automatic XDT snapshot commits and the dependent
-   * Codex file rewind entry. Default false; SET writes a user override.
+   * Git safety workflow: three-state automatic XDT savepoint policy. File
+   * rewind remains available as conversation-only rewind when no savepoint
+   * exists; SET writes a user override.
    */
   GIT_SAFETY_GET: 'maker:git-safety:get',
   GIT_SAFETY_SET: 'maker:git-safety:set',
   GIT_SAFETY_RESET: 'maker:git-safety:reset',
-  /**
-   * 智能通讯录(maker-contacts) ——
-   *  - SETTINGS_GET/SET: 功能开关(<userData>/contacts-settings.json), 只 gate agent 侧
-   *    cindy_contacts MCP(新 session 生效); 下面的数据 CRUD 通道不受 gate, 设置页
-   *    管理 UI 关着开关也能浏览/清理。
-   *  - 数据通道: 实体/身份/事件/分组 CRUD + resolve/search/stats, 直达全局
-   *    MakerContactsManager(maker-core), 与 session 无关。
-   */
-  CONTACTS_SETTINGS_GET: 'maker:contacts:settings:get',
-  CONTACTS_SETTINGS_SET: 'maker:contacts:settings:set',
-  CONTACTS_SYNC_STATUS_GET: 'maker:contacts:sync:status:get',
-  CONTACTS_SYNC_ENABLED_SET: 'maker:contacts:sync:enabled:set',
-  CONTACTS_SYNC_NOW: 'maker:contacts:sync:now',
-  CONTACTS_LIST: 'maker:contacts:list',
-  CONTACTS_GET: 'maker:contacts:get',
-  CONTACTS_CREATE: 'maker:contacts:create',
-  CONTACTS_UPDATE: 'maker:contacts:update',
-  CONTACTS_DELETE: 'maker:contacts:delete',
-  CONTACTS_MERGE: 'maker:contacts:merge',
-  CONTACTS_RESOLVE: 'maker:contacts:resolve',
-  CONTACTS_SEARCH: 'maker:contacts:search',
-  CONTACTS_STATS: 'maker:contacts:stats',
-  CONTACTS_ADD_IDENTITY: 'maker:contacts:add-identity',
-  CONTACTS_REMOVE_IDENTITY: 'maker:contacts:remove-identity',
-  CONTACTS_APPEND_EVENT: 'maker:contacts:append-event',
-  CONTACTS_ADD_RELATION: 'maker:contacts:add-relation',
-  CONTACTS_REMOVE_RELATION: 'maker:contacts:remove-relation',
-  CONTACTS_DELETE_EVENT: 'maker:contacts:delete-event',
-  CONTACTS_GROUPS_LIST: 'maker:contacts:groups:list',
-  CONTACTS_GROUPS_CREATE: 'maker:contacts:groups:create',
-  CONTACTS_GROUPS_UPDATE: 'maker:contacts:groups:update',
-  CONTACTS_GROUPS_DELETE: 'maker:contacts:groups:delete',
-  CONTACTS_GROUPS_SET_MEMBERS: 'maker:contacts:groups:set-members',
-  CONTACTS_RESET_ALL: 'maker:contacts:reset-all',
-  /** macOS 系统通讯录只读拉取(JXA); 非 darwin 抛 UNSUPPORTED_CAPABILITY */
-  CONTACTS_SYSTEM_READ: 'maker:contacts:system-read',
-  /** vCard 文本解析(renderer 禁止 runtime import maker-core, 解析必须在 main 做) */
-  CONTACTS_PARSE_VCF: 'maker:contacts:parse-vcf',
-  /** 批量导入(系统通讯录/vCard 共用管道: identity 撞档自动并入, 名字相似进 needsReview) */
-  CONTACTS_IMPORT: 'maker:contacts:import',
   /** Codex app-server 当前进程启动时固定下来的鉴权注入方式(oauth-bearer / env-key)。 */
   CODEX_RUNTIME_ROUTE_GET: 'maker:codex-runtime-route:get',
   /**
@@ -429,13 +498,12 @@ export const MAKER_INVOKE = {
    */
   CLAUDE_SESSION_ROUTE_GET: 'maker:claude-session-route:get',
   /**
-   * Claude.ai 订阅 OAuth 登录 —— 浏览器 OAuth(移植自 cc),凭证落系统 ~/.claude 凭证库
-   * (mac Keychain `Claude Code-credentials` / 其它 .credentials.json),与本地 claude 共用、
-   * 自动兼容已登录态。与鉴权模式开关正交(像 Codex 的 OAuth 登录独立于 API 模式)。
-   *  - STATUS: 返回 { authorized }(系统凭证库是否有 Claude.ai OAuth 登录)
-   *  - LOGIN: 拉起浏览器 OAuth,成功后写凭证 + 广播;返回 { authorized }
-   *  - LOGOUT: 清凭证(⚠️ 同时登出本地 claude)+ 广播
-   *  - CANCEL: 取消进行中的浏览器登录流
+   * Claude.ai 订阅 —— 登录由内置 Claude Code CLI 自己完成(`claude auth login`),凭证落在
+   * CLI 的默认凭证库(与终端里的 claude 共用);Cindy 不读取、不保存凭证,只记使用许可。
+   *  - STATUS: 返回 { authorized }(CLI 已登录且 Cindy 获准使用)
+   *  - LOGIN: CLI 已登录则直接授权;否则拉起 CLI 登录,完成后授权 + 广播;返回 { ok, reason?, authorized }
+   *  - LOGOUT: 撤销 Cindy 的使用许可 + 广播(不登出 CLI)
+   *  - CANCEL: 取消进行中的 CLI 登录
    */
   CLAUDE_OAUTH_STATUS: 'maker:claude-oauth:status',
   CLAUDE_OAUTH_LOGIN: 'maker:claude-oauth:login',
@@ -448,10 +516,10 @@ export const MAKER_INVOKE = {
   XAI_OAUTH_CANCEL: 'maker:xai-oauth:cancel',
   /**
    * 模型供应商目录（@cindy/model-providers）—— 只读聚合：内置目录元数据 + 各供应商
-   * 实时连接状态（XD=gateway key / Anthropic=Claude.ai OAuth / OpenAI=Codex OAuth）。
+   * 实时连接状态（XD=gateway key / Anthropic=本机 Claude Code 登录 / OpenAI=Codex OAuth）。
    * 供应商的「连接 / 断开」复用各 agent 已有的鉴权通道（CLAUDE_OAUTH_* / AUTH_* / 登录托管），
    * 不另立重复通道。
-  */
+   */
   PROVIDER_LIST: 'maker:provider:list',
   /**
    * 内置四家模型清单手动刷新。入参仅允许 xd / anthropic / openai / xai；
@@ -472,12 +540,41 @@ export const MAKER_INVOKE = {
   PROVIDER_CUSTOM_CREATE: 'maker:provider:custom:create',
   PROVIDER_CUSTOM_UPDATE: 'maker:provider:custom:update',
   PROVIDER_CUSTOM_DELETE: 'maker:provider:custom:delete',
+  /** 本机模型（Ollama）探测 / 后台启动 / 列表 / 拉取。renderer 不传 URL 或路径。 */
+  LOCAL_MODEL_STATUS: 'maker:local-model:status',
+  LOCAL_MODEL_START: 'maker:local-model:start',
+  LOCAL_MODEL_LIST: 'maker:local-model:list',
+  LOCAL_MODEL_PULL: 'maker:local-model:pull',
+  LOCAL_MODEL_ABORT: 'maker:local-model:abort',
+  LOCAL_MODEL_ENSURE: 'maker:local-model:ensure',
+  LOCAL_MODEL_SET_IN_PICKER: 'maker:local-model:set-in-picker',
+  LOCAL_MODEL_DELETE: 'maker:local-model:delete',
+  LOCAL_MODEL_DISCARD_PAUSED: 'maker:local-model:discard-paused',
+  /** 在 Cindy 数据目录安装官方 Ollama 运行时。renderer 只传 consent=true，不传 URL。 */
+  LOCAL_MODEL_INSTALL: 'maker:local-model:install',
+  LOCAL_MODEL_INSTALL_ABORT: 'maker:local-model:install-abort',
+  LLAMACPP_ENSURE: 'maker:llamacpp:ensure',
+  LLAMACPP_STATUS: 'maker:llamacpp:status',
+  LLAMACPP_INSTALL: 'maker:llamacpp:install',
+  LLAMACPP_FILES: 'maker:llamacpp:files',
+  LLAMACPP_DOWNLOAD: 'maker:llamacpp:download',
+  LLAMACPP_START: 'maker:llamacpp:start',
+  LLAMACPP_STOP: 'maker:llamacpp:stop',
+  LLAMACPP_CANCEL: 'maker:llamacpp:cancel',
+  PROVIDER_IMPORT_PREVIEW: 'maker:provider:import:preview',
+  PROVIDER_IMPORT_FILE: 'maker:provider:import:file',
+  PROVIDER_IMPORT_LOCAL_SCAN: 'maker:provider:import:local-scan',
+  PROVIDER_IMPORT_LOCAL_EDIT: 'maker:provider:import:local-edit',
+  PROVIDER_IMPORT_CONFIRM: 'maker:provider:import:confirm',
+  PROVIDER_IMPORT_CANCEL: 'maker:provider:import:cancel',
   /**
    * 自定义 MCP 服务器 CRUD（配置入 localDb，可选 bearer token 另走通用 safe-storage IPC）。
    * list 无入参；create/update 入参 = CustomMcpConfig；delete 入参 = mcpId。
    * 成功后 main 刷新两个 agent 的 mcpProviders 数组并广播 MCP_CHANGED（见 MAKER_PUSH）。
    */
   MCP_CUSTOM_LIST: 'maker:mcp:custom:list',
+  MCP_DUPLICATES_LIST: 'maker:mcp:duplicates:list',
+  MCP_DUPLICATES_CHOOSE: 'maker:mcp:duplicates:choose',
   MCP_CUSTOM_CREATE: 'maker:mcp:custom:create',
   MCP_CUSTOM_UPDATE: 'maker:mcp:custom:update',
   MCP_CUSTOM_DELETE: 'maker:mcp:custom:delete',
@@ -500,12 +597,21 @@ export const MAKER_INVOKE = {
    */
   PROVIDER_TEST_CONNECTION: 'maker:provider:test-connection',
   /**
+   * 供应商账户余额查询（API Key 计费连接的余额卡,见 maker-host/provider-account-usage）。
+   * 入参 ProviderAccountUsageRequest（{providerId, forceRefresh?}）,端点在 main 硬编码
+   * 官方清单里,renderer 不传 URL;返回查询型结构化结果 ProviderAccountUsageResult（规则 13
+   * 例外条款:renderer 需要 error 渲染分类文案与重试入口）。快照不含密钥材料;虽只读,
+   * 但会把该供应商已存 key 发往其官方端点,不进 device-link 白名单（口径同 test-connection）。
+   */
+  PROVIDER_ACCOUNT_USAGE: 'maker:provider:account-usage',
+  /**
    * 供应商「获取模型列表」—— 用表单值（baseUrl / modelsUrl / key / headers 内存透传）GET
    * 该供应商的列模型端点（见 maker-host/provider-model-fetch）。返回查询型结构化结果
    * ProviderModelsFetchResult（{ok, models?, code?, status?}，规则 13 例外条款：renderer
    * 需要 code 渲染分类文案）。带密钥材料，不进 device-link 白名单（口径同 test-connection）。
    */
   PROVIDER_MODELS_FETCH: 'maker:provider:models-fetch',
+  PROVIDER_DETECT: 'maker:provider:detect',
   /**
    * 通用 OAuth 供应商（目录 auth.oauth 描述符驱动、非 bespoke 四家）的登录 / 登出 / 取消。
    * 入参 = providerId；login 走 generic-oauth Runner（PKCE 浏览器流），成功后拉动态模型
@@ -550,9 +656,9 @@ export const MAKER_INVOKE = {
   /** 表单「AI 生成」:按自然语言描述生成前置检查脚本并落盘,返回可填入的命令。 */
   SCHEDULE_GENERATE_PRE_RUN_HOOK: 'maker:schedule:generate-pre-run-hook',
   SCHEDULE_LIST_RUNS: 'maker:schedule:list-runs',
-  /** Sidebar 聚合索引：带 sessionId 的 run + 未读终态 run，避免固定 history limit 截断。 */
+  /** Sidebar 聚合索引：每个 session 最新映射 + 全部 running / 未读终态 run。 */
   SCHEDULE_LIST_SIDEBAR_INDEX_RUNS: 'maker:schedule:list-sidebar-index-runs',
-  /** Automation 列表总开销：按 schedule 去重 session 汇总 sessions.total_cost_usd。 */
+  /** 已移除累计费用展示；保留 channel 供旧 device-link 控制端降级为空结果。 */
   SCHEDULE_LIST_COST_SUMMARIES: 'maker:schedule:list-cost-summaries',
   SCHEDULE_DELETE_RUN: 'maker:schedule:delete-run',
   /** Renderer 在 delete/pause 前查这条 schedule 当前有多少个 in-flight run,>0 时弹二次确认。 */
@@ -570,19 +676,32 @@ export const MAKER_INVOKE = {
   SCHEDULE_CREATE_FROM_TEMPLATE: 'maker:schedule:create-from-template',
   /** script 任务能力选择器的运行时可用性探测(意识装入/唤醒态);只做提示,不过滤清单。 */
   SCHEDULE_SCRIPT_CAPABILITY_STATUS: 'maker:schedule:script-capability-status',
+  SCHEDULE_WEBHOOK_STATUS: 'maker:schedule:webhook-status',
+  /** 这台电脑现在能不能接收 Webhook：决定是否显示开关。 */
+  SCHEDULE_WEBHOOK_RECEIVER: 'maker:schedule:webhook-receiver',
+  SCHEDULE_WEBHOOK_SET_SECRET: 'maker:schedule:webhook-set-secret',
+  SCHEDULE_WEBHOOK_ROTATE_URL: 'maker:schedule:webhook-rotate-url',
+  SCHEDULE_WEBHOOK_ACCOUNT: 'maker:schedule:webhook-account',
+  SCHEDULE_WEBHOOK_RELEASE: 'maker:schedule:webhook-release',
+  SCHEDULE_WEBHOOK_RESTORE: 'maker:schedule:webhook-restore',
   PROJECT_AUTOMATION_RECONCILE: 'maker:project-automation:reconcile',
+  PROJECT_AUTOMATION_PENDING_IMPORTS: 'maker:project-automation:pending-imports',
   PROJECT_AUTOMATION_LIST_CONSENTS: 'maker:project-automation:list-consents',
   PROJECT_AUTOMATION_REVOKE_CONSENT: 'maker:project-automation:revoke-consent',
   PROJECT_AUTOMATION_UPSERT_SCHEDULE: 'maker:project-automation:upsert-schedule',
   PROJECT_AUTOMATION_REMOVE_SCHEDULE: 'maker:project-automation:remove-schedule',
   // multi-worker Phase 1
   WORKER_CREATE: 'maker:worker:create',
+  /** 新建 Lead 的首条输入 accepted 后，派发此前延后的 UI initial_task。 */
+  WORKER_DISPATCH_UI_ASSIGNMENT: 'maker:worker:dispatch-ui-assignment',
   WORKER_LIST: 'maker:worker:list',
   WORKER_SWITCH_FOCUS: 'maker:worker:switch-focus',
   WORKER_IDLE: 'maker:worker:idle',
   /** New wire contract for automatic done acknowledgements; old peers reject it safely. */
   WORKER_ACKNOWLEDGE_DONE: 'maker:worker:acknowledge-done',
   WORKER_ARCHIVE: 'maker:worker:archive',
+  /** 修改已创建 Worker 的展示角色名(role)与 team 内唯一标识(label)。 */
+  WORKER_UPDATE: 'maker:worker:update',
   TEAM_END: 'maker:team:end',
   COLLABORATION_SETTINGS_GET: 'maker:collaboration-settings:get',
   COLLABORATION_SETTINGS_SET: 'maker:collaboration-settings:set',
@@ -637,6 +756,13 @@ export const MAKER_INVOKE = {
    * 自动同步。窗口生命周期见 main/secondary-windows.ts。
    */
   OPEN_SESSION_IN_NEW_WINDOW: 'maker:open-session-in-new-window',
+  /** Native task drag released outside every Cindy app window. */
+  OPEN_SESSION_IN_NEW_WINDOW_IF_DROPPED_OUTSIDE:
+    'maker:open-session-in-new-window-if-dropped-outside',
+  /** Start the transient task drag preview shown outside Cindy windows. */
+  SESSION_DRAG_PREVIEW_START: 'maker:session-drag-preview:start',
+  /** 右侧栏页签拖出窗口:复用任务拖出的窗外预览卡(松手在窗外 = 弹成独立窗口)。 */
+  SIDEBAR_TAB_DRAG_PREVIEW_START: 'maker:sidebar-tab-drag-preview:start',
   /**
    * 右侧栏独立子窗口(RSB window)——「侧边栏在新窗口中显示」全局偏好 + 窗口生命周期。
    * 状态机 / 窗口管理见 main/right-sidebar-window/controller.ts。
@@ -655,17 +781,19 @@ export const MAKER_INVOKE = {
   RSB_WINDOW_READY: 'maker:rsb-window:ready',
   RSB_WINDOW_SEND_COMMAND: 'maker:rsb-window:send-command',
   /**
-   * 插件停靠面板独立窗口(ghost panel window)——每 ghostId 一扇窗。
-   * 状态机见 main/ghost-panel-window/controller.ts。
-   *  - GET_STATE: 拉全量 { <ghostId>: { detached, lastOpen, open } }
-   *  - OPEN(ghostId): 幂等开(已开则 focus);资格不符清条目
-   *  - SET_DETACHED(ghostId, boolean): true 开窗抽离,false 关窗回停靠;返回新全量 state
-   * 首帧同步读走裸 sendSync 通道 'ghost-panel-window:get-state-sync'
-   * (与 layout:get / ghosts:list 同模式,规则 7 首帧无跳变)。
+   * 右侧栏单页签独立窗口(sidebar tab window)——每个弹出的页签一扇窗。
+   * 状态机见 main/sidebar-tab-window/controller.ts。
+   *  - GET_STATE: 拉全量 { <tabId>: { sessionId, open } }
+   *  - OPEN(request): 主窗把当前页签弹出到独立窗口(已弹出则聚焦)
+   *  - FOCUS(tabId): 聚焦已弹出页签的窗口(agent focus / 用户切换到被弹出页签)
+   *  - CLOSE_FOR_TAB(tabId): 页签已在宿主里关闭,销毁窗口且不交回页签
    */
-  GHOST_PANEL_WINDOW_GET_STATE: 'maker:ghost-panel-window:get-state',
-  GHOST_PANEL_WINDOW_OPEN: 'maker:ghost-panel-window:open',
-  GHOST_PANEL_WINDOW_SET_DETACHED: 'maker:ghost-panel-window:set-detached',
+  SIDEBAR_TAB_WINDOW_GET_STATE: 'maker:sidebar-tab-window:get-state',
+  SIDEBAR_TAB_WINDOW_OPEN: 'maker:sidebar-tab-window:open',
+  SIDEBAR_TAB_WINDOW_FOCUS: 'maker:sidebar-tab-window:focus',
+  SIDEBAR_TAB_WINDOW_CLOSE_FOR_TAB: 'maker:sidebar-tab-window:close-for-tab',
+  /** 主窗口把弹在独立窗口里的全局页签交回侧栏(无任务数据,不经窗口侧快照)。 */
+  SIDEBAR_TAB_WINDOW_RETURN_TAB: 'maker:sidebar-tab-window:return-tab',
   /**
    * 会话内 /goal 自主续跑(goal-host)——
    *  - GOAL_SET: 设/替换目标并立刻发首轮。入参 { sessionId, objective, agentKind, budgetTokens? }(budgetTokens 留空=不设预算)
@@ -681,6 +809,68 @@ export const MAKER_INVOKE = {
   GOAL_PAUSE: 'maker:goal:pause',
   GOAL_RESUME: 'maker:goal:resume',
   GOAL_UPDATE: 'maker:goal:update',
+  /** Read-only: the V1 background tasks (delegations) a teammate conversation started, for old task cards. */
+  BOT_DELEGATIONS_LIST: 'maker:bot-delegations:list',
+  /** Kept for older controllers over device-link; answers UNSUPPORTED_CAPABILITY. */
+  BOT_DELEGATION_CANCEL: 'maker:bot-delegation:cancel',
+  /** Read one hidden Bot-to-Bot conversation after a timeline trace is opened. */
+  BOT_DIRECT_MESSAGE_THREAD_GET: 'maker:bot-direct-message-thread:get',
+  /** 伙伴群聊：列表、详情、创建、修改、成员、删除、发言、继续讨论与停止。 */
+  CHAT_SERVER_MANAGE: 'maker:chat-server:manage',
+  CHAT_SERVER_MASK: 'maker:chat-server:mask',
+  CHAT_SERVER_MENTIONS: 'maker:chat-server:mentions',
+  CHAT_SERVER_OWNEDBOTS: 'maker:chat-server:ownedBots',
+  CHAT_SERVER_REFRESHPROFILE: 'maker:chat-server:refreshProfile',
+  CHAT_SERVER_STATUS: 'maker:chat-server:status',
+  CHAT_SERVER_THREAD: 'maker:chat-server:thread',
+  CHAT_SERVER_FOLLOWTHREAD: 'maker:chat-server:followThread',
+  CHAT_SERVER_REPLY: 'maker:chat-server:reply',
+  CHAT_SERVER_SHARETOMAIN: 'maker:chat-server:shareToMain',
+  CHAT_SERVER_REACT: 'maker:chat-server:react',
+  CHAT_SERVER_REACTORS: 'maker:chat-server:reactors',
+  CHAT_SERVER_READERS: 'maker:chat-server:readers',
+  CHAT_SERVER_CREATEINVITE: 'maker:chat-server:createInvite',
+  CHAT_SERVER_REVOKEINVITE: 'maker:chat-server:revokeInvite',
+  CHAT_SERVER_PREVIEWINVITE: 'maker:chat-server:previewInvite',
+  CHAT_SERVER_ACCEPTINVITE: 'maker:chat-server:acceptInvite',
+  BOT_GROUP_LIST: 'maker:bot-group:list',
+  BOT_GROUP_GET: 'maker:bot-group:get',
+  BOT_GROUP_CREATE: 'maker:bot-group:create',
+  BOT_GROUP_UPDATE: 'maker:bot-group:update',
+  BOT_GROUP_SET_MEMBERS: 'maker:bot-group:set-members',
+  BOT_GROUP_DELETE: 'maker:bot-group:delete',
+  BOT_GROUP_SEND: 'maker:bot-group:send',
+  CHAT_DISPLAY_CACHE: 'maker:chat:display-cache',
+  BOT_GROUP_OUTBOX: 'maker:bot-group:outbox',
+  BOT_GROUP_OUTBOX_COMMAND: 'maker:bot-group:outbox-command',
+  BOT_READ_STATE: 'maker:bot-read-state',
+  BOT_GROUP_CONTINUE: 'maker:bot-group:continue',
+  BOT_GROUP_STOP: 'maker:bot-group:stop',
+  BOT_GROUP_PLAN_START: 'maker:bot-group:plan-start',
+  BOT_GROUP_PLAN_DISMISS: 'maker:bot-group:plan-dismiss',
+  BOT_GROUP_PLAN_CONTINUE: 'maker:bot-group:plan-continue',
+  BOT_GROUP_PLAN_RETRY: 'maker:bot-group:plan-retry',
+  BOT_GROUP_PLAN_EDIT: 'maker:bot-group:plan-edit',
+  BOT_LIFECYCLE_ACTION: 'maker:bot-lifecycle:action',
+  /** Where each companion runs (cloud-companions.md §3); read-only snapshot. */
+  COMPANION_CLOUD_STATE: 'maker:companion-cloud:state',
+  /** Make this computer the companion's home (cloud-companions.md §3.1). */
+  COMPANION_CLOUD_TAKE_OVER: 'maker:companion-cloud:take-over',
+  /** Move the companion to another computer from any computer (hand over, ask its home, or take over). */
+  COMPANION_CLOUD_SWITCH_HOME: 'maker:companion-cloud:switch-home',
+  /** Read the companion's 1:1 room (works while its home is offline). */
+  COMPANION_CLOUD_TRANSCRIPT: 'maker:companion-cloud:transcript',
+  /** Where a companion can move, seen from this computer. */
+  COMPANION_CLOUD_HOME_CHOICES: 'maker:companion-cloud:home-choices',
+  /** The copies of Cindy in the cloud, when there are several to merge. */
+  COMPANION_CLOUD_CINDY_COPIES: 'maker:companion-cloud:cindy-copies',
+  /** Merge the other copies of Cindy into the kept one (on its home). */
+  COMPANION_CLOUD_MERGE_CINDY: 'maker:companion-cloud:merge-cindy',
+  /** A file of the companion's room, brought to this computer (works while its home is offline). */
+  COMPANION_CLOUD_ATTACHMENT: 'maker:companion-cloud:attachment',
+  COMPANION_CLOUD_DISMISS_NOTICES: 'maker:companion-cloud:dismiss-notices',
+  /** Local copy of an avatar from another computer or the cloud (looked up first, optionally fetched). */
+  COMPANION_AVATAR_RESOLVE: 'maker:companion-avatar:resolve',
 } as const;
 
 /**
@@ -689,6 +879,13 @@ export const MAKER_INVOKE = {
  * (typically localStorage 镜像) 推给 main, main 只更新内存缓存供后续工具调用读。
  */
 export const MAKER_SEND = {
+  /**
+   * Stop the transient task drag preview. Release feedback is latency-sensitive
+   * and has no response payload, so it must not pay an invoke/ack round trip.
+   */
+  SESSION_DRAG_PREVIEW_END: 'maker:session-drag-preview:end',
+  /** 右侧栏页签拖出窗口的预览卡收起(与任务拖出同款 fire-and-forget)。 */
+  SIDEBAR_TAB_DRAG_PREVIEW_END: 'maker:sidebar-tab-drag-preview:end',
   /**
    * macOS permission coach: begin a native drag of the real Computer Use app
    * bundle into System Settings. Main validates that the sender is the
@@ -735,6 +932,8 @@ export const MAKER_SEND = {
 
 export const MAKER_PUSH = {
   EVENT: 'maker:event',
+  /** Runtime agent roster changed after an optional agent recovery. */
+  AGENTS_CHANGED: 'maker:agents:changed',
   TURN_CHANGE_SET_UPDATED: 'maker:turn-change-set:updated',
   STATUS_CHANGED: 'maker:status-changed',
   /** 用户从独立 Computer Use 授权引导浮窗主动取消。 */
@@ -755,6 +954,14 @@ export const MAKER_PUSH = {
    * 模型选择器 live 刷新）。无 payload；收到即重拉 listProviders。
    */
   PROVIDER_CHANGED: 'maker:provider:changed',
+  /** 当前 owner 的对话语义索引设置由另一窗口 / 进程改动。payload 为 owner stamp。 */
+  CHAT_EMBEDDING_CHANGED: 'maker:chat-embedding:changed',
+  /** 本机 Ollama 运行态变化（设置页右栏 + 发消息前就绪）。 */
+  LOCAL_MODEL_STATUS: 'maker:local-model:status',
+  /** 本机 Ollama /api/pull 进度。 */
+  LOCAL_MODEL_PULL_PROGRESS: 'maker:local-model:pull-progress',
+  /** 官方 Ollama sidecar 安装进度。 */
+  LOCAL_MODEL_INSTALL_PROGRESS: 'maker:local-model:install-progress',
   /** 通用 OAuth Device Grant 的短期验证码进度（仅 renderer 展示，不落盘/不进日志）。 */
   PROVIDER_OAUTH_PROGRESS: 'maker:provider:oauth:progress',
   /**
@@ -762,11 +969,13 @@ export const MAKER_PUSH = {
    * 无 payload；收到即重拉 listCustomMcpServers。
    */
   MCP_CHANGED: 'maker:mcp:changed',
+  /** Cindy-owned Pi extension roster changed; renderer refetches settings and slash previews. */
+  PI_PACKAGES_CHANGED: 'maker:pi-packages:changed',
   /**
    * 自定义供应商上游错误的结构化广播(payload = ProviderUpstreamErrorEvent:
-   * { agent, providerId, code, retryable, status, detail? })。仅「会话显式路由到
-   * user 供应商」的 status≥400 响应触发,main 侧 30s/(providerId,code) 节流。
-   * renderer 据 code 显示 providerError.* i18n toast + 修复引导。
+   * { agent, providerId, code, retryable, status, detail?, errorType?, reqId? })。
+   * 仅「会话显式路由到 user 供应商」的 status≥400 响应触发,main 侧 30s/(providerId, code) 节流。
+   * renderer 据 code 显示 providerError.* i18n toast + 修复引导;errorType / reqId 供诊断详情。
    */
   PROVIDER_UPSTREAM_ERROR: 'maker:provider:upstream-error',
   /**
@@ -784,6 +993,8 @@ export const MAKER_PUSH = {
    * 会话内轻提示。
    */
   SESSION_CREDENTIAL_SWITCH_APPLIED: 'maker:session-credential-switch-applied',
+  /** A deferred Pi model switch failed; the previous route remains authoritative. */
+  SESSION_CREDENTIAL_SWITCH_FAILED: 'maker:session-credential-switch-failed',
   /** cc 默认路由会话的生效计费路由变化 (payload: { sessionId, route })。 */
   CLAUDE_SESSION_ROUTE_CHANGED: 'maker:claude-session-route-changed',
   /**
@@ -792,6 +1003,11 @@ export const MAKER_PUSH = {
    * 据此显示会话内横幅 +「全部停止」入口;false = 已静默 / 已被全停,横幅熄灭。
    */
   SESSION_BACKGROUND_ACTIVITY_CHANGED: 'maker:session-background-activity-changed',
+  /**
+   * 「回合已结束但后台命令仍在工作」翻转广播（payload = { sessionId, active }）。任务列表据此把
+   * 该任务显示为运行中；只影响展示，不代表回合在跑，不改完成提醒、发送排队与停止语义。
+   */
+  SESSION_BACKGROUND_WORK_CHANGED: 'maker:session-background-work-changed',
   /**
    * Scheduler (Phase 4) — 单一 channel 承载 'fired' / 'completed' / 'failed' / 'changed'
    * 4 个事件类型；renderer 按 payload.type 分支。
@@ -805,8 +1021,22 @@ export const MAKER_PUSH = {
    * 分支处理; payload 还带 ctx (sessionId / workingDir / args) 让 renderer 知道在哪触发的。
    */
   DESKTOP_COMMAND_TRIGGERED: 'maker:desktop-command-triggered',
+  /** Main-owned Cindy Make operation snapshots, broadcast to every trusted renderer. */
+  CINDY_MAKE_STATE_CHANGED: 'maker:cindy-make:state-changed',
   /** multi-worker: worker 增删改 / focus 切换时 broadcast, renderer useWorkers hook 订阅刷新。 */
   ORCA_WORKER_CHANGED: 'maker:orca:worker-changed',
+  /** A Bot group, its members, messages or running round changed. */
+  BOT_GROUP_CHANGED: 'maker:bot-group:changed',
+  /** Local complete-app windows only; never forwarded to Device Link. */
+  BOT_GROUP_OUTBOX_CHANGED: 'maker:bot-group:outbox-changed',
+  BOT_READ_STATE_CHANGED: 'maker:bot-read-state:changed',
+  /** Companion homes changed; payload is the full CompanionCloudSnapshot. */
+  COMPANION_CLOUD_CHANGED: 'maker:companion-cloud:changed',
+  /** Bot 档案经主进程创建或更新后变化；renderer 收到后重拉伙伴列表。 */
+  BOT_PROFILE_CHANGED: 'maker:bot-profile:changed',
+  /** A teammate's linked projects or the tasks it opened changed (payload: { botId }); the name is kept from the V1 workbench. */
+  BOT_WORKBENCH_CHANGED: 'maker:bot-workbench:changed',
+  BOT_LIFECYCLE_CHANGED: 'maker:bot-lifecycle:changed',
   /**
    * 被控端「当前 New Maker 草稿」全量变更广播。SYNC_NEW_MAKER_DRAFT 落 main 缓存后随即发,
    * 经 device-link tap 转发给控制端(account 级 → sessions topic),控制端刷新远程草稿显示镜像。
@@ -844,6 +1074,11 @@ export const MAKER_PUSH = {
    */
   WORKER_CREATION_PREFS_APPLY: 'maker:worker-creation-prefs:apply',
   /**
+   * 手机或远程控制的电脑改了这台电脑的协同角色清单(记下一次创建 / 移除一个角色)：交给本机
+   * renderer 写回 workerCreationPrefs localStorage。只在本机消费，不进入 device-link 转发。
+   */
+  WORKER_ROLES_APPLY_REQUEST: 'maker:worker-roles:apply-request',
+  /**
    * 被控端本地 main → 自身 renderer:把控制端写穿的会话 pref 交给 renderer,renderer 调它原来的
    * 本地 setter 写真实会话记忆。仅本地窗口消费(不转发)。payload = SET_SESSION_MODEL_PREF 入参。
    */
@@ -857,16 +1092,25 @@ export const MAKER_PUSH = {
   /**
    * 右侧栏子窗口状态广播 { detached, open }——发所有窗口(主窗按钮态 + 子窗口自身都消费)。
    */
-  RSB_WINDOW_STATE_CHANGED: 'maker:rsb-window:state-changed',
+  RSB_WINDOW_STATE_CHANGED: RSB_WINDOW_STATE_CHANGED_CHANNEL,
   /** 侧边栏渲染上下文变化(主窗切会话),只发子窗口。payload = RsbWindowContext。 */
-  RSB_WINDOW_CONTEXT_CHANGED: 'maker:rsb-window:context-changed',
+  RSB_WINDOW_CONTEXT_CHANGED: RSB_WINDOW_CONTEXT_CHANGED_CHANNEL,
   /** main → 子窗口命令(如 open-terminal),只发子窗口。payload = RsbWindowCommand。 */
-  RSB_WINDOW_COMMAND: 'maker:rsb-window:command',
+  RSB_WINDOW_COMMAND: RSB_WINDOW_COMMAND_CHANNEL,
+  /** 子窗口合并回主窗口前交接不可持久化 session 的 tab 快照，只发主窗口。 */
+  RSB_WINDOW_TAB_HANDOFF: 'maker:rsb-window:tab-handoff',
   /**
-   * 插件面板独立窗口状态广播(全量 GhostPanelWindowsState)——发所有窗口
-   * (主窗布局过滤 + 各子窗口自身都消费)。
+   * 右侧栏单页签独立窗口状态广播(全量 SidebarTabWindowsState)——发所有窗口
+   * (主窗侧栏据此隐藏已弹出页签;弹出窗口自身不消费)。
    */
-  GHOST_PANEL_WINDOW_STATE_CHANGED: 'maker:ghost-panel-window:state-changed',
+  SIDEBAR_TAB_WINDOW_STATE_CHANGED: 'maker:sidebar-tab-window:state-changed',
+  /** 页签从弹出窗口回到侧边栏,只发主窗口。payload = SidebarTabReturnedPayload。 */
+  SIDEBAR_TAB_WINDOW_TAB_RETURNED: 'maker:sidebar-tab-window:tab-returned',
+  /**
+   * 某会话的右侧栏页签持久化数据被另一个 renderer 改动(弹出窗口 ↔ 主窗)。
+   * 发给除改动发起方之外的所有窗口。payload = RightSidebarTabsChangedPayload。
+   */
+  RIGHT_SIDEBAR_TABS_CHANGED: 'maker:right-sidebar-tabs:changed',
 } as const;
 
 /**

@@ -1,25 +1,52 @@
 // @vitest-environment jsdom
 
 import { createElement, type ReactNode } from 'react';
-import { cleanup, fireEvent, render, screen, within } from '@testing-library/react';
+import { createInstance } from 'i18next';
+import {
+  act,
+  cleanup,
+  createEvent,
+  fireEvent,
+  render,
+  screen,
+  within,
+} from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { cindyMakeState } from '@/lib/cindyMakeState';
+import en from '@/i18n/locales/en/common.json';
+import zhCN from '@/i18n/locales/zh-CN/common.json';
+import zhTW from '@/i18n/locales/zh-TW/common.json';
+import ja from '@/i18n/locales/ja/common.json';
+import ko from '@/i18n/locales/ko/common.json';
+
+import {
+  applyRemoteSessionActivity,
+  clearRemoteSessionActivity,
+} from '@/features/device-link/remoteSessionActivityStore';
 
 import { SessionCard } from '../SessionCard';
+import type { Session } from '@/lib/ccAgent.types';
+import { SessionItem } from '../SessionItem';
 import { sessionCardVisualCases } from '../__fixtures__/sessionCardVisualCases';
+import { SPLIT_GROUP_SESSION_MIME } from '../../splitGroupDnd';
+import { sharedTaskHostPeer } from '@cindy/device-link';
 
 const mocks = vi.hoisted(() => ({
   navigate: vi.fn(),
+  dropdownMenuOpen: false,
   boundSchedulesBySession: new Map<string, readonly unknown[]>(),
   worktreeSessionIds: new Set<string>(),
   runningDetailBySession: new Map<string, string>(),
   pendingPluginSetupSessionIds: new Set<string>(),
   attentionKindBySession: new Map<string, 'done' | 'awaiting' | 'error'>(),
   ensureInitialMessages: vi.fn(),
+  translate: undefined as ((key: string, options?: Record<string, unknown>) => string) | undefined,
 }));
 
 vi.mock('react-router-dom', () => ({
   useNavigate: () => mocks.navigate,
 }));
+vi.mock('@/contexts/AuthContext', () => ({ useAuth: () => ({ dataOwnerId: 'owner' }) }));
 
 vi.mock('react-i18next', () => ({
   initReactI18next: {
@@ -28,6 +55,7 @@ vi.mock('react-i18next', () => ({
   },
   useTranslation: () => ({
     t: (key: string, options?: Record<string, unknown>) => {
+      if (mocks.translate) return mocks.translate(key, options);
       const count = Number(options?.count ?? 0);
       const dict: Record<string, string> = {
         'ccAgent.time.relative.now': '刚刚',
@@ -63,6 +91,7 @@ vi.mock('react-i18next', () => ({
 }));
 
 vi.mock('@/components/ui/tooltip', () => ({
+  Tip: ({ children }: { children: ReactNode }) => children,
   Tooltip: {
     Provider: ({ children }: { children: ReactNode }) => children,
     Root: ({ children }: { children: ReactNode }) => children,
@@ -72,10 +101,15 @@ vi.mock('@/components/ui/tooltip', () => ({
 }));
 
 vi.mock('@/components/ui/dropdown-menu', () => ({
-  DropdownMenu: ({ children }: { children: ReactNode }) => children,
+  DropdownMenu: ({ children, open }: { children: ReactNode; open?: boolean }) => {
+    mocks.dropdownMenuOpen = Boolean(open);
+    return children;
+  },
   DropdownMenuTrigger: ({ children }: { children: ReactNode }) => children,
-  DropdownMenuContent: () => null,
-  DropdownMenuItem: ({ children }: { children: ReactNode }) => children,
+  DropdownMenuContent: ({ children }: { children: ReactNode }) =>
+    mocks.dropdownMenuOpen ? createElement('div', { role: 'menu' }, children) : null,
+  DropdownMenuItem: ({ children, disabled }: { children: ReactNode; disabled?: boolean }) =>
+    createElement('div', { role: 'menuitem', 'aria-disabled': disabled || undefined }, children),
   DropdownMenuSeparator: () => null,
   DropdownMenuSub: ({ children }: { children: ReactNode }) => children,
   DropdownMenuSubContent: () => null,
@@ -84,8 +118,31 @@ vi.mock('@/components/ui/dropdown-menu', () => ({
 
 vi.mock('@/components/sidebar/WorktreeBadge', () => ({
   WorktreeBadge: ({ sessionId }: { sessionId: string }) =>
-    mocks.worktreeSessionIds.has(sessionId) ? createElement('span', { 'data-testid': 'worktree-badge' }, 'WT') : null,
+    mocks.worktreeSessionIds.has(sessionId)
+      ? createElement('span', { 'data-testid': 'worktree-badge' }, 'WT')
+      : null,
 }));
+
+vi.mock('@/lib/worktreeRemovalWarning', async (importOriginal) => ({
+  ...await importOriginal<typeof import('@/lib/worktreeRemovalWarning')>(),
+  prefetchDirtyWorktreeForRemoval: vi.fn(),
+}));
+
+vi.mock('@/features/device-link/useDeviceLinkDeviceList', async (importOriginal) => ({
+  ...await importOriginal<typeof import('@/features/device-link/useDeviceLinkDeviceList')>(),
+  useDeviceLinkDeviceList: () => [],
+}));
+
+vi.mock('@/contexts/WorktreeContext', () => {
+  const reportLiveness = vi.fn();
+  const refreshObserved = vi.fn();
+  return {
+    useWorktreeForSession: () => null,
+    useReportWorktreeLiveness: () => reportLiveness,
+    useObservedWorktreeForSession: () => null,
+    useRefreshObservedWorktree: () => refreshObserved,
+  };
+});
 
 vi.mock('@/state/agentIslandActivity', () => ({
   useAgentIslandActivity: (sessionId: string) => {
@@ -118,10 +175,8 @@ vi.mock('@/hooks/useSessionPausedQueue', () => ({
 
 vi.mock('@/lib/sessionAttentionStore', () => ({
   useSessionAttentionKind: (sessionId: string) => mocks.attentionKindBySession.get(sessionId),
-}));
-
-vi.mock('../../lib/scrollIntoNearestView', () => ({
-  scrollIntoNearestView: vi.fn(),
+  getSessionAttentionKinds: () => mocks.attentionKindBySession,
+  subscribeSessionAttention: () => () => undefined,
 }));
 
 vi.mock('@/lib/toast', () => ({
@@ -132,12 +187,15 @@ vi.mock('@/lib/toast', () => ({
 }));
 
 vi.mock('@/features/scheduler/lib/scheduleSessionBinding', () => ({
-  scheduleFocusPath: (scheduleId: string) => `/cc-agent/scheduled?focus=${encodeURIComponent(scheduleId)}`,
-  useSessionBoundSchedules: (sessionId: string) => mocks.boundSchedulesBySession.get(sessionId) ?? [],
+  scheduleFocusPath: (scheduleId: string) =>
+    `/cc-agent/scheduled?focus=${encodeURIComponent(scheduleId)}`,
+  useSessionBoundSchedules: (sessionId: string) =>
+    mocks.boundSchedulesBySession.get(sessionId) ?? [],
 }));
 
 vi.mock('@/features/scheduler/lib/scheduleSidebarIndexRuns', () => ({
   loadScheduleSidebarIndexRuns: async () => [],
+  findLatestSidebarIndexRunForSession: () => undefined,
 }));
 
 function scheduleForCase(id: string, status: 'active' | 'paused') {
@@ -151,7 +209,7 @@ function scheduleForCase(id: string, status: 'active' | 'paused') {
   };
 }
 
-function renderCase(caseId: string) {
+function renderCase(caseId: string, overrides: Record<string, unknown> = {}) {
   const visualCase = sessionCardVisualCases.find((item) => item.id === caseId);
   if (!visualCase) throw new Error(`Missing visual case: ${caseId}`);
   if (visualCase.boundSchedule) {
@@ -176,25 +234,304 @@ function renderCase(caseId: string) {
         onRename: vi.fn(),
         onTogglePin: vi.fn(),
         projectOptions: [],
+        ...overrides,
       }),
     ),
   );
 }
 
+/** 取本次渲染的行根元素(带 data-sidebar-session-row 标记)。 */
+function sessionRowEl(): HTMLElement {
+  const el = screen
+    .getByTestId('visual-case')
+    .querySelector('[data-sidebar-session-row="true"]') as HTMLElement | null;
+  if (!el) throw new Error('session row not found');
+  return el;
+}
+
 describe('SessionCard visual cases', () => {
+  const originalScrollIntoView = Object.getOwnPropertyDescriptor(HTMLElement.prototype, 'scrollIntoView');
+
   beforeEach(() => {
+    Object.defineProperty(HTMLElement.prototype, 'scrollIntoView', {
+      configurable: true,
+      value: vi.fn(),
+    });
+    clearRemoteSessionActivity();
     mocks.navigate.mockReset();
+    mocks.dropdownMenuOpen = false;
     mocks.boundSchedulesBySession.clear();
     mocks.worktreeSessionIds.clear();
     mocks.runningDetailBySession.clear();
     mocks.pendingPluginSetupSessionIds.clear();
     mocks.attentionKindBySession.clear();
     mocks.ensureInitialMessages.mockReset();
+    mocks.translate = undefined;
   });
 
   afterEach(() => {
     cleanup();
+    vi.restoreAllMocks();
+    if (originalScrollIntoView) {
+      Object.defineProperty(HTMLElement.prototype, 'scrollIntoView', originalScrollIntoView);
+    } else {
+      delete (HTMLElement.prototype as Partial<HTMLElement>).scrollIntoView;
+    }
   });
+
+  it.each(['list', 'card'] as const)(
+    'shows the sorting timestamp in the %s row with legacy fallback',
+    (variant) => {
+      const session: Session = {
+        ...sessionCardVisualCases[0].session,
+        updatedAt: '2026-10-24T09:00:00.000Z',
+        userSendAt: '2026-10-24T08:00:00.000Z',
+        lastActivityAt: '2026-10-24T10:00:00.000Z',
+      };
+      for (const expected of [session.lastActivityAt, session.userSendAt, session.updatedAt]) {
+        const view = renderCase(sessionCardVisualCases[0].id, { session, variant });
+        expect(view.container.querySelector('time')?.getAttribute('dateTime')).toBe(expected);
+        view.unmount();
+        if (session.lastActivityAt) delete session.lastActivityAt;
+        else session.userSendAt = null;
+      }
+    },
+  );
+
+  it('scrolls a text row into nearest view only when it becomes active', () => {
+    const props = {
+      session: sessionCardVisualCases[0].session,
+      isActive: false,
+      isRunning: false,
+      hasAttentionNotification: false,
+      onClick: vi.fn(),
+      onAction: vi.fn(),
+      onRename: vi.fn(),
+      onTogglePin: vi.fn(),
+    };
+    const view = render(createElement(SessionItem, props));
+    const row = view.container.querySelector(`[data-session-id="${props.session.id}"]`);
+    const scrollIntoView = vi.mocked(HTMLElement.prototype.scrollIntoView);
+    expect(row).toBeTruthy();
+    expect(scrollIntoView).not.toHaveBeenCalled();
+
+    // The old source guard never exercised this transition. Keep the real
+    // SessionItem effect and helper in this unit regression; only stub native DOM.
+    view.rerender(createElement(SessionItem, { ...props, isActive: true }));
+    expect(scrollIntoView).toHaveBeenCalledExactlyOnceWith({ block: 'nearest', behavior: 'smooth' });
+    expect(scrollIntoView.mock.contexts).toEqual([row]);
+
+    const updatedSession = { ...props.session, preview: 'Updated preview' };
+    view.rerender(createElement(SessionItem, { ...props, session: updatedSession, isActive: true }));
+    expect(scrollIntoView).toHaveBeenCalledTimes(1);
+    view.rerender(createElement(SessionItem, { ...props, session: updatedSession, isActive: false }));
+    expect(scrollIntoView).toHaveBeenCalledTimes(1);
+  });
+
+  it.each(['list', 'text'] as const)('reuses the %s presentation for shared navigation without task actions', (variant) => {
+    const session = { ...sessionCardVisualCases[0].session, preview: 'Shared message preview' };
+    const onClick = vi.fn();
+    const onRename = vi.fn();
+    const onAction = vi.fn();
+    const onTogglePin = vi.fn();
+    const props = { session, isActive: false, isRunning: false, hasAttentionNotification: false, navigationOnly: true, onClick, onRename, onAction, onTogglePin };
+    const view = render(variant === 'list'
+      ? createElement(SessionCard, { ...props, variant: 'list' })
+      : createElement(SessionItem, props));
+    const row = view.container.querySelector<HTMLElement>('[data-sidebar-navigation-row="true"]')!;
+    expect(row).toBeTruthy();
+    expect(view.container.querySelector('[data-sidebar-session-row="true"]')).toBeNull();
+    expect(row.draggable).toBe(false);
+    expect(row.querySelector('button')).toBeNull();
+    if (variant === 'list') expect(row.textContent).toContain(session.preview);
+    const context = createEvent.contextMenu(row);
+    fireEvent(row, context);
+    expect(context.defaultPrevented).toBe(true);
+    expect(screen.queryByRole('menu')).toBeNull();
+    fireEvent.doubleClick(row);
+    expect(screen.queryByRole('textbox')).toBeNull();
+    fireEvent.pointerDown(row, { button: 0, isPrimary: true });
+    expect(mocks.ensureInitialMessages).not.toHaveBeenCalled();
+    fireEvent.click(row);
+    fireEvent.keyDown(row, { key: 'Enter' });
+    expect(onClick).toHaveBeenCalledTimes(2);
+    expect(onAction).not.toHaveBeenCalled();
+    expect(onRename).not.toHaveBeenCalled();
+    expect(onTogglePin).not.toHaveBeenCalled();
+  });
+
+  it('uses ordinary running and awaiting preview text in shared navigation rows', () => {
+    const visualCase = sessionCardVisualCases.find(item => item.id === 'short-idle-cc')!;
+    mocks.runningDetailBySession.set(visualCase.session.id, 'Reading shared files');
+    const view = renderCase(visualCase.id, { variant: 'list', navigationOnly: true });
+    expect(screen.getByText('Reading shared files')).toBeTruthy();
+    view.unmount();
+    mocks.runningDetailBySession.clear();
+    mocks.pendingPluginSetupSessionIds.add(visualCase.session.id);
+    renderCase(visualCase.id, { variant: 'list', navigationOnly: true });
+    expect(screen.getByText('等待插件设置')).toBeTruthy();
+  });
+
+  // Regression: remote-supplier tasks have local messages, but agentDeviceId hid export.
+  // The existing shared-task menu cases cover guests, not owner tasks using a remote agent.
+  // Unit tier: render the production rows and inspect the menu opened by a context click.
+  // Standalone file: 5.28s on Windows; existing imports take 3.50s, test bodies 0.76s.
+  it.each(['list', 'text'] as const)('offers history export for a remote supplier in the %s row', async (variant) => {
+    const session = { ...sessionCardVisualCases[0].session, agentDeviceId: 'remote-device' };
+    const props = {
+      session, isActive: false, isRunning: false, hasAttentionNotification: false,
+      onClick: vi.fn(), onRename: vi.fn(), onAction: vi.fn(), onTogglePin: vi.fn(),
+    };
+    const view = render(variant === 'list'
+      ? createElement(SessionCard, { ...props, variant: 'list' })
+      : createElement(SessionItem, props));
+    await act(async () => {
+      fireEvent.contextMenu(view.container.querySelector<HTMLElement>('[data-sidebar-session-row="true"]')!);
+    });
+    expect(screen.getByRole('menuitem', { name: 'ccAgent.sidebar.sessionMenu.exportShare' })).toBeTruthy();
+  });
+
+  it.each(['list', 'text'] as const)('shows only leave sharing on a guest %s row', (variant) => {
+    const session = { ...sessionCardVisualCases[0].session, status: 'active' as const, deviceLinkDeviceId: sharedTaskHostPeer('share', 'host') };
+    const onClick = vi.fn();
+    const onAction = vi.fn();
+    const props = { session, isActive: false, isRunning: false, hasAttentionNotification: false, navigationOnly: true, onClick, onRename: vi.fn(), onAction, onTogglePin: vi.fn() };
+    const view = render(variant === 'list' ? createElement(SessionCard, { ...props, variant: 'list' }) : createElement(SessionItem, props));
+    fireEvent.contextMenu(view.container.querySelector<HTMLElement>('[data-sidebar-navigation-row="true"]')!);
+    expect(screen.getAllByRole('menuitem').map(item => item.textContent)).toEqual(['sharedTask.leaveShort']);
+    expect(screen.queryByRole('group', { name: '标签' })).toBeNull();
+    expect(onClick).not.toHaveBeenCalled();
+    expect(onAction).not.toHaveBeenCalled();
+  });
+
+  it.each(['list', 'text'] as const)('shows the shared crown only for owners in %s rows', (variant) => {
+    const session = { ...sessionCardVisualCases[0].session, id: `shared-${variant}` };
+    const baseProps = {
+      session,
+      isActive: false,
+      isRunning: false,
+      hasAttentionNotification: false,
+      navigationOnly: true,
+      onClick: vi.fn(),
+      onRename: vi.fn(),
+      onAction: vi.fn(),
+      onTogglePin: vi.fn(),
+    };
+    const renderRow = (sharedTaskRole: 'owned' | 'joined') => render(variant === 'list'
+      ? createElement(SessionCard, { ...baseProps, sharedTaskRole, variant: 'list' })
+      : createElement(SessionItem, { ...baseProps, sharedTaskRole }));
+
+    const joined = renderRow('joined');
+    expect(joined.container.querySelector('[data-testid^="shared-task-role-slot-"]')).toBeNull();
+    joined.unmount();
+
+    const owned = renderRow('owned');
+    const ownerSlot = owned.container.querySelector(`[data-testid="shared-task-role-slot-owned-${session.id}"]`);
+    expect(ownerSlot).toBeTruthy();
+    expect(ownerSlot?.querySelector('svg')?.getAttribute('class')).toContain('text-[var(--warning-fg)]');
+  });
+
+  it.each([
+    { locale: 'en', resource: en },
+    { locale: 'zh-CN', resource: zhCN },
+    { locale: 'zh-TW', resource: zhTW },
+    { locale: 'ja', resource: ja },
+    { locale: 'ko', resource: ko },
+  ])(
+    'renders retained conflict titles with local creation times in $locale',
+    async ({ locale, resource }) => {
+      const i18n = createInstance();
+      await i18n.init({
+        lng: locale,
+        fallbackLng: false,
+        defaultNS: 'common',
+        resources: { en: { common: en }, [locale]: { common: resource } },
+      });
+      mocks.translate = (key, options) => i18n.t(key, options);
+      const visualCase = sessionCardVisualCases.find((item) => item.id === 'short-idle-cc')!;
+      for (const variant of ['card', 'list'] as const) {
+        for (const [key, expected] of [
+          ['cindyMake.merge.taskTitle', resource.cindyMake.merge.taskTitle],
+          ['cindyMake.history.mergeTaskTitle', resource.cindyMake.history.mergeTaskTitle],
+          ['cindyMake.history.revertTaskTitle', resource.cindyMake.history.revertTaskTitle],
+        ]) {
+          for (const title of [key, expected, `[fe0a] ${expected}`]) {
+            const view = renderCase(visualCase.id, {
+              variant,
+              session: {
+                ...visualCase.session,
+                source: 'cindy-make-merge',
+                title,
+                createdAt: new Date(2026, 8, 20, 14, 7).toISOString(),
+                workingDir: '/managed/merge-worktrees/fe0a1234',
+              },
+            });
+            expect(
+              screen.getByText(`[fe0a] 09-20 14:07 ${expected}`, {
+                selector: ':not([aria-hidden="true"])',
+              }),
+            ).toBeTruthy();
+            expect(view.container.textContent).not.toMatch(/cindyMake[.]|[{][{]|[?]{2,}|�/);
+            view.unmount();
+          }
+        }
+      }
+      // A task created in another UI language must still get its original creation time.
+      await i18n.changeLanguage('en');
+      renderCase(visualCase.id, {
+        session: {
+          ...visualCase.session,
+          source: 'cindy-make-merge',
+          title: resource.cindyMake.merge.taskTitle,
+          createdAt: new Date(2026, 8, 20, 14, 7).toISOString(),
+          workingDir: '/managed/merge-worktrees/fe0a1234',
+        },
+      });
+      expect(
+        screen.getByText('[fe0a] 09-20 14:07 Resolve Source Update Conflicts', {
+          selector: ':not([aria-hidden="true"])',
+        }),
+      ).toBeTruthy();
+    },
+  );
+
+  it.each(['card', 'list'] as const)(
+    'keeps %s active during preparation before the Agent starts',
+    (variant) => {
+      const visualCase = sessionCardVisualCases.find((item) => item.id === 'short-idle-cc')!;
+      vi.spyOn(cindyMakeState, 'subscribe').mockReturnValue(() => {});
+      vi.spyOn(cindyMakeState, 'taskForSession').mockReturnValue({
+        runId: 'make-run',
+        platform: 'win32',
+        arch: 'x64',
+        checks: [],
+        status: 'running',
+        task: { sessionId: visualCase.session.id, phase: 'dependencies' },
+      });
+      renderCase(visualCase.id, {
+        variant,
+        isRunning: false,
+        session: { ...visualCase.session, source: 'cindy-make' },
+      });
+      expect(sessionRowEl().querySelector('.session-status-breathing')).not.toBeNull();
+      expect(screen.getByText('cindyMake.code.phases.dependencies')).toBeTruthy();
+      if (variant === 'list') {
+        expect(
+          sessionRowEl().querySelector('[data-sidebar-right-status="running"]'),
+        ).not.toBeNull();
+      }
+
+      cleanup();
+      mocks.pendingPluginSetupSessionIds.add(visualCase.session.id);
+      renderCase(visualCase.id, {
+        variant,
+        isRunning: false,
+        session: { ...visualCase.session, source: 'cindy-make' },
+      });
+      expect(screen.getByText('等待插件设置')).toBeTruthy();
+      expect(screen.queryByText('cindyMake.code.phases.dependencies')).toBeNull();
+    },
+  );
 
   it('keeps a broad gallery of title, body, icon, and state combinations', () => {
     expect(sessionCardVisualCases.map((item) => item.id)).toEqual([
@@ -215,9 +552,40 @@ describe('SessionCard visual cases', () => {
     ]);
   });
 
+  // 2026-08-12 用户反馈:列表模式下选中会改变行高,把上下行推移、列表跳动。
+  // 根因是 active 态加了真实 border 而未选中时没有——列表行高由内容撑开,
+  // 1px 边框直接把该行加高 2px。改用 inset shadow(画在盒内、不参与布局),
+  // 与 SessionItem(文字模式)当年的修法一致。
+  it('列表模式:选中态不引入改变盒模型的 border(行高与未选中一致)', () => {
+    renderCase('short-idle-cc', { variant: 'list', isActive: true });
+    const activeRow = sessionRowEl();
+    // 描边走 inset shadow,不是 border —— 后者会撑高行。
+    expect(activeRow.className).toContain(
+      'shadow-[inset_0_0_0_1px_var(--sidebar-item-active-border)]',
+    );
+    expect(activeRow.className).not.toMatch(/(^|\s)border(\s|$)/);
+    expect(activeRow.className).not.toContain('border-[var(--sidebar-item-active-border)]');
+
+    cleanup();
+    renderCase('short-idle-cc', { variant: 'list', isActive: false });
+    const idleRow = sessionRowEl();
+    // 未选中同样没有 border —— 两态盒模型一致,切换不产生高度差。
+    expect(idleRow.className).not.toMatch(/(^|\s)border(\s|$)/);
+  });
+
+  it('卡片模式的 border 恒定存在(只换颜色),不因选中而改变布局', () => {
+    renderCase('short-idle-cc', { variant: 'card', isActive: true });
+    expect(sessionRowEl().className).toMatch(/(^|\s)border(\s|$)/);
+    cleanup();
+    renderCase('short-idle-cc', { variant: 'card', isActive: false });
+    expect(sessionRowEl().className).toMatch(/(^|\s)border(\s|$)/);
+  });
+
   it('prefetches a new task on primary pointerdown before navigation', () => {
     renderCase('short-idle-cc');
-    const card = screen.getByTestId('visual-case').querySelector('[data-sidebar-session-row="true"]');
+    const card = screen
+      .getByTestId('visual-case')
+      .querySelector('[data-sidebar-session-row="true"]');
     expect(card).not.toBeNull();
 
     fireEvent.pointerDown(card!, { button: 0, pointerType: 'mouse' });
@@ -225,6 +593,109 @@ describe('SessionCard visual cases', () => {
     expect(mocks.ensureInitialMessages).toHaveBeenCalledTimes(1);
     expect(mocks.ensureInitialMessages).toHaveBeenCalledWith('short-idle-cc');
   });
+
+  it('does not expose split creation in the card task menu', () => {
+    renderCase('short-idle-cc');
+
+    fireEvent.click(
+      screen.getByRole('button', {
+        name: /^(?:更多操作|ccAgent\.sidebar\.sessionMenu\.moreActions)$/,
+      }),
+    );
+
+    const menu = screen.getByRole('menu');
+    expect(within(menu).getByRole('menuitem', { name: '重命名' })).toBeTruthy();
+    expect(
+      within(menu).queryByRole('menuitem', {
+        name: /(?:splitGroup\.openInSplit|在分栏中打开)/,
+      }),
+    ).toBeNull();
+  });
+
+  it.each(['card', 'list'] as const)(
+    'uses native %s dragging for normal content while excluding action buttons',
+    (variant) => {
+      const visualCase = sessionCardVisualCases.find((item) => item.id === 'short-idle-cc');
+      if (!visualCase) throw new Error('Missing idle visual case');
+      const values = new Map<string, string>();
+      const dataTransfer = {
+        effectAllowed: 'none',
+        setData: (format: string, data: string) => values.set(format, data),
+      };
+
+      const { container } = render(
+        createElement(
+          'div',
+          {
+            'data-sortable-id': visualCase.session.id,
+            'data-sortable-native-dnd': 'true',
+          },
+          createElement(SessionCard, {
+            session: visualCase.session,
+            variant,
+            isActive: false,
+            isRunning: false,
+            isAttached: false,
+            hasAttentionNotification: false,
+            isSelected: false,
+            onClick: vi.fn(),
+            onAction: vi.fn(),
+            onRename: vi.fn(),
+            onTogglePin: vi.fn(),
+            projectOptions: [],
+          }),
+        ),
+      );
+
+      const card = container.querySelector<HTMLElement>('[data-sidebar-session-row="true"]');
+      const title = within(card!).getByText(visualCase.session.title, {
+        selector: '.sidebar-title-marquee__ellipsis',
+      });
+      const actionButton = card?.querySelector<HTMLButtonElement>(
+        'button[aria-label="ccAgent.sidebar.sessionMenu.moreActions"]',
+      );
+      expect(card?.draggable).toBe(true);
+      expect(card?.className).toContain('cursor-pointer');
+      expect(card?.className).not.toContain('cursor-grab');
+      expect(card?.querySelector('[data-split-group-drag-handle="true"]')).toBeNull();
+      expect(title.className).not.toContain('cursor-grab');
+      expect(actionButton).not.toBeNull();
+
+      fireEvent.pointerDown(title, { button: 0, pointerType: 'mouse' });
+      fireEvent.dragStart(card!, { dataTransfer });
+
+      expect(values.get(SPLIT_GROUP_SESSION_MIME)).toBe(visualCase.session.id);
+      expect(dataTransfer.effectAllowed).toBe('copyMove');
+
+      const openOutside = vi.fn().mockResolvedValue(false);
+      const electronApiDescriptor = Object.getOwnPropertyDescriptor(window, 'electronAPI');
+      Object.defineProperty(window, 'electronAPI', {
+        configurable: true,
+        value: { maker: { openSessionInNewWindowIfDroppedOutside: openOutside } },
+      });
+      fireEvent.dragEnd(card!, { dataTransfer });
+      expect(openOutside).toHaveBeenCalledWith(
+        visualCase.session.id,
+        visualCase.session.deviceLinkDeviceId,
+      );
+      if (electronApiDescriptor) {
+        Object.defineProperty(window, 'electronAPI', electronApiDescriptor);
+      } else {
+        Reflect.deleteProperty(window, 'electronAPI');
+      }
+
+      values.clear();
+      dataTransfer.effectAllowed = 'none';
+      fireEvent.pointerDown(actionButton!, { button: 0, pointerType: 'mouse' });
+      const blockedDragStart = createEvent.dragStart(card!, { dataTransfer });
+      const preventDefault = vi.spyOn(blockedDragStart, 'preventDefault');
+      fireEvent(card!, blockedDragStart);
+
+      expect(preventDefault).toHaveBeenCalledOnce();
+      expect(values.has(SPLIT_GROUP_SESSION_MIME)).toBe(false);
+      expect(dataTransfer.effectAllowed).toBe('none');
+    },
+  );
 
   it.each(sessionCardVisualCases.map((item) => [item.label, item.id] as const))(
     'renders visual case: %s',
@@ -235,18 +706,70 @@ describe('SessionCard visual cases', () => {
       const visualCase = sessionCardVisualCases.find((item) => item.id === id);
       expect(card).not.toBeNull();
       expect(card?.className).toContain('rounded-xl');
-      expect(root.textContent).toContain(visualCase?.session.title.replace('[Schedule] ', '').slice(0, 4));
+      expect(root.textContent).toContain(
+        visualCase?.session.title.replace('[Schedule] ', '').slice(0, 4),
+      );
     },
   );
 
-  it('keeps single-line cards naturally shorter than long summary cards', () => {
-    renderCase('short-idle-cc');
-    const shortCard = screen.getByTestId('visual-case').querySelector('[data-sidebar-session-row="true"]');
-    expect(shortCard?.className).not.toContain('h-full');
-    cleanup();
+  // 2026-11-08 用户定稿:置顶卡片统一高度(标题 1 行 + 正文固定 2 行位 + meta 行)。
+  // 旧版无正文时不渲染正文区、summary 正文放宽到 3 行,同列卡片高度不一、两列底边错开。
+  it('keeps pinned cards on one height budget whether the body is empty, short or a long summary', () => {
+    const shortCase = sessionCardVisualCases.find((item) => item.id === 'short-idle-cc')!;
+    const summaryCase = sessionCardVisualCases.find((item) => item.id === 'summary-long-body')!;
+    const cases = [
+      { caseId: 'short-idle-cc', overrides: { session: { ...shortCase.session, preview: null } } },
+      { caseId: 'short-idle-cc', overrides: {} },
+      { caseId: 'summary-long-body', overrides: {} },
+    ];
+    const budgets = cases.map(({ caseId, overrides }) => {
+      const view = renderCase(caseId, overrides);
+      const card = sessionRowEl();
+      expect(card.className).not.toContain('h-full');
+      const bodies = card.querySelectorAll('p');
+      expect(bodies).toHaveLength(1);
+      const budget = {
+        body: bodies[0].textContent,
+        bodyBox: `${bodies[0].className}|${bodies[0].getAttribute('style') ?? ''}`,
+      };
+      view.unmount();
+      return budget;
+    });
 
-    renderCase('summary-long-body');
-    expect(screen.getByText(/汇总玩家/)).toBeTruthy();
+    expect(budgets.map((item) => item.body)).toEqual([
+      '',
+      shortCase.session.preview,
+      summaryCase.session.summary,
+    ]);
+    expect(new Set(budgets.map((item) => item.bodyBox)).size).toBe(1);
+  });
+
+  // 2026-11-09 用户定:置顶卡片标题单行但不能只截断,悬停卡片时与列表行一样用跑马灯带过全名。
+  it('plays the shared title marquee when hovering a pinned card with an overflowing title', () => {
+    const widths = [
+      vi.spyOn(HTMLElement.prototype, 'scrollWidth', 'get').mockImplementation(function (this: HTMLElement) {
+        return this.classList.contains('sidebar-title-marquee__track') ? 300 : 0;
+      }),
+      vi.spyOn(HTMLElement.prototype, 'clientWidth', 'get').mockImplementation(function (this: HTMLElement) {
+        return this.classList.contains('sidebar-title-marquee') ? 100 : 0;
+      }),
+    ];
+    try {
+      renderCase('very-long-title');
+      const card = sessionRowEl();
+      const marquee = card.querySelector<HTMLElement>('.sidebar-title-marquee')!;
+      expect(marquee.title).toBe(sessionCardVisualCases.find((item) => item.id === 'very-long-title')!.session.title);
+      expect(marquee.dataset.titleOverflowing).toBeUndefined();
+
+      fireEvent.mouseEnter(card);
+      expect(marquee.dataset.titleOverflowing).toBe('true');
+      expect(marquee.style.getPropertyValue('--sidebar-title-marquee-shift')).toBe('-200px');
+
+      fireEvent.mouseLeave(card);
+      expect(marquee.dataset.titleOverflowing).toBeUndefined();
+    } finally {
+      widths.forEach((spy) => spy.mockRestore());
+    }
   });
 
   it('shows plugin setup as a needs-interaction preview', () => {
@@ -261,8 +784,10 @@ describe('SessionCard visual cases', () => {
 
   it('uses the unified Timer for automation cases without a bound schedule', () => {
     renderCase('automation-timer');
-    expect(screen.getByRole('button', { name: '查看自动化任务' }).getAttribute('title')).toBe('由自动化创建');
-    expect(screen.getByRole('button', { name: '查看自动化任务' }).querySelector('.lucide-timer')).not.toBeNull();
+    expect(screen.getByRole('button', { name: '查看自动化任务' }).getAttribute('title')).toBeNull();
+    expect(
+      screen.getByRole('button', { name: '查看自动化任务' }).querySelector('.lucide-timer'),
+    ).not.toBeNull();
   });
 
   it('stops keyboard activation on the automation title action from opening the card', () => {
@@ -293,7 +818,9 @@ describe('SessionCard visual cases', () => {
   it('stops keyboard activation on the schedule badge from opening the card', () => {
     const visualCase = sessionCardVisualCases.find((item) => item.id === 'schedule-bound-active');
     if (!visualCase) throw new Error('Missing schedule visual case');
-    mocks.boundSchedulesBySession.set(visualCase.session.id, [scheduleForCase(visualCase.session.id, 'active')]);
+    mocks.boundSchedulesBySession.set(visualCase.session.id, [
+      scheduleForCase(visualCase.session.id, 'active'),
+    ]);
     const onClick = vi.fn();
 
     render(
@@ -344,9 +871,7 @@ describe('SessionCard visual cases', () => {
 
     // card 变体(评审定稿):标题纯文字,自动化标志下沉到底部 meta 行。
     const { container: cardContainer } = render(createElement(SessionCard, commonProps));
-    const cardTitle = Array.from(cardContainer.querySelectorAll('div')).find((node) =>
-      node.className.includes('[-webkit-line-clamp:2]'),
-    );
+    const cardTitle = cardContainer.querySelector('.sidebar-title-marquee');
     expect(cardTitle?.textContent).toContain('自动化日报巡检');
     // 标题里不再有自动化图标……
     expect(cardTitle?.querySelector('[aria-label="查看自动化任务"]')).toBeNull();
@@ -355,10 +880,12 @@ describe('SessionCard visual cases', () => {
     cleanup();
 
     // list 变体保持原有标题前缀契约不变:自动化图标仍在标题里。
-    const { container: listContainer } = render(createElement(SessionCard, { ...commonProps, variant: 'list' }));
+    const { container: listContainer } = render(
+      createElement(SessionCard, { ...commonProps, variant: 'list' }),
+    );
     const listTitleRow = Array.from(listContainer.querySelectorAll<HTMLElement>('div')).find(
       (node) =>
-        node.classList.contains('h-5') &&
+        node.className.includes('h-[22px]') &&
         node.textContent?.includes('自动化日报巡检') &&
         node.querySelector('[aria-label="查看自动化任务"]'),
     );
@@ -390,7 +917,7 @@ describe('SessionCard visual cases', () => {
     const card = container.querySelector<HTMLElement>('[data-sidebar-session-row="true"]')!;
     const titleRow = Array.from(card.querySelectorAll<HTMLElement>('div')).find(
       (node) =>
-        node.classList.contains('h-5') && node.textContent?.includes(visualCase.session.title),
+        node.className.includes('h-[22px]') && node.textContent?.includes(visualCase.session.title),
     );
     expect(titleRow).toBeTruthy();
     const statusIconSlot = Array.from(titleRow!.querySelectorAll<HTMLElement>('span')).find(
@@ -434,9 +961,7 @@ describe('SessionCard visual cases', () => {
     );
 
     const card = container.querySelector<HTMLElement>('[data-sidebar-session-row="true"]')!;
-    const title = Array.from(card.querySelectorAll<HTMLElement>('div')).find((node) =>
-      node.className.includes('[-webkit-line-clamp:2]'),
-    )!;
+    const title = card.querySelector<HTMLElement>('.sidebar-title-marquee')!.parentElement!;
     expect(title.classList.contains('invisible')).toBe(false);
 
     fireEvent.doubleClick(card);
@@ -446,6 +971,8 @@ describe('SessionCard visual cases', () => {
     const titleSlot = title.parentElement!;
     expect(card.contains(title)).toBe(true);
     expect(title.classList.contains('invisible')).toBe(true);
+    // 编辑时不渲染跑马灯轨道:轨道自带 visibility:visible,会穿透 invisible 从透明输入框下透出旧标题。
+    expect(title.querySelector('.sidebar-title-marquee__track')).toBeNull();
     expect(titleSlot).toBe(overlay.parentElement);
     expect(titleSlot.classList.contains('relative')).toBe(true);
     expect(overlay.classList.contains('absolute')).toBe(true);
@@ -459,7 +986,9 @@ describe('SessionCard visual cases', () => {
 
   it('keeps archived sessions on the archive visual branch', () => {
     renderCase('archived');
-    expect(screen.getByText('已归档的历史分析任务')).toBeTruthy();
+    expect(
+      screen.getByText('已归档的历史分析任务', { selector: '.sidebar-title-marquee__ellipsis' }),
+    ).toBeTruthy();
   });
 
   it('matches text-mode action chrome in list mode while preserving card buttons', () => {
@@ -492,14 +1021,17 @@ describe('SessionCard visual cases', () => {
       expect(action.className).toContain('size-5');
       expect(action.className).toContain('rounded-md');
       expect(action.className).toContain('text-sidebar-action-icon');
+      expect(action.className).not.toMatch(/(?:^|\s)bg-sidebar(?:\s|$)/);
       expect(action.className).not.toContain('size-6');
       expect(action.className).not.toContain('bg-[var(--cmd-palette-bg)]');
       expect(action.className).not.toContain('border-sidebar-border');
       expect(action.querySelector('svg')?.getAttribute('width')).toBe('14');
     }
-    const listTimeFade = listContainer.querySelector('time')?.parentElement;
+    // C 期起 time 包在 SessionInfoMeta 的 span 里;最近的 div 祖先才是让位容器。
+    // 信息层与操作占位叠在同一格,槽根仍是 group/slot,中间多一层 max-content grid。
+    const listTimeFade = listContainer.querySelector('time')?.closest('div');
     expect(listTimeFade?.className).toContain('group-focus-within/slot:opacity-0');
-    expect(listTimeFade?.parentElement?.className).toContain('group/slot');
+    expect(listTimeFade?.closest('[class*="group/slot"]')?.className).toContain('group/slot');
     cleanup();
 
     const { container: activeListContainer } = render(
@@ -509,6 +1041,7 @@ describe('SessionCard visual cases', () => {
       name: moreActionsName,
     });
     expect(activeListMore.className).toContain('text-sidebar-item-active-foreground');
+    expect(activeListMore.className).not.toContain('bg-sidebar-item-active');
     expect(activeListMore.className).toContain(
       'hover:bg-[color-mix(in_srgb,var(--sidebar-item-active-foreground)_14%,transparent)]',
     );
@@ -525,38 +1058,57 @@ describe('SessionCard visual cases', () => {
     expect(cardMore.querySelector('svg')?.getAttribute('width')).toBe('13');
   });
 
-  it.each(['list', 'card'] as const)('keeps the %s archive confirmation pill on one line', (variant) => {
-    const visualCase = sessionCardVisualCases.find((item) => item.id === 'short-idle-cc');
-    if (!visualCase) throw new Error('Missing idle visual case');
+  it.each(['list', 'card'] as const)(
+    'keeps the %s archive confirmation pill on one line',
+    (variant) => {
+      const visualCase = sessionCardVisualCases.find((item) => item.id === 'short-idle-cc');
+      if (!visualCase) throw new Error('Missing idle visual case');
 
-    const { container } = render(
-      createElement(SessionCard, {
-        session: visualCase.session,
-        variant: variant === 'list' ? 'list' : undefined,
-        isActive: false,
-        isRunning: false,
-        isAttached: false,
-        hasAttentionNotification: false,
-        isSelected: false,
-        onClick: vi.fn(),
-        onAction: vi.fn(),
-        onRename: vi.fn(),
-        onTogglePin: vi.fn(),
-        projectOptions: [],
-      }),
-    );
+      const { container } = render(
+        createElement(SessionCard, {
+          session: visualCase.session,
+          variant: variant === 'list' ? 'list' : undefined,
+          isActive: false,
+          isRunning: false,
+          isAttached: false,
+          hasAttentionNotification: false,
+          isSelected: false,
+          onClick: vi.fn(),
+          onAction: vi.fn(),
+          onRename: vi.fn(),
+          onTogglePin: vi.fn(),
+          projectOptions: [],
+        }),
+      );
 
-    fireEvent.click(screen.getByRole('button', { name: '归档' }));
-    const confirmPill = screen.getByRole('button', { name: '归档' });
-    expect(confirmPill.className).toContain('w-max');
-    expect(confirmPill.className).toContain('min-w-14');
-    expect(confirmPill.className).toContain('whitespace-nowrap');
-    expect(confirmPill.className).toContain('var(--surface-elevated)');
-    expect(confirmPill.className).not.toContain('transparent');
-    if (variant === 'list') {
-      expect(container.querySelector('time')?.parentElement?.className).toContain('invisible');
-    }
-  });
+      fireEvent.click(screen.getByRole('button', { name: '归档' }));
+      const confirmPill = screen.getByRole('button', { name: '归档' });
+      expect(confirmPill.className).toContain('w-max');
+      expect(confirmPill.className).toContain('min-w-14');
+      expect(confirmPill.className).toContain('whitespace-nowrap');
+      expect(confirmPill.className).toContain('var(--surface-elevated)');
+      expect(confirmPill.className).not.toContain('[--button-face-bg:transparent]');
+      if (variant === 'list') {
+        // 让位容器是 time 最近的 div 祖先(time 嵌在 SessionInfoMeta span 内)。
+        expect(container.querySelector('time')?.closest('div')?.className).toContain('invisible');
+        const confirmReserve = Array.from(container.querySelectorAll<HTMLElement>('button[aria-hidden="true"]')).find(
+          (node) =>
+            node.getAttribute('aria-hidden') === 'true' &&
+            node.className.includes('w-max') &&
+            node.textContent === '归档',
+        );
+        expect(confirmReserve).toBeTruthy();
+        // The reserved width must use the same primitive geometry as the visible pill.
+        for (const className of ['cindy-button', 'h-[22px]', 'px-3', 'text-13', 'font-medium', 'border', 'whitespace-nowrap', 'w-max', 'min-w-14']) {
+          expect(confirmReserve?.classList.contains(className)).toBe(true);
+          expect(confirmPill.classList.contains(className)).toBe(true);
+        }
+        expect(confirmReserve).toHaveProperty('disabled', true);
+        expect(confirmReserve).toHaveProperty('tabIndex', -1);
+        expect(confirmReserve?.className).not.toContain('inline-block h-[22px] w-14');
+      }
+    },
+  );
 
   it('keeps running card mode on the stable preview while list mode can show live detail', () => {
     const visualCase = sessionCardVisualCases.find((item) => item.id === 'running-loading');
@@ -582,59 +1134,64 @@ describe('SessionCard visual cases', () => {
     expect(cardContainer.textContent).not.toContain('正在实时扫描并刷新当前执行步骤');
     cleanup();
 
-    const { container: listContainer } = render(createElement(SessionCard, { ...commonProps, variant: 'list' }));
+    const { container: listContainer } = render(
+      createElement(SessionCard, { ...commonProps, variant: 'list' }),
+    );
     expect(listContainer.textContent).toContain('正在实时扫描并刷新当前执行步骤');
   });
 
-  it.each(['list', 'card'] as const)('keeps running %s text colors identical to idle', (variant) => {
-    const visualCase = sessionCardVisualCases.find((item) => item.id === 'running-loading');
-    if (!visualCase) throw new Error('Missing running visual case');
+  it.each(['list', 'card'] as const)(
+    'keeps running %s text colors identical to idle',
+    (variant) => {
+      const visualCase = sessionCardVisualCases.find((item) => item.id === 'running-loading');
+      if (!visualCase) throw new Error('Missing running visual case');
 
-    const renderColors = (isRunning: boolean) => {
-      const { container } = render(
-        createElement(SessionCard, {
-          session: visualCase.session,
-          variant: variant === 'list' ? 'list' : undefined,
-          isActive: false,
-          isRunning,
-          isAttached: false,
-          hasAttentionNotification: false,
-          isSelected: false,
-          onClick: vi.fn(),
-          onAction: vi.fn(),
-          onRename: vi.fn(),
-          onTogglePin: vi.fn(),
-          projectOptions: [],
-        }),
-      );
-      const title =
-        variant === 'list'
-          ? Array.from(container.querySelectorAll('span')).find(
-              (node) => node.className.includes('truncate') && node.textContent?.includes(visualCase.session.title),
-            )
-          : Array.from(container.querySelectorAll('div')).find((node) =>
-              node.className.includes('[-webkit-line-clamp:2]'),
-            );
-      const preview = Array.from(container.querySelectorAll('p')).find((node) =>
-        node.textContent?.includes('正在分析本周项目数据与异常波动。'),
-      );
-      const time = container.querySelector('time');
-      const colors = [title, preview, time].map((node) =>
-        node?.className
-          .split(' ')
-          .filter(
-            (className) =>
-              className === 'text-foreground' ||
-              className.startsWith('text-[var(--text-') ||
-              className === 'text-[var(--cmd-palette-item-meta)]',
-          ),
-      );
-      cleanup();
-      return colors;
-    };
+      const renderColors = (isRunning: boolean) => {
+        const { container } = render(
+          createElement(SessionCard, {
+            session: visualCase.session,
+            variant: variant === 'list' ? 'list' : undefined,
+            isActive: false,
+            isRunning,
+            isAttached: false,
+            hasAttentionNotification: false,
+            isSelected: false,
+            onClick: vi.fn(),
+            onAction: vi.fn(),
+            onRename: vi.fn(),
+            onTogglePin: vi.fn(),
+            projectOptions: [],
+          }),
+        );
+        const title =
+          variant === 'list'
+            ? Array.from(container.querySelectorAll('span')).find(
+                (node) =>
+                  node.className.includes('truncate') &&
+                  node.textContent?.includes(visualCase.session.title),
+              )
+            : container.querySelector('.sidebar-title-marquee__ellipsis');
+        const preview = Array.from(container.querySelectorAll('p')).find((node) =>
+          node.textContent?.includes('正在分析本周项目数据与异常波动。'),
+        );
+        const time = container.querySelector('time');
+        const colors = [title, preview, time].map((node) =>
+          node?.className
+            .split(' ')
+            .filter(
+              (className) =>
+                className === 'text-foreground' ||
+                className.startsWith('text-[var(--text-') ||
+                className === 'text-[var(--cmd-palette-item-meta)]',
+            ),
+        );
+        cleanup();
+        return colors;
+      };
 
-    expect(renderColors(true)).toEqual(renderColors(false));
-  });
+      expect(renderColors(true)).toEqual(renderColors(false));
+    },
+  );
 
   it.each([
     ['done', 'var(--card-status-done)'],
@@ -665,10 +1222,13 @@ describe('SessionCard visual cases', () => {
     const rightStatus = container.querySelector(`[data-sidebar-right-status="${kind}"]`);
     expect(rightStatus?.className).toContain('right-2.5');
     expect(rightStatus?.className).toContain('bottom-2');
-    expect((rightStatus?.firstElementChild as HTMLElement | null)?.style.backgroundColor).toBe(color);
+    expect((rightStatus?.firstElementChild as HTMLElement | null)?.style.backgroundColor).toBe(
+      color,
+    );
 
-    const title = Array.from(container.querySelectorAll('span')).find((node) =>
-      node.className.includes('truncate') && node.textContent?.includes(visualCase.session.title),
+    const title = Array.from(container.querySelectorAll('span')).find(
+      (node) =>
+        node.className.includes('truncate') && node.textContent?.includes(visualCase.session.title),
     );
     expect(
       Array.from(title?.querySelectorAll('span') ?? []).some((node) =>
@@ -732,5 +1292,149 @@ describe('SessionCard visual cases', () => {
         node.className.includes('bg-[var(--card-status-done)]'),
       ),
     ).toBe(true);
+  });
+  it.each(['card', 'list'] as const)('keeps %s status scoped to the task origin', (variant) => {
+    const base = sessionCardVisualCases[0];
+    const session = { ...base.session, id: 'origin-regression', deviceLinkDeviceId: undefined };
+    applyRemoteSessionActivity('other', { sessionId: session.id, phase: 'running' });
+    const view = renderCase(base.id, {
+      session,
+      variant,
+      isRunning: false,
+      hasAttentionNotification: false,
+    });
+    expect(sessionRowEl().querySelector('.session-status-breathing')).toBeNull();
+    view.unmount();
+
+    // The remote row must not fall back to a same-ID local activity either.
+    mocks.runningDetailBySession.set(session.id, 'local turn is running');
+    renderCase(base.id, {
+      session: { ...session, deviceLinkDeviceId: 'target' },
+      variant,
+      isRunning: false,
+      hasAttentionNotification: false,
+    });
+    expect(sessionRowEl().querySelector('.session-status-breathing')).toBeNull();
+    act(() => applyRemoteSessionActivity('target', { sessionId: session.id, phase: 'running' }));
+    expect(sessionRowEl().querySelector('.session-status-breathing')).not.toBeNull();
+    act(() =>
+      applyRemoteSessionActivity('other', {
+        sessionId: session.id,
+        phase: 'completed',
+        attention: false,
+      }),
+    );
+    expect(sessionRowEl().querySelector('.session-status-breathing')).not.toBeNull();
+    act(() =>
+      applyRemoteSessionActivity('target', {
+        sessionId: session.id,
+        phase: 'completed',
+        attention: false,
+      }),
+    );
+    expect(sessionRowEl().querySelector('.session-status-breathing')).toBeNull();
+  });
+
+  describe('任务标签紧跟标题常显', () => {
+    const baseSession = sessionCardVisualCases.find((item) => item.id === 'short-idle-cc')!.session;
+    const tags = [
+      { id: 'tag-red', name: 'Red tag', color: 'red' as const, favoriteOrder: 0, revision: 1 },
+      { id: 'tag-blue', name: 'Blue tag', color: 'blue' as const, favoriteOrder: 1, revision: 1 },
+    ];
+    const baseProps = {
+      isActive: false,
+      isRunning: false,
+      isAttached: false,
+      hasAttentionNotification: false,
+      isSelected: false,
+      onClick: vi.fn(),
+      onAction: vi.fn(),
+      onRename: vi.fn(),
+      onTogglePin: vi.fn(),
+      projectOptions: [],
+    };
+    const variants = ['text', 'list', 'card'] as const;
+    const renderVariant = (variant: (typeof variants)[number], session: typeof baseSession) =>
+      render(
+        variant === 'text'
+          ? createElement(SessionItem, { ...baseProps, session })
+          : createElement(SessionCard, { ...baseProps, session, variant }),
+      );
+    const dotsFor = (container: HTMLElement) =>
+      container.querySelector<HTMLElement>('[aria-label="Red tag, Blue tag"]');
+    const titleNode = (container: HTMLElement) =>
+      Array.from(container.querySelectorAll<HTMLElement>('span, div')).find(
+        (node) => node.children.length === 0 && node.textContent === baseSession.title,
+      )!;
+
+    it.each(variants)('%s: 色球紧跟标题，不在右侧任务信息槽', (variant) => {
+      const { container } = renderVariant(variant, { ...baseSession, tags });
+      const dots = dotsFor(container);
+      expect(dots).not.toBeNull();
+      expect(dots!.querySelectorAll('[aria-label="Red tag"], [aria-label="Blue tag"]')).toHaveLength(2);
+      // 文档顺序:标题在前、色球紧随其后;右侧信息槽(ml-auto)内不含色球。
+      const title = titleNode(container);
+      expect(title.compareDocumentPosition(dots!) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+      const infoSlot = container.querySelector<HTMLElement>('.ml-auto');
+      if (infoSlot) expect(infoSlot.contains(dots!)).toBe(false);
+    });
+
+    it.each(variants)('%s: 无标签时不渲染色球、不占位', (variant) => {
+      const { container } = renderVariant(variant, { ...baseSession, tags: [] });
+      expect(container.querySelector('[aria-label="Red tag"]')).toBeNull();
+      expect(container.querySelector('.h-\\[1\\.22em\\]')).toBeNull();
+    });
+
+    it.each(variants)('%s: 悬停与菜单态不改写色球外圈颜色', (variant) => {
+      const { container } = renderVariant(variant, { ...baseSession, tags });
+      const row = container.querySelector<HTMLElement>('[data-sidebar-session-row="true"]');
+      expect(row).not.toBeNull();
+      // CINDY 的 hover 底是半透明叠加色,用作外圈会透出色球本色、描边消失。
+      expect(row!.className).not.toMatch(/--task-tag-ring-bg:hsl\(var\(--sidebar-item-hover\)\)/);
+    });
+
+    it('card: 操作钮浮出时标题行右侧让位，色球不被遮挡', () => {
+      const { container } = renderVariant('card', { ...baseSession, tags });
+      const titleRow = dotsFor(container)!.closest<HTMLElement>('.items-start')!;
+      expect(titleRow.className).toContain('group-hover/card:pr-14');
+      // 让位与操作钮显隐同源:按操作钮自身 focus-within,而非整张卡片获得焦点。
+      expect(titleRow.className).toContain('peer-focus-within/card-actions:pr-14');
+      expect(titleRow.className).not.toContain('group-focus-within/card:pr-14');
+      const actions = container.querySelector<HTMLElement>('.peer\\/card-actions')!;
+      expect(actions.className).toContain('focus-within:opacity-100');
+      expect(actions.compareDocumentPosition(titleRow) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+      expect(actions.parentElement).toBe(titleRow.parentElement);
+      cleanup();
+      // 无标签时同样让位:悬停跑马灯要在操作钮左侧带完全名(2026-11-09)。
+      const { container: untagged } = renderVariant('card', { ...baseSession, tags: [] });
+      expect(untagged.querySelector('[class*="group-hover/card:pr-14"]')).not.toBeNull();
+    });
+
+    it('card: 归档确认胶囊按实际宽度让位(同文案同样式的隐形占位)', () => {
+      const { container } = renderVariant('card', { ...baseSession, tags });
+      expect(container.querySelector('[data-card-archive-confirm-spacer]')).toBeNull();
+      fireEvent.click(within(container).getByRole('button', { name: '归档' }));
+      const pill = within(container).getByRole('button', { name: '归档' });
+      const spacer = container.querySelector<HTMLElement>('[data-card-archive-confirm-spacer="true"]');
+      expect(spacer).not.toBeNull();
+      expect(spacer!.textContent).toBe(pill.textContent);
+      expect(spacer!.getAttribute('aria-hidden')).toBe('true');
+      expect(spacer!.tabIndex).toBe(-1);
+      expect(spacer!.className).toContain('invisible');
+      for (const cls of ['w-max', 'min-w-14', 'whitespace-nowrap']) {
+        expect(pill.className).toContain(cls);
+        expect(spacer!.className).toContain(cls);
+      }
+      // 占位与色球同在标题行,位于色球之后;确认态不再叠加固定 pr-14。
+      // 占位外包零高度容器:只贡献宽度,不撑高单行标题(卡片高度与瀑布流不动)。
+      const titleRow = dotsFor(container)!.closest<HTMLElement>('.items-start')!;
+      const spacerBox = spacer!.parentElement!;
+      expect(spacerBox.parentElement).toBe(titleRow);
+      expect(spacerBox.className).toContain('h-0');
+      expect(spacerBox.className).toContain('overflow-hidden');
+      expect(spacerBox.className).toContain('shrink-0');
+      expect(titleRow.className).not.toMatch(/(?:^|\s)pr-14(?:\s|$)/);
+      expect(titleRow.className).not.toContain('group-hover/card:pr-14');
+    });
   });
 });

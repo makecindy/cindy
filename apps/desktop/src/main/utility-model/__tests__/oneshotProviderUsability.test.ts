@@ -1,3 +1,5 @@
+import { codexAccountState } from '../../maker-host/codex-account-auth.desktop.js';
+vi.mock('../../maker-host/codex-account-auth.desktop.js', () => ({ codexAccountState: vi.fn() }));
 /**
  * oneshotProviderUsability.test.ts — 凭证同步探测单测(store 全 mock)。
  */
@@ -6,18 +8,16 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 import type { Provider } from '@cindy/model-providers';
 
 vi.mock('../../maker-host/auth-adapters.js', () => ({ readClaudeApiKey: vi.fn() }));
-vi.mock('../../maker-host/claude-oauth-refresh.js', () => ({ getClaudeAiOAuthForSpawn: vi.fn() }));
 vi.mock('../../maker-host/codex-oauth-readiness.js', () => ({ hasChatgptOneshotReadiness: vi.fn() }));
-vi.mock('../../maker-host/generic-oauth.js', () => ({ readCachedGenericOAuthAccessToken: vi.fn() }));
-vi.mock('../../maker-host/grok-oauth-login.js', () => ({ hasGrokOAuthLogin: vi.fn() }));
+vi.mock('../../maker-host/generic-oauth.desktop.js', () => ({ readCachedGenericOAuthAccessToken: vi.fn() }));
+vi.mock('../../maker-host/grok-oauth-login.desktop.js', () => ({ hasGrokOAuthLogin: vi.fn() }));
 vi.mock('../../model-access/effectiveEndpoint.js', () => ({ effectiveXdGatewayBaseUrl: vi.fn() }));
 vi.mock('../../secrets/providerSecretStore.js', () => ({ readCustomProviderKey: vi.fn() }));
 
 import { readClaudeApiKey } from '../../maker-host/auth-adapters.js';
-import { getClaudeAiOAuthForSpawn } from '../../maker-host/claude-oauth-refresh.js';
 import { hasChatgptOneshotReadiness } from '../../maker-host/codex-oauth-readiness.js';
-import { readCachedGenericOAuthAccessToken } from '../../maker-host/generic-oauth.js';
-import { hasGrokOAuthLogin } from '../../maker-host/grok-oauth-login.js';
+import { readCachedGenericOAuthAccessToken } from '../../maker-host/generic-oauth.desktop.js';
+import { hasGrokOAuthLogin } from '../../maker-host/grok-oauth-login.desktop.js';
 import { effectiveXdGatewayBaseUrl } from '../../model-access/effectiveEndpoint.js';
 import { readCustomProviderKey } from '../../secrets/providerSecretStore.js';
 
@@ -37,7 +37,6 @@ function provider(over: Partial<Provider> & { id: string }): Provider {
 
 beforeEach(() => {
   vi.mocked(readClaudeApiKey).mockReset();
-  vi.mocked(getClaudeAiOAuthForSpawn).mockReset();
   vi.mocked(hasChatgptOneshotReadiness).mockReset();
   vi.mocked(readCachedGenericOAuthAccessToken).mockReset();
   vi.mocked(hasGrokOAuthLogin).mockReset();
@@ -57,11 +56,15 @@ describe('hasOneshotProviderCredential · 内置四家', () => {
     expect(hasOneshotProviderCredential(provider({ id: 'xd' }), 'codex')).toBe(false);
   });
 
-  it('anthropic/openai/xai 各自跟订阅登录态;其余内置 id 一律不可用', () => {
-    vi.mocked(getClaudeAiOAuthForSpawn).mockReturnValue({ accessToken: 't' } as never);
-    expect(hasOneshotProviderCredential(provider({ id: 'anthropic' }), 'claude-code')).toBe(true);
-    vi.mocked(getClaudeAiOAuthForSpawn).mockReturnValue(null);
+  it('openai/xai 各自跟订阅登录态;Claude 订阅与其余内置 id 一律不可用', () => {
+    // Claude 订阅只供内置 Claude Code CLI 用它自己的登录,快问快答直连不可用,
+    // 与任何其它登录态无关。
+    vi.mocked(readClaudeApiKey).mockReturnValue('k');
+    vi.mocked(effectiveXdGatewayBaseUrl).mockReturnValue('https://gw.example.com');
+    vi.mocked(hasChatgptOneshotReadiness).mockReturnValue(true);
+    vi.mocked(hasGrokOAuthLogin).mockReturnValue(true);
     expect(hasOneshotProviderCredential(provider({ id: 'anthropic' }), 'claude-code')).toBe(false);
+    expect(hasOneshotProviderCredential(provider({ id: 'anthropic' }), 'codex')).toBe(false);
 
     vi.mocked(hasChatgptOneshotReadiness).mockReturnValue(true);
     expect(hasOneshotProviderCredential(provider({ id: 'openai' }), 'codex')).toBe(true);
@@ -117,10 +120,54 @@ describe('hasOneshotProviderCredential · 自定义供应商', () => {
     expect(hasOneshotProviderCredential(p, 'codex')).toBe(true);
   });
 
+  it('legacy custom xai 的 OAuth 凭证仍按存储 id 读取', () => {
+    const oauth = { issuer: 'https://issuer.example.com' } as never;
+    const p = custom(
+      'custom:xai',
+      { codex: { upstream: 'https://up.example.com', authStrategy: 'oauth-token' } },
+      { method: 'oauth', oauth },
+    );
+    vi.mocked(readCachedGenericOAuthAccessToken).mockReturnValue('cached' as never);
+
+    expect(hasOneshotProviderCredential(p, 'codex')).toBe(true);
+    expect(readCachedGenericOAuthAccessToken).toHaveBeenCalledWith('xai', oauth);
+  });
+
   it('不支持的鉴权策略 / 缺 routing → 不可用', () => {
     const bespoke = custom('c4', { codex: { upstream: 'https://up.example.com', authStrategy: 'bespoke' as never } });
     expect(hasOneshotProviderCredential(bespoke, 'codex')).toBe(false);
     const noRouting = custom('c5', {});
     expect(hasOneshotProviderCredential(noRouting, 'codex')).toBe(false);
   });
+});
+
+it('probes each native account instead of borrowing the builtin login', () => {
+  vi.mocked(codexAccountState).mockReturnValue({ authenticated: true });
+  vi.mocked(hasGrokOAuthLogin).mockReturnValue(true);
+  for (const native of ['codex', 'xai'] as const) {
+    const p = provider({ id: `${native}-work`, source: 'user', auth: { method: 'oauth', native } });
+    expect(hasOneshotProviderCredential(p, 'codex')).toBe(true);
+  }
+  expect(codexAccountState).toHaveBeenCalledWith('codex-work');
+  expect(hasGrokOAuthLogin).toHaveBeenCalledWith('xai-work');
+  vi.mocked(codexAccountState).mockReturnValue({ authenticated: false });
+  vi.mocked(hasGrokOAuthLogin).mockReturnValue(false);
+  for (const native of ['codex', 'xai'] as const)
+    expect(hasOneshotProviderCredential(provider({ id: `${native}-work`, source: 'user', auth: { method: 'oauth', native } }), 'codex')).toBe(false);
+});
+
+it('retired independent Claude accounts are never usable, whatever else is logged in', () => {
+  vi.mocked(codexAccountState).mockReturnValue({ authenticated: true });
+  vi.mocked(hasGrokOAuthLogin).mockReturnValue(true);
+  vi.mocked(readCustomProviderKey).mockReturnValue('k' as never);
+  vi.mocked(readCachedGenericOAuthAccessToken).mockReturnValue('cached' as never);
+  const p = provider({
+    id: 'claude-work',
+    source: 'user',
+    agents: ['claude-code'],
+    auth: { method: 'oauth', native: 'claude' },
+    routing: { 'claude-code': { upstream: 'https://api.anthropic.com', authStrategy: 'none' } },
+  });
+  expect(hasOneshotProviderCredential(p, 'claude-code')).toBe(false);
+  expect(hasOneshotProviderCredential(p, 'codex')).toBe(false);
 });

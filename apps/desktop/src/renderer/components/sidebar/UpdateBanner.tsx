@@ -1,3 +1,4 @@
+import { Button } from '@/components/ui/button';
 /**
  * UpdateBanner — F4: Sidebar update notification banner.
  * ---------------------------------------------------------------------------
@@ -5,6 +6,10 @@
  * (status === 'ready'), or while it's busy preparing an even newer one on top
  * of the already-ready patch (status === 'superseding'). Sits between the upper
  * content slot and UserInfoSection in the Sidebar shell.
+ *
+ * 自动弹出前先问「有没有任务在跑」(与「立即重启」二次确认同一条探针)。有任务时展开态
+ * 不占侧栏,只留头像行火焰;收起态那颗小火焰本身就是最小化提醒,继续留着。全部停下后再
+ * 弹出完整横幅。用户点 X 关掉的不自动恢复。
  *
  * 点「立即重启」不再无条件多要一次确认:先查「有没有任务在跑」(逻辑 turn + turn 已结束但
  * 仍在调模型的后台活动,两个来源都要看),**只有真的有任务时**才就地切换成确认态,确认没有
@@ -40,20 +45,27 @@
  * 下载完成后主进程会把 status 切回 'ready' 且 version 升级到新版,banner 自动刷新。
  */
 
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useRef, useState, type ReactNode } from 'react';
 import { useTranslation } from 'react-i18next';
 import { Flame, Check, X } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import { Spinner } from '@/components/ui/spinner';
 import { useUpdateStatus } from '@/hooks/useUpdateStatus';
 import { useUpdateBannerDismiss } from '@/hooks/useUpdateBannerDismiss';
+import { useDeferUpdateBannerWhileBusy } from '@/hooks/useDeferUpdateBannerWhileBusy';
 import { useLocale } from '@/hooks/useLocale';
 import { ConfirmDialog } from '@/components/ui/confirm-dialog';
 import { Tip } from '@/components/ui/tooltip';
 import { fetchReleaseNotes } from '@/release-notes';
+import {
+  formatRelaunchActivityHint,
+  normalizeRelaunchActivitySummary,
+  type RelaunchActivitySummary,
+} from '../../../shared/relaunchActivitySummary';
 
 // 运行期端点清单(dev/packaged 都在启动阻断后有真值,烘焙兜底已退役)
 const websiteUrl = () => window.electronAPI.clientEndpoints.websiteUrl;
+const WINDOWS_VC_RUNTIME_DOWNLOAD_URL = 'https://aka.ms/vs/17/release/vc_redist.x64.exe';
 
 interface UpdateBannerProps {
   isCollapsed: boolean;
@@ -62,17 +74,32 @@ interface UpdateBannerProps {
    * 提供;未传时文字链整体不渲染。
    */
   onOpenVersionNotice?: (version: string) => void;
+  /**
+   * 状态进入安装前置条件错误时是否自动弹出提示。侧栏实例负责自动弹出；
+   * 浮窗副本关闭它，避免同一个提示叠开两次（点击操作触发的弹窗不受影响）。
+   */
+  autoOpenPrerequisiteDialogs?: boolean;
 }
 
-export function UpdateBanner({ isCollapsed, onOpenVersionNotice }: UpdateBannerProps) {
+// 状态写法与 Button 的 variant 相同的修饰符才能替换它；只写 enabled:hover 优先级更低，不生效。
+export const UPDATE_BUTTON_TREATMENT =
+  '[--button-face-bg:var(--update-btn-bg)] [--button-face-border:var(--update-btn-border)] text-[var(--update-btn-text)] enabled:[&:not([aria-disabled=true])]:hover:[--button-face-bg:var(--update-btn-hover)] enabled:[&:not([aria-disabled=true])]:hover:[--button-face-border:var(--update-btn-border)] enabled:[&:not([aria-disabled=true])]:active:[--button-face-bg:var(--update-btn-pressed)] enabled:[&:not([aria-disabled=true])]:active:[--button-face-border:var(--update-btn-border)]';
+
+export function UpdateBanner({
+  isCollapsed,
+  onOpenVersionNotice,
+  autoOpenPrerequisiteDialogs = true,
+}: UpdateBannerProps) {
   const { status, version, errorCode } = useUpdateStatus();
   const { effectiveLocale } = useLocale();
   // 用户主动关闭态(仅本次进程内存,由 UserInfoSection 的火焰按钮唤回)。
-  // status/version 变化时下面 effect 会自动 restore,新一版更新到达时 banner
-  // 重新出现,不会被上一版的 dismiss 状态吞掉。
-  const { dismissed, dismiss, restore, isNewUpdateAfterDismiss } = useUpdateBannerDismiss();
+  // 新一版更新到达时 useDeferUpdateBannerWhileBusy 会清掉上一版的决定并重新探针。
+  const { dismissed, dismiss, reason } = useUpdateBannerDismiss();
+  const hideUntilBusyDecision = useDeferUpdateBannerWhileBusy(status, version);
   // 就地中断警告态:只在点击入口时探到「有任务在跑」才进入。
   const [confirming, setConfirming] = useState(false);
+  // 只有全部类别都读出来才替换通用警告。null = 沿用原来那句。
+  const [activitySummary, setActivitySummary] = useState<RelaunchActivitySummary | null>(null);
   // 入口点击的 busy 探针在飞标记 —— 防重入。探针是一次 IPC round trip(毫秒级),所以
   // 刻意不给 loading UI(几毫秒的 spinner 只会闪一下),只用 ref 挡住连点导致的
   // 重复探针 / 重复重启。与 WindowControls 的关窗入口保持同样的「无 loading 态」处理。
@@ -101,6 +128,8 @@ export function UpdateBanner({ isCollapsed, onOpenVersionNotice }: UpdateBannerP
   // 区别于 status 变化等其它导致的复位。
   const restoreFocusRef = useRef(false);
   const [showTranslocatedDialog, setShowTranslocatedDialog] = useState(false);
+  const [showWindowsRuntimeDialog, setShowWindowsRuntimeDialog] = useState(false);
+  const [showLinuxInstallationDialog, setShowLinuxInstallationDialog] = useState(false);
   const { t } = useTranslation();
 
   const [showSpawnFailedDialog, setShowSpawnFailedDialog] = useState(false);
@@ -111,38 +140,41 @@ export function UpdateBanner({ isCollapsed, onOpenVersionNotice }: UpdateBannerP
   // the app is running from a read-only App Translocation path.
   const isTranslocated = status === 'error' && errorCode === 'translocated';
   const isSpawnFailed = status === 'error' && errorCode === 'updater_spawn_failed';
+  const isWindowsRuntimeMissing =
+    status === 'ready' && errorCode === 'windows_vc_runtime_missing';
+  const isLinuxInstallationUnsupported =
+    status === 'ready' && errorCode === 'linux_installation_unsupported';
   const isPreparing = status === 'superseding';
 
   useEffect(() => {
-    if (isSpawnFailed) setShowSpawnFailedDialog(true);
-  }, [isSpawnFailed]);
+    if (autoOpenPrerequisiteDialogs && isLinuxInstallationUnsupported) setShowLinuxInstallationDialog(true);
+  }, [autoOpenPrerequisiteDialogs, isLinuxInstallationUnsupported]);
 
   useEffect(() => {
-    if (isTranslocated) setShowTranslocatedDialog(true);
-  }, [isTranslocated]);
+    if (autoOpenPrerequisiteDialogs && isWindowsRuntimeMissing) setShowWindowsRuntimeDialog(true);
+  }, [autoOpenPrerequisiteDialogs, isWindowsRuntimeMissing]);
+
+  useEffect(() => {
+    if (autoOpenPrerequisiteDialogs && isSpawnFailed) setShowSpawnFailedDialog(true);
+  }, [autoOpenPrerequisiteDialogs, isSpawnFailed]);
+
+  useEffect(() => {
+    if (autoOpenPrerequisiteDialogs && isTranslocated) setShowTranslocatedDialog(true);
+  }, [autoOpenPrerequisiteDialogs, isTranslocated]);
 
   // 一旦不再是 ready(如被 superseding 顶掉 / 出错),复位确认态,避免残留一个
   // 指向旧补丁的「仍要重启」;同时作废在飞的探针 —— 它的结论建立在「当前补丁可装」之上。
   useEffect(() => {
-    if (status !== 'ready') {
+    if (status !== 'ready' || isWindowsRuntimeMissing || isLinuxInstallationUnsupported) {
       relaunchEpochRef.current += 1;
+      setActivitySummary(null);
       setConfirming(false);
     }
-  }, [status]);
+  }, [status, isWindowsRuntimeMissing, isLinuxInstallationUnsupported]);
 
   // 卸载时同样作废在飞的探针。卸载后 setConfirming 只是一次无效更新,但 handleRelaunch
   // 会真的把 app 重启掉 —— 这条 cleanup 不是防 React 警告,是防意外重启。
   useEffect(() => () => { relaunchEpochRef.current += 1; }, []);
-
-  // 新更新到达时自动 restore:isNewUpdateAfterDismiss 先检查当前 status 是否为
-  // active update 态(ready / superseding),再对比 dismiss 时的快照——两个条件
-  // 都满足才 restore(),从而避免 remount 时 useUpdateStatus() 经历 idle→ready
-  // 的初始水合过程中误触 restore。
-  useEffect(() => {
-    if (isNewUpdateAfterDismiss(status, version ?? null)) {
-      restore();
-    }
-  }, [status, version, restore, isNewUpdateAfterDismiss]);
 
   // 焦点管理:进入确认态 → 聚焦「取消」(安全默认 + 键盘可达);主动取消退出确认态 →
   // 把焦点还给入口「立即重启」按钮,避免焦点掉到 body。
@@ -168,7 +200,9 @@ export function UpdateBanner({ isCollapsed, onOpenVersionNotice }: UpdateBannerP
   //     让探测跟着弹窗开关反复重跑。
   const canOpenNotice = Boolean(onOpenVersionNotice);
   useEffect(() => {
-    if (status !== 'ready' || !version || !canOpenNotice || isCollapsed) {
+    // 同版本就绪 = 换装 Apple 芯片包，不展示公告链接，也就不必探测。
+    const nativeBuildSwitch = version === window.electronAPI?.appVersion;
+    if (status !== 'ready' || !version || !canOpenNotice || isCollapsed || nativeBuildSwitch) {
       setHasNotes(false);
       return;
     }
@@ -182,6 +216,7 @@ export function UpdateBanner({ isCollapsed, onOpenVersionNotice }: UpdateBannerP
   // 取消:先打标记再复位,让上面的 effect 在入口按钮重新挂载后把焦点还回去。
   const handleCancelConfirm = () => {
     restoreFocusRef.current = true;
+    setActivitySummary(null);
     setConfirming(false);
   };
 
@@ -193,21 +228,30 @@ export function UpdateBanner({ isCollapsed, onOpenVersionNotice }: UpdateBannerP
   // 的探针结论不能反过来推翻它(否则轻则 confirming 残留、重则直接重启)。
   const handleDismiss = () => {
     relaunchEpochRef.current += 1;
+    setActivitySummary(null);
     setConfirming(false);
     dismiss(status, version ?? null);
   };
 
-  // Banner is visible for ready (relaunch available), superseding (preparing
-  // a newer version on top of an already-ready patch), or error fallback
-  // dialogs. Everything else hides the banner.
-  if (status !== 'ready' && !isPreparing && !isTranslocated && !isSpawnFailed) return null;
-
-  // 用户主动 dismiss 后隐藏 banner —— 只作用于 ready/superseding,error 态
-  // 只弹 modal 与 dismiss 无关。dismiss 逻辑在 handleDismiss 里把 confirming 一并
-  // 复位,这里只负责渲染分支。
-  if (dismissed && (status === 'ready' || isPreparing)) return null;
+  // 展开态的完整横幅:用户关掉、有任务在跑、或探针还没给出「弹出 / 让路」决定时
+  // 都不渲染,避免闪一下再收成火焰。收起态那颗小火焰本身就是最小化提醒,busy
+  // 让路和探针空窗都要留着;只有用户点过 X 才连它一起藏。
+  //
+  // 不会跟 UserInfoSection 头像行火焰叠两颗:Sidebar 把 UserInfoSection.isCollapsed
+  // 绑在 isRail 上,rail 分支只渲染头像、没有火焰;展开态本组件在 hideExpandedBanner
+  // 时 return null,只留头像行那颗。busy 时若把折叠火焰也藏掉,rail 会完全没入口。
+  const hideExpandedBanner =
+    hideUntilBusyDecision
+    || (dismissed && (status === 'ready' || isPreparing));
 
   const handleRelaunch = () => {
+    // Main may emit exactly the same prerequisite error again. Keep the
+    // prompt visible without relying on a false -> true error transition.
+    if (isLinuxInstallationUnsupported) {
+      setActivitySummary(null);
+      setConfirming(false);
+      setShowLinuxInstallationDialog(true);
+    }
     const theme = document.documentElement.classList.contains('dark') ? 'dark' : 'light';
     window.electronAPI.relaunchToUpdate(theme);
   };
@@ -232,15 +276,44 @@ export function UpdateBanner({ isCollapsed, onOpenVersionNotice }: UpdateBannerP
   // 卸载、已就绪补丁可能被 superseding 顶掉。少了它们,「点了稍后却重启」「装回旧补丁」
   // 「confirming 残留到下次唤回」三种都会真实发生。
   const handleRelaunchClick = async (): Promise<void> => {
+    if (isLinuxInstallationUnsupported) {
+      setShowLinuxInstallationDialog(true);
+      return;
+    }
+    if (isWindowsRuntimeMissing) {
+      setShowWindowsRuntimeDialog(true);
+      return;
+    }
+    await probeBeforeRelaunch();
+  };
+
+  const probeBeforeRelaunch = async (): Promise<void> => {
     if (relaunchProbeRef.current) return;
     relaunchProbeRef.current = true;
     const epoch = relaunchEpochRef.current;
-    // 初值取 true:探针没给出可信答案的任何路径(reject、桥同步 throw)都落在保守的那一侧。
+    // 初值取 true:探针没给出可信答案的任何路径(reject、桥同步 throw、形状不对)都落在保守的那一侧。
+    // 是否确认只看 busy 布尔。不能把返回对象当成 true,否则 busy 为 false 的对象也会被拦下。
     let hasInFlight = true;
+    let summary: RelaunchActivitySummary | null = null;
     try {
-      hasInFlight = await window.electronAPI.anyActivityBlockingRelaunch();
+      const describe = window.electronAPI.describeRelaunchBlockingActivity;
+      if (describe) {
+        const normalized = normalizeRelaunchActivitySummary(await describe());
+        if (!normalized) {
+          hasInFlight = true;
+        } else {
+          hasInFlight = normalized.busy;
+          summary = normalized.busy && normalized.categories.length > 0
+            ? { categories: normalized.categories, companionNames: normalized.companionNames }
+            : null;
+        }
+      } else {
+        const busy = await window.electronAPI.anyActivityBlockingRelaunch();
+        hasInFlight = busy === true ? true : busy === false ? false : true;
+      }
     } catch {
       hasInFlight = true;
+      summary = null;
     } finally {
       relaunchProbeRef.current = false;
     }
@@ -249,8 +322,11 @@ export function UpdateBanner({ isCollapsed, onOpenVersionNotice }: UpdateBannerP
     // status 变化的作废由上面那个 effect 打点,但 effect 会晚一拍;这里直接读最新值,
     // 关掉「已 setState 未跑 effect」的那段窗口。两道判定针对同一不变量的不同触发路径。
     if (statusRef.current !== 'ready') return;
-    if (hasInFlight) setConfirming(true);
-    else handleRelaunch();
+    if (hasInFlight) {
+      setShowLinuxInstallationDialog(false);
+      setActivitySummary(summary);
+      setConfirming(true);
+    } else handleRelaunch();
   };
 
   const handleMoveToApplications = () => {
@@ -268,11 +344,32 @@ export function UpdateBanner({ isCollapsed, onOpenVersionNotice }: UpdateBannerP
     window.open(websiteUrl(), '_blank');
   };
 
+  const handleWindowsRuntimeDownload = () => {
+    setShowWindowsRuntimeDialog(false);
+    void window.electronAPI.openExternal(WINDOWS_VC_RUNTIME_DOWNLOAD_URL);
+  };
+
+  const handlePrerequisiteRetry = () => {
+    const theme = document.documentElement.classList.contains('dark') ? 'dark' : 'light';
+    window.electronAPI.relaunchToUpdate(theme);
+  };
+
+  const handleLinuxDialogOpenChange = (open: boolean) => {
+    if (!open) relaunchEpochRef.current += 1;
+    setShowLinuxInstallationDialog(open);
+  };
+
   // 文字链要显示的版本 —— undefined 即不显示。ready 态之外(superseding / error)没有
   // 可信版本号,confirming 态则刻意让位给两步确认。hasNotes 已经蕴含「ready + 该版本
   // 公告可渲染」,这里再显式列出条件,读代码时不必回溯 effect。
+  // 版本号不变却已就绪 = Rosetta 下的 Intel 包换装 Apple 芯片原生包（主进程只在这种情况
+  // 放行同版本补丁）。「已更新到 当前版本」会让人困惑，改说换装；也没有新的更新公告可看。
+  const isNativeBuildSwitch = status === 'ready' && !!version
+    && version === window.electronAPI?.appVersion;
   const notesVersion =
-    status === 'ready' && !confirming && hasNotes && version ? version : undefined;
+    status === 'ready' && !confirming && hasNotes && version && !isNativeBuildSwitch
+      ? version
+      : undefined;
 
   const versionSuffix = version ? ` (v${version})` : '';
   const versionForAria = version ?? 'latest';
@@ -282,6 +379,52 @@ export function UpdateBanner({ isCollapsed, onOpenVersionNotice }: UpdateBannerP
   // to vX" body would be misleading (version may be missing, button does
   // nothing because the patch has already been cleared).
   const isErrorOnly = isTranslocated || isSpawnFailed;
+
+  const withPrerequisiteDialogs = (content: ReactNode) => (
+    <>
+      {isLinuxInstallationUnsupported && (
+        <ConfirmDialog
+          open={showLinuxInstallationDialog}
+          onOpenChange={handleLinuxDialogOpenChange}
+          title={t('update.linuxInstallation.title')}
+          description={t('update.linuxInstallation.description')}
+          confirmText={t('update.linuxInstallation.guide')}
+          tertiaryText={t('update.linuxInstallation.retry')}
+          cancelText={t('update.linuxInstallation.later')}
+          autoFocusConfirm
+          onConfirm={() => {
+            handleLinuxDialogOpenChange(false);
+            void window.electronAPI.openExternal('https://github.com/makecindy/cindy/blob/main/docs/linux.md');
+          }}
+          onCancel={() => handleLinuxDialogOpenChange(false)}
+          onTertiary={() => {
+            void probeBeforeRelaunch();
+          }}
+        />
+      )}
+      {isWindowsRuntimeMissing && (
+        <ConfirmDialog
+          open={showWindowsRuntimeDialog}
+          onOpenChange={setShowWindowsRuntimeDialog}
+          title={t('update.windowsRuntimeMissing.title')}
+          description={t('update.windowsRuntimeMissing.description')}
+          confirmText={t('update.windowsRuntimeMissing.download')}
+          tertiaryText={t('update.windowsRuntimeMissing.retry')}
+          cancelText={t('update.windowsRuntimeMissing.later')}
+          autoFocusConfirm
+          onConfirm={handleWindowsRuntimeDownload}
+          onTertiary={handlePrerequisiteRetry}
+          onCancel={() => setShowWindowsRuntimeDialog(false)}
+        />
+      )}
+      {content}
+    </>
+  );
+
+  // Banner is visible for ready (relaunch available), superseding (preparing
+  // a newer version on top of an already-ready patch), or error fallback
+  // dialogs. Everything else hides the banner.
+  if (status !== 'ready' && !isPreparing && !isTranslocated && !isSpawnFailed) return null;
 
   if (isErrorOnly) {
     // onOpenChange is a no-op so the user can't accidentally dismiss the
@@ -316,14 +459,23 @@ export function UpdateBanner({ isCollapsed, onOpenVersionNotice }: UpdateBannerP
     );
   }
 
+  // The prerequisite dialog must not be suppressed by the normal busy/dismiss
+  // rules. After the user chooses "later", the usual banner visibility rules
+  // resume and clicking the update entry opens this dialog again. Explicit
+  // retry confirmation also remains visible when the banner was busy-deferred.
+  if (!isCollapsed && hideExpandedBanner && !confirming) return withPrerequisiteDialogs(null);
+  if (isCollapsed && dismissed && reason === 'user' && !confirming && (status === 'ready' || isPreparing)) {
+    return withPrerequisiteDialogs(null);
+  }
+
   // ── Collapsed state: icon only ──
   if (isCollapsed) {
     // 确认态(仅在有任务在跑时出现):上方 ✓(仍要重启,占据原 Flame 图标位置,鼠标零位移),
     // 下方 ✕(取消)。收起态没有文案位置,「会打断进行中的任务」只能落在 ✓ 的 tooltip 上。
     if (confirming && !isPreparing) {
-      return (
+      return withPrerequisiteDialogs(
         <div className="flex flex-col items-center gap-0.5 border-t border-sidebar-border py-1.5">
-          <Tip text={t('update.banner.confirmTooltip')} side="right">
+          <Tip text={formatRelaunchActivityHint((key, vars) => t(key, vars), activitySummary) ?? t('update.banner.confirmTooltip')} side="right">
             <button
               onClick={handleRelaunch}
               aria-label={t('update.banner.confirmAria')}
@@ -350,11 +502,11 @@ export function UpdateBanner({ isCollapsed, onOpenVersionNotice }: UpdateBannerP
               <X className="h-5 w-5" strokeWidth={2} />
             </button>
           </Tip>
-        </div>
+        </div>,
       );
     }
 
-    return (
+    return withPrerequisiteDialogs(
       <div className="flex flex-col items-center border-t border-sidebar-border">
         <Tip
           text={isPreparing
@@ -385,12 +537,12 @@ export function UpdateBanner({ isCollapsed, onOpenVersionNotice }: UpdateBannerP
             </div>
           </button>
         </Tip>
-      </div>
+      </div>,
     );
   }
 
   // ── Expanded state: full banner ──
-  return (
+  return withPrerequisiteDialogs(
     <div className="flex select-none flex-col border-t border-sidebar-border">
       <div className="relative flex flex-col items-center gap-[10px] px-4 py-3">
         {/* X dismiss —— 右上角。error 态 body 本就隐藏,superseding 允许 dismiss。
@@ -420,7 +572,9 @@ export function UpdateBanner({ isCollapsed, onOpenVersionNotice }: UpdateBannerP
             ? t('update.banner.preparingTitle')
             : confirming
               ? t('update.banner.confirmTitle')
-              : t('update.banner.title', { version: version ?? '…' })}
+              : isNativeBuildSwitch
+                ? t('update.banner.nativeBuildTitle')
+                : t('update.banner.title', { version: version ?? '…' })}
         </p>
 
         {/* Subtitle + 「查看更新公告」文字链 —— 同一视觉组(gap-1),所以链接读作副标题的
@@ -439,8 +593,10 @@ export function UpdateBanner({ isCollapsed, onOpenVersionNotice }: UpdateBannerP
             {isPreparing
               ? t('update.banner.preparingSubtitle')
               : confirming
-                ? t('update.banner.confirmBusyHint')
-                : t('update.banner.subtitle')}
+                ? (formatRelaunchActivityHint((key, vars) => t(key, vars), activitySummary) ?? t('update.banner.confirmBusyHint'))
+                : isNativeBuildSwitch
+                  ? t('update.banner.nativeBuildSubtitle')
+                  : t('update.banner.subtitle')}
           </p>
           {notesVersion && (
             <button
@@ -456,69 +612,82 @@ export function UpdateBanner({ isCollapsed, onOpenVersionNotice }: UpdateBannerP
           )}
         </div>
 
-        {/* Actions.
-            - superseding: disabled pill + spinner.
-            - confirming:  竖排 —— 主按钮「仍要重启」占入口按钮原位(鼠标零位移),
-                           「取消」在其下,次级 ghost,需刻意移动 → 打断任务前的最后一道闸。
-            - ready:       单个「立即重启」入口 pill,点击后按 busy 探针决定直接重启还是
-                           先进中断警告态。 */}
+        {/* X dismiss —— 右上角。error 态 body 本就隐藏,superseding 允许 dismiss。
+            hover 前 muted、hover 后主色,不抢主视觉;绝对定位保证不影响居中主内容。 */}
         {isPreparing ? (
-          <button
+          <Button
+            variant="cta"
+            size="md"
+            compact
+            loading={true}
             disabled
             aria-label={t('update.banner.preparingAria')}
-            className={cn(
-              'flex w-full items-center justify-center gap-2 rounded-full border py-2',
-              'text-[13px] font-medium',
-              'bg-[var(--update-btn-bg)] border-[var(--update-btn-border)] text-[var(--update-btn-text)]',
-              'cursor-default opacity-70',
-            )}
+            className={cn('w-full', UPDATE_BUTTON_TREATMENT)}
           >
-            <Spinner size={14} />
             {t('update.banner.preparingButton')}
-          </button>
+          </Button>
         ) : confirming ? (
           <div className="flex w-full flex-col gap-2">
-            <button
+            <Button
+              variant="cta"
+              size="md"
+              compact
               onClick={handleRelaunch}
               aria-label={t('update.banner.confirmAria')}
-              className={cn(
-                'flex w-full items-center justify-center gap-2 rounded-full border py-2',
-                'text-[13px] font-medium transition-colors',
-                'bg-[var(--update-btn-bg)] border-[var(--update-btn-border)] text-[var(--update-btn-text)]',
-                'hover:bg-[var(--update-btn-hover)]',
-              )}
+              className={cn('w-full', UPDATE_BUTTON_TREATMENT)}
             >
               {t('update.banner.confirmButton')}
-            </button>
-            <button
+            </Button>
+            <Button
+              variant="secondary"
+              size="sm"
+              tone="quiet"
+              compact
               ref={cancelBtnRef}
               onClick={handleCancelConfirm}
               aria-label={t('update.banner.cancelAria')}
-              className={cn(
-                'flex w-full items-center justify-center rounded-full py-1.5',
-                'text-[13px] font-medium text-sidebar-muted transition-colors',
-                'hover:bg-sidebar-item-hover',
-              )}
+              className="w-full"
             >
               {t('update.banner.cancel')}
-            </button>
+            </Button>
           </div>
         ) : (
-          <button
+          <Button
+            variant="cta"
+            size="md"
+            compact
             ref={relaunchTriggerRef}
             onClick={() => { void handleRelaunchClick(); }}
             aria-label={t('update.banner.ariaExpanded', { version: version ?? '' })}
-            className={cn(
-              'flex w-full items-center justify-center gap-2 rounded-full border py-2',
-              'text-[13px] font-medium transition-colors',
-              'bg-[var(--update-btn-bg)] border-[var(--update-btn-border)] text-[var(--update-btn-text)]',
-              'hover:bg-[var(--update-btn-hover)]',
-            )}
+            className={cn('w-full', UPDATE_BUTTON_TREATMENT)}
           >
             {t('update.banner.button')}
-          </button>
+          </Button>
         )}
       </div>
+    </div>,
+  );
+}
+
+/** 原侧栏不可见时，显式请求的更新提醒仍在窗口左下角显示。 */
+export function FloatingUpdateBanner({
+  enabled,
+  ownsPrerequisiteDialogs = false,
+  onOpenVersionNotice,
+}: {
+  enabled: boolean;
+  /** 没有侧栏实例（设置页）时由浮窗负责自动弹出安装提示；否则交给侧栏，避免叠开两次。 */
+  ownsPrerequisiteDialogs?: boolean;
+} & Pick<UpdateBannerProps, 'onOpenVersionNotice'>) {
+  const { revealRequested, pinnedByUser, dismissed } = useUpdateBannerDismiss();
+  if (!enabled || (!revealRequested && (!pinnedByUser || dismissed))) return null;
+  return (
+    <div className="fixed bottom-4 left-4 z-50 w-72 max-w-[calc(100vw-2rem)] rounded-xl border border-sidebar-border bg-sidebar empty:hidden">
+      <UpdateBanner
+        isCollapsed={false}
+        onOpenVersionNotice={onOpenVersionNotice}
+        autoOpenPrerequisiteDialogs={ownsPrerequisiteDialogs}
+      />
     </div>
   );
 }

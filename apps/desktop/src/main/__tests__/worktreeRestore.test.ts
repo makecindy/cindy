@@ -23,6 +23,7 @@ const storeGetAllMock = vi.fn();
 const storeDelMock = vi.fn();
 const applyIncludeMock = vi.fn();
 const copyClaudeSiviDirsMock = vi.fn();
+let dbFailure = false;
 let dbWorktreePath: string | null = null;
 let dbWorkingDir: string | null = null;
 let dbBindingRows: Array<{
@@ -61,6 +62,7 @@ vi.mock('../localDb/client/current', () => ({
       select: (selection: Record<string, unknown>) => ({
         from: () => ({
           where: () => {
+            if (dbFailure) throw new Error('database temporarily unavailable');
             if ('id' in selection) return dbOwnerRows;
             if (dbBindingRows.length > 0) return [dbBindingRows.shift()!];
             return dbWorktreePath === undefined
@@ -99,6 +101,7 @@ describe('worktree restore', () => {
     dbWorktreePath = wtPath;
     dbWorkingDir = wtPath;
     dbBindingRows = [];
+    dbFailure = false;
     dbOwnerRows = [];
     gitExecMock.mockReset().mockResolvedValue({ stdout: '', stderr: '' });
     storeSetMock.mockReset().mockResolvedValue(undefined);
@@ -560,6 +563,30 @@ describe('worktree restore', () => {
     const addWorktreeIndex = calls.findIndex((args) => args[0] === '-c' && args[3] === 'add');
     expect(calls[createBranchIndex]).toEqual(['branch', 'xdt/wt1', 'refs/remotes/origin/xdt/wt1']);
     expect(createBranchIndex).toBeLessThan(addWorktreeIndex);
+  });
+
+  it('does not classify a healthy directory as gone after a transient DB failure', async () => {
+    fsSync.mkdirSync(wtPath, { recursive: true });
+    dbWorktreePath = null;
+    dbFailure = true;
+    await expect(mod.getManagedWorktreeReadinessForSession('s1', wtPath)).resolves.toBe('retry');
+    dbFailure = false;
+    await expect(mod.getManagedWorktreeReadinessForSession('s1', wtPath)).resolves.toBe('ready');
+    expect(gitExecMock).not.toHaveBeenCalled();
+  });
+
+  it('only reports gone after a successful branch inventory confirms missing refs', async () => {
+    await expect(mod.getManagedWorktreeReadinessForSession('s1', wtPath)).resolves.toBe('gone');
+    gitExecMock.mockRejectedValue(new Error('git temporarily unavailable'));
+    await expect(mod.getManagedWorktreeReadinessForSession('s1', wtPath)).resolves.toBe('retry');
+  });
+
+  it('does not select fallback when ref probes failed but branch inventory still has the branch', async () => {
+    gitExecMock.mockImplementation(async (args: string[]) => {
+      if (args[0] === 'for-each-ref') return { stdout: 'refs/heads/cindy/wt1\n', stderr: '' };
+      throw new Error('probe unavailable');
+    });
+    await expect(mod.getManagedWorktreeReadinessForSession('s1', wtPath)).resolves.toBe('retry');
   });
 
   it('send-time restore only accepts the DB-authoritative managed path', async () => {

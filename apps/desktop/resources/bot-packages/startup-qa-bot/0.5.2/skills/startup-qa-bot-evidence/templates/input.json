@@ -1,0 +1,29 @@
+{
+  "baseline": {
+    "environment": "synthetic-staging",
+    "complete": true,
+    "pages": [
+      {
+        "id": "/settings",
+        "status": "OK",
+        "evidence": "synthetic://before"
+      },
+      {
+        "id": "/billing",
+        "status": "OK",
+        "evidence": "synthetic://before-billing"
+      }
+    ]
+  },
+  "current": {
+    "environment": "synthetic-staging",
+    "complete": false,
+    "pages": [
+      {
+        "id": "/settings",
+        "status": "BROKEN",
+        "evidence": "synthetic://after"
+      }
+    ]
+  }
+}

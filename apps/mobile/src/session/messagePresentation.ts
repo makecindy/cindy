@@ -6,6 +6,7 @@ import {
 import {
   buildMessageActionBarPresentation,
   countMessageRenderItemDiffs,
+  formatToolRowText,
   isToolErrorLike,
   summarizeMessageBubblePresentation,
   summarizeTodoCardPresentation,
@@ -33,6 +34,7 @@ import {
 
 export {
   buildMessageActionBarPresentation,
+  formatToolRowText,
   isToolErrorLike,
   summarizeMessageBubblePresentation,
   summarizeTodoCardPresentation,

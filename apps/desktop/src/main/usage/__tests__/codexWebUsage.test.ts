@@ -1,4 +1,9 @@
-import { describe, expect, it, vi } from 'vitest';
+import { net } from 'electron';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
+
+vi.mock('electron', () => ({
+  net: { fetch: vi.fn() },
+}));
 
 import {
   CodexWebUsageUnauthorizedError,
@@ -7,6 +12,10 @@ import {
 } from '../codexWebUsage';
 
 describe('codexWebUsageResponseToSnapshot', () => {
+  beforeEach(() => {
+    vi.mocked(net.fetch).mockReset();
+  });
+
   it('maps ChatGPT wham usage into the shared Codex account snapshot shape', () => {
     const snapshot = codexWebUsageResponseToSnapshot({
       plan_type: 'pro',
@@ -132,5 +141,44 @@ describe('codexWebUsageResponseToSnapshot', () => {
       fetchFn,
       timeoutMs: 1000,
     })).resolves.toBeNull();
+  });
+
+  it('uses Electron net.fetch by default so system proxy settings are honored', async () => {
+    vi.mocked(net.fetch).mockResolvedValue({
+      ok: true,
+      status: 200,
+      json: vi.fn().mockResolvedValue({
+        plan_type: 'pro',
+        rate_limit: {
+          primary_window: {
+            limit_window_seconds: 604_800,
+            used_percent: 14,
+          },
+        },
+      }),
+    } as unknown as Response);
+
+    await expect(fetchCodexWebUsageSnapshot({
+      accessToken: 'token',
+      accountId: 'account-1',
+      timeoutMs: 1000,
+    })).resolves.toMatchObject({
+      source: 'openai-web',
+      accountId: 'account-1',
+      primary: {
+        usedPercent: 14,
+        windowMinutes: 10080,
+      },
+    });
+
+    expect(net.fetch).toHaveBeenCalledWith(
+      'https://chatgpt.com/backend-api/wham/usage',
+      expect.objectContaining({
+        method: 'GET',
+        headers: expect.objectContaining({
+          'ChatGPT-Account-Id': 'account-1',
+        }),
+      }),
+    );
   });
 });

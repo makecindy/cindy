@@ -10,8 +10,16 @@ function activity(
   return {
     sessionId,
     phase: 'running',
+    recordStatus: 'active',
     compactDetail,
+    startedAtMs: 1,
+    lastActivityAtMs: 1,
+    currentActionSummary: compactDetail,
     attention: false,
+    workflow: null,
+    turnGeneration: null,
+    gracefulStopState: 'none',
+    source: 'live',
     ...patch,
   };
 }
@@ -24,6 +32,18 @@ describe('SessionActivityRelay', () => {
 
   afterEach(() => {
     vi.useRealTimers();
+  });
+
+  it('keeps a silent completion through replay', () => {
+    const emit = vi.fn();
+    const relay = new SessionActivityRelay(emit);
+    const silent = { ...activity('s1', 'Final result', { phase: 'completed', attention: true }), completionNotification: 'silent' as const };
+    relay.publish([silent]);
+    expect(emit).toHaveBeenLastCalledWith(expect.objectContaining({ attention: true, completionNotification: 'silent' }));
+    const replay = vi.fn();
+    relay.replay([silent], replay);
+    expect(replay).toHaveBeenLastCalledWith(emit.mock.calls.at(-1)?.[0]);
+    relay.dispose();
   });
 
   it('bypasses throttling for unread terminal states arriving inside the window', () => {
@@ -230,8 +250,7 @@ describe('SessionActivityRelay', () => {
     const relay = new SessionActivityRelay(emit, { minIntervalMs: 1_500 });
 
     // entry 存在(此处是 live running 帧)说明与远端有活跃同步流:ensure 不得
-    // 插手 —— 发收尾包会把远端的 running / needs-interaction 指示误清成"已完成"
-    // (needs-interaction 是稳定态,没有后续事件能补回)。
+    // 插手 —— 发收尾包会把远端的 running / needs-interaction 指示误清成"已完成"。
     relay.publish([activity('s1', 'Thinking')]);
     emit.mockClear();
 
@@ -247,6 +266,47 @@ describe('SessionActivityRelay', () => {
       phase: 'completed',
       attention: false,
     }));
+  });
+
+  it('does not clear a leftover unread completed entry either — publish/ledger owns that', () => {
+    const emit = vi.fn();
+    const relay = new SessionActivityRelay(emit, { minIntervalMs: 1_500 });
+
+    // 异步 not-found 回执可能在查询窗口内碰上新一轮 completed。ensure 若因
+    // 「entries 是终态」就 clear,会把新绿点误清。未读由独立账本 + publish 收敛。
+    relay.publish([activity('s1', 'run tests', { phase: 'completed', attention: true })]);
+    emit.mockClear();
+
+    relay.ensureSessionTerminalClear('s1');
+
+    expect(emit).not.toHaveBeenCalled();
+  });
+
+  it('does not clear a leftover unread error entry either', () => {
+    const emit = vi.fn();
+    const relay = new SessionActivityRelay(emit, { minIntervalMs: 1_500 });
+
+    relay.publish([activity('s1', 'boom', { phase: 'error', attention: true })]);
+    emit.mockClear();
+
+    relay.ensureSessionTerminalClear('s1');
+
+    expect(emit).not.toHaveBeenCalled();
+  });
+
+  it('leaves a live needs-interaction entry intact', () => {
+    const emit = vi.fn();
+    const relay = new SessionActivityRelay(emit, { minIntervalMs: 1_500 });
+
+    relay.publish([activity('s1', '等待权限确认', {
+      phase: 'needs-interaction',
+      interactionKind: 'permission',
+    })]);
+    emit.mockClear();
+
+    relay.ensureSessionTerminalClear('s1');
+
+    expect(emit).not.toHaveBeenCalled();
   });
 
   it('drops pending throttled activity when the latest snapshot returns to the last sent state', () => {

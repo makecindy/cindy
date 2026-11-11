@@ -18,6 +18,7 @@ export const ui = {
     detachedBySlash: '🚪 已结束接管，后续消息回到企业微信对话。',
     detachedByRevoke: '⚠️ desktop 端已收回接管，后续消息回到企业微信对话。',
     notAttached: '当前没有正在接管的任务。',
+    companionManagedCommand: '🧭 这个连接已交给伙伴，模型、权限和工作目录跟随伙伴设置。请在 Cindy 的伙伴设置里修改。',
   },
   agent: {
     completedNoText: '✅ 任务已完成（本轮没有文本输出）',
@@ -37,7 +38,7 @@ export const ui = {
       const message = `⚠️ 当前企业微信对话使用「${provider}」（${model}），${reason}。`;
       return attached
         ? `${message}\n请在 desktop 修复认证后继续发送消息。`
-        : `${message}\n修改后请发送 \`/new\` 开始新任务。`;
+        : `${message}\n修改“新对话配置”后直接继续发送消息即可；若当前对话单独选过模型，请发送 \`/new\` 开始新任务。`;
     },
     controlInProgress: '🎮 接管选择尚未完成，请先处理上一条交互消息。',
     credentialBusy: '⏳ 本地 Agent 正在运行，暂时不能切换凭证模式，请稍后重试。',

@@ -477,7 +477,7 @@ describe('prepareCodexGlobalPluginsBridge', () => {
     expect(isolatedMcp.mcpServers).not.toHaveProperty('feishu-delegate');
   });
 
-  it.skipIf(process.platform === 'win32')(
+  it(
     'fails closed instead of following symlinks out of a protected plugin',
     async () => {
       const { homeDir, codexHome, paths } = await setup();
@@ -498,7 +498,7 @@ describe('prepareCodexGlobalPluginsBridge', () => {
       await fs.symlink(
         outsideSkill,
         path.join(pluginDir, 'skills', 'message-feishu-coworkers'),
-        'dir',
+        process.platform === 'win32' ? 'junction' : 'dir',
       );
       await writePluginEnabledState(
         paths.sourceConfigFile,
@@ -521,7 +521,7 @@ describe('prepareCodexGlobalPluginsBridge', () => {
     },
   );
 
-  it.skipIf(process.platform === 'win32')(
+  it(
     'fails closed when the protected plugin root itself is a symlink',
     async () => {
       const { homeDir, codexHome, paths } = await setup();
@@ -543,7 +543,7 @@ describe('prepareCodexGlobalPluginsBridge', () => {
       await fs.symlink(
         realPluginDir,
         path.join(marketplaceDir, 'feishu-delegate'),
-        'dir',
+        process.platform === 'win32' ? 'junction' : 'dir',
       );
       await writePluginEnabledState(
         paths.sourceConfigFile,

@@ -1,7 +1,7 @@
 /**
  * claudeOrphanReaper.test.ts
  * ---------------------------------------------------------------------------
- * 单测只覆盖同步 reaper 的识别 / 容错语义。真实 taskkill / pgrep / kill 由
+ * 单测只覆盖同步 reaper 与启动期异步清扫的识别 / 容错语义。真实 taskkill / pgrep / kill 由
  * 平台集成验证兜底，避免测试环境误碰本机进程树。
  */
 
@@ -37,6 +37,7 @@ function restorePlatform(): void {
 
 async function importReaper(options: {
   platform: NodeJS.Platform;
+  execFile?: ReturnType<typeof vi.fn>;
   execFileSync?: ExecFileSyncMock;
   spawnSync?: SpawnSyncMock;
 }) {
@@ -46,6 +47,7 @@ async function importReaper(options: {
     createLogger: () => logger,
   }));
   vi.doMock('node:child_process', () => ({
+    execFile: options.execFile ?? vi.fn(),
     execFileSync: options.execFileSync ?? vi.fn(),
     spawnSync: options.spawnSync ?? vi.fn(),
   }));
@@ -63,7 +65,7 @@ describe('reapClaudeOrphansSync', () => {
     logger.warn.mockReset();
   });
 
-  it('kills current main-process children and historical xdt-maker orphans', async () => {
+  it('kills current main-process children and historical same-region orphans', async () => {
     const selfChildPid = 111;
     const historicalPid = 222;
     const livePeerPid = 333;
@@ -72,8 +74,8 @@ describe('reapClaudeOrphansSync', () => {
       if (file === 'taskkill') return '';
       return [
         `${selfChildPid}|${process.pid}|C:\\tools\\claude.exe`,
-        `${historicalPid}|99999|C:\\Users\\me\\AppData\\Roaming\\xdt-maker\\claude-code\\claude.exe`,
-        `${livePeerPid}|88888|C:\\Users\\me\\AppData\\Roaming\\xdt-maker\\claude-code\\claude.exe`,
+        `${historicalPid}|99999|C:\\Users\\me\\AppData\\Roaming\\CindyGlobal\\claude-code\\claude.exe`,
+        `${livePeerPid}|88888|C:\\Users\\me\\AppData\\Roaming\\CindyGlobal\\claude-code\\claude.exe`,
         `${externalPid}|77777|C:\\Users\\me\\.local\\bin\\claude.exe`,
       ].join('\n');
     });
@@ -122,8 +124,8 @@ describe('reapClaudeOrphansSync', () => {
     const execFileSync = vi.fn((file: string) => {
       if (file === 'taskkill') return '';
       return [
-        `${systemOrphanPid}|4|C:\\Users\\me\\AppData\\Roaming\\xdt-maker\\claude-code\\claude.exe`,
-        `${selfChildPid}|${process.pid}|C:\\Users\\me\\AppData\\Roaming\\xdt-maker\\claude-code\\claude.exe`,
+        `${systemOrphanPid}|4|C:\\Users\\me\\AppData\\Roaming\\CindyGlobal\\claude-code\\claude.exe`,
+        `${selfChildPid}|${process.pid}|C:\\Users\\me\\AppData\\Roaming\\CindyGlobal\\claude-code\\claude.exe`,
       ].join('\n');
     });
     const killSpy = vi.spyOn(process, 'kill').mockImplementation((() => true) as typeof process.kill);
@@ -136,14 +138,14 @@ describe('reapClaudeOrphansSync', () => {
     expect(killSpy).not.toHaveBeenCalled();
   });
 
-  it('matches all xdt-maker Claude binary path markers', async () => {
+  it('matches all current Global Claude binary path marker shapes', async () => {
     const pids = [701, 702, 703];
     const execFileSync = vi.fn((file: string) => {
       if (file === 'taskkill') return '';
       return [
-        `${pids[0]}|4|C:\\Users\\me\\AppData\\Roaming\\xdt-maker\\claude-code\\claude.exe`,
-        `${pids[1]}|4|C:/Users/me/AppData/Roaming/xdt-maker/claude-code/claude.exe`,
-        `${pids[2]}|4|/Users/me/Library/Application Support/xdt-maker/claude-code/claude`,
+        `${pids[0]}|4|C:\\Users\\me\\AppData\\Roaming\\CindyGlobal\\claude-code\\claude.exe`,
+        `${pids[1]}|4|C:/Users/me/AppData/Roaming/CindyGlobal/claude-code/claude.exe`,
+        `${pids[2]}|4|/Users/me/Library/Application Support/CindyGlobal/claude-code/claude`,
       ].join('\n');
     });
     const { reapClaudeOrphansSync } = await importReaper({ platform: 'win32', execFileSync });
@@ -158,6 +160,24 @@ describe('reapClaudeOrphansSync', () => {
         expect.objectContaining({ stdio: 'ignore' }),
       );
     }
+  });
+
+  it('does not claim historical CN xdt-maker processes from a Global build', async () => {
+    const cnHistoricalPid = 704;
+    const execFileSync = vi.fn((file: string) => {
+      if (file === 'taskkill') return '';
+      return `${cnHistoricalPid}|4|C:\\Users\\me\\AppData\\Roaming\\xdt-maker\\claude-code\\claude.exe`;
+    });
+    const { reapClaudeOrphansSync } = await importReaper({ platform: 'win32', execFileSync });
+
+    const result = reapClaudeOrphansSync();
+
+    expect(result.killedHistoricalOrphans).toBe(0);
+    expect(execFileSync).not.toHaveBeenCalledWith(
+      'taskkill',
+      expect.anything(),
+      expect.anything(),
+    );
   });
 
   it('does not throw when scanning fails', async () => {
@@ -281,7 +301,7 @@ describe('reapClaudeOrphansSync', () => {
     const lowercasePid = 801;
     const execFileSync = vi.fn((file: string) => {
       if (file === 'taskkill') return '';
-      return `${lowercasePid}|4|C:\\users\\me\\appdata\\roaming\\xdt-maker\\claude-code\\claude.exe`;
+      return `${lowercasePid}|4|C:\\users\\me\\appdata\\roaming\\cindyglobal\\claude-code\\claude.exe`;
     });
     const { reapClaudeOrphansSync } = await importReaper({ platform: 'win32', execFileSync });
 
@@ -337,4 +357,66 @@ describe('reapClaudeOrphansSync', () => {
     // pgrep is no longer used — the old recursive walk is gone.
     expect(spawnSync).not.toHaveBeenCalledWith('pgrep', expect.anything(), expect.anything());
   });
+});
+
+describe('reapHistoricalClaudeOrphans', () => {
+  afterEach(() => {
+    vi.restoreAllMocks();
+    vi.doUnmock('../logger');
+    vi.doUnmock('node:child_process');
+    restorePlatform();
+  });
+
+  // Startup no longer blocks on the scan, so a task this instance launches
+  // before the scan returns shows up as a current-process child. Reaping it
+  // like the quit path does would kill the user's freshly started task.
+  it.each([
+    [
+      'win32',
+      (pid: number, ppid: number, bin: string) => `${pid}|${ppid}|${bin}`,
+      'C:\\src\\cindy\\apps\\claude-code-bin\\win32-x64\\claude.exe',
+      (pid: number) => ['taskkill', ['/T', '/F', '/PID', String(pid)]],
+    ],
+    [
+      'darwin',
+      (pid: number, ppid: number, bin: string) => `${pid} ${ppid} ${bin}`,
+      '/src/cindy/apps/claude-code-bin/darwin-arm64/claude',
+      (pid: number) => ['kill', ['-9', String(pid)]],
+    ],
+  ] as const)(
+    'on %s scans without blocking and spares current-process children',
+    async (platform, row, bin, killCall) => {
+      const liveChildPid = process.pid + 40;
+      const orphanPid = process.pid + 41;
+      const execFile = vi.fn(
+        (file: string, _args: readonly string[], _opts: unknown, cb: Function) => {
+          const scan = file === 'powershell.exe' || file === 'ps';
+          cb(
+            null,
+            scan ? [row(liveChildPid, process.pid, bin), row(orphanPid, 99999, bin)].join('\n') : '',
+          );
+        },
+      );
+      const execFileSync = vi.fn();
+      const spawnSync = vi.fn();
+      vi.spyOn(process, 'kill').mockImplementation(((pid: number) => {
+        if (pid !== 99999) return true;
+        throw Object.assign(new Error('missing'), { code: 'ESRCH' });
+      }) as typeof process.kill);
+      const { reapHistoricalClaudeOrphans } = await importReaper({
+        platform,
+        execFile,
+        execFileSync,
+        spawnSync,
+      });
+
+      const result = await reapHistoricalClaudeOrphans();
+
+      expect(result).toMatchObject({ scannedTotal: 2, killedSelfSpawned: 0, killedHistoricalOrphans: 1 });
+      const [file, args] = killCall(orphanPid);
+      expect(execFile.mock.calls.filter(([f]) => f === file).map(([, a]) => a)).toEqual([args]);
+      expect(execFileSync).not.toHaveBeenCalled();
+      expect(spawnSync).not.toHaveBeenCalled();
+    },
+  );
 });

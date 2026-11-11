@@ -2,12 +2,14 @@
 /**
  * ensure-deps — 启动/构建/发布前的依赖守护
  *
- * 五道检查（任一失败都会自动修复）：
- *   1. 协议 submodule — 先初始化 cindy-protocol，避免 pnpm 少发现 workspace
- *   2. Lockfile 同步性 — 比对 pnpm-lock.yaml 与 node_modules/.modules.yaml 的 mtime
- *   3. 关键依赖完整性 — 确认 workspace / native / binary 依赖的 package.json 存在
- *   4. Electron binary 完整性 — 确认 electron postinstall 已完整解出 dist binary
- *   5. native ABI 隔离 — root 保持 Node ABI，Electron cache 单独准备 native binding
+ * 四道检查（任一失败都会自动修复）：
+ *   1. Lockfile 同步性 — 比对 pnpm-lock.yaml 与 node_modules/.modules.yaml 的 mtime
+ *   2. 关键依赖完整性 — 确认 workspace / native / binary 依赖的 package.json 存在
+ *   3. Electron binary 完整性 — 确认 electron postinstall 已完整解出 dist binary
+ *   4. native ABI 隔离 — root 保持 Node ABI，Electron cache 单独准备 native binding
+ *
+ * `--electron-binary` 只跑第 3 道，由根 postinstall 调用，让任何 `pnpm install` 结束时
+ * Electron 都是完整的。
  *
  * 关于 hoisted 模式：项目 .npmrc 指定 node-linker=hoisted，绝大多数依赖被平铺到根
  * node_modules，但原生二进制包（electron、protobufjs 等）必须留
@@ -57,11 +59,6 @@ const CRITICAL_DEPS = [
 ];
 
 const WORKSPACE_CRITICAL_DEPS = CRITICAL_DEPS.slice(0, 2);
-const SUBMODULE_WORKSPACE_FILES = Object.freeze([
-  'cindy-protocol/packages/device-link-protocol/package.json',
-  'cindy-protocol/packages/slack-hook-protocol/package.json',
-]);
-
 // 子包下的残缺目录 —— 这些本不该存在于子包 node_modules（pnpm 10 会 hoist 到根），
 // 但某些 postinstall 残留（例如 electron postinstall 解压的 dist/）可能会让这些路径
 // 看起来"存在"。Node.js 的 require 解析会卡在残缺目录（有路径但没 package.json）
@@ -227,69 +224,27 @@ function findBrokenDeps(deps = CRITICAL_DEPS) {
   return broken;
 }
 
-/** Protocol package manifests that a complete checkout must expose to pnpm. */
-export function findMissingSubmoduleWorkspaceFiles(root = ROOT) {
-  return SUBMODULE_WORKSPACE_FILES.filter((relativePath) => !fs.existsSync(path.join(root, relativePath)));
-}
-
-function ensureSubmoduleWorkspaces() {
-  // `.gitmodules` 的 URL 会随仓库迁移变化，但 Git 会把已初始化 submodule 的旧 URL
-  // 缓存在本地 `.git/config`。每次依赖检查先同步一次（纯本地操作），确保老 checkout
-  // 在 pull 后也改从当前公开仓拉取，而不是继续访问已经退役的旧组织仓库。
-  const syncResult = spawnSync('git', ['submodule', 'sync', '--', 'cindy-protocol'], {
-    cwd: ROOT,
-    stdio: 'inherit',
-  });
-  if (syncResult.error || syncResult.status !== 0) {
-    warn('协议 submodule URL 同步失败；将继续使用当前 checkout，缺失时初始化仍会 fail closed');
+// Simulator entrypoints are diagnostics/startup, never an implicit dependency repair.
+export function checkWorkspaceDependencies(root = ROOT) {
+  const missing = WORKSPACE_CRITICAL_DEPS.filter(({ checkPath }) =>
+    !fs.existsSync(path.join(root, checkPath))).map(({ name }) => name);
+  for (const name of ['expo', '@expo/env', 'react-native']) {
+    if (![path.join(root, 'apps/mobile/node_modules', name, 'package.json'),
+      path.join(root, 'node_modules', name, 'package.json')].some((file) => fs.existsSync(file))) missing.push(name);
   }
-
-  const missing = findMissingSubmoduleWorkspaceFiles();
-  if (missing.length === 0) return;
-
-  warn(`协议 workspace 缺失：${missing.join(', ')}`);
-  // 只初始化协议 submodule（pnpm workspace 依赖它）。内建插件不再作为 submodule
-  // 随客户端源码分发，插件通过 SkillHub 或手动安装。
-  log('运行 git submodule update --init cindy-protocol ...');
-  const result = spawnSync('git', ['submodule', 'update', '--init', '--recursive', '--', 'cindy-protocol'], {
-    cwd: ROOT,
-    stdio: 'inherit',
-  });
-  if (result.error || result.status !== 0) {
-    if (result.error) err(result.error.message);
-    err('协议 submodule 初始化失败；未继续安装依赖，避免生成不完整的 pnpm workspace');
-    process.exit(result.status ?? 1);
-  }
-
-  const stillMissing = findMissingSubmoduleWorkspaceFiles();
-  if (stillMissing.length > 0) {
-    err(`submodule 初始化后协议 workspace 仍缺失：${stillMissing.join(', ')}`);
-    process.exit(1);
-  }
-  log('协议 submodule 已就绪');
+  return missing;
 }
 
 function ensureWorkspaceOnlyDependencies() {
-  const broken = findBrokenDeps(WORKSPACE_CRITICAL_DEPS);
+  const missing = checkWorkspaceDependencies();
   const lockIssue = reasonLockfileOutOfSync();
-  if (broken.length === 0 && !lockIssue) {
-    log('workspace 依赖已同步，跳过');
+  if (missing.length || lockIssue) {
+    err(`依赖检查失败: ${missing.join(', ') || lockIssue}`);
+    err('保留现有 node_modules，未安装或删除依赖。请在当前 worktree 显式运行 pnpm install --frozen-lockfile。');
+    process.exitCode = 1;
     return;
   }
-
-  if (broken.length > 0) {
-    warn(`workspace 依赖缺失：${broken.map((item) => item.name).join(', ')}`);
-    removeBrokenDirs(broken);
-  }
-  if (lockIssue) log(lockIssue);
-  runInstall(['install']);
-
-  const still = findBrokenDeps(WORKSPACE_CRITICAL_DEPS);
-  if (still.length > 0) {
-    err(`pnpm install 后 workspace 依赖仍缺失：${still.map((item) => item.name).join(', ')}`);
-    process.exit(1);
-  }
-  log('workspace 依赖已同步');
+  log('workspace 依赖检查通过（只读）');
 }
 
 function runInstall(args = ['install']) {
@@ -402,13 +357,26 @@ downloadArtifact({
   return zipPath;
 }
 
+/**
+ * Windows 自带的 tar.exe(bsdtar，能解 zip、认盘符路径)。不能按 PATH 找：在 Git Bash 里装依赖时，
+ * PATH 上先命中的是 Git 自带的 GNU tar，它把 `C:\...` 里的冒号当成「远程主机:路径」，
+ * 报 `Cannot connect to C: resolve failed`，也解不了 zip。系统目录里没有时才退回 PATH。
+ */
+export function resolveSystemTarCommand(platform = process.platform, env = process.env, exists = fs.existsSync) {
+  if (platform !== 'win32') return 'tar';
+  const systemRoot = env.SystemRoot || env.SYSTEMROOT || env.windir || env.WINDIR || 'C:\\Windows';
+  const systemTar = path.win32.join(systemRoot, 'System32', 'tar.exe');
+  return exists(systemTar) ? systemTar : 'tar';
+}
+
 function extractElectronZipWithSystemTar(zipPath, root = ROOT) {
   const electronDir = getElectronDir(root);
   const distDir = path.join(electronDir, 'dist');
   fs.mkdirSync(distDir, { recursive: true });
 
-  log(`使用系统 tar 解压 Electron zip：${zipPath}`);
-  const result = spawnSync('tar', ['-xf', zipPath, '-C', distDir], {
+  const tar = resolveSystemTarCommand();
+  log(`使用系统 tar 解压 Electron zip：${zipPath}（${tar}）`);
+  const result = spawnSync(tar, ['-xf', zipPath, '-C', distDir], {
     cwd: root,
     stdio: 'inherit',
   });
@@ -476,6 +444,26 @@ function ensureElectronBinaryComplete(root = ROOT) {
   if (issue) {
     repairElectronBinary(issue, root);
   }
+}
+
+// CI 用 stub dist 代替真实 Electron；显式跳过下载时也不应在安装阶段补下载。
+export function electronBinaryCheckSkipReason(env = process.env) {
+  if (env.ELECTRON_OVERRIDE_DIST_PATH) return 'ELECTRON_OVERRIDE_DIST_PATH';
+  if (env.ELECTRON_SKIP_BINARY_DOWNLOAD) return 'ELECTRON_SKIP_BINARY_DOWNLOAD';
+  return null;
+}
+
+// 由根 postinstall 调用。pnpm 的 side-effects cache 一旦记下「electron 构建完成但没有产物」
+// （例如某次安装设置了 ELECTRON_SKIP_BINARY_DOWNLOAD），之后同机每个新 worktree 都会跳过
+// Electron 自己的 postinstall，留下缺 dist 的安装。这里在每次 install 末尾按 install.js
+// 语义复核一次，缺失就补装，不依赖 store 缓存是否干净。
+function ensureElectronBinaryAfterInstall() {
+  const skipReason = electronBinaryCheckSkipReason();
+  if (skipReason) {
+    log(`已设置 ${skipReason}，跳过 Electron binary 检查`);
+    return;
+  }
+  ensureElectronBinaryComplete();
 }
 
 // 检测 frozen-lockfile 是否生效（根 .npmrc 显式配置，或环境变量覆盖）。
@@ -780,10 +768,12 @@ function ensureElectronNativeBinding(electronVersion, electronArch) {
 }
 
 function main() {
-  ensureSubmoduleWorkspaces();
-
   if (process.argv.slice(2).includes('--workspace-only')) {
     ensureWorkspaceOnlyDependencies();
+    return;
+  }
+  if (process.argv.slice(2).includes('--electron-binary')) {
+    ensureElectronBinaryAfterInstall();
     return;
   }
 

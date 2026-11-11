@@ -31,7 +31,7 @@
  */
 
 import type { HlcTimestamp } from './hlc';
-import { isCanonicalHlc } from './hlc';
+import { hlcNodeId, isCanonicalHlc } from './hlc';
 
 /** 状态结构版本;不兼容改动 +1,收到更高版本的状态整份忽略而不是猜着合并。 */
 export const VOICE_DICTIONARY_SYNC_VERSION = 1;
@@ -113,6 +113,10 @@ export interface DictionarySuppression {
 /** 一份完整的可交换状态。JSON 可序列化:直接落盘、直接进 device-link push 帧。 */
 export interface VoiceDictionarySyncState {
   version: typeof VOICE_DICTIONARY_SYNC_VERSION;
+  /** Supplemental progress for count/stage changes without a text-register write.
+   * Optional for v1 compatibility; merge per node by max, never use it to choose spelling.
+   */
+  mutationVector?: Record<string, HlcTimestamp>;
   /** key = 归一化词条主键。 */
   records: Record<string, DictionaryRecord>;
   /** key = 归一化词条主键。 */
@@ -183,6 +187,12 @@ export function isValidSyncState(raw: unknown): raw is VoiceDictionarySyncState 
   const candidate = raw as Partial<VoiceDictionarySyncState>;
   if (candidate.version !== VOICE_DICTIONARY_SYNC_VERSION) return false;
   if (!isPlainRecord(candidate.records) || !isPlainRecord(candidate.suppressed)) return false;
+  if (candidate.mutationVector !== undefined) {
+    if (!isPlainRecord(candidate.mutationVector)) return false;
+    for (const [nodeId, stamp] of Object.entries(candidate.mutationVector)) {
+      if (!isCanonicalHlc(stamp) || hlcNodeId(stamp) !== nodeId) return false;
+    }
+  }
 
   for (const record of Object.values(candidate.records)) {
     if (!isPlainRecord(record)) return false;

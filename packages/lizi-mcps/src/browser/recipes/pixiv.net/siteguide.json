@@ -1,12 +1,15 @@
 {
   "site": "pixiv.net",
-  "auth": "必须登录:Ajax 接口对未登录返回 401/403,需在持久浏览器里登录 pixiv.net",
+  "auth": "鉴权以具体命令为准：cookie。需要登录的命令复用当前浏览器会话。",
   "entry": {
-    "home": "https://www.pixiv.net",
-    "searchApi": "https://www.pixiv.net/ajax/search/illustrations/<word>?word=<word>&order=date_d&mode=all&p=1&s_mode=s_tag_full&type=illust_and_ugoira",
-    "rankingApi": "https://www.pixiv.net/ranking.php?mode=daily&p=1&format=json",
-    "illustApi": "https://www.pixiv.net/ajax/illust/<illustId>"
+    "home": "https://www.pixiv.net"
   },
-  "recipes": ["pixiv-search"],
-  "notes": "Pixiv 全套读接口都是 www.pixiv.net 同源的 Ajax,返回统一是 {error:false, body:...}(失败按 HTTP status 区分:401/403=未登录、404=不存在)。必须先 navigate 到 https://www.pixiv.net 带上 cookie,再在页面内 fetch(credentials:'include')。搜索:/ajax/search/illustrations/<word>?word=<word>&order=&mode=&p=&s_mode=s_tag_full&type=illust_and_ugoira —— 关键词要同时出现在 path 和 word 参数;order 可选 date_d/date/popular_d/popular_male_d/popular_female_d,mode 可选 all/safe/r18;结果在 body.illust.data[],每条 {id,title,userName,userId,pageCount,bookmarkCount,tags[]}。排行榜:/ranking.php?mode=daily|weekly|monthly|rookie|original|male|female&p=1&format=json,结果在 contents[],每条 {rank,title,user_name,user_id,illust_id,illust_page_count,illust_bookmark_count}。作品详情:/ajax/illust/<id>,body 含 {illustTitle,userName,pageCount,bookmarkCount,likeCount,viewCount,tags.tags[].tag,createDate}。作者作品列表两步:先 /ajax/user/<uid>/profile/all 取所有 illust id,再批量 /ajax/user/<uid>/profile/illusts?ids[]=...&work_category=illustManga(每批最多 48 个 id)。作品页 URL = https://www.pixiv.net/artworks/<id>。"
+  "recipes": [
+    "pixiv-search"
+  ],
+  "notes": "兼容入口 pixiv-search 现执行内置 pixiv/search，原参数名保留；结果采用新版适配器的结构化输出。可用 opencli:<站点>/<命令> 调用完整目录，siteguide 查询参数默认值、类型及 read/write 分类。网站可能变更或要求登录、验证；有 Cookie 不保证绕过风控。",
+  "upstream": {
+    "repository": "https://github.com/jackwener/opencli",
+    "revision": "fe5f1d96aff01c32fd84f86b52af922bfe6ca93f"
+  }
 }

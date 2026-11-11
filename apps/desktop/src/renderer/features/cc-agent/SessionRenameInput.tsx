@@ -36,11 +36,12 @@ import { extractIpcError } from '@/utils/ipcError';
 const log = createLogger('SessionRenameInput');
 
 /**
- * Magic 生成失败的场景化提示:远程会话的隧道错误按 IPC 错误码细分——
- * 老被控端白名单没有该 channel(版本过旧)与链路不通(离线/超时)给不同文案,
- * 其余(本机生成失败、无素材等)落通用失败提示。
+ * Magic 生成失败的场景化提示:业务失败与远程隧道错误统一按 IPC 错误码细分。
+ * 新控制端连旧被控端时仍可能收到 `{ title: null }`,继续走通用失败提示以保持兼容。
  */
 const AI_RENAME_ERROR_I18N: Record<string, string> = {
+  TITLE_NO_MATERIAL: 'aiRename:noMaterial',
+  TITLE_PROVIDER_UNSUPPORTED: 'aiRename:providerUnsupported',
   DEVICE_LINK_CHANNEL_NOT_ALLOWED: 'ccAgent.rename.aiRenameRemoteOutdated',
   DEVICE_LINK_VERSION_MISMATCH: 'ccAgent.rename.aiRenameRemoteOutdated',
   DEVICE_LINK_NOT_CONNECTED: 'ccAgent.rename.aiRenameRemoteOffline',
@@ -82,7 +83,7 @@ export function SessionRenameInput({
   containerClassName,
   activeForeground = false,
 }: SessionRenameInputProps) {
-  const { t } = useTranslation();
+  const { t } = useTranslation(['common', 'aiRename']);
   const inputRef = useRef<HTMLInputElement>(null);
   const containerRef = useRef<HTMLDivElement>(null);
   const [generating, setGenerating] = useState(false);

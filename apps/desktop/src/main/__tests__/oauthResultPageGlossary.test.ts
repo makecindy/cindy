@@ -1,15 +1,15 @@
 /**
- * OAuth 回调结果页四语文案的术语门禁。
+ * OAuth 回调结果页多语文案的术语门禁。
  *
  * 又一处扫描盲区:`check-i18n-glossary.mjs` 只读 locale JSON,而这些文案是
- * `oauthResultPage.ts` 里的手写四语 catalog。它们渲染在**系统浏览器**里——用户完成
+ * `oauthResultPage.ts` 里的手写多语 catalog。它们渲染在**系统浏览器**里——用户完成
  * 第三方授权后看到的第一屏,失败时还要靠它说清下一步该做什么,可见度不低。
  * 既有的 oauthResultPage.test.ts 只校验完整性与渲染结果,不校验术语与标点。
  *
  * 判定逻辑复用 scripts/shared/glossary-rules.mjs,与根门禁、mobile 影子 catalog、
  * 原生菜单 catalog 同一套,避免各处规则悄悄漂移。
  *
- * 文案取值方式:这个模块的四语文案分散在若干函数与常量里,且部分需要传入
+ * 文案取值方式:这个模块的多语文案分散在若干函数与常量里,且部分需要传入
  * providerName / brandName,所以下面用固定的占位实参把它们全部求值出来再扫。
  * 占位值刻意不含 CJK 与标点,免得实参本身影响判定。
  */
@@ -37,6 +37,7 @@ import {
 import {
   buildOAuthReturnAction,
   getGhostOAuthResultCopy,
+  getRemoteOAuthCallbackCopy,
   getOAuthNeutralResultCopy,
   getProviderOAuthResultCopy,
   type OAuthResultPageLang,
@@ -54,9 +55,7 @@ interface GlossaryTerm {
   checkCase?: boolean;
 }
 
-const glossary = JSON.parse(
-  readFileSync(resolve(REPO_ROOT, 'i18n/glossary.json'), 'utf8'),
-) as {
+const glossary = JSON.parse(readFileSync(resolve(REPO_ROOT, 'i18n/glossary.json'), 'utf8')) as {
   locales: string[];
   sourceLocale: string;
   punctuationExempt?: string[];
@@ -64,7 +63,7 @@ const glossary = JSON.parse(
 };
 
 /** 该模块用 'zh' 作语言键,术语表用 'zh-CN';不映射的话 zh 分支整段扫不到。 */
-const LANGS: OAuthResultPageLang[] = ['zh', 'en', 'ja', 'ko'];
+const LANGS: OAuthResultPageLang[] = ['zh', 'zh-TW', 'en', 'ja', 'ko', 'es', 'fr', 'de', 'pt-PT', 'pt-BR', 'zh-Hant-x-lzh', 'zh-Hans-x-lzh'];
 const toLocale = (lang: OAuthResultPageLang) => (lang === 'zh' ? 'zh-CN' : lang);
 
 /** 占位实参:不含 CJK 与标点,避免实参本身影响判定。 */
@@ -78,6 +77,7 @@ function collectEntries(): { locale: string; key: string; value: string }[] {
   };
 
   for (const lang of LANGS) {
+    for (const [key, value] of Object.entries(getRemoteOAuthCallbackCopy(lang))) push(lang, `remote.${key}`, value);
     const provider = getProviderOAuthResultCopy(lang, PROVIDER, BRAND);
     for (const [k, v] of Object.entries(provider)) {
       if (typeof v === 'string') push(lang, `provider.${k}`, v);
@@ -114,7 +114,7 @@ const sourceByKey = new Map(
 const isHalfWidthExempt = makeExemptChecker(glossary.punctuationExempt);
 
 describe('OAuth 结果页文案符合术语表', () => {
-  it('摊平后覆盖四种语言且非空（防止 import 失效后测试静默通过）', () => {
+  it('摊平后覆盖全部支持语言且非空（防止 import 失效后测试静默通过）', () => {
     expect(entries.length).toBeGreaterThan(0);
     const seen = new Set(entries.map((e) => e.locale));
     for (const locale of glossary.locales) {

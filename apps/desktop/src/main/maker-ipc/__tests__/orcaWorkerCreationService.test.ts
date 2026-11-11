@@ -1,9 +1,11 @@
-import type { AgentKind } from '@cindy/maker-core';
+import path from 'node:path';
+import { resolveAgentCredentialMode, type AgentKind } from '@cindy/maker-core';
 import { describe, expect, it, vi } from 'vitest';
 
 import {
   buildNoProviderMessage,
   createOrcaWorkerCreationService,
+  orcaWorkerTitle,
   providerRouteRequiresExplicitSelection,
   type OrcaWorkerCreationDeps,
   type OrcaWorkerCreateParams,
@@ -11,10 +13,470 @@ import {
   type OrcaWorkerProviderRoutingContext,
   type OrcaWorkerProviderSnapshot,
 } from '../orcaWorkerCreationService';
-import type { DispatchWorkerTaskResult, OrcaWorkerStatus } from '../orcaTeamService';
+import { type DispatchWorkerTaskResult, type OrcaWorkerStatus } from '../orcaTeamService';
 import type { MakerSessionCreateOpts } from '../sessionRequest';
 import { CredentialModeSwitchBusyError } from '../../maker-host/codex-credential-switch';
 import { isActiveWorkerStatus } from '../../../shared/orca-worker-status';
+import { deviceAvailableModels, deviceWorkerRoutingContext, sshCodexWorkerRoutingContext } from '../orcaProviderRoutingContext';
+import type { ProviderView } from '@cindy/model-providers';
+import { resolveSessionGitDir, resolveWorkerInheritedDirectory } from '../../git-context/sessionDirResolver';
+
+vi.mock('electron-store', () => ({ default: class {} }));
+
+describe('SSH Codex Worker catalog', () => {
+  it.each([undefined, 'remote-next', 'controller-only'])('uses remote membership and defaults for %s', async (model) => {
+    const models = ['remote-default', 'remote-lead', 'remote-next'].map((id) => ({
+      id, efforts: ['low'], defaultEffort: 'low', supportsFastMode: false,
+    }));
+    const routing = sshCodexWorkerRoutingContext([{ name: 'Remote', models: { codex: models } } as ProviderView]);
+    const { deps, service } = createDeps({
+      getLeadSessionRow: vi.fn(async () => ({ id: 'lead-1', agentKind: 'codex' as const, workspaceKind: 'project' as const,
+        workingDir: '/srv/repo', model: 'remote-lead', effort: 'low', permissionMode: 'default',
+        fastMode: false, providerId: 'openai', remoteHostId: 'remote-builder' })),
+      getProviderRoutingContext: vi.fn(async () => routing),
+      getWorkerDefaults: vi.fn(() => ({ model: 'controller-only', providerId: 'xd', effort: 'high' })),
+    });
+    const result = await service.createWorker({ leadSessionId: 'lead-1', role: 'reviewer', label: 'reviewer', agent: 'codex', model });
+    expect(deps.getProviderRoutingContext).toHaveBeenCalledWith('codex', 'remote-builder');
+    expect(deps.getAvailableModels).not.toHaveBeenCalled();
+    expect(deps.getWorkerDefaults).not.toHaveBeenCalled();
+    if (model === 'controller-only') {
+      expect(result.ok).toBe(false);
+      expect(deps.bootstrapSession).not.toHaveBeenCalled();
+    } else {
+      expect(result.ok).toBe(true);
+      expect(deps.bootstrapSession).toHaveBeenCalledWith(expect.objectContaining({
+        model: model ?? 'remote-lead', providerId: 'openai', remoteHostId: 'remote-builder', effort: 'low', fastMode: false,
+      }));
+    }
+  });
+});
+
+describe('orcaWorkerTitle', () => {
+  it('names the role once when the label repeats it', () => {
+    expect(orcaWorkerTitle('reader', 'reader')).toBe('Worker · reader');
+    expect(orcaWorkerTitle('Reviewer', 'reviewer')).toBe('Worker · Reviewer');
+    expect(orcaWorkerTitle('developer', 'developer-2')).toBe('Worker · developer · developer-2');
+    expect(orcaWorkerTitle('转写', 'transcribe')).toBe('Worker · 转写 · transcribe');
+  });
+});
+
+describe('Worker running on another device (execution device)', () => {
+  // Unit regression: a remote model must not move the Team or prevent a Worker
+  // from working on a third computer. The former guards rejected both inputs.
+  const remoteDeps = (overrides: Partial<OrcaWorkerCreationDeps> = {}) => createDeps({
+    openRemoteWorker: vi.fn(async (input) => ({
+      ok: true as const,
+      proxySessionId: 'proxy-1',
+      remoteSessionId: 'remote-1',
+      proxySession: {
+        title: input.title, agentKind: input.agent === 'claude-code' ? 'cc' : input.agent,
+        model: input.model ?? 'device-default-model', effort: input.effort ?? null,
+        permissionMode: input.permissionMode, fastMode: input.fast === true,
+      },
+      agent: input.agent,
+      model: input.model ?? 'device-default-model',
+      workingDir: input.workingDir ?? '/Users/demo/Cindy/dialogues/remote-1',
+    })),
+    recordRemoteWorker: vi.fn(async () => undefined),
+    discardRemoteWorker: vi.fn(async () => undefined),
+    ...overrides,
+  });
+
+  it('creates the task on the device, records a proxy worker and skips local model admission', async () => {
+    const { deps, service } = remoteDeps();
+    const result = await service.createWorker({
+      leadSessionId: 'lead-1', role: '转写', label: 'transcribe', agent: 'claude-code',
+      executionDeviceId: 'mac-mini', workingDir: '/Users/demo/Interviews', model: 'only-on-device',
+    });
+    expect(result).toMatchObject({
+      ok: true,
+      workerSessionId: 'proxy-1',
+      workingDir: '/Users/demo/Interviews',
+      resolved: { agent: 'claude-code', model: 'only-on-device', label: 'transcribe' },
+    });
+    expect(deps.openRemoteWorker).toHaveBeenCalledWith(expect.objectContaining({
+      deviceId: 'mac-mini', workerId: 'worker-1', teamId: 'team-1', leadSessionId: 'lead-1',
+      label: 'transcribe', role: '转写', agent: 'claude-code', model: 'only-on-device',
+      permissionMode: 'auto', workingDir: '/Users/demo/Interviews', title: 'Worker · 转写 · transcribe',
+    }));
+    expect(deps.addOrUpdateWorker).not.toHaveBeenCalled();
+    expect(deps.recordRemoteWorker).toHaveBeenCalledWith({
+      workerId: 'worker-1', teamId: 'team-1', leadSessionId: 'lead-1',
+      proxySessionId: 'proxy-1', deviceId: 'mac-mini', remoteSessionId: 'remote-1',
+      proxySession: expect.objectContaining({ model: 'only-on-device', agentKind: 'cc' }),
+      label: 'transcribe', role: '转写',
+      workingDir: '/Users/demo/Interviews',
+    });
+    expect(deps.getProviderRoutingContext).not.toHaveBeenCalled();
+    expect(deps.bootstrapSession).not.toHaveBeenCalled();
+    expect(deps.resolveWorkerWorkingDir).not.toHaveBeenCalled();
+    expect(deps.releaseWorkerCreationReservation).toHaveBeenCalledWith('worker-1');
+  });
+
+  it('lets the device allocate a directory when none is given and accepts Windows paths', async () => {
+    const { deps, service } = remoteDeps();
+    await service.createWorker({
+      leadSessionId: 'lead-1', role: 'dev', label: 'a', agent: 'codex', executionDeviceId: 'office',
+    });
+    expect(deps.openRemoteWorker).toHaveBeenLastCalledWith(expect.not.objectContaining({ workingDir: expect.anything() }));
+    const windows = await service.createWorker({
+      leadSessionId: 'lead-1', role: 'dev', label: 'b', agent: 'codex', executionDeviceId: 'office',
+      workingDir: 'D:\\projects\\site',
+    });
+    expect(windows.ok).toBe(true);
+  });
+
+  it.each([false, true])('reports admitted remote Fast %s instead of the request after recording the Worker', async fastMode => {
+    const { deps, service } = remoteDeps({
+      openRemoteWorker: vi.fn(async () => ({ ok: true as const,
+        proxySessionId: 'proxy-1', remoteSessionId: 'remote-1', agent: 'codex' as const,
+        model: 'device-model', workingDir: '/remote',
+        proxySession: { title: 'Worker', model: 'device-model', agentKind: 'codex', effort: null,
+          permissionMode: 'auto', fastMode },
+      })),
+    });
+    await expect(service.createWorker({ leadSessionId: 'lead-1', role: 'dev', label: 'a',
+      agent: 'codex', executionDeviceId: 'mac-mini', fast: !fastMode })).resolves.toMatchObject({
+      ok: true, resolved: { fastMode },
+    });
+    expect(deps.recordRemoteWorker).toHaveBeenCalledWith(expect.objectContaining({
+      proxySession: expect.objectContaining({ fastMode }),
+    }));
+  });
+
+  it.each(['medium', 'low', ''])('reports the admitted remote effort %s after recording the Worker', async effort => {
+    const { deps, service } = remoteDeps({
+      openRemoteWorker: vi.fn(async () => ({ ok: true as const,
+        proxySessionId: 'proxy-1', remoteSessionId: 'remote-1', agent: 'codex' as const,
+        model: 'device-model', workingDir: '/remote',
+        proxySession: { title: 'Worker', model: 'device-model', agentKind: 'codex', effort,
+          permissionMode: 'auto', fastMode: false },
+      })),
+    });
+    await expect(service.createWorker({ leadSessionId: 'lead-1', role: 'dev', label: 'a',
+      agent: 'codex', executionDeviceId: 'mac-mini' })).resolves.toMatchObject({
+      ok: true, resolved: { effort: effort || null },
+    });
+    expect(deps.recordRemoteWorker).toHaveBeenCalledWith(expect.objectContaining({
+      proxySession: expect.objectContaining({ effort }),
+    }));
+  });
+
+  it.each([
+    ['relative directory', { workingDir: 'relative/dir' }],
+    ['malformed device id', { executionDeviceId: 'bad id/../' }],
+  ])('rejects a %s before reserving a slot', async (_name, patch) => {
+    const { deps, service } = remoteDeps();
+    const result = await service.createWorker({
+      leadSessionId: 'lead-1', role: 'dev', label: 'a', agent: 'codex', executionDeviceId: 'office', ...patch,
+    });
+    expect(result).toMatchObject({ ok: false, errorCode: 'INVALID_PARAMS' });
+    expect(deps.reserveWorkerCreation).not.toHaveBeenCalled();
+    expect(deps.openRemoteWorker).not.toHaveBeenCalled();
+  });
+
+  it('keeps SSH execution on its original SSH host', async () => {
+    const { deps, service } = remoteDeps({
+      getLeadSessionRow: vi.fn(async () => ({
+        id: 'lead-1', agentKind: 'codex' as const, workspaceKind: 'project' as const, workingDir: '/repo',
+        model: 'gpt-5.5', effort: 'medium', permissionMode: 'default', fastMode: false, providerId: 'xd',
+        remoteHostId: 'host-1',
+      })),
+    });
+    const result = await service.createWorker({
+      leadSessionId: 'lead-1', role: 'dev', label: 'a', agent: 'codex', executionDeviceId: 'office',
+    });
+    expect(result).toMatchObject({ ok: false, errorCode: 'INVALID_PARAMS' });
+    expect(deps.openRemoteWorker).not.toHaveBeenCalled();
+  });
+
+  it.each([undefined, null, 'provider-pc'])('places a remote-model Lead’s Worker on its work computer with Agent selection %s', async agentDeviceId => {
+    const { deps, service } = remoteDeps({
+      getLeadSessionRow: vi.fn(async () => ({ id: 'lead-1', agentKind: 'codex' as const,
+        workspaceKind: 'project' as const, workingDir: 'D:/lead', model: 'gpt-5.5',
+        effort: 'medium', permissionMode: 'default', fastMode: false, providerId: 'openai',
+        remoteHostId: null, agentDeviceId: 'lead-model-pc' })),
+    });
+    const result = await service.createWorker({ leadSessionId: 'lead-1', role: 'tester', label: 'mac',
+      agent: 'codex', executionDeviceId: 'mac', workingDir: '/Users/demo/project',
+      ...(agentDeviceId !== undefined ? { agentDeviceId } : {}) });
+    expect(result).toMatchObject({ ok: true, executionDeviceId: 'mac', workingDir: '/Users/demo/project' });
+    const opened = vi.mocked(deps.openRemoteWorker!).mock.calls[0]![0];
+    if (agentDeviceId === undefined) expect(opened).not.toHaveProperty('agentDeviceId');
+    else expect(opened.agentDeviceId).toBe(agentDeviceId);
+    expect(deps.bootstrapSession).not.toHaveBeenCalled();
+    expect(deps.getProviderRoutingContext).not.toHaveBeenCalled();
+  });
+
+  it('passes through device errors without recording a worker', async () => {
+    const { deps, service } = remoteDeps({
+      openRemoteWorker: vi.fn(async () => ({
+        ok: false as const, errorCode: 'UNSUPPORTED_CAPABILITY' as const, message: 'Mac mini 需要更新',
+      })),
+    });
+    const result = await service.createWorker({
+      leadSessionId: 'lead-1', role: 'dev', label: 'a', agent: 'codex', executionDeviceId: 'mac-mini',
+    });
+    expect(result).toEqual({ ok: false, errorCode: 'UNSUPPORTED_CAPABILITY', message: 'Mac mini 需要更新' });
+    expect(deps.addOrUpdateWorker).not.toHaveBeenCalled();
+    expect(deps.releaseWorkerCreationReservation).toHaveBeenCalledWith('worker-1');
+  });
+
+  it('discards the device task when persisting the worker fails', async () => {
+    const { deps, service } = remoteDeps({
+      recordRemoteWorker: vi.fn(async () => { throw new Error('disk full'); }),
+    });
+    const result = await service.createWorker({
+      leadSessionId: 'lead-1', role: 'dev', label: 'a', agent: 'codex', executionDeviceId: 'mac-mini',
+    });
+    expect(result).toMatchObject({ ok: false, errorCode: 'INTERNAL' });
+    expect(deps.discardRemoteWorker).toHaveBeenCalledWith({
+      proxySessionId: 'proxy-1', deviceId: 'mac-mini', remoteSessionId: 'remote-1',
+    });
+    expect(deps.recordRemoteWorker).toHaveBeenCalledOnce();
+    expect(deps.addOrUpdateWorker).not.toHaveBeenCalled();
+    expect(deps.removeWorker).not.toHaveBeenCalled();
+  });
+
+  it('reports remote workers as unsupported when the host did not wire them', async () => {
+    const { service } = createDeps();
+    const result = await service.createWorker({
+      leadSessionId: 'lead-1', role: 'dev', label: 'a', agent: 'codex', executionDeviceId: 'mac-mini',
+    });
+    expect(result).toMatchObject({ ok: false, errorCode: 'INVALID_PARAMS' });
+  });
+});
+
+describe('Worker of a lead whose agent runs on another computer', () => {
+  const sparkModels = ['spark/qwen', 'spark/deepseek'].map((id) => ({
+    id, name: id, efforts: ['low', 'high'], defaultEffort: 'high', supportsFastMode: false,
+  }));
+  const views = [
+    { id: 'spark', name: 'Spark', source: 'user', agents: ['claude-code', 'pi'], connected: true,
+      models: { 'claude-code': sparkModels, pi: sparkModels }, routing: { 'claude-code': {}, pi: {} } },
+    { id: 'offline', name: 'Offline', source: 'user', agents: ['pi'], connected: false,
+      models: { pi: [{ id: 'offline/model', name: 'Offline', efforts: [], defaultEffort: null }] }, routing: { pi: {} } },
+  ] as unknown as ProviderView[];
+  const deviceLead = (overrides: Record<string, unknown> = {}) => ({
+    id: 'lead-1', agentKind: 'pi' as const, workspaceKind: 'project' as const, workingDir: '/Users/me/repo',
+    model: 'spark/qwen', effort: 'high', permissionMode: 'default', fastMode: false, providerId: 'spark',
+    remoteHostId: null, agentDeviceId: 'device-b', ...overrides,
+  });
+
+  it.each([undefined, 'spark/deepseek', 'local-only'])('uses that computer for membership and defaults (%s)', async (model) => {
+    const routing = deviceWorkerRoutingContext(views, 'pi');
+    const { deps, service } = createDeps({
+      getLeadSessionRow: vi.fn(async () => deviceLead()),
+      getProviderRoutingContext: vi.fn(async () => routing),
+      getWorkerDefaults: vi.fn(() => ({ model: 'local-only', providerId: 'xd', effort: 'high' })),
+    });
+    const result = await service.createWorker({ leadSessionId: 'lead-1', role: 'reviewer', label: 'reviewer', agent: 'pi', model });
+    expect(deps.getProviderRoutingContext).toHaveBeenCalledWith('pi', null, 'device-b');
+    expect(deps.getAvailableModels).not.toHaveBeenCalled();
+    expect(deps.getWorkerDefaults).not.toHaveBeenCalled();
+    if (model === 'local-only') {
+      expect(result.ok).toBe(false);
+      expect(deps.bootstrapSession).not.toHaveBeenCalled();
+      return;
+    }
+    expect(result.ok).toBe(true);
+    // Worker 跟 lead 在同一台电脑运行，模型与来源按那台的目录。
+    expect(deps.bootstrapSession).toHaveBeenCalledWith(expect.objectContaining({
+      model: model ?? 'spark/qwen', providerId: 'spark', agentDeviceId: 'device-b',
+    }));
+    expect(deps.buildCreateOptsWithStderr).toHaveBeenCalledWith(expect.objectContaining({ agentDeviceId: 'device-b' }));
+  });
+
+  it("starts from that computer's first model when the lead uses another agent", async () => {
+    const routing = deviceWorkerRoutingContext(views, 'claude-code');
+    const { deps, service } = createDeps({
+      getLeadSessionRow: vi.fn(async () => deviceLead({ agentKind: 'codex', model: 'gpt-5.5', providerId: 'openai' })),
+      getProviderRoutingContext: vi.fn(async () => routing),
+    });
+    const result = await service.createWorker({ leadSessionId: 'lead-1', role: 'reviewer', label: 'reviewer', agent: 'claude-code' });
+    expect(result.ok).toBe(true);
+    expect(deps.bootstrapSession).toHaveBeenCalledWith(expect.objectContaining({
+      agentKind: 'claude-code', model: 'spark/qwen', providerId: 'spark', agentDeviceId: 'device-b',
+    }));
+  });
+
+  it('lists only connected sources of that computer', () => {
+    expect(deviceAvailableModels(views, 'pi')).toEqual([
+      ...sparkModels.map(model => ({ id: model.id, label: model.name, providers: [{ id: 'spark', name: 'Spark',
+        access: undefined,
+        modelDetails: expect.objectContaining({ efforts: ['low', 'high'], defaultEffort: 'high', supportsFastMode: false }),
+      }], defaultProviderId: 'spark' })),
+    ]);
+    expect(deviceAvailableModels(views, 'codex')).toEqual([]);
+  });
+
+  // 远程供应商与本机供应商一视同仁(2026-10-10)：每个 Worker 可以单独选 Agent 所在电脑。
+  describe('when the Worker picks its own Agent location', () => {
+    const create = (service: ReturnType<typeof createDeps>['service'], patch: Partial<OrcaWorkerCreateParams>) =>
+      service.createWorker({ leadSessionId: 'lead-1', role: 'reviewer', label: 'reviewer', agent: 'pi', ...patch });
+
+    it("runs a local Lead's Worker on another computer with that computer's catalog", async () => {
+      const routing = deviceWorkerRoutingContext(views, 'pi');
+      const { deps, service } = createDeps({ getProviderRoutingContext: vi.fn(async () => routing) });
+      const result = await create(service, { model: 'spark/deepseek', agentDeviceId: 'device-b' });
+      expect(result).toMatchObject({ ok: true, resolved: { model: 'spark/deepseek', providerId: 'spark', agentDeviceId: 'device-b' } });
+      expect(deps.getProviderRoutingContext).toHaveBeenCalledWith('pi', null, 'device-b');
+      expect(deps.bootstrapSession).toHaveBeenCalledWith(expect.objectContaining({
+        model: 'spark/deepseek', providerId: 'spark', agentDeviceId: 'device-b',
+      }));
+    });
+
+    it("runs a remote Lead's Worker on the task computer when asked", async () => {
+      const { deps, service } = createDeps({ getLeadSessionRow: vi.fn(async () => deviceLead({ agentKind: 'codex', model: 'gpt-5.5', providerId: 'xd' })) });
+      const result = await service.createWorker({
+        leadSessionId: 'lead-1', role: 'dev', label: 'dev', agent: 'codex', model: 'gpt-5.4', agentDeviceId: null,
+      });
+      expect(result).toMatchObject({ ok: true, resolved: { agentDeviceId: null } });
+      expect(deps.getProviderRoutingContext).toHaveBeenCalledWith('codex', null);
+      const opts = vi.mocked(deps.bootstrapSession).mock.calls[0]![0];
+      expect(opts).not.toHaveProperty('agentDeviceId');
+    });
+
+    it("does not carry the Lead's model to a computer that lacks it", async () => {
+      const { service } = createDeps({
+        getLeadSessionRow: vi.fn(async () => deviceLead({ agentKind: 'codex', model: 'gpt-only-on-b', providerId: 'xd' })),
+      });
+      const result = await service.createWorker({
+        leadSessionId: 'lead-1', role: 'dev', label: 'dev', agent: 'codex', agentDeviceId: null,
+      });
+      expect(result).toMatchObject({ ok: true, resolved: { model: 'gpt-5.5', agentDeviceId: null } });
+    });
+
+    it("does not carry the Lead's source to a different computer", async () => {
+      // Lead 在 device-b 用的来源 other 在 device-c 上不存在：跟 Lead 同位置时会按「Lead 来源不可用」拒绝，
+      // 换了位置就按那台的默认来源。
+      const routing = deviceWorkerRoutingContext(views, 'pi');
+      const { deps, service } = createDeps({
+        getLeadSessionRow: vi.fn(async () => deviceLead({ providerId: 'other' })),
+        getProviderRoutingContext: vi.fn(async () => routing),
+      });
+      const result = await create(service, { agentDeviceId: 'device-c' });
+      expect(result).toMatchObject({ ok: true, resolved: { model: 'spark/qwen', providerId: 'spark', agentDeviceId: 'device-c' } });
+      expect(deps.getProviderRoutingContext).toHaveBeenCalledWith('pi', null, 'device-c');
+    });
+
+    it.each([
+      ['[REMOTE_AGENT_SHARE_PAUSED] the owner has paused this share', 'REMOTE_AGENT_SHARE_PAUSED'],
+      ['[DEVICE_LINK_NOT_CONNECTED] offline', 'REMOTE_AGENT_DEVICE_UNREACHABLE'],
+    ])('fails before reserving a slot when that catalog cannot be read (%s)', async (message, errorCode) => {
+      const { deps, service } = createDeps({
+        getProviderRoutingContext: vi.fn(async () => { throw new Error(message); }),
+      });
+      const result = await create(service, { agentDeviceId: 'share:abc' });
+      expect(result).toMatchObject({ ok: false, errorCode });
+      expect(deps.reserveWorkerCreation).not.toHaveBeenCalled();
+      expect(deps.bootstrapSession).not.toHaveBeenCalled();
+    });
+
+    it.each([
+      ['an SSH Lead', { lead: { remoteHostId: 'host-1' }, params: {} }],
+      ['a malformed id', { lead: {}, params: { agentDeviceId: 'bad id/..' } }],
+    ])('rejects another computer for %s', async (_name, { lead, params }) => {
+      const { deps, service } = createDeps({
+        getLeadSessionRow: vi.fn(async () => deviceLead({ agentDeviceId: null, ...lead })),
+      });
+      const result = await create(service, { agentDeviceId: 'device-b', ...params });
+      expect(result).toMatchObject({ ok: false, errorCode: 'INVALID_PARAMS' });
+      expect(deps.reserveWorkerCreation).not.toHaveBeenCalled();
+    });
+
+    it('treats this computer as the task computer', async () => {
+      const { deps, service } = createDeps({ isSelfDeviceId: (id) => id === 'self-pc' });
+      const result = await service.createWorker({
+        leadSessionId: 'lead-1', role: 'dev', label: 'dev', agent: 'codex', agentDeviceId: 'self-pc',
+      });
+      expect(result).toMatchObject({ ok: true, resolved: { agentDeviceId: null } });
+      expect(deps.getProviderRoutingContext).toHaveBeenCalledWith('codex', null);
+    });
+  });
+
+  // 协同任务归供应商组(2026-10-10)：跟 Lead 的 Worker 跟的是 Lead 的组，不是 Lead 这次落到的那台。
+  describe('when the Lead runs through a provider group', () => {
+    const create = (service: ReturnType<typeof createDeps>['service'], patch: Partial<OrcaWorkerCreateParams> = {}) =>
+      service.createWorker({ leadSessionId: 'lead-1', role: 'reviewer', label: 'reviewer', agent: 'pi', ...patch });
+    // Lead 由本机的组(组的供应商 spark)分配到了 device-b，那台的同一个供应商 id 是 spark-b。
+    const groupedLead = (overrides: Record<string, unknown> = {}) => deviceLead({
+      providerId: 'spark-b',
+      providerGroupEntry: { agentDeviceId: null, providerId: 'spark' },
+      ...overrides,
+    });
+
+    it('follows the group entry when no location is given, so the group picks the computer', async () => {
+      const routing = deviceWorkerRoutingContext(views, 'pi');
+      const { deps, service } = createDeps({
+        getLeadSessionRow: vi.fn(async () => groupedLead()),
+        getProviderRoutingContext: vi.fn(async () => routing),
+      });
+      const result = await create(service);
+      expect(result).toMatchObject({ ok: true, resolved: { model: 'spark/qwen', providerId: 'spark', agentDeviceId: null } });
+      expect(deps.getProviderRoutingContext).toHaveBeenCalledTimes(1);
+      expect(deps.getProviderRoutingContext).toHaveBeenCalledWith('pi', null);
+      const opts = vi.mocked(deps.bootstrapSession).mock.calls[0]![0];
+      expect(opts).toMatchObject({ model: 'spark/qwen', providerId: 'spark' });
+      expect(opts).not.toHaveProperty('agentDeviceId');
+    });
+
+    it("treats the Lead's own computer and source chosen in the panel as following the Lead", async () => {
+      const routing = deviceWorkerRoutingContext(views, 'pi');
+      const { deps, service } = createDeps({
+        getLeadSessionRow: vi.fn(async () => groupedLead()),
+        getProviderRoutingContext: vi.fn(async () => routing),
+      });
+      const result = await create(service, { agentDeviceId: 'device-b', providerId: 'spark-b', model: 'spark/deepseek' });
+      expect(result).toMatchObject({ ok: true, resolved: { model: 'spark/deepseek', providerId: 'spark', agentDeviceId: null } });
+      expect(vi.mocked(deps.bootstrapSession).mock.calls[0]![0]).not.toHaveProperty('agentDeviceId');
+    });
+
+    it('follows a group that lives on another computer', async () => {
+      const routing = deviceWorkerRoutingContext(views, 'pi');
+      const { deps, service } = createDeps({
+        getLeadSessionRow: vi.fn(async () => groupedLead({ providerGroupEntry: { agentDeviceId: 'device-g', providerId: 'spark' } })),
+        getProviderRoutingContext: vi.fn(async () => routing),
+      });
+      const result = await create(service);
+      expect(result).toMatchObject({ ok: true, resolved: { providerId: 'spark', agentDeviceId: 'device-g' } });
+      expect(deps.getProviderRoutingContext).toHaveBeenCalledWith('pi', null, 'device-g');
+      expect(deps.bootstrapSession).toHaveBeenCalledWith(expect.objectContaining({ agentDeviceId: 'device-g', providerId: 'spark' }));
+    });
+
+    it("stays with the Lead's computer when the group entry does not offer the model", async () => {
+      const routing = deviceWorkerRoutingContext(views, 'pi');
+      const empty = deviceWorkerRoutingContext([], 'pi');
+      const { deps, service } = createDeps({
+        getLeadSessionRow: vi.fn(async () => groupedLead({ providerId: 'spark' })),
+        getProviderRoutingContext: vi.fn(async (_agent, _host, device) => (device === 'device-b' ? routing : empty)),
+      });
+      const result = await create(service);
+      expect(result).toMatchObject({ ok: true, resolved: { providerId: 'spark', agentDeviceId: 'device-b' } });
+      expect(deps.bootstrapSession).toHaveBeenCalledWith(expect.objectContaining({ agentDeviceId: 'device-b' }));
+    });
+
+    it('keeps an explicit other location, source or agent as chosen', async () => {
+      const routing = deviceWorkerRoutingContext(views, 'pi');
+      const elsewhere = createDeps({
+        getLeadSessionRow: vi.fn(async () => groupedLead()),
+        getProviderRoutingContext: vi.fn(async () => routing),
+      });
+      expect(await create(elsewhere.service, { agentDeviceId: 'device-c' }))
+        .toMatchObject({ ok: true, resolved: { agentDeviceId: 'device-c' } });
+
+      const claude = deviceWorkerRoutingContext(views, 'claude-code');
+      const otherAgent = createDeps({
+        getLeadSessionRow: vi.fn(async () => groupedLead({ providerId: 'spark' })),
+        getProviderRoutingContext: vi.fn(async () => claude),
+      });
+      expect(await create(otherAgent.service, { agent: 'claude-code' }))
+        .toMatchObject({ ok: true, resolved: { agentDeviceId: 'device-b' } });
+      expect(otherAgent.deps.getProviderRoutingContext).toHaveBeenCalledTimes(1);
+    });
+  });
+});
 
 const UUID_V4_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/;
 const WORKER_SESSION_ID = '123e4567-e89b-42d3-a456-426614174000';
@@ -95,6 +557,9 @@ function createDeps(overrides: Partial<OrcaWorkerCreationDeps> = {}) {
     })),
     getWorkerDefaults: vi.fn(() => ({})),
     getWorkerPermissionMode: vi.fn(() => 'auto' as const),
+    resolveWorkerWorkingDir: vi.fn(async (dir) => dir),
+    resolveWorkerWorktreeSource: vi.fn(async (_dir, source) => source ?? 'main'),
+    getWorkerWorktree: vi.fn(() => ({path: '/repo/.cindy-worktrees/worker', branch: 'cindy/worker'})),
     getAvailableModels: vi.fn((agent: AgentKind) => (
       agent === 'codex'
         ? [
@@ -185,6 +650,90 @@ function createDeps(overrides: Partial<OrcaWorkerCreationDeps> = {}) {
     service: createOrcaWorkerCreationService(deps),
   };
 }
+
+describe('Orca worker working directory', () => {
+  const params: OrcaWorkerCreateParams = {
+    leadSessionId: 'lead-1', role: 'developer', agent: 'codex', label: 'worker',
+    initialTask: 'Run in the assigned project',
+  };
+
+  it('binds the resolved directory before bootstrap (dispatch belongs to lifecycle)', async () => {
+    const requested = path.resolve('candidate link ');
+    const resolved = path.resolve('candidate real ');
+    const { deps, service } = createDeps({
+      resolveWorkerWorkingDir: vi.fn(async () => resolved),
+    });
+    const result = await service.createWorker({ ...params, workingDir: requested });
+    expect(result.ok).toBe(true);
+    expect(deps.resolveWorkerWorkingDir).toHaveBeenCalledWith(requested, expect.objectContaining({ id: 'lead-1' }));
+    expect(deps.bootstrapSession).toHaveBeenCalledWith(expect.objectContaining({
+      workingDir: resolved, workspaceKind: 'project',
+    }));
+    expect(deps.dispatchWorkerTask).not.toHaveBeenCalled();
+    expect(vi.mocked(deps.resolveWorkerWorkingDir).mock.invocationCallOrder[0])
+      .toBeLessThan(vi.mocked(deps.bootstrapSession).mock.invocationCallOrder[0]!);
+  });
+
+  // Product C / #4332 (unit): UI telemetry may select a sibling checkout, but omitted tool
+  // working_dir must keep the recorded directory. Earlier coverage had no telemetry candidate.
+  it('keeps the recorded Lead directory even when telemetry resolves to another worktree in the same repository', async () => {
+    const recorded = path.resolve('recorded-project');
+    const checkout = path.join(recorded, '.cindy-worktrees', 'agent');
+    const { deps, service } = createDeps();
+    const lead = { ...(await deps.getLeadSessionRow('lead-1'))!, workingDir: recorded };
+    vi.mocked(deps.getLeadSessionRow).mockResolvedValue(lead);
+    const inferred = await resolveWorkerInheritedDirectory(lead, {
+      infer: input => resolveSessionGitDir(input, {
+        recentToolUseContents: async () => [JSON.stringify({ toolName: 'exec', input: { cwd: checkout, command: 'pwd' } })],
+        probeGitDir: async () => ({ kind: 'branch', branch: 'agent', shortSha: null }),
+      }),
+      probe: async directory => ({ directory, realDirectory: directory, checkoutRoot: directory,
+        commonDir: path.join(recorded, '.git'), baseRepo: recorded, branch: 'agent',
+        exists: true, dirty: false, isWorktree: directory === checkout }),
+    });
+    expect(inferred.directory).toBe(checkout);
+    await expect(service.createWorker(params)).resolves.toMatchObject({ ok: true, workingDir: recorded });
+    expect(deps.resolveWorkerWorkingDir).not.toHaveBeenCalled();
+    expect(deps.bootstrapSession).toHaveBeenCalledWith(expect.objectContaining({ workingDir: recorded }));
+  });
+
+  it.each(['', ' ', 'relative/project', './project', 'a\0b'])('rejects invalid directory %j before creating anything', async (workingDir) => {
+    const { deps, service } = createDeps();
+    expect(await service.createWorker({ ...params, workingDir })).toMatchObject({ ok: false, errorCode: 'INVALID_PARAMS' });
+    expect(deps.resolveWorkerWorkingDir).not.toHaveBeenCalled();
+    expect(deps.reserveWorkerCreation).not.toHaveBeenCalled();
+    expect(deps.bootstrapSession).not.toHaveBeenCalled();
+    expect(deps.dispatchWorkerTask).not.toHaveBeenCalled();
+  });
+
+  it.each(['missing directory', 'not a directory', 'collaboration disabled'])('does not fall back when resolution fails: %s', async (reason) => {
+    const { deps, service } = createDeps({ resolveWorkerWorkingDir: vi.fn(async () => { throw new Error(reason); }) });
+    expect(await service.createWorker({ ...params, workingDir: path.resolve('candidate') }))
+      .toMatchObject({ ok: false, errorCode: 'INVALID_PARAMS' });
+    expect(deps.reserveWorkerCreation).not.toHaveBeenCalled();
+    expect(deps.bootstrapSession).not.toHaveBeenCalled();
+    expect(deps.dispatchWorkerTask).not.toHaveBeenCalled();
+  });
+
+  it('uses project context when a dialogue Lead explicitly selects a directory', async () => {
+    const { deps, service } = createDeps();
+    const lead = await deps.getLeadSessionRow('lead-1');
+    vi.mocked(deps.getLeadSessionRow).mockResolvedValue({ ...lead!, workspaceKind: 'dialogue' });
+    const workingDir = path.resolve('explicit project');
+    expect(await service.createWorker({ ...params, workingDir })).toMatchObject({ ok: true });
+    expect(deps.bootstrapSession).toHaveBeenCalledWith(expect.objectContaining({ workingDir, workspaceKind: 'project' }));
+  });
+
+  it('resolves SSH paths on the inherited host and binds the result', async () => {
+    const { deps, service } = createDeps();
+    const lead = await deps.getLeadSessionRow('lead-1');
+    vi.mocked(deps.getLeadSessionRow).mockResolvedValue({ ...lead!, remoteHostId: 'host-1' });
+    vi.mocked(deps.resolveWorkerWorkingDir).mockResolvedValue('/remote/real');
+    expect(await service.createWorker({ ...params, workingDir: '/remote/project' })).toMatchObject({ ok: true });
+    expect(deps.resolveWorkerWorkingDir).toHaveBeenCalledWith('/remote/project', expect.objectContaining({ remoteHostId: 'host-1' }));
+    expect(deps.bootstrapSession).toHaveBeenCalledWith(expect.objectContaining({ workingDir: '/remote/real', remoteHostId: 'host-1' }));
+  });
+});
 
 describe('OrcaWorkerCreationService', () => {
   const workerStatus = (status: OrcaWorkerStatus): OrcaWorkerStatus => status;
@@ -426,7 +975,8 @@ describe('OrcaWorkerCreationService', () => {
       message: expect.stringContaining('gpt-unknown'),
     });
 
-    expect(deps.getLeadSessionRow).not.toHaveBeenCalled();
+    expect(deps.getLeadSessionRow).toHaveBeenCalledWith('lead-1');
+    expect(deps.getWorkerDefaults).not.toHaveBeenCalled();
     expect(deps.bootstrapSession).not.toHaveBeenCalled();
   });
 
@@ -713,13 +1263,13 @@ describe('OrcaWorkerCreationService', () => {
 
       await expect(service.createWorker(workerParams())).resolves.toMatchObject({
         ok: true,
-        resolved: { model: canonicalId, providerId: null },
+        resolved: { model: canonicalId, providerId: 'xd' },
       });
 
       expect(legacyDefaults).toEqual({ model: shortId, providerId: 'deleted-custom' });
       expect(deps.buildCreateOptsWithStderr).toHaveBeenCalledWith(expect.objectContaining({
         model: canonicalId,
-        providerId: null,
+        providerId: 'xd',
       }));
     });
 
@@ -816,7 +1366,9 @@ describe('OrcaWorkerCreationService', () => {
       message: expect.stringContaining('Claude Code'),
     });
 
-    expect(deps.getLeadSessionRow).not.toHaveBeenCalled();
+    // Read the Lead host to scope the catalog, but do not create any state.
+    expect(deps.getLeadSessionRow).toHaveBeenCalledWith('lead-1');
+    expect(deps.getWorkerDefaults).not.toHaveBeenCalled();
     expect(deps.bootstrapSession).not.toHaveBeenCalled();
     expect(deps.addOrUpdateWorker).not.toHaveBeenCalled();
     expect(deps.dispatchWorkerTask).not.toHaveBeenCalled();
@@ -1180,6 +1732,43 @@ describe('OrcaWorkerCreationService', () => {
     expect(deps.addOrUpdateWorker).not.toHaveBeenCalled();
   });
 
+  it('keeps an explicit effort for a custom model whose capabilities were never declared (#5535)', async () => {
+    // 自定义来源只填了 id/name:目录与路由快照都没有档位声明,[] 只是占位而不是 valid: none。
+    const model = 'custom/step-5-preview';
+    const { deps, service } = createDeps({
+      getAvailableModels: vi.fn((agent: AgentKind) => (
+        agent === 'claude-code'
+          ? [{ id: model, efforts: [], defaultEffort: null, effortsUnknown: true }]
+          : [{ id: 'gpt-5.5', efforts: ['low', 'medium', 'high', 'xhigh'], defaultEffort: 'high', supportsFastMode: true }]
+      )),
+      getProviderRoutingContext: vi.fn(async () => providerRoutingContext({
+        'claude-code': [{
+          id: 'custom-anthropic',
+          name: 'Custom Anthropic Messages',
+          models: [model],
+          effortMetaByModel: { [model]: { efforts: [], defaultEffort: null, effortsUnknown: true } },
+          requiresExplicitRoute: true,
+        }],
+        codex: [{ id: 'xd', name: 'XD Gateway', models: ['gpt-5.5'] }],
+      })),
+    });
+
+    await expect(
+      service.createWorker({
+        leadSessionId: 'lead-1',
+        role: 'reviewer',
+        agent: 'claude-code',
+        label: 'reviewer',
+        model,
+        effort: 'medium',
+      }),
+    ).resolves.toMatchObject({
+      ok: true,
+      resolved: { model, effort: 'medium' },
+    });
+    expect(deps.buildCreateOptsWithStderr).toHaveBeenCalledWith(expect.objectContaining({ model, effort: 'medium' }));
+  });
+
   it('rejects explicit minimal effort for a Claude Code worker at the creation boundary', async () => {
     const { deps, service } = createDeps();
 
@@ -1395,7 +1984,7 @@ describe('OrcaWorkerCreationService', () => {
       effort: 'high',
       fastMode: true,
       permissionMode: 'auto',
-      title: 'Worker · reviewer · reviewer',
+      title: 'Worker · reviewer',
       orcaRole: 'worker',
       vendorOptions: expect.objectContaining({
         orcaRole: 'worker',
@@ -1488,7 +2077,189 @@ describe('OrcaWorkerCreationService', () => {
     }));
   });
 
-  it('falls back from a stale New Maker provider to the current native default route', async () => {
+  it('prefers a compatible Lead route before a cached New Maker route', async () => {
+    const { deps, service } = createDeps({
+      getLeadSessionRow: vi.fn(async () => ({
+        id: 'lead-1',
+        agentKind: 'claude-code' as const,
+        workspaceKind: 'project' as const,
+        workingDir: '/repo',
+        model: 'claude-opus-5',
+        effort: 'high',
+        permissionMode: 'default',
+        fastMode: false,
+        providerId: 'anthropic',
+        remoteHostId: null,
+      })),
+      getWorkerDefaults: vi.fn(() => ({
+        model: 'claude-sonnet-4-6',
+        providerId: 'xd',
+      })),
+      getProviderRoutingContext: vi.fn(async () => providerRoutingContext({
+        'claude-code': [
+          { id: 'xd', name: 'Cindy AI', models: ['claude-sonnet-4-6'] },
+          {
+            id: 'anthropic',
+            name: 'Anthropic',
+            models: ['claude-opus-5', 'claude-sonnet-4-6'],
+          },
+        ],
+      })),
+    });
+
+    await expect(service.createWorker({
+      leadSessionId: 'lead-1',
+      role: 'developer',
+      agent: 'claude-code',
+      label: 'developer',
+    })).resolves.toMatchObject({
+      ok: true,
+      resolved: { providerId: 'anthropic', model: 'claude-sonnet-4-6' },
+    });
+    expect(deps.buildCreateOptsWithStderr).toHaveBeenCalledWith(expect.objectContaining({
+      providerId: 'anthropic',
+      model: 'claude-sonnet-4-6',
+    }));
+  });
+
+  it.each([
+    {
+      name: 'trims a cached provider ID before inheriting it',
+      providerId: ' custom-codex ',
+      expectedProviderId: 'custom-codex',
+    },
+    {
+      name: 'treats a whitespace-only cached provider ID as not selected',
+      providerId: '   ',
+      expectedProviderId: 'xd',
+    },
+  ])('$name', async ({ providerId, expectedProviderId }) => {
+    const cachedDefaults = { model: 'gpt-5.4', providerId };
+    const { deps, service } = createDeps({
+      getLeadSessionRow: vi.fn(async () => ({
+        id: 'lead-1',
+        agentKind: 'claude-code' as const,
+        workspaceKind: 'project' as const,
+        workingDir: '/repo',
+        model: 'claude-sonnet-4-6',
+        effort: 'high',
+        permissionMode: 'default',
+        fastMode: false,
+        providerId: 'anthropic',
+        remoteHostId: null,
+      })),
+      getWorkerDefaults: vi.fn(() => cachedDefaults),
+      getProviderRoutingContext: vi.fn(async () => providerRoutingContext({
+        'claude-code': [],
+        codex: [
+          { id: 'xd', name: 'Cindy AI', models: ['gpt-5.4'] },
+          { id: 'custom-codex', name: 'Custom Codex', models: ['gpt-5.4'] },
+        ],
+      })),
+    });
+
+    await expect(service.createWorker({
+      leadSessionId: 'lead-1',
+      role: 'reviewer',
+      agent: 'codex',
+      label: 'reviewer',
+    })).resolves.toMatchObject({
+      ok: true,
+      resolved: { providerId: expectedProviderId, model: 'gpt-5.4' },
+    });
+    expect(cachedDefaults.providerId).toBe(providerId);
+    expect(deps.buildCreateOptsWithStderr).toHaveBeenCalledWith(expect.objectContaining({
+      providerId: expectedProviderId,
+      model: 'gpt-5.4',
+    }));
+  });
+
+  it('keeps the compatible Anthropic Lead route for an explicit Claude Worker model', async () => {
+    const { deps, service } = createDeps({
+      getLeadSessionRow: vi.fn(async () => ({
+        id: 'lead-1',
+        agentKind: 'claude-code' as const,
+        workspaceKind: 'project' as const,
+        workingDir: '/repo',
+        model: 'claude-opus-5',
+        effort: 'high',
+        permissionMode: 'default',
+        fastMode: false,
+        providerId: 'anthropic',
+        remoteHostId: null,
+      })),
+      getAvailableModels: vi.fn(() => [
+        { id: 'claude-opus-5', efforts: ['low', 'medium', 'high', 'xhigh', 'max'], defaultEffort: 'high' },
+      ]),
+      getProviderRoutingContext: vi.fn(async () => providerRoutingContext({
+        'claude-code': [
+          { id: 'xd', name: 'Cindy AI', models: ['claude-opus-5'] },
+          { id: 'anthropic', name: 'Anthropic', models: ['claude-opus-5'] },
+        ],
+      })),
+    });
+
+    const result = await service.createWorker({
+      leadSessionId: 'lead-1',
+      role: 'developer',
+      agent: 'claude-code',
+      label: 'developer',
+      model: 'claude-opus-5',
+    });
+
+    expect(result).toMatchObject({
+      ok: true,
+      resolved: { providerId: 'anthropic', model: 'claude-opus-5' },
+    });
+    expect(deps.buildCreateOptsWithStderr).toHaveBeenCalledWith(expect.objectContaining({
+      providerId: 'anthropic',
+      model: 'claude-opus-5',
+    }));
+    expect(resolveAgentCredentialMode({
+      agentKind: 'claude-code',
+      providerId: result.ok ? result.resolved.providerId : null,
+      model: result.ok ? result.resolved.model : null,
+    })).toBe('oauth-bearer');
+  });
+
+  it('rejects a missing Anthropic Lead route before falling back to Cindy AI', async () => {
+    const { deps, service } = createDeps({
+      getLeadSessionRow: vi.fn(async () => ({
+        id: 'lead-1',
+        agentKind: 'claude-code' as const,
+        workspaceKind: 'project' as const,
+        workingDir: '/repo',
+        model: 'claude-opus-5',
+        effort: 'high',
+        permissionMode: 'default',
+        fastMode: false,
+        providerId: 'anthropic',
+        remoteHostId: null,
+      })),
+      getAvailableModels: vi.fn(() => [
+        { id: 'claude-opus-5', efforts: ['low', 'medium', 'high', 'xhigh', 'max'], defaultEffort: 'high' },
+      ]),
+      getProviderRoutingContext: vi.fn(async () => providerRoutingContext({
+        'claude-code': [{ id: 'xd', name: 'Cindy AI', models: ['claude-opus-5'] }],
+      })),
+    });
+
+    await expect(service.createWorker({
+      leadSessionId: 'lead-1',
+      role: 'developer',
+      agent: 'claude-code',
+      label: 'developer',
+      model: 'claude-opus-5',
+    })).resolves.toMatchObject({
+      ok: false,
+      errorCode: 'PROVIDER_ROUTE_UNAVAILABLE',
+      message: expect.stringContaining('"anthropic" 当前未连接'),
+    });
+    expect(deps.reserveWorkerCreation).not.toHaveBeenCalled();
+    expect(deps.bootstrapSession).not.toHaveBeenCalled();
+  });
+
+  it('persists the current native route when a stale New Maker provider falls back', async () => {
     const { deps, service } = createDeps({
       getWorkerDefaults: vi.fn(() => ({ model: 'gpt-5.4', providerId: 'deleted-custom' })),
       getProviderRoutingContext: vi.fn(async () => providerRoutingContext({
@@ -1504,11 +2275,11 @@ describe('OrcaWorkerCreationService', () => {
       label: 'reviewer',
     })).resolves.toMatchObject({
       ok: true,
-      resolved: { providerId: null, model: 'gpt-5.4' },
+      resolved: { providerId: 'xd', model: 'gpt-5.4' },
     });
 
     expect(deps.buildCreateOptsWithStderr).toHaveBeenCalledWith(expect.objectContaining({
-      providerId: null,
+      providerId: 'xd',
       model: 'gpt-5.4',
     }));
   });
@@ -1543,7 +2314,7 @@ describe('OrcaWorkerCreationService', () => {
     }));
   });
 
-  it('keeps a model-only legacy default on the current native default route', async () => {
+  it('persists the current native route for a model-only legacy default', async () => {
     const { deps, service } = createDeps({
       getWorkerDefaults: vi.fn(() => ({ model: 'gpt-5.5' })),
     });
@@ -1555,11 +2326,11 @@ describe('OrcaWorkerCreationService', () => {
       label: 'reviewer',
     })).resolves.toMatchObject({
       ok: true,
-      resolved: { providerId: null, model: 'gpt-5.5' },
+      resolved: { providerId: 'xd', model: 'gpt-5.5' },
     });
 
     expect(deps.buildCreateOptsWithStderr).toHaveBeenCalledWith(expect.objectContaining({
-      providerId: null,
+      providerId: 'xd',
     }));
   });
 
@@ -1596,7 +2367,7 @@ describe('OrcaWorkerCreationService', () => {
     }));
   });
 
-  it('keeps the default route while validating connected sources when only the worker model is explicit', async () => {
+  it('pins the sole runtime provider when only the worker model is explicit', async () => {
     const availability = {
       'claude-code': [],
       codex: [
@@ -1618,12 +2389,47 @@ describe('OrcaWorkerCreationService', () => {
       model: 'gpt-5.4',
     })).resolves.toMatchObject({
       ok: true,
-      resolved: { providerId: null, model: 'gpt-5.4' },
+      resolved: { providerId: 'xd', model: 'gpt-5.4' },
     });
 
     expect(deps.buildCreateOptsWithStderr).toHaveBeenCalledWith(expect.objectContaining({
-      providerId: null,
+      providerId: 'xd',
       model: 'gpt-5.4',
+    }));
+  });
+
+  it('uses the sole XD catalog route for an explicit DeepSeek model instead of Codex native auth', async () => {
+    const model = 'deepseek/deepseek-v4-pro';
+    const { deps, service } = createDeps({
+      getAvailableModels: vi.fn(() => [
+        { id: model, efforts: ['high'], defaultEffort: 'high', supportsFastMode: false },
+      ]),
+      getProviderRoutingContext: vi.fn(async () => providerRoutingContext({
+        'claude-code': [],
+        codex: [{
+          id: 'xd',
+          name: 'XD Gateway',
+          models: [model],
+          // gateway-key 不属于 requiresExplicitRoute；唯一来源仍必须固化。
+          requiresExplicitRoute: false,
+        }],
+      })),
+    });
+
+    await expect(service.createWorker({
+      leadSessionId: 'lead-1',
+      role: 'developer',
+      agent: 'codex',
+      label: 'deepseek_worker',
+      model,
+    })).resolves.toMatchObject({
+      ok: true,
+      resolved: { model, providerId: 'xd' },
+    });
+
+    expect(deps.buildCreateOptsWithStderr).toHaveBeenCalledWith(expect.objectContaining({
+      model,
+      providerId: 'xd',
     }));
   });
 
@@ -1921,7 +2727,7 @@ describe('buildNoProviderMessage', () => {
     }));
   });
 
-  it('treats an empty-string providerId as not-explicit and keeps the forced default route', async () => {
+  it('treats an empty-string providerId as not-explicit and pins a sole runtime source', async () => {
     const { service } = createDeps();
 
     await expect(service.createWorker({
@@ -1933,9 +2739,29 @@ describe('buildNoProviderMessage', () => {
       providerId: '',
     })).resolves.toMatchObject({
       ok: true,
-      // 与「显式 model 未显式来源」同语义:providerId 强制默认路由,不进显式 preflight。
-      resolved: { providerId: null, model: 'gpt-5.5' },
+      // 空串仍按未显式处理；唯一可用来源由运行时目录解析,不按模型名写死。
+      resolved: { providerId: 'xd', model: 'gpt-5.5' },
     });
+  });
+
+  // Protocol/admission regression: Fast access alone must not grant the distinct Ultrafast tier.
+  it.each([true, false])('admits explicit Ultrafast only with selected account access (%s)', async (allowed) => {
+    const { service, deps } = createDeps({
+      getProviderRoutingContext: vi.fn(async () => providerRoutingContext({
+        'claude-code': [],
+        codex: [{ id: 'openai', name: 'OpenAI', models: ['gpt-5.5'],
+          fastModels: ['gpt-5.5'], ultrafastModels: allowed ? ['gpt-5.5'] : [] }],
+      })),
+    });
+    const result = await service.createWorker({
+      leadSessionId: 'lead-1', role: 'reviewer', agent: 'codex', label: 'reviewer',
+      model: 'gpt-5.5', providerId: 'openai', fast: 'ultrafast',
+    });
+    expect(result).toMatchObject(allowed
+      ? { ok: true, resolved: { fastMode: 'ultrafast' } }
+      : { ok: false, errorCode: 'INVALID_PARAMS' });
+    if (allowed) expect(deps.buildCreateOptsWithStderr).toHaveBeenCalledWith(expect.objectContaining({ fastMode: 'ultrafast' }));
+    else expect(deps.buildCreateOptsWithStderr).not.toHaveBeenCalled();
   });
 
   it('resolves Fast from the explicit provider catalog entry, not the flattened union', async () => {
@@ -2247,15 +3073,15 @@ describe('SSH remote worker model/provider compatibility gate (R23 P2)', () => {
     });
   });
 
-  it('rejects chat-bridged codex providers for a remote lead (wireProtocol=openai-chat)', async () => {
-    const { service } = createDeps({
+  it.each([['deepseek', 'codex'], ['user-openai-account', 'codex'], ['user-claude-account', 'pi']] as const)('rejects local-only source %s/%s before allocating a remote worker', async (providerId, agent) => {
+    const { service, deps } = createDeps({
       getLeadSessionRow: vi.fn(async () => remoteLeadRow),
       getAvailableModels: vi.fn(() => [
         { id: 'deepseek-v4', efforts: ['low', 'medium', 'high', 'xhigh'], defaultEffort: 'high', supportsFastMode: true },
       ]),
       getProviderRoutingContext: vi.fn(async () => providerRoutingContext({
         'claude-code': [],
-        codex: [{ id: 'deepseek', name: 'DeepSeek', models: ['deepseek-v4'], chatBridgedCodex: true }],
+        [agent]: [{ id: providerId, name: providerId, models: ['deepseek-v4'], localOnlyForSsh: true }],
       })),
     });
 
@@ -2263,16 +3089,17 @@ describe('SSH remote worker model/provider compatibility gate (R23 P2)', () => {
       service.createWorker({
         leadSessionId: 'lead-1',
         role: 'reviewer',
-        agent: 'codex',
+        agent,
         label: 'reviewer',
         model: 'deepseek-v4',
-        providerId: 'deepseek',
+        providerId,
       }),
     ).resolves.toMatchObject({
       ok: false,
       errorCode: 'INVALID_PARAMS',
       message: expect.stringContaining('not available for SSH remote workers'),
     });
+    expect(deps.createSessionId).not.toHaveBeenCalled();
   });
 
   it('still allows SSH-compatible models for a remote lead', async () => {
@@ -2289,9 +3116,10 @@ describe('SSH remote worker model/provider compatibility gate (R23 P2)', () => {
     ).resolves.toMatchObject({ ok: true });
   });
 
-  it('rejects Pi workers for a remote lead before bootstrap (pi sessions are local-only)', async () => {
-    // codex-connector 回归:PiAgent.startSession 对 remoteHostId 一律 NotSupportedError,
-    // 不在 preflight 拒绝会让远程 Lead + Pi 组合在 bootstrap 期落成笼统 INTERNAL。
+  it('allows Pi workers for a remote lead (pi SSH remote runtime landed — round 42)', async () => {
+    // 轮 42:原闸(pi sessions are local-only)写于 Pi SSH remote 能力落地前;
+    // 现 remote pi 全链路可用,worker 继承 lead.remoteHostId 走通用 remote 路径,
+    // preflight 不再拒绝,直接进 bootstrap。
     const { service, deps } = createDeps({
       getLeadSessionRow: vi.fn(async () => remoteLeadRow),
       getProviderRoutingContext: vi.fn(async () => providerRoutingContext({
@@ -2300,19 +3128,22 @@ describe('SSH remote worker model/provider compatibility gate (R23 P2)', () => {
         pi: [{ id: 'xd', name: 'XD Gateway', models: ['claude-sonnet-4-6'] }],
       })),
     });
-    await expect(
-      service.createWorker({
-        leadSessionId: 'lead-1',
-        role: 'developer',
-        agent: 'pi',
-        label: 'pi-dev',
-      }),
-    ).resolves.toMatchObject({
-      ok: false,
-      errorCode: 'INVALID_PARAMS',
-      message: expect.stringContaining('local-only'),
+    const result = await service.createWorker({
+      leadSessionId: 'lead-1',
+      role: 'developer',
+      agent: 'pi',
+      label: 'pi-dev',
     });
-    expect(deps.bootstrapSession).not.toHaveBeenCalled();
+    expect(result).toMatchObject({ ok: true });
+    // worker bootstrap 继承 lead 的 remoteHostId + workingDir(同远端主机 spawn)。
+    expect(deps.bootstrapSession).toHaveBeenCalledWith(
+      expect.objectContaining({
+        agentKind: 'pi',
+        remoteHostId: 'remote-host-1',
+        workingDir: '/srv/repo',
+        orcaRole: 'worker',
+      }),
+    );
   });
 });
 
@@ -2337,7 +3168,7 @@ describe('SSH remote worker model/provider compatibility gate (R23 P2)', () => {
       ]),
       getProviderRoutingContext: vi.fn(async () => providerRoutingContext({
         'claude-code': [],
-        codex: [{ id: 'deepseek', name: 'DeepSeek', models: ['deepseek-v4'], chatBridgedCodex: true }],
+        codex: [{ id: 'deepseek', name: 'DeepSeek', models: ['deepseek-v4'], localOnlyForSsh: true }],
       })),
     });
 
@@ -2379,7 +3210,7 @@ describe('SSH remote worker model/provider compatibility gate (R23 P2)', () => {
       ]),
       getProviderRoutingContext: vi.fn(async () => providerRoutingContext({
         'claude-code': [],
-        codex: [{ id: 'deepseek', name: 'DeepSeek', models: ['deepseek-v4'], chatBridgedCodex: true }],
+        codex: [{ id: 'deepseek', name: 'DeepSeek', models: ['deepseek-v4'], localOnlyForSsh: true }],
       })),
     });
 
@@ -2397,3 +3228,267 @@ describe('SSH remote worker model/provider compatibility gate (R23 P2)', () => {
       message: expect.stringContaining('not available for SSH remote workers'),
     });
   });
+
+// Test value: the UI's optional worktree creates new filesystem ownership before bootstrap.
+// The former tests only cover binding an existing path. Failures at each persistence boundary
+// must release that new ownership, never an inherited checkout. Unit tier, injected I/O.
+describe('local Worker worktree ownership', () => {
+  const request = {leadSessionId: 'lead-1', role: 'developer', label: 'worker', agent: 'codex' as const,
+    worktree: {sourceBranch: 'feature'}};
+  // PR2 unit: a tool can omit the source revision; return actual cwd and registered ownership.
+  // UI coverage always supplied a source and never asserted the public spawn facts.
+  it('resolves an omitted source and returns the actual subproject cwd separately from the owned checkout', async () => {
+    const {deps, service} = createDeps({
+      createWorkerWorktree: vi.fn(async () => '/repo/.cindy-worktrees/worker/apps/web'),
+      discardWorkerWorktree: vi.fn(async () => {}),
+      resolveWorkerWorktreeSource: vi.fn(async () => 'detached-commit'),
+    });
+    await expect(service.createWorker({...request, worktree: {}})).resolves.toMatchObject({
+      ok: true, workingDir: '/repo/.cindy-worktrees/worker/apps/web',
+      worktree: {path: '/repo/.cindy-worktrees/worker', branch: 'cindy/worker'},
+    });
+    expect(deps.createWorkerWorktree).toHaveBeenCalledWith(WORKER_SESSION_ID, 'C:\\repo', 'detached-commit');
+    expect(deps.getWorkerWorktree).toHaveBeenCalledWith(WORKER_SESSION_ID);
+  });
+
+  it.each(['SSH', 'execution-device', 'dialogue', 'malformed'])('rejects %s worktree creation without probing or reserving', async kind => {
+    const {deps, service} = createDeps({createWorkerWorktree: vi.fn(), discardWorkerWorktree: vi.fn()});
+    const lead = await deps.getLeadSessionRow('lead-1');
+    vi.mocked(deps.getLeadSessionRow).mockResolvedValue({...lead!,
+      ...(kind === 'SSH' ? {remoteHostId: 'ssh-host'} : {}),
+      ...(kind === 'dialogue' ? {workspaceKind: 'dialogue' as const} : {}),
+    });
+    const result = await service.createWorker({...request,
+      ...(kind === 'execution-device' ? {executionDeviceId: 'other'} : {}),
+      ...(kind === 'malformed' ? {worktree: null as never} : {}),
+    });
+    expect(result).toMatchObject({ok: false, errorCode: 'INVALID_PARAMS'});
+    expect(deps.resolveWorkerWorktreeSource).not.toHaveBeenCalled();
+    expect(deps.reserveWorkerCreation).not.toHaveBeenCalled();
+    expect(deps.bootstrapSession).not.toHaveBeenCalled();
+    expect(deps.createWorkerWorktree).not.toHaveBeenCalled();
+  });
+
+  it.each(['Repository has no commits', 'Worktree source_branch must reference an existing commit'])('rejects an unavailable Git target before reservation: %s', async message => {
+    const {deps, service} = createDeps({createWorkerWorktree: vi.fn(), discardWorkerWorktree: vi.fn(),
+      resolveWorkerWorktreeSource: vi.fn(async () => {throw new Error(message);}),
+    });
+    await expect(service.createWorker({...request, worktree: {}})).resolves.toMatchObject({ok: false, errorCode: 'INVALID_PARAMS', message});
+    expect(deps.reserveWorkerCreation).not.toHaveBeenCalled();
+    expect(deps.createWorkerWorktree).not.toHaveBeenCalled();
+    expect(deps.bootstrapSession).not.toHaveBeenCalled();
+  });
+
+  // #6623 P1 (unit): source policy does not authorize a fallback checkout root.
+  // Earlier coverage accepted every resolved directory and missed this bootstrap boundary.
+  it.each([false, true])('revalidates a missing-subproject fallback before bootstrap (root allowed=%s)', async allowed => {
+    const selected = path.resolve('repo/apps/web');
+    const checkoutRoot = path.resolve('repo/.cindy-worktrees/worker');
+    const {deps, service} = createDeps({
+      createWorkerWorktree: vi.fn(async () => checkoutRoot),
+      discardWorkerWorktree: vi.fn(async () => {}),
+      resolveWorkerWorkingDir: vi.fn(async directory => {
+        if (directory === checkoutRoot && !allowed) throw new Error('Collaboration disabled');
+        return directory;
+      }),
+    });
+    const result = await service.createWorker({...request, workingDir: selected});
+    expect(deps.resolveWorkerWorkingDir).toHaveBeenNthCalledWith(2, checkoutRoot, expect.objectContaining({id: 'lead-1'}));
+    if (allowed) {
+      expect(result).toMatchObject({ok: true, workingDir: checkoutRoot});
+      expect(deps.bootstrapSession).toHaveBeenCalledWith(expect.objectContaining({workingDir: checkoutRoot}));
+      expect(deps.discardWorkerWorktree).not.toHaveBeenCalled();
+    } else {
+      expect(result).toMatchObject({ok: false, errorCode: 'INVALID_PARAMS',
+        message: 'working_dir is unavailable or collaboration is disabled for that directory; no Worker was started'});
+      expect(deps.bootstrapSession).not.toHaveBeenCalled();
+      expect(deps.addOrUpdateWorker).not.toHaveBeenCalled();
+      expect(deps.discardWorkerWorktree).toHaveBeenCalledWith(WORKER_SESSION_ID);
+    }
+    expect(deps.releaseWorkerCreationReservation).toHaveBeenCalledWith('worker-1');
+  });
+
+  it('allows a dialogue Lead to explicitly target another local Git project', async () => {
+    const {deps, service} = createDeps({createWorkerWorktree: vi.fn(async () => '/new/checkout'), discardWorkerWorktree: vi.fn()});
+    const lead = await deps.getLeadSessionRow('lead-1');
+    vi.mocked(deps.getLeadSessionRow).mockResolvedValue({...lead!, workspaceKind: 'dialogue'});
+    const selected = path.resolve('other-project');
+    await expect(service.createWorker({...request, workingDir: selected})).resolves.toMatchObject({ok: true, workingDir: '/new/checkout'});
+    expect(deps.resolveWorkerWorktreeSource).toHaveBeenCalledWith(selected, 'feature', 'C:\\repo');
+    expect(deps.bootstrapSession).toHaveBeenCalledWith(expect.objectContaining({workspaceKind: 'project', workingDir: '/new/checkout'}));
+  });
+
+  it('returns the recorded directory without claiming ownership when no worktree was requested', async () => {
+    const {deps, service} = createDeps();
+    const result = await service.createWorker({...request, worktree: undefined});
+    expect(result).toMatchObject({ok: true, workingDir: 'C:\\repo'});
+    expect(result).not.toHaveProperty('worktree');
+    expect(deps.resolveWorkerWorktreeSource).not.toHaveBeenCalled();
+    expect(deps.getWorkerWorktree).not.toHaveBeenCalled();
+  });
+
+  it('binds the newly created checkout to the Worker session and leaves success asynchronous', async () => {
+    const {deps, service} = createDeps({
+      createWorkerWorktree: vi.fn(async () => '/repo/.cindy-worktrees/worker'),
+      discardWorkerWorktree: vi.fn(async () => {}),
+    });
+    await expect(service.createWorker(request)).resolves.toMatchObject({ok: true, workerSessionId: WORKER_SESSION_ID});
+    expect(deps.createWorkerWorktree).toHaveBeenCalledWith(WORKER_SESSION_ID, 'C:\\repo', 'feature');
+    expect(deps.bootstrapSession).toHaveBeenCalledWith(expect.objectContaining({id: WORKER_SESSION_ID, workingDir: '/repo/.cindy-worktrees/worker'}));
+    expect(deps.discardWorkerWorktree).not.toHaveBeenCalled();
+  });
+  it.each(['create', 'ownership', 'bootstrap', 'renewal', 'persist', 'postcheck'])('compensates a %s failure before releasing the reservation', async phase => {
+    let finishCheckout!: () => void;
+    const checkout = new Promise<void>(resolve => {finishCheckout = resolve;});
+    let compensationStarted!: () => void;
+    const entered = new Promise<void>(resolve => {compensationStarted = resolve;});
+    const removed: string[] = [];
+    const {deps, service} = createDeps({
+      createWorkerWorktree: vi.fn(async () => {if (phase === 'create') throw new Error('Git failed'); return '/repo/.cindy-worktrees/worker';}),
+      discardWorkerWorktree: vi.fn(async id => {compensationStarted(); await checkout; removed.push(id);}),
+      ...(phase === 'ownership' ? {getWorkerWorktree: vi.fn(() => undefined)} : {}),
+      ...(phase === 'bootstrap' ? {bootstrapSession: vi.fn(async () => {throw new Error('start failed');})} : {}),
+      ...(phase === 'renewal' ? {renewWorkerCreationReservation: vi.fn(async () => false)} : {}),
+      ...(phase === 'persist' ? {addOrUpdateWorker: vi.fn(async () => {throw new Error('write failed');})} : {}),
+      ...(phase === 'postcheck' ? {markOrcaRoleIfNeeded: vi.fn(async () => {throw new Error('mark failed');})} : {}),
+    });
+    const result = service.createWorker(request);
+    await entered;
+    expect(removed).toEqual([]);
+    expect(deps.releaseWorkerCreationReservation).not.toHaveBeenCalled();
+    finishCheckout();
+    await expect(result).resolves.toMatchObject({ok: false});
+    expect(removed).toEqual([WORKER_SESSION_ID]);
+    expect(deps.releaseWorkerCreationReservation).toHaveBeenCalledWith('worker-1');
+    if (phase === 'create' || phase === 'ownership') expect(deps.bootstrapSession).not.toHaveBeenCalled();
+  });
+  it('never claims or discards an inherited checkout, even when bootstrap fails', async () => {
+    const {deps, service} = createDeps({
+      createWorkerWorktree: vi.fn(), discardWorkerWorktree: vi.fn(),
+      bootstrapSession: vi.fn(async () => {throw new Error('start failed');}),
+    });
+    await expect(service.createWorker({...request, worktree: undefined})).resolves.toMatchObject({ok: false});
+    expect(deps.createWorkerWorktree).not.toHaveBeenCalled();
+    expect(deps.discardWorkerWorktree).not.toHaveBeenCalled();
+  });
+  it('rejects a new worktree on an execution device before reservation', async () => {
+    const {deps, service} = createDeps({createWorkerWorktree: vi.fn(), discardWorkerWorktree: vi.fn()});
+    await expect(service.createWorker({...request, executionDeviceId: 'other'})).resolves.toMatchObject({ok: false, errorCode: 'INVALID_PARAMS'});
+    expect(deps.reserveWorkerCreation).not.toHaveBeenCalled();
+  });
+});
+
+// Worker defaults parity (unit): real creation/bootstrap results, not source inspection.
+// Old tests always supplied agent and had no submitted panel route. Minimal regression:
+// omit agent/model with a saved route, or disconnect that exact provider before creation.
+describe('Worker tool defaults follow the submitted panel route atomically', () => {
+  const request = { leadSessionId: 'lead-1', role: 'developer', label: 'worker', useCreationPrefs: true };
+  const saved = { agent: 'codex' as const, model: 'gpt-5.4', effort: 'high', fast: true,
+    providerId: 'xd', agentDeviceId: null };
+  // PR #7933 unit regression: createWorker must preserve admission errors before
+  // resolving defaults. Existing admission tests always supplied agent; the minimal
+  // failure is an unavailable saved provider, no agent, and a full team or used label.
+  it.each([
+    { label: 'another-worker', errorCode: 'WORKER_LIMIT_HARD_EXCEEDED',
+      limit: { workerHardLimit: 1, occupiedSlots: 1, remainingSlots: 0 } },
+    { label: ' WORKER ', errorCode: 'DUPLICATE_LABEL' },
+  ])('rejects $errorCode before reading a saved route or catalog', async ({ label, errorCode, limit }) => {
+    const getCreationSelection = vi.fn(() => ({ ...saved, providerId: 'disconnected' }));
+    const { service, deps } = createDeps({
+      getCreationSelection,
+      listWorkersByLead: vi.fn(async () => [{ id: 'worker-existing', label: 'worker', status: 'idle' as const }]),
+      readCollaborationSettings: vi.fn(() => ({ workerSoftLimit: 1, workerHardLimit: 1 })),
+    });
+    const result = await service.createWorker({ ...request, label });
+    expect(result).toMatchObject({ ok: false, errorCode });
+    if (limit) expect(result).toHaveProperty('limit', limit);
+    else expect(result).not.toHaveProperty('limit');
+    expect(getCreationSelection).not.toHaveBeenCalled();
+    expect(deps.getProviderRoutingContext).not.toHaveBeenCalled();
+    expect(deps.getAvailableModels).not.toHaveBeenCalled();
+    expect(deps.getLeadSessionRow).not.toHaveBeenCalled();
+    expect(deps.reserveWorkerCreation).not.toHaveBeenCalled();
+    expect(deps.bootstrapSession).not.toHaveBeenCalled();
+  });
+  it('checks existing creation authority before reading a remembered remote catalog', async () => {
+    const getCreationSelection = vi.fn(() => ({ ...saved, agentDeviceId: 'another-computer' }));
+    const assertCurrent = vi.fn(async () => { throw new Error('permission revoked'); });
+    const { service, deps } = createDeps({ getCreationSelection });
+    await expect(service.createWorker({ ...request, label: ' WORKER ' }, assertCurrent)).rejects.toThrow('permission revoked');
+    expect(assertCurrent).toHaveBeenCalledOnce();
+    expect(getCreationSelection).not.toHaveBeenCalled();
+    expect(deps.getProviderRoutingContext).not.toHaveBeenCalled();
+    expect(deps.reserveWorkerCreation).not.toHaveBeenCalled();
+  });
+  it('restores a submitted model without reasoning effort instead of treating empty effort as no selection', async () => {
+    const { service } = createDeps({ getCreationSelection: () => ({ ...saved, model: 'no-effort', effort: '', fast: false }),
+      getAvailableModels: () => [{ id: 'no-effort', efforts: [], defaultEffort: null }],
+      getProviderRoutingContext: async () => providerRoutingContext({ codex: [{ id: 'xd', name: 'Gateway', models: ['no-effort'],
+        effortMetaByModel: { 'no-effort': { efforts: [], defaultEffort: null } } }] }),
+    });
+    expect(await service.createWorker(request)).toMatchObject({ ok: true, defaults: { source: 'memory' }, resolved: { model: 'no-effort', effort: null } });
+  });
+  it.each([{}, { agent: 'codex' as const }, { model: 'gpt-5.4' }])('restores the entire route for %j', async explicit => {
+    const { service, deps } = createDeps({ getCreationSelection: () => saved });
+    const result = await service.createWorker({ ...request, ...explicit });
+    expect(result).toMatchObject({ ok: true, defaults: { source: 'memory' }, resolved: {
+      agent: 'codex', model: 'gpt-5.4', providerId: 'xd', agentDeviceId: null, effort: 'high', fastMode: true,
+    } });
+    expect(deps.bootstrapSession).toHaveBeenCalledWith(expect.objectContaining({ model: 'gpt-5.4', effort: 'high', fastMode: true }));
+  });
+  it.each([{ model: 'gpt-5.5' }, { agent: 'claude-code' as const }, { agent: 'codex' as const, agentDeviceId: null },
+    { agent: 'codex' as const, providerId: 'xd' }])('keeps original policy for explicit changes %j', async explicit => {
+    const { service } = createDeps({ getCreationSelection: () => saved });
+    const result = await service.createWorker({ ...request, ...explicit });
+    expect(result.ok).toBe(true);
+    if (result.ok) {
+      expect(result.defaults?.source).not.toBe('memory');
+      expect(result.resolved.model).not.toBe(saved.model);
+    }
+  });
+  it('requires an agent without a submitted selection and leaves all side effects untouched', async () => {
+    const { service, deps } = createDeps();
+    expect(await service.createWorker(request)).toMatchObject({ ok: false, errorCode: 'INVALID_PARAMS', message: expect.stringContaining('Specify agent') });
+    expect(deps.reserveWorkerCreation).not.toHaveBeenCalled();
+    expect(deps.bootstrapSession).not.toHaveBeenCalled();
+  });
+  it.each([{}, { agent: 'codex' as const }, { model: 'gpt-5.5' }])('drops every saved field on an unavailable provider %j', async explicit => {
+    const { service, deps } = createDeps({ getCreationSelection: () => ({ ...saved, providerId: 'disconnected' }) });
+    const result = await service.createWorker({ ...request, ...explicit });
+    if (!('agent' in explicit) && !('model' in explicit)) {
+      expect(result).toMatchObject({ ok: false, errorCode: 'INVALID_PARAMS', message: expect.stringContaining('Specify agent and retry') });
+      expect(deps.bootstrapSession).not.toHaveBeenCalled();
+    } else {
+      expect(result).toMatchObject({ ok: true, defaults: { source: 'original-policy' }, resolved: { model: 'gpt-5.5', fastMode: false } });
+      // Only matching route attempts must explain rejection; a different model never uses memory.
+      if ('agent' in explicit && result.ok) expect(result.defaults?.fallbackReason).toContain('provider is disconnected');
+    }
+  });
+  it.each(['[REMOTE_AGENT_SHARE_PAUSED] secret-endpoint', 'offline secret-endpoint'])('returns a safe reason and never switches a failed saved device silently: %s', async error => {
+    const { service, deps } = createDeps({ getCreationSelection: () => ({ ...saved, agentDeviceId: 'share:fake' }),
+      getProviderRoutingContext: vi.fn(async () => { throw new Error(error); }) });
+    const result = await service.createWorker(request);
+    expect(result).toMatchObject({ ok: false, errorCode: 'INVALID_PARAMS' });
+    if (!result.ok) { expect(result.message).toContain('shared provider'); expect(result.message).not.toContain('secret-endpoint'); }
+    expect(deps.reserveWorkerCreation).not.toHaveBeenCalled();
+  });
+  it('uses the saved agent to disambiguate a model, but refuses ambiguity after rejecting the route', async () => {
+    const { service, deps } = createDeps({ getCreationSelection: () => ({ ...saved, agent: 'pi', model: 'auto', fast: false }),
+      getAvailableModels: () => [{ id: 'auto', efforts: ['high'] }],
+      getProviderRoutingContext: async () => providerRoutingContext({ codex: [{ id: 'xd', name: 'Gateway', models: ['auto'] }],
+        pi: [{ id: 'xd', name: 'Gateway', models: ['auto'] }] }),
+    });
+    expect(await service.createWorker({ ...request, model: 'auto' })).toMatchObject({ ok: true, resolved: { agent: 'pi' } });
+    deps.getCreationSelection = () => ({ ...saved, agent: 'pi', model: 'auto', providerId: 'missing' });
+    expect(await service.createWorker({ ...request, label: 'retry', model: 'auto' })).toMatchObject({ ok: false, errorCode: 'INVALID_PARAMS', message: expect.stringContaining('multiple agents') });
+  });
+  it('does not apply panel memory to SSH, execution devices or manual creation', async () => {
+    for (const kind of ['ssh', 'execution', 'manual']) {
+      const getCreationSelection = vi.fn(() => saved);
+      const { service, deps } = createDeps({ getCreationSelection });
+      if (kind === 'ssh') vi.mocked(deps.getLeadSessionRow).mockResolvedValue({ ...(await deps.getLeadSessionRow('lead-1'))!, remoteHostId: 'ssh' });
+      await service.createWorker({ ...request, agent: 'codex', ...(kind === 'execution' ? { executionDeviceId: 'device' } : {}), useCreationPrefs: kind !== 'manual' });
+      expect(getCreationSelection).not.toHaveBeenCalled();
+    }
+  });
+});

@@ -4,7 +4,7 @@
  * Hook 新会话的 agent / model / effort / permissionMode / providerId 合成
  * (取值链的桌面端末段):
  *
- *   server 显式值(用户在 Slack 按工作目录设置的偏好) > 桌面端 IM 新会话
+ *   本机目录偏好(尚未迁移时才回落 dispatch/server 便签) > 桌面端 IM 新会话
  *   默认值(草稿, 建 session 那一刻实时读) > 当前可用模型清单的首项 >
  *   草稿裸值(没有任何可用模型时的兼容兜底)
  *
@@ -14,9 +14,11 @@
  * 的清单本就来自本机实时供应商目录, 非法值只出现在
  * "偏好过期"(模型下架 / agent 换代)的窗口里。
  *
- * permissionMode 例外: IM 草稿默认没有权限概念, 取值链是「显式且该 agent
- * 支持 > 显式但不支持时回落该 agent **最严**档 > 从未填显式档时
- * 'bypassPermissions'」。
+ * permissionMode 例外: 本模块**刻意不消费**草稿里的权限档(注入面
+ * `HookDefaultsDeps.readDefaults` 压根没这个字段 —— 草稿本身是有的,
+ * `ImDefaultSettings.permissionMode` 出厂 'auto', 个人 IM 那侧照常用它)。
+ * 这里的取值链是「显式且该 agent 支持 > 显式但不支持时回落该 agent **最严**档 >
+ * 从未填显式档时 'bypassPermissions'」。
  *
  * 「不支持时只能更严不能更宽」是安全方向的硬要求(2026-07 修正; 旧实现在此
  * 回落 bypass): 用户填过显式档 = 明确表达过「不要默认的完全访问」, 换 agent
@@ -52,6 +54,7 @@ export interface HookDefaultsDeps {
 }
 
 export interface ResolvedHookSessionConfig {
+  agentDeviceId?: string | null;
   agentKind: 'claude-code' | 'codex' | 'pi';
   model: string;
   effort: Effort | undefined;

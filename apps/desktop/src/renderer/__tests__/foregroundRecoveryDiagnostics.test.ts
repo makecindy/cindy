@@ -1,4 +1,4 @@
-/**
+﻿/**
  * foregroundRecoveryDiagnostics.test.ts
  * ---------------------------------------------------------------------------
  * focus / visibility 前台恢复诊断的纯函数测试。
@@ -33,7 +33,7 @@ import {
   type PerformanceLike,
 } from '../lib/foregroundRecoveryDiagnostics';
 
-const rendererIndexSource = readFileSync(resolve(__dirname, '..', 'index.tsx'), 'utf8').replace(/\r\n?/g, '\n');
+const rendererIndexSource = readFileSync(resolve(__dirname, '..', 'main-entry.tsx'), 'utf8').replace(/\r\n?/g, '\n');
 
 describe('前台恢复诊断', () => {
   beforeEach(() => {

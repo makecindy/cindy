@@ -38,6 +38,7 @@ function withWechatInfoPlist(config, appId) {
       ...(info.LSApplicationQueriesSchemes || []),
       'weixin',
       'weixinULAPI',
+      'weixinURLParamsAPI',
     ]);
     const urlTypes = Array.isArray(info.CFBundleURLTypes)
       ? info.CFBundleURLTypes

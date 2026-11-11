@@ -1,10 +1,10 @@
 import Database from 'better-sqlite3';
 import { describe, expect, it } from 'vitest';
 
-// Migration runner loads drizzle scripts through CommonJS require.
-// eslint-disable-next-line @typescript-eslint/no-require-imports
-const migration = require('../../../drizzle/scripts/0066_slim_messages_fts.ts') as {
-  run: (db: Database.Database) => void;
+// Production keeps migration helpers CommonJS; Vitest loads the TS helper through
+// its transformer and consumes the CommonJS default export.
+const { default: migration } = (await import('../../../drizzle/scripts/0066_slim_messages_fts')) as {
+  default: { run: (db: Database.Database) => void };
 };
 
 /** 0017 形态的最小 messages 表 + 旧版全量 FTS(insert 触发器无 role 过滤)。 */

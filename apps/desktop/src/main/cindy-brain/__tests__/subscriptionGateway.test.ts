@@ -5,6 +5,7 @@
  * 归属校验、reason 截断;turn 翻译器状态机与 usage 归一化;activity 边界配对与轮次来源过滤。
  */
 
+import fs from 'node:fs';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import {
@@ -13,11 +14,17 @@ import {
   GhostTapPendingQueue,
   GhostTurnOriginTracker,
   GhostTurnTranslator,
+  createGhostPrimarySessionFocusTracker,
   createGhostSessionFocusTracker,
   ghostActivityId,
   isGhostEligibleSessionRow,
+  isGhostSessionSwitchEligibleRow,
   normalizeTurnUsage,
   readStatusIsRunning,
+  resolveGhostPrimarySessionId,
+  resolveGhostUserHookModel,
+  withGhostAssistantHookModel,
+  withGhostUserHookModel,
   type GhostSubscriptionGatewayDeps,
 } from '../subscriptionGateway';
 import {
@@ -27,6 +34,241 @@ import {
   type GhostPipeEventPush,
   type InstalledGhost,
 } from '../../../shared/ghost';
+import { installedGhostStoragePart } from '../../../shared/pluginIdentity.js';
+import { createGhostProductionCallbacks } from './ghostProductionCallbacksFixture.js';
+import { GhostNotificationIndex } from '../ghostNotificationIndex.js';
+import { createRuntimePluginControl } from '../runtimeControl.js';
+import { createRuntimeContextProviders } from '../runtimeContext.js';
+import type { RuntimePluginSettings } from '../../../shared/pluginRuntime.js';
+
+const createSessionNotification = createGhostProductionCallbacks<{
+  notifyGhostSessionEvent(
+    kind: 'created' | 'archived' | 'switched',
+    data: { sessionId: string },
+    claim: () => Promise<boolean>,
+    releaseRaw: (resetPrimary?: boolean) => void,
+  ): void;
+}>({ functions: ['notifyGhostSessionEvent'] });
+
+describe('did-session-switched primary session resolution', () => {
+  it('allows ordinary sessions and Orca leads, but never workers or background sessions', () => {
+    expect(isGhostSessionSwitchEligibleRow({ source: 'desktop', orcaRole: null })).toBe(true);
+    expect(isGhostSessionSwitchEligibleRow({ source: 'shared', orcaRole: 'lead' })).toBe(true);
+    expect(isGhostSessionSwitchEligibleRow({ source: 'plugin', orcaRole: 'lead' })).toBe(true);
+    expect(isGhostSessionSwitchEligibleRow({ source: 'desktop', orcaRole: 'worker' })).toBe(false);
+    expect(isGhostSessionSwitchEligibleRow({ source: 'desktop', orcaRole: 'unknown' })).toBe(false);
+    expect(isGhostSessionSwitchEligibleRow({ source: 'scheduler', orcaRole: null })).toBe(false);
+  });
+
+  it('keeps ordinary and lead ids, and maps a worker to its lead', async () => {
+    const roles = new Map<string, string | null>([
+      ['ordinary', null],
+      ['lead', 'lead'],
+      ['worker', 'worker'],
+    ]);
+    const readSession = vi.fn(async (sessionId: string) =>
+      roles.has(sessionId) ? { orcaRole: roles.get(sessionId) } : null,
+    );
+    const resolveWorkerLead = vi.fn(async () => 'lead');
+
+    await expect(
+      resolveGhostPrimarySessionId('ordinary', readSession, resolveWorkerLead),
+    ).resolves.toBe('ordinary');
+    await expect(resolveGhostPrimarySessionId('lead', readSession, resolveWorkerLead)).resolves.toBe(
+      'lead',
+    );
+    await expect(
+      resolveGhostPrimarySessionId('worker', readSession, resolveWorkerLead),
+    ).resolves.toBe('lead');
+    expect(resolveWorkerLead).toHaveBeenCalledTimes(1);
+    expect(resolveWorkerLead).toHaveBeenCalledWith('worker');
+  });
+
+  it('fails closed for missing rows, unknown roles, missing teams, and lookup failures', async () => {
+    const noTeam = vi.fn(async () => null);
+    await expect(
+      resolveGhostPrimarySessionId('missing', async () => null, noTeam),
+    ).resolves.toBeNull();
+    await expect(
+      resolveGhostPrimarySessionId('unknown', async () => ({ orcaRole: 'unknown' }), noTeam),
+    ).resolves.toBeNull();
+    await expect(
+      resolveGhostPrimarySessionId('worker', async () => ({ orcaRole: 'worker' }), noTeam),
+    ).resolves.toBeNull();
+    await expect(
+      resolveGhostPrimarySessionId(
+        'worker',
+        async () => {
+          throw new Error('db unavailable');
+        },
+        noTeam,
+      ),
+    ).resolves.toBeNull();
+  });
+});
+
+describe('createGhostPrimarySessionFocusTracker', () => {
+  it('deduplicates different workers that resolve to the same lead', async () => {
+    const published: string[] = [];
+    const notify = vi.fn(async (sessionId: string, claim: () => Promise<boolean>) => {
+      if (await claim()) published.push(sessionId);
+    });
+    const tracker = createGhostPrimarySessionFocusTracker(async () => 'lead', notify);
+
+    tracker.note('worker-1');
+    await vi.waitFor(() => expect(published).toEqual(['lead']));
+    tracker.note('worker-2');
+    await Promise.resolve();
+
+    expect(published).toEqual(['lead']);
+  });
+
+  it('ignores a stale async resolution after focus changes', async () => {
+    let resolveFirst!: (sessionId: string | null) => void;
+    let resolveSecond!: (sessionId: string | null) => void;
+    const first = new Promise<string | null>((resolve) => {
+      resolveFirst = resolve;
+    });
+    const second = new Promise<string | null>((resolve) => {
+      resolveSecond = resolve;
+    });
+    const resolve = vi.fn((sessionId: string) => (sessionId === 'worker-1' ? first : second));
+    const published: string[] = [];
+    const notify = vi.fn(async (sessionId: string, claim: () => Promise<boolean>) => {
+      if (await claim()) published.push(sessionId);
+    });
+    const tracker = createGhostPrimarySessionFocusTracker(resolve, notify);
+
+    tracker.note('worker-1');
+    tracker.note('worker-2');
+    resolveSecond('lead-2');
+    await vi.waitFor(() => expect(published).toEqual(['lead-2']));
+    resolveFirst('lead-1');
+    await Promise.resolve();
+
+    expect(published).toEqual(['lead-2']);
+  });
+
+  it('claims publication at the final async boundary', async () => {
+    const pending: Array<{ sessionId: string; claim: () => Promise<boolean>; releaseRaw: (resetPrimary?: boolean) => void }> = [];
+    const tracker = createGhostPrimarySessionFocusTracker(async () => 'lead', (sessionId, claim, releaseRaw) => {
+      pending.push({ sessionId, claim, releaseRaw });
+    });
+
+    tracker.note('worker-1');
+    await vi.waitFor(() => expect(pending).toHaveLength(1));
+    tracker.note('worker-2');
+    await vi.waitFor(() => expect(pending).toHaveLength(2));
+
+    await expect(pending[0]?.claim()).resolves.toBe(false);
+    await expect(pending[1]?.claim()).resolves.toBe(true);
+    // A late discovery failure must not erase the newer focus's deduplication.
+    pending[0]?.releaseRaw(true);
+    await expect(pending[1]?.claim()).resolves.toBe(false);
+  });
+
+  it('rejects a lead mapping that changes before publication', async () => {
+    let currentLead = 'lead-1';
+    const pending: Array<{ sessionId: string; claim: () => Promise<boolean> }> = [];
+    const tracker = createGhostPrimarySessionFocusTracker(
+      async () => currentLead,
+      (sessionId, claim) => pending.push({ sessionId, claim }),
+    );
+
+    tracker.note('worker');
+    await vi.waitFor(() => expect(pending).toHaveLength(1));
+    currentLead = 'lead-2';
+
+    expect(pending[0]?.sessionId).toBe('lead-1');
+    await expect(pending[0]?.claim()).resolves.toBe(false);
+  });
+
+  it('allows the same unresolved focus to retry after the first lookup fails', async () => {
+    let attempts = 0;
+    const published: string[] = [];
+    const notify = vi.fn(async (sessionId: string, claim: () => Promise<boolean>) => {
+      if (await claim()) published.push(sessionId);
+    });
+    const tracker = createGhostPrimarySessionFocusTracker(async () => {
+      attempts += 1;
+      return attempts === 1 ? null : 'lead';
+    }, notify);
+
+    tracker.note('worker');
+    await vi.waitFor(() => expect(attempts).toBe(1));
+    tracker.note('worker');
+    await vi.waitFor(() => expect(published).toEqual(['lead']));
+
+    expect(attempts).toBe(3);
+  });
+
+  it('preserves the published lead while a same-lead worker focus is unresolved', async () => {
+    let workerBAttempts = 0;
+    const published: string[] = [];
+    const notify = vi.fn(async (sessionId: string, claim: () => Promise<boolean>) => {
+      if (await claim()) published.push(sessionId);
+    });
+    const tracker = createGhostPrimarySessionFocusTracker(async (sessionId) => {
+      if (sessionId === 'worker-b') {
+        workerBAttempts += 1;
+        return workerBAttempts === 1 ? null : 'lead-a';
+      }
+      return 'lead-a';
+    }, notify);
+
+    tracker.note('worker-a');
+    await vi.waitFor(() => expect(published).toEqual(['lead-a']));
+    tracker.note('worker-b');
+    await vi.waitFor(() => expect(workerBAttempts).toBe(1));
+    tracker.note('worker-b');
+    await vi.waitFor(() => expect(workerBAttempts).toBe(3));
+
+    expect(published).toEqual(['lead-a']);
+  });
+
+  it('allows the same focus to retry when the publication recheck fails', async () => {
+    let attempts = 0;
+    const pending: Array<{ sessionId: string; claim: () => Promise<boolean> }> = [];
+    const tracker = createGhostPrimarySessionFocusTracker(
+      async () => {
+        attempts += 1;
+        return attempts === 2 ? null : 'lead';
+      },
+      (sessionId, claim) => pending.push({ sessionId, claim }),
+    );
+
+    tracker.note('worker');
+    await vi.waitFor(() => expect(pending).toHaveLength(1));
+    await expect(pending[0]?.claim()).resolves.toBe(false);
+
+    tracker.note('worker');
+    await vi.waitFor(() => expect(pending).toHaveLength(2));
+    await expect(pending[1]?.claim()).resolves.toBe(true);
+    expect(attempts).toBe(4);
+  });
+
+  it('clears deduplication when focus explicitly leaves the session', async () => {
+    const published: string[] = [];
+    const notify = vi.fn(async (sessionId: string, claim: () => Promise<boolean>) => {
+      if (await claim()) published.push(sessionId);
+    });
+    const tracker = createGhostPrimarySessionFocusTracker(
+      async (sessionId) => (sessionId === 'hidden-worker' ? null : 'lead'),
+      notify,
+    );
+
+    tracker.note('worker');
+    await vi.waitFor(() => expect(published).toHaveLength(1));
+    tracker.note(null);
+    tracker.note('lead');
+    await vi.waitFor(() => expect(published).toHaveLength(2));
+    tracker.note(null);
+    tracker.note('lead');
+    await vi.waitFor(() => expect(published).toHaveLength(3));
+
+    expect(published).toEqual(['lead', 'lead', 'lead']);
+  });
+});
 
 function ghost(
   id: string,
@@ -41,7 +283,6 @@ function ghost(
       version: '1.0.0',
       kind: 'chip',
       entry: 'main.js',
-      slots: ['subscribe'],
       ...(subscribe ? { subscribe } : {}),
     },
     dir: `/fake/${id}`,
@@ -57,21 +298,294 @@ function makeGateway(overrides: Partial<GhostSubscriptionGatewayDeps> = {}) {
     listGhosts: () => [ghost('a', { topics: ['turn'] })],
     isRunning: (id) => running.has(id),
     wake: vi.fn(async (g: InstalledGhost) => {
-      running.add(g.manifest.id);
+      running.add(installedGhostStoragePart(g));
     }),
     sendToGhost: (ghostId, payload) => {
       sent.push({ ghostId, payload });
     },
     now: () => 1_000,
     newHookId: () => `hook-${++hookSeq}`,
+    resolveMessageHookContext: () => ({}),
     ...overrides,
   };
   return { gw: new GhostSubscriptionGateway(deps), sent, running, deps };
 }
 
+describe('subscriptionGateway owner boundary', () => {
+  it('drops buffered events when the owner changes during wake', async () => {
+    let releaseWake!: () => void;
+    let ownerValid = true;
+    const onInvalidated = vi.fn();
+    const wake = vi.fn(() => new Promise<void>((resolve) => { releaseWake = resolve; }));
+    const { gw, sent } = makeGateway({
+      listGhosts: () => [ghost('a', { topics: ['activity'] })],
+      wake,
+      ownerScope: {
+        capture: () => ({ ownerId: 'owner-a', generation: 1 }),
+        isCurrent: () => ownerValid,
+        isStable: () => ownerValid,
+        onInvalidated,
+      },
+    });
+
+    gw.publish('activity', 'did-thinking-start', { sessionId: 's1', blockId: 'b1' });
+    await vi.waitFor(() => expect(wake).toHaveBeenCalledOnce());
+    ownerValid = false;
+    releaseWake();
+
+    await vi.waitFor(() => expect(onInvalidated).toHaveBeenCalledWith('a'));
+    expect(sent).toHaveLength(0);
+  });
+});
+
 const TURN_DATA = { sessionId: 's1', agent: 'claude-code' };
 
+// Unit regression: async discovery must preserve ordered delivery without a
+// synchronous scan, and must not reuse another owner's pending discovery.
+// Existing fan-out tests only exercise synchronous discovery / wake boundaries.
+describe('asynchronous notification discovery', () => {
+  // Unit performance regression: when recursive watching is unavailable, the
+  // real index scans on each read. Preflight and delivery must share one read
+  // for each lifecycle event, while the next event must still discover afresh.
+  it.each(['created', 'archived', 'switched'] as const)('scans once per %s event without filesystem watchers', async (kind) => {
+    const watch = vi.spyOn(fs, 'watch').mockImplementation(() => { throw new Error('watch unavailable'); });
+    const subscriber = ghost('a', { topics: ['session'] });
+    const scan = vi.fn(async () => [subscriber]);
+    const index = new GhostNotificationIndex({ roots: () => [process.cwd()], scan });
+    try {
+      const { gw, sent, running } = makeGateway({ listGhostsAsync: () => index.read() });
+      running.add('a');
+      const { notifyGhostSessionEvent } = createSessionNotification({
+        ghostOwnerScope: { capture: () => 1, isCurrent: () => true, isStable: () => true },
+        getGhostSubscriptionGateway: () => gw,
+        isGhostEligibleSession: async () => ({ outcome: 'eligible' }),
+      });
+      notifyGhostSessionEvent(kind, { sessionId: 'A' }, async () => true, () => {});
+      await new Promise<void>((resolve) => setImmediate(resolve));
+      expect(watch).toHaveBeenCalled();
+      expect(sent).toHaveLength(1);
+      expect(scan).toHaveBeenCalledTimes(1);
+      notifyGhostSessionEvent(kind, { sessionId: 'B' }, async () => true, () => {});
+      await new Promise<void>((resolve) => setImmediate(resolve));
+      expect(sent).toHaveLength(2);
+      expect(scan).toHaveBeenCalledTimes(2);
+    } finally {
+      index.dispose();
+      watch.mockRestore();
+    }
+  });
+
+  // Unit regression: an unreadable discovery root must not reserve a failed
+  // focus, either when the same raw focus retries or when the user returns.
+  it.each([false, true])('recovers after discovery fails (retry same focus: %s)', async (retrySameFocus) => {
+    let failDiscovery = false;
+    const subscriber = ghost('a', { topics: ['session'] });
+    const { gw, sent, running } = makeGateway({
+      listGhostsAsync: async () => {
+        if (failDiscovery) throw new Error('receipt root temporarily unreadable');
+        return [subscriber];
+      },
+    });
+    running.add('a');
+    const eligible = vi.fn(async () => ({ outcome: 'eligible' }));
+    const { notifyGhostSessionEvent } = createSessionNotification({
+      ghostOwnerScope: { capture: () => 1, isCurrent: () => true, isStable: () => true },
+      getGhostSubscriptionGateway: () => gw,
+      isGhostEligibleSession: eligible,
+    });
+    const tracker = createGhostPrimarySessionFocusTracker(
+      async (id) => id,
+      (sessionId, claim, releaseRaw) => notifyGhostSessionEvent('switched', { sessionId }, claim, releaseRaw),
+    );
+    tracker.note('A');
+    await new Promise<void>((resolve) => setImmediate(resolve));
+    failDiscovery = true;
+    tracker.note('B');
+    await new Promise<void>((resolve) => setImmediate(resolve));
+    expect(sent).toHaveLength(1);
+    expect(eligible).toHaveBeenCalledTimes(1);
+
+    failDiscovery = false;
+    if (retrySameFocus) {
+      tracker.note('B');
+      await new Promise<void>((resolve) => setImmediate(resolve));
+      expect(sent).toHaveLength(2);
+    }
+    tracker.note('A');
+    await new Promise<void>((resolve) => setImmediate(resolve));
+    expect(sent.map(({ payload }) => 'data' in payload ? payload.data : undefined)).toEqual(
+      (retrySameFocus ? ['A', 'B', 'A'] : ['A', 'A']).map(sessionId => ({ sessionId })),
+    );
+  });
+
+  // Unit regression (PR #8752): the gateway-only preflight tests did not cover
+  // focus bookkeeping across an empty subscription set. A -> disabled B -> A
+  // must deliver both A events through the production notification entry.
+  it('advances focus without subscribers so re-enabling does not suppress a return', async () => {
+    let enabled = true;
+    const subscriber = ghost('a', { topics: ['session'] });
+    const { gw, sent, running } = makeGateway({
+      listGhostsAsync: async () => enabled ? [subscriber] : [],
+    });
+    running.add('a');
+    const eligible = vi.fn(async () => ({ outcome: 'eligible' }));
+    const { notifyGhostSessionEvent } = createSessionNotification({
+      ghostOwnerScope: { capture: () => 1, isCurrent: () => true, isStable: () => true },
+      getGhostSubscriptionGateway: () => gw,
+      isGhostEligibleSession: eligible,
+    });
+    const tracker = createGhostPrimarySessionFocusTracker(
+      async (id) => id,
+      (sessionId, claim, releaseRaw) => notifyGhostSessionEvent('switched', { sessionId }, claim, releaseRaw),
+    );
+    tracker.note('A');
+    await vi.waitFor(() => expect(sent).toHaveLength(1));
+
+    enabled = false;
+    tracker.note('B');
+    // Drain the async focus/notification chain without sleeping or assuming
+    // how many Promise continuations the implementation uses.
+    await new Promise<void>((resolve) => setImmediate(resolve));
+    expect(eligible).toHaveBeenCalledTimes(1);
+    expect(sent).toHaveLength(1);
+
+    enabled = true;
+    tracker.note('A');
+    await new Promise<void>((resolve) => setImmediate(resolve));
+    expect(sent.map(({ payload }) => 'data' in payload ? payload.data : undefined)).toEqual([
+      { sessionId: 'A' }, { sessionId: 'A' },
+    ]);
+    expect(eligible).toHaveBeenCalledTimes(2);
+  });
+
+  it('preflights the requested topic without waking unrelated or disabled plugins', async () => {
+    const { gw, deps } = makeGateway({ listGhostsAsync: async () => [
+      ghost('idle', { topics: ['session'] }), ghost('off', { topics: ['turn'] }, false),
+      ghost('hooks', { hooks: ['will-user-message'] }),
+    ] });
+    await expect(gw.preparePublish('session')).resolves.toEqual(expect.any(Function));
+    await expect(gw.preparePublish('turn')).resolves.toBeNull();
+    expect(deps.wake).not.toHaveBeenCalled();
+  });
+
+  // Prepared candidates are discovery hints, never cached authorization.
+  it.each(['approval', 'disabled', 'topic', 'owner'] as const)('rechecks %s after preparing an event', async (change) => {
+    let owner = 1;
+    const candidate = { ...ghost('a', { topics: ['session'] }), approval: { state: 'approved' as const, revision: 'old' } };
+    let live = candidate;
+    const { gw, sent, running, deps } = makeGateway({
+      listGhostsAsync: async () => [candidate],
+      findGhostForDelivery: () => live,
+      ownerScope: { capture: () => owner, isCurrent: stamp => stamp === owner, isStable: () => true },
+    });
+    running.add('a');
+    const publish = await gw.preparePublish('session');
+    expect(publish).not.toBeNull();
+    if (change === 'approval') live = { ...candidate, approval: { state: 'approved', revision: 'new' } };
+    if (change === 'disabled') live = { ...candidate, enabled: false };
+    if (change === 'topic') live = { ...candidate, manifest: { ...candidate.manifest, subscribe: { topics: ['turn'] } } };
+    if (change === 'owner') owner++;
+    publish?.('did-session-switched', { sessionId: 'A' });
+    expect(sent).toHaveLength(0);
+    expect(deps.wake).not.toHaveBeenCalled();
+  });
+
+  it('rejects an indexed subscriber after its approval was replaced without refreshing the index', async () => {
+    const candidate = { ...ghost('a', { topics: ['turn'] }), approval: { state: 'approved' as const, revision: 'old' } };
+    const { gw, sent, deps } = makeGateway({
+      listGhostsAsync: async () => [candidate],
+      findGhostForDelivery: () => ({ ...candidate, approval: { state: 'approved', revision: 'new' } }),
+    });
+    gw.publish('turn', 'did-turn-start', TURN_DATA);
+    await Promise.resolve();
+    await Promise.resolve();
+    expect(sent).toEqual([]);
+    expect(deps.wake).not.toHaveBeenCalled();
+  });
+
+  it('shares an in-flight scan, delivers in order and refreshes the next burst', async () => {
+    let resolve!: (ghosts: InstalledGhost[]) => void;
+    const pending = new Promise<InstalledGhost[]>((done) => { resolve = done; });
+    const listGhosts = vi.fn(() => { throw new Error('synchronous scan'); });
+    const listGhostsAsync = vi.fn(() => pending);
+    const subscriber = ghost('a', { topics: ['turn'] });
+    const { gw, sent, running } = makeGateway({ listGhosts, listGhostsAsync });
+    running.add('a');
+    gw.publish('turn', 'did-turn-start', TURN_DATA);
+    gw.publish('turn', 'did-turn-end', { ...TURN_DATA, durationMs: 5, endReason: 'completed' });
+    expect(sent).toEqual([]);
+    expect(listGhostsAsync).toHaveBeenCalledOnce();
+    resolve([subscriber]);
+    await vi.waitFor(() => expect(sent.map(({ payload }) => payload.name)).toEqual(['did-turn-start', 'did-turn-end']));
+    gw.publish('turn', 'did-turn-start', TURN_DATA);
+    await vi.waitFor(() => expect(sent).toHaveLength(3));
+    expect(listGhostsAsync).toHaveBeenCalledTimes(2);
+    expect(listGhosts).not.toHaveBeenCalled();
+  });
+
+  it('starts fresh discovery after owner changes while an old scan is pending', async () => {
+    let owner = 1;
+    const releases: Array<(ghosts: InstalledGhost[]) => void> = [];
+    const { gw, sent, running } = makeGateway({
+      listGhostsAsync: () => new Promise((resolve) => { releases.push(resolve); }),
+      ownerScope: { capture: () => owner, isCurrent: (stamp) => stamp === owner, isStable: () => true },
+    });
+    running.add('a');
+    gw.publish('turn', 'did-turn-start', { ...TURN_DATA, sessionId: 'old' });
+    owner++;
+    gw.publish('turn', 'did-turn-start', { ...TURN_DATA, sessionId: 'new' });
+    expect(releases).toHaveLength(2);
+    releases[0]!([ghost('a', { topics: ['turn'] })]);
+    releases[1]!([ghost('a', { topics: ['turn'] })]);
+    await vi.waitFor(() => expect(sent).toHaveLength(1));
+    expect(sent[0]!.payload).toMatchObject({ data: { sessionId: 'new' } });
+  });
+
+  it('does not deliver when the subscriber was disabled during discovery', async () => {
+    const subscriber = ghost('a', { topics: ['turn'] });
+    const { gw, sent, running } = makeGateway({
+      listGhostsAsync: async () => [subscriber],
+      findGhostForDelivery: () => ({ ...subscriber, enabled: false }),
+    });
+    running.add('a');
+    gw.publish('turn', 'did-turn-start', TURN_DATA);
+    await Promise.resolve();
+    await Promise.resolve();
+    expect(sent).toEqual([]);
+  });
+});
+
 describe('did- 旁听扇出', () => {
+  it('does not deliver an old buffered event after its physical key has been reused', async () => {
+    let release!: () => void;
+    const pending = new Promise<void>((resolve) => { release = resolve; });
+    const { gw, sent, running } = makeGateway({ wake: () => pending });
+    gw.publish('turn', 'did-turn-start', TURN_DATA);
+    gw.dropGhost('a');
+    running.add('a');
+    release();
+    await pending;
+    await Promise.resolve();
+    expect(sent).toHaveLength(0);
+    gw.publish('turn', 'did-turn-start', TURN_DATA);
+    expect(sent).toHaveLength(1);
+    expect((sent[0]!.payload as { seq: number }).seq).toBe(1);
+  });
+  it('isolates same-name subscriber queues and never sends organization events to root', () => {
+    const root = ghost('helper', undefined);
+    const organization = { ...ghost('helper', { topics: ['turn'] }), namespace: 'acme', dir: '/fake/_ns/acme/helper' };
+    const { gw, sent, running } = makeGateway({ listGhosts: () => [root, organization] });
+    running.add('helper');
+    running.add('_ns__acme__helper');
+    gw.publish('turn', 'did-turn-start', TURN_DATA);
+    expect(sent.map((event) => event.ghostId)).toEqual(['_ns__acme__helper']);
+    root.manifest.subscribe = { topics: ['turn'] };
+    gw.publish('turn', 'did-turn-start', TURN_DATA);
+    expect(sent.map((event) => [event.ghostId, (event.payload as { seq: number }).seq])).toEqual([
+      ['_ns__acme__helper', 1], ['helper', 1], ['_ns__acme__helper', 2],
+    ]);
+  });
+
   it('只投声明了该 topic 的启用意识;seq 单调', async () => {
     const { gw, sent, running } = makeGateway({
       listGhosts: () => [
@@ -117,6 +631,34 @@ describe('did- 旁听扇出', () => {
     await vi.waitFor(() => expect(sent).toHaveLength(2));
     expect(deps.wake).toHaveBeenCalledTimes(1); // 唤醒去重
     expect(sent.map((s) => (s.payload as { name: string }).name)).toEqual([
+      'did-turn-start',
+      'did-turn-end',
+    ]);
+  });
+
+  it('补投首次唤醒 flush 期间新入队的终止事件', async () => {
+    const delivered: GhostPipeEventPush[] = [];
+    let gateway!: GhostSubscriptionGateway;
+    const created = makeGateway({
+      sendToGhost: (_ghostId, payload) => {
+        delivered.push(payload);
+        if ((payload as { name?: string }).name === 'did-turn-start') {
+          queueMicrotask(() => {
+            gateway.publish('turn', 'did-turn-end', {
+              ...TURN_DATA,
+              durationMs: 5,
+              endReason: 'completed',
+            });
+          });
+        }
+      },
+    });
+    gateway = created.gw;
+
+    gateway.publish('turn', 'did-turn-start', TURN_DATA);
+
+    await vi.waitFor(() => expect(delivered).toHaveLength(2));
+    expect(delivered.map((payload) => (payload as { name: string }).name)).toEqual([
       'did-turn-start',
       'did-turn-end',
     ]);
@@ -255,6 +797,21 @@ describe('GhostActivityTracker', () => {
 });
 
 describe('will- 拦截', () => {
+  it.each(['will-user-message', 'will-assistant-message'] as const)('wakes and routes %s only to its selected organization instance', async (hook) => {
+    const root = ghost('helper', undefined);
+    const org = { ...ghost('helper', { hooks: [hook] }), namespace: 'acme', dir: '/fake/_ns/acme/helper' };
+    const { gw, sent, running } = makeGateway({ listGhosts: () => [root, org] });
+    const screening = hook === 'will-user-message'
+      ? gw.screenUserMessage({ sessionId: 's', text: 'input' })
+      : gw.screenAssistantMessage({ sessionId: 's', text: 'input' });
+    await vi.waitFor(() => expect(sent).toHaveLength(1));
+    expect(running).toEqual(new Set(['_ns__acme__helper']));
+    expect(sent[0]!.ghostId).toBe('_ns__acme__helper');
+    const hookId = (sent[0]!.payload as unknown as { hookId: string }).hookId;
+    gw.handleVerdict('helper', { type: 'event-verdict', hookId, action: 'rewrite', text: 'wrong instance' });
+    gw.handleVerdict('_ns__acme__helper', { type: 'event-verdict', hookId, action: 'rewrite', text: 'organization' });
+    expect(await screening).toMatchObject({ action: 'rewrite', ghostId: '_ns__acme__helper', text: 'organization' });
+  });
   beforeEach(() => {
     vi.useFakeTimers();
   });
@@ -286,15 +843,22 @@ describe('will- 拦截', () => {
   });
 
   it('allow 继续问下一个;全 allow 放行', async () => {
-    const { gw, sent, running } = makeGateway({ listGhosts: () => HOOK_GHOSTS });
+    const context = { model: 'gpt-5.6' };
+    const { gw, sent, running } = makeGateway({
+      listGhosts: () => HOOK_GHOSTS,
+      resolveMessageHookContext: () => context,
+    });
     running.add('h1').add('h2');
     const p = gw.screenUserMessage({ sessionId: 's1', text: 'hi' });
+    expect(sent[0]?.payload).toMatchObject({ name: 'will-user-message', data: context });
     gw.handleVerdict('h1', {
       type: 'event-verdict',
       hookId: (sent[0].payload as { hookId: string }).hookId,
       action: 'allow',
     });
     await vi.waitFor(() => expect(sent).toHaveLength(2));
+    const secondData = (sent[1]?.payload as { data: Record<string, unknown> }).data;
+    expect(secondData).toEqual({ sessionId: 's1', text: 'hi', model: 'gpt-5.6' });
     gw.handleVerdict('h2', {
       type: 'event-verdict',
       hookId: (sent[1].payload as { hookId: string }).hookId,
@@ -397,6 +961,38 @@ describe('will- 拦截', () => {
     expect(sent).toHaveLength(3);
   });
 
+  it('无匹配钩子时不读取上下文', async () => {
+    const resolveMessageHookContext = vi.fn(() => ({ model: 'gpt-5.6' }));
+    const { gw } = makeGateway({ listGhosts: () => [], resolveMessageHookContext });
+    expect(await gw.screenUserMessage({ sessionId: 's1', text: 'hi' })).toEqual({ action: 'allow' });
+    expect(resolveMessageHookContext).not.toHaveBeenCalled();
+  });
+
+  it('同轮插话使用运行中会话的模型快照', async () => {
+    const resolveMessageHookContext = vi.fn(() => ({ model: 'next-model' }));
+    const { gw, sent, running } = makeGateway({
+      listGhosts: () => [HOOK_GHOSTS[0]],
+      resolveMessageHookContext,
+    });
+    running.add('h1');
+    const p = withGhostUserHookModel('live-model', () =>
+      gw.screenUserMessage({ sessionId: 's1', text: 'steer' }),
+    );
+    expect(sent[0]?.payload).toMatchObject({ data: { model: 'live-model' } });
+    expect(resolveMessageHookContext).not.toHaveBeenCalled();
+    gw.handleVerdict('h1', {
+      type: 'event-verdict',
+      hookId: (sent[0].payload as { hookId: string }).hookId,
+      action: 'allow',
+    });
+    expect(await p).toEqual({ action: 'allow' });
+  });
+
+  it('排队轮次使用入队时捕获的模型', () => {
+    expect(resolveGhostUserHookModel(false, 'new-selection', 'queued-model')).toBe('queued-model');
+    expect(resolveGhostUserHookModel(true, 'live-model', 'queued-model')).toBe('live-model');
+  });
+
   it('verdict 归属校验:冒名/未知 hookId 静默丢;迟到 verdict 无副作用', async () => {
     const { gw, sent, running } = makeGateway({ listGhosts: () => [HOOK_GHOSTS[0]] });
     running.add('h1');
@@ -409,8 +1005,8 @@ describe('will- 拦截', () => {
     gw.handleVerdict('h1', { type: 'event-verdict', hookId, action: 'block' }); // 迟到
   });
 
-  it('wake 挂死(load 永不完成):3s 整体上界照样放行,不卡发送', async () => {
-    const { gw } = makeGateway({
+  it('wake 挂死(load 永不完成):超时后终止投递续体,不卡发送', async () => {
+    const { gw, sent } = makeGateway({
       listGhosts: () => [HOOK_GHOSTS[0]],
       isRunning: () => false,
       wake: vi.fn(() => new Promise<never>(() => {})), // 永不 settle
@@ -418,6 +1014,50 @@ describe('will- 拦截', () => {
     const p = gw.screenUserMessage({ sessionId: 's1', text: 'hi' });
     await vi.advanceTimersByTimeAsync(GHOST_HOOK_TIMEOUT_MS + 10);
     expect(await p).toEqual({ action: 'allow' });
+    expect(sent).toEqual([]);
+  });
+
+  it('入口钩子的唤醒与裁决共享同一个整体超时', async () => {
+    let finishWake!: () => void;
+    const wake = vi.fn(() => new Promise<void>((resolve) => {
+      finishWake = resolve;
+    }));
+    const { gw, sent } = makeGateway({
+      listGhosts: () => [HOOK_GHOSTS[0]],
+      isRunning: () => false,
+      wake,
+    });
+    const p = gw.screenUserMessage({ sessionId: 's1', text: 'hi' });
+    await vi.advanceTimersByTimeAsync(GHOST_HOOK_TIMEOUT_MS - 100);
+    finishWake();
+    await vi.waitFor(() => expect(sent).toHaveLength(1));
+
+    await vi.advanceTimersByTimeAsync(200);
+    expect(await p).toEqual({ action: 'allow' });
+    gw.handleVerdict('h1', {
+      type: 'event-verdict',
+      hookId: (sent[0].payload as { hookId: string }).hookId,
+      action: 'block',
+    });
+  });
+
+  it('上下文读取挂死:无上下文投递后仍受整体超时约束', async () => {
+    const { gw, sent, running } = makeGateway({
+      listGhosts: () => [HOOK_GHOSTS[0]],
+      resolveMessageHookContext: () => new Promise<never>(() => {}),
+    });
+    running.add('h1');
+    const p = gw.screenUserMessage({ sessionId: 's1', text: 'hi' });
+    await vi.advanceTimersByTimeAsync(GHOST_HOOK_TIMEOUT_MS / 2);
+    expect((sent[0].payload as { data: unknown }).data).toEqual({ sessionId: 's1', text: 'hi' });
+    const hookId = (sent[0].payload as { hookId: string }).hookId;
+    await vi.advanceTimersByTimeAsync(GHOST_HOOK_TIMEOUT_MS / 2 + 1);
+    expect(await p).toEqual({ action: 'allow' });
+    gw.handleVerdict('h1', {
+      type: 'event-verdict',
+      hookId,
+      action: 'block',
+    });
   });
 
   it('投递失败计入熔断并放行;成功裁决清零失败计数', async () => {
@@ -458,10 +1098,19 @@ describe('will-assistant-message 出口钩子拦截(screenAssistantMessage)', ()
     ghost('h2', { hooks: ['will-assistant-message'] }),
   ];
 
-  it('全 allow → 放行', async () => {
-    const { gw, sent, running } = makeGateway({ listGhosts: () => OUT_GHOSTS });
+  it('使用本轮模型快照而不是下一轮选择', async () => {
+    const resolveMessageHookContext = vi.fn(() => ({ model: 'next-model' }));
+    const { gw, sent, running } = makeGateway({
+      listGhosts: () => OUT_GHOSTS,
+      resolveMessageHookContext,
+    });
     running.add('h1').add('h2');
-    const p = gw.screenAssistantMessage({ sessionId: 's1', text: 'AI 回复' });
+    const p = withGhostAssistantHookModel(Promise.resolve('claude-opus-5'), () =>
+      gw.screenAssistantMessage({ sessionId: 's1', text: 'AI 回复' }),
+    );
+    await vi.waitFor(() => expect(sent).toHaveLength(1));
+    expect(sent[0]?.payload).toMatchObject({ data: { model: 'claude-opus-5' } });
+    expect(resolveMessageHookContext).not.toHaveBeenCalled();
     gw.handleVerdict('h1', {
       type: 'event-verdict',
       hookId: (sent[0].payload as { hookId: string }).hookId,
@@ -476,6 +1125,30 @@ describe('will-assistant-message 出口钩子拦截(screenAssistantMessage)', ()
     expect(await p).toEqual({ action: 'allow' });
     // 下发的事件名是出口钩子名。
     expect((sent[0].payload as { name: string }).name).toBe('will-assistant-message');
+  });
+
+  it('出口钩子按自身预算等待较慢的本轮模型快照', async () => {
+    let resolveModel!: (model: string) => void;
+    const model = new Promise<string>((resolve) => {
+      resolveModel = resolve;
+    });
+    const { gw, sent, running } = makeGateway({ listGhosts: () => [OUT_GHOSTS[0]] });
+    running.add('h1');
+    const p = withGhostAssistantHookModel(model, () =>
+      gw.screenAssistantMessage({ sessionId: 's1', text: 'AI 回复' }),
+    );
+
+    await vi.advanceTimersByTimeAsync(GHOST_HOOK_TIMEOUT_MS);
+    expect(sent).toHaveLength(0);
+    resolveModel('claude-opus-5');
+    await vi.waitFor(() => expect(sent).toHaveLength(1));
+    expect(sent[0]?.payload).toMatchObject({ data: { model: 'claude-opus-5' } });
+    gw.handleVerdict('h1', {
+      type: 'event-verdict',
+      hookId: (sent[0].payload as { hookId: string }).hookId,
+      action: 'allow',
+    });
+    expect(await p).toEqual({ action: 'allow' });
   });
 
   it('rewrite 链式叠加:h2 看到 h1 改写后的文本,末个署名', async () => {
@@ -742,6 +1415,40 @@ describe('GhostTurnTranslator(status/done/error → did-turn-*)', () => {
         endReason: 'completed',
       },
     ]);
+  });
+
+  it.each([false, true])('retains output-limit usage exactly once (continuation=%s)', (continuation) => {
+    const { tr, ends } = makeTranslator({ t: 0 });
+    tr.handleEvent({ type: 'status', source: 'pi', data: { isRunning: true } });
+    if (continuation) {
+      tr.handleEvent({ type: 'done', source: 'pi', turnContinuationId: 7,
+        data: { usage: { inputTokens: 2, outputTokens: 3 } } });
+    }
+    const usage = { inputTokens: 10, outputTokens: 16_000, cacheReadTokens: 4, cacheCreationTokens: 6 };
+    tr.handleEvent({ type: 'error', source: 'pi',
+      data: { reason: 'output-limit', isTerminal: true, usage } });
+    expect(ends).toEqual([expect.objectContaining({
+      endReason: 'error', agent: 'pi',
+      usage: { ...usage, inputTokens: continuation ? 12 : 10, outputTokens: continuation ? 16_003 : 16_000 },
+    })]);
+    tr.handleEvent({ type: 'done', source: 'pi', data: { status: 'failed', usage } });
+    tr.handleEvent({ type: 'status', source: 'pi', data: { isRunning: false } });
+    vi.advanceTimersByTime(1_000);
+    expect(ends).toHaveLength(1);
+    tr.handleEvent({ type: 'status', source: 'pi', data: { isRunning: true } });
+    tr.handleEvent({ type: 'done', source: 'pi', data: { usage: { inputTokens: 1 } } });
+    expect(ends[1]).toMatchObject({ endReason: 'completed', usage: { inputTokens: 1 } });
+    expect((ends[1] as { usage: unknown }).usage).toEqual({ inputTokens: 1 });
+  });
+
+  it('ignores nonterminal error usage and preserves errors without usage', () => {
+    const { tr, ends } = makeTranslator({ t: 0 });
+    tr.handleEvent({ type: 'status', data: { isRunning: true } });
+    tr.handleEvent({ type: 'error', data: { isTerminal: false, usage: { inputTokens: 99 } } });
+    expect(ends).toHaveLength(0);
+    tr.handleEvent({ type: 'error', data: { isTerminal: true } });
+    expect(ends).toEqual([expect.objectContaining({ endReason: 'error' })]);
+    expect(ends[0]).not.toHaveProperty('usage');
   });
 
   it('status false 后宽限窗内无 done/error = interrupted;terminal error 定性 error', () => {
@@ -1026,5 +1733,248 @@ describe('GhostTurnOriginTracker', () => {
     origin.noteEvent({ type: 'thinking', data: { stage: 'start', blockId: 'b1' } });
     origin.noteEvent({ type: 'assistant', data: {} });
     expect(origin.acceptsInteraction(undefined)).toBe(false);
+  });
+});
+
+// Bug/rule: control points (2026-10-31) ask only the plugin the task chose, never every installed
+// plugin; a plugin can only tighten; an unavailable or silent plugin follows the task's onFailure.
+// Message-hook cases above do not cover per-task targeting or `skip`. Unit tier, fake timers.
+describe('control points', () => {
+  beforeEach(() => {
+    vi.useFakeTimers();
+  });
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  const point = 'will-schedule-run' as const;
+  const data = {
+    scheduleId: 's1', runId: 'r1', name: 'Daily', prompt: 'summarize', executionMode: 'agent' as const,
+    trigger: 'cron' as const, firedAt: 1,
+  };
+  const approved = (id: string): InstalledGhost => ({ ...ghost(id, { hooks: [point] }), approvedControlPoints: [point] });
+
+  // Runtime latency contract, unit/fake timers: silence reaches the selected
+  // failure policy at each new point's own deadline, not the legacy 8s limit.
+  it.each([['will-start-turn', 1000], ['will-compose-context', 2000], ['will-search-memory', 1500], ['will-model-request', 1000]] as const)
+    ('bounds unanswered %s at %dms', async (runtimePoint, timeoutMs) => {
+      const provider = { ...ghost('runtime', { hooks: [runtimePoint] }), approvedControlPoints: [runtimePoint] };
+      const { gw, running, sent } = makeGateway({ listGhosts: () => [provider] });
+      running.add('runtime');
+      const input = { sessionId: 'task', route: { agentKind: 'pi' as const, model: 'm', providerId: 'p' },
+        phase: 'select' as const, text: 'text', query: 'query', limit: 10 };
+      let settled = false;
+      const pending = gw.screenControlPoint(runtimePoint, input, { pluginId: 'runtime', onFailure: 'allow' });
+      void pending.then(() => { settled = true; });
+      await vi.advanceTimersByTimeAsync(timeoutMs - 1);
+      expect(sent[0].payload).toMatchObject({ deadline: 1000 + timeoutMs });
+      expect(settled).toBe(false);
+      await vi.advanceTimersByTimeAsync(1);
+      expect(await pending).toEqual({ action: 'allow' });
+      expect(settled).toBe(true);
+    });
+
+  it('asks only the chosen plugin and returns its skip', async () => {
+    const { gw, sent, running } = makeGateway({ listGhosts: () => [approved('p1'), approved('p2')] });
+    running.add('p1').add('p2');
+    const result = gw.screenControlPoint(point, data, { pluginId: 'p2', onFailure: 'block' });
+    await vi.advanceTimersByTimeAsync(0);
+    expect(sent.map((item) => item.ghostId)).toEqual(['p2']);
+    expect(sent[0].payload).toMatchObject({ name: point, data, deadline: 1_000 + 30_000 });
+    const hookId = (sent[0].payload as { hookId: string }).hookId;
+    gw.handleVerdict('p2', { type: 'event-verdict', hookId, action: 'skip', reason: 'nothing new' });
+    expect(await result).toEqual({ action: 'skip', ghostId: 'p2', ghostName: '意识p2', reason: 'nothing new', failure: false });
+  });
+
+  it('applies the task failure setting to an unapproved, missing or silent plugin', async () => {
+    const { gw, sent, running } = makeGateway({ listGhosts: () => [ghost('pre', { hooks: [point] }), approved('p1')] });
+    running.add('pre').add('p1');
+    expect(await gw.screenControlPoint(point, data, { pluginId: 'pre', onFailure: 'skip' }))
+      .toMatchObject({ action: 'skip', ghostId: 'pre', failure: true });
+    expect(await gw.screenControlPoint(point, data, { pluginId: 'gone', onFailure: 'block' }))
+      .toMatchObject({ action: 'block', ghostId: 'gone', failure: true });
+    expect(sent).toHaveLength(0);
+
+    const blocked = gw.screenControlPoint(point, data, { pluginId: 'p1', onFailure: 'block' });
+    await vi.advanceTimersByTimeAsync(30_000 + 10);
+    expect(await blocked).toMatchObject({ action: 'block', ghostId: 'p1', failure: true });
+
+    const allowed = gw.screenControlPoint(point, data, { pluginId: 'p1', onFailure: 'allow' });
+    await vi.advanceTimersByTimeAsync(30_000 + 10);
+    expect(await allowed).toEqual({ action: 'allow' });
+  });
+
+  // Rule (2026-10-31): only the new-task point may pick a model; the route is reduced to the four
+  // known fields before Main validates it, and a route sent to a run point is just "no objection".
+  it('returns a sanitized route only at the new-task point', async () => {
+    const start = 'will-start-task' as const;
+    const startData = { modelId: 'auto', text: 'fix the login bug', attachmentCount: 0, route: { agentKind: 'codex' as const, model: 'm1', providerId: 'p' } };
+    const { gw, sent, running } = makeGateway({
+      listGhosts: () => [{ ...ghost('r1', { hooks: [start, point] }), approvedControlPoints: [start, point] }],
+    });
+    running.add('r1');
+    const verdict = (index: number, route: unknown) => gw.handleVerdict('r1', {
+      type: 'event-verdict', hookId: (sent[index].payload as { hookId: string }).hookId, action: 'route', reason: 'code', route,
+    });
+
+    const routed = gw.screenControlPoint(start, startData, { pluginId: 'r1', onFailure: 'block' });
+    await vi.advanceTimersByTimeAsync(0);
+    verdict(0, { agentKind: 'cc', model: 'opus', providerId: 'anthropic', effort: 'high', agentDeviceId: 'share:fixture', endpoint: 'https://evil' });
+    expect(await routed).toEqual({
+      action: 'route', ghostId: 'r1', ghostName: '意识r1', reason: 'code',
+      route: { agentKind: 'cc', model: 'opus', providerId: 'anthropic', effort: 'high', agentDeviceId: 'share:fixture' },
+    });
+
+    const malformed = gw.screenControlPoint(start, startData, { pluginId: 'r1', onFailure: 'block' });
+    await vi.advanceTimersByTimeAsync(0);
+    verdict(1, { agentKind: 'gpt', model: 'opus', providerId: 'anthropic' });
+    expect(await malformed).toEqual({ action: 'allow' });
+
+    const runPoint = gw.screenControlPoint(point, data, { pluginId: 'r1', onFailure: 'block' });
+    await vi.advanceTimersByTimeAsync(0);
+    verdict(2, { agentKind: 'cc', model: 'opus', providerId: 'anthropic' });
+    expect(await runPoint).toEqual({ action: 'allow' });
+  });
+
+  // Runtime points are opt-in per task; installing a router cannot give it other
+  // tasks. Unlike the legacy new-task selector, invalid runtime answers use the
+  // task's failure policy. Unit: real gateway, in-memory transport, fake timers.
+  it('routes only the selected runtime plugin and retains request preferences', async () => {
+    const runtimePoint = 'will-start-turn' as const;
+    const ghosts = ['r1', 'r2'].map(id => ({ ...ghost(id, { hooks: [runtimePoint] }), approvedControlPoints: [runtimePoint] }));
+    const listGhosts = vi.fn(() => ghosts);
+    const findGhostForDelivery = vi.fn((id: string) => ghosts.find(item => installedGhostStoragePart(item) === id) ?? null);
+    const { gw, sent, running } = makeGateway({
+      listGhosts, findGhostForDelivery,
+    });
+    running.add('r1');
+    running.add('r2');
+    const route = { agentKind: 'pi' as const, model: 'm1', providerId: 'p', effort: 'high', fastMode: true };
+    const response = gw.screenControlPoint(runtimePoint, { sessionId: 'task', text: 'work', attachmentCount: 0, route }, { pluginId: 'r1', onFailure: 'block' });
+    await vi.advanceTimersByTimeAsync(0);
+    expect(sent).toHaveLength(1);
+    gw.handleVerdict('r2', { type: 'event-verdict', hookId: (sent[0].payload as { hookId: string }).hookId, action: 'route', route });
+    gw.handleVerdict('r1', { type: 'event-verdict', hookId: (sent[0].payload as { hookId: string }).hookId, action: 'route', route });
+    expect(await response).toMatchObject({ action: 'route', ghostId: 'r1', route });
+    // Performance contract: check fresh target approval before and after the
+    // ask without scanning unrelated installations on every model request.
+    expect(listGhosts).not.toHaveBeenCalled();
+    expect(findGhostForDelivery.mock.calls).toEqual([['r1'], ['r1']]);
+  });
+
+  it('processes a request only at the model-request point and follows failure policy for invalid routes', async () => {
+    const requestPoint = 'will-model-request' as const;
+    const { gw, sent, running } = makeGateway({
+      listGhosts: () => [{ ...ghost('r1', { hooks: [requestPoint] }), approvedControlPoints: [requestPoint] }],
+    });
+    running.add('r1');
+    const input = { sessionId: 'task', phase: 'payload' as const, route: { agentKind: 'pi' as const, model: 'm1', providerId: 'p' }, request: { model: 'm1', max_tokens: 100 } };
+    const response = gw.screenControlPoint(requestPoint, input, { pluginId: 'r1', onFailure: 'block' });
+    await vi.advanceTimersByTimeAsync(0);
+    gw.handleVerdict('r1', { type: 'event-verdict', hookId: (sent[0].payload as { hookId: string }).hookId, action: 'transform', request: { model: 'm1', max_tokens: 200 } });
+    expect(await response).toMatchObject({ action: 'transform', request: { model: 'm1', max_tokens: 200 } });
+    const invalid = gw.screenControlPoint(requestPoint, { ...input, phase: 'select' }, { pluginId: 'r1', onFailure: 'skip' });
+    await vi.advanceTimersByTimeAsync(0);
+    gw.handleVerdict('r1', { type: 'event-verdict', hookId: (sent[1].payload as { hookId: string }).hookId, action: 'route', route: { agentKind: 'pi' } });
+    expect(await invalid).toMatchObject({ action: 'skip', failure: true });
+  });
+
+  it('rejects a runtime answer from an installation replaced during the ask', async () => {
+    const point = 'will-start-turn' as const;
+    const selected = { ...ghost('r1', { hooks: [point] }), approvedControlPoints: [point],
+      approval: { state: 'approved' as const, revision: '00000000-0000-4000-8000-000000000001' } };
+    const { gw, sent, running } = makeGateway({ listGhosts: () => [selected] });
+    running.add('r1');
+    const route = { agentKind: 'pi' as const, providerId: 'p', model: 'm' };
+    const response = gw.screenControlPoint(point, { sessionId: 'task', route }, { pluginId: 'r1', onFailure: 'block' });
+    await vi.advanceTimersByTimeAsync(0);
+    selected.approval.revision = '00000000-0000-4000-8000-000000000002';
+    gw.handleVerdict('r1', { type: 'event-verdict', hookId: (sent[0].payload as { hookId: string }).hookId, action: 'route', route });
+    expect(await response).toMatchObject({ action: 'block', failure: true });
+  });
+
+  // PR #9803: a fast provider can be revoked while another provider is pending.
+  // Existing gateway tests stop at delivery; exercise the real collection and
+  // application entry, with no network/waits (unit/fake timers). Minimum input:
+  // two providers, first answers, its enable/approval changes, second answers.
+  it.each((['disabled', 'approval'] as const).flatMap(change => [
+    ['will-compose-context', 'allow', change], ['will-compose-context', 'skip', change],
+    ['will-compose-context', 'block', change], ['will-search-memory', 'allow', change],
+  ] as const))('rechecks collected %s with %s policy after %s changes', async (point, onFailure, change) => {
+    const selected = ['first', 'second'].map(id => ({ ...ghost(id, { hooks: [point] }), approvedControlPoints: [point],
+      approval: { state: 'approved' as const, revision: '00000000-0000-4000-8000-000000000001' } }));
+    const listGhosts = vi.fn(() => selected);
+    const { gw, sent, running } = makeGateway({ listGhosts,
+      findGhostForDelivery: id => selected.find(item => installedGhostStoragePart(item) === id) ?? null });
+    for (const item of selected) running.add(installedGhostStoragePart(item));
+    const settings: RuntimePluginSettings = { [point]: selected.map(item => ({ pluginId: item.manifest.id, onFailure })) };
+    const control = createRuntimePluginControl({ readSettings: () => settings, captureOwner: () => () => true,
+      screen: (...args) => gw.screenControlPoint(...args) });
+    const providers = createRuntimeContextProviders(control);
+    const pending = point === 'will-compose-context' ? providers.compose('task', 'current input')
+      : providers.search({ sessionId: 'task', query: 'word', limit: 10 });
+    const observed = pending!.then(value => ({ value, error: undefined }), error => ({ value: undefined, error }));
+    await vi.advanceTimersByTimeAsync(0);
+    const reply = (id: string) => {
+      const event = sent.find(item => item.ghostId === id)!.payload;
+      gw.handleVerdict(id, { type: 'event-verdict', hookId: (event as { hookId: string }).hookId,
+        ...(point === 'will-compose-context' ? { action: 'context', blocks: [{ id, text: id }] }
+          : { action: 'memories', entries: [{ id, title: id, content: id }] }) });
+    };
+    reply('first');
+    await vi.advanceTimersByTimeAsync(0);
+    if (change === 'disabled') selected[0].enabled = false;
+    else selected[0].approval.revision = '00000000-0000-4000-8000-000000000002';
+    reply('second');
+    const outcome = await observed;
+    if (onFailure !== 'allow') expect(outcome.error).toMatchObject({ action: onFailure, failure: true });
+    else if (point === 'will-search-memory') expect(outcome.value).toMatchObject({ hits: [{ id: 'second', sourcePlugin: { id: 'second' } }] });
+    else {
+      expect(outcome.error).toBeUndefined();
+      expect(typeof outcome.value).toBe('string');
+      expect(JSON.parse(outcome.value as string)).toMatchObject({ sourcePlugin: { id: 'second' }, blocks: [{ id: 'second', text: 'second' }] });
+    }
+    expect(listGhosts).not.toHaveBeenCalled();
+  });
+
+  // The same approval boundary also spans asynchronous host route validation.
+  it.each(['will-start-turn', 'will-model-request'] as const)('rechecks %s before applying an asynchronous host effect', async point => {
+    const selected = { ...ghost('router', { hooks: [point] }), approvedControlPoints: [point] };
+    const { gw, sent, running } = makeGateway({ findGhostForDelivery: () => selected });
+    running.add('router');
+    const settings: RuntimePluginSettings = { [point]: [{ pluginId: 'router', onFailure: 'block' }] };
+    const control = createRuntimePluginControl({ readSettings: () => settings, captureOwner: () => () => true,
+      screen: (...args) => gw.screenControlPoint(...args) });
+    const route = { agentKind: 'pi' as const, providerId: 'p', model: 'm' };
+    const applied = vi.fn();
+    const pending = control.run(point, 'task', async () => ({ sessionId: 'task', phase: 'select' as const, route }),
+      async (_result, _input, assertCurrent) => {
+        await Promise.resolve();
+        selected.enabled = false;
+        assertCurrent();
+        applied();
+      });
+    const observed = pending!.then(() => undefined, error => error);
+    await vi.advanceTimersByTimeAsync(0);
+    gw.handleVerdict('router', { type: 'event-verdict', hookId: (sent[0].payload as { hookId: string }).hookId, action: 'route', route });
+    expect(await observed).toMatchObject({ action: 'block', failure: true });
+    expect(applied).not.toHaveBeenCalled();
+  });
+
+  it.each(['will-compose-context', 'will-search-memory'] as const)('validates provider results and times out %s without blocking', async point => {
+    const selected = { ...ghost('provider', { hooks: [point] }), approvedControlPoints: [point] };
+    const { gw, sent, running } = makeGateway({ listGhosts: () => [selected] });
+    running.add('provider');
+    const data = point === 'will-compose-context' ? { sessionId: 'task', text: 'read' }
+      : { sessionId: 'task', query: 'word', limit: 10 };
+    const pending = gw.screenControlPoint(point, data, { pluginId: 'provider', onFailure: 'allow' });
+    await vi.advanceTimersByTimeAsync(0);
+    const answer = point === 'will-compose-context' ? { action: 'context', blocks: [{ id: 'a', text: 'reference', sourcePlugin: 'forged' }] }
+      : { action: 'memories', entries: [{ id: 'a', title: 'Title', content: 'Full memory', sourcePlugin: 'forged' }] };
+    gw.handleVerdict('provider', { type: 'event-verdict', hookId: (sent[0].payload as { hookId: string }).hookId, ...answer });
+    expect(JSON.stringify(await pending)).not.toContain('forged');
+    const timeout = gw.screenControlPoint(point, data, { pluginId: 'provider', onFailure: 'allow' });
+    await vi.advanceTimersByTimeAsync(8001);
+    expect(await timeout).toEqual({ action: 'allow' });
   });
 });

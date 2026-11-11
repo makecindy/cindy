@@ -11,9 +11,9 @@
  * 三类规则:
  *  1. forbidden —— 术语在某语言下的禁用译法(如 Agent 在 zh-CN 禁「代理」)。
  *  2. case-form —— 保留英文的术语必须统一大小写形态(如 Worker 不写 worker)。
- *  3. punctuation —— 两条规则适用范围不同:半角标点(汉字后禁 , : ; ! ?)只对 zh-CN
- *     生效——日文 UI 惯例本就用半角冒号,实测 ja 半角 124:78 才是主流;省略号(… 而非
- *     三个半角点)覆盖 zh-CN / ja / ko 三语,三者现状都以 … 为主流。
+ *  3. punctuation —— 两条规则适用范围不同:半角标点(汉字后禁 , : ; ! ?)对 zh-CN /
+ *     zh-TW 生效——日文 UI 惯例本就用半角冒号,实测 ja 半角 124:78 才是主流;省略号
+ *     (… 而非三个半角点)覆盖 en / zh-CN / zh-TW / ja / ko。
  *
  * 分级:
  *  - status=decided 的术语违规 → **阻断**(exit 1)。
@@ -134,6 +134,20 @@ if (localeKeyErrors.length > 0) {
   fail(`术语表里有无法生效的语言键(拼错的语言键会让整条规则静默失效):\n${localeKeyErrors.map((e) => `  - ${e}`).join('\n')}`);
 }
 
+// terms 必须按 id 升序。新术语若都加在数组开头(或末尾),任意两个加术语的 PR 都会在同一
+// 位置冲突——2026-11-11 有 7 个未合并 PR 卡在这里。按 id 排序让新增落在各自的位置。
+// 顺序不参与任何规则判定:扫描逐条独立,人读版生成时自行重排(已裁决在前,各组内按 id)。
+for (let i = 1; i < glossary.terms.length; i += 1) {
+  const previous = glossary.terms[i - 1].id;
+  const current = glossary.terms[i].id;
+  if (previous > current) {
+    fail(
+      `i18n/glossary.json 的 terms 必须按 id 升序排列:"${current}" 排在了 "${previous}" 之后。\n` +
+        `  把新术语插到按 id 排序的位置,不要加在数组开头或末尾(大家都往同一处加会让 PR 互相冲突)。`,
+    );
+  }
+}
+
 /** 递归展平嵌套 JSON 为 Map<'a.b.c', string>。 */
 function flatten(obj, prefix, out) {
   for (const [key, value] of Object.entries(obj)) {
@@ -149,15 +163,21 @@ function flatten(obj, prefix, out) {
 
 /**
  * 加载一个 locale 的全部文案。
- * key 前缀区分来源,便于 exempt 精确定位:desktop:a.b / mobile/session:x.y
+ * key 前缀区分来源,便于 exempt 精确定位:desktop:a.b /
+ * desktop/namespace:a.b / mobile/session:x.y
  */
 function loadLocale(locale) {
   const out = new Map();
 
-  const desktopFile = path.join(DESKTOP_LOCALES, locale, 'common.json');
-  if (fs.existsSync(desktopFile)) {
-    for (const [k, v] of flatten(readJson(desktopFile), '', new Map())) {
-      out.set(`desktop:${k}`, v);
+  const desktopDir = path.join(DESKTOP_LOCALES, locale);
+  if (fs.existsSync(desktopDir)) {
+    for (const file of fs.readdirSync(desktopDir).sort()) {
+      if (!file.endsWith('.json')) continue;
+      const ns = file.slice(0, -'.json'.length);
+      const source = ns === 'common' ? 'desktop' : `desktop/${ns}`;
+      for (const [k, v] of flatten(readJson(path.join(desktopDir, file)), '', new Map())) {
+        out.set(`${source}:${k}`, v);
+      }
     }
   }
 

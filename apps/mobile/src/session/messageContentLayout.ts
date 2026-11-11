@@ -20,6 +20,7 @@ export interface MessageContentLayout {
   markdownBodyGap: number;
   markdownListGap: number;
   markdownListMarkerWidth: number;
+  markdownTableAvailableWidth: number;
   markdownTableCellMinWidth: number;
   mediaGap: number;
   mediaPlaceholderMinHeight: number;
@@ -59,6 +60,7 @@ export function buildMessageContentLayout(input: MessageContentLayoutInput): Mes
     markdownBodyGap: compact ? 12 : 14,
     markdownListGap: compact ? 6 : 8,
     markdownListMarkerWidth: compact ? 20 : 24,
+    markdownTableAvailableWidth: contentWidth,
     markdownTableCellMinWidth: compact ? 96 : 112,
     mediaGap: compact ? 6 : 8,
     mediaPlaceholderMinHeight: compact ? 84 : 90,
@@ -69,4 +71,15 @@ export function buildMessageContentLayout(input: MessageContentLayoutInput): Mes
 
 function normalizeDimension(value: number | undefined, fallback: number): number {
   return Number.isFinite(value) && typeof value === 'number' && value > 0 ? value : fallback;
+}
+
+/**
+ * Agent 回复正文的二次测宽:外层 stretch 量到像素宽后钉在内层,避免 iOS UITextView
+ * 在不确定宽度下只报出部分高度,LegendList 按偏矮值裁切消息。1px 内抖动忽略,
+ * 防止分享勾选栏出现时来回改宽把公式 WebView 打进重挂循环;真实变宽(旋转/分屏)
+ * 由外层 stretch 容器继续上报,这里照常更新。
+ */
+export function nextSettledContentWidth(current: number, next: number): number {
+  if (!(next > 0) || Math.abs(current - next) <= 1) return current;
+  return next;
 }

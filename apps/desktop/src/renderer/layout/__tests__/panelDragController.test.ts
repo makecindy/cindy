@@ -1,6 +1,12 @@
 import { describe, expect, it } from 'vitest';
 
-import { computeTriggerRange, isDroppableRect, isPointerInTargetZone } from '../PanelDragController';
+import {
+  computePanelDropIntent,
+  computePanelDropZone,
+  computeTriggerRange,
+  isDroppableRect,
+  isPointerInTargetZone,
+} from '../PanelDragController';
 
 /**
  * 拖面板原型的落点判定单测 —— 高亮/提交共用同一区间(所见即所得)。
@@ -55,5 +61,49 @@ describe('isDroppableRect', () => {
     expect(isDroppableRect(0, 0)).toBe(false); // display:none
     expect(isDroppableRect(300, 0)).toBe(false);
     expect(isDroppableRect(20, 800)).toBe(false); // 低于最小身体尺寸
+  });
+});
+
+describe('根级区域换位落点', () => {
+  const paneRect = { left: 100, top: 100, width: 400, height: 600, right: 500, bottom: 700 };
+
+  it('指针落在另一块根级区域里 → swap;同一根级区域(聊天列内)或矩形外 → null', () => {
+    expect(
+      computePanelDropIntent({
+        pointerX: 300,
+        pointerY: 400,
+        paneRect,
+        sourceRootIndex: 0,
+        targetRootIndex: 1,
+      }),
+    ).toBe('swap');
+    expect(
+      computePanelDropIntent({
+        pointerX: 300,
+        pointerY: 400,
+        paneRect,
+        sourceRootIndex: 1,
+        targetRootIndex: 1,
+      }),
+    ).toBeNull();
+    expect(
+      computePanelDropIntent({
+        pointerX: 50,
+        pointerY: 400,
+        paneRect,
+        sourceRootIndex: 0,
+        targetRootIndex: 1,
+      }),
+    ).toBeNull();
+  });
+
+  it('高亮整块根级区域(聊天列时是整列,不是列里的单个 pane),四边内缩 6px', () => {
+    const columnRect = { left: 80, top: 80, width: 440, height: 640, right: 520, bottom: 720 };
+    expect(computePanelDropZone(columnRect)).toEqual({
+      left: 86,
+      top: 86,
+      width: 428,
+      height: 628,
+    });
   });
 });

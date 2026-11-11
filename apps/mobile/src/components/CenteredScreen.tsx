@@ -7,7 +7,7 @@ import {
   useThemedStyles,
   type ThemeColors,
 } from '@/theme';
-import { spacing, typeScale } from '@/theme/tokens';
+import { lineHeight, spacing, typeScale } from '@/theme/tokens';
 
 /**
  * CenteredScreen —— 启动期全屏占位屏。
@@ -63,11 +63,13 @@ const makeStyles = (colors: ThemeColors) => StyleSheet.create({
   title: {
     color: colors.textPrimary,
     fontSize: typeScale.title,
-    fontWeight: fontWeight.medium,
+    lineHeight: lineHeight.title,
+    fontWeight: fontWeight.semibold,
   },
   subtitle: {
     color: colors.textSecondary,
     fontSize: typeScale.body,
+    lineHeight: lineHeight.body,
     textAlign: 'center',
   },
 });

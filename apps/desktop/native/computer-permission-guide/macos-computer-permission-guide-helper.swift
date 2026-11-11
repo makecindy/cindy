@@ -11,9 +11,17 @@ private let trackingInterval: TimeInterval = 0.16
 
 private enum GuideLocale: String {
     case zhCN = "zh-CN"
+    case zhTW = "zh-TW"
     case en
     case ja
     case ko
+    case es
+    case fr
+    case de
+    case ptPT = "pt-PT"
+    case ptBR = "pt-BR"
+    case lzh = "zh-Hant-x-lzh"
+    case lzhHans = "zh-Hans-x-lzh"
 }
 
 /** Localized native copy selected from the renderer-synchronized app locale. */
@@ -52,6 +60,21 @@ private struct GuideCopy {
                 dragTitle: "将 CuaDriver 拖入「{{permission}}」",
                 dragHint: "拖拽"
             )
+        case .zhTW:
+            return GuideCopy(
+                close: "關閉",
+                turnThisOn: "開啟此項目",
+                pointsToSwitch: "指向切換開關",
+                accessibility: "輔助使用",
+                screenRecording: "螢幕錄製",
+                completeEyebrow: "權限設定完成",
+                readyTitle: "Computer Use 已準備就緒",
+                step: "開啟電腦自動操作",
+                turnOnAppTitle: "在「{{permission}}」中開啟 CuaDriver",
+                waiting: "等待你開啟",
+                dragTitle: "將 CuaDriver 拖曳至「{{permission}}」",
+                dragHint: "拖曳"
+            )
         case .ja:
             return GuideCopy(
                 close: "閉じる",
@@ -81,6 +104,111 @@ private struct GuideCopy {
                 waiting: "켜기 대기",
                 dragTitle: "CuaDriver를 {{permission}}으로 드래그",
                 dragHint: "드래그"
+            )
+        case .es:
+            return GuideCopy(
+                close: "Cerrar",
+                turnThisOn: "Activa esto",
+                pointsToSwitch: "Señala el interruptor",
+                accessibility: "Accesibilidad",
+                screenRecording: "Grabación de pantalla",
+                completeEyebrow: "Permisos completados",
+                readyTitle: "Computer Use está listo",
+                step: "Abrir automatización del equipo",
+                turnOnAppTitle: "Activa CuaDriver en {{permission}}",
+                waiting: "Esperando tu acción",
+                dragTitle: "Arrastra CuaDriver a {{permission}}",
+                dragHint: "Arrastrar"
+            )
+        case .fr:
+            return GuideCopy(
+                close: "Fermer",
+                turnThisOn: "Activer cette option",
+                pointsToSwitch: "Pointe vers l’interrupteur",
+                accessibility: "Accessibilité",
+                screenRecording: "Enregistrement de l’écran",
+                completeEyebrow: "Autorisations accordées",
+                readyTitle: "Computer Use est prêt",
+                step: "Ouvrir l’automatisation de l’ordinateur",
+                turnOnAppTitle: "Activez CuaDriver dans {{permission}}",
+                waiting: "En attente de votre intervention",
+                dragTitle: "Faites glisser CuaDriver dans {{permission}}",
+                dragHint: "Faire glisser"
+            )
+        case .de:
+            return GuideCopy(
+                close: "Schließen",
+                turnThisOn: "Aktiviere dies",
+                pointsToSwitch: "Zeigt auf den Schalter",
+                accessibility: "Bedienungshilfen",
+                screenRecording: "Bildschirmaufnahme",
+                completeEyebrow: "Berechtigungen vollständig erteilt",
+                readyTitle: "Computer Use ist bereit",
+                step: "Computerautomatisierung öffnen",
+                turnOnAppTitle: "Aktiviere CuaDriver unter {{permission}}",
+                waiting: "Warte auf dich",
+                dragTitle: "Ziehe CuaDriver in {{permission}}",
+                dragHint: "Ziehen"
+            )
+        case .ptPT:
+            return GuideCopy(
+                close: "Fechar",
+                turnThisOn: "Ativar esta opção",
+                pointsToSwitch: "Aponta para o interruptor",
+                accessibility: "Acessibilidade",
+                screenRecording: "Gravação do ecrã",
+                completeEyebrow: "Permissões concluídas",
+                readyTitle: "Computer Use está pronto",
+                step: "Abrir automatização do computador",
+                turnOnAppTitle: "Ative o CuaDriver em {{permission}}",
+                waiting: "À sua espera",
+                dragTitle: "Arraste o CuaDriver para {{permission}}",
+                dragHint: "Arrastar"
+            )
+        case .ptBR:
+            return GuideCopy(
+                close: "Fechar",
+                turnThisOn: "Ativar",
+                pointsToSwitch: "Aponta para o interruptor",
+                accessibility: "Acessibilidade",
+                screenRecording: "Gravação de Tela",
+                completeEyebrow: "Permissões concluídas",
+                readyTitle: "Computer Use está pronto",
+                step: "Abrir automação do computador",
+                turnOnAppTitle: "Ative o CuaDriver em {{permission}}",
+                waiting: "Aguardando você",
+                dragTitle: "Arraste o CuaDriver para {{permission}}",
+                dragHint: "Arrastar"
+            )
+        case .lzh:
+            return GuideCopy(
+                close: "闔",
+                turnThisOn: "啟此項",
+                pointsToSwitch: "指向開關",
+                accessibility: "輔助使用",
+                screenRecording: "螢幕錄製",
+                completeEyebrow: "權柄已備",
+                readyTitle: "Computer Use 已備",
+                step: "啟電腦自動操作",
+                turnOnAppTitle: "於「{{permission}}」中開啟 CuaDriver",
+                waiting: "待君開啟",
+                dragTitle: "將 CuaDriver 拖曳至「{{permission}}」",
+                dragHint: "拖曳"
+            )
+        case .lzhHans:
+            return GuideCopy(
+                close: "阖",
+                turnThisOn: "启此项",
+                pointsToSwitch: "指向开关",
+                accessibility: "辅助功能",
+                screenRecording: "屏幕录制",
+                completeEyebrow: "权柄已备",
+                readyTitle: "Computer Use 已备",
+                step: "启电脑自动操作",
+                turnOnAppTitle: "于「{{permission}}」中打开 CuaDriver",
+                waiting: "待君打开",
+                dragTitle: "将 CuaDriver 拖入「{{permission}}」",
+                dragHint: "拖拽"
             )
         case .en:
             return GuideCopy(
@@ -934,7 +1062,6 @@ private final class PermissionGuideCoordinator {
                 }
                 if !switchPanel.isVisible {
                     switchGuideController.prepareForDisplay()
-                    switchPanel.order(.above, relativeTo: settingsInfo.windowNumber)
                     emit([
                         "type": "attached",
                         "systemX": settingsFrame.origin.x,
@@ -944,6 +1071,9 @@ private final class PermissionGuideCoordinator {
                         "panelX": desiredFrame.origin.x,
                         "panelY": desiredFrame.origin.y,
                     ])
+                }
+                if !isDragging {
+                    switchPanel.order(.above, relativeTo: settingsInfo.windowNumber)
                 }
                 return
             } else {
@@ -963,7 +1093,6 @@ private final class PermissionGuideCoordinator {
             panel.setFrame(desiredFrame, display: panel.isVisible, animate: false)
         }
         if !panel.isVisible && !isDragging {
-            panel.order(.above, relativeTo: settingsInfo.windowNumber)
             emit([
                 "type": "attached",
                 "systemX": settingsFrame.origin.x,
@@ -973,6 +1102,14 @@ private final class PermissionGuideCoordinator {
                 "panelX": desiredFrame.origin.x,
                 "panelY": desiredFrame.origin.y,
             ])
+        }
+        // isVisible stays true when Settings raises its window over ours.
+        // Reassert the attachment on every tracking tick, including after a
+        // permission-pane transition, without activating the helper or
+        // disturbing an in-progress drag. Keep the normal window level so
+        // System Settings sheets retain their usual stacking behavior.
+        if !isDragging {
+            panel.order(.above, relativeTo: settingsInfo.windowNumber)
         }
     }
 

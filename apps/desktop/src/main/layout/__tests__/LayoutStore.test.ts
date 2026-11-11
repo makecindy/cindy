@@ -3,7 +3,12 @@ import os from 'node:os';
 import path from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
-import { createDefaultLayout, validateLayout, type Layout } from '../../../shared/layoutTree';
+import {
+  createDefaultLayout,
+  insertRootSplitPane,
+  validateLayout,
+  type Layout,
+} from '../../../shared/layoutTree';
 import { LAYOUT_FILE_NAME, LayoutStore } from '../LayoutStore';
 
 /** 每个用例独立临时目录(规则 23:测试路径一律 os.tmpdir,收尾清理)。 */
@@ -82,6 +87,7 @@ describe('LayoutStore · 写路径(严格)', () => {
 
     const result = store.setLayout(next);
     expect('layout' in result && result.layout).toEqual(next);
+    expect('persisted' in result && result.persisted).toBe(true);
     expect(onChanged).toHaveBeenCalledTimes(1);
     expect(readFileJson()).toEqual(next);
     // 新实例读回同一棵树(round-trip)。
@@ -109,6 +115,26 @@ describe('LayoutStore · 写路径(严格)', () => {
     expect('rejection' in store.setLayout(null)).toBe(true);
     expect('rejection' in store.setLayout('garbage')).toBe(true);
   });
+
+  it('setLayout 写盘失败时保留内存布局并返回 persisted=false', () => {
+    const onChanged = vi.fn();
+    const store = makeStore(onChanged);
+    const before = createDefaultLayout();
+    expect(store.setLayout(before)).toMatchObject({ persisted: true });
+
+    const next = structuredClone(before);
+    (next.content as { children: { fraction: number }[] }).children[0].fraction = 0.55;
+    (next.content as { children: { fraction: number }[] }).children[1].fraction = 0.45;
+    vi.spyOn(fs, 'renameSync').mockImplementationOnce(() => {
+      throw new Error('disk full');
+    });
+
+    expect(store.setLayout(next)).toEqual({ layout: next, persisted: false });
+    expect(store.getLayout()).toEqual(next);
+    expect(readFileJson()).toEqual(before);
+    expect(onChanged).toHaveBeenCalledTimes(2);
+    expect(fs.existsSync(`${filePath}.tmp`)).toBe(false);
+  });
 });
 
 describe('LayoutStore · reset 与 ensurePersisted', () => {
@@ -120,10 +146,26 @@ describe('LayoutStore · reset 与 ensurePersisted', () => {
     (custom.content as { children: { fraction: number }[] }).children[1].fraction = 0.2;
     store.setLayout(custom);
 
-    const layout = store.reset();
-    expect(layout).toEqual(createDefaultLayout());
+    const result = store.reset();
+    expect(result).toEqual({ layout: createDefaultLayout(), persisted: true });
     expect(readFileJson()).toEqual(createDefaultLayout());
     expect(onChanged).toHaveBeenCalledTimes(2);
+  });
+
+  it('reset 不保留树里的额外 pane(页签组由 renderer 按需重新插入)', () => {
+    const store = makeStore();
+    const withExtra = insertRootSplitPane(
+      createDefaultLayout(),
+      { id: 'tab-group-left', panelKind: 'tab-group:left' },
+      { index: 0, fraction: 0.3 },
+    );
+    expect(withExtra.applied).toBe(true);
+    store.setLayout(withExtra.layout);
+
+    const result = store.reset();
+    expect(result.persisted).toBe(true);
+    expect(result.layout).toEqual(createDefaultLayout());
+    expect(readFileJson()).toEqual(createDefaultLayout());
   });
 
   it('ensurePersisted:缺失时落默认存档;已有合法存档不覆盖', () => {
@@ -151,4 +193,26 @@ describe('LayoutStore · reset 与 ensurePersisted', () => {
     store.reset();
     expect(fs.existsSync(`${filePath}.tmp`)).toBe(false);
   });
+});
+
+it('persists explicit sidebar width across restart and clears it on reset', () => {
+  const layout = createDefaultLayout();
+  if (layout.content.type !== 'split' || layout.content.children[1].node.type !== 'pane') throw new Error('fixture');
+  layout.content.children[1].node.preferredWidth = 517;
+  expect('persisted' in makeStore().setLayout(layout)).toBe(true);
+  const restarted = makeStore();
+  const restored = restarted.getLayout();
+  expect(restored).toEqual(layout);
+  restarted.reset();
+  expect(makeStore().getLayout()).toEqual(createDefaultLayout());
+});
+
+it.each([NaN, Infinity, -1, 119, 16001])('rejects invalid sidebar preference %s without changing other layout', (width) => {
+  const store = makeStore();
+  const before = store.getLayout();
+  const next = structuredClone(before);
+  if (next.content.type !== 'split' || next.content.children[1].node.type !== 'pane') throw new Error('fixture');
+  next.content.children[1].node.preferredWidth = width;
+  expect(store.setLayout(next)).toHaveProperty('rejection');
+  expect(store.getLayout()).toEqual(before);
 });

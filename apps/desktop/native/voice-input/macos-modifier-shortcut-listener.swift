@@ -1,4 +1,5 @@
 import ApplicationServices
+import AppKit
 import Foundation
 
 func emitJson(_ payload: [String: Any]) {
@@ -52,6 +53,29 @@ let keyCodeNames: [Int64: String] = [
   63: "Fn",
 ]
 
+let functionKeyCodeNames: [Int64: String] = [
+  64: "Function:F17",
+  79: "Function:F18",
+  80: "Function:F19",
+  90: "Function:F20",
+  96: "Function:F5",
+  97: "Function:F6",
+  98: "Function:F7",
+  99: "Function:F3",
+  100: "Function:F8",
+  101: "Function:F9",
+  103: "Function:F11",
+  105: "Function:F13",
+  106: "Function:F16",
+  107: "Function:F14",
+  109: "Function:F10",
+  111: "Function:F12",
+  113: "Function:F15",
+  118: "Function:F4",
+  120: "Function:F2",
+  122: "Function:F1",
+]
+
 let modifierGroups: [String: CGEventFlags] = [
   "MetaLeft": .maskCommand,
   "MetaRight": .maskCommand,
@@ -75,6 +99,7 @@ let modifierGroupMembers: [UInt64: Set<String>] = [
 enum ListenerState {
   static var pressedKeys = Set<String>()
   static var lastEmittedKeys: [String] = []
+  static var functionKeyNamesByKeyCode: [Int64: String] = [:]
 
   // Keep this helper intentionally dumb: it emits snapshots of keys currently
   // held down. Tap/hold timing and voice-input business state stay in the
@@ -114,8 +139,40 @@ enum ListenerState {
     emitKeysIfChanged()
   }
 
-  static func handleNonModifierKey(keyCode: Int64, down: Bool) {
-    let name = "KeyCode:\(keyCode)"
+  static func functionKeyName(event: CGEvent) -> String? {
+    var length = 0
+    var characters = [UniChar](repeating: 0, count: 4)
+    event.keyboardGetUnicodeString(
+      maxStringLength: characters.count,
+      actualStringLength: &length,
+      unicodeString: &characters
+    )
+    guard length == 1 else {
+      return nil
+    }
+    let value = Int(characters[0])
+    let firstFunctionKey = Int(NSF1FunctionKey)
+    let lastFunctionKey = Int(NSF24FunctionKey)
+    guard value >= firstFunctionKey && value <= lastFunctionKey else {
+      return nil
+    }
+    return "Function:F\(value - firstFunctionKey + 1)"
+  }
+
+  static func handleNonModifierKey(event: CGEvent, down: Bool) {
+    let keyCode = event.getIntegerValueField(.keyboardEventKeycode)
+    let name: String
+    if down {
+      let detected = functionKeyName(event: event)
+        ?? functionKeyCodeNames[keyCode]
+        ?? "KeyCode:\(keyCode)"
+      functionKeyNamesByKeyCode[keyCode] = detected
+      name = detected
+    } else {
+      name = functionKeyNamesByKeyCode.removeValue(forKey: keyCode)
+        ?? functionKeyName(event: event)
+        ?? "KeyCode:\(keyCode)"
+    }
     if down {
       pressedKeys.insert(name)
     } else {
@@ -137,7 +194,7 @@ enum ListenerState {
       }
     } else if type == .keyDown || type == .keyUp {
       if keyCodeNames[keyCode] == nil {
-        handleNonModifierKey(keyCode: keyCode, down: type == .keyDown)
+        handleNonModifierKey(event: event, down: type == .keyDown)
       }
     }
     return Unmanaged.passUnretained(event)

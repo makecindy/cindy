@@ -1,12 +1,14 @@
-import { describe, expect, it } from 'vitest';
+import { beforeAll, describe, expect, it } from 'vitest';
+import { i18n } from '@/i18n';
 import {
   isCollaborationSession,
-  sessionCollaborationComposerReadOnlyReason,
   sessionCollaborationLabel,
-  sessionCollaborationNotice,
-  sessionCollaborationReadOnlyReason,
 } from '@/session/collaboration';
 import type { RemoteSession } from '@/session/types';
+
+beforeAll(async () => {
+  await i18n.changeLanguage('zh-CN');
+});
 
 function session(patch: Partial<RemoteSession> = {}): RemoteSession {
   return {
@@ -30,45 +32,21 @@ function session(patch: Partial<RemoteSession> = {}): RemoteSession {
 }
 
 describe('mobile collaboration session fallback', () => {
-  it('labels Orca lead and worker sessions without exposing orchestration actions', () => {
+  it('labels Orca lead and worker sessions', () => {
     const lead = session({ orcaRole: 'lead' });
     const worker = session({ orcaRole: 'worker' });
 
-    expect(sessionCollaborationLabel(lead)).toBe('协作 Lead');
-    expect(sessionCollaborationLabel(worker)).toBe('协作 Worker');
-    // Lead 文案:可以发消息聊天,只有编排操作留在电脑端(不再说"暂不提供发送消息")。
-    expect(sessionCollaborationNotice(lead)).toContain('发消息聊天');
-    expect(sessionCollaborationNotice(lead)).toContain('创建 worker');
-    expect(sessionCollaborationNotice(lead)).not.toContain('暂不提供');
-    expect(sessionCollaborationNotice(worker)).toContain('发送消息');
-    expect(sessionCollaborationNotice(worker)).toContain('worker focus');
+    expect(sessionCollaborationLabel(lead)).toBe('协同 Lead');
+    expect(sessionCollaborationLabel(worker)).toBe('协同 Worker');
     expect(isCollaborationSession(lead)).toBe(true);
-    expect(sessionCollaborationReadOnlyReason(worker)).toContain('只读安全降级');
-  });
-
-  it('lets Lead compose messages while keeping worker composer read-only', () => {
-    const lead = session({ orcaRole: 'lead' });
-    const worker = session({ orcaRole: 'worker' });
-    const custom = session({ orcaRole: 'reviewer' });
-
-    // composer 只读:Lead 可发消息(null),worker / 其它角色只读(非空)。
-    expect(sessionCollaborationComposerReadOnlyReason(lead)).toBeNull();
-    expect(sessionCollaborationComposerReadOnlyReason(worker)).toContain('只读');
-    expect(sessionCollaborationComposerReadOnlyReason(custom)).toContain('只读');
-    expect(sessionCollaborationComposerReadOnlyReason(session({ orcaRole: null }))).toBeNull();
-
-    // 但写编排只读对 Lead 仍生效(fork/rewind/队列/设置仍留电脑端)。
-    expect(sessionCollaborationReadOnlyReason(lead)).not.toBeNull();
+    expect(isCollaborationSession(worker)).toBe(true);
   });
 
   it('keeps unknown collaboration roles readable but generic', () => {
     const custom = session({ orcaRole: 'reviewer' });
 
-    expect(sessionCollaborationLabel(custom)).toBe('协作 reviewer');
-    expect(sessionCollaborationNotice(custom)).toContain('协作编排操作请先在电脑端完成');
-    expect(sessionCollaborationReadOnlyReason(custom)).toContain('任务写操作请先在电脑端完成');
+    expect(sessionCollaborationLabel(custom)).toBe('协同 reviewer');
     expect(sessionCollaborationLabel(session({ orcaRole: null }))).toBeNull();
     expect(isCollaborationSession(session({ orcaRole: null }))).toBe(false);
-    expect(sessionCollaborationReadOnlyReason(session({ orcaRole: null }))).toBeNull();
   });
 });

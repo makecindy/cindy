@@ -11,7 +11,7 @@
  * 同时钉住:火焰按钮的完整历史路径不受本次改动影响。
  */
 
-import { act, renderHook, waitFor } from '@testing-library/react';
+import { act, cleanup, renderHook, waitFor } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { useUpdateNotice } from '@/hooks/useUpdateNotice';
@@ -79,6 +79,8 @@ beforeEach(() => {
 });
 
 afterEach(() => {
+  cleanup();
+  vi.useRealTimers();
   vi.restoreAllMocks();
 });
 
@@ -223,9 +225,14 @@ describe('useUpdateNotice onOpenVersion — pre-install preview', () => {
 
     act(() => { result.current.onOpenVersion('1.4.2'); });
     await waitFor(() => expect(result.current.open).toBe(true));
+    // CI 41177892495: complete the real hook's delayed exit cleanup before
+    // jsdom teardown; prior dismiss assertions left a live 200ms callback.
+    vi.useFakeTimers();
     act(() => { result.current.dismiss(); });
 
     expect(localStorage.getItem(STORAGE_KEY)).toBe('1.4.1');
+    await act(async () => { await vi.advanceTimersByTimeAsync(200); });
+    expect(result.current.releaseNotes).toBeNull();
   });
 
   it('passes the effective locale and refreshes loaded preview notes after a language switch', async () => {
@@ -321,6 +328,66 @@ describe('useUpdateNotice automatic popup', () => {
     expect(result.current.releaseNotes?.[0]?.topics[0]?.title).toBe('ja-1.4.2');
   });
 
+  it('retries a transient automatic notice miss before giving up', async () => {
+    (window as unknown as { electronAPI: unknown }).electronAPI = { appVersion: '1.4.2' };
+    localStorage.setItem(STORAGE_KEY, '1.4.1');
+    let currentFetch = 0;
+    mocks.fetchReleaseNotes.mockImplementation(async (version: string, locale: string) => {
+      if (version === '1.4.2' && currentFetch++ === 0) return null;
+      return notesFor(version, locale);
+    });
+    vi.useFakeTimers();
+    try {
+      const { result } = renderHook(() => useUpdateNotice());
+
+      await act(async () => {
+        await Promise.resolve();
+        await Promise.resolve();
+      });
+      expect(result.current.open).toBe(false);
+
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(2000);
+      });
+      expect(result.current.open).toBe(true);
+      expect(result.current.releaseNotes?.map((n) => n.version)).toEqual(['1.4.2']);
+      expect(currentFetch).toBe(2);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('does not reopen an automatic notice after manual history is opened and dismissed during retry delay', async () => {
+    (window as unknown as { electronAPI: unknown }).electronAPI = { appVersion: '1.4.2' };
+    localStorage.setItem(STORAGE_KEY, '1.4.1');
+    let currentFetch = 0;
+    mocks.fetchReleaseNotes.mockImplementation(async (version: string, locale: string) => {
+      if (version === '1.4.2' && currentFetch++ === 0) return null;
+      return notesFor(version, locale);
+    });
+    vi.useFakeTimers();
+    try {
+      const { result } = renderHook(() => useUpdateNotice());
+
+      await act(async () => {
+        await Promise.resolve();
+        await Promise.resolve();
+      });
+      expect(result.current.open).toBe(false);
+
+      act(() => { result.current.onOpen(); });
+      await act(async () => { await Promise.resolve(); });
+      expect(result.current.open).toBe(true);
+
+      act(() => { result.current.dismiss(); });
+      await act(async () => { await vi.advanceTimersByTimeAsync(2000); });
+      expect(result.current.open).toBe(false);
+      expect(currentFetch).toBe(2);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it('does not reopen an automatic notice dismissed during a locale refresh', async () => {
     (window as unknown as { electronAPI: unknown }).electronAPI = { appVersion: '1.4.2' };
     localStorage.setItem(STORAGE_KEY, '1.4.1');
@@ -334,6 +401,9 @@ describe('useUpdateNotice automatic popup', () => {
     await waitFor(() => expect(result.current.open).toBe(true));
     localeState.current = 'ja';
     rerender();
+    // Keep the locale-response assertions before the exit animation completes,
+    // then drain that callback using virtual time instead of leaking it to CI.
+    vi.useFakeTimers();
     act(() => { result.current.dismiss(); });
     expect(result.current.open).toBe(false);
 
@@ -342,5 +412,7 @@ describe('useUpdateNotice automatic popup', () => {
     expect(result.current.open).toBe(false);
     expect(localStorage.getItem(STORAGE_KEY)).toBe('1.4.2');
     expect(mocks.fetchReleaseNotes).toHaveBeenCalledTimes(2);
+    await act(async () => { await vi.advanceTimersByTimeAsync(200); });
+    expect(result.current.releaseNotes).toBeNull();
   });
 });

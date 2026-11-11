@@ -10,21 +10,40 @@
  *   4. willRetry=false → 不论 auth 与否都 push
  */
 
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
+import { stripInternalWebCitations } from '@cindy/maker-shared/internal-citation';
 
 import {
+  classifyCodexError,
   extractRolloutUpdatePlanFunctionCallEvent,
   newCodexRuntimeState,
+  finalizeCodexCitationText,
+  normalizeCodexFileCitations,
+  stableCitationBoundary,
   translateErrorNotification,
+  translateAgentMessageDelta,
   translateAccountRateLimitsUpdated,
   translateItemNotification,
   translatePlanUpdatedNotification,
+  beginCodexGenerationTurn,
+  codexGenerationDurationMs,
+  finalizeCodexGenerationTurn,
+  finishCodexSamplingTurn,
+  pauseCodexGeneration,
+  resetCodexGenerationTiming,
+  resumeCodexGeneration,
+  codexSpeedSnapshot,
+  settleCodexSpeedUsage,
 } from './translator.js';
 import type { CodexRuntimeState } from './translator.js';
 import type { CodexErrorInfo } from './app-server/protocol.js';
 import { createAsyncQueue } from '../shared/async-queue.js';
 import type { AsyncQueue } from '../shared/async-queue.js';
 import type { AgentEvent } from '../../types/events.js';
+import { makeGhostManual64KiBFixture } from '../shared/ghost-manual-fixture.js';
+import { expandCodexStream, type RecordedCodexStream } from './recorded-stream-fixture.js';
+import recordedAnswer from './fixtures/recorded-stream-answer.json';
+import recordedToolLoop from './fixtures/recorded-stream-tool-loop.json';
 
 function noopLog(): {
   info: () => void;
@@ -72,6 +91,325 @@ async function collect(queue: AsyncQueue<AgentEvent>): Promise<AgentEvent[]> {
   return out;
 }
 
+describe('Codex assistant text streaming contract', () => {
+  it.each(['completed', 'failed', 'interrupted'])('isolates failed sampling items when the retry turn is %s', async (status) => {
+    const rt = newCodexRuntimeState();
+    const q = createAsyncQueue<AgentEvent>();
+    const ctx = makeCtx(rt);
+    const delta = (turnId: string, itemId: string) => translateAgentMessageDelta({
+      threadId: 't1', turnId, itemId, delta: 'Opening',
+    }, q, ctx);
+    delta('turn-a', 'first');
+    delta('turn-b', 'other-turn');
+    translateErrorNotification(makeParams({ willRetry: true, message: 'stream disconnected',
+      codexErrorInfo: { responseStreamDisconnected: {} } }), q, ctx);
+    delta('turn-a', 'retry');
+    expect(finishCodexSamplingTurn(rt, 't1', 'turn-a', status)).toEqual(status === 'completed'
+      ? undefined : { threadId: 't1', turnId: 'turn-a', attempt: 2, agentMessageIds: ['retry'] });
+    expect(finishCodexSamplingTurn(rt, 't1', 'turn-a', status)).toBeUndefined();
+    translateErrorNotification(makeParams({ turnId: 'turn-b', willRetry: false, message: 'stream disconnected' }), q, ctx);
+    const failures = (await collect(q)).filter(event => event.type === 'error').map(event =>
+      (event.data as { assistantAttemptFailure?: { agentMessageIds: string[] } }).assistantAttemptFailure?.agentMessageIds);
+    expect(failures).toEqual([['first'], ['other-turn']]);
+    resetCodexGenerationTiming(rt);
+  });
+  // #6351: item/completed is not response completion. Existing text-delta tests
+  // never inject a stream failure after an assistant item has already completed.
+  it('attributes a failed sampling segment without discarding earlier tool progress or final retry output', async () => {
+    const rt = newCodexRuntimeState();
+    const q = createAsyncQueue<AgentEvent>();
+    const ctx = makeCtx(rt);
+    const complete = (id: string, text: string, phase: 'commentary' | 'final_answer') =>
+      translateItemNotification('completed', { threadId: 't1', turnId: 'turn-a',
+        item: { type: 'agentMessage', id, text, phase } }, q, ctx);
+    complete('progress', 'Checking the workspace', 'commentary');
+    translateItemNotification('completed', { threadId: 't1', turnId: 'turn-a',
+      item: { type: 'commandExecution', id: 'tool', command: 'pwd', cwd: '/repo',
+        status: 'completed', aggregatedOutput: '/repo', exitCode: 0 } }, q, ctx);
+    complete('failed-commentary', 'Preparing the answer', 'commentary');
+    complete('failed-answer', 'Hello from attempt one', 'final_answer');
+    translateErrorNotification(makeParams({ willRetry: true,
+      message: 'stream disconnected - retrying sampling request (1/5 in 212ms)...',
+      codexErrorInfo: { responseStreamDisconnected: {} } }), q, ctx);
+    complete('successful-commentary', 'Preparing the accepted answer', 'commentary');
+    complete('successful-intro', 'Hello from attempt two', 'final_answer');
+    complete('successful-answer', 'The accepted answer continues', 'final_answer');
+    expect(finishCodexSamplingTurn(rt, 't1', 'turn-a', 'completed')).toBeUndefined();
+    const events = await collect(q);
+    expect(events.filter(event => event.type === 'text').map(event =>
+      (event.data as { agentMessageId?: string }).agentMessageId)).toEqual([
+      'progress', 'failed-commentary', 'failed-answer',
+      'successful-commentary', 'successful-intro', 'successful-answer',
+    ]);
+    expect(events.filter(event => (event.data as { assistantSamplingAccepted?: unknown }).assistantSamplingAccepted))
+      .toEqual([expect.objectContaining({ type: 'tool_result_full', source: 'codex',
+        data: expect.objectContaining({ assistantSamplingAccepted: { agentMessageIds: ['progress'] } }) })]);
+    expect(events.filter(event => event.type === 'status')).toHaveLength(0);
+    expect(events.find(event => event.type === 'error')).toMatchObject({
+      data: { isTerminal: false, willRetry: true, assistantAttemptFailure: {
+        threadId: 't1', turnId: 'turn-a', attempt: 1,
+        agentMessageIds: ['failed-commentary', 'failed-answer'],
+      } },
+    });
+    expect(events.some(event => event.type === 'done')).toBe(false);
+    resetCodexGenerationTiming(rt);
+  });
+
+  it('uses dedicated deltas for live text, dedupes item snapshots, and keeps completed as final calibration', async () => {
+    const rt = newCodexRuntimeState();
+    const q = createAsyncQueue<AgentEvent>();
+    const ctx = makeCtx(rt);
+
+    translateAgentMessageDelta(
+      { threadId: 'thread-1', turnId: 'turn-1', itemId: 'msg-1', delta: 'Hello ' },
+      q,
+      ctx,
+    );
+    translateAgentMessageDelta(
+      { threadId: 'thread-1', turnId: 'turn-1', itemId: 'msg-1', delta: 'world' },
+      q,
+      ctx,
+    );
+    // 新 app-server 可能同时发送专用 delta 与 item/updated 全文快照；不得重复正文。
+    translateItemNotification(
+      'updated',
+      {
+        threadId: 'thread-1',
+        turnId: 'turn-1',
+        item: { type: 'agentMessage', id: 'msg-1', text: 'Hello world' },
+      },
+      q,
+      ctx,
+    );
+    translateItemNotification(
+      'completed',
+      {
+        threadId: 'thread-1',
+        turnId: 'turn-1',
+        item: { type: 'agentMessage', id: 'msg-1', text: 'Hello world' },
+      },
+      q,
+      ctx,
+    );
+
+    expect((await collect(q)).filter((event) => event.type === 'text')).toEqual([
+      { type: 'text', data: { text: 'Hello ', isFinal: false, agentMessageId: 'msg-1' }, source: 'codex' },
+      { type: 'text', data: { text: 'world', isFinal: false, agentMessageId: 'msg-1' }, source: 'codex' },
+      {
+        type: 'text',
+        data: { text: 'Hello world', isFinal: true, isFullText: true, agentMessageId: 'msg-1' },
+        source: 'codex',
+      },
+    ]);
+  });
+
+  it('dedupes a snapshot that arrives before its dedicated deltas and resumes after catch-up', async () => {
+    const rt = newCodexRuntimeState();
+    const q = createAsyncQueue<AgentEvent>();
+    const ctx = makeCtx(rt);
+
+    translateItemNotification(
+      'updated',
+      {
+        threadId: 'thread-1',
+        turnId: 'turn-1',
+        item: { type: 'agentMessage', id: 'msg-1', text: 'Hello ' },
+      },
+      q,
+      ctx,
+    );
+    translateAgentMessageDelta(
+      { threadId: 'thread-1', turnId: 'turn-1', itemId: 'msg-1', delta: 'Hello ' },
+      q,
+      ctx,
+    );
+    translateAgentMessageDelta(
+      { threadId: 'thread-1', turnId: 'turn-1', itemId: 'msg-1', delta: 'world' },
+      q,
+      ctx,
+    );
+    translateItemNotification(
+      'completed',
+      {
+        threadId: 'thread-1',
+        turnId: 'turn-1',
+        item: { type: 'agentMessage', id: 'msg-1', text: 'Hello world' },
+      },
+      q,
+      ctx,
+    );
+
+    expect((await collect(q)).filter((event) => event.type === 'text')).toEqual([
+      { type: 'text', data: { text: 'Hello ', isFinal: false, agentMessageId: 'msg-1' }, source: 'codex' },
+      { type: 'text', data: { text: 'world', isFinal: false, agentMessageId: 'msg-1' }, source: 'codex' },
+      {
+        type: 'text',
+        data: { text: 'Hello world', isFinal: true, isFullText: true, agentMessageId: 'msg-1' },
+        source: 'codex',
+      },
+    ]);
+    expect(rt.itemRawText.has('msg-1')).toBe(false);
+    expect(rt.itemDeltaText.has('msg-1')).toBe(false);
+    expect(rt.itemSnapshotText.has('msg-1')).toBe(false);
+  });
+
+  it('keeps interleaved snapshots and dedicated deltas append-only without replaying text', async () => {
+    const rt = newCodexRuntimeState();
+    const q = createAsyncQueue<AgentEvent>();
+    const ctx = makeCtx(rt);
+
+    translateAgentMessageDelta(
+      { threadId: 'thread-1', turnId: 'turn-1', itemId: 'msg-1', delta: 'Hel' },
+      q,
+      ctx,
+    );
+    translateItemNotification(
+      'updated',
+      {
+        threadId: 'thread-1',
+        turnId: 'turn-1',
+        item: { type: 'agentMessage', id: 'msg-1', text: 'Hello ' },
+      },
+      q,
+      ctx,
+    );
+    translateAgentMessageDelta(
+      { threadId: 'thread-1', turnId: 'turn-1', itemId: 'msg-1', delta: 'world' },
+      q,
+      ctx,
+    );
+
+    expect((await collect(q)).filter((event) => event.type === 'text')).toEqual([
+      { type: 'text', data: { text: 'Hel', isFinal: false, agentMessageId: 'msg-1' }, source: 'codex' },
+      { type: 'text', data: { text: 'lo ', isFinal: false, agentMessageId: 'msg-1' }, source: 'codex' },
+      { type: 'text', data: { text: 'world', isFinal: false, agentMessageId: 'msg-1' }, source: 'codex' },
+    ]);
+  });
+
+  it('never mixes a divergent snapshot tail into an already emitted dedicated stream', async () => {
+    const rt = newCodexRuntimeState();
+    const q = createAsyncQueue<AgentEvent>();
+    const ctx = makeCtx(rt);
+
+    translateAgentMessageDelta(
+      { threadId: 'thread-1', turnId: 'turn-1', itemId: 'msg-1', delta: 'Hello worxd' },
+      q,
+      ctx,
+    );
+    translateItemNotification(
+      'updated',
+      {
+        threadId: 'thread-1',
+        turnId: 'turn-1',
+        item: { type: 'agentMessage', id: 'msg-1', text: 'Hello wonderful' },
+      },
+      q,
+      ctx,
+    );
+    translateItemNotification(
+      'completed',
+      {
+        threadId: 'thread-1',
+        turnId: 'turn-1',
+        item: { type: 'agentMessage', id: 'msg-1', text: 'Hello wonderful' },
+      },
+      q,
+      ctx,
+    );
+
+    expect((await collect(q)).filter((event) => event.type === 'text')).toEqual([
+      { type: 'text', data: { text: 'Hello worxd', isFinal: false, agentMessageId: 'msg-1' }, source: 'codex' },
+      {
+        type: 'text',
+        data: { text: 'Hello wonderful', isFinal: true, isFullText: true, agentMessageId: 'msg-1' },
+        source: 'codex',
+      },
+    ]);
+  });
+
+  it('preserves distinct Codex message identities and completed phases', async () => {
+    const q = createAsyncQueue<AgentEvent>();
+    const ctx = makeCtx(newCodexRuntimeState());
+
+    for (const item of [
+      {
+        type: 'agentMessage' as const,
+        id: 'msg-commentary',
+        text: 'Execution preview',
+        phase: 'commentary',
+      },
+      {
+        type: 'agentMessage' as const,
+        id: 'msg-final',
+        text: 'Please confirm.',
+        phase: 'final_answer',
+      },
+    ]) {
+      translateItemNotification(
+        'completed',
+        { threadId: 'thread-1', turnId: 'turn-1', item },
+        q,
+        ctx,
+      );
+    }
+
+    expect((await collect(q)).filter((event) => event.type === 'text')).toEqual([
+      {
+        type: 'text',
+        data: {
+          text: 'Execution preview',
+          isFinal: true,
+          isFullText: true,
+          agentMessageId: 'msg-commentary',
+          phase: 'commentary',
+        },
+        source: 'codex',
+      },
+      {
+        type: 'text',
+        data: {
+          text: 'Please confirm.',
+          isFinal: true,
+          isFullText: true,
+          agentMessageId: 'msg-final',
+          phase: 'final_answer',
+        },
+        source: 'codex',
+      },
+    ]);
+  });
+});
+
+describe('translateItemNotification ghost_manual boundary', () => {
+  it('preserves a 64KB high-escape MCP envelope without truncation', async () => {
+    const { content, wire } = makeGhostManual64KiBFixture();
+    expect(Buffer.byteLength(wire, 'utf8')).toBeGreaterThan(64 * 1024);
+
+    const q = createAsyncQueue<AgentEvent>();
+    translateItemNotification(
+      'completed',
+      {
+        threadId: 'thread-manual',
+        turnId: 'turn-manual',
+        item: {
+          type: 'mcpToolCall',
+          id: 'manual-call',
+          server: 'cindy',
+          tool: 'ghost_manual',
+          status: 'completed',
+          result: { content: [{ type: 'text', text: wire }] },
+        },
+      },
+      q,
+      makeCtx(newCodexRuntimeState()),
+    );
+    const events = await collect(q);
+    const full = events.find((event) => event.type === 'tool_result_full');
+    expect(full).toMatchObject({ data: { fullText: wire }, source: 'codex' });
+    expect(JSON.parse((full!.data as { fullText: string }).fullText).content).toBe(content);
+  });
+});
+
 describe('translateAccountRateLimitsUpdated', () => {
   it('normalizes Codex 0.144 windowDurationMins before emitting account usage', async () => {
     const q = createAsyncQueue<AgentEvent>();
@@ -92,6 +430,176 @@ describe('translateAccountRateLimitsUpdated', () => {
         secondary: { usedPercent: 25, windowMinutes: 10080, windowDurationMins: 60 },
       },
     });
+  });
+});
+
+describe('Codex generation timing', () => {
+  it('includes TTFT and thinking while excluding a tool interval', async () => {
+    let now = 4_000;
+    const nowSpy = vi.spyOn(Date, 'now').mockImplementation(() => now);
+    const rt = newCodexRuntimeState();
+    const q = createAsyncQueue<AgentEvent>();
+    const ctx = makeCtx(rt);
+    try {
+      beginCodexGenerationTurn(rt, 'turn-1', 1_000);
+      translateItemNotification('started', {
+        threadId: 'thread-1',
+        turnId: 'turn-1',
+        startedAtMs: 400_000,
+        item: { type: 'commandExecution', id: 'tool-1', command: 'pwd', status: 'inProgress' },
+      }, q, ctx);
+      now = 10_000;
+      translateItemNotification('completed', {
+        threadId: 'thread-1',
+        turnId: 'turn-1',
+        completedAtMs: 406_000,
+        item: { type: 'commandExecution', id: 'tool-1', command: 'pwd', status: 'completed' },
+      }, q, ctx);
+      now = 11_000;
+      translateItemNotification('started', {
+        threadId: 'thread-1',
+        turnId: 'turn-1',
+        startedAtMs: 407_000,
+        item: { type: 'agentMessage', id: 'msg-1', text: '' },
+      }, q, ctx);
+      translateItemNotification('updated', {
+        threadId: 'thread-1',
+        turnId: 'turn-1',
+        item: { type: 'agentMessage', id: 'msg-1', text: 'hello' },
+      }, q, ctx);
+      now = 11_500;
+      translateItemNotification('completed', {
+        threadId: 'thread-1',
+        turnId: 'turn-1',
+        completedAtMs: 407_500,
+        item: { type: 'agentMessage', id: 'msg-1', text: 'hello' },
+      }, q, ctx);
+      finalizeCodexGenerationTurn(rt, 'turn-1', 12_000);
+      await collect(q);
+      // Local 1s→4s includes initial TTFT/thinking; 4s→10s tool time is excluded;
+      // 10s→12s includes the post-tool API call. Remote timestamps are offset by 396s.
+      expect(codexGenerationDurationMs(rt)).toBe(5_000);
+    } finally {
+      nowSpy.mockRestore();
+    }
+  });
+
+  it('omits timing when a tool completion has no matching start boundary', async () => {
+    const rt = newCodexRuntimeState();
+    const q = createAsyncQueue<AgentEvent>();
+    const ctx = makeCtx(rt);
+    beginCodexGenerationTurn(rt, 'turn-1', 1_000);
+    translateItemNotification('completed', {
+      threadId: 'thread-1',
+      turnId: 'turn-1',
+      completedAtMs: 3_500,
+      item: { type: 'commandExecution', id: 'tool-1', command: 'pwd', status: 'completed' },
+    }, q, ctx);
+    finalizeCodexGenerationTurn(rt, 'turn-1', 4_000);
+    await collect(q);
+    expect(codexGenerationDurationMs(rt)).toBeUndefined();
+  });
+
+  it('omits timing when an item arrives before the local turn-start boundary', async () => {
+    let now = 2_000;
+    const nowSpy = vi.spyOn(Date, 'now').mockImplementation(() => now);
+    const rt = newCodexRuntimeState();
+    const q = createAsyncQueue<AgentEvent>();
+    try {
+      translateItemNotification('started', {
+        threadId: 'thread-1',
+        turnId: 'turn-1',
+        startedAtMs: 500_000,
+        item: { type: 'commandExecution', id: 'tool-1', command: 'pwd', status: 'inProgress' },
+      }, q, makeCtx(rt));
+      now = 4_000;
+      translateItemNotification('completed', {
+        threadId: 'thread-1',
+        turnId: 'turn-1',
+        completedAtMs: 502_000,
+        item: { type: 'commandExecution', id: 'tool-1', command: 'pwd', status: 'completed' },
+      }, q, makeCtx(rt));
+      finalizeCodexGenerationTurn(rt, 'turn-1', 5_000);
+      await collect(q);
+      expect(codexGenerationDurationMs(rt)).toBeUndefined();
+    } finally {
+      nowSpy.mockRestore();
+    }
+  });
+
+  it('does not require a start boundary for completion-only file changes', async () => {
+    const rt = newCodexRuntimeState();
+    const q = createAsyncQueue<AgentEvent>();
+    beginCodexGenerationTurn(rt, 'turn-1', 1_000);
+    translateItemNotification('completed', {
+      threadId: 'thread-1',
+      turnId: 'turn-1',
+      completedAtMs: 3_500,
+      item: { type: 'fileChange', id: 'patch-1', changes: [], status: 'completed' },
+    }, q, makeCtx(rt));
+    finalizeCodexGenerationTurn(rt, 'turn-1', 4_000);
+    await collect(q);
+    expect(codexGenerationDurationMs(rt)).toBe(3_000);
+  });
+
+  it('omits timing when context compaction has no matching start boundary', async () => {
+    const nowSpy = vi.spyOn(Date, 'now').mockReturnValue(3_000);
+    const rt = newCodexRuntimeState();
+    const q = createAsyncQueue<AgentEvent>();
+    try {
+      beginCodexGenerationTurn(rt, 'turn-1', 1_000);
+      translateItemNotification('completed', {
+        threadId: 'thread-1',
+        turnId: 'turn-1',
+        item: { type: 'contextCompaction', id: 'compact-1' },
+      }, q, makeCtx(rt));
+      finalizeCodexGenerationTurn(rt, 'turn-1', 4_000);
+      const events = await collect(q);
+
+      expect(events).toEqual([
+        expect.objectContaining({
+          type: 'compact_boundary',
+          data: expect.objectContaining({ boundaryId: 'compact-1' }),
+        }),
+      ]);
+      expect(codexGenerationDurationMs(rt)).toBeUndefined();
+    } finally {
+      nowSpy.mockRestore();
+    }
+  });
+
+  it('excludes approval waits from generation timing', () => {
+    const rt = newCodexRuntimeState();
+    beginCodexGenerationTurn(rt, 'turn-1', 1_000);
+    pauseCodexGeneration(rt, 'turn-1', 'approval:cmd-1', 2_000);
+    resumeCodexGeneration(rt, 'turn-1', 'approval:cmd-1', 10_000);
+    finalizeCodexGenerationTurn(rt, 'turn-1', 12_000);
+    expect(codexGenerationDurationMs(rt)).toBe(3_000);
+  });
+
+  it('omits timing when the first observed boundary is an interaction pause', () => {
+    const rt = newCodexRuntimeState();
+    pauseCodexGeneration(rt, 'turn-1', 'approval:cmd-1', 2_000);
+    resumeCodexGeneration(rt, 'turn-1', 'approval:cmd-1', 10_000);
+    finalizeCodexGenerationTurn(rt, 'turn-1', 12_000);
+    expect(codexGenerationDurationMs(rt)).toBeUndefined();
+  });
+
+  it('omits timing when the model-active event loop has a suspend-sized gap', () => {
+    const wallClockSpy = vi.spyOn(Date, 'now').mockReturnValue(1_000);
+    try {
+      const rt = newCodexRuntimeState();
+      beginCodexGenerationTurn(rt, 'turn-1', 1_000);
+      settleCodexSpeedUsage(rt, { outputTokens: 10 }, 2_000);
+      expect(rt.tokenSpeed.snapshot()).toMatchObject({ tokens: 10 });
+      wallClockSpy.mockReturnValue(40_000);
+      finalizeCodexGenerationTurn(rt, 'turn-1', 2_000);
+      expect(codexGenerationDurationMs(rt)).toBeUndefined();
+      // The suspended wall clock would dilute the live speed too.
+      expect(rt.tokenSpeed.snapshot()).toBeUndefined();
+    } finally {
+      wallClockSpy.mockRestore();
+    }
   });
 });
 
@@ -378,6 +886,41 @@ describe('translateErrorNotification', () => {
     expect(events[0]!.data).not.toHaveProperty('reason');
   });
 
+  it('Codex 远端 compact 密文 400 保留独立原因并交给 host 换窗', async () => {
+    const rt = newCodexRuntimeState();
+    const q = createAsyncQueue<AgentEvent>();
+    translateErrorNotification(
+      makeParams({
+        willRetry: false,
+        message:
+          'Error running remote compact task: { "type": "error", "error": { "code": "invalid_encrypted_content", "message": "The encrypted content cind...9ln0 could not be verified." } }',
+      }),
+      q,
+      makeCtx(rt),
+    );
+    const events = await collect(q);
+    expect(events[0]!.data).toMatchObject({
+      reason: 'remote-compact-encrypted-content',
+      isTerminal: true,
+    });
+  });
+
+  it('单独的 invalid_encrypted_content 不冒充超限换窗', async () => {
+    const rt = newCodexRuntimeState();
+    const q = createAsyncQueue<AgentEvent>();
+    translateErrorNotification(
+      makeParams({
+        willRetry: false,
+        message:
+          'Encrypted content could not be decrypted or parsed. code=invalid_encrypted_content',
+      }),
+      q,
+      makeCtx(rt),
+    );
+    const events = await collect(q);
+    expect(events[0]!.data).not.toHaveProperty('reason');
+  });
+
   it('上下文超限终止错误带 context-overflow reason(#1429): 原样重试必败, renderer 靠它换恢复动作', async () => {
     const rt = newCodexRuntimeState();
     const q = createAsyncQueue<AgentEvent>();
@@ -395,6 +938,73 @@ describe('translateErrorNotification', () => {
       reason: 'context-overflow',
       isTerminal: true,
     });
+  });
+
+  it.each([
+    'unexpected status 400 Bad Request: {"error":{"code":"model_not_found"}}',
+    "The 'gpt-6.1-sol' model is not supported when using Codex with a ChatGPT account.",
+  ])('tells the user to switch models on a definitive Codex error: %s', async message => {
+    const q = createAsyncQueue<AgentEvent>();
+    translateErrorNotification(makeParams({ willRetry: false, message }), q, makeCtx(newCodexRuntimeState()));
+    expect(await collect(q)).toEqual([
+      expect.objectContaining({ type: 'error', data: expect.objectContaining({
+        message: expect.stringContaining('[MODEL_SELECTION_UNAVAILABLE]'),
+        reason: 'model_unavailable', isTerminal: true,
+      }) }),
+    ]);
+  });
+
+  it('does not interpret a generic HTTP 404 or reconnect notice as an unavailable model', () => {
+    expect(classifyCodexError({ message: 'unexpected status 404 Not Found' }).reason).toBeUndefined();
+    expect(classifyCodexError({ message: 'Reconnecting... 1/5' }).reason).toBeUndefined();
+    expect(classifyCodexError({
+      message: '{"error":{"code":"invalid_request","metadata":{"code":"model_not_found"}}}',
+    }).reason).toBeUndefined();
+  });
+
+  it('keeps structured rate limits and explicit 5xx failures on their existing error paths', () => {
+    const modelCode = '{"error":{"code":"model_not_found"}}';
+    expect(classifyCodexError({
+      message: modelCode,
+      codexErrorInfo: { responseTooManyFailedAttempts: { httpStatusCode: 429 } },
+    }).reason).toBeUndefined();
+    expect(classifyCodexError({ message: `HTTP/1.1 503: ${modelCode}` }).reason).toBeUndefined();
+    expect(classifyCodexError({ message: `unexpected status code 502: ${modelCode}` }).reason).toBeUndefined();
+  });
+
+  it('classifyCodexError 把 contextWindowExceeded 与 overload 映射成稳定 reason', () => {
+    expect(classifyCodexError({
+      message: 'window full',
+      codexErrorInfo: 'contextWindowExceeded',
+    })).toMatchObject({
+      reason: 'context-overflow',
+      errorInfoTag: 'contextWindowExceeded',
+    });
+    expect(classifyCodexError({
+      message: 'The upstream declined this request.',
+      codexErrorInfo: 'serverOverloaded',
+    }).reason).toBe('upstream-overload');
+    expect(classifyCodexError({
+      message: 'stream dropped',
+      codexErrorInfo: { responseStreamDisconnected: { httpStatusCode: 502 } },
+    }).errorInfoTag).toBe('responseStreamDisconnected');
+    expect(
+      classifyCodexError({
+        message:
+          'Error running remote compact task: { "type": "error", "error": { "code": "invalid_encrypted_content" } }',
+      }).reason,
+    ).toBe('remote-compact-encrypted-content');
+    expect(
+      classifyCodexError({
+        message: 'Error running remote compact task',
+        additionalDetails: 'code=invalid_encrypted_content',
+      }).reason,
+    ).toBe('remote-compact-encrypted-content');
+    expect(
+      classifyCodexError({
+        message: 'Encrypted content could not be decrypted or parsed. code=invalid_encrypted_content',
+      }).reason,
+    ).toBeUndefined();
   });
 
   it('Codex 结构化 contextWindowExceeded tag 不依赖错误文案措辞', async () => {
@@ -493,6 +1103,50 @@ describe('translateErrorNotification', () => {
     expect((events[0].data as { message: string }).message).toBe(
       'The upstream declined this request. (auto-retry 1/4)',
     );
+  });
+
+  it('上游文案带 rate limit exceeded 时仍按容量接管重投,且不再标记 usageLimit', async () => {
+    // Kimi 编码端点回的原文: 半句 rate limit exceeded 会让既有信号抽取置 usageLimit,
+    // 只归 overloaded 时这轮既不会被接管重投, 还会被续跑判定当成账号用量上限拒掉。
+    const rt = newCodexRuntimeState();
+    const q = createAsyncQueue<AgentEvent>();
+    const calls: number[] = [];
+    translateErrorNotification(
+      makeParams({
+        willRetry: false,
+        message: 'rate limit exceeded: The engine is currently overloaded, please try again later',
+      }),
+      q,
+      {
+        ...makeCtx(rt),
+        tryTakeOverOverload: () => {
+          calls.push(1);
+          return { attempt: 1, maxAttempts: 4 };
+        },
+      },
+    );
+    const events = await collect(q);
+    expect(calls).toHaveLength(1);
+    expect(events[0].data).toMatchObject({
+      isTerminal: false,
+      willRetry: true,
+      reason: 'upstream-overload',
+    });
+    // 容量问题不是账号用量上限: 这个字段会让续跑与限额自动继续走错分支。
+    expect(events[0].data).not.toHaveProperty('usageLimit');
+    expect((events[0].data as { message: string }).message).toBe(
+      'rate limit exceeded: The engine is currently overloaded, please try again later (auto-retry 1/4)',
+    );
+  });
+
+  it('classifyCodexError 把 currently overloaded 归容量,不保留 rate limit 信号', () => {
+    const classified = classifyCodexError({
+      message: 'rate limit exceeded: The engine is currently overloaded, please try again later',
+    });
+    expect(classified.isCapacityError).toBe(true);
+    expect(classified.reason).toBe('upstream-overload');
+    expect(classified.usageLimit).toBe(false);
+    expect(classified.data).not.toHaveProperty('usageLimit');
   });
 
   it('结构化 tag 透出到 error data，且不干扰既有 errorStatus 推断', async () => {
@@ -809,6 +1463,21 @@ describe('translateItemNotification contextCompaction', () => {
 });
 
 describe('translateItemNotification commandExecution output normalization', () => {
+  it.each(['declined', 'failed', 'completed'] as const)('keeps empty %s command results truthful and readable', async (status) => {
+    const queue = createAsyncQueue<AgentEvent>();
+    translateItemNotification('completed', { threadId: 't', turnId: 'turn',
+      item: { type: 'commandExecution', id: 'empty', command: 'pwd', status, aggregatedOutput: '' },
+    }, queue, makeCtx(newCodexRuntimeState()));
+    queue.end();
+    const events: AgentEvent[] = [];
+    for await (const event of queue) events.push(event);
+    const result = events.find(event => event.type === 'tool_result_full')!;
+    expect(result.data).toMatchObject({ isError: status !== 'completed',
+      fullText: status === 'completed' ? '' : expect.stringMatching(/declined|failed/),
+    });
+    expect(JSON.stringify(result)).not.toContain('rejected by user');
+  });
+
   it('keeps the raw PowerShell wrapper command and emits a display command for tool_use display', async () => {
     const rt = newCodexRuntimeState();
     const q = createAsyncQueue<AgentEvent>();
@@ -1088,9 +1757,147 @@ describe('translateItemNotification commandExecution output normalization', () =
       isError: false,
     });
   });
+
+  // #3793:bwrap 沙箱初始化失败(命令从未执行)的 failed exec 追加宿主归因标注;
+  // 普通失败不受影响。
+  it('annotates a failed exec whose output is pure bwrap init diagnostics', async () => {
+    const rt = newCodexRuntimeState();
+    const q = createAsyncQueue<AgentEvent>();
+    const ctx = makeCtx(rt);
+
+    translateItemNotification(
+      'completed',
+      {
+        threadId: 'thread-1',
+        turnId: 'turn-1',
+        item: {
+          type: 'commandExecution',
+          id: 'cmd-sandbox',
+          command: 'ls',
+          status: 'failed',
+          aggregatedOutput: 'bwrap: loopback: Failed RTM_NEWADDR: Operation not permitted\n',
+          exitCode: 1,
+        },
+      },
+      q,
+      ctx,
+    );
+
+    const events = await collect(q);
+    const full = events.find((event) => event.type === 'tool_result_full');
+    const fullText = (full?.data as { fullText?: string }).fullText ?? '';
+    expect(fullText).toContain('Failed RTM_NEWADDR');
+    expect(fullText).toContain('[Cindy] The Codex command sandbox (bubblewrap) failed to initialize');
+    expect(full?.data).toMatchObject({ isError: true });
+  });
+
+  it('does not annotate an ordinary failed exec', async () => {
+    const rt = newCodexRuntimeState();
+    const q = createAsyncQueue<AgentEvent>();
+    const ctx = makeCtx(rt);
+
+    translateItemNotification(
+      'completed',
+      {
+        threadId: 'thread-1',
+        turnId: 'turn-1',
+        item: {
+          type: 'commandExecution',
+          id: 'cmd-fail',
+          command: 'tsc',
+          status: 'failed',
+          aggregatedOutput: 'error TS2322: type mismatch\n',
+          exitCode: 2,
+        },
+      },
+      q,
+      ctx,
+    );
+
+    const events = await collect(q);
+    const full = events.find((event) => event.type === 'tool_result_full');
+    expect((full?.data as { fullText?: string }).fullText).toBe('error TS2322: type mismatch\n');
+  });
 });
 
 describe('translateItemNotification collabAgentToolCall', () => {
+  it('does not create a Subagent card for a provisional spawn with no child thread', async () => {
+    const q = createAsyncQueue<AgentEvent>();
+    const ctx = makeCtx(newCodexRuntimeState());
+    const provisional = {
+      threadId: 'thread-1',
+      turnId: 'turn-1',
+      item: {
+        type: 'collabAgentToolCall',
+        id: 'spawn-before-validation',
+        tool: 'spawnAgent',
+        status: 'inProgress',
+        senderThreadId: 'thread-1',
+        receiverThreadIds: [],
+        prompt: 'Use the configured default model',
+        reasoningEffort: 'medium',
+        agentsStates: {},
+      },
+    };
+
+    translateItemNotification('started', provisional, q, ctx);
+    translateItemNotification('updated', provisional, q, ctx);
+
+    expect(await collect(q)).toEqual([]);
+    expect(ctx.rt.emittedToolUse.has('spawn-before-validation')).toBe(false);
+  });
+
+  it('publishes the same provisional spawn once a child receiver appears', async () => {
+    const q = createAsyncQueue<AgentEvent>();
+    const ctx = makeCtx(newCodexRuntimeState());
+    const provisional = {
+      threadId: 'thread-1',
+      turnId: 'turn-1',
+      item: {
+        type: 'collabAgentToolCall',
+        id: 'spawn-after-validation',
+        tool: 'spawnAgent',
+        status: 'inProgress',
+        senderThreadId: 'thread-1',
+        receiverThreadIds: [],
+        prompt: 'Use the configured default model',
+        reasoningEffort: 'medium',
+        agentsStates: {},
+      },
+    };
+
+    translateItemNotification('started', provisional, q, ctx);
+    translateItemNotification(
+      'updated',
+      {
+        ...provisional,
+        item: {
+          ...provisional.item,
+          receiverThreadIds: ['thread-2'],
+          model: 'gpt-5.6-terra',
+        },
+      },
+      q,
+      ctx,
+    );
+
+    const events = await collect(q);
+    expect(events.map((event) => event.type)).toEqual(['tool_use', 'agent_task_update']);
+    expect(events[0].data).toMatchObject({
+      toolUseId: 'spawn-after-validation',
+      input: { receiverThreadIds: ['thread-2'], model: 'gpt-5.6-terra' },
+    });
+    expect(events[1].data).toMatchObject({
+      taskId: 'spawn-after-validation',
+      status: 'running',
+      model: 'gpt-5.6-terra',
+      subagentObservation: {
+        kind: 'spawn',
+        providerRunIds: ['thread-2'],
+      },
+    });
+  });
+
   it('emits provider-neutral task updates alongside existing tool events', async () => {
     const rt = newCodexRuntimeState();
     const q = createAsyncQueue<AgentEvent>();
@@ -1139,6 +1946,12 @@ describe('translateItemNotification collabAgentToolCall', () => {
       title: 'spawnAgent',
       description: 'Review the auth flow',
       receiverThreadIds: ['thread-2'],
+      subagentObservation: {
+        kind: 'spawn',
+        logicalSubagentId: 'collab-1',
+        parentToolUseId: 'collab-1',
+        providerRunIds: ['thread-2'],
+      },
     });
     expect(events[2].data).toMatchObject({
       toolUseId: 'collab-1',
@@ -1149,6 +1962,77 @@ describe('translateItemNotification collabAgentToolCall', () => {
       status: 'completed',
       summary: 'thread-2: done',
     });
+    expect(events[4].data).not.toHaveProperty('subagentObservation');
+  });
+
+  it('marks a completed-only spawn as a creation-capable Subagent observation', async () => {
+    const q = createAsyncQueue<AgentEvent>();
+    const ctx = makeCtx(newCodexRuntimeState());
+    translateItemNotification(
+      'completed',
+      {
+        threadId: 'thread-1',
+        turnId: 'turn-1',
+        item: {
+          type: 'collabAgentToolCall',
+          id: 'completed-only-spawn',
+          tool: 'spawnAgent',
+          status: 'completed',
+          senderThreadId: 'thread-1',
+          receiverThreadIds: ['thread-2'],
+          prompt: 'Finish without a started notification',
+          agentsStates: { 'thread-2': { status: 'done' } },
+        },
+      },
+      q,
+      ctx,
+    );
+
+    const events = await collect(q);
+    expect(events.map((event) => event.type)).toEqual([
+      'tool_use',
+      'tool_result_full',
+      'tool_result',
+      'agent_task_update',
+    ]);
+    expect(events[3].data).toMatchObject({
+      provider: 'codex',
+      taskId: 'completed-only-spawn',
+      status: 'completed',
+      subagentObservation: {
+        kind: 'spawn',
+        logicalSubagentId: 'completed-only-spawn',
+        parentToolUseId: 'completed-only-spawn',
+        providerRunIds: ['thread-2'],
+      },
+    });
+  });
+
+  it('keeps wait/send/resume control updates live-only', async () => {
+    const q = createAsyncQueue<AgentEvent>();
+    const ctx = makeCtx(newCodexRuntimeState());
+    const params = {
+      threadId: 'thread-1',
+      turnId: 'turn-1',
+      item: {
+        type: 'collabAgentToolCall',
+        id: 'wait-1',
+        tool: 'wait',
+        status: 'inProgress',
+        senderThreadId: 'thread-1',
+        receiverThreadIds: ['child-a', 'child-b'],
+        agentsStates: {},
+      },
+    };
+
+    translateItemNotification('started', params, q, ctx);
+
+    const update = (await collect(q)).find((event) => event.type === 'agent_task_update');
+    expect(update?.data).toMatchObject({
+      taskId: 'wait-1',
+      receiverThreadIds: ['child-a', 'child-b'],
+    });
+    expect(update?.data).not.toHaveProperty('subagentObservation');
   });
 });
 
@@ -1202,6 +2086,13 @@ describe('translateItemNotification subAgentActivity', () => {
       status: 'running',
       title: '/root/survey_startup',
       model: 'gpt-5.6-terra',
+      receiverThreadIds: ['thread-2'],
+      subagentObservation: {
+        kind: 'spawn',
+        logicalSubagentId: 'spawn-1',
+        parentToolUseId: 'spawn-1',
+        providerRunIds: ['thread-2'],
+      },
     });
   });
 
@@ -1314,6 +2205,7 @@ describe('translatePlanUpdatedNotification', () => {
     expect(events[0].data).toMatchObject({
       toolUseId: 'plan:turn-1',
       toolName: 'update_plan',
+      runtimeActivity: 'snapshot',
       input: {
         explanation: 'Working through the implementation.',
         plan: [
@@ -1326,6 +2218,7 @@ describe('translatePlanUpdatedNotification', () => {
     expect(events[1].data).toMatchObject({
       toolUseId: 'plan:turn-1',
       toolName: 'update_plan',
+      runtimeActivity: 'snapshot',
       input: {
         plan: [
           { step: 'Read logs', status: 'completed' },
@@ -1370,6 +2263,7 @@ describe('extractRolloutUpdatePlanFunctionCallEvent', () => {
       data: {
         toolUseId: 'plan:turn-1',
         toolName: 'update_plan',
+        runtimeActivity: 'snapshot',
         input: {
           plan: [
             { step: 'Read logs', status: 'completed' },
@@ -1400,6 +2294,106 @@ describe('extractRolloutUpdatePlanFunctionCallEvent', () => {
 });
 
 describe('codex internal citation 归一化 (#785)', () => {
+  // 测试价值：通过 dedicated delta / completed 生产入口验证每步可见文本与既有全文口径相同。
+  // 依据：maker-core-and-agent-behavior §3.2–3.3，增量化不得丢失、错序或改写正文。
+  // 缺口：既有引用用例以 updated 全文为主，未覆盖专用流在任意字符边界拆分、两类引用嵌套
+  // 与引用剥除后暴露停止串。最小输入包括 ['正文 ', '<|eos|>']，逐尾转换不能吞掉后一段。
+  // tier：unit；复用公开全文转换作为每步参考，不复制解析实现，也不以计时阈值判断通过。
+  // 实测：pnpm --dir packages/maker-core exec vitest run src/agents/codex/translator.test.ts，0.43 秒。
+  it.each([
+    ['普通文本', '正文 😀\n第二行。'],
+    ['文件路径内引号、转义和花括号', String.raw`前 :codex-file-citation{path="/tmp/a{b}\"c.md" line=2} 后`],
+    ['文件路径内嵌引用开头', '前 :codex-file-citation{path="/tmp/:codex-file-citation{a.md"} 后'],
+    ['裸花括号畸形后仍有有效引用', '前 :codex-file-citation{oops{ 后 :codex-file-citation{path="a.md"}。'],
+    ['删除文件引用后拼成 web 开头', 'a\uE200ci:codex-file-citation{}te\uE202x\uE201b'],
+    ['并列文件和 web 引用及截断残尾', '前 :codex-file-citation{path="a.md"} \uE200cite\uE202turn1\uE201 后 \uE200ci'],
+    ['正文后停止标记', '正文 <|eos|><|eo 后'],
+    ['独立混合停止串', ' \n<|eos|> <|eot_id|>\n'],
+    ['仅 web 引用和停止串后恢复正文', '\uE200cite\uE202turn1\uE201<|eos|> 后'],
+    ['无 path 引用和停止串后恢复正文', ':codex-file-citation{line=2}<|eos|> 后'],
+    ['文件路径内嵌 web 引用', '前 :codex-file-citation{path="a\uE200cite\uE202turn1\uE201b.md"} 后'],
+    ['web 引用载荷内嵌文件引用', '前 \uE200cite\uE202:codex-file-citation{path="a.md"}\uE201 后'],
+  ])('dedicated delta 任意切分保持全文转换语义：%s', async (_name, raw) => {
+    const chunkings = Array.from({ length: raw.length + 1 }, (_, split) => [raw.slice(0, split), raw.slice(split)]);
+    chunkings.push(raw.split(''));
+    for (const chunks of chunkings) {
+      const rt = newCodexRuntimeState();
+      const q = createAsyncQueue<AgentEvent>();
+      const ctx = makeCtx(rt);
+      const expected: string[] = [];
+      let accumulated = '';
+      let previousLength = 0;
+      for (const delta of chunks) {
+        translateAgentMessageDelta({ threadId: 't', turnId: 'turn', itemId: 'm', delta }, q, ctx);
+        accumulated += delta;
+        const visible = stripInternalWebCitations(
+          normalizeCodexFileCitations(accumulated.slice(0, stableCitationBoundary(accumulated))),
+        );
+        const next = visible.slice(previousLength);
+        if (next) expected.push(next);
+        previousLength = visible.length;
+      }
+      translateItemNotification('completed', {
+        threadId: 't', turnId: 'turn', item: { type: 'agentMessage', id: 'm', text: raw },
+      }, q, ctx);
+      // Reusing the identity after completed must start with fresh parser context.
+      translateAgentMessageDelta({ threadId: 't', turnId: 'next', itemId: 'm', delta: '<|eos|>' }, q, ctx);
+      translateAgentMessageDelta({ threadId: 't', turnId: 'next', itemId: 'm', delta: 'answer' }, q, ctx);
+      const events = (await collect(q)).filter(event => event.type === 'text');
+      expect(events, JSON.stringify(chunks)).toEqual([
+        ...expected.map(text => ({ type: 'text', source: 'codex', data: { text, isFinal: false, agentMessageId: 'm' } })),
+        { type: 'text', source: 'codex', data: { text: finalizeCodexCitationText(raw), isFinal: true, isFullText: true, agentMessageId: 'm' } },
+        { type: 'text', source: 'codex', data: { text: '<|eos|>answer', isFinal: false, agentMessageId: 'm' } },
+      ]);
+    }
+  });
+
+  // Long replies exercise repeated prefix commits, unlike the short split-marker cases above.
+  // Unit: verify the actual stream and final calibration retain all 1,000 chunks, without a timing assertion.
+  it('preserves a long mixed-citation reply in the delta stream and completed full text', async () => {
+    const q = createAsyncQueue<AgentEvent>();
+    const ctx = makeCtx(newCodexRuntimeState());
+    const chunk = `${'文'.repeat(20)}:codex-file-citation{path="src/index.ts" line=10} \uE200cite\uE202turn1\uE201 后\n`;
+    const visibleChunk = `${'文'.repeat(20)}\`src/index.ts\`  后\n`;
+    for (let i = 0; i < 1_000; i += 1) {
+      translateAgentMessageDelta({ threadId: 't', turnId: 'turn', itemId: 'm', delta: chunk }, q, ctx);
+    }
+    translateItemNotification('completed', {
+      threadId: 't', turnId: 'turn', item: { type: 'agentMessage', id: 'm', text: chunk.repeat(1_000) + '完成。' },
+    }, q, ctx);
+    const events = (await collect(q)).filter(event => event.type === 'text');
+    const deltas = events.filter(event => !(event.data as { isFinal: boolean }).isFinal);
+    expect(deltas.map(event => (event.data as { text: string }).text).join('')).toBe(visibleChunk.repeat(1_000));
+    expect(events.filter(event => (event.data as { isFinal: boolean }).isFinal)).toEqual([
+      { type: 'text', source: 'codex', data: {
+        text: visibleChunk.repeat(1_000) + '完成。', isFinal: true, isFullText: true, agentMessageId: 'm',
+      } },
+    ]);
+  });
+
+  // The existing divergent snapshot test contains only plain text; this one retains a pending citation
+  // across the rejected branch and checks final calibration, not just the internal parser cursor.
+  it('keeps a pending citation on the accepted delta branch until completed calibrates a divergent snapshot', async () => {
+    const q = createAsyncQueue<AgentEvent>();
+    const ctx = makeCtx(newCodexRuntimeState());
+    const send = (delta: string) => translateAgentMessageDelta({ threadId: 't', turnId: 'turn', itemId: 'm', delta }, q, ctx);
+    send('前 :codex-file-citation{path="delta');
+    translateItemNotification('updated', {
+      threadId: 't', turnId: 'turn', item: { type: 'agentMessage', id: 'm', text: '前 :codex-file-citation{path="other.md"} 分叉' },
+    }, q, ctx);
+    // The snapshot differs inside the pending citation, despite sharing the already visible prefix.
+    // It must not replace that raw prefix or contaminate the parser's retained tail.
+    send('.md"} 后');
+    translateItemNotification('completed', {
+      threadId: 't', turnId: 'turn', item: { type: 'agentMessage', id: 'm', text: '前 :codex-file-citation{path="final.md"} 最终' },
+    }, q, ctx);
+    expect((await collect(q)).filter(event => event.type === 'text').map(event => event.data)).toEqual([
+      { text: '前 ', isFinal: false, agentMessageId: 'm' },
+      { text: '`delta.md` 后', isFinal: false, agentMessageId: 'm' },
+      { text: '前 `final.md` 最终', isFinal: true, isFullText: true, agentMessageId: 'm' },
+    ]);
+  });
+
   it('normalizeCodexFileCitations 把标记换成行内代码路径,畸形标记整个剥掉', async () => {
     const { normalizeCodexFileCitations } = await import('./translator.js');
     expect(
@@ -1504,6 +2498,51 @@ describe('codex internal citation 归一化 (#785)', () => {
     expect(stableCitationBoundary(braceInQuote)).toBe(4);
     const braceComplete = 'abc :codex-file-citation{path="/tmp/a{b}.md"}';
     expect(stableCitationBoundary(braceComplete)).toBe(braceComplete.length);
+    expect(stableCitationBoundary('<|eo')).toBe(0);
+    expect(stableCitationBoundary('<')).toBe(0);
+    expect(stableCitationBoundary('  <|eos|>')).toBe(0);
+    expect(stableCitationBoundary('<|eos|><|eos|>')).toBe(0);
+    expect(stableCitationBoundary('The token is <|eos|>')).toBe('The token is <|eos|>'.length);
+  });
+
+  it('agentMessage 流式按住独立停止符前缀,completed 后不留下可见泄漏', async () => {
+    const { newCodexRuntimeState } = await import('./translator.js');
+    const rt = newCodexRuntimeState();
+    const q = createAsyncQueue<AgentEvent>();
+    const push = (phase: 'started' | 'updated' | 'completed', text: string): void => {
+      translateItemNotification(
+        phase,
+        {
+          threadId: 'thread-stop-token',
+          turnId: 'turn-stop-token',
+          item: { type: 'agentMessage', id: 'msg-stop-token', text },
+        },
+        q,
+        makeCtx(rt),
+      );
+    };
+
+    push('started', '<|eo');
+    push('updated', '<|eos|>');
+    push('completed', '<|eos|>');
+
+    const events = await collect(q);
+    const deltas = events
+      .filter((event) => event.type === 'text' && !(event.data as { isFinal: boolean }).isFinal)
+      .map((event) => (event.data as { text: string }).text);
+    expect(deltas.join('')).toBe('');
+    const final = events.find(
+      (event) => event.type === 'text' && (event.data as { isFinal: boolean }).isFinal,
+    );
+    expect((final?.data as { text: string } | undefined)?.text).toBe('');
+  });
+
+  it('finalizeCodexCitationText keeps a completed incomplete prefix as real text', async () => {
+    const { finalizeCodexCitationText } = await import('./translator.js');
+    expect(finalizeCodexCitationText('<')).toBe('<');
+    expect(finalizeCodexCitationText('<|eo')).toBe('<|eo');
+    expect(finalizeCodexCitationText('<|eos|>')).toBe('');
+    expect(finalizeCodexCitationText('<|eos|><|eos|>')).toBe('');
   });
 
   it('Web Search 引用标记被剥离,普通 cite 文本与相邻标点不变', async () => {
@@ -1697,8 +2736,177 @@ describe('codex internal citation 归一化 (#785)', () => {
     expect(events).toEqual([
       expect.objectContaining({
         type: 'text',
-        data: { text: 'done `/a/b.md`', isFinal: true },
+        data: { text: 'done `/a/b.md`', isFinal: true, isFullText: true, agentMessageId: 'msg-2' },
       }),
     ]);
+  });
+});
+
+
+it('carries the provider final phase from item start onto the first delta', async () => {
+  const rt = newCodexRuntimeState(), q = createAsyncQueue<AgentEvent>(), ctx = makeCtx(rt);
+  translateItemNotification('started', { threadId: 'thread', turnId: 'turn', item: { type: 'agentMessage', id: 'final', text: '', phase: 'final_answer' } }, q, ctx);
+  translateAgentMessageDelta({ threadId: 'thread', turnId: 'turn', itemId: 'final', delta: 'Visible now' }, q, ctx);
+  expect(await collect(q)).toContainEqual({ type: 'text', source: 'codex', data: { text: 'Visible now', isFinal: false, agentMessageId: 'final', phase: 'final_answer' } });
+});
+
+it('counts the streamed answer while it arrives and stops the clock while a command runs', () => {
+  vi.useFakeTimers();
+  try {
+    const rt = newCodexRuntimeState(), q = createAsyncQueue<AgentEvent>(), ctx = makeCtx(rt);
+    vi.setSystemTime(1_000);
+    beginCodexGenerationTurn(rt, 'turn', 1_000);
+    // Hidden reasoning: time the model spends, with nothing to count until usage arrives.
+    translateItemNotification('started', { threadId: 'thread', turnId: 'turn', item: { type: 'reasoning', id: 'r1', summary: [], content: [] } }, q, ctx);
+    vi.setSystemTime(1_500);
+    expect(rt.tokenSpeed.snapshot()).toBeUndefined();
+    translateItemNotification('started', { threadId: 'thread', turnId: 'turn', item: { type: 'agentMessage', id: 'm1', text: '' } }, q, ctx);
+    vi.setSystemTime(2_000);
+    translateAgentMessageDelta({ threadId: 'thread', turnId: 'turn', itemId: 'm1', delta: 'one two three four' }, q, ctx);
+    expect(rt.tokenSpeed.snapshot()).toMatchObject({ streaming: true, tokens: 4 });
+    translateItemNotification('started', { threadId: 'thread', turnId: 'turn', item: { type: 'commandExecution', id: 'c1', command: 'ls' } }, q, ctx);
+    vi.setSystemTime(9_500);
+    // The command is still running: its time is not generation time.
+    expect(rt.generationDurationMs).toBe(1_000);
+    settleCodexSpeedUsage(rt, { outputTokens: 20, reasoningOutputTokens: 8 });
+    rt.tokenSpeed.stop();
+    // The response's real 20 tokens over the second between its first item and the command.
+    expect(rt.tokenSpeed.snapshot()).toMatchObject({ streaming: false, tokens: 20, elapsedMs: 1_000, average: 20 });
+  } finally {
+    vi.useRealTimers();
+  }
+});
+
+// Regression: imageView was discarded by the host; now a paired process step. Unit.
+it('projects imageView once and retains mixed MCP media', async () => {
+  const q = createAsyncQueue<AgentEvent>();
+  const ctx = makeCtx(newCodexRuntimeState());
+  const viewed = { threadId: 't', turnId: 'turn', item: { type: 'imageView', id: 'view', path: '/tmp/preview.png' } };
+  translateItemNotification('started', viewed, q, ctx);
+  translateItemNotification('completed', viewed, q, ctx);
+  translateItemNotification('completed', { threadId: 't', turnId: 'turn', item: {
+    type: 'mcpToolCall', id: 'mcp', server: 'preview', tool: 'capture', status: 'completed',
+    result: { content: [{ type: 'text', text: 'captured' }, { type: 'image', mimeType: 'image/png', data: 'aW1hZ2U=' }] },
+  } }, q, ctx);
+  q.end(); const events: AgentEvent[] = []; for await (const e of q) events.push(e);
+  expect(events.filter(e => e.type === 'tool_use')).toHaveLength(1);
+  expect(events.filter(e => e.type === 'tool_result_full').map(e => e.data)).toEqual([
+    { toolUseId: 'view', fullText: '/tmp/preview.png', processMedia: [{ kind: 'image', path: '/tmp/preview.png' }] },
+    { toolUseId: 'mcp', fullText: 'captured', isError: false,
+      processMedia: [{ kind: 'image', mimeType: 'image/png', data: 'aW1hZ2U=' }] },
+  ]);
+});
+
+// Recorded Codex turns (scripts/token-speed-replay.ts). The speed used to divide each
+// response's output by its model time, wait for the first byte included, and to appear only
+// once a response had finished: 38.8 tok/s after a 30s answer that streamed at 63, and
+// 26 tok/s for a turn of tool calls whose answer streamed at 114. Unit tier, through the
+// translator entry points the agent calls; the smallest failing input is one streamed answer.
+it.each([
+  ['a long streamed answer', recordedAnswer as RecordedCodexStream, 42, 44],
+  ['a loop of tool calls', recordedToolLoop as RecordedCodexStream, 32, 50],
+])('times %s from its first byte and reads its speed while it streams', (_name, recorded, slowest, fastest) => {
+  vi.useFakeTimers();
+  vi.setSystemTime(0);
+  try {
+    const rt = newCodexRuntimeState(), q = createAsyncQueue<AgentEvent>(), ctx = makeCtx(rt);
+    let realOutput = 0;
+    const readings: number[] = [];
+    for (const { t, msg } of expandCodexStream(recorded)) {
+      // Advance rather than jump: the suspend heartbeat has to see time pass.
+      vi.advanceTimersByTime(Math.max(0, t - Date.now()));
+      const params = msg.params as never;
+      if (msg.method === 'turn/started') beginCodexGenerationTurn(rt, 'recorded-turn', t);
+      else if (msg.method === 'item/started') translateItemNotification('started', params, q, ctx);
+      else if (msg.method === 'item/completed') translateItemNotification('completed', params, q, ctx);
+      else if (msg.method === 'item/agentMessage/delta') {
+        translateAgentMessageDelta(params, q, ctx);
+        const shown = codexSpeedSnapshot(rt);
+        if (shown?.streaming && shown.rate > 0) readings.push(shown.rate);
+      } else if (msg.method === 'thread/tokenUsage/updated') {
+        const last = (msg.params as { tokenUsage: { last: { outputTokens: number; reasoningOutputTokens: number } } }).tokenUsage.last;
+        realOutput += last.outputTokens;
+        settleCodexSpeedUsage(rt, last);
+      } else if (msg.method === 'turn/completed') {
+        finalizeCodexGenerationTurn(rt, 'recorded-turn');
+        rt.tokenSpeed.stop();
+      }
+    }
+    const final = codexSpeedSnapshot(rt);
+    expect(final).toMatchObject({ streaming: false, tokens: realOutput });
+    expect(final!.average).toBeGreaterThan(slowest);
+    expect(final!.average).toBeLessThan(fastest);
+    // The answer is read while it streams, at the pace it streams.
+    expect(readings.length).toBeGreaterThan(0);
+    expect(Math.min(...readings)).toBeGreaterThan(40);
+    // The recorded answer itself speeds up to about 150 words a second near its end.
+    expect(Math.max(...readings)).toBeLessThan(170);
+  } finally {
+    vi.useRealTimers();
+  }
+});
+
+// Review of the speed meter (PR 9597): output that streams while a tool owns the turn, and
+// waits for the user, used to leak into the next response's speed. Unit tier, translator entry points.
+describe('codex speed around unpaired output and human waits', () => {
+  const answer = (rt: CodexRuntimeState, q: ReturnType<typeof createAsyncQueue<AgentEvent>>, ctx: ReturnType<typeof makeCtx>, id: string, from: number, words: number, perDelta = 5) => {
+    translateItemNotification('started', { threadId: 't', turnId: 'turn', item: { type: 'agentMessage', id, text: '' } }, q, ctx);
+    for (let at = from + 100; at <= from + 100 * (words / perDelta); at += 100) {
+      vi.setSystemTime(at);
+      translateAgentMessageDelta({ threadId: 't', turnId: 'turn', itemId: id, delta: 'w '.repeat(perDelta) }, q, ctx);
+    }
+  };
+
+  it('drops output that streamed while tools owned the turn instead of timing the next response with it', () => {
+    vi.useFakeTimers();
+    try {
+      const rt = newCodexRuntimeState(), q = createAsyncQueue<AgentEvent>(), ctx = makeCtx(rt);
+      vi.setSystemTime(0);
+      beginCodexGenerationTurn(rt, 'turn', 0);
+      // A response of 250 tokens at 50 tok/s.
+      answer(rt, q, ctx, 'a1', 0, 250);
+      vi.setSystemTime(5_000);
+      expect(settleCodexSpeedUsage(rt, { outputTokens: 250 })?.requestTps).toBeCloseTo(50, -1);
+      // A background tool owns the turn while 50 more tokens stream, then the tool runs for 10s.
+      translateItemNotification('started', { threadId: 't', turnId: 'turn', item: { type: 'mcpToolCall', id: 'tool', server: 's', tool: 't', arguments: {} } }, q, ctx);
+      vi.setSystemTime(6_000);
+      translateAgentMessageDelta({ threadId: 't', turnId: 'turn', itemId: 'a1', delta: 'w '.repeat(50) }, q, ctx);
+      vi.setSystemTime(16_000);
+      expect(settleCodexSpeedUsage(rt, { outputTokens: 50 })).toBeUndefined();
+      expect(codexSpeedSnapshot(rt)).toBeUndefined();
+      translateItemNotification('completed', { threadId: 't', turnId: 'turn', item: { type: 'mcpToolCall', id: 'tool', server: 's', tool: 't', arguments: {} } }, q, ctx);
+      // The next response is timed from its own first byte, at its own 50 tok/s.
+      vi.setSystemTime(17_000);
+      answer(rt, q, ctx, 'a2', 17_000, 250);
+      vi.setSystemTime(22_000);
+      const report = settleCodexSpeedUsage(rt, { outputTokens: 250 });
+      expect(report?.requestTps).toBeCloseTo(50, -1);
+      expect(report!.requestMs).toBeLessThan(6_000);
+      expect(codexSpeedSnapshot(rt)).toMatchObject({ tokens: 500 });
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('stops the speed clock while the user owes an answer, and restarts it with the next output', () => {
+    vi.useFakeTimers();
+    try {
+      const rt = newCodexRuntimeState(), q = createAsyncQueue<AgentEvent>(), ctx = makeCtx(rt);
+      vi.setSystemTime(0);
+      beginCodexGenerationTurn(rt, 'turn', 0);
+      answer(rt, q, ctx, 'a1', 0, 250);
+      vi.setSystemTime(5_000);
+      // An approval or a question to the user is not an item with a boundary of its own.
+      pauseCodexGeneration(rt, 'turn', 'approval:cmd-1', 5_000);
+      vi.setSystemTime(65_000);
+      expect(codexSpeedSnapshot(rt)).toMatchObject({ streaming: false, elapsedMs: 5_000 });
+      resumeCodexGeneration(rt, 'turn', 'approval:cmd-1', 65_000);
+      answer(rt, q, ctx, 'a2', 65_000, 250);
+      vi.setSystemTime(70_000);
+      expect(settleCodexSpeedUsage(rt, { outputTokens: 500 })?.requestTps).toBeCloseTo(50, -1);
+      expect(codexSpeedSnapshot(rt)).toMatchObject({ tokens: 500, elapsedMs: 10_000, average: 50 });
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });

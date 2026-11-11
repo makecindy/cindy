@@ -5,12 +5,13 @@
  * or partially selected by later M2 operations.
  */
 
-import { promises as fs } from 'node:fs';
-import path from 'node:path';
-
 import { runGit, GitRunError } from './gitRunner.js';
 import { parseGitDiff, parseGitDiffs } from './diffParser.js';
-import { resolveRepoContainedRealPath } from './fsPathGuard.js';
+import {
+  lstatReviewWorktreePath,
+  readReviewWorktreeFile,
+  readReviewWorktreePrefix,
+} from './reviewFileRunner.js';
 import {
   buildCappedDiffData,
   createDiffSummaryEntry,
@@ -35,14 +36,9 @@ function literalPathspec(gitPath: string): string {
   return `:(top,literal)${gitPath}`;
 }
 
-function toFsPath(repoRoot: string, gitPath: string): string {
-  return path.join(repoRoot, ...gitPath.split('/'));
-}
-
 async function lstatWorktreePath(repoRoot: string, gitPath: string): Promise<{ size: number | null; isSymlink: boolean }> {
   try {
-    const stat = await fs.lstat(toFsPath(repoRoot, gitPath));
-    return { size: stat.size, isSymlink: stat.isSymbolicLink() };
+    return await lstatReviewWorktreePath(repoRoot, gitPath);
   } catch {
     return { size: null, isSymlink: false };
   }
@@ -55,15 +51,7 @@ async function statSize(repoRoot: string, gitPath: string): Promise<number | nul
 async function hasNulByte(repoRoot: string, gitPath: string): Promise<boolean> {
   try {
     if ((await lstatWorktreePath(repoRoot, gitPath)).isSymlink) return false;
-    const { targetReal } = await resolveRepoContainedRealPath(repoRoot, gitPath);
-    const fh = await fs.open(targetReal, 'r');
-    try {
-      const buf = Buffer.alloc(8192);
-      const { bytesRead } = await fh.read(buf, 0, buf.length, 0);
-      return buf.subarray(0, bytesRead).includes(0);
-    } finally {
-      await fh.close();
-    }
+    return (await readReviewWorktreePrefix(repoRoot, gitPath, 8192)).includes(0);
   } catch {
     return false;
   }
@@ -268,8 +256,7 @@ async function countUntrackedTextLines(repoRoot: string, gitPath: string, size: 
   if (size === null || size > 3 * 1024 * 1024) return 0;
   try {
     if ((await lstatWorktreePath(repoRoot, gitPath)).isSymlink) return 0;
-    const { targetReal } = await resolveRepoContainedRealPath(repoRoot, gitPath);
-    const content = await fs.readFile(targetReal);
+    const content = await readReviewWorktreeFile(repoRoot, gitPath, 3 * 1024 * 1024);
     if (content.includes(0)) return 0;
     if (content.length === 0) return 0;
     let lines = 0;

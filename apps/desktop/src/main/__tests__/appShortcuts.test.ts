@@ -397,3 +397,28 @@ describe('switch-session slots (mod+1..9)', () => {
     expect(effective.get('save-file')).toEqual([sCombo]);
   });
 });
+
+describe('session history defaults', () => {
+  // 老用户可能在新增这对默认键之前就把别的动作改绑到 ⌘[ / ⌘]：写入侧只校验
+  // 当时的规则，升级后两条默认会同时生效，一次按键既切侧栏又后退。
+  it('yields ⌘[ / ⌘] to an existing user binding on the same combo', () => {
+    const bracketLeft = combo('BracketLeft', { meta: true });
+    const bracketRight = combo('BracketRight', { meta: true });
+    const effective = getEffectiveAppShortcuts(
+      { 'toggle-sidebar': bracketLeft, 'find-in-page': bracketRight },
+      'darwin',
+    );
+
+    expect(effective.get('session-history-back')).toEqual([]);
+    expect(effective.get('session-history-forward')).toEqual([]);
+    // 用户自己的改绑照常生效，没有被新默认抢走。
+    expect(effective.get('toggle-sidebar')).toEqual([bracketLeft]);
+    expect(effective.get('find-in-page')).toEqual([bracketRight]);
+  });
+
+  it('keeps the defaults when nothing else claims them', () => {
+    const effective = getEffectiveAppShortcuts({}, 'darwin');
+    expect(effective.get('session-history-back')).toEqual([combo('BracketLeft', { meta: true })]);
+    expect(effective.get('session-history-forward')).toEqual([combo('BracketRight', { meta: true })]);
+  });
+});

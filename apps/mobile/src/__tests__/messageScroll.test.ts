@@ -9,12 +9,18 @@ import {
   buildSearchLoadEarlierAction,
   createMobileFollowEndPinState,
   DEFAULT_NEAR_BOTTOM_THRESHOLD,
+  evaluateMobileAnchorVerify,
   evaluateMobileFollowEndContentSizePin,
   findMobileRenderItemKeyByClientId,
-  firstNonEmptyMessageLine,
   isNearMessageListBottom,
   isNearMobileMessageListBottom,
   isNearMessageListTop,
+  isMobileMvcpSettling,
+  mobileMessageListKeysSignature,
+  mobileMvcpSettleDeadline,
+  MOBILE_ANCHOR_VERIFY_MAX_ATTEMPTS,
+  MOBILE_ANCHOR_VERIFY_MAX_WAIT_ROUNDS,
+  MOBILE_ANCHOR_VERIFY_TOLERANCE,
   MOBILE_FOLLOW_END_PIN_HEIGHT_DEAD_ZONE,
   MOBILE_FOLLOW_END_PIN_MAX_REVERSALS_PER_WINDOW,
   MOBILE_FOLLOW_END_PIN_SUPPRESS_MS,
@@ -24,7 +30,6 @@ import {
   mobileMessageListEndOffset,
   mobileMessageListBottomPadding,
   mobileMessageListNearBottomThreshold,
-  previousUserMessageJumpTarget,
   shouldAutoFollowMessages,
   shouldAutoLoadEarlier,
   shouldShowNewMessageIndicator,
@@ -32,7 +37,9 @@ import {
   mobileMessageListTopPadding,
   mobileTopPaddingCompensationOffset,
   MOBILE_FOLLOW_REPIN_DIRECTION_DEAD_ZONE,
+  MOBILE_FOLLOW_REPIN_END_TOLERANCE,
   MOBILE_FOLLOW_UNPIN_DRAG_DEAD_ZONE,
+  MOBILE_MVCP_SETTLE_QUIET_MS,
   resolveMobileNearBottomOnScroll,
   shouldUnpinMobileFollowOnDrag,
 } from '@/session/messageScroll';
@@ -90,6 +97,9 @@ describe('messageScroll', () => {
   it('uses the measured bottom overlay height when it is larger than the fallback padding', () => {
     expect(mobileMessageListBottomPadding(320)).toBe(320);
     expect(mobileMessageListBottomPadding(80)).toBe(MOBILE_MESSAGE_LIST_BOTTOM_PADDING);
+    expect(mobileMessageListBottomPadding(320, 16)).toBe(16);
+    expect(mobileMessageListBottomPadding(320, 0)).toBe(0);
+    expect(mobileMessageListBottomPadding(320, Number.NaN)).toBe(320);
     expect(mobileMessageListNearBottomThreshold(320)).toBe(DEFAULT_NEAR_BOTTOM_THRESHOLD + 320);
 
     const metrics = {
@@ -179,28 +189,6 @@ describe('messageScroll', () => {
     });
   });
 
-  it('finds the previous user message above the first visible item', () => {
-    const items = renderItems([
-      remoteMessage({ id: 'u1', role: 'user', content: '\n  first question\nsecond line', createdAt: at(1) }),
-      remoteMessage({ id: 'a1', role: 'assistant', content: 'answer', createdAt: at(2) }),
-      remoteMessage({ id: 'u2', role: 'user', content: 'second question', createdAt: at(3) }),
-      remoteMessage({ id: 'a2', role: 'assistant', content: 'answer 2', createdAt: at(4) }),
-    ]);
-
-    expect(firstNonEmptyMessageLine('\n  first question\nsecond line')).toBe('first question');
-    expect(previousUserMessageJumpTarget(items, 3)).toMatchObject({
-      clientId: 'u2',
-      itemKey: 'message-u2',
-      preview: 'second question',
-    });
-    expect(previousUserMessageJumpTarget(items, 1)).toMatchObject({
-      clientId: 'u1',
-      itemKey: 'message-u1',
-      preview: 'first question',
-    });
-    expect(previousUserMessageJumpTarget(items, 0)).toBeNull();
-  });
-
   it('maps client ids inside folded render items to the top-level scroll target', () => {
     const items = renderItems([
       remoteMessage({ id: 'user', role: 'user', content: 'run tests', createdAt: at(1) }),
@@ -244,9 +232,10 @@ describe('shouldAutoLoadEarlier', () => {
     actionDisabled: false,
     actionVisible: true,
     atEnd: false,
-    firstItemKey: 'message-a',
+    atStart: true,
+    progressKey: 'message-a',
     initialAutoFillAllowed: false,
-    lastAttemptedFirstItemKey: null,
+    lastAttemptedProgressKey: null,
     nearStart: true,
     userScrolledForOlder: true,
   };
@@ -274,20 +263,40 @@ describe('shouldAutoLoadEarlier', () => {
   it('cold-fills a near-start window while the initial bounded budget is available', () => {
     expect(shouldAutoLoadEarlier({
       ...eligible,
+      atEnd: true,
       initialAutoFillAllowed: true,
       userScrolledForOlder: false,
     })).toBe(true);
   });
 
-  it('keeps user-driven history prefetch disabled while pinned at the end', () => {
-    // 短会话整窗都在近顶阈值内:nearStart 与贴底可同时成立,贴底跟流优先。
-    expect(shouldAutoLoadEarlier({ ...eligible, atEnd: true })).toBe(false);
+  it('does not cold-fill after the initial window already fills the viewport', () => {
+    expect(shouldAutoLoadEarlier({
+      ...eligible,
+      atEnd: true,
+      atStart: false,
+      initialAutoFillAllowed: true,
+      userScrolledForOlder: false,
+    })).toBe(false);
+  });
+
+  it('keeps user-driven history prefetch disabled while only pinned at the end', () => {
+    expect(shouldAutoLoadEarlier({ ...eligible, atEnd: true, atStart: false })).toBe(false);
+  });
+
+  it('loads history after an explicit drag when a short window is both at-start and at-end', () => {
+    expect(shouldAutoLoadEarlier({
+      ...eligible,
+      atEnd: true,
+      atStart: true,
+      userScrolledForOlder: true,
+    })).toBe(true);
   });
 
   it('allows bounded cold-fill while a short initial window is both near-start and at-end', () => {
     expect(shouldAutoLoadEarlier({
       ...eligible,
       atEnd: true,
+      atStart: true,
       initialAutoFillAllowed: true,
       userScrolledForOlder: false,
     })).toBe(true);
@@ -299,11 +308,11 @@ describe('shouldAutoLoadEarlier', () => {
 
   it('requires progress between attempts to avoid hammering a host that returns no new rows', () => {
     // 上次尝试后首项没变(加载失败 / host cursor 未命中拉回重复页)→ 不自动重试;
-    expect(shouldAutoLoadEarlier({ ...eligible, lastAttemptedFirstItemKey: 'message-a' })).toBe(false);
+    expect(shouldAutoLoadEarlier({ ...eligible, lastAttemptedProgressKey: 'message-a' })).toBe(false);
     // prepend 真落地(首项变化)→ 允许级联拉下一页(小页填满预取区);
-    expect(shouldAutoLoadEarlier({ ...eligible, lastAttemptedFirstItemKey: 'message-z' })).toBe(true);
+    expect(shouldAutoLoadEarlier({ ...eligible, lastAttemptedProgressKey: 'message-z' })).toBe(true);
     // 空列表无进展信号,不触发。
-    expect(shouldAutoLoadEarlier({ ...eligible, firstItemKey: null })).toBe(false);
+    expect(shouldAutoLoadEarlier({ ...eligible, progressKey: null })).toBe(false);
   });
 });
 
@@ -417,16 +426,28 @@ describe('shouldUnpinMobileFollowOnDrag', () => {
 
 describe('resolveMobileNearBottomOnScroll', () => {
   // 阈值:96 + 132(无浮层)= 228。内容 2000,视口 800 → end offset 1200,
-  // 阈值带 = offsetY > 972。
+  // 阈值带 = offsetY > 972(只用于判定「保持跟随」;恢复跟随要求距末端 ≤ 容差)。
   const metricsAt = (offsetY: number) => ({ contentHeight: 2000, offsetY, viewportHeight: 800 });
 
-  it('距底超出阈值 → false(原有离底解除行为不变)', () => {
+  it('距底超出阈值 + 明确上滑 / 已解除 → false(原有离底解除行为不变)', () => {
     expect(resolveMobileNearBottomOnScroll({
       wasNearBottom: true, metrics: metricsAt(900), scrollDelta: -40,
     })).toBe(false);
     expect(resolveMobileNearBottomOnScroll({
       wasNearBottom: false, metrics: metricsAt(500), scrollDelta: 40,
     })).toBe(false);
+  });
+
+  it('已在跟 + 距底越线但未上滑 → 保持跟随(发送后内容长高不得解除)', () => {
+    expect(resolveMobileNearBottomOnScroll({
+      wasNearBottom: true, metrics: metricsAt(900), scrollDelta: 0,
+    })).toBe(true);
+    expect(resolveMobileNearBottomOnScroll({
+      wasNearBottom: true, metrics: metricsAt(500), scrollDelta: 80,
+    })).toBe(true);
+    expect(resolveMobileNearBottomOnScroll({
+      wasNearBottom: true, metrics: metricsAt(500), scrollDelta: -1,
+    })).toBe(true);
   });
 
   it('阈值带内 + 原本在跟 → 保持跟随(贴底期间程序化 scrollToEnd 的增量不改状态)', () => {
@@ -450,10 +471,31 @@ describe('resolveMobileNearBottomOnScroll', () => {
     })).toBe(false);
   });
 
-  it('阈值带内 + 已解除 + 明确向下 → 恢复跟随', () => {
+  it('已解除 + 明确向下 + 真正到底 → 恢复跟随', () => {
     expect(resolveMobileNearBottomOnScroll({
-      wasNearBottom: false, metrics: metricsAt(1100), scrollDelta: 2,
+      wasNearBottom: false, metrics: metricsAt(1200), scrollDelta: 2,
     })).toBe(true);
+    expect(resolveMobileNearBottomOnScroll({
+      wasNearBottom: false, metrics: metricsAt(1200 - MOBILE_FOLLOW_REPIN_END_TOLERANCE), scrollDelta: 2,
+    })).toBe(true);
+    // iOS 回弹越过末端同样算到底。
+    expect(resolveMobileNearBottomOnScroll({
+      wasNearBottom: false, metrics: metricsAt(1240), scrollDelta: 6,
+    })).toBe(true);
+  });
+
+  it('已解除 + 停在距底几行处的向下微调/抬手位移 → 保持解除(不在近底阈值带内恢复)', () => {
+    // 距末端约三行(~70px):仍在 228px 近底阈值带内,但不是「回到底部」。
+    expect(resolveMobileNearBottomOnScroll({
+      wasNearBottom: false, metrics: metricsAt(1130), scrollDelta: 3,
+    })).toBe(false);
+    expect(resolveMobileNearBottomOnScroll({
+      wasNearBottom: false, metrics: metricsAt(1200 - MOBILE_FOLLOW_REPIN_END_TOLERANCE - 1), scrollDelta: 2,
+    })).toBe(false);
+    // 恢复的距离口径与底部浮层高度无关:留白已计入 contentHeight。
+    expect(resolveMobileNearBottomOnScroll({
+      wasNearBottom: false, metrics: metricsAt(1000), scrollDelta: 3, bottomOverlayHeight: 400,
+    })).toBe(false);
   });
 
   it('bottomOverlayHeight 放大阈值(与 isNearMobileMessageListBottom 同口径)', () => {
@@ -627,5 +669,148 @@ describe('evaluateMobileFollowEndContentSizePin (贴底补滚振荡断路器)', 
     // t=2000 的旧翻转被剔除,窗口内只剩本次。
     evaluateMobileFollowEndContentSizePin(state, { now: 3000, contentHeight: 1200 });
     expect(state.reversalTimestamps).toEqual([3000]);
+  });
+});
+
+describe('evaluateMobileAnchorVerify (落底校验/补滚有界重试环——冷开锚定与贴底跟随共用同一判定)', () => {
+  // 视口 800,内容 2000 → endOffset = 1200。
+  const metricsAt = (offsetY: number) => ({ contentHeight: 2000, offsetY, viewportHeight: 800 });
+  const baseInput = {
+    attempts: 0,
+    listVisible: true,
+    preserveVisibleContentPosition: false,
+    stickToLatest: true,
+    userControllingScroll: false,
+    waitRounds: 0,
+  };
+
+  it('未处于贴底跟随意图(用户已解除/翻到旧消息)→ 直接 settled,不发起补滚', () => {
+    expect(evaluateMobileAnchorVerify({
+      ...baseInput, stickToLatest: false, metrics: metricsAt(0),
+    })).toBe('settled');
+  });
+
+  it('列表尚未可见(如切换会话中)→ 直接 settled', () => {
+    expect(evaluateMobileAnchorVerify({
+      ...baseInput, listVisible: false, metrics: metricsAt(0),
+    })).toBe('settled');
+  });
+
+  it('已落在容差带内 → settled(容差边界 offsetY === endOffset - TOLERANCE 视为已达)', () => {
+    expect(evaluateMobileAnchorVerify({
+      ...baseInput, metrics: metricsAt(1200),
+    })).toBe('settled');
+    expect(evaluateMobileAnchorVerify({
+      ...baseInput, metrics: metricsAt(1200 - MOBILE_ANCHOR_VERIFY_TOLERANCE),
+    })).toBe('settled');
+  });
+
+  it('偏移仍差着容差带 → retry(容差边界外 1px 即触发重试)', () => {
+    expect(evaluateMobileAnchorVerify({
+      ...baseInput, metrics: metricsAt(1200 - MOBILE_ANCHOR_VERIFY_TOLERANCE - 1),
+    })).toBe('retry');
+    expect(evaluateMobileAnchorVerify({
+      ...baseInput, metrics: metricsAt(0),
+    })).toBe('retry');
+  });
+
+  it('rejects overshoot beyond the end while allowing two-sided rounding tolerance', () => {
+    expect(evaluateMobileAnchorVerify({
+      ...baseInput, metrics: metricsAt(1200 + MOBILE_ANCHOR_VERIFY_TOLERANCE),
+    })).toBe('settled');
+    for (const offsetY of [1200 + MOBILE_ANCHOR_VERIFY_TOLERANCE + 1, 1800]) {
+      expect(evaluateMobileAnchorVerify({ ...baseInput, metrics: metricsAt(offsetY) })).toBe('retry');
+      expect(evaluateMobileAnchorVerify({
+        ...baseInput, attempts: MOBILE_ANCHOR_VERIFY_MAX_ATTEMPTS, metrics: metricsAt(offsetY),
+      })).toBe('give-up');
+    }
+  });
+
+  it('corrects a stale offset after content shrinks below the viewport', () => {
+    const metrics = { contentHeight: 400, viewportHeight: 800, offsetY: 600 };
+    expect(evaluateMobileAnchorVerify({ ...baseInput, metrics })).toBe('retry');
+    expect(evaluateMobileAnchorVerify({
+      ...baseInput, metrics: { ...metrics, offsetY: 0 },
+    })).toBe('settled');
+  });
+
+  it('waits through native bounce and resumes correction only after gesture ownership ends', () => {
+    const metrics = metricsAt(1800);
+    expect(evaluateMobileAnchorVerify({
+      ...baseInput, userControllingScroll: true, metrics,
+    })).toBe('wait');
+    expect(evaluateMobileAnchorVerify({
+      ...baseInput, userControllingScroll: true, waitRounds: MOBILE_ANCHOR_VERIFY_MAX_WAIT_ROUNDS, metrics,
+    })).toBe('give-up');
+    expect(evaluateMobileAnchorVerify({ ...baseInput, metrics })).toBe('retry');
+    expect(evaluateMobileAnchorVerify({
+      ...baseInput, stickToLatest: false, metrics,
+    })).toBe('settled');
+  });
+
+  it('重试次数达到上限后仍未落底 → give-up(不无限重试)', () => {
+    expect(evaluateMobileAnchorVerify({
+      ...baseInput, attempts: MOBILE_ANCHOR_VERIFY_MAX_ATTEMPTS, metrics: metricsAt(0),
+    })).toBe('give-up');
+    // 上限前一次仍是 retry。
+    expect(evaluateMobileAnchorVerify({
+      ...baseInput, attempts: MOBILE_ANCHOR_VERIFY_MAX_ATTEMPTS - 1, metrics: metricsAt(0),
+    })).toBe('retry');
+  });
+
+  it('mVCP 仍开着(preserveVisibleContentPosition)→ wait,不在其吸收滚动的窗口内瞎重试', () => {
+    expect(evaluateMobileAnchorVerify({
+      ...baseInput, preserveVisibleContentPosition: true, metrics: metricsAt(0),
+    })).toBe('wait');
+  });
+
+  it('原生 metrics 尚未结算(contentHeight/viewportHeight <= 0)→ wait,而非误判为已落空', () => {
+    expect(evaluateMobileAnchorVerify({
+      ...baseInput, metrics: { contentHeight: 0, offsetY: 0, viewportHeight: 800 },
+    })).toBe('wait');
+    expect(evaluateMobileAnchorVerify({
+      ...baseInput, metrics: { contentHeight: 2000, offsetY: 0, viewportHeight: 0 },
+    })).toBe('wait');
+  });
+
+  it('等待轮数达到上限仍无有效 metrics/仍在 mVCP 中 → give-up(不无限期挂着)', () => {
+    expect(evaluateMobileAnchorVerify({
+      ...baseInput,
+      preserveVisibleContentPosition: true,
+      waitRounds: MOBILE_ANCHOR_VERIFY_MAX_WAIT_ROUNDS,
+      metrics: metricsAt(0),
+    })).toBe('give-up');
+    // 上限前一轮仍是 wait。
+    expect(evaluateMobileAnchorVerify({
+      ...baseInput,
+      preserveVisibleContentPosition: true,
+      waitRounds: MOBILE_ANCHOR_VERIFY_MAX_WAIT_ROUNDS - 1,
+      metrics: metricsAt(0),
+    })).toBe('wait');
+  });
+});
+
+describe('mobile mVCP settle quiet window', () => {
+  it('keeps verification waiting through the quiet window after a data or size change', () => {
+    const settleAt = mobileMvcpSettleDeadline(0, 1_000);
+    expect(settleAt).toBe(1_000 + MOBILE_MVCP_SETTLE_QUIET_MS);
+    expect(isMobileMvcpSettling(1_000, settleAt)).toBe(true);
+    expect(isMobileMvcpSettling(settleAt - 1, settleAt)).toBe(true);
+    expect(isMobileMvcpSettling(settleAt, settleAt)).toBe(false);
+  });
+
+  it('extends an in-flight settle window when streaming content changes again', () => {
+    const firstDeadline = mobileMvcpSettleDeadline(0, 1_000);
+    const extendedDeadline = mobileMvcpSettleDeadline(firstDeadline, 1_080);
+    expect(extendedDeadline).toBe(1_080 + MOBILE_MVCP_SETTLE_QUIET_MS);
+  });
+
+  it('treats reused keys as the same list identity even when the items array is new', () => {
+    expect(mobileMessageListKeysSignature(['u1', 'a1'])).toBe(
+      mobileMessageListKeysSignature(['u1', 'a1']),
+    );
+    expect(mobileMessageListKeysSignature(['u1', 'a1'])).not.toBe(
+      mobileMessageListKeysSignature(['u1', 'a1', 'a2']),
+    );
   });
 });

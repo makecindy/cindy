@@ -1,29 +1,31 @@
 /**
- * deepLink: argv 解析 + URL 解析 + 新增的 --open-folder 解析单测。
+ * deepLink: argv / URL 解析、pending handoff、窗口聚焦与 OS 协议注册边界单测。
  *
- * 只覆盖 pure function:dispatch / pending buffer 依赖 Electron app + BrowserWindow,
- * 端到端"点链接 / 右键唤起"需要 packaged build 手验,本单测不涵盖。
+ * Electron 副作用使用内存替身，不改机器级 handler；实际 OS 焦点与端到端
+ * “点链接 / 右键唤起”仍需 packaged build 平台实跑，本单测不涵盖。
  */
 
-import { describe, it, expect } from 'vitest';
-import type { BrowserWindow } from 'electron';
+import { afterEach, beforeEach, describe, it, expect } from 'vitest';
+import { app, BrowserWindow } from 'electron';
+import { previewProviderImport } from '../provider-import/providerImport';
+import { registerWindowsDeepLinkName } from '../deepLinkWindowsRegistration';
+import { DEEP_LINK_SCHEMES } from '../../shared/deepLinkSchemes';
 
 // vitest 跑测试时不会真的初始化 Electron app, 单 import 需要 mock electron。
-// deepLink.ts 只在 registerDeepLinkProtocol / dispatchDeepLink 用到 app /
-// BrowserWindow, 本单测只测 pure parse function 不会触达,给个最小 mock 满足 import。
+// 聚焦策略测试通过这些替身观察是否产生窗口激活副作用。
 vi.mock('electron', () => ({
-  app: { focus: vi.fn(), setAsDefaultProtocolClient: () => {} },
-  BrowserWindow: class {},
+  app: { get isPackaged() { return false; }, focus: vi.fn(), setAsDefaultProtocolClient: vi.fn() },
+  BrowserWindow: { getFocusedWindow: vi.fn(() => null) },
 }));
+vi.mock('../deepLinkWindowsRegistration', () => ({ registerWindowsDeepLinkName: vi.fn() }));
 
 // logger 依赖 electron-log + app path, 在测试里要么 mock 要么吞日志。给个 noop logger。
-vi.mock('../logger', () => ({
-  createLogger: () => ({
-    info: () => {},
-    warn: () => {},
-    error: () => {},
-    debug: () => {},
-  }),
+const logs = vi.hoisted(() => ({ info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() }));
+vi.mock('../logger', () => ({ createLogger: () => logs }));
+const owner = vi.hoisted(() => ({ generation: 1 }));
+vi.mock('../device-link/broadcast-tap', () => ({
+  captureDataOwnerBroadcastScope: () => ({ ownerScopeKey: String(owner.generation) }),
+  isDataOwnerBroadcastScopeCurrent: (scope: { ownerScopeKey?: string }) => scope.ownerScopeKey === String(owner.generation),
 }));
 
 import { vi } from 'vitest';
@@ -32,19 +34,285 @@ import {
   buildFocusDeepLink,
   buildProjectDeepLink,
   buildSessionDeepLink,
+  buildHistorySessionDeepLink,
   buildSessionMessageDeepLink,
   findDeepLinkInArgv,
+  redactConsumedDeepLinkInArgv,
   findOpenFolderInArgv,
   findOpenShareFileInArgv,
   DEEP_LINK_PROTOCOL,
   OPEN_FOLDER_FLAG,
   OPEN_SHARE_FILE_FLAG,
+  focusMainWindow,
+  handleIncomingDeepLink,
   openMainWindowVoiceSettings,
+  openMainWindowSession,
+  openMainWindowRemoteControlSettings,
   setDeepLinkMainWindow,
+  takePendingDeepLink,
+  takePendingDeepLinkFromRenderer,
+  registerDeepLinkProtocol,
 } from '../deepLink';
 
+describe('OS deep-link registration', () => {
+  const defaultAppDescriptor = Object.getOwnPropertyDescriptor(process, 'defaultApp');
+  beforeEach(() => {
+    vi.mocked(app.setAsDefaultProtocolClient).mockReset();
+    vi.mocked(registerWindowsDeepLinkName).mockReset();
+  });
+  afterEach(() => {
+    vi.restoreAllMocks();
+    if (defaultAppDescriptor) Object.defineProperty(process, 'defaultApp', defaultAppDescriptor);
+    else Reflect.deleteProperty(process, 'defaultApp');
+  });
+
+  // Regression: starting an unpackaged checkout replaced the installed client's OS
+  // handler, even after dev exited. Existing parser/handoff tests never called this
+  // startup entry. The fake models persistent OS ownership without touching the host.
+  it.each([true, undefined])('preserves installed handlers in dev (defaultApp=%s)', defaultApp => {
+    Object.defineProperty(process, 'defaultApp', { value: defaultApp, configurable: true });
+    const handlers = new Map(DEEP_LINK_SCHEMES.map(scheme => [scheme, 'installed-client']));
+    vi.mocked(app.setAsDefaultProtocolClient).mockImplementation(scheme => {
+      handlers.set(scheme, 'stock-electron');
+      return true;
+    });
+
+    registerDeepLinkProtocol();
+
+    expect([...handlers.values()]).toEqual(DEEP_LINK_SCHEMES.map(() => 'installed-client'));
+    expect(app.setAsDefaultProtocolClient).not.toHaveBeenCalled();
+    expect(registerWindowsDeepLinkName).not.toHaveBeenCalled();
+  });
+
+  it('preserves installed handlers during a packaged smoke test', () => {
+    vi.spyOn(app, 'isPackaged', 'get').mockReturnValue(true);
+    const argv = process.argv;
+    process.argv = ['cindy', '--smoke-test'];
+    try {
+      registerDeepLinkProtocol();
+      expect(app.setAsDefaultProtocolClient).not.toHaveBeenCalled();
+      expect(registerWindowsDeepLinkName).not.toHaveBeenCalled();
+    } finally {
+      process.argv = argv;
+    }
+  });
+
+  it('registers every supported scheme for packaged clients without a dev launch command', () => {
+    vi.spyOn(app, 'isPackaged', 'get').mockReturnValue(true);
+    vi.mocked(app.setAsDefaultProtocolClient).mockReturnValue(true);
+
+    registerDeepLinkProtocol();
+
+    expect(vi.mocked(app.setAsDefaultProtocolClient).mock.calls).toEqual(DEEP_LINK_SCHEMES.map(scheme => [scheme]));
+    expect(vi.mocked(registerWindowsDeepLinkName).mock.calls).toEqual(DEEP_LINK_SCHEMES.map(scheme => [scheme]));
+  });
+
+  it('does not write a Windows display name for a scheme whose registration failed', () => {
+    vi.spyOn(app, 'isPackaged', 'get').mockReturnValue(true);
+    vi.mocked(app.setAsDefaultProtocolClient).mockImplementation(scheme => scheme !== DEEP_LINK_SCHEMES[0]);
+
+    registerDeepLinkProtocol();
+
+    expect(vi.mocked(app.setAsDefaultProtocolClient).mock.calls).toEqual(DEEP_LINK_SCHEMES.map(scheme => [scheme]));
+    expect(vi.mocked(registerWindowsDeepLinkName).mock.calls).toEqual(DEEP_LINK_SCHEMES.slice(1).map(scheme => [scheme]));
+  });
+});
+
+function providerImportUrl(scheme: 'cindy' | 'xdt-maker'): string {
+  const payload = {
+    kind: 'custom',
+    name: 'Deep Link Import',
+    auth: { method: 'apiKey', apiKey: 'sk-must-stay-in-main' },
+    endpoints: [
+      {
+        protocol: 'openai-chat',
+        baseUrl: 'https://api.example.test/v1',
+        models: ['demo-model'],
+      },
+    ],
+  };
+  return `${scheme}://provider/import?v=1&data=${Buffer.from(JSON.stringify(payload), 'utf8').toString('base64url')}`;
+}
+
+describe('history task links', () => {
+  it.each([
+    ['task/一', 'host', 'task/一', 'host'],
+    ['local::task', 'host', 'task', 'host'],
+    ['other::task', 'host', 'task', 'other'],
+  ])('routes %s to its owning computer', (key, localDeviceId, sessionId, deviceId) => {
+    const url = buildHistorySessionDeepLink(key, localDeviceId);
+    expect(parseDeepLink(url)).toEqual({ type: 'session', id: sessionId, deviceId });
+    expect(new URL(url).searchParams.get('device')).toBe(deviceId);
+    expect(url).not.toContain('::');
+  });
+});
+
+describe('chat invitation handoff', () => {
+  const token = 'synthetic-invitation-'.padEnd(43, 'a');
+  const link = `cindy://chat-invite/${token}`;
+  it('keeps the invitation for the main frame when secondary windows or subframes try to take it', () => {
+    setDeepLinkMainWindow(null);
+    handleIncomingDeepLink(link, 'open-url');
+    const sender = { mainFrame: {} } as BrowserWindow['webContents'];
+    const secondary = { mainFrame: {} } as BrowserWindow['webContents'];
+    const event = { sender, senderFrame: sender.mainFrame };
+    expect(takePendingDeepLinkFromRenderer(event)).toBeNull();
+    const isDestroyed = vi.fn(() => false);
+    setDeepLinkMainWindow({ isDestroyed, webContents: sender } as unknown as BrowserWindow);
+    expect(takePendingDeepLinkFromRenderer({ sender: secondary, senderFrame: secondary.mainFrame })).toBeNull();
+    expect(takePendingDeepLinkFromRenderer({ sender, senderFrame: secondary.mainFrame })).toBeNull();
+    expect(takePendingDeepLinkFromRenderer({ sender, senderFrame: null })).toBeNull();
+    isDestroyed.mockReturnValue(true);
+    expect(takePendingDeepLinkFromRenderer(event)).toBeNull();
+    isDestroyed.mockReturnValue(false);
+    expect(takePendingDeepLinkFromRenderer(event)).toEqual({ type: 'chat-invite', token });
+    expect(takePendingDeepLinkFromRenderer(event)).toBeNull();
+    setDeepLinkMainWindow(null);
+  });
+  it('recognizes the existing generated link and rejects ambiguous targets', () => {
+    expect(parseDeepLink(link)).toEqual({ type: 'chat-invite', token });
+    expect(parseDeepLink(link.replace('cindy:', 'xdt-maker:'))).toEqual({ type: 'chat-invite', token });
+    // A damaged invitation never yields a token, but the click is reported instead of ignored.
+    for (const value of [link + '/extra', link + '?token=other', link + '#secret', link + 'a', link.slice(0, -1), 'cindy://chat-invite/']) {
+      expect(parseDeepLink(value)).toEqual({ type: 'chat-invite-malformed' });
+    }
+    expect(parseDeepLink('cindy://chat-invite')).toBeNull();
+  });
+  it('queues one malformed-link notice behind valid invitations without logging the link', () => {
+    setDeepLinkMainWindow(null);
+    const damaged = link.slice(0, -3);
+    handleIncomingDeepLink(damaged, 'open-url');
+    handleIncomingDeepLink(link, 'open-url');
+    handleIncomingDeepLink(damaged + 'x', 'second-instance');
+    handleIncomingDeepLink('cindy://session/ordinary-task', 'open-url');
+    expect(takePendingDeepLink()).toEqual({ type: 'chat-invite-malformed' });
+    expect(takePendingDeepLink()).toEqual({ type: 'chat-invite', token });
+    expect(takePendingDeepLink()).toEqual({ type: 'session', id: 'ordinary-task' });
+    expect(takePendingDeepLink()).toBeNull();
+    expect(JSON.stringify(Object.values(logs).map(log => log.mock.calls))).not.toContain(damaged.slice('cindy://chat-invite/'.length));
+  });
+  it.each(['open-url', 'cold-start-argv', 'second-instance'])('retains %s through login focus and unrelated navigation', source => {
+    setDeepLinkMainWindow(null);
+    handleIncomingDeepLink(link, source);
+    handleIncomingDeepLink(link, source);
+    handleIncomingDeepLink('cindy://focus/desktop-login', 'open-url');
+    handleIncomingDeepLink('cindy://session/ordinary-task', source);
+    expect(takePendingDeepLink()).toEqual({ type: 'chat-invite', token });
+    expect(takePendingDeepLink()).toEqual({ type: 'session', id: 'ordinary-task' });
+    expect(takePendingDeepLink()).toBeNull();
+    expect(JSON.stringify(Object.values(logs).map(log => log.mock.calls))).not.toContain(token);
+  });
+  it('retains invitations while a loaded login page has no consumer, and redacts all argv copies', () => {
+    const send = vi.fn();
+    setDeepLinkMainWindow({ isDestroyed: () => false, isMinimized: () => false,
+      isVisible: () => true, isAlwaysOnTop: () => true, setAlwaysOnTop: vi.fn(), moveTop: vi.fn(), focus: vi.fn(),
+      webContents: { isLoading: () => false, send } } as unknown as BrowserWindow);
+    handleIncomingDeepLink(link, 'open-url');
+    expect(send).toHaveBeenCalledWith('deep-link:navigate', { type: 'chat-invite', token });
+    expect(takePendingDeepLink()).toEqual({ type: 'chat-invite', token });
+    expect(takePendingDeepLink()).toBeNull();
+    const argv = ['cindy.exe', link, 'cindy://chat-invite/invalid-secret'];
+    expect(findDeepLinkInArgv(['cindy.exe', link])).toBe(link);
+    redactConsumedDeepLinkInArgv(argv);
+    expect(argv).toEqual(['cindy.exe', 'cindy://consumed', 'cindy://consumed']);
+    setDeepLinkMainWindow(null);
+  });
+});
+
+describe('shared task invitation handoff', () => {
+  it('buffers until the authenticated renderer takes it, without logging the secret', () => {
+    const invitation = 'A'.repeat(43);
+    const url = 'cindy://shared-task/join?invitation=' + invitation + '&server=https%3A%2F%2Frelay.example.test';
+    setDeepLinkMainWindow(null);
+    handleIncomingDeepLink(url, 'test');
+    expect(takePendingDeepLink()).toEqual({ type: 'shared-task-join', invitation, server: 'https://relay.example.test' });
+    expect(takePendingDeepLink()).toBeNull();
+    expect(JSON.stringify(Object.values(logs).map(log => log.mock.calls))).not.toContain(invitation);
+    const argv = ['cindy.exe', url, 'cindy://shared-task/join?invitation=invalid-secret'];
+    redactConsumedDeepLinkInArgv(argv, url);
+    expect(argv.join(' ')).not.toContain(invitation);
+    expect(argv.join(' ')).not.toContain('invalid-secret');
+  });
+  it('rejects malformed and duplicate invitation fields', () => {
+    const url = 'cindy://shared-task/join?invitation=' + 'A'.repeat(43) + '&server=https%3A%2F%2Frelay.example.test';
+    expect(parseDeepLink(url + '&invitation=' + 'B'.repeat(43))).toBeNull();
+    expect(parseDeepLink(url.replace('https%3A%2F%2Frelay.example.test', 'javascript%3Aalert(1)'))).toBeNull();
+  });
+});
+
+describe('user-initiated main-window focus', () => {
+  it('activates and raises the target window before focusing on Windows', () => {
+    const calls: string[] = [];
+    const mainWindow = {
+      isDestroyed: () => false,
+      isVisible: () => false,
+      isMinimized: () => true,
+      show: vi.fn(() => calls.push('show')),
+      restore: vi.fn(() => calls.push('restore')),
+      moveTop: vi.fn(() => calls.push('moveTop')),
+      focus: vi.fn(() => calls.push('window.focus')),
+    };
+    vi.mocked(app.focus).mockImplementation(() => calls.push('app.focus'));
+    setDeepLinkMainWindow(mainWindow as unknown as BrowserWindow);
+
+    expect(focusMainWindow('win32')).toBe(true);
+
+    expect(calls).toEqual(['show', 'restore', 'app.focus', 'moveTop', 'window.focus']);
+    setDeepLinkMainWindow(null);
+  });
+});
+
 describe('internal main-window navigation', () => {
-  it('focuses the main window and routes voice settings to the requested tab', () => {
+  // #913 / #500: workspace focus:true must navigate without taking the OS foreground.
+  // Existing tests cover explicit clicks, not background navigation or a hidden/loading main window.
+  // Production entry: openMainWindowSession; minimal input: focus:'if-active', no focused app window.
+  // tier: unit; Electron effects are injected, with native Windows acceptance run separately.
+  it.each([
+    { visible: true, minimized: false, loading: false },
+    { visible: false, minimized: false, loading: false },
+    { visible: true, minimized: true, loading: true },
+  ])('keeps background task navigation passive (%j)', ({ visible, minimized, loading }) => {
+    const win = {
+      isDestroyed: () => false, isVisible: () => visible, isMinimized: () => minimized,
+      show: vi.fn(), restore: vi.fn(), focus: vi.fn(), moveTop: vi.fn(), setAlwaysOnTop: vi.fn(),
+      webContents: { isLoading: () => loading, send: vi.fn() },
+    };
+    vi.mocked(BrowserWindow.getFocusedWindow).mockReturnValue(null);
+    vi.mocked(app.focus).mockClear();
+    setDeepLinkMainWindow(win as unknown as BrowserWindow);
+    try {
+      openMainWindowSession('background-task', { focus: 'if-active' });
+      const payload = { type: 'session', id: 'background-task' };
+      if (loading) expect(takePendingDeepLink()).toEqual(payload);
+      else expect(win.webContents.send).toHaveBeenCalledWith('deep-link:navigate', payload);
+      for (const effect of [win.show, win.restore, win.focus, win.moveTop, win.setAlwaysOnTop, app.focus]) {
+        expect(effect).not.toHaveBeenCalled();
+      }
+    } finally {
+      takePendingDeepLink();
+      setDeepLinkMainWindow(null);
+    }
+  });
+
+  it('still brings the main task forward when Cindy already has an active window', () => {
+    const win = {
+      isDestroyed: () => false, isVisible: () => true, isMinimized: () => false,
+      focus: vi.fn(), moveTop: vi.fn(), setAlwaysOnTop: vi.fn(),
+      webContents: { isLoading: () => false, send: vi.fn() },
+    };
+    vi.mocked(BrowserWindow.getFocusedWindow).mockReturnValue(win as unknown as BrowserWindow);
+    setDeepLinkMainWindow(win as unknown as BrowserWindow);
+    try {
+      openMainWindowSession('foreground-task', { focus: 'if-active' });
+      expect(win.focus).toHaveBeenCalledOnce();
+      expect(win.webContents.send).toHaveBeenCalledWith('deep-link:navigate', { type: 'session', id: 'foreground-task' });
+    } finally {
+      vi.mocked(BrowserWindow.getFocusedWindow).mockReturnValue(null);
+      setDeepLinkMainWindow(null);
+    }
+  });
+
+  it.each(['providers', 'remote-control'] as const)('focuses the main window and routes settings to %s', (tab) => {
     const send = vi.fn();
     const mainWindow = {
       isDestroyed: () => false,
@@ -52,7 +320,9 @@ describe('internal main-window navigation', () => {
       isMinimized: () => true,
       show: vi.fn(),
       restore: vi.fn(),
+      moveTop: vi.fn(),
       focus: vi.fn(),
+      setAlwaysOnTop: vi.fn(),
       webContents: {
         isLoading: () => false,
         send,
@@ -60,14 +330,22 @@ describe('internal main-window navigation', () => {
     };
     setDeepLinkMainWindow(mainWindow as unknown as BrowserWindow);
 
-    openMainWindowVoiceSettings('providers');
+    if (tab === 'remote-control') openMainWindowRemoteControlSettings();
+    else openMainWindowVoiceSettings(tab);
 
     expect(mainWindow.show).toHaveBeenCalledOnce();
     expect(mainWindow.restore).toHaveBeenCalledOnce();
     expect(mainWindow.focus).toHaveBeenCalledOnce();
+    if (process.platform === 'win32') {
+      expect(mainWindow.moveTop).toHaveBeenCalledOnce();
+      expect(mainWindow.setAlwaysOnTop).not.toHaveBeenCalled();
+    } else {
+      expect(mainWindow.setAlwaysOnTop).toHaveBeenNthCalledWith(1, true);
+      expect(mainWindow.setAlwaysOnTop).toHaveBeenNthCalledWith(2, false);
+    }
     expect(send).toHaveBeenCalledWith('deep-link:navigate', {
       type: 'settings',
-      tab: 'providers',
+      tab,
     });
     setDeepLinkMainWindow(null);
   });
@@ -76,6 +354,14 @@ describe('internal main-window navigation', () => {
 describe('parseDeepLink', () => {
   it('parses session payload', () => {
     expect(parseDeepLink('xdt-maker://session/abc-123')).toEqual({
+      type: 'session',
+      id: 'abc-123',
+    });
+  });
+
+  // islandEntryId 只由主进程的灵动岛点击写入;外部链接不能冒充一次点击去处置提醒。
+  it('never derives an Agent Island click id from an external link', () => {
+    expect(parseDeepLink('cindy://session/abc-123?islandEntryId=1')).toEqual({
       type: 'session',
       id: 'abc-123',
     });
@@ -126,12 +412,11 @@ describe('parseDeepLink', () => {
     });
   });
 
-  it('tolerates the device-frozen link format when routing a click', () => {
-    // 远程会话深链带 `?device=`(renderer 生成);main 端点击路由按 sessionId
-    // 导航即可,未知参数不拖累 session / message 解析。
+  it('preserves the owning device and message anchor when routing an external click', () => {
     expect(parseDeepLink(buildSessionDeepLink('abc-123', { deviceId: 'dev-1' }))).toEqual({
       type: 'session',
       id: 'abc-123',
+      deviceId: 'dev-1',
     });
     expect(
       parseDeepLink(buildSessionMessageDeepLink('abc-123', 'm1', { deviceId: 'dev-1' })),
@@ -139,6 +424,7 @@ describe('parseDeepLink', () => {
       type: 'session',
       id: 'abc-123',
       messageClientId: 'm1',
+      deviceId: 'dev-1',
     });
   });
 
@@ -175,6 +461,83 @@ describe('parseDeepLink', () => {
   it('returns null for focus without a source value', () => {
     expect(parseDeepLink('xdt-maker://focus/')).toBeNull();
   });
+
+  it('parses plugins payload to the installed list or one plugin detail', () => {
+    // Bug/规则依据: 随包浏览器扩展的断连引导要把用户带回该插件的设置页。
+    expect(parseDeepLink('cindy://plugins')).toEqual({ type: 'installed-plugin' });
+    expect(parseDeepLink('cindy://plugins/')).toEqual({ type: 'installed-plugin' });
+    expect(parseDeepLink('cindy://plugins/my-browser')).toEqual({ type: 'installed-plugin', ghostId: 'my-browser' });
+    expect(parseDeepLink('cindy://plugins/my-browser/?x=1')).toEqual({ type: 'installed-plugin', ghostId: 'my-browser' });
+    expect(parseDeepLink('cindy://plugins/My Browser')).toBeNull();
+    expect(parseDeepLink('cindy://plugins/..%2Fetc')).toBeNull();
+  });
+
+  // Agent guidance target when Computer Use is off (CU-013 follow-up): the page
+  // holds the switch and the macOS permission guide, so only the bare path opens.
+  it('parses settings/builtin-tools as a bare tab and rejects parameters or sub-paths', () => {
+    expect(parseDeepLink('cindy://settings/builtin-tools')).toEqual({ type: 'settings', tab: 'builtin-tools' });
+    expect(parseDeepLink('cindy://settings/builtin-tools/')).toEqual({ type: 'settings', tab: 'builtin-tools' });
+    expect(parseDeepLink('cindy://settings/builtin-tools?connect=x')).toEqual({ type: 'settings', tab: 'builtin-tools' });
+    expect(parseDeepLink('cindy://settings/builtin-tools/computer')).toBeNull();
+    expect(parseDeepLink('cindy://settings/general')).toBeNull();
+  });
+
+  it('parses settings/im-bot with an optional cindy/personal group and rejects anything else', () => {
+    // 官方 IM 机器人(飞书)的未关联引导卡点开后直达「设置 → IM 机器人」的官方分区。
+    expect(parseDeepLink('cindy://settings/im-bot')).toEqual({ type: 'settings', tab: 'im-bot' });
+    expect(parseDeepLink('cindy://settings/im-bot?group=cindy')).toEqual({ type: 'settings', tab: 'im-bot', imGroup: 'cindy' });
+    expect(parseDeepLink('xdt-maker://settings/im-bot/?group=personal')).toEqual({ type: 'settings', tab: 'im-bot', imGroup: 'personal' });
+    expect(parseDeepLink('cindy://settings/im-bot?group=admin')).toBeNull();
+    expect(parseDeepLink('cindy://settings/im-bot/feishu')).toBeNull();
+  });
+
+  it('parses settings/providers payload with and without a connect target', () => {
+    expect(parseDeepLink('cindy://settings/providers')).toEqual({
+      type: 'settings',
+      tab: 'providers',
+    });
+    expect(parseDeepLink('cindy://settings/providers/')).toEqual({
+      type: 'settings',
+      tab: 'providers',
+    });
+    expect(parseDeepLink('cindy://settings/providers?connect=openrouter')).toEqual({
+      type: 'settings',
+      tab: 'providers',
+      connect: 'openrouter',
+    });
+    // connect 同时覆盖 provider id 与 preset id 的字符契约;其它 query 参数忽略。
+    expect(parseDeepLink('cindy://settings/providers?foo=bar&connect=Vendor_2')).toEqual({
+      type: 'settings',
+      tab: 'providers',
+      connect: 'Vendor_2',
+    });
+    // 历史 scheme 同样可用
+    expect(parseDeepLink('xdt-maker://settings/providers?connect=deepseek')).toEqual({
+      type: 'settings',
+      tab: 'providers',
+      connect: 'deepseek',
+    });
+  });
+
+  it('rejects settings deep links outside the providers tab', () => {
+    // voice-input 仍是主进程内部专用 payload,不开放给外部 URL 注入
+    expect(parseDeepLink('cindy://settings/voice-input')).toBeNull();
+    expect(parseDeepLink('cindy://settings/anything-else')).toBeNull();
+    expect(parseDeepLink('cindy://settings/providers/anything-else')).toBeNull();
+    expect(parseDeepLink('cindy://settings/')).toBeNull();
+  });
+
+  it('rejects settings deep links whose connect value fails the shared id whitelist', () => {
+    // 深链是不可信输入:非法 connect 整条拒绝,不做"半执行"。
+    expect(parseDeepLink('cindy://settings/providers?connect=')).toBeNull();
+    expect(parseDeepLink('cindy://settings/providers?connect=a.b')).toBeNull();
+    expect(parseDeepLink('cindy://settings/providers?connect=a%20b')).toBeNull();
+    expect(parseDeepLink('cindy://settings/providers?connect=%3Cscript%3E')).toBeNull();
+    expect(parseDeepLink('cindy://settings/providers?connect=%E4%ZZ')).toBeNull();
+    expect(
+      parseDeepLink(`cindy://settings/providers?connect=${'a'.repeat(129)}`),
+    ).toBeNull();
+  });
 });
 
 // 双 scheme 收敛(2026-07 品牌翻转):解析 cindy 主 + 历史 xdt-maker 都认,
@@ -197,6 +560,79 @@ describe('dual scheme (cindy primary + legacy xdt-maker)', () => {
     expect(parseDeepLink('cindy://focus/google-auth')).toEqual({ type: 'focus' });
     expect(parseDeepLink('cindy://unknown/x')).toBeNull();
     expect(parseDeepLink('cindy://session/')).toBeNull();
+  });
+
+  it.each(['cindy', 'xdt-maker'] as const)(
+    'parses %s provider imports into an opaque Main-only draft id',
+    (scheme) => {
+      const result = parseDeepLink(providerImportUrl(scheme));
+      expect(result).toEqual({
+        type: 'provider-import',
+        importId: expect.stringMatching(/^[0-9a-f-]{36}$/),
+      });
+      expect(JSON.stringify(result)).not.toContain('sk-must-stay-in-main');
+    },
+  );
+
+  it('retains the original task host and reply anchor while the main renderer is unavailable', () => {
+    setDeepLinkMainWindow(null);
+    openMainWindowSession('original', { deviceId: 'studio', messageClientId: 'reply', islandEntryId: 'entry' });
+    expect(takePendingDeepLink()).toEqual({ type: 'session', id: 'original', deviceId: 'studio', messageClientId: 'reply', islandEntryId: 'entry' });
+    expect(takePendingDeepLink()).toBeNull();
+  });
+
+  // Notification clicks can be buffered during reload, then pulled after another
+  // account logs in. The public main-window entry must reject that stale intent.
+  it('drops an old owner notification from the pending queue without dropping later external links', () => {
+    setDeepLinkMainWindow(null);
+    openMainWindowSession('account-a-task', { deviceId: 'studio', messageClientId: 'reply' });
+    owner.generation += 1;
+    expect(takePendingDeepLink()).toBeNull();
+    handleIncomingDeepLink('cindy://session/external-task', 'open-url');
+    owner.generation += 1;
+    expect(takePendingDeepLink()).toEqual({ type: 'session', id: 'external-task' });
+  });
+
+  it('buffers only the opaque provider import id during cold start', () => {
+    setDeepLinkMainWindow(null);
+    handleIncomingDeepLink(providerImportUrl('cindy'), 'test');
+
+    const pending = takePendingDeepLink();
+    expect(pending).toEqual({
+      type: 'provider-import',
+      importId: expect.stringMatching(/^[0-9a-f-]{36}$/),
+    });
+    expect(JSON.stringify(pending)).not.toContain('sk-must-stay-in-main');
+    expect(takePendingDeepLink()).toBeNull();
+  });
+
+  it('retains an import on a loaded login page until MainLayout takes it, only once', () => {
+    const send = vi.fn();
+    const win = {
+      isDestroyed: () => false, isVisible: () => true, isMinimized: () => false,
+      focus: vi.fn(), moveTop: vi.fn(), setAlwaysOnTop: vi.fn(),
+      webContents: { isLoading: () => false, send },
+    };
+    setDeepLinkMainWindow(win as unknown as BrowserWindow);
+    try {
+      handleIncomingDeepLink(providerImportUrl('cindy'), 'test');
+      const first = send.mock.calls[0]![1];
+      handleIncomingDeepLink(providerImportUrl('xdt-maker'), 'test');
+      const last = send.mock.calls[1]![1];
+      expect(() => previewProviderImport(first.importId, { dataOwnerId: null, generation: 0 }, [])).toThrow();
+      expect(takePendingDeepLink()).toEqual(last);
+      // Whichever wins (mount pull or push wake-up), the other sees no import.
+      expect(takePendingDeepLink()).toBeNull();
+      expect(JSON.stringify(send.mock.calls)).not.toContain('sk-must-stay-in-main');
+    } finally {
+      setDeepLinkMainWindow(null);
+    }
+  });
+
+  it('rejects malformed provider import paths and repeated parameters', () => {
+    const valid = providerImportUrl('cindy');
+    expect(parseDeepLink(valid.replace('provider/import', 'providers/import'))).toBeNull();
+    expect(parseDeepLink(`${valid}&data=duplicate`)).toBeNull();
   });
 
   it('generates all builders with the primary cindy:// scheme', () => {
@@ -226,6 +662,54 @@ describe('findDeepLinkInArgv', () => {
     expect(findDeepLinkInArgv(['electron.exe', 'xdt-maker://session/a'])).toBe(
       'xdt-maker://session/a',
     );
+  });
+});
+
+describe('redactConsumedDeepLinkInArgv', () => {
+  it('drops both schemes before restart without selecting or retaining an import', () => {
+    const argv = ['electron', '--flag', 'cindy://session/keep', providerImportUrl('cindy'), providerImportUrl('xdt-maker')];
+    redactConsumedDeepLinkInArgv(argv);
+    expect(argv).toEqual(['electron', '--flag', 'cindy://session/keep', 'cindy://consumed', 'cindy://consumed']);
+  });
+  it('removes every import, including invalid and duplicate arguments, while retaining the selected URL for parsing', () => {
+    const selected = providerImportUrl('xdt-maker');
+    const argv = ['electron.exe', '--flag', 'cindy://session/keep', 'cindy://provider/import?invalid=FAKE', selected, selected];
+    const url = findDeepLinkInArgv(argv)!;
+    redactConsumedDeepLinkInArgv(argv, url);
+    expect(argv).toEqual(['electron.exe', '--flag', 'cindy://session/keep', 'cindy://consumed', 'cindy://consumed', 'cindy://consumed']);
+    expect(parseDeepLink(url)?.type).toBe('provider-import');
+  });
+  it('parses provider share links and never keeps their invitation in argv', () => {
+    const link = `cindy://provider-share/join?invitation=${'a'.repeat(43)}&server=${encodeURIComponent('https://device-link.cindy.app')}`;
+    expect(parseDeepLink(link)).toEqual({ type: 'provider-share-join', link });
+    const argv = ['electron', link];
+    redactConsumedDeepLinkInArgv(argv);
+    expect(argv).toEqual(['electron', 'cindy://consumed']);
+  });
+
+  it('releases an overwritten cold-start draft before a renderer ever mounts', () => {
+    setDeepLinkMainWindow(null);
+    for (let i = 0; i < 130; i++) {
+      const data = Buffer.from(JSON.stringify({
+        kind: 'custom', name: `Draft ${i}`, auth: { method: 'apiKey', apiKey: 'FAKE-KEY' },
+        endpoints: [{ protocol: 'openai-chat', baseUrl: 'https://example.invalid/v1' }],
+      })).toString('base64url');
+      handleIncomingDeepLink(`cindy://provider/import?v=1&data=${data}`, 'cold-start-argv');
+    }
+    const draft = takePendingDeepLink();
+    if (draft?.type !== 'provider-import') throw new Error('missing draft');
+    expect(previewProviderImport(draft.importId, { dataOwnerId: null, generation: 0 }, []).name).toBe('Draft 129');
+  });
+  it('replaces a consumed URL without changing unrelated argv entries', () => {
+    const argv = ['electron.exe', '--flag', 'cindy://provider/import?v=1&data=secret'];
+    redactConsumedDeepLinkInArgv(argv, argv[2]!);
+    expect(argv).toEqual(['electron.exe', '--flag', 'cindy://consumed']);
+  });
+
+  it('does nothing when the URL is no longer present', () => {
+    const argv = ['electron.exe', 'cindy://other'];
+    redactConsumedDeepLinkInArgv(argv, 'cindy://provider/import?v=1&data=secret');
+    expect(argv).toEqual(['electron.exe', 'cindy://other']);
   });
 });
 
@@ -378,5 +862,38 @@ describe('findOpenShareFileInArgv', () => {
         '/tmp/team.cshare',
       ]),
     ).toBe('/tmp/team.cshare');
+  });
+});
+
+
+describe('public plugin links are navigation only', () => {
+  const id = 'c123456789012345678901234';
+  it('opens exactly the referenced market resource', () => {
+    expect(parseDeepLink(`cindy://plugin/${id}`)).toEqual({ type: 'plugin', pluginId: id });
+  });
+  it.each(['?install=1', '?url=https://example.test/package', '/releases/release', '#auto', '/../other'])('rejects extra behavior %s', suffix => {
+    expect(parseDeepLink(`cindy://plugin/${id}${suffix}`)).toBeNull();
+  });
+  it('does not accept ghost names as server resource IDs', () => {
+    expect(parseDeepLink('cindy://plugin/cindy-github')).toBeNull();
+  });
+});
+
+// A local share is a fixed package, never a market ID or an automatic install.
+// Unit: the real parser and pending handoff need no server or real Electron app.
+describe('fixed local plugin share navigation', () => {
+  const snapshotId = 'a'.repeat(32);
+  it('keeps the exact snapshot through the loaded login page', () => {
+    const window = { isDestroyed: () => false, isVisible: () => true, isMinimized: () => false, show: vi.fn(), focus: vi.fn(),
+      restore: vi.fn(), moveTop: vi.fn(), setAlwaysOnTop: vi.fn(),
+      webContents: { isLoading: () => false, send: vi.fn() } } as unknown as BrowserWindow;
+    setDeepLinkMainWindow(window);
+    handleIncomingDeepLink(`cindy://plugin-share/${snapshotId}`, 'open-url');
+    expect(takePendingDeepLink()).toEqual({ type: 'local-plugin-share', snapshotId });
+    expect(takePendingDeepLink()).toBeNull();
+    setDeepLinkMainWindow(null);
+  });
+  it.each(['?install=1', '?url=https://example.test/file', '#auto', '/other', '/../other'])('rejects extra behavior %s', suffix => {
+    expect(parseDeepLink(`cindy://plugin-share/${snapshotId}${suffix}`)).toBeNull();
   });
 });

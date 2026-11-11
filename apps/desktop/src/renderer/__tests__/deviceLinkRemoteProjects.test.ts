@@ -2,6 +2,8 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import {
   createReconcileBackoff,
+  createRemoteReconcilePresence,
+  nextArchivedSessionRetryDelay,
   nextSessionListTokenRetryDelay,
   resolveIneligibleRemoteProjectAction,
   startRemoteSessionsReconciler,
@@ -67,7 +69,144 @@ describe('session-list owner token retry backoff', () => {
   });
 });
 
+describe('archived session retry backoff', () => {
+  it('从 2s 指数退避到 30s，并在成功或生命周期清理后可从首档重启', () => {
+    const delays: number[] = [];
+    let previous = 0;
+    for (let i = 0; i < 7; i += 1) {
+      previous = nextArchivedSessionRetryDelay(previous);
+      delays.push(previous);
+    }
+    expect(delays).toEqual([2_000, 4_000, 8_000, 16_000, 30_000, 30_000, 30_000]);
+    expect(nextArchivedSessionRetryDelay(0)).toBe(2_000);
+  });
+});
+
 describe('startRemoteSessionsReconciler', () => {
+  it('keeps a healthy third peer independent of two stalled peers and stops cleanly', async () => {
+    vi.useFakeTimers();
+    const refresh = vi.fn((id: string) => id === 'healthy' ? Promise.resolve('ok') : new Promise<string>(() => {}));
+    const { wake, stop } = startRemoteSessionsReconciler(
+      () => new Map([['a', 'A'], ['b', 'B'], ['healthy', 'C']]), refresh, 1000,
+    );
+    wake();
+    expect(refresh.mock.calls.map(([id]) => id)).toEqual(['a', 'b', 'healthy']);
+    await vi.advanceTimersByTimeAsync(1000);
+    expect(refresh.mock.calls.map(([id]) => id)).toEqual(['a', 'b', 'healthy', 'healthy']);
+    stop();
+    wake();
+    await vi.advanceTimersByTimeAsync(1000);
+    expect(refresh).toHaveBeenCalledTimes(4);
+  });
+  it('preserves failure backoff while a window is hidden', async () => {
+    vi.useFakeTimers();
+    let visible = true;
+    const refresh = vi.fn(async () => 'gave-up');
+    const backoff = createReconcileBackoff({ baseMs: 10_000, jitter: (ms) => ms });
+    const { stop } = startRemoteSessionsReconciler(
+      () => new Map([['dev-a', 'Mac A']]),
+      refresh,
+      1_000,
+      backoff,
+      () => visible,
+    );
+    await vi.advanceTimersByTimeAsync(1_000);
+    expect(refresh).toHaveBeenCalledTimes(1);
+    visible = false;
+    await vi.advanceTimersByTimeAsync(2_000);
+    visible = true;
+    await vi.advanceTimersByTimeAsync(7_000);
+    expect(refresh).toHaveBeenCalledTimes(1);
+    await vi.advanceTimersByTimeAsync(1_000);
+    expect(refresh).toHaveBeenCalledTimes(2);
+    await vi.advanceTimersByTimeAsync(19_000);
+    expect(refresh).toHaveBeenCalledTimes(2);
+    await vi.advanceTimersByTimeAsync(1_000);
+    expect(refresh).toHaveBeenCalledTimes(3);
+    stop();
+  });
+
+  it('wakes immediately after idle instead of waiting for the next interval', async () => {
+    vi.useFakeTimers();
+    let visible = false;
+    const refresh = vi.fn(async () => 'ok');
+    const { stop, wake } = startRemoteSessionsReconciler(
+      () => new Map([['dev-a', 'Mac A']]),
+      refresh,
+      10_000,
+      undefined,
+      () => visible,
+    );
+    await vi.advanceTimersByTimeAsync(30_000);
+    expect(refresh).not.toHaveBeenCalled();
+    visible = true;
+    wake();
+    expect(refresh).toHaveBeenCalledTimes(1);
+    await vi.advanceTimersByTimeAsync(9_000);
+    expect(refresh).toHaveBeenCalledTimes(1);
+    stop();
+  });
+
+  it('wake bypasses failure backoff so returning to the computer is not delayed', async () => {
+    vi.useFakeTimers();
+    const refresh = vi.fn(async () => 'gave-up');
+    const backoff = createReconcileBackoff({
+      baseMs: 10_000,
+      maxMs: 120_000,
+      jitter: (ms) => ms,
+      now: () => Date.now(),
+    });
+    const { stop, wake } = startRemoteSessionsReconciler(
+      () => new Map([['dev-a', 'Mac A']]),
+      refresh,
+      1_000,
+      backoff,
+    );
+    await vi.advanceTimersByTimeAsync(1_000);
+    expect(refresh).toHaveBeenCalledTimes(1);
+    await vi.advanceTimersByTimeAsync(0);
+    expect(refresh).toHaveBeenCalledTimes(1);
+    wake();
+    expect(refresh).toHaveBeenCalledTimes(2);
+    stop();
+  });
+
+  it('pauses hidden window polling without duplicating pending requests on resume', async () => {
+    vi.useFakeTimers();
+    let visible = false;
+    let finish!: (result: string) => void;
+    const refresh = vi.fn(
+      () =>
+        new Promise<string>((resolve) => {
+          finish = resolve;
+        }),
+    );
+    const { stop } = startRemoteSessionsReconciler(
+      () => new Map([['dev-a', 'Mac A']]),
+      refresh,
+      1_000,
+      undefined,
+      () => visible,
+    );
+    await vi.advanceTimersByTimeAsync(10_000);
+    expect(refresh).not.toHaveBeenCalled();
+    visible = true;
+    await vi.advanceTimersByTimeAsync(1_000);
+    expect(refresh).toHaveBeenCalledTimes(1);
+    visible = false;
+    await vi.advanceTimersByTimeAsync(10_000);
+    visible = true;
+    await vi.advanceTimersByTimeAsync(1_000);
+    expect(refresh).toHaveBeenCalledTimes(1);
+    finish('ok');
+    await vi.advanceTimersByTimeAsync(1_000);
+    expect(refresh).toHaveBeenCalledTimes(2);
+    stop();
+    finish('ok');
+    await vi.advanceTimersByTimeAsync(10_000);
+    expect(refresh).toHaveBeenCalledTimes(2);
+  });
+
   it('periodically refreshes every eligible device and stops cleanly', async () => {
     vi.useFakeTimers();
     const eligible = new Map([
@@ -75,7 +214,7 @@ describe('startRemoteSessionsReconciler', () => {
       ['dev-b', 'Mac B'],
     ]);
     const refresh = vi.fn(async () => 'ok');
-    const stop = startRemoteSessionsReconciler(() => eligible, refresh, 1_000);
+    const { stop } = startRemoteSessionsReconciler(() => eligible, refresh, 1_000);
 
     await vi.advanceTimersByTimeAsync(1_000);
     expect(refresh.mock.calls).toEqual([
@@ -93,6 +232,38 @@ describe('startRemoteSessionsReconciler', () => {
     expect(refresh).toHaveBeenCalledTimes(3);
   });
 
+  // 测试价值:startRemoteSessionsReconciler 的 cadence 把有 push 的设备全量对账从每拍放宽到
+  // 间隔一次(实测 3 台 peer 每 10s 三连 sessions:list + 自动化读取),但 sessions 订阅缺口
+  // 的设备没有 push 兜底,必须仍每拍补订;wake 不受间隔约束。unit,fake timers。
+  it('reconciles subscribed peers once per interval but subscription gaps every tick', async () => {
+    vi.useFakeTimers();
+    const gaps = new Set(['gap']);
+    const refresh = vi.fn(async (_id: string) => 'ok');
+    const { stop, wake } = startRemoteSessionsReconciler(
+      () => new Map([['healthy', 'A'], ['gap', 'B']]),
+      refresh,
+      60_000,
+      createReconcileBackoff({ baseMs: 10_000, jitter: (ms) => ms }),
+      () => true,
+      { tickMs: 10_000, needsEveryTick: (id) => gaps.has(id) },
+    );
+    const callsFor = (id: string) => refresh.mock.calls.filter(([device]) => device === id).length;
+    // The first sighting follows bootstrap, so the interval starts there (10s tick).
+    await vi.advanceTimersByTimeAsync(60_000);
+    expect(callsFor('healthy')).toBe(0);
+    expect(callsFor('gap')).toBe(6);
+    await vi.advanceTimersByTimeAsync(10_000);
+    expect(callsFor('healthy')).toBe(1);
+    gaps.clear();
+    await vi.advanceTimersByTimeAsync(50_000);
+    expect(callsFor('healthy')).toBe(1);
+    expect(callsFor('gap')).toBe(7);
+    wake();
+    expect(callsFor('healthy')).toBe(2);
+    expect(callsFor('gap')).toBe(8);
+    stop();
+  });
+
   it('counts one coalesced refresh failure once when periodic ticks overlap', async () => {
     vi.useFakeTimers();
     const eligible = new Map([['dev-a', 'Mac A']]);
@@ -107,7 +278,7 @@ describe('startRemoteSessionsReconciler', () => {
       jitter: (delay) => delay,
       now: () => Date.now(),
     });
-    const stop = startRemoteSessionsReconciler(() => eligible, refresh, 1_000, backoff);
+    const { stop } = startRemoteSessionsReconciler(() => eligible, refresh, 1_000, backoff);
 
     await vi.advanceTimersByTimeAsync(1_000);
     await vi.advanceTimersByTimeAsync(1_000);
@@ -128,9 +299,7 @@ describe('startRemoteSessionsReconciler', () => {
       ['dev-good', 'Mac Good'],
     ]);
     let badResult: string = 'gave-up';
-    const refresh = vi.fn(async (deviceId: string) =>
-      deviceId === 'dev-bad' ? badResult : 'ok',
-    );
+    const refresh = vi.fn(async (deviceId: string) => (deviceId === 'dev-bad' ? badResult : 'ok'));
     // 无抖动 + 假时钟,退避序列确定:失败 1 次后推迟 1s(=base),2 次后 2s,3 次后 4s…
     const backoff = createReconcileBackoff({
       baseMs: 1_000,
@@ -138,7 +307,7 @@ describe('startRemoteSessionsReconciler', () => {
       jitter: (d) => d,
       now: () => Date.now(),
     });
-    const stop = startRemoteSessionsReconciler(() => eligible, refresh, 1_000, backoff);
+    const { stop } = startRemoteSessionsReconciler(() => eligible, refresh, 1_000, backoff);
 
     const badCalls = () => refresh.mock.calls.filter(([id]) => id === 'dev-bad').length;
     const goodCalls = () => refresh.mock.calls.filter(([id]) => id === 'dev-good').length;
@@ -176,9 +345,10 @@ describe('startRemoteSessionsReconciler', () => {
     const eligible = new Map([['dev-slow', 'Mac Slow']]);
     let settle: ((r: string) => void) | null = null;
     const refresh = vi.fn(
-      () => new Promise<string>((resolve) => {
-        settle = resolve;
-      }),
+      () =>
+        new Promise<string>((resolve) => {
+          settle = resolve;
+        }),
     );
     const failures: string[] = [];
     const backoff = createReconcileBackoff({ baseMs: 1_000, maxMs: 8_000, jitter: (d) => d });
@@ -187,7 +357,7 @@ describe('startRemoteSessionsReconciler', () => {
       if (outcome === 'failure') failures.push(deviceId);
       origReport(deviceId, outcome);
     };
-    const stop = startRemoteSessionsReconciler(() => eligible, refresh, 1_000, backoff);
+    const { stop } = startRemoteSessionsReconciler(() => eligible, refresh, 1_000, backoff);
 
     // 三个 tick 过去,刷新仍在途:不再重复发起,也没有任何记账
     await vi.advanceTimersByTimeAsync(3_000);
@@ -284,5 +454,23 @@ describe('resolveIneligibleRemoteProjectAction', () => {
         disabledControl: true,
       }),
     ).toBe('remove');
+  });
+});
+
+describe('createRemoteReconcilePresence', () => {
+  it('pauses polling after idle while keeping a visible window reconnectable', () => {
+    let now = 1_000;
+    const gate = createRemoteReconcilePresence({ idleMs: 5_000, now: () => now });
+    expect(gate.isActive()).toBe(true);
+    now = 6_000;
+    expect(gate.isActive()).toBe(false);
+    expect(gate.noteActivity()).toBe(true);
+    expect(gate.isActive()).toBe(true);
+    expect(gate.noteActivity()).toBe(false);
+    expect(gate.setVisible(false)).toBe(false);
+    expect(gate.isActive()).toBe(false);
+    now = 20_000;
+    expect(gate.setVisible(true)).toBe(true);
+    expect(gate.isActive()).toBe(true);
   });
 });

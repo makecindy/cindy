@@ -50,7 +50,12 @@ export function registerMemoryWriteTool(registry: MemoryToolRegistry, deps: Memo
       body: z.string().min(1),
       mode: z.enum(['create', 'update', 'append']).optional(),
     },
-    handler: async (args) =>
-      withStore(deps, (store) => store.write(args as WriteOptions)),
+    handler: async (args) => {
+      const saved = deps.beginWrite?.(deps.getSessionContext?.());
+      const result = await withStore(deps, (store) => store.write(args as WriteOptions));
+      if (!result.isError) saved?.({ key: `${args.type}_${args.name}.md`, title: args.title as string,
+        action: args.mode === 'update' || args.mode === 'append' ? 'updated' : 'created' });
+      return result;
+    },
   });
 }

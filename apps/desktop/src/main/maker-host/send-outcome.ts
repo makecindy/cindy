@@ -24,6 +24,8 @@ export const HOST_SEND_FAILURE_CODES = [
    */
   'CREDENTIAL_SWITCH_BUSY',
   'SEND_FAILED',
+  'PLUGIN_TURN_SKIPPED',
+  'PLUGIN_TURN_BLOCKED',
 ] as const;
 
 export type HostSendFailureCode = (typeof HOST_SEND_FAILURE_CODES)[number];
@@ -57,7 +59,11 @@ export type DesktopSendOutcome = HostSendOutcome | DesktopSessionDispatchOutcome
 export type DesktopMakerSendResult =
   | { accepted: true; outcome: DesktopSessionDispatchSuccess }
   | { accepted: false; reason: HostSendFailureCode; outcome: HostSendOutcome }
-  | { accepted: false; reason: 'cancelled-before-dispatch'; outcome: DesktopSessionDispatchFailure };
+  | {
+      accepted: false;
+      reason: DesktopSessionDispatchFailure['reason'];
+      outcome: DesktopSessionDispatchFailure;
+    };
 
 export interface SendOutcomeLogContext {
   owner: string;

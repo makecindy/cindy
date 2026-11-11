@@ -1,28 +1,53 @@
 // ⚠️ 加载结构的硬约束(与 mathWebViewHtml.ts 同一套,改动前先读那边文件头):
-// 阻塞式外链 <script src> 在 CDN 请求挂起(弱网,不是快速失败)时会让页面停在
+// 阻塞式外链 <script src> 在资源请求挂起(弱网,不是快速失败)时会让页面停在
 // "Loading Mermaid..." 直到浏览器自身的 TCP 超时(几十秒)。所以本文件必须保持:
 // 1. 静态文档零外链资源,图表源码作为首屏内容立即绘制;
 // 2. mermaid JS 由内联脚本动态注入,带超时;
-// 3. CDN 按顺序 failover(jsdelivr → npmmirror,后者大陆可达性好),
-//    全部失败就停留在源码展示,永不长时间空转。
+// 3. 固定版本资源随 Mobile 包分发,执行失败就停留在源码展示,
+//    永不长时间空转。
 import { repairMermaidSource } from '@cindy/maker-shared/mermaid-autofix';
 
 import { lightColors } from '@/theme/tokens';
 import { i18n } from '@/i18n';
+import { MOBILE_MERMAID_JS } from '@/session/richContentAssets.generated';
+export { MOBILE_MERMAID_VERSION } from '@/session/richContentAssets.generated';
 
-export const MOBILE_MERMAID_VERSION = '11.14.0';
+/** 本地资源执行超时;异常时停留在源码降级。 */
+const MERMAID_LOCAL_TIMEOUT_MS = 1000;
 
-/** mermaid CDN 源(按顺序尝试)。 */
-export const MOBILE_MERMAID_SCRIPT_URLS: string[] = [
-  `https://cdn.jsdelivr.net/npm/mermaid@${MOBILE_MERMAID_VERSION}/dist/mermaid.min.js`,
-  `https://registry.npmmirror.com/mermaid/${MOBILE_MERMAID_VERSION}/files/dist/mermaid.min.js`,
-];
+// The bundled runtime is immutable. Escape it once on first use, not on startup
+// or for every diagram/theme; only source and callbacks vary between documents.
+let serializedMermaidRuntime: string | undefined;
 
-/** 首选 CDN 源(向后兼容导出;完整降级序列见 MOBILE_MERMAID_SCRIPT_URLS)。 */
-export const MOBILE_MERMAID_SCRIPT_URL = MOBILE_MERMAID_SCRIPT_URLS[0];
-
-/** 单个 CDN 源的就绪超时;超时即切下一源,全部失败停留在源码展示(与 KaTeX 同口径)。 */
-const MERMAID_CDN_TIMEOUT_MS = 6000;
+/** Mermaid 本地动态加载器,只在页面含图表时注入。 */
+export function buildMermaidLoaderJs(
+  onReadyJs: string,
+  onErrorJs = '',
+): string {
+  return `
+    (function () {
+      var done = false;
+      var timer = setTimeout(fail, ${MERMAID_LOCAL_TIMEOUT_MS});
+      function fail() {
+        if (done) return;
+        done = true;
+        clearTimeout(timer);
+        try { ${onErrorJs} } catch (error) { /* 保持源码展示 */ }
+      }
+      try {
+        var script = document.createElement('script');
+        script.textContent = ${serializedMermaidRuntime ??= serializeForScript(MOBILE_MERMAID_JS)};
+        document.head.appendChild(script);
+        if (!window.mermaid) { fail(); return; }
+        try { ${onReadyJs} } catch (error) { fail(); return; }
+        done = true;
+        clearTimeout(timer);
+      } catch (error) {
+        fail();
+      }
+    })();
+  `;
+}
 
 /** mermaid WebView 主题色与展示选项(可选,缺省走 light;调用方从 useTheme().colors 注入)。 */
 export interface MermaidWebViewColors {
@@ -37,9 +62,13 @@ export interface MermaidWebViewColors {
   deferSource?: boolean;
   /** true 时页面允许双指缩放(详情查看);缺省锁定(内联预览,避免列表滚动误触)。 */
   zoomable?: boolean;
+  preview?: boolean;
 }
 
-export function buildMermaidWebViewHtml(source: string, theme: MermaidWebViewColors = {}): string {
+export function buildMermaidWebViewHtml(
+  source: string,
+  theme: MermaidWebViewColors = {},
+): string {
   const surfaceChip = theme.surfaceChip ?? lightColors.surfaceChip;
   const textPrimary = theme.textPrimary ?? lightColors.textPrimary;
   const textSecondary = theme.textSecondary ?? lightColors.textSecondary;
@@ -55,16 +84,19 @@ export function buildMermaidWebViewHtml(source: string, theme: MermaidWebViewCol
   const emptyDiagramLabel = i18n.t('message.renderer.mermaidEmpty');
   const serializedEmptyDiagramLabel = serializeForScript(emptyDiagramLabel);
   // deferSource:首屏留空(干净背景),源码只作降级;否则源码即首屏(弱网零白条)。
-  const firstFrameHtml = deferSource ? '' : `<pre>${escapeHtmlText(trimmed) || escapeHtmlText(emptyDiagramLabel)}</pre>`;
-  // deferSource 模式下,CDN 全部耗尽 / 空源码这两条「静默停留首屏」的路径必须
+  const firstFrameHtml = deferSource
+    ? ''
+    : `<pre>${escapeHtmlText(trimmed) || escapeHtmlText(emptyDiagramLabel)}</pre>`;
+  // deferSource 模式下,本地资源失败 / 空源码这两条「静默停留首屏」的路径必须
   // 显式降级到源码,否则页面永远空白。
   const exhaustFallback = deferSource ? 'showSource();' : '';
   const serializedSource = serializeForScript(trimmed);
   // RN 侧预计算确定性修复版(mermaidAutofix):原文 parse 失败时 WebView 内用它
   // 重试一次。无可修项时注入空串,WebView 侧跳过重试直接走源码降级。
   const repaired = repairMermaidSource(trimmed);
-  const serializedRepaired = serializeForScript(repaired === trimmed ? '' : repaired);
-  const cdnsJson = JSON.stringify(MOBILE_MERMAID_SCRIPT_URLS);
+  const serializedRepaired = serializeForScript(
+    repaired === trimmed ? '' : repaired,
+  );
   return `<!doctype html>
 <html>
 <head>
@@ -138,6 +170,13 @@ export function buildMermaidWebViewHtml(source: string, theme: MermaidWebViewCol
       root.appendChild(pre);
     }
 
+    function snapshotPreview() {
+      if (!${theme.preview === true}) return;
+      Promise.resolve(document.fonts && document.fonts.ready).then(function () {
+        window.__cindyMermaidExportPng('inline-preview', 3);
+      });
+    }
+
     async function renderMermaid() {
       const trimmed = source.trim();
       if (!trimmed || !window.mermaid) return;
@@ -165,6 +204,7 @@ export function buildMermaidWebViewHtml(source: string, theme: MermaidWebViewCol
         const rendered = await window.mermaid.render('mobile-mermaid-diagram', trimmed);
         root.className = '';
         root.innerHTML = rendered.svg;
+        snapshotPreview();
       } catch (error) {
         // 原文失败 → 用 RN 侧预算好的修复版重试一次;再失败才降级源码展示。
         if (repairedSource) {
@@ -173,6 +213,7 @@ export function buildMermaidWebViewHtml(source: string, theme: MermaidWebViewCol
             const rendered = await window.mermaid.render('mobile-mermaid-diagram-fixed', repairedSource);
             root.className = '';
             root.innerHTML = rendered.svg;
+            snapshotPreview();
             return;
           } catch (retryError) {
             // fall through
@@ -197,6 +238,8 @@ export function buildMermaidWebViewHtml(source: string, theme: MermaidWebViewCol
         var w = (vb && vb.width) || rect.width || 800;
         var h = (vb && vb.height) || rect.height || 600;
         var effScale = Math.min(scale || 2, 4096 / Math.max(w, h));
+        // Inline snapshots have a separate pixel budget; full-screen export keeps its resolution.
+        if (id === 'inline-preview') effScale = Math.min(effScale, 1536 / Math.max(w, h));
         var xml = new XMLSerializer().serializeToString(svg);
         var img = new Image();
         img.onload = function () {
@@ -221,34 +264,11 @@ export function buildMermaidWebViewHtml(source: string, theme: MermaidWebViewCol
       }
     };
 
-    // mermaid JS 动态注入:单源超时 ${MERMAID_CDN_TIMEOUT_MS}ms 即切下一 CDN;
-    // 全部失败停留在首屏源码(不改 DOM,不需要额外降级动作)。
+    // mermaid JS 随 Mobile 包分发,只在页面含图表时动态注入;
+    // 执行失败停留在首屏源码,不产生空白页。
     (function () {
-      var cdns = ${cdnsJson};
       if (!source.trim()) { ${exhaustFallback} return; }
-      function attempt(i) {
-        if (i >= cdns.length) { ${exhaustFallback} return; }
-        var done = false;
-        var timer = setTimeout(fail, ${MERMAID_CDN_TIMEOUT_MS});
-        function fail() {
-          if (done) return;
-          done = true;
-          clearTimeout(timer);
-          attempt(i + 1);
-        }
-        var script = document.createElement('script');
-        script.src = cdns[i];
-        script.onload = function () {
-          if (done) return; // 超时后晚到的旧源不串台
-          if (!window.mermaid) { fail(); return; }
-          done = true;
-          clearTimeout(timer);
-          renderMermaid();
-        };
-        script.onerror = fail;
-        document.head.appendChild(script);
-      }
-      attempt(0);
+      ${buildMermaidLoaderJs('renderMermaid();', exhaustFallback)}
     })();
   </script>
 </body>

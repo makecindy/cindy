@@ -37,6 +37,7 @@ function baseInput(patch: Partial<ResolveSessionTailBannerInput> = {}): ResolveS
     projection: { error: null, credentialSwitchWait: null },
     isSessionStreaming: false,
     continuationInFlight: false,
+    sessionMetadataSyncedForConnection: true,
     interruptAcked: false,
     hiddenErrorClientIds: new Set(),
     ...patch,
@@ -54,10 +55,21 @@ describe('resolveSessionTailBanner — error-tail', () => {
     expect(state).toEqual({
       kind: 'error-tail',
       clientId: 'e1',
-      text: 'process exited unexpectedly',
+      text: i18n.t('session.tail.replyFailed'),
+      rawError: 'process exited unexpectedly',
+      reason: null,
+      summaryKey: 'session.tail.replyFailed',
       continueKind: 'error',
       retryable: true,
     });
+  });
+
+  it('keeps a persisted error tail visible before current-connection metadata sync', () => {
+    const state = resolveSessionTailBanner(baseInput({
+      messages: [errorRow('e1', '2026-01-01T00:00:02.000Z', { message: 'boom' })],
+      sessionMetadataSyncedForConnection: false,
+    }));
+    expect(state).toMatchObject({ kind: 'error-tail', clientId: 'e1' });
   });
 
   it('maps legacy app-exit marker rows to the continue-task semantics', () => {
@@ -80,6 +92,44 @@ describe('resolveSessionTailBanner — error-tail', () => {
     expect((state as { text: string }).text).toContain('设置 → 模型供应商');
   });
 
+  it('shows reasoning exhaustion details from a restored error tail', () => {
+    const state = resolveSessionTailBanner(baseInput({
+      messages: [errorRow('limit', '2026-01-01T00:00:02.000Z', {
+        message: 'limit', reason: 'output-limit', outputLimit: { outputTokens: 131072, reasoningTokens: 131064 },
+      })],
+    }));
+    expect(state).toMatchObject({ kind: 'error-tail', retryable: true });
+    expect((state as { text: string }).text).toContain('131064');
+    expect((state as { text: string }).text).toContain(i18n.t('session.tail.outputLimitReasoning'));
+  });
+
+  it('localizes a persisted output limit and keeps manual continuation available', () => {
+    const state = resolveSessionTailBanner(baseInput({
+      messages: [errorRow('limit', '2026-01-01T00:00:02.000Z', {
+        message: 'Pi reached the model output limit.', reason: 'output-limit',
+      })],
+    }));
+    expect(state).toMatchObject({
+      kind: 'error-tail', text: i18n.t('session.tail.outputLimit'), retryable: true,
+    });
+  });
+
+  it('localizes a tool-loop tail from its stable reason and structured details', () => {
+    const state = resolveSessionTailBanner(baseInput({
+      messages: [errorRow('e1', '2026-01-01T00:00:02.000Z', {
+        message: 'internal contract failure: missing_required_field',
+        reason: 'tool_use_loop_detected',
+        toolLoop: { kind: 'rotation', count: 16 },
+      })],
+    }));
+    expect(state).toMatchObject({
+      kind: 'error-tail',
+      text: i18n.t('session.tail.toolUseLoopDetectedRotationWithCount', { count: 16 }),
+      retryable: true,
+    });
+    expect((state as { text: string }).text).not.toContain('missing_required_field');
+  });
+
   it('disables retry for codex stale-thread and invalid-encrypted tail errors', () => {
     // 对齐桌面 ErrorBanner hide-Retry 门控:这两类重试必撞同一失败循环
     const stale = resolveSessionTailBanner(baseInput({
@@ -98,6 +148,37 @@ describe('resolveSessionTailBanner — error-tail', () => {
     expect(encrypted).toMatchObject({ kind: 'error-tail', retryable: false });
     expect((encrypted as { text: string }).text).toContain('加密');
   });
+
+  it('does not relabel a concrete compact overflow as unreadable encrypted history', () => {
+    const state = resolveSessionTailBanner(baseInput({
+      messages: [errorRow('overflow', '2026-01-01T00:00:02.000Z', {
+        message: 'Error running remote compact task: maximum context length exceeded',
+        reason: 'context-overflow',
+      })],
+    }));
+    expect(state).toMatchObject({ kind: 'error-tail', text: i18n.t('session.tail.replyFailed'), retryable: true });
+    expect((state as { text: string }).text).not.toContain(i18n.t('session.tail.remoteCompactEncryptedContent'));
+  });
+
+  // Compact-specific failures can be rebuilt by the host, unlike bare ciphertext errors.
+  it.each([
+    ['context-overflow', 'Error running remote compact task: invalid_encrypted_content'],
+    ['remote-compact-encrypted-content', 'Error running remote compact task: invalid_encrypted_content'],
+    ['context-overflow', 'Error running remote compact task'],
+  ])(
+    'keeps recovery available for a compact ciphertext failure (%s)',
+    (reason, message) => {
+      const state = resolveSessionTailBanner(baseInput({
+        messages: [errorRow('compact', '2026-01-01T00:00:02.000Z', {
+          message, reason,
+        })],
+      }));
+      expect(state).toMatchObject({
+        kind: 'error-tail', retryable: true,
+        text: i18n.t('session.tail.remoteCompactEncryptedContent'),
+      });
+    },
+  );
 
   it('does not fire when the error row is dismissed, superseded, or locally hidden', () => {
     const dismissed = resolveSessionTailBanner(baseInput({
@@ -163,6 +244,13 @@ describe('resolveSessionTailBanner — error-tail', () => {
 });
 
 describe('resolveSessionTailBanner — interrupted(session 双时间戳)', () => {
+  it('stays quiet until metadata is synced for the current connection', () => {
+    expect(resolveSessionTailBanner(baseInput({
+      session: { activeTurnStartedAt: 2000, lastTurnEndedAt: 1000, clearedAt: null },
+      sessionMetadataSyncedForConnection: false,
+    }))).toBeNull();
+  });
+
   it('fires when the active turn started after it last ended and nothing acked it', () => {
     const state = resolveSessionTailBanner(baseInput({
       session: { activeTurnStartedAt: 2000, lastTurnEndedAt: 1000, clearedAt: null },

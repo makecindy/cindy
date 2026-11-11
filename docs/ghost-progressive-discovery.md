@@ -1,0 +1,309 @@
+# 插件渐进式发现与花名册注入（Ghost Progressive Discovery）
+
+> **适用**：修改插件发现链（花名册注入、`ghost_list` / `ghost_info` / `ghost_call`）、
+> 插件运行期可见性门禁、FORGE_GUIDE 作者契约前先读本文。插件基座红线、沙箱与
+> 权限规则的正本仍是 `docs/dev-rules/plugin-security-and-authoring.md`，本文不替代它。
+
+## 1. 目标
+
+模型侧插件发现要同时满足两个硬目标：
+
+- **召回**：用户没有点名插件时，模型能按使用场景想起合适的插件。召回线索必须与
+  Agent Skill 的 description 同级别稳定常驻，且 Claude Code、Codex、Pi 三个
+  harness 行为一致。
+- **零污染**：插件的业务规则、工具明细、参数 schema 只在真正需要时进入会话；
+  常驻内容只有最小召回线索。
+
+与 Agent Skill 的对应关系是：系统提示词区插件花名册中的身份与 `recall` 承担
+frontmatter `name + description` 的召回作用；`manual.items` 只是插件容器级一级目录，
+不对标 frontmatter；`MANUAL.md` 与深层 Markdown 承接 Skill 正文、references 和完整工作流。
+
+## 2. 渐进式披露（权威路由规则）
+
+```text
+【系统提示词区插件花名册】
+  身份 + recall 召回线索
+           │ 得到 ghost_id
+           ▼
+  ┌──────────────────────┐       ┌──────────────────────┐
+  │ ghost_info(ghost_id) │  或   │ ghost_list()         │
+  │ 已知 id 精准查单条    │       │ 全量实时回查          │
+  └──────────────────────┘       └──────────────────────┘
+           │ 两者数据完整度相同，均返回 CindyGhostInfo
+           ▼
+  ┌────────────────────────────────────────────────────┐
+  │ 取得完整 info 后，在两条披露路径之间按任务反复交叉 │
+  └────────────────────────────────────────────────────┘
+           │                              │
+           ▼                              ▼
+  ghost_manual 根索引              ghost_call 调插件顶层
+    → MANUAL.md                     list_tools(category)
+    → 任意深度 Markdown             → 工具/参数/result.rules
+           └──────── 完整调用互相指路 ────────┘
+                          │
+                          ▼
+                信息足够时 ghost_call 执行
+```
+
+- **系统提示词区插件花名册负责第一跳召回。** `recall = whenToUse ?? description`；
+  用户点名插件或上文已有 `ghost_id` 也是 id 来源，但不属于花名册层。
+- **命中后不绕开插件。** 实时详情确认插件能完成当前步骤时，Agent 用插件完成，不为省事改用
+  本机命令行或其他直连方式另起一套设备、浏览器会话或账号；只有插件不支持的步骤另行处理，
+  且仍作用于插件管理的同一对象。用户明确指定做法（如点名用 `adb`／某台 AVD）时以用户为准，
+  不能让 Cindy 比原生 harness 更难用。判断依据是 `ghost_info` 的实时工具，不是作者 `recall`。
+  同一句宿主规则（`GHOST_NO_BYPASS_RULE`）放在插件发现的各条入口：花名册前导、`ghost_info`
+  工具说明，以及没有花名册时的 `ghost_list` 说明（有花名册时前导已在 `ghost_list` 描述里，
+  不重复）。`ghost_info` 与 `ghost_list` 是并列入口、没有固定补查链，缺一条入口，从那条入口
+  发现插件的任务就看不到规则。Agent 往往在查插件之前就决定了用命令行，所以规则必须在动手前
+  可见：工具按需加载时只有 system 段的前导能挡住；没有花名册的任务（伙伴、开始时没有可见
+  插件、缺工作目录）只能靠插件网关常驻注册的这两处工具说明。（2026-10-31：Agent 已命中设备模拟器插件，仍用 SDK
+  `emulator` 起了插件外的安卓模拟器，窗口弹在桌面而不在任务侧栏。）
+- **`ghost_info` 与 `ghost_list` 是并列查询方式。** 已知 id 时用 `ghost_info` 精准现查
+  单条；未命中或需要全量实时回查时用 `ghost_list`。两者都返回完整 `CindyGhostInfo`
+  （id/name/command/recall/setup/tools/manual），不存在 `ghost_list → ghost_info` 的
+  固定补查链。
+- **Manual-only 插件也可被发现。** 非空 `manual.items` 不依赖 `tools`；这类插件的
+  `tools` 返回空数组，通过 `ghost_manual` 按需读取，不启动插件运行时，也不因此取得
+  `ghost_call` 能力。读取仍按插件存在、账号可用、工作目录停用、启用状态依次检查；
+  未声明手册时返回 `GHOST_NOT_FOUND`。无工具且无手册的插件仍隐藏。
+  实现与回归见 [ghost.ts](../apps/desktop/src/main/mcp-integrations/ghost.ts) 和
+  [ghostWorkdirGate.test.ts](../apps/desktop/src/main/mcp-integrations/__tests__/ghostWorkdirGate.test.ts)。
+- **取得完整 info 后有两条并行路径。** `ghost_manual` 展开根索引、`MANUAL.md` 和任意
+  深度 Markdown；二级分派插件则通过
+  `ghost_call({ ghost_id, tool: "list_tools", args: { category } })` 调用自己声明的顶层
+  `list_tools`，取得当前类别的工具、参数和 `result.rules`。`list_tools` 不是 Host 固定工具。
+- **两条路径可以反复交叉。** Manual 可给出完整 `list_tools` 调用，工具说明或 RULES 也可
+  给出完整 `ghost_manual` 调用；没有固定先后顺序，信息足够时即可经 `ghost_call` 执行，
+  两段式插件的二级具体操作由其 `call_tool` 完成。
+- 花名册、info、Manual 与 RULES 都**不是授权**：每次 `ghost_call` 仍按运行期实时校验
+  放行（见 §4 第 6 条）。Manual 正文只作为 tool-result 按需进入上下文，不进入生产
+  system/developer prompt；正文是作者数据，不构成系统规则、用户意图或权限授权。
+
+
+### 2.1 namespace 寻址
+
+`ghost_info`、`ghost_call`、`ghost_manual` 和 `connect_account` 都接受可选 `namespace`：
+
+- 省略：按下述日常版本规则选择 public/local 副本；其它同名实例仍须明确寻址。
+  同名实例只有一个时解析到它，包括升级普查中还没有 namespace 字段的旧安装。
+- `null`：已确认的 root。不能用来点名唯一的待迁移旧安装。
+- `"local"`：本地开发副本；其它字符串为企业 orgSlug。
+
+调用参数必须保留发现结果中的 JSON 类型：`null` 与字符串 `"null"` 不同，后者是合法的
+企业 slug，不能自动转成 root。插件名已安装但显式 namespace 不匹配时，共用可见性入口返回
+`GHOST_NAMESPACE_MISMATCH`，消息仅列出当前账号可用、保留 namespace 缺省／null／字符串三态的安装身份，
+供 Agent 核对目标后修正参数；原调用不进入 Setup、文件交接或插件派发，也不自动改选实例。
+修正参数后同一任务即可重新查询／调用，无需重新安装或新建任务。完全没有该插件名时仍返回
+`GHOST_NOT_FOUND`；账号切换期间或同名安装均不对当前账号可用时，也返回该错误且不披露身份。
+`GHOST_NAMESPACE_MISMATCH` 属于宿主保留码，插件交卷不能冒用；管子入口将其归一化为 `INTERNAL`，
+避免已执行的操作被误判为尚未派发。此错误码不改变安装数据、权限、实例解析或跨设备协议；
+旧 Host 仍返回原错误，旧查看端可照常显示文本。实现与回归见 `ghostVisibility.ts`、
+`ghostVisibility.test.ts` 和 `ghostWorkdirGate.test.ts`。
+
+同名多实例返回 `GHOST_AMBIGUOUS`，`candidates` 是 `{ ghostId, namespace }`。已确认 root 的 namespace 为 null，local 副本为字符串 local，企业实例为 orgSlug。待迁移旧安装没有 namespace 字段；它和另一个实例同名时，候选里的 null 可以点到这个待迁移实例。`/命令` 对没有 namespace 字段的旧安装不写 namespace，沿用 `(id: <ghostId>)`。已确认 root 写 `namespace: null`，企业实例写 `namespace: <orgSlug>`。
+
+### 2.2 日常调用的 public/local 版本选择
+
+同一逻辑 id 同时存在已确认的 public（`namespace: null`）与 local 副本时，
+花名册、`ghost_list` 和省略 namespace 的默认查询／调用只选择版本较新的一份。
+按 SemVer 比较数值段和预发布标识，build metadata 不影响版本优先级；版本相同选 public。
+不是本地优先，也不是公开版永久优先。每次实时查询重新选择，更新／启停／工作目录变化
+后不沿用旧胜者。已停用、下线或当前账号／工作目录不可用的副本不遮挡可用副本。
+
+企业 namespace、尚未确认的旧身份、无法比较的历史版本和重复物理身份不按名字强行合并，
+保持原来的明确寻址／歧义处理。显式 namespace 或物理实例键仍精确指向原安装，供明确指定
+来源的调试、历史页面与在途调用使用；不得静默把已绑定的请求、凭据或文件授权换给另一副本。
+管理列表保留所有安装，不改启用设置、不搬凭据和数据、不删除旧包。
+
+生产判据为 `ghostVisibility.ts` 的 `preferLatestLocalOrPublicGhosts`；
+花名册与实时清单在现有可见性过滤后复用它，默认名称解析也复用同一判据。
+回归见 `ghostVisibility.test.ts` 与 `ghostWorkdirGate.test.ts`。
+
+## 3. 花名册（roster）
+
+普通任务可调用 `connect_account({kind:"plugin", id:ghost_id})`，由 Host 复用配置卡等待连接，
+不必先触发插件业务调用。等待受当前任务取消、插件可见性及原配置卡版本校验约束。
+伙伴继续使用原持久授权卡与配置策略；Host 账号入口仍只用于伙伴。显式 `reauthorize`
+只呈现已声明的 OAuth、Secret 或连接配置动作，不删除现存账号。没有 Host 配置动作的插件应使用其
+设置页或手册中的登录工具；空的配置就绪状态不能作为平台账号已登录的证据。
+
+### 3.1 内容与口径
+
+- 每条 = `{id, name, command, recall}`；`recall = whenToUse ?? description`。
+- 单条 recall 上限为协议常量 `GHOST_MANIFEST_SUMMARY_MAX_CHARS`（= 300，正本在
+  本仓 `packages/plugin-protocol/src/manifest.ts`；desktop 的
+  `apps/desktop/src/shared/ghost.ts` 是需要同步维护的完整协议镜像，不是 re-export）。
+- 序列化前逐字段折叠空白（`replace(/\s+/g, " ")` + trim）并防御截断
+  （name ≤ 64、command ≤ 32、recall ≤ 300）；条目按 id 排序；最多 16 条、
+  总预算 8000 字符。
+- 进入花名册的过滤条件：已启用的 chip 插件 + 账号可用 +（有工具或非空 `manual.items`）+ 当前工作目录未停用
+  （`visibleChipGhosts`，`apps/desktop/src/main/mcp-integrations/ghost.ts`）。
+
+### 3.2 注入位置（vendor-neutral，一份 formatter 两处消费）
+
+- **system 段（主通道）**：`AgentDeps` 新增回调按 `{workingDir}` 取花名册文本，三 harness 各自在
+  会话装配点追加：
+  - Claude Code：`buildQuery` → `systemPrompt.append`；
+  - Codex：`startSession` → `developerInstructions`（HTTP proxy / OAuth WS /
+    远程 SSH 三形态同一拼装函数；远端 SSH 下花名册按 §3.4 为空）；
+  - Pi：`PiAgent.startSession` 把花名册段追加进 `--append-system-prompt`
+    （Desktop 侧 `composePiSystemPrompt` 预构建的产品段保持不变）。
+- **`ghost_list` 工具描述（副通道）**：同一 formatter 输出，与 system 段字节
+  一致。副通道保证只看工具面的路径（以及历史行为）不回退。
+- 纯格式化函数下沉在 `packages/cindy-tools`，主进程与 MCP server 共用，避免两处
+  实现漂移。
+
+伙伴仅保留插件发现网关，不默认注入全量花名册；按需调用 `ghost_list` / `ghost_info`
+复用同账号已有插件。伙伴内置工具集的冻结名单不适用于插件 ID，插件仍由 §4 的实时可见性与
+调用授权守门。
+
+已安装插件无法满足请求时，伙伴经 `ghost_market_search` 查询 Cindy 服务端市场与用户配置的
+自定义市场；不以 Skill/MCP 搜索或模型供应商 Apps 市场代替。搜索只发现目录，不触发默认
+安装、更新、移除或账本修复。结果区分已装状态、实时可用性和来源不可用，失败不能解释为
+能力不存在。选定缺失插件后，`ghost_market_install` 绑定真实 plugin/release，复用现有
+安装事务与当前 Agent 操作授权；既有安装不重装、不启用、不换源。安装不等于登录，仍须
+经 `ghost_info` 与现有 `connect_account` / setup 链路连接，再续接原请求。宿主没有市场
+工具时如实说明并引导可信桌面插件页。实现见 `plugin-market/agentTools.ts`，回归覆盖
+`agentTools.test.ts`、市场 service 测试与 `ghostWorkdirGate.test.ts`。
+
+### 3.3 快照语义
+
+- 花名册在**会话装配时求值一次，会话内恒定**——这是 prompt 前缀缓存安全的前提，
+  因此禁止时间戳、随机 boundary 等每次变化的内容。
+- 新会话才能看到插件变动；会话中途的变动靠 `ghost_list` 现查 + 运行期门禁兜底。
+
+### 3.4 fail-closed
+
+- formatter 的调用方必须传入**已解析的会话 workingDir**；拿不到语境（ALS 缺失、
+  bridge 建线期 `workingDir === ''`）时**不注入，绝不回退全量**——否则会把当前
+  目录已停用插件的元数据送进高权重 prompt。
+- 远端 SSH 的 Claude / Codex（`remoteHostId`）不注入花名册：固定 `cindy` MCP
+  不在远端注入白名单，agent 调不到 ghost 工具；且远端 workingDir 是远程路径，
+  无法匹配本地的目录停用记录。远端 Pi 经 MCP bridge 隧道可达 in-process
+  `cindy`，伙伴提示词与 helper 工具描述应保留 `ghost_list` / `ghost_info` /
+  `ghost_call`；花名册 system 段仍 fail-closed（远端路径对不上本地停用记录，
+  伙伴会话也不注入全量花名册，按需 `ghost_list`）。
+- 设备托管（远程供应商、供应商分享的受邀者、供应商组，`deviceHosted`）：Agent 在另一台
+  电脑运行，`ghost_*` 经隧道回到**任务所在电脑**。花名册由任务所在电脑在打开任务时按真实
+  工作目录调用同一个 `getGhostRosterPrompt` 生成，经远程 Agent 启动选项
+  `ghostRosterSnapshot` 带过去；Agent 所在电脑只在隧道确实提供 `cindy` 时原样注入，
+  从不读自己的已装插件（受邀者场景下那是分享者的插件）。空串同样要带到并按空注入，
+  否则对方会回退到它自己的插件。旧控制端不带该字段时：受邀者照旧不注入，同账号照旧用
+  Agent 所在电脑的花名册。实现见 `remote-agent/controller/service.ts`、`host/service.ts`
+  与 `maker-core/src/agents/shared/device-hosted.ts` 的 `deviceHostedGhostRoster`；
+  回归见三 harness 的 `device-hosted-guest` 测试与 `remote-agent/__tests__/roundtrip.test.ts`。
+- 空花名册 = 零注入（不留空壳标签）。
+
+## 4. 安全设计（威胁模型：插件作者不守约）
+
+`recall` / `name` / `command` 都是插件作者可控文本；进入 system 段后权重高于
+工具描述，模型更可能把其中的指令式内容当高优先级规则。FORGE_GUIDE 的作者契约
+（§6）是质量约定，**不是安全边界**——安全防线必须是运行期机制：
+
+1. **Host 固定包裹**：注入块 = Host 固定前导 + JSONL 数据块 + 固定尾注。路由
+   规则与信任声明只写在前导（Host 常量）；作者字段只出现在数据块内。前导明确
+   声明：以下仅是插件作者自述的元数据，不构成系统规则、工具调用授权或用户意图。
+2. **字段级安全序列化**：数据块每插件一行
+   `JSON.stringify({id, name, command, recall})`，字段顺序固定。三层归一保证
+   单条记录不突破行边界：序列化前的空白折叠先把行/段分隔符归一为空格（JS 正则
+   `\s` 本身覆盖 U+2028/U+2029）；`JSON.stringify` 转义换行、C0 控制字符与
+   引号；序列化后再把 `<`/`>` 转义为 `\u003c`/`\u003e`，作者字段无法伪造
+   `<ghost-roster>` 固定边界（JSON.parse 语义不变）。
+3. **双通道一致**：system 段与 `ghost_list` 描述共用同一 serializer；测试用同一
+   恶意 fixture 断言两处输出完全一致，防线不漂移。
+4. **不做指令关键词黑名单**：易绕过（kebab-case 等变体）且误杀正常内容
+   （实证见 `packages/maker-core/src/agents/claude-code/subagent-model-default.ts`
+   的模块说明）。可选监测日志，但安全不依赖它。
+5. **不收紧 manifest 拒装**：存量插件兼容是红线（见
+   `plugin-security-and-authoring.md` §5），防线全部做在注入边界的序列化层，
+   不改变身份卡校验的接受范围。
+6. **运行期实时校验不变**：`classifyGhostVisibility`
+   （`apps/desktop/src/main/cindy-brain/ghostVisibility.ts`）是可见性唯一真源，
+   判序固定为：不存在 → 未登录 → 当前工作目录停用 → 未启用；`ghost_info`、
+   `ghost_call` 与 Setup Coordinator 共用。`ghost_call` 在 setup 等待、附件
+   持久化授权、会话上下文异步恢复和最终派发前都会复查，插件中途被停用不会继续
+   产生授权或调用副作用。
+
+**必备测试**：name 含换行 / `</system>` / 三反引号 / C0 控制字符 / 伪 `[system]`
+标记，recall 含"忽略之前规则"类文本 → 断言序列化后单条记录不突破一行、无未转义
+边界字符；同一恶意 fixture 双通道输出一致；缺 workingDir → 双通道都空注入；
+目录停用插件不出现在任一通道。
+
+## 5. 会话形态覆盖矩阵
+
+装配点定在 **Agent runtimeConfig / `agent.startSession` 层**（而不是
+`register.ts` 的 bootstrap helper）。Desktop 只有一套 Maker 单例，所有持久会话
+最终统一走 `maker.createSession → agent.startSession`，因此：
+
+| 会话形态                                                                    | 是否吃到 system 段花名册                         |
+| --------------------------------------------------------------------------- | ------------------------------------------------ |
+| 本地普通会话                                                                | 是                                               |
+| device-link 手机发起/接管（agent 真身在被控端）                             | 是                                               |
+| 远程供应商 / 供应商分享 / 供应商组（Agent 在另一台电脑，`deviceHosted`）    | 是——用任务所在电脑带来的快照（§3.4）            |
+| Orca worker（含 bridge 对 dormant worker/lead 的 rehydrate）                | 是                                               |
+| scheduler 定时任务（heartbeat / persistent / ephemeral）                    | 是                                               |
+| send_to_session 新建与 lazy-resume、IM/飞书会话、hook-control、Goal restore | 是                                               |
+| fork 后的新分支（fork 本身不启 agent，首次 send 时装配）                    | 是                                               |
+| utility oneShot（起标题/摘要/git snapshot 等内部辅助）                      | 否——本来就没有 system 段与插件工具面，不构成缺口 |
+
+**设计边界（防回归）**：scheduler、hook-control、IM/飞书、Goal、Orca bridge 这些
+入口**直连 `maker.createSession`，绕过 `register.ts` 的 bootstrapSession**。
+产品段注入必须留在 Agent 层——谁把它上移到 register.ts 的 bootstrap helper，
+谁就漏掉这些入口。
+
+## 6. 作者契约（FORGE_GUIDE，质量约定）
+
+- `whenToUse` 只写系统提示词区插件花名册需要的**召回场景**，不写行为规则、工具
+  调用顺序或错误协议；缺省时回落 `description`。
+- 工具/参数 description 承载单工具局部契约（用途、输入输出、调用前限制）。二级分派
+  插件的 `list_tools(category)` 必须随实时工具明细下发当前类别的动态参数与
+  `result.rules`；`call_tool` 参数错误时返回对应 schema 供自纠（FORGE_GUIDE §3.5）。
+- Manual 不按篇幅分流：它承载多工具组合、跨类别完整流程、复杂工具深入用法、前置
+  检查、顺序/分支、失败恢复、交付标准、长期稳定的共同原则和分层资料。短但跨工具的
+  关键原则可以属于 Manual；很长但仅是单工具参数枚举，仍属于工具或类别契约。
+- 同一规则只保留一个权威落点。Manual 与 `list_tools` 用完整的 `ghost_manual` /
+  `ghost_call({ ghost_id, tool: "list_tools", args: { category } })` 调用互相指路，
+  可以反复交叉，不是固定顺序。
+- 打包期对疑似规则化的 `whenToUse` 只做 warning，不阻断安装（存量兼容）。
+- Manual 使用顶层 `manual.items`；`MANUAL.md` 默认一层直达，内容确需分层时再拆深层，
+  并在入口给出可直接照抄的完整下一步调用，避免循环索引。
+
+## 7. 明确不做的事
+
+- 不新增使用插件的全局路由 Skill；不把插件业务手册铺成全局 Skill。内置
+  `cindy-plugin-creator` 仅负责编写插件，不替代插件业务的渐进发现。插件工具的深入用法
+  使用按需读取的 `manual`；需要斜杠命令或本地脚本的完整工作流可用插件 Skill 槽，它装在
+  Cindy 私有目录，随插件启停（见插件编写手册 §4.16）。
+- 不维护排他的 active plugin / active context；插件切换不做上下文替换，规则
+  适用范围由 `ghost_id + category` 边界保证。
+- 不引入宿主级 rules_revision / receipt 回执协议。
+- 不做指令关键词黑名单；不收紧 manifest 校验的接受范围。
+
+## 8. 关键代码坐标
+
+- 花名册 formatter 与 Ghost 固定工具：
+  `packages/cindy-tools/src/ghost/mcpServer.ts`
+- 花名册取数与过滤（`visibleChipGhosts` / `getRosterItems`）：
+  `apps/desktop/src/main/mcp-integrations/ghost.ts`
+- 可见性唯一真源：`apps/desktop/src/main/cindy-brain/ghostVisibility.ts`
+- 作者契约：`apps/desktop/resources/system-skills/cindy-plugin-creator/references/`；
+  `apps/desktop/src/main/cindy-brain/forgeGuide.ts` 组合为兼容的 `FORGE_GUIDE`
+- 摘要与 manual 契约：本仓 `packages/plugin-protocol/src/manifest.ts`，desktop
+  在 `apps/desktop/src/shared/ghost.ts` 维护完整镜像
+- 三 harness 注入落点：`packages/maker-core/src/agents/claude-code/index.ts`
+  （buildQuery）、`packages/maker-core/src/agents/codex/index.ts`
+  （startSession → developerInstructions）、
+  `packages/maker-core/src/agents/pi/index.ts`（startSession →
+  `--append-system-prompt`）；Pi 的 host 侧装配在
+  `apps/desktop/src/main/maker-host/pi-host.ts`（buildPiAgent /
+  composePiSystemPrompt）
+
+### 任务内授权指引
+
+Desktop 的 Claude/Codex/Pi Host 追加同一静态授权指引，复用现有发现及市场安装工具，
+不改安装权限或来源策略。已有登录态时，用户明确要求更新授权仍调用 `reauthorize:true`；
+私密值只填原卡片，不进入工具参数或对话。先等待 Host 完成，再以最小只读调用验证平台权限。
+提示词保持原 system 前缀，无设备 ID、凭据、时间戳或动态账号状态；详见
+[远程授权契约](remote-plugin-oauth.md) 的兼容性与缓存影响。
+
+本地文件与 Forge 默认安装到 local。花名册、详情和调用始终保留真实 namespace；同名多份必须按用户目标选择，禁止按公开市场、企业或 local 排隐式优先级。已有任务绑定的实例键继续指向原实例，不迁移任务。

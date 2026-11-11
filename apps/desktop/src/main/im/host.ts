@@ -15,26 +15,38 @@ import { app, ipcMain, BrowserWindow, net, shell } from 'electron';
 
 import {
   createIM,
+  BlueBubblesIM,
+  LocalWebhookReceiver,
   createDiscordIM,
   createDingTalkIM,
   createFeishuIM,
   createTelegramIM,
   createWecomIM,
+  type DingTalkIM,
+  type DiscordChannelAccessStore,
+  type DiscordIM,
+  type FeishuIM,
   type IMHost,
+  type TelegramBehaviorConfig,
+  type TelegramIM,
+  type WecomIM,
 } from '@cindy/im';
 import { TencentIlinkTransport } from '@cindy/wechat-ilink';
 
+import { inboundFileStaging } from './shared/inboundFileStaging';
+import { verifiedInboundMediaMime } from './shared/inboundMediaVerify';
 import { createLogger } from '../logger';
-import { resolveSafe as resolveXdtImageUrl } from '../imageCacheStore';
-import { resolveSafe as resolveCindyMediaUrl } from '../cindy-media/blobStore';
+import { resolveSafe as resolveXdtImageUrl } from '../imageCacheStore.desktop';
+import { resolveSafe as resolveCindyMediaUrl } from '../cindy-media/blobStore.desktop';
 import {
   integrationCacheGet,
   integrationCacheKey,
   integrationCachePut,
 } from '../cindy-media/integrationCache';
 import { pinBlob } from '../cindy-media/ledger';
-import { t } from '../i18n';
+import { t } from '../i18n.desktop';
 import { discordUiText } from './discord/uiText';
+import { discordChannelAccessStore } from './discord/channelAccessStore';
 import { telegramUiText } from './telegram/uiText';
 import {
   patchTelegramBehavior,
@@ -47,6 +59,7 @@ import { listTelegramKnownGroups } from './telegram/groupWindow';
 import { assertTrustedAppRendererEvent } from '../security/trustedAppRenderer.js';
 import { throwIpcError } from '../utils/ipcValidate.js';
 import { imHostAccountScope } from './accountScopeBridge';
+import { blueBubblesStateStorage } from './imessage/storage';
 import { ownerScopedImSecrets } from './ownerScopedStorage';
 import { captureImAccountGeneration, isImAccountGenerationCurrent } from './accountBoundary';
 import { getDbClient } from '../localDb/client/current';
@@ -56,7 +69,8 @@ import {
   WechatCompatibilityPolicyService,
 } from './wechat/compatibilityPolicy';
 import { fetchPublicImageBytes } from './publicImageFetch';
-import { buildPersonalBotCommandMenu } from './shared/personalBotCommands';
+import { buildPersonalBotCommandMenu } from './shared/botCommands';
+import { shouldAnnounceFeishuLifecycle } from './feishu/lifecycleAnnouncements';
 
 const log = createLogger('im/host');
 
@@ -83,7 +97,7 @@ const host: IMHost = {
         cacheKey: integrationCacheKey(integration, token),
         integration,
         buffer,
-        mimeType,
+        mimeType: verifiedInboundMediaMime(buffer, mimeType, 'image'),
         // 常规入站图直接按用户附件保存；需要跨账户竞态保护的 transport 可先
         // 以可回收 staging 写入，确认归属后由消息落库的 pinBlob 提升为用户附件。
         isCache: staging === true,
@@ -91,6 +105,7 @@ const host: IMHost = {
       return {
         absPath: hit.absPath,
         url: hit.url,
+        mimeType: hit.mimeType,
         ...(staging ? { discard: hit.rollbackRef } : {}),
       };
     },
@@ -99,7 +114,7 @@ const host: IMHost = {
         cacheKey: integrationCacheKey(integration, token),
         integration,
         buffer,
-        mimeType,
+        mimeType: verifiedInboundMediaMime(buffer, mimeType, 'av'),
         // IM 入站媒体最终属于用户附件；在消息落库挂 session owner 前先按
         // 可回收暂存处理，失效账户只回滚本次新增的 cache ref。
         isCache: true,
@@ -144,6 +159,9 @@ const host: IMHost = {
     },
     fetchRemoteImage: (url, maxBytes) => fetchPublicImageBytes(url, maxBytes),
   },
+  // 入站非媒体文件: 按账号暂存, 路由到任务后由 turnRunner 移入任务附件目录;
+  // 不再写下方 paths 里的 cc-agent/*-media(冻结的历史兼容层, 仅供读取旧消息)。
+  files: inboundFileStaging,
   secrets: ownerScopedImSecrets,
   ipc: {
     throwIpcError,
@@ -178,8 +196,24 @@ const host: IMHost = {
   createLogger,
 };
 
-export const feishuIm = createFeishuIM(host);
+export const feishuIm = createFeishuIM(host, {
+  shouldAnnounceLifecycle: shouldAnnounceFeishuLifecycle,
+});
+/**
+ * 伙伴自有飞书 / Lark 连接的传输层实例: 凭证与 TOFU 主人按连接前缀隔离、不注册设置卡
+ * IPC。非主人仅可通过群 @ 进业务层，私聊只认已绑定主人。
+ */
+export function createBotFeishuIM(secretKeyPrefix: string): FeishuIM {
+  return createFeishuIM(host, {
+    secretKeyPrefix,
+    ipc: false,
+    guests: true,
+    shouldAnnounceLifecycle: shouldAnnounceFeishuLifecycle,
+  });
+}
 export const discordIm = createDiscordIM(host, {
+  channelAccess: discordChannelAccessStore,
+  ownerOnlyCardNotice: () => t('settings.discordBot.channels.ownerOnlyCardNotice'),
   resolveImageUrl: resolveManagedImageAbsPath,
   expiredCardNotice: discordUiText.expiredCardNotice,
   ownerNoticeText: (phase) => t(`settings.discordBot.ownerNotice.${phase}`),
@@ -193,10 +227,61 @@ export const telegramIm = createTelegramIM(host, {
   // owner 私聊的 "/" 命令菜单(BotCommandScopeChat 只发 owner, 其他人不可见)。
   commandMenu: buildPersonalBotCommandMenu((key) => t(key)),
 });
+/**
+ * 伙伴自有 Telegram 连接的传输层实例: 与设置页那份同一套宿主能力, 但凭证按连接
+ * 前缀隔离、不注册设置卡 IPC；私聊只认已绑定主人，群参与方式沿用原配置。
+ * 行为配置由连接记录给(群参与模式按连接各一份, 表情 / 引用档位用默认值 —— 伙伴的
+ * 身份与分寸来自它的 SOUL, 不读设置页的人格); 命令菜单去掉交给伙伴后不在渠道里改的
+ * 模型 / 权限 / 工作目录三条。
+ */
+export function createBotTelegramIM(
+  secretKeyPrefix: string,
+  options: { behavior: () => TelegramBehaviorConfig },
+): TelegramIM {
+  return createTelegramIM(host, {
+    resolveImageUrl: resolveManagedImageAbsPath,
+    expiredCardNotice: telegramUiText.expiredCardNotice,
+    ownerNoticeText: (phase) => t(`settings.telegramBot.ownerNotice.${phase}`),
+    behavior: options.behavior,
+    commandMenu: buildPersonalBotCommandMenu((key) => t(key), { surface: 'companion' }),
+    secretKeyPrefix,
+    ipc: false,
+  });
+}
 export const dingtalkIm = createDingTalkIM(host, {
   fetcher: (input, init) => net.fetch(input instanceof URL ? input.toString() : input, init),
 });
 export const wecomIm = createWecomIM(host);
+/**
+ * 伙伴自有企业微信 / 钉钉 / Discord 连接的传输层实例: 与设置页那份同一套宿主能力,
+ * 凭证按连接前缀隔离、不注册设置卡 IPC。三者的主人认定沿用各自传输层(企业微信 / 钉钉
+ * TOFU 首个私聊者, Discord 填主人 id), 群消息只有企业微信与钉钉有(钉钉 @ 触发)。
+ */
+export function createBotWecomIM(secretKeyPrefix: string): WecomIM {
+  return createWecomIM(host, { secretKeyPrefix, ipc: false });
+}
+export function createBotDingTalkIM(secretKeyPrefix: string): DingTalkIM {
+  return createDingTalkIM(host, {
+    fetcher: (input, init) => net.fetch(input instanceof URL ? input.toString() : input, init),
+    secretKeyPrefix,
+    ipc: false,
+  });
+}
+export function createBotDiscordIM(
+  secretKeyPrefix: string,
+  options: { channelAccess?: DiscordChannelAccessStore } = {},
+): DiscordIM {
+  return createDiscordIM(host, {
+    // 服务器频道白名单按连接各一份、由连接记录提供（缺省 = 不开放任何频道）。
+    ...(options.channelAccess ? { channelAccess: options.channelAccess } : {}),
+    ownerOnlyCardNotice: () => t('settings.discordBot.channels.ownerOnlyCardNotice'),
+    resolveImageUrl: resolveManagedImageAbsPath,
+    expiredCardNotice: discordUiText.expiredCardNotice,
+    ownerNoticeText: (phase) => t(`settings.discordBot.ownerNotice.${phase}`),
+    secretKeyPrefix,
+    ipc: false,
+  });
+}
 /**
  * Telegram 个人 bot 的行为/人格/群参与配置 IPC(设置卡数据通道)。
  * 必须由 bootstrap 显式调用(与 im.registerIpc() 同期) — 不能放模块顶层:
@@ -307,3 +392,17 @@ export const im = createIM([
   dingtalkIm,
   wecomIm,
 ]);
+
+const localImReceivers = new Map<string, LocalWebhookReceiver>();
+export function createBotIMessageIM(secretKeyPrefix: string, connectionId: string): BlueBubblesIM {
+  return new BlueBubblesIM(host, {
+    secretPrefix: secretKeyPrefix,
+    storage: blueBubblesStateStorage(connectionId),
+    receiver: (listenHost, port) => {
+      const key = `${listenHost}:${port}`;
+      let receiver = localImReceivers.get(key);
+      if (!receiver) { receiver = new LocalWebhookReceiver(listenHost, port); localImReceivers.set(key, receiver); }
+      return receiver;
+    },
+  });
+}

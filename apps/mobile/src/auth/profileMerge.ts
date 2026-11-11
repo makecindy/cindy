@@ -11,9 +11,6 @@ import type { AuthMembership } from '@cindy/auth-client';
 
 import type { MobileUser } from './AuthContext';
 
-export const DEFAULT_MODEL = 'claude-sonnet-4-6';
-export const DEFAULT_EFFORT = 'medium';
-
 export function mapMembershipToMobileUser(
   membership: AuthMembership,
   passportId?: string,
@@ -24,12 +21,11 @@ export function mapMembershipToMobileUser(
     // auth-server 自助头像(PATCH /api/me/profile);null = 未设置(首字母兜底)。
     avatar: membership.avatarUrl ?? null,
     email: membership.email,
-    defaultModel: DEFAULT_MODEL,
-    defaultEffort: DEFAULT_EFFORT,
     membershipKind: membership.kind,
     membershipRole: membership.role,
     orgId: membership.orgId,
     orgName: membership.orgName,
+    orgLogoUrl: membership.orgLogoUrl ?? null,
     passportId: passportId ?? membership.passportId ?? '',
   };
 }
@@ -45,8 +41,7 @@ export function mergeMembershipWithExisting(
     ...mapped,
     // membership 自助头像优先;未设置时保留既有展示值。
     avatar: mapped.avatar ?? existing.avatar,
-    defaultModel: existing.defaultModel,
-    defaultEffort: existing.defaultEffort,
     passportId: mapped.passportId || existing.passportId,
+    orgLogoUrl: mapped.orgLogoUrl ?? existing.orgLogoUrl ?? null,
   };
 }

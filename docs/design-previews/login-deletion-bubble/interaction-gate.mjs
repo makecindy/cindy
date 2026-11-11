@@ -7,6 +7,8 @@
 //  5. 桌面 clamp:宽度 @800=670 / @717=669 / @600=552,top 恒 72
 //  6. 压力态:气泡撑高 > completed、间距仍 22/20、copy 居中(text-align)
 //  7. 热区:dismiss 命中区 ≥44×44(desk py 扩张 45)
+//  8. 多语言:共享 SUPPORTED_LOCALES 的每个语言在 desk/phone、light/dark、三态均
+//     有文案、可换行且不裁切;completed 底距仍满足产品几何。
 // 用法:node interaction-gate.mjs(在 demo 目录)。exit 2 = FAIL。
 
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
@@ -43,6 +45,8 @@ const PLATS = ['desk', 'phone', 'pad-landscape', 'pad-portrait'];
 // 与登录组同缩放;旧版把设计单位当物理 px 写死,所以这里不留任何物理常量)。
 const TRUTH = JSON.parse(readFileSync(join(demoDir, 'truth.json'), 'utf8'));
 const tv = (o) => (o && typeof o === 'object' && 'value' in o ? o.value : o);
+const SUPPORTED_LOCALES = (TRUTH.supportedLocales ?? []).map(tv);
+if (!SUPPORTED_LOCALES.length) throw new Error('truth.supportedLocales 为空');
 const DESK_G = Object.fromEntries(Object.entries(TRUTH.desktop.geometry).map(([k, v]) => [k, tv(v)]));
 const MOB_G = Object.fromEntries(Object.entries(TRUTH.mobile.geometry).map(([k, v]) => [k, tv(v)]));
 const MOB_S = Object.fromEntries(Object.entries(TRUTH.mobile.surface).map(([k, v]) => [k, tv(v)]));
@@ -95,7 +99,8 @@ async function gotoCase(plat, mode = 'light', lang = 'zh-CN', state = 'deletion-
   await page.evaluate(() => localStorage.clear());
   for (const [k, v] of [['plat', plat], ['mode', mode], ['lang', lang]]) {
     const el = await page.$(`[data-qa-pref="${k}:${v}"]`);
-    if (el) await el.click();
+    if (!el) throw new Error(`缺少偏好按钮 ${k}:${v}`);
+    await el.click();
   }
   await page.click(`[data-qa-state-btn="${state}"]`);
   await page.waitForFunction((id) => window.__qa.current() === id, state, { timeout: 5000 });
@@ -198,6 +203,65 @@ for (const plat of ['desk', 'phone']) {
         g.bubbleH > h0 + minGrow,
         `压力态撑高 ${g.bubbleH.toFixed(0)} > completed ${h0.toFixed(0)} + ${minGrow.toFixed(1)}`,
       );
+    }
+  }
+}
+
+// 8:当前支持语言全集——三态长文案在 desk/phone × light/dark 中均真实进入布局。
+for (const plat of ['desk', 'phone']) {
+  const G = plat === 'desk' ? DESK_G : MOB_G;
+  for (const mode of ['light', 'dark']) {
+    for (const lang of SUPPORTED_LOCALES) {
+      for (const state of ['deletion-pending', 'deletion-processing', 'deletion-completed']) {
+        await gotoCase(plat, mode, lang, state);
+        const m = await page.evaluate(() => {
+          const bubble = document.querySelector('.db-bubble');
+          const title = bubble?.querySelector('.db-title');
+          const copy = bubble?.querySelector('.db-copy');
+          if (!bubble || !title || !copy) return null;
+          const br = bubble.getBoundingClientRect();
+          const tr = title.getBoundingClientRect();
+          const cr = copy.getBoundingClientRect();
+          const copyStyle = getComputedStyle(copy);
+          const dismiss = bubble.querySelector('.db-dismiss');
+          let gapBottom = null;
+          if (dismiss) {
+            const dr = (dismiss.querySelector('.db-dismiss-text') ?? dismiss).getBoundingClientRect();
+            gapBottom = br.bottom - 1 - dr.bottom;
+          }
+          return {
+            title: title.textContent?.trim() ?? '',
+            copy: copy.textContent?.trim() ?? '',
+            bubbleH: br.height,
+            noClip:
+              title.scrollWidth <= title.clientWidth + 1 &&
+              title.scrollHeight <= title.clientHeight + 1 &&
+              copy.scrollWidth <= copy.clientWidth + 1 &&
+              copy.scrollHeight <= copy.clientHeight + 1,
+            wrappedByLayout: copyStyle.whiteSpace === 'normal' && copyStyle.textAlign === 'center',
+            titleH: tr.height,
+            copyH: cr.height,
+            gapBottom,
+            scale: window.__qa.scale(),
+          };
+        });
+        const tag = `${plat}:${mode}:${lang}:${state.replace('deletion-', '')}`;
+        check(
+          `locale-layout:${tag}`,
+          Boolean(m && m.title && m.copy && m.bubbleH > 0 && m.titleH > 0 && m.copyH > 0 && m.noClip && m.wrappedByLayout),
+          m
+            ? `title=${JSON.stringify(m.title)} copy=${m.copy.length}字 noClip=${m.noClip} centerWrap=${m.wrappedByLayout}`
+            : '气泡/标题/正文缺失',
+        );
+        if (state === 'deletion-completed' && m) {
+          const wantBottom = G.padding * m.scale;
+          check(
+            `locale-bottom-gap:${tag}`,
+            typeof m.gapBottom === 'number' && Math.abs(m.gapBottom - wantBottom) <= 1.5,
+            `我知道了↔气泡底=${m.gapBottom?.toFixed(1)}(期望 ${wantBottom.toFixed(1)})`,
+          );
+        }
+      }
     }
   }
 }

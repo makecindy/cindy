@@ -33,7 +33,7 @@ describe('mobile simulator env bootstrap', () => {
     expect(result.created).toBe(true);
     expect(result.addedKeys).toEqual(REQUIRED_MOBILE_ENV_KEYS);
     expect(env).toMatchObject(productionEnv);
-    expect(env).not.toHaveProperty('EXPO_PUBLIC_XDT_DEV_LOGIN_ENABLED');
+    expect(env).not.toHaveProperty('EXPO_PUBLIC_LOGIN_SCENARIO');
   });
 
   it('preserves existing user values and only fills missing or empty required keys', () => {
@@ -47,7 +47,7 @@ describe('mobile simulator env bootstrap', () => {
         'EXPO_PUBLIC_CINDY_AUTH_REGION=global',
         'EXPO_PUBLIC_ENDPOINT_MANIFEST_BASE_URL=',
         'EXPO_PUBLIC_ENDPOINT_MANIFEST_PEER_BASE_URL=',
-        'EXPO_PUBLIC_XDT_DEV_LOGIN_ENABLED=1',
+        'EXPO_PUBLIC_LOGIN_SCENARIO=providers:email-only',
         '',
       ].join('\n'),
     );
@@ -67,7 +67,7 @@ describe('mobile simulator env bootstrap', () => {
     expect(env.EXPO_PUBLIC_ENDPOINT_MANIFEST_PEER_BASE_URL).toBe(
       productionEnv.EXPO_PUBLIC_ENDPOINT_MANIFEST_PEER_BASE_URL,
     );
-    expect(env.EXPO_PUBLIC_XDT_DEV_LOGIN_ENABLED).toBe('1');
+    expect(env.EXPO_PUBLIC_LOGIN_SCENARIO).toBe('providers:email-only');
   });
 
   it('replaces copied example placeholders and quoted empty values', () => {

@@ -4,6 +4,7 @@
  */
 
 import { describe, expect, it, vi } from 'vitest';
+import type { z } from 'zod';
 
 import { XdtHelperToolRegistry } from '../lizi_xdtHelperToolRegistry.js';
 import type { XdtHelperToolResult } from '../lizi_xdtHelperToolRegistry.js';
@@ -31,6 +32,7 @@ function setup(opts?: {
         issueUrl: 'https://github.com/makecindy/cindy/issues/76',
         finalTitle: VALID_ARGS.title,
         editedByUser: false,
+        privacyRedacted: false,
       },
   );
   const registry = new XdtHelperToolRegistry();
@@ -54,6 +56,41 @@ function parse(result: XdtHelperToolResult) {
 }
 
 describe('submit_github_issue tool', () => {
+  it('要求按最小公开原则泛化用户原话与示例', () => {
+    const { registry } = setup();
+    const tool = registry.get('submit_github_issue');
+    expect(tool?.description).toContain('Bug 和功能建议都遵循最小公开原则');
+    expect(tool?.description).toContain('不要逐字复制用户消息');
+    expect(tool?.description).toContain('不能识别所有语义隐私');
+  });
+
+  it('澄清流程交给 agent 判断,并与自动附加的当前任务环境区分', () => {
+    const { registry } = setup();
+    const tool = registry.get('submit_github_issue');
+    const bodySchema = tool?.inputShape.body as z.ZodType | undefined;
+    expect(tool?.description).toContain('缺什么问什么');
+    expect(tool?.description).toContain('不要套固定问卷或章节清单');
+    expect(tool?.description).toContain('普通建议不必按缺陷来问');
+    expect(tool?.description).toContain('和环境无关不必追问 Harness');
+    expect(tool?.description).toContain('系统自动附加的 Harness / Model ID 是当前任务的快照');
+    expect(tool?.description).toContain('不一定是出问题的那个');
+    expect(tool?.description).toContain('提交时的任务环境');
+    expect(tool?.description).toContain('本工具不能把对话里的图片传到 GitHub');
+    expect(tool?.description).toContain('禁止写「已提供截图」');
+    expect(tool?.description).toContain('不要写仓库路径、实现方案、验收清单');
+    expect(bodySchema?.description).toContain('按这条反馈本身组织');
+    expect(bodySchema?.description).not.toContain('bug 优先用');
+    expect(bodySchema?.description).toContain('禁止声称截图已附');
+    expect(bodySchema?.description).toContain('提交时的任务环境');
+    expect(bodySchema?.description).toContain('实际故障');
+    expect(bodySchema?.description).toContain(
+      '不要复制系统自动附加的当前任务快照',
+    );
+    expect(bodySchema?.description).not.toMatch(
+      /不要写环境信息\(客户端版本 \/ 版本区域 \/ OS \/ Harness \/ 模型 ID/,
+    );
+  });
+
   it('缺参数 → INVALID_ARGS, host 不被调', async () => {
     const { registry, submit } = setup();
     const res = await registry.call('submit_github_issue', {});
@@ -92,6 +129,7 @@ describe('submit_github_issue tool', () => {
     });
     expect(submit).toHaveBeenCalledWith({
       sessionId: 'sess-1',
+      agentKind: 'claude-code',
       workingDir: '/tmp/wd',
       title: VALID_ARGS.title,
       body: VALID_ARGS.body,
@@ -104,7 +142,23 @@ describe('submit_github_issue tool', () => {
       issue_url: 'https://github.com/makecindy/cindy/issues/76',
       final_title: VALID_ARGS.title,
       edited_by_user: false,
+      privacy_redacted: false,
+      open_source: {
+        repository_url: 'https://github.com/makecindy/cindy',
+        license: 'Apache-2.0',
+        invitation:
+          'Cindy is open source. If the user is interested, offer help with reproducing the issue, editing the source, adding tests, and preparing a pull request.',
+      },
     });
+  });
+
+  it('用户同意后透传 include_related_logs', async () => {
+    const { registry, submit } = setup();
+    await registry.call('submit_github_issue', { ...VALID_ARGS, include_related_logs: true });
+
+    expect(submit).toHaveBeenCalledWith(
+      expect.objectContaining({ includeRelatedLogs: true }),
+    );
   });
 
   it('host 错误码透传, isError=true', async () => {

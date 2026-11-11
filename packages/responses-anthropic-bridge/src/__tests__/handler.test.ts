@@ -607,3 +607,154 @@ describe('createResponsesAnthropicHandler', () => {
     expect(res.chunks.join('').length).toBeLessThan(17 * 1024);
   });
 });
+
+/**
+ * onUpstreamResponse —— 最终上游响应的元数据旁路(见 #2626)。
+ * 桥不解释这些 header, 只保证「最终响应一次、重试的中间响应不报」。
+ */
+describe('createResponsesAnthropicHandler onUpstreamResponse', () => {
+  it('reports the final headers once for a streaming success', async () => {
+    const fetchImpl = vi.fn(async () => new Response(anthropicStream().body, {
+      status: 200,
+      headers: {
+        'content-type': 'text/event-stream',
+        'anthropic-ratelimit-unified-5h-utilization': '0.34',
+      },
+    })) as typeof fetch;
+    const onUpstreamResponse = vi.fn();
+    const handler = createResponsesAnthropicHandler({
+      upstreamBase: 'https://provider.example',
+      buildHeaders: async () => ({ authorization: 'Bearer live' }),
+      onUpstreamResponse,
+    }, { fetchImpl });
+    const res = new FakeResponse();
+    await handler.handle({ parsedBody: { model: 'claude', input: 'hi' }, ctx, res: res as never });
+
+    expect(onUpstreamResponse).toHaveBeenCalledTimes(1);
+    const info = onUpstreamResponse.mock.calls[0][0];
+    expect(info.status).toBe(200);
+    expect(info.responseHeaders.get('anthropic-ratelimit-unified-5h-utilization')).toBe('0.34');
+    // 请求头按发出去的那一份传出 —— 账号归属靠它
+    expect(info.requestHeaders.authorization).toBe('Bearer live');
+    expect(res.status).toBe(200);
+  });
+
+  it('reports once for a non-streaming success', async () => {
+    const fetchImpl = vi.fn(async () => new Response(anthropicStream().body, {
+      status: 200,
+      headers: { 'content-type': 'text/event-stream', 'anthropic-ratelimit-unified-status': 'allowed' },
+    })) as typeof fetch;
+    const onUpstreamResponse = vi.fn();
+    const handler = createResponsesAnthropicHandler({
+      upstreamBase: 'https://provider.example',
+      buildHeaders: async () => ({}),
+      onUpstreamResponse,
+    }, { fetchImpl });
+    const res = new FakeResponse();
+    await handler.handle({
+      parsedBody: { model: 'claude', input: 'hi', stream: false },
+      ctx,
+      res: res as never,
+    });
+
+    expect(onUpstreamResponse).toHaveBeenCalledTimes(1);
+    expect(onUpstreamResponse.mock.calls[0][0].responseHeaders.get('anthropic-ratelimit-unified-status'))
+      .toBe('allowed');
+  });
+
+  it('reports the final non-2xx response too', async () => {
+    const fetchImpl = vi.fn(async () => new Response('nope', {
+      status: 429,
+      headers: { 'anthropic-ratelimit-unified-status': 'rejected' },
+    })) as typeof fetch;
+    const onUpstreamResponse = vi.fn();
+    const handler = createResponsesAnthropicHandler({
+      upstreamBase: 'https://provider.example',
+      buildHeaders: async () => ({}),
+      onUpstreamResponse,
+    }, { fetchImpl });
+    const res = new FakeResponse();
+    await handler.handle({ parsedBody: { model: 'claude', input: 'hi' }, ctx, res: res as never });
+
+    expect(onUpstreamResponse).toHaveBeenCalledTimes(1);
+    expect(onUpstreamResponse.mock.calls[0][0].status).toBe(429);
+    expect(res.status).toBe(429);
+  });
+
+  it('skips the intermediate 401 and reports only the refreshed response', async () => {
+    const fetchMock = vi.fn()
+      .mockResolvedValueOnce(new Response('expired', {
+        status: 401,
+        headers: { 'anthropic-ratelimit-unified-status': 'stale-should-not-be-reported' },
+      }))
+      .mockResolvedValueOnce(new Response(anthropicStream().body, {
+        status: 200,
+        headers: { 'content-type': 'text/event-stream', 'anthropic-ratelimit-unified-status': 'allowed' },
+      }));
+    const onUpstreamResponse = vi.fn();
+    const handler = createResponsesAnthropicHandler({
+      upstreamBase: 'https://provider.example',
+      buildHeaders: async () => ({ authorization: 'Bearer stale' }),
+      refreshHeaders: async () => ({ authorization: 'Bearer fresh' }),
+      onUpstreamResponse,
+    }, { fetchImpl: fetchMock as unknown as typeof fetch });
+    const res = new FakeResponse();
+    await handler.handle({ parsedBody: { model: 'claude', input: 'hi' }, ctx, res: res as never });
+
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+    expect(onUpstreamResponse).toHaveBeenCalledTimes(1);
+    const info = onUpstreamResponse.mock.calls[0][0];
+    expect(info.status).toBe(200);
+    expect(info.responseHeaders.get('anthropic-ratelimit-unified-status')).toBe('allowed');
+    // 换过凭据后的请求头才是这次响应的归属依据
+    expect(info.requestHeaders.authorization).toBe('Bearer fresh');
+  });
+
+  it('skips the intermediate 413 and reports only the downscaled retry', async () => {
+    const fetchMock = vi.fn()
+      .mockResolvedValueOnce(new Response('too large', { status: 413 }))
+      .mockResolvedValueOnce(new Response(anthropicStream().body, {
+        status: 200,
+        headers: { 'content-type': 'text/event-stream', 'anthropic-ratelimit-unified-status': 'allowed' },
+      }));
+    const onUpstreamResponse = vi.fn();
+    const handler = createResponsesAnthropicHandler({
+      upstreamBase: 'https://provider.example',
+      buildHeaders: async () => ({}),
+      imageCodec: { normalize: async () => ({ data: 'abc', mediaType: 'image/png' }) },
+      onUpstreamResponse,
+    }, { fetchImpl: fetchMock as unknown as typeof fetch });
+    const res = new FakeResponse();
+    await handler.handle({
+      parsedBody: {
+        model: 'claude',
+        input: [{ role: 'user', content: [{ type: 'input_image', image_url: 'data:image/png;base64,abc' }] }],
+      },
+      ctx,
+      res: res as never,
+    });
+
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+    expect(onUpstreamResponse).toHaveBeenCalledTimes(1);
+    expect(onUpstreamResponse.mock.calls[0][0].status).toBe(200);
+  });
+
+  it('never lets a throwing or rejecting callback affect the response', async () => {
+    const fetchImpl = vi.fn(async () => anthropicStream()) as typeof fetch;
+    for (const onUpstreamResponse of [
+      () => { throw new Error('sync boom'); },
+      async () => { throw new Error('async boom'); },
+    ]) {
+      const handler = createResponsesAnthropicHandler({
+        upstreamBase: 'https://provider.example',
+        buildHeaders: async () => ({}),
+        onUpstreamResponse,
+      }, { fetchImpl });
+      const res = new FakeResponse();
+      await handler.handle({ parsedBody: { model: 'claude', input: 'hi' }, ctx, res: res as never });
+      expect(res.status).toBe(200);
+      expect(res.chunks.join('')).toContain('event: response.completed');
+      expect(res.ended).toBe(true);
+    }
+  });
+});

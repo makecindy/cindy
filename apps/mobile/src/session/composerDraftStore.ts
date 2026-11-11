@@ -1,5 +1,5 @@
 import AsyncStorage from '@react-native-async-storage/async-storage';
-import { parseStoredComposerDocument, type ComposerDocument } from '@/session/composerDocument';
+import { composerDocumentsEqual, parseStoredComposerDocument, composerDocumentProjectedText, type ComposerDocument } from '@/session/composerDocument';
 
 const STORAGE_KEY_PREFIX = 'xdt.mobileComposerDraft.v1';
 const DOCUMENT_STORAGE_KEY_PREFIX = 'xdt.mobileComposerDocument.v1';
@@ -179,6 +179,54 @@ export async function flushComposerDraftWrites(sessionId?: string): Promise<void
   await drainPendingStorageOperations(normalizedSessionId);
 }
 
+/** Finish a committed send's draft handoff in the existing per-session write chain.
+ * Failures propagate so the outbox keeps its recovery proof. Later user edits win.
+ */
+export async function reconcileCommittedComposerDraft(
+  sessionId: string,
+  handoff: { before: ComposerDocument; after: ComposerDocument },
+  guard: () => void,
+): Promise<void> {
+  const id = normalizeSessionId(sessionId);
+  guard();
+  await flushComposerDraftWrites(id);
+  await enqueueStorageOperation(id, async () => {
+    guard();
+    const documentKey = documentStorageKeyForSession(id);
+    const textKey = storageKeyForSession(id);
+    const raw = await AsyncStorage.getItem(documentKey);
+    const text = await AsyncStorage.getItem(textKey);
+    guard();
+    const stored = raw ? parseStoredComposerDocument(JSON.parse(raw)) : null;
+    if (raw && !stored) throw new Error('COMPOSER_DRAFT_INVALID');
+    const memory = documentDrafts.get(id);
+    const next = memory && !composerDocumentsEqual(memory, handoff.before)
+      ? memory : stored && !composerDocumentsEqual(stored, handoff.before)
+        ? stored : handoff.after;
+    const replaceDocument = !!stored && composerDocumentsEqual(stored, handoff.before);
+    const beforeText = composerDocumentProjectedText(handoff.before);
+    const nextText = drafts.get(id);
+    const replacementText = nextText !== undefined && nextText !== beforeText
+      ? nextText : composerDocumentProjectedText(next);
+    if (memory && composerDocumentsEqual(memory, handoff.before)) {
+      documentDrafts.set(id, next);
+      cancelPendingDocumentPersist(id);
+    }
+    if (nextText === beforeText) {
+      drafts.set(id, replacementText);
+      cancelPendingPersist(id);
+    }
+    if (replaceDocument) {
+      await AsyncStorage.setItem(documentKey, JSON.stringify(next));
+      guard();
+    }
+    if (text === beforeText) {
+      await AsyncStorage.setItem(textKey, replacementText);
+      guard();
+    }
+  }, true);
+}
+
 function normalizeSessionId(sessionId: string): string {
   return sessionId.trim();
 }
@@ -258,19 +306,20 @@ async function persistDocumentIfCurrent(
 function enqueueStorageOperation(
   normalizedSessionId: string,
   operation: () => Promise<void>,
+  propagateError = false,
 ): Promise<void> {
   const previous = pendingStorageOperations.get(normalizedSessionId) ?? Promise.resolve();
-  const next = previous
+  const result = previous
     .catch(() => undefined)
-    .then(operation)
-    .catch(() => undefined);
+    .then(operation);
+  const next = result.catch(() => undefined);
   pendingStorageOperations.set(normalizedSessionId, next);
   void next.finally(() => {
     if (pendingStorageOperations.get(normalizedSessionId) === next) {
       pendingStorageOperations.delete(normalizedSessionId);
     }
   });
-  return next;
+  return propagateError ? result : next;
 }
 
 async function drainPendingStorageOperations(normalizedSessionId?: string): Promise<void> {

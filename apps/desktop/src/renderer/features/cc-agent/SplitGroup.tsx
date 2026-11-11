@@ -29,17 +29,16 @@ import {
   useRemoteBootstrapLoadingDeviceIds,
   useRemoteProjectSessions,
 } from '@/features/device-link/remoteProjectsStore';
-import { ApiError } from '@/lib/httpClient';
-import { getSessionFor } from '@/lib/makerTransport';
+import { readSessionBatchFor } from '@/lib/sessionBatchRead';
 import { getSessionRouteOwnerId, resolveSessionRoute } from '@/lib/orcaSessionIdentity';
 import { toast } from '@/lib/toast';
-import { extractIpcError } from '@/utils/ipcError';
 import { getSessionDisplayTitle } from './lib/sessionDisplayTitle';
 import { CCAgentSessionView } from './CCAgentSessionView';
 import { mergeSessionSources } from './lib/mergeSessionSources';
 import {
   SPLIT_GROUP_SESSION_MIME,
   hasSplitGroupSessionType,
+  isSplitGroupComposerDropTarget,
   resolveSplitDropSide,
 } from './splitGroupDnd';
 import {
@@ -229,19 +228,13 @@ function SplitGroupActive({
 
     // The merged catalog is eventually consistent while local refreshes and
     // device-link mirrors rebuild. Only prune after the session's owning side
-    // confirms the pane is no longer active or is absent; getSessionFor
+    // confirms the pane is no longer active or is absent; readSessionBatchFor
     // preserves remote routing.
-    void Promise.all(
-      missingSessionIds.map(async (sessionId) => {
-        try {
-          const session = await getSessionFor(sessionId);
-          return session.status === 'archived' || session.status === 'deleted' ? sessionId : null;
-        } catch (error) {
-          const errorCode = error instanceof ApiError ? error.code : extractIpcError(error)?.code;
-          return errorCode === 'NOT_FOUND' ? sessionId : null;
-        }
-      }),
-    ).then((staleSessionIds) => {
+    void readSessionBatchFor(missingSessionIds).then((results) => {
+      const staleSessionIds = results.map(({ sessionId, value, errorCode }) =>
+        errorCode === 'NOT_FOUND' || value?.status === 'archived' || value?.status === 'deleted'
+          ? sessionId : null,
+      );
       if (cancelled) return;
       const confirmedStaleSessionIds = staleSessionIds.filter((sessionId): sessionId is string =>
         Boolean(sessionId && !sessionsById.has(sessionId)),
@@ -822,7 +815,7 @@ const SplitPaneView = memo(function SplitPaneView({
   const isOwner = pane.key === ownerPaneKey;
   const viewSessionId = pane.sessionId;
   const session = sessionsById.get(viewSessionId) ?? null;
-  const title = session ? getSessionDisplayTitle(session, unnamedTitle) : loadingTitle;
+  const title = session ? getSessionDisplayTitle(session, unnamedTitle, t) : loadingTitle;
 
   return (
     <SplitDropTarget
@@ -919,6 +912,7 @@ function SplitGroupToolbar({ root }: { root: SplitNode }) {
     <div
       data-split-group-toolbar
       className="flex h-8 shrink-0 items-center justify-end gap-1 border-b border-border/40 px-2"
+      style={{ paddingRight: 'calc(0.5rem + var(--content-top-right-actions-inset, 0px))' }}
     >
       <button
         type="button"
@@ -962,6 +956,10 @@ function SplitDropTarget({
 
   const handleDragOver = useCallback((event: DragEvent<HTMLDivElement>) => {
     if (!hasSplitGroupSessionType(event.dataTransfer.types)) return;
+    if (isSplitGroupComposerDropTarget(event.target)) {
+      setDropSide(null);
+      return;
+    }
     event.preventDefault();
     event.stopPropagation();
     event.dataTransfer.dropEffect = 'move';
@@ -981,6 +979,10 @@ function SplitDropTarget({
   const handleDrop = useCallback(
     (event: DragEvent<HTMLDivElement>) => {
       if (!hasSplitGroupSessionType(event.dataTransfer.types)) return;
+      if (isSplitGroupComposerDropTarget(event.target)) {
+        setDropSide(null);
+        return;
+      }
       event.preventDefault();
       event.stopPropagation();
       const sessionId = event.dataTransfer.getData(SPLIT_GROUP_SESSION_MIME).trim();

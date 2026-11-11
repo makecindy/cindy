@@ -11,11 +11,32 @@ const mocks = vi.hoisted(() => {
     logger: { info: vi.fn(), warn: vi.fn(), error: vi.fn() },
     insertConflict,
     insertValues: vi.fn(() => ({ onConflictDoUpdate: insertConflict })),
+    // createSession upsert 后回读持久化行;返回空数组时回落 prepared row
+    selectLimit: vi.fn<() => Promise<Array<{ title?: string | null }>>>(async () => []),
+    updateSet: vi.fn(),
+    updateWhere: vi.fn(async () => undefined),
     webContentsSend: vi.fn(),
     tapWindowBroadcast: vi.fn(),
   };
 });
 
+// 新任务经公共入口 openSession(模型准入)—— 准入本身由 sessionOpening 的测试覆盖, 这里
+// 只把准入前的路由原样透传给建行回调。
+vi.mock('../../../localDb/sessionOpening', () => ({
+  openSession: vi.fn(
+    async (
+      input: { body: Record<string, unknown> },
+      commit?: (row: Record<string, unknown>, assertCurrent: () => void) => Promise<unknown>,
+    ) => {
+      const row = {
+        ...input.body,
+        providerId: input.body.providerId ?? null,
+        fastMode: !!input.body.fastMode,
+      };
+      return { row, value: commit ? await commit(row, () => undefined) : undefined };
+    },
+  ),
+}));
 vi.mock('electron', () => ({
   BrowserWindow: {
     getAllWindows: () => [
@@ -31,12 +52,18 @@ vi.mock('../../../logger', () => ({
   createLogger: () => mocks.logger,
   maskPath: (p: string) => p,
 }));
+const STABLE_ACCOUNT = vi.hoisted(() => ({}));
 vi.mock('../../../localDb/client/current', () => ({
+  // 账号快照: 同一引用 = 账号没变(sessionRepo 建任务前按它复核账号代次)。
+  getCurrentDbClientSnapshot: () => STABLE_ACCOUNT,
   getDbClient: () => ({
     drizzle: {
       insert: () => ({ values: mocks.insertValues }),
-      // createSession upsert 后回读持久化行;返回空数组时回落 prepared row
-      select: () => ({ from: () => ({ where: () => ({ limit: async () => [] }) }) }),
+      select: () => ({ from: () => ({ where: () => ({ limit: mocks.selectLimit }) }) }),
+      // resolveSessionTitle 标题回写链: update().set().where()
+      update: () => ({
+        set: mocks.updateSet.mockReturnValue({ where: mocks.updateWhere }),
+      }),
     },
   }),
 }));
@@ -56,6 +83,7 @@ vi.mock('../../defaultSessionSettings', () => ({
   })),
 }));
 
+import { openSession } from '../../../localDb/sessionOpening';
 import { createImSessionRepo, type ImSessionRow } from '../sessionRepo';
 import type { ImOrchestratorConfig, ImSessionNamespace } from '../types';
 
@@ -101,6 +129,32 @@ describe('sessionRepo.createSession broadcast', () => {
     });
   });
 
+  it('新任务经 openSession 准入: 插入的是准入后的路由(来源 / 推理强度)', async () => {
+    vi.mocked(openSession).mockImplementationOnce(async (input, commit) => {
+      const row = { ...input.body, model: 'claude-opus-4-8', providerId: 'admitted-provider', effort: 'medium', fastMode: false };
+      return { row, value: await commit!(row as never, () => undefined) } as never;
+    });
+    const repo = createImSessionRepo({ agentKind: 'claude-code' } as ImOrchestratorConfig, ns);
+    await repo.createSession('bot', 'user', undefined, preparedRow);
+    expect(vi.mocked(openSession).mock.calls.at(-1)?.[0]).toMatchObject({
+      id: 'slack-bot-user',
+      body: { agentKind: 'cc', model: 'claude-opus-4-8', providerId: null, effort: 'high' },
+    });
+    expect(mocks.insertValues).toHaveBeenCalledWith(
+      expect.objectContaining({ providerId: 'admitted-provider', effort: 'medium' }),
+    );
+  });
+
+  it('准入拒绝: 不插行、不广播, 错误交给调用方走渠道失败提示', async () => {
+    vi.mocked(openSession).mockRejectedValueOnce(new Error('不会自动更换模型或供应商'));
+    const repo = createImSessionRepo({ agentKind: 'claude-code' } as ImOrchestratorConfig, ns);
+    await expect(repo.createSession('bot', 'user', undefined, preparedRow)).rejects.toThrow(
+      '不会自动更换模型或供应商',
+    );
+    expect(mocks.insertValues).not.toHaveBeenCalled();
+    expect(mocks.webContentsSend).not.toHaveBeenCalled();
+  });
+
   it('DB 插入失败时不广播(避免 renderer 重拉到不存在的行)', async () => {
     mocks.insertConflict.mockRejectedValueOnce(new Error('insert failed'));
     const repo = createImSessionRepo({ agentKind: 'claude-code' } as ImOrchestratorConfig, ns);
@@ -110,5 +164,45 @@ describe('sessionRepo.createSession broadcast', () => {
     );
     expect(mocks.webContentsSend).not.toHaveBeenCalled();
     expect(mocks.tapWindowBroadcast).not.toHaveBeenCalled();
+  });
+
+  it('resolveSessionTitle 解析出标题时回写行并广播 sessions:patched; null 不动', async () => {
+    const resolveSessionTitle = vi.fn<
+      (userId: string, scopeKey?: string) => Promise<string | null>
+    >(async () => '[飞书·群] 产品交流群');
+    const repo = createImSessionRepo({ agentKind: 'claude-code' } as ImOrchestratorConfig, {
+      ...ns,
+      resolveSessionTitle,
+    });
+    await repo.createSession('bot', 'user', undefined, preparedRow);
+
+    expect(mocks.updateSet).toHaveBeenCalledWith({ title: '[飞书·群] 产品交流群' });
+    expect(mocks.updateWhere).toHaveBeenCalledTimes(1);
+    expect(mocks.webContentsSend).toHaveBeenCalledWith('local-db:sessions:patched', {
+      sessionId: 'slack-bot-user',
+      patch: { title: '[飞书·群] 产品交流群' },
+    });
+
+    resolveSessionTitle.mockResolvedValueOnce(null);
+    mocks.updateSet.mockClear();
+    await repo.createSession('bot', 'user', undefined, preparedRow);
+    expect(mocks.updateSet).not.toHaveBeenCalled();
+  });
+
+  it('resolveSessionTitle 只对新建行生效 — 复活行保留历史标题不回调解析器', async () => {
+    // upsert 前预检 select 返回已存在的行 → 复活路径, 不解析标题
+    // (oneshot 拼装过的话题名不能被渠道解析结果刷掉)。
+    mocks.selectLimit.mockResolvedValueOnce([{ title: '[飞书·群名·简介] abc123' }]);
+    const resolveSessionTitle = vi.fn<
+      (userId: string, scopeKey?: string) => Promise<string | null>
+    >(async () => '[飞书·群] 产品交流群');
+    const repo = createImSessionRepo({ agentKind: 'claude-code' } as ImOrchestratorConfig, {
+      ...ns,
+      resolveSessionTitle,
+    });
+    mocks.updateSet.mockClear();
+    await repo.createSession('bot', 'user', undefined, preparedRow);
+    expect(resolveSessionTitle).not.toHaveBeenCalled();
+    expect(mocks.updateSet).not.toHaveBeenCalled();
   });
 });

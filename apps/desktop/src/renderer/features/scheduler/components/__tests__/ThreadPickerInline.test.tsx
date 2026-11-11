@@ -4,12 +4,27 @@ import { cleanup, render, screen } from '@testing-library/react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
 const mocks = vi.hoisted(() => ({
-  list: vi.fn(async () => []),
+  list: vi.fn(
+    async () =>
+      [] as Array<{
+        id: string;
+        title: string;
+        agentKind: 'cc' | 'codex' | 'pi';
+        source?: string;
+      }>,
+  ),
 }));
 
 vi.mock('@/lib/sessionService', () => ({ list: mocks.list }));
+// These cases mount the task picker only; model location state is unrelated.
+vi.mock('@/hooks/useModelRouteDevices', () => ({ useModelRouteDevices: () => ({ devices: undefined }) }));
+// The shared-quota rail observes auth; this component fixture has no auth host.
+vi.mock('@/contexts/AuthContext', () => ({ useOptionalAuthUser: () => null }));
+
 vi.mock('react-i18next', () => ({
   useTranslation: () => ({ t: (key: string) => key }),
+  // ScheduleChips 经模型面板的远程位置候选间接加载 i18n 初始化。
+  initReactI18next: { type: '3rdParty', init: () => undefined },
 }));
 
 import { ThreadPickerInline } from '../ScheduleChips';
@@ -20,6 +35,18 @@ afterEach(() => {
 });
 
 describe('ThreadPickerInline 会话引用状态', () => {
+  it('does not offer Review tasks as scheduler targets', async () => {
+    mocks.list.mockResolvedValueOnce([
+      { id: 'session-review', title: 'Review task', agentKind: 'codex', source: 'review' },
+      { id: 'session-normal', title: 'Desktop task', agentKind: 'codex', source: 'desktop' },
+    ]);
+
+    render(<ThreadPickerInline value="" onSelect={vi.fn()} />);
+
+    expect(await screen.findByRole('option', { name: 'Desktop task · Codex' })).toBeDefined();
+    expect(screen.queryByRole('option', { name: 'Review task · Codex' })).toBeNull();
+  });
+
   it('普通绑定会话被删除后要求重新选择且不再显示打开入口', async () => {
     render(
       <ThreadPickerInline

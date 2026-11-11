@@ -13,15 +13,15 @@ describe('RolePillDropdown worker count summary', () => {
     expect(source).toContain('const activeCount = activeWorkerCount;');
     expect(source).toContain("t('orca.rolePill.workerCountSummary', {");
     expect(source).toContain('totalCount: totalWorkerCount');
-    expect(source).toContain('activeCount,');
+    expect(source).toContain('activeCount: runningCount,');
     // count 必须传给 i18next 以驱动复数选择 (en _one/_other)
     expect(source).toContain('count: totalWorkerCount');
     expect(source).not.toContain('{count} / {softLimit}');
 
     const gateBlock = extractBetween(
       source,
-      '{/* ── Create new worker row (3 上限态) ── */}',
-      '        </div>\n      )}',
+      'function CreateWorkerTabButton({',
+      'function WorkerTabsList({',
     );
     expect(gateBlock).toContain('activeCount >= hardLimit');
     expect(gateBlock).toContain('activeCount >= softLimit');
@@ -30,7 +30,7 @@ describe('RolePillDropdown worker count summary', () => {
   });
 
   it('defines the pluralized summary string in every locale', () => {
-    for (const locale of ['zh-CN', 'en', 'ja', 'ko']) {
+    for (const locale of ['zh-CN', 'zh-TW', 'en', 'ja', 'ko']) {
       const raw = readFileSync(
         resolve(__dirname, '..', 'i18n', 'locales', locale, 'common.json'),
         'utf8',

@@ -1,0 +1,1 @@
+ALTER TABLE `sessions` ADD `hidden_at` integer;

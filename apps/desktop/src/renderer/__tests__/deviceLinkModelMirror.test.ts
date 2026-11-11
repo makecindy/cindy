@@ -35,14 +35,22 @@ describe('replaceScope / get*', () => {
     expect(getMirrorFast(DRAFT, 'codex', 'openai', 'unknown')).toBeUndefined();
   });
 
-  it('新快照的全局槽优先于来源兼容副本', () => {
+  it('* 权威槽优先于 provider 兼容副本,旧快照没有它才回落来源槽', () => {
     replaceScope(DRAFT, {
       'claude-code:*': { effortByModel: { opus: 'xhigh' }, fastByModel: { opus: true } },
       'claude-code:anthropic': { effortByModel: { opus: 'high' }, fastByModel: { opus: false } },
     });
+    // 权威槽优先:同一模型换个来源也读到同一档,不会被来源副本拽回旧值。
     expect(getMirrorEffort(DRAFT, 'claude-code', 'anthropic', 'opus')).toBe('xhigh');
     expect(getMirrorEffort(DRAFT, 'claude-code', 'xd', 'opus')).toBe('xhigh');
     expect(getMirrorFast(DRAFT, 'claude-code', 'xd', 'opus')).toBe(true);
+    // 被控端旧快照只写过来源槽(没有 `*`)→ 回落来源副本;没有该来源条目时仍为 undefined
+    // (旧快照本就是降级路径:能读多少算多少,不会跨来源乱借)。
+    replaceScope(DRAFT, {
+      'claude-code:anthropic': { effortByModel: { opus: 'high' }, fastByModel: { opus: false } },
+    });
+    expect(getMirrorEffort(DRAFT, 'claude-code', 'anthropic', 'opus')).toBe('high');
+    expect(getMirrorEffort(DRAFT, 'claude-code', 'xd', 'opus')).toBeUndefined();
   });
 
   it('replaceScope(undefined) 等于清空该 scope', () => {
@@ -70,7 +78,7 @@ describe('scope 隔离', () => {
     expect(getMirrorEffort(SESSION, 'claude-code', 'anthropic', 'opus')).toBe('low');
   });
 
-  it('同 agent/model 跨 provider 共享,不同 agent 仍隔离', () => {
+  it('同 agent/model 跨来源共享,不同 agent 仍隔离', () => {
     setMirrorFast(DRAFT, 'claude-code', 'anthropic', 'opus', true);
     expect(getMirrorFast(DRAFT, 'claude-code', 'xd', 'opus')).toBe(true);
     setMirrorFast(DRAFT, 'claude-code', 'xd', 'opus', false);
@@ -110,10 +118,22 @@ describe('makeMirrorAccessors', () => {
     expect(onWrite).toHaveBeenCalledWith('codex', 'openai', 'gpt-5.4', { fast: true });
   });
 
+  it('setThinking:乐观写镜像 + 用 {thinking} 调 onWrite', () => {
+    const onWrite = vi.fn();
+    const acc = makeMirrorAccessors(SESSION, onWrite);
+    acc.setThinking?.('pi', 'cindy-local-ollama', 'qwen3.8:27b-mxfp8', false);
+    expect(acc.getThinking?.('pi', 'cindy-local-ollama', 'qwen3.8:27b-mxfp8')).toBe(false);
+    expect(onWrite).toHaveBeenCalledWith('pi', 'cindy-local-ollama', 'qwen3.8:27b-mxfp8', {
+      thinking: false,
+    });
+  });
+
   it('setChoice:共享预设并显式标记真正选中模型', () => {
     const onWrite = vi.fn();
     const acc = makeMirrorAccessors(SESSION, onWrite);
     acc.setChoice?.('claude-code', 'anthropic', 'opus', 'high');
+    expect(acc.getEffort('claude-code', 'anthropic', 'opus')).toBe('high');
+    // 权威槽跨来源共享:另一个来源读到同一档。
     expect(acc.getEffort('claude-code', 'xd', 'opus')).toBe('high');
     expect(onWrite).toHaveBeenCalledWith('claude-code', 'anthropic', 'opus', {
       effort: 'high',

@@ -17,7 +17,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import type Database from 'better-sqlite3';
-import { app } from 'electron';
+import { initializeTaskTagPresets } from './taskTagPresets';
 import { createLogger } from '../logger';
 import {
   backupDb,
@@ -32,43 +32,45 @@ import {
   readSchemaVersion,
   runMigrationReplay,
 } from './migrationRunner';
+import {
+  officialProfileWriterMigrationMessage,
+  shouldRefuseOfficialProfileWriterMigration,
+} from './officialProfileMigrationPolicy';
+import { getMigrationRuntimeConfig } from './migrationRuntime';
 
 const log = createLogger('migrate');
 
 export { hashMigrationFile };
 
 export function getDrizzleDir(): string {
-  return resolveDrizzleDir();
+  return getMigrationRuntimeConfig().drizzleDir;
 }
 
 const MAX_ISO_BACKUPS = 3;
 
 /**
- * 解析 drizzle 目录路径：
+ * Desktop's own location rules, kept here so the Electron entry can install
+ * them once at startup:
  *   - packaged：`process.resourcesPath/drizzle`（forge.config.ts extraResource 配置）
  *   - dev：源码工作目录 `<projectRoot>/apps/desktop/drizzle`
  *
  * vite 把 main 入口产物输出到 `<workspace>/.vite/build/index.js`，运行时 `__dirname`
  * 指向该目录；从那里向上回退到工作根目录再加 `drizzle/`。
  */
-function resolveDrizzleDir(): string {
-  if (app.isPackaged) {
+export function resolveDesktopDrizzleDir(isPackaged: boolean): string {
+  if (isPackaged) {
     return path.join(process.resourcesPath, 'drizzle');
   }
-  // dev：__dirname = <repo>/apps/desktop/.vite/build → ../../drizzle
   return path.resolve(__dirname, '../../drizzle');
 }
 
-export async function runMigrations(
-  db: Database.Database,
-  dbFilePath: string,
-): Promise<void> {
-  const drizzleDir = resolveDrizzleDir();
+export async function runMigrations(db: Database.Database, dbFilePath: string): Promise<void> {
+  const { drizzleDir, isPackaged } = getMigrationRuntimeConfig();
   log.info(
     JSON.stringify({
       event: 'localDb.migrate.start',
       drizzleDir,
-      isPackaged: app.isPackaged,
+      isPackaged,
       dbFilePath,
     }),
   );
@@ -83,14 +85,27 @@ export async function runMigrations(
       event: 'localDb.migrate.scan',
       currentVersion,
       pendingCount: pending.length,
-      pending: pending.map((m) => ({ seq: m.seq, fileName: m.fileName, hasTsScript: !!m.tsScriptPath })),
+      pending: pending.map((m) => ({
+        seq: m.seq,
+        fileName: m.fileName,
+        hasTsScript: !!m.tsScriptPath,
+      })),
     }),
   );
   if (pending.length === 0) {
-    log.info(
-      JSON.stringify({ event: 'localDb.migrate.upToDate', currentVersion }),
-    );
+    log.info(JSON.stringify({ event: 'localDb.migrate.upToDate', currentVersion }));
     return;
+  }
+  if (
+    shouldRefuseOfficialProfileWriterMigration({
+      isPackaged,
+      officialSharedProfile: process.env.XDT_OFFICIAL_SHARED_PROFILE === '1',
+      pendingCount: pending.length,
+    })
+  ) {
+    throw new Error(
+      officialProfileWriterMigrationMessage(pending.map((migration) => migration.fileName)),
+    );
   }
 
   // 备份前先做磁盘侧准备：腾旧备份预算 + 剩余空间预检。
@@ -115,40 +130,51 @@ export async function runMigrations(
   );
 
   try {
-    runMigrationReplay(db, {
-      drizzleDir,
-      currentVersion,
-      onMigrationStart: (m) => {
-        log.info(
-          JSON.stringify({
-            event: 'localDb.migrate.apply.begin',
-            seq: m.seq,
-            fileName: m.fileName,
-            hasTsScript: !!m.tsScriptPath,
-          }),
-        );
-      },
-      onMigrationApplied: (m, durationMs) => {
-        log.info(
-          JSON.stringify({
-            event: 'localDb.migrate.apply.ok',
-            seq: m.seq,
-            fileName: m.fileName,
-            durationMs,
-          }),
-        );
-      },
-      onMigrationHistoryWriteFailed: (failure) => {
-        log.warn(
-          JSON.stringify({
-            event: 'localDb.migrate.history.writeFailed',
-            seq: failure.seq,
-            fileName: failure.fileName,
-            error: failure.error instanceof Error ? failure.error.message : String(failure.error),
-          }),
-        );
-      },
-    });
+    const apply = () =>
+      runMigrationReplay(db, {
+        drizzleDir,
+        currentVersion,
+        onMigrationStart: (m) => {
+          log.info(
+            JSON.stringify({
+              event: 'localDb.migrate.apply.begin',
+              seq: m.seq,
+              fileName: m.fileName,
+              hasTsScript: !!m.tsScriptPath,
+            }),
+          );
+        },
+        onMigrationApplied: (m, durationMs) => {
+          log.info(
+            JSON.stringify({
+              event: 'localDb.migrate.apply.ok',
+              seq: m.seq,
+              fileName: m.fileName,
+              durationMs,
+            }),
+          );
+        },
+        onMigrationHistoryWriteFailed: (failure) => {
+          log.warn(
+            JSON.stringify({
+              event: 'localDb.migrate.history.writeFailed',
+              seq: failure.seq,
+              fileName: failure.fileName,
+              error: failure.error instanceof Error ? failure.error.message : String(failure.error),
+            }),
+          );
+        },
+      });
+    if (currentVersion < 110) {
+      // Commit the first tag catalog together with its schema version. A crash
+      // must not leave the temporary color seeds marked as fully initialized.
+      db.transaction(() => {
+        apply();
+        initializeTaskTagPresets(db);
+      })();
+    } else {
+      apply();
+    }
   } catch (err) {
     log.error(
       JSON.stringify({

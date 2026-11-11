@@ -3,6 +3,7 @@ import { describe, expect, it, vi } from 'vitest';
 import {
   registerPrecreatedWorktreeDiscardHandler,
   WORKTREE_DISCARD_PRECREATED_CHANNEL,
+  WORKTREE_CANCEL_PRECREATED_CHANNEL,
   type PrecreatedWorktreeDiscardHandlerDeps,
 } from '../precreatedWorktreeDiscardHandler';
 import { IpcHarness } from './helpers/ipcHarness';
@@ -27,6 +28,36 @@ function createDeps(
 }
 
 describe('worktree:discard-precreated IPC handler', () => {
+  it('serializes cancellation with create and rechecks ownership at removal', async () => {
+    const harness = new IpcHarness();
+    let locked = false;
+    const cancel = vi.fn<NonNullable<PrecreatedWorktreeDiscardHandlerDeps['cancel']>>(async (_id, _locator, options) => {
+      expect(locked).toBe(true);
+      expect(await options.canRemove()).toBe(true);
+      return { status: 'absent' as const };
+    });
+    const deps = createDeps({ cancel, withSessionLock: async (_id, task) => {
+      locked = true;
+      try { return await task(); } finally { locked = false; }
+    } });
+    registerPrecreatedWorktreeDiscardHandler(harness, deps);
+    await expect(harness.invoke(WORKTREE_CANCEL_PRECREATED_CHANNEL, { sessionId: 'id', recoveryKey: 'key' }))
+      .resolves.toEqual({ discarded: true });
+    expect(deps.isSessionClaimed).toHaveBeenCalledTimes(2);
+    expect(deps.discard).not.toHaveBeenCalled();
+    expect(deps.discardByRecoveryKey).not.toHaveBeenCalled();
+  });
+
+  it.each([true, 'unreadable'])('does not cancel when ownership is %s', async (ownership) => {
+    const harness = new IpcHarness();
+    const deps = createDeps({
+      cancel: vi.fn(),
+      isSessionClaimed: async () => { if (ownership === 'unreadable') throw new Error('DB unavailable'); return true; },
+    });
+    registerPrecreatedWorktreeDiscardHandler(harness, deps);
+    await expect(harness.invoke(WORKTREE_CANCEL_PRECREATED_CHANNEL, { sessionId: 'id', path: '/repo/worktree' })).rejects.toThrow();
+    expect(deps.cancel).not.toHaveBeenCalled();
+  });
   it('validates the caller and payload before touching ownership or worktree state', async () => {
     const harness = new IpcHarness();
     const deps = createDeps();

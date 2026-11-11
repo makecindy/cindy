@@ -7,13 +7,14 @@ import {
   type CreateBillingTopupRequest,
 } from '../../shared/billing.js';
 import { getClientEndpoint } from '../clientEndpointsService.js';
-import { ServerApiError, serverApiFetch, type ApiFetchOptions } from '../serverApiClient.js';
+import { ServerApiError, serverApiFetch, type ApiFetchOptions } from '../serverApiClient.desktop.js';
 import { requireObject, throwIpcError } from '../utils/ipcValidate.js';
 import { isAllowedBillingRedirectUrl } from './paymentRedirect.js';
 import {
   projectBillingCatalog,
   projectBillingCurrentSubscription,
   projectBillingOrderList,
+  projectBillingPaymentHistory,
   projectBillingPortalSession,
   projectBillingPaymentOrder,
   projectBillingPlanChange,
@@ -59,8 +60,14 @@ function assertMainWindowSender(
 
 function throwBillingFetchError(error: unknown): never {
   if (error instanceof ServerApiError) {
+    if (error.code === 'PLAN_CHANGE_RENEWAL_PREPAID') {
+      throwIpcError('PLAN_CHANGE_RENEWAL_PREPAID', 'next renewal is already paid');
+    }
     if (error.code === 'PLAN_CHANGE_NOT_AVAILABLE') {
       throwIpcError('PLAN_CHANGE_NOT_AVAILABLE', 'target plan is not available');
+    }
+    if (error.code === 'RESUME_NOT_AVAILABLE') {
+      throwIpcError('RESUME_NOT_AVAILABLE', 'subscription is not resumable');
     }
     if (error.statusCode === 400) {
       throwIpcError('INVALID_PARAMS', 'billing request was rejected');
@@ -272,6 +279,19 @@ export function createBillingHandlers(
       }
       return projectResponse(await invoke<unknown>('/api/billing/catalog'), projectBillingCatalog);
     }),
+    [BILLING_INVOKE.LIST_PAYMENT_HISTORY]: protect(async (raw) => {
+      const payload = requireObject(raw);
+      assertOnlyKeys(payload, ['limit', 'cursor'], 'payload');
+      if (typeof payload.limit !== 'number' || !Number.isInteger(payload.limit) || payload.limit < 1 || payload.limit > 100) {
+        throwIpcError('INVALID_PARAMS', 'limit must be an integer between 1 and 100');
+      }
+      if (payload.cursor !== undefined && (typeof payload.cursor !== 'string' || !/^[A-Za-z0-9_-]{1,1024}$/.test(payload.cursor))) {
+        throwIpcError('INVALID_PARAMS', 'cursor must be a bounded history cursor');
+      }
+      const query = new URLSearchParams({ limit: String(payload.limit) });
+      if (typeof payload.cursor === 'string') query.set('cursor', payload.cursor);
+      return projectResponse(await invoke<unknown>(`/api/billing/payment-history?${query}`), projectBillingPaymentHistory);
+    }),
     [BILLING_INVOKE.LIST_ORDERS]: protect(async (raw) => {
       const payload = requireObject(raw);
       assertOnlyKeys(payload, ['limit'], 'payload');
@@ -365,6 +385,18 @@ export function createBillingHandlers(
         projectBillingSubscription,
       );
     }),
+    [BILLING_INVOKE.RESUME_CURRENT_SUBSCRIPTION]: protect(async (raw) => {
+      if (raw !== undefined) {
+        throwIpcError('INVALID_PARAMS', 'subscription resume does not accept a payload');
+      }
+      return projectResponse(
+        await invoke<unknown>('/api/billing/subscription/resume', {
+          method: 'POST',
+          allowedRedactedErrorCodes: ['RESUME_NOT_AVAILABLE'],
+        }),
+        projectBillingSubscription,
+      );
+    }),
     [BILLING_INVOKE.REFRESH_SUBSCRIPTION_PURCHASE]: protect(async (raw) => {
       const { purchaseAttemptId } = parseIdPayload(raw, 'purchaseAttemptId');
       return projectResponse(
@@ -385,7 +417,7 @@ export function createBillingHandlers(
           method: 'POST',
           body: { targetOfferCode },
           headers: { 'Idempotency-Key': idempotencyKey },
-          allowedRedactedErrorCodes: ['PLAN_CHANGE_NOT_AVAILABLE'],
+          allowedRedactedErrorCodes: ['PLAN_CHANGE_NOT_AVAILABLE', 'PLAN_CHANGE_RENEWAL_PREPAID'],
         }),
         projectBillingPlanChange,
       );
@@ -395,7 +427,7 @@ export function createBillingHandlers(
       return projectResponse(
         await invoke<unknown>(
           `/api/billing/subscription/plan-changes/${encodeURIComponent(planChangeId)}/confirm`,
-          { method: 'POST' },
+          { method: 'POST', allowedRedactedErrorCodes: ['PLAN_CHANGE_RENEWAL_PREPAID'] },
         ),
         projectBillingPlanChange,
       );

@@ -10,7 +10,9 @@ const desktopRoot = path.resolve(process.cwd());
 describe('Node runtime packaging contract', () => {
   it('使用独立 utilityProcess bundle，且不重新打开 RunAsNode / Node 参数开关', () => {
     const forge = fs.readFileSync(path.join(desktopRoot, 'forge.config.ts'), 'utf8');
-    expect(forge).toContain("entry: 'src/main/cindy-brain/nodeRuntimeWorkerProcess.ts'");
+    expect(forge).toContain("entry: 'src/main/cindy-brain/nodeRuntimeWorkerProcess.desktop.ts'");
+    expect(forge).toContain("entry: 'src/main/cindy-brain/forgeScaffoldWorkerProcess.ts'");
+    expect(forge).toContain("entry: 'src/main/cindy-brain/ghostSnapshotWorkerProcess.ts'");
     expect(forge).toContain("target: 'preload'");
     expect(forge).toContain('[FuseV1Options.RunAsNode]: false');
     expect(forge).toContain('[FuseV1Options.EnableNodeOptionsEnvironmentVariable]: false');
@@ -19,19 +21,99 @@ describe('Node runtime packaging contract', () => {
     expect(forge).toContain('[FuseV1Options.OnlyLoadAppFromAsar]: true');
   });
 
+  it('Pi Subagent 与正式包的 RunAsNode=false 契约使用同一受支持入口', () => {
+    const forge = fs.readFileSync(path.join(desktopRoot, 'forge.config.ts'), 'utf8');
+    const piHost = fs.readFileSync(path.join(desktopRoot, 'src/main/maker-host/pi-host.ts'), 'utf8');
+    const runtime = fs.readFileSync(path.join(desktopRoot, 'src/main/cindy-brain/piSubagentRunnerHost.ts'), 'utf8');
+    const repoRoot = path.resolve(desktopRoot, '..', '..');
+    const subagentSource = fs.readFileSync(
+      path.join(repoRoot, 'packages/maker-core/src/agents/pi/cindy-subagent-source.ts'),
+      'utf8',
+    );
+    const piAgent = fs.readFileSync(
+      path.join(repoRoot, 'packages/maker-core/src/agents/pi/index.ts'),
+      'utf8',
+    );
+
+    expect(forge).toContain("entry: 'src/main/cindy-brain/piSubagentRunnerProcess.ts'");
+    expect(forge).toContain('[FuseV1Options.RunAsNode]: false');
+    expect(runtime).toContain('utilityProcess.fork');
+    expect(piHost).toContain('spawnPiSubagentRunner,');
+    expect(subagentSource).not.toContain('ELECTRON_RUN_AS_NODE');
+    expect(subagentSource).not.toContain('CINDY_PI_SUBAGENT_NODE');
+    expect(piAgent).not.toContain('[CINDY_SUBAGENT_ENV.nodeExecutable]');
+  });
+
+  it('scaffold worker is parentPort-only and does not reopen RunAsNode', () => {
+    const worker = fs.readFileSync(
+      path.join(desktopRoot, 'src/main/cindy-brain/forgeScaffoldWorkerProcess.ts'),
+      'utf8',
+    );
+    expect(worker).toContain('parentPort');
+    expect(worker).toContain('verifyParent');
+    expect(worker).toContain('sameForgeScaffoldParentIdentity');
+    expect(worker).toContain('fs.promises.mkdir(request.targetName)');
+    expect(worker).not.toContain('ELECTRON_RUN_AS_NODE');
+    const capability = fs.readFileSync(
+      path.join(desktopRoot, 'src/main/cindy-brain/forgeScaffoldCapability.ts'),
+      'utf8',
+    );
+    expect(capability).toContain('child.kill()');
+  });
+
   it('工作入口通过 parentPort 接收虚拟 stdin，不启动外部 node 命令', () => {
+    const entry = fs.readFileSync(
+      path.join(desktopRoot, 'src/main/cindy-brain/nodeRuntimeWorkerProcess.desktop.ts'),
+      'utf8',
+    );
     const worker = fs.readFileSync(
       path.join(desktopRoot, 'src/main/cindy-brain/nodeRuntimeWorkerProcess.ts'),
       'utf8',
     );
     const broker = fs.readFileSync(
-      path.join(desktopRoot, 'src/main/cindy-brain/nodeRuntimeBroker.ts'),
+      path.join(desktopRoot, 'src/main/cindy-brain/nodeRuntimeBroker.desktop.ts'),
       'utf8',
     );
+    expect(entry).toContain('}).parentPort');
+    expect(entry).toContain('runNodeRuntimeWorker');
     expect(worker).toContain("data.type === 'stdin'");
     expect(worker).toContain('requireFromWorker(entryPath)');
     expect(broker).toContain('utilityProcess.fork');
     expect(broker).not.toContain("ELECTRON_RUN_AS_NODE: '1'");
+  });
+
+  it('启动上下文只做每次 attempt 粗粒度快照，不注册窗口/电源时间线', () => {
+    const bootstrap = fs.readFileSync(
+      path.join(desktopRoot, 'src/main/bootstrap-electron.ts'),
+      'utf8',
+    );
+    const start = bootstrap.indexOf('setGhostNodeRuntimeStartAttemptContextReader(() => {');
+    const end = bootstrap.indexOf('installWindowHiddenBroadcast(mainWindow);', start);
+    expect(start).toBeGreaterThan(0);
+    expect(end).toBeGreaterThan(start);
+    const contextReader = bootstrap.slice(start, end);
+    for (const state of [
+      'absent',
+      'hidden',
+      'minimized',
+      'visible-unfocused',
+      'focused',
+      'unknown',
+    ]) {
+      expect(contextReader).toContain(`'${state}'`);
+    }
+    expect(contextReader).toContain('powerMonitor.getSystemIdleState(60)');
+    expect(contextReader).toContain('observedScreenState');
+    expect(contextReader).not.toMatch(
+      /\.on\(|getSystemIdleTime|systemIdleSec|msSinceVisibility|title|URL|bounds|windowHidden/,
+    );
+  });
+
+  it('appRunId 在 cindy-brain main singleton 边界生成一次并注入每代 broker', () => {
+    const brain = fs.readFileSync(path.join(desktopRoot, 'src/main/cindy-brain/index.ts'), 'utf8');
+    expect(brain).toContain('const nodeRuntimeAppRunId = (() => {');
+    expect(brain).toContain("randomUUID().replaceAll('-', '')");
+    expect(brain).toContain('appRunId: nodeRuntimeAppRunId');
   });
 
   it('代启子进程(childSpawn)仍走同一 utilityProcess 通道,worker 侧只暴露窄接口', () => {
@@ -43,15 +125,22 @@ describe('Node runtime packaging contract', () => {
       path.join(desktopRoot, 'src/main/cindy-brain/nodeRuntimeBroker.ts'),
       'utf8',
     );
+    const adapter = fs.readFileSync(
+      path.join(desktopRoot, 'src/main/cindy-brain/nodeRuntimeBroker.desktop.ts'), 'utf8',
+    );
     // 窄接口冻结挂载,原样模式伪装 argv,不引 child_process 自己生进程。
     expect(worker).toContain('__CINDY_NODE__');
-    expect(worker).toContain('Object.freeze({ spawnEntry })');
+    // Pin the complete public surface, allowing only formatting differences.
+    expect(worker).toMatch(
+      /Object\.freeze\(\{\s*spawnEntry,\s*bindDeviceAuthorization: \(\) => deviceAuthorization\.bind\(\),\s*bindHostServices: \(\) => hostServices\.bind\(\),\s*bindAuthorization: \(\) => authorization\.bind\(\)\s*\}\)/,
+    );
     expect(worker).toContain('GHOST_NODE_CHILD_MODE_FLAG');
     expect(worker).not.toContain("require('node:child_process')");
     expect(worker).not.toContain("from 'node:child_process'");
     // broker 守门:形状校验 + 申报清单 + 数量顶 + 级联收尾。
     expect(broker).toContain('parseGhostNodeChildToHostMessage');
     expect(broker).toContain('GHOST_NODE_MAX_CHILDREN_PER_GHOST');
-    expect(broker).toContain('GHOST_NODE_CHILD_MODE_FLAG');
+    expect(adapter).toContain('GHOST_NODE_CHILD_MODE_FLAG');
+    expect(adapter).toContain('utilityProcess.fork');
   });
 });

@@ -11,6 +11,12 @@
  */
 
 import { compareHlc } from './hlc';
+import { createMovedAliasResolver, type ResolveMovedAliases } from './moved-aliases';
+import {
+  indexAliasRemovalMarkers,
+  isAliasRemovalMarkerKey,
+  readAliasStateVisibleCount,
+} from './alias-removal';
 import {
   hasDictionaryKey,
   listLiveIncarnations,
@@ -92,6 +98,7 @@ export function materializeDictionary(
 ): MaterializedDictionary {
   const entries: Array<MaterializedEntry & { key: string }> = [];
   const candidates: Array<MaterializedCandidate & { key: string }> = [];
+  const resolveMovedAliases = createMovedAliasResolver(state);
 
   for (const [key, record] of Object.entries(state.records)) {
     const live = listLiveIncarnations(record);
@@ -107,7 +114,7 @@ export function materializeDictionary(
     const stage = live.some((item) => item.stage === 'entry') ? 'entry' : 'candidate';
     const total = Math.max(1, live.reduce((sum, item) => sum + readCounterTotal(item.counters), 0));
     const text = pickDisplayText(live);
-    const aliases = mergeLiveAliases(live, limits.maxAliases);
+    const aliases = mergeLiveAliases(key, live, limits.maxAliases, resolveMovedAliases);
     const createdAt = live.reduce((min, item) => Math.min(min, item.createdAt), live[0].createdAt);
     const updatedAt = live.reduce((max, item) => Math.max(max, item.updatedAt), live[0].updatedAt);
 
@@ -148,13 +155,19 @@ export function materializeDictionary(
  * (化身内部按节点分桶取 max 已经在合并阶段做完,这里不会重复计入同一事件。)
  */
 function mergeLiveAliases(
+  recordKey: string,
   live: ReadonlyArray<DictionaryIncarnation>,
   maxAliases: number,
+  resolveMovedAliases: ResolveMovedAliases,
 ): MaterializedAlias[] {
   const totals = new Map<string, { text: string; textStamp: string; count: number; lastSeenAt: number }>();
   for (const incarnation of live) {
-    for (const [aliasKey, alias] of Object.entries(incarnation.aliases)) {
-      const count = readCounterTotal(alias.counters);
+    const aliases = resolveMovedAliases(recordKey, incarnation);
+    const removalIndex = indexAliasRemovalMarkers(aliases);
+    for (const [aliasKey, alias] of Object.entries(aliases)) {
+      if (isAliasRemovalMarkerKey(aliasKey)) continue;
+      const count = readAliasStateVisibleCount(alias, removalIndex.get(aliasKey));
+      if (count === 0) continue;
       const existing = totals.get(aliasKey);
       if (!existing) {
         totals.set(aliasKey, {

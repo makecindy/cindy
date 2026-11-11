@@ -12,7 +12,8 @@
  */
 
 import { getDesktopProviderService } from '../../maker-host/createDesktopProviderService';
-import { getModelVisibilityOverride } from '../../maker-host/model-visibility-mirror';
+import { readDeviceProviderViews } from '../../remote-agent/controller/deviceCatalog';
+import { getModelVisibilityOverride, waitForModelVisibilityMirror } from '../../maker-host/model-visibility-mirror';
 import { getSessionProvider } from '../../maker-host/session-provider-store';
 import {
   buildProviderSections,
@@ -22,7 +23,7 @@ import {
 } from '@cindy/model-providers';
 import { createLogger } from '../../logger';
 
-import { resetSessionToDefaults } from './sessionRepo';
+import { resetImSessionToChannelDefaults } from './channelDefaultRouteSync';
 import type { ImSessionRepo } from './sessionRepo';
 import type { ImCardBuilders } from './cardBuilders';
 import type { ImTurnRunner } from './turnRunner';
@@ -34,7 +35,7 @@ import {
 import { startThreadControlFlow } from './controlFlow';
 import { enterControl } from './controlState';
 import { bindingStore, executeDetach } from '../binding';
-import type { IdentityKey } from '@cindy/im';
+import type { IdentityKey, InteractiveCardSpec } from '@cindy/im';
 import type { ImChannelAdapter } from './types';
 import {
   permissionModeCommandContext,
@@ -42,7 +43,15 @@ import {
   renderTextPermissionModeResult,
   resolvePermissionMode,
 } from './permissionModeControl';
-import { parsePersonalBotCommand } from './personalBotCommands';
+import {
+  COMPANION_MANAGED_COMMAND_FALLBACK,
+  isBotCommandAvailableOnChannel,
+  isCompanionManagedCommand,
+  tokenizeBotCommand,
+} from './botCommands';
+
+/** 把本机桌面任务 / 项目接进当前对话的命令（与 card 里 control:* / project:* 按钮同一组能力）。 */
+const LOCAL_TASK_ACCESS_COMMANDS: ReadonlySet<string> = new Set(['/ctr', '/exctr', '/session', '/project']);
 
 /** Quick text-only check; treat anything starting with '/' (no spaces before) as a command. */
 export function looksLikeSlashCommand(text: string): boolean {
@@ -52,6 +61,16 @@ export function looksLikeSlashCommand(text: string): boolean {
 export interface SlashCtx {
   botContextId: string;
   userId: string;
+  /**
+   * 群主流 @ 开话题的首条 slash 时由 messageHandler 注入: slash 的**首个**
+   * 回复(文本或卡片)就地消费开场白卡(patch 文本 / 替换卡片)而不是另发 —
+   * 「思考中」卡不会卡住, 也不会撤回后拿已删消息当回复锚点。消费过一次
+   * 后返回 false, 后续回复正常发送。
+   */
+  consumePendingOpener?: {
+    withMarkdown(userId: string, markdown: string): Promise<boolean>;
+    withCard(userId: string, spec: InteractiveCardSpec): Promise<boolean>;
+  };
 }
 
 export interface ImSlashHandlers {
@@ -80,49 +99,155 @@ export function createSlashHandlers(
    * 所有 slash 反馈都走 markdown (body-only interactive card), 因为很多文案带
    * **粗体** / `code` / emoji, 渠道原生 text 不渲染 markdown 标记会显示成原文。
    * markdown 同样兼容纯文本: 没标记的字符串显示效果跟 text 一致。
+   *
+   * 群主流 @ 开话题的首条 slash: 首个回复经 ctx.consumePendingOpener 就地
+   * patch 开场白卡(消费过一次后回落正常发送)。
    */
-  async function safeSendText(userId: string, text: string): Promise<void> {
+  async function safeSendText(ctx: SlashCtx, text: string): Promise<void> {
     try {
-      await im.sendMarkdownText(userId, text);
+      if (ctx.consumePendingOpener) {
+        try {
+          if (await ctx.consumePendingOpener.withMarkdown(ctx.userId, text)) {
+            return;
+          }
+        } catch (err) {
+          // patch 失败不吞回复: 认领已完成(卡不会再被误 patch), 回落正常
+          // 发送 — 用户至少收到结果。
+          const msg = err instanceof Error ? err.message : String(err);
+          log.warn(`consumePendingOpener withMarkdown failed (fallback to normal send): ${msg}`);
+        }
+      }
+      const fallbackOpenerId = richIm?.takeNotedFallbackOpenerId?.(ctx.userId, 'markdown');
+      if (fallbackOpenerId) {
+        await im.sendMarkdownText(ctx.userId, text, { fallbackOpenerId });
+      } else {
+        await im.sendMarkdownText(ctx.userId, text);
+      }
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
       log.warn(`safeSendText failed (non-fatal): ${msg}`);
     }
   }
 
-  async function handleSlashCommand(text: string, ctx: SlashCtx): Promise<boolean> {
-    const [invocation, ...fallbackArgs] = text.trim().split(/\s+/);
-    const registered = parsePersonalBotCommand(text);
-    const cmd = registered ? `/${registered.definition.command}` : invocation;
-    const commandArgs = registered?.args ?? fallbackArgs;
-    log.info(`slash cmd=${registered?.invocation ?? cmd} userId=...${ctx.userId.slice(-8)}`);
+  /**
+   * 卡片反馈: 首条经 consumePendingOpener 替换开场白卡, 替换失败回落正常发卡。
+   * 返回是否送达(替换成功或发卡成功)— /ctr 等依赖「卡片确实可见」的调用方
+   * 据此决定是否进入控制态。
+   */
+  async function safeSendCard(ctx: SlashCtx, spec: InteractiveCardSpec): Promise<boolean> {
+    try {
+      if (ctx.consumePendingOpener) {
+        try {
+          if (await ctx.consumePendingOpener.withCard(ctx.userId, spec)) {
+            return true;
+          }
+        } catch (err) {
+          // 替换失败回落正常发卡: 认领已完成, 用户至少拿到一张可用卡片。
+          const msg = err instanceof Error ? err.message : String(err);
+          log.warn(`consumePendingOpener withCard failed (fallback to normal send): ${msg}`);
+        }
+      }
+      if (!richIm) {
+        log.warn('safeSendCard failed: channel has no rich-card output');
+        return false;
+      }
+      const fallbackOpenerId = richIm.takeNotedFallbackOpenerId?.(ctx.userId, 'spec');
+      if (fallbackOpenerId) {
+        await richIm.sendInteractiveCard(ctx.userId, spec, { fallbackOpenerId });
+      } else {
+        await richIm.sendInteractiveCard(ctx.userId, spec);
+      }
+      return true;
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      log.warn(`safeSendCard failed (non-fatal): ${msg}`);
+      return false;
+    }
+  }
 
-    const supportsTextPermissionCommand = channel === 'wecom' && cmd === '/permission';
+  /**
+   * 工作区显示名。
+   *
+   * 三种情况各有其名: 没有会话行、或目录就是渠道的托管目录时显示「对话」——
+   * 内部的 `telegram-<botId>` 是实现细节, 不是项目名; 否则取目录名(两种分隔符
+   * 都切, 不用 path.basename: 它只认当前平台的分隔符, 而远程控制下一条 Windows
+   * 会话完全可能由 macOS 上的主进程渲染); 目录为空则退回「对话」而不是空串。
+   */
+  function workspaceDisplayName(
+    workingDir: string | null | undefined,
+    botContextId: string,
+    /**
+     * 该会话的归属分组(只读路径带得出来时传)。schema 里它与路径是**解耦**的:
+     * 接管一条 desktop 的对话会话时, 目录既不是项目、也不等于本渠道的托管目录
+     * (末段常是内部 UUID), 只比对路径判不出来, 会把 UUID 当项目名报出去。
+     */
+    workspaceKind?: 'project' | 'dialogue' | null,
+  ): string {
+    // 没有 project 卡文案的渠道(它是可选契约)退回一个中性词, 不硬造。
+    const dialogueName = ui.cards.project?.dialogueName ?? '—';
+    if (workspaceKind === 'dialogue') return dialogueName;
+    if (!workingDir) return dialogueName;
+    if (workingDir === adapter.sessions.ensureWorkingDir(botContextId)) return dialogueName;
+    // 取不到末段就保留目录本身。两种根目录都会走到这:
+    //   - POSIX 根 `/` 按分隔符切完一段不剩;
+    //   - Windows 盘符根 `C:/` 只剩 `C:` —— 而 `C:` 在 Windows 里指的是「该盘的
+    //     当前目录」, 跟根目录不是一回事, 拿它当项目名会指向另一个地方。
+    // listProjectsForControl 并不排除根目录(选择器里就显示成 `/` 或 `C:/`),
+    // 回落到「对话」会把一个货真价实的项目报成对话。
+    const segments = workingDir.split(/[\\/]/).filter(Boolean);
+    const named = segments.filter((seg, i) => !(i === 0 && /^[A-Za-z]:$/.test(seg)));
+    return named.pop() ?? workingDir;
+  }
+
+  async function handleSlashCommand(text: string, ctx: SlashCtx): Promise<boolean> {
+    // 分词只做一次 —— 注册表内部不再重复 split, 命令名与参数不可能对不上。
+    const { definition, invocation, args: commandArgs } = tokenizeBotCommand(text);
+    const cmd = definition ? `/${definition.command}` : invocation;
+    log.info(`slash cmd=${invocation} userId=...${ctx.userId.slice(-8)}`);
+
+    // 渠道能力判据收进注册表(哪些命令要富卡、哪些渠道有文本降级), dispatcher
+    // 不再硬编码 `channel === 'wecom' && cmd === '/permission'`。
     if (
-      adapter.output.kind === 'chunked-text' &&
-      registered?.definition.interactive === true &&
-      !supportsTextPermissionCommand
+      definition &&
+      !isBotCommandAvailableOnChannel(
+        definition,
+        channel,
+        adapter.output.kind !== 'chunked-text',
+      )
     ) {
       await safeSendText(
-        ctx.userId,
+        ctx,
         ui.slash.interactiveCommandUnsupported?.(cmd) ?? ui.slash.unknownCommand(cmd),
       );
       return true;
     }
 
+    // 公共对话(服务器频道)不接入本机桌面任务 / 项目: 接管会把主人的私人任务挂进公共场合。
+    if (LOCAL_TASK_ACCESS_COMMANDS.has(cmd) && adapter.blocksLocalTaskAccess?.(ctx.userId)) {
+      await safeSendText(ctx, ui.slash.localTaskAccessUnavailable?.(cmd) ?? ui.slash.unknownCommand(cmd));
+      return true;
+    }
+
+    // 连接已交给伙伴: 模型 / 权限 / 工作目录归伙伴设置管, 不在渠道里改伙伴任务的配置
+    // (伙伴的 Home 工作区与模型链是伙伴的正本)。每个渠道都拦, 不看文案包有没有这条提示。
+    if (isCompanionManagedCommand(cmd) && turnRunner.companionBotIdFor?.(ctx.botContextId)) {
+      await safeSendText(ctx, ui.slash.companionManagedCommand ?? COMPANION_MANAGED_COMMAND_FALLBACK);
+      return true;
+    }
+
     switch (cmd) {
       case '/help':
-        await safeSendText(ctx.userId, ui.slash.help);
+        await safeSendText(ctx, ui.slash.help);
         return true;
 
       case '/start': {
         // Telegram 私聊首次交互必发 /start(START 按钮) — 有欢迎语的渠道回
         // 欢迎语, 其它渠道走未知命令提示。
         if (ui.slash.start) {
-          await safeSendText(ctx.userId, ui.slash.start);
+          await safeSendText(ctx, ui.slash.start);
           return true;
         }
-        await safeSendText(ctx.userId, ui.slash.unknownCommand(cmd));
+        await safeSendText(ctx, ui.slash.unknownCommand(cmd));
         return true;
       }
 
@@ -141,21 +266,46 @@ export function createSlashHandlers(
           log.error(`/stop stopActiveTurn threw: ${msg}`);
           reply = ui.agent.sendInternalError(msg);
         }
-        await safeSendText(ctx.userId, reply);
+        await safeSendText(ctx, reply);
         return true;
       }
 
       case '/new': {
         // thread = session 模型: 发新顶层消息即新会话, /new 无意义 → 废弃提示。
         if (threadScoped && threadUi) {
-          await safeSendText(ctx.userId, threadUi.newDeprecated);
+          await safeSendText(ctx, threadUi.newDeprecated);
           return true;
+        }
+        // 连接已交给伙伴: 群 / 话题换一条新专线; 主人私聊不轮换伙伴主任务。
+        // 伙伴当前解析不出时('unbound')走下面原有的 `/new`, 与消息路由的回落一致。
+        // `/ctr` 接管中仍按原有 `/new` 处理(它会顺带结束接管)。
+        if (
+          turnRunner.rotateCompanionLane &&
+          !bindingStore.get({ channel, botContextId: ctx.botContextId, userId: ctx.userId })
+        ) {
+          let companionNew: 'unbound' | 'owner-dm' | 'rotated';
+          try {
+            companionNew = await turnRunner.rotateCompanionLane(ctx.botContextId, ctx.userId);
+          } catch (err) {
+            const msg = err instanceof Error ? err.message : String(err);
+            log.error(`/new companion lane rotation failed: ${msg}`);
+            await safeSendText(ctx, ui.agent.sendInternalError(msg));
+            return true;
+          }
+          if (companionNew === 'owner-dm') {
+            await safeSendText(ctx, ui.slash.companionDmNew ?? ui.slash.new);
+            return true;
+          }
+          if (companionNew === 'rotated') {
+            await safeSendText(ctx, ui.slash.companionLaneNew ?? ui.slash.new);
+            return true;
+          }
         }
         const prepared = await repo.prepareNewSession(ctx.botContextId, ctx.userId);
         const auth = await turnRunner.getAuthStatusForRoute?.(prepared);
         if (auth ? !auth.ok : !(await turnRunner.hasAuthForRoute(prepared))) {
           await safeSendText(
-            ctx.userId,
+            ctx,
             auth && ui.agent.authMissing
               ? ui.agent.authMissing({
                   ...auth,
@@ -166,32 +316,61 @@ export function createSlashHandlers(
           );
           return true;
         }
-        // 找到当前 IM 会话行；没有历史会话时按已通过认证的默认值创建一行。
+        if (adapter.sessions.createTaskOnNew) {
+          if (!repo.createFreshSession) {
+            throw new Error(`${channel} session rotation is not available`);
+          }
+          const identity: IdentityKey = {
+            channel,
+            botContextId: ctx.botContextId,
+            userId: ctx.userId,
+          };
+          const attachedTargetSessionId = bindingStore.get(identity);
+          const { previous } = await repo.createFreshSession(
+            ctx.botContextId,
+            ctx.userId,
+            undefined,
+            prepared,
+            attachedTargetSessionId
+              ? { identity, targetSessionId: attachedTargetSessionId }
+              : null,
+          );
+          // Session rotation and the persisted `/ctr` detach commit in one
+          // SQLite transaction. Only mirror that committed deletion in memory;
+          // a newer concurrent takeover is preserved by the expected target.
+          if (attachedTargetSessionId) {
+            await bindingStore.applyPersistedDetach(identity, attachedTargetSessionId);
+          }
+          if (previous) await turnRunner.disposeOneSession(previous.id);
+          await safeSendText(ctx, ui.slash.new);
+          return true;
+        }
+        // Legacy single-row channels keep their established reset semantics.
         const existing = await repo.findActiveSession(ctx.botContextId, ctx.userId);
         const row =
           existing ?? (await repo.createSession(ctx.botContextId, ctx.userId, undefined, prepared));
         if (existing) {
-          await resetSessionToDefaults(row.id, adapter.config, prepared, adapter.channel);
+          await resetImSessionToChannelDefaults(row.id, adapter.config, prepared, adapter.channel);
         }
         await turnRunner.disposeOneSession(row.id);
-        await safeSendText(ctx.userId, ui.slash.new);
+        await safeSendText(ctx, ui.slash.new);
         return true;
       }
 
       case '/model': {
         if (!richIm) {
-          await safeSendText(ctx.userId, ui.slash.unknownCommand(cmd));
+          await safeSendText(ctx, ui.slash.unknownCommand(cmd));
           return true;
         }
         // thread 模型: slash 命令不携带 thread 上下文(Slack 平台限制), 无法定位
         // 目标 thread/session;不拦的话 resolveRouteTarget 会误建空 scope session。
         if (threadScoped && threadUi) {
-          await safeSendText(ctx.userId, threadUi.perThreadConfigUnsupported);
+          await safeSendText(ctx, threadUi.perThreadConfigUnsupported);
           return true;
         }
         const target = await turnRunner.resolveRouteTarget(ctx.botContextId, ctx.userId);
         if (!target) {
-          await safeSendText(ctx.userId, ui.agent.apiKeyMissing);
+          await safeSendText(ctx, ui.agent.apiKeyMissing);
           return true;
         }
         const { row } = target;
@@ -201,7 +380,10 @@ export function createSlashHandlers(
         // 保证 IM 列表与应用内逐模型一致。currentProviderId 优先取会话持久化的 providerId。
         const agentKind = row.agentKind;
         const currentProviderId = getSessionProvider(row.id) ?? row.providerId;
-        const providers = await getDesktopProviderService().listProviders({ allowSideEffects: true });
+        const providers = row.agentDeviceId
+          ? await readDeviceProviderViews((await import('../../device-link')).remoteBackgroundInvoke, row.agentDeviceId)
+          : await getDesktopProviderService().listProviders({ allowSideEffects: true });
+        if (!row.agentDeviceId) await waitForModelVisibilityMirror();
         const connected = connectedProvidersForAgent(providers, agentKind);
         const sections = buildProviderSections({
           providers: connected,
@@ -212,7 +394,7 @@ export function createSlashHandlers(
             const provider = connected.find((p) => p.id === pid);
             const model = provider ? getModel(provider, mid, agentKind) : undefined;
             return isModelVisible(
-              getModelVisibilityOverride(agentKind, pid, mid),
+              row.agentDeviceId ? undefined : getModelVisibilityOverride(agentKind, pid, mid),
               model?.defaultEnabled,
             );
           },
@@ -231,7 +413,7 @@ export function createSlashHandlers(
             : undefined,
         });
         try {
-          await richIm.sendInteractiveCard(ctx.userId, spec);
+          await safeSendCard(ctx, spec);
         } catch (err) {
           const msg = err instanceof Error ? err.message : String(err);
           log.error(`/model card send failed: ${msg}`);
@@ -245,7 +427,7 @@ export function createSlashHandlers(
         if (threadScoped && threadUi) {
           const all = bindingStore.listByIdentity(channel, ctx.botContextId, ctx.userId);
           if (all.length === 0) {
-            await safeSendText(ctx.userId, threadUi.exctrNothing);
+            await safeSendText(ctx, threadUi.exctrNothing);
             return true;
           }
           let detached = 0;
@@ -255,10 +437,10 @@ export function createSlashHandlers(
               if (r.wasAttached) detached += 1;
             } catch (err) {
               const msg = err instanceof Error ? err.message : String(err);
-              log.error(`${registered?.invocation ?? cmd} executeDetach(scope) threw: ${msg}`);
+              log.error(`${invocation} executeDetach(scope) threw: ${msg}`);
             }
           }
-          await safeSendText(ctx.userId, threadUi.exctrAllDone(detached));
+          await safeSendText(ctx, threadUi.exctrAllDone(detached));
           return true;
         }
         // 结束当前 (bot, owner) 的接管, 让后续消息回到渠道默认 session。
@@ -272,21 +454,21 @@ export function createSlashHandlers(
         try {
           const result = await executeDetach(identity, `${channel}-slash`);
           if (!result.wasAttached) {
-            await safeSendText(ctx.userId, ui.slash.notAttached);
+            await safeSendText(ctx, ui.slash.notAttached);
           } else {
-            await safeSendText(ctx.userId, ui.slash.detachedBySlash);
+            await safeSendText(ctx, ui.slash.detachedBySlash);
           }
         } catch (err) {
           const msg = err instanceof Error ? err.message : String(err);
-          log.error(`${registered?.invocation ?? cmd} executeDetach threw: ${msg}`);
-          await safeSendText(ctx.userId, `❌ 结束接管失败：${msg}`);
+          log.error(`${invocation} executeDetach threw: ${msg}`);
+          await safeSendText(ctx, `❌ 结束接管失败：${msg}`);
         }
         return true;
       }
 
       case '/ctr': {
         if (!richIm) {
-          await safeSendText(ctx.userId, ui.slash.unknownCommand(cmd));
+          await safeSendText(ctx, ui.slash.unknownCommand(cmd));
           return true;
         }
         // ── thread 模型: 整个选择流程在"接管锚点卡"的 thread 里进行 ────────
@@ -327,12 +509,11 @@ export function createSlashHandlers(
           projects,
           currentAttachedTitle,
         });
-        try {
-          await richIm.sendInteractiveCard(ctx.userId, spec);
+        const sent = await safeSendCard(ctx, spec);
+        if (sent) {
           enterControl(ctx.botContextId, ctx.userId);
-        } catch (err) {
-          const msg = err instanceof Error ? err.message : String(err);
-          log.error(`/ctr card send failed: ${msg}`);
+        } else {
+          log.error('/ctr picker card send failed — control NOT entered (avoid locking the user)');
         }
         return true;
       }
@@ -342,7 +523,7 @@ export function createSlashHandlers(
         // 才放行; 选中走 control:session-pick 接管路径。
         const recentUi = ui.cards.control.recentSessions;
         if (!richIm || !recentUi) {
-          await safeSendText(ctx.userId, ui.slash.unknownCommand(cmd));
+          await safeSendText(ctx, ui.slash.unknownCommand(cmd));
           return true;
         }
         const recent = await listRecentSessionsForPicker();
@@ -351,7 +532,7 @@ export function createSlashHandlers(
           sessions: recent,
         });
         try {
-          await richIm.sendInteractiveCard(ctx.userId, spec);
+          await safeSendCard(ctx, spec);
         } catch (err) {
           const msg = err instanceof Error ? err.message : String(err);
           log.error(`/session card send failed: ${msg}`);
@@ -364,7 +545,7 @@ export function createSlashHandlers(
         // 未知命令处理, 不暴露半成品入口。
         const projectUi = ui.cards.project;
         if (!richIm || !adapter.projectSwitching || !projectUi) {
-          await safeSendText(ctx.userId, ui.slash.unknownCommand(cmd));
+          await safeSendText(ctx, ui.slash.unknownCommand(cmd));
           return true;
         }
         // /ctr 接管期间语义冲突(消息在被接管的 desktop 会话里跑): 先 /exctr。
@@ -374,25 +555,25 @@ export function createSlashHandlers(
           userId: ctx.userId,
         };
         if (bindingStore.get(identity)) {
-          await safeSendText(ctx.userId, projectUi.attachedUnsupported);
+          await safeSendText(ctx, projectUi.attachedUnsupported);
           return true;
         }
         const [projects, current] = await Promise.all([
           listProjectsForControl(),
           repo.findActiveSession(ctx.botContextId, ctx.userId),
         ]);
-        const dialogueDir = adapter.sessions.ensureWorkingDir(ctx.botContextId);
-        const currentName =
-          !current || current.workingDir === dialogueDir
-            ? projectUi.dialogueName
-            : (current.workingDir.split(/[\\/]/).filter(Boolean).pop() ?? current.workingDir);
+        const currentName = workspaceDisplayName(
+          current?.workingDir,
+          ctx.botContextId,
+          current?.workspaceKind,
+        );
         const spec = cards.buildProjectPickerCard({
           botAppId: ctx.botContextId,
           projects,
           currentName,
         });
         try {
-          await richIm.sendInteractiveCard(ctx.userId, spec);
+          await safeSendCard(ctx, spec);
         } catch (err) {
           const msg = err instanceof Error ? err.message : String(err);
           log.error(`/project card send failed: ${msg}`);
@@ -400,14 +581,80 @@ export function createSlashHandlers(
         return true;
       }
 
+      case '/settings': {
+        // 只读总览 —— 不改任何配置, 所以不需要富卡, 纯文本渠道也照常可用。
+        const render = ui.slash.settings;
+        if (!render) {
+          await safeSendText(ctx, ui.slash.unknownCommand(cmd));
+          return true;
+        }
+        if (threadScoped && threadUi) {
+          await safeSendText(ctx, threadUi.perThreadConfigUnsupported);
+          return true;
+        }
+        // /ctr 接管期间, 下一条消息跑在**被接管的 desktop 会话**里 —— /model、
+        // /permission 改的也是那一行。总览无条件读 Telegram 自己的确定性会话行
+        // 就会报接管前的项目/模型/权限, 与同一屏里的其它命令自相矛盾。
+        //
+        // binding 指向的行已失效时回落到渠道自身的会话 —— 与 turnRunner 命中
+        // 无效 binding 时的落点一致(它还会顺手 detach, 只读路径不写)。
+        const attachedSessionId = bindingStore.get({
+          channel,
+          botContextId: ctx.botContextId,
+          userId: ctx.userId,
+        });
+        // 连接已交给伙伴(且没在 /ctr 接管中): 报伙伴那条任务(主任务 / 本群专线)实际在用
+        // 的配置。渠道自己的确定性会话行在这条连接上根本不会跑, 它的默认值(设置页 IM
+        // 新会话默认)会让用户以为伙伴用的是另一个模型。
+        const companionBound = !attachedSessionId && !!turnRunner.companionBotIdFor?.(ctx.botContextId);
+        const companionRow = companionBound
+          ? await turnRunner.peekCompanionRouteTarget?.(ctx.botContextId, ctx.userId)
+          : null;
+        if (companionBound && !companionRow) {
+          // 伙伴暂停 / 任务还没建起来: 没有一份能如实报的配置, 指回伙伴设置。
+          await safeSendText(ctx, ui.slash.companionManagedCommand ?? COMPANION_MANAGED_COMMAND_FALLBACK);
+          return true;
+        }
+        // 只读查询必须走只读路径: resolveRouteTarget 没有现成会话时会**建**一条,
+        // 而它内部的 findActiveSession 还会把软删行翻回 active 并广播 —— 问一句
+        // 「我现在什么配置」不该凭空造出任务, 更不该把用户已删的会话拉回列表。
+        const row =
+          companionRow ??
+          (attachedSessionId ? await repo.peekSessionById(attachedSessionId) : null) ??
+          (await repo.peekSession(ctx.botContextId, ctx.userId));
+        // 还没有会话行时报的必须是**下一条消息真正会用的**那份配置。静态
+        // adapter.config 不认用户在设置页改过的新会话默认值, 也不认已下架的模型,
+        // 会报出一个用户根本得不到的配置。prepareNewSession 走的正是建会话那条
+        // 默认值解析(readImDefaultSettings + 供应商目录 reconcile), 且只算不写。
+        const effective = row ?? (await repo.prepareNewSession(ctx.botContextId, ctx.userId));
+        // 项目显示成目录名而不是绝对路径: 官方 bot 那边显示的是工作区别名(短名),
+        // 两边给出的粒度得一样, 否则同一个项目在两个 bot 里看着像两个东西。
+        const workspace = workspaceDisplayName(
+          effective.workingDir,
+          ctx.botContextId,
+          effective.workspaceKind,
+        );
+        await safeSendText(
+          ctx,
+          ((companionRow && ui.slash.settingsCompanion) || render)({
+            workspace,
+            agent: effective.agentKind,
+            model: effective.model,
+            effort: effective.effort,
+            permission: effective.permissionMode,
+          }),
+        );
+        return true;
+      }
+
       case '/permission': {
         if (threadScoped && threadUi) {
-          await safeSendText(ctx.userId, threadUi.perThreadConfigUnsupported);
+          await safeSendText(ctx, threadUi.perThreadConfigUnsupported);
           return true;
         }
         const target = await turnRunner.resolveRouteTarget(ctx.botContextId, ctx.userId);
         if (!target) {
-          await safeSendText(ctx.userId, ui.agent.apiKeyMissing);
+          await safeSendText(ctx, ui.agent.apiKeyMissing);
           return true;
         }
         const { row } = target;
@@ -419,12 +666,12 @@ export function createSlashHandlers(
         if (!richIm) {
           const requested = commandArgs[0];
           if (!requested) {
-            await safeSendText(ctx.userId, renderTextPermissionModePicker(ui, context));
+            await safeSendText(ctx, renderTextPermissionModePicker(ui, context));
             return true;
           }
           const mode = resolvePermissionMode(context.modes, requested);
           if (!mode) {
-            await safeSendText(ctx.userId, renderTextPermissionModePicker(ui, context));
+            await safeSendText(ctx, renderTextPermissionModePicker(ui, context));
             return true;
           }
           const confirmedFullAccess = ['confirm', '确认'].includes(commandArgs[1]?.toLowerCase());
@@ -434,7 +681,7 @@ export function createSlashHandlers(
             modes: context.modes,
             confirmedFullAccess,
           });
-          await safeSendText(ctx.userId, renderTextPermissionModeResult(ui, result));
+          await safeSendText(ctx, renderTextPermissionModeResult(ui, result));
           return true;
         }
         const spec = cards.buildPermissionModePickerCard({
@@ -444,7 +691,7 @@ export function createSlashHandlers(
           currentMode: row.permissionMode,
         });
         try {
-          await richIm.sendInteractiveCard(ctx.userId, spec);
+          await safeSendCard(ctx, spec);
         } catch (err) {
           const msg = err instanceof Error ? err.message : String(err);
           log.error(`/permission card send failed: ${msg}`);
@@ -453,7 +700,7 @@ export function createSlashHandlers(
       }
 
       default:
-        await safeSendText(ctx.userId, ui.slash.unknownCommand(cmd));
+        await safeSendText(ctx, ui.slash.unknownCommand(cmd));
         return true;
     }
   }

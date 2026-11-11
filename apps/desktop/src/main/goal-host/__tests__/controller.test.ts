@@ -1,9 +1,11 @@
 import { describe, expect, it, beforeEach, vi } from 'vitest';
 
+import { TurnDispatchUnconfirmedError } from '@cindy/maker-core';
 import type { AgentEvent, SessionSendResult } from '@cindy/maker-core';
 
 import {
   GoalController,
+  GoalSessionRestoreError,
   GoalUpdateSupersededError,
   decideNextGoalState,
   deriveObjectiveFromAnswers,
@@ -13,6 +15,11 @@ import {
 } from '../controller';
 import { buildContinuationDirective, buildFirstTurnDirective } from '../directive';
 import { MAX_CONSECUTIVE_OVERLOAD_TURNS } from '../usageLimit';
+import { publishUiSessionIntervention, resetUiContinuationListenersForTest } from '../../maker-ipc/uiContinuationSignal';
+import { createMakerSteerTransaction, type MakerSteerTransactionDeps } from '../../maker-ipc/makerSteerTransaction';
+import { createWireNoteMemory } from '../../maker-ipc/wireNoteMemory';
+import { DEFAULT_CLASSICAL_REPLY_STYLE } from '@cindy/maker-shared/classical-reply';
+import { MCP_APP_MESSAGE_GUARD } from '../../mcp-apps/message.js';
 import type {
   AccountLimitInfo,
   GoalCompletionSummary,
@@ -23,6 +30,42 @@ import type {
   GoalStorageLike,
   SessionLike,
 } from '../types';
+
+// Execute the same production factory used by Desktop with in-memory IO.
+function productionSteer(
+  session: FakeSession,
+  deliver: (payload?: unknown) => Promise<void>,
+  rejectBeforeDelivery = false,
+  overrides: Record<string, unknown> = {},
+) {
+  const live = {
+    ...session,
+    capabilities: { sameTurnSteer: { supported: true } },
+    isTurnRunning: () => session.running,
+    getTurnGeneration: () => session.generation,
+    steer: deliver,
+  };
+  const deps = {
+    maker: { getSession: () => live, getSessionMeta: async () => null },
+    assertInputAllowed: async () => {},
+    assertInputCurrent: () => { if (rejectBeforeDelivery) throw new Error('stale input generation'); },
+    prepareUserMessageForAgent: async (_id: string, message: unknown) => message,
+    readReplyQuoteNote: async () => null,
+    readAutoReviewHistory: async () => [],
+    readSessionSource: async () => null,
+    getHostSourceDevice: () => ({ deviceId: 'fixture', platform: 'desktop' }),
+    getResolvedMainLocale: () => null,
+    getMainClassicalStyle: () => DEFAULT_CLASSICAL_REPLY_STYLE,
+    wireNoteMemory: createWireNoteMemory(),
+    inputHandoffSteerNote: () => null,
+    inputHandoffNoteDelivered: () => {},
+    mcpAppModelContext: async () => ({ text: '', assertCurrent: async () => {}, consume() {} }),
+    publishUiSessionIntervention,
+    log: { info() {}, warn() {}, debug() {} },
+    ...overrides,
+  };
+  return createMakerSteerTransaction(deps as unknown as MakerSteerTransactionDeps);
+}
 
 // ── decideNextGoalState (pure) ───────────────────────────────────────────────
 
@@ -48,11 +91,19 @@ function outcome(partial: Partial<TurnOutcome>): TurnOutcome {
 }
 
 describe('decideNextGoalState', () => {
-  it('pauses when a non-goal (user) turn finishes', () => {
-    const d = decideNextGoalState(BASE, outcome({ origin: 'other' }));
-    expect(d.status).toBe('paused');
-    expect(d.shouldFire).toBe(false);
-    expect(d.turnsUsed).toBe(0); // user turn does not count toward goal turns
+  it('continues after ordinary input without consuming Goal counters', () => {
+    const d = decideNextGoalState(BASE, outcome({ origin: 'other', tokensThisTurn: 999,
+      verdict: { status: 'complete', reason: 'unrelated' } }));
+    expect(d).toMatchObject({ status: 'active', shouldFire: true, turnsUsed: 0, tokensUsed: 0, noProgressStreak: 0 });
+  });
+
+  it.each([
+    { errorMessage: 'boom', status: 'blocked' },
+    { errorMessage: 'AbortError: aborted', status: 'paused' },
+    { errorKind: 'usage_limit', status: 'usageLimited' },
+  ] as const)('keeps errors of ordinary turns on the existing stop path: $status', (error) => {
+    const d = decideNextGoalState(BASE, outcome({ origin: 'other', errored: true, ...error }));
+    expect(d).toMatchObject({ status: error.status, shouldFire: false, turnsUsed: 0, tokensUsed: 0 });
   });
 
   it('blocks on a terminal error', () => {
@@ -60,6 +111,17 @@ describe('decideNextGoalState', () => {
     expect(d.status).toBe('blocked');
     expect(d.shouldFire).toBe(false);
     expect(d.lastReason).toContain('boom');
+  });
+
+  it('projects a tool-loop terminal error as a stable reason', () => {
+    const d = decideNextGoalState(BASE, outcome({
+      errored: true,
+      errorMessage: '上游模型疑似陷入死循环: missing_required_field',
+      errorReason: 'tool_use_loop_detected',
+    }));
+    expect(d.status).toBe('blocked');
+    expect(d.lastReason).toBe('tool_use_loop_detected');
+    expect(d.lastReason).not.toContain('missing_required_field');
   });
 
   it('pauses (not blocks) when the turn was aborted by the user', () => {
@@ -215,6 +277,11 @@ class FakeSession implements SessionLike {
   readonly sends: Array<{ content: string; originKind?: string }> = [];
   private listener: ((event: AgentEvent) => void) | null = null;
   running = false;
+  generation = 0;
+
+  getTurnGeneration(): number {
+    return this.generation;
+  }
 
   constructor(id: string, agentKind: SessionLike['agentKind'] = 'claude-code') {
     this.id = id;
@@ -223,11 +290,13 @@ class FakeSession implements SessionLike {
 
   async send(
     message: { type: 'user'; content: string } | string,
-    opts?: { origin?: { kind?: string }; onDispatching?: () => void; signal?: AbortSignal },
+    opts?: { origin?: { kind?: string }; onDispatching?: () => void; onAccepted?: () => void | Promise<void>; signal?: AbortSignal },
   ): Promise<SessionSendResult> {
     const content = typeof message === 'string' ? message : message.content;
     this.sends.push({ content, originKind: opts?.origin?.kind });
     opts?.onDispatching?.();
+    const accepted = opts?.onAccepted?.();
+    if (accepted) await accepted;
     return { accepted: true };
   }
 
@@ -236,6 +305,10 @@ class FakeSession implements SessionLike {
     return () => {
       if (this.listener === listener) this.listener = null;
     };
+  }
+
+  hasListener(): boolean {
+    return this.listener !== null;
   }
 
   isTurnRunning(): boolean {
@@ -323,6 +396,8 @@ function makeController(depOverrides: Partial<GoalControllerDeps> = {}) {
   const persistedLimits: GoalLimits[] = [];
   const notices: Array<{ sessionId: string; kind: string }> = [];
   const userMessages: Array<{ sessionId: string; content: string; updated?: boolean }> = [];
+  const stopped = vi.fn();
+  const userDispatched = vi.fn();
   // 可变:测试按需设置"账号是否受限 + resetAt"。
   let accountLimit: AccountLimitInfo | null = null;
   // 可变:模拟"会话已关闭 / 此刻 hydrate 不出来"(ensureSession 返回 undefined)。
@@ -334,6 +409,8 @@ function makeController(depOverrides: Partial<GoalControllerDeps> = {}) {
     isSessionInTurn: () => false,
     stopActiveGoalTurn: () => {},
     emitStatus: (u) => updates.push(u),
+    onGoalStopped: stopped,
+    onGoalUserDispatched: userDispatched,
     getDefaults: () => ({ ...DEFAULT_LIMITS }),
     persistGoalSettingsOverride: (l) => persistedLimits.push(l),
     logger: { info: () => {}, warn: () => {}, error: () => {} },
@@ -361,6 +438,8 @@ function makeController(depOverrides: Partial<GoalControllerDeps> = {}) {
     persistedLimits,
     notices,
     userMessages,
+    stopped,
+    userDispatched,
     setAccountLimit: (v: AccountLimitInfo | null) => {
       accountLimit = v;
     },
@@ -397,10 +476,195 @@ function startGoal(h: ReturnType<typeof makeController>, objective = 'make tests
 describe('GoalController', () => {
   let h: ReturnType<typeof makeController>;
   beforeEach(() => {
+    resetUiContinuationListenersForTest();
     h = makeController();
   });
 
+  it('reports one handoff when a goal is cleared, not on its intermediate turns', async () => {
+    await startGoal(h);
+    h.session.emitGoalTurn({ toolUse: true, verdictJson: '```json\n{"goal_status":"continue","reason":"wip"}\n```' });
+    await tick();
+    expect(h.stopped).not.toHaveBeenCalled();
+    await h.controller.clearGoal('s1');
+    expect(h.stopped).toHaveBeenCalledExactlyOnceWith('s1', 1000);
+    await h.controller.clearGoal('s1');
+    expect(h.stopped).toHaveBeenCalledTimes(1);
+  });
+
+  it('reports accepted manual starts and resumes, but not intermediate goal rounds', async () => {
+    try {
+      await startGoal(h);
+      expect(h.userDispatched).toHaveBeenCalledExactlyOnceWith('s1', 1000);
+      h.session.emitGoalTurn({ toolUse: true, verdictJson: '```json\n{"goal_status":"continue","reason":"wip"}\n```' });
+      await tick();
+      expect(h.session.sends).toHaveLength(2);
+      expect(h.userDispatched).toHaveBeenCalledTimes(1);
+      await h.controller.pauseGoal('s1');
+      await h.controller.resumeGoal('s1');
+      expect(h.session.sends).toHaveLength(3);
+      expect(h.userDispatched).toHaveBeenCalledTimes(2);
+    } finally { await h.controller.dispose(); }
+  });
+
   // ── setGoal / updateGoal ──
+  it('blocks an unconfirmed dispatch without retrying duplicate Goal work', async () => {
+    const local = makeController();
+    vi.spyOn(local.session, 'send').mockImplementation(async (
+      _message: Parameters<FakeSession['send']>[0],
+      opts: Parameters<FakeSession['send']>[1],
+    ) => {
+      opts?.onDispatching?.();
+      throw new TurnDispatchUnconfirmedError('Pi prompt acceptance timed out');
+    });
+
+    await local.controller.setGoal({ sessionId: 's1', objective: 'finish the work' });
+
+    expect(local.session.send).toHaveBeenCalledTimes(1);
+    expect(local.userDispatched).not.toHaveBeenCalled();
+    expect(await local.storage.get('s1')).toMatchObject({
+      status: 'blocked',
+      turnsUsed: 0,
+      lastReason: expect.stringContaining('Pi prompt acceptance timed out'),
+    });
+  });
+
+  it('rejects a new Goal when its dormant agent session cannot be restored', async () => {
+    const local = makeController();
+    local.setHydratable(false);
+
+    await expect(local.controller.setGoal({
+      sessionId: 's1',
+      objective: 'finish the work',
+      agentKind: 'pi',
+    })).rejects.toBeInstanceOf(GoalSessionRestoreError);
+
+    expect(local.session.sends).toHaveLength(0);
+    expect(await local.storage.get('s1')).toBeNull();
+  });
+
+  it('blocks and rejects a Goal edit when its session cannot be restored', async () => {
+    const local = makeController();
+    await local.storage.set(seededGoal({ status: 'active', objective: 'old objective' }));
+    local.setHydratable(false);
+
+    await expect(local.controller.setGoal({
+      sessionId: 's1',
+      objective: 'new objective',
+    })).rejects.toBeInstanceOf(GoalSessionRestoreError);
+
+    expect(await local.storage.get('s1')).toMatchObject({
+      status: 'blocked',
+      objective: 'old objective',
+      lastReason: expect.stringContaining('unable to restore the agent session'),
+    });
+    expect(local.session.sends).toHaveLength(0);
+  });
+
+  it('blocks a Goal edit when session restoration throws and preserves the old objective', async () => {
+    const local = makeController({
+      ensureSession: async () => {
+        throw new Error('agent bootstrap failed');
+      },
+    });
+    await local.storage.set(seededGoal({ status: 'active', objective: 'old objective' }));
+
+    await expect(local.controller.setGoal({
+      sessionId: 's1',
+      objective: 'new objective',
+    })).rejects.toBeInstanceOf(GoalSessionRestoreError);
+
+    expect(await local.storage.get('s1')).toMatchObject({
+      status: 'blocked',
+      objective: 'old objective',
+      lastReason: expect.stringContaining('unable to restore the agent session'),
+    });
+    expect(local.session.sends).toHaveLength(0);
+  });
+
+  it('surfaces a non-retryable first-turn send failure as blocked instead of active at zero turns', async () => {
+    const local = makeController();
+    vi.spyOn(local.session, 'send').mockRejectedValue(new Error('provider authentication failed'));
+
+    await local.controller.setGoal({ sessionId: 's1', objective: 'finish the work' });
+
+    expect(await local.storage.get('s1')).toMatchObject({
+      status: 'blocked',
+      turnsUsed: 0,
+      lastReason: expect.stringContaining('provider authentication failed'),
+    });
+  });
+
+  it('keeps dispatch owners clean when the route-lock release throws', async () => {
+    const releaseAgentSwitchLock = vi.fn(() => {
+      throw new Error('route lock release failed');
+    });
+    const acquirePendingAgentSwitch = vi.fn(async () => releaseAgentSwitchLock);
+    const local = makeController({ acquirePendingAgentSwitch });
+
+    await local.controller.setGoal({ sessionId: 's1', objective: 'keep advancing' });
+    expect(local.session.sends).toHaveLength(1);
+
+    local.session.emitGoalTurn({
+      toolUse: true,
+      verdictJson: '```json\n{"goal_status":"continue","reason":"next"}\n```',
+      tokens: 10,
+    });
+    await vi.waitFor(() => {
+      expect(local.session.sends).toHaveLength(2);
+      expect(acquirePendingAgentSwitch).toHaveBeenCalledTimes(2);
+      expect(releaseAgentSwitchLock).toHaveBeenCalledTimes(2);
+    });
+  });
+
+  it('propagates a typed restore error when the route switch closes the initially ensured session', async () => {
+    const session = new FakeSession('s1', 'pi');
+    let ensureCalls = 0;
+    const local = makeController({
+      getSession: () => session,
+      ensureSession: async () => {
+        ensureCalls += 1;
+        return ensureCalls === 1 ? session : undefined;
+      },
+      acquirePendingAgentSwitch: async () => () => {},
+    });
+
+    await expect(local.controller.setGoal({
+      sessionId: 's1',
+      objective: 'recover after the switch',
+      agentKind: 'pi',
+    })).rejects.toBeInstanceOf(GoalSessionRestoreError);
+
+    expect(await local.storage.get('s1')).toMatchObject({
+      status: 'blocked',
+      lastReason: expect.stringContaining('unable to restore the agent session'),
+    });
+    expect(session.sends).toHaveLength(0);
+  });
+
+  it('propagates a typed restore error when manual Resume loses its session after route switching', async () => {
+    const session = new FakeSession('s1', 'pi');
+    let ensureCalls = 0;
+    const local = makeController({
+      getSession: () => session,
+      ensureSession: async () => {
+        ensureCalls += 1;
+        return ensureCalls === 1 ? session : undefined;
+      },
+      acquirePendingAgentSwitch: async () => () => {},
+    });
+    await local.storage.set(seededGoal({ status: 'blocked', agentKind: 'pi' }));
+
+    await expect(local.controller.resumeGoal('s1')).rejects.toBeInstanceOf(
+      GoalSessionRestoreError,
+    );
+
+    expect(await local.storage.get('s1')).toMatchObject({
+      status: 'blocked',
+      lastReason: expect.stringContaining('unable to restore the agent session'),
+    });
+    expect(session.sends).toHaveLength(0);
+  });
+
   it('setGoal creates a new goal directly with default limits and fires the first turn', async () => {
     await h.controller.setGoal({ sessionId: 's1', objective: 'ship the feature' });
     const st = await h.storage.get('s1');
@@ -491,7 +755,9 @@ describe('GoalController', () => {
     expect(await local.storage.get('s1')).toBeNull();
   });
 
-  it('aborts the git baseline when a goal continuation send is not accepted', async () => {
+  it('backs off once after an explicit provider rejection, then accepts without duplicate dispatch', async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(1_000);
     const order: string[] = [];
     const beforeDispatchUserTurn = vi.fn(async () => {
       order.push('baseline');
@@ -502,7 +768,10 @@ describe('GoalController', () => {
     const local = makeController({
       beforeDispatchUserTurn,
       onUndispatchedUserTurn,
+      now: () => Date.now(),
+      continuationDebounceMs: 150,
     });
+    let attempts = 0;
     vi.spyOn(local.session, 'send').mockImplementation(async (
       message: Parameters<FakeSession['send']>[0],
       opts: Parameters<FakeSession['send']>[1],
@@ -510,15 +779,679 @@ describe('GoalController', () => {
       const content = typeof message === 'string' ? message : message.content;
       local.session.sends.push({ content, originKind: opts?.origin?.kind });
       order.push('send');
-      return { accepted: false, reason: 'cancelled-before-dispatch' };
+      attempts += 1;
+      await opts?.onAccepted?.();
+      opts?.onDispatching?.();
+      return attempts === 1
+        ? { accepted: false, reason: 'provider-rejected-before-dispatch' }
+        : { accepted: true };
     });
 
-    await local.controller.setGoal({ sessionId: 's1', objective: 'ship the feature' });
+    try {
+      await local.controller.setGoal({ sessionId: 's1', objective: 'ship the feature' });
 
-    expect(order).toEqual(['baseline', 'send', 'abort']);
-    expect(beforeDispatchUserTurn).toHaveBeenCalledWith('s1');
-    expect(onUndispatchedUserTurn).toHaveBeenCalledWith('s1');
-    expect(local.session.sends).toHaveLength(1);
+      expect(order).toEqual(['baseline', 'send', 'abort']);
+      expect(local.userDispatched).not.toHaveBeenCalled();
+      expect(onUndispatchedUserTurn).toHaveBeenCalledWith('s1');
+      expect(await local.storage.get('s1')).toMatchObject({ status: 'active', turnsUsed: 0 });
+
+      // Generic idle continuation signals must not shorten the rejection backoff.
+      await local.controller.maybeContinueActiveGoal('s1');
+      await vi.advanceTimersByTimeAsync(499);
+      expect(local.session.sends).toHaveLength(1);
+
+      await vi.advanceTimersByTimeAsync(1);
+      expect(order).toEqual(['baseline', 'send', 'abort', 'baseline', 'send']);
+      expect(beforeDispatchUserTurn).toHaveBeenCalledTimes(2);
+      expect(onUndispatchedUserTurn).toHaveBeenCalledTimes(1);
+      expect(local.session.sends).toHaveLength(2);
+      expect(local.userDispatched).toHaveBeenCalledExactlyOnceWith('s1', 1_500);
+      expect(await local.storage.get('s1')).toMatchObject({ status: 'active', turnsUsed: 0 });
+    } finally {
+      local.controller.dispose();
+      vi.useRealTimers();
+    }
+  });
+
+  it.each(['create', 'edit'] as const)(
+    'preserves the %s lifecycle when the final status read fails after provider rejection',
+    async (mode) => {
+      vi.useFakeTimers();
+      vi.setSystemTime(1_000);
+      const local = makeController({ now: () => Date.now() });
+      const originalGet = local.storage.get.bind(local.storage);
+      let failNextRead = false;
+      vi.spyOn(local.storage, 'get').mockImplementation(async (sessionId) => {
+        if (failNextRead) {
+          failNextRead = false;
+          throw new Error('final status read unavailable');
+        }
+        return originalGet(sessionId);
+      });
+      let attempts = 0;
+      vi.spyOn(local.session, 'send').mockImplementation(async (
+        message: Parameters<FakeSession['send']>[0],
+        opts: Parameters<FakeSession['send']>[1],
+      ): Promise<SessionSendResult> => {
+        const content = typeof message === 'string' ? message : message.content;
+        local.session.sends.push({ content, originKind: opts?.origin?.kind });
+        attempts += 1;
+        opts?.onDispatching?.();
+        if (attempts === 1) {
+          failNextRead = true;
+          return { accepted: false, reason: 'provider-rejected-before-dispatch' };
+        }
+        return { accepted: true };
+      });
+      const internals = local.controller as unknown as {
+        turns: Map<string, unknown>;
+        timers: Map<string, ReturnType<typeof setTimeout>>;
+        unsubscribers: Map<string, () => void>;
+        dispatchRejectionRetries: Map<string, unknown>;
+      };
+
+      try {
+        if (mode === 'edit') {
+          await local.storage.set(seededGoal({ status: 'paused', objective: 'old objective' }));
+        }
+
+        await expect(
+          local.controller.setGoal({ sessionId: 's1', objective: 'replacement objective' }),
+        ).rejects.toThrow('final status read unavailable');
+
+        expect(local.session.sends).toHaveLength(1);
+        expect(internals.turns.has('s1')).toBe(true);
+        expect(internals.timers.has('s1')).toBe(true);
+        expect(internals.unsubscribers.has('s1')).toBe(true);
+        expect(internals.dispatchRejectionRetries.has('s1')).toBe(true);
+        expect(await originalGet('s1')).toMatchObject({
+          status: 'active',
+          objective: 'replacement objective',
+          turnsUsed: 0,
+        });
+
+        // Opening an already managed Goal must not bypass the preserved timer.
+        await local.controller.resumeOnOpen('s1');
+        expect(local.session.sends).toHaveLength(1);
+        await vi.advanceTimersByTimeAsync(499);
+        expect(local.session.sends).toHaveLength(1);
+        await vi.advanceTimersByTimeAsync(1);
+        expect(local.session.sends).toHaveLength(2);
+        expect(internals.dispatchRejectionRetries.has('s1')).toBe(false);
+        expect(internals.unsubscribers.has('s1')).toBe(true);
+
+        local.session.emitGoalTurn({
+          toolUse: true,
+          verdictJson: '```json\n{"goal_status":"complete","reason":"done"}\n```',
+          tokens: 10,
+        });
+        await vi.waitFor(async () => {
+          expect(await originalGet('s1')).toBeNull();
+        });
+        expect(internals.turns.has('s1')).toBe(false);
+        expect(internals.timers.has('s1')).toBe(false);
+        expect(internals.unsubscribers.has('s1')).toBe(false);
+      } finally {
+        local.controller.dispose();
+        vi.useRealTimers();
+      }
+    },
+  );
+
+  it('backs off persistent provider rejection and blocks after four confirmed non-dispatches', async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(1_000);
+    const beforeDispatchUserTurn = vi.fn(async () => {});
+    const onUndispatchedUserTurn = vi.fn();
+    const local = makeController({
+      beforeDispatchUserTurn,
+      onUndispatchedUserTurn,
+      now: () => Date.now(),
+    });
+    vi.spyOn(local.session, 'send').mockImplementation(async (
+      message: Parameters<FakeSession['send']>[0],
+      opts: Parameters<FakeSession['send']>[1],
+    ): Promise<SessionSendResult> => {
+      const content = typeof message === 'string' ? message : message.content;
+      local.session.sends.push({ content, originKind: opts?.origin?.kind });
+      opts?.onDispatching?.();
+      return { accepted: false, reason: 'provider-rejected-before-dispatch' };
+    });
+
+    try {
+      await local.controller.setGoal({ sessionId: 's1', objective: 'ship the feature' });
+      expect(local.session.sends).toHaveLength(1);
+
+      await vi.advanceTimersByTimeAsync(499);
+      expect(local.session.sends).toHaveLength(1);
+      await vi.advanceTimersByTimeAsync(1);
+      expect(local.session.sends).toHaveLength(2);
+
+      await vi.advanceTimersByTimeAsync(999);
+      expect(local.session.sends).toHaveLength(2);
+      await vi.advanceTimersByTimeAsync(1);
+      expect(local.session.sends).toHaveLength(3);
+
+      await vi.advanceTimersByTimeAsync(1_999);
+      expect(local.session.sends).toHaveLength(3);
+      await vi.advanceTimersByTimeAsync(1);
+
+      expect(local.session.sends).toHaveLength(4);
+      expect(beforeDispatchUserTurn).toHaveBeenCalledTimes(4);
+      expect(onUndispatchedUserTurn).toHaveBeenCalledTimes(4);
+      expect(await local.storage.get('s1')).toMatchObject({
+        status: 'blocked',
+        turnsUsed: 0,
+        tokensUsed: 0,
+        lastReason: expect.stringContaining('provider repeatedly rejected attempts'),
+      });
+
+      await vi.advanceTimersByTimeAsync(60_000);
+      expect(local.session.sends).toHaveLength(4);
+    } finally {
+      local.controller.dispose();
+      vi.useRealTimers();
+    }
+  });
+
+  it('blocks when confirmed provider rejections exceed the retry time window', async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(1_000);
+    const local = makeController({ now: () => Date.now() });
+    vi.spyOn(local.session, 'send').mockImplementation(async (
+      message: Parameters<FakeSession['send']>[0],
+      opts: Parameters<FakeSession['send']>[1],
+    ): Promise<SessionSendResult> => {
+      const content = typeof message === 'string' ? message : message.content;
+      local.session.sends.push({ content, originKind: opts?.origin?.kind });
+      opts?.onDispatching?.();
+      return { accepted: false, reason: 'provider-rejected-before-dispatch' };
+    });
+
+    try {
+      await local.controller.setGoal({ sessionId: 's1', objective: 'ship the feature' });
+      vi.setSystemTime(16_001);
+      await vi.advanceTimersByTimeAsync(500);
+
+      expect(local.session.sends).toHaveLength(1);
+      expect(await local.storage.get('s1')).toMatchObject({
+        status: 'blocked',
+        turnsUsed: 0,
+        lastReason: expect.stringContaining('provider repeatedly rejected attempts'),
+      });
+    } finally {
+      local.controller.dispose();
+      vi.useRealTimers();
+    }
+  });
+
+  it('gives a replacement objective a fresh rejection budget during backoff', async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(1_000);
+    const local = makeController({ now: () => Date.now() });
+    vi.spyOn(local.session, 'send').mockImplementation(async (
+      message: Parameters<FakeSession['send']>[0],
+      opts: Parameters<FakeSession['send']>[1],
+    ): Promise<SessionSendResult> => {
+      const content = typeof message === 'string' ? message : message.content;
+      local.session.sends.push({ content, originKind: opts?.origin?.kind });
+      opts?.onDispatching?.();
+      return { accepted: false, reason: 'provider-rejected-before-dispatch' };
+    });
+
+    try {
+      await local.controller.setGoal({ sessionId: 's1', objective: 'old objective' });
+      await vi.advanceTimersByTimeAsync(500);
+      expect(local.session.sends).toHaveLength(2);
+
+      await local.controller.updateGoal('s1', { objective: 'replacement objective' });
+      await vi.advanceTimersByTimeAsync(0);
+      expect(local.session.sends).toHaveLength(3);
+      expect(local.session.sends.at(-1)?.content).toContain('replacement objective');
+      expect(await local.storage.get('s1')).toMatchObject({
+        status: 'active',
+        objective: 'replacement objective',
+      });
+
+      await vi.advanceTimersByTimeAsync(500);
+      await vi.advanceTimersByTimeAsync(1_000);
+      await vi.advanceTimersByTimeAsync(2_000);
+
+      expect(local.session.sends).toHaveLength(6);
+      expect(await local.storage.get('s1')).toMatchObject({
+        status: 'blocked',
+        objective: 'replacement objective',
+        turnsUsed: 0,
+        lastReason: expect.stringContaining('provider repeatedly rejected attempts'),
+      });
+    } finally {
+      local.controller.dispose();
+      vi.useRealTimers();
+    }
+  });
+
+  it('fences the old rejection timer while setGoal replacement waits for hydration', async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(1_000);
+    let ensureCalls = 0;
+    let releaseHydration!: (session: SessionLike | undefined) => void;
+    const pendingHydration = new Promise<SessionLike | undefined>((resolve) => {
+      releaseHydration = resolve;
+    });
+    const local = makeController({
+      now: () => Date.now(),
+      ensureSession: async () => {
+        ensureCalls += 1;
+        return ensureCalls === 3 ? pendingHydration : local.session;
+      },
+    });
+    let attempts = 0;
+    vi.spyOn(local.session, 'send').mockImplementation(async (
+      message: Parameters<FakeSession['send']>[0],
+      opts: Parameters<FakeSession['send']>[1],
+    ): Promise<SessionSendResult> => {
+      const content = typeof message === 'string' ? message : message.content;
+      local.session.sends.push({ content, originKind: opts?.origin?.kind });
+      attempts += 1;
+      opts?.onDispatching?.();
+      return attempts === 1
+        ? { accepted: false, reason: 'provider-rejected-before-dispatch' }
+        : { accepted: true };
+    });
+
+    try {
+      await local.controller.setGoal({ sessionId: 's1', objective: 'old objective' });
+      const replacement = local.controller.setGoal({
+        sessionId: 's1',
+        objective: 'replacement objective',
+      });
+      await vi.advanceTimersByTimeAsync(0);
+      expect(ensureCalls).toBe(3);
+
+      await vi.advanceTimersByTimeAsync(500);
+      expect(local.session.sends).toHaveLength(1);
+
+      releaseHydration(local.session);
+      await replacement;
+      expect(local.session.sends).toHaveLength(2);
+      expect(local.session.sends.at(-1)?.content).toContain('replacement objective');
+    } finally {
+      local.controller.dispose();
+      vi.useRealTimers();
+    }
+  });
+
+  it('fences the old rejection timer while an objective marker is persisting', async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(1_000);
+    let releaseMarker!: () => void;
+    const pendingMarker = new Promise<void>((resolve) => {
+      releaseMarker = resolve;
+    });
+    const local = makeController({
+      now: () => Date.now(),
+      persistUserMessage: async (_sessionId, _content, opts) => {
+        if (opts?.goalObjective?.updated) await pendingMarker;
+      },
+    });
+    let attempts = 0;
+    vi.spyOn(local.session, 'send').mockImplementation(async (
+      message: Parameters<FakeSession['send']>[0],
+      opts: Parameters<FakeSession['send']>[1],
+    ): Promise<SessionSendResult> => {
+      const content = typeof message === 'string' ? message : message.content;
+      local.session.sends.push({ content, originKind: opts?.origin?.kind });
+      attempts += 1;
+      opts?.onDispatching?.();
+      return attempts === 1
+        ? { accepted: false, reason: 'provider-rejected-before-dispatch' }
+        : { accepted: true };
+    });
+
+    try {
+      await local.controller.setGoal({ sessionId: 's1', objective: 'old objective' });
+      const update = local.controller.updateGoal('s1', { objective: 'replacement objective' });
+      await vi.advanceTimersByTimeAsync(0);
+
+      await vi.advanceTimersByTimeAsync(500);
+      expect(local.session.sends).toHaveLength(1);
+
+      releaseMarker();
+      await update;
+      await vi.advanceTimersByTimeAsync(0);
+      expect(local.session.sends).toHaveLength(2);
+      expect(local.session.sends.at(-1)?.content).toContain('replacement objective');
+    } finally {
+      local.controller.dispose();
+      vi.useRealTimers();
+    }
+  });
+
+  it('restores the old objective retry budget when its update fails before commit', async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(1_000);
+    const local = makeController({ now: () => Date.now() });
+    let attempts = 0;
+    vi.spyOn(local.session, 'send').mockImplementation(async (
+      message: Parameters<FakeSession['send']>[0],
+      opts: Parameters<FakeSession['send']>[1],
+    ): Promise<SessionSendResult> => {
+      const content = typeof message === 'string' ? message : message.content;
+      local.session.sends.push({ content, originKind: opts?.origin?.kind });
+      attempts += 1;
+      opts?.onDispatching?.();
+      return attempts === 1
+        ? { accepted: false, reason: 'provider-rejected-before-dispatch' }
+        : { accepted: true };
+    });
+
+    try {
+      await local.controller.setGoal({ sessionId: 's1', objective: 'old objective' });
+      vi.spyOn(local.storage, 'update').mockRejectedValueOnce(new Error('storage unavailable'));
+
+      await expect(
+        local.controller.updateGoal('s1', { objective: 'replacement objective' }),
+      ).rejects.toThrow('storage unavailable');
+
+      await vi.advanceTimersByTimeAsync(499);
+      expect(local.session.sends).toHaveLength(1);
+      await vi.advanceTimersByTimeAsync(1);
+      expect(local.session.sends).toHaveLength(2);
+      expect(local.session.sends.at(-1)?.content).toContain('old objective');
+      expect(await local.storage.get('s1')).toMatchObject({
+        status: 'active',
+        objective: 'old objective',
+      });
+    } finally {
+      local.controller.dispose();
+      vi.useRealTimers();
+    }
+  });
+
+  it('aborts a retry still inside the dispatch gate before replacing the Goal', async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(1_000);
+    const local = makeController({ now: () => Date.now() });
+    let attempts = 0;
+    let markRetryStarted!: () => void;
+    const retryStarted = new Promise<void>((resolve) => {
+      markRetryStarted = resolve;
+    });
+    vi.spyOn(local.session, 'send').mockImplementation(async (
+      message: Parameters<FakeSession['send']>[0],
+      opts: Parameters<FakeSession['send']>[1],
+    ): Promise<SessionSendResult> => {
+      const content = typeof message === 'string' ? message : message.content;
+      local.session.sends.push({ content, originKind: opts?.origin?.kind });
+      attempts += 1;
+      if (attempts === 1) {
+        opts?.onDispatching?.();
+        return { accepted: false, reason: 'provider-rejected-before-dispatch' };
+      }
+      if (attempts === 2) {
+        markRetryStarted();
+        await new Promise<void>((resolve) => {
+          opts?.signal?.addEventListener('abort', () => resolve(), { once: true });
+        });
+        return { accepted: false, reason: 'cancelled-before-dispatch' };
+      }
+      opts?.onDispatching?.();
+      return { accepted: true };
+    });
+
+    try {
+      await local.controller.setGoal({ sessionId: 's1', objective: 'old objective' });
+      const retryAdvance = vi.advanceTimersByTimeAsync(500);
+      await retryStarted;
+
+      const replacement = local.controller.setGoal({
+        sessionId: 's1',
+        objective: 'replacement objective',
+      });
+      await Promise.all([retryAdvance, replacement]);
+
+      expect(local.session.sends).toHaveLength(3);
+      expect(local.session.sends.at(-1)?.content).toContain('replacement objective');
+      expect(await local.storage.get('s1')).toMatchObject({
+        status: 'active',
+        objective: 'replacement objective',
+      });
+    } finally {
+      local.controller.dispose();
+      vi.useRealTimers();
+    }
+  });
+
+  it('aborts a retry after onDispatching before replacing the Goal', async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(1_000);
+    const local = makeController({ now: () => Date.now() });
+    let attempts = 0;
+    let markRetryStarted!: () => void;
+    let releaseRetry!: (result: SessionSendResult) => void;
+    const retryStarted = new Promise<void>((resolve) => {
+      markRetryStarted = resolve;
+    });
+    const pendingRetry = new Promise<SessionSendResult>((resolve) => {
+      releaseRetry = resolve;
+    });
+    vi.spyOn(local.session, 'send').mockImplementation(async (
+      message: Parameters<FakeSession['send']>[0],
+      opts: Parameters<FakeSession['send']>[1],
+    ): Promise<SessionSendResult> => {
+      const content = typeof message === 'string' ? message : message.content;
+      local.session.sends.push({ content, originKind: opts?.origin?.kind });
+      attempts += 1;
+      opts?.onDispatching?.();
+      if (attempts === 1) {
+        return { accepted: false, reason: 'provider-rejected-before-dispatch' };
+      }
+      if (attempts === 2) {
+        local.session.running = true;
+        markRetryStarted();
+        return pendingRetry;
+      }
+      return { accepted: true };
+    });
+    vi.spyOn(local.session, 'abort').mockImplementation(async () => {
+      local.session.running = false;
+      releaseRetry({ accepted: false, reason: 'cancelled-before-dispatch' });
+    });
+
+    try {
+      await local.controller.setGoal({ sessionId: 's1', objective: 'old objective' });
+      const retryAdvance = vi.advanceTimersByTimeAsync(500);
+      await retryStarted;
+
+      const replacement = local.controller.setGoal({
+        sessionId: 's1',
+        objective: 'replacement objective',
+      });
+      await Promise.all([retryAdvance, replacement]);
+
+      expect(local.session.abort).toHaveBeenCalledTimes(1);
+      expect(local.session.sends).toHaveLength(3);
+      expect(local.session.sends.at(-1)?.content).toContain('replacement objective');
+      expect(await local.storage.get('s1')).toMatchObject({
+        status: 'active',
+        objective: 'replacement objective',
+      });
+    } finally {
+      local.controller.dispose();
+      vi.useRealTimers();
+    }
+  });
+
+  it('rejects updateGoal while an old-objective retry acceptance is unresolved', async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(1_000);
+    const local = makeController({ now: () => Date.now() });
+    let attempts = 0;
+    let markRetryStarted!: () => void;
+    let releaseRetry!: (result: SessionSendResult) => void;
+    const retryStarted = new Promise<void>((resolve) => {
+      markRetryStarted = resolve;
+    });
+    const pendingRetry = new Promise<SessionSendResult>((resolve) => {
+      releaseRetry = resolve;
+    });
+    vi.spyOn(local.session, 'send').mockImplementation(async (
+      message: Parameters<FakeSession['send']>[0],
+      opts: Parameters<FakeSession['send']>[1],
+    ): Promise<SessionSendResult> => {
+      const content = typeof message === 'string' ? message : message.content;
+      local.session.sends.push({ content, originKind: opts?.origin?.kind });
+      attempts += 1;
+      opts?.onDispatching?.();
+      if (attempts === 1) {
+        return { accepted: false, reason: 'provider-rejected-before-dispatch' };
+      }
+      markRetryStarted();
+      return pendingRetry;
+    });
+
+    try {
+      await local.controller.setGoal({ sessionId: 's1', objective: 'old objective' });
+      const retryAdvance = vi.advanceTimersByTimeAsync(500);
+      await retryStarted;
+
+      await expect(
+        local.controller.updateGoal('s1', { objective: 'replacement objective' }),
+      ).rejects.toThrow('current goal dispatch is still being accepted');
+      expect(await local.storage.get('s1')).toMatchObject({
+        status: 'active',
+        objective: 'old objective',
+      });
+
+      releaseRetry({ accepted: true });
+      await retryAdvance;
+      await vi.advanceTimersByTimeAsync(60_000);
+      expect(local.session.sends).toHaveLength(2);
+      expect(await local.storage.get('s1')).toMatchObject({ objective: 'old objective' });
+    } finally {
+      local.controller.dispose();
+      vi.useRealTimers();
+    }
+  });
+
+  it('restores the old rejection owner when replacement state lookup fails', async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(1_000);
+    const local = makeController({ now: () => Date.now() });
+    let attempts = 0;
+    vi.spyOn(local.session, 'send').mockImplementation(async (
+      message: Parameters<FakeSession['send']>[0],
+      opts: Parameters<FakeSession['send']>[1],
+    ): Promise<SessionSendResult> => {
+      const content = typeof message === 'string' ? message : message.content;
+      local.session.sends.push({ content, originKind: opts?.origin?.kind });
+      attempts += 1;
+      opts?.onDispatching?.();
+      return attempts === 1
+        ? { accepted: false, reason: 'provider-rejected-before-dispatch' }
+        : { accepted: true };
+    });
+
+    try {
+      await local.controller.setGoal({ sessionId: 's1', objective: 'old objective' });
+      vi.spyOn(local.storage, 'get').mockRejectedValueOnce(new Error('storage unavailable'));
+
+      await expect(
+        local.controller.setGoal({ sessionId: 's1', objective: 'replacement objective' }),
+      ).rejects.toThrow('storage unavailable');
+
+      await vi.advanceTimersByTimeAsync(500);
+      expect(local.session.sends).toHaveLength(2);
+      expect(local.session.sends.at(-1)?.content).toContain('old objective');
+      expect(await local.storage.get('s1')).toMatchObject({
+        status: 'active',
+        objective: 'old objective',
+      });
+    } finally {
+      local.controller.dispose();
+      vi.useRealTimers();
+    }
+  });
+
+  it('restores the old retry when setGoal replacement fails before objective commit', async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(1_000);
+    const local = makeController({ now: () => Date.now() });
+    let attempts = 0;
+    vi.spyOn(local.session, 'send').mockImplementation(async (
+      message: Parameters<FakeSession['send']>[0],
+      opts: Parameters<FakeSession['send']>[1],
+    ): Promise<SessionSendResult> => {
+      const content = typeof message === 'string' ? message : message.content;
+      local.session.sends.push({ content, originKind: opts?.origin?.kind });
+      attempts += 1;
+      opts?.onDispatching?.();
+      return attempts === 1
+        ? { accepted: false, reason: 'provider-rejected-before-dispatch' }
+        : { accepted: true };
+    });
+
+    try {
+      await local.controller.setGoal({ sessionId: 's1', objective: 'old objective' });
+      vi.spyOn(local.storage, 'update').mockRejectedValueOnce(new Error('storage unavailable'));
+
+      await expect(
+        local.controller.setGoal({ sessionId: 's1', objective: 'replacement objective' }),
+      ).rejects.toThrow('storage unavailable');
+
+      await vi.advanceTimersByTimeAsync(500);
+      expect(local.session.sends).toHaveLength(2);
+      expect(local.session.sends.at(-1)?.content).toContain('old objective');
+      expect(await local.storage.get('s1')).toMatchObject({
+        status: 'active',
+        objective: 'old objective',
+      });
+    } finally {
+      local.controller.dispose();
+      vi.useRealTimers();
+    }
+  });
+
+  it('continues the committed replacement when its objective marker fails', async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(1_000);
+    const local = makeController({
+      now: () => Date.now(),
+      persistUserMessage: async (_sessionId, _content, opts) => {
+        if (opts?.goalObjective?.updated) throw new Error('marker unavailable');
+      },
+    });
+    let attempts = 0;
+    vi.spyOn(local.session, 'send').mockImplementation(async (
+      message: Parameters<FakeSession['send']>[0],
+      opts: Parameters<FakeSession['send']>[1],
+    ): Promise<SessionSendResult> => {
+      const content = typeof message === 'string' ? message : message.content;
+      local.session.sends.push({ content, originKind: opts?.origin?.kind });
+      attempts += 1;
+      opts?.onDispatching?.();
+      return attempts === 1
+        ? { accepted: false, reason: 'provider-rejected-before-dispatch' }
+        : { accepted: true };
+    });
+
+    try {
+      await local.controller.setGoal({ sessionId: 's1', objective: 'old objective' });
+      await expect(
+        local.controller.setGoal({ sessionId: 's1', objective: 'replacement objective' }),
+      ).rejects.toThrow('marker unavailable');
+
+      expect(await local.storage.get('s1')).toMatchObject({
+        status: 'active',
+        objective: 'replacement objective',
+      });
+      await vi.advanceTimersByTimeAsync(0);
+      expect(local.session.sends).toHaveLength(2);
+      expect(local.session.sends.at(-1)?.content).toContain('replacement objective');
+    } finally {
+      local.controller.dispose();
+      vi.useRealTimers();
+    }
   });
 
   it('setGoal create resolves agentKind from the ensured (resumed) session for a dormant Codex session (no claude-code fallback)', async () => {
@@ -1111,6 +2044,248 @@ describe('GoalController', () => {
     expect(h.userMessages.filter((m) => m.content === 'think about it').length).toBe(1);
   });
 
+  it.each([false, true])('waits for the pre-existing user turn without counting its output (previous Stop: %s)', async (previousStop) => {
+    if (previousStop) await h.controller.pauseGoal('s1');
+    h.session.generation = 7;
+    h.session.running = true;
+    await startGoal(h);
+    const oldEvent = (event: AgentEvent) => h.session.emit({ ...event, sessionTurnGeneration: 7 });
+    oldEvent({ type: 'tool_use', data: { name: 'Bash' } });
+    oldEvent({ type: 'text', data: { text: '```json\n{"goal_status":"complete"}\n```', isFinal: true } });
+    oldEvent({ type: 'status', data: { isRunning: false, tokenUsage: 900 } });
+    // An SDK continuation boundary is not the end of the old product turn.
+    oldEvent({ type: 'done', data: {}, turnContinuationId: 1 });
+    await tick();
+    expect(h.session.sends).toHaveLength(0);
+
+    h.session.running = false;
+    oldEvent({ type: 'done', data: {} });
+    await vi.waitFor(() => expect(h.session.sends).toHaveLength(1));
+    expect(h.session.sends[0].content).toContain('[Goal] Work autonomously');
+    expect(await h.storage.get('s1')).toMatchObject({
+      status: 'active', turnsUsed: 0, tokensUsed: 0, noProgressStreak: 0, lastReason: null,
+    });
+    expect(h.userMessages).toHaveLength(1);
+    expect(h.completions).toHaveLength(0);
+
+    // A late duplicate cannot pause the newly dispatched Goal turn either.
+    oldEvent({ type: 'done', data: {} });
+    await tick();
+    expect(h.session.sends).toHaveLength(1);
+    h.session.emitGoalTurn({ tokens: 12, verdictJson: '{"goal_status":"continue"}' });
+    await vi.waitFor(() => expect(h.session.sends).toHaveLength(2));
+    expect(await h.storage.get('s1')).toMatchObject({ turnsUsed: 1, tokensUsed: 12, noProgressStreak: 1 });
+    await h.controller.dispose();
+  });
+
+  it.each([false, true])('preserves pending clear before creating a Goal (Stop again: %s)', async (stopAgain) => {
+    let releaseClear!: () => void;
+    const blockedClear = new Promise<void>((resolve) => { releaseClear = resolve; });
+    const clear = h.storage.clear.bind(h.storage);
+    const clearSpy = vi.spyOn(h.storage, 'clear').mockImplementation(async (sessionId) => {
+      await blockedClear;
+      await clear(sessionId);
+    });
+    const clearing = h.controller.clearGoal('s1');
+    await vi.waitFor(() => expect(clearSpy).toHaveBeenCalledOnce());
+    h.session.generation = 7;
+    h.session.running = true;
+    const upsertSpy = vi.spyOn(h.storage, 'upsert');
+    const creating = startGoal(h);
+    await tick();
+    expect(upsertSpy).not.toHaveBeenCalled();
+    const stopping = stopAgain ? h.controller.pauseGoal('s1') : Promise.resolve();
+    releaseClear();
+    await Promise.all([clearing, creating, stopping]);
+    h.session.running = false;
+    h.session.emit({ type: 'done', data: {}, sessionTurnGeneration: 7 });
+    if (stopAgain) {
+      await tick();
+      expect(upsertSpy).not.toHaveBeenCalled();
+      expect(await h.storage.get('s1')).toBeNull();
+      expect(h.session.sends).toHaveLength(0);
+    } else {
+      await vi.waitFor(() => expect(h.session.sends).toHaveLength(1));
+      expect(await h.storage.get('s1')).toMatchObject({ status: 'active', turnsUsed: 0 });
+    }
+    await h.controller.dispose();
+  });
+
+  it.each(['pause', 'clear', 'dispose'] as const)(
+    'does not start a Goal after %s while the pre-existing turn is running', async (action) => {
+      await h.controller.pauseGoal('s1');
+      h.session.generation = 7;
+      h.session.running = true;
+      await startGoal(h);
+      if (action === 'pause') await h.controller.pauseGoal('s1');
+      else if (action === 'clear') await h.controller.clearGoal('s1');
+      else await h.controller.dispose();
+      h.session.running = false;
+      h.session.emit({ type: 'done', data: {}, sessionTurnGeneration: 7 });
+      await tick();
+      expect(h.session.sends).toHaveLength(0);
+      if (action === 'pause') expect((await h.storage.get('s1'))?.status).toBe('paused');
+      if (action === 'clear') expect(await h.storage.get('s1')).toBeNull();
+      await h.controller.dispose();
+    },
+  );
+
+  it.each(['same-turn steer', 'new turn'] as const)(
+    'continues after a new user message after Goal creation (%s)', async (delivery) => {
+      await h.controller.pauseGoal('s1');
+      h.session.generation = 7;
+      h.session.running = true;
+      await startGoal(h);
+      if (delivery === 'same-turn steer') publishUiSessionIntervention('s1');
+      else h.session.generation = 8;
+      h.session.running = false;
+      h.session.emit({ type: 'done', data: {}, sessionTurnGeneration: h.session.generation });
+      await vi.waitFor(() => expect(h.session.sends).toHaveLength(1));
+      expect(await h.storage.get('s1')).toMatchObject({ status: 'active', turnsUsed: 0, tokensUsed: 0 });
+      expect(h.session.sends).toHaveLength(1);
+      await h.controller.dispose();
+    },
+  );
+
+  it.each([false, true])('uses the production steer boundary before a pre-existing turn ends (rejected: %s)', async (rejected) => {
+    h.session.generation = 7;
+    h.session.running = true;
+    await startGoal(h);
+    const finishOldTurn = () => {
+      h.session.running = false;
+      h.session.emit({ type: 'done', data: {}, sessionTurnGeneration: 7 });
+    };
+    const deliver = vi.fn(async () => {
+      // The vendor can emit done before acknowledging the steer RPC.
+      finishOldTurn();
+      await tick();
+    });
+    const steer = productionSteer(h.session, deliver, rejected);
+    if (rejected) {
+      await expect(steer('s1', 'new direction')).rejects.toThrow('stale input generation');
+      expect(deliver).not.toHaveBeenCalled();
+      finishOldTurn();
+      await vi.waitFor(() => expect(h.session.sends).toHaveLength(1));
+      expect((await h.storage.get('s1'))?.status).toBe('active');
+    } else {
+      await steer('s1', 'new direction');
+      expect(deliver).toHaveBeenCalledOnce();
+      await vi.waitFor(() => expect(h.session.sends).toHaveLength(1));
+      expect(await h.storage.get('s1')).toMatchObject({ status: 'active', turnsUsed: 0, tokensUsed: 0 });
+      expect(h.session.sends).toHaveLength(1);
+    }
+    await h.controller.dispose();
+  });
+
+  it('never rewrites a steered native command with the input handoff note, and drops the note instead of keeping it', async () => {
+    const delivered = vi.fn();
+    const payloads: unknown[] = [];
+    h.session.running = true;
+    const steer = productionSteer(h.session, async (payload) => { payloads.push(payload); }, false, {
+      inputHandoffSteerNote: () => '[Card closed]',
+      inputHandoffNoteDelivered: delivered,
+    });
+    await steer('s1', '/compact');
+    expect(String(payloads[0])).not.toContain('[Card closed]');
+    expect(delivered).toHaveBeenCalledOnce();
+  });
+
+  it.each([
+    ['a shared-task guest', { sharedTaskAuthor: { accountId: 'guest' } }],
+    ['a plugin', { sourcePlugin: 'some-plugin' }],
+  ] as const)('does not close the owner\'s input handoff card for a steered message from %s', async (_who, sendOpts) => {
+    const noteFor = vi.fn(() => '[Card closed]');
+    const delivered = vi.fn();
+    h.session.running = true;
+    const steer = productionSteer(h.session, async () => {}, false, {
+      inputHandoffSteerNote: noteFor,
+      inputHandoffNoteDelivered: delivered,
+    });
+    await steer('s1', 'hello from someone else', sendOpts);
+    // Neither closes the card nor claims a note was handled for this message.
+    expect(noteFor).not.toHaveBeenCalled();
+    expect(delivered).not.toHaveBeenCalled();
+  });
+
+  it('closes the owner\'s card for the owner\'s own steered message', async () => {
+    const noteFor = vi.fn(() => '[Card closed]');
+    h.session.running = true;
+    const steer = productionSteer(h.session, async () => {}, false, {
+      inputHandoffSteerNote: noteFor,
+    });
+    await steer('s1', 'my own message');
+    expect(noteFor).toHaveBeenCalledOnce();
+  });
+
+  it.each(['new turn', 'same-turn steer'] as const)(
+    'does not exempt input that arrives during Goal persistence (%s)', async (delivery) => {
+      h.session.generation = 7;
+      h.session.running = true;
+      const upsert = h.storage.upsert.bind(h.storage);
+      vi.spyOn(h.storage, 'upsert').mockImplementation(async (state) => {
+        if (delivery === 'new turn') h.session.generation = 8;
+        else publishUiSessionIntervention('s1');
+        await upsert(state);
+      });
+      await startGoal(h);
+      h.session.running = false;
+      h.session.emit({ type: 'done', data: {}, sessionTurnGeneration: h.session.generation });
+      await vi.waitFor(() => expect(h.session.sends).toHaveLength(1));
+      expect(await h.storage.get('s1')).toMatchObject({ status: 'active', turnsUsed: 0, tokensUsed: 0 });
+      expect(h.session.sends).toHaveLength(1);
+      await h.controller.dispose();
+    },
+  );
+
+  it('does not confuse a replacement Session with the same generation for the pre-existing turn', async () => {
+    const replacement = new FakeSession('s1');
+    replacement.generation = 7;
+    replacement.running = true;
+    let live: FakeSession;
+    const local = makeController({
+      getSession: () => live,
+      ensureSession: async () => (live = replacement),
+    });
+    live = local.session;
+    live.generation = 7;
+    live.running = true;
+    await startGoal(local);
+    replacement.running = false;
+    replacement.emit({ type: 'done', data: {}, sessionTurnGeneration: 7 });
+    await vi.waitFor(() => expect(replacement.sends).toHaveLength(1));
+    expect((await local.storage.get('s1'))?.status).toBe('active');
+    await local.controller.dispose();
+  });
+
+  it('starts the first Goal turn if the pre-existing turn ends before the listener is attached', async () => {
+    h.session.generation = 7;
+    h.session.running = true;
+    const upsert = h.storage.upsert.bind(h.storage);
+    vi.spyOn(h.storage, 'upsert').mockImplementation(async (state) => {
+      h.session.running = false;
+      h.session.emit({ type: 'done', data: {}, sessionTurnGeneration: 7 });
+      await upsert(state);
+    });
+    await startGoal(h);
+    expect(h.session.sends).toHaveLength(1);
+    expect((await h.storage.get('s1'))?.status).toBe('active');
+    await h.controller.dispose();
+  });
+
+  it('keeps terminal errors of the pre-existing turn on the existing stop path', async () => {
+    h.session.generation = 7;
+    h.session.running = true;
+    await startGoal(h);
+    h.session.running = false;
+    h.session.emit({
+      type: 'error', data: { isTerminal: true, message: 'AbortError: aborted' },
+      sessionTurnGeneration: 7,
+    });
+    await vi.waitFor(async () => expect((await h.storage.get('s1'))?.status).toBe('paused'));
+    expect(h.session.sends).toHaveLength(0);
+    await h.controller.dispose();
+  });
+
   it('continues to a second turn when the verdict is continue', async () => {
     await startGoal(h);
     h.session.emitGoalTurn({ toolUse: true, verdictJson: '```json\n{"goal_status":"continue","reason":"wip"}\n```', tokens: 100 });
@@ -1273,6 +2448,7 @@ describe('GoalController', () => {
     expect(h.completions[0].summary.reason).toBe('green');
     expect(h.updates.at(-1)).toEqual({ sessionId: 's1', goal: null });
     expect(h.session.sends).toHaveLength(1); // no continuation
+    expect(h.stopped).toHaveBeenCalledExactlyOnceWith('s1', 1000);
   });
 
   it('pauseGoal pauses an active goal, preserves counters, and stops continuation', async () => {
@@ -1288,6 +2464,7 @@ describe('GoalController', () => {
     h.session.emitGoalTurn({ toolUse: true, verdictJson: '```json\n{"goal_status":"continue","reason":"x"}\n```' });
     await tick();
     expect(h.session.sends.length).toBe(sendsAfterPause);
+    expect(h.stopped).toHaveBeenCalledExactlyOnceWith('s1', 1000);
   });
 
   it('detaches goal continuation synchronously before pause persistence can block', async () => {
@@ -1389,6 +2566,8 @@ describe('GoalController', () => {
     });
     await startGoal(local);
     expect(liveSession.sends).toHaveLength(1);
+    (local.controller as unknown as { goalTurnsInFlight: Set<string> })
+      .goalTurnsInFlight.delete('s1');
 
     const firePromise = (
       local.controller as unknown as { fireTurn(sessionId: string): Promise<void> }
@@ -1424,6 +2603,8 @@ describe('GoalController', () => {
     });
     await startGoal(local);
     expect(ensureCalls).toBe(2);
+    (local.controller as unknown as { goalTurnsInFlight: Set<string> })
+      .goalTurnsInFlight.delete('s1');
 
     const firePromise = (
       local.controller as unknown as { fireTurn(sessionId: string): Promise<void> }
@@ -1503,8 +2684,10 @@ describe('GoalController', () => {
     const internals = local.controller as unknown as {
       fireTurn(sessionId: string): Promise<void>;
       firing: Map<string, object>;
+      goalTurnsInFlight: Set<string>;
       goalDispatchAbortControllers: Map<string, { owner: object; controller: AbortController }>;
     };
+    internals.goalTurnsInFlight.delete('s1');
 
     const oldFire = internals.fireTurn('s1');
     await vi.waitFor(() => expect(acquireCalls).toBe(2));
@@ -1548,6 +2731,7 @@ describe('GoalController', () => {
       fireTurn(sessionId: string): Promise<void>;
       goalTurnsInFlight: Set<string>;
     };
+    internals.goalTurnsInFlight.delete('s1');
 
     const oldFire = internals.fireTurn('s1');
     await vi.waitFor(() => expect(sendCalls).toBe(2));
@@ -1677,6 +2861,67 @@ describe('GoalController', () => {
     expect(local.updates.filter((update) => update.goal === null)).toHaveLength(1);
   });
 
+  it('drains a pending completion commit before controller disposal completes', async () => {
+    let completionCalls = 0;
+    let releaseCompletion!: () => void;
+    const blockedCompletion = new Promise<void>((resolve) => {
+      releaseCompletion = resolve;
+    });
+    const local = makeController({
+      persistGoalCompletion: async () => {
+        completionCalls += 1;
+        await blockedCompletion;
+      },
+    });
+    const clear = vi.spyOn(local.storage, 'clear');
+    await startGoal(local);
+
+    local.session.emitGoalTurn({
+      toolUse: true,
+      verdictJson: '```json\n{"goal_status":"complete","reason":"done"}\n```',
+    });
+    await vi.waitFor(() => expect(completionCalls).toBe(1));
+
+    const disposing = local.controller.dispose();
+    releaseCompletion();
+    await disposing;
+    await tick();
+
+    expect(clear).toHaveBeenCalledWith('s1');
+    expect(await local.storage.get('s1')).toBeNull();
+    expect(local.updates.filter((update) => update.goal === null)).toHaveLength(0);
+  });
+
+  it('drains an in-flight completion clear during disposal without publishing stale status', async () => {
+    const local = makeController();
+    const originalClear = local.storage.clear.bind(local.storage);
+    let clearCalls = 0;
+    let releaseClear!: () => void;
+    const blockedClear = new Promise<void>((resolve) => {
+      releaseClear = resolve;
+    });
+    vi.spyOn(local.storage, 'clear').mockImplementation(async (sessionId) => {
+      clearCalls += 1;
+      await blockedClear;
+      await originalClear(sessionId);
+    });
+    await startGoal(local);
+
+    local.session.emitGoalTurn({
+      toolUse: true,
+      verdictJson: '```json\n{"goal_status":"complete","reason":"done"}\n```',
+    });
+    await vi.waitFor(() => expect(clearCalls).toBe(1));
+
+    const disposing = local.controller.dispose();
+    releaseClear();
+    await disposing;
+    await tick();
+
+    expect(await local.storage.get('s1')).toBeNull();
+    expect(local.updates.filter((update) => update.goal === null)).toHaveLength(0);
+  });
+
   it('finishes the completion commit if Stop arrives while clearing goal storage', async () => {
     const local = makeController();
     const originalClear = local.storage.clear.bind(local.storage);
@@ -1707,7 +2952,14 @@ describe('GoalController', () => {
     expect(local.updates.at(-1)).toEqual({ sessionId: 's1', goal: null });
   });
 
-  it('waits for an old completion clear before creating a replacement Goal', async () => {
+  it.each([
+    { previousStop: false, intervention: 'none' },
+    { previousStop: true, intervention: 'none' },
+    { previousStop: false, intervention: 'same-turn steer' },
+    { previousStop: false, intervention: 'new turn' },
+    { previousStop: false, intervention: 'pause' },
+    { previousStop: false, intervention: 'clear' },
+  ] as const)('waits for an old completion clear before creating a replacement Goal ($previousStop, $intervention)', async ({ previousStop, intervention }) => {
     const local = makeController();
     const originalClear = local.storage.clear.bind(local.storage);
     let clearCalls = 0;
@@ -1727,7 +2979,9 @@ describe('GoalController', () => {
       verdictJson: '```json\n{"goal_status":"complete","reason":"done"}\n```',
     });
     await vi.waitFor(() => expect(clearCalls).toBe(1));
-    await local.controller.pauseGoal('s1');
+    if (previousStop) await local.controller.pauseGoal('s1');
+    local.session.generation = 7;
+    local.session.running = true;
 
     let replacementSettled = false;
     const replacement = local.controller.setGoal({
@@ -1737,9 +2991,24 @@ describe('GoalController', () => {
     void replacement.then(() => { replacementSettled = true; });
     await tick();
     expect(replacementSettled).toBe(false);
-    expect((await local.storage.get('s1'))?.status).toBe('paused');
+    expect((await local.storage.get('s1'))?.status).toBe(previousStop ? 'paused' : 'active');
 
+    if (intervention === 'same-turn steer') publishUiSessionIntervention('s1');
+    if (intervention === 'new turn') local.session.generation = 8;
+    const stopping = intervention === 'pause' ? local.controller.pauseGoal('s1')
+      : intervention === 'clear' ? local.controller.clearGoal('s1') : Promise.resolve();
     releaseClear();
+    await stopping;
+    if (intervention === 'pause' || intervention === 'clear') {
+      await expect(replacement).resolves.toBeNull();
+      local.session.running = false;
+      local.session.emit({ type: 'done', data: {}, sessionTurnGeneration: 7 });
+      await tick();
+      expect(local.session.sends).toHaveLength(1);
+      expect(await local.storage.get('s1')).toBeNull();
+      await local.controller.dispose();
+      return;
+    }
     await expect(replacement).resolves.toMatchObject({
       status: 'active',
       objective: 'replacement objective',
@@ -1752,6 +3021,12 @@ describe('GoalController', () => {
       status: 'active',
       objective: 'replacement objective',
     });
+    expect(local.session.sends).toHaveLength(1);
+    local.session.running = false;
+    local.session.emit({ type: 'done', data: {}, sessionTurnGeneration: local.session.generation });
+    await vi.waitFor(() => expect(local.session.sends).toHaveLength(2));
+    expect(await local.storage.get('s1')).toMatchObject({ status: 'active', turnsUsed: 0, tokensUsed: 0 });
+    await local.controller.dispose();
   });
 
   it('resumeGoal resumes a paused goal: preserves counters, fires a continuation', async () => {
@@ -2045,14 +3320,17 @@ describe('GoalController', () => {
     expect(h.session.sends).toHaveLength(sendsBeforeResume);
   });
 
-  it('keeps a manual Resume paused when the session cannot hydrate, then allows retry', async () => {
+  it('blocks a manual Resume when the session cannot hydrate, then allows retry', async () => {
     await startGoal(h);
     await h.controller.pauseGoal('s1');
     const sendsBeforeResume = h.session.sends.length;
 
     h.setHydratable(false);
-    await h.controller.resumeGoal('s1');
-    expect((await h.storage.get('s1'))?.status).toBe('paused');
+    await expect(h.controller.resumeGoal('s1')).rejects.toBeInstanceOf(
+      GoalSessionRestoreError,
+    );
+    expect((await h.storage.get('s1'))?.status).toBe('blocked');
+    expect((await h.storage.get('s1'))?.lastReason).toContain('unable to restore the agent session');
     expect(h.session.sends).toHaveLength(sendsBeforeResume);
 
     h.setHydratable(true);
@@ -2099,6 +3377,96 @@ describe('GoalController', () => {
     expect(h.session.sends.length).toBe(sends);
   });
 
+  it('resumeOnOpen can return after recovery while prompt acceptance remains pending', async () => {
+    let markDispatchStarted!: () => void;
+    let releaseDispatch!: (result: SessionSendResult) => void;
+    const dispatchStarted = new Promise<void>((resolve) => {
+      markDispatchStarted = resolve;
+    });
+    const pendingDispatch = new Promise<SessionSendResult>((resolve) => {
+      releaseDispatch = resolve;
+    });
+    const local = makeController();
+    vi.spyOn(local.session, 'send').mockImplementation(async (
+      message: Parameters<FakeSession['send']>[0],
+      opts: Parameters<FakeSession['send']>[1],
+    ): Promise<SessionSendResult> => {
+      const content = typeof message === 'string' ? message : message.content;
+      local.session.sends.push({ content, originKind: opts?.origin?.kind });
+      opts?.onDispatching?.();
+      markDispatchStarted();
+      return pendingDispatch;
+    });
+    await local.storage.set(seededGoal({ status: 'active', objective: 'keep going' }));
+
+    await expect(
+      local.controller.resumeOnOpen('s1', { waitForDispatch: false }),
+    ).resolves.toBeUndefined();
+    await dispatchStarted;
+
+    expect(local.session.sends).toHaveLength(1);
+    expect(await local.storage.get('s1')).toMatchObject({ status: 'active' });
+
+    releaseDispatch({ accepted: true });
+    await Promise.resolve();
+  });
+
+  it('converges a detached resume-on-open dispatch failure to blocked', async () => {
+    let markDispatchStarted!: () => void;
+    let releaseDispatch!: () => void;
+    const dispatchStarted = new Promise<void>((resolve) => {
+      markDispatchStarted = resolve;
+    });
+    const dispatchGate = new Promise<void>((resolve) => {
+      releaseDispatch = resolve;
+    });
+    const local = makeController();
+    vi.spyOn(local.session, 'send').mockImplementation(async (
+      message: Parameters<FakeSession['send']>[0],
+      opts: Parameters<FakeSession['send']>[1],
+    ): Promise<SessionSendResult> => {
+      const content = typeof message === 'string' ? message : message.content;
+      local.session.sends.push({ content, originKind: opts?.origin?.kind });
+      opts?.onDispatching?.();
+      markDispatchStarted();
+      await dispatchGate;
+      throw new Error('provider unavailable');
+    });
+    await local.storage.set(seededGoal({ status: 'active', objective: 'recover safely' }));
+
+    await local.controller.resumeOnOpen('s1', { waitForDispatch: false });
+    await dispatchStarted;
+    expect(await local.storage.get('s1')).toMatchObject({ status: 'active' });
+
+    releaseDispatch();
+    await vi.waitFor(async () => {
+      expect(await local.storage.get('s1')).toMatchObject({
+        status: 'blocked',
+        lastReason: expect.stringContaining('provider unavailable'),
+      });
+    });
+    expect(local.session.sends).toHaveLength(1);
+  });
+
+  it('converges a detached resume-on-open preflight read failure to blocked', async () => {
+    const local = makeController();
+    const active = seededGoal({ status: 'active', objective: 'recover safely' });
+    await local.storage.set(active);
+    vi.spyOn(local.storage, 'get')
+      .mockResolvedValueOnce(active)
+      .mockRejectedValueOnce(new Error('goal state read unavailable'));
+
+    await local.controller.resumeOnOpen('s1', { waitForDispatch: false });
+
+    await vi.waitFor(async () => {
+      expect(await local.storage.get('s1')).toMatchObject({
+        status: 'blocked',
+        lastReason: expect.stringContaining('unable to read Goal state'),
+      });
+    });
+    expect(local.session.sends).toHaveLength(0);
+  });
+
   it('resumeOnOpen activates a dormant active goal (attach + fire) when the conversation is opened', async () => {
     // 模拟重启后 dormant:有 active 目标行,但没挂 listener、没 fire。
     await h.storage.set(seededGoal({ status: 'active', objective: 'keep going', turnsUsed: 0 }));
@@ -2106,6 +3474,132 @@ describe('GoalController', () => {
     await h.controller.resumeOnOpen('s1');
     expect(h.session.sends.length).toBeGreaterThanOrEqual(1); // 已活化并续了一轮
     expect(h.session.sends.at(-1)?.content).toContain('keep going');
+  });
+
+  it('blocks a dormant active goal when opening cannot restore its session', async () => {
+    const local = makeController();
+    local.setHydratable(false);
+    await local.storage.set(seededGoal({ status: 'active', objective: 'cannot restore' }));
+
+    await local.controller.resumeOnOpen('s1');
+
+    expect(await local.storage.get('s1')).toMatchObject({
+      status: 'blocked',
+      lastReason: expect.stringContaining('unable to restore the agent session'),
+    });
+    expect(local.session.sends).toHaveLength(0);
+  });
+
+  it('blocks and releases a dormant lifecycle boundary when agent-switch bootstrap rejects', async () => {
+    let acquireCalls = 0;
+    const acquirePendingAgentSwitch = vi.fn(async () => {
+      acquireCalls += 1;
+      if (acquireCalls === 1) throw new Error('agent switch bootstrap failed');
+      return () => {};
+    });
+    const local = makeController({ acquirePendingAgentSwitch });
+    await local.storage.set(seededGoal({ status: 'active', objective: 'recover safely' }));
+
+    await local.controller.resumeOnOpen('s1');
+
+    expect(await local.storage.get('s1')).toMatchObject({
+      status: 'blocked',
+      lastReason: expect.stringContaining('unable to restore the agent session'),
+    });
+    expect(local.session.sends).toHaveLength(0);
+
+    await local.controller.resumeGoal('s1');
+
+    expect((await local.storage.get('s1'))?.status).toBe('active');
+    expect(local.session.sends).toHaveLength(1);
+    expect(acquirePendingAgentSwitch).toHaveBeenCalledTimes(2);
+  });
+
+  it('keeps a fail-closed owner when persisting a restore failure is unavailable', async () => {
+    const acquirePendingAgentSwitch = vi.fn(async () => {
+      throw new Error('agent switch bootstrap failed');
+    });
+    const local = makeController({ acquirePendingAgentSwitch });
+    await local.storage.set(seededGoal({ status: 'active', objective: 'do not replay' }));
+    const update = vi.spyOn(local.storage, 'update').mockRejectedValueOnce(
+      new Error('goal storage unavailable'),
+    );
+
+    await expect(local.controller.resumeOnOpen('s1')).rejects.toBeInstanceOf(
+      GoalSessionRestoreError,
+    );
+    await local.controller.resumeOnOpen('s1');
+
+    expect(await local.storage.get('s1')).toMatchObject({
+      status: 'blocked',
+      objective: 'do not replay',
+      lastReason: expect.stringContaining('unable to restore the agent session'),
+    });
+    expect(update).toHaveBeenCalledTimes(2);
+    expect(acquirePendingAgentSwitch).toHaveBeenCalledTimes(1);
+    expect(local.session.sends).toHaveLength(0);
+  });
+
+  it('propagates an unpersisted second restore failure through resume-on-open', async () => {
+    const session = new FakeSession('s1', 'pi');
+    let ensureCalls = 0;
+    const local = makeController({
+      getSession: () => session,
+      ensureSession: async () => {
+        ensureCalls += 1;
+        return ensureCalls === 1 ? session : undefined;
+      },
+      acquirePendingAgentSwitch: async () => () => {},
+    });
+    await local.storage.set(seededGoal({ status: 'active', objective: 'recover once' }));
+    const update = vi.spyOn(local.storage, 'update').mockRejectedValueOnce(
+      new Error('goal storage unavailable'),
+    );
+
+    await expect(local.controller.resumeOnOpen('s1')).rejects.toBeInstanceOf(
+      GoalSessionRestoreError,
+    );
+    expect(await local.storage.get('s1')).toMatchObject({ status: 'active' });
+
+    await local.controller.resumeOnOpen('s1');
+
+    expect(await local.storage.get('s1')).toMatchObject({
+      status: 'blocked',
+      lastReason: expect.stringContaining('unable to restore the agent session'),
+    });
+    expect(update).toHaveBeenCalledTimes(2);
+    expect(ensureCalls).toBe(2);
+    expect(session.sends).toHaveLength(0);
+  });
+
+  it('does not let a late resume-on-open bootstrap failure overwrite a newer Stop boundary', async () => {
+    let markBootstrapStarted!: () => void;
+    const bootstrapStarted = new Promise<void>((resolve) => {
+      markBootstrapStarted = resolve;
+    });
+    let rejectBootstrap!: (error: Error) => void;
+    const bootstrap = new Promise<() => void>((_resolve, reject) => {
+      rejectBootstrap = reject;
+    });
+    const local = makeController({
+      acquirePendingAgentSwitch: () => {
+        markBootstrapStarted();
+        return bootstrap;
+      },
+    });
+    await local.storage.set(seededGoal({ status: 'active', objective: 'stay paused' }));
+
+    const resuming = local.controller.resumeOnOpen('s1');
+    await bootstrapStarted;
+    await local.controller.pauseGoal('s1');
+    rejectBootstrap(new Error('late bootstrap failure'));
+    await resuming;
+
+    expect(await local.storage.get('s1')).toMatchObject({
+      status: 'paused',
+      lastReason: 'paused by user',
+    });
+    expect(local.session.sends).toHaveLength(0);
   });
 
   it('does not let a stale startup active snapshot overwrite a concurrent Stop', async () => {
@@ -2127,6 +3621,47 @@ describe('GoalController', () => {
     expect((await h.storage.get('s1'))?.status).toBe('paused');
     expect(h.updates.at(-1)?.goal?.status).toBe('paused');
     expect(h.session.sends).toHaveLength(0);
+  });
+
+  it('does not let a startup resume scan repopulate runtime state after disposal', async () => {
+    const local = makeController();
+    const active = seededGoal({ status: 'active', objective: 'old account goal' });
+    await local.storage.set(active);
+    let releaseList!: (states: GoalState[]) => void;
+    const blockedList = new Promise<GoalState[]>((resolve) => {
+      releaseList = resolve;
+    });
+    vi.spyOn(local.storage, 'listActive').mockReturnValueOnce(blockedList);
+
+    const startupResume = local.controller.resumeActiveGoals();
+    local.controller.dispose();
+    releaseList([active]);
+    await startupResume;
+
+    expect(local.session.hasListener()).toBe(false);
+    expect(local.session.sends).toHaveLength(0);
+    expect(local.updates).toHaveLength(0);
+  });
+
+  it('does not let a per-goal startup lookup attach after disposal', async () => {
+    const local = makeController();
+    const active = seededGoal({ status: 'active', objective: 'old account goal' });
+    await local.storage.set(active);
+    let releaseGet!: (state: GoalState | null) => void;
+    const blockedGet = new Promise<GoalState | null>((resolve) => {
+      releaseGet = resolve;
+    });
+    vi.spyOn(local.storage, 'get').mockReturnValueOnce(blockedGet);
+
+    const startupResume = local.controller.resumeActiveGoals();
+    await vi.waitFor(() => expect(local.storage.get).toHaveBeenCalledWith('s1'));
+    local.controller.dispose();
+    releaseGet(active);
+    await startupResume;
+
+    expect(local.session.hasListener()).toBe(false);
+    expect(local.session.sends).toHaveLength(0);
+    expect(local.updates).toHaveLength(0);
   });
 
   it('resumeOnOpen 在释放 route 锁前挂 listener，并在会话随即关闭后迁移到重建会话', async () => {
@@ -2181,14 +3716,14 @@ describe('GoalController', () => {
     expect(h2.session.sends.length).toBe(n);
   });
 
-  it('maybeContinueActiveGoal fires only when an active goal is attached and idle', async () => {
+  it('maybeContinueActiveGoal does not overlap an accepted Goal turn before provider running state arrives', async () => {
     await h.controller.maybeContinueActiveGoal('s1'); // 无 goal → no-op
     expect(h.session.sends).toHaveLength(0);
     await startGoal(h);
     const before = h.session.sends.length;
     await h.controller.maybeContinueActiveGoal('s1');
     await tick();
-    expect(h.session.sends.length).toBe(before + 1);
+    expect(h.session.sends.length).toBe(before);
     await h.controller.pauseGoal('s1');
     const afterPause = h.session.sends.length;
     await h.controller.maybeContinueActiveGoal('s1');
@@ -2196,12 +3731,80 @@ describe('GoalController', () => {
     expect(h.session.sends.length).toBe(afterPause);
   });
 
-  it('pauses when a user-origin turn finishes mid-goal', async () => {
-    await startGoal(h);
-    h.session.emitGoalTurn({ origin: 'user', toolUse: true, verdictJson: '' });
+  it('reports an input restoration failure without sending or silently staying active', async () => {
+    const local = makeController({ ensureInputReady: async () => { throw new Error('queue read failed'); } });
+    await expect(startGoal(local)).rejects.toThrow('queue read failed');
+    expect(await local.storage.get('s1')).toMatchObject({ status: 'blocked', lastReason: 'turn dispatch failed: unable to restore input queue' });
+    expect(local.session.sends).toHaveLength(0);
+    await local.controller.dispose();
+  });
+
+  it('yields to input arriving during the final pre-dispatch await, then sends once', async () => {
+    let inputBlocked = false;
+    let yielded = false;
+    const rollback = vi.fn();
+    const local = makeController({
+      ensureInputReady: async () => !inputBlocked, isInputBlocked: () => inputBlocked,
+      beforeDispatchUserTurn: async () => { if (!yielded) { inputBlocked = true; yielded = true; } }, onUndispatchedUserTurn: rollback,
+    });
+    await startGoal(local);
+    expect(local.session.sends).toHaveLength(0);
+    expect(rollback).toHaveBeenCalledOnce();
+    inputBlocked = false;
+    await local.controller.maybeContinueActiveGoal('s1');
+    await vi.waitFor(() => expect(local.session.sends).toHaveLength(1));
+    await local.controller.dispose();
+  });
+
+  it('continues after queued ordinary input and counts only the Goal turn', async () => {
+    let inputBlocked = false;
+    const local = makeController({ ensureInputReady: async () => !inputBlocked, isInputBlocked: () => inputBlocked });
+    await startGoal(local);
+    inputBlocked = true;
+    local.session.emitGoalTurn({ toolUse: true, tokens: 10 });
     await tick();
-    expect((await h.storage.get('s1'))?.status).toBe('paused');
+    expect(local.session.sends).toHaveLength(1);
+    local.session.emitGoalTurn({ origin: 'user', toolUse: true, tokens: 900 });
+    await tick();
+    expect(await local.storage.get('s1')).toMatchObject({ status: 'active', turnsUsed: 1, tokensUsed: 10 });
+    expect(local.session.sends).toHaveLength(1);
+    inputBlocked = false;
+    await Promise.all([local.controller.maybeContinueActiveGoal('s1'), local.controller.maybeContinueActiveGoal('s1')]);
+    await vi.waitFor(() => expect(local.session.sends).toHaveLength(2));
+    await tick();
+    expect(local.session.sends).toHaveLength(2);
+    await local.controller.dispose();
+  });
+
+  it.each(['pause', 'clear'] as const)('does not resume from a late queue release after %s', async action => {
+    let inputBlocked = true;
+    const ensureInputReady = vi.fn(async () => !inputBlocked);
+    const local = makeController({ ensureInputReady, isInputBlocked: () => inputBlocked });
+    await startGoal(local);
+    const attempts = ensureInputReady.mock.calls.length;
+    await tick();
+    expect(ensureInputReady).toHaveBeenCalledTimes(attempts); // no blocked-boundary polling
+    expect(local.session.sends).toHaveLength(0);
+    if (action === 'pause') await local.controller.pauseGoal('s1');
+    else await local.controller.clearGoal('s1');
+    inputBlocked = false;
+    await local.controller.maybeContinueActiveGoal('s1');
+    local.session.emit({ type: 'done', data: {}, turnOrigin: { kind: 'user' } });
+    await tick();
+    expect(local.session.sends).toHaveLength(0);
+    await local.controller.dispose();
+  });
+
+  it('ignores background output and terminal tails instead of treating them as input or Goal work', async () => {
+    await startGoal(h);
+    h.session.emit({ type: 'text', turnScope: 'background', data: { text: '{"goal_status":"complete"}', isFinal: true } });
+    h.session.emit({ type: 'done', turnScope: 'background', data: {} });
+    await tick();
     expect(h.session.sends).toHaveLength(1);
+    expect(h.completions).toHaveLength(0);
+    h.session.emitGoalTurn({ toolUse: true, tokens: 15 });
+    await vi.waitFor(() => expect(h.session.sends).toHaveLength(2));
+    expect(await h.storage.get('s1')).toMatchObject({ status: 'active', turnsUsed: 1, tokensUsed: 15 });
   });
 
   // ── applyClarificationAnswer(Option B:答完卡片即时改写目标)──
@@ -2885,6 +4488,27 @@ describe('GoalController', () => {
   });
 
   // ── usageLimited(账号用量受限)──
+  it('a confirmed reset resumes an existing quota wait once before the natural reset time', async () => {
+    h.setAccountLimit({ limited: true, resetAtMs: 3_601_000 });
+    await startGoal(h);
+    h.session.emitErrorTurn({ sdkError: 'rate_limit', message: 'rate limit reached' });
+    await tick();
+    h.setAccountLimit({ limited: false, resetAtMs: null });
+    await h.controller.resumeRestoredQuota(async () => true);
+    await tick();
+    expect(h.session.sends).toHaveLength(2);
+    await h.controller.resumeRestoredQuota(async () => true);
+    expect(h.session.sends).toHaveLength(2);
+  });
+
+  it('a quota refresh does not shorten an overload wait', async () => {
+    await startGoal(h);
+    h.session.emitErrorTurn({ errorStatus: 529, message: 'overloaded_error' });
+    await tick();
+    await h.controller.resumeRestoredQuota(async () => true);
+    expect(h.session.sends).toHaveLength(1);
+  });
+
   it('reactive: a usage-limit turn error → usageLimited with resetAt, no continuation', async () => {
     h.setAccountLimit({ limited: true, resetAtMs: 3_601_000 }); // 远未来 → 不在测试窗口自动续
     await startGoal(h);
@@ -2894,6 +4518,101 @@ describe('GoalController', () => {
     expect(st?.status).toBe('usageLimited');
     expect(st?.usageResetAt).toBe(3_601_000);
     expect(h.session.sends).toHaveLength(1); // 无续轮
+  });
+
+  it('reactive: prefers the reset time carried by the error over the account snapshot', async () => {
+    // Claude 订阅:账号快照(LiteLLM 预算)读不到 5h 窗口,只有错误带的重置时刻可用。
+    h.setAccountLimit(null);
+    await startGoal(h);
+    h.session.emitErrorTurn({ sdkError: 'rate_limit', message: "You've hit your session limit", usageResetAt: 7_201_000 });
+    await tick();
+    const st = await h.storage.get('s1');
+    expect(st?.status).toBe('usageLimited');
+    expect(st?.usageResetAt).toBe(7_201_000);
+    expect(h.session.sends).toHaveLength(1);
+  });
+
+  it('reads the account limit of the goal session so the subscription provider is respected', async () => {
+    const getAccountLimit = vi.fn(async () => ({ limited: true, resetAtMs: 3_601_000 }));
+    const local = makeController({ getAccountLimit });
+    try {
+      await startGoal(local);
+      local.session.emitErrorTurn({ sdkError: 'rate_limit', message: 'rate limit reached' });
+      await tick();
+      expect(getAccountLimit).toHaveBeenCalledWith(
+        expect.any(String),
+        's1',
+        expect.objectContaining({ sdkError: 'rate_limit' }),
+      );
+      expect((await local.storage.get('s1'))?.usageResetAt).toBe(3_601_000);
+    } finally {
+      await local.controller.dispose();
+    }
+  });
+
+  it('reactive: ignores the snapshot reset time when the snapshot does not show the limit', async () => {
+    // 未用满窗口的重置时刻与这次限流无关:不排期,留待手动 resume。
+    h.setAccountLimit({ limited: false, resetAtMs: 3_601_000 });
+    await startGoal(h);
+    h.session.emitErrorTurn({ errorStatus: 429, message: 'Too many requests' });
+    await tick();
+    const st = await h.storage.get('s1');
+    expect(st?.status).toBe('usageLimited');
+    expect(st?.usageResetAt).toBeNull();
+  });
+
+  it('leaves the reset time written in the error text to the host (only trusted for subscriptions)', async () => {
+    // 报错原文里的时刻要由注入端按会话订阅家族判定;非订阅来源的 Retry-After 不能直接排期。
+    const getAccountLimit = vi.fn(async () => null);
+    const local = makeController({ getAccountLimit });
+    try {
+      await startGoal(local);
+      const error = { errorStatus: 429, message: 'Too many requests. Try again in ~2 min.' };
+      local.session.emitErrorTurn(error);
+      await tick();
+      expect(getAccountLimit).toHaveBeenCalledWith(expect.any(String), 's1', expect.objectContaining(error));
+      const st = await local.storage.get('s1');
+      expect(st?.status).toBe('usageLimited');
+      expect(st?.usageResetAt).toBeNull();
+    } finally {
+      await local.controller.dispose();
+    }
+  });
+
+  it('shared task: a usage limit stays usageLimited without scheduling an auto resume', async () => {
+    const local = makeController({ isSessionShared: () => true });
+    try {
+      local.setAccountLimit({ limited: true, resetAtMs: 1000 });
+      await startGoal(local);
+      local.session.emitErrorTurn({ sdkError: 'rate_limit', usageResetAt: 1000 });
+      await tick();
+      await tick();
+      const st = await local.storage.get('s1');
+      expect(st?.status).toBe('usageLimited');
+      expect(st?.usageResetAt).toBeNull();
+      expect(local.notices).toEqual([]);
+      expect(local.session.sends).toHaveLength(1);
+    } finally {
+      await local.controller.dispose();
+    }
+  });
+
+  it('shared task: a wait that becomes shared does not auto resume at the reset time', async () => {
+    // 报错时尚未共享(排了恢复),到点时已在共享。
+    const isSessionShared = vi.fn(() => isSessionShared.mock.calls.length > 1);
+    const local = makeController({ isSessionShared });
+    try {
+      local.setAccountLimit({ limited: true, resetAtMs: 1000 });
+      await startGoal(local);
+      local.session.emitErrorTurn({ sdkError: 'rate_limit' });
+      await vi.waitFor(() => expect(isSessionShared).toHaveBeenCalledTimes(2));
+      await tick();
+      expect(local.notices).toEqual([]);
+      expect(await local.storage.get('s1')).toMatchObject({ status: 'usageLimited', usageResetAt: 1000 });
+      expect(local.session.sends).toHaveLength(1);
+    } finally {
+      await local.controller.dispose();
+    }
   });
 
   it('proactive: a would-be-continue turn flips to usageLimited when the account is limited', async () => {
@@ -2906,16 +4625,50 @@ describe('GoalController', () => {
     expect(h.session.sends).toHaveLength(1); // 本应续跑,但被改判,不续
   });
 
-  it('auto-resumes at resetAt: posts a usage-resumed notice and continues', async () => {
-    h.setAccountLimit({ limited: true, resetAtMs: 1000 }); // == now → delay 0,tick 内触发
-    await startGoal(h);
-    h.session.emitErrorTurn({ sdkError: 'rate_limit' });
-    await tick(); // usageLimited → schedule(delay 0) → autoResume → resumeGoal
-    expect(h.notices).toEqual([{ sessionId: 's1', kind: 'usage-resumed' }]);
-    const st = await h.storage.get('s1');
-    expect(st?.status).toBe('active');
-    expect(st?.usageResetAt).toBeNull(); // resume 清掉
-    expect(h.session.sends.length).toBeGreaterThanOrEqual(2); // 自动续了一轮
+  it.each([false, true])('auto-resumes at resetAt: posts a usage-resumed notice and continues (deferred hydration: %s)', async (deferHydration) => {
+    let releaseEnsure!: () => void;
+    const blockedEnsure = new Promise<void>((resolve) => { releaseEnsure = resolve; });
+    let restoring = false;
+    let ensurePending = false;
+    const local = makeController({
+      ensureSession: async () => {
+        if (restoring && deferHydration) {
+          ensurePending = true;
+          await blockedEnsure;
+        }
+        return local.session;
+      },
+    });
+    try {
+      local.setAccountLimit({ limited: true, resetAtMs: 1000 }); // == now → real timer, delay 0
+      await startGoal(local);
+      restoring = true;
+      local.session.emitErrorTurn({ sdkError: 'rate_limit' });
+
+      if (deferHydration) {
+        await vi.waitFor(() => expect(ensurePending).toBe(true));
+        // Even after the old 10ms wait, hydration can still be pending legitimately.
+        await tick();
+        expect(local.notices).toEqual([]);
+        expect(await local.storage.get('s1')).toMatchObject({ status: 'usageLimited', usageResetAt: 1000 });
+        expect(local.session.sends).toHaveLength(1);
+      }
+
+      // Observe the entire chain, not just the first notice or elapsed wall time.
+      const resumed = vi.waitFor(async () => {
+        expect(local.notices).toEqual([{ sessionId: 's1', kind: 'usage-resumed' }]);
+        const st = await local.storage.get('s1');
+        expect(st?.status).toBe('active');
+        expect(st?.usageResetAt).toBeNull();
+        expect(local.session.sends.length).toBeGreaterThanOrEqual(2);
+      });
+      releaseEnsure();
+      await resumed;
+      expect(local.userDispatched).toHaveBeenCalledExactlyOnceWith('s1', 1000);
+    } finally {
+      releaseEnsure();
+      await local.controller.dispose();
+    }
   });
 
   it('Stop cancels auto-resume while session hydration is pending without persisting a recovery notice', async () => {
@@ -3019,6 +4772,20 @@ describe('GoalController', () => {
     expect(st?.usageResetAt).toBe(1000 + 60_000); // now() + OVERLOAD_RESUME_DELAY_MS
     expect(st?.lastReason).toBe('model service at capacity');
     expect(h.session.sends).toHaveLength(1); // 不立即续轮
+  });
+
+  it('persists a stable reason for a tool-loop terminal error', async () => {
+    await startGoal(h);
+    h.session.emitErrorTurn({
+      message: '上游模型疑似陷入死循环: missing_required_field',
+      reason: 'tool_use_loop_detected',
+      toolLoop: { kind: 'contract', count: 3 },
+    });
+    await tick();
+    const st = await h.storage.get('s1');
+    expect(st?.status).toBe('blocked');
+    expect(st?.lastReason).toBe('tool_use_loop_detected');
+    expect(st?.lastReason).not.toContain('missing_required_field');
   });
 
   it('prefers the overload window over the account snapshot for a 529 turn error', async () => {
@@ -3253,4 +5020,140 @@ describe('GoalController', () => {
     expect(st?.lastReason).toBe('usage limit reached');
   });
 
+});
+
+// ── dispose / GoalControllerDisposedError ───────────────────────────────────
+
+describe('GoalController disposal', () => {
+  it('setGoal rejects after dispose', async () => {
+    const h = makeController();
+    h.controller.dispose();
+    await expect(
+      h.controller.setGoal({ sessionId: 's1', objective: 'x', agentKind: 'claude-code' }),
+    ).rejects.toThrow('GoalController has been disposed');
+  });
+
+  it('resumeGoal is no-op after dispose (auto)', async () => {
+    const h = makeController();
+    await startGoal(h);
+    h.controller.dispose();
+    // resumeGoal with auto:true returns early when turns map is empty (no throw).
+    await expect(h.controller.resumeGoal('s1', { auto: true })).resolves.toBeUndefined();
+  });
+
+  it('clearGoal is no-op after dispose', async () => {
+    const h = makeController();
+    await startGoal(h);
+    h.controller.dispose();
+    // clearGoal does not call assertActive — it is a safe cleanup operation.
+    // After dispose it should not throw; the turns map is already empty.
+    await expect(h.controller.clearGoal('s1')).resolves.toBeUndefined();
+  });
+
+  it('all public lifecycle entry points stay inert after dispose', async () => {
+    const h = makeController();
+    await h.storage.set(seededGoal({ status: 'paused' }));
+    h.controller.dispose();
+
+    await expect(h.controller.updateGoal('s1', { objective: 'later' })).resolves.toBeNull();
+    await expect(h.controller.pauseGoal('s1')).resolves.toBeUndefined();
+    await expect(h.controller.resumeGoal('s1')).resolves.toBeUndefined();
+    await expect(h.controller.maybeContinueActiveGoal('s1')).resolves.toBeUndefined();
+    await expect(h.controller.resumeOnOpen('s1')).resolves.toBeUndefined();
+    await expect(h.controller.resumeActiveGoals()).resolves.toBeUndefined();
+    await expect(h.controller.getStatus('s1')).resolves.toBeNull();
+    await expect(
+      h.controller.applyClarificationAnswer(
+        's1',
+        { objective: 'later' },
+        [{ options: [{ label: 'task' }] }],
+      ),
+    ).resolves.toBeUndefined();
+
+    expect(await h.storage.get('s1')).toMatchObject({
+      status: 'paused',
+      objective: 'old objective',
+    });
+    expect(h.session.sends).toHaveLength(0);
+    expect(h.updates).toHaveLength(0);
+  });
+
+  it('dispose clears turns and listeners', async () => {
+    const h = makeController();
+    await startGoal(h);
+    // Start a turn to register listeners.
+    h.session.emitGoalTurn({ toolUse: true, tokens: 100 });
+    await new Promise((r) => setTimeout(r, 0));
+    const updatesBefore = h.updates.length;
+    h.controller.dispose();
+    // After dispose, no more status updates should be emitted.
+    h.session.emitGoalTurn({ toolUse: true, tokens: 200 });
+    await new Promise((r) => setTimeout(r, 0));
+    expect(h.updates.length).toBe(updatesBefore);
+  });
+
+  it('dispose is idempotent', () => {
+    const h = makeController();
+    h.controller.dispose();
+    h.controller.dispose(); // should not throw
+  });
+
+  it('drains a create marker before disposal completes', async () => {
+    const h = makeController();
+    const originalUpsert = h.storage.upsert.bind(h.storage);
+    let markUpsertStarted!: () => void;
+    const upsertStarted = new Promise<void>((resolve) => {
+      markUpsertStarted = resolve;
+    });
+    let releaseUpsert!: () => void;
+    const blockedUpsert = new Promise<void>((resolve) => {
+      releaseUpsert = resolve;
+    });
+    vi.spyOn(h.storage, 'upsert').mockImplementationOnce(async (state) => {
+      markUpsertStarted();
+      await blockedUpsert;
+      return originalUpsert(state);
+    });
+
+    const create = h.controller.setGoal({ sessionId: 's1', objective: 'outgoing objective' });
+    await upsertStarted;
+    const disposing = h.controller.dispose();
+    releaseUpsert();
+    await disposing;
+
+    await expect(create).resolves.toBeNull();
+    expect(await h.storage.get('s1')).toMatchObject({ status: 'active', objective: 'outgoing objective' });
+    expect(h.userMessages).toHaveLength(1);
+    expect(h.session.sends).toHaveLength(0);
+  });
+
+  it('drains an edit marker before disposal completes', async () => {
+    const h = makeController();
+    await h.storage.set(seededGoal({ status: 'paused', objective: 'old objective' }));
+    const originalUpdate = h.storage.update.bind(h.storage);
+    let markUpdateStarted!: () => void;
+    const updateStarted = new Promise<void>((resolve) => {
+      markUpdateStarted = resolve;
+    });
+    let releaseUpdate!: () => void;
+    const blockedUpdate = new Promise<void>((resolve) => {
+      releaseUpdate = resolve;
+    });
+    vi.spyOn(h.storage, 'update').mockImplementationOnce(async (sessionId, patch) => {
+      markUpdateStarted();
+      await blockedUpdate;
+      return originalUpdate(sessionId, patch);
+    });
+
+    const edit = h.controller.setGoal({ sessionId: 's1', objective: 'outgoing edit' });
+    await updateStarted;
+    const disposing = h.controller.dispose();
+    releaseUpdate();
+    await disposing;
+
+    await expect(edit).resolves.toBeNull();
+    expect(await h.storage.get('s1')).toMatchObject({ status: 'active', objective: 'outgoing edit' });
+    expect(h.userMessages).toHaveLength(1);
+    expect(h.session.sends).toHaveLength(0);
+  });
 });

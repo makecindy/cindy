@@ -199,3 +199,14 @@ export function desktopLogUploadBuildEnv({ authRegion, repoRoot, configPath, all
 }
 
 export const __testing = { OPTIONAL_REGIONS, normalizeRegionTarget, assertRegionsIsolated };
+
+/** Mobile consumes the same validated single-region target, inlined into its JS bundle by Expo. */
+export function mobileLogUploadConfigRequired(env = process.env) {
+  return env.CINDY_REQUIRE_LOG_UPLOAD_CONFIG === '1'
+    || /^(?:production|testflight)(?:-global)?$|^store-(?:cn|global)-base$/.test(env.EAS_BUILD_PROFILE ?? '');
+}
+
+export function mobileLogUploadBuildEnv(options = {}) {
+  const env = desktopLogUploadBuildEnv(options);
+  return { EXPO_PUBLIC_CINDY_LOG_UPLOAD_TARGET: env[LOG_UPLOAD_TARGET_ENV] };
+}

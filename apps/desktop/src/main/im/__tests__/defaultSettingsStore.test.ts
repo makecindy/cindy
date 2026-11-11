@@ -1,17 +1,19 @@
 import fs from 'node:fs';
+import os from 'node:os';
 import path from 'node:path';
 
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 const scopeMocks = vi.hoisted(() => ({
   owner: 'cloud-a',
+  dir: '',
   join: null as unknown as (...parts: string[]) => string,
   claimLegacy: vi.fn(),
 }));
 
 vi.mock('electron', () => ({
   app: {
-    getPath: vi.fn(() => '/tmp/xdt-maker-test'),
+    getPath: vi.fn(() => scopeMocks.dir),
   },
 }));
 
@@ -26,13 +28,14 @@ vi.mock('../../maker-host/logger-adapter.js', () => ({
 
 vi.mock('../ownerScopedStorage.js', () => ({
   ownerScopedImUserDataPath: (...parts: string[]) =>
-    scopeMocks.join('/tmp/xdt-maker-test', 'owners', scopeMocks.owner, ...parts),
+    scopeMocks.join(scopeMocks.dir, 'owners', scopeMocks.owner, ...parts),
   claimLegacyImPath: scopeMocks.claimLegacy,
 }));
 
 import { IM_DEFAULT_SETTINGS } from '../../../shared/imDefaultSettings.js';
 import {
   __testing,
+  previewImDefaultSettingsPatch,
   readImDefaultSettings,
   readImDefaultSettingsState,
   resetImDefaultSettings,
@@ -41,12 +44,32 @@ import {
   writeImDefaultSettingsPatch,
 } from '../defaultSettingsStore';
 
-const settingsDir = '/tmp/xdt-maker-test';
+const settingsDir = fs.mkdtempSync(path.join(os.tmpdir(), 'cindy-im-defaults-'));
 const settingsFile = () =>
   path.join(settingsDir, 'owners', scopeMocks.owner, 'im-default-settings.json');
 
 describe('im default settings store', () => {
+  it('keeps automatic defaults sparse and retains explicit old-model overrides until reset', () => {
+    writeImDefaultSettingsPatch({ groupPermissionMode: 'bypassPermissions' }, 'feishu');
+    expect(readImDefaultSettings('feishu').agents['claude-code'].model).toBe('');
+    expect(JSON.parse(fs.readFileSync(settingsFile(), 'utf-8')).channels.feishu).toEqual({ groupPermissionMode: 'bypassPermissions' });
+    const manual = { providerId: 'openai', model: 'old-but-explicit', effort: 'high' as const };
+    writeImDefaultSettingsPatch({ agentKind: 'codex', agents: { codex: manual } }, 'feishu');
+    expect(readImDefaultSettings('feishu').agents.codex).toEqual(manual);
+    writeImDefaultSettingsPatch({ agentKind: IM_DEFAULT_SETTINGS.agentKind, agents: IM_DEFAULT_SETTINGS.agents }, 'feishu');
+    expect(readImDefaultSettings('feishu').groupPermissionMode).toBe('bypassPermissions');
+    expect(JSON.parse(fs.readFileSync(settingsFile(), 'utf-8')).channels.feishu).toEqual({ groupPermissionMode: 'bypassPermissions' });
+  });
+  it('persists the shared location per channel and can switch back to local', () => {
+    const route = { ...IM_DEFAULT_SETTINGS.agents.codex, providerId: 'openai', agentDeviceId: 'share:alice' };
+    writeImDefaultSettingsPatch({ agentKind: 'codex', agents: { codex: route } }, 'feishu');
+    expect(readImDefaultSettings('feishu').agents.codex).toEqual(route);
+    expect(readImDefaultSettings('telegram').agents.codex.agentDeviceId).toBeUndefined();
+    writeImDefaultSettingsPatch({ agents: { codex: { ...route, agentDeviceId: null } } }, 'feishu');
+    expect(readImDefaultSettings('feishu').agents.codex.agentDeviceId).toBeUndefined();
+  });
   beforeEach(() => {
+    scopeMocks.dir = settingsDir;
     scopeMocks.join = path.join;
     scopeMocks.owner = 'cloud-a';
     scopeMocks.claimLegacy.mockReset();
@@ -74,6 +97,20 @@ describe('im default settings store', () => {
       effort: 'medium',
     });
     expect(normalized.agents['claude-code']).toEqual(IM_DEFAULT_SETTINGS.agents['claude-code']);
+  });
+
+  it('previews a patch merge without writing (route-change gate for the blocking backfill)', () => {
+    writeImDefaultSettingsPatch({ agents: { codex: { providerId: null, model: 'gpt-5.5', effort: 'high' } } }, 'feishu');
+    const before = readImDefaultSettings('feishu');
+
+    const merged = previewImDefaultSettingsPatch({ groupPermissionMode: 'bypassPermissions' }, 'feishu');
+
+    // 合并结果包含补丁效果, 路由轴与现状一致 —— 调用方据此判断路由指纹是否变化。
+    expect(merged.groupPermissionMode).toBe('bypassPermissions');
+    expect(merged.agentKind).toBe(before.agentKind);
+    expect(merged.agents).toEqual(before.agents);
+    // 预览不写盘。
+    expect(readImDefaultSettings('feishu')).toEqual(before);
   });
 
   it('persists only the changed agent override so untouched agents keep inheriting future defaults', () => {
@@ -171,7 +208,7 @@ describe('im default settings store', () => {
       // legacy root mirror 是 resolved 满射快照(global 才做 diff),pi 槽为系统默认。
       pi: {
         providerId: null,
-        model: 'claude-sonnet-5',
+        model: '',
         effort: 'high',
       },
     });
@@ -397,5 +434,76 @@ describe('im default settings store', () => {
     expect(persisted.global).toBeUndefined();
     expect(persisted.channels.feishu.permissionMode).toBe('bypassPermissions');
     expect(persisted.channels.slack.agentKind).toBe('codex');
+  });
+
+  it('group permission mode: auto default, per-channel override, reset clears it', () => {
+    expect(readImDefaultSettings('feishu').groupPermissionMode).toBe('auto');
+    writeImDefaultSettingsPatch({ groupPermissionMode: 'bypassPermissions' }, 'feishu');
+    expect(readImDefaultSettings('feishu').groupPermissionMode).toBe('bypassPermissions');
+    // 其它渠道不受影响, 跟随系统默认。
+    expect(readImDefaultSettings('discord').groupPermissionMode).toBe('auto');
+    expect(readImDefaultSettingsState('feishu').customizedKeys).toContain(
+      'groupPermissionMode',
+    );
+
+    resetImDefaultSettingsChannel('feishu');
+    expect(readImDefaultSettings('feishu').groupPermissionMode).toBe('auto');
+    expect(readImDefaultSettingsState('feishu').isCustomized).toBe(false);
+
+    // override 清空后文件整体删除(createOverrideSettingsFile 清理语义)。
+    const persisted = fs.existsSync(settingsFile())
+      ? JSON.parse(fs.readFileSync(settingsFile(), 'utf-8'))
+      : {};
+    expect(persisted.channels).toBeUndefined();
+  });
+
+  it('falls back group permission to auto for persisted documents without the field', () => {
+    const without = {
+      agentKind: IM_DEFAULT_SETTINGS.agentKind,
+      permissionMode: 'auto' as const,
+      agents: IM_DEFAULT_SETTINGS.agents,
+    };
+    const migrated = __testing.normalizeDocument({
+      schemaVersion: 3,
+      global: without,
+      channels: { feishu: without },
+    });
+    expect(migrated.global.groupPermissionMode).toBe('auto');
+    expect(migrated.channels.feishu.groupPermissionMode).toBe('auto');
+  });
+
+  /**
+   * 存量兼容: 该设置项最初叫「群聊 /ctr 新建任务权限档」, 键名 groupCtrPermissionMode。
+   * 作用域扩到「群里新建的所有会话」后键名改了, 已经存过旧键的用户升级后什么都不做,
+   * 原来选的档位必须照旧生效(漏这条 = 用户的完全访问被静默改回自动审批)。
+   */
+  it('keeps a legacy groupCtrPermissionMode value after the key rename', () => {
+    const legacy = {
+      agentKind: IM_DEFAULT_SETTINGS.agentKind,
+      permissionMode: 'auto' as const,
+      groupCtrPermissionMode: 'bypassPermissions' as const,
+      agents: IM_DEFAULT_SETTINGS.agents,
+    };
+    const migrated = __testing.normalizeDocument({
+      schemaVersion: 3,
+      global: legacy,
+      channels: { feishu: legacy },
+    });
+    expect(migrated.global.groupPermissionMode).toBe('bypassPermissions');
+    expect(migrated.channels.feishu.groupPermissionMode).toBe('bypassPermissions');
+
+    // 新键同时在场时新键胜出(写侧只写新键, 旧键只是历史残留)。
+    const both = __testing.normalize({
+      ...legacy,
+      groupPermissionMode: 'auto' as const,
+    });
+    expect(both.groupPermissionMode).toBe('auto');
+  });
+
+  it('writes only the new group permission key (legacy key not resurrected)', () => {
+    writeImDefaultSettingsPatch({ groupPermissionMode: 'bypassPermissions' }, 'feishu');
+    const persisted = JSON.parse(fs.readFileSync(settingsFile(), 'utf-8'));
+    expect(persisted.channels.feishu.groupPermissionMode).toBe('bypassPermissions');
+    expect(persisted.channels.feishu.groupCtrPermissionMode).toBeUndefined();
   });
 });

@@ -10,6 +10,10 @@ import { fileURLToPath } from 'node:url';
 import { promisify } from 'node:util';
 import { gzipSync, gunzipSync } from 'node:zlib';
 import WebSocket from 'ws';
+import {
+  desktopUserDataDirForRegion,
+  resolveDesktopDevRegion,
+} from './shared/desktop-dev-region.mjs';
 
 const execFile = promisify(execFileCb);
 
@@ -134,6 +138,7 @@ Refine options:
   --dictation-text <text>           Single ad-hoc case input
   --expected-text <text>            Expected output for the single ad-hoc case
   --context <path>                  JSON context merged into every case
+  --region <cn|global|dev>          userData 区域 (默认读取 CINDY_AUTH_REGION, 再默认 global)
   --iterations <n>                  Default: 1
   --timeout-ms <n>                  Default: 15000
   --base-url <url>                  LiteLLM gateway. Default: VITE_XD_GATEWAY_BASE_URL
@@ -188,6 +193,7 @@ function parseArgs(argv) {
     dictationText: '',
     expectedText: '',
     context: '',
+    region: null,
   };
 
   for (let i = 0; i < args.length; i += 1) {
@@ -265,6 +271,9 @@ function parseArgs(argv) {
         break;
       case '--context':
         opts.context = path.resolve(next());
+        break;
+      case '--region':
+        opts.region = next();
         break;
       case '--base-url':
         opts.baseUrl = next();
@@ -604,24 +613,27 @@ async function resolveLiteLlmApiKey(opts) {
     process.env.ANTHROPIC_API_KEY,
   ].find((value) => value?.trim());
   if (explicit) return explicit.trim();
-  const stored = await readXdGatewayApiKeyFromAppStorage();
+  const region = opts.region ?? resolveDesktopDevRegion([], process.env);
+  const stored = await readXdGatewayApiKeyFromAppStorage(region);
   if (stored) return stored;
   throw new Error(
     'No LiteLLM/XD Gateway API key found. Pass --api-key, set XDT_VOICE_INPUT_BENCHMARK_API_KEY, or save an API key in Settings > API Key.',
   );
 }
 
-async function readXdGatewayApiKeyFromAppStorage() {
+async function readXdGatewayApiKeyFromAppStorage(region) {
   const electron = resolveElectronBinary();
   if (!electron) return null;
+  const userDataDir = desktopUserDataDirForRegion(region);
   const helperPath = path.join(os.tmpdir(), `xdt-read-xd-gateway-key-${process.pid}-${Date.now()}.cjs`);
   await fsp.writeFile(helperPath, `
 const fs = require('node:fs');
 const path = require('node:path');
 const { app, safeStorage } = require('electron');
-// userData 子目录随 productName(2026-07 身份翻转后 'Cindy'),要读 desktop dev
-// 同一份 safe-storage 就必须对齐这个名字。
+// safeStorage service name remains Cindy for the shared packaged CN/Global keychain;
+// the profile path is selected explicitly so Global reads CindyGlobal storage.
 app.setName('Cindy');
+app.setPath('userData', ${JSON.stringify(userDataDir)});
 app.whenReady().then(() => {
   try {
     const file = path.join(app.getPath('userData'), 'safe-storage', 'api_key.enc');
@@ -971,14 +983,10 @@ async function runVolcengineSaucAsrIteration(spec, audio, opts, apiKey, iteratio
   // The initial full client request is auto-assigned sequence 1 by
   // Volcengine SAUC, so audio-only requests begin at 2.
   let sequence = 1;
-  let pendingFinalAudioChunk;
   const sendAudioChunk = (chunk) => {
     if (fatalError) return;
-    if (pendingFinalAudioChunk) {
-      sequence += 1;
-      ws.send(encodeVolcengineBenchmarkAudioOnlyRequest(pendingFinalAudioChunk, sequence));
-    }
-    pendingFinalAudioChunk = chunk;
+    sequence += 1;
+    ws.send(encodeVolcengineBenchmarkAudioOnlyRequest(chunk, sequence));
   };
   marks.audioStart = performance.now();
   await streamPcmAudio(pcm, spec.pcmSampleRate, opts.chunkMs, sendAudioChunk, true);
@@ -988,11 +996,6 @@ async function runVolcengineSaucAsrIteration(spec, audio, opts, apiKey, iteratio
   if (fatalError) throw fatalError;
   marks.tailSilenceFinished = performance.now();
   finalRequested = true;
-  if (pendingFinalAudioChunk) {
-    sequence += 1;
-    ws.send(encodeVolcengineBenchmarkAudioOnlyRequest(pendingFinalAudioChunk, sequence));
-  }
-  pendingFinalAudioChunk = undefined;
   // Match production VolcengineSaucAsrProvider: the last real audio chunk is
   // sent normally, then a short silence packet carries the negative final
   // sequence so the final marker does not cut off the spoken tail.
@@ -1970,6 +1973,66 @@ function parseVoiceInputReport(logPath, latest) {
         elapsedMs: extractNumber(block, 'elapsedMs'),
         textChars: extractNumber(block, 'textChars'),
         refinedTextChars: extractNumber(block, 'refinedTextChars'),
+      };
+      continue;
+    }
+
+    // Packaged/default logging omits debug timeline rows. The main process
+    // therefore emits one redacted info summary per run; accept that compact
+    // shape so `report` remains useful against real user logs.
+    if (line.includes('[voice-input] latency summary {')) {
+      const { block, nextIndex } = readBraceBlock(lines, i);
+      i = nextIndex;
+      const runId = extractQuoted(block, 'runId');
+      if (!runId) continue;
+      let session = [...sessions].reverse().find((candidate) => candidate.runId === runId);
+      if (!session) {
+        const submittedMs = extractNumber(block, 'submittedMs') ?? extractNumber(block, 'totalMs');
+        session = {
+          runId,
+          startAt: submittedMs === undefined ? ts : ts - submittedMs,
+          shortcutToStartMs: pendingShortcutAt && submittedMs !== undefined
+            ? (ts - submittedMs) - pendingShortcutAt
+            : undefined,
+          mic: pendingMic,
+          timeline: {},
+        };
+        sessions.push(session);
+        pendingMic = {};
+        pendingShortcutAt = undefined;
+      }
+      const summaryFields = [
+        ['asr_connected', 'asrConnectedMs'],
+        ['first_audio_chunk', 'firstAudioChunkMs'],
+        ['first_partial', 'firstPartialMs'],
+        ['stable_received', 'stableReceivedMs'],
+        ['submitted', 'submittedMs'],
+      ];
+      for (const [type, field] of summaryFields) {
+        const elapsedMs = extractNumber(block, field);
+        if (elapsedMs === undefined || session.timeline[type]) continue;
+        session.timeline[type] = {
+          at: session.startAt + elapsedMs,
+          elapsedMs,
+        };
+      }
+      continue;
+    }
+
+    if (line.includes('[voice-input] refinement latency summary {')) {
+      const { block, nextIndex } = readBraceBlock(lines, i);
+      i = nextIndex;
+      const runId = extractQuoted(block, 'runId');
+      const outcome = extractQuoted(block, 'outcome');
+      const session = runId
+        ? [...sessions].reverse().find((candidate) => candidate.runId === runId)
+        : undefined;
+      if (!session || (outcome !== 'accepted' && outcome !== 'rejected')) continue;
+      const type = outcome === 'accepted' ? 'refine_accepted' : 'refine_rejected';
+      const totalMs = extractNumber(block, 'totalMs');
+      session.timeline[type] = {
+        at: totalMs === undefined ? ts : session.startAt + totalMs,
+        elapsedMs: extractNumber(block, 'elapsedMs'),
       };
       continue;
     }

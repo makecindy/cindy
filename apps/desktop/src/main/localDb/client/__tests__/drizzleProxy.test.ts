@@ -19,8 +19,10 @@ const DRIZZLE_PROXY_SCHEMA = [
       summary TEXT,
       provider_id TEXT,
       working_dir TEXT,
+      project_dir TEXT,
       workspace_kind TEXT NOT NULL DEFAULT 'project',
       model TEXT NOT NULL DEFAULT 'claude-sonnet-4-6',
+      scheduled_model_baseline TEXT,
       effort TEXT NOT NULL DEFAULT 'high',
       permission_mode TEXT NOT NULL DEFAULT 'ask',
       status TEXT NOT NULL DEFAULT 'active',
@@ -32,11 +34,15 @@ const DRIZZLE_PROXY_SCHEMA = [
       total_cost_is_approximate INTEGER NOT NULL DEFAULT 0,
       context_tokens INTEGER NOT NULL DEFAULT 0,
       context_window INTEGER NOT NULL DEFAULT 0,
+      context_window_runtime INTEGER,
       fast_mode INTEGER NOT NULL DEFAULT 0,
       plan_mode_enabled INTEGER NOT NULL DEFAULT 0,
       cleared_at INTEGER,
       pinned_at INTEGER,
+      hidden_at INTEGER,
+      notifications_muted INTEGER NOT NULL DEFAULT 0,
       user_send_at INTEGER,
+      last_activity_at INTEGER,
       agent_kind TEXT NOT NULL DEFAULT 'cc',
       orca_role TEXT,
       parent_session_id TEXT,
@@ -47,13 +53,22 @@ const DRIZZLE_PROXY_SCHEMA = [
       feishu_bot_app_id TEXT,
       im_bot_context_id TEXT,
       im_user_id TEXT,
+      im_default_route TEXT,
       used_project_context INTEGER NOT NULL DEFAULT 0,
       codex_history_has_product_prompt INTEGER,
       extra_dirs TEXT NOT NULL DEFAULT '[]',
+      writable_dirs TEXT NOT NULL DEFAULT '[]',
       remote_host_id TEXT,
+      agent_device_id TEXT,
+      orca_remote_lead TEXT,
       active_turn_started_at INTEGER,
       active_turn_pid INTEGER,
       last_turn_ended_at INTEGER,
+      one_m INTEGER NOT NULL DEFAULT 0,
+      codex_plan_json TEXT,
+      list_preview TEXT,
+      list_preview_role TEXT,
+      list_message_count INTEGER,
       created_at INTEGER NOT NULL,
       updated_at INTEGER NOT NULL
     )
@@ -75,6 +90,50 @@ const DRIZZLE_PROXY_SCHEMA = [
 ];
 
 describe('drizzle proxy', () => {
+  // Storage integration: the eval worker must own its codec, including legacy numeric fork inputs.
+  // Existing Drizzle round trips do not execute the inline fork transaction.
+  it('preserves speed when the inline worker forks a session', async () => {
+    const client = await createDbClient({ useInlineWorker: true });
+    try {
+      await applyDrizzleProxySchema(client);
+      await client.exec('ALTER TABLE messages ADD COLUMN agent_kind TEXT');
+      for (const [index, fastMode] of ['ultrafast', true, false, 1, 2].entries()) {
+        const id = `fork-${index}`;
+        await client.tx('fork.session', {
+          sourceSessionId: 'empty-source', sourceClearedAt: null,
+          targetCreatedAt: 10, targetRowid: null,
+          uuidMap: {}, nativeForkAnchorSessionMap: {},
+          legacyTranscriptParentUuids: [], toolParentUuids: [], newMessageIds: [],
+          newSession: {
+            id, title: 'Fork', model: 'gpt-6.1-sol', effort: 'high',
+            permissionMode: 'ask', status: 'active', agentKind: 'codex',
+            workspaceKind: 'project', totalTokenUsage: 0, totalCostUsd: 0,
+            contextTokens: 0, contextWindow: 272000, fastMode, createdAt: 10, updatedAt: 10,
+          },
+        });
+        const expected = fastMode === 'ultrafast' || fastMode === 2 ? 'ultrafast' : !!fastMode;
+        expect(await client.drizzle.select({ fastMode: sessions.fastMode }).from(sessions)
+          .where(eq(sessions.id, id))).toEqual([{ fastMode: expected }]);
+      }
+    } finally { await client.dispose(); }
+  });
+
+  // Storage tier: retain old integer values while new session rows round-trip Ultrafast.
+  it('round-trips all three speeds through the real Drizzle worker mapping', async () => {
+    const client = await createDbClient({ useInlineWorker: true });
+    try {
+      await applyDrizzleProxySchema(client);
+      await client.drizzle.insert(sessions).values({ id: 'speed', title: 'Speed', createdAt: 1, updatedAt: 1, fastMode: 'ultrafast' });
+      for (const [speed, stored] of [['ultrafast', 2], [true, 1], [false, 0]] as const) {
+        await client.drizzle.update(sessions).set({ fastMode: speed }).where(eq(sessions.id, 'speed'));
+        expect(await client.queryOne('SELECT fast_mode FROM sessions WHERE id = ?', ['speed']))
+          .toEqual({ fast_mode: stored });
+        const rows = await client.drizzle.select({ fastMode: sessions.fastMode }).from(sessions);
+        expect(rows).toEqual([{ fastMode: speed }]);
+      }
+    } finally { await client.dispose(); }
+  });
+
   it('maps nested select rows with drizzle mapResultRow semantics', async () => {
     const inProc = new Database(':memory:');
     const client = await createDbClient({ useInlineWorker: true });
@@ -184,6 +243,56 @@ describe('drizzle proxy', () => {
       // DELETE 同样透传
       const del = await client.drizzle.delete(sessions).where(eq(sessions.id, 's1')).run();
       expect(del.changes).toBe(1);
+    } finally {
+      await client.dispose();
+    }
+  });
+
+  it('UPDATE ... RETURNING 回传命中行,不再固定返回 [](#3496 CAS 自愈误拦)', async () => {
+    // 回归测试 — 防退化:compareAndClearSdkSessionId 用
+    // .returning({ id }) 的行数判断条件 UPDATE 是否命中。此前 executeAll 对
+    // 非 select builder 固定返回 [],磁盘上成功的 CAS 清除被判失败,
+    // invalid-resume 的一次性 fresh fallback 被「refusing to overwrite
+    // concurrent ...」拦成 UI 终态错误(No conversation found)。
+    const client = await createDbClient({ useInlineWorker: true });
+    try {
+      await applyDrizzleProxySchema(client);
+      await client.drizzle
+        .insert(sessions as never)
+        .values({ id: 's1', sdkSessionId: 'sdk-old', title: 'a', createdAt: 1, updatedAt: 1 } as never);
+
+      // 命中:返回被更新行(CAS 判胜)
+      const hit = await client.drizzle
+        .update(sessions)
+        .set({ sdkSessionId: null })
+        .where(eq(sessions.sdkSessionId, 'sdk-old'))
+        .returning({ id: sessions.id });
+      expect(hit).toEqual([{ id: 's1' }]);
+
+      // 未命中:返回 [](CAS 判负),且与「查询失败」可区分地正常 resolve
+      const miss = await client.drizzle
+        .update(sessions)
+        .set({ sdkSessionId: null })
+        .where(eq(sessions.sdkSessionId, 'sdk-old'))
+        .returning({ id: sessions.id });
+      expect(miss).toEqual([]);
+
+      // 字段别名映射:key 用调用方命名,不透传裸列名
+      const aliased = await client.drizzle
+        .update(sessions)
+        .set({ title: 'renamed' })
+        .where(eq(sessions.id, 's1'))
+        .returning({ sessionId: sessions.id, newTitle: sessions.title });
+      expect(aliased).toEqual([{ sessionId: 's1', newTitle: 'renamed' }]);
+
+      // .returning().get() 走 executeGet 分支,同样按别名映射
+      const got = await client.drizzle
+        .update(sessions)
+        .set({ title: 'got' })
+        .where(eq(sessions.id, 's1'))
+        .returning({ sessionId: sessions.id })
+        .get();
+      expect(got).toEqual({ sessionId: 's1' });
     } finally {
       await client.dispose();
     }

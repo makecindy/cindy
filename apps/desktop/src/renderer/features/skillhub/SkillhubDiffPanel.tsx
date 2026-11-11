@@ -1,5 +1,5 @@
 /**
- * SkillhubDiffPanel — 右侧滑入面板，展示当前 skill 与上次发布快照的文件级 diff。
+ * SkillhubDiffPanel — 原作者比较线上具体版本；其他本地修改保留安装快照 diff。
  *
  * 触发：DetailView 里点 mine-dirty banner → setOpen(true)。
  *
@@ -22,6 +22,7 @@ import { FileDiff as FileDiffIcon } from 'lucide-react';
 import { DiffPanelShell } from '@/components/diff-panel/DiffPanelShell';
 import { FileChangeGroup, type FileChange } from '@/components/diff-panel/FileChangeGroup';
 import { computeDiffStats } from '@/lib/agent-actions/diffStats';
+import { getDataOwnerGeneration, isDataOwnerGenerationCurrent } from '@/contexts/dataOwnerGeneration';
 
 interface SkillhubDiffPanelProps {
   open: boolean;
@@ -30,6 +31,8 @@ interface SkillhubDiffPanelProps {
   skillName: string;
   /** Skill 在本机的绝对路径 — IPC 用它读当前文件。 */
   absolutePath: string;
+  skillId?: string;
+  published?: boolean;
 }
 
 type LoadState =
@@ -37,9 +40,9 @@ type LoadState =
   | { kind: 'loading' }
   | { kind: 'no-snapshot' }
   | { kind: 'error'; message: string }
-  | { kind: 'ready'; changes: FileChange[] };
+  | { kind: 'ready'; changes: FileChange[]; version?: string };
 
-export function SkillhubDiffPanel({ open, onClose, skillName, absolutePath }: SkillhubDiffPanelProps) {
+export function SkillhubDiffPanel({ open, onClose, skillName, absolutePath, skillId, published }: SkillhubDiffPanelProps) {
   const { t } = useTranslation();
   const [state, setState] = useState<LoadState>({ kind: 'idle' });
 
@@ -50,11 +53,29 @@ export function SkillhubDiffPanel({ open, onClose, skillName, absolutePath }: Sk
       return;
     }
     let cancelled = false;
+    const owner = getDataOwnerGeneration();
     setState({ kind: 'loading' });
+    if (published) {
+      window.electronAPI.skillhub.comparePublished({ absolutePath, skillId, includeDiff: true })
+        .then((res) => {
+          if (cancelled || !isDataOwnerGenerationCurrent(owner)) return;
+          if (res.status !== 'same' && res.status !== 'different') {
+            setState({ kind: 'error', message: t('skillhub.publishComparison.unavailable') });
+            return;
+          }
+          setState({ kind: 'ready', version: res.version, changes: res.changes ?? [] });
+        })
+        .catch(() => {
+          if (!cancelled && isDataOwnerGenerationCurrent(owner)) {
+            setState({ kind: 'error', message: t('skillhub.publishComparison.unavailable') });
+          }
+        });
+      return () => { cancelled = true; };
+    }
     window.electronAPI.skillhub
       .getSnapshotDiff({ absolutePath, name: skillName })
       .then((res) => {
-        if (cancelled) return;
+        if (cancelled || !isDataOwnerGenerationCurrent(owner)) return;
         if (!res.success) {
           setState({ kind: 'error', message: res.error ?? 'unknown error' });
           return;
@@ -66,7 +87,7 @@ export function SkillhubDiffPanel({ open, onClose, skillName, absolutePath }: Sk
         setState({ kind: 'ready', changes: res.changes ?? [] });
       })
       .catch((err: unknown) => {
-        if (cancelled) return;
+        if (cancelled || !isDataOwnerGenerationCurrent(owner)) return;
         setState({
           kind: 'error',
           message: err instanceof Error ? err.message : String(err),
@@ -75,7 +96,7 @@ export function SkillhubDiffPanel({ open, onClose, skillName, absolutePath }: Sk
     return () => {
       cancelled = true;
     };
-  }, [open, absolutePath, skillName]);
+  }, [open, absolutePath, skillName, skillId, published, t]);
 
   // 汇总 +/- 计数(只对 ready 状态算)
   const totals = useMemo(() => {
@@ -97,7 +118,9 @@ export function SkillhubDiffPanel({ open, onClose, skillName, absolutePath }: Sk
       onClose={onClose}
       variant="floating"
       ariaLabel={t('skillhub.diffPanel.ariaLabel')}
-      title={t('skillhub.diffPanel.title')}
+      title={state.kind === 'ready' && state.version
+        ? t('skillhub.publishComparison.diffTitle', { version: state.version })
+        : t('skillhub.diffPanel.title')}
       defaultWidth={560}
       storageKey="diff-panel-shell:skillhub-width"
       rightHeader={
@@ -119,7 +142,7 @@ export function SkillhubDiffPanel({ open, onClose, skillName, absolutePath }: Sk
         ) : (
           <ul className="flex flex-col gap-2 p-3">
             {state.changes.map((c) => (
-              <FileChangeGroup key={c.path} change={c} />
+              <FileChangeGroup key={c.path} change={c} summaryOnly={published && c.isBinary} />
             ))}
           </ul>
         ))}

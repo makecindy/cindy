@@ -25,12 +25,13 @@ function createTurnState(): TurnState {
   };
 }
 
-function createCtx(tracker: UsageTracker) {
+function createCtx(tracker: UsageTracker, providerId: string | null = 'xd') {
   return {
     rt: newRuntimeState(),
     turn: createTurnState(),
     log: { debug: vi.fn(), info: vi.fn(), warn: vi.fn() },
     getModel: () => 'codex/gpt-5.5',
+    getProviderId: () => providerId,
     getEffort: () => 'high' as const,
     getPermissionMode: () => 'auto' as const,
     onSessionId: vi.fn(),
@@ -49,6 +50,144 @@ async function drain(queue: ReturnType<typeof createAsyncQueue<AgentEvent>>): Pr
 }
 
 describe('Claude Code translator is_error result guard', () => {
+  it.each(['toolu_child', null])('keeps query failure terminal after an API envelope from %s', async (parent) => {
+    const queue = createAsyncQueue<AgentEvent>();
+    const ctx = createCtx(new UsageTracker());
+    translateSdkMessage({
+      type: 'assistant', uuid: 'error-envelope', parent_tool_use_id: parent,
+      error: 'server_error', message: { content: [{ type: 'text', text: 'Upstream unavailable' }] },
+    }, queue, ctx);
+    translateSdkMessage({ type: 'result', is_error: true }, queue, ctx);
+    const events = await drain(queue);
+    const errors = events.filter((event) => event.type === 'error');
+    expect(errors).toHaveLength(1);
+    expect(errors[0].data).toMatchObject({ message: 'Upstream unavailable', isTerminal: true });
+    expect(errors[0].agentMeta?.parentUuid).toBeUndefined();
+    if (parent) expect(errors[0].agentMeta).toBeUndefined();
+    else expect(errors[0].agentMeta?.uuid).toBe('error-envelope');
+    expect(events.filter((event) => event.type === 'text')).toHaveLength(0);
+    expect(events.at(-1)?.type).toBe('done');
+  });
+
+  it.each([
+    'Failed to authenticate. API Error: 403 user not allowed to access model. This user can only access models=[private-model]. Tried to access claude-opus-5',
+    'API Error: 403 {"error":{"type":"user_model_access_denied","message":"Access denied"}}',
+    'API Error: 403 {"error":{"code":"user_model_access_denied","param":"model","message":"Access denied"}}',
+  ])('classifies model access denial separately from SDK authentication_failed: %s', async (message) => {
+    const queue = createAsyncQueue<AgentEvent>();
+    const ctx = createCtx(new UsageTracker(), 'custom-provider');
+    translateSdkMessage({ type: 'assistant', error: 'authentication_failed',
+      message: { content: [{ type: 'text', text: message }] } }, queue, ctx);
+    translateSdkMessage({ type: 'result', is_error: true, result: message }, queue, ctx);
+    const events = await drain(queue);
+    expect(events.find((event) => event.type === 'error')?.data).toMatchObject({
+      reason: 'user_model_access_denied', errorStatus: 403,
+      sdkError: 'user_model_access_denied', isTerminal: true,
+    });
+    expect(JSON.stringify(events)).not.toContain('Failed to authenticate');
+    expect(JSON.stringify(events)).not.toContain('private-model');
+    expect(events.filter((event) => event.type === 'error')).toHaveLength(1);
+    expect(events.some((event) => event.type === 'done')).toBe(true);
+  });
+
+  it('carries the assistant API message id into done for Vertex lag detection', async () => {
+    const tracker = new UsageTracker();
+    const queue = createAsyncQueue<AgentEvent>();
+    const ctx = createCtx(tracker);
+
+    translateSdkMessage(
+      {
+        type: 'assistant',
+        message: {
+          id: 'msg_vrtx_123',
+          content: [{ type: 'text', text: '完成' }],
+        },
+      },
+      queue,
+      ctx,
+    );
+    translateSdkMessage(
+      {
+        type: 'result',
+        result: '完成',
+        stop_reason: 'end_turn',
+        total_cost_usd: 0,
+        usage: { input_tokens: 20_000, output_tokens: 7 },
+        modelUsage: {
+          'claude-opus-4-8': {
+            inputTokens: 20_000,
+            outputTokens: 7,
+            costUSD: 0,
+            contextWindow: 200_000,
+          },
+        },
+      },
+      queue,
+      ctx,
+    );
+
+    const events = await drain(queue);
+    const done = events.find((event) => event.type === 'done');
+    expect(done?.data).toMatchObject({ assistant_message_id: 'msg_vrtx_123' });
+  });
+
+  it.each([
+    'API Error: 401 invalid API key',
+    'API Error: 403 permission denied',
+    'API Error: 401 user not allowed to access model',
+    'Connection error',
+    'API Error: 403 {"error":{"type":"authentication_error","message":"Invalid credentials"}}',
+  ])('does not turn a different failure into model access denial: %s', async (message) => {
+    const queue = createAsyncQueue<AgentEvent>();
+    const ctx = createCtx(new UsageTracker(), 'custom-provider');
+    // A later error envelope replaces the earlier diagnosis in the same turn.
+    translateSdkMessage({ type: 'assistant', error: 'authentication_failed',
+      message: { content: [{ type: 'text', text: 'API Error: 403 user not allowed to access model' }] },
+    }, queue, ctx);
+    translateSdkMessage({ type: 'assistant', error: 'authentication_failed',
+      message: { content: [{ type: 'text', text: message }] } }, queue, ctx);
+    translateSdkMessage({ type: 'result', is_error: true, result: message }, queue, ctx);
+    const events = await drain(queue);
+    expect(events.find((event) => event.type === 'error')?.data).toMatchObject({
+      sdkError: 'authentication_failed', message,
+    });
+    expect(events.find((event) => event.type === 'error')?.data).not.toHaveProperty('reason');
+  });
+
+  it('classifies a result-only model denial without losing usage accounting', async () => {
+    const queue = createAsyncQueue<AgentEvent>();
+    const ctx = createCtx(new UsageTracker(), 'custom-provider');
+    translateSdkMessage({ type: 'result', is_error: true,
+      result: 'API Error: 403 user not allowed to access model',
+      total_cost_usd: 0.25, usage: { input_tokens: 100, output_tokens: 2 },
+    }, queue, ctx);
+    const events = await drain(queue);
+    expect(events.find((event) => event.type === 'error')?.data).toMatchObject({
+      reason: 'user_model_access_denied', errorStatus: 403,
+    });
+    expect(events.find((event) => event.type === 'done')?.data).toMatchObject({
+      total_cost_usd: 0.25, usage: { input_tokens: 100, output_tokens: 2 },
+    });
+  });
+
+  it('keeps a structured denial signal across redaction and SDK retry metadata', async () => {
+    const queue = createAsyncQueue<AgentEvent>();
+    const ctx = createCtx(new UsageTracker(), 'custom-provider');
+    translateSdkMessage({ type: 'assistant', error: 'authentication_failed',
+      message: { content: [{ type: 'text', text:
+        'API Error: 403 {"error":{"type":"user_model_access_denied","message":"Denied","api_key":"fake-never-valid-key"}}',
+      }] } }, queue, ctx);
+    translateSdkMessage({ type: 'system', subtype: 'api_retry', error: 'authentication_failed',
+      error_status: 403, attempt: 1, max_retries: 2, retry_delay_ms: 1,
+    }, queue, ctx);
+    translateSdkMessage({ type: 'result', is_error: true, result: '' }, queue, ctx);
+    const events = await drain(queue);
+    expect(events.find((event) => event.type === 'error')?.data).toMatchObject({
+      reason: 'user_model_access_denied', errorStatus: 403,
+    });
+    expect(JSON.stringify(events)).not.toContain('fake-never-valid-key');
+  });
+
   it('surfaces a terminal error AND keeps the Done/done tail when is_error arrives without a prior envelope', async () => {
     // 原 bug 路径②: result.is_error 但 turn 内没有任何 API-error envelope → 旧实现只发
     // status Done + done, renderer 的 state.error 不置位, 失败被通知成"已完成"。
@@ -135,12 +274,51 @@ describe('Claude Code translator is_error result guard', () => {
     expect(serialized).not.toContain('secret-token');
     expect(serialized).not.toContain('hash-abc');
     expect(serialized).toContain('[REDACTED]');
+    expect(error?.data).toMatchObject({
+      reason: 'gateway-proxy-token-invalid',
+    });
     expect(JSON.stringify(ctx.log.debug.mock.calls)).not.toContain('secret-token');
     expect(JSON.stringify(ctx.log.warn.mock.calls)).not.toContain('secret-token');
     expect(ctx.log.warn).toHaveBeenCalledWith(
       'SDK ◀ turn ended with error',
       expect.objectContaining({ output: 'Authorization: [REDACTED]' }),
     );
+  });
+
+  it('does not classify a custom LiteLLM provider error as a Cindy credential failure', async () => {
+    const tracker = new UsageTracker();
+    const queue = createAsyncQueue<AgentEvent>();
+    const ctx = createCtx(tracker, 'custom-litellm');
+
+    translateSdkMessage(
+      {
+        type: 'result',
+        is_error: true,
+        result:
+          'Invalid proxy server token; Unable to find token in LiteLLM_VerificationTokenTable',
+        stop_reason: 'end_turn',
+        total_cost_usd: 0,
+        usage: { input_tokens: 1, output_tokens: 0 },
+        modelUsage: {
+          'codex/gpt-5.5': {
+            inputTokens: 1,
+            outputTokens: 0,
+            costUSD: 0,
+            contextWindow: 272_000,
+          },
+        },
+      },
+      queue,
+      ctx,
+    );
+
+    const events = await drain(queue);
+    const error = events.find((event) => event.type === 'error');
+    expect(error?.data).toMatchObject({
+      message: 'Invalid proxy server token; Unable to find token in LiteLLM_VerificationTokenTable',
+      isTerminal: true,
+    });
+    expect(error?.data).not.toHaveProperty('reason');
   });
 
   it('preserves non-secret status and quota signals from a redacted terminal result', async () => {
@@ -231,6 +409,57 @@ describe('Claude Code translator is_error result guard', () => {
       isTerminal: true,
     });
     expect(JSON.stringify(events)).not.toContain('secret-token');
+  });
+
+  describe('rate-limit reset time on limit errors', () => {
+    const limitTurn = async (ctx: ReturnType<typeof createCtx>): Promise<AgentEvent | undefined> => {
+      const queue = createAsyncQueue<AgentEvent>();
+      translateSdkMessage({ type: 'assistant', error: 'rate_limit',
+        message: { content: [{ type: 'text', text: "You've hit your session limit · resets 1:20am" }] } }, queue, ctx);
+      translateSdkMessage({ type: 'result', is_error: true, result: "You've hit your session limit · resets 1:20am" }, queue, ctx);
+      return (await drain(queue)).find((event) => event.type === 'error');
+    };
+    const rateLimitEvent = (
+      ctx: ReturnType<typeof createCtx>,
+      status: string,
+      rateLimitType: string,
+      resetsAt: number,
+    ): void => {
+      translateSdkMessage({ type: 'rate_limit_event', rate_limit_info: { status, resetsAt, rateLimitType } },
+        createAsyncQueue<AgentEvent>(), ctx);
+    };
+
+    it('keeps the rejected window reset across turns until that window recovers', async () => {
+      const ctx = createCtx(new UsageTracker(), 'anthropic');
+      const resetsAtSec = Math.floor(Date.now() / 1000) + 3600;
+      rateLimitEvent(ctx, 'rejected', 'five_hour', resetsAtSec);
+      expect((await limitTurn(ctx))?.data).toMatchObject({ sdkError: 'rate_limit', usageResetAt: resetsAtSec * 1000 });
+      // CLI 已知被拒后本地短路的下一轮不再发事件,仍带同一重置时刻。
+      expect((await limitTurn(ctx))?.data).toMatchObject({ usageResetAt: resetsAtSec * 1000 });
+
+      rateLimitEvent(ctx, 'allowed', 'five_hour', resetsAtSec);
+      expect((await limitTurn(ctx))?.data).not.toHaveProperty('usageResetAt');
+    });
+
+    it('ignores allowed events from other windows and reports the latest rejected reset', async () => {
+      const ctx = createCtx(new UsageTracker(), 'anthropic');
+      const nowSec = Math.floor(Date.now() / 1000);
+      rateLimitEvent(ctx, 'rejected', 'five_hour', nowSec + 3600);
+      rateLimitEvent(ctx, 'allowed_warning', 'seven_day', nowSec + 86_400);
+      expect((await limitTurn(ctx))?.data).toMatchObject({ usageResetAt: (nowSec + 3600) * 1000 });
+
+      rateLimitEvent(ctx, 'rejected', 'seven_day', nowSec + 86_400);
+      expect((await limitTurn(ctx))?.data).toMatchObject({ usageResetAt: (nowSec + 86_400) * 1000 });
+    });
+
+    it('reports a reset time that already passed once, then drops it to avoid an immediate-retry loop', async () => {
+      const ctx = createCtx(new UsageTracker(), 'anthropic');
+      const pastSec = Math.floor(Date.now() / 1000) - 60;
+      rateLimitEvent(ctx, 'rejected', 'five_hour', pastSec);
+      expect((await limitTurn(ctx))?.data).toMatchObject({ usageResetAt: pastSec * 1000 });
+      // 到点后仍被本地短路拒绝、没有新事件:不再带同一个过期时刻。
+      expect((await limitTurn(ctx))?.data).not.toHaveProperty('usageResetAt');
+    });
   });
 
   it('falls back to reason=turn-failed when is_error carries no result text', async () => {

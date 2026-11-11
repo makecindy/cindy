@@ -1,3 +1,13 @@
+import { BotChatQuoteInBubble } from '@/features/bots/BotChatQuoteViews';
+import { useBotChatQuote } from '@/features/bots/botChatQuoteContext';
+import { botReplyQuoteFor } from '@/features/bots/botDmQuote';
+import type { ChatReplyQuote } from '../../../shared/chatReplyQuote';
+import { BotDmThreadPreview } from '@/features/bots/BotDmThreadPreview';
+import { useBotDmThreadForMessage } from '@/features/bots/botDmThreadsContext';
+import { FileTypeIcon } from '@/components/ui/file-type-icon';
+import type { ImMessageSource } from '../../../shared/imMessageSource';
+import { isSharedTaskPeer } from '@cindy/device-link';
+import { hasEmbeddedImPrompt } from './userMessageDisplayText';
 /**
  * UserMessage
  * ---------------------------------------------------------------------------
@@ -12,20 +22,23 @@
  * F-MSG-DOC: document paths rendered inline as @path chips in text content
  */
 
-import { useCallback, useContext, useEffect, useMemo, useRef, useState } from 'react';
+import { ChatBubble, CHAT_BUBBLE_COLUMN_CLASS } from './ChatBubble';
+import { type ReactNode, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   Bot,
   ChevronDown,
   ChevronRight,
   ChevronUp,
-  Download,
-  File as FileIcon,
   FileText,
   Folder as FolderIcon,
   Sparkles,
   Target,
 } from 'lucide-react';
 import { readAgentInputReferences } from '@cindy/maker-shared/agent-input-projection';
+import {
+  projectSlashCommandsInText,
+  slashCommandDisplayLabel,
+} from '@cindy/maker-shared/composer-palette';
 import { useTranslation } from 'react-i18next';
 import type { TFunction } from 'i18next';
 import { cn } from '@/lib/utils';
@@ -33,10 +46,6 @@ import { resolveLocalPath, resolveLocalPathSmart, toLocalFileUrl } from '@/lib/l
 import { isBrowserOpenablePath } from '../../../shared/browserOpenableExts';
 import { toast } from '@/lib/toast';
 import { shouldOpenTextLightboxForOrigin } from '@/lib/filePreview';
-import {
-  isSafetyDowngradedAttachment,
-  saveChatAttachmentWithToasts,
-} from '@/lib/chatAttachmentSave';
 import { saveDraft as saveComposerDraft } from '@/lib/composerDraftStore';
 import { emitPatch as emitSessionPatch } from '@/lib/sessionsBus';
 import { makerChatStore } from '@/lib/makerChatStore';
@@ -45,15 +54,23 @@ import type {
   AgentKind as RendererAgentKind,
   MessageAutomationOrigin,
 } from '@/lib/ccAgent.types';
+import type {
+  MessageSourceDevice,
+  MessageSourcePlugin,
+} from '@cindy/maker-shared/message-source';
+import { isRealAutomationOrigin } from '@/lib/messageAutomationOrigin';
+import { SHARE_SOURCE_ATTR } from '@/lib/shareConversationImage';
 import type { PastedTextRange, SlashCommandRange } from '@/lib/imageRef';
 import type { AgentInputReference } from '../../../shared/agentInputQueue';
-import type { PersistedSessionReferenceMetadata } from '../../../shared/sessionReferenceMetadata';
-import { buildRewindDraftAttachments } from '@/lib/rewindDraftAttachments';
+import {
+  buildRewindDraftAttachments,
+  startRewindSourceProbe,
+  type RewindSourceProbe,
+} from '@/lib/rewindDraftAttachments';
 import {
   useAgentCapabilities,
   type AgentKind as MakerAgentKind,
 } from '@/hooks/useAgentCapabilities';
-import { useGitSafetyAutoSnapshotEnabledForDevice } from '@/hooks/useGitSafetySettings';
 import { useChatSessionFile } from './ChatSessionFileContext';
 import { isRemoteFileOrigin, originDeviceId, toRemoteMediaOrigin } from '@/lib/sessionFileOrigin';
 import { rewriteToRemoteMediaOrigin } from '../../../shared/remoteMediaUrl';
@@ -67,9 +84,10 @@ import {
 } from '@/lib/chatQuotes';
 import { quoteSegmentsToComposerDocument } from '@/lib/composerQuoteDocument';
 import { ChatImageView } from './ChatImageView';
-import { TextLightbox } from './TextLightbox';
+import { TextLightbox } from './lazyPreviewLightboxes';
 import { ToolPayloadLightbox } from './ToolPayloadLightbox';
 import { MessageActionBar } from './MessageActionBar';
+import { renderPluginUiBody, type PluginUiMessageCandidates } from '@/cindy-brain/PluginUiContributions';
 import { shareSelectionStore } from './shareSelectionStore';
 import { ErrorMessageCard } from './ErrorMessageCard';
 import { useForkAtMessage, textToTiptapDoc } from './useForkAtMessage';
@@ -82,12 +100,8 @@ import { RewindPreviewDialog } from './RewindPreviewDialog';
 import { UserMessageEditBox } from './UserMessageEditBox';
 import HookTaskCard from './HookTaskCard';
 import { useFileChipContextMenu } from './useFileChipContextMenu';
-import {
-  DropdownMenu,
-  DropdownMenuContent,
-  DropdownMenuItem,
-  DropdownMenuTrigger,
-} from '@/components/ui/dropdown-menu';
+import { UserAttachmentChip } from './UserAttachmentChip';
+import { UserMessageImageLink } from './UserMessageImageLink';
 import {
   AUTOMATION_USER_MESSAGE_VISUAL_LINE_THRESHOLD,
   LONG_USER_MESSAGE_VISUAL_LINE_THRESHOLD,
@@ -97,25 +111,24 @@ import {
 import { findLinkifyMatches } from './userMessageLinkify';
 import { SessionLinkChip } from './SessionLinkChip';
 import { ProjectLinkChip } from './ProjectLinkChip';
-import { buildSessionMessageDeepLink, parseSessionDeepLinkHref } from '@/lib/deepLink';
+import { buildSessionMessageDeepLink } from '@/lib/deepLink';
 import { getStickySessionDeviceId } from '@/features/device-link/stickySessionOrigin';
 import { insertSessionLinkIntoComposer } from '@/lib/composerActionsBus';
 import { MENTION_TOKEN_SPLIT, parseMentionToken } from '@/lib/mentionRefFormat';
-import { parseGhostCommandWord, splitGhostDirective } from '@/cindy-brain/ghostCommand';
-import {
-  GhostFulfillmentContext,
-  GhostSummonCard,
-  type GhostSummonDisplay,
-} from './GhostSummonCard';
-import { AutomationOriginBadge } from './AutomationOriginBadge';
+import { ghostCommandTokenLength, parseGhostCommandToken, splitGhostDirective } from '@/cindy-brain/ghostCommand';
+import { splitHostCapabilityDirective } from '@/cindy-brain/hostCapabilityInvocation';
+import { GhostSummonCard } from './GhostSummonCard';
+import { MessageSourceLabels } from './MessageSourceLabels';
+import { BotTaskLetterOpen, BotTaskLetterPill } from './BotStartedTasks';
 import { UserMessageUrlLink } from './UserMessageUrlLink';
 import { InlineReferenceChip } from './InlineReferenceChip';
 import { QuoteChip } from './QuoteChip';
+import { SentAgentReferenceChip, sentAgentReferenceDisplayLabel } from './SentAgentReferenceChip';
 import {
-  SentAgentReferenceChip,
-  sentAgentReferenceDisplayLabel,
-} from './SentAgentReferenceChip';
-import { parseOrcaCommunicationContent, resolveUserDisplayText } from './userMessageDisplayText';
+  parseOrcaCommunicationContent,
+  resolveHookGroupContext,
+  resolveUserDisplayText,
+} from './userMessageDisplayText';
 
 /**
  * image-local-cache: a user-message image can be in two shapes:
@@ -134,12 +147,28 @@ type UserImageItem =
   | { base64: string; mimeType: string; originalName?: string };
 
 interface UserMessageProps {
+  pluginUi: PluginUiMessageCandidates;
+  /** Pending delivery uses the same bubble, with queue actions instead of history actions. */
+  pendingActions?: ReactNode;
+  pendingEditing?: boolean;
+  pendingIndicator?: ReactNode;
+  sharedAuthorName?: string;
+  /** 共享任务成员 id:作者行悬停显示。 */
+  sharedAuthorMemberId?: string;
   /** F2: session cwd used to resolve relative paths in inline @-chip refs.
    *  Stable per-session — only changes on session switch. */
   workingDir: string;
+  /**
+   * Whether `workingDir` names paths on *this* machine.
+   *
+   * False for a device-link or SSH task, where an inline @-chip would otherwise
+   * resolve the remote author's path against the control side's filesystem and
+   * open a local file. Chips then render inert — the same shape a collapsed
+   * long message already uses. Default true keeps every existing caller, which
+   * renders local sessions, exactly as it was.
+   */
+  allowPrivilegedLinks?: boolean;
   content: string;
-  /** Resolved range summaries for session links in this user message. */
-  sessionReferences?: PersistedSessionReferenceMetadata[];
   /** chat-text-quote:content 开头 blockquote 为引用功能产出(胶囊化渲染判据)。 */
   quotesEncoded?: boolean;
   /** Hidden semantic reference ranges; preserved only while visible text is unchanged. */
@@ -154,8 +183,8 @@ interface UserMessageProps {
    *  the Fork button is not rendered. */
   sessionId?: string;
   /** Owning agent kind (renderer 短名 'cc' | 'codex') — gates Fork/Rewind icon
-   *  visibility via capabilities. Codex rewind additionally requires the Git
-   *  safety snapshot setting because file rewind depends on savepoint commits. */
+   *  visibility via capabilities. File rewind may degrade to conversation-only
+   *  rewind when no Git savepoint is available; the preview explains why. */
   agentKind?: RendererAgentKind;
   /** Owning session's remote SSH host id (null for local). Remote cc daemon
    *  sessions don't support the query-rebuild that Fork/Rewind need yet (MVP),
@@ -178,15 +207,18 @@ interface UserMessageProps {
    *  edit-last-message: 只有最后一条 user 消息显示编辑入口(编辑 = rewind 到
    *  这条 + 重发,更早的消息编辑会静默丢弃后续轮次,v1 不开放)。 */
   isLastUserMessage?: boolean;
+  /** 伙伴对话使用常显、无 Fork 的轻量消息操作栏。 */
+  simplifiedBotConversation?: boolean;
+  /** 伙伴私聊引用回复:本条回复的那条消息,气泡正文上方显示引用块。 */
+  replyQuote?: ChatReplyQuote;
   /** scheduler 注入的消息来源标记;存在时在气泡上方渲染"由自动化任务发送"标签。 */
   automationOrigin?: MessageAutomationOrigin;
   /** Hook 来源元数据;存在时渲染左对齐 Cindy 署名任务卡片(替代右对齐气泡)。 */
-  hookSource?: {
-    im: string;
-    channelName?: string | null;
-    userText?: string;
-    threadContext?: Array<{ author: string; text: string; isBot?: boolean }>;
-  };
+  hookSource?: ImMessageSource;
+  /** 手机 / 另一台电脑远程发来时的发送设备;查看者就是该设备时不显示标签。 */
+  sourceDevice?: MessageSourceDevice;
+  /** 插件任务派发的消息来源。 */
+  sourcePlugin?: MessageSourcePlugin;
   /** /goal 目标设定/更新标记:在气泡上方渲一个「目标 / 目标已更新」徽标。 */
   goalBadge?: { updated: boolean };
   /** 订阅槽①:本条消息被意识钩子拦下(未发出)。存在时气泡下方渲一条 error
@@ -224,6 +256,7 @@ function UserFileChip({
   // 按 workdir 风格直接 join(与 useResolvedMarkdownTarget 的 remote 分支同策)。
   const chipRemote = isRemoteFileOrigin(useChatSessionFile().origin);
   const ctxMenu = useFileChipContextMenu({
+    fileName: refText,
     getAbsPath: async () => {
       if (chipRemote) return resolveLocalPath(refText, workingDir);
       const r = await resolveLocalPathSmart(refText, workingDir);
@@ -237,126 +270,18 @@ function UserFileChip({
     <>
       <InlineReferenceChip
         label={fileName}
-        icon={<FileIcon aria-hidden />}
+        icon={<FileTypeIcon name={fileName} />}
         tooltip={refText}
         tooltipMono
         ariaLabel={fileName}
-        onClick={onClick}
+        onClick={(event) => ctxMenu.onActivate(event, () => onClick(event))}
+        onAuxClick={(event) => {
+          if (event.button === 1) ctxMenu.onActivate(event, () => onClick(event));
+        }}
         onContextMenu={ctxMenu.onContextMenu}
         className="relative top-[-1px] -my-[1px] max-w-[min(240px,55vw)] align-middle"
       />
       {ctxMenu.menu}
-    </>
-  );
-}
-
-/**
- * UserAttachmentChip — 用户消息下方的文件附件 chip(与正文里的 `@file` 引用
- * chip 是两种呈现;此前只有 onClick,右键无反应,与 UserFileChip 交互不一致,
- * Issue #1811 讨论中实捉)。左键保持既有行为:安全降级附件走另存流程,其余
- * 文本预览 / 交系统默认应用。右键:
- *   - 普通附件 → 共享文件 chip 菜单(复制 / 路径 / 定位等,与 UserFileChip 同款);
- *   - 安全降级附件 → 仅「另存为…」单项。受控 `.bin` 副本的路径不该经「复制
- *     文件路径 / 打开所在目录」外泄,打开类动作更会绕过降级本身。
- */
-function UserAttachmentChip({
-  file,
-  onOpenTextPreview,
-}: {
-  file: { name: string; path: string };
-  /** 文本预览分支的回调:父组件记录 chip 元素(关闭预览后焦点复位)并开 lightbox。 */
-  onOpenTextPreview: (chip: HTMLElement) => void;
-}) {
-  const { t } = useTranslation();
-  const sessionFileCtx = useChatSessionFile();
-  const downloadOnly = isSafetyDowngradedAttachment(file);
-  // Rules-of-hooks:两个菜单 hook/状态都无条件建,按 downloadOnly 选用其一。
-  const ctxMenu = useFileChipContextMenu({
-    getAbsPath: () => file.path,
-    canOpenInBrowser: isBrowserOpenablePath(file.path),
-  });
-  const [saveMenuPos, setSaveMenuPos] = useState<{ x: number; y: number } | null>(null);
-
-  const saveOnlyMenu = (
-    <DropdownMenu
-      open={saveMenuPos !== null}
-      onOpenChange={(open) => {
-        if (!open) setSaveMenuPos(null);
-      }}
-    >
-      <DropdownMenuTrigger asChild>
-        <span
-          aria-hidden
-          style={{
-            position: 'fixed',
-            left: saveMenuPos?.x ?? 0,
-            top: saveMenuPos?.y ?? 0,
-            width: 0,
-            height: 0,
-            pointerEvents: 'none',
-          }}
-        />
-      </DropdownMenuTrigger>
-      <DropdownMenuContent align="start" sideOffset={2} onClick={(e) => e.stopPropagation()}>
-        <DropdownMenuItem
-          onClick={() => {
-            setSaveMenuPos(null);
-            void saveChatAttachmentWithToasts(sessionFileCtx, file);
-          }}
-        >
-          <Download className="mr-2 h-4 w-4" />
-          {t('chat.media.saveAs')}
-        </DropdownMenuItem>
-      </DropdownMenuContent>
-    </DropdownMenu>
-  );
-
-  return (
-    <>
-      <button
-        type="button"
-        aria-label={
-          downloadOnly ? t('chat.userMessage.saveAttachmentAs', { name: file.name }) : undefined
-        }
-        onClick={async (e) => {
-          if (downloadOnly) {
-            await saveChatAttachmentWithToasts(sessionFileCtx, file);
-            return;
-          }
-          const chip = e.currentTarget;
-          if (!(await shouldOpenTextLightboxForOrigin(sessionFileCtx, file.path))) return;
-          onOpenTextPreview(chip);
-        }}
-        onContextMenu={(e) => {
-          if (downloadOnly) {
-            e.preventDefault();
-            e.stopPropagation();
-            setSaveMenuPos({ x: e.clientX, y: e.clientY });
-            return;
-          }
-          ctxMenu.onContextMenu(e);
-        }}
-        className={cn(
-          'inline-flex items-center gap-1.5',
-          'h-7 px-2.5 py-1.5',
-          'rounded-[9999px]',
-          'bg-[var(--msg-user-bg)]',
-          'border border-[var(--msg-user-border)]',
-          'text-[13px] font-medium',
-          'text-[var(--msg-user-text)]',
-          'hover:bg-[var(--cmd-palette-item-hover)]',
-          'transition-colors cursor-pointer',
-          'max-w-[280px]',
-        )}
-      >
-        {downloadOnly ? (
-          <Download size={14} className="shrink-0 text-[var(--msg-user-text)]" />
-        ) : (
-          <FileText size={14} className="shrink-0 text-[var(--msg-user-text)]" />
-        )}
-        <span className="truncate">{file.name}</span>
-      </button>
-      {downloadOnly ? saveOnlyMenu : ctxMenu.menu}
     </>
   );
 }
@@ -373,7 +298,6 @@ function renderTextWithLinks(
   keyPrefix: string,
   onImageClick: ((xdtFileUrl: string) => void) | undefined,
   sessionId?: string,
-  sessionReferences?: readonly PersistedSessionReferenceMetadata[],
   interactive = true,
 ): React.ReactNode[] {
   if (!interactive) return [text];
@@ -396,14 +320,6 @@ function renderTextWithLinks(
         />,
       );
     } else if (match.kind === 'session') {
-      const target = parseSessionDeepLinkHref(match.href);
-      const referenceMetadata = target
-        ? sessionReferences?.find(
-            (reference) =>
-              reference.sessionId === target.sessionId &&
-              (reference.messageClientId ?? null) === target.messageClientId,
-          )
-        : undefined;
       // 会话深链 → chip(显式 label / 标题 / 短 ID),点击跳会话、带锚点定位
       // 消息。`[标题](深链)` markdown 形式(输入框粘贴 chip 化的序列化产物)
       // 带显式 label,SessionLinkChip 优先展示、不查库。
@@ -412,7 +328,6 @@ function renderTextWithLinks(
           key={`${keyPrefix}-session-${match.index}`}
           href={match.href}
           label={match.label}
-          referenceMetadata={referenceMetadata}
         />,
       );
     } else if (match.kind === 'project') {
@@ -427,15 +342,11 @@ function renderTextWithLinks(
     } else {
       const p = match.text;
       result.push(
-        <button
+        <UserMessageImageLink
           key={`${keyPrefix}-img-${match.index}`}
-          type="button"
-          onClick={() => onImageClick?.(toLocalFileUrl(p))}
-          // 同 UserMessageUrlLink:可点 = 正文色 + 常显下划线,不再靠 --msg-link 颜色。
-          className="underline underline-offset-2 cursor-pointer break-all"
-        >
-          {p}
-        </button>,
+          path={p}
+          onOpen={onImageClick}
+        />,
       );
     }
     lastIndex = match.index + match.length;
@@ -514,7 +425,6 @@ function renderContentWithoutPastedText(
   /** remote 会话:@-chip 点击跳过本机 smart resolve,按 workdir 风格直接 join。 */
   remoteJoin = false,
   renderLegacySlashCommands = true,
-  sessionReferences?: readonly PersistedSessionReferenceMetadata[],
   interactive = true,
 ): React.ReactNode[] {
   const nodes: React.ReactNode[] = [];
@@ -527,11 +437,12 @@ function renderContentWithoutPastedText(
     // Check for /command at line start — only if it looks like a real command
     const slashMatch = line.match(/^\/(\S+)/);
     if (renderLegacySlashCommands && slashMatch && looksLikeCommand(slashMatch[1])) {
+      const slashLabel = `/${slashMatch[1]}`;
       nodes.push(
         <InlineReferenceChip
           key={`s-${li}`}
-          label={`/${slashMatch[1]}`}
-          tooltip={`/${slashMatch[1]}`}
+          label={slashLabel}
+          tooltip={slashLabel}
           className="relative top-[-1px] -my-[1px] max-w-[min(240px,55vw)] align-middle text-[var(--msg-user-text)]"
         />,
       );
@@ -552,14 +463,30 @@ function renderContentWithoutPastedText(
         // A real mention is always preceded by whitespace or sits at line start.
         const prev = parts[pi - 1];
         if (prev && prev.length > 0 && !/\s$/.test(prev)) {
-          nodes.push(...renderTextWithLinks(part, `${li}-${pi}`, onImageClick, sessionId, sessionReferences, interactive));
+          nodes.push(
+            ...renderTextWithLinks(
+              part,
+              `${li}-${pi}`,
+              onImageClick,
+              sessionId,
+              interactive,
+            ),
+          );
           continue;
         }
 
         // Only render as chip if it looks like a real path
         if (!looksLikePath(ref)) {
           // Not a path — render as plain text
-          nodes.push(...renderTextWithLinks(part, `${li}-${pi}`, onImageClick, sessionId, sessionReferences, interactive));
+          nodes.push(
+            ...renderTextWithLinks(
+              part,
+              `${li}-${pi}`,
+              onImageClick,
+              sessionId,
+              interactive,
+            ),
+          );
           continue;
         }
 
@@ -620,7 +547,9 @@ function renderContentWithoutPastedText(
                   const result = await resolveLocalPathSmart(ref, workingDir);
                   if (result.status === 'multiple') {
                     toast.error(
-                      t('chat.markdownRenderer.duplicateFiles', { count: result.candidates.length }),
+                      t('chat.markdownRenderer.duplicateFiles', {
+                        count: result.candidates.length,
+                      }),
                     );
                     return;
                   }
@@ -632,7 +561,7 @@ function renderContentWithoutPastedText(
               <InlineReferenceChip
                 key={key}
                 label={fileName}
-                icon={<FileIcon aria-hidden />}
+                icon={<FileTypeIcon name={fileName} />}
                 tooltip={ref}
                 tooltipMono
                 ariaLabel={fileName}
@@ -642,7 +571,15 @@ function renderContentWithoutPastedText(
           );
         }
       } else {
-        nodes.push(...renderTextWithLinks(part, `${li}-${pi}`, onImageClick, sessionId, sessionReferences, interactive));
+        nodes.push(
+          ...renderTextWithLinks(
+            part,
+            `${li}-${pi}`,
+            onImageClick,
+            sessionId,
+            interactive,
+          ),
+        );
       }
     }
   }
@@ -811,7 +748,6 @@ export function renderContent(
   remoteJoin = false,
   pastedTextRanges: readonly PastedTextRange[] = [],
   slashCommandRanges?: readonly SlashCommandRange[],
-  sessionReferences?: readonly PersistedSessionReferenceMetadata[],
   /**
    * 粘贴段胶囊的点击入口(issue #946)。不传时胶囊退回不可交互,只剩 hover
    * tooltip —— 那正是"发出去就再也看不到全文"的旧行为,新调用点都应该传。
@@ -829,11 +765,12 @@ export function renderContent(
   const useLegacySlashHeuristic = slashCommandRanges === undefined;
   return tokens.map((token, index) => {
     if (token.kind === 'slash') {
+      const slashLabel = slashCommandDisplayLabel(token.text);
       return (
         <InlineReferenceChip
           key={`slash-chip-${index}`}
-          label={token.text}
-          tooltip={token.text}
+          label={slashLabel}
+          tooltip={slashLabel}
           className="relative top-[-1px] -my-[1px] max-w-[min(240px,55vw)] align-middle text-[var(--msg-user-text)]"
         />
       );
@@ -854,8 +791,7 @@ export function renderContent(
           // 也无法选中复制,不能当作查看全文的唯一出口(issue #946)。
           {...(interactive && onPastedTextChipClick
             ? {
-                onClick: (event) =>
-                  onPastedTextChipClick(token.text, event.currentTarget),
+                onClick: (event) => onPastedTextChipClick(token.text, event.currentTarget),
               }
             : {})}
         />
@@ -881,7 +817,6 @@ export function renderContent(
           sessionId,
           remoteJoin,
           useLegacySlashHeuristic,
-          sessionReferences,
           interactive,
         )}
       </span>
@@ -894,9 +829,15 @@ export function renderContent(
 // 老 UserImageItemView 已迁出,见 ChatImageView.tsx。
 
 export function UserMessage({
+  pluginUi,
+  pendingActions,
+  pendingEditing,
+  pendingIndicator,
+  sharedAuthorName,
+  sharedAuthorMemberId,
   workingDir,
+  allowPrivilegedLinks = true,
   content,
-  sessionReferences,
   quotesEncoded,
   agentReferences,
   pastedTextRanges,
@@ -912,8 +853,12 @@ export function UserMessage({
   delivery,
   isFirstUserMessage,
   isLastUserMessage,
+  simplifiedBotConversation = false,
+  replyQuote,
   automationOrigin,
   hookSource,
+  sourceDevice,
+  sourcePlugin,
   goalBadge,
   blockedByGhost,
 }: UserMessageProps) {
@@ -921,14 +866,15 @@ export function UserMessage({
   // Capability gate: 没传 agentKind (调用方未升级) → 默认两者都允许 (兼容旧路径)
   // 传了 agentKind → 按 capabilities.fork/rewind.supported 决定 icon 显示
   // renderer 'cc' ↔ maker 'claude-code' 别名映射 (DB / Session 用 'cc', maker IPC 用 'claude-code')
-  const makerKind: MakerAgentKind = agentKind === 'codex' || agentKind === 'pi' ? agentKind : 'claude-code';
+  const makerKind: MakerAgentKind =
+    agentKind === 'codex' || agentKind === 'pi' ? agentKind : 'claude-code';
   // device-link 远程会话:fork/rewind 能力按被控端读(本机会话 deviceId undefined,行为不变)。
   // 媒体来源(device/ssh)用于把附件/文件预览 URL 改写到 cindy-remote-media://(入方向媒体)。
   // 取自 ChatSessionFileContext(MessageStream 顶层订阅式构造,deviceId 迟到注册时
   // context 更新会穿透 memo 触发重渲,替代旧的 render 期一次性读取)。
   const sessionFileCtx = useChatSessionFile();
   const remoteDeviceId = originDeviceId(sessionFileCtx.origin);
-  const gitSafetyAutoSnapshotEnabled = useGitSafetyAutoSnapshotEnabledForDevice(remoteDeviceId);
+  const sharedGuest = isSharedTaskPeer(remoteDeviceId ?? '');
   const remoteMediaOrigin = useMemo(
     () => toRemoteMediaOrigin(sessionFileCtx.origin, sessionFileCtx.workingDir),
     [sessionFileCtx],
@@ -937,10 +883,9 @@ export function UserMessage({
   // 远端 cc daemon 会话暂不支持 Fork/Rewind 依赖的 query rebuild (MVP),
   // remoteHostId 非空时直接关掉这两个能力, 避免点了落到后端错误。
   const isRemote = Boolean(remoteHostId);
-  const codexRewindEntryAllowed = agentKind !== 'codex' || gitSafetyAutoSnapshotEnabled;
-  const forkSupported = !isRemote && (!agentKind || (capabilities?.fork?.supported ?? true));
+  const forkSupported =
+    !isRemote && (!agentKind || (capabilities?.fork?.supported ?? true));
   const rewindSupported =
-    codexRewindEntryAllowed &&
     !isRemote &&
     (!agentKind || (capabilities?.rewind?.supported ?? true));
 
@@ -954,6 +899,7 @@ export function UserMessage({
     name: string;
   } | null>(null);
   const [orcaExpanded, setOrcaExpanded] = useState(false);
+  const [letterExpanded, setLetterExpanded] = useState(false);
   const [longMessageExpanded, setLongMessageExpanded] = useState(false);
   // issue #946: 已发送消息里点粘贴段胶囊 → 只读全文 lightbox(无文件路径可给
   // TextLightbox,与 composer 侧一样走 ToolPayloadLightbox 的 text 模式)。
@@ -975,7 +921,14 @@ export function UserMessage({
   // 显示文本推导(Orca JSON 解包 / hook 消息取 userText 或剥 <thread_context>)
   // 与提问导航条预览共用同一实现,规则见 userMessageDisplayText.ts;上面已
   // 解析过的 Orca 结果传入复用,渲染热路径不重复 JSON.parse(Copilot review)。
-  const displayContent = resolveUserDisplayText({ content, hookSource }, orcaCommunication);
+  const displayContent = resolveUserDisplayText({ content, hookSource, automationOrigin }, orcaCommunication);
+  // Only the bubble is decoded. Draft restoration must retain the canonical envelope.
+  const forwardedDraftBody = !hookSource && !orcaCommunication
+    && automationOrigin?.kind === 'session' && displayContent !== content ? content : undefined;
+  const groupContext = useMemo(
+    () => resolveHookGroupContext({ content, hookSource }),
+    [content, hookSource],
+  );
   const validAgentReferences = useMemo(
     () => readAgentInputReferences(agentReferences, content),
     [agentReferences, content],
@@ -985,7 +938,10 @@ export function UserMessage({
   // 对不上模板按普通文本原样显示)。copy / fork / rewind / 编辑预填全部用
   // 剥离后的正文——这些路径重发都走发送期再展开,带着旧指令会叠加双份。
   // orca / hook 消息不经意识展开,跳过解析。
-  const ghostSplit = orcaCommunication || hookSource ? null : splitGhostDirective(displayContent);
+  const ghostSplit =
+    orcaCommunication || hookSource
+      ? null
+      : (splitGhostDirective(displayContent) ?? splitHostCapabilityDirective(displayContent));
   const ghostDirective = ghostSplit?.directive ?? null;
   const ghostBody = ghostSplit?.body ?? displayContent;
   // quotesEncoded 消息按正文顺序解析全部引用块,支持引用与回复交错。
@@ -1008,50 +964,29 @@ export function UserMessage({
   );
   // 意识指令等既有语义判断只看用户自己的正文,不把引用原文误识别成命令。
   const bubbleBody = useMemo(() => joinChatQuoteTextSegments(quoteSegments), [quoteSegments]);
+  const draftBody = forwardedDraftBody ?? bubbleBody;
   const inlineQuoteCount = quoteSegments.reduce(
     (count, segment) => count + (segment.kind === 'quote' ? 1 : 0),
     0,
   );
   const quoteDraftDocument = useMemo(
-    () => (quotesEncoded ? quoteSegmentsToComposerDocument(quoteSegments) : undefined),
-    [quoteSegments, quotesEncoded],
+    () => forwardedDraftBody !== undefined
+      ? textToTiptapDoc(forwardedDraftBody)
+      : quotesEncoded ? quoteSegmentsToComposerDocument(quoteSegments) : undefined,
+    [forwardedDraftBody, quoteSegments, quotesEncoded],
   );
   // $指令 开头且确认命中意识时,气泡正文渲剥掉指令 token 的余文($token 的
   // 语义由气泡内的召唤标注行承载,正文不重复报幕);普通消息里的 $word 不受
   // 影响。2026-07-29 起取消「卡片即消息」合并形态:正文永远回归文字气泡。
-  const ghostCmdWord =
-    ghostDirective?.kind === 'command' ? parseGhostCommandWord(bubbleBody) : null;
+  const ghostCmd =
+    ghostDirective?.kind === 'command' ? parseGhostCommandToken(bubbleBody) : null;
   // 触发符恒为 1 个字符($ 或全角变体),token = 触发符 + 指令词。
-  const ghostCmdToken = ghostCmdWord ? bubbleBody.slice(0, 1 + ghostCmdWord.length) : null;
+  const ghostCmdToken = ghostCmd ? bubbleBody.slice(0, 1 + ghostCommandTokenLength(ghostCmd)) : null;
   const ghostPromptBody = ghostCmdToken ? bubbleBody.slice(ghostCmdToken.length).trim() : '';
-  // 软提示兑现(语义调用):本条消息触发的那一轮 AI 真调了被提及的意识时,
-  // 升级为与硬指令同形态的召唤标注行。判据来自 GhostFulfillmentContext
-  // (MessageStream 从会话历史现算,重启幂等)。
-  const ghostFulfillment = useContext(GhostFulfillmentContext);
-  const ghostFulfilledIds = messageClientId ? ghostFulfillment.get(messageClientId) : undefined;
-  const ghostMentionFulfilled =
-    ghostDirective?.kind === 'mention' &&
-    Boolean(
-      ghostFulfilledIds && ghostDirective.ghosts.some((g) => ghostFulfilledIds.has(g.ghostId)),
-    );
-  // 语义自主召唤:消息一个触发词都没命中(无任何追加段),AI 本轮仍真调了
-  // ghost_call → 合成 semantic 展示数据,渲染同一行召唤标注(与硬指令/兑现
-  // 软提示渲染一致)。orca / hook 消息不参与(它们本就不经意识展开)。
-  const ghostSemanticDisplay: GhostSummonDisplay | null =
-    !ghostDirective &&
-    !orcaCommunication &&
-    !hookSource &&
-    ghostFulfilledIds &&
-    ghostFulfilledIds.size > 0
-      ? { kind: 'semantic', ghostIds: [...ghostFulfilledIds] }
-      : null;
-  // 召唤展示数据(追加段解析优先;没有追加段才可能是 semantic),按形态分流:
-  // - 标注行(chip):硬指令 / 软提示已兑现 / semantic → 嵌进气泡顶部;
-  // - 胶囊(pill):软提示未兑现 → 保持原低调形态,留在气泡下方。
-  const ghostCardDisplay: GhostSummonDisplay | null = ghostDirective ?? ghostSemanticDisplay;
-  const ghostPillForm = ghostDirective?.kind === 'mention' && !ghostMentionFulfilled;
-  const ghostChipDisplay = ghostPillForm ? null : ghostCardDisplay;
-  const ghostPillDisplay = ghostPillForm ? ghostDirective : null;
+  // A user's bubble records their selection, never the assistant's later calls.
+  const ghostPillForm = ghostDirective?.kind === 'mention';
+  const ghostChipDisplay = simplifiedBotConversation || ghostPillForm ? null : ghostDirective;
+  const ghostPillDisplay = !simplifiedBotConversation && ghostPillForm ? ghostDirective : null;
   // 气泡实际显示的正文与其在原始 content 中的起点(粘贴块/斜杠命令高亮的
   // 偏移投影用):硬指令剥 $token,其余原样。
   const displayBubbleBody = ghostCmdToken ? ghostPromptBody : bubbleBody;
@@ -1065,7 +1000,10 @@ export function UserMessage({
   // 视觉行数,窗口缩放 / 侧栏开合导致气泡宽度变化时由 ResizeObserver 重算。
   // 自动化任务注入的消息(模板化调度 prompt,每轮重复出现)用更低的收起
   // 阈值,收起后也只留 3 行(手打消息 14 行阈值 / 收起留 10 行不变)。
-  const collapseThreshold = automationOrigin
+  // 其他任务经工具发来的消息不是每轮重复的模板，保持手打消息的收起口径。
+  // Hook 渠道消息复用自动化来源，但它是真人提问，不算自动化。
+  const isScheduledAutomation = isRealAutomationOrigin(automationOrigin);
+  const collapseThreshold = isScheduledAutomation
     ? AUTOMATION_USER_MESSAGE_VISUAL_LINE_THRESHOLD
     : LONG_USER_MESSAGE_VISUAL_LINE_THRESHOLD;
   // 粘贴段在气泡展示正文(displayBubbleBody)局部坐标下的 range(与下方
@@ -1088,11 +1026,7 @@ export function UserMessage({
   const collapseMeasureBody = useMemo(
     () =>
       bubbleBody === ghostBody
-        ? projectSentInlinePlainText(
-            displayBubbleBody,
-            bubblePastedRanges,
-            bubbleAgentReferences,
-          )
+        ? projectSentInlinePlainText(displayBubbleBody, bubblePastedRanges, bubbleAgentReferences)
         : displayBubbleBody,
     [bubbleAgentReferences, bubbleBody, bubblePastedRanges, displayBubbleBody, ghostBody],
   );
@@ -1112,7 +1046,19 @@ export function UserMessage({
   // copy text per V1.2: original text + (if files) "\n\n附件：a.md, b.md"
   // ghost-summon-card:copy 给用户的是"他自己的话"(剥离机器追加段);
   // 追加段原文在卡片展开区可查可选中。
-  const copyBody = quotesEncoded ? stripChatQuoteMarkerLines(ghostBody) : ghostBody;
+  // Project on the persisted wire text first so slashCommandRanges stay valid,
+  // then strip private quote markers for copy / edit display.
+  const projectedSource = projectSlashCommandsInText(ghostBody, slashCommandRanges);
+  const copyBody = quotesEncoded ? stripChatQuoteMarkerLines(projectedSource) : projectedSource;
+  const visibleSource = quotesEncoded ? stripChatQuoteMarkerLines(ghostBody) : ghostBody;
+  // Display decoding must not change an unedited resend's wire bytes.
+  const editSubmitText = forwardedDraftBody !== undefined
+    ? forwardedDraftBody
+    : quotesEncoded
+    ? ghostBody
+    : copyBody !== visibleSource
+      ? visibleSource
+      : undefined;
   const copyText = hasFiles
     ? `${copyBody}\n\n${t('chat.userMessage.attachmentPrefix')}${files!.map((f) => f.name).join(', ')}`
     : copyBody;
@@ -1124,10 +1070,17 @@ export function UserMessage({
           deviceId: getStickySessionDeviceId(sessionId),
         })
       : undefined;
+  // 伙伴私聊里「回复」是引用回复:引用块等在输入框上方(cindy-bots-runtime.md「私聊引用回复」)。
+  const botQuote = useBotChatQuote(simplifiedBotConversation ? sessionId : undefined);
   const handleAddToChat = useCallback(() => {
+    if (botQuote && messageClientId) {
+      const quote = botReplyQuoteFor({ clientId: messageClientId, role: 'user', content, images, files, automationOrigin, hookSource });
+      if (quote) botQuote.quote(quote);
+      return;
+    }
     if (!sessionId || !messageDeepLink) return;
     insertSessionLinkIntoComposer({ targetSessionId: sessionId, href: messageDeepLink });
-  }, [messageDeepLink, sessionId]);
+  }, [botQuote, content, files, images, automationOrigin, hookSource, messageClientId, messageDeepLink, sessionId]);
 
   // 分享为图片:进入选择模式并预选本条(入口那条天然该已勾选,省一次点击)。
   const handleShareAsImage = useMemo(
@@ -1147,7 +1100,7 @@ export function UserMessage({
     sessionId,
     messageClientId,
     forkBlocked: shouldBlockUserFork(sessionRunning, delivery),
-    draftText: quotesEncoded ? undefined : bubbleBody,
+    draftText: quotesEncoded ? undefined : draftBody,
     draftDocument: quoteDraftDocument,
   });
   const handleDelete = useDeleteMessage({
@@ -1160,23 +1113,28 @@ export function UserMessage({
   // 同时按 capabilities.fork.supported gate (Codex 现支持; 未来若 agent 不支持自动隐藏)。
   const navigationMode = useSessionNavigationMode();
   const canFork =
+    !sharedGuest &&
     isInteractiveSessionNavigationMode(navigationMode) &&
     Boolean(sessionId && messageClientId) &&
     !isFirstUserMessage &&
     forkSupported &&
     !orcaCommunication &&
-    !hookSource;
+    !hasEmbeddedImPrompt(hookSource);
 
   // ── rewind ──────────────────────────────────────────────────────────────
   // Dialog open state lives here (UserMessage owns the in-flight period —
   // dialog opens → preview dryRun → user confirm → commit → close, the whole
   // span counts as "rewinding" for the action-bar Loader2). Reset on close.
   const [rewindOpen, setRewindOpen] = useState(false);
+  // 带可再编辑标注的历史图:确认框打开时就预探测未烧录原图是否还在,提交时
+  // 同步取结果(丢失的退回烧录图),草稿仍在提交当下一次写完。
+  const rewindSourceProbeRef = useRef<RewindSourceProbe<UserImageItem> | null>(null);
 
   const handleRewind = useCallback(() => {
     if (!sessionId || !messageClientId) return;
+    rewindSourceProbeRef.current = images ? startRewindSourceProbe(images) : null;
     setRewindOpen(true);
-  }, [sessionId, messageClientId]);
+  }, [sessionId, messageClientId, images]);
 
   const handleRewindCommitted = useCallback(
     (session: Session) => {
@@ -1185,8 +1143,11 @@ export function UserMessage({
       // Rewind soft-deletes this row server-side (rewind_at set), so on next
       // reload it disappears from the list; the composer keeps the draft so
       // the user can edit and re-send.
-      const draftText = quoteDraftDocument ?? textToTiptapDoc(bubbleBody);
-      const draftAttachments = buildRewindDraftAttachments({ images, files });
+      const draftText = quoteDraftDocument ?? textToTiptapDoc(draftBody);
+      const probe = rewindSourceProbeRef.current;
+      rewindSourceProbeRef.current = null;
+      const draftImages = probe && probe.images === images ? probe.imagesForDraft() : images;
+      const draftAttachments = buildRewindDraftAttachments({ images: draftImages, files });
       if (draftText || draftAttachments.length > 0) {
         saveComposerDraft(sessionId, {
           text: draftText,
@@ -1205,32 +1166,32 @@ export function UserMessage({
       // Force chat store to re-fetch messages (server filters rewind_at).
       makerChatStore.reloadMessages(sessionId);
     },
-    [sessionId, bubbleBody, quoteDraftDocument, images, files],
+    [sessionId, draftBody, quoteDraftDocument, images, files],
   );
 
-  // 第一条 user 消息没有可作为锚点的 prior assistant uuid → 后端必抛
-  // NO_PRIOR_ASSISTANT。直接藏掉按钮，避免无效点击。
-  // 同时按 capabilities.rewind.supported gate；Codex 入口还要用户显式开启 Git safety。
+  // 第一条消息同样可回退：Codex / Pi 回到原生线程开头，Claude 目标之前没有可续接的
+  // 回复时换全新原生会话(见 main 侧 commitRewindAtMessage)。
+  // 按 capabilities.rewind.supported gate；文件恢复能力由实际 Git 保存点决定。
   const canRewind =
+    !sharedGuest &&
     Boolean(sessionId && messageClientId) &&
-    !isFirstUserMessage &&
     rewindSupported &&
     !orcaCommunication &&
-    !hookSource;
+    !hasEmbeddedImPrompt(hookSource);
 
   // ── edit-last-message ──────────────────────────────────────────────────
   // 编辑 = rewind 到本条 + 用编辑后的文本立即重发(见 UserMessageEditBox)。
   // 只在最后一条 user 消息开放;能力门控与 Rewind 完全一致(编辑走同一条
-  // commit 链路,rewind 不可用则编辑必然也不可用),首条消息同样因缺
-  // prior assistant 锚点而隐藏。进入编辑态零副作用,取消原样恢复。
+  // commit 链路,rewind 不可用则编辑必然也不可用),首条消息同样可编辑。
+  // 进入编辑态零副作用,取消原样恢复。
   const [editing, setEditing] = useState(false);
   // 被意识钩子拦下的消息(订阅槽①):从未落库、无 turn 可 rewind,编辑走
   // 普通重发(onCommitOverride),故可编辑条件与 rewind 无关——只要有
   // session/clientId 就能改了重发。
   const isBlocked = Boolean(blockedByGhost);
-  const canEdit = isBlocked
+  const canEdit = !sharedGuest && (isBlocked
     ? Boolean(sessionId && messageClientId)
-    : canRewind && Boolean(isLastUserMessage);
+    : canRewind && Boolean(isLastUserMessage));
 
   // 中断运行中的 turn——Stop 语义与输入框的 Stop 按钮完全一致
   // (useCCAgentChat.stopSession):有排队消息时 keepQueue+pauseQueue(停当前 +
@@ -1245,11 +1206,11 @@ export function UserMessage({
     }
   }, [sessionId]);
 
-  // 点编辑 = 立即中断运行中的 turn(产品决策,对齐 2026-07 的 Codex 调研:
-  // 用户点编辑的意图就是"停下来我要改",且 interrupt 终止性、无恢复原语,
-  // 取消编辑后 AI **不会**继续工作——Codex 同语义,用户已知悉接受)。
-  // 发送侧不依赖这里的 stop 已完成:EditBox 会等 sessionRunning 翻 false 再
-  // 提交(含超时兜底 + 发送时再补一次 stop 的保险),两端解耦。
+  // 点编辑不中断运行中的 turn(2026-11 产品决策):interrupt 终止性、无恢复
+  // 原语,点编辑就停会让「误点 / 改主意取消」白白丢掉这轮工作。中断推迟到
+  // 编辑框点「发送」:EditBox 经 onRequestStop 中断并等 sessionRunning 翻 false
+  // 再提交(含超时兜底);取消编辑对运行中的 turn 零影响。
+  // 运行中编辑按钮不外显、收进 More 菜单(editInMenu),停下后回到操作行。
   //
   // 队列门槛:有排队中的消息时拒绝进入编辑(toast 说明)。排队消息是针对
   // rewind 前的旧上下文写的,而编辑重发只会追加到 paused 队列尾部——Continue
@@ -1261,9 +1222,8 @@ export function UserMessage({
       toast.error(t('chat.userMessage.editQueueNotEmpty'));
       return;
     }
-    if (sessionRunning) stopForEdit();
     setEditing(true);
-  }, [sessionId, sessionRunning, stopForEdit, t]);
+  }, [sessionId, t]);
 
   // 稳定引用:内联箭头会让 EditBox 的 doCommit(依赖 onSent)每次父组件
   // 重渲都重建,连带"等待停止接力" effect 无谓重跑(bot review 指出)。
@@ -1288,12 +1248,65 @@ export function UserMessage({
     if (editing && !isLastUserMessage) setEditing(false);
   }, [editing, isLastUserMessage]);
 
+  const orcaWorkerRole =
+    automationOrigin?.kind === 'session' ? automationOrigin.orcaSenderLabel : undefined;
+  const orcaBatchCount = automationOrigin?.kind === 'session' ? automationOrigin.orcaAutoBridgeBatchCount : undefined;
   const orcaCardTitle =
-    orcaCommunication?.orcaSource === 'lead'
-      ? 'Orca Lead: dispatched task'
-      : 'Orca Worker: reported result';
+    orcaBatchCount
+      ? t('chat.userMessage.orcaFromWorkerBatch', { count: orcaBatchCount })
+      : orcaCommunication?.orcaSource === 'lead'
+        ? t('chat.userMessage.orcaFromLead')
+        : orcaWorkerRole
+          ? t('chat.userMessage.orcaFromWorkerNamed', { role: orcaWorkerRole })
+          : t('chat.userMessage.orcaFromWorker');
+
+  // 伙伴对话：其他任务转来的消息不占主人在右侧的位置，收成左侧一行来信，点开看全文
+  // （2026-11-10 主人裁决；普通任务页不变）。
+  const botLetter =
+    simplifiedBotConversation && !editing && !orcaCommunication && !hookSource
+    && automationOrigin?.kind === 'session' && !automationOrigin.orca;
+  const letterPreview = botLetter
+    ? (displayContent.split('\n').find((line) => line.trim()) ?? '').trim()
+    : '';
+  const attachmentsInBubble =
+    simplifiedBotConversation && !editing && !orcaCommunication && !hookSource && !botLetter && (hasImages || hasFiles);
+  // 伙伴私聊：常用操作始终在气泡下方，保留群聊原图标与菜单。
+  const bubbleActions = simplifiedBotConversation && !editing && !orcaCommunication && !hookSource && !botLetter
+    && Boolean(inlineQuoteCount > 0 || displayBubbleBody.trim() || ghostChipDisplay || attachmentsInBubble);
+  // 私聊话题：只有本机伙伴主对话里、主人自己发的消息能开话题（cindy-bots-runtime.md「私聊话题」）。
+  const dmThread = useBotDmThreadForMessage(
+    simplifiedBotConversation && !sharedGuest && !isBlocked && !automationOrigin && !orcaCommunication && !hookSource ? sessionId : undefined,
+    messageClientId,
+  );
 
   // Attachments belong to the user message independently of its visual shell.
+  const messageActions = pendingActions ?? (
+    <MessageActionBar
+      pluginUi={pluginUi}
+      createdAt={createdAt}
+      copyText={copyText}
+      copyLinkText={messageDeepLink}
+      align={hookSource || botLetter ? 'left' : 'right'}
+      hovered={hovered}
+      simplifiedBotConversation={simplifiedBotConversation}
+      companionFooter={bubbleActions}
+      replyAction={dmThread && bubbleActions ? {
+        onClick: dmThread.open,
+        label: dmThread.thread
+          ? t('bots.groupChat.server.openTopic', { count: dmThread.thread.replyCount })
+          : t('bots.groupChat.server.startTopic'),
+      } : undefined}
+      onFork={!isBlocked && canFork ? handleFork : undefined}
+      onAddToChat={!isBlocked && messageDeepLink ? handleAddToChat : undefined}
+      onShareAsImage={handleShareAsImage}
+      onDelete={!sharedGuest && !isBlocked && sessionId && messageClientId ? handleDelete : undefined}
+      onEdit={canEdit ? handleEdit : undefined}
+      editInMenu={sessionRunning === true}
+      onRewind={!isBlocked && canRewind ? handleRewind : undefined}
+      rewindInFlight={rewindOpen}
+    />
+  );
+
   // Define each renderer once, then place it inside the hook / ordinary branch
   // so the ordinary message keeps its established badge-before-attachment order.
   const imageAttachmentNodes =
@@ -1321,7 +1334,7 @@ export function UserMessage({
       <div
         className={cn(
           'flex flex-wrap items-end gap-1.5',
-          hookSource ? 'justify-start' : 'justify-end',
+          hookSource || botLetter || attachmentsInBubble ? 'justify-start' : 'justify-end',
         )}
       >
         {files.map((f, idx) => (
@@ -1346,83 +1359,167 @@ export function UserMessage({
       // scrollIntoView 也以此为目标)。messageClientId 缺失时不挂属性,以免
       // querySelector 命中"data-user-msg-id" 空字符串。
       {...(messageClientId ? { 'data-user-msg-id': messageClientId } : {})}
-      // 自己发送的消息不显示主动浮出的“添加到对话”；右键菜单仍可添加。
-      data-selection-floating-quote-disabled=""
+      data-selection-quote-scope=""
       className={cn(
         'flex w-full',
-        orcaCommunication || hookSource ? 'justify-start' : 'justify-end',
+        orcaCommunication || hookSource || botLetter ? 'justify-start' : 'justify-end',
+        bubbleActions && 'group/message',
+        simplifiedBotConversation && 'chat-bubble-layout',
+        // 与伙伴回复的气泡对齐：头像 28px + 间距 10px。
+        botLetter && 'group/letter pl-[38px]',
       )}
       onMouseEnter={() => setHovered(true)}
       onMouseLeave={() => setHovered(false)}
     >
+      {pendingIndicator && <span className="mr-2 flex h-12 shrink-0 items-center text-[var(--text-secondary)]">{pendingIndicator}</span>}
       <div
         className={cn(
           'flex flex-col gap-2',
-          orcaCommunication || hookSource
+          botLetter
+            ? cn(CHAT_BUBBLE_COLUMN_CLASS, 'w-full items-start')
+            : orcaCommunication || hookSource
             ? 'w-full max-w-[560px] items-start'
             : // 编辑态铺满可用宽度(上限 720px,Codex 同款"气泡展开成编辑器"观感);
               // 附件 chips 行保持右对齐不动。
               editing
               ? 'w-full max-w-[720px] items-end'
-              : 'max-w-[488px] items-end',
+              : // 伙伴私聊与群聊同一气泡上限（bot-group-chat.md §5）。
+                // 左侧留出贴边操作栏的位置。
+                simplifiedBotConversation
+                ? cn(CHAT_BUBBLE_COLUMN_CLASS, 'items-end')
+                : 'max-w-[488px] items-end',
         )}
       >
-        {orcaCommunication ? (
-          <div
-            className={cn(
-              'w-full rounded-[8px] border border-[var(--msg-tool-card-border)]',
-              'bg-[var(--msg-tool-card-bg)] text-[var(--msg-tool-card-text)]',
-              'overflow-hidden',
-            )}
+        {sharedAuthorName && (
+          <span
+            {...{ [SHARE_SOURCE_ATTR]: '' }}
+            className="text-12 text-[var(--text-secondary)]"
+            title={
+              sharedAuthorMemberId
+                ? t('chat.userMessage.sourceIds.member', { id: sharedAuthorMemberId })
+                : undefined
+            }
           >
-            <button
-              type="button"
+            {sharedAuthorName}
+          </span>
+        )}
+        {orcaCommunication ? (
+          <>
+            {/* Orca 卡片标题只说明 Lead / Worker 角色；来源标签补上可跳转的发送方任务。 */}
+            <MessageSourceLabels
+              automationOrigin={automationOrigin}
+              sourceDevice={sourceDevice}
+              sourcePlugin={sourcePlugin}
+              hostSessionId={sessionId}
+              align="start"
+            />
+            <div
               className={cn(
-                'flex w-full items-center gap-2 px-3 py-2 text-left',
-                'text-[13px] font-medium leading-none',
-                'hover:bg-[var(--cmd-palette-item-hover)] transition-colors',
+                'w-full rounded-[8px] border border-[var(--msg-tool-card-border)]',
+                'bg-[var(--msg-tool-card-bg)] text-[var(--msg-tool-card-text)]',
+                'overflow-hidden',
               )}
-              aria-expanded={orcaExpanded}
-              onClick={() => setOrcaExpanded((value) => !value)}
             >
-              <Bot size={14} className="shrink-0 text-[var(--msg-tool-card-chevron)]" />
-              <span className="min-w-0 flex-1 truncate">{orcaCardTitle}</span>
-              {orcaExpanded ? (
-                <ChevronDown size={14} className="shrink-0 text-[var(--msg-tool-card-chevron)]" />
-              ) : (
-                <ChevronRight size={14} className="shrink-0 text-[var(--msg-tool-card-chevron)]" />
+              <button
+                type="button"
+                className={cn(
+                  'flex w-full items-center gap-2 px-3 py-2 text-left',
+                  'text-13 font-medium leading-none',
+                  'hover:bg-[var(--cmd-palette-item-hover)] transition-colors',
+                )}
+                aria-expanded={orcaExpanded}
+                onClick={() => setOrcaExpanded((value) => !value)}
+              >
+                <Bot size={14} className="shrink-0 text-[var(--msg-tool-card-chevron)]" />
+                <span className="min-w-0 flex-1 truncate">{orcaCardTitle}</span>
+                {orcaExpanded ? (
+                  <ChevronDown size={14} className="shrink-0 text-[var(--msg-tool-card-chevron)]" />
+                ) : (
+                  <ChevronRight size={14} className="shrink-0 text-[var(--msg-tool-card-chevron)]" />
+                )}
+              </button>
+              {orcaExpanded && (
+                <div className="border-t border-[var(--msg-tool-card-border)] px-3 py-2">
+                  <pre data-selection-quote-body="" className="m-0 whitespace-pre-wrap break-words font-mono text-[length:calc(var(--app-code-font-size)_-_2px)] leading-[calc(var(--app-code-font-size)_+_4px)] text-foreground">
+                    {displayContent}
+                  </pre>
+                </div>
               )}
-            </button>
-            {orcaExpanded && (
-              <div className="border-t border-[var(--msg-tool-card-border)] px-3 py-2">
-                <pre className="m-0 whitespace-pre-wrap break-words font-mono text-[length:calc(var(--app-code-font-size)_-_2px)] leading-[calc(var(--app-code-font-size)_+_4px)] text-[var(--foreground)]">
+            </div>
+          </>
+        ) : botLetter ? (
+          <>
+            <BotTaskLetterPill
+              senderSessionId={automationOrigin?.kind === 'session' ? automationOrigin.senderSessionId : undefined}
+              senderTitle={automationOrigin?.kind === 'session' ? automationOrigin.senderSessionTitle ?? null : null}
+              hostSessionId={sessionId}
+              preview={letterPreview}
+              expanded={letterExpanded}
+              onToggle={() => setLetterExpanded((value) => !value)}
+            />
+            {letterExpanded && (
+              <div className="flex w-full flex-col items-start gap-1.5 border-l-2 border-[var(--border-default)] pl-3">
+                <div className="w-full select-text whitespace-pre-wrap text-13 leading-5 text-[var(--text-secondary)] [overflow-wrap:anywhere]">
                   {displayContent}
-                </pre>
+                </div>
+                <BotTaskLetterOpen
+                  senderSessionId={automationOrigin?.kind === 'session' ? automationOrigin.senderSessionId : undefined}
+                  hostSessionId={sessionId}
+                />
               </div>
             )}
-          </div>
-        ) : hookSource ? (
+            {imageAttachmentNodes}
+            {fileAttachmentNodes}
+            {/* 伙伴对话的操作栏常显；来信收起时只占一行，展开后操作在悬停或聚焦时出现。 */}
+            {letterExpanded && (
+              <div className="opacity-0 transition-opacity group-hover/letter:opacity-100 focus-within:opacity-100 motion-reduce:transition-none">
+                {messageActions}
+              </div>
+            )}
+          </>
+        ) : hookSource && !editing ? (
           <>
             {/* hook 消息: Cindy 署名任务卡片(左对齐), 替代右对齐用户气泡 +
-                automation 标签。图片 / 文件附件仍属于同一条入站消息。 */}
+                automation 标签(卡片头已写明渠道)。图片 / 文件附件仍属于同一条入站消息。 */}
+            <MessageSourceLabels
+              sourceDevice={sourceDevice}
+              sourcePlugin={sourcePlugin}
+              hostSessionId={sessionId}
+              align="start"
+            />
             {imageAttachmentNodes}
             {fileAttachmentNodes}
             <HookTaskCard
               im={hookSource.im}
+              origin={hookSource.origin}
               userText={displayContent}
+              collapseUserText={hookSource.contentFormat === 'user-text'}
               threadContext={hookSource.threadContext}
+              groupContext={groupContext}
+              replyContext={hookSource.contextSnapshot?.replyContext}
+              groupMessageCount={hookSource.contextSnapshot?.groupMessageCount}
+              replyMessageCount={hookSource.contextSnapshot?.replyMessageCount}
             />
+            {!hasEmbeddedImPrompt(hookSource) && messageActions}
           </>
         ) : (
           <>
-            {/* 自动化任务注入的消息:气泡上方右对齐渲染来源标签(不进气泡、不入 copyText)。
-            点击跳转自动化页并 focus 对应条目(与侧边栏自动化分组"编辑"同款 query
-            机制);任务已删除时 SchedulerPage 的 focus 兜底会自动回退到列表首条。 */}
-            {automationOrigin && <AutomationOriginBadge automationOrigin={automationOrigin} />}
+            {/* 自动化 / 其他任务 / 插件注入或远程设备发来的消息:气泡上方右对齐渲染来源
+            标签(不进气泡、不入 copyText)。自动化来源跳转自动化页并 focus 对应条目(与侧边栏
+            自动化分组"编辑"同款 query 机制;已删除时 SchedulerPage 的 focus 兜底回退到列表
+            首条);任务来源跳转发送方任务;Hook 渠道(编辑态或缺 hookSource 时走到这里)
+            只显示渠道;设备标签跳设置 → 我的设备。 */}
+            <MessageSourceLabels
+              automationOrigin={automationOrigin}
+              hookIm={hookSource?.im}
+              sourceDevice={sourceDevice}
+              sourcePlugin={sourcePlugin}
+              hostSessionId={sessionId}
+            />
             {/* /goal 目标设定/更新:气泡上方右对齐渲一个徽标(不进气泡、不入 copyText)。 */}
             {goalBadge && (
               <span
-                className="inline-flex max-w-full items-center gap-1 rounded-full px-2 py-0.5 text-[11px] font-medium"
+                className="inline-flex max-w-full items-center gap-1 rounded-full px-2 py-0.5 text-11 font-medium"
                 style={{ backgroundColor: 'var(--surface-chip)', color: 'var(--text-secondary)' }}
               >
                 <Target size={11} strokeWidth={2} aria-hidden className="shrink-0" />
@@ -1431,8 +1528,9 @@ export function UserMessage({
                 </span>
               </span>
             )}
-            {imageAttachmentNodes}
-            {fileAttachmentNodes}
+            {/* 伙伴私聊：图片与文件随正文进同一个气泡（编辑态照常在上方）。 */}
+            {!attachmentsInBubble && imageAttachmentNodes}
+            {!attachmentsInBubble && fileAttachmentNodes}
             {/* edit-last-message: 编辑态原地替换文本气泡 + 操作条(附件 chips 保持
             只读展示在上方);非编辑态走原有渲染。 */}
             {editing && sessionId && messageClientId ? (
@@ -1440,7 +1538,7 @@ export function UserMessage({
                 sessionId={sessionId}
                 messageClientId={messageClientId}
                 initialText={copyBody}
-                initialSubmitText={quotesEncoded ? ghostBody : undefined}
+                initialSubmitText={editSubmitText}
                 images={images}
                 files={files}
                 workingDir={workingDir}
@@ -1480,31 +1578,22 @@ export function UserMessage({
                 {/* 召唤标注行(chip)嵌进气泡顶部;正文永远回归文字气泡(2026-07-29
             取消合并形态)。气泡在有标注、有引用或有正文任一时渲染——$指令
             无余文时气泡只剩标注行。 */}
-                {(inlineQuoteCount > 0 || displayBubbleBody.trim() || ghostChipDisplay) && (
-                  <div
-                    className={cn(
-                      // overflow-wrap:anywhere（不是 break-words）才能让超长无空格序列
-                      // 在任意字符处断行，并把内容的 min-content 缩小到一个字符宽。
-                      // min-w-0 解除 flex item 默认的 min-width:auto，否则父容器的
-                      // max-w-[488px] 会被超长 token 顶穿。两者缺一不可。
-                      'relative min-w-0 max-w-full rounded-[12px]',
-                      'border border-[var(--msg-user-border)]',
-                      'bg-[var(--msg-user-bg)]',
-                      'px-4 py-3',
-                      'text-15 font-normal leading-[1.6]',
-                      'text-[var(--msg-user-text)]',
-                      'select-text',
-                    )}
+                {(inlineQuoteCount > 0 || displayBubbleBody.trim() || ghostChipDisplay || attachmentsInBubble) && (
+                  <ChatBubble
+                    data-plugin-appearance-region
+                    data-plugin-appearance-speaker="user"
+                    speaker="user"
+                    // 只剩插件标注行的气泡:分享图会剥掉标注,整泡一起去掉,不留空壳。
+                    // 伙伴私聊里附件也在气泡内,有附件就不是空壳。
+                    {...(inlineQuoteCount === 0 && !displayBubbleBody.trim() && !attachmentsInBubble
+                      ? { [SHARE_SOURCE_ATTR]: '' }
+                      : {})}
+                    className={cn("select-text", pendingEditing && "opacity-40 transition-opacity motion-reduce:transition-none")}
                   >
                     {ghostChipDisplay && (
-                      /* ghost-summon-chip:标注行(法阵 + 意识名 + 状态 + 展开
-                 caret)。running = 本条消息触发的 turn 仍在执行(最后一条
-                 user 消息 + 会话流式中),期间法阵旋转,turn 结束播终态编舞。
-                 下方有正文/引用时加分隔线,单独成泡时不加。 */
                       <GhostSummonCard
                         directive={ghostChipDisplay}
-                        running={Boolean(sessionRunning) && Boolean(isLastUserMessage)}
-                        {...(messageClientId ? { messageClientId } : {})}
+                        commandNamespace={ghostCmd?.namespace ?? undefined}
                         className={
                           inlineQuoteCount > 0 || displayBubbleBody.trim()
                             ? 'mb-2.5 border-b border-[var(--msg-user-border)] pb-2.5'
@@ -1512,6 +1601,11 @@ export function UserMessage({
                         }
                       />
                     )}
+                    {replyQuote && botQuote ? (
+                      <div className="mb-1.5 flex min-w-0">
+                        <BotChatQuoteInBubble quote={replyQuote} context={botQuote} align="left" />
+                      </div>
+                    ) : null}
                     {collapseMeasureEnabled && (
                       /* 收起判定的测量镜像:与正文同宽(inset-x-4 对应 px-4)、同字号
                  同换行规则的纯文本。max-h-0 + overflow-hidden 让它不占布局、
@@ -1529,9 +1623,11 @@ export function UserMessage({
                     )}
                     {inlineQuoteCount > 0 ? (
                       <div
+                        data-selection-quote-body=""
                         className={cn(
                           'min-w-0 whitespace-pre-wrap [overflow-wrap:anywhere]',
-                          longMessageCollapsed && (automationOrigin ? 'line-clamp-3' : 'line-clamp-10'),
+                          longMessageCollapsed &&
+                            (isScheduledAutomation ? 'line-clamp-3' : 'line-clamp-10'),
                         )}
                       >
                         {quoteSegments.map((segment, index) =>
@@ -1551,7 +1647,7 @@ export function UserMessage({
                               {renderContent(
                                 segment.text,
                                 workingDir,
-                                longMessageCollapsed
+                                longMessageCollapsed || !allowPrivilegedLinks
                                   ? undefined
                                   : async (abs, name, chip) => {
                                       if (
@@ -1564,7 +1660,7 @@ export function UserMessage({
                                       activeFileChipRef.current = chip;
                                       setTextLightboxFile({ path: abs, name });
                                     },
-                                longMessageCollapsed
+                                longMessageCollapsed || !allowPrivilegedLinks
                                   ? undefined
                                   : (xdtFileUrl) => setLightboxSrc(xdtFileUrl),
                                 t,
@@ -1588,7 +1684,6 @@ export function UserMessage({
                                         : ghostBodySourceStart + quoteTextSegmentStarts[index]!,
                                       segment.text.length,
                                     ),
-                                sessionReferences,
                                 longMessageCollapsed ? undefined : handlePastedTextChipClick,
                                 projectSentRanges(
                                   validAgentReferences,
@@ -1605,10 +1700,15 @@ export function UserMessage({
                         )}
                       </div>
                     ) : displayBubbleBody.trim() ? (
+                      renderPluginUiBody(pluginUi.messageBody ? { position: 'message.body', role: 'user', sessionId,
+                        disabled: isRemoteFileOrigin(sessionFileCtx.origin), plugin: sourcePlugin?.pluginId,
+                        context: () => ({ message: { clientId: messageClientId, role: 'user', content } }) } : undefined,
                       <div
+                        data-selection-quote-body=""
                         className={cn(
                           'whitespace-pre-wrap [overflow-wrap:anywhere]',
-                          longMessageCollapsed && (automationOrigin ? 'line-clamp-3' : 'line-clamp-10'),
+                          longMessageCollapsed &&
+                            (isScheduledAutomation ? 'line-clamp-3' : 'line-clamp-10'),
                         )}
                       >
                         {longMessageCollapsed
@@ -1628,7 +1728,6 @@ export function UserMessage({
                                     displayBubbleSourceStart,
                                     displayBubbleBody.length,
                                   ),
-                              sessionReferences,
                               undefined,
                               bubbleAgentReferences,
                               false,
@@ -1636,16 +1735,20 @@ export function UserMessage({
                           : renderContent(
                               displayBubbleBody,
                               workingDir,
-                              async (abs, name, chip) => {
-                                if (!(await shouldOpenTextLightboxForOrigin(sessionFileCtx, abs)))
-                                  return;
-                                // F2 / F6: stash the clicked chip so the lightbox can
-                                // return focus on close. State + ref are shared with the
-                                // Chip-Row above ("most recent trigger wins" semantics).
-                                activeFileChipRef.current = chip;
-                                setTextLightboxFile({ path: abs, name });
-                              },
-                              (xdtFileUrl) => setLightboxSrc(xdtFileUrl),
+                              allowPrivilegedLinks
+                                ? async (abs, name, chip) => {
+                                    if (!(await shouldOpenTextLightboxForOrigin(sessionFileCtx, abs)))
+                                      return;
+                                    // F2 / F6: stash the clicked chip so the lightbox can
+                                    // return focus on close. State + ref are shared with the
+                                    // Chip-Row above ("most recent trigger wins" semantics).
+                                    activeFileChipRef.current = chip;
+                                    setTextLightboxFile({ path: abs, name });
+                                  }
+                                : undefined,
+                              allowPrivilegedLinks
+                                ? (xdtFileUrl) => setLightboxSrc(xdtFileUrl)
+                                : undefined,
                               t,
                               sessionId,
                               isRemoteFileOrigin(sessionFileCtx.origin),
@@ -1657,11 +1760,11 @@ export function UserMessage({
                                     displayBubbleSourceStart,
                                     displayBubbleBody.length,
                                   ),
-                              sessionReferences,
                               handlePastedTextChipClick,
                               bubbleAgentReferences,
                             )}
                       </div>
+                      )
                     ) : null}
                     {shouldCollapseLongMessage && (
                       <button
@@ -1670,9 +1773,9 @@ export function UserMessage({
                         onClick={() => setLongMessageExpanded((expanded) => !expanded)}
                         className={cn(
                           'mt-2 inline-flex items-center gap-1 rounded-full px-1 py-0.5',
-                          'text-[12px] font-medium leading-5',
-                          'text-[var(--msg-user-text)] opacity-65 transition-opacity',
-                          'hover:opacity-100',
+                          'text-12 font-medium leading-5',
+                          'text-[var(--text-secondary)] transition-colors',
+                          'hover:text-[var(--msg-user-text)]',
                           'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--focus-ring-soft)]',
                         )}
                       >
@@ -1686,15 +1789,18 @@ export function UserMessage({
                         )}
                       </button>
                     )}
-                  </div>
+                    {attachmentsInBubble && (
+                      <div className={cn('flex flex-col items-start gap-2', (inlineQuoteCount > 0 || displayBubbleBody.trim() || ghostChipDisplay) && 'mt-2')}>
+                        {imageAttachmentNodes}
+                        {fileAttachmentNodes}
+                      </div>
+                    )}
+                  </ChatBubble>
                 )}
-                {/* ghost-summon-pill:未兑现的软提示保持低调胶囊,留在气泡下方
+                {/* ghost-summon-pill:历史提及保持低调胶囊,留在气泡下方
             (chip 标注行形态见气泡内部;提示原文仍可点开查看)。 */}
                 {ghostPillDisplay && (
-                  <GhostSummonCard
-                    directive={ghostPillDisplay}
-                    {...(messageClientId ? { messageClientId } : {})}
-                  />
+                  <GhostSummonCard directive={ghostPillDisplay} />
                 )}
                 {/* 订阅槽①:被意识钩子拦下 —— 气泡照常显示(未发出),下方渲一条
             error 红条,内容 = 意识返回的文本(直接显示,主机不加框不署名);
@@ -1702,6 +1808,7 @@ export function UserMessage({
                 {blockedByGhost && (
                   <div className="mt-1.5">
                     <ErrorMessageCard
+                      kind="blocked-input"
                       message={blockedByGhost.reason || t('chat.ghostHook.blockedFallback')}
                     />
                   </div>
@@ -1709,20 +1816,11 @@ export function UserMessage({
                 {/* message-actions V1.2: hover-revealed bar below the bubble,
                 right-aligned, order [time][copy][fork][edit][undo][more]。被拦消息只保留
             编辑和链接复制,fork/rewind/delete 对未发消息无意义。 */}
-                <MessageActionBar
-                  createdAt={createdAt}
-                  copyText={copyText}
-                  copyLinkText={messageDeepLink}
-                  align="right"
-                  hovered={hovered}
-                  onFork={!isBlocked && canFork ? handleFork : undefined}
-                  onAddToChat={!isBlocked && messageDeepLink ? handleAddToChat : undefined}
-                  onShareAsImage={handleShareAsImage}
-                  onDelete={!isBlocked && sessionId && messageClientId ? handleDelete : undefined}
-                  onEdit={canEdit ? handleEdit : undefined}
-                  onRewind={!isBlocked && canRewind ? handleRewind : undefined}
-                  rewindInFlight={rewindOpen}
-                />
+                {messageActions}
+                {dmThread?.thread ? (
+                  <BotDmThreadPreview align="right" thread={dmThread.thread} bot={dmThread.bot}
+                    unread={dmThread.unread} onOpen={dmThread.open} />
+                ) : null}
               </>
             )}
           </>

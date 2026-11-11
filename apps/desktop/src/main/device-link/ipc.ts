@@ -5,26 +5,64 @@
  * ipcMain.handle 只做 adapter),__tests__ 用内存 harness 直接调 handler body。
  */
 
+import { promises as pluginFileFs } from 'node:fs';
+import { PLUGIN_MEMBER_UPLOAD_MAX_ARCHIVE_BYTES } from '@cindy/plugin-protocol';
+import { capturePluginOauthPeer } from '../plugin-oauth/runtime.js';
+import { openRemotePluginSettings, closeRemotePluginSettings, answerRemotePluginSettingsDirectory, answerRemotePluginSettingsModelPicker } from '../cindy-brain/remotePluginSettingsController.js';
+import { REMOTE_PLUGIN_SETTINGS_OPEN, REMOTE_PLUGIN_SETTINGS_CLOSE, REMOTE_PLUGIN_SETTINGS_DIRECTORY_ANSWER, REMOTE_PLUGIN_SETTINGS_MODEL_ANSWER } from '../../shared/remotePluginSettings.js';
+import {
+  decodeModelSpeedPayload,
+  REMOTE_RESOURCE_MANIFEST_CHANNEL,
+  REMOTE_RESOURCE_INVOKE_CHANNEL,
+  REMOTE_RESOURCE_PROTOCOL_VERSION,
+  isProviderSharePeer,
+} from '@cindy/device-link';
+import { confirmRemoteSkillMutation, isRemoteSkillApproval } from './remoteSkillConfirmation';
+import { t } from '../i18n.desktop';
 import { createHash, randomBytes } from 'node:crypto';
-import { ipcMain } from 'electron';
+import { ipcMain, shell, clipboard, dialog, BrowserWindow } from 'electron';
+import { MCP_APPS_INVOKE } from '../../shared/mcpApps.js';
+import { currentOauthIdentityScope, trustOauthPeer } from '../plugin-oauth/desktopIdentity.js';
+import { RemotePluginOauthUnsupportedError, resolveOauthPeerIdentity } from '../plugin-oauth/identityResolver.js';
+import { getDeviceId } from '../authManager.js';
+import { markStartupMilestone } from '../startupTimeline.js';
+import { copyPrivateDeviceCode } from '../plugin-oauth/deviceCodeClipboard.js';
+import { PLUGIN_OAUTH_CHANNEL, PLUGIN_OAUTH_LOCAL_CHANNEL, PLUGIN_SECRET_LOCAL_CHANNEL, PLUGIN_CONNECTION_LOCAL_CHANNEL, INPUT_HANDOFF_LOCAL_CHANNEL, INPUT_HANDOFF_REMOTE_LOCAL_CHANNEL, INPUT_HANDOFF_LOCAL_PICTURE_CHANNEL, INPUT_HANDOFF_LOCAL_RAISE_CHANNEL, INPUT_HANDOFF_REMOTE_PICTURE_CHANNEL, INPUT_HANDOFF_REMOTE_PICTURE_ANSWER_CHANNEL } from '@cindy/device-link';
+import { handleAssistPluginOauth, handleSubmitPluginSecret, handleSubmitPluginConnection, handleSubmitInputHandoff, handleOpenInputHandoffPicture, handleAnswerInputHandoffPicture, type LocalOauthDeps } from '../plugin-oauth/localIpc.js';
+import { LocalDeviceCodeSessions } from '../plugin-oauth/deviceCodeSessions.js';
+import { PLUGIN_OAUTH_DEVICE_CODE_CHANNEL } from '../../shared/pluginOauthDeviceCode.js';
+import { getActiveAppSession, isAppSessionBoundaryPending, onAppSessionInvalidated } from '../appSessionState.js';
 import {
   DL_SESSION_REFERENCE_CAPABILITY_CHANNEL,
   DeviceLinkError,
+  readProviderMetadataContinuity,
   type InvokeResultPayload,
   type LinkAcceptPayload,
 } from '@cindy/device-link';
-import { serverApiFetch, ServerApiError } from '../serverApiClient';
+import { isMobilePlatform } from '@cindy/maker-shared/device-list';
+import { ServerApiError } from '../serverApiClient.desktop';
+import { deviceLinkApiFetch } from './deviceLinkApi.desktop.js';
 import { requireString, throwIpcError } from '../utils/ipcValidate';
 import { assertTrustedAppRendererEvent } from '../security/trustedAppRenderer';
-import type { IpcErrorCode } from '../../shared/ipc-errors';
+import { isIpcError, type IpcErrorCode } from '../../shared/ipc-errors';
+import { ReviewArtifactAuthorizationError } from '../reviewer/reviewArtifactAuthorization.js';
+import { decodeRemoteHistory } from '../../shared/remoteHistoryCache';
 import {
   DEVICE_LINK_INVOKE,
   DEVICE_LINK_PUSH,
   type DeviceLinkDeviceView,
   type DeviceLinkState,
+  type DeviceLinkPeerLinksSnapshot,
 } from '../../shared/deviceLinkIpc';
 import {
   getDeviceLinkStatus,
+  getDirectDataDeviceIds,
+  hasOfflineDirectPath,
+  isDeviceDataPathAvailable,
+  isPeerControlAvailable,
+  getPeerControlState,
+  isPresenceFreshAfterRequest,
+  forgetPeerControlState,
   getDeviceLinkConnectionIssue,
   isDeviceLinkStandby,
   getUnresponsiveDeviceIds,
@@ -34,31 +72,62 @@ import {
   openRemoteLink,
   closeRemoteLink,
   remoteInvoke,
+  providerShareHostInvoke,
   remoteSubscribe,
   remoteUnsubscribe,
   disconnectAllControllers,
   revokeController,
   restoreController,
+  setControllerModelUse,
   broadcast,
-  deviceLinkApiBase,
+  applyControllerDisplayNameListSnapshot,
+  applyControllerPresenceListSnapshot,
+  beginControllerDisplayNameDirectoryRefresh,
+  captureControllerDisplayNameRequestEpoch,
+  captureControllerPresenceRequestEpoch,
+  isLatestControllerDisplayNameDirectoryRefresh,
+  readControllerDisplayNameFreshnessSince,
+  waitForNewerControllerDisplayNameDirectoryRefresh,
+  getDeviceLinkPeerLinks,
 } from './index';
-import { getActiveControllers } from './dispatch';
-import { rewriteOutboundMedia } from './outboundMedia';
+import { getActiveControllers } from './dispatch.desktop';
+import { rewriteOutboundMedia, withPeerAttachmentUpload } from './outboundMedia';
+import { createSentImageRetainer } from './remoteMediaPersistentCache';
+import { withOutboundReviewConfirmation } from '../maker-ipc/reviewOutboundInput.js';
+import { confirmReviewArtifacts } from '../reviewer/confirmReviewArtifacts.js';
+import { tryUploadPeerAttachment } from './filePeer';
+import { withAgentNetMediaTarget } from './agentNetMediaRouting.js';
+import { withSourceFileAccessRecovery, releaseSourceFileAccessUploads } from './sourceFileAccessRecovery';
+import { parseSharedTaskPeer, scrubSharedProviderCatalog } from '@cindy/device-link';
+import { withSharedTaskMedia } from './sharedTaskMediaContext.js';
+import {
+  isProviderShareRefusal,
+  noteProviderShareAccessFailure,
+  parseProviderShareAgentDeviceId,
+  resolveRemoteAgentTargetWhenReady,
+} from './providerShareGuest.js';
+import { crossRegionInvoke, isCrossRegionProviderShareTarget } from './providerShareCrossRegion.js';
+import { readProviderDirectoryContinuity, invalidateProviderDirectoryContinuity,
+  providerDirectoryGeneration } from './providerMetadataContinuity.js';
 import {
   outboundSessionReferencesRequested,
   rewriteOutboundSessionReferences,
   stripOutboundSessionReferenceSideChannels,
 } from './outboundSessionReferences';
 import {
+  forgetLastKnownDeviceName,
   isPlaceholderDeviceName,
+  normalizeCachedDeviceName,
   readDeviceLinkSettings,
   readLastKnownDeviceNames,
   rememberLastKnownDeviceName,
   setDeviceControlEnabled,
-} from './settings-store';
+} from './settings-store.desktop';
 import { activeOwnerScopeKey, ownerScopedUserDataPath } from '../appSessionState';
 import {
+  coerceCachedSession,
   getMirrorCache,
+  MAX_CACHED_TEXT_CHARS,
   MirrorCachePurgeError,
   type CachedDeviceSessions,
   type MirrorCache,
@@ -72,6 +141,8 @@ import {
   resetAll as resetSubscriptionRefcount,
 } from './subscriptionRefcount';
 import { createLogger } from '../logger';
+import { onQuit } from '../lifecycle';
+import { createDeviceLinkIpcDiagnostics } from './ipcDiagnostics';
 import { getAppCapabilities } from '../appCapabilities.js';
 
 const log = createLogger('device-link:ipc');
@@ -88,68 +159,121 @@ type DeviceLinkServerDeviceView = Omit<DeviceLinkDeviceView, 'controlEnabled'> &
 
 /** handler 依赖注入面(测试替身用) */
 export interface DeviceLinkIpcDeps {
+  /** Authenticated, already-established data path retained through signaling loss. */
+  hasOfflineDirectPath?(deviceId: string): boolean;
+  /** A current authenticated data path for this target, not a stale directory row. */
+  isDeviceDataPathAvailable?(deviceId: string): boolean;
+  /** Last verified control availability for a retained target; unknown stays permissive. */
+  isPeerControlAvailable?(deviceId: string): boolean;
+  /** Current presence authority, separate from the UI display projection. */
+  getPeerControlState?(deviceId: string): { online?: boolean; available?: boolean; disabled: boolean };
+  /** Whether a presence delta is newer than this directory request. */
+  isPresenceFreshAfterRequest?(deviceId: string, requestEpoch: number): boolean;
   getState(): DeviceLinkState;
+  /** 远程连接拓扑:本机链路快照(只读) */
+  getPeerLinks(): DeviceLinkPeerLinksSnapshot;
   setEnabled(enabled: boolean): Promise<void>;
   setKeepAwake(enabled: boolean): Promise<void>;
   apiFetch<T>(path: string, opts?: { method?: string; body?: unknown }): Promise<T>;
   openLink(deviceId: string): Promise<LinkAcceptPayload>;
   closeLink(deviceId: string): void;
-  invoke(deviceId: string, channel: string, args: unknown[]): Promise<InvokeResultPayload>;
+  invoke(deviceId: string, channel: string, args: unknown[], options?: { background?: boolean; diagnosticSource?: 'renderer' }): Promise<InvokeResultPayload>;
+  /** 分享者电脑的只读请求：先建后台链路再发(relay 只在建链时登记受邀者的电脑)。缺省时用 invoke。 */
+  invokeProviderShareHost?(target: string, channel: string, args: unknown[]): Promise<InvokeResultPayload>;
   subscribe(deviceId: string, topics: string[]): Promise<InvokeResultPayload>;
   unsubscribe(deviceId: string, topics: string[]): Promise<InvokeResultPayload>;
   disconnectAll(): void;
   revoke(deviceId: string): Promise<void>;
   restore(deviceId: string): Promise<void>;
+  setModelUse(deviceId: string, allowed: boolean): Promise<void>;
   setDeviceControlEnabled(deviceId: string, enabled: boolean): Promise<string[]>;
   /** 清理本机禁用目标的响应性熔断状态。 */
   clearDeviceResponsiveness?(deviceId: string): void;
   broadcast(channel: string, payload: unknown): void;
   readLastKnownDeviceNames(): Record<string, string>;
   rememberLastKnownDeviceName(deviceId: string, name: string): Promise<boolean>;
+  forgetLastKnownDeviceName(deviceId: string): Promise<boolean>;
+  applyControllerDisplayNameListSnapshot(
+    devices: readonly DeviceLinkServerDeviceView[],
+    requestEpoch: number,
+  ): void;
+  applyControllerPresenceListSnapshot(
+    devices: readonly DeviceLinkServerDeviceView[],
+    requestEpoch: number,
+  ): Map<string, { online: boolean; enabled?: boolean }>;
+  beginControllerDisplayNameDirectoryRefresh(): number;
+  isLatestControllerDisplayNameDirectoryRefresh(sequence: number): boolean;
+  waitForNewerControllerDisplayNameDirectoryRefresh(sequence: number): Promise<void>;
+  captureControllerDisplayNameRequestEpoch(): number;
+  captureControllerPresenceRequestEpoch(): number;
+  readControllerDisplayNameFreshnessSince(
+    deviceId: string,
+    requestEpoch: number,
+  ): { changedAfterRequest: boolean; authoritativeName: string | null };
   /**
    * 出方向附件改写:把消息里的本机附件上传 OSS、替换成引用串(仅 send/steer/enqueue 生效)。
    * 可选 —— 测试可不注入(跳过改写,行为同旧版纯透传)。
    */
-  rewriteOutboundMedia?(channel: string, args: unknown[]): Promise<unknown[]>;
+  rewriteOutboundMedia?(channel: string, args: unknown[], existing?: ReadonlySet<string>): Promise<unknown[]>;
   /** 控制端 main 在越过 device-link 前把相对引用解析为可信、预算化快照。 */
   rewriteOutboundSessionReferences?(channel: string, args: unknown[]): Promise<unknown[]>;
 }
 
 export function defaultDeps(): DeviceLinkIpcDeps {
   return {
+    hasOfflineDirectPath,
+    isDeviceDataPathAvailable,
+    isPeerControlAvailable,
+    getPeerControlState,
+    isPresenceFreshAfterRequest,
     getState: () => {
       const s = readDeviceLinkSettings();
       return {
         remoteControlEnabled: s.remoteControlEnabled,
         keepAwake: s.keepAwake,
         linkStatus: getDeviceLinkStatus(),
+        directDataDeviceIds: getDirectDataDeviceIds(),
         connectionIssue: getDeviceLinkConnectionIssue(),
         standby: isDeviceLinkStandby(),
         controlledBy: getActiveControllers(),
         revokedControllers: s.revokedControllers,
+        modelUseRevokedControllers: s.modelUseRevokedControllers,
         disabledControlDeviceIds: s.disabledControlDeviceIds,
         unresponsiveDeviceIds: getUnresponsiveDeviceIds(),
       };
     },
+    getPeerLinks: getDeviceLinkPeerLinks,
     setEnabled: setRemoteControlEnabled,
     setKeepAwake: setKeepAwakeEnabled,
-    apiFetch: (path, opts) => serverApiFetch(path, { ...opts, baseUrl: deviceLinkApiBase }),
-    openLink: openRemoteLink,
+    // 官方中转或自建中转(凭证与 401 语义不同,见 deviceLinkApi.ts)。
+    apiFetch: (path, opts) => deviceLinkApiFetch(path, opts),
+    openLink: (deviceId: string) => openRemoteLink(deviceId),
     closeLink: closeRemoteLink,
     invoke: (...args) => {
       requireDeviceLinkCapability();
       return remoteInvoke(...args);
     },
+    invokeProviderShareHost: providerShareHostInvoke,
     subscribe: remoteSubscribe,
     unsubscribe: remoteUnsubscribe,
     disconnectAll: disconnectAllControllers,
     revoke: revokeController,
     restore: restoreController,
+    setModelUse: setControllerModelUse,
     setDeviceControlEnabled,
     clearDeviceResponsiveness,
     broadcast,
     readLastKnownDeviceNames,
     rememberLastKnownDeviceName,
+    forgetLastKnownDeviceName,
+    applyControllerDisplayNameListSnapshot,
+    applyControllerPresenceListSnapshot,
+    beginControllerDisplayNameDirectoryRefresh,
+    captureControllerDisplayNameRequestEpoch,
+    captureControllerPresenceRequestEpoch,
+    isLatestControllerDisplayNameDirectoryRefresh,
+    readControllerDisplayNameFreshnessSince,
+    waitForNewerControllerDisplayNameDirectoryRefresh,
     rewriteOutboundMedia,
     rewriteOutboundSessionReferences,
   };
@@ -166,7 +290,8 @@ const DEVICE_LINK_CODE_MAP: Record<string, IpcErrorCode> = {
   VERSION_MISMATCH: 'DEVICE_LINK_VERSION_MISMATCH',
   NOT_CONNECTED: 'DEVICE_LINK_NOT_CONNECTED',
   LINK_NOT_OPEN: 'DEVICE_LINK_NOT_CONNECTED',
-  BACKPRESSURE: 'DEVICE_LINK_NOT_CONNECTED',
+  PEER_RESET: 'DEVICE_LINK_NOT_CONNECTED',
+  BACKPRESSURE: 'DEVICE_LINK_BUSY',
 };
 
 /**
@@ -221,6 +346,11 @@ function rethrowServerError(err: unknown): never {
 
 // ─── handler bodies(纯函数,可注入依赖)──────────────────────────────────────
 
+/** 远程连接拓扑快照:纯转发,门禁在注册处(trusted renderer + 账号能力)。 */
+export function handleGetPeerLinks(deps: DeviceLinkIpcDeps): DeviceLinkPeerLinksSnapshot {
+  return deps.getPeerLinks();
+}
+
 export function handleGetState(deps: DeviceLinkIpcDeps): DeviceLinkState {
   const state = deps.getState();
   if (getAppCapabilities().canUseDeviceLink) return state;
@@ -236,6 +366,7 @@ export function handleGetState(deps: DeviceLinkIpcDeps): DeviceLinkState {
     standby: false,
     controlledBy: [],
     revokedControllers: [],
+    modelUseRevokedControllers: [],
     disabledControlDeviceIds: [],
     unresponsiveDeviceIds: [],
   };
@@ -289,40 +420,206 @@ export async function handleSetDeviceControlEnabled(
   return { deviceId: normalizedDeviceId, enabled, disabledControlDeviceIds };
 }
 
-export async function handleListDevices(
+type DeviceListResult = {
+  devices: DeviceLinkDeviceView[];
+  /** True only when this is the bounded last-known directory, not a fresh REST answer. */
+  stale?: true;
+  /**
+   * Local display budget measured from the request start; never a wire
+   * authorization. A missing field is an old endpoint (legacy lifecycle);
+   * an explicit 0 means the source budget has already ended.
+   */
+  displayBudget?: { remainingMs: number };
+};
+
+/**
+ * 所有 renderer 的设备列表入口最终都汇到本 handler。代次刻意跨状态变化与 teardown
+ * 单调递增：后发请求代表更新的目录意图，先发请求即使更晚返回也只能跟随最新 promise，
+ * 不能进入 reconcile 写回旧名称/空值，也不能把旧列表重新交给 UI。
+ */
+let deviceListRequestSequence = 0;
+let latestDeviceListRequest: {
+  owner: string;
+  sequence: number;
+  promise: Promise<DeviceListResult>;
+  startedAt: number;
+  /** false once settled or once a directory mutation succeeded after it was sent. */
+  joinable: boolean;
+} | null = null;
+
+/** A rename / delete changes the directory: later reads must not join a request sent before it. */
+function invalidateDeviceListCoalescing(): void {
+  invalidateProviderDirectoryContinuity();
+  if (latestDeviceListRequest) latestDeviceListRequest.joinable = false;
+}
+/**
+ * 启动与重连时 3–4 个 renderer 入口(侧栏、切换栏、设置页、main 自身)在同一拍里各发一次
+ * /devices。在途请求在这个窗口内的后来者直接共用它:目录快照本来就是同一时刻的,
+ * 多发只是多占一次往返和服务端查询。窗口外(或已结束)的请求仍代表新的目录意图,照常新发。
+ */
+const DEVICE_LIST_COALESCE_WINDOW_MS = 300;
+
+/** 仅测试:重置合并窗口状态,避免跨用例共用在途 promise。 */
+export function __resetDeviceListCoalescingForTests(): void {
+  latestDeviceListRequest = null;
+  invalidateProviderDirectoryContinuity();
+}
+
+export function handleListDevices(
   deps: DeviceLinkIpcDeps,
-): Promise<{ devices: DeviceLinkDeviceView[] }> {
-  try {
-    const result = await deps.apiFetch<{ devices: DeviceLinkServerDeviceView[] }>(
-      '/api/device-link/devices',
-    );
-    return reconcileDeviceNames(result, deps);
-  } catch (err) {
-    rethrowServerError(err);
+): Promise<DeviceListResult> {
+  const owner = activeOwnerScopeKey();
+  const inFlight = latestDeviceListRequest;
+  if (inFlight && inFlight.owner === owner && inFlight.joinable && Date.now() - inFlight.startedAt < DEVICE_LIST_COALESCE_WINDOW_MS) {
+    return inFlight.promise;
   }
+  const sequence = ++deviceListRequestSequence;
+  const directoryRequestSequence = deps.beginControllerDisplayNameDirectoryRefresh();
+  const requestEpoch = deps.captureControllerDisplayNameRequestEpoch();
+  const presenceRequestEpoch = deps.captureControllerPresenceRequestEpoch();
+  const directoryEpoch = providerDirectoryGeneration();
+    const request = readProviderDirectoryContinuity(() => deps.apiFetch<{ devices: DeviceLinkServerDeviceView[] }>(
+      '/api/device-link/devices',
+    )).then(
+    async ({ value: result, stale, remainingMs }) => {
+      if (activeOwnerScopeKey() !== owner) throw new Error('[DEVICE_LINK_NOT_CONNECTED] device directory account changed');
+      // A rename/delete supersedes a request that started before it, even when
+      // no newer list caller has joined yet. Never install that old snapshot.
+      if (directoryEpoch !== providerDirectoryGeneration()) return handleListDevices(deps);
+      let latest = latestDeviceListRequest;
+      if (latest && latest.sequence > sequence) return latest.promise;
+      const isLatestDirectorySnapshot = deps.isLatestControllerDisplayNameDirectoryRefresh(
+        directoryRequestSequence,
+      );
+      let appliedEvidence = new Map<string, { online: boolean; enabled?: boolean }>();
+      if (isLatestDirectorySnapshot && !stale) {
+        deps.applyControllerDisplayNameListSnapshot(result.devices, requestEpoch);
+        appliedEvidence = deps.applyControllerPresenceListSnapshot(result.devices, presenceRequestEpoch) ?? appliedEvidence;
+      } else if (!stale) {
+        await deps.waitForNewerControllerDisplayNameDirectoryRefresh(directoryRequestSequence);
+        latest = latestDeviceListRequest;
+        if (latest && latest.sequence > sequence) return latest.promise;
+      }
+      const reconciled = reconcileDeviceNames(
+        result,
+        deps,
+        requestEpoch,
+        // A stale snapshot may be shown within its bounded budget, but its names
+        // must not become new persistent truth for later cold starts.
+        !stale && isLatestDirectorySnapshot,
+        !isLatestDirectorySnapshot,
+      );
+      return {
+        devices: reconciled.devices.map(device => {
+          const deviceId = device.deviceId;
+          const nonMobile = !isMobilePlatform(device.platform);
+          const retained = deps.hasOfflineDirectPath?.(deviceId) === true;
+          const current = deps.getPeerControlState?.(deviceId);
+          const controlAvailable = deps.isPeerControlAvailable?.(deviceId) !== false;
+          const presenceFresh = deps.isPresenceFreshAfterRequest?.(deviceId, presenceRequestEpoch) === true;
+          const evidence = appliedEvidence.get(deviceId);
+          if (presenceFresh) {
+            const online = current?.online === true || (current?.online !== false && retained);
+            const available = current?.available === true && current.disabled !== true && nonMobile;
+            return { ...device, online, remoteControlEnabled: available };
+          }
+          if (evidence) {
+            if (!evidence.online) {
+              return { ...device, ...(retained ? { online: true,
+                remoteControlEnabled: nonMobile && controlAvailable && current?.disabled !== true } : { remoteControlEnabled: false }) };
+            }
+            return { ...device, online: true, remoteControlEnabled: nonMobile && evidence.enabled === true };
+          }
+          // A bounded cached REST row is not new presence/control evidence.
+          // Keep only the target whose current authenticated data path is verified.
+          // Fresh REST rows still use raw evidence above and retained direct below.
+          if (stale) {
+            const online = deps.isDeviceDataPathAvailable?.(deviceId) ?? retained;
+            return { ...device, online, remoteControlEnabled: nonMobile && controlAvailable && current?.disabled !== true };
+          }
+          if (current?.disabled === true) {
+            return { ...device, online: device.online === true || retained, remoteControlEnabled: false };
+          }
+          if (device.online === true) {
+            const enabled = device.remoteControlEnabled === true && controlAvailable;
+            return { ...device, ...(nonMobile && enabled ? { remoteControlEnabled: true } : { remoteControlEnabled: false }) };
+          }
+          if (retained) return { ...device, online: true, remoteControlEnabled: nonMobile && controlAvailable };
+          return stale ? { ...device, online: false } : device;
+        }),
+        ...(stale ? { stale: true as const } : {}),
+        // Never drop an exhausted budget: absent means an old endpoint with no
+        // stamp, while zero means this read is already outside its source window.
+        displayBudget: { remainingMs: Math.max(0, remainingMs) },
+      };
+    },
+    (err: unknown) => {
+      if (activeOwnerScopeKey() !== owner) throw new Error('[DEVICE_LINK_NOT_CONNECTED] device directory account changed');
+      if (directoryEpoch !== providerDirectoryGeneration()) return handleListDevices(deps);
+      const latest = latestDeviceListRequest;
+      if (latest && latest.sequence > sequence) return latest.promise;
+      rethrowServerError(err);
+    },
+  );
+  const entry = { owner, sequence, promise: request, startedAt: Date.now(), joinable: true };
+  latestDeviceListRequest = entry;
+  void request.then(
+    () => { entry.joinable = false; markStartupMilestone('device-directory-first-result'); },
+    () => { entry.joinable = false; },
+  );
+  return request;
 }
 
 function reconcileDeviceNames(
   result: { devices: DeviceLinkServerDeviceView[] },
   deps: Pick<
     DeviceLinkIpcDeps,
-    'getState' | 'readLastKnownDeviceNames' | 'rememberLastKnownDeviceName'
+    | 'getState'
+    | 'readLastKnownDeviceNames'
+    | 'rememberLastKnownDeviceName'
+    | 'forgetLastKnownDeviceName'
+    | 'readControllerDisplayNameFreshnessSince'
   >,
+  requestEpoch: number,
+  writeCache: boolean = true,
+  preferCurrentAuthoritativeName: boolean = false,
 ): { devices: DeviceLinkDeviceView[] } {
   const cachedNames = deps.readLastKnownDeviceNames();
   const disabledControlDeviceIds = new Set(deps.getState().disabledControlDeviceIds ?? []);
 
   const devices = result.devices.map<DeviceLinkDeviceView>((device) => {
     let name = device.name;
+    const selfName = typeof device.selfName === 'string'
+      ? normalizeCachedDeviceName(device.selfName)
+      : null;
+    const freshness = deps.readControllerDisplayNameFreshnessSince(
+      device.deviceId,
+      requestEpoch,
+    );
+    if (freshness.changedAfterRequest || preferCurrentAuthoritativeName) {
+      name = freshness.authoritativeName ?? selfName ?? device.deviceId.slice(0, 8);
+      const controlEnabled = !disabledControlDeviceIds.has(device.deviceId);
+      return { ...device, name, controlEnabled };
+    }
+
     const trimmedName = device.name.trim();
     const hasDisplayName = !!trimmedName && !isPlaceholderDeviceName(trimmedName);
     if (hasDisplayName) {
-      void deps.rememberLastKnownDeviceName(device.deviceId, trimmedName); // best-effort,不阻塞列表返回
+      if (writeCache) {
+        void deps.rememberLastKnownDeviceName(device.deviceId, trimmedName); // best-effort,不阻塞列表返回
+      }
       if (device.name !== trimmedName) {
         name = trimmedName;
       }
+    } else if (!trimmedName) {
+      if (writeCache) {
+        void deps.forgetLastKnownDeviceName(device.deviceId); // 显式清空与后台目录刷新保持同义
+      }
+      name = selfName ?? device.deviceId.slice(0, 8);
     } else if (cachedNames[device.deviceId]) {
       name = cachedNames[device.deviceId];
+    } else {
+      name = selfName ?? device.deviceId.slice(0, 8);
     }
 
     const controlEnabled = !disabledControlDeviceIds.has(device.deviceId);
@@ -358,10 +655,12 @@ export async function handleRenameDevice(
     throwIpcError('INVALID_PARAMS', 'name is required');
   }
   try {
-    return await deps.apiFetch<{ deviceId: string; name: string; manualName?: string | null }>(
+    const renamed = await deps.apiFetch<{ deviceId: string; name: string; manualName?: string | null }>(
       `/api/device-link/devices/${encodeURIComponent(deviceId)}`,
       { method: 'PATCH', body: { name: nextName } },
     );
+    invalidateDeviceListCoalescing();
+    return renamed;
   } catch (err) {
     rethrowServerError(err);
   }
@@ -375,10 +674,13 @@ export async function handleDeleteDevice(
     throwIpcError('INVALID_PARAMS', 'deviceId is required');
   }
   try {
-    return await deps.apiFetch<{ deviceId: string; deleted: boolean }>(
+    const deleted = await deps.apiFetch<{ deviceId: string; deleted: boolean }>(
       `/api/device-link/devices/${encodeURIComponent(deviceId)}`,
       { method: 'DELETE' },
     );
+    invalidateDeviceListCoalescing();
+    if (deleted.deleted) { forgetPeerControlState(deviceId); handleCloseLink(deps, deviceId); }
+    return deleted;
   } catch (err) {
     rethrowServerError(err);
   }
@@ -455,6 +757,7 @@ export async function handleInvoke(
   deviceId: unknown,
   channel: unknown,
   args: unknown,
+  scheduling?: unknown,
 ): Promise<unknown> {
   if (typeof deviceId !== 'string' || !deviceId.trim()) {
     throwIpcError('INVALID_PARAMS', 'deviceId is required');
@@ -464,6 +767,14 @@ export async function handleInvoke(
   if (typeof channel !== 'string' || !channel.trim()) {
     throwIpcError('INVALID_PARAMS', 'channel is required');
   }
+  // App RPCs require the dedicated Main/frame binding, including for remote cards.
+  // Never forward Renderer-supplied View IDs through the general preload bridge.
+  if (channel === MCP_APPS_INVOKE) throwIpcError('PERMISSION_DENIED', 'MCP_APP_FRAME_REQUIRED');
+  if (channel === PLUGIN_OAUTH_CHANNEL || channel === PLUGIN_SECRET_LOCAL_CHANNEL || channel === PLUGIN_CONNECTION_LOCAL_CHANNEL
+    || channel === INPUT_HANDOFF_LOCAL_CHANNEL || channel === INPUT_HANDOFF_REMOTE_LOCAL_CHANNEL
+    || channel === INPUT_HANDOFF_LOCAL_PICTURE_CHANNEL || channel === INPUT_HANDOFF_LOCAL_RAISE_CHANNEL || channel === INPUT_HANDOFF_REMOTE_PICTURE_CHANNEL
+    || channel === INPUT_HANDOFF_REMOTE_PICTURE_ANSWER_CHANNEL)
+    throwIpcError('PERMISSION_DENIED', 'Authorization transport is Host-only');
   let callArgs = Array.isArray(args) ? args : [];
 
   // Resolve controller-relative references first. If the source session is
@@ -538,11 +849,50 @@ export async function handleInvoke(
   // 上传失败 → MEDIA_TRANSFER_FAILED,整条消息不发(产品决策:不静默丢附件)。
   if (deps.rewriteOutboundMedia) {
     try {
-      callArgs = await deps.rewriteOutboundMedia(channel, callArgs);
-    } catch (err) {
-      throwIpcError(
-        'DEVICE_LINK_MEDIA_TRANSFER_FAILED',
-        err instanceof Error ? err.message : String(err),
+      const peer = parseSharedTaskPeer(normalizedDeviceId);
+      let existing: ReadonlySet<string> | undefined;
+      let projectionUnavailable = false;
+      if ((!peer || peer.role === 'host') && channel === 'maker:input:update-content') {
+        const projection = await deps.invoke(normalizedDeviceId, 'maker:input:get-projection', [callArgs[0]]);
+        if (projection.ok) {
+          const value = projection.result as { sessionId?: string; pendingQueue?: Array<{ clientId: string; files?: Array<{ path?: string; url?: string }> }> };
+          if (value?.sessionId !== callArgs[0] || !Array.isArray(value.pendingQueue)) throw new Error('Invalid input projection');
+          const item = value.pendingQueue.find((row) => row.clientId === callArgs[1]);
+          if (!item) throw new Error('Queued message is no longer pending');
+          existing = new Set((item.files ?? []).flatMap((file) => [file.path, file.url].filter((ref): ref is string => typeof ref === 'string')));
+          assertControlTargetEnabled(deps, normalizedDeviceId);
+        } else if (projection.error.code !== 'CHANNEL_NOT_ALLOWED') {
+          throw new Error(projection.error.message);
+        } else {
+          projectionUnavailable = true;
+        }
+      }
+      if (projectionUnavailable) {
+        throwIpcError('DEVICE_LINK_CHANNEL_NOT_ALLOWED', 'Queued content editing is not supported by the target device');
+      }
+      callArgs = await withPeerAttachmentUpload((source, mime, signal) => peer ? Promise.resolve(null) : tryUploadPeerAttachment(normalizedDeviceId, source, mime, deps.invoke, undefined, signal), () =>
+        withAgentNetMediaTarget(normalizedDeviceId, () => withSharedTaskMedia(peer?.role === 'host' ? peer.sharedTaskId : undefined,
+          () => existing ? deps.rewriteOutboundMedia!(channel, callArgs, existing) : deps.rewriteOutboundMedia!(channel, callArgs))),
+        createSentImageRetainer(normalizedDeviceId));
+     } catch (err) {
+       if (isIpcError(err) && (err.code === 'DEVICE_LINK_CHANNEL_NOT_ALLOWED'
+         || err.code === 'DEVICE_LINK_MEDIA_ACCESS_DENIED')) {
+         throw err;
+       }
+       // Review 走同一条出方向改写管线, 但它的授权/校验拒绝不是媒体传输失败:
+       // PERMISSION_DENIED(凭证/密钥附件拒绝、授权不可用)、INVALID_PARAMS(整批
+       // 请求校验)与用户取消外部成果授权对话框, 保留原错误码/原语义, 消费端才
+       // 不会把"有意拒绝"当成可重试的传输故障。上传/压缩等真传输路径只抛普通
+       // Error, 不受影响。
+       if (isIpcError(err) && (err.code === 'PERMISSION_DENIED' || err.code === 'INVALID_PARAMS')) {
+         throw err;
+       }
+       if (err instanceof ReviewArtifactAuthorizationError) {
+         throwIpcError('PERMISSION_DENIED', err.message);
+       }
+       throwIpcError(
+         'DEVICE_LINK_MEDIA_TRANSFER_FAILED',
+         err instanceof Error ? err.message : String(err),
       );
     }
     assertControlTargetEnabled(deps, normalizedDeviceId);
@@ -550,18 +900,108 @@ export async function handleInvoke(
 
   let result: InvokeResultPayload;
   try {
-    result = await deps.invoke(normalizedDeviceId, channel, callArgs);
+    // Local admission hint only: never forward this field or change authorization.
+    const background = scheduling && typeof scheduling === 'object'
+      && 'background' in scheduling && scheduling.background === true;
+    result = background
+      ? await deps.invoke(normalizedDeviceId, channel, callArgs, { background: true })
+      : await deps.invoke(normalizedDeviceId, channel, callArgs);
   } catch (err) {
     rethrowDeviceLinkError(err);
   }
 
-  if (result.ok) return result.result;
+  if (result.ok) return decodeModelSpeedPayload(channel, result.result);
   // 被控端透传回来的错误:IPC_ERROR 的 message 已是 `[CODE] message` 形态,
   // 直接抛原样 Error 让 renderer extractIpcError 解码;其余隧道码走映射
   if (result.error.code === 'IPC_ERROR') {
     throw new Error(result.error.message);
   }
   throwIpcError(DEVICE_LINK_CODE_MAP[result.error.code] ?? 'INTERNAL', result.error.message);
+}
+
+/**
+ * 分享来的供应商(`share:<id>`)的 Renderer 只读请求：模型列表与发送前检查要读的那几项
+ * (模型目录、Agent 能力、可用 Agent、Agent 就绪)，分享者电脑已按分享的供应商收窄。
+ * Agent 本身由主进程的远程 Agent 客户端连接，不经这里。
+ */
+const PROVIDER_SHARE_RENDERER_CHANNELS: ReadonlySet<string> = new Set([
+  'maker:provider:list',
+  'maker:get-capabilities',
+  'maker:list-available-agents',
+  'maker:agent:status',
+]);
+
+function projectProviderShareResult(channel: string, value: unknown): unknown {
+  // 分享者电脑已去掉账号身份；受邀者这边再过一遍，旧版本分享者也不会把登录邮箱带进界面。
+  if (channel === 'maker:provider:list') return scrubSharedProviderCatalog(value);
+  if (channel === 'maker:agent:status') {
+    // 只认 Agent 是否装好：就绪以分享的模型目录为准，不带对方的登录状态、本机路径与身份。
+    const status = value && typeof value === 'object' ? value as { binaryReady?: unknown } : {};
+    const continuity = readProviderMetadataContinuity(value);
+    return { binaryReady: status.binaryReady === true,
+      ...(continuity ? { providerContinuity: continuity } : {}) };
+  }
+  return value;
+}
+
+/**
+ * 分享来的供应商读不到时在本机日志记下错误(同一分享、同一请求、同一错误每分钟最多一条)。
+ * 界面只能说「暂时读不到」，排查要靠这里和分享者电脑上的拒绝原因。
+ */
+const providerShareReadFailureLoggedAt = new Map<string, number>();
+function logProviderShareReadFailure(agentDeviceId: string, channel: string, code: string, message: string): void {
+  const key = `${agentDeviceId}\u0000${channel}\u0000${code}`;
+  const now = Date.now();
+  if (now - (providerShareReadFailureLoggedAt.get(key) ?? 0) < 60_000) return;
+  if (providerShareReadFailureLoggedAt.size >= 256) providerShareReadFailureLoggedAt.clear();
+  providerShareReadFailureLoggedAt.set(key, now);
+  log.warn(`provider share read failed: ${channel} on ${agentDeviceId}: ${code} ${message.slice(0, 200)}`);
+}
+
+export async function handleProviderShareInvoke(
+  deps: Pick<DeviceLinkIpcDeps, 'invoke' | 'invokeProviderShareHost'>,
+  agentDeviceId: string,
+  channel: unknown,
+  args: unknown,
+): Promise<unknown> {
+  if (typeof channel !== 'string' || !PROVIDER_SHARE_RENDERER_CHANNELS.has(channel)) {
+    throwIpcError('DEVICE_LINK_CHANNEL_NOT_ALLOWED', 'Not available for shared providers');
+  }
+  let target: string;
+  try {
+    target = await resolveRemoteAgentTargetWhenReady(agentDeviceId);
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err);
+    logProviderShareReadFailure(agentDeviceId, channel, 'RESOLVE', message);
+    throw err;
+  }
+  const callArgs = Array.isArray(args) ? args : [];
+  let result: InvokeResultPayload;
+  try {
+    result = isCrossRegionProviderShareTarget(target)
+      ? await crossRegionInvoke(target, channel, callArgs)
+      : await (deps.invokeProviderShareHost ?? deps.invoke)(target, channel, callArgs);
+  } catch (err) {
+    logProviderShareReadFailure(
+      agentDeviceId,
+      channel,
+      err instanceof DeviceLinkError ? err.code : 'THROWN',
+      err instanceof Error ? err.message : String(err),
+    );
+    if (err instanceof DeviceLinkError && isProviderShareRefusal(err.code, err.message)) refuseProviderShare(parseProviderShareAgentDeviceId(agentDeviceId) ?? undefined);
+    rethrowDeviceLinkError(err);
+  }
+  if (result.ok) return projectProviderShareResult(channel, result.result);
+  logProviderShareReadFailure(agentDeviceId, channel, result.error.code, result.error.message);
+  // 分享者电脑拒绝了(暂停、关了远程控制或这个供应商的「允许被远程调用」)：分享专属原因。
+  if (isProviderShareRefusal(result.error.code, result.error.message)) refuseProviderShare(parseProviderShareAgentDeviceId(agentDeviceId) ?? undefined);
+  if (result.error.code === 'IPC_ERROR') throw new Error(result.error.message);
+  throwIpcError(DEVICE_LINK_CODE_MAP[result.error.code] ?? 'INTERNAL', result.error.message);
+}
+
+function refuseProviderShare(shareId?: string): never {
+  noteProviderShareAccessFailure(shareId);
+  throwIpcError('REMOTE_AGENT_SHARE_UNAVAILABLE', 'The shared provider is not available right now');
 }
 
 /** subscribe/unsubscribe 共用:校验 + 解包 invoke-result(失败按隧道错误码抛给 renderer)。 */
@@ -825,16 +1265,21 @@ function finalMirrorCacheReadOwnerToken(
  * 缓存 id 的长度上界。renderer 被 XSS 时可以塞进任意长的 deviceId / sessionId,而 store 随后
  * 会对**完整字符串**做 trim + 正则改写 + sha256(messageFileName / clearDevice),这些都是同步
  * 的 —— 一次调用就能拖住 main(数组与单条字节预算管不到标量字段)(review: codex P1)。
- * 真实 id 是 cuid / uuid 量级(≤ 64),给到 256 已经宽松得离谱。
+ * 普通 id 保持 256 上限;共享连接标识包含 JSON 转义后的物理设备 id,由其 parser 单独限长。
  */
 const MIRROR_CACHE_MAX_ID_LENGTH = 256;
 
 /** opaque owner token 是 32-byte digest 的 base64url(43 字符);宽松上限防异常 renderer。 */
 const MIRROR_CACHE_MAX_OWNER_TOKEN_LENGTH = 128;
 
-function requireCacheId(value: unknown, name: string): string {
+function isCacheIdWithinLimit(id: string, name: 'deviceId' | 'sessionId'): boolean {
+  return id.length <= MIRROR_CACHE_MAX_ID_LENGTH
+    || (name === 'deviceId' && parseSharedTaskPeer(id) !== null);
+}
+
+function requireCacheId(value: unknown, name: 'deviceId' | 'sessionId'): string {
   const id = requireString(value, name);
-  if (id.length > MIRROR_CACHE_MAX_ID_LENGTH) {
+  if (!isCacheIdWithinLimit(id, name)) {
     throwIpcError('INVALID_PARAMS', `${name} is too long`);
   }
   return id;
@@ -846,6 +1291,7 @@ export async function handleMirrorCacheGetMessages(
   sessionId: unknown,
 ): Promise<{
   messages: Record<string, unknown>[];
+  historyView?: string;
   invalidation?: number;
   ownerToken?: string;
   accountCounter?: number;
@@ -881,6 +1327,7 @@ export async function handleMirrorCacheGetMessages(
   // 暴露给不可信 renderer(review: codex P2)。账号代际再区分同账号登出重登。
   return {
     messages,
+    ...(read.historyView !== undefined ? { historyView: read.historyView } : {}),
     invalidation: read.invalidation,
     ownerToken,
     accountCounter: read.accountCounter,
@@ -901,10 +1348,13 @@ export async function handleMirrorCachePutMessages(
   expectedInvalidation?: unknown,
   expectedOwnerToken?: unknown,
   expectedAccountCounter?: unknown,
+  historyView?: unknown,
+  mergeListMessage?: unknown,
 ): Promise<{ ok: true; invalidation?: number }> {
   const device = requireCacheId(deviceId, 'deviceId');
   const session = requireCacheId(sessionId, 'sessionId');
   if (!Array.isArray(messages)) throwIpcError('INVALID_PARAMS', 'messages must be an array');
+  if (historyView !== undefined && !decodeRemoteHistory(historyView)) throwIpcError('INVALID_PARAMS', 'Invalid history view cache');
   const bounded = boundedItems(messages, MIRROR_CACHE_MAX_INBOUND_MESSAGES, 'messages');
   const expected =
     typeof expectedInvalidation === 'number'
@@ -930,6 +1380,8 @@ export async function handleMirrorCachePutMessages(
       ? expectedAccountCounter
       : undefined;
   try {
+    const historyArgs: [historyView?: string, mergeListMessage?: boolean] = mergeListMessage === true
+      ? [historyView as string | undefined, true] : historyView !== undefined ? [historyView as string] : [];
     const result = await cache.writeMessages(
       device,
       session,
@@ -937,6 +1389,7 @@ export async function handleMirrorCachePutMessages(
       expected,
       expectedOwner,
       expectedAccount,
+      ...historyArgs,
     );
     return { ok: true, invalidation: result.invalidation };
   } catch (err) {
@@ -994,16 +1447,29 @@ export async function handleMirrorCachePutSessionList(
   // 已经吃进去了。截断之后才是「设备数不多但某台带着几十万个 session」这一层(review: codex P1)。
   // 逐台**只挑需要的三个字段**,不做对象展开:一台设备对象可以带上几十万个自有属性,
   // 展开会让 main 先枚举 + 复制整份,结构 / 字节预算要等 boundedItems 才生效(review: codex P1)。
-  // main 侧的 normalizeDeviceSessions 也只消费这三个字段,别的原本就会被白名单丢掉。
+  // session 先经过与落盘侧相同的白名单投影;否则完整 session 上的 summary / extra
+  // 字段会在投影前触发预算,把本可缓存的会话误判成 oversized(review: codex P1)。
   const trimmed = devices.slice(0, MIRROR_CACHE_MAX_INBOUND_DEVICES).map((device) => {
     if (!device || typeof device !== 'object') return device;
     const source = device as { deviceId?: unknown; deviceName?: unknown; sessions?: unknown };
+    const sessions: Record<string, unknown>[] = [];
+    if (Array.isArray(source.sessions)) {
+      for (
+        const rawSession of source.sessions.slice(0, MIRROR_CACHE_MAX_INBOUND_SESSIONS_PER_DEVICE)
+      ) {
+        const session = coerceCachedSession(rawSession);
+        if (session) sessions.push(session);
+      }
+    }
     return {
-      deviceId: source.deviceId,
-      deviceName: source.deviceName,
-      sessions: Array.isArray(source.sessions)
-        ? source.sessions.slice(0, MIRROR_CACHE_MAX_INBOUND_SESSIONS_PER_DEVICE)
-        : [],
+      deviceId: typeof source.deviceId === 'string'
+        && isCacheIdWithinLimit(source.deviceId, 'deviceId')
+        ? source.deviceId
+        : undefined,
+      deviceName: typeof source.deviceName === 'string'
+        ? source.deviceName.slice(0, MAX_CACHED_TEXT_CHARS)
+        : undefined,
+      sessions,
     };
   });
   const ownerRootAtHandler = ownerScopedUserDataPath('device-link-mirror-cache');
@@ -1120,6 +1586,202 @@ export async function retryUnsubscribeAfterWindowGone(
 // ─── 注册(Electron adapter)──────────────────────────────────────────────────
 
 export function registerDeviceLinkIpc(deps: DeviceLinkIpcDeps = defaultDeps()): void {
+  const diagnosticsLog = createLogger('device-link:ipc-diagnostics');
+  const diagnostics = createDeviceLinkIpcDiagnostics((event, fields, level) =>
+    level === 'debug' ? diagnosticsLog.debug(event, fields) : diagnosticsLog.info(event, fields),
+  );
+  // Submit the final partial interval at shutdown start, giving the async log
+  // writer the subsequent cleanup phases to drain before app.exit().
+  onQuit('device-link-ipc-diagnostics', diagnostics.flush, 'sync');
+  const deviceCodes = new LocalDeviceCodeSessions();
+  const deviceCodeScope = (event: import('electron').IpcMainInvokeEvent): string => {
+    assertTrustedAppRendererEvent(event);
+    requireDeviceLinkCapability();
+    if (isAppSessionBoundaryPending() || getActiveAppSession().mode !== 'cloud' || event.sender.isDestroyed())
+      throwIpcError('PRECONDITION_FAILED', 'Remote authorization unavailable');
+    const frame = event.senderFrame!;
+    return JSON.stringify([activeOwnerScopeKey(), event.sender.id, frame.processId, frame.routingId]);
+  };
+  // Local-only reads from the initiating frame; never a broadcast, mirror or remote invoke.
+  ipcMain.handle(PLUGIN_OAUTH_DEVICE_CODE_CHANNEL, async (event, raw: unknown) => {
+    const scope = deviceCodeScope(event);
+    try { return await deviceCodes.handle(scope, raw); }
+    catch { throwIpcError('PRECONDITION_FAILED', 'Authorization code unavailable; retry from the current card'); }
+  });
+  const skillConfirmations = new Set<number>();
+  ipcMain.handle('device-link:confirm-skill-mutation', async (event, raw: unknown) => {
+    assertTrustedAppRendererEvent(event);
+    requireDeviceLinkCapability();
+    const request = (raw ?? {}) as { deviceId?: unknown; operationId?: unknown };
+    const deviceId = requireString(request.deviceId, 'deviceId');
+    const operationId = requireString(request.operationId, 'operationId');
+    if (
+      deviceId.length > 256 || operationId.length > 64 || parseSharedTaskPeer(deviceId) ||
+      isProviderSharePeer(deviceId) || deviceId === getDeviceId()
+    ) throwIpcError('INVALID_PARAMS', 'Expected a same-account computer');
+    const owner = activeOwnerScopeKey();
+    const peerCurrent = capturePluginOauthPeer(deviceId);
+    const parent = BrowserWindow.fromWebContents(event.sender);
+    if (!parent || parent.isDestroyed() || skillConfirmations.has(event.sender.id)) {
+      throwIpcError('PRECONDITION_FAILED', 'Skill confirmation unavailable');
+    }
+    let navigated = false;
+    const invalidate = () => { navigated = true; };
+    event.sender.on('did-start-navigation', invalidate);
+    const current = () => {
+      peerCurrent();
+      assertTrustedAppRendererEvent(event);
+      assertControlTargetEnabled(deps, deviceId);
+      if (
+        navigated || parent.isDestroyed() || event.sender.isDestroyed() ||
+        isAppSessionBoundaryPending() || owner !== activeOwnerScopeKey()
+      ) throwIpcError('PRECONDITION_FAILED', 'Skill confirmation expired');
+    };
+    skillConfirmations.add(event.sender.id);
+    try {
+      return await confirmRemoteSkillMutation({
+        current,
+        invoke: async (action, input) => {
+          const response = await deps.invoke(deviceId, REMOTE_RESOURCE_INVOKE_CHANNEL, [{
+            collectionId: 'skills', actionId: `management:${action}`,
+            client: { protocolVersion: REMOTE_RESOURCE_PROTOCOL_VERSION, primitives: [] }, input,
+          }]);
+          if (!response.ok) throwIpcError('PRECONDITION_FAILED', 'Skill confirmation unavailable');
+          return (response.result as { result?: unknown })?.result;
+        },
+        prompt: async facts => {
+          const device = deps.readLastKnownDeviceNames()[deviceId] ?? deviceId;
+          const message = t(`skillhub.remote.confirm.${facts.kind}`)
+            .replace('{{name}}', () => facts.name)
+            .replace('{{device}}', () => device)
+            .replace('{{version}}', () => facts.version ?? '');
+          const detail = facts.kind === 'uninstall'
+            ? t(facts.linkOnly ? 'skillhub.management.unlinkDescription' : 'skillhub.management.trashDescription')
+            : t('skillhub.remote.confirm.installDescription');
+          const { response } = await dialog.showMessageBox(parent, {
+            type: 'warning', title: message, message, detail,
+            buttons: [t('commonUi.confirmDialog.confirm'), t('commonUi.confirmDialog.cancel')],
+            defaultId: 1, cancelId: 1, noLink: true,
+          });
+          return response === 0;
+        },
+      }, operationId);
+    } finally {
+      skillConfirmations.delete(event.sender.id);
+      event.sender.removeListener('did-start-navigation', invalidate);
+    }
+  });
+  // The native picker grants only this file; no renderer-supplied filesystem path.
+  ipcMain.handle('device-link:pick-plugin-package', async (event, raw: unknown) => {
+    assertTrustedAppRendererEvent(event);
+    requireDeviceLinkCapability();
+    const deviceId = requireString(raw, 'deviceId');
+    if (parseSharedTaskPeer(deviceId) || isProviderSharePeer(deviceId) || deviceId === getDeviceId()) throwIpcError('INVALID_PARAMS', 'Expected a same-account target computer');
+    const owner = activeOwnerScopeKey(), peerCurrent = capturePluginOauthPeer(deviceId);
+    const assertCurrent = () => {
+      peerCurrent(); assertTrustedAppRendererEvent(event);
+      if (event.sender.isDestroyed() || isAppSessionBoundaryPending() || owner !== activeOwnerScopeKey())
+        throwIpcError('PRECONDITION_FAILED', 'Plugin upload is no longer current');
+      assertControlTargetEnabled(deps, deviceId);
+    };
+    assertCurrent();
+    await deps.openLink(deviceId);
+    assertCurrent();
+    const caps = await deps.invoke(deviceId, REMOTE_RESOURCE_MANIFEST_CHANNEL, [{ client: { protocolVersion: REMOTE_RESOURCE_PROTOCOL_VERSION, primitives: [] } }]);
+    assertCurrent();
+    const manifest = caps.ok ? caps.result as { collections?: Array<{ id: string; actions?: Array<{ id: string }> }> } : null;
+    if (!manifest?.collections?.some(c => c.id === 'plugins' && c.actions?.some(a => a.id === 'management:snapshot')))
+      throwIpcError('UNSUPPORTED_CAPABILITY', 'Update Cindy on the target computer');
+    const win = BrowserWindow.fromWebContents(event.sender);
+    const options = { filters: [{ name: t('settings.ghosts.detail.exportFileType'), extensions: ['cindy'] }], properties: ['openFile' as const] };
+    const picked = win ? await dialog.showOpenDialog(win, options) : await dialog.showOpenDialog(options);
+    assertCurrent();
+    if (picked.canceled || picked.filePaths.length !== 1) return null;
+    const file = picked.filePaths[0];
+    const stat = await pluginFileFs.lstat(file);
+    if (!stat.isFile() || stat.isSymbolicLink() || stat.size > PLUGIN_MEMBER_UPLOAD_MAX_ARCHIVE_BYTES) throwIpcError('GHOST_FILE_INVALID', 'Invalid plugin file');
+    assertCurrent();
+    const attachment = await tryUploadPeerAttachment(deviceId, file, 'application/octet-stream', deps.invoke);
+    assertCurrent();
+    if (!attachment) throwIpcError('UNSUPPORTED_CAPABILITY', 'Secure plugin file transfer is unavailable');
+    return { attachment };
+  });
+  const localOauthDeps = (event: import('electron').IpcMainInvokeEvent): LocalOauthDeps => ({
+    owner: () => !isAppSessionBoundaryPending() && getActiveAppSession().mode === 'cloud' ? activeOwnerScopeKey() : null,
+    assertTarget: deviceId => {
+      if (event.sender.isDestroyed()) throw new Error('OAUTH_BRIDGE_UNAVAILABLE');
+      assertTrustedAppRendererEvent(event);
+      assertControlTargetEnabled(deps, deviceId);
+    },
+    invoke: deps.invoke,
+    localDeviceId: getDeviceId,
+    identity: (deviceId, assertCurrent) => resolveOauthPeerIdentity({scope: currentOauthIdentityScope, invoke: deps.invoke}, deviceId, assertCurrent),
+    trustIdentity: trustOauthPeer,
+    openExternal: url => shell.openExternal(url),
+    copyDeviceCode: code => copyPrivateDeviceCode(clipboard, code),
+    presentBrowserAuthorization: (target, expiresAt, assertCurrent, reopen) =>
+      deviceCodes.presentBrowser(deviceCodeScope(event), target, expiresAt, assertCurrent, reopen),
+    presentDeviceCode: (target, prompt, assertCurrent, clearClipboard) => deviceCodes.present(deviceCodeScope(event), target, prompt, {
+      assertCurrent,
+      clearClipboard,
+      copy: code => { copyPrivateDeviceCode(clipboard, code); },
+      openExternal: url => shell.openExternal(url),
+    }),
+  });
+  const authorizationFailed = (error: unknown): never => {
+    if (error instanceof RemotePluginOauthUnsupportedError)
+      throwIpcError('UNSUPPORTED_CAPABILITY', 'Update Cindy on the remote device to use remote plugin authorization');
+    throwIpcError('PRECONDITION_FAILED', 'Remote authorization unavailable; retry from the current card');
+  };
+  ipcMain.handle(REMOTE_PLUGIN_SETTINGS_OPEN, async (event, raw: unknown) => {
+    assertTrustedAppRendererEvent(event);
+    try {
+      return await openRemotePluginSettings(event.sender, localOauthDeps(event), raw);
+    } catch {
+      throwIpcError('PRECONDITION_FAILED', 'Remote plugin settings unavailable');
+    }
+  });
+  ipcMain.handle(REMOTE_PLUGIN_SETTINGS_CLOSE, (event, id: unknown) => {
+    assertTrustedAppRendererEvent(event);
+    closeRemotePluginSettings(event.sender, id);
+  });
+  ipcMain.handle(REMOTE_PLUGIN_SETTINGS_DIRECTORY_ANSWER, async (event, raw: unknown) => {
+    assertTrustedAppRendererEvent(event);
+    try { await answerRemotePluginSettingsDirectory(event.sender, raw); }
+    catch { throwIpcError('PRECONDITION_FAILED', 'Remote plugin directory request unavailable'); }
+  });
+  ipcMain.handle(REMOTE_PLUGIN_SETTINGS_MODEL_ANSWER, async (event, raw: unknown) => {
+    assertTrustedAppRendererEvent(event);
+    try { return await answerRemotePluginSettingsModelPicker(event.sender, raw); }
+    catch { throwIpcError('PRECONDITION_FAILED', 'Remote plugin model picker unavailable'); }
+  });
+  const authorizationHandler = (mode: 'oauth' | 'secret' | 'connection' | 'input') => async (event: import('electron').IpcMainInvokeEvent, raw: unknown) => {
+    assertTrustedAppRendererEvent(event);
+    requireDeviceLinkCapability();
+    try {
+      return await (mode === 'input' ? handleSubmitInputHandoff : mode === 'connection' ? handleSubmitPluginConnection : mode === 'secret' ? handleSubmitPluginSecret : handleAssistPluginOauth)(localOauthDeps(event), raw);
+    } catch (error) {
+      return authorizationFailed(error);
+    }
+  };
+  ipcMain.handle(PLUGIN_OAUTH_LOCAL_CHANNEL, authorizationHandler('oauth'));
+  ipcMain.handle(PLUGIN_SECRET_LOCAL_CHANNEL, authorizationHandler('secret'));
+  ipcMain.handle(PLUGIN_CONNECTION_LOCAL_CHANNEL, authorizationHandler('connection'));
+  ipcMain.handle(INPUT_HANDOFF_REMOTE_LOCAL_CHANNEL, authorizationHandler('input'));
+  // 代输入 screenshot step on another computer: the sealed picture returns to this window only.
+  ipcMain.handle(INPUT_HANDOFF_REMOTE_PICTURE_CHANNEL, async (event, raw: unknown) => {
+    assertTrustedAppRendererEvent(event);
+    requireDeviceLinkCapability();
+    try {
+      return await handleOpenInputHandoffPicture(localOauthDeps(event), raw, event.sender.id);
+    } catch (error) {
+      return authorizationFailed(error);
+    }
+  });
+  ipcMain.handle(INPUT_HANDOFF_REMOTE_PICTURE_ANSWER_CHANNEL, (event, raw: unknown) => {
+    assertTrustedAppRendererEvent(event);
+    return handleAnswerInputHandoffPicture(raw, event.sender.id);
+  });
   const gated =
     <T extends unknown[]>(handler: (...args: T) => unknown) =>
     (...args: T) => {
@@ -1129,13 +1791,18 @@ export function registerDeviceLinkIpc(deps: DeviceLinkIpcDeps = defaultDeps()): 
   // Keep the local keep-awake setting available without a Cindy account. The
   // setting is local-only and does not expose any remote-control capability.
   ipcMain.handle(DEVICE_LINK_INVOKE.GET_STATE, () => handleGetState(deps));
-  ipcMain.handle(DEVICE_LINK_INVOKE.SET_ENABLED, (_e, enabled: unknown) =>
-    gated(handleSetEnabled)(deps, enabled),
-  );
+  ipcMain.handle(DEVICE_LINK_INVOKE.SET_ENABLED, (e, enabled: unknown) => {
+    // Account capability does not identify the local page making a grant.
+    // This rejects foreign frames; it is not proof of a human click within
+    // a compromised app renderer.
+    assertTrustedAppRendererEvent(e);
+    return gated(handleSetEnabled)(deps, enabled);
+  });
   ipcMain.handle(DEVICE_LINK_INVOKE.SET_KEEP_AWAKE, (_e, enabled: unknown) =>
     handleSetKeepAwake(deps, enabled),
   );
-  ipcMain.handle(DEVICE_LINK_INVOKE.SET_DEVICE_CONTROL_ENABLED, (_e, payload: unknown) => {
+  ipcMain.handle(DEVICE_LINK_INVOKE.SET_DEVICE_CONTROL_ENABLED, (e, payload: unknown) => {
+    assertTrustedAppRendererEvent(e);
     requireDeviceLinkCapability();
     const p = (payload ?? {}) as { deviceId?: unknown; enabled?: unknown };
     return handleSetDeviceControlEnabled(deps, p.deviceId, p.enabled);
@@ -1144,6 +1811,11 @@ export function registerDeviceLinkIpc(deps: DeviceLinkIpcDeps = defaultDeps()): 
     DEVICE_LINK_INVOKE.LIST_DEVICES,
     gated(() => handleListDevices(deps)),
   );
+  ipcMain.handle(DEVICE_LINK_INVOKE.GET_PEER_LINKS, (e) => {
+    // 新增的特权只读(本账号设备的链路拓扑):先拒外来 frame,再看账号能力。
+    assertTrustedAppRendererEvent(e);
+    return gated(() => handleGetPeerLinks(deps))();
+  });
   ipcMain.handle(DEVICE_LINK_INVOKE.RENAME_DEVICE, (_e, payload: unknown) => {
     requireDeviceLinkCapability();
     const p = (payload ?? {}) as { deviceId?: unknown; name?: unknown };
@@ -1154,20 +1826,88 @@ export function registerDeviceLinkIpc(deps: DeviceLinkIpcDeps = defaultDeps()): 
     const p = (payload ?? {}) as { deviceId?: unknown };
     return handleDeleteDevice(deps, p.deviceId);
   });
-  ipcMain.handle(DEVICE_LINK_INVOKE.OPEN_LINK, (_e, payload: unknown) => {
+  ipcMain.handle(DEVICE_LINK_INVOKE.OPEN_LINK, (e, payload: unknown) => {
     requireDeviceLinkCapability();
     const p = (payload ?? {}) as { deviceId?: unknown };
-    return handleOpenLink(deps, p.deviceId);
+    return handleOpenLink(diagnostics.forWindow(deps, e.sender.id), p.deviceId);
   });
   ipcMain.handle(DEVICE_LINK_INVOKE.CLOSE_LINK, (_e, payload: unknown) => {
     requireDeviceLinkCapability();
     const p = (payload ?? {}) as { deviceId?: unknown };
     return handleCloseLink(deps, p.deviceId);
   });
-  ipcMain.handle(DEVICE_LINK_INVOKE.INVOKE, (_e, payload: unknown) => {
+  ipcMain.handle(DEVICE_LINK_INVOKE.INVOKE, (e, payload: unknown) => {
     requireDeviceLinkCapability();
-    const p = (payload ?? {}) as { deviceId?: unknown; channel?: unknown; args?: unknown };
-    return handleInvoke(deps, p.deviceId, p.channel, p.args);
+    const p = (payload ?? {}) as { deviceId?: unknown; channel?: unknown; args?: unknown; scheduling?: unknown };
+    if (isRemoteSkillApproval(p.channel, p.args)) throwIpcError('PERMISSION_DENIED', 'Skill approval requires the native confirmation');
+    if (typeof p.deviceId === 'string' && parseProviderShareAgentDeviceId(p.deviceId)) {
+      assertTrustedAppRendererEvent(e);
+      return handleProviderShareInvoke(deps, p.deviceId, p.channel, p.args);
+    }
+    if (p.channel === 'maker:review:start') {
+      assertTrustedAppRendererEvent(e);
+      return withOutboundReviewConfirmation(
+        (items) => confirmReviewArtifacts(e, items),
+        () => handleInvoke(diagnostics.forWindow(deps, e.sender.id), p.deviceId, p.channel, p.args),
+      );
+    }
+    const interactiveAttachmentSend = ['maker:send', 'maker:steer', 'maker:input:enqueue', 'maker:input:steer', 'maker:input:update-content'].includes(String(p.channel))
+      && !(p.scheduling && typeof p.scheduling === 'object' && 'background' in p.scheduling && p.scheduling.background === true);
+    if (interactiveAttachmentSend) {
+      assertTrustedAppRendererEvent(e);
+      const owner = getActiveAppSession();
+      const transfer = new AbortController();
+      const cancel = () => transfer.abort();
+      const frame = e.senderFrame;
+      const targetWindow = BrowserWindow.fromWebContents(e.sender);
+      const assertCurrent = () => {
+        const current = getActiveAppSession();
+        if (transfer.signal.aborted || isAppSessionBoundaryPending() || !owner.dataOwnerId
+          || current.dataOwnerId !== owner.dataOwnerId || current.generation !== owner.generation
+          || e.sender.isDestroyed() || !frame || frame.detached || e.sender.mainFrame !== frame
+          || !targetWindow || targetWindow.isDestroyed()) {
+          throwIpcError('PERMISSION_DENIED', 'Attachment confirmation is no longer current');
+        }
+        assertTrustedAppRendererEvent(e);
+      };
+      const scopedDeps = diagnostics.forWindow(deps, e.sender.id);
+      // This guard also runs immediately before final message dispatch, after all file awaits.
+      const guardedDeps: DeviceLinkIpcDeps = {
+        ...scopedDeps,
+        invoke: (...args) => {
+          assertCurrent();
+          if (args[1] === p.channel) releaseSourceFileAccessUploads();
+          return scopedDeps.invoke(...args);
+        },
+      };
+      const unsubscribe = onAppSessionInvalidated(cancel);
+      e.sender.on('destroyed', cancel);
+      const onNavigation = (_event: unknown, _url: string, _inPlace: boolean, isMainFrame: boolean) => {
+        if (isMainFrame) cancel();
+      };
+      e.sender.on('did-start-navigation', onNavigation);
+      return withSourceFileAccessRecovery({
+        assertCurrent,
+        signal: transfer.signal,
+        selectFile: async (source) => {
+          assertCurrent();
+          const selected = await dialog.showOpenDialog(targetWindow!, {
+            title: t('attachmentAccessConfirmation.title'),
+            message: t('attachmentAccessConfirmation.message'),
+            buttonLabel: t('attachmentAccessConfirmation.button'),
+            defaultPath: source,
+            properties: ['openFile'],
+          });
+          assertCurrent();
+          return selected.canceled || selected.filePaths.length !== 1 ? null : selected.filePaths[0];
+        },
+      }, () => handleInvoke(guardedDeps, p.deviceId, p.channel, p.args, p.scheduling)).finally(() => {
+        unsubscribe();
+        e.sender.removeListener('destroyed', cancel);
+        e.sender.removeListener('did-start-navigation', onNavigation);
+      });
+    }
+    return handleInvoke(diagnostics.forWindow(deps, e.sender.id), p.deviceId, p.channel, p.args, p.scheduling);
   });
   // 多窗口订阅引用计数:每个发起订阅的窗口(WebContents)挂一次 'destroyed' 清理,
   // 窗口关闭时释放它持有的全部引用,聚合出降零 topics 才向 relay 发 unsubscribe
@@ -1182,8 +1922,13 @@ export function registerDeviceLinkIpc(deps: DeviceLinkIpcDeps = defaultDeps()): 
       for (const { deviceId, topics } of recordWindowGone(windowId)) {
         // 窗口已销毁、无 ref 可恢复 → 用有限退避主动重试,堵住 unsubscribe 一次失败后被控端
         // 对已无 UI 订阅的 topic 持续推送的泄漏(见 retryUnsubscribeAfterWindowGone)。
-        if (topics.length > 0)
-          void retryUnsubscribeAfterWindowGone(deps.unsubscribe, deviceId, topics);
+        if (topics.length > 0) {
+          void retryUnsubscribeAfterWindowGone(
+            diagnostics.forWindow(deps, windowId).unsubscribe,
+            deviceId,
+            topics,
+          );
+        }
       }
     });
   };
@@ -1191,24 +1936,39 @@ export function registerDeviceLinkIpc(deps: DeviceLinkIpcDeps = defaultDeps()): 
     requireDeviceLinkCapability();
     const p = (payload ?? {}) as { deviceId?: unknown; topics?: unknown };
     attachWindowCleanup(e.sender);
-    return handleSubscribe(deps, p.deviceId, p.topics, e.sender.id);
+    return handleSubscribe(diagnostics.forWindow(deps, e.sender.id), p.deviceId, p.topics, e.sender.id);
   });
   ipcMain.handle(DEVICE_LINK_INVOKE.UNSUBSCRIBE, (e, payload: unknown) => {
     requireDeviceLinkCapability();
     const p = (payload ?? {}) as { deviceId?: unknown; topics?: unknown };
-    return handleUnsubscribe(deps, p.deviceId, p.topics, e.sender.id);
+    return handleUnsubscribe(
+      diagnostics.forWindow(deps, e.sender.id), p.deviceId, p.topics, e.sender.id,
+    );
   });
-  ipcMain.handle(DEVICE_LINK_INVOKE.DISCONNECT_ALL, () => {
+  ipcMain.handle(DEVICE_LINK_INVOKE.DISCONNECT_ALL, (e) => {
+    assertTrustedAppRendererEvent(e);
     requireDeviceLinkCapability();
     resetSubscriptionRefcount(); // 整体断开 → 清空引用,后续重连各窗口重订阅
     return handleDisconnectAll(deps);
   });
-  ipcMain.handle(DEVICE_LINK_INVOKE.REVOKE, (_e, payload: unknown) => {
+  ipcMain.handle(DEVICE_LINK_INVOKE.REVOKE, (e, payload: unknown) => {
+    assertTrustedAppRendererEvent(e);
     requireDeviceLinkCapability();
     const p = (payload ?? {}) as { deviceId?: unknown };
     return handleRevoke(deps, p.deviceId);
   });
-  ipcMain.handle(DEVICE_LINK_INVOKE.RESTORE, (_e, payload: unknown) => {
+  ipcMain.handle(DEVICE_LINK_INVOKE.SET_MODEL_USE, async (e, payload: unknown) => {
+    assertTrustedAppRendererEvent(e);
+    requireDeviceLinkCapability();
+    const p = (payload ?? {}) as { deviceId?: unknown; allowed?: unknown };
+    if (typeof p.deviceId !== 'string' || !p.deviceId.trim() || typeof p.allowed !== 'boolean') {
+      throwIpcError('INVALID_PARAMS', 'deviceId and allowed are required');
+    }
+    await deps.setModelUse(p.deviceId, p.allowed);
+    return { ok: true };
+  });
+  ipcMain.handle(DEVICE_LINK_INVOKE.RESTORE, (e, payload: unknown) => {
+    assertTrustedAppRendererEvent(e);
     requireDeviceLinkCapability();
     const p = (payload ?? {}) as { deviceId?: unknown };
     return handleRestore(deps, p.deviceId);
@@ -1238,6 +1998,8 @@ export function registerDeviceLinkIpc(deps: DeviceLinkIpcDeps = defaultDeps()): 
       expectedInvalidation?: unknown;
       expectedOwnerToken?: unknown;
       expectedAccountCounter?: unknown;
+      historyView?: unknown;
+      mergeListMessage?: unknown;
     };
     return handleMirrorCachePutMessages(
       getMirrorCache(),
@@ -1248,6 +2010,8 @@ export function registerDeviceLinkIpc(deps: DeviceLinkIpcDeps = defaultDeps()): 
       p.expectedInvalidation,
       p.expectedOwnerToken,
       p.expectedAccountCounter,
+      p.historyView,
+      p.mergeListMessage,
     );
   });
   ipcMain.handle(DEVICE_LINK_INVOKE.MIRROR_CACHE_GET_SESSION_LIST, (e) => {

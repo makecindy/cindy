@@ -25,12 +25,14 @@
 
 import type Database from 'better-sqlite3';
 import { drizzle, type BetterSQLite3Database } from 'drizzle-orm/better-sqlite3';
-import { app, dialog, BrowserWindow } from 'electron';
-import path from 'node:path';
+import { localDbHostUi } from './hostUi.js';
+import { userDataPath } from '../userDataPath.js';
+import { isHostClientMode } from '../host-client-mode.js';
+import { isCindyPersonalRuntime } from '../cindy-make/versionRuntimeIdentity.js';
 import fs from 'node:fs';
-import { BRAND_IDENTITY } from '@cindy/maker-shared/brand-identity';
 
 import { createBetterSqliteDatabase } from './betterSqliteFactory';
+import { ensureCjkFtsTempTriggersInstalled } from './registerCjkSeg';
 import {
   getDrizzleDir,
   prepareBackupDiskSpace,
@@ -44,7 +46,7 @@ import { reconcileKnownEquivalentMigrationHashes } from './schemaDriftCompatibil
 import { cleanupStaleOrcaLeadIndex, hasStaleOrcaLeadIndex } from './orcaStaleIndexCleanup';
 import { reconcileStrandedOrcaLeads } from './orcaStrandedLeadReconcile';
 import { initializeCodexHistoryPromptState } from './codexHistoryPromptInit';
-import { dialogueWorkspaceRootDir } from './dialogueWorkspace';
+import { dialogueWorkspaceRoots } from './dialogueWorkspace';
 import { repairManagedDialogueWorkspaceSessions } from './managedDialogueWorkspaceRepair';
 import * as schema from './schema';
 import { loadSqliteVec, resetSqliteVecState } from './sqliteVecLoader';
@@ -54,7 +56,6 @@ import {
   readSchemaVersion,
 } from './migrationRunner';
 import {
-  acquireSchemaMigrationWriterLease,
   acquireSchemaStartupLease,
   SchemaMigrationReaderLeaseLifecycle,
   type SchemaMigrationLease,
@@ -65,9 +66,12 @@ import {
   buildSharedDbCompatibilityMessage,
 } from './sharedDbCompatibilityMessage';
 import { shouldShowNativeFatalDialog, type EnsureReadyErrorCode } from './fatalDialogPolicy';
+import { deferReleaseUntilDbSlimmingWorkerTermination } from './dbSlimmingWorkerClient';
+import { ownerDatabasePath, prepareModelDefaultsProfile } from './modelDefaultsProfile';
 
 import { createLogger } from '../logger';
 import { recordDesktopDevLocalDbStartupResult } from '../devStartupStatus';
+import { localDbText } from './hostUiText.js';
 
 const log = createLogger('localDb');
 
@@ -104,7 +108,11 @@ export function getCurrentUserId(): string | null {
 }
 
 function dbPath(userId: string): string {
-  return path.join(app.getPath('userData'), `${BRAND_IDENTITY.dbFilePrefix}-${userId}.db`);
+  return ownerDatabasePath(userDataPath(), userId);
+}
+
+export function getDbPathForUser(userId: string): string {
+  return dbPath(userId);
 }
 
 export type EnsureReadyResult =
@@ -126,6 +134,17 @@ export type EnsureReadyResult =
  * - 任何不可恢复故障 → 弹 OS 对话框 + return `{ ready: false, error }`，由 renderer 阻断 navigate
  */
 export async function ensureReady(userId: string): Promise<EnsureReadyResult> {
+  // One writer per profile: the host holds the runtime and schema leases, so a
+  // local open here would race it. In client mode, confirm host readiness and
+  // report ready without opening a local SQLite database or creating a local DbClient.
+  if (isHostClientMode()) {
+    log.info(JSON.stringify({ event: 'localDb.ensureReady.hostClientMode', userId }));
+    if (!userId || typeof userId !== 'string') {
+      return { ready: false, error: { code: 'DB_INIT_FAILED', message: 'invalid userId' } };
+    }
+    _currentUserId = userId;
+    return { ready: true };
+  }
   if (!userId || typeof userId !== 'string') {
     return { ready: false, error: { code: 'DB_INIT_FAILED', message: 'invalid userId' } };
   }
@@ -149,7 +168,7 @@ export async function ensureReady(userId: string): Promise<EnsureReadyResult> {
   }
 
   const filePath = dbPath(userId);
-  const passiveSharedUserData = !app.isPackaged && process.env.XDT_PASSIVE_SHARED_USER_DATA === '1';
+  const passiveSharedUserData = (isCindyPersonalRuntime() && fs.existsSync(filePath)) || (!localDbHostUi().isPackaged() && process.env.XDT_PASSIVE_SHARED_USER_DATA === '1');
   // A packaged release may be launched while a shared passive dev instance is still
   // open.  The passive reader lease must continue to block schema writes, but an
   // already-compatible database does not need any startup DDL; let the release use
@@ -159,35 +178,34 @@ export async function ensureReady(userId: string): Promise<EnsureReadyResult> {
   let startupWriterLease: SchemaMigrationLease | null = null;
   let readerLeaseAcquiredThisCall = false;
 
-  const startupLease = acquireSchemaStartupLease({
+  const startupLease = await acquireSchemaStartupLease({
     dbFilePath: filePath,
-    packaged: app.isPackaged,
+    packaged: localDbHostUi().isPackaged(),
     sharedPassive: passiveSharedUserData,
     readerLifecycle: schemaMigrationReaderLeaseLifecycle,
   });
   if (!startupLease.acquired) {
-    const readerHint = startupLease.activeReaderCount
-      ? `（当前有 ${startupLease.activeReaderCount} 个 passive 实例）`
-      : '';
-    const waitingForWriter = startupLease.reason === 'writer-active';
-    const message = waitingForWriter
-      ? '另一个实例正在执行数据库 schema migration，当前实例无法同时启动维护。请等待迁移完成后重试，或改用 --isolated 启动独立数据。'
-      : `当前不能执行数据库 schema 启动维护${readerHint}。` +
-        '请先关闭共享该 userData 的 passive dev 后重试，或让这些实例使用 --isolated。';
+    const message = localDbText(`localDbFatal.schemaLease.${startupLease.reason}`);
+    log.warn(JSON.stringify({ event: 'localDb.schemaLease.blocked', reason: startupLease.reason }));
     showFatalDialog(
-      waitingForWriter ? '数据库 schema 正在维护' : '数据库 schema 正被其它实例使用',
+      localDbText('localDbFatal.schemaLease.title'),
       message,
-      'MIGRATE_FAILED',
+      'DB_SCHEMA_LOCKED',
     );
-    return { ready: false, error: { code: 'MIGRATE_FAILED', message } };
+    return { ready: false, error: { code: 'DB_SCHEMA_LOCKED', message } };
   }
   const schemaMaintenanceReadOnly = startupLease.kind === 'reader' && !passiveSharedUserData;
   readerLeaseAcquiredThisCall = startupLease.kind === 'reader' && startupLease.newlyAcquired;
   if (startupLease.kind === 'writer') startupWriterLease = startupLease.lease;
 
-  const releaseSchemaLeasesAfterFailure = (): void => {
-    startupWriterLease?.release();
-    startupWriterLease = null;
+  const releaseSchemaLeasesAfterFailure = (error?: unknown): void => {
+    if (startupWriterLease) {
+      const heldWriterLease = startupWriterLease;
+      if (!deferReleaseUntilDbSlimmingWorkerTermination(error, () => heldWriterLease.release())) {
+        heldWriterLease.release();
+      }
+      startupWriterLease = null;
+    }
     if (readerLeaseAcquiredThisCall) {
       schemaMigrationReaderLeaseLifecycle.release();
     }
@@ -201,21 +219,58 @@ export async function ensureReady(userId: string): Promise<EnsureReadyResult> {
     }),
   );
 
+  let maintenance: { handled: boolean; originalDatabaseReady: boolean };
   try {
+    const runSlimming = localDbHostUi().runStartupSlimming;
+    maintenance = runSlimming
+      // The headless host has no utility-process slimming worker yet; skipping
+      // only defers maintenance, it never fabricates a recovered database.
+      ? await runSlimming({
+          userDataDir: userDataPath(),
+          dbFilePath: filePath,
+          ownerId: userId,
+          leaseKind: startupLease.kind,
+        })
+      : { handled: false, originalDatabaseReady: true };
+  } catch (error) {
+    const detail = error instanceof Error ? error.message : String(error);
+    const message = localDbText('localDbFatal.databaseCleanup.interruptedDescription');
+    log.error('database cleanup startup failed unexpectedly', { detail });
+    releaseSchemaLeasesAfterFailure(error);
+    showFatalDialog(localDbText('localDbFatal.databaseCleanup.interruptedTitle'), message, 'MIGRATE_FAILED');
+    return { ready: false, error: { code: 'MIGRATE_FAILED', message } };
+  }
+  if (maintenance.handled && startupLease.kind === 'writer') {
+    resetSqliteVecState();
+  }
+  if (!maintenance.originalDatabaseReady) {
+    const message = localDbText('localDbFatal.databaseCleanup.recoveryFailedDescription');
+    showFatalDialog(
+      localDbText('localDbFatal.databaseCleanup.recoveryFailedTitle'),
+      message,
+      'DB_CORRUPT_NO_BACKUP',
+    );
+    releaseSchemaLeasesAfterFailure();
+    return { ready: false, error: { code: 'DB_CORRUPT_NO_BACKUP', message } };
+  }
+
+  try {
+    if (startupLease.kind === 'writer') prepareModelDefaultsProfile(filePath);
     _db = openWithPragmas(filePath);
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
     const errCode = (err as { code?: string }).code ?? '';
     if (errCode === 'SQLITE_CORRUPT' || /corrupt/i.test(message)) {
       if (passiveSharedUserData || schemaMaintenanceReadOnly) {
-        const readOnlyStartupMessage =
-          '共享数据库当前由其它实例使用，Cindy 不会在其运行期间自动恢复或修改 schema。' +
-          '请关闭共享该 userData 的 passive 实例后重试，或改用 --isolated。';
-        showFatalDialog('共享数据库无法恢复', readOnlyStartupMessage, 'DB_CORRUPT_NO_BACKUP');
+        // 经 i18n 取文案：该 message 会原样带回 renderer 的 LocalDbFatalScreen（retry-local-db 视图），
+        // 硬编码中文会在 en/ja/ko/zh-TW 下与已本地化的标题和按钮混排。
+        const readOnlyStartupMessage = localDbText('localDbFatal.passiveCorrupt.description');
+        // 本进程是只读/passive，从未检查过备份：不能报「无可用备份」，按「被占用，关闭后重试」处理。
+        showFatalDialog(localDbText('localDbFatal.passiveCorrupt.title'), readOnlyStartupMessage, 'DB_SCHEMA_LOCKED');
         releaseSchemaLeasesAfterFailure();
         return {
           ready: false,
-          error: { code: 'DB_CORRUPT_NO_BACKUP', message: readOnlyStartupMessage },
+          error: { code: 'DB_SCHEMA_LOCKED', message: readOnlyStartupMessage },
         };
       }
       const restored = tryRestoreWithFallback(filePath);
@@ -237,13 +292,7 @@ export async function ensureReady(userId: string): Promise<EnsureReadyResult> {
         source: restored.source,
         backupMtime: restored.mtime.toISOString(),
       };
-      for (const w of BrowserWindow.getAllWindows()) {
-        try {
-          w.webContents.send('local-db:corruption-restored', payload);
-        } catch {
-          /* renderer 已销毁等 */
-        }
-      }
+      localDbHostUi().broadcast('local-db:corruption-restored', payload);
     } else {
       showFatalDialog('无法初始化本地数据库', message, 'DB_INIT_FAILED');
       releaseSchemaLeasesAfterFailure();
@@ -366,7 +415,9 @@ export async function ensureReady(userId: string): Promise<EnsureReadyResult> {
   }
 
   try {
-    const repaired = repairManagedDialogueWorkspaceSessions(db, dialogueWorkspaceRootDir());
+    const repaired = dialogueWorkspaceRoots().reduce(
+      (count, root) => count + repairManagedDialogueWorkspaceSessions(db, root), 0,
+    );
     if (repaired > 0) {
       log.info(
         JSON.stringify({
@@ -408,6 +459,12 @@ export async function ensureReady(userId: string): Promise<EnsureReadyResult> {
   // 见 orcaStrandedLeadReconcile.ts。同样必须在 migration / drift-repair 之后跑(依赖 orca_teams)。
   reconcileStrandedOrcaLeads(db);
 
+  // #3841：openWithPragmas 时三表可能还不存在（全新库），ensure 会早退。
+  // migration / drift-repair 建完表后必须再收口一次，否则 in-proc 回退走这条
+  // 主连接写 messages 时，持久触发器因 cjk_seg 已注册而跳过、TEMP 又不在，
+  // 增量消息继续漏 FTS。已挂则是 no-op。
+  ensureCjkFtsTempTriggersInstalled(db);
+
   // 启动 optimize: 0x10002 mask 会强制对从未 ANALYZE 过的表跑一次,
   // 之后挂 24h 周期任务按需更新统计。详见 runOptimize 注释。
   runOptimize(0x10002);
@@ -418,22 +475,38 @@ export async function ensureReady(userId: string): Promise<EnsureReadyResult> {
 }
 
 function openWithPragmas(filePath: string): Database.Database {
+  // 顺序硬约束（#3841）：`temp_store` 一旦变更会立即删除连接上所有已存在的 TEMP
+  // 对象（SQLite 文档化语义），而工厂内部会注册 cjk_seg 并挂 TEMP 触发器。
+  // 理想顺序是「pragma → 工厂」，但工厂承担 native binding 解析与权限收紧，
+  // 不宜绕开；故保持「工厂 → pragma」，由 ensureCjkFtsTempTriggersInstalled
+  // 在 pragma 清掉刚挂的触发器后重挂收口。新增 pragma 时禁止挪到收口之后。
   const db = createBetterSqliteDatabase(filePath);
-  db.pragma('journal_mode = WAL');
-  db.pragma('foreign_keys = ON');
-  // 性能/并发相关 (社区生产推荐组合):
-  //   synchronous=NORMAL  WAL 下安全; fsync 大幅减少, 仅掉电时可能丢最近一笔事务,
-  //                       进程崩溃不丢
-  //   temp_store=MEMORY   临时表/排序/中间结果走 RAM
-  //   mmap_size=256MB     读热数据零拷贝, 降低系统调用开销
-  //   cache_size=-65536   page cache 64MB (负值=KB)
-  //   busy_timeout=5000   多 writer 时自动重试而非立刻抛 SQLITE_BUSY
-  db.pragma('synchronous = NORMAL');
-  db.pragma('temp_store = MEMORY');
-  db.pragma('mmap_size = 268435456');
-  db.pragma('cache_size = -65536');
-  db.pragma('busy_timeout = 5000');
-  return db;
+  try {
+    db.pragma('journal_mode = WAL');
+    db.pragma('foreign_keys = ON');
+    // 性能/并发相关 (社区生产推荐组合):
+    //   synchronous=NORMAL  WAL 下安全; fsync 大幅减少, 仅掉电时可能丢最近一笔事务,
+    //                       进程崩溃不丢
+    //   temp_store=MEMORY   临时表/排序/中间结果走 RAM
+    //   mmap_size=256MB     读热数据零拷贝, 降低系统调用开销
+    //   cache_size=-65536   page cache 64MB (负值=KB)
+    //   busy_timeout=5000   多 writer 时自动重试而非立刻抛 SQLITE_BUSY
+    db.pragma('synchronous = NORMAL');
+    db.pragma('temp_store = MEMORY');
+    db.pragma('mmap_size = 268435456');
+    db.pragma('cache_size = -65536');
+    db.pragma('busy_timeout = 5000');
+    // temp_store 切换刚清掉了工厂挂的 TEMP 触发器；收口重挂（#3841）。
+    ensureCjkFtsTempTriggersInstalled(db);
+    return db;
+  } catch (err) {
+    try {
+      db.close();
+    } catch {
+      // 初始化失败后关闭连接是 best-effort，原始错误更重要。
+    }
+    throw err;
+  }
 }
 
 /**
@@ -552,7 +625,7 @@ async function handleSchemaDrift(filePath: string): Promise<void> {
       );
     }
 
-    if (app.isPackaged) {
+    if (localDbHostUi().isPackaged()) {
       if (drift.status === 'drifted') {
         log.warn(
           JSON.stringify({
@@ -567,13 +640,7 @@ async function handleSchemaDrift(filePath: string): Promise<void> {
         const payload = {
           driftedFiles: drift.entries.map((e) => e.fileName),
         };
-        for (const w of BrowserWindow.getAllWindows()) {
-          try {
-            w.webContents.send('local-db:schema-drift-warning', payload);
-          } catch {
-            /* renderer 已销毁 */
-          }
-        }
+        localDbHostUi().broadcast('local-db:schema-drift-warning', payload);
       }
       return;
     }
@@ -687,11 +754,15 @@ function promptDevNukeOnResidual(
       .slice(0, 10)
       .map((r) => `[${r.table}] ${r.kind} — ${r.detail}`)
       .join('\n');
-    const choice = dialog.showMessageBoxSync({
-      type: 'warning',
-      title: '本地 DB schema 仍有残留不一致',
-      message: '反射自愈无法修复以下不一致(改类型 / 删列 / 缺 NOT NULL 列等):',
-      detail: `${detail}\n\n选「Nuke 重建」会把当前 DB 文件改名为 .bak.nuke-<时间>(永久保留),下次启动建空库重跑迁移。\n选「忽略继续」会带着不一致启动,业务层大概率会报 SqliteError —— 仅推荐用于排查。`,
+    log.warn(
+      JSON.stringify({
+        event: 'localDb.schemaDrift.dev.residual',
+        title: '本地 DB schema 仍有残留不一致',
+        detail,
+        note: '反射自愈无法修复这些不一致；Nuke 会把当前 DB 改名为 .bak.nuke-<时间> 并重建。',
+      }),
+    );
+    const choice = localDbHostUi().showMessageBoxSync({
       buttons: ['Nuke 重建', '忽略继续'],
       defaultId: 0,
       cancelId: 1,
@@ -721,14 +792,12 @@ function promptDevNukeOnResidual(
         nukePath,
       }),
     );
-    dialog.showMessageBoxSync({
-      type: 'info',
-      title: '本地 DB 已 nuke',
-      message: `当前 DB 已重命名为:\n${nukePath}\n\n请重启应用,下次启动会建一个空库并跑全套 migration。`,
-      buttons: ['好的'],
-    });
+    localDbHostUi().showInfo(
+      '本地 DB 已 nuke',
+      `当前 DB 已重命名为:\n${nukePath}\n\n请重启应用,下次启动会建一个空库并跑全套 migration。`,
+    );
     // 强制退出 —— 后续模块若继续跑会 getRawDb() 抛 not ready,体验更糟
-    app.exit(0);
+    localDbHostUi().exitApp(0);
   } catch (err) {
     log.error(
       JSON.stringify({
@@ -754,14 +823,7 @@ function showFatalDialog(title: string, detail: string, code: EnsureReadyErrorCo
     return;
   }
   try {
-    dialog.showMessageBoxSync({
-      type: 'error',
-      title,
-      message: title,
-      detail: `${detail}\n\n请重启应用，或在系统资源管理器中打开数据目录手动处理。`,
-      buttons: ['好的'],
-      defaultId: 0,
-    });
+    localDbHostUi().reportFatal(title, detail, code);
   } catch (err) {
     log.error('showFatalDialog failed', err);
   }

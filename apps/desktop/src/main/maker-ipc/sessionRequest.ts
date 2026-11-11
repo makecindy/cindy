@@ -1,4 +1,5 @@
-import path from 'node:path';
+import { isSafeSessionPathSegment } from '../sessionIds.js';
+import { isLibraryExtraDirSlot } from './extraDirsValidator.js';
 
 import type { AgentKind, CreateSessionOptions, WorkspaceKind } from '@cindy/maker-core';
 
@@ -10,11 +11,6 @@ import { requireObject, requireString, throwIpcError } from '../utils/ipcValidat
  * basename so a remote `maker:create-session` caller can't use `..` / path separators /
  * absolute paths in `id` to escape that root and bypass the remote working-directory guard.
  */
-function isSafePathSegment(value: string): boolean {
-  if (value === '.' || value === '..') return false;
-  if (value.includes('/') || value.includes('\\') || value.includes('\0')) return false;
-  return path.basename(value) === value;
-}
 
 export interface MakerSessionCreateOpts extends CreateSessionOptions {
   orcaRole?: 'lead' | 'worker' | null;
@@ -41,11 +37,15 @@ export interface MakerSessionCreateOpts extends CreateSessionOptions {
    * main 端仍统一校验，防 IPC 直调 / 老 DB 残留 / bug 数据。
    */
   extraDirs?: string[];
+  /** 用户逐目录明确授予的附加可读写目录；不从 extraDirs 推导。 */
+  writableDirs?: string[];
   /**
    * 远端目标 host id。非空表示 session 跑在远端机器上，workingDir 必须是远端路径。
    * 目前仅 Codex 支持，Claude session 会忽略。
    */
   remoteHostId?: string;
+  /** Agent 在同账号另一台电脑上运行时那台电脑的 deviceId(任务与文件仍在本机)。 */
+  agentDeviceId?: string;
   /**
    * per-session 来源(供应商)显式选择。device-link 远程 create 由控制端透传被控端供应商 id
    * (见 deviceLinkCreateArgs);bootstrapSession 据此把 sessions.provider_id 落库,使新会话首个
@@ -94,7 +94,7 @@ function readDialogueSessionId(value: unknown, createSessionId: (() => string) |
   if (typeof value !== 'string' || value.trim() === '') {
     throwIpcError('INVALID_PARAMS', 'id must be a non-empty string');
   }
-  if (!isSafePathSegment(value)) {
+  if (!isSafeSessionPathSegment(value)) {
     throwIpcError('INVALID_PARAMS', 'id must be a safe path segment (no separators or ..)');
   }
   return value;
@@ -108,6 +108,13 @@ export function readCreateSessionOpts(
     throwIpcError('INVALID_PARAMS', 'createSession opts must be an object');
   }
   const body = requireObject(input, 'createSession opts');
+  if (body.planMode !== undefined && typeof body.planMode !== 'boolean') {
+    throwIpcError('INVALID_PARAMS', 'planMode must be a boolean');
+  }
+  if (Array.isArray(body.extraDirs) && body.extraDirs.some((dir) =>
+    typeof dir === 'string' && isLibraryExtraDirSlot(dir.trim()))) {
+    throwIpcError('INVALID_PARAMS', 'extraDirs must not contain Host-owned library slots');
+  }
   const agentKind = readAgentKind(body.agentKind);
   const model = requireString(body.model, 'model');
   const workspaceKind = readWorkspaceKind(body.workspaceKind);
@@ -120,7 +127,7 @@ export function readCreateSessionOpts(
   // 外部(含 device-link)可控的 session id 会被下游拼进磁盘路径(如 Pi 权限档
   // perm-<id>.json)。未校验的 `../../..` 之类 id 经 path.join 逃出 runtimeDir,writeFile
   // 可覆盖任意可写文件(codex review)。在边界统一限制为安全单段值;缺省(自动生成)放行。
-  if (typeof id === 'string' && id.length > 0 && !isSafePathSegment(id)) {
+  if (typeof id === 'string' && id.length > 0 && !isSafeSessionPathSegment(id)) {
     throwIpcError('INVALID_PARAMS', 'session id must be a safe path segment');
   }
   const workingDir = needsDialogueWorkspace
@@ -129,6 +136,15 @@ export function readCreateSessionOpts(
         deps.now ? deps.now() : Date.now(),
       )
     : requireString(body.workingDir, 'workingDir');
+  // Agent 运行在同账号另一台电脑上：只接受设备 id 形态的值，且不能与 SSH 远端同时使用。
+  if (body.agentDeviceId !== undefined && body.agentDeviceId !== null) {
+    if (typeof body.agentDeviceId !== 'string' || !/^[A-Za-z0-9_.:-]{1,128}$/.test(body.agentDeviceId)) {
+      throwIpcError('INVALID_PARAMS', 'agentDeviceId must be a device id');
+    }
+    if (typeof body.remoteHostId === 'string' && body.remoteHostId.trim()) {
+      throwIpcError('INVALID_PARAMS', 'agentDeviceId cannot be combined with remoteHostId');
+    }
+  }
   return {
     ...body,
     id,
@@ -155,4 +171,22 @@ export function withCreateSessionStderr(
     ...opts,
     vendorOptions: { ...vendorOptions, onStderrLine },
   };
+}
+
+export function createSessionStderrOptions(log: { warn(message: string): void }) {
+  return function buildCreateOptsWithStderr(o: MakerSessionCreateOpts) {
+    // 把 vendor 子进程 stderr 引到主进程日志,否则 "process exited with code 1" 之类
+    // 的失败信息会被默默丢掉。renderer 仍可以通过 vendorOptions 自定义,这里只在缺省时兜底。
+    return withCreateSessionStderr(o, (agentKind, line) =>
+      log.warn(`[${agentKind}/stderr] ${line}`),
+    );
+  };
+}
+
+export function isSessionRunningError(err: unknown): boolean {
+  if (!err || typeof err !== 'object') return false;
+  const code = (err as { code?: unknown }).code;
+  if (code === 'SESSION_RUNNING') return true;
+  const message = (err as { message?: unknown }).message;
+  return typeof message === 'string' && message.startsWith('SESSION_RUNNING:');
 }

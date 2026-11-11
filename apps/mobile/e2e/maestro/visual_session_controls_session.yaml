@@ -17,7 +17,7 @@ appId: ${APP_ID}
     id: "session.controlsToggle"
 - extendedWaitUntil:
     visible:
-      id: "session.menuSheet"
+      id: "session.menuUsageRow"
     timeout: 10000
 - assertVisible:
     id: "session.renameAction"
@@ -35,5 +35,34 @@ appId: ${APP_ID}
     id: "session.renameAction"
 - assertVisible:
     id: "session.renameInput"
+- assertVisible:
+    id: "session.renameButton"
+- assertVisible:
+    id: "session.renameCancelButton"
 - takeScreenshot:
     path: visual-session-controls-rename
+# Exercise real taps while the keyboard is up; an accessibility-visible editor
+# alone does not catch a footer that overflows its native sheet viewport.
+- tapOn:
+    id: "session.renameCancelButton"
+- assertNotVisible:
+    id: "session.renameInput"
+- tapOn:
+    id: "session.renameAction"
+- tapOn:
+    id: "session.renameButton"
+- assertNotVisible:
+    id: "session.renameInput"
+- tapOn:
+    id: "session.renameAction"
+- hideKeyboard
+- assertVisible:
+    id: "session.renameButton"
+- assertVisible:
+    id: "session.renameCancelButton"
+- takeScreenshot:
+    path: visual-session-controls-rename-keyboard-hidden
+- tapOn:
+    id: "session.renameCancelButton"
+- assertNotVisible:
+    id: "session.renameInput"

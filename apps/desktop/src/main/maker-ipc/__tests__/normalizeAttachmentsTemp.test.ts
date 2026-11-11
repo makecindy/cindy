@@ -1,0 +1,715 @@
+import { promises as fs } from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
+
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+
+const tempRoot = vi.hoisted(() => ({ value: '' }));
+
+vi.mock('electron', () => ({
+  app: { getPath: () => tempRoot.value },
+}));
+vi.mock('../../imageCacheStore.desktop.js', () => ({
+  resolveSafe: vi.fn(),
+}));
+vi.mock('../../cindy-media/blobStore.desktop.js', () => ({
+  resolveSafe: vi.fn(),
+  supportedMime: vi.fn(),
+  mimeForExt: vi.fn(),
+}));
+vi.mock('../../cindy-media/ledger.js', () => ({
+  removeRefById: vi.fn(),
+  deleteZeroRefBlobRecord: vi.fn(),
+}));
+vi.mock('../../cindy-media/ingest.js', () => ({ ingestMedia: vi.fn() }));
+vi.mock('../../device-link/mediaTransfer.desktop.js', () => ({
+  downloadToFile: vi.fn(),
+  removeRemote: vi.fn(),
+}));
+vi.mock('../../logger.js', () => ({
+  createLogger: () => ({ info: vi.fn(), debug: vi.fn(), warn: vi.fn(), error: vi.fn() }),
+}));
+
+import {
+  cleanupOrphanedTempAttachments,
+  cleanupSessionTempAttachments,
+  configureTempAttachmentOwner,
+  materializeDirectSendOssAttachments,
+  materializeQueuedOssAttachmentsDeferred,
+  normalizeUserMessage,
+  tempAttachmentRootPath,
+  writeTempFile,
+} from '../normalizeAttachments.desktop.js';
+import * as imageCacheStore from '../../imageCacheStore.desktop.js';
+import * as cindyMediaBlobStore from '../../cindy-media/blobStore.desktop.js';
+import { ingestMedia } from '../../cindy-media/ingest.js';
+import { downloadToFile, removeRemote } from '../../device-link/mediaTransfer.desktop.js';
+import { buildAttachmentOssRef } from '../../../shared/attachmentOssRef.js';
+import { configureMailAttachmentHost, prepareMailAttachmentSelection } from '../../cindy-brain/mailAttachmentUpload.js';
+import { createAttachmentNormalizer, type AttachmentNormalizerIO } from '../normalizeAttachments.js';
+import { isRemoteAttachmentRef, parseRemoteAttachmentRef } from '../../device-link/remoteAttachment.js';
+
+const tempDirs: string[] = [];
+
+beforeEach(async () => {
+  vi.clearAllMocks();
+  tempRoot.value = await fs.mkdtemp(path.join(os.tmpdir(), 'cindy-review-inline-test-'));
+  tempDirs.push(tempRoot.value);
+  configureMailAttachmentHost({ writeTempFile, materializeDirectSendOssAttachments });
+  configureTempAttachmentOwner({
+    instanceId: 'normalize-attachments-test-owner',
+    processId: process.pid,
+  });
+});
+
+afterEach(async () => {
+  await Promise.all(tempDirs.splice(0).map((dir) => fs.rm(dir, { recursive: true, force: true })));
+});
+
+describe('inline attachment temporary files', () => {
+  // Unit: Host account switches may occur during preparation or before deferred
+  // cleanup. Existing tests use a single desktop store. Two isolated IO owners
+  // must retain their own writes, resolutions and rollback, even for one task.
+  it('binds attachment preparation and deferred cleanup to the captured IO owner', async () => {
+    const source = path.join(tempRoot.value, 'captured.png');
+    const secondSource = path.join(tempRoot.value, 'captured-second.png');
+    await fs.writeFile(source, Buffer.from([0x89, 0x50, 0x4e, 0x47]));
+    await fs.copyFile(source, secondSource);
+    const hash = 'a'.repeat(64);
+    const mediaUrl = `cindy-media://blobs/${hash}.png`;
+    const refs = { first: new Set<string>(), second: new Set<string>() };
+    let current: AttachmentNormalizerIO;
+    const makeIO = (owner: keyof typeof refs): AttachmentNormalizerIO => ({
+      imageCacheStore: {
+        resolveSafe: () => { throw new Error('unexpected legacy cache read'); },
+        copyFromPath: async () => { throw new Error('unexpected legacy cache write'); },
+        removeFile: async () => { throw new Error('unexpected legacy cache removal'); },
+      },
+      cindyMediaBlobStore: {
+        resolveSafe: () => ({ hash, absPath: path.join(tempRoot.value, owner, 'blob.png'), mimeType: 'image/png' }),
+        deleteBlobFile: vi.fn(async () => {}),
+        mimeForExt: () => 'image/png',
+        supportedMime: () => true,
+      },
+      cindyMediaLedger: {
+        removeRefById: vi.fn(async (id) => Number(refs[owner].delete(id))),
+        deleteZeroRefBlobRecord: vi.fn(async () => refs[owner].size === 0),
+      },
+      ingestMedia: vi.fn(async () => {
+        const id = `${owner}-${refs[owner].size}`;
+        refs[owner].add(id);
+        current = second;
+        return { hash, ext: '.png', mimeType: 'image/png', bytes: 4, url: mediaUrl, deduplicated: false, refIds: [id] };
+      }),
+      materializeRemoteAttachment: vi.fn(async (_ref, destination) => {
+        await fs.copyFile(source, destination);
+        current = second;
+      }),
+      removeRemote: vi.fn(async () => {}),
+    });
+    const first = makeIO('first');
+    const second = makeIO('second');
+    current = first;
+    const captureIO = vi.fn(() => current);
+    const normalizer = createAttachmentNormalizer({
+      ...second, getTempDir: () => tempRoot.value, isRemoteAttachmentRef, parseRemoteAttachmentRef, captureIO,
+    });
+    const item = { files: [source, secondSource].map(p => ({ category: 'image', ext: '.png', path: p, mimeType: 'image/png' })) };
+    const old = await normalizer.materializeQueuedOssAttachmentsDeferred('same-task', item);
+    expect(refs.first.size).toBe(2);
+    expect(refs.second.size).toBe(0);
+    const next = await normalizer.materializeQueuedOssAttachmentsDeferred('same-task', item);
+    expect(refs.second.size).toBe(2);
+    await old.cleanupBeforeAcceptance?.();
+    expect(refs.first.size).toBe(0);
+    expect(refs.second.size).toBe(2);
+    expect(second.cindyMediaLedger.removeRefById).not.toHaveBeenCalled();
+    expect(second.cindyMediaBlobStore.deleteBlobFile).not.toHaveBeenCalled();
+    await next.cleanupBeforeAcceptance?.();
+    expect(refs.second.size).toBe(0);
+    expect(captureIO).toHaveBeenCalledTimes(2);
+
+    current = first;
+    const normalized = await normalizer.normalizeUserMessage('same-task', {
+      type: 'user', content: [
+        { type: 'image', path: buildAttachmentOssRef({ ossKey: 'captured/image.png', mimeType: 'image/png' }) },
+        { type: 'image', path: mediaUrl },
+      ],
+    });
+    expect(normalized).toMatchObject({ content: [
+      { type: 'image' }, { path: path.join(tempRoot.value, 'first', 'blob.png') },
+    ] });
+    expect(first.materializeRemoteAttachment).toHaveBeenCalledTimes(1);
+    expect(first.removeRemote).toHaveBeenCalledWith('captured/image.png');
+    expect(second.removeRemote).not.toHaveBeenCalled();
+    expect(captureIO).toHaveBeenCalledTimes(3);
+    await normalizer.cleanupSessionTempAttachments('same-task');
+  });
+
+  // Unit, real isolated bytes: PR #6404 selected-file path disclosure/TOCTOU.
+  // Existing temp tests did not traverse the mail picker handoff. Replacing the
+  // selected source must not change the delivered file; rollback removes only
+  // the staged copy, and acceptance retains the existing session cleanup.
+  it('stages selected mail bytes without exposing or retaining the source path', async () => {
+    const source = path.join(tempRoot.value, 'personal-name.txt');
+    for (const inline of [false, true]) {
+      await fs.writeFile(source, 'selected');
+      const staged = await prepareMailAttachmentSelection(source, 'mail-selection', inline);
+      expect(staged.attachment.filename).toBe('personal-name.txt');
+      expect(staged.attachment.path).not.toBe(source);
+      expect(staged.attachment.path).not.toContain('personal-name');
+      await fs.writeFile(source, 'replaced');
+      expect(await fs.readFile(staged.attachment.path, 'utf8')).toBe('selected');
+      expect(staged.attachment.bytes).toBe(8);
+      expect(Boolean(staged.attachment.contentId)).toBe(inline);
+      if (inline) {
+        staged.accepted();
+        await cleanupSessionTempAttachments('mail-selection');
+      } else await staged.discard();
+      await expect(fs.stat(staged.attachment.path)).rejects.toThrow();
+      expect(await fs.readFile(source, 'utf8')).toBe('replaced');
+    }
+  });
+  it('keeps a resolved xdt-image URL as the Host-managed image identity', async () => {
+    const imageUrl = 'xdt-image://managed-reference/source.png';
+    const absPath = path.join(tempRoot.value, 'source.png');
+    vi.mocked(imageCacheStore.resolveSafe).mockReturnValue({
+      absPath,
+      mimeType: 'image/png',
+    });
+
+    const normalized = await normalizeUserMessage('managed-reference', {
+      type: 'user',
+      content: [{
+        type: 'image',
+        path: imageUrl,
+        managedUrl: 'https://renderer.example/forged.png',
+      }],
+    });
+
+    expect(normalized).toEqual({
+      type: 'user',
+      content: [{
+        type: 'image',
+        path: absPath,
+        managedUrl: imageUrl,
+        mimeType: 'image/png',
+        pathOrigin: 'desktop-host',
+      }],
+    });
+  });
+
+  it('keeps a resolved cindy-media URL as the Host-managed image identity', async () => {
+    const hash = '9'.repeat(64);
+    const mediaUrl = `cindy-media://blobs/${hash}.png`;
+    const absPath = path.join(tempRoot.value, 'blob.png');
+    vi.mocked(cindyMediaBlobStore.resolveSafe).mockReturnValue({
+      absPath,
+      mimeType: 'image/png',
+      hash,
+    });
+
+    const normalized = await normalizeUserMessage('managed-media-reference', {
+      type: 'user',
+      content: [{ type: 'image', path: mediaUrl }],
+    });
+
+    expect(normalized).toEqual({
+      type: 'user',
+      content: [{
+        type: 'image',
+        path: absPath,
+        managedUrl: mediaUrl,
+        mimeType: 'image/png',
+        pathOrigin: 'desktop-host',
+      }],
+    });
+  });
+
+  it('drops a renderer-supplied managed identity from an ordinary image path', async () => {
+    const imagePath = path.join(tempRoot.value, 'ordinary.png');
+
+    const normalized = await normalizeUserMessage('untrusted-managed-reference', {
+      type: 'user',
+      content: [{
+        type: 'image',
+        path: imagePath,
+        managedUrl: `cindy-media://blobs/${'f'.repeat(64)}.png`,
+      }],
+    });
+
+    expect(normalized).toEqual({
+      type: 'user',
+      content: [{ type: 'image', path: imagePath }],
+    });
+  });
+
+  it('marks directly materialized OSS images as desktop-host attachments', async () => {
+    const hash = 'a'.repeat(64);
+    const mediaUrl = `cindy-media://blobs/${hash}.png`;
+    const absPath = path.join(tempRoot.value, 'materialized.png');
+    vi.mocked(downloadToFile).mockImplementationOnce(async (_ossKey, destination) => {
+      await fs.writeFile(destination, Buffer.from([0x89, 0x50, 0x4e, 0x47]));
+    });
+    vi.mocked(cindyMediaBlobStore.supportedMime).mockReturnValue(true);
+    vi.mocked(cindyMediaBlobStore.resolveSafe).mockReturnValue({
+      absPath,
+      mimeType: 'image/png',
+      hash,
+    });
+    vi.mocked(ingestMedia).mockResolvedValueOnce({
+      hash,
+      ext: '.png',
+      mimeType: 'image/png',
+      bytes: 4,
+      url: mediaUrl,
+      deduplicated: false,
+      refIds: ['ref-1'],
+    });
+    const ossRef = buildAttachmentOssRef({
+      ossKey: 'cindy/device-link/user/image.png',
+      mimeType: 'image/png',
+      originalName: 'image.png',
+    });
+
+    const materialized = await materializeDirectSendOssAttachments(
+      'direct-oss-image',
+      {
+        type: 'user',
+        content: [{ type: 'image', path: ossRef, mimeType: 'image/png' }],
+      },
+      undefined,
+    );
+
+    expect(materialized.message).toEqual({
+      type: 'user',
+      content: [{
+        type: 'image',
+        path: mediaUrl,
+        mimeType: 'image/png',
+        pathOrigin: 'desktop-host',
+        base64: undefined,
+      }],
+    });
+    // 下载的临时件按文件流式入仓,不整读进 main 内存(附件不限大小)。
+    const ingestParams = vi.mocked(ingestMedia).mock.calls[0][0] as { filePath?: string; buffer?: unknown };
+    expect(ingestParams.filePath).toEqual(expect.any(String));
+    expect(ingestParams.buffer).toBeUndefined();
+    materialized.cleanupAfterAcceptance?.();
+    expect(removeRemote).toHaveBeenCalledWith('cindy/device-link/user/image.png');
+  });
+
+  it('marks queued OSS images as desktop-host attachments after materialization', async () => {
+    const hash = 'b'.repeat(64);
+    const mediaUrl = `cindy-media://blobs/${hash}.png`;
+    const absPath = path.join(tempRoot.value, 'queued-materialized.png');
+    vi.mocked(downloadToFile).mockImplementationOnce(async (_ossKey, destination) => {
+      await fs.writeFile(destination, Buffer.from([0x89, 0x50, 0x4e, 0x47]));
+    });
+    vi.mocked(cindyMediaBlobStore.supportedMime).mockReturnValue(true);
+    vi.mocked(cindyMediaBlobStore.resolveSafe).mockReturnValue({
+      absPath,
+      mimeType: 'image/png',
+      hash,
+    });
+    vi.mocked(ingestMedia).mockResolvedValueOnce({
+      hash,
+      ext: '.png',
+      mimeType: 'image/png',
+      bytes: 4,
+      url: mediaUrl,
+      deduplicated: false,
+      refIds: ['ref-2'],
+    });
+    const ossRef = buildAttachmentOssRef({
+      ossKey: 'cindy/device-link/user/queued-image.png',
+      mimeType: 'image/png',
+      originalName: 'queued-image.png',
+    });
+
+    const materialized = await materializeQueuedOssAttachmentsDeferred(
+      'queued-oss-image',
+      {
+        clientId: 'queued-image-1',
+        files: [{
+          category: 'image',
+          ext: '.png',
+          path: ossRef,
+          mimeType: 'image/png',
+        }],
+      },
+    );
+
+    expect(materialized.item).toEqual({
+      clientId: 'queued-image-1',
+      files: [{
+        category: 'image',
+        ext: '.png',
+        path: absPath,
+        url: mediaUrl,
+        mimeType: 'image/png',
+        pathOrigin: 'desktop-host',
+        base64: undefined,
+      }],
+      persistedContent: undefined,
+    });
+    materialized.cleanupAfterAcceptance?.();
+    expect(removeRemote).toHaveBeenCalledWith('cindy/device-link/user/queued-image.png');
+  });
+
+  it('marks queued local images as desktop-host attachments after materialization', async () => {
+    const sourcePath = path.join(tempRoot.value, 'device-link-local.png');
+    await fs.writeFile(sourcePath, Buffer.from([0x89, 0x50, 0x4e, 0x47]));
+    const hash = 'c'.repeat(64);
+    const mediaUrl = `cindy-media://blobs/${hash}.png`;
+    const absPath = path.join(tempRoot.value, 'queued-local-materialized.png');
+    vi.mocked(cindyMediaBlobStore.mimeForExt).mockReturnValue('image/png');
+    vi.mocked(cindyMediaBlobStore.resolveSafe).mockReturnValue({
+      absPath,
+      mimeType: 'image/png',
+      hash,
+    });
+    vi.mocked(ingestMedia).mockResolvedValueOnce({
+      hash,
+      ext: '.png',
+      mimeType: 'image/png',
+      bytes: 4,
+      url: mediaUrl,
+      deduplicated: false,
+      refIds: ['ref-3'],
+    });
+
+    const materialized = await materializeQueuedOssAttachmentsDeferred(
+      'queued-local-image',
+      {
+        clientId: 'queued-image-2',
+        files: [{
+          category: 'image',
+          ext: '.png',
+          path: sourcePath,
+          mimeType: 'image/png',
+        }],
+      },
+    );
+
+    expect(materialized.item).toEqual({
+      clientId: 'queued-image-2',
+      files: [{
+        category: 'image',
+        ext: '.png',
+        path: absPath,
+        url: mediaUrl,
+        mimeType: 'image/png',
+        pathOrigin: 'desktop-host',
+        base64: undefined,
+      }],
+      persistedContent: undefined,
+    });
+    expect(downloadToFile).not.toHaveBeenCalled();
+    // 控制端指定的本机图片路径保持原读取方式(整读),不改变其读取语义。
+    const ingestParams = vi.mocked(ingestMedia).mock.calls[0][0] as { filePath?: string; buffer?: unknown };
+    expect(ingestParams.filePath).toBeUndefined();
+    expect(Buffer.isBuffer(ingestParams.buffer)).toBe(true);
+  });
+
+  it('keeps queued images on managed URLs instead of rematerializing their source paths', async () => {
+    const burnedUrl = 'xdt-image://queued-annotated/annotated.png';
+    const selectedUrl = 'xdt-image://queued-selected/selected.png';
+    const mediaUrl = `cindy-media://blobs/${'d'.repeat(64)}.png`;
+    const originalPath = path.join(tempRoot.value, 'original.png');
+    await fs.writeFile(originalPath, Buffer.from([0x89, 0x50, 0x4e, 0x47]));
+    const item = {
+      clientId: 'queued-annotated-image',
+      files: [
+        {
+          category: 'image',
+          ext: '.png',
+          path: originalPath,
+          url: selectedUrl,
+          mimeType: 'image/png',
+        },
+        {
+          category: 'image',
+          ext: '.png',
+          path: originalPath,
+          url: mediaUrl,
+          mimeType: 'image/png',
+        },
+        {
+          category: 'image',
+          ext: '.png',
+          path: originalPath,
+          url: burnedUrl,
+          mimeType: 'image/png',
+          annotated: true,
+        },
+      ],
+    };
+
+    const materialized = await materializeQueuedOssAttachmentsDeferred(
+      'queued-annotated-image',
+      item,
+    );
+
+    expect(materialized.item).toBe(item);
+    expect(ingestMedia).not.toHaveBeenCalled();
+    expect(downloadToFile).not.toHaveBeenCalled();
+  });
+
+  it('writes private bytes and removes them even before Maker owns the session', async () => {
+    const sessionId = 'reviewer-session';
+    const normalized = await normalizeUserMessage(sessionId, {
+      type: 'user',
+      content: [
+        { type: 'text', text: 'Review this image' },
+        {
+          type: 'image',
+          base64: Buffer.from('private image bytes').toString('base64'),
+          mimeType: 'image/png',
+        },
+      ],
+    });
+    if (typeof normalized === 'string' || typeof normalized.content === 'string') {
+      throw new Error('expected block message');
+    }
+    const imageBlock = normalized.content.find((block) => block.type === 'image');
+    const imagePath = imageBlock?.path;
+    if (!imageBlock || typeof imagePath !== 'string') {
+      throw new Error('expected materialized image path');
+    }
+    expect(imageBlock.pathOrigin).toBe('desktop-host');
+    const sessionTempDir = path.dirname(imagePath);
+    const ownerRoot = path.dirname(sessionTempDir);
+    const ownerRecord = JSON.parse(
+      await fs.readFile(path.join(ownerRoot, '.cindy-owner.json'), 'utf8'),
+    ) as Record<string, unknown>;
+
+    await expect(fs.readFile(imagePath, 'utf8')).resolves.toBe('private image bytes');
+    expect(ownerRecord).toMatchObject({
+      version: 1,
+      owner: {
+        instanceId: 'normalize-attachments-test-owner',
+        processId: process.pid,
+      },
+    });
+    expect(ownerRecord.expiresAt).toEqual(expect.any(Number));
+    if (process.platform !== 'win32') {
+      expect((await fs.stat(sessionTempDir)).mode & 0o777).toBe(0o700);
+      expect((await fs.stat(imagePath)).mode & 0o777).toBe(0o600);
+    }
+
+    await cleanupSessionTempAttachments(sessionId);
+
+    await expect(fs.lstat(sessionTempDir)).rejects.toMatchObject({ code: 'ENOENT' });
+    await expect(fs.lstat(ownerRoot)).rejects.toMatchObject({ code: 'ENOENT' });
+    await cleanupSessionTempAttachments(sessionId);
+  });
+
+  it('reclaims a persisted owner root after its Main process terminates', async () => {
+    const normalized = await normalizeUserMessage('reviewer-crashed', {
+      type: 'user',
+      content: [{
+        type: 'image',
+        base64: Buffer.from('private image bytes').toString('base64'),
+        mimeType: 'image/png',
+      }],
+    });
+    if (typeof normalized === 'string' || typeof normalized.content === 'string') {
+      throw new Error('expected block message');
+    }
+    const imagePath = normalized.content[0]?.path;
+    if (typeof imagePath !== 'string') throw new Error('expected materialized image path');
+    const ownerRoot = path.dirname(path.dirname(imagePath));
+
+    await cleanupOrphanedTempAttachments({
+      currentOwner: { instanceId: 'restarted-main', processId: process.pid },
+      root: tempAttachmentRootPath(tempRoot.value),
+    });
+
+    await expect(fs.lstat(ownerRoot)).rejects.toMatchObject({ code: 'ENOENT' });
+  });
+
+  it('coalesces concurrent owner-root creation without dropping either attachment', async () => {
+    const makeMessage = (text: string) => ({
+      type: 'user' as const,
+      content: [{
+        type: 'file',
+        base64: Buffer.from(text).toString('base64'),
+        mimeType: 'text/plain',
+      }],
+    });
+    const [first, second] = await Promise.all([
+      normalizeUserMessage('concurrent-a', makeMessage('first')),
+      normalizeUserMessage('concurrent-b', makeMessage('second')),
+    ]);
+    if (
+      typeof first === 'string' ||
+      typeof first.content === 'string' ||
+      typeof second === 'string' ||
+      typeof second.content === 'string'
+    ) {
+      throw new Error('expected block messages');
+    }
+    const firstPath = first.content[0]?.path;
+    const secondPath = second.content[0]?.path;
+    expect(typeof firstPath).toBe('string');
+    expect(typeof secondPath).toBe('string');
+    expect(path.dirname(path.dirname(firstPath as string))).toBe(
+      path.dirname(path.dirname(secondPath as string)),
+    );
+
+    await Promise.all([
+      cleanupSessionTempAttachments('concurrent-a'),
+      cleanupSessionTempAttachments('concurrent-b'),
+    ]);
+  });
+
+  it('keeps an ambiguous live owner until its persisted deadline, then reclaims it', async () => {
+    const normalized = await normalizeUserMessage('reviewer-ambiguous', {
+      type: 'user',
+      content: [{
+        type: 'file',
+        base64: Buffer.from('private document bytes').toString('base64'),
+        mimeType: 'application/pdf',
+      }],
+    });
+    if (typeof normalized === 'string' || typeof normalized.content === 'string') {
+      throw new Error('expected block message');
+    }
+    const filePath = normalized.content[0]?.path;
+    if (typeof filePath !== 'string') throw new Error('expected materialized file path');
+    const ownerRoot = path.dirname(path.dirname(filePath));
+    const record = JSON.parse(
+      await fs.readFile(path.join(ownerRoot, '.cindy-owner.json'), 'utf8'),
+    ) as { expiresAt: number };
+    const sharedRoot = tempAttachmentRootPath(tempRoot.value);
+    const currentOwner = { instanceId: 'other-live-main', processId: process.pid + 100_000 };
+
+    await cleanupOrphanedTempAttachments({
+      currentOwner,
+      root: sharedRoot,
+      processIsAlive: () => true,
+      now: () => record.expiresAt - 1,
+    });
+    await expect(fs.lstat(ownerRoot)).resolves.toMatchObject({});
+
+    await cleanupOrphanedTempAttachments({
+      currentOwner,
+      root: sharedRoot,
+      processIsAlive: () => true,
+      now: () => record.expiresAt,
+    });
+    await expect(fs.lstat(ownerRoot)).rejects.toMatchObject({ code: 'ENOENT' });
+  });
+
+  it('persists exact liveness before writing an owner record and protects a live owner past its deadline', async () => {
+    const owner = {
+      instanceId: 'exact-live-owner',
+      processId: process.pid,
+    } as {
+      instanceId: string;
+      processId: number;
+      liveness?: { version: 1; port: number; token: string };
+    };
+    const ensureOwnerLiveness = vi.fn(async () => {
+      owner.liveness = {
+        version: 1,
+        port: 43_101,
+        token: 'exact-live-owner-token',
+      };
+    });
+    configureTempAttachmentOwner(owner, ensureOwnerLiveness);
+
+    const normalized = await normalizeUserMessage('exact-live-session', {
+      type: 'user',
+      content: [{
+        type: 'file',
+        base64: Buffer.from('still in use').toString('base64'),
+        mimeType: 'text/plain',
+      }],
+    });
+    if (typeof normalized === 'string' || typeof normalized.content === 'string') {
+      throw new Error('expected block message');
+    }
+    const filePath = normalized.content[0]?.path;
+    if (typeof filePath !== 'string') throw new Error('expected materialized file path');
+    const ownerRoot = path.dirname(path.dirname(filePath));
+    const record = JSON.parse(
+      await fs.readFile(path.join(ownerRoot, '.cindy-owner.json'), 'utf8'),
+    ) as { expiresAt: number; owner: typeof owner };
+
+    expect(ensureOwnerLiveness).toHaveBeenCalledOnce();
+    expect(record.owner.liveness).toEqual(owner.liveness);
+    const ownerLivenessProbe = vi.fn(() => 'alive' as const);
+    await cleanupOrphanedTempAttachments({
+      currentOwner: { instanceId: 'other-main', processId: process.pid + 100_000 },
+      root: tempAttachmentRootPath(tempRoot.value),
+      processIsAlive: () => true,
+      ownerLivenessProbe,
+      now: () => record.expiresAt + 1,
+    });
+
+    expect(ownerLivenessProbe).toHaveBeenCalledWith(record.owner);
+    await expect(fs.lstat(ownerRoot)).resolves.toMatchObject({});
+  });
+
+  it.each(['shared root', 'session directory'] as const)(
+    'refuses a symlinked temporary attachment %s',
+    async (target) => {
+      if (process.platform === 'win32') return;
+      const outside = await fs.mkdtemp(path.join(os.tmpdir(), 'cindy-review-inline-outside-'));
+      tempDirs.push(outside);
+      const sharedRoot = tempAttachmentRootPath(tempRoot.value);
+      if (target === 'shared root') {
+        await fs.symlink(outside, sharedRoot);
+      } else {
+        await fs.mkdir(sharedRoot);
+        await normalizeUserMessage('seed-session', {
+          type: 'user',
+          content: [{
+            type: 'file',
+            base64: Buffer.from('seed').toString('base64'),
+            mimeType: 'text/plain',
+          }],
+        });
+        const [ownerRootName] = await fs.readdir(sharedRoot);
+        await fs.symlink(outside, path.join(sharedRoot, ownerRootName, 'reviewer-session'));
+      }
+
+      const normalized = await normalizeUserMessage('reviewer-session', {
+        type: 'user',
+        content: [
+          { type: 'text', text: 'Review this image' },
+          {
+            type: 'image',
+            base64: Buffer.from('private image bytes').toString('base64'),
+            mimeType: 'image/png',
+          },
+        ],
+      });
+
+      if (typeof normalized === 'string' || typeof normalized.content === 'string') {
+        throw new Error('expected block message');
+      }
+      expect(normalized.content).toEqual([{ type: 'text', text: 'Review this image' }]);
+      await expect(fs.readdir(outside)).resolves.toEqual([]);
+      if (target === 'session directory') {
+        await cleanupSessionTempAttachments('seed-session');
+      }
+    },
+  );
+
+  // Unit: issue #9021. /tmp is shared by every Linux account; one account's
+  // 0700 root must not block another account's Desktop on the same machine.
+  it('writes attachments when another account already holds the legacy root', async () => {
+    if (typeof process.getuid !== 'function') return;
+    // Stand-in for another account's root: unusable as this account's directory.
+    await fs.writeFile(path.join(tempRoot.value, 'cindy-attachments'), 'held by another account');
+
+    const file = await writeTempFile('other-account-session', Buffer.from('bytes'), 'image/png');
+
+    expect(file.startsWith(tempAttachmentRootPath(tempRoot.value) + path.sep)).toBe(true);
+    await expect(fs.readFile(file, 'utf8')).resolves.toBe('bytes');
+    await cleanupSessionTempAttachments('other-account-session');
+  });
+});

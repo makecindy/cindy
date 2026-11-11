@@ -26,6 +26,11 @@ describe('parsePiSubagentProgress', () => {
         taskId: 'sa-1',
         parentToolUseId: 'sa-1',
         status: 'running',
+        subagentObservation: {
+          kind: 'progress',
+          logicalSubagentId: 'sa-1',
+          parentToolUseId: 'sa-1',
+        },
         title: 'scout',
         description: 'survey the auth flow',
         model: 'claude-haiku-4-5',

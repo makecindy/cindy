@@ -6,8 +6,6 @@
 
 import {
   SUBAGENT_MODEL_SETTINGS_DEFAULTS,
-  isCodexSubagentEffort,
-  normalizeCodexSubagentConcurrency,
   normalizeSubagentModelId,
   type SubagentModelSettings,
   type SubagentModelSettingsPatch,
@@ -15,9 +13,10 @@ import {
 import { desktopMakerLogger } from './logger-adapter.js';
 import {
   createOverrideSettingsFile,
+  portableOverrideSettings,
   type OverrideSettingsState,
 } from './override-settings-file.js';
-import { ownerScopedUserDataPath } from '../appSessionState.js';
+import { ownerScopedPath as ownerScopedUserDataPath } from '../ownerContext.js';
 
 const log = desktopMakerLogger.child('subagent-model-settings-store');
 
@@ -31,30 +30,39 @@ function normalize(raw: unknown): SubagentModelSettings {
   }
   const input = raw as Record<string, unknown>;
   const claudeCode = normalizeSubagentModelId(input.claudeCode);
-  const codex = normalizeSubagentModelId(input.codex);
   return {
     claudeCode,
     // 磁盘直读同样执行配对不变量:模型未指定时来源无所依附,外部手改文件留下的
     // 孤儿 providerId 会让 isCustomized 误报「已自定义」却显示「不指定」(codex review)。
     claudeCodeProviderId:
       claudeCode === null ? null : normalizeSubagentModelId(input.claudeCodeProviderId),
-    codex,
-    codexProviderId: codex === null ? null : normalizeSubagentModelId(input.codexProviderId),
-    // effort 不依附模型(effort-only 是合法上游配置,见 shared 契约注释)。
-    codexEffort: isCodexSubagentEffort(input.codexEffort) ? input.codexEffort : null,
-    // 垃圾值回退方向按语义定:总开关 fail-open(保能力),嵌套 fail-closed(少放权)。
-    codexSubagentsEnabled: input.codexSubagentsEnabled === false ? false : true,
-    codexMaxConcurrentSubagents: normalizeCodexSubagentConcurrency(
-      input.codexMaxConcurrentSubagents,
-    ),
-    codexAllowNestedSubagents: input.codexAllowNestedSubagents === true,
+    codexSmartSubagentRouting: input.codexSmartSubagentRouting === true,
   };
 }
+
+const ACTIVE_KEYS = new Set<keyof SubagentModelSettings>([
+  'claudeCode',
+  'claudeCodeProviderId',
+  'codexSmartSubagentRouting',
+]);
 
 const store = createOverrideSettingsFile<SubagentModelSettings>({
   filePath: settingsFilePath,
   defaults: SUBAGENT_MODEL_SETTINGS_DEFAULTS,
   normalize,
+  // 写设置时顺便移除旧版 Codex 固定路由与护栏键；它们已不属于有效协议。
+  mergeOverrides: ({ patch, next, defaults, overrides }) => {
+    const activeOverrides = Object.fromEntries(
+      Object.entries(overrides).filter(([key]) =>
+        ACTIVE_KEYS.has(key as keyof SubagentModelSettings),
+      ),
+    );
+    for (const key of Object.keys(patch) as Array<keyof SubagentModelSettings>) {
+      if (next[key] === defaults[key]) delete activeOverrides[key];
+      else activeOverrides[key] = next[key];
+    }
+    return activeOverrides;
+  },
   log,
   label: 'subagent model',
 });
@@ -83,10 +91,10 @@ export function readSubagentModelSettingsState(): OverrideSettingsState<Subagent
   if (state.value.claudeCode === null && state.customizedKeys.includes('claudeCodeProviderId')) {
     orphanPatch.claudeCodeProviderId = null;
   }
-  if (state.value.codex === null && state.customizedKeys.includes('codexProviderId')) {
-    orphanPatch.codexProviderId = null;
-  }
-  if (Object.keys(orphanPatch).length > 0) {
+  const hasRetiredCodexKey = state.customizedKeys.some(
+    (key) => !ACTIVE_KEYS.has(key as keyof SubagentModelSettings),
+  );
+  if (Object.keys(orphanPatch).length > 0 || hasRetiredCodexKey) {
     store.writePatch(orphanPatch);
     return store.readState();
   }
@@ -105,3 +113,6 @@ export function resetSubagentModelSettings(): SubagentModelSettings {
 }
 
 export const __testing = { normalize };
+
+/** New-computer setup: values the user changed here (docs/product-rules/new-device-setup-migration.md). */
+export const subagentModelPortableSettings = portableOverrideSettings(store);

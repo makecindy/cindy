@@ -8,98 +8,112 @@
  *   - 不带 "需新会话生效" 后缀: 嵌入开关立即生效 (下一条新消息即可)
  *   - 不带 confirm dialog: 关闭只是停止入队, 已嵌入的向量不删, 用户无可见副作用
  */
+import { additionalSettings } from './AdditionalSettings.settings-search';
+import { useSettingDefinition } from './useSettingDefinition';
 import { useCallback, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { Database } from 'lucide-react';
 
 import { cn } from '@/lib/utils';
 import { toast } from '@/lib/toast';
+import { SettingsRow } from '@/components/ui/settings-rows';
 import { Switch } from '@/components/ui/switch';
 import { createLogger } from '@/lib/logger';
+import { chatEmbeddingFailureKey, refreshChatEmbeddingFromMain } from '@/lib/chatEmbeddingStore';
 import { useChatEmbedding } from '@/hooks/useChatEmbedding';
 import { DefaultOverrideControls } from './DefaultOverrideControls';
 
 const log = createLogger('ChatEmbeddingCell');
 
 export function ChatEmbeddingCell() {
+  const setting = useSettingDefinition(additionalSettings.chatEmbedding);
   const { t } = useTranslation();
-  const { enabled, isCustomized, setEnabled, setIsCustomized } = useChatEmbedding();
+  const { enabled, isCustomized, beginMutation, completeMutation, rollbackMutation } =
+    useChatEmbedding();
   const [pending, setPending] = useState(false);
 
   const handleToggle = useCallback(
     async (next: boolean) => {
-      // 乐观更新: toggle 视觉立即跟手, IPC 内部就是写一个 JSON 文件, 几乎不会失败
-      const prev = enabled;
-      setEnabled(next);
+      const token = beginMutation(next);
       setPending(true);
       try {
-        const settings = await window.electronAPI.maker.chatEmbeddingSet(next);
-        setEnabled(settings.enabled);
-        setIsCustomized(settings.isCustomized);
-        toast.success(
-          t(next ? 'settings.chatEmbedding.toast.enabled' : 'settings.chatEmbedding.toast.disabled'),
-        );
+        const settings = await window.electronAPI.maker.chatEmbeddingSet(next, {
+          dataOwnerId: token.dataOwnerId,
+          ownerGeneration: token.ownerGeneration,
+        });
+        if (completeMutation(token, settings)) {
+          toast.success(
+            t(
+              next
+                ? 'settings.chatEmbedding.toast.enabled'
+                : 'settings.chatEmbedding.toast.disabled',
+            ),
+          );
+        }
       } catch (err) {
         log.warn('chatEmbeddingSet failed', err);
-        toast.error(
-          err instanceof Error ? err.message : t('settings.chatEmbedding.toast.toggleFailed'),
-        );
-        setEnabled(prev); // 回滚乐观值
+        if (rollbackMutation(token)) {
+          toast.error(t(chatEmbeddingFailureKey(err)));
+          void refreshChatEmbeddingFromMain();
+        }
       } finally {
         setPending(false);
       }
     },
-    [enabled, setEnabled, setIsCustomized, t],
+    [beginMutation, completeMutation, rollbackMutation, t],
   );
 
   const handleReset = useCallback(async () => {
+    const token = beginMutation();
     setPending(true);
     try {
-      const next = await window.electronAPI.maker.chatEmbeddingReset();
-      setEnabled(next.enabled);
-      setIsCustomized(next.isCustomized);
-      toast.success(t('settings.defaults.restored'));
+      const next = await window.electronAPI.maker.chatEmbeddingReset({
+        dataOwnerId: token.dataOwnerId,
+        ownerGeneration: token.ownerGeneration,
+      });
+      if (completeMutation(token, next)) toast.success(t('settings.defaults.restored'));
     } catch (err) {
       log.warn('chatEmbeddingReset failed', err);
-      toast.error(err instanceof Error ? err.message : t('settings.defaults.restoreFailed'));
+      if (rollbackMutation(token)) {
+        toast.error(t('settings.defaults.restoreFailed'));
+        void refreshChatEmbeddingFromMain();
+      }
     } finally {
       setPending(false);
     }
-  }, [setEnabled, setIsCustomized, t]);
+  }, [beginMutation, completeMutation, rollbackMutation, t]);
 
   return (
-    <div className="flex items-center justify-between gap-3 px-4 py-[14px]">
-      <div className="flex items-center gap-3">
-        <div
+    <SettingsRow
+      {...setting.anchorProps}
+      lead={
+        <span
           className={cn(
             'flex h-9 w-9 shrink-0 items-center justify-center rounded-lg',
             'bg-[var(--settings-input-bg)]',
           )}
         >
           <Database size={18} className="text-[var(--settings-section-title)]" />
+        </span>
+      }
+      title={setting.title}
+      hint={setting.description}
+      trailing={
+        <div className="flex items-center gap-2">
+          <DefaultOverrideControls
+            isCustomized={isCustomized}
+            disabled={pending}
+            onReset={() => void handleReset()}
+          />
+          <Switch
+            {...setting.controlProps}
+            checked={enabled}
+            disabled={pending}
+            onCheckedChange={(v) => void handleToggle(v)}
+            aria-label={t('settings.chatEmbedding.toggleAria')}
+          />
         </div>
-        <div className="flex flex-col gap-[8px]">
-          <p className="text-14 font-medium leading-none text-[var(--settings-section-title)]">
-            {t('settings.chatEmbedding.cell.label')}
-          </p>
-          <p className="text-12 leading-none text-[var(--settings-section-desc)]">
-            {t('settings.chatEmbedding.cell.description')}
-          </p>
-        </div>
-      </div>
-      <div className="flex items-center gap-2">
-        <DefaultOverrideControls
-          isCustomized={isCustomized}
-          disabled={pending}
-          onReset={() => void handleReset()}
-        />
-        <Switch
-          checked={enabled}
-          disabled={pending}
-          onCheckedChange={(v) => void handleToggle(v)}
-          aria-label={t('settings.chatEmbedding.toggleAria')}
-        />
-      </div>
-    </div>
+      }
+    />
   );
 }

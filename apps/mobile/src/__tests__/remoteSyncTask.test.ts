@@ -1,7 +1,11 @@
-import { readFileSync } from 'node:fs';
-import { resolve } from 'node:path';
-import { describe, expect, it } from 'vitest';
-import { createRemoteSyncCoordinator, createRemoteSyncRunner } from '@/device-link/remoteSyncTask';
+import { afterEach, describe, expect, it, vi } from 'vitest';
+import {
+  createRemoteSyncCoordinator,
+  createRemoteSyncReopenCoordinator,
+  createRemoteSyncRunner,
+  waitForCachedSubscription,
+} from '@/device-link/remoteSyncTask';
+import { SubscriptionAcknowledgements } from '@/device-link/subscriptionAcknowledgements';
 
 function deferred() {
   let resolve!: () => void;
@@ -14,12 +18,75 @@ function deferred() {
 function nextTick(): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, 0));
 }
-
-function readSessionScreenSource(): string {
-  return readFileSync(resolve(process.cwd(), 'app/sessions/[sessionId].tsx'), 'utf8').replace(/\r\n/g, '\n');
-}
+afterEach(() => vi.useRealTimers());
 
 describe('remote sync task runner', () => {
+  // Unit: a cached return used to read before ACK and repeat the whole batch.
+  // Bound the optimization without delaying cold reads or losing late recovery.
+  it.each(['ack', 'timeout', 'failure', 'cancel', 'cold'] as const)('bounds cached subscription waiting: %s', async (outcome) => {
+    vi.useFakeTimers();
+    const controller = new AbortController();
+    let resolve!: () => void;
+    let reject!: (error: Error) => void;
+    const subscription = new Promise<void>((done, fail) => { resolve = done; reject = fail; });
+    const run = { signal: controller.signal, isStale: () => controller.signal.aborted };
+    let settled = false;
+    let ack = false;
+    const waiting = waitForCachedSubscription(run, outcome !== 'cold', subscription, () => ack).then(() => { settled = true; });
+    const observed = waiting.catch(() => undefined);
+    try {
+      await vi.advanceTimersByTimeAsync(0);
+      expect(settled).toBe(outcome === 'cold');
+      if (outcome === 'ack') { ack = true; resolve(); }
+      if (outcome === 'failure') reject(new Error('offline'));
+      if (outcome === 'cancel') controller.abort();
+      if (outcome === 'timeout') await vi.advanceTimersByTimeAsync(2000);
+      await observed;
+      if (outcome === 'cancel') await expect(waiting).rejects.toThrow('superseded');
+      else expect(settled).toBe(true);
+      expect(vi.getTimerCount()).toBe(0);
+      resolve(); // A late ACK may still drive the existing recovery effect.
+    } finally { vi.useRealTimers(); }
+  });
+
+  it('shares one successful peer reopen across staggered retries in the same sync run', async () => {
+    const reopen = vi.fn(async () => undefined);
+    const coordinator = createRemoteSyncReopenCoordinator(reopen);
+    const failedAtVersion = coordinator.captureVersion();
+
+    const first = coordinator.reopenAfter(failedAtVersion);
+    await first;
+    const later = coordinator.reopenAfter(failedAtVersion);
+
+    expect(later).toBe(first);
+    await later;
+    expect(reopen).toHaveBeenCalledTimes(1);
+  });
+
+  it('allows a new reopen when an operation fails after the previous recovery', async () => {
+    const reopen = vi.fn(async () => undefined);
+    const coordinator = createRemoteSyncReopenCoordinator(reopen);
+
+    await coordinator.reopenAfter(coordinator.captureVersion());
+    const requestStartedAfterRecovery = coordinator.captureVersion();
+    await coordinator.reopenAfter(requestStartedAfterRecovery);
+
+    expect(reopen).toHaveBeenCalledTimes(2);
+    expect(coordinator.captureVersion()).toBe(2);
+  });
+
+  it('allows the same sync run to retry after a failed peer reopen', async () => {
+    const reopen = vi.fn()
+      .mockRejectedValueOnce(new Error('offline'))
+      .mockResolvedValueOnce(undefined);
+    const coordinator = createRemoteSyncReopenCoordinator(reopen);
+    const failedAtVersion = coordinator.captureVersion();
+
+    await expect(coordinator.reopenAfter(failedAtVersion)).rejects.toThrow('offline');
+    await expect(coordinator.reopenAfter(failedAtVersion)).resolves.toBeUndefined();
+    expect(reopen).toHaveBeenCalledTimes(2);
+  });
+
   it('coalesces repeated triggers into one in-flight run and one follow-up run', async () => {
     const gates = [deferred(), deferred()];
     const starts: number[] = [];
@@ -63,6 +130,61 @@ describe('remote sync task runner', () => {
 });
 
 describe('remote sync coordinator', () => {
+  // Unit, PR #6325: previous tests had one promise for one connection. A completed
+  // old subscription (or only the new list ACK) must not start a cached read while
+  // the current detail ACK is missing. Exercise the production ACK table + waiter.
+  it('waits for current detail ACK after a focused reconnect', async () => {
+    vi.useFakeTimers();
+    const acks = new SubscriptionAcknowledgements(() => {});
+    const topics = ['sessions', 'session:s'] as const;
+    acks.set('d', new Set(topics));
+    const previousSubscription = Promise.resolve();
+    await previousSubscription;
+    acks.delete('d');
+    acks.set('d', new Set(['sessions']));
+    const controller = new AbortController();
+    let reads = 0;
+    const waiting = waitForCachedSubscription(
+      { signal: controller.signal }, true, previousSubscription,
+      () => acks.identity('d', topics) !== null,
+    ).then(() => { reads++; });
+    await vi.advanceTimersByTimeAsync(500);
+    expect(reads).toBe(0);
+    acks.set('d', new Set(topics));
+    await vi.advanceTimersByTimeAsync(50);
+    await waiting;
+    expect(reads).toBe(1);
+    expect(vi.getTimerCount()).toBe(0);
+  });
+
+  // Unit: the ACK may land during cached-return preparation or after the first
+  // snapshot starts. Only the former can safely remove the recovery batch.
+  it.each([false, true])('coalesces cached return but preserves an ACK after snapshot start (%s)', async (lateAck) => {
+    vi.useFakeTimers();
+    const subscription = deferred();
+    const snapshot = deferred();
+    let ack = false;
+    let reads = 0;
+    const coordinator = createRemoteSyncCoordinator(async run => {
+      await waitForCachedSubscription(run, true, subscription.promise, () => ack);
+      const covered = ack;
+      reads++;
+      await snapshot.promise;
+      if (covered) run.satisfy('subscription-acked');
+    });
+    coordinator.setContext('device:session:visit');
+    const sync = coordinator.request({ reason: 'passive-refresh' });
+    await vi.advanceTimersByTimeAsync(lateAck ? 2000 : 0);
+    expect(reads).toBe(lateAck ? 1 : 0);
+    ack = true;
+    subscription.resolve();
+    void coordinator.request({ reason: 'subscription-acked' });
+    snapshot.resolve();
+    await sync;
+    expect(reads).toBe(lateAck ? 2 : 1);
+    expect(coordinator.isRunning()).toBe(false);
+  });
+
   it('merges repeated passive requests into one follow-up run', async () => {
     const gates = [deferred(), deferred()];
     const runs: Array<{ reasons: readonly string[]; replaceMessages: boolean }> = [];
@@ -163,33 +285,5 @@ describe('remote sync coordinator', () => {
 
     await expect(task).rejects.toThrow('first failed');
     expect(runs).toEqual([['first'], ['follow-up']]);
-  });
-
-  it('clears loading when a queued sync is blocked for a newly-created session', () => {
-    const source = readSessionScreenSource();
-    expect(source).toContain(
-      'if (shouldBlockSessionSync(sessionId)) {\n      if (!syncRun.isStale()) setLoading(false);\n      return;\n    }',
-    );
-  });
-
-  it('resets loading when the reused screen switches sessions', () => {
-    const source = readSessionScreenSource();
-    expect(source).toContain(
-      'setRewindState({ kind: \'idle\' });\n    setMessageActionBusy(null);\n    setLoading(false);',
-    );
-  });
-
-  it('applies coordinator context and task changes after render commits', () => {
-    const source = readFileSync(
-      resolve(process.cwd(), 'src/device-link/remoteSyncTask.ts'),
-      'utf8',
-    ).replace(/\r\n/g, '\n');
-    expect(source).toContain(
-      'useLayoutEffect(() => {\n    taskRef.current = task;\n    coordinatorRef.current?.setContext(contextKey);\n  }, [contextKey, task]);',
-    );
-    expect(source).not.toContain(
-      '  taskRef.current = task;\n  const coordinatorRef =',
-    );
-    expect(source).not.toContain('coordinatorRef.current.setContext(contextKey);');
   });
 });

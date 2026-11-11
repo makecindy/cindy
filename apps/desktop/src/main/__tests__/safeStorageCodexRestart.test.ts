@@ -72,4 +72,15 @@ describe('safe storage Codex restart invariants', () => {
     expect(body).toContain("safeStorageReadLog.error('read failed'");
     expect(body).not.toContain("console.error('[safe-storage-read]', err)");
   });
+
+  it('keeps custom-provider runtime reads strict while preserving missing-key null semantics', () => {
+    const src = source();
+    const start = src.indexOf("'safe-storage-read'");
+    const end = src.indexOf("'safe-storage-remove'", start);
+    const body = src.slice(start, end);
+    expect(body).toContain('isCustomProviderRuntimeKeyStorageKey(key)');
+    expect(body).toContain("throwIpcError('INTERNAL', 'custom provider credential is unavailable')");
+    expect(body).toContain("throwIpcError('INTERNAL', 'custom provider credential is unreadable')");
+    expect(body).toContain('if (!fs.existsSync(filepath)) return null;');
+  });
 });

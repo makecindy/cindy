@@ -16,7 +16,6 @@ import {
   categorize,
   chatEligibleSourcesForModel,
   classifyModel,
-  connectedProvidersForAgent,
   getModel,
   groupModelsForDisplay,
   groupOf,
@@ -57,12 +56,17 @@ export const CATEGORY_LABEL_KEY: Record<ModelCategory, string> = {
   grok: 'newChat.modelSelector.category.grok',
   google: 'newChat.modelSelector.category.google',
   china: 'newChat.modelSelector.category.china',
+  // `ungrouped` = 认不出厂商的对话模型(「未分组」);`other` = 不能对话的其它端点
+  // (「其它端点」)。两者标签必须区分得开:前者可选、默认展开,后者是能力组、默认收起。
+  ungrouped: 'newChat.modelSelector.category.ungrouped',
   image: 'newChat.modelSelector.category.image',
   video: 'newChat.modelSelector.category.video',
+  audio: 'newChat.modelSelector.category.audio',
   tts: 'newChat.modelSelector.category.tts',
   stt: 'newChat.modelSelector.category.stt',
   realtime: 'newChat.modelSelector.category.realtime',
   embedding: 'newChat.modelSelector.category.embedding',
+  decision: 'newChat.modelSelector.category.decision',
   compression: 'newChat.modelSelector.category.compression',
   other: 'newChat.modelSelector.category.other',
 };
@@ -147,7 +151,7 @@ export function resolveSourceSwitch(args: {
     // 只在聊天厂商组里找候选(issue #882):非聊天类型(image/video/tts/stt/realtime/
     // embedding/compression/other)不该被 reconcile 选中。用 classifyModel(mode 优先,
     // 无 mode 才回退 id 正则)而不是纯 id 正则的 categorize——否则 mode 标为非聊天、
-    // 但 id 落进 categorize 兜底组(如 china)的模型会绕过准入被选中(2026-07 review)。
+    // 但 id 落进 categorize 兜底组(ungrouped)的模型会绕过准入被选中(2026-07 review)。
     const ordered = CHAT_VENDOR_CATEGORY_ORDER.flatMap((c) =>
       visibleModels.filter((m) => classifyModel(m) === c),
     );
@@ -164,7 +168,14 @@ export function resolveSourceSwitch(args: {
 // resolveEffort / resolveProviderSwitchEffort(切模型 / 同模型切来源的落档优先级)已下沉到共享包
 // `@cindy/model-providers`(手机版模型选择列表要用同一套口径)。这里 re-export 保持 renderer
 // 既有 import 路径不变,语义与历史版本逐字一致。
-export { resolveEffort, resolveProviderSwitchEffort } from '@cindy/model-providers';
+export {
+  resolveEffort,
+  resolveRequestedEffort,
+  resolveRemoteSwitchEffort,
+  composeAtomicModelSelection,
+  resolveIntentReselectEffort,
+  resolveProviderSwitchEffort,
+} from '@cindy/model-providers';
 
 /**
  * 「显式选中的来源已断开」判定 —— 纯函数。会话把来源(providerId)持久化在 DB 里,

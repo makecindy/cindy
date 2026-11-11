@@ -51,6 +51,17 @@ export function applyProviderOrder<T extends { id: string }>(
   return result;
 }
 
+/** Id-only variant of applyProviderOrder for callers that hold plain provider ids. */
+export function applyProviderOrderIds(
+  ids: readonly string[],
+  order: readonly string[],
+): string[] {
+  return applyProviderOrder(
+    ids.map((id) => ({ id })),
+    order,
+  ).map((item) => item.id);
+}
+
 /**
  * Replace only the visible providers' slots in a full catalog order. This keeps
  * currently hidden/disconnected providers stable when the settings list is reordered.

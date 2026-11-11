@@ -1,4 +1,5 @@
 import { randomUUID } from 'node:crypto';
+import { EventEmitter } from 'node:events';
 import { promises as fsp } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
@@ -9,22 +10,58 @@ const h = vi.hoisted(() => ({
   endpoint: 'https://model.cn.example',
   buildEndpoint: 'https://model.cn.example',
   owner: 'owner-default',
+  imageKeys: new Map<string, string>(),
+  speechKey: null as string | null,
+  secretsClearedListeners: new Set<() => void>(),
+  canUseCindyGateway: true,
   loads: [] as Array<{
     source: Record<string, unknown>;
-    resolve: (catalog: unknown) => void;
+    resolve: (
+      catalog: unknown,
+      capabilityEvidence?: 'current' | 'fallback',
+      unverifiedXdMediaKinds?: readonly ('image' | 'video' | 'embedding')[],
+    ) => void;
   }>,
   refreshLoads: [] as Array<{
     source: Record<string, unknown>;
     resolve: (result: unknown) => void;
   }>,
   customProviderRead: vi.fn(),
+  casUpdate: vi.fn<(...args: unknown[]) => Promise<boolean>>(async () => true),
+  migrateManaged: vi.fn<(config?: unknown) => unknown>(() => null),
+  getGrokAccessToken: vi.fn(),
+  recoverGrokAuthAfterRejection: vi.fn(),
   warn: vi.fn(),
+  request: vi.fn(),
+  catalogIo: null as Parameters<typeof import('@cindy/model-providers').loadCatalog>[1] | null,
+  pool: null as import('../../../shared/subscriptionAccounts.js').SubscriptionPoolConfig | null,
+  legacyLoggedIn: new Set<string>(),
+  migrateLegacy: vi.fn<(...args: unknown[]) => Promise<boolean>>(async () => false),
 }));
+vi.mock('../../subscription-accounts/store.js', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../../subscription-accounts/store.js')>();
+  return {
+    ...actual,
+    readPool: (id: string) => id === 'openai' ? h.pool : null,
+    readLegacyCodexAccountId: (id: string) => h.pool?.legacyCodexAccounts?.[id],
+    migrateLegacyCodexAccounts: h.migrateLegacy,
+  };
+});
+vi.mock('../../subscription-accounts/runtime.js', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../../subscription-accounts/runtime.js')>();
+  return { ...actual, hasConnectedSubscriptionPool: () => Boolean(h.pool && !h.pool.disconnected) };
+});
+vi.mock('../codex-account-auth.desktop.js', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../codex-account-auth.desktop.js')>();
+  return { ...actual, codexAccountState: (id: string) => ({ authenticated: h.legacyLoggedIn.has(id) }) };
+});
+
+vi.mock('../../userDataPath.js', () => ({ getUserDataDir: () => os.tmpdir(), userDataPath: (...parts: string[]) => path.join(os.tmpdir(), ...parts) }));
 
 vi.mock('electron', () => ({
   app: { getPath: () => os.tmpdir() },
   BrowserWindow: { getAllWindows: () => [] },
-  net: { request: vi.fn() },
+  net: { request: h.request },
 }));
 
 vi.mock('@cindy/model-providers', async (importOriginal) => {
@@ -32,9 +69,31 @@ vi.mock('@cindy/model-providers', async (importOriginal) => {
   return {
     ...actual,
     loadCatalog: vi.fn(
-      (source: Record<string, unknown>) =>
+      (
+        source: Record<string, unknown>,
+        io: Parameters<typeof import('@cindy/model-providers').loadCatalog>[1],
+        onResolved?: (result: unknown) => void,
+      ) =>
         new Promise((resolve) => {
-          h.loads.push({ source, resolve });
+          h.catalogIo = io;
+          h.loads.push({
+            source,
+            resolve: (
+              catalog,
+              capabilityEvidence = 'current',
+              unverifiedXdMediaKinds = capabilityEvidence === 'current'
+                ? []
+                : ['image', 'video', 'embedding'],
+            ) => {
+              onResolved?.({
+                catalog,
+                source: capabilityEvidence === 'current' ? 'remote' : 'cache',
+                capabilityEvidence,
+                unverifiedXdMediaKinds,
+              });
+              resolve(catalog);
+            },
+          });
         }),
     ),
     loadCatalogWithSource: vi.fn(
@@ -48,7 +107,6 @@ vi.mock('@cindy/model-providers', async (importOriginal) => {
 
 vi.mock('../../manifestService.js', () => ({
   getBaseUrl: () => 'https://legacy-build-cdn.example',
-  isDev: () => false,
 }));
 vi.mock('../../clientEndpointsService.js', () => ({
   getBuildClientEndpoint: () => h.buildEndpoint,
@@ -67,11 +125,17 @@ vi.mock('../../authManager.js', () => ({
 }));
 vi.mock('../../appSessionState.js', () => ({
   getActiveAppSession: () => ({ mode: 'signed-out', dataOwnerId: h.owner }),
+  activeOwnerScopeKey: () => `signed-out:${h.owner ?? 'none'}`,
+  isAppSessionBoundaryPending: () => false,
   ownerScopedUserDataPath: (...segments: string[]) =>
     path.join(os.tmpdir(), 'provider-catalog-realm-reload', h.owner, ...segments),
 }));
+vi.mock('../../../shared/brandRegion.js', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../../../shared/brandRegion.js')>();
+  return { ...actual, CURRENT_CINDY_REGION: 'cn' };
+});
 vi.mock('../../appCapabilities.js', () => ({
-  getAppCapabilities: () => ({ canUseCindyGateway: false }),
+  getAppCapabilities: () => ({ canUseCindyGateway: h.canUseCindyGateway }),
 }));
 vi.mock('../../ownerNamespaceMigration.js', () => ({
   hasLegacyOwnerNamespaceClaim: () => false,
@@ -84,17 +148,21 @@ vi.mock('../auth-adapters.js', () => ({
     hasCodexOAuthLoginUnbound: () => false,
   },
 }));
-vi.mock('../claude-credentials-store.js', () => ({
-  hasClaudeAiOAuth: () => false,
-  hasClaudeAiOAuthUnbound: () => false,
+vi.mock('../claude-native-auth.js', () => ({
+  hasClaudeNativeLogin: () => false,
+  hasClaudeNativeLoginUnbound: () => false,
 }));
-vi.mock('../grok-oauth-login.js', () => ({
-  getGrokAccessToken: () => null,
+vi.mock('../claude-native-connection.js', () => ({ readClaudeNativeLogin: async () => null }));
+vi.mock('../claude-native-cli.desktop.js', () => ({ readClaudeCliLoginStatus: async () => ({ loggedIn: false }) }));
+vi.mock('../grok-oauth-login.desktop.js', () => ({
+  getGrokAccessToken: h.getGrokAccessToken,
+  peekGrokAccessToken: () => null,
   hasGrokOAuthLogin: () => false,
   hasGrokOAuthLoginUnbound: () => false,
+  recoverGrokAuthAfterRejection: h.recoverGrokAuthAfterRejection,
   resetGrokOAuthMemoryCache: () => undefined,
 }));
-vi.mock('../generic-oauth.js', () => ({
+vi.mock('../generic-oauth.desktop.js', () => ({
   configureGenericOAuth: () => undefined,
   hasGenericOAuthLogin: () => false,
   readCachedGenericOAuthAccessToken: () => null,
@@ -102,11 +170,21 @@ vi.mock('../generic-oauth.js', () => ({
 }));
 vi.mock('../../secrets/providerSecretStore.js', () => ({
   genericOAuthSecretIo: {},
-  readCustomProviderKey: () => null,
+  readCustomProviderHeaders: () => null,
+  readCustomProviderKey: (providerId: string) => providerId === 'speech-review' ? h.speechKey : null,
+  getProviderSecretStore: () => ({
+    get: (id: string) => id === 'openai-images' ? h.imageKeys.get(h.owner) ?? null : null,
+    invalidateCaches: () => h.secretsClearedListeners.forEach((listener) => listener()),
+  }),
   setProviderSecretsClearedListener: () => undefined,
-  addProviderSecretsClearedListener: () => undefined,
+  addProviderSecretsClearedListener: (listener: () => void) => h.secretsClearedListeners.add(listener),
+}));
+vi.mock('../outbound-fetch.desktop.js', () => ({
+  outboundFetch: vi.fn(async () => { throw new Error('offline'); }),
 }));
 vi.mock('../provider-route.js', () => ({
+  getProviderRouteCredentialRevision: () => 0,
+  setCustomProviderHeaderReader: () => undefined,
   setCustomProviderKeyReader: () => undefined,
   setOAuthTokenReader: () => undefined,
   setProviderOAuthTokenReader: () => undefined,
@@ -128,28 +206,55 @@ vi.mock('../model-discovery/anthropic.js', () => ({
 vi.mock('../custom-provider-header-secrets.js', () => ({
   listCustomProvidersWithSecureHeaders: () => h.customProviderRead(),
 }));
+vi.mock('../../local-model-runtime/managedOllamaProvider.js', () => ({
+  migrateManagedOllamaOnCatalogLoad: async () => false,
+  migrateManagedOllamaProvider: (config: unknown) => h.migrateManaged(config),
+}));
+vi.mock('../../local-model-runtime/localConnectHarness.js', () => ({
+  migrateLocalConnectPresetsOnCatalogLoad: async () => 0,
+}));
+vi.mock('../../../shared/localConnectHarness.js', () => ({
+  migrateLocalConnectPresetsOnCatalogLoad: async () => 0,
+  migrateLocalConnectProvider: () => null,
+}));
+vi.mock('../custom-provider-store.js', () => ({
+  updateCustomProviderIfUnchanged: (...args: unknown[]) => h.casUpdate(...args),
+}));
 
 import {
   BUNDLED_CATALOG,
   buildUserProvider,
   type Catalog,
   type CustomProviderConfig,
+  XAI_API_CUSTOM_PROVIDER_ID,
 } from '@cindy/model-providers';
+import { resolveScheduledModelSelection } from '../../maker-ipc/scheduledModelSelection.js';
+import { deriveCindyMediaConfig } from '../../cindy-brain/cindyMediaCatalog.js';
+import { getProviderSecretStore } from '../../secrets/providerSecretStore.js';
 import {
   getActiveCatalog,
+  commitModelPlaneFromCatalog,
   setActiveCatalog,
   setActiveCatalogChangedListener,
+  setCustomProviderConfigs,
   setCustomProviders,
 } from '../active-catalog.js';
 import {
   __testing,
   ensureActiveCatalogLoaded,
+  getDesktopSelectableCatalog,
+  getDesktopProviderService,
   refreshActiveCatalogFromSource,
   refreshCustomProvidersIntoCatalog,
   reloadActiveCatalogForEndpointChange,
-  shouldDisableCatalogFetch,
   syncLocalCatalogOverridesIntoActiveCatalog,
 } from '../createDesktopProviderService.js';
+import {
+  buildCodexCustomProviderArgs,
+  deriveCodexCustomProviderRoutes,
+  hasCodexAppliedCustomProviderCapability,
+  setCodexAppliedCustomProviderRoutes,
+} from '../codex-custom-provider-route.js';
 
 function catalogNamed(name: string, updatedAt?: string): Catalog {
   return {
@@ -168,6 +273,127 @@ function activeMarker(): string | undefined {
 }
 
 describe('provider catalog realm reload', () => {
+  // Upgrade 2026-11-11, standard: real loader/view wiring must import only native
+  // Codex connections and keep their model membership under the canonical supplier.
+  // Regression: the picker was covered but explicit/lazy full-catalog reads used by
+  // scheduled admission dropped imported-only models and rejected the saved route.
+  it('projects imported model membership under OpenAI while retaining compatibility routes', async () => {
+    const previous = getActiveCatalog();
+    h.pool = { strategy: 'least', accounts: [{ id: 'imported', paused: false, limit: 4, weight: 1 }],
+      legacyCodexAccounts: { 'legacy-imported': 'imported' } };
+    h.legacyLoggedIn.add('legacy-imported');
+    const legacy: CustomProviderConfig = { id: 'legacy-imported', name: 'Old OpenAI',
+      auth: { method: 'oauth', native: 'codex' }, runtimes: { codex: {
+        baseUrl: 'https://chatgpt.com/backend-api/codex', models: [{ id: 'gpt-migration-fixture', name: 'Fixture model' }],
+      } } };
+    const api: CustomProviderConfig = { id: 'migration-api', name: 'API stays separate', runtimes: { codex: {
+      baseUrl: 'https://fixture.example/v1', models: [{ id: 'api-fixture', name: 'API fixture' }],
+    } } };
+    try {
+      setActiveCatalog(BUNDLED_CATALOG);
+      h.customProviderRead.mockResolvedValue([legacy, api]);
+      h.migrateLegacy.mockClear();
+      await refreshCustomProvidersIntoCatalog();
+      expect(h.migrateLegacy.mock.calls[0][0]).toEqual([{ providerId: 'legacy-imported', paused: false }]);
+      const catalog = getDesktopSelectableCatalog();
+      expect(catalog.providers.find(provider => provider.id === 'openai')?.models.codex?.some(model => model.id === 'gpt-migration-fixture')).toBe(true);
+      expect(catalog.providers.some(provider => provider.id === 'legacy-imported')).toBe(true);
+      expect(catalog.providers.some(provider => provider.id === 'migration-api')).toBe(true);
+      const selection = { agentKind: 'codex' as const, providerId: 'openai',
+        model: 'gpt-migration-fixture', effort: null, fastMode: false };
+      const service = getDesktopProviderService({ allowSideEffects: false });
+      const readRoutes = () => Promise.all([
+        service.listProviders({ snapshotOnly: true }),
+        service.listProviders({ snapshotOnly: true, catalog: getActiveCatalog() }),
+        service.listProviders({ snapshotOnly: true, getCatalog: getActiveCatalog }),
+      ]);
+      for (const views of await readRoutes()) {
+        expect(resolveScheduledModelSelection(selection, views)).toMatchObject({
+          model: selection.model, providerId: 'openai', agentKind: 'codex',
+        });
+        expect(() => resolveScheduledModelSelection({ ...selection, model: 'api-fixture' }, views))
+          .toThrow('MODEL_SELECTION_UNAVAILABLE');
+      }
+      // Projection must not mutate the raw catalog or retain membership after pause/sign-out.
+      expect(getActiveCatalog().providers.find(provider => provider.id === 'openai')?.models.codex?.some(model => model.id === selection.model)).not.toBe(true);
+      for (const unavailable of ['paused', 'signed-out', 'disconnected'] as const) {
+        h.pool.accounts[0].paused = unavailable === 'paused';
+        h.pool.disconnected = unavailable === 'disconnected';
+        if (unavailable === 'signed-out') h.legacyLoggedIn.clear();
+        else h.legacyLoggedIn.add('legacy-imported');
+        expect(getDesktopSelectableCatalog().providers.find(provider => provider.id === 'openai')?.models.codex?.some(model => model.id === selection.model)).not.toBe(true);
+        for (const views of await readRoutes()) {
+          expect(() => resolveScheduledModelSelection(selection, views)).toThrow('MODEL_SELECTION_UNAVAILABLE');
+        }
+      }
+    } finally {
+      h.pool = null;
+      h.legacyLoggedIn.clear();
+      setCustomProviders([]);
+      setActiveCatalog(previous);
+    }
+  });
+  // #6768 unit regression: a hidden TTS route needs channel readiness in the
+  // actual provider-list wiring before its management switch can be used.
+  // Renderer tests inject that snapshot and could not catch missing Main wiring.
+  it('projects admitted hidden speech routes as manageable and clears readiness when their key is removed', async () => {
+    const previous = getActiveCatalog();
+    const provider = buildUserProvider({ id: 'speech-review', name: 'Speech review', runtimes: {
+      codex: { baseUrl: 'https://api.elevenlabs.io/v1', wireProtocol: 'openai-chat',
+        models: [{ id: 'eleven_v3', name: 'Later speech', mode: 'audio_speech', defaultEnabled: false }] },
+    } });
+    try {
+      setActiveCatalog({ ...BUNDLED_CATALOG, providers: [provider] });
+      h.speechKey = 'fake-speech-key';
+      const list = () => getDesktopProviderService().listProviders({ allowSideEffects: false, snapshotOnly: true });
+      expect((await list()).find(item => item.id === provider.id)?.availableMediaModelIds).toEqual(['eleven_v3']);
+      h.speechKey = null;
+      expect((await list()).find(item => item.id === provider.id)?.availableMediaModelIds).toEqual([]);
+    } finally {
+      h.speechKey = null;
+      setActiveCatalog(previous);
+    }
+  });
+  it('passes xAI rejection context into forced recovery and never replays the stale token', async () => {
+    h.getGrokAccessToken.mockReset();
+    h.recoverGrokAuthAfterRejection.mockReset();
+
+    h.getGrokAccessToken.mockResolvedValueOnce('ordinary-token');
+    await expect(__testing.readXaiProviderOAuthToken()).resolves.toBe('ordinary-token');
+    expect(h.recoverGrokAuthAfterRejection).not.toHaveBeenCalled();
+
+    h.recoverGrokAuthAfterRejection.mockResolvedValueOnce('refreshed');
+    h.getGrokAccessToken.mockResolvedValueOnce('fresh-token');
+    await expect(
+      __testing.readXaiProviderOAuthToken({
+        forceRefresh: true,
+        staleToken: 'rejected-token',
+      }),
+    ).resolves.toBe('fresh-token');
+    expect(h.recoverGrokAuthAfterRejection).toHaveBeenLastCalledWith('rejected-token', 'xai');
+
+    h.recoverGrokAuthAfterRejection.mockResolvedValueOnce('unchanged');
+    await expect(
+      __testing.readXaiProviderOAuthToken({
+        forceRefresh: true,
+        staleToken: 'rejected-token',
+      }),
+    ).resolves.toBeNull();
+    expect(h.getGrokAccessToken).toHaveBeenCalledTimes(2);
+
+    h.recoverGrokAuthAfterRejection.mockResolvedValueOnce('superseded');
+    h.getGrokAccessToken.mockResolvedValueOnce('replacement-token');
+    await expect(
+      __testing.readXaiProviderOAuthToken({
+        forceRefresh: true,
+        staleToken: 'rejected-token',
+      }),
+    ).resolves.toBe('replacement-token');
+
+    await expect(__testing.readXaiProviderOAuthToken({ forceRefresh: true })).resolves.toBeNull();
+    expect(h.recoverGrokAuthAfterRejection).toHaveBeenCalledTimes(3);
+  });
+
   it('drops a stale owner custom-provider read and clears the current snapshot on failure', async () => {
     const provider: CustomProviderConfig = {
       id: 'owner-a-provider',
@@ -202,6 +428,247 @@ describe('provider catalog realm reload', () => {
     await refreshCustomProvidersIntoCatalog();
     expect(getActiveCatalog().providers.some((entry) => entry.id === provider.id)).toBe(false);
     h.customProviderRead.mockReset();
+  });
+
+  it('does not let an older OFF refresh overwrite a newer ON catalog and Host spawn snapshot', async () => {
+    const disabled: CustomProviderConfig = {
+      id: 'image-capability-race-provider',
+      name: 'Image capability race fixture',
+      runtimes: {
+        codex: {
+          baseUrl: 'https://provider.example/v1',
+          wireProtocol: 'openai-responses',
+          models: [{ id: 'chat-model', name: 'Chat model' }],
+        },
+      },
+    };
+    const enabled: CustomProviderConfig = {
+      ...disabled,
+      runtimes: {
+        codex: {
+          ...disabled.runtimes.codex!,
+          supportsImageGeneration: true,
+        },
+      },
+    };
+    let resolveOlderRefresh!: (configs: CustomProviderConfig[]) => void;
+    h.customProviderRead.mockReset();
+    h.customProviderRead
+      .mockReturnValueOnce(
+        new Promise<CustomProviderConfig[]>((resolve) => {
+          resolveOlderRefresh = resolve;
+        }),
+      )
+      .mockResolvedValueOnce([enabled]);
+
+    const olderRefresh = refreshCustomProvidersIntoCatalog();
+    await refreshCustomProvidersIntoCatalog();
+    resolveOlderRefresh([disabled]);
+    await olderRefresh;
+
+    const routes = deriveCodexCustomProviderRoutes(getActiveCatalog());
+    expect(routes).toHaveLength(1);
+    expect(routes[0]?.responseModels).toEqual(['chat-model']);
+    setCodexAppliedCustomProviderRoutes(routes);
+    expect(hasCodexAppliedCustomProviderCapability(disabled.id, 'imageGeneration')).toBe(true);
+    const spawn = buildCodexCustomProviderArgs('http://127.0.0.1:43210', 'env-key', routes);
+    expect(spawn.extraArgs.filter((arg) => arg.includes('.name='))).toHaveLength(1);
+    expect(spawn.extraArgs.join(' ')).toContain('x-openai-actor-authorization');
+
+    setCodexAppliedCustomProviderRoutes([]);
+    setCustomProviders([]);
+    h.customProviderRead.mockReset();
+  });
+
+  it('projects executable Imagine models onto the xAI API-key source', () => {
+    setCustomProviders([
+      buildUserProvider({
+        id: XAI_API_CUSTOM_PROVIDER_ID,
+        name: 'xAI API',
+        runtimes: {
+          codex: {
+            baseUrl: 'https://api.x.ai/v1',
+            wireProtocol: 'openai-chat',
+            models: [{ id: 'grok-4.6', name: 'Grok 4.6' }],
+          },
+        },
+      }),
+    ]);
+
+    const projected = getActiveCatalog().providers.find(
+      (provider) => provider.id === XAI_API_CUSTOM_PROVIDER_ID,
+    );
+    const bundledXai = BUNDLED_CATALOG.providers.find((provider) => provider.id === 'xai');
+    expect(projected?.imageModels).toEqual(bundledXai?.imageModels);
+
+    setCustomProviders([]);
+  });
+
+  it('does not publish a migrated snapshot after a failed CAS write', async () => {
+    const original: CustomProviderConfig = {
+      id: 'cas-provider',
+      name: 'Original',
+      runtimes: {
+        'claude-code': {
+          baseUrl: 'https://original.example/anthropic',
+          models: [{ id: 'original-model', name: 'Original Model' }],
+        },
+      },
+    };
+    const edited: CustomProviderConfig = {
+      ...original,
+      name: 'Edited by user',
+      runtimes: {
+        'claude-code': {
+          baseUrl: 'https://edited.example/anthropic',
+          models: [{ id: 'user-model', name: 'User Model' }],
+        },
+      },
+    };
+    const migrated: CustomProviderConfig = {
+      ...original,
+      runtimes: {
+        'claude-code': {
+          baseUrl: 'https://migrated.example/anthropic',
+          models: [{ id: 'stale-model', name: 'Stale Model' }],
+        },
+      },
+    };
+    h.migrateManaged.mockReset();
+    h.casUpdate.mockReset();
+    h.customProviderRead.mockReset();
+    h.migrateManaged.mockImplementation((config: unknown) =>
+      (config as CustomProviderConfig).id === original.id ? migrated : null,
+    );
+    h.casUpdate.mockResolvedValueOnce(false);
+    h.customProviderRead.mockResolvedValueOnce([original]).mockResolvedValueOnce([edited]);
+
+    await refreshCustomProvidersIntoCatalog();
+
+    expect(h.casUpdate).toHaveBeenCalled();
+    const published = getActiveCatalog().providers.find((entry) => entry.id === original.id);
+    expect(published?.name).toBe('Edited by user');
+    expect(published?.models['claude-code']?.[0]).toMatchObject({ id: 'user-model' });
+    expect(JSON.stringify(published)).not.toContain('stale-model');
+    expect(JSON.stringify(published)).not.toContain('migrated.example');
+    setCustomProviders([]);
+    h.migrateManaged.mockReset();
+    h.casUpdate.mockReset();
+    h.customProviderRead.mockReset();
+    h.migrateManaged.mockImplementation(() => null);
+    h.casUpdate.mockResolvedValue(true);
+  });
+
+  it('reprojects custom efforts once on Registry refresh and preserves the custom route', async () => {
+    const current = structuredClone(catalogNamed('custom-before', '2026-08-12T10:00:00.000Z'));
+    const currentEntry = current.modelRegistry?.models.find(
+      (entry) => entry.id === 'openai/gpt-5.6-sol',
+    );
+    if (!currentEntry) throw new Error('expected gpt-5.6-sol Registry entry');
+    current.modelRegistry!.models = [currentEntry];
+    current.modelRegistry!.baseModels!.find(
+      (model) => model.id === currentEntry.modelRef,
+    )!.defaults = { efforts: ['high'], defaultEffort: 'high' };
+    setActiveCatalog(current);
+
+    const config: CustomProviderConfig = {
+      id: 'registry-relay',
+      name: 'Registry Relay',
+      runtimes: {
+        codex: {
+          baseUrl: 'https://relay.example/v1',
+          models: [{ id: 'gpt-5.6-sol', name: 'GPT-5.6-Sol' }],
+        },
+      },
+    };
+    setCustomProviderConfigs([config]);
+
+    const next = structuredClone(catalogNamed('custom-after', '2026-08-12T11:00:00.000Z'));
+    const nextEntry = next.modelRegistry?.models.find((entry) => entry.id === 'openai/gpt-5.6-sol');
+    if (!nextEntry) throw new Error('expected gpt-5.6-sol Registry entry');
+    next.modelRegistry!.models = [nextEntry];
+    next.modelRegistry!.baseModels!.find((model) => model.id === nextEntry.modelRef)!.defaults = {
+      efforts: ['high', 'max', 'ultra'],
+      defaultEffort: 'high',
+    };
+
+    const events: number[] = [];
+    setActiveCatalogChangedListener((revision) => events.push(revision));
+    try {
+      setActiveCatalog(next);
+      const provider = getActiveCatalog().providers.find((entry) => entry.id === config.id);
+      expect(provider).toMatchObject({
+        id: config.id,
+        routing: { codex: { upstream: 'https://relay.example/v1' } },
+      });
+      expect(provider?.models.codex?.[0]).toMatchObject({
+        id: 'gpt-5.6-sol',
+        efforts: ['high', 'max', 'ultra'],
+        defaultEffort: 'high',
+      });
+      expect(events).toHaveLength(1);
+    } finally {
+      setActiveCatalogChangedListener(null);
+      setCustomProviders([]);
+    }
+  });
+
+  it('keeps the current custom projection when full or model-plane catalogs omit Registry', () => {
+    const current = structuredClone(catalogNamed('registry-bearing', '2026-08-12T12:00:00.000Z'));
+    const entry = current.modelRegistry?.models.find(
+      (candidate) => candidate.id === 'openai/gpt-5.6-sol',
+    );
+    if (!entry) throw new Error('expected gpt-5.6-sol Registry entry');
+    current.modelRegistry!.models = [entry];
+    current.modelRegistry!.baseModels!.find((model) => model.id === entry.modelRef)!.defaults = {
+      efforts: ['minimal', 'max'],
+      defaultEffort: 'minimal',
+    };
+    setActiveCatalog(current);
+    const config: CustomProviderConfig = {
+      id: 'registry-relay',
+      name: 'Registry Relay',
+      runtimes: {
+        codex: {
+          baseUrl: 'https://relay.example/v1',
+          models: [{ id: 'gpt-5.6-sol', name: 'GPT-5.6-Sol' }],
+        },
+      },
+    };
+    setCustomProviderConfigs([config]);
+
+    const withoutRegistry = structuredClone(current);
+    delete withoutRegistry.modelRegistry;
+    setActiveCatalog(withoutRegistry);
+    expect(
+      getActiveCatalog().providers.find((provider) => provider.id === config.id)?.models.codex?.[0],
+    ).toMatchObject({ efforts: ['minimal', 'max'], defaultEffort: 'minimal' });
+    expect(getActiveCatalog().modelRegistry).toBeUndefined();
+
+    setActiveCatalog(current);
+    commitModelPlaneFromCatalog(withoutRegistry);
+    expect(
+      getActiveCatalog().providers.find((provider) => provider.id === config.id)?.models.codex?.[0],
+    ).toMatchObject({ efforts: ['minimal', 'max'], defaultEffort: 'minimal' });
+    expect(getActiveCatalog().modelRegistry?.updatedAt).toBe('2026-08-12T12:00:00.000Z');
+    setCustomProviders([]);
+  });
+
+  it('does not revive cleared owner configs on a later Registry refresh', () => {
+    const config: CustomProviderConfig = {
+      id: 'old-owner-relay',
+      name: 'Old owner relay',
+      runtimes: {
+        codex: {
+          baseUrl: 'https://old-owner.example/v1',
+          models: [{ id: 'gpt-5.6-sol', name: 'GPT-5.6-Sol' }],
+        },
+      },
+    };
+    setCustomProviderConfigs([config]);
+    setCustomProviders([]);
+    setActiveCatalog(catalogNamed('next-owner-catalog', '2026-08-12T13:00:00.000Z'));
+    expect(getActiveCatalog().providers.some((provider) => provider.id === config.id)).toBe(false);
   });
 
   it('persists only a digest of a catalog scope that may contain URL credentials', () => {
@@ -351,23 +818,21 @@ describe('provider catalog realm reload', () => {
     expect(files.has('/catalog.json.bak')).toBe(false);
   });
 
-  it('keeps dev offline by default but permits an explicit catalog URL', () => {
-    expect(shouldDisableCatalogFetch(true, undefined, false)).toBe(true);
-    expect(shouldDisableCatalogFetch(true, '   ', false)).toBe(true);
-    expect(shouldDisableCatalogFetch(true, 'http://127.0.0.1/catalog', false)).toBe(false);
-    expect(shouldDisableCatalogFetch(false, undefined, false)).toBe(false);
-    expect(shouldDisableCatalogFetch(false, 'http://127.0.0.1/catalog', true)).toBe(true);
-  });
-
   it('invalidates the old realm immediately and ignores a stale cross-realm response', async () => {
     const initial = ensureActiveCatalogLoaded();
     expect(h.loads[0]?.source).toMatchObject({
       baseUrl: 'https://model.cn.example',
       fallbackBaseUrl: 'https://legacy-build-cdn.example',
     });
-    h.loads[0]!.resolve(catalogNamed('catalog-cn-initial'));
+    h.loads[0]!.resolve(catalogNamed('catalog-cn-initial'), 'current', ['embedding']);
     await initial;
     expect(activeMarker()).toBe('catalog-cn-initial');
+    const startupXd = getDesktopSelectableCatalog().providers.find(
+      (provider) => provider.id === 'xd',
+    );
+    expect(startupXd?.imageModels).toEqual([]);
+    expect(startupXd?.videoModels).toEqual([]);
+    expect(startupXd?.embeddingModels).toEqual([]);
 
     h.endpoint = 'https://model.global.example';
     const globalReload = reloadActiveCatalogForEndpointChange();
@@ -390,10 +855,169 @@ describe('provider catalog realm reload', () => {
     expect(activeMarker()).toBe('catalog-cn-latest');
   });
 
+  it('keeps bundled/LKG/waiting catalogs region-safe without hiding discovered xAI media', async () => {
+    const catalogWithXaiMedia = structuredClone(catalogNamed('catalog-with-xai-media'));
+    const xai = catalogWithXaiMedia.providers.find((provider) => provider.id === 'xai');
+    if (!xai) throw new Error('expected xAI provider');
+    xai.imageModels = [{ id: 'xai/grok-imagine-image', name: 'Grok Imagine Image' }];
+    xai.imageDefaults = { standard: 'xai/grok-imagine-image' };
+    xai.videoModels = [
+      { id: 'xai/grok-imagine-video', name: 'Grok Imagine Video' },
+      { id: 'xai/grok-imagine-video-1.5', name: 'Grok Imagine Video 1.5' },
+    ];
+    xai.videoDefaults = { standard: 'xai/grok-imagine-video' };
+
+    h.endpoint = 'https://model.cn-fallback.example';
+    const fallbackReload = reloadActiveCatalogForEndpointChange();
+
+    // The endpoint-switch window uses bundled data, but it cannot advertise Global XD media.
+    const waitingXd = getDesktopSelectableCatalog().providers.find(
+      (provider) => provider.id === 'xd',
+    );
+    expect(waitingXd?.imageModels).toEqual([]);
+    expect(waitingXd?.embeddingModels).toEqual([]);
+    expect(waitingXd?.videoModels?.map((model) => model.id)).not.toContain('happyhorse');
+
+    h.loads.at(-1)!.resolve(catalogWithXaiMedia, 'fallback');
+    await fallbackReload;
+
+    const fallbackCatalog = getDesktopSelectableCatalog();
+    const fallbackXd = fallbackCatalog.providers.find((provider) => provider.id === 'xd');
+    expect(fallbackXd?.imageModels).toEqual([]);
+    expect(fallbackXd?.embeddingModels).toEqual([]);
+    expect(fallbackXd?.videoModels?.map((model) => model.id)).not.toContain('happyhorse');
+    expect(
+      fallbackCatalog.providers
+        .find((provider) => provider.id === 'xai')
+        ?.videoModels?.map((model) => model.id),
+    ).toEqual(['xai/grok-imagine-video', 'xai/grok-imagine-video-1.5']);
+    expect(deriveCindyMediaConfig(fallbackCatalog.providers, 'embed')).toEqual({
+      models: [],
+      defaults: null,
+    });
+    expect(
+      deriveCindyMediaConfig(fallbackCatalog.providers, 'video').models.map((model) => model.id),
+    ).toContain('xai/grok-imagine-video-1.5');
+
+    h.endpoint = 'https://model.cn-current.example';
+    const currentReload = reloadActiveCatalogForEndpointChange();
+    expect(
+      getDesktopSelectableCatalog()
+        .providers.find((provider) => provider.id === 'xd')
+        ?.videoModels?.map((model) => model.id),
+    ).not.toContain('happyhorse');
+    const currentCatalogWithExplicitXd = structuredClone(catalogWithXaiMedia);
+    const explicitXd = currentCatalogWithExplicitXd.providers.find(
+      (provider) => provider.id === 'xd',
+    );
+    if (!explicitXd) throw new Error('expected XD provider');
+    explicitXd.imageModels = [];
+    delete explicitXd.imageDefaults;
+    explicitXd.embeddingModels = [];
+    delete explicitXd.embeddingDefaults;
+    explicitXd.videoModels = [{ id: 'seedance-fast', name: 'Seedance Fast' }];
+    explicitXd.videoDefaults = { standard: 'seedance-fast' };
+    h.loads.at(-1)!.resolve(currentCatalogWithExplicitXd, 'current');
+    await currentReload;
+
+    const currentCatalog = getDesktopSelectableCatalog();
+    const currentXd = currentCatalog.providers.find((provider) => provider.id === 'xd');
+    expect(currentXd?.imageModels).toEqual([]);
+    expect(currentXd?.embeddingModels).toEqual([]);
+    expect(currentXd?.videoModels).toEqual([]);
+    expect(deriveCindyMediaConfig(currentCatalog.providers, 'embed')).toEqual({
+      models: [],
+      defaults: null,
+    });
+    expect(
+      currentCatalog.providers
+        .find((provider) => provider.id === 'xai')
+        ?.videoModels?.map((model) => model.id),
+    ).toEqual(['xai/grok-imagine-video', 'xai/grok-imagine-video-1.5']);
+
+    // Restore the baseline expected by the following realm-race tests.
+    h.endpoint = 'https://model.cn.example';
+    const reset = reloadActiveCatalogForEndpointChange();
+    h.loads.at(-1)!.resolve(catalogNamed('catalog-cn-latest'));
+    await reset;
+  });
+
+  it('keeps bundled XD backfill field-scoped across endpoint reload and refresh', async () => {
+    const inheritedAll = structuredClone(catalogNamed('current-with-bundled-xd'));
+    const inheritedXai = inheritedAll.providers.find((provider) => provider.id === 'xai');
+    if (!inheritedXai) throw new Error('expected xAI provider');
+    inheritedXai.imageModels = [{ id: 'xai/grok-imagine-image', name: 'Grok Imagine Image' }];
+    inheritedXai.videoModels = [{ id: 'xai/grok-imagine-video', name: 'Grok Imagine Video' }];
+
+    h.endpoint = 'https://model.cn-primary-missing-xd.example';
+    const reload = reloadActiveCatalogForEndpointChange();
+    h.loads.at(-1)!.resolve(inheritedAll, 'current', ['image', 'video', 'embedding']);
+    await reload;
+
+    const projectedAll = getDesktopSelectableCatalog();
+    const projectedAllXd = projectedAll.providers.find((provider) => provider.id === 'xd');
+    expect(projectedAllXd?.imageModels).toEqual([]);
+    expect(projectedAllXd?.embeddingModels).toEqual([]);
+    expect(projectedAllXd?.videoModels?.map((model) => model.id)).not.toContain('happyhorse');
+    expect(projectedAll.providers.find((provider) => provider.id === 'xai')?.videoModels?.map(({ id, name }) => ({ id, name }))).toEqual(
+      inheritedXai.videoModels?.map(({ id, name }) => ({ id, name })),
+    );
+
+    const inheritedEmbedding = structuredClone(inheritedAll);
+    const inheritedEmbeddingXd = inheritedEmbedding.providers.find(
+      (provider) => provider.id === 'xd',
+    );
+    if (!inheritedEmbeddingXd) throw new Error('expected XD provider');
+    inheritedEmbeddingXd.imageModels = [
+      { id: 'gateway-current-image', name: 'Gateway Current Image' },
+    ];
+    inheritedEmbeddingXd.videoModels = [
+      { id: 'gateway-current-video', name: 'Gateway Current Video' },
+    ];
+
+    const partialRefresh = refreshActiveCatalogFromSource();
+    await Promise.resolve();
+    h.refreshLoads.at(-1)!.resolve({
+      catalog: inheritedEmbedding,
+      source: 'remote',
+      capabilityEvidence: 'current',
+      unverifiedXdMediaKinds: ['embedding'],
+    });
+    await partialRefresh;
+
+    const projectedEmbedding = getDesktopSelectableCatalog().providers.find(
+      (provider) => provider.id === 'xd',
+    );
+    expect(projectedEmbedding?.imageModels).toEqual([]);
+    expect(projectedEmbedding?.videoModels).toEqual([]);
+    expect(projectedEmbedding?.embeddingModels).toEqual([]);
+
+    const evidenceUpgrade = refreshActiveCatalogFromSource();
+    await Promise.resolve();
+    h.refreshLoads.at(-1)!.resolve({
+      catalog: structuredClone(inheritedEmbedding),
+      source: 'remote',
+      capabilityEvidence: 'current',
+      unverifiedXdMediaKinds: [],
+    });
+    await evidenceUpgrade;
+
+    expect(
+      getDesktopSelectableCatalog().providers.find((provider) => provider.id === 'xd')
+        ?.embeddingModels,
+    ).toEqual(inheritedEmbeddingXd.embeddingModels);
+
+    h.endpoint = 'https://model.cn.example';
+    const reset = reloadActiveCatalogForEndpointChange();
+    h.loads.at(-1)!.resolve(catalogNamed('catalog-cn-latest'));
+    await reset;
+  });
+
   it('ignores an automatic refresh response from a superseded realm', async () => {
+    const staleRefreshIndex = h.refreshLoads.length;
     const staleRefresh = refreshActiveCatalogFromSource();
     await Promise.resolve();
-    expect(h.refreshLoads[0]?.source).toMatchObject({
+    expect(h.refreshLoads[staleRefreshIndex]?.source).toMatchObject({
       baseUrl: 'https://model.cn.example',
     });
 
@@ -405,24 +1029,25 @@ describe('provider catalog realm reload', () => {
     );
     await globalReload;
 
+    const currentRefreshIndex = h.refreshLoads.length;
     const currentRefresh = refreshActiveCatalogFromSource();
     await Promise.resolve();
-    expect(h.refreshLoads[1]?.source).toMatchObject({
+    expect(h.refreshLoads[currentRefreshIndex]?.source).toMatchObject({
       baseUrl: 'https://model.global.example',
     });
-    h.refreshLoads[1]!.resolve({
+    h.refreshLoads[currentRefreshIndex]!.resolve({
       catalog: catalogNamed('catalog-global-refreshed', '2026-07-31T12:30:00.000Z'),
       source: 'remote',
     });
     await currentRefresh;
 
-    h.refreshLoads[0]!.resolve({
+    h.refreshLoads[staleRefreshIndex]!.resolve({
       catalog: catalogNamed('catalog-cn-stale', '2026-07-31T13:00:00.000Z'),
       source: 'remote',
     });
     await staleRefresh;
 
-    expect(activeMarker()).toBe('catalog-global-current');
+    expect(activeMarker()).toBe('catalog-global-refreshed');
     expect(getActiveCatalog().modelRegistry?.updatedAt).toBe('2026-07-31T12:30:00.000Z');
   });
 
@@ -458,6 +1083,175 @@ describe('provider catalog realm reload', () => {
     ).toEqual(activeXaiModels);
   });
 
+  it('installs a same-registry fallback snapshot and propagates evidence atomically', async () => {
+    const current = structuredClone(
+      catalogNamed('catalog-current-before-same-registry-fallback', '2026-07-31T12:30:00.000Z'),
+    );
+    setActiveCatalog(current, { capabilityEvidence: 'current' });
+
+    const fallback = structuredClone(current);
+    fallback.providers[0] = {
+      ...fallback.providers[0]!,
+      name: 'catalog-fallback-same-registry',
+    };
+    const fallbackXd = fallback.providers.find((provider) => provider.id === 'xd');
+    const fallbackXai = fallback.providers.find((provider) => provider.id === 'xai');
+    if (!fallbackXd || !fallbackXai) throw new Error('expected fallback providers');
+    fallbackXd.imageModels = [{ id: 'fallback-image', name: 'Fallback Image' }];
+    fallbackXd.videoModels = [{ id: 'fallback-video', name: 'Fallback Video' }];
+    fallbackXd.embeddingModels = [{ id: 'fallback-embedding', name: 'Fallback Embedding' }];
+    fallbackXai.videoModels = [
+      { id: 'xai/grok-imagine-video-1.5', name: 'Grok Imagine Video 1.5' },
+    ];
+
+    const events: number[] = [];
+    setActiveCatalogChangedListener((revision) => events.push(revision));
+    try {
+      const refresh = refreshActiveCatalogFromSource();
+      await Promise.resolve();
+      h.refreshLoads.at(-1)!.resolve({
+        catalog: fallback,
+        source: 'cache',
+        capabilityEvidence: 'fallback',
+      });
+      await refresh;
+
+      expect(activeMarker()).toBe('catalog-fallback-same-registry');
+      const projected = getDesktopSelectableCatalog();
+      expect(projected.providers.find((provider) => provider.id === 'xd')).toMatchObject({
+        imageModels: [],
+        videoModels: [],
+        embeddingModels: [],
+      });
+      expect(projected.providers.find((provider) => provider.id === 'xai')?.videoModels?.map(({ id, name }) => ({ id, name }))).toEqual(
+        fallbackXai.videoModels?.map(({ id, name }) => ({ id, name })),
+      );
+      expect(events).toHaveLength(1);
+
+      const exactFallbackRepeat = refreshActiveCatalogFromSource();
+      await Promise.resolve();
+      h.refreshLoads.at(-1)!.resolve({
+        catalog: structuredClone(fallback),
+        source: 'cache',
+        capabilityEvidence: 'fallback',
+      });
+      await exactFallbackRepeat;
+
+      expect(events).toHaveLength(1);
+
+      const evidenceUpgrade = refreshActiveCatalogFromSource();
+      await Promise.resolve();
+      h.refreshLoads.at(-1)!.resolve({
+        catalog: structuredClone(fallback),
+        source: 'remote',
+        capabilityEvidence: 'current',
+        unverifiedXdMediaKinds: ['image'],
+      });
+      await evidenceUpgrade;
+
+      expect(
+        getDesktopSelectableCatalog().providers.find((provider) => provider.id === 'xd'),
+      ).toMatchObject({
+        imageModels: [],
+        videoModels: [],
+        embeddingModels: fallbackXd.embeddingModels,
+      });
+      expect(events).toHaveLength(2);
+
+      const exactRepeat = refreshActiveCatalogFromSource();
+      await Promise.resolve();
+      h.refreshLoads.at(-1)!.resolve({
+        catalog: structuredClone(fallback),
+        source: 'remote',
+        capabilityEvidence: 'current',
+        unverifiedXdMediaKinds: ['image'],
+      });
+      await exactRepeat;
+
+      expect(events).toHaveLength(2);
+    } finally {
+      setActiveCatalogChangedListener(null);
+    }
+  });
+
+  it('projects a newer fallback refresh, then promotes identical current evidence', async () => {
+    const current = structuredClone(
+      catalogNamed('catalog-current-before-fallback-refresh', '2026-07-31T12:30:00.000Z'),
+    );
+    setActiveCatalog(current, { capabilityEvidence: 'current' });
+    expect(
+      getDesktopSelectableCatalog()
+        .providers.find((provider) => provider.id === 'xd')
+        ?.embeddingModels?.map((model) => model.id),
+    ).toContain('voyage/voyage-4');
+
+    const fallback = structuredClone(
+      catalogNamed('catalog-fallback-refresh', '2026-07-31T13:00:00.000Z'),
+    );
+    const xai = fallback.providers.find((provider) => provider.id === 'xai');
+    if (!xai) throw new Error('expected xAI provider');
+    xai.imageModels = [{ id: 'xai/grok-imagine-image', name: 'Grok Imagine Image' }];
+    xai.videoModels = [
+      { id: 'xai/grok-imagine-video', name: 'Grok Imagine Video' },
+      { id: 'xai/grok-imagine-video-1.5', name: 'Grok Imagine Video 1.5' },
+    ];
+
+    const refresh = refreshActiveCatalogFromSource();
+    await Promise.resolve();
+    h.refreshLoads.at(-1)!.resolve({
+      catalog: fallback,
+      source: 'cache',
+      capabilityEvidence: 'fallback',
+    });
+    await refresh;
+
+    const projected = getDesktopSelectableCatalog();
+    const xd = projected.providers.find((provider) => provider.id === 'xd');
+    expect(xd?.imageModels).toEqual([]);
+    expect(xd?.embeddingModels).toEqual([]);
+    expect(xd?.videoModels?.map((model) => model.id)).not.toContain('happyhorse');
+    expect(projected.providers.find((provider) => provider.id === 'xai')?.videoModels?.map(({ id, name }) => ({ id, name }))).toEqual(
+      xai.videoModels?.map(({ id, name }) => ({ id, name })),
+    );
+
+    const recoveredCatalog = structuredClone(fallback);
+    recoveredCatalog.providers[0] = {
+      ...recoveredCatalog.providers[0]!,
+      name: 'catalog-current-same-registry',
+    };
+    const recoveredXd = recoveredCatalog.providers.find((provider) => provider.id === 'xd');
+    const recoveredXai = recoveredCatalog.providers.find((provider) => provider.id === 'xai');
+    if (!recoveredXd || !recoveredXai) throw new Error('expected recovered providers');
+    recoveredXd.imageModels = [];
+    delete recoveredXd.imageDefaults;
+    recoveredXd.embeddingModels = [];
+    delete recoveredXd.embeddingDefaults;
+    recoveredXd.videoModels = [{ id: 'seedance-fast', name: 'Seedance Fast' }];
+    recoveredXd.videoDefaults = { standard: 'seedance-fast' };
+    recoveredXai.videoModels = [
+      { id: 'xai/grok-imagine-video-1.5', name: 'Grok Imagine Video 1.5' },
+    ];
+
+    const recovered = refreshActiveCatalogFromSource();
+    await Promise.resolve();
+    h.refreshLoads.at(-1)!.resolve({
+      catalog: recoveredCatalog,
+      source: 'remote',
+      capabilityEvidence: 'current',
+    });
+    await recovered;
+
+    const promoted = getDesktopSelectableCatalog();
+    const promotedXd = promoted.providers.find((provider) => provider.id === 'xd');
+    expect(activeMarker()).toBe('catalog-current-same-registry');
+    expect(promotedXd?.imageModels).toEqual([]);
+    expect(promotedXd?.embeddingModels).toEqual([]);
+    expect(promotedXd?.videoModels).toEqual([]);
+    expect(promoted.providers.find((provider) => provider.id === 'xai')?.videoModels?.map(({ id, name }) => ({ id, name }))).toEqual(
+      recoveredXai.videoModels,
+    );
+  });
+
   it('按时间语义守卫 offset/Z 等价 revision,拒收真实旧值和坏值,接受真实新值', async () => {
     setActiveCatalog(catalogNamed('current-offset', '2026-08-02T10:00:00+08:00'));
     h.warn.mockClear();
@@ -470,13 +1264,15 @@ describe('provider catalog realm reload', () => {
     };
 
     try {
-      // 同一时刻仅 ISO 表示不同：Registry 内容相同，应 no-op 且不误报警。
+      // 同一时刻仅 ISO 表示不同：Registry 关系仍为 same；完整 Catalog 快照不同则
+      // 原子安装 incoming，但不应误报同 revision 冲突。
       await refreshWith('equivalent-z', '2026-08-02T02:00:00.000Z');
-      expect(getActiveCatalog().modelRegistry?.updatedAt).toBe('2026-08-02T10:00:00+08:00');
+      expect(activeMarker()).toBe('equivalent-z');
+      expect(getActiveCatalog().modelRegistry?.updatedAt).toBe('2026-08-02T02:00:00.000Z');
       expect(h.warn).not.toHaveBeenCalled();
 
       await refreshWith('actually-older', '2026-08-02T01:59:59.000Z');
-      expect(getActiveCatalog().modelRegistry?.updatedAt).toBe('2026-08-02T10:00:00+08:00');
+      expect(getActiveCatalog().modelRegistry?.updatedAt).toBe('2026-08-02T02:00:00.000Z');
 
       await refreshWith('actually-newer', '2026-08-02T03:00:00.000Z');
       expect(getActiveCatalog().modelRegistry?.updatedAt).toBe('2026-08-02T03:00:00.000Z');
@@ -575,4 +1371,85 @@ describe('provider catalog realm reload', () => {
       syncLocalCatalogOverridesIntoActiveCatalog();
     }
   });
+
+  it.each([false, true])('recomputes Images API mode after a same-endpoint owner commit (outgoing key: %s)', async (outgoingHasKey) => {
+    const originalOwner = h.owner;
+    const loadsBefore = h.loads.length;
+    const images = () => getActiveCatalog().providers.find((provider) => provider.id === 'openai')!.imageModels!;
+    const expectMode = (hasKey: boolean) => {
+      expect(images().map((model) => model.id)).toEqual(hasKey
+        ? ['openai/gpt-image-2.6-sunburst', 'openai/gpt-image-2.6-flare', 'openai/gpt-image-2.5-sunburst', 'openai/gpt-image-2.5-flare', 'openai/gpt-image-2']
+        : ['openai/gpt-image-2']);
+      expect(images().find((model) => model.id === 'openai/gpt-image-2')?.name)
+        .toBe(hasKey ? 'GPT Image 2' : 'GPT Image Gen');
+    };
+    try {
+      h.owner = 'outgoing-owner';
+      h.imageKeys.set(outgoingHasKey ? h.owner : 'local-owner', 'fixture-image-key');
+      // enterLocalMode invalidates caches before committing the next owner.
+      getProviderSecretStore().invalidateCaches();
+      expectMode(outgoingHasKey);
+      h.owner = 'local-owner';
+      const reload = reloadActiveCatalogForEndpointChange();
+      // Correct the projection synchronously, even if background discovery fails.
+      expectMode(!outgoingHasKey);
+      await reload;
+      expectMode(!outgoingHasKey);
+      expect(h.loads).toHaveLength(loadsBefore);
+    } finally {
+      h.imageKeys.clear();
+      h.owner = originalOwner;
+      getProviderSecretStore().invalidateCaches();
+      await reloadActiveCatalogForEndpointChange();
+    }
+  });
+
+  it('XDT_DISABLE_MODELS_FETCH=1 时手动刷新不发请求,抛 MODEL_CATALOG_FETCH_DISABLED 而非伪装的网络失败', async () => {
+    const savedUrl = process.env.XDT_MODELS_URL;
+    const savedPath = process.env.XDT_MODELS_PATH;
+    const savedForceOff = process.env.XDT_DISABLE_MODELS_FETCH;
+    delete process.env.XDT_MODELS_URL;
+    delete process.env.XDT_MODELS_PATH;
+    process.env.XDT_DISABLE_MODELS_FETCH = '1';
+    try {
+      const loadsBefore = h.refreshLoads.length;
+      await expect(refreshActiveCatalogFromSource()).rejects.toMatchObject({
+        code: 'MODEL_CATALOG_FETCH_DISABLED',
+      });
+      expect(h.refreshLoads).toHaveLength(loadsBefore);
+    } finally {
+      if (savedUrl === undefined) delete process.env.XDT_MODELS_URL;
+      else process.env.XDT_MODELS_URL = savedUrl;
+      if (savedPath === undefined) delete process.env.XDT_MODELS_PATH;
+      else process.env.XDT_MODELS_PATH = savedPath;
+      if (savedForceOff === undefined) delete process.env.XDT_DISABLE_MODELS_FETCH;
+      else process.env.XDT_DISABLE_MODELS_FETCH = savedForceOff;
+    }
+  });
+
+  it('aborts a non-200 catalog body before dropping its timeout', async () => {
+    if (!h.catalogIo) {
+      const loading = ensureActiveCatalogLoaded();
+      h.loads.at(-1)!.resolve(BUNDLED_CATALOG);
+      await loading;
+    }
+    const response = Object.assign(new EventEmitter(), { statusCode: 404 });
+    const request = Object.assign(new EventEmitter(), {
+      setHeader: vi.fn(),
+      end: vi.fn(() => request.emit('response', response)),
+      abort: vi.fn(() => response.emit('error', new Error('cancelled'))),
+    });
+    h.request.mockReturnValueOnce(request);
+    await expect(h.catalogIo!.fetchText!('https://catalog.example.test', 100)).rejects.toThrow('HTTP 404');
+    expect(request.abort).toHaveBeenCalledTimes(1);
+  });
 });
+
+// Preserve the existing test owner/path contract after storage ports were extracted.
+vi.mock('../../ownerContext.js', () => ({
+  activeDataOwnerId: () => h.owner,
+  ownerGeneration: () => 0,
+  isOwnerBoundaryPending: () => false,
+  hasCommittedOwner: () => Boolean(h.owner),
+  ownerScopedPath: (...parts: string[]) => path.join(os.tmpdir(), 'provider-catalog-realm-reload', h.owner, ...parts),
+}));

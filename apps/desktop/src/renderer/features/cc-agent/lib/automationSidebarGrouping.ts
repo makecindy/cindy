@@ -1,11 +1,13 @@
 import type { Session } from '@/lib/ccAgent.types';
 import type { Schedule } from '@cindy/maker-scheduler';
+import type { FailedScheduleRunSnapshot } from '../../scheduler/lib/failedScheduleDismissal';
 
 import {
   getAutomationSessionDisplayTitle,
   isAutomationGeneratedSession,
 } from './scheduledSessionGrouping';
 import { normalizeWorkingDir } from './projectGrouping';
+import { isTeammateTaskSession } from '../../../../shared/sessionSource';
 import { sessionActivityMs } from './dateSessionGrouping';
 import {
   getSessionListCollapseView,
@@ -23,21 +25,47 @@ export interface AutomationScheduleSessionInfo {
   unreadRunIds: string[];
   hasUnreadRun: boolean;
   /**
-   * unreadRunIds 里是否至少有一个非成功结局(`failed` / `aborted` / `interrupted`)
-   * 的 run —— 侧栏右侧状态指示器据此把 failed schedule 涂成红点(urgent),
-   * 而不是和成功完成一样涂绿。
+   * unreadRunIds 里未成功结局(`failed` / `interrupted`)的子集。
+   * `aborted` 生而已读,不算未读失败。
+   */
+  unreadFailedRunIds: string[];
+  /** 存在失败/中断历史；不随已读变化，用于保留失败提示。 */
+  hasFailedRun?: boolean;
+  /** 最近一次失败/中断的身份，不随已读变化；关闭提示只针对这次历史快照。 */
+  latestFailedRun?: FailedScheduleRunSnapshot;
+  /** 该 session 上最近一次未读失败/中断 run，供单次重试或继续操作使用。 */
+  latestUnreadFailedRunId?: string;
+  /**
+   * 是否至少有一个未读失败 run —— 侧栏右侧据此涂红,而不是和成功完成一样涂绿。
    */
   hasUnreadFailedRun: boolean;
 }
 
+export function unreadSuccessScheduleRunIds(
+  info: Pick<AutomationScheduleSessionInfo, 'unreadRunIds' | 'unreadFailedRunIds'>,
+): string[] {
+  if (info.unreadFailedRunIds.length === 0) return info.unreadRunIds;
+  const failed = new Set(info.unreadFailedRunIds);
+  return info.unreadRunIds.filter((id) => !failed.has(id));
+}
+
 export interface AutomationSessionGroup {
   id: string;
+  /** 追加设备作用域前的分组 id；仅用于继承旧版持久化偏好。 */
+  legacyId?: string;
   scheduleId?: string;
   scheduleStatus?: Schedule['status'];
   scheduleSource?: Schedule['source'];
   nextFireAt?: number;
   workingDir?: string;
   projectConfigId?: string;
+  /** 远程设备上的自动化分组（组键已按设备作用域隔离，组内会话同属这台设备）。 */
+  deviceLinkDeviceId?: string;
+  /**
+   * 旧伙伴例行任务分组（同一伙伴同一条规则）。不是 schedule，规则引擎已移除：
+   * 已有运行照旧成组可读，组头只提供标为已读。
+   */
+  teammateRoutine?: { botId: string; routineId: string };
   title: string;
   sessions: Session[];
   attentionSessionIds: string[];
@@ -56,13 +84,32 @@ export function getEntryActivityMs(entry: SidebarSessionEntry): number {
   return entry.group.sessions.reduce((max, s) => Math.max(max, sessionActivityMs(s)), 0);
 }
 
-export type AutomationScheduleAction = 'run' | 'edit' | 'toggle-pause' | 'delete';
+export type AutomationScheduleAction =
+  'run' | 'edit' | 'toggle-pause' | 'delete' | 'mark-read' | 'archive-all';
 
-function fallbackAutomationGroupKey(session: Session): string {
+interface ScopedAutomationGroupKey {
+  key: string;
+  legacyKey?: string;
+}
+
+function fallbackAutomationGroupKey(session: Session): ScopedAutomationGroupKey {
   const workspace = session.workspaceKind ?? 'project';
-  const dir = normalizeWorkingDir(session.workingDir) ?? '__no_working_dir__';
+  const dir = normalizeWorkingDir(session.projectDir ?? session.workingDir) ?? '__no_working_dir__';
   const title = getAutomationSessionDisplayTitle(session).trim() || session.id;
-  return `fallback:${workspace}:${dir}:${title}`;
+  return scopeAutomationGroupKey(`fallback:${workspace}:${dir}:${title}`, session);
+}
+
+function scopeAutomationGroupKey(key: string, session: Session): ScopedAutomationGroupKey {
+  const deviceId = session.deviceLinkDeviceId?.trim();
+  return deviceId ? { key: `${key}:device:${deviceId}`, legacyKey: key } : { key };
+}
+
+/** 伙伴例行任务 Session 的规则归属；旧主机不带 routineId 时为 null（维持平铺）。 */
+function teammateRoutineOf(session: Session): { botId: string; routineId: string } | null {
+  if (!isTeammateTaskSession(session) || session.orcaRole === 'worker') return null;
+  const companion = session.companion;
+  if (companion?.role !== 'routine' || !companion.routineId) return null;
+  return { botId: companion.id, routineId: companion.routineId };
 }
 
 export function getAutomationSidebarGroupInfo(
@@ -70,6 +117,7 @@ export function getAutomationSidebarGroupInfo(
   scheduleSessionIndex?: ReadonlyMap<string, AutomationScheduleSessionInfo>,
 ): {
   key: string;
+  legacyKey?: string;
   title: string;
   scheduleId?: string;
   scheduleStatus?: Schedule['status'];
@@ -77,13 +125,27 @@ export function getAutomationSidebarGroupInfo(
   nextFireAt?: number;
   workingDir?: string;
   projectConfigId?: string;
+  teammateRoutine?: { botId: string; routineId: string };
 } | null {
+  const teammateRoutine = teammateRoutineOf(session);
+  if (teammateRoutine) {
+    return {
+      ...scopeAutomationGroupKey(
+        `routine:${teammateRoutine.botId}:${teammateRoutine.routineId}`,
+        session,
+      ),
+      // 例行任务 Session 以规则名为标题（「每次新建任务」时各次同名）。
+      title: session.title,
+      teammateRoutine,
+    };
+  }
   if (!isAutomationGeneratedSession(session)) return null;
 
   const indexed = scheduleSessionIndex?.get(session.id);
   if (indexed) {
+    const scopedKey = scopeAutomationGroupKey(`schedule:${indexed.scheduleId}`, session);
     return {
-      key: `schedule:${indexed.scheduleId}`,
+      ...scopedKey,
       scheduleId: indexed.scheduleId,
       scheduleStatus: indexed.scheduleStatus,
       scheduleSource: indexed.scheduleSource,
@@ -94,8 +156,9 @@ export function getAutomationSidebarGroupInfo(
     };
   }
 
+  const fallbackKey = fallbackAutomationGroupKey(session);
   return {
-    key: fallbackAutomationGroupKey(session),
+    ...fallbackKey,
     title: getAutomationSessionDisplayTitle(session),
   };
 }
@@ -124,12 +187,15 @@ export function groupAutomationSidebarEntries(
     } else {
       groups.set(groupInfo.key, {
         id: groupInfo.key,
+        legacyId: groupInfo.legacyKey,
         scheduleId: groupInfo.scheduleId,
         scheduleStatus: groupInfo.scheduleStatus,
         scheduleSource: groupInfo.scheduleSource,
         nextFireAt: groupInfo.nextFireAt,
         workingDir: groupInfo.workingDir,
         projectConfigId: groupInfo.projectConfigId,
+        ...(session.deviceLinkDeviceId ? { deviceLinkDeviceId: session.deviceLinkDeviceId } : {}),
+        ...(groupInfo.teammateRoutine ? { teammateRoutine: groupInfo.teammateRoutine } : {}),
         title: groupInfo.title,
         sessions: [session],
         attentionSessionIds: options.notifications.has(session.id) ? [session.id] : [],
@@ -171,23 +237,41 @@ export interface AutomationGroupChildViewOptions {
   notifications: ReadonlySet<string>;
   runningSessionIds?: ReadonlySet<string>;
   showAll: boolean;
+  /** 组头实际打开的任务，仅在收起态从未读子行中排除；展开态仍列出。 */
+  headerSessionId?: string;
   activeSessionId?: string;
   frozenVisibleSessionIds?: readonly string[] | null;
   /** 传入当前时间 ms 即启用「最近 24h 内有活动不折叠」豁免(和普通对话一致);不传走纯硬上限。 */
   nowMs?: number;
-  /** 收起态默认展示条数,默认 5(和普通对话一致)。 */
+  /** 展开组内的历史列表默认展示条数，默认 5（和普通对话一致）。 */
   minVisibleCount?: number;
+  /** 轴 1(文件夹开/关)的收起态。收起时只渲染 collapsedAttentionSessionIds 命中的运行。 */
+  collapsed?: boolean;
+  /**
+   * 收起态仍要保留可见的非静默未读、错误告警与待回复运行 id。错误来源是
+   * `sidebar/projectCollapsedAttention.ts` 的 `resolveCollapsedAttention().errorSessionIds`
+   * —— 与组头红点、项目折叠头红点同一份判据;待回复由组件按本地/远程活动补入。
+   */
+  collapsedAttentionSessionIds?: ReadonlySet<string>;
+  /**
+   * 展开态折叠的追加豁免集合(只影响折叠),语义同 SessionEntryList 的同名 prop:
+   * 父层把 device-link 远程活动镜像并进来,保证项目行 / 对话组 / 设备段头聚合灯
+   * 为之点亮的远程子运行不会藏在「显示全部」后(review P2)。
+   */
+  foldExemptSessionIds?: ReadonlySet<string>;
 }
 
 /**
  * 计算自动化分组组头底下要展示哪些子运行。
  *
- * 展开态(showAll=false 且无冻结快照)复用与普通对话列表同源的
- * `getSessionListCollapseView`:默认前 N 条(默认 5)+ 传入 nowMs 时豁免最近 24h 内
- * 有活动的运行 + 需关注(未读)/运行中 + 当前打开的运行始终可见,超出由「显示全部」一次
- * 展开。**全部运行(含被组头代表的最新一条)都参与折叠并各自成行**,让最新未读也单独可见,
- * 与「显示全部」一致;组头点击打开哪条由组件单独算(getAutomationGroupPrimarySession),
- * 与列表行是"两个入口指向同一 session",不互斥。
+ * 展开态列出全部运行，包含组头代表的那条，并复用普通任务列表的前 N 条、
+ * 最近 24h、未读／运行中和当前任务豁免；冻结布局和「显示全部」也保留它。
+ * 只有收起态排除组头实际代表的任务，避免未读子行与组头重复。
+ *
+ * 收起态仍展示全部非静默未读及待处理运行，不受前 N 条上限影响。
+ * 组件把未读、远程 completed、错误和待回复统一传入 collapsedAttentionSessionIds；
+ * 静默成功不产生未读，已读且无待处理状态的历史仍隐藏。
+ * 收起态不套 24h / active 豁免，避免普通历史或当前打开的已读运行撑开列表。
  */
 export function getAutomationGroupChildView(
   group: AutomationSessionGroup,
@@ -201,6 +285,20 @@ export function getAutomationGroupChildView(
     hiddenCount: 0,
   });
 
+  // 收起态先于冻结布局和 showAll，只显示未读及待处理运行。
+  if (options.collapsed) {
+    const attentionIds = options.collapsedAttentionSessionIds;
+    const visibleSessions = attentionIds?.size
+      ? allRuns.filter((session) => session.id !== options.headerSessionId && attentionIds.has(session.id))
+      : [];
+    return {
+      visibleSessions,
+      isOverflowing: false,
+      totalCount: visibleSessions.length,
+      hiddenCount: 0,
+    };
+  }
+
   // 展开:全量子运行。
   if (options.showAll) return withoutOverflow(allRuns);
 
@@ -210,10 +308,20 @@ export function getAutomationGroupChildView(
     const frozenSessions = options.frozenVisibleSessionIds
       .map((sessionId) => byId.get(sessionId))
       .filter((session): session is Session => Boolean(session));
-    return withoutOverflow(frozenSessions);
+    // 冻结只固定已点选布局，不能藏住后来变为运行/未读的本地或远程子运行。
+    const visibleIds = new Set(frozenSessions.map((session) => session.id));
+    const visibleSessions = [
+      ...frozenSessions,
+      ...allRuns.filter((session) => !visibleIds.has(session.id) &&
+        (options.notifications.has(session.id) ||
+          options.runningSessionIds?.has(session.id) ||
+          options.foldExemptSessionIds?.has(session.id))),
+    ];
+    const hiddenCount = allRuns.length - visibleSessions.length;
+    return { visibleSessions, isOverflowing: hiddenCount > 0, totalCount: allRuns.length, hiddenCount };
   }
 
-  // 默认展开态:全部运行套用普通对话同款折叠,每条(含被组头代表的最新一条)各自成行。
+  // 默认展开态：全部运行套用普通任务同款折叠，包含组头代表的任务。
   const view = getSessionListCollapseView({
     entries: allRuns,
     minVisibleCount: options.minVisibleCount ?? SESSION_LIST_COLLAPSE_MIN_VISIBLE_COUNT,
@@ -225,7 +333,8 @@ export function getAutomationGroupChildView(
     isActiveEntry: (session) => session.id === options.activeSessionId,
     hasAttentionEntry: (session) =>
       options.notifications.has(session.id) ||
-      (options.runningSessionIds?.has(session.id) ?? false),
+      (options.runningSessionIds?.has(session.id) ?? false) ||
+      (options.foldExemptSessionIds?.has(session.id) ?? false),
   });
   return {
     visibleSessions: [...view.visibleEntries],
@@ -244,7 +353,7 @@ export function getVisibleAutomationGroupSessions(
 }
 
 /**
- * 组内「最新一条」运行:按 sessionActivityMs(updatedAt / userSendAt 取较新)降序取首。
+ * 组内「最新一条」运行:按 sessionActivityMs 的换手时间及旧数据回退降序取首。
  * 侧栏组头(折叠态)用它作为整组的代表 —— 状态、running/loading、点击打开目标都跟这条一致
  * (「组头 = 最新一条运行的代理」)。group.sessions 恒非空(分组至少 2 条),返回可能仍为
  * undefined 仅为类型安全兜底。

@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { parseCron, nextRun, cronToHuman } from '../engine/cron.js';
+import { parseCron, nextRun, cronToHuman, fromWallClock } from '../engine/cron.js';
 
 describe('parseCron', () => {
   it('expands */5 in minute field', () => {
@@ -31,6 +31,11 @@ describe('parseCron', () => {
     expect(p.dayOfWeek).toEqual([0]);
   });
 
+  it('expands dayOfWeek steps through the Sunday alias 7', () => {
+    expect(parseCron('0 0 * * 7/2').dayOfWeek).toEqual([0]);
+    expect(parseCron('0 0 * * 5/2').dayOfWeek).toEqual([0, 5]);
+  });
+
   it('rejects out-of-range minute', () => {
     expect(() => parseCron('60 * * * *')).toThrow();
   });
@@ -38,6 +43,13 @@ describe('parseCron', () => {
   it('rejects wrong field count', () => {
     expect(() => parseCron('* * * *')).toThrow();
     expect(() => parseCron('* * * * * *')).toThrow();
+  });
+
+  it('rejects malformed numeric field segments instead of partially parsing them', () => {
+    expect(() => parseCron('5abc * * * *')).toThrow();
+    expect(() => parseCron('*/5abc * * * *')).toThrow();
+    expect(() => parseCron('1-2-3 * * * *')).toThrow();
+    expect(() => parseCron('1/2/3 * * * *')).toThrow();
   });
 });
 
@@ -184,6 +196,99 @@ describe('nextRun', () => {
     const from = Date.UTC(2026, 9, 31, 16, 0, 1);
     const next = nextRun('0 12 * * *', from, 'America/New_York');
     expect(next).toBe(Date.UTC(2026, 10, 1, 17, 0, 0));
+  });
+
+  it('DST fall-back overlap: from inside the repeated hour never yields a past instant', () => {
+    // 2026-11-01 06:31:30Z = 01:31:30 EST — the SECOND pass of the repeated
+    // 01:xx hour (02:00 EDT → 01:00 EST at 06:00Z). Wall 01:45 occurs at both
+    // 05:45Z (EDT) and 06:45Z (EST); resolving ambiguity to the earlier
+    // occurrence returned 05:45Z — 46min in the past — which the scheduler
+    // treated as due and re-fired the finished schedule every tick.
+    const from = Date.UTC(2026, 10, 1, 6, 31, 30);
+    const next = nextRun('45 1 * * *', from, 'America/New_York');
+    expect(next).toBe(Date.UTC(2026, 10, 1, 6, 45, 0));
+    expect(next).toBeGreaterThan(from);
+  });
+
+  it('DST fall-back overlap: minute-wrap branch also stays in the future', () => {
+    // Same geometry, but the current minute (31) is past the target (10), so
+    // nextRun takes the wrap-into-next-hour branch through wall 02:00.
+    const from = Date.UTC(2026, 10, 1, 6, 31, 30);
+    const next = nextRun('10 1 * * *', from, 'America/New_York');
+    expect(next).toBe(Date.UTC(2026, 10, 2, 6, 10, 0));
+    expect(next).toBeGreaterThan(from);
+  });
+
+  // 测试价值
+  // - 生产入口与可观察结果：nextRun 返回下一个 cron 壁钟槽位；scheduler 会用它重排 nextFireAt。
+  // - Bug／规则依据：#5924；亚小时 DST 回拨时 nextRun 必须严格晚于 from。
+  // - 现有覆盖缺口：既有纽约整小时回拨只覆盖重复段内的单个分钟，未覆盖 Lord Howe 的 30 分钟回拨与分钟 wrap。
+  // - 最小失败输入：2026-04-05 Australia/Lord_Howe 回拨日，from 位于重复 01:xx 壁钟小时。
+  // - tier：unit；直接调用公开 nextRun，无外部 I/O。
+  // - 实测耗时：随现有 cron.test.ts 定向运行记录在 PR 验证项。
+  it('Lord Howe 亚小时回拨：分钟 wrap 保留未来重复段并严格向前', () => {
+    const tz = 'Australia/Lord_Howe';
+    const cases = [
+      ['23 1 * * *', Date.UTC(2026, 3, 4, 14, 23, 13), Date.UTC(2026, 3, 5, 14, 53, 0)],
+      ['0 * * * *', Date.UTC(2026, 3, 4, 14, 0, 21), Date.UTC(2026, 3, 4, 15, 30, 0)],
+      ['0,45 1 * * *', Date.UTC(2026, 3, 4, 14, 50, 30), Date.UTC(2026, 3, 4, 15, 15, 0)],
+      ['45 1 * * *', Date.UTC(2026, 3, 4, 14, 50, 30), Date.UTC(2026, 3, 4, 15, 15, 0)],
+    ] as const;
+    for (const [expr, from, expected] of cases) {
+      const next = nextRun(expr, from, tz);
+      expect(next, expr).toBe(expected);
+      expect(next, expr).toBeGreaterThan(from);
+    }
+  });
+
+  it('Lord Howe 亚小时跳时：不存在的整点直接前进到下一合法小时', () => {
+    const from = Date.UTC(2026, 9, 3, 15, 29, 0); // local 2026-10-04 01:59, next is 02:30
+    const next = nextRun('0 * * * *', from, 'Australia/Lord_Howe');
+    expect(next).toBe(Date.UTC(2026, 9, 3, 16, 0, 0)); // local 03:00 after the 30m gap
+    expect(next).toBeGreaterThan(from);
+  });
+
+  it('DST fall-back overlap: ambiguous wall time resolves to the later occurrence', () => {
+    // 01:00 on 2026-11-01 in NY exists twice (05:00Z EDT and 06:00Z EST).
+    expect(fromWallClock(2026, 11, 1, 1, 0, 'America/New_York'))
+      .toBe(Date.UTC(2026, 10, 1, 6, 0, 0));
+    // Southern-hemisphere geometry (guess lands post-transition):
+    // 2026-04-05 02:30 in Sydney exists twice (15:30Z AEDT and 16:30Z AEST).
+    expect(fromWallClock(2026, 4, 5, 2, 30, 'Australia/Sydney'))
+      .toBe(Date.UTC(2026, 3, 4, 16, 30, 0));
+  });
+
+  it('DST spring-forward gap: nonexistent wall time clamps past the transition', () => {
+    // 02:30 on 2026-03-08 in NY does not exist (02:00 EST → 03:00 EDT).
+    // The post-transition reading is 03:30 EDT = 07:30Z.
+    expect(fromWallClock(2026, 3, 8, 2, 30, 'America/New_York'))
+      .toBe(Date.UTC(2026, 2, 8, 7, 30, 0));
+    // Sydney gap: 2026-10-04 02:30 AEST doesn't exist (→ 03:00 AEDT); the
+    // post-transition reading is 03:30 AEDT = Oct 3 16:30Z.
+    expect(fromWallClock(2026, 10, 4, 2, 30, 'Australia/Sydney'))
+      .toBe(Date.UTC(2026, 9, 3, 16, 30, 0));
+  });
+
+  it('DST spring-forward gap: hourly cron terminates instead of exhausting the iteration limit', () => {
+    // cron "0 2 * * *" can never match wall 02:00 on 2026-03-08 in NY. Before
+    // the gap clamp this looped MAX_ITERATIONS times (~4.4s of blocking Intl
+    // calls) and threw, quarantining the schedule. The missing slot is skipped:
+    // the fire lands on the next day's 02:00 EDT.
+    const next = nextRun('0 2 * * *', Date.UTC(2026, 2, 8, 5, 0, 0), 'America/New_York');
+    expect(next).toBe(Date.UTC(2026, 2, 9, 6, 0, 0));
+    const nextHalf = nextRun('30 2 * * *', Date.UTC(2026, 2, 8, 4, 0, 0), 'America/New_York');
+    expect(nextHalf).toBe(Date.UTC(2026, 2, 9, 6, 30, 0));
+  });
+
+  it('every-minute cron never moves backwards across both 2026 NY transition days', () => {
+    for (const dayStart of [Date.UTC(2026, 2, 8), Date.UTC(2026, 10, 1)]) {
+      let cur = dayStart;
+      for (let i = 0; i < 2000; i++) {
+        const next = nextRun('* * * * *', cur, 'America/New_York');
+        expect(next).toBeGreaterThan(cur);
+        cur = next;
+      }
+    }
   });
 });
 

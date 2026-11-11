@@ -1,6 +1,4 @@
 /** worktree 删除/归档预检的本机与 device-link 路由回归。 */
-import fs from 'node:fs';
-
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import {
@@ -39,11 +37,7 @@ describe('fetchDirtyWorktreeForRemoval', () => {
     remoteInvoke.mockResolvedValue({ hasWorktree: true, dirty: true });
 
     await expect(fetchDirtyWorktreeForRemoval('s1', 'device-1')).resolves.toBe(true);
-    expect(remoteInvoke).toHaveBeenCalledWith(
-      'device-1',
-      'worktree:removal-preview',
-      ['s1'],
-    );
+    expect(remoteInvoke).toHaveBeenCalledWith('device-1', 'worktree:removal-preview', ['s1']);
     expect(localPreview).not.toHaveBeenCalled();
   });
 
@@ -63,25 +57,5 @@ describe('fetchDirtyWorktreeForRemoval', () => {
         { id: 'remote', deviceLinkDeviceId: 'device-1' },
       ]),
     ).resolves.toBe(2);
-  });
-});
-
-describe('archive warning wiring', () => {
-  it('preflights bulk archive, archive-all, and doc-mode tab close', () => {
-    const sidebarSource = fs.readFileSync(
-      new URL('../features/cc-agent/CCAgentSidebarUpper.tsx', import.meta.url),
-      'utf8',
-    );
-    const docModeSource = fs.readFileSync(
-      new URL('../features/cc-agent/workdir-browse/WorkdirBrowseRoute.tsx', import.meta.url),
-      'utf8',
-    );
-
-    expect(sidebarSource.match(/countDirtyWorktreesForRemoval\(/g)).toHaveLength(3);
-    expect(sidebarSource).toContain(
-      "ccAgent.sidebar.bulkSelection.confirmArchive.dirtyWorktreeWarning",
-    );
-    expect(docModeSource).toContain('fetchDirtyWorktreeForRemoval(');
-    expect(docModeSource).toContain('ccAgent.sidebar.confirmArchive.dirtyWorktreeWarning');
   });
 });

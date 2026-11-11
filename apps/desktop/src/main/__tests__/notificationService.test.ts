@@ -22,7 +22,17 @@
  * Notification 的实例方法和 isSupported 必须支持(constructor 是顶层 IIFE 触发)。
  */
 
-import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
+import type { Session } from '@cindy/maker-core';
+import type { BrowserWindow } from 'electron';
+
+const chatWindow = vi.hoisted(() => ({ url: 'file:///app/index.html#/bots/groups/group-1' }));
+vi.mock('../deepLink', () => ({
+  getDeepLinkMainWindow: () => ({ isFocused: () => true, isVisible: () => true, webContents: { getURL: () => chatWindow.url } }),
+  openMainWindowChatMessage: vi.fn(),
+  openMainWindowSession: vi.fn(),
+}));
+vi.mock('../agent-island/companionIdentity', () => ({ companionAvatarThumbnail: async () => undefined }));
 
 type IpcHandler = (event: unknown, payload: unknown) => Promise<void> | void;
 
@@ -31,6 +41,7 @@ const registeredHandlers = new Map<string, IpcHandler>();
 
 // Notification 构造调用计数(每条 toast 一次)。
 const notificationCtor = vi.fn();
+const notificationClicks: Array<() => void> = [];
 // Notification.isSupported() — 默认 true; 单独用例需改成 false 时,setMock 之前覆盖。
 let notificationSupported = true;
 
@@ -48,6 +59,7 @@ class FakeNotification {
   }
   on(evt: string, cb: (...args: unknown[]) => void): this {
     if (evt === 'close') this.closeCb = cb;
+    if (evt === 'click') notificationClicks.push(cb);
     return this;
   }
   show(): void {
@@ -73,6 +85,7 @@ vi.mock('electron', () => ({
   }),
   nativeImage: {
     createFromPath: () => ({ isEmpty: () => true }),
+    createFromBuffer: (bytes: Buffer) => ({ bytes, isEmpty: () => false }),
   },
 }));
 
@@ -89,6 +102,19 @@ vi.mock('../logger', () => ({
 const markSessionNeedsAttention = vi.fn();
 vi.mock('../appBadgeService', () => ({
   markSessionNeedsAttention,
+}));
+
+// 高权限 IPC 的入站来源断言：真实实现要 BrowserWindow 与 app-content 登记表，
+// 这里只验它在该 handler 上被调到（且在任何副作用之前）。
+const assertTrustedAppRendererEvent = vi.fn((_event: unknown): void => {});
+vi.mock('../security/trustedAppRenderer', () => ({
+  assertTrustedAppRendererEvent: (event: unknown) => assertTrustedAppRendererEvent(event),
+}));
+
+// 「消息免打扰」判定：真实实现读账号库的同步索引，这里只验 handler 在哪个时刻用它。
+const isSessionNotificationsMutedSync = vi.fn((_sessionId: string): boolean => false);
+vi.mock('../localDb/sessionFlagRegistry', () => ({
+  isSessionNotificationsMutedSync: (sessionId: string) => isSessionNotificationsMutedSync(sessionId),
 }));
 
 // mobile 通道:真实实现在 device-link host(依赖 electron/ws/authManager 全家桶),
@@ -110,62 +136,355 @@ const latestMessageText = vi.fn<
 vi.mock('../localDb/latestMessageText', () => ({
   latestMessageText: (sessionId: string, role: string) => latestMessageText(sessionId, role),
 }));
+const readSessionNotificationPreview = vi.fn(async (_sessionId: string, _includeReply = true): Promise<import('../localDb/sessionNotificationPreview').SessionNotificationPreview> => ({}));
+vi.mock('../localDb/sessionNotificationPreview', () => ({ readSessionNotificationPreview }));
+let ownerScopeCurrent = true;
+let ownerScopeKey = 'account-a:1';
+vi.mock('../device-link/broadcast-tap', () => ({
+  captureDataOwnerBroadcastScope: () => ({ ownerScopeKey }),
+  isDataOwnerBroadcastScopeCurrent: () => ownerScopeCurrent,
+}));
 const drainPersistQueue = vi.fn((): Promise<void> => Promise.resolve());
-vi.mock('../messagePersistBroadcaster', () => ({
+vi.mock('../messagePersistBroadcaster.desktop', () => ({
   drainPersistQueue: () => drainPersistQueue(),
+}));
+const drainSessionActiveTurnWrites = vi.fn((_sessionId: string): Promise<void> => Promise.resolve());
+const getSessionNotificationTurnSignal = vi.fn((_sessionId: string): { id: string; fallbackEventId: string; ended: boolean } | undefined => undefined);
+vi.mock('../localDb/sessionActiveTurn', () => ({
+  drainSessionActiveTurnWrites: (sessionId: string) => drainSessionActiveTurnWrites(sessionId),
+  getSessionNotificationTurnSignal: (sessionId: string) => getSessionNotificationTurnSignal(sessionId),
 }));
 
 interface FakeFeishuIM {
   getOwnerOpenId: ReturnType<typeof vi.fn>;
+  sendText: ReturnType<typeof vi.fn>;
   sendMarkdownText: ReturnType<typeof vi.fn>;
 }
 
 function makeFeishuIm(ownerOpenId: string | null): FakeFeishuIM {
   return {
     getOwnerOpenId: vi.fn(() => ownerOpenId),
+    sendText: vi.fn(async () => ({ messageId: 'msg-plain' })),
     sendMarkdownText: vi.fn(async () => ({ messageId: 'msg-1' })),
   };
 }
 
-// notificationService 在顶层做 IIFE / module state, 每个用例都拿一份新的。
+// notificationService 在顶层做 IIFE / module state, 既有用例仍各拿一份新的。
+// 「cross-window failure dedupe on one module」只在 beforeAll 调一次：账本 key 含
+// owner + session + channel，两条用例靠不同 session 和不同 alert id 隔离，不逐条重载。
 async function freshService() {
   vi.resetModules();
   registeredHandlers.clear();
   notificationCtor.mockClear();
+  notificationClicks.length = 0;
   warn.mockClear();
   notificationSupported = true;
+  ownerScopeCurrent = true;
+  ownerScopeKey = 'account-a:1';
   markSessionNeedsAttention.mockClear();
-  sendMobileSessionNotify.mockClear();
+  assertTrustedAppRendererEvent.mockReset();
+  isSessionNotificationsMutedSync.mockReset().mockReturnValue(false);
+  sendMobileSessionNotify.mockReset().mockReturnValue(true);
   getMobileNotifyGeneration.mockClear();
-  latestMessageText.mockClear();
+  latestMessageText.mockReset().mockResolvedValue('');
+  readSessionNotificationPreview.mockReset().mockImplementation(async (sessionId, includeReply = true) => {
+    if (!includeReply) return {};
+    const text = await latestMessageText(sessionId, 'assistant');
+    return text ? { reply: { clientId: 'reply-id', text }, eventId: 'reply-id' } : {};
+  });
   drainPersistQueue.mockClear();
-  return import('../notificationService');
+  drainSessionActiveTurnWrites.mockReset().mockResolvedValue(undefined);
+  getSessionNotificationTurnSignal.mockReset().mockReturnValue(undefined);
+  const service = await import('../notificationService');
+  const { setMainLocale } = await import('../i18n.desktop');
+  // 既有分发断言以简中为基准；需要验证其它语言的用例会在调用前显式切换。
+  setMainLocale('zh-CN');
+  return service;
 }
 
-async function invokeHandler(payload: unknown): Promise<void> {
+function windowEvent(senderId: number): { sender: { id: number } } {
+  return { sender: { id: senderId } };
+}
+
+async function invokeHandler(payload: unknown, event: unknown = {}): Promise<void> {
   const handler = registeredHandlers.get('notification:show-session-event');
   if (!handler) throw new Error('handler not registered');
-  await handler({} as unknown, payload);
+  await handler(event, payload);
+  await flushAsync();
 }
 
 /** mobile 分支是 fire-and-forget 的独立 async 块;断言它之前先把微任务队列排空。 */
 const flushAsync = () => new Promise<void>((resolve) => setTimeout(resolve, 0));
 
+// 有的用例会切到假定时器，而且这个文件不止一个 describe。恢复必须盖住整个文件，
+// 否则前一个用例留下的假定时器会让后面用例里的 setTimeout(0) 永远不跑。
+afterEach(() => {
+  vi.useRealTimers();
+});
+
 const baseDeps = (feishuIm: FakeFeishuIM) => ({
   getWindow: () => null,
   // 实参在主进程是 FeishuIM, 测试里用结构兼容的 fake 就够 — 仅访问
-  // getOwnerOpenId / sendMarkdownText 两个方法。
+  // getOwnerOpenId / sendText / sendMarkdownText 三个方法。
   feishuIm: feishuIm as unknown as Parameters<
     Awaited<ReturnType<typeof freshService>>['initNotificationService']
   >[0]['feishuIm'],
 });
 
 describe('notificationService — channels 分发', () => {
-  beforeEach(() => {
-    // 每个用例重新注册 handler,避免相互污染。
+  // Unit regression: direct scheduler/autonomy toasts bypassed the renderer's island gate and
+  // played a second sound. Exercise actual OS options, including the exits that must stay audible.
+  it('applies the sound policy only where a Cindy sound can replace the system one', async () => {
+    const { initNotificationService, showDesktopSessionEvent, showDesktopChatMessage } = await freshService();
+    let silent = true;
+    initNotificationService({ ...baseDeps(makeFeishuIm(null)), shouldSilenceTaskNotification: (kind) => silent && kind !== 'error' });
+    showDesktopSessionEvent(() => null, { sessionId: 'sound-task', title: 'Task', kind: 'done' });
+    expect(notificationCtor).toHaveBeenLastCalledWith(expect.objectContaining({ silent: true }));
+    showDesktopSessionEvent(() => null, { sessionId: 'sound-task', title: 'Task', kind: 'error' });
+    expect(notificationCtor).toHaveBeenLastCalledWith(expect.objectContaining({ silent: false }));
+    // A run that never created a session changes no island state, so nothing else will sound.
+    showDesktopSessionEvent(() => null, { sessionId: '', title: 'Schedule', kind: 'done' });
+    expect(notificationCtor).toHaveBeenLastCalledWith(expect.objectContaining({ silent: false }));
+    // Group chat rows never get task sounds, so their fallback toast keeps the system sound.
+    const chat = { groupId: 'sound-chat', groupName: 'Chat', messageId: 'reply', senderName: 'Cindy', avatar: '', preview: 'Done' };
+    await showDesktopChatMessage(chat, () => true);
+    expect(notificationCtor).toHaveBeenLastCalledWith(expect.not.objectContaining({ silent: true }));
+    silent = false;
+    showDesktopSessionEvent(() => null, { sessionId: 'sound-task', title: 'Task', kind: 'done' });
+    expect(notificationCtor).toHaveBeenLastCalledWith(expect.objectContaining({ silent: false }));
   });
-  afterEach(() => {
-    vi.useRealTimers();
+
+  // Regression: OS click must keep host + original task + reply anchor through reload,
+  // and a notification from the previous account must not navigate the new account.
+  it('routes desktop notification clicks with their original host and message, fenced by owner', async () => {
+    const { showDesktopSessionEvent, initNotificationService } = await freshService();
+    const { openMainWindowSession } = await import('../deepLink');
+    vi.mocked(openMainWindowSession).mockClear();
+    showDesktopSessionEvent(() => null, {
+      sessionId: 'remote-task', deviceId: 'studio', messageClientId: 'answer', title: 'Reply', kind: 'done',
+    });
+    notificationClicks[0]!();
+    expect(openMainWindowSession).toHaveBeenLastCalledWith('remote-task', { deviceId: 'studio', messageClientId: 'answer' });
+    ownerScopeCurrent = false;
+    notificationClicks[0]!();
+    expect(openMainWindowSession).toHaveBeenCalledTimes(1);
+    ownerScopeCurrent = true;
+    initNotificationService(baseDeps(makeFeishuIm(null)));
+    readSessionNotificationPreview.mockResolvedValue({ reply: { clientId: 'reply-original', text: 'Answer' } });
+    await invokeHandler({ sessionId: 'original', title: 'Reply', kind: 'done' });
+    notificationClicks.at(-1)!();
+    expect(openMainWindowSession).toHaveBeenLastCalledWith('original', { messageClientId: 'reply-original' });
+  });
+
+  it('does not suppress an unread thread merely because its group is focused', async () => {
+    const { showDesktopChatMessage } = await freshService();
+    const payload = { groupId: 'group-1', groupName: 'Group', messageId: 'message-1', senderName: 'Other', avatar: '', preview: 'Reply' };
+    await showDesktopChatMessage(payload, () => true);
+    expect(notificationCtor).not.toHaveBeenCalled();
+    await showDesktopChatMessage({ ...payload, threadRootId: 'thread-2' }, () => true);
+    expect(notificationCtor).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({ title: 'Group', body: 'Other: Reply' }));
+  });
+  // #6754 review 4373832302 / unit: a finished handoff's delayed event keeps
+  // its host-recorded routing decision; current pending state can already differ.
+  it('uses request ownership after a handoff ends and rejects unknown or cross-session request IDs', async () => {
+    const { initNotificationService } = await freshService();
+    const { notifyInputHandoffOnce, forgetInputHandoffNotice, clearInputHandoffChannelNotices } =
+      await import('../im/shared/inputHandoffChannelNotice');
+    const feishuIm = makeFeishuIm('owner');
+    initNotificationService(baseDeps(feishuIm));
+    const notify = (sessionId: string, inputHandoffRequestId: string) => invokeHandler({
+      sessionId, inputHandoffRequestId, title: 'Bot', kind: 'needs-reply',
+      channels: { desktop: false, feishu: true, mobile: false },
+    });
+    try {
+      await notifyInputHandoffOnce('im-bot', 'settled-request', async () => true);
+      await notify('im-bot', 'settled-request');
+      expect(feishuIm.sendMarkdownText).not.toHaveBeenCalled();
+      await notify('other-bot', 'settled-request');
+      forgetInputHandoffNotice('im-bot', 'settled-request');
+      await notify('im-bot', 'settled-request');
+      expect(feishuIm.sendMarkdownText).not.toHaveBeenCalled();
+      await notifyInputHandoffOnce('desktop-bot', 'ordinary-request', async () => false);
+      await notify('desktop-bot', 'ordinary-request');
+      expect(feishuIm.sendMarkdownText).toHaveBeenCalledOnce();
+    } finally {
+      clearInputHandoffChannelNotices();
+    }
+  });
+
+  it.each(['owned', 'owner-changed', 'focused', 'muted'] as const)(
+    'keeps desktop independent of delayed handoff ownership (%s)', async outcome => {
+      const { initNotificationService } = await freshService();
+      const { notifyInputHandoffOnce, forgetInputHandoffNotice, clearInputHandoffChannelNotices } =
+        await import('../im/shared/inputHandoffChannelNotice');
+      const feishuIm = makeFeishuIm('owner');
+      let focused = false;
+      initNotificationService({ ...baseDeps(feishuIm), getWindow: () => ({ isFocused: () => focused }) as unknown as BrowserWindow });
+      let release!: (handled: boolean) => void;
+      const decision = new Promise<boolean>(resolve => { release = resolve; });
+      void notifyInputHandoffOnce('bot', 'request', () => decision);
+      try {
+        const pending = registeredHandlers.get('notification:show-session-event')!({}, {
+          sessionId: 'bot', title: 'Bot', kind: 'needs-reply', inputHandoffRequestId: 'request',
+          ...(outcome === 'muted' ? { markAttention: false } : {}),
+          channels: { desktop: true, feishu: true, mobile: false },
+        });
+        // Allow Main's independent identity enrichment to finish; the handoff
+        // routing promise below stays unresolved throughout this desktop check.
+        await flushAsync();
+        expect(notificationCtor).toHaveBeenCalledOnce();
+        expect(feishuIm.sendMarkdownText).not.toHaveBeenCalled();
+        forgetInputHandoffNotice('bot', 'request'); // completion cleanup while resolution is in flight
+        if (outcome === 'owner-changed') ownerScopeCurrent = false;
+        if (outcome === 'focused') focused = true;
+        if (outcome === 'muted') isSessionNotificationsMutedSync.mockReturnValue(true);
+        release(outcome === 'owned');
+        await pending;
+        expect(feishuIm.sendMarkdownText).not.toHaveBeenCalled();
+      } finally {
+        clearInputHandoffChannelNotices();
+      }
+    },
+  );
+
+  // #6754 / input-handoff §2.4 / unit: the real notification IPC must not
+  // duplicate Main's channel pointer on successive steps. Both bot tasks have
+  // the same source; only Main's decision for this request distinguishes them.
+  it('deduplicates channel-owned handoff steps while preserving desktop bot fallback and other notices', async () => {
+    const { initNotificationService } = await freshService();
+    const { bindInputHandoffChannelNotice, sendInputHandoffChannelNotice, notifyInputHandoffOnce, clearInputHandoffChannelNotices } =
+      await import('../im/shared/inputHandoffChannelNotice');
+    const feishuIm = makeFeishuIm('owner');
+    initNotificationService(baseDeps(feishuIm));
+    const statusListeners = new Set<(status: string) => void>();
+    bindInputHandoffChannelNotice({
+      id: 'im-bot',
+      onStatusChange: (listener: (status: string) => void) => {
+        statusListeners.add(listener);
+        return () => statusListeners.delete(listener);
+      },
+    } as unknown as Session, async () => true);
+    const notify = (sessionId: string, kind = 'needs-reply', requestId?: string) => invokeHandler({
+      sessionId, title: 'Bot', kind, ...(requestId ? { inputHandoffRequestId: requestId } : {}),
+      channels: { desktop: true, feishu: true, mobile: false },
+    });
+    const claim = (sessionId: string, requestId: string) => notifyInputHandoffOnce(sessionId, requestId,
+      async () => sendInputHandoffChannelNotice(sessionId, 'pointer', { warn }));
+    try {
+      await claim('im-bot', 'request-1');
+      await notify('im-bot', 'needs-reply', 'request-1'); // first actionable step
+      await notify('im-bot', 'needs-reply', 'request-1'); // next step of the same request
+      expect(feishuIm.sendMarkdownText).not.toHaveBeenCalled();
+      expect(notificationCtor).toHaveBeenCalledTimes(2);
+      expect(markSessionNeedsAttention).toHaveBeenCalledWith('im-bot');
+      expect(sendMobileSessionNotify).not.toHaveBeenCalled();
+
+      await claim('desktop-bot', 'request-desktop');
+      await notify('desktop-bot', 'needs-reply', 'request-desktop'); // ordinary bot: no channel route
+      expect(feishuIm.sendMarkdownText).toHaveBeenCalledOnce();
+
+      await notify('im-bot'); // channel route alone must not hide a question
+      expect(feishuIm.sendMarkdownText).toHaveBeenCalledTimes(2);
+      await claim('im-bot', 'request-2'); // a new handoff request is also owned by Main
+      await notify('im-bot', 'needs-reply', 'request-2');
+      expect(feishuIm.sendMarkdownText).toHaveBeenCalledTimes(2);
+      await notify('im-bot', 'error');
+      await notify('im-bot', 'done');
+      expect(feishuIm.sendMarkdownText).toHaveBeenCalledTimes(4);
+
+      statusListeners.forEach(listener => listener('closed'));
+      await claim('im-bot', 'request-3');
+      await notify('im-bot', 'needs-reply', 'request-3'); // a removed route cannot suppress a new fallback
+      expect(feishuIm.sendMarkdownText).toHaveBeenCalledTimes(5);
+    } finally {
+      clearInputHandoffChannelNotices();
+    }
+  });
+
+  it('「消息免打扰」任务不发任何外向提醒，但未读照旧记账', async () => {
+    const { initNotificationService } = await freshService();
+    const feishuIm = makeFeishuIm('owner');
+    initNotificationService(baseDeps(feishuIm));
+    isSessionNotificationsMutedSync.mockReturnValue(true);
+
+    // done 与 needs-reply 分别走「预览后的异步分支」和「立即桌面分支」，两条都要断。
+    await invokeHandler({ sessionId: 'muted', title: 'Muted', kind: 'done', channels: { desktop: true, feishu: true, mobile: true } });
+    await invokeHandler({ sessionId: 'muted', title: 'Muted', kind: 'needs-reply', channels: { desktop: true, feishu: true, mobile: true } });
+
+    expect(isSessionNotificationsMutedSync).toHaveBeenCalledWith('muted');
+    expect(markSessionNeedsAttention).toHaveBeenCalledTimes(2);
+    expect(notificationCtor).not.toHaveBeenCalled();
+    expect(sendMobileSessionNotify).not.toHaveBeenCalled();
+    expect(feishuIm.sendMarkdownText).not.toHaveBeenCalled();
+    expect(feishuIm.sendText).not.toHaveBeenCalled();
+  });
+
+  // bot-autonomy / scheduler 这类 main 内直调方不经过 IPC handler，静音门必须在
+  // 公共出口（showDesktopSessionEvent）上，否则静音任务仍会弹出系统 toast。
+  it('main 内直接调公共出口时同样受静音门禁，其它设备任务不受影响', async () => {
+    const { initNotificationService, showDesktopSessionEvent } = await freshService();
+    initNotificationService(baseDeps(makeFeishuIm('owner')));
+    isSessionNotificationsMutedSync.mockReturnValue(true);
+
+    expect(showDesktopSessionEvent(() => null, { sessionId: 'muted', title: 'Muted', kind: 'needs-reply' })).toBe(false);
+    expect(notificationCtor).not.toHaveBeenCalled();
+
+    // 其它设备的任务（markAttention: false）不查本机静音标记，照旧弹。
+    expect(showDesktopSessionEvent(() => null, { sessionId: 'muted', title: 'Remote', kind: 'needs-reply', markAttention: false })).toBe(true);
+    expect(notificationCtor).toHaveBeenCalledOnce();
+  });
+
+  it('keeps remote-device notifications when a local task with the same id is muted', async () => {
+    const { initNotificationService } = await freshService();
+    const feishuIm = makeFeishuIm('owner');
+    initNotificationService(baseDeps(feishuIm));
+    isSessionNotificationsMutedSync.mockReturnValue(true);
+
+    // 还原/复制过的库里可能留着同 id 的本地任务行，那是另一条任务：它的静音标记
+    // 不得把其它设备发来的事件压掉（renderer 对远端任务传 markAttention: false）。
+    await invokeHandler({
+      sessionId: 'collision',
+      title: 'Remote',
+      kind: 'needs-reply',
+      markAttention: false,
+      channels: { desktop: true, feishu: true, mobile: true },
+    });
+
+    expect(notificationCtor).toHaveBeenCalledOnce();
+    expect(feishuIm.sendMarkdownText).toHaveBeenCalledOnce();
+    expect(sendMobileSessionNotify).toHaveBeenCalledWith(
+      expect.objectContaining({ sessionId: 'collision', muteExempt: true }),
+    );
+  });
+
+  it('keeps every channel for a task that is not muted', async () => {
+    const { initNotificationService } = await freshService();
+    const feishuIm = makeFeishuIm('owner');
+    initNotificationService(baseDeps(feishuIm));
+
+    await invokeHandler({ sessionId: 'loud', title: 'Loud', kind: 'needs-reply', channels: { desktop: true, feishu: true, mobile: true } });
+
+    expect(notificationCtor).toHaveBeenCalledOnce();
+    expect(feishuIm.sendMarkdownText).toHaveBeenCalledOnce();
+  });
+
+  it('re-checks the mute after preview enrichment so muting during the wait still suppresses', async () => {
+    const { initNotificationService } = await freshService();
+    const feishuIm = makeFeishuIm('owner');
+    // 取正文是发出去之前的最后一个 await，就在那里把免打扰打开。
+    const preview = vi.fn(async () => {
+      isSessionNotificationsMutedSync.mockReturnValue(true);
+      return { eventId: 'turn:1:2' };
+    });
+    readSessionNotificationPreview.mockImplementation(preview);
+    initNotificationService(baseDeps(feishuIm));
+    getSessionNotificationTurnSignal.mockReturnValue({ id: 'turn:1:2', fallbackEventId: 'turn:1:2', ended: true });
+
+    await invokeHandler({ sessionId: 's1', title: 'Mid-flight', kind: 'done', channels: { desktop: true, feishu: true, mobile: true } });
+
+    expect(preview).toHaveBeenCalled();
+    expect(notificationCtor).not.toHaveBeenCalled();
+    expect(feishuIm.sendMarkdownText).not.toHaveBeenCalled();
   });
 
   it('同步并校验 renderer 持久化的桌面通知总开关', async () => {
@@ -205,6 +524,8 @@ describe('notificationService — channels 分发', () => {
       { sessionId: 's1', title: 'x'.repeat(1025), kind: 'done' },
       { sessionId: 's1', title: 'x', kind: 'done', channels: 'all' },
       null,
+      ...['', 1, 'x'.repeat(257)].map(inputHandoffRequestId => ({ sessionId: 's1', title: 'x', kind: 'needs-reply', inputHandoffRequestId })),
+      { sessionId: 's1', title: 'x', kind: 'done', inputHandoffRequestId: 'request' },
     ];
     for (const payload of invalids) {
       await expect(invokeHandler(payload)).rejects.toThrow('invalid session event payload');
@@ -212,6 +533,27 @@ describe('notificationService — channels 分发', () => {
     expect(notificationCtor).not.toHaveBeenCalled();
     expect(sendMobileSessionNotify).not.toHaveBeenCalled();
     expect(markSessionNeedsAttention).not.toHaveBeenCalled();
+  });
+
+  // #9575 review: an alert id longer than 256 used to fail the whole payload
+  // check (`invalid session event payload`), so a legitimate long request key
+  // never toasted. The id is only a dedup key: drop it and still deliver.
+  // A repeat of that same over-long id is not kept, so it toasts again.
+  it('does not reject a needs-reply whose alert id is longer than 256', async () => {
+    const { initNotificationService } = await freshService();
+    initNotificationService(baseDeps(makeFeishuIm(null)));
+    const channels = { desktop: true, feishu: false, mobile: false };
+    const tooLong = 'plugin:' + 'k'.repeat(260);
+
+    await expect(invokeHandler({
+      sessionId: 's1', title: 'Ask', kind: 'needs-reply', alertEventId: tooLong, channels,
+    })).resolves.toBeUndefined();
+    expect(notificationCtor).toHaveBeenCalledTimes(1);
+
+    await invokeHandler({
+      sessionId: 's1', title: 'Ask', kind: 'needs-reply', alertEventId: tooLong, channels,
+    });
+    expect(notificationCtor).toHaveBeenCalledTimes(2);
   });
 
   it('mobile 通道同步抛错不 reject invoke,飞书分支照常执行', async () => {
@@ -236,25 +578,238 @@ describe('notificationService — channels 分发', () => {
     expect(sendMobileSessionNotify).toHaveBeenCalledTimes(1);
   });
 
-  it('持久化队列挂死时不阻塞 invoke 与飞书分支(mobile 摘要 fire-and-forget)', async () => {
+  it('delivers a bounded fallback when persistence stalls, without a late or retried duplicate', async () => {
     const { initNotificationService } = await freshService();
     const feishuIm = makeFeishuIm('ou_owner');
     initNotificationService(baseDeps(feishuIm));
-    // 队列 pending 不 resolve —— 模拟别的会话慢写入长期占住全局队列。
-    drainPersistQueue.mockReturnValueOnce(new Promise<void>(() => {}));
+    vi.useFakeTimers();
+    let release!: () => void;
+    drainPersistQueue.mockReturnValueOnce(new Promise<void>((resolve) => { release = resolve; }));
+    readSessionNotificationPreview.mockImplementation(async (_id, includeReply = true) => ({
+      teammateName: 'Cindy', eventId: 'turn:100:200',
+      ...(includeReply ? { reply: { clientId: 'final-2', text: '**Finished**' } } : {}),
+    }));
+    const payload = { sessionId: 's1', title: 'Cindy', kind: 'done', channels: { desktop: true, feishu: true, mobile: true } };
+    await registeredHandlers.get('notification:show-session-event')!({}, payload);
+    expect(feishuIm.sendText).not.toHaveBeenCalled();
+    await vi.advanceTimersByTimeAsync(1_000);
+    expect(notificationCtor).toHaveBeenCalledWith(expect.objectContaining({ title: 'Cindy', body: '有新回复' }));
+    expect(sendMobileSessionNotify).toHaveBeenCalledWith(expect.objectContaining({ fallbackBody: '有新回复' }));
+    expect(feishuIm.sendText).toHaveBeenCalledWith('ou_owner', 'Cindy\n有新回复');
+    expect((sendMobileSessionNotify.mock.calls[0] as unknown as [Record<string, unknown>])[0]).not.toHaveProperty('eventId');
+    release();
+    await vi.advanceTimersByTimeAsync(0);
+    await registeredHandlers.get('notification:show-session-event')!({}, payload);
+    await vi.advanceTimersByTimeAsync(0);
+    expect(notificationCtor).toHaveBeenCalledTimes(1);
+    expect(sendMobileSessionNotify).toHaveBeenCalledTimes(1);
+    expect(feishuIm.sendText).toHaveBeenCalledTimes(1);
+  });
+
+  it('skips the local badge mark for remote device tasks while keeping other channels', async () => {
+    const { initNotificationService } = await freshService();
+    initNotificationService(baseDeps(makeFeishuIm('ou_owner')));
+    markSessionNeedsAttention.mockClear();
+
+    await invokeHandler({
+      sessionId: 'remote-1',
+      title: 'Fix login',
+      kind: 'needs-reply',
+      markAttention: false,
+      remoteDeviceId: 'execution-host',
+      channels: { desktop: false, feishu: false, mobile: true },
+    });
+
+    expect(markSessionNeedsAttention).not.toHaveBeenCalled();
+    await flushAsync();
+    expect(sendMobileSessionNotify).toHaveBeenCalledWith(expect.objectContaining({
+      sessionId: 'remote-1', remoteDeviceId: 'execution-host', muteExempt: true,
+    }));
+    await expect(invokeHandler({ sessionId: 'remote-1', title: 'x', kind: 'done', markAttention: 'no' }))
+      .rejects.toThrow('invalid session event payload');
+    for (const remoteDeviceId of ['', 42, 'x'.repeat(257)]) {
+      await expect(invokeHandler({ sessionId: 'remote-1', title: 'x', kind: 'error', remoteDeviceId }))
+        .rejects.toThrow('invalid session event payload');
+    }
+  });
+
+  it('rejects a caller that is not the Cindy renderer before any channel or badge work', async () => {
+    const { initNotificationService } = await freshService();
+    initNotificationService(baseDeps(makeFeishuIm('ou_owner')));
+    // 插件 webview 等其它 webContents 能调到同一个 channel:来源断言失败时
+    // 不得记角标，也不得把 title/kind 经飞书或手机送出去。
+    assertTrustedAppRendererEvent.mockImplementationOnce(() => {
+      throw new Error('PERMISSION_DENIED');
+    });
 
     await expect(
       invokeHandler({
         sessionId: 's1',
-        title: 'Hello',
+        title: 'Fix login',
         kind: 'done',
-        channels: { desktop: false, feishu: true, mobile: true },
+        channels: { desktop: true, feishu: true, mobile: true },
       }),
-    ).resolves.toBeUndefined();
-    expect(feishuIm.sendMarkdownText).toHaveBeenCalledTimes(1);
-    // mobile 发送仍卡在队列上,不应已触发
-    await flushAsync();
+    ).rejects.toThrow('PERMISSION_DENIED');
+
+    expect(assertTrustedAppRendererEvent).toHaveBeenCalledTimes(1);
+    expect(markSessionNeedsAttention).not.toHaveBeenCalled();
+    expect(notificationCtor).not.toHaveBeenCalled();
     expect(sendMobileSessionNotify).not.toHaveBeenCalled();
+  });
+
+  it('does not treat a pre-drain running snapshot as a reason to lose the completion fallback', async () => {
+    const { initNotificationService } = await freshService();
+    initNotificationService(baseDeps(makeFeishuIm('owner')));
+    vi.useFakeTimers();
+    let release!: () => void;
+    drainPersistQueue.mockReturnValueOnce(new Promise<void>((resolve) => { release = resolve; }));
+    readSessionNotificationPreview.mockResolvedValueOnce({ teammateName: 'Cindy', suppress: true });
+    const payload = { sessionId: 'bot-main', title: 'Cindy', kind: 'done', channels: { desktop: true, mobile: true } };
+
+    await registeredHandlers.get('notification:show-session-event')!({}, payload);
+    await vi.advanceTimersByTimeAsync(1_000);
+    expect(notificationCtor).toHaveBeenCalledWith(expect.objectContaining({ title: 'Cindy', body: '有新回复' }));
+    expect(sendMobileSessionNotify).toHaveBeenCalledTimes(1);
+    release();
+    await vi.advanceTimersByTimeAsync(0);
+    expect(notificationCtor).toHaveBeenCalledTimes(1);
+  });
+
+  it('sends the current turn fallback when its terminal marker write failed', async () => {
+    const { initNotificationService } = await freshService();
+    const feishuIm = makeFeishuIm('owner');
+    initNotificationService(baseDeps(feishuIm));
+    getSessionNotificationTurnSignal.mockReturnValue({
+      id: 'signal:ended', fallbackEventId: 'turn:100:200:signal-ended', ended: true,
+    });
+    // The write chain drained, but its swallowed UPDATE failure left SQLite
+    // with startedAt > endedAt. No old final may be used as the preview.
+    readSessionNotificationPreview.mockResolvedValue({ teammateName: 'Cindy', suppress: true });
+    const payload = {
+      sessionId: 'bot-main', title: 'Cindy', kind: 'done',
+      channels: { desktop: true, mobile: true, feishu: true },
+    };
+
+    await invokeHandler(payload);
+    await invokeHandler(payload);
+
+    expect(notificationCtor).toHaveBeenCalledTimes(1);
+    expect(notificationCtor).toHaveBeenCalledWith(expect.objectContaining({ body: '有新回复' }));
+    expect(sendMobileSessionNotify).toHaveBeenCalledTimes(1);
+    expect(sendMobileSessionNotify).toHaveBeenCalledWith(expect.objectContaining({
+      fallbackBody: '有新回复', eventId: 'turn:100:200:signal-ended',
+    }));
+    expect(feishuIm.sendText).toHaveBeenCalledTimes(1);
+    expect(feishuIm.sendText).toHaveBeenCalledWith('owner', 'Cindy\n有新回复');
+  });
+
+  it('drops the bounded fallback after the data owner changes', async () => {
+    const { initNotificationService } = await freshService();
+    initNotificationService(baseDeps(makeFeishuIm('owner')));
+    vi.useFakeTimers();
+    drainPersistQueue.mockReturnValueOnce(new Promise<void>(() => {}));
+    await registeredHandlers.get('notification:show-session-event')!({}, {
+      sessionId: 's1', title: 'Old account', kind: 'done', channels: { desktop: true, mobile: true },
+    });
+    ownerScopeCurrent = false;
+    await vi.advanceTimersByTimeAsync(1_000);
+    expect(notificationCtor).not.toHaveBeenCalled();
+    expect(sendMobileSessionNotify).not.toHaveBeenCalled();
+  });
+
+  it('device-link handoff does not resend accepted desktop or Feishu replies', async () => {
+    const { initNotificationService } = await freshService();
+    const feishuIm = makeFeishuIm('owner');
+    initNotificationService(baseDeps(feishuIm));
+    getSessionNotificationTurnSignal.mockReturnValue({ id: 'turn:100:200', fallbackEventId: 'turn:100:200', ended: true });
+    getMobileNotifyGeneration.mockReturnValueOnce(7).mockReturnValueOnce(8);
+    const payload = {
+      sessionId: 's1', title: 'Cindy', kind: 'done',
+      channels: { desktop: true, mobile: true, feishu: true },
+    };
+
+    await invokeHandler(payload);
+    await invokeHandler(payload);
+
+    expect(notificationCtor).toHaveBeenCalledTimes(1);
+    expect(feishuIm.sendMarkdownText).toHaveBeenCalledTimes(1);
+    // Mobile retains its own generation so a new link can accept the signal.
+    expect(sendMobileSessionNotify).toHaveBeenCalledTimes(2);
+    expect(sendMobileSessionNotify).toHaveBeenLastCalledWith(expect.objectContaining({ generation: 8 }));
+  });
+
+  it('a new data owner keeps its own desktop and Feishu dedupe scope', async () => {
+    const { initNotificationService } = await freshService();
+    const feishuIm = makeFeishuIm('owner');
+    initNotificationService(baseDeps(feishuIm));
+    getSessionNotificationTurnSignal.mockReturnValue({ id: 'turn:100:200', fallbackEventId: 'turn:100:200', ended: true });
+    const payload = { sessionId: 's1', title: 'Cindy', kind: 'done', channels: { desktop: true, feishu: true } };
+
+    await invokeHandler(payload);
+    ownerScopeKey = 'account-b:2';
+    await invokeHandler(payload);
+
+    expect(notificationCtor).toHaveBeenCalledTimes(2);
+    expect(feishuIm.sendMarkdownText).toHaveBeenCalledTimes(2);
+  });
+
+  it('late done cannot consume a newer running turn’s notification identity', async () => {
+    const { initNotificationService } = await freshService();
+    const feishuIm = makeFeishuIm('owner');
+    initNotificationService(baseDeps(feishuIm));
+    const payload = {
+      sessionId: 's1', title: 'Cindy', kind: 'done',
+      channels: { desktop: true, mobile: true, feishu: true },
+    };
+    getSessionNotificationTurnSignal.mockReturnValue({
+      id: 'signal:2', fallbackEventId: 'turn:300:300:signal-2', ended: false,
+    });
+
+    await invokeHandler(payload); // delayed turn A terminal while turn B runs
+    expect(notificationCtor).not.toHaveBeenCalled();
+    expect(sendMobileSessionNotify).not.toHaveBeenCalled();
+    expect(feishuIm.sendMarkdownText).not.toHaveBeenCalled();
+
+    getSessionNotificationTurnSignal.mockReturnValue({
+      id: 'signal:2', fallbackEventId: 'turn:300:400:signal-2', ended: true,
+    });
+    await invokeHandler(payload); // turn B's own terminal
+    expect(notificationCtor).toHaveBeenCalledTimes(1);
+    expect(sendMobileSessionNotify).toHaveBeenCalledTimes(1);
+    expect(feishuIm.sendMarkdownText).toHaveBeenCalledTimes(1);
+  });
+
+  it.each(['error', 'needs-reply'])('%s desktop notice does not wait for the transcript', async (kind) => {
+    const { initNotificationService } = await freshService();
+    initNotificationService(baseDeps(makeFeishuIm('owner')));
+    vi.useFakeTimers();
+    drainPersistQueue.mockReturnValueOnce(new Promise<void>(() => {}));
+    await registeredHandlers.get('notification:show-session-event')!({}, {
+      sessionId: 's1', title: 'Hello', kind, channels: { desktop: true, mobile: true },
+    });
+    await vi.advanceTimersByTimeAsync(0);
+    expect(notificationCtor).toHaveBeenCalledTimes(1);
+    await vi.advanceTimersByTimeAsync(1_000);
+    expect(sendMobileSessionNotify).toHaveBeenCalledTimes(1);
+    drainPersistQueue.mockReset().mockResolvedValue();
+  });
+
+  it('keeps the teammate fallback when final preview lookup rejects', async () => {
+    const { initNotificationService } = await freshService();
+    initNotificationService(baseDeps(makeFeishuIm('owner')));
+    readSessionNotificationPreview.mockResolvedValueOnce({ teammateName: 'Cindy', eventId: 'turn:100:200' })
+      .mockRejectedValueOnce(new Error('read unavailable'));
+    await invokeHandler({ sessionId: 's1', title: 'Cindy', kind: 'done', channels: { desktop: true, mobile: true } });
+    expect(notificationCtor).toHaveBeenCalledWith(expect.objectContaining({ title: 'Cindy', body: '有新回复' }));
+    expect(sendMobileSessionNotify).toHaveBeenCalledWith(expect.objectContaining({ fallbackBody: '有新回复' }));
+  });
+
+  it('still delivers the base notice if even the initial lookup fails', async () => {
+    const { initNotificationService } = await freshService();
+    initNotificationService(baseDeps(makeFeishuIm('owner')));
+    readSessionNotificationPreview.mockRejectedValueOnce(new Error('read unavailable'));
+    await invokeHandler({ sessionId: 's1', title: 'Task', kind: 'done' });
+    expect(notificationCtor).toHaveBeenCalledTimes(1);
   });
 
   it('channels.mobile === true → 调用手机推送分发(标题兜底后的 safeTitle)', async () => {
@@ -282,6 +837,55 @@ describe('notificationService — channels 分发', () => {
     expect(markSessionNeedsAttention).toHaveBeenCalledWith('s1');
   });
 
+  it('routes a teammate reply push to that teammate chat', async () => {
+    const { initNotificationService } = await freshService();
+    initNotificationService(baseDeps(makeFeishuIm('ou_owner')));
+    readSessionNotificationPreview.mockImplementation(async (_id, includeReply = true) => ({
+      teammateName: 'Cindy', teammateBotId: 'bot-1', eventId: 'turn:100:200',
+      teammateAvatar: { kind: 'preset', value: 'cindy' },
+      ...(includeReply ? { reply: { clientId: 'final-2', text: 'Done' } } : {}),
+    }));
+    await invokeHandler({ sessionId: 's1', title: 'Cindy', kind: 'done', channels: { desktop: false, feishu: false, mobile: true } });
+    await flushAsync();
+    expect(sendMobileSessionNotify).toHaveBeenCalledWith(expect.objectContaining({ sessionId: 's1', teammateBotId: 'bot-1', teammateAvatar: { kind: 'preset', value: 'cindy' } }));
+  });
+
+  it.each(['error', 'needs-reply'] as const)('routes teammate %s with its actual identity and state, never an older answer', async (kind) => {
+    const { initNotificationService } = await freshService();
+    initNotificationService(baseDeps(makeFeishuIm('ou_owner')));
+    readSessionNotificationPreview.mockResolvedValue({ teammateName: 'Cindy', teammateBotId: 'bot-1', teammateAvatar: { kind: 'jpeg', value: 'YQ==' } });
+    await invokeHandler({ sessionId: 's1', title: 'Hello', kind, channels: { desktop: true, feishu: false, mobile: true } });
+    await flushAsync();
+    expect(sendMobileSessionNotify).toHaveBeenCalledWith({
+      sessionId: 's1', title: 'Cindy', kind, generation: 7, teammateBotId: 'bot-1', teammateAvatar: { kind: 'jpeg', value: 'YQ==' },
+    });
+    expect(latestMessageText).not.toHaveBeenCalled();
+    expect(notificationCtor).toHaveBeenCalledWith(expect.objectContaining({ title: 'Cindy', icon: expect.objectContaining({ bytes: Buffer.from('a') }) }));
+    // A failed identity read keeps the ordinary push.
+    sendMobileSessionNotify.mockClear();
+    readSessionNotificationPreview.mockRejectedValueOnce(new Error('read unavailable'));
+    await invokeHandler({ sessionId: 's2', title: 'Hello', kind, channels: { desktop: false, feishu: false, mobile: true } });
+    await flushAsync();
+    expect(sendMobileSessionNotify).toHaveBeenCalledWith({ sessionId: 's2', title: 'Hello', kind, generation: 7 });
+  });
+
+  it('bounds a slow approval identity lookup without reusing the previous answer', async () => {
+    const { initNotificationService } = await freshService();
+    initNotificationService(baseDeps(makeFeishuIm('ou_owner')));
+    vi.useFakeTimers();
+    readSessionNotificationPreview.mockReturnValueOnce(new Promise(() => {}));
+    latestMessageText.mockResolvedValueOnce('上一轮已完成');
+    await registeredHandlers.get('notification:show-session-event')!({}, {
+      sessionId: 's1', title: 'Hello', kind: 'needs-reply', channels: { desktop: false, feishu: false, mobile: true },
+    });
+    // A missing identity cannot indefinitely hide the action request.
+    await vi.advanceTimersByTimeAsync(1_000);
+    expect(sendMobileSessionNotify).toHaveBeenCalledTimes(1);
+    expect(sendMobileSessionNotify).toHaveBeenCalledWith({
+      sessionId: 's1', title: 'Hello', kind: 'needs-reply', generation: 7,
+    });
+  });
+
   it('mobile 正文带最近 assistant 内容;error 终态不取(无可靠错误正文来源)', async () => {
     const { initNotificationService } = await freshService();
     initNotificationService(baseDeps(makeFeishuIm('ou_owner')));
@@ -300,6 +904,7 @@ describe('notificationService — channels 分发', () => {
       kind: 'done',
       generation: 7,
       detail: '修好了,共改了 3 个文件。',
+      eventId: 'reply-id',
     });
 
     sendMobileSessionNotify.mockClear();
@@ -419,6 +1024,82 @@ describe('notificationService — channels 分发', () => {
       'ou_owner',
       'Cindy · 任务「Hello」已完成 ✓',
     );
+    expect(feishuIm.sendText).not.toHaveBeenCalled();
+  });
+
+  it('伙伴飞书通知使用本轮最终答复的纯文本摘要，重复终态不重发', async () => {
+    const { initNotificationService } = await freshService();
+    const feishuIm = makeFeishuIm('ou_owner');
+    initNotificationService(baseDeps(feishuIm));
+    readSessionNotificationPreview.mockImplementation(async (_id, includeReply = true) => ({
+      teammateName: 'Cindy', eventId: 'turn:100:200',
+      ...(includeReply ? { reply: { clientId: 'final-1', text: '## **修好了**\n[结果](https://example.com)' } } : {}),
+    }));
+    const payload = { sessionId: 'bot-main', title: 'Cindy', kind: 'done', channels: { desktop: false, feishu: true } };
+
+    await invokeHandler(payload);
+    await invokeHandler(payload);
+
+    expect(feishuIm.sendText).toHaveBeenCalledTimes(1);
+    expect(feishuIm.sendText).toHaveBeenCalledWith('ou_owner', 'Cindy\n修好了 结果');
+    expect(feishuIm.sendMarkdownText).not.toHaveBeenCalled();
+  });
+
+  it('伙伴纯图片回复使用本地化图片摘要而不是泛泛新回复', async () => {
+    const { initNotificationService } = await freshService();
+    const feishuIm = makeFeishuIm('ou_owner');
+    initNotificationService(baseDeps(feishuIm));
+    readSessionNotificationPreview.mockImplementation(async (_id, includeReply = true) => ({
+      teammateName: 'Mika', eventId: 'turn:300:400',
+      ...(includeReply ? { reply: { clientId: 'final-2', text: '![](https://example.com/chart.png)' } } : {}),
+    }));
+
+    await invokeHandler({ sessionId: 'bot-main', title: 'Old title', kind: 'done', channels: { desktop: false, feishu: true } });
+
+    expect(feishuIm.sendText).toHaveBeenCalledWith('ou_owner', 'Mika\n图片');
+    expect(feishuIm.sendMarkdownText).not.toHaveBeenCalled();
+  });
+
+  it('飞书发送失败不消耗伙伴回复去重标记，恢复后重试一次', async () => {
+    const { initNotificationService } = await freshService();
+    const feishuIm = makeFeishuIm('ou_owner');
+    feishuIm.sendText.mockRejectedValueOnce(new Error('offline'));
+    initNotificationService(baseDeps(feishuIm));
+    readSessionNotificationPreview.mockImplementation(async (_id, includeReply = true) => ({
+      teammateName: 'Cindy', eventId: 'turn:500:600',
+      ...(includeReply ? { reply: { clientId: 'final-3', text: '继续处理' } } : {}),
+    }));
+    const payload = { sessionId: 'bot-main', title: 'Cindy', kind: 'done', channels: { desktop: false, feishu: true } };
+
+    await invokeHandler(payload);
+    await invokeHandler(payload);
+    await invokeHandler(payload);
+
+    expect(feishuIm.sendText).toHaveBeenCalledTimes(2);
+    expect(feishuIm.sendText).toHaveBeenLastCalledWith('ou_owner', 'Cindy\n继续处理');
+  });
+
+  it('飞书发送尚未确认时，同一轮并发终态只发送一次', async () => {
+    const { initNotificationService } = await freshService();
+    const feishuIm = makeFeishuIm('ou_owner');
+    let accept!: () => void;
+    feishuIm.sendText.mockImplementationOnce(() => new Promise((resolve) => {
+      accept = () => resolve({ messageId: 'msg-pending' });
+    }));
+    initNotificationService(baseDeps(feishuIm));
+    readSessionNotificationPreview.mockImplementation(async (_id, includeReply = true) => ({
+      teammateName: 'Cindy', eventId: 'turn:700:800',
+      ...(includeReply ? { reply: { clientId: 'final-4', text: '并发完成' } } : {}),
+    }));
+    const payload = { sessionId: 'bot-main', title: 'Cindy', kind: 'done', channels: { desktop: false, feishu: true } };
+
+    await invokeHandler(payload);
+    await invokeHandler(payload);
+    expect(feishuIm.sendText).toHaveBeenCalledTimes(1);
+    accept();
+    await flushAsync();
+    await invokeHandler(payload);
+    expect(feishuIm.sendText).toHaveBeenCalledTimes(1);
   });
 
   it('error kind → 桌面与飞书都显示执行失败', async () => {
@@ -442,6 +1123,42 @@ describe('notificationService — channels 分发', () => {
     expect(feishuIm.sendMarkdownText).toHaveBeenCalledWith(
       'ou_owner',
       'Cindy · 任务「Broken model」执行失败',
+    );
+  });
+
+  it('zh-TW → 桌面与飞书使用繁中，空标题兜底也跟随当前语言', async () => {
+    const { initNotificationService, showDesktopSessionEvent } = await freshService();
+    const { setMainLocale } = await import('../i18n.desktop');
+    const feishuIm = makeFeishuIm('ou_owner');
+    initNotificationService(baseDeps(feishuIm));
+    setMainLocale('zh-TW');
+
+    await invokeHandler({
+      sessionId: 's1',
+      title: '整理報告',
+      kind: 'needs-reply',
+      channels: { desktop: true, feishu: true },
+    });
+
+    expect(notificationCtor).toHaveBeenCalledWith(
+      expect.objectContaining({
+        title: 'Cindy · 整理報告',
+        body: '需要你回覆',
+      }),
+    );
+    expect(feishuIm.sendMarkdownText).toHaveBeenCalledWith(
+      'ou_owner',
+      'Cindy · 任務「整理報告」需要你回覆',
+    );
+
+    notificationCtor.mockClear();
+    notificationClicks.length = 0;
+    showDesktopSessionEvent(() => null, { sessionId: '', title: '', kind: 'error' });
+    expect(notificationCtor).toHaveBeenCalledWith(
+      expect.objectContaining({
+        title: 'Cindy · 未命名任務',
+        body: '執行失敗',
+      }),
     );
   });
 
@@ -482,6 +1199,779 @@ describe('notificationService — channels 分发', () => {
 
     expect(notificationCtor).toHaveBeenCalledTimes(1);
     expect(warn).toHaveBeenCalledTimes(1);
-    expect(warn.mock.calls[0]![0]).toContain('feishu sendMarkdownText failed');
+    expect(warn.mock.calls[0]![0]).toContain('feishu send failed');
+  });
+
+  // Bug: same needs-reply / error payload notified twice because the desktop
+  // ledger only recorded kind === 'done'. A repeated alert id is one toast; a
+  // different id is a new request and must still notify. Completions keep their
+  // own turn identity and are not part of this ledger key.
+  it('shows one desktop toast for a repeated needs-reply or error, and another for a new id', async () => {
+    const { initNotificationService } = await freshService();
+    initNotificationService(baseDeps(makeFeishuIm(null)));
+    const channels = { desktop: true, feishu: false, mobile: false };
+    const ask = { sessionId: 's1', title: 'Ask', kind: 'needs-reply', alertEventId: 'ask-1', channels };
+    await invokeHandler(ask);
+    await invokeHandler(ask);
+    expect(notificationCtor).toHaveBeenCalledTimes(1);
+    await invokeHandler({ ...ask, alertEventId: 'ask-2' });
+    expect(notificationCtor).toHaveBeenCalledTimes(2);
+    const failed = { sessionId: 's1', title: 'Ask', kind: 'error', alertEventId: 'err-1', channels };
+    await invokeHandler(failed);
+    await invokeHandler(failed);
+    expect(notificationCtor).toHaveBeenCalledTimes(3);
+  });
+
+  // #9317 review / unit: an alert id longer than 256 used to fail the whole
+  // payload check, so the needs-reply or error never toasted. The id is only a
+  // dedup key: drop it and still deliver. A later short id of the same task is
+  // a different alert and must toast again.
+  it('still delivers a needs-reply or error when its alert id is too long to keep', async () => {
+    const { initNotificationService } = await freshService();
+    initNotificationService(baseDeps(makeFeishuIm(null)));
+    const channels = { desktop: true, feishu: false, mobile: false };
+    const tooLong = 'turn:100:' + 'k'.repeat(300);
+    await invokeHandler({
+      sessionId: 's1', title: 'Ask', kind: 'needs-reply', alertEventId: tooLong, channels,
+    });
+    await invokeHandler({
+      sessionId: 's1', title: 'Ask', kind: 'error', alertEventId: '', channels,
+    });
+    expect(notificationCtor).toHaveBeenCalledTimes(2);
+    await invokeHandler({
+      sessionId: 's1', title: 'Ask', kind: 'error', alertEventId: 'turn:200:error', channels,
+    });
+    expect(notificationCtor).toHaveBeenCalledTimes(3);
+  });
+
+  // #9575 review / unit: two alerts of one task both read the preview before either
+  // finishes. The ledger used to keep whichever id finished last, so an older
+  // alert completing after a newer one rewrote the newer id and the next delivery
+  // of that newer alert toasted again. Order is the turn clock inside the id,
+  // not whose preview read returns first. The repeated id below is the one that
+  // must stay swallowed after the out-of-order completion.
+  //
+  // The replay used to keep the held preview mock. invokeHandler only waits for
+  // the IPC return and one macrotask, so the duplicate toast was still pending
+  // when the count was asserted, and releasing that read afterwards could show
+  // a third toast without failing the test. Settle the chain first, then send
+  // the same id once more: a broken dedup key makes that third delivery toast.
+  it.each([
+    {
+      name: 'newer preview finishes first',
+      first: { kind: 'needs-reply', alertEventId: 'turn:100:ask:1' },
+      second: { kind: 'needs-reply', alertEventId: 'turn:200:ask:2' },
+      finish: 'second-then-first' as const,
+      repeat: 'turn:200:ask:2',
+    },
+    {
+      name: 'older preview finishes first',
+      first: { kind: 'needs-reply', alertEventId: 'turn:100:ask:1' },
+      second: { kind: 'needs-reply', alertEventId: 'turn:200:ask:2' },
+      finish: 'first-then-second' as const,
+      repeat: 'turn:100:ask:1',
+    },
+    {
+      name: 'two different alerts of one turn',
+      first: { kind: 'needs-reply', alertEventId: 'turn:100:ask:1' },
+      second: { kind: 'error', alertEventId: 'turn:100:error' },
+      finish: 'second-then-first' as const,
+      repeat: 'both' as const,
+    },
+  ])('toasts each concurrent alert once ($name)', async ({ first, second, finish, repeat }) => {
+    const { initNotificationService } = await freshService();
+    initNotificationService(baseDeps(makeFeishuIm(null)));
+    const channels = { desktop: true, feishu: false, mobile: false };
+    const pending: Array<() => void> = [];
+    // Each delivery reads the preview once before it can toast. Hold those reads so
+    // this test, not the 1s preview timeout, decides which one finishes first.
+    readSessionNotificationPreview.mockImplementation(() => new Promise(resolve => {
+      pending.push(() => resolve({}));
+    }));
+    const handler = registeredHandlers.get('notification:show-session-event')!;
+    const started = [
+      handler({}, { sessionId: 's1', title: 'Ask', ...first, channels }),
+      handler({}, { sessionId: 's1', title: 'Ask', ...second, channels }),
+    ];
+    await vi.waitFor(() => expect(pending).toHaveLength(2));
+    const release = finish === 'second-then-first' ? [pending[1]!, pending[0]!] : [pending[0]!, pending[1]!];
+    release[0]();
+    await vi.waitFor(() => expect(notificationCtor).toHaveBeenCalledTimes(1));
+    release[1]();
+    await Promise.all(started);
+    await vi.waitFor(() => expect(notificationCtor).toHaveBeenCalledTimes(2));
+    // Drop the held preview before any replay. A still-pending read lets the
+    // duplicate decide after this assertion, so a missed dedup key still passes.
+    readSessionNotificationPreview.mockImplementation(async () => ({}));
+    for (const releaseLeft of pending.splice(0)) releaseLeft();
+    await flushAsync();
+    expect(notificationCtor).toHaveBeenCalledTimes(2);
+    const deliver = async (alertEventId: string) => {
+      const kind = alertEventId === second.alertEventId ? second.kind : first.kind;
+      await invokeHandler({ sessionId: 's1', title: 'Ask', kind, alertEventId, channels });
+    };
+    const again = repeat === 'both' ? [first.alertEventId, second.alertEventId] : [repeat];
+    for (const alertEventId of again) {
+      await deliver(alertEventId);
+      expect(notificationCtor).toHaveBeenCalledTimes(2);
+    }
+    // Third delivery of the same id. The count stays 2 only while that id is
+    // still in the ledger; dropping the key makes this toast and fails here.
+    for (const alertEventId of again) {
+      await deliver(alertEventId);
+      expect(notificationCtor).toHaveBeenCalledTimes(2);
+    }
+  });
+
+  // Two BrowserWindows each sample Date.now() for one running frame, so the same
+  // error arrives as turn:1000:error and turn:1002:error. Exact-id dedupe toasts
+  // both. Collapse that pair only because the senders differ: same task, same
+  // content tail, arrivals inside 1s, one toast. The second preview is released
+  // last so a ledger that only keeps the latest id cannot hide the extra toast.
+  // A different request, a different error tail, another task, and the same tail
+  // a full second later each toast.
+  it('toasts once when two renderer clocks 2ms apart report the same alert', async () => {
+    const { initNotificationService } = await freshService();
+    initNotificationService(baseDeps(makeFeishuIm(null)));
+    const channels = { desktop: true, feishu: false, mobile: false };
+    const pending: Array<() => void> = [];
+    readSessionNotificationPreview.mockImplementation(() => new Promise(resolve => {
+      pending.push(() => resolve({}));
+    }));
+    const handler = registeredHandlers.get('notification:show-session-event')!;
+    let now = 1_700_000_000_000;
+    const nowSpy = vi.spyOn(Date, 'now').mockImplementation(() => now);
+    try {
+      const started = [
+        handler(windowEvent(1), {
+          sessionId: 's1', title: 'Task', kind: 'error', alertEventId: 'turn:1000:error', channels,
+        }),
+      ];
+      now += 2;
+      started.push(handler(windowEvent(2), {
+        sessionId: 's1', title: 'Task', kind: 'error', alertEventId: 'turn:1002:error', channels,
+      }));
+      await vi.waitFor(() => expect(pending).toHaveLength(2));
+      pending[1]!();
+      await vi.waitFor(() => expect(notificationCtor).toHaveBeenCalledTimes(1));
+      pending[0]!();
+      await Promise.all(started);
+      await flushAsync();
+      expect(notificationCtor).toHaveBeenCalledTimes(1);
+
+      readSessionNotificationPreview.mockImplementation(async () => ({}));
+      for (const releaseLeft of pending.splice(0)) releaseLeft();
+      await flushAsync();
+      expect(notificationCtor).toHaveBeenCalledTimes(1);
+
+      await invokeHandler({
+        sessionId: 's1', title: 'Task', kind: 'error', alertEventId: 'turn:1002:error', channels,
+      });
+      await invokeHandler({
+        sessionId: 's1', title: 'Task', kind: 'error', alertEventId: 'turn:1000:error', channels,
+      });
+      expect(notificationCtor).toHaveBeenCalledTimes(1);
+
+      now += 2;
+      await invokeHandler({
+        sessionId: 's1', title: 'Task', kind: 'needs-reply', alertEventId: 'turn:1004:ask:2', channels,
+      });
+      expect(notificationCtor).toHaveBeenCalledTimes(2);
+      now += 2;
+      await invokeHandler({
+        sessionId: 's1', title: 'Task', kind: 'error', alertEventId: 'turn:1006:error:quota', channels,
+      });
+      expect(notificationCtor).toHaveBeenCalledTimes(3);
+      now += 2;
+      await invokeHandler({
+        sessionId: 's2', title: 'Other', kind: 'error', alertEventId: 'turn:1008:error', channels,
+      });
+      expect(notificationCtor).toHaveBeenCalledTimes(4);
+
+      now += 1000;
+      await invokeHandler({
+        sessionId: 's1', title: 'Task', kind: 'error', alertEventId: 'turn:9000:error', channels,
+      });
+      expect(notificationCtor).toHaveBeenCalledTimes(5);
+      await invokeHandler({
+        sessionId: 's1', title: 'Task', kind: 'error', alertEventId: 'turn:1002:error', channels,
+      });
+      expect(notificationCtor).toHaveBeenCalledTimes(5);
+    } finally {
+      nowSpy.mockRestore();
+    }
+  });
+
+  // Same window, two failures, 200ms apart. Stripping the turn clock leaves `error`
+  // for both. A time window alone would collapse them; the sender id must not.
+  it('toasts twice when the same window reports two failures 200ms apart', async () => {
+    const { initNotificationService } = await freshService();
+    initNotificationService(baseDeps(makeFeishuIm(null)));
+    const channels = { desktop: true, feishu: false, mobile: false };
+    let now = 1_700_000_000_000;
+    const nowSpy = vi.spyOn(Date, 'now').mockImplementation(() => now);
+    try {
+      await invokeHandler({
+        sessionId: 's1', title: 'Task', kind: 'error', alertEventId: 'turn:1000:error', channels,
+      }, windowEvent(1));
+      now += 200;
+      await invokeHandler({
+        sessionId: 's1', title: 'Task', kind: 'error', alertEventId: 'turn:1200:error', channels,
+      }, windowEvent(1));
+      expect(notificationCtor).toHaveBeenCalledTimes(2);
+    } finally {
+      nowSpy.mockRestore();
+    }
+  });
+
+  // Two windows, clocks 2ms apart, arrivals 200ms apart. Different sender ids are
+  // what makes this one event; the shared `error` tail is not enough on its own.
+  it('toasts once when two windows 200ms apart report the same failure', async () => {
+    const { initNotificationService } = await freshService();
+    initNotificationService(baseDeps(makeFeishuIm(null)));
+    const channels = { desktop: true, feishu: false, mobile: false };
+    let now = 1_700_000_000_000;
+    const nowSpy = vi.spyOn(Date, 'now').mockImplementation(() => now);
+    try {
+      await invokeHandler({
+        sessionId: 's1', title: 'Task', kind: 'error', alertEventId: 'turn:1000:error', channels,
+      }, windowEvent(1));
+      now += 200;
+      await invokeHandler({
+        sessionId: 's1', title: 'Task', kind: 'error', alertEventId: 'turn:1002:error', channels,
+      }, windowEvent(2));
+      expect(notificationCtor).toHaveBeenCalledTimes(1);
+    } finally {
+      nowSpy.mockRestore();
+    }
+  });
+
+  // The suppressed window's id has to stay in the ledger. Replaying that same
+  // payload 2s later misses both the exact id and the 1s content window if it
+  // was never recorded, and would toast again.
+  it('does not toast again when a collapsed window replays its payload after 2s', async () => {
+    const { initNotificationService } = await freshService();
+    initNotificationService(baseDeps(makeFeishuIm(null)));
+    const channels = { desktop: true, feishu: false, mobile: false };
+    const collapsed = {
+      sessionId: 's1', title: 'Task', kind: 'error', alertEventId: 'turn:1002:error', channels,
+    };
+    let now = 1_700_000_000_000;
+    const nowSpy = vi.spyOn(Date, 'now').mockImplementation(() => now);
+    try {
+      await invokeHandler({
+        sessionId: 's1', title: 'Task', kind: 'error', alertEventId: 'turn:1000:error', channels,
+      }, windowEvent(1));
+      now += 200;
+      await invokeHandler(collapsed, windowEvent(2));
+      expect(notificationCtor).toHaveBeenCalledTimes(1);
+      now += 2000;
+      await invokeHandler(collapsed, windowEvent(2));
+      expect(notificationCtor).toHaveBeenCalledTimes(1);
+    } finally {
+      nowSpy.mockRestore();
+    }
+  });
+
+  // Window 2's collapsed copy used to become a merge anchor: it keeps sender 2 and
+  // the shared `error` tail. Window 1's next failure, 200ms later, differs from
+  // window 1's first id but matches that alias, so both windows swallow the new
+  // failure. The third delivery must toast. Window 2's copy of that same id, a few
+  // ms later, is the duplicate and must not toast again.
+  it('toasts a later failure after the other window only recorded an alias', async () => {
+    const { initNotificationService } = await freshService();
+    initNotificationService(baseDeps(makeFeishuIm(null)));
+    const channels = { desktop: true, feishu: false, mobile: false };
+    let now = 1_700_000_000_000;
+    const nowSpy = vi.spyOn(Date, 'now').mockImplementation(() => now);
+    try {
+      await invokeHandler({
+        sessionId: 's1', title: 'Task', kind: 'error', alertEventId: 'turn:1000:error', channels,
+      }, windowEvent(1));
+      now += 200;
+      await invokeHandler({
+        sessionId: 's1', title: 'Task', kind: 'error', alertEventId: 'turn:1002:error', channels,
+      }, windowEvent(2));
+      expect(notificationCtor).toHaveBeenCalledTimes(1);
+      now += 200;
+      await invokeHandler({
+        sessionId: 's1', title: 'Task', kind: 'error', alertEventId: 'turn:1200:error', channels,
+      }, windowEvent(1));
+      expect(notificationCtor).toHaveBeenCalledTimes(2);
+      now += 2;
+      await invokeHandler({
+        sessionId: 's1', title: 'Task', kind: 'error', alertEventId: 'turn:1200:error', channels,
+      }, windowEvent(2));
+      expect(notificationCtor).toHaveBeenCalledTimes(2);
+    } finally {
+      nowSpy.mockRestore();
+    }
+  });
+
+  // Both windows are in the background. The first failure is one event seen twice,
+  // then the next failure lands inside 1s: 1000 (window 1) → 1002 (window 2) →
+  // 1200 (window 2) → 1200 (window 1). The anchor used to keep only window 1, so
+  // window 2's new failure still matched it (same `error` tail, other sender) and
+  // was recorded as an alias; window 1's copy was then swallowed by that exact id.
+  // The third delivery must toast. Counts are 1, 1, 2, 2.
+  it('toasts the next failure on both windows after both joined the first event', async () => {
+    const { initNotificationService } = await freshService();
+    initNotificationService(baseDeps(makeFeishuIm(null)));
+    const channels = { desktop: true, feishu: false, mobile: false };
+    let now = 1_700_000_000_000;
+    const nowSpy = vi.spyOn(Date, 'now').mockImplementation(() => now);
+    const deliver = (alertEventId: string, senderId: number) => invokeHandler({
+      sessionId: 's1', title: 'Task', kind: 'error', alertEventId, channels,
+    }, windowEvent(senderId));
+    try {
+      await deliver('turn:1000:error', 1);
+      expect(notificationCtor).toHaveBeenCalledTimes(1);
+      now += 2;
+      await deliver('turn:1002:error', 2);
+      expect(notificationCtor).toHaveBeenCalledTimes(1);
+      now += 198;
+      await deliver('turn:1200:error', 2);
+      expect(notificationCtor).toHaveBeenCalledTimes(2);
+      now += 2;
+      await deliver('turn:1200:error', 1);
+      expect(notificationCtor).toHaveBeenCalledTimes(2);
+    } finally {
+      nowSpy.mockRestore();
+    }
+  });
+
+  // Both background windows sample one turn clock, so the first failure is the
+  // same id twice: 1000 (window 1) → 1000 (window 2) → 1200 (window 2) →
+  // 1200 (window 1), all inside 202ms. Exact-id dedupe used to return before
+  // recording window 2 on that anchor, so window 2's new failure still matched
+  // the first event and was stored as an alias; window 1's copy was then
+  // swallowed by that exact id. Counts are 1, 1, 2, 2.
+  //
+  // #9575 review / unit: dedupe used to wait until preview finished, so the ledger
+  // only knew deliveries whose reads had returned. Two background windows each
+  // report two failures. Arrival is 1000/w1, 1000/w2, 1200/w2, 1200/w1 at
+  // 0/2/200/202ms, but the reads finish 1200/w2, 1000/w1, 1000/w2, 1200/w1.
+  // The old 1000/w1 write then landed as an alias of the already-toasted 1200,
+  // and exact-id dedupe swallowed the rest: one real failure never toasted.
+  // Each turn keeps its own arrival, so Notification.show runs twice — once for
+  // turn 1000, once for turn 1200 — no matter which preview returns first.
+  // 生产入口：notification:show-session-event。可观察结果：两次桌面 toast。
+  // 缺口：此前的 [1,1,2,2] 按到达顺序读完，盖不住「后一轮先读完」。
+  // 最小失败输入：上面这四次到达与相反的 preview 完成序。tier：unit。
+  //
+  // 这两条共用 beforeAll 里加载的一份模块：账本 key 含 owner + session + channel，
+  // 用不同 session 和不同的 turn 时钟隔开，不在每条用例里 vi.resetModules()。
+  describe('cross-window failure dedupe on one module', () => {
+    let initNotificationService: Awaited<ReturnType<typeof freshService>>['initNotificationService'];
+
+    beforeAll(async () => {
+      ({ initNotificationService } = await freshService());
+    });
+
+    beforeEach(() => {
+      initNotificationService(baseDeps(makeFeishuIm(null)));
+      notificationCtor.mockClear();
+      readSessionNotificationPreview.mockReset().mockImplementation(async (sessionId, includeReply = true) => {
+        if (!includeReply) return {};
+        const text = await latestMessageText(sessionId, 'assistant');
+        return text ? { reply: { clientId: 'reply-id', text }, eventId: 'reply-id' } : {};
+      });
+    });
+
+    it('toasts the next failure when both windows share the first alert id', async () => {
+      const channels = { desktop: true, feishu: false, mobile: false };
+      const sessionId = 'shared-id-session';
+      let now = 1_700_000_000_000;
+      const nowSpy = vi.spyOn(Date, 'now').mockImplementation(() => now);
+      const counts: number[] = [];
+      const deliver = async (alertEventId: string, senderId: number) => {
+        await invokeHandler({
+          sessionId, title: 'Task', kind: 'error', alertEventId, channels,
+        }, windowEvent(senderId));
+        counts.push(notificationCtor.mock.calls.length);
+      };
+      try {
+        await deliver('turn:1000:error', 1);
+        now += 2;
+        await deliver('turn:1000:error', 2);
+        now += 198;
+        await deliver('turn:1200:error', 2);
+        now += 2;
+        await deliver('turn:1200:error', 1);
+        expect(counts).toEqual([1, 1, 2, 2]);
+      } finally {
+        nowSpy.mockRestore();
+      }
+    });
+
+    it('toasts each turn once when a later failure preview finishes before the earlier one', async () => {
+      const channels = { desktop: true, feishu: false, mobile: false };
+      const sessionId = 'preview-order-session';
+      const pending: Array<() => void> = [];
+      readSessionNotificationPreview.mockImplementation(() => new Promise(resolve => {
+        pending.push(() => resolve({}));
+      }));
+      const handler = registeredHandlers.get('notification:show-session-event')!;
+      let now = 1_800_000_000_000;
+      const nowSpy = vi.spyOn(Date, 'now').mockImplementation(() => now);
+      const deliver = (alertEventId: string, senderId: number) => handler(windowEvent(senderId), {
+        sessionId, title: 'Task', kind: 'error', alertEventId, channels,
+      });
+      try {
+        const started = [deliver('turn:1000:error', 1)];
+        now += 2;
+        started.push(deliver('turn:1000:error', 2));
+        now += 198;
+        started.push(deliver('turn:1200:error', 2));
+        now += 2;
+        started.push(deliver('turn:1200:error', 1));
+        await vi.waitFor(() => expect(pending).toHaveLength(4));
+        // Finish order: 1200/w2, 1000/w1, 1000/w2, 1200/w1.
+        const finish = [pending[2]!, pending[0]!, pending[1]!, pending[3]!];
+        finish[0]!();
+        await vi.waitFor(() => expect(notificationCtor).toHaveBeenCalledTimes(1));
+        finish[1]!();
+        await vi.waitFor(() => expect(notificationCtor).toHaveBeenCalledTimes(2));
+        finish[2]!();
+        finish[3]!();
+        await Promise.all(started);
+        await flushAsync();
+        // First finished read is turn 1200 window 2; second is turn 1000 window 1.
+        // Each is its own toast. The two later reads are the other window of that turn.
+        expect(notificationCtor).toHaveBeenCalledTimes(2);
+        // Replaying either turn's id still does not toast. A ledger that aliased
+        // 1000 onto 1200 would already have failed the count above; this pins the
+        // exact ids so a later delivery of the swallowed turn cannot come back.
+        readSessionNotificationPreview.mockImplementation(async () => ({}));
+        for (const releaseLeft of pending.splice(0)) releaseLeft();
+        await flushAsync();
+        await invokeHandler({
+          sessionId, title: 'Task', kind: 'error', alertEventId: 'turn:1000:error', channels,
+        }, windowEvent(1));
+        await invokeHandler({
+          sessionId, title: 'Task', kind: 'error', alertEventId: 'turn:1200:error', channels,
+        }, windowEvent(2));
+        expect(notificationCtor).toHaveBeenCalledTimes(2);
+      } finally {
+        nowSpy.mockRestore();
+      }
+    });
+  });
+
+  // Same window, two needs-reply request keys. Different content must not merge
+  // even inside the 1s window.
+  it('toasts twice when the same window reports two different requests', async () => {
+    const { initNotificationService } = await freshService();
+    initNotificationService(baseDeps(makeFeishuIm(null)));
+    const channels = { desktop: true, feishu: false, mobile: false };
+    let now = 1_700_000_000_000;
+    const nowSpy = vi.spyOn(Date, 'now').mockImplementation(() => now);
+    try {
+      await invokeHandler({
+        sessionId: 's1', title: 'Task', kind: 'needs-reply', alertEventId: 'turn:1000:ask:1', channels,
+      }, windowEvent(1));
+      now += 200;
+      await invokeHandler({
+        sessionId: 's1', title: 'Task', kind: 'needs-reply', alertEventId: 'turn:1200:ask:2', channels,
+      }, windowEvent(1));
+      expect(notificationCtor).toHaveBeenCalledTimes(2);
+    } finally {
+      nowSpy.mockRestore();
+    }
+  });
+
+  // #9317 / unit: a done with no turn id and a failed preview read records only a
+  // send time. An alert keeps its own ledger, so a later needs-reply or error of
+  // the same task — even one that also has no id — must still toast.
+  it('still notifies an alert after a completion fell back to a send time', async () => {
+    const { initNotificationService } = await freshService();
+    initNotificationService(baseDeps(makeFeishuIm(null)));
+    getSessionNotificationTurnSignal.mockReturnValue(undefined);
+    readSessionNotificationPreview.mockRejectedValue(new Error('read unavailable'));
+    const channels = { desktop: true, feishu: false, mobile: false };
+    await invokeHandler({ sessionId: 's1', title: 'Task', kind: 'done', channels });
+    expect(notificationCtor).toHaveBeenCalledTimes(1);
+    await invokeHandler({ sessionId: 's1', title: 'Task', kind: 'needs-reply', channels });
+    await invokeHandler({ sessionId: 's1', title: 'Task', kind: 'error', channels });
+    expect(notificationCtor).toHaveBeenCalledTimes(3);
+  });
+});
+
+
+describe('teammate reply previews', () => {
+  it('drops a completion whose preview wait spans a later completed turn', async () => {
+    const { initNotificationService } = await freshService();
+    const feishuIm = makeFeishuIm('owner');
+    initNotificationService(baseDeps(feishuIm));
+    const payload = {
+      sessionId: 'bot-main', title: 'Cindy', kind: 'done',
+      channels: { desktop: true, mobile: true, feishu: true },
+    };
+    const turnA = { id: 'signal:A', fallbackEventId: 'turn:100:200:signal-A', ended: true };
+    const turnB = { id: 'signal:B', fallbackEventId: 'turn:300:400:signal-B', ended: true };
+    let currentSignal = turnA;
+    getSessionNotificationTurnSignal.mockImplementation(() => currentSignal);
+    let releaseFirstDrain!: () => void;
+    drainPersistQueue.mockImplementationOnce(() => new Promise<void>(resolve => {
+      releaseFirstDrain = resolve;
+    }));
+    readSessionNotificationPreview.mockImplementation(async (_id, includeReply = true) => ({
+      teammateName: 'Cindy', eventId: 'turn:300:400',
+      ...(includeReply ? { reply: { clientId: 'final-B', text: 'Turn B answer' } } : {}),
+    }));
+
+    await invokeHandler(payload); // A is waiting for persistence.
+    currentSignal = turnB;
+    await invokeHandler(payload); // B completes and sends its own reply.
+    releaseFirstDrain();
+    await flushAsync();
+
+    expect(notificationCtor).toHaveBeenCalledTimes(1);
+    expect(notificationCtor).toHaveBeenCalledWith(expect.objectContaining({ body: 'Turn B answer' }));
+    expect(sendMobileSessionNotify).toHaveBeenCalledTimes(1);
+    expect(sendMobileSessionNotify).toHaveBeenCalledWith(expect.objectContaining({ detail: 'Turn B answer' }));
+    expect(feishuIm.sendText).toHaveBeenCalledTimes(1);
+    expect(feishuIm.sendText).toHaveBeenCalledWith('owner', 'Cindy\nTurn B answer');
+  });
+
+  it('delivers a later turn when its preview fails after the previous turn was identified', async () => {
+    const { initNotificationService } = await freshService();
+    initNotificationService(baseDeps(makeFeishuIm('owner')));
+    const payload = { sessionId: 'bot-main', title: 'Cindy', kind: 'done', channels: { desktop: true, mobile: true } };
+    getSessionNotificationTurnSignal.mockReturnValue({ id: 'signal:1', fallbackEventId: 'turn:100:200:signal-1', ended: true });
+    readSessionNotificationPreview.mockResolvedValue({ teammateName: 'Cindy', eventId: 'turn:100:200' });
+    await invokeHandler(payload);
+
+    getSessionNotificationTurnSignal.mockReturnValue({ id: 'signal:2', fallbackEventId: 'turn:300:400:signal-2', ended: true });
+    readSessionNotificationPreview.mockRejectedValue(new Error('db busy'));
+    await invokeHandler(payload);
+    expect(notificationCtor).toHaveBeenCalledTimes(2);
+    expect(sendMobileSessionNotify).toHaveBeenCalledTimes(2);
+    expect(sendMobileSessionNotify).toHaveBeenLastCalledWith(expect.objectContaining({ eventId: 'turn:300:400:signal-2' }));
+
+    readSessionNotificationPreview.mockResolvedValue({ teammateName: 'Cindy', eventId: 'turn:300:400' });
+    await invokeHandler(payload);
+    expect(notificationCtor).toHaveBeenCalledTimes(2);
+    expect(sendMobileSessionNotify).toHaveBeenCalledTimes(2);
+  });
+
+  it('keeps a fallback Feishu send in flight under the same turn signal after preview recovery', async () => {
+    const { initNotificationService } = await freshService();
+    const feishuIm = makeFeishuIm('owner');
+    let accept!: () => void;
+    feishuIm.sendText.mockImplementationOnce(() => new Promise((resolve) => {
+      accept = () => resolve({ messageId: 'sent' });
+    }));
+    initNotificationService(baseDeps(feishuIm));
+    getSessionNotificationTurnSignal.mockReturnValue({ id: 'signal:3', fallbackEventId: 'turn:500:600:signal-3', ended: true });
+    readSessionNotificationPreview.mockImplementationOnce(async () => ({ teammateName: 'Cindy' }))
+      .mockRejectedValueOnce(new Error('db busy'));
+    const payload = { sessionId: 'bot-main', title: 'Cindy', kind: 'done', channels: { desktop: false, feishu: true } };
+    await invokeHandler(payload);
+    expect(feishuIm.sendText).toHaveBeenCalledTimes(1);
+
+    readSessionNotificationPreview.mockResolvedValue({
+      teammateName: 'Cindy', eventId: 'turn:500:600', reply: { clientId: 'final', text: 'Current answer' },
+    });
+    await invokeHandler(payload);
+    expect(feishuIm.sendText).toHaveBeenCalledTimes(1);
+    accept();
+    await flushAsync();
+    await invokeHandler(payload);
+    expect(feishuIm.sendText).toHaveBeenCalledTimes(1);
+  });
+
+  it('reconciles an unidentified Feishu send still in flight when a durable turn ID appears', async () => {
+    const { initNotificationService } = await freshService();
+    const feishuIm = makeFeishuIm('owner');
+    let accept!: () => void;
+    feishuIm.sendMarkdownText.mockImplementationOnce(() => new Promise((resolve) => {
+      accept = () => resolve({ messageId: 'sent' });
+    }));
+    initNotificationService(baseDeps(feishuIm));
+    readSessionNotificationPreview.mockRejectedValueOnce(new Error('db busy'));
+    const payload = { sessionId: 'legacy', title: 'Task', kind: 'done', channels: { desktop: false, feishu: true } };
+    await invokeHandler(payload);
+    expect(feishuIm.sendMarkdownText).toHaveBeenCalledTimes(1);
+
+    readSessionNotificationPreview.mockResolvedValue({ eventId: 'turn:100:200' });
+    await invokeHandler(payload);
+    expect(feishuIm.sendMarkdownText).toHaveBeenCalledTimes(1);
+    accept();
+    await flushAsync();
+    await invokeHandler(payload);
+    expect(feishuIm.sendMarkdownText).toHaveBeenCalledTimes(1);
+  });
+
+  it('waits for the current turn marker before using a persisted reply identity', async () => {
+    const { initNotificationService } = await freshService();
+    const oldPreview = {
+      teammateName: 'Cindy', eventId: 'turn:100:200',
+      reply: { clientId: 'old-final', text: 'Previous answer' },
+    };
+    const newPreview = {
+      teammateName: 'Cindy', eventId: 'turn:300:400',
+      reply: { clientId: 'new-final', text: 'Current answer' },
+    };
+    readSessionNotificationPreview.mockResolvedValue(oldPreview);
+    initNotificationService(baseDeps(makeFeishuIm('owner')));
+    const payload = { sessionId: 'bot-main', title: 'Cindy', kind: 'done', channels: { desktop: true, mobile: true } };
+    await invokeHandler(payload);
+    expect(notificationCtor).toHaveBeenCalledTimes(1);
+
+    let releaseMarker!: () => void;
+    let markerPersisted = false;
+    const markerBarrier = new Promise<void>((resolve) => {
+      releaseMarker = () => { markerPersisted = true; resolve(); };
+    });
+    drainSessionActiveTurnWrites.mockReturnValueOnce(markerBarrier);
+    readSessionNotificationPreview.mockImplementation(async () => markerPersisted ? newPreview : oldPreview);
+    await invokeHandler(payload);
+    expect(notificationCtor).toHaveBeenCalledTimes(1);
+    expect(sendMobileSessionNotify).toHaveBeenCalledTimes(1);
+
+    releaseMarker();
+    await vi.waitFor(() => expect(notificationCtor).toHaveBeenCalledTimes(2));
+    expect(notificationCtor).toHaveBeenLastCalledWith(expect.objectContaining({ body: 'Current answer' }));
+    expect(sendMobileSessionNotify).toHaveBeenCalledTimes(2);
+    expect(sendMobileSessionNotify).toHaveBeenLastCalledWith(expect.objectContaining({ eventId: 'turn:300:400' }));
+  });
+
+  it('reconciles an accepted fallback after preview recovery without hiding the next turn', async () => {
+    const { initNotificationService } = await freshService();
+    const clock = vi.spyOn(Date, 'now').mockReturnValue(1_000);
+    try {
+      readSessionNotificationPreview.mockRejectedValueOnce(new Error('db busy'));
+      initNotificationService(baseDeps(makeFeishuIm('owner')));
+      const payload = { sessionId: 'bot-main', title: 'Cindy', kind: 'done', channels: { desktop: true, mobile: true } };
+
+      await invokeHandler(payload);
+      expect(notificationCtor).toHaveBeenCalledTimes(1);
+      expect(sendMobileSessionNotify).toHaveBeenCalledTimes(1);
+      await invokeHandler(payload);
+      expect(notificationCtor).toHaveBeenCalledTimes(1);
+      expect(sendMobileSessionNotify).toHaveBeenCalledTimes(1);
+
+      readSessionNotificationPreview.mockResolvedValue({
+        teammateName: 'Cindy', eventId: 'turn:900:950',
+        reply: { clientId: 'old-final', text: 'Already delivered' },
+      });
+      await invokeHandler(payload);
+      expect(notificationCtor).toHaveBeenCalledTimes(1);
+      expect(sendMobileSessionNotify).toHaveBeenCalledTimes(1);
+
+      readSessionNotificationPreview.mockResolvedValue({
+        teammateName: 'Cindy', eventId: 'turn:1100:1200',
+        reply: { clientId: 'new-final', text: 'New answer' },
+      });
+      await invokeHandler(payload);
+      expect(notificationCtor).toHaveBeenCalledTimes(2);
+      expect(sendMobileSessionNotify).toHaveBeenCalledTimes(2);
+    } finally {
+      clock.mockRestore();
+    }
+  });
+
+  it('does not consume fallback dedupe when no channel accepted it', async () => {
+    const { initNotificationService } = await freshService();
+    readSessionNotificationPreview.mockRejectedValueOnce(new Error('db busy'));
+    sendMobileSessionNotify.mockReturnValueOnce(false);
+    initNotificationService(baseDeps(makeFeishuIm('owner')));
+    const payload = { sessionId: 'bot-main', title: 'Cindy', kind: 'done', channels: { desktop: false, mobile: true } };
+
+    await invokeHandler(payload);
+    readSessionNotificationPreview.mockResolvedValue({ teammateName: 'Cindy', eventId: 'turn:100:200' });
+    await invokeHandler(payload);
+    expect(sendMobileSessionNotify).toHaveBeenCalledTimes(2);
+    await invokeHandler(payload);
+    expect(sendMobileSessionNotify).toHaveBeenCalledTimes(2);
+  });
+
+  it('retries the same final reply after a mobile-only send was rejected, then dedupes the accepted send', async () => {
+    const { initNotificationService } = await freshService();
+    readSessionNotificationPreview.mockResolvedValue({
+      teammateName: 'Cindy', eventId: 'turn:100:200',
+      reply: { clientId: 'final-2', text: '**Ready**' },
+    });
+    sendMobileSessionNotify.mockReturnValueOnce(false);
+    initNotificationService(baseDeps(makeFeishuIm('owner')));
+    const payload = { sessionId: 'bot-main', title: 'Cindy', kind: 'done', channels: { desktop: false, mobile: true } };
+
+    await invokeHandler(payload);
+    expect(sendMobileSessionNotify).toHaveBeenCalledTimes(1);
+    await invokeHandler(payload);
+    expect(sendMobileSessionNotify).toHaveBeenCalledTimes(2);
+    await invokeHandler(payload);
+    expect(sendMobileSessionNotify).toHaveBeenCalledTimes(2);
+    expect(notificationCtor).not.toHaveBeenCalled();
+  });
+
+  it('does not repeat an accepted desktop toast when the mobile channel rejects the same reply', async () => {
+    const { initNotificationService } = await freshService();
+    readSessionNotificationPreview.mockResolvedValue({ teammateName: 'Cindy', eventId: 'turn:100:200' });
+    sendMobileSessionNotify.mockReturnValueOnce(false);
+    initNotificationService(baseDeps(makeFeishuIm('owner')));
+    const payload = { sessionId: 'bot-main', title: 'Cindy', kind: 'done', channels: { desktop: true, mobile: true } };
+
+    await invokeHandler(payload);
+    await invokeHandler(payload);
+    expect(notificationCtor).toHaveBeenCalledTimes(1);
+    expect(sendMobileSessionNotify).toHaveBeenCalledTimes(2);
+    await invokeHandler(payload);
+    expect(notificationCtor).toHaveBeenCalledTimes(1);
+    expect(sendMobileSessionNotify).toHaveBeenCalledTimes(2);
+  });
+
+  it('retries only the missing channel after a fallback was delivered', async () => {
+    const { initNotificationService } = await freshService();
+    readSessionNotificationPreview.mockRejectedValueOnce(new Error('db busy'));
+    sendMobileSessionNotify.mockReturnValueOnce(false);
+    initNotificationService(baseDeps(makeFeishuIm('owner')));
+    const payload = { sessionId: 'bot-main', title: 'Cindy', kind: 'done', channels: { desktop: true, mobile: true } };
+
+    await invokeHandler(payload);
+    readSessionNotificationPreview.mockResolvedValue({ teammateName: 'Cindy', eventId: 'turn:100:200' });
+    await invokeHandler(payload);
+    expect(notificationCtor).toHaveBeenCalledTimes(1);
+    expect(sendMobileSessionNotify).toHaveBeenCalledTimes(2);
+    await invokeHandler(payload);
+    expect(notificationCtor).toHaveBeenCalledTimes(1);
+    expect(sendMobileSessionNotify).toHaveBeenCalledTimes(2);
+  });
+
+  it('does not mark an unsupported desktop toast as delivered when mobile is also offline', async () => {
+    const { initNotificationService } = await freshService();
+    readSessionNotificationPreview.mockResolvedValue({ teammateName: 'Cindy', eventId: 'turn:100:200' });
+    notificationSupported = false;
+    sendMobileSessionNotify.mockReturnValueOnce(false);
+    initNotificationService(baseDeps(makeFeishuIm('owner')));
+    const payload = { sessionId: 'bot-main', title: 'Cindy', kind: 'done', channels: { desktop: true, mobile: true } };
+
+    await invokeHandler(payload);
+    expect(notificationCtor).not.toHaveBeenCalled();
+    await invokeHandler(payload);
+    expect(sendMobileSessionNotify).toHaveBeenCalledTimes(2);
+  });
+
+  it('shows current final Markdown as plain text on desktop and keeps mobile routing/fallback', async () => {
+    const { initNotificationService } = await freshService();
+    readSessionNotificationPreview.mockResolvedValue({ teammateName: 'Cindy', eventId: 'turn:100:200', reply: { clientId: 'final-2', text: '**完成**：[报告](https://example.com) `a_b * 2`' } });
+    initNotificationService(baseDeps(makeFeishuIm('owner')));
+    const payload = { sessionId: 'bot-main', title: 'Cindy · Old title', kind: 'done', channels: { desktop: true, mobile: true } };
+    await invokeHandler(payload);
+    expect(notificationCtor).toHaveBeenCalledWith(expect.objectContaining({ title: 'Cindy', body: '完成：报告 a_b * 2' }));
+    expect(sendMobileSessionNotify).toHaveBeenCalledWith(expect.objectContaining({ sessionId: 'bot-main', title: 'Cindy', eventId: 'turn:100:200', fallbackBody: '有新回复' }));
+    await invokeHandler(payload);
+    expect(notificationCtor).toHaveBeenCalledTimes(1);
+    expect(sendMobileSessionNotify).toHaveBeenCalledTimes(1);
+  });
+  it('uses localized reply fallback without inventing task completion when there is no body', async () => {
+    const { initNotificationService } = await freshService();
+    const { setMainLocale } = await import('../i18n.desktop');
+    setMainLocale('en');
+    readSessionNotificationPreview.mockResolvedValue({ teammateName: 'Mochi' });
+    initNotificationService(baseDeps(makeFeishuIm('owner')));
+    await invokeHandler({ sessionId: 'bot-main', title: 'Mochi', kind: 'done' });
+    expect(notificationCtor).toHaveBeenCalledWith(expect.objectContaining({ title: 'Cindy · Mochi', body: 'New reply' }));
   });
 });

@@ -64,6 +64,23 @@ describe('SentInlineAtomBody', () => {
     expect(document.querySelector('[tabindex]')).toBeNull();
   });
 
+  it('does not turn unconfirmed /skill: prose into a /unknown chip', () => {
+    render(<SentInlineAtomBody content="/skill:unknown is prose" />);
+    expect(screen.getByText(/\/skill:unknown is prose/)).toBeTruthy();
+    expect(screen.queryByText('/unknown')).toBeNull();
+  });
+
+  it('still projects a confirmed /skill:git range to /git', () => {
+    render(
+      <SentInlineAtomBody
+        content="/skill:git follow-up"
+        slashCommandRanges={[{ start: 0, end: 10 }]}
+      />,
+    );
+    expect(screen.getByText('/git')).toBeTruthy();
+    expect(screen.queryByText('/skill:git')).toBeNull();
+  });
+
   it('leaves the pending queue single-line truncation contract to the row container', () => {
     const bodyStart = pendingQueueSource.indexOf('<SentInlineAtomBody');
     const bodyEnd = pendingQueueSource.indexOf('/>', bodyStart);
@@ -74,7 +91,7 @@ describe('SentInlineAtomBody', () => {
     expect(bodyBlock).not.toContain('whitespace-pre-wrap');
     expect(bodyBlock).not.toContain('truncate');
     expect(pendingQueueSource).toContain(
-      "'relative top-px min-w-0 flex-1 truncate text-[13px] leading-[1.25]'",
+      "'relative top-px min-w-0 flex-1 truncate text-13 leading-[1.25]'",
     );
   });
 });

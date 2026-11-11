@@ -105,9 +105,8 @@ describe('systemCard', () => {
     expect(formatMobileSystemCard('compact', {
       detail: 'Compacted 20 messages',
     })).toEqual({
-      title: 'Compact',
+      title: i18n.t('message.systemCard.compact.auto'),
       rows: [],
-      body: 'Compacted 20 messages',
     });
 
     expect(formatMobileSystemCard('cmd', {
@@ -141,6 +140,47 @@ describe('formatMobileSystemCard — goal 续跑卡按原因分说法', () => {
   });
 });
 
+describe('compact and context-rebuild notices', () => {
+  it('only reports savings when both token counts are known', () => {
+    for (const postTokens of [undefined, NaN, Infinity, -1, '1000']) {
+      expect(formatMobileSystemCard('compact', { preTokens: 25000, postTokens }).title)
+        .toBe(i18n.t('message.systemCard.compact.auto'));
+    }
+    expect(formatMobileSystemCard('compact', {
+      trigger: 'manual', preTokens: 25000, postTokens: 1000, durationMs: 2400,
+    }).title).toBe([
+      i18n.t('message.systemCard.compact.manual'),
+      i18n.t('message.systemCard.compact.savedTokens', { tokens: '24.0k' }),
+      '2.4s',
+    ].join(' · '));
+  });
+
+  it.each([
+    ['context-overflow', 'labelOverflow'],
+    ['pi-prompt-timeout', 'labelTimeout'],
+    ['codex-history-strip', 'labelStrip'],
+    ['future-reason', 'labelOverflow'],
+  ])('preserves the reason for %s without exposing a handoff as message body', (reason, key) => {
+    expect(formatMobileSystemCard('context-rebuild', { reason, handoff: '  ' })).toEqual({
+      title: i18n.t(`message.systemCard.contextRebuild.${key}`), rows: [],
+    });
+  });
+
+  it('preserves the handoff and only labels English when its terminal marker matches', () => {
+    const marker = "; the user's new message follows ==";
+    for (const [handoff, key] of [
+      ['旧交接正文', 'handoffTitle'],
+      [`Quoted ${marker}\n旧交接结尾`, 'handoffTitle'],
+      [`Summary ${marker}\n`, 'handoffTitleEnglishSource'],
+    ]) {
+      expect(formatMobileSystemCard('context-rebuild', { handoff })).toMatchObject({
+        body: handoff,
+        subtitle: i18n.t(`message.systemCard.contextRebuild.${key}`),
+      });
+    }
+  });
+});
+
 describe('formatMobileSystemCard — 中断自动重连状态', () => {
   const info = { error: 'socket hang up', attempt: 2, maxAttempts: 5, sessionTotal: 3 };
   it('shows live progress, reason, current attempt, and session total', () => {
@@ -164,6 +204,52 @@ describe('formatMobileSystemCard — Agent 切换', () => {
       toAgentKind: 'codex',
       toModel: 'gpt-5.6',
     }).title).toContain('Pi');
+  });
+
+  it('describes the new location when the Agent changed computers', () => {
+    const base = { fromAgentKind: 'cc', toAgentKind: 'cc', toModel: 'claude-sonnet-4-6' };
+    // 只有 content 带 toAgentDeviceId 键才算换电脑;没带仍是「已从 X 切换到 Y」。
+    expect(formatMobileSystemCard('agent-switch', base).title).toBe(
+      i18n.t('message.systemCard.agentSwitch', { from: 'Claude Code', to: 'Claude Code' }),
+    );
+    expect(formatMobileSystemCard('agent-switch', {
+      ...base,
+      fromAgentDeviceId: 'device-office-pc',
+      toAgentDeviceId: null,
+      fromAgentDeviceName: 'Office PC',
+      toAgentDeviceName: 'Studio Mac',
+    })).toEqual({
+      title: i18n.t('message.systemCard.agentSwitchLocation', { device: 'Studio Mac' }),
+      rows: [{ label: i18n.t('message.systemCard.modelLabel'), value: 'claude-sonnet-4-6' }],
+    });
+    expect(formatMobileSystemCard('agent-switch', {
+      ...base,
+      toAgentDeviceId: null,
+      toAgentDeviceName: null,
+    }).title).toBe(i18n.t('message.systemCard.agentSwitchLocationThisComputer'));
+    expect(formatMobileSystemCard('agent-switch', {
+      ...base,
+      toAgentDeviceId: 'device-office-pc',
+      toAgentDeviceName: null,
+    }).title).toBe(i18n.t('message.systemCard.agentSwitchLocationOtherComputer'));
+    // 换电脑的同时换了引擎:位置后带上目标引擎。
+    expect(formatMobileSystemCard('agent-switch', {
+      ...base,
+      toAgentKind: 'codex',
+      toAgentDeviceId: null,
+      toAgentDeviceName: 'Studio Mac',
+    }).title).toBe(
+      `${i18n.t('message.systemCard.agentSwitchLocation', { device: 'Studio Mac' })} · Codex`,
+    );
+    // 用户确认为了先用那台的配额换过去(provider-groups.md §6.2)：与桌面一样写明原因。
+    expect(formatMobileSystemCard('agent-switch', {
+      ...base,
+      toAgentDeviceId: 'device-office-pc',
+      toAgentDeviceName: 'Office PC',
+      switchReason: 'quota-rebalance',
+    }).title).toBe(
+      `${i18n.t('message.systemCard.agentSwitchLocation', { device: 'Office PC' })} · ${i18n.t('message.systemCard.agentSwitchLocationQuotaRebalance')}`,
+    );
   });
 });
 

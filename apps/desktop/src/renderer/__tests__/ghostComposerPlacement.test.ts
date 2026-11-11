@@ -11,7 +11,10 @@ import {
   ComposerListItem,
   ComposerOrderedList,
 } from '@/components/new-chat/ComposerListNodes';
-import { placeGhostAtComposerStart } from '@/components/new-chat/ghostComposerPlacement';
+import {
+  placeGhostAtComposerStart,
+} from '@/components/new-chat/ghostComposerPlacement';
+import { normalizeComposerDocumentJSON } from '@/lib/composerListDocument';
 import { MentionChipNode } from '@/components/new-chat/MentionChipNode';
 import type { InstalledGhost } from '../../shared/ghost';
 
@@ -26,12 +29,29 @@ function ghost(command: string, id = command, enabled = true): InstalledGhost {
       version: '1.0.0',
       kind: 'chip',
       entry: 'main.js',
-      slots: ['tool'],
       tools: [{ name: 'run', description: 'Run.' }],
       command,
     },
     dir: `/tmp/${id}`,
     enabled,
+    approval: { state: 'approved', revision: '00000000-0000-4000-8000-000000000001' },
+  };
+}
+
+function hostCapabilityGhost(id = 'ios-simulator'): InstalledGhost {
+  return {
+    manifest: {
+      schemaVersion: 2,
+      id,
+      name: 'iOS Simulator',
+      version: '1.0.0',
+      kind: 'chip',
+      entry: 'main.js',
+      iosSimulator: true,
+    },
+    dir: `/tmp/${id}`,
+    enabled: true,
+    approval: { state: 'approved', revision: '00000000-0000-4000-8000-000000000001' },
   };
 }
 
@@ -66,6 +86,38 @@ describe('placeGhostAtComposerStart', () => {
     expect(editor.state.selection.to).toBe(editor.state.doc.content.size - 1);
   });
 
+  it('qualifies a namespaced Plugin command only when its command is shared', () => {
+    const editor = editorWith('keep going');
+    const selected = ghost('draw', 'art');
+    selected.namespace = 'acme';
+    selected.dir = '/tmp/_ns/acme/art';
+    expect(placeGhostAtComposerStart(editor, selected, [selected])).toBe(true);
+    expect(editor.getText()).toBe('$draw keep going');
+
+    const sharedEditor = editorWith('keep going');
+    const root = ghost('draw', 'art');
+    root.namespace = null;
+    expect(placeGhostAtComposerStart(sharedEditor, selected, [root, selected])).toBe(true);
+    expect(sharedEditor.getText()).toBe('$draw/acme keep going');
+  });
+
+  it('replaces a bare command that became ambiguous after a same-name install', () => {
+    // `$draw` was inserted while the organization instance was unique; a root sibling arrived later.
+    const org = ghost('draw', 'art');
+    org.namespace = 'acme';
+    org.dir = '/tmp/_ns/acme/art';
+    const root = ghost('draw', 'art');
+    root.namespace = null;
+
+    const pickRoot = editorWith('$draw keep going');
+    expect(placeGhostAtComposerStart(pickRoot, root, [org, root])).toBe(true);
+    expect(pickRoot.getText()).toBe('$draw/@root keep going');
+
+    const pickOrg = editorWith('$draw keep going');
+    expect(placeGhostAtComposerStart(pickOrg, org, [org, root])).toBe(true);
+    expect(pickOrg.getText()).toBe('$draw/acme keep going');
+  });
+
   it('replaces an existing Plugin command instead of stacking commands', () => {
     const current = ghost('mivo');
     const selected = ghost('feishu');
@@ -84,6 +136,17 @@ describe('placeGhostAtComposerStart', () => {
     placeGhostAtComposerStart(editor, selected, [disabledCurrent, selected]);
 
     expect(editor.getText()).toBe('$feishu 帮我整理这段内容');
+  });
+
+  it('places a Plugin command after restoring a legacy capability draft', () => {
+    const capability = hostCapabilityGhost();
+    const selected = ghost('feishu');
+    const editor = editorWith('继续补充需求');
+    editor.commands.insertContentAt(1, { type: 'mentionChip', attrs: { kind: 'plugin-capability', label: capability.manifest.name, path: 'ios-simulator', pluginId: capability.manifest.id } });
+
+    editor.commands.setContent(normalizeComposerDocumentJSON(editor.getJSON()));
+    expect(placeGhostAtComposerStart(editor, selected, [capability, selected])).toBe(true);
+    expect(editor.getText()).toBe('$feishu 继续补充需求');
   });
 
   it('adds a command paragraph before a leading structured list', () => {

@@ -76,28 +76,12 @@ export interface PersistedTurnChangeSetV1 {
 }
 
 /**
- * Reasons that only say "the capture may not have seen everything", without any
- * evidence that a change actually happened (opaque tools ran, the turn failed, or
- * another session overlapped). Reasons outside this set prove changes existed but
- * were not recorded — including 'outside-workspace', which the store only records
- * for suspicious cases (a workspace path whose realpath escapes via symlink, or a
- * provider diff block rejected as unsafe); literal out-of-workspace targets are
- * skipped at capture time without recording any reason.
- */
-const NO_CHANGE_EVIDENCE_REASONS: ReadonlySet<TurnChangeIncompleteReason> = new Set([
-  'opaque-tool',
-  'turn-failed',
-  'concurrent-workspace',
-]);
-
-/**
- * Whether a summary carries anything a standalone review card can show. Zero-file
- * entries whose reasons carry no change evidence open an empty review pane — hide
- * the chat-stream card instead of sending users into a dead end.
+ * Whether a summary carries file content a standalone review card can show.
+ * Incomplete zero-file records remain persisted for diagnostics, but rendering a
+ * warning-only card in the chat stream gives the user nothing to inspect or act on.
  */
 export function hasReviewableTurnChanges(summary: TurnChangeSetSummary): boolean {
-  if (summary.fileCount > 0 || summary.files.length > 0) return true;
-  return summary.incompleteReasons.some((reason) => !NO_CHANGE_EVIDENCE_REASONS.has(reason));
+  return summary.fileCount > 0 || summary.files.length > 0;
 }
 
 export interface TurnChangeSetUpdatedPayload {

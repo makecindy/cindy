@@ -15,6 +15,20 @@ import {
   useFontSettings,
 } from '@/hooks/useFontSettings';
 
+const UI_TEXT_TOKEN_SIZES = [10, 11, 12, 13, 14, 15, 16, 18, 20, 24, 28] as const;
+const REMOVED_UI_TEXT_TOKEN_SIZES = [9, 17, 19, 21, 22, 23, 25, 26, 27] as const;
+const SCALED_TAILWIND_TOKENS = {
+  xs: 12,
+  sm: 14,
+  base: 16,
+  lg: 18,
+  xl: 20,
+  '2xl': 24,
+  '3xl': 30,
+  '4xl': 36,
+  '5xl': 48,
+} as const;
+
 function resetRootStyles() {
   const targets = [document.documentElement, document.body];
   for (const target of targets) {
@@ -22,12 +36,10 @@ function resetRootStyles() {
     target.style.removeProperty('--app-font-code');
     target.style.removeProperty('--app-code-font-size');
     target.style.removeProperty('--app-ui-font-size');
-    for (const tokenSize of [
-      9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28,
-    ]) {
+    for (const tokenSize of [...UI_TEXT_TOKEN_SIZES, ...REMOVED_UI_TEXT_TOKEN_SIZES]) {
       target.style.removeProperty(`--text-${tokenSize}`);
     }
-    for (const token of ['xs', 'sm', 'base', 'lg', 'xl', '2xl', '3xl', '4xl', '5xl']) {
+    for (const token of Object.keys(SCALED_TAILWIND_TOKENS)) {
       target.style.removeProperty(`--text-${token}`);
       target.style.removeProperty(`--text-${token}-line-height`);
     }
@@ -107,10 +119,15 @@ describe('font settings', () => {
 
     const rootStyle = document.documentElement.style;
     expect(rootStyle.getPropertyValue('--app-ui-font-size')).toBe(`${DEFAULT_UI_FONT_SIZE}px`);
-    for (const tokenSize of [
-      9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28,
-    ]) {
+    for (const tokenSize of UI_TEXT_TOKEN_SIZES) {
       expect(rootStyle.getPropertyValue(`--text-${tokenSize}`)).toBe(`${tokenSize}px`);
+    }
+    for (const tokenSize of REMOVED_UI_TEXT_TOKEN_SIZES) {
+      expect(rootStyle.getPropertyValue(`--text-${tokenSize}`)).toBe('');
+      expect(document.body.style.getPropertyValue(`--text-${tokenSize}`)).toBe('');
+    }
+    for (const [token, base] of Object.entries(SCALED_TAILWIND_TOKENS)) {
+      expect(rootStyle.getPropertyValue(`--text-${token}`)).toBe(`${base}px`);
     }
     expect(rootStyle.getPropertyValue('--text-sm-line-height')).toBe('20px');
     expect(document.body.style.getPropertyValue('--text-sm-line-height')).toBe('20px');
@@ -128,11 +145,17 @@ describe('font settings', () => {
 
     const rootStyle = document.documentElement.style;
     expect(rootStyle.getPropertyValue('--app-ui-font-size')).toBe('18px');
-    for (const tokenSize of [
-      9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28,
-    ]) {
+    for (const tokenSize of UI_TEXT_TOKEN_SIZES) {
       expect(rootStyle.getPropertyValue(`--text-${tokenSize}`)).toBe(
         `${Math.round((tokenSize * 18) / DEFAULT_UI_FONT_SIZE)}px`,
+      );
+    }
+    for (const tokenSize of REMOVED_UI_TEXT_TOKEN_SIZES) {
+      expect(rootStyle.getPropertyValue(`--text-${tokenSize}`)).toBe('');
+    }
+    for (const [token, base] of Object.entries(SCALED_TAILWIND_TOKENS)) {
+      expect(rootStyle.getPropertyValue(`--text-${token}`)).toBe(
+        `${Math.round((base * 18) / DEFAULT_UI_FONT_SIZE)}px`,
       );
     }
     expect(rootStyle.getPropertyValue('--text-sm-line-height')).toBe('26px');

@@ -1,0 +1,2314 @@
+import { afterEach, describe, expect, it, vi } from 'vitest';
+
+import { createAsyncQueue } from '../shared/async-queue.js';
+import { UsageTracker } from '../shared/usage-tracker.js';
+import type { AgentEvent } from '../../types/events.js';
+import {
+  beginClaudeGeneration,
+  finalizeClaudeGeneration,
+  newClaudeGenerationState,
+  pauseClaudeGeneration,
+  resetClaudeGenerationTiming,
+  resumeClaudeGeneration,
+} from './generation-timing.js';
+import { expandRecordedStream, type RecordedStream } from './recorded-stream-fixture.js';
+import { newRuntimeState, translateSdkMessage, type TurnState } from './translator.js';
+import fableSummarized from './fixtures/recorded-stream-fable-summarized.json';
+import sonnetRedacted from './fixtures/recorded-stream-sonnet-redacted.json';
+
+describe('claude generation timing', () => {
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  it('excludes tool intervals from the generation denominator', () => {
+    vi.spyOn(Date, 'now').mockReturnValue(1_000);
+    const state = newClaudeGenerationState();
+    beginClaudeGeneration(state, 1_000);
+    pauseClaudeGeneration(state, 'tool-1', 1_400);
+    resumeClaudeGeneration(state, 'tool-1', 5_000);
+    finalizeClaudeGeneration(state, 5_200);
+    expect(state.reliable).toBe(true);
+    expect(state.durationMs).toBe(600);
+    expect(state.startedAt).toBeNull();
+  });
+
+  it('stops the heartbeat when the session is reset without a result event', () => {
+    vi.useFakeTimers();
+    try {
+      const state = newClaudeGenerationState();
+      beginClaudeGeneration(state, 1_000);
+      expect(state.heartbeatTimer).not.toBeNull();
+      resetClaudeGenerationTiming(state);
+      expect(state.heartbeatTimer).toBeNull();
+      expect(state.heartbeatAt).toBeNull();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('marks timing unreliable when pausing without a generation start boundary', () => {
+    const state = newClaudeGenerationState();
+    pauseClaudeGeneration(state, 'tool-1', 1_400);
+    resumeClaudeGeneration(state, 'tool-1', 5_000);
+    finalizeClaudeGeneration(state, 5_200);
+    expect(state.reliable).toBe(false);
+  });
+
+  it('does not re-pause a settled id while the current interval is open', () => {
+    const state = newClaudeGenerationState();
+    beginClaudeGeneration(state, 1_000);
+    pauseClaudeGeneration(state, 'tool-1', 1_400);
+    resumeClaudeGeneration(state, 'tool-1', 5_000);
+    expect(state.startedAt).toBe(5_000);
+    expect(state.pendingToolIds.size).toBe(0);
+    expect(state.settledPauseIds.has('tool-1')).toBe(true);
+
+    pauseClaudeGeneration(state, 'tool-1', 5_500);
+    expect(state.startedAt).toBe(5_000);
+    expect(state.pendingToolIds.size).toBe(0);
+    expect(state.reliable).toBe(true);
+    expect(state.durationMs).toBe(400);
+  });
+});
+
+function createTurnState(): TurnState {
+  return {
+    text: '',
+    toolUses: 0,
+    apiCalls: 0,
+    sawCompactBoundary: false,
+    hasEmittedText: false,
+    uiEmittedText: '',
+    pendingApiError: null,
+    interruptRequested: false,
+    generation: 0,
+    interruptGeneration: 0,
+    lastAssistantMsgHadSubstance: true,
+    nextRequestPriceVariant: 'standard',
+  };
+}
+
+function createTranslatorCtx() {
+  return {
+    rt: newRuntimeState(),
+    turn: createTurnState(),
+    log: { debug: vi.fn(), info: vi.fn(), warn: vi.fn() },
+    getModel: () => 'claude-sonnet-4.5',
+    getEffort: () => 'medium' as const,
+    getPermissionMode: () => 'auto' as const,
+    onSessionId: vi.fn(),
+    getSdkSessionId: () => undefined,
+    getLogTitle: () => undefined,
+    tracker: new UsageTracker(),
+  };
+}
+
+describe('claude generation pause boundaries', () => {
+  afterEach(() => {
+    vi.useRealTimers();
+    vi.restoreAllMocks();
+  });
+
+  it('keeps generating through tool-argument deltas and pauses on message_delta', () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(1_000);
+
+    const ctx = createTranslatorCtx();
+    const queue = createAsyncQueue<AgentEvent>();
+
+    translateSdkMessage(
+      {
+        type: 'stream_event',
+        event: {
+          type: 'message_start',
+          message: { model: 'claude-sonnet-4.5', usage: { input_tokens: 10 } },
+        },
+      },
+      queue,
+      ctx,
+    );
+    expect(ctx.rt.generation.startedAt).toBe(1_000);
+    expect(ctx.rt.generation.pendingToolIds.size).toBe(0);
+
+    vi.setSystemTime(1_200);
+    translateSdkMessage(
+      {
+        type: 'stream_event',
+        event: {
+          type: 'content_block_start',
+          index: 0,
+          content_block: { type: 'tool_use', id: 'toolu_1', input: {} },
+        },
+      },
+      queue,
+      ctx,
+    );
+    expect(ctx.rt.generation.startedAt).toBe(1_000);
+    expect(ctx.rt.generation.pendingToolIds.size).toBe(0);
+    expect(ctx.rt.generation.durationMs).toBe(0);
+
+    vi.setSystemTime(1_600);
+    translateSdkMessage(
+      {
+        type: 'stream_event',
+        event: {
+          type: 'content_block_delta',
+          index: 0,
+          delta: { type: 'input_json_delta', partial_json: '{"command":"ls"}' },
+        },
+      },
+      queue,
+      ctx,
+    );
+    expect(ctx.rt.generation.startedAt).toBe(1_000);
+    expect(ctx.rt.generation.pendingToolIds.size).toBe(0);
+
+    vi.setSystemTime(1_800);
+    translateSdkMessage(
+      {
+        type: 'stream_event',
+        event: {
+          type: 'message_delta',
+          usage: { output_tokens: 40 },
+        },
+      },
+      queue,
+      ctx,
+    );
+    expect(ctx.rt.generation.startedAt).toBeNull();
+    expect(ctx.rt.generation.pendingToolIds.has('toolu_1')).toBe(true);
+    expect(ctx.rt.generation.durationMs).toBe(800);
+    expect(ctx.rt.generation.reliable).toBe(true);
+
+    resetClaudeGenerationTiming(ctx.rt.generation);
+    queue.end();
+  });
+
+  it('pauses on a completed assistant tool_use when stream_event never arrived', () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(1_000);
+
+    const ctx = createTranslatorCtx();
+    const queue = createAsyncQueue<AgentEvent>();
+
+    translateSdkMessage(
+      {
+        type: 'stream_event',
+        event: {
+          type: 'message_start',
+          message: { model: 'claude-sonnet-4.5', usage: { input_tokens: 10 } },
+        },
+      },
+      queue,
+      ctx,
+    );
+
+    vi.setSystemTime(1_500);
+    translateSdkMessage(
+      {
+        type: 'assistant',
+        message: {
+          content: [
+            {
+              type: 'tool_use',
+              id: 'toolu_2',
+              name: 'Read',
+              input: { file_path: '/tmp/a' },
+            },
+          ],
+        },
+      },
+      queue,
+      ctx,
+    );
+
+    expect(ctx.rt.generation.startedAt).toBeNull();
+    expect(ctx.rt.generation.pendingToolIds.has('toolu_2')).toBe(true);
+    expect(ctx.rt.generation.durationMs).toBe(500);
+    expect(ctx.rt.generation.reliable).toBe(true);
+
+    resetClaudeGenerationTiming(ctx.rt.generation);
+    queue.end();
+  });
+
+  it('marks timing unreliable when a completed tool_use arrives without message_start', () => {
+    const ctx = createTranslatorCtx();
+    const queue = createAsyncQueue<AgentEvent>();
+    translateSdkMessage(
+      {
+        type: 'assistant',
+        message: {
+          content: [
+            {
+              type: 'tool_use',
+              id: 'toolu_3',
+              name: 'Read',
+              input: { file_path: '/tmp/a' },
+            },
+          ],
+        },
+      },
+      queue,
+      ctx,
+    );
+    expect(ctx.rt.generation.startedAt).toBeNull();
+    expect(ctx.rt.generation.pendingToolIds.has('toolu_3')).toBe(true);
+    expect(ctx.rt.generation.reliable).toBe(false);
+    resetClaudeGenerationTiming(ctx.rt.generation);
+    queue.end();
+  });
+
+  it('keeps terminal tokens but omits unproven speed without message_delta', async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(1_000);
+    const ctx = createTranslatorCtx();
+    const queue = createAsyncQueue<AgentEvent>();
+    translateSdkMessage(
+      {
+        type: 'stream_event',
+        event: {
+          type: 'message_start',
+          message: { model: 'claude-sonnet-4.5', usage: { input_tokens: 10 } },
+        },
+      },
+      queue,
+      ctx,
+    );
+    translateSdkMessage(
+      {
+        type: 'assistant',
+        message: { content: [{ type: 'text', text: 'done' }] },
+      },
+      queue,
+      ctx,
+    );
+    vi.setSystemTime(1_800);
+    translateSdkMessage(
+      {
+        type: 'result',
+        stop_reason: 'end_turn',
+        total_cost_usd: 0,
+        num_turns: 1,
+        usage: { input_tokens: 10, output_tokens: 40 },
+      },
+      queue,
+      ctx,
+    );
+    queue.end();
+    const events: AgentEvent[] = [];
+    for await (const event of queue) events.push(event);
+    const doneStatus = events.find(
+      (event) => event.type === 'status' && (event.data as { status?: string }).status === 'Done',
+    );
+    expect(doneStatus?.data).toMatchObject({
+      isRunning: false,
+      outputTokens: 40,
+      generationReliable: false,
+      generationActive: false,
+    });
+    expect(doneStatus?.data).not.toHaveProperty('generationDurationMs');
+    resetClaudeGenerationTiming(ctx.rt.generation);
+    vi.useRealTimers();
+  });
+
+  it('merges message_start and message_delta usage into one request segment', async () => {
+    const ctx = createTranslatorCtx();
+    const queue = createAsyncQueue<AgentEvent>();
+    translateSdkMessage(
+      {
+        type: 'stream_event',
+        event: {
+          type: 'message_start',
+          message: {
+            model: 'claude-sonnet-4.5',
+            usage: {
+              input_tokens: 100,
+              cache_read_input_tokens: 900,
+              cache_creation_input_tokens: 50,
+            },
+          },
+        },
+      },
+      queue,
+      ctx,
+    );
+    translateSdkMessage(
+      {
+        type: 'stream_event',
+        event: {
+          type: 'message_delta',
+          usage: {
+            input_tokens: 100,
+            output_tokens: 25,
+            cache_read_input_tokens: 900,
+            cache_creation_input_tokens: 50,
+          },
+        },
+      },
+      queue,
+      ctx,
+    );
+    expect(ctx.tracker.getTurnUsage()).toEqual({
+      input: 100,
+      output: 25,
+      cacheRead: 900,
+      cacheCreate: 50,
+    });
+    expect(ctx.tracker.getTurnUsageSegments()).toHaveLength(1);
+
+    translateSdkMessage(
+      {
+        type: 'result',
+        stop_reason: 'end_turn',
+        total_cost_usd: 0,
+        num_turns: 1,
+        usage: {
+          input_tokens: 100,
+          output_tokens: 25,
+          cache_read_input_tokens: 900,
+          cache_creation_input_tokens: 50,
+        },
+      },
+      queue,
+      ctx,
+    );
+    queue.end();
+    const events: AgentEvent[] = [];
+    for await (const event of queue) events.push(event);
+    const done = events.find((event) => event.type === 'done');
+    expect(done?.data).toMatchObject({
+      usageSegmentsComplete: true,
+      usageSegments: [
+        {
+          model: 'claude-sonnet-4.5',
+          inputTokens: 100,
+          outputTokens: 25,
+          cacheReadTokens: 900,
+          cacheCreateTokens: 50,
+          complete: true,
+        },
+      ],
+    });
+  });
+
+  it('freezes the current request and captures the next tool-loop request variant at the tool boundary', () => {
+    let fastMode = false;
+    const ctx = {
+      ...createTranslatorCtx(),
+      getFastMode: () => fastMode,
+    };
+    const queue = createAsyncQueue<AgentEvent>();
+    // The first request was accepted on standard before its message_start
+    // arrived; the user toggles Fast while that response is still in flight.
+    ctx.turn.nextRequestPriceVariant = 'standard';
+    fastMode = true;
+    translateSdkMessage(
+      {
+        type: 'stream_event',
+        event: {
+          type: 'message_start',
+          message: { model: 'claude-sonnet-4.5', usage: { input_tokens: 100 } },
+        },
+      },
+      queue,
+      ctx,
+    );
+    translateSdkMessage(
+      {
+        type: 'stream_event',
+        event: {
+          type: 'message_delta',
+          usage: {
+            input_tokens: 100,
+            output_tokens: 25,
+            cache_read_input_tokens: 0,
+            cache_creation_input_tokens: 0,
+          },
+        },
+      },
+      queue,
+      ctx,
+    );
+
+    // The first response requests a tool. Fast is toggled while the tool is
+    // running, and the SDK's tool-result echo is the boundary at which the
+    // next provider request's variant is captured.
+    fastMode = false;
+    translateSdkMessage(
+      {
+        type: 'assistant',
+        message: {
+          content: [{ type: 'tool_use', id: 'toolu_1', name: 'Read', input: {} }],
+        },
+      },
+      queue,
+      ctx,
+    );
+    fastMode = true;
+    translateSdkMessage(
+      {
+        type: 'user',
+        message: {
+          content: [{ type: 'tool_result', tool_use_id: 'toolu_1', content: 'done' }],
+        },
+      },
+      queue,
+      ctx,
+    );
+
+    // The next provider request is dispatched after the tool result and gets
+    // its own priority segment.
+    translateSdkMessage(
+      {
+        type: 'stream_event',
+        event: {
+          type: 'message_start',
+          message: { model: 'claude-sonnet-4.5', usage: { input_tokens: 200 } },
+        },
+      },
+      queue,
+      ctx,
+    );
+    translateSdkMessage(
+      {
+        type: 'stream_event',
+        event: {
+          type: 'message_delta',
+          usage: {
+            input_tokens: 200,
+            output_tokens: 10,
+            cache_read_input_tokens: 0,
+            cache_creation_input_tokens: 0,
+          },
+        },
+      },
+      queue,
+      ctx,
+    );
+
+    expect(ctx.tracker.getTurnUsageSegments()).toEqual([
+      expect.objectContaining({ inputTokens: 100, outputTokens: 25, priceVariant: 'standard' }),
+      expect.objectContaining({ inputTokens: 200, outputTokens: 10, priceVariant: 'priority' }),
+    ]);
+    queue.end();
+  });
+
+  it('fails closed when a resumed result aggregate cannot prove streamed segment completeness', async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(1_000);
+    const ctx = createTranslatorCtx();
+    const queue = createAsyncQueue<AgentEvent>();
+    translateSdkMessage(
+      {
+        type: 'stream_event',
+        event: {
+          type: 'message_start',
+          message: { model: 'claude-sonnet-4.5', usage: { input_tokens: 100 } },
+        },
+      },
+      queue,
+      ctx,
+    );
+    vi.setSystemTime(2_000);
+    translateSdkMessage(
+      {
+        type: 'stream_event',
+        event: { type: 'message_delta', usage: { output_tokens: 25 } },
+      },
+      queue,
+      ctx,
+    );
+    translateSdkMessage(
+      {
+        type: 'result',
+        stop_reason: 'end_turn',
+        total_cost_usd: 2,
+        num_turns: 1,
+        usage: {
+          // First result after resume can include historical usage, and some
+          // providers only reveal cache tokens here. Request count alone must
+          // not turn the streamed subset into an exact priced total.
+          input_tokens: 1_100,
+          output_tokens: 225,
+          cache_read_input_tokens: 500,
+        },
+      },
+      queue,
+      ctx,
+    );
+    queue.end();
+    const events: AgentEvent[] = [];
+    for await (const event of queue) events.push(event);
+    const done = events.find((event) => event.type === 'done');
+    const statuses = events.filter((event) => event.type === 'status');
+    expect(statuses.at(-2)?.data).toMatchObject({
+      outputTokens: 25,
+      generationDurationMs: 1_000,
+      generationReliable: true,
+    });
+    expect(statuses.at(-1)?.data).toMatchObject({
+      status: 'Done',
+      outputTokens: 225,
+      generationReliable: false,
+    });
+    expect(statuses.at(-1)?.data).not.toHaveProperty('generationDurationMs');
+    expect(done?.data).toMatchObject({
+      usageSegmentsComplete: false,
+      usageSegments: [
+        {
+          model: 'claude-sonnet-4.5',
+          inputTokens: 100,
+          outputTokens: 25,
+          cacheReadTokens: 0,
+          cacheCreateTokens: 0,
+          complete: false,
+        },
+      ],
+    });
+  });
+
+  it('samples only accepted output growth across input-only, duplicate, and older deltas', async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(1_000);
+    const ctx = createTranslatorCtx();
+    const queue = createAsyncQueue<AgentEvent>();
+    const send = (message: Parameters<typeof translateSdkMessage>[0]) =>
+      translateSdkMessage(message, queue, ctx);
+    send({ type: 'stream_event', event: {
+      type: 'message_start', message: { usage: { input_tokens: 10 } },
+    } });
+    vi.setSystemTime(2_000);
+    send({ type: 'stream_event', event: { type: 'message_delta', usage: { output_tokens: 100 } } });
+    for (const [index, usage] of [
+      { input_tokens: 20 },
+      { output_tokens: 0, cache_read_input_tokens: 10 },
+      { output_tokens: 100 },
+      { output_tokens: 50 },
+    ].entries()) {
+      vi.setSystemTime(3_000 + index * 1_000);
+      send({ type: 'stream_event', event: { type: 'message_delta', usage } });
+      expect(ctx.tracker.getTurnUsage().output).toBe(100);
+      expect(ctx.rt.generation.outputDurationMs).toBe(1_000);
+    }
+    expect(ctx.tracker.getTurnUsage()).toMatchObject({ input: 20, cacheRead: 10 });
+    vi.setSystemTime(7_000);
+    send({ type: 'stream_event', event: { type: 'message_delta', usage: { output_tokens: 200 } } });
+    expect(ctx.rt.generation.outputDurationMs).toBe(6_000);
+    vi.setSystemTime(8_000);
+    send({ type: 'stream_event', event: { type: 'message_delta', usage: { input_tokens: 30 } } });
+    vi.setSystemTime(12_000);
+    send({ type: 'result', stop_reason: 'end_turn',
+      usage: { input_tokens: 30, output_tokens: 200, cache_read_input_tokens: 10 },
+    });
+    queue.end();
+    const events: AgentEvent[] = [];
+    for await (const event of queue) events.push(event);
+    const statuses = events.filter((event) => event.type === 'status').map((event) => ({
+      ...event, data: event.data as { outputTokens?: number; generationDurationMs?: number },
+    }));
+    expect(statuses.filter((event) => event.data.outputTokens === 100)).toHaveLength(5);
+    for (const event of statuses.filter((event) => event.data.outputTokens === 100)) {
+      expect(event.data.generationDurationMs).toBe(1_000);
+    }
+    expect(statuses.at(-1)?.data).toMatchObject({
+      status: 'Done', outputTokens: 200, generationDurationMs: 6_000, generationReliable: true,
+    });
+  });
+
+  it('keeps the last paired rate when the matching final result is delayed', async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(1_000);
+    const ctx = createTranslatorCtx();
+    const queue = createAsyncQueue<AgentEvent>();
+    translateSdkMessage({ type: 'stream_event', event: {
+      type: 'message_start', message: { usage: { input_tokens: 10 } },
+    } }, queue, ctx);
+    vi.setSystemTime(2_000);
+    translateSdkMessage({ type: 'stream_event', event: {
+      type: 'message_delta', usage: { output_tokens: 100 },
+    } }, queue, ctx);
+    vi.setSystemTime(12_000);
+    translateSdkMessage({ type: 'result', stop_reason: 'end_turn',
+      usage: { input_tokens: 10, output_tokens: 100 },
+    }, queue, ctx);
+    queue.end();
+    const events: AgentEvent[] = [];
+    for await (const event of queue) events.push(event);
+    const statuses = events.filter((event) => event.type === 'status');
+    for (const event of statuses.slice(-2)) {
+      expect(event.data).toMatchObject({
+        outputTokens: 100, generationDurationMs: 1_000, generationReliable: true,
+      });
+    }
+    expect(statuses.at(-1)?.data).toMatchObject({ status: 'Done', generationActive: false });
+  });
+
+  it.each([false, true])('ignores background child tool timing (assistant envelope: %s)', async (hasEnvelope) => {
+    vi.useFakeTimers();
+    vi.setSystemTime(1_000);
+    const ctx = createTranslatorCtx();
+    const queue = createAsyncQueue<AgentEvent>();
+    const send = (message: Parameters<typeof translateSdkMessage>[0]) =>
+      translateSdkMessage(message, queue, ctx);
+    send({ type: 'stream_event', event: { type: 'message_start', message: {} } });
+    send({ type: 'stream_event', event: {
+      type: 'content_block_start', index: 0,
+      content_block: { type: 'tool_use', id: 'bg-agent', name: 'Agent', input: {} },
+    } });
+    vi.setSystemTime(1_800);
+    send({ type: 'stream_event', event: { type: 'message_delta', usage: { output_tokens: 80 } } });
+    vi.setSystemTime(2_200);
+    send({ type: 'user', message: { content: [
+      { type: 'tool_result', tool_use_id: 'bg-agent', content: 'async_launched' },
+    ] } });
+    vi.setSystemTime(3_000);
+    send({ type: 'stream_event', event: { type: 'message_start', message: {} } });
+    vi.setSystemTime(3_400);
+    send({ type: 'stream_event', parent_tool_use_id: 'bg-agent',
+      event: { type: 'message_start', message: {} } });
+    if (hasEnvelope) {
+      send({ type: 'assistant', parent_tool_use_id: 'bg-agent', message: { content: [
+        { type: 'tool_use', id: 'child-bash', name: 'Bash', input: { command: 'sleep 10' } },
+      ] } });
+    }
+    expect(ctx.rt.generation.startedAt).toBe(2_200);
+    expect(ctx.rt.generation.pendingToolIds.size).toBe(0);
+    vi.setSystemTime(13_400);
+    send({ type: 'user', parent_tool_use_id: 'bg-agent', message: { content: [
+      { type: 'tool_result', tool_use_id: 'child-bash', content: 'child done' },
+    ] } });
+    expect(ctx.rt.generation.startedAt).toBe(2_200);
+    expect(ctx.rt.generation.reliable).toBe(true);
+    vi.setSystemTime(14_000);
+    send({ type: 'stream_event', event: { type: 'message_delta', usage: { output_tokens: 1_180 } } });
+    queue.end();
+    const events: AgentEvent[] = [];
+    for await (const event of queue) events.push(event);
+    expect(events.filter((event) => event.type === 'status').at(-1)?.data).toMatchObject({
+      outputTokens: 1_260,
+      generationDurationMs: 12_600,
+      generationReliable: true,
+    });
+    expect(events).toContainEqual(expect.objectContaining({
+      type: 'tool_result_full', data: { toolUseId: 'child-bash', fullText: 'child done' },
+    }));
+    if (hasEnvelope) {
+      expect(events).toContainEqual(expect.objectContaining({
+        type: 'tool_use', data: expect.objectContaining({ toolUseId: 'child-bash' }),
+      }));
+    }
+    resetClaudeGenerationTiming(ctx.rt.generation);
+  });
+
+  it('keeps parent timing reliable for a complete subagent assistant without message_delta', () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(1_000);
+    const ctx = createTranslatorCtx();
+    const queue = createAsyncQueue<AgentEvent>();
+    translateSdkMessage(
+      {
+        type: 'stream_event',
+        event: {
+          type: 'message_start',
+          message: { model: 'claude-sonnet-4.5', usage: { input_tokens: 10 } },
+        },
+      },
+      queue,
+      ctx,
+    );
+    expect(ctx.rt.generation.reliable).toBe(true);
+    translateSdkMessage(
+      {
+        type: 'assistant',
+        parent_tool_use_id: 'toolu-agent',
+        message: { content: [{ type: 'text', text: 'child output' }] },
+      },
+      queue,
+      ctx,
+    );
+    expect(ctx.rt.generation.reliable).toBe(true);
+    expect(ctx.rt.generation.sawSubagent).toBe(true);
+    expect(ctx.rt.generation.startedAt).toBeNull();
+    expect(ctx.rt.generation.pendingToolIds.has('toolu-agent')).toBe(true);
+    resetClaudeGenerationTiming(ctx.rt.generation);
+    queue.end();
+    vi.useRealTimers();
+  });
+
+  it('closes parent generation when a child stream arrives before the parent tool pause', async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(1_000);
+    const ctx = createTranslatorCtx();
+    const queue = createAsyncQueue<AgentEvent>();
+
+    translateSdkMessage(
+      {
+        type: 'stream_event',
+        event: {
+          type: 'message_start',
+          message: { model: 'claude-sonnet-4.5', usage: { input_tokens: 10 } },
+        },
+      },
+      queue,
+      ctx,
+    );
+
+    vi.setSystemTime(1_500);
+    translateSdkMessage(
+      {
+        type: 'stream_event',
+        parent_tool_use_id: 'toolu-agent',
+        event: {
+          type: 'message_start',
+          message: { model: 'claude-sonnet-4.5', usage: { input_tokens: 5 } },
+        },
+      },
+      queue,
+      ctx,
+    );
+    expect(ctx.rt.generation.startedAt).toBeNull();
+    expect(ctx.rt.generation.pendingToolIds.has('toolu-agent')).toBe(true);
+    expect(ctx.rt.generation.durationMs).toBe(500);
+    expect(ctx.rt.generation.reliable).toBe(true);
+    expect(ctx.rt.generation.sawSubagent).toBe(true);
+
+    translateSdkMessage(
+      {
+        type: 'stream_event',
+        event: {
+          type: 'content_block_start',
+          index: 0,
+          content_block: { type: 'tool_use', id: 'toolu-agent', name: 'Agent', input: {} },
+        },
+      },
+      queue,
+      ctx,
+    );
+    vi.setSystemTime(5_000);
+    translateSdkMessage(
+      {
+        type: 'stream_event',
+        event: {
+          type: 'message_delta',
+          usage: { output_tokens: 80 },
+        },
+      },
+      queue,
+      ctx,
+    );
+    expect(ctx.rt.generation.startedAt).toBeNull();
+    expect(ctx.rt.generation.durationMs).toBe(500);
+    expect(ctx.rt.generation.reliable).toBe(true);
+
+    translateSdkMessage(
+      {
+        type: 'stream_event',
+        parent_tool_use_id: 'toolu-agent',
+        event: {
+          type: 'message_delta',
+          usage: { output_tokens: 500 },
+        },
+      },
+      queue,
+      ctx,
+    );
+    translateSdkMessage(
+      {
+        type: 'user',
+        message: {
+          content: [{ type: 'tool_result', tool_use_id: 'toolu-agent', content: 'child done' }],
+        },
+      },
+      queue,
+      ctx,
+    );
+    vi.setSystemTime(5_400);
+    translateSdkMessage(
+      {
+        type: 'result',
+        stop_reason: 'end_turn',
+        total_cost_usd: 0,
+        num_turns: 1,
+        usage: { input_tokens: 15, output_tokens: 580 },
+      },
+      queue,
+      ctx,
+    );
+    queue.end();
+    const events: AgentEvent[] = [];
+    for await (const event of queue) events.push(event);
+
+    const generating = events.filter(
+      (event) => event.type === 'status' && (event.data as { status?: string }).status === 'Generating...',
+    );
+    expect(generating[1]?.data).toMatchObject({
+      outputTokens: 0,
+      generationReliable: true,
+    });
+    expect(generating[1]?.data).not.toHaveProperty('generationDurationMs');
+    expect(generating.at(-1)?.data).toMatchObject({
+      outputTokens: 80,
+      generationReliable: true,
+    });
+    const doneStatus = events.find(
+      (event) => event.type === 'status' && (event.data as { status?: string }).status === 'Done',
+    );
+    expect(doneStatus?.data).toMatchObject({
+      outputTokens: 80,
+      generationReliable: true,
+      generationActive: false,
+    });
+    resetClaudeGenerationTiming(ctx.rt.generation);
+    vi.useRealTimers();
+  });
+
+  it('retains the last paired parent sample until the next request reports output', async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(1_000);
+    const ctx = createTranslatorCtx();
+    const queue = createAsyncQueue<AgentEvent>();
+
+    translateSdkMessage(
+      {
+        type: 'stream_event',
+        event: {
+          type: 'message_start',
+          message: { model: 'claude-sonnet-4.5', usage: { input_tokens: 10 } },
+        },
+      },
+      queue,
+      ctx,
+    );
+    translateSdkMessage(
+      {
+        type: 'stream_event',
+        event: {
+          type: 'content_block_start',
+          index: 0,
+          content_block: { type: 'tool_use', id: 'toolu-agent-1', name: 'Agent', input: {} },
+        },
+      },
+      queue,
+      ctx,
+    );
+    vi.setSystemTime(1_800);
+    translateSdkMessage(
+      {
+        type: 'stream_event',
+        event: { type: 'message_delta', usage: { output_tokens: 80 } },
+      },
+      queue,
+      ctx,
+    );
+    translateSdkMessage(
+      {
+        type: 'stream_event',
+        parent_tool_use_id: 'toolu-agent-1',
+        event: {
+          type: 'message_start',
+          message: { model: 'claude-sonnet-4.5', usage: { input_tokens: 5 } },
+        },
+      },
+      queue,
+      ctx,
+    );
+    translateSdkMessage(
+      {
+        type: 'stream_event',
+        parent_tool_use_id: 'toolu-agent-1',
+        event: { type: 'message_delta', usage: { output_tokens: 500 } },
+      },
+      queue,
+      ctx,
+    );
+    translateSdkMessage(
+      {
+        type: 'user',
+        message: {
+          content: [{ type: 'tool_result', tool_use_id: 'toolu-agent-1', content: 'child 1 done' }],
+        },
+      },
+      queue,
+      ctx,
+    );
+
+    vi.setSystemTime(2_200);
+    translateSdkMessage(
+      {
+        type: 'stream_event',
+        event: {
+          type: 'message_start',
+          message: { model: 'claude-sonnet-4.5', usage: { input_tokens: 20 } },
+        },
+      },
+      queue,
+      ctx,
+    );
+    expect(ctx.rt.generation.reliable).toBe(true);
+
+    vi.setSystemTime(2_600);
+    translateSdkMessage(
+      {
+        type: 'stream_event',
+        parent_tool_use_id: 'toolu-agent-2',
+        event: {
+          type: 'message_start',
+          message: { model: 'claude-sonnet-4.5', usage: { input_tokens: 5 } },
+        },
+      },
+      queue,
+      ctx,
+    );
+    expect(ctx.rt.generation.reliable).toBe(true);
+    expect(ctx.rt.generation.startedAt).toBeNull();
+
+    translateSdkMessage(
+      {
+        type: 'stream_event',
+        event: {
+          type: 'content_block_start',
+          index: 0,
+          content_block: { type: 'tool_use', id: 'toolu-agent-2', name: 'Agent', input: {} },
+        },
+      },
+      queue,
+      ctx,
+    );
+    vi.setSystemTime(2_800);
+    translateSdkMessage(
+      {
+        type: 'stream_event',
+        event: { type: 'message_delta', usage: { output_tokens: 40 } },
+      },
+      queue,
+      ctx,
+    );
+    expect(ctx.rt.generation.reliable).toBe(true);
+
+    translateSdkMessage(
+      {
+        type: 'stream_event',
+        parent_tool_use_id: 'toolu-agent-2',
+        event: { type: 'message_delta', usage: { output_tokens: 200 } },
+      },
+      queue,
+      ctx,
+    );
+    translateSdkMessage(
+      {
+        type: 'user',
+        message: {
+          content: [{ type: 'tool_result', tool_use_id: 'toolu-agent-2', content: 'child 2 done' }],
+        },
+      },
+      queue,
+      ctx,
+    );
+    vi.setSystemTime(3_200);
+    translateSdkMessage(
+      {
+        type: 'result',
+        stop_reason: 'end_turn',
+        total_cost_usd: 0,
+        num_turns: 1,
+        usage: { input_tokens: 40, output_tokens: 820 },
+      },
+      queue,
+      ctx,
+    );
+    queue.end();
+    const events: AgentEvent[] = [];
+    for await (const event of queue) events.push(event);
+
+    const generating = events.filter(
+      (event) => event.type === 'status' && (event.data as { status?: string }).status === 'Generating...',
+    );
+    const pendingCurrentParent = generating.filter((event) => {
+      const data = event.data as { outputTokens?: number; generationReliable?: boolean };
+      return data.outputTokens === 80;
+    });
+    expect(pendingCurrentParent.length).toBeGreaterThan(0);
+    for (const event of pendingCurrentParent) {
+      expect(event.data).toMatchObject({ generationReliable: true, generationDurationMs: 800 });
+    }
+    expect(generating.at(-1)?.data).toMatchObject({
+      outputTokens: 120,
+      generationReliable: true,
+    });
+    const doneStatus = events.find(
+      (event) => event.type === 'status' && (event.data as { status?: string }).status === 'Done',
+    );
+    expect(doneStatus?.data).toMatchObject({
+      outputTokens: 120,
+      generationReliable: true,
+      generationActive: false,
+    });
+    resetClaudeGenerationTiming(ctx.rt.generation);
+    vi.useRealTimers();
+  });
+
+  it('does not pin a pause id when a child stream arrives with no parent generation interval', () => {
+    const ctx = createTranslatorCtx();
+    const queue = createAsyncQueue<AgentEvent>();
+    translateSdkMessage(
+      {
+        type: 'stream_event',
+        parent_tool_use_id: 'toolu-agent',
+        event: {
+          type: 'message_start',
+          message: { model: 'claude-sonnet-4.5', usage: { input_tokens: 5 } },
+        },
+      },
+      queue,
+      ctx,
+    );
+    expect(ctx.rt.generation.sawSubagent).toBe(true);
+    expect(ctx.rt.generation.reliable).toBe(true);
+    expect(ctx.rt.generation.startedAt).toBeNull();
+    expect(ctx.rt.generation.pendingToolIds.size).toBe(0);
+    resetClaudeGenerationTiming(ctx.rt.generation);
+    queue.end();
+  });
+
+  it('does not let a settled-turn background child block the next parent generation', () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(1_000);
+    const ctx = createTranslatorCtx();
+    const queue = createAsyncQueue<AgentEvent>();
+
+    translateSdkMessage(
+      {
+        type: 'stream_event',
+        event: {
+          type: 'message_start',
+          message: { model: 'claude-sonnet-4.5', usage: { input_tokens: 10 } },
+        },
+      },
+      queue,
+      ctx,
+    );
+    vi.setSystemTime(1_800);
+    translateSdkMessage(
+      {
+        type: 'stream_event',
+        event: { type: 'message_delta', usage: { output_tokens: 80 } },
+      },
+      queue,
+      ctx,
+    );
+    vi.setSystemTime(2_200);
+    translateSdkMessage(
+      {
+        type: 'result',
+        stop_reason: 'end_turn',
+        total_cost_usd: 0,
+        num_turns: 1,
+        usage: { input_tokens: 10, output_tokens: 80 },
+      },
+      queue,
+      ctx,
+    );
+    expect(ctx.rt.generation.startedAt).toBeNull();
+    expect(ctx.rt.generation.pendingToolIds.size).toBe(0);
+    expect(ctx.rt.generation.reliable).toBe(true);
+
+    translateSdkMessage(
+      {
+        type: 'stream_event',
+        parent_tool_use_id: 'toolu-agent-bg',
+        event: {
+          type: 'message_start',
+          message: { model: 'claude-sonnet-4.5', usage: { input_tokens: 5 } },
+        },
+      },
+      queue,
+      ctx,
+    );
+    expect(ctx.rt.generation.sawSubagent).toBe(true);
+    expect(ctx.rt.generation.reliable).toBe(true);
+    expect(ctx.rt.generation.startedAt).toBeNull();
+    expect(ctx.rt.generation.pendingToolIds.size).toBe(0);
+
+    vi.setSystemTime(3_000);
+    translateSdkMessage(
+      {
+        type: 'stream_event',
+        event: {
+          type: 'message_start',
+          message: { model: 'claude-sonnet-4.5', usage: { input_tokens: 20 } },
+        },
+      },
+      queue,
+      ctx,
+    );
+    expect(ctx.rt.generation.startedAt).toBe(3_000);
+    expect(ctx.rt.generation.reliable).toBe(true);
+    expect(ctx.rt.generation.pendingToolIds.size).toBe(0);
+    resetClaudeGenerationTiming(ctx.rt.generation);
+    queue.end();
+    vi.useRealTimers();
+  });
+
+  it('does not re-pause a resumed background child during the next parent generation', () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(1_000);
+    const ctx = createTranslatorCtx();
+    const queue = createAsyncQueue<AgentEvent>();
+
+    translateSdkMessage(
+      {
+        type: 'stream_event',
+        event: {
+          type: 'message_start',
+          message: { model: 'claude-sonnet-4.5', usage: { input_tokens: 10 } },
+        },
+      },
+      queue,
+      ctx,
+    );
+    translateSdkMessage(
+      {
+        type: 'stream_event',
+        event: {
+          type: 'content_block_start',
+          index: 0,
+          content_block: { type: 'tool_use', id: 'toolu-agent-bg', name: 'Agent', input: {} },
+        },
+      },
+      queue,
+      ctx,
+    );
+    vi.setSystemTime(1_800);
+    translateSdkMessage(
+      {
+        type: 'stream_event',
+        event: { type: 'message_delta', usage: { output_tokens: 80 } },
+      },
+      queue,
+      ctx,
+    );
+    expect(ctx.rt.generation.pendingToolIds.has('toolu-agent-bg')).toBe(true);
+    expect(ctx.rt.generation.startedAt).toBeNull();
+
+    vi.setSystemTime(2_200);
+    translateSdkMessage(
+      {
+        type: 'user',
+        message: {
+          content: [{ type: 'tool_result', tool_use_id: 'toolu-agent-bg', content: 'async_launched' }],
+        },
+      },
+      queue,
+      ctx,
+    );
+    expect(ctx.rt.generation.pendingToolIds.size).toBe(0);
+    expect(ctx.rt.generation.startedAt).toBe(2_200);
+    expect(ctx.rt.generation.settledPauseIds.has('toolu-agent-bg')).toBe(true);
+    expect(ctx.rt.generation.reliable).toBe(true);
+
+    vi.setSystemTime(3_000);
+    translateSdkMessage(
+      {
+        type: 'stream_event',
+        event: {
+          type: 'message_start',
+          message: { model: 'claude-sonnet-4.5', usage: { input_tokens: 20 } },
+        },
+      },
+      queue,
+      ctx,
+    );
+    expect(ctx.rt.generation.startedAt).toBe(2_200);
+
+    translateSdkMessage(
+      {
+        type: 'stream_event',
+        parent_tool_use_id: 'toolu-agent-bg',
+        event: {
+          type: 'message_start',
+          message: { model: 'claude-sonnet-4.5', usage: { input_tokens: 5 } },
+        },
+      },
+      queue,
+      ctx,
+    );
+    expect(ctx.rt.generation.startedAt).toBe(2_200);
+    expect(ctx.rt.generation.pendingToolIds.size).toBe(0);
+    expect(ctx.rt.generation.reliable).toBe(true);
+
+    vi.setSystemTime(3_400);
+    translateSdkMessage(
+      {
+        type: 'stream_event',
+        parent_tool_use_id: 'toolu-agent-2',
+        event: {
+          type: 'message_start',
+          message: { model: 'claude-sonnet-4.5', usage: { input_tokens: 5 } },
+        },
+      },
+      queue,
+      ctx,
+    );
+    expect(ctx.rt.generation.startedAt).toBeNull();
+    expect(ctx.rt.generation.pendingToolIds.has('toolu-agent-2')).toBe(true);
+    expect(ctx.rt.generation.reliable).toBe(true);
+    resetClaudeGenerationTiming(ctx.rt.generation);
+    queue.end();
+    vi.useRealTimers();
+  });
+
+  it('does not reuse the previous parent request output after that assistant closes', async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(1_000);
+    const ctx = createTranslatorCtx();
+    const queue = createAsyncQueue<AgentEvent>();
+
+    translateSdkMessage(
+      {
+        type: 'stream_event',
+        event: {
+          type: 'message_start',
+          message: { model: 'claude-sonnet-4.5', usage: { input_tokens: 10 } },
+        },
+      },
+      queue,
+      ctx,
+    );
+    translateSdkMessage(
+      {
+        type: 'stream_event',
+        event: {
+          type: 'content_block_start',
+          index: 0,
+          content_block: { type: 'tool_use', id: 'toolu-agent-1', name: 'Agent', input: {} },
+        },
+      },
+      queue,
+      ctx,
+    );
+    vi.setSystemTime(1_800);
+    translateSdkMessage(
+      {
+        type: 'stream_event',
+        event: { type: 'message_delta', usage: { output_tokens: 80 } },
+      },
+      queue,
+      ctx,
+    );
+    translateSdkMessage(
+      {
+        type: 'assistant',
+        message: {
+          content: [{ type: 'tool_use', id: 'toolu-agent-1', name: 'Agent', input: {} }],
+        },
+      },
+      queue,
+      ctx,
+    );
+    translateSdkMessage(
+      { type: 'stream_event', event: { type: 'message_stop' } },
+      queue,
+      ctx,
+    );
+    expect(ctx.rt.generation.parentStreamedOutputIncomplete).toBe(false);
+
+    translateSdkMessage(
+      {
+        type: 'user',
+        message: {
+          content: [{ type: 'tool_result', tool_use_id: 'toolu-agent-1', content: 'child 1 done' }],
+        },
+      },
+      queue,
+      ctx,
+    );
+
+    vi.setSystemTime(2_600);
+    translateSdkMessage(
+      {
+        type: 'assistant',
+        message: {
+          content: [{ type: 'tool_use', id: 'toolu-agent-2', name: 'Agent', input: {} }],
+        },
+      },
+      queue,
+      ctx,
+    );
+    expect(ctx.rt.generation.parentStreamedOutputIncomplete).toBe(true);
+
+    translateSdkMessage(
+      {
+        type: 'stream_event',
+        parent_tool_use_id: 'toolu-agent-2',
+        event: {
+          type: 'message_start',
+          message: { model: 'claude-sonnet-4.5', usage: { input_tokens: 5 } },
+        },
+      },
+      queue,
+      ctx,
+    );
+    queue.end();
+    const events: AgentEvent[] = [];
+    for await (const event of queue) events.push(event);
+    expect(events.at(-1)?.data).toMatchObject({
+      outputTokens: 80,
+      generationReliable: false,
+    });
+    resetClaudeGenerationTiming(ctx.rt.generation);
+    vi.useRealTimers();
+  });
+
+  it('excludes subagent output from parent live tok/s', async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(1_000);
+    const ctx = createTranslatorCtx();
+    const queue = createAsyncQueue<AgentEvent>();
+
+    translateSdkMessage(
+      {
+        type: 'stream_event',
+        event: {
+          type: 'message_start',
+          message: { model: 'claude-sonnet-4.5', usage: { input_tokens: 10 } },
+        },
+      },
+      queue,
+      ctx,
+    );
+    translateSdkMessage(
+      {
+        type: 'stream_event',
+        event: {
+          type: 'content_block_start',
+          index: 0,
+          content_block: { type: 'tool_use', id: 'toolu-agent', name: 'Agent', input: {} },
+        },
+      },
+      queue,
+      ctx,
+    );
+    vi.setSystemTime(1_800);
+    translateSdkMessage(
+      {
+        type: 'stream_event',
+        event: {
+          type: 'message_delta',
+          usage: { output_tokens: 80 },
+        },
+      },
+      queue,
+      ctx,
+    );
+    expect(ctx.rt.generation.reliable).toBe(true);
+    expect(ctx.rt.generation.pendingToolIds.has('toolu-agent')).toBe(true);
+
+    translateSdkMessage(
+      {
+        type: 'stream_event',
+        parent_tool_use_id: 'toolu-agent',
+        event: {
+          type: 'message_start',
+          message: { model: 'claude-sonnet-4.5', usage: { input_tokens: 5 } },
+        },
+      },
+      queue,
+      ctx,
+    );
+    translateSdkMessage(
+      {
+        type: 'stream_event',
+        parent_tool_use_id: 'toolu-agent',
+        event: {
+          type: 'message_delta',
+          usage: { output_tokens: 500 },
+        },
+      },
+      queue,
+      ctx,
+    );
+    expect(ctx.rt.generation.reliable).toBe(true);
+    expect(ctx.rt.generation.sawSubagent).toBe(true);
+
+    translateSdkMessage(
+      {
+        type: 'user',
+        message: {
+          content: [{ type: 'tool_result', tool_use_id: 'toolu-agent', content: 'child done' }],
+        },
+      },
+      queue,
+      ctx,
+    );
+    vi.setSystemTime(2_200);
+    translateSdkMessage(
+      {
+        type: 'result',
+        stop_reason: 'end_turn',
+        total_cost_usd: 0,
+        num_turns: 1,
+        usage: { input_tokens: 15, output_tokens: 580 },
+      },
+      queue,
+      ctx,
+    );
+    queue.end();
+    const events: AgentEvent[] = [];
+    for await (const event of queue) events.push(event);
+
+    const generating = events.filter(
+      (event) => event.type === 'status' && (event.data as { status?: string }).status === 'Generating...',
+    );
+    expect(generating.at(-1)?.data).toMatchObject({
+      outputTokens: 80,
+      generationReliable: true,
+    });
+    const doneStatus = events.find(
+      (event) => event.type === 'status' && (event.data as { status?: string }).status === 'Done',
+    );
+    expect(doneStatus?.data).toMatchObject({
+      outputTokens: 80,
+      generationReliable: true,
+      generationActive: false,
+    });
+    resetClaudeGenerationTiming(ctx.rt.generation);
+    vi.useRealTimers();
+  });
+
+  it('fails closed when a subagent is present but parent streamed output is incomplete', async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(1_000);
+    const ctx = createTranslatorCtx();
+    const queue = createAsyncQueue<AgentEvent>();
+
+    translateSdkMessage(
+      {
+        type: 'stream_event',
+        event: {
+          type: 'message_start',
+          message: { model: 'claude-sonnet-4.5', usage: { input_tokens: 10 } },
+        },
+      },
+      queue,
+      ctx,
+    );
+    translateSdkMessage(
+      {
+        type: 'assistant',
+        message: { content: [{ type: 'text', text: 'parent without delta' }] },
+      },
+      queue,
+      ctx,
+    );
+    translateSdkMessage(
+      { type: 'stream_event', event: { type: 'message_stop' } },
+      queue,
+      ctx,
+    );
+    translateSdkMessage(
+      {
+        type: 'stream_event',
+        parent_tool_use_id: 'toolu-agent',
+        event: {
+          type: 'message_start',
+          message: { model: 'claude-sonnet-4.5', usage: { input_tokens: 5 } },
+        },
+      },
+      queue,
+      ctx,
+    );
+    translateSdkMessage(
+      {
+        type: 'stream_event',
+        parent_tool_use_id: 'toolu-agent',
+        event: {
+          type: 'message_delta',
+          usage: { output_tokens: 500 },
+        },
+      },
+      queue,
+      ctx,
+    );
+    expect(ctx.rt.generation.sawSubagent).toBe(true);
+    expect(ctx.rt.generation.parentStreamedOutputIncomplete).toBe(true);
+    expect(ctx.rt.generation.reliable).toBe(false);
+
+    vi.setSystemTime(1_800);
+    translateSdkMessage(
+      {
+        type: 'result',
+        stop_reason: 'end_turn',
+        total_cost_usd: 0,
+        num_turns: 1,
+        usage: { input_tokens: 15, output_tokens: 580 },
+      },
+      queue,
+      ctx,
+    );
+    queue.end();
+    const events: AgentEvent[] = [];
+    for await (const event of queue) events.push(event);
+    const generating = events.filter(
+      (event) => event.type === 'status' && (event.data as { status?: string }).status === 'Generating...',
+    );
+    expect(generating.at(-1)?.data).toMatchObject({
+      generationReliable: false,
+    });
+    const doneStatus = events.find(
+      (event) => event.type === 'status' && (event.data as { status?: string }).status === 'Done',
+    );
+    expect(doneStatus?.data).toMatchObject({
+      generationReliable: false,
+      generationActive: false,
+    });
+    resetClaudeGenerationTiming(ctx.rt.generation);
+    vi.useRealTimers();
+  });
+
+  it('fails closed live when a later parent request closes without usage', async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(1_000);
+    const ctx = createTranslatorCtx();
+    const queue = createAsyncQueue<AgentEvent>();
+
+    translateSdkMessage(
+      {
+        type: 'stream_event',
+        event: {
+          type: 'message_start',
+          message: { model: 'claude-sonnet-4.5', usage: { input_tokens: 10 } },
+        },
+      },
+      queue,
+      ctx,
+    );
+    translateSdkMessage(
+      {
+        type: 'stream_event',
+        event: {
+          type: 'message_delta',
+          usage: { output_tokens: 80 },
+        },
+      },
+      queue,
+      ctx,
+    );
+    translateSdkMessage(
+      {
+        type: 'assistant',
+        message: { content: [{ type: 'text', text: 'first parent request' }] },
+      },
+      queue,
+      ctx,
+    );
+    expect(ctx.rt.generation.parentStreamedOutputIncomplete).toBe(false);
+
+    translateSdkMessage(
+      {
+        type: 'stream_event',
+        event: {
+          type: 'message_start',
+          message: { model: 'claude-sonnet-4.5', usage: { input_tokens: 8 } },
+        },
+      },
+      queue,
+      ctx,
+    );
+    translateSdkMessage(
+      {
+        type: 'assistant',
+        message: { content: [{ type: 'text', text: 'parent without delta' }] },
+      },
+      queue,
+      ctx,
+    );
+    // The assistant envelope precedes its request's message_delta; only the
+    // request boundary proves the usage never came.
+    expect(ctx.rt.generation.parentStreamedOutputIncomplete).toBe(false);
+    translateSdkMessage(
+      { type: 'stream_event', event: { type: 'message_stop' } },
+      queue,
+      ctx,
+    );
+    expect(ctx.rt.generation.parentStreamedOutputIncomplete).toBe(true);
+
+    translateSdkMessage(
+      {
+        type: 'stream_event',
+        parent_tool_use_id: 'toolu-agent',
+        event: {
+          type: 'message_start',
+          message: { model: 'claude-sonnet-4.5', usage: { input_tokens: 5 } },
+        },
+      },
+      queue,
+      ctx,
+    );
+    expect(ctx.rt.generation.reliable).toBe(false);
+
+    vi.setSystemTime(1_800);
+    translateSdkMessage(
+      {
+        type: 'result',
+        stop_reason: 'end_turn',
+        total_cost_usd: 0,
+        num_turns: 1,
+        usage: { input_tokens: 23, output_tokens: 600 },
+      },
+      queue,
+      ctx,
+    );
+    queue.end();
+    const events: AgentEvent[] = [];
+    for await (const event of queue) events.push(event);
+    const generating = events.filter(
+      (event) => event.type === 'status' && (event.data as { status?: string }).status === 'Generating...',
+    );
+    expect(generating.at(-1)?.data).toMatchObject({
+      outputTokens: 80,
+      generationReliable: false,
+    });
+    const doneStatus = events.find(
+      (event) => event.type === 'status' && (event.data as { status?: string }).status === 'Done',
+    );
+    expect(doneStatus?.data).toMatchObject({
+      outputTokens: 80,
+      generationReliable: false,
+      generationActive: false,
+    });
+    resetClaudeGenerationTiming(ctx.rt.generation);
+    vi.useRealTimers();
+  });
+
+  it('keeps parent live tok/s when per-block assistant envelopes precede message_delta beside a background subagent', async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(1_000);
+    const ctx = createTranslatorCtx();
+    const queue = createAsyncQueue<AgentEvent>();
+    const send = (msg: Record<string, unknown>) => translateSdkMessage(msg as never, queue, ctx);
+    const main = (event: Record<string, unknown>) => send({ type: 'stream_event', event });
+    const child = (event: Record<string, unknown>) =>
+      send({ type: 'stream_event', parent_tool_use_id: 'toolu-bg', event });
+
+    // Claude Code yields one assistant envelope per finished content block,
+    // carrying message_start usage; the request's output usage arrives later.
+    main({ type: 'message_start', message: { id: 'msg_p1', model: 'claude-sonnet-4.5', usage: { input_tokens: 10, output_tokens: 3 } } });
+    main({
+      type: 'content_block_start',
+      index: 1,
+      content_block: { type: 'tool_use', id: 'toolu-bg', name: 'Agent', input: {} },
+    });
+    send({
+      type: 'assistant',
+      message: { id: 'msg_p1', content: [{ type: 'thinking', thinking: 'plan' }], usage: { output_tokens: 3 } },
+    });
+    // The tool_use block is last; its envelope lands right before message_delta.
+    vi.setSystemTime(1_500);
+    send({
+      type: 'assistant',
+      message: {
+        id: 'msg_p1',
+        content: [{ type: 'tool_use', id: 'toolu-bg', name: 'Agent', input: { run_in_background: true } }],
+        usage: { output_tokens: 3 },
+      },
+    });
+    expect(ctx.rt.generation.parentStreamedOutputIncomplete).toBe(false);
+    main({ type: 'message_delta', usage: { output_tokens: 100 } });
+    main({ type: 'message_stop' });
+    send({
+      type: 'user',
+      message: { content: [{ type: 'tool_result', tool_use_id: 'toolu-bg', content: 'Async agent launched successfully.' }] },
+    });
+
+    vi.setSystemTime(1_600);
+    main({ type: 'message_start', message: { id: 'msg_p2', model: 'claude-sonnet-4.5', usage: { input_tokens: 12, output_tokens: 3 } } });
+    child({ type: 'message_start', message: { id: 'msg_c1', model: 'claude-sonnet-4.5', usage: { input_tokens: 5 } } });
+    child({ type: 'message_delta', usage: { output_tokens: 400 } });
+    send({
+      type: 'assistant',
+      message: { id: 'msg_p2', content: [{ type: 'text', text: 'working on it' }], usage: { output_tokens: 3 } },
+    });
+    vi.setSystemTime(2_100);
+    main({ type: 'message_delta', usage: { output_tokens: 150 } });
+    main({ type: 'message_stop' });
+    child({ type: 'message_stop' });
+    expect(ctx.rt.generation.sawSubagent).toBe(true);
+    expect(ctx.rt.generation.parentStreamedOutputIncomplete).toBe(false);
+    expect(ctx.rt.generation.reliable).toBe(true);
+
+    send({
+      type: 'result',
+      stop_reason: 'end_turn',
+      total_cost_usd: 0,
+      num_turns: 2,
+      usage: { input_tokens: 27, output_tokens: 650 },
+    });
+    queue.end();
+    const events: AgentEvent[] = [];
+    for await (const event of queue) events.push(event);
+    const generating = events.filter(
+      (event) => event.type === 'status' && (event.data as { status?: string }).status === 'Generating...',
+    );
+    expect(generating.every((event) => (event.data as { generationReliable?: boolean }).generationReliable)).toBe(true);
+    expect(generating.at(-1)?.data).toMatchObject({
+      outputTokens: 250,
+      // 1000→1500 first request; the clock resumes at the async-launch
+      // tool_result (1500) and runs to the second message_delta (2100).
+      generationDurationMs: 1_100,
+      generationReliable: true,
+    });
+    const doneStatus = events.find(
+      (event) => event.type === 'status' && (event.data as { status?: string }).status === 'Done',
+    );
+    expect(doneStatus?.data).toMatchObject({ outputTokens: 250, generationReliable: true });
+    resetClaudeGenerationTiming(ctx.rt.generation);
+    vi.useRealTimers();
+  });
+
+  it('settles a parent request that never sent message_stop at the next main message_start', () => {
+    for (const withDelta of [true, false]) {
+      const ctx = createTranslatorCtx();
+      const queue = createAsyncQueue<AgentEvent>();
+      const main = (event: Record<string, unknown>) =>
+        translateSdkMessage({ type: 'stream_event', event } as never, queue, ctx);
+      main({ type: 'message_start', message: { id: 'msg_a', model: 'claude-sonnet-4.5', usage: { input_tokens: 10 } } });
+      translateSdkMessage(
+        { type: 'assistant', message: { id: 'msg_a', content: [{ type: 'text', text: 'a' }] } } as never,
+        queue,
+        ctx,
+      );
+      if (withDelta) main({ type: 'message_delta', usage: { output_tokens: 40 } });
+      main({ type: 'message_start', message: { id: 'msg_b', model: 'claude-sonnet-4.5', usage: { input_tokens: 10 } } });
+      expect(ctx.rt.generation.parentStreamedOutputIncomplete).toBe(!withDelta);
+      resetClaudeGenerationTiming(ctx.rt.generation);
+    }
+  });
+
+  it('does not freeze the next turn when a previous turn left an unresolved tool id', () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(1_000);
+    const ctx = createTranslatorCtx();
+    const queue = createAsyncQueue<AgentEvent>();
+
+    // Turn 1: a tool_use streams but its tool_result echo never arrives
+    // (SDK-internal tools like ToolSearch resolve without an echo), then the
+    // turn ends.
+    translateSdkMessage(
+      {
+        type: 'stream_event',
+        event: {
+          type: 'message_start',
+          message: { model: 'claude-sonnet-4.5', usage: { input_tokens: 10 } },
+        },
+      },
+      queue,
+      ctx,
+    );
+    translateSdkMessage(
+      {
+        type: 'stream_event',
+        event: {
+          type: 'content_block_start',
+          index: 0,
+          content_block: { type: 'tool_use', id: 'toolu_stale', name: 'ToolSearch', input: {} },
+        },
+      },
+      queue,
+      ctx,
+    );
+    vi.setSystemTime(1_500);
+    translateSdkMessage(
+      {
+        type: 'stream_event',
+        event: { type: 'message_delta', usage: { output_tokens: 40 } },
+      },
+      queue,
+      ctx,
+    );
+    vi.setSystemTime(2_000);
+    translateSdkMessage(
+      {
+        type: 'result',
+        stop_reason: 'end_turn',
+        total_cost_usd: 0,
+        num_turns: 1,
+        usage: { input_tokens: 10, output_tokens: 40 },
+      },
+      queue,
+      ctx,
+    );
+    expect(ctx.rt.generation.pendingToolIds.size).toBe(0);
+
+    // Turn 2: the stale id must not re-enter pending, and the clock must
+    // restart once this turn's only real tool resolves. Otherwise the
+    // denominator freezes while output keeps accruing → runaway live tok/s.
+    vi.setSystemTime(10_000);
+    translateSdkMessage(
+      {
+        type: 'stream_event',
+        event: {
+          type: 'message_start',
+          message: { model: 'claude-sonnet-4.5', usage: { input_tokens: 12 } },
+        },
+      },
+      queue,
+      ctx,
+    );
+    expect(ctx.rt.generation.startedAt).toBe(10_000);
+    translateSdkMessage(
+      {
+        type: 'stream_event',
+        event: {
+          type: 'content_block_start',
+          index: 0,
+          content_block: { type: 'tool_use', id: 'toolu_next', name: 'Read', input: {} },
+        },
+      },
+      queue,
+      ctx,
+    );
+    vi.setSystemTime(10_400);
+    translateSdkMessage(
+      {
+        type: 'stream_event',
+        event: { type: 'message_delta', usage: { output_tokens: 100 } },
+      },
+      queue,
+      ctx,
+    );
+    expect(ctx.rt.generation.pendingToolIds.has('toolu_stale')).toBe(false);
+    expect(ctx.rt.generation.pendingToolIds.has('toolu_next')).toBe(true);
+    expect(ctx.rt.generation.durationMs).toBe(400);
+
+    vi.setSystemTime(10_600);
+    translateSdkMessage(
+      {
+        type: 'user',
+        message: {
+          content: [{ type: 'tool_result', tool_use_id: 'toolu_next', content: 'ok' }],
+        },
+      },
+      queue,
+      ctx,
+    );
+    expect(ctx.rt.generation.pendingToolIds.size).toBe(0);
+    expect(ctx.rt.generation.startedAt).toBe(10_600);
+    expect(ctx.rt.generation.reliable).toBe(true);
+
+    resetClaudeGenerationTiming(ctx.rt.generation);
+    queue.end();
+    vi.useRealTimers();
+  });
+
+  it('unfreezes the clock at the next request when a tool result echo never arrives', async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(1_000);
+    const ctx = createTranslatorCtx();
+    const queue = createAsyncQueue<AgentEvent>();
+
+    translateSdkMessage(
+      {
+        type: 'stream_event',
+        event: {
+          type: 'message_start',
+          message: { model: 'claude-sonnet-4.5', usage: { input_tokens: 10 } },
+        },
+      },
+      queue,
+      ctx,
+    );
+    translateSdkMessage(
+      {
+        type: 'stream_event',
+        event: {
+          type: 'content_block_start',
+          index: 0,
+          content_block: { type: 'tool_use', id: 'toolu_search', name: 'ToolSearch', input: {} },
+        },
+      },
+      queue,
+      ctx,
+    );
+    vi.setSystemTime(1_500);
+    translateSdkMessage(
+      {
+        type: 'stream_event',
+        event: { type: 'message_delta', usage: { output_tokens: 50 } },
+      },
+      queue,
+      ctx,
+    );
+    expect(ctx.rt.generation.pendingToolIds.has('toolu_search')).toBe(true);
+    expect(ctx.rt.generation.durationMs).toBe(500);
+
+    // The SDK resolved the tool internally without echoing a tool_result. A
+    // new parent request proves every tool of the previous message settled —
+    // the clock must restart instead of staying frozen for the rest of the
+    // turn.
+    vi.setSystemTime(4_000);
+    translateSdkMessage(
+      {
+        type: 'stream_event',
+        event: {
+          type: 'message_start',
+          message: { model: 'claude-sonnet-4.5', usage: { input_tokens: 12 } },
+        },
+      },
+      queue,
+      ctx,
+    );
+    expect(ctx.rt.generation.pendingToolIds.size).toBe(0);
+    expect(ctx.rt.generation.startedAt).toBe(4_000);
+    expect(ctx.rt.generation.reliable).toBe(true);
+
+    // A late echo for the internally settled id stays a no-op.
+    vi.setSystemTime(4_100);
+    translateSdkMessage(
+      {
+        type: 'user',
+        message: {
+          content: [{ type: 'tool_result', tool_use_id: 'toolu_search', content: 'loaded' }],
+        },
+      },
+      queue,
+      ctx,
+    );
+    expect(ctx.rt.generation.startedAt).toBe(4_000);
+    expect(ctx.rt.generation.reliable).toBe(true);
+
+    vi.setSystemTime(4_500);
+    translateSdkMessage(
+      {
+        type: 'stream_event',
+        event: { type: 'message_delta', usage: { output_tokens: 100 } },
+      },
+      queue,
+      ctx,
+    );
+    vi.setSystemTime(4_800);
+    translateSdkMessage(
+      {
+        type: 'result',
+        stop_reason: 'end_turn',
+        total_cost_usd: 0,
+        num_turns: 1,
+        usage: { input_tokens: 22, output_tokens: 150 },
+      },
+      queue,
+      ctx,
+    );
+    queue.end();
+    const events: AgentEvent[] = [];
+    for await (const event of queue) events.push(event);
+    const doneStatus = events.find(
+      (event) => event.type === 'status' && (event.data as { status?: string }).status === 'Done',
+    );
+    expect(doneStatus?.data).toMatchObject({
+      outputTokens: 150,
+      generationReliable: true,
+      generationActive: false,
+      generationDurationMs: 1_000,
+    });
+    resetClaudeGenerationTiming(ctx.rt.generation);
+    vi.useRealTimers();
+  });
+});
+
+describe('claude live token speed', () => {
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  it('counts main-thread deltas, pauses on tools and reports the real average at the end', async () => {
+    vi.useFakeTimers();
+    const ctx = createTranslatorCtx();
+    const queue = createAsyncQueue<AgentEvent>();
+    const stream = (event: Record<string, unknown>, at: number, parent?: string) => {
+      vi.setSystemTime(at);
+      translateSdkMessage(
+        { type: 'stream_event', event, ...(parent ? { parent_tool_use_id: parent } : {}) },
+        queue,
+        ctx,
+      );
+    };
+    stream({ type: 'message_start', message: { model: 'claude-sonnet-4.5', usage: { input_tokens: 10 } } }, 1_000);
+    stream({ type: 'content_block_start', index: 0, content_block: { type: 'text', text: '' } }, 1_000);
+    stream({ type: 'content_block_delta', index: 0, delta: { type: 'text_delta', text: 'one two three four' } }, 1_500);
+    stream({ type: 'content_block_start', index: 1, content_block: { type: 'tool_use', id: 'toolu_1', name: 'Bash', input: {} } }, 1_600);
+    stream({ type: 'content_block_delta', index: 1, delta: { type: 'input_json_delta', partial_json: '{"command":"ls -la"}' } }, 1_700);
+    stream({ type: 'content_block_stop', index: 1 }, 2_000);
+    stream({ type: 'message_delta', usage: { output_tokens: 12 } }, 2_000);
+    // Subagent output is not the main thread's speed.
+    stream({ type: 'content_block_delta', index: 0, delta: { type: 'text_delta', text: 'x y z' } }, 5_000, 'toolu_1');
+    // The request's real output replaces the stream estimate as soon as it is reported.
+    expect(ctx.rt.generation.tokenSpeed.snapshot(5_000)).toMatchObject({ tokens: 12, elapsedMs: 1_000 });
+    stream({ type: 'message_start', message: { model: 'claude-sonnet-4.5', usage: { input_tokens: 10 } } }, 12_000);
+    stream({ type: 'content_block_start', index: 0, content_block: { type: 'text', text: '' } }, 12_000);
+    stream({ type: 'content_block_delta', index: 0, delta: { type: 'text_delta', text: 'five six' } }, 12_400);
+    stream({ type: 'message_delta', usage: { output_tokens: 18 } }, 12_500);
+    vi.setSystemTime(12_500);
+    translateSdkMessage(
+      {
+        type: 'result',
+        stop_reason: 'end_turn',
+        total_cost_usd: 0,
+        num_turns: 2,
+        // A session aggregate turned into a wrong turn delta must not drive the snap.
+        usage: { input_tokens: 20, output_tokens: 5 },
+      },
+      queue,
+      ctx,
+    );
+    queue.end();
+    const events: AgentEvent[] = [];
+    for await (const event of queue) events.push(event);
+    const statuses = events.filter((event) => event.type === 'status');
+    const liveSpeed = statuses
+      .map((event) => (event.data as { tokenSpeed?: unknown }).tokenSpeed)
+      .find(Boolean);
+    expect(liveSpeed).toMatchObject({ streaming: true, elapsedMs: 500 });
+    expect((liveSpeed as { tokens: number }).tokens).toBeGreaterThan(0);
+    const done = statuses.find((event) => (event.data as { status?: string }).status === 'Done');
+    // The streamed 12 + 18 real tokens. The 10s tool pause is not generation time, and the
+    // second request is too short to time, so it counts at the 12 tok/s measured before it.
+    expect((done?.data as { tokenSpeed?: unknown }).tokenSpeed).toMatchObject({
+      streaming: false,
+      tokens: 30,
+      elapsedMs: 2_500,
+      average: 12,
+      rate: 12,
+    });
+    resetClaudeGenerationTiming(ctx.rt.generation);
+    expect(ctx.rt.generation.tokenSpeed.snapshot()).toBeUndefined();
+  });
+
+  it('leaves the API retry backoff out of generation time', () => {
+    vi.useFakeTimers();
+    const ctx = createTranslatorCtx();
+    const queue = createAsyncQueue<AgentEvent>();
+    const send = (msg: Record<string, unknown>, at: number) => {
+      vi.setSystemTime(at);
+      translateSdkMessage(msg as never, queue, ctx);
+    };
+    const stream = (event: Record<string, unknown>, at: number) => send({ type: 'stream_event', event }, at);
+    stream({ type: 'message_start', message: { model: 'claude-sonnet-4.5', usage: { input_tokens: 10 } } }, 1_000);
+    stream({ type: 'content_block_start', index: 0, content_block: { type: 'text', text: '' } }, 1_000);
+    stream({ type: 'content_block_delta', index: 0, delta: { type: 'text_delta', text: 'one two three four' } }, 1_500);
+    send({ type: 'system', subtype: 'api_retry', attempt: 1, max_retries: 3, retry_delay_ms: 10_000, error_status: 529, error: 'overloaded' }, 1_500);
+    // 10s backoff, then the retried request streams again.
+    stream({ type: 'message_start', message: { model: 'claude-sonnet-4.5', usage: { input_tokens: 10 } } }, 11_500);
+    stream({ type: 'content_block_start', index: 0, content_block: { type: 'text', text: '' } }, 11_500);
+    stream({ type: 'content_block_delta', index: 0, delta: { type: 'text_delta', text: 'five six seven eight' } }, 12_000);
+    expect(ctx.rt.generation.tokenSpeed.snapshot(12_000)).toMatchObject({ elapsedMs: 1_000 });
+    resetClaudeGenerationTiming(ctx.rt.generation);
+    queue.end();
+  });
+
+  it('withdraws the speed when the host was suspended mid-generation', async () => {
+    vi.useFakeTimers();
+    const ctx = createTranslatorCtx();
+    const queue = createAsyncQueue<AgentEvent>();
+    const stream = (event: Record<string, unknown>, at: number) => {
+      vi.setSystemTime(at);
+      translateSdkMessage({ type: 'stream_event', event }, queue, ctx);
+    };
+    stream({ type: 'message_start', message: { model: 'claude-sonnet-4.5', usage: { input_tokens: 10 } } }, 1_000);
+    stream({ type: 'content_block_start', index: 0, content_block: { type: 'text', text: '' } }, 1_000);
+    stream({ type: 'content_block_delta', index: 0, delta: { type: 'text_delta', text: 'one two three four five' } }, 1_500);
+    expect(ctx.rt.generation.tokenSpeed.snapshot(1_500)?.tokens).toBeGreaterThan(0);
+    // The lid closes for five minutes: no heartbeat fires until the stream resumes.
+    stream({ type: 'content_block_delta', index: 0, delta: { type: 'text_delta', text: 'six seven' } }, 301_500);
+    stream({ type: 'message_delta', usage: { output_tokens: 7 } }, 302_000);
+    vi.setSystemTime(302_000);
+    translateSdkMessage(
+      { type: 'result', stop_reason: 'end_turn', total_cost_usd: 0, num_turns: 1, usage: { input_tokens: 10, output_tokens: 7 } },
+      queue,
+      ctx,
+    );
+    queue.end();
+    const events: AgentEvent[] = [];
+    for await (const event of queue) events.push(event);
+    const done = events.find((event) => event.type === 'status' && (event.data as { status?: string }).status === 'Done');
+    expect(done?.data).toMatchObject({ generationReliable: false });
+    expect(done?.data).not.toHaveProperty('tokenSpeed');
+    resetClaudeGenerationTiming(ctx.rt.generation);
+  });
+
+  it.each(['Write', 'mcp__custom_tool'])('counts %s arguments and excludes execution time', (name) => {
+    vi.useFakeTimers();
+    vi.setSystemTime(1_000);
+    const ctx = createTranslatorCtx();
+    const queue = createAsyncQueue<AgentEvent>();
+    const stream = (event: Record<string, unknown>) =>
+      translateSdkMessage({ type: 'stream_event', event }, queue, ctx);
+    stream({ type: 'message_start', message: { model: 'claude-sonnet-4.5', usage: { input_tokens: 10 } } });
+    stream({ type: 'content_block_start', index: 0, content_block: { type: 'tool_use', id: 'toolu_w', name, input: {} } });
+    vi.setSystemTime(2_000);
+    stream({ type: 'content_block_delta', index: 0, delta: { type: 'input_json_delta', partial_json: '{"content":"a b c"}' } });
+    expect(ctx.rt.generation.tokenSpeed.snapshot()?.tokens).toBeGreaterThan(0);
+    stream({ type: 'content_block_stop', index: 0 });
+    vi.setSystemTime(12_000);
+    expect(ctx.rt.generation.tokenSpeed.snapshot()?.elapsedMs).toBe(1_000);
+    resetClaudeGenerationTiming(ctx.rt.generation);
+    queue.end();
+  });
+
+  // The tests below pin what recorded turns showed (scripts/token-speed-replay.ts):
+  // while a turn ran, the panel counted 20–50% of the real output and drew readings near
+  // zero after every stretch of thinking.
+  function speedHarness() {
+    vi.useFakeTimers();
+    vi.setSystemTime(0);
+    const ctx = createTranslatorCtx();
+    const queue = createAsyncQueue<AgentEvent>();
+    const readings: number[] = [];
+    const send = (msg: Record<string, unknown>, at: number) => {
+      // Advance rather than jump: the suspend heartbeat has to see time pass.
+      vi.advanceTimersByTime(Math.max(0, at - Date.now()));
+      translateSdkMessage(msg as never, queue, ctx);
+    };
+    const stream = (event: Record<string, unknown>, at: number) => send({ type: 'stream_event', event }, at);
+    const speed = (at: number) => ctx.rt.generation.tokenSpeed.snapshot(at);
+    /** Deltas of `chars` characters every `everyMs`, from `from` (exclusive) to `to`. */
+    const flow = (index: number, delta: (text: string) => Record<string, unknown>, chars: number, from: number, to: number, everyMs = 50) => {
+      for (let at = from + everyMs; at <= to; at += everyMs) {
+        stream({ type: 'content_block_delta', index, delta: delta('a'.repeat(chars)) }, at);
+        const shown = speed(at);
+        if (shown?.streaming && shown.rate > 0) readings.push(shown.rate);
+      }
+    };
+    const text = (value: string) => ({ type: 'text_delta', text: value });
+    const thinking = (value: string) => ({ type: 'thinking_delta', thinking: value });
+    const start = (at: number) =>
+      stream({ type: 'message_start', message: { model: 'claude-sonnet-4.5', usage: { input_tokens: 10 } } }, at);
+    const finish = () => {
+      resetClaudeGenerationTiming(ctx.rt.generation);
+      queue.end();
+    };
+    return { queue, send, stream, speed, flow, text, thinking, start, finish, readings };
+  }
+
+  it('reads summarized thinking at the pace the finished request reported', () => {
+    const { stream, speed, flow, thinking, start, finish, readings } = speedHarness();
+    // 20s of thinking whose summary carries 107 characters (50 estimated tokens) every 500ms.
+    start(0);
+    stream({ type: 'content_block_start', index: 0, content_block: { type: 'thinking', thinking: '' } }, 0);
+    flow(0, thinking, 107, 0, 20_000, 500);
+    stream({ type: 'content_block_stop', index: 0 }, 20_000);
+    // The request really thought three tokens for every estimated one: 300 tok/s.
+    stream({ type: 'message_delta', usage: { output_tokens: 6_000, output_tokens_details: { thinking_tokens: 6_000 } } }, 20_000);
+    expect(speed(20_000)).toMatchObject({ tokens: 6_000, elapsedMs: 20_000, average: 300 });
+
+    readings.length = 0;
+    start(25_000);
+    stream({ type: 'content_block_start', index: 0, content_block: { type: 'thinking', thinking: '' } }, 25_000);
+    flow(0, thinking, 107, 25_000, 45_000, 500);
+    // The same summary now counts for what it stood for last time, while it is still streaming.
+    const live = speed(45_000);
+    expect(live?.tokens).toBeGreaterThan(11_000);
+    expect(live?.tokens).toBeLessThan(12_300);
+    expect(Math.min(...readings)).toBeGreaterThan(270);
+    expect(Math.max(...readings)).toBeLessThan(320);
+    finish();
+  });
+
+  // Review of PR 9597: a held-back burst inside an otherwise steady window read as a spike
+  // (the window stayed below the ceiling) and kept the peak for the whole turn.
+  it('keeps a burst released at once out of the readings and the peak', () => {
+    const { stream, speed, flow, text, start, finish, readings } = speedHarness();
+    start(0);
+    stream({ type: 'content_block_start', index: 0, content_block: { type: 'text', text: '' } }, 0);
+    flow(0, text, 11, 0, 4_000);
+    // 12 000 estimated tokens released within a few milliseconds.
+    stream({ type: 'content_block_delta', index: 0, delta: text('a'.repeat(25_700)) }, 4_005);
+    flow(0, text, 11, 4_005, 8_000);
+    expect(Math.max(...readings)).toBeLessThan(115);
+    expect(speed(8_000)!.peak).toBeLessThan(115);
+    finish();
+  });
+
+  it('takes no reading from the silence before visible output', () => {
+    const { stream, flow, text, start, finish, readings } = speedHarness();
+    start(0);
+    // Redacted thinking: 20s in which the model generates and nothing streams.
+    stream({ type: 'content_block_start', index: 0, content_block: { type: 'thinking', thinking: '' } }, 0);
+    stream({ type: 'content_block_stop', index: 0 }, 20_000);
+    stream({ type: 'content_block_start', index: 1, content_block: { type: 'text', text: '' } }, 20_000);
+    // 11 characters every 50ms is about 103 tok/s.
+    flow(1, text, 11, 20_000, 26_000);
+    expect(readings.length).toBeGreaterThan(0);
+    // Dividing the first output by the 20s before it read below 1 tok/s.
+    expect(Math.min(...readings)).toBeGreaterThan(95);
+    expect(Math.max(...readings)).toBeLessThan(110);
+    finish();
+  });
+
+  it('credits the time a response spent generating before its first byte', () => {
+    const { stream, speed, flow, text, start, finish } = speedHarness();
+    start(0);
+    stream({ type: 'content_block_start', index: 0, content_block: { type: 'text', text: '' } }, 0);
+    // 428 characters over 2s: 200 real tokens at 100 tok/s.
+    flow(0, text, 107, 0, 2_000, 500);
+    stream({ type: 'content_block_stop', index: 0 }, 2_000);
+    stream({ type: 'message_delta', usage: { output_tokens: 200 } }, 2_000);
+    expect(speed(2_000)).toMatchObject({ tokens: 200, elapsedMs: 2_000, average: 100 });
+    // A short reply held back by the provider arrives whole with its first byte.
+    start(5_000);
+    stream({ type: 'content_block_start', index: 0, content_block: { type: 'text', text: '' } }, 5_000);
+    stream({ type: 'content_block_delta', index: 0, delta: text('a'.repeat(214)) }, 5_000);
+    stream({ type: 'content_block_stop', index: 0 }, 5_001);
+    stream({ type: 'message_delta', usage: { output_tokens: 100 } }, 5_001);
+    // Its 100 tokens took a second somewhere; counting them over 1ms read 150 tok/s.
+    const settled = speed(5_001);
+    expect(settled?.tokens).toBe(300);
+    expect(settled?.average).toBeGreaterThan(98);
+    expect(settled?.average).toBeLessThan(102);
+    finish();
+  });
+
+  it.each([
+    ['summarized thinking', fableSummarized as RecordedStream],
+    ['redacted thinking', sonnetRedacted as RecordedStream],
+  ])('follows a recorded turn with %s within reach of its real usage', async (_name, recorded) => {
+    const { queue, send, speed, finish } = speedHarness();
+    let realOutput = 0;
+    let streamMs = 0;
+    let requestStart = 0;
+    const readings: number[] = [];
+    for (const { t, msg } of expandRecordedStream(recorded)) {
+      const event = msg.event as { type?: string; usage?: { output_tokens?: number } } | undefined;
+      if (event?.type === 'message_start') requestStart = t;
+      if (event?.type === 'message_delta') {
+        realOutput += event.usage?.output_tokens ?? 0;
+        streamMs += t - requestStart;
+        // Right before a request reports its usage the panel still shows the stream's own count.
+        const shown = speed(t)?.tokens ?? 0;
+        if ((event.usage?.output_tokens ?? 0) >= 1_000) {
+          expect(shown / realOutput).toBeGreaterThan(0.85);
+          expect(shown / realOutput).toBeLessThan(1.15);
+        }
+      }
+      if (msg.type === 'result') {
+        send({ type: 'result', stop_reason: 'end_turn', total_cost_usd: 0, num_turns: 1, usage: { input_tokens: 1, output_tokens: realOutput } }, t);
+      } else {
+        send(msg, t);
+      }
+      const shown = speed(t);
+      if (shown?.streaming && shown.rate > 0) readings.push(shown.rate);
+    }
+    finish();
+    const realTps = (realOutput * 1_000) / streamMs;
+    let final: { streaming: boolean; tokens: number; average: number } | undefined;
+    for await (const event of queue) {
+      const data = event.data as { status?: string; tokenSpeed?: typeof final };
+      if (event.type === 'status' && data.status === 'Done') final = data.tokenSpeed;
+    }
+    expect(final).toMatchObject({ streaming: false, tokens: realOutput });
+    expect(final!.average / realTps).toBeGreaterThan(0.97);
+    expect(final!.average / realTps).toBeLessThan(1.01);
+    // No reading may collapse towards zero after thinking or spike on a flushed burst.
+    expect(Math.min(...readings) / realTps).toBeGreaterThan(0.4);
+    expect(Math.max(...readings) / realTps).toBeLessThan(2.2);
+  });
+});

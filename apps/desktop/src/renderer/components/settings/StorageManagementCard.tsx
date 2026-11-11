@@ -1,13 +1,15 @@
+import { storageManagementCardSettings } from './StorageManagementCard.settings-search';
 /**
  * StorageManagementCard — 关于页「存储空间」卡片。
  * ---------------------------------------------------------------------------
- * 三段式:
+ * 组成:
  *   1. 占用总览(挂载时异步拉一次;数据在本地,拿到前不渲染 loading 骨架,
  *      规则 7:先拿数据再刷新显示);
- *   2. 清理:扫描(报数)→ 明细确认 → 执行 → 结果。发起扫描/清理时把
+ *   2. 两个固定缓存目录:打开目录或经破坏性确认后整目录清理;
+ *   3. 媒体总仓清理:扫描(报数)→ 明细确认 → 执行 → 结果。发起扫描/清理时把
  *      composerDraftStore 全部草稿附件 URL 随参带给 main——草稿图是合法的
  *      零引用 blob,main 读不到 renderer 内存,不带就会被当垃圾清掉;
- *   3. 体检(对账):只报不删,异常计数展示,全量清单在 main 日志里。
+ *   4. 体检(对账):只报不删,异常计数展示,全量清单在 main 日志里。
  *
  * 无瞬态 loading(规则 7):扫描/体检/清理都是本地毫秒级操作,按钮文案与
  * 已显示的结果区块在操作期间保持不动,结果到达才一次性刷新——中间态文案
@@ -15,18 +17,44 @@
  * 点击用 ref 标志,不产生任何视觉变化。
  */
 
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useId, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
+import { RefreshCw } from 'lucide-react';
+import * as AlertDialog from '@radix-ui/react-alert-dialog';
+import { Select } from '@/components/ui/select';
 
 import { cn } from '@/lib/utils';
 import { toast } from '@/lib/toast';
+import { mapIpcErrorToI18nKey } from '@/utils/ipcError';
 import { getAllDraftAttachmentUrls } from '@/lib/composerDraftStore';
+import { acquireAppInteractionLock } from '@/lib/appInteractionLock';
 import { formatBytes } from '@/features/cc-agent/workdir-browse/lib/fileMeta';
+import { WINDOW_DRAG_STYLE, WINDOW_NO_DRAG_STYLE } from '@/components/layout/windowDrag';
+import { Spinner } from '@/components/ui/spinner';
+import { Button } from '@/components/ui/button';
+import { FormField } from '@/components/ui/form-field';
+import { Switch } from '@/components/ui/switch';
+import { SettingsCard, SettingsField, SettingsRow, SettingsSection } from '@/components/ui/settings-rows';
+import { useConfirmDialog } from '@/components/ui/confirm-dialog-provider';
+import { DefaultOverrideControls } from './DefaultOverrideControls';
+import { SettingsTextInput } from './SettingsTextInput';
+import { DialogueDirectorySection } from './DialogueDirectorySection';
+import { ProjectsRootSection } from './ProjectsRootSection';
+import {
+  DB_SLIMMING_ARCHIVE_AGE_OPTIONS,
+  DB_SLIMMING_DEFAULT_ARCHIVE_AGE,
+  type DbSlimmingArchiveAge,
+  type DbSlimmingBackupDirectorySelection,
+  type DbSlimmingResult,
+  type DbSlimmingScanResult,
+} from '../../../shared/localDbMaintenance';
 
 type StatsResult = Awaited<ReturnType<typeof window.electronAPI.cindyMediaStorage.stats>>;
 type ScanResult = Awaited<ReturnType<typeof window.electronAPI.cindyMediaStorage.scan>>;
 type CleanupResult = Awaited<ReturnType<typeof window.electronAPI.cindyMediaStorage.cleanup>>;
 type ReconcileResult = Awaited<ReturnType<typeof window.electronAPI.cindyMediaStorage.reconcile>>;
+
+const GIB_BYTES = 1024 ** 3;
 
 type CleanPhase =
   | { kind: 'idle' }
@@ -35,25 +63,131 @@ type CleanPhase =
 
 export function StorageManagementCard() {
   const { t } = useTranslation();
+  const { confirm } = useConfirmDialog();
   const [stats, setStats] = useState<StatsResult | null>(null);
+  const [databaseBytes, setDatabaseBytes] = useState<number | null>(null);
+  const [warningThresholdGiB, setWarningThresholdGiB] = useState(10);
   const [phase, setPhase] = useState<CleanPhase>({ kind: 'idle' });
   const [reconcile, setReconcile] = useState<ReconcileResult | null>(null);
   // in-flight 防重入标志(不进 state:操作期间界面零变化,见文件头)。
   const cleanupBusyRef = useRef(false);
   const reconcileBusyRef = useRef(false);
+  const directoryCleanupBusyRef = useRef(false);
+  const statsBusyRef = useRef(false);
+  const statsRefreshQueuedRef = useRef(false);
+  const [statsRefreshing, setStatsRefreshing] = useState(false);
+  const [statsFailed, setStatsFailed] = useState(false);
 
   const refreshStats = async () => {
+    if (statsBusyRef.current) {
+      statsRefreshQueuedRef.current = true;
+      return;
+    }
+    statsBusyRef.current = true;
+    setStatsRefreshing(true);
     try {
-      const res = await window.electronAPI.cindyMediaStorage.stats();
-      setStats(res);
-    } catch {
-      // 保持上一份显示;错误由具体操作路径提示。
+      const databaseApi = window.electronAPI.localDb?.databaseSizeWarning;
+      const [mediaResult, databaseResult] = await Promise.allSettled([
+        window.electronAPI.cindyMediaStorage.stats(),
+        databaseApi?.measure?.() ?? databaseApi?.getStatus?.() ?? Promise.resolve({ databaseBytes: null }),
+      ]);
+      const mediaSucceeded = mediaResult.status === 'fulfilled' && mediaResult.value.success;
+      const databaseSucceeded =
+        databaseResult.status === 'fulfilled' && databaseResult.value.databaseBytes !== null;
+      setStats(mediaSucceeded ? mediaResult.value : null);
+      setDatabaseBytes(databaseSucceeded ? databaseResult.value.databaseBytes : null);
+      setStatsFailed(!mediaSucceeded || !databaseSucceeded);
+    } finally {
+      statsBusyRef.current = false;
+      setStatsRefreshing(false);
+      if (statsRefreshQueuedRef.current) {
+        statsRefreshQueuedRef.current = false;
+        void refreshStats();
+      }
     }
   };
 
   useEffect(() => {
     void refreshStats();
   }, []);
+
+  const handleOpenLegacyImagesDir = async () => {
+    try {
+      const result = await window.electronAPI.cindyMediaStorage.openLegacyImagesDir();
+      if (!result.opened) toast.info(t('settings.about.storage.legacyImagesDirectoryMissing'));
+    } catch {
+      toast.error(t('settings.about.storage.legacyImagesOpenFailed'));
+    }
+  };
+
+  const handleClearLegacyImagesDir = async () => {
+    if (directoryCleanupBusyRef.current) return;
+    directoryCleanupBusyRef.current = true;
+    try {
+      const result = await window.electronAPI.cindyMediaStorage.clearLegacyImagesDir();
+      if (!result.cleared) return;
+      toast.success(t('settings.about.storage.legacyImagesCleared'));
+      void refreshStats();
+    } catch {
+      toast.error(t('settings.about.storage.legacyImagesClearFailed'));
+    } finally {
+      directoryCleanupBusyRef.current = false;
+    }
+  };
+
+  const handleOpenChatAttachmentsDir = async () => {
+    try {
+      const result = await window.electronAPI.cindyMediaStorage.openChatAttachmentsDir();
+      if (!result.opened) {
+        toast.info(t('settings.about.storage.chatAttachmentsDirectoryMissing'));
+      }
+    } catch {
+      toast.error(t('settings.about.storage.chatAttachmentsOpenFailed'));
+    }
+  };
+
+  const handleClearChatAttachmentsDir = async () => {
+    if (directoryCleanupBusyRef.current) return;
+    directoryCleanupBusyRef.current = true;
+    try {
+      const result = await window.electronAPI.cindyMediaStorage.clearChatAttachmentsDir();
+      if (!result.cleared) return;
+      toast.success(t('settings.about.storage.chatAttachmentsCleared'));
+      void refreshStats();
+    } catch {
+      toast.error(t('settings.about.storage.chatAttachmentsClearFailed'));
+    } finally {
+      directoryCleanupBusyRef.current = false;
+    }
+  };
+
+  const handleClearRemoteMedia = async () => {
+    if (cleanupBusyRef.current) return;
+    cleanupBusyRef.current = true;
+    try {
+      const api = window.electronAPI.cindyMediaStorage;
+      const scan = await api.scan({ draftUrls: getAllDraftAttachmentUrls(), scope: 'remote-media' });
+      if (!scan.success) throw new Error('scan failed');
+      const bytes = scan.cache.evictable.reduce((sum, entry) => sum + entry.bytes, 0);
+      if (!await confirm({
+        title: t('settings.about.storage.remoteMediaClearTitle'),
+        description: t('settings.about.storage.remoteMediaClearDescription', { size: formatBytes(bytes) }),
+        confirmText: t('settings.about.storage.remoteMediaClearButton'),
+        cancelText: t('settings.about.storage.cancelButton'),
+      })) return;
+      const result = await api.cleanup({
+        scope: 'remote-media', draftUrls: getAllDraftAttachmentUrls(),
+        evictCacheHashes: scan.cache.evictable.map((entry) => entry.hash),
+        zeroRefHashes: [], deadDirNames: [], cleanTmpFiles: false,
+      });
+      toast.success(t('settings.about.storage.cleanupDoneToast', { size: formatBytes(result.freedBytes) }));
+      void refreshStats();
+    } catch {
+      toast.error(t('settings.about.storage.cleanupFailed'));
+    } finally {
+      cleanupBusyRef.current = false;
+    }
+  };
 
   const handleScan = async () => {
     if (cleanupBusyRef.current) return;
@@ -126,172 +260,954 @@ export function StorageManagementCard() {
     scan.deadDirs.some((d) => d.eligible) ||
     scan.tmpFileCount > 0;
 
+  const mediaBytes = stats?.success ? stats.blobs.totalBytes : null;
+  const fixedCacheBytes = stats?.success
+    ? stats.fixedCaches.legacyImages.bytes + stats.fixedCaches.chatAttachments.bytes
+    : null;
+  const fixedCaches = stats?.success ? stats.fixedCaches : null;
+  const totalBytes = databaseBytes !== null && mediaBytes !== null && fixedCacheBytes !== null
+    ? databaseBytes + mediaBytes + fixedCacheBytes
+    : null;
+  const overviewPercent = databaseBytes === null || warningThresholdGiB <= 0
+    ? null
+    : Math.min(100, (databaseBytes / (warningThresholdGiB * GIB_BYTES)) * 100);
+
   return (
-    <div
-      className={cn(
-        'flex flex-col rounded-xl',
-        'bg-[var(--settings-theme-card-bg)]',
-        'border border-[var(--settings-theme-card-border)]',
-      )}
+    <SettingsSection
+      variant="page"
+      id="settings-storage-section"
+      title={t(storageManagementCardSettings.storage.sectionKey)}
+      description={t('settings.about.storage.overviewDescription')}
     >
-      {/* 占用总览 */}
-      <div className="flex flex-col gap-1.5 px-[18px] py-4">
-        <div className="flex items-center justify-between gap-3">
-          <span className="text-13 text-[var(--settings-section-sublabel)]">
-            {t('settings.about.storage.usageLabel')}
+      {/* 目录与占用总览同属一组，彼此 14px */}
+      <SettingsSection>
+        <DialogueDirectorySection />
+
+        <ProjectsRootSection />
+
+        {/* 占用总览 */}
+        <div
+          className={cn(
+            'grid gap-4 rounded-xl px-5 py-5 md:grid-cols-[1.15fr_0.85fr] md:items-center',
+            'bg-[var(--settings-theme-card-bg)]',
+            'border border-[var(--settings-theme-card-border)]',
+          )}
+        >
+          <div>
+            <h3 className="text-13 font-medium text-[var(--settings-section-title)]">
+              {t('settings.about.storage.overviewTitle')}
+            </h3>
+            <p className="mt-1 text-12 leading-[1.5] text-[var(--settings-section-sublabel)]">
+              {t('settings.about.storage.overviewDescription')}
+            </p>
+            <div id={storageManagementCardSettings.aboutStorageDatabaseSectionTitle.targetId}
+              role="progressbar"
+              aria-label={t(storageManagementCardSettings.aboutStorageDatabaseSectionTitle.titleKey)}
+              aria-valuemin={0}
+              aria-valuemax={100}
+              aria-valuenow={overviewPercent ?? undefined}
+              className="mt-4 h-2 overflow-hidden rounded-full bg-[var(--settings-theme-card-border)]"
+            >
+              {overviewPercent !== null && (
+                <span
+                  className="block h-full rounded-full bg-[var(--accent-cta-bg)] transition-[width]"
+                  style={{ width: `${overviewPercent}%` }}
+                />
+              )}
+            </div>
+          </div>
+          <div className="flex items-end justify-between gap-3 md:flex-col md:items-end">
+            <div className="text-right">
+              <strong className="block text-24 font-medium leading-none tracking-[-0.04em] text-[var(--settings-section-title)]">
+                {totalBytes === null ? t('settings.about.storage.unknown') : formatBytes(totalBytes)}
+              </strong>
+              <span id={storageManagementCardSettings.aboutStorageMediaSectionTitle.targetId} className="mt-1 block text-11 text-[var(--settings-section-sublabel)]">
+                {t('settings.about.storage.databaseUsage', {
+                  size: databaseBytes === null
+                    ? t('settings.about.storage.unknown')
+                    : formatBytes(databaseBytes),
+                })}{' '}
+                · {t(storageManagementCardSettings.aboutStorageMediaSectionTitle.titleKey)} {mediaBytes === null
+                  ? t('settings.about.storage.unknown')
+                  : formatBytes(mediaBytes)}{' '}
+                · {t('settings.about.storage.legacyImagesLabel')} {fixedCacheBytes === null
+                  ? t('settings.about.storage.unknown')
+                  : formatBytes(fixedCaches?.legacyImages.bytes ?? 0)}{' '}
+                · {t('settings.about.storage.chatAttachmentsLabel')} {fixedCacheBytes === null
+                  ? t('settings.about.storage.unknown')
+                  : formatBytes(fixedCaches?.chatAttachments.bytes ?? 0)}
+              </span>
+              {statsFailed && (
+                <span className="mt-1 block text-11 text-[var(--warning-fg)]">
+                  {t('settings.about.storage.statsFailed')}
+                </span>
+              )}
+            </div>
+            <Button data-setting-id={storageManagementCardSettings.aboutStorageMediaSectionTitle.id}
+              variant="secondary"
+              size="md"
+              onClick={() => void refreshStats()}
+              disabled={statsRefreshing}
+              loading={statsRefreshing}
+            >
+              <RefreshCw className="h-3.5 w-3.5" aria-hidden />
+              {t('settings.about.storage.refreshStatsButton')}
+            </Button>
+          </div>
+        </div>
+      </SettingsSection>
+
+      <SettingsSection
+        title={t(storageManagementCardSettings.aboutStorageMediaSectionTitle.titleKey)}
+        action={
+          <span className="text-11 text-[var(--settings-section-sublabel)]">
+            {t(storageManagementCardSettings.aboutStorageMediaSectionTitle.descriptionKey)}
           </span>
-          <span
-            className={cn(
-              'truncate text-13 font-medium',
-              stats && !stats.success
-                ? 'text-[var(--settings-section-sublabel)] opacity-70'
-                : 'text-[var(--settings-section-title)]',
+        }
+      >
+        <SettingsCard>
+          <SettingsRow
+            title={t('settings.about.storage.legacyImagesLabel')}
+            hint={t('settings.about.storage.legacyImagesDescription')}
+            trailing={
+              <div className="flex shrink-0 items-center gap-2">
+                <CardButton onClick={handleOpenLegacyImagesDir}>
+                  {t('settings.about.storage.legacyImagesOpenButton')}
+                </CardButton>
+                <CardButton danger onClick={handleClearLegacyImagesDir}>
+                  {t('settings.about.storage.legacyImagesClearButton')}
+                </CardButton>
+              </div>
+            }
+          />
+          <SettingsRow
+            title={t('settings.about.storage.chatAttachmentsLabel')}
+            hint={t('settings.about.storage.chatAttachmentsDescription')}
+            trailing={
+              <div className="flex shrink-0 items-center gap-2">
+                <CardButton onClick={handleOpenChatAttachmentsDir}>
+                  {t('settings.about.storage.chatAttachmentsOpenButton')}
+                </CardButton>
+                <CardButton danger onClick={handleClearChatAttachmentsDir}>
+                  {t('settings.about.storage.chatAttachmentsClearButton')}
+                </CardButton>
+              </div>
+            }
+          />
+          <SettingsRow
+            title={
+              <>
+                <span id={storageManagementCardSettings.aboutStorageRemoteMediaLabel.targetId}>{t(storageManagementCardSettings.aboutStorageRemoteMediaLabel.titleKey)}</span>
+                {' · '}{stats?.remoteMedia ? formatBytes(stats.remoteMedia.bytes) : t('settings.about.storage.unknown')}
+              </>
+            }
+            hint={t(storageManagementCardSettings.aboutStorageRemoteMediaLabel.descriptionKey)}
+            trailing={
+              <CardButton danger onClick={handleClearRemoteMedia}>
+                {t('settings.about.storage.remoteMediaClearButton')}
+              </CardButton>
+            }
+          />
+        </SettingsCard>
+      </SettingsSection>
+
+      <SettingsSection
+        title={t(storageManagementCardSettings.aboutStorageDatabaseSectionTitle.titleKey)}
+        action={
+          <span className="text-11 text-[var(--settings-section-sublabel)]">
+            {databaseBytes === null
+              ? t('settings.about.storage.unknown')
+              : t('settings.about.storage.databaseUsage', { size: formatBytes(databaseBytes) })}
+          </span>
+        }
+      >
+        <SettingsCard>
+          <DatabaseSlimmingSection
+            warningThresholdGiB={warningThresholdGiB}
+            onWarningThresholdChange={setWarningThresholdGiB}
+          />
+        </SettingsCard>
+
+        <div className="flex items-start gap-2 rounded-xl bg-[var(--warning-bg-soft)] px-3.5 py-3 text-12 text-[var(--warning-fg)]">
+          <span className="text-14 font-semibold leading-none" aria-hidden>
+            !
+          </span>
+          <span>{t('settings.about.storage.databaseWarningNote')}</span>
+        </div>
+
+        {/* 清理:扫描 → 报数确认 → 执行 → 结果 */}
+        <SettingsCard>
+          {/* 报数与结果同属清理这一项,紧贴在名称下面,不另起分割线 */}
+          <SettingsField
+            title={<span id={storageManagementCardSettings.aboutStorageCleanupLabel.targetId}>{t(storageManagementCardSettings.aboutStorageCleanupLabel.titleKey)}</span>}
+            hint={t(storageManagementCardSettings.aboutStorageCleanupLabel.descriptionKey)}
+            action={(
+              <CardButton onClick={handleScan}>
+                {t('settings.about.storage.scanButton')}
+              </CardButton>
             )}
           >
-            {stats
-              ? stats.success
-                ? t('settings.about.storage.usageValue', {
-                    size: formatBytes(stats.blobs.totalBytes),
-                    count: stats.blobs.totalCount,
-                    cacheSize: formatBytes(stats.blobs.cacheBytes),
-                  })
-                : t('settings.about.storage.statsFailed')
-              : ''}
-          </span>
-        </div>
-        {stats?.success && stats.legacy.bytes > 0 && (
-          <p className="text-12 leading-[1.4] text-[var(--settings-section-sublabel)] opacity-70">
-            {t('settings.about.storage.legacyUsage', { size: formatBytes(stats.legacy.bytes) })}
-          </p>
-        )}
-      </div>
+            {phase.kind === 'scanned' && (
+              <div className="flex flex-col gap-1.5 rounded-lg border border-[var(--settings-theme-card-border)] px-3 py-2.5">
+                {hasCleanable(phase.scan) ? (
+                  <>
+                    <ReportLine
+                      visible={phase.scan.zeroRef.count > 0}
+                      text={t('settings.about.storage.reportZeroRef', {
+                        count: phase.scan.zeroRef.count,
+                        size: formatBytes(phase.scan.zeroRef.bytes),
+                      })}
+                    />
+                    <ReportLine
+                      visible={phase.scan.zeroRef.protectedCount > 0}
+                      text={t('settings.about.storage.reportProtected', {
+                        count: phase.scan.zeroRef.protectedCount,
+                      })}
+                    />
+                    <ReportLine
+                      visible={phase.scan.cache.evictable.length > 0}
+                      text={t('settings.about.storage.reportCache', {
+                        size: formatBytes(
+                          phase.scan.cache.evictable.reduce((sum, e) => sum + e.bytes, 0),
+                        ),
+                        total: formatBytes(phase.scan.cache.totalBytes),
+                        limit: formatBytes(phase.scan.cache.limitBytes),
+                      })}
+                    />
+                    <ReportLine
+                      visible={phase.scan.deadDirs.some((d) => d.eligible)}
+                      text={t('settings.about.storage.reportDeadDirs', {
+                        size: formatBytes(
+                          phase.scan.deadDirs
+                            .filter((d) => d.eligible)
+                            .reduce((sum, d) => sum + d.bytes, 0),
+                        ),
+                      })}
+                    />
+                    <ReportLine
+                      visible={phase.scan.tmpFileCount > 0}
+                      text={t('settings.about.storage.reportTmpFiles', {
+                        count: phase.scan.tmpFileCount,
+                      })}
+                    />
+                    <div className="mt-1 flex items-center justify-end gap-2">
+                      <CardButton onClick={() => setPhase({ kind: 'idle' })}>
+                        {t('settings.about.storage.cancelButton')}
+                      </CardButton>
+                      <CardButton emphasis onClick={() => handleCleanup(phase.scan)}>
+                        {cleanableBytes(phase.scan) > 0
+                          ? t('settings.about.storage.confirmCleanup', {
+                              size: formatBytes(cleanableBytes(phase.scan)),
+                            })
+                          : t('settings.about.storage.confirmCleanupNoSize')}
+                      </CardButton>
+                    </div>
+                  </>
+                ) : (
+                  <p className="text-12 text-[var(--settings-section-sublabel)]">
+                    {t('settings.about.storage.nothingToClean')}
+                  </p>
+                )}
+              </div>
+            )}
 
-      <Divider />
-
-      {/* 清理:扫描 → 报数确认 → 执行 → 结果 */}
-      <div className="flex flex-col gap-2 px-[18px] py-4">
-        <div className="flex items-center justify-between gap-3">
-          <div className="flex min-w-0 flex-col gap-1">
-            <span className="text-13 text-[var(--settings-section-sublabel)]">
-              {t('settings.about.storage.cleanupLabel')}
-            </span>
-            <p className="text-12 leading-[1.4] text-[var(--settings-section-sublabel)] opacity-70">
-              {t('settings.about.storage.cleanupDescription')}
-            </p>
-          </div>
-          <CardButton onClick={handleScan}>
-            {t('settings.about.storage.scanButton')}
-          </CardButton>
-        </div>
-
-        {phase.kind === 'scanned' && (
-          <div className="flex flex-col gap-1.5 rounded-lg border border-[var(--settings-theme-card-border)] px-3 py-2.5">
-            {hasCleanable(phase.scan) ? (
-              <>
-                <ReportLine
-                  visible={phase.scan.zeroRef.count > 0}
-                  text={t('settings.about.storage.reportZeroRef', {
-                    count: phase.scan.zeroRef.count,
-                    size: formatBytes(phase.scan.zeroRef.bytes),
-                  })}
-                />
-                <ReportLine
-                  visible={phase.scan.zeroRef.protectedCount > 0}
-                  text={t('settings.about.storage.reportProtected', {
-                    count: phase.scan.zeroRef.protectedCount,
-                  })}
-                />
-                <ReportLine
-                  visible={phase.scan.cache.evictable.length > 0}
-                  text={t('settings.about.storage.reportCache', {
-                    size: formatBytes(
-                      phase.scan.cache.evictable.reduce((sum, e) => sum + e.bytes, 0),
-                    ),
-                    total: formatBytes(phase.scan.cache.totalBytes),
-                    limit: formatBytes(phase.scan.cache.limitBytes),
-                  })}
-                />
-                <ReportLine
-                  visible={phase.scan.deadDirs.some((d) => d.eligible)}
-                  text={t('settings.about.storage.reportDeadDirs', {
-                    size: formatBytes(
-                      phase.scan.deadDirs
-                        .filter((d) => d.eligible)
-                        .reduce((sum, d) => sum + d.bytes, 0),
-                    ),
-                  })}
-                />
-                <ReportLine
-                  visible={phase.scan.tmpFileCount > 0}
-                  text={t('settings.about.storage.reportTmpFiles', {
-                    count: phase.scan.tmpFileCount,
-                  })}
-                />
-                <div className="mt-1 flex items-center justify-end gap-2">
-                  <CardButton onClick={() => setPhase({ kind: 'idle' })}>
-                    {t('settings.about.storage.cancelButton')}
-                  </CardButton>
-                  <CardButton emphasis onClick={() => handleCleanup(phase.scan)}>
-                    {cleanableBytes(phase.scan) > 0
-                      ? t('settings.about.storage.confirmCleanup', {
-                          size: formatBytes(cleanableBytes(phase.scan)),
-                        })
-                      : t('settings.about.storage.confirmCleanupNoSize')}
-                  </CardButton>
-                </div>
-              </>
-            ) : (
-              <p className="text-12 text-[var(--settings-section-sublabel)]">
-                {t('settings.about.storage.nothingToClean')}
+            {phase.kind === 'done' && (
+              <p className="text-12 leading-[1.4] text-[var(--settings-section-sublabel)]">
+                {t('settings.about.storage.cleanupResult', {
+                  size: formatBytes(phase.result.freedBytes),
+                  skipped:
+                    phase.result.zeroRef.skipped +
+                    phase.result.cacheEvicted.skipped +
+                    phase.result.deadDirs.skipped.length,
+                })}
               </p>
             )}
-          </div>
-        )}
+          </SettingsField>
+        </SettingsCard>
 
-        {phase.kind === 'done' && (
-          <p className="text-12 leading-[1.4] text-[var(--settings-section-sublabel)]">
-            {t('settings.about.storage.cleanupResult', {
-              size: formatBytes(phase.result.freedBytes),
-              skipped:
-                phase.result.zeroRef.skipped +
-                phase.result.cacheEvicted.skipped +
-                phase.result.deadDirs.skipped.length,
-            })}
-          </p>
-        )}
-      </div>
+        {/* 体检(对账,只报不删) */}
+        <SettingsCard>
+          <SettingsField
+            title={<span id={storageManagementCardSettings.aboutStorageReconcileLabel.targetId}>{t(storageManagementCardSettings.aboutStorageReconcileLabel.titleKey)}</span>}
+            hint={t(storageManagementCardSettings.aboutStorageReconcileLabel.descriptionKey)}
+            action={(
+              <CardButton onClick={handleReconcile}>
+                {t('settings.about.storage.reconcileButton')}
+              </CardButton>
+            )}
+          >
+            {reconcile && (
+              <p className="text-12 leading-[1.4] text-[var(--settings-section-sublabel)]">
+                {reconcile.orphanCount === 0 && reconcile.missingCount === 0 && reconcile.strayCount === 0
+                  ? t('settings.about.storage.reconcileHealthy')
+                  : t('settings.about.storage.reconcileIssues', {
+                      orphans: reconcile.orphanCount,
+                      orphanSize: formatBytes(reconcile.orphanBytes),
+                      missing: reconcile.missingCount,
+                      stray: reconcile.strayCount,
+                    })}
+              </p>
+            )}
+          </SettingsField>
+        </SettingsCard>
+      </SettingsSection>
+    </SettingsSection>
+  );
+}
 
-      <Divider />
+type DbSlimmingPhase =
+  | { kind: 'idle' }
+  | { kind: 'scanned'; scan: DbSlimmingScanResult }
+  | { kind: 'done'; result: DbSlimmingResult };
 
-      {/* 体检(对账,只报不删) */}
-      <div className="flex flex-col gap-1.5 px-[18px] py-4">
-        <div className="flex items-center justify-between gap-3">
-          <div className="flex min-w-0 flex-col gap-1">
-            <span className="text-13 text-[var(--settings-section-sublabel)]">
-              {t('settings.about.storage.reconcileLabel')}
-            </span>
-            <p className="text-12 leading-[1.4] text-[var(--settings-section-sublabel)] opacity-70">
-              {t('settings.about.storage.reconcileDescription')}
-            </p>
-          </div>
-          <CardButton onClick={handleReconcile}>
-            {t('settings.about.storage.reconcileButton')}
-          </CardButton>
+function DatabaseSlimmingSection({
+  warningThresholdGiB,
+  onWarningThresholdChange,
+}: {
+  warningThresholdGiB: number;
+  onWarningThresholdChange: (value: number) => void;
+}) {
+  const { t } = useTranslation();
+  const { confirm } = useConfirmDialog();
+  const [warningDisabled, setWarningDisabled] = useState(false);
+  const [warningCustomized, setWarningCustomized] = useState(false);
+  const [warningSaving, setWarningSaving] = useState(false);
+  const warningSettingsQueueRef = useRef(Promise.resolve());
+  const warningThresholdPersistedRef = useRef(warningThresholdGiB);
+  const [warningThresholdDraft, setWarningThresholdDraft] = useState(String(warningThresholdGiB));
+  const [warningThresholdInvalid, setWarningThresholdInvalid] = useState(false);
+  const warningThresholdDirtyRef = useRef(false);
+  const warningThresholdEditVersionRef = useRef(0);
+  const [archiveAge, setArchiveAge] = useState<DbSlimmingArchiveAge>(
+    DB_SLIMMING_DEFAULT_ARCHIVE_AGE,
+  );
+  const [includeActiveTasks, setIncludeActiveTasks] = useState(false);
+  const [backupEnabled, setBackupEnabled] = useState(true);
+  const [backupDirectory, setBackupDirectory] =
+    useState<DbSlimmingBackupDirectorySelection>({ selected: false });
+  const [phase, setPhase] = useState<DbSlimmingPhase>({ kind: 'idle' });
+  const [scanLoading, setScanLoading] = useState(false);
+  const [reportOpen, setReportOpen] = useState(false);
+  const [executionLocked, setExecutionLocked] = useState(false);
+  const busyRef = useRef(false);
+  const activeTasksConfirmationPendingRef = useRef(false);
+  const interactionLockReleaseRef = useRef<(() => void) | null>(null);
+
+  const applyWarningSettings = (
+    settings: Awaited<ReturnType<typeof window.electronAPI.localDb.databaseSizeWarning.getSettings>>,
+    savedDraftVersion?: number,
+  ) => {
+    warningThresholdPersistedRef.current = settings.thresholdGiB;
+    onWarningThresholdChange(settings.thresholdGiB);
+    setWarningDisabled(settings.disabled);
+    setWarningCustomized(settings.isCustomized === true);
+    if (!warningThresholdDirtyRef.current || savedDraftVersion === warningThresholdEditVersionRef.current) {
+      warningThresholdDirtyRef.current = false;
+      setWarningThresholdDraft(String(settings.thresholdGiB));
+      setWarningThresholdInvalid(false);
+    }
+  };
+
+  useEffect(() => {
+    const api = window.electronAPI?.localDb?.databaseSizeWarning;
+    if (!api) return undefined;
+    let cancelled = false;
+    // Serialize notification reads with writes so an older read cannot undo a save.
+    const refreshSettings = () => {
+      warningSettingsQueueRef.current = warningSettingsQueueRef.current.then(async () => {
+        if (cancelled) return;
+        try {
+          const settings = await api.getSettings();
+          if (!cancelled) applyWarningSettings(settings);
+        } catch {
+          // Keep the last known settings when the optional read is unavailable.
+        }
+      });
+    };
+    const unsubscribe = api.onChanged(refreshSettings);
+    refreshSettings();
+    return () => {
+      cancelled = true;
+      unsubscribe();
+    };
+  }, []);
+
+  // Blur-save may precede a reset click. Keep that user action order through persistence.
+  const persistWarningSettings = (
+    patch?: { thresholdGiB?: number; disabled?: boolean },
+    blockControls = true,
+  ) => {
+    const savedDraftVersion = !patch || patch.thresholdGiB !== undefined
+      ? warningThresholdEditVersionRef.current
+      : undefined;
+    const pending = warningSettingsQueueRef.current.then(async () => {
+      // Compare after earlier reads/writes, not at blur: a newer edit may undo an in-flight save.
+      if (patch && patch.thresholdGiB === warningThresholdPersistedRef.current && patch.disabled === undefined) {
+        if (savedDraftVersion === warningThresholdEditVersionRef.current) {
+          warningThresholdDirtyRef.current = false;
+          setWarningThresholdInvalid(false);
+        }
+        return;
+      }
+      if (blockControls) setWarningSaving(true);
+      try {
+        const api = window.electronAPI.localDb.databaseSizeWarning;
+        const saved = patch ? await api.setSettings(patch) : await api.resetSettings();
+        applyWarningSettings(saved, savedDraftVersion);
+      } catch (err) {
+        if (savedDraftVersion === warningThresholdEditVersionRef.current) {
+          warningThresholdDirtyRef.current = false;
+          setWarningThresholdDraft(String(warningThresholdPersistedRef.current));
+        }
+        toast.error(t(mapIpcErrorToI18nKey(err)));
+      } finally {
+        if (blockControls) setWarningSaving(false);
+      }
+    });
+    warningSettingsQueueRef.current = pending;
+    return pending;
+  };
+
+  const saveWarningThreshold = () => {
+    const value = Number(warningThresholdDraft);
+    if (!warningThresholdDraft.trim() || !Number.isFinite(value) || value < 1 || value > 1024) {
+      setWarningThresholdInvalid(true);
+      return;
+    }
+    if (warningThresholdDirtyRef.current) {
+      return persistWarningSettings({ thresholdGiB: value }, false);
+    }
+    setWarningThresholdInvalid(false);
+  };
+
+  const acquireInteractionLock = () => {
+    if (!interactionLockReleaseRef.current) {
+      interactionLockReleaseRef.current = acquireAppInteractionLock();
+    }
+  };
+
+  const releaseInteractionLock = () => {
+    interactionLockReleaseRef.current?.();
+    interactionLockReleaseRef.current = null;
+  };
+
+  useEffect(() => {
+    return () => {
+      interactionLockReleaseRef.current?.();
+      interactionLockReleaseRef.current = null;
+    };
+  }, []);
+
+  useEffect(() => {
+    let cancelled = false;
+    void window.electronAPI.localDb.maintenance.getLastResult().then(
+      (result) => {
+        if (!cancelled && result) setPhase({ kind: 'done', result });
+      },
+      () => undefined,
+    );
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  const invalidateScan = () => {
+    setReportOpen(false);
+    releaseInteractionLock();
+    setPhase((current) => (current.kind === 'scanned' ? { kind: 'idle' } : current));
+  };
+
+  const handleArchiveAgeChange = (raw: string) => {
+    const parsed = raw === '7-days' ? raw : Number(raw);
+    if (!DB_SLIMMING_ARCHIVE_AGE_OPTIONS.includes(parsed as DbSlimmingArchiveAge)) return;
+    setArchiveAge(parsed as DbSlimmingArchiveAge);
+    invalidateScan();
+  };
+
+  const handleIncludeActiveTasksChange = async (checked: boolean) => {
+    if (!checked) {
+      setIncludeActiveTasks(false);
+      invalidateScan();
+      return;
+    }
+    if (busyRef.current || scanLoading || activeTasksConfirmationPendingRef.current) return;
+    activeTasksConfirmationPendingRef.current = true;
+    let accepted = false;
+    try {
+      accepted = await confirm({
+        title: t('settings.about.storage.dbSlimmingIncludeActiveConfirmTitle'),
+        description: t('settings.about.storage.dbSlimmingIncludeActiveConfirmDescription'),
+        confirmText: t('settings.about.storage.dbSlimmingIncludeActiveConfirmButton'),
+        cancelText: t('settings.about.storage.dbSlimmingIncludeActiveCancelButton'),
+        autoFocusConfirm: true,
+      });
+    } finally {
+      activeTasksConfirmationPendingRef.current = false;
+    }
+    if (!accepted) return;
+    setIncludeActiveTasks(true);
+    invalidateScan();
+  };
+
+  const handleChooseBackupDirectory = async () => {
+    if (busyRef.current) return;
+    busyRef.current = true;
+    try {
+      const selection = await window.electronAPI.localDb.maintenance.chooseBackupDirectory();
+      if (selection.selected) setBackupDirectory(selection);
+    } catch {
+      toast.error(t('settings.about.storage.dbSlimmingBackupDirectoryFailed'));
+    } finally {
+      busyRef.current = false;
+    }
+  };
+
+  const handleScan = async () => {
+    if (busyRef.current) return;
+    busyRef.current = true;
+    acquireInteractionLock();
+    setReportOpen(false);
+    setScanLoading(true);
+    let completed = false;
+    try {
+      const scan = await window.electronAPI.localDb.maintenance.scan({
+        archiveAgeMonths: archiveAge,
+        includeActiveTasks,
+      });
+      setPhase({ kind: 'scanned', scan });
+      setReportOpen(true);
+      completed = true;
+    } catch (error) {
+      toast.error(
+        t(
+          mapIpcErrorToI18nKey(error, {
+            fallback: 'settings.about.storage.dbSlimmingScanFailed',
+          }),
+        ),
+      );
+    } finally {
+      busyRef.current = false;
+      if (!completed) releaseInteractionLock();
+      setScanLoading(false);
+    }
+  };
+
+  const handleSchedule = async () => {
+    if (phase.kind !== 'scanned' || busyRef.current || executionLocked) return;
+    busyRef.current = true;
+    acquireInteractionLock();
+    setReportOpen(false);
+    setExecutionLocked(true);
+    try {
+      const result = await window.electronAPI.localDb.maintenance.schedule({
+        scanId: phase.scan.scanId,
+        backupEnabled,
+        ...(backupEnabled && backupDirectory.grantId
+          ? { backupDirectoryGrantId: backupDirectory.grantId }
+          : {}),
+      });
+      if (!result.scheduled) {
+        busyRef.current = false;
+        setExecutionLocked(false);
+        setReportOpen(true);
+      }
+    } catch (error) {
+      busyRef.current = false;
+      setExecutionLocked(false);
+      setReportOpen(true);
+      toast.error(
+        t(
+          mapIpcErrorToI18nKey(error, {
+            fallback: 'settings.about.storage.dbSlimmingScheduleFailed',
+          }),
+        ),
+      );
+    }
+  };
+
+  const handleReportOpenChange = (open: boolean) => {
+    setReportOpen(open);
+    if (!open) releaseInteractionLock();
+  };
+
+  const handleOpenBackup = async () => {
+    try {
+      const result = await window.electronAPI.localDb.maintenance.openLastBackupDirectory();
+      if (!result.opened) toast.info(t('settings.about.storage.dbSlimmingBackupMissing'));
+    } catch {
+      toast.error(t('settings.about.storage.dbSlimmingBackupOpenFailed'));
+    }
+  };
+
+  const scanned = phase.kind === 'scanned' ? phase.scan : null;
+  const insufficientSpace = Boolean(
+    scanned &&
+      scanned.databaseVolumeFreeBytes !== null &&
+      scanned.databaseVolumeFreeBytes < scanned.temporaryBytesRequired,
+  );
+
+  return (
+    <SettingsField
+      aria-busy={scanLoading}
+      title={<span id={storageManagementCardSettings.aboutStorageDbSlimmingLabel.targetId}>{t(storageManagementCardSettings.aboutStorageDbSlimmingLabel.titleKey)}</span>}
+      hint={t(storageManagementCardSettings.aboutStorageDbSlimmingLabel.descriptionKey)}
+      action={(
+        <Button data-setting-id={storageManagementCardSettings.aboutStorageDbSlimmingLabel.id}
+          variant="cta"
+          size="md"
+          className="gap-1.5"
+          onClick={handleScan}
+          loading={scanLoading}
+        >
+          {t('settings.about.storage.dbSlimmingScanButton')}
+        </Button>
+      )}
+    >
+
+      <div className="grid grid-cols-[minmax(0,1fr)_auto] items-center gap-x-3 gap-y-2 rounded-lg border border-[var(--settings-theme-card-border)] px-3 py-2.5">
+        <label
+          htmlFor="db-slimming-archive-age"
+          className="text-12 text-[var(--settings-section-sublabel)]"
+        >
+          {t('settings.about.storage.dbSlimmingArchiveAgeLabel')}
+        </label>
+        <div className="flex items-center">
+          <Select data-setting-id={storageManagementCardSettings.aboutStorageDbSlimmingLabel.id}
+            id="db-slimming-archive-age"
+            size="compact"
+            width="sm"
+            value={String(archiveAge)}
+            onValueChange={handleArchiveAgeChange}
+            disabled={scanLoading}
+            label={t('settings.about.storage.dbSlimmingArchiveAgeLabel')}
+            options={DB_SLIMMING_ARCHIVE_AGE_OPTIONS.map((age) => ({
+              value: String(age),
+              label: t(
+                age === '7-days'
+                  ? 'settings.about.storage.dbSlimmingArchiveAgeOption7Days'
+                  : `settings.about.storage.dbSlimmingArchiveAgeOption${age}`,
+              ),
+            }))}
+          />
         </div>
-        {reconcile && (
-          <p className="text-12 leading-[1.4] text-[var(--settings-section-sublabel)]">
-            {reconcile.orphanCount === 0 && reconcile.missingCount === 0 && reconcile.strayCount === 0
-              ? t('settings.about.storage.reconcileHealthy')
-              : t('settings.about.storage.reconcileIssues', {
-                  orphans: reconcile.orphanCount,
-                  orphanSize: formatBytes(reconcile.orphanBytes),
-                  missing: reconcile.missingCount,
-                  stray: reconcile.strayCount,
-                })}
-          </p>
+
+        <label
+          htmlFor="db-slimming-include-active"
+          className="flex min-w-0 cursor-pointer flex-col gap-0.5"
+        >
+          <span className="text-12 text-[var(--settings-section-sublabel)]">
+            {t('settings.about.storage.dbSlimmingIncludeActiveLabel')}
+          </span>
+          <span className="text-11 leading-[1.4] text-[var(--text-secondary)]">
+            {t('settings.about.storage.dbSlimmingIncludeActiveDescription')}
+          </span>
+        </label>
+        <Switch data-setting-id={storageManagementCardSettings.aboutStorageDbSlimmingLabel.id}
+          id="db-slimming-include-active"
+          checked={includeActiveTasks}
+          disabled={scanLoading}
+          onCheckedChange={(checked) => void handleIncludeActiveTasksChange(checked)}
+          aria-label={t('settings.about.storage.dbSlimmingIncludeActiveLabel')}
+        />
+
+        <label
+          htmlFor="db-slimming-backup-enabled"
+          className="flex min-w-0 cursor-pointer flex-col gap-0.5"
+        >
+          <span className="text-12 text-[var(--settings-section-sublabel)]">
+            {t('settings.about.storage.dbSlimmingBackupLabel')}
+          </span>
+          <span className="truncate text-11 text-[var(--text-secondary)]">
+            {backupDirectory.selected && backupDirectory.displayPath
+              ? backupDirectory.displayPath
+              : t('settings.about.storage.dbSlimmingBackupDefaultLocation')}
+          </span>
+        </label>
+        <Switch data-setting-id={storageManagementCardSettings.aboutStorageDbSlimmingLabel.id}
+          id="db-slimming-backup-enabled"
+          checked={backupEnabled}
+          onCheckedChange={(checked) => setBackupEnabled(checked)}
+          aria-label={t('settings.about.storage.dbSlimmingBackupLabel')}
+        />
+
+        {backupEnabled && (
+          <div className="col-span-2 flex justify-end gap-2">
+            {backupDirectory.selected && (
+              <CardButton
+                onClick={() => setBackupDirectory({ selected: false })}
+              >
+                {t('settings.about.storage.dbSlimmingUseDefaultDirectoryButton')}
+              </CardButton>
+            )}
+            <CardButton onClick={handleChooseBackupDirectory}>
+              {t('settings.about.storage.dbSlimmingChooseDirectoryButton')}
+            </CardButton>
+          </div>
         )}
       </div>
-    </div>
+
+      {phase.kind === 'done' && (
+        <div className="flex flex-col gap-1.5 text-12 leading-[1.5] text-[var(--settings-section-sublabel)]">
+          {phase.result.status === 'completed' ? (
+            <>
+              <p>
+                {t('settings.about.storage.dbSlimmingResultCompleted', {
+                  size: formatBytes(phase.result.reclaimedBytes),
+                  messages: phase.result.messageCount,
+                  tasks:
+                    (phase.result.activeTaskCount ?? 0) +
+                    phase.result.deletedTaskCount +
+                    phase.result.archivedTaskCount,
+                })}
+              </p>
+              {phase.result.backupCreated && (
+                <div>
+                  <CardButton onClick={handleOpenBackup}>
+                    {t('settings.about.storage.dbSlimmingOpenBackupButton')}
+                  </CardButton>
+                </div>
+              )}
+            </>
+          ) : (
+            <p>
+              {t(`settings.about.storage.dbSlimmingFailure.${phase.result.reason}`, {
+                defaultValue: t('settings.about.storage.dbSlimmingFailure.unknown'),
+              })}
+            </p>
+          )}
+        </div>
+      )}
+
+      <DatabaseCleanupDialog
+        scanLoading={scanLoading}
+        reportOpen={reportOpen}
+        executionLocked={executionLocked}
+        scanned={scanned}
+        insufficientSpace={insufficientSpace}
+        backupEnabled={backupEnabled}
+        onReportOpenChange={handleReportOpenChange}
+        onConfirm={handleSchedule}
+      />
+
+      <div id={storageManagementCardSettings.aboutStorageDbSizeWarningThresholdLabel.targetId} className="grid grid-cols-[minmax(0,1fr)_auto] items-center gap-x-3 gap-y-2 rounded-lg border border-[var(--settings-theme-card-border)] px-3 py-2.5">
+        <FormField
+          id="db-size-warning-threshold"
+          label={t(storageManagementCardSettings.aboutStorageDbSizeWarningThresholdLabel.titleKey)}
+          hint={t(storageManagementCardSettings.aboutStorageDbSizeWarningThresholdLabel.descriptionKey)}
+          error={warningThresholdInvalid ? t('settings.about.storage.dbSizeWarningThresholdInvalid') : undefined}
+          reserveFeedback
+          className="col-span-2 grid grid-cols-[minmax(0,1fr)_auto] items-center [&>div:last-child]:col-span-2"
+        >
+          {({ error, ...control }) => (
+            <div className="flex items-center gap-1.5">
+              {/* Group reset sits left of the first control, only when customized (CONTROLS decision 3). */}
+              <DefaultOverrideControls
+                isCustomized={warningCustomized}
+                disabled={warningSaving}
+                onReset={() => void persistWarningSettings()}
+              />
+              <SettingsTextInput data-setting-id={storageManagementCardSettings.aboutStorageDbSizeWarningThresholdLabel.id}
+                {...control}
+                type="number"
+                size="sm"
+                surface="ivory"
+                min={1}
+                max={1024}
+                step={1}
+                value={warningThresholdDraft}
+                disabled={warningSaving}
+                error={error}
+                onChange={(next) => {
+                  warningThresholdDirtyRef.current = true;
+                  warningThresholdEditVersionRef.current += 1;
+                  setWarningThresholdDraft(next);
+                  setWarningThresholdInvalid(false);
+                }}
+                onBlur={() => void saveWarningThreshold()}
+                className="w-16"
+                inputClassName="text-center"
+              />
+              <span className="text-12 text-[var(--settings-section-sublabel)]">G</span>
+            </div>
+          )}
+        </FormField>
+
+        <label
+          htmlFor="db-size-warning-disabled"
+          className="flex min-w-0 cursor-pointer flex-col gap-0.5"
+        >
+          <span id={storageManagementCardSettings.aboutStorageDbSizeWarningDisableLabel.targetId} className="text-12 text-[var(--settings-section-sublabel)]">
+            {t(storageManagementCardSettings.aboutStorageDbSizeWarningDisableLabel.titleKey)}
+          </span>
+          <span className="text-11 leading-[1.4] text-[var(--text-secondary)]">
+            {t(storageManagementCardSettings.aboutStorageDbSizeWarningDisableLabel.descriptionKey)}
+          </span>
+        </label>
+        <Switch data-setting-id={storageManagementCardSettings.aboutStorageDbSizeWarningDisableLabel.id}
+          id="db-size-warning-disabled"
+          checked={warningDisabled}
+          disabled={warningSaving}
+          onCheckedChange={(checked) => void persistWarningSettings({ disabled: checked })}
+          aria-label={t(storageManagementCardSettings.aboutStorageDbSizeWarningDisableLabel.titleKey)}
+        />
+      </div>
+    </SettingsField>
+  );
+}
+
+interface DatabaseCleanupDialogProps {
+  scanLoading: boolean;
+  reportOpen: boolean;
+  executionLocked: boolean;
+  scanned: DbSlimmingScanResult | null;
+  insufficientSpace: boolean;
+  backupEnabled: boolean;
+  onReportOpenChange: (open: boolean) => void;
+  onConfirm: () => void;
+}
+
+function DatabaseCleanupDialog({
+  scanLoading,
+  reportOpen,
+  executionLocked,
+  scanned,
+  insufficientSpace,
+  backupEnabled,
+  onReportOpenChange,
+  onConfirm,
+}: DatabaseCleanupDialogProps) {
+  const { t } = useTranslation();
+  const bodyId = useId();
+  const confirmButtonRef = useRef<HTMLButtonElement>(null);
+  const reportVisible = reportOpen && scanned !== null;
+  const mode = scanLoading
+    ? 'scanning'
+    : executionLocked
+      ? 'executing'
+      : reportVisible
+        ? 'report'
+        : 'closed';
+  const open = mode !== 'closed';
+  const busy = mode === 'scanning' || mode === 'executing';
+
+  useEffect(() => {
+    if (mode !== 'report') return;
+    const frame = requestAnimationFrame(() => confirmButtonRef.current?.focus());
+    return () => cancelAnimationFrame(frame);
+  }, [mode]);
+
+  return (
+    <AlertDialog.Root
+      open={open}
+      onOpenChange={(nextOpen) => {
+        if (!nextOpen && mode === 'report') onReportOpenChange(false);
+      }}
+    >
+      <AlertDialog.Portal>
+        <AlertDialog.Overlay
+          className="modal-scrim fixed inset-0 z-[10020]"
+          style={{ ...WINDOW_DRAG_STYLE, zIndex: 10020 }}
+        >
+          <AlertDialog.Content
+            className={cn(
+              'modal-panel fixed inset-0 z-[10020] m-auto flex h-fit min-h-[180px] w-full max-w-[640px] flex-col',
+              'p-4',
+              mode === 'report' ? 'select-text' : 'select-none',
+            )}
+            style={{ ...WINDOW_NO_DRAG_STYLE, zIndex: 10020 }}
+            aria-describedby={mode === 'report' ? bodyId : undefined}
+            aria-busy={busy || undefined}
+            onEscapeKeyDown={(event) => {
+              if (busy) event.preventDefault();
+            }}
+          >
+            {busy ? (
+              <AlertDialog.Title className="flex flex-1 items-center justify-center gap-3 text-14 font-medium text-[var(--confirm-title)]">
+                <Spinner size={18} />
+                <span role="status" aria-live="assertive">
+                  {mode === 'scanning'
+                    ? t('settings.about.storage.dbSlimmingScanLoading')
+                    : t('settings.about.storage.dbSlimmingExecutionLoading')}
+                </span>
+              </AlertDialog.Title>
+            ) : (
+              scanned && (
+                <>
+                  <AlertDialog.Title className="shrink-0 text-lg font-medium text-[var(--confirm-title)]">
+                    {t('settings.about.storage.dbSlimmingScanResultTitle')}
+                  </AlertDialog.Title>
+                  <div
+                    id={bodyId}
+                    className="mt-3 flex min-h-0 flex-1 select-text flex-col gap-1.5 overflow-y-auto overscroll-contain"
+                  >
+                    <ReportLine
+                      visible
+                      text={t(
+                        scanned.includeActiveTasks
+                          ? 'settings.about.storage.dbSlimmingReportTasksWithActive'
+                          : 'settings.about.storage.dbSlimmingReportTasks',
+                        {
+                          active: scanned.activeTaskCount,
+                          deleted: scanned.deletedTaskCount,
+                          archived: scanned.archivedTaskCount,
+                        },
+                      )}
+                    />
+                    <ReportLine
+                      visible
+                      text={t('settings.about.storage.dbSlimmingReportMessages', {
+                        count: scanned.messageCount,
+                        size: formatBytes(scanned.estimatedMessageBytes),
+                      })}
+                    />
+                    <ReportLine
+                      visible
+                      text={t('settings.about.storage.dbSlimmingReportSpace', {
+                        database: formatBytes(scanned.databaseBytes),
+                        temporary: formatBytes(scanned.temporaryBytesRequired),
+                        free:
+                          scanned.databaseVolumeFreeBytes === null
+                            ? t('settings.about.storage.dbSlimmingSpaceUnknown')
+                            : formatBytes(scanned.databaseVolumeFreeBytes),
+                      })}
+                    />
+                    {insufficientSpace && (
+                      <p className="text-12 leading-[1.5] text-[hsl(var(--destructive))]">
+                        {t('settings.about.storage.dbSlimmingInsufficientSpace')}
+                      </p>
+                    )}
+                    <p className="mt-2 text-12 leading-[1.5] text-[var(--text-secondary)]">
+                      {backupEnabled
+                        ? t('settings.about.storage.dbSlimmingConfirmDescriptionWithBackup')
+                        : t('settings.about.storage.dbSlimmingConfirmDescriptionWithoutBackup')}
+                    </p>
+                  </div>
+                  <div className="mt-6 flex shrink-0 justify-end gap-2.5">
+                    <AlertDialog.Cancel asChild>
+                      <Button data-settings-search-action="Cancel database cleanup" variant="secondary" size="lg" type="button" className="min-w-[96px]">
+                        {t('settings.about.storage.cancelButton')}
+                      </Button>
+                    </AlertDialog.Cancel>
+                    <Button data-settings-search-action="Confirm the selected database cleanup"
+                      variant="secondary"
+                      size="lg"
+                      tone="danger-solid"
+                      ref={confirmButtonRef}
+                      type="button"
+                      disabled={insufficientSpace || scanned.messageCount === 0}
+                      onClick={onConfirm}
+                      className="min-w-[96px]"
+                    >
+                      {t('settings.about.storage.dbSlimmingConfirmButton')}
+                    </Button>
+                  </div>
+                </>
+              )
+            )}
+          </AlertDialog.Content>
+        </AlertDialog.Overlay>
+      </AlertDialog.Portal>
+    </AlertDialog.Root>
   );
 }
 
@@ -304,34 +1220,30 @@ function CardButton({
   children,
   onClick,
   emphasis = false,
+  danger = false,
+  disabled = false,
+  busy = false,
 }: {
   children: React.ReactNode;
   onClick: () => void;
   emphasis?: boolean;
+  /** Irreversible clears use the danger tone (CONTROLS decision 4). */
+  danger?: boolean;
+  disabled?: boolean;
+  busy?: boolean;
 }) {
   return (
-    <button
+    <Button data-settings-search-action="Run the labeled storage cleanup or folder action"
+      variant={emphasis ? 'cta' : 'secondary'}
+      tone={danger ? 'danger' : 'default'}
+      size="sm"
+      compact
       type="button"
       onClick={onClick}
-      className={cn(
-        'shrink-0 rounded-md px-2.5 py-1 text-12 font-medium transition-colors',
-        'border border-[var(--settings-theme-card-border)]',
-        emphasis
-          ? 'bg-[var(--accent-cta-bg)] text-[var(--accent-pure-cta-fg)] border-transparent hover:opacity-90'
-          : 'text-[var(--settings-section-title)] hover:bg-[var(--settings-theme-card-border)]/40',
-      )}
+      disabled={disabled}
+      aria-busy={busy || undefined}
     >
       {children}
-    </button>
-  );
-}
-
-function Divider() {
-  return (
-    <div
-      aria-hidden
-      className="h-px w-full"
-      style={{ background: 'var(--settings-theme-card-border)' }}
-    />
+    </Button>
   );
 }

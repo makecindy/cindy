@@ -4,9 +4,9 @@
  * File: <userData>/ghost-workdir-prefs.json
  *
  * 形态:{ disabledByWorkdir: { <归一化目录键>: [ghostId, …] } }
- * - 语义:某意识被记在某目录键下 = 该目录的会话里"当它不存在"——
- *   花名册(工具描述)不出现、ghost_list 不返回、`$` 指令不点亮,
- *   ghost_call 调用时刻兜底拒绝(老会话快照已含自述的防御线)。
+ * - 语义:某意识被记在某目录键下 = 该目录的会话里不可使用——花名册
+ *   不出现、ghost_list 不返回、ghost_info 返回目录禁用错误、`$` 指令
+ *   不点亮,ghost_call 调用时刻兜底拒绝(老会话快照已含自述的防御线)。
  * - 全局唤醒/沉睡(GhostManager.enabled)仍是主开关;本文件只记
  *   "全局唤醒之上的目录级例外",一个方向:禁用。没写 = 跟随全局
  *   (规则 20:override 与默认分开记,清除 override 即回到跟随)。
@@ -27,6 +27,7 @@ import path from 'node:path';
 import { desktopMakerLogger } from '../maker-host/logger-adapter.js';
 import { createOverrideSettingsFile } from '../maker-host/override-settings-file.js';
 import { ownerScopedUserDataPath } from '../appSessionState.js';
+import { assertGhostPrefsWritable, updateGhostPrefsForRelocation } from './ghostPreferenceRelocation.js';
 
 const log = desktopMakerLogger.child('ghost-workdir-prefs');
 
@@ -39,16 +40,15 @@ const DEFAULTS: GhostWorkdirPrefs = { disabledByWorkdir: {} };
 
 /** 目录键归一化(导出供测试;两端形态判定见文件头注释)。 */
 export function normalizeWorkdirKey(dir: string): string {
-  const trimmed = dir.trim();
-  if (trimmed.length === 0) return '';
-  const looksWindows = /^[A-Za-z]:[\\/]/.test(trimmed) || trimmed.includes('\\');
+  if (dir.trim().length === 0) return '';
+  const looksWindows = /^[A-Za-z]:[\\/]/.test(dir) || dir.includes('\\');
   if (looksWindows) {
     // win32.normalize 统一分隔符并折叠 '..';根目录(C:\)保留尾分隔符。
-    let n = path.win32.normalize(trimmed);
+    let n = path.win32.normalize(dir);
     if (n.length > 3 && (n.endsWith('\\') || n.endsWith('/'))) n = n.slice(0, -1);
     return n.toLowerCase();
   }
-  let n = path.posix.normalize(trimmed);
+  let n = path.posix.normalize(dir);
   if (n.length > 1 && n.endsWith('/')) n = n.slice(0, -1);
   return n;
 }
@@ -72,13 +72,18 @@ function normalize(raw: unknown): GhostWorkdirPrefs {
   return { disabledByWorkdir };
 }
 
-const store = createOverrideSettingsFile<GhostWorkdirPrefs>({
-  filePath: () => ownerScopedUserDataPath('ghost-workdir-prefs.json'),
-  defaults: DEFAULTS,
-  normalize,
-  log,
-  label: 'ghost-workdir-prefs',
-});
+function createStore() {
+  return createOverrideSettingsFile<GhostWorkdirPrefs>({
+    filePath: () => ownerScopedUserDataPath('ghost-workdir-prefs.json'),
+    defaults: DEFAULTS,
+    normalize,
+    log,
+    label: 'ghost-workdir-prefs',
+    preserveUnreadableFile: true,
+  });
+}
+
+let store = createStore();
 
 function readPrefs(): GhostWorkdirPrefs {
   store.invalidateIfChanged();
@@ -98,6 +103,7 @@ export function isGhostDisabledForWorkdir(ghostId: string, workdir: string | nul
 
 /** 写入目录级例外;返回该目录写后的禁用列表(供 IPC 回包)。 */
 export function setGhostDisabledForWorkdir(workdir: string, ghostId: string, disabled: boolean): string[] {
+  assertGhostPrefsWritable('ghost-workdir-prefs.json');
   const key = normalizeWorkdirKey(workdir);
   if (key.length === 0) throw new Error('workdir must be a non-empty path');
   const current = readPrefs().disabledByWorkdir;
@@ -110,6 +116,36 @@ export function setGhostDisabledForWorkdir(workdir: string, ghostId: string, dis
   store.writePatch({ disabledByWorkdir: next });
   log.info('ghost workdir pref updated', { workdirKey: key, ghostId, disabled });
   return next[key] ?? [];
+}
+
+/** 原位组织插件改用 namespace 物理 ID 时，保留各项目的禁用例外。 */
+export async function relocateGhostWorkdirPrefs(fromPart: string, toPart: string): Promise<void> {
+  if (fromPart === toPart) return;
+  await updateGhostPrefsForRelocation('ghost-workdir-prefs.json', (raw) => {
+    const map = raw.disabledByWorkdir;
+    if (map === undefined) return {};
+    if (map === null || typeof map !== 'object' || Array.isArray(map)) {
+      throw new Error('ghost workdir preferences are unreadable');
+    }
+    const entries = Object.entries(map);
+    if (entries.some(([, ids]) => !Array.isArray(ids) || ids.some((id) => typeof id !== 'string'))) {
+      throw new Error('ghost workdir preferences are unreadable');
+    }
+    const disabled = map as Record<string, string[]>;
+    if (!Object.values(disabled).some((ids) => ids.includes(fromPart))) return {};
+    if (Object.values(disabled).some((ids) => ids.includes(toPart))) {
+      throw new Error('ghost workdir preferences relocation destination collision');
+    }
+    return {
+      disabledByWorkdir: Object.fromEntries(
+        Object.entries(disabled).map(([workdir, ids]) => [
+          workdir, ids.map((id) => id === fromPart ? toPart : id),
+        ]),
+      ),
+    };
+  }, () => {
+    store = createStore();
+  });
 }
 
 /** 测试钩子(仅纯函数;读写链路由 IPC / 生效点测试覆盖)。 */

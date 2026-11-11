@@ -13,7 +13,12 @@ import { describe, expect, it } from 'vitest';
 
 import { actualSourceIdForModel, buildRegistry, connectedProvidersForAgent, effectiveSourceIdForModel, sourcesForModel } from '../registry.js';
 import { deriveModelList, deriveModelSections } from '../modelList.js';
-import { isModelDisabled, isProviderDisabled, modelDisableKey } from '../disableOverrides.js';
+import {
+  isModelDisabled,
+  isModelDisabledWithUniqueLegacyBasename,
+  isProviderDisabled,
+  modelDisableKey,
+} from '../disableOverrides.js';
 import type { Catalog, CatalogModel, Provider } from '../types.js';
 
 function model(id: string, extra: Partial<CatalogModel> = {}): CatalogModel {
@@ -51,6 +56,26 @@ describe('disableOverrides 决策函数', () => {
     expect(isProviderDisabled(access, 'alpha')).toBe(false);
     expect(isModelDisabled(undefined, 'alpha', 'claude-opus-5')).toBe(false);
     expect(isProviderDisabled(undefined, 'alpha')).toBe(false);
+  });
+
+  it('旧裸 modelId 仅在当前 namespaced 候选唯一时继承停用状态', () => {
+    const access = { disabledModels: { 'xd:gpt-image-2': true } };
+    expect(
+      isModelDisabledWithUniqueLegacyBasename(
+        access,
+        'xd',
+        'openai/gpt-image-2',
+        ['openai/gpt-image-2'],
+      ),
+    ).toBe(true);
+    expect(
+      isModelDisabledWithUniqueLegacyBasename(
+        access,
+        'xd',
+        'openai/gpt-image-2',
+        ['openai/gpt-image-2', 'other/gpt-image-2'],
+      ),
+    ).toBe(false);
   });
 });
 
@@ -105,7 +130,8 @@ describe('rail 过滤(suspended)', () => {
 
   it('sourcesForModel / effectiveSourceIdForModel 不解析到 suspended 来源', () => {
     expect(sourcesForModel(views, 'claude-opus-5', 'claude-code').map((p) => p.id)).toEqual(['beta']);
-    expect(effectiveSourceIdForModel(views, 'alpha', 'claude-opus-5', 'claude-code')).toBe('beta');
+    expect(effectiveSourceIdForModel(views, 'alpha', 'claude-opus-5', 'claude-code')).toBeNull();
+    expect(effectiveSourceIdForModel(views, null, 'claude-opus-5', 'claude-code')).toBe('beta');
   });
 });
 
@@ -119,8 +145,9 @@ describe('来源过滤(模型级停用拷贝)', () => {
     expect(sourcesForModel(views, 'claude-opus-5', 'claude-code').map((p) => p.id)).toEqual(['beta']);
   });
 
-  it('effectiveSourceIdForModel 落到启用拷贝;全部拷贝停用时解析为 null', () => {
-    expect(effectiveSourceIdForModel(views, 'alpha', 'claude-opus-5', 'claude-code')).toBe('beta');
+  it('显式停用来源不替换账号；隐式默认仍选择启用拷贝', () => {
+    expect(effectiveSourceIdForModel(views, 'alpha', 'claude-opus-5', 'claude-code')).toBeNull();
+    expect(effectiveSourceIdForModel(views, null, 'claude-opus-5', 'claude-code')).toBe('beta');
     const allDisabled = buildRegistry(CATALOG, ALL_CONNECTED, {}, {
       disabledModels: { 'alpha:claude-opus-5': true, 'beta:claude-opus-5': true },
     });
@@ -128,7 +155,7 @@ describe('来源过滤(模型级停用拷贝)', () => {
   });
 
   it('actualSourceIdForModel(实际路由口径)保留停用拷贝:运行中会话的展示跟真实路由', () => {
-    // 准入口径(effective)解析到替代来源 beta;实际路由口径(actual)必须仍是会话
+    // 准入口径(effective)拒绝停用来源;实际路由口径(actual)必须仍是会话
     // 真正在用的来源 —— 显式点名的停用来源原样保留,隐式解析仍落原生默认
     // (PR #744 review 第五轮:图标/价格/Fast/选中行豁免不能显示成替代来源)。
     expect(actualSourceIdForModel(views, 'alpha', 'claude-opus-5', 'claude-code')).toBe('alpha');
@@ -151,7 +178,8 @@ describe('retired tombstone 的新路由与运行中会话分层', () => {
   const views = buildRegistry(retiredCatalog, ALL_CONNECTED, {});
 
   it('effective 新路由跳过 retired；actual 仍保留运行中会话的真实来源', () => {
-    expect(effectiveSourceIdForModel(views, 'alpha', 'claude-opus-5', 'claude-code')).toBe('beta');
+    expect(effectiveSourceIdForModel(views, 'alpha', 'claude-opus-5', 'claude-code')).toBeNull();
+    expect(effectiveSourceIdForModel(views, null, 'claude-opus-5', 'claude-code')).toBe('beta');
     expect(actualSourceIdForModel(views, 'alpha', 'claude-opus-5', 'claude-code')).toBe('alpha');
   });
 
@@ -196,9 +224,9 @@ describe('未知 group 的例外只限用户供应商', () => {
     expect(ids).toEqual(['gpt-4o-audio-preview', 'flux-image-x']);
   });
 
-  it('builtin 网关补的 custom:xd 未知组**不**豁免:无分组下发的图像模型仍被硬排除', () => {
-    // active-catalog 对缺 group 的网关条目补 `custom:xd`(见 active-catalog.ts)——
-    // 若无条件放行未知组,这类图像/音频模型会绕过能力分类重新漏进对话清单。
+  it('builtin 网关显式下发的 custom:xd 未知组**不**豁免:图像模型仍被硬排除', () => {
+    // 即使服务端显式下发未知组,也不能像用户自定义供应商一样获得豁免；否则这类
+    // 图像/音频模型会绕过能力分类重新漏进对话清单。
     const views = buildRegistry(
       {
         providers: [

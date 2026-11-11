@@ -5,19 +5,22 @@
  * 静默改写；非 thread 渠道通过 `/new` 显式应用。
  */
 
+import { useModelPickerAgents } from '@/hooks/useAvailableAgents';
 import {
   connectedProvidersForAgent,
   getModel,
   isModelSelectableForNewRoute,
 } from '@cindy/model-providers';
 import { MessageSquare, AlertTriangle } from 'lucide-react';
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 
-import { AgentSelect } from '@/components/new-chat/AgentSelect';
 import { ModelSelector } from '@/components/new-chat/ModelSelector';
+import { useModelRouteDevices } from '@/hooks/useModelRouteDevices';
+import { PermissionSelector } from '@/components/new-chat/PermissionSelector';
 import { type ModelDescriptor, useAgentCapabilities } from '@/hooks/useAgentCapabilities';
 import { useProviders } from '@/hooks/useProviders';
+import { useDeviceProviders } from '@/hooks/useDeviceProviders';
 import { deriveModelsFromProviders } from '@/lib/providerModels';
 import { toast } from '@/lib/toast';
 import type { Effort } from '@/lib/userPreferences.types';
@@ -26,6 +29,7 @@ import {
   IM_DEFAULT_EFFORT_OVERRIDES,
   IM_DEFAULT_SETTINGS,
   isUnconditionalTurnPolicyChannel,
+  isImDefaultPermissionMode,
   type ImDefaultAgentKind,
   type ImDefaultEffort,
   type ImDefaultSettingsChannel,
@@ -34,11 +38,8 @@ import {
   isImDefaultEffort,
 } from '../../../shared/imDefaultSettings';
 import { DefaultOverrideControls } from './DefaultOverrideControls';
-import {
-  buildAgentSettingsPatch,
-  mergeSettingsPatch,
-  resolveAgentSwitchSettings,
-} from './imDefaultSettingsLogic';
+import { Button } from '@/components/ui/button';
+import { buildAgentSettingsPatch, mergeSettingsPatch } from './imDefaultSettingsLogic';
 
 function vendorKeyFor(agentKind: ImDefaultAgentKind): 'cc' | 'codex' | 'pi' {
   return agentKind === 'claude-code' ? 'cc' : agentKind;
@@ -75,21 +76,29 @@ export function ImDefaultSettingsSection({
   onSummaryChange?: (summary: ImDefaultSettingsSummary | null) => void;
 }) {
   const { t } = useTranslation();
-  const { providers } = useProviders();
-  const cc = useAgentCapabilities('claude-code');
-  const codex = useAgentCapabilities('codex');
-  const pi = useAgentCapabilities('pi');
   const [settings, setSettings] = useState<ImDefaultSettingsState | null>(null);
   const [pending, setPending] = useState(false);
+  const settingsRequestVersion = useRef(0);
+  const agentDeviceId = settings?.agents[settings.agentKind].agentDeviceId ?? null;
+  const local = useProviders();
+  const remote = useDeviceProviders(agentDeviceId ?? undefined);
+  const providers = agentDeviceId ? remote.providers : local.providers;
+  const cc = useAgentCapabilities('claude-code', agentDeviceId ?? undefined);
+  const codex = useAgentCapabilities('codex', agentDeviceId ?? undefined);
+  const pi = useAgentCapabilities('pi', agentDeviceId ?? undefined);
+  const routeDevices = useModelRouteDevices({ controlledDeviceId: null, leadAgentDeviceId: agentDeviceId });
+
+  const pickerAgents = useModelPickerAgents(settings?.agentKind ?? 'claude-code', agentDeviceId);
 
   useEffect(() => {
     let cancelled = false;
+    const version = ++settingsRequestVersion.current;
     setSettings(null);
     setPending(false);
     void window.electronAPI.maker
       .imDefaultSettingsGet(channel)
       .then((state) => {
-        if (!cancelled) setSettings(state);
+        if (!cancelled && version === settingsRequestVersion.current) setSettings(state);
       })
       .catch((err) => {
         if (!cancelled) {
@@ -98,6 +107,7 @@ export function ImDefaultSettingsSection({
       });
     return () => {
       cancelled = true;
+      if (version === settingsRequestVersion.current) settingsRequestVersion.current++;
     };
   }, [channel, t]);
 
@@ -126,9 +136,7 @@ export function ImDefaultSettingsSection({
       codex: fromProviders.codex.length
         ? fromProviders.codex
         : (codex.capabilities?.availableModels ?? []),
-      pi: fromProviders.pi.length
-        ? fromProviders.pi
-        : (pi.capabilities?.availableModels ?? []),
+      pi: fromProviders.pi.length ? fromProviders.pi : (pi.capabilities?.availableModels ?? []),
     };
   }, [providers, cc.capabilities, codex.capabilities, pi.capabilities]);
 
@@ -170,18 +178,24 @@ export function ImDefaultSettingsSection({
 
   const persist = useCallback(
     async (patch: ImDefaultSettingsPatch) => {
-      if (!settings || pending) return;
+      if (!settings || pending) return false;
+      // A displayed automatic route may use a different engine than the stored empty default.
+      if (patch.agents && !patch.agentKind) patch = { ...patch, agentKind: settings.agentKind };
       const previous = settings;
+      const version = ++settingsRequestVersion.current;
       setPending(true);
       setSettings(mergeSettingsPatch(settings, patch));
       try {
         const next = await window.electronAPI.maker.imDefaultSettingsSet(patch, channel);
-        setSettings(next);
+        if (version === settingsRequestVersion.current) setSettings(next);
+        return true;
       } catch (err) {
+        if (version !== settingsRequestVersion.current) return false;
         setSettings(previous);
         toast.error(err instanceof Error ? err.message : t('settings.imBot.defaults.saveFailed'));
+        return false;
       } finally {
-        setPending(false);
+        if (version === settingsRequestVersion.current) setPending(false);
       }
     },
     [channel, pending, settings, t],
@@ -189,22 +203,44 @@ export function ImDefaultSettingsSection({
 
   const reset = useCallback(async () => {
     if (pending) return;
+    const version = ++settingsRequestVersion.current;
     setPending(true);
     try {
-      setSettings(await window.electronAPI.maker.imDefaultSettingsReset(channel));
+      const next = await window.electronAPI.maker.imDefaultSettingsReset(channel);
+      if (version !== settingsRequestVersion.current) return;
+      setSettings(next);
       toast.success(t('settings.defaults.restored'));
     } catch (err) {
+      if (version !== settingsRequestVersion.current) return;
       toast.error(err instanceof Error ? err.message : t('settings.defaults.restoreFailed'));
     } finally {
-      setPending(false);
+      if (version === settingsRequestVersion.current) setPending(false);
     }
   }, [channel, pending, t]);
+
+  const automaticMode =
+    settings?.automaticModel ?? (settings ? !settings.agents[settings.agentKind].model : false);
+  useEffect(() => {
+    if (!automaticMode || pending || local.loading) return;
+    const version = ++settingsRequestVersion.current;
+    void window.electronAPI.maker
+      .imDefaultSettingsGet(channel)
+      .then((next) => {
+        if (version === settingsRequestVersion.current) setSettings(next);
+      })
+      .catch(() => {
+        // Retain the last display snapshot; normal settings writes report their own errors.
+      });
+    return () => {
+      if (version === settingsRequestVersion.current) settingsRequestVersion.current++;
+    };
+  }, [automaticMode, channel, local.loading, local.providers, pending]);
 
   if (!settings) {
     return (
       <div
         className={cn(
-          'text-[13px] text-[var(--text-tertiary)]',
+          'text-13 text-[var(--text-tertiary)]',
           embedded
             ? 'py-2'
             : 'rounded-xl border border-[var(--settings-theme-card-border)] bg-[var(--settings-theme-card-bg)] px-4 py-5',
@@ -216,17 +252,14 @@ export function ImDefaultSettingsSection({
   }
 
   const activeSettings = settings.agents[settings.agentKind];
+  const automaticModel = settings.automaticModel ?? !activeSettings.model;
   // 按选中 Agent 的 capabilities 判断:未声明 / 声明了但 supported.supported !== true
   // 的 Agent(如 Pi)无法在「无条件挂逐条权限确认」的渠道(个人微信)使用。不写死 Pi——
   // 未来 Pi 补上该 capability、或新增其它不支持的 Agent 时,此处自动跟随 main 侧
   // 的 capability 真相,不会误警告 / 漏警告。(Telegram / 钉钉仅在群聊挂 policy,
   // 主人私聊 Pi 可用,设置 UI 不区分群聊/私聊,故不整体警告。)
   const selectedAgentCaps =
-    settings.agentKind === 'claude-code'
-      ? cc
-      : settings.agentKind === 'codex'
-        ? codex
-        : pi;
+    settings.agentKind === 'claude-code' ? cc : settings.agentKind === 'codex' ? codex : pi;
   const selectedAgentCapabilitiesReady =
     !selectedAgentCaps.loading &&
     selectedAgentCaps.error === null &&
@@ -252,31 +285,18 @@ export function ImDefaultSettingsSection({
           : null
       : null;
 
-  const changeAgent = (agentKind: ImDefaultAgentKind) => {
-    if (agentKind === settings.agentKind) return;
-    // 只写 agentKind 会把目标 agent 上一次的模型原样带回来 —— 那个模型可能已停用
-    // 或供应商已断开, UI 照显而派发时静默降级。与 changeModel 同口径收敛。
-    const next = resolveAgentSwitchSettings({
-      current: settings.agents[agentKind],
-      available: modelsByAgent[agentKind],
-      // 与 changeModel 共用同一条解析链(model override / defaultEffort 先于 agent 出厂值)
-      resolveEffort: (modelId, requested) => resolveEffort(agentKind, modelId, requested),
-      resolveProviderId: (modelId, providerId) =>
-        resolveProviderId(agentKind, modelId, providerId),
-    });
-    void persist({ agentKind, ...buildAgentSettingsPatch(agentKind, next) });
-  };
-
   const changeModel = (
     model: string,
     providerId: string | null = activeSettings.providerId,
     reconciledEffort?: Effort,
   ) => {
-    const nextProviderId = resolveProviderId(settings.agentKind, model, providerId);
+    const nextProviderId = agentDeviceId
+      ? providerId
+      : resolveProviderId(settings.agentKind, model, providerId);
     const effort = isImDefaultEffort(reconciledEffort)
       ? reconciledEffort
       : resolveEffort(settings.agentKind, model, activeSettings.effort);
-    void persist(
+    return persist(
       buildAgentSettingsPatch(settings.agentKind, {
         ...activeSettings,
         model,
@@ -288,7 +308,7 @@ export function ImDefaultSettingsSection({
 
   const changeEffort = (effort: Effort) => {
     if (!isImDefaultEffort(effort) || effort === activeSettings.effort) return;
-    void persist(
+    return persist(
       buildAgentSettingsPatch(settings.agentKind, {
         ...activeSettings,
         effort,
@@ -316,10 +336,10 @@ export function ImDefaultSettingsSection({
             <MessageSquare size={18} className="text-[var(--settings-section-title)]" />
           </div>
           <div className="min-w-0">
-            <h3 className="text-[14px] font-medium leading-none text-[var(--settings-section-title)]">
+            <h3 className="text-14 font-medium leading-none text-[var(--settings-section-title)]">
               {t('settings.imBot.defaults.title')}
             </h3>
-            <p className="mt-2 text-[12px] leading-[1.45] text-[var(--settings-section-desc)]">
+            <p className="mt-2 text-12 leading-[1.45] text-[var(--settings-section-desc)]">
               {t(`settings.imBot.defaults.channelDescriptions.${descriptionChannel}`)}
             </p>
           </div>
@@ -331,30 +351,59 @@ export function ImDefaultSettingsSection({
         />
       </div>
 
-      <div className="grid gap-4 md:grid-cols-[minmax(0,0.95fr)_minmax(0,1.05fr)]">
+      <div>
         <div className="flex flex-col gap-2">
-          <span className="text-[12px] font-medium text-[var(--text-secondary)]">
-            {t('settings.imBot.defaults.agentLabel')}
-          </span>
-          {/* 与新建对话工具条同一个引擎下拉(AgentSelect, #1350): 手写三选一分段在
-              窄列里三等分 + truncate, 引擎一多就挤; 且未选中项置灰看着像不可用。 */}
-          <AgentSelect
-            value={vendorKeyFor(settings.agentKind)}
-            // 字段形态: 与右侧模型选择器同高同宽规格, 面板绑 trigger 宽度
-            // (DESIGN.md §4 Select & Dropdown 宽度铁则)。
-            triggerVariant="field"
-            side="bottom"
-            disabled={pending}
-            ariaContext={t('settings.imBot.defaults.agentLabel')}
-            onChange={(next) => changeAgent(agentKindOfVendor(next))}
-          />
-        </div>
-
-        <div className="flex flex-col gap-2">
-          <span className="text-[12px] font-medium text-[var(--text-secondary)]">
+          <span className="text-12 font-medium text-[var(--text-secondary)]">
             {t('settings.imBot.defaults.modelLabel')}
           </span>
+          <div className="flex flex-wrap items-center justify-between gap-2 text-12 text-[var(--text-secondary)]">
+            <span>
+              {t(
+                automaticModel
+                  ? 'settings.imBot.defaults.automatic'
+                  : 'settings.imBot.defaults.fixed',
+              )}
+            </span>
+            {!automaticModel && (
+              <Button
+                size="sm"
+                tone="quiet"
+                disabled={pending}
+                onClick={() =>
+                  void persist({
+                    agentKind: IM_DEFAULT_SETTINGS.agentKind,
+                    agents: IM_DEFAULT_SETTINGS.agents,
+                  })
+                }
+              >
+                {t('settings.imBot.defaults.useAutomatic')}
+              </Button>
+            )}
+          </div>
+          {automaticModel && !activeSettings.model && (
+            <p className="text-12 text-[var(--text-secondary)]">
+              {t('settings.imBot.defaults.automaticUnavailable')}
+            </p>
+          )}
           <ModelSelector
+            remoteAgent={routeDevices.devices && { devices: routeDevices.devices, selectedDeviceId: agentDeviceId }}
+            fastModeConfigurable={false}
+            unifiedAgents={pickerAgents}
+            onUnifiedSelect={({ engine, modelId, providerId, effort, agentDevice }) => {
+              const agentKind = agentKindOfVendor(engine);
+              return persist({
+                agentKind,
+                ...buildAgentSettingsPatch(agentKind, {
+                  ...settings.agents[agentKind],
+                  model: modelId,
+                  providerId,
+                  agentDeviceId: agentDevice?.deviceId ?? null,
+                  effort: isImDefaultEffort(effort)
+                    ? effort
+                    : resolveEffort(agentKind, modelId, ''),
+                }),
+              });
+            }}
             modelId={activeSettings.model}
             effort={activeSettings.effort}
             onModelChange={(modelId) => changeModel(modelId)}
@@ -370,6 +419,34 @@ export function ImDefaultSettingsSection({
           />
         </div>
       </div>
+
+      {/* 飞书专属: 群里新建任务统一用的权限档(默认自动审批) —— 群里 @bot 开话题、
+          群里 /new、群里 /ctr 都以它为准, 上面那个权限档只管私聊。群上下文含成员
+          可控内容; 用户显式选择「完全访问」时群护栏取缔(不挂强确认策略, 直接
+          执行), 防注入过滤仍独立生效。共享 PermissionSelector — 权限语义与
+          新建对话工具栏同一份。 */}
+      {channel === 'feishu' && (
+        <div className="flex flex-col gap-2">
+          <span className="text-12 font-medium text-[var(--text-secondary)]">
+            {t('settings.imBot.defaults.groupPermissionLabel')}
+          </span>
+          <PermissionSelector
+            permissionMode={settings.groupPermissionMode}
+            vendorKey={vendorKeyFor(settings.agentKind)}
+            triggerVariant="field"
+            disabled={pending}
+            ariaContext={t('settings.imBot.defaults.groupPermissionLabel')}
+            onPermissionModeChange={(mode) => {
+              if (isImDefaultPermissionMode(mode)) {
+                void persist({ groupPermissionMode: mode });
+              }
+            }}
+          />
+          <p className="text-11 leading-[1.45] text-[var(--text-secondary)]">
+            {t('settings.imBot.defaults.groupPermissionDescription')}
+          </p>
+        </div>
+      )}
 
       {turnPolicyWarning && (
         <div

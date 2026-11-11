@@ -40,6 +40,39 @@ describe('composeProgressView — 过程区/正文合成骨架(两侧共用)', (
   });
 });
 
+function status(data: Record<string, unknown>): AgentEvent {
+  return { type: 'status', data: { status: 'Running', isRunning: true, ...data } } as unknown as AgentEvent;
+}
+
+function speed(rate: number, tokens = 100): Record<string, unknown> {
+  return { rate, average: rate, tokens, elapsedMs: 1_000, streaming: true };
+}
+
+describe('createTurnPresenter — status 事件带出头部 tok/s', () => {
+  it('跟随宿主实测速度, 无读数的占位帧保留上一个值, 不可靠时隐藏', () => {
+    const presenter = createTurnPresenter({ mode: 'buffer-replace', startedAt: 0 });
+    presenter.applyToolUse(toolUse('Read', 'r1'));
+
+    expect(presenter.applyStatus(status({ tokenSpeed: speed(116.4) }))).toBe(true);
+    expect(presenter.activity.tokenRate).toBe(116);
+
+    // 占位帧(无 tokenSpeed)/ 首个输出前的 0 读数 / 坏数据: 不改头部, 避免来回闪。
+    expect(presenter.applyStatus(status({}))).toBe(false);
+    expect(presenter.applyStatus(status({ tokenSpeed: speed(0, 0) }))).toBe(false);
+    expect(presenter.applyStatus(status({ tokenSpeed: { rate: 'fast' } }))).toBe(false);
+    expect(presenter.activity.tokenRate).toBe(116);
+
+    expect(presenter.applyStatus(status({ tokenSpeed: speed(297) }))).toBe(true);
+    expect(presenter.composeRunning('').split('\n')[0]).toContain('· 297 tok/s');
+
+    // 与桌面运行状态栏同口径: 不可靠读数隐藏, 而不是显示错数。
+    expect(
+      presenter.applyStatus(status({ generationReliable: false, tokenSpeed: speed(300) })),
+    ).toBe(true);
+    expect(presenter.composeRunning('')).not.toContain('tok/s');
+  });
+});
+
 describe('createTurnPresenter — buffer-replace 策略(个人 IM 渠道现有行为)', () => {
   it('isFinal 用该条全文整体替换缓冲, 流式增量追加', () => {
     const p = createTurnPresenter({ mode: 'buffer-replace' });
@@ -94,6 +127,50 @@ describe('createTurnPresenter — finalized-segments 策略(官方 bot 现有行
     p.applyText(text('第一段。', true, { source: 'codex' }));
     p.applyText(text('第二段。', true, { source: 'codex' }));
     expect(p.progressBody()).toBe('第二段。');
+  });
+
+  it('progressBodyMode=whole 时进度发射器展示整轮累计正文', () => {
+    vi.useFakeTimers();
+    try {
+      const frames: string[] = [];
+      const p = createTurnPresenter({
+        mode: 'finalized-segments',
+        progressBodyMode: 'whole',
+        onProgress: (frame) => void frames.push(frame),
+      });
+      p.applyText(text('第一段。', true, { source: 'codex' }));
+      p.scheduleProgress();
+      vi.advanceTimersByTime(0);
+      p.applyText(text('第二段。', true, { source: 'codex' }));
+      p.flushProgress();
+
+      expect(frames.at(-1)).toContain('第一段。\n\n第二段。');
+      p.stopProgress();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('whole 累计视图超过单帧上限时退回当前消息，不把最新答案截在末尾', () => {
+    vi.useFakeTimers();
+    try {
+      const frames: string[] = [];
+      const p = createTurnPresenter({
+        mode: 'finalized-segments',
+        progressBodyMode: 'whole',
+        onProgress: (frame) => void frames.push(frame),
+        policy: { ...DEFAULT_PRESENTER_POLICY, intermediateMaxRenderedChars: 12 },
+      });
+      p.applyText(text('很长的第一段内容。', true, { source: 'codex' }));
+      p.applyText(text('最新答案。', true, { source: 'codex' }));
+      p.flushProgress();
+
+      expect(frames.at(-1)).toContain('最新答案。');
+      expect(frames.at(-1)).not.toContain('很长的第一段内容。');
+      p.stopProgress();
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it('claude 同一条消息(同 uuid)的相邻文本块连拼, 不同消息空行分隔', () => {
@@ -188,6 +265,31 @@ describe('createProgressEmitter — trailing-edge 1.5s 节流骨架', () => {
       emitter.schedule();
       vi.advanceTimersByTime(1500);
       expect(frames).toEqual([]);
+      emitter.stop();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('flush 跳过剩余节流窗口并取消原 trailing timer', () => {
+    vi.useFakeTimers();
+    try {
+      const frames: string[] = [];
+      let body = '第一帧';
+      const emitter = createProgressEmitter((t) => void frames.push(t), () => body);
+      emitter.schedule();
+      vi.advanceTimersByTime(0);
+      expect(frames).toEqual(['第一帧']);
+
+      body = '最后一帧';
+      emitter.schedule();
+      vi.advanceTimersByTime(100);
+      expect(frames).toEqual(['第一帧']);
+      emitter.flush();
+      expect(frames).toEqual(['第一帧', '最后一帧']);
+
+      vi.advanceTimersByTime(PROGRESS_THROTTLE_MS);
+      expect(frames).toEqual(['第一帧', '最后一帧']);
       emitter.stop();
     } finally {
       vi.useRealTimers();

@@ -5,10 +5,15 @@ private let onAudioChunk = "onAudioChunk"
 private let onAudioError = "onAudioError"
 
 public class XdtMobileRealtimeAudioModule: Module {
-  private let engine = AVAudioEngine()
+  private let capture = XdtAudioCapture()
+  private var drainTimer: DispatchSourceTimer?
+  private var recentChunks: [[String: Any]] = []
+  private var captureId = ""
+  private var sessionActivatedAt = 0.0
+  private var engineStartedAt = 0.0
   private var isCapturing = false
+  private var ownsAudioSession = false
   private var targetSampleRate = 16_000.0
-  private var chunkIndex = 0
   private var interruptionObserver: NSObjectProtocol?
   private var routeChangeObserver: NSObjectProtocol?
   // Deferred AVAudioSession deactivation (keep-alive). Activating the session in
@@ -36,11 +41,53 @@ public class XdtMobileRealtimeAudioModule: Module {
     Events(onAudioChunk, onAudioError)
 
     AsyncFunction("start") { (options: [String: Any]?) in
-      try self.startCapture(options: options)
+      return try self.sessionStateQueue.sync { () -> [String: Any] in
+        try self.startCaptureLocked(options: options)
+        let session = AVAudioSession.sharedInstance()
+        // Port types only: names and UIDs can contain personal information.
+        return [
+          "inputPortTypes": session.currentRoute.inputs.map { $0.portType.rawValue },
+          "inputSampleRate": session.sampleRate,
+          "inputChannels": session.inputNumberOfChannels,
+          "ioBufferDurationMs": session.ioBufferDuration * 1000,
+          "sessionActivatedAt": self.sessionActivatedAt,
+          "engineStartedAt": self.engineStartedAt
+        ]
+      }
     }
 
     AsyncFunction("stop") {
       self.stopCapture()
+    }
+
+    // Additive: old installed binaries still use stop(). Only audio not already
+    // delivered to JS is returned; trim to the user's stop time, not bridge arrival.
+    AsyncFunction("stopAndDrain") { (afterIndex: Int, stoppedAt: Double) in
+      return try self.sessionStateQueue.sync { () -> [[String: Any]] in
+        self.stopCaptureLocked(deactivateImmediately: false)
+        defer { self.recentChunks.removeAll() }
+        guard stoppedAt.isFinite else {
+          throw Exception(name: "ERR_AUDIO_STOP_TIME", description: "Invalid microphone stop time.")
+        }
+        if self.capture.overflowed || (self.recentChunks.first?["chunkIndex"] as? Int ?? 0) > afterIndex + 1 {
+          throw Exception(name: "ERR_AUDIO_OVERFLOW", description: "Realtime microphone delivery fell behind.")
+        }
+        return self.recentChunks.compactMap { chunk in
+          guard let index = chunk["chunkIndex"] as? Int, index > afterIndex,
+                let capturedAt = chunk["capturedAt"] as? Double,
+                let sampleRate = chunk["sampleRate"] as? Double,
+                let base64 = chunk["base64Pcm16"] as? String,
+                var pcm = Data(base64Encoded: base64) else { return nil }
+          let retainedFrames = min(Double(pcm.count / 2), max(0, ((stoppedAt - capturedAt) * sampleRate / 1000).rounded(.down)))
+          let frames = Int(retainedFrames)
+          guard frames > 0 else { return nil }
+          pcm = pcm.prefix(frames * 2)
+          var result = chunk
+          result["base64Pcm16"] = pcm.base64EncodedString()
+          result["durationMs"] = Double(frames) / sampleRate * 1000
+          return result
+        }
+      }
     }
 
     // Best-effort audio-session warm-up, called on touch-down of the mic button
@@ -89,8 +136,8 @@ public class XdtMobileRealtimeAudioModule: Module {
       return
     }
     do {
-      try session.setCategory(.playAndRecord, mode: .measurement, options: [.duckOthers, .defaultToSpeaker])
-      try session.setActive(true)
+      try activateAudioSessionLocked(session)
+      installAudioSessionObservers()
       // Deliberately do NOT touch the engine here: engine.prepare() with no
       // attached nodes raises an uncatchable NSException (AVAudioEngineGraph
       // Initialize: inputNode != nullptr || outputNode != nullptr). Session
@@ -113,7 +160,8 @@ public class XdtMobileRealtimeAudioModule: Module {
       if self.isCapturing {
         return
       }
-      try? AVAudioSession.sharedInstance().setActive(false, options: .notifyOthersOnDeactivation)
+      self.deactivateOwnedSessionLocked()
+      self.removeAudioSessionObservers()
     }
     deactivateWorkItem = workItem
     sessionStateQueue.asyncAfter(deadline: .now() + sessionKeepAliveSeconds, execute: workItem)
@@ -124,10 +172,17 @@ public class XdtMobileRealtimeAudioModule: Module {
     deactivateWorkItem = nil
   }
 
-  private func startCapture(options: [String: Any]?) throws {
-    try sessionStateQueue.sync {
-      try self.startCaptureLocked(options: options)
-    }
+  // AVAudioSession is shared with remote desktop PiP and other playback. A
+  // background notification is not ownership: never release a session we did
+  // not activate, or one whose configuration has since been taken over.
+  private func deactivateOwnedSessionLocked() {
+    guard ownsAudioSession else { return }
+    ownsAudioSession = false
+    let session = AVAudioSession.sharedInstance()
+    // iOS may add mixWithOthers implicitly when duckOthers is requested.
+    guard session.category == .playAndRecord, session.mode == .measurement,
+          session.categoryOptions.subtracting(.mixWithOthers) == [.duckOthers, .defaultToSpeaker] else { return }
+    try? session.setActive(false, options: .notifyOthersOnDeactivation)
   }
 
   // Must run on sessionStateQueue.
@@ -140,7 +195,8 @@ public class XdtMobileRealtimeAudioModule: Module {
     if let sampleRate = numericOption(options, key: "sampleRate"), sampleRate > 0 {
       targetSampleRate = sampleRate
     }
-    let bufferSize = AVAudioFrameCount(integerOption(options, key: "bufferSize") ?? 2048)
+    captureId = options?["captureId"] as? String ?? ""
+    recentChunks.removeAll()
 
     let session = AVAudioSession.sharedInstance()
     if session.recordPermission == .denied {
@@ -152,8 +208,7 @@ public class XdtMobileRealtimeAudioModule: Module {
     }
 
     do {
-      try session.setCategory(.playAndRecord, mode: .measurement, options: [.duckOthers, .defaultToSpeaker])
-      try session.setActive(true)
+      try activateAudioSessionLocked(session)
     } catch {
       scheduleDeactivateLocked()
       throw Exception(name: "ERR_AUDIO_SESSION", description: "Failed to configure audio session: \(error.localizedDescription)")
@@ -161,23 +216,55 @@ public class XdtMobileRealtimeAudioModule: Module {
 
     installAudioSessionObservers()
 
-    let inputNode = engine.inputNode
-    let inputFormat = inputNode.inputFormat(forBus: 0)
-    chunkIndex = 0
-    inputNode.removeTap(onBus: 0)
-    inputNode.installTap(onBus: 0, bufferSize: bufferSize, format: inputFormat) { [weak self] buffer, time in
-      self?.handleInputBuffer(buffer, time: time)
-    }
-
     do {
-      engine.prepare()
-      try engine.start()
+      _ = try capture.start(withSampleRate: targetSampleRate)
+      engineStartedAt = Date().timeIntervalSince1970 * 1000
       isCapturing = true
+      let timer = DispatchSource.makeTimerSource(queue: sessionStateQueue)
+      timer.schedule(deadline: .now(), repeating: .milliseconds(5), leeway: .milliseconds(1))
+      timer.setEventHandler { [weak self] in
+        guard let self else { return }
+        self.collectChunksLocked(emit: true)
+        if self.capture.overflowed {
+          self.emitError("Realtime microphone delivery fell behind.")
+          self.stopCaptureLocked(deactivateImmediately: true)
+        }
+      }
+      drainTimer = timer
+      timer.resume()
     } catch {
       removeAudioSessionObservers()
-      inputNode.removeTap(onBus: 0)
+      capture.stop()
       scheduleDeactivateLocked()
       throw Exception(name: "ERR_AUDIO_ENGINE_START", description: "Failed to start realtime audio engine: \(error.localizedDescription)")
+    }
+  }
+
+  private func activateAudioSessionLocked(_ session: AVAudioSession) throws {
+    // Reuse only our live, unchanged session. Interruptions and route loss clear
+    // ownership; another playback feature's configuration never counts as warm.
+    let matches = session.category == .playAndRecord && session.mode == .measurement
+      && session.categoryOptions.subtracting(.mixWithOthers) == [.duckOthers, .defaultToSpeaker]
+    if !ownsAudioSession || !matches {
+      try session.setCategory(.playAndRecord, mode: .measurement, options: [.duckOthers, .defaultToSpeaker])
+      // A preference, not a promise: report the actual period after activation.
+      try? session.setPreferredIOBufferDuration(0.010)
+      try session.setActive(true)
+      ownsAudioSession = true
+    }
+    sessionActivatedAt = Date().timeIntervalSince1970 * 1000
+  }
+
+  private func collectChunksLocked(emit: Bool) {
+    for raw in capture.drain() {
+      var chunk = raw as! [String: Any]
+      chunk["captureId"] = captureId
+      recentChunks.append(chunk)
+      if recentChunks.count > 128 { recentChunks.removeFirst() }
+      if emit {
+        let payload = chunk
+        DispatchQueue.main.async { [weak self] in self?.sendEvent(onAudioChunk, payload) }
+      }
     }
   }
 
@@ -189,73 +276,27 @@ public class XdtMobileRealtimeAudioModule: Module {
 
   // Must run on sessionStateQueue.
   private func stopCaptureLocked(deactivateImmediately: Bool) {
-    removeAudioSessionObservers()
-    if engine.isRunning {
-      engine.inputNode.removeTap(onBus: 0)
-      engine.stop()
-    }
+    if deactivateImmediately { removeAudioSessionObservers() }
+    drainTimer?.cancel()
+    drainTimer = nil
+    capture.stop()
+    collectChunksLocked(emit: false)
     isCapturing = false
     if deactivateImmediately {
       // System interruptions and teardown must release the session right away —
       // holding a keep-alive claim on a session the system just reclaimed (or
       // while the module is being destroyed) serves nobody.
       cancelScheduledDeactivateLocked()
-      try? AVAudioSession.sharedInstance().setActive(false, options: .notifyOthersOnDeactivation)
+      deactivateOwnedSessionLocked()
     } else {
       scheduleDeactivateLocked()
     }
   }
 
-  private func handleInputBuffer(_ buffer: AVAudioPCMBuffer, time: AVAudioTime) {
-    guard let channelData = buffer.floatChannelData else {
-      emitError("Realtime audio input did not provide float PCM samples.")
-      return
-    }
-    let frameCount = Int(buffer.frameLength)
-    guard frameCount > 0 else {
-      return
-    }
-
-    let inputSampleRate = buffer.format.sampleRate
-    let channelCount = max(1, Int(buffer.format.channelCount))
-    let targetFrameCount = max(1, Int((Double(frameCount) * targetSampleRate / inputSampleRate).rounded(.down)))
-    var pcm = Data(capacity: targetFrameCount * 2)
-    let scale = inputSampleRate / targetSampleRate
-
-    for targetIndex in 0..<targetFrameCount {
-      let sourceIndex = min(frameCount - 1, Int(Double(targetIndex) * scale))
-      var mono: Float = 0
-      for channelIndex in 0..<channelCount {
-        mono += channelData[channelIndex][sourceIndex]
-      }
-      mono /= Float(channelCount)
-      let clamped = max(-1, min(1, mono))
-      var sample = Int16(clamped * Float(Int16.max)).littleEndian
-      withUnsafeBytes(of: &sample) { bytes in
-        pcm.append(contentsOf: bytes)
-      }
-    }
-
-    let capturedAt = Date().timeIntervalSince1970 * 1000
-    let index = chunkIndex
-    chunkIndex += 1
-    let durationMs = Double(targetFrameCount) / targetSampleRate * 1000
-    let payload: [String: Any] = [
-      "base64Pcm16": pcm.base64EncodedString(),
-      "capturedAt": capturedAt,
-      "chunkIndex": index,
-      "sampleRate": Int(targetSampleRate),
-      "durationMs": durationMs
-    ]
-
-    DispatchQueue.main.async { [weak self] in
-      self?.sendEvent(onAudioChunk, payload)
-    }
-  }
-
   private func emitError(_ message: String) {
+    let id = captureId
     DispatchQueue.main.async { [weak self] in
-      self?.sendEvent(onAudioError, ["message": message])
+      self?.sendEvent(onAudioError, ["message": message, "captureId": id])
     }
   }
 
@@ -292,27 +333,27 @@ public class XdtMobileRealtimeAudioModule: Module {
   }
 
   private func handleAudioSessionInterruption(_ notification: Notification) {
-    guard isCapturing else {
-      return
-    }
     let rawType = unsignedIntegerValue(notification.userInfo?[AVAudioSessionInterruptionTypeKey])
     guard rawType == AVAudioSession.InterruptionType.began.rawValue else {
       return
     }
-    emitError("Realtime voice input was interrupted by the system.")
-    stopCapture(deactivateImmediately: true)
+    sessionStateQueue.async { [weak self] in
+      guard let self else { return }
+      if self.isCapturing { self.emitError("Realtime voice input was interrupted by the system.") }
+      self.stopCaptureLocked(deactivateImmediately: true)
+    }
   }
 
   private func handleAudioRouteChange(_ notification: Notification) {
-    guard isCapturing else {
-      return
-    }
     let rawReason = unsignedIntegerValue(notification.userInfo?[AVAudioSessionRouteChangeReasonKey])
     guard rawReason == AVAudioSession.RouteChangeReason.oldDeviceUnavailable.rawValue else {
       return
     }
-    emitError("Realtime voice input microphone route became unavailable.")
-    stopCapture(deactivateImmediately: true)
+    sessionStateQueue.async { [weak self] in
+      guard let self else { return }
+      if self.isCapturing { self.emitError("Realtime voice input microphone route became unavailable.") }
+      self.stopCaptureLocked(deactivateImmediately: true)
+    }
   }
 }
 
@@ -325,19 +366,6 @@ private func numericOption(_ options: [String: Any]?, key: String) -> Double? {
   }
   if let value = options?[key] as? NSNumber {
     return value.doubleValue
-  }
-  return nil
-}
-
-private func integerOption(_ options: [String: Any]?, key: String) -> Int? {
-  if let value = options?[key] as? Int {
-    return value
-  }
-  if let value = options?[key] as? Double {
-    return Int(value)
-  }
-  if let value = options?[key] as? NSNumber {
-    return value.intValue
   }
   return nil
 }

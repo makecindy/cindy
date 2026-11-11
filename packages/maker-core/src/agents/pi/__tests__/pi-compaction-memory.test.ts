@@ -12,6 +12,24 @@ const captured = vi.hoisted(() => ({
   onEvent: null as ((event: unknown) => void) | null,
 }));
 
+vi.mock('../transport.js', () => ({
+  createPiStdioTransport: (opts: {
+    onProcessSpawned?: (pid: number) => void | (() => void);
+  }) => {
+    opts.onProcessSpawned?.(1234);
+    return {
+      writeLine: async () => {},
+      onLine: () => () => {},
+      onStderr: () => () => {},
+      onClose: () => () => {},
+      close: async () => {},
+      pid: 1234,
+      isClosed: () => false,
+    };
+  },
+  attachJsonlReader: () => {},
+}));
+
 vi.mock('../rpc-client.js', () => ({
   PiRpcProcess: class {
     isClosed = false;
@@ -74,6 +92,7 @@ describe('PiAgent compaction → memory digest', () => {
       capabilityAdditions: {
         availableModels: [{ id: 'm', displayName: 'M', contextWindow: 200_000, efforts: [], defaultEffort: null }],
       },
+      resolvePiGatewayModelApi: () => 'openai-responses',
       resolvePiAgentHome: () => agentHome,
       ...(withManager ? { makerMemory: { write: writeMock, resetDigests: resetDigestsMock } as never } : {}),
     };
@@ -135,6 +154,25 @@ describe('PiAgent compaction → memory digest', () => {
     await flush();
     expect(writeMock).not.toHaveBeenCalled();
     await handle.close();
+  });
+
+  it('an engine-level memory switch does not turn off a teammate whose own switch decided', async () => {
+    // A V2 teammate works in its project (no `bot:` scope); its memory follows its own setting.
+    const agent = new PiAgent(buildDeps(true));
+    await agent.setMemory(false);
+    const ordinary = await agent.startSession({ sessionId: 'plain', workingDir: cwd, model: 'm' });
+    fireCompaction('ordinary task summary');
+    await flush();
+    expect(writeMock).not.toHaveBeenCalled();
+    await ordinary.close();
+
+    const teammate = await agent.startSession({
+      sessionId: 'mate', workingDir: cwd, model: 'm', makerMemorySwitchOwned: true,
+    });
+    fireCompaction('teammate summary');
+    await flush();
+    expect(writeMock).toHaveBeenCalledTimes(1);
+    await teammate.close();
   });
 
   it('does not write when there is no summary text', async () => {

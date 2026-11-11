@@ -1,10 +1,10 @@
 import { chmodSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { delimiter, join } from 'node:path';
 import { Writable } from 'node:stream';
-import { afterAll, describe, expect, it } from 'vitest';
+import { afterAll, describe, expect, it, vi } from 'vitest';
 // eslint-disable-next-line import/no-relative-packages -- dev 脚本模块,不在 src 下
-import { podInstallBounded, runPodInstallOnce } from '../../scripts/sim-pod-install.mjs';
+import { inspectIOSBuildTools, podInstallBounded, runPodInstallOnce, withUserGemPodOnPath } from '../../scripts/sim-pod-install.mjs';
 
 // 这些用例用假的 `pod` 可执行文件真实跑 spawn + 看门狗,覆盖 sim-rebuild pod 层的
 // 全部失败模式 —— 尤其是"输出空转 → SIGKILL"(实测过 CDN 连接挂死干等 20 分钟)
@@ -83,5 +83,54 @@ posixOnly('sim-pod-install bounded runner', () => {
     await expect(podInstallBounded({
       iosDir: tmpdir(), podBin: '/nonexistent/pod-not-here', idleTimeoutMs: 2_000, log: { warn: () => {} },
     })).rejects.toMatchObject({ podMissing: true });
+  });
+});
+
+describe('withUserGemPodOnPath', () => {
+  const missing = () => { throw Object.assign(new Error('spawn pod ENOENT'), { code: 'ENOENT' }); };
+  const env = { PATH: '/usr/bin' } as unknown as NodeJS.ProcessEnv;
+  // 实现用宿主平台的 join/delimiter,测试输入与预期也用同一套,Windows CI 才不会因分隔符失败。
+  const gemDir = join('/home/test', '.gem', 'ruby', '2.6.0');
+  const gemBin = join(gemDir, 'bin');
+
+  // Regression 2026-11-01: a working user-gem CocoaPods was reported as pod=missing
+  // because the Agent PATH omits Gem.user_dir/bin, and tasks asked to install Homebrew.
+  it('appends the user gem bin when pod is only installed there, without shadowing PATH', () => {
+    const run = vi.fn((command: string) => (command === 'ruby' ? `${gemDir}\n` : missing()));
+    const result = withUserGemPodOnPath({ env, run: run as never, exists: (path) => path === join(gemBin, 'pod') });
+    expect(result).toEqual({ PATH: `${env.PATH}${delimiter}${gemBin}` });
+    expect(env.PATH).toBe('/usr/bin');
+  });
+
+  it('keeps the environment when pod is already on PATH, without asking Ruby', () => {
+    const run = vi.fn(() => '1.17.0');
+    expect(withUserGemPodOnPath({ env, run: run as never, exists: () => true })).toBe(env);
+    expect(run).toHaveBeenCalledOnce();
+  });
+
+  it('keeps a broken PATH pod visible instead of masking it with the user gem copy', () => {
+    const run = vi.fn(() => { throw Object.assign(new Error('boom'), { status: 1 }); });
+    expect(withUserGemPodOnPath({ env, run: run as never, exists: () => true })).toBe(env);
+    expect(run).toHaveBeenCalledOnce();
+  });
+
+  it.each([
+    ['Ruby is unavailable', () => missing(), true],
+    ['Ruby prints no directory', () => '', true],
+    ['the user gem directory has no pod', () => gemDir, false],
+  ])('keeps the environment when %s', (_case, ruby, podExists) => {
+    const run = vi.fn((command: string) => (command === 'ruby' ? ruby() : missing()));
+    expect(withUserGemPodOnPath({ env, run: run as never, exists: () => podExists })).toBe(env);
+  });
+
+  it('lets the preflight find pod through the resolved PATH', () => {
+    const run = vi.fn((command: string, _args: string[], options: { env: NodeJS.ProcessEnv }) => {
+      if (command === 'ruby') return gemDir;
+      if (command === 'pod' && !options.env.PATH?.includes(gemBin)) return missing();
+      return '';
+    });
+    const resolved = withUserGemPodOnPath({ env, run: run as never, exists: () => true });
+    expect(inspectIOSBuildTools({ env: resolved, run: run as never }).healthy).toBe(true);
+    expect(inspectIOSBuildTools({ env, run: run as never }).checks.at(-1)).toEqual({ tool: 'pod', healthy: false, code: 'missing' });
   });
 });

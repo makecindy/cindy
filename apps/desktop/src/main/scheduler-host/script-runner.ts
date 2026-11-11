@@ -16,8 +16,10 @@ import type {
 
 import { sessions } from '../localDb/schema';
 import { buildSkipResultText, executePreRunHook, formatPreRunHookFailure } from './pre-run-hook';
+import { withPreRunHookDiagnosis, type DiagnosePreRunHookFailure } from './pre-run-hook-diagnosis';
 import { capAppend, killProcessTree } from './proc-util';
-import type { SchedulerDrizzleDb } from './storage';
+import type { SchedulerDrizzleDb } from './storage.desktop';
+import type { isManagedScheduledTarget, restoreScheduledTarget } from './restore-target.desktop';
 
 const PROTOCOL = 'cindy-script/1' as const;
 const LEGACY_PROTOCOL = 'xdt-maker-script/1' as const;
@@ -103,6 +105,8 @@ export interface ScriptScheduleRunnerDeps {
   notifier?: Notifier;
   scheduler?: Scheduler;
   getDb?: () => SchedulerDrizzleDb;
+  /** 检查脚本失败时识别「所属插件未安装或未启用」。 */
+  diagnosePreRunHookFailure?: DiagnosePreRunHookFailure;
 }
 
 interface CompleteFrame {
@@ -137,7 +141,13 @@ function safeError(error: unknown): { code: string; message: string } {
 }
 
 export class ScriptScheduleRunner {
-  constructor(private readonly deps: ScriptScheduleRunnerDeps) {}
+  constructor(
+    private readonly deps: ScriptScheduleRunnerDeps,
+    private readonly targets: {
+      isManagedScheduledTarget: typeof isManagedScheduledTarget;
+      restoreScheduledTarget: typeof restoreScheduledTarget;
+    },
+  ) {}
 
   attachScheduler(scheduler: Scheduler): void {
     this.deps.scheduler = scheduler;
@@ -163,6 +173,28 @@ export class ScriptScheduleRunner {
     }
   }
 
+  private async retireUnavailableOwner(schedule: Schedule, ctx: FireContext, restore = false): Promise<FireResult | null> {
+    // The owner is a lifecycle binding, not an agent execution mode. Check before
+    // hooks so idle scripts stop too, even when they have no event to dispatch.
+    if (schedule.targetSessionId) {
+      if (!this.deps.getDb || !this.deps.scheduler) {
+        throw new Error('bound script execution requires session storage and scheduler');
+      }
+      const [owner] = await this.deps.getDb()
+        .select({ status: sessions.status, workingDir: sessions.workingDir, remoteHostId: sessions.remoteHostId,
+          source: sessions.source, orcaRole: sessions.orcaRole, orcaRemoteLead: sessions.orcaRemoteLead }).from(sessions)
+        .where(eq(sessions.id, schedule.targetSessionId)).limit(1);
+      if (!owner || owner.status === 'deleted' || (owner.status === 'archived' && this.targets.isManagedScheduledTarget(owner))) {
+        await this.deps.scheduler.pause(schedule.id, { exemptRunId: ctx.runId });
+        return { sessionId: '', skipped: true,
+          resultText: `Script stopped: target session ${owner?.status ?? 'missing'}` };
+      }
+      if (restore) await this.targets.restoreScheduledTarget(schedule.targetSessionId, owner, ctx.signal);
+    }
+
+    return null;
+  }
+
   private async fireInner(schedule: Schedule, ctx: FireContext): Promise<FireResult> {
     const config = schedule.scriptConfig;
     if (schedule.executionMode !== 'script' || !config?.command.trim()) {
@@ -171,12 +203,18 @@ export class ScriptScheduleRunner {
     if (schedule.workspaceKind !== 'project' || !schedule.workingDir?.trim()) {
       throw new Error('script execution requires a local project workspace');
     }
-    if (schedule.useWorktree || schedule.targetSessionId || schedule.persistentSession) {
-      throw new Error('script execution does not support worktrees or bound sessions');
+    if (schedule.useWorktree || schedule.persistentSession) {
+      throw new Error('script execution does not support worktrees or persistent sessions');
     }
 
+    if (schedule.targetSessionId) {
+      const retired = await this.retireUnavailableOwner(schedule, ctx, true);
+      if (retired) return retired;
+    }
+
+    if (ctx.canDispatch?.() === false) return { sessionId: '', deferred: true };
     if (schedule.preRunHook?.command?.trim()) {
-      const hook = await executePreRunHook({
+      const hook = await withPreRunHookDiagnosis(await executePreRunHook({
         command: schedule.preRunHook.command,
         timeoutMs: schedule.preRunHook.timeoutMs,
         cwd: schedule.workingDir,
@@ -187,10 +225,12 @@ export class ScriptScheduleRunner {
           scheduleName: schedule.name,
           runId: ctx.runId,
           firedAt: ctx.firedAt,
+          ...(ctx.webhook ? { webhook: ctx.webhook } : {}),
           workingDir: schedule.workingDir,
           lastFinishedAt: schedule.lastFinishedAt,
+          ...(ctx.trigger ? { trigger: ctx.trigger } : {}),
         },
-      });
+      }), schedule.preRunHook.command, this.deps.diagnosePreRunHookFailure);
       await ctx.onPreRunHookCompleted?.(hook);
       if (hook.aborted || ctx.signal.aborted) {
         this.deps.logger.info?.('[script-runner] pre-run hook aborted by pause/delete', {
@@ -233,6 +273,9 @@ export class ScriptScheduleRunner {
       });
     }
 
+    // A hook or owner lookup may outlive the deadline. Once spawned, the script
+    // remains free to finish; this gate only controls starting a new process.
+    if (ctx.canDispatch?.() === false) return { sessionId: '', deferred: true };
     const granted = new Set(config.capabilities);
     const startedAt = Date.now();
     let child: ChildProcess;
@@ -363,7 +406,22 @@ export class ScriptScheduleRunner {
             : result;
         writeFrame({ type: 'call_result', id: frame.id, ok: true, result: responseResult });
       } catch (error) {
-        writeFrame({ type: 'call_result', id: frame.id, ok: false, error: safeError(error) });
+        // Recheck typed owner rejections after preparation. Deleted/missing or
+        // archived managed owners retire the schedule; ordinary archives and
+        // transient dispatch failures keep it active for its next occurrence.
+        const failure = safeError(error);
+        if (schedule.targetSessionId && frame.method === 'sessions.dispatch'
+          && (!frame.params?.target_session_id || frame.params.target_session_id === schedule.targetSessionId)
+          && ['ARCHIVED', 'DELETED', 'NOT_FOUND'].includes(failure.code)) {
+          try {
+            // Re-read durable state: NOT_FOUND can also mean a temporary runtime
+            // lookup failure, which must not permanently pause a live owner.
+            await this.retireUnavailableOwner(schedule, ctx);
+          } catch (pauseError) {
+            deferredCallFailure = pauseError instanceof Error ? pauseError : new Error(String(pauseError));
+          }
+        }
+        writeFrame({ type: 'call_result', id: frame.id, ok: false, error: failure });
         if (completeReceived && !deferredCallFailure) {
           deferredCallFailure = error instanceof Error ? error : new Error(safeError(error).message);
         }
@@ -479,6 +537,8 @@ export class ScriptScheduleRunner {
         runId: ctx.runId,
         firedAt: ctx.firedAt,
         workingDir: schedule.workingDir,
+        ...(schedule.targetSessionId ? { targetSessionId: schedule.targetSessionId } : {}),
+        ...(ctx.webhook ? { webhook: ctx.webhook } : {}),
       },
     });
 

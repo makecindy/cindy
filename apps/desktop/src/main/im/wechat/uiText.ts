@@ -46,7 +46,7 @@ export const ui = {
       const message = `⚠️ 当前微信对话使用供应商「${provider}」（${model}），${reason}。`;
       return attached
         ? `${message}\n请在 desktop 的 Settings → 模型供应商中修复认证后，直接继续发送消息。`
-        : `${message}\n“新对话配置”只影响新对话；修改后请发送 \`/new\`，再继续聊天。`;
+        : `${message}\n修改“新对话配置”后直接继续发送消息即可；若当前对话单独选过模型，请发送 \`/model\` 重新选择。`;
     },
     controlInProgress:
       '🎮 你 /ctr 还在选择中呢 — 先把上面那张卡片操作完（或点 🚪 退出），再来发别的~',
@@ -73,8 +73,8 @@ export const ui = {
     // turnPermissionPolicy 分类:agent(如 Pi)未声明该 capability,任何权限模式
     // 都无法提供微信所需的逐条确认 → 换 Agent;已声明的 agent 仅个别模式不可用
     // (如 bypassPermissions / acceptEdits) → 换权限模式。
-    // 注意:微信渠道的 Agent 配置只在 /new 时应用到现有会话(设置仅影响新对话),
-    // 所以「换 Agent」指引必须带 /new,否则用户改完设置重发仍路由到旧 Agent。
+    // 注意:跟随渠道默认的会话在下一条消息就会换到新 Agent, 但单独选过 Agent / 模型
+    // 的会话不跟随设置, 所以「换 Agent」指引仍带 /new, 否则这类会话重发仍路由到旧 Agent。
     agentUnsupported:
       '⚠️ 当前 Agent 不支持个人微信的逐条权限确认，消息无法启动。\n' +
       '请在 desktop 设置里把微信渠道的 Agent 换成 Claude Code 或 Codex，再在微信发送 /new，然后重试。',
@@ -84,8 +84,8 @@ export const ui = {
     agentSwitchAlsoCheckPermissionMode:
       '若新的 Agent 仍提示权限模式问题，请在微信发送 /permission 调整权限模式后重试。',
     permissionModeUnsupported:
-      '⚠️ 当前 Agent 无法在个人微信中安全使用此权限模式。\n' +
-      '请在微信发送 /permission 切换权限模式后重试。',
+      '这条消息尚未执行：当前任务的权限模式无法提供个人微信所需的操作审批。\n' +
+      '请在 Cindy 中把当前任务改为「自动审批」，或在微信发送 /permission 调整后重发。',
   },
   cards: {
     permission: {

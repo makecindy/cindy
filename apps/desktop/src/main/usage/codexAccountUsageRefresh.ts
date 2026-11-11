@@ -40,7 +40,7 @@ function refreshKey(accessToken: string, accountId: string | null): string {
 export function createCodexAccountUsageSnapshotReader(
   deps: CodexWebUsageRefreshDeps,
   options: CodexWebUsageRefreshOptions = {},
-): () => Promise<RateLimitSnapshot | null> {
+): (options?: { fresh?: boolean }) => Promise<RateLimitSnapshot | null> {
   const throttleMs = options.throttleMs ?? DEFAULT_THROTTLE_MS;
   const refreshInFlightByKey = new Map<string, RefreshInFlight>();
   const lastRefreshAtByKey = new Map<string, number>();
@@ -69,14 +69,14 @@ export function createCodexAccountUsageSnapshotReader(
     }
   }
 
-  function triggerRefresh(accessToken: string, accountId: string | null): Promise<void> {
+  function triggerRefresh(accessToken: string, accountId: string | null, force = false): Promise<void> {
     const key = refreshKey(accessToken, accountId);
     const existing = refreshInFlightByKey.get(key);
     if (existing) return existing.promise;
 
     const now = deps.now();
     const lastRefreshAt = lastRefreshAtByKey.get(key) ?? 0;
-    if (lastRefreshAt > 0 && now - lastRefreshAt < throttleMs) {
+    if (!force && lastRefreshAt > 0 && now - lastRefreshAt < throttleMs) {
       return Promise.resolve();
     }
 
@@ -115,7 +115,7 @@ export function createCodexAccountUsageSnapshotReader(
     return refreshInFlight.promise;
   }
 
-  return async () => {
+  return async (readOptions) => {
     let accessToken: string | null;
     try {
       accessToken = await deps.readAccessToken();
@@ -137,15 +137,21 @@ export function createCodexAccountUsageSnapshotReader(
 
     const cachedSnapshot = await deps.readCachedSnapshot();
     const cachedAccountId = cachedSnapshot?.accountId ?? null;
-    if (cachedSnapshot && cachedAccountId !== accountId) {
+    if (cachedSnapshot && (cachedAccountId !== accountId
+      || (accountId === null && lastUnknownAccountSnapshotAccessToken !== accessToken))) {
       await clearCachedSnapshot();
-      void triggerRefresh(accessToken, accountId);
-      return null;
+      if (!readOptions?.fresh) {
+        void triggerRefresh(accessToken, accountId);
+        return null;
+      }
     }
-    if (cachedSnapshot && accountId === null && lastUnknownAccountSnapshotAccessToken !== accessToken) {
-      await clearCachedSnapshot();
-      void triggerRefresh(accessToken, accountId);
-      return null;
+    if (readOptions?.fresh) {
+      // A request already in flight may have observed quota before the reset. Let it settle,
+      // then fetch again without the UI read throttle; credential checks still guard publication.
+      await refreshInFlightByKey.get(refreshKey(accessToken, accountId))?.promise;
+      if (!await isRefreshStillCurrent(accessToken, accountId)) return null;
+      await triggerRefresh(accessToken, accountId, true);
+      return await isRefreshStillCurrent(accessToken, accountId) ? deps.readCachedSnapshot() : null;
     }
     void triggerRefresh(accessToken, accountId);
     return cachedSnapshot;

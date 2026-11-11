@@ -1,3 +1,12 @@
+import { createServer } from 'node:http';
+import { createAnthropicCompatProxy } from '@cindy/anthropic-compat-proxy';
+import { loadCatalogWithSource, type ModelRegistry } from '@cindy/model-providers';
+import { mkdtempSync, rmSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import path from 'node:path';
+import { setLocalCatalogOverrides } from '../active-catalog.js';
+import { EMPTY_MODEL_CATALOG_OVERRIDES } from '../model-plane/localCatalogOverrides.js';
+import { configureSessionModelInterfaceStorage, sessionModelInterface } from '../session-model-interface.js';
 import { afterEach, describe, it, expect, vi } from 'vitest';
 
 const { mockGetAppCapabilities } = vi.hoisted(() => ({
@@ -20,32 +29,87 @@ import {
   beginProviderRouteMutation,
   buildLocalHandlerHeaders,
   buildRouteDecision,
+  getProviderRouteCredentialRevision,
   getSessionRoutingDescriptor,
   resolveSessionRoute,
+  resolveCodexLocalAuthPolicy,
+  captureCodexLocalAuthPolicy,
   resolveSessionRouteDecision,
+  resolveFrozenProviderRouteDecision,
   resolveImplicitLocalBridgeRoute,
+  resolveConnectedDefaultProviderIdForModel,
   inferProviderIdForModel,
   isUserProviderSession,
   setCustomProviderKeyReader,
+  setCustomProviderHeaderReader,
+  setOAuthTokenReader,
+  setPendingCredentialSwitchReader,
   setProviderOAuthTokenReader,
   setProviderViewsReader,
   resolveImplicitProviderOAuthRouteDecision,
+  providerRoutingForModel,
+  resolveVisionBackendRoute,
   rewriteImplicitModelIdForRoute,
   rewriteSessionModelIdForRoute,
+  setVisionGatewayKeyReader,
 } from '../provider-route.js';
 import {
   getActiveCatalog,
   setAnthropicDiscoveredModels,
   setCustomProviders,
   setDiscoveredCodexModels,
+  setManagedProviders,
   setXdGatewayModels,
 } from '../active-catalog.js';
 import { setSessionProvider, clearSessionProvider } from '../session-provider-store.js';
+import { migrateManagedOllamaProvider } from '../../local-model-runtime/managedOllamaProvider.js';
 import { ANTHROPIC_DIRECT_UPSTREAM } from '../claude-gateway-config.js';
+import { buildByokProvider } from '../../model-access/byokProvider.js';
 
 // CODEX_OAUTH_UPSTREAM 不直接 import —— codex-proxy-host.ts 在 import 期触电(app.getPath),
 // 会让本测试在 vitest 无 electron 环境炸。其值稳定(codex-gateway-config.ts),这里以字面量锁定。
 const CODEX_OAUTH_UPSTREAM = 'https://chatgpt.com/backend-api/codex';
+
+// Unit: missing app attribution made Cindy traffic anonymous or credited the
+// underlying harness. Existing auth-route cases did not cover provider identity.
+describe('provider application attribution', () => {
+  it.each([
+    ['https://openrouter.ai/api/v1', 'X-OpenRouter-Title'],
+    ['https://ai-gateway.vercel.sh/v1', 'X-Title'],
+    ['https://router.requesty.ai/v1', 'X-Title'],
+    ['https://router.eu.requesty.ai/v1', 'X-Title'],
+  ])('attributes all harness routes to Cindy at %s', (upstream, title) => {
+    for (const agent of ['claude-code', 'codex', 'pi'] as const) {
+      const routing: RoutingDescriptor = { upstream, authStrategy: 'api-key-header' };
+      expect(buildRouteDecision(routing, null, agent, 'fixture-key')?.headerOverride).toMatchObject({
+        'HTTP-Referer': 'https://cindy.app', [title]: 'Cindy',
+        authorization: 'Bearer fixture-key',
+      });
+      expect(routing.headerOverride).toBeUndefined();
+      expect(buildLocalHandlerHeaders({ providerId: 'fixture', providerSource: 'user', routing,
+        apiKey: 'fixture-key', oauthToken: null }, agent).headers).toMatchObject({ 'HTTP-Referer': 'https://cindy.app', [title]: 'Cindy' });
+    }
+  });
+
+  it('preserves explicit mixed-case and legacy attribution, and header deletion', () => {
+    const headers = { 'http-referer': 'https://custom.example', 'x-TITLE': '', 'x-extra': 'value' };
+    const routing: RoutingDescriptor = { upstream: 'https://openrouter.ai/api/v1', authStrategy: 'oauth-token', headerOverride: headers };
+    const sent = buildRouteDecision(routing, null, 'pi', null, 'fixture-token')!.headerOverride!;
+    expect(sent).toMatchObject(headers);
+    expect(sent['X-OpenRouter-Title']).toBeUndefined();
+    expect(sent['HTTP-Referer']).toBeUndefined();
+    const deleted = buildRouteDecision({ ...routing, headerOverride: {}, headerDelete: ['http-referer', 'x-title'] }, null, 'pi')!;
+    expect(deleted.headerOverride).not.toHaveProperty('HTTP-Referer');
+    expect(deleted.headerOverride).not.toHaveProperty('X-OpenRouter-Title');
+  });
+
+  it.each(['https://openrouter.ai.example/api/v1', 'http://openrouter.ai/api/v1',
+    'https://openrouter.ai:8443/api/v1', 'https://api.anthropic.com', 'http://127.0.0.1:1234/v1'])
+  ('leaves unrelated or custom endpoint %s unchanged', upstream => {
+    expect(buildRouteDecision({ upstream, authStrategy: 'api-key-header' }, null, 'codex', 'fixture-key')?.headerOverride)
+      .toEqual({ authorization: 'Bearer fixture-key' });
+  });
+});
 
 /**
  * no-break 锁定:catalog 描述符经 buildRouteDecision 出来的路由,必须与退役前 decideXxxRoute
@@ -71,6 +135,8 @@ const CODEX_ACCOUNT_HEADER_DELETE = [
 afterEach(() => {
   mockGetAppCapabilities.mockReturnValue({ canUseCindyGateway: true });
   setProviderOAuthTokenReader(() => null);
+  setOAuthTokenReader(() => null);
+  setPendingCredentialSwitchReader(() => undefined);
   clearSessionProvider('s-xai');
   clearSessionProvider('s-xai-rewrite');
   clearSessionProvider('s-anthropic-codex');
@@ -78,10 +144,165 @@ afterEach(() => {
   setXdGatewayModels([]);
   setAnthropicDiscoveredModels([]);
   setProviderViewsReader(async () => []);
+  setCustomProviderHeaderReader(() => null);
+});
+
+describe('Codex local auth policy', () => {
+  it('uses the actual custom route even without image generation capabilities', async () => {
+    setCustomProviders([buildUserProvider({
+      id: 'plain-key', name: 'Plain API',
+      runtimes: { codex: { baseUrl: 'https://example.invalid/v1', wireProtocol: 'openai-responses', models: [{ id: 'plain-model', name: 'Plain' }] } },
+    })]);
+    try {
+      expect(await resolveCodexLocalAuthPolicy('plain-key', 'plain-model')).toBe('isolated');
+      expect(await resolveCodexLocalAuthPolicy(undefined, 'plain-model')).toBe('isolated');
+      expect(await resolveCodexLocalAuthPolicy('missing-provider', 'plain-model')).toBe('legacy-shared');
+    } finally {
+      setCustomProviders([]);
+    }
+  });
+
+  it('waits through nested route mutations before selecting an API key policy', async () => {
+    setCustomProviders([buildUserProvider({
+      id: 'pending-key', name: 'Pending API',
+      runtimes: { codex: { baseUrl: 'https://example.invalid/v1', wireProtocol: 'openai-responses', models: [{ id: 'pending-model', name: 'Pending' }] } },
+    })]);
+    const finish = beginProviderRouteMutation('pending-key');
+    const nested = beginProviderRouteMutation('pending-key');
+    let settled = false;
+    const policy = resolveCodexLocalAuthPolicy('pending-key', 'pending-model').then((value) => { settled = true; return value; });
+    await Promise.resolve();
+    expect(settled).toBe(false);
+    finish.commit();
+    finish();
+    await Promise.resolve();
+    expect(settled).toBe(false);
+    nested();
+    await expect(policy).resolves.toBe('isolated');
+  });
+
+  it('invalidates a captured selection when a Desktop mutation starts, even without a core guard', async () => {
+    const before = await captureCodexLocalAuthPolicy('pending-key', 'pending-model');
+    expect(before.isCurrent()).toBe(true);
+    const finish = beginProviderRouteMutation('pending-key');
+    try {
+      expect(before.isCurrent()).toBe(false);
+      const abort = new AbortController();
+      const pending = captureCodexLocalAuthPolicy('pending-key', 'pending-model', abort.signal);
+      abort.abort(new Error('fixture cancelled'));
+      await expect(pending).rejects.toThrow('fixture cancelled');
+    } finally { finish(); }
+    expect(before.isCurrent()).toBe(false);
+    expect((await captureCodexLocalAuthPolicy('pending-key', 'pending-model')).isCurrent()).toBe(true);
+  });
+
+  it('isolates gateway routes while retaining official and third-party OAuth compatibility', async () => {
+    expect(await resolveCodexLocalAuthPolicy('openai', 'gpt-5.4')).toBe('legacy-shared');
+    expect(await resolveCodexLocalAuthPolicy('xd', 'gpt-5.4')).toBe('isolated');
+    expect(await resolveCodexLocalAuthPolicy('xai', 'xai/grok-4.3')).toBe('legacy-shared');
+  });
+});
+
+describe('Pi per-model protocol routing', () => {
+  const provider = buildUserProvider({
+    id: 'pi-overrides',
+    name: 'Pi Overrides',
+    runtimes: {
+      pi: {
+        baseUrl: 'https://pi.example.com/v1',
+        wireProtocol: 'openai-chat',
+        models: [
+          {
+            id: 'messages',
+            name: 'Messages',
+            piApi: 'anthropic-messages',
+            route: {
+              baseUrl: 'https://pi.example.com/anthropic',
+              wireProtocol: 'anthropic-messages',
+            },
+          },
+          { id: 'google', name: 'Google', piApi: 'google-generative-ai' },
+        ],
+      },
+    },
+  });
+
+  it('uses the model override before the provider default', () => {
+    expect(providerRoutingForModel(provider, 'pi', 'messages')).toMatchObject({
+      upstream: 'https://pi.example.com/anthropic',
+      wireProtocol: 'anthropic-messages',
+    });
+  });
+
+  it('fails closed for a native protocol unsupported by the HTTP bridge', () => {
+    expect(providerRoutingForModel(provider, 'pi', 'google')).toBeNull();
+  });
+
+  it('inherits model requestPath only when the route matches the final Pi protocol', () => {
+    const legacy = buildUserProvider({
+      id: 'pi-legacy-paths',
+      name: 'Pi Legacy Paths',
+      runtimes: {
+        pi: {
+          baseUrl: 'https://pi.example.com/v1',
+          wireProtocol: 'openai-chat',
+          models: [
+            {
+              id: 'stale-path',
+              name: 'Stale Path',
+              piApi: 'openai-responses',
+              route: {
+                baseUrl: 'https://pi.example.com/messages',
+                wireProtocol: 'anthropic-messages',
+                requestPath: '/v1/messages',
+              },
+            },
+            {
+              id: 'matching-path',
+              name: 'Matching Path',
+              piApi: 'openai-responses',
+              route: {
+                baseUrl: 'https://pi.example.com/responses',
+                wireProtocol: 'openai-responses',
+                requestPath: '/tenant/responses',
+              },
+            },
+          ],
+        },
+      },
+    });
+
+    expect(providerRoutingForModel(legacy, 'pi', 'stale-path')).toMatchObject({
+      upstream: 'https://pi.example.com/v1',
+      wireProtocol: 'openai-responses',
+    });
+    expect(providerRoutingForModel(legacy, 'pi', 'stale-path')).not.toHaveProperty('requestPath');
+    expect(providerRoutingForModel(legacy, 'pi', 'matching-path')).toMatchObject({
+      upstream: 'https://pi.example.com/responses',
+      wireProtocol: 'openai-responses',
+      requestPath: '/tenant/responses',
+    });
+  });
 });
 
 describe('implicit local bridge resume routing', () => {
-  it('keeps the connected source when a running session model becomes retired', async () => {
+  // PR #9998 review, unit: catalog uniqueness is not the connected default.
+  // Two connected custom sources sharing one model used to be mistaken for OpenAI.
+  it('uses the same connected default for account selection and an implicit Codex bridge', async () => {
+    setCustomProviders(['account-a', 'account-b'].map(id => buildUserProvider({
+      id, name: id, auth: { method: 'apiKey' }, runtimes: { codex: {
+        baseUrl: `https://${id}.example.test/v1`, wireProtocol: 'openai-chat',
+        models: [{ id: 'shared-custom-model', name: 'Shared Custom Model' }],
+      } },
+    })));
+    setProviderViewsReader(async () => buildRegistry(getActiveCatalog(), { 'account-a': true, 'account-b': true }, {}));
+    try {
+      expect(inferProviderIdForModel('shared-custom-model', 'codex')).toBeNull();
+      await expect(resolveConnectedDefaultProviderIdForModel('shared-custom-model', 'codex')).resolves.toBe('account-a');
+      expect((await resolveImplicitLocalBridgeRoute('shared-custom-model', 'codex'))?.providerId).toBe('account-a');
+    } finally { setCustomProviders([]); }
+  });
+  it('never resolves a Codex session to the Claude subscription, even for a retired Claude model', async () => {
     setAnthropicDiscoveredModels([
       {
         id: 'claude-retired-live',
@@ -92,15 +313,11 @@ describe('implicit local bridge resume routing', () => {
         status: 'retired',
       },
     ]);
-    setProviderViewsReader(async () =>
-      buildRegistry(getActiveCatalog(), { anthropic: true }, {}),
-    );
+    setProviderViewsReader(async () => buildRegistry(getActiveCatalog(), { anthropic: true }, {}));
 
-    await expect(resolveImplicitLocalBridgeRoute('claude-retired-live', 'codex')).resolves
-      .toMatchObject({
-        providerId: 'anthropic',
-        routing: { wireProtocol: 'anthropic-messages' },
-      });
+    await expect(
+      resolveImplicitLocalBridgeRoute('claude-retired-live', 'codex'),
+    ).resolves.toBeNull();
   });
 });
 
@@ -119,7 +336,11 @@ describe('local mode Cindy gateway gate', () => {
 
 describe('claude-code: buildRouteDecision no-break 基线', () => {
   it('Anthropic(oauth-passthrough) == 直连 api.anthropic.com 分支', () => {
-    const fromCatalog = buildRouteDecision(descriptor('anthropic', 'claude-code'), KEY, 'claude-code');
+    const fromCatalog = buildRouteDecision(
+      descriptor('anthropic', 'claude-code'),
+      KEY,
+      'claude-code',
+    );
     expect(fromCatalog).toEqual({ upstreamOverride: ANTHROPIC_DIRECT_UPSTREAM });
   });
 
@@ -153,7 +374,13 @@ describe('codex: buildRouteDecision no-break 基线', () => {
   });
 
   it('xAI(provider-oauth-header) → 直连 api.x.ai + 覆盖 authorization + 删除 ChatGPT 专属头', () => {
-    const fromCatalog = buildRouteDecision(descriptor('xai', 'codex'), KEY, 'codex', null, 'xai-token');
+    const fromCatalog = buildRouteDecision(
+      descriptor('xai', 'codex'),
+      KEY,
+      'codex',
+      null,
+      'xai-token',
+    );
     expect(fromCatalog).toEqual({
       upstreamOverride: 'https://api.x.ai/v1',
       headerOverride: { authorization: 'Bearer xai-token' },
@@ -163,29 +390,18 @@ describe('codex: buildRouteDecision no-break 基线', () => {
 
   it('xAI 无 token → 哑 token 覆盖 authorization,不透传 OpenAI bearer', () => {
     const fromCatalog = buildRouteDecision(descriptor('xai', 'codex'), KEY, 'codex');
-    expect(fromCatalog).toEqual(expect.objectContaining({
-      upstreamOverride: 'https://api.x.ai/v1',
-      headerOverride: { authorization: 'Bearer xdt-missing-provider-oauth-token' },
-    }));
+    expect(fromCatalog).toEqual(
+      expect.objectContaining({
+        upstreamOverride: 'https://api.x.ai/v1',
+        headerOverride: { authorization: 'Bearer xdt-missing-provider-oauth-token' },
+      }),
+    );
   });
 
-  it('Anthropic subscription → Claude.ai bearer + OAuth beta,不透传 Codex 账号头', () => {
-    const fromCatalog = buildRouteDecision(
-      descriptor('anthropic', 'codex'),
-      KEY,
-      'codex',
-      null,
-      'claude-subscription-token',
-    );
-    expect(fromCatalog).toEqual({
-      upstreamOverride: 'https://api.anthropic.com',
-      headerOverride: {
-        'anthropic-version': '2023-06-01',
-        'anthropic-beta': 'claude-code-20250219,oauth-2025-04-20',
-        authorization: 'Bearer claude-subscription-token',
-      },
-      headerDelete: CODEX_ACCOUNT_HEADER_DELETE,
-    });
+  it('Claude 订阅没有 Codex 路由(订阅只归内置 Claude Code CLI)', () => {
+    const anthropic = getActiveCatalog().providers.find((provider) => provider.id === 'anthropic');
+    expect(anthropic?.routing.codex).toBeUndefined();
+    expect(anthropic?.routing.pi).toBeUndefined();
   });
 });
 
@@ -201,22 +417,14 @@ describe('pi: provider-aware Anthropic wire routing', () => {
     });
   });
 
-  it('Anthropic injects the host OAuth token and required OAuth beta headers', async () => {
+  it('Pi 会话选 Claude 订阅 → 无路由(不注入 host OAuth,调用方本地拒绝)', async () => {
     setSessionProvider('s-pi', 'anthropic');
-    setProviderOAuthTokenReader((providerId, agent) =>
-      providerId === 'anthropic' && agent === 'pi' ? Promise.resolve('claude-live-token') : null,
-    );
+    const tokenReader = vi.fn(() => Promise.resolve('claude-live-token'));
+    setProviderOAuthTokenReader(tokenReader);
     await expect(
       Promise.resolve(resolveSessionRouteDecision('s-pi', 'pi', KEY, 'claude-opus-5')),
-    ).resolves.toEqual({
-      upstreamOverride: ANTHROPIC_DIRECT_UPSTREAM,
-      headerOverride: {
-        'anthropic-version': '2023-06-01',
-        'anthropic-beta': 'oauth-2025-04-20',
-        authorization: 'Bearer claude-live-token',
-      },
-      headerDelete: ['x-api-key'],
-    });
+    ).resolves.toBeNull();
+    expect(tokenReader).not.toHaveBeenCalled();
   });
 });
 
@@ -247,34 +455,73 @@ describe('resolveSessionRouteDecision (per-session 选择 → 路由;no-break fa
     });
   });
 
-  it('codex 会话选 XD:原生模型保持 Responses,Claude-only 投影模型派生 Anthropic bridge wire', async () => {
+  it('codex 会话选 XD:不根据模型归属切换到 Anthropic Messages', async () => {
     setXdGatewayModels([
       { id: 'gpt-native', agents: ['claude-code', 'codex'] },
       { id: 'claude-bridge', agents: ['claude-code'] },
     ]);
     setSessionProvider('s-xd-model-wire', 'xd');
 
-    expect(getSessionRoutingDescriptor('s-xd-model-wire', 'codex', 'gpt-native'))
-      .toMatchObject({
-        authStrategy: 'gateway-key',
-      });
-    expect(getSessionRoutingDescriptor('s-xd-model-wire', 'codex', 'gpt-native')?.wireProtocol)
-      .toBeUndefined();
+    expect(getSessionRoutingDescriptor('s-xd-model-wire', 'codex', 'gpt-native')).toMatchObject({
+      authStrategy: 'gateway-key',
+    });
+    expect(
+      getSessionRoutingDescriptor('s-xd-model-wire', 'codex', 'gpt-native')?.wireProtocol,
+    ).toBeUndefined();
 
-    expect(getSessionRoutingDescriptor('s-xd-model-wire', 'codex', 'claude-bridge[1m]'))
-      .toMatchObject({
+    expect(
+      getSessionRoutingDescriptor('s-xd-model-wire', 'codex', 'claude-bridge[1m]'),
+    ).toMatchObject({
+      authStrategy: 'gateway-key',
+    });
+    expect(
+      getSessionRoutingDescriptor('s-xd-model-wire', 'codex', 'claude-bridge[1m]')?.wireProtocol,
+    ).toBeUndefined();
+    await expect(
+      resolveSessionRoute('s-xd-model-wire', 'codex', 'claude-bridge[1m]'),
+    ).resolves.toMatchObject({
+      providerId: 'xd',
+      providerSource: 'builtin',
+      routing: {
         authStrategy: 'gateway-key',
-        wireProtocol: 'anthropic-messages',
-      });
-    await expect(resolveSessionRoute('s-xd-model-wire', 'codex', 'claude-bridge[1m]'))
-      .resolves.toMatchObject({
-        providerId: 'xd',
-        providerSource: 'builtin',
-        routing: {
-          authStrategy: 'gateway-key',
-          wireProtocol: 'anthropic-messages',
-        },
-      });
+      },
+    });
+    // 视觉后端复用统一路由器：XD 投影给 Codex 的模型（只声明 claude-code）必须走
+    // Claude Messages 面，且 model 必须剥到裸 id（`codex/` 是路由前缀不是后端模型名），
+    // 无论带 `codex/` 前缀还是 `[1m]` 后缀（修复 P1 路由 bug）。
+    setVisionGatewayKeyReader(() => KEY);
+    const bridgeBare = resolveVisionBackendRoute(
+      'xd',
+      'claude-bridge[1m]',
+      'https://tenant.gateway.xd',
+    );
+    expect(bridgeBare).toMatchObject({
+      wireProtocol: 'anthropic-messages',
+      requestPath: '/v1/messages',
+      authorization: `Bearer ${KEY}`,
+      model: 'claude-bridge',
+    });
+    const bridgeCodexPrefixed = resolveVisionBackendRoute(
+      'xd',
+      'codex/claude-bridge',
+      'https://tenant.gateway.xd',
+    );
+    expect(bridgeCodexPrefixed).toMatchObject({
+      wireProtocol: 'anthropic-messages',
+      requestPath: '/v1/messages',
+      authorization: `Bearer ${KEY}`,
+      model: 'claude-bridge',
+    });
+    const bridgeCodexSuffix = resolveVisionBackendRoute(
+      'xd',
+      'codex/claude-bridge[1m]',
+      'https://tenant.gateway.xd',
+    );
+    expect(bridgeCodexSuffix).toMatchObject({
+      wireProtocol: 'anthropic-messages',
+      requestPath: '/v1/messages',
+      model: 'claude-bridge',
+    });
   });
 
   it('codex 会话选 xAI → 异步读取 xAI OAuth token 并路由到 api.x.ai', async () => {
@@ -282,7 +529,9 @@ describe('resolveSessionRouteDecision (per-session 选择 → 路由;no-break fa
     setProviderOAuthTokenReader((providerId, agent) =>
       providerId === 'xai' && agent === 'codex' ? Promise.resolve('xai-live-token') : null,
     );
-    await expect(Promise.resolve(resolveSessionRouteDecision('s-xai', 'codex', KEY))).resolves.toEqual({
+    await expect(
+      Promise.resolve(resolveSessionRouteDecision('s-xai', 'codex', KEY)),
+    ).resolves.toEqual({
       upstreamOverride: 'https://api.x.ai/v1',
       headerOverride: { authorization: 'Bearer xai-live-token' },
       headerDelete: ['chatgpt-account-id', 'openai-beta', 'originator', 'session_id'],
@@ -304,9 +553,9 @@ describe('resolveSessionRouteDecision (per-session 选择 → 路由;no-break fa
     expect(inferProviderIdForModel('xai/grok-4.3', 'codex')).toBe('xai');
     expect(inferProviderIdForModel('gpt-5.4', 'codex')).toBeNull();
     setDiscoveredCodexModels([]);
-    await expect(Promise.resolve(
-      resolveImplicitProviderOAuthRouteDecision('xai/grok-4.3', 'codex', KEY),
-    )).resolves.toEqual({
+    await expect(
+      Promise.resolve(resolveImplicitProviderOAuthRouteDecision('xai/grok-4.3', 'codex', KEY)),
+    ).resolves.toEqual({
       upstreamOverride: 'https://api.x.ai/v1',
       headerOverride: { authorization: 'Bearer xai-live-token' },
       headerDelete: ['chatgpt-account-id', 'openai-beta', 'originator', 'session_id'],
@@ -314,52 +563,23 @@ describe('resolveSessionRouteDecision (per-session 选择 → 路由;no-break fa
     setProviderOAuthTokenReader(() => null);
   });
 
-  it('codex 会话选 Anthropic → 本地桥读取 Claude.ai OAuth，缺失时也 fail closed', async () => {
+  it('codex 会话选 Claude 订阅 → 无本地桥路由,也不读 Claude.ai token', async () => {
     setSessionProvider('s-anthropic-codex', 'anthropic');
-    setProviderOAuthTokenReader((providerId, agent) =>
-      providerId === 'anthropic' && agent === 'codex'
-        ? Promise.resolve('claude-subscription-token')
-        : null,
-    );
-    const route = await resolveSessionRoute(
-      's-anthropic-codex',
-      'codex',
-      'claude-opus-5',
-    );
-    expect(route).toMatchObject({
-      providerId: 'anthropic',
-      providerSource: 'builtin',
-      oauthToken: 'claude-subscription-token',
-      routing: {
-        wireProtocol: 'anthropic-messages',
-        authStrategy: 'provider-oauth-header',
-      },
-    });
-    expect(buildLocalHandlerHeaders(route!, 'codex')).toEqual({
-      headers: {
-        'anthropic-version': '2023-06-01',
-        'anthropic-beta': 'claude-code-20250219,oauth-2025-04-20',
-        authorization: 'Bearer claude-subscription-token',
-      },
-      headerDelete: CODEX_ACCOUNT_HEADER_DELETE,
-    });
-
+    const tokenReader = vi.fn(() => Promise.resolve('claude-subscription-token'));
+    setProviderOAuthTokenReader(tokenReader);
+    await expect(resolveSessionRoute('s-anthropic-codex', 'codex', 'claude-opus-5')).resolves.toBeNull();
+    expect(tokenReader).not.toHaveBeenCalled();
     setProviderOAuthTokenReader(() => null);
-    const missing = await resolveSessionRoute(
-      's-anthropic-codex',
-      'codex',
-      'claude-opus-5',
-    );
-    expect(buildLocalHandlerHeaders(missing!, 'codex').headers.authorization)
-      .toBe('Bearer xdt-missing-provider-oauth-token');
   });
 
   it('按 catalog modelIdRewrite 剥 xAI 内部前缀', () => {
     setSessionProvider('s-xai-rewrite', 'xai');
-    expect(rewriteSessionModelIdForRoute('s-xai-rewrite', 'codex', {
-      model: 'xai/grok-4.3',
-      input: [],
-    })).toEqual({
+    expect(
+      rewriteSessionModelIdForRoute('s-xai-rewrite', 'codex', {
+        model: 'xai/grok-4.3',
+        input: [],
+      }),
+    ).toEqual({
       model: 'grok-4.3',
       input: [],
     });
@@ -367,10 +587,12 @@ describe('resolveSessionRouteDecision (per-session 选择 → 路由;no-break fa
   });
 
   it('隐式 xAI model 也按 catalog modelIdRewrite 剥内部前缀', () => {
-    expect(rewriteImplicitModelIdForRoute('codex', {
-      model: 'xai/grok-4.3',
-      input: [],
-    })).toEqual({
+    expect(
+      rewriteImplicitModelIdForRoute('codex', {
+        model: 'xai/grok-4.3',
+        input: [],
+      }),
+    ).toEqual({
       model: 'grok-4.3',
       input: [],
     });
@@ -387,7 +609,9 @@ describe('resolveSessionRouteDecision — modelPrefixes 服务范围门(issue #8
     setSessionProvider('s-scope', 'xai');
     // #886 现场:分类器的 haiku 调用被会话路由拽到 api.x.ai → 必挂 → Bash 全被拦。
     // scope 门后返回 null,调用方回落 spawn 默认(网关/直连),分类器照常工作。
-    expect(resolveSessionRouteDecision('s-scope', 'claude-code', KEY, 'claude-haiku-4-5-20251001')).toBeNull();
+    expect(
+      resolveSessionRouteDecision('s-scope', 'claude-code', KEY, 'claude-haiku-4-5-20251001'),
+    ).toBeNull();
   });
 
   it('cc 会话选 xAI + 自家前缀模型 → 正常路由到 api.x.ai', () => {
@@ -406,7 +630,9 @@ describe('resolveSessionRouteDecision — modelPrefixes 服务范围门(issue #8
 
   it('cc 会话选 OpenAI(ChatGPT 订阅直连)同样只捕获 chatgpt/ 前缀', () => {
     setSessionProvider('s-scope', 'openai');
-    expect(resolveSessionRouteDecision('s-scope', 'claude-code', KEY, 'claude-haiku-4-5-20251001')).toBeNull();
+    expect(
+      resolveSessionRouteDecision('s-scope', 'claude-code', KEY, 'claude-haiku-4-5-20251001'),
+    ).toBeNull();
     expect(resolveSessionRouteDecision('s-scope', 'claude-code', KEY, 'chatgpt/gpt-5.5')).toEqual({
       upstreamOverride: CODEX_OAUTH_UPSTREAM,
     });
@@ -417,18 +643,45 @@ describe('resolveSessionRouteDecision — modelPrefixes 服务范围门(issue #8
     setProviderOAuthTokenReader(() => Promise.resolve('xai-live-token'));
     expect(resolveSessionRouteDecision('s-scope', 'codex', KEY, 'gpt-5.5')).toBeNull();
     // 自家模型不受影响。
+    await expect(
+      Promise.resolve(resolveSessionRouteDecision('s-scope', 'codex', KEY, 'xai/grok-4.3')),
+    ).resolves.toEqual(expect.objectContaining({ upstreamOverride: 'https://api.x.ai/v1' }));
+  });
+
+  it('xAI 会话的裸 grok-4.6 仍算自家模型,不回落默认网关', async () => {
+    setSessionProvider('s-scope', 'xai');
+    setProviderOAuthTokenReader(() => Promise.resolve('xai-live-token'));
+    expect(resolveSessionRouteDecision('s-scope', 'claude-code', KEY, 'grok-4.6')).toEqual({
+      upstreamOverride: 'https://api.x.ai/v1',
+    });
     await expect(Promise.resolve(
-      resolveSessionRouteDecision('s-scope', 'codex', KEY, 'xai/grok-4.3'),
+      resolveSessionRouteDecision('s-scope', 'codex', KEY, 'grok-4.6'),
     )).resolves.toEqual(expect.objectContaining({ upstreamOverride: 'https://api.x.ai/v1' }));
+  });
+
+  it('pending 目标在旧 Provider scope 外时仍先 fail closed', () => {
+    setSessionProvider('s-scope', 'xai');
+    setPendingCredentialSwitchReader(() => ({
+      model: 'gpt-5.6-sol',
+      providerId: 'openai',
+    }));
+
+    expect(resolveSessionRouteDecision('s-scope', 'codex', KEY, 'gpt-5.6-sol')).toEqual({
+      localHandler: expect.any(Function),
+    });
   });
 
   it('未声明 modelPrefixes 的供应商(XD/Anthropic/自定义)不受门限制 —— no-break', () => {
     setSessionProvider('s-scope', 'xd');
-    expect(resolveSessionRouteDecision('s-scope', 'claude-code', KEY, 'claude-haiku-4-5-20251001')).toEqual({
+    expect(
+      resolveSessionRouteDecision('s-scope', 'claude-code', KEY, 'claude-haiku-4-5-20251001'),
+    ).toEqual({
       headerOverride: { 'x-api-key': KEY, authorization: `Bearer ${KEY}` },
     });
     setSessionProvider('s-scope', 'anthropic');
-    expect(resolveSessionRouteDecision('s-scope', 'claude-code', KEY, 'claude-haiku-4-5-20251001')).toEqual({
+    expect(
+      resolveSessionRouteDecision('s-scope', 'claude-code', KEY, 'claude-haiku-4-5-20251001'),
+    ).toEqual({
       upstreamOverride: ANTHROPIC_DIRECT_UPSTREAM,
     });
   });
@@ -483,14 +736,7 @@ describe('api-key-header (自定义供应商 buildRouteDecision)', () => {
   });
 
   it('legacy 只含 x-api-key 时仍覆盖 Codex Authorization', () => {
-    expect(
-      buildRouteDecision(
-        routing({ 'X-API-Key': 'legacy-key' }),
-        KEY,
-        'codex',
-        null,
-      ),
-    ).toEqual({
+    expect(buildRouteDecision(routing({ 'X-API-Key': 'legacy-key' }), KEY, 'codex', null)).toEqual({
       headerOverride: {
         'x-api-key': 'legacy-key',
         authorization: 'Bearer cindy-missing-custom-provider-api-key',
@@ -502,12 +748,7 @@ describe('api-key-header (自定义供应商 buildRouteDecision)', () => {
 
   it('legacy 只含 Authorization 时仍覆盖 Claude x-api-key', () => {
     expect(
-      buildRouteDecision(
-        routing({ Authorization: 'Bearer legacy' }),
-        KEY,
-        'claude-code',
-        null,
-      ),
+      buildRouteDecision(routing({ Authorization: 'Bearer legacy' }), KEY, 'claude-code', null),
     ).toEqual({
       headerOverride: {
         authorization: 'Bearer legacy',
@@ -540,14 +781,7 @@ describe('api-key-header (自定义供应商 buildRouteDecision)', () => {
   });
 
   it('缺少 safeStorage 与 legacy key 时用哑值覆盖 CLI 凭证并删除 Codex 账号头', () => {
-    expect(
-      buildRouteDecision(
-        routing({ 'X-Tenant': 'tenant-a' }),
-        KEY,
-        'codex',
-        null,
-      ),
-    ).toEqual({
+    expect(buildRouteDecision(routing({ 'X-Tenant': 'tenant-a' }), KEY, 'codex', null)).toEqual({
       headerOverride: {
         'X-Tenant': 'tenant-a',
         authorization: 'Bearer cindy-missing-custom-provider-api-key',
@@ -572,13 +806,16 @@ describe('api-key-header (自定义供应商 buildRouteDecision)', () => {
       },
     });
     expect(
-      buildLocalHandlerHeaders({
-        ...baseRoute,
-        routing: routing({
-          Authorization: 'Bearer legacy',
-          'X-Tenant': 'tenant-a',
-        }),
-      }, 'codex'),
+      buildLocalHandlerHeaders(
+        {
+          ...baseRoute,
+          routing: routing({
+            Authorization: 'Bearer legacy',
+            'X-Tenant': 'tenant-a',
+          }),
+        },
+        'codex',
+      ),
     ).toMatchObject({
       headers: {
         authorization: 'Bearer legacy',
@@ -620,14 +857,19 @@ describe('none (无鉴权自定义代理 buildRouteDecision)', () => {
 
   it('无鉴权透明路由不保留自定义 headers 里的凭证', () => {
     expect(
-      buildRouteDecision({
-        ...routing,
-        headerOverride: {
-          Authorization: 'Bearer must-not-leak',
-          'X-API-Key': 'must-not-leak',
-          'X-Proxy-Tenant': 'local',
+      buildRouteDecision(
+        {
+          ...routing,
+          headerOverride: {
+            Authorization: 'Bearer must-not-leak',
+            'X-API-Key': 'must-not-leak',
+            'X-Proxy-Tenant': 'local',
+          },
         },
-      }, KEY, 'codex', null),
+        KEY,
+        'codex',
+        null,
+      ),
     ).toMatchObject({
       headerOverride: { 'X-Proxy-Tenant': 'local' },
     });
@@ -660,28 +902,32 @@ describe('none (无鉴权自定义代理 buildRouteDecision)', () => {
     });
     expect(JSON.parse(end.mock.calls[0][0])).toMatchObject({
       error: {
-        message: 'The selected provider is disabled; update its endpoint or authentication settings before retrying.',
+        message:
+          'The selected provider is disabled; update its endpoint or authentication settings before retrying.',
       },
     });
   });
 
   it('本地 Chat 桥也剥掉复制配置里残留的鉴权与账号头', () => {
     expect(
-      buildLocalHandlerHeaders({
-        providerId: 'local',
-        providerSource: 'user',
-        routing: {
-          ...routing,
-          headerOverride: {
-            Authorization: 'Bearer must-not-leak',
-            'X-API-Key': 'must-not-leak',
-            'ChatGPT-Account-ID': 'acct',
-            'X-Proxy-Tenant': 'local',
+      buildLocalHandlerHeaders(
+        {
+          providerId: 'local',
+          providerSource: 'user',
+          routing: {
+            ...routing,
+            headerOverride: {
+              Authorization: 'Bearer must-not-leak',
+              'X-API-Key': 'must-not-leak',
+              'ChatGPT-Account-ID': 'acct',
+              'X-Proxy-Tenant': 'local',
+            },
           },
+          apiKey: null,
+          oauthToken: null,
         },
-        apiKey: null,
-        oauthToken: null,
-      }, 'codex'),
+        'codex',
+      ),
     ).toMatchObject({
       headers: { 'X-Proxy-Tenant': 'local' },
     });
@@ -689,6 +935,47 @@ describe('none (无鉴权自定义代理 buildRouteDecision)', () => {
 });
 
 describe('resolveSessionRouteDecision — 自定义供应商(resolve 时注入 key)', () => {
+  it('routes independent Claude accounts with their own bearer and removes the CLI API key', async () => {
+    setCustomProviders(['anthropic-a', 'anthropic-b'].map(id => buildUserProvider({
+      id, name: 'Claude subscription', auth: { method: 'oauth', native: 'claude' },
+      runtimes: { 'claude-code': { baseUrl: ANTHROPIC_DIRECT_UPSTREAM, models: [] } },
+    })));
+    const readToken = vi.fn(async (id: string) => `test-token-${id}`);
+    setProviderOAuthTokenReader(readToken);
+    for (const id of ['anthropic-a', 'anthropic-b', 'anthropic-a']) {
+      setSessionProvider('s-user', id);
+      expect(await resolveSessionRouteDecision('s-user', 'claude-code', KEY, 'claude-opus-4-6')).toEqual({
+        upstreamOverride: ANTHROPIC_DIRECT_UPSTREAM,
+        headerOverride: { authorization: `Bearer test-token-${id}` },
+        headerDelete: ['x-api-key'],
+      });
+      expect(readToken).toHaveBeenLastCalledWith(id, 'claude-code');
+    }
+    setProviderOAuthTokenReader(() => null);
+    expect(await resolveSessionRouteDecision('s-user', 'claude-code', KEY, 'claude-opus-4-6')).toMatchObject({
+      upstreamOverride: ANTHROPIC_DIRECT_UPSTREAM,
+      headerOverride: { authorization: 'Bearer xdt-missing-provider-oauth-token' },
+      headerDelete: ['x-api-key'],
+    });
+  });
+
+  it('routes A → B → A by connection id despite identical provider and model names', () => {
+    setCustomProviders(['account-a', 'account-b'].map(id => buildUserProvider({
+      id, name: 'Same provider', runtimes: { codex: {
+        baseUrl: `https://${id}.example/v1`,
+        models: [{ id: 'same-model', name: 'Same model' }],
+      } },
+    })));
+    setCustomProviderKeyReader(id => `test-key-${id}`);
+    for (const id of ['account-a', 'account-b', 'account-a']) {
+      setSessionProvider('s-user', id);
+      expect(resolveSessionRouteDecision('s-user', 'codex', KEY, 'same-model')).toEqual({
+        upstreamOverride: `https://${id}.example/v1`,
+        headerOverride: { authorization: `Bearer test-key-${id}` },
+        headerDelete: CODEX_ACCOUNT_HEADER_DELETE,
+      });
+    }
+  });
   afterEach(() => {
     setCustomProviders([]);
     setCustomProviderKeyReader(() => null);
@@ -709,17 +996,262 @@ describe('resolveSessionRouteDecision — 自定义供应商(resolve 时注入 k
         },
       }),
     ]);
-    setCustomProviderKeyReader((id, agent) => (id === 'openrouter' && agent === 'codex' ? 'sk-or-123' : null));
+    setCustomProviderKeyReader((id, agent) =>
+      id === 'openrouter' && agent === 'codex' ? 'sk-or-123' : null,
+    );
     setSessionProvider('s-user', 'openrouter');
 
     expect(isUserProviderSession('s-user')).toBe(true);
     expect(resolveSessionRouteDecision('s-user', 'codex', KEY)).toEqual({
-      headerOverride: { authorization: 'Bearer sk-or-123' },
+      headerOverride: { authorization: 'Bearer sk-or-123',
+        'HTTP-Referer': 'https://cindy.app', 'X-OpenRouter-Title': 'Cindy',
+      },
       upstreamOverride: 'https://openrouter.ai/api/v1',
       headerDelete: CODEX_ACCOUNT_HEADER_DELETE,
     });
   });
 
+  it('同一 GLM key 下普通模型走 V4 Chat，glm-5.3 走 V1 Responses', () => {
+    setCustomProviders([
+      buildUserProvider({
+        id: 'zhipu-plan',
+        name: 'Zhipu Plan',
+        runtimes: {
+          codex: {
+            baseUrl: 'https://open.bigmodel.cn/api/coding/paas/v4',
+            wireProtocol: 'openai-chat',
+            requestPath: '/chat/completions',
+            models: [
+              { id: 'glm-5.2', name: 'GLM-5.2' },
+              {
+                id: 'glm-5.3',
+                name: 'GLM-5.3',
+                route: {
+                  baseUrl: 'https://open.bigmodel.cn/api/v1',
+                  wireProtocol: 'openai-responses',
+                },
+              },
+            ],
+          },
+        },
+      }),
+    ]);
+    setCustomProviderKeyReader(() => 'glm-key');
+    setSessionProvider('s-user', 'zhipu-plan');
+
+    expect(getSessionRoutingDescriptor('s-user', 'codex', 'glm-5.2')).toMatchObject({
+      upstream: 'https://open.bigmodel.cn/api/coding/paas/v4',
+      wireProtocol: 'openai-chat',
+      requestPath: '/chat/completions',
+    });
+    expect(getSessionRoutingDescriptor('s-user', 'codex', 'glm-5.3')).toEqual(
+      expect.objectContaining({
+        upstream: 'https://open.bigmodel.cn/api/v1',
+        wireProtocol: 'openai-responses',
+        authStrategy: 'api-key-header',
+      }),
+    );
+    expect(getSessionRoutingDescriptor('s-user', 'codex', 'glm-5.3')).not.toHaveProperty(
+      'requestPath',
+    );
+    expect(resolveSessionRouteDecision('s-user', 'codex', KEY, 'glm-5.3')).toEqual({
+      headerOverride: { authorization: 'Bearer glm-key' },
+      upstreamOverride: 'https://open.bigmodel.cn/api/v1',
+      headerDelete: CODEX_ACCOUNT_HEADER_DELETE,
+    });
+  });
+
+  it('routes a legacy custom xai row independently from the built-in SuperGrok source', () => {
+    setCustomProviders([
+      buildUserProvider({
+        id: 'xai',
+        name: 'Private xAI-compatible endpoint',
+        runtimes: {
+          codex: {
+            baseUrl: 'https://private-xai.example/v1',
+            models: [{ id: 'private-grok', name: 'Private Grok' }],
+          },
+        },
+      }),
+    ]);
+    setCustomProviderKeyReader((id, agent) =>
+      id === 'xai' && agent === 'codex' ? 'legacy-custom-key' : null,
+    );
+    setSessionProvider('s-user', 'custom:xai');
+
+    expect(getActiveCatalog().providers.some((provider) => provider.id === 'xai')).toBe(true);
+    expect(getActiveCatalog().providers.some((provider) => provider.id === 'custom:xai')).toBe(
+      true,
+    );
+    expect(resolveSessionRouteDecision('s-user', 'codex', KEY)).toEqual({
+      headerOverride: { authorization: 'Bearer legacy-custom-key' },
+      upstreamOverride: 'https://private-xai.example/v1',
+      headerDelete: CODEX_ACCOUNT_HEADER_DELETE,
+    });
+  });
+
+  it('跨供应商切换 pending 时不把目标模型发给旧供应商', async () => {
+    setCustomProviders([
+      buildUserProvider({
+        id: 'provider-a',
+        name: 'Provider A',
+        runtimes: {
+          'claude-code': {
+            baseUrl: 'https://provider-a.example/v1',
+            models: [{ id: 'deepseek-v4-flash', name: 'DeepSeek V4 Flash' }],
+          },
+        },
+      }),
+      buildUserProvider({
+        id: 'provider-b',
+        name: 'Provider B',
+        runtimes: {
+          'claude-code': {
+            baseUrl: 'https://provider-b.example/v1',
+            models: [{ id: 'anthropic/gpt-5.6-sol', name: 'GPT 5.6 Sol' }],
+          },
+        },
+      }),
+    ]);
+    const readKey = vi.fn(() => 'custom-key');
+    setCustomProviderKeyReader(readKey);
+    setSessionProvider('s-user', 'provider-a');
+    setPendingCredentialSwitchReader((sessionId) =>
+      sessionId === 's-user'
+        ? { model: 'anthropic/gpt-5.6-sol', providerId: 'provider-b' }
+        : undefined,
+    );
+
+    const decision = await Promise.resolve(
+      resolveSessionRouteDecision('s-user', 'claude-code', KEY, 'anthropic/gpt-5.6-sol'),
+    );
+    expect(decision).toEqual({ localHandler: expect.any(Function) });
+    expect(
+      resolveSessionRouteDecision('s-user', 'claude-code', KEY, 'anthropic/gpt-5.6-sol[1m]'),
+    ).toEqual({ localHandler: expect.any(Function) });
+    expect(readKey).not.toHaveBeenCalled();
+
+    const writeHead = vi.fn();
+    const end = vi.fn();
+    await decision!.localHandler!({
+      rawBody: Buffer.from('{}'),
+      parsedBody: { model: 'anthropic/gpt-5.6-sol' },
+      ctx: { reqId: 1, method: 'POST', url: '/v1/messages', headers: {} },
+      res: { writeHead, end } as never,
+    });
+    expect(writeHead).toHaveBeenCalledWith(503, {
+      'content-type': 'application/json; charset=utf-8',
+      'cache-control': 'no-store',
+      'retry-after': '1',
+    });
+    expect(JSON.parse(end.mock.calls[0][0])).toMatchObject({
+      error: {
+        type: 'provider_switch_pending',
+        code: 'provider_switch_pending',
+      },
+    });
+
+    setPendingCredentialSwitchReader(() => ({
+      model: 'deepseek-v4-flash',
+      providerId: 'provider-b',
+    }));
+    expect(resolveSessionRouteDecision('s-user', 'claude-code', KEY, 'deepseek-v4-flash')).toEqual({
+      localHandler: expect.any(Function),
+    });
+    expect(readKey).not.toHaveBeenCalled();
+  });
+
+  it('pending 只拦目标模型，保留旧 turn 与自定义供应商 universal 路由', () => {
+    setCustomProviders([
+      buildUserProvider({
+        id: 'provider-a',
+        name: 'Provider A',
+        runtimes: {
+          'claude-code': {
+            baseUrl: 'https://provider-a.example/v1',
+            models: [{ id: 'old-model', name: 'Old Model' }],
+          },
+        },
+      }),
+    ]);
+    setCustomProviderKeyReader(() => 'custom-key');
+    setSessionProvider('s-user', 'provider-a');
+    setPendingCredentialSwitchReader(() => ({ model: 'new-model', providerId: 'provider-b' }));
+
+    expect(resolveSessionRouteDecision('s-user', 'claude-code', KEY, 'old-model')).toMatchObject({
+      upstreamOverride: 'https://provider-a.example/v1',
+    });
+    setPendingCredentialSwitchReader(() => ({
+      model: 'old-model',
+      providerId: 'provider-b',
+      previousModel: 'old-model',
+    }));
+    expect(resolveSessionRouteDecision('s-user', 'claude-code', KEY, 'old-model')).toMatchObject({
+      upstreamOverride: 'https://provider-a.example/v1',
+    });
+    setPendingCredentialSwitchReader(() => undefined);
+    expect(
+      resolveSessionRouteDecision('s-user', 'claude-code', KEY, 'unknown-model'),
+    ).toMatchObject({
+      upstreamOverride: 'https://provider-a.example/v1',
+    });
+  });
+
+  it('implicit 旧路由也拦截 pending 目标，但允许同模型旧 turn 收尾', () => {
+    clearSessionProvider('s-user');
+    setPendingCredentialSwitchReader(() => ({
+      model: 'new-model',
+      providerId: 'provider-b',
+      previousModel: 'old-model',
+    }));
+    expect(resolveSessionRouteDecision('s-user', 'codex', KEY, 'new-model')).toEqual({
+      localHandler: expect.any(Function),
+    });
+
+    setPendingCredentialSwitchReader(() => ({
+      model: 'shared-model',
+      providerId: 'provider-b',
+      previousModel: 'shared-model',
+    }));
+    expect(resolveSessionRouteDecision('s-user', 'codex', KEY, 'shared-model')).toBeNull();
+  });
+
+  it('同供应商 pending 也拦目标模型，但无 model 的控制面请求不受影响', () => {
+    setCustomProviders([
+      buildUserProvider({
+        id: 'provider-a',
+        name: 'Provider A',
+        runtimes: {
+          'claude-code': {
+            baseUrl: 'https://provider-a.example/v1',
+            models: [{ id: 'new-model', name: 'New Model' }],
+          },
+        },
+      }),
+    ]);
+    setCustomProviderKeyReader(() => 'custom-key');
+    setSessionProvider('s-user', 'provider-a');
+    setPendingCredentialSwitchReader(() => ({ model: 'new-model', providerId: 'provider-a' }));
+
+    expect(resolveSessionRouteDecision('s-user', 'claude-code', KEY, 'new-model')).toEqual({
+      localHandler: expect.any(Function),
+    });
+    setPendingCredentialSwitchReader(() => ({ model: 'new-model', providerId: 'provider-b' }));
+    expect(resolveSessionRouteDecision('s-user', 'claude-code', KEY)).toMatchObject({
+      upstreamOverride: 'https://provider-a.example/v1',
+    });
+
+    clearSessionProvider('s-user');
+    setPendingCredentialSwitchReader(() => ({
+      model: 'codex/gpt-5.5',
+      providerId: null,
+      previousModel: 'gpt-5.5',
+    }));
+    expect(resolveSessionRouteDecision('s-user', 'codex', KEY, 'codex/gpt-5.5')).toEqual({
+      localHandler: expect.any(Function),
+    });
+    expect(resolveSessionRouteDecision('s-user', 'codex', KEY, 'gpt-5.5')).toBeNull();
+  });
   it('blocks new routes while endpoint and key switch as one logical mutation', async () => {
     setCustomProviders([
       buildUserProvider({
@@ -744,9 +1276,7 @@ describe('resolveSessionRouteDecision — 自定义供应商(resolve 时注入 k
     try {
       // Secret writes are synchronous and may become visible before the catalog refresh awaits.
       setCustomProviderKeyReader(() => 'new-key');
-      const decision = await Promise.resolve(
-        resolveSessionRouteDecision('s-user', 'codex', KEY),
-      );
+      const decision = await Promise.resolve(resolveSessionRouteDecision('s-user', 'codex', KEY));
       expect(decision).toEqual({ localHandler: expect.any(Function) });
       const writeHead = vi.fn();
       const end = vi.fn();
@@ -787,6 +1317,276 @@ describe('resolveSessionRouteDecision — 自定义供应商(resolve 时注入 k
       upstreamOverride: 'https://new.example/v1',
       headerOverride: { authorization: 'Bearer new-key' },
     });
+  });
+
+  it('keeps frozen image routes and credentials on one generation and closes async read races', async () => {
+    const providerId = 'image-route-generation';
+    const makeProvider = (baseUrl: string) =>
+      buildUserProvider({
+        id: providerId,
+        name: 'Image Route Generation',
+        runtimes: {
+          codex: {
+            baseUrl,
+            wireProtocol: 'openai-responses',
+            supportsImageGeneration: true,
+            models: [{ id: 'image-chat', name: 'Image Chat' }],
+          },
+        },
+      });
+    const oldProvider = makeProvider('https://old-images.example/v1');
+    setCustomProviders([oldProvider]);
+    setCustomProviderKeyReader(() => 'old-key');
+    const oldRevision = getProviderRouteCredentialRevision(providerId);
+    const oldRouting = oldProvider.routing.codex!;
+    await expect(
+      resolveFrozenProviderRouteDecision(providerId, oldRouting, oldRevision, 'codex', KEY),
+    ).resolves.toMatchObject({
+      decision: {
+        upstreamOverride: 'https://old-images.example/v1',
+        headerOverride: { authorization: 'Bearer old-key' },
+      },
+    });
+
+    const finishMutation = beginProviderRouteMutation(providerId);
+    setCustomProviders([makeProvider('https://new-images.example/v1')]);
+    setCustomProviderKeyReader(() => 'new-key');
+    await expect(
+      resolveFrozenProviderRouteDecision(providerId, oldRouting, oldRevision, 'codex', KEY),
+    ).resolves.toBeNull();
+    finishMutation.commit();
+    finishMutation();
+
+    await expect(
+      resolveFrozenProviderRouteDecision(providerId, oldRouting, oldRevision, 'codex', KEY),
+    ).resolves.toBeNull();
+    const newRevision = getProviderRouteCredentialRevision(providerId);
+    const newProvider = makeProvider('https://new-images.example/v1');
+    await expect(
+      resolveFrozenProviderRouteDecision(
+        providerId,
+        newProvider.routing.codex!,
+        newRevision,
+        'codex',
+        KEY,
+      ),
+    ).resolves.toMatchObject({
+      decision: {
+        upstreamOverride: 'https://new-images.example/v1',
+        headerOverride: { authorization: 'Bearer new-key' },
+      },
+    });
+
+    let finishTokenRead!: (token: string) => void;
+    setProviderOAuthTokenReader(
+      () =>
+        new Promise<string>((resolve) => {
+          finishTokenRead = resolve;
+        }),
+    );
+    const asyncRouting = {
+      ...newProvider.routing.codex!,
+      authStrategy: 'provider-oauth-header' as const,
+    };
+    const pending = resolveFrozenProviderRouteDecision(
+      providerId,
+      asyncRouting,
+      newRevision,
+      'codex',
+      KEY,
+    );
+    await vi.waitFor(() => expect(finishTokenRead).toBeTypeOf('function'));
+    const finishTokenMutation = beginProviderRouteMutation(providerId);
+    finishTokenMutation.commit();
+    finishTokenMutation();
+    finishTokenRead('new-oauth-token');
+    await expect(pending).resolves.toBeNull();
+
+    // Recreating the same stored id cannot revive an older Host snapshot (ABA).
+    setCustomProviders([]);
+    const finishDelete = beginProviderRouteMutation(providerId);
+    finishDelete.commit();
+    finishDelete();
+    setCustomProviders([oldProvider]);
+    const finishRecreate = beginProviderRouteMutation(providerId);
+    finishRecreate.commit();
+    finishRecreate();
+    expect(getProviderRouteCredentialRevision(providerId)).not.toBe(newRevision);
+    await expect(
+      resolveFrozenProviderRouteDecision(providerId, oldRouting, oldRevision, 'codex', KEY),
+    ).resolves.toBeNull();
+  });
+
+  it('reads custom headers at request time and rejects a stale frozen route after header mutation', async () => {
+    const providerId = 'image-header-generation';
+    const makeProvider = (header: string) =>
+      buildUserProvider({
+        id: providerId,
+        name: 'Image Header Generation',
+        runtimes: {
+          codex: {
+            baseUrl: 'https://header-images.example/v1',
+            wireProtocol: 'openai-responses',
+            supportsImageGeneration: true,
+            headers: { Authorization: header, 'x-vendor-token': header },
+            models: [{ id: 'image-chat', name: 'Image Chat' }],
+          },
+        },
+      });
+    const oldProvider = makeProvider('Bearer old-header-secret');
+    setCustomProviders([oldProvider]);
+    setCustomProviderKeyReader(() => null);
+    setCustomProviderHeaderReader(() => ({
+      Authorization: 'Bearer old-header-secret',
+      'x-vendor-token': 'old-header-secret',
+    }));
+    const oldRevision = getProviderRouteCredentialRevision(providerId);
+    const frozenRouting = { ...oldProvider.routing.codex! };
+    delete frozenRouting.headerOverride;
+
+    const oldDecision = await resolveFrozenProviderRouteDecision(
+      providerId,
+      frozenRouting,
+      oldRevision,
+      'codex',
+      KEY,
+    );
+    expect(oldDecision).toMatchObject({
+      decision: {
+        headerOverride: {
+          authorization: 'Bearer old-header-secret',
+          'x-vendor-token': 'old-header-secret',
+        },
+      },
+    });
+    expect(oldDecision?.routing).not.toHaveProperty('headerOverride');
+    expect(oldDecision?.decision?.dispatchGenerationValid?.()).toBe(true);
+
+    const finishMutation = beginProviderRouteMutation(providerId);
+    expect(oldDecision?.decision?.dispatchGenerationValid?.()).toBe(false);
+    setCustomProviders([makeProvider('Bearer new-header-secret')]);
+    setCustomProviderHeaderReader(() => ({
+      Authorization: 'Bearer new-header-secret',
+      'x-vendor-token': 'new-header-secret',
+    }));
+    await expect(
+      resolveFrozenProviderRouteDecision(
+        providerId,
+        frozenRouting,
+        oldRevision,
+        'codex',
+        KEY,
+      ),
+    ).resolves.toBeNull();
+    finishMutation.commit();
+    finishMutation();
+
+    await expect(
+      resolveFrozenProviderRouteDecision(
+        providerId,
+        frozenRouting,
+        oldRevision,
+        'codex',
+        KEY,
+      ),
+    ).resolves.toBeNull();
+    const newProvider = makeProvider('Bearer new-header-secret');
+    const newFrozenRouting = { ...newProvider.routing.codex! };
+    delete newFrozenRouting.headerOverride;
+    const newDecision = await resolveFrozenProviderRouteDecision(
+      providerId,
+      newFrozenRouting,
+      getProviderRouteCredentialRevision(providerId),
+      'codex',
+      KEY,
+    );
+    expect(newDecision).toMatchObject({
+      decision: {
+        headerOverride: {
+          authorization: 'Bearer new-header-secret',
+          'x-vendor-token': 'new-header-secret',
+        },
+      },
+    });
+    expect(newDecision?.routing).not.toHaveProperty('headerOverride');
+  });
+
+  // Unit regression: Codex API-key requests include originator, which BYOK gateways use
+  // to admit Cindy, but resumed threads can carry another client's originator.
+  // A generated BYOK/personal route is the minimal input; buildRouteDecision must
+  // force Cindy's identity only for BYOK forwarding while still stripping account metadata.
+  it.each(['organization', 'personal'] as const)(
+    'forces Cindy Codex originator only for BYOK: %s',
+    (source) => {
+      const providerId = 'originator-test';
+      const endpoint = 'https://gateway.example.invalid/v1';
+      const provider = source === 'organization'
+        ? buildByokProvider({
+            provider: {
+              id: providerId, name: 'Enterprise', connectionRevision: 1,
+              models: [{
+                id: 'custom-model', agents: ['codex'], currency: 'CNY',
+                perAgent: { codex: { wireProtocol: 'openai-responses' } },
+              }],
+            },
+            credential: {
+              providerId, connectionRevision: 1, status: 'ready', endpoint,
+              apiKey: KEY,
+            },
+          })
+        : buildUserProvider({
+            id: providerId, name: 'Personal', auth: { method: 'apiKey' },
+            runtimes: { codex: {
+              baseUrl: endpoint, wireProtocol: 'openai-responses',
+              models: [{ id: 'custom-model', name: 'Custom Model' }],
+            } },
+          });
+      const routing = provider.routing.codex!;
+      const decision = buildRouteDecision(routing, null, 'codex', KEY)!;
+      expect(decision.headerOverride?.originator).toBe(source === 'organization' ? 'cindy' : undefined);
+      expect(decision.headerDelete).toEqual(expect.arrayContaining([
+        'chatgpt-account-id', 'openai-beta', 'session_id',
+      ]));
+      expect(decision.headerDelete?.includes('originator')).toBe(source === 'personal');
+    },
+  );
+
+  it('does not inject stale personal headers into organization-managed routes', async () => {
+    const providerId = 'byok-header-isolation';
+    const routing: RoutingDescriptor = {
+      upstream: 'https://gateway.example.invalid/v1',
+      authStrategy: 'api-key-header',
+      wireProtocol: 'openai-responses',
+    };
+    setManagedProviders([{
+      id: providerId, name: 'Enterprise', source: 'organization',
+      auth: { method: 'managed' }, access: { kind: 'managed' }, agents: ['codex'],
+      models: { codex: [] }, routing: { codex: routing },
+    }]);
+    setCustomProviderKeyReader(() => 'managed-member-key');
+    setCustomProviderHeaderReader(() => ({
+      Authorization: 'Bearer stale-personal-key',
+      'x-personal-tenant': 'must-not-leak',
+    }));
+
+    try {
+      const resolved = await resolveFrozenProviderRouteDecision(
+        providerId,
+        routing,
+        getProviderRouteCredentialRevision(providerId),
+        'codex',
+        KEY,
+      );
+      expect(resolved?.decision).toMatchObject({
+        upstreamOverride: 'https://gateway.example.invalid/v1',
+        headerOverride: { authorization: 'Bearer managed-member-key' },
+      });
+      expect(resolved?.decision?.headerOverride).not.toHaveProperty('x-personal-tenant');
+    } finally {
+      setManagedProviders([]);
+      setCustomProviderKeyReader(() => null);
+      setCustomProviderHeaderReader(() => null);
+    }
   });
 
   it('精确请求路径只覆盖带 model 的推理请求，不改写无 body 的控制面请求', () => {
@@ -865,8 +1665,513 @@ describe('resolveSessionRouteDecision — 自定义供应商(resolve 时注入 k
     });
   });
 
+  it('catalog refresh 形态:旧 Responses 行迁完后 Codex 选 Chat 桥', () => {
+    const migrated = migrateManagedOllamaProvider({
+      id: 'cindy-local-ollama',
+      name: 'Ollama',
+      auth: { method: 'none' },
+      runtimes: {
+        pi: {
+          baseUrl: 'http://127.0.0.1:11434/v1',
+          wireProtocol: 'openai-chat',
+          models: [{ id: 'qwen3.8:27b-mxfp8', name: 'Qwen3.8' }],
+        },
+        'claude-code': {
+          baseUrl: 'http://127.0.0.1:11434',
+          wireProtocol: 'anthropic-messages',
+          models: [{ id: 'qwen3.8:27b-mxfp8', name: 'Qwen3.8' }],
+        },
+        codex: {
+          baseUrl: 'http://127.0.0.1:11434/v1',
+          wireProtocol: 'openai-responses',
+          models: [{ id: 'qwen3.8:27b-mxfp8', name: 'Qwen3.8' }],
+        },
+      },
+    });
+    expect(migrated).not.toBeNull();
+    setCustomProviders([buildUserProvider(migrated!)]);
+    setSessionProvider('s-user', 'cindy-local-ollama');
+    const routing = getSessionRoutingDescriptor('s-user', 'codex', 'qwen3.8:27b-mxfp8');
+    expect(routing?.wireProtocol).toBe('openai-chat');
+    expect(routing?.upstream).toBe('http://127.0.0.1:11434/v1');
+  });
+
+  it('managed Ollama: Codex 打本机 11434 并剥掉订阅凭证', () => {
+    setCustomProviders([
+      buildUserProvider({
+        id: 'cindy-local-ollama',
+        name: 'Ollama',
+        auth: { method: 'none' },
+        runtimes: {
+          pi: {
+            baseUrl: 'http://127.0.0.1:11434/v1',
+            wireProtocol: 'openai-chat',
+            models: [{ id: 'qwen3.8:27b-mxfp8', name: 'Qwen3.8' }],
+          },
+          'claude-code': {
+            baseUrl: 'http://127.0.0.1:11434',
+            wireProtocol: 'anthropic-messages',
+            models: [{ id: 'qwen3.8:27b-mxfp8', name: 'Qwen3.8' }],
+          },
+          codex: {
+            baseUrl: 'http://127.0.0.1:11434/v1',
+            wireProtocol: 'openai-chat',
+            models: [{ id: 'qwen3.8:27b-mxfp8', name: 'Qwen3.8' }],
+          },
+        },
+      }),
+    ]);
+    setSessionProvider('s-user', 'cindy-local-ollama');
+
+    expect(isUserProviderSession('s-user')).toBe(true);
+    expect(
+      getSessionRoutingDescriptor('s-user', 'codex', 'qwen3.8:27b-mxfp8')?.wireProtocol,
+    ).toBe('openai-chat');
+    expect(resolveSessionRouteDecision('s-user', 'codex', KEY, 'qwen3.8:27b-mxfp8')).toEqual({
+      upstreamOverride: 'http://127.0.0.1:11434/v1',
+      headerDelete: ['authorization', 'x-api-key', ...CODEX_ACCOUNT_HEADER_DELETE],
+    });
+  });
+
   it('内置供应商 isUserProviderSession=false', () => {
     setSessionProvider('s-user', 'xd');
     expect(isUserProviderSession('s-user')).toBe(false);
   });
+});
+
+describe('resolveVisionBackendRoute（视觉桥复用统一路由器）', () => {
+  it('xd gateway-key + 动态端点：返回网关端点 + Bearer 网关 key', () => {
+    setVisionGatewayKeyReader(() => KEY);
+    // xd 的 codex 面模型由服务端目录决定；这里用真实 BUNDLED_CATALOG 里 xd 的 codex 模型。
+    const xd = BUNDLED_CATALOG.providers.find((p) => p.id === 'xd')!;
+    const codexModel = xd.models.codex?.[0];
+    if (!codexModel) {
+      // 目录可能为空（运行时填充），回退到 codex/ 前缀显式模型 id。
+      const routed = resolveVisionBackendRoute(
+        'xd',
+        'codex/gpt-5.6-luna',
+        'https://tenant.gateway.xd',
+      );
+      expect(routed).not.toBeNull();
+      if (routed) {
+        // codex 面网关上游含 /v1（对齐 buildCodexGatewayBaseUrl：拼 /responses 得 /v1/responses）。
+        expect(routed.upstream).toBe('https://tenant.gateway.xd/v1');
+        expect(routed.authorization).toBe(`Bearer ${KEY}`);
+      }
+      return;
+    }
+    const routed = resolveVisionBackendRoute('xd', codexModel.id, 'https://tenant.gateway.xd');
+    expect(routed).not.toBeNull();
+    if (routed) {
+      expect(routed.upstream).toBe('https://tenant.gateway.xd/v1');
+      expect(routed.authorization).toBe(`Bearer ${KEY}`);
+      expect(routed.wireProtocol).toBeDefined();
+    }
+  });
+
+  it('xd gateway-key + claude-code 面（Anthropic Messages）：headers 补 x-api-key', () => {
+    setVisionGatewayKeyReader(() => KEY);
+    // claude-code 面视觉路由走 Anthropic Messages，代理层 buildRouteDecision 对 XD
+    // 路由同时发 x-api-key + authorization——直连视觉请求必须镜像，否则 /v1/messages
+    // 按 x-api-key 鉴权会 401（codex P1）。
+    const xd = BUNDLED_CATALOG.providers.find((p) => p.id === 'xd')!;
+    const ccModel = xd.models['claude-code']?.[0];
+    if (!ccModel) {
+      const routed = resolveVisionBackendRoute(
+        'xd',
+        'claude-3-7-sonnet',
+        'https://tenant.gateway.xd',
+      );
+      expect(routed).not.toBeNull();
+      if (routed) {
+        expect(routed.authorization).toBe(`Bearer ${KEY}`);
+        expect(routed.headers['x-api-key']).toBe(KEY);
+      }
+      return;
+    }
+    const routed = resolveVisionBackendRoute('xd', ccModel.id, 'https://tenant.gateway.xd');
+    expect(routed).not.toBeNull();
+    if (routed) {
+      expect(routed.authorization).toBe(`Bearer ${KEY}`);
+      expect(routed.headers['x-api-key']).toBe(KEY);
+    }
+  });
+
+  it('api-key provider：返回 routing.upstream + custom key，缺 key 返回 null', () => {
+    setCustomProviders([
+      buildUserProvider({
+        id: 'openrouter',
+        name: 'OpenRouter',
+        runtimes: {
+          codex: {
+            baseUrl: 'https://openrouter.ai/api/v1',
+            models: [{ id: 'qwen/qwen-vl-max', name: 'Qwen VL Max' }],
+          },
+        },
+      }),
+    ]);
+    setCustomProviderKeyReader((id, agent) =>
+      id === 'openrouter' && agent === 'codex' ? 'sk-or-123' : null,
+    );
+    const routed = resolveVisionBackendRoute('openrouter', 'qwen/qwen-vl-max', null);
+    expect(routed).not.toBeNull();
+    if (routed) {
+      expect(routed.authorization).toBe('Bearer sk-or-123');
+      expect(routed.upstream).toBe('https://openrouter.ai/api/v1');
+      expect(routed.wireProtocol).toBe('openai-responses');
+    }
+    // 缺 key → null（后端不可用）。
+    setCustomProviderKeyReader(() => null);
+    expect(resolveVisionBackendRoute('openrouter', 'qwen/qwen-vl-max', null)).toBeNull();
+  });
+
+  it('目录预设身份随路由返回：改地址后视觉直连仍能识别 OpenCode Go', () => {
+    setCustomProviders([
+      buildUserProvider({
+        id: 'opencode-go-mirror',
+        name: 'OpenCode Go (mirror)',
+        runtimes: {
+          codex: {
+            baseUrl: 'https://mirror.example/v1',
+            wireProtocol: 'openai-chat',
+            catalogPresetId: 'opencode-go',
+            models: [{ id: 'deepseek-v4.1-flash', name: 'DeepSeek V4.1 Flash' }],
+          },
+        },
+      }),
+    ]);
+    setCustomProviderKeyReader((id) => (id === 'opencode-go-mirror' ? 'sk-go' : null));
+    try {
+      const routed = resolveVisionBackendRoute('opencode-go-mirror', 'deepseek-v4.1-flash', null);
+      expect(routed).not.toBeNull();
+      expect(routed?.catalogPresetId).toBe('opencode-go');
+      expect(routed?.upstream).toBe('https://mirror.example/v1');
+    } finally {
+      setCustomProviders([]);
+      setCustomProviderKeyReader(() => null);
+    }
+  });
+
+  it('gateway-key 无动态端点 → null（网关不可用）', () => {
+    setVisionGatewayKeyReader(() => KEY);
+    expect(resolveVisionBackendRoute('xd', 'codex/gpt-5.6-luna', null)).toBeNull();
+  });
+
+  it('未知 provider → null', () => {
+    expect(resolveVisionBackendRoute('nope', 'whatever', null)).toBeNull();
+  });
+
+  it('Pi 视觉路由缺显式协议时返回 null，不猜 Chat', () => {
+    const custom = {
+      id: 'pi-missing-wire',
+      name: 'Pi Missing Wire',
+      source: 'user',
+      agents: ['pi'],
+      auth: { method: 'apiKey' },
+      routing: {
+        pi: {
+          upstream: 'https://pi.example/v1',
+          authStrategy: 'api-key-header',
+        },
+      },
+      models: { pi: [{ id: 'vision-model', name: 'Vision Model' }] },
+    } as never;
+    setCustomProviders([custom]);
+    setCustomProviderKeyReader(() => 'sk-pi');
+
+    expect(resolveVisionBackendRoute('pi-missing-wire', 'vision-model', null)).toBeNull();
+  });
+
+  it('XD 仅 Pi 的视觉模型保留服务端协议并可路由', () => {
+    setXdGatewayModels([
+      {
+        id: 'pi-only-vision',
+        agents: ['pi'],
+        perAgent: { pi: { wireProtocol: 'openai-responses' } },
+        modalities: { input: ['text', 'image'], output: ['text'] },
+      },
+    ]);
+    setVisionGatewayKeyReader(() => KEY);
+
+    const routed = resolveVisionBackendRoute(
+      'xd',
+      'pi-only-vision',
+      'https://tenant.gateway.xd/',
+    );
+    expect(routed).toMatchObject({
+      upstream: 'https://tenant.gateway.xd/v1',
+      requestPath: '/responses',
+      wireProtocol: 'openai-responses',
+      model: 'pi-only-vision',
+      authorization: `Bearer ${KEY}`,
+    });
+    expect(`${routed?.upstream}${routed?.requestPath}`).toBe(
+      'https://tenant.gateway.xd/v1/responses',
+    );
+  });
+
+  it('XD Pi Messages 视觉模型仍使用裸网关 base 拼 /v1/messages', () => {
+    setXdGatewayModels([
+      {
+        id: 'pi-only-messages-vision',
+        agents: ['pi'],
+        perAgent: { pi: { wireProtocol: 'anthropic-messages' } },
+        modalities: { input: ['text', 'image'], output: ['text'] },
+      },
+    ]);
+    setVisionGatewayKeyReader(() => KEY);
+
+    const routed = resolveVisionBackendRoute(
+      'xd',
+      'pi-only-messages-vision',
+      'https://tenant.gateway.xd/',
+    );
+    expect(routed).toMatchObject({
+      upstream: 'https://tenant.gateway.xd',
+      requestPath: '/v1/messages',
+      wireProtocol: 'anthropic-messages',
+      model: 'pi-only-messages-vision',
+      authorization: `Bearer ${KEY}`,
+    });
+    expect(`${routed?.upstream}${routed?.requestPath}`).toBe(
+      'https://tenant.gateway.xd/v1/messages',
+    );
+  });
+
+  it('modelIdRewrite.stripPrefix：视觉后端返回已剥前缀的 model', () => {
+    const custom = {
+      id: 'rewrite-provider',
+      name: 'Rewrite Provider',
+      source: 'user',
+      agents: ['codex'],
+      auth: { method: 'apiKey' },
+      routing: {
+        codex: {
+          wireProtocol: 'openai-chat',
+          upstream: 'https://rewrite.example/v1',
+          authStrategy: 'api-key-header',
+          modelIdRewrite: { stripPrefix: 'custom/' },
+        },
+      },
+      models: { codex: [{ id: 'custom/vision-model', name: 'Vision Model' }] },
+    } as never;
+    setCustomProviders([custom]);
+    setCustomProviderKeyReader(() => 'sk-rewrite');
+    const routed = resolveVisionBackendRoute('rewrite-provider', 'custom/vision-model', null);
+    expect(routed).not.toBeNull();
+    if (routed) {
+      expect(routed.model).toBe('vision-model');
+      expect(routed.authorization).toBe('Bearer sk-rewrite');
+      expect(routed.upstream).toBe('https://rewrite.example/v1');
+      expect(routed.wireProtocol).toBe('openai-chat');
+      // codex 面（OpenAI 式）按 Bearer 鉴权，不补 x-api-key。
+      expect(routed.headers['x-api-key']).toBeUndefined();
+    }
+  });
+
+  it('api-key-header + claude-code 面：视觉请求补 x-api-key（Anthropic 风格后端按 x-api-key 鉴权）', () => {
+    const custom = {
+      id: 'anthropic-style-provider',
+      name: 'Anthropic Style',
+      source: 'user',
+      agents: ['claude-code'],
+      auth: { method: 'apiKey' },
+      routing: {
+        'claude-code': {
+          wireProtocol: 'anthropic-messages',
+          upstream: 'https://anthropic.example',
+          authStrategy: 'api-key-header',
+          headerOverride: { 'anthropic-version': '2023-06-01' },
+        },
+      },
+      models: { 'claude-code': [{ id: 'claude-bridge', name: 'Bridge' }] },
+    } as never;
+    setCustomProviders([custom]);
+    setCustomProviderKeyReader(() => 'sk-anthropic');
+    const routed = resolveVisionBackendRoute('anthropic-style-provider', 'claude-bridge', null);
+    expect(routed).not.toBeNull();
+    if (routed) {
+      expect(routed.authorization).toBe('Bearer sk-anthropic');
+      // Anthropic Messages 端点按 x-api-key 鉴权：只带 Bearer 会被拒，必须补 x-api-key。
+      expect(routed.headers['x-api-key']).toBe('sk-anthropic');
+      // 非凭证路由头仍保留（anthropic-version 是请求必需头，不是客户端凭证）。
+      expect(routed.headers['anthropic-version']).toBe('2023-06-01');
+    }
+  });
+
+  it('api-key-header 无 safeStorage key 但 headerOverride 有 legacy 凭证：视觉路由保留 legacy 头可用', () => {
+    // 升级前的自定义供应商把凭证存在 headerOverride（authorization/x-api-key），safeStorage
+    // 无 key。普通路由保留 legacy 头继续工作，视觉路由也应如此——否则该后端「不可用」
+    // 但普通请求明明成功（codex P1）。
+    const custom = {
+      id: 'legacy-provider',
+      name: 'Legacy Provider',
+      source: 'user',
+      agents: ['claude-code'],
+      auth: { method: 'apiKey' },
+      routing: {
+        'claude-code': {
+          wireProtocol: 'anthropic-messages',
+          upstream: 'https://legacy.example',
+          authStrategy: 'api-key-header',
+          headerOverride: { 'x-api-key': 'legacy-key', authorization: 'Bearer legacy-key' },
+        },
+      },
+      models: { 'claude-code': [{ id: 'legacy-model', name: 'Legacy' }] },
+    } as never;
+    setCustomProviders([custom]);
+    setCustomProviderKeyReader(() => null); // safeStorage 无 key
+    const routed = resolveVisionBackendRoute('legacy-provider', 'legacy-model', null);
+    expect(routed).not.toBeNull();
+    if (routed) {
+      expect(routed.authorization).toBeNull(); // legacy 凭证经 headers 下发，不单设 Bearer
+      expect(routed.headers['x-api-key']).toBe('legacy-key');
+      expect(routed.headers['authorization']).toBe('Bearer legacy-key');
+    }
+  });
+
+  it('codex 面 api-key-header 无 safeStorage key 但有 legacy Authorization：视觉路由保留 legacy 头', () => {
+    // 升级的 Codex/OpenAI 兼容自定义供应商：凭证只在 headerOverride（legacy），普通路由
+    // 保留 legacy 头正常工作；视觉路由也必须如此，否则普通请求正常但视觉后端 401（codex P1）。
+    const custom = {
+      id: 'codex-legacy-provider',
+      name: 'Codex Legacy',
+      source: 'user',
+      agents: ['codex'],
+      auth: { method: 'apiKey' },
+      routing: {
+        codex: {
+          wireProtocol: 'openai-responses',
+          upstream: 'https://codex-legacy.example/v1',
+          authStrategy: 'api-key-header',
+          headerOverride: { authorization: 'Bearer legacy-codex-key' },
+        },
+      },
+      models: { codex: [{ id: 'codex-legacy-model', name: 'Codex Legacy' }] },
+    } as never;
+    setCustomProviders([custom]);
+    setCustomProviderKeyReader(() => null); // safeStorage 无 key
+    const routed = resolveVisionBackendRoute('codex-legacy-provider', 'codex-legacy-model', null);
+    expect(routed).not.toBeNull();
+    if (routed) {
+      expect(routed.authorization).toBeNull(); // legacy 凭证经 headers 下发
+      expect(routed.headers['authorization']).toBe('Bearer legacy-codex-key');
+    }
+  });
+
+  it('api-key-header 无 safeStorage key 且 headerOverride 无 legacy 凭证：视觉路由 null', () => {
+    const custom = {
+      id: 'nokey-provider',
+      name: 'No Key Provider',
+      source: 'user',
+      agents: ['claude-code'],
+      auth: { method: 'apiKey' },
+      routing: {
+        'claude-code': {
+          wireProtocol: 'anthropic-messages',
+          upstream: 'https://nokey.example',
+          authStrategy: 'api-key-header',
+        },
+      },
+      models: { 'claude-code': [{ id: 'nokey-model', name: 'No Key' }] },
+    } as never;
+    setCustomProviders([custom]);
+    setCustomProviderKeyReader(() => null);
+    expect(resolveVisionBackendRoute('nokey-provider', 'nokey-model', null)).toBeNull();
+  });
+});
+
+// Tier: integration. Persisted transport must survive catalog refresh + process
+// restart, while retirement blocks dispatch. No credentials enter the snapshot.
+describe('task interface snapshot', () => {
+  it('pins across restart and refuses retired profiles without falling back', () => {
+    const directory = mkdtempSync(path.join(tmpdir(), 'cindy-interface-'));
+    const registry = structuredClone(BUNDLED_CATALOG.modelRegistry!);
+    const config = { id: 'snapshot-kimi', name: 'Kimi', runtimes: { codex: {
+      catalogPresetId: 'moonshot-kimi-code', baseUrl: 'https://api.kimi.com/coding/v1',
+      wireProtocol: 'openai-chat' as const, models: [{ id: 'k3.1-pro', name: 'Kimi' }],
+    } } };
+    try {
+      configureSessionModelInterfaceStorage(() => directory);
+      const initial = buildUserProvider(config, { modelRegistry: registry }).models.codex![0];
+      const first = sessionModelInterface('task', config.id, 'codex', initial, registry)!;
+      expect(first.api).toBe('openai-responses');
+      expect(first.defaults).toMatchObject({ contextWindow: 262144, maxOutputTokens: 262144 });
+      registry.models.flatMap(e => e.routes).find(r => r.providerId === 'moonshot-kimi-code' && r.modelId === 'k3.1-pro')!.preferredInterfaces!.codex = ['moonshot-kimi-code-openai-completions'];
+      const next = buildUserProvider(config, { modelRegistry: registry }).models.codex![0];
+      configureSessionModelInterfaceStorage(() => directory); // real disk restore
+      expect(sessionModelInterface('task', config.id, 'codex', next, registry)).toEqual(first);
+      expect(sessionModelInterface('new-task', config.id, 'codex', next, registry)?.api).toBe('openai-completions');
+      // Explicit image edits override pinned metadata, never the saved interface.
+      // Reset removes the override rather than permanently rewriting the snapshot.
+      for (const value of [false, true]) {
+        setLocalCatalogOverrides({ ...EMPTY_MODEL_CATALOG_OVERRIDES, patches: {
+          'snapshot-kimi:k3.1-pro': { perAgent: { codex: { supportsImageInput: value } } },
+        } });
+        configureSessionModelInterfaceStorage(() => directory);
+        const edited = sessionModelInterface('task', config.id, 'codex', next, registry)!;
+        expect(edited.defaults.supportsImageInput).toBe(value);
+        expect(edited.route).toEqual(first.route);
+        expect(edited.api).toBe(first.api);
+      }
+      setLocalCatalogOverrides(EMPTY_MODEL_CATALOG_OVERRIDES);
+      expect(sessionModelInterface('task', config.id, 'codex', next, registry)).toEqual(first);
+      registry.interfaceProfiles!.find(p => p.id === first.profileId)!.retired = true;
+      expect(() => sessionModelInterface('task', config.id, 'codex', next, registry)).toThrow('MODEL_INTERFACE_RETIRED');
+    } finally {
+      setLocalCatalogOverrides(EMPTY_MODEL_CATALOG_OVERRIDES);
+      configureSessionModelInterfaceStorage(() => null);
+      rmSync(directory, { recursive: true, force: true });
+    }
+  });
+});
+
+// Tier: integration. Fixed production loader + resolver + proxy, real HTTP on
+// both sides. Only the served registry changes between calls; no client rebuild.
+it('dispatches a newly delivered model through all three existing HTTP interfaces', async () => {
+  let delivered: unknown;
+  const received: Array<{ url: string; body: Record<string, unknown>; auth?: string }> = [];
+  const upstream = createServer(async (req, res) => {
+    if (req.url?.startsWith('/api/model-catalog/catalog')) {
+      res.setHeader('content-type', 'application/json'); res.end(JSON.stringify(delivered)); return;
+    }
+    const chunks: Buffer[] = [];
+    for await (const chunk of req) chunks.push(Buffer.from(chunk));
+    received.push({ url: req.url!, body: JSON.parse(Buffer.concat(chunks).toString()), auth: req.headers.authorization });
+    res.setHeader('content-type', 'application/json'); res.end(JSON.stringify({ ok: true }));
+  });
+  await new Promise<void>(resolve => upstream.listen(0, '127.0.0.1', resolve));
+  const port = (upstream.address() as { port: number }).port;
+  const base = `http://127.0.0.1:${port}`;
+  let decision: ReturnType<typeof buildRouteDecision>;
+  const proxy = await createAnthropicCompatProxy({ upstream: base, routingTransform: () => decision });
+  try {
+    for (const [index, api] of ['anthropic-messages', 'openai-responses', 'openai-completions'].entries()) {
+      const wire = api === 'openai-completions' ? 'openai-chat' : api;
+      const requestPath = ['/v1/messages', '/responses', '/chat/completions'][index];
+      const modelId = `future-model-${index}`;
+      const registry: ModelRegistry = { schemaVersion: 6, updatedAt: `2099-01-0${index + 1}T00:00:00.000Z`,
+        interfaceProfiles: ['anthropic-messages', 'openai-responses', 'openai-completions'].map((api, i) => ({ id: `fixture-api-${i}`, providerId: 'fixture', api, baseUrl: base, inputBaseUrls: [base], requestPath: ['/v1/messages', '/responses', '/chat/completions'][i] })),
+        models: [{ id: modelId, name: 'Future', routes: [{ providerId: 'fixture', modelId, agents: ['codex'],
+          defaults: { contextWindow: 32768, maxOutputTokens: 1024 }, interfaces: [{ profileId: `fixture-api-${index}`, wireModelId: `wire-${index}` }], preferredInterfaces: { codex: [`fixture-api-${index}`] } }] }],
+      };
+      delivered = { version: '2', providers: BUNDLED_CATALOG.providers, modelRegistry: registry };
+      const loaded = await loadCatalogWithSource({ baseUrl: base }, { fetchText: async url => (await fetch(url)).text() });
+      expect(loaded.source).toBe('remote');
+      const provider = buildUserProvider({ id: 'http-account', name: 'HTTP', runtimes: { codex: {
+        catalogPresetId: 'fixture', baseUrl: base, wireProtocol: 'openai-chat', models: [{ id: modelId, name: 'Future' }],
+      } } }, { modelRegistry: loaded.catalog.modelRegistry });
+      const routing = providerRoutingForModel(provider, 'codex', modelId)!;
+      expect(routing.wireProtocol).toBe(wire);
+      decision = buildRouteDecision(routing, null, 'codex', 'fixture-key');
+      decision = { ...decision!, pathOverride: routing.requestPath };
+      const response = await fetch(`${proxy.url}/responses`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ model: modelId, stream: false }) });
+      expect(await response.json()).toEqual({ ok: true });
+      expect(received.at(-1)).toMatchObject({ url: requestPath, body: { model: `wire-${index}` }, auth: 'Bearer fixture-key' });
+    }
+  } finally {
+    await proxy.dispose();
+    upstream.closeAllConnections();
+    await new Promise<void>((resolve, reject) => upstream.close(error => error ? reject(error) : resolve()));
+  }
 });

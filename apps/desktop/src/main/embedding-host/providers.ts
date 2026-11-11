@@ -41,6 +41,7 @@ export interface EmbeddingProvider {
 }
 
 const providers = new Map<string, EmbeddingProvider>();
+const suspendedSources = new Set<string>();
 
 export function registerProvider(provider: EmbeddingProvider): void {
   providers.set(provider.source, provider);
@@ -54,7 +55,22 @@ export function listProviderSources(): string[] {
   return Array.from(providers.keys());
 }
 
+/** Pause queued work for a consumer source without unregistering its provider. */
+export function setProviderSuspended(source: string, suspended: boolean): void {
+  if (suspended) suspendedSources.add(source);
+  else suspendedSources.delete(source);
+}
+
+export function isProviderSuspended(source: string): boolean {
+  return suspendedSources.has(source);
+}
+
+export function listSuspendedProviderSources(): string[] {
+  return Array.from(suspendedSources);
+}
+
 /** dev / 测试用 — 清空注册表。 */
 export function clearProviders(): void {
   providers.clear();
+  suspendedSources.clear();
 }
