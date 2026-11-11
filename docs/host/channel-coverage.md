@@ -1,27 +1,38 @@
 # Host 通道覆盖清单（脚本生成）
 
 > 由 `node scripts/host-channel-coverage.mjs` 生成，不要手工修改；行号只在 `--json` 输出里。
-> 生成时的源码提交：`9ca71eb6fe`。归属规则见下方「归属规则」，正本在脚本的 `OWNERSHIP_RULES`。
+> 生成时的源码提交：`8599e2d25d`。归属规则见下方「归属规则」，正本在脚本的 `OWNERSHIP_RULES`。
 
 统计对象是桌面主进程（`apps/desktop/src/main`，不含测试）里所有 `ipcMain.handle/on`
 及其包装函数注册的通道；同名通道按 invoke / event 各计一次。
 
+## 总口径
+
+**真正要 Host 做的 = A + C-后台 + C-两段式 = 918 + 32 + 39 = 989**；巡检实际调用到 **133** 个（722 次，其中 A 131）。
+同步通道（S）与回执通道（R）已单列，不在 A 里；C-窗口本地与 C-专项设计不计入。
+
 | 分类 | 含义 | 通道数 |
 |---|---|---:|
-| contract | 已在 Host 通道合同里，窗口做客户端时转发给 Host | 61 |
-| client | 客户端模式自己的通道（连接状态、重连） | 2 |
-| **A** | 必须由后台处理：读写后台持有的数据或运行状态 | 930 |
-| **B** | 永久留在窗口：只能在 Electron／图形界面里做 | 361 |
-| **W** | 窗口本地设置（含全部同步通道）：窗口直接读写同一份 profile，不经 Host | 14 |
-| **C** | 待定，见各条原因 | 86 |
+| contract | 已在 Host 通道合同里，窗口做客户端时转发给 Host | 61（巡检调用 30） |
+| client | 客户端模式自己的通道（连接状态、重连） | 2（巡检调用 1） |
+| **A** | 必须由后台处理：读写后台持有的数据或运行状态 | 918（巡检调用 131） |
+| **B** | 永久留在窗口：只能在 Electron／图形界面里做 | 361（巡检调用 73） |
+| **W** | 窗口本地设置：窗口直接读写同一份 profile，不经 Host | 6（巡检调用 1） |
+| **S** | 同步通道（给 `event.returnValue` 赋值）：不能转发给 Host | 14（巡检调用 11） |
+| 　S·本地 | 同步·界面设置（窗口本地读 profile） | 7（巡检调用 7） |
+| 　S·镜像 | 同步·数据归 Host（需窗口缓存镜像） | 7（巡检调用 4） |
+| **R** | 回执通道：主进程向界面要数据，界面回执；先不排期 | 6（巡检调用 2） |
+| **C** | 跨两边，按处理方式分四种 | 86（巡检调用 4） |
+| 　C-后台 | | 32（巡检调用 2） |
+| 　C-两段式（窗口做界面动作，数据调 Host） | | 39（巡检调用 0） |
+| 　C-窗口本地 | | 11（巡检调用 2） |
+| 　C-专项设计（安全边界） | | 4（巡检调用 0） |
 | 合计 | | 1454 |
 
-**三个数**（窗口类 = B + W）：
-- 窗口类且客户端模式下已注册：**361**
-- 窗口类但客户端模式下未注册（今天被拒或无人监听）：**12**；另有 2 个无法从快照判断（见下文）
-- 真正要 Host 接的（A）：**930**；C 的 86 个定归属后再计入
+**窗口类**（B + W + S·本地 + C-窗口本地）在客户端模式下：
+已注册 **371**、未注册 **12**（今天被拒或无人监听，见下文）、快照无法判断 2。
 
-判定依据：A 类 819 条按规则、111 条按默认（未登记前缀且处理函数没用窗口 API）；W 类 8 条按规则、6 条按同步通道判定；C 类 68 条按规则、18 条按依赖（后台领域或未登记前缀，但处理函数用到窗口 API）。
+判定依据：A:default 109、A:rule 809、B:rule 361、C:dependency 16、C:rule 70、R:rule 6、S:dependency 14、W:rule 6（rule = 规则表，dependency = 窗口 API 或同步返回值判定，default = 未登记前缀且没用窗口 API）。
 
 转发适配器 2 处（把通道原样转给另一个注册表，通道已在调用处计入）：
 `maker-ipc/electronIpcRegistry.ts`、`maker-ipc/register.ts`
@@ -32,11 +43,12 @@
 
 ## 归属规则
 
-按顺序匹配，先中先得；通道名或注册模块（`apps/desktop/src/main` 下的路径）命中即算。B 规则直接定类；
-其后，处理函数给 `event.returnValue` 赋值的同步通道不能走异步 HTTP：属于设置、账号提示或未登记前缀的判 W（窗口本地读 profile）；
-属于其它后台领域的仍判 A，并注明需 Host 预取、窗口本地回放（同 `ghosts:list`）。本地读取的领域：设置与偏好、账号与凭据。
-W、C 规则直接定类；A 规则只标出领域，处理函数（及其调用的两层桌面源码函数，不含被调函数里的嵌套回调）
-若用到下面的窗口 API 则改判 C；没有命中任何规则的通道：用到窗口 API 判 C，否则判 A。
+按顺序匹配，先中先得；通道名或注册模块（`apps/desktop/src/main` 下的路径）命中即算。
+1. B 规则直接定类。
+2. 处理函数给 `event.returnValue` 赋值的同步通道判 S：命中 W 规则、领域为设置与偏好或未登记前缀的为 S·本地，其余为 S·镜像。
+3. W、R、C 规则直接定类（C 规则带细分）。
+4. A 规则只标领域；处理函数及其调用的两层桌面源码函数（不含被调函数里的嵌套回调）若用到下面的窗口 API，改判 C-两段式。
+5. 没有命中任何规则：用到窗口 API 判 C-两段式，否则判 A（默认）。
 
 | 归属 | 原因 | 通道名 | 注册模块 |
 |---|---|---|---|
@@ -46,13 +58,15 @@ W、C 规则直接定类；A 规则只标出领域，处理函数（及其调用
 | B | 图形能力，由窗口替 Agent 执行（平台 RPC） | `^(maker:computer\|maker:browser\|browser-backend\|rsb-browser-bridge\|rsb-native-popup)` | `^(rsb-browser-bridge)\b` |
 | B | 本机输入设备与语音 | `^(voice-input\|voice-conversation\|xbox-gamepad\|worklouder-codex\|codex-micro-guard\|app-shortcuts:set-recording)` | `^(voice-input\|voice-conversation\|xbox-gamepad\|worklouder-codex)\b` |
 | B | 桌面安装包自身：更新、版本、日志与诊断 | `^(update-(?!relaunch:)\|get-app-version\|get-app-display-version-info\|get-os-release\|release-notes:\|app:get-arm64-translation\|app:open-logs-dir\|crash-diagnosis\|log-upload\|performance-trace\|renderer:log\|dev:\|cc:set-debug-net\|deep-link:)` | `^(updateService\|crash-diagnosis\|log-upload\|performance-trace)\b` |
-| C | 终端 PTY：放窗口则换窗口时断开，放后台需要流式输出通道 | `^terminal:` | — |
-| C | 本机文件读取：同一台电脑两边都能读，网页与手机只能走后台 | `^(maker:file-browser\|maker:chat-file\|maker:chat-folder\|maker:html-preview\|maker:search:\|file-browser:\|fs:\|read-file-bytes\|read-file-for-attachment\|text-file:\|peek-file-header\|file:thumbnail)` | `^fsBrowse\b` |
-| C | 弹出系统选择框后写入后台数据：选择在窗口，结果归后台 | `(^\|:)(choose\|pick)([A-Z-]\|$)` | — |
-| C | 在访达／资源管理器或系统浏览器里打开后台持有的内容 | `(:\|-)(open-dir\|reveal)$\|:open-[a-z-]*-dir(ectory)?$\|^billing:open-` | — |
-| C | 运行时发起、窗口收集用户输入（安全输入交接） | `^input-handoff:` | — |
+| C-专项设计（安全边界） | 安全边界待专项设计：主人填写的值只交给宿主执行（input-handoff），远程控制派发；方案出来前不动 | `^(input-handoff:\|device-link:invoke$)` | — |
+| C-后台 | 终端 PTY：换窗口时不能断，网页和手机也要用（优先级低，放后面批次） | `^terminal:` | — |
+| C-后台 | 任务范围内的文件操作：换窗口时不能断，网页和手机也要用，路径授权跟着运行时 | `^(maker:file-browser\|maker:chat-file\|maker:chat-folder\|maker:html-preview\|maker:search:\|file-browser:remote-op$)` | — |
+| C-窗口本地 | 用户在本窗口选择或拖入的本机文件、本机进程监视：窗口直接处理，客户端模式下照常注册 | `^(fs:\|read-file-bytes\|read-file-for-attachment\|peek-file-header\|text-file:\|file:thumbnail\|process-monitor:subscribe$)` | `^fsBrowse\b` |
+| C-两段式（窗口做界面动作，数据调 Host） | 弹出系统选择框后写入后台数据：选择在窗口，结果归后台 | `(^\|:)(choose\|pick)([A-Z-]\|$)` | — |
+| C-两段式（窗口做界面动作，数据调 Host） | 在访达／资源管理器或系统浏览器里打开后台持有的内容 | `(:\|-)(open-dir\|reveal)$\|:open-[a-z-]*-dir(ectory)?$\|^billing:open-` | — |
+| R | 主进程向界面要数据的回执协议：数据在界面本地存储，Host 要用需经窗口往返，先不排期 | `(^\|:)(host-ready\|host-reply\|host-changed)$\|^app-preferences:reply$` | — |
 | W | 窗口本地设置：窗口直接读写同一份 profile 文件，不经 Host | `^sidebar-settings:` | — |
-| A | 重启会打断哪些任务：客户端模式下由 Host 与交接合同回答（归升级与交接流程） | `^update-relaunch:` | — |
+| A | 升级与交接（归交接任务：它留在原工作区的升级流程） | `^update-relaunch:` | — |
 | A | 任务、消息与输入队列 | `^(local-db:(sessions\|messages\|history\|session-share\|session-import\|right-sidebar-tabs\|recent-workdirs\|subagent-runs\|conversations\|task-tags\|project-aliases\|ensure-ready\|maintenance)\|maker:(session\|input\|send\|steer\|create-session\|close-session\|abort-session\|fork\|rewind\|compact\|message\|get-session\|navigate-session\|side-chat\|goal\|turn-change\|persist-turn\|working-status\|any-session\|export-session\|generate-title\|regenerate-title\|auto-title\|predict-prompt\|switch-session-agent\|write-plan-file\|images\|list-desktop-commands\|execute-desktop-command\|get-context\|set-))` | — |
 | A | 自动化 | `^maker:schedule` | — |
 | A | Orca | `^(maker:(orca\|worker\|team\|mark-orca\|sync-worker)\|local-db:orca)` | — |
@@ -69,242 +83,274 @@ W、C 规则直接定类；A 规则只标出领域，处理函数（及其调用
 
 窗口 API：Electron 导出 `dialog`、`shell`、`clipboard`、`Menu`、`MenuItem`、`screen`、`desktopCapturer`、`Notification`、`globalShortcut`、`systemPreferences`、`nativeTheme`、`Tray`、`TouchBar`、`BrowserView`、`WebContentsView`、`powerSaveBlocker`、`nativeImage`、`autoUpdater`；成员 `BrowserWindow.fromWebContents`、`BrowserWindow.getFocusedWindow`、`BrowserWindow.fromId`、`BrowserWindow.fromBrowserView`、`app.focus`、`app.dock`、`app.setBadgeCount`、`app.relaunch`、`app.quit`、`app.exit`、`app.setLoginItemSettings`、`app.getLoginItemSettings`、`app.show`、`app.hide`、`app.setAsDefaultProtocolClient`、`app.getFileIcon`；以及 `new BrowserWindow`。不计入：发送方校验（`src/main/security/`，客户端模式下由 Host 令牌鉴权），以及发给某个窗口的推送（`webContents.fromId`、`event.sender`，客户端模式下推送走 Host 事件流）。
 
-## A 类：实际调用排行
+## 要 Host 做的：实际调用排行
 
-来源：`docs/host/evidence/channel-usage-mock-tour.json`（UI fixture tour (pnpm restart:desktop:remote -- --mock --isolated=host-usage + apps/desktop/scripts/host-client-usage-tour.mjs)；embedded 模式，2026-11-11）。
-这次共调用 253 个通道（1862 次）：contract 30、client 1、**A 136**（733 次，含清单外 0）、B 73、W 9、C 4。
+来源：`docs/host/evidence/channel-usage-mock-tour.json`（UI fixture tour (pnpm restart:desktop:remote -- --mock --isolated=host-usage + apps/desktop/scripts/host-client-usage-tour.mjs)；embedded 模式，2026-11-11）。范围是 A + C-后台 + C-两段式；这次共调用 253 个通道（1862 次）。
 
-| # | 通道 | 调用次数 | 领域 | 模块 |
-|---:|---|---:|---|---|
-| 1 | `maker:bot-group:outbox-command` | 51 | 伙伴与 IM | maker-ipc |
-| 2 | `maker:list-desktop-commands` | 47 | 任务、消息与输入队列 | maker-ipc |
-| 3 | `device-link:list-devices` | 33 | 设备互联与远程执行 | device-link |
-| 4 | `ghosts:session-focused` | 32 | 插件、技能与 MCP | cindy-brain |
-| 5 | `maker:session-background-tasks:list` | 28 | 任务、消息与输入队列 | maker-ipc |
-| 6 | `maker:plugins:get-state` | 21 | 插件、技能与 MCP | maker-ipc |
-| 7 | `device-link:get-state` | 20 | 设备互联与远程执行 | device-link |
-| 8 | `maker:model-context-limit:get` | 20 | 供应商与模型 | maker-ipc |
-| 9 | `ghosts:ui-prompts` | 19 | 插件、技能与 MCP | cindy-brain |
-| 10 | `git-context:get-for-session` | 19 | git 与工作树 | git-context |
-| 11 | `learn:list-runs` | 18 | 记忆、学习与钩子 | learn-host |
-| 12 | `git-context:find-linked-worktree` | 17 | git 与工作树 | git-context |
-| 13 | `maker:get-context-window-bounds` | 16 | 任务、消息与输入队列 | maker-ipc |
-| 14 | `maker:get-session-agent-switch-intent` | 16 | 任务、消息与输入队列 | maker-ipc |
-| 15 | `maker:side-chat:list:v1` | 16 | 任务、消息与输入队列 | maker-ipc |
-| 16 | `provider-group:command` | 16 | 供应商与模型 | provider-group |
-| 17 | `binding:resolve-session` | 15 | 伙伴与 IM | im |
-| 18 | `maker:goal:get-status` | 15 | 任务、消息与输入队列 | maker-ipc |
-| 19 | `maker:session-background-activity` | 15 | 任务、消息与输入队列 | maker-ipc |
-| 20 | `worktree:restore-status` | 15 | git 与工作树 | worktree |
-| 21 | `git-context:pr-refs:list` | 14 | git 与工作树 | git-context |
-| 22 | `local-db:right-sidebar-tabs:list` | 13 | 任务、消息与输入队列 | localDb |
-| 23 | `maker:bot-group:list` | 13 | 伙伴与 IM | maker-ipc |
-| 24 | `ghosts:recommendations` | 8 | 插件、技能与 MCP；同步通道，需 Host 预取并随事件刷新、窗口本地回放（同 ghosts:list） | cindy-brain |
-| 25 | `maker:subscription-accounts` | 8 | 账号与凭据 | subscription-accounts |
-| 26 | `maker:claude-session-route:get` | 7 | 供应商与模型 | bootstrap-electron |
-| 27 | `maker:model-visibility:sync` | 7 | 供应商与模型 | maker-ipc |
-| 28 | `maker:remote-ssh:list` | 7 | 设备互联与远程执行 | remote-ssh |
-| 29 | `maker:usage:account` | 7 | 供应商与模型 | maker-ipc |
-| 30 | `local-db:bots:model-chain-settings-get` | 6 | 伙伴与 IM | localDb |
-| 31 | `local-db:bots:read-state:update` | 6 | 伙伴与 IM | maker-ipc |
-| 32 | `maker:claude-oauth:status` | 6 | 账号与凭据 | bootstrap-electron |
-| 33 | `maker:im-default-settings:get` | 6 | 伙伴与 IM | bootstrap-electron |
-| 34 | `maker:usage:claude-subscription` | 6 | 供应商与模型 | maker-ipc |
-| 35 | `maker:usage:codex-rate-limits` | 6 | 供应商与模型 | maker-ipc |
-| 36 | `local-db:bots:list` | 5 | 伙伴与 IM | localDb |
-| 37 | `maker:sync-worker-creation-prefs` | 5 | Orca | maker-ipc |
-| 38 | `binding:list-attached` | 4 | 伙伴与 IM | im |
-| 39 | `desktop:cc-prefs-changed` | 4 | 伙伴与 IM | im |
-| 40 | `ghosts:models:list` | 4 | 插件、技能与 MCP | cindy-brain |
-| 41 | `maker:bot-read-state` | 4 | 伙伴与 IM | maker-ipc |
-| 42 | `maker:silent-encrypted-retry:get` | 4 | 未登记前缀，处理函数没有用到窗口 API | bootstrap-electron |
-| 43 | `maker:sync-new-maker-draft` | 4 | 未登记前缀，处理函数没有用到窗口 API | maker-ipc |
-| 44 | `plugin-market:snapshot` | 4 | 插件、技能与 MCP | plugin-market |
-| 45 | `provider-share:command` | 4 | 供应商与模型 | device-link |
-| 46 | `database-size-warning:get-settings` | 3 | 设置与偏好 | bootstrap-electron |
-| 47 | `git-context:pr-refs:list-all` | 3 | git 与工作树 | git-context |
-| 48 | `maker:agent:binary-version` | 3 | 未登记前缀，处理函数没有用到窗口 API | maker-ipc |
-| 49 | `maker:git-safety:get` | 3 | git 与工作树 | bootstrap-electron |
-| 50 | `maker:memory:get` | 3 | 记忆、学习与钩子 | maker-ipc |
-| 51 | `self-hosted-relay:command` | 3 | 设备互联与远程执行 | device-link |
-| 52 | `analytics:settings-get` | 2 | 设置与偏好 | analyticsSettingsService |
-| 53 | `auth:initialize` | 2 | 账号与凭据 | bootstrap-electron |
-| 54 | `database-size-warning:get-status` | 2 | 设置与偏好 | bootstrap-electron |
-| 55 | `feishuBot:get-state` | 2 | 伙伴与 IM | im |
-| 56 | `ghosts:recent-usage` | 2 | 插件、技能与 MCP；同步通道，需 Host 预取并随事件刷新、窗口本地回放（同 ghosts:list） | cindy-brain |
-| 57 | `local-db:maintenance:last-result` | 2 | 任务、消息与输入队列 | bootstrap-electron |
-| 58 | `maker:agent-resource-settings:get` | 2 | 设置与偏好 | maker-ipc |
-| 59 | `maker:agent:pi-kernel-state` | 2 | 未登记前缀，处理函数没有用到窗口 API | maker-ipc |
-| 60 | `maker:chat-embedding:get` | 2 | 未登记前缀，处理函数没有用到窗口 API | bootstrap-electron |
-| 61 | `maker:chat:display-cache` | 2 | 未登记前缀，处理函数没有用到窗口 API | maker-ipc |
-| 62 | `maker:collaboration-settings:get` | 2 | 设置与偏好 | maker-ipc |
-| 63 | `maker:memory:get-settings` | 2 | 记忆、学习与钩子 | bootstrap-electron |
-| 64 | `maker:schedule:list-sidebar-index-runs` | 2 | 自动化 | maker-ipc |
-| 65 | `maker:session:turn-active` | 2 | 任务、消息与输入队列 | maker-ipc |
-| 66 | `plugin-market:recommendations` | 2 | 插件、技能与 MCP | plugin-market |
-| 67 | `setup-migration:state` | 2 | 未登记前缀，处理函数没有用到窗口 API | setup-migration |
-| 68 | `skillhub:scan` | 2 | 插件、技能与 MCP | skillhub |
-| 69 | `wecomGroupNotification:get-state` | 2 | 伙伴与 IM | wecomGroupNotification |
-| 70 | `worktree:get-for-session` | 2 | git 与工作树 | worktree |
-| 71 | `app:get-cindy-make-state` | 1 | Cindy Make | bootstrap-electron |
-| 72 | `app:ready-for-bot` | 1 | 未登记前缀，处理函数没有用到窗口 API | bootstrap-electron |
-| 73 | `appearance-settings:get` | 1 | 设置与偏好 | appearance-settings-ipc |
-| 74 | `check-environment` | 1 | 未登记前缀，处理函数没有用到窗口 API | bootstrap-electron |
-| 75 | `cindy-media:storage-stats` | 1 | 附件与媒体库 | bootstrap-electron |
-| 76 | `companion-import` | 1 | 伙伴与 IM | bot-import |
-| 77 | `database-size-warning:measure` | 1 | 设置与偏好 | bootstrap-electron |
-| 78 | `dialogue-workspace:get` | 1 | 未登记前缀，处理函数没有用到窗口 API | bootstrap-electron |
-| 79 | `dingtalkBot:get-state` | 1 | 伙伴与 IM | im |
-| 80 | `discordBot:get-status` | 1 | 伙伴与 IM | im |
-| 81 | `ghosts:take-pending-install` | 1 | 插件、技能与 MCP | cindy-brain |
-| 82 | `ghosts:unread` | 1 | 插件、技能与 MCP；同步通道，需 Host 预取并随事件刷新、窗口本地回放（同 ghosts:list） | cindy-brain |
-| 83 | `legacy-migration:get-state` | 1 | 未登记前缀，处理函数没有用到窗口 API | legacyUserDataMigration |
-| 84 | `local-agent:connections` | 1 | 设备互联与远程执行 | bootstrap-electron |
-| 85 | `local-agent:developer-connection` | 1 | 设备互联与远程执行 | bootstrap-electron |
-| 86 | `local-db:bots:read-state:get` | 1 | 伙伴与 IM | maker-ipc |
-| 87 | `local-db:bots:workbench:follow-scopes` | 1 | 伙伴与 IM | localDb |
-| 88 | `local-db:ensure-ready` | 1 | 任务、消息与输入队列 | localDb |
-| 89 | `local-db:maintenance:startup-progress` | 1 | 任务、消息与输入队列 | bootstrap-electron |
-| 90 | `local-db:session-import:scan` | 1 | 任务、消息与输入队列 | session-import |
-| 91 | `local-db:session-import:status` | 1 | 任务、消息与输入队列 | session-import |
-| 92 | `local-db:sessions:set-pinned-card-summaries` | 1 | 任务、消息与输入队列 | localDb |
-| 93 | `local-themes:list` | 1 | 设置与偏好 | local-themes |
-| 94 | `maker:android:get-config` | 1 | 未登记前缀，处理函数没有用到窗口 API | maker-ipc |
-| 95 | `maker:auto-title` | 1 | 任务、消息与输入队列 | maker-ipc |
-| 96 | `maker:auxiliary-model-settings:get` | 1 | 供应商与模型 | maker-ipc |
-| 97 | `maker:companion-cloud:state` | 1 | 伙伴与 IM | maker-ipc |
-| 98 | `maker:issues:list-mine` | 1 | 未登记前缀，处理函数没有用到窗口 API | maker-ipc |
-| 99 | `maker:issues:snapshot-mine` | 1 | 未登记前缀，处理函数没有用到窗口 API | maker-ipc |
-| 100 | `maker:lsp-mode:get` | 1 | 未登记前缀，处理函数没有用到窗口 API | bootstrap-electron |
-| 101 | `maker:mcp:custom:list` | 1 | 插件、技能与 MCP | maker-ipc |
-| 102 | `maker:mcp:duplicates:list` | 1 | 插件、技能与 MCP | maker-ipc |
-| 103 | `maker:memory:get-settings-state` | 1 | 记忆、学习与钩子 | bootstrap-electron |
-| 104 | `maker:pi-packages:list` | 1 | 插件、技能与 MCP | maker-ipc |
-| 105 | `maker:plugins:list` | 1 | 插件、技能与 MCP | maker-ipc |
-| 106 | `maker:project-automation:pending-imports` | 1 | 未登记前缀，处理函数没有用到窗口 API | maker-ipc |
-| 107 | `maker:provider:local-cli-scan` | 1 | 供应商与模型 | maker-ipc |
-| 108 | `maker:provider:models-auto-refresh` | 1 | 供应商与模型 | maker-ipc |
-| 109 | `maker:remote-ssh:cc-mgr-list-pending-upgrades` | 1 | 设备互联与远程执行 | remote-ssh |
-| 110 | `maker:schedule:get-runtime-state` | 1 | 自动化 | maker-ipc |
-| 111 | `maker:schedule:list` | 1 | 自动化 | maker-ipc |
-| 112 | `maker:schedule:list-runs` | 1 | 自动化 | maker-ipc |
-| 113 | `maker:schedule:webhook-receiver` | 1 | 自动化 | maker-ipc |
-| 114 | `maker:session-background-activity:list` | 1 | 任务、消息与输入队列 | maker-ipc |
-| 115 | `maker:session-background-work:list` | 1 | 任务、消息与输入队列 | maker-ipc |
-| 116 | `maker:session:commit-provisional` | 1 | 任务、消息与输入队列 | maker-ipc |
-| 117 | `maker:session:prewarm` | 1 | 任务、消息与输入队列 | maker-ipc |
-| 118 | `maker:subagent-model-settings:get` | 1 | 供应商与模型 | bootstrap-electron |
-| 119 | `maker:sync-provider-model-memory` | 1 | 供应商与模型 | maker-ipc |
-| 120 | `maker:usage:history` | 1 | 供应商与模型 | maker-ipc |
-| 121 | `maker:vision-bridge-settings:get` | 1 | 供应商与模型 | bootstrap-electron |
-| 122 | `model-favorites:host-ready` | 1 | 供应商与模型 | maker-ipc |
-| 123 | `plugin-market:consume-removal-notice` | 1 | 插件、技能与 MCP | plugin-market |
-| 124 | `plugin-market:lookup` | 1 | 插件、技能与 MCP | plugin-market |
-| 125 | `process-monitor:unsubscribe` | 1 | 未登记前缀，处理函数没有用到窗口 API | process-monitor |
-| 126 | `projects-root:get` | 1 | 设置与偏好 | bootstrap-electron |
-| 127 | `safe-storage-read` | 1 | 账号与凭据 | bootstrap-electron |
-| 128 | `setup-migration:host-ready` | 1 | 未登记前缀，处理函数没有用到窗口 API | setup-migration |
-| 129 | `skillhub:list-categories` | 1 | 插件、技能与 MCP | skillhub |
-| 130 | `skillhub:list-market` | 1 | 插件、技能与 MCP | skillhub |
-| 131 | `telegramBot:get-status` | 1 | 伙伴与 IM | im |
-| 132 | `wechatBot:get-channel-settings` | 1 | 伙伴与 IM | im |
-| 133 | `wechatBot:get-state` | 1 | 伙伴与 IM | im |
-| 134 | `wecomBot:get-status` | 1 | 伙伴与 IM | im |
-| 135 | `worktree-recycle:list` | 1 | git 与工作树 | bootstrap-electron |
-| 136 | `worktree:list-all` | 1 | git 与工作树 | worktree |
+| # | 通道 | 调用次数 | 归属 | 领域／原因 | 模块 |
+|---:|---|---:|---|---|---|
+| 1 | `maker:bot-group:outbox-command` | 51 | A | 伙伴与 IM | maker-ipc |
+| 2 | `maker:list-desktop-commands` | 47 | A | 任务、消息与输入队列 | maker-ipc |
+| 3 | `device-link:list-devices` | 33 | A | 设备互联与远程执行 | device-link |
+| 4 | `ghosts:session-focused` | 32 | A | 插件、技能与 MCP | cindy-brain |
+| 5 | `maker:session-background-tasks:list` | 28 | A | 任务、消息与输入队列 | maker-ipc |
+| 6 | `maker:plugins:get-state` | 21 | A | 插件、技能与 MCP | maker-ipc |
+| 7 | `device-link:get-state` | 20 | A | 设备互联与远程执行 | device-link |
+| 8 | `maker:model-context-limit:get` | 20 | A | 供应商与模型 | maker-ipc |
+| 9 | `ghosts:ui-prompts` | 19 | A | 插件、技能与 MCP | cindy-brain |
+| 10 | `git-context:get-for-session` | 19 | A | git 与工作树 | git-context |
+| 11 | `learn:list-runs` | 18 | A | 记忆、学习与钩子 | learn-host |
+| 12 | `git-context:find-linked-worktree` | 17 | A | git 与工作树 | git-context |
+| 13 | `maker:get-context-window-bounds` | 16 | A | 任务、消息与输入队列 | maker-ipc |
+| 14 | `maker:get-session-agent-switch-intent` | 16 | A | 任务、消息与输入队列 | maker-ipc |
+| 15 | `maker:side-chat:list:v1` | 16 | A | 任务、消息与输入队列 | maker-ipc |
+| 16 | `provider-group:command` | 16 | A | 供应商与模型 | provider-group |
+| 17 | `binding:resolve-session` | 15 | A | 伙伴与 IM | im |
+| 18 | `maker:goal:get-status` | 15 | A | 任务、消息与输入队列 | maker-ipc |
+| 19 | `maker:session-background-activity` | 15 | A | 任务、消息与输入队列 | maker-ipc |
+| 20 | `worktree:restore-status` | 15 | A | git 与工作树 | worktree |
+| 21 | `git-context:pr-refs:list` | 14 | A | git 与工作树 | git-context |
+| 22 | `local-db:right-sidebar-tabs:list` | 13 | A | 任务、消息与输入队列 | localDb |
+| 23 | `maker:bot-group:list` | 13 | A | 伙伴与 IM | maker-ipc |
+| 24 | `maker:subscription-accounts` | 8 | A | 账号与凭据 | subscription-accounts |
+| 25 | `maker:claude-session-route:get` | 7 | A | 供应商与模型 | bootstrap-electron |
+| 26 | `maker:model-visibility:sync` | 7 | A | 供应商与模型 | maker-ipc |
+| 27 | `maker:remote-ssh:list` | 7 | A | 设备互联与远程执行 | remote-ssh |
+| 28 | `maker:usage:account` | 7 | A | 供应商与模型 | maker-ipc |
+| 29 | `local-db:bots:model-chain-settings-get` | 6 | A | 伙伴与 IM | localDb |
+| 30 | `local-db:bots:read-state:update` | 6 | A | 伙伴与 IM | maker-ipc |
+| 31 | `maker:claude-oauth:status` | 6 | A | 账号与凭据 | bootstrap-electron |
+| 32 | `maker:im-default-settings:get` | 6 | A | 伙伴与 IM | bootstrap-electron |
+| 33 | `maker:usage:claude-subscription` | 6 | A | 供应商与模型 | maker-ipc |
+| 34 | `maker:usage:codex-rate-limits` | 6 | A | 供应商与模型 | maker-ipc |
+| 35 | `local-db:bots:list` | 5 | A | 伙伴与 IM | localDb |
+| 36 | `maker:sync-worker-creation-prefs` | 5 | A | Orca | maker-ipc |
+| 37 | `binding:list-attached` | 4 | A | 伙伴与 IM | im |
+| 38 | `desktop:cc-prefs-changed` | 4 | A | 伙伴与 IM | im |
+| 39 | `ghosts:models:list` | 4 | A | 插件、技能与 MCP | cindy-brain |
+| 40 | `maker:bot-read-state` | 4 | A | 伙伴与 IM | maker-ipc |
+| 41 | `maker:silent-encrypted-retry:get` | 4 | A | 未登记前缀，处理函数没有用到窗口 API | bootstrap-electron |
+| 42 | `maker:sync-new-maker-draft` | 4 | A | 未登记前缀，处理函数没有用到窗口 API | maker-ipc |
+| 43 | `plugin-market:snapshot` | 4 | A | 插件、技能与 MCP | plugin-market |
+| 44 | `provider-share:command` | 4 | A | 供应商与模型 | device-link |
+| 45 | `database-size-warning:get-settings` | 3 | A | 设置与偏好 | bootstrap-electron |
+| 46 | `git-context:pr-refs:list-all` | 3 | A | git 与工作树 | git-context |
+| 47 | `maker:agent:binary-version` | 3 | A | 未登记前缀，处理函数没有用到窗口 API | maker-ipc |
+| 48 | `maker:git-safety:get` | 3 | A | git 与工作树 | bootstrap-electron |
+| 49 | `maker:memory:get` | 3 | A | 记忆、学习与钩子 | maker-ipc |
+| 50 | `self-hosted-relay:command` | 3 | A | 设备互联与远程执行 | device-link |
+| 51 | `analytics:settings-get` | 2 | A | 设置与偏好 | analyticsSettingsService |
+| 52 | `auth:initialize` | 2 | A | 账号与凭据 | bootstrap-electron |
+| 53 | `database-size-warning:get-status` | 2 | A | 设置与偏好 | bootstrap-electron |
+| 54 | `feishuBot:get-state` | 2 | A | 伙伴与 IM | im |
+| 55 | `local-db:maintenance:last-result` | 2 | A | 任务、消息与输入队列 | bootstrap-electron |
+| 56 | `maker:agent-resource-settings:get` | 2 | A | 设置与偏好 | maker-ipc |
+| 57 | `maker:agent:pi-kernel-state` | 2 | A | 未登记前缀，处理函数没有用到窗口 API | maker-ipc |
+| 58 | `maker:chat-embedding:get` | 2 | A | 未登记前缀，处理函数没有用到窗口 API | bootstrap-electron |
+| 59 | `maker:chat:display-cache` | 2 | A | 未登记前缀，处理函数没有用到窗口 API | maker-ipc |
+| 60 | `maker:collaboration-settings:get` | 2 | A | 设置与偏好 | maker-ipc |
+| 61 | `maker:memory:get-settings` | 2 | A | 记忆、学习与钩子 | bootstrap-electron |
+| 62 | `maker:schedule:list-sidebar-index-runs` | 2 | A | 自动化 | maker-ipc |
+| 63 | `maker:session:turn-active` | 2 | A | 任务、消息与输入队列 | maker-ipc |
+| 64 | `plugin-market:recommendations` | 2 | A | 插件、技能与 MCP | plugin-market |
+| 65 | `setup-migration:state` | 2 | A | 未登记前缀，处理函数没有用到窗口 API | setup-migration |
+| 66 | `skillhub:scan` | 2 | A | 插件、技能与 MCP | skillhub |
+| 67 | `wecomGroupNotification:get-state` | 2 | A | 伙伴与 IM | wecomGroupNotification |
+| 68 | `worktree:get-for-session` | 2 | A | git 与工作树 | worktree |
+| 69 | `app:get-cindy-make-state` | 1 | A | Cindy Make | bootstrap-electron |
+| 70 | `app:ready-for-bot` | 1 | A | 未登记前缀，处理函数没有用到窗口 API | bootstrap-electron |
+| 71 | `appearance-settings:get` | 1 | A | 设置与偏好 | appearance-settings-ipc |
+| 72 | `check-environment` | 1 | A | 未登记前缀，处理函数没有用到窗口 API | bootstrap-electron |
+| 73 | `cindy-media:storage-stats` | 1 | A | 附件与媒体库 | bootstrap-electron |
+| 74 | `companion-import` | 1 | A | 伙伴与 IM | bot-import |
+| 75 | `database-size-warning:measure` | 1 | A | 设置与偏好 | bootstrap-electron |
+| 76 | `dialogue-workspace:get` | 1 | A | 未登记前缀，处理函数没有用到窗口 API | bootstrap-electron |
+| 77 | `dingtalkBot:get-state` | 1 | A | 伙伴与 IM | im |
+| 78 | `discordBot:get-status` | 1 | A | 伙伴与 IM | im |
+| 79 | `ghosts:take-pending-install` | 1 | A | 插件、技能与 MCP | cindy-brain |
+| 80 | `legacy-migration:get-state` | 1 | A | 未登记前缀，处理函数没有用到窗口 API | legacyUserDataMigration |
+| 81 | `local-agent:connections` | 1 | A | 设备互联与远程执行 | bootstrap-electron |
+| 82 | `local-agent:developer-connection` | 1 | A | 设备互联与远程执行 | bootstrap-electron |
+| 83 | `local-db:bots:read-state:get` | 1 | A | 伙伴与 IM | maker-ipc |
+| 84 | `local-db:bots:workbench:follow-scopes` | 1 | A | 伙伴与 IM | localDb |
+| 85 | `local-db:ensure-ready` | 1 | A | 任务、消息与输入队列 | localDb |
+| 86 | `local-db:maintenance:startup-progress` | 1 | A | 任务、消息与输入队列 | bootstrap-electron |
+| 87 | `local-db:session-import:scan` | 1 | A | 任务、消息与输入队列 | session-import |
+| 88 | `local-db:session-import:status` | 1 | A | 任务、消息与输入队列 | session-import |
+| 89 | `local-db:sessions:set-pinned-card-summaries` | 1 | A | 任务、消息与输入队列 | localDb |
+| 90 | `local-themes:list` | 1 | A | 设置与偏好 | local-themes |
+| 91 | `maker:android:get-config` | 1 | A | 未登记前缀，处理函数没有用到窗口 API | maker-ipc |
+| 92 | `maker:auto-title` | 1 | A | 任务、消息与输入队列 | maker-ipc |
+| 93 | `maker:auxiliary-model-settings:get` | 1 | A | 供应商与模型 | maker-ipc |
+| 94 | `maker:companion-cloud:state` | 1 | A | 伙伴与 IM | maker-ipc |
+| 95 | `maker:issues:list-mine` | 1 | A | 未登记前缀，处理函数没有用到窗口 API | maker-ipc |
+| 96 | `maker:issues:snapshot-mine` | 1 | A | 未登记前缀，处理函数没有用到窗口 API | maker-ipc |
+| 97 | `maker:lsp-mode:get` | 1 | A | 未登记前缀，处理函数没有用到窗口 API | bootstrap-electron |
+| 98 | `maker:mcp:custom:list` | 1 | A | 插件、技能与 MCP | maker-ipc |
+| 99 | `maker:mcp:duplicates:list` | 1 | A | 插件、技能与 MCP | maker-ipc |
+| 100 | `maker:memory:get-settings-state` | 1 | A | 记忆、学习与钩子 | bootstrap-electron |
+| 101 | `maker:pi-packages:list` | 1 | A | 插件、技能与 MCP | maker-ipc |
+| 102 | `maker:plugins:list` | 1 | A | 插件、技能与 MCP | maker-ipc |
+| 103 | `maker:project-automation:pending-imports` | 1 | A | 未登记前缀，处理函数没有用到窗口 API | maker-ipc |
+| 104 | `maker:provider:local-cli-scan` | 1 | A | 供应商与模型 | maker-ipc |
+| 105 | `maker:provider:models-auto-refresh` | 1 | A | 供应商与模型 | maker-ipc |
+| 106 | `maker:remote-ssh:cc-mgr-list-pending-upgrades` | 1 | A | 设备互联与远程执行 | remote-ssh |
+| 107 | `maker:schedule:get-runtime-state` | 1 | A | 自动化 | maker-ipc |
+| 108 | `maker:schedule:list` | 1 | A | 自动化 | maker-ipc |
+| 109 | `maker:schedule:list-runs` | 1 | A | 自动化 | maker-ipc |
+| 110 | `maker:schedule:webhook-receiver` | 1 | A | 自动化 | maker-ipc |
+| 111 | `maker:session-background-activity:list` | 1 | A | 任务、消息与输入队列 | maker-ipc |
+| 112 | `maker:session-background-work:list` | 1 | A | 任务、消息与输入队列 | maker-ipc |
+| 113 | `maker:session:commit-provisional` | 1 | A | 任务、消息与输入队列 | maker-ipc |
+| 114 | `maker:session:prewarm` | 1 | A | 任务、消息与输入队列 | maker-ipc |
+| 115 | `maker:subagent-model-settings:get` | 1 | A | 供应商与模型 | bootstrap-electron |
+| 116 | `maker:sync-provider-model-memory` | 1 | A | 供应商与模型 | maker-ipc |
+| 117 | `maker:usage:history` | 1 | A | 供应商与模型 | maker-ipc |
+| 118 | `maker:vision-bridge-settings:get` | 1 | A | 供应商与模型 | bootstrap-electron |
+| 119 | `plugin-market:consume-removal-notice` | 1 | A | 插件、技能与 MCP | plugin-market |
+| 120 | `plugin-market:lookup` | 1 | A | 插件、技能与 MCP | plugin-market |
+| 121 | `process-monitor:unsubscribe` | 1 | A | 未登记前缀，处理函数没有用到窗口 API | process-monitor |
+| 122 | `projects-root:get` | 1 | A | 设置与偏好 | bootstrap-electron |
+| 123 | `safe-storage-read` | 1 | A | 账号与凭据 | bootstrap-electron |
+| 124 | `skillhub:list-categories` | 1 | A | 插件、技能与 MCP | skillhub |
+| 125 | `skillhub:list-market` | 1 | A | 插件、技能与 MCP | skillhub |
+| 126 | `telegramBot:get-status` | 1 | A | 伙伴与 IM | im |
+| 127 | `terminal:get-default-shell-pref` | 1 | C-后台 | 终端 PTY：换窗口时不能断，网页和手机也要用（优先级低，放后面批次） | maker-ipc |
+| 128 | `terminal:list-available-shells` | 1 | C-后台 | 终端 PTY：换窗口时不能断，网页和手机也要用（优先级低，放后面批次） | maker-ipc |
+| 129 | `wechatBot:get-channel-settings` | 1 | A | 伙伴与 IM | im |
+| 130 | `wechatBot:get-state` | 1 | A | 伙伴与 IM | im |
+| 131 | `wecomBot:get-status` | 1 | A | 伙伴与 IM | im |
+| 132 | `worktree-recycle:list` | 1 | A | git 与工作树 | bootstrap-electron |
+| 133 | `worktree:list-all` | 1 | A | git 与工作树 | worktree |
+
+## 同步通道 S（14）
+
+S·本地：界面设置，由窗口本地读同一份 profile 文件，客户端模式下照常注册。S·镜像：数据归 Host（插件状态、登录提示），需要“窗口缓存镜像”（Host 经事件流推送、窗口同步回答缓存）或把界面改成异步，单独设计，放进对应的小批（插件那批），不混进 1a。
+
+| 通道 | 类型 | 归属 | 原因 | 调用次数 | 注册文件 |
+|---|---|---|---|---:|---|
+| `sidebar-settings:load-snapshot-sync` | event | 同步·界面设置（窗口本地读 profile） | 同步通道·界面设置：窗口本地读同一份 profile 文件 | 21 | `sidebarSettingsStore.ts` |
+| `ghosts:recommendations` | event | 同步·数据归 Host（需窗口缓存镜像） | 同步通道·插件、技能与 MCP：数据归 Host，需窗口缓存镜像（Host 经事件流推送，窗口同步回答缓存）或改界面为异步，放进对应小批单独设计 | 8 | `cindy-brain/index.ts` |
+| `sidebar-settings:claim-renderer-legacy-owner-sync` | event | 同步·界面设置（窗口本地读 profile） | 同步通道·界面设置：窗口本地读同一份 profile 文件 | 8 | `sidebarSettingsStore.ts` |
+| `auth:has-persisted-session-hint-sync` | event | 同步·数据归 Host（需窗口缓存镜像） | 同步通道·账号与凭据：数据归 Host，需窗口缓存镜像（Host 经事件流推送，窗口同步回答缓存）或改界面为异步，放进对应小批单独设计 | 4 | `bootstrap-electron.ts` |
+| `appearance-settings:get-sync` | event | 同步·界面设置（窗口本地读 profile） | 同步通道·界面设置：窗口本地读同一份 profile 文件 | 3 | `appearance-settings-ipc.ts` |
+| `layout:get` | event | 同步·界面设置（窗口本地读 profile） | 同步通道·界面设置：窗口本地读同一份 profile 文件 | 3 | `layout/index.ts` |
+| `local-themes:list-sync` | event | 同步·界面设置（窗口本地读 profile） | 同步通道·界面设置：窗口本地读同一份 profile 文件 | 3 | `local-themes/register.ts` |
+| `ghosts:recent-usage` | event | 同步·数据归 Host（需窗口缓存镜像） | 同步通道·插件、技能与 MCP：数据归 Host，需窗口缓存镜像（Host 经事件流推送，窗口同步回答缓存）或改界面为异步，放进对应小批单独设计 | 2 | `cindy-brain/index.ts` |
+| `app-shortcuts:get` | event | 同步·界面设置（窗口本地读 profile） | 同步通道·界面设置：窗口本地读同一份 profile 文件 | 1 | `app-shortcuts/index.ts` |
+| `client-endpoints:get-sync` | event | 同步·界面设置（窗口本地读 profile） | 同步通道·界面设置：窗口本地读同一份 profile 文件 | 1 | `clientEndpointsService.ts` |
+| `ghosts:unread` | event | 同步·数据归 Host（需窗口缓存镜像） | 同步通道·插件、技能与 MCP：数据归 Host，需窗口缓存镜像（Host 经事件流推送，窗口同步回答缓存）或改界面为异步，放进对应小批单独设计 | 1 | `cindy-brain/index.ts` |
+| `ghosts:builtin-status` | event | 同步·数据归 Host（需窗口缓存镜像） | 同步通道·插件、技能与 MCP：数据归 Host，需窗口缓存镜像（Host 经事件流推送，窗口同步回答缓存）或改界面为异步，放进对应小批单独设计 | 0 | `cindy-brain/index.ts` |
+| `ghosts:errand-prefs` | event | 同步·数据归 Host（需窗口缓存镜像） | 同步通道·插件、技能与 MCP：数据归 Host，需窗口缓存镜像（Host 经事件流推送，窗口同步回答缓存）或改界面为异步，放进对应小批单独设计 | 0 | `cindy-brain/index.ts` |
+| `ghosts:workdir-prefs` | event | 同步·数据归 Host（需窗口缓存镜像） | 同步通道·插件、技能与 MCP：数据归 Host，需窗口缓存镜像（Host 经事件流推送，窗口同步回答缓存）或改界面为异步，放进对应小批单独设计 | 0 | `cindy-brain/index.ts` |
+
+## 回执通道 R（6）
+
+主进程发请求、界面用本地存储里的数据回执。Host 要这些数据得经窗口往返一次，不是普通的“接一个接口”；先标出来，不排期。
+
+| 通道 | 类型 | 归属 | 原因 | 调用次数 | 注册文件 |
+|---|---|---|---|---:|---|
+| `model-favorites:host-ready` | event | R | 主进程向界面要数据的回执协议：数据在界面本地存储，Host 要用需经窗口往返，先不排期 | 1 | `maker-ipc/modelFavoritesSync.ts` |
+| `setup-migration:host-ready` | event | R | 主进程向界面要数据的回执协议：数据在界面本地存储，Host 要用需经窗口往返，先不排期 | 1 | `setup-migration/rendererPrefsHost.ts` |
+| `app-preferences:reply` | event | R | 主进程向界面要数据的回执协议：数据在界面本地存储，Host 要用需经窗口往返，先不排期 | 0 | `app-settings/preferences.ts` |
+| `model-favorites:host-changed` | event | R | 主进程向界面要数据的回执协议：数据在界面本地存储，Host 要用需经窗口往返，先不排期 | 0 | `maker-ipc/modelFavoritesSync.ts` |
+| `model-favorites:host-reply` | event | R | 主进程向界面要数据的回执协议：数据在界面本地存储，Host 要用需经窗口往返，先不排期 | 0 | `maker-ipc/modelFavoritesSync.ts` |
+| `setup-migration:host-reply` | event | R | 主进程向界面要数据的回执协议：数据在界面本地存储，Host 要用需经窗口往返，先不排期 | 0 | `setup-migration/rendererPrefsHost.ts` |
 
 ## C 类全量（86）
 
-| 通道 | 类型 | 原因 | 调用次数 | 注册文件 |
-|---|---|---|---:|---|
-| `fs:resolve-path-batch` | invoke | 本机文件读取：同一台电脑两边都能读，网页与手机只能走后台 | 1 | `bootstrap-electron.ts` |
-| `process-monitor:subscribe` | invoke | 未登记前缀，但处理函数用到窗口 API：BrowserWindow.fromWebContents | 1 | `process-monitor/ipc.ts` |
-| `terminal:get-default-shell-pref` | invoke | 终端 PTY：放窗口则换窗口时断开，放后台需要流式输出通道 | 1 | `maker-ipc/terminal-handlers.ts` |
-| `terminal:list-available-shells` | invoke | 终端 PTY：放窗口则换窗口时断开，放后台需要流式输出通道 | 1 | `maker-ipc/terminal-handlers.ts` |
-| `app:cindy-make-history-open-build` | invoke | Cindy Make，但处理函数用到窗口 API：shell | 0 | `bootstrap-electron.ts` |
-| `app:open-cindy-make-source-dir` | invoke | 在访达／资源管理器或系统浏览器里打开后台持有的内容 | 0 | `bootstrap-electron.ts` |
-| `app:open-cindy-make-tools-dir` | invoke | 在访达／资源管理器或系统浏览器里打开后台持有的内容 | 0 | `bootstrap-electron.ts` |
-| `appearance-settings:import-wallpaper` | invoke | 设置与偏好，但处理函数用到窗口 API：BrowserWindow.fromWebContents | 0 | `appearance-settings-ipc.ts` |
-| `billing:open-payment-redirect` | invoke | 在访达／资源管理器或系统浏览器里打开后台持有的内容 | 0 | `billing/index.ts` |
-| `billing:open-subscription-portal` | invoke | 在访达／资源管理器或系统浏览器里打开后台持有的内容 | 0 | `billing/index.ts` |
-| `cindy-media:chat-attachments-clear` | invoke | 附件与媒体库，但处理函数用到窗口 API：BrowserWindow.fromWebContents、dialog | 0 | `bootstrap-electron.ts` |
-| `cindy-media:chat-attachments-open-dir` | invoke | 在访达／资源管理器或系统浏览器里打开后台持有的内容 | 0 | `bootstrap-electron.ts` |
-| `cindy-media:legacy-images-clear` | invoke | 附件与媒体库，但处理函数用到窗口 API：BrowserWindow.fromWebContents、dialog | 0 | `bootstrap-electron.ts` |
-| `cindy-media:legacy-images-open-dir` | invoke | 在访达／资源管理器或系统浏览器里打开后台持有的内容 | 0 | `bootstrap-electron.ts` |
-| `create-project-from-task:chooseParent` | invoke | 弹出系统选择框后写入后台数据：选择在窗口，结果归后台 | 0 | `bootstrap-electron.ts` |
-| `device-link:confirm-skill-mutation` | invoke | 设备互联与远程执行，但处理函数用到窗口 API：BrowserWindow.fromWebContents、dialog | 0 | `device-link/ipc.ts` |
-| `device-link:invoke` | invoke | 设备互联与远程执行，但处理函数用到窗口 API：BrowserWindow.fromWebContents、dialog、nativeTheme | 0 | `device-link/ipc.ts` |
-| `device-link:pick-plugin-package` | invoke | 弹出系统选择框后写入后台数据：选择在窗口，结果归后台 | 0 | `device-link/ipc.ts` |
-| `dialogue-workspace:choose` | invoke | 弹出系统选择框后写入后台数据：选择在窗口，结果归后台 | 0 | `bootstrap-electron.ts` |
-| `file-browser:remote-op` | invoke | 本机文件读取：同一台电脑两边都能读，网页与手机只能走后台 | 0 | `file-browser/device-op.ts` |
-| `file:thumbnail` | invoke | 本机文件读取：同一台电脑两边都能读，网页与手机只能走后台 | 0 | `bootstrap-electron.ts` |
-| `fs:list-dir` | invoke | 本机文件读取：同一台电脑两边都能读，网页与手机只能走后台 | 0 | `fsBrowse/ipc.ts` |
-| `fs:mkdir-p` | invoke | 本机文件读取：同一台电脑两边都能读，网页与手机只能走后台 | 0 | `fsBrowse/ipc.ts` |
-| `fs:resolve-path` | invoke | 本机文件读取：同一台电脑两边都能读，网页与手机只能走后台 | 0 | `bootstrap-electron.ts` |
-| `fs:stat-path` | invoke | 本机文件读取：同一台电脑两边都能读，网页与手机只能走后台 | 0 | `fsBrowse/ipc.ts` |
-| `ghosts:background-tasks:reveal` | invoke | 在访达／资源管理器或系统浏览器里打开后台持有的内容 | 0 | `maker-ipc/register.ts` |
-| `ghosts:export` | invoke | 插件、技能与 MCP，但处理函数用到窗口 API：BrowserWindow.fromWebContents、dialog | 0 | `cindy-brain/index.ts` |
-| `ghosts:library-delete` | invoke | 插件、技能与 MCP，但处理函数用到窗口 API：BrowserWindow.fromWebContents、dialog | 0 | `cindy-brain/index.ts` |
-| `ghosts:library-pick-location` | invoke | 插件、技能与 MCP，但处理函数用到窗口 API：BrowserWindow.fromWebContents、dialog | 0 | `cindy-brain/index.ts` |
-| `ghosts:library-reattach-legacy` | invoke | 插件、技能与 MCP，但处理函数用到窗口 API：BrowserWindow.fromWebContents、dialog | 0 | `cindy-brain/index.ts` |
-| `ghosts:pick-file` | invoke | 弹出系统选择框后写入后台数据：选择在窗口，结果归后台 | 0 | `cindy-brain/index.ts` |
-| `input-handoff:picture` | invoke | 运行时发起、窗口收集用户输入（安全输入交接） | 0 | `maker-ipc/register.ts` |
-| `input-handoff:raise` | invoke | 运行时发起、窗口收集用户输入（安全输入交接） | 0 | `maker-ipc/register.ts` |
-| `input-handoff:submit` | invoke | 运行时发起、窗口收集用户输入（安全输入交接） | 0 | `maker-ipc/register.ts` |
-| `local-db:bots:choose-avatar` | invoke | 弹出系统选择框后写入后台数据：选择在窗口，结果归后台 | 0 | `localDb/ipc/bots.ts` |
-| `local-db:bots:choose-avatar-source` | invoke | 弹出系统选择框后写入后台数据：选择在窗口，结果归后台 | 0 | `localDb/ipc/bots.ts` |
-| `local-db:maintenance:choose-backup-directory` | invoke | 弹出系统选择框后写入后台数据：选择在窗口，结果归后台 | 0 | `bootstrap-electron.ts` |
-| `local-db:maintenance:open-last-backup-directory` | invoke | 在访达／资源管理器或系统浏览器里打开后台持有的内容 | 0 | `bootstrap-electron.ts` |
-| `local-db:session-share:export` | invoke | 任务、消息与输入队列，但处理函数用到窗口 API：BrowserWindow.getFocusedWindow、dialog | 0 | `localDb/ipc/session-share.ts` |
-| `local-db:session-share:inspect` | invoke | 任务、消息与输入队列，但处理函数用到窗口 API：BrowserWindow.getFocusedWindow、dialog | 0 | `localDb/ipc/session-share.ts` |
-| `local-themes:import` | invoke | 设置与偏好，但处理函数用到窗口 API：BrowserWindow.fromWebContents、dialog | 0 | `local-themes/register.ts` |
-| `local-themes:open-dir` | invoke | 在访达／资源管理器或系统浏览器里打开后台持有的内容 | 0 | `local-themes/register.ts` |
-| `maker:chat-file:cancel` | invoke | 本机文件读取：同一台电脑两边都能读，网页与手机只能走后台 | 0 | `file-browser/index.ts` |
-| `maker:chat-file:download` | invoke | 本机文件读取：同一台电脑两边都能读，网页与手机只能走后台 | 0 | `file-browser/index.ts` |
-| `maker:chat-file:fetch` | invoke | 本机文件读取：同一台电脑两边都能读，网页与手机只能走后台 | 0 | `file-browser/index.ts` |
-| `maker:chat-file:stat` | invoke | 本机文件读取：同一台电脑两边都能读，网页与手机只能走后台 | 0 | `file-browser/index.ts` |
-| `maker:chat-folder:upload` | invoke | 本机文件读取：同一台电脑两边都能读，网页与手机只能走后台 | 0 | `file-browser/index.ts` |
-| `maker:export-session-html` | invoke | 任务、消息与输入队列，但处理函数用到窗口 API：BrowserWindow.fromWebContents、BrowserWindow.getFocusedWindow、dialog、shell | 0 | `maker-ipc/register.ts` |
-| `maker:file-browser:cache-put` | invoke | 本机文件读取：同一台电脑两边都能读，网页与手机只能走后台 | 0 | `file-browser/index.ts` |
-| `maker:file-browser:create-file` | invoke | 本机文件读取：同一台电脑两边都能读，网页与手机只能走后台 | 0 | `file-browser/index.ts` |
-| `maker:file-browser:create-folder` | invoke | 本机文件读取：同一台电脑两边都能读，网页与手机只能走后台 | 0 | `file-browser/index.ts` |
-| `maker:file-browser:delete-entry` | invoke | 本机文件读取：同一台电脑两边都能读，网页与手机只能走后台 | 0 | `file-browser/index.ts` |
-| `maker:file-browser:fetch-remote` | invoke | 本机文件读取：同一台电脑两边都能读，网页与手机只能走后台 | 0 | `file-browser/index.ts` |
-| `maker:file-browser:list-all` | invoke | 本机文件读取：同一台电脑两边都能读，网页与手机只能走后台 | 0 | `file-browser/index.ts` |
-| `maker:file-browser:list-dir` | invoke | 本机文件读取：同一台电脑两边都能读，网页与手机只能走后台 | 0 | `file-browser/index.ts` |
-| `maker:file-browser:read-cached` | invoke | 本机文件读取：同一台电脑两边都能读，网页与手机只能走后台 | 0 | `file-browser/index.ts` |
-| `maker:file-browser:read-file` | invoke | 本机文件读取：同一台电脑两边都能读，网页与手机只能走后台 | 0 | `file-browser/index.ts` |
-| `maker:file-browser:rename-entry` | invoke | 本机文件读取：同一台电脑两边都能读，网页与手机只能走后台 | 0 | `file-browser/index.ts` |
-| `maker:file-browser:start-watch` | invoke | 本机文件读取：同一台电脑两边都能读，网页与手机只能走后台 | 0 | `file-browser/index.ts` |
-| `maker:file-browser:stat` | invoke | 本机文件读取：同一台电脑两边都能读，网页与手机只能走后台 | 0 | `file-browser/index.ts` |
-| `maker:file-browser:stop-watch` | invoke | 本机文件读取：同一台电脑两边都能读，网页与手机只能走后台 | 0 | `file-browser/index.ts` |
-| `maker:file-browser:write-file` | invoke | 本机文件读取：同一台电脑两边都能读，网页与手机只能走后台 | 0 | `file-browser/index.ts` |
-| `maker:html-preview:cancel` | invoke | 本机文件读取：同一台电脑两边都能读，网页与手机只能走后台 | 0 | `file-browser/html-preview-ipc.ts` |
-| `maker:html-preview:open` | invoke | 本机文件读取：同一台电脑两边都能读，网页与手机只能走后台 | 0 | `file-browser/html-preview-ipc.ts` |
-| `maker:mcp-apps:v1` | invoke | 插件、技能与 MCP，但处理函数用到窗口 API：shell | 0 | `mcp-apps/ipc.ts` |
-| `maker:mcp:duplicates:choose` | invoke | 弹出系统选择框后写入后台数据：选择在窗口，结果归后台 | 0 | `maker-ipc/mcpHandlers.ts` |
-| `maker:remote-ssh:review-host-key` | invoke | 设备互联与远程执行，但处理函数用到窗口 API：BrowserWindow.fromWebContents、dialog | 0 | `remote-ssh/index.ts` |
-| `maker:search:cancel` | invoke | 本机文件读取：同一台电脑两边都能读，网页与手机只能走后台 | 0 | `file-browser/search/index.ts` |
-| `maker:search:start` | invoke | 本机文件读取：同一台电脑两边都能读，网页与手机只能走后台 | 0 | `file-browser/search/index.ts` |
-| `peek-file-header` | invoke | 本机文件读取：同一台电脑两边都能读，网页与手机只能走后台 | 0 | `bootstrap-electron.ts` |
-| `plugin-market:pick-local-source` | invoke | 弹出系统选择框后写入后台数据：选择在窗口，结果归后台 | 0 | `plugin-market/registerIpc.ts` |
-| `profile:choose-avatar` | invoke | 弹出系统选择框后写入后台数据：选择在窗口，结果归后台 | 0 | `bootstrap-electron.ts` |
-| `projects-root:choose` | invoke | 弹出系统选择框后写入后台数据：选择在窗口，结果归后台 | 0 | `bootstrap-electron.ts` |
-| `read-file-bytes` | invoke | 本机文件读取：同一台电脑两边都能读，网页与手机只能走后台 | 0 | `bootstrap-electron.ts` |
-| `read-file-for-attachment` | invoke | 本机文件读取：同一台电脑两边都能读，网页与手机只能走后台 | 0 | `bootstrap-electron.ts` |
-| `skillhub:pick-local` | invoke | 弹出系统选择框后写入后台数据：选择在窗口，结果归后台 | 0 | `skillhub/registerIpc.ts` |
-| `skillhub:uninstall` | invoke | 插件、技能与 MCP，但处理函数用到窗口 API：BrowserWindow.fromWebContents、dialog、shell | 0 | `skillhub/registerIpc.ts` |
-| `terminal:create` | invoke | 终端 PTY：放窗口则换窗口时断开，放后台需要流式输出通道 | 0 | `maker-ipc/terminal-handlers.ts` |
-| `terminal:dispose` | invoke | 终端 PTY：放窗口则换窗口时断开，放后台需要流式输出通道 | 0 | `maker-ipc/terminal-handlers.ts` |
-| `terminal:resize` | invoke | 终端 PTY：放窗口则换窗口时断开，放后台需要流式输出通道 | 0 | `maker-ipc/terminal-handlers.ts` |
-| `terminal:restart` | invoke | 终端 PTY：放窗口则换窗口时断开，放后台需要流式输出通道 | 0 | `maker-ipc/terminal-handlers.ts` |
-| `terminal:set-default-shell-pref` | invoke | 终端 PTY：放窗口则换窗口时断开，放后台需要流式输出通道 | 0 | `maker-ipc/terminal-handlers.ts` |
-| `terminal:write` | invoke | 终端 PTY：放窗口则换窗口时断开，放后台需要流式输出通道 | 0 | `maker-ipc/terminal-handlers.ts` |
-| `text-file:read-preview` | invoke | 本机文件读取：同一台电脑两边都能读，网页与手机只能走后台 | 0 | `bootstrap-electron.ts` |
-| `wechatBot:choose-working-directory` | invoke | 弹出系统选择框后写入后台数据：选择在窗口，结果归后台 | 0 | `im/index.ts` |
-| `worktree:reveal` | invoke | 在访达／资源管理器或系统浏览器里打开后台持有的内容 | 0 | `worktree/index.ts` |
+C-后台：换窗口时不能断、网页和手机也要用，计入要 Host 做的（终端优先级低）。C-两段式：窗口保留处理者做界面动作，数据那一半调 Host，每个需要一个 Host 接口，计入但低频、排在后面。C-窗口本地：路径来自用户在本窗口的选择，客户端模式下照常注册，不计入。C-专项设计：安全边界，先读 docs/product-rules/input-handoff.md，方案出来前不动。
 
-## 窗口类（B + W）在客户端模式下的实际行为
+| 通道 | 类型 | 归属 | 原因 | 调用次数 | 注册文件 |
+|---|---|---|---|---:|---|
+| `fs:resolve-path-batch` | invoke | C-窗口本地 | 用户在本窗口选择或拖入的本机文件、本机进程监视：窗口直接处理，客户端模式下照常注册 | 1 | `bootstrap-electron.ts` |
+| `process-monitor:subscribe` | invoke | C-窗口本地 | 用户在本窗口选择或拖入的本机文件、本机进程监视：窗口直接处理，客户端模式下照常注册 | 1 | `process-monitor/ipc.ts` |
+| `terminal:get-default-shell-pref` | invoke | C-后台 | 终端 PTY：换窗口时不能断，网页和手机也要用（优先级低，放后面批次） | 1 | `maker-ipc/terminal-handlers.ts` |
+| `terminal:list-available-shells` | invoke | C-后台 | 终端 PTY：换窗口时不能断，网页和手机也要用（优先级低，放后面批次） | 1 | `maker-ipc/terminal-handlers.ts` |
+| `app:cindy-make-history-open-build` | invoke | C-两段式（窗口做界面动作，数据调 Host） | Cindy Make，但处理函数用到窗口 API：shell；窗口做界面动作，数据那一半调 Host | 0 | `bootstrap-electron.ts` |
+| `app:open-cindy-make-source-dir` | invoke | C-两段式（窗口做界面动作，数据调 Host） | 在访达／资源管理器或系统浏览器里打开后台持有的内容 | 0 | `bootstrap-electron.ts` |
+| `app:open-cindy-make-tools-dir` | invoke | C-两段式（窗口做界面动作，数据调 Host） | 在访达／资源管理器或系统浏览器里打开后台持有的内容 | 0 | `bootstrap-electron.ts` |
+| `appearance-settings:import-wallpaper` | invoke | C-两段式（窗口做界面动作，数据调 Host） | 设置与偏好，但处理函数用到窗口 API：BrowserWindow.fromWebContents；窗口做界面动作，数据那一半调 Host | 0 | `appearance-settings-ipc.ts` |
+| `billing:open-payment-redirect` | invoke | C-两段式（窗口做界面动作，数据调 Host） | 在访达／资源管理器或系统浏览器里打开后台持有的内容 | 0 | `billing/index.ts` |
+| `billing:open-subscription-portal` | invoke | C-两段式（窗口做界面动作，数据调 Host） | 在访达／资源管理器或系统浏览器里打开后台持有的内容 | 0 | `billing/index.ts` |
+| `cindy-media:chat-attachments-clear` | invoke | C-两段式（窗口做界面动作，数据调 Host） | 附件与媒体库，但处理函数用到窗口 API：BrowserWindow.fromWebContents、dialog；窗口做界面动作，数据那一半调 Host | 0 | `bootstrap-electron.ts` |
+| `cindy-media:chat-attachments-open-dir` | invoke | C-两段式（窗口做界面动作，数据调 Host） | 在访达／资源管理器或系统浏览器里打开后台持有的内容 | 0 | `bootstrap-electron.ts` |
+| `cindy-media:legacy-images-clear` | invoke | C-两段式（窗口做界面动作，数据调 Host） | 附件与媒体库，但处理函数用到窗口 API：BrowserWindow.fromWebContents、dialog；窗口做界面动作，数据那一半调 Host | 0 | `bootstrap-electron.ts` |
+| `cindy-media:legacy-images-open-dir` | invoke | C-两段式（窗口做界面动作，数据调 Host） | 在访达／资源管理器或系统浏览器里打开后台持有的内容 | 0 | `bootstrap-electron.ts` |
+| `create-project-from-task:chooseParent` | invoke | C-两段式（窗口做界面动作，数据调 Host） | 弹出系统选择框后写入后台数据：选择在窗口，结果归后台 | 0 | `bootstrap-electron.ts` |
+| `device-link:confirm-skill-mutation` | invoke | C-两段式（窗口做界面动作，数据调 Host） | 设备互联与远程执行，但处理函数用到窗口 API：BrowserWindow.fromWebContents、dialog；窗口做界面动作，数据那一半调 Host | 0 | `device-link/ipc.ts` |
+| `device-link:invoke` | invoke | C-专项设计（安全边界） | 安全边界待专项设计：主人填写的值只交给宿主执行（input-handoff），远程控制派发；方案出来前不动 | 0 | `device-link/ipc.ts` |
+| `device-link:pick-plugin-package` | invoke | C-两段式（窗口做界面动作，数据调 Host） | 弹出系统选择框后写入后台数据：选择在窗口，结果归后台 | 0 | `device-link/ipc.ts` |
+| `dialogue-workspace:choose` | invoke | C-两段式（窗口做界面动作，数据调 Host） | 弹出系统选择框后写入后台数据：选择在窗口，结果归后台 | 0 | `bootstrap-electron.ts` |
+| `file-browser:remote-op` | invoke | C-后台 | 任务范围内的文件操作：换窗口时不能断，网页和手机也要用，路径授权跟着运行时 | 0 | `file-browser/device-op.ts` |
+| `file:thumbnail` | invoke | C-窗口本地 | 用户在本窗口选择或拖入的本机文件、本机进程监视：窗口直接处理，客户端模式下照常注册 | 0 | `bootstrap-electron.ts` |
+| `fs:list-dir` | invoke | C-窗口本地 | 用户在本窗口选择或拖入的本机文件、本机进程监视：窗口直接处理，客户端模式下照常注册 | 0 | `fsBrowse/ipc.ts` |
+| `fs:mkdir-p` | invoke | C-窗口本地 | 用户在本窗口选择或拖入的本机文件、本机进程监视：窗口直接处理，客户端模式下照常注册 | 0 | `fsBrowse/ipc.ts` |
+| `fs:resolve-path` | invoke | C-窗口本地 | 用户在本窗口选择或拖入的本机文件、本机进程监视：窗口直接处理，客户端模式下照常注册 | 0 | `bootstrap-electron.ts` |
+| `fs:stat-path` | invoke | C-窗口本地 | 用户在本窗口选择或拖入的本机文件、本机进程监视：窗口直接处理，客户端模式下照常注册 | 0 | `fsBrowse/ipc.ts` |
+| `ghosts:background-tasks:reveal` | invoke | C-两段式（窗口做界面动作，数据调 Host） | 在访达／资源管理器或系统浏览器里打开后台持有的内容 | 0 | `maker-ipc/register.ts` |
+| `ghosts:export` | invoke | C-两段式（窗口做界面动作，数据调 Host） | 插件、技能与 MCP，但处理函数用到窗口 API：BrowserWindow.fromWebContents、dialog；窗口做界面动作，数据那一半调 Host | 0 | `cindy-brain/index.ts` |
+| `ghosts:library-delete` | invoke | C-两段式（窗口做界面动作，数据调 Host） | 插件、技能与 MCP，但处理函数用到窗口 API：BrowserWindow.fromWebContents、dialog；窗口做界面动作，数据那一半调 Host | 0 | `cindy-brain/index.ts` |
+| `ghosts:library-pick-location` | invoke | C-两段式（窗口做界面动作，数据调 Host） | 插件、技能与 MCP，但处理函数用到窗口 API：BrowserWindow.fromWebContents、dialog；窗口做界面动作，数据那一半调 Host | 0 | `cindy-brain/index.ts` |
+| `ghosts:library-reattach-legacy` | invoke | C-两段式（窗口做界面动作，数据调 Host） | 插件、技能与 MCP，但处理函数用到窗口 API：BrowserWindow.fromWebContents、dialog；窗口做界面动作，数据那一半调 Host | 0 | `cindy-brain/index.ts` |
+| `ghosts:pick-file` | invoke | C-两段式（窗口做界面动作，数据调 Host） | 弹出系统选择框后写入后台数据：选择在窗口，结果归后台 | 0 | `cindy-brain/index.ts` |
+| `input-handoff:picture` | invoke | C-专项设计（安全边界） | 安全边界待专项设计：主人填写的值只交给宿主执行（input-handoff），远程控制派发；方案出来前不动 | 0 | `maker-ipc/register.ts` |
+| `input-handoff:raise` | invoke | C-专项设计（安全边界） | 安全边界待专项设计：主人填写的值只交给宿主执行（input-handoff），远程控制派发；方案出来前不动 | 0 | `maker-ipc/register.ts` |
+| `input-handoff:submit` | invoke | C-专项设计（安全边界） | 安全边界待专项设计：主人填写的值只交给宿主执行（input-handoff），远程控制派发；方案出来前不动 | 0 | `maker-ipc/register.ts` |
+| `local-db:bots:choose-avatar` | invoke | C-两段式（窗口做界面动作，数据调 Host） | 弹出系统选择框后写入后台数据：选择在窗口，结果归后台 | 0 | `localDb/ipc/bots.ts` |
+| `local-db:bots:choose-avatar-source` | invoke | C-两段式（窗口做界面动作，数据调 Host） | 弹出系统选择框后写入后台数据：选择在窗口，结果归后台 | 0 | `localDb/ipc/bots.ts` |
+| `local-db:maintenance:choose-backup-directory` | invoke | C-两段式（窗口做界面动作，数据调 Host） | 弹出系统选择框后写入后台数据：选择在窗口，结果归后台 | 0 | `bootstrap-electron.ts` |
+| `local-db:maintenance:open-last-backup-directory` | invoke | C-两段式（窗口做界面动作，数据调 Host） | 在访达／资源管理器或系统浏览器里打开后台持有的内容 | 0 | `bootstrap-electron.ts` |
+| `local-db:session-share:export` | invoke | C-两段式（窗口做界面动作，数据调 Host） | 任务、消息与输入队列，但处理函数用到窗口 API：BrowserWindow.getFocusedWindow、dialog；窗口做界面动作，数据那一半调 Host | 0 | `localDb/ipc/session-share.ts` |
+| `local-db:session-share:inspect` | invoke | C-两段式（窗口做界面动作，数据调 Host） | 任务、消息与输入队列，但处理函数用到窗口 API：BrowserWindow.getFocusedWindow、dialog；窗口做界面动作，数据那一半调 Host | 0 | `localDb/ipc/session-share.ts` |
+| `local-themes:import` | invoke | C-两段式（窗口做界面动作，数据调 Host） | 设置与偏好，但处理函数用到窗口 API：BrowserWindow.fromWebContents、dialog；窗口做界面动作，数据那一半调 Host | 0 | `local-themes/register.ts` |
+| `local-themes:open-dir` | invoke | C-两段式（窗口做界面动作，数据调 Host） | 在访达／资源管理器或系统浏览器里打开后台持有的内容 | 0 | `local-themes/register.ts` |
+| `maker:chat-file:cancel` | invoke | C-后台 | 任务范围内的文件操作：换窗口时不能断，网页和手机也要用，路径授权跟着运行时 | 0 | `file-browser/index.ts` |
+| `maker:chat-file:download` | invoke | C-后台 | 任务范围内的文件操作：换窗口时不能断，网页和手机也要用，路径授权跟着运行时 | 0 | `file-browser/index.ts` |
+| `maker:chat-file:fetch` | invoke | C-后台 | 任务范围内的文件操作：换窗口时不能断，网页和手机也要用，路径授权跟着运行时 | 0 | `file-browser/index.ts` |
+| `maker:chat-file:stat` | invoke | C-后台 | 任务范围内的文件操作：换窗口时不能断，网页和手机也要用，路径授权跟着运行时 | 0 | `file-browser/index.ts` |
+| `maker:chat-folder:upload` | invoke | C-后台 | 任务范围内的文件操作：换窗口时不能断，网页和手机也要用，路径授权跟着运行时 | 0 | `file-browser/index.ts` |
+| `maker:export-session-html` | invoke | C-两段式（窗口做界面动作，数据调 Host） | 任务、消息与输入队列，但处理函数用到窗口 API：BrowserWindow.fromWebContents、BrowserWindow.getFocusedWindow、dialog、shell；窗口做界面动作，数据那一半调 Host | 0 | `maker-ipc/register.ts` |
+| `maker:file-browser:cache-put` | invoke | C-后台 | 任务范围内的文件操作：换窗口时不能断，网页和手机也要用，路径授权跟着运行时 | 0 | `file-browser/index.ts` |
+| `maker:file-browser:create-file` | invoke | C-后台 | 任务范围内的文件操作：换窗口时不能断，网页和手机也要用，路径授权跟着运行时 | 0 | `file-browser/index.ts` |
+| `maker:file-browser:create-folder` | invoke | C-后台 | 任务范围内的文件操作：换窗口时不能断，网页和手机也要用，路径授权跟着运行时 | 0 | `file-browser/index.ts` |
+| `maker:file-browser:delete-entry` | invoke | C-后台 | 任务范围内的文件操作：换窗口时不能断，网页和手机也要用，路径授权跟着运行时 | 0 | `file-browser/index.ts` |
+| `maker:file-browser:fetch-remote` | invoke | C-后台 | 任务范围内的文件操作：换窗口时不能断，网页和手机也要用，路径授权跟着运行时 | 0 | `file-browser/index.ts` |
+| `maker:file-browser:list-all` | invoke | C-后台 | 任务范围内的文件操作：换窗口时不能断，网页和手机也要用，路径授权跟着运行时 | 0 | `file-browser/index.ts` |
+| `maker:file-browser:list-dir` | invoke | C-后台 | 任务范围内的文件操作：换窗口时不能断，网页和手机也要用，路径授权跟着运行时 | 0 | `file-browser/index.ts` |
+| `maker:file-browser:read-cached` | invoke | C-后台 | 任务范围内的文件操作：换窗口时不能断，网页和手机也要用，路径授权跟着运行时 | 0 | `file-browser/index.ts` |
+| `maker:file-browser:read-file` | invoke | C-后台 | 任务范围内的文件操作：换窗口时不能断，网页和手机也要用，路径授权跟着运行时 | 0 | `file-browser/index.ts` |
+| `maker:file-browser:rename-entry` | invoke | C-后台 | 任务范围内的文件操作：换窗口时不能断，网页和手机也要用，路径授权跟着运行时 | 0 | `file-browser/index.ts` |
+| `maker:file-browser:start-watch` | invoke | C-后台 | 任务范围内的文件操作：换窗口时不能断，网页和手机也要用，路径授权跟着运行时 | 0 | `file-browser/index.ts` |
+| `maker:file-browser:stat` | invoke | C-后台 | 任务范围内的文件操作：换窗口时不能断，网页和手机也要用，路径授权跟着运行时 | 0 | `file-browser/index.ts` |
+| `maker:file-browser:stop-watch` | invoke | C-后台 | 任务范围内的文件操作：换窗口时不能断，网页和手机也要用，路径授权跟着运行时 | 0 | `file-browser/index.ts` |
+| `maker:file-browser:write-file` | invoke | C-后台 | 任务范围内的文件操作：换窗口时不能断，网页和手机也要用，路径授权跟着运行时 | 0 | `file-browser/index.ts` |
+| `maker:html-preview:cancel` | invoke | C-后台 | 任务范围内的文件操作：换窗口时不能断，网页和手机也要用，路径授权跟着运行时 | 0 | `file-browser/html-preview-ipc.ts` |
+| `maker:html-preview:open` | invoke | C-后台 | 任务范围内的文件操作：换窗口时不能断，网页和手机也要用，路径授权跟着运行时 | 0 | `file-browser/html-preview-ipc.ts` |
+| `maker:mcp-apps:v1` | invoke | C-两段式（窗口做界面动作，数据调 Host） | 插件、技能与 MCP，但处理函数用到窗口 API：shell；窗口做界面动作，数据那一半调 Host | 0 | `mcp-apps/ipc.ts` |
+| `maker:mcp:duplicates:choose` | invoke | C-两段式（窗口做界面动作，数据调 Host） | 弹出系统选择框后写入后台数据：选择在窗口，结果归后台 | 0 | `maker-ipc/mcpHandlers.ts` |
+| `maker:remote-ssh:review-host-key` | invoke | C-两段式（窗口做界面动作，数据调 Host） | 设备互联与远程执行，但处理函数用到窗口 API：BrowserWindow.fromWebContents、dialog；窗口做界面动作，数据那一半调 Host | 0 | `remote-ssh/index.ts` |
+| `maker:search:cancel` | invoke | C-后台 | 任务范围内的文件操作：换窗口时不能断，网页和手机也要用，路径授权跟着运行时 | 0 | `file-browser/search/index.ts` |
+| `maker:search:start` | invoke | C-后台 | 任务范围内的文件操作：换窗口时不能断，网页和手机也要用，路径授权跟着运行时 | 0 | `file-browser/search/index.ts` |
+| `peek-file-header` | invoke | C-窗口本地 | 用户在本窗口选择或拖入的本机文件、本机进程监视：窗口直接处理，客户端模式下照常注册 | 0 | `bootstrap-electron.ts` |
+| `plugin-market:pick-local-source` | invoke | C-两段式（窗口做界面动作，数据调 Host） | 弹出系统选择框后写入后台数据：选择在窗口，结果归后台 | 0 | `plugin-market/registerIpc.ts` |
+| `profile:choose-avatar` | invoke | C-两段式（窗口做界面动作，数据调 Host） | 弹出系统选择框后写入后台数据：选择在窗口，结果归后台 | 0 | `bootstrap-electron.ts` |
+| `projects-root:choose` | invoke | C-两段式（窗口做界面动作，数据调 Host） | 弹出系统选择框后写入后台数据：选择在窗口，结果归后台 | 0 | `bootstrap-electron.ts` |
+| `read-file-bytes` | invoke | C-窗口本地 | 用户在本窗口选择或拖入的本机文件、本机进程监视：窗口直接处理，客户端模式下照常注册 | 0 | `bootstrap-electron.ts` |
+| `read-file-for-attachment` | invoke | C-窗口本地 | 用户在本窗口选择或拖入的本机文件、本机进程监视：窗口直接处理，客户端模式下照常注册 | 0 | `bootstrap-electron.ts` |
+| `skillhub:pick-local` | invoke | C-两段式（窗口做界面动作，数据调 Host） | 弹出系统选择框后写入后台数据：选择在窗口，结果归后台 | 0 | `skillhub/registerIpc.ts` |
+| `skillhub:uninstall` | invoke | C-两段式（窗口做界面动作，数据调 Host） | 插件、技能与 MCP，但处理函数用到窗口 API：BrowserWindow.fromWebContents、dialog、shell；窗口做界面动作，数据那一半调 Host | 0 | `skillhub/registerIpc.ts` |
+| `terminal:create` | invoke | C-后台 | 终端 PTY：换窗口时不能断，网页和手机也要用（优先级低，放后面批次） | 0 | `maker-ipc/terminal-handlers.ts` |
+| `terminal:dispose` | invoke | C-后台 | 终端 PTY：换窗口时不能断，网页和手机也要用（优先级低，放后面批次） | 0 | `maker-ipc/terminal-handlers.ts` |
+| `terminal:resize` | invoke | C-后台 | 终端 PTY：换窗口时不能断，网页和手机也要用（优先级低，放后面批次） | 0 | `maker-ipc/terminal-handlers.ts` |
+| `terminal:restart` | invoke | C-后台 | 终端 PTY：换窗口时不能断，网页和手机也要用（优先级低，放后面批次） | 0 | `maker-ipc/terminal-handlers.ts` |
+| `terminal:set-default-shell-pref` | invoke | C-后台 | 终端 PTY：换窗口时不能断，网页和手机也要用（优先级低，放后面批次） | 0 | `maker-ipc/terminal-handlers.ts` |
+| `terminal:write` | invoke | C-后台 | 终端 PTY：换窗口时不能断，网页和手机也要用（优先级低，放后面批次） | 0 | `maker-ipc/terminal-handlers.ts` |
+| `text-file:read-preview` | invoke | C-窗口本地 | 用户在本窗口选择或拖入的本机文件、本机进程监视：窗口直接处理，客户端模式下照常注册 | 0 | `bootstrap-electron.ts` |
+| `wechatBot:choose-working-directory` | invoke | C-两段式（窗口做界面动作，数据调 Host） | 弹出系统选择框后写入后台数据：选择在窗口，结果归后台 | 0 | `im/index.ts` |
+| `worktree:reveal` | invoke | C-两段式（窗口做界面动作，数据调 Host） | 在访达／资源管理器或系统浏览器里打开后台持有的内容 | 0 | `worktree/index.ts` |
+
+## 窗口类在客户端模式下的实际行为
 
 来源：`docs/host/evidence/channel-usage-client-login.json`（client mode at the sign-in page (isolated cindy-host on a fresh sandbox + pnpm restart:desktop:remote -- --isolated=host-client with CINDY_HOST_API)；client 模式，2026-11-11）；对照 `docs/host/evidence/channel-usage-mock-tour.json`（UI fixture tour (pnpm restart:desktop:remote -- --mock --isolated=host-usage + apps/desktop/scripts/host-client-usage-tour.mjs)；embedded 模式，2026-11-11）。
 两份快照都是报告写入时主进程已注册的处理者；客户端快照里没有、普通模式快照里有，就是该在窗口本地处理却没有注册的通道。
@@ -312,7 +358,7 @@ W、C 规则直接定类；A 规则只标出领域，处理函数（及其调用
 
 | 行为 | 通道数 |
 |---|---:|
-| 窗口本地照常处理 | 361 |
+| 窗口本地照常处理 | 371 |
 | 被拒：UNSUPPORTED_CAPABILITY | 11 |
 | 消息无人监听（被丢弃） | 1 |
 | 注册在插件页面的 webContents.ipc 上，主进程快照不覆盖 | 2 |
@@ -338,78 +384,78 @@ W、C 规则直接定类；A 规则只标出领域，处理函数（及其调用
 
 ## 按注册模块
 
-| 模块 | 已代理 | A | B | W | C | 合计 |
-|---|---:|---:|---:|---:|---:|---:|
-| maker-ipc | 26 | 302 | 12 | 0 | 14 | 354 |
-| bootstrap-electron | 5 | 129 | 61 | 1 | 20 | 216 |
-| localDb | 20 | 61 | 1 | 1 | 4 | 87 |
-| im | 0 | 58 | 0 | 0 | 1 | 59 |
-| cindy-brain | 5 | 54 | 2 | 0 | 5 | 66 |
-| device-link | 0 | 49 | 0 | 0 | 3 | 52 |
-| skillhub | 0 | 40 | 0 | 0 | 2 | 42 |
-| hook-control | 0 | 29 | 0 | 0 | 0 | 29 |
-| remote-ssh | 0 | 28 | 0 | 0 | 1 | 29 |
-| git-review | 0 | 21 | 0 | 0 | 0 | 21 |
-| billing | 0 | 19 | 0 | 0 | 2 | 21 |
-| local-model-runtime | 0 | 19 | 0 | 0 | 0 | 19 |
-| plugin-market | 0 | 19 | 0 | 0 | 1 | 20 |
-| git-context | 0 | 17 | 0 | 0 | 0 | 17 |
-| plugin-contributions | 0 | 13 | 0 | 0 | 0 | 13 |
-| worktree | 0 | 11 | 0 | 0 | 1 | 12 |
-| setup-migration | 0 | 7 | 0 | 0 | 0 | 7 |
-| learn-host | 0 | 6 | 0 | 0 | 0 | 6 |
-| plugin-publisher | 0 | 5 | 0 | 0 | 0 | 5 |
-| session-import | 0 | 5 | 0 | 0 | 0 | 5 |
-| wecomGroupNotification | 0 | 5 | 0 | 0 | 0 | 5 |
-| analyticsSettingsService | 0 | 4 | 0 | 0 | 0 | 4 |
-| appearance-settings-ipc | 2 | 4 | 0 | 1 | 1 | 8 |
-| app-shortcuts | 0 | 3 | 1 | 1 | 0 | 5 |
-| remotePrecreatedWorktreeLedger | 0 | 3 | 0 | 0 | 0 | 3 |
-| cross-agent-convert | 0 | 2 | 0 | 0 | 0 | 2 |
-| legacyUserDataMigration | 0 | 2 | 0 | 0 | 0 | 2 |
-| local-themes | 0 | 2 | 0 | 1 | 2 | 5 |
-| process-monitor | 0 | 2 | 0 | 0 | 1 | 3 |
-| relaunchBusyActivityIpc | 0 | 2 | 0 | 0 | 0 | 2 |
-| subscription-accounts | 0 | 2 | 0 | 0 | 0 | 2 |
-| app-settings | 0 | 1 | 0 | 0 | 0 | 1 |
-| bot-import | 0 | 1 | 0 | 0 | 0 | 1 |
-| commands | 0 | 1 | 0 | 0 | 0 | 1 |
-| local-agent | 0 | 1 | 0 | 0 | 0 | 1 |
-| model-access | 2 | 1 | 0 | 0 | 0 | 3 |
-| provider-group | 0 | 1 | 0 | 0 | 0 | 1 |
-| task-migration | 0 | 1 | 0 | 0 | 0 | 1 |
-| accessibility-support-ipc | 0 | 0 | 1 | 0 | 0 | 1 |
-| agent-island | 0 | 0 | 15 | 0 | 0 | 15 |
-| appBadgeService | 0 | 0 | 3 | 0 | 0 | 3 |
-| clientEndpointsService | 0 | 0 | 0 | 1 | 0 | 1 |
-| crash-diagnosis | 0 | 0 | 3 | 0 | 0 | 3 |
-| file-browser | 0 | 0 | 0 | 0 | 24 | 24 |
-| fsBrowse | 0 | 0 | 0 | 0 | 3 | 3 |
-| ipc | 0 | 0 | 2 | 0 | 0 | 2 |
-| layout | 2 | 0 | 0 | 1 | 0 | 3 |
-| log-upload | 0 | 0 | 4 | 0 | 0 | 4 |
-| login-item-ipc | 0 | 0 | 2 | 0 | 0 | 2 |
-| maker-host | 1 | 0 | 0 | 0 | 0 | 1 |
-| mcp-apps | 0 | 0 | 0 | 0 | 1 | 1 |
-| mcp-integrations | 0 | 0 | 9 | 0 | 0 | 9 |
-| menubar | 0 | 0 | 2 | 0 | 0 | 2 |
-| notificationService | 0 | 0 | 2 | 0 | 0 | 2 |
-| performance-trace | 0 | 0 | 2 | 0 | 0 | 2 |
-| projectOrderStore | 0 | 0 | 0 | 2 | 0 | 2 |
-| region-screenshot | 0 | 0 | 48 | 0 | 0 | 48 |
-| remote-desktop | 0 | 0 | 20 | 0 | 0 | 20 |
-| remote-desktop-viewer | 0 | 0 | 17 | 0 | 0 | 17 |
-| resource-usage-window | 0 | 0 | 4 | 0 | 0 | 4 |
-| right-sidebar-window | 0 | 0 | 11 | 0 | 0 | 11 |
-| rsb-browser-bridge | 0 | 0 | 12 | 0 | 0 | 12 |
-| sidebar-tab-window | 0 | 0 | 10 | 0 | 0 | 10 |
-| sidebarSettingsStore | 0 | 0 | 0 | 5 | 0 | 5 |
-| sidebarWindowExpansionIpc | 0 | 0 | 1 | 0 | 0 | 1 |
-| updateService | 0 | 0 | 17 | 0 | 0 | 17 |
-| voice-conversation | 0 | 0 | 22 | 0 | 0 | 22 |
-| voice-input | 0 | 0 | 62 | 0 | 0 | 62 |
-| worklouder-codex | 0 | 0 | 10 | 0 | 0 | 10 |
-| xbox-gamepad | 0 | 0 | 5 | 0 | 0 | 5 |
+| 模块 | 已代理 | A | B | W | S | R | C | 合计 |
+|---|---:|---:|---:|---:|---:|---:|---:|---:|
+| maker-ipc | 26 | 299 | 12 | 0 | 0 | 3 | 14 | 354 |
+| bootstrap-electron | 5 | 129 | 61 | 0 | 1 | 0 | 20 | 216 |
+| localDb | 20 | 61 | 1 | 1 | 0 | 0 | 4 | 87 |
+| im | 0 | 58 | 0 | 0 | 0 | 0 | 1 | 59 |
+| device-link | 0 | 49 | 0 | 0 | 0 | 0 | 3 | 52 |
+| cindy-brain | 5 | 48 | 2 | 0 | 6 | 0 | 5 | 66 |
+| skillhub | 0 | 40 | 0 | 0 | 0 | 0 | 2 | 42 |
+| hook-control | 0 | 29 | 0 | 0 | 0 | 0 | 0 | 29 |
+| remote-ssh | 0 | 28 | 0 | 0 | 0 | 0 | 1 | 29 |
+| git-review | 0 | 21 | 0 | 0 | 0 | 0 | 0 | 21 |
+| billing | 0 | 19 | 0 | 0 | 0 | 0 | 2 | 21 |
+| local-model-runtime | 0 | 19 | 0 | 0 | 0 | 0 | 0 | 19 |
+| plugin-market | 0 | 19 | 0 | 0 | 0 | 0 | 1 | 20 |
+| git-context | 0 | 17 | 0 | 0 | 0 | 0 | 0 | 17 |
+| plugin-contributions | 0 | 13 | 0 | 0 | 0 | 0 | 0 | 13 |
+| worktree | 0 | 11 | 0 | 0 | 0 | 0 | 1 | 12 |
+| learn-host | 0 | 6 | 0 | 0 | 0 | 0 | 0 | 6 |
+| plugin-publisher | 0 | 5 | 0 | 0 | 0 | 0 | 0 | 5 |
+| session-import | 0 | 5 | 0 | 0 | 0 | 0 | 0 | 5 |
+| setup-migration | 0 | 5 | 0 | 0 | 0 | 2 | 0 | 7 |
+| wecomGroupNotification | 0 | 5 | 0 | 0 | 0 | 0 | 0 | 5 |
+| analyticsSettingsService | 0 | 4 | 0 | 0 | 0 | 0 | 0 | 4 |
+| appearance-settings-ipc | 2 | 4 | 0 | 0 | 1 | 0 | 1 | 8 |
+| app-shortcuts | 0 | 3 | 1 | 0 | 1 | 0 | 0 | 5 |
+| remotePrecreatedWorktreeLedger | 0 | 3 | 0 | 0 | 0 | 0 | 0 | 3 |
+| cross-agent-convert | 0 | 2 | 0 | 0 | 0 | 0 | 0 | 2 |
+| legacyUserDataMigration | 0 | 2 | 0 | 0 | 0 | 0 | 0 | 2 |
+| local-themes | 0 | 2 | 0 | 0 | 1 | 0 | 2 | 5 |
+| process-monitor | 0 | 2 | 0 | 0 | 0 | 0 | 1 | 3 |
+| relaunchBusyActivityIpc | 0 | 2 | 0 | 0 | 0 | 0 | 0 | 2 |
+| subscription-accounts | 0 | 2 | 0 | 0 | 0 | 0 | 0 | 2 |
+| bot-import | 0 | 1 | 0 | 0 | 0 | 0 | 0 | 1 |
+| commands | 0 | 1 | 0 | 0 | 0 | 0 | 0 | 1 |
+| local-agent | 0 | 1 | 0 | 0 | 0 | 0 | 0 | 1 |
+| model-access | 2 | 1 | 0 | 0 | 0 | 0 | 0 | 3 |
+| provider-group | 0 | 1 | 0 | 0 | 0 | 0 | 0 | 1 |
+| task-migration | 0 | 1 | 0 | 0 | 0 | 0 | 0 | 1 |
+| accessibility-support-ipc | 0 | 0 | 1 | 0 | 0 | 0 | 0 | 1 |
+| agent-island | 0 | 0 | 15 | 0 | 0 | 0 | 0 | 15 |
+| app-settings | 0 | 0 | 0 | 0 | 0 | 1 | 0 | 1 |
+| appBadgeService | 0 | 0 | 3 | 0 | 0 | 0 | 0 | 3 |
+| clientEndpointsService | 0 | 0 | 0 | 0 | 1 | 0 | 0 | 1 |
+| crash-diagnosis | 0 | 0 | 3 | 0 | 0 | 0 | 0 | 3 |
+| file-browser | 0 | 0 | 0 | 0 | 0 | 0 | 24 | 24 |
+| fsBrowse | 0 | 0 | 0 | 0 | 0 | 0 | 3 | 3 |
+| ipc | 0 | 0 | 2 | 0 | 0 | 0 | 0 | 2 |
+| layout | 2 | 0 | 0 | 0 | 1 | 0 | 0 | 3 |
+| log-upload | 0 | 0 | 4 | 0 | 0 | 0 | 0 | 4 |
+| login-item-ipc | 0 | 0 | 2 | 0 | 0 | 0 | 0 | 2 |
+| maker-host | 1 | 0 | 0 | 0 | 0 | 0 | 0 | 1 |
+| mcp-apps | 0 | 0 | 0 | 0 | 0 | 0 | 1 | 1 |
+| mcp-integrations | 0 | 0 | 9 | 0 | 0 | 0 | 0 | 9 |
+| menubar | 0 | 0 | 2 | 0 | 0 | 0 | 0 | 2 |
+| notificationService | 0 | 0 | 2 | 0 | 0 | 0 | 0 | 2 |
+| performance-trace | 0 | 0 | 2 | 0 | 0 | 0 | 0 | 2 |
+| projectOrderStore | 0 | 0 | 0 | 2 | 0 | 0 | 0 | 2 |
+| region-screenshot | 0 | 0 | 48 | 0 | 0 | 0 | 0 | 48 |
+| remote-desktop | 0 | 0 | 20 | 0 | 0 | 0 | 0 | 20 |
+| remote-desktop-viewer | 0 | 0 | 17 | 0 | 0 | 0 | 0 | 17 |
+| resource-usage-window | 0 | 0 | 4 | 0 | 0 | 0 | 0 | 4 |
+| right-sidebar-window | 0 | 0 | 11 | 0 | 0 | 0 | 0 | 11 |
+| rsb-browser-bridge | 0 | 0 | 12 | 0 | 0 | 0 | 0 | 12 |
+| sidebar-tab-window | 0 | 0 | 10 | 0 | 0 | 0 | 0 | 10 |
+| sidebarSettingsStore | 0 | 0 | 0 | 3 | 2 | 0 | 0 | 5 |
+| sidebarWindowExpansionIpc | 0 | 0 | 1 | 0 | 0 | 0 | 0 | 1 |
+| updateService | 0 | 0 | 17 | 0 | 0 | 0 | 0 | 17 |
+| voice-conversation | 0 | 0 | 22 | 0 | 0 | 0 | 0 | 22 |
+| voice-input | 0 | 0 | 62 | 0 | 0 | 0 | 0 | 62 |
+| worklouder-codex | 0 | 0 | 10 | 0 | 0 | 0 | 0 | 10 |
+| xbox-gamepad | 0 | 0 | 5 | 0 | 0 | 0 | 0 | 5 |
 
 ## 全部通道
 
@@ -452,14 +498,14 @@ W、C 规则直接定类；A 规则只标出领域，处理函数（及其调用
 
 | 通道 | 类型 | 归属 | 调用次数 | 注册文件 |
 |---|---|---|---:|---|
-| `app-preferences:reply` | event | A（设置与偏好） | 0 | `app-settings/preferences.ts` |
+| `app-preferences:reply` | event | R（主进程向界面要数据的回执协议：数据在界面本地存储，Host 要用需经窗口往返，先不排期） | 0 | `app-settings/preferences.ts` |
 
 ### app-shortcuts
 
 | 通道 | 类型 | 归属 | 调用次数 | 注册文件 |
 |---|---|---|---:|---|
 | `app-shortcuts:clear-override` | invoke | A（设置与偏好） | 0 | `app-shortcuts/index.ts` |
-| `app-shortcuts:get` | event | W（同步通道（event.returnValue）：转发给 Host 只会阻塞主进程，由窗口本地读同一份 profile） | 1 | `app-shortcuts/index.ts` |
+| `app-shortcuts:get` | event | 同步·界面设置（窗口本地读 profile）（同步通道·界面设置：窗口本地读同一份 profile 文件） | 1 | `app-shortcuts/index.ts` |
 | `app-shortcuts:reset-all` | invoke | A（设置与偏好） | 0 | `app-shortcuts/index.ts` |
 | `app-shortcuts:set-override` | invoke | A（设置与偏好） | 0 | `app-shortcuts/index.ts` |
 | `app-shortcuts:set-recording` | event | B（本机输入设备与语音） | 0 | `app-shortcuts/index.ts` |
@@ -479,8 +525,8 @@ W、C 规则直接定类；A 规则只标出领域，处理函数（及其调用
 | `appearance-settings:ensure-wallpaper-image` | invoke | A（设置与偏好） | 0 | `appearance-settings-ipc.ts` |
 | `appearance-settings:ensure-wallpaper-video` | invoke | A（设置与偏好） | 0 | `appearance-settings-ipc.ts` |
 | `appearance-settings:get` | invoke | A（设置与偏好） | 1 | `appearance-settings-ipc.ts` |
-| `appearance-settings:get-sync` | event | W（同步通道（event.returnValue）：转发给 Host 只会阻塞主进程，由窗口本地读同一份 profile） | 3 | `appearance-settings-ipc.ts` |
-| `appearance-settings:import-wallpaper` | invoke | C（设置与偏好，但处理函数用到窗口 API：BrowserWindow.fromWebContents） | 0 | `appearance-settings-ipc.ts` |
+| `appearance-settings:get-sync` | event | 同步·界面设置（窗口本地读 profile）（同步通道·界面设置：窗口本地读同一份 profile 文件） | 3 | `appearance-settings-ipc.ts` |
+| `appearance-settings:import-wallpaper` | invoke | C-两段式（窗口做界面动作，数据调 Host）（设置与偏好，但处理函数用到窗口 API：BrowserWindow.fromWebContents；窗口做界面动作，数据那一半调 Host） | 0 | `appearance-settings-ipc.ts` |
 | `appearance-settings:remove-wallpaper` | invoke | A（设置与偏好） | 0 | `appearance-settings-ipc.ts` |
 | `appearance-settings:reset` | invoke | contract | 0 | `appearance-settings-ipc.ts` |
 | `appearance-settings:set-patch` | invoke | contract | 0 | `appearance-settings-ipc.ts` |
@@ -502,8 +548,8 @@ W、C 规则直接定类；A 规则只标出领域，处理函数（及其调用
 | `billing:get-order` | invoke | A（未登记前缀，处理函数没有用到窗口 API） | 0 | `billing/index.ts` |
 | `billing:list-orders` | invoke | A（未登记前缀，处理函数没有用到窗口 API） | 0 | `billing/index.ts` |
 | `billing:list-payment-history` | invoke | A（未登记前缀，处理函数没有用到窗口 API） | 0 | `billing/index.ts` |
-| `billing:open-payment-redirect` | invoke | C（在访达／资源管理器或系统浏览器里打开后台持有的内容） | 0 | `billing/index.ts` |
-| `billing:open-subscription-portal` | invoke | C（在访达／资源管理器或系统浏览器里打开后台持有的内容） | 0 | `billing/index.ts` |
+| `billing:open-payment-redirect` | invoke | C-两段式（窗口做界面动作，数据调 Host）（在访达／资源管理器或系统浏览器里打开后台持有的内容） | 0 | `billing/index.ts` |
+| `billing:open-subscription-portal` | invoke | C-两段式（窗口做界面动作，数据调 Host）（在访达／资源管理器或系统浏览器里打开后台持有的内容） | 0 | `billing/index.ts` |
 | `billing:quote-plan-change` | invoke | A（未登记前缀，处理函数没有用到窗口 API） | 0 | `billing/index.ts` |
 | `billing:refresh-plan-change` | invoke | A（未登记前缀，处理函数没有用到窗口 API） | 0 | `billing/index.ts` |
 | `billing:refresh-subscription-purchase` | invoke | A（未登记前缀，处理函数没有用到窗口 API） | 0 | `billing/index.ts` |
@@ -525,7 +571,7 @@ W、C 规则直接定类；A 规则只标出领域，处理函数（及其调用
 | `app:cindy-make-history-action` | invoke | A（Cindy Make） | 0 | `bootstrap-electron.ts` |
 | `app:cindy-make-history-build` | invoke | A（Cindy Make） | 0 | `bootstrap-electron.ts` |
 | `app:cindy-make-history-cancel-build` | invoke | A（Cindy Make） | 0 | `bootstrap-electron.ts` |
-| `app:cindy-make-history-open-build` | invoke | C（Cindy Make，但处理函数用到窗口 API：shell） | 0 | `bootstrap-electron.ts` |
+| `app:cindy-make-history-open-build` | invoke | C-两段式（窗口做界面动作，数据调 Host）（Cindy Make，但处理函数用到窗口 API：shell；窗口做界面动作，数据那一半调 Host） | 0 | `bootstrap-electron.ts` |
 | `app:cindy-make-merge` | invoke | A（Cindy Make） | 0 | `bootstrap-electron.ts` |
 | `app:cindy-make-personal-remote` | invoke | A（Cindy Make） | 0 | `bootstrap-electron.ts` |
 | `app:cindy-make-sync` | invoke | A（Cindy Make） | 0 | `bootstrap-electron.ts` |
@@ -537,8 +583,8 @@ W、C 规则直接定类；A 规则只标出领域，处理函数（及其调用
 | `app:get-cindy-make-source-status` | invoke | A（Cindy Make） | 0 | `bootstrap-electron.ts` |
 | `app:get-cindy-make-state` | invoke | A（Cindy Make） | 1 | `bootstrap-electron.ts` |
 | `app:manage-cindy-make-task` | invoke | A（Cindy Make） | 0 | `bootstrap-electron.ts` |
-| `app:open-cindy-make-source-dir` | invoke | C（在访达／资源管理器或系统浏览器里打开后台持有的内容） | 0 | `bootstrap-electron.ts` |
-| `app:open-cindy-make-tools-dir` | invoke | C（在访达／资源管理器或系统浏览器里打开后台持有的内容） | 0 | `bootstrap-electron.ts` |
+| `app:open-cindy-make-source-dir` | invoke | C-两段式（窗口做界面动作，数据调 Host）（在访达／资源管理器或系统浏览器里打开后台持有的内容） | 0 | `bootstrap-electron.ts` |
+| `app:open-cindy-make-tools-dir` | invoke | C-两段式（窗口做界面动作，数据调 Host）（在访达／资源管理器或系统浏览器里打开后台持有的内容） | 0 | `bootstrap-electron.ts` |
 | `app:open-logs-dir` | invoke | B（桌面安装包自身：更新、版本、日志与诊断） | 0 | `bootstrap-electron.ts` |
 | `app:prepare-cindy-make-workspace` | invoke | A（Cindy Make） | 0 | `bootstrap-electron.ts` |
 | `app:ready-for-bot` | invoke | A（未登记前缀，处理函数没有用到窗口 API） | 1 | `bootstrap-electron.ts` |
@@ -560,7 +606,7 @@ W、C 规则直接定类；A 规则只标出领域，处理函数（及其调用
 | `auth:exit-local` | invoke | A（账号与凭据） | 0 | `bootstrap-electron.ts` |
 | `auth:get-captcha-challenge-url` | invoke | A（账号与凭据） | 0 | `bootstrap-electron.ts` |
 | `auth:get-login-state` | invoke | A（账号与凭据） | 0 | `bootstrap-electron.ts` |
-| `auth:has-persisted-session-hint-sync` | event | W（同步通道（event.returnValue）：转发给 Host 只会阻塞主进程，由窗口本地读同一份 profile） | 4 | `bootstrap-electron.ts` |
+| `auth:has-persisted-session-hint-sync` | event | 同步·数据归 Host（需窗口缓存镜像）（同步通道·账号与凭据：数据归 Host，需窗口缓存镜像（Host 经事件流推送，窗口同步回答缓存）或改界面为异步，放进对应小批单独设计） | 4 | `bootstrap-electron.ts` |
 | `auth:initialize` | invoke | A（账号与凭据） | 2 | `bootstrap-electron.ts` |
 | `auth:logout` | invoke | contract | 0 | `bootstrap-electron.ts` |
 | `auth:refresh` | invoke | contract | 0 | `bootstrap-electron.ts` |
@@ -572,17 +618,17 @@ W、C 规则直接定类；A 规则只标出领域，处理函数（及其调用
 | `chat-attachment:save-as` | invoke | B（原生对话框、剪贴板、系统外壳与通知） | 0 | `bootstrap-electron.ts` |
 | `chat-attachment:stage` | invoke | A（附件与媒体库） | 0 | `bootstrap-electron.ts` |
 | `check-environment` | invoke | A（未登记前缀，处理函数没有用到窗口 API） | 1 | `bootstrap-electron.ts` |
-| `cindy-media:chat-attachments-clear` | invoke | C（附件与媒体库，但处理函数用到窗口 API：BrowserWindow.fromWebContents、dialog） | 0 | `bootstrap-electron.ts` |
-| `cindy-media:chat-attachments-open-dir` | invoke | C（在访达／资源管理器或系统浏览器里打开后台持有的内容） | 0 | `bootstrap-electron.ts` |
-| `cindy-media:legacy-images-clear` | invoke | C（附件与媒体库，但处理函数用到窗口 API：BrowserWindow.fromWebContents、dialog） | 0 | `bootstrap-electron.ts` |
-| `cindy-media:legacy-images-open-dir` | invoke | C（在访达／资源管理器或系统浏览器里打开后台持有的内容） | 0 | `bootstrap-electron.ts` |
+| `cindy-media:chat-attachments-clear` | invoke | C-两段式（窗口做界面动作，数据调 Host）（附件与媒体库，但处理函数用到窗口 API：BrowserWindow.fromWebContents、dialog；窗口做界面动作，数据那一半调 Host） | 0 | `bootstrap-electron.ts` |
+| `cindy-media:chat-attachments-open-dir` | invoke | C-两段式（窗口做界面动作，数据调 Host）（在访达／资源管理器或系统浏览器里打开后台持有的内容） | 0 | `bootstrap-electron.ts` |
+| `cindy-media:legacy-images-clear` | invoke | C-两段式（窗口做界面动作，数据调 Host）（附件与媒体库，但处理函数用到窗口 API：BrowserWindow.fromWebContents、dialog；窗口做界面动作，数据那一半调 Host） | 0 | `bootstrap-electron.ts` |
+| `cindy-media:legacy-images-open-dir` | invoke | C-两段式（窗口做界面动作，数据调 Host）（在访达／资源管理器或系统浏览器里打开后台持有的内容） | 0 | `bootstrap-electron.ts` |
 | `cindy-media:report-draft-urls` | event | A（附件与媒体库） | 0 | `bootstrap-electron.ts` |
 | `cindy-media:storage-cleanup` | invoke | A（附件与媒体库） | 0 | `bootstrap-electron.ts` |
 | `cindy-media:storage-reconcile` | invoke | A（附件与媒体库） | 0 | `bootstrap-electron.ts` |
 | `cindy-media:storage-scan` | invoke | A（附件与媒体库） | 0 | `bootstrap-electron.ts` |
 | `cindy-media:storage-stats` | invoke | A（附件与媒体库） | 1 | `bootstrap-electron.ts` |
 | `clipboard:copy-text` | invoke | B（原生对话框、剪贴板、系统外壳与通知） | 0 | `bootstrap-electron.ts` |
-| `create-project-from-task:chooseParent` | invoke | C（弹出系统选择框后写入后台数据：选择在窗口，结果归后台） | 0 | `bootstrap-electron.ts` |
+| `create-project-from-task:chooseParent` | invoke | C-两段式（窗口做界面动作，数据调 Host）（弹出系统选择框后写入后台数据：选择在窗口，结果归后台） | 0 | `bootstrap-electron.ts` |
 | `create-project-from-task:create` | invoke | A（未登记前缀，处理函数没有用到窗口 API） | 0 | `bootstrap-electron.ts` |
 | `create-project-from-task:prepare` | invoke | A（未登记前缀，处理函数没有用到窗口 API） | 0 | `bootstrap-electron.ts` |
 | `database-size-warning:get-settings` | invoke | A（设置与偏好） | 3 | `bootstrap-electron.ts` |
@@ -595,15 +641,15 @@ W、C 规则直接定类；A 规则只标出领域，处理函数（及其调用
 | `dialog:show-open-directory` | invoke | B（原生对话框、剪贴板、系统外壳与通知） | 0 | `bootstrap-electron.ts` |
 | `dialog:show-open-file` | invoke | B（原生对话框、剪贴板、系统外壳与通知） | 0 | `bootstrap-electron.ts` |
 | `dialog:show-open-resource` | invoke | B（原生对话框、剪贴板、系统外壳与通知） | 0 | `bootstrap-electron.ts` |
-| `dialogue-workspace:choose` | invoke | C（弹出系统选择框后写入后台数据：选择在窗口，结果归后台） | 0 | `bootstrap-electron.ts` |
+| `dialogue-workspace:choose` | invoke | C-两段式（窗口做界面动作，数据调 Host）（弹出系统选择框后写入后台数据：选择在窗口，结果归后台） | 0 | `bootstrap-electron.ts` |
 | `dialogue-workspace:get` | invoke | A（未登记前缀，处理函数没有用到窗口 API） | 1 | `bootstrap-electron.ts` |
 | `dialogue-workspace:open` | invoke | A（未登记前缀，处理函数没有用到窗口 API） | 0 | `bootstrap-electron.ts` |
 | `dialogue-workspace:reset` | invoke | A（未登记前缀，处理函数没有用到窗口 API） | 0 | `bootstrap-electron.ts` |
-| `file:thumbnail` | invoke | C（本机文件读取：同一台电脑两边都能读，网页与手机只能走后台） | 0 | `bootstrap-electron.ts` |
+| `file:thumbnail` | invoke | C-窗口本地（用户在本窗口选择或拖入的本机文件、本机进程监视：窗口直接处理，客户端模式下照常注册） | 0 | `bootstrap-electron.ts` |
 | `find-in-page:start` | invoke | B（窗口外壳、窗口布局与多窗口） | 0 | `bootstrap-electron.ts` |
 | `find-in-page:stop` | event | B（窗口外壳、窗口布局与多窗口） | 0 | `bootstrap-electron.ts` |
-| `fs:resolve-path` | invoke | C（本机文件读取：同一台电脑两边都能读，网页与手机只能走后台） | 0 | `bootstrap-electron.ts` |
-| `fs:resolve-path-batch` | invoke | C（本机文件读取：同一台电脑两边都能读，网页与手机只能走后台） | 1 | `bootstrap-electron.ts` |
+| `fs:resolve-path` | invoke | C-窗口本地（用户在本窗口选择或拖入的本机文件、本机进程监视：窗口直接处理，客户端模式下照常注册） | 0 | `bootstrap-electron.ts` |
+| `fs:resolve-path-batch` | invoke | C-窗口本地（用户在本窗口选择或拖入的本机文件、本机进程监视：窗口直接处理，客户端模式下照常注册） | 1 | `bootstrap-electron.ts` |
 | `get-app-display-version-info` | event | B（桌面安装包自身：更新、版本、日志与诊断） | 1 | `bootstrap-electron.ts` |
 | `get-app-version` | event | B（桌面安装包自身：更新、版本、日志与诊断） | 1 | `bootstrap-electron.ts` |
 | `get-device-id` | invoke | A（未登记前缀，处理函数没有用到窗口 API） | 0 | `bootstrap-electron.ts` |
@@ -621,9 +667,9 @@ W、C 规则直接定类；A 规则只标出领域，处理函数（及其调用
 | `local-agent:revoke` | invoke | A（设备互联与远程执行） | 0 | `bootstrap-electron.ts` |
 | `local-agent:set-create-visible-sessions` | invoke | A（设备互联与远程执行） | 0 | `bootstrap-electron.ts` |
 | `local-db:maintenance:cancel-startup` | invoke | A（任务、消息与输入队列） | 0 | `bootstrap-electron.ts` |
-| `local-db:maintenance:choose-backup-directory` | invoke | C（弹出系统选择框后写入后台数据：选择在窗口，结果归后台） | 0 | `bootstrap-electron.ts` |
+| `local-db:maintenance:choose-backup-directory` | invoke | C-两段式（窗口做界面动作，数据调 Host）（弹出系统选择框后写入后台数据：选择在窗口，结果归后台） | 0 | `bootstrap-electron.ts` |
 | `local-db:maintenance:last-result` | invoke | A（任务、消息与输入队列） | 2 | `bootstrap-electron.ts` |
-| `local-db:maintenance:open-last-backup-directory` | invoke | C（在访达／资源管理器或系统浏览器里打开后台持有的内容） | 0 | `bootstrap-electron.ts` |
+| `local-db:maintenance:open-last-backup-directory` | invoke | C-两段式（窗口做界面动作，数据调 Host）（在访达／资源管理器或系统浏览器里打开后台持有的内容） | 0 | `bootstrap-electron.ts` |
 | `local-db:maintenance:scan` | invoke | A（任务、消息与输入队列） | 0 | `bootstrap-electron.ts` |
 | `local-db:maintenance:schedule` | invoke | A（任务、消息与输入队列） | 0 | `bootstrap-electron.ts` |
 | `local-db:maintenance:startup-progress` | invoke | A（任务、消息与输入队列） | 1 | `bootstrap-electron.ts` |
@@ -687,15 +733,15 @@ W、C 规则直接定类；A 规则只标出领域，处理函数（及其调用
 | `page-zoom:in` | invoke | B（窗口外壳、窗口布局与多窗口） | 0 | `bootstrap-electron.ts` |
 | `page-zoom:out` | invoke | B（窗口外壳、窗口布局与多窗口） | 0 | `bootstrap-electron.ts` |
 | `page-zoom:reset` | invoke | B（窗口外壳、窗口布局与多窗口） | 0 | `bootstrap-electron.ts` |
-| `peek-file-header` | invoke | C（本机文件读取：同一台电脑两边都能读，网页与手机只能走后台） | 0 | `bootstrap-electron.ts` |
-| `profile:choose-avatar` | invoke | C（弹出系统选择框后写入后台数据：选择在窗口，结果归后台） | 0 | `bootstrap-electron.ts` |
+| `peek-file-header` | invoke | C-窗口本地（用户在本窗口选择或拖入的本机文件、本机进程监视：窗口直接处理，客户端模式下照常注册） | 0 | `bootstrap-electron.ts` |
+| `profile:choose-avatar` | invoke | C-两段式（窗口做界面动作，数据调 Host）（弹出系统选择框后写入后台数据：选择在窗口，结果归后台） | 0 | `bootstrap-electron.ts` |
 | `profile:get-state` | invoke | A（设置与偏好） | 0 | `bootstrap-electron.ts` |
 | `profile:update` | invoke | A（设置与偏好） | 0 | `bootstrap-electron.ts` |
-| `projects-root:choose` | invoke | C（弹出系统选择框后写入后台数据：选择在窗口，结果归后台） | 0 | `bootstrap-electron.ts` |
+| `projects-root:choose` | invoke | C-两段式（窗口做界面动作，数据调 Host）（弹出系统选择框后写入后台数据：选择在窗口，结果归后台） | 0 | `bootstrap-electron.ts` |
 | `projects-root:get` | invoke | A（设置与偏好） | 1 | `bootstrap-electron.ts` |
 | `projects-root:reset` | invoke | A（设置与偏好） | 0 | `bootstrap-electron.ts` |
-| `read-file-bytes` | invoke | C（本机文件读取：同一台电脑两边都能读，网页与手机只能走后台） | 0 | `bootstrap-electron.ts` |
-| `read-file-for-attachment` | invoke | C（本机文件读取：同一台电脑两边都能读，网页与手机只能走后台） | 0 | `bootstrap-electron.ts` |
+| `read-file-bytes` | invoke | C-窗口本地（用户在本窗口选择或拖入的本机文件、本机进程监视：窗口直接处理，客户端模式下照常注册） | 0 | `bootstrap-electron.ts` |
+| `read-file-for-attachment` | invoke | C-窗口本地（用户在本窗口选择或拖入的本机文件、本机进程监视：窗口直接处理，客户端模式下照常注册） | 0 | `bootstrap-electron.ts` |
 | `release-notes:fetch` | invoke | B（桌面安装包自身：更新、版本、日志与诊断） | 2 | `bootstrap-electron.ts` |
 | `release-notes:fetch-index` | invoke | B（桌面安装包自身：更新、版本、日志与诊断） | 0 | `bootstrap-electron.ts` |
 | `renderer:log` | event | B（桌面安装包自身：更新、版本、日志与诊断） | 79 | `bootstrap-electron.ts` |
@@ -709,7 +755,7 @@ W、C 规则直接定类；A 规则只标出领域，处理函数（及其调用
 | `shell:show-item-in-folder` | invoke | B（原生对话框、剪贴板、系统外壳与通知） | 0 | `bootstrap-electron.ts` |
 | `show-open-directory-dialog` | invoke | B（原生对话框、剪贴板、系统外壳与通知） | 0 | `bootstrap-electron.ts` |
 | `startup-gate:stalled` | event | B（窗口外壳、窗口布局与多窗口） | 0 | `bootstrap-electron.ts` |
-| `text-file:read-preview` | invoke | C（本机文件读取：同一台电脑两边都能读，网页与手机只能走后台） | 0 | `bootstrap-electron.ts` |
+| `text-file:read-preview` | invoke | C-窗口本地（用户在本窗口选择或拖入的本机文件、本机进程监视：窗口直接处理，客户端模式下照常注册） | 0 | `bootstrap-electron.ts` |
 | `theme:apply-vibrancy` | event | B（窗口外壳、窗口布局与多窗口） | 10 | `bootstrap-electron.ts` |
 | `theme:set-sidebar-width` | event | B（窗口外壳、窗口布局与多窗口） | 3 | `bootstrap-electron.ts` |
 | `toggle-fullscreen` | invoke | B（窗口外壳、窗口布局与多窗口） | 0 | `bootstrap-electron.ts` |
@@ -749,7 +795,7 @@ W、C 规则直接定类；A 规则只标出领域，处理函数（及其调用
 | `ghost-pipe:send` | invoke | A（插件、技能与 MCP） | 0 | `cindy-brain/index.ts` |
 | `ghosts:acknowledge-retirement` | invoke | A（插件、技能与 MCP） | 0 | `cindy-brain/index.ts` |
 | `ghosts:activate-browser` | invoke | A（插件、技能与 MCP） | 0 | `cindy-brain/index.ts` |
-| `ghosts:builtin-status` | event | A（插件、技能与 MCP；同步通道，需 Host 预取并随事件刷新、窗口本地回放（同 ghosts:list）） | 0 | `cindy-brain/index.ts` |
+| `ghosts:builtin-status` | event | 同步·数据归 Host（需窗口缓存镜像）（同步通道·插件、技能与 MCP：数据归 Host，需窗口缓存镜像（Host 经事件流推送，窗口同步回答缓存）或改界面为异步，放进对应小批单独设计） | 0 | `cindy-brain/index.ts` |
 | `ghosts:card:action` | invoke | A（插件、技能与 MCP） | 0 | `cindy-brain/index.ts` |
 | `ghosts:card:get` | invoke | contract | 0 | `cindy-brain/index.ts` |
 | `ghosts:card:list-by-session` | invoke | contract | 13 | `cindy-brain/index.ts` |
@@ -761,9 +807,9 @@ W、C 规则直接定类；A 规则只标出领域，处理函数（及其调用
 | `ghosts:control-points:get` | invoke | A（插件、技能与 MCP） | 0 | `cindy-brain/index.ts` |
 | `ghosts:defer-ui-prompt` | invoke | A（插件、技能与 MCP） | 0 | `cindy-brain/index.ts` |
 | `ghosts:dev-runtime` | invoke | A（插件、技能与 MCP） | 0 | `cindy-brain/index.ts` |
-| `ghosts:errand-prefs` | event | A（插件、技能与 MCP；同步通道，需 Host 预取并随事件刷新、窗口本地回放（同 ghosts:list）） | 0 | `cindy-brain/index.ts` |
+| `ghosts:errand-prefs` | event | 同步·数据归 Host（需窗口缓存镜像）（同步通道·插件、技能与 MCP：数据归 Host，需窗口缓存镜像（Host 经事件流推送，窗口同步回答缓存）或改界面为异步，放进对应小批单独设计） | 0 | `cindy-brain/index.ts` |
 | `ghosts:errand-prefs:set` | invoke | A（插件、技能与 MCP） | 0 | `cindy-brain/index.ts` |
-| `ghosts:export` | invoke | C（插件、技能与 MCP，但处理函数用到窗口 API：BrowserWindow.fromWebContents、dialog） | 0 | `cindy-brain/index.ts` |
+| `ghosts:export` | invoke | C-两段式（窗口做界面动作，数据调 Host）（插件、技能与 MCP，但处理函数用到窗口 API：BrowserWindow.fromWebContents、dialog；窗口做界面动作，数据那一半调 Host） | 0 | `cindy-brain/index.ts` |
 | `ghosts:handoff-delete` | invoke | A（插件、技能与 MCP） | 0 | `cindy-brain/index.ts` |
 | `ghosts:handoff-folder` | invoke | A（插件、技能与 MCP） | 0 | `cindy-brain/index.ts` |
 | `ghosts:handoff-list` | invoke | A（插件、技能与 MCP） | 0 | `cindy-brain/index.ts` |
@@ -772,10 +818,10 @@ W、C 规则直接定类；A 规则只标出领域，处理函数（及其调用
 | `ghosts:install-consent:resolve` | invoke | A（插件、技能与 MCP） | 0 | `cindy-brain/index.ts` |
 | `ghosts:legacy-recovery-status` | invoke | A（插件、技能与 MCP） | 0 | `cindy-brain/index.ts` |
 | `ghosts:library-bind` | invoke | A（插件、技能与 MCP） | 0 | `cindy-brain/index.ts` |
-| `ghosts:library-delete` | invoke | C（插件、技能与 MCP，但处理函数用到窗口 API：BrowserWindow.fromWebContents、dialog） | 0 | `cindy-brain/index.ts` |
+| `ghosts:library-delete` | invoke | C-两段式（窗口做界面动作，数据调 Host）（插件、技能与 MCP，但处理函数用到窗口 API：BrowserWindow.fromWebContents、dialog；窗口做界面动作，数据那一半调 Host） | 0 | `cindy-brain/index.ts` |
 | `ghosts:library-overview` | invoke | A（插件、技能与 MCP） | 0 | `cindy-brain/index.ts` |
-| `ghosts:library-pick-location` | invoke | C（插件、技能与 MCP，但处理函数用到窗口 API：BrowserWindow.fromWebContents、dialog） | 0 | `cindy-brain/index.ts` |
-| `ghosts:library-reattach-legacy` | invoke | C（插件、技能与 MCP，但处理函数用到窗口 API：BrowserWindow.fromWebContents、dialog） | 0 | `cindy-brain/index.ts` |
+| `ghosts:library-pick-location` | invoke | C-两段式（窗口做界面动作，数据调 Host）（插件、技能与 MCP，但处理函数用到窗口 API：BrowserWindow.fromWebContents、dialog；窗口做界面动作，数据那一半调 Host） | 0 | `cindy-brain/index.ts` |
+| `ghosts:library-reattach-legacy` | invoke | C-两段式（窗口做界面动作，数据调 Host）（插件、技能与 MCP，但处理函数用到窗口 API：BrowserWindow.fromWebContents、dialog；窗口做界面动作，数据那一半调 Host） | 0 | `cindy-brain/index.ts` |
 | `ghosts:library-relocate` | invoke | A（插件、技能与 MCP） | 0 | `cindy-brain/index.ts` |
 | `ghosts:library-revert-default` | invoke | A（插件、技能与 MCP） | 0 | `cindy-brain/index.ts` |
 | `ghosts:library-unbind` | invoke | A（插件、技能与 MCP） | 0 | `cindy-brain/index.ts` |
@@ -785,10 +831,10 @@ W、C 规则直接定类；A 规则只标出领域，处理函数（及其调用
 | `ghosts:model-picker:resolve` | invoke | A（插件、技能与 MCP） | 0 | `cindy-brain/index.ts` |
 | `ghosts:models:list` | invoke | A（插件、技能与 MCP） | 4 | `cindy-brain/index.ts` |
 | `ghosts:open-retirement` | invoke | A（插件、技能与 MCP） | 0 | `cindy-brain/index.ts` |
-| `ghosts:pick-file` | invoke | C（弹出系统选择框后写入后台数据：选择在窗口，结果归后台） | 0 | `cindy-brain/index.ts` |
+| `ghosts:pick-file` | invoke | C-两段式（窗口做界面动作，数据调 Host）（弹出系统选择框后写入后台数据：选择在窗口，结果归后台） | 0 | `cindy-brain/index.ts` |
 | `ghosts:readme` | invoke | A（插件、技能与 MCP） | 0 | `cindy-brain/index.ts` |
-| `ghosts:recent-usage` | event | A（插件、技能与 MCP；同步通道，需 Host 预取并随事件刷新、窗口本地回放（同 ghosts:list）） | 2 | `cindy-brain/index.ts` |
-| `ghosts:recommendations` | event | A（插件、技能与 MCP；同步通道，需 Host 预取并随事件刷新、窗口本地回放（同 ghosts:list）） | 8 | `cindy-brain/index.ts` |
+| `ghosts:recent-usage` | event | 同步·数据归 Host（需窗口缓存镜像）（同步通道·插件、技能与 MCP：数据归 Host，需窗口缓存镜像（Host 经事件流推送，窗口同步回答缓存）或改界面为异步，放进对应小批单独设计） | 2 | `cindy-brain/index.ts` |
+| `ghosts:recommendations` | event | 同步·数据归 Host（需窗口缓存镜像）（同步通道·插件、技能与 MCP：数据归 Host，需窗口缓存镜像（Host 经事件流推送，窗口同步回答缓存）或改界面为异步，放进对应小批单独设计） | 8 | `cindy-brain/index.ts` |
 | `ghosts:reload` | invoke | A（插件、技能与 MCP） | 0 | `cindy-brain/index.ts` |
 | `ghosts:request-task-approval` | invoke | A（插件、技能与 MCP） | 0 | `cindy-brain/index.ts` |
 | `ghosts:request-ui-approval` | invoke | A（插件、技能与 MCP） | 0 | `cindy-brain/index.ts` |
@@ -803,9 +849,9 @@ W、C 规则直接定类；A 规则只标出领域，处理函数（及其调用
 | `ghosts:take-pending-install` | invoke | A（插件、技能与 MCP） | 1 | `cindy-brain/index.ts` |
 | `ghosts:ui-prompts` | invoke | A（插件、技能与 MCP） | 19 | `cindy-brain/index.ts` |
 | `ghosts:uninstall` | invoke | A（插件、技能与 MCP） | 0 | `cindy-brain/index.ts` |
-| `ghosts:unread` | event | A（插件、技能与 MCP；同步通道，需 Host 预取并随事件刷新、窗口本地回放（同 ghosts:list）） | 1 | `cindy-brain/index.ts` |
+| `ghosts:unread` | event | 同步·数据归 Host（需窗口缓存镜像）（同步通道·插件、技能与 MCP：数据归 Host，需窗口缓存镜像（Host 经事件流推送，窗口同步回答缓存）或改界面为异步，放进对应小批单独设计） | 1 | `cindy-brain/index.ts` |
 | `ghosts:update` | invoke | A（插件、技能与 MCP） | 0 | `cindy-brain/index.ts` |
-| `ghosts:workdir-prefs` | event | A（插件、技能与 MCP；同步通道，需 Host 预取并随事件刷新、窗口本地回放（同 ghosts:list）） | 0 | `cindy-brain/index.ts` |
+| `ghosts:workdir-prefs` | event | 同步·数据归 Host（需窗口缓存镜像）（同步通道·插件、技能与 MCP：数据归 Host，需窗口缓存镜像（Host 经事件流推送，窗口同步回答缓存）或改界面为异步，放进对应小批单独设计） | 0 | `cindy-brain/index.ts` |
 | `ghosts:workdir-prefs` | invoke | A（插件、技能与 MCP） | 0 | `cindy-brain/index.ts` |
 | `ghosts:workdir-prefs:set` | invoke | A（插件、技能与 MCP） | 0 | `cindy-brain/index.ts` |
 
@@ -813,7 +859,7 @@ W、C 规则直接定类；A 规则只标出领域，处理函数（及其调用
 
 | 通道 | 类型 | 归属 | 调用次数 | 注册文件 |
 |---|---|---|---:|---|
-| `client-endpoints:get-sync` | event | W（同步通道（event.returnValue）：转发给 Host 只会阻塞主进程，由窗口本地读同一份 profile） | 1 | `clientEndpointsService.ts` |
+| `client-endpoints:get-sync` | event | 同步·界面设置（窗口本地读 profile）（同步通道·界面设置：窗口本地读同一份 profile 文件） | 1 | `clientEndpointsService.ts` |
 
 ### commands
 
@@ -841,12 +887,12 @@ W、C 规则直接定类；A 规则只标出领域，处理函数（及其调用
 | 通道 | 类型 | 归属 | 调用次数 | 注册文件 |
 |---|---|---|---:|---|
 | `device-link:close-link` | invoke | A（设备互联与远程执行） | 0 | `device-link/ipc.ts` |
-| `device-link:confirm-skill-mutation` | invoke | C（设备互联与远程执行，但处理函数用到窗口 API：BrowserWindow.fromWebContents、dialog） | 0 | `device-link/ipc.ts` |
+| `device-link:confirm-skill-mutation` | invoke | C-两段式（窗口做界面动作，数据调 Host）（设备互联与远程执行，但处理函数用到窗口 API：BrowserWindow.fromWebContents、dialog；窗口做界面动作，数据那一半调 Host） | 0 | `device-link/ipc.ts` |
 | `device-link:delete-device` | invoke | A（设备互联与远程执行） | 0 | `device-link/ipc.ts` |
 | `device-link:disconnect-all` | invoke | A（设备互联与远程执行） | 0 | `device-link/ipc.ts` |
 | `device-link:get-peer-links` | invoke | A（设备互联与远程执行） | 0 | `device-link/ipc.ts` |
 | `device-link:get-state` | invoke | A（设备互联与远程执行） | 20 | `device-link/ipc.ts` |
-| `device-link:invoke` | invoke | C（设备互联与远程执行，但处理函数用到窗口 API：BrowserWindow.fromWebContents、dialog、nativeTheme） | 0 | `device-link/ipc.ts` |
+| `device-link:invoke` | invoke | C-专项设计（安全边界）（安全边界待专项设计：主人填写的值只交给宿主执行（input-handoff），远程控制派发；方案出来前不动） | 0 | `device-link/ipc.ts` |
 | `device-link:list-devices` | invoke | A（设备互联与远程执行） | 33 | `device-link/ipc.ts` |
 | `device-link:mirror-cache:clear` | invoke | A（设备互联与远程执行） | 0 | `device-link/ipc.ts` |
 | `device-link:mirror-cache:messages:get` | invoke | A（设备互联与远程执行） | 0 | `device-link/ipc.ts` |
@@ -854,7 +900,7 @@ W、C 规则直接定类；A 规则只标出领域，处理函数（及其调用
 | `device-link:mirror-cache:session-list:get` | invoke | A（设备互联与远程执行） | 0 | `device-link/ipc.ts` |
 | `device-link:mirror-cache:session-list:put` | invoke | A（设备互联与远程执行） | 0 | `device-link/ipc.ts` |
 | `device-link:open-link` | invoke | A（设备互联与远程执行） | 0 | `device-link/ipc.ts` |
-| `device-link:pick-plugin-package` | invoke | C（弹出系统选择框后写入后台数据：选择在窗口，结果归后台） | 0 | `device-link/ipc.ts` |
+| `device-link:pick-plugin-package` | invoke | C-两段式（窗口做界面动作，数据调 Host）（弹出系统选择框后写入后台数据：选择在窗口，结果归后台） | 0 | `device-link/ipc.ts` |
 | `device-link:plugin-settings:answer-directory` | invoke | A（设备互联与远程执行） | 0 | `device-link/ipc.ts` |
 | `device-link:plugin-settings:answer-model-picker` | invoke | A（设备互联与远程执行） | 0 | `device-link/ipc.ts` |
 | `device-link:plugin-settings:close` | invoke | A（设备互联与远程执行） | 0 | `device-link/ipc.ts` |
@@ -897,38 +943,38 @@ W、C 规则直接定类；A 规则只标出领域，处理函数（及其调用
 
 | 通道 | 类型 | 归属 | 调用次数 | 注册文件 |
 |---|---|---|---:|---|
-| `file-browser:remote-op` | invoke | C（本机文件读取：同一台电脑两边都能读，网页与手机只能走后台） | 0 | `file-browser/device-op.ts` |
-| `maker:chat-file:cancel` | invoke | C（本机文件读取：同一台电脑两边都能读，网页与手机只能走后台） | 0 | `file-browser/index.ts` |
-| `maker:chat-file:download` | invoke | C（本机文件读取：同一台电脑两边都能读，网页与手机只能走后台） | 0 | `file-browser/index.ts` |
-| `maker:chat-file:fetch` | invoke | C（本机文件读取：同一台电脑两边都能读，网页与手机只能走后台） | 0 | `file-browser/index.ts` |
-| `maker:chat-file:stat` | invoke | C（本机文件读取：同一台电脑两边都能读，网页与手机只能走后台） | 0 | `file-browser/index.ts` |
-| `maker:chat-folder:upload` | invoke | C（本机文件读取：同一台电脑两边都能读，网页与手机只能走后台） | 0 | `file-browser/index.ts` |
-| `maker:file-browser:cache-put` | invoke | C（本机文件读取：同一台电脑两边都能读，网页与手机只能走后台） | 0 | `file-browser/index.ts` |
-| `maker:file-browser:create-file` | invoke | C（本机文件读取：同一台电脑两边都能读，网页与手机只能走后台） | 0 | `file-browser/index.ts` |
-| `maker:file-browser:create-folder` | invoke | C（本机文件读取：同一台电脑两边都能读，网页与手机只能走后台） | 0 | `file-browser/index.ts` |
-| `maker:file-browser:delete-entry` | invoke | C（本机文件读取：同一台电脑两边都能读，网页与手机只能走后台） | 0 | `file-browser/index.ts` |
-| `maker:file-browser:fetch-remote` | invoke | C（本机文件读取：同一台电脑两边都能读，网页与手机只能走后台） | 0 | `file-browser/index.ts` |
-| `maker:file-browser:list-all` | invoke | C（本机文件读取：同一台电脑两边都能读，网页与手机只能走后台） | 0 | `file-browser/index.ts` |
-| `maker:file-browser:list-dir` | invoke | C（本机文件读取：同一台电脑两边都能读，网页与手机只能走后台） | 0 | `file-browser/index.ts` |
-| `maker:file-browser:read-cached` | invoke | C（本机文件读取：同一台电脑两边都能读，网页与手机只能走后台） | 0 | `file-browser/index.ts` |
-| `maker:file-browser:read-file` | invoke | C（本机文件读取：同一台电脑两边都能读，网页与手机只能走后台） | 0 | `file-browser/index.ts` |
-| `maker:file-browser:rename-entry` | invoke | C（本机文件读取：同一台电脑两边都能读，网页与手机只能走后台） | 0 | `file-browser/index.ts` |
-| `maker:file-browser:start-watch` | invoke | C（本机文件读取：同一台电脑两边都能读，网页与手机只能走后台） | 0 | `file-browser/index.ts` |
-| `maker:file-browser:stat` | invoke | C（本机文件读取：同一台电脑两边都能读，网页与手机只能走后台） | 0 | `file-browser/index.ts` |
-| `maker:file-browser:stop-watch` | invoke | C（本机文件读取：同一台电脑两边都能读，网页与手机只能走后台） | 0 | `file-browser/index.ts` |
-| `maker:file-browser:write-file` | invoke | C（本机文件读取：同一台电脑两边都能读，网页与手机只能走后台） | 0 | `file-browser/index.ts` |
-| `maker:html-preview:cancel` | invoke | C（本机文件读取：同一台电脑两边都能读，网页与手机只能走后台） | 0 | `file-browser/html-preview-ipc.ts` |
-| `maker:html-preview:open` | invoke | C（本机文件读取：同一台电脑两边都能读，网页与手机只能走后台） | 0 | `file-browser/html-preview-ipc.ts` |
-| `maker:search:cancel` | invoke | C（本机文件读取：同一台电脑两边都能读，网页与手机只能走后台） | 0 | `file-browser/search/index.ts` |
-| `maker:search:start` | invoke | C（本机文件读取：同一台电脑两边都能读，网页与手机只能走后台） | 0 | `file-browser/search/index.ts` |
+| `file-browser:remote-op` | invoke | C-后台（任务范围内的文件操作：换窗口时不能断，网页和手机也要用，路径授权跟着运行时） | 0 | `file-browser/device-op.ts` |
+| `maker:chat-file:cancel` | invoke | C-后台（任务范围内的文件操作：换窗口时不能断，网页和手机也要用，路径授权跟着运行时） | 0 | `file-browser/index.ts` |
+| `maker:chat-file:download` | invoke | C-后台（任务范围内的文件操作：换窗口时不能断，网页和手机也要用，路径授权跟着运行时） | 0 | `file-browser/index.ts` |
+| `maker:chat-file:fetch` | invoke | C-后台（任务范围内的文件操作：换窗口时不能断，网页和手机也要用，路径授权跟着运行时） | 0 | `file-browser/index.ts` |
+| `maker:chat-file:stat` | invoke | C-后台（任务范围内的文件操作：换窗口时不能断，网页和手机也要用，路径授权跟着运行时） | 0 | `file-browser/index.ts` |
+| `maker:chat-folder:upload` | invoke | C-后台（任务范围内的文件操作：换窗口时不能断，网页和手机也要用，路径授权跟着运行时） | 0 | `file-browser/index.ts` |
+| `maker:file-browser:cache-put` | invoke | C-后台（任务范围内的文件操作：换窗口时不能断，网页和手机也要用，路径授权跟着运行时） | 0 | `file-browser/index.ts` |
+| `maker:file-browser:create-file` | invoke | C-后台（任务范围内的文件操作：换窗口时不能断，网页和手机也要用，路径授权跟着运行时） | 0 | `file-browser/index.ts` |
+| `maker:file-browser:create-folder` | invoke | C-后台（任务范围内的文件操作：换窗口时不能断，网页和手机也要用，路径授权跟着运行时） | 0 | `file-browser/index.ts` |
+| `maker:file-browser:delete-entry` | invoke | C-后台（任务范围内的文件操作：换窗口时不能断，网页和手机也要用，路径授权跟着运行时） | 0 | `file-browser/index.ts` |
+| `maker:file-browser:fetch-remote` | invoke | C-后台（任务范围内的文件操作：换窗口时不能断，网页和手机也要用，路径授权跟着运行时） | 0 | `file-browser/index.ts` |
+| `maker:file-browser:list-all` | invoke | C-后台（任务范围内的文件操作：换窗口时不能断，网页和手机也要用，路径授权跟着运行时） | 0 | `file-browser/index.ts` |
+| `maker:file-browser:list-dir` | invoke | C-后台（任务范围内的文件操作：换窗口时不能断，网页和手机也要用，路径授权跟着运行时） | 0 | `file-browser/index.ts` |
+| `maker:file-browser:read-cached` | invoke | C-后台（任务范围内的文件操作：换窗口时不能断，网页和手机也要用，路径授权跟着运行时） | 0 | `file-browser/index.ts` |
+| `maker:file-browser:read-file` | invoke | C-后台（任务范围内的文件操作：换窗口时不能断，网页和手机也要用，路径授权跟着运行时） | 0 | `file-browser/index.ts` |
+| `maker:file-browser:rename-entry` | invoke | C-后台（任务范围内的文件操作：换窗口时不能断，网页和手机也要用，路径授权跟着运行时） | 0 | `file-browser/index.ts` |
+| `maker:file-browser:start-watch` | invoke | C-后台（任务范围内的文件操作：换窗口时不能断，网页和手机也要用，路径授权跟着运行时） | 0 | `file-browser/index.ts` |
+| `maker:file-browser:stat` | invoke | C-后台（任务范围内的文件操作：换窗口时不能断，网页和手机也要用，路径授权跟着运行时） | 0 | `file-browser/index.ts` |
+| `maker:file-browser:stop-watch` | invoke | C-后台（任务范围内的文件操作：换窗口时不能断，网页和手机也要用，路径授权跟着运行时） | 0 | `file-browser/index.ts` |
+| `maker:file-browser:write-file` | invoke | C-后台（任务范围内的文件操作：换窗口时不能断，网页和手机也要用，路径授权跟着运行时） | 0 | `file-browser/index.ts` |
+| `maker:html-preview:cancel` | invoke | C-后台（任务范围内的文件操作：换窗口时不能断，网页和手机也要用，路径授权跟着运行时） | 0 | `file-browser/html-preview-ipc.ts` |
+| `maker:html-preview:open` | invoke | C-后台（任务范围内的文件操作：换窗口时不能断，网页和手机也要用，路径授权跟着运行时） | 0 | `file-browser/html-preview-ipc.ts` |
+| `maker:search:cancel` | invoke | C-后台（任务范围内的文件操作：换窗口时不能断，网页和手机也要用，路径授权跟着运行时） | 0 | `file-browser/search/index.ts` |
+| `maker:search:start` | invoke | C-后台（任务范围内的文件操作：换窗口时不能断，网页和手机也要用，路径授权跟着运行时） | 0 | `file-browser/search/index.ts` |
 
 ### fsBrowse
 
 | 通道 | 类型 | 归属 | 调用次数 | 注册文件 |
 |---|---|---|---:|---|
-| `fs:list-dir` | invoke | C（本机文件读取：同一台电脑两边都能读，网页与手机只能走后台） | 0 | `fsBrowse/ipc.ts` |
-| `fs:mkdir-p` | invoke | C（本机文件读取：同一台电脑两边都能读，网页与手机只能走后台） | 0 | `fsBrowse/ipc.ts` |
-| `fs:stat-path` | invoke | C（本机文件读取：同一台电脑两边都能读，网页与手机只能走后台） | 0 | `fsBrowse/ipc.ts` |
+| `fs:list-dir` | invoke | C-窗口本地（用户在本窗口选择或拖入的本机文件、本机进程监视：窗口直接处理，客户端模式下照常注册） | 0 | `fsBrowse/ipc.ts` |
+| `fs:mkdir-p` | invoke | C-窗口本地（用户在本窗口选择或拖入的本机文件、本机进程监视：窗口直接处理，客户端模式下照常注册） | 0 | `fsBrowse/ipc.ts` |
+| `fs:stat-path` | invoke | C-窗口本地（用户在本窗口选择或拖入的本机文件、本机进程监视：窗口直接处理，客户端模式下照常注册） | 0 | `fsBrowse/ipc.ts` |
 
 ### git-context
 
@@ -1065,7 +1111,7 @@ W、C 规则直接定类；A 规则只标出领域，处理函数（及其调用
 | `telegramBot:set-persona` | invoke | A（伙伴与 IM） | 0 | `im/host.ts` |
 | `wechatBot:authorize` | invoke | A（伙伴与 IM） | 0 | `im/index.ts` |
 | `wechatBot:cancel-authorization` | invoke | A（伙伴与 IM） | 0 | `im/index.ts` |
-| `wechatBot:choose-working-directory` | invoke | C（弹出系统选择框后写入后台数据：选择在窗口，结果归后台） | 0 | `im/index.ts` |
+| `wechatBot:choose-working-directory` | invoke | C-两段式（窗口做界面动作，数据调 Host）（弹出系统选择框后写入后台数据：选择在窗口，结果归后台） | 0 | `im/index.ts` |
 | `wechatBot:get-channel-settings` | invoke | A（伙伴与 IM） | 1 | `im/index.ts` |
 | `wechatBot:get-state` | invoke | A（伙伴与 IM） | 1 | `im/index.ts` |
 | `wechatBot:reset-working-directory` | invoke | A（伙伴与 IM） | 0 | `im/index.ts` |
@@ -1087,7 +1133,7 @@ W、C 规则直接定类；A 规则只标出领域，处理函数（及其调用
 
 | 通道 | 类型 | 归属 | 调用次数 | 注册文件 |
 |---|---|---|---:|---|
-| `layout:get` | event | W（同步通道（event.returnValue）：转发给 Host 只会阻塞主进程，由窗口本地读同一份 profile） | 3 | `layout/index.ts` |
+| `layout:get` | event | 同步·界面设置（窗口本地读 profile）（同步通道·界面设置：窗口本地读同一份 profile 文件） | 3 | `layout/index.ts` |
 | `layout:reset` | invoke | contract | 0 | `layout/index.ts` |
 | `layout:set` | invoke | contract | 0 | `layout/index.ts` |
 
@@ -1143,10 +1189,10 @@ W、C 规则直接定类；A 规则只标出领域，处理函数（及其调用
 
 | 通道 | 类型 | 归属 | 调用次数 | 注册文件 |
 |---|---|---|---:|---|
-| `local-themes:import` | invoke | C（设置与偏好，但处理函数用到窗口 API：BrowserWindow.fromWebContents、dialog） | 0 | `local-themes/register.ts` |
+| `local-themes:import` | invoke | C-两段式（窗口做界面动作，数据调 Host）（设置与偏好，但处理函数用到窗口 API：BrowserWindow.fromWebContents、dialog；窗口做界面动作，数据那一半调 Host） | 0 | `local-themes/register.ts` |
 | `local-themes:list` | invoke | A（设置与偏好） | 1 | `local-themes/register.ts` |
-| `local-themes:list-sync` | event | W（同步通道（event.returnValue）：转发给 Host 只会阻塞主进程，由窗口本地读同一份 profile） | 3 | `local-themes/register.ts` |
-| `local-themes:open-dir` | invoke | C（在访达／资源管理器或系统浏览器里打开后台持有的内容） | 0 | `local-themes/register.ts` |
+| `local-themes:list-sync` | event | 同步·界面设置（窗口本地读 profile）（同步通道·界面设置：窗口本地读同一份 profile 文件） | 3 | `local-themes/register.ts` |
+| `local-themes:open-dir` | invoke | C-两段式（窗口做界面动作，数据调 Host）（在访达／资源管理器或系统浏览器里打开后台持有的内容） | 0 | `local-themes/register.ts` |
 | `local-themes:write` | invoke | A（设置与偏好） | 0 | `local-themes/register.ts` |
 
 ### localDb
@@ -1154,8 +1200,8 @@ W、C 规则直接定类；A 规则只标出领域，处理函数（及其调用
 | 通道 | 类型 | 归属 | 调用次数 | 注册文件 |
 |---|---|---|---:|---|
 | `dev:sqlite-vec:status` | invoke | B（桌面安装包自身：更新、版本、日志与诊断） | 0 | `localDb/ipc/dev/sqliteVec.ts` |
-| `local-db:bots:choose-avatar` | invoke | C（弹出系统选择框后写入后台数据：选择在窗口，结果归后台） | 0 | `localDb/ipc/bots.ts` |
-| `local-db:bots:choose-avatar-source` | invoke | C（弹出系统选择框后写入后台数据：选择在窗口，结果归后台） | 0 | `localDb/ipc/bots.ts` |
+| `local-db:bots:choose-avatar` | invoke | C-两段式（窗口做界面动作，数据调 Host）（弹出系统选择框后写入后台数据：选择在窗口，结果归后台） | 0 | `localDb/ipc/bots.ts` |
+| `local-db:bots:choose-avatar-source` | invoke | C-两段式（窗口做界面动作，数据调 Host）（弹出系统选择框后写入后台数据：选择在窗口，结果归后台） | 0 | `localDb/ipc/bots.ts` |
 | `local-db:bots:create` | invoke | A（伙伴与 IM） | 0 | `localDb/ipc/bots.ts` |
 | `local-db:bots:create-canonical-session` | invoke | A（伙伴与 IM） | 0 | `localDb/ipc/bots.ts` |
 | `local-db:bots:dm-thread:ensure` | invoke | A（伙伴与 IM） | 0 | `localDb/ipc/bots.ts` |
@@ -1217,8 +1263,8 @@ W、C 规则直接定类；A 规则只标出领域，处理函数（及其调用
 | `local-db:session-share:cancel` | invoke | A（任务、消息与输入队列） | 0 | `localDb/ipc/session-share.ts` |
 | `local-db:session-share:classify-path` | invoke | A（任务、消息与输入队列） | 0 | `localDb/ipc/session-share.ts` |
 | `local-db:session-share:commit` | invoke | A（任务、消息与输入队列） | 0 | `localDb/ipc/session-share.ts` |
-| `local-db:session-share:export` | invoke | C（任务、消息与输入队列，但处理函数用到窗口 API：BrowserWindow.getFocusedWindow、dialog） | 0 | `localDb/ipc/session-share.ts` |
-| `local-db:session-share:inspect` | invoke | C（任务、消息与输入队列，但处理函数用到窗口 API：BrowserWindow.getFocusedWindow、dialog） | 0 | `localDb/ipc/session-share.ts` |
+| `local-db:session-share:export` | invoke | C-两段式（窗口做界面动作，数据调 Host）（任务、消息与输入队列，但处理函数用到窗口 API：BrowserWindow.getFocusedWindow、dialog；窗口做界面动作，数据那一半调 Host） | 0 | `localDb/ipc/session-share.ts` |
+| `local-db:session-share:inspect` | invoke | C-两段式（窗口做界面动作，数据调 Host）（任务、消息与输入队列，但处理函数用到窗口 API：BrowserWindow.getFocusedWindow、dialog；窗口做界面动作，数据那一半调 Host） | 0 | `localDb/ipc/session-share.ts` |
 | `local-db:session-share:unlock` | invoke | A（任务、消息与输入队列） | 0 | `localDb/ipc/session-share.ts` |
 | `local-db:sessions:ack-interrupted` | invoke | A（任务、消息与输入队列） | 0 | `localDb/ipc/sessions.ts` |
 | `local-db:sessions:create` | invoke | contract | 1 | `localDb/ipc/sessions.ts` |
@@ -1268,10 +1314,10 @@ W、C 规则直接定类；A 规则只标出领域，处理函数（及其调用
 | 通道 | 类型 | 归属 | 调用次数 | 注册文件 |
 |---|---|---|---:|---|
 | `ghosts:background-tasks:list` | invoke | A（插件、技能与 MCP） | 0 | `maker-ipc/register.ts` |
-| `ghosts:background-tasks:reveal` | invoke | C（在访达／资源管理器或系统浏览器里打开后台持有的内容） | 0 | `maker-ipc/register.ts` |
-| `input-handoff:picture` | invoke | C（运行时发起、窗口收集用户输入（安全输入交接）） | 0 | `maker-ipc/register.ts` |
-| `input-handoff:raise` | invoke | C（运行时发起、窗口收集用户输入（安全输入交接）） | 0 | `maker-ipc/register.ts` |
-| `input-handoff:submit` | invoke | C（运行时发起、窗口收集用户输入（安全输入交接）） | 0 | `maker-ipc/register.ts` |
+| `ghosts:background-tasks:reveal` | invoke | C-两段式（窗口做界面动作，数据调 Host）（在访达／资源管理器或系统浏览器里打开后台持有的内容） | 0 | `maker-ipc/register.ts` |
+| `input-handoff:picture` | invoke | C-专项设计（安全边界）（安全边界待专项设计：主人填写的值只交给宿主执行（input-handoff），远程控制派发；方案出来前不动） | 0 | `maker-ipc/register.ts` |
+| `input-handoff:raise` | invoke | C-专项设计（安全边界）（安全边界待专项设计：主人填写的值只交给宿主执行（input-handoff），远程控制派发；方案出来前不动） | 0 | `maker-ipc/register.ts` |
+| `input-handoff:submit` | invoke | C-专项设计（安全边界）（安全边界待专项设计：主人填写的值只交给宿主执行（input-handoff），远程控制派发；方案出来前不动） | 0 | `maker-ipc/register.ts` |
 | `local-db:bots:read-state:get` | invoke | A（伙伴与 IM） | 1 | `maker-ipc/botReadStateIpc.ts` |
 | `local-db:bots:read-state:update` | invoke | A（伙伴与 IM） | 6 | `maker-ipc/botReadStateIpc.ts` |
 | `maker:abort-session` | invoke | A（任务、消息与输入队列） | 0 | `maker-ipc/register.ts` |
@@ -1376,7 +1422,7 @@ W、C 规则直接定类；A 规则只标出领域，处理函数（及其调用
 | `maker:computer:update-driver` | invoke | B（图形能力，由窗口替 Agent 执行（平台 RPC）） | 0 | `maker-ipc/register.ts` |
 | `maker:create-session` | invoke | A（任务、消息与输入队列） | 0 | `maker-ipc/sessionCreateHandler.ts` |
 | `maker:execute-desktop-command` | invoke | A（任务、消息与输入队列） | 0 | `maker-ipc/register.ts` |
-| `maker:export-session-html` | invoke | C（任务、消息与输入队列，但处理函数用到窗口 API：BrowserWindow.fromWebContents、BrowserWindow.getFocusedWindow、dialog、shell） | 0 | `maker-ipc/register.ts` |
+| `maker:export-session-html` | invoke | C-两段式（窗口做界面动作，数据调 Host）（任务、消息与输入队列，但处理函数用到窗口 API：BrowserWindow.fromWebContents、BrowserWindow.getFocusedWindow、dialog、shell；窗口做界面动作，数据那一半调 Host） | 0 | `maker-ipc/register.ts` |
 | `maker:fork` | invoke | A（任务、消息与输入队列） | 0 | `maker-ipc/fork.ts` |
 | `maker:fork-strip-encrypted` | invoke | A（任务、消息与输入队列） | 0 | `maker-ipc/fork.ts` |
 | `maker:generate-title` | invoke | A（任务、消息与输入队列） | 0 | `maker-ipc/title.ts` |
@@ -1434,7 +1480,7 @@ W、C 规则直接定类；A 规则只标出领域，处理函数（及其调用
 | `maker:mcp:custom:list` | invoke | A（插件、技能与 MCP） | 1 | `maker-ipc/mcpHandlers.ts` |
 | `maker:mcp:custom:refresh` | invoke | A（插件、技能与 MCP） | 0 | `maker-ipc/mcpHandlers.ts` |
 | `maker:mcp:custom:update` | invoke | A（插件、技能与 MCP） | 0 | `maker-ipc/mcpHandlers.ts` |
-| `maker:mcp:duplicates:choose` | invoke | C（弹出系统选择框后写入后台数据：选择在窗口，结果归后台） | 0 | `maker-ipc/mcpHandlers.ts` |
+| `maker:mcp:duplicates:choose` | invoke | C-两段式（窗口做界面动作，数据调 Host）（弹出系统选择框后写入后台数据：选择在窗口，结果归后台） | 0 | `maker-ipc/mcpHandlers.ts` |
 | `maker:mcp:duplicates:list` | invoke | A（插件、技能与 MCP） | 1 | `maker-ipc/mcpHandlers.ts` |
 | `maker:memory:get` | invoke | A（记忆、学习与钩子） | 3 | `maker-ipc/register.ts` |
 | `maker:memory:reset` | invoke | A（记忆、学习与钩子） | 0 | `maker-ipc/register.ts` |
@@ -1608,17 +1654,17 @@ W、C 规则直接定类；A 规则只标出领域，处理函数（及其调用
 | `maker:worker:update` | invoke | A（Orca） | 0 | `maker-ipc/orcaWorkerControlHandlers.ts` |
 | `maker:working-status` | invoke | A（任务、消息与输入队列） | 0 | `maker-ipc/workingStatus.ts` |
 | `maker:write-plan-file` | invoke | A（任务、消息与输入队列） | 0 | `maker-ipc/plan-write.ts` |
-| `model-favorites:host-changed` | event | A（供应商与模型） | 0 | `maker-ipc/modelFavoritesSync.ts` |
-| `model-favorites:host-ready` | event | A（供应商与模型） | 1 | `maker-ipc/modelFavoritesSync.ts` |
-| `model-favorites:host-reply` | event | A（供应商与模型） | 0 | `maker-ipc/modelFavoritesSync.ts` |
-| `terminal:create` | invoke | C（终端 PTY：放窗口则换窗口时断开，放后台需要流式输出通道） | 0 | `maker-ipc/terminal-handlers.ts` |
-| `terminal:dispose` | invoke | C（终端 PTY：放窗口则换窗口时断开，放后台需要流式输出通道） | 0 | `maker-ipc/terminal-handlers.ts` |
-| `terminal:get-default-shell-pref` | invoke | C（终端 PTY：放窗口则换窗口时断开，放后台需要流式输出通道） | 1 | `maker-ipc/terminal-handlers.ts` |
-| `terminal:list-available-shells` | invoke | C（终端 PTY：放窗口则换窗口时断开，放后台需要流式输出通道） | 1 | `maker-ipc/terminal-handlers.ts` |
-| `terminal:resize` | invoke | C（终端 PTY：放窗口则换窗口时断开，放后台需要流式输出通道） | 0 | `maker-ipc/terminal-handlers.ts` |
-| `terminal:restart` | invoke | C（终端 PTY：放窗口则换窗口时断开，放后台需要流式输出通道） | 0 | `maker-ipc/terminal-handlers.ts` |
-| `terminal:set-default-shell-pref` | invoke | C（终端 PTY：放窗口则换窗口时断开，放后台需要流式输出通道） | 0 | `maker-ipc/terminal-handlers.ts` |
-| `terminal:write` | invoke | C（终端 PTY：放窗口则换窗口时断开，放后台需要流式输出通道） | 0 | `maker-ipc/terminal-handlers.ts` |
+| `model-favorites:host-changed` | event | R（主进程向界面要数据的回执协议：数据在界面本地存储，Host 要用需经窗口往返，先不排期） | 0 | `maker-ipc/modelFavoritesSync.ts` |
+| `model-favorites:host-ready` | event | R（主进程向界面要数据的回执协议：数据在界面本地存储，Host 要用需经窗口往返，先不排期） | 1 | `maker-ipc/modelFavoritesSync.ts` |
+| `model-favorites:host-reply` | event | R（主进程向界面要数据的回执协议：数据在界面本地存储，Host 要用需经窗口往返，先不排期） | 0 | `maker-ipc/modelFavoritesSync.ts` |
+| `terminal:create` | invoke | C-后台（终端 PTY：换窗口时不能断，网页和手机也要用（优先级低，放后面批次）） | 0 | `maker-ipc/terminal-handlers.ts` |
+| `terminal:dispose` | invoke | C-后台（终端 PTY：换窗口时不能断，网页和手机也要用（优先级低，放后面批次）） | 0 | `maker-ipc/terminal-handlers.ts` |
+| `terminal:get-default-shell-pref` | invoke | C-后台（终端 PTY：换窗口时不能断，网页和手机也要用（优先级低，放后面批次）） | 1 | `maker-ipc/terminal-handlers.ts` |
+| `terminal:list-available-shells` | invoke | C-后台（终端 PTY：换窗口时不能断，网页和手机也要用（优先级低，放后面批次）） | 1 | `maker-ipc/terminal-handlers.ts` |
+| `terminal:resize` | invoke | C-后台（终端 PTY：换窗口时不能断，网页和手机也要用（优先级低，放后面批次）） | 0 | `maker-ipc/terminal-handlers.ts` |
+| `terminal:restart` | invoke | C-后台（终端 PTY：换窗口时不能断，网页和手机也要用（优先级低，放后面批次）） | 0 | `maker-ipc/terminal-handlers.ts` |
+| `terminal:set-default-shell-pref` | invoke | C-后台（终端 PTY：换窗口时不能断，网页和手机也要用（优先级低，放后面批次）） | 0 | `maker-ipc/terminal-handlers.ts` |
+| `terminal:write` | invoke | C-后台（终端 PTY：换窗口时不能断，网页和手机也要用（优先级低，放后面批次）） | 0 | `maker-ipc/terminal-handlers.ts` |
 | `worktree:cancel-precreated` | invoke | A（git 与工作树） | 0 | `maker-ipc/precreatedWorktreeDiscardHandler.ts` |
 | `worktree:discard-precreated` | invoke | A（git 与工作树） | 0 | `maker-ipc/precreatedWorktreeDiscardHandler.ts` |
 
@@ -1626,7 +1672,7 @@ W、C 规则直接定类；A 规则只标出领域，处理函数（及其调用
 
 | 通道 | 类型 | 归属 | 调用次数 | 注册文件 |
 |---|---|---|---:|---|
-| `maker:mcp-apps:v1` | invoke | C（插件、技能与 MCP，但处理函数用到窗口 API：shell） | 0 | `mcp-apps/ipc.ts` |
+| `maker:mcp-apps:v1` | invoke | C-两段式（窗口做界面动作，数据调 Host）（插件、技能与 MCP，但处理函数用到窗口 API：shell；窗口做界面动作，数据那一半调 Host） | 0 | `mcp-apps/ipc.ts` |
 
 ### mcp-integrations
 
@@ -1703,7 +1749,7 @@ W、C 规则直接定类；A 规则只标出领域，处理函数（及其调用
 | `plugin-market:local-icons` | invoke | A（插件、技能与 MCP） | 0 | `plugin-market/registerIpc.ts` |
 | `plugin-market:local-share-detail` | invoke | A（插件、技能与 MCP） | 0 | `plugin-market/registerIpc.ts` |
 | `plugin-market:lookup` | invoke | A（插件、技能与 MCP） | 1 | `plugin-market/registerIpc.ts` |
-| `plugin-market:pick-local-source` | invoke | C（弹出系统选择框后写入后台数据：选择在窗口，结果归后台） | 0 | `plugin-market/registerIpc.ts` |
+| `plugin-market:pick-local-source` | invoke | C-两段式（窗口做界面动作，数据调 Host）（弹出系统选择框后写入后台数据：选择在窗口，结果归后台） | 0 | `plugin-market/registerIpc.ts` |
 | `plugin-market:prepare-local-share` | invoke | A（插件、技能与 MCP） | 0 | `plugin-market/registerIpc.ts` |
 | `plugin-market:prepare-share` | invoke | A（插件、技能与 MCP） | 0 | `plugin-market/registerIpc.ts` |
 | `plugin-market:query` | invoke | A（插件、技能与 MCP） | 0 | `plugin-market/registerIpc.ts` |
@@ -1728,7 +1774,7 @@ W、C 规则直接定类；A 规则只标出领域，处理函数（及其调用
 
 | 通道 | 类型 | 归属 | 调用次数 | 注册文件 |
 |---|---|---|---:|---|
-| `process-monitor:subscribe` | invoke | C（未登记前缀，但处理函数用到窗口 API：BrowserWindow.fromWebContents） | 1 | `process-monitor/ipc.ts` |
+| `process-monitor:subscribe` | invoke | C-窗口本地（用户在本窗口选择或拖入的本机文件、本机进程监视：窗口直接处理，客户端模式下照常注册） | 1 | `process-monitor/ipc.ts` |
 | `process-monitor:terminate-agent` | invoke | A（未登记前缀，处理函数没有用到窗口 API） | 0 | `process-monitor/ipc.ts` |
 | `process-monitor:unsubscribe` | invoke | A（未登记前缀，处理函数没有用到窗口 API） | 1 | `process-monitor/ipc.ts` |
 
@@ -1802,8 +1848,8 @@ W、C 规则直接定类；A 规则只标出领域，处理函数（及其调用
 
 | 通道 | 类型 | 归属 | 调用次数 | 注册文件 |
 |---|---|---|---:|---|
-| `update-relaunch:blocking-activity` | invoke | A（重启会打断哪些任务：客户端模式下由 Host 与交接合同回答（归升级与交接流程）） | 0 | `relaunchBusyActivityIpc.ts` |
-| `update-relaunch:blocking-summary` | invoke | A（重启会打断哪些任务：客户端模式下由 Host 与交接合同回答（归升级与交接流程）） | 0 | `relaunchBusyActivityIpc.ts` |
+| `update-relaunch:blocking-activity` | invoke | A（升级与交接（归交接任务：它留在原工作区的升级流程）） | 0 | `relaunchBusyActivityIpc.ts` |
+| `update-relaunch:blocking-summary` | invoke | A（升级与交接（归交接任务：它留在原工作区的升级流程）） | 0 | `relaunchBusyActivityIpc.ts` |
 
 ### remote-desktop
 
@@ -1878,7 +1924,7 @@ W、C 规则直接定类；A 规则只标出领域，处理函数（及其调用
 | `maker:remote-ssh:read-pubkey` | invoke | A（设备互联与远程执行） | 0 | `remote-ssh/index.ts` |
 | `maker:remote-ssh:reload-config` | invoke | A（设备互联与远程执行） | 0 | `remote-ssh/index.ts` |
 | `maker:remote-ssh:remove` | invoke | A（设备互联与远程执行） | 0 | `remote-ssh/index.ts` |
-| `maker:remote-ssh:review-host-key` | invoke | C（设备互联与远程执行，但处理函数用到窗口 API：BrowserWindow.fromWebContents、dialog） | 0 | `remote-ssh/index.ts` |
+| `maker:remote-ssh:review-host-key` | invoke | C-两段式（窗口做界面动作，数据调 Host）（设备互联与远程执行，但处理函数用到窗口 API：BrowserWindow.fromWebContents、dialog；窗口做界面动作，数据那一半调 Host） | 0 | `remote-ssh/index.ts` |
 | `maker:remote-ssh:run-agent-one-shot` | invoke | A（设备互联与远程执行） | 0 | `remote-ssh/index.ts` |
 | `maker:remote-ssh:set-auto-connect` | invoke | A（设备互联与远程执行） | 0 | `remote-ssh/index.ts` |
 | `maker:remote-ssh:stat-remote-path` | invoke | A（设备互联与远程执行） | 0 | `remote-ssh/index.ts` |
@@ -1952,8 +1998,8 @@ W、C 规则直接定类；A 规则只标出领域，处理函数（及其调用
 |---|---|---|---:|---|
 | `setup-migration:apply` | invoke | A（未登记前缀，处理函数没有用到窗口 API） | 0 | `setup-migration/register.ts` |
 | `setup-migration:dismiss` | invoke | A（未登记前缀，处理函数没有用到窗口 API） | 0 | `setup-migration/register.ts` |
-| `setup-migration:host-ready` | event | A（未登记前缀，处理函数没有用到窗口 API） | 1 | `setup-migration/rendererPrefsHost.ts` |
-| `setup-migration:host-reply` | event | A（未登记前缀，处理函数没有用到窗口 API） | 0 | `setup-migration/rendererPrefsHost.ts` |
+| `setup-migration:host-ready` | event | R（主进程向界面要数据的回执协议：数据在界面本地存储，Host 要用需经窗口往返，先不排期） | 1 | `setup-migration/rendererPrefsHost.ts` |
+| `setup-migration:host-reply` | event | R（主进程向界面要数据的回执协议：数据在界面本地存储，Host 要用需经窗口往返，先不排期） | 0 | `setup-migration/rendererPrefsHost.ts` |
 | `setup-migration:preview` | invoke | A（未登记前缀，处理函数没有用到窗口 API） | 0 | `setup-migration/register.ts` |
 | `setup-migration:sources` | invoke | A（未登记前缀，处理函数没有用到窗口 API） | 0 | `setup-migration/register.ts` |
 | `setup-migration:state` | invoke | A（未登记前缀，处理函数没有用到窗口 API） | 2 | `setup-migration/register.ts` |
@@ -1977,8 +2023,8 @@ W、C 规则直接定类；A 规则只标出领域，处理函数（及其调用
 
 | 通道 | 类型 | 归属 | 调用次数 | 注册文件 |
 |---|---|---|---:|---|
-| `sidebar-settings:claim-renderer-legacy-owner-sync` | event | W（窗口本地设置：窗口直接读写同一份 profile 文件，不经 Host） | 8 | `sidebarSettingsStore.ts` |
-| `sidebar-settings:load-snapshot-sync` | event | W（窗口本地设置：窗口直接读写同一份 profile 文件，不经 Host） | 21 | `sidebarSettingsStore.ts` |
+| `sidebar-settings:claim-renderer-legacy-owner-sync` | event | 同步·界面设置（窗口本地读 profile）（同步通道·界面设置：窗口本地读同一份 profile 文件） | 8 | `sidebarSettingsStore.ts` |
+| `sidebar-settings:load-snapshot-sync` | event | 同步·界面设置（窗口本地读 profile）（同步通道·界面设置：窗口本地读同一份 profile 文件） | 21 | `sidebarSettingsStore.ts` |
 | `sidebar-settings:save-pinned-order` | invoke | W（窗口本地设置：窗口直接读写同一份 profile 文件，不经 Host） | 0 | `sidebarSettingsStore.ts` |
 | `sidebar-settings:set-main-view-hidden` | invoke | W（窗口本地设置：窗口直接读写同一份 profile 文件，不经 Host） | 0 | `sidebarSettingsStore.ts` |
 | `sidebar-settings:set-project-hidden` | invoke | W（窗口本地设置：窗口直接读写同一份 profile 文件，不经 Host） | 0 | `sidebarSettingsStore.ts` |
@@ -2014,7 +2060,7 @@ W、C 规则直接定类；A 规则只标出领域，处理函数（及其调用
 | `skillhub:list-market` | invoke | A（插件、技能与 MCP） | 1 | `skillhub/registerIpc.ts` |
 | `skillhub:list-published-versions` | invoke | A（插件、技能与 MCP） | 0 | `skillhub/registerIpc.ts` |
 | `skillhub:list-user-teams` | invoke | A（插件、技能与 MCP） | 0 | `skillhub/registerIpc.ts` |
-| `skillhub:pick-local` | invoke | C（弹出系统选择框后写入后台数据：选择在窗口，结果归后台） | 0 | `skillhub/registerIpc.ts` |
+| `skillhub:pick-local` | invoke | C-两段式（窗口做界面动作，数据调 Host）（弹出系统选择框后写入后台数据：选择在窗口，结果归后台） | 0 | `skillhub/registerIpc.ts` |
 | `skillhub:publish` | invoke | A（插件、技能与 MCP） | 0 | `skillhub/registerIpc.ts` |
 | `skillhub:read-published-file` | invoke | A（插件、技能与 MCP） | 0 | `skillhub/registerIpc.ts` |
 | `skillhub:read-raw` | invoke | A（插件、技能与 MCP） | 0 | `skillhub/registerIpc.ts` |
@@ -2030,7 +2076,7 @@ W、C 规则直接定类；A 规则只标出领域，处理函数（及其调用
 | `skillhub:start-scan-poll` | invoke | A（插件、技能与 MCP） | 0 | `skillhub/registerIpc.ts` |
 | `skillhub:stop-scan-poll` | invoke | A（插件、技能与 MCP） | 0 | `skillhub/registerIpc.ts` |
 | `skillhub:sync` | invoke | A（插件、技能与 MCP） | 0 | `skillhub/registerIpc.ts` |
-| `skillhub:uninstall` | invoke | C（插件、技能与 MCP，但处理函数用到窗口 API：BrowserWindow.fromWebContents、dialog、shell） | 0 | `skillhub/registerIpc.ts` |
+| `skillhub:uninstall` | invoke | C-两段式（窗口做界面动作，数据调 Host）（插件、技能与 MCP，但处理函数用到窗口 API：BrowserWindow.fromWebContents、dialog、shell；窗口做界面动作，数据那一半调 Host） | 0 | `skillhub/registerIpc.ts` |
 | `skillhub:unpublish-published` | invoke | A（插件、技能与 MCP） | 0 | `skillhub/registerIpc.ts` |
 | `skillhub:update-published` | invoke | A（插件、技能与 MCP） | 0 | `skillhub/registerIpc.ts` |
 | `skillhub:validate-frontmatter` | invoke | A（插件、技能与 MCP） | 0 | `skillhub/registerIpc.ts` |
@@ -2203,7 +2249,7 @@ W、C 规则直接定类；A 规则只标出领域，处理函数（及其调用
 | `worktree:removal-preview` | invoke | A（git 与工作树） | 0 | `worktree/index.ts` |
 | `worktree:restore-for-session` | invoke | A（git 与工作树） | 0 | `worktree/index.ts` |
 | `worktree:restore-status` | invoke | A（git 与工作树） | 15 | `worktree/index.ts` |
-| `worktree:reveal` | invoke | C（在访达／资源管理器或系统浏览器里打开后台持有的内容） | 0 | `worktree/index.ts` |
+| `worktree:reveal` | invoke | C-两段式（窗口做界面动作，数据调 Host）（在访达／资源管理器或系统浏览器里打开后台持有的内容） | 0 | `worktree/index.ts` |
 | `worktree:suggest-name` | invoke | A（git 与工作树） | 0 | `worktree/index.ts` |
 | `worktree:sync-branch` | invoke | A（git 与工作树） | 0 | `worktree/index.ts` |
 
