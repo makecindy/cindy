@@ -60,6 +60,8 @@ function setPlatform(platform: NodeJS.Platform): void {
   });
 }
 
+vi.mock('../../input-handoff/macDriver.js', () => ({ isSecureInputTarget: vi.fn(async () => false) }));
+
 vi.mock('node:child_process', () => ({
   spawn: spawnMock,
 }));
@@ -146,7 +148,7 @@ import {
   matchAssetSizeByFilename,
   pickLatestCuaDriverRelease,
   updateComputerDriver,
-} from '../computer.js';
+} from '../computer.desktop.js';
 
 interface MockSpawnOptions {
   stdout?: string;

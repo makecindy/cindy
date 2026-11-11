@@ -62,7 +62,7 @@ function ImIcon({ im }: { im: string }) {
 
 // Component-specific bare-text treatment registered in DESIGN.md §4.
 const disclosureClassName =
-  'inline-flex min-h-6 min-w-6 items-center py-1 w-fit cursor-pointer text-12 text-[var(--text-tertiary)] hover:text-[var(--text-secondary)] transition-colors focus-visible:outline focus-visible:outline-2 focus-visible:outline-[var(--focus-ring)] focus-visible:outline-offset-2';
+  'inline-flex min-h-6 min-w-6 items-center py-1 w-fit cursor-pointer text-12 text-[var(--text-tertiary)] hover:text-[var(--text-secondary)] transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--focus-ring)]';
 
 /** IM 渠道的显示名(卡片头与 Hook 来源标签共用)。未知渠道原样显示。 */
 export function imLabel(im: string, t: TFunction): string {

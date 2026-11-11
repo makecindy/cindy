@@ -880,6 +880,7 @@
       "limitAria": "Limite de tarefas de {{name}}",
       "limitOption_one": "Até {{count}}",
       "limitOption_other": "Até {{count}}",
+      "limitUnlimited": "Sem limite",
       "weightAria": "Peso de {{name}}",
       "weightOption": "Peso {{weight}}",
       "assignAria": "Atribuir tarefas a {{name}}",
@@ -2337,7 +2338,7 @@
         "desktopVisibilityHint": "Mostra a área de trabalho e as janelas atrás da Cindy. Textos e controles permanecem nítidos.",
         "desktopBlurLabel": "Desfoque da área de trabalho",
         "desktopBlurHint": "Desfoca a área de trabalho atrás da janela. 0 desativa; valores maiores aumentam o desfoque. Sistemas sem ajuste de intensidade usam o efeito padrão.",
-        "desktopBlurSwitchHint": "Desfoca a área de trabalho atrás da janela com o efeito do sistema do Windows. Requer o Windows 11 versão 22H2 ou posterior.",
+        "desktopBlurSwitchHint": "Desfoca a área de trabalho atrás da janela com o efeito do sistema do Windows. Requer o Windows 11 versão 22H2 ou posterior. Depois de desativar, reinicie o app para aplicar a alteração.",
         "blurLabel": "Desfoque do papel de parede",
         "blurHint": "Desfoque apenas o papel de parede. Defina como 0 para desativar. Desfocar papéis de parede animados aumenta o uso da GPU.",
         "motionLabel": "Exibição",
@@ -8241,7 +8242,9 @@
         "mcpUi": "Exibir páginas interativas na conversa",
         "mcpUiDomains": "Domínios de rede da página: {{domains}}",
         "mcpAppOnly": "Somente página",
-        "uiPageAccess": "Páginas: {{pages}}; domínios: {{domains}}; ferramentas disponíveis para as páginas: {{tools}}"
+        "uiPageAccess": "Páginas: {{pages}}; domínios: {{domains}}; ferramentas disponíveis para as páginas: {{tools}}",
+        "uiHost": "Fornecer interfaces e ações do host no Cindy",
+        "uiHostAccess": "{{subject}}: {{access}}"
       },
       "connections": {
         "confirmTitle": "Adicionar endereço de conexão",
@@ -11798,6 +11801,8 @@
       "takeOverConflict": "{{name}} já foi transferido para “{{device}}”",
       "takeOverOffline": "Não foi possível acessar o servidor, então {{name}} não pode continuar aqui agora",
       "takeOverFailed": "Não foi possível assumir {{name}} neste computador",
+      "localCindyConflict": "O computador que assume já tem outra Cindy. Gerencie essa Cindy nas configurações dela ou escolha outro computador principal",
+      "localCindyConflictAction": "Abrir configurações da Cindy local",
       "notEnabled": "Este servidor não permite alterar o computador principal",
       "readOnlyNote": "Esta conversa está salva na nuvem e é somente leitura",
       "empty": "Ainda não há conversa na nuvem",
@@ -14383,6 +14388,8 @@
       "REMOTE_AGENT_SHARE_LEGACY_DISABLED": "Este é um compartilhamento antigo e não pode ser usado enquanto \"Usar apenas Agent-Net\" estiver ativado. Desative essa opção para continuar ou troque para outro modelo.",
       "REMOTE_AGENT_GROUP_USAGE_LIMIT": "As contas disponíveis para este modelo atingiram o limite de uso. Troque de modelo ou continue quando a cota for renovada.",
       "REMOTE_AGENT_GROUP_UNAVAILABLE": "Nenhum computador no grupo de provedores pode executar esta tarefa agora. Eles podem estar offline, pausados, em intervalo de espera ou sem este modelo. Verifique o grupo na página Acesso remoto e compartilhamento deste provedor.",
+      "REMOTE_AGENT_GROUP_FULL": "Todas as contas ou computadores que podem executar esta tarefa atingiram o limite de tarefas simultâneas. Aguarde uma tarefa em andamento terminar ou aumente o limite nas configurações do provedor.",
+      "SUBSCRIPTION_ACCOUNTS_FULL": "Todas as contas ou computadores que podem executar esta tarefa atingiram o limite de tarefas simultâneas. Aguarde uma tarefa em andamento terminar ou aumente o limite nas configurações do provedor.",
       "REMOTE_AGENT_DEVICE_LIMIT": "Este dispositivo atingiu o limite de sessões remotas. Arquive sessões não utilizadas ou peça ao proprietário do provedor para aumentar o limite em Acesso remoto e compartilhamento.",
       "REMOTE_AGENT_TOTAL_LIMIT": "O computador do provedor atingiu o limite total de sessões remotas. Peça ao proprietário para liberar sessões não utilizadas ou aumentar o limite em Acesso remoto e compartilhamento.",
       "REMOTE_AGENT_RESUME_LOST": "Não foi possível reconectar a conversa anterior no outro computador, então o Agent continua sem esse contexto.",
@@ -14627,6 +14634,14 @@
       "replied": "respondeu",
       "toggle": "Mostrar ou ocultar a resposta de “{{title}}”",
       "openTask": "Abrir tarefa"
+    },
+    "subscriptionAccountError": {
+      "limited": "A conta de assinatura desta tarefa atingiu o limite de uso. Aguarde a redefinição ou escolha outra origem de modelos. A conta não muda automaticamente.",
+      "limitedUntil": "A conta de assinatura desta tarefa atingiu o limite de uso. Redefinição prevista: {{resetAt}}. Aguarde até lá ou escolha outra origem de modelos. A conta não muda automaticamente.",
+      "loginRequired": "A conta de assinatura desta tarefa exige um novo login. Entre novamente no computador que executa a tarefa e tente de novo.",
+      "signingIn": "O login na conta de assinatura desta tarefa está em andamento. Tente de novo quando terminar.",
+      "unavailable": "A conta de assinatura atribuída a esta tarefa não pode ser usada nesta solicitação. Verifique a conta nas configurações do provedor de modelos no computador que executa a tarefa ou escolha outra origem de modelos.",
+      "legacy": "A conta de assinatura atribuída a esta tarefa não está disponível. Verifique o login e o uso no computador que executa a tarefa ou escolha outra origem de modelos. A conta não muda automaticamente."
     }
   },
   "ccAgent": {
@@ -19634,6 +19649,12 @@
       "restore": "Restaurar padrões"
     }
   },
+  "pluginUi": {
+    "display": "Exibição",
+    "original": "Original",
+    "menu": "Visualizações e comandos do plugin",
+    "actionFailed": "Não foi possível concluir a ação do plugin. Tente novamente."
+  },
   "mcpApps": {
     "sharedTaskReadOnly": "Apenas o proprietário da sessão pode interagir com este cartão.",
     "retry": "Recarregar",
@@ -19945,12 +19966,6 @@
       "from": "Transferido de “{{name}}”",
       "closeChecklist": "Fechar lista"
     },
-    "suggestion": {
-      "title": "Usar o assistente de migração para transferir de “{{name}}”?",
-      "description": "Você pode configurar este computador com os plugins, habilidades, configurações e conexões do outro. Tudo o que precisar de um novo login ou permissão aqui fica listado para você. Você também pode abri-lo depois em Configurações → Geral → Assistente de migração.",
-      "confirm": "Abrir o assistente de migração",
-      "later": "Agora não"
-    },
     "walkthrough": {
       "progress": "Lista de configuração {{current}} / {{total}}",
       "open": "Abrir",
@@ -19972,6 +19987,103 @@
         "allow": "Permitir",
         "deny": "Recusar"
       }
+    }
+  },
+  "firstRunGuide": {
+    "title": {
+      "new": "Boas-vindas ao Cindy",
+      "returning": "Que bom ter você de volta"
+    },
+    "stepsLabel": "Etapas do guia",
+    "close": "Fechar o guia",
+    "next": "Avançar",
+    "skip": "Pular",
+    "preparing": "Preparando…",
+    "steps": {
+      "legacy": "Dados anteriores",
+      "intro": "Conheça o Cindy",
+      "migration": "Migrar",
+      "models": "Conectar um modelo",
+      "import": "Trazer o que você já tem",
+      "finish": "Concluído"
+    },
+    "legacy": {
+      "title": "Seus dados da versão anterior já estão aqui",
+      "body": "As sessões anteriores, os arquivos de mídia e os logins do navegador do Agent foram movidos para esta versão e estão prontos para uso.",
+      "note": "As chaves e credenciais de terceiros que você autorizou não são movidas com os dados. Autorize ou informe-as novamente nas Configurações."
+    },
+    "intro": {
+      "lead": "O Cindy é o assistente de IA que ajuda você a tornar realidade o que tem em mente.",
+      "work": {
+        "title": "Deixe o trabalho com ele",
+        "body": "Ele trabalha diretamente nas suas pastas e aplicativos, em vez de apenas responder a perguntas."
+      },
+      "connect": {
+        "title": "Use os modelos e as ferramentas que você já tem",
+        "body": "Conecte sua própria assinatura ou chave de API e adicione plugins e Skills quando precisar."
+      },
+      "continue": {
+        "title": "Continue de qualquer lugar",
+        "body": "Pelo celular, inicie, acompanhe e continue as sessões do seu computador."
+      },
+      "start": "Começar",
+      "next": "A seguir"
+    },
+    "migration": {
+      "title": "Traga o Cindy do seu outro computador",
+      "body": "Outro computador da sua conta já está configurado. O Assistente de migração copia os plugins, Skills, configurações e conexões dele para este computador; as chaves só são copiadas depois que você escolher Permitir naquele computador.",
+      "manualBody": "Se você já usou o Cindy em outro computador, o Assistente de migração pode copiar os plugins, Skills, configurações e conexões dele para este computador.",
+      "done": "Migrado de “{{name}}”",
+      "from": "Computador antigo",
+      "to": "Este computador"
+    },
+    "models": {
+      "title": "Dê um modelo ao Cindy",
+      "body": "Você pode usar as duas opções juntas.",
+      "cindy": {
+        "badge": "Serviço oficial",
+        "body": "O serviço de modelos oferecido pelo Cindy. Ele já vem com a sua conta, sem nada para ativar. Contas novas recebem um saldo gratuito para experimentar; depois de pagar, quase todos os modelos ficam disponíveis, e sem pagar a gama de modelos é menor.",
+        "active": "Incluído na sua conta e pronto para usar",
+        "freeBalance": "Valor gratuito de presente: fique à vontade para experimentar"
+      },
+      "own": {
+        "title": "Use seu próprio plano",
+        "badge": "Mais em conta",
+        "body": "Já tem uma assinatura do Claude ou do ChatGPT, ou uma chave de API? Recomendamos muito conectá-la e usá-la junto com o Cindy AI para ter a melhor experiência.",
+        "more": "Outros provedores e chaves de API",
+        "connected": "Conectado"
+      }
+    },
+    "import": {
+      "title": "Traga o que já está neste computador",
+      "body": "Isto é o que o Cindy encontrou em outras ferramentas de IA neste computador. O Cindy apenas lê os originais e nunca os altera.",
+      "empty": "Nada para importar foi encontrado neste computador.",
+      "tasksHeading": "Sessões",
+      "tasksHint": "Selecione ferramentas para trazer as sessões delas para o Cindy e continuar trabalhando.",
+      "pick": "Escolher uma a uma",
+      "started": "A importação começou em segundo plano. Acompanhe o progresso em Configurações → Importação de sessões.",
+      "startFailed": "A importação não começou. Importe novamente em Configurações → Importação de sessões.",
+      "teammatesHeading": "Colegas",
+      "teammatesHint": "Importe um Agent de outra ferramenta como colega, com a memória, as Skills e as automações dele.",
+      "importTeammate": "Importar como colega"
+    },
+    "finish": {
+      "title": "Tudo pronto",
+      "legacy": "Os dados da versão anterior foram movidos para esta versão",
+      "modelReady": "Há um modelo conectado",
+      "modelMissing": "Nenhum modelo está conectado ainda. Você pode conectar um quando iniciar uma sessão.",
+      "importStarted": "As sessões de outras ferramentas estão sendo importadas em segundo plano",
+      "native": "Suas Skills e seus servidores MCP do Claude Code e do Codex funcionam aqui diretamente; não há nada para importar.",
+      "start": "Iniciar sua primeira sessão"
+    },
+    "resume": {
+      "label": "Guia em andamento · {{step}}",
+      "back": "Voltar ao guia"
+    },
+    "settings": {
+      "title": "Guia de introdução",
+      "description": "Veja novamente como conhecer o Cindy, migrar de outro computador, conectar um modelo e trazer o que você já tem.",
+      "open": "Abrir o guia"
     }
   },
   "forwardedRequest": {

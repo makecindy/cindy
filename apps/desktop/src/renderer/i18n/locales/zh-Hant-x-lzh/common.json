@@ -862,6 +862,7 @@
       "runningCount_other": "{{count}} 件差事方行",
       "limitAria": "{{name}} 之並行上限",
       "limitOption_other": "並行 {{count}}",
+      "limitUnlimited": "不限",
       "weightAria": "{{name}} 之權重",
       "weightOption": "輕重 {{weight}}",
       "assignAria": "分差事予 {{name}}",
@@ -2269,7 +2270,7 @@
         "desktopVisibilityHint": "透見 Cindy 後之桌面與視窗，文字控件仍清晰。",
         "desktopBlurLabel": "桌面模糊",
         "desktopBlurHint": "模糊窗後桌面；0 則關閉，值愈大則愈朦朧。系統若不可調，仍用預設之效。",
-        "desktopBlurSwitchHint": "以 Windows 系統之效模糊窗後桌面；須 Windows 11 22H2 或更新之版。",
+        "desktopBlurSwitchHint": "以 Windows 系統之效模糊窗後桌面；須 Windows 11 22H2 或更新之版。關之，須重啟應用方生效。",
         "blurLabel": "桌布朦朧",
         "blurHint": "僅朦朧桌布，0 為闔。動態桌布啟朦朧則增顯示卡之負。",
         "motionLabel": "展示之式",
@@ -8097,6 +8098,8 @@
         "mcpUiDomains": "頁面可連之網域：{{domains}}",
         "mcpAppOnly": "唯頁面可用",
         "uiPageAccess": "頁面：{{pages}}；網域：{{domains}}；頁面可召之工具：{{tools}}",
+        "uiHost": "於 Cindy 提供介面及宿主操作",
+        "uiHostAccess": "{{subject}}：{{access}}",
         "subscribeRoutineRun": "可於君所擇之同僚例行差事運行前行檢",
         "subscribeRoutineRunDetail": "凡於「預檢」擇之之例行差事，每番觸發必先詢之。其可見差事之指令与觸發事件之內容，可令此番略過或止之，不能代君准允。",
         "subscribeScheduleRun": "可於君所擇之自動化運行前行檢",
@@ -11654,6 +11657,8 @@
       "takeOverConflict": "{{name}} 已移至「{{device}}」續行",
       "takeOverOffline": "連不上伺服器，暫不能於此機續之",
       "takeOverFailed": "未能於此機接手 {{name}}",
+      "localCindyConflict": "接手之機已有另一 Cindy。請於其設定中處置，或另擇主力電腦",
+      "localCindyConflictAction": "查看本機 Cindy 設定",
       "notEnabled": "今之伺服器不支援更換主機",
       "readOnlyNote": "此乃雲端所存之言談，僅可觀覽",
       "empty": "雲端寂寂，尚無言談",
@@ -14229,6 +14234,8 @@
       "REMOTE_AGENT_SHARE_LEGACY_DISABLED": "此乃舊版分享，啟「唯用 Agent-Net」時暫不可用。關此開關即可續之，亦可易他模型。",
       "REMOTE_AGENT_GROUP_USAGE_LIMIT": "此模型之可用名籍已達耗用上限。可改用他模型，或待限額重置後續之。",
       "REMOTE_AGENT_GROUP_UNAVAILABLE": "供方組中之機今皆不能行此差事：或皆離線、已暫停分配、方冷卻，或無此模型。可至此供方之「遠端與分享」頁察組內之機。",
+      "REMOTE_AGENT_GROUP_FULL": "可行此務之帳號或電腦，並行皆已至上限。俟運行之務畢，或於供應商設定中增其上限。",
+      "SUBSCRIPTION_ACCOUNTS_FULL": "可行此務之帳號或電腦，並行皆已至上限。俟運行之務畢，或於供應商設定中增其上限。",
       "REMOTE_AGENT_DEVICE_LIMIT": "此裝置所留遠端差事之數已達上限。可封存暫不用之差事，或請遠方之機主於「遠端與分享」中提高上限。",
       "REMOTE_AGENT_TOTAL_LIMIT": "遠方之機所留差事總數已達上限。請彼機主人釋暫不用之差事，或於「遠端與分享」中提高上限。",
       "REMOTE_AGENT_RESUME_LOST": "前於彼機之言談未能接續，Agent 將無前之上下文而續行。",
@@ -14426,6 +14433,14 @@
       "replied": "覆書",
       "toggle": "啟閉「{{title}}」之覆書",
       "openTask": "啟差事"
+    },
+    "subscriptionAccountError": {
+      "limited": "此差事所用訂閱帳號，用量已盡。可待用量重設後再試，或另選模型來源。此差事仍繫原帳號，不自動更換。",
+      "limitedUntil": "此差事所用訂閱帳號，用量已盡，預計 {{resetAt}} 重設。可待重設後再試，或另選模型來源。此差事仍繫原帳號，不自動更換。",
+      "loginRequired": "此差事所用訂閱帳號需要重新登入。請在執行差事的電腦上重新登入該帳號，再重試。",
+      "signingIn": "此差事所用訂閱帳號正在登入，請完成登入後重試。",
+      "unavailable": "此差事所繫訂閱帳號，無法用於本次請求。請於執行差事的電腦檢查模型供方的帳號設定，或另選模型來源。",
+      "legacy": "此差事所繫訂閱帳號，暫不可用。請於執行差事的電腦檢查登入與用量，或另選模型來源。此差事不自動更換帳號。"
     }
   },
   "ccAgent": {
@@ -19388,6 +19403,12 @@
       "restore": "復預設"
     }
   },
+  "pluginUi": {
+    "display": "示法",
+    "original": "原文",
+    "menu": "法器頁面與指令",
+    "actionFailed": "此法器操作未成，請重試。"
+  },
   "mcpApps": {
     "sharedTaskReadOnly": "此卡唯差事之主可操作。",
     "retry": "重載",
@@ -19815,12 +19836,6 @@
       "from": "遷自「{{name}}」",
       "closeChecklist": "闔清單"
     },
-    "suggestion": {
-      "title": "用遷移助理從「{{name}}」遷移？",
-      "description": "可以把那台電腦上的法器、技藝、設定和連線搬到這台電腦。需要在這台電腦上重新登入或授權的內容會列成清單。之後也可以在「設定 → 通用 → 遷移助理」中開啟。",
-      "confirm": "開啟遷移助理",
-      "later": "暫緩"
-    },
     "walkthrough": {
       "progress": "辦理清單 {{current}} / {{total}}",
       "open": "開啟",
@@ -19842,6 +19857,103 @@
         "allow": "允許",
         "deny": "拒絕"
       }
+    }
+  },
+  "firstRunGuide": {
+    "title": {
+      "new": "歡迎使用 Cindy",
+      "returning": "歡迎回來"
+    },
+    "stepsLabel": "引導步驟",
+    "close": "關閉引導",
+    "next": "次之",
+    "skip": "略過",
+    "preparing": "正在準備…",
+    "steps": {
+      "legacy": "舊版資料",
+      "intro": "識 Cindy",
+      "migration": "自舊電腦遷移",
+      "models": "連模型",
+      "import": "納已有之物",
+      "finish": "畢"
+    },
+    "legacy": {
+      "title": "舊版之資料已攜至",
+      "body": "歷史差事、媒體檔案與 Agent 瀏覽器之登入狀態已遷至新版，可續用。",
+      "note": "已授權之第三方金鑰與憑證不隨資料而遷，須於設定中重新授權或填寫。"
+    },
+    "intro": {
+      "lead": "Cindy 乃助你心想事成之 AI 助手。",
+      "work": {
+        "title": "以事託之",
+        "body": "它於你的卷匣與應用中徑直成事，非止答問。"
+      },
+      "connect": {
+        "title": "用你已有之模型與器具",
+        "body": "接上自己的訂閱或 API Key，法器與技藝按需新增。"
+      },
+      "continue": {
+        "title": "何處皆可續做",
+        "body": "於手機上發起、查看並續做電腦上的差事。"
+      },
+      "start": "始",
+      "next": "其後"
+    },
+    "migration": {
+      "title": "將另一台電腦上的 Cindy 搬來",
+      "body": "你的帳號下有一台電腦已設定妥當。遷移助理會把它的法器、技藝、設定和連線複製到這台電腦；金鑰只在你在那台電腦上點「允許」後複製。",
+      "manualBody": "若曾在另一台電腦上用過 Cindy，遷移助理可把它的法器、技藝、設定和連線複製到這台電腦。",
+      "done": "已自「{{name}}」遷移",
+      "from": "舊電腦",
+      "to": "這台電腦"
+    },
+    "models": {
+      "title": "為 Cindy 接上模型",
+      "body": "以下二法可並用。",
+      "cindy": {
+        "badge": "官方之役",
+        "body": "Cindy 官方所供之模型服務，登入即有，無須開通。新帳號有贈予之餘資，可供試用；付費之後，幾乎諸模型皆可用，不付費則可用模型之範圍有限。",
+        "active": "已含於你的帳號，可徑直使用",
+        "freeBalance": "贈予之資，歡迎試用"
+      },
+      "own": {
+        "title": "用你自己的訂閱",
+        "badge": "更為實惠",
+        "body": "已有 Claude、ChatGPT 等訂閱或 API Key？甚薦接入並用，如此體驗最佳。",
+        "more": "其他供方與 API Key",
+        "connected": "已連"
+      }
+    },
+    "import": {
+      "title": "將此機已有之物攜入",
+      "body": "以下乃此機其他 AI 器具中所得。唯讀原錄，不改其分毫。",
+      "empty": "此機未見可納之物。",
+      "tasksHeading": "差事",
+      "tasksHint": "勾選器具，將其中差事接至 Cindy 續做。",
+      "pick": "逐一揀選",
+      "started": "已於背景開始納入，可於「設定 → 差事匯入」察其進度。",
+      "startFailed": "納入未始。可於「設定 → 差事匯入」重新納入。",
+      "teammatesHeading": "同僚",
+      "teammatesHint": "將其他器具中的 Agent 連同記憶、技藝與自動化納為同僚。",
+      "importTeammate": "納為同僚"
+    },
+    "finish": {
+      "title": "諸事已備",
+      "legacy": "舊版之資料已遷至新版",
+      "modelReady": "模型已連",
+      "modelMissing": "尚未連模型。新建差事時可隨時連之。",
+      "importStarted": "其他器具之差事正於背景納入",
+      "native": "你在 Claude Code、Codex 中的技藝與 MCP 可徑直使用，無須納入。",
+      "start": "始第一件差事"
+    },
+    "resume": {
+      "label": "引導進行中 · {{step}}",
+      "back": "返引導"
+    },
+    "settings": {
+      "title": "起步引導",
+      "description": "重覽識 Cindy、自舊電腦遷移、連模型與納已有之物的引導。",
+      "open": "開啟引導"
     }
   },
   "subscriptionAccounts": {

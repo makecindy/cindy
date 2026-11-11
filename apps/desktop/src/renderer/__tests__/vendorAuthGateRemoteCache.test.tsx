@@ -224,3 +224,76 @@ describe('useVendorAuthGate 本机恢复引导', () => {
     expect(navigate).not.toHaveBeenCalled();
   });
 });
+
+// #9952 / unit: the real inline gate must explain the failed voice service and
+// navigate to its recovery page. Existing tests cover auth/settingsTab alone,
+// and the overlay resolver tests never exercise this hook's confirmation path.
+// Minimum regression: BYOK custom ASR, missing config/key, legacy providers tab.
+describe('useVendorAuthGate voice input recovery', () => {
+  type VoiceReadiness = Awaited<ReturnType<typeof window.electronAPI.voiceInput.getReadiness>>;
+  const missingCustomConfig: VoiceReadiness = {
+    ok: false,
+    serviceMode: 'byok',
+    provider: 'custom-realtime-asr',
+    providerModel: 'custom-realtime-asr',
+    auth: 'api-key',
+    settingsTab: 'providers',
+    failureReason: 'custom-asr-config-missing',
+  };
+
+  function mockVoiceInput(readiness: VoiceReadiness, cached: VoiceReadiness | null = null) {
+    const getReadiness = vi.fn(async () => readiness);
+    vi.stubGlobal('electronAPI', {
+      voiceInput: { getReadinessCached: () => cached, getReadiness },
+    });
+    return getReadiness;
+  }
+
+  it.each([
+    [{}, 'settings.voiceInput.serviceSource.credentialError.customAsrConfigMissing', 'voice-input'],
+    [{ failureReason: 'custom-asr-key-missing' }, 'settings.voiceInput.serviceSource.credentialError.customAsrKeyMissing', 'voice-input'],
+    [{ serviceMode: 'cindy', provider: 'litellm-gpt-realtime-whisper', failureReason: undefined }, 'voiceInputOverlay.cindyServiceUnavailable', 'voice-input'],
+    [{ auth: 'codex', provider: 'openai-realtime-whisper', failureReason: 'codex-realtime-unsupported' }, 'settings.voiceInput.serviceSource.credentialError.codexRealtimeUnsupported', 'voice-input'],
+    [{ auth: 'codex', provider: 'openai-realtime-whisper', failureReason: undefined }, 'settings.voiceInput.serviceSource.credentialError.codexMissing', 'providers'],
+    [{ provider: 'elevenlabs-scribe-realtime', failureReason: undefined }, 'settings.voiceInput.serviceSource.credentialError.elevenlabsMissing', 'voice-input'],
+    [{ provider: 'litellm-gpt-realtime-whisper', failureReason: undefined }, 'settings.voiceInput.serviceSource.credentialError.gatewayMissing', 'providers'],
+  ] satisfies [Partial<VoiceReadiness>, string, string][])(
+    'explains %j and opens its recovery settings', async (overrides, messageKey, settingsTab) => {
+      mockVoiceInput({ ...missingCustomConfig, ...overrides });
+      const { result } = renderHook(() => useVendorAuthGate());
+
+      await expect(result.current.checkAndConfirm('codex', { purpose: 'voice-input' }))
+        .resolves.toEqual({ proceed: false });
+      expect(confirm).toHaveBeenCalledExactlyOnceWith({
+        title: 'settings.voiceInput.title',
+        description: messageKey,
+        confirmText: 'logic.confirm.goToSettings',
+        cancelText: 'logic.confirm.cancel',
+        autoFocusConfirm: true,
+      });
+      expect(navigate).toHaveBeenCalledExactlyOnceWith(`/settings?tab=${settingsTab}`);
+    },
+  );
+
+  it('cancels without navigating or starting voice input', async () => {
+    mockVoiceInput(missingCustomConfig);
+    confirm.mockResolvedValueOnce(false);
+    const { result } = renderHook(() => useVendorAuthGate());
+
+    await expect(result.current.checkAndConfirm('codex', { purpose: 'voice-input' }))
+      .resolves.toEqual({ proceed: false });
+    expect(navigate).not.toHaveBeenCalled();
+  });
+
+  it.each([false, true])('allows a ready service (cached=%s) without prompting', async (cached) => {
+    const ready = { ...missingCustomConfig, ok: true, failureReason: undefined };
+    const getReadiness = mockVoiceInput(ready, cached ? ready : missingCustomConfig);
+    const { result } = renderHook(() => useVendorAuthGate());
+
+    await expect(result.current.checkAndConfirm('codex', { purpose: 'voice-input' }))
+      .resolves.toEqual({ proceed: true });
+    expect(getReadiness).toHaveBeenCalledTimes(cached ? 0 : 1);
+    expect(confirm).not.toHaveBeenCalled();
+    expect(navigate).not.toHaveBeenCalled();
+  });
+});

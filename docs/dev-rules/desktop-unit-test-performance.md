@@ -157,7 +157,8 @@ named 与 namespace wrapper、短等待、常量内层等待和参数／fixture 
 - 按历史耗时分配分片（自定义 Vitest sequencer），拉平哈希均分造成的不均衡。
 - 把 Windows checkout 与临时目录放到 Dev Drive（ReFS），降低大量小文件 IO 的开销。
 - 基线中逐用例重置最多的 `newMakerDraft.test.ts`（54 处）、`modelVisibilityPrefs.test.ts`（18 处）、
-  `pi-package-store-security.test.ts`（17 处）按 `codexProxyHost` 的方式改；真实 I/O 重的
+  `pi-package-store-security.test.ts`（余 `beforeEach` 1 处，其余 16 处是写明理由的重启边界；去掉它需要
+  生产侧的 reset 接口）按 `codexProxyHost` 的方式改；真实 I/O 重的
   `llamaCppService`、`proxy-auth`、`updateService` 评估是否迁到专用 tier。
 - PR 阶段只跑受影响的 workspace、合并队列跑全量：需要先修改上面「PR 门禁完整覆盖」的规则，由维护者决定。
 
