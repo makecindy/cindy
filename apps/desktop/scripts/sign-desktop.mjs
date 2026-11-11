@@ -123,6 +123,9 @@ function main() {
   const baseName = artifactBaseName({ version, versionless: false });
   const workDir = fs.mkdtempSync(path.join(os.tmpdir(), 'cindy-sign-'));
   const packagedDir = path.join(workDir, `${appName}-darwin-${arch}`);
+  // 产物目录名来自打包机(--build-info 的父目录),不能进 signAndPackMacApp 里拼 shell 的命令:
+  // DMG 与热更 ZIP 先写到签名机自己建的暂存目录,再用 fs 拷进产物目录。
+  const stageDir = path.join(workDir, 'out');
   const outputs = [`${baseName}-${arch}.dmg`, `${baseName}-${arch}-hotfix.zip`]
     .map((name) => path.join(artifactDir, name));
   try {
@@ -134,15 +137,21 @@ function main() {
     if (escaping) throw new Error(`${unsignedName} 含越界条目 ${escaping}`);
     execFileSync('/usr/bin/ditto', ['-x', '-k', payloadPath, packagedDir], { stdio: 'inherit' });
     assertNoLinksOut(packagedDir, { allowInternal: true });
+    fs.mkdirSync(stageDir);
     const files = signAndPackMacApp({
       packagedDir,
       appName,
       arch,
-      artifactDir,
+      artifactDir: stageDir,
       baseName,
       identity,
       webAuthnProvisioningProfile,
     });
+    for (const { name } of files) {
+      const dest = path.join(artifactDir, name);
+      fs.rmSync(dest, { force: true });
+      fs.copyFileSync(path.join(stageDir, name), dest, fs.constants.COPYFILE_EXCL);
+    }
     const signed = signedBuildInfo(pending, { files, teamId: identity.teamId });
     // 先写同目录临时文件再 rename:写一半失败时原 pending build-info 完好,可以直接重跑。
     // 随机文件名 + 独占创建(wx 不跟随已存在的链接);rename 替换的是目录项本身。
