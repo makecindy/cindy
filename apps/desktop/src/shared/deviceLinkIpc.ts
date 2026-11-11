@@ -20,7 +20,8 @@ export const DEVICE_LINK_INVOKE = {
   GET_PEER_LINKS: 'device-link:get-peer-links',
   /** 远程连接拓扑:设置本机到指定设备的 Agent-Net 线路偏好(auto / direct / relay,纯本机持久化并通知对端) */
   SET_PEER_PATH_PREFERENCE: 'device-link:set-peer-path-preference',
-  /** 本机出站路径诊断:跨设备通道 origin 的系统/env代理判定(纯本机读,不进隧道;供连接失败时给排查提示) */
+  /** 本机出站路径诊断:跨设备通道 origin 的系统/env代理判定(纯本机读,不进隧道;供连接失败时给排查提示)。
+   *  payload: deviceId?(当前会话对端,用来取它实际走的 transport URL) */
   GET_PROXY_VERDICT: 'device-link:get-proxy-verdict',
   /** 重命名设备 */
   RENAME_DEVICE: 'device-link:rename-device',

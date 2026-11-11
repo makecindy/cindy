@@ -4493,8 +4493,9 @@ interface ElectronAPI {
     ) => Promise<{ deviceId: string; preference: 'auto' | 'direct' | 'relay' }>;
     /** 对端链路拓扑变化,payload 为全量快照 */
     onPeerLinksChanged: (cb: (payload: DeviceLinkPeerLinksSnapshot) => void) => () => void;
-    /** 出站路径诊断(#9537):跨设备通道 origin 的当前代理判定;null = 没判定 */
-    getProxyVerdict: () => Promise<DeviceLinkProxyVerdict | null>;
+    /** 出站路径诊断(#9537):跨设备通道 origin 的当前代理判定;null = 没判定。
+     *  deviceId = 当前会话对端,用于取它实际走的 transport URL(可省略)。 */
+    getProxyVerdict: (deviceId?: string) => Promise<DeviceLinkProxyVerdict | null>;
     renameDevice: (
       deviceId: string,
       name: string | null,

@@ -149,8 +149,12 @@ export function useRemoteSessionConnection(deviceId: string | undefined): Remote
  * 只回传「已确证经 Proxy 出站」这一种事实(kind='proxy' + 脱敏地址);unknown / unsupported /
  * direct / 探测失败一律 null —— `unknown` 是「没问出判定」的 fail-open 兜底,不是「确认无
  * 代理」,不得当事实展示。降级恢复后清空,再次降级时重新探(用户可能中途改了系统代理)。
+ * deviceId 让 main 取这个对端实际走的 transport URL(协议 + path 都与真实 socket 一致)。
  */
-export function useOutboundProxyVerdict(active: boolean): DeviceLinkProxyVerdict | null {
+export function useOutboundProxyVerdict(
+  active: boolean,
+  deviceId?: string,
+): DeviceLinkProxyVerdict | null {
   const [verdict, setVerdict] = useState<DeviceLinkProxyVerdict | null>(null);
 
   useEffect(() => {
@@ -160,7 +164,7 @@ export function useOutboundProxyVerdict(active: boolean): DeviceLinkProxyVerdict
     }
     let cancelled = false;
     void window.electronAPI.deviceLink
-      .getProxyVerdict()
+      .getProxyVerdict(deviceId)
       .then((v) => {
         if (!cancelled) setVerdict(v && v.kind === 'proxy' ? v : null);
       })
@@ -170,7 +174,7 @@ export function useOutboundProxyVerdict(active: boolean): DeviceLinkProxyVerdict
     return () => {
       cancelled = true;
     };
-  }, [active]);
+  }, [active, deviceId]);
 
   return active ? verdict : null;
 }
