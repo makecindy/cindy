@@ -8,12 +8,11 @@ import { isDepositExcludedFileName } from '../cindy-brain/dirDeposit.js';
 import { GHOST_HANDOFF_MAX_BYTES_PER_FILE } from '../../shared/ghost.js';
 import { readBoundedFileNoFollow } from '../utils/readBoundedFile.js';
 import { getGhostHandoffStore } from '../cindy-brain/handoffStore.desktop.js';
-import { handoffMimeType } from '../cindy-brain/handoffStore.js';
-import { resolveAuthorizedMedia } from '../device-link/mediaFetch.js';
-import { ingestMedia, supportedMime } from '../cindy-media/ingest.js';
+import { ingestMedia } from '../cindy-media/ingest.js';
+import { chatAttachmentOrigin } from '../cindy-media/attachmentGrantGate.js';
 import { captureMediaRefCompensationScope } from '../cindy-media/refCompensationJournal.desktop.js';
 import { ghostCanRead, getBlobInfo } from '../cindy-media/ledger.js';
-import { blobUrl, openBlobFile } from '../cindy-media/blobStore.desktop.js';
+import { blobUrl, openBlobFile, parseBlobUrl, resolveSafe } from '../cindy-media/blobStore.desktop.js';
 
 async function resolveStoredHistoryAttachment(args: ReadSessionAttachmentArgs): Promise<HistoryAttachmentSource | null> {
   const row = await getDbClient().queryOne<{ content: unknown; role: string }>(
@@ -41,13 +40,22 @@ export async function readDesktopHistoryAttachment(args: ReadSessionAttachmentAr
       assertCurrent,
       source: () => resolveStoredHistoryAttachment(args),
       read: async source => {
+        const media = parseBlobUrl(source.url);
+        if (!media) throw new Error('UNSUPPORTED_CAPABILITY');
+        const origin = await chatAttachmentOrigin(media.hash, db.drizzle);
+        assertCurrent();
+        if (!origin) {
+          const granted = plugin && await ghostCanRead(media.hash, plugin.caller.pluginId, db.drizzle);
+          assertCurrent();
+          if (!granted) throw new Error('PERMISSION_DENIED');
+        }
+        source.originKind = origin ?? 'tool';
         if (isDepositExcludedFileName(source.name)) throw new Error('PERMISSION_DENIED');
-        const resolved = await resolveAuthorizedMedia({ url: source.url }, GHOST_HANDOFF_MAX_BYTES_PER_FILE);
-        if (isDepositExcludedFileName(path.basename(resolved.absPath))) throw new Error('PERMISSION_DENIED');
+        const resolved = resolveSafe(source.url);
         const bytes = await readBoundedFileNoFollow(resolved.absPath, GHOST_HANDOFF_MAX_BYTES_PER_FILE,
           { containWithin: path.dirname(resolved.absPath), nonBlocking: true, verifyContentStability: true });
         if (!bytes) throw new Error('ATTACHMENT_UNAVAILABLE');
-        return { bytes, mimeType: resolved.mimeType ?? handoffMimeType(source.name) };
+        return { bytes, mimeType: resolved.mimeType };
       },
       ...(plugin && store ? {
         handoff: async (ref: string, offset: number, length: number) => {
@@ -80,21 +88,17 @@ export async function readDesktopHistoryAttachment(args: ReadSessionAttachmentAr
         },
         transfer: async (source: HistoryAttachmentSource, file: { bytes: Buffer; mimeType: string }) => {
           assertCurrent();
-          if (supportedMime(file.mimeType)) {
-            const refCompensationScope = captureMediaRefCompensationScope();
-            const media = await ingestMedia({ buffer: file.bytes, mimeType: file.mimeType, isCache: false,
-              refs: [{ refKind: source.originKind === 'user' ? 'ghost-grant' : 'ghost-tool-grant', refId: plugin.caller.pluginId, originKind: source.originKind }],
-              assertStillValid: assertCurrent, refCompensationScope }, db.drizzle);
-            return { mediaHash: media.hash };
-          }
-          const [receipt] = await store.import(plugin.caller.pluginId, [{ name: source.name, bytes: file.bytes }], assertCurrent);
-          return { attachment_ref: receipt.ref };
+          const refCompensationScope = captureMediaRefCompensationScope();
+          const media = await ingestMedia({ buffer: file.bytes, mimeType: file.mimeType, isCache: false,
+            refs: [{ refKind: source.originKind === 'user' ? 'ghost-grant' : 'ghost-tool-grant', refId: plugin.caller.pluginId, originKind: source.originKind }],
+            assertStillValid: assertCurrent, refCompensationScope }, db.drizzle);
+          return { mediaHash: media.hash };
         },
       } : {}),
     });
   } catch (error) {
     assertCurrent();
-    const known = ['PERMISSION_DENIED', 'NOT_FOUND', 'HOST_NOT_READY', 'HANDOFF_UNAVAILABLE'];
+    const known = ['PERMISSION_DENIED', 'NOT_FOUND', 'HOST_NOT_READY', 'HANDOFF_UNAVAILABLE', 'UNSUPPORTED_CAPABILITY'];
     const code = error instanceof Error && known.includes(error.message) ? error.message : 'ATTACHMENT_UNAVAILABLE';
     return { ok: false as const, errorCode: code, message: code };
   }

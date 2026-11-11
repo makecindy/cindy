@@ -96,8 +96,8 @@ user 锚点复制它之前的历史；assistant 锚点复制至下一条 user �
 
 `get_chat_history`、`search_chat_history` 与 `get_task_digest` 沿用原工具。完整导出由插件逐页读取历史后组装，不另设宿主导出接口。
 
-使用 `read_session_attachment` 读取本机指定消息中登记的附件；跨电脑任务返回 `UNSUPPORTED_CAPABILITY`，不发起远程查询或传输。
-`attachment_index` 从 0 开始，先图片、后普通文件：
+`read_session_attachment` 只覆盖已有宿主授权的本机媒体和交接引用：Cindy 管理的聊天媒体、已授予当前插件的 grant / deposit，以及已有的 handoff 回执。历史消息 JSON 的 `files.path`、绝对路径或旧文件直读 URL 不构成授权，返回 `UNSUPPORTED_CAPABILITY`；跨电脑任务也返回此错误，不发起远程查询或传输。
+`attachment_index` 从 0 开始，沿用先图片、后普通文件的历史位置；普通文件位置不能直接取源，须使用已有 `attachment_ref`：
 
 ```js
 const result = await cindy.host.call('cindy_helper', 'read_session_attachment', {
@@ -105,6 +105,6 @@ const result = await cindy.host.call('cindy_helper', 'read_session_attachment', 
 });
 ```
 
-文本结果中的 `base64` 为本段字节，每次最多 64 KiB；`name`、`mimeType`、`size` 与 `sha256` 描述整份附件。`nextOffset` 非空时继续传 `offset:nextOffset`，媒体带回 `mediaHash`，普通文件带回 `attachment_ref`，直到返回 null；保留同一组任务、消息和附件序号。两类续读都从已有 grant / 交接副本按范围读取，不重复读取来源、入仓或对整份文件重算摘要。普通文件的摘要标识首次交接内容，组装完成后必须核对 SHA-256；交接副本被编辑或校验不符时丢弃本次组装，重新从消息取源。不能混合不同版本的分块，也不能把正文里的路径或链接当成附件传入。
+文本结果中的 `base64` 为本段字节，每次最多 64 KiB；`name`、`mimeType`、`size` 与 `sha256` 描述整份附件。`nextOffset` 非空时继续传 `offset:nextOffset`，媒体带回 `mediaHash`，普通文件带回原 `attachment_ref`，直到返回 null；保留同一组任务、消息和附件序号。两类续读都从已有 grant / 交接副本按范围读取，不重复读取来源、入仓或对整份文件重算摘要。普通文件的摘要标识原交接内容，组装完成后必须核对 SHA-256；交接副本被编辑或校验不符时丢弃本次组装，使用既有授权交接流程重新取得。不能混合不同版本的分块，也不能把正文里的路径或链接当成附件传入。
 
-媒体沿用总仓和插件媒体 grant，返回 `mediaHash`；普通文件沿用 7 天交接副本，返回 `attachment_ref`，也可交给现有 `upload.handoff`。插件逻辑页和 Node 都只得到这些引用、元数据与分块字节，不得到宿主绝对路径。回执过期返回 `HANDOFF_UNAVAILABLE`，重新从原消息取得；账号、安装或批准变化使读取失效。
+媒体复用既有聊天附件账本或当前插件的 grant / deposit，返回 `mediaHash`；不把孤立媒体或其他插件的作品当作公共附件。普通文件仅读取已有的 7 天 handoff 交接副本，回执也可交给现有 `upload.handoff`，本工具不凭历史路径创建副本。插件逻辑页和 Node 都只得到引用、元数据与分块字节，不得到宿主绝对路径。回执过期返回 `HANDOFF_UNAVAILABLE`，通过既有交接流程重新取得；账号、安装或批准变化使读取失效。

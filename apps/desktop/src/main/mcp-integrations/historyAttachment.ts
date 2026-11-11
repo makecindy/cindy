@@ -4,21 +4,19 @@ import type { ReadSessionAttachmentArgs } from '@cindy/mcps';
 
 export interface HistoryAttachmentSource { url: string; name: string; originKind: 'user' | 'tool' }
 
-/** Uses persisted attachment fields only, never links or paths found in message text. */
+/** Locates managed media; persisted file paths do not prove read authority. */
 export function historyAttachmentSource(content: unknown, role: string, index: number): HistoryAttachmentSource | null {
   let parsed = content;
   if (typeof parsed === 'string') { try { parsed = JSON.parse(parsed); } catch { return null; } }
   if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) return null;
   const record = parsed as Record<string, unknown>;
-  const sources = [...(Array.isArray(record.images) ? record.images : []).map(item => ({ item, field: 'url' })),
-    ...(Array.isArray(record.files) ? record.files : []).map(item => ({ item, field: 'path' }))];
-  const selected = sources[index];
-  if (!selected) return null;
-  const item = selected?.item as Record<string, unknown> | undefined;
-  const raw = item?.[selected.field];
+  const images = Array.isArray(record.images) ? record.images : [];
+  if (index >= images.length && Array.isArray(record.files) && record.files[index - images.length])
+    throw new Error('UNSUPPORTED_CAPABILITY');
+  const item = images[index] as Record<string, unknown> | undefined;
+  const raw = item?.url;
   if (typeof raw !== 'string' || !raw || raw.includes('\0')) return null;
-  const url = path.isAbsolute(raw) ? `xdt-file://attachment?path=${encodeURIComponent(raw)}` : raw;
-  return { url, name: path.basename(String(item?.originalName ?? item?.name ?? 'attachment')), originKind: role === 'user' ? 'user' : 'tool' };
+  return { url: raw, name: path.basename(String(item?.originalName ?? item?.name ?? 'attachment')), originKind: role === 'user' ? 'user' : 'tool' };
 }
 
 export async function readHistoryAttachment(args: ReadSessionAttachmentArgs, ports: {
@@ -34,7 +32,7 @@ export async function readHistoryAttachment(args: ReadSessionAttachmentArgs, por
   if (args.attachment_ref) {
     const held = await ports.handoff?.(args.attachment_ref, args.offset, args.length);
     ports.assertCurrent();
-    if (!held) return { ok: false as const, errorCode: 'HANDOFF_UNAVAILABLE', message: 'Attachment receipt is unavailable; request the source attachment again.' };
+    if (!held) return { ok: false as const, errorCode: 'HANDOFF_UNAVAILABLE', message: 'Attachment receipt is unavailable; obtain a new receipt through the existing authorized handoff flow.' };
     const end = args.offset + held.bytes.byteLength;
     return { ok: true as const, name: held.name, mimeType: held.mimeType, size: held.size, sha256: held.sha256,
       offset: args.offset, base64: held.bytes.toString('base64'), nextOffset: end < held.size ? end : null, attachment_ref: args.attachment_ref };

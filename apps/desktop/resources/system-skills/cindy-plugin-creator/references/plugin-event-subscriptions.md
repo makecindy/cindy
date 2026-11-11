@@ -9,8 +9,8 @@
 
 `did-message-created` 的 `data` 包含 `{sessionId,messageId,role,content,createdAt,historyCursor}`。
 覆盖宿主已经保存的用户消息和 AI 回复，更新同一行时按 `messageId` 合并，不是逐 token 流。
-结构化内容只包含正文与附件位置 `{attachment_index,name,mimeType?}`；读取附件使用
-`cindy.host.call('cindy_helper','read_session_attachment',...)`，另需 `history` 组批准。
+结构化内容只包含正文与附件位置 `{attachment_index,name,mimeType?}`；已有宿主授权的本机媒体与交接引用可用
+`cindy.host.call('cindy_helper','read_session_attachment',...)` 读取，另需 `history` 组批准；历史文件路径和跨电脑附件返回 `UNSUPPORTED_CAPABILITY`。
 `did-task-state-changed` 的 `data` 为 `{sessionId,state}`，只在生命周期变化时发布：一轮开始、结束、出错、等待权限、等待回答、排队或取消，
 以及归档、恢复和删除。归档等变化提供相应状态字段，运行变化提供宿主规范投影的 `activity` 状态字段（或退出活动投影时的 null）及 `changedAtMs`。
 活动摘要、进度、流式输出和仅隐藏状态的变化不触发此主题。
