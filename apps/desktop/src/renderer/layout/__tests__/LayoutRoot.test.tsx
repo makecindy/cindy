@@ -659,3 +659,26 @@ it('expands the saved standalone window when the initial session restores an ope
   await act(async () => { rendered.rerender(view(true)); });
   expect(expand).toHaveBeenCalledExactlyOnceWith(802);
 });
+
+// Bug: a Settings takeover hides the sidebar without a session change; reading it as a
+// session restore skipped the route-exit retraction, so each round trip re-expanded from
+// the already expanded bounds.
+it('retracts on a Settings takeover and expands again on return', () => {
+  const expand = vi.fn(async (_width: number) => undefined);
+  window.electronAPI.windowSidebarExpansion = expand;
+  const view = (suppress: boolean, ready: boolean) => (
+    <BuiltinPanelBridgeProvider value={bridge}>
+      <LayoutRoot rightTabsCollapsed={false} rightTabsUserToggle={false}
+        suppressNonChatPanels={suppress} sidebarExpansionReady={ready} />
+    </BuiltinPanelBridgeProvider>
+  );
+  const rendered = render(view(false, true));
+  vi.spyOn(screen.getByTestId('layout-root-content'), 'getBoundingClientRect')
+    .mockReturnValue({ width: 800 } as DOMRect);
+  rendered.rerender(view(true, true));
+  expect(expand).toHaveBeenCalledExactlyOnceWith(0);
+  rendered.rerender(view(true, false));
+  expect(expand).toHaveBeenCalledTimes(1);
+  rendered.rerender(view(false, true));
+  expect(expand.mock.lastCall![0]).toBeGreaterThan(0);
+});
