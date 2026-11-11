@@ -79,6 +79,13 @@ describe('decodeRemoteErrorMessage', () => {
     expect(decodeRemoteErrorMessage(raw)).toBe(i18n.t('chat.remoteError.REMOTE_COMPAT_MODE_UNSUPPORTED'));
   });
 
+  it('explains an SSH Codex source mismatch after lazy creation fails', () => {
+    const raw = 'LAZY_CREATE_FAILED: [REMOTE_CODEX_SOURCE_UNSUPPORTED] SSH Codex uses the remote native connection';
+    const expected = i18n.t('settings.remote.startSession.unsupportedCodexSource');
+    expect(decodeRemoteErrorMessage(raw)).toBe(expected);
+    expect(remoteErrorMessageForBanner(raw)).toBe(raw);
+  });
+
   it('maps a missing auto-review confirmation to i18n text, not a user rejection', () => {
     expect(
       decodeRemoteErrorMessage(

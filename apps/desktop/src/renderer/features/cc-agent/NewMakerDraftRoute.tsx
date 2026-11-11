@@ -810,6 +810,8 @@ export function NewMakerDraftRoute() {
     const key =
       code === 'REMOTE_PROVIDER_UPDATING'
         ? 'ccAgent.draft.remoteProviderUpdating'
+        : code === 'REMOTE_CODEX_SOURCE_UNSUPPORTED'
+          ? 'settings.remote.startSession.unsupportedCodexSource'
         : code === 'REMOTE_PROVIDER_UNSUPPORTED'
           ? 'ccAgent.draft.remoteProviderUnsupported'
           : code === 'REMOTE_NATIVE_OAUTH_UNAVAILABLE'
@@ -3953,6 +3955,12 @@ export function NewMakerDraftRoute() {
           const capabilityAgentKind = dbToMakerAgentKind(persistedAgentKind);
           const model = routedTo?.model ?? sendBaseRoute.model;
           const providerId = routedTo ? routedTo.providerId : sendBaseRoute.providerId;
+          // The composer guards its visible selection, but a late route override
+          // must satisfy the same SSH Codex boundary before creating a session.
+          if (effectiveRemoteHostId && persistedAgentKind === 'codex' && providerId && providerId !== 'openai') {
+            toast.error(t('settings.remote.startSession.unsupportedCodexSource'));
+            return;
+          }
           const submittedEffort = routedTo ? (routedTo.effort ?? '') as Effort : sendBaseRoute.submittedEffort;
           const effectiveFastMode = routedTo ? false : sendBaseRoute.effectiveFastMode;
           const writePluginRouteNote = (sessionId: string) => writePluginModelRouteNote(sessionId, pluginRoute);
@@ -5020,6 +5028,8 @@ export function NewMakerDraftRoute() {
           toast.error(
             isRemotePrecreatedWorktreeCleanupPendingError(err)
               ? t('ccAgent.draft.remoteWorktreeCleanupPending')
+              : extractIpcError(err)?.code === 'REMOTE_CODEX_SOURCE_UNSUPPORTED'
+                ? t('settings.remote.startSession.unsupportedCodexSource')
               : (getRemoteWorkingDirErrorMessage(err, t) ?? t('ccAgent.draft.createSessionFailed')),
           );
         } finally {

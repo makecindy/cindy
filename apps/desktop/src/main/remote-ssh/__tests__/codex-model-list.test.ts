@@ -30,7 +30,7 @@ describe('SSH Codex model projection and admission', () => {
     expect(provider.models.codex?.[0].contextWindowVerified).not.toBe(true);
     expect(assertSshCodexModel([provider], 'remote-default', 'openai').id).toBe('remote-default');
     expect(() => assertSshCodexModel([provider], 'local-only', 'openai')).toThrow('[INVALID_PARAMS]');
-    expect(() => assertSshCodexModel([provider], 'remote-default', 'xd')).toThrow('[INVALID_PARAMS]');
+    expect(() => assertSshCodexModel([provider], 'remote-default', 'xd')).toThrow('[REMOTE_CODEX_SOURCE_UNSUPPORTED]');
   });
   it('validates input before reading and never exposes an RPC secret in an error', async () => {
     const read = vi.fn().mockRejectedValue(new Error('test-secret-not-for-renderer'));
