@@ -37,6 +37,9 @@ import {
 import { installedGhostStoragePart } from '../../../shared/pluginIdentity.js';
 import { createGhostProductionCallbacks } from './ghostProductionCallbacksFixture.js';
 import { GhostNotificationIndex } from '../ghostNotificationIndex.js';
+import { createRuntimePluginControl } from '../runtimeControl.js';
+import { createRuntimeContextProviders } from '../runtimeContext.js';
+import type { RuntimePluginSettings } from '../../../shared/pluginRuntime.js';
 
 const createSessionNotification = createGhostProductionCallbacks<{
   notifyGhostSessionEvent(
@@ -1888,6 +1891,74 @@ describe('control points', () => {
     selected.approval.revision = '00000000-0000-4000-8000-000000000002';
     gw.handleVerdict('r1', { type: 'event-verdict', hookId: (sent[0].payload as { hookId: string }).hookId, action: 'route', route });
     expect(await response).toMatchObject({ action: 'block', failure: true });
+  });
+
+  // PR #9803: a fast provider can be revoked while another provider is pending.
+  // Existing gateway tests stop at delivery; exercise the real collection and
+  // application entry, with no network/waits (unit/fake timers). Minimum input:
+  // two providers, first answers, its enable/approval changes, second answers.
+  it.each((['disabled', 'approval'] as const).flatMap(change => [
+    ['will-compose-context', 'allow', change], ['will-compose-context', 'skip', change],
+    ['will-compose-context', 'block', change], ['will-search-memory', 'allow', change],
+  ] as const))('rechecks collected %s with %s policy after %s changes', async (point, onFailure, change) => {
+    const selected = ['first', 'second'].map(id => ({ ...ghost(id, { hooks: [point] }), approvedControlPoints: [point],
+      approval: { state: 'approved' as const, revision: '00000000-0000-4000-8000-000000000001' } }));
+    const listGhosts = vi.fn(() => selected);
+    const { gw, sent, running } = makeGateway({ listGhosts,
+      findGhostForDelivery: id => selected.find(item => installedGhostStoragePart(item) === id) ?? null });
+    for (const item of selected) running.add(installedGhostStoragePart(item));
+    const settings: RuntimePluginSettings = { [point]: selected.map(item => ({ pluginId: item.manifest.id, onFailure })) };
+    const control = createRuntimePluginControl({ readSettings: () => settings, captureOwner: () => () => true,
+      screen: (...args) => gw.screenControlPoint(...args) });
+    const providers = createRuntimeContextProviders(control);
+    const pending = point === 'will-compose-context' ? providers.compose('task', 'current input')
+      : providers.search({ sessionId: 'task', query: 'word', limit: 10 });
+    const observed = pending!.then(value => ({ value, error: undefined }), error => ({ value: undefined, error }));
+    await vi.advanceTimersByTimeAsync(0);
+    const reply = (id: string) => {
+      const event = sent.find(item => item.ghostId === id)!.payload;
+      gw.handleVerdict(id, { type: 'event-verdict', hookId: (event as { hookId: string }).hookId,
+        ...(point === 'will-compose-context' ? { action: 'context', blocks: [{ id, text: id }] }
+          : { action: 'memories', entries: [{ id, title: id, content: id }] }) });
+    };
+    reply('first');
+    await vi.advanceTimersByTimeAsync(0);
+    if (change === 'disabled') selected[0].enabled = false;
+    else selected[0].approval.revision = '00000000-0000-4000-8000-000000000002';
+    reply('second');
+    const outcome = await observed;
+    if (onFailure !== 'allow') expect(outcome.error).toMatchObject({ action: onFailure, failure: true });
+    else if (point === 'will-search-memory') expect(outcome.value).toMatchObject({ hits: [{ id: 'second', sourcePlugin: { id: 'second' } }] });
+    else {
+      expect(outcome.error).toBeUndefined();
+      expect(typeof outcome.value).toBe('string');
+      expect(JSON.parse(outcome.value as string)).toMatchObject({ sourcePlugin: { id: 'second' }, blocks: [{ id: 'second', text: 'second' }] });
+    }
+    expect(listGhosts).not.toHaveBeenCalled();
+  });
+
+  // The same approval boundary also spans asynchronous host route validation.
+  it.each(['will-start-turn', 'will-model-request'] as const)('rechecks %s before applying an asynchronous host effect', async point => {
+    const selected = { ...ghost('router', { hooks: [point] }), approvedControlPoints: [point] };
+    const { gw, sent, running } = makeGateway({ findGhostForDelivery: () => selected });
+    running.add('router');
+    const settings: RuntimePluginSettings = { [point]: [{ pluginId: 'router', onFailure: 'block' }] };
+    const control = createRuntimePluginControl({ readSettings: () => settings, captureOwner: () => () => true,
+      screen: (...args) => gw.screenControlPoint(...args) });
+    const route = { agentKind: 'pi' as const, providerId: 'p', model: 'm' };
+    const applied = vi.fn();
+    const pending = control.run(point, 'task', async () => ({ sessionId: 'task', phase: 'select' as const, route }),
+      async (_result, _input, assertCurrent) => {
+        await Promise.resolve();
+        selected.enabled = false;
+        assertCurrent();
+        applied();
+      });
+    const observed = pending!.then(() => undefined, error => error);
+    await vi.advanceTimersByTimeAsync(0);
+    gw.handleVerdict('router', { type: 'event-verdict', hookId: (sent[0].payload as { hookId: string }).hookId, action: 'route', route });
+    expect(await observed).toMatchObject({ action: 'block', failure: true });
+    expect(applied).not.toHaveBeenCalled();
   });
 
   it.each(['will-compose-context', 'will-search-memory'] as const)('validates provider results and times out %s without blocking', async point => {

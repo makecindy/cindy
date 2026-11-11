@@ -58,6 +58,7 @@ import { isGhostOwnerScopeUsable, type GhostOwnerScope } from './ghostOwnerScope
 import { getDbClient } from '../localDb/client/current.js';
 import * as localDbSchema from '../localDb/schema.js';
 import { findInstalledGhostByInstanceId, installedGhostStoragePart } from '../../shared/pluginIdentity.js';
+import { RUNTIME_PLUGIN_RESULT_CURRENT, type RuntimePluginControlResult } from './runtimeControl.js';
 
 /** block 理由展示上限(超长截断,防意识用理由塞小作文)。 */
 const BLOCK_REASON_MAX_CHARS = 200;
@@ -583,7 +584,7 @@ export class GhostSubscriptionGateway {
     data: GhostControlPointData,
     target: { pluginId: string; onFailure: GhostControlPointFailureAction },
     timeoutMs?: number,
-  ): Promise<GhostRuntimeControlPointResult> {
+  ): Promise<RuntimePluginControlResult> {
     const ownerScope = this.captureOwnerScope();
     if (!this.ownerScopeUsable(ownerScope)) return { action: 'allow' };
     const spec = GHOST_CONTROL_POINTS[point];
@@ -605,17 +606,22 @@ export class GhostSubscriptionGateway {
     const ghostId = installedGhostStoragePart(ghost);
     const e = this.entry(ghostId);
     const controlApproval = ghostInstallApprovalToken(ghost.approval);
+    const currentTarget = () => {
+      const current = findTarget();
+      return this.ownerScopeUsable(ownerScope) && !!current && ghostControlPointActive(current, point)
+        && ghostInstallApprovalToken(current.approval) === controlApproval;
+    };
+    const checked = (result: GhostRuntimeControlPointResult): RuntimePluginControlResult => {
+      // Keep the original wire/JSON shape. Parallel collection and asynchronous
+      // host effects must recheck this same exact installation before use.
+      if (runtimePoint) Object.defineProperty(result, RUNTIME_PLUGIN_RESULT_CURRENT, { value: currentTarget });
+      return result;
+    };
     const verdict = e.pointFused ? null : await this.askControlPoint(ghost, e, point, data,
       Math.min(spec.timeoutMs, timeoutMs ?? spec.timeoutMs), ownerScope);
     if (!this.ownerScopeUsable(ownerScope)) return { action: 'allow' };
     if (verdict === null) return failed(ghostId, ghost.manifest.name, e.pointFused ? 'fused' : 'unanswered');
-    if (runtimePoint) {
-      const current = findTarget();
-      if (!current || !ghostControlPointActive(current, point)
-        || ghostInstallApprovalToken(current.approval) !== controlApproval) {
-        return failed(ghostId, ghost.manifest.name, 'changed');
-      }
-    }
+    if (runtimePoint && !currentTarget()) return failed(ghostId, ghost.manifest.name, 'changed');
     if (verdict.action === 'route' && verdict.route && (spec.actions as readonly string[]).includes('route')) {
       if (point === 'will-model-request' && 'phase' in data && data.phase !== 'select') {
         return failed(ghostId, ghost.manifest.name, 'route-after-selection');
@@ -623,38 +629,38 @@ export class GhostSubscriptionGateway {
       // Existing new-task selectors keep their original request-preference contract.
       const { fastMode: _fast, ...legacyRoute } = verdict.route;
       this.deps.log?.info('control point routed', { ghostId, point, agentKind: verdict.route.agentKind, model: verdict.route.model });
-      return {
+      return checked({
         action: 'route',
         ghostId,
         ghostName: ghost.manifest.name,
         route: point === 'will-start-task' ? legacyRoute : verdict.route,
         reason: (verdict.reason ?? '').slice(0, BLOCK_REASON_MAX_CHARS),
-      };
+      });
     }
     if (point === 'will-model-request' && verdict.action === 'transform' && verdict.request
       && 'phase' in data && data.phase === 'payload') {
-      return { action: 'transform', ghostId, ghostName: ghost.manifest.name, request: verdict.request };
+      return checked({ action: 'transform', ghostId, ghostName: ghost.manifest.name, request: verdict.request });
     }
     if (point === 'will-compose-context' && verdict.action === 'context' && verdict.blocks) {
-      return { action: 'context', ghostId, ghostName: ghost.manifest.name, blocks: verdict.blocks };
+      return checked({ action: 'context', ghostId, ghostName: ghost.manifest.name, blocks: verdict.blocks });
     }
     if (point === 'will-search-memory' && verdict.action === 'memories' && verdict.entries) {
-      return { action: 'memories', ghostId, ghostName: ghost.manifest.name, entries: verdict.entries };
+      return checked({ action: 'memories', ghostId, ghostName: ghost.manifest.name, entries: verdict.entries });
     }
     if ((verdict.action === 'skip' || verdict.action === 'block') &&
         (spec.actions as readonly string[]).includes(verdict.action)) {
       this.deps.log?.info('control point stopped', { ghostId, point, action: verdict.action });
-      return {
+      return checked({
         action: verdict.action,
         ghostId,
         ghostName: ghost.manifest.name,
         reason: (verdict.reason ?? '').slice(0, BLOCK_REASON_MAX_CHARS),
         failure: false,
-      };
+      });
     }
     if (runtimePoint && verdict.action !== 'allow') return failed(ghostId, ghost.manifest.name, 'invalid-verdict');
     // Legacy points retain their fail-open handling of unsupported answers.
-    return { action: 'allow' };
+    return checked({ action: 'allow' });
   }
 
   private async askControlPoint(

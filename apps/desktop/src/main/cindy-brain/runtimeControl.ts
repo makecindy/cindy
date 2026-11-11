@@ -2,6 +2,10 @@ import { GHOST_CONTROL_POINTS, type GhostRuntimeControlPointResult, type GhostCo
 import type { RuntimePluginPoint, RuntimePluginSettings, RuntimePluginTarget } from '../../shared/pluginRuntime.js';
 type RuntimeControlPoint = Exclude<RuntimePluginPoint, 'system-prompt'>;
 
+/** Host-only approval guard; never part of the plugin's wire verdict. */
+export const RUNTIME_PLUGIN_RESULT_CURRENT = Symbol('runtime-plugin-result-current');
+export type RuntimePluginControlResult = GhostRuntimeControlPointResult & { [RUNTIME_PLUGIN_RESULT_CURRENT]?: () => boolean };
+
 /** Parallel provider waits share wall time; host work between waits is excluded. */
 function createWaitBudget(limitMs: number, now: () => number) {
   let remaining = limitMs;
@@ -33,7 +37,7 @@ export class RuntimePluginControlError extends Error {
 export function createRuntimePluginControl(deps: {
   readSettings(sessionId: string): RuntimePluginSettings | undefined;
   captureOwner(): () => boolean;
-  screen(point: RuntimeControlPoint, data: GhostControlPointData, target: RuntimePluginTarget, timeoutMs?: number): Promise<GhostRuntimeControlPointResult>;
+  screen(point: RuntimeControlPoint, data: GhostControlPointData, target: RuntimePluginTarget, timeoutMs?: number): Promise<RuntimePluginControlResult>;
   now?(): number;
 }) {
   const now = deps.now ?? (() => performance.now());
@@ -87,16 +91,20 @@ export function createRuntimePluginControl(deps: {
             return await deps.screen(point, data, target, timeoutMs);
           } finally { for (const finish of release) finish(); }
         };
-        const applyResult = async (target: RuntimePluginTarget, answer: { result?: GhostRuntimeControlPointResult; error?: unknown }) => {
+        const applyResult = async (target: RuntimePluginTarget, answer: { result?: RuntimePluginControlResult; error?: unknown }) => {
           try {
             if ('error' in answer) throw answer.error;
             const result = answer.result!;
-            assertCurrent();
+            const assertResultCurrent = () => {
+              assertCurrent();
+              if (result[RUNTIME_PLUGIN_RESULT_CURRENT]?.() === false) throw new Error('Runtime plugin approval changed');
+            };
+            assertResultCurrent();
             if (result.action === 'skip' || result.action === 'block') {
               throw new RuntimePluginControlError(result.action, target.pluginId, result.failure, result.reason);
             }
-            data = await apply(result, data, assertCurrent) ?? data;
-            assertCurrent();
+            data = await apply(result, data, assertResultCurrent) ?? data;
+            assertResultCurrent();
           } catch (error) {
             // An owner/selection/cancellation boundary always wins, including allow-on-failure.
             assertCurrent();
