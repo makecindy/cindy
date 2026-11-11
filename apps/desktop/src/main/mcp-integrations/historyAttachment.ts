@@ -27,30 +27,35 @@ export async function readHistoryAttachment(args: ReadSessionAttachmentArgs, por
   read(source: HistoryAttachmentSource): Promise<{ bytes: Buffer; mimeType: string }>;
   /** Present only for a Host-attested plugin caller. */
   transfer?: (source: HistoryAttachmentSource, file: { bytes: Buffer; mimeType: string }) => Promise<{ attachment_ref?: string; mediaHash?: string }>;
-  handoff?: (ref: string) => Promise<{ bytes: Buffer; name: string; mimeType: string } | null>;
+  handoff?: (ref: string, offset: number, length: number) => Promise<{ bytes: Buffer; name: string; mimeType: string; size: number; sha256: string } | null>;
   media?: (hash: string, offset: number, length: number) => Promise<{ bytes: Buffer; size: number; mimeType: string } | null>;
 }) {
   ports.assertCurrent();
-  const held = args.attachment_ref ? await ports.handoff?.(args.attachment_ref) : null;
+  if (args.attachment_ref) {
+    const held = await ports.handoff?.(args.attachment_ref, args.offset, args.length);
+    ports.assertCurrent();
+    if (!held) return { ok: false as const, errorCode: 'HANDOFF_UNAVAILABLE', message: 'Attachment receipt is unavailable; request the source attachment again.' };
+    const end = args.offset + held.bytes.byteLength;
+    return { ok: true as const, name: held.name, mimeType: held.mimeType, size: held.size, sha256: held.sha256,
+      offset: args.offset, base64: held.bytes.toString('base64'), nextOffset: end < held.size ? end : null, attachment_ref: args.attachment_ref };
+  }
+  const source = await ports.source();
   ports.assertCurrent();
-  if (args.attachment_ref && !held) return { ok: false as const, errorCode: 'HANDOFF_UNAVAILABLE', message: 'Attachment receipt is unavailable; request the source attachment again.' };
-  const source = held ? null : await ports.source();
-  ports.assertCurrent();
-  if (!held && !source) return { ok: false as const, errorCode: 'NOT_FOUND', message: 'Message attachment does not exist.' };
-  if (!held && args.mediaHash) {
+  if (!source) return { ok: false as const, errorCode: 'NOT_FOUND', message: 'Message attachment does not exist.' };
+  if (args.mediaHash) {
     const chunk = await ports.media?.(args.mediaHash, args.offset, args.length);
     ports.assertCurrent();
     if (!chunk) return { ok: false as const, errorCode: 'ATTACHMENT_UNAVAILABLE', message: 'Granted media is unavailable.' };
     const end = args.offset + chunk.bytes.byteLength;
-    return { ok: true as const, name: source!.name, mimeType: chunk.mimeType, size: chunk.size, sha256: args.mediaHash,
+    return { ok: true as const, name: source.name, mimeType: chunk.mimeType, size: chunk.size, sha256: args.mediaHash,
       offset: args.offset, base64: chunk.bytes.toString('base64'), nextOffset: end < chunk.size ? end : null, mediaHash: args.mediaHash };
   }
-  const file = held ?? await ports.read(source!);
+  const file = await ports.read(source);
   ports.assertCurrent();
-  const receipt = held ? { attachment_ref: args.attachment_ref } : await ports.transfer?.(source!, file);
+  const receipt = await ports.transfer?.(source, file);
   ports.assertCurrent();
   const end = Math.min(args.offset + args.length, file.bytes.byteLength);
-  return { ok: true as const, name: held?.name ?? source!.name, mimeType: file.mimeType,
+  return { ok: true as const, name: source.name, mimeType: file.mimeType,
     size: file.bytes.byteLength, sha256: createHash('sha256').update(file.bytes).digest('hex'),
     offset: args.offset, base64: file.bytes.subarray(args.offset, end).toString('base64'),
     nextOffset: end < file.bytes.byteLength ? end : null, ...receipt };

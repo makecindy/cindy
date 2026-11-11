@@ -247,7 +247,8 @@ export interface SearchChatHistoryResult {
 export interface XdtHelperHistoryDeps {
   readSessionAttachment?: (args: import('./read_session_attachment.js').ReadSessionAttachmentArgs,
     context?: import('../types.js').LiziMcpSessionContext) => Promise<ControlResult<Record<string, unknown>, string>>;
-  listTeammates?: (callerSessionId?: string) => Promise<ControlResult<{ teammates: unknown[] }>>;
+  listTeammates?: (args: { teammateId?: string; limit: number; cursor: HistoryCursor | null },
+    callerSessionId?: string) => Promise<ControlResult<{ page: HistoryPage<Record<string, unknown>> }>>;
   /** Host-built task link; accepts local ids or deviceId::sessionId. No lookup or permission grant. */
   sessionUrl?: (sessionId: string) => string;
   remote?: import('./_history_devices.js').HistoryRemoteDeps;

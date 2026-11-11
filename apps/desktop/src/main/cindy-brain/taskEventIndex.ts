@@ -16,6 +16,11 @@ export class GhostTaskEventIndex {
   private owner: DataOwnerPushStamp | undefined;
   private readonly topics = new Map<GhostTaskEventTopic, InstalledGhost[]>();
 
+  subscribedKinds(): TaskChangeEvent['kind'][] {
+    return [...(this.topics.has('message') ? ['message' as const] : []),
+      ...(this.topics.has('task-state') ? ['state' as const] : [])];
+  }
+
   replace(ghosts: InstalledGhost[], owner?: DataOwnerPushStamp): void {
     this.topics.clear();
     this.owner = owner;
@@ -30,12 +35,16 @@ export class GhostTaskEventIndex {
     }
   }
 
-  publish(event: TaskChangeEvent, owner: DataOwnerPushStamp, gateway: () => GhostSubscriptionGateway): void {
+  publish(event: TaskChangeEvent, owner: DataOwnerPushStamp, gateway: () => GhostSubscriptionGateway,
+    pendingRecipients?: InstalledGhost[]): void {
     if (!this.owner || owner.dataOwnerId !== this.owner.dataOwnerId || owner.ownerGeneration !== this.owner.ownerGeneration) return;
     const topic = event.kind === 'message' ? 'message' : 'task-state';
-    const ghosts = this.topics.get(topic);
+    const subscribed = this.topics.get(topic);
     // No projection, JSON parsing, cursor encoding, filesystem lookup or runtime wake at zero subscribers.
-    if (!ghosts?.length) return;
+    if (!subscribed?.length) return;
+    // A cursor read retains its original recipients. The gateway still checks
+    // their live approval; a replacement install cannot inherit pending data.
+    const ghosts = pendingRecipients ?? subscribed;
     let data: GhostTaskEventData;
     if (event.kind === 'message') {
       const msg = event.message;
@@ -50,7 +59,7 @@ export class GhostTaskEventIndex {
         ).then(row => {
           if (!row || !Number.isSafeInteger(row.rowid) || row.rowid < 1 || db !== tryGetDbClient()) return;
           // Re-enter the indexed owner/subscription checks after the async read.
-          this.publish({ ...event, message: { ...msg, rowid: row.rowid } }, owner, gateway);
+          this.publish({ ...event, message: { ...msg, rowid: row.rowid } }, owner, gateway, ghosts);
         }).catch(() => log.warn('committed message cursor lookup failed'));
         return;
       }
@@ -60,7 +69,8 @@ export class GhostTaskEventIndex {
     } else {
       data = { sessionId: event.sessionId, state: taskState(event.state) };
     }
-    gateway().publishIndexed(ghosts, topic, event.kind === 'message' ? 'did-message-created' : 'did-task-state-changed', data);
+    gateway().publishIndexed(ghosts, topic, event.kind === 'message' ? 'did-message-created' : 'did-task-state-changed', data,
+      event.kind === 'state' && event.progress === true);
   }
 }
 

@@ -55,6 +55,19 @@ function fixture() {
 const code = (value: Awaited<ReturnType<typeof handlePluginHostToolRequest>>) => JSON.parse(value.content[0].type === 'text' ? value.content[0].text : '{}').errorCode;
 
 describe('plugin Host tool entry', () => {
+  // Unit, §1.2: runtime.close is asynchronous too. The old last check ran
+  // before cleanup, so an owner switch during close could return old data.
+  it.each(['owner', 'approval'] as const)('rechecks %s after asynchronous runtime cleanup before returning tool data', async change => {
+    const f = fixture(), create = f.ports.createRuntime;
+    const close = vi.fn(async () => {
+      await Promise.resolve();
+      if (change === 'owner') f.changeOwner(); else f.ghost.approvedHostToolGroups = [];
+    });
+    f.ports.createRuntime = (server, caller) => ({ ...create(server, caller)!, close });
+    expect(code(await f.call())).toBe('PERMISSION_DENIED');
+    expect(close).toHaveBeenCalledOnce();
+  });
+
   it('routes the public UI API through the real IPC dispatcher using the sender identity', async () => {
     const f = fixture();
     const sender = { id: 7, isDestroyed: () => false };
@@ -190,6 +203,24 @@ describe('plugin scheduler command boundary', () => {
       useScheduler: (scheduler: Scheduler) => { actualScheduler = scheduler; },
       setCommand: (value: string) => { schedule = { ...schedule, scriptConfig: { command: value, capabilities: [] } }; } };
   }
+
+  // Unit, #9801 performance/security: snapshots expire before an await resumes
+  // and never survive to another host.call, even if the receipt's revision is unchanged.
+  it('rechecks revocation after native confirmation and between separate calls', async () => {
+    const f = schedulerFixture();
+    f.dialog.showMessageBox.mockImplementationOnce(async () => {
+      f.ghost.approvedHostToolGroups = [];
+      return { response: 0 };
+    });
+    expect(code(await f.call('schedule_run_now', { id: 'automation' }) as never)).toBe('PERMISSION_DENIED');
+    expect(f.runNow).not.toHaveBeenCalled();
+    f.ghost.approvedHostToolGroups = ['history', 'control', 'scheduler'];
+    await f.call('schedule_run_now', { id: 'automation' });
+    expect(f.runNow).toHaveBeenCalledOnce();
+    f.ghost.approvedHostToolGroups = [];
+    expect(code(await f.call('schedule_run_now', { id: 'automation' }) as never)).toBe('PERMISSION_DENIED');
+    expect(f.runNow).toHaveBeenCalledOnce();
+  });
 
   it.each(['schedule_create', 'schedule_update', 'schedule_run_now', 'schedule_resume'] as const)('asks before browser plugin %s and refuses denied execution', async tool => {
     for (const allow of [false, true]) {

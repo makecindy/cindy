@@ -260,7 +260,7 @@ export const CAPABILITIES: readonly CapabilityEntry[] = [
     detail: [
       '输入框处随时可调:换模型(当前账号与供应商可用的模型)、「推理强度」、「速度」(标准 / 快速 / 超快;只在模型支持时出现,目前快速主要由 GPT / Codex 系模型提供,超快取决于当前账号的 Codex 目录)。',
       '权限模式:「默认权限」「自动审批」「完全访问」,Claude Code 另有「允许编辑」;另可开「计划模式」。',
-      '模型、推理强度、速度的修改对下一条消息生效(运行中则在当前轮结束后)。agent 可用 cindy_helper control 类 set_session_runtime 调整本机任务的模型来源、模型、推理强度与速度(get_session_runtime 先读);普通任务与伙伴共用 settings 类 get_app_default_model / set_app_default_model 读改以后新建任务的默认模型;agent 不能切换权限模式。',
+      '模型、推理强度、速度的修改对下一条消息生效(运行中则在当前轮结束后)。agent 可用 cindy_helper control 类 set_session_runtime 调整本机任务的模型来源、模型、推理强度与速度(get_session_runtime 先读);普通任务与伙伴共用 settings 类 get_app_default_model / set_app_default_model 读改以后新建任务的默认模型;permission_mode 变更走宿主原权限提交路径，需逐次确认。',
     ].join(' '),
   },
   {

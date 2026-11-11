@@ -86,7 +86,12 @@ user 锚点复制它之前的历史；assistant 锚点复制至下一条 user �
 
 ## 完整历史与附件
 
-`list_teammates({device:'all'})` 枚举伙伴及其已保存的任务关系（含隐藏、暂停和归档）；`list_sessions` 包含隐藏任务，并在隐藏时返回 `hiddenAt`。普通任务、独立对话、伙伴私聊、话题和渠道专线均以数据库里实际保存的来源和关系为准。跨设备按返回的电脑分组翻页；未查到的电脑保留错误与 `partial`，不据此认定任务不存在。
+`list_teammates({device:'all',limit:100})` 分页枚举伙伴目录（含隐藏、暂停和归档），返回 `teammates`。
+用 `list_teammates({device,teammate_id,limit:100})` 分页读取该伙伴保存的任务关系，返回 `relationships`。
+两种查询的 `limit` 默认 100、最多 1000；`hasMore:true` 时带回 `nextCursor` 继续同一电脑、同一过滤条件，直到结束。
+跨设备聚合按各电脑的游标分别翻页；伙伴 id 不加电脑前缀，关系中的任务 id 使用返回的 `deviceId::sessionId`。
+本机目录包含隐藏和归档伙伴；远程目录沿用来源宿主既有的远程伙伴可见范围，在分页前过滤并在返回时复核，不扩大远程管理权限。
+`list_sessions` 包含隐藏任务，并在隐藏时返回 `hiddenAt`。普通任务、独立对话、伙伴私聊、话题和渠道专线均以数据库里实际保存的来源和关系为准。未查到的电脑保留错误与 `partial`，不据此认定任务不存在。
 
 `get_chat_history`、`search_chat_history` 与 `get_task_digest` 沿用原工具。完整导出由插件逐页读取历史后组装，不另设宿主导出接口。
 
@@ -98,6 +103,6 @@ const result = await cindy.host.call('cindy_helper', 'read_session_attachment', 
 });
 ```
 
-文本结果中的 `base64` 为本段字节，每次最多 64 KiB；`name`、`mimeType`、`size` 与 `sha256` 描述整份附件。`nextOffset` 非空时继续传 `offset:nextOffset`，媒体带回 `mediaHash`，普通文件带回 `attachment_ref`，直到返回 null；保留同一组任务、消息和附件序号。媒体后续分块从已有 grant 对应的总仓字节按范围读取，不重复读取来源或入仓。保留同一份内容的 SHA-256，不混合不同版本的分块。不能把正文里的路径或链接当成附件传入。
+文本结果中的 `base64` 为本段字节，每次最多 64 KiB；`name`、`mimeType`、`size` 与 `sha256` 描述整份附件。`nextOffset` 非空时继续传 `offset:nextOffset`，媒体带回 `mediaHash`，普通文件带回 `attachment_ref`，直到返回 null；保留同一组任务、消息和附件序号。两类续读都从已有 grant / 交接副本按范围读取，不重复读取来源、入仓或对整份文件重算摘要。普通文件的摘要标识首次交接内容，组装完成后必须核对 SHA-256；交接副本被编辑或校验不符时丢弃本次组装，重新从消息取源。不能混合不同版本的分块，也不能把正文里的路径或链接当成附件传入。
 
 媒体沿用总仓和插件媒体 grant，返回 `mediaHash`；普通文件沿用 7 天交接副本，返回 `attachment_ref`，也可交给现有 `upload.handoff`。插件逻辑页和 Node 都只得到这些引用、元数据与分块字节，不得到宿主绝对路径。回执过期返回 `HANDOFF_UNAVAILABLE`，重新从原消息取得；账号、安装或批准变化使读取失效。跨设备只在宿主内部解析原消息引用，字节走既有文件传输；旧端不支持时明确返回错误。

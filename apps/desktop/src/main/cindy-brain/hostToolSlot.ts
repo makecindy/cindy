@@ -5,6 +5,7 @@ import { ghostInstallApprovalToken } from '../../shared/ghost.js';
 import type { DataOwnerPushStamp } from '../../shared/dataOwnerPush.js';
 import { hasPluginHostToolGroupApproval } from './taskCapability.js';
 import { runPluginHostToolCall } from '../mcp-integrations/hostToolCaller.js';
+import { withPluginApprovalReads } from './pluginApprovalReadScope.js';
 
 export interface PluginHostToolPorts {
   getGhost(id: string): InstalledGhost | null;
@@ -19,7 +20,11 @@ export interface PluginHostToolPorts {
 const fail = (errorCode: string) => ({ isError: true, content: [{ type: 'text' as const, text: JSON.stringify({ ok: false, errorCode }) }] });
 
 /** Both logic pages and Node workers enter here with a Host-verified installation identity. */
-export async function handlePluginHostToolRequest(id: string, payload: unknown, pageCurrent: () => boolean, ports: PluginHostToolPorts) {
+export function handlePluginHostToolRequest(id: string, payload: unknown, pageCurrent: () => boolean, ports: PluginHostToolPorts) {
+  return withPluginApprovalReads(() => handleRequest(id, payload, pageCurrent, ports));
+}
+
+async function handleRequest(id: string, payload: unknown, pageCurrent: () => boolean, ports: PluginHostToolPorts) {
   if (!payload || typeof payload !== 'object' || Array.isArray(payload)) return fail('INVALID_PARAMS');
   const raw = payload as Partial<GhostPipeHostToolRequest>;
   if (raw.type !== 'host-tool-request' || typeof raw.tool !== 'string' || !/^[a-z][a-z0-9_:-]{0,127}$/.test(raw.tool) ||
@@ -43,6 +48,7 @@ export async function handlePluginHostToolRequest(id: string, payload: unknown, 
   const caller = { kind: 'plugin' as const, pluginId: id, ...owner };
   const runtime = ports.createRuntime(server, caller);
   if (!runtime) return fail('HOST_NOT_READY');
+  let closeStarted = false;
   try {
     const definition = runtime.describe(tool);
     const group = GHOST_HOST_TOOL_GROUPS.find(item => item === definition?.category);
@@ -56,12 +62,16 @@ export async function handlePluginHostToolRequest(id: string, payload: unknown, 
     if (!authorized()) return fail('PERMISSION_DENIED');
     const assertCurrent = () => { if (!authorized()) throw new Error('PERMISSION_DENIED'); };
     const result = await runPluginHostToolCall({ caller, server, tool: definition.name, argsJson, assertCurrent }, () => runtime.call(definition.name, args));
+    closeStarted = true;
+    await runtime.close();
+    // Cleanup is an async boundary too; old-owner data must not escape it.
     assertCurrent();
     ports.recordCall?.(id, server, definition.name);
     return result;
-  } catch {
-    return fail(current() ? 'HOST_TOOL_FAILED' : 'PERMISSION_DENIED');
+  } catch (error) {
+    return fail((error instanceof Error && error.message === 'PERMISSION_DENIED') || !current()
+      ? 'PERMISSION_DENIED' : 'HOST_TOOL_FAILED');
   } finally {
-    await runtime.close();
+    if (!closeStarted) await runtime.close();
   }
 }

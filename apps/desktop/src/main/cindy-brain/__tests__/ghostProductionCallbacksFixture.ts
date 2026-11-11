@@ -3,6 +3,7 @@ import ts from 'typescript';
 import { confirmedAutoTools, confirmedHostToolGroups, confirmedEventTopics } from '../ghostInstallConsent.js';
 import { setPluginEnabled } from '../pluginEnableService.js';
 import { createGhostExecutionPipe } from '../executionPipe.js';
+import { setTaskChangeListener } from '../../localDb/taskEvents.js';
 import { ghostInstallTargetContext, resolveForgeInstallTarget } from '../ghostInstallTarget.js';
 import {
   parsePluginStoragePart,
@@ -19,6 +20,7 @@ import {
 const productionIdentityDeps = {
   requestPluginHostToolCall: async () => ({ isError: true, content: [{ type: 'text', text: '{"ok":false,"errorCode":"HOST_NOT_READY"}' }] }),
   createGhostExecutionPipe,
+  setTaskChangeListener,
   setPluginEnabled,
   parsePluginStoragePart,
   parsePluginInstallRelId,

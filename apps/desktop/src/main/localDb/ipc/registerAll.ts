@@ -33,6 +33,7 @@ import { registerDevSqliteVecIpc } from './dev/sqliteVec';
 import { registerSearchIpc } from './search.desktop';
 import { registerRemoteHistoryIpc } from './history';
 import { registerHistoryQueryIpc } from './historyQuery';
+import { resolveStoredHistoryAttachment } from '../../mcp-integrations/historyAttachment.desktop.js';
 import { recoverActiveTeammateInvitations, registerBotIpc } from './bots';
 import { registerBotSkillSettingsIpc } from './botSkillSettingsIpc';
 import { botRemoteManagement } from './botRemoteManagement';
@@ -218,7 +219,10 @@ export function registerLocalDbIpc(opts: RegisterLocalDbIpcOpts = {}): void {
   });
   registerMessageIpc(opts.isSessionTurnPendingCompletion, opts.readHistoryLiveMessages);
   registerRemoteHistoryIpc();
-  registerHistoryQueryIpc();
+  registerHistoryQueryIpc({ readSessionAttachment: async args => {
+    const source = await resolveStoredHistoryAttachment(args, true);
+    return source ? { ok: true, sessionId: args.session_id, ...source } : { ok: false, errorCode: 'NOT_FOUND', message: 'Message attachment does not exist.' };
+  } });
   registerBotIpc();
   registerBotSkillSettingsIpc();
   registerCompanionImport();

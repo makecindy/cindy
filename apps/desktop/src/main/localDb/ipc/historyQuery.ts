@@ -11,7 +11,6 @@ import {
 } from '@cindy/mcps';
 import { listSessionsForHistory } from '../chatHistoryReader.js';
 import { readTeammateDirectory } from '../teammateDirectory.js';
-import { resolveStoredHistoryAttachment } from '../../mcp-integrations/historyAttachment.desktop.js';
 import { searchChatHistoryHybrid } from '../chatHistorySearch.js';
 import { capReferenceMessageRows } from './history.js';
 import { getDeviceLinkInvokeContext } from '../../device-link/invoke-context.js';
@@ -60,13 +59,10 @@ export function createHistoryQueryHandler(
   };
 }
 
-export function registerHistoryQueryIpc(): void {
+export function registerHistoryQueryIpc(deps: Pick<XdtHelperHistoryDeps, 'readSessionAttachment'> = {}): void {
   const execute = createHistoryQueryHandler({
-    readSessionAttachment: async args => {
-      const source = await resolveStoredHistoryAttachment(args);
-      return source ? { ok: true, ...source } : { ok: false, errorCode: 'NOT_FOUND', message: 'Message attachment does not exist.' };
-    },
-    listTeammates: async () => ({ ok: true, teammates: await readTeammateDirectory() }),
+    ...deps,
+    listTeammates: async args => ({ ok: true, page: await readTeammateDirectory({ ...args, remoteVisibleOnly: true }) }),
     listSessions: async (args) => ({
       ok: true,
       page: await listSessionsForHistory({ ...args, remoteVisibleOnly: true }),

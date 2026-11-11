@@ -87,6 +87,7 @@ Ghost manifest、自建中转同步维护与 Review 清单。每项具体能力�
   UI 管子新增 `host-tool-request`，Node 私有通道使用同类型加 `reqId`，共用宿主校验及 Agent 工具处理器；返回原始 MCP 结果。
   旧宿主可保留清单但不支持接口，插件须检测 `cindy.host?.call` 并处理不支持响应。无 Session 的插件调用方不会改变原任务调用方协议或身份；不涉及 device-link wire 变更。
 - 历史查询通道增量支持 `list_teammates`，复用同一个工具 registry 校验与宿主目录读取；不新增 channel。
+  目录和指定 `teammate_id` 的关系分别分页，默认 100、最多 1000，返回 `nextCursor` / `hasMore`，游标复用历史查询的编码。
 - `control/delete_session` 为增量 Agent 工具，插件通过同一入口调用；本机复用 `patchSessionMetaInDb(status:'deleted')`，
   远程复用已有 `local-db:sessions:patch-meta` 状态协议，不新增通道或重试；无法确认写入结果时返回 `REMOTE_RESULT_UNKNOWN`。
 - `control/fork_session` 与 `rewind_session` 通过共用的 UI 业务入口执行；远程复用既有 `maker:fork` / `maker:rewind:commit`。
@@ -102,11 +103,13 @@ Ghost manifest、自建中转同步维护与 Review 清单。每项具体能力�
 - `subscribe.topics` 增量识别 `message` / `task-state`，事件名为 `did-message-created` / `did-task-state-changed`，复用现有管子事件封装。
   receipt 增量可选 `approvedEventTopics`，不改变版本；旧宿主保存的未知 topic 不自动获得批准，原有 topic 继续原行为。
   新消息事件只提供正文和附件位置，不提供宿主路径；`historyCursor` 复用 `get_chat_history` 编解码，序号不作为持久重放凭证。
+  新两种 topic 每插件 25ms 一批、队列最多 100 条，沿用逐条事件封装；只折叠连续非终态进度，生命周期转换保序，序号缺口可补拉、溢出标记 `dropped`。
   无新跨设备 channel、轮询、事件持久化或中转协议；旧端可保留新声明但不投递。
   旧端拒绝未知查询时按既有远程错误报告，聚合结果保留 `partial`，不当成空目录。
   `list_sessions.hiddenAt` 为可选增量字段，旧响应缺失不推断隐藏；跨电脑伙伴目录中的任务关系使用 `deviceId::sessionId`，伙伴 id 保持原值。
 - `read_session_attachment` 的公开工具结果为分块 base64（最多 64 KiB）与内容摘要，插件媒体与普通文件分别复用 grant / handoff。
   可选 `mediaHash` 仅续读已交接给当前插件的媒体：复核既有 grant 后按范围读总仓字节，复用内容寻址摘要；普通文件继续使用 `attachment_ref`。不新增缓存、授权事实或路径字段，旧端不识别续读参数时仍可从原消息读取。
+  普通文件续读复用原交接句柄的范围读取和首次交接摘要，不逐页重读整份副本；调用方组装后校验，副本变化或摘要不符时重新取源。
   跨设备历史查询的同名操作仅为宿主之间解析指定消息的附件引用；接收宿主使用既有文件传输取字节后才生成公开结果，绝不把来源路径透给插件。
   不增加 Device Link channel 或大字节控制帧；旧端拒绝该操作时明确报告不支持，不能当作附件为空。
 

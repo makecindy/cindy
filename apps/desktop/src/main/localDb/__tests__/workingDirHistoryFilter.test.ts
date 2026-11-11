@@ -153,18 +153,26 @@ it('enumerates hidden dialogue tasks with their visibility metadata', async () =
   expect(result.items).toEqual([expect.objectContaining({ id: 'hidden-dialogue', hiddenAt: 2000, workspaceKind: 'dialogue' })]);
 });
 
-it('reads hidden and paused teammates with every persisted lane without activating them', async () => {
+// Unit, #9801 performance: the original one-profile fixture missed unbounded
+// directory/relationship materialization. Page each collection through the reader.
+it('pages hidden teammates and their persisted relationships without activating them', async () => {
   const db = useDb();
   db.exec(`CREATE TABLE bot_profiles (id TEXT, display_name TEXT, status TEXT, hidden_at INTEGER, updated_at INTEGER);
     ALTER TABLE bot_session_links ADD COLUMN archived_at INTEGER;
     ALTER TABLE bot_session_links ADD COLUMN created_at INTEGER DEFAULT 0;
-    INSERT INTO bot_profiles VALUES ('paused','Paused','paused',1,2);
+    CREATE UNIQUE INDEX teammate_id ON bot_profiles(id);
+    CREATE INDEX teammate_roles ON bot_session_links(bot_id, role);
+    INSERT INTO bot_profiles VALUES ('paused','Paused','paused',1,2), ('archived','Archived','archived',NULL,2);
     INSERT INTO bot_session_links(session_id, bot_id, role, route_key) VALUES
       ('main','paused','canonical',NULL), ('channel','paused','route','telegram:1'), ('history','paused','history',NULL);`);
-  const result = await readTeammateDirectory();
-  expect(result).toEqual([{ id: 'paused', name: 'Paused', status: 'paused', hiddenAt: 1,
-    sessions: expect.arrayContaining([expect.objectContaining({ sessionId: 'channel', routeKey: 'telegram:1' }),
-      expect.objectContaining({ sessionId: 'history', role: 'history' }), expect.objectContaining({ sessionId: 'main' })]) }]);
+  const first = await readTeammateDirectory({ limit: 1, cursor: null });
+  expect(first).toMatchObject({ items: [{ id: 'archived' }], hasMore: true });
+  const second = await readTeammateDirectory({ limit: 1, cursor: first.nextCursor });
+  expect(second).toMatchObject({ items: [{ id: 'paused', status: 'paused', hiddenAt: 1 }], hasMore: false, nextCursor: null });
+  const firstLinks = await readTeammateDirectory({ teammateId: 'paused', limit: 2, cursor: null });
+  expect(firstLinks).toMatchObject({ items: [{ sessionId: 'main' }, { sessionId: 'history' }], hasMore: true });
+  const lastLinks = await readTeammateDirectory({ teammateId: 'paused', limit: 2, cursor: firstLinks.nextCursor });
+  expect(lastLinks).toMatchObject({ items: [{ sessionId: 'channel', routeKey: 'telegram:1' }], hasMore: false, nextCursor: null });
 });
 
 describe('resolveStoredWorkingDirCandidates', () => {

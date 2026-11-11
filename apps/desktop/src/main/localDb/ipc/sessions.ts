@@ -115,7 +115,7 @@ import {
 import { assertRendererSessionSourceAllowed } from './sessionSourceGuard.js';
 import type { SessionReference } from '../../../shared/sessionReference.js';
 import * as broadcastTap from '../../device-link/broadcast-tap.js';
-import { publishTaskChange } from '../taskEvents.js';
+import { hasTaskChangeListener, publishTaskChange } from '../taskEvents.js';
 import { notifyAgentIslandSessionPatch } from '../agentIslandSessionPatch';
 import { ensureSessionFlagRegistryLoaded, noteSessionNotificationsMuted } from '../sessionFlagRegistry.js';
 import { recoverGeneratedImagesForHistory } from '../../cindy-media/generatedImageRecovery';
@@ -480,7 +480,7 @@ export function broadcastSessionPatched(
   pagePermissionSessionChanged(sessionId, patch);
   const hasCapturedScope = ownerScope !== undefined && ownerScope !== null;
   const ownerStamp = hasCapturedScope ? ownerScope.ownerStamp : getSafeOwnerPushStamp();
-  if (!isProvisionalSession(sessionId) && (patch.status !== undefined || patch.hiddenAt !== undefined)) {
+  if (hasTaskChangeListener('state') && !isProvisionalSession(sessionId) && (patch.status !== undefined || patch.hiddenAt !== undefined)) {
     publishTaskChange({ kind: 'state', sessionId, state: {
       ...(patch.status !== undefined ? { status: patch.status } : {}),
       ...(patch.hiddenAt !== undefined ? { hiddenAt: patch.hiddenAt } : {}),

@@ -59,10 +59,8 @@ export function qualifyHistoryPayload(
 ): Record<string, unknown> {
   if (value.ok !== true) return value;
   const qualify = (id: string) => `${deviceId}::${id}`;
-  if (Array.isArray(value.teammates)) return { ...value, teammates: value.teammates.map((item: Record<string, unknown>) => ({
-    ...item, sessions: Array.isArray(item.sessions) ? item.sessions.map((link: Record<string, unknown>) => ({
-      ...link, sessionId: qualify(String(link.sessionId)),
-    })) : [],
+  if (Array.isArray(value.relationships)) return { ...value, relationships: value.relationships.map((link: Record<string, unknown>) => ({
+    ...link, sessionId: qualify(String(link.sessionId)),
   })) };
   if (Array.isArray(value.sessions)) {
     return {

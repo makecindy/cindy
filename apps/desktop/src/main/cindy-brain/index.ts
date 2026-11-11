@@ -1428,6 +1428,7 @@ export function suspendCindyAccountGhosts(): void {
  */
 export async function interruptGhostCallsForAccountBoundary(): Promise<void> {
   taskEventIndex.replace([]);
+  setTaskChangeListener(undefined);
   managerSingleton?.disposeNotificationIndex();
   await revokePluginAppServers();
   pluginDownloads.abortAll();
@@ -9036,9 +9037,6 @@ export function registerGhostIpc(): void {
   });
   if (ipcRegistered) return;
   ipcRegistered = true;
-  setTaskChangeListener((event, owner) => {
-    if (isGhostOwnerStampCurrent(owner)) taskEventIndex.publish(event, owner, getGhostSubscriptionGateway);
-  });
   // 插件工具审批按真实已装实例与 receipt 判定，调用参数里的名字只用来定位。
   setGhostToolApprovalResolver(({ ghostId, namespace, tool }) => {
     const ghost = findGhostForInstanceId(ghostId, namespace);
@@ -11523,6 +11521,9 @@ function broadcastGhostsChanged(
 ): void {
   if (!opts?.projectionOnly) {
     taskEventIndex.replace(ghosts, getGhostOwnerPushStamp());
+    setTaskChangeListener((event, owner) => {
+      if (isGhostOwnerStampCurrent(owner)) taskEventIndex.publish(event, owner, getGhostSubscriptionGateway);
+    }, taskEventIndex.subscribedKinds());
     managerSingleton?.invalidateNotificationCandidates();
     refreshPluginApps(ghosts, { find: findGhostForInstanceId,
       evidence: id => getGhostManager().approvedInstallEvidence(id), available: () => !isGhostBoundaryPending() });

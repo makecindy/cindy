@@ -193,6 +193,7 @@ interface SubEntry {
   seq: number;
   /** 熄灯期缓冲(did- 事件,按 seq 序)。 */
   buffer: GhostPipeEventPush[];
+  batchTimer: ReturnType<typeof setTimeout> | null;
   /** 溢出丢弃数(随下一条成功入队/投递的事件带出)。 */
   pendingDropped: number;
   /** 唤醒在途标记(合并并发 kick,避免重复 spawn)。 */
@@ -219,6 +220,7 @@ export class GhostSubscriptionGateway {
   private readonly pendingHooks = new Map<string, PendingHook>();
   private discovery: { owner: unknown; promise: Promise<InstalledGhost[]> } | null = null;
   private readonly contentRecipients = new WeakMap<GhostPipeEventPush, InstalledGhost>();
+  private readonly progressEvents = new WeakSet<GhostPipeEventPush>();
 
   constructor(private readonly deps: GhostSubscriptionGatewayDeps) {}
 
@@ -267,8 +269,8 @@ export class GhostSubscriptionGateway {
   }
 
   /** Indexed content/state subscribers; avoids discovery on every message or state event. */
-  publishIndexed(ghosts: InstalledGhost[], topic: GhostSubscribeTopic, name: GhostDidEventName, data: GhostDidEventData): void {
-    this.publishTo(ghosts, topic, name, data);
+  publishIndexed(ghosts: InstalledGhost[], topic: GhostSubscribeTopic, name: GhostDidEventName, data: GhostDidEventData, progress = false): void {
+    this.publishTo(ghosts, topic, name, data, progress);
   }
 
   private publishTo(
@@ -276,6 +278,7 @@ export class GhostSubscriptionGateway {
     topic: GhostSubscribeTopic,
     name: GhostDidEventName,
     data: GhostDidEventData,
+    progress = false,
   ): void {
     for (const candidate of ghosts) {
       if (!candidate.enabled || !candidate.manifest.subscribe?.topics?.includes(topic)) continue;
@@ -285,7 +288,7 @@ export class GhostSubscriptionGateway {
       if (!ghost || ghostInstallApprovalToken(ghost.approval) !== ghostInstallApprovalToken(candidate.approval)) continue;
       if (!ghost.enabled || !ghostTaskEventApproved(ghost, topic)) continue;
       if (!ghost.manifest.subscribe?.topics?.includes(topic)) continue;
-      this.dispatchTo(ghost, topic, name, data);
+      this.dispatchTo(ghost, topic, name, data, progress);
     }
   }
 
@@ -295,6 +298,7 @@ export class GhostSubscriptionGateway {
       e = {
         seq: 0,
         buffer: [],
+        batchTimer: null,
         pendingDropped: 0,
         waking: false,
         hookFails: 0,
@@ -313,6 +317,7 @@ export class GhostSubscriptionGateway {
     topic: GhostSubscribeTopic,
     name: GhostDidEventName,
     data: GhostDidEventData,
+    progress: boolean,
   ): void {
     const ghostId = installedGhostStoragePart(ghost);
     const e = this.entry(ghostId);
@@ -333,7 +338,23 @@ export class GhostSubscriptionGateway {
       ts: this.deps.now(),
       data,
     };
-    if (topic === 'message' || topic === 'task-state') this.contentRecipients.set(evt, ghost);
+    if (topic === 'message' || topic === 'task-state') {
+      this.contentRecipients.set(evt, ghost);
+      if (progress && topic === 'task-state') this.progressEvents.add(evt);
+      // Only new approved content topics pay for a short batch. Old metadata
+      // subscriptions retain their existing delivery and wake behavior.
+      if (!e.batchTimer) {
+        e.batchTimer = setTimeout(() => {
+          e.batchTimer = null;
+          if (this.entries.get(ghostId) !== e) return;
+          if (this.deps.isRunning(ghostId)) this.flush(ghostId, e, ownerScope);
+          else this.kickWake(ghost, e, ownerScope);
+        }, 25);
+        e.batchTimer.unref?.();
+      }
+      this.buffer(ghost, e, evt, ownerScope);
+      return;
+    }
 
     // 直投条件:在跑 + 缓冲已清 + 无唤醒在途——三者缺一都排队,否则新事件
     // 会插到缓冲里旧事件前面(seq 乱序)。投递失败(刚崩窗口期)同样回落缓冲。
@@ -378,6 +399,13 @@ export class GhostSubscriptionGateway {
     evt: GhostPipeEventPush,
     ownerScope: unknown,
   ): void {
+    const previous = e.buffer.at(-1);
+    if (previous && this.progressEvents.has(previous) && this.progressEvents.has(evt)
+      && 'data' in previous && 'data' in evt && 'sessionId' in previous.data && 'sessionId' in evt.data
+      && previous.data.sessionId === evt.data.sessionId) {
+      e.buffer[e.buffer.length - 1] = evt;
+      return;
+    }
     if (e.buffer.length >= GHOST_SUB_QUEUE_MAX) {
       e.buffer.shift();
       e.pendingDropped += 1;
@@ -388,7 +416,7 @@ export class GhostSubscriptionGateway {
 
   /** 事件到达即按需拉起(去重:唤醒在途不重复 spawn),醒后顺序补投。 */
   private kickWake(ghost: InstalledGhost, e: SubEntry, ownerScope: unknown): void {
-    if (e.waking) return;
+    if (e.waking || e.batchTimer) return;
     if (!this.ownerScopeUsable(ownerScope)) {
       this.invalidateOwner(installedGhostStoragePart(ghost), e);
       return;
@@ -402,7 +430,7 @@ export class GhostSubscriptionGateway {
           this.invalidateOwner(installedGhostStoragePart(ghost), e);
           return;
         }
-        this.flush(installedGhostStoragePart(ghost), e, ownerScope);
+        if (!e.batchTimer) this.flush(installedGhostStoragePart(ghost), e, ownerScope);
       })
       .catch((err) => {
         // 唤醒失败缓冲保留(封顶丢最旧),下一条事件再试。
@@ -417,7 +445,7 @@ export class GhostSubscriptionGateway {
         // for another event to wake them up (the queued event may be terminal).
         const ghostId = installedGhostStoragePart(ghost);
         if (this.entries.get(ghostId) === e && this.ownerScopeUsable(ownerScope)
-          && e.buffer.length > 0 && this.deps.isRunning(ghostId)) this.flush(ghostId, e, ownerScope);
+          && !e.batchTimer && e.buffer.length > 0 && this.deps.isRunning(ghostId)) this.flush(ghostId, e, ownerScope);
       });
   }
 
@@ -435,6 +463,8 @@ export class GhostSubscriptionGateway {
   }
 
   private invalidateOwner(ghostId: string, e: SubEntry): void {
+    if (e.batchTimer) clearTimeout(e.batchTimer);
+    e.batchTimer = null;
     e.buffer.length = 0;
     e.pendingDropped = 0;
     e.ownerScope = undefined;
@@ -855,7 +885,10 @@ export class GhostSubscriptionGateway {
   /** 意识停用/抽离时清态(缓冲、熔断、seq 全部归零;待决钩子按超时自然收口)。 */
   dropGhost(ghostId: string): void {
     const entry = this.entries.get(ghostId);
-    if (entry) entry.buffer.length = 0;
+    if (entry) {
+      if (entry.batchTimer) clearTimeout(entry.batchTimer);
+      entry.buffer.length = 0;
+    }
     for (const [hookId, pending] of this.pendingHooks) {
       if (pending.ghostId !== ghostId) continue;
       this.pendingHooks.delete(hookId);

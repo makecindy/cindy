@@ -1379,10 +1379,10 @@ export function createDesktopMcpProviders(deps: DesktopMcpProvidersDeps): LiziMc
           await assertCurrent();
           return result;
         }),
-        listTeammates: callerSessionId => withAccountDataAccess(callerSessionId, async assertCurrent => {
-          const teammates = await readTeammateDirectory();
+        listTeammates: (args, callerSessionId) => withAccountDataAccess(callerSessionId, async assertCurrent => {
+          const page = await readTeammateDirectory(args);
           await assertCurrent();
-          return { ok: true as const, teammates };
+          return { ok: true as const, page };
         }),
         sessionUrl: (sessionId) => buildHistorySessionDeepLink(sessionId, getDeviceId()),
         remote: deps.historyRemote,

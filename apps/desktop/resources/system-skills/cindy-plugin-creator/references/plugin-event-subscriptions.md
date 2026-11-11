@@ -18,6 +18,10 @@
 消息事件不主动订阅其它电脑；跨电脑历史读取仍使用原工具的设备参数。
 
 它们复用既有 `onHostMessage`、`seq`、100 条缓冲、唤醒与 `dropped` 语义，没有持久事件日志。
+仅这两种新 topic 按插件每 25ms 一批发送，批内仍为逐条事件，队列最多 100 条。
+同一任务连续的非终态进度可只保留最后一条；一轮开始、结束、出错、等待权限/回答、排队和取消等生命周期变化按顺序保留。
+例如 `running → completed → running` 不会合成一个 `running`。每条保留自己的单调 `seq`，折叠或溢出会出现缺口，溢出另外标记 `dropped`。
+只有已批准的订阅收到事件时才启动短 timer，队列清空或停用时释放；没有订阅者时不投影内容、不取游标、不发事件或唤醒插件。
 断线、重启或 `dropped` 后，用最后保存的 `historyCursor` 调用 `get_chat_history({session_ids:[sessionId],cursor,order:'asc'})`
 补拉（另需 `history` 组），并按消息 ID 合并；任务当前状态用 `get_session_runtime` 重读（另需 `control` 组）。
 首次连接先分页读取所需历史；事件顺序号只属于当次宿主运行，不能用作跨重启游标。

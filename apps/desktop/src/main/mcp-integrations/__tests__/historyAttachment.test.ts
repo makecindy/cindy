@@ -26,7 +26,10 @@ vi.mock('../../utils/readBoundedFile.js', () => ({ readBoundedFileNoFollow: host
 vi.mock('../../device-link/mediaFetch.js', () => ({ resolveAuthorizedMedia: host.resolve }));
 vi.mock('../../device-link/fileAccess.js', () => ({ readRemoteDeviceFile: host.remoteFile }));
 vi.mock('../../device-link/mediaTransfer.js', () => ({ downloadToBuffer: vi.fn() }));
-vi.mock('../../cindy-brain/handoffStore.desktop.js', () => ({ getGhostHandoffStore: () => ({ import: host.copy, read: async () => null }) }));
+vi.mock('../../cindy-brain/handoffStore.desktop.js', () => ({ getGhostHandoffStore: () => ({ import: host.copy,
+  open: async () => ({ info: { name: 'notes.txt', mimeType: 'text/plain', size: 4, sha256: createHash('sha256').update('text').digest('hex') },
+    file: { read: host.readChunk, stat: async () => ({ size: 4 }), close: host.close } }),
+}) }));
 vi.mock('../../cindy-media/ingest.js', () => ({ supportedMime: (mime: string) => mime.startsWith('image/'), ingestMedia: host.ingest }));
 vi.mock('../../cindy-media/refCompensationJournal.desktop.js', () => ({ captureMediaRefCompensationScope: () => ({ owner: 'owner' }) }));
 vi.mock('../../cindy-media/ledger.js', () => ({ ghostCanRead: host.canRead, getBlobInfo: host.blobInfo }));
@@ -46,7 +49,8 @@ describe('history attachment reader', () => {
     const ports = { assertCurrent: () => { if (!active) throw new Error('PERMISSION_DENIED'); },
       source: vi.fn(async () => source), read: vi.fn(async () => ({ bytes: Buffer.from('text'), mimeType: 'text/plain' })),
       transfer: vi.fn(async () => ({ attachment_ref: 'handoff:00000000-0000-4000-8000-000000000000' })),
-      handoff: vi.fn(async () => ({ name: 'notes.txt', bytes: Buffer.from('text'), mimeType: 'text/plain' })) };
+      handoff: vi.fn(async (_ref: string, offset: number, length: number) => ({ name: 'notes.txt', bytes: Buffer.from('text').subarray(offset, offset + length),
+        size: 4, sha256: createHash('sha256').update('text').digest('hex'), mimeType: 'text/plain' })) };
     return { ports, revoke: () => { active = false; } };
   }
   it('reads only registered attachment fields, keeping user/tool provenance', () => {
@@ -136,6 +140,21 @@ describe('history attachment reader', () => {
     { query: vi.fn(), invoke: vi.fn() });
     expect(result).toMatchObject({ ok: false, errorCode: 'ATTACHMENT_UNAVAILABLE' });
     expect(host.readChunk).not.toHaveBeenCalled();
+  });
+
+  // Unit, #9801 performance: file receipts previously read/hash the whole 64MiB
+  // copy on every 64KiB continuation. Exercise the real Desktop range port.
+  it('continues a file receipt through a bounded handle read without reloading its source', async () => {
+    host.plugin = true; host.queryOne.mockClear(); host.readChunk.mockClear(); host.close.mockClear();
+    const result = await readDesktopHistoryAttachment({ ...args, offset: 2,
+      attachment_ref: 'handoff:00000000-0000-4000-8000-000000000000' },
+    { agentKind: 'codex', workingDir: '', hostCaller: { kind: 'plugin', pluginId: 'installed-instance', dataOwnerId: 'owner', ownerGeneration: 1 } },
+    { query: vi.fn(), invoke: vi.fn() });
+    expect(result).toMatchObject({ ok: true, base64: 'eHQ=', nextOffset: null, size: 4,
+      sha256: createHash('sha256').update('text').digest('hex') });
+    expect(host.queryOne).not.toHaveBeenCalled();
+    expect(host.readChunk).toHaveBeenCalledWith(expect.any(Buffer), 0, 2, 2);
+    expect(host.close).toHaveBeenCalledOnce();
   });
   it('resolves a remote message on its source computer and moves bytes through the existing file channel', async () => {
     host.plugin = false;

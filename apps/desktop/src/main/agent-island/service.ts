@@ -174,7 +174,7 @@ import { isDataOwnerPushStamp } from '../../shared/dataOwnerPush.js';
 import { assertTrustedAppRendererEvent } from '../security/trustedAppRenderer.js';
 import { isDeviceLinkInvoke } from '../device-link/invoke-context.js';
 import { tapWindowBroadcast, getSafeDataOwnerPushStamp } from '../device-link/broadcast-tap.js';
-import { publishTaskChange } from '../localDb/taskEvents.js';
+import { hasTaskChangeListener, publishTaskChange } from '../localDb/taskEvents.js';
 import {
   beginProtectedFolderCheck,
   detectProtectedFolderEperm,
@@ -2164,9 +2164,17 @@ export class AgentIslandService {
       const previous = this.sessionActivitySubscriptionCursor.get(sessionId) ?? null;
       const current = next.get(sessionId) ?? null;
       if (previous && current && sessionActivitySnapshotsEqual(previous, current)) continue;
-      publishTaskChange({ kind: 'state', sessionId, state: {
-        activity: current ? canonicalSessionActivity(current) : null, changedAtMs,
-      } }, getSafeDataOwnerPushStamp());
+      if (hasTaskChangeListener('state')) {
+        publishTaskChange({ kind: 'state', sessionId, state: {
+          activity: current ? canonicalSessionActivity(current) : null, changedAtMs,
+        }, progress: previous?.phase === 'running' && current?.phase === 'running'
+          && previous.currentTurnActive === current.currentTurnActive
+          && previous.turnGeneration === current.turnGeneration && previous.startedAtMs === current.startedAtMs
+          && previous.recordStatus === current.recordStatus && previous.attention === current.attention
+          && previous.gracefulStopState === current.gracefulStopState
+          && !previous.interactionKind && !current.interactionKind,
+        }, getSafeDataOwnerPushStamp());
+      }
       for (const listener of this.sessionActivityListeners) {
         try {
           listener({

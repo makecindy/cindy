@@ -16,11 +16,14 @@ import { ingestMedia, supportedMime } from '../cindy-media/ingest.js';
 import { captureMediaRefCompensationScope } from '../cindy-media/refCompensationJournal.desktop.js';
 import { ghostCanRead, getBlobInfo } from '../cindy-media/ledger.js';
 import { blobUrl, openBlobFile } from '../cindy-media/blobStore.desktop.js';
+import { remoteVisibleSessionSql } from '../localDb/ipc/botRemoteVisibility.js';
 
 /** Also used on the source computer by the authenticated history query handler. */
-export async function resolveStoredHistoryAttachment(args: ReadSessionAttachmentArgs): Promise<HistoryAttachmentSource | null> {
+export async function resolveStoredHistoryAttachment(args: ReadSessionAttachmentArgs, remoteVisibleOnly = false): Promise<HistoryAttachmentSource | null> {
   const row = await getDbClient().queryOne<{ content: unknown; role: string }>(
-    'SELECT content, role FROM messages WHERE id = ? AND session_id = ? AND rewind_at IS NULL', [args.message_id, args.session_id]);
+    `SELECT content, role FROM messages WHERE id = ? AND session_id = ? AND rewind_at IS NULL
+     ${remoteVisibleOnly ? `AND EXISTS (SELECT 1 FROM sessions WHERE sessions.id = messages.session_id AND ${remoteVisibleSessionSql('sessions')})` : ''}`,
+    [args.message_id, args.session_id]);
   const source = row ? historyAttachmentSource(row.content, row.role, args.attachment_index) : null;
   return source && !isDepositExcludedFileName(source.name) ? source : null;
 }
@@ -63,7 +66,7 @@ export async function readDesktopHistoryAttachment(args: ReadSessionAttachmentAr
               : 'path' in result ? await readBoundedFileNoFollow(result.path, GHOST_HANDOFF_MAX_BYTES_PER_FILE)
               : (await downloadToBuffer(result.ossKey)).bytes;
             if (!bytes || bytes.byteLength > GHOST_HANDOFF_MAX_BYTES_PER_FILE) throw new Error('ATTACHMENT_UNAVAILABLE');
-            return { bytes: Buffer.from(bytes), mimeType: result.mimeType };
+            return { bytes, mimeType: result.mimeType };
           } finally { if ('dispose' in result) await result.dispose(); }
         }
         const resolved = await resolveAuthorizedMedia({ url: source.url }, GHOST_HANDOFF_MAX_BYTES_PER_FILE);
@@ -74,9 +77,18 @@ export async function readDesktopHistoryAttachment(args: ReadSessionAttachmentAr
         return { bytes, mimeType: resolved.mimeType ?? handoffMimeType(source.name) };
       },
       ...(plugin && store ? {
-        handoff: async (ref: string) => {
-          const result = await store.read(plugin.caller.pluginId, ref);
-          return result === 'changed' ? null : result;
+        handoff: async (ref: string, offset: number, length: number) => {
+          const opened = await store.open(plugin.caller.pluginId, ref);
+          if (!opened) return null;
+          try {
+            assertCurrent();
+            const bytes = Buffer.alloc(Math.max(0, Math.min(length, opened.info.size - offset)));
+            const { bytesRead } = await opened.file.read(bytes, 0, bytes.byteLength, offset);
+            if (bytesRead !== bytes.byteLength || (await opened.file.stat()).size !== opened.info.size) return null;
+            // The receipt's digest identifies the imported copy. Callers verify
+            // the assembled file against it; each page reads only its range.
+            return { bytes, name: opened.info.name, mimeType: opened.info.mimeType, size: opened.info.size, sha256: opened.info.sha256 };
+          } finally { await opened.file.close(); }
         },
         media: async (hash: string, offset: number, length: number) => {
           if (!await ghostCanRead(hash, plugin.caller.pluginId, db.drizzle)) return null;

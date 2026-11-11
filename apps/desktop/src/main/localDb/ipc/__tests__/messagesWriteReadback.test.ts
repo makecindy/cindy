@@ -142,6 +142,17 @@ describe('message write paths avoid large-content readback', () => {
     setupDb();
   });
 
+  // Unit, #9801 performance contract: the existing tests only checked the index,
+  // after the producer had already resolved an extra owner stamp for no listener.
+  it('does no extra owner lookup or DB work for an unsubscribed message broadcast', () => {
+    const stamp = vi.mocked(getSafeDataOwnerPushStamp);
+    stamp.mockClear();
+    const queriesBefore = h.queries.length;
+    broadcastMessageRow('s1', { id: 'unused', clientId: 'unused', role: 'assistant', content: 'reply' } as never);
+    expect(stamp).toHaveBeenCalledOnce(); // The original window/device broadcast only.
+    expect(h.queries).toHaveLength(queriesBefore);
+  });
+
   // Unit, #9801: the earlier index fixture supplied a rowid manually. Exercise
   // createMessage -> content event -> shared history query with same-ms reversed IDs.
   it('resumes history after a committed message event without losing a later same-ms row', async () => {

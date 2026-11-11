@@ -72,14 +72,20 @@ it.each(['fork_session', 'rewind_session'] as const)('routes %s to the existing 
 // Unit, real shared handler: ordinary tasks and plugins need the account directory,
 // including paused/hidden companions and stored relationships, without a bot identity.
 it('discovers the complete teammate directory through history for task and plugin callers', async () => {
-  const listTeammates = vi.fn(async () => ({ ok: true as const, teammates: [{ id: 'paused', status: 'paused', hiddenAt: 1,
-    sessions: [{ sessionId: 'channel-task', role: 'route', channel: 'telegram' }] }] }));
+  const listTeammates = vi.fn(async () => ({ ok: true as const, page: { items: [{ id: 'paused', status: 'paused', hiddenAt: 1 }],
+    hasMore: true, nextCursor: { createdAt: 0, id: 'paused' } } }));
   const history = { listTeammates, listWorkdirs: vi.fn(), listSessions: vi.fn(), getMessages: vi.fn(), searchChatHistory: vi.fn() };
   const server = createXdtHelperMcpServer({ history }, { agentKind: 'codex', workingDir: '', sessionId: 'ordinary' });
   expect(server.hostTools.describe('list_teammates')).toMatchObject({ category: 'history' });
   expect(parsePayload(await server.hostTools.call('list_teammates', {}))).toMatchObject({ ok: true,
-    teammates: [{ id: 'paused', status: 'paused', hiddenAt: 1, sessions: [{ sessionId: 'channel-task' }] }] });
-  expect(listTeammates).toHaveBeenCalledOnce();
+    teammates: [{ id: 'paused', status: 'paused', hiddenAt: 1 }], hasMore: true, nextCursor: expect.any(String) });
+  expect(listTeammates).toHaveBeenCalledWith({ limit: 100, cursor: null }, 'ordinary');
+  const result = parsePayload(await server.hostTools.call('list_teammates', { teammate_id: 'paused', limit: 1,
+    cursor: Buffer.from(JSON.stringify({ c: 0, i: 'routine', r: 7 })).toString('base64url') }));
+  expect(result).toMatchObject({ ok: true, teammateId: 'paused', relationships: expect.any(Array) });
+  expect(listTeammates).toHaveBeenLastCalledWith({ teammateId: 'paused', limit: 1,
+    cursor: { createdAt: 0, id: 'routine', rowid: 7 } }, 'ordinary');
+  expect(parsePayload(await server.hostTools.call('list_teammates', { limit: 1001 }))).toMatchObject({ ok: false });
   await server.close();
 });
 
