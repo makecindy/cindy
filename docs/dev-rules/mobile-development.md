@@ -260,6 +260,32 @@ pnpm --filter mobile test:smoke
 
 ## 专项入口
 
+### 线上崩溃日志的读法
+
+- **iOS 符号**：崩溃日志里 App 自身的调用帧只有在本机能找到该版本的 dSYM 时才会还原成
+  函数名。`build-ios.mjs` 把 archive 里的 dSYM 打成与 `.ipa` 同名的 `.dSYMs.zip`
+  （`--out` 时一并拷出）；archive 建在临时目录里，这份 zip 是该版本符号的唯一留存，须与
+  安装包一起保管。没有它，日志里只剩「二进制 + 偏移」。
+- **没有符号时按调用链形状归类**（同一份原生二进制的偏移相同，可跨版本比对）：
+
+  | 日志特征 | 含义 |
+  | --- | --- |
+  | `objc_exception_throw` ← App 三帧 ← `-[NSInvocation invoke]` ← App 两帧 | 首屏出现 10 秒之后的 JS 致命错误：RN 把它转成原生异常抛出，日志不带 JS 报错内容 |
+  | `-[NSException raise]` ← 连续 App 帧 ← dispatch | 启动监控窗口内的 JS 致命错误：expo-updates 的错误恢复放弃后主动崩溃 |
+  | `Termination Reason: RUNNINGBOARD 0xdead10cc` | 被挂起时仍持有 App Group 里的文件锁。入站分享读取暂存区时持锁，所以后台启动时不读取，等回到前台（`IncomingShareBridge`） |
+
+- **JS 报错兜底**：启动稳定后（根布局首次提交 20 秒后），页面树的渲染报错由
+  `RootErrorBoundary`（包在 `NavigationGate` 外、`AuthProvider` / `DeviceLinkProvider` 内，重新加载不会
+  重建登录与设备连接）显示可重新加载的错误页，回调与定时器里的未捕获报错由 `jsErrorGuard`
+  降为非致命、App 继续运行。**窗口内两者都保持致命**：expo-updates 的错误恢复靠「首屏出现后
+  10 秒内的致命报错」回滚坏掉的热更，20 秒的窗口严格覆盖它，改动这两处时不得缩短或绕过。
+  开发构建不启用降级，保留红屏。开启本机诊断记录时会写入 `js error` 事件，只含报错类型与
+  打包文件里的行列号（要用对应版本的源码映射还原位置），不含报错文本与堆栈原文。
+- **Android**：`ExpoImageView.draw` → `BaseCanvas.throwIfCannotDraw` 与
+  `Editor.startDragAndDrop: Drag shadow dimensions must be positive` 两类的原因和规避见
+  [`dependency-patches/README.md`](../../dependency-patches/README.md) 的 `expo-image`、
+  `expo-paste-input` 两行。
+
 ### Android 组字与发送快照
 
 普通任务与伙伴私聊点击发送时保持编辑器可编辑、保留焦点与软键盘；发送防重由提交锁和发送按钮负责，

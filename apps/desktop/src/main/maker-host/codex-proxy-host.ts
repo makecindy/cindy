@@ -2080,6 +2080,24 @@ function responsesCompatibilityRouting(
   return responsesCompatibilityRoute(body, ctx, frozenAuthInjection).routing;
 }
 
+function isXdGrokWireModel(model: string): boolean {
+  return model.startsWith('x-ai/grok') || model.startsWith('x-ai-grok/grok');
+}
+
+function isXdGatewayUpstream(upstreamBase: string | undefined): boolean {
+  const endpoint = claudeUpstreamEndpoint().trim();
+  if (!upstreamBase || !endpoint) return false;
+  try {
+    const actual = new URL(upstreamBase);
+    const gateway = new URL(buildCodexGatewayBaseUrl(endpoint));
+    return actual.origin === gateway.origin &&
+      actual.pathname.replace(/\/+$/, '') === gateway.pathname.replace(/\/+$/, '') &&
+      actual.search === gateway.search;
+  } catch {
+    return false;
+  }
+}
+
 /**
  * The XD Gateway claims this wire model for its codex routing when the active
  * catalog exposes it under `xd.models.codex`. We use the catalog membership
@@ -2095,7 +2113,7 @@ function responsesCompatibilityRouting(
  * implicit routes (PR #2444 Codex P1).
  */
 function xdProviderClaimsWireModel(wireModel: string): boolean {
-  if (!wireModel.startsWith('x-ai/grok')) return false;
+  if (!isXdGrokWireModel(wireModel)) return false;
   const { authoritative, models } = getXdGatewayModelAccessSnapshot();
   if (!authoritative) {
     // Negative evidence is unavailable. The env-key default route and the
@@ -2147,7 +2165,8 @@ function createGatewayGrokResponsesCompatTransform(
   return (body, ctx) => {
     if (!isPlainObject(body)) return null;
     const requestModel = typeof body.model === 'string' ? body.model : '';
-    if (!requestModel.startsWith('x-ai/grok')) return null;
+    if (!isXdGrokWireModel(requestModel)) return null;
+    if (ctx.upstreamBase && !isXdGatewayUpstream(ctx.upstreamBase)) return null;
     // Use providerContextForRequest so subagent-frozen routes resolve to xd
     // even when the parent session belongs to a different provider. Only
     // clean tools when the effective provider for THIS request is xd.
@@ -3267,17 +3286,21 @@ function createTransformRequestChain(
 ): RequestTransform[] {
   const execFunctionAdapterTransform: RequestTransform = (body, ctx) => {
     if (!isPlainObject(body)) return null;
-    const routing = responsesCompatibilityRouting(body, ctx, frozenAuthInjection);
+    const { providerId, routing } = responsesCompatibilityRoute(body, ctx, frozenAuthInjection);
     if ((routing?.wireProtocol ?? 'openai-responses') !== 'openai-responses'
       || routing?.supportsResponsesCustomTools !== false) return null;
-    const upstreamBase = ctx.upstreamBase ?? routing.upstream;
+    const gatewayEndpoint = providerId === 'xd' ? claudeUpstreamEndpoint().trim() : '';
+    const upstreamBase = ctx.upstreamBase ?? (gatewayEndpoint
+      ? buildCodexGatewayBaseUrl(gatewayEndpoint)
+      : routing.upstream);
     const model = rewriteChatBridgeModel(String(body.model ?? ''), routing.modelIdRewrite?.stripPrefix);
     // Only known provider endpoints or the existing XD model contract lower namespaces.
     const endpoint = new URL(upstreamBase);
-    const gateway = new URL(getProviderRoutingDescriptor('xd', 'codex', String(body.model ?? ''))?.upstream ?? upstreamBase);
     const knownEndpoint = ['api.x.ai', 'cli-chat-proxy.grok.com', 'api.deepseek.com'].includes(endpoint.hostname)
       || VOLCENGINE_ARK_CHAT_HOST_RE.test(endpoint.hostname);
-    const gatewayDialect = endpoint.origin === gateway.origin && /^(?:x-ai\/grok|deepseek\/|bytedance-seed\/|doubao-seed-)/.test(String(body.model ?? ''));
+    const requestModel = String(body.model ?? '');
+    const gatewayDialect = providerId === 'xd' && isXdGatewayUpstream(upstreamBase) &&
+      (isXdGrokWireModel(requestModel) || /^(?:deepseek\/|bytedance-seed\/|doubao-seed-)/.test(requestModel));
     return execAdapter.adaptRequest(body, ctx.reqId,
       { harness: 'codex', protocol: 'openai-responses', upstreamBase, model }, knownEndpoint || gatewayDialect);
   };

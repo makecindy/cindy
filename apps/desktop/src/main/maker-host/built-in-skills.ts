@@ -29,7 +29,7 @@ const BUILT_IN_SKILL_MUTATION_WAIT_MS = 5_000;
  * since then the version is this base plus the number of record files shipped
  * in `<bundled root>/_versions/`, see readBuiltInSkillsBundleVersion.
  */
-export const BUILT_IN_SKILLS_BUNDLE_VERSION_BASE = 96;
+export const BUILT_IN_SKILLS_BUNDLE_VERSION_BASE = 101;
 /** Directory beside the bundled Skills holding one record file per bundle change. */
 export const BUILT_IN_SKILLS_VERSION_RECORDS_DIRECTORY = '_versions';
 const PLUGIN_CREATOR_FIRST_BUNDLE_VERSION = 13;
