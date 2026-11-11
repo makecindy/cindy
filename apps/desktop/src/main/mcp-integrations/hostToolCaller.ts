@@ -26,6 +26,14 @@ export function setHostToolProviders(current: readonly LiziMcpProvider[], owner:
   providerOwner = owner;
 }
 
+/** The existing stable-owner commit hook may retain a live Maker after recovery. */
+export function refreshHostToolProviderOwner(owner: DataOwnerPushStamp): void {
+  if (providerOwner && owner.dataOwnerId !== null && providerOwner.dataOwnerId === owner.dataOwnerId &&
+    owner.ownerGeneration > providerOwner.ownerGeneration) {
+    providerOwner = owner;
+  }
+}
+
 export function getPluginHostToolCaller(): PluginHostToolCaller | undefined {
   const caller = callerScope.getStore();
   caller?.assertCurrent();
