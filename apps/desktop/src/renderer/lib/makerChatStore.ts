@@ -20157,6 +20157,10 @@ function mapServerMessages(serverMsgs: Message[]): ChatMessage[] {
           isStreaming: false,
           isSyntheticTrigger: true,
           isContinuationTrigger: isContinuationMessage(m),
+          // A hidden question answer can still have been delivered inside the active turn.
+          ...(isAnsweredAsyncQuestionClientId(m.clientId) && m.agentMeta?.delivery === 'steer'
+            ? { delivery: 'steer' as const }
+            : {}),
           // 中断自动续跑补发的续跑指令带 [UI_ACTION_TRIGGER] 前缀(复用人工「继续」
           // 那条常量),会先命中本分支 —— 但它同样是**自动**动作,必须渲染「已自动
           // 继续」分隔线(MessageStream 对 systemCardType 的处理刻意优先于 synthetic

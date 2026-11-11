@@ -32,6 +32,28 @@ describe('collectAssistantTurnElapsedMs', () => {
       .toEqual([['final', 3_630_000], ['next', 5000]]);
   });
 
+  // #9806 review: the rendered handoff record and hidden recovery rows retain
+  // timestamps, but neither represents a new user request.
+  it.each([
+    ['an input handoff', {
+      clientId: 'resume', role: 'user', content: '', isSyntheticTrigger: true,
+      systemCardType: 'input-handoff',
+    }],
+    ['a manual recovery', {
+      clientId: 'resume', role: 'user', content: '', isSyntheticTrigger: true,
+      isContinuationTrigger: true,
+    }],
+  ] satisfies [string, ChatMessage][])('keeps the original start after %s', (_name, continuation) => {
+    const messages = [
+      at(user('request'), 0),
+      at(continuation, 3000),
+      at(assistant('final', undefined), 3630),
+    ];
+    const ids = new Set(['final']);
+    expect(collectAssistantTurnElapsedMs(messages, ids).get('final')).toBe(3_630_000);
+    expect(collectAssistantTurnElapsedMs(messages.slice(1), ids).size).toBe(0);
+  });
+
   it.each([undefined, '', 'invalid', '2026-11-11T00:00:00Z'])('omits a turn with missing, invalid or reversed start time (%s)', (createdAt) => {
     const messages = [{ ...user('u'), createdAt }, at(assistant('a', undefined), 1)];
     expect(collectAssistantTurnElapsedMs(messages, new Set(['a'])).size).toBe(0);
@@ -52,6 +74,9 @@ describe('collectAssistantTurnElapsedMs', () => {
       at(user('u'), 0),
       at({ ...assistant('streaming', undefined), isStreaming: true }, 1),
       at({ ...assistant('failed', undefined), turnCompleted: false }, 2),
+      // A saved sampling attempt can have text and no explicit turn seal.
+      at({ ...assistant('failed-sample', undefined), failedSamplingAttempt: true }, 2),
+      at({ ...assistant('pending-sample', undefined), samplingAttemptPending: true }, 2),
       assistant('missing', undefined),
       { ...assistant('invalid', undefined), createdAt: 'invalid' },
       at(assistant('instant', undefined), 0),

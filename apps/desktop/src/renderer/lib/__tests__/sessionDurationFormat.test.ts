@@ -35,7 +35,7 @@ describe('Desktop task durations', () => {
   it('uses localized units in work summaries and preserves live padding', () => {
     const t = translator(zhCN);
     expect(t('chat.workGroup.worked', { duration: formatSessionDuration(183_845_000, t) }))
-      .toBe('已工作 2 天 3 小时 4 分');
+      .toBe('本段用时 2 天 3 小时 4 分');
     const options = { minimumSeconds: 0, alwaysShowRemainder: true, padRemainder: true };
     expect(formatSessionDuration(0, t, options)).toBe('0s');
     expect(formatSessionDuration(65_000, t, options)).toBe('1m 05s');

@@ -58,6 +58,7 @@ vi.mock('@/lib/composerDraftStore', () => ({
 
 import { EMPTY_SESSION_STATE, handleStreamEvent, makerChatStore } from '@/lib/makerChatStore';
 import { findActiveReconnect } from '@/lib/autoResumePresentation';
+import { collectAssistantTurnElapsedMs } from '@/lib/userTurnUsage';
 import * as messageService from '@/lib/messageService';
 import type { Message } from '@/lib/ccAgent.types';
 import type { ChatMessage } from '@/lib/makerChatStore';
@@ -244,6 +245,27 @@ describe('mapServerMessages auto-resume 分隔线', () => {
     expect(row('question-reply:answered:q1:digest')).toMatchObject({ content: '', isSyntheticTrigger: true });
     expect(row('question-reply:q1:digest')?.content).toBe('> Install?\n\nYes');
     expect(row('question-reply:q1:digest')?.isSyntheticTrigger).toBeUndefined();
+  });
+
+  // #9806 review, unit: restoring a hidden question answer previously discarded
+  // its steering metadata. A request, its answer and a final reply are enough
+  // to distinguish an in-turn answer from one dispatched as a new turn.
+  it.each([
+    ['steer', 660_000],
+    ['turn', 60_000],
+  ] as const)('uses the persisted delivery mode when timing a question answer (%s)', (delivery, elapsed) => {
+    const messages = makerChatStore.__mapServerMessagesForTest([
+      serverMessage({ clientId: 'request', role: 'user', createdAt: '2026-06-12T10:00:00Z' }),
+      serverMessage({
+        clientId: 'question-reply:answered:q1:digest', role: 'user', content: 'Yes',
+        createdAt: '2026-06-12T10:10:00Z', agentMeta: { delivery },
+      }),
+      serverMessage({
+        clientId: 'final', createdAt: '2026-06-12T10:11:00Z', agentMeta: { turnCompleted: true },
+      }),
+    ]);
+    expect(messages[1]).toMatchObject({ content: '', isSyntheticTrigger: true });
+    expect(collectAssistantTurnElapsedMs(messages, new Set(['final'])).get('final')).toBe(elapsed);
   });
 
   // Unit / PR #6611: the first queued input resumes without a hidden clone.

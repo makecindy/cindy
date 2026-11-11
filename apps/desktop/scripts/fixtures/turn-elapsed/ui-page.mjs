@@ -13,6 +13,7 @@ export default {
     narrow: { about: 'Elapsed metadata wraps at 320px', viewport: { width: 320, height: 600 } },
     'missing-start': { about: 'Unloaded user boundary cannot produce whole-request elapsed', data: { missingStart: true } },
     island: { about: 'Disjoint history windows cannot produce whole-request elapsed', data: { island: true } },
+    'input-handoff': { about: 'An input handoff keeps the elapsed clock anchored to the original request', data: { handoff: true } },
   },
   async check(page, ui) {
     const reply = page.locator('[data-message-client-id="final"]');

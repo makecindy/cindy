@@ -12,6 +12,17 @@ const rows: ChatMessage[] = [
   { clientId: 'final', role: 'assistant', content: 'The source material has been checked. The findings are ready.', createdAt: at(3630), turnCompleted: true },
 ];
 
+const handoffRecord: ChatMessage = {
+  clientId: 'input-handoff',
+  role: 'user',
+  content: '',
+  createdAt: at(3173),
+  isSyntheticTrigger: true,
+  systemCardType: 'input-handoff',
+  systemCardData: { status: 'succeeded', steps: 1, nothingToFill: false },
+};
+const rowsWithHandoff = [...rows.slice(0, -2), handoffRecord, ...rows.slice(-2)];
+
 void mountPage({
   route: '/fixture',
   host: () => ({
@@ -21,7 +32,7 @@ void mountPage({
   }),
   render: ctx => <main className="flex h-screen w-full flex-col bg-[var(--surface)]">
     <MessageStream workingDir="" historyLoaded contentWidth={720}
-      messages={ctx.data.missingStart ? rows.slice(1) : rows}
+      messages={ctx.data.handoff ? rowsWithHandoff : ctx.data.missingStart ? rows.slice(1) : rows}
       historyWindowHasIsland={ctx.data.island === true} />
   </main>,
 });
