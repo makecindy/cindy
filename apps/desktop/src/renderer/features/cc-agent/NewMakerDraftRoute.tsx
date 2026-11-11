@@ -1134,16 +1134,18 @@ export function NewMakerDraftRoute() {
       : undefined,
     [pluginModelsAllowed, pluginModels, activePluginModel],
   );
-  // 模型组与插件模型同一个条件：只在本机新任务提供。记住的那一项后来被删掉时按没选处理。
-  const { config: modelGroupsConfig } = useModelGroups(pluginModelsAllowed);
+  // 模型组只在本机开的新任务提供(远程控制别的电脑、SSH、协同不提供)。草稿此刻选着在另一台电脑运行的模型也照样提供：
+  // 路线自己决定这次在哪台运行(model-groups.md §3.1)。记住的那一项后来被删掉时按没选处理。
+  const modelGroupsAllowed = !isDeviceLinkDraft && !effectiveRemoteHostId && draft.vendor !== 'orca';
+  const { config: modelGroupsConfig } = useModelGroups(modelGroupsAllowed);
   const activeModelGroup = useMemo(
-    () => (pluginModelsAllowed && !activePluginModel && findModelGroupRoute(modelGroupsConfig, draft.modelGroup)
+    () => (modelGroupsAllowed && !activePluginModel && findModelGroupRoute(modelGroupsConfig, draft.modelGroup)
       ? draft.modelGroup
       : null),
-    [pluginModelsAllowed, activePluginModel, modelGroupsConfig, draft.modelGroup],
+    [modelGroupsAllowed, activePluginModel, modelGroupsConfig, draft.modelGroup],
   );
   const modelGroupsProps = useMemo(
-    () => pluginModelsAllowed
+    () => modelGroupsAllowed
       ? {
           config: modelGroupsConfig,
           active: activeModelGroup,
@@ -1151,7 +1153,7 @@ export function NewMakerDraftRoute() {
           onManage: () => navigate('/settings?tab=model-groups'),
         }
       : undefined,
-    [pluginModelsAllowed, modelGroupsConfig, activeModelGroup, navigate],
+    [modelGroupsAllowed, modelGroupsConfig, activeModelGroup, navigate],
   );
   /** 组里没有能用的模型时，说明里写用户原来选的那个模型的显示名。 */
   const localProvidersForGroupNoteRef = useRef<ReturnType<typeof useProviders>['providers']>([]);
