@@ -23,9 +23,10 @@ describe('Kimi route-scoped tool history', () => {
     const secondOutput = { ...output, call_id: 'exec:84' };
     const input = [reasoning, call, patch, media, assistant, output, second, assistant, secondOutput];
     const body = { model: 'k3[1m]', input, reasoning: { effort: 'high' } };
+    const snapshot = structuredClone(body);
     const normalized = normalizeKimiToolHistory(body, { ...route, model: body.model, authMode: 'api-key' });
     expect(normalized).toEqual({ ...body, input: [reasoning, call, patch, media, output, assistant, second, secondOutput, assistant] });
-    expect(body.input).toEqual(input);
+    expect(body).toEqual(snapshot);
     expect(normalizeKimiToolHistory(normalized!, route)).toBeNull();
     expect(normalizeStrictGatewayHistory(body)).toBeNull();
   });

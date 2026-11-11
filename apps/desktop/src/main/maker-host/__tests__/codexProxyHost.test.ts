@@ -1192,7 +1192,8 @@ describe('chatBridgeCapabilitiesForRoute', () => {
 
   // #10024: the local Chat handler bypasses transformRequest. Exercise the real
   // routing/dispatch entry, not just the gateway transform. Unit tier, fake auth
-  // and transport only; the minimal failure is call -> assistant -> result.
+  // and transport only. Parallel results separated by an assistant message used
+  // to replace the second real result with an "unrecorded" Chat placeholder.
   it.each([
     { auth: 'oauth', model: 'k3' },
     { auth: 'oauth', model: 'k3[1m]' },
@@ -1225,14 +1226,18 @@ describe('chatBridgeCapabilitiesForRoute', () => {
     const call = { type: 'function_call', name: 'read', call_id: 'exec:83', arguments: '{}' };
     const assistant = { type: 'message', role: 'assistant', content: [{ type: 'output_text', text: 'Checking.' }] };
     const output = { type: 'function_call_output', call_id: 'exec:83', output: 'result' };
+    const second = { ...call, call_id: 'exec:84' };
+    const secondOutput = { ...output, call_id: 'exec:84', output: 'second result' };
     try {
       for (const scenario of [
-        { url: '/responses', input: [call, assistant, output], expected: upstream ? [call, assistant, output] : [call, output, assistant] },
+        { url: '/responses', input: [call, second, output, assistant, secondOutput],
+          expected: upstream ? [call, second, output, assistant, secondOutput] : [call, second, output, secondOutput, assistant] },
         { url: '/responses', input: [assistant], expected: [assistant] },
         { url: '/responses/compact', input: [call, assistant, output], expected: [call, assistant, output] },
       ]) {
         mockState.handlePiProviderRequest.mockClear();
         const body = { model: child ? 'gpt-5.6-sol' : model, input: scenario.input };
+        const snapshot = structuredClone(body);
         const headers: Record<string, string> = child ? {
           'thread-id': 'thread-kimi-history-child', 'x-openai-subagent': 'collab_spawn',
           'x-codex-parent-thread-id': 'thread-kimi-history',
@@ -1246,20 +1251,25 @@ describe('chatBridgeCapabilitiesForRoute', () => {
             expect.objectContaining({ model, input: scenario.expected }), expect.anything());
         } else {
           const bridge = mockState.createResponsesChatHandler.mock.results.at(-1)?.value;
-          expect(bridge?.handle).toHaveBeenCalledWith(expect.objectContaining({
-            parsedBody: expect.objectContaining({ model, input: scenario.expected }),
-          }));
-          if (!upstream && scenario.expected.length === 3 && scenario.url === '/responses') {
+          if (!upstream && scenario.expected.length === 5 && scenario.url === '/responses') {
             const sent = bridge!.handle.mock.calls.at(-1)![0].parsedBody;
             const chat = translateResponsesRequest(sent);
-            expect(chat.messages.slice(-3)).toMatchObject([
-              { role: 'assistant', tool_calls: [{ id: 'exec:83' }] },
+            expect(chat.messages.filter(message => message.role === 'tool')).toEqual([
               { role: 'tool', tool_call_id: 'exec:83', content: 'result' },
+              { role: 'tool', tool_call_id: 'exec:84', content: 'second result' },
+            ]);
+            expect(chat.messages.slice(-4)).toMatchObject([
+              { role: 'assistant', tool_calls: [{ id: 'exec:83' }, { id: 'exec:84' }] },
+              { role: 'tool', tool_call_id: 'exec:83' },
+              { role: 'tool', tool_call_id: 'exec:84' },
               { role: 'assistant', content: 'Checking.' },
             ]);
           }
+          expect(bridge?.handle).toHaveBeenCalledWith(expect.objectContaining({
+            parsedBody: expect.objectContaining({ model, input: scenario.expected }),
+          }));
         }
-        expect(body.input).toEqual(scenario.input);
+        expect(body).toEqual(snapshot);
       }
     } finally {
       host.unregister('session-kimi-history');
