@@ -1529,58 +1529,62 @@ describe('Chat Server result delivery and refresh', () => {
     expect(edits).toHaveLength(1);
   });
 
-  // bot-group-chat.md §10 (2026-11-11 owner decision): the task stopped and nobody in the group could
-  // tell why. The reply of the turn the task was created with comes back to the group once, as the
-  // teammate, where the card is, and the card names where it stopped. The owner's own later turn in
-  // the task stays there, also when the owner typed into it before that first turn ended (2 requests).
-  // A failed post is retried as the same operation, never posted twice.
-  it.each([1, 2])('posts the reply of the turn a card task was created with once, and none of the owner\'s own turns (requests: %i)', async (firstRequests) => {
+  // bot-group-chat.md §10 (2026-11-11 owner decision, Amp as reference): the task stopped and nobody
+  // in the group could tell why. The card's Thread is the task's window in the group: every turn end
+  // of the card's task — the turn it was created with or one its owner typed in the task — posts its
+  // reply there, and the main group gets a short result quoting the card (a short reply is its own
+  // result; the helper model condenses a long one; without it the card's line). Once per turn: a
+  // failed post retries the same operation, the same turn end again posts nothing, NO_REPLY posts
+  // nothing. A card inside a Thread cannot root its own: the reply goes to that Thread, nothing to the main group.
+  it.each([
+    ['condensed by the helper model', null, 'The lint step failed; the log is in the thread.'],
+    ['the card line without the helper model', null, null],
+    ['a card inside a Thread', '70000000-0000-4000-8000-000000000009', undefined],
+  ] as const)('posts each turn of a card task into its Thread and a short result in the main group (%s)', async (_case, inThread, condensed) => {
     const cardId = '70000000-0000-4000-8000-000000000001';
-    const replies: unknown[] = [];
-    const cards: Array<Record<string, unknown> | undefined> = [];
-    let replyUnavailable = true;
-    let requests = firstRequests;
+    taskCardStore.value = { [cardId]: { roomId, botId, threadRootId: inThread, taskId: 'task-1', deviceId: null, title: 'Fix login',
+      requesterName: 'Owner', botName: 'Bot (Owner)', state: 'running', revision: 1, createdAt: Date.now() } };
+    const posts: Array<{ operationId: string; threadRootId?: string; content: Array<{ text?: string }> }> = [];
+    const cards: Array<Record<string, unknown>> = [];
+    let unavailable = true;
     deps.readGroupTaskStatus = vi.fn(async () => ({ title: 'Fix login', state: 'idle' as const }));
-    deps.countTaskRequests = vi.fn(async () => requests);
+    deps.condenseTaskReply = vi.fn(async () => condensed ?? null);
     fixture.handle.mockImplementation((route, method, body) => {
-      if (route === '/executions/claim') { const next = claimed ? null : { ...execution, requester_id: selfId, access_mode: 'owner' }; claimed = true; return { body: { execution: next } }; }
       if (route === `/conversations/${roomId}/messages` && method === 'POST') {
-        if (!String(body.operationId).startsWith('task-reply:')) return { body: { id: cardId, revision: 1 } };
-        if (replyUnavailable) { replyUnavailable = false; return { status: 503, body: { code: 'UNAVAILABLE' } }; }
-        replies.push(body);
+        if (unavailable) { unavailable = false; return { status: 503, body: { code: 'UNAVAILABLE' } }; }
+        posts.push(body);
         return { body: { id: '70000000-0000-4000-8000-000000000002', revision: 1 } };
       }
       if (method === 'PATCH' && route.includes('/messages/')) { cards.push(body.content[0].data); return { body: { revision: cards.length + 1 } }; }
       return response(route);
     });
     await start();
-    reportGroupTaskCreated('lane', { taskId: 'task-1', deviceId: null, title: 'Fix login' });
-    await vi.advanceTimersByTimeAsync(0);
-    const reply = '## Preflight **failed**\n\nThe lint step failed, see [the log](https://example.com/log).';
-    const ended = { ...terminal, sessionId: 'task-1', activeInputClientId: 'created-with' };
+    const reply = `## Preflight **failed**\n\n${'The lint step failed, see [the log](https://example.com/log). '.repeat(5).trim()}`;
+    const ended = { ...terminal, sessionId: 'task-1', activeInputClientId: 'created-with', resultMessageClientId: 'reply-1' };
     await service.settleLaneTurn({ ...ended, resultText: reply });
-    await vi.advanceTimersByTimeAsync(0);
-    if (firstRequests === 2) {
-      await vi.advanceTimersByTimeAsync(60_000);
-      expect(replies).toHaveLength(0);
-      expect(cards.at(-1)).toMatchObject({ state: 'idle' });
-      expect(cards.at(-1)).not.toHaveProperty('summary');
-      return;
-    }
+    await vi.advanceTimersByTimeAsync(60_000);
+    const thread = inThread ?? cardId;
+    expect(posts[0]).toEqual({ operationId: expect.stringMatching(`^task-reply:${cardId}:`), threadRootId: thread, mentions: [],
+      content: [{ type: 'text', text: reply }] });
+    if (!inThread) expect(posts[1]).toEqual({ operationId: expect.stringMatching(`^task-result:${cardId}:`), mentions: [], content: [
+      expect.objectContaining({ namespace: 'cindy.quote', data: expect.objectContaining({ messageId: cardId, authorKind: 'bot' }) }),
+      { type: 'text', text: condensed ?? 'Preflight failed' }] });
+    expect(posts).toHaveLength(inThread ? 1 : 2);
     expect(cards.at(-1)).toMatchObject({ state: 'idle', summary: 'Preflight failed' });
-    await vi.advanceTimersByTimeAsync(60_000);
-    expect(replies).toEqual([{ operationId: `task-reply:${cardId}`, content: [{ type: 'text', text: reply }], mentions: [] }]);
-    // The same turn end again (a retry, a restart) and later sync passes do not post it again.
+    // The same turn end again (the error and the done closing one turn, a retry) posts nothing more.
     await service.settleLaneTurn({ ...ended, resultText: reply });
+    await service.settleLaneTurn({ ...ended, activeInputClientId: 'quiet', resultMessageClientId: 'reply-2', resultText: 'NO_REPLY' });
     await vi.advanceTimersByTimeAsync(60_000);
-    expect(replies).toHaveLength(1);
-    // The owner then talks to the task directly: the card stops naming the group turn, nothing is posted.
-    requests = 2;
-    await service.settleLaneTurn({ ...ended, activeInputClientId: 'owner-typed', resultText: 'Private answer' });
+    expect(posts).toHaveLength(inThread ? 1 : 2);
+    // The owner types in the task: that turn is the group's work too, and a short reply is its own result.
+    const asked = 'Should I bump Pi to 1.5.2?';
+    await service.settleLaneTurn({ ...ended, activeInputClientId: 'owner-typed', resultMessageClientId: 'reply-3', resultText: asked });
     await vi.advanceTimersByTimeAsync(15_000);
-    expect(replies).toHaveLength(1);
-    expect(cards.at(-1)).toMatchObject({ state: 'idle' });
-    expect(cards.at(-1)).not.toHaveProperty('summary');
+    expect(posts.slice(inThread ? 1 : 2).map(post => [post.threadRootId ?? null, post.content.at(-1)?.text]))
+      .toEqual([[thread, asked], ...(inThread ? [] : [[null, asked]])]);
+    expect(new Set(posts.map(post => post.operationId)).size).toBe(posts.length);
+    expect(deps.condenseTaskReply).toHaveBeenCalledTimes(inThread ? 0 : 1);
+    expect(cards.at(-1)).toMatchObject({ summary: asked });
   });
 
   // bot-group-chat.md §10 (2026-11-11 owner decision): words in the Thread under a task card go
@@ -1627,11 +1631,16 @@ describe('Chat Server result delivery and refresh', () => {
     expect(buildMessageSourceNote(messageSourceSenderFromMeta({ origin: input.origin })))
       .toContain(`在群聊「Room」(group_id: ${roomId})的话题里发送`);
     // The task's owner may be mid-turn: only this turn's own input ends the execution.
-    expect(await service.settleLaneTurn({ ...terminal, sessionId: 'task-1', resultText: 'Owner turn' })).toBe(false);
+    expect(await service.settleLaneTurn({ ...terminal, sessionId: 'task-1', activeInputClientId: 'owner-typed', resultText: 'Owner turn' })).toBe(false);
     expect(await service.settleLaneTurn({ ...terminal, sessionId: 'task-1', activeInputClientId: input.clientId, resultText: 'Docs updated' })).toBe(true);
     expect(deliveries()).toHaveLength(1);
     expect(deliveries()[0][2].content[0]).toEqual({ type: 'text', text: 'Docs updated' });
     expect(deps.abortLane).not.toHaveBeenCalled();
+    // The owner's turn goes to the card's Thread and its result to the main group; the Thread's own
+    // turn has already answered in the Thread and is not posted again.
+    await vi.advanceTimersByTimeAsync(15_000);
+    expect(fixture.handle.mock.calls.filter(([route, method]) => method === 'POST' && route === `/conversations/${roomId}/messages`)
+      .map(([, , body]) => [body.threadRootId ?? null, body.content.at(-1).text])).toEqual([[rootId, 'Owner turn'], [null, 'Owner turn']]);
   });
 
   // #7583, unit: runtime close without an SDK terminal left the leased execution

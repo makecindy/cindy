@@ -35,12 +35,15 @@ const liveTaskCard = z.object({
   state: z.preprocess(value => value === 'finished' ? 'idle' : value, z.enum(['running', 'waiting', 'idle', 'failed'])), prUrl: z.string().optional(),
   /** The line the card shows after its state, and the one it shows once the task is not running. */
   summary: z.string().optional(), lastLine: z.string().optional(),
+  /** The task's latest turn ends, newest last: a turn end seen again posts nothing again. */
+  turns: z.array(z.string()).optional(),
   /**
-   * The reply of the turn the task was created with, posted to the group once: `text` until the
-   * group has it, then `messageId`; neither when it could not be posted.
+   * Messages a turn end left for the group, oldest first, until the group has them: the reply in
+   * the card's Thread, the short result in the main group (`quote`: it quotes this card). Each
+   * keeps its own operation, so a retry is the same message.
    */
-  reply: z.object({ text: z.string().optional(), messageId: z.string().optional(),
-    attempts: z.number().int().nonnegative().optional(), retryAt: z.number().optional() }).optional(),
+  outbox: z.array(z.object({ op: z.string(), text: z.string(), threadRootId: z.string().uuid().nullable(),
+    quote: z.boolean().optional(), attempts: z.number().int().nonnegative().optional(), retryAt: z.number().optional() })).optional(),
   /** The posted message's server revision; the next edit expects it. */
   revision: z.number().int().positive(), createdAt: z.number(),
 });

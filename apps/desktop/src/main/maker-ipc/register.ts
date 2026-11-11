@@ -688,6 +688,7 @@ import { activeCompanionCloud } from '../companion-cloud/runtime.js';
 import { companionCloudView } from '../companion-cloud/view.js';
 import type { CompanionCloudActionResult, CompanionCloudFailureCode, CompanionHomeChoices, CompanionMergeResult, CompanionSwitchOptions } from '../../shared/companionCloud.js';
 import { createBotGroupPlanDecider } from './botGroupPlanDecider.js';
+import { createBotGroupTaskResultCondenser } from './botGroupTaskResult.js';
 import { botGroupMembersVisibleRemotely, registerBotGroupRemoteResourceProvider } from './botGroupRemoteResourceProvider.js';
 import { broadcastBotGroupRemoteResourceChanged } from './botGroupRemoteResourceInvalidation.js';
 import { getBotGroupStepNotificationBody, getInputHandoffNotificationBody } from '../sessionNotificationCopy.js';
@@ -13764,9 +13765,8 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
       const state = botGroupLiveTaskStateOfPhase(phase);
       return { title: row.title, ...(state ? { state } : {}), ...(pr ? { prUrl: pr.url } : {}) };
     },
-    // Only the turn a card task was created with posts its reply to the group (bot-group-chat.md §10).
-    countTaskRequests: async (taskId) => (await getDbClient().drizzle.select({ id: messages.id }).from(messages)
-      .where(and(eq(messages.sessionId, taskId), eq(messages.role, 'user'))).limit(2)).length,
+    // A card task's short result in the main group (bot-group-chat.md §10).
+    condenseTaskReply: createBotGroupTaskResultCondenser((prompt, opts) => requestUtilityText(maker, prompt, opts)),
     // A group's GitHub repository picks this computer's checkout among the registered projects.
     findProjectDirsForRepo: async (repo) => findRepositoryFolders(
       (await listRecentWorkdirs()).filter(row => row.exists).map(row => row.path), repo, {

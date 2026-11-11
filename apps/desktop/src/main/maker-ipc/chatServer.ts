@@ -2213,8 +2213,12 @@ function createChatServer(local: BotGroupChatService, deps: BotGroupChatServiceD
   }
   /** Cards follow their task for a week; after that a card keeps what it last said. */
   const TASK_CARD_FOLLOW_MS = 7 * 24 * 60 * 60_000;
-  /** A task's reply that could not reach the group is retried with backoff, then dropped. */
+  /** A task's message that could not reach the group is retried with backoff, then dropped. */
   const TASK_REPLY_ATTEMPTS = 8;
+  /** A reply this short is its own result in the main group. */
+  const TASK_RESULT_SHORT_CHARS = 280;
+  /** Turn ends a card remembers, so the same end seen again posts nothing again. */
+  const TASK_TURNS_KEPT = 20;
   /** Read-modify-write of one card record against the current file, never a stale copy. */
   function updateTaskCard(messageId: string, change: (card: ChatLiveTaskCardRecord) => ChatLiveTaskCardRecord | null) {
     if (!current()) return;
@@ -2226,11 +2230,11 @@ function createChatServer(local: BotGroupChatService, deps: BotGroupChatServiceD
     taskCards().save(cards);
   }
   /**
-   * A card task's turn ended on this computer (bot-group-chat.md §10, 2026-11-11). The turn the
-   * task was created with — the task still holds only that request — gets its reply posted to the
-   * group once, where the card is; a turn from the card's Thread already answered there. Either
-   * gives the card its line. A turn the owner started in the task stays in the task: it only
-   * moves the card's state, and the card shows no line from it.
+   * A card task's turn ended on this computer (bot-group-chat.md §10, 2026-11-11). The card's
+   * Thread is the task's window in the group: the turn's reply goes there as the teammate, and the
+   * main group gets a short result that quotes the card. A turn that came in through the Thread has
+   * already answered there. A card posted inside a Thread cannot root its own, so its reply goes to
+   * that Thread and nothing to the main group. Every turn end gives the card its line.
    */
   async function noteCardTaskTurn(terminal: BotGroupLaneTerminal, fromThread: boolean) {
     if (!current() || !terminal.sessionId) return;
@@ -2241,33 +2245,58 @@ function createChatServer(local: BotGroupChatService, deps: BotGroupChatServiceD
     if (terminal.outcome === 'done' && !text.trim() && terminal.resultMessageClientId)
       text = (await readPersistedReplyText(terminal.sessionId, terminal.resultMessageClientId).catch(() => null)) ?? '';
     text = isBotGroupNoReplyText(text) ? '' : text.trim();
-    const created = !fromThread && mine.some(([, card]) => !card.reply)
-      && (await deps.countTaskRequests?.(terminal.sessionId).catch(() => 0)) === 1;
-    const line = fromThread || created ? botGroupLiveTaskReplyLine(text) : '';
+    const line = botGroupLiveTaskReplyLine(text);
+    // The turn's input and reply name its end; the error and the done that close one turn share both.
+    const turn = [terminal.activeInputClientId, terminal.resultMessageClientId].filter(Boolean).join(':');
+    const op = (kind: string, messageId: string) => `${kind}:${messageId}:${createHash('sha256').update(turn).digest('hex').slice(0, 32)}`;
+    const results: string[] = [];
     for (const [messageId] of mine) updateTaskCard(messageId, card => {
+      if (turn && card.turns?.includes(turn)) return card;
       const next: ChatLiveTaskCardRecord = { ...card, lastLine: line || undefined };
-      if (created && text && !card.reply) next.reply = { text: text.slice(0, 16000) };
+      // A turn end that cannot be told apart from another is never posted.
+      if (!turn) return next;
+      next.turns = [...(card.turns ?? []), turn].slice(-TASK_TURNS_KEPT);
+      if (fromThread || !text) return next;
+      next.outbox = [...(card.outbox ?? []), { op: op('task-reply', messageId), text: text.slice(0, 16000), threadRootId: card.threadRootId ?? messageId }];
+      if (!card.threadRootId) results.push(messageId);
       return next;
     });
     void syncTaskCards(true);
+    if (!results.length) return;
+    const result = text.length <= TASK_RESULT_SHORT_CHARS ? text
+      : (await deps.condenseTaskReply?.(text).catch(() => null))?.trim() || line;
+    if (!result) return;
+    for (const messageId of results) updateTaskCard(messageId, card => ({ ...card, outbox: [...(card.outbox ?? []),
+      { op: op('task-result', messageId), text: result.slice(0, 16000), threadRootId: null, quote: true }] }));
+    void syncTaskCards(true);
   }
-  /** Posts a card task's reply as the teammate where the card is; the operation makes a retry the same message. */
-  async function postTaskReply(messageId: string, card: ChatLiveTaskCardRecord) {
-    const reply = card.reply;
-    if (!reply?.text || reply.messageId || Date.now() < (reply.retryAt ?? 0)) return;
-    try {
-      const posted = await api<{ id: string }>(`/conversations/${card.roomId}/messages`, 'POST', {
-        operationId: `task-reply:${messageId}`, content: [{ type: 'text', text: reply.text }], mentions: [],
-        ...(card.threadRootId ? { threadRootId: card.threadRootId } : {}),
-      }, card.botId);
-      updateTaskCard(messageId, fresh => ({ ...fresh, reply: typeof posted?.id === 'string' ? { messageId: posted.id } : {} }));
-      changed(card.roomId);
-    } catch (error) {
-      const attempts = (reply.attempts ?? 0) + 1;
-      const giveUp = attempts >= TASK_REPLY_ATTEMPTS || error instanceof ChatResponseError && !retryableResponse(error);
-      if (giveUp) deps.log?.warn('Group task reply could not be posted', chatErrorDiagnostic(error));
-      updateTaskCard(messageId, fresh => ({ ...fresh, reply: giveUp ? {}
-        : { text: reply.text, attempts, retryAt: Date.now() + 15_000 * 2 ** (attempts - 1) } }));
+  /**
+   * Posts what a card's task left for the group, oldest first, as the teammate and naming nobody;
+   * each message's operation makes a retry the same message. The next waits while one is retried.
+   */
+  async function postTaskOutbox(messageId: string) {
+    for (;;) {
+      const card = taskCards().read()[messageId];
+      const item = card?.outbox?.[0];
+      if (!current() || !card || !item || Date.now() < (item.retryAt ?? 0)) return;
+      const drop = (fresh: ChatLiveTaskCardRecord) => ({ ...fresh, outbox: fresh.outbox?.filter(o => o.op !== item.op) });
+      try {
+        await api(`/conversations/${card.roomId}/messages`, 'POST', {
+          operationId: item.op, mentions: [], ...(item.threadRootId ? { threadRootId: item.threadRootId } : {}),
+          content: [...(item.quote ? [buildBotGroupQuoteCard({ messageId, authorName: card.botName, authorKind: 'bot',
+            excerpt: botGroupQuoteExcerpt(card.title), attachmentCount: 0, attachmentName: null, sequence: null })] : []),
+          { type: 'text', text: item.text }],
+        }, card.botId);
+        updateTaskCard(messageId, drop);
+        changed(card.roomId);
+      } catch (error) {
+        const attempts = (item.attempts ?? 0) + 1;
+        const giveUp = attempts >= TASK_REPLY_ATTEMPTS || error instanceof ChatResponseError && !retryableResponse(error);
+        if (giveUp) deps.log?.warn('Group task message could not be posted', chatErrorDiagnostic(error));
+        updateTaskCard(messageId, fresh => giveUp ? drop(fresh) : { ...fresh, outbox: fresh.outbox?.map(o => o.op !== item.op ? o
+          : { ...o, attempts, retryAt: Date.now() + 15_000 * 2 ** (attempts - 1) }) });
+        if (!giveUp) return;
+      }
     }
   }
   let syncingTaskCards = false;
@@ -2283,7 +2312,7 @@ function createChatServer(local: BotGroupChatService, deps: BotGroupChatServiceD
         if (Date.now() - card.createdAt > TASK_CARD_FOLLOW_MS) { updateTaskCard(messageId, () => null); continue; }
         // Only the computer running the task reads it; another of my computers keeps its own cards.
         if (card.deviceId && selfDeviceId && card.deviceId !== selfDeviceId) continue;
-        await postTaskReply(messageId, card);
+        await postTaskOutbox(messageId);
         const status = await deps.readGroupTaskStatus(card.taskId).catch(() => undefined);
         if (status === undefined) continue;
         if (status === null) { updateTaskCard(messageId, () => null); continue; }
