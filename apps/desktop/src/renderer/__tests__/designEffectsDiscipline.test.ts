@@ -10,8 +10,9 @@ import '../themes/colors';
  *
  * 这几类写法都能通过编译，界面却静默出错：无类型的 `shadow-[var(--x)]` 被 Tailwind 当成
  * 阴影颜色，不产生阴影；HSL 三元组 token 直接写进 `text-[var(--x)]` 是无效颜色；
- * `enabled:hover:` 的优先级低于 Button 变体，覆盖不生效；`globals.css` 对非输入元素全局
- * `outline: none !important`，只写 `focus-visible:outline*` 的按钮 Tab 聚焦时什么都不画
+ * `enabled:hover:` 的优先级低于 Button 变体，覆盖不生效；`globals.css` 对所有元素全局
+ * `outline: none !important`（其后给输入框写的 `outline: revert` 不带 !important，压不过它），
+ * 只写 `focus-visible:outline*` 的控件 Tab 聚焦时什么都不画
  * （§14.2，2026-11 维护者裁决：以规范为准改代码）。清单外的阴影和渐变则让 §6、§7
  * 的封闭清单与代码再次脱节。新增例外须先有设计决定，再登记到这里和对应规范。
  *
@@ -89,7 +90,7 @@ const FIXES = {
   invalidHslColor: '这个 token 是 HSL 三元组，改成 hsl(var(--x)) 或对应的 Tailwind 颜色类',
   losingButtonState: '会输给 Button 变体：用 palette，或写成 enabled:[&:not([aria-disabled=true])]:hover:',
   invisibleFocus:
-    'globals.css 压掉了非输入元素的 outline，键盘焦点看不见：改成 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--focus-ring)]，或换用 Button（DESIGN.md §14.2）',
+    'globals.css 用 !important 压掉了所有元素的 outline，键盘焦点看不见：改成 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--focus-ring)]，或换用 Button（DESIGN.md §14.2）',
 } as const;
 
 type EffectKind = keyof typeof FIXES;
@@ -110,9 +111,6 @@ function isCommentLine(source: string, index: number): boolean {
   const line = source.slice(source.lastIndexOf('\n', index) + 1, index).trimStart();
   return line.startsWith('//') || line.startsWith('*') || line.startsWith('/*');
 }
-
-/** globals.css 只对 input / textarea / contenteditable 恢复 outline。 */
-const OUTLINE_KEEPING_TAG = /^(?:input|textarea|Input|Textarea)$/;
 
 /** 从 openIndex 处的开括号起，返回配对闭括号之后的下标；没有配对时返回 -1。 */
 function closingIndex(source: string, openIndex: number, open: string, close: string): number {
@@ -157,13 +155,12 @@ function classRegionsAround(source: string, index: number): string[] {
   return regions;
 }
 
-/** 只靠 outline 画焦点：不在输入元素上，且同一 class 区域没有 focus-visible 焦点圈兜底。 */
+/**
+ * 只靠 outline 画焦点：同一 class 区域没有 focus-visible 焦点圈兜底。输入元素不例外——
+ * globals.css 给 input / textarea / contenteditable 写的 `outline: revert` 不带 !important，
+ * 输给前面的 `outline: none !important`，它们的 outline 同样画不出来。
+ */
 function relyOnlyOnOutline(source: string, index: number): boolean {
-  const opening = [...source.slice(0, index).matchAll(/<([A-Za-z][\w.]*)/g)].at(-1);
-  const tagText = opening ? source.slice(opening.index, index) : '';
-  const insideInput =
-    opening && !/\/>|<\//.test(tagText) && (OUTLINE_KEEPING_TAG.test(opening[1]) || /\bcontentEditable\b/.test(tagText));
-  if (insideInput) return false;
   return !classRegionsAround(source, index).some((region) => /focus-visible:(?:[\w-]+:)*ring-/.test(region));
 }
 
@@ -252,7 +249,7 @@ describe('阴影、渐变与写法失效门禁', () => {
     ).toEqual([]);
   });
 
-  it('焦点规则只拦非输入元素上没有焦点圈兜底的 outline', () => {
+  it('焦点规则只拦没有焦点圈兜底的 outline，输入元素也不例外', () => {
     const kinds = (source: string) => findEffects(source, new Set()).map(({ kind }) => kind);
     // Toast ×、附件预览图标按钮等:只写 outline,Tab 聚焦时 outline=none、box-shadow=none。
     expect(kinds('<button className="size-8 focus-visible:outline focus-visible:outline-2">')).toEqual(['invisibleFocus']);
@@ -260,6 +257,12 @@ describe('阴影、渐变与写法失效门禁', () => {
       'invisibleFocus',
     ]);
     expect(kinds("<summary className=\"underline focus-visible:outline-2\">")).toEqual(['invisibleFocus']);
+    // 输入元素的 outline 也被 !important 压掉(PdfPreview 页码输入框曾因豁免漏报)。
+    expect(
+      kinds(`<input onChange={(e) => set(e.target.value)} className="focus-visible:outline focus-visible:outline-2" />
+        <textarea className="focus-visible:outline-2" />
+        <div contentEditable className="focus-visible:outline" />`),
+    ).toEqual(['invisibleFocus', 'invisibleFocus', 'invisibleFocus']);
     // cn() 分行写法:焦点圈在同一个 cn 的另一行也算兜底。
     expect(kinds("className={cn(\n  'rounded-full',\n  'focus-visible:outline focus-visible:outline-2',\n)}")).toEqual([
       'invisibleFocus',
@@ -278,9 +281,7 @@ describe('阴影、渐变与写法失效门禁', () => {
       kinds(`<button className="focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--focus-ring)]">
         <a className="focus-visible:outline focus-visible:ring-2">
         <button className="focus-visible:outline-none focus-visible:after:ring-2">
-        <input onChange={(e) => set(e.target.value)} className="focus-visible:outline focus-visible:outline-2" />
-        <textarea className="focus-visible:outline-2" />
-        <div contentEditable className="focus-visible:outline" />
+        <input className="focus-visible:outline-none focus-visible:ring-2" />
         // focus-visible:outline in prose`),
     ).toEqual([]);
   });
