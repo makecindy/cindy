@@ -204,6 +204,13 @@ async function canonicalizeLocalWorkdir(workingDir: string, execGit: GitProbe): 
   return mainRoot;
 }
 
+/** 去掉结尾的 `/` 与 `\`。逐字符回退而不用 `/[\\/]+$/`: 那个正则对大量连续分隔符是多项式时间 (CodeQL)。 */
+function trimTrailingSeparators(value: string): string {
+  let end = value.length;
+  while (end > 0 && (value[end - 1] === '/' || value[end - 1] === '\\')) end -= 1;
+  return value.slice(0, end);
+}
+
 /**
  * cwd 所在的仓库根, 沿用调用方传入路径的写法。
  *
@@ -222,7 +229,7 @@ async function callerSpelledRoot(workingDir: string, cwd: string, root: string):
   }
   // cwd 就是仓库根: 去掉结尾的分隔符, 否则 `/repo/` 与从子目录解析出的 `/repo` 是两把钥匙。
   if (rel === '') {
-    const trimmed = workingDir.replace(/[\\/]+$/, '');
+    const trimmed = trimTrailingSeparators(workingDir);
     // 文件系统根 (`/`、`C:\\`) 本身以分隔符结尾, 不动。
     return trimmed && !trimmed.endsWith(':') ? trimmed : workingDir;
   }

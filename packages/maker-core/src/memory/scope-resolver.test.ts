@@ -365,4 +365,9 @@ describe.skipIf(!gitAvailable())('resolveMemoryScopeKey — 真实 Git smoke', (
     // 否则 `/repo/` 和 `/repo` 落到两个目录, 同一仓库的记忆被拆开。
     expect(await resolveMemoryScopeKey(`${repoRoot}${path.sep}`)).toBe(repoRoot);
   });
+
+  it('仓库根后面跟着大量连续分隔符: 去干净, 仍是同一把钥匙', async () => {
+    // 去掉结尾分隔符改成了逐字符回退 (原来的正则被 CodeQL 判为多项式时间); 行为必须不变。
+    expect(await resolveMemoryScopeKey(`${repoRoot}${path.sep.repeat(20_000)}`)).toBe(repoRoot);
+  });
 });
