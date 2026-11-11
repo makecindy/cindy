@@ -13222,7 +13222,8 @@
     },
     "workGroup": {
       "working": "작업 중…",
-      "worked": "{{duration}} 동안 작업함",
+      "worked": "이 구간 소요 시간 {{duration}}",
+      "durationDescription": "대기 시간을 포함한 이 작업 구간의 경과 시간입니다. 요청 전체의 경과 시간이나 순수 작업 시간이 아닙니다.",
       "workDetails": "작업 내역",
       "exploration": {
         "read_one": "파일 {{count}}개 읽음",
@@ -13324,6 +13325,8 @@
       "turnCostEstimatedValue": "가치 {{cost}}",
       "turnTokens": "{{tokens}} tokens",
       "userTurnCostDetailsTitle": "이번 요청 상세",
+      "turnElapsed": "전체 경과 시간 {{duration}}",
+      "turnElapsedDescription": "이번 요청을 시작한 입력부터 이 답변의 기록 시각까지의 경과 시간입니다. 대기 시간을 포함하며, 순수 작업 시간은 아닙니다.",
       "relative": {
         "justNow": "방금",
         "minutesAgo_other": "{{count}}분 전",

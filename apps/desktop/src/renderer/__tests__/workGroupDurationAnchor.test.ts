@@ -19,6 +19,7 @@
 import { describe, it, expect } from 'vitest';
 import { buildRenderItems, groupWorkRuns } from '../components/chat/MessageStream';
 import type { ChatMessage } from '@/lib/makerChatStore';
+import { collectAssistantTurnElapsedMs } from '@/lib/userTurnUsage';
 
 // ── 时间线基准(镜像真实 DB 证据的间隔) ─────────────────────────────────────
 const T0 = Date.parse('2026-07-01T00:00:00.000Z');
@@ -98,6 +99,23 @@ function answeredTurnMessages(): ChatMessage[] {
 // ── 完成态:内层段与外层总表都锚上一边界 ────────────────────────────────────
 
 describe('「已工作」时长 — 已回答 turn 锚定上一边界', () => {
+  // #9806, unit: real grouping can correctly show 457s at the end of a 3630s
+  // request. Previous anchor tests only covered one outer group. The heading
+  // creates a visible intermediate delivery, splitting the local work clock.
+  it('keeps segment and whole-request clocks distinct across intermediate delivery', () => {
+    const messages = [
+      mkUser('u', iso(0)),
+      mkTool('first', iso(1000)),
+      mkResult('first-result', 'tu-first', iso(3_000_000)),
+      mkAssistant('delivery', '# 阶段结果\n\n已核对第一部分。', iso(3_173_000)),
+      mkTool('last', iso(3_180_000)),
+      mkResult('last-result', 'tu-last', iso(3_620_000)),
+      { ...mkAssistant('final', '完成。', iso(3_630_000)), turnCompleted: true },
+    ];
+    const groups = topLevelWorkGroups(groupWorkRuns(buildRenderItems(messages).items, false));
+    expect(groups.at(-1)?.durationMs).toBe(457_000);
+    expect(collectAssistantTurnElapsedMs(messages, new Set(['final'])).get('final')).toBe(3_630_000);
+  });
   it('纯 thinking 首段计入模型思考时间(6s,而非 111ms 的到达窗口)', () => {
     const items = groupWorkRuns(buildRenderItems(answeredTurnMessages()).items, false);
 

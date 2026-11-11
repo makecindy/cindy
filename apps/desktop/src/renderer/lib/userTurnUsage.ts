@@ -9,6 +9,29 @@ function isUserTurnBoundary(message: ChatMessage): boolean {
   );
 }
 
+/** Wall-clock time from the user boundary to each selected reply's recorded timestamp. */
+export function collectAssistantTurnElapsedMs(
+  messages: readonly ChatMessage[],
+  assistantClientIds: ReadonlySet<string>,
+): Map<string, number> {
+  const out = new Map<string, number>();
+  let startMs = NaN;
+  for (const message of messages) {
+    if (isUserTurnBoundary(message)) {
+      // An absent timestamp on a new turn must clear the previous turn's clock.
+      startMs = Date.parse(message.createdAt ?? '');
+      continue;
+    }
+    if (message.role !== 'assistant' || !assistantClientIds.has(message.clientId) ||
+      message.isStreaming || message.turnCompleted === false) continue;
+    const endMs = Date.parse(message.createdAt ?? '');
+    if (Number.isFinite(startMs) && Number.isFinite(endMs) && endMs >= startMs) {
+      out.set(message.clientId, endMs - startMs);
+    }
+  }
+  return out;
+}
+
 /**
  * Return the token/model details for the visible user turn containing an
  * assistant message. If the loaded history starts in the middle of a turn,

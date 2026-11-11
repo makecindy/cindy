@@ -13222,7 +13222,8 @@
     },
     "workGroup": {
       "working": "正在工作…",
-      "worked": "已工作 {{duration}}",
+      "worked": "本段用时 {{duration}}",
+      "durationDescription": "仅此段工作过程的历时，包含等待；不代表整轮历时或净工作时间。",
       "workDetails": "工作过程",
       "exploration": {
         "read_one": "读取 {{count}} 个文件",
@@ -13324,6 +13325,8 @@
       "turnCostEstimatedValue": "价值 {{cost}}",
       "turnTokens": "{{tokens}} tokens",
       "userTurnCostDetailsTitle": "本轮明细",
+      "turnElapsed": "整轮历时 {{duration}}",
+      "turnElapsedDescription": "从本轮指令到这条回复记录的历时，包含等待；不代表净工作时间。",
       "relative": {
         "justNow": "刚刚",
         "minutesAgo_other": "{{count}} 分钟前",

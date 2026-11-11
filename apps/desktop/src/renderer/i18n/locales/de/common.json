@@ -13238,7 +13238,8 @@
     },
     "workGroup": {
       "working": "Wird verarbeitet…",
-      "worked": "{{duration}} gearbeitet",
+      "worked": "Dieser Abschnitt dauerte {{duration}}",
+      "durationDescription": "Verstrichene Zeit für diesen Arbeitsabschnitt einschließlich Wartezeiten. Weder die Gesamtdauer der Anfrage noch die reine Arbeitszeit.",
       "workDetails": "Arbeitsdetails",
       "exploration": {
         "read_one": "1 Datei gelesen",
@@ -13340,6 +13341,8 @@
       "turnCostEstimatedValue": "Wert: {{cost}}",
       "turnTokens": "{{tokens}} Token",
       "userTurnCostDetailsTitle": "Anfragedetails",
+      "turnElapsed": "Gesamtdauer {{duration}}",
+      "turnElapsedDescription": "Von der Eingabe für diese Anfrage bis zum gespeicherten Zeitpunkt dieser Antwort, einschließlich Wartezeiten. Keine reine Arbeitszeit.",
       "relative": {
         "justNow": "gerade eben",
         "minutesAgo_one": "Vor {{count}} Minute",

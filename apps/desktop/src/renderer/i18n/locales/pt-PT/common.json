@@ -13345,7 +13345,8 @@
     },
     "workGroup": {
       "working": "A processar…",
-      "worked": "Trabalhou durante {{duration}}",
+      "worked": "Este segmento demorou {{duration}}",
+      "durationDescription": "Tempo decorrido neste segmento de trabalho, incluindo esperas. Não é a duração total do pedido nem o tempo de trabalho efetivo.",
       "workDetails": "Detalhes do trabalho",
       "exploration": {
         "read_one": "Leu 1 ficheiro",
@@ -13454,6 +13455,8 @@
       "turnCostEstimatedValue": "Valor de {{cost}}",
       "turnTokens": "{{tokens}} tokens",
       "userTurnCostDetailsTitle": "Detalhes do pedido",
+      "turnElapsed": "Tempo total {{duration}}",
+      "turnElapsedDescription": "Desde a entrada que iniciou este pedido até à hora registada desta resposta, incluindo esperas. Não é tempo de trabalho efetivo.",
       "relative": {
         "justNow": "agora mesmo",
         "minutesAgo_one": "Há {{count}} minuto",

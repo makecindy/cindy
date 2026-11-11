@@ -13222,7 +13222,8 @@
     },
     "workGroup": {
       "working": "作業中…",
-      "worked": "{{duration}} 作業しました",
+      "worked": "この区間の所要時間 {{duration}}",
+      "durationDescription": "この作業区間の経過時間です。待機時間を含み、依頼全体の経過時間や実作業時間ではありません。",
       "workDetails": "作業内容",
       "exploration": {
         "read_one": "{{count}} ファイルを読み取り",
@@ -13324,6 +13325,8 @@
       "turnCostEstimatedValue": "価値 {{cost}}",
       "turnTokens": "{{tokens}} tokens",
       "userTurnCostDetailsTitle": "リクエストの明細",
+      "turnElapsed": "全体の経過時間 {{duration}}",
+      "turnElapsedDescription": "今回の依頼の入力から、この返信の記録時刻までの経過時間です。待機時間を含み、実作業時間ではありません。",
       "relative": {
         "justNow": "たった今",
         "minutesAgo_other": "{{count}}分前",
