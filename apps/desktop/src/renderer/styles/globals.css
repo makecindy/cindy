@@ -2486,8 +2486,10 @@ html:is([data-theme='cindy-light'], [data-theme='cindy-dark'])[data-wallpaper-ac
    above it (user decision, 2026-11-11).
    On macOS a colorless system blur beneath it adds a fixed frost over the
    adjustable window blur; Windows shares the whole-window backdrop. */
-html[data-theme='cindy-light'] { --sidebar-desktop-shade: rgb(0 0 0 / 0.04); }
-html[data-theme='cindy-dark'] { --sidebar-desktop-shade: rgb(0 0 0 / 0.1); }
+/* Derived from existing roles, so no literal colour: the ink black of the light
+   text role, and the sidebar's own near-black coat in dark. */
+html[data-theme='cindy-light'] { --sidebar-desktop-shade: rgb(from var(--text-primary) r g b / 0.04); }
+html[data-theme='cindy-dark'] { --sidebar-desktop-shade: rgb(from var(--surface-translucent-sidebar) r g b / 0.1); }
 html:is([data-theme='cindy-light'], [data-theme='cindy-dark'])[data-desktop-background='true']
   aside.bg-sidebar:not([data-sidebar-peek-drawer]) {
   background: color-mix(in srgb, var(--surface) var(--desktop-background-veil), transparent);
