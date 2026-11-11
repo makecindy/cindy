@@ -20,6 +20,9 @@ export interface SharedTaskHostState {
 }
 
 export interface SharedTaskListItem extends SharedTaskIdentity { title: string; revision: number }
+/** A local multi-service adapter may mark only the IDs whose authority could
+ * not be read. Absence on a different service is never evidence of closure. */
+export type SharedTaskListing = SharedTaskListItem[] & { unavailableSharedTaskIds?: readonly string[]; authorityIncomplete?: true };
 /** Items this profile hosts carry the local flag so the window can label this device. */
 export type SharedTaskOwnedItem = SharedTaskListItem & { local: boolean };
 export interface SharedTaskCloseResult { closed: string[]; failed: { sharedTaskId: string }[] }
@@ -29,7 +32,9 @@ export interface SharedTaskDetail extends SharedTaskSnapshot {
 }
 export interface SharedTaskApiOptions {
   /** Use Desktop serverApiFetch / Mobile apiFetch; no independent auth or retry stack. */
-  request(path: string, options: { method: 'GET' | 'POST'; body?: unknown; isCurrent(): boolean }): Promise<unknown>;
+  request(path: string, options: { method: 'GET' | 'POST'; body?: unknown; isCurrent(): boolean;
+    /** Host bookkeeping only, never UI success; may observe an outgoing create. */
+    observeResponse?(value: unknown): void }): Promise<unknown>;
   /** Captures account AND region generation; false rejects late success after logout/switch. */
   captureScope(): { isCurrent(): boolean };
 }
@@ -77,13 +82,16 @@ export function createSharedTaskApi(options: SharedTaskApiOptions) {
   async function request(path: string, method: 'GET' | 'POST' = 'GET', body?: unknown, observe?: (value: Record<string, unknown>) => void): Promise<Record<string, unknown>> {
     const scope = options.captureScope();
     if (!scope.isCurrent()) throw new SharedTaskScopeChangedError();
+    let observed = false;
+    const observeResponse = observe ? (value: unknown) => { observe(row(value)); observed = true; } : undefined;
     const value = await options.request(`/api/device-link/shared-tasks${path}`, {
       method, ...(body === undefined ? {} : { body }), isCurrent: () => scope.isCurrent(),
+      ...(observeResponse ? { observeResponse } : {}),
     });
     const parsed = row(value);
     // Creation cleanup must learn the committed ID even after an auth boundary.
     // This observer is host-owned bookkeeping, never a success delivery to UI.
-    observe?.(parsed);
+    if (!observed) observe?.(parsed);
     if (!scope.isCurrent()) throw new SharedTaskScopeChangedError();
     return parsed;
   }
@@ -95,10 +103,10 @@ export function createSharedTaskApi(options: SharedTaskApiOptions) {
       });
       return { sharedTaskId: id(value.sharedTaskId), revision: integer(value.revision) };
     },
-    async list(): Promise<SharedTaskListItem[]> {
+    async list(): Promise<SharedTaskListing> {
       const value = await request('');
       const seen = new Set<string>();
-      return array(value.sharedTasks, 10_000).map((item) => {
+      const result: SharedTaskListing = array(value.sharedTasks, 10_000).map((item) => {
         const value = row(item);
         const sharedTaskId = id(value.sharedTaskId);
         if (seen.has(sharedTaskId)) throw new Error('Duplicate sharedTask');
@@ -106,6 +114,11 @@ export function createSharedTaskApi(options: SharedTaskApiOptions) {
         return { sharedTaskId, sessionId: id(value.sessionId), ownerAccountId: id(value.ownerAccountId),
           hostDeviceId: sharedTaskDeviceId(value.hostDeviceId), title: label(value.title), revision: integer(value.revision) };
       });
+      if (value.unavailableSharedTaskIds !== undefined) Object.defineProperty(result, 'unavailableSharedTaskIds', {
+        value: Object.freeze(array(value.unavailableSharedTaskIds, 10_000).map(id)), enumerable: false,
+      });
+      if (value.authorityIncomplete === true) Object.defineProperty(result, 'authorityIncomplete', { value: true, enumerable: false });
+      return result;
     },
     async get(sharedTaskId: string): Promise<SharedTaskDetail> {
       const value = await request(route(sharedTaskId));

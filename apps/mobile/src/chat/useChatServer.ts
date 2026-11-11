@@ -251,6 +251,8 @@ export function useChatServerGroup(groupId: string, enabled: boolean, threadRoot
   const { t } = useTranslation();
   const identity = `${api.owner}:${groupId}:${threadRootId ?? 'main'}`;
   const active = useRef(identity); active.current = identity;
+  const stopOwner = useMemo(() => ({}), [identity, enabled, focused]);
+  const stopOwnerRef = useRef(stopOwner); stopOwnerRef.current = stopOwner;
   const ledger = useSyncExternalStore(mobileDurableOutbox.subscribe, mobileDurableOutbox.getSnapshot);
   const pendingAccount = enabled && api.current() ? getMobileAuthOwner().accountKey : null;
   const pending = useMemo(() => ledger.filter(row => pendingAccount !== null && row.accountId === pendingAccount
@@ -447,8 +449,12 @@ export function useChatServerGroup(groupId: string, enabled: boolean, threadRoot
       }
     }
     if (action === 'stop') {
+      if (!enabled || !focused || !valid() || threadRootId) throw new Error('OWNER_CHANGED');
+      if (input?.scope !== undefined && input.scope !== 'all') throw new Error('INVALID_PARAMS');
+      const generation = accessGeneration.current;
+      const current = () => valid() && stopOwnerRef.current === stopOwner && accessGeneration.current === generation;
       const operationId = (await import('expo-crypto')).randomUUID();
-      try { await api.client.stop(groupId, operationId); } finally { if (valid()) reload(); }
+      try { await api.client.stop(groupId, operationId, input?.scope as 'all' | undefined, current); } finally { if (valid()) reload(); }
       return { effects: [] };
     }
     if (action === 'dissolve' || action === 'leave' || action === 'hide') {

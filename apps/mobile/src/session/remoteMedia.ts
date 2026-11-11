@@ -1,4 +1,5 @@
 import { peerMediaUri, peerMediaExpiry, releasePeerMedia } from "@/device-link/peerFileRegistry";
+import { isLocalAgentNetMediaReceipt } from '@/device-link/agentNetLocalMediaReceipt';
 import type { NormalizedToolMedia } from "@/session/messageNormalize";
 import {
   isPayloadDesktopLocalMediaUrl,
@@ -36,6 +37,8 @@ export interface MobileRemoteMediaFetchResult {
 export interface MobileRemoteMediaPresignResult {
   getUrl: string;
   expiresAt: string;
+  /** Local-only receipt; accepted only with the native adapter's object identity. */
+  protectLocalFile?(): () => void;
 }
 
 export interface MobileResolvedRemoteMedia {
@@ -308,6 +311,7 @@ export async function resolveMobileRemoteMedia(
     });
   return {
     url: signed.getUrl,
+    ...(isLocalAgentNetMediaReceipt(signed) ? { protectLocalFile: signed.protectLocalFile } : {}),
     ossKey: fetched.ossKey,
     mimeType: fetched.mimeType,
     size: fetched.size,
@@ -369,7 +373,7 @@ function isValidPresignResult(value: MobileRemoteMediaPresignResult): boolean {
   return (
     !!value &&
     typeof value.getUrl === "string" &&
-    value.getUrl.startsWith("http") &&
+    (value.getUrl.startsWith("http") || (isLocalAgentNetMediaReceipt(value) && value.getUrl.startsWith('file://'))) &&
     typeof value.expiresAt === "string" &&
     Number.isFinite(Date.parse(value.expiresAt))
   );

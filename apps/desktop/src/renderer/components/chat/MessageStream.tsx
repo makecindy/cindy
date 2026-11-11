@@ -6,7 +6,7 @@ import { scrollRangeIntoView } from '@/lib/scrollRangeIntoView';
 import { historyAfter } from './historyAfter';
 import { readGhostCardSupersededBy, readMailCard } from '@cindy/maker-shared/ghost-card-form';
 import { animateFocusScroll } from './animateFocusScroll';
-import { botProcessItems, latestSettledAssistantMs, tailReplyClientIds } from '@/features/bots/botConversationPresentation';
+import { botProcessItems, botTurnContinuations, latestSettledAssistantMs, tailReplyClientIds } from '@/features/bots/botConversationPresentation';
 import { isVisibleVoiceCallMessage } from '@/features/bots/voice/voiceCallPresentation';
 import { MessageViewport, type MessageViewportApi } from './MessageViewport';
 import { PAGE_TEXT_NAVIGATION_EVENT } from '@/lib/pageTextAccess';
@@ -332,6 +332,7 @@ function hasNestedScrollableAncestorThatCanScrollDown(
 import { UserMessage } from './UserMessage';
 import { AssistantMessage } from './AssistantMessage';
 import { MessageSourceLabels } from './MessageSourceLabels';
+import { attachBotStartedTasks, BotStartedTasks, collectBotStartedTasks } from './BotStartedTasks';
 import { BotMessageTimelineHeader } from './BotMessageTimelineHeader';
 import { AskUserQuestionBubble } from './AskUserQuestionBubble';
 import type { ErrorDiagnosisSource } from '@/lib/errorDiagnosisPrompt';
@@ -1893,6 +1894,12 @@ export function buildRenderItems(
     }
 
     const slice = originalTurnSlice(lo, hi);
+    if (opts?.botSessionId) {
+      const startedTasks = collectBotStartedTasks(slice);
+      if (startedTasks.length > 0) {
+        items.push({ type: 'bot_started_tasks', key: `started-tasks-${messages[lo].clientId}`, tasks: startedTasks });
+      }
+    }
     const generatedByPath = new Map<string, GeneratedFileRef>();
     if (opts?.botSessionId) {
       for (const changeSet of changeSets) {
@@ -1980,11 +1987,9 @@ export function buildRenderItems(
       turnStartIdx = i;
     }
 
-    // ask_user: pending lives in the bottom input overlay; expired/unanswered
-    // questions have no user selection to show. Only the answered state surfaces
-    // in the stream — rendered by AskUserQuestionBubble so the choice the user
-    // made stays visible after the agent moves on.
-    if (msg.role === 'ask_user' && msg.askUserStatus !== 'answered') {
+    // Pending questions live in the input overlay. Settled questions preserve
+    // their prompt and answer, withdrawal reason, or unanswered status in history.
+    if (msg.role === 'ask_user' && msg.askUserStatus !== 'answered' && msg.askUserStatus !== 'expired') {
       i++;
       continue;
     }
@@ -2880,7 +2885,7 @@ export const WorkGroupRenderItemView = memo(function WorkGroupRenderItemView({
   item: Extract<RenderItem, { type: 'work_group' }>;
   context: WorkGroupRenderContext;
   compact: boolean;
-  /** 伙伴聊天：过程区与最终回复各显示一个头像，正文保持同列。 */
+  /** 伙伴聊天：同一轮开头显示头像，后续行仅保留正文列缩进。 */
   companionAvatar?: ReactNode;
 }) {
   // 完成态外层时间线可包含内层 work_group。递归只负责形状映射,
@@ -3369,7 +3374,7 @@ export function MessageStream({
     );
     return appendPendingQueueItems(
       simplifiedBotConversation
-        ? botProcessItems(grouped, isSessionStreaming, botTailReplyIds)
+        ? attachBotStartedTasks(botProcessItems(grouped, isSessionStreaming, botTailReplyIds))
         : grouped,
       pendingMessages ?? [],
       messages,
@@ -3387,6 +3392,10 @@ export function MessageStream({
     botTailReplyIds,
   ]);
   const renderMetadataItems = renderMetadataProjection(allRenderItems);
+  const botContinuationKeys = useMemo(
+    () => simplifiedBotConversation ? botTurnContinuations(allRenderItems) : new Set<string>(),
+    [allRenderItems, simplifiedBotConversation],
+  );
   const botMessageTimeGroups = useMemo(() => {
     if (!simplifiedBotConversation) return new Map<string, number>();
     return collectBotMessageTimeGroups(
@@ -3521,7 +3530,10 @@ export function MessageStream({
     const items = itemsRef.current;
     if (!container || !items) return null;
     const cTop = container.getBoundingClientRect().top;
-    const children = items.children;
+    const indexedRow = messageViewportRef.current?.getViewportTopRow();
+    // The viewport connects during mount; retain the DOM fallback until its
+    // index is available. Normal scrolling reads only the indexed visible row.
+    const children = indexedRow ? [indexedRow] : items.children;
     for (let i = 0; i < children.length; i++) {
       const itemElement = children[i] as HTMLElement;
       const rect = itemElement.getBoundingClientRect();
@@ -6325,13 +6337,11 @@ export function MessageStream({
     previousLocalFileRefsRef.current = localFileRefs;
   }, [localFileRefs]);
 
-  // 成果与回复正文同列，只占头像宽度；过程区单独显示伙伴头像。
+  // 后续正文及成果沿用头像列宽，不再挂载一个隐藏头像。
   const botReplyColumnSpacer = useMemo(
     () =>
       simplifiedBotConversation && assistantAvatar ? (
-        <span aria-hidden="true" className="invisible">
-          {assistantAvatar}
-        </span>
+        <span aria-hidden="true" className="block w-7" />
       ) : undefined,
     [assistantAvatar, simplifiedBotConversation],
   );
@@ -6602,6 +6612,13 @@ export function MessageStream({
                       );
                     }
 
+                    if (item.type === 'bot_started_tasks') {
+                      const tasks = <BotStartedTasks tasks={item.tasks} hostSessionId={sessionId} />;
+                      return botReplyColumnSpacer
+                        ? withAssistantAvatar(botReplyColumnSpacer, tasks, item.key)
+                        : <div key={item.key} data-render-item-key={item.key}>{tasks}</div>;
+                    }
+
                     if (item.type === 'generated_files') {
                       return (
                         <GeneratedFilesCard
@@ -6663,7 +6680,9 @@ export function MessageStream({
                           // 伙伴聊天与普通任务同一套工作过程：运行中露最近 5 条活动与计时，
                           // 组头按内容宽；最终答复后保留折叠过程，按需展开。
                           compact={false}
-                          companionAvatar={simplifiedBotConversation ? assistantAvatar : undefined}
+                          companionAvatar={simplifiedBotConversation
+                            ? botContinuationKeys.has(item.key) ? botReplyColumnSpacer : assistantAvatar
+                            : undefined}
                         />
                       );
                     }
@@ -6783,7 +6802,7 @@ export function MessageStream({
                         isLastMessage={msg.clientId === lastMessageClientId}
                         isActiveError={msg.role === 'error' && msg.clientId === activeErrorClientId}
                         localFileRefs={localFileRefs}
-                        assistantAvatar={assistantAvatar}
+                        assistantAvatar={botContinuationKeys.has(item.key) ? botReplyColumnSpacer : assistantAvatar}
                         simplifiedBotConversation={simplifiedBotConversation}
                         starterOptionsLocked={Boolean(lastUserMessageClientId)}
                         sessionSource={sessionSource}
@@ -7170,6 +7189,7 @@ const MessageItem = memo(function MessageItem({
             botStarterOptions={message.botStarterOptions}
             starterOptionsLocked={starterOptionsLocked}
             botTaskResults={message.turnCompleted === true ? message.botTaskResults : undefined}
+            botStartedTasks={message.botStartedTasks}
           />
         </>,
       );

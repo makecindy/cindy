@@ -20,7 +20,7 @@ import type { Rectangle, WebContents } from 'electron';
 
 import { markAppearanceSettingsReaderWindow } from '../appearance-settings-reader.js';
 import { scheduleMainAppPresenceRestore } from '../appPresence.js';
-import { getResolvedMainLocale } from '../i18n.js';
+import { getResolvedMainLocale } from '../i18n.desktop.js';
 import { createLogger } from '../logger.js';
 import { MAKER_PUSH } from '../maker-ipc/channels.js';
 import {

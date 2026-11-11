@@ -32,7 +32,9 @@ export async function resolve(specifier, context, nextResolve) {
     return resolved;
   }
   const bare = wantsRaw ? specifier.slice(0, -'?raw'.length) : specifier;
-  const target = new URL(bare, context.parentURL);
+  const target = bare.startsWith('.') || bare.startsWith('/')
+    ? new URL(bare, context.parentURL)
+    : new URL((await nextResolve(bare, context)).url);
   if (target.protocol !== 'file:') return nextResolve(specifier, context);
   return { url: `cindy-raw:${fileURLToPath(target)}`, shortCircuit: true };
 }

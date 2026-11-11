@@ -85,6 +85,52 @@ function setup(mode: 'cloud' | 'local' | 'signed-out', passive = false) {
 }
 
 describe('authentication does not wait for optional plugin provisioning', () => {
+  it.each([false, true])('settles the startup boundary push even with notify=false (teardown fails: %s)', async (fails) => {
+    // The main window sees the pending push while its initialize IPC is in flight.
+    // Its auth service deliberately ignores the later IPC result, so Main must
+    // close that push boundary on both success and rollback.
+    let mode = 'signed-out';
+    let pending = false;
+    const projections: Array<{ mode: string; pending: boolean }> = [];
+    const deps = {
+      LOCAL_DATA_OWNER_ID: 'local-v1',
+      getActiveAppSession: () => ({ mode, dataOwnerId: null }),
+      isPassiveSharedUserDataInstance: () => false,
+      withGhostSkillProjectionOwnerCommit: async (hooks: {
+        prepareTransition: (value: { ownerChanged: boolean }) => Promise<void>;
+        prepareCommit: () => Promise<void>;
+        commit: () => void;
+      }) => {
+        await hooks.prepareTransition({ ownerChanged: true });
+        await hooks.prepareCommit();
+        hooks.commit();
+      },
+      notifyRendererAuthBoundaryPending: () => projections.push({ mode: 'signed-out', pending: true }),
+      enterOwnerChangeShellPending: () => { pending = true; },
+      leaveOwnerChangeShellPending: () => { pending = false; },
+      beginAppSessionBoundary: () => () => {},
+      authSessionTeardown: async () => { if (fails) throw new Error('teardown unavailable'); },
+      clearAuth: vi.fn(),
+      commitActiveAppSession: (nextMode: string) => { mode = nextMode; },
+      notifyRenderer: () => projections.push({ mode, pending }),
+      notifyAuthListeners: vi.fn(),
+      requestStableOwnerPostCommit: vi.fn(),
+    };
+    const compiled = transpileModule(
+      `${productionFunction('withAccountFreeOwnerCommit')}\nreturn withAccountFreeOwnerCommit;`,
+      { compilerOptions: { target: ScriptTarget.ES2022 } },
+    ).outputText;
+    const commit = new Function(...Object.keys(deps), compiled)(...Object.values(deps));
+    const completion = commit({ reason: 'cold-start-local-recovery', nextMode: 'local', notify: false });
+    if (fails) await expect(completion).rejects.toThrow('teardown unavailable');
+    else await completion;
+    expect(projections).toEqual([
+      { mode: 'signed-out', pending: true },
+      { mode: fails ? 'signed-out' : 'local', pending: false },
+    ]);
+    expect(deps.notifyAuthListeners).not.toHaveBeenCalled();
+  });
+
   it('returns through the real startup IPC while the owner task remains pending', async () => {
     const run = setup('cloud');
     const bootstrap = readFileSync(new URL('../bootstrap-electron.ts', import.meta.url), 'utf8');

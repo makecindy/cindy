@@ -8,8 +8,10 @@ import path from 'node:path';
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 
 const imageResolve = vi.hoisted(() => vi.fn());
+const ownerScope = vi.hoisted(() => ({ value: 'owner-a' }));
+vi.mock('../../appSessionState.js', () => ({ activeOwnerScopeKey: () => ownerScope.value }));
 const videoResolve = vi.hoisted(() => vi.fn());
-vi.mock('../../imageCacheStore.js', () => ({ resolveSafe: imageResolve }));
+vi.mock('../../imageCacheStore.desktop.js', () => ({ resolveSafe: imageResolve }));
 vi.mock('../../videoCacheStore.js', () => ({ resolveSafe: videoResolve }));
 
 const uploadLocalFile = vi.hoisted(() => vi.fn());
@@ -52,6 +54,7 @@ async function codeOf(fn: () => Promise<unknown>): Promise<string> {
 }
 
 beforeEach(() => {
+  ownerScope.value = 'owner-a';
   vi.clearAllMocks();
   assertSharedTaskMedia.mockReset();
   __testing.uploadCache.clear();
@@ -77,6 +80,18 @@ beforeEach(() => {
     planModeEnabled: false,
     remoteHostId: 'host-1',
   });
+});
+
+// A delayed source lookup must not upload owner A's file using owner B's credentials.
+// Minimal failure: switch owner while the existing image resolver is pending (unit tier).
+it('rejects an account switch before uploading or returning private media', async () => {
+  realpathMock.mockImplementationOnce(async (p: string) => { ownerScope.value = 'owner-b'; return p; });
+  await expect(fetchLocalMediaToOss({ url: 'xdt-file://local/?path=%2Ftmp%2Fprivate.pdf' })).rejects.toThrow('DEVICE_LINK_SCOPE_CHANGED');
+  expect(uploadLocalFile).not.toHaveBeenCalled();
+  ownerScope.value = 'owner-a';
+  imageResolve.mockReturnValue({ absPath: '/cache/a.png', mimeType: 'image/png' });
+  uploadLocalFile.mockImplementationOnce(async () => { ownerScope.value = 'owner-b'; return { key: 'old-key', size: 42, contentType: 'image/png' }; });
+  await expect(fetchLocalMediaToOss({ url: 'xdt-image://sess/a.png' })).rejects.toThrow('DEVICE_LINK_SCOPE_CHANGED');
 });
 
 it('reports a missing Host source without uploading or exposing its filesystem path', async () => {
@@ -213,7 +228,7 @@ describe('fetchLocalMediaToOss — scheme 路由', () => {
     imageResolve.mockReturnValue({ absPath: '/cache/a.png', mimeType: 'image/png' });
     const r = await fetchLocalMediaToOss({ url: 'xdt-image://sess/a.png' });
     expect(imageResolve).toHaveBeenCalledWith('xdt-image://sess/a.png');
-    expect(uploadLocalFile).toHaveBeenCalledWith('/cache/a.png', { contentType: 'image/png' });
+    expect(uploadLocalFile).toHaveBeenCalledWith('/cache/a.png', { contentType: 'image/png', assertCurrent: expect.any(Function) });
     expect(r).toEqual({ ossKey: 'cindy/device-link/u/uuid.ext', mimeType: 'image/png', size: 42 });
   });
 
@@ -249,7 +264,7 @@ describe('fetchLocalMediaToOss — scheme 路由', () => {
   it('xdt-file://local/?path= → 绝对路径,mime 由上传按 ext 推断(extHint 取请求扩展名)', async () => {
     const filePath = path.resolve('/tmp/x.pdf');
     await fetchLocalMediaToOss({ url: 'xdt-file://local/?path=%2Ftmp%2Fx.pdf' });
-    expect(uploadLocalFile).toHaveBeenCalledWith(filePath, { extHint: '.pdf' });
+    expect(uploadLocalFile).toHaveBeenCalledWith(filePath, { extHint: '.pdf', assertCurrent: expect.any(Function) });
     expect(imageResolve).not.toHaveBeenCalled();
     expect(videoResolve).not.toHaveBeenCalled();
   });
@@ -257,7 +272,7 @@ describe('fetchLocalMediaToOss — scheme 路由', () => {
   it('xdt-audio://local/?path= → 同 file', async () => {
     const audioPath = path.resolve('/tmp/s.mp3');
     await fetchLocalMediaToOss({ url: 'xdt-audio://local/?path=%2Ftmp%2Fs.mp3' });
-    expect(uploadLocalFile).toHaveBeenCalledWith(audioPath, { extHint: '.mp3' });
+    expect(uploadLocalFile).toHaveBeenCalledWith(audioPath, { extHint: '.mp3', assertCurrent: expect.any(Function) });
   });
 
   it('SSH xdt-file → 远程磁盘缓存→上传，不触发本机 realpath', async () => {
@@ -278,6 +293,7 @@ describe('fetchLocalMediaToOss — scheme 路由', () => {
     expect(realpathMock).not.toHaveBeenCalled();
     expect(uploadLocalFile).toHaveBeenCalledWith('/cache/ssh/plot.png', {
       contentType: 'image/png',
+      assertCurrent: expect.any(Function),
     });
     expect(result).toEqual({
       ossKey: 'cindy/device-link/u/uuid.ext',
@@ -417,7 +433,7 @@ describe('fetchLocalMediaToOss — 敏感目录黑名单(与 xdt-file 协议同�
     realpathMock.mockResolvedValue(realTarget);
     await fetchLocalMediaToOss({ url: 'xdt-file://local/?path=%2Ftmp%2Fx.pdf' });
     // 字节读 realpath,但语义扩展名取请求路径(此处两者一致)
-    expect(uploadLocalFile).toHaveBeenCalledWith(realTarget, { extHint: '.pdf' });
+    expect(uploadLocalFile).toHaveBeenCalledWith(realTarget, { extHint: '.pdf', assertCurrent: expect.any(Function) });
   });
 
   it('symlink 目标扩展名不同 → 上传按请求 URL 的扩展名(不因 realpath 目标退成 octet-stream)', async () => {
@@ -426,6 +442,7 @@ describe('fetchLocalMediaToOss — 敏感目录黑名单(与 xdt-file 协议同�
     await fetchLocalMediaToOss({ url: 'xdt-file://local/?path=%2Ftmp%2Ffoo.mp3' });
     expect(uploadLocalFile).toHaveBeenCalledWith(path.resolve('/mnt/blobstore/abc123'), {
       extHint: '.mp3',
+      assertCurrent: expect.any(Function),
     });
   });
 

@@ -14,7 +14,7 @@ import { CURRENT_CINDY_REGION } from '../../shared/brandRegion.js';
 import { activeOwnerScopeKey } from '../appSessionState.js';
 import { getCurrentMembershipDisplayName } from '../authManager';
 import { createLogger } from '../logger.js';
-import { serverApiFetch } from '../serverApiClient';
+import { serverApiFetch } from '../serverApiClient.desktop';
 import { getClientEndpoint } from '../clientEndpointsService';
 import type { IssueConfirmBridge } from './issueConfirmBridge';
 import { getAppCapabilities } from '../appCapabilities.js';

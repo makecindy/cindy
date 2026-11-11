@@ -13,7 +13,7 @@ import { ipcMain } from 'electron';
 
 import { createLogger } from '../logger.js';
 import { previewRewindAtMessage, commitRewindAtMessage, type RewindCommitOptions } from '../maker-orchestration/rewind.js';
-import { drainPersistQueue } from '../messagePersistBroadcaster.js';
+import { drainPersistQueue } from '../messagePersistBroadcaster.desktop.js';
 import { getGoalController } from '../goal-host/index.js';
 import { captureDataOwnerBroadcastScope } from '../device-link/broadcast-tap.js';
 import { broadcastSubagentRunsInvalidated } from '../localDb/ipc/subagentRuns.js';
@@ -33,8 +33,6 @@ import { requireString, throwIpcError } from '../utils/ipcValidate.js';
 import { MAKER_INVOKE } from './channels.js';
 import { withSessionInputStoppedForRewind } from './register.js';
 import { agentHandoffPending } from './agentHandoffPendingSingleton.js';
-import { ownerScopedUserDataPath } from '../appSessionState.js';
-import { pruneWithdrawnWorkingMemoryForSession } from './botWorkingMemory.js';
 
 const log = createLogger('maker-ipc/rewind');
 const STOPPED_REWIND_RETRY_MS = 100;
@@ -72,9 +70,6 @@ async function commitAfterPersistBarrier(
   return withSendToSessionLock(sessionId, async () => {
     const result = await commitRewindAtMessage(sessionId, clientId, opts);
     advanceSessionRewindGeneration(sessionId);
-    // 被撤回轮次产生的伙伴工作记忆条目一并清掉(与删除路径同一失效模式);提交成功
-    // 后按数据库现状对账,失败不影响 rewind,渲染时的统一过滤仍兜底。
-    await pruneWithdrawnWorkingMemoryForSession(sessionId, ownerScopedUserDataPath()).catch(() => 0);
     return result;
   });
 }

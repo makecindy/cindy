@@ -1103,6 +1103,31 @@ export function HookConnectionsSection({ companion }: { companion?: { id: string
     hook.lastError === 'not logged in'
       ? t('settings.remoteControl.hook.loginRequired')
       : hook.lastError;
+  /** A connected server socket is usable only after the account is linked. */
+  const connectionBadge = (
+    status: SlackHookView['status'],
+    linked: boolean,
+    linking: boolean,
+    unboundLabel: string,
+  ): { tone: ChannelBadgeTone; label: string } => {
+    if (status === 'connected' && !linked) {
+      return linking
+        ? { tone: 'progress', label: t('settings.remoteControl.hook.authorizing') }
+        : { tone: 'attention', label: unboundLabel };
+    }
+    return {
+      tone: transportBadgeTone(status),
+      label: t(`settings.remoteControl.hook.status.${status}`),
+    };
+  };
+  const slackBadge = connectionBadge(
+    hook.enabled ? hook.status : 'disabled',
+    toggleChecked,
+    hook.enabled && (bindingState === 'pending' || hook.pendingBind?.state === 'pending'),
+    t(isNotInstalled
+      ? 'settings.remoteControl.hook.notInstalled.status'
+      : 'settings.remoteControl.hook.statusUnbound'),
+  );
   /**
    * provider-neutral 渠道卡(Telegram / X)的派生展示状态。i18n 前缀按
    * provider 取 settings.remoteControl.hook.<provider>.*, 两块 key 结构平行。
@@ -1129,7 +1154,7 @@ export function HookConnectionsSection({ companion }: { companion?: { id: string
     // Keep it on while the provider is waiting for confirmation so clicking it
     // is an unsurprising cancel/disable action.
     const toggleChecked = view.enabled;
-    /** 状态徽章: 只承载传输/能力状态, 绑定细节走摘要与展开区。 */
+    /** Show connection/capability failures first; a live socket alone is not linked. */
     const badge: { tone: ChannelBadgeTone; label: string } = !view.enabled
       ? { tone: 'attention', label: t(`settings.remoteControl.hook.${provider}.status.disabled`) }
       : view.status === 'error'
@@ -1148,13 +1173,14 @@ export function HookConnectionsSection({ companion }: { companion?: { id: string
                     : `settings.remoteControl.hook.${provider}.status.unavailable`,
                 ),
               }
-            : {
-                tone: transportBadgeTone(view.status),
-                label: t(`settings.remoteControl.hook.status.${view.status}`),
-              };
+            : connectionBadge(
+                view.status, confirmed, inProgress,
+                t(`settings.remoteControl.hook.${provider}.status.none`),
+              );
     /** 绑定态一行(收起行摘要与展开区共用文案)。 */
     const bindingLine =
-      view.enabled && view.available && !view.capabilityPending && view.status === 'connected'
+      view.enabled && view.available && !view.capabilityPending && view.status === 'connected' &&
+      state !== 'none' && state !== 'revoked'
         ? confirmed
           ? t(`settings.remoteControl.hook.${provider}.status.confirmed`, {
               user: binding?.principalName ?? binding?.principalId ?? '',
@@ -1763,10 +1789,8 @@ export function HookConnectionsSection({ companion }: { companion?: { id: string
         routeSummary={slackSummary}
         status={
           <ChannelStatusBadge
-            tone={transportBadgeTone(hook.status)}
-            label={t('settings.remoteControl.hook.transportStatus', {
-              status: t(`settings.remoteControl.hook.status.${hook.status}`),
-            })}
+            tone={slackBadge.tone}
+            label={slackBadge.label}
           />
         }
         headerAction={
