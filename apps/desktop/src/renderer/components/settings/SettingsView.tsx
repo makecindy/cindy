@@ -56,8 +56,7 @@ import { SetupMigrationSection } from './SetupMigrationSection';
 import { useAuth } from '@/contexts/AuthContext';
 import { useLocale } from '@/hooks/useLocale';
 import { useWallpaperSettings } from '@/hooks/useWallpaperSettings';
-import { useTheme } from '@/hooks/useTheme';
-import { DEFAULT_FAMILY_ID } from '@/themes/families';
+import { useIsCindyTheme } from '@/hooks/useIsCindyTheme';
 import { isSceneWallpaper } from '@/lib/wallpaper';
 import { isCustomWallpaperVideo } from '../../../shared/appearanceSettings';
 import { getLastWorkingDir, subscribeToLastWorkingDir } from '@/state/lastWorkingDir';
@@ -117,10 +116,10 @@ export function SettingsView() {
 function SettingsViewContent() {
   const { locale } = useLocale();
   const { wallpaperId, customWallpaperUrl } = useWallpaperSettings();
-  const { familyId } = useTheme();
+  const isCindyTheme = useIsCindyTheme();
   // Mirrors WallpaperSection: the sidebar transparency row only mounts for the CINDY
   // theme family with a wallpaper selected, and search must not offer a dead hit.
-  const sidebarTransparencyAvailable = familyId === DEFAULT_FAMILY_ID && wallpaperId !== 'none';
+  const sidebarTransparencyAvailable = isCindyTheme && wallpaperId !== 'none';
   const wallpaperMotionAvailable = isSceneWallpaper(wallpaperId) ||
     (wallpaperId === 'custom' && isCustomWallpaperVideo(customWallpaperUrl));
   const voiceModelSelection = useVoiceInputModelSelection();

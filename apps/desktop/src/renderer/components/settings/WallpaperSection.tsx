@@ -12,8 +12,7 @@ import { Slider } from '@/components/ui/slider';
 import { Tip } from '@/components/ui/tooltip';
 import { cn } from '@/lib/utils';
 import { useWallpaperSettings } from '@/hooks/useWallpaperSettings';
-import { useTheme } from '@/hooks/useTheme';
-import { DEFAULT_FAMILY_ID } from '@/themes/families';
+import { useIsCindyTheme } from '@/hooks/useIsCindyTheme';
 import { getBuiltinWallpaperPreview, isCdnWallpaper, isSceneWallpaper } from '@/lib/wallpaper';
 import {
   APPEARANCE_LIMITS,
@@ -27,7 +26,7 @@ import { SETTINGS_HINT, SettingsBlock, SettingsCard, SettingsRow, SettingsSectio
 
 export function WallpaperSection() {
   const { t } = useTranslation();
-  const { familyId } = useTheme();
+  const isCindyTheme = useIsCindyTheme();
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
   const feedbackId = useId();
@@ -61,8 +60,7 @@ export function WallpaperSection() {
   // The frosted sidebar is a CINDY-theme surface, and the rule this control drives
   // only applies while a wallpaper is active; elsewhere it would persist a value with
   // no visible effect, so the row stays hidden there.
-  const sidebarTransparencyAvailable =
-    familyId === DEFAULT_FAMILY_ID && wallpaperId !== 'none';
+  const sidebarTransparencyAvailable = isCindyTheme && wallpaperId !== 'none';
   const retiredInUse = RETIRED_WALLPAPER_IDS.find((id) => id === wallpaperId);
   const pickerIds: readonly WallpaperId[] = retiredInUse
     ? [SELECTABLE_WALLPAPER_IDS[0], retiredInUse, ...SELECTABLE_WALLPAPER_IDS.slice(1)]
