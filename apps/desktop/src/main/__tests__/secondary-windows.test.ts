@@ -9,6 +9,7 @@ vi.mock('electron', () => ({
   BrowserWindow: class {
     webContents = { on: vi.fn(), once: vi.fn(), setWindowOpenHandler: vi.fn() };
     once = vi.fn();
+    hookWindowMessage = vi.fn();
     loadURL = mocks.loadURL;
     loadFile = mocks.loadFile;
   },

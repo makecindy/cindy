@@ -94,6 +94,21 @@ export const providersSettings = defineSettings({
     keywordKeys: ['settings.providers.models.advanced.displayName'],
     sectionKey: 'settings.sections.providers',
   },
+  videoApi: {
+    id: 'providers.videoApi',
+    tab: 'providers',
+    targetId: 'settings-panel-providers',
+    titleKey: 'settings.providers.custom.fields.openaiVideos',
+    sectionKey: 'settings.tabs.providers',
+    keywordKeys: [
+      'settings.providers.custom.fields.openaiVideosHint',
+      'settings.providers.custom.fields.minimaxVideos',
+      'settings.providers.custom.fields.minimaxVideosHint',
+      'settings.providers.custom.fields.xaiVideos',
+      'settings.providers.custom.fields.xaiVideosHint',
+    ],
+    aliases: ['视频接口', '视频生成', 'MiniMax-H3', '/v1/videos', 'video API', 'video generation'],
+  },
   addProvider: {
     id: 'settings.providers.addProvider',
     fallbackTargetId: 'settings-panel-providers',

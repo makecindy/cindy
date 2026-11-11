@@ -7,10 +7,12 @@ import { homedir } from 'node:os';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import type { SubscriptionPoolConfig } from '../../../shared/subscriptionAccounts.js';
 const h = vi.hoisted(() => ({
-  handlers: new Map<string, (event: unknown, arg: unknown) => Promise<unknown>>(),
+  handlers: new Map<string, (event: unknown, arg: unknown, model?: unknown) => Promise<unknown>>(),
   context: null as null | { sharedTask?: object },
   trusted: true,
   execute: vi.fn(),
+  availability: vi.fn(),
+  sessionRead: vi.fn(),
   owner: 'owner-a',
   generation: 1,
   bindings: {} as Record<string, { providerId: 'anthropic' | 'openai'; accountId: string }>,
@@ -73,8 +75,10 @@ vi.mock('../service.js', () => ({ executeSubscriptionAccountCommand: h.execute }
 vi.mock('../runtime.js', () => ({
   onSubscriptionAccountsChanged: vi.fn(),
   readSubscriptionPoolUsage: vi.fn(async () => undefined),
+  readSubscriptionPoolModelAvailability: h.availability,
   readLegacySubscriptionPoolUsage: vi.fn(async () => undefined),
   readSubscriptionSessionUsage: vi.fn(async () => undefined),
+  readSubscriptionSessionAccount: h.sessionRead,
 }));
 import { registerSubscriptionAccountsIpc } from '../ipc.js';
 import { accountDirectory, accountOwnerPrefix, migrateLegacyCodexAccounts, readBoundClaudeConfigDir, readLegacyCodexAccountId } from '../store.js';
@@ -95,6 +99,8 @@ beforeEach(() => {
   h.remoteAllowed.clear();
   h.remoteModels = null;
   h.execute.mockReset().mockResolvedValue({ accounts: [] });
+  h.availability.mockReset().mockResolvedValue(true);
+  h.sessionRead.mockReset().mockResolvedValue({ providerId: 'anthropic', state: 'legacy' });
 });
 
 describe('legacy Codex account upgrade', () => {
@@ -170,6 +176,26 @@ describe('legacy Codex account upgrade', () => {
   });
 });
 describe('subscription management boundary', () => {
+  // #9833, unit: new optional model query keeps old caller shape and the
+  // owner-only boundary. An aggregate/guest reply cannot authorize recovery.
+  // PR #9837 review: local grants cannot authorize a remote cooldown recovery.
+  it('supports model availability without changing old quota replies or admitting guests', async () => {
+    const quota = h.handlers.get('maker:subscription-pool:quota')!;
+    expect(await quota({}, 'anthropic')).toEqual({ providerId: 'anthropic', pooled: false, usage: null });
+    h.availability.mockImplementation(async (_provider, _model, options) => options?.remote !== true);
+    expect(await quota({}, 'openai', 'gpt-model')).toEqual({ providerId: 'openai', model: 'gpt-model', available: true });
+    h.context = {};
+    expect(await quota({}, 'openai', 'gpt-model')).toEqual({ providerId: 'openai', model: 'gpt-model', available: false });
+    for (const model of ['', ' ', 1, {}, 'x'.repeat(513)])
+      await expect(quota({}, 'anthropic', model)).rejects.toThrow('INVALID_PARAMS');
+    h.context = { sharedTask: {} };
+    await expect(quota({}, 'anthropic', 'sonnet')).rejects.toThrow('PERMISSION_DENIED');
+    h.context = null;
+    h.trusted = false;
+    await expect(quota({}, 'anthropic', 'sonnet')).rejects.toThrow('untrusted');
+    expect(h.availability).toHaveBeenCalledTimes(2);
+  });
+
   // #9517, unit: CLI provider-managed auth must survive the real handler and
   // renderer decoder as actionable copy, not the generic CLI/network failure.
   it('reports provider-managed authentication through the owner IPC error protocol', async () => {
@@ -178,8 +204,9 @@ describe('subscription management boundary', () => {
     expect(mapIpcErrorToI18nKey(error)).toBe('ipcError.SUBSCRIPTION_CODEX_PROVIDER_AUTH');
   });
   it('admits the trusted owner and paired owner remote context, never an untrusted frame or shared-task guest', async () => {
-    const command = { action: 'read', providerId: 'anthropic' };
+    const command = { action: 'read', providerId: 'anthropic', taskId: 'task-one' };
     await invoke(command);
+    expect(h.execute).toHaveBeenLastCalledWith(command);
     h.trusted = false;
     await expect(invoke(command)).rejects.toThrow('untrusted');
     h.context = {};
@@ -187,6 +214,30 @@ describe('subscription management boundary', () => {
     h.context = { sharedTask: {} };
     await expect(invoke(command)).rejects.toThrow('PERMISSION_DENIED');
     expect(h.execute).toHaveBeenCalledTimes(2);
+  });
+  // 2026-11-11 (unit, protocol): the read-only task-account query shares the owner channel. It
+  // must keep that gate (identity is owner-only), validate ids, and never reach the management
+  // executor; older hosts reject the unknown action, which callers treat as "keep old readers".
+  it('serves the task-account read to the owner only, with validated ids', async () => {
+    const query = { action: 'session', providerId: 'openai', sessionId: 'task-1', nativeSessionId: 'sdk-1' };
+    await expect(invoke(query)).resolves.toEqual({ providerId: 'anthropic', state: 'legacy' });
+    expect(h.sessionRead).toHaveBeenCalledExactlyOnceWith('openai', query);
+    h.context = {};
+    await invoke({ action: 'session', providerId: 'anthropic', nativeSessionId: 'sdk-1' });
+    h.context = { sharedTask: {} };
+    await expect(invoke(query)).rejects.toThrow('PERMISSION_DENIED');
+    h.context = null;
+    for (const bad of [
+      { action: 'session', providerId: 'anthropic' },
+      { action: 'session', providerId: 'anthropic', sessionId: '' },
+      { action: 'session', providerId: 'anthropic', sessionId: 'x'.repeat(257) },
+      { action: 'session', providerId: 'anthropic-second', sessionId: 'task-1' },
+    ])
+      await expect(invoke(bad)).rejects.toThrow('INVALID_PARAMS');
+    h.sessionRead.mockRejectedValue(new Error('fixture-private-path'));
+    await expect(invoke(query)).rejects.toThrow('[SUBSCRIPTION_ACCOUNT_FAILED]');
+    expect(h.sessionRead).toHaveBeenCalledTimes(3);
+    expect(h.execute).not.toHaveBeenCalled();
   });
   it('rejects invalid account paths, settings and login keys before any native operation', async () => {
     for (const command of [
@@ -198,6 +249,8 @@ describe('subscription management boundary', () => {
       { action: 'configure', accountId: 'default', limit: 0 },
       { action: 'configure', paused: false },
       { action: 'configure', strategy: 'unknown' },
+      { action: 'read', taskId: '../other-owner' },
+      { action: 'read', taskId: 42 },
     ])
       await expect(invoke({ providerId: 'anthropic', ...command })).rejects.toThrow(
         'INVALID_PARAMS',

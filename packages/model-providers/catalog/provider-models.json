@@ -13921,7 +13921,6 @@
         "supportsImageInput": true,
         "reasoning": true,
         "efforts": [
-          "minimal",
           "low",
           "medium",
           "high",
@@ -13946,7 +13945,7 @@
         },
         "execution": {
           "pi": {
-            "api": "openai-completions",
+            "api": "openai-responses",
             "headers": {
               "User-Agent": "GitHubCopilotChat/0.35.0",
               "Editor-Version": "vscode/1.107.0",
@@ -13954,13 +13953,16 @@
               "Copilot-Integration-Id": "vscode-chat"
             },
             "thinkingLevelMap": {
+              "off": null,
+              "minimal": null,
+              "low": "low",
+              "medium": "medium",
+              "high": "high",
               "xhigh": "xhigh",
               "max": "max"
             },
             "compat": {
-              "supportsStore": false,
-              "supportsDeveloperRole": false,
-              "supportsReasoningEffort": false
+              "supportsOpenAIGrammarTools": true
             }
           }
         }

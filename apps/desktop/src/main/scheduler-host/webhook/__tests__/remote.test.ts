@@ -326,6 +326,9 @@ describe('ScheduleWebhookHost 服务器通道', () => {
     await start([original]);
     await host.setSecret(original);
     await vi.waitFor(() => expect(host.status(original)?.connected).toBe(true));
+    // Welcome starts an asynchronous reconcile; connected alone is not a ready
+    // baseline for the revocation scenario below.
+    await host.refreshStatus();
     server.push({ batchId: 'before-disable', endpointId: 'whk-s1', scheduleId: 's1', events: [event('before-disable')], omitted: 0 });
     await vi.waitFor(() => expect(server.frames).toContainEqual({ type: 'ack', batchId: 'before-disable' }));
     await host.stop();
@@ -388,6 +391,8 @@ describe('ScheduleWebhookHost 服务器通道', () => {
 
   it('旧服务明确提示账号管理未部署，原接收能力继续工作', async () => {
     await start([schedule('s1')]);
+    await vi.waitFor(() => expect(host.status(schedule('s1'))?.connected).toBe(true));
+    await host.refreshStatus();
     await expect(host.accountOverview()).rejects.toThrow('WEBHOOK_MANAGEMENT_UNAVAILABLE');
     expect(host.status(schedule('s1'))?.url).toBeTruthy();
   });

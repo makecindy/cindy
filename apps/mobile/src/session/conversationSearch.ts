@@ -282,6 +282,7 @@ function sessionToSearchSummary(
   return {
     id: session.id,
     title: session.title,
+    tags: session.tags,
     workingDir: session.workingDir,
     projectDir: session.projectDir,
     workspaceKind: session.workspaceKind,
@@ -342,6 +343,7 @@ export function toSearchListItem(
   const stamped = cached
     ? {
         ...cached,
+        tags: item.session.tags ?? cached.tags,
         canonicalDeviceId: deviceId ?? cached.canonicalDeviceId,
         deviceLinkDeviceId: deviceId,
         deviceLinkDeviceName: item.session.deviceLinkDeviceName ?? cached.deviceLinkDeviceName,
@@ -349,6 +351,7 @@ export function toSearchListItem(
     : {
         id: item.session.id,
         title: item.session.title,
+        tags: item.session.tags,
         workingDir: item.session.workingDir,
         projectDir: item.session.projectDir,
         workspaceKind: item.session.workspaceKind,
