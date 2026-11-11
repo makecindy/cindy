@@ -14466,6 +14466,7 @@
       "reconnecting": "与远程设备的连接中断，正在重连…",
       "hostOffline": "远程设备已离线，暂时无法同步",
       "degraded": "与远程设备的连接不稳定，正在自动重试…",
+      "proxyHint": "本机跨设备通道正经 Proxy（{{proxy}}）转发，可能是连接不稳定的原因；请检查本机 Proxy 或网络设置",
       "actionsUnavailable": "远程设备暂不可用，恢复连接后才能修改该任务",
       "resync": "重新同步",
       "loading": "正在读取任务…",

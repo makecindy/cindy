@@ -143,6 +143,7 @@ vi.mock('../appCapabilities.js', () => ({
 
 import {
   handleGetState,
+  handleGetProxyVerdict,
   handleSetEnabled,
   handleSetKeepAwake,
   handleSetDeviceControlEnabled,
@@ -193,6 +194,7 @@ function makeDeps(overrides?: Partial<DeviceLinkIpcDeps>): DeviceLinkIpcDeps {
       unresponsiveDeviceIds: [],
     }),
     getPeerLinks: vi.fn(() => ({ links: [], relayRttMs: null })),
+    probeProxyVerdict: vi.fn(async () => null),
     setEnabled: vi.fn(),
     setKeepAwake: vi.fn(),
     apiFetch: vi.fn().mockResolvedValue({ devices: [] }),
@@ -253,6 +255,39 @@ describe('device-link IPC handlers', () => {
       disabledControlDeviceIds: [],
       unresponsiveDeviceIds: [],
     });
+  });
+
+  it('#9537 出站路径判定:按中转 origin 探测并透传脱敏判定;无判定 → null', async () => {
+    const probe = vi.fn(async () => ({
+      source: 'system' as const,
+      kind: 'proxy' as const,
+      proxy: 'http://127.0.0.1:7890',
+      upstream: 'https://continuity.test.invalid',
+      at: 0,
+    }));
+    await expect(handleGetProxyVerdict(makeDeps({ probeProxyVerdict: probe }))).resolves.toEqual({
+      kind: 'proxy',
+      proxy: 'http://127.0.0.1:7890',
+    });
+    // 探测目标必须是当前 device-link 中转 REST origin(官方或自建),不能另写死地址
+    expect(probe).toHaveBeenCalledWith('https://continuity.test.invalid');
+  });
+
+  it('#9537 出站路径判定:没问出判定(unknown)照实透传、地址缺省归一 null;无快照 → null', async () => {
+    await expect(
+      handleGetProxyVerdict(
+        makeDeps({
+          probeProxyVerdict: vi.fn(async () => ({
+            source: 'env' as const,
+            kind: 'unknown' as const,
+            reason: 'resolve_failed' as const,
+            upstream: 'https://continuity.test.invalid',
+            at: 0,
+          })),
+        }),
+      ),
+    ).resolves.toEqual({ kind: 'unknown', proxy: null });
+    await expect(handleGetProxyVerdict(makeDeps())).resolves.toBeNull();
   });
 
   it('getState 透传待命状态', () => {

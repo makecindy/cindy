@@ -143,3 +143,34 @@ export function useRemoteSessionConnection(deviceId: string | undefined): Remote
   return deriveRemoteConnectionStatus(isSharedTaskPeer(deviceId) || directReady ? 'online' : linkStatus,
     hostOnline || directReady, hostUnresponsive);
 }
+
+/**
+ * 出站路径诊断(#9537):degraded(通路不稳定)时探一次本机跨设备通道 origin 的代理判定。
+ * 只回传「已确证经 Proxy 出站」这一种事实(kind='proxy' + 脱敏地址);unknown / unsupported /
+ * direct / 探测失败一律 null —— `unknown` 是「没问出判定」的 fail-open 兜底,不是「确认无
+ * 代理」,不得当事实展示。降级恢复后清空,再次降级时重新探(用户可能中途改了系统代理)。
+ */
+export function useOutboundProxyVerdict(active: boolean): DeviceLinkProxyVerdict | null {
+  const [verdict, setVerdict] = useState<DeviceLinkProxyVerdict | null>(null);
+
+  useEffect(() => {
+    if (!active) {
+      setVerdict(null);
+      return;
+    }
+    let cancelled = false;
+    void window.electronAPI.deviceLink
+      .getProxyVerdict()
+      .then((v) => {
+        if (!cancelled) setVerdict(v && v.kind === 'proxy' ? v : null);
+      })
+      .catch(() => {
+        /* 诊断不可用 → 不提示,静默失败 */
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [active]);
+
+  return active ? verdict : null;
+}

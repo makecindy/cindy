@@ -14532,6 +14532,7 @@
       "reconnecting": "Verbindung zum entfernten Gerät verloren — Verbindung wird wiederhergestellt…",
       "hostOffline": "Das entfernte Gerät ist offline; Synchronisierung derzeit nicht möglich",
       "degraded": "Die Verbindung zum entfernten Gerät ist instabil — automatischer Neuversuch…",
+      "proxyHint": "Die Geräteverbindung dieses Rechners läuft über einen Proxy ({{proxy}}) und kann die Instabilität verursachen — prüfe die Proxy- oder Netzwerkeinstellungen dieses Rechners",
       "actionsUnavailable": "Das entfernte Gerät ist nicht verfügbar. Verbinde es erneut, bevor du diese Sitzung änderst.",
       "resync": "Erneut synchronisieren",
       "loading": "Aufgabe wird geladen…",

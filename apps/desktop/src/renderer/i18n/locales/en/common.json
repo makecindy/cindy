@@ -14532,6 +14532,7 @@
       "reconnecting": "Connection to the remote device was lost — reconnecting…",
       "hostOffline": "The remote device is offline; can't sync right now",
       "degraded": "Connection to the remote device is unstable — retrying automatically…",
+      "proxyHint": "The cross-device link on this machine is going through a proxy ({{proxy}}), which may be causing the instability — check this machine's proxy or network settings",
       "actionsUnavailable": "The remote device is unavailable. Reconnect it before changing this session.",
       "resync": "Resync",
       "loading": "Loading task…",

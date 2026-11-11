@@ -14466,6 +14466,7 @@
       "reconnecting": "与远程设备之连接中断，方重连…",
       "hostOffline": "远程设备已脱机，暂不能同步",
       "degraded": "与远程设备之连接不稳，方自动再试…",
+      "proxyHint": "此机跨设备之连接方经 Proxy（{{proxy}}）转发，或即不稳之由；请查此机 Proxy 或网络设置",
       "actionsUnavailable": "远程设备暂不可用，复连后方可改此差事",
       "resync": "再同步",
       "loading": "方读差事…",

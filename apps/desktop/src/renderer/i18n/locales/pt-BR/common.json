@@ -14667,6 +14667,7 @@
       "reconnecting": "A conexão com o dispositivo remoto foi perdida — reconectando…",
       "hostOffline": "O dispositivo remoto está offline; não é possível sincronizar agora",
       "degraded": "A conexão com o dispositivo remoto está instável — tentando novamente automaticamente…",
+      "proxyHint": "A conexão entre dispositivos deste computador está passando por um proxy ({{proxy}}) e pode ser a causa da instabilidade — verifique o proxy ou as configurações de rede deste computador",
       "actionsUnavailable": "O dispositivo remoto está indisponível. Reconecte-o antes de alterar esta sessão.",
       "resync": "Sincronizar novamente",
       "loading": "Carregando tarefa…",

@@ -41,7 +41,7 @@ import {
 } from '@cindy/device-link';
 import { isMobilePlatform } from '@cindy/maker-shared/device-list';
 import { ServerApiError } from '../serverApiClient.desktop';
-import { deviceLinkApiFetch } from './deviceLinkApi.js';
+import { deviceLinkApiFetch, resolveDeviceLinkApiBase } from './deviceLinkApi.js';
 import { requireString, throwIpcError } from '../utils/ipcValidate';
 import { assertTrustedAppRendererEvent } from '../security/trustedAppRenderer';
 import { isIpcError, type IpcErrorCode } from '../../shared/ipc-errors';
@@ -53,7 +53,12 @@ import {
   type DeviceLinkDeviceView,
   type DeviceLinkState,
   type DeviceLinkPeerLinksSnapshot,
+  type DeviceLinkProxyVerdict,
 } from '../../shared/deviceLinkIpc';
+import {
+  probeOutboundPathFor,
+  type OutboundPathSnapshot,
+} from '../maker-host/outbound-proxy-resolver.js';
 import {
   getDeviceLinkStatus,
   getDirectDataDeviceIds,
@@ -172,6 +177,8 @@ export interface DeviceLinkIpcDeps {
   getState(): DeviceLinkState;
   /** 远程连接拓扑:本机链路快照(只读) */
   getPeerLinks(): DeviceLinkPeerLinksSnapshot;
+  /** 出站路径诊断探针(#9537):解析跨设备通道 origin 的当前代理判定,不发业务请求。 */
+  probeProxyVerdict(upstreamUrl: string): Promise<OutboundPathSnapshot | null>;
   setEnabled(enabled: boolean): Promise<void>;
   setKeepAwake(enabled: boolean): Promise<void>;
   apiFetch<T>(path: string, opts?: { method?: string; body?: unknown }): Promise<T>;
@@ -243,6 +250,7 @@ export function defaultDeps(): DeviceLinkIpcDeps {
       };
     },
     getPeerLinks: getDeviceLinkPeerLinks,
+    probeProxyVerdict: probeOutboundPathFor,
     setEnabled: setRemoteControlEnabled,
     setKeepAwake: setKeepAwakeEnabled,
     // 官方中转或自建中转(凭证与 401 语义不同,见 deviceLinkApi.ts)。
@@ -349,6 +357,17 @@ function rethrowServerError(err: unknown): never {
 /** 远程连接拓扑快照:纯转发,门禁在注册处(trusted renderer + 账号能力)。 */
 export function handleGetPeerLinks(deps: DeviceLinkIpcDeps): DeviceLinkPeerLinksSnapshot {
   return deps.getPeerLinks();
+}
+
+/**
+ * 出站路径判定(#9537):按跨设备通道 origin 解析当前系统/env 代理,给渲染侧在连接
+ * 反复失败时提示「本机可能在走代理」。null = 没判定(同 origin 判定冲突 / 解析未落
+ * 快照),渲染侧按无提示处理;`unknown`(没问出来)照实透传,渲染侧不得当事实用。
+ */
+export async function handleGetProxyVerdict(deps: DeviceLinkIpcDeps): Promise<DeviceLinkProxyVerdict | null> {
+  const snap = await deps.probeProxyVerdict(resolveDeviceLinkApiBase());
+  if (!snap) return null;
+  return { kind: snap.kind, proxy: snap.proxy ?? null };
 }
 
 export function handleGetState(deps: DeviceLinkIpcDeps): DeviceLinkState {
@@ -1815,6 +1834,11 @@ export function registerDeviceLinkIpc(deps: DeviceLinkIpcDeps = defaultDeps()): 
     // 新增的特权只读(本账号设备的链路拓扑):先拒外来 frame,再看账号能力。
     assertTrustedAppRendererEvent(e);
     return gated(() => handleGetPeerLinks(deps))();
+  });
+  ipcMain.handle(DEVICE_LINK_INVOKE.GET_PROXY_VERDICT, (e) => {
+    // 本机只读诊断(系统/env 代理判定,不进隧道):与 GET_PEER_LINKS 同门槛。
+    assertTrustedAppRendererEvent(e);
+    return gated(() => handleGetProxyVerdict(deps))();
   });
   ipcMain.handle(DEVICE_LINK_INVOKE.RENAME_DEVICE, (_e, payload: unknown) => {
     requireDeviceLinkCapability();
