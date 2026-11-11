@@ -20280,6 +20280,9 @@
       "recentEmpty": "Ninguna tarea ha usado aún una ruta o un modo.",
       "keptOriginal": "No había ningún modelo disponible, así que la tarea usó el modelo que habías elegido.",
       "keptOriginalShort": "Se mantuvo tu modelo"
+    },
+    "switchOffer": {
+      "action": "Continuar con {{model}}"
     }
   }
 }

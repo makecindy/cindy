@@ -20019,6 +20019,9 @@
       "recentEmpty": "还没有任务用过路线或模式。",
       "keptOriginal": "里面没有现在能用的模型，沿用了原来选的模型。",
       "keptOriginalShort": "沿用原来的模型"
+    },
+    "switchOffer": {
+      "action": "换到 {{model}} 继续"
     }
   }
 }

@@ -8,9 +8,7 @@ import { modelImageInputDefault } from '../../shared/modelImageInputOverride.js'
 import { getModelPriceQuote } from '../../shared/modelPriceQuote.js';
 import { USD_TO_CNY_FIXED_RATE, type ModelPricingCatalog } from '../../shared/regionalMoney.js';
 import {
-  findModelGroupSelection,
   modelGroupCandidateKey,
-  modelGroupHoursMatch,
   type ModelGroupAppliedException,
   type ModelGroupCandidate,
   type ModelGroupResolveRequest,
@@ -21,6 +19,7 @@ import {
 } from '../../shared/modelGroups.js';
 import { isPluginModelPickerRouteAvailable } from '../cindy-brain/ghostModelPicker.js';
 import { pickModelGroupCandidate, type ModelGroupCandidateFacts } from './pick.js';
+import { modelGroupRouteFor } from './routeFor.js';
 
 export interface ModelGroupResolverDeps {
   config(): ModelGroupsConfig;
@@ -60,31 +59,6 @@ function listedPrice(view: ProviderView | undefined, agent: AgentKind, model: Ca
   return quote.currency === 'CNY' ? effective / USD_TO_CNY_FIXED_RATE : effective;
 }
 
-function hoursTarget(route: ModelGroupRoute, localHour: number): string | null {
-  for (const item of route.exceptions ?? []) {
-    if (item.when.type === 'hours' && item.use !== 'vision' && modelGroupHoursMatch(item.when, localHour)) return item.use.routeId;
-  }
-  return null;
-}
-
-/**
- * 时段例外：落在时段里就改走另一条路线，那条路线自己的时段例外接着看。指向的路线不存在或绕回走过的路线时，
- * 整条改道作废，按原路线照常选。
- */
-function followHours(start: ModelGroupRoute, config: ModelGroupsConfig, localHour: number) {
-  const visited = new Set([start.id]);
-  const via: ModelGroupAppliedException[] = [];
-  let route = start;
-  for (let targetId = hoursTarget(route, localHour); targetId; targetId = hoursTarget(route, localHour)) {
-    const next = config.routes.find((item) => item.id === targetId);
-    if (!next || visited.has(next.id)) return { route: start, via: [] };
-    visited.add(next.id);
-    via.push({ type: 'hours', viaRouteName: next.name });
-    route = next;
-  }
-  return { route, via };
-}
-
 export function createModelGroupResolver(deps: ModelGroupResolverDeps) {
   /** 「轮流」上一次选中的候选；只在内存里，重启后从第一个开始。 */
   const lastPicked = new Map<string, string>();
@@ -122,25 +96,10 @@ export function createModelGroupResolver(deps: ModelGroupResolverDeps) {
 
   async function resolve(request: ModelGroupResolveRequest): Promise<ModelGroupResolveResult> {
     const scope = deps.scope();
-    const config = deps.config();
-    const found = findModelGroupSelection(config, request.selection);
-    if (!found) return { outcome: 'missing', groupName: '', trace: [] };
-    const groupName = found.type === 'route' ? found.route.name : found.mode.name;
-    const effort = found.type === 'mode' ? found.mode.effort : undefined;
-    let base: ModelGroupRoute;
-    if (found.type === 'route') base = found.route;
-    else if (found.mode.target.type === 'route') {
-      const routeId = found.mode.target.routeId;
-      const target = config.routes.find((item) => item.id === routeId);
-      if (!target) return { outcome: 'missing', groupName, trace: [] };
-      base = target;
-    } else {
-      const { agentKind, providerId, model } = found.mode.target;
-      base = { id: found.mode.id, name: groupName, strategy: 'order', candidates: [{ agentKind, providerId, model }] };
-    }
-
     const now = deps.now();
-    const { route, via } = followHours(base, config, new Date(now).getHours());
+    const target = modelGroupRouteFor(deps.config(), request.selection, now);
+    if (target.outcome === 'missing') return { outcome: 'missing', groupName: target.groupName, trace: [] };
+    const { groupName, effort, route, via } = target;
     const needsImage = request.context?.hasImages === true && !!route.exceptions?.some((item) => item.when.type === 'image');
     const views = await deps.views();
     const picked = pickModelGroupCandidate(route, await facts(route, views), {
@@ -166,5 +125,10 @@ export function createModelGroupResolver(deps: ModelGroupResolverDeps) {
     };
   }
 
-  return { resolve };
+  /** 一条路线每个候选此刻的事实(与新任务解析同一判断)；不推进「轮流」的位置。 */
+  async function candidateFacts(route: ModelGroupRoute): Promise<ModelGroupCandidateFacts[]> {
+    return facts(route, await deps.views());
+  }
+
+  return { resolve, candidateFacts };
 }

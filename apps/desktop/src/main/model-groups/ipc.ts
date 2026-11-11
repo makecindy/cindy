@@ -2,7 +2,9 @@
 import { ipcMain } from 'electron';
 
 import {
+  MODEL_GROUP_LIMITS,
   MODEL_GROUPS_IPC,
+  modelGroupCandidateKey,
   normalizeModelGroupsConfig,
   sanitizeModelGroupSelection,
   type ModelGroupResolveRequest,
@@ -10,6 +12,9 @@ import {
 } from '../../shared/modelGroups.js';
 import { activeOwnerScopeKey } from '../appSessionState.js';
 import { getPluginModelPickerAgents, isPluginRouteHarnessInstalled } from '../cindy-brain/ghostModelPicker.js';
+import { isSessionSharedTaskActive } from '../device-link/sharedTaskDispatch.js';
+import { getGoalController } from '../goal-host/index.js';
+import { getSessionRowSnapshot } from '../localDb/sessionDispatchSnapshot.js';
 import { getDesktopProviderService } from '../maker-host/createDesktopProviderService.js';
 import { getQuotaOverviewService } from '../quota-overview/service.js';
 import { getGatewayModelPricing } from '../usage/modelPricing.js';
@@ -18,7 +23,9 @@ import { assertTrustedAppRendererEvent } from '../security/trustedAppRenderer.js
 import { throwIpcError } from '../utils/ipcValidate.js';
 import { recordModelGroupDecision } from './decisionLog.js';
 import { createModelGroupResolver } from './resolver.js';
+import { bindModelGroupSession, clearModelGroupSessionBinding, readModelGroupSessionBinding } from './sessionBindings.js';
 import { readModelGroupsConfig, writeModelGroupsConfig } from './store.js';
+import { computeModelGroupSwitchOffer } from './switchOffer.js';
 
 /** 选路时让额度总览保持采集这么久；面板没开时它平时不采集。 */
 const QUOTA_LEASE_MS = 5 * 60_000;
@@ -54,6 +61,29 @@ const resolver = createModelGroupResolver({
   pricing: async () => ({ gateway: await getGatewayModelPricing(), reference: getReferenceModelPricing() }),
 });
 
+const switchOfferDeps = {
+  readBinding: readModelGroupSessionBinding,
+  clearBinding: clearModelGroupSessionBinding,
+  readSession: getSessionRowSnapshot,
+  isShared: isSessionSharedTaskActive,
+  // 目标还没就绪时说不清这个任务有没有目标：按有处理，不提议。
+  hasGoal: async (sessionId: string) => {
+    const goals = getGoalController();
+    return !goals || (await goals.getStatus(sessionId).catch(() => null)) !== null;
+  },
+  config: readModelGroupsConfig,
+  candidateFacts: resolver.candidateFacts,
+  now: Date.now,
+};
+
+function sessionIdOf(value: Record<string, unknown>): string {
+  const sessionId = value.sessionId;
+  if (typeof sessionId !== 'string' || !sessionId || sessionId.length > 256) {
+    throwIpcError('INVALID_PARAMS', 'sessionId is required');
+  }
+  return sessionId;
+}
+
 export function registerModelGroupsIpc(): void {
   ipcMain.handle(MODEL_GROUPS_IPC.GET, (event) => {
     assertTrustedAppRendererEvent(event);
@@ -79,5 +109,26 @@ export function registerModelGroupsIpc(): void {
     // 设置页的「试一下」不算一次真实选择。
     if (!request.dryRun) recordModelGroupDecision(selection, result);
     return result;
+  });
+  ipcMain.handle(MODEL_GROUPS_IPC.BIND_SESSION, (event, raw: unknown) => {
+    assertTrustedAppRendererEvent(event);
+    const value = raw && typeof raw === 'object' ? raw as Record<string, unknown> : {};
+    const sessionId = sessionIdOf(value);
+    const selection = sanitizeModelGroupSelection(value.selection);
+    const route = value.route && typeof value.route === 'object' ? value.route as Record<string, unknown> : {};
+    const agentKind = route.agentKind;
+    const providerId = route.providerId;
+    const model = route.model;
+    if (!selection || (agentKind !== 'cc' && agentKind !== 'codex' && agentKind !== 'pi')
+      || typeof providerId !== 'string' || !providerId || providerId.length > MODEL_GROUP_LIMITS.field
+      || typeof model !== 'string' || !model || model.length > MODEL_GROUP_LIMITS.field) {
+      throwIpcError('INVALID_PARAMS', 'model group selection and route are required');
+    }
+    bindModelGroupSession(sessionId, selection, modelGroupCandidateKey({ agentKind, providerId, model }));
+  });
+  ipcMain.handle(MODEL_GROUPS_IPC.SWITCH_OFFER, async (event, raw: unknown) => {
+    assertTrustedAppRendererEvent(event);
+    const value = raw && typeof raw === 'object' ? raw as Record<string, unknown> : {};
+    return computeModelGroupSwitchOffer(switchOfferDeps, sessionIdOf(value));
   });
 }

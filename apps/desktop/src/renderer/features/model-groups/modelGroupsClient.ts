@@ -2,7 +2,7 @@
  * 模型组在界面这一侧的读写：设置页改完后，选择器不用重开就能看到；新任务发出前把选中的一项解析成具体模型，
  * 并在第一条消息下方写一行用了谁、为什么。配置的事实源在主进程(main/model-groups)。
  */
-import { useEffect, useSyncExternalStore } from 'react';
+import { useEffect, useState, useSyncExternalStore } from 'react';
 import type { TFunction } from 'i18next';
 
 import type { PluginModelRouteNote } from '@/lib/ccAgent.types';
@@ -15,6 +15,7 @@ import {
   type ModelGroupResolveResult,
   type ModelGroupSelection,
   type ModelGroupsConfig,
+  type ModelGroupSwitchOffer,
   type ModelGroupTraceEntry,
 } from '../../../shared/modelGroups';
 
@@ -65,6 +66,42 @@ export async function resolveModelGroup(
     log.warn('model group resolve failed', err);
     return null;
   }
+}
+
+/**
+ * 记下这个任务经哪条路线或模式建、现在用着哪个候选；只在模型组真的选了一个(routed)时记。
+ * 失败只记日志：没有记录时撞配额就不提议换来源，其余一切照旧。
+ */
+export function bindModelGroupSession(
+  sessionId: string,
+  selection: ModelGroupSelection,
+  result: ModelGroupResolveResult | Pick<ModelGroupSwitchOffer, 'agentKind' | 'providerId' | 'model'> | null,
+): void {
+  const route = !result ? null : 'outcome' in result ? (result.outcome === 'routed' ? result.route : null) : result;
+  if (!route) return;
+  void window.electronAPI.modelGroups.bindSession({
+    sessionId,
+    selection,
+    route: { agentKind: route.agentKind, providerId: route.providerId, model: route.model },
+  }).catch((err: unknown) => log.warn('model group session binding failed', err));
+}
+
+/**
+ * 撞配额横幅出现时问一次：这个任务的路线里还有没有别的来源能接着用。只在横幅挂上、换了任务或换了一个错误时问，
+ * 不轮询；enabled 变假(横幅消失)即清空。
+ */
+export function useModelGroupSwitchOffer(sessionId: string | null | undefined, enabled: boolean, errorKey: string | null): ModelGroupSwitchOffer | null {
+  const [offer, setOffer] = useState<{ key: string; value: ModelGroupSwitchOffer } | null>(null);
+  const key = enabled && sessionId ? `${sessionId}\u0000${errorKey ?? ''}` : null;
+  useEffect(() => {
+    if (!key || !sessionId) return;
+    let cancelled = false;
+    window.electronAPI.modelGroups.switchOffer({ sessionId })
+      .then((value) => { if (!cancelled) setOffer(value ? { key, value } : null); })
+      .catch((err: unknown) => log.warn('model group switch offer unavailable', err));
+    return () => { cancelled = true; };
+  }, [key, sessionId]);
+  return offer && offer.key === key ? offer.value : null;
 }
 
 function formatReset(ms: number, locale: string): string {

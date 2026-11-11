@@ -8,6 +8,10 @@ export const MODEL_GROUPS_IPC = {
   GET: 'model-groups:get',
   SET: 'model-groups:set',
   RESOLVE: 'model-groups:resolve',
+  /** 记下这个任务是经哪条路线或模式建的、用着哪个候选(撞配额时据此提议换来源)。 */
+  BIND_SESSION: 'model-groups:bind-session',
+  /** 撞配额时同一条路线里还能接着用的下一个来源；没有为 null。 */
+  SWITCH_OFFER: 'model-groups:switch-offer',
 } as const;
 
 export const MODEL_GROUP_STRATEGIES = ['expiring', 'order', 'rotate', 'cheapest'] as const;
@@ -136,6 +140,20 @@ export type ModelGroupResolveResult =
     }
   /** missing = 这条路线或模式已被删除；unavailable = 里面没有现在能用的模型。两者都沿用用户原来选的模型。 */
   | { outcome: 'missing' | 'unavailable'; groupName: string; trace: ModelGroupTraceEntry[] };
+
+/** 撞配额时「换到下一个来源继续」的提议(model-groups.md §6.1)。 */
+export interface ModelGroupSwitchOffer {
+  groupName: string;
+  /** 换过去之后记回去时用：任务仍属于同一个组。 */
+  selection: ModelGroupSelection;
+  agentKind: ModelGroupAgentKind;
+  providerId: string;
+  model: string;
+  modelName: string;
+  sourceName: string;
+  /** 换到另一个引擎：要走选择器的跨引擎切换(含它的确认)。 */
+  crossEngine: boolean;
+}
 
 export interface ModelGroupResolveRequest {
   selection: ModelGroupSelection;

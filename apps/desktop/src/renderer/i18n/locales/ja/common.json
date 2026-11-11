@@ -20019,6 +20019,9 @@
       "recentEmpty": "ルートやモードを使ったタスクはまだありません。",
       "keptOriginal": "今使えるモデルがなかったため、元々選んでいたモデルを使いました。",
       "keptOriginalShort": "元のモデルを使用"
+    },
+    "switchOffer": {
+      "action": "{{model}} に切り替えて続行"
     }
   }
 }

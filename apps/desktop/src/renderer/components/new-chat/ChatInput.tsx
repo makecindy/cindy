@@ -512,7 +512,15 @@ function isPointInsideElement(
   );
 }
 
+/**
+ * 在已建任务里替用户「点中选择器里的一行」：同引擎与跨引擎(含它的确认)都走选择器原有链路。
+ * 返回 = 这次选择真的落到任务上了没有(取消确认、被挡下或失败都为 false)。
+ */
+export type SessionModelPick = (pick: { agent: AgentKind; providerId: string; modelId: string }) => Promise<boolean>;
+
 interface ChatInputProps {
+  /** 已建任务：ChatInput 把「按选择器的方式换到这个模型」放进来，供撞配额横幅的「换来源继续」调用。 */
+  sessionModelPickRef?: { current: SessionModelPick | null };
   modelPickerRequest?: number;
   onModelPickerRequestConsumed?: (nonce: number) => void;
   onSend: (
@@ -1298,6 +1306,7 @@ function resolveModelThinkingIntent(input: {
 }
 
 export function ChatInput({
+  sessionModelPickRef,
   modelPickerRequest,
   onModelPickerRequestConsumed,
   onSend,
@@ -9092,6 +9101,31 @@ export function ChatInput({
       performProviderChange(providerId, modelId, effort, expectedRevision, fastMode),
     byModel: (modelId, expectedRevision) => performModelChange(modelId, expectedRevision),
   };
+
+  // 模型组「换到 X 继续」(model-groups.md §6.1)：与在选择器里点中这一行同一条链路 —— 跨引擎行
+  // 走 sessionEngineFilter.onCrossEngineSelect(确认 + performAgentSwitch)，判定同 useUnifiedRowActions
+  // 的 shouldCrossEngine；同引擎走 handleProviderChange。拿不到跨引擎入口时不替用户换引擎。
+  // 每次渲染后换成最新闭包(与 performAgentSwitchRef 同理)；卸载时收回，横幅不会调到已离开的任务。
+  useEffect(() => {
+    if (!sessionModelPickRef || !sessionId) return;
+    const pick: SessionModelPick = async ({ agent, providerId, modelId }) => {
+      if (!sessionEngineFilter) {
+        if (agent !== runtimeAgentKind) return false;
+        return (await handleProviderChange(providerId, modelId)) !== false;
+      }
+      const runtime = sessionEngineFilter.runtimeAgent;
+      const pending = sessionEngineFilter.pendingTarget;
+      const crossEngine = runtime === undefined || agent !== runtime || (pending !== undefined && pending !== runtime);
+      if (crossEngine) {
+        return sessionEngineFilter.onCrossEngineSelect({ providerId, modelId, targetAgent: agent, effort: '' });
+      }
+      return (await handleProviderChange(providerId, modelId)) !== false;
+    };
+    sessionModelPickRef.current = pick;
+    return () => {
+      if (sessionModelPickRef.current === pick) sessionModelPickRef.current = null;
+    };
+  });
 
   const handleNavigateToProviders = useCallback((target?: ProvidersNavigationTarget) => {
     navigate(providersSettingsPath(target));

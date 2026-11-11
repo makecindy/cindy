@@ -20280,6 +20280,9 @@
       "recentEmpty": "Nenhuma tarefa usou uma rota ou um modo ainda.",
       "keptOriginal": "Não havia nenhum modelo disponível, então a tarefa manteve o modelo que você tinha escolhido.",
       "keptOriginalShort": "Seu modelo foi mantido"
+    },
+    "switchOffer": {
+      "action": "Continuar com {{model}}"
     }
   }
 }

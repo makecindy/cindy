@@ -20019,6 +20019,9 @@
       "recentEmpty": "尚无差事用过路线或模式。",
       "keptOriginal": "其中今无可用之模型，仍用原择之模型。",
       "keptOriginalShort": "仍用原模型"
+    },
+    "switchOffer": {
+      "action": "易用 {{model}} 续之"
     }
   }
 }

@@ -20280,6 +20280,9 @@
       "recentEmpty": "Aucune tâche n'a encore utilisé d'itinéraire ou de mode.",
       "keptOriginal": "Aucun modèle n'était disponible : la tâche a gardé le modèle que vous aviez choisi.",
       "keptOriginalShort": "Votre modèle a été conservé"
+    },
+    "switchOffer": {
+      "action": "Continuer avec {{model}}"
     }
   }
 }

@@ -20092,6 +20092,9 @@
       "recentEmpty": "Noch keine Aufgabe hat eine Route oder einen Modus verwendet.",
       "keptOriginal": "Darin war kein Modell verfügbar, daher blieb die Aufgabe beim Modell, das du gewählt hattest.",
       "keptOriginalShort": "Dein Modell wurde beibehalten"
+    },
+    "switchOffer": {
+      "action": "Mit {{model}} fortfahren"
     }
   }
 }
