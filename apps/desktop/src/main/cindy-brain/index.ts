@@ -613,7 +613,8 @@ import { GhostFsSlot } from './fsSlot.js';
 import { GhostLibrarySlot } from './librarySlot.js';
 import { LibraryBindingStore, assertLibraryMetaOwner, relocateLibraryMetaOwner, validateLibraryCandidateLocation } from './libraryBinding.js';
 import { LibraryVault, statfsFreeBytes, DEFAULT_LIBRARY_LIMITS } from './libraryVault.js';
-import { GhostHandoffStore } from './handoffStore.js';
+import { getGhostHandoffStore, isGhostHandoffBusy } from './handoffStore.desktop.js';
+export { getGhostHandoffStore } from './handoffStore.desktop.js';
 import { LibraryStagingStore, relocateLibraryStagingOwner } from './libraryStaging.js';
 import { LibrarySqlService, defaultLibraryDbWorkerPath } from './librarySqlService.js';
 import { trashGhostLibrary } from './libraryTrash.js';
@@ -1715,7 +1716,7 @@ function assertGhostRelocationDbReady(): void {
 function assertGhostRelocationIdle(part: string): void {
   if (hasPendingGhostCalls(part) || hasRunningGhostErrand(part) ||
       hasRunningGhostCindyWork(part) || fsSlotSingleton?.hasInFlightRequests(part) ||
-      networkSlotSingleton?.hasInFlightRequests(part) || handoffStoreSingleton?.isBusy(part)) {
+      networkSlotSingleton?.hasInFlightRequests(part) || isGhostHandoffBusy(part)) {
     throw new Error('Ghost relocation is waiting for active work to finish');
   }
 }
@@ -6896,13 +6897,6 @@ export function getGhostFsSlot(): GhostFsSlot {
     });
   }
   return fsSlotSingleton;
-}
-
-let handoffStoreSingleton: GhostHandoffStore | null = null;
-/** Owner-scoped copies of chat files handed to plugins (root re-resolved per call). */
-export function getGhostHandoffStore(): GhostHandoffStore {
-  handoffStoreSingleton ??= new GhostHandoffStore({ root: () => ownerScopedUserDataPath('ghost-handoff') });
-  return handoffStoreSingleton;
 }
 
 let librarySlotSingleton: GhostLibrarySlot | null = null;

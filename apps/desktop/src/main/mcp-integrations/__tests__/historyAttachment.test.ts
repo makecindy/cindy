@@ -1,4 +1,5 @@
 import { describe, expect, it, vi } from 'vitest';
+import { createHash } from 'node:crypto';
 import { historyAttachmentSource, readHistoryAttachment } from '../historyAttachment.js';
 import { readDesktopHistoryAttachment } from '../historyAttachment.desktop.js';
 
@@ -8,7 +9,13 @@ const host = vi.hoisted(() => {
     bytes: vi.fn(async () => Buffer.from('text')), resolve: vi.fn(async () => ({ absPath: '/fixture/notes.txt', mimeType: 'text/plain' })),
     copy: vi.fn(async () => [{ ref: 'handoff:00000000-0000-4000-8000-000000000000' }]),
     remoteFile: vi.fn(async () => ({ inlineBase64: Buffer.from('remote').toString('base64'), mimeType: 'text/plain', ossKey: '', size: 6 })),
-    ingest: vi.fn(async () => ({ hash: 'media-hash' })) };
+    ingest: vi.fn(async () => ({ hash: createHash('sha256').update('text').digest('hex') })),
+    canRead: vi.fn(async () => true),
+    blobInfo: vi.fn(async () => ({ ext: '.png', mimeType: 'image/png', bytes: 4 })),
+    readChunk: vi.fn(async (buffer: Buffer, offset: number, length: number, position: number) => {
+      const bytesRead = Buffer.from('text').copy(buffer, offset, position, position + length);
+      return { buffer, bytesRead };
+    }), close: vi.fn(async () => {}) };
 });
 vi.mock('../../appSessionState.js', () => ({ getActiveDataOwnerPushStamp: () => ({ dataOwnerId: 'owner', ownerGeneration: host.generation }) }));
 vi.mock('../../localDb/client/current.js', () => ({ getDbClient: () => host.db, tryGetDbClient: () => host.db }));
@@ -18,9 +25,15 @@ vi.mock('../hostToolCaller.js', () => ({ getPluginHostToolCaller: () => host.plu
 vi.mock('../../utils/readBoundedFile.js', () => ({ readBoundedFileNoFollow: host.bytes }));
 vi.mock('../../device-link/mediaFetch.js', () => ({ resolveAuthorizedMedia: host.resolve }));
 vi.mock('../../device-link/fileAccess.js', () => ({ readRemoteDeviceFile: host.remoteFile }));
-vi.mock('../../cindy-brain/index.js', () => ({ getGhostHandoffStore: () => ({ import: host.copy, read: async () => null }) }));
+vi.mock('../../device-link/mediaTransfer.js', () => ({ downloadToBuffer: vi.fn() }));
+vi.mock('../../cindy-brain/handoffStore.desktop.js', () => ({ getGhostHandoffStore: () => ({ import: host.copy, read: async () => null }) }));
 vi.mock('../../cindy-media/ingest.js', () => ({ supportedMime: (mime: string) => mime.startsWith('image/'), ingestMedia: host.ingest }));
 vi.mock('../../cindy-media/refCompensationJournal.desktop.js', () => ({ captureMediaRefCompensationScope: () => ({ owner: 'owner' }) }));
+vi.mock('../../cindy-media/ledger.js', () => ({ ghostCanRead: host.canRead, getBlobInfo: host.blobInfo }));
+vi.mock('../../cindy-media/blobStore.desktop.js', () => ({
+  blobUrl: (hash: string, ext: string) => `cindy-media://blobs/${hash}${ext}`,
+  openBlobFile: vi.fn(async () => ({ totalSize: 4, mimeType: 'image/png', file: { read: host.readChunk, close: host.close } })),
+}));
 
 // Unit through the Host attachment reader: history approval must not turn arbitrary text
 // into a file read, and a plugin receives only the existing grant/handoff receipt plus bytes.
@@ -85,9 +98,44 @@ describe('history attachment reader', () => {
     const result = await readDesktopHistoryAttachment(args, { agentKind: 'codex', workingDir: '',
       hostCaller: { kind: 'plugin', pluginId: 'installed-instance', dataOwnerId: 'owner', ownerGeneration: 1 } },
     { query: vi.fn(), invoke: vi.fn() });
-    expect(result).toMatchObject({ ok: true, mediaHash: 'media-hash' });
+    expect(result).toMatchObject({ ok: true, mediaHash: createHash('sha256').update('text').digest('hex') });
     expect(host.ingest).toHaveBeenCalledWith(expect.objectContaining({ refs: [{ refKind: 'ghost-tool-grant', refId: 'installed-instance', originKind: 'tool' }],
       assertStillValid: expect.any(Function) }), host.db.drizzle);
+  });
+
+  // Unit, #9801: first-image coverage missed subsequent 64KiB pages rereading
+  // and re-ingesting the entire source. Reuse the existing granted blob's range.
+  it('continues image chunks from an owned media hash without reading or ingesting the source again', async () => {
+    host.plugin = true;
+    host.ingest.mockClear(); host.resolve.mockClear(); host.bytes.mockClear(); host.readChunk.mockClear(); host.close.mockClear();
+    host.queryOne.mockResolvedValueOnce({ role: 'assistant', content: { images: [{ url: 'cindy-media://blobs/source.png', originalName: 'shot.png' }] } })
+      .mockResolvedValueOnce({ role: 'assistant', content: { images: [{ url: 'cindy-media://blobs/source.png', originalName: 'shot.png' }] } });
+    host.resolve.mockResolvedValueOnce({ absPath: '/fixture/shot.png', mimeType: 'image/png' });
+    const context = { agentKind: 'codex' as const, workingDir: '',
+      hostCaller: { kind: 'plugin' as const, pluginId: 'installed-instance', dataOwnerId: 'owner', ownerGeneration: 1 } };
+    const remote = { query: vi.fn(), invoke: vi.fn() };
+    const first = await readDesktopHistoryAttachment(args, context, remote);
+    expect(first).toMatchObject({ ok: true, mediaHash: expect.any(String), nextOffset: 2 });
+    if (!first.ok || !('mediaHash' in first) || typeof first.mediaHash !== 'string') throw new Error('missing granted media');
+    const tail = await readDesktopHistoryAttachment({ ...args, offset: 2, mediaHash: first.mediaHash }, context, remote);
+    expect(tail).toMatchObject({ ok: true, base64: 'eHQ=', nextOffset: null, sha256: first.sha256, size: 4 });
+    expect(host.resolve).toHaveBeenCalledOnce();
+    expect(host.bytes).toHaveBeenCalledOnce();
+    expect(host.ingest).toHaveBeenCalledOnce();
+    expect(host.readChunk).toHaveBeenCalledWith(expect.any(Buffer), 0, 2, 2);
+    expect(host.close).toHaveBeenCalledOnce();
+  });
+
+  it('refuses a continuation hash outside the calling plugin grant', async () => {
+    host.plugin = true;
+    host.canRead.mockResolvedValueOnce(false);
+    host.queryOne.mockResolvedValueOnce({ role: 'user', content: { images: [{ url: 'cindy-media://blobs/source.png', originalName: 'shot.png' }] } });
+    host.readChunk.mockClear();
+    const result = await readDesktopHistoryAttachment({ ...args, mediaHash: 'a'.repeat(64) }, { agentKind: 'codex', workingDir: '',
+      hostCaller: { kind: 'plugin', pluginId: 'installed-instance', dataOwnerId: 'owner', ownerGeneration: 1 } },
+    { query: vi.fn(), invoke: vi.fn() });
+    expect(result).toMatchObject({ ok: false, errorCode: 'ATTACHMENT_UNAVAILABLE' });
+    expect(host.readChunk).not.toHaveBeenCalled();
   });
   it('resolves a remote message on its source computer and moves bytes through the existing file channel', async () => {
     host.plugin = false;

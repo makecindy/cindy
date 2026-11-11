@@ -30,8 +30,11 @@ it('validates attachment reads against the same history scope before host I/O', 
   const history = { readSessionAttachment, resolveSessionScope: async () => ({ ok: true as const, sessionIds: denied ? [] : null }),
     listWorkdirs: vi.fn(), listSessions: vi.fn(), getMessages: vi.fn(), searchChatHistory: vi.fn() };
   const server = createXdtHelperMcpServer({ history }, { agentKind: 'codex', workingDir: '', sessionId: 'ordinary' });
-  expect(parsePayload(await server.hostTools.call('read_session_attachment', { session_id: 'target', message_id: 'm', attachment_index: 0 })))
+  expect(parsePayload(await server.hostTools.call('read_session_attachment', { session_id: 'target', message_id: 'm', attachment_index: 0, mediaHash: 'a'.repeat(64) })))
     .toMatchObject({ ok: true, base64: 'dGV4dA==' });
+  expect(readSessionAttachment).toHaveBeenCalledWith(expect.objectContaining({ mediaHash: 'a'.repeat(64) }), expect.any(Object));
+  expect(parsePayload(await server.hostTools.call('read_session_attachment', { session_id: 'target', message_id: 'm', attachment_index: 0, mediaHash: 'invalid' })))
+    .toMatchObject({ ok: false, errorCode: 'INVALID_ARGS' });
   expect(parsePayload(await server.hostTools.call('read_session_attachment', { message_id: 'm', attachment_index: 0 })))
     .toMatchObject({ ok: false, errorCode: 'INVALID_ARGS' });
   denied = true;

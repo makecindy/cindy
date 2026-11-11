@@ -7,6 +7,15 @@ import { historyAttachmentSource, readHistoryAttachment, type HistoryAttachmentS
 import { isDepositExcludedFileName } from '../cindy-brain/dirDeposit.js';
 import { GHOST_HANDOFF_MAX_BYTES_PER_FILE } from '../../shared/ghost.js';
 import { readBoundedFileNoFollow } from '../utils/readBoundedFile.js';
+import { getGhostHandoffStore } from '../cindy-brain/handoffStore.desktop.js';
+import { handoffMimeType } from '../cindy-brain/handoffStore.js';
+import { readRemoteDeviceFile } from '../device-link/fileAccess.js';
+import { downloadToBuffer } from '../device-link/mediaTransfer.js';
+import { resolveAuthorizedMedia } from '../device-link/mediaFetch.js';
+import { ingestMedia, supportedMime } from '../cindy-media/ingest.js';
+import { captureMediaRefCompensationScope } from '../cindy-media/refCompensationJournal.desktop.js';
+import { ghostCanRead, getBlobInfo } from '../cindy-media/ledger.js';
+import { blobUrl, openBlobFile } from '../cindy-media/blobStore.desktop.js';
 
 /** Also used on the source computer by the authenticated history query handler. */
 export async function resolveStoredHistoryAttachment(args: ReadSessionAttachmentArgs): Promise<HistoryAttachmentSource | null> {
@@ -20,7 +29,7 @@ export async function resolveStoredHistoryAttachment(args: ReadSessionAttachment
  * and handoff storage; paths remain exclusively within these Host services. */
 export async function readDesktopHistoryAttachment(args: ReadSessionAttachmentArgs, context: LiziMcpSessionContext | undefined,
   remote: { query(device: string, args: ReadSessionAttachmentArgs): Promise<Record<string, unknown>>;
-    invoke: Parameters<typeof import('../device-link/fileAccess.js').readRemoteDeviceFile>[2] }) {
+    invoke: Parameters<typeof readRemoteDeviceFile>[2] }) {
   const db = getDbClient(), owner = getActiveDataOwnerPushStamp();
   const plugin = context?.hostCaller ? getPluginHostToolCaller() : undefined;
   const assertCurrent = () => {
@@ -32,7 +41,7 @@ export async function readDesktopHistoryAttachment(args: ReadSessionAttachmentAr
   const split = args.session_id.indexOf('::');
   const device = split > 0 ? args.session_id.slice(0, split) : null;
   try {
-    const store = plugin ? (await import('../cindy-brain/index.js')).getGhostHandoffStore() : null;
+    const store = plugin ? getGhostHandoffStore() : null;
     return await readHistoryAttachment(args, {
       assertCurrent,
       source: async () => {
@@ -47,34 +56,47 @@ export async function readDesktopHistoryAttachment(args: ReadSessionAttachmentAr
       read: async source => {
         if (isDepositExcludedFileName(source.name)) throw new Error('PERMISSION_DENIED');
         if (device) {
-          const { readRemoteDeviceFile } = await import('../device-link/fileAccess.js');
           const result = await readRemoteDeviceFile(device, source.url, remote.invoke, { maxBytes: GHOST_HANDOFF_MAX_BYTES_PER_FILE });
           try {
             assertCurrent();
             const bytes = result.inlineBase64 ? Buffer.from(result.inlineBase64, 'base64')
               : 'path' in result ? await readBoundedFileNoFollow(result.path, GHOST_HANDOFF_MAX_BYTES_PER_FILE)
-              : (await (await import('../device-link/mediaTransfer.js')).downloadToBuffer(result.ossKey)).bytes;
+              : (await downloadToBuffer(result.ossKey)).bytes;
             if (!bytes || bytes.byteLength > GHOST_HANDOFF_MAX_BYTES_PER_FILE) throw new Error('ATTACHMENT_UNAVAILABLE');
             return { bytes: Buffer.from(bytes), mimeType: result.mimeType };
           } finally { if ('dispose' in result) await result.dispose(); }
         }
-        const resolved = await (await import('../device-link/mediaFetch.js')).resolveAuthorizedMedia({ url: source.url }, GHOST_HANDOFF_MAX_BYTES_PER_FILE);
+        const resolved = await resolveAuthorizedMedia({ url: source.url }, GHOST_HANDOFF_MAX_BYTES_PER_FILE);
         if (isDepositExcludedFileName(path.basename(resolved.absPath))) throw new Error('PERMISSION_DENIED');
         const bytes = await readBoundedFileNoFollow(resolved.absPath, GHOST_HANDOFF_MAX_BYTES_PER_FILE,
           { containWithin: path.dirname(resolved.absPath), nonBlocking: true, verifyContentStability: true });
         if (!bytes) throw new Error('ATTACHMENT_UNAVAILABLE');
-        return { bytes, mimeType: resolved.mimeType ?? (await import('../cindy-brain/handoffStore.js')).handoffMimeType(source.name) };
+        return { bytes, mimeType: resolved.mimeType ?? handoffMimeType(source.name) };
       },
       ...(plugin && store ? {
         handoff: async (ref: string) => {
           const result = await store.read(plugin.caller.pluginId, ref);
           return result === 'changed' ? null : result;
         },
+        media: async (hash: string, offset: number, length: number) => {
+          if (!await ghostCanRead(hash, plugin.caller.pluginId, db.drizzle)) return null;
+          const info = await getBlobInfo(hash, db.drizzle);
+          if (!info) return null;
+          assertCurrent();
+          const opened = await openBlobFile(blobUrl(hash, info.ext));
+          try {
+            assertCurrent();
+            if (opened.totalSize !== info.bytes) return null;
+            const bytes = Buffer.alloc(Math.max(0, Math.min(length, opened.totalSize - offset)));
+            const { bytesRead } = await opened.file.read(bytes, 0, bytes.byteLength, offset);
+            if (bytesRead === 0 && bytes.byteLength > 0) return null;
+            return { bytes: bytes.subarray(0, bytesRead), size: opened.totalSize, mimeType: info.mimeType };
+          } finally { await opened.file.close(); }
+        },
         transfer: async (source: HistoryAttachmentSource, file: { bytes: Buffer; mimeType: string }) => {
           assertCurrent();
-          const { ingestMedia, supportedMime } = await import('../cindy-media/ingest.js');
           if (supportedMime(file.mimeType)) {
-            const refCompensationScope = (await import('../cindy-media/refCompensationJournal.desktop.js')).captureMediaRefCompensationScope();
+            const refCompensationScope = captureMediaRefCompensationScope();
             const media = await ingestMedia({ buffer: file.bytes, mimeType: file.mimeType, isCache: false,
               refs: [{ refKind: source.originKind === 'user' ? 'ghost-grant' : 'ghost-tool-grant', refId: plugin.caller.pluginId, originKind: source.originKind }],
               assertStillValid: assertCurrent, refCompensationScope }, db.drizzle);

@@ -28,6 +28,7 @@ export async function readHistoryAttachment(args: ReadSessionAttachmentArgs, por
   /** Present only for a Host-attested plugin caller. */
   transfer?: (source: HistoryAttachmentSource, file: { bytes: Buffer; mimeType: string }) => Promise<{ attachment_ref?: string; mediaHash?: string }>;
   handoff?: (ref: string) => Promise<{ bytes: Buffer; name: string; mimeType: string } | null>;
+  media?: (hash: string, offset: number, length: number) => Promise<{ bytes: Buffer; size: number; mimeType: string } | null>;
 }) {
   ports.assertCurrent();
   const held = args.attachment_ref ? await ports.handoff?.(args.attachment_ref) : null;
@@ -36,6 +37,14 @@ export async function readHistoryAttachment(args: ReadSessionAttachmentArgs, por
   const source = held ? null : await ports.source();
   ports.assertCurrent();
   if (!held && !source) return { ok: false as const, errorCode: 'NOT_FOUND', message: 'Message attachment does not exist.' };
+  if (!held && args.mediaHash) {
+    const chunk = await ports.media?.(args.mediaHash, args.offset, args.length);
+    ports.assertCurrent();
+    if (!chunk) return { ok: false as const, errorCode: 'ATTACHMENT_UNAVAILABLE', message: 'Granted media is unavailable.' };
+    const end = args.offset + chunk.bytes.byteLength;
+    return { ok: true as const, name: source!.name, mimeType: chunk.mimeType, size: chunk.size, sha256: args.mediaHash,
+      offset: args.offset, base64: chunk.bytes.toString('base64'), nextOffset: end < chunk.size ? end : null, mediaHash: args.mediaHash };
+  }
   const file = held ?? await ports.read(source!);
   ports.assertCurrent();
   const receipt = held ? { attachment_ref: args.attachment_ref } : await ports.transfer?.(source!, file);

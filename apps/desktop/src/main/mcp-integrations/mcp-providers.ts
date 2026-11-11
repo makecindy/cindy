@@ -117,6 +117,8 @@ import { createDesktopTaskDigestDeps } from './taskDigestHost.js';
 import { createTaskToolCallAuthorizer } from '../maker-ipc/taskToolCallAuthorizer.js';
 import { authorizePluginHostToolCall, getPluginHostToolCaller, setHostToolProviders } from './hostToolCaller.js';
 import { createDesktopTaskActionAuthorizer } from '../maker-ipc/taskActionHost.js';
+import { forkTaskAtMessage } from '../maker-ipc/fork.js';
+import { commitTaskRewind } from '../maker-ipc/rewind.js';
 import { authorizeGroupTool } from '../maker-ipc/botGroupToolAuthorization.js';
 import { createSharedTaskTools } from './sharedTaskTools.js';
 import { assertTaskActionCurrent, captureTaskActionSyncGuard } from '../maker-ipc/taskActionAuthorization.js';
@@ -1027,8 +1029,8 @@ export function createDesktopMcpProviders(deps: DesktopMcpProvidersDeps): LiziMc
             result = { id: `${params.sessionId.slice(0, split)}::${row.id}` };
           } else {
             result = params.kind === 'fork'
-              ? await (await import('../maker-ipc/fork.js')).forkTaskAtMessage(params.sessionId, params.messageClientId)
-              : await (await import('../maker-ipc/rewind.js')).commitTaskRewind(params.sessionId, params.messageClientId,
+              ? await forkTaskAtMessage(params.sessionId, params.messageClientId)
+              : await commitTaskRewind(params.sessionId, params.messageClientId,
                 { stopIfRunning: params.stopIfRunning, allowFileRestore: params.allowFileRestore });
           }
           return { ok: true as const, sessionId: result.id };

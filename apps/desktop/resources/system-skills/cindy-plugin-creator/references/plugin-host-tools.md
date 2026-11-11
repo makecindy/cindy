@@ -94,6 +94,6 @@ const result = await cindy.host.call('cindy_helper', 'read_session_attachment', 
 });
 ```
 
-文本结果中的 `base64` 为本段字节，每次最多 64 KiB；`name`、`mimeType`、`size` 与 `sha256` 描述整份附件。`nextOffset` 非空时继续传 `offset:nextOffset`，并带回 `attachment_ref`（若有），直到返回 null。保留同一份内容的 SHA-256，不混合不同版本的分块。不能把正文里的路径或链接当成附件传入。
+文本结果中的 `base64` 为本段字节，每次最多 64 KiB；`name`、`mimeType`、`size` 与 `sha256` 描述整份附件。`nextOffset` 非空时继续传 `offset:nextOffset`，媒体带回 `mediaHash`，普通文件带回 `attachment_ref`，直到返回 null；保留同一组任务、消息和附件序号。媒体后续分块从已有 grant 对应的总仓字节按范围读取，不重复读取来源或入仓。保留同一份内容的 SHA-256，不混合不同版本的分块。不能把正文里的路径或链接当成附件传入。
 
 媒体沿用总仓和插件媒体 grant，返回 `mediaHash`；普通文件沿用 7 天交接副本，返回 `attachment_ref`，也可交给现有 `upload.handoff`。插件逻辑页和 Node 都只得到这些引用、元数据与分块字节，不得到宿主绝对路径。回执过期返回 `HANDOFF_UNAVAILABLE`，重新从原消息取得；账号、安装或批准变化使读取失效。跨设备只在宿主内部解析原消息引用，字节走既有文件传输；旧端不支持时明确返回错误。
