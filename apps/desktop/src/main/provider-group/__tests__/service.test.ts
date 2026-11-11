@@ -1696,6 +1696,39 @@ describe('onTurnError for a shared user (the sharer’s group picks the computer
     expect(h.deps.fallback).toHaveBeenCalledTimes(1);
   });
 
+  // Unit, provider-sharing-direct-execution §7: the live-handle case never
+  // closed M while reading eligibility or waiting for O's switch token.
+  // Retain only the failed input's grant; cancellation/replacement still fence it.
+  it.each(['before-lookup', 'during-request', 'input-cancelled', 'grant-replaced', 'no-grant'] as const)(
+    'fences direct quota recovery across runtime close: %s', async mode => {
+      const h = guestHarness();
+      let grantCurrent = true;
+      const requestSwitch = vi.fn(async () => {
+        live = null;
+        if (mode === 'input-cancelled') h.deps.isLeaseCurrent.mockReturnValue(false);
+        if (mode === 'grant-replaced') grantCurrent = false;
+        return 'token-direct-aaaaaaaaaaaa';
+      });
+      const direct = { ownerRoute: SHARE_ROUTE, requestSwitch,
+        captureRecovery: () => mode === 'no-grant' ? null : ({
+          ownerRoute: SHARE_ROUTE, requestSwitch, isCurrent: () => grantCurrent,
+        }) };
+      let live: typeof direct | null = direct;
+      if (mode === 'before-lookup') h.deps.isFailoverEligible.mockImplementation(async () => {
+        live = null;
+        return true;
+      });
+      const service = createProviderGroupService({ ...h.deps, guestSwitch: h.guestSwitch,
+        directGuestSession: () => live });
+      await service.onTurnError('s1', { message: 'You have hit your usage limit' }, 7);
+      const recovered = mode === 'before-lookup' || mode === 'during-request';
+      expect(requestSwitch).toHaveBeenCalledTimes(mode === 'no-grant' ? 0 : 1);
+      expect(h.deps.switchAgentLocation).toHaveBeenCalledTimes(recovered ? 1 : 0);
+      expect(h.deps.continueSession).toHaveBeenCalledTimes(recovered ? 1 : 0);
+      expect(h.guestSwitch.takeForOpen('s1')).toBe(recovered ? 'token-direct-aaaaaaaaaaaa' : undefined);
+    },
+  );
+
   it('ignores a stale token, a token the user already took over from, and failures any computer would hit', async () => {
     const stale = guestHarness();
     stale.guestSwitch.offer('s1', 'token-aaaaaaaaaaaaaaaa');

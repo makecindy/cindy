@@ -47,6 +47,7 @@ import {
 import type { ProviderGroupBinding, ProviderGroupRef } from './bindings.desktop.js';
 import type { ProviderGroupDirectory } from './directory.js';
 import type { ProviderGroupGuestSwitch } from './guestSwitch.js';
+import type { DirectGuestRecovery } from '../remote-agent/controller/service.js';
 import { isProviderGroupLocalCapacityError } from './localCapacity.js';
 import { providerGroupMemberUsageState, providerGroupRebalanceTarget } from './usage.js';
 import {
@@ -226,6 +227,8 @@ export interface ProviderGroupServiceDeps {
   directGuestSession?(sessionId: string): {
     ownerRoute: string;
     requestSwitch(): Promise<string | undefined>;
+    /** A failed turn may outlive its runtime handle, but never its original authorization. */
+    captureRecovery?(): DirectGuestRecovery | null;
     probeReconnect?(isCurrent?: () => boolean): Promise<'ok' | 'offline' | 'unavailable'>;
   } | null;
   /** 这个任务现在是否正在运行一轮。 */
@@ -1250,6 +1253,9 @@ export function createProviderGroupService(deps: ProviderGroupServiceDeps): Prov
     // (drain 宽限到点关闭重建)，所以在第一次 await 之前取得；同时登记这一趟，下面检查期间用户接手(发消息、重试、
     // 换模型)或新一轮都让它停手(run.superseded / isLeaseCurrent)。
     const lease = deps.leaseRecovery(sessionId, token);
+    // Capture before any DB/eligibility await: terminal-error drain may close M's
+    // handle while O is deciding. The input lease and original grant still fence recovery.
+    const directRecovery = deps.directGuestSession?.(sessionId)?.captureRecovery?.();
     const { run, done } = trackRun(sessionId);
     try {
       if (signals.reason === 'remote_agent_restarted') {
@@ -1284,7 +1290,7 @@ export function createProviderGroupService(deps: ProviderGroupServiceDeps): Prov
         });
         return true;
       }
-      return await failoverRun(sessionId, signals, token, hooks, decision, lease, run);
+      return await failoverRun(sessionId, signals, token, hooks, decision, lease, run, directRecovery);
     } finally {
       done();
     }
@@ -1298,10 +1304,11 @@ export function createProviderGroupService(deps: ProviderGroupServiceDeps): Prov
     decision: ProviderGroupFailureDecision & { action: 'switch' },
     lease: object | null,
     run: { superseded: boolean },
+    directRecovery: DirectGuestRecovery | null | undefined,
   ): Promise<boolean> {
     const { cause } = decision;
     if (!deps.readBinding(sessionId) && !(await adoptOnFailure(sessionId, token, lease, signals.reason))) {
-      return guestFailover(sessionId, signals, token, lease, run, cause, hooks);
+      return guestFailover(sessionId, signals, token, lease, run, cause, hooks, directRecovery);
     }
     const bound = await withTimeout(loadBound(sessionId), PROVIDER_GROUP_ADOPT_TIMEOUT_MS);
     if (!bound) {
@@ -1471,6 +1478,7 @@ export function createProviderGroupService(deps: ProviderGroupServiceDeps): Prov
     run: { superseded: boolean },
     cause: ProviderGroupFailureCause,
     hooks: ProviderGroupTurnErrorHooks | undefined,
+    directRecovery: DirectGuestRecovery | null | undefined,
   ): Promise<boolean> {
     const guestSwitch = deps.guestSwitch;
     if (!guestSwitch) return false;
@@ -1479,12 +1487,14 @@ export function createProviderGroupService(deps: ProviderGroupServiceDeps): Prov
     if (!row?.model || row.remoteHostId || !shareRoute || !isProviderShareAgentDeviceId(shareRoute)) return false;
     if (!(await deps.isFailoverEligible(sessionId, { kind: 'failure', token, lease, reason: signals.reason }))) return false;
     if (!guestSwitch.claim(sessionId)) {
-      const direct = deps.directGuestSession?.(sessionId);
+      const direct = directRecovery === undefined ? deps.directGuestSession?.(sessionId) : directRecovery;
+      const directIsCurrent = () => directRecovery ? directRecovery.isCurrent()
+        : deps.directGuestSession?.(sessionId) === direct;
       if (!direct || direct.ownerRoute !== shareRoute || !lease || run.superseded
-        || !deps.isLeaseCurrent(sessionId, lease)) return false;
+        || !deps.isLeaseCurrent(sessionId, lease) || !directIsCurrent()) return false;
       const offered = await direct.requestSwitch().catch(() => undefined);
       if (!offered || run.superseded || !deps.isLeaseCurrent(sessionId, lease)
-        || deps.directGuestSession?.(sessionId) !== direct) return false;
+        || !directIsCurrent()) return false;
       guestSwitch.offer(sessionId, offered);
       if (!guestSwitch.claim(sessionId)) return false;
     }
