@@ -24,6 +24,7 @@ import {
   translateAgentMessageDelta,
   translateAccountRateLimitsUpdated,
   translateItemNotification,
+  translateOmittedItem,
   translatePlanUpdatedNotification,
   beginCodexGenerationTurn,
   codexGenerationDurationMs,
@@ -152,6 +153,30 @@ describe('Codex assistant text streaming contract', () => {
       } },
     });
     expect(events.some(event => event.type === 'done')).toBe(false);
+    resetCodexGenerationTiming(rt);
+  });
+
+  // #8412 review, unit: an oversized tool result arrives through itemOmitted,
+  // not item/completed. It still proves the earlier commentary was accepted, so
+  // a later stream retry must not mark that commentary failed.
+  it('accepts earlier commentary when a completed tool body was omitted', async () => {
+    const rt = newCodexRuntimeState();
+    const q = createAsyncQueue<AgentEvent>();
+    const ctx = makeCtx(rt);
+    translateItemNotification('completed', { threadId: 't1', turnId: 'turn-a',
+      item: { type: 'agentMessage', id: 'progress', text: 'Writing the file', phase: 'commentary' } }, q, ctx);
+    translateItemNotification('started', { threadId: 't1', turnId: 'turn-a',
+      item: { type: 'commandExecution', id: 'tool', command: 'cat big', cwd: '/repo',
+        status: 'inProgress', aggregatedOutput: '', exitCode: null } } as never, q, ctx);
+    translateOmittedItem('completed', { threadId: 't1', turnId: 'turn-a',
+      item: { id: 'tool', type: 'commandExecution' } }, q, ctx);
+    translateErrorNotification(makeParams({ willRetry: true, message: 'stream disconnected',
+      codexErrorInfo: { responseStreamDisconnected: {} } }), q, ctx);
+    const events = await collect(q);
+    expect(events.find(event => event.type === 'tool_result_full')?.data)
+      .toMatchObject({ toolUseId: 'tool', assistantSamplingAccepted: { agentMessageIds: ['progress'] } });
+    expect(events.filter(event => event.type === 'error' &&
+      (event.data as { assistantAttemptFailure?: unknown }).assistantAttemptFailure)).toEqual([]);
     resetCodexGenerationTiming(rt);
   });
 

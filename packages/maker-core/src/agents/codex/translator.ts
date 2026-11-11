@@ -632,7 +632,7 @@ const OMITTED_ITEM_RESULT = 'Result omitted: too large to display.';
  */
 export function translateOmittedItem(
   phase: ItemPhase,
-  notification: { turnId: string; item: { id?: string; type?: string } },
+  notification: { threadId: string; turnId: string; item: { id?: string; type?: string } },
   queue: AsyncQueue<AgentEvent>,
   ctx: CodexTranslateContext,
 ): void {
@@ -640,6 +640,15 @@ export function translateOmittedItem(
   noteCodexGenerationBoundary(ctx.rt, phase, item, notification);
   if (phase !== 'completed' || !item.id) return;
   const id = item.id;
+  // Same acceptance rule as translateItemNotification: a completed tool proves
+  // the earlier sampling output was accepted, even when its body was omitted.
+  let accepted: string[] | undefined;
+  if (item.type && SAMPLING_ACCEPTED_TOOL_TYPES.has(item.type)) {
+    const key = JSON.stringify([notification.threadId, notification.turnId]);
+    const segment = ctx.rt.samplingSegments.get(key);
+    if (segment?.itemIds.size) accepted = [...segment.itemIds];
+    ctx.rt.samplingSegments.delete(key);
+  }
   for (const byItem of [
     ctx.rt.itemTextLen,
     ctx.rt.itemRawText,
@@ -656,7 +665,8 @@ export function translateOmittedItem(
   if (!ctx.rt.emittedToolUse.delete(id)) return;
   queue.push({
     type: 'tool_result_full',
-    data: { toolUseId: id, fullText: OMITTED_ITEM_RESULT, isError: false },
+    data: { toolUseId: id, fullText: OMITTED_ITEM_RESULT, isError: false,
+      ...(accepted ? { assistantSamplingAccepted: { agentMessageIds: accepted } } : {}) },
     source: 'codex',
   });
   queue.push({
