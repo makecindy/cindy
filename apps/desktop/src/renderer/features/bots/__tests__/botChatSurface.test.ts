@@ -58,10 +58,20 @@ describe('消息流的头像挂载', () => {
     // Assistant text and work folds show avatars; task and teammate-message
     // cards and generated artifacts reserve the same space invisibly.
     // User messages bypass it; fixture geometry covers pending/empty artifacts.
-    expect(messageStream.match(/withAssistantAvatar\(/g)?.length).toBe(5);
+    // Assistant text, work folds, plugin result cards and the started-task chips each
+    // reserve the same reply column in companion conversations.
+    expect(messageStream.match(/withAssistantAvatar\(/g)?.length).toBe(7);
     expect(messageStream).toMatch(/simplifiedBotConversation\s*&&\s*\(message\.systemCardType === 'bot-session-task'\s*\|\|\s*message\.systemCardType === 'bot-session-task-result'\s*\|\|\s*message\.systemCardType === 'bot-session-task-message'\s*\|\|\s*message\.systemCardType === 'bot-direct-message'\)\s*\? withAssistantAvatar\(/);
     expect(messageStream).toMatch(/<span aria-hidden="true" className="invisible">\s*\{assistantAvatar\}\s*<\/span>/);
     expect(messageStream).toContain('{companionAvatar ? withAssistantAvatar(companionAvatar, block) : block}');
+  });
+
+  it('插件卡的头像行承接渲染项标识', () => {
+    // 视口补偿只扫消息列的直接子元素，所以伙伴会话里被头像行包住的插件卡
+    // 必须把 data-render-item-key 交给头像行，而不是留在内层卡片上。
+    // 卡片自身只在不套头像行时留标识，套了就必须把标识交给外层行。
+    expect(messageStream).toContain("...(botReplyColumnSpacer ? {} : { 'data-render-item-key': item.key })");
+    expect(messageStream).toContain('withAssistantAvatar(botReplyColumnSpacer, card, item.key)');
   });
 });
 
@@ -106,12 +116,13 @@ describe('伙伴设置包含独立能力选择入口', () => {
 describe('伙伴消息流复用工作组件并保留独立过程分组', () => {
   it('伙伴过程使用伙伴分组入口，输入框上方仍保留普通状态栏', () => {
     expect(sessionView).toContain('simplifiedBotConversation={Boolean(botChatIdentity)}');
-    expect(messageStream).toContain('botProcessItems(grouped, isSessionStreaming)');
+    expect(messageStream).toContain('botProcessItems(grouped, isSessionStreaming, botTailReplyIds)');
     // Text/tool grouping is covered by botConversationPresentation behavioral tests.
     expect(messageStream).toContain("from '@/features/bots/botConversationPresentation'");
     expect(messageStream).toContain('compact={false}');
     expect(messageStream).not.toContain('compact={simplifiedBotConversation}');
-    expect(messageStream).toContain('companionAvatar={simplifiedBotConversation ? assistantAvatar : undefined}');
+    // Wiring guard only; the real teammate-process fixture verifies visible portraits.
+    expect(messageStream).toMatch(/companionAvatar=\{simplifiedBotConversation\s*\? botContinuationKeys\.has\(item\.key\) \? botReplyColumnSpacer : assistantAvatar\s*: undefined\}/);
     expect(messageStream).not.toContain('data-testid="bot-thinking-indicator"');
     expect(sessionView).not.toContain('<BotWorkingStatus');
     expect(sessionView).toContain('<RunningStatusBar');
@@ -128,7 +139,9 @@ describe('伙伴消息流复用工作组件并保留独立过程分组', () => {
     expect(sessionView).toContain(
       'botUnreadBoundaryAt={botChatIdentity ? botUnreadBoundaryAt : null}',
     );
-    expect(messageStream).toContain("t('bots.chat.newMessagesBoundary')");
+    // The extracted BotMessageTimelineHeader's visible label and accessible
+    // separator are exercised by selectionQuoteUserMessage's real-component test.
+    // Keep this guard about the Bot-only routing, not the label's source location.
     expect(messageStream).toContain('botUnreadBoundaryClientId === msg.clientId');
   });
 

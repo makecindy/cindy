@@ -18,6 +18,7 @@ import { retroDesktopViewport } from "../FoldDesktopSkin";
 import { RemoteDesktopControls } from "../RemoteDesktopControls";
 import { AppState } from "react-native";
 import { goBackGuarded } from "@/utils/backGuard";
+import { resolveMobileInvokeTimeoutMs } from "@/device-link/invokeTimeouts";
 import AsyncStorage from "@react-native-async-storage/async-storage";
 import { darkColors, lightColors } from "@/theme/tokens";
 
@@ -73,7 +74,8 @@ vi.mock("../useAutoUnlockSettings", () => ({
       biometricVerification: true,
       available: true,
       busy: fixture.securityBusy,
-      notice: null,
+      notice: fixture.securityNotice,
+      clearNotice: fixture.clearSecurityNotice,
       onAutoUnlock: vi.fn(),
       onBiometricVerification: vi.fn(),
       maybeUnlock: fixture.maybeUnlock,
@@ -127,6 +129,8 @@ const fixture = vi.hoisted(() => ({
   safe: { top: 59, bottom: 34, left: 0, right: 0 },
   securityAutoUnlock: false,
   securityBusy: false,
+  securityNotice: null as string | null,
+  clearSecurityNotice: vi.fn(),
   themeMode: "light",
   lockOnExit: false,
   lockPreferenceFromStorage: false,
@@ -216,6 +220,7 @@ vi.mock("react-native", async () => {
       },
     },
     Dimensions: {
+      addEventListener: () => ({ remove() {} }),
       get: (kind: string) =>
         kind === "screen"
           ? (fixture.displaySize ?? fixture.size)
@@ -262,9 +267,13 @@ vi.mock("expo-router", () => ({
   }),
 }));
 vi.mock("@/utils/backGuard", () => ({ goBackGuarded: vi.fn() }));
-vi.mock("react-native-safe-area-context", () => ({
-  useSafeAreaInsets: () => fixture.safe,
-}));
+vi.mock("react-native-safe-area-context", async () => {
+  const { createContext } = await import("react");
+  return {
+    SafeAreaInsetsContext: createContext(fixture.safe),
+    useSafeAreaInsets: () => fixture.safe,
+  };
+});
 vi.mock("react-i18next", () => {
   const t = (key: string) => key;
   return { useTranslation: () => ({ t }) };
@@ -328,6 +337,7 @@ vi.mock("@/platform/chrome/NativePullDownMenu", () => ({
     ),
 }));
 vi.mock("lucide-react-native", () => ({
+  CircleAlert: () => null,
   Smartphone: () => null,
   Tablet: () => null,
   ArrowBigUp: () => null,
@@ -511,6 +521,8 @@ beforeEach(async () => {
   fixture.liveScreen = undefined;
   fixture.securityAutoUnlock = false;
   fixture.securityBusy = false;
+  fixture.securityNotice = null;
+  fixture.clearSecurityNotice.mockReset();
   fixture.maybeUnlock.mockReset().mockResolvedValue(undefined);
   fixture.themeMode = "light";
   fixture.lockOnExit = false;
@@ -3492,6 +3504,50 @@ describe("remote desktop controls", () => {
     act(() => button("operations").click());
     expect(host.textContent).not.toContain("remoteDesktop.pipUnavailable");
   });
+  // 回归：自动解锁失败原先只藏在安全页；主画面应给出非模态错误，安全页打开时不重复。
+  // 生产入口 RemoteDesktopScreen；最小输入 security.notice；unit，真实组件渲染。
+  it("surfaces automatic unlock failure on the remote picture without a modal", async () => {
+    await connect();
+    fixture.securityNotice = "remoteDesktop.credentialUnlockUnavailable";
+    act(() => root.render(<RemoteDesktopScreen />));
+    const notice = host.querySelector(
+      '[data-testid="remoteDesktop.autoUnlockNotice"]',
+    );
+    expect(notice).not.toBeNull();
+    expect(notice?.textContent).toContain(
+      "remoteDesktop.credentialUnlockUnavailable",
+    );
+    // 自动解锁失败是异步出现的告警，读屏也必须能播报，不能只有视觉提示。
+    expect(
+      fixture.views["remoteDesktop.autoUnlockNotice"]?.accessibilityRole,
+    ).toBe("alert");
+    expect(fixture.alert).not.toHaveBeenCalled();
+    fixture.clearSecurityNotice.mockImplementation(() => {
+      fixture.securityNotice = null;
+    });
+    act(() =>
+      host
+        .querySelector<HTMLButtonElement>(
+          '[data-testid="remoteDesktop.dismissUnlockNotice"]',
+        )!
+        .click(),
+    );
+    act(() => root.render(<RemoteDesktopScreen />));
+    expect(
+      host.querySelector('[data-testid="remoteDesktop.autoUnlockNotice"]'),
+    ).toBeNull();
+    fixture.securityNotice = "remoteDesktop.credentialUnlockUnavailable";
+    act(() => root.render(<RemoteDesktopScreen />));
+    act(() => button("operations").click());
+    act(() => button("security").click());
+    expect(
+      host.querySelector('[data-testid="remoteDesktop.autoUnlockNotice"]'),
+    ).toBeNull();
+    expect(
+      host.querySelector('[data-testid="remoteDesktop.panelScroll"]')
+        ?.textContent,
+    ).toContain("remoteDesktop.credentialUnlockUnavailable");
+  });
   it("does not reuse Mac eligibility when the route changes to another host", async () => {
     await connect();
     expect(fixture.getHost()).toBe("darwin");
@@ -3793,6 +3849,28 @@ describe("remote desktop controls", () => {
     expect(requests().filter((r) => r.op === "start")).toHaveLength(1);
     expect(host.textContent).toContain("remoteDesktop.backgroundDisconnected");
   });
+  // Unit regression: a missing heartbeat reply must not block renewal beyond the
+  // host's 12s lease. Existing cases rejected immediately; here the mock waits
+  // for the timeout the real mobile transport resolves for this request.
+  it("renews before the host lease expires when a heartbeat reply is missing", async () => {
+    await connect();
+    const original = fixture.invoke.getMockImplementation()!;
+    let heartbeats = 0;
+    fixture.invoke.mockImplementation((...args) => {
+      if (args[2][0].op === "heartbeat" && ++heartbeats === 1) {
+        return new Promise((_, reject) => setTimeout(
+          () => reject({ code: "INVOKE_TIMEOUT" }),
+          resolveMobileInvokeTimeoutMs(args[1], args[2]) ?? 30_000,
+        ));
+      }
+      return original(...args);
+    });
+    await act(async () => vi.advanceTimersByTimeAsync(11_000));
+    expect(heartbeats).toBeGreaterThanOrEqual(2);
+    expect(requests().filter((r) => r.op === "start")).toHaveLength(1);
+    expect(requests().filter((r) => r.op === "stop")).toHaveLength(0);
+  });
+
   it("keeps the host idle clock alive during a transient protected reconnect", async () => {
     fixture.idleSupported = true;
     await connect();
@@ -7080,6 +7158,7 @@ describe("live screen controls", () => {
   const open = async (
     page = <RemoteDesktopScreen />,
     buttons = screen.buttons,
+    firstFrame = true,
   ) => {
     act(() => root.unmount());
     fixture.liveScreen = `${screen.plugin}|${screen.id}`;
@@ -7096,7 +7175,10 @@ describe("live screen controls", () => {
     });
     root = createRoot(host);
     act(() => root.render(page));
-    await connect();
+    if (firstFrame) await connect();
+    else await act(async () => {
+      fixture.message!({ nativeEvent: { data: '{"type":"ready"}' } });
+    });
     await act(async () => {});
   };
   const control = (testID: string) =>
@@ -7115,6 +7197,20 @@ describe("live screen controls", () => {
         .click(),
     );
   };
+
+  // Regression: a plugin screen without a first frame had no visible Back.
+  // Existing live-screen tests only exercised controls after opening (unit tier).
+  it("keeps an exit and identifies the device screen until its first frame", async () => {
+    await open(undefined, undefined, false);
+    expect(control("remoteDesktop.backPosition")).not.toBeNull();
+    expect(host.textContent).toContain("remoteDesktop.liveScreenConnecting");
+    act(() =>
+      fixture.message!({
+        nativeEvent: { data: '{"type":"framePresented","epoch":"lease"}' },
+      }),
+    );
+    expect(control("remoteDesktop.backPosition")).toBeNull();
+  });
 
   it("tells a reloaded viewer again that fingers touch the device", async () => {
     await open();

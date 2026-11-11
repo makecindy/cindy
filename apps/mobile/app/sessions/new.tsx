@@ -1,3 +1,6 @@
+import { TaskArchiveUndoSlot } from '@/session/TaskArchiveUndoNotice';
+import { useComposerDragOpen } from '@/session/useComposerDragOpen';
+import { ResizableComposerInputRow } from '@/session/ResizableComposerInputRow';
 import type { ViewInstance, TextInputInstance, ScrollViewInstance } from 'react-native';
 import { useBotGroupRemoteMedia } from "@/session/useBotGroupRemoteMedia";
 import { ComposerAttachmentPreview } from "@/session/ComposerAttachmentPreview";
@@ -304,7 +307,6 @@ import { confirmFullAccessChange } from '@/session/fullAccessConfirmation';
 import { MobileVendorIcon } from '@/components/MobileVendorIcon';
 import { PlanModeChip } from '@/session/PlanModeChip';
 import {
-  ComposerResizeGrabber,
   ComposerToolbarLeftGroup,
   ComposerToolbarSpacer,
   ComposerToolbarVoiceSlot,
@@ -314,7 +316,6 @@ import {
   MOBILE_COMPOSER_INPUT_MAX_HEIGHT,
   MOBILE_COMPOSER_INPUT_SINGLE_LINE_HEIGHT,
   MOBILE_COMPOSER_MIN_TOUCH_TARGET,
-  MobileComposerInputRow,
   VoiceMicWaveCaret,
   resolveMobileComposerVoiceButtonPlacement,
 } from '@/session/MobileComposerInputRow';
@@ -677,6 +678,8 @@ function NewRemoteSessionContent({ creatingRef }: { creatingRef: { current: bool
     // Worker 默认跟任务(Lead)的 Agent 所在电脑。
     leadAgentDeviceId: remoteAgentPick?.deviceId ?? null,
     agentLocationSelectable: workerAgentLocationSupported,
+    // 任务还没建：没有可审查、可测试的工作，内置角色不带出自带的首条任务。
+    leadHasWork: false,
   });
   const collabTarget = useMemo(() => ({
     orcaRole: null,
@@ -1617,7 +1620,9 @@ function NewRemoteSessionContent({ creatingRef }: { creatingRef: { current: bool
   const pendingImagePreview = useComposerPendingImagePreview({ attachments, previews: attachmentPreviews, pendingUploads, getUploadedAttachmentId });
   const composerImageCount = attachments.filter((item) => item.category === 'image').length + composerIncomingImageCount;
   const { active: composerImageHoldActive, collapse: collapseComposerImages } = useComposerImageExpansion(composerImageCount, imageSelectionRevision);
-  const composerCardActive = firstMessageInputFocused || composerPillOpen.opening
+  const { composerDragOpen, handleComposerDragOpenChange, handleComposerDragOpenCommit } =
+    useComposerDragOpen(firstMessageInputFocused, () => firstMessageInputRef.current?.focus());
+  const composerCardActive = firstMessageInputFocused || composerPillOpen.opening || composerDragOpen
     || composerImageHoldActive
     || modelSheetOpen
     || permissionSheetOpen
@@ -1640,6 +1645,9 @@ function NewRemoteSessionContent({ creatingRef }: { creatingRef: { current: bool
   const composerChromeHeight = (composerCardActive ? COMPOSER_CARD_CHROME_HEIGHT : COMPOSER_RESIZE_CHROME_HEIGHT)
     + composerAttachmentTrayHeight;
   const composerResize = useComposerResize({
+    bodyDragEnabled: !creating && (!composerCardActive || composerAttachmentTrayHeight === 0),
+    onDragOpenChange: handleComposerDragOpenChange,
+    onDragOpenCommit: handleComposerDragOpenCommit,
     autoMaxContentHeight: Math.max(
       MOBILE_COMPOSER_INPUT_SINGLE_LINE_HEIGHT,
       Math.min(MOBILE_COMPOSER_INPUT_MAX_HEIGHT, composerCardMaxHeight - composerChromeHeight),
@@ -2468,11 +2476,10 @@ function NewRemoteSessionContent({ creatingRef }: { creatingRef: { current: bool
     setPermissionSheetOpen(true);
   }, []);
 
-  // 选权限档(独立选择器与模型浮窗共用同一语义):Full access 升级先过确认弹层,
+  // 用户直接选权限档即生效(独立选择器与模型浮窗共用同一语义),
   // 非 plan 档写 per-agent 记忆(内存 + 落盘;对齐桌面 lastByVendor)。
   const selectPermissionMode = useCallback((mode: string) => {
     void (async () => {
-      if (!(await confirmFullAccessChange(draft.permissionMode, mode))) return;
       patchDraft({ permissionMode: mode });
       if (mode === 'plan') return; // 老被控端兼容档,不入记忆
       // 同步进本地 state:本次会话内切走再切回也能拿到最新记忆(落盘不回写 state)。
@@ -3349,15 +3356,6 @@ function NewRemoteSessionContent({ creatingRef }: { creatingRef: { current: bool
     setVoiceDraftCaretFrame({ left: 0, top: 0 });
   }, [draft.firstMessage.length, voiceIsListening]);
 
-  const renderComposerResizeHandle = () => (
-    <ComposerResizeGrabber
-      onAdjust={composerResize.adjustByLine}
-      panHandlers={composerResize.panHandlers}
-      gesture={composerResize.gesture}
-      testID="newSession.composerResizeGrabber"
-      visible
-    />
-  );
   const renderAttachmentToggleButton = () => (
     <Pressable
       accessibilityLabel={t('session.common.openContextPanel')}
@@ -5613,10 +5611,11 @@ function NewRemoteSessionContent({ creatingRef }: { creatingRef: { current: bool
                   ) : null}
                 </View>
               ) : null}
+              <TaskArchiveUndoSlot active={isShareTargetFocused} />
               <View style={[styles.composerToolbarWrap, composerCardActive && {
                 minHeight: COMPOSER_CARD_CHROME_HEIGHT + MOBILE_COMPOSER_INPUT_SINGLE_LINE_HEIGHT,
               }]}>
-                <MobileComposerInputRow
+                <ResizableComposerInputRow resize={composerResize}
                   accessibilityLabel={t('session.new.firstMessagePlaceholder')}
                   bodyScrollGesture={composerResize.scrollGesture}
                   bodyScrollEnabled={!composerResize.dragging}
@@ -5657,7 +5656,7 @@ function NewRemoteSessionContent({ creatingRef }: { creatingRef: { current: bool
                   onPasteImagesLoadFailed={failPastePlaceholders}
 
                   placeholderTextColor={colors.textPlaceholder}
-                  resizeHandle={composerCardActive ? renderComposerResizeHandle() : null}
+                  grabberTestID="newSession.composerResizeGrabber"
                   scrollEnabled={composerInputScrollEnabled}
 
                   selectionColor={colors.inputCaret}
@@ -5768,9 +5767,9 @@ function NewRemoteSessionContent({ creatingRef }: { creatingRef: { current: bool
             label={t('session.collab.draftSubmit')}
             onPress={() => {
               // 与桌面新建任务一样:确认协同草稿即记住这次的 Worker 选择。
-              collabForm.remember(collabForm.form);
+              collabForm.remember(collabForm.submission);
               collabDraftTargetRef.current = collabTargetKey;
-              setCollabDraft(collabForm.form);
+              setCollabDraft(collabForm.submission);
               setContextSheetView('main');
               setContextSheetOpen(false);
             }}
@@ -5877,12 +5876,16 @@ function NewRemoteSessionContent({ creatingRef }: { creatingRef: { current: bool
               executionDevicesError={collabForm.executionDevicesError}
               busy={creating}
               customRoleMode={collabForm.customRoleMode}
+              description={t('session.collab.enableHint')}
               form={collabForm.form}
               notice={orcaCollabEntryHint(collabEntryStatus)}
               onAgentChange={collabForm.changeAgent}
               onChange={collabForm.patch}
-              onCustomRoleModeChange={collabForm.setCustomRoleMode}
               onPermissionChange={(mode) => void collabForm.changePermission(mode)}
+              onRemoveRole={collabForm.removeRole}
+              onSelectRole={collabForm.selectRole}
+              roles={collabForm.roles}
+              rolesEditable={collabForm.rolesEditable}
               onPickModel={collabForm.modelPicker.openPicker}
               onPickDirectory={collabForm.directoryPicker.openPicker}
             />

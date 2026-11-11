@@ -401,7 +401,6 @@ dependencies = [
  "tauri-build",
  "thiserror 2.0.18",
  "walkdir",
- "windows 0.61.3",
  "windows-sys 0.59.0",
  "zip",
 ]

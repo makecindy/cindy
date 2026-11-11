@@ -26,7 +26,6 @@ thiserror = "2"
 open = "5"
 
 [target.'cfg(windows)'.dependencies]
-windows = { version = "0.61", features = ["Win32_Foundation", "Win32_System_Com", "Win32_System_Ole", "Win32_System_Variant", "Win32_UI_Shell"] }
 # Windows APIs for UAC installation and same-account desktop-shell relaunch.
 # Keep only the modules used by these two boundaries.
 windows-sys = { version = "0.59", features = [

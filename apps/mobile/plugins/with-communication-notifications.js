@@ -33,8 +33,12 @@ function configureProject(project, config, platformRoot, projectRoot) {
   const directory = path.join(platformRoot, TARGET);
   fs.mkdirSync(directory, { recursive: true });
   fs.copyFileSync(path.join(__dirname, 'communication-notifications/NotificationService.swift'), path.join(directory, 'NotificationService.swift'));
-  fs.writeFileSync(path.join(directory, 'Info.plist'), plist.default.build(extensionInfo()));
-  fs.writeFileSync(path.join(directory, `${TARGET}.entitlements`), plist.default.build({ [ENTITLEMENT]: true }));
+  fs.copyFileSync(path.resolve(projectRoot, 'modules/cindy-agent-net/ios/AgentNetNotifications.swift'), path.join(directory, 'AgentNetNotifications.swift'));
+  const keychainGroup = `$(AppIdentifierPrefix)${config.ios.bundleIdentifier}.agent-net-notifications`;
+  fs.writeFileSync(path.join(directory, 'Info.plist'), plist.default.build({ ...extensionInfo(), CindyAgentNetKeychainGroup: keychainGroup }));
+  // Communication Notifications belongs to the containing app target. Xcode
+  // cannot provision this capability for a notification service extension.
+  fs.writeFileSync(path.join(directory, `${TARGET}.entitlements`), plist.default.build({ 'keychain-access-groups': [keychainGroup] }));
   for (const [name, file] of Object.entries(portraits)) {
     fs.copyFileSync(path.resolve(projectRoot, file), path.join(directory, `teammate-${name}.png`));
   }
@@ -43,11 +47,13 @@ function configureProject(project, config, platformRoot, projectRoot) {
   if (!target) {
     const added = project.addTarget(TARGET, 'app_extension', TARGET, bundleId);
     target = [added.uuid, added.pbxNativeTarget];
-    project.addBuildPhase([`${TARGET}/NotificationService.swift`], 'PBXSourcesBuildPhase', 'Sources', added.uuid);
+    project.addBuildPhase([`${TARGET}/NotificationService.swift`, `${TARGET}/AgentNetNotifications.swift`], 'PBXSourcesBuildPhase', 'Sources', added.uuid);
     project.addBuildPhase([], 'PBXFrameworksBuildPhase', 'Frameworks', added.uuid);
     project.addBuildPhase(Object.keys(portraits).map(name => `${TARGET}/teammate-${name}.png`), 'PBXResourcesBuildPhase', 'Resources', added.uuid);
   }
   const [, nativeTarget] = target;
+  const swiftSource = `${TARGET}/AgentNetNotifications.swift`;
+  if (!project.hasFile(swiftSource)) project.addSourceFile(swiftSource, { target: target[0] });
   const configurations = project.pbxXCConfigurationList()[nativeTarget.buildConfigurationList].buildConfigurations;
   for (const item of configurations) {
     const settings = project.pbxXCBuildConfigurationSection()[item.value].buildSettings;
@@ -83,9 +89,12 @@ module.exports = function withCommunicationNotifications(config) {
   }]);
   config = withEntitlementsPlist(config, mod => {
     mod.modResults[ENTITLEMENT] = true;
+    mod.modResults['keychain-access-groups'] = [...new Set([...(mod.modResults['keychain-access-groups'] ?? []),
+      `$(AppIdentifierPrefix)${config.ios.bundleIdentifier}.agent-net-notifications`])];
     return mod;
   });
   config = withInfoPlist(config, mod => {
+    mod.modResults.CindyAgentNetKeychainGroup = `$(AppIdentifierPrefix)${config.ios.bundleIdentifier}.agent-net-notifications`;
     mod.modResults.NSUserActivityTypes = [...new Set([...(mod.modResults.NSUserActivityTypes ?? []), 'INSendMessageIntent'])];
     return mod;
   });
@@ -97,7 +106,8 @@ module.exports = function withCommunicationNotifications(config) {
       ...experimental.ios,
       appExtensions: [
         ...(experimental.ios?.appExtensions ?? []).filter(item => item.targetName !== TARGET),
-        { targetName: TARGET, bundleIdentifier: `${config.ios.bundleIdentifier}.${TARGET}`, entitlements: { [ENTITLEMENT]: true } },
+        { targetName: TARGET, bundleIdentifier: `${config.ios.bundleIdentifier}.${TARGET}`, entitlements: {
+          'keychain-access-groups': [`$(AppIdentifierPrefix)${config.ios.bundleIdentifier}.agent-net-notifications`] } },
       ],
     } },
   } } };

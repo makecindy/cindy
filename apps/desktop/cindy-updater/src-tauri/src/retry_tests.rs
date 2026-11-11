@@ -74,6 +74,185 @@ impl Drop for Fixture {
     }
 }
 
+struct TestProcess(std::process::Child);
+impl Drop for TestProcess {
+    fn drop(&mut self) {
+        let _ = self.0.kill();
+        let _ = self.0.wait();
+    }
+}
+
+fn start_install_process(fixture: &Fixture) -> TestProcess {
+    let executable = fixture.args.app_dir.join("retry-process-fixture.exe");
+    fs::copy(std::env::current_exe().unwrap(), &executable).unwrap();
+    TestProcess(
+        std::process::Command::new(executable)
+            .args([
+                "--exact",
+                "installer::retry_tests::retry_process_fixture",
+                "--ignored",
+            ])
+            .stdout(std::process::Stdio::null())
+            .spawn()
+            .unwrap(),
+    )
+}
+
+// Production transaction regression: an exited/missed main process can leave
+// an install-dir child alive. Earlier tests only covered a definitely failed
+// launch, so they allowed overwriting its files during rollback. The minimum
+// input is a launch error with one live install-dir process (Rust integration
+// fixture); assert file contents and recovery choices, not implementation text.
+#[test]
+fn surviving_install_process_prevents_overwrite_rollback() {
+    let fixture = Fixture::new();
+    let args = &fixture.args;
+    let (extract, backup) = fixture.prepare(args);
+    let mut child = start_install_process(&fixture);
+    let mut attempt = AttemptState::default();
+    let error = replace_and_launch(args, &extract, &backup, &mut attempt, &mut |_| {}, |_| {
+        anyhow::bail!("main process exited but child is still alive")
+    })
+    .unwrap_err();
+    assert!(error.to_string().contains("未执行覆盖回滚"));
+    assert_eq!(
+        fs::read(args.app_dir.join("Cindy.exe")).unwrap(),
+        b"new exe"
+    );
+    assert_eq!(
+        fs::read(args.app_dir.join("resources/app.asar")).unwrap(),
+        b"new app"
+    );
+    assert_eq!(fs::read(backup.join("Cindy.exe")).unwrap(), b"old exe");
+    assert!(!finish_failed_attempt(args, &attempt));
+    assert!(backup.exists());
+    assert!(child.0.try_wait().unwrap().is_none());
+}
+
+// A failed handle query is not proof of exit. Exercise real replacement and
+// cleanup without fabricating a Windows handle or launching the installed app.
+#[test]
+fn unknown_created_process_preserves_new_tree_and_recovery_backup() {
+    let fixture = Fixture::new();
+    let args = &fixture.args;
+    let (extract, backup) = fixture.prepare(args);
+    let mut attempt = AttemptState::default();
+    let error = replace_and_launch(args, &extract, &backup, &mut attempt, &mut |_| {}, |_| {
+        Err(LaunchStateUnknown(io::Error::other("simulated handle query failure")).into())
+    })
+    .unwrap_err();
+    assert!(error.to_string().contains("未执行覆盖回滚"));
+    assert_eq!(
+        fs::read(args.app_dir.join("Cindy.exe")).unwrap(),
+        b"new exe"
+    );
+    assert_eq!(fs::read(backup.join("Cindy.exe")).unwrap(), b"old exe");
+    assert!(!finish_failed_attempt(args, &attempt));
+    assert!(backup.exists());
+}
+
+// Integration tier, explicitly invoked by check-windows-updater-launch.mjs.
+// The launcher-only matrix cannot observe replacement, rollback, retained ZIP
+// or Close. Use the real installer entry and an isolated executable that waits
+// for our release file. Never call the updater's global stale-temp sweep or use
+// an installed Cindy. The driver removes CINDY_VERSION_SYNC_KEY from its env.
+#[cfg(target_os = "windows")]
+#[test]
+#[ignore = "requires the isolated Windows launcher integration driver"]
+fn real_launcher_transactions_rollback_retry_and_close() {
+    let executable =
+        std::env::var_os("CINDY_UPDATER_TEST_EXE").expect("integration driver required");
+    assert!(std::env::var_os("CINDY_VERSION_SYNC_KEY").is_none());
+    let fixture = Fixture::new();
+    let mut args = fixture.args.clone();
+    use std::os::windows::process::CommandExt;
+    // PID 0 is Windows' real Idle process. Retain a handle to our known-exited
+    // fixture parent so this test neither waits on a system PID nor reuses one.
+    let mut parent = std::process::Command::new(std::env::var("ComSpec").unwrap())
+        .args(["/d", "/c", "exit", "0"])
+        .creation_flags(0x08000000)
+        .spawn()
+        .unwrap();
+    args.pid = parent.id();
+    assert!(parent.wait().unwrap().success());
+    let image = fs::read(executable).unwrap();
+    let receipt = fixture.root.join("receipt.txt");
+    let release = fixture.root.join("release");
+    std::env::set_var("CINDY_LAUNCH_TEST_RECEIPT", &receipt);
+    std::env::set_var("CINDY_LAUNCH_TEST_RELEASE", &release);
+    std::env::set_var("CINDY_LAUNCH_TEST_CONTEXT", "transaction-only");
+    let write_package = |image: &[u8], version: &[u8]| {
+        let mut zip = zip::ZipWriter::new(File::create(&args.zip).unwrap());
+        for (name, bytes) in [("Cindy.exe", image), ("resources/app.asar", version)] {
+            zip.start_file(name, zip::write::SimpleFileOptions::default())
+                .unwrap();
+            zip.write_all(bytes).unwrap();
+        }
+        zip.finish().unwrap();
+    };
+    let release_child = || {
+        let deadline = Instant::now() + Duration::from_secs(10);
+        while !receipt.exists() {
+            assert!(
+                Instant::now() < deadline,
+                "new process did not write its receipt"
+            );
+            std::thread::sleep(Duration::from_millis(20));
+        }
+        assert!(fs::read_to_string(&receipt).unwrap().starts_with("0|"));
+        fs::write(&release, b"done").unwrap();
+        let mut sys = System::new();
+        while !collect_appdir_processes(&mut sys, &args.app_dir, std::process::id()).is_empty() {
+            assert!(Instant::now() < deadline, "fixture child did not exit");
+            std::thread::sleep(Duration::from_millis(20));
+        }
+        fs::remove_file(&receipt).unwrap();
+        fs::remove_file(&release).unwrap();
+    };
+    for version in [b"version-one".as_slice(), b"version-two".as_slice()] {
+        write_package(&image, version);
+        let mut done = false;
+        run(args.clone(), |event| match event {
+            InstallerEvent::Done => done = true,
+            InstallerEvent::Failed { error, .. } => panic!("{error}"),
+            _ => {}
+        });
+        assert!(done);
+        assert_eq!(
+            fs::read(args.app_dir.join("resources/app.asar")).unwrap(),
+            version
+        );
+        assert!(!args.zip.exists());
+        assert!(!args.lock.exists());
+        release_child();
+    }
+    write_package(b"invalid executable image", b"broken version");
+    for attempt in [args.clone(), retry_args(&args)] {
+        let mut failed = false;
+        run(attempt, |event| {
+            if let InstallerEvent::Failed {
+                can_retry,
+                relaunch_on_close,
+                ..
+            } = event
+            {
+                assert!(can_retry && relaunch_on_close);
+                failed = true;
+            }
+        });
+        assert!(failed);
+        assert_eq!(fs::read(args.app_dir.join("Cindy.exe")).unwrap(), image);
+        assert_eq!(
+            fs::read(args.app_dir.join("resources/app.asar")).unwrap(),
+            b"version-two"
+        );
+        assert!(retry_available(&retry_archive(&args)));
+    }
+    abandon_retry(&args, true);
+    assert!(!retry_archive(&args).exists());
+    release_child();
+}
+
 #[test]
 fn launch_failure_rolls_back_and_same_package_succeeds_on_manual_retry() {
     let fixture = Fixture::new();
@@ -140,7 +319,7 @@ fn rollback_failure_disables_retry_and_keeps_original_backup() {
     })
     .unwrap_err();
     assert!(error.to_string().contains("回滚也失败"));
-    assert!(attempt.rollback_failed);
+    assert!(attempt.recovery_required);
     assert!(!finish_failed_attempt(args, &attempt));
     assert_eq!(fs::read(backup.join("Cindy.exe")).unwrap(), b"old exe");
     assert!(!args.zip.exists());
@@ -166,7 +345,7 @@ fn missing_backup_is_not_reported_as_a_successful_rollback() {
     })
     .unwrap_err();
     assert!(error.to_string().contains("回滚也失败"));
-    assert!(attempt.rollback_failed);
+    assert!(attempt.recovery_required);
     assert!(!finish_failed_attempt(args, &attempt));
     assert_eq!(
         fs::read(moved_backup.join("Cindy.exe")).unwrap(),
@@ -177,26 +356,7 @@ fn missing_backup_is_not_reported_as_a_successful_rollback() {
 #[test]
 fn retry_rejects_running_processes_without_terminating_them() {
     let fixture = Fixture::new();
-    let executable = fixture.args.app_dir.join("retry-process-fixture.exe");
-    fs::copy(std::env::current_exe().unwrap(), &executable).unwrap();
-    struct Child(std::process::Child);
-    impl Drop for Child {
-        fn drop(&mut self) {
-            let _ = self.0.kill();
-            let _ = self.0.wait();
-        }
-    }
-    let mut child = Child(
-        std::process::Command::new(&executable)
-            .args([
-                "--exact",
-                "installer::retry_tests::retry_process_fixture",
-                "--ignored",
-            ])
-            .stdout(std::process::Stdio::null())
-            .spawn()
-            .unwrap(),
-    );
+    let mut child = start_install_process(&fixture);
     let deadline = std::time::Instant::now() + Duration::from_secs(5);
     while ensure_retry_processes_closed(&fixture.args).is_ok() {
         assert!(

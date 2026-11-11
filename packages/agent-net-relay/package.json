@@ -1,0 +1,37 @@
+{
+  "name": "@cindy/agent-net-relay",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "main": "./src/index.ts",
+  "types": "./src/index.ts",
+  "exports": {
+    ".": "./src/index.ts",
+    "./client": "./src/client.ts",
+    "./sharing-auth": "./src/sharingAuth.ts",
+    "./cli": "./src/cli.ts",
+    "./gateway": "./src/gateway.ts",
+    "./notification-bridge": "./src/notificationBridge.ts"
+  },
+  "scripts": {
+    "build": "tsup",
+    "bundle": "node build.mjs",
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run"
+  },
+  "dependencies": {
+    "@cindy/agent-net-protocol": "workspace:*",
+    "@cindy/device-link-sharing": "workspace:*",
+    "jose": "^6.2.2",
+    "ws": "^8.18.3"
+  },
+  "devDependencies": {
+    "esbuild": "^0.28.1",
+    "@types/node": "^22.0.0",
+    "@types/ws": "^8.18.1",
+    "tsup": "^8.3.0",
+    "typescript": "^5.7.0",
+    "vitest": "^3.2.4",
+    "tsx": "^4.19.0"
+  }
+}

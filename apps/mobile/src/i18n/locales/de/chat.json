@@ -153,6 +153,9 @@
     "workDetails": "Arbeitsdetails"
   },
   "teammateProcess": {
+    "retry": "Erneut versuchen",
+    "empty": "Für diese Antwort sind keine Prozessdetails vorhanden",
+    "unavailable": "Prozessdetails konnten nicht geladen werden",
     "record": "Aktivität",
     "operations": "Aktivitätsprotokoll",
     "elapsed": "In Bearbeitung seit {{duration}}",

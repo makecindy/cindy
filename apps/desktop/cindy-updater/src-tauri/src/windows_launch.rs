@@ -1,32 +1,28 @@
 //! Updating Program Files needs elevation; running Cindy afterwards does not.
-//! Ask the existing desktop shell only after verifying the SAME user/session,
-//! never a newly-created (possibly elevated) Shell.Application.
-use std::{io, mem, os::windows::ffi::OsStrExt, path::Path, ptr};
-use windows::{
-    core::{Interface, BSTR},
-    Win32::{
-        Foundation::RPC_E_CHANGED_MODE,
-        System::{
-            Com::{
-                CoCreateInstance, CoInitializeEx, CoUninitialize, IDispatch, IServiceProvider,
-                CLSCTX_LOCAL_SERVER, COINIT_APARTMENTTHREADED,
-            },
-            Variant::VARIANT,
-        },
-        UI::Shell::{
-            IShellBrowser, IShellDispatch2, IShellFolderViewDual, IShellWindows,
-            SID_STopLevelBrowser, ShellWindows, SVGIO_BACKGROUND, SWC_DESKTOP, SWFO_NEEDDISPATCH,
-        },
+//! Create the child with the verified SAME-user/session ordinary desktop shell
+//! as parent. Unlike COM ShellExecute this returns the actual process handle:
+//! there is no queued, uncancellable launch that can arrive during rollback.
+use std::{
+    io, mem,
+    os::windows::{
+        ffi::OsStrExt,
+        io::{AsRawHandle, FromRawHandle, OwnedHandle},
     },
+    path::Path,
+    ptr,
 };
 use windows_sys::Win32::{
-    Foundation::{CloseHandle, HANDLE},
+    Foundation::{CloseHandle, HANDLE, WAIT_OBJECT_0, WAIT_TIMEOUT},
     Security::{
         EqualSid, GetTokenInformation, TokenElevation, TokenSessionId, TokenUser, TOKEN_ELEVATION,
         TOKEN_QUERY, TOKEN_USER,
     },
     System::Threading::{
-        GetCurrentProcess, OpenProcess, OpenProcessToken, PROCESS_QUERY_LIMITED_INFORMATION,
+        CreateProcessW, DeleteProcThreadAttributeList, GetCurrentProcess,
+        InitializeProcThreadAttributeList, OpenProcess, OpenProcessToken,
+        UpdateProcThreadAttribute, WaitForSingleObject, CREATE_NEW_PROCESS_GROUP, DETACHED_PROCESS,
+        EXTENDED_STARTUPINFO_PRESENT, PROCESS_CREATE_PROCESS, PROCESS_INFORMATION,
+        PROCESS_QUERY_LIMITED_INFORMATION, PROC_THREAD_ATTRIBUTE_PARENT_PROCESS, STARTUPINFOEXW,
     },
     UI::WindowsAndMessaging::{GetShellWindow, GetWindowThreadProcessId},
 };
@@ -39,13 +35,12 @@ impl Drop for Token {
         }
     }
 }
-struct Apartment(bool);
-impl Drop for Apartment {
+// Aligned storage for Windows' opaque attribute list, freed on every path.
+struct Attributes(Vec<usize>);
+impl Drop for Attributes {
     fn drop(&mut self) {
         unsafe {
-            if self.0 {
-                CoUninitialize();
-            }
+            DeleteProcThreadAttributeList(self.0.as_mut_ptr().cast());
         }
     }
 }
@@ -101,9 +96,10 @@ fn user(token: HANDLE) -> io::Result<Vec<usize>> {
     Ok(buffer)
 }
 
-/// False means the caller is already normal. Never change Windows accounts to
-/// obtain a normal token; errors retain the original launch fallback.
-pub(crate) fn launch_via_desktop_shell(exe: &Path) -> io::Result<bool> {
+/// None means the caller is already normal. Every Err occurs before a child
+/// was created, so the original detached fallback cannot duplicate a launch.
+/// Never change accounts, enable privileges, or alter ACLs to obtain a parent.
+pub(crate) fn launch_via_desktop_shell(exe: &Path) -> io::Result<Option<OwnedHandle>> {
     let mut handle = ptr::null_mut();
     if unsafe { OpenProcessToken(GetCurrentProcess(), TOKEN_QUERY, &mut handle) } == 0 {
         return Err(last_error("OpenProcessToken(current)"));
@@ -111,7 +107,7 @@ pub(crate) fn launch_via_desktop_shell(exe: &Path) -> io::Result<bool> {
     let current = Token(handle);
     let elevation: TOKEN_ELEVATION = information(current.0, TokenElevation)?;
     if elevation.TokenIsElevated == 0 {
-        return Ok(false);
+        return Ok(None);
     }
     let shell_window = unsafe { GetShellWindow() };
     let mut shell_pid = 0;
@@ -120,11 +116,26 @@ pub(crate) fn launch_via_desktop_shell(exe: &Path) -> io::Result<bool> {
     {
         return Err(io::Error::other("desktop shell unavailable"));
     }
-    let shell_process = unsafe { OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, 0, shell_pid) };
+    let shell_process = unsafe {
+        OpenProcess(
+            PROCESS_QUERY_LIMITED_INFORMATION | PROCESS_CREATE_PROCESS,
+            0,
+            shell_pid,
+        )
+    };
     if shell_process.is_null() {
         return Err(last_error("OpenProcess(shell)"));
     }
     let shell_process = Token(shell_process);
+    let mut desktop_pid = 0;
+    if unsafe { GetShellWindow() } != shell_window
+        || unsafe { GetWindowThreadProcessId(shell_window, &mut desktop_pid) } == 0
+        || desktop_pid != shell_pid
+    {
+        return Err(io::Error::other(
+            "desktop shell changed during verification",
+        ));
+    }
     let mut shell_token = ptr::null_mut();
     if unsafe { OpenProcessToken(shell_process.0, TOKEN_QUERY, &mut shell_token) } == 0 {
         return Err(last_error("OpenProcessToken(shell)"));
@@ -149,54 +160,99 @@ pub(crate) fn launch_via_desktop_shell(exe: &Path) -> io::Result<bool> {
             "desktop token identity or elevation mismatch",
         ));
     }
-    // Bind the desktop view inside the already-running shell. CoCreating
-    // Shell.Application directly can instead create another elevated server.
-    // https://devblogs.microsoft.com/oldnewthing/20131118-00/?p=2643
-    unsafe {
-        let initialized = CoInitializeEx(None, COINIT_APARTMENTTHREADED);
-        if initialized.is_err() && initialized != RPC_E_CHANGED_MODE {
-            return Err(io::Error::other(format!(
-                "CoInitializeEx: HRESULT {initialized:?}"
-            )));
-        }
-        let _apartment = Apartment(initialized.is_ok());
-        let launch = || -> windows::core::Result<()> {
-            let shell_windows: IShellWindows =
-                CoCreateInstance(&ShellWindows, None, CLSCTX_LOCAL_SERVER)?;
-            let location = VARIANT::from(0i32);
-            let mut desktop_hwnd = 0;
-            let desktop = shell_windows.FindWindowSW(
-                &location,
-                &location,
-                SWC_DESKTOP,
-                &mut desktop_hwnd,
-                SWFO_NEEDDISPATCH,
-            )?;
-            let mut desktop_pid = 0;
-            GetWindowThreadProcessId(desktop_hwnd as isize as *mut _, &mut desktop_pid);
-            if desktop_pid != shell_pid {
-                return Err(windows::core::Error::from_hresult(windows::core::HRESULT(
-                    0x80070005u32 as i32,
-                )));
-            }
-            let service: IServiceProvider = desktop.cast()?;
-            let browser: IShellBrowser = service.QueryService(&SID_STopLevelBrowser)?;
-            let view = browser.QueryActiveShellView()?;
-            let background: IDispatch = view.GetItemObject(SVGIO_BACKGROUND)?;
-            let folder: IShellFolderViewDual = background.cast()?;
-            let application: IShellDispatch2 = folder.Application()?.cast()?;
-            let file = BSTR::from_wide(&exe.as_os_str().encode_wide().collect::<Vec<_>>());
-            application.ShellExecute(
-                &file,
-                &VARIANT::default(),
-                &VARIANT::default(),
-                &VARIANT::from("open"),
-                &VARIANT::from(1i32),
-            )
-        };
-        launch().map_err(|error| {
-            io::Error::other(format!("desktop ShellExecute: HRESULT {:?}", error.code()))
-        })?;
+    // This documented parent attribute inherits the verified shell token, not
+    // the elevated updater token. Keep the opened process handle throughout,
+    // so shell exit/PID reuse cannot select a different parent.
+    // https://devblogs.microsoft.com/oldnewthing/20190425-00/?p=102443
+    // Environment and cwd deliberately retain the ORIGINAL detached launch's
+    // caller context; specifying a parent does not inherit Explorer's values.
+    if !exe.is_absolute() {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            "executable path must be absolute",
+        ));
     }
-    Ok(true)
+    let file: Vec<u16> = exe.as_os_str().encode_wide().chain(Some(0)).collect();
+    if file[..file.len() - 1].iter().any(|c| *c == 0 || *c == 34) {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            "invalid executable path",
+        ));
+    }
+    let mut command: Vec<u16> = std::iter::once(34)
+        .chain(file[..file.len() - 1].iter().copied())
+        .chain([34, 0])
+        .collect();
+    unsafe {
+        let mut size = 0;
+        InitializeProcThreadAttributeList(ptr::null_mut(), 1, 0, &mut size);
+        if size == 0 || size > 65_536 {
+            return Err(io::Error::other("invalid process attribute size"));
+        }
+        let mut buffer = vec![0usize; size.div_ceil(mem::size_of::<usize>())];
+        if InitializeProcThreadAttributeList(buffer.as_mut_ptr().cast(), 1, 0, &mut size) == 0 {
+            return Err(last_error("InitializeProcThreadAttributeList"));
+        }
+        let mut attributes = Attributes(buffer);
+        if UpdateProcThreadAttribute(
+            attributes.0.as_mut_ptr().cast(),
+            0,
+            PROC_THREAD_ATTRIBUTE_PARENT_PROCESS as usize,
+            (&shell_process.0 as *const HANDLE).cast(),
+            mem::size_of::<HANDLE>(),
+            ptr::null_mut(),
+            ptr::null(),
+        ) == 0
+        {
+            return Err(last_error("UpdateProcThreadAttribute(parent)"));
+        }
+        let mut startup: STARTUPINFOEXW = mem::zeroed();
+        startup.StartupInfo.cb = mem::size_of::<STARTUPINFOEXW>() as u32;
+        startup.lpAttributeList = attributes.0.as_mut_ptr().cast();
+        let mut process: PROCESS_INFORMATION = mem::zeroed();
+        if CreateProcessW(
+            file.as_ptr(),
+            command.as_mut_ptr(),
+            ptr::null(),
+            ptr::null(),
+            0,
+            EXTENDED_STARTUPINFO_PRESENT | DETACHED_PROCESS | CREATE_NEW_PROCESS_GROUP,
+            ptr::null(),
+            ptr::null(),
+            &startup.StartupInfo,
+            &mut process,
+        ) == 0
+        {
+            return Err(last_error("CreateProcessW(desktop parent)"));
+        }
+        CloseHandle(process.hThread);
+        Ok(Some(OwnedHandle::from_raw_handle(process.hProcess)))
+    }
+}
+
+/// A fixed executable launch, never file associations or a UAC request. Both
+/// branches return the created process; fallback is possible only before that.
+pub(crate) fn spawn_detached(
+    exe: &Path,
+    on_shell_error: impl FnOnce(&io::Error),
+) -> io::Result<OwnedHandle> {
+    use std::os::windows::process::CommandExt;
+    match launch_via_desktop_shell(exe) {
+        Ok(Some(process)) => return Ok(process),
+        Ok(None) => {}
+        Err(error) => on_shell_error(&error),
+    }
+    std::process::Command::new(exe)
+        .creation_flags(DETACHED_PROCESS | CREATE_NEW_PROCESS_GROUP)
+        .spawn()
+        .map(Into::into)
+}
+
+/// Query the exact created process, not a global name match or a reused PID.
+pub(crate) fn is_running(process: &OwnedHandle) -> io::Result<bool> {
+    match unsafe { WaitForSingleObject(process.as_raw_handle(), 0) } {
+        WAIT_TIMEOUT => Ok(true),
+        WAIT_OBJECT_0 => Ok(false),
+        _ => Err(last_error("WaitForSingleObject(child)")),
+    }
 }

@@ -46,6 +46,16 @@ Agent 只能通过 `updateService.ts` 的 `applyConfirmedAppUpdateForAgent` 走�
 check → download → relaunch 状态机，且必须先经宿主确认卡；不得给 Agent 新开下载、替换或重启
 路径。产品规则见 [`../product-rules/agent-app-update.md`](../product-rules/agent-app-update.md)。
 
+## Rosetta 下的 x64 包换装原生架构
+
+应用更新只前进不后退，唯一例外由 `updateService.ts` 的 `appUpdateRelation` 统一判定：
+darwin + x64 + `app.runningUnderARM64Translation` 的进程，经 `manifestService.fetchAppUpdateManifest`
+读到不低于 x64 版本的同渠道 `manifest-darwin-arm64*.json` 时，同版本 arm64 hotfix 也视为可安装。
+补丁在 `patch-info.json` 记 `targetArch: 'arm64'`，换装后进程已是 arm64，同版本补丁按已应用清理。
+arm64 清单不写清单缓存、不通知监听者，引擎安装继续按进程架构取资产。macOS 执行器整包替换
+`.app`，换架构不残留旧文件。Agent 更新查询保持严格版本比较。新增版本闸门须复用 `appUpdateRelation`，
+不要另写同版本例外。
+
 ## 引擎二进制的后台下载
 
 主程序的检查、下载、ready、自动重启、替换和回滚条件不依赖引擎下载。环境就绪后，
@@ -84,10 +94,18 @@ Pi 的显式版本选择沿用原内核管理器，不由后台更新覆盖。�
 
 写入 Program Files 所需的提权不应传给更新后的 Cindy。`windows_launch.rs` 查询实际进程
 令牌（不能用仅表示 UAC 重入的 `args.elevated` 判断），提权时读取当前桌面 Shell 的令牌，
-确认同账号、同登录会话且未提权后，通过该 Shell 桌面视图的启动接口打开客户端；不借用其他账号的 Explorer，
-也不启动可能同样提权的 `Shell.Application`。普通启动保留既有路径；Shell 不可用、
-身份不匹配或系统策略拒绝 Shell 启动时
-只记录错误码并回到原来的 detached launch，文件替换、备份与回滚的事务保持不变。
+确认同账号、同登录会话且未提权后，以同一个已核验的 Shell 进程句柄作为
+`PROC_THREAD_ATTRIBUTE_PARENT_PROCESS`，同步 `CreateProcessW` 打开固定客户端 exe。
+不借用其他账号的 Explorer，不启用额外特权或修改令牌 ACL，也不通过 COM 排队启动。
+环境变量和工作目录保留原 detached launch 的更新器上下文，父进程属性只负责启动权限。
+普通启动保留既有路径；Shell 不可用、身份不匹配、系统策略拒绝或目标明确要求管理员权限时，
+只在尚未创建进程的失败分支记录错误码并回到原来的 detached launch。
+
+Windows 通过本次创建的进程句柄核实存活，不以全局同名进程或扫描超时代替启动回执；
+进程创建成功不等于客户端已完成初始化。句柄状态未知或安装目录仍有进程时，不覆盖回滚，
+保留备份并禁用自动 Retry/重新启动。确定启动失败且目录无运行进程时才走原备份回滚。
+Close 的清理和重新启动使用后台线程，关闭中拒绝重复 Close 与 Retry；系统进程创建本身
+不承诺硬超时，但不会阻塞更新器界面，也不会因超时另开一个可能迟到的启动请求。
 
 客户端的 Windows 深链补偿仍须支持运行中的提权实例，不能把每次点链接前退出客户端当作
 解决办法。真实权限验证入口见 [Desktop 开发](desktop-development.md#开发深链与系统关联)；

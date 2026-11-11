@@ -289,17 +289,6 @@ export interface SlackHookMcpDeps {
   logger?: LiziMcpLogger;
 }
 
-/** Native routine service; only caller-bound companion tools expose it to agents. */
-export interface RoutineToolService {
-  deliveryTargets?(botId: string): Promise<import('@cindy/maker-scheduler').RoutineDeliveryTarget[]>;
-  list(botId: string): Promise<import('@cindy/maker-scheduler').Routine[]>;
-  sources(): Promise<import('@cindy/maker-scheduler').RoutineSource[]>;
-  save(botId: string, input: import('@cindy/maker-scheduler').RoutineInput, id?: string): Promise<import('@cindy/maker-scheduler').Routine>;
-  history(botId: string, id: string): Promise<import('@cindy/maker-scheduler').RoutineRun[]>;
-  remove(botId: string, id: string): Promise<void>;
-  runNow(botId: string, id: string): Promise<void>;
-}
-
 /**
  * Host injects a `getScheduler()` accessor — the cindy_scheduler MCP server
  * never holds a long-lived Scheduler reference because the host may
@@ -678,6 +667,8 @@ export interface BrowserMcpDeps {
   resolveProfile?(profile?: string): string | undefined;
   /** Existing host lifecycle/backend identities; changes invalidate session evidence. */
   getBackendScope?(): { lifecycle: object; backend: object };
+  /** Active automation target; lets the workflow rules carry only what applies to it. Absent → all rules. */
+  getBackendKind?(): BrowserBackendKind;
   /**
    * Resolve a successful screenshot runtime result into verified image bytes.
    * The host owns file-system access so this package never receives a generic

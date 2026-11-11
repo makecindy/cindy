@@ -1,7 +1,7 @@
 import { describe, expect, it, vi } from 'vitest';
 import * as openaiCompletions from '@earendil-works/pi-ai/api/openai-completions';
-import { PROVIDER_MODEL_CATALOG, BUNDLED_CATALOG, buildUserProvider, parseModelsListResponse, mergeDiscoveredRuntimeModels } from '@cindy/model-providers';
-import { probePiProvider, createPiProviderFetch, hostCredentialEndpointAllowed, invocationModelRecord, nativeBridgeApiKey, NATIVE_ADAPTER_ERROR_BODY_LIMIT, NATIVE_BRIDGE_SESSION_HEADER, readBoundedResponseText } from '../pi-provider-transport.js';
+import { PROVIDER_MODEL_CATALOG, BUNDLED_CATALOG, buildUserProvider, modelProtocolComparison, parseModelsListResponse, mergeDiscoveredRuntimeModels } from '@cindy/model-providers';
+import { probePiProvider, createPiProviderFetch, handlePiProviderRequest, hostCredentialEndpointAllowed, invocationModelRecord, nativeBridgeApiKey, NATIVE_ADAPTER_ERROR_BODY_LIMIT, NATIVE_BRIDGE_SESSION_HEADER, readBoundedResponseText } from '../pi-provider-transport.js';
 
 vi.mock('@earendil-works/pi-ai/api/openai-completions', async (importOriginal) => ({
   ...await importOriginal<typeof import('@earendil-works/pi-ai/api/openai-completions')>(),
@@ -13,6 +13,41 @@ const reply = [
 ].map(value => `data: ${JSON.stringify(value)}\n\n`).join('') + 'data: [DONE]\n\n';
 
 describe('Pi-owned transport for Cindy harnesses', () => {
+  // #9630 review, unit: a retained preset ID must not reintroduce the same
+  // Messages extension through Claude/Codex's native bridge descriptor.
+  it('keeps message-scoped effort out of an edited Anthropic preset bridge', () => {
+    const row = invocationModelRecord({ id: 'claude-opus-5', name: 'Opus', group: 'custom',
+      contextWindow: 200_000, efforts: ['low', 'medium', 'high'], defaultEffort: 'medium',
+      catalogPresetId: 'anthropic-api', api: 'anthropic-messages' }, 'https://relay.example')!;
+    expect(row.execution.pi.compat).not.toHaveProperty('supportsMidConvoEffort');
+    expect(row.execution.pi.compat).toMatchObject({ forceAdaptiveThinking: true });
+  });
+
+  // #9101, unit: preset import + installed Chat SDK serialization protects all
+  // harnesses from assuming Messages/Responses based on their names. Existing
+  // cases use other suppliers/protocols; the minimum input is the Hinoki seed.
+  it.each(['claude-code', 'codex', 'pi'] as const)
+  ('serializes the Hinoki %s preset through Bearer Chat without changing the wire model', async agent => {
+    const preset = BUNDLED_CATALOG.presets!.find(p => p.id === 'hinoki')!;
+    const runtime = preset.runtimes[agent]!;
+    const provider = buildUserProvider({ id: 'hinoki-test', name: 'Hinoki', runtimes: {
+      [agent]: { ...runtime, catalogPresetId: preset.id },
+    } }, { presets: BUNDLED_CATALOG.presets, modelRegistry: BUNDLED_CATALOG.modelRegistry });
+    const model = provider.models[agent]![0];
+    const api = modelProtocolComparison(provider, { [agent]: model }).forAgent(agent)!.outbound!;
+    const row = invocationModelRecord(model, model.route?.baseUrl ?? runtime.baseUrl, api)!;
+    const send = createPiProviderFetch({ row, providerId: provider.id, apiKey: 'fixture-key', fetchImpl: async (url, init) => {
+      expect(String(url)).toBe('https://inference.hinoki.security/v1/chat/completions');
+      expect(new Headers(init?.headers).get('authorization')).toBe('Bearer fixture-key');
+      expect(JSON.parse(String(init?.body))).toMatchObject({ model: 'hinoki-offensive', stream: true });
+      return new Response(reply, { headers: { 'content-type': 'text/event-stream' } });
+    } });
+    const output = await (await send('https://unused.invalid', { body: JSON.stringify({
+      model: model.id, input: 'Hello', max_output_tokens: 128, stream: true,
+    }) })).text();
+    expect(output).toContain('response.completed');
+    expect(output).not.toContain('response.failed');
+  });
   it.each(['deepseek-v4-flash', 'kimi-k3.1-pro', 'glm-5.3'])
   ('sends the OpenHubs %s template through the installed Pi Chat adapter', async id => {
     const preset = BUNDLED_CATALOG.presets!.find(p => p.id === 'openhubs')!;
@@ -611,6 +646,36 @@ it.each([undefined, 200, 302])('keeps iterator exceptions private after HTTP %s 
     stream.mockRestore();
   }
 });
+
+describe('Codex 原生传输的确定性错误终态 (#9344)', () => {
+  const row = PROVIDER_MODEL_CATALOG.providers.together.find(
+    row => row.execution.pi.api === 'openai-completions',
+  )!;
+
+  it('把「协议特性不支持」落成终态 400,而不是冒泡成可重试的 502', async () => {
+    const writeHead = vi.fn();
+    const end = vi.fn();
+    const res = { once: vi.fn(), off: vi.fn(), writeHead, end, headersSent: false } as never;
+    const upstream = vi.fn(async () => new Response(reply, { headers: { 'content-type': 'text/event-stream' } }));
+    const send = createPiProviderFetch({ row, providerId: 'together', apiKey: 'fixture-key', fetchImpl: upstream });
+
+    // user 消息的 content 为 null:Chat Completions 桥接无法翻译,抛确定性错误。
+    await handlePiProviderRequest(send, {
+      model: row.id,
+      input: [{ type: 'message', role: 'user', content: null }],
+      stream: true,
+    } as never, res);
+
+    expect(writeHead).toHaveBeenCalledWith(400, expect.objectContaining({
+      'content-type': 'application/json; charset=utf-8',
+    }));
+    expect(JSON.parse(String(end.mock.calls[0][0]))).toMatchObject({
+      error: { type: 'invalid_request_error', code: 'unsupported_feature' },
+    });
+    expect(upstream).not.toHaveBeenCalled();
+  });
+});
+
 
 describe('OpenCode Go session header on the native transport (#5325)', () => {
   const goUpstream = 'https://opencode.ai/zen/go/v1';

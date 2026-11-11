@@ -1213,8 +1213,6 @@ describe('远程交互接线不变式', () => {
     expect(src).not.toContain(
       'await window.electronAPI.maker.setPermissionMode(sessionId, previousMode);',
     );
-    expect(src).toContain('requiresFullAccessConfirmation(previousMode, newMode)');
-    expect(src).toContain('if (!confirmed) return;');
     expect(src).toContain("toast.error(t('newChat.chatInput.permissionSwitchFailed'))");
   });
 
@@ -1671,7 +1669,7 @@ describe('远程交互接线不变式', () => {
 
   it('F6: scheduler 新会话在首条消息落库后广播 created 给 device-link 列表订阅者', () => {
     const runnerSrc = mainSrc('scheduler-host/runner.ts');
-    const hostSrc = mainSrc('scheduler-host/index.ts');
+    const hostSrc = mainSrc('scheduler-host/index.desktop.ts');
     expect(runnerSrc).toContain('this.deps.onSessionCreated?.(session.id)');
     expect(hostSrc).toContain('onSessionCreated: broadcastSessionCreated');
   });

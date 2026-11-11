@@ -55,7 +55,9 @@ const APPDIR_PROCESS_POLL: Duration = Duration::from_millis(500);
 /// How long we'll WAIT for the new process to register in sysinfo before
 /// declaring the launch failed. Polled — happy path exits in 100-300ms
 /// instead of always sleeping the full duration.
+#[cfg(not(target_os = "windows"))]
 const LAUNCH_VERIFY_TIMEOUT: Duration = Duration::from_secs(3);
+#[cfg(not(target_os = "windows"))]
 const LAUNCH_VERIFY_POLL: Duration = Duration::from_millis(100);
 
 pub fn run<F: FnMut(InstallerEvent)>(args: CliArgs, mut emit: F) {
@@ -71,18 +73,18 @@ pub fn run<F: FnMut(InstallerEvent)>(args: CliArgs, mut emit: F) {
             emit(InstallerEvent::Failed {
                 error: err.to_string(),
                 can_retry,
-                relaunch_on_close: attempt.app_stopped && !attempt.rollback_failed,
+                relaunch_on_close: attempt.app_stopped && !attempt.recovery_required,
             });
         }
     }
 }
 
-/// Facts needed after failure: only a failed rollback makes the install unsafe
-/// to retry or restart. The ordinary install/elevation path stays unchanged.
+/// A failed/unsafe rollback retains the recovery copy and disables automatic
+/// Retry/restart. Never overwrite files that may belong to a live new process.
 #[derive(Default)]
 struct AttemptState {
     app_stopped: bool,
-    rollback_failed: bool,
+    recovery_required: bool,
     invalid_archive: bool,
     lock_written: bool,
 }
@@ -203,10 +205,10 @@ fn prepare_retry_archive(args: &CliArgs) -> io::Result<()> {
 fn finish_failed_attempt(args: &CliArgs, attempt: &AttemptState) -> bool {
     let (extract_dir, backup_dir) = staging_dirs(args);
     let _ = fs::remove_dir_all(&extract_dir);
-    if !attempt.rollback_failed {
+    if !attempt.recovery_required {
         let _ = fs::remove_dir_all(&backup_dir);
     }
-    if !attempt.rollback_failed && !attempt.invalid_archive {
+    if !attempt.recovery_required && !attempt.invalid_archive {
         match prepare_retry_archive(args) {
             Ok(()) if retry_available(&retry_archive(args)) => return true,
             Ok(()) => {}
@@ -416,15 +418,25 @@ fn run_inner<F: FnMut(InstallerEvent)>(
     })?;
 
     replace_and_launch(args, &extract_dir, &backup_dir, attempt, emit, |exe_path| {
-        launch_detached(exe_path)?;
-        if !poll_until_process_running(&args.exe_name, LAUNCH_VERIFY_TIMEOUT) {
-            anyhow::bail!(
-                "新进程 {} 在启动 {} 秒后未出现，可能被杀软拦截或新可执行文件损坏",
-                args.exe_name,
-                LAUNCH_VERIFY_TIMEOUT.as_secs()
-            );
+        let process = spawn_detached(exe_path)?;
+        #[cfg(target_os = "windows")]
+        match crate::windows_launch::is_running(&process) {
+            Ok(true) => return Ok(()),
+            Ok(false) => anyhow::bail!("新进程 {} 在启动后已退出", args.exe_name),
+            Err(error) => return Err(LaunchStateUnknown(error).into()),
         }
-        Ok(())
+        #[cfg(not(target_os = "windows"))]
+        {
+            drop(process);
+            if !poll_until_process_running(&args.exe_name, LAUNCH_VERIFY_TIMEOUT) {
+                anyhow::bail!(
+                    "新进程 {} 在启动 {} 秒后未出现，可能被杀软拦截或新可执行文件损坏",
+                    args.exe_name,
+                    LAUNCH_VERIFY_TIMEOUT.as_secs()
+                );
+            }
+            Ok(())
+        }
     })
 }
 
@@ -494,6 +506,21 @@ where
         }
         Err(install_err) => {
             logger::error(format!("[installer] install failed: {install_err}"));
+            // Process creation is synchronous. A returned live handle already
+            // commits the launch; an unqueryable handle or surviving app-dir
+            // child must never be overwritten merely because a name scan missed
+            // the main process. No retry/relaunch can repair that uncertainty.
+            let mut sys = System::new();
+            if install_err.is::<LaunchStateUnknown>()
+                || !collect_appdir_processes(&mut sys, &args.app_dir, std::process::id()).is_empty()
+            {
+                attempt.recovery_required = true;
+                anyhow::bail!(
+                    "{} (程序可能仍在运行，未执行覆盖回滚；备份保留在 {} 供手动恢复)",
+                    install_err,
+                    backup_dir.display()
+                );
+            }
             emit(InstallerEvent::Phase(
                 Phase::RollingBack,
                 "更新失败，正在回滚到旧版本…".into(),
@@ -523,7 +550,7 @@ where
                     ));
                     // This backup is the only recovery copy. Do not offer Retry
                     // or restart the app from a partially restored directory.
-                    attempt.rollback_failed = true;
+                    attempt.recovery_required = true;
                     anyhow::bail!(
                         "{} (回滚也失败：{}；备份保留在 {} 供手动恢复)",
                         install_err,
@@ -768,36 +795,37 @@ fn copy_with_retry(src: &Path, dst: &Path) -> io::Result<()> {
 
 // io::Error::other has been stable since Rust 1.74; we require >= 1.74 in CI.
 
+#[cfg(target_os = "windows")]
+type LaunchedProcess = std::os::windows::io::OwnedHandle;
+#[cfg(not(target_os = "windows"))]
+type LaunchedProcess = std::process::Child;
+
+#[derive(Debug, thiserror::Error)]
+#[error("无法核实已创建的新进程是否退出：{0}")]
+struct LaunchStateUnknown(io::Error);
+
 fn launch_detached(exe: &Path) -> io::Result<()> {
-    use std::process::Command;
+    spawn_detached(exe).map(drop)
+}
+
+fn spawn_detached(exe: &Path) -> io::Result<LaunchedProcess> {
     #[cfg(target_os = "windows")]
     {
-        use std::os::windows::process::CommandExt;
-        match crate::windows_launch::launch_via_desktop_shell(exe) {
-            Ok(true) => {
-                logger::info("[installer] launched Cindy via the same-user unelevated desktop shell");
-                return Ok(());
-            }
-            Ok(false) => {}
-            Err(error) => {
-                // Preserve the established launch/rollback behavior if Windows
-                // policy disallows desktop-shell launch. Cindy's bounded deep-link
-                // handoff also supports an elevated running instance.
-                logger::warn(format!("[installer] desktop-shell launch unavailable ({error}); using detached launch"));
-            }
-        }
-        // DETACHED_PROCESS | CREATE_NEW_PROCESS_GROUP — orphan the child so
-        // updater can exit immediately without taking the new app down with it.
-        const FLAGS: u32 = 0x00000008 | 0x00000200;
-        Command::new(exe).creation_flags(FLAGS).spawn()?;
+        crate::windows_launch::spawn_detached(exe, |error| {
+            // No child has been created on this path. Windows policy and an
+            // explicitly requested admin target retain the original fallback.
+            logger::warn(format!(
+                "[installer] desktop-shell launch unavailable ({error}); using detached launch"
+            ));
+        })
     }
     #[cfg(not(target_os = "windows"))]
     {
-        Command::new(exe).spawn()?;
+        std::process::Command::new(exe).spawn()
     }
-    Ok(())
 }
 
+#[cfg(not(target_os = "windows"))]
 fn is_process_running_by_name(name: &str) -> bool {
     let mut sys = System::new_all();
     sys.refresh_all();
@@ -811,6 +839,7 @@ fn is_process_running_by_name(name: &str) -> bool {
 /// `timeout` elapses. Lets the happy path exit in ~100-300ms (typical
 /// CreateProcess → tasklist register latency on Windows) instead of
 /// sleeping a fixed long delay on every successful launch.
+#[cfg(not(target_os = "windows"))]
 fn poll_until_process_running(name: &str, timeout: Duration) -> bool {
     let start = std::time::Instant::now();
     while start.elapsed() < timeout {

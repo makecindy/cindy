@@ -7,6 +7,7 @@ import {
   isAccountUsageLimitError,
   type UsageLimitAutoResumeDeps,
 } from '../usageLimitAutoResume';
+import { readTurnUsageResetAt } from '../../goal-host/usageLimit';
 import { USAGE_LIMIT_RESET_AUTO_RESUME_REASON } from '../../../shared/agentInputQueue';
 
 const NOW = 1_000_000;
@@ -73,6 +74,21 @@ describe('isAccountUsageLimitError', () => {
 });
 
 describe('UsageLimitAutoResume', () => {
+  // Unit: real quota classifier + timer callback, using the Fable SDK envelope.
+  // No wall-clock wait or model request; normal errors previously used generic text.
+  it('waits for the structured Fable deadline and continues once when its timer fires', async () => {
+    const h = harness({ resolveResetAt: async (_id, signals) => readTurnUsageResetAt(signals, NOW) });
+    await h.guard.onTurnError('fable', {
+      sdkError: 'rate_limit', usageResetAt: RESET_AT,
+      message: "You've reached your Fable limit. Switch to another model to continue.",
+    });
+    expect(h.deps.arm).toHaveBeenCalledWith('fable', 1, RESET_AT + USAGE_LIMIT_RESUME_BUFFER_MS);
+    expect(h.deps.continueSession).not.toHaveBeenCalled();
+    expect(h.timers.at(-1)?.delayMs).toBe(RESET_AT - NOW + USAGE_LIMIT_RESUME_BUFFER_MS);
+    await h.fireLast();
+    expect(h.deps.continueSession).toHaveBeenCalledOnce();
+  });
+
   it('restores the saved deadline and attempt budget; overdue startup waits buffer once', async () => {
     const h = harness();
     expect(h.guard.restore('restarted', 42, RESET_AT, 2)).toBe(true);

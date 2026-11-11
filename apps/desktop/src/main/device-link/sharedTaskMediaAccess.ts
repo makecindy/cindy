@@ -1,6 +1,6 @@
 import path from 'node:path';
 import { realpath } from 'node:fs/promises';
-import { parseBlobUrl } from '../cindy-media/blobStore.js';
+import { parseBlobUrl } from '../cindy-media/blobStore.desktop.js';
 import { sessionCanRead } from '../cindy-media/ledger.js';
 import { getSessionFsSnapshot } from '../localDb/ipc/sessions.js';
 import { getDbClient } from '../localDb/client/current.js';

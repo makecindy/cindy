@@ -13,8 +13,8 @@ import { windowBehaviorSettings } from './WindowBehaviorSection.settings-search'
  *  3. 「后台窗口首次左键点击仅激活不透传」(swallowActivationClick,PR #446):仅
  *     macOS + Windows 有实际效果,Linux 上两条底层路径均 no-op,故该行在 Linux 隐藏。
  *
- * 各项放在同一张卡片里、以分割线隔开,与「协同」「Agent 资源占用」同一套设置行样式
- * (settingsRowClasses)。平台不支持的行不渲染,分割线只出现在可见行之间。
+ * 各项放在同一张 SettingsCard 里、以分割线隔开,与「协同」「Agent 资源占用」同一套设置行
+ * (settings-rows)。平台不支持的行不渲染,分割线只出现在可见行之间。
  */
 
 import { Fragment, useEffect, useState, type ReactNode } from 'react';
@@ -24,15 +24,7 @@ import { Button } from '@/components/ui/button';
 import { SegmentedControl } from '@/components/ui/segmented-control';
 
 import { Switch } from '@/components/ui/switch';
-import { cn } from '@/lib/utils';
-import {
-  SETTINGS_CARD_CLASS,
-  SETTINGS_ROW_CLASS,
-  SETTINGS_ROW_DIVIDER_CLASS,
-  SETTINGS_ROW_HINT_CLASS,
-  SETTINGS_ROW_LABEL_CLASS,
-  SETTINGS_SECTION_TITLE_CLASS,
-} from './settingsRowClasses';
+import { SETTINGS_HINT, SettingsCard, SettingsRow, SettingsSection } from '@/components/ui/settings-rows';
 import { useSwallowActivationClickSettings } from '@/hooks/useSwallowActivationClickSettings';
 import { useKeepAwakeSetting } from '@/hooks/useKeepAwakeSetting';
 import { useAwayGuardSetting } from '@/hooks/useAwayGuardSetting';
@@ -71,24 +63,24 @@ function BehaviorRow({
   disabled?: boolean;
 }) {
   return (
-    <div id={id} className={SETTINGS_ROW_CLASS}>
-      <div className="flex min-w-0 flex-col gap-1">
-        <p className={SETTINGS_ROW_LABEL_CLASS} style={{ letterSpacing: '0.12px' }}>
-          {label}
-        </p>
-        <p className={cn('whitespace-pre-line', SETTINGS_ROW_HINT_CLASS)}>
-          {hint}
-        </p>
-        {note}
-      </div>
-
-      <Switch data-setting-id={settingId}
-        checked={checked}
-        onCheckedChange={onCheckedChange}
-        aria-label={ariaLabel}
-        disabled={disabled}
-      />
-    </div>
+    <SettingsRow
+      id={id}
+      title={label}
+      hint={
+        <span className="flex flex-col gap-1">
+          <span className="whitespace-pre-line">{hint}</span>
+          {note}
+        </span>
+      }
+      trailing={
+        <Switch data-setting-id={settingId}
+          checked={checked}
+          onCheckedChange={onCheckedChange}
+          aria-label={ariaLabel}
+          disabled={disabled}
+        />
+      }
+    />
   );
 }
 
@@ -179,7 +171,7 @@ export function WindowBehaviorSection() {
             <div className="flex flex-col items-start gap-2 pt-1">
               {awayGuard.preview === 'permission' ||
               (awayGuard.state?.enabled && awayGuard.state.permission === 'missing') ? (
-                <p className={SETTINGS_ROW_HINT_CLASS} role="status">
+                <p className={SETTINGS_HINT} role="status">
                   {t('settings.windowBehavior.awayGuard.permission')}
                 </p>
               ) : null}
@@ -195,11 +187,11 @@ export function WindowBehaviorSection() {
                   {t('settings.windowBehavior.awayGuard.preview')}
                 </Button>
                 {awayGuard.preview === 'starting' ? (
-                  <p className={SETTINGS_ROW_HINT_CLASS}>
+                  <p className={SETTINGS_HINT}>
                     {t('settings.windowBehavior.awayGuard.previewStarting')}
                   </p>
                 ) : awayGuard.preview === 'unavailable' ? (
-                  <p className={SETTINGS_ROW_HINT_CLASS} role="alert">
+                  <p className={SETTINGS_HINT} role="alert">
                     {t('settings.windowBehavior.awayGuard.previewUnavailable')}
                   </p>
                 ) : null}
@@ -215,32 +207,29 @@ export function WindowBehaviorSection() {
     rows.push({
       key: 'away-guard-delay',
       node: (
-        <div className="cindy-segmented-row px-4 py-4">
-          <div className="flex min-w-0 flex-col gap-1">
-            <p id={windowBehaviorSettings.awayGuardDelay.targetId}
-              className={SETTINGS_ROW_LABEL_CLASS}
-              style={{ letterSpacing: '0.12px' }}
-            >
+        <SettingsRow
+          className="cindy-segmented-row"
+          title={
+            <span id={windowBehaviorSettings.awayGuardDelay.targetId}>
               {t(windowBehaviorSettings.awayGuardDelay.titleKey)}
-            </p>
-            <p className={SETTINGS_ROW_HINT_CLASS}>
-              {t(windowBehaviorSettings.awayGuardDelay.descriptionKey)}
-            </p>
-          </div>
-
-          <SegmentedControl data-setting-id={windowBehaviorSettings.awayGuardDelay.id}
-            aria-label={t(windowBehaviorSettings.awayGuardDelay.titleKey)}
-            value={String(awayGuard.state.delaySeconds ?? 'system')}
-            onValueChange={(value) => {
-              const seconds = Number(value);
-              void awayGuard.setDelay(isAwayGuardDelaySeconds(seconds) ? seconds : null);
-            }}
-            options={windowBehaviorSettings.awayGuardDelay.options.map((option) => ({
-              value: option.value,
-              label: t(option.labelKey),
-            }))}
-          />
-        </div>
+            </span>
+          }
+          hint={t(windowBehaviorSettings.awayGuardDelay.descriptionKey)}
+          trailing={
+            <SegmentedControl data-setting-id={windowBehaviorSettings.awayGuardDelay.id}
+              aria-label={t(windowBehaviorSettings.awayGuardDelay.titleKey)}
+              value={String(awayGuard.state.delaySeconds ?? 'system')}
+              onValueChange={(value) => {
+                const seconds = Number(value);
+                void awayGuard.setDelay(isAwayGuardDelaySeconds(seconds) ? seconds : null);
+              }}
+              options={windowBehaviorSettings.awayGuardDelay.options.map((option) => ({
+                value: option.value,
+                label: t(option.labelKey),
+              }))}
+            />
+          }
+        />
       ),
     });
   }
@@ -299,29 +288,26 @@ export function WindowBehaviorSection() {
     rows.push({
       key: 'close-behavior',
       node: (
-        <div className="cindy-segmented-row px-4 py-4">
-          <div className="flex min-w-0 flex-col gap-1">
-            <p id={windowBehaviorSettings.closeBehaviorLabel.targetId}
-              className={SETTINGS_ROW_LABEL_CLASS}
-              style={{ letterSpacing: '0.12px' }}
-            >
+        <SettingsRow
+          className="cindy-segmented-row"
+          title={
+            <span id={windowBehaviorSettings.closeBehaviorLabel.targetId}>
               {t(windowBehaviorSettings.closeBehaviorLabel.titleKey)}
-            </p>
-            <p className={SETTINGS_ROW_HINT_CLASS}>
-              {t(windowBehaviorSettings.closeBehaviorLabel.descriptionKey)}
-            </p>
-          </div>
-
-          <SegmentedControl data-setting-id={windowBehaviorSettings.closeBehaviorLabel.id}
-            aria-label={t('settings.windowBehavior.closeBehavior.aria')}
-            value={closeBehavior}
-            onValueChange={setCloseBehavior}
-            options={closeBehaviorOptions.map((behavior) => ({
-              value: behavior,
-              label: t(`settings.windowBehavior.closeBehavior.${behavior}`),
-            }))}
-          />
-        </div>
+            </span>
+          }
+          hint={t(windowBehaviorSettings.closeBehaviorLabel.descriptionKey)}
+          trailing={
+            <SegmentedControl data-setting-id={windowBehaviorSettings.closeBehaviorLabel.id}
+              aria-label={t('settings.windowBehavior.closeBehavior.aria')}
+              value={closeBehavior}
+              onValueChange={setCloseBehavior}
+              options={closeBehaviorOptions.map((behavior) => ({
+                value: behavior,
+                label: t(`settings.windowBehavior.closeBehavior.${behavior}`),
+              }))}
+            />
+          }
+        />
       ),
     });
   }
@@ -337,7 +323,7 @@ export function WindowBehaviorSection() {
           hint={t(windowBehaviorSettings.swallowActivationClickLabel.descriptionKey)}
           note={
             isMac ? (
-              <p className={SETTINGS_ROW_HINT_CLASS}>
+              <p className={SETTINGS_HINT}>
                 {t('settings.windowBehavior.macRestartNote')}
               </p>
             ) : undefined
@@ -351,19 +337,12 @@ export function WindowBehaviorSection() {
   }
 
   return (
-    <div className="flex flex-col gap-[14px]">
-      <h2 className={SETTINGS_SECTION_TITLE_CLASS}>
-        {t('settings.windowBehavior.title')}
-      </h2>
-
-      <div className={SETTINGS_CARD_CLASS}>
-        {rows.map((row, index) => (
-          <Fragment key={row.key}>
-            {index > 0 ? <div className={SETTINGS_ROW_DIVIDER_CLASS} /> : null}
-            {row.node}
-          </Fragment>
+    <SettingsSection title={t('settings.windowBehavior.title')}>
+      <SettingsCard>
+        {rows.map((row) => (
+          <Fragment key={row.key}>{row.node}</Fragment>
         ))}
-      </div>
-    </div>
+      </SettingsCard>
+    </SettingsSection>
   );
 }

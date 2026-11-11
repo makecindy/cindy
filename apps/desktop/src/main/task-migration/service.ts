@@ -31,10 +31,11 @@ import { withSessionRouteLocks } from '../localDb/sessionRouteLock';
 import { getActiveTeamByLead } from '../localDb/orcaTeamStore';
 import { getSelfDeviceId, remoteInvoke } from '../device-link';
 import { getDeviceLinkInvokeContext } from '../device-link/invoke-context';
-import { readDeviceLinkSettings } from '../device-link/settings-store';
+import { readDeviceLinkSettings } from '../device-link/settings-store.desktop';
 import { withCrossProcessLock } from '../device-link/crossProcessLock';
 import { tryUploadPeerAttachment } from '../device-link/filePeer';
 import { uploadLocalFile, removeRemote, MAX_MEDIA_BYTES } from '../device-link/mediaTransfer';
+import { withAgentNetMediaTarget } from '../device-link/agentNetMediaRouting';
 import {
   materializeRemoteAttachment,
   parseRemoteAttachmentRef,
@@ -43,7 +44,7 @@ import { createLogger } from '../logger';
 import { assertTrustedAppRendererEvent } from '../security/trustedAppRenderer';
 import { throwIpcError } from '../utils/ipcValidate';
 import { atomicWriteFileSync, readAtomicFileSync } from '../utils/atomicWriteFile';
-import { captureMediaRefCompensationScope } from '../cindy-media/refCompensationJournal';
+import { captureMediaRefCompensationScope } from '../cindy-media/refCompensationJournal.desktop';
 import { exportSessionShare } from '../session-share/sessionShareExport';
 import {
   commitShareImport,
@@ -667,11 +668,12 @@ async function sendPart(
     return { ref: peer, size: result.size, sha256: result.sha256 };
   }
   onProgress?.(0); // OSS fallback starts this part again, not a second completed part.
-  const result = await uploadLocalFile(file, {
+  const result = await withAgentNetMediaTarget(device, async () => uploadLocalFile(file, {
     maxBytes: (await fs.stat(file)).size,
     onProgress,
     signal,
-  });
+    assertCurrent: scope.assertCurrent,
+  }));
   // Record the upload before the checkpoint so a cancelled copy still deletes it.
   const keysFile = path.join(artifacts, 'transfer-keys.json');
   const keys = JSON.parse(readAtomicFileSync(keysFile) ?? '[]') as string[];

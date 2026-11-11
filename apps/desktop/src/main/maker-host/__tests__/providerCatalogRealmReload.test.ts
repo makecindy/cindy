@@ -34,7 +34,25 @@ const h = vi.hoisted(() => ({
   warn: vi.fn(),
   request: vi.fn(),
   catalogIo: null as Parameters<typeof import('@cindy/model-providers').loadCatalog>[1] | null,
+  pool: null as import('../../../shared/subscriptionAccounts.js').SubscriptionPoolConfig | null,
+  legacyLoggedIn: new Set<string>(),
+  migrateLegacy: vi.fn<(...args: unknown[]) => Promise<boolean>>(async () => false),
 }));
+vi.mock('../../subscription-accounts/store.js', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../../subscription-accounts/store.js')>();
+  return {
+    ...actual,
+    readPool: (id: string) => id === 'openai' ? h.pool : null,
+    readLegacyCodexAccountId: (id: string) => h.pool?.legacyCodexAccounts?.[id],
+    migrateLegacyCodexAccounts: h.migrateLegacy,
+  };
+});
+vi.mock('../codex-account-auth.desktop.js', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../codex-account-auth.desktop.js')>();
+  return { ...actual, codexAccountState: (id: string) => ({ authenticated: h.legacyLoggedIn.has(id) }) };
+});
+
+vi.mock('../../userDataPath.js', () => ({ getUserDataDir: () => os.tmpdir(), userDataPath: (...parts: string[]) => path.join(os.tmpdir(), ...parts) }));
 
 vi.mock('electron', () => ({
   app: { getPath: () => os.tmpdir() },
@@ -131,8 +149,8 @@ vi.mock('../claude-native-auth.js', () => ({
   hasClaudeNativeLoginUnbound: () => false,
 }));
 vi.mock('../claude-native-connection.js', () => ({ readClaudeNativeLogin: async () => null }));
-vi.mock('../claude-native-cli.js', () => ({ readClaudeCliLoginStatus: async () => ({ loggedIn: false }) }));
-vi.mock('../grok-oauth-login.js', () => ({
+vi.mock('../claude-native-cli.desktop.js', () => ({ readClaudeCliLoginStatus: async () => ({ loggedIn: false }) }));
+vi.mock('../grok-oauth-login.desktop.js', () => ({
   getGrokAccessToken: h.getGrokAccessToken,
   peekGrokAccessToken: () => null,
   hasGrokOAuthLogin: () => false,
@@ -140,7 +158,7 @@ vi.mock('../grok-oauth-login.js', () => ({
   recoverGrokAuthAfterRejection: h.recoverGrokAuthAfterRejection,
   resetGrokOAuthMemoryCache: () => undefined,
 }));
-vi.mock('../generic-oauth.js', () => ({
+vi.mock('../generic-oauth.desktop.js', () => ({
   configureGenericOAuth: () => undefined,
   hasGenericOAuthLogin: () => false,
   readCachedGenericOAuthAccessToken: () => null,
@@ -157,7 +175,7 @@ vi.mock('../../secrets/providerSecretStore.js', () => ({
   setProviderSecretsClearedListener: () => undefined,
   addProviderSecretsClearedListener: (listener: () => void) => h.secretsClearedListeners.add(listener),
 }));
-vi.mock('../outbound-fetch.js', () => ({
+vi.mock('../outbound-fetch.desktop.js', () => ({
   outboundFetch: vi.fn(async () => { throw new Error('offline'); }),
 }));
 vi.mock('../provider-route.js', () => ({
@@ -250,6 +268,39 @@ function activeMarker(): string | undefined {
 }
 
 describe('provider catalog realm reload', () => {
+  // Upgrade 2026-11-11, standard: real loader/view wiring must import only native
+  // Codex connections and keep their model membership under the canonical supplier.
+  it('projects imported model membership under OpenAI while retaining compatibility routes', async () => {
+    const previous = getActiveCatalog();
+    h.pool = { strategy: 'least', accounts: [{ id: 'imported', paused: false, limit: 4, weight: 1 }],
+      legacyCodexAccounts: { 'legacy-imported': 'imported' } };
+    h.legacyLoggedIn.add('legacy-imported');
+    const legacy: CustomProviderConfig = { id: 'legacy-imported', name: 'Old OpenAI',
+      auth: { method: 'oauth', native: 'codex' }, runtimes: { codex: {
+        baseUrl: 'https://chatgpt.com/backend-api/codex', models: [{ id: 'gpt-migration-fixture', name: 'Fixture model' }],
+      } } };
+    const api: CustomProviderConfig = { id: 'migration-api', name: 'API stays separate', runtimes: { codex: {
+      baseUrl: 'https://fixture.example/v1', models: [{ id: 'api-fixture', name: 'API fixture' }],
+    } } };
+    try {
+      setActiveCatalog(BUNDLED_CATALOG);
+      h.customProviderRead.mockResolvedValue([legacy, api]);
+      h.migrateLegacy.mockClear();
+      await refreshCustomProvidersIntoCatalog();
+      expect(h.migrateLegacy.mock.calls[0][0]).toEqual([{ providerId: 'legacy-imported', paused: false }]);
+      const catalog = getDesktopSelectableCatalog();
+      expect(catalog.providers.find(provider => provider.id === 'openai')?.models.codex?.some(model => model.id === 'gpt-migration-fixture')).toBe(true);
+      expect(catalog.providers.some(provider => provider.id === 'legacy-imported')).toBe(true);
+      expect(catalog.providers.some(provider => provider.id === 'migration-api')).toBe(true);
+      h.pool.accounts[0].paused = true;
+      expect(getDesktopSelectableCatalog().providers.find(provider => provider.id === 'openai')?.models.codex?.some(model => model.id === 'gpt-migration-fixture')).not.toBe(true);
+    } finally {
+      h.pool = null;
+      h.legacyLoggedIn.clear();
+      setCustomProviders([]);
+      setActiveCatalog(previous);
+    }
+  });
   // #6768 unit regression: a hidden TTS route needs channel readiness in the
   // actual provider-list wiring before its management switch can be used.
   // Renderer tests inject that snapshot and could not catch missing Main wiring.
@@ -1361,3 +1412,12 @@ describe('provider catalog realm reload', () => {
     expect(request.abort).toHaveBeenCalledTimes(1);
   });
 });
+
+// Preserve the existing test owner/path contract after storage ports were extracted.
+vi.mock('../../ownerContext.js', () => ({
+  activeDataOwnerId: () => h.owner,
+  ownerGeneration: () => 0,
+  isOwnerBoundaryPending: () => false,
+  hasCommittedOwner: () => Boolean(h.owner),
+  ownerScopedPath: (...parts: string[]) => path.join(os.tmpdir(), 'provider-catalog-realm-reload', h.owner, ...parts),
+}));

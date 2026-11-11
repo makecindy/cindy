@@ -103,15 +103,23 @@ and a rejected retry leaves the other updater's lock untouched.
 After failure Cindy stays closed until the user chooses Retry or Close. Close
 (including the native window close action) removes the retained retry package
 and restarts the unmodified or restored Cindy once. Closing is blocked during an
-active install. A failed rollback never starts the partially restored app.
+active install. Close cleanup/relaunch runs off the UI thread; closing excludes
+duplicate Close and Retry. A failed or unsafe rollback never auto-restarts the app.
 
 The original permission probe, UAC handoff and temporary staging location are
 retained. `launch_detached` now checks the updater's actual token elevation and,
-when elevated, asks the existing desktop Shell to launch Cindy only after
+when elevated, uses the existing desktop Shell as the new process's parent after
 verifying that Shell belongs to the same user and login session and is not
-elevated. It does not switch accounts or modify token ACLs. If the Shell is
-unavailable or verification/launch fails, the original detached launch remains
-the fallback and may inherit the updater's elevation. Running elevated clients
+elevated. Synchronous `CreateProcessW` returns the actual process handle, without
+an uncancellable COM launch request. It does not switch accounts, enable extra
+privileges or modify token ACLs. Environment and cwd retain the original detached
+launch's updater context. If the Shell is unavailable or creation fails before
+there is a child, the original detached launch remains the fallback and may
+inherit the updater's elevation, including an explicitly admin-only target.
+Windows verifies this process handle instead of a global process-name match.
+Creation/liveness is not a full application readiness check. An unknown handle
+state or surviving install-directory process blocks overwrite rollback, keeps
+the recovery backup and disables automatic Retry/relaunch. Running elevated clients
 are supported by the common Windows deep-link handoff; see the authoritative
 [startup-permission rules](../../../docs/dev-rules/cindy-updater.md#windows-更新后的启动权限).
 The existing seven-day temporary-directory cleanup still applies.
@@ -146,12 +154,14 @@ cargo run -- \
   --zip path/to/anything.zip \
   --app-dir C:\Temp\fake-app \
   --exe-name notepad.exe \
-  --pid 0 \
+  --pid <known-exited-fixture-pid> \
   --log C:\Temp\updater-test.log \
   --lock C:\Temp\updater-test.lock
 ```
 
-`--pid 0` exits the wait phase immediately.
+Use the verified PID of an exited disposable test process; PID 0 is Windows'
+Idle process and does not bypass the wait phase. Never use the installed Cindy
+for this dummy-argument check.
 
 ## Prerequisites
 

@@ -9,7 +9,8 @@ import {
   type SetupSnapshotSourceDeps,
   type SourceMcpFact,
 } from '../snapshot.js';
-import { snapshot } from './fixtures.js';
+import { buildSetupPlan } from '../plan.js';
+import { installFacts, planInputs, snapshot } from './fixtures.js';
 
 function deps(overrides: Partial<SetupSnapshotSourceDeps> = {}): SetupSnapshotSourceDeps {
   return {
@@ -206,6 +207,56 @@ describe('projectPlugins', () => {
     ]);
     expect(result.find((p) => p.ghostId === 'manual-one')?.enabled).toBe(false);
     expect(result.filter((p) => p.hasUserSecrets).map((p) => p.ghostId)).toEqual(['custom-one']);
+  });
+});
+
+describe('plugins when the official catalog was not read', () => {
+  // unit：服务端缺新接口时 snapshot 只剩自定义市场项，官方市场插件曾被误标为「只在那台电脑上，手动搬」。
+  it('keeps official installs from the install record, leaves real manual installs local-only and reports partial', async () => {
+    const ghost = (ghostId: string) => ({
+      ghostId, name: ghostId, version: '1.0.0', namespace: null, instanceKey: `_root__${ghostId}`, enabled: true, builtin: false,
+    });
+    const result = await collectSetupSnapshot(
+      deps({
+        readPlugins: async () => ({
+          // A same-id `local` development copy sits beside the official install.
+          ghosts: [ghost('google-gmail'), { ...ghost('google-gmail'), namespace: 'local', instanceKey: 'local__google-gmail' },
+            ghost('hand-made')],
+          market: [],
+          catalogUnavailable: true,
+          // A pre-namespace install record carries no namespace.
+          installedServerRecords: [{ pluginId: 'plg_gmail', ghostId: 'google-gmail' }],
+        }),
+      }),
+    );
+    expect(result.unavailable).toEqual(['plugins']);
+    expect(result.plugins.map((p) => [p.ghostId, p.namespace, p.source, p.pluginId])).toEqual([
+      ['google-gmail', null, 'market', 'plg_gmail'],
+      ['google-gmail', 'local', 'manual', null],
+      ['hand-made', null, 'manual', null],
+    ]);
+    const plan = buildSetupPlan(planInputs({
+      snapshot: result,
+      catalog: new Map([['plg_gmail', { pluginId: 'plg_gmail', releaseId: 'r1', version: '1.0.0', consent: installFacts('google-gmail') }]]),
+    }));
+    expect(plan.plugins.map((item) => [item.ghostId, item.state, item.reason ?? null])).toEqual([
+      ['google-gmail', 'ready', null],
+      ['google-gmail', 'unavailable', 'local-only'],
+      ['hand-made', 'unavailable', 'local-only'],
+    ]);
+    expect(plan.unavailable).toEqual(['plugins']);
+  });
+
+  it('ignores install records when the catalog was read', async () => {
+    const result = await collectSetupSnapshot(deps({
+      readPlugins: async () => ({
+        ghosts: [{ ghostId: 'x', name: 'x', version: '1', namespace: null, instanceKey: '_root__x', enabled: true, builtin: false }],
+        market: [],
+        installedServerRecords: [{ pluginId: 'plg_x', ghostId: 'x', namespace: null }],
+      }),
+    }));
+    expect(result.unavailable).toEqual([]);
+    expect(result.plugins[0]).toMatchObject({ source: 'manual', pluginId: null });
   });
 });
 

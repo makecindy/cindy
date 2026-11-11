@@ -33,7 +33,7 @@ import { BuiltinPanelBridgeProvider } from '@/panels/BuiltinPanelBridge';
 import { WindowControls } from '@/components/title-bar/WindowControls';
 import { UpdateNoticeDialog } from '@/components/UpdateNoticeDialog';
 import { FeishuConflictDialogHost } from '@/components/feishuBot/FeishuConflictDialogHost';
-import { InterruptedTasksResumeDialog } from '@/features/cc-agent/InterruptedTasksResumeDialog';
+import { StartupRecoveryDialogs } from '@/components/log-support/StartupRecoveryDialogs';
 import { GlobalDropImportListener } from '@/components/layout/GlobalDropImportListener';
 import { SessionShareImportWizard } from '@/components/settings/SessionShareImportWizard';
 import { ControlledBanner } from '@/features/remote-device/ControlledBanner';
@@ -120,6 +120,7 @@ import { usePluginRemovalNoticeToast } from '@/hooks/usePluginRemovalNoticeToast
 import { requestProjectFocus } from '@/state/pendingProjectFocus';
 import { patchDraft } from '@/state/newMakerDraft';
 import { cn } from '@/lib/utils';
+import { FloatingUpdateBanner } from '@/components/sidebar/UpdateBanner';
 import { checkForUpdateWithToast } from '@/lib/checkForUpdateWithToast';
 import { createLogger } from '@/lib/logger';
 import { subscribeWorkLouderCodexAction } from '@/lib/workLouderCodexActions';
@@ -140,6 +141,7 @@ import { useSessionEntryLocationCommits } from '@/features/bots/useSessionEntryL
 import { islandEntryRouteState, requestIslandEntryAlertDisposal } from '@/features/bots/islandEntryAlert';
 import { requestProviderShareJoin } from '@/features/provider-share/joinIntent';
 import { ProviderShareGlobalHost } from '@/features/provider-share/ProviderShareGlobalHost';
+import { RelayShareGlobalHost } from '@/features/relay-share/RelayShareGlobalHost';
 import { applyScreenshotComposeRequest } from '@/features/region-screenshot/screenshotTaskHandoff';
 import { remoteProjectsStore } from '@/features/device-link/remoteProjectsStore';
 import {
@@ -735,7 +737,7 @@ export function MainLayout() {
         | { type: 'new-session'; workingDir: string }
         | { type: 'share-import'; filePath: string }
         | { type: 'provider-import'; importId: string }
-        | { type: 'shared-task-join'; invitation: string; server: string }
+        | { type: 'shared-task-join'; invitation: string; server: string; link?: string }
         | { type: 'chat-invite'; token: string }
         | { type: 'chat-invite-malformed' }
         | { type: 'provider-share-join'; link: string }
@@ -764,7 +766,7 @@ export function MainLayout() {
         return;
       }
       if (payload.type === 'shared-task-join') {
-        setSharedTaskInvitation({ link: buildSharedTaskInvitationLink(payload.invitation, payload.server), id: ++invitationSequence.current });
+        setSharedTaskInvitation({ link: payload.link ?? buildSharedTaskInvitationLink(payload.invitation, payload.server), id: ++invitationSequence.current });
         return;
       }
       if (payload.type === 'local-plugin-share') {
@@ -1995,6 +1997,12 @@ export function MainLayout() {
         )}
 
       </div>
+      {/* 手动检查的结果在设置页、隐藏侧栏和窄轨模式也必须可见；复用原横幅及重启确认。 */}
+      <FloatingUpdateBanner
+        enabled={isSettingsRoute || isSidebarCollapsed || isRailMode}
+        ownsPrerequisiteDialogs={isSettingsRoute}
+        onOpenVersionNotice={openVersionNotice}
+      />
       {/* Update notice dialog -- mounted inside FeatureSidebarSlotProvider (ThemeProvider scope) */}
       {releaseNotes && (
         <UpdateNoticeDialog
@@ -2006,14 +2014,16 @@ export function MainLayout() {
           onDismiss={dismissNotice}
         />
       )}
-      {/* 意外退出后重启:列出被中断的任务供一键继续;更新说明弹窗关闭后再出现。 */}
+      {/* 重启提示按更新说明、中断任务恢复、意外退出诊断的顺序出现。 */}
       {!isSecondaryWindow() && (
-        <InterruptedTasksResumeDialog suspended={Boolean(releaseNotes && noticeOpen)} />
+        <StartupRecoveryDialogs suspended={Boolean(releaseNotes && noticeOpen)} />
       )}
       {/* FeiShu Bot conflict dialog -- subscribes to main process push and surfaces a global modal */}
       <FeishuConflictDialogHost />
       {/* 副窗支持管理页手动审批；自动提醒与受邀申请仍只由主窗口处理。 */}
       <ProviderShareGlobalHost manualOnly={isSecondaryWindow()} />
+      {/* 中转加入申请:同样主窗口自动弹,副窗口只显示中转页手动打开的那条。 */}
+      <RelayShareGlobalHost manualOnly={isSecondaryWindow()} />
       {!isSecondaryWindow() && <ChatInviteHost />}
       {/* 通话属于应用而不是任务页:切任务、换页面都不卸载;副窗只显示并转发操作。 */}
       {isSecondaryWindow() ? <RemoteVoiceCallSurface /> : <GlobalVoiceCallHost />}

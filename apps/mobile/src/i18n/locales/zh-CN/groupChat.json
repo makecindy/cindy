@@ -1,6 +1,10 @@
 {
   "progress": {
-    "stop": "停止"
+    "stop": "停止",
+    "stopMine": "停止我发起的",
+    "stopAll": "全部停止",
+    "stopAllHint": "包括其他人发起的",
+    "step": "第 {{step}}/{{total}} 步"
   },
   "title": "群聊",
   "memberSeparator": "、",
@@ -79,7 +83,8 @@
     "planDone_one": "{{count}} 步都做完了",
     "planDone_other": "{{count}} 步都做完了",
     "planDoneGeneric": "分工做完了",
-    "olderOnComputer": "更早的消息请在电脑上查看"
+    "olderOnComputer": "更早的消息请在电脑上查看",
+    "endTalk": "结束"
   },
   "quote": {
     "label": "引用 {{name}}：{{summary}}",
@@ -98,6 +103,13 @@
     "stepFailed": "{{name}}这一步出错了，没做完",
     "stepTimeout": "{{name}}太久没做完，这一步先停下",
     "stepUnavailable": "{{name}}现在不可用，这一步没法做",
+    "runtimeFailureReason": {
+      "unclaimed_timeout": {
+        "summary": "{{name}}未能在等待期限内开始处理，本次请求已结束。",
+        "advice": "请伙伴的主人检查所属电脑上的 Cindy 是否正常运行、网络是否连接。",
+        "details": "确认 Cindy 和网络恢复正常后，请重新发送消息。"
+      }
+    },
     "runtimeFailure": {
       "REMOTE_DEVICE_LIMIT": {
         "summary": "{{name}}无法回复：伙伴所在设备保留的远程任务数已达上限。",
@@ -169,6 +181,8 @@
     "start": "开始",
     "dismiss": "不用了",
     "editHint": "想换人或改步骤，直接说",
+    "autoContinue": "做完一步自动交给下一位",
+    "autoContinueSaveFailed": "分工交接没能保存，请再试一次",
     "autoNote": "做完一步会自动交给下一位。",
     "pauseNote": "每做完一步会停下来，等你点「继续」。",
     "superseded": "已更新",
@@ -212,12 +226,6 @@
     "stopping": "正在停止…",
     "planning": "正在安排…",
     "step": "正在做…"
-  },
-  "work": {
-    "queued": "排队 {{count}}",
-    "active": "进行中 {{count}}",
-    "expand": "展开伙伴动态",
-    "collapse": "收起伙伴动态"
   },
   "task": {
     "state": {
@@ -324,7 +332,9 @@
     "groupDissolved": "群聊已解散，仍可查看有权访问的历史消息。",
     "lastOwner": "请先转让群主或解散群聊，再退出。",
     "allBotsMentionDisabled": "群主尚未开启 @所有伙伴。",
-    "turnAlreadyStarted": "这位伙伴已开始执行，不能跳过"
+    "turnAlreadyStarted": "这位伙伴已开始执行，不能跳过",
+    "stopOwnershipUnknown": "部分工作未能停止：无法确认由谁发起",
+    "nothingToStop": "当前没有可停止的工作"
   },
   "followUp": {
     "next": "分工 · 下一步",
@@ -623,5 +633,6 @@
       "uncertain": "暂未确认加入结果"
     },
     "externalFormatError": "请从原消息重新打开完整链接。"
-  }
+  },
+  "waitingForOwner": "等待主人确认"
 }

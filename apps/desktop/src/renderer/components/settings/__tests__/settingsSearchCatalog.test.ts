@@ -46,6 +46,17 @@ const searchContext = { platform: 'win32', region: 'cn', mode: 'cloud', membersh
 } as const;
 
 describe('settings discoverability regressions', () => {
+  it('finds the local API import entry by its titles and source app names before mounting settings', () => {
+    const documents = buildSettingsSearchDocuments(searchI18n.t, TAB_IDS, searchContext);
+    for (const query of [
+      searchI18n.t('settings.providers.import.local.title'),
+      searchI18n.t('settings.providers.import.local.title', { lng: 'en' }),
+      'Alma', 'CC Switch', 'OpenCode',
+    ]) {
+      const result = searchSettings(documents, query).find(({ entry }) => entry.id === 'providers.localImport');
+      expect(result?.entry, query).toMatchObject({ tab: 'providers', targetId: 'settings-provider-local-import' });
+    }
+  });
   // Unit regression (#8481): automatic mode renders no slot explanations.
   // Existing catalog tests did not query those hidden descriptions.
   it('does not advertise custom-only auxiliary slot explanations', () => {
@@ -120,7 +131,9 @@ describe('settings discoverability regressions', () => {
         ...AGENT_ISLAND_SOUND_OPTIONS.map((option) => `soundOptions.${option}`),
       ]) {
         const query = searchI18n.t(`settings.agentIsland.${key}`, { lng });
-        expect(searchSettings(documents, query).some(({ entry }) => entry.id === 'settings.agentIsland.soundLabel'), query).toBe(visible);
+        // The row's hint is indexed whenever the row exists and may contain a short label such as "Follow system".
+        const inHint = agentIsland.supported && agentIsland.enabled && searchI18n.t('settings.agentIsland.soundHint', { lng }).toLowerCase().includes(query.toLowerCase());
+        expect(searchSettings(documents, query).some(({ entry }) => entry.id === 'settings.agentIsland.soundLabel'), query).toBe(visible || inHint);
       }
     }
   });

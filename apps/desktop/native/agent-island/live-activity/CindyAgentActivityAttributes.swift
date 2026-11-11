@@ -11,8 +11,14 @@ struct CindyAgentActivityAttributes: ActivityAttributes {
     var runningCount: Int
     /// Tasks waiting on the user (question / permission).
     var attentionCount: Int
+    /// Full Agent Notch badge count (waiting + unread results/chats). Optional so
+    /// activities from older app versions still decode with their waiting count.
+    var attentionTotal: Int?
+    var badgeAttentionCount: Int { attentionTotal ?? attentionCount }
     /// Title of the task the island would surface first.
     var title: String
+    /// Click destination, optional so existing activity payloads still decode.
+    var taskUrl: String?
     /// Localized status line, prepared by the main process.
     var detail: String
     /// Localized secondary line ("2 more tasks running"); empty when nothing to add.

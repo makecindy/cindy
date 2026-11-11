@@ -120,8 +120,8 @@ fs.writeFileSync(${JSON.stringify(receipt)}, JSON.stringify({ elevated, first, s
 `);
 
   // Compile the exact production launcher into a disposable probe. Its child
-  // starts the same Node executable as the receiver, without inheriting the
-  // elevated process environment, and uses only synthetic URLs.
+  // starts the same Node executable as the receiver, retaining the original
+  // detached launch's environment/cwd, and uses only synthetic URLs.
   const project = path.join(fixture, 'launcher');
   await fs.mkdir(path.join(project, 'src'), { recursive: true });
   await fs.writeFile(path.join(project, 'Cargo.toml'), `[package]
@@ -130,7 +130,6 @@ version = "0.0.0"
 edition = "2021"
 [dependencies]
 windows-sys = { version = "0.59", features = ["Win32_Foundation", "Win32_Security", "Win32_System_Environment", "Win32_System_Threading", "Win32_UI_WindowsAndMessaging"] }
-windows = { version = "0.61", features = ["Win32_Foundation", "Win32_System_Com", "Win32_System_Ole", "Win32_System_Variant", "Win32_UI_Shell"] }
 `);
   const launchSource = path.join(root, 'apps/desktop/cindy-updater/src-tauri/src/windows_launch.rs');
   await fs.writeFile(path.join(project, 'src/main.rs'), `
@@ -144,9 +143,10 @@ fn main() {
     let exe = std::env::current_exe().unwrap();
     let text = exe.to_string_lossy();
     let text = text.strip_prefix(r"\\\\?\\").unwrap_or(&text);
-    assert!(windows_launch::launch_via_desktop_shell(std::path::Path::new(text)).unwrap());
+    let process = windows_launch::launch_via_desktop_shell(std::path::Path::new(text)).unwrap().unwrap();
+    assert!(windows_launch::is_running(&process).unwrap());
   } else {
-    assert!(!windows_launch::launch_via_desktop_shell(std::path::Path::new("missing-test-app.exe")).unwrap());
+    assert!(windows_launch::launch_via_desktop_shell(std::path::Path::new("missing-test-app.exe")).unwrap().is_none());
     let status = std::process::Command::new(${JSON.stringify(process.execPath)})
       .arg(${JSON.stringify(clientFile)}).creation_flags(0x08000000).status().unwrap();
     std::process::exit(status.code().unwrap_or(1));

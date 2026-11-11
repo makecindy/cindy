@@ -301,6 +301,28 @@ describe('feishu group inbound gate', () => {
     expect(mocks.resolveReplyMessage).toHaveBeenCalledWith('om_parent', 'oc_chat1');
   });
 
+  // 测试价值(#9245): 生产入口是 wsClient 的 im.message.receive_v1。直接转发的模板/
+  // 第三方卡片抽不出正文, 修复前空门禁把事件丢掉, 用户看不到任何回复。引用解析
+  // 仍须留空(incomingContent 的 template 用例), 所以这条只覆盖入站可见性。
+  // 最小失败输入: p2p interactive 模板卡。tier: unit。
+  it('emits an unsupported entry for a private card with no readable text instead of dropping it (#9245)', async () => {
+    await connect();
+    const events = collectEvents();
+    const incoming = groupMessage({});
+    incoming.message.chat_type = 'p2p';
+    incoming.message.message_type = 'interactive';
+    incoming.message.content = JSON.stringify({ type: 'template', data: { template_id: 'ctp_alert' } });
+    incoming.message.mentions = [];
+    await mocks.eventHandlers['im.message.receive_v1']!(incoming);
+    expect(events).toHaveLength(1);
+    expect(events[0]).toMatchObject({
+      senderId: OWNER,
+      text: '',
+      attachments: [],
+      unsupported: [{ type: 'interactive', label: '卡片消息' }],
+    });
+  });
+
   it('fetches directly received merged forwards instead of silently dropping them', async () => {
     mocks.resolveReplyMessage.mockResolvedValueOnce({ replyContext: { author: 'Alice', text: 'forwarded content' } });
     await connect();

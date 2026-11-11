@@ -5,12 +5,13 @@ import { isSeparateLinkActivation } from './linkInteraction';
 import { toast } from '@/lib/toast';
 
 export function GhostCardSessionLink({ element }: { element: HTMLElement }) {
-  const { openTarget, navigationMode } = useSessionLinkTarget(element.dataset.ghostLink ?? '');
+  const { openTarget, navigationMode } = useSessionLinkTarget(element.dataset.ghostSessionLink ?? element.dataset.ghostLink ?? '');
   const { t } = useTranslation();
   useEffect(() => {
     const open = (event: Event) => {
       event.preventDefault();
       event.stopPropagation();
+      if ((element as HTMLButtonElement).disabled || element.getAttribute('aria-disabled') === 'true') return;
       const mouse = event as MouseEvent;
       void openTarget(navigationMode === 'sidebar-embedded' || isSeparateLinkActivation(mouse))
         .catch(() => toast.error(t('chat.ghostCall.linkOpenFailed')));

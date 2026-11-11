@@ -1,3 +1,5 @@
+import { recordStandbyUsage, flushStandbyUsage } from '../../device-link/providerShareAvailabilityUsage.js';
+import { prepareShareAvailability, acceptShareAvailability, beginShareAvailabilityTurn } from '../../device-link/providerShareAvailability.js';
 import { assertMemberBudget, memberBudgetDenial, memberBudgetAllows } from '../../device-link/providerShareBudgetRuntime.js';
 import { readRemoteAgentLimitsState } from './limitsStore.js';
 /**
@@ -22,7 +24,7 @@ import {
   isDataOwnerBroadcastScopeCurrent,
   type DataOwnerBroadcastScope,
 } from '../../device-link/broadcast-tap.js';
-import { setRemoteAgentHandler } from '../../device-link/dispatch.js';
+import { setRemoteAgentHandler } from '../../device-link/dispatch.desktop.js';
 import { getSelfDeviceId, remoteBackgroundInvoke } from '../../device-link/index.js';
 import { getProviderShareHostLoadedSnapshot, onProviderShareHostChanged, ownedProviderShareGuestAccess, providerShareGuestAccess, verifyProviderShareMemberGeneration } from '../../device-link/providerShareHost.js';
 import { applyProviderShareDelegation, clearProviderShareDelegations, delegatedProviderShareGuestAccess, delegatedProviderShareLeases, delegatedProviderShareModelAllowed, delegatedProviderShareReceiptAuthority, delegatedProviderShareSessionAllowed, delegatedProviderShareTaskAccess, invalidateProviderShareDelegation, revokeDelegatedProviderShareGuest } from '../../device-link/providerShareDelegatedAccess.js';
@@ -43,7 +45,7 @@ import { remoteAgentPollerFor } from '../controller/service';
 import { RemoteAgentRunClient, type RemoteAgentInvoke } from '../controller/runClient.js';
 import { getProviderShareUsageStore, installProviderShareUsageStore, type ProviderShareDirectReceiptRoute } from '../../device-link/providerShareUsageStore.js';
 import { currentProviderPartyUsageStore, flushProviderPartyUsage } from '../../usage/providerPartyUsageStore.js';
-import { onDeviceLinkSettingChanged, readDeviceLinkSettings } from '../../device-link/settings-store.js';
+import { onDeviceLinkSettingChanged, readDeviceLinkSettings } from '../../device-link/settings-store.desktop.js';
 import { readTurnUsageResetAt } from '../../goal-host/usageLimit.js';
 import { getDesktopProviderService } from '../../maker-host/createDesktopProviderService.js';
 import { bindHostedSessionProvider, hasHostedSessionModelAccess } from '../../maker-host/session-provider-store.js';
@@ -82,6 +84,7 @@ export function hostedStartOptions(input: HostedStartInput): StartSessionOptions
     ...(options.botProfileContextPrompt ? { botProfileContextPrompt: options.botProfileContextPrompt } : {}),
     ...(options.botUserProfilePrompt ? { botUserProfilePrompt: options.botUserProfilePrompt } : {}),
     ...(options.makerMemoryEnabled !== undefined ? { makerMemoryEnabled: options.makerMemoryEnabled } : {}),
+    ...(options.makerMemorySwitchOwned ? { makerMemorySwitchOwned: true } : {}),
     ...(options.makerMemoryScopeKey ? { makerMemoryScopeKey: options.makerMemoryScopeKey } : {}),
     // 记忆在对方电脑上：没有快照时也给空快照，本机不读自己的记忆库。
     ...(options.makerMemoryEnabled ? { makerMemoryIndexSnapshot: options.makerMemoryIndexSnapshot ?? '' } : {}),
@@ -166,10 +169,10 @@ export function createProviderShareMemberPurger(options: {
   ownerDeviceId: () => string | null | undefined;
   isCurrent: () => boolean;
   hasAccess: (controller: string) => boolean;
-}): (match: (controller: string) => boolean) => Promise<void> {
+}): (match: (controller: string) => boolean, requireComplete?: boolean) => Promise<void> {
   const { usage, current } = options;
   let memberPurgeWork: Promise<void> = Promise.resolve();
-  const purgeMemberControllers = (match: (controller: string) => boolean): Promise<void> => {
+  const purgeMemberControllers = (match: (controller: string) => boolean, requireComplete = false): Promise<void> => {
     const work = memberPurgeWork.then(async () => {
       const ownerScope = options.ownerScope();
       const ownerDeviceId = options.ownerDeviceId();
@@ -217,7 +220,7 @@ export function createProviderShareMemberPurger(options: {
         assertCurrent();
         await usage.rememberMemberCleanupScopes(member, scopes);
       }
-      await current.purgeControllers(guarded);
+      await current.purgeControllers(guarded, requireComplete);
       assertCurrent();
       // runHost's legacy cleanup is best effort. Retain the membership fence
       // until its durable index and pending relay forgets are actually empty.
@@ -269,7 +272,8 @@ export function installRemoteAgentHost(options: {
   const isControllerAuthorized = (controller: string): boolean => {
     if (isProviderSharePeer(controller)) return providerShareGuestAccess(controller) !== null;
     const settings = readDeviceLinkSettings();
-    return settings.remoteControlEnabled && !settings.revokedControllers.includes(controller);
+    return settings.remoteControlEnabled && !settings.revokedControllers.includes(controller)
+      && !(settings.modelUseRevokedControllers ?? []).includes(controller);
   };
   // 同一份受邀者分配器同时提供匿名状态，沿用实际分配时记录的版本兼容情况。
   const groupRelay = createProviderGroupGuestRelay({
@@ -292,6 +296,12 @@ export function installRemoteAgentHost(options: {
   stopDelegationChecks = startProviderShareDelegationRechecks({
     leases: delegatedProviderShareLeases,
     async check(first) {
+      const cloud = delegatedProviderShareLeases().find(item => item.peer === first.peer && item.sessionId === first.sessionId)?.lease.availability;
+      if (cloud) {
+        await prepareShareAvailability(first.peer);
+        const lease = delegatedProviderShareLeases().find(item => item.peer === first.peer && item.sessionId === first.sessionId)?.lease;
+        return { active: !!lease, ownerDeviceId: lease?.ownerDeviceId };
+      }
       const peer = parseProviderSharePeer(first.peer);
       const deviceId = getSelfDeviceId();
       if (peer?.role !== 'guest' || !deviceId) throw new Error('Provider share executor is unavailable');
@@ -887,6 +897,8 @@ export function installRemoteAgentHost(options: {
     ownerModelAllowed: (hostSessionId, providerId, kind, model) => hasHostedSessionModelAccess(hostSessionId)
       && hostedProviderOffersModel(hostSessionId, providerId, kind, model),
     isControllerAuthorized,
+    isControllerModelUseRevoked: (controller) => !isProviderSharePeer(controller)
+      && (readDeviceLinkSettings().modelUseRevokedControllers ?? []).includes(controller),
     controllerTrust: (controller) => (isProviderSharePeer(controller) ? 'guest' : 'owner'),
     providerAccess: {
       models: async (kind, providerId, controller, sessionId) => {
@@ -975,8 +987,12 @@ export function installRemoteAgentHost(options: {
       const peer = parseProviderSharePeer(controller);
       if (peer?.role === 'guest' && peer.memberId) {
         // O receives only model/counter data for the matching delegated task.
-        const authority = sessionId && delegatedProviderShareReceiptAuthority(controller, sessionId);
-        if (authority) {
+        const authority = sessionId ? delegatedProviderShareReceiptAuthority(controller, sessionId) : null;
+        if (authority?.availability && sessionId) {
+          void recordStandbyUsage({ shareId: peer.shareId, memberId: peer.memberId, guestDeviceId: peer.deviceId,
+            sessionId, generation: authority.generation }, sample.samples).then(flushStandbyUsage)
+            .catch(error => log.warn('standby usage persistence/upload unavailable', { error: String(error) }));
+        } else if (authority && sessionId) {
           for (let i = 0; i < sample.samples.length; i += 64) {
             const usageId = randomUUID();
             const request: Extract<RemoteAgentRequest, { op: 'direct-usage' }> = {
@@ -1004,6 +1020,8 @@ export function installRemoteAgentHost(options: {
     groupRelay,
     groupContinuity: hasProviderGroupContinuityHandler,
     directGuestExecution: {
+      acceptDelegated: acceptShareAvailability,
+      beginDelegatedTurn: beginShareAvailabilityTurn,
       ownerScope: providerShareOwnerKey,
       async locate(controller, request) {
         const key = JSON.stringify([controller, request.sessionId]);

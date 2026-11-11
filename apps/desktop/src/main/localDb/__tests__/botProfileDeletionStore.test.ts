@@ -257,6 +257,22 @@ describe('Bot profile deletion transaction', () => {
     expect(snapshot().bot_direct_messages).toEqual(before.bot_direct_messages);
   });
 
+  // Tier: behavior. Deleting a teammate left the tasks in its project (automation runs, tasks it opened
+  // there) in the task list under a project that no longer exists (2026-11-10).
+  it.each([true, false])('applies the keep-or-delete choice to the teammate project tasks (keep=%s)', async (keepTaskHistory) => {
+    sqlite.exec(`INSERT INTO sessions VALUES ('project-run', 'scheduler', 'active', 1), ('project-gone', 'desktop', 'deleted', 1)`);
+    await commitBotProfileDeletion({
+      botId: 'bot-1', sessionIds: ['canonical'], keepTaskHistory, projectSessionIds: ['project-run', 'project-gone', 'canonical'],
+    });
+    const status = keepTaskHistory ? 'archived' : 'deleted';
+    expect(sqlite.prepare("SELECT id, source, status FROM sessions WHERE id IN ('project-run', 'project-gone', 'ordinary') ORDER BY id").all())
+      .toEqual([
+        { id: 'ordinary', source: 'desktop', status: 'active' },
+        { id: 'project-gone', source: 'desktop', status: 'deleted' },
+        { id: 'project-run', source: 'scheduler', status },
+      ]);
+  });
+
   it('deletes a Profile that has no task yet', async () => {
     await commitBotProfileDeletion({
       botId: 'bot-1',

@@ -21,7 +21,7 @@ vi.mock('react-native', async () => {
   const node = { interpolate: () => node };
   return {
     View, Pressable: ({ children, testID }: any) => el('button', { 'data-testid': testID }, children),
-    StyleSheet: { create: (value: unknown) => value }, useWindowDimensions: () => ({ width: 400 }),
+    StyleSheet: { create: (value: unknown) => value }, Dimensions: { get: () => ({ width: 400 }), addEventListener: () => ({ remove() {} }) },
     Animated: { Value, View, add: () => node, divide: () => node, multiply: () => node,
       subtract: () => node, timing: () => ({ start() {} }) },
   };

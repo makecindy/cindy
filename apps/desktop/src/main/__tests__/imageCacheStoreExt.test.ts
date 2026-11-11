@@ -19,7 +19,7 @@ vi.mock('electron', () => ({
   app: { getPath: () => userDataDir },
 }));
 
-const imageCacheStore = await import('../imageCacheStore');
+const imageCacheStore = await import('../imageCacheStore.desktop');
 
 async function makeSource(contents = 'data'): Promise<string> {
   const dir = path.join(os.tmpdir(), `ext-src-${randomUUID()}`);

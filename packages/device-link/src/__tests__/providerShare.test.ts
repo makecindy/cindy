@@ -107,6 +107,15 @@ describe('provider share api', () => {
     expect(shares[0].owner).toEqual({ displayName: 'Magi', avatarUrl: 'https://cdn.example/a.png', region: 'global' });
   });
 
+  it('keeps original host presence distinct from an authorized standby and accepts legacy servers', async () => {
+    const row = { shareId: 's1', memberId: 'm1', providerId: 'p', providerLabel: 'Fake', hostDeviceId: 'primary', deviceName: 'Fake',
+      owner: { displayName: 'Fake', avatarUrl: null, region: 'global' }, status: 'active', hostOnline: false, hostCapable: true };
+    expect((await api({ shares: [{ ...row, standbyOnline: true }] }).listReceived())[0]).toMatchObject({ hostOnline: true, hostDeviceOnline: false, standbyOnline: true });
+    const legacy = (await api({ shares: [row] }).listReceived())[0];
+    expect(legacy.hostOnline).toBe(false);
+    expect(legacy).not.toHaveProperty('hostDeviceOnline');
+  });
+
   it('rejects malformed pairing codes and sends invitations only in the body', async () => {
     await expect(api({ requestId: 'r1', status: 'pending', pairingCode: '12a4', expiresAt: new Date().toISOString() })
       .sendRequest(TOKEN, 'card')).rejects.toThrow();
@@ -152,6 +161,24 @@ describe('provider share received catalogs', () => {
     expect(parsed).toEqual([{ ...entry, owner: { displayName: 'Magi', avatarUrl: null } }]);
     expect(parseProviderShareReceivedCatalogs(null)).toEqual([]);
   });
+
+  it('keeps a matching favorite identity and drops a mismatched one without dropping the catalog', async () => {
+    const { parseProviderShareReceivedCatalogs } = await import('../providerShareCatalog.js');
+    const entry = {
+      agentDeviceId: 'share:s1', shareId: 's1', providerId: 'anthropic', providerLabel: 'Anthropic', deviceName: 'Mac',
+      owner: { displayName: 'Magi', avatarUrl: null }, status: 'active', hostOnline: true, catalog: { providers: [] },
+    };
+    const favoriteSource = { shareId: 's1', memberId: 'member-1', providerId: 'anthropic', owner: { region: 'global' } };
+    const [matched, mismatched, malformed] = parseProviderShareReceivedCatalogs({ shares: [
+      { ...entry, favoriteSource },
+      { ...entry, favoriteSource: { ...favoriteSource, memberId: 'other', shareId: 'other' } },
+      { ...entry, favoriteSource: { shareId: 's1', memberId: '', providerId: 'anthropic', owner: { region: 'global' } } },
+    ] });
+    expect(matched?.favoriteSource).toEqual(favoriteSource);
+    expect(mismatched?.favoriteSource).toBeUndefined();
+    expect(malformed?.favoriteSource).toBeUndefined();
+    expect(mismatched?.providerId).toBe('anthropic');
+  });
 });
 
 describe('provider share identity scrubbing', () => {
@@ -181,6 +208,8 @@ describe('provider share identity scrubbing', () => {
     expect(scrubProviderShareLabel('My Gateway')).toBe('My Gateway');
     const provider = {
       id: 'openai-2', name: 'OpenAI · alice@corp.com', connected: true,
+      // The guest still uses this original shared connection, not the owner's whole account pool.
+      subscriptionPoolAlias: true,
       subscriptionAccount: { source: 'local', identity: 'alice@corp.com' },
       openAiAccount: { source: 'oauth', identity: 'alice@corp.com' },
     };

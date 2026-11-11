@@ -15,6 +15,7 @@
     "./agent-task": "./src/agentTask.ts",
     "./bot-template-preset": "./src/botTemplatePreset.ts",
     "./branding": "./src/branding.ts",
+    "./teammate-project": "./src/teammateProject.ts",
     "./classical-reply": "./src/classicalReply.ts",
     "./brand-identity": "./src/brandIdentity.ts",
     "./chat-quotes": "./src/chatQuotes.ts",
@@ -42,6 +43,7 @@
     "./ui-mock": "./src/uiMock.ts",
     "./ghost-command": "./src/ghostCommand.ts",
     "./ghost-card-form": "./src/ghostCardForm.ts",
+    "./ghost-card-task-archive": "./src/ghostCardTaskArchive.ts",
     "./mail-text-edit": "./src/mailTextEdit.ts",
     "./mail-message": "./src/mailMessage.ts",
     "./goal-command": "./src/goalCommand.ts",
@@ -66,6 +68,7 @@
     "./message-source": "./src/messageSource.ts",
     "./message-window": "./src/messageWindow.ts",
     "./orca-team": "./src/orcaTeam.ts",
+    "./orca-queue": "./src/orcaQueue.ts",
     "./mobile-home": "./src/mobileHome.ts",
     "./tool-process-media": "./src/toolProcessMedia.ts",
     "./payload-summary": "./src/payloadSummary.ts",
@@ -120,8 +123,10 @@
     "./remote-desktop-viewer": "./src/remote-desktop/viewerRuntime.js",
     "./remote-desktop-mobile": "./src/remote-desktop/mobileHtml.ts",
     "./remote-desktop-scripts": "./src/remote-desktop/viewerScripts.ts",
-    "./teammate-todo": "./src/teammateTodo.ts",
-    "./teammate-status": "./src/teammateStatus.ts"
+    "./teammate-status": "./src/teammateStatus.ts",
+    "./host-channel-contract": "./src/hostChannelContract.ts",
+    "./host-event-stream": "./src/hostEventStream.ts",
+    "./subscription-selection": "./src/subscriptionSelection.ts"
   },
   "scripts": {
     "build": "tsc --noEmit",

@@ -29,6 +29,13 @@
       "description": "Full access disables the workspace sandbox and skips routine approvals. {{appName}} can modify files outside the workspace and run network commands without asking; built-in high-risk operations will still require confirmation.",
       "confirm": "Enable Full access",
       "cancel": "Keep current permissions"
+    },
+    "description": {
+      "default": "You approve actions when needed.",
+      "acceptEdits": "File edits are allowed directly; you approve other actions when needed.",
+      "auto": "An AI model approves actions, which may take extra time; you confirm when needed.",
+      "bypass": "Routine actions are allowed directly, including files outside the workspace and network commands.",
+      "plan": "Analyzes and plans without changing files."
     }
   },
   "planMode": {
@@ -36,6 +43,10 @@
     "exit": "Exit plan mode"
   },
   "panel": {
+    "questionUnanswered": "Unanswered",
+    "questionWithdrawn": "No longer needs an answer",
+    "withdrawnDraft": "This question no longer needs an answer.\n{{reason}}\nYour draft is kept; you can send it as additional information.",
+    "sendSupplement": "Send additional information",
     "readOnlyKind": "Pending",
     "readOnlyTitle": "Waiting for confirmation on your computer",
     "pendingRequests": "Pending requests",
@@ -450,5 +461,39 @@
       "ghost_id": "Plugin",
       "tool": "Tool"
     }
+  },
+  "issueConfirm": {
+    "title": "Confirm feedback submission to {{appName}}",
+    "typeBug": "Bug",
+    "typeFeature": "Feature",
+    "titleLabel": "Title",
+    "bodyLabel": "Body (Markdown)",
+    "privacyHint": "The Issue title and body will be public and may be searchable or cached. Automatic redaction only covers some common patterns and cannot detect all sensitive context.",
+    "relatedLogsHint": "This submission includes the related client logs shown above. They are filtered, redacted, and length-limited before publication.",
+    "privacyConfirm": "I reviewed the public content above and it contains no personal, conversation, or business information that should remain private",
+    "submissionMethodLabel": "Submission Identity",
+    "identityGithubUser": "My GitHub account @{{login}}",
+    "identityGithubUserHint": "You will be the GitHub author and can edit or close this Issue on GitHub",
+    "identityPlatform": "Cindy official bot @{{login}} (default)",
+    "identityPlatformHint": "No GitHub account setup is required. The official bot creates the Issue, and you can add a public attribution in the body",
+    "publicNameLabel": "Public Attribution",
+    "publicNameHint": "This attribution will appear publicly in the Issue body",
+    "anonymous": "Anonymous",
+    "useAnonymous": "Use Anonymous Attribution",
+    "envLine": "Submitting client environment (attached automatically on submit): client {{appVersion}} · {{platform}} {{arch}} ({{osVersion}}) · UI language {{uiLanguage}}",
+    "runtimeLine": "Harness {{harness}} · Model ID {{modelId}} (this session)",
+    "regionLine": "Build region: {{region}}",
+    "regionCodeCn": "CN",
+    "regionCodeDev": "Dev",
+    "submit": "Submit Feedback",
+    "cancel": "Cancel",
+    "previewLabel": "GitHub · Public feedback",
+    "edit": "Edit",
+    "doneEditing": "Done editing",
+    "publicSubmit": "Submit publicly",
+    "publicationNotice": "Your feedback and attribution will be public on GitHub.",
+    "attribution": "By {{name}}",
+    "environment": "Environment included",
+    "identitySettings": "Name and account"
   }
 }

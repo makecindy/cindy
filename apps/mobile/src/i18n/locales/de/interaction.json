@@ -29,6 +29,13 @@
       "description": "Vollzugriff deaktiviert die Sandbox des Arbeitsbereichs und überspringt routinemäßige Genehmigungen. {{appName}} kann ohne Rückfrage Dateien außerhalb des Arbeitsbereichs ändern und Netzwerkbefehle ausführen. Integrierte Vorgänge mit hohem Risiko erfordern weiterhin eine Bestätigung.",
       "confirm": "Vollzugriff aktivieren",
       "cancel": "Aktuelle Berechtigungen beibehalten"
+    },
+    "description": {
+      "default": "Du genehmigst Aktionen bei Bedarf.",
+      "acceptEdits": "Dateiänderungen sind direkt erlaubt; andere Aktionen genehmigst du bei Bedarf.",
+      "auto": "Ein KI-Modell genehmigt Aktionen. Das kann zusätzliche Wartezeit erfordern; bei Bedarf bestätigst du.",
+      "bypass": "Routineaktionen sind direkt erlaubt, einschließlich Dateien außerhalb des Arbeitsbereichs und Netzwerkbefehlen.",
+      "plan": "Analysiert und plant, ohne Dateien zu ändern."
     }
   },
   "planMode": {
@@ -36,6 +43,10 @@
     "exit": "Planmodus beenden"
   },
   "panel": {
+    "questionUnanswered": "Unbeantwortet",
+    "questionWithdrawn": "Keine Antwort mehr nötig",
+    "withdrawnDraft": "Diese Frage braucht keine Antwort mehr.\n{{reason}}\nIhr Entwurf bleibt erhalten und kann als Ergänzung gesendet werden.",
+    "sendSupplement": "Ergänzung senden",
     "readOnlyKind": "Ausstehend",
     "readOnlyTitle": "Warten auf Bestätigung auf deinem Computer",
     "pendingRequests": "Ausstehende Anfragen",
@@ -450,5 +461,39 @@
       "ghost_id": "Plugin",
       "tool": "Tool"
     }
+  },
+  "issueConfirm": {
+    "title": "Feedback an {{appName}} bestätigen",
+    "typeBug": "Fehler",
+    "typeFeature": "Funktion",
+    "titleLabel": "Titel",
+    "bodyLabel": "Text (Markdown)",
+    "privacyHint": "Titel und Text des Issues werden öffentlich und können über Suchmaschinen auffindbar sein oder zwischengespeichert werden. Die automatische Bereinigung deckt nur einige gängige Muster ab und kann nicht alle sensiblen Zusammenhänge erkennen.",
+    "relatedLogsHint": "Diese Einreichung enthält die oben angezeigten zugehörigen Client-Protokolle. Sie werden vor der Veröffentlichung gefiltert, bereinigt und in der Länge begrenzt.",
+    "privacyConfirm": "Ich habe die obigen öffentlichen Inhalte geprüft. Sie enthalten keine persönlichen, gesprächsbezogenen oder geschäftlichen Informationen, die privat bleiben sollten",
+    "submissionMethodLabel": "Identität beim Einreichen",
+    "identityGithubUser": "Mein GitHub-Konto @{{login}}",
+    "identityGithubUserHint": "Du wirst auf GitHub als Autor eingetragen und kannst dieses Issue dort bearbeiten oder schließen",
+    "identityPlatform": "Offizieller Cindy-Bot @{{login}} (Standard)",
+    "identityPlatformHint": "Es muss kein GitHub-Konto eingerichtet werden. Der offizielle Bot erstellt das Issue, und du kannst im Text eine öffentliche Namensnennung hinzufügen",
+    "publicNameLabel": "Öffentliche Namensnennung",
+    "publicNameHint": "Diese Namensnennung erscheint öffentlich im Text des Issues",
+    "anonymous": "Anonym",
+    "useAnonymous": "Anonym einreichen",
+    "envLine": "Client-Umgebung (wird beim Absenden automatisch angehängt): Client {{appVersion}} · {{platform}} {{arch}} ({{osVersion}}) · UI-Sprache {{uiLanguage}}",
+    "runtimeLine": "Harness {{harness}} · Modell-ID {{modelId}} (diese Sitzung)",
+    "regionLine": "Build-Region: {{region}}",
+    "regionCodeCn": "CN",
+    "regionCodeDev": "Dev",
+    "submit": "Feedback absenden",
+    "cancel": "Abbrechen",
+    "previewLabel": "GitHub · Öffentliches Feedback",
+    "edit": "Bearbeiten",
+    "doneEditing": "Fertig",
+    "publicSubmit": "Öffentlich senden",
+    "publicationNotice": "Feedback und Name werden auf GitHub veröffentlicht.",
+    "attribution": "Von {{name}}",
+    "environment": "Laufzeitumgebung enthalten",
+    "identitySettings": "Name und Konto"
   }
 }
