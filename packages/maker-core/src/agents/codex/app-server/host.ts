@@ -548,9 +548,16 @@ export class AppServerHost {
     dynamicIdentity: boolean;
     disableSubagents: boolean;
     disableModelOverrides: boolean;
+    disableWebSearch: boolean;
   } {
+    const nativePolicy = {
+      dynamicIdentity: false,
+      disableSubagents: false,
+      disableModelOverrides: false,
+      disableWebSearch: false,
+    };
     if (!this.getCustomProviderModelProviderId(providerId, model, sessionId)) {
-      return { dynamicIdentity: false, disableSubagents: false, disableModelOverrides: false };
+      return nativePolicy;
     }
     const route = providerId && model
       ? this.opts.codexCustomProviderRoutes?.find(
@@ -559,17 +566,20 @@ export class AppServerHost {
         )
       : undefined;
     if (!route) {
-      return { dynamicIdentity: false, disableSubagents: false, disableModelOverrides: false };
+      return nativePolicy;
     }
     const child = this.opts.subagentRoute;
-    const childCompatible = !child || (
-      child.providerId === route.providerId && route.responseModels.includes(child.catalogModel)
-    );
+    // 同一供应商下的 Chat/Messages 子模型不在 responseModels 里，但智能调配会走协议桥接，
+    // 不能因此关掉子代理。只有换了供应商的子代理才靠不住这条身份。
+    const childCompatible = !child || child.providerId === route.providerId;
+    const imageGeneration = route.capabilities?.imageGeneration === true;
     return {
       dynamicIdentity: true,
       disableSubagents: !childCompatible,
       // 图片生成身份不能让 spawn_agent 换模型。纯文本 Responses 供应商保留用户已开启的智能调配。
-      disableModelOverrides: route.capabilities?.imageGeneration === true,
+      disableModelOverrides: imageGeneration,
+      // 原生网页搜索只在图片生成身份上关掉。纯文本 Responses 自定义供应商保持开启。
+      disableWebSearch: imageGeneration,
     };
   }
 

@@ -27,7 +27,10 @@ import {
   toCodexCustomProviderHostRoutes,
 } from '../codex-custom-provider-route.js';
 import { setActiveCatalog } from '../active-catalog.js';
-import { isCodexThreadModelProviderIdentityMismatch } from '../codex-credential-switch.js';
+import {
+  isCodexThreadModelProviderIdentityMismatch,
+  shouldCloseSessionForCredentialSwitch,
+} from '../codex-credential-switch.js';
 import { beginProviderRouteMutation } from '../provider-route.js';
 import { configureSessionModelInterfaceStorage, sessionModelInterface } from '../session-model-interface.js';
 
@@ -428,6 +431,18 @@ describe('Codex custom Provider identity', () => {
         ...pinnedThread,
         currentCodexThreadModelProviderId: routes[0]?.modelProviderId,
         sessionId: 'old-chat-task',
+      })).toBe(true);
+
+      // 模型切换和排队心跳用的就是这两个入口。已钉成 Chat 的旧任务必须带上 sessionId，
+      // 否则按当前目录默认会被看成 Responses，误判成身份失配并关掉会话。
+      expect(shouldCloseSessionForCredentialSwitch({
+        ...pinnedThread,
+        currentCodexThreadModelProviderId: 'cindy_gateway',
+        sessionId: 'old-chat-task',
+      })).toBe(false);
+      expect(shouldCloseSessionForCredentialSwitch({
+        ...pinnedThread,
+        currentCodexThreadModelProviderId: 'cindy_gateway',
       })).toBe(true);
     } finally {
       rmSync(directory, { recursive: true, force: true });

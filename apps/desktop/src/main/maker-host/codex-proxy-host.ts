@@ -3075,7 +3075,10 @@ function resolveCodexCustomProviderRoutingDecision(
             && !isProviderRouteMutationInProgress(childRoute.providerId)
             && getProviderRouteCredentialRevision(childRoute.providerId) === subagentCredentialRevisions.get(childRoute);
           if (!current()) return unresolvedCollabSpawnRouteDecision();
-          const crossesProvider = childRoute.providerId !== parentRoute.providerId;
+          // 同一供应商下，子模型不在父级 Responses 名单里时也要逃出命名空间。
+          // 否则 Chat/Messages 子代理会继续打在 Responses 命名空间上，上游回 403。
+          const crossesProvider = childRoute.providerId !== parentRoute.providerId
+            || !parentRoute.responseModels.includes(childRoute.catalogModel);
           const decision = crossesProvider
             ? createModelRoutingTransform(frozenAuthInjection, frozenCustomProviderRoutes, sourceHostAlive)(
                 body, { ...ctx, url: '/responses' },

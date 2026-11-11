@@ -5425,16 +5425,21 @@ assertRouteCurrent();
       ? null
       : host.getCustomProviderModelProviderId?.(mutableProviderId, mutableCatalogModel, opts.sessionId);
     const customProviderThreadPolicy = opts.remoteHostId
-      ? { dynamicIdentity: false, disableSubagents: false, disableModelOverrides: false }
+      ? { dynamicIdentity: false, disableSubagents: false, disableModelOverrides: false, disableWebSearch: false }
       : host.getCustomProviderThreadPolicy?.(mutableProviderId, mutableCatalogModel, opts.sessionId) ?? {
           dynamicIdentity: false,
           disableSubagents: false,
           disableModelOverrides: false,
+          disableWebSearch: false,
         };
     if (customProviderThreadPolicy.dynamicIdentity) {
       customProviderThreadConfig = {
-        web_search: 'disabled',
-        'features.standalone_web_search': false,
+        ...(customProviderThreadPolicy.disableWebSearch
+          ? {
+              web_search: 'disabled',
+              'features.standalone_web_search': false,
+            }
+          : {}),
         ...(customProviderThreadPolicy.disableSubagents
           ? {
               'features.multi_agent': false,
