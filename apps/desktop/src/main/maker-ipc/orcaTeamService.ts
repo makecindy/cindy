@@ -2174,8 +2174,10 @@ export function createOrcaTeamService(deps: OrcaTeamServiceDeps): OrcaTeamServic
       const link = await deps.getWorkerLinkBySessionId(sessionId);
       if (!link) return;
       await withWorkerTransition(link.workerId, async () => {
+        // 身份复核必须无条件：直连 Worker 轮（无派活）的 captured 为 undefined，
+        // 若新派活恰好装上了新的 identity，旧进度同样不得写进它。
         const current = autoBridge.get(sessionId);
-        if (captured && current !== captured) return;
+        if (current !== captured) return;
         if (current) current.structuredReport = report;
         // 只记最新进度：不结算欠回报、不改 worker 状态，面板与通知读得到即可。
         await deps.setWorkerLatestReport(link.workerId, report);

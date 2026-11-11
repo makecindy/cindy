@@ -1871,6 +1871,28 @@ describe('OrcaTeamService', () => {
     expect(progressWrites).toEqual([]);
   });
 
+  // 直连 Worker 轮的 progress：捕获时无派活（captured=undefined），await 期间新派活装上
+  // 新 identity 并清空 latest_report —— 旧进度必须被拒，无条件身份复核。
+  it('rejects a no-assignment progress report when a dispatch lands mid-await', async () => {
+    const { deps, service } = createDeps();
+    let releaseLink!: () => void;
+    const linkGate = new Promise<void>((resolve) => { releaseLink = resolve; });
+    const originalLink = deps.getWorkerLinkBySessionId;
+    deps.getWorkerLinkBySessionId = async (sessionId: string) => {
+      await linkGate;
+      return originalLink(sessionId);
+    };
+    // 没有先 sendToWorker：直连场景，autoBridge 里没有该 session 的身份。
+    const pending = service.recordWorkerReport('worker-session-1', { state: 'progress', summary: '直连进度' });
+    await service.sendToWorker({ callerLeadSessionId: 'lead-1', targetSessionId: 'worker-session-1', message: '新派活' });
+    releaseLink();
+    await pending;
+
+    expect(deps.setWorkerLatestReport).not.toHaveBeenCalledWith(
+      'worker-1', expect.objectContaining({ summary: '直连进度' }),
+    );
+  });
+
   // 派活会清空上一轮回报；发送失败回滚必须把它还回去，否则用户看过的结论消失。
   it('restores the previous report when a dispatch fails after acceptance', async () => {
     let calls = 0;
