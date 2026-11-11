@@ -15,6 +15,7 @@ import {
   resolveHostDelegation,
   startHostEventBridge,
 } from '../host-delegation';
+import { createIpcChannelUsage } from '../ipcChannelUsage';
 
 const roots: string[] = [];
 
@@ -291,6 +292,58 @@ describe('claimProxiedChannels and unsupported fallbacks', () => {
     await expect(fallback!({} as IpcMainInvokeEvent)).rejects.toMatchObject({
       code: 'UNSUPPORTED_CAPABILITY',
     });
+  });
+
+  /** Electron 42 order: invoke asks has() then get(); handle() asks has() before it registers. */
+  function electronLikeIpcMain() {
+    const handlers = new Map<string, (event: IpcMainInvokeEvent, ...args: unknown[]) => unknown>();
+    const ipcMain = {
+      _invokeHandlers: handlers,
+      removeHandler: (channel: string) => { handlers.delete(channel); },
+      handle(channel: string, listener: (event: IpcMainInvokeEvent, ...args: unknown[]) => unknown) {
+        if (handlers.has(channel)) throw new Error(`Attempted to register a second handler for '${channel}'`);
+        handlers.set(channel, listener);
+      },
+      handleOnce(channel: string, listener: (event: IpcMainInvokeEvent, ...args: unknown[]) => unknown) {
+        this.handle(channel, listener);
+      },
+    };
+    const invoke = async (channel: string) => {
+      if (!handlers.has(channel)) throw new Error(`No handler registered for '${channel}'`);
+      return handlers.get(channel)!({} as IpcMainInvokeEvent);
+    };
+    return { ipcMain, invoke };
+  }
+
+  it('answers the has() lookup Electron makes before get(), and counts unserved invokes', async () => {
+    const { ipcMain, invoke } = electronLikeIpcMain();
+    const usage = createIpcChannelUsage({ mode: 'client' });
+    const logged: string[] = [];
+    installUnsupportedMakerFallbacks({ ipcMain, usage, log: (channel) => logged.push(channel) });
+
+    await expect(invoke('maker:remote-ssh:connect')).rejects.toMatchObject({ code: 'UNSUPPORTED_CAPABILITY' });
+    await expect(invoke('maker:remote-ssh:connect')).rejects.toMatchObject({ code: 'UNSUPPORTED_CAPABILITY' });
+    await expect(invoke('skillhub:list')).rejects.toThrow(/No handler registered/);
+
+    expect(logged).toEqual(['maker:remote-ssh:connect']);
+    expect(usage.report().channels).toEqual({
+      'maker:remote-ssh:connect': { kind: 'invoke', count: 2, handled: 0, missing: 0, unsupported: 2 },
+      'skillhub:list': { kind: 'invoke', count: 1, handled: 0, missing: 1, unsupported: 0 },
+    });
+  });
+
+  it('still lets the desktop register a maker:* channel after the fallback is installed', async () => {
+    const { ipcMain, invoke } = electronLikeIpcMain();
+    const usage = createIpcChannelUsage({ mode: 'client' });
+    installUnsupportedMakerFallbacks({ ipcMain, usage });
+
+    expect(() => ipcMain.handle('maker:open-session-in-new-window', () => 'opened')).not.toThrow();
+    expect(() => ipcMain.handleOnce('maker:once', () => 'once')).not.toThrow();
+    await expect(invoke('maker:open-session-in-new-window')).resolves.toBe('opened');
+    await expect(invoke('maker:once')).resolves.toBe('once');
+    // A real duplicate registration still fails loudly.
+    expect(() => ipcMain.handle('maker:open-session-in-new-window', () => 'again')).toThrow(/second handler/);
+    expect(usage.report().channels).toEqual({});
   });
 
   it('fails with UNSUPPORTED_CAPABILITY for explicit unproxied channels list', async () => {

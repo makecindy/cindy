@@ -1186,6 +1186,10 @@ function devEnvEntries(env) {
     ['CINDY_PERSONAL_FIXED_APP', env.CINDY_PERSONAL_FIXED_APP],
     // 插件存储启动边界的 dev 黑盒验收：仅显式临时结果路径时启用。
     ['XDT_PLUGIN_STORAGE_SMOKE_RESULT_FILE', env.XDT_PLUGIN_STORAGE_SMOKE_RESULT_FILE],
+    // IPC 通道调用计数报告（ipcChannelUsage.ts，仅源码运行）：Host 通道覆盖排行用。
+    ['CINDY_IPC_USAGE_FILE', env.CINDY_IPC_USAGE_FILE],
+    // 客户端模式目标（host-delegation.ts，只接受回环地址）：隔离沙箱里验收窗口连 Host。
+    ['CINDY_HOST_API', env.CINDY_HOST_API],
   ];
 }
 

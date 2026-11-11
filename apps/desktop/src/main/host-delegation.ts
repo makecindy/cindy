@@ -17,6 +17,7 @@ import path from 'node:path';
 import type { IpcMainInvokeEvent } from 'electron';
 import { HOST_CONTRACT_CHANNELS, type HostChannelDef } from '@cindy/maker-shared/host-channel-contract';
 import { createIpcError } from '../shared/ipc-errors.js';
+import { guardIpcRegistration, type IpcChannelUsage } from './ipcChannelUsage';
 import { startHostEventStream, type HostConnectionState } from '@cindy/maker-shared/host-event-stream';
 
 export interface HostDelegationConfig {
@@ -208,12 +209,16 @@ export function registerHostDelegatedIpc(deps: HostDelegatedIpcDeps): string[] {
 export interface UnsupportedMakerFallbackDeps {
   readonly ipcMain: unknown;
   readonly channels?: readonly string[];
+  /** Called the first time each `maker:*` channel falls back. */
   readonly log?: (channel: string) => void;
+  /** Counts every invoke that reaches no handler, ranked later against the channel inventory. */
+  readonly usage?: IpcChannelUsage;
 }
 
 /**
  * In client mode, any `maker:*` channel outside the proxied contract fails with
  * explicit UNSUPPORTED_CAPABILITY error rather than "No handler registered".
+ * Other unhandled channels keep Electron's error and are counted.
  */
 export function installUnsupportedMakerFallbacks(deps: UnsupportedMakerFallbackDeps): void {
   const target = deps.ipcMain as {
@@ -235,20 +240,6 @@ export function installUnsupportedMakerFallbacks(deps: UnsupportedMakerFallbackD
     );
   };
 
-  if (target._invokeHandlers instanceof Map) {
-    const handlers = target._invokeHandlers;
-    const origGet = handlers.get.bind(handlers);
-    handlers.get = (channel: string) => {
-      const existing = origGet(channel);
-      if (existing) return existing;
-      if (typeof channel === 'string' && channel.startsWith('maker:')) {
-        deps.log?.(channel);
-        return createFallback(channel);
-      }
-      return undefined;
-    };
-  }
-
   if (deps.channels && target.handle) {
     const rawHandle = target.__originalHandle
       ? target.__originalHandle.bind(target)
@@ -259,6 +250,36 @@ export function installUnsupportedMakerFallbacks(deps: UnsupportedMakerFallbackD
         rawHandle(ch, createFallback(ch));
       }
     }
+  }
+
+  if (target._invokeHandlers instanceof Map) {
+    const handlers = target._invokeHandlers;
+    // Electron asks has() before get() on every invoke, and handle() asks has()
+    // before it registers. Answer only invokes, so later desktop registrations
+    // of a `maker:*` channel still succeed.
+    const registering = guardIpcRegistration(target);
+    const origHas = handlers.has.bind(handlers);
+    const origGet = handlers.get.bind(handlers);
+    const fallsBack = (channel: unknown): channel is string =>
+      typeof channel === 'string' && channel.startsWith('maker:');
+    const logged = new Set<string>();
+    handlers.has = (channel: string) => {
+      if (origHas(channel)) return true;
+      if (registering()) return false;
+      if (fallsBack(channel)) return true;
+      if (typeof channel === 'string') deps.usage?.record(channel, 'invoke', 'missing');
+      return false;
+    };
+    handlers.get = (channel: string) => {
+      const existing = origGet(channel);
+      if (existing || registering() || !fallsBack(channel)) return existing;
+      if (!logged.has(channel)) {
+        logged.add(channel);
+        deps.log?.(channel);
+      }
+      deps.usage?.record(channel, 'invoke', 'unsupported');
+      return createFallback(channel);
+    };
   }
 }
 
