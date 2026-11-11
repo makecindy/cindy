@@ -1,5 +1,5 @@
 import { ipcRenderer } from 'electron';
-import { NATIVE_TRACKPAD_HOST } from '../shared/nativeTrackpad';
+import { LIVE_SCREEN_RELAY, type LiveScreenRelayBridge } from '../shared/liveScreenView';
 import { LIVE_SCREEN_EMBED, type LiveScreenEmbedBridge } from '../shared/remoteDesktopViewer';
 
 function onPayload<T>(channel: string, cb: (payload: T) => void): () => void {
@@ -8,7 +8,7 @@ function onPayload<T>(channel: string, cb: (payload: T) => void): () => void {
   return () => ipcRenderer.removeListener(channel, listener);
 }
 
-/** Device screens embedded in an app window; Main binds and checks everything. */
+/** Device screen connections held by an app window; Main binds and checks everything. */
 export function createLiveScreenEmbedBridge(): LiveScreenEmbedBridge {
   return {
     open: (embedId, target) => ipcRenderer.invoke(LIVE_SCREEN_EMBED.OPEN, embedId, target),
@@ -21,8 +21,20 @@ export function createLiveScreenEmbedBridge(): LiveScreenEmbedBridge {
       ipcRenderer.invoke(LIVE_SCREEN_EMBED.CHANNEL_REPLY, embedId, generation, id, outcome),
     onActive: (listener) => onPayload(LIVE_SCREEN_EMBED.ACTIVE, listener),
     onChannelRequest: (listener) => onPayload(LIVE_SCREEN_EMBED.CHANNEL_REQUEST, listener),
-    trackpadStart: () => ipcRenderer.invoke(NATIVE_TRACKPAD_HOST.START),
-    trackpadStop: () => ipcRenderer.invoke(NATIVE_TRACKPAD_HOST.STOP),
-    onTrackpadFrame: (listener) => onPayload(NATIVE_TRACKPAD_HOST.FRAME, listener),
+  };
+}
+
+/** Relays a device screen's picture to the plugin page that draws it. */
+export function createLiveScreenRelayBridge(): LiveScreenRelayBridge {
+  return {
+    host: () => ipcRenderer.invoke(LIVE_SCREEN_RELAY.HOST),
+    onStart: (listener) => onPayload(LIVE_SCREEN_RELAY.START, listener),
+    onStop: (listener) => onPayload(LIVE_SCREEN_RELAY.STOP, listener),
+    onInput: (listener) => onPayload(LIVE_SCREEN_RELAY.INPUT, listener),
+    onKeyframe: (listener) => onPayload(LIVE_SCREEN_RELAY.KEYFRAME, listener),
+    onRetry: (listener) => onPayload(LIVE_SCREEN_RELAY.RETRY, listener),
+    state: (relayId, state) => ipcRenderer.send(LIVE_SCREEN_RELAY.STATE, relayId, state),
+    frame: (relayId, kind, bytes) =>
+      ipcRenderer.send(LIVE_SCREEN_RELAY.FRAME, relayId, kind, bytes),
   };
 }

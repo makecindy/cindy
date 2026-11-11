@@ -48,6 +48,8 @@ import { markRemoteDesktopViewer } from './registry.js';
 import { extractIpcError } from '../../shared/ipcError.js';
 import { RemoteViewerConnection } from './connection.js';
 import { EmbeddedLiveScreens } from './embedded.js';
+import type { PluginLiveScreenViews } from './pluginViews.js';
+import { LIVE_SCREEN_RELAY } from '../../shared/liveScreenView.js';
 import { ViewerCredentials } from './credentials.js';
 import { readViewerPreferences, writeViewerPreferences } from './preferences.js';
 import { readViewerResolution, writeViewerResolution } from './resolutionMemory.js';
@@ -350,7 +352,27 @@ export class RemoteDesktopViewerWindows {
       if (win && !win.isDestroyed()) entry.controller.close(win.webContents);
     }
   };
-  register(): void {
+  /**
+   * `pluginViews` serves plugins that draw their own device screens: the app
+   * window that registers here holds those connections and relays the picture.
+   */
+  register(pluginViews?: PluginLiveScreenViews): void {
+    if (pluginViews) {
+      pluginViews.connect({
+        selfDeviceId: getSelfDeviceId,
+        invoke: (deviceId, request) => requestRemote(deviceId, request, () => {}),
+      });
+      ipcMain.handle(LIVE_SCREEN_RELAY.HOST, (event) => {
+        assertTrustedAppRendererEvent(event);
+        pluginViews.setHost(event.sender);
+      });
+      ipcMain.on(LIVE_SCREEN_RELAY.STATE, (event, relayId, state) =>
+        pluginViews.state(event.sender, relayId, state),
+      );
+      ipcMain.on(LIVE_SCREEN_RELAY.FRAME, (event, relayId, kind, bytes) =>
+        pluginViews.frame(event.sender, relayId, kind, bytes),
+      );
+    }
     powerMonitor.on('lock-screen', this.endForLocalLock);
     powerMonitor.on('suspend', this.endForLocalLock);
     ipcMain.handle(REMOTE_VIEWER.OPEN, (event, target) => {

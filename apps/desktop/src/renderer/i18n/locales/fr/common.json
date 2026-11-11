@@ -1239,7 +1239,6 @@
       "noDisplay": "Aucun écran disponible sur cet ordinateur."
     },
     "viewer": {
-      "fitShort": "Ajuster",
       "displayPanel": "Affichage et son",
       "clipboardPanel": "Presse-papiers",
       "securityPanel": "Sécurité",
@@ -1331,11 +1330,24 @@
     "handoffEnded": "Ce transfert de saisie est déjà terminé ; il n'y a donc aucune fenêtre à afficher.",
     "handoffUnavailable": "Cet ordinateur ne peut pas afficher uniquement cette fenêtre. Mettez-y Cindy à jour, ou activez-y le bureau à distance.",
     "handoffWindow": "Transfert de saisie · {{app}}",
-    "screenNotRunning": "L'appareil est éteint. Démarrez-le sur l'ordinateur, puis reconnectez-vous.",
-    "liveScreenTitle": "Écran de l’appareil",
-    "liveScreenConnecting": "Connexion à l’écran de l’appareil…",
-    "liveScreenReconnecting": "Reconnexion à l’écran de l’appareil…",
-    "idleMinutes_many": "{{count}} minutes"
+    "idleMinutes_many": "{{count}} minutes",
+    "liveScreenPlugin": {
+      "install": {
+        "title": "Installer le plugin « {{plugin}} »",
+        "body": "Cette tâche a {{device}} ouvert sur un autre ordinateur. Installez le plugin « {{plugin}} » sur cet ordinateur pour le voir et le contrôler dans la barre latérale droite.",
+        "action": "Installer"
+      },
+      "enable": {
+        "title": "Activer le plugin « {{plugin}} »",
+        "body": "Cette tâche a {{device}} ouvert sur un autre ordinateur. Activez le plugin « {{plugin}} » sur cet ordinateur pour le voir et le contrôler dans la barre latérale droite.",
+        "action": "Activer"
+      },
+      "update": {
+        "title": "Mettre à jour le plugin « {{plugin}} »",
+        "body": "Cette tâche a {{device}} ouvert sur un autre ordinateur. Mettez à jour le plugin « {{plugin}} » sur cet ordinateur pour le voir et le contrôler dans la barre latérale droite.",
+        "action": "Mettre à jour"
+      }
+    }
   },
   "ipcError": {
     "SSH_HARNESS_SWITCH_UNSUPPORTED": "Cette tâche SSH ne peut pas changer de Harness. Choisissez un modèle dans son Harness actuel, ou créez une nouvelle tâche SSH avec le Harness souhaité.",

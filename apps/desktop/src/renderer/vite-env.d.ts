@@ -1253,6 +1253,7 @@ interface ElectronAPI {
   accessibilitySupport: import('../shared/accessibilitySupport').AccessibilitySupportBridge;
   /** Device screens of another computer shown inside this window (sidebar tab). */
   liveScreenEmbed?: import('../shared/remoteDesktopViewer').LiveScreenEmbedBridge;
+  liveScreenRelay?: import('../shared/liveScreenView').LiveScreenRelayBridge;
   appPreferenceControl?: import('../shared/appPreferenceControl').AppPreferenceControlBridge;
   appearanceSettings: {
     importWallpaper: () => Promise<import('../shared/appearanceSettings').AppearanceSettings | null>;

@@ -1126,8 +1126,6 @@ it('shows a device screen as that device: touches, its own buttons and its turns
     enabled: true,
     maxTouches: 5,
     keyboard: true,
-    // A 390-pixel-wide phone stream is a 2× device: finger pairs sit 80 points each side.
-    scale: 2,
   });
   present();
   expect(snapshot.screen?.name).toBe('iPhone');
@@ -1139,9 +1137,8 @@ it('shows a device screen as that device: touches, its own buttons and its turns
     height: 390,
     restore: true,
   });
-  controller.press('home');
-  // Only the buttons this device lists exist.
-  controller.press('power');
+  // The page that draws the device (the plugin's own) sends its input through here.
+  expect(controller.deviceInput([{ kind: 'press', button: 'home' }])).toBe(true);
   expect(runtime.receive.mock.calls.filter(([message]) => message.type === 'events')).toEqual([
     [{ type: 'events', events: [{ kind: 'press', button: 'home' }] }],
   ]);

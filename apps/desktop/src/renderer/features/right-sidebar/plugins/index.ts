@@ -22,4 +22,3 @@ import './background-tasks';
 import './resource-usage';
 import './plugin-view';
 import './plugin-task';
-import './live-screen';

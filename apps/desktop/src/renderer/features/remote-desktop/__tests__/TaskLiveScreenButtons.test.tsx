@@ -1,8 +1,9 @@
 // @vitest-environment jsdom
-// 测试价值：通过真实入口保护「远程任务的模拟器在电脑上自动出现在侧边栏」——只认那台电脑绑定到
-// 当前任务、正在运行的设备；设备出现时自动打开一次页签（之后不反复弹出），入口可再次打开；
-// 旧版电脑（不支持设备画面）不发列表请求、不出现入口。此前只有手机任务页有这个入口。最小输入：一台在线可远控的电脑与一份设备列表；
-// unit tier，单独约 3 秒。
+// 测试价值：通过真实入口保护「远程任务的设备（模拟器）在电脑上由同一个插件自己的任务页显示」——只认
+// 那台电脑绑定到当前任务、正在运行的设备；本机装着同一个插件时设备出现就自动打开它的任务页一次（之后
+// 不反复弹出），入口可再次打开；本机没装、没开启或版本太旧时不打开任何页面，而是提示并带用户去安装 /
+// 开启 / 更新；旧版电脑（不支持设备画面）不发列表请求、不出现入口。此前设备画面由宿主自己画，没有
+// 「需要插件」这条路径。最小输入：一台在线可远控的电脑、一份设备列表与本机已装插件；unit tier，单独约 3 秒。
 import { act, cleanup, fireEvent, render, screen } from '@testing-library/react';
 import { afterEach, beforeEach, expect, it, vi } from 'vitest';
 import { REMOTE_DESKTOP_CHANNEL } from '@cindy/device-link';
@@ -15,6 +16,8 @@ import {
   useAutoOpenTaskLiveScreens,
 } from '../TaskLiveScreenButtons';
 import { useTaskLiveScreens } from '../useTaskLiveScreens';
+import { ConfirmDialogProvider } from '@/components/ui/confirm-dialog-provider';
+import { installedGhostStoragePart } from '../../../../shared/pluginIdentity';
 
 const fixture = vi.hoisted(() => ({ devices: [] as DeviceLinkDeviceView[] }));
 vi.mock('@/features/device-link/useDeviceLinkDeviceList', () => ({
@@ -22,11 +25,19 @@ vi.mock('@/features/device-link/useDeviceLinkDeviceList', () => ({
   useDeviceLinkDeviceListRequestState: () => ({ status: 'ready', error: null }),
 }));
 const openTab = vi.hoisted(() => vi.fn(async () => {}));
-vi.mock('@/features/right-sidebar/lib/openLiveScreenTab', () => ({ openLiveScreenTab: openTab }));
+vi.mock('@/features/right-sidebar/lib/openPluginTaskTab', () => ({ openPluginTaskTab: openTab }));
+const installed = vi.hoisted(() => ({ ghosts: [] as unknown[] }));
+vi.mock('@/cindy-brain/useInstalledGhosts', () => ({ useInstalledGhosts: () => installed.ghosts }));
+const setupRoute = vi.hoisted(() => vi.fn(async () => '/plugins?market=cindy-simulator'));
+vi.mock('@/features/cc-agent/pluginSkillSetup', () => ({ pluginSetupRoute: setupRoute }));
+const navigate = vi.hoisted(() => vi.fn());
+vi.mock('react-router-dom', () => ({ useNavigate: () => navigate }));
+const notices = vi.hoisted(() => vi.fn());
+vi.mock('@/lib/toast', () => ({ toast: { info: notices } }));
 
 const invoke = vi.fn();
 const listed = (id: string, name: string, taskIds: string[], state = 'running') => ({
-  plugin: 'cindy-simulator',
+  plugin: '_root__cindy-simulator',
   pluginName: 'Device Simulator',
   id,
   name,
@@ -34,10 +45,26 @@ const listed = (id: string, name: string, taskIds: string[], state = 'running') 
   state,
   taskIds,
 });
+/** The same plugin installed on this computer, by default able to show another computer's device. */
+const plugin = (patch: { enabled?: boolean; remote?: boolean } = {}) => ({
+  dir: '/plugins/_ns/_root/cindy-simulator',
+  namespace: null,
+  namespaceState: 'confirmed',
+  enabled: patch.enabled !== false,
+  manifest: {
+    id: 'cindy-simulator',
+    name: 'Device Simulator',
+    taskView: { html: 'task.html', ...(patch.remote === false ? {} : { remote: true }) },
+  },
+});
 function Entries() {
   const screens = useTaskLiveScreens('remote', 'task-1');
-  useAutoOpenTaskLiveScreens('task-1', screens);
-  return <TaskLiveScreenButtons sessionId="task-1" screens={screens.screens} />;
+  const entries = useAutoOpenTaskLiveScreens('task-1', screens);
+  return (
+    <ConfirmDialogProvider>
+      <TaskLiveScreenButtons sessionId="task-1" entries={entries} />
+    </ConfirmDialogProvider>
+  );
 }
 const settle = () => act(async () => void (await Promise.resolve()));
 
@@ -60,6 +87,10 @@ beforeEach(async () => {
   ];
   invoke.mockReset();
   openTab.mockClear();
+  navigate.mockClear();
+  notices.mockClear();
+  setupRoute.mockClear();
+  installed.ghosts = [plugin()];
   resetAutoOpenedTaskLiveScreens();
   Object.assign(window, { electronAPI: { deviceLink: { invoke } } });
   vi.spyOn(document, 'hasFocus').mockReturnValue(true);
@@ -88,7 +119,7 @@ it('reads the list only while this window is in front, and again when the user r
   }
 });
 
-it('opens a device of this task in the sidebar when it appears, once, and again from its entry', async () => {
+it('opens the plugin’s own task page when a device of this task appears, once, and again from its entry', async () => {
   let screens = [
     listed('sim-a', 'iPhone Air', ['task-1']),
     listed('sim-b', 'Other task', ['task-2']),
@@ -106,23 +137,20 @@ it('opens a device of this task in the sidebar when it appears, once, and again 
     render(<Entries />);
     await act(async () => void (await vi.advanceTimersByTimeAsync(0)));
     expect(invoke).toHaveBeenCalledWith('remote', REMOTE_DESKTOP_CHANNEL, [{ op: 'screens' }]);
-    const state = {
-      plugin: 'cindy-simulator',
-      id: 'sim-a',
-      name: 'iPhone Air',
-      pluginName: 'Device Simulator',
-    };
-    // The device appeared: its tab opens by itself, without claiming a user gesture.
-    expect(openTab).toHaveBeenCalledExactlyOnceWith('task-1', state, { userInitiated: false });
+    const instance = installedGhostStoragePart(plugin() as never);
+    expect(instance).toBe('_root__cindy-simulator');
+    // The device appeared: the plugin's task page opens by itself, without claiming a user gesture.
+    expect(openTab).toHaveBeenCalledExactlyOnceWith('task-1', instance, { userInitiated: false });
+    expect(notices).not.toHaveBeenCalled();
     const buttons = screen.getAllByRole('button');
     expect(buttons.map((button) => button.getAttribute('aria-label'))).toEqual([
-      'Device screen · iPhone Air',
+      'Device Simulator · iPhone Air',
     ]);
     // The same device on later reads does not open again (the user may have closed the tab).
     await act(async () => void (await vi.advanceTimersByTimeAsync(15_000)));
     expect(openTab).toHaveBeenCalledTimes(1);
     fireEvent.click(buttons[0]);
-    expect(openTab).toHaveBeenLastCalledWith('task-1', state);
+    expect(openTab).toHaveBeenLastCalledWith('task-1', instance);
     // Shut down and started again: a new appearance.
     screens = [];
     await act(async () => void (await vi.advanceTimersByTimeAsync(15_000)));
@@ -130,7 +158,7 @@ it('opens a device of this task in the sidebar when it appears, once, and again 
     screens = [listed('sim-a', 'iPhone Air', ['task-1'])];
     await act(async () => void (await vi.advanceTimersByTimeAsync(15_000)));
     expect(openTab).toHaveBeenCalledTimes(3);
-    expect(openTab).toHaveBeenLastCalledWith('task-1', state, { userInitiated: false });
+    expect(openTab).toHaveBeenLastCalledWith('task-1', instance, { userInitiated: false });
   } finally {
     vi.useRealTimers();
   }
@@ -146,4 +174,59 @@ it('shows no entry and asks for no list on a computer without device screens', a
   ]);
   expect(screen.queryByRole('button')).toBeNull();
   expect(openTab).not.toHaveBeenCalled();
+});
+
+it('asks for the plugin instead of opening anything when this computer cannot show the device', async () => {
+  invoke.mockImplementation(
+    async (_device: string, _channel: string, [request]: [{ op: string }]) =>
+      request.op === 'capabilities'
+        ? { version: 1, enabled: true, liveScreens: true }
+        : { screens: [listed('sim-a', 'iPhone Air', ['task-1'])] },
+  );
+  installed.ghosts = [];
+  const view = render(<Entries />);
+  await settle();
+  await settle();
+  // Not installed here: a notice says what is needed, once, and leads to the plugin.
+  expect(openTab).not.toHaveBeenCalled();
+  expect(notices).toHaveBeenCalledExactlyOnceWith(
+    expect.stringContaining('Install the “Device Simulator” plugin on this computer'),
+    expect.objectContaining({
+      title: 'Install the “Device Simulator” plugin',
+      action: expect.objectContaining({ label: 'Install' }),
+    }),
+  );
+  // The entry explains the same and goes there only when the user agrees.
+  fireEvent.click(screen.getByRole('button', { name: 'Install the “Device Simulator” plugin' }));
+  await settle();
+  expect(navigate).not.toHaveBeenCalled();
+  fireEvent.click(screen.getByRole('button', { name: 'Install' }));
+  await settle();
+  await settle();
+  expect(setupRoute).toHaveBeenLastCalledWith(undefined, 'cindy-simulator');
+  expect(navigate).toHaveBeenCalledExactlyOnceWith('/plugins?market=cindy-simulator');
+
+  // Installed but turned off, or too old to show another computer's device: say which.
+  installed.ghosts = [plugin({ enabled: false })];
+  view.rerender(<Entries />);
+  await settle();
+  expect(notices).toHaveBeenLastCalledWith(
+    expect.any(String),
+    expect.objectContaining({ title: 'Turn on the “Device Simulator” plugin' }),
+  );
+  installed.ghosts = [plugin({ remote: false })];
+  view.rerender(<Entries />);
+  await settle();
+  expect(notices).toHaveBeenLastCalledWith(
+    expect.any(String),
+    expect.objectContaining({ title: 'Update the “Device Simulator” plugin' }),
+  );
+  expect(openTab).not.toHaveBeenCalled();
+  // Once it can, the page opens without another request from the user.
+  installed.ghosts = [plugin()];
+  view.rerender(<Entries />);
+  await settle();
+  expect(openTab).toHaveBeenCalledExactlyOnceWith('task-1', '_root__cindy-simulator', {
+    userInitiated: false,
+  });
 });

@@ -1222,7 +1222,6 @@
       "noDisplay": "Auf diesem Computer ist keine Anzeige verfügbar."
     },
     "viewer": {
-      "fitShort": "Anpassen",
       "displayPanel": "Anzeige & Ton",
       "clipboardPanel": "Zwischenablage",
       "securityPanel": "Sicherheit",
@@ -1314,10 +1313,23 @@
     "handoffEnded": "Diese Eingabeübergabe ist bereits abgeschlossen. Es gibt kein Fenster mehr zum Anzeigen.",
     "handoffUnavailable": "Dieser Computer kann nicht nur dieses Fenster anzeigen. Aktualisiere Cindy darauf oder aktiviere dort den Remotedesktop.",
     "handoffWindow": "Eingabeübergabe · {{app}}",
-    "screenNotRunning": "Das Gerät ist ausgeschaltet. Starte es auf dem Computer und verbinde dich dann erneut.",
-    "liveScreenTitle": "Gerätebildschirm",
-    "liveScreenConnecting": "Verbindung zum Gerätebildschirm wird hergestellt…",
-    "liveScreenReconnecting": "Verbindung zum Gerätebildschirm wird wiederhergestellt…"
+    "liveScreenPlugin": {
+      "install": {
+        "title": "Plugin „{{plugin}}“ installieren",
+        "body": "Diese Aufgabe hat {{device}} auf einem anderen Computer geöffnet. Installiere das Plugin „{{plugin}}“ auf diesem Computer, um es in der rechten Seitenleiste anzusehen und zu bedienen.",
+        "action": "Installieren"
+      },
+      "enable": {
+        "title": "Plugin „{{plugin}}“ aktivieren",
+        "body": "Diese Aufgabe hat {{device}} auf einem anderen Computer geöffnet. Aktiviere das Plugin „{{plugin}}“ auf diesem Computer, um es in der rechten Seitenleiste anzusehen und zu bedienen.",
+        "action": "Aktivieren"
+      },
+      "update": {
+        "title": "Plugin „{{plugin}}“ aktualisieren",
+        "body": "Diese Aufgabe hat {{device}} auf einem anderen Computer geöffnet. Aktualisiere das Plugin „{{plugin}}“ auf diesem Computer, um es in der rechten Seitenleiste anzusehen und zu bedienen.",
+        "action": "Aktualisieren"
+      }
+    }
   },
   "ipcError": {
     "SSH_HARNESS_SWITCH_UNSUPPORTED": "Bei dieser SSH-Aufgabe lässt sich der Harness nicht wechseln. Wähle ein Modell im aktuellen Harness oder erstelle eine neue SSH-Aufgabe mit dem benötigten Harness.",

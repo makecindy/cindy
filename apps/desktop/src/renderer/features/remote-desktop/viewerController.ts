@@ -78,21 +78,6 @@ export interface ViewerSnapshot {
   screenSize?: Size | null;
 }
 
-/**
- * Stream pixels per device point, so synthesized finger pairs sit 80 points
- * each side as on the plugin's own page. The descriptor carries pixels only:
- * phones draw at 3× (2× the small ones), iPads at 2×, and an Android phone is
- * about 411 points wide. Zero when unknown; the picture then uses a share of
- * its own size.
- */
-export function liveScreenPointScale(platform: string, size: Size): number {
-  const short = Math.min(size.width, size.height);
-  if (platform === 'ios') return short >= 1000 ? 3 : 2;
-  if (platform === 'ipados') return 2;
-  if (platform === 'android') return short / 411;
-  return 0;
-}
-
 /** A device picture's upright size as a host reports it; anything else is ignored. */
 function liveScreenShape(value: unknown): Size | null {
   const shape = value as { width?: unknown; height?: unknown } | null;
@@ -531,7 +516,6 @@ export class DesktopViewerController {
               enabled: true,
               maxTouches: lease.screen.maxTouches,
               keyboard: lease.screen.keyboard,
-              scale: liveScreenPointScale(lease.screen.platform, lease.display),
             }
           : { type: 'deviceTouch', enabled: false },
       );
@@ -632,16 +616,20 @@ export class DesktopViewerController {
     this.runtime.receive({ type: 'control', enabled: controlling });
     if (controlling) void this.applyRememberedResolution();
   }
-  /** The trackpad's two real fingers on the shown device, as positions in its picture. */
-  contacts(frame: { phase: string; touches: { id: number; x: number; y: number }[] }): void {
-    if (!this.state.controlling || !this.session.lease?.screen) return;
-    this.runtime.receive({ type: 'deviceContacts', phase: frame.phase, touches: frame.touches });
+  /**
+   * Input for the shown device from the page that draws it (the plugin's own
+   * page): touches, the device's listed buttons and typing, already checked
+   * and in the picture's own terms. Returns whether it was taken.
+   */
+  deviceInput(events: DesktopInput[]): boolean {
+    if (!this.state.controlling || !this.session.lease?.screen) return false;
+    this.runtime.receive({ type: 'events', events });
+    return true;
   }
-  /** Presses one of the buttons the shown device lists (Home, rotate, volume). */
-  press(button: string): void {
-    const screen = this.session.lease?.screen;
-    if (!this.state.controlling || !screen?.buttons.some((item) => item.id === button)) return;
-    this.runtime.receive({ type: 'events', events: [{ kind: 'press', button }] });
+  /** The picture being received, for a relay that hands it on undrawn. */
+  videoTrack(): MediaStreamTrack | null {
+    const stream = this.root.querySelector('video')?.srcObject;
+    return stream instanceof MediaStream ? (stream.getVideoTracks()[0] ?? null) : null;
   }
   /**
    * Lays the picture out at the shape the device shows as it turns. The host

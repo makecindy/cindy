@@ -19,13 +19,11 @@ export interface RightSidebarTabAvailability {
    * 不随任务归属变化。缺省 = 不做可用性过滤。
    */
   pluginViewGhosts?: readonly InstalledGhost[];
-  /** 任务归属未解析时仍保留本机插件页签的投影;正文另按已确认的归属加载。 */
-  pluginTaskGhosts?: readonly InstalledGhost[];
   /**
-   * 「设备画面」页签(live-screen)只属于另一台电脑上的任务。归属未解析时保留投影
-   * (正文另按已确认的归属连接),确认是本机或 SSH 任务才收起。缺省 = 不投影。
+   * 任务归属未解析时仍保留本机插件页签的投影;正文另按已确认的归属加载。任务在另一台
+   * 电脑上时，只含声明了 `taskView.remote` 的插件。
    */
-  liveScreens?: boolean;
+  pluginTaskGhosts?: readonly InstalledGhost[];
 }
 
 function isUnavailablePluginView(
@@ -80,7 +78,6 @@ function isUnavailableTab(tab: TabState, availability: RightSidebarTabAvailabili
     availability.hiddenTabIds?.has(tab.id) === true ||
     isUnavailablePluginView(tab, availability) ||
     isUnavailablePluginTask(tab, availability) ||
-    (tab.kind === 'live-screen' && availability.liveScreens !== true) ||
     (!CINDY_MAKE_ENABLED && tab.kind === 'cindy-make') ||
     retiredTab(tab, availability) === null ||
     (tab.kind === 'subagents' && !availability.subagentsAvailable)
@@ -151,11 +148,15 @@ export function buildTabAvailabilities(input: TabAvailabilityInput): TabAvailabi
     session: {
       installedGhosts:
         input.remoteHostId || input.deviceLinkDeviceId !== null ? [] : input.installedGhosts,
-      pluginTaskGhosts:
-        input.remoteHostId || input.deviceLinkDeviceId ? [] : input.installedGhosts,
+      // 另一台电脑上的任务只保留声明了 taskView.remote 的任务页（它在本机显示那台
+      // 电脑上同一插件的设备画面）；SSH 远程任务没有任务页。
+      pluginTaskGhosts: input.remoteHostId
+        ? []
+        : input.deviceLinkDeviceId
+          ? input.installedGhosts.filter((ghost) => ghost.manifest.taskView?.remote === true)
+          : input.installedGhosts,
       subagentsAvailable: input.subagentsAvailable === true || !eligibilityKnown,
       hiddenTabIds: input.hiddenTabIds,
-      liveScreens: !input.remoteHostId && input.deviceLinkDeviceId !== null,
     },
     global: {
       installedGhosts: [],

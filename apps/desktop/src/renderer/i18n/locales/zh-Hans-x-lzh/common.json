@@ -1210,7 +1210,6 @@
       "noDisplay": "此机无可用之显示器。"
     },
     "viewer": {
-      "fitShort": "适",
       "displayPanel": "声影",
       "clipboardPanel": "剪贴板",
       "securityPanel": "安全",
@@ -1301,10 +1300,23 @@
     "handoffEnded": "此番代书已毕，无可显之窗口。",
     "handoffUnavailable": "此机暂不能仅显此窗口。请于彼机更新 Cindy，或启远程桌面。",
     "handoffWindow": "代书 · {{app}}",
-    "screenNotRunning": "设备已闭。请于机上启之，然后重连。",
-    "liveScreenTitle": "设备画面",
-    "liveScreenConnecting": "正连设备画面…",
-    "liveScreenReconnecting": "正重连设备画面…"
+    "liveScreenPlugin": {
+      "install": {
+        "title": "须装「{{plugin}}」法器",
+        "body": "此务于他机开 {{device}}。于本机装「{{plugin}}」法器，即可于右栏观之、操之。",
+        "action": "往装"
+      },
+      "enable": {
+        "title": "须启「{{plugin}}」法器",
+        "body": "此务于他机开 {{device}}。于本机启「{{plugin}}」法器，即可于右栏观之、操之。",
+        "action": "往启"
+      },
+      "update": {
+        "title": "须更「{{plugin}}」法器",
+        "body": "此务于他机开 {{device}}。更本机「{{plugin}}」法器至新版，即可于右栏观之、操之。",
+        "action": "往更"
+      }
+    }
   },
   "ipcError": {
     "SSH_HARNESS_SWITCH_UNSUPPORTED": "此 SSH 差事暂不支持易 Harness。请择今 Harness 下之模型，或以所需 Harness 新立 SSH 差事。",

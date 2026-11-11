@@ -49,14 +49,6 @@ export type RsbWindowCommand =
       /** Main 从路由请求写入的来源；缺省为被动，仅用于保留选中与焦点语义。 */
       userInitiated?: boolean;
     }
-  /** 打开 / 聚焦「设备画面」页签:另一台电脑上、绑定到该任务的插件设备(模拟器等)。 */
-  | {
-      type: 'open-live-screen';
-      sessionId: string;
-      screen: { plugin: string; id: string; name: string; pluginName: string };
-      /** 与 open-plugin-task 相同:由 Main 从路由请求写入的来源。 */
-      userInitiated?: boolean;
-    }
   | { type: 'open-terminal'; sessionId: string }
   | { type: 'toggle-review-tab'; sessionId: string }
   | { type: 'open-web-browser'; sessionId: string; url: string }

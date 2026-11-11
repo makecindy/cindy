@@ -1239,7 +1239,6 @@
       "noDisplay": "No hay pantalla disponible en esta computadora."
     },
     "viewer": {
-      "fitShort": "Ajustar",
       "displayPanel": "Pantalla y sonido",
       "clipboardPanel": "portapapeles",
       "securityPanel": "Seguridad",
@@ -1331,11 +1330,24 @@
     "handoffEnded": "Esta transferencia de entrada ya finalizó, por lo que no hay ninguna ventana para mostrar.",
     "handoffUnavailable": "Esta computadora no puede mostrar solo esta ventana. Actualice Cindy o active el escritorio remoto allí.",
     "handoffWindow": "Transferencia de entrada · {{app}}",
-    "screenNotRunning": "El dispositivo está apagado. Inícielo en la computadora y vuelva a conectarse.",
-    "liveScreenTitle": "Pantalla del dispositivo",
-    "liveScreenConnecting": "Conectando con la pantalla del dispositivo…",
-    "liveScreenReconnecting": "Reconectando con la pantalla del dispositivo…",
-    "idleMinutes_many": "minutos {{count}}"
+    "idleMinutes_many": "minutos {{count}}",
+    "liveScreenPlugin": {
+      "install": {
+        "title": "Instala el complemento «{{plugin}}»",
+        "body": "Esta tarea tiene {{device}} abierto en otro ordenador. Instala el complemento «{{plugin}}» en este ordenador para verlo y manejarlo en la barra lateral derecha.",
+        "action": "Instalar"
+      },
+      "enable": {
+        "title": "Activa el complemento «{{plugin}}»",
+        "body": "Esta tarea tiene {{device}} abierto en otro ordenador. Activa el complemento «{{plugin}}» en este ordenador para verlo y manejarlo en la barra lateral derecha.",
+        "action": "Activar"
+      },
+      "update": {
+        "title": "Actualiza el complemento «{{plugin}}»",
+        "body": "Esta tarea tiene {{device}} abierto en otro ordenador. Actualiza el complemento «{{plugin}}» en este ordenador para verlo y manejarlo en la barra lateral derecha.",
+        "action": "Actualizar"
+      }
+    }
   },
   "ipcError": {
     "SSH_HARNESS_SWITCH_UNSUPPORTED": "Esta tarea SSH no permite cambiar de Harness. Elige un modelo en su Harness actual o crea otra tarea SSH con el Harness que necesitas.",

@@ -1210,7 +1210,6 @@
       "noDisplay": "이 컴퓨터에 사용 가능한 디스플레이가 없습니다."
     },
     "viewer": {
-      "fitShort": "맞춤",
       "displayPanel": "화면 및 소리",
       "clipboardPanel": "클립보드",
       "securityPanel": "보안",
@@ -1301,10 +1300,23 @@
     "handoffEnded": "이 대리 입력은 이미 끝나서 표시할 창이 없습니다.",
     "handoffUnavailable": "이 컴퓨터에서는 이 창만 표시할 수 없습니다. 해당 컴퓨터에서 Cindy를 업데이트하거나 원격 데스크톱을 켜세요.",
     "handoffWindow": "대리 입력 · {{app}}",
-    "screenNotRunning": "기기가 꺼져 있습니다. 컴퓨터에서 기기를 시작한 후 다시 연결하세요.",
-    "liveScreenTitle": "기기 화면",
-    "liveScreenConnecting": "기기 화면에 연결 중…",
-    "liveScreenReconnecting": "기기 화면에 다시 연결 중…"
+    "liveScreenPlugin": {
+      "install": {
+        "title": "“{{plugin}}” 플러그인을 설치해야 합니다",
+        "body": "이 작업은 다른 컴퓨터에서 {{device}}을(를) 열어 두었습니다. 이 컴퓨터에 “{{plugin}}” 플러그인을 설치하면 오른쪽 사이드바에서 보고 조작할 수 있습니다.",
+        "action": "설치하기"
+      },
+      "enable": {
+        "title": "“{{plugin}}” 플러그인을 켜야 합니다",
+        "body": "이 작업은 다른 컴퓨터에서 {{device}}을(를) 열어 두었습니다. 이 컴퓨터에서 “{{plugin}}” 플러그인을 켜면 오른쪽 사이드바에서 보고 조작할 수 있습니다.",
+        "action": "켜기"
+      },
+      "update": {
+        "title": "“{{plugin}}” 플러그인을 업데이트해야 합니다",
+        "body": "이 작업은 다른 컴퓨터에서 {{device}}을(를) 열어 두었습니다. 이 컴퓨터의 “{{plugin}}” 플러그인을 새 버전으로 업데이트하면 오른쪽 사이드바에서 보고 조작할 수 있습니다.",
+        "action": "업데이트"
+      }
+    }
   },
   "ipcError": {
     "SSH_HARNESS_SWITCH_UNSUPPORTED": "이 SSH 작업에서는 Harness를 전환할 수 없습니다. 현재 Harness의 모델을 선택하거나 필요한 Harness로 새 SSH 작업을 만드세요.",

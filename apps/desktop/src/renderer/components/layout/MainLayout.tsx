@@ -44,6 +44,7 @@ import {
   useAutoOpenTaskLiveScreens,
 } from '@/features/remote-desktop/TaskLiveScreenButtons';
 import { useTaskLiveScreens } from '@/features/remote-desktop/useTaskLiveScreens';
+import { installLiveScreenRelay } from '@/features/remote-desktop/liveScreenRelay';
 import { CredentialStoreBanner } from '@/components/layout/CredentialStoreBanner';
 import { useDeviceLinkRemoteProjects } from '@/features/device-link/useDeviceLinkRemoteProjects';
 import { useAgentIslandRemoteSessionsSync } from '@/features/device-link/agentIslandRemoteSessions';
@@ -411,13 +412,18 @@ export function MainLayout() {
     !isSharedTaskPeer(rightSidebarWorkdirInfo.deviceLinkDeviceId)
       ? rightSidebarWorkdirInfo.deviceLinkDeviceId
       : null;
-  // 那台电脑的插件为当前任务开着的设备画面（例如模拟器）：设备出现时在右侧栏自动打开它的
-  // 页签（与本机模拟器同一位置），远程桌面入口旁另给一个找回 / 切换设备的入口。
-  // 与手机任务页同源；旧版电脑或读不到时都没有。
+  // 那台电脑的插件为当前任务开着的设备（例如模拟器）：画面和操作都在该插件自己的任务页里，
+  // 所以本机装着同一个插件时，设备出现就在右侧栏自动打开它的任务页（与任务在本机时同一个
+  // 页面）；没装时提示去安装。远程桌面入口旁另给一个找回入口。旧版电脑或读不到时都没有。
+  // 主窗口替插件页面持有到那台电脑的画面连接并转交画面；自己不画任何东西。
+  useEffect(() => installLiveScreenRelay(), []);
   const taskLiveScreens = useTaskLiveScreens(remoteDesktopDeviceId, rightSidebarSessionId);
-  useAutoOpenTaskLiveScreens(remoteDesktopDeviceId ? rightSidebarSessionId : null, taskLiveScreens);
+  const liveScreenEntries = useAutoOpenTaskLiveScreens(
+    remoteDesktopDeviceId ? rightSidebarSessionId : null,
+    taskLiveScreens,
+  );
   const taskLiveScreenEntries =
-    remoteDesktopDeviceId && rightSidebarSessionId ? taskLiveScreens.screens : [];
+    remoteDesktopDeviceId && rightSidebarSessionId ? liveScreenEntries : [];
   // Windows chip 栈按入口个数让位：远程桌面 1 个 + 设备画面若干，每个 28px + 4px 间距。
   const remoteTaskEntriesWidth = remoteDesktopDeviceId
     ? (1 + Math.min(taskLiveScreenEntries.length, TASK_LIVE_SCREEN_LIMIT)) * 32
@@ -1853,7 +1859,7 @@ export function MainLayout() {
                         {rightSidebarSessionId && (
                           <TaskLiveScreenButtons
                             sessionId={rightSidebarSessionId}
-                            screens={taskLiveScreenEntries}
+                            entries={taskLiveScreenEntries}
                             className="mr-1"
                           />
                         )}
@@ -1898,7 +1904,7 @@ export function MainLayout() {
                           {rightSidebarSessionId && (
                             <TaskLiveScreenButtons
                               sessionId={rightSidebarSessionId}
-                              screens={taskLiveScreenEntries}
+                              entries={taskLiveScreenEntries}
                             />
                           )}
                           <TaskRemoteDesktopButton

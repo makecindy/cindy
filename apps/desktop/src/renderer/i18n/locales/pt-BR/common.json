@@ -1239,7 +1239,6 @@
       "noDisplay": "Nenhuma tela disponível neste computador."
     },
     "viewer": {
-      "fitShort": "Ajustar",
       "displayPanel": "Tela e som",
       "clipboardPanel": "Área de transferência",
       "securityPanel": "Segurança",
@@ -1331,11 +1330,24 @@
     "handoffEnded": "Esta transferência de controle de entrada já terminou, então não há janela para mostrar.",
     "handoffUnavailable": "Este computador não pode mostrar apenas esta janela. Atualize o Cindy nele ou ative a área de trabalho remota.",
     "handoffWindow": "Transferência de controle de entrada · {{app}}",
-    "screenNotRunning": "O dispositivo está desligado. Inicie-o no computador e reconecte.",
-    "liveScreenTitle": "Tela do dispositivo",
-    "liveScreenConnecting": "Conectando à tela do dispositivo…",
-    "liveScreenReconnecting": "Reconectando à tela do dispositivo…",
-    "idleMinutes_many": "{{count}} minutos"
+    "idleMinutes_many": "{{count}} minutos",
+    "liveScreenPlugin": {
+      "install": {
+        "title": "Instale o plugin “{{plugin}}”",
+        "body": "Esta tarefa está com {{device}} aberto em outro computador. Instale o plugin “{{plugin}}” neste computador para ver e operar o dispositivo na barra lateral direita.",
+        "action": "Instalar"
+      },
+      "enable": {
+        "title": "Ative o plugin “{{plugin}}”",
+        "body": "Esta tarefa está com {{device}} aberto em outro computador. Ative o plugin “{{plugin}}” neste computador para ver e operar o dispositivo na barra lateral direita.",
+        "action": "Ativar"
+      },
+      "update": {
+        "title": "Atualize o plugin “{{plugin}}”",
+        "body": "Esta tarefa está com {{device}} aberto em outro computador. Atualize o plugin “{{plugin}}” neste computador para ver e operar o dispositivo na barra lateral direita.",
+        "action": "Atualizar"
+      }
+    }
   },
   "ipcError": {
     "SSH_HARNESS_SWITCH_UNSUPPORTED": "Esta tarefa SSH não pode trocar de Harness. Escolha um modelo no Harness atual ou crie uma nova tarefa SSH com o Harness necessário.",

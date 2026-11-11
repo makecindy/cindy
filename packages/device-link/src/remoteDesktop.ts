@@ -304,13 +304,10 @@ export interface RemoteLiveScreen {
   taskIds: string[];
 }
 /**
- * The running screens a host's `screens` reply binds to one task. The reply is
- * untrusted: entries of any other shape are dropped.
+ * The running screens in a host's `screens` reply. The reply is untrusted:
+ * entries of any other shape are dropped.
  */
-export function taskLiveScreens(
-  value: unknown,
-  taskId: string,
-): RemoteLiveScreen[] {
+export function runningLiveScreens(value: unknown): RemoteLiveScreen[] {
   const list = (value as { screens?: unknown } | null)?.screens;
   if (!Array.isArray(list)) return [];
   return list.filter(
@@ -326,7 +323,16 @@ export function taskLiveScreens(
       LIVE_SCREEN_PLATFORMS.includes(item.platform) &&
       item.state === "running" &&
       Array.isArray(item.taskIds) &&
-      item.taskIds.includes(taskId),
+      item.taskIds.every((id: unknown) => typeof id === "string"),
+  );
+}
+/** The running screens a host's `screens` reply binds to one task. */
+export function taskLiveScreens(
+  value: unknown,
+  taskId: string,
+): RemoteLiveScreen[] {
+  return runningLiveScreens(value).filter((item) =>
+    item.taskIds.includes(taskId),
   );
 }
 export const LIVE_SCREEN_BUTTON_ICONS = [

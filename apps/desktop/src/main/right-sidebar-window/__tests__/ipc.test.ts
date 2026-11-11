@@ -448,20 +448,6 @@ describe('right-sidebar-window IPC', () => {
     ).rejects.toThrow(/1–128/);
   });
 
-  // 设备画面页签的打开指令会经 Main 转给分离的侧边栏窗口：只放行形状合法的设备引用，
-  // 否则另一个 renderer 会按任意字符串去连别的电脑上的设备。
-  it('routes a device screen tab by its listed reference and rejects malformed ones', async () => {
-    const controller = makeController();
-    const { handler, mainWebContents } = registerController(controller);
-    const screen = { plugin: 'cindy-simulator', id: 'sim-a', name: 'iPhone', pluginName: 'Sim' };
-    const command = { type: 'open-live-screen', sessionId: 's1', screen };
-    await handler({ sender: mainWebContents }, { command: { ...command, extra: 1 }, allowOpen: true });
-    expect(controller.routeCommand).toHaveBeenCalledWith({ command, allowOpen: true });
-    for (const bad of [{ ...screen, plugin: 'bad plugin' }, { ...screen, id: '' }, { ...screen, name: 1 }])
-      await expect(
-        handler({ sender: mainWebContents }, { command: { ...command, screen: bad }, allowOpen: true }),
-      ).rejects.toThrow(/device screen/);
-  });
   it('forwards userInitiated when present and omits it when absent', async () => {
     const controller = makeController();
     const { handler, mainWebContents } = registerController(controller);

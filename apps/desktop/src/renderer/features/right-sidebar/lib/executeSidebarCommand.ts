@@ -1,5 +1,4 @@
 import { openPluginTaskTab } from './openPluginTaskTab';
-import { openLiveScreenTab } from './openLiveScreenTab';
 import { openMailPreview, openMailCard } from './mailPreview';
 /** 执行 main 已裁决并推给当前 renderer host 的 RSB command。 */
 
@@ -31,12 +30,6 @@ export async function executeSidebarCommand(command: RsbWindowCommand): Promise<
   }
   if (command.type === 'open-plugin-task') {
     await openPluginTaskTab(command.sessionId, command.instanceId, {
-      userInitiated: command.userInitiated === true,
-    });
-    return;
-  }
-  if (command.type === 'open-live-screen') {
-    await openLiveScreenTab(command.sessionId, command.screen, {
       userInitiated: command.userInitiated === true,
     });
     return;

@@ -8,6 +8,11 @@
  * 页面与 mainView / panel 同一条 webview 路(ghostPanelBody.tsx):插件专属分区、
  * 零桥、主机注入主题;页签头由 Cindy 绘制,没有地址栏。页面经查询参数
  * `session=<id>` 得知自己所在的任务。
+ *
+ * 任务在本账号的另一台电脑上时，只有声明了 `taskView.remote` 的插件才显示任务页，
+ * 页面多一个查询参数 `device=<那台电脑的设备 ID>`：画面和操作都由插件自己的页面
+ * 完成（逻辑页经 `cindy.liveScreenView()` 取那台电脑上同一插件的设备画面）。SSH
+ * 远程任务没有任务页。
  */
 
 import { Puzzle } from 'lucide-react';
@@ -53,9 +58,11 @@ function PluginTaskBody({ state, ctx }: TabKindBodyProps<PluginTaskTabState>) {
   const ghost = useInstalledGhostByInstance(state.instanceId);
   const runtimeState = useGhostRuntimeState(state.instanceId);
   // 归属未知时只保留页签和选中位,不为可能属于远端的任务加载本机插件页。
-  if (ctx.remoteHostId || ctx.deviceLinkDeviceId !== null) return null;
+  if (ctx.remoteHostId || ctx.deviceLinkDeviceId === undefined) return null;
   // 停用 / 卸载的瞬间可用性投影已把页签隐藏,这里只兜住收起前的一两帧。
   if (!ghost || ghost.enabled === false || !ghost.manifest.taskView) return null;
+  const remoteDevice = ctx.deviceLinkDeviceId;
+  if (remoteDevice !== null && ghost.manifest.taskView.remote !== true) return null;
   if (runtimeState === 'crashed' || runtimeState === 'fused') {
     return <GhostPanelError ghost={ghost} state={runtimeState} />;
   }
@@ -64,7 +71,10 @@ function PluginTaskBody({ state, ctx }: TabKindBodyProps<PluginTaskTabState>) {
       <GhostWebviewBody
         ghost={ghost}
         html={ghost.manifest.taskView.html}
-        query={`session=${encodeURIComponent(ctx.sessionId)}`}
+        query={
+          `session=${encodeURIComponent(ctx.sessionId)}` +
+          (remoteDevice ? `&device=${encodeURIComponent(remoteDevice)}` : '')
+        }
       />
     </div>
   );

@@ -25,7 +25,8 @@ const UNKNOWN: TaskLiveScreens = { screens: NONE, loaded: false };
 
 /**
  * Plugin live screens (such as simulators) that the task's computer has bound
- * to this task, for the entries beside the remote desktop button. Only a
+ * to this task, for the entries beside the remote desktop button. A computer
+ * with two copies of one plugin lists a device once per copy. Only a
  * reachable computer advertising `liveScreens` is asked, and only while this
  * window is in front: every read makes that computer ask its plugins, so a
  * window left open in the background stays quiet and reads again once the user
@@ -93,14 +94,7 @@ export function useTaskLiveScreens(
           publish(NONE);
           return;
         }
-        // One device may be listed twice when that computer has two copies of
-        // the same plugin installed; it is still one device with one tab.
-        const devices = new Set<string>();
-        publish(
-          taskLiveScreens(await invoke('screens'), sessionId).filter(
-            (screen) => !devices.has(screen.id) && devices.add(screen.id),
-          ),
-        );
+        publish(taskLiveScreens(await invoke('screens'), sessionId));
       } catch {
         // Ask again next time: the computer may have been busy or reconnecting.
         supported = null;

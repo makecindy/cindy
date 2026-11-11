@@ -461,8 +461,7 @@ export class RsbWindowController {
     const { allowOpen } = request;
     // 子窗口执行开页时也需要原点击来源。只从既有路由信封派生一次，
     // 与 command 一起经过现有排队/交接路径；不信任 command 内自报的来源。
-    const command: RsbWindowCommand =
-      request.command.type === 'open-plugin-task' || request.command.type === 'open-live-screen'
+    const command: RsbWindowCommand = request.command.type === 'open-plugin-task'
       ? { ...request.command, userInitiated: request.userInitiated === true }
       : request.command;
     const userInitiated = request.userInitiated !== false;

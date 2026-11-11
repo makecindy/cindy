@@ -1210,7 +1210,6 @@
       "noDisplay": "這台電腦沒有可用的顯示器。"
     },
     "viewer": {
-      "fitShort": "適合",
       "displayPanel": "影音",
       "clipboardPanel": "剪貼簿",
       "securityPanel": "安全",
@@ -1301,10 +1300,23 @@
     "handoffEnded": "這次代輸入已經結束，沒有可顯示的視窗。",
     "handoffUnavailable": "這台電腦暫時無法只顯示這個視窗。請在那台電腦上更新 Cindy，或開啟遠端桌面。",
     "handoffWindow": "代輸入 · {{app}}",
-    "screenNotRunning": "裝置已關閉。請在電腦上啟動它，然後重新連線。",
-    "liveScreenTitle": "裝置畫面",
-    "liveScreenConnecting": "正在連線至裝置畫面…",
-    "liveScreenReconnecting": "正在重新連線至裝置畫面…"
+    "liveScreenPlugin": {
+      "install": {
+        "title": "需要安裝「{{plugin}}」插件",
+        "body": "這個任務在另一台電腦上開著 {{device}}。在這台電腦上安裝「{{plugin}}」插件後，就能在右側欄查看和操作它。",
+        "action": "前往安裝"
+      },
+      "enable": {
+        "title": "需要開啟「{{plugin}}」插件",
+        "body": "這個任務在另一台電腦上開著 {{device}}。在這台電腦上開啟「{{plugin}}」插件後，就能在右側欄查看和操作它。",
+        "action": "前往開啟"
+      },
+      "update": {
+        "title": "需要更新「{{plugin}}」插件",
+        "body": "這個任務在另一台電腦上開著 {{device}}。把這台電腦上的「{{plugin}}」插件更新到新版本後，就能在右側欄查看和操作它。",
+        "action": "前往更新"
+      }
+    }
   },
   "ipcError": {
     "SSH_HARNESS_SWITCH_UNSUPPORTED": "此 SSH 任務暫不支援切換 Harness。請選擇目前 Harness 下的模型，或使用所需 Harness 建立新的 SSH 任務。",

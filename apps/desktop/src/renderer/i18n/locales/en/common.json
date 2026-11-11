@@ -1222,7 +1222,6 @@
       "noDisplay": "No available display on this computer."
     },
     "viewer": {
-      "fitShort": "Fit",
       "displayPanel": "Display & Sound",
       "clipboardPanel": "Clipboard",
       "securityPanel": "Security",
@@ -1314,10 +1313,23 @@
     "handoffEnded": "This input handoff has already finished, so there is no window to show.",
     "handoffUnavailable": "This computer can't show just this window. Update Cindy on it, or turn on remote desktop there.",
     "handoffWindow": "Input handoff · {{app}}",
-    "screenNotRunning": "The device is off. Start it on the computer, then reconnect.",
-    "liveScreenTitle": "Device screen",
-    "liveScreenConnecting": "Connecting to device screen…",
-    "liveScreenReconnecting": "Reconnecting to device screen…"
+    "liveScreenPlugin": {
+      "install": {
+        "title": "Install the “{{plugin}}” plugin",
+        "body": "This task has {{device}} open on another computer. Install the “{{plugin}}” plugin on this computer to view and operate it in the right sidebar.",
+        "action": "Install"
+      },
+      "enable": {
+        "title": "Turn on the “{{plugin}}” plugin",
+        "body": "This task has {{device}} open on another computer. Turn on the “{{plugin}}” plugin on this computer to view and operate it in the right sidebar.",
+        "action": "Turn on"
+      },
+      "update": {
+        "title": "Update the “{{plugin}}” plugin",
+        "body": "This task has {{device}} open on another computer. Update the “{{plugin}}” plugin on this computer to view and operate it in the right sidebar.",
+        "action": "Update"
+      }
+    }
   },
   "ipcError": {
     "SSH_HARNESS_SWITCH_UNSUPPORTED": "This SSH task cannot switch Harness. Choose a model in its current Harness, or create a new SSH task with the Harness you need.",

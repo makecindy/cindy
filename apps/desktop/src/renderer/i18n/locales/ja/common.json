@@ -1210,7 +1210,6 @@
       "noDisplay": "このコンピュータに利用可能なディスプレイがありません。"
     },
     "viewer": {
-      "fitShort": "フィット",
       "displayPanel": "画面とサウンド",
       "clipboardPanel": "クリップボード",
       "securityPanel": "セキュリティ",
@@ -1301,10 +1300,23 @@
     "handoffEnded": "この代理入力はすでに終了しているため、表示するウィンドウがありません。",
     "handoffUnavailable": "このコンピュータではこのウィンドウだけを表示できません。そのコンピュータで Cindy を更新するか、リモートデスクトップをオンにしてください。",
     "handoffWindow": "代理入力 · {{app}}",
-    "screenNotRunning": "デバイスがオフになっています。コンピューターで起動してから、再接続してください。",
-    "liveScreenTitle": "デバイス画面",
-    "liveScreenConnecting": "デバイス画面に接続中…",
-    "liveScreenReconnecting": "デバイス画面に再接続中…"
+    "liveScreenPlugin": {
+      "install": {
+        "title": "「{{plugin}}」プラグインのインストールが必要です",
+        "body": "このタスクは別のコンピュータで {{device}} を開いています。このコンピュータに「{{plugin}}」プラグインをインストールすると、右サイドバーで表示・操作できます。",
+        "action": "インストール"
+      },
+      "enable": {
+        "title": "「{{plugin}}」プラグインを有効にしてください",
+        "body": "このタスクは別のコンピュータで {{device}} を開いています。このコンピュータで「{{plugin}}」プラグインを有効にすると、右サイドバーで表示・操作できます。",
+        "action": "有効にする"
+      },
+      "update": {
+        "title": "「{{plugin}}」プラグインの更新が必要です",
+        "body": "このタスクは別のコンピュータで {{device}} を開いています。このコンピュータの「{{plugin}}」プラグインを新しいバージョンに更新すると、右サイドバーで表示・操作できます。",
+        "action": "更新"
+      }
+    }
   },
   "ipcError": {
     "SSH_HARNESS_SWITCH_UNSUPPORTED": "この SSH タスクでは Harness を切り替えられません。現在の Harness のモデルを選ぶか、必要な Harness で新しい SSH タスクを作成してください。",

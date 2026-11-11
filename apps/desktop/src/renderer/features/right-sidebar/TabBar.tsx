@@ -19,7 +19,7 @@
  */
 
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
-import { Activity, MessagesSquare, Bot, FolderTree, Globe, Terminal, GitPullRequestArrow, UsersRound, ListTodo, Pin, Plus, Puzzle, Smartphone, X, Maximize2, Minimize2, PictureInPicture2, Wrench } from 'lucide-react';
+import { Activity, MessagesSquare, Bot, FolderTree, Globe, Terminal, GitPullRequestArrow, UsersRound, ListTodo, Pin, Plus, Puzzle, X, Maximize2, Minimize2, PictureInPicture2, Wrench } from 'lucide-react';
 import type { LucideIcon } from 'lucide-react';
 import type { TFunction } from 'i18next';
 import { useTranslation } from 'react-i18next';
@@ -156,7 +156,6 @@ const KIND_ICON: Record<BuiltinTabKindId, LucideIcon> = {
   'cindy-make': Wrench,
   'plugin-view': Puzzle,
   'plugin-task': Puzzle,
-  'live-screen': Smartphone,
 };
 
 const KIND_LABEL_KEY: Record<BuiltinTabKindId, string> = {
@@ -174,7 +173,6 @@ const KIND_LABEL_KEY: Record<BuiltinTabKindId, string> = {
   'cindy-make': 'settings.cindyMake.title',
   'plugin-view': 'rightSidebar.tabs.kinds.pluginView',
   'plugin-task': 'rightSidebar.tabs.kinds.pluginTask',
-  'live-screen': 'remoteDesktop.liveScreenTitle',
 };
 
 /**
