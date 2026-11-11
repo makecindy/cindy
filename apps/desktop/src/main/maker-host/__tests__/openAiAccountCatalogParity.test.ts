@@ -206,7 +206,12 @@ describe('OpenAI account catalog identity', () => {
   });
 
   it.each(['gpt-6.1-sol', 'gpt-future-account-model'])('restores %s into Pi without public or binary model membership', (id) => {
-    setActiveCatalog(BUNDLED_CATALOG);
+    // Keep the original absent-public-member scenario even after the bundled
+    // catalog learns this ID. Account restoration must not leak to other accounts.
+    const catalog = structuredClone(BUNDLED_CATALOG);
+    const openai = catalog.providers.find(p => p.id === 'openai')!;
+    openai.models.pi = openai.models.pi!.filter(model => model.id !== `chatgpt/${id}`);
+    setActiveCatalog(catalog, { authorityCatalog: catalog });
     setCustomProviderConfigs([{
       id: accountId, name: 'Restored account', auth: { method: 'oauth', native: 'codex' },
       runtimes: { codex: { baseUrl: 'https://chatgpt.com/backend-api/codex', models: [{
@@ -221,7 +226,7 @@ describe('OpenAI account catalog identity', () => {
       expect(pi.efforts).not.toContain('ultra');
       expect(pi.defaultEffort).not.toBe('ultra');
       expect(entry('openai', 'pi', `chatgpt/${id}`)).toBeUndefined();
-      setActiveCatalog(structuredClone(BUNDLED_CATALOG));
+      setActiveCatalog(structuredClone(catalog), { authorityCatalog: catalog });
     }
     // A new account snapshot replaces restored membership, without leaking to other accounts.
     setDiscoveredProviderModels(accountId, 'codex', accountListModels(['gpt-next-account-model']));
@@ -247,6 +252,9 @@ describe('OpenAI account catalog identity', () => {
 
   it('keeps retired restored models out of Pi and does not borrow subscription routes for API connections', () => {
     const catalog = structuredClone(BUNDLED_CATALOG);
+    // This tests account-only restoration, not the independent public Pi list.
+    const openai = catalog.providers.find(p => p.id === 'openai')!;
+    openai.models.pi = openai.models.pi!.filter(model => model.id !== 'chatgpt/gpt-6.1-sol');
     catalog.modelRegistry!.models.find(model => model.id === 'openai/gpt-6.1-sol')!.status = 'retired';
     setActiveCatalog(catalog, { authorityCatalog: catalog });
     setCustomProviderConfigs([

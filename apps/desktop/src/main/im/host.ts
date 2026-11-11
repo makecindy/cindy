@@ -201,7 +201,7 @@ export const feishuIm = createFeishuIM(host, {
 });
 /**
  * 伙伴自有飞书 / Lark 连接的传输层实例: 凭证与 TOFU 主人按连接前缀隔离、不注册设置卡
- * IPC、对外开放(非主人的私聊与群 @ 带非主人标记进业务层)。
+ * IPC。非主人仅可通过群 @ 进业务层，私聊只认已绑定主人。
  */
 export function createBotFeishuIM(secretKeyPrefix: string): FeishuIM {
   return createFeishuIM(host, {
@@ -229,7 +229,7 @@ export const telegramIm = createTelegramIM(host, {
 });
 /**
  * 伙伴自有 Telegram 连接的传输层实例: 与设置页那份同一套宿主能力, 但凭证按连接
- * 前缀隔离、不注册设置卡 IPC、对外开放私聊(陌生人消息带非主人标记进业务层)。
+ * 前缀隔离、不注册设置卡 IPC；私聊只认已绑定主人，群参与方式沿用原配置。
  * 行为配置由连接记录给(群参与模式按连接各一份, 表情 / 引用档位用默认值 —— 伙伴的
  * 身份与分寸来自它的 SOUL, 不读设置页的人格); 命令菜单去掉交给伙伴后不在渠道里改的
  * 模型 / 权限 / 工作目录三条。
@@ -246,7 +246,6 @@ export function createBotTelegramIM(
     commandMenu: buildPersonalBotCommandMenu((key) => t(key), { surface: 'companion' }),
     secretKeyPrefix,
     ipc: false,
-    guestDm: true,
   });
 }
 export const dingtalkIm = createDingTalkIM(host, {

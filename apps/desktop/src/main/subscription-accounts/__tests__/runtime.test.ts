@@ -1411,6 +1411,125 @@ describe('native account assignment on the executing computer', () => {
     expect(await readSubscriptionPoolAccountUsages('anthropic')).toBeUndefined();
     expect((await readSubscriptionPool('anthropic')).accounts.every((a) => !a.usage)).toBe(true);
   });
+  // User-reported quota oscillation / unit: frequent SDK events used to renew
+  // the cache clock forever. Existing tests never cross endpoint TTL with events.
+  it('refreshes authoritative Claude percentages despite continuous SDK events', async () => {
+    let now = 1_800_000_000_000;
+    const clock = vi.spyOn(Date, 'now').mockImplementation(() => now);
+    try {
+      h.pools.anthropic = { strategy: 'order', accounts: [account('default')] };
+      const reset = now / 1000 + 604800;
+      h.usage.mockResolvedValue({ claudeUsage: {
+        source: 'oauth-endpoint', updatedAt: now, sevenDay: { utilization: 22, resetsAt: reset },
+      } });
+      const lease = await acquireSubscriptionAccount('anthropic', 'claude-sonnet', []);
+      for (let i = 0; i < 5; i++) {
+        now += 31_000;
+        observeSubscriptionAccountUsage(lease!.account, {
+          rateLimitType: 'seven_day', utilization: 0.2, resetsAt: reset, status: 'allowed',
+        });
+        expect((await readSubscriptionPool('anthropic')).accounts[0].usage?.claude?.sevenDay?.utilization).toBe(22);
+      }
+      expect(h.usage).toHaveBeenCalledTimes(1);
+      now += 31_000;
+      h.usage.mockResolvedValue({ claudeUsage: {
+        source: 'oauth-endpoint', updatedAt: now, sevenDay: { utilization: 24, resetsAt: reset },
+      } });
+      observeSubscriptionAccountUsage(lease!.account, {
+        rateLimitType: 'seven_day', utilization: 0.2, resetsAt: reset, status: 'allowed',
+      });
+      expect((await readSubscriptionPool('anthropic')).accounts[0].usage?.claude?.sevenDay?.utilization).toBe(24);
+      expect(h.usage).toHaveBeenCalledTimes(2);
+      lease!.release();
+    } finally { clock.mockRestore(); }
+  });
+
+  // #9951 P1 / unit: list reads yield to auth and quota I/O. Existing TTL tests
+  // complete I/O immediately and cannot detect a rejected event being overwritten.
+  it.each(['anthropic', 'openai'] as const)('retains %s quota events during auth, endpoint and failed endpoint reads', async (provider) => {
+    let now = 1_800_000_000_000;
+    const clock = vi.spyOn(Date, 'now').mockImplementation(() => now);
+    let releaseRead: (() => void) | undefined;
+    try {
+      h.pools[provider] = { strategy: 'order', accounts: [account('default')] };
+      const reset = now / 1000 + 86400;
+      const initial = provider === 'anthropic'
+        ? { claudeUsage: { source: 'oauth-endpoint', updatedAt: now, fiveHour: { utilization: 20, resetsAt: reset } } }
+        : { codexUsage: { appServerBuckets: {
+            codex: { limitId: 'codex', updatedAt: now,
+              primary: { usedPercent: 20, windowMinutes: 300, resetsAt: reset },
+              secondary: { usedPercent: 25, windowMinutes: 10080, resetsAt: reset } },
+            spark: { limitId: 'spark', updatedAt: now,
+              primary: { usedPercent: 15, windowMinutes: 300, resetsAt: reset }, secondary: null },
+          }, webSnapshot: null } };
+      h.usage.mockResolvedValue(initial);
+      const lease = await acquireSubscriptionAccount(provider, provider === 'anthropic' ? 'claude-sonnet' : 'gpt-6', []);
+      for (const phase of ['auth', 'endpoint', 'failed-endpoint', 'new-window']) {
+        now += phase === 'auth' ? 31_000 : 181_000;
+        let started!: () => void;
+        const reading = new Promise<void>(resolve => { started = resolve; });
+        const paused = new Promise<void>(resolve => { releaseRead = resolve; });
+        if (phase === 'auth') h.read.mockImplementationOnce(async () => {
+          started(); await paused; return { authenticated: true, identity: 'account' };
+        });
+        else h.usage.mockImplementationOnce(async () => {
+          started(); await paused;
+          if (phase === 'failed-endpoint') throw new Error('endpoint unavailable');
+          return provider === 'anthropic' ? { claudeUsage: {
+            source: 'oauth-endpoint', updatedAt: now + 1,
+            fiveHour: { utilization: 30, resetsAt: phase === 'new-window' ? reset + 18000 : reset },
+            sevenDay: { utilization: 45, resetsAt: reset },
+            scoped: [{ modelDisplayName: 'Opus', utilization: 60, resetsAt: reset }],
+          } } : { codexUsage: { appServerBuckets: {
+            codex: { limitId: 'codex', updatedAt: now + 1,
+              primary: { usedPercent: 30, windowMinutes: 300, resetsAt: phase === 'new-window' ? reset + 18000 : reset },
+              secondary: { usedPercent: 45, windowMinutes: 10080, resetsAt: reset } },
+            spark: { limitId: 'spark', updatedAt: now + 1,
+              primary: { usedPercent: 60, windowMinutes: 300, resetsAt: reset }, secondary: null },
+          }, webSnapshot: null }, codexCredits: { hasCredits: true, unlimited: false, balance: '8.50' } };
+        });
+        const view = readSubscriptionPool(provider);
+        await reading;
+        observeSubscriptionAccountUsage(lease!.account, provider === 'anthropic'
+          ? { rateLimitType: 'five_hour', utilization: 1, resetsAt: reset, status: 'rejected' }
+          : { limitId: 'codex', primary: { usedPercent: 100, windowMinutes: 300, resetsAt: reset } });
+        releaseRead!();
+        const usage = (await view).accounts[0].usage;
+        if (phase === 'new-window') {
+          if (provider === 'anthropic') {
+            expect(usage?.claude?.fiveHour?.resetsAt).toBe(reset + 18000);
+            expect(usage?.claude?.rateLimitStatus).toBeUndefined();
+          } else expect(usage?.codex?.buckets.codex.primary).toMatchObject({ usedPercent: 30, resetsAt: reset + 18000 });
+          const nextLease = await acquireSubscriptionAccount(provider, provider === 'anthropic' ? 'claude-sonnet' : 'gpt-6', []);
+          expect(nextLease).toBeTruthy();
+          nextLease!.release();
+          continue;
+        }
+        if (provider === 'anthropic') expect(usage?.claude?.rateLimitStatus).toBe('rejected');
+        else expect(usage?.codex?.buckets.codex.primary?.usedPercent).toBe(100);
+        if (phase === 'endpoint') {
+          // #9951 P2: a concurrent event must not discard successful read fields
+          // or keep the endpoint TTL expired. Prior tests only checked rejection.
+          if (provider === 'anthropic') expect(usage?.claude).toMatchObject({
+            fiveHour: { utilization: 30 }, sevenDay: { utilization: 45 },
+            scoped: [{ modelDisplayName: 'Opus', utilization: 60 }],
+          });
+          else expect(usage?.codex).toMatchObject({
+            buckets: { codex: { secondary: { usedPercent: 45 } }, spark: { primary: { usedPercent: 60 } } },
+            credits: { balance: '8.50' },
+          });
+          const readCount = h.usage.mock.calls.length;
+          now += 31_000;
+          await readSubscriptionPool(provider);
+          expect(h.usage).toHaveBeenCalledTimes(readCount);
+        }
+        await expect(acquireSubscriptionAccount(provider, provider === 'anthropic' ? 'claude-sonnet' : 'gpt-6', []))
+          .rejects.toThrow('No subscription account is available');
+      }
+      lease!.release();
+    } finally { releaseRead?.(); clock.mockRestore(); }
+  });
+
   it('keeps Codex credits for the account card when quota events update its buckets', async () => {
     h.pools.openai = { strategy: 'order', accounts: [account('default')] };
     h.usage.mockResolvedValue({

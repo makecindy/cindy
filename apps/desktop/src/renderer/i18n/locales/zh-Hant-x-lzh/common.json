@@ -9345,6 +9345,9 @@
     }
   },
   "quotaCard": {
+    "codexRefreshFailed": "ChatGPT 配額更新未成，請重讀。其餘用量仍存",
+    "retryQuota": "重讀配額",
+    "retryingQuota": "正讀配額…",
     "usageCritical": "耗用頗高",
     "usageWarning": "耗用偏高",
     "usageTitle": "耗用明細",
@@ -11775,7 +11778,7 @@
       "remove": "除",
       "removeAria": "除 {{platform}}",
       "empty": "增君已有之機器人，或於下方接個人微信，{{name}} 即於彼處回覆。",
-      "externalNote": "凡遣訊予此機器人者，皆與 {{name}} 言談。君之訊依 {{name}} 之權柄行事；他人各有一條隱藏差事，權柄受限。",
+      "externalNote": "Telegram 與飛書/Lark 既綁定，私訊惟受主人。群訊依各平台參與之設，工具循 {{name}} 之權柄。差事雖分，資料與記憶共用。",
       "sharedMemoryNote": "{{name}} 將合用此處與他處言談之資訊。欲隔記憶，請換一同僚。",
       "groups": {
         "title": "諸群",
@@ -19879,6 +19882,10 @@
     "openDirectoryFailed": "帳號目錄未能啟，或已移或已刪。",
     "loginAgain": "重登",
     "login": "登入",
+    "quotaRecoverIn": "{{duration}}後復",
+    "quotaExhausted": "額度已盡",
+    "quotaFiveHourRemaining": "五小時餘 {{percent}}%",
+    "quotaFiveHourExhausted": "五小時額度已盡",
     "quotaAverage": "平均餘量 {{percent}}%",
     "quotaUpdating": "餘量待新",
     "quotaResetSoon": "將重置",

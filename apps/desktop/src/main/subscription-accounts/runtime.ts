@@ -20,6 +20,7 @@ import { providerGroupCodexUsageSnapshot } from '../provider-group/usage.js';
 import { codexLimitBucketKey } from '@cindy/maker-shared/codex-usage-buckets';
 import {
   mergeClaudeSubscriptionUsageSnapshot,
+  mergeClaudeSubscriptionUsageDuringRead,
   parseClaudeSdkRateLimitInfo,
 } from '../../shared/claudeSubscriptionUsage.js';
 import type {
@@ -192,7 +193,7 @@ export function observeSubscriptionAccountUsage(
   });
   // Notifications contain one bucket directly. Merge it before sanitizing, retaining
   // omitted fields and unrelated model buckets instead of treating it as an RPC reply.
-  const codexUsage =
+  let codexUsage =
     codexEvent && ('primary' in codexEvent || 'secondary' in codexEvent)
       ? providerGroupCodexUsageSnapshot({
           appServerBuckets: {
@@ -206,6 +207,19 @@ export function observeSubscriptionAccountUsage(
           webSnapshot: previousCodex?.webSnapshot,
         })
       : previousCodex;
+  if (codexUsage !== previousCodex && codexUsage?.appServerBuckets?.[bucketKey] && codexEvent) {
+    const bucket = codexUsage.appServerBuckets[bucketKey];
+    const previous = previousCodex?.appServerBuckets?.[bucketKey];
+    // Preserve references for fields the event did not observe. This makes the
+    // concurrent delta distinguish a repeated 100% event from an omitted window.
+    codexUsage = { ...codexUsage, appServerBuckets: {
+      ...previousCodex?.appServerBuckets,
+      [bucketKey]: { ...bucket,
+        primary: 'primary' in codexEvent ? bucket.primary : previous?.primary ?? null,
+        secondary: 'secondary' in codexEvent ? bucket.secondary : previous?.secondary ?? null,
+      },
+    } };
+  }
   const usage: Usage =
     provider === 'anthropic'
       ? {
@@ -214,7 +228,9 @@ export function observeSubscriptionAccountUsage(
             : cached.usage?.claudeUsage,
         }
       : { ...cached.usage, codexUsage };
-  state.cache.set(key, { ...cached, usage, at: Date.now() });
+  // The event updates usage, not the last account/endpoint read. Renewing `at`
+  // here lets a stream of SDK events postpone authoritative polling indefinitely.
+  state.cache.set(key, { ...cached, usage });
   changed(provider);
 }
 async function snapshot(
@@ -249,22 +265,59 @@ async function snapshot(
             auth = { ...auth, authenticated: false, errorReason: invalidated.reason };
           else if (state.invalidated.get(key) === invalidated) state.invalidated.delete(key);
         }
+        // Auth reads yield: quota events may have replaced the captured cache.
+        const current = state.cache.get(key);
+        const sameAccount = current?.auth.identity === auth.identity;
         const reuseUsage =
-          cached?.auth.identity === auth.identity &&
-          cached?.usageAt !== undefined &&
-          Date.now() - cached.usageAt < 180_000;
-        const usage = auth.authenticated
+          sameAccount &&
+          current?.usageAt !== undefined &&
+          Date.now() - current.usageAt < 180_000;
+        let usage = auth.authenticated
           ? reuseUsage
-            ? cached?.usage
+            ? current?.usage
             : await readNativeAccountUsage(provider, directory).catch(() =>
-                cached?.auth.identity === auth.identity ? cached?.usage : undefined,
+                state.cache.get(key)?.auth.identity === auth.identity ? state.cache.get(key)?.usage : undefined,
               )
           : undefined;
+        const latest = state.cache.get(key);
+        const eventDuringRead = auth.authenticated && latest?.auth.identity === auth.identity
+          && latest?.usage !== current?.usage;
+        // A successful read owns the full snapshot; overlay only concurrent
+        // events, not the old endpoint fields carried along in the event cache.
+        if (eventDuringRead && usage !== latest?.usage) {
+          if (provider === 'anthropic' && latest?.usage?.claudeUsage) {
+            usage = { ...usage, claudeUsage: usage?.claudeUsage ? mergeClaudeSubscriptionUsageDuringRead(
+              current?.usage?.claudeUsage, usage.claudeUsage, latest.usage.claudeUsage,
+            ) : latest.usage.claudeUsage };
+          } else if (provider === 'openai' && latest?.usage?.codexUsage) {
+            const buckets = { ...usage?.codexUsage?.appServerBuckets };
+            for (const [id, bucket] of Object.entries(latest.usage.codexUsage.appServerBuckets ?? {})) {
+              const previous = current?.usage?.codexUsage?.appServerBuckets?.[id];
+              if (bucket === previous) continue;
+              // Omitted event fields still belong to the fresh RPC result.
+              const delta = Object.fromEntries(Object.entries(bucket).filter(([field, value]) => {
+                if (value === previous?.[field as keyof typeof previous]) return false;
+                if (field === 'primary' || field === 'secondary') {
+                  const eventReset = bucket[field]?.resetsAt;
+                  const readReset = buckets[id]?.[field]?.resetsAt;
+                  if (eventReset != null && readReset != null && eventReset < readReset) return false;
+                }
+                return true;
+              }));
+              buckets[id] = { ...buckets[id], ...delta,
+                updatedAt: Math.max(bucket.updatedAt ?? 0, buckets[id]?.updatedAt ?? 0) } as typeof bucket;
+            }
+            usage = { ...usage, codexUsage: providerGroupCodexUsageSnapshot({
+              ...usage?.codexUsage, appServerBuckets: buckets,
+            }) };
+          }
+        }
         result = {
           auth,
           usage,
           at: Date.now(),
-          usageAt: reuseUsage ? cached?.usageAt : Date.now(),
+          usageAt: reuseUsage ? current?.usageAt
+            : eventDuringRead && usage === latest?.usage ? latest?.usageAt : Date.now(),
         };
       } catch {
         result = { auth: { authenticated: false }, unavailable: true, at: Date.now() };

@@ -139,9 +139,23 @@ export class BrowserToolRegistry {
     const input = rawArgs && typeof rawArgs === 'object' && def.normalizeArgs ? def.normalizeArgs(rawArgs as Record<string, unknown>) : rawArgs;
     const parsed = objSchema.safeParse(input ?? {});
     if (!parsed.success) {
+      // The whole schema is several thousand tokens; a mistake in one field only needs that field's part.
+      // Fields named by the issues are described, unknown top-level keys get the list of valid ones, and
+      // anything that cannot be pinned to a field (or an empty call asking what exists) gets everything.
+      const issues = parsed.error.issues;
+      const named = new Set<string>();
+      let unknownKeys = false;
+      let whole = !input || typeof input !== 'object' || Object.keys(input).length === 0;
+      for (const issue of issues) {
+        const top = issue.path[0];
+        if (typeof top === 'string' && top in def.inputShape) named.add(top);
+        else if (issue.code === 'unrecognized_keys' && issue.path.length === 0) unknownKeys = true;
+        else whole = true;
+      }
       let jsonSchema: unknown;
       try {
-        jsonSchema = z.toJSONSchema(objSchema);
+        jsonSchema = z.toJSONSchema(whole ? objSchema
+          : z.object(Object.fromEntries([...named].map((key) => [key, def.inputShape[key]!]))));
       } catch {
         jsonSchema = '<schema serialization failed>';
       }
@@ -154,9 +168,10 @@ export class BrowserToolRegistry {
               errorCode: 'INVALID_ARGS',
               data: {
                 tool: name,
-                validation_errors: parsed.error.issues,
+                validation_errors: issues,
                 schema: jsonSchema,
-                hint: '请按 schema 修正参数后重试',
+                ...(!whole && unknownKeys ? { validKeys: Object.keys(def.inputShape) } : {}),
+                hint: whole ? '请按 schema 修正参数后重试' : '请按 schema 修正参数后重试(只列出有问题的字段;args 传 {} 可取完整 schema)',
               },
             }),
           },

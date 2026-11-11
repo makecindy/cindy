@@ -9388,6 +9388,9 @@
     }
   },
   "quotaCard": {
+    "codexRefreshFailed": "ChatGPT quota could not be updated. Retry the read; other usage information is kept.",
+    "retryQuota": "Retry Quota Read",
+    "retryingQuota": "Reading Quota…",
     "usageCritical": "High usage",
     "usageWarning": "Elevated usage",
     "usageTitle": "Usage details",
@@ -11820,7 +11823,7 @@
       "remove": "Remove",
       "removeAria": "Remove {{platform}}",
       "empty": "Add a bot you already have, or connect personal WeChat below, and {{name}} will reply there.",
-      "externalNote": "Anyone who messages this bot is talking to {{name}}. Your own messages run with {{name}}’s permissions; everyone else gets a separate hidden task with restricted permissions.",
+      "externalNote": "After binding, Telegram and Feishu/Lark accept private messages only from the owner. Groups follow each platform’s participation settings and {{name}}’s tool permissions. Separate tasks share files and memory.",
       "sharedMemoryNote": "{{name}} uses information from here and from other conversations together. To keep memories separate, use another teammate.",
       "groups": {
         "title": "Groups",
@@ -19951,6 +19954,10 @@
     "openDirectoryFailed": "Couldn’t open the account folder. It may have been moved or deleted.",
     "loginAgain": "Sign in again",
     "login": "Sign in",
+    "quotaRecoverIn": "Available in {{duration}}",
+    "quotaExhausted": "Usage limit reached",
+    "quotaFiveHourRemaining": "5-hour remaining {{percent}}%",
+    "quotaFiveHourExhausted": "5-hour usage limit reached",
     "quotaAverage": "Average remaining {{percent}}%",
     "quotaUpdating": "Quota updating",
     "quotaResetSoon": "Resets soon",

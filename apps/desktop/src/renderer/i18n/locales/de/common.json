@@ -9388,6 +9388,9 @@
     }
   },
   "quotaCard": {
+    "codexRefreshFailed": "Das ChatGPT-Kontingent konnte nicht aktualisiert werden. Erneut abrufen; die anderen Nutzungsinformationen bleiben erhalten.",
+    "retryQuota": "Kontingent Erneut Abrufen",
+    "retryingQuota": "Kontingent wird abgerufen…",
     "usageCritical": "Hohe Nutzung",
     "usageWarning": "Erhöhte Nutzung",
     "usageTitle": "Nutzungsdetails",
@@ -11820,7 +11823,7 @@
       "remove": "Entfernen",
       "removeAria": "{{platform}} entfernen",
       "empty": "Füge einen vorhandenen Bot hinzu oder verbinde unten dein persönliches WeChat. {{name}} antwortet dann dort.",
-      "externalNote": "Wer diesem Bot schreibt, spricht mit {{name}}. Deine eigenen Nachrichten werden mit den Berechtigungen von {{name}} verarbeitet; alle anderen erhalten eine separate, ausgeblendete Aufgabe mit eingeschränkten Berechtigungen.",
+      "externalNote": "Nach der Verknüpfung nehmen Telegram und Feishu/Lark private Nachrichten nur vom Besitzer an. Für Gruppen gelten die jeweiligen Teilnahme-Einstellungen und die Tool-Berechtigungen von {{name}}. Getrennte Aufgaben teilen Dateien und Erinnerungen.",
       "sharedMemoryNote": "{{name}} nutzt Informationen von hier und aus anderen Unterhaltungen gemeinsam. Verwende ein anderes Teammitglied, um Erinnerungen getrennt zu halten.",
       "groups": {
         "title": "Gruppen",
@@ -19951,6 +19954,10 @@
     "openDirectoryFailed": "Der Kontoordner konnte nicht geöffnet werden. Er wurde möglicherweise verschoben oder gelöscht.",
     "loginAgain": "Erneut anmelden",
     "login": "Anmelden",
+    "quotaRecoverIn": "In {{duration}} wieder verfügbar",
+    "quotaExhausted": "Kontingent aufgebraucht",
+    "quotaFiveHourRemaining": "5-Stunden-Kontingent: {{percent}}% verbleibend",
+    "quotaFiveHourExhausted": "5-Stunden-Kontingent aufgebraucht",
     "quotaAverage": "Ø verbleibend {{percent}} %",
     "quotaUpdating": "Kontingent wird aktualisiert",
     "quotaResetSoon": "Bald zurückgesetzt",

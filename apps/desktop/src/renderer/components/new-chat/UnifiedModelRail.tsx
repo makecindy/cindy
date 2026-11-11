@@ -15,6 +15,8 @@ import { Tip } from '@/components/ui/tooltip';
 
 import {
   useProviderWeeklyQuota,
+  useProviderUsageSnapshots,
+  useWeeklyQuotaFromSnapshots,
   type ProviderGroupUsageOf,
   type ProviderUsageScope,
 } from './useProviderWeeklyQuota';
@@ -256,10 +258,12 @@ function SharedProviderQuotaButton(props: RailButtonProps & { shareDeviceId: str
 function ProviderQuotaButton(props: RailButtonProps & { provider: ProviderView }) {
   const { t } = useTranslation();
   const pickerAccount = useModelPickerAccount(props.provider.id, props.usageDeviceId);
-  const quota = useProviderWeeklyQuota(props.provider, { deviceId: props.usageDeviceId });
-  const pool = useModelPoolQuota(props.provider.id, props.usageDeviceId);
-  const identity = pool
+  const usage = useProviderUsageSnapshots(props.provider, { deviceId: props.usageDeviceId ?? null });
+  const quota = useWeeklyQuotaFromSnapshots(usage);
+  const pool = useModelPoolQuota(props.provider.id, props.usageDeviceId, usage);
+  const identity = pool?.isPool
     ? t('providerGroup.member.accountCount', { count: pool.members.length })
+    : pool && pickerAccount ? pool.members[0].identity
     : pickerAccount
       ? (pickerAccount.identity ?? t('subscriptionAccounts.unassigned'))
       : props.accountIdentity;
@@ -290,7 +294,7 @@ function RailButtonView({
 }) {
   const { t } = useTranslation();
   const remaining = quota ? Math.round(100 - quota.usedPercent) : null;
-  const quotaLabel = pool
+  const quotaLabel = pool?.hasAccountDetails
     ? pool.label
     : remaining === null
       ? null
@@ -299,20 +303,22 @@ function RailButtonView({
   // 供应商组：组名不带某一台的账号，账号跟在「当前在 {电脑} 上运行」后面。
   const displayLabel = groupNote ? label : providerAccountLabel(label, accountIdentity);
   const note = groupNote ? providerAccountLabel(groupNote, accountIdentity) : null;
-  const accountLines = pool?.members.map((member) =>
+  const accountLines = pool?.hasAccountDetails ? pool.members.map((member) =>
     [
       member.identity,
       member.remaining === null
         ? '—'
         : `${t('quotaCard.weeklyLabel')} · ${t('quotaCard.remainingPercent', { percent: member.remaining })}`,
+      member.fiveHourLabel,
+      member.recovery,
       member.reset,
       member.resetSoon ? t('subscriptionAccounts.quotaResetSoon') : null,
     ]
       .filter(Boolean)
       .join(' · '),
-  );
-  const description = [note, quotaLabel, ...(accountLines ?? [])].filter(Boolean).join(' · ');
-  const tooltip = pool ? (
+  ) : undefined;
+  const description = [note, quotaLabel, ...(!pool?.hasAccountDetails ? [pool?.warningLabel] : []), ...(accountLines ?? [])].filter(Boolean).join(' · ');
+  const tooltip = pool && (pool.hasAccountDetails || pool.warning) ? (
     <>
       <div>{displayLabel}</div>
       <ModelPoolQuotaDetails pool={pool} />
@@ -351,11 +357,13 @@ function RailButtonView({
         )}
       >
         <span className="flex h-[24px] items-center justify-center">{children}</span>
-        {!!pool?.resetSoonCount && (
+        {(pool?.warning || !!pool?.resetSoonCount) && (
           <span
             aria-hidden
-            data-pool-reset-soon
-            className="pointer-events-none absolute right-0.5 top-0.5 h-1.5 w-1.5 rounded-full bg-[var(--warning-fg)]"
+            data-pool-reset-soon={pool?.resetSoonCount ? '' : undefined}
+            data-quota-warning={pool?.warning?.kind}
+            className={cn('pointer-events-none absolute right-0.5 top-0.5 h-1.5 w-1.5 rounded-full',
+              pool?.warning?.kind === 'limited' ? 'bg-[var(--quota-bar-crit)]' : 'bg-[var(--warning-fg)]')}
           />
         )}
         {quota && (

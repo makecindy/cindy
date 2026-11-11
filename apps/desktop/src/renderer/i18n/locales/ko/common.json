@@ -9345,6 +9345,9 @@
     }
   },
   "quotaCard": {
+    "codexRefreshFailed": "ChatGPT 할당량을 업데이트하지 못했습니다. 다시 조회하세요. 다른 사용량 정보는 유지됩니다.",
+    "retryQuota": "할당량 다시 조회",
+    "retryingQuota": "할당량 조회 중…",
     "usageCritical": "사용량이 높습니다",
     "usageWarning": "사용량이 다소 높습니다",
     "usageTitle": "사용량 상세",
@@ -11775,7 +11778,7 @@
       "remove": "제거",
       "removeAria": "{{platform}} 제거",
       "empty": "기존 봇을 추가하거나 아래에서 개인 WeChat을 연결하면 {{name}}이 그곳에서 답장합니다.",
-      "externalNote": "이 봇에게 메시지를 보내는 사람은 모두 {{name}}과(와) 대화하게 됩니다. 내 메시지는 {{name}}의 권한으로 실행되고, 다른 사람에게는 권한이 제한된 숨겨진 작업이 따로 만들어집니다.",
+      "externalNote": "연결 후 Telegram과 Feishu/Lark의 개인 메시지는 소유자에게서만 받습니다. 그룹 참여는 각 플랫폼의 설정을 따르며, 도구는 {{name}}의 권한으로 실행됩니다. 별도 세션에서도 자료와 메모리는 공유됩니다.",
       "sharedMemoryNote": "{{name}}은(는) 여기의 정보와 다른 대화의 정보를 함께 사용합니다. 기억을 분리하려면 다른 동료를 사용하세요.",
       "groups": {
         "title": "그룹",
@@ -19879,6 +19882,10 @@
     "openDirectoryFailed": "계정 폴더를 열 수 없습니다. 이동되었거나 삭제되었을 수 있습니다.",
     "loginAgain": "다시 로그인",
     "login": "로그인",
+    "quotaRecoverIn": "{{duration}} 후 이용 가능",
+    "quotaExhausted": "한도 소진",
+    "quotaFiveHourRemaining": "5시간 한도 잔여 {{percent}}%",
+    "quotaFiveHourExhausted": "5시간 한도 소진",
     "quotaAverage": "평균 잔여량 {{percent}}%",
     "quotaUpdating": "잔여량 업데이트 대기",
     "quotaResetSoon": "곧 초기화",
