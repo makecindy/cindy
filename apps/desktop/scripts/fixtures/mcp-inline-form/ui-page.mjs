@@ -13,11 +13,25 @@ export default {
     narrow: { about: 'Inline form at 320 px', viewport: { width: 320, height: 1100 } },
     invalid: { about: 'Original validation and focus in the embedded form' },
     'result-error': { about: 'Saved configuration remains saved when result delivery fails; retry and cancel remain available' },
+    reuse: { about: 'Same endpoint repairs the saved entry and offers an explicit create' },
     settings: { about: 'Original modal remains a modal' },
     layout: { about: 'Production message scrollport carries the entire form; composer stays fixed', viewport: { width: 600, height: 600 } },
   },
   async ready(page) { await page.getByRole('button', { name: /./ }).first().waitFor(); },
   async check(page, ui) {
+    if (ui.case === 'reuse') {
+      const editTitle = await ui.t('settings.mcp.dialog.editTitle');
+      await page.getByText(editTitle, { exact: true }).waitFor();
+      await page.getByText(await ui.t('settings.mcp.dialog.matchNotice'), { exact: false }).waitFor();
+      const createInstead = page.getByRole('button', { name: await ui.t('settings.mcp.dialog.createInstead'), exact: true });
+      assert.equal(await createInstead.isEnabled(), true);
+      await ui.capture('reuse');
+      // The escape hatch really leaves the repair path.
+      await createInstead.click();
+      await page.getByText(await ui.t('settings.mcp.dialog.createTitle'), { exact: true }).waitFor();
+      await ui.capture('create-instead');
+      return;
+    }
     const title = await ui.t('settings.mcp.dialog.createTitle');
     const region = ui.case === 'settings' ? page.getByRole('dialog') : page.getByRole('region', { name: title });
     await region.waitFor();
