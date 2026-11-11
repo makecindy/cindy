@@ -382,6 +382,37 @@ describe('AppServerHost custom Provider subagent policy', () => {
       disableModelOverrides: true,
     });
   });
+
+  // 测试价值
+  // - 生产入口与可观察结果：getCustomProviderThreadPolicy。
+  //   纯文本 Responses 身份返回 disableModelOverrides: false，图片生成身份仍为 true。
+  // - Bug／规则依据：#9759。扩大身份登记后，纯文本供应商也被无条件关掉 spawn_agent 的模型覆写，
+  //   用户已开启的智能调配失效。
+  // - 现有覆盖缺口：上面的路由都带 imageGeneration: true。
+  // - 最小失败输入：同一份路由表里加一条 imageGeneration 不为 true 的文本身份。
+  // - tier：unit。只构造 AppServerHost，不启进程、不访问网络。
+  it('keeps model overrides enabled for a text-only custom Provider', () => {
+    const host = new AppServerHost({
+      createTransport: () => new HangingTransport(),
+      logger,
+      clientInfo: { name: 'cindy-test', version: '0.0.0' },
+      codexCustomProviderRoutes: [
+        ...routes,
+        {
+          providerId: 'text-a',
+          modelProviderId: 'cindy_custom_cccccccccccccccccccc',
+          capabilities: { imageGeneration: false },
+          responseModels: ['text-model'],
+        },
+      ],
+    });
+    expect(host.getCustomProviderThreadPolicy('text-a', 'text-model')).toEqual({
+      dynamicIdentity: true,
+      disableSubagents: false,
+      disableModelOverrides: false,
+    });
+    expect(host.getCustomProviderThreadPolicy('images-a', 'image-a').disableModelOverrides).toBe(true);
+  });
 });
 
 describe('AppServerHost shutdown completion', () => {

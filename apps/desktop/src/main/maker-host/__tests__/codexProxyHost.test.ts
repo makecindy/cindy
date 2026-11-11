@@ -8718,6 +8718,155 @@ describe('codex proxy host', () => {
     }
   });
 
+  // 测试价值
+  // - 生产入口与可观察结果：ensureCodexProxyReady 装上的 transformRequest。
+  //   自定义 Grok Responses 连接走命名空间时，恢复 controller 还没激活，
+  //   历史里的 Codex agent_message 在第一次打到上游前就被改成标准 message。
+  // - Bug／规则依据：#9759。白名单只放行了激活后才生效的 xaiModelInputStripTransform，
+  //   首轮 agent_message 会原样发给 Grok，先 422 再重试。
+  // - 现有覆盖缺口：主动清洗在普通 /responses 有覆盖，不经过命名空间包装。
+  // - 最小失败输入：已登记的 Responses 路由，model 为 grok-4，
+  //   url 为 /_cindy/custom-provider/<routeId>/responses，input 含 type:agent_message。
+  // - tier：unit。进程内代理桩，不访问网络。
+  it('rewrites Grok agent_message on a custom-provider namespace route before recovery activates', async () => {
+    const host = await freshCodexProxyHost();
+    const { BUNDLED_CATALOG, buildUserProvider } = await import('@cindy/model-providers');
+    const { setActiveCatalog } = await import('../active-catalog.js');
+    const { setSessionProvider, clearSessionProvider } = await import('../session-provider-store.js');
+    const { deriveCodexCustomProviderRoutes } = await import('../codex-custom-provider-route.js');
+    const provider = buildUserProvider({
+      id: 'namespace-grok',
+      name: 'Namespace Grok',
+      runtimes: {
+        codex: {
+          baseUrl: 'https://api.x.ai/v1',
+          wireProtocol: 'openai-responses',
+          models: [{ id: 'grok-4', name: 'Grok 4' }],
+        },
+      },
+    });
+    const catalog = { ...BUNDLED_CATALOG, providers: [...BUNDLED_CATALOG.providers, provider] };
+    setActiveCatalog(catalog);
+    const route = deriveCodexCustomProviderRoutes(catalog).find(item => item.providerId === provider.id)!;
+    host.setCodexAppliedCustomProviderRoutes([route]);
+    host.registerComposed('session-namespace-grok', 'thread-namespace-grok', 'PRODUCT_PROMPT');
+    setSessionProvider('session-namespace-grok', provider.id);
+    mockState.createAnthropicCompatProxy.mockResolvedValueOnce({
+      url: 'http://127.0.0.1:43210',
+      dispose: vi.fn(async () => undefined),
+    });
+    try {
+      await host.ensureCodexProxyReady();
+      const transforms = mockState.createAnthropicCompatProxy.mock.calls[0]?.[0]?.transformRequest ?? [];
+      const ctx = {
+        reqId: 9765,
+        method: 'POST',
+        url: `/_cindy/custom-provider/${route.routeId}/responses`,
+        headers: { 'thread-id': 'thread-namespace-grok' },
+        upstreamBase: 'https://api.x.ai/v1',
+      };
+      let current: unknown = {
+        model: 'grok-4',
+        input: [{ type: 'agent_message', author: 'bot', content: 'hi' }],
+      };
+      for (const transform of transforms) {
+        const next = transform(current, ctx);
+        if (next !== null && next !== undefined) current = next;
+      }
+      expect(JSON.stringify(current)).not.toContain('agent_message');
+      expect(current).toMatchObject({
+        model: 'grok-4',
+        input: [{ type: 'message', role: 'assistant' }],
+      });
+    } finally {
+      host.unregister('session-namespace-grok');
+      clearSessionProvider('session-namespace-grok');
+      host.setCodexAppliedCustomProviderRoutes([]);
+      setActiveCatalog(BUNDLED_CATALOG);
+    }
+  });
+
+  // 测试价值
+  // - 生产入口与可观察结果：createModelRoutingTransform 里的命名空间决策。
+  //   旧任务把同一型号固定成 Chat 接口后，命名空间请求返回 403 custom_provider_model_mismatch，
+  //   不再按 Host 快照的 /responses 发出去。
+  // - Bug／规则依据：#9759。命名空间只读 responseRoutingByModel，不看任务接口快照。
+  // - 现有覆盖缺口：接口快照的覆盖在普通路由，不经过自定义供应商命名空间。
+  // - 最小失败输入：Kimi Code 预设，任务先固定 openai-completions，目录默认改回 Responses 后
+  //   再打 /_cindy/custom-provider/<routeId>/responses。
+  // - tier：unit。调公开路由函数，不启 Electron、不访问网络。
+  it('refuses a custom-provider namespace request when the task interface is pinned to Chat', async () => {
+    const host = await freshCodexProxyHost();
+    const { BUNDLED_CATALOG, buildUserProvider } = await import('@cindy/model-providers');
+    const { setActiveCatalog } = await import('../active-catalog.js');
+    const { setSessionProvider, clearSessionProvider } = await import('../session-provider-store.js');
+    const { deriveCodexCustomProviderRoutes } = await import('../codex-custom-provider-route.js');
+    const { configureSessionModelInterfaceStorage, sessionModelInterface } = await import('../session-model-interface.js');
+    const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'codex-namespace-interface-'));
+    const config = {
+      id: 'namespace-kimi',
+      name: 'Namespace Kimi',
+      runtimes: {
+        codex: {
+          catalogPresetId: 'moonshot-kimi-code',
+          baseUrl: 'https://api.kimi.com/coding/v1',
+          wireProtocol: 'openai-chat' as const,
+          models: [{ id: 'k3.1-pro', name: 'Kimi' }],
+        },
+      },
+    };
+    try {
+      configureSessionModelInterfaceStorage(() => directory);
+      const registry = structuredClone(BUNDLED_CATALOG.modelRegistry!);
+      const chat = registry.models.flatMap(entry => entry.routes)
+        .find(item => item.providerId === 'moonshot-kimi-code' && item.modelId === 'k3.1-pro')!;
+      chat.preferredInterfaces!.codex = ['moonshot-kimi-code-openai-completions'];
+      const chatProvider = buildUserProvider(config, { modelRegistry: registry, presets: BUNDLED_CATALOG.presets });
+      const pinned = sessionModelInterface(
+        'session-namespace-chat',
+        config.id,
+        'codex',
+        chatProvider.models.codex![0]!,
+        registry,
+      );
+      expect(pinned?.api).toBe('openai-completions');
+
+      const responsesRegistry = structuredClone(BUNDLED_CATALOG.modelRegistry!);
+      const responses = responsesRegistry.models.flatMap(entry => entry.routes)
+        .find(item => item.providerId === 'moonshot-kimi-code' && item.modelId === 'k3.1-pro')!;
+      responses.preferredInterfaces!.codex = ['moonshot-kimi-code-openai-responses'];
+      const provider = buildUserProvider(config, { modelRegistry: responsesRegistry, presets: BUNDLED_CATALOG.presets });
+      expect(provider.models.codex![0]?.route?.wireProtocol).toBe('openai-responses');
+      const catalog = { ...BUNDLED_CATALOG, modelRegistry: responsesRegistry, providers: [...BUNDLED_CATALOG.providers, provider] };
+      setActiveCatalog(catalog);
+      const route = deriveCodexCustomProviderRoutes(catalog).find(item => item.providerId === provider.id)!;
+      expect(route.responseModels).toContain('k3.1-pro');
+      host.setCodexAppliedCustomProviderRoutes([route]);
+      host.registerComposed('session-namespace-chat', 'thread-namespace-chat', 'PRODUCT_PROMPT');
+      setSessionProvider('session-namespace-chat', provider.id);
+
+      const decision = await Promise.resolve(host.createModelRoutingTransform()(
+        { model: 'k3.1-pro' },
+        {
+          reqId: 9766,
+          method: 'POST',
+          url: `/_cindy/custom-provider/${route.routeId}/responses`,
+          headers: { 'thread-id': 'thread-namespace-chat' },
+        },
+      ));
+      const refusal = await runLocalRefusal(decision);
+      expect(refusal.status).toBe(403);
+      expect(refusal.body.error?.code).toBe('custom_provider_model_mismatch');
+    } finally {
+      host.unregister('session-namespace-chat');
+      clearSessionProvider('session-namespace-chat');
+      host.setCodexAppliedCustomProviderRoutes([]);
+      configureSessionModelInterfaceStorage(() => null);
+      setActiveCatalog(BUNDLED_CATALOG);
+      fs.rmSync(directory, { recursive: true, force: true });
+    }
+  });
+
   it('keeps xhigh effort for non-MiniMax custom Responses providers', async () => {
     const host = await freshCodexProxyHost();
     const { buildUserProvider } = await import('@cindy/model-providers');

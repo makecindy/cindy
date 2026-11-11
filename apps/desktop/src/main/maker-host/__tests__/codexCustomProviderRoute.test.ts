@@ -1,3 +1,6 @@
+import { mkdtempSync, rmSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import path from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
 
 import {
@@ -23,7 +26,9 @@ import {
   setCodexAppliedCustomProviderRoutes,
   toCodexCustomProviderHostRoutes,
 } from '../codex-custom-provider-route.js';
+import { setActiveCatalog } from '../active-catalog.js';
 import { beginProviderRouteMutation } from '../provider-route.js';
+import { configureSessionModelInterfaceStorage, sessionModelInterface } from '../session-model-interface.js';
 
 function customProvider(overrides: Partial<CustomProviderConfig> = {}) {
   return buildUserProvider({
@@ -60,6 +65,8 @@ function catalog(provider = customProvider()) {
 
 afterEach(() => {
   setCodexAppliedCustomProviderRoutes([]);
+  setActiveCatalog(BUNDLED_CATALOG);
+  configureSessionModelInterfaceStorage(() => null);
 });
 
 describe('Codex custom Provider identity', () => {
@@ -287,6 +294,91 @@ describe('Codex custom Provider identity', () => {
       providerId: 'ordinary-responses',
       responseModels: ['chat-text-only'],
     });
+  });
+
+  // 测试价值
+  // - 生产入口与可观察结果：resolveCodexCustomProviderModelProviderId。
+  //   任务已把接口固定成 Chat 时返回 null；同一型号没有快照、或快照仍是 Responses 时仍返回 cindy_custom 身份。
+  // - Bug／规则依据：#9759。当前目录默认改成 Responses 后，旧 Chat 任务也会被登记成动态身份，
+  //   恢复时从 /chat/completions 静默切到 /responses。
+  // - 现有覆盖缺口：身份解析不看 sessionModelInterface。
+  // - 最小失败输入：Kimi Code 的 k3.1-pro，先用 openai-completions 固定任务，再把目录默认改回 Responses。
+  // - tier：unit。调公开函数，不启 Electron、不访问网络。
+  it('keeps a Chat-pinned task off the custom Responses identity', () => {
+    const directory = mkdtempSync(path.join(tmpdir(), 'codex-custom-interface-'));
+    const config = {
+      id: 'provider-kimi',
+      name: 'Kimi',
+      runtimes: {
+        codex: {
+          catalogPresetId: 'moonshot-kimi-code',
+          baseUrl: 'https://api.kimi.com/coding/v1',
+          wireProtocol: 'openai-chat' as const,
+          models: [{ id: 'k3.1-pro', name: 'Kimi' }],
+        },
+      },
+    };
+    try {
+      configureSessionModelInterfaceStorage(() => directory);
+      const chatRegistry = structuredClone(BUNDLED_CATALOG.modelRegistry!);
+      const chatRoute = chatRegistry.models.flatMap(entry => entry.routes)
+        .find(item => item.providerId === 'moonshot-kimi-code' && item.modelId === 'k3.1-pro')!;
+      chatRoute.preferredInterfaces!.codex = ['moonshot-kimi-code-openai-completions'];
+      const chatProvider = buildUserProvider(config, {
+        modelRegistry: chatRegistry,
+        presets: BUNDLED_CATALOG.presets,
+      });
+      const pinned = sessionModelInterface(
+        'old-chat-task',
+        config.id,
+        'codex',
+        chatProvider.models.codex![0]!,
+        chatRegistry,
+      );
+      expect(pinned?.api).toBe('openai-completions');
+
+      const responsesRegistry = structuredClone(BUNDLED_CATALOG.modelRegistry!);
+      const responsesRoute = responsesRegistry.models.flatMap(entry => entry.routes)
+        .find(item => item.providerId === 'moonshot-kimi-code' && item.modelId === 'k3.1-pro')!;
+      responsesRoute.preferredInterfaces!.codex = ['moonshot-kimi-code-openai-responses'];
+      const provider = buildUserProvider(config, {
+        modelRegistry: responsesRegistry,
+        presets: BUNDLED_CATALOG.presets,
+      });
+      expect(provider.models.codex![0]?.route?.wireProtocol).toBe('openai-responses');
+      const routes = deriveCodexCustomProviderRoutes({
+        ...BUNDLED_CATALOG,
+        modelRegistry: responsesRegistry,
+        providers: [...BUNDLED_CATALOG.providers, provider],
+      });
+      setActiveCatalog({
+        ...BUNDLED_CATALOG,
+        modelRegistry: responsesRegistry,
+        providers: [...BUNDLED_CATALOG.providers, provider],
+      });
+      expect(routes[0]?.responseModels).toContain('k3.1-pro');
+
+      expect(
+        resolveCodexCustomProviderModelProviderId(routes, config.id, 'k3.1-pro', 'old-chat-task'),
+      ).toBeNull();
+      expect(
+        resolveCodexCustomProviderModelProviderId(routes, config.id, 'k3.1-pro'),
+      ).toBe(routes[0]?.modelProviderId);
+
+      const responsesPinned = sessionModelInterface(
+        'responses-task',
+        config.id,
+        'codex',
+        provider.models.codex![0]!,
+        responsesRegistry,
+      );
+      expect(responsesPinned?.api).toBe('openai-responses');
+      expect(
+        resolveCodexCustomProviderModelProviderId(routes, config.id, 'k3.1-pro', 'responses-task'),
+      ).toBe(routes[0]?.modelProviderId);
+    } finally {
+      rmSync(directory, { recursive: true, force: true });
+    }
   });
 
   it('uses the applied Host snapshot to identify only real dynamic identity crossings', () => {

@@ -114,6 +114,7 @@ import {
   getUserProviderIdForSession,
   readProviderOAuthToken,
   providerRoutingServesWireModel,
+  sessionProviderRoutingForModel,
   resolveImplicitLocalBridgeRoute,
   resolveImplicitProviderOAuthRouteDecision,
   resolveProviderOAuthControlRouteDecision,
@@ -2941,6 +2942,22 @@ function resolveCodexCustomProviderRoutingDecision(
   }
   const wireModel = parsed.pathKind === 'responses' ? requestModel : undefined;
   const sessionId = sessionIdFromHeaders(ctx.headers) ?? guestSessionId;
+  // Host 快照只记当前目录的 Responses 路径。旧任务经 sessionModelInterface 固定为
+  // Chat 接口时，命名空间仍会把它送到 /responses。按任务快照的协议判：
+  // 不是 openai-responses 就拒绝，让该任务留在普通路由；仍是 Responses 则把快照路径合进去。
+  let effectiveRouting = frozenRouting;
+  if (sessionId && wireModel) {
+    const provider = getActiveCatalog().providers.find((candidate) => candidate.id === route.providerId);
+    const sessionRouting = provider
+      ? sessionProviderRoutingForModel(sessionId, provider, 'codex', wireModel)
+      : null;
+    if (sessionRouting?.wireProtocol && sessionRouting.wireProtocol !== 'openai-responses') {
+      return codexCustomProviderRouteFailure(403, 'custom_provider_model_mismatch');
+    }
+    if (sessionRouting?.wireProtocol === 'openai-responses') {
+      effectiveRouting = { ...frozenRouting, ...sessionRouting };
+    }
+  }
   if (wireModel && !hostedProviderOffersModel(sessionId, route.providerId, 'codex', wireModel)) {
     return codexCustomProviderRouteFailure(403, 'remote_model_not_allowed');
   }
@@ -2954,7 +2971,7 @@ function resolveCodexCustomProviderRoutingDecision(
     : undefined;
   return resolveFrozenProviderRouteDecision(
     route.providerId,
-    frozenRouting,
+    effectiveRouting,
     route.credentialRevision,
     'codex',
     _readGatewayKey(),
@@ -3011,8 +3028,8 @@ function resolveCodexCustomProviderRoutingDecision(
         ...(headerDelete.size > 0 ? { headerDelete: [...headerDelete] } : {}),
         ...(parsed.pathKind === 'images'
           ? {
-              ...(frozenRouting.imageModel || allowsImageModel ? {
-                transformRequestBody: createCodexImageModelRewrite(frozenRouting.imageModel, allowsImageModel),
+              ...(effectiveRouting.imageModel || allowsImageModel ? {
+                transformRequestBody: createCodexImageModelRewrite(effectiveRouting.imageModel, allowsImageModel),
               } : {}),
               forwardLifecycle: createCodexImageGenerationForwardLifecycleObserver(
                 parsed.routeId,
@@ -3365,6 +3382,9 @@ function createTransformRequestChain(
   // 这 7+2 个恢复清洗只在 controller 已激活（或设置开启）后才动手，用于同一份历史下一轮提前洗掉。
   // 构造参数、enabled 谓词和在链里的位置保持不变，不合并。
   const byteDanceSeedResponsesCompatTransform = createByteDanceSeedResponsesCompatTransform();
+  // Grok 的主动清洗不等恢复 controller 激活：首轮就把 Codex agent_message 改成标准 message。
+  // 命名空间白名单按引用相等，链里再内联调用就进不了 Set。
+  const xaiModelInputSanitizeTransform = createXaiModelInputSanitizeTransform();
   const armedHttpRecoveryStripTransform = createArmedHttpRecoveryStripTransform();
   const encryptedStripTransform = createActiveStripTransform({
     controller: encryptedStripController,
@@ -3435,7 +3455,7 @@ function createTransformRequestChain(
     createStrictGatewayHistoryCompatTransform(),
     // Gateway / LiteLLM / 自定义 grok 不走 xAI 订阅 transform，但仍必须在
     // ModelInput deserialize 前洗 input[]。订阅直连那条会再洗一次（幂等）。
-    createXaiModelInputSanitizeTransform(),
+    xaiModelInputSanitizeTransform,
     sanitizeDeepSeekV4CustomTools,
     createXaiResponsesCompatTransform(pricing),
     createGatewayGrokResponsesCompatTransform(frozenAuthInjection),
@@ -3481,6 +3501,7 @@ function createTransformRequestChain(
     encryptedStripTransform,
     imageGenerationStripTransform,
     xaiModelInputStripTransform,
+    xaiModelInputSanitizeTransform,
     responsesItemIdStripTransform,
     responsesItemIdLengthStripTransform,
     armedHttpRecoveryStripTransformLate,

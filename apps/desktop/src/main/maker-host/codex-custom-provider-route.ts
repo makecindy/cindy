@@ -17,7 +17,11 @@ import {
   CODEX_PROVIDER_OAUTH_PLACEHOLDER_KEY,
   type CodexProxySpawnAuthMode,
 } from './codex-gateway-config.js';
-import { getProviderRouteCredentialRevision } from './provider-route.js';
+import { getActiveCatalog } from './active-catalog.js';
+import {
+  getProviderRouteCredentialRevision,
+  sessionProviderRoutingForModel,
+} from './provider-route.js';
 import {
   invocationModelRecord,
   requiresNativeProviderAuth,
@@ -285,10 +289,23 @@ export function resolveCodexCustomProviderModelProviderId(
   routes: readonly CodexCustomProviderRoute[],
   providerId: string | null | undefined,
   model: string | null | undefined,
+  sessionId?: string | null,
 ): string | null {
   if (!providerId || !model) return null;
   const route = routes.find((candidate) => candidate.providerId === providerId);
-  return route?.responseModels.includes(model) ? route.modelProviderId : null;
+  if (!route?.responseModels.includes(model)) return null;
+  // 旧任务已经把接口固定成 Chat 时，不要因当前目录默认变成 Responses 就换上 cindy_custom 身份。
+  // 返回 null 让调用方走普通路由，保留快照里的协议与路径。没有 session 或没有快照时行为不变。
+  if (sessionId) {
+    const provider = getActiveCatalog().providers.find((candidate) => candidate.id === providerId);
+    const sessionRouting = provider
+      ? sessionProviderRoutingForModel(sessionId, provider, 'codex', model)
+      : null;
+    if (sessionRouting?.wireProtocol && sessionRouting.wireProtocol !== 'openai-responses') {
+      return null;
+    }
+  }
+  return route.modelProviderId;
 }
 
 export interface CodexAppliedCustomProviderIdentityInput {

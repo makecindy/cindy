@@ -552,7 +552,8 @@ export class AppServerHost {
     return {
       dynamicIdentity: true,
       disableSubagents: !childCompatible,
-      disableModelOverrides: true,
+      // 图片生成身份不能让 spawn_agent 换模型。纯文本 Responses 供应商保留用户已开启的智能调配。
+      disableModelOverrides: route.capabilities?.imageGeneration === true,
     };
   }
 
