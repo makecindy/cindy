@@ -4216,8 +4216,10 @@ function CCAgentSessionContent({
       // 输入框在点击时就已清空。普通发送把这项检查交给 store 的 beforeEnqueue:
       // 气泡先上屏,和清空同一帧出现,不再等这次主进程往返;不通过时 store 按
       // clientId 撤回气泡、返回 false,输入框原样恢复草稿。还没选目录(走目录选择
-      // 续发)和内置技能分派不经过 store 的乐观插入,仍在这里先查。
-      const deferVendorAuthGate = Boolean(session?.workingDir) && !opts?.builtInSkillIntent;
+      // 续发)、本地插话和内置技能分派不经过 store 的乐观插入,仍在这里先查。
+      // 归档任务也先查,避免认证拒绝后仍留下自动取消归档的副作用。
+      const deferVendorAuthGate = Boolean(session?.workingDir) && !opts?.builtInSkillIntent &&
+        deliveryMode !== 'steer' && session?.status !== 'archived';
       if (!remoteDeviceId && !recoveringBaseline && !deferVendorAuthGate) {
         if (!(await passesVendorAuthGate())) return false;
       }

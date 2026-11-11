@@ -66,7 +66,7 @@ it('authenticates the recovered Harness on subsequent sends after a legacy proje
 // clears on click, so the store must show the bubble before the vendor readiness
 // check waits on main. The check runs as the store's beforeEnqueue, and its
 // rejection rolls the bubble back so the composer restores the draft.
-function setup(options: { proceed: boolean; remoteDeviceId?: string | null; rebalance?: boolean }) {
+function setup(options: { proceed: boolean; remoteDeviceId?: string | null; rebalance?: boolean; status?: string }) {
   const order: string[] = [];
   const auth = vi.fn(async () => {
     order.push('auth');
@@ -84,7 +84,7 @@ function setup(options: { proceed: boolean; remoteDeviceId?: string | null; reba
     readOnly: false, cindyMakeInputLocked: false, invalidateHistoryRecoveryNavigation: vi.fn(),
     remoteDeviceId: options.remoteDeviceId ?? null, displayAgentKind: 'claude-code', isCodex: false,
     agentSwitchIntent: null, vendorAuthGate: { checkAndConfirm: auth },
-    session: { source: 'user', status: 'active', workingDir: '/repo' }, sessionId: 'session-1',
+    session: { source: 'user', status: options.status ?? 'active', workingDir: '/repo' }, sessionId: 'session-1',
     folderPickerOpen: false, sessionHandoffPreparing: false, isOrcaLeadSession: () => false,
     isRunningRef: { current: false }, confirmRebalance: vi.fn(), t: (key: string) => key,
     offerSessionRebalance: async () => (options.rebalance ? recordRebalance : undefined),
@@ -96,14 +96,14 @@ function setup(options: { proceed: boolean; remoteDeviceId?: string | null; reba
 }
 
 it.each(['queue', 'steer'] as const)(
-  'hands an ordinary %s send to the store before checking vendor readiness', async (deliveryMode) => {
+  'checks vendor readiness at the appropriate boundary for %s sends', async (deliveryMode) => {
     const { send, order, storeSend } = setup({ proceed: true, rebalance: true });
     await expect(send('hello', 'model', '', 'ask', undefined, undefined, {
       literalText: true, deliveryMode,
     })).resolves.toBe(true);
     expect(storeSend).toHaveBeenCalledOnce();
     // Steer joins the running turn, so it never offers an account rebalance.
-    expect(order).toEqual(deliveryMode === 'steer' ? ['store', 'auth'] : ['store', 'auth', 'rebalance']);
+    expect(order).toEqual(deliveryMode === 'steer' ? ['auth', 'store'] : ['store', 'auth', 'rebalance']);
   });
 
 it('rejects through beforeEnqueue so the store rolls the bubble back and the composer restores', async () => {
@@ -120,4 +120,17 @@ it('leaves device-link sends to the task computer without a renderer check', asy
     .resolves.toBe(true);
   expect(auth).not.toHaveBeenCalled();
   expect(getStoreOpts()?.beforeEnqueue).toBeUndefined();
+});
+
+// Regression: a denied send must not reach auto-unarchive or local steer dispatch.
+// Existing queue tests only exercised store rollback; these precheck paths must
+// return false before any persistence or input dispatch (unit tier).
+it.each(['archived', 'steer'] as const)('rejects %s sends before dispatch or unarchive', async (scenario) => {
+  const { send, order, storeSend } = setup({ proceed: false,
+    status: scenario === 'archived' ? 'archived' : 'active' });
+  await expect(send('hello', 'model', '', 'ask', undefined, undefined, {
+    literalText: true, deliveryMode: scenario === 'steer' ? 'steer' : 'queue',
+  })).resolves.toBe(false);
+  expect(order).toEqual(['auth']);
+  expect(storeSend).not.toHaveBeenCalled();
 });
