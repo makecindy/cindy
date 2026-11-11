@@ -737,7 +737,8 @@ That path needs Electron itself on Wayland. Electron picks Ozone Wayland only wh
 from a shell without that variable inside a Wayland compositor, Cindy runs on XWayland.
 Capture then reads XWayland's root window, which holds no desktop pixels: viewers
 see a black screen with only the pointer and no portal request is made (#9712).
-On the first video offer of each run, the host logs one `remote-desktop:display-backend`
+Hyprland's native capture does not depend on Electron's backend. Otherwise, on the
+first video offer of each run, the host logs one `remote-desktop:display-backend`
 warning listing the Wayland signals it saw (`XDG_SESSION_TYPE=wayland`,
 `WAYLAND_DISPLAY` set, a `wayland-N` socket in the runtime directory). That exact
 scope is in the log-upload allowlist. The UI does not show this state, and the

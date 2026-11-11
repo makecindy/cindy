@@ -184,7 +184,8 @@ const portalWayland = () => wayland() && !nativeWayland();
 const displayBackendLog = createLogger('remote-desktop:display-backend');
 let xwaylandChecked = false;
 function warnIfXWaylandCapture(): void {
-  if (xwaylandChecked || process.platform !== 'linux') return;
+  // Hyprland's native screencopy talks to the compositor, not to XWayland's root window.
+  if (xwaylandChecked || process.platform !== 'linux' || nativeWayland()) return;
   xwaylandChecked = true;
   let entries: string[] = [];
   try {
