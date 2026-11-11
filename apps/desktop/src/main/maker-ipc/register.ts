@@ -20728,6 +20728,12 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
       publishUiTurnDispatching(sessionId, item.clientId);
       await gitSnapshotCoordinator?.onTurnStart(sessionId, signal);
     },
+    onRetryUndispatchedUserTurn: (sessionId) => {
+      // The welcome receipt still belongs to the same queued input. Only the
+      // proven undispatched attempt's file preparation is being replaced.
+      clearPendingTurnChangeSets(sessionId);
+      gitSnapshotCoordinator?.onTurnAbort(sessionId);
+    },
     onUndispatchedUserTurn: (sessionId, item, disposition) => {
       welcomeDispatchReceipts.settle(sessionId, item.clientId, false);
       // 目标轮落库了却没能 dispatch(取消 / 失败): 记账该立刻还回去, 而不是等超时。

@@ -29,6 +29,7 @@ import { createBotModelSelectionCoordinator } from '../botModelSelectionCoordina
 import { acquireSendToSessionLock, withSendToSessionLock } from '../sendToSessionLock.js';
 import * as dbCurrent from '../../localDb/client/current.js';
 import { prepareBotPermissionDispatch, retryBotWelcomePermissionDispatch, withBotPermissionChangeForBot } from '../botPermissionDispatch.js';
+import { GitSnapshotCoordinator, type GitSnapshotCoordinatorDeps } from '../../git-snapshot/gitSnapshotCoordinator.js';
 import { UsageLimitAutoResume, USAGE_LIMIT_MAX_CONSECUTIVE_RESUMES } from '../usageLimitAutoResume.js';
 import { MCP_APP_MESSAGE_CLIENT_PREFIX, MCP_APP_MESSAGE_GUARD } from '../../mcp-apps/message.js';
 import { runSchedulerQueuedPreparation } from '../schedulerQueuedPreparation.js';
@@ -786,8 +787,31 @@ describe('queued welcome dispatch receipts', () => {
     let attempts = 0;
     const providerSend = vi.fn();
     const inputIds: string[] = [];
+    let anchor = 'welcome';
+    let snapshotAttempt = 0;
+    const createSavepoint = vi.fn<GitSnapshotCoordinatorDeps['createShadowSavepoint']>(async (_repo, input) => ({
+      commit: `baseline-${input.meta?.attemptId}`, tree: 'tree', includedFiles: [], skippedFiles: [], skippedFingerprints: [],
+    }));
+    const snapshots = new GitSnapshotCoordinator({
+      readAutoSnapshotEnabled: () => true,
+      getSessionContext: async () => ({ workingDir: '/welcome-repo', agentKind: 'codex' }),
+      detectRepoRoot: async () => '/welcome-repo',
+      recordTurnAttempt: async () => ({ anchor, attemptId: `attempt-${++snapshotAttempt}` }),
+      createShadowSavepoint: createSavepoint,
+      createShadowMarker: async () => 'marker',
+      oneShot: async () => 'label',
+      logger: { info: vi.fn(), warn: vi.fn(), debug: vi.fn() },
+    });
+    // #10021, unit: the real snapshot FIFO must be settled between attempts,
+    // or the next ordinary turn consumes a leftover welcome baseline.
+    h.onRetryUndispatchedUserTurn.mockImplementation(sid => snapshots.onTurnAbort(sid));
+    h.onUndispatchedUserTurn.mockImplementation((sid, item) => {
+      snapshots.onTurnAbort(sid);
+      receipts.settle(sid, item.clientId, false);
+    });
     const runtime = { id: 'welcome-session', stablePermissionModeState: { mode: 'ask' } } as unknown as Session;
-    h.beforeDispatchUserTurn.mockImplementation(async () => {
+    h.beforeDispatchUserTurn.mockImplementation(async (sid, _item, signal) => {
+      await snapshots.onTurnStart(sid, signal);
       if (attempts === 1) change = withBotPermissionChangeForBot('bot-1', () => writerGate.promise);
     });
     h.sendToAgent.mockImplementation(async (sid, message, _create, opts) =>
@@ -818,11 +842,26 @@ describe('queued welcome dispatch receipts', () => {
         expect(h.onRejectedUserTurn).not.toHaveBeenCalled();
         expect(h.onUndispatchedUserTurn).not.toHaveBeenCalled();
         expect(h.coordinator.getProjection('welcome-session')).toMatchObject({ error: null, recovery: null, pendingQueue: [] });
+        await snapshots.onTurnEnd('welcome-session');
+        expect(snapshots.hasPendingTurnStart('welcome-session')).toBe(false);
+        expect(createSavepoint.mock.calls.at(-1)?.[1].meta).toMatchObject({
+          kind: 'after-edit', anchor: 'welcome', attemptId: 'attempt-2', baselineCommit: 'baseline-attempt-2',
+        });
+        h.coordinator.onTurnEvent('welcome-session', 'done');
+        anchor = 'ordinary';
+        h.coordinator.enqueue('welcome-session', makeItem('ordinary', 'next turn'));
+        await vi.waitFor(() => expect(providerSend).toHaveBeenCalledTimes(2));
+        await snapshots.onTurnEnd('welcome-session');
+        expect(createSavepoint.mock.calls.at(-1)?.[1].meta).toMatchObject({
+          kind: 'after-edit', anchor: 'ordinary', attemptId: 'attempt-3', baselineCommit: 'baseline-attempt-3',
+        });
+        expect(snapshots.hasPendingTurnStart('welcome-session')).toBe(false);
       } else {
         expect(providerSend).not.toHaveBeenCalled();
         expect(attempts).toBe(1);
+        expect(snapshots.hasPendingTurnStart('welcome-session')).toBe(false);
       }
-    } finally { writerGate.resolve(); await change; snapshot.mockRestore(); }
+    } finally { writerGate.resolve(); await change; snapshots.onSessionClosed('welcome-session'); snapshot.mockRestore(); }
   });
 
   it('does not acknowledge enqueue or persistence before vendor acceptance', async () => {
@@ -1827,6 +1866,7 @@ function createHarness(opts?: {
   const beforeDispatchUserTurn = vi.fn<
     NonNullable<AgentInputCoordinatorDeps['beforeDispatchUserTurn']>
   >(() => {});
+  const onRetryUndispatchedUserTurn = vi.fn<NonNullable<AgentInputCoordinatorDeps['onRetryUndispatchedUserTurn']>>();
   const onUndispatchedUserTurn = vi.fn<
     NonNullable<AgentInputCoordinatorDeps['onUndispatchedUserTurn']>
   >(() => {});
@@ -1977,6 +2017,7 @@ function createHarness(opts?: {
       ? { getRecoveryContextSnapshot: opts.getRecoveryContextSnapshot }
       : {}),
     beforeDispatchUserTurn,
+    onRetryUndispatchedUserTurn,
     onUndispatchedUserTurn,
     onUserMessagePersisting,
     onUserMessagePersisted,
@@ -2026,6 +2067,7 @@ function createHarness(opts?: {
     getSdkSessionId,
     reconcileTurnIdle,
     beforeDispatchUserTurn,
+    onRetryUndispatchedUserTurn,
     onUndispatchedUserTurn,
     onUserMessagePersisting,
     onUserMessagePersisted,
