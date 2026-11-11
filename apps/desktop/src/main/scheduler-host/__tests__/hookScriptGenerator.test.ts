@@ -351,28 +351,6 @@ describe('installHookScript(统一安装通道:script/description 双模式 + �
     rmSync(dir, { recursive: true, force: true });
   });
 
-  // Unit, #9801: a browser plugin must see the final command and complete
-  // generated/authored script before overwrite or self-test, including modification flows.
-  it.each(['script', 'description'] as const)('declined %s installation preserves the existing script before self-test', async mode => {
-    const old = path.join(dir, 'existing.mjs');
-    writeFileSync(old, 'process.exit(0)\n');
-    let confirmed = false;
-    await expect(installHookScript({
-      maker: null, fallbackDir: dir, hasSystemNode: async () => true,
-      requestText: async () => utilitySuccess('```js\nprocess.exit(2)\n```'),
-      beforeInstall: async (prepared: { command: string; content: string }) => {
-        confirmed = true;
-        expect(prepared.command).toContain(old);
-        expect(prepared.content).toBe('process.exit(2)');
-        expect(readFileSync(old, 'utf8')).toBe('process.exit(0)\n');
-        throw new Error('PERMISSION_DENIED');
-      },
-    }, { currentCommand: `node ${shellQuote(old)}`, workingDir: dir,
-      ...(mode === 'script' ? { script: 'process.exit(2)' } : { description: 'skip' }) })).rejects.toThrow('PERMISSION_DENIED');
-    expect(confirmed).toBe(true);
-    expect(readFileSync(old, 'utf8')).toBe('process.exit(0)\n');
-  });
-
   it('script 模式:agent 提供内容 → 落盘规范路径 + 自测返回 skip(exit 2)', async () => {
     const result = await installHookScript(
       { maker: null, fallbackDir: path.join(dir, 'fb') },

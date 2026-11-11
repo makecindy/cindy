@@ -4,7 +4,7 @@ import { createLogger } from '../logger.js';
 
 export type TaskChangeEvent =
   | { kind: 'message'; sessionId: string; message: Message }
-  | { kind: 'state'; sessionId: string; state: Record<string, unknown>; progress?: boolean };
+  | { kind: 'state'; sessionId: string; state: Record<string, unknown> };
 
 type Listener = (event: TaskChangeEvent, owner: DataOwnerPushStamp) => void;
 const listeners: Partial<Record<TaskChangeEvent['kind'], Listener>> = {};

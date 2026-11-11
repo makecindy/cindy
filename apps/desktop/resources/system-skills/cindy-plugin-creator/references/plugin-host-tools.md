@@ -49,9 +49,9 @@ const archived = await cindy.host.call('cindy_helper', 'archive_sessions', {
 需要绑定时显式传 `targetSessionId`。运行记录由 `schedule_list_runs({scheduleId})` 读取。
 删除及其它由宿主判为逐次确认的调用须等待原生确认；回执不明时先查询，不自动重试写操作。
 
-没有已批准 `node` 能力的插件，提交脚本命令、运行或恢复带脚本的调度，以及安装前置检查脚本时，
-还须逐次原生确认完整命令；前置检查在覆盖文件和立即自测前展示准备好的完整代码与命令。
-确认期间任务配置变化会使操作失效。已有 `node` 批准的插件沿用原共享风险规则；Agent 的工具分类与权限档保持原行为。
+没有已批准 `node` 能力的插件，不支持提交或修改脚本、前置命令，以及运行或恢复已有脚本或前置命令的调度，
+统一返回 `UNSUPPORTED_CAPABILITY`，不提供额外确认放行。更新时也检查任务实际配置，不能通过只改 `recurring` 等字段重新激活脚本。
+普通定时任务的读改不受影响。已有 `node` 批准的插件沿用原共享风险规则；Agent 的工具分类与权限档保持原行为。
 
 `settings` 组使用 `list_app_settings` 发现分类，再用 `get_app_settings({section})` 读取当前值和修改 schema，
 最后调用 `update_app_settings({section,patch})`。省略的字段保持原值，写入复用设置页的保存与生效路径；
@@ -95,7 +95,8 @@ user 锚点复制它之前的历史；assistant 锚点复制至下一条 user �
 
 `get_chat_history`、`search_chat_history` 与 `get_task_digest` 沿用原工具。完整导出由插件逐页读取历史后组装，不另设宿主导出接口。
 
-使用 `read_session_attachment` 读取指定消息中登记的附件；`attachment_index` 从 0 开始，先图片、后普通文件：
+使用 `read_session_attachment` 读取本机指定消息中登记的附件；跨电脑任务返回 `UNSUPPORTED_CAPABILITY`，不发起远程查询或传输。
+`attachment_index` 从 0 开始，先图片、后普通文件：
 
 ```js
 const result = await cindy.host.call('cindy_helper', 'read_session_attachment', {
@@ -105,4 +106,4 @@ const result = await cindy.host.call('cindy_helper', 'read_session_attachment', 
 
 文本结果中的 `base64` 为本段字节，每次最多 64 KiB；`name`、`mimeType`、`size` 与 `sha256` 描述整份附件。`nextOffset` 非空时继续传 `offset:nextOffset`，媒体带回 `mediaHash`，普通文件带回 `attachment_ref`，直到返回 null；保留同一组任务、消息和附件序号。两类续读都从已有 grant / 交接副本按范围读取，不重复读取来源、入仓或对整份文件重算摘要。普通文件的摘要标识首次交接内容，组装完成后必须核对 SHA-256；交接副本被编辑或校验不符时丢弃本次组装，重新从消息取源。不能混合不同版本的分块，也不能把正文里的路径或链接当成附件传入。
 
-媒体沿用总仓和插件媒体 grant，返回 `mediaHash`；普通文件沿用 7 天交接副本，返回 `attachment_ref`，也可交给现有 `upload.handoff`。插件逻辑页和 Node 都只得到这些引用、元数据与分块字节，不得到宿主绝对路径。回执过期返回 `HANDOFF_UNAVAILABLE`，重新从原消息取得；账号、安装或批准变化使读取失效。跨设备只在宿主内部解析原消息引用，字节走既有文件传输；旧端不支持时明确返回错误。
+媒体沿用总仓和插件媒体 grant，返回 `mediaHash`；普通文件沿用 7 天交接副本，返回 `attachment_ref`，也可交给现有 `upload.handoff`。插件逻辑页和 Node 都只得到这些引用、元数据与分块字节，不得到宿主绝对路径。回执过期返回 `HANDOFF_UNAVAILABLE`，重新从原消息取得；账号、安装或批准变化使读取失效。

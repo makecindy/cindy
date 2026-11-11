@@ -200,17 +200,17 @@ Library 请求同时绑定迁移代次和安装批准，根解析、排队及开
   receipt 的可选 `approvedHostToolGroups` 仅记录显式批准；旧记录缺失时首次调用复用现有确认，拒绝后由详情页手动重试。
   新增组算扩权，同来源更新只保留仍声明的已批准组，移除或卸载即失效，不改变旧插件其它能力。
   `cindy.host.call(server, tool, args)` 的 UI 与 Node 请求共用 `hostToolSlot`，通过同一 provider / registry 调用 Agent 工具处理器，禁止另写插件业务实现。
-  插件没有已批准的 `node` 能力时，调度中提交或执行 shell 必须逐次原生确认完整命令；前置检查安装在覆写文件、自测前再确认准备好的代码。
-  复用调度的配置快照守卫，确认后配置变化拒绝执行。已有 `node` 的插件与 Agent 的原共享策略分类保持，不能用 `scheduler` 组批准替代本机命令执行批准。
+  插件没有已批准的 `node` 能力时，不支持提交或修改脚本、前置命令，也不支持运行或恢复实际配置中带有脚本或前置命令的调度，返回 `UNSUPPORTED_CAPABILITY`。
+  更新时读取实际配置，不能只凭入参判断；不新增确认放行或配置快照。普通定时任务读改、已有 `node` 的插件与 Agent 的原共享策略分类保持，不能用 `scheduler` 组批准替代本机命令执行批准。
   调用方显式为插件实例与请求时 owner 快照，不绑定任务；组批准与共享风险规则的原生逐次确认替代任务权限档，执行前及返回前复核账号和安装版本，现有写入钩子同样复核。
-  receipt 不作跨调用或 mtime 授权缓存；只在一次插件调用的同一同步段内去重文件读取，微任务结束前清空，跨 `await`（包括原生确认前后）重新读取并验证。
+  每次批准查询均重新读取和验证 receipt，不使用授权缓存或同步段去重。
   依赖当前任务的工具必须显式指定目标，缺省保留 `NO_SESSION_CONTEXT`；插件管理、主人代输入、应用更新、反馈不经此入口开放。
   作者契约见 [宿主工具调用](../../apps/desktop/resources/system-skills/cindy-plugin-creator/references/plugin-host-tools.md)。
 - `subscribe.topics` 的 `message` / `task-state` 独立展示和批准，receipt 可选 `approvedEventTopics` 只记录显式事实，不从旧未知声明推断。
-  消息仅在持久化后通知，结构化附件使用不透明位置引用；状态复用宿主规范投影的状态字段，不含活动摘要、标题标签或工具参数。
+  消息仅在持久化后通知，结构化附件使用不透明位置引用；附件工具仅支持本机，跨电脑返回 `UNSUPPORTED_CAPABILITY`。
+  状态只发布生命周期变化（开始、结束、出错、等待权限/回答、排队、取消及归档/恢复/删除），复用宿主规范投影，不含活动摘要、标题标签或工具参数；不发布高频进度和活动变化。
   花名册变动时建立 topic 索引，禁止每个消息/状态事件扫描全部插件；缓冲补投重查安装版本、批准和 owner。
-  无已批准订阅时生产端同步短路；仅新内容/状态 topic 每插件 25ms 一批、队列最多 100 条，溢出沿用 `dropped`。
-  只合并同任务连续的非终态进度，生命周期转换和单调序号保留；停用释放待发 timer，不新增常驻轮询或持久事件表。
+  无已批准订阅时生产端同步短路；沿用既有逐事件投递、100 条熄灯队列、单调序号和 `dropped`，不新增合批、折叠或 timer。
   断线按 `get_chat_history` 游标补拉，旧 `turn` / `session` / `activity` 订阅和既有插件批准保持原行为。
   作者契约见 [事件订阅](../../apps/desktop/resources/system-skills/cindy-plugin-creator/references/plugin-event-subscriptions.md)。
 - `agent.targets` 必须与 `agent.tasks: true` 同时声明，独立列出 `agent:targets` 权限并要求 Host receipt 的 `targetCapabilityApproved` 显式批准。

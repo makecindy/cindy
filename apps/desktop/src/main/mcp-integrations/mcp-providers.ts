@@ -119,7 +119,6 @@ import { authorizePluginHostToolCall, getPluginHostToolCaller, setHostToolProvid
 import { createDesktopTaskActionAuthorizer } from '../maker-ipc/taskActionHost.js';
 import { forkTaskAtMessage } from '../maker-ipc/fork.js';
 import { commitTaskRewind } from '../maker-ipc/rewind.js';
-import { getApprovedPluginScheduleGuard, getPluginPreparedHookApproval } from '../cindy-brain/pluginSchedulerApproval.js';
 import { authorizeGroupTool } from '../maker-ipc/botGroupToolAuthorization.js';
 import { createSharedTaskTools } from './sharedTaskTools.js';
 import { assertTaskActionCurrent, captureTaskActionSyncGuard } from '../maker-ipc/taskActionAuthorization.js';
@@ -559,7 +558,6 @@ export function createDesktopMcpProviders(deps: DesktopMcpProvidersDeps): LiziMc
       withAccountDataAccess,
       authorizeCall: authorizeTaskToolCall,
       getScheduler: () => getScheduler(),
-      getApprovedScheduleGuard: getApprovedPluginScheduleGuard,
       // 其它电脑上的定时任务:与历史查询共用设备目录与 owner fence,走既有远程控制通道。
       ...(deps.historyRemote
         ? {
@@ -625,13 +623,11 @@ export function createDesktopMcpProviders(deps: DesktopMcpProvidersDeps): LiziMc
           } catch {
             maker = null;
           }
-          const beforeInstall = getPluginPreparedHookApproval();
           return installHookScript(
             {
               maker,
               fallbackDir: pathJoin(app.getPath('userData'), 'schedule-hooks'),
               logger: createLogger('mcp/cindy_scheduler:hook-script'),
-              ...(beforeInstall ? { beforeInstall } : {}),
             },
             input,
           );
@@ -1372,11 +1368,7 @@ export function createDesktopMcpProviders(deps: DesktopMcpProvidersDeps): LiziMc
       }),
       history: {
         readSessionAttachment: (args, context) => withAccountDataAccess(context?.sessionId, async assertCurrent => {
-          const result = await readDesktopHistoryAttachment(args, context, {
-            query: (device, sourceArgs) => deps.historyRemote?.query(device, 'read_session_attachment', { ...sourceArgs })
-              ?? Promise.resolve({ ok: false, errorCode: 'REMOTE_UNSUPPORTED' }),
-            invoke: deps.invokeRemote,
-          });
+          const result = await readDesktopHistoryAttachment(args, context);
           await assertCurrent();
           return result;
         }),

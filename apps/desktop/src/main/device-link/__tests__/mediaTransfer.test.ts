@@ -979,51 +979,6 @@ describe('downloadToFile — 无进展超时', () => {
 });
 
 describe('downloadToBuffer', () => {
-  // Unit, #9801 performance: a bounded attachment must also release a stalled
-  // response/body. Fake time verifies cancellation without holding a real socket.
-  it.each(['response', 'body'] as const)('aborts a bounded download stalled in %s and releases its timer', async phase => {
-    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
-    const cancel = vi.fn();
-    let requestSignal: AbortSignal | undefined;
-    netFetchMock.mockImplementationOnce(async (_url, init: RequestInit) => {
-      requestSignal = init.signal ?? undefined;
-      if (phase === 'body') return new Response(new ReadableStream({ cancel }));
-      return new Promise<Response>((_resolve, reject) => requestSignal?.addEventListener('abort', () => reject(requestSignal!.reason), { once: true }));
-    });
-    try {
-      const settled = downloadToBuffer(KEY, 3).then(() => null, (error: Error) => error);
-      await vi.advanceTimersByTimeAsync(phase === 'response' ? 12_000 : 15_000);
-      expect(requestSignal?.aborted).toBe(true);
-      expect((await settled)?.message).toBe('OSS_DOWNLOAD_STALLED');
-      if (phase === 'body') expect(cancel).toHaveBeenCalledOnce();
-      expect(vi.getTimerCount()).toBe(0);
-    } finally { vi.useRealTimers(); }
-  });
-
-  // Unit, #9801: the attachment caller's post-download size check could allocate
-  // an entire large OSS object. Bound before reading and cancel streaming overflow.
-  it.each(['header', 'stream'] as const)('enforces an explicit byte ceiling against %s size', async mode => {
-    const cancel = vi.fn();
-    let part = 0;
-    const body = new ReadableStream<Uint8Array>({
-      pull(controller) { if (++part <= 3) controller.enqueue(new Uint8Array([1, 2])); else controller.close(); },
-      cancel,
-    });
-    const response = new Response(body, { headers: mode === 'header' ? { 'content-length': '6' } : {} });
-    const arrayBuffer = vi.spyOn(response, 'arrayBuffer');
-    netFetchMock.mockResolvedValueOnce(response);
-    await expect(downloadToBuffer(KEY, 3)).rejects.toThrow('REMOTE_FILE_TOO_LARGE');
-    expect(arrayBuffer).not.toHaveBeenCalled();
-    expect(cancel).toHaveBeenCalledOnce();
-  });
-
-  it('keeps bounded successful downloads on the same media backend', async () => {
-    installAgentNetMediaBackend({ guard: () => () => {}, available: () => true, cacheScope: () => 'test',
-      upload: async () => null, open: async () => new Response('ok'), remove: async () => {} });
-    expect((await downloadToBuffer('agent-net-v3/encrypted-reference', 3)).bytes.toString()).toBe('ok');
-    expect(apiFetch).not.toHaveBeenCalled(); expect(netFetchMock).not.toHaveBeenCalled();
-  });
-
   it('presign-get + GET 整文件 → Buffer + contentType', async () => {
     const ab = new Uint8Array([1, 2, 3]).buffer;
     netFetchMock.mockResolvedValue({

@@ -228,11 +228,6 @@ export async function projectRemoteSessionResult(channel: string, value: unknown
       await assertHistoryReferences(row.relationships.map(item => record(item)?.sessionId), 'session');
       return value;
     }
-    if (typeof row.url === 'string' && typeof row.name === 'string'
-      && (row.originKind === 'user' || row.originKind === 'tool')) {
-      await assertHistoryReferences([row.sessionId], 'session');
-      return value;
-    }
     const listing = Array.isArray(row.sessions);
     if (!listing && !Array.isArray(row.hits)) throw new Error('[INVALID_PARAMS] Invalid history result');
     const entries = (listing ? row.sessions : row.hits) as unknown[];

@@ -33,6 +33,9 @@ it('validates attachment reads against the same history scope before host I/O', 
   expect(parsePayload(await server.hostTools.call('read_session_attachment', { session_id: 'target', message_id: 'm', attachment_index: 0, mediaHash: 'a'.repeat(64) })))
     .toMatchObject({ ok: true, base64: 'dGV4dA==' });
   expect(readSessionAttachment).toHaveBeenCalledWith(expect.objectContaining({ mediaHash: 'a'.repeat(64) }), expect.any(Object));
+  // Scope reduction: remote attachments must not enter any history/file transport.
+  expect(parsePayload(await server.hostTools.call('read_session_attachment', { session_id: 'device::target', message_id: 'm', attachment_index: 0 })))
+    .toMatchObject({ ok: false, errorCode: 'UNSUPPORTED_CAPABILITY' });
   expect(parsePayload(await server.hostTools.call('read_session_attachment', { session_id: 'target', message_id: 'm', attachment_index: 0, mediaHash: 'invalid' })))
     .toMatchObject({ ok: false, errorCode: 'INVALID_ARGS' });
   expect(parsePayload(await server.hostTools.call('read_session_attachment', { message_id: 'm', attachment_index: 0 })))

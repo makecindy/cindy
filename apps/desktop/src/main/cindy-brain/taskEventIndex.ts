@@ -69,15 +69,14 @@ export class GhostTaskEventIndex {
     } else {
       data = { sessionId: event.sessionId, state: taskState(event.state) };
     }
-    gateway().publishIndexed(ghosts, topic, event.kind === 'message' ? 'did-message-created' : 'did-task-state-changed', data,
-      event.kind === 'state' && event.progress === true);
+    gateway().publishIndexed(ghosts, topic, event.kind === 'message' ? 'did-message-created' : 'did-task-state-changed', data);
   }
 }
 
 /** Select state facts from the canonical projection; content needs separate message approval. */
 function taskState(raw: Record<string, unknown>): Record<string, unknown> {
   const result: Record<string, unknown> = {};
-  for (const key of ['status', 'hiddenAt', 'changedAtMs']) if (key in raw) result[key] = raw[key];
+  for (const key of ['status', 'changedAtMs']) if (key in raw) result[key] = raw[key];
   if (raw.activity === null) result.activity = null;
   else if (raw.activity && typeof raw.activity === 'object') {
     const activity = raw.activity as Record<string, unknown>;

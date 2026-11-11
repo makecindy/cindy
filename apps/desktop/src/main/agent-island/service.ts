@@ -2164,16 +2164,16 @@ export class AgentIslandService {
       const previous = this.sessionActivitySubscriptionCursor.get(sessionId) ?? null;
       const current = next.get(sessionId) ?? null;
       if (previous && current && sessionActivitySnapshotsEqual(previous, current)) continue;
-      if (hasTaskChangeListener('state')) {
+      // The plugin topic contains lifecycle edges only. Activity/progress and
+      // display changes stay on existing consumers, without plugin timers.
+      if (hasTaskChangeListener('state') && (!previous || !current
+        || previous.phase !== current.phase || previous.currentTurnActive !== current.currentTurnActive
+        || previous.turnGeneration !== current.turnGeneration || previous.startedAtMs !== current.startedAtMs
+        || previous.recordStatus !== current.recordStatus || previous.gracefulStopState !== current.gracefulStopState
+        || previous.interactionKind !== current.interactionKind)) {
         publishTaskChange({ kind: 'state', sessionId, state: {
           activity: current ? canonicalSessionActivity(current) : null, changedAtMs,
-        }, progress: previous?.phase === 'running' && current?.phase === 'running'
-          && previous.currentTurnActive === current.currentTurnActive
-          && previous.turnGeneration === current.turnGeneration && previous.startedAtMs === current.startedAtMs
-          && previous.recordStatus === current.recordStatus && previous.attention === current.attention
-          && previous.gracefulStopState === current.gracefulStopState
-          && !previous.interactionKind && !current.interactionKind,
-        }, getSafeDataOwnerPushStamp());
+        } }, getSafeDataOwnerPushStamp());
       }
       for (const listener of this.sessionActivityListeners) {
         try {

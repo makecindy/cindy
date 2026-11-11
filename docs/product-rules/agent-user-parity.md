@@ -80,7 +80,7 @@ Agent 新建普通独立任务（`send_to_session` create；伙伴专用的 `sta
 | 订阅账号 | `configure_model_provider` 的 `subscriptionAccounts`：查看、官方 CLI 登录、暂停、限额、权重与调度策略 | 有（Claude / Codex，同供应商内多账号） | 工具按目标电脑的本机任务执行；同账号远控 UI 复用管理 IPC |
 | 任务     | 列出、搜索、读聊天记录、发现电脑                           | 有   | 有               |
 | 任务与伙伴 | `list_sessions` 返回隐藏状态；`list_teammates` 分页枚举含隐藏、暂停、归档的伙伴，传 `teammate_id` 分页读取已保存的任务关系（默认100、最多1000） | 有（history 组，普通任务与插件共用） | 有（同账号历史查询；旧端不支持时明确返回未覆盖） |
-| 任务附件 | `read_session_attachment` 按消息读取已登记附件，分块字节与 SHA-256；插件复用媒体 grant / 文件交接副本，不返回宿主路径 | 有（history 组） | 有（消息引用在来源电脑核验，字节复用文件通道；旧端明确不支持） |
+| 任务附件 | `read_session_attachment` 按消息读取已登记附件，分块字节与 SHA-256；插件复用媒体 grant / 文件交接副本，不返回宿主路径 | 有（history 组） | 暂不支持，返回 `UNSUPPORTED_CAPABILITY` |
 | 任务     | 获取可直接引用的任务链接（列表、搜索、聊天记录与摘要返回 sessionUrl） | 有 | 有（链接携带所属电脑；旧远端查询结果由调用端补齐） |
 | 任务     | 读摘要（状态、最后的要求与回答、模型路线、PR、排队数）     | 有   | 有（2026-10-17） |
 | GitHub | 查询明确 PR 的 CI、评审和变化；明确关联、移除、恢复、固定、排序 | 有（桌面与手机关联管理） | 有：helper `github` 类目，同账号跨电脑；脚本 `github.read` |

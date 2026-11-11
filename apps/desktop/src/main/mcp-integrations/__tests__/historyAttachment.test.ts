@@ -2,15 +2,12 @@ import { describe, expect, it, vi } from 'vitest';
 import { createHash } from 'node:crypto';
 import { historyAttachmentSource, readHistoryAttachment } from '../historyAttachment.js';
 import { readDesktopHistoryAttachment } from '../historyAttachment.desktop.js';
-import type { readRemoteDeviceFile } from '../../device-link/fileAccess.js';
-import { DL_MEDIA_FETCH_CHANNEL } from '@cindy/device-link';
 
 const host = vi.hoisted(() => {
   const queryOne = vi.fn();
   return { db: { queryOne, drizzle: {} }, queryOne, generation: 1, plugin: false,
     bytes: vi.fn(async () => Buffer.from('text')), resolve: vi.fn(async () => ({ absPath: '/fixture/notes.txt', mimeType: 'text/plain' })),
     copy: vi.fn(async () => [{ ref: 'handoff:00000000-0000-4000-8000-000000000000' }]),
-    remoteFile: vi.fn(async (..._args: Parameters<typeof readRemoteDeviceFile>) => ({ inlineBase64: Buffer.from('remote').toString('base64'), mimeType: 'text/plain', ossKey: '', size: 6 })),
     ingest: vi.fn(async () => ({ hash: createHash('sha256').update('text').digest('hex') })),
     canRead: vi.fn(async () => true),
     blobInfo: vi.fn(async () => ({ ext: '.png', mimeType: 'image/png', bytes: 4 })),
@@ -26,8 +23,6 @@ vi.mock('../hostToolCaller.js', () => ({ getPluginHostToolCaller: () => host.plu
 } : undefined }));
 vi.mock('../../utils/readBoundedFile.js', () => ({ readBoundedFileNoFollow: host.bytes }));
 vi.mock('../../device-link/mediaFetch.js', () => ({ resolveAuthorizedMedia: host.resolve }));
-vi.mock('../../device-link/fileAccess.js', () => ({ readRemoteDeviceFile: host.remoteFile }));
-vi.mock('../../device-link/mediaTransfer.js', () => ({ downloadToBuffer: vi.fn() }));
 vi.mock('../../cindy-brain/handoffStore.desktop.js', () => ({ getGhostHandoffStore: () => ({ import: host.copy,
   open: async () => ({ info: { name: 'notes.txt', mimeType: 'text/plain', size: 4, sha256: createHash('sha256').update('text').digest('hex') },
     file: { read: host.readChunk, stat: async () => ({ size: 4 }), close: host.close } }),
@@ -90,8 +85,7 @@ describe('history attachment reader', () => {
     host.plugin = true;
     host.queryOne.mockResolvedValueOnce({ role: 'user', content: JSON.stringify({ files: [{ name: 'notes.txt', path: '/fixture/notes.txt' }] }) });
     const result = await readDesktopHistoryAttachment(args, { agentKind: 'codex', workingDir: '',
-      hostCaller: { kind: 'plugin', pluginId: 'installed-instance', dataOwnerId: 'owner', ownerGeneration: 1 } },
-    { query: vi.fn(), invoke: vi.fn() });
+      hostCaller: { kind: 'plugin', pluginId: 'installed-instance', dataOwnerId: 'owner', ownerGeneration: 1 } });
     expect(result).toMatchObject({ ok: true, base64: 'dGU=', attachment_ref: expect.any(String) });
     expect(host.queryOne).toHaveBeenLastCalledWith(expect.stringContaining('session_id = ?'), ['message', 'task']);
     expect(host.copy).toHaveBeenCalledWith('installed-instance', [{ name: 'notes.txt', bytes: Buffer.from('text') }], expect.any(Function));
@@ -102,8 +96,7 @@ describe('history attachment reader', () => {
     host.queryOne.mockResolvedValueOnce({ role: 'assistant', content: { images: [{ url: 'cindy-media://blobs/source.png', originalName: 'shot.png' }] } });
     host.resolve.mockResolvedValueOnce({ absPath: '/fixture/shot.png', mimeType: 'image/png' });
     const result = await readDesktopHistoryAttachment(args, { agentKind: 'codex', workingDir: '',
-      hostCaller: { kind: 'plugin', pluginId: 'installed-instance', dataOwnerId: 'owner', ownerGeneration: 1 } },
-    { query: vi.fn(), invoke: vi.fn() });
+      hostCaller: { kind: 'plugin', pluginId: 'installed-instance', dataOwnerId: 'owner', ownerGeneration: 1 } });
     expect(result).toMatchObject({ ok: true, mediaHash: createHash('sha256').update('text').digest('hex') });
     expect(host.ingest).toHaveBeenCalledWith(expect.objectContaining({ refs: [{ refKind: 'ghost-tool-grant', refId: 'installed-instance', originKind: 'tool' }],
       assertStillValid: expect.any(Function) }), host.db.drizzle);
@@ -119,11 +112,10 @@ describe('history attachment reader', () => {
     host.resolve.mockResolvedValueOnce({ absPath: '/fixture/shot.png', mimeType: 'image/png' });
     const context = { agentKind: 'codex' as const, workingDir: '',
       hostCaller: { kind: 'plugin' as const, pluginId: 'installed-instance', dataOwnerId: 'owner', ownerGeneration: 1 } };
-    const remote = { query: vi.fn(), invoke: vi.fn() };
-    const first = await readDesktopHistoryAttachment(args, context, remote);
+    const first = await readDesktopHistoryAttachment(args, context);
     expect(first).toMatchObject({ ok: true, mediaHash: expect.any(String), nextOffset: 2 });
     if (!first.ok || !('mediaHash' in first) || typeof first.mediaHash !== 'string') throw new Error('missing granted media');
-    const tail = await readDesktopHistoryAttachment({ ...args, offset: 2, mediaHash: first.mediaHash }, context, remote);
+    const tail = await readDesktopHistoryAttachment({ ...args, offset: 2, mediaHash: first.mediaHash }, context);
     expect(tail).toMatchObject({ ok: true, base64: 'eHQ=', nextOffset: null, sha256: first.sha256, size: 4 });
     expect(host.resolve).toHaveBeenCalledOnce();
     expect(host.bytes).toHaveBeenCalledOnce();
@@ -138,8 +130,7 @@ describe('history attachment reader', () => {
     host.queryOne.mockResolvedValueOnce({ role: 'user', content: { images: [{ url: 'cindy-media://blobs/source.png', originalName: 'shot.png' }] } });
     host.readChunk.mockClear();
     const result = await readDesktopHistoryAttachment({ ...args, mediaHash: 'a'.repeat(64) }, { agentKind: 'codex', workingDir: '',
-      hostCaller: { kind: 'plugin', pluginId: 'installed-instance', dataOwnerId: 'owner', ownerGeneration: 1 } },
-    { query: vi.fn(), invoke: vi.fn() });
+      hostCaller: { kind: 'plugin', pluginId: 'installed-instance', dataOwnerId: 'owner', ownerGeneration: 1 } });
     expect(result).toMatchObject({ ok: false, errorCode: 'ATTACHMENT_UNAVAILABLE' });
     expect(host.readChunk).not.toHaveBeenCalled();
   });
@@ -150,75 +141,20 @@ describe('history attachment reader', () => {
     host.plugin = true; host.queryOne.mockClear(); host.readChunk.mockClear(); host.close.mockClear();
     const result = await readDesktopHistoryAttachment({ ...args, offset: 2,
       attachment_ref: 'handoff:00000000-0000-4000-8000-000000000000' },
-    { agentKind: 'codex', workingDir: '', hostCaller: { kind: 'plugin', pluginId: 'installed-instance', dataOwnerId: 'owner', ownerGeneration: 1 } },
-    { query: vi.fn(), invoke: vi.fn() });
+    { agentKind: 'codex', workingDir: '', hostCaller: { kind: 'plugin', pluginId: 'installed-instance', dataOwnerId: 'owner', ownerGeneration: 1 } });
     expect(result).toMatchObject({ ok: true, base64: 'eHQ=', nextOffset: null, size: 4,
       sha256: createHash('sha256').update('text').digest('hex') });
     expect(host.queryOne).not.toHaveBeenCalled();
     expect(host.readChunk).toHaveBeenCalledWith(expect.any(Buffer), 0, 2, 2);
     expect(host.close).toHaveBeenCalledOnce();
   });
-  it.each([null, '12'])('resolves a remote message with source byte ceiling %s through the existing file channel', async ceiling => {
-    host.plugin = false;
-    const sourceUrl = 'xdt-file://attachment?path=remote-private' + (ceiling ? `&maxBytes=${ceiling}` : '');
-    const query = vi.fn(async () => ({ ok: true, url: sourceUrl, name: 'notes.txt', originKind: 'user' }));
-    const invoke = vi.fn();
-    const result = await readDesktopHistoryAttachment({ ...args, session_id: 'device::task' },
-      { agentKind: 'codex', workingDir: '', sessionId: 'ordinary' }, { query, invoke });
-    expect(query).toHaveBeenCalledWith('device', expect.objectContaining({ session_id: 'task', message_id: 'message' }));
-    expect(host.remoteFile).toHaveBeenCalledWith('device', `xdt-file://attachment?path=remote-private&maxBytes=${ceiling ?? 64 * 1024 * 1024}`,
-      expect.any(Function), expect.objectContaining({ maxBytes: 64 * 1024 * 1024, cacheFirst: false }));
-    expect(result).toMatchObject({ ok: true, base64: Buffer.from('re').toString('base64'), size: 6 });
-    expect(JSON.stringify(result)).not.toContain('remote-private');
-  });
-
-  // Unit, #9801: reject source metadata before the existing transfer service
-  // proceeds to peer/OSS bytes; the old maxBytes option did not constrain this path.
-  it.each(['xdt-file://attachment?path=remote-private', 'cindy-media://blobs/source.png'])(
-    'rejects oversized metadata before transferring any bytes from %s', async sourceUrl => {
-    host.plugin = false;
-    const transfer = vi.fn();
-    host.remoteFile.mockImplementationOnce(async (device, url, invoke) => {
-      await invoke(device, DL_MEDIA_FETCH_CHANNEL, [{ url, prepareOnly: true }]);
-      transfer();
-      return { inlineBase64: Buffer.from('remote').toString('base64'), mimeType: 'text/plain', ossKey: '', size: 6 };
-    });
-    const result = await readDesktopHistoryAttachment({ ...args, session_id: 'device::task' },
-      { agentKind: 'codex', workingDir: '', sessionId: 'ordinary' }, {
-        query: async () => ({ ok: true, url: sourceUrl, name: 'notes.txt', originKind: 'user' }),
-        invoke: vi.fn(async () => ({ ok: true as const, result: { size: 64 * 1024 * 1024 + 1, ossKey: '', mimeType: 'text/plain', transferRequired: true } })),
-      });
-    expect(result.ok).toBe(false);
-    expect(transfer).not.toHaveBeenCalled();
-    const request = host.remoteFile.mock.calls.at(-1)!;
-    if (sourceUrl.startsWith('xdt-file:'))
-      expect(new URL(request[1]).searchParams.get('maxBytes')).toBe(String(64 * 1024 * 1024));
-    else expect(request[1]).toBe(sourceUrl);
-    expect(request[3]).toMatchObject({ cacheFirst: false });
-  });
-
-  it('rejects malformed source constraints and mismatched transferred bytes before handing them off', async () => {
-    host.plugin = true; host.copy.mockClear(); host.remoteFile.mockClear();
-    const context = { agentKind: 'codex' as const, workingDir: '', hostCaller: {
-      kind: 'plugin' as const, pluginId: 'installed-instance', dataOwnerId: 'owner', ownerGeneration: 1 } };
-    const remote = { query: async () => ({ ok: true, url: 'xdt-file://attachment?path=remote-private&maxBytes=invalid', name: 'notes.txt', originKind: 'user' }), invoke: vi.fn() };
-    expect(await readDesktopHistoryAttachment({ ...args, session_id: 'device::task' }, context, remote))
-      .toMatchObject({ ok: false, errorCode: 'ATTACHMENT_UNAVAILABLE' });
-    expect(host.remoteFile).not.toHaveBeenCalled();
-    host.remoteFile.mockResolvedValueOnce({ inlineBase64: Buffer.from('short').toString('base64'), mimeType: 'text/plain', ossKey: '', size: 6 });
-    expect(await readDesktopHistoryAttachment({ ...args, session_id: 'device::task' }, context,
-      { ...remote, query: async () => ({ ok: true, url: 'cindy-media://blobs/source.txt', name: 'notes.txt', originKind: 'user' }) }))
-      .toMatchObject({ ok: false, errorCode: 'ATTACHMENT_UNAVAILABLE' });
+  it('rejects a remote task before accessing local files, receipts or the database', async () => {
+    host.queryOne.mockClear(); host.resolve.mockClear(); host.copy.mockClear(); host.readChunk.mockClear();
+    const result = await readDesktopHistoryAttachment({ ...args, session_id: 'device::task' }, undefined);
+    expect(result).toMatchObject({ ok: false, errorCode: 'UNSUPPORTED_CAPABILITY' });
+    expect(host.queryOne).not.toHaveBeenCalled();
+    expect(host.resolve).not.toHaveBeenCalled();
     expect(host.copy).not.toHaveBeenCalled();
-  });
-
-  // Unit/old-peer compatibility: valid new-tool input rejected by an old query registry
-  // means unsupported, while a missing registered attachment remains NOT_FOUND.
-  it.each([['INVALID_ARGS', 'REMOTE_UNSUPPORTED'], ['REMOTE_UNSUPPORTED_QUERY', 'REMOTE_UNSUPPORTED'],
-    ['NOT_FOUND', 'NOT_FOUND'], ['REMOTE_TIMEOUT', 'REMOTE_TIMEOUT']])('preserves remote attachment failure %s', async (remoteCode, expected) => {
-    host.plugin = false;
-    const result = await readDesktopHistoryAttachment({ ...args, session_id: 'device::task' }, { agentKind: 'codex', workingDir: '', sessionId: 'ordinary' },
-      { query: async () => ({ ok: false, errorCode: remoteCode }), invoke: vi.fn() });
-    expect(result).toMatchObject({ ok: false, errorCode: expected });
+    expect(host.readChunk).not.toHaveBeenCalled();
   });
 });

@@ -4,7 +4,6 @@ import {
   XdtHelperToolRegistry,
   registerListSessionsTool,
   registerListTeammatesTool,
-  registerReadSessionAttachmentTool,
   registerSearchChatHistoryTool,
   historyPayload,
   type XdtHelperHistoryDeps,
@@ -18,7 +17,7 @@ import { requireObject, throwIpcError } from '../../utils/ipcValidate.js';
 
 /** Reuse MCP's strict input validation and the exact same readers/formatters on the source host. */
 export function createHistoryQueryHandler(
-  deps: Pick<XdtHelperHistoryDeps, 'listSessions' | 'searchChatHistory' | 'listTeammates' | 'readSessionAttachment'>,
+  deps: Pick<XdtHelperHistoryDeps, 'listSessions' | 'searchChatHistory' | 'listTeammates'>,
 ) {
   const registry = new XdtHelperToolRegistry();
   const unsupported = async () => ({
@@ -33,11 +32,10 @@ export function createHistoryQueryHandler(
   };
   registerListSessionsTool(registry, { history });
   registerListTeammatesTool(registry, { history });
-  registerReadSessionAttachmentTool(registry, { history });
   registerSearchChatHistoryTool(registry, { history });
   return async (value: unknown) => {
     const request = requireObject(value, 'request');
-    if (request.tool !== 'list_sessions' && request.tool !== 'search_chat_history' && request.tool !== 'list_teammates' && request.tool !== 'read_session_attachment') {
+    if (request.tool !== 'list_sessions' && request.tool !== 'search_chat_history' && request.tool !== 'list_teammates') {
       throwIpcError('INVALID_PARAMS', 'Unsupported history query');
     }
     const args = requireObject(request.args, 'args');
@@ -59,9 +57,8 @@ export function createHistoryQueryHandler(
   };
 }
 
-export function registerHistoryQueryIpc(deps: Pick<XdtHelperHistoryDeps, 'readSessionAttachment'> = {}): void {
+export function registerHistoryQueryIpc(): void {
   const execute = createHistoryQueryHandler({
-    ...deps,
     listTeammates: async args => ({ ok: true, page: await readTeammateDirectory({ ...args, remoteVisibleOnly: true }) }),
     listSessions: async (args) => ({
       ok: true,

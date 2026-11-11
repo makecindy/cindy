@@ -5,7 +5,6 @@ import { ghostInstallApprovalToken } from '../../shared/ghost.js';
 import type { DataOwnerPushStamp } from '../../shared/dataOwnerPush.js';
 import { hasPluginHostToolGroupApproval } from './taskCapability.js';
 import { runPluginHostToolCall } from '../mcp-integrations/hostToolCaller.js';
-import { withPluginApprovalReads } from './pluginApprovalReadScope.js';
 
 export interface PluginHostToolPorts {
   getGhost(id: string): InstalledGhost | null;
@@ -20,11 +19,7 @@ export interface PluginHostToolPorts {
 const fail = (errorCode: string) => ({ isError: true, content: [{ type: 'text' as const, text: JSON.stringify({ ok: false, errorCode }) }] });
 
 /** Both logic pages and Node workers enter here with a Host-verified installation identity. */
-export function handlePluginHostToolRequest(id: string, payload: unknown, pageCurrent: () => boolean, ports: PluginHostToolPorts) {
-  return withPluginApprovalReads(() => handleRequest(id, payload, pageCurrent, ports));
-}
-
-async function handleRequest(id: string, payload: unknown, pageCurrent: () => boolean, ports: PluginHostToolPorts) {
+export async function handlePluginHostToolRequest(id: string, payload: unknown, pageCurrent: () => boolean, ports: PluginHostToolPorts) {
   if (!payload || typeof payload !== 'object' || Array.isArray(payload)) return fail('INVALID_PARAMS');
   const raw = payload as Partial<GhostPipeHostToolRequest>;
   if (raw.type !== 'host-tool-request' || typeof raw.tool !== 'string' || !/^[a-z][a-z0-9_:-]{0,127}$/.test(raw.tool) ||
@@ -70,7 +65,8 @@ async function handleRequest(id: string, payload: unknown, pageCurrent: () => bo
     return result;
   } catch (error) {
     return fail((error instanceof Error && error.message === 'PERMISSION_DENIED') || !current()
-      ? 'PERMISSION_DENIED' : 'HOST_TOOL_FAILED');
+      ? 'PERMISSION_DENIED' : error instanceof Error && error.message === 'UNSUPPORTED_CAPABILITY'
+        ? 'UNSUPPORTED_CAPABILITY' : 'HOST_TOOL_FAILED');
   } finally {
     if (!closeStarted) await runtime.close();
   }

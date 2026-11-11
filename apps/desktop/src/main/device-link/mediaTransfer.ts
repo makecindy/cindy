@@ -648,41 +648,7 @@ export interface DownloadResult {
 }
 
 /** 整文件下载到内存(用于小媒体物化;大视频走 openMediaStream 流式,勿用本函数)。 */
-export async function downloadToBuffer(key: string, maxBytes?: number): Promise<DownloadResult> {
-  if (maxBytes !== undefined) {
-    if (!Number.isSafeInteger(maxBytes) || maxBytes < 0) throw new Error('INVALID_MAX_BYTES');
-    const controller = new AbortController();
-    const wait = async <T>(pending: Promise<T>, timeout: number): Promise<T> => {
-      let timer: ReturnType<typeof setTimeout> | undefined;
-      try {
-        return await Promise.race([pending, new Promise<T>((_resolve, reject) => {
-          timer = setTimeout(() => {
-            const error = new Error('OSS_DOWNLOAD_STALLED');
-            controller.abort(error); reject(error);
-          }, timeout);
-        })]);
-      } finally { clearTimeout(timer); }
-    };
-    const response = await wait(openMediaStream(key, undefined, controller.signal), DOWNLOAD_START_TIMEOUT_MS);
-    const reader = response.body?.getReader();
-    if (!reader) return { bytes: Buffer.alloc(0), contentType: response.headers.get('content-type') };
-    try {
-      if (Number(response.headers.get('content-length')) > maxBytes) throw new Error('REMOTE_FILE_TOO_LARGE');
-      const chunks: Buffer[] = [];
-      let size = 0;
-      for (;;) {
-        const { done, value } = await wait(reader.read(), DOWNLOAD_STALL_TIMEOUT_MS);
-        if (done) break;
-        size += value.byteLength;
-        if (size > maxBytes) throw new Error('REMOTE_FILE_TOO_LARGE');
-        chunks.push(Buffer.from(value.buffer, value.byteOffset, value.byteLength));
-      }
-      return { bytes: Buffer.concat(chunks, size), contentType: response.headers.get('content-type') };
-    } catch (error) {
-      await reader.cancel().catch(() => {});
-      throw error;
-    } finally { reader.releaseLock(); }
-  }
+export async function downloadToBuffer(key: string): Promise<DownloadResult> {
   if (isAgentNetMediaReference(key)) { const response = await openThroughAgentNet(key); return { bytes: Buffer.from(await response.arrayBuffer()), contentType: response.headers.get('content-type') }; }
   const { getUrl } = await presignGet(key);
   const resp = await net.fetch(getUrl, { method: 'GET' });

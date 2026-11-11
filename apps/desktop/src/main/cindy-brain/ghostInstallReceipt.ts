@@ -2,7 +2,6 @@ import crypto from 'node:crypto';
 import fs from 'node:fs';
 import path from 'node:path';
 import { readBoundedFileNoFollow, readBoundedFileNoFollowSync } from '../utils/readBoundedFile.js';
-import { readPluginApprovalOnce } from './pluginApprovalReadScope.js';
 import { declaredGhostHostToolGroups, type GhostHostToolGroup, isValidPluginNamespace, isValidPluginResourceId } from '@cindy/plugin-protocol';
 import { validSimulatorMigration } from '../../shared/simulatorIdentityMigration.js';
 
@@ -389,30 +388,27 @@ export class GhostInstallReceiptStore {
   /** Recovery must not confuse transient state-root IO with missing/corrupt approval state. */
   readForRecovery(id: string): GhostInstallReceiptRecoveryReadResult {
     // Bind path construction and all containment checks to one resolved owner
-    // root for this read. Plugin calls share only a synchronous segment's read;
-    // every await and every ordinary caller opens and validates fresh bytes.
+    // root for this read. Every approval lookup opens and validates fresh bytes.
     const root = this.rootDir();
     const receiptPath = this.receiptPath(id, root);
-    return readPluginApprovalOnce<GhostInstallReceiptRecoveryReadResult>(this, receiptPath, () => {
-      let bytes: Buffer | null;
-      try {
-        if (!this.assertPathParentSync(receiptPath, false, root)) {
-          return { state: 'missing' };
-        }
-        bytes = readBoundedFileNoFollowSync(receiptPath, MAX_RECEIPT_BYTES, {
-          containWithin: fs.realpathSync(root),
-        });
-      } catch (error) {
-        if ((error as NodeJS.ErrnoException).code === 'ENOENT') {
-          return { state: 'missing' };
-        }
-        return {
-          state: 'unreadable',
-          reason: error instanceof Error ? error.message : String(error),
-        };
+    let bytes: Buffer | null;
+    try {
+      if (!this.assertPathParentSync(receiptPath, false, root)) {
+        return { state: 'missing' };
       }
-      return this.parseReceiptBytes(id, bytes);
-    });
+      bytes = readBoundedFileNoFollowSync(receiptPath, MAX_RECEIPT_BYTES, {
+        containWithin: fs.realpathSync(root),
+      });
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code === 'ENOENT') {
+        return { state: 'missing' };
+      }
+      return {
+        state: 'unreadable',
+        reason: error instanceof Error ? error.message : String(error),
+      };
+    }
+    return this.parseReceiptBytes(id, bytes);
   }
 
   private parseReceiptBytes(id: string, bytes: Buffer | null): Extract<GhostInstallReceiptReadResult, { state: 'approved' | 'invalid' }> {

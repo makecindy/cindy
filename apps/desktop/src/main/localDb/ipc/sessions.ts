@@ -480,11 +480,8 @@ export function broadcastSessionPatched(
   pagePermissionSessionChanged(sessionId, patch);
   const hasCapturedScope = ownerScope !== undefined && ownerScope !== null;
   const ownerStamp = hasCapturedScope ? ownerScope.ownerStamp : getSafeOwnerPushStamp();
-  if (hasTaskChangeListener('state') && !isProvisionalSession(sessionId) && (patch.status !== undefined || patch.hiddenAt !== undefined)) {
-    publishTaskChange({ kind: 'state', sessionId, state: {
-      ...(patch.status !== undefined ? { status: patch.status } : {}),
-      ...(patch.hiddenAt !== undefined ? { hiddenAt: patch.hiddenAt } : {}),
-    } }, ownerStamp);
+  if (hasTaskChangeListener('state') && !isProvisionalSession(sessionId) && patch.status !== undefined) {
+    publishTaskChange({ kind: 'state', sessionId, state: { status: patch.status } }, ownerStamp);
   }
   try {
     // 未发送任务只在本机可见，转正前不推给控制端。

@@ -426,12 +426,14 @@ DB 中下一条输入的 armed 值为 false 不代表原生执行已退出 Plan�
 `tasks.send` 与 `targets.send` 支持 `attachments?: Array<{base64:string,name?:string}>`。
 
 账号范围历史与附件读取使用独立声明的 `agent.hostTools:['history']` 和共用的 `cindy.host.call`。
-`list_teammates` 返回伙伴及保存的任务关系，`read_session_attachment` 按明确的任务、消息和附件序号读取，
+`list_teammates` 返回伙伴及保存的任务关系，`read_session_attachment` 按明确的本机任务、消息和附件序号读取，跨电脑返回 `UNSUPPORTED_CAPABILITY`，
 不接收任意路径；插件取件沿用媒体 grant 或文件 handoff，返回分块字节与摘要，不暴露宿主路径。
 媒体后续请求带回 `mediaHash`，复核当前插件的既有 grant 后，从总仓安全文件句柄只读取指定范围，不重复读取来源、计算整图摘要或入仓；未获 grant 的指纹不提供字节。
 完整历史导出由插件基于 `get_chat_history` 游标页组装。作者说明见[宿主工具调用](../../apps/desktop/resources/system-skills/cindy-plugin-creator/references/plugin-host-tools.md)。
 消息与任务状态订阅使用 `subscribe.topics` 中的 `message` / `task-state`，receipt 可选 `approvedEventTopics` 只记录明确批准。
-宿主消息保存和规范状态变化走同一事件源，花名册变化时重建 `GhostTaskEventIndex`；热路径只访问该 topic 的订阅者，零订阅不读目录、投影正文或唤醒进程。
+宿主消息保存和生命周期状态变化走同一事件源；`task-state` 不发高频进度、活动或仅隐藏状态的变化。
+花名册变化时重建 `GhostTaskEventIndex`；热路径只访问该 topic 的订阅者，零订阅不读目录、投影正文或唤醒进程。
+沿用逐事件投递、100 条熄灯队列和 `dropped`，不新增 timer 或进度折叠。
 投递与缓冲补投均核对当前安装、批准和 owner；断线补拉复用历史游标，不新增持久事件账本。
 插件先核对 `tasks.capabilities().messageAttachments`，无此能力时停止发送截图，不能静默丢图或回退文件路径。
 只接受插件自己提供的字节；不接受 Host 路径、URL、其他会话的媒体 URI 或自报 MIME。

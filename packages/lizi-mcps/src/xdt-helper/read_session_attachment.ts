@@ -13,7 +13,7 @@ export function registerReadSessionAttachmentTool(registry: XdtHelperToolRegistr
   if (!deps.history.readSessionAttachment) return;
   registry.register({
     name: 'read_session_attachment', category: 'history',
-    description: 'Read an attachment actually registered on a message, by zero-based index (images first, then files). Explicit session_id is required; deviceId::sessionId reads the source computer through the existing file channel. Returns bounded base64 chunks, name, MIME, size and SHA-256, never a host path. Continue with nextOffset and the returned mediaHash or attachment_ref, retaining the same source parameters. Plugins receive media grants or existing handoff receipts; expired refs must be obtained again. Export history in the plugin from get_chat_history cursor pages; no export endpoint is needed.',
+    description: 'Read a local attachment actually registered on a message, by zero-based index (images first, then files). Explicit session_id is required; remote attachments return UNSUPPORTED_CAPABILITY. Returns bounded base64 chunks, name, MIME, size and SHA-256, never a host path. Continue with nextOffset and the returned mediaHash or attachment_ref, retaining the same source parameters. Plugins receive media grants or existing handoff receipts; expired refs must be obtained again. Export history in the plugin from get_chat_history cursor pages; no export endpoint is needed.',
     inputShape: {
       session_id: z.string().min(1), message_id: z.string().min(1), attachment_index: z.number().int().min(0),
       offset: z.number().int().min(0).default(0), length: z.number().int().min(1).max(65536).default(65536),
@@ -21,6 +21,10 @@ export function registerReadSessionAttachmentTool(registry: XdtHelperToolRegistr
       mediaHash: z.string().regex(/^[0-9a-f]{64}$/).optional(),
     },
     handler: async args => {
+      const split = args.session_id.indexOf('::');
+      if (split > 0 && args.session_id.slice(0, split) !== 'local')
+        return errorPayload('UNSUPPORTED_CAPABILITY', 'Remote attachment reads are not supported.');
+      if (split > 0) args = { ...args, session_id: args.session_id.slice(split + 2) };
       const scope = await resolveHistoryScope(deps.history, deps.getSessionContext, [args.session_id]);
       if (!scope.ok) return errorPayload(scope.errorCode, scope.message);
       if (scope.deniedSessionIds.length) return errorPayload('HISTORY_SCOPE_DENIED', 'Attachment task is outside the current history scope.');

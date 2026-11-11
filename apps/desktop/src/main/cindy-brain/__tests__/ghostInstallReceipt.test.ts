@@ -165,9 +165,9 @@ describe('GhostInstallReceiptStore cleanup', () => {
     });
   }
 
-  // Unit, #9801 performance/security: exercise the shared gateway with real
-  // receipt IO. Existing reader cases did not count repeated synchronous reads.
-  it('deduplicates synchronous receipt IO only within a host call and rereads after awaits', async () => {
+  // Unit, #9801 scope reduction: every Host approval lookup reopens the receipt,
+  // including two lookups in one synchronous segment and queued revocation.
+  it('reads fresh receipt bytes throughout a host call without an authorization cache', async () => {
     const receipt = createSetupReceipt();
     receipt.manifest.agent = { hostTools: ['history'] };
     receipt.approvedHostToolGroups = ['history'];
@@ -192,11 +192,13 @@ describe('GhostInstallReceiptStore cleanup', () => {
       createRuntime: () => ({ describe: () => ({ name: 'list_sessions', category: 'history' }), close: async () => {},
         call: async () => {
           const caller = getPluginHostToolCaller()!;
+          const before = reads;
+          getGhost(); getGhost();
+          expect(reads - before).toBe(2);
           caller.assertCurrent(); caller.assertCurrent();
           await Promise.resolve();
           if (revoke === 'queued') {
-            // This callback was queued before this segment's first read. It
-            // runs before the cleanup microtask, but must observe revocation.
+            // A queued callback must observe revocation before any write.
             const pending = Promise.resolve().then(() => {
               const value = JSON.parse(fs.readFileSync(receiptPath, 'utf8')); value.enabled = false;
               fs.writeFileSync(receiptPath, JSON.stringify(value));
@@ -213,7 +215,6 @@ describe('GhostInstallReceiptStore cleanup', () => {
         } }),
     });
     expect(await call()).toMatchObject({ content: [{ text: '{"ok":true}' }] });
-    expect(reads).toBeLessThanOrEqual(8);
     const previous = reads;
     revoke = 'after-await';
     expect(await call()).toMatchObject({ isError: true, content: [{ text: expect.stringContaining('PERMISSION_DENIED') }] });

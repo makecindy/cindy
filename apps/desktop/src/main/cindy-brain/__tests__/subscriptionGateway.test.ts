@@ -315,57 +315,30 @@ describe('indexed task content and state events', () => {
   const subscriber = (): InstalledGhost => ({ ...ghost('reader', { topics: ['message', 'task-state'] }),
     approval: { state: 'approved', revision: 'r1' }, approvedEventTopics: ['message', 'task-state'] });
 
-  // Unit, #9801 performance: existing cold-queue tests do not constrain a running
-  // plugin's high-frequency notifications or preserve rapid terminal transitions.
-  it('batches saved events for 25ms, folding only consecutive progress within the same turn', async () => {
-    vi.useFakeTimers();
-    try {
-      const g = subscriber(), { gw, sent, running } = makeGateway({ findGhostForDelivery: () => g });
-      running.add('reader');
-      const index = new GhostTaskEventIndex(); index.replace([g], owner);
-      const state = (phase: string, progress = false, at = 1) => index.publish({ kind: 'state', sessionId: 'task', progress,
-        state: { activity: { phase, lastActivityAtMs: at } } }, owner, () => gw);
-      state('running'); state('running', true, 2); state('running', true, 3);
-      state('completed'); state('running'); state('needs-interaction'); state('error');
-      expect(sent).toHaveLength(0);
-      await vi.advanceTimersByTimeAsync(24); expect(sent).toHaveLength(0);
-      await vi.advanceTimersByTimeAsync(1);
-      expect(sent.map(item => (item.payload as any).data.state.activity.phase))
-        .toEqual(['running', 'running', 'completed', 'running', 'needs-interaction', 'error']);
-      expect(sent.map(item => (item.payload as any).seq)).toEqual([1, 3, 4, 5, 6, 7]);
-      expect((sent[1]!.payload as any).data.state.activity.lastActivityAtMs).toBe(3);
-      expect(vi.getTimerCount()).toBe(0);
-    } finally { vi.useRealTimers(); }
+  // Unit, #9801 scope reduction: lifecycle events reuse immediate delivery and
+  // the existing cold queue; they add no timer and must not fold a finished turn.
+  it('delivers running, completed and running immediately in order without a timer', () => {
+    const g = subscriber(), { gw, sent, running } = makeGateway({ findGhostForDelivery: () => g });
+    running.add('reader');
+    const index = new GhostTaskEventIndex(); index.replace([g], owner);
+    for (const phase of ['running', 'completed', 'running'])
+      index.publish({ kind: 'state', sessionId: 'task', state: { activity: { phase } } }, owner, () => gw);
+    expect(sent.map(item => (item.payload as any).data.state.activity.phase)).toEqual(['running', 'completed', 'running']);
+    expect(sent.map(item => (item.payload as any).seq)).toEqual([1, 2, 3]);
+    expect(vi.getTimerCount()).toBe(0);
   });
 
-  it('bounds a running plugin batch to 100, reports overflow and releases its timer on disable', async () => {
-    vi.useFakeTimers();
-    try {
-      const g = subscriber(), { gw, sent, running } = makeGateway({ findGhostForDelivery: () => g });
-      running.add('reader');
-      for (let n = 0; n < 103; n++) gw.publishIndexed([g], 'message', 'did-message-created', { sessionId: 'task', messageId: `${n}` });
-      expect(sent).toHaveLength(0); expect(vi.getTimerCount()).toBe(1);
-      await vi.advanceTimersByTimeAsync(25);
-      expect(sent).toHaveLength(100); expect(sent[0]!.payload).toMatchObject({ seq: 4, dropped: 3 });
-      gw.publishIndexed([g], 'message', 'did-message-created', { sessionId: 'task' });
-      expect(vi.getTimerCount()).toBe(1);
-      gw.dropGhost('reader'); expect(vi.getTimerCount()).toBe(0);
-      await vi.advanceTimersByTimeAsync(25); expect(sent).toHaveLength(100);
-    } finally { vi.useRealTimers(); }
-  });
-
-  // Unit, #9801 performance: failed cold starts must not turn a message burst
-  // into one runtime wake per event before the 25ms batch has elapsed.
-  it('starts a cold subscriber only after its batch window', async () => {
-    const g = subscriber(), wake = vi.fn(async () => { throw new Error('offline'); });
-    const { gw } = makeGateway({ findGhostForDelivery: () => g, wake });
-    for (let n = 0; n < 5; n++) {
-      gw.publishIndexed([g], 'message', 'did-message-created', { sessionId: 'task' });
-      await Promise.resolve();
-    }
-    expect(wake).not.toHaveBeenCalled();
-    await vi.advanceTimersByTimeAsync(25);
-    expect(wake).toHaveBeenCalledOnce();
+  it('uses the existing 100-event cold queue and dropped marker without a timer', async () => {
+    const g = subscriber();
+    let finishWake!: () => void;
+    const wake = vi.fn(() => new Promise<void>(resolve => { finishWake = resolve; }));
+    const { gw, sent, running } = makeGateway({ findGhostForDelivery: () => g, wake });
+    for (let n = 0; n < 103; n++) gw.publishIndexed([g], 'message', 'did-message-created', { sessionId: 'task', messageId: `${n}` });
+    expect(sent).toHaveLength(0); expect(wake).toHaveBeenCalledOnce();
+    expect(vi.getTimerCount()).toBe(0);
+    running.add('reader'); finishWake();
+    await new Promise<void>(resolve => setImmediate(resolve));
+    expect(sent).toHaveLength(100); expect(sent[0]!.payload).toMatchObject({ seq: 4, dropped: 3 });
     gw.dropGhost('reader'); expect(vi.getTimerCount()).toBe(0);
   });
 
@@ -376,7 +349,7 @@ describe('indexed task content and state events', () => {
     index.replace([g], owner);
     index.publish({ kind: 'message', sessionId: 'task', message: row }, owner, () => gw);
     index.publish({ kind: 'state', sessionId: 'task', state: { status: 'archived' } }, owner, () => gw);
-    await vi.advanceTimersByTimeAsync(25);
+    await new Promise<void>(resolve => setImmediate(resolve));
     expect(sent.map(item => item.payload.name)).toEqual(['did-message-created', 'did-task-state-changed']);
     const payload = sent[0]!.payload;
     if (!('data' in payload)) throw new Error('expected content event');
@@ -433,7 +406,7 @@ describe('indexed task content and state events', () => {
       live = { ...original, approval: { state: 'approved', revision: 'r2' } };
       index.replace([live], owner); finish({ rowid: 4 });
       await new Promise<void>(resolve => setImmediate(resolve));
-      await vi.advanceTimersByTimeAsync(25);
+      await new Promise<void>(resolve => setImmediate(resolve));
       expect(sent).toEqual([]);
       expect(vi.getTimerCount()).toBe(0);
     } finally { clearCurrentDbClient(); }
@@ -449,7 +422,7 @@ describe('indexed task content and state events', () => {
       sessionId: 'task', phase: 'running', attention: false, currentActionSummary: 'private command arguments',
       workflow: { key: 'title:private', label: 'private task title' },
     } } }, owner, () => gw);
-    await vi.advanceTimersByTimeAsync(25);
+    await new Promise<void>(resolve => setImmediate(resolve));
     expect(sent[0]!.payload).toMatchObject({ data: { state: { changedAtMs: 10, activity: { sessionId: 'task', phase: 'running', attention: false } } } });
     expect(JSON.stringify(sent)).not.toContain('private');
   });
@@ -461,7 +434,7 @@ describe('indexed task content and state events', () => {
     const { gw, sent, running } = makeGateway({ findGhostForDelivery: () => live,
       wake: () => new Promise<void>(resolve => { wake = resolve; }) });
     gw.publishIndexed([g], 'message', 'did-message-created', { sessionId: 'task', content: 'secret' });
-    await vi.advanceTimersByTimeAsync(25);
+    await new Promise<void>(resolve => setImmediate(resolve));
     live = change === 'uninstalled' ? null : { ...g,
       ...(change === 'revision' ? { approval: { state: 'approved', revision: 'r2' } } : {}),
       ...(change === 'revoked' ? { approvedEventTopics: [] } : {}),

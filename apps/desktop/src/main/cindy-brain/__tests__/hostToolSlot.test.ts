@@ -8,8 +8,7 @@ import { createGhostProductionCallbacks } from './ghostProductionCallbacksFixtur
 import { createGhostPageBridge } from '../../../shared/ghostPageBridge.js';
 import { createSchedulerMcpServer } from '@cindy/mcps';
 import { getDesktopMcpToolApprovalPolicy } from '../../maker-host/mcp-tool-approval-policy.js';
-import { withPluginSchedulerApproval, getApprovedPluginScheduleGuard, getPluginPreparedHookApproval } from '../pluginSchedulerApproval.js';
-import { Scheduler } from '@cindy/maker-scheduler';
+import { withPluginSchedulerApproval } from '../pluginSchedulerApproval.js';
 
 const uiPipe = createGhostProductionCallbacks<{
   send(event: { sender: { id: number; isDestroyed(): boolean } }, payload: unknown): Promise<unknown>;
@@ -178,20 +177,17 @@ describe('plugin scheduler command boundary', () => {
     const installed = vi.fn();
     const install = vi.fn(async () => {
       const prepared = { command: 'node /fixture/project/precheck.mjs', filePath: '/fixture/project/precheck.mjs', content: 'process.exit(0)' };
-      const approval = getPluginPreparedHookApproval();
-      if (approval) await approval(prepared);
       installed();
       return { ...prepared, test: { decision: 'run' as const, status: 'passed' as const, exitCode: 0, durationMs: 0,
         stdout: '', stderr: '', stdoutTruncated: false, stderrTruncated: false, timedOut: false, aborted: false } };
     });
-    let actualScheduler: Scheduler | undefined;
     const dialog = { showMessageBox: vi.fn(async (_parent: unknown, _options: Record<string, unknown>) => ({ response: allow ? 0 : 1 })) };
     const entry = production({
       handlePluginHostToolRequest, withPluginSchedulerApproval, getDesktopMcpToolApprovalPolicy,
       findGhostForInstanceId: () => f.ghost, getActiveDataOwnerPushStamp: f.ports.owner,
       createHostToolRuntime: (_server: string, caller: NonNullable<Parameters<typeof createSchedulerMcpServer>[1]>['hostCaller']) =>
-        createSchedulerMcpServer({ getScheduler: () => actualScheduler ?? ({ create, updateFromCurrent: update, runNow, resume, get }) as never,
-          authorizeCall: authorizePluginHostToolCall, getApprovedScheduleGuard: getApprovedPluginScheduleGuard,
+        createSchedulerMcpServer({ getScheduler: () => ({ create, updateFromCurrent: update, runNow, resume, get }) as never,
+          authorizeCall: authorizePluginHostToolCall,
           hookScript: { install } },
         { agentKind: 'codex', workingDir: '', hostCaller: caller }).hostTools,
       requestPluginTaskApproval: (id: string, active: () => boolean, _confirm: unknown, _explicit: boolean, capability: string) =>
@@ -203,21 +199,12 @@ describe('plugin scheduler command boundary', () => {
     const call = (tool: string, args: Record<string, unknown>) => entry.requestPluginHostToolCall('dashboard',
       { type: 'host-tool-request', server: 'cindy_scheduler', tool, args }, () => true);
     return { ...f, call, dialog, create, update, runNow, resume, get, installed,
-      useScheduler: (scheduler: Scheduler) => { actualScheduler = scheduler; },
-      setCommand: (value: string) => { schedule = { ...schedule, scriptConfig: { command: value, capabilities: [] } }; } };
+      setHook: () => { Object.assign(schedule, { preRunHook: { command } }); } };
   }
 
-  // Unit, #9801 performance/security: snapshots expire before an await resumes
-  // and never survive to another host.call, even if the receipt's revision is unchanged.
-  it('rechecks revocation after native confirmation and between separate calls', async () => {
-    const f = schedulerFixture();
-    f.dialog.showMessageBox.mockImplementationOnce(async () => {
-      f.ghost.approvedHostToolGroups = [];
-      return { response: 0 };
-    });
-    expect(code(await f.call('schedule_run_now', { id: 'automation' }) as never)).toBe('PERMISSION_DENIED');
-    expect(f.runNow).not.toHaveBeenCalled();
-    f.ghost.approvedHostToolGroups = ['history', 'control', 'scheduler'];
+  // Unit, #9801: group revocation must still stop ordinary non-shell schedules.
+  it('rechecks revocation between separate calls', async () => {
+    const f = schedulerFixture(false, true, false);
     await f.call('schedule_run_now', { id: 'automation' });
     expect(f.runNow).toHaveBeenCalledOnce();
     f.ghost.approvedHostToolGroups = [];
@@ -225,18 +212,15 @@ describe('plugin scheduler command boundary', () => {
     expect(f.runNow).toHaveBeenCalledOnce();
   });
 
-  it.each(['schedule_create', 'schedule_update', 'schedule_run_now', 'schedule_resume'] as const)('asks before browser plugin %s and refuses denied execution', async tool => {
-    for (const allow of [false, true]) {
-      const f = schedulerFixture(false, allow);
-      const args = tool === 'schedule_create' ? { name: 'Automation', executionMode: 'script', workingDir: '/fixture/project',
-        cronExpr: '0 9 * * *', timezone: 'UTC', recurring: true, agentKind: 'codex', notify: { desktop: false, feishu: false }, scriptConfig: { command } }
-        : tool === 'schedule_update' ? { id: 'automation', scriptConfig: { command } } : { id: 'automation' };
-      await f.call(tool, args);
-      expect(f.dialog.showMessageBox).toHaveBeenCalledOnce();
-      expect(f.dialog.showMessageBox.mock.calls[0]![1]).toMatchObject({ detail: expect.stringContaining(command) });
-      expect({ schedule_create: f.create, schedule_update: f.update, schedule_run_now: f.runNow, schedule_resume: f.resume }[tool]!)
-        .toHaveBeenCalledTimes(allow ? 1 : 0);
-    }
+  it.each(['schedule_create', 'schedule_update', 'schedule_run_now', 'schedule_resume'] as const)('rejects browser plugin %s of a script without executing or prompting', async tool => {
+    const f = schedulerFixture();
+    const args = tool === 'schedule_create' ? { name: 'Automation', executionMode: 'script', workingDir: '/fixture/project',
+      cronExpr: '0 9 * * *', timezone: 'UTC', recurring: true, agentKind: 'codex', notify: { desktop: false, feishu: false }, scriptConfig: { command } }
+      : tool === 'schedule_update' ? { id: 'automation', scriptConfig: { command } } : { id: 'automation' };
+    expect(code(await f.call(tool, args) as never)).toBe('UNSUPPORTED_CAPABILITY');
+    expect(f.dialog.showMessageBox).not.toHaveBeenCalled();
+    expect({ schedule_create: f.create, schedule_update: f.update, schedule_run_now: f.runNow, schedule_resume: f.resume }[tool]!)
+      .not.toHaveBeenCalled();
   });
 
   it.each(['schedule_create', 'schedule_run_now'] as const)('preserves approved node plugin %s without extra confirmation', async tool => {
@@ -248,33 +232,43 @@ describe('plugin scheduler command boundary', () => {
     expect(tool === 'schedule_create' ? f.create : f.runNow).toHaveBeenCalledOnce();
   });
 
-  it('keeps a non-shell browser run quiet while binding its existing mutation guard', async () => {
+  it.each(['schedule_update', 'schedule_run_now', 'schedule_resume'] as const)('keeps non-shell browser %s on the original scheduler handler', async tool => {
     const f = schedulerFixture(false, true, false);
-    await f.call('schedule_run_now', { id: 'automation' });
+    await f.call(tool, { id: 'automation', ...(tool === 'schedule_update' ? { recurring: true } : {}) });
     expect(f.dialog.showMessageBox).not.toHaveBeenCalled();
-    expect(f.runNow).toHaveBeenCalledWith('automation', { expectedSchedule: expect.objectContaining({ executionMode: 'agent' }) });
+    expect({ schedule_update: f.update, schedule_run_now: f.runNow, schedule_resume: f.resume }[tool]).toHaveBeenCalledOnce();
+    if (tool === 'schedule_run_now') expect(f.runNow).toHaveBeenCalledWith('automation', undefined);
   });
 
-  it('rejects a script changed during native confirmation through the real engine guard', async () => {
-    const f = schedulerFixture();
-    const insertRun = vi.fn(), fire = vi.fn();
-    f.useScheduler(new Scheduler({ storage: { get: f.get, insertRun } as never, runner: { fire } as never }));
-    f.dialog.showMessageBox.mockImplementationOnce(async () => { f.setCommand('printf changed'); return { response: 0 }; });
-    const result = await f.call('schedule_run_now', { id: 'automation' }) as { isError?: boolean; content: Array<{ text: string }> };
-    expect(result.isError).toBe(true);
-    expect(JSON.parse(result.content[0]!.text).message).toContain('Schedule changed');
-    expect(insertRun).not.toHaveBeenCalled();
-    expect(fire).not.toHaveBeenCalled();
+  it.each(['schedule_update', 'schedule_run_now', 'schedule_resume'] as const)('rejects a stored pre-run command during browser %s', async tool => {
+    const f = schedulerFixture(false, true, false);
+    f.setHook();
+    expect(code(await f.call(tool, { id: 'automation', ...(tool === 'schedule_update' ? { name: 'Renamed' } : {}) }) as never))
+      .toBe('UNSUPPORTED_CAPABILITY');
+    expect(f.get).toHaveBeenCalledOnce();
+    expect(f.update).not.toHaveBeenCalled(); expect(f.runNow).not.toHaveBeenCalled(); expect(f.resume).not.toHaveBeenCalled();
+    expect(f.dialog.showMessageBox).not.toHaveBeenCalled();
   });
 
-  it('declines a prepared hook before installation and preserves the permission error', async () => {
+  it.each(['schedule_create', 'schedule_update'] as const)('rejects a submitted pre-run command during browser %s', async tool => {
+    const f = schedulerFixture(false, true, false);
+    expect(code(await f.call(tool, { id: 'automation', preRunHook: { command } }) as never)).toBe('UNSUPPORTED_CAPABILITY');
+    expect(f.create).not.toHaveBeenCalled(); expect(f.update).not.toHaveBeenCalled();
+    expect(f.dialog.showMessageBox).not.toHaveBeenCalled();
+  });
+
+  it('rejects a recurring update that reactivates a stored script even without a command in the input', async () => {
     const f = schedulerFixture();
-    f.dialog.showMessageBox.mockResolvedValueOnce({ response: 0 }).mockResolvedValueOnce({ response: 1 });
-    const result = await f.call('schedule_set_pre_run_hook', { script: 'process.exit(0)', workingDir: '/fixture/project' }) as { isError?: boolean; content: Array<{ text: string }> };
-    expect(result.isError).toBe(true);
-    expect(JSON.parse(result.content[0]!.text).code).toBe('PERMISSION_DENIED');
+    expect(code(await f.call('schedule_update', { id: 'automation', recurring: true }) as never)).toBe('UNSUPPORTED_CAPABILITY');
+    expect(f.get).toHaveBeenCalledOnce();
+    expect(f.update).not.toHaveBeenCalled();
+    expect(f.dialog.showMessageBox).not.toHaveBeenCalled();
+  });
+
+  it('rejects hook preparation before generating, installing or prompting', async () => {
+    const f = schedulerFixture();
+    expect(code(await f.call('schedule_set_pre_run_hook', { script: 'process.exit(0)', workingDir: '/fixture/project' }) as never)).toBe('UNSUPPORTED_CAPABILITY');
     expect(f.installed).not.toHaveBeenCalled();
-    expect(f.dialog.showMessageBox.mock.calls[1]![1]).toMatchObject({ detail: expect.stringContaining('node /fixture/project/precheck.mjs') });
-    expect(f.dialog.showMessageBox.mock.calls[1]![1]).toMatchObject({ detail: expect.stringContaining('process.exit(0)') });
+    expect(f.dialog.showMessageBox).not.toHaveBeenCalled();
   });
 });

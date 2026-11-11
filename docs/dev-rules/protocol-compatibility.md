@@ -103,15 +103,15 @@ Ghost manifest、自建中转同步维护与 Review 清单。每项具体能力�
 - `subscribe.topics` 增量识别 `message` / `task-state`，事件名为 `did-message-created` / `did-task-state-changed`，复用现有管子事件封装。
   receipt 增量可选 `approvedEventTopics`，不改变版本；旧宿主保存的未知 topic 不自动获得批准，原有 topic 继续原行为。
   新消息事件只提供正文和附件位置，不提供宿主路径；`historyCursor` 复用 `get_chat_history` 编解码，序号不作为持久重放凭证。
-  新两种 topic 每插件 25ms 一批、队列最多 100 条，沿用逐条事件封装；只折叠连续非终态进度，生命周期转换保序，序号缺口可补拉、溢出标记 `dropped`。
+  `task-state` 只发布开始、结束、出错、等待权限/回答、排队、取消及归档/恢复/删除等生命周期变化，不发布高频进度、活动或仅隐藏状态的变化。
+  两种 topic 沿用逐事件投递、100 条熄灯队列和单调序号，不新增合批、折叠或 timer；序号缺口可补拉，溢出标记 `dropped`。
   无新跨设备 channel、轮询、事件持久化或中转协议；旧端可保留新声明但不投递。
   旧端拒绝未知查询时按既有远程错误报告，聚合结果保留 `partial`，不当成空目录。
   `list_sessions.hiddenAt` 为可选增量字段，旧响应缺失不推断隐藏；跨电脑伙伴目录中的任务关系使用 `deviceId::sessionId`，伙伴 id 保持原值。
 - `read_session_attachment` 的公开工具结果为分块 base64（最多 64 KiB）与内容摘要，插件媒体与普通文件分别复用 grant / handoff。
   可选 `mediaHash` 仅续读已交接给当前插件的媒体：复核既有 grant 后按范围读总仓字节，复用内容寻址摘要；普通文件继续使用 `attachment_ref`。不新增缓存、授权事实或路径字段，旧端不识别续读参数时仍可从原消息读取。
   普通文件续读复用原交接句柄的范围读取和首次交接摘要，不逐页重读整份副本；调用方组装后校验，副本变化或摘要不符时重新取源。
-  跨设备历史查询的同名操作仅为宿主之间解析指定消息的附件引用；接收宿主使用既有文件传输取字节后才生成公开结果，绝不把来源路径透给插件。
-  不增加 Device Link channel 或大字节控制帧；旧端拒绝该操作时明确报告不支持，不能当作附件为空。
+  仅支持本机任务；跨电脑返回 `UNSUPPORTED_CAPABILITY`，不加入跨设备历史查询、文件传输或 Device Link channel。
 
 ## 自建中转同步维护
 
