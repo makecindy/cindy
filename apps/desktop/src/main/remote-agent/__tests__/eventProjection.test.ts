@@ -1,6 +1,7 @@
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
+import { randomUUID } from 'node:crypto';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 
 import type { AgentEvent } from '@cindy/maker-core';
@@ -12,7 +13,7 @@ import { localTaskImagePath } from '../../cindy-media/taskImageMarkdown';
 import { collectOutboundAttachments } from '../../hook-control/outbound';
 import { mapClaudeHostedEvent } from '../controller/eventMap';
 import { createRemoteAgentHandle } from '../controller/proxyHandle';
-import type { RemoteAgentRunClient } from '../controller/runClient';
+import { RemoteAgentRunClient, type RemoteAgentPoller } from '../controller/runClient';
 import { RemoteExecutor } from '../executor/executor';
 import { ExecutorGate } from '../executor/gate';
 import { ExecutorWorkspace } from '../executor/workspace';
@@ -21,15 +22,15 @@ let root: string;
 beforeEach(() => { root = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'cindy-event-projection-'))); });
 afterEach(() => { fs.rmSync(root, { recursive: true, force: true }); });
 
-function setup(virtual: string, callWithId: () => Promise<void> = async () => undefined) {
+function setup(virtual: string, callWithId: () => Promise<void> = async () => undefined, client?: RemoteAgentRunClient) {
   const real = path.join(root, '真实 目录');
   fs.mkdirSync(real);
   const workspace = new ExecutorWorkspace({ workingDir: real, aliases: [{ from: virtual, to: real }] });
   workspace.setVirtualRoot(virtual);
   const controller = createRemoteAgentHandle({
-    client: { callWithId } as unknown as RemoteAgentRunClient,
+    client: client ?? { callWithId } as unknown as RemoteAgentRunClient,
     started: { id: 'sdk-1', agentKind: 'claude-code', model: 'm', shadowDir: virtual, virtualWorkspace: true, methods: [], state: {} },
-    workspace, mapEvent: mapClaudeHostedEvent, recordApproval: () => {}, newId: () => 'request-id', dispose: async () => {},
+    workspace, mapEvent: mapClaudeHostedEvent, recordApproval: () => {}, newId: client ? randomUUID : () => 'request-id', dispose: async () => {},
   });
   return { real, workspace, controller };
 }
@@ -47,6 +48,39 @@ async function eventsFrom(controller: ReturnType<typeof setup>['controller'], in
 // Unit regression: a quota terminal followed by a missing remote run must keep
 // the actionable error (and its reset time), rather than replacing it with EXPIRED.
 describe('remote terminal error ownership', () => {
+  // Unit regression: Session graceful Stop cancels SendOptions.signal before
+  // invoking the remote stop method. The real proxy + client must reject the
+  // unaccepted send locally; client-only abort tests miss this handoff.
+  it('keeps a cancelled preparation undispatched while allowing the next send', async () => {
+    const requests: unknown[] = [];
+    const client = new RemoteAgentRunClient(randomUUID(), {
+      async invoke(args: unknown[]) {
+        requests.push(args[0]);
+        const request = args[0] as { op: string; callId?: string };
+        if (request.op === 'call') client.onData(Buffer.from(`${JSON.stringify({
+          t: 'result', callId: request.callId, ok: true, value: null,
+        })}\n`), false);
+        return {};
+      },
+      unregister() {},
+    } as unknown as RemoteAgentPoller, {
+      onEvent() {}, onState() {}, onWs() {}, onClosed() {},
+      onRequest: async () => ({ type: 'callback', value: null }),
+    }, randomUUID);
+    const { controller } = setup('/remote/workspace', undefined, client);
+    const abort = new AbortController();
+    abort.abort();
+    await expect(controller.handle.send({ type: 'user', content: 'x'.repeat(70 * 1024) },
+      { signal: abort.signal })).rejects.toMatchObject({ name: 'AbortError' });
+    expect(requests).toEqual([]);
+    expect(client.hasPendingWork).toBe(false);
+    expect(controller.isQuiet()).toBe(true);
+    await expect(controller.handle.send({ type: 'user', content: 'fresh message' })).resolves.toBeUndefined();
+    expect(requests).toHaveLength(1);
+    client.abandon('fixture-complete');
+    controller.onClosed('closed');
+  });
+
   // Unit regression: local in-flight tracking must not turn a rejected send into
   // a restart candidate, or acknowledge an uncertain steer as delivered.
   it('leaves a rejected send idle and does not manufacture a restart continuation', async () => {

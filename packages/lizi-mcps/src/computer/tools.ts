@@ -308,12 +308,15 @@ const COMPUTER_TOOL_DEFINITIONS: readonly ComputerToolDef[] = [
   },
   {
     name: 'scroll',
-    description: 'Scroll a target element or window-local coordinate.',
+    description:
+      'Scroll a target element or a point from the latest window screenshot. For nested Windows web scrollers, use x/y: an element without a UIA scroll action can fall back to the window center. Supply both x and y with an exact window_id, without element_index/element_token. Coordinates use the returned screenshot pixels, not screen coordinates. Inspect the result with observe:{}; delivery alone does not confirm scrolling.',
     inputShape: {
       pid: z.number().int().positive(),
       window_id: z.number().int().nonnegative().optional(),
       element_index: z.number().int().nonnegative().optional(),
       element_token: ELEMENT_TOKEN_ARG,
+      x: z.number().optional(),
+      y: z.number().optional(),
       delivery_mode: z.enum(['background', 'foreground']).optional(),
       direction: z.enum(['up', 'down', 'left', 'right']),
       amount: z.number().int().min(1).max(50).optional(),
