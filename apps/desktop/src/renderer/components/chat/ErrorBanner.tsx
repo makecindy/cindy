@@ -364,7 +364,11 @@ export function ErrorBanner({
     recoveryHint: isOpenAiAuthFailure ? { reason: error } : undefined,
   });
   const openAiConnectionRecoveredSinceError =
-    isOpenAiAuthFailure && (independentOpenAiAccount ? selectedOpenAiAccount?.connected === true : isChatGptConnectionConnected(openAiAuthState, false));
+    isOpenAiAuthFailure && (independentOpenAiAccount
+      // A generic 401 need not invalidate the account's local connected snapshot.
+      // Only the existing explicit-invalidation flow can use that marker clearing.
+      ? isOpenAiConnectionExpired && selectedOpenAiAccount?.connected === true
+      : isChatGptConnectionConnected(openAiAuthState, false));
   const openAiReconnectRequired = isOpenAiConnectionExpired && !openAiConnectionRecoveredSinceError;
   const openAiAuthLoading = openAiAuthState.kind === 'loading';
   const openAiLoginPending = openAiAuthState.kind === 'login-pending';
@@ -458,7 +462,9 @@ export function ErrorBanner({
     isOversizedHistoryError ||
     (isCodexRemoteAuthMissing && !syncedSinceError) ||
     openAiReconnectRequired ||
-    (isCodexLocalOAuthAuthMissing && !openAiConnectionRecoveredSinceError);
+    // Independent generic failures have no verified recovery signal. Keep a manual
+    // retry alongside settings, without claiming that cached credentials recovered.
+    (isCodexLocalOAuthAuthMissing && !independentOpenAiAccount && !openAiConnectionRecoveredSinceError);
   const safeRetryText = !hideRetry && retryText ? retryText : null;
   const retryAction = safeRetryText
     ? () => onRetry(safeRetryText)

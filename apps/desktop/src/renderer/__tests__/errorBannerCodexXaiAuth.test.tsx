@@ -40,7 +40,7 @@ vi.mock('@/hooks/useCodexRuntimeRoute', () => ({
 
 vi.mock('@/hooks/useProviders', () => ({
   useProviders: () => ({
-    providers: [{ id: 'work-openai', name: 'Work account', auth: { method: 'oauth', native: 'codex' } }],
+    providers: [{ id: 'work-openai', name: 'Work account', connected: true, auth: { method: 'oauth', native: 'codex' } }],
     refetch: vi.fn(),
   }),
 }));
@@ -112,9 +112,18 @@ describe('ErrorBanner Codex xAI auth classification', () => {
   ])(
     'offers the failed connection even after runtime fallback: %s / %s', (error, failedProvider) => {
       useCodexRuntimeRouteMock.mockReturnValue({ authInjection: 'env-key' });
+      const onRetry = vi.fn();
       render(<ErrorBanner error={error} agentKind="codex" providerId="xai"
-        errorSourceProviderId={failedProvider} onRetry={vi.fn()} retryText="original" />);
-      expect(screen.queryByTitle('chat.errorBanner.retryTitle')).toBeNull();
+        errorSourceProviderId={failedProvider} onRetry={onRetry} retryText="original" />);
+      // An independent account's cached connected flag is not recovery evidence.
+      // Keep settings available and allow a manual retry without claiming recovery.
+      expect(screen.queryByText('chatgptAuthRecovery.recovered')).toBeNull();
+      if (failedProvider === 'work-openai') {
+        fireEvent.click(screen.getByTitle('chat.errorBanner.retryTitle'));
+        expect(onRetry).toHaveBeenCalledWith('original');
+      } else {
+        expect(screen.queryByTitle('chat.errorBanner.retryTitle')).toBeNull();
+      }
       fireEvent.click(screen.getByRole('button', { name: 'logic.confirm.goToSettings' }));
       expect(screen.getByTestId('location').textContent).toBe(`/settings?tab=providers&connect=${failedProvider}`);
     },
