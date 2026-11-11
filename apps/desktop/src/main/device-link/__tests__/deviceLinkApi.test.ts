@@ -126,6 +126,25 @@ describe('deviceLinkApiFetch', () => {
     expect(String((error as Error)?.message ?? error)).toContain('aborted');
   });
 
+  // 混合发现里一条腿卡到**调用方的总期限**时,不能把另一条已经读成的腿一起拖掉:中止错误
+  // 不带 code / status,`isTemporaryProviderMetadataFailure` 认不出来,健康的那条线路会跟着
+  // 变得不可用(Codex review #9360「Classify deadline aborts before hybrid fallback」)。
+  // 最小失败输入:V2 激活 + V2 腿成立 + 旧版 REST 腿挂到调用方 abort。tier:unit(真实
+  // deviceLinkApi + 真实 readCurrentDeviceDirectory,electron net / agent-net 运行时为 fake)。
+  it('keeps the fulfilled leg when the peer leg reaches the caller deadline', async () => {
+    mocks.v2Active = true; mocks.onlyEncrypted = false;
+    mocks.v2Directory.mockResolvedValue([{ certificate: { deviceId: 'v2-peer' }, name: 'V2 Peer', online: true }]);
+    mocks.netFetch.mockImplementation((_url: string, opts: RequestInit) => new Promise((_resolve, reject) => {
+      opts.signal?.addEventListener('abort', () => reject(opts.signal!.reason), { once: true });
+    }));
+    const controller = new AbortController();
+    const pending = deviceLinkApiFetch<{ devices: Array<{ deviceId: string }> }>('/api/device-link/devices', { signal: controller.signal });
+    await vi.waitFor(() => expect(mocks.v2Directory).toHaveBeenCalledTimes(1));
+    controller.abort(Object.assign(new Error('设备目录读取超时'), { name: 'TimeoutError' }));
+    const result = await pending;
+    expect(result.devices.map((device) => device.deviceId)).toEqual(['v2-peer']);
+  });
+
   // /models 复用真实目录读取与 API 路由；旧 caller 直接用 serverApiFetch 会把官方 token 发到自建中转。
   // 最小输入为自建路由 + 空设备目录，不能仅 mock 新 helper，否则会漏掉 caller 未迁移的问题。tier: unit。
   it('uses the relay credential when the local Agent reads its remote model directory', async () => {

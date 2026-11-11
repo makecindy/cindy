@@ -21,6 +21,17 @@ export function projectAgentNetDevice(device: AgentNetDeviceView, selfId: string
   };
 }
 
+/**
+ * 一次**期限**到点的中止不是权威拒绝:调用方的总期限到了,或者这一腿自己的传输超时。
+ * 中止错误不带 code / status,`isTemporaryProviderMetadataFailure` 认不出来 —— 于是一条腿
+ * 卡到期限会把另一条已经读成的腿一起拖掉:健康的线路在同伴卡住时变得不可用
+ * (Codex review #9360「Classify deadline aborts before hybrid fallback」)。
+ */
+function isDeadlineAbort(error: unknown): boolean {
+  const name = (error as { name?: unknown } | null | undefined)?.name;
+  return name === 'AbortError' || name === 'TimeoutError';
+}
+
 /** V1 presence cannot describe a peer that has disconnected V1 to use only V2. */
 export async function readCurrentDeviceDirectory(
   readLegacy: () => Promise<{ devices: DeviceView[] }>,
@@ -61,8 +72,11 @@ export async function readCurrentDeviceDirectory(
   assertCurrent();
   // Only transient transport failures can use the other live directory. Never
   // hide a membership denial, invalid certificate or account boundary as fallback.
-  if (encrypted.status === 'rejected' && !isTemporaryProviderMetadataFailure(encrypted.reason)) throw encrypted.reason;
-  if (legacy.status === 'rejected' && !isTemporaryProviderMetadataFailure(legacy.reason)) throw legacy.reason;
+  // 期限到点的中止按**暂时性**失败处理:两条腿里只要有一条读成了,就用那条结果。
+  const legIsTemporary = (reason: unknown): boolean =>
+    isTemporaryProviderMetadataFailure(reason) || isDeadlineAbort(reason);
+  if (encrypted.status === 'rejected' && !legIsTemporary(encrypted.reason)) throw encrypted.reason;
+  if (legacy.status === 'rejected' && !legIsTemporary(legacy.reason)) throw legacy.reason;
   if (encrypted.status === 'rejected') {
     if (legacy.status === 'rejected') throw encrypted.reason;
     return legacy.value;
