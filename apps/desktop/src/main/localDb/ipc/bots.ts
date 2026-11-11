@@ -310,7 +310,7 @@ export async function createBotCanonicalSession(
 }
 
 export type EnsureBotGroupLaneResult =
-  | { ok: true; sessionId: string; created: boolean }
+  | { ok: true; sessionId: string; created: boolean; replacedSessionId?: string }
   | { ok: false; errorCode: 'MEMBER_UNAVAILABLE' | 'NO_MODEL'; message: string };
 
 /**
@@ -327,6 +327,10 @@ export type EnsureBotGroupLaneResult =
  *
  * With `talkPlanId` (server groups only), the Bot's own lane for that queue: like a Thread
  * lane, it talks in the group lane's place with its own context; no project folder.
+ *
+ * With `projectDir` (the group's project folder on this computer), a V2 teammate's group and
+ * Thread lanes work in that folder instead of the Home workspace, like an ordinary task there
+ * (bot-group-chat.md §7.5). A lane created for another folder is archived and replaced.
  */
 export async function ensureBotGroupLaneSession(input: {
   botId: string;
@@ -337,6 +341,7 @@ export async function ensureBotGroupLaneSession(input: {
   threadRootId?: string;
   talkPlanId?: string;
   personalDigest?: boolean;
+  projectDir?: string;
 }): Promise<EnsureBotGroupLaneResult> {
   const owner = captureBotOperationOwner();
   const client = getDbClient();
@@ -349,7 +354,7 @@ export async function ensureBotGroupLaneSession(input: {
     : input.chatAccess && input.threadRootId ? chatGroupThreadRouteKey(input.groupId, input.chatAccess, input.threadRootId)
     : input.chatAccess ? chatGroupLaneRouteKey(input.groupId, input.chatAccess) : botGroupLaneRouteKey(input.groupId);
   const [existing] = await db
-    .select({ sessionId: botSessionLinks.sessionId })
+    .select({ sessionId: botSessionLinks.sessionId, workingDir: sessions.workingDir, projectDir: sessions.projectDir })
     .from(botSessionLinks)
     .innerJoin(sessions, eq(sessions.id, botSessionLinks.sessionId))
     .where(and(
@@ -361,7 +366,15 @@ export async function ensureBotGroupLaneSession(input: {
       eq(sessions.status, 'active'),
     ))
     .limit(1);
-  if (existing) {
+  // Only a group or Thread lane with real access follows the group's project folder.
+  const followsProject = !input.plan && !input.talkPlanId && !input.personalDigest
+    && input.chatAccess && input.chatAccess.mode !== 'chat' && !input.chatAccess.maskOwnerId;
+  const projectLane = (row: { workingDir: string | null; projectDir: string | null }) =>
+    !!row.projectDir && row.workingDir === row.projectDir && isGroupProjectLaneDir(owner.userDataDir, input.botId, row.workingDir);
+  const wantedProject = followsProject && input.projectDir && await readTeammateProjectMode(input.botId) ? input.projectDir : null;
+  const moves = !!existing && followsProject
+    && (wantedProject ? existing.workingDir !== wantedProject : projectLane(existing));
+  if (existing && !moves) {
     await syncBotLanePermission(existing.sessionId);
     owner.assertCurrent();
     return { ok: true, sessionId: existing.sessionId, created: false };
@@ -382,10 +395,10 @@ export async function ensureBotGroupLaneSession(input: {
   const config = parseJson(profileVersion.capabilitiesJson);
   const primaryRoute = (await readEffectiveBotModelChain(config))[0] ?? null;
   if (!primaryRoute) return { ok: false, errorCode: 'NO_MODEL', message: '伙伴还没有可用模型' };
-  const workspaceKind = input.plan && input.chatAccess?.mode !== 'chat' ? ('project' as const) : ('dialogue' as const);
+  const workspaceKind = (input.plan || wantedProject) && input.chatAccess?.mode !== 'chat' ? ('project' as const) : ('dialogue' as const);
   const workingDir = input.chatAccess?.mode === 'chat'
     ? await ensureBotChatOnlyWorkspaceDir(owner.userDataDir, input.botId, groupLaneOfRouteKey(routeKey))
-    : input.plan ? input.plan.workDir : await ensureBotWorkspaceDir(owner.userDataDir, input.botId, app.getPath('userData'));
+    : input.plan ? input.plan.workDir : wantedProject ?? await ensureBotWorkspaceDir(owner.userDataDir, input.botId, app.getPath('userData'));
   const now = Date.now();
   const sessionId = resolveBusinessSessionId(input.plan?.sessionId);
   const row = {
@@ -394,6 +407,7 @@ export async function ensureBotGroupLaneSession(input: {
       {
         workspaceKind,
         workingDir,
+        ...(wantedProject ? { projectDir: wantedProject } : {}),
         ...botSessionRouteFields(config, primaryRoute),
         remoteHostId: undefined,
         source: 'bot',
@@ -417,10 +431,12 @@ export async function ensureBotGroupLaneSession(input: {
     botId: input.botId,
     groupId: input.groupId,
     routeKey,
+    ...(moves ? { replaceOtherWorkingDir: true } : {}),
     session: {
       id: row.id,
       title: row.title,
       workingDir: row.workingDir ?? null,
+      ...(row.projectDir ? { projectDir: row.projectDir } : {}),
       workspaceKind: row.workspaceKind,
       model: row.model,
       effort: row.effort,
@@ -441,7 +457,16 @@ export async function ensureBotGroupLaneSession(input: {
     await syncBotLinkedLanePermissions(result.permissionRepairCanonicalSessionId);
     owner.assertCurrent();
   }
-  return { ok: true, sessionId: result.sessionId, created: result.created };
+  return { ok: true, sessionId: result.sessionId, created: result.created,
+    ...(result.replacedSessionId ? { replacedSessionId: result.replacedSessionId } : {}) };
+}
+
+/** A group lane recorded in a project folder rather than the teammate's own Home. */
+function isGroupProjectLaneDir(userDataDir: string, botId: string, workingDir: string | null): boolean {
+  if (!workingDir) return false;
+  const home = path.resolve(botProfileDir(userDataDir, botId));
+  const resolved = path.resolve(workingDir);
+  return resolved !== home && !resolved.startsWith(home + path.sep);
 }
 
 export type EnsureBotChannelLaneResult =

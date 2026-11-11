@@ -7,7 +7,7 @@ import { afterEach, beforeEach, expect, it, vi } from 'vitest';
 import { ChatGroupSettings } from '../ChatGroupSettings';
 import { BotSettingsDrawer } from '../BotSettingsDrawer';
 import type { BotGroupSummary } from '../../../../shared/botGroupChat';
-const mocks = vi.hoisted(() => ({ manage: vi.fn(), ownedBots: vi.fn(), refresh: vi.fn(), confirm: vi.fn(), toastSuccess: vi.fn(), toastError: vi.fn() }));
+const mocks = vi.hoisted(() => ({ manage: vi.fn(), updateBotGroup: vi.fn(async () => ({ ok: true })), ownedBots: vi.fn(), refresh: vi.fn(), confirm: vi.fn(), toastSuccess: vi.fn(), toastError: vi.fn() }));
 const profiles = vi.hoisted(() => ({
   list: [{ id: 'bot', name: 'Partner', status: 'active', sessions: [] as Array<{ id: string }>, capabilities: {}, skills: [] as string[] }],
 }));
@@ -187,7 +187,7 @@ beforeEach(() => {
   profiles.list = [activeProfile('bot', 'Partner')];
   vi.clearAllMocks(); mocks.manage.mockResolvedValue({ ok: true }); mocks.ownedBots.mockResolvedValue({ ok: true, bots: [] });
   mocks.confirm.mockResolvedValue(true);
-  Object.defineProperty(window, 'electronAPI', { configurable: true, value: { maker: { chatServer: mocks } } });
+  Object.defineProperty(window, 'electronAPI', { configurable: true, value: { maker: { chatServer: mocks, updateBotGroup: mocks.updateBotGroup } } });
 });
 function LocationProbe() {
   const location = useLocation();
@@ -310,7 +310,7 @@ it('keeps reply mode and 分工 settings for single-speaker groups and saves men
   renderAt({ ...group(true), singleSpeaker: true, replyMode: 'all', speakingMode: 'auto', topic: 'Topic' }, 'manage');
   expect(screen.queryByRole('combobox', { name: 'bots.groupChat.settings.speakingMode' })).toBeNull();
   expect(screen.getByRole('combobox', { name: 'bots.groupChat.organizer' })).toBeTruthy();
-  expect(screen.getByText('bots.groupChat.settings.projectDir')).toBeTruthy();
+  expect(screen.getByText(key('projectFolder'))).toBeTruthy();
   fireEvent.click(screen.getByRole('combobox', { name: 'bots.groupChat.settings.replyMode' }));
   fireEvent.click(screen.getByRole('option', { name: 'bots.groupChat.settings.replyModeMentioned' }));
   await waitFor(() => expect(mocks.manage).toHaveBeenCalledWith({ groupId: 'room', action: {
@@ -318,6 +318,20 @@ it('keeps reply mode and 分工 settings for single-speaker groups and saves men
   } }));
   expect(mocks.refresh).toHaveBeenCalledOnce();
   expect(screen.getByRole('combobox', { name: 'bots.groupChat.settings.replyMode' }).textContent).toContain('bots.groupChat.settings.replyModeMentioned');
+});
+
+// bot-group-chat.md §7.5: the group's repository is saved with the group; a pasted URL is reduced to owner/name.
+it('saves the group repository from the project section', async () => {
+  renderAt({ ...group(true), supportsGroupProject: true, project: null }, 'manage');
+  const input = screen.getByRole('textbox', { name: key('githubRepo') });
+  fireEvent.focus(input);
+  fireEvent.change(input, { target: { value: 'https://github.com/makecindy/cindy.git' } });
+  fireEvent.blur(input);
+  await waitFor(() => expect(mocks.updateBotGroup).toHaveBeenCalledWith({ groupId: 'room', githubRepo: 'makecindy/cindy' }));
+  fireEvent.focus(input);
+  fireEvent.change(input, { target: { value: 'not a repo' } });
+  fireEvent.blur(input);
+  expect(mocks.updateBotGroup).toHaveBeenCalledOnce();
 });
 
 it('does not offer leaving when this account owns every group owner, including its companion', () => {

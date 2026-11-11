@@ -27,3 +27,32 @@ export function chatServerWorkspaces(endpoint: string, actorId: string, current:
     },
   };
 }
+
+/** `owner/name` of a GitHub remote URL (HTTPS, SSH or scp form), or null for any other remote. */
+export function githubRepositoryOfRemote(url: string): string | null {
+  const match = /^(?:https?:\/\/(?:[^@/\s]+@)?github\.com\/|ssh:\/\/git@github\.com(?::\d+)?\/|git@github\.com:)([^/\s]+\/[^/\s]+?)(?:\.git)?\/?$/i
+    .exec(url.trim());
+  return match ? match[1]! : null;
+}
+
+/**
+ * Registered project folders that are checkouts of `repo` (their `origin`), main checkouts only:
+ * a linked worktree (`.git` is a file) or a folder inside another match is the same project.
+ */
+export async function findRepositoryFolders(dirs: readonly string[], repo: string, read: {
+  origin(dir: string): Promise<string | null>;
+  isMainCheckout(dir: string): Promise<boolean>;
+}): Promise<string[]> {
+  const wanted = repo.toLowerCase();
+  const matches: string[] = [];
+  for (let start = 0; start < dirs.length; start += 8) {
+    const batch = dirs.slice(start, start + 8);
+    const found = await Promise.all(batch.map(async dir => {
+      const origin = await read.origin(dir).catch(() => null);
+      return origin && githubRepositoryOfRemote(origin)?.toLowerCase() === wanted && await read.isMainCheckout(dir).catch(() => false) ? dir : null;
+    }));
+    for (const dir of found) if (dir) matches.push(path.resolve(dir));
+  }
+  const unique = [...new Set(matches)];
+  return unique.filter(dir => !unique.some(other => other !== dir && dir.startsWith(other + path.sep)));
+}

@@ -68,6 +68,7 @@ import { createChatHistory, type ChatHistory } from '@cindy/maker-shared/chat-hi
 import { createOthersReadOverlay, isReadByOthers, parseReadReceiptFrame, projectMessageReaders } from '@cindy/maker-shared/chat-read-receipts';
 import { readAllRoomMessages } from '../companion-cloud/room.js';
 import type { ChatMaskState, ChatMaskSettings, ChatMaskMention } from '../../shared/botGroupChat.js';
+import { isGithubRepository } from '../../shared/cindyMakePersonalRemote.js';
 
 interface Actor { id: string; kind: string; externalId: string; name: string; avatar?: string | null; avatarSource?: string | null; homeDeviceId?: string | null; disabled?: boolean }
 interface Member { id: string; kind: 'human' | 'bot' | 'integration'; name: string; state: string; role: 'owner' | 'admin' | 'member' | 'guest';
@@ -84,6 +85,8 @@ interface Message {
 interface Room {
   id: string; name: string; topic: string; description: string; response_mode: 'all' | 'mentioned'; speaking_mode: 'auto' | 'sequential';
   allow_mention_all_bots?: boolean; created_at: string; updated_at: string; revision: number; archived: boolean; dissolved_at?: string | null; organizer_id?: string | null; kind?: string;
+  /** The group's shared project (servers with `groupProject`); each computer keeps its own folder. */
+  project?: { kind: 'github'; repo: string } | null;
 }
 /**
  * `reads`: this reader's read position per Thread (`thread_key` = root ID, `main` for the main timeline); older servers omit it.
@@ -477,6 +480,30 @@ function createChatServer(local: BotGroupChatService, deps: BotGroupChatServiceD
   let personalMaskTools = false;
   /** One teammate per request; several take turns on an arrangement (server capability groupSingleSpeaker). */
   let singleSpeaker = false;
+  /** The server keeps a group's shared GitHub project (capability groupProject). */
+  let supportsGroupProject = false;
+  // Registered project folders whose origin is a repository, briefly cached: settings reads and
+  // every group reply resolve the folder, and each lookup reads the git remotes of local projects.
+  const repositoryFolders = new Map<string, { at: number; dir: Promise<string | null> }>();
+  function repositoryFolder(repo: string): Promise<string | null> {
+    const key = repo.toLowerCase();
+    const cached = repositoryFolders.get(key);
+    if (cached && Date.now() - cached.at < 5 * 60_000) return cached.dir;
+    const dir = (deps.findProjectDirsForRepo?.(repo) ?? Promise.resolve([]))
+      .then(dirs => dirs.length === 1 ? dirs[0]! : null, () => null);
+    repositoryFolders.set(key, { at: Date.now(), dir });
+    return dir;
+  }
+  /**
+   * The group's project folder on this computer: the folder chosen here, else the one registered
+   * project whose git origin is the group's repository (bot-group-chat.md §7.5).
+   */
+  async function groupProjectFolder(room: Room): Promise<{ dir: string | null; auto: boolean }> {
+    const chosen = workspaces().read(room.id)?.projectDir ?? null;
+    if (chosen) return { dir: chosen, auto: false };
+    const repo = room.project?.kind === 'github' ? room.project.repo : null;
+    return { dir: repo ? await repositoryFolder(repo) : null, auto: true };
+  }
   const pendingPlanCancels = new Map<string, Map<string, boolean>>();
   async function cancelPlanning(roomId: string, sourceId: string, failed = false) {
     if (!groupDiscussionParity) return;
@@ -978,6 +1005,7 @@ function createChatServer(local: BotGroupChatService, deps: BotGroupChatServiceD
       supportsMentionAudiences = me.capabilities?.groupMentionAudiences === 1;
       groupDiscussionParity = me.capabilities?.groupDiscussionParity === 1;
       singleSpeaker = me.capabilities?.groupSingleSpeaker === 1;
+      supportsGroupProject = (me.capabilities as { groupProject?: number } | undefined)?.groupProject === 1;
       // The read-only probe covers ordinary and member-joined queues only. AI reply work and
       // digests are found by the idle mask claim, so a server offering them keeps idle claims.
       const probing = me.capabilities?.workAvailabilityVersion === 1 && !personalMask;
@@ -1833,6 +1861,7 @@ function createChatServer(local: BotGroupChatService, deps: BotGroupChatServiceD
     const executionFailures = summaryOnly || direct ? undefined : await failureSnapshot(roomId, s.members, [...(o.sourceMessageIds ?? []), ...page.map(m => m.id)], executions);
     const serverPlans = await plansRead;
     const workspace = workspaces().read(roomId);
+    const folder = direct ? { dir: null, auto: false } : await groupProjectFolder(s.room);
     const plans = serverPlans.map(plan => planView(plan, s.members, workspace, Boolean(s.room.archived || s.room.dissolved_at)));
     const open = plans.find(p => ['proposed', 'running', 'waiting'].includes(p.status));
     // Keep execution identity across computers and concurrent threads. Only the executing
@@ -1893,7 +1922,8 @@ function createChatServer(local: BotGroupChatService, deps: BotGroupChatServiceD
           ...(m.ownerActorId === selfId && m.kind === 'bot' ? { homeDeviceId: actors.find(a => a.id === m.id)?.homeDeviceId ?? null } : {}),
           avatarUrl: m.avatar?.startsWith('https://') ? m.avatar : null,
           name: memberName(m, ownerMembers), avatar: m.groupAvatar ? '' : p?.avatar ?? (m.avatar?.startsWith('https://') ? '' : m.avatar) ?? '', avatarColor: p?.avatarColor ?? 'violet', status: p?.status ?? 'active' };
-      }), organizerBotId: direct ? null : ((id?: string) => id ? localBot(id)?.id ?? id : null)(s.room.organizer_id ?? s.members.find(m => m.kind === 'bot' && m.state === 'joined')?.id), projectDir: workspace?.projectDir ?? null,
+      }), organizerBotId: direct ? null : ((id?: string) => id ? localBot(id)?.id ?? id : null)(s.room.organizer_id ?? s.members.find(m => m.kind === 'bot' && m.state === 'joined')?.id), projectDir: folder.dir, ...(folder.dir && folder.auto ? { projectDirAuto: true } : {}),
+      ...(!direct && supportsGroupProject ? { supportsGroupProject: true, project: s.room.project ?? null } : {}),
       // Only servers that tell a 分工 from a queue (kind) can hand one on by itself.
       ...(singleSpeaker ? { autoContinue: workspace?.autoContinue === true } : {}), lastMessage: last && lastView ? {
         isSelf: lastView.isSelf, authorKind: lastView.authorKind, authorName: lastView.authorName, noticeCode: lastView.noticeCode,
@@ -2549,7 +2579,7 @@ function createChatServer(local: BotGroupChatService, deps: BotGroupChatServiceD
             const key = `${run.plan.id}:${execution.access_mode}:${execution.access_revision}`;
             run.workspace = settings.plans[key] ?? (execution.access_mode === 'owner' ? settings.plans[run.plan.id] : undefined);
             if (!run.workspace) {
-              const prepared = await deps.workDir?.prepare({ groupId: s.room.id, projectDir: settings.projectDir });
+              const prepared = await deps.workDir?.prepare({ groupId: s.room.id, projectDir: (await groupProjectFolder(s.room)).dir });
               if (!prepared?.ok) throw new Error('WORKDIR_UNAVAILABLE');
               run.workspace = prepared;
               if (!current()) throw new Error('OWNER_CHANGED');
@@ -2566,7 +2596,12 @@ function createChatServer(local: BotGroupChatService, deps: BotGroupChatServiceD
         if (source?.origin === 'system') throw new Error('INVALID_EXECUTION_TRIGGER');
         // Plan steps belong to the main group; a Thread request gets the Thread's own lane.
         const threadRootId = run.plan || digest ? undefined : source?.threadRootId ?? undefined;
+        // A reply with real access works in the group's project folder when this computer has one.
+        const folder = !run.plan && !digest && !execution.mask_owner_id && execution.access_mode !== 'chat'
+          ? (await groupProjectFolder(s.room)).dir : null;
+        const projectDir = folder && (await deps.validateProjectDir?.(folder).catch(() => null))?.ok ? folder : null;
         const lane = await deps.ensureLane({ botId: bot.id, groupId: s.room.id, title: s.room.name,
+          ...(projectDir ? { projectDir } : {}),
           chatAccess: { mode: execution.access_mode, revision: execution.access_revision, maskOwnerId: execution.mask_owner_id },
           ...(digest ? { personalDigest: true } : {}),
           // A queue turn talks in its own lane (no project folder); a division of work runs in its work directory.
@@ -2574,6 +2609,7 @@ function createChatServer(local: BotGroupChatService, deps: BotGroupChatServiceD
             : run.plan ? { plan: { planId: run.plan.id, workDir: run.workspace?.workDir ?? '', sessionId: run.workspace?.ownerSessionId ?? undefined } } : {}),
           ...(threadRootId ? { threadRootId } : {}) });
         if (!lane.ok) throw new Error(botGroupRuntimeFailureCode({ code: lane.errorCode, message: lane.message }));
+        if (lane.replacedSessionId) void deps.closeLanes?.([lane.replacedSessionId]);
         run.sessionId = lane.sessionId;
         run.releaseToolAuthority = registerGroupToolAuthority(lane.sessionId, {
           botId: bot.id, mode: execution.access_mode,
@@ -3758,7 +3794,8 @@ function createChatServer(local: BotGroupChatService, deps: BotGroupChatServiceD
     },
     updateGroup: input => safe(async () => {
       const i = z.object({ groupId: id, name: z.string().min(1).max(40).optional(), replyMode: z.enum(['all', 'mentioned']).optional(),
-        speakingMode: z.enum(['auto', 'sequential']).optional(), allowMentionAllBots: z.boolean().optional(), organizerBotId: z.string().nullable().optional(), projectDir: z.string().max(4096).nullable().optional(), autoContinue: z.boolean().optional(), expectedRevision: z.number().int().positive().optional() }).parse(input);
+        speakingMode: z.enum(['auto', 'sequential']).optional(), allowMentionAllBots: z.boolean().optional(), organizerBotId: z.string().nullable().optional(), projectDir: z.string().max(4096).nullable().optional(), autoContinue: z.boolean().optional(), expectedRevision: z.number().int().positive().optional(),
+        githubRepo: z.string().trim().max(200).refine(isGithubRepository).nullable().optional() }).parse(input);
       i.groupId = await resolveGroup(i.groupId);
       // Local only, so saved before any server read: a handoff deciding meanwhile must already see it.
       if (i.autoContinue !== undefined) workspaces().save(i.groupId, { projectDir: null, plans: {}, ...workspaces().read(i.groupId), autoContinue: i.autoContinue });
@@ -3768,8 +3805,10 @@ function createChatServer(local: BotGroupChatService, deps: BotGroupChatServiceD
       if (projectDir) { const checked = await deps.validateProjectDir?.(projectDir); if (!checked?.ok) throw new Error('INVALID_DIRECTORY'); projectDir = checked.dir; }
       const organizerId = i.organizerBotId ? actors.find(a => a.externalId === i.organizerBotId)?.id ?? id.parse(i.organizerBotId) : i.organizerBotId;
       if (i.allowMentionAllBots !== undefined && !supportsMentionAudiences) throw new Error('CHAT_UNAVAILABLE');
-      if (i.allowMentionAllBots !== undefined || i.name !== undefined || i.replyMode !== undefined || i.speakingMode !== undefined || organizerId !== undefined) await api(`/conversations/${i.groupId}`, 'PATCH', { operationId: randomUUID(), expectedRevision: i.expectedRevision ?? s.room.revision,
-        name: i.name, responseMode: i.replyMode, speakingMode: i.speakingMode, organizerId, allowMentionAllBots: i.allowMentionAllBots }, managementActor(s));
+      if (i.githubRepo !== undefined && !supportsGroupProject) throw new Error('CHAT_UNAVAILABLE');
+      const project = i.githubRepo === undefined ? undefined : i.githubRepo ? { kind: 'github' as const, repo: i.githubRepo } : null;
+      if (i.allowMentionAllBots !== undefined || i.name !== undefined || i.replyMode !== undefined || i.speakingMode !== undefined || organizerId !== undefined || project !== undefined) await api(`/conversations/${i.groupId}`, 'PATCH', { operationId: randomUUID(), expectedRevision: i.expectedRevision ?? s.room.revision,
+        name: i.name, responseMode: i.replyMode, speakingMode: i.speakingMode, organizerId, allowMentionAllBots: i.allowMentionAllBots, project }, managementActor(s));
       if (projectDir !== undefined) workspaces().save(i.groupId, { ...workspaces().read(i.groupId) ?? { plans: {} }, projectDir });
       changed(i.groupId);
       // Turned on while a step waits for 继续: go on now rather than at the next change.

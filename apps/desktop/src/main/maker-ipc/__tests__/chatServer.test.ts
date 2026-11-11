@@ -1343,6 +1343,27 @@ describe('Chat Server result delivery and refresh', () => {
     await vi.advanceTimersByTimeAsync(2000);
     expect(deps.dispatch).toHaveBeenCalledOnce();
   }
+  // bot-group-chat.md §7.5: with no folder chosen here, a reply with real access works in the one
+  // registered project whose origin is the group's repository; a chat-only reply never does.
+  it.each(['tools', 'chat'] as const)('runs a %s reply in the folder found from the group repository', async mode => {
+    deps.findProjectDirsForRepo = vi.fn(async () => ['/projects/cindy']);
+    deps.validateProjectDir = vi.fn(async (dir: string) => ({ ok: true as const, dir }));
+    const project = { kind: 'github', repo: 'makecindy/cindy' };
+    fixture.handle.mockImplementation(route => {
+      if (route === '/me') return { body: { actor: { id: selfId }, capabilities: { groupProject: 1 } } };
+      if (route === '/executions/claim') { const next = claimed ? null : { ...execution, access_mode: mode }; claimed = true; return { body: { execution: next } }; }
+      if (route.endsWith('/snapshot')) return { body: { room: { ...room(roomId), project }, members: [], messages: [], cursor: '1' } };
+      return response(route);
+    });
+    await start();
+    const lane = vi.mocked(deps.ensureLane).mock.calls[0][0];
+    if (mode === 'chat') expect(lane).not.toHaveProperty('projectDir');
+    else expect(lane).toMatchObject({ projectDir: '/projects/cindy' });
+    const shown = await service.getGroup(roomId);
+    if (!shown.ok) throw new Error(shown.errorCode);
+    expect(shown.group).toMatchObject({ projectDir: '/projects/cindy', projectDirAuto: true, supportsGroupProject: true, project });
+    expect(deps.findProjectDirsForRepo).toHaveBeenCalledWith('makecindy/cindy');
+  });
   it.each([[false, 0], [true, 0], [false, 1], [true, 1], [true, 3]] as const)('posts a validation failure as the companion without settling or replaying its turn (temporary: %s, retry: %s)', async (temporary, retry) => {
     const posted: unknown[] = [];
     let invalid = false;

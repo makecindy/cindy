@@ -90,7 +90,7 @@ type DispatchResult =
   | { ok: true; targetSessionId: string; wakeKind: string }
   | { ok: false; errorCode: string; message: string };
 
-type LaneResult = { ok: true; sessionId: string } | { ok: false; errorCode: string; message: string };
+type LaneResult = { ok: true; sessionId: string; replacedSessionId?: string } | { ok: false; errorCode: string; message: string };
 
 interface TurnExecution {
   instanceId: string;
@@ -138,6 +138,8 @@ export interface BotGroupChatServiceDeps {
     threadRootId?: string;
     talkPlanId?: string;
     personalDigest?: boolean;
+    /** The group's project folder on this computer; a V2 teammate's replies work there (§7.5). */
+    projectDir?: string;
   }) => Promise<LaneResult>;
   /** Live native context identity; absent/unknown means background must be restored. */
   readLaneContext?: (sessionId: string) => { key: string; contextTokens: number } | null;
@@ -181,6 +183,8 @@ export interface BotGroupChatServiceDeps {
   workDir?: Pick<BotGroupWorkDir, 'prepare' | 'snapshot' | 'changedFiles' | 'trashGroupFolder'>;
   /** Existing local directory usable as a 项目文件夹 (same rules as new-task projects). */
   validateProjectDir?: (dir: string) => Promise<{ ok: true; dir: string } | { ok: false; message: string }>;
+  /** Registered project folders on this computer whose git `origin` is this GitHub repository. */
+  findProjectDirsForRepo?: (repo: string) => Promise<string[]>;
   /**
    * A 分工 step stopped for the user: finished (继续, or the whole plan is done) or not
    * finished (重试). Phones are notified from here (bot-group-chat.md §8.3).

@@ -561,6 +561,12 @@ export interface BotGroupSummary {
   organizerBotId: string | null;
   /** 项目文件夹; null means the group's own folder. */
   projectDir: string | null;
+  /** `projectDir` was found from the group's repository, not chosen on this computer. */
+  projectDirAuto?: boolean;
+  /** The server keeps the group's shared project; absent on older servers/hosts. */
+  supportsGroupProject?: boolean;
+  /** The group's shared project (a GitHub repository); null when none is set. */
+  project?: { kind: 'github'; repo: string } | null;
   /**
    * Server groups: 分工 you start here go on to the next step by themselves instead of waiting
    * for 继续 (§7.4). Kept on this computer like the project folder; absent where unsupported.
@@ -681,6 +687,8 @@ export interface BotGroupUpdateInput {
   organizerBotId?: string | null;
   /** Absolute existing local directory; null uses the group's own folder. */
   projectDir?: string | null;
+  /** Server groups: the shared GitHub repository (`owner/name`); null clears it. */
+  githubRepo?: string | null;
   /** Server groups: whether 分工 you start go on by themselves (kept on this computer). */
   autoContinue?: boolean;
 }
