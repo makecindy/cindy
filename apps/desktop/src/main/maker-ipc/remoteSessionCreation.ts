@@ -1,10 +1,42 @@
 import type { openSession, OpenedSessionRow } from '../localDb/sessionOpening.js';
 import type { TaskActionDeliveryGuard } from './taskActionAuthorization.js';
 import type { RemoteSessionCreation, RemoteSessionCreated } from '../../shared/remoteSessionCreation.js';
+import { resolveSessionExecutionSelection, type SessionExecutionSelection } from './sessionExecutionSelection.js';
 
 type Failure = { ok: false; errorCode: string; message: string };
 type Execution = Pick<RemoteSessionCreated, 'agentKind' | 'model' | 'fastMode'>
   & { providerId?: string | null; effort?: RemoteSessionCreated['effort']; agentDeviceId?: string | null };
+
+/** Resolve target defaults against the chosen provider computer, without borrowing its source ID. */
+export function createRemoteSessionExecutionResolver(deps: {
+  isSelfDeviceId(id: string): boolean;
+  resolveLocal(input: RemoteSessionCreation): Promise<Execution>;
+  readDefault(): SessionExecutionSelection | undefined;
+  readRemoteRouting(deviceId: string, agent: Execution['agentKind']): Promise<Parameters<typeof resolveSessionExecutionSelection>[0]['providerRouting']>;
+}) {
+  return async (input: RemoteSessionCreation): Promise<Execution> => {
+    const deviceId = input.agentDeviceId && !deps.isSelfDeviceId(input.agentDeviceId) ? input.agentDeviceId : null;
+    if (!deviceId) return deps.resolveLocal(input);
+    const defaults = deps.readDefault();
+    const agentKind = input.agentKind ?? defaults?.agentKind;
+    if (!agentKind) throw new Error('Select an agent for the remote provider');
+    let routing: Awaited<ReturnType<typeof deps.readRemoteRouting>>;
+    try { routing = await deps.readRemoteRouting(deviceId, agentKind); }
+    catch (error) {
+      throw Object.assign(new Error(`Cannot read providers of provider_device_id "${deviceId}": ${error instanceof Error ? error.message : String(error)}`),
+        { code: 'PROVIDER_ROUTE_UNAVAILABLE' });
+    }
+    const selected = resolveSessionExecutionSelection({
+      selection: { agentKind, model: input.model, effort: input.effort, fastMode: input.fast },
+      source: defaults ? { ...defaults, providerId: undefined } : undefined,
+      availableAgents: [agentKind], availableModels: routing.remoteCodexModels ?? [], providerRouting: routing,
+      hasCindyAiApiKey: true, locationChanged: true,
+    });
+    // Keep the destination's resolved provider explicit when execution moves computers.
+    return { ...selected, providerId: selected.providerId ?? routing.resolveDefaultProviderIdForModel(agentKind, selected.model),
+      agentDeviceId: deviceId };
+  };
+}
 
 /** Ordinary task creation on the destination. Sending is still owned by the handoff queue. */
 export function createRemoteSessionOpener(deps: {
@@ -52,7 +84,6 @@ export function createRemoteSessionOpener(deps: {
           await check();
         }
         const { row } = await deps.openSession({ id, assertCurrent: assertOwner,
-          onPersistenceStarted: () => { persistenceStarted = true; },
           body: {
             title: input.title,
             projectDir: project.projectDir,
@@ -67,6 +98,7 @@ export function createRemoteSessionOpener(deps: {
         }, async (row, assertCurrent) => {
           // Revalidate the source after model/directory preparation and before the first write.
           await check(); assertCurrent();
+          persistenceStarted = true;
           await deps.openSessionCommit({ ...row, worktreePath }, assertCurrent);
         });
         assertOwner();
@@ -84,7 +116,9 @@ export function createRemoteSessionOpener(deps: {
         throw error;
       }
     }); } catch (error) {
-      return { ok: false, errorCode: 'INVALID_ARGS', message: error instanceof Error ? error.message : 'Task creation validation failed' };
+      const code = error && typeof error === 'object' && 'code' in error ? error.code : undefined;
+      return { ok: false, errorCode: code === 'PROVIDER_ROUTE_UNAVAILABLE' || code === 'BUDGET_MODEL_REQUIRES_API_MODE' ? code : 'INVALID_ARGS',
+        message: error instanceof Error ? error.message : 'Task creation validation failed' };
     }
   };
 }

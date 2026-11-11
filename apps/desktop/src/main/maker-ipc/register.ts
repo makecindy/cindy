@@ -275,7 +275,7 @@ import {
   ownerScopedUserDataPath,
 } from '../appSessionState.js';
 import { upsertRecentWorkdir } from '../localDb/ipc/recentWorkdirs.js';
-import { createRemoteSessionOpener } from './remoteSessionCreation.js';
+import { createRemoteSessionOpener, createRemoteSessionExecutionResolver } from './remoteSessionCreation.js';
 import { resolveSessionProject, listProjects } from '../mcp-integrations/projectManagement.js';
 import { isRetainableProjectSession } from '../../shared/sessionSource.js';
 import { initializePluginOauthCards } from '../plugin-oauth/cards.js';
@@ -13531,21 +13531,16 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
       sessionExists: async id => Boolean((await getDbClient().drizzle.select({ id: sessions.id }).from(sessions).where(eq(sessions.id, id)).limit(1))[0]),
       resolveProject: input => resolveSessionProject({ ...input, callerSessionId: undefined }),
       validateDirectory: validateExistingLocalProjectDirectory,
-      resolveExecution: async input => {
-        const deviceId = input.agentDeviceId && input.agentDeviceId !== getSelfDeviceId() ? input.agentDeviceId : null;
-        if (!deviceId) return resolveSessionExecution({ agentKind: input.agentKind, model: input.model, effort: input.effort, fastMode: input.fast });
-        const defaults = getSelectedNewMakerRoute(activeOwnerScopeKey());
-        const agentKind = input.agentKind ?? (defaults?.harness === 'claude' ? 'claude-code' : defaults?.harness);
-        if (!agentKind) throwIpcError('INVALID_PARAMS', 'Select an agent for the remote provider');
-        const routing = deviceWorkerRoutingContext(await readDeviceProviderViews(remoteBackgroundInvoke, deviceId), agentKind!);
-        const selected = resolveSessionExecutionSelection({
-          selection: { agentKind, model: input.model ?? defaults?.model,
-            effort: input.effort, fastMode: input.fast },
-          availableAgents: [agentKind!], availableModels: routing.remoteCodexModels ?? [], providerRouting: routing,
-          hasCindyAiApiKey: true,
-        });
-        return { ...selected, agentDeviceId: deviceId };
-      },
+      resolveExecution: createRemoteSessionExecutionResolver({
+        isSelfDeviceId: id => id === getSelfDeviceId(),
+        resolveLocal: input => resolveSessionExecution({ agentKind: input.agentKind, model: input.model, effort: input.effort, fastMode: input.fast }),
+        readDefault: () => {
+          const route = getSelectedNewMakerRoute(activeOwnerScopeKey());
+          return route ? { agentKind: route.harness === 'claude' ? 'claude-code' : route.harness,
+            model: route.model, effort: (route.effort || undefined) as Effort | undefined, fastMode: route.fastMode } : undefined;
+        },
+        readRemoteRouting: async (id, agent) => deviceWorkerRoutingContext(await readDeviceProviderViews(remoteBackgroundInvoke, id), agent),
+      }),
       prepareWorktree: async (id, directory) => {
         const prepared = await prepareHandoffWorktree({
           getForSession: worktreeManager.getForSession, listAll: worktreeManager.listAll,
