@@ -1,7 +1,7 @@
 import { createSchedulerQueueBridge, type SchedulerQueueBridge, type SchedulerQueuedPromptRequest, type SchedulerEnqueueResult } from './schedulerQueueBridge.js';
 import { markCindyOfficialSkills } from '../maker-host/managed-skills.js';
 import { registerRuntimeSettingsSection } from '../app-settings/runtime.js';
-import { createTaskRuntimePlugins } from './runtimePlugins.js';
+import { appendRuntimePluginContext, createTaskRuntimePlugins } from './runtimePlugins.js';
 import { RuntimePluginControlError } from '../cindy-brain/runtimeControl.js';
 import { readRuntimePluginSettings, writeRuntimePluginSettings } from '../maker-host/runtime-plugin-settings.js';
 import { parseRuntimePluginSettings } from '../../shared/pluginRuntime.js';
@@ -19235,7 +19235,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
       .limit(1);
     const blocked = botSessionInputBlockReason(botInput ?? null);
     if (blocked) throwIpcError('PRECONDITION_FAILED', blocked);
-    const so = (sendOpts ?? {}) as {
+    let so = (sendOpts ?? {}) as {
       messageUuid?: string;
       userName?: string;
       signal?: AbortSignal;
@@ -19261,7 +19261,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
       readonly [MAIN_OWNED_SEND_CONTEXT]?: MainOwnedSendContext;
       readonly [ASYNC_QUESTION_ANSWER]?: true;
       readonly [SUPERSEDE_ASYNC_QUESTIONS]?: true;
-      readonly [AUTO_REVIEW_SOURCE_CONTENT]?: string;
+      readonly [AUTO_REVIEW_SOURCE_CONTENT]?: UserMessage['content'];
       readonly [AUTO_REVIEW_DELEGATED_CONTINUATION]?: true;
       readonly [AUTO_REVIEW_USER_INTENT]?: string;
       readonly [MCP_APP_MESSAGE_GUARD]?: McpAppMessageGuard;
@@ -19412,6 +19412,23 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
       steerPayload = prependNoteToWireUserMessage(steerPayload as HandoffWireMessage, appContext.text);
     }
     try {
+      const runtimeContext = steerAllowsEnvironmentNotes
+        ? composeGhostRuntimeContext(sessionId,
+            () => extractPlainText(typeof normalized === 'string' ? normalized : normalized.content), so.signal)
+        : undefined;
+      if (runtimeContext) {
+        const material = await runtimeContext;
+        sess = readCurrentSteerSession();
+        if (sess !== authorizationSession || sess.getTurnGeneration() !== authorizationTurn) {
+          throw new Error(`[STALE_TURN] Session ${sessionId} changed turns while preparing plugin context`);
+        }
+        if (!sess.isTurnRunning()) throwIpcError('NO_ACTIVE_TURN', `Session ${sessionId} has no active turn`);
+        if (material) {
+          steerPayload = appendRuntimePluginContext(steerPayload as HandoffWireMessage, material);
+          so = { ...so, [AUTO_REVIEW_SOURCE_CONTENT]: so[AUTO_REVIEW_SOURCE_CONTENT]
+            ?? (typeof normalized === 'string' ? normalized : (normalized as UserMessage).content) };
+        }
+      }
       const remote = isDeviceLinkInvoke();
       assertRemoteInputClearNotInFlight(sessionId, remote);
       const precondition = readRemoteInputClearBoundaryPrecondition(sendOpts);

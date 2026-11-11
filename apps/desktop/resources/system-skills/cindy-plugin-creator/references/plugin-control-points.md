@@ -13,7 +13,7 @@
 | `will-schedule-run` | 每次自动化(定时任务,含脚本模式)运行前;恢复中断的续跑不再问 | allow / skip / block | 30 秒 |
 | `will-routine-run` | 兼容保留,不再触发:伙伴例行任务已改成项目自动化(2026-11-08),声明照常安装 | allow / skip / block | 30 秒 |
 | `will-start-task` | 新任务(含 `/goal` 开的)第一条消息发出、任务建好之前;只问一次,之后的消息不再问;伙伴对话不问 | allow / route | 8 秒 |
-| `will-start-turn` | 任务中每条消息发给引擎之前；只问任务设置中选中的插件 | allow / route / skip / block | 1 秒 |
+| `will-start-turn` | 任务中新一轮开始前，不含同轮插话；只问任务设置中选中的插件 | allow / route / skip / block | 1 秒 |
 | `will-model-request` | 本机 Pi 的每次模型请求，包含工具结果后的继续请求 | allow / route（select 阶段）/ transform（payload 阶段）/ skip / block | 每次请求的 select＋payload 合计 1 秒 |
 | `will-compose-context` | 每条模型消息装配时，为选了该插件的任务补参考资料 | allow / context / skip / block | 2 秒 |
 | `will-search-memory` | 所选任务调用已有 `cindy_memory.memory_search` 时 | allow / memories | 1.5 秒，失败保留 Cindy 结果 |
@@ -77,8 +77,8 @@ cindy.onHostMessage(async (msg) => {
 
 ### 任务运行时等待预算
 
-四个新增运行时节点共用每轮 **5 秒**插件等待预算。每条消息在统一发送准备入口开启新预算，
-工具续轮和同一轮内的多次模型请求不重置。每次询问还受上表单点时限约束；
+四个新增运行时节点共用每轮 **5 秒**插件等待预算。普通消息在统一发送准备入口开启新预算，
+同轮插话、工具续轮和同一轮内的多次模型请求不重置。每次询问还受上表单点时限约束；
 `will-model-request` 的 `select` 与 `payload` 共用该次请求的 **1 秒**，下一请求重新取得
 请求预算，但继续消费本轮剩余的 5 秒。实际 `deadline` 会按两项剩余预算缩短。
 
@@ -162,12 +162,12 @@ cindy.send({
   可以处理参数和正文，包括模型字段；宿主只校验请求结构仍合法及序列化后最多 1048576 字符，不按字段设业务白名单。
   后选插件读取前一个插件处理后的正文。日志只记任务、来源插件和处理阶段，不记录正文。
 
-| 引擎 | 每条消息前路由 | 每次模型请求前路由／正文处理 |
+| 引擎 | 每轮开始前路由 | 每次模型请求前路由／正文处理 |
 | --- | --- | --- |
 | Claude Code | 支持 | 不支持：无对应请求入口 |
 | Codex | 支持 | 不支持：无对应请求入口 |
 | 本机 Pi | 支持 | 支持：原生虚拟模型＋`before_provider_request` |
-| SSH／设备托管 Pi | 支持每条消息前路由 | 不支持逐请求处理 |
+| SSH／设备托管 Pi | 支持每轮开始前路由 | 不支持逐请求处理 |
 
 超时、未批准、被停用、非法结果或不可用路由都走该任务为该插件设置的出错策略。`skip` 跳过
 本次回复，`block` 停止并报错；插件不能更改出错策略。逐请求阶段发生时，Pi 已接受本次输入，
@@ -178,7 +178,14 @@ cindy.send({
 在 `subscribe.hooks` 声明 `will-compose-context` 或 `will-search-memory`，安装确认分别展示权限。
 用户在任务菜单的「任务插件」中分别选择，可以只用其中一种；不会为其它任务调用插件。
 
-`will-compose-context` 数据为 `{ sessionId, text }`（当前消息）。返回：
+`will-compose-context` 数据为 `{ sessionId, text }`（当前消息）。
+
+普通发送和同轮插话共用该节点，只发送尚未附加交接、应用资料或环境说明的当前原文。
+插话沿本轮剩余预算，等待结束后复核同一会话、轮次和取消状态；skip/block 拒绝本次插话，
+不重建 Agent 或重新执行新轮次选模。原生非模型命令沿既有判定跳过资料装配。
+资料不进入自动审核的授权来源；原消息的附件边界和主人原话保持不变。
+
+返回示例：
 
 ```js
 cindy.send({ type: 'event-verdict', hookId: msg.hookId, action: 'context',
