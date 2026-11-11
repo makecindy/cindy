@@ -291,7 +291,7 @@ import {
   saveTurnStartedAtForDeferred,
   preserveTurnPersistStateForBackground,
   redactToolInputForUntrustedBoundary,
-} from '../messagePersistBroadcaster.js';
+} from '../messagePersistBroadcaster.desktop.js';
 
 const SESSION = 'sess-tr';
 const FULL =
@@ -3692,6 +3692,17 @@ describe('consumeLastAssistantPersistId(per-turn 费用挂载的目标消息追�
 });
 
 describe('onTurnErrorEvent — terminal error 持久化', () => {
+  it('persists only bounded output-limit usage for later history rendering', async () => {
+    onTurnErrorEvent(SESSION, { message: 'limit', reason: 'output-limit',
+      outputLimit: { outputTokens: 131072, reasoningTokens: 131064, raw: 'discard' } });
+    await flushWrites();
+    const [, bodyArg] = vi.mocked(createMessage).mock.calls[0];
+    expect((bodyArg as { content: unknown }).content).toMatchObject({
+      reason: 'output-limit', outputLimit: { outputTokens: 131072, reasoningTokens: 131064 },
+    });
+    expect((bodyArg as { content: { outputLimit: object } }).content.outputLimit).not.toHaveProperty('raw');
+  });
+
   it('落一条 role=error 行,content 保留 message/reason/sdkError,且绝不广播', async () => {
     const persistId = onTurnErrorEvent(SESSION, {
       message: '任务执行失败（模型未返回错误详情）。',
@@ -4354,6 +4365,19 @@ describe('媒体 echo 兜底:flushOrphanToolResults 从 fallback 池认领', () 
 });
 
 describe('ask_user persist first-write-wins', () => {
+  // Regression: withdrawal survives reload without being presented as an answer.
+  // Entry: production interaction writer; tier: unit.
+  it('persists a withdrawal reason with the existing cancelled status', async () => {
+    const request = { kind: 'ask_user_question', requestId: 'obsolete-question', questions: [{ question: 'Logged in?' }] };
+    const persistId = onInteractionMessage(SESSION, request);
+    onInteractionResolved(SESSION, persistId, 'ask_user_question', request,
+      { dismissed: true, withdrawalReason: '已从日志确认' });
+    await flushWrites();
+    expect(updateMessageContent).toHaveBeenCalledWith(SESSION, persistId,
+      expect.objectContaining({ status: 'cancelled', withdrawalReason: '已从日志确认', answers: {} }),
+      { text: '', acceptedAt: expect.any(Number) });
+  });
+
   it.each([
     [{ ' Scope? ': ' only inspect ' }, 'Clarifications:\n- Scope? → only inspect'],
     [{ ' ': ' only inspect ' }, 'Clarifications:\n- only inspect'],

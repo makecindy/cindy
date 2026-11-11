@@ -71,7 +71,9 @@ import {
   type GhostSourceLabels,
 } from './GhostCommandDecoration';
 import {
+  commandPaletteReplacementNames,
   replaceSlashCommandRunWithText,
+  resolveSlashCommandRunEnd,
   setSlashCommandRoster,
   SlashCommandDecoration,
 } from './SlashCommandDecoration';
@@ -124,7 +126,6 @@ import {
   subscribeComposerSubmitRequest,
   subscribePromptInsert,
   subscribeSessionLinkInsert,
-  subscribeTodoReferenceInsert,
   takeComposerSubmitRequest,
 } from '@/lib/composerActionsBus';
 import { resolveComposerModelSelection } from './composerModelSelection';
@@ -199,7 +200,6 @@ import {
   planModeComposerDraftText,
   shouldPreservePlanModeComposerDraft,
 } from './planModeComposerCommand';
-import { PendingQueuePanel } from './PendingQueuePanel';
 import { resolveSoleSteerableQueuedMessage } from './pendingQueueRowPresentation';
 import { SendButton } from './SendButton';
 import { FolderPickerPopover, addRecentFolder, type FolderPickerOption } from './FolderPickerPopover';
@@ -377,7 +377,7 @@ import {
 } from '@/lib/providerModels';
 import {
   clearProviderModelEffort,
-  clearProviderModelFast,
+  clearProviderModelFast, editProviderModelMemoryBatch,
   getProviderModelEffort,
   setProviderModelChoice,
   setProviderModelEffort,
@@ -421,7 +421,7 @@ import {
   shouldBlockLegacyRemotePiModelWindowSwitch,
 } from '../../../shared/modelSwitchAssessment';
 import { useVoiceInput } from '@/voice-input/useVoiceInput';
-import { getTextPreviewSearchHost } from '@/components/find-in-page/findInPageOwnership';
+import { getTextPreviewHost } from '@/components/find-in-page/findInPageOwnership';
 import { useVoiceInputSettings } from '@/hooks/useVoiceInputSettings';
 import { VoiceInputStatusNotice } from '@/voice-input/VoiceInputStatusNotice';
 import type { VoiceInputState } from '@cindy/voice-input-core';
@@ -512,6 +512,8 @@ function isPointInsideElement(
 }
 
 interface ChatInputProps {
+  modelPickerRequest?: number;
+  onModelPickerRequestConsumed?: (nonce: number) => void;
   onSend: (
     message: string,
     model: string,
@@ -680,20 +682,12 @@ interface ChatInputProps {
   voiceConversationDisabledReason?: string;
   voiceConversationActive?: boolean;
   /**
-   * F-QUEUE-DEFER: un-dispatched messages (rendered above the input by
-   * `PendingQueuePanel`). Empty array hides the panel entirely.
+   * Pending messages live in MessageStream. This snapshot supports the
+   * empty-composer steer shortcut.
    */
   pendingQueue?: QueuedMessage[];
-  /** F-QUEUE-DEFER: queue panel expanded state. */
-  queueExpanded?: boolean;
-  /** F-QUEUE-DEFER: toggle queue panel expanded/collapsed. */
-  onQueueExpandedChange?: (expanded: boolean) => void;
-  /** F-QUEUE-DEFER: remove a single un-dispatched queued message. */
-  onQueueRemove?: (clientId: string) => void;
   /** Queue row currently loaded into this shared composer. */
   queueEditingClientId?: string | null;
-  /** Load one queued row into the shared composer. */
-  onQueueEditBegin?: (entry: QueuedMessage) => void;
   /** Save the shared composer's complete text/reference/attachment snapshot. */
   onQueueEditSubmit?: (
     clientId: string,
@@ -710,16 +704,6 @@ interface ChatInputProps {
   onQueueSteer?: (clientId: string) => Promise<boolean>;
   /** Queue row ids currently being delivered through onQueueSteer. */
   steeringQueueClientIds?: string[];
-  /** Queue was paused by Stop; a Continue button appears in the queue panel. */
-  queuePaused?: boolean;
-  /** Resume a queue paused by Stop. */
-  onQueueResume?: () => void;
-  /** Move a queued row to a new insertion index. */
-  onQueueReorder?: (clientId: string, targetIndex: number) => void;
-  /** Lock the whole queue while drag-sort is in progress. */
-  onQueueInteractionLock?: (lockId: string, locked: boolean) => void;
-  /** Lock one queued row while its text is being edited. */
-  onQueueEditLock?: (clientId: string, locked: boolean) => void;
   /** Chat messages — used to derive user message history for ↑/↓ navigation. */
   messages?: Array<{ role: string; content: string; quotesEncoded?: boolean }>;
   /** Custom placeholder text. Defaults to "今天我们做点什么呢~" */
@@ -969,6 +953,7 @@ interface ChatInputProps {
 
 /** 本机模型全局预设的读写器(本机目录的选择器共用一份,引用稳定)。 */
 const LOCAL_MODEL_MEMORY: ModelMemoryAccessors = {
+  editMany: editProviderModelMemoryBatch,
   getEffort: getProviderModelEffort,
   setEffort: setProviderModelEffort,
   setChoice: setProviderModelChoice,
@@ -1310,6 +1295,8 @@ function resolveModelThinkingIntent(input: {
 }
 
 export function ChatInput({
+  modelPickerRequest,
+  onModelPickerRequestConsumed,
   onSend,
   onComposerTyping,
   onComposerVoiceBusyChange,
@@ -1354,20 +1341,11 @@ export function ChatInput({
   voiceConversationDisabledReason,
   voiceConversationActive = false,
   pendingQueue,
-  queueExpanded = false,
-  onQueueExpandedChange,
-  onQueueRemove,
   queueEditingClientId = null,
-  onQueueEditBegin,
   onQueueEditSubmit,
   onQueueEditCancel,
   onQueueSteer,
   steeringQueueClientIds = [],
-  queuePaused = false,
-  onQueueResume,
-  onQueueReorder,
-  onQueueInteractionLock,
-  onQueueEditLock,
   messages,
   placeholder,
   previewPrompt,
@@ -1618,7 +1596,9 @@ export function ChatInput({
     if (turnStarting) {
       turnGenRef.current += 1;
       showRecommendationRef.current = false;
-      if (sessionId) dismissPromptRecommendation(sessionId);
+      // The session store owns turn invalidation. A mounted/reused composer can
+      // see a delayed busy projection; treating it as explicit consumption would
+      // erase B's buffered completion before the streams converge.
     }
   });
   useEffect(() => {
@@ -1629,43 +1609,14 @@ export function ChatInput({
   }, [recommendationEnabled, sessionId]);
 
   const hasPredictionMessages = (messages?.length ?? 0) > 0;
-  // F-QUEUE-DEFER: when the queue panel is expanded, esc collapses it
-  // BEFORE falling through to the existing stop / history shortcuts. That
-  // way the user's mental model stays consistent: esc = "back out of the
-  // current thing". For the queue this only collapses the tail after the first
-  // three rows; it does not affect dispatch.
-  const queueExpandedRef = useRef(queueExpanded);
-  queueExpandedRef.current = queueExpanded;
-  const onQueueExpandedChangeRef = useRef(onQueueExpandedChange);
-  onQueueExpandedChangeRef.current = onQueueExpandedChange;
   const queueEditingClientIdRef = useRef(queueEditingClientId);
   queueEditingClientIdRef.current = queueEditingClientId;
-  // 空输入框 + 队列仅一条时，输入框里的 Cmd/Ctrl+Enter 直接插话这条(稳定的 window
-  // capture 监听经 ref 读当前值;赋值在 handleQueueSteer 之后)。
   const steerSoleQueuedMessageRef = useRef<() => boolean>(() => false);
   const onQueueEditCancelRef = useRef(onQueueEditCancel);
   onQueueEditCancelRef.current = onQueueEditCancel;
   const queueEditCancelAllowedRef = useRef(true);
-  // F-QUEUE-DEFER: outside-click collapses the queue tail. Boundary = the
-  // palette anchor layer that holds the merged card (panel + input editor)
-  // AND the palette host (slash / at-mention popovers) — clicking into the
-  // editor or a palette row must NOT collapse rows under the user's cursor.
-  // (The palette host sits outside the merged card since the slash-menu
-  // overlap fix, so the boundary must be the anchor layer, not the card.)
   const mergedCardRef = useRef<HTMLDivElement | null>(null);
   const paletteAnchorRef = useRef<HTMLDivElement | null>(null);
-  useEffect(() => {
-    if (!queueExpanded || !onQueueExpandedChange) return;
-    const handler = (e: MouseEvent) => {
-      const root = paletteAnchorRef.current;
-      if (!root) return;
-      if (root.contains(e.target as Node)) return;
-      onQueueExpandedChange(false);
-    };
-    document.addEventListener('mousedown', handler, true);
-    return () => document.removeEventListener('mousedown', handler, true);
-  }, [queueExpanded, onQueueExpandedChange]);
-
   // ── 工具行宽度自适应 ────────────────────────────────────────────────
   // 测 input card（mergedCardRef）实际宽度，窄宽时自动收紧工具行。主会话被右栏
   // 拖宽压窄时据此折叠，行为对齐 doc rail（doc rail 仍按 denseToolbar 强制收紧，
@@ -2858,13 +2809,6 @@ export function ChatInput({
             onQueueEditCancelRef.current();
             return true;
           }
-          // F-QUEUE-DEFER: if the queue tail is expanded, Esc collapses that
-          // visual tail before falling through to Stop.
-          if (queueExpandedRef.current && onQueueExpandedChangeRef.current) {
-            event.preventDefault();
-            onQueueExpandedChangeRef.current(false);
-            return true;
-          }
           // Existing behaviour: abort running task (same as clicking Stop).
           // If queued messages exist, useCCAgentChat.stopSession pauses them
           // instead of sending the next one immediately.
@@ -3259,18 +3203,6 @@ export function ChatInput({
       appendMentionChip(editor, pastedSessionChipAttrs({ href, label: null }), { at });
       lastComposerSelectionFromRef.current = editor.state.selection.from;
       resolveSessionChipTitles(editor);
-    });
-  }, [editor, sessionId]);
-
-  // 伙伴近况里点一条待办：把它作为引用 chip 放进输入框，用户自己写一句再发。
-  useEffect(() => {
-    if (!editor || !sessionId) return;
-    return subscribeTodoReferenceInsert(({ targetSessionId, href, title }) => {
-      if (targetSessionId !== sessionId || editor.isDestroyed) return;
-      if (composerMutationLockedRef.current) return;
-      const at = lastComposerSelectionFromRef.current ?? editor.state.selection.from;
-      appendMentionChip(editor, { kind: 'todo', label: title, path: href }, { at });
-      lastComposerSelectionFromRef.current = editor.state.selection.from;
     });
   }, [editor, sessionId]);
 
@@ -3691,7 +3623,7 @@ export function ChatInput({
       // 注册在 document 或组件层，晚于本 window capture handler 执行。
       if (
         event.key === 'Escape' &&
-        (getTextPreviewSearchHost() || (
+        (getTextPreviewHost() || (
           event.target instanceof Element &&
           event.target.closest('[role="alertdialog"], [data-morph-side]')
         ))
@@ -5346,31 +5278,14 @@ export function ChatInput({
         return;
       }
       const { from } = trigger;
-      // Replace the WHOLE slash-run, not just up-to-caret: the user may
-      // have moved the caret back inside the run (e.g. `/compa|ct`) and
-      // still hit Enter. Extend `to` to the first whitespace / end of
-      // paragraph after the `/`.
-      const $from = editor.state.doc.resolve(from);
-      const parent = $from.parent;
-      const parentStart = $from.start();
-      let runEnd = from + 1; // skip the `/` itself
-      // Walk forward through inline nodes until whitespace / chip boundary
-      const offset = from - parentStart + 1;
-      parent.forEach((child, childOffset) => {
-        // childOffset is relative to parentStart
-        if (childOffset + child.nodeSize <= offset) return;
-        if (child.type.name === 'mentionChip') return; // chip boundary
-        if (!child.isText) return;
-        const localStart = Math.max(0, offset - childOffset);
-        const text = child.text ?? '';
-        for (let i = localStart; i < text.length; i++) {
-          if (/\s/.test(text[i])) {
-            runEnd = parentStart + childOffset + i;
-            return;
-          }
-        }
-        runEnd = parentStart + childOffset + text.length;
-      });
+      // Preserve any draft after the caret. Only consume a suffix when it
+      // completes this exact command (e.g. `/compa|ct`) at a real boundary.
+      const runEnd = resolveSlashCommandRunEnd(
+        editor.state.doc,
+        from,
+        trigger.query,
+        commandPaletteReplacementNames(cmd),
+      );
       const setupSkillName = pluginSkillSetupName(cmd);
       if (setupSkillName) {
         if (trigger.sigil !== '/' || !pluginSkillSetup) return;
@@ -6293,7 +6208,10 @@ export function ChatInput({
           if (sourceStorageKey) clearComposerDraft(sourceStorageKey);
         };
         let optimisticComposerRestored = false;
-        const immediateRestoreClientId = `local-restore:${crypto.randomUUID()}`;
+        const immediateRestoreClientId =
+          typeof crypto?.randomUUID === 'function'
+            ? `local-restore:${crypto.randomUUID()}`
+            : `local-restore:${Date.now()}-${Math.random().toString(36).slice(2)}`;
         const restoreOptimisticallyClearedComposer = (
           clientId = immediateRestoreClientId,
           {
@@ -9261,7 +9179,7 @@ export function ChatInput({
     hasAttachments: hasPreparedOrPendingAttachments,
     hasBrowserComments: browserComments.length > 0,
     hasVoiceDraftText,
-    mutationLocked: composerMutationLocked,
+    mutationLocked: composerMutationLocked || showStopButton,
   };
   const recommendationComposerReady = isComposerReadyForPromptRecommendation(recommendationComposerState);
   usePromptRecommendationPrediction({
@@ -9271,7 +9189,7 @@ export function ChatInput({
       recommendationComposerReady && !!editor && !editor.isDestroyed &&
       deviceLinkDeviceId !== undefined && runtimeAgentKind != null &&
       hasPredictionMessages && !remoteHostId,
-    predict: async (revision) => {
+    predict: async (revision, isCurrent) => {
       if (!sessionId || runtimeAgentKind == null) return null;
       // 素材仍由 Main 从 DB 读取；远程任务经 sticky 路由交给被控电脑。
       const result = await predictPromptUntilDisabled(makerApiForSticky(sessionId), {
@@ -9281,7 +9199,7 @@ export function ChatInput({
         workingDir: workingDirRef.current ?? undefined,
         turnGen: turnGenRef.current,
         completionRevision: revision,
-      });
+      }, isCurrent);
       return result?.prompt ?? null;
     },
   });
@@ -9448,21 +9366,9 @@ export function ChatInput({
   );
   const folderBasename = workingDir ? workingDir.split(/[\\/]/).pop() : null;
 
-  // F-QUEUE-DEFER: panel + input fuse into a single visual card when the
-  // queue has entries. Two-step rendering would leave a 16px gap between
-  // them (the parent's `gap-4`), which reads as "two cards stacked" — the
-  // design exploration shows them as one continuous card with a hairline
-  // divider, so we wrap them in a gap-0 sub-flex and surgically drop the
-  // input's top-border + top-radius.
-  const queuePanelState =
-    pendingQueue && pendingQueue.length > 0 && onQueueExpandedChange && onQueueRemove
-      ? { queue: pendingQueue, onExpandedChange: onQueueExpandedChange, onRemove: onQueueRemove }
-      : null;
-  const showQueuePanel = queuePanelState !== null;
-  // Orca / topSlot 也走 fused-wrapper 模式:外层 wrapper 拿 border + rounded,
-  // 内部 topSlot 与 textarea 用 1px hairline 分隔但看起来是一张卡。
+  // Queue bubbles live in MessageStream; only composer-specific content is fused here.
   const showTopSlot = !!topSlot;
-  const showFusedWrapper = showQueuePanel || showTopSlot;
+  const showFusedWrapper = showTopSlot;
   const isCreateAgentVariant = visualVariant === 'create-agent';
   // split-pane 同时打开侧栏 / 会话 / 浏览器时，普通会话 composer 也会落到窄容器。
   // 这里必须按 card 实际宽度统一切 compact，而不是只照顾 create-agent；否则普通
@@ -9531,26 +9437,6 @@ export function ChatInput({
           framed={showFusedWrapper}
           className={cn('flex w-full flex-col gap-0', showFusedWrapper && 'overflow-hidden')}
         >
-          {queuePanelState && (
-            <PendingQueuePanel
-              queue={queuePanelState.queue}
-              expanded={queueExpanded}
-              onToggle={() => queuePanelState.onExpandedChange(!queueExpanded)}
-              onRemove={queuePanelState.onRemove}
-              editingClientId={queueEditingClientId}
-              onEditBegin={onQueueEditBegin}
-              onSteer={onQueueSteer ? handleQueueSteer : undefined}
-              steeringClientIds={steeringQueueClientIds}
-              paused={queuePaused}
-              turnRunning={showStopButton}
-              onResume={onQueueResume}
-              onReorder={onQueueReorder}
-              onInteractionLock={onQueueInteractionLock}
-              onEditLock={onQueueEditLock}
-              mergedWithBelow
-              steerShortcutLabel={steerShortcutLabel}
-            />
-          )}
           {showTopSlot && (
             <div className="border-b border-[var(--chat-input-border)] px-[11px] py-2">
               {topSlot}
@@ -9994,7 +9880,6 @@ export function ChatInput({
                         onBack={() => setAddDirViewOpen(false)}
                         onSelectRecent={handleAddRecentDir}
                         onBrowse={handleBrowseExtraDir}
-                        maxHeight={paletteMaxHeight}
                       />
                     ) : (
                       <AtMentionPanel
@@ -10041,6 +9926,7 @@ export function ChatInput({
                       />
                     )
                   }
+                  maxContentHeight={paletteMaxHeight}
                   disabled={composerMutationLocked}
                   dense={effectiveDenseToolbar}
                   visualVariant={isCreateAgentVariant ? 'create-agent' : 'default'}
@@ -10095,6 +9981,8 @@ export function ChatInput({
                     : useNarrowToolbar ? 'min-w-0 shrink' : undefined}
                 >
                   {!sessionModelLoading && <ModelSelector
+                    openRequest={modelPickerRequest}
+                    onOpenRequestConsumed={onModelPickerRequestConsumed}
                     sshCodex={sshCodexCatalog}
                     // 选中态一律是会话 / 草稿持有的 **wire model id**(sessions.model 或
                     // lastByVendor.model)。面板行的归一化 id 只活在面板内部 —— 从这里递进去
@@ -10277,6 +10165,7 @@ export function ChatInput({
                     // 已建会话按实际路由口径解析当前来源(含停用拷贝,跟真实扣费路由);
                     // 草稿是新路由选择,保持准入口径(PR #744 review 第十轮)。
                     actualRoute={!!sessionId}
+            previewSubscriptionPool={!sessionId}
                     // 有过 Agent 回复 = 供应商组已为这个任务选好电脑,组那一项的用量按那台显示。
                     taskStarted={taskStarted}
                     onProviderChange={(providerId, modelId, effort, fast) =>

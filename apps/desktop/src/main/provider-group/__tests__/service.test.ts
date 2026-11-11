@@ -6,10 +6,11 @@
  */
 import type { ProviderView } from '@cindy/model-providers';
 import { describe, expect, it, vi } from 'vitest';
+import { createAutomaticContinueEligibility, type CompanionFailoverSnapshot } from '../../maker-ipc/automaticContinueEligibility';
 
 import type { ProviderGroupConfig, ProviderGroupMember } from '../../../shared/providerGroup';
 import type { ClaudeSubscriptionUsageSnapshot } from '../../../shared/claudeSubscriptionUsage';
-import type { ProviderGroupBinding, ProviderGroupRef } from '../bindings';
+import type { ProviderGroupBinding, ProviderGroupRef } from '../bindings.desktop';
 import type { ProviderGroupDirectory, ResolvedMemberState, ResolvedProviderGroupMember } from '../directory';
 import { PROVIDER_GROUP_FAILURE_COOLDOWN_MS } from '../cooling';
 import { createProviderGroupGuestSwitch, PROVIDER_GROUP_SWITCH_OFFER_TTL_MS } from '../guestSwitch';
@@ -82,6 +83,7 @@ function harness(options: {
   const released = new Map<string, ProviderGroupRef>();
   /** 选过「以后自动换号」的任务。 */
   const autoRebalance = new Set<string>();
+  const disabledRebalance = new Set<string>();
   // 现读那台的状态：默认与组内电脑状态同一份离线名单，单测按需逐次指定。
   const probe = vi.fn(async (agentDeviceId: string, providerId: string): Promise<ResolvedMemberState> => {
     const found = config.members.find((m) => m.agentDeviceId === agentDeviceId && m.providerId === providerId);
@@ -147,7 +149,7 @@ function harness(options: {
       row.providerId = route.providerId;
     }),
     hasAssistantHistory: vi.fn(async () => false),
-    isFailoverEligible: vi.fn(async () => true),
+    isFailoverEligible: vi.fn<ProviderGroupServiceDeps['isFailoverEligible']>(async () => true),
     leaseRecovery: vi.fn((): object | null => LEASE),
     isLeaseCurrent: vi.fn(() => true),
     rearmContinue: vi.fn((): number | null => 99),
@@ -162,6 +164,11 @@ function harness(options: {
     fallback: vi.fn(),
     readResetAt: vi.fn(() => null),
     readAutoRebalance: vi.fn((id: string) => autoRebalance.has(id)),
+    readRebalanceDisabled: vi.fn((id: string) => disabledRebalance.has(id)),
+    writeRebalanceEnabled: vi.fn(async (id: string, enabled: boolean) => {
+      if (enabled) disabledRebalance.delete(id);
+      else disabledRebalance.add(id);
+    }),
     writeAutoRebalance: vi.fn(async (id: string) => {
       autoRebalance.add(id);
     }),
@@ -177,6 +184,101 @@ function harness(options: {
 async function flush() {
   for (let i = 0; i < 60; i++) await Promise.resolve();
 }
+
+describe('companion group failover eligibility', () => {
+  // Unit: the production eligibility policy plus group service must relocate a
+  // direct companion input. The old fixture always returned true and missed the
+  // source=bot exclusion. Minimum: active canonical/thread, A limited, B available.
+  function companionHarness(role = 'canonical') {
+    const h = harness({ members: [LOCAL, MINI] });
+    const companion: CompanionFailoverSnapshot = { role, profileStatus: 'active', hiddenAt: null, shadowed: false };
+    const state = { source: 'bot', status: 'active', orcaRole: null as string | null };
+    const deps = {
+      ownerEpoch: () => 'owner', isPaused: () => false, isShared: () => false,
+      readSession: async () => state, goalOwnsRecovery: async () => false,
+      readCompanion: async (): Promise<CompanionFailoverSnapshot | null> => companion, ownsCompanionInput: () => true,
+    };
+    const eligibility = createAutomaticContinueEligibility(deps);
+    h.deps.isFailoverEligible.mockImplementation(eligibility.providerGroup);
+    h.bindings.set('s1', { providerId: 'anthropic', memberKey: LOCAL.key, at: 1 });
+    return { ...h, companion, state, eligibility, eligibilityDeps: deps };
+  }
+
+  it.each(['canonical', 'thread'])('relocates a failed %s input once without scheduling quota recovery', async role => {
+    const h = companionHarness(role);
+    await h.service.onTurnError('s1', { message: "You've hit your usage limit", sdkError: 'rate_limit' }, 1);
+    expect(h.row.agentDeviceId).toBe('mini');
+    expect(h.deps.continueSession).toHaveBeenCalledTimes(1);
+    expect(h.deps.fallback).not.toHaveBeenCalled();
+    expect(await h.eligibility.usageLimit('s1')).toBe(false);
+  });
+
+  it('moves a retry away from the exhausted member before sending, without balancing healthy inputs', async () => {
+    const h = companionHarness();
+    await h.service.beforeSend('s1', { clientId: 'retry' });
+    expect(h.deps.switchAgentLocation).not.toHaveBeenCalled();
+    h.router.markCooling('anthropic', LOCAL.key, 2_000_000);
+    await h.service.beforeSend('s1', { clientId: 'retry' });
+    expect(h.row.agentDeviceId).toBe('mini');
+    expect(h.deps.continueSession).not.toHaveBeenCalled();
+    expect(await h.service.rebalanceSuggestion('s1')).toBeNull();
+  });
+
+  it.each(['group', 'channel', 'routine', 'delegation', 'history'])('leaves %s recovery with its existing owner', async role => {
+    const h = companionHarness(role);
+    const beforeFallback = vi.fn();
+    await h.service.onTurnError('s1', { sdkError: 'rate_limit' }, 1, { beforeFallback });
+    expect(h.deps.switchAgentLocation).not.toHaveBeenCalled();
+    expect(beforeFallback).toHaveBeenCalledOnce();
+    expect(h.deps.fallback).toHaveBeenCalledOnce();
+  });
+
+  it.each(['paused', 'hidden', 'shadowed', 'archived', 'missing-link', 'unknown-input', 'shared', 'goal', 'owner-changed'])(
+    'hands back a companion error when %s instead of swallowing it', async reason => {
+      const h = companionHarness();
+      if (reason === 'paused') h.companion.profileStatus = 'paused';
+      if (reason === 'hidden') h.companion.hiddenAt = 1;
+      if (reason === 'shadowed') h.companion.shadowed = true;
+      if (reason === 'archived') h.state.status = 'archived';
+      if (reason === 'unknown-input') h.eligibilityDeps.ownsCompanionInput = () => false;
+      if (reason === 'shared') h.eligibilityDeps.isShared = () => true;
+      if (reason === 'goal') h.eligibilityDeps.goalOwnsRecovery = async () => true;
+      if (reason === 'missing-link') h.eligibilityDeps.readCompanion = async () => null;
+      if (reason === 'owner-changed') h.eligibilityDeps.goalOwnsRecovery = async () => {
+        h.eligibilityDeps.ownerEpoch = () => 'new-owner';
+        return false;
+      };
+      const beforeFallback = vi.fn();
+      await h.service.onTurnError('s1', { sdkError: 'rate_limit' }, 1, { beforeFallback });
+      expect(h.row.agentDeviceId).toBeNull();
+      expect(h.deps.continueSession).not.toHaveBeenCalled();
+      expect(beforeFallback).toHaveBeenCalledOnce();
+    },
+  );
+
+  it('returns the final error when the remaining companion member also fails', async () => {
+    const h = companionHarness();
+    h.deps.switchAgentLocation.mockRejectedValue(new Error('[REMOTE_AGENT_UNAVAILABLE] failed to start'));
+    const beforeFallback = vi.fn();
+    await h.service.onTurnError('s1', { sdkError: 'rate_limit' }, 1, { beforeFallback });
+    expect(h.deps.switchAgentLocation).toHaveBeenCalledOnce();
+    expect(h.deps.continueSession).not.toHaveBeenCalled();
+    expect(beforeFallback).toHaveBeenCalledOnce();
+    expect(h.deps.fallback).toHaveBeenCalledOnce();
+    expect(await h.eligibility.usageLimit('s1')).toBe(false);
+  });
+
+  it.each(['reconnect', 'restart', 'rebalance'] as const)('does not extend %s to companions', async kind => {
+    const h = companionHarness();
+    expect(await h.eligibility.providerGroup('s1', { kind })).toBe(false);
+    h.state.source = 'desktop';
+    h.state.orcaRole = 'worker';
+    expect(await h.eligibility.providerGroup('s1', { kind })).toBe(true);
+    expect(await h.eligibility.usageLimit('s1')).toBe(false);
+    h.state.orcaRole = null;
+    expect(await h.eligibility.usageLimit('s1')).toBe(true);
+  });
+});
 
 describe('own tasks after this computer becomes available again', () => {
   it.each([false, true].flatMap((paused) =>
@@ -1393,6 +1495,42 @@ describe('switching accounts between messages to balance quota', () => {
     expect(h.deps.writeAutoRebalance).toHaveBeenCalledWith('s1');
     expect(await h.service.rebalanceSuggestion('s1')).toMatchObject({ kind: 'auto', memberKey: MINI.key });
     expect(await h.service.rebalanceSuggestion('s2')).toMatchObject({ kind: 'auto', memberKey: MINI.key });
+  });
+
+  // Unit, §6.2：原覆盖只有同意/取消；关闭后旧控制端的缓存决定不能再迁移，另一个任务不受影响。
+  it('disables quota balancing for this task, rejects stale approvals, and can restore the default', async () => {
+    const h = paced();
+    h.bindings.set('s2', { providerId: 'anthropic', memberKey: 'local', at: 1_000_000 });
+    await h.service.rebalanceDecision('s1', MINI.key, true, 'message-a');
+    expect(await h.service.rebalancePreference('s1', false)).toBe(true);
+    expect(await h.service.rebalanceSuggestion('s1')).toBeNull();
+    expect(await h.service.rebalanceSuggestion('s2')).toMatchObject({ kind: 'auto' });
+    expect(await h.service.rebalanceDecision('s1', MINI.key, true, 'message-b')).toBe(false);
+    await h.service.beforeSend('s1', { clientId: 'message-a' });
+    expect(h.deps.switchAgentLocation).not.toHaveBeenCalled();
+    expect(await h.service.rebalancePreference('s1', true)).toBe(true);
+    expect(await h.service.rebalanceSuggestion('s1')).toMatchObject({ kind: 'auto' });
+  });
+
+  // Unit/协议：旧提议仍在但任务已经手动挪到组外时，不能凭未清理的绑定写入隐藏偏好。
+  it('does not save a preference after the task has moved outside its cached group', async () => {
+    const h = paced();
+    expect(await h.service.rebalanceSuggestion('s1')).not.toBeNull();
+    h.row.agentDeviceId = 'outside-group';
+    expect(await h.service.rebalancePreference('s1', false)).toBe(false);
+    expect(h.deps.writeRebalanceEnabled).not.toHaveBeenCalled();
+  });
+
+  // Unit, §6.2：只关闭配额均衡；原电脑真正不可用时仍按故障恢复处理。
+  it('keeps fault recovery after disabling quota balancing and reports preference write failure', async () => {
+    const h = paced();
+    h.deps.writeRebalanceEnabled.mockRejectedValueOnce(new Error('disk full'));
+    await expect(h.service.rebalancePreference('s1', false)).rejects.toThrow('disk full');
+    expect(await h.service.rebalanceSuggestion('s1')).not.toBeNull();
+    await h.service.rebalancePreference('s1', false);
+    h.usage.local.sevenDay = { utilization: 100, resetsAt: 600_000 };
+    await h.service.beforeSend('s1', { clientId: 'message-a' });
+    expect(h.bindings.get('s1')?.memberKey).toBe(MINI.key);
   });
 
   // §6.2：A 确认后离开而未发送，B 取消或没有提议时不能继承 A 的换号；此前只按任务 id 暂存。

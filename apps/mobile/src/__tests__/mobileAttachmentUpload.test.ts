@@ -2,7 +2,8 @@ import { beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import { setMobileAuthOwner } from '@/auth/authOwnerGeneration';
 import { apiFetchRaw } from '@/api/client';
 import { installPeerUpload } from '@/device-link/peerFileRegistry';
-import { buildPeerAttachmentRef, parsePeerAttachmentRef } from '@cindy/device-link';
+import { installMobileAgentNetMedia } from '@/device-link/agentNetMediaRegistry';
+import { buildPeerAttachmentRef, parsePeerAttachmentRef, sharedTaskHostPeer } from '@cindy/device-link';
 import { DEVICE_LINK_API_BASE_URL, getOfficialDeviceLinkApiBaseUrl, setDeviceLinkApiBaseOverride } from '@/config/env';
 import { i18n } from '@/i18n';
 import { buildAttachmentOssRef, parseAttachmentOssRef } from '@/session/attachmentOssRef';
@@ -27,6 +28,50 @@ const readFileChunk = vi.fn(async (_uri: string, _position: number, length: numb
 beforeEach(() => setMobileAuthOwner('alice'));
 
 describe('mobileAttachmentUpload', () => {
+  // Unit: the production attachment entries must retain the scoped destination
+  // supplied by useMobileLocalAttachments. Existing encrypted tests only used a
+  // same-account device, so dropping deviceId for sharedTaskId went unnoticed.
+  it.each((['body', 'file'] as const).flatMap(path => [false, true].map(onlyEncrypted => ({ path, onlyEncrypted }))))
+    ('keeps shared-task $path uploads encrypted (onlyEncrypted=$onlyEncrypted)', async ({ path, onlyEncrypted }) => {
+      const deviceId = sharedTaskHostPeer('unit-shared-task', 'host'), legacy = vi.fn();
+      const off = installMobileAgentNetMedia({ available: device => device === deviceId, requiresEncryption: () => onlyEncrypted,
+        async upload(options) {
+          expect(options.deviceId).toBe(deviceId);
+          expect(await options.read(0, 3)).toEqual(new Uint8Array([120, 120, 120]));
+          return { key: 'agent-net-v3/unit-shared-fixture', sha256: 'a'.repeat(64) };
+        } });
+      try {
+        const options = { token: 'unit-unused-token', deviceId, sharedTaskId: 'unit-shared-task',
+          deps: { apiFetch: legacy, fetch: legacy, readFileChunk: async () => 'eHh4' } };
+        const candidate = { name: 'note.txt', size: 3, mimeType: 'text/plain' };
+        const attachment = path === 'body'
+          ? await uploadMobileAttachment(candidate, new Uint8Array([120, 120, 120]).buffer, options)
+          : await uploadMobileAttachmentFromFile(candidate, 'file:///unit-note', options);
+        expect(parseAttachmentOssRef(attachment.path)?.ossKey).toBe('agent-net-v3/unit-shared-fixture');
+        expect(legacy).not.toHaveBeenCalled();
+      } finally { off(); }
+    });
+  // Production file upload must select the V2 encrypting adapter before OSS,
+  // and a native failure must not send the same attachment through plaintext.
+  it.each(['success', 'failure', 'unavailable'] as const)('keeps an encrypted upload on its selected adapter (native result=%s)', async (result) => {
+    const legacy = vi.fn(), readFileChunk = vi.fn(async () => 'eHh4');
+    const off = installMobileAgentNetMedia({ available: device => device === 'paired-v2', requiresEncryption: () => result !== 'unavailable',
+      async upload(options) {
+        expect(await options.read(0, 3)).toEqual(new Uint8Array([120, 120, 120]));
+        if (result === 'failure') throw new Error('NATIVE_UPLOAD_FAILED');
+        if (result === 'unavailable') return null;
+        return { key: 'agent-net-v3/unit-public-fixture', sha256: 'a'.repeat(64) };
+      } });
+    try {
+      const work = uploadMobileAttachmentFromFile({ name: 'note.txt', size: 3, mimeType: 'text/plain' }, 'file:///unit-note', {
+        token: 'unit-unused-account-token', deviceId: 'paired-v2', deps: { apiFetch: legacy, readFileChunk },
+      });
+      if (result === 'failure') await expect(work).rejects.toThrow('NATIVE_UPLOAD_FAILED');
+      else if (result === 'unavailable') await expect(work).rejects.toThrow('AGENT_NET_MEDIA_PEER_UNAVAILABLE');
+      else expect(parseAttachmentOssRef((await work).path)?.ossKey).toBe('agent-net-v3/unit-public-fixture');
+      expect(legacy).not.toHaveBeenCalled();
+    } finally { off(); }
+  });
   // Unit: late peer completion must not retain removed uploads or an invalidated owner's pixels.
   it.each(['cancelled', 'outbox-removed', 'account-switched'] as const)('does not retain a late upload after %s', async (reason) => {
     const abort = new AbortController();

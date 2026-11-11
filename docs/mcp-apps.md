@@ -156,7 +156,7 @@ App 的完整 CSP，proxy 的资源地址由宿主固定，不能被普通桥消
 同一个 WebView；卡片离屏或实际页面卸载后，先将内容移回屏幕外 host，保留消息回调，
 收到 teardown 响应或满 1 秒后移除 WebView、停止两项资源服务并清理专属缓存。退后台
 关闭旧 View，原生资源最多保留本次后台代次 1 秒；回前台打开新 View，不重放工具调用。
-这改变两端 runtime fingerprint，必须有针对冷更的明确确认并发布原生新包；不能仅 OTA 交付。
+这改变两端 runtime fingerprint，必须按冷更边界在 PR 中写明原因、存量装机影响与发版节奏，并发布原生新包；不能仅 OTA 交付。
 旧安装包缺少 App 承载能力时保留已保存文本并提示更新手机，不回退到同源或 opaque-origin
 `srcdoc`。下次进程首次打开时清理中断遗留的本功能随机目录。iOS 使用非持久 WebView
 数据存储；Android 不使用会清空其他 View cookie 的 incognito 开关，只删除本 View 的

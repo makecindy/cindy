@@ -21,6 +21,8 @@ export interface CompanionEnvironment {
   memoryFiles?: Record<string, string>;
   /** Originals behind redacted skill projections; only materialized for authorized host commands. */
   skillFiles?: Record<string, Array<{ name: string; bytes: string; executable: boolean; interpreterLink?: string }>>;
+  /** Bounded-memory encrypted originals; legacy inline skillFiles remain readable. */
+  skillArchives?: Record<string, import('./types.js').ImportResourceRef>;
   /** Original selected documents; model-readable profile/memory copies redact known credentials. */
   documents?: Record<string, string>;
   /** Redaction only: known values embedded in selected originals, never injected into processes. */
@@ -32,10 +34,11 @@ export interface CompanionEnvironment {
   automations?: Record<string, { kind: 'hermes' | 'openclaw'; original: Record<string, unknown>; sourceRoot: string; sourceWorkspace?: string; sourceId?: string;
     /** Missing or pending means source ownership has not been safely handed over. */
     handover?: 'pending' | 'ready';
-    issues?: string[]; deliveries?: import('./types.js').ImportedDelivery[]; completed?: number; lastRun?: string;
-    /** Resume a partially sent result before executing another occurrence. */
-    deliveryProgress?: { runId: string; text: string; direct: boolean; deliveries: import('./types.js').ImportedDelivery[]; next: number };
-    monitorHash?: string; monitorOutput?: string; prepared?: { runId: string; prompt: string; direct?: string; skipped?: boolean; monitorHash?: string; monitorOutput?: string } }>;
+    /** Chat destinations of older checkpoints; results now stay in the automation's task. */
+    issues?: string[]; deliveries?: import('./types.js').ImportedDelivery[];
+    // Older bindings may also hold the removed import runtime's counters and pending output
+    // (completed, lastRun, deliveryProgress, monitor*, prepared): kept as stored, never read.
+  }>;
 }
 
 export interface CompanionSecretIo {
@@ -45,6 +48,8 @@ export interface CompanionSecretIo {
   /** Idempotent: a missing key is a successful removal, matching the account vault. */
   remove(key: string): boolean;
   removeResources?(botId: string, assertOwner: () => void): Promise<void>;
+  writeResource?(key: string, id: string, chunks: AsyncIterable<string>, assertOwner: () => void): Promise<string>;
+  readResource?(key: string, id: string, digest: string, assertOwner: () => void): AsyncIterable<string>;
 }
 
 export interface CompanionDiscoveryEnvironment {
@@ -84,6 +89,16 @@ export function createCompanionEnvironmentStore(io: CompanionSecretIo) {
     assertOwner();
   };
   const store = {
+    async writeResource(botId: string, id: string, chunks: AsyncIterable<string>, assertOwner: () => void) {
+      if (!io.writeResource) throw new CompanionImportError('CREDENTIAL_STORAGE_UNAVAILABLE');
+      const key = companionEnvironmentKey(botId);
+      const digest = await io.writeResource(key, id, chunks, assertOwner);
+      return { key, id, digest };
+    },
+    async *readResource(ref: import('./types.js').ImportResourceRef, assertOwner: () => void) {
+      if (!io.readResource) throw new CompanionImportError('CREDENTIAL_STORAGE_UNAVAILABLE');
+      yield* io.readResource(ref.key, ref.id, ref.digest, assertOwner);
+    },
     async write(userData: string, botId: string, value: CompanionEnvironment, assertOwner: () => void): Promise<void> {
       const key = `${userData}:${botId}`;
       const task = serializeDiscovery(key, async () => {

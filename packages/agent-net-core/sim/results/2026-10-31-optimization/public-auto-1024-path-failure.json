@@ -1,0 +1,28 @@
+{
+  "policy": "auto",
+  "command": [
+    "./target/release/netperf",
+    "client",
+    "--bind",
+    "0.0.0.0:47812",
+    "--server",
+    "47.101.195.26:47811",
+    "--windows",
+    "1024",
+    "--modes",
+    "0,1,2",
+    "--rounds",
+    "3",
+    "--mib",
+    "8",
+    "--limit",
+    "60",
+    "--label",
+    "公网 Auto"
+  ],
+  "exit": -6,
+  "seconds": 30.48,
+  "core_fingerprint": "bc94b7e56a6d26a8264d0eb5629b032fb7035806",
+  "rounds": 3,
+  "note": "same-host CPU contention observed before run; exploratory single public path, not stable p95/p99 evidence"
+}

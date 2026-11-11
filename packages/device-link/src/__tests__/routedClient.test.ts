@@ -83,6 +83,124 @@ async function onlineSelfHosted() {
 describe('RoutedDeviceLinkClient', () => {
   beforeEach(() => vi.useFakeTimers());
   afterEach(() => vi.useRealTimers());
+  // Official V2 must not open two V1 sockets with the same physical identity:
+  // they would continuously evict each other. Existing tests use distinct origins.
+  // Unit, fake socket; observable routing includes old and new scoped resources.
+  it('shares the official compatibility socket between legacy devices and old scoped resources', async () => {
+    const sockets: FakeWs[] = [];
+    const options = (url: string): DeviceLinkClientOptions => ({ getWsUrl: () => url, getToken: async () => 'unit-token',
+      getHello: () => ({ deviceName: 'unit', platform: 'test', appVersion: '1', remoteControlEnabled: true, busy: false }),
+      createWebSocket: (address, headers) => { const socket = new FakeWs(address, headers); sockets.push(socket); return socket; } });
+    const client = new RoutedDeviceLinkClient(options(RELAY), { active: () => true, useLegacyConnection: () => true,
+      options: options(OFFICIAL) }, { active: () => true, useForPeer: () => true, options: options(OFFICIAL) });
+    client.start(); await vi.advanceTimersByTimeAsync(1);
+    expect(sockets.filter(s => s.url === OFFICIAL)).toHaveLength(1);
+    for (const socket of sockets) socket.ack([SHARED_TASK_RELAY_CAPABILITY]);
+    await vi.advanceTimersByTimeAsync(1);
+    const compatibility = client.connectionFor(SHARED_PEER);
+    expect(client.connectionFor('old-device')).toBe(compatibility);
+    expect(compatibility).not.toBe(client);
+    client.registerScopedConnection({ kind: 'shared-task', resourceId: 'new-task' }, 'primary');
+    expect(client.connectionFor(sharedTaskHostPeer('new-task', 'host-device'))).toBe(client);
+    expect(client.connectionFor(SHARED_PEER)).toBe(compatibility);
+    client.stop();
+  });
+  // V2 self-hosted parity: a resource pin overrides the official V1 route.
+  // Existing tests only know static account-wide routes. Minimal failure: two
+  // tasks with separate relays, registered after observers/start; a retired pin
+  // must fail closed. Unit tier, fake sockets, no real waits.
+  it('pins scoped resources independently, joins late events and never falls back after retirement', async () => {
+    const h = await onlineSelfHosted();
+    const received: Envelope[] = [];
+    const off = h.client.onFrame(frame => received.push(frame));
+    const resource = (task: string, address: string) => h.client.registerScopedConnection({ kind: 'shared-task', resourceId: task }, {
+      getWsUrl: () => address, getToken: async () => 'resource-proof',
+      getHello: () => ({ deviceName: 'Guest', platform: 'test', appVersion: '1', remoteControlEnabled: false, busy: false }),
+      createWebSocket: (url, headers) => { const socket = new FakeWs(url, headers); h.sockets.push(socket); return socket; },
+    });
+    const retire = resource('task-a', 'wss://private-a.example/ws');
+    const retireB = resource('task-b', 'wss://private-b.example/ws'); await h.tick();
+    const a = h.socketTo('wss://private-a.example/ws'), b = h.socketTo('wss://private-b.example/ws');
+    a.ack([SHARED_TASK_RELAY_CAPABILITY]); b.ack([SHARED_TASK_RELAY_CAPABILITY]); await h.tick();
+    void h.client.openLink(SHARED_PEER, {}).catch(() => undefined);
+    void h.client.openLink(sharedTaskHostPeer('task-b', 'host-device'), {}).catch(() => undefined); await h.tick();
+    expect(a.sent.some(frame => frame.kind === 'link-open' && frame.sharedTask?.sharedTaskId === 'task-a')).toBe(true);
+    expect(b.sent.some(frame => frame.kind === 'link-open' && frame.sharedTask?.sharedTaskId === 'task-b')).toBe(true);
+    expect(h.socketTo(OFFICIAL).sent.some(frame => frame.kind === 'link-open')).toBe(false);
+    const push = { v: PROTOCOL_VERSION, kind: 'push' as const, src: 'host-device', dst: 'dev-self',
+      sharedTask: { sharedTaskId: 'task-a', source: { role: 'host' as const }, target: { role: 'guest' as const, memberId: 'member-a' } },
+      payload: { channel: 'shared:update', payload: 'private' } };
+    a.push(push); b.push(push); h.socketTo(OFFICIAL).push(push);
+    expect(received.filter(frame => frame.kind === 'push')).toHaveLength(1);
+    retire();
+    expect(h.client.connectionFor(SHARED_PEER).getStatus()).toBe('stopped');
+    void h.client.openLink(SHARED_PEER, {}).catch(() => undefined); await h.tick();
+    expect(h.socketTo(OFFICIAL).sent.some(frame => frame.kind === 'link-open')).toBe(false);
+    off(); b.push({ ...push, sharedTask: { ...push.sharedTask, sharedTaskId: 'task-b' } });
+    expect(received.filter(frame => frame.kind === 'push')).toHaveLength(1);
+    h.socketTo(RELAY).close(4410); h.socketTo(OFFICIAL).close(4410); await h.tick();
+    expect(h.client.getStatus()).toBe('stopped');
+    expect(h.client.hasOnlineConnection()).toBe(true); // Private task B still supports foreground recovery.
+    retireB(); expect(h.client.hasOnlineConnection()).toBe(false);
+    h.client.stop();
+  });
+  // A directory outage is not permission to send business data in cleartext; only an authenticated peer handshake can select V1.
+  it.each([false, true])('probes only the link handshake and chooses the peer\'s confirmed transport (V2=%s)', async (newer) => {
+    const sockets: FakeWs[] = [];
+    const options = (url: string): DeviceLinkClientOptions => ({
+      getWsUrl: () => url, getToken: async () => 'unit-test-token',
+      getHello: () => ({ deviceName: 'unit', platform: 'test', appVersion: '1', remoteControlEnabled: true, busy: false }),
+      createWebSocket: (address, headers) => { const socket = new FakeWs(address, headers); sockets.push(socket); return socket; },
+    });
+    const client = new RoutedDeviceLinkClient(options('ws://v2-node'), undefined, {
+      active: () => true, useForPeer: () => false, probeForPeer: () => true,
+      primaryCapability: 'agent-net-node-v2', options: options('ws://v1-relay'),
+    });
+    client.start(); await vi.advanceTimersByTimeAsync(1);
+    const primary = sockets.find((s) => s.url === 'ws://v2-node')!, legacy = sockets.find((s) => s.url === 'ws://v1-relay')!;
+    primary.ack(); legacy.ack(); await vi.advanceTimersByTimeAsync(1);
+    const opened = client.openLink('known-peer', {}); await vi.advanceTimersByTimeAsync(1);
+    const probe = legacy.sent.find((f) => f.kind === 'link-open')!;
+    expect(primary.sent.some((f) => f.kind === 'link-open')).toBe(false);
+    legacy.push({ v: PROTOCOL_VERSION, kind: 'link-accept', id: probe.id, src: 'known-peer', payload: {
+      appVersion: '1', allowlistHash: 'unit', capabilities: newer ? ['agent-net-node-v2'] : [],
+    } }); await vi.advanceTimersByTimeAsync(1);
+    if (newer) {
+      const actual = primary.sent.find((f) => f.kind === 'link-open')!;
+      expect(actual).toBeDefined();
+      primary.push({ v: PROTOCOL_VERSION, kind: 'link-accept', id: actual.id, src: 'known-peer', payload: { appVersion: '1', allowlistHash: 'unit' } });
+    }
+    await opened;
+    void client.invoke('known-peer', { channel: 'private:business', args: ['secret'] }).catch(() => undefined);
+    await vi.advanceTimersByTimeAsync(1);
+    expect(primary.sent.some((f) => f.kind === 'invoke')).toBe(newer);
+    expect(legacy.sent.some((f) => f.kind === 'invoke')).toBe(!newer);
+    client.stop();
+  });
+  it('routes only peers without V2 to the compatibility socket and replies on the path which accepted a request', async () => {
+    const sockets: FakeWs[] = [];
+    const options = (url: string): DeviceLinkClientOptions => ({
+      getWsUrl: () => url, getToken: async () => 'unit-test-token',
+      getHello: () => ({ deviceName: 'unit', platform: 'test', appVersion: '1', remoteControlEnabled: true, busy: false }),
+      createWebSocket: (address, headers) => { const socket = new FakeWs(address, headers); sockets.push(socket); return socket; },
+    });
+    const client = new RoutedDeviceLinkClient(options('ws://v2-node'), undefined, {
+      active: () => true, useForPeer: (peer) => peer === 'old-device', options: options('ws://v1-relay'),
+    });
+    client.onFrame((frame) => { if (frame.kind === 'link-open' && frame.src && frame.id) client.sendLinkAccept(frame.src, frame.id, { appVersion: '1', allowlistHash: 'unit' }); });
+    client.start(); await vi.advanceTimersByTimeAsync(1);
+    const primary = sockets.find((s) => s.url === 'ws://v2-node')!, legacy = sockets.find((s) => s.url === 'ws://v1-relay')!;
+    primary.ack(); legacy.ack(); await vi.advanceTimersByTimeAsync(1);
+    void client.openLink('new-device', {}).catch(() => undefined);
+    void client.openLink('old-device', {}).catch(() => undefined); await vi.advanceTimersByTimeAsync(1);
+    expect(primary.sent.some((f) => f.kind === 'link-open' && f.dst === 'new-device')).toBe(true);
+    expect(legacy.sent.some((f) => f.kind === 'link-open' && f.dst === 'old-device')).toBe(true);
+    legacy.push({ v: PROTOCOL_VERSION, kind: 'link-open', src: 'new-device', id: 'request-on-old-path',
+      payload: { controllerName: 'unit', protocolVersion: PROTOCOL_VERSION, appVersion: '1' } });
+    expect(legacy.sent.some((f) => f.kind === 'link-accept' && f.id === 'request-on-old-path')).toBe(true);
+    expect(primary.sent.some((f) => f.kind === 'link-accept' && f.id === 'request-on-old-path')).toBe(false);
+    client.stop();
+  });
 
   it('opens no second connection on the official route, so scoped peers stay on the only socket', async () => {
     const h = harness({ value: false });
@@ -130,6 +248,9 @@ describe('RoutedDeviceLinkClient', () => {
     socket.push({ v: PROTOCOL_VERSION, kind: 'link-accept', id: request.id, src: peer,
       payload: { appVersion: '1', allowlistHash: 'hash', capabilities: ['github-read-v1'] } });
     await opening;
+    // 远程连接拓扑:路由客户端的快照经基类读自建中转那条连接;这里的对端没声明可靠传输,是 legacy 链路,不算拓扑里的链路。
+    expect(h.client.getPeerLinkSnapshots()).toEqual([]);
+    expect(h.client.getRelayRttMs()).toBeNull();
     const result = h.client.invoke(peer, payload);
     await h.tick();
     const invoke = socket.sent.filter(frame => frame.kind === 'invoke').at(-1)!;

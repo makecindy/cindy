@@ -3,6 +3,7 @@ import { isProviderShareAgentDeviceId } from '../../../shared/providerShare';
 import { useProviderShareWeeklyQuota } from '@/features/provider-share/useProviderShareWeeklyQuota';
 import { History, LayoutGrid, Star } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
+import { useDraftClaudeAccount } from './DraftClaudeAccount';
 
 import type { ProviderView } from '@cindy/model-providers';
 
@@ -243,8 +244,10 @@ function SharedProviderQuotaButton(props: RailButtonProps & { shareDeviceId: str
 }
 
 function ProviderQuotaButton(props: RailButtonProps & { provider: ProviderView }) {
+  const { t } = useTranslation();
+  const draftClaude = useDraftClaudeAccount(props.provider.id, props.usageDeviceId);
   const quota = useProviderWeeklyQuota(props.provider, { deviceId: props.usageDeviceId });
-  return <RailButtonView {...props} quota={quota} />;
+  return <RailButtonView {...props} accountIdentity={draftClaude ? draftClaude.identity ?? t('subscriptionAccounts.unassigned') : props.accountIdentity} quota={quota} />;
 }
 
 function RailButtonView({
@@ -300,7 +303,7 @@ function RailButtonView({
         className={cn(
           'relative flex h-[38px] w-[34px] shrink-0 flex-col items-center justify-center rounded-[9px] transition-colors',
           isActive
-            ? 'bg-[var(--accent-cta-bg)] text-[var(--accent-pure-cta-fg)] shadow-[var(--shadow-menu)]'
+            ? 'bg-[var(--accent-cta-bg)] text-[var(--accent-pure-cta-fg)]'
             : 'text-[var(--text-tertiary)] hover:bg-[var(--model-item-hover)] hover:text-[var(--text-secondary)]',
           disabled && 'cursor-not-allowed opacity-50',
         )}

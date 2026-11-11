@@ -204,6 +204,7 @@ export function ChatAudioCard({ track, sessionId }: ChatAudioCardProps) {
       >
         {track.coverUrl && !coverFailed ? (
           <img
+            data-chat-audio-cover
             src={displayCoverUrl}
             alt={title}
             className="h-full w-full object-cover"
@@ -239,6 +240,7 @@ export function ChatAudioCard({ track, sessionId }: ChatAudioCardProps) {
           {track.tags ? (
             <Tip text={t('chat.media.audioCopyDescription')}>
               <button
+                data-chat-copy-exclude
                 type="button"
                 onClick={handleCopyDescription}
                 aria-label={t('chat.media.audioCopyDescription')}
@@ -271,7 +273,7 @@ export function ChatAudioCard({ track, sessionId }: ChatAudioCardProps) {
         ) : null}
 
         {/* Player row: play btn + currentTime + progress + duration */}
-        <div className="flex items-center gap-3">
+        <div data-chat-copy-exclude className="flex items-center gap-3">
           <Tip text={playing ? t('chat.media.audioPause') : t('chat.media.audioPlay')}>
             <button
               type="button"

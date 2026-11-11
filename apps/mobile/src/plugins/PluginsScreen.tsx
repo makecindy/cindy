@@ -69,6 +69,7 @@ import {
   isMobileAuthOwnerCurrent,
 } from "@/auth/authOwnerGeneration";
 import { PluginOriginalSettings } from "./PluginOriginalSettings";
+import { PluginReadmePage } from "./PluginReadmePage";
 import { usePluginManagement } from "./usePluginManagement";
 import { PluginManagementMenu } from "./PluginManagementMenu";
 import { PluginManagementConfirmation } from "./PluginManagementConfirmation";
@@ -144,6 +145,7 @@ function PluginDirectory() {
   const [detailLoading, setDetailLoading] = useState(false);
   const [detailFailed, setDetailFailed] = useState(false);
   const [settingsOpen, setSettingsOpen] = useState(false);
+  const [readmeOpen, setReadmeOpen] = useState(false);
   const [recent, setRecent] = useState<string[]>([]);
   const [busy, setBusy] = useState(false);
   const enableLock = useRef(false);
@@ -255,14 +257,17 @@ function PluginDirectory() {
     pageBack.current = handler;
   }, []);
   const goBack = useCallback(() => {
-    if (settingsOpen) setSettingsOpen(false);
+    if (readmeOpen) setReadmeOpen(false);
+    else if (settingsOpen) setSettingsOpen(false);
     else if (detailOpen && selected?.surface) setDetailOpen(false);
     else if (selected?.surface && pageBack.current) pageBack.current();
     else if (selected && !wide) {
       detailGeneration.current += 1;
       setSelected(undefined);
     } else goBackGuarded(router);
-  }, [detailOpen, settingsOpen, selected, wide, router]);
+  }, [detailOpen, readmeOpen, settingsOpen, selected, wide, router]);
+  // The introduction belongs to one plugin's detail page.
+  useEffect(() => setReadmeOpen(false), [selected?.row.key, detailOpen]);
   useEffect(() => {
     if (!focused || !selected || wide) return;
     const listener = BackHandler.addEventListener("hardwareBackPress", () => {
@@ -1000,6 +1005,7 @@ function PluginDirectory() {
           if (model.canToggle) void enable(value);
         }}
         onOpen={(surface) => open(selected.row, surface)}
+        onOpenReadme={model.readme ? () => setReadmeOpen(true) : undefined}
         onNewTask={() => newTask()}
         onChooseTask={() => {
           if (model.canUseTasks && !busy) setTaskPicker(true);
@@ -1017,7 +1023,8 @@ function PluginDirectory() {
       <SimpleStackHeader
         title={
           selected && !wide
-            ? (settingsOpen && t("plugins.settings")) ||
+            ? (readmeOpen && t("plugins.detail.readme")) ||
+              (settingsOpen && t("plugins.settings")) ||
               (!detailOpen && selected.surface && pageTitle) ||
               text(selected.row.item.display.title)
             : t("plugins.title")
@@ -1112,7 +1119,17 @@ function PluginDirectory() {
                 />
               </View>
             ) : null}
-            {!selected?.surface || detailOpen ? detailView : null}
+            {!selected?.surface || detailOpen
+              ? readmeOpen && selected
+                ? (
+                    <PluginReadmePage
+                      key={selected.row.key}
+                      deviceId={selected.row.host.deviceId}
+                      pluginId={selected.row.item.ref.id}
+                    />
+                  )
+                : detailView
+              : null}
             {settingsNotice && transientScope.current === noticeScope ? (
               <View pointerEvents="none" style={styles.toast}>
                 <PluginNotice

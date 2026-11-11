@@ -69,6 +69,7 @@
       "favicon": "./assets/favicon.png"
     },
     "plugins": [
+      "./plugins/with-agent-net-native",
       "./plugins/with-message-menu-icons",
       "./plugins/with-third-party-notices",
       "./plugins/with-google-signin-modular-headers",
@@ -82,8 +83,7 @@
             "enableShrinkResourcesInReleaseBuilds": true
           },
           "ios": {
-            "buildReactNativeFromSource": true,
-            "enableSceneSupport": true
+            "buildReactNativeFromSource": true
           }
         }
       ],

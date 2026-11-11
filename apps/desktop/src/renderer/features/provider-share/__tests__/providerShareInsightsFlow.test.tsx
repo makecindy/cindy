@@ -39,8 +39,9 @@ vi.mock('../../../../main/maker-host/createDesktopProviderService.js', () => ({
 }));
 vi.mock('../../../../main/maker-host/remote-provider-access-store.js', () => ({
   isRemoteProviderInvocationAllowed: () => true,
+  onRemoteProviderAccessChanged: () => () => undefined,
 }));
-vi.mock('../../../../main/i18n.js', () => ({ t: (key: string) => key }));
+vi.mock('../../../../main/i18n.desktop.js', () => ({ t: (key: string) => key }));
 vi.mock('../../../../main/textClipboard.js', () => ({ rememberIssuedClipboardText: vi.fn() }));
 // 额度查询不经过 Agent 启动面，隔离其与调度器的全局装配。
 // 其它 IPC 服务不是本链路的依赖，不装配文件传输、桌面捕获、语音和插件宿主。
@@ -73,8 +74,8 @@ vi.mock('../../../../main/logger.js', () => ({
 vi.mock('../../../../main/security/trustedAppRenderer.js', () => ({
   assertTrustedAppRendererEvent: vi.fn(),
 }));
-vi.mock('../../../../main/device-link/settings-store.js', async (original) => ({
-  ...(await original<typeof import('../../../../main/device-link/settings-store.js')>()),
+vi.mock('../../../../main/device-link/settings-store.desktop.js', async (original) => ({
+  ...(await original<typeof import('../../../../main/device-link/settings-store.desktop.js')>()),
   readDeviceLinkSettings: () => ({
     remoteControlEnabled: true,
     keepAwake: false,
@@ -86,6 +87,8 @@ vi.mock('../../../../main/device-link/settings-store.js', async (original) => ({
 vi.mock('../../../../main/device-link/providerShareHost.js', () => ({
   startProviderShareHost: vi.fn(),
   stopProviderShareHost: vi.fn(),
+  getProviderShareHostLoadedSnapshot: () => null,
+  onProviderShareHostChanged: () => () => {},
   providerShareAccessRevision: () => 1,
   ownedProviderShareGuestAccess: () =>
     state.active ? { shareId: 'flow', memberId: 'guest', providerId: 'anthropic' } : null,
@@ -214,7 +217,7 @@ import {
   __testing as dispatch,
   setProviderShareAccess,
   setRemoteAgentHandler,
-} from '../../../../main/device-link/dispatch';
+} from '../../../../main/device-link/dispatch.desktop';
 import { createProviderShareVisibilityStore } from '../../../../main/device-link/providerShareVisibility';
 import { ProviderShareInsightsSection } from '../ProviderShareInsightsSection';
 

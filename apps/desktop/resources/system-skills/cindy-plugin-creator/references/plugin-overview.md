@@ -4,7 +4,8 @@
 主机叠加:AI 可调用的工具、常驻界面面板、[工具结果中的交互页面（§4.23）](plugin-interactive-pages.md)、模型代办能力。本手册教你(agent)替用户
 写一个插件。**流程:先按 §0a 确认执行宿主并用 tag / commit 定位开源源码 → 读本 Skill 的参考目录 → 按 §0 用提问卡片和用户对齐设计 → 按需
 读透相关章(动手前至少读完"沙箱红线"与"打包与测试"两章) → 在工作目录写源码文件 →
-ghost_forge_pack 校验并生成 .cindy 产物；需要发布时改用 publish intent 取得一次性票据。**
+ghost_forge_pack 校验并生成 .cindy 产物。公开市场投稿走 §7.3 的贡献流程；
+发布到当前组织时才用 publish intent 取得一次性票据，见 §7.2。**
 
 版本获取、tag / commit 解析、源码入口与无法核实时的处理见
 [按宿主版本定位开源源码（§0a）](plugin-source-verification.md)。先定位版本，再查所需接口；
@@ -30,7 +31,10 @@ ghost_forge_pack 校验并生成 .cindy 产物；需要发布时改用 publish i
   `cindy.fetch` 或 `cindy.fs`；CLI 继续使用既有随包 Node 工作进程，
   不新增另一套 Host 执行协议。具体 CLI、域名或路径不需要先注册成客户端 Slot。
 - 只有 Panel、订阅、常驻进程、后台任务等**脱离当前 Agent tool-call**
-  仍要自主使用 Host 能力时，才声明 `network`、`fs`、`node` 等对应字段。
+  仍要自主使用普通网络或文件能力时，才需要对应的 `network`、`fs` 声明；
+  托管凭证等服务仍按各自声明守门，见 §4.7。
+  使用随包代码、CLI 或 stdio MCP 时始终需要顶层 `node` 声明运行形态，
+  包括当前 Agent tool-call，见 §4.12。
   真正需要 Cindy 尚未实现的 Host 服务（例如新的内置设备面）时，才需要客户端
   实现并提高 `minCindyVersion`。
 

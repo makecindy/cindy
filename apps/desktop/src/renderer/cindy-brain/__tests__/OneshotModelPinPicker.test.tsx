@@ -90,7 +90,8 @@ describe('OneshotModelPinPicker shared A adapter', () => {
   });
 
   it('uses the shared picker with all host-approved routes, without a separate Agent step', () => {
-    mount();
+    mount({ 'data-setting-id': 'settings.auxiliaryModels.preferred.label' });
+    expect(picker['data-setting-id']).toBe('settings.auxiliaryModels.preferred.label');
     expect(screen.getByTestId('shared-picker')).toBeTruthy();
     expect(picker.unifiedPanel).toBeUndefined(); // shared default, no opt-in needed
     expect(picker.configurationEnabled).toBe(true);

@@ -899,12 +899,12 @@ describe('db worker tx handlers', () => {
           ['m1', 'c1', 's1', 'user', 'before', 100, 'm2', 'c2', 's1', 'assistant', 'after', 200],
         );
 
-        await client.tx('rewind.commit', {
+        await expect(client.tx('rewind.commit', {
           sessionId: 's1',
           targetCreatedAt: 200,
           sdkSessionId: 'sdk-after-rewind',
           now: 999,
-        });
+        })).resolves.toEqual(['c2']);
 
         await expect(client.query('SELECT id, rewind_at FROM messages ORDER BY id')).resolves.toEqual(
           [
@@ -1073,13 +1073,14 @@ describe('db worker tx handlers', () => {
         ],
       );
 
-      await client.tx('rewind.commit', {
+      const rewoundClientIds = await client.tx('rewind.commit', {
         sessionId: 's1',
         targetCreatedAt: 200,
         targetMessageId: 'target',
         targetClientId: 'target-client',
         now: 999,
       });
+      expect(rewoundClientIds.sort()).toEqual(['c-after', 'target-client']);
 
       await expect(client.query('SELECT id, rewind_at FROM messages ORDER BY id')).resolves.toEqual(
         [
@@ -3578,6 +3579,55 @@ describe('db worker tx handlers', () => {
       await expect(
         client.queryOne('SELECT id FROM orca_workers WHERE id = ?', ['late-worker-link']),
       ).resolves.toBeUndefined();
+    }, { useInlineWorker });
+  });
+
+  /**
+   * 测试价值
+   * - 生产入口与可观察结果：orca.reserveWorkerCreation（真实 worker 线程与内联两条实现）；已归档
+   *   Worker 的名字能否被新 Worker 使用，仍在团队里的同名 Worker 是否照旧拒绝。
+   * - Bug 依据：2026-11-10 协同任务，归档五个 Worker 后按原名重建，五个全部 DUPLICATE_LABEL。
+   * - 现有覆盖缺口：相邻用例只验证归档释放名额，没有验证名字。
+   * - 最小失败输入：归档 label 为 done 的 Worker 后，用 DONE 申请创建。
+   * - tier：db（真实 SQLite 事务与唯一索引）。
+   */
+  it.each([false, true])('frees an archived worker label for reuse and keeps active labels unique (inline=%s)', async (useInlineWorker) => {
+    await withClient(async (client) => {
+      await seedSession(client, 'lead');
+      await seedSession(client, 'done-worker', { orcaRole: 'worker' });
+      await seedSession(client, 'active-worker', { orcaRole: 'worker' });
+      await client.exec(
+        'INSERT INTO orca_teams (id, lead_session_id, status, created_at, updated_at) VALUES (?, ?, ?, ?, ?)',
+        ['team-1', 'lead', 'active', 1, 1],
+      );
+      for (const [id, sessionId, label] of [['worker-1', 'done-worker', 'done'], ['worker-2', 'active-worker', 'busy']]) {
+        await client.exec(
+          `INSERT INTO orca_workers (
+            id, team_id, session_id, status, label, role, created_at, updated_at
+          ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+          [id, 'team-1', sessionId, 'done', label, 'tester', 1, 1],
+        );
+      }
+      const reserve = (reservationId: string, label: string) => client.tx('orca.reserveWorkerCreation', {
+        reservationId, teamId: 'team-1', label, hardLimit: 8, now: 100, expiresAt: 200,
+      });
+
+      await expect(reserve('still-active', 'done')).resolves.toEqual({ ok: false, errorCode: 'DUPLICATE_LABEL' });
+
+      await client.exec("UPDATE sessions SET status = 'archived' WHERE id = ?", ['done-worker']);
+      await expect(reserve('reuse', 'DONE')).resolves.toEqual({ ok: true, occupiedSlotsBefore: 1 });
+      await expect(reserve('active-name', 'BUSY')).resolves.toEqual({ ok: false, errorCode: 'DUPLICATE_LABEL' });
+
+      // 归档的记录保留，名字改成带自身 id 的唯一值；新 Worker 以原名落库不再撞唯一索引。
+      await expect(client.query('SELECT id, label FROM orca_workers ORDER BY id')).resolves.toEqual([
+        { id: 'worker-1', label: 'done~worker-1' },
+        { id: 'worker-2', label: 'busy' },
+      ]);
+      await seedSession(client, 'new-worker', { orcaRole: 'worker' });
+      await client.tx('orca.upsertWorker', {
+        id: 'worker-3', teamId: 'team-1', sessionId: 'new-worker', status: 'idle', label: 'done', role: 'tester', focused: false, now: 101,
+      });
+      await expect(client.queryOne('SELECT label FROM orca_workers WHERE id = ?', ['worker-3'])).resolves.toEqual({ label: 'done' });
     }, { useInlineWorker });
   });
 

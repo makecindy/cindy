@@ -1,3 +1,4 @@
+import { copyChatSelection } from '@/components/chat/chatSelectionClipboard';
 import { forwardedRequestDisplayText } from '@cindy/maker-shared/message-source';
 import { Button } from '@/components/ui/button';
 import { useCallback, useEffect, useMemo, useState } from 'react';
@@ -12,7 +13,6 @@ import { MarkdownRenderer } from '@/components/chat/MarkdownRenderer';
 import {
   getDataOwnerGeneration,
   isDataOwnerGenerationCurrent,
-  isDataOwnerPushCurrent,
 } from '@/contexts/dataOwnerGeneration';
 import { useRegisterContentHeader } from '../feature-context';
 import type { BotDirectMessageThreadView } from '../../../shared/botDirectMessage';
@@ -56,16 +56,14 @@ export function BotDirectMessageView() {
       }
     };
     void load();
+    // A thread is read-only history; only a computer still on the older version can extend it.
     const unsubscribe = deviceId
       ? window.electronAPI.deviceLink.onRemotePush((push, stamp) => {
           if (push.deviceId !== deviceId || push.channel !== 'maker:bot-direct-message:changed'
             || !isDeviceLinkRemotePushCurrent(push, stamp)) return;
           if ((push.payload as { threadId?: string })?.threadId === threadId) void load();
         })
-      : window.electronAPI.maker.onBotDirectMessageChanged((payload, ownerStamp) => {
-          if (!isDataOwnerPushCurrent(ownerStamp) || payload.threadId !== threadId) return;
-          void load();
-        });
+      : () => {};
     const offStatus = deviceId ? window.electronAPI.deviceLink.onStatusChanged((state) => {
       if (state.status === 'online') void load();
       else requestVersion += 1;
@@ -155,7 +153,7 @@ export function BotDirectMessageView() {
 
   return (
     <main className="flex h-full min-w-0 flex-col overflow-hidden bg-[var(--surface)]">
-      <div className="min-h-0 flex-1 overflow-y-auto px-5 py-6">
+      <div onCopy={copyChatSelection} className="min-h-0 flex-1 overflow-y-auto px-5 py-6">
         <div className="mx-auto flex w-full max-w-[760px] flex-col gap-4">
           {thread.messages.map((message) => {
             const ownSide = message.senderBotId === botId;

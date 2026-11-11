@@ -105,7 +105,7 @@ import {
   ACTIVITY_ROW_RADIUS_CLASS,
 } from './activityRowChrome';
 import { ImageLightbox } from './ImageLightbox';
-import { TextLightbox } from './TextLightbox';
+import { TextLightbox } from './lazyPreviewLightboxes';
 import { ToolPayloadLightbox, type ToolPayloadMode } from './ToolPayloadLightbox';
 import { useFileChipContextMenu } from './useFileChipContextMenu';
 import { activateInlineLinkFromKeyboard } from './linkInteraction';
@@ -1204,7 +1204,7 @@ export function AgentActionRow({
             'bg-[var(--msg-user-bg)]',
             'border border-[var(--msg-user-border)]',
             'font-mono text-[length:calc(var(--app-code-font-size)_-_1px)] leading-[calc(var(--app-code-font-size)_+_4px)]',
-            'text-[var(--foreground)]',
+            'text-foreground',
             'select-text cursor-text',
           )}
         >

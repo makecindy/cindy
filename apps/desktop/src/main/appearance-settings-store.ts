@@ -73,7 +73,7 @@ export const __testing = {
 export const appearancePortableSettings = portableOverrideSettings(store, {
   // Host-owned media reference; a custom wallpaper image is not copied.
   omitKeys: ['customWallpaperUrl'],
-  optionalKeys: ['wallpaperBlur', 'wallpaperVisibility'],
+  optionalKeys: ['wallpaperBlur', 'wallpaperVisibility', 'desktopVisibility'],
   filter: (values) => {
     if (values.wallpaperId !== 'custom') return values;
     const rest = { ...values };

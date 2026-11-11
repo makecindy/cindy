@@ -14,7 +14,7 @@ import {
   type NodeWorkerStartupObservation,
   type NodeWorkerStartupState,
   type NodeWorkerProcess,
-} from '../nodeRuntimeBroker';
+} from '../nodeRuntimeBroker.desktop';
 
 const TEST_APP_RUN_ID = 'a'.repeat(16);
 const TEST_ATTEMPT_ID = 'b'.repeat(16);
@@ -480,7 +480,7 @@ describe('nodeRuntimeBroker · Electron utilityProcess 适配', () => {
     );
 
     expect(fork).toHaveBeenCalledWith(
-      expect.stringMatching(/nodeRuntimeWorkerProcess\.js$/),
+      expect.stringMatching(/nodeRuntimeWorkerProcess\.desktop\.js$/),
       ['/plugins/demo/node/worker.cjs'],
       expect.objectContaining({
         cwd: os.tmpdir(),

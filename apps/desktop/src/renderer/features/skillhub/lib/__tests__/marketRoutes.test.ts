@@ -13,7 +13,7 @@ const localDetailSource = readFileSync(resolve(skillhubDir, 'SkillhubDetailView.
 
 describe('market route scope', () => {
   it('uses one detail route and redirects old detail URLs', () => {
-    expect(routerSource).toContain('<SkillhubDetailRoute />');
+    expect(routerSource).toContain('Component: SkillhubDetailRoute');
     expect(routerSource).toContain('<LegacySkillDetailRedirect market />');
     expect(routerSource).toContain('<LegacySkillDetailRedirect />');
     expect(routerSource).not.toContain('SkillhubMarketManageView');

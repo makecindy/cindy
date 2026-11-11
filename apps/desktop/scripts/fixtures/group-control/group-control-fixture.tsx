@@ -1,3 +1,6 @@
+import answerPicture from '../../../src/renderer/assets/cindy-share-character.jpg';
+import answerVideo from '../../../src/renderer/assets/wallpapers/cindy-window.mp4?url';
+import answerAudio from '../../../native/agent-island/sounds/startup-chime.mp3?url';
 import { makerChatStore } from '../../../src/renderer/lib/makerChatStore';
 import { useEffect, useRef } from 'react';
 import { Route, Routes, useSearchParams } from 'react-router-dom';
@@ -20,6 +23,8 @@ if (!crypto.randomUUID) {
 
 interface GroupData {
   processRecord?: boolean;
+  processEmpty?: boolean;
+  processUnavailable?: boolean;
   processOtherOwner?: boolean;
   /** Controlled receipts for the real renderer send/settle layout regression. */
   sendStatus?: boolean;
@@ -84,7 +89,7 @@ function bodyMessages() {
     { seq: 3, op: 'create', id: 'list', kind: 'markdown', props: { text: '- 正文可以阅读\n- **重点**保持格式' } },
     { seq: 4, op: 'create', id: 'image', kind: 'image', props: { src: 'cindy-media://blobs/fixture-image.png', alt: '图片说明保留', caption: '图片标题保留' } },
     { seq: 5, op: 'create', id: 'unnamed-image', kind: 'image', props: { src: '/private/tmp/fixture-image.png' } },
-    ...['image', 'video', 'audio'].map((kind, index) => ({ seq: index + 6, op: 'create', id: `public-${kind}`, kind, props: { src: `https://example.test/public-${kind}` } })),
+    ...Object.entries({ image: answerPicture, video: answerVideo, audio: answerAudio }).map(([kind, asset], index) => ({ seq: index + 6, op: 'create', id: `public-${kind}`, kind, props: { src: new URL(asset, location.href).href, alt: `public-${kind}`, style: { maxHeight: 120 } } })),
   ].map(item => JSON.stringify(item)).join('\n') + '\n```';
   return [
     message({ id: 'body-user', sequence: 1, content: '请整理发布前检查', createdAt: T0 }),
@@ -455,7 +460,10 @@ void mountPage({
         onStatusChanged: subscription('deviceLinkStatus'),
         onPresenceChanged: subscription('deviceLinkPresence'),
         onResponsivenessChanged: subscription('deviceLinkResponsiveness'),
-        invoke: async (_device: string, _channel: string, args: Array<{ ref?: { collectionId?: string } }>) => _channel === 'local-db:messages:around-client-id' ? [
+        invoke: async (_device: string, _channel: string, args: Array<{ ref?: { collectionId?: string } }>) => _channel === 'local-db:messages:around-client-id' ? data.processUnavailable ? Promise.reject(new Error('Process unavailable')) : data.processEmpty ? [
+          { clientId: 'fixture-source', role: 'user', content: 'Request' },
+          { clientId: 'fixture-end', role: 'assistant', content: 'Result', agentMeta: { assistantPhase: 'final_answer', turnCompleted: true } },
+        ] : [
           { clientId: 'fixture-source', role: 'user', content: 'Request' },
           { clientId: 'fixture-thought', role: 'thinking', content: 'Hidden reasoning' },
           { clientId: 'fixture-note', role: 'assistant', content: '我先核对任务的最近进展，再看未完成 PR 的阻塞点。', agentMeta: { assistantPhase: 'commentary' } },

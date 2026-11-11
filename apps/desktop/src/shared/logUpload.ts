@@ -9,6 +9,8 @@
  * `docs/client-log-upload-implementation-plan.md`。
  */
 
+import type { CindyRegion } from '@cindy/maker-shared/brand-identity';
+
 /** 一次上报的触发原因。后台按它区分手动报障与崩溃现场。 */
 export type LogUploadReason = 'manual' | 'crash-immediate' | 'crash-backfill';
 
@@ -46,18 +48,19 @@ export const LOG_UPLOAD_SETTINGS_CHANGE_CHANNEL = 'log-upload:settings-change';
  */
 export const UPLOAD_CODE_ALPHABET = '23456789ABCDEFGHJKMNPQRSTVWXYZ';
 
-/** 编号总长度（不含分隔符）。8 位 × 30 字符集 ≈ 6.6e11 组合，足够避免口述冲突。 */
+/** 随机部分长度（不含区域前缀与分隔符）。8 位 × 30 字符集 ≈ 6.6e11 组合。 */
 export const UPLOAD_CODE_LENGTH = 8;
 
-/** `XXXX-XXXX`：分组让用户读得准、抄得对。 */
-export function formatUploadCode(raw: string): string {
-  return raw.length <= 4 ? raw : `${raw.slice(0, 4)}-${raw.slice(4)}`;
+/** 区域前缀隔离跨区编号；随机部分仍分成 `XXXX-XXXX`，不缩减随机空间。 */
+export function formatUploadCode(raw: string, region: CindyRegion): string {
+  const grouped = raw.length <= 4 ? raw : `${raw.slice(0, 4)}-${raw.slice(4)}`;
+  return `${region.toUpperCase()}-${grouped}`;
 }
 
-/** 校验一个字符串是否是本协议产出的编号形态（用于测试与日志自检）。 */
+/** 接受带区域前缀的新编号及历史 `XXXX-XXXX` 编号（用于测试与日志自检）。 */
 export function isFormattedUploadCode(value: string): boolean {
   const pattern = new RegExp(
-    `^[${UPLOAD_CODE_ALPHABET}]{4}-[${UPLOAD_CODE_ALPHABET}]{${UPLOAD_CODE_LENGTH - 4}}$`,
+    `^(?:(?:CN|GLOBAL|DEV)-)?[${UPLOAD_CODE_ALPHABET}]{4}-[${UPLOAD_CODE_ALPHABET}]{${UPLOAD_CODE_LENGTH - 4}}$`,
   );
   return pattern.test(value);
 }

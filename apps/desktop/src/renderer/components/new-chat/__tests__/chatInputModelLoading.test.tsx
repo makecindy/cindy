@@ -121,17 +121,23 @@ const props = {
 
 // #8232, unit: the real composer Escape listener must not cancel a covered
 // voice draft. Existing voice cases cover sending, not foreground previews.
+// #9056: keep the card mounted when switching from rendered Markdown to source;
+// both modes must preserve the voice draft even without a Markdown search host.
 it.each(['listening', 'submitting', 'refining'] as const)('preserves %s voice input while a Markdown preview owns Escape', async state => {
   h.listening = state === 'listening';
   h.processing = state === 'listening' ? null : state;
   render(<ChatInput {...props} onSend={vi.fn()} />);
   const preview = document.createElement('section');
+  preview.dataset.textLightboxCard = '';
   preview.dataset.textLightboxSearchHost = '';
   const paragraph = document.createElement('p');
   paragraph.textContent = 'Foreground document';
   preview.append(paragraph);
   document.body.append(preview);
   try {
+    fireEvent.keyDown(paragraph, { key: 'Escape' });
+    expect(h.cancel).not.toHaveBeenCalled();
+    delete preview.dataset.textLightboxSearchHost;
     fireEvent.keyDown(paragraph, { key: 'Escape' });
     expect(h.cancel).not.toHaveBeenCalled();
     preview.remove();
@@ -362,11 +368,7 @@ function QueueEditHarness({
       onSend={() => undefined}
       onStartVoiceConversation={onStartVoiceConversation}
       pendingQueue={[queuedMessage]}
-      queueExpanded={false}
-      onQueueExpandedChange={vi.fn()}
-      onQueueRemove={onRemove}
       queueEditingClientId={editingClientId}
-      onQueueEditBegin={vi.fn()}
       onQueueEditSubmit={onSubmit}
       onQueueEditCancel={() => {
         onCancel();
@@ -640,7 +642,7 @@ it('hides a missing existing model, recovers from the effective runtime, and pre
   expect(onSend).not.toHaveBeenCalled();
 });
 
-it('hides queue removal while editing and exits editing from the composer cancel button', async () => {
+it('keeps the queue out of the composer and exits editing from its cancel button', async () => {
   const onCancel = vi.fn();
   const onRemove = vi.fn();
   render(<QueueEditHarness onCancel={onCancel} onRemove={onRemove} />);
@@ -648,7 +650,7 @@ it('hides queue removal while editing and exits editing from the composer cancel
   const cancel = await screen.findByRole('button', {
     name: 'newChat.pendingQueue.editCancelAria',
   });
-  expect(screen.getByRole('listitem')).toBeTruthy();
+  expect(screen.queryByRole('listitem')).toBeNull();
   expect(
     screen.queryByRole('button', { name: 'newChat.pendingQueue.removeAria' }),
   ).toBeNull();
@@ -661,8 +663,7 @@ it('hides queue removal while editing and exits editing from the composer cancel
       screen.queryByRole('button', { name: 'newChat.pendingQueue.editCancelAria' }),
     ).toBeNull();
   });
-  fireEvent.mouseEnter(screen.getByRole('listitem'));
-  expect(screen.getByRole('button', { name: 'newChat.pendingQueue.removeAria' })).toBeTruthy();
+  expect(screen.queryByRole('listitem')).toBeNull();
   expect(onRemove).not.toHaveBeenCalled();
 });
 

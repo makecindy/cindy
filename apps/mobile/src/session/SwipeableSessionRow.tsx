@@ -1,3 +1,4 @@
+import { useWindowWidth } from '@/platform/windowDimension';
 /**
  * SwipeableSessionRow —— 首页会话行的 iOS 式滑动操作包装。
  *
@@ -21,7 +22,7 @@
  *    避免拆手势树。读取失败时才回退到 Animated listener 的最近值。
  */
 import { memo, useCallback, useEffect, useRef, useState, type ReactNode } from 'react';
-import { Animated, Pressable, StyleSheet, View, useWindowDimensions } from 'react-native';
+import { Animated, Pressable, StyleSheet, View } from 'react-native';
 import {
   ClassicSwipeable as Swipeable,
   type ClassicSwipeableMethods,
@@ -46,7 +47,7 @@ const FULL_SWIPE_RATIO = 0.55;
 /** 「归档」按钮越过全滑阈值时扩展盖满右侧面板的过渡时长。 */
 const ARM_ANIMATION_MS = 150;
 const ICON_SIZE = iconSize.swipeAction;
-type SwipeTranslation = Animated.AnimatedInterpolation<number>;
+type SwipeTranslation = Parameters<NonNullable<React.ComponentProps<typeof Swipeable>["renderLeftActions"]>>[1];
 type ReadableSwipeTranslation = SwipeTranslation & { __getValue?(): unknown };
 type ClassicSwipeDirection = 'left' | 'right';
 
@@ -97,7 +98,7 @@ function SwipeableSessionRowInner({
   const pinnedAt = session.pinnedAt;
   const styles = useThemedStyles(makeStyles);
   const { colors } = useTheme();
-  const { width: windowWidth } = useWindowDimensions();
+  const windowWidth = useWindowWidth();
   const fullSwipeThreshold = windowWidth * FULL_SWIPE_RATIO;
 
   const methodsRef = useRef<ClassicSwipeableMethods | null>(null);

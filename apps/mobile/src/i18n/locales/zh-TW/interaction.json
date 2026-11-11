@@ -1,5 +1,7 @@
 {
   "permission": {
+    "mcpComplete": "已完成",
+    "mcpCancel": "取消",
     "mode": {
       "default": "預設權限",
       "acceptEdits": "允許編輯",
@@ -34,6 +36,10 @@
     "exit": "退出計劃模式"
   },
   "panel": {
+    "questionUnanswered": "未回答",
+    "questionWithdrawn": "無需再回答",
+    "withdrawnDraft": "這個問題已不再需要回答。\n{{reason}}\n草稿已保留，你仍可作為補充傳送。",
+    "sendSupplement": "傳送補充",
     "readOnlyKind": "待確認",
     "readOnlyTitle": "電腦端正在等待確認",
     "pendingRequests": "待處理請求",
@@ -98,7 +104,14 @@
     "planFeedbackPlaceholder": "告訴 Claude 應該怎麼做",
     "planFeedbackRequired": "輸入反饋後才能提交。",
     "planFeedbackSubmit": "提交計劃反饋",
-    "planFeedbackAccessibility": "反饋修改計劃"
+    "planFeedbackAccessibility": "反饋修改計劃",
+    "validation": {
+      "required": "請填寫此必填項目。",
+      "choice": "請選擇列出的選項。",
+      "tooShort": "請至少輸入 {{count}} 個字元。",
+      "tooLong": "請最多輸入 {{count}} 個字元。"
+    },
+    "askRestrictedMetaCaption": "{{options}} · {{mode}}"
   },
   "kinds": {
     "permission": {
@@ -385,6 +398,8 @@
       "submitting": "提交中"
     },
     "permission": {
+      "titleStdin": "允許向終端傳送輸入？",
+      "titleMcpUrl": "完成 {{server}} 的請求",
       "highRiskTitle": "高風險授權需要二次確認",
       "highRiskDetail": "先核對指令內容，再點一次確認允許；不確定就拒絕。",
       "sessionAllowTitle": "可以只允許一次，也可以本任務總是允許",
@@ -439,5 +454,39 @@
       "ghost_id": "插件",
       "tool": "工具"
     }
+  },
+  "issueConfirm": {
+    "title": "確認提交反饋到 {{appName}}",
+    "typeBug": "Bug",
+    "typeFeature": "功能建議",
+    "titleLabel": "標題",
+    "bodyLabel": "正文(Markdown)",
+    "privacyHint": "Issue 的標題與正文將公開顯示，且可能被搜尋或快取。系統只能遮蔽部分常見敏感資訊，無法辨識所有語意隱私。",
+    "relatedLogsHint": "本次提交包含上方顯示的相關客戶端日誌；日誌在公開前已經過來源與欄位篩選、脫敏及長度限制。",
+    "privacyConfirm": "我已檢查以上公開內容，不包含不應公開的個人、對話或業務資訊",
+    "submissionMethodLabel": "釋出方式",
+    "identityGithubUser": "GitHub 帳號 @{{login}} 直接釋出",
+    "identityGithubUserHint": "你將成為該 Issue 的 GitHub 作者，可以在 GitHub 編輯或關閉",
+    "identityPlatform": "由 Cindy 平臺代發(GitHub App {{login}})",
+    "identityPlatformHint": "你不是該 Issue 的 GitHub 作者，提交後無法自行編輯或關閉",
+    "publicNameLabel": "公開署名",
+    "publicNameHint": "該署名會公開顯示在 Issue 正文中",
+    "anonymous": "匿名",
+    "useAnonymous": "使用匿名署名",
+    "envLine": "提交客戶端環境（提交時自動附加）：客戶端 {{appVersion}} · {{platform}} {{arch}}（{{osVersion}}）· 介面語言 {{uiLanguage}}",
+    "runtimeLine": "Harness {{harness}} · Model ID {{modelId}}（目前任務）",
+    "regionLine": "版本區域：{{region}}",
+    "regionCodeCn": "CN",
+    "regionCodeDev": "Dev",
+    "submit": "提交反饋",
+    "cancel": "取消",
+    "previewLabel": "GitHub · 公開回饋",
+    "edit": "修改",
+    "doneEditing": "完成修改",
+    "publicSubmit": "公開提交回饋",
+    "publicationNotice": "提交後，內容和署名將公開在 GitHub。",
+    "attribution": "署名：{{name}}",
+    "environment": "附帶執行環境",
+    "identitySettings": "署名與帳號"
   }
 }

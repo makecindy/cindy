@@ -141,7 +141,11 @@ function TaskCheckbox({
   );
 }
 
-export function InterruptedTasksResumeDialog({ suspended = false }: { suspended?: boolean }) {
+export function InterruptedTasksResumeDialog({ suspended = false, onPendingChange }: {
+  suspended?: boolean;
+  /** Includes loading: later startup notices must wait until this choice is settled. */
+  onPendingChange?: (pending: boolean) => void;
+}) {
   const { t } = useTranslation();
   const { dataOwnerId } = useAuth();
   const [tasks, setTasks] = useState<InterruptedTask[]>([]);
@@ -150,11 +154,17 @@ export function InterruptedTasksResumeDialog({ suspended = false }: { suspended?
 
   useEffect(() => {
     let active = true;
+    onPendingChange?.(true);
+    setOpen(false);
     if (_load?.ownerId !== dataOwnerId) {
       _load = { ownerId: dataOwnerId, promise: loadInterruptedTasksWithRetry() };
     }
     void _load.promise.then((loaded) => {
-      if (!active || _handledOwnerIds.has(dataOwnerId) || loaded.length === 0) return;
+      if (!active) return;
+      if (_handledOwnerIds.has(dataOwnerId) || loaded.length === 0) {
+        onPendingChange?.(false);
+        return;
+      }
       log.info(`found ${loaded.length} interrupted task(s) to offer for resume`);
       setTasks(loaded);
       setOpen(true);
@@ -162,10 +172,13 @@ export function InterruptedTasksResumeDialog({ suspended = false }: { suspended?
     return () => {
       active = false;
     };
-  }, [dataOwnerId]);
+  }, [dataOwnerId, onPendingChange]);
 
   const handleOpenChange = (next: boolean) => {
-    if (!next) _handledOwnerIds.add(dataOwnerId);
+    if (!next) {
+      _handledOwnerIds.add(dataOwnerId);
+      onPendingChange?.(false);
+    }
     setOpen(next);
   };
 

@@ -23,7 +23,7 @@ import {
   stageLocalFileToCache,
   cleanupOwnedUnpersistedStagedChatAttachments,
 } from '../remote-file-cache';
-import * as attachments from '../../imageCacheStore';
+import * as attachments from '../../imageCacheStore.desktop';
 
 beforeEach(async () => {
   state.root = await fs.mkdtemp(path.join(os.tmpdir(), 'chat-folder-test-'));

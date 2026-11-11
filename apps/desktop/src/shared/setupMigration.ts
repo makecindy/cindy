@@ -43,6 +43,7 @@ export const SETUP_MIGRATION_RENDERER_PREF_KEYS: readonly string[] = [
   'notifications.feishuEnabled',
   'notifications.wecomGroupEnabled',
   'notifications.agentIslandEnabled',
+  'notifications.agentIslandSubtleReminders',
   'notifications.agentIslandSoundSettings',
   'notifications.agentIslandMascotSkin',
   'chat.streamFadePreference',

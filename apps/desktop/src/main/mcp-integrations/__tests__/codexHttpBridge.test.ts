@@ -13,7 +13,7 @@ import {
   startCodexHttpBridge,
   type CodexHttpBridge,
   withMcpRouteIdentity,
-} from '../codexHttpBridge.js';
+} from '../codexHttpBridge.desktop.js';
 import { CODEX_ALLOWED_BUILTIN_PLUGIN_IDS_KEY, CODEX_DISABLED_BUILTIN_PLUGIN_IDS_KEY } from '../codexBuiltinToolPolicy.js';
 import { isBotToolsetAvailableOnTarget } from '../../../shared/botRemoteCapabilities.js';
 import { resolveBotAllowedBuiltinPluginIds } from '../../maker-host/plugins/types.js';
@@ -284,15 +284,14 @@ describe('codexHttpBridge', () => {
 
   it.each(['codex', 'claude-code'] as const)('serves live remote introspection and keeps Bot tasks scoped over the %s helper route', async (agentKind) => {
     let surface: 'bot' | 'default' = 'bot';
-    const start = vi.fn(async () => ({ ok: true as const, delegationId: 'remote-task', childSessionId: 'child-session', status: 'running', deadlineAt: 1000 }));
-    const unavailable = vi.fn(async () => ({ ok: false as const, errorCode: 'UNEXPECTED', message: 'unused' }));
+    const start = vi.fn(async () => ({ ok: true as const, agents: [{ id: 'remote-task' }], unavailableDevices: [] }));
     const machines = { computers: [{ name: 'Desktop', availability: 'online' }], ssh: [] };
     const listMachines = vi.fn(async () => ({ ok: true as const, machines }));
     bridge = await startCodexHttpBridge({
       serverFactories: { cindy_helper: () => createXdtHelperMcpServer({
         resolveSurface: async () => surface,
         machines: { list: listMachines },
-        sessionTasks: { startSessionTask: start, getSessionTask: unavailable, messageSessionTask: unavailable, stopSessionTask: unavailable },
+        botMessaging: { listAgents: start },
       }, { agentKind, workingDir: '', getSessionContext: getLiziMcpSessionContext }) },
       pluginIdByServerName: { cindy_helper: 'xdt_helper' },
       additionalBearerTokens: () => ['remote-test-token'],
@@ -329,11 +328,9 @@ describe('codexHttpBridge', () => {
     });
     const list = async () => readRpcResponse(await request('tools/list')) as Promise<{ result: { tools: Array<{ name: string }> } }>;
     await current.withDiscoveryContext(ctx, async () => {
-      expect((await list()).result.tools.map(t => t.name)).toEqual(expect.arrayContaining([
-        'start_session_task', 'check_session_task', 'message_session_task', 'stop_session_task',
-      ]));
+      expect((await list()).result.tools.map(t => t.name)).toEqual(expect.arrayContaining(['list_agents']));
       if (agentKind === 'codex') {
-        const denied = await request('tools/call', { name: 'start_session_task', arguments: { instruction: 'too early' } });
+        const denied = await request('tools/call', { name: 'list_agents', arguments: {} });
         expect(denied.status).toBe(401);
         await denied.text();
       }
@@ -342,11 +339,11 @@ describe('codexHttpBridge', () => {
     const firstList = await list();
     expect((await list()).result).toEqual(firstList.result);
     const result = await readRpcResponse(await request('tools/call', {
-      name: 'start_session_task', arguments: { project_path: '/project', instruction: 'Build the report' },
+      name: 'list_agents', arguments: {},
       ...(agentKind === 'codex' ? { _meta: { threadId: 'remote-thread' } } : {}),
     }));
     expect(result).toMatchObject({ result: { content: [{ type: 'text', text: expect.stringContaining('remote-task') }] } });
-    expect(start).toHaveBeenCalledWith(expect.objectContaining({ callerSessionId: 'remote-bot', objective: 'Build the report' }));
+    expect(start).toHaveBeenCalledWith({ callerSessionId: 'remote-bot' });
     // The ordinary remote surface retains Cindy introspection, but not local controls or Bot-only tasks.
     surface = 'default';
     expect((await list()).result.tools.map(t => t.name).sort()).toEqual(['call_tool', 'list_machines', 'list_tools']);
@@ -366,7 +363,7 @@ describe('codexHttpBridge', () => {
       name: 'call_tool', arguments: { name: 'get_current_session_id', args: {} },
     }));
     expect(introspection).toMatchObject({ result: { content: [{ text: expect.stringContaining('remote-bot') }] } });
-    await request('tools/call', { name: 'start_session_task', arguments: { instruction: 'denied' } }).then(readRpcResponse);
+    await request('tools/call', { name: 'list_agents', arguments: {} }).then(readRpcResponse);
     expect(start).toHaveBeenCalledTimes(1);
     if (agentKind === 'codex') {
       // A remote token cannot borrow a local or Pi context to get the broad helper surface.
@@ -1291,6 +1288,91 @@ describe('codexHttpBridge', () => {
     const stale = await fetch(staleUrl, { method: 'POST', headers, body: initBody });
     expect(stale.status).toBe(401);
     await stale.text();
+  });
+
+  // Regression (2026-11 personal build): Pi exits without DELETE, so its MCP sessions
+  // (each a full McpServer with every tool schema) stayed forever — 77 opened, 0 closed
+  // in 40 minutes. Ending the Session must close them; a reattach that re-registers the
+  // same Session must not, and local Codex sessions (no ?session=) are never owned.
+  it('closes MCP sessions owned by a Session once its registration really ends', async () => {
+    bridge = await startCodexHttpBridge({
+      serverFactories: { cindy_orca: createTestServer },
+      logger: noopLogger(),
+    });
+    const initBody = JSON.stringify({
+      jsonrpc: '2.0',
+      id: 1,
+      method: 'initialize',
+      params: { protocolVersion: '2024-11-05', capabilities: {}, clientInfo: { name: 'pi', version: '1.0.0' } },
+    });
+    const accept = { accept: 'application/json, text/event-stream', 'content-type': 'application/json' };
+
+    const codexInit = await fetch(bridge.url('cindy_orca'), {
+      method: 'POST',
+      headers: { ...accept, authorization: `Bearer ${bridge.token}` },
+      body: initBody,
+    });
+    expect(codexInit.status).toBe(200);
+    await codexInit.text();
+
+    const ctx = { agentKind: 'pi' as const, sessionId: 'pi-session', sessionInstanceId: 'pi-instance', workingDir: '/repo', vendorOptions: {} };
+    bridge.registerSessionCtx('pi-session', ctx);
+    bridge.registerSessionToken('pi-session', 'pi-token');
+    const piUrl = withMcpRouteIdentity(bridge.url('cindy_orca'), { sessionId: 'pi-session', sessionInstanceId: 'pi-instance' });
+    const piHeaders = { ...accept, authorization: 'Bearer pi-token' };
+    const piInit = await fetch(piUrl, { method: 'POST', headers: piHeaders, body: initBody });
+    expect(piInit.status).toBe(200);
+    const mcpSessionId = piInit.headers.get('mcp-session-id') ?? '';
+    await piInit.text();
+    expect(bridge.mcpSessionCount()).toBe(2);
+
+    // Reattach: a newer registration replaces the ctx; the old dispose arrives late.
+    const reattached = { ...ctx };
+    bridge.registerSessionCtx('pi-session', reattached);
+    bridge.unregisterSessionCtx('pi-session', ctx);
+    expect(bridge.mcpSessionCount()).toBe(2);
+    const call = await fetch(piUrl, {
+      method: 'POST',
+      headers: { ...piHeaders, 'mcp-session-id': mcpSessionId },
+      body: JSON.stringify({ jsonrpc: '2.0', id: 2, method: 'tools/call', params: { name: 'current_session', arguments: {} } }),
+    });
+    expect(await readRpcResponse(call)).toMatchObject({ result: { content: [{ type: 'text', text: 'pi-session' }] } });
+
+    bridge.unregisterSessionCtx('pi-session', reattached);
+    expect(bridge.mcpSessionCount()).toBe(1);
+  });
+
+  // Review finding on the cleanup above: an initialize that already passed the ctx check
+  // can finish after the Session unregistered, missing the cleanup scan. The factory runs
+  // between the ctx check and the table insert, so unregistering there is that interleaving.
+  it('does not keep an MCP session whose owner unregistered while it was initializing', async () => {
+    const ctx = { agentKind: 'pi' as const, sessionId: 'pi-session', sessionInstanceId: 'pi-instance', workingDir: '/repo', vendorOptions: {} };
+    bridge = await startCodexHttpBridge({
+      serverFactories: {
+        cindy_orca: () => {
+          bridge?.unregisterSessionCtx('pi-session', ctx);
+          return createTestServer();
+        },
+      },
+      logger: noopLogger(),
+    });
+    bridge.registerSessionCtx('pi-session', ctx);
+    bridge.registerSessionToken('pi-session', 'pi-token');
+    const init = await fetch(
+      withMcpRouteIdentity(bridge.url('cindy_orca'), { sessionId: 'pi-session', sessionInstanceId: 'pi-instance' }),
+      {
+        method: 'POST',
+        headers: { accept: 'application/json, text/event-stream', 'content-type': 'application/json', authorization: 'Bearer pi-token' },
+        body: JSON.stringify({
+          jsonrpc: '2.0',
+          id: 1,
+          method: 'initialize',
+          params: { protocolVersion: '2024-11-05', capabilities: {}, clientInfo: { name: 'pi', version: '1.0.0' } },
+        }),
+      },
+    );
+    await init.text();
+    expect(bridge.mcpSessionCount()).toBe(0);
   });
 
   it('rejects an unregistered ?session= query while leaving token-only requests untouched', async () => {

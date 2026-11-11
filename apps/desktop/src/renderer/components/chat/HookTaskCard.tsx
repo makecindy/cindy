@@ -186,7 +186,7 @@ export default function HookTaskCard({
               {userText}
             </div>
           )}
-          <div className={cn(shouldCollapse && !bodyExpanded && 'line-clamp-10')}>{userText}</div>
+          <div data-selection-quote-body="" className={cn(shouldCollapse && !bodyExpanded && 'line-clamp-10')}>{userText}</div>
           {shouldCollapse && (
             <button
               type="button"

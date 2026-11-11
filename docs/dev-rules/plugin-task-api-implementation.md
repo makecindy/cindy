@@ -2,6 +2,33 @@
 
 状态：实验接口，尚未发布。入口为插件逻辑页 `cindy.tasks`，声明 `agent.tasks: true` 后由既有插件权限流程确认。存量 `errand` 声明不自动获得此权限。
 
+## 插件任务使用远程模型（2026-11-06，未发布）
+
+`tasks.capabilities().remoteRoutes:true` 声明 `create / setModel` 可接受含 `agentDeviceId` 的完整 route。
+同账号其他电脑与 `share:<shareId>` 均沿普通远程 Agent 通道执行，任务/文件/权限/历史/插件回执仍在插件电脑。
+旧 Host 缺字段时作者保持本机选模，不把远程配置去掉来源后重试；旧本机 route、批准与回执摘要保持兼容。
+不用新增 manifest 权限、数据迁移、device-link channel 或 relay 帧，也不接管其他电脑上的任意任务。
+
+`taskSlot` 校验可选位置；`resolveRemotePluginTaskRoute` 每次复用授权远程目录核对完整模型配置，
+不用插件电脑的 Harness 或同名供应商兜底。创建落 `sessions.agent_device_id`，改模复用普通 runtime
+controller 与 Agent 切换意图，pending/effective 快照包含位置；来源参与 revision、幂等和接受前配置比较。
+组分配用 `providerGroupService.sessionGroup` 核对当前成员，核验成功时投影所选组来源，避免正常分配
+被误判成用户改来源；已离组的真实位置仍参与比较，不能借旧绑定通过。
+revision 使用固定字段顺序，pending 来源与组分配后的同一配置不因对象字段顺序而冲突。
+
+远程目录读取、Session 创建及 runtime 改模不占用跨插件的回执写队列；返回后进入队列重读归属、
+批准、Plan、任务配置和回执，已经取消或结算的输入不能再被接受。创建、改模与卸载按插件实例串行，
+维持原有安装归属和幂等保证，同时允许同插件及其他插件的取消、终态写入继续进行。
+账号切换的 drain 等待上述完整在途操作；未开始落 Session 的回执仅能在原捕获数据库内精确回滚。
+
+发送沿 `sendToSessionInternal` / InputCoordinator，接受前复核插件归属、权限、Plan、完整来源配置及当前目录。
+远程 proxy 的输出与终态走普通 Session 持久化和 `settlePluginTaskTerminal`，run 保留 acceptedConfig；
+getRun/listRuns/readMessages 复用本机回执和历史、按原插件/账号隔离。取消仍用原输入 alias 与执行实例/轮次
+经普通 `stopSessionTurn` 停止远程 proxy，不停止别的输入，断线结果未知按 reconciling，不重放付费输入。
+
+回归：`taskSlot.test.ts`、`pluginTaskSnapshot.test.ts`、`pluginTaskService.test.ts`、
+`sessionRuntimeHarnessSelection.test.ts`；同时运行原远程往返和 Session 控制回归。
+
 ## 新建任务、继续任务与读取结果
 
 插件调用的是 Cindy 普通任务（Session）能力。界面、工具说明和文档统一使用「新建任务」「打开任务」「继续任务」，不另设 AI 代办或插件专属任务概念。
@@ -101,6 +128,7 @@ Host 每次调用都重新读取本插件的模型设置，复用创建任务的
 `localDb/sessionOpening.openSession` 是普通新建任务的公共入口：模型准入、目录准备、Session 行构造与提交。
 普通新建任务 UI、`send_to_session` 新建、伙伴普通任务、插件普通任务和工作区创建均使用该入口。
 伙伴通过提交回调把 Session 与原有委派回执保存在同一个事务中；伙伴信号、卡片、超时及完成回报留在伙伴层。
+（2026-11-08 起 V2 不再适用：V1 委派已移除，伙伴用普通 `send_to_session` 开任务，宿主只另记「由这位伙伴开的」，见 [伙伴运行时](../product-rules/cindy-bots-runtime.md) §6.1。）
 插件继续使用自己的持久操作回执。公共入口不认识伙伴／插件身份，不创建回叫任务。
 `sessionExecutionSelection` 复用普通模型能力及供应商校验；显式目录选项沿用 `appDefaultModelControl`。
 已有任务改模复用 `sessionControlService`，不另造运行时或供应商选择器。
@@ -217,8 +245,8 @@ Claude Code 适配层 `toSdkModelString` 会按目录窗口自动追加 `[1m]`�
 - **写入口**：创建时由 `openSession({hiddenAt})` 在同一次 INSERT 落库，不发「新建」推送；切换与用户
   显示统一走 `localDb/ipc/sessionHidden.setSessionHidden`：隐藏广播 `sessions:patched {hiddenAt}`
   （renderer 从各桶移除并重拉、灵动岛收起），显示清列并刷新 updatedAt、广播 patched 后再发
-  `sessions:created` 让侧栏与控制端整体重拉。归属复用 `ownTask`（创建回执 + 账号/批准复核），远程任务
-  与 Worker 没有创建回执，`readSession` 不认，不支持 setHidden。
+  `sessions:created` 让侧栏与控制端整体重拉。归属复用 `ownTask`（创建回执 + 账号/批准复核）；
+  只把 Agent 放到远程的自有任务照常支持，其他电脑上的任务、SSH 工作区与 Worker 不因远程路由获得创建回执。
 - **可见性口径**：`local-db:sessions:list`、会话搜索（conversationSearch）、未结束提示两条腿
   （sessionActiveTurn）、hook-control 最近任务排除隐藏任务；用量统计等全量口径不排除。灵动岛/菜单栏
   运行态与系统通知经 `sessionFlagRegistry` 同步判定跳过（首次 list 时按账号库预热，加载前按可见处理）；
@@ -240,9 +268,9 @@ Claude Code 适配层 `toSdkModelString` 会按目录窗口自动追加 `[1m]`�
 
 ## 与伙伴的共用和隔离
 
-`sessionExecutionOwnership.ts` 提供执行身份比较、锁内二次核对、按归属撤回排队输入。伙伴委派与插件任务均使用这套函数。
+`sessionExecutionOwnership.ts` 提供执行身份比较、锁内二次核对、按归属撤回排队输入。插件任务使用这套函数（V1 伙伴委派曾共用，2026-11-08 已移除）。
 
-插件继续复用现有普通 Session 创建、输入协调器、停止服务及产品终态边界。没有创建假伙伴，没有另建模型执行器。伙伴的身份、父子委派规则及专有配置仍由伙伴服务管理。
+插件继续复用现有普通 Session 创建、输入协调器、停止服务及产品终态边界。没有创建假伙伴，没有另建模型执行器。伙伴的身份及专有配置仍由伙伴服务管理。
 
 ## 当前限制与后续工作
 
@@ -326,6 +354,7 @@ DB 中下一条输入的 armed 值为 false 不代表原生执行已退出 Plan�
   项目使用 Cindy 已有目录分组（id 为目录路径），普通任务和伙伴使用其 ID。最近活动只排序，插件自行展示和选择。
 - `resolve({target:{kind,id}})` 返回最新目标元数据，供插件校验保存的固定目标；无写入、弹窗或隐式选中。
   `send` 同样重新校验目标，不要求先 list/resolve，也不接受任意不可用路径或目标；失效返回 TARGET_UNAVAILABLE，不降级改投。
+- `resolve({session:sessionId})` 与 `target` 二选一，返回相同 `{kind,id,label,detail}`。普通任务沿用候选筛选并返回 task；伙伴只接受唯一、未归档的 canonical 注册，返回 bot 与伙伴 ID。其他伙伴会话、冲突或不可用目标返回 TARGET_UNAVAILABLE；不使用兼容镜像，不回退到其他会话，查询继续复核账号与批准。
 - `send({target,requestKey,text,context?,title?,autoTitle?,route?,permissionMode?,delivery?,attachments?})` 在指定项目中新建普通任务，或向指定普通任务/伙伴投递。
   新任务经现有 `PluginTaskService.create` 登记归属后使用 `createPluginTaskSession`，沿用插件模型选择、受限动手权限及卸载撤销流程，可传统一模型目录的 route，以及当前授权范围内的 permissionMode。
   存量任务和伙伴保留其模型、权限、目录，不接受 route 或 permissionMode；伙伴通过唯一 canonical 注册解析，不使用兼容镜像或伪造伙伴身份。

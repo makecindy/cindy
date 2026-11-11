@@ -28,6 +28,57 @@ vi.mock('../mediaStaging', async (importOriginal) => {
 });
 
 describe('WechatIM host boundary', () => {
+  // #9486: discovery must use the credential-verified owner and current inbox
+  // context, not the most recent peer or a source=wechat session. Unit tier,
+  // exercising the real host lifecycle/store with only DB and network fakes.
+  it.each([true, false])('discovers the owner only with known reply context: %s', async (known) => {
+    const { im, db, transport } = restoredConnection(() => 0);
+    transport.sendMessage = vi.fn(async () => { throw new Error('Unexpected send during discovery'); });
+    const query = vi.mocked(db.queryOne);
+    const originalQuery = query.getMockImplementation()!;
+    const context = encryptWechatContextToken('private-context', Buffer.alloc(32, 3), 'epoch', 'owner-message');
+    query.mockImplementation((async (sql: string, params: unknown[]) => {
+      if (!sql.includes('context_nonce AS contextNonce')) return originalQuery(sql, params);
+      expect(params).toEqual(['epoch', 'owner']);
+      return known ? { taskId: 'owner-message', sessionId: 'companion-canonical',
+        contextNonce: context.nonce, contextCiphertext: context.ciphertext, contextTag: context.tag } : undefined;
+    }) as DbClient['queryOne']);
+    expect(await im.getOwnerDeliveryTarget()).toBeNull();
+    await im.init();
+    try {
+      const target = await im.getOwnerDeliveryTarget();
+      if (known) {
+        expect(target).toMatchObject({ receiver: 'owner', bindingEpoch: 'epoch' });
+        expect(target!.isCurrent()).toBe(true);
+        expect(Object.keys(target!).sort()).toEqual(['bindingEpoch', 'isCurrent', 'receiver']);
+        await im.dispose();
+        expect(target!.isCurrent()).toBe(false);
+        expect(await im.getOwnerDeliveryTarget()).toBeNull();
+      } else {
+        expect(target).toBeNull();
+      }
+      expect(transport.sendMessage).not.toHaveBeenCalled();
+    } finally { await im.dispose(); }
+  });
+
+  it('discards owner discovery when the connection ends during the inbox read', async () => {
+    const { im, db } = restoredConnection(() => 0);
+    await im.init();
+    let complete!: (value: unknown) => void;
+    const query = vi.mocked(db.queryOne);
+    const originalQuery = query.getMockImplementation()!;
+    query.mockImplementation(((sql: string, params: unknown[]) => sql.includes('context_nonce AS contextNonce')
+      ? new Promise<unknown>(resolve => { complete = resolve; }) : originalQuery(sql, params)) as DbClient['queryOne']);
+    try {
+      const pending = im.getOwnerDeliveryTarget();
+      await im.dispose();
+      const context = encryptWechatContextToken('private-context', Buffer.alloc(32, 3), 'epoch', 'owner-message');
+      complete({ taskId: 'owner-message', sessionId: 'companion-canonical',
+        contextNonce: context.nonce, contextCiphertext: context.ciphertext, contextTag: context.tag });
+      expect(await pending).toBeNull();
+    } finally { await im.dispose(); }
+  });
+
   it('clears reconnecting after an empty successful poll', async () => {
     vi.useFakeTimers();
     const { im, transport, db } = restoredConnection(() => 0);

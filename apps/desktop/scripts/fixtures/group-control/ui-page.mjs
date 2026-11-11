@@ -25,6 +25,8 @@ export default {
   name: 'group-chat',
   // Voice capture is outside this fixture.
   stubs: {
+    // Rich component bodies read account context, but sign-in is not under test.
+    'src/renderer/contexts/AuthContext': { partial: `export const useAuth = () => ({ mode: 'local', dataOwnerId: 'fixture-account', user: null });` },
     'src/renderer/voice-input/workletUrl': 'export const getVoiceInputWorkletUrl = () => { throw new Error("Voice input is not covered by this fixture"); };',
     // The file preview pulls in pdf.js' and draw.io's workers through Vite's ?url, which the single-page builder does not implement; no group case opens a file.
     'src/renderer/features/cc-agent/workdir-browse/FileBodyView': 'export const FileBodyView = () => null;',
@@ -33,7 +35,7 @@ export default {
   viewport: { width: 1280, height: 800 },
   real: 'BotGroupChatView (timeline, composer, send button, header registration), ControlledBanner, ContentHeader shell, Markdown, theme, fonts and translations',
   notCovered:
-    'Real IPC/network sending (send-status/share-pending control host receipts), round control, real device-link control and revocation, answering pending owner interactions, plans and attachment IO; the bubbles case shows a task snapshot, not a live task; the sidebar renders the real group row for work-state cases and is otherwise an empty frame',
+    'Account sign-in, real IPC/network sending (send-status/share-pending control host receipts), round control, real device-link control and revocation, answering pending owner interactions, plans and attachment IO; the bubbles case shows a task snapshot, not a live task; the sidebar renders the real group row for work-state cases and is otherwise an empty frame',
   cases: {
     'share-pending': {
       about: 'Pending topic copy appears in the main chat while the host receipt is unresolved',
@@ -51,6 +53,8 @@ export default {
     'work-queued-step-mixed': { about: '#8064 review: queued plan step does not override a running reply', data: { ...base, messages: 2, workState: 'queued', workParallel: true, workQueuedStep: true } },
     'work-queued': { about: '#8047: queued execution is busy without speaking or elapsed work', data: { ...base, messages: 2, workState: 'queued' } },
     'process-history': { about: 'Owned teammate historical process, final reply outside', data: { ...base, sidebar: false, processRecord: true, workRemote: true } },
+    'process-empty': { about: 'Final-only reply explains the empty process', data: { ...base, sidebar: false, processRecord: true, processEmpty: true, workRemote: true } },
+    'process-unavailable': { about: 'Unavailable process shows a retry action', data: { ...base, sidebar: false, processRecord: true, processUnavailable: true, workRemote: true } },
     'process-other-owner': { about: 'Other members never receive a private process entry', data: { ...base, sidebar: false, processRecord: true, processOtherOwner: true, workRemote: true } },
     'work-thinking': { about: 'Actual group work status, scenario data: thinking', data: { ...base, messages: 2, workState: 'thinking' } },
     'work-tools': { about: 'Actual group work status, scenario data: command execution', data: { ...base, messages: 2, workState: 'testing' } },
@@ -181,6 +185,15 @@ export default {
       const heading = journal.locator(':scope > button');
       assert.equal(await heading.getAttribute('aria-expanded'), 'false');
       await heading.click();
+      if (definition.data.processEmpty || definition.data.processUnavailable) {
+        await journal.getByText(await ui.t(definition.data.processEmpty ? 'chat.teammateProcess.empty' : 'chat.teammateProcess.unavailable')).waitFor();
+        assert.equal(await journal.getByRole('button', { name: await ui.t('chat.errorBanner.retry'), exact: true }).count(), definition.data.processUnavailable ? 1 : 0);
+        await ui.capture('process-expanded');
+        await heading.click();
+        assert.equal(await heading.getAttribute('aria-expanded'), 'false');
+        await ui.capture('process-collapsed');
+        return;
+      }
       await journal.getByText('我先核对任务的最近进展，再看未完成 PR 的阻塞点。').waitFor();
       await ui.capture('history-expanded');
       const endError = await journal.evaluate(root => {
@@ -307,13 +320,17 @@ export default {
       assert.ok(!(await timeline.innerText()).includes('"op":"create"'));
       const text = await timeline.innerText();
       assert.ok(text.includes('图片说明保留') && text.includes('图片标题保留'));
-      assert.ok(text.includes('🖼'), 'an undescribed image has a neutral placeholder');
-      assert.ok(!text.includes('cindy-media://') && !text.includes('/private/tmp/fixture-image.png'));
-      for (const kind of ['image', 'video', 'audio']) {
-        const url = `https://example.test/public-${kind}`;
-        const link = timeline.getByRole('link', { name: url, exact: true });
-        assert.equal(await link.count(), 1, 'public media keep an actionable web link');
-        assert.equal(await link.getAttribute('href'), url);
+      assert.equal(await timeline.getByText(await ui.t('richAnswer.invalidImageReference'), { exact: true }).count(), 1, 'invalid managed image references have an explicit recovery state');
+      assert.equal(await timeline.locator('a[href^="cindy-media:"], a[href^="/private/"], img[src^="/private/"]').count(), 0, 'unavailable references must not become privileged links or file requests');
+      // Group replies now render rich media instead of the former text-only projection.
+      // Serve checked-in assets from the fixture origin; never relax its network CSP.
+      const picture = timeline.locator('img[alt="public-image"]');
+      await picture.waitFor();
+      assert.equal(await picture.evaluate(img => img.complete && img.naturalWidth > 0), true);
+      for (const kind of ['video', 'audio']) {
+        const media = timeline.locator(kind);
+        assert.equal(await media.count(), 1, `${kind} keeps a native media control`);
+        assert.ok((await media.getAttribute('src'))?.startsWith('http://cindy-ui.test/assets/'));
       }
       return;
     }

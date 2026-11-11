@@ -1,3 +1,4 @@
+import { remoteControlSettings } from './RemoteControlSection.settings-search';
 import { deviceDisplayName } from '@/lib/deviceName';
 import { Button } from '@/components/ui/button';
 /**
@@ -40,23 +41,7 @@ import {
   inboundToggleState,
   resolveActiveConnectionIssue,
 } from './myDevicesModel';
-
-function platformLabel(platform: string | null): string {
-  switch (platform) {
-    case 'darwin':
-      return 'macOS';
-    case 'win32':
-      return 'Windows';
-    case 'linux':
-      return 'Linux';
-    case 'ios':
-      return 'iOS';
-    case 'android':
-      return 'Android';
-    default:
-      return platform ?? '—';
-  }
-}
+import { platformLabel, relativeTime } from './deviceLabels';
 
 function hardwareLabel(deviceInfo: DeviceLinkDeviceInfo | null | undefined): string | null {
   const label = deviceInfo?.modelLabel?.trim() || deviceInfo?.cpuLabel?.trim();
@@ -93,24 +78,6 @@ function deviceSubtitle(
   ].filter(Boolean);
   if (opts.isControlling) parts.push(t('settings.remoteControl.myDevices.controllingThisMac'));
   return parts.join(' · ');
-}
-
-/** lastSeenAt 相对时间(分钟粒度,超过 7 天显示日期)。 */
-function relativeTime(
-  iso: string | null,
-  t: (k: string, o?: Record<string, unknown>) => string,
-): string {
-  if (!iso) return '—';
-  const ts = Date.parse(iso);
-  if (Number.isNaN(ts)) return '—';
-  const diffMin = Math.floor((Date.now() - ts) / 60_000);
-  if (diffMin < 1) return t('settings.devices.justNow');
-  if (diffMin < 60) return t('settings.devices.minutesAgo', { count: diffMin });
-  const diffHour = Math.floor(diffMin / 60);
-  if (diffHour < 24) return t('settings.devices.hoursAgo', { count: diffHour });
-  const diffDay = Math.floor(diffHour / 24);
-  if (diffDay < 7) return t('settings.devices.daysAgo', { count: diffDay });
-  return new Date(ts).toLocaleDateString();
 }
 
 /** 与设置搜索命中同款的短暂高亮(globals.css),时长也一致。 */
@@ -196,7 +163,7 @@ function AccessPill({
   onToggle: (next: boolean) => void;
 }) {
   return (
-    <button
+    <button data-setting-id={remoteControlSettings.devices.id}
       type="button"
       aria-pressed={pressed}
       aria-label={ariaLabel}
@@ -279,6 +246,7 @@ export function MyDevicesPanel({
   // 短期上下线 / 心跳不再让顺序跳动,设备只在原位改在线点。本机单独置顶(下面单独渲染)。
   const others = (s.devices ?? []).filter((d) => !d.isSelf).sort(compareDevicesByName);
   const revokedControllers = new Set(s.revokedControllers);
+  const modelUseRevoked = new Set(s.modelUseRevokedControllers);
   const controlling = new Set(s.controlledBy.map((c) => c.deviceId));
 
   const rowRefs = useRef(new Map<string, HTMLLIElement>());
@@ -346,7 +314,7 @@ export function MyDevicesPanel({
     <div className="flex flex-col gap-4">
       {variant !== 'self' && (
         <div className="flex items-center justify-end">
-          <Button
+          <Button data-setting-id={remoteControlSettings.devices.id}
             variant="secondary"
             size="sm"
             compact
@@ -367,7 +335,7 @@ export function MyDevicesPanel({
         aria-label={
           variant === 'self'
             ? t('settings.devices.thisDevice')
-            : t('settings.remoteControl.sections.myDevices')
+            : t(remoteControlSettings.devices.titleKey)
         }
       >
         {/* 本机:承载重命名 + 被控总开关 + relay 状态 */}
@@ -386,7 +354,7 @@ export function MyDevicesPanel({
             <div className="flex min-w-0 flex-1 flex-col gap-0.5">
               {self && editingId === self.deviceId ? (
                 <div className="flex items-center gap-1.5">
-                  <input
+                  <input data-setting-id={remoteControlSettings.devices.id}
                     value={editingName}
                     autoFocus
                     maxLength={64}
@@ -397,7 +365,7 @@ export function MyDevicesPanel({
                     }}
                     className="w-44 rounded-lg border border-[var(--border-default)] bg-transparent px-2 py-0.5 text-13 text-[var(--settings-input-text)] outline-none"
                   />
-                  <button
+                  <button data-setting-id={remoteControlSettings.devices.id}
                     type="button"
                     onClick={() => void handleRename(self.deviceId)}
                     aria-label={t('settings.devices.renameConfirm')}
@@ -405,7 +373,7 @@ export function MyDevicesPanel({
                   >
                     <Check size={14} />
                   </button>
-                  <button
+                  <button data-setting-id={remoteControlSettings.devices.id}
                     type="button"
                     onClick={() => setEditingId(null)}
                     aria-label={t('settings.devices.renameCancel')}
@@ -438,7 +406,7 @@ export function MyDevicesPanel({
               ) : null}
             </div>
             {self && editingId !== self.deviceId ? (
-              <button
+              <button data-setting-id={remoteControlSettings.devices.id}
                 type="button"
                 onClick={() => {
                   setEditingId(self.deviceId);
@@ -456,7 +424,7 @@ export function MyDevicesPanel({
               label={t('settings.devices.allowControl')}
               reason={t('settings.devices.allowControlHint')}
             >
-              <Switch
+              <Switch data-setting-id={remoteControlSettings.devices.id}
                 checked={s.enabled}
                 onCheckedChange={(v) => void s.setEnabled(v)}
                 aria-label={t('settings.devices.allowControl')}
@@ -509,7 +477,7 @@ export function MyDevicesPanel({
                   <div className="flex min-w-0 flex-1 flex-col gap-0.5">
                     {editingId === d.deviceId ? (
                       <div className="flex items-center gap-1.5">
-                        <input
+                        <input data-setting-id={remoteControlSettings.devices.id}
                           value={editingName}
                           autoFocus
                           maxLength={64}
@@ -520,7 +488,7 @@ export function MyDevicesPanel({
                           }}
                           className="w-44 rounded-lg border border-[var(--border-default)] bg-transparent px-2 py-0.5 text-13 text-[var(--settings-input-text)] outline-none"
                         />
-                        <button
+                        <button data-settings-search-action="Save the device display name"
                           type="button"
                           onClick={() => void handleRename(d.deviceId)}
                           aria-label={t('settings.devices.renameConfirm')}
@@ -528,7 +496,7 @@ export function MyDevicesPanel({
                         >
                           <Check size={14} />
                         </button>
-                        <button
+                        <button data-settings-search-action="Start or cancel editing the device display name"
                           type="button"
                           onClick={() => setEditingId(null)}
                           aria-label={t('settings.devices.renameCancel')}
@@ -549,14 +517,14 @@ export function MyDevicesPanel({
                   {editingId !== d.deviceId && (
                     <div className="flex shrink-0 items-center gap-1">
                       {canBeControlledPlatform(d.platform) && !peerRevoked && (
-                        <button type="button" className="inline-flex min-h-11 min-w-11 items-center justify-center rounded-full text-[var(--text-primary)] hover:bg-[var(--surface-chip)] disabled:opacity-40"
+                        <button data-settings-search-action="Open a remote desktop session for this device" type="button" className="inline-flex min-h-11 min-w-11 items-center justify-center rounded-full text-[var(--text-primary)] hover:bg-[var(--surface-chip)] disabled:opacity-40"
                           disabled={!d.online || !d.remoteControlEnabled || !d.controlEnabled}
                           title={t('remoteDesktop.title')} aria-label={t('remoteDesktop.title')}
                           onClick={() => void window.electronAPI.openRemoteDesktop({deviceId:d.deviceId,name:d.name}).catch(() => toast.error(t('remoteDesktop.connectionError')))}>
                           <Monitor size={16}/>
                         </button>
                       )}
-                      <button
+                      <button data-settings-search-action="Start or cancel editing the device display name"
                         type="button"
                         onClick={() => {
                           setEditingId(d.deviceId);
@@ -567,7 +535,7 @@ export function MyDevicesPanel({
                       >
                         <Pencil size={13} />
                       </button>
-                      <button
+                      <button data-settings-search-action="Open confirmation to remove this device"
                         type="button"
                         onClick={() => setDeleteTarget(d)}
                         disabled={deleting}
@@ -604,6 +572,16 @@ export function MyDevicesPanel({
                       disabled={inbound.disabled}
                       onToggle={(v) => void onInboundChange(d.deviceId, v)}
                     />
+                    {/* 「用本机模型」跟着「控制本机」：能控制本机时默认可用，可以单独关掉。手机不借模型，不显示。 */}
+                    {canBeControlledPlatform(d.platform) && (
+                      <AccessPill
+                        label={t('settings.remoteControl.myDevices.useThisDeviceModels')}
+                        ariaLabel={t('settings.remoteControl.myDevices.allowModelUseAria', { name: d.name })}
+                        pressed={inbound.checked && !modelUseRevoked.has(d.deviceId)}
+                        disabled={inbound.disabled || !inbound.checked}
+                        onToggle={(v) => void s.setModelUse(d.deviceId, v)}
+                      />
+                    )}
                   </AccessRow>
                 </div>
               </li>

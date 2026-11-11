@@ -78,9 +78,9 @@ import { hydrateSessionProvider } from '../../maker-host/session-provider-store'
 import { setSessionEffort, setSessionFastMode } from '../../maker-host/session-effort-store';
 import { hasCustomProviderKey } from '../../maker-host/provider-route';
 import { createLogger } from '../../logger';
-import { t } from '../../i18n';
-import { resolveSafe as resolveXdtImageUrl } from '../../imageCacheStore';
-import { resolveSafe as resolveCindyMediaUrl } from '../../cindy-media/blobStore';
+import { t } from '../../i18n.desktop';
+import { resolveSafe as resolveXdtImageUrl } from '../../imageCacheStore.desktop';
+import { resolveSafe as resolveCindyMediaUrl } from '../../cindy-media/blobStore.desktop';
 import { beginHeadlessGhostSetupTurn } from '../../mcp-integrations/ghostSetupInteractionSurface.js';
 
 import {
@@ -103,6 +103,7 @@ import type {
   IMAttachment,
   IMMessageEvent,
   InteractiveCardSpec,
+  StreamingProcessRecord,
   StreamingTextHandle,
 } from '@cindy/im';
 import { transformXdtRefs } from '@cindy/im';
@@ -138,7 +139,7 @@ import { listMessagesForAgentHandoff } from '../../localDb/ipc/messages';
 import {
   enqueueDurableWrite,
   redactToolInputForUntrustedBoundary,
-} from '../../messagePersistBroadcaster';
+} from '../../messagePersistBroadcaster.desktop';
 import {
   cancelPending,
   registerPending,
@@ -163,8 +164,10 @@ import {
 } from './fbotTitle';
 import { localTaskImagePath, rewriteTaskImageReferences, taskImageReferences } from '../../cindy-media/taskImageMarkdown';
 import { materializeLocalMarkdownImageRefs, materializeLocalMarkdownImages } from './localMarkdownImages';
+import { unlinkLocalFileLinks } from './localFileLinks';
 import {
   applyStatusTokenRate,
+  buildActivityRecord,
   clearRunningIndicators,
   createTurnActivity,
   markActivityWriting,
@@ -246,10 +249,11 @@ interface TurnState {
   streamingHandlePromise: Promise<StreamingTextHandle | null> | null;
   /**
    * 初始流式输出面创建失败(#2164)。置位后本轮不再重试 startStreamingText
-   * (密集 delta 会造成 API 风暴 / 多张孤儿卡),已生成正文由 turn 收口一次性
-   * 降级为普通文本发送,不再静默丢失。
+   * (密集 delta 会造成 API 风暴 / 多张孤儿卡)。普通失败由收口降级发送，
+   * 出站身份失效则丢弃本轮输出。
    */
   streamingStartFailed: boolean;
+  streamingOutputInvalidated: boolean;
   /**
    * 呈现大脑(正文累积 / 过程区合成), 与官方 bot 共用 im/shared/turnPresenter。
    * buffer-replace 策略: 保留个人 IM 渠道现有行为 —— isFinal 用该条全文整体替换
@@ -297,7 +301,8 @@ interface TurnState {
    * Host turn lease held for the duration of a per-turn permission policy turn.
    * Keeps new sends and retirement behind this turn's background continuations;
    * the owner's live permission changes remain immediate. Released on every terminal / requeue /
-   * cleanup path via releaseTurnInteractionRoute. Null when the turn has no policy.
+   * cleanup path via releaseTurnInteractionRoute, after any temporary Auto restoration.
+   * Null when the turn has no policy.
    */
   hostTurnLeaseRelease: (() => void) | null;
   groupHistoryAccessRelease: (() => void) | null;
@@ -1062,6 +1067,57 @@ export function createTurnRunner(
       }
       target = created.target;
     }
+    // A cold companion task must reconcile its saved model before starting an
+    // agent. Otherwise a disconnected old provider can prevent both wiring and
+    // the later prepareSend guard from ever applying the new selection.
+    const coldCompanion = target.botOwned && !sessionStates.has(target.row.id)
+      && !wiringInFlight.has(target.row.id) && !getMaker().getSession(target.row.id);
+    if (coldCompanion && deps.companion?.prepareSend) {
+      let blocked: string | null;
+      try {
+        if (target.botOwned?.lane === 'channel') {
+          coldWiringVendorOptions.set(target.row.id, adapter.buildVendorOptions(userId, target.scopeKey));
+        }
+        blocked = await deps.companion.prepareSend(target.row.id);
+        if (!blocked) {
+          const refreshed = await repo.peekSessionById(target.row.id);
+          if (!refreshed) throw new Error(`companion session ${target.row.id} missing after route preparation`);
+          target = { ...target, row: refreshed };
+        }
+      } catch (err) {
+        if (isImAccountScopeClosedError(err)) throw err;
+        const normalized = normalizeSendError(err);
+        log.error(`${channel} companion preparation failed before dispatch`, {
+          kind: 'session-dispatch',
+          source: 'companion.prepareSend',
+          sessionId: hashLogSessionId(target.row.id),
+          reason: normalized.reason,
+          error: normalized.error,
+        });
+        await waitForAckCleanupBounded(discardHandedOverAck(userMessageId, args.ackReactionIdPromise));
+        if (args.queueMode === 'internal') {
+          try {
+            const text = ui.agent.sendInternalError(normalized.reason);
+            const consumed = (await args.onEarlyReject?.(normalized.reason, text)) ?? false;
+            if (!consumed) await sendTextClaimingOpener(userId, text, target.scopeKey);
+          } catch {
+            /* A failed notice must still return a definite pre-dispatch rejection. */
+          }
+        }
+        return { kind: 'rejected', reason: normalized.reason };
+      } finally {
+        coldWiringVendorOptions.delete(target.row.id);
+      }
+      if (blocked) {
+        const text = ui.agent.companionUnavailable?.(blocked) ?? ui.agent.runtimeError(blocked);
+        if (args.queueMode === 'internal') {
+          const consumed = (await args.onEarlyReject?.('companion_unavailable', text)) ?? false;
+          if (!consumed) await sendTextClaimingOpener(userId, text, target.scopeKey);
+        }
+        await discardHandedOverAck(userMessageId, args.ackReactionIdPromise);
+        return { kind: 'rejected', reason: 'companion_unavailable' };
+      }
+    }
     const row = target.row;
     const allowedFileRoots = resolveTurnFileRoots(row.workingDir, row.remoteHostId);
     let followTarget: ImDefaultRoute | null | undefined = null;
@@ -1069,7 +1125,10 @@ export function createTurnRunner(
     const sharedSession =
       target.attached || target.notificationReply === true || target.botOwned?.lane === 'canonical';
     const authNoticeAttached = target.attached || target.botOwned !== undefined;
-    if (!target.authChecked) {
+    // Live companion tasks may still be running on the previous selection.
+    // Authenticate them after prepareSend + the locked switch at dispatch, not
+    // against the stale row before their input has even reached the queue.
+    if (!target.authChecked && (!target.botOwned || coldCompanion)) {
       // 渠道默认跟随: 本条消息会在 send 锁内切到新默认时, 按新路由检查授权 ——
       // 否则旧默认坏掉(如供应商断开)时, 消息会先被「缺授权」挡掉, 永远换不过去。
       followTarget =
@@ -1160,6 +1219,7 @@ export function createTurnRunner(
       streamingHandle: null,
       streamingHandlePromise: null,
       streamingStartFailed: false,
+      streamingOutputInvalidated: false,
       presenter: createTurnPresenter({ mode: 'buffer-replace', channel }),
       mediaAbsPaths: [],
       allowedFileRoots,
@@ -1470,7 +1530,6 @@ export function createTurnRunner(
         await item.turn.revalidateNotificationReply?.();
         await resolveNotificationTarget(rowId, item.turn.scopeKey);
       }
-      await beginChunkedReply(item.turn);
       // 伙伴任务: 与桌面发送同源的伙伴守卫(暂停 / 归档 → 回一句提示不发送),
       // 再对齐伙伴模型链、刷新能力纪元。要在拿 send 锁之前做 —— 对齐登记的切换
       // 意图由下面的锁内应用落实。
@@ -1553,19 +1612,24 @@ export function createTurnRunner(
       // 失败被吞后这条消息会按旧路由发送 —— 按实际路由补一次授权检查, 旧供应商断开
       // 时在这里给出缺授权提示, 而不是进发送流程运行时失败(PR #5155 review P2)。
       // 冷路径在接线前已查过一次, 这里兜的是接线后切换才失败 / 热任务的切换失败。
+      // 伙伴任务始终在守卫与锁内切换完成后检查实际路由, 不复用入队时的旧选择。
       const followAuthRoute = item.turn.followAuthRoute;
-      if (followAuthRoute) {
+      if (followAuthRoute || state.botLane) {
         const landed = await repo.peekSessionById(rowId);
-        if (landed && !sameImDefaultRoute(routeOfRow(landed), followAuthRoute)) {
+        if (state.botLane && !landed) {
+          throw new Error(`companion session ${rowId} missing before route authentication`);
+        }
+        if (landed && (state.botLane || (followAuthRoute && !sameImDefaultRoute(routeOfRow(landed), followAuthRoute)))) {
           const auth = await checkImRouteAuthDetailed(landed, undefined, authCheckDeps());
           if (!auth.ok) {
+            const attached = state.attached || !!state.botLane;
             const authStatus = { ...auth, agentKind: landed.agentKind, model: landed.model };
             if (item.turn.queueMode === 'internal') {
               const text =
-                ui.agent.authMissing?.({ ...authStatus, attached: state.attached }) ??
+                ui.agent.authMissing?.({ ...authStatus, attached }) ??
                 ui.agent.apiKeyMissing;
               const consumed = (await item.onEarlyReject?.('missing_auth', text)) ?? false;
-              if (!consumed) await replyMissingAuth(userId, authStatus, item.turn.scopeKey, state.attached);
+              if (!consumed) await replyMissingAuth(userId, authStatus, item.turn.scopeKey, attached);
             }
             // 文案已在上面按缺授权发过(外部队列由调用方消费), 这里只走收口。
             await handleSendPreDispatchFailure(state, userId, {
@@ -1579,6 +1643,10 @@ export function createTurnRunner(
           }
         }
       }
+
+      // Only claim a passive reply after preparation and route authentication.
+      // Rejected input must not leave a pending chunked response for the next turn.
+      await beginChunkedReply(item.turn);
 
       // session-agent-switch:本路径直发 session.send(不经 makerSendTransaction),
       // 交接注入自己接——切换后首条消息若来自 IM 渠道,新引擎同样需要交接上下文
@@ -1652,6 +1720,49 @@ export function createTurnRunner(
         return { kind: 'rejected', reason: 'aborted' };
       }
 
+      // 项目资源漂移(如会话中途 openspec init):空闲时经 Maker 以 runtime-refresh
+      // 回收运行时,再按 DB 行自愈重建 —— 与桌面发送事务同口径,IM 直发不用旧资源。
+      // 无 agent-switch 锁的装配不支持关闭后重建,保持原样投递。
+      let driftRecycled = false;
+      try {
+        driftRecycled = !!(deps.acquirePendingAgentSwitch
+          && await getMaker().recyclePiRuntimeIfResourcesDrifted(state.makerSession));
+      } catch (err) {
+        // close 抛出时 Session 已停在 error(performClose 不回退),旧实例不可用:
+        // 只能走重建;仍 active 才原样投递(Codex P2, 2026-11-10)。
+        driftRecycled = !!deps.acquirePendingAgentSwitch && state.makerSession.getStatus() !== 'active';
+        log.warn('im send: resource-drift recycle failed',
+          err instanceof Error ? err.message : String(err));
+      }
+      if (driftRecycled) {
+        await refreshSessionAfterPendingAgentSwitch(state, state.makerSession.id, userId);
+        log.info('im send: project resources drifted, recycled runtime before dispatch');
+      }
+      // 回收+重建是异步窗口:/stop 可能恰好落在其中;喊停后不得再开始执行,与上方
+      // aborted 分支同口径收尾(此时尚未发送,无需补终态章)。经函数读取:上方检查
+      // 已把控制流收窄到 'done'|'error',但运行时值在回收窗口内仍可变为 'aborted'。
+      const turnTerminalNow = (): 'done' | 'aborted' | 'error' => item.turn.terminalKind;
+      if (turnTerminalNow() === 'aborted') {
+        const index = state.queue.indexOf(item.turn);
+        if (index >= 0) state.queue.splice(index, 1);
+        if (output.kind === 'chunked-text' && item.turn.chunkedReplyBegun) {
+          try {
+            await output.commitFinal({
+              userId,
+              text: ui.agent.stopDone(0),
+              terminal: 'aborted',
+              threadTs: item.turn.scopeKey,
+            });
+          } catch (err) {
+            log.warn(`cancelled reply finalization failed: ${err instanceof Error ? err.message : String(err)}`);
+          }
+        }
+        await completeTurnCallbackAfterAck(item.turn);
+        settleTurnTerminal(item.turn);
+        if (!finishDeferredDetachIfIdle(state)) armDispatchRetry(state, userId);
+        return { kind: 'rejected', reason: 'aborted' };
+      }
+
       const sendResult = await state.makerSession.send(outgoingMessage as typeof item.userMessage, {
         planMode: false,
         // IM owns successful replies, including turns in an attached desktop task.
@@ -1665,6 +1776,38 @@ export function createTurnRunner(
           ...(item.autoReviewReferences ? { autoReviewReferences: item.autoReviewReferences } : {}),
         },
         ...(effectiveTurnPolicy ? { turnPermissionPolicy: effectiveTurnPolicy } : {}),
+        afterTurnReserved: async () => {
+          if (!effectiveTurnPolicy) return;
+          const session = state.makerSession;
+          const previous = session.stablePermissionModeState;
+          // A retained policy is mandatory, regardless of channel or whether its
+          // requester is known. Explicit channel/companion exemptions were resolved
+          // above; never remove a mandatory policy just to admit Full access.
+          if (previous?.mode !== 'bypassPermissions') return;
+          if (!session.capabilities.setPermissionModeMidSession?.supported
+              || !session.capabilities.permissionModes?.some((mode) => mode.id === 'auto')
+              || !session.capabilities.turnPermissionPolicy?.supported?.supported
+              || session.capabilities.turnPermissionPolicy.unsupportedPermissionModes?.includes('auto')) return;
+
+          // Reservation prevents stealing another turn's runtime. Keep the existing
+          // host lease through background continuation AND asynchronous restoration.
+          // CAS protects user changes; the persisted task preference is never changed.
+          const release = session.acquireTurnLease();
+          const switching = session.setPermissionModeIfUnchanged(previous, 'auto');
+          const originalMode = previous.mode;
+          item.turn.hostTurnLeaseRelease = () => {
+            void switching.then(async (changed) => {
+              if (changed) {
+                await session.setPermissionModeIfUnchanged(
+                  { mode: 'auto', generation: previous.generation + 1 }, originalMode,
+                );
+              }
+            }).catch((err) => {
+              log.warn(`temporary IM permission cleanup failed: ${err instanceof Error ? err.message : String(err)}`);
+            }).finally(release);
+          };
+          await switching;
+        },
         beforeProviderStart: async () => {
           const noticeSession = state.makerSession;
           const noticeScope = item.turn.scopeKey;
@@ -1680,7 +1823,7 @@ export function createTurnRunner(
           // 策略轮保留逻辑占用直到后台续跑和收尾结束；新输入仍须等待，
           // 主人在 Cindy 中切换权限则立即沿用普通任务的运行时切换。
           if (effectiveTurnPolicy) {
-            item.turn.hostTurnLeaseRelease = state.makerSession.acquireTurnLease();
+            item.turn.hostTurnLeaseRelease ??= state.makerSession.acquireTurnLease();
           }
           if (item.groupHistoryAccess) {
             item.turn.groupHistoryAccessRelease = beginGroupHistoryAccess({
@@ -2158,11 +2301,16 @@ export function createTurnRunner(
     }
   }
 
-  async function finalizeTurnStream(turn: TurnState, finalView: string): Promise<void> {
+  async function finalizeTurnStream(
+    turn: TurnState,
+    finalView: string,
+    process?: StreamingProcessRecord,
+  ): Promise<void> {
     const handle = turn.streamingHandle;
     if (!handle) return;
     try {
-      await handle.finalize(finalView);
+      if (process) await handle.finalize(finalView, { process });
+      else await handle.finalize(finalView);
     } catch (err) {
       if (output.kind === 'chunked-text') {
         turn.terminalKind = 'error';
@@ -2944,7 +3092,7 @@ export function createTurnRunner(
 
   /** Project only the outbound copy; persistence keeps the original component events. */
   function composeOutboundBody(source: string, final: boolean): string {
-    let body = stripInternalWebCitations(richAnswerText(source));
+    let body = unlinkLocalFileLinks(stripInternalWebCitations(richAnswerText(source)));
     // Card channels patch the live body; a machine-local image path must not show before finalize imports it.
     if (!final && output.kind === 'rich-card' && body.includes('![')) {
       const local = new Map(
@@ -3293,8 +3441,8 @@ export function createTurnRunner(
     const lease = turn.interactionRouteLease;
     turn.interactionRouteLease = null;
     lease?.release(reason);
-    // Release the host turn lease on the same terminal / requeue / cleanup paths
-    // so an unsupported permission-mode switch can proceed once the policy turn ends.
+    // All terminal / requeue / cleanup paths release the same lease. Temporary
+    // Auto turns retain the underlying lease until their asynchronous restore settles.
     const releaseHostLease = turn.hostTurnLeaseRelease;
     turn.hostTurnLeaseRelease = null;
     releaseHostLease?.();
@@ -3628,7 +3776,7 @@ export function createTurnRunner(
   function ensureStreamingHandle(turn: TurnState): Promise<StreamingTextHandle | null> {
     if (turn.streamingHandle) return Promise.resolve(turn.streamingHandle);
     // 初始创建已失败:resolve null(#2164)。不复用 rejected promise 也不再重试 ——
-    // 密集 delta 下重试会造成 API 风暴 / 多张孤儿卡;正文由 turn 收口统一降级。
+    // 密集 delta 下重试会造成 API 风暴 / 多张孤儿卡;收口时区分降级发送与身份失效。
     if (turn.streamingStartFailed) return Promise.resolve(null);
     if (turn.streamingHandlePromise) return turn.streamingHandlePromise;
     // Singleton: subsequent concurrent callers await the same promise rather
@@ -3636,7 +3784,7 @@ export function createTurnRunner(
     // call and produce a flood of orphan messages).
     // 创建失败集中在此捕获并 resolve null(#2164):调用点全部是 fire-and-forget
     // 的 .then(...),各自补 rejection handler 必然遗漏;失败留下脱敏日志与
-    // streamingStartFailed 标记,已生成正文由收口分支一次性降级发送。
+    // streamingStartFailed 标记,由收口分支决定降级发送或丢弃。
     turn.streamingHandlePromise = (async () => {
       try {
         const handle =
@@ -3651,6 +3799,9 @@ export function createTurnRunner(
         return handle;
       } catch (err) {
         turn.streamingStartFailed = true;
+        turn.streamingOutputInvalidated =
+          typeof err === 'object' && err !== null &&
+          'code' in err && err.code === 'IM_OUTPUT_INVALIDATED';
         // 只记渠道 / 阶段 / 错误摘要,不记 token、消息正文与完整用户标识。
         log.warn(
           `[${channel}/turn] initial streaming output start failed (phase=initial_stream_start): ${
@@ -3770,7 +3921,15 @@ export function createTurnRunner(
     }
     const finalView = composeStreamingView(turn);
     if (turn.streamingHandle) {
-      await finalizeTurnStream(turn, finalView.trim() ? finalView : '');
+      // 正常完成: 正文保持干净, 过程区不再丢弃 —— 交给渠道收成折叠的过程记录
+      // (卡片渠道支持折叠; 不支持的 handle 忽略它)。空回复没有可挂记录的正文。
+      const process =
+        output.kind === 'rich-card' && finalView.trim()
+          ? buildActivityRecord(turn.presenter.activity, Date.now())
+          : null;
+      await finalizeTurnStream(turn, finalView.trim() ? finalView : '', process ?? undefined);
+    } else if (turn.streamingOutputInvalidated) {
+      // 原出站身份已失效：只完成收口，不能使用当前身份重发正文或附件。
     } else if (!finalView.trim() && turn.mediaAbsPaths.length === 0) {
       try {
         if (output.kind === 'chunked-text') {
@@ -3891,7 +4050,7 @@ export function createTurnRunner(
       const view = composeStreamingView(turn, true);
       const body = view ? `${view}\n\n❌ 错误：${msg}` : `❌ 错误：${msg}`;
       await finalizeTurnStream(turn, body);
-    } else {
+    } else if (!turn.streamingOutputInvalidated) {
       try {
         if (output.kind === 'chunked-text') {
           await output.commitFinal({

@@ -1,5 +1,7 @@
 {
   "permission": {
+    "mcpComplete": "완료",
+    "mcpCancel": "취소",
     "mode": {
       "default": "기본 권한",
       "acceptEdits": "편집 허용",
@@ -34,6 +36,10 @@
     "exit": "플랜 모드 종료"
   },
   "panel": {
+    "questionUnanswered": "답변 없음",
+    "questionWithdrawn": "더 이상 답변이 필요하지 않습니다",
+    "withdrawnDraft": "이 질문에 더 이상 답변할 필요가 없습니다.\n{{reason}}\n초안은 보관되며 추가 정보로 보낼 수 있습니다.",
+    "sendSupplement": "추가 정보 보내기",
     "readOnlyKind": "확인 대기",
     "readOnlyTitle": "컴퓨터에서 확인을 기다리는 중",
     "pendingRequests": "대기 중인 요청",
@@ -98,7 +104,14 @@
     "planFeedbackPlaceholder": "Claude에게 무엇을 해야 할지 알려주세요",
     "planFeedbackRequired": "제출하기 전에 피드백을 입력하세요.",
     "planFeedbackSubmit": "플랜 피드백 제출",
-    "planFeedbackAccessibility": "플랜을 변경할 피드백"
+    "planFeedbackAccessibility": "플랜을 변경할 피드백",
+    "validation": {
+      "required": "이 필수 항목을 입력하세요.",
+      "choice": "목록의 옵션 중 하나를 선택하세요.",
+      "tooShort": "{{count}}자 이상 입력하세요.",
+      "tooLong": "{{count}}자 이하로 입력하세요."
+    },
+    "askRestrictedMetaCaption": "{{options}} · {{mode}}"
   },
   "kinds": {
     "permission": {
@@ -385,6 +398,8 @@
       "submitting": "제출 중"
     },
     "permission": {
+      "titleStdin": "터미널 입력을 허용할까요?",
+      "titleMcpUrl": "{{server}} 요청 완료",
       "highRiskTitle": "고위험 권한은 한 번 더 확인해야 합니다",
       "highRiskDetail": "명령 내용을 확인한 뒤 허용을 다시 누르세요. 확실하지 않으면 거부하세요.",
       "sessionAllowTitle": "한 번만 허용하거나 이 작업에서 항상 허용할 수 있습니다",
@@ -439,5 +454,39 @@
       "ghost_id": "플러그인",
       "tool": "도구"
     }
+  },
+  "issueConfirm": {
+    "title": "{{appName}} 피드백 제출 확인",
+    "typeBug": "버그",
+    "typeFeature": "기능 제안",
+    "titleLabel": "제목",
+    "bodyLabel": "본문(Markdown)",
+    "privacyHint": "Issue 제목과 본문은 공개되며 검색되거나 캐시될 수 있습니다. 자동 가림은 일부 일반적인 형식만 처리하며 문맥상 민감한 정보를 모두 감지할 수는 없습니다.",
+    "relatedLogsHint": "이 제출에는 위에 표시된 관련 클라이언트 로그가 포함됩니다. 공개 전에 출처 및 필드 필터링, 가림, 길이 제한이 적용됩니다.",
+    "privacyConfirm": "위 공개 내용을 검토했으며 비공개로 유지해야 할 개인, 대화 또는 업무 정보가 포함되지 않았음을 확인했습니다",
+    "submissionMethodLabel": "제출 계정",
+    "identityGithubUser": "내 GitHub 계정 @{{login}}",
+    "identityGithubUserHint": "GitHub의 Issue 작성자가 되며 직접 수정하거나 닫을 수 있습니다",
+    "identityPlatform": "Cindy 공식 봇 @{{login}} (기본값)",
+    "identityPlatformHint": "GitHub 계정 설정 없이 사용할 수 있습니다. Issue는 공식 봇이 만들며 본문에 공개 서명을 표시할 수 있습니다",
+    "publicNameLabel": "공개 서명",
+    "publicNameHint": "이 서명은 Issue 본문에 공개적으로 표시됩니다",
+    "anonymous": "익명",
+    "useAnonymous": "익명 서명 사용",
+    "envLine": "제출 클라이언트 환경(제출 시 자동 첨부): 클라이언트 {{appVersion}} · {{platform}} {{arch}}({{osVersion}}) · 표시 언어 {{uiLanguage}}",
+    "runtimeLine": "Harness {{harness}} · Model ID {{modelId}} (지금 이 세션)",
+    "regionLine": "지역: {{region}}",
+    "regionCodeCn": "CN",
+    "regionCodeDev": "Dev",
+    "submit": "피드백 제출",
+    "cancel": "취소",
+    "previewLabel": "GitHub · 공개 피드백",
+    "edit": "수정",
+    "doneEditing": "수정 완료",
+    "publicSubmit": "공개 제출",
+    "publicationNotice": "내용과 작성자 이름이 GitHub에 공개됩니다.",
+    "attribution": "작성자: {{name}}",
+    "environment": "실행 환경 포함",
+    "identitySettings": "이름 및 계정"
   }
 }

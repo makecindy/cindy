@@ -27,7 +27,7 @@ import { isMobilePlatform } from '../device-link/controllerPlatform.js';
 import { deviceName } from '../device-link/deviceName.js';
 import { getDesktopProviderService } from '../maker-host/createDesktopProviderService.js';
 import { readDeviceProviderCatalog, readDeviceProviderViews } from '../remote-agent/controller/deviceCatalog.js';
-import { listProviderGroupBindings } from './bindings.js';
+import { listProviderGroupBindings } from './bindings.desktop.js';
 import { readProviderGroupCooling, writeProviderGroupCooling } from './coolingStore.js';
 import { createProviderGroupDirectory, type ProviderGroupCatalogRead, type ProviderGroupDirectory } from './directory.js';
 import { createProviderGroupExternalLoad, type ProviderGroupExternalLoad } from './externalLoad.js';
@@ -36,6 +36,8 @@ import { captureProviderManagementScope } from './managementScope.js';
 import { createProviderGroupRouter, type ProviderGroupRouter } from './router.js';
 import type { ProviderGroupRemoteGroups } from './service.js';
 import { readProviderGroup } from './store.js';
+import { readSubscriptionPoolUsage } from '../subscription-accounts/runtime.js';
+import { isSubscriptionProvider } from '../../shared/subscriptionAccounts.js';
 import { createGroupContinuityClient } from './continuityClient.js';
 import { createProviderGroupUsageReader, providerGroupUsageSnapshot, providerGroupCodexUsageSnapshot, providerGroupCodexUsageFromReads, type ProviderGroupCodexUsageSnapshot } from './usage.js';
 
@@ -59,10 +61,37 @@ let codexRateLimitsReader: ((providerId: string) => Promise<unknown>) | null = n
 function runtimeForActiveOwner(): OwnerRuntime {
   const owner = activeOwnerScopeKey();
   if (current?.owner === owner) return current;
+  type PoolQuota = Awaited<ReturnType<typeof readSubscriptionPoolUsage>>;
+  const poolQuotaReads = new Map<string, { at: number; result: Promise<PoolQuota> }>();
+  const readPoolQuota = async (providerId: string, deviceId?: string) => {
+    if (!isSubscriptionProvider(providerId)) return undefined;
+    if (!deviceId) return readSubscriptionPoolUsage(providerId);
+    const key = `${deviceId}:${providerId}`;
+    const cached = poolQuotaReads.get(key);
+    if (cached && Date.now() - cached.at < 30_000) return cached.result;
+    const resultPromise = (async (): Promise<PoolQuota> => {
+    const result = await remoteBackgroundInvoke(deviceId, 'maker:subscription-pool:quota', [providerId], {
+      preSend: () => { if (activeOwnerScopeKey() !== owner) throw new Error('provider group account changed'); },
+    }).catch(() => null);
+    const raw = result?.ok ? result.result as { providerId?: string; pooled?: boolean; usage?: Record<string, unknown> | null } : null;
+    if (raw?.providerId !== providerId || raw.pooled !== true) return undefined;
+    return raw.usage ? {
+      claudeUsage: providerGroupUsageSnapshot(raw.usage.claudeUsage, Date.now()),
+      codexUsage: providerGroupCodexUsageSnapshot(raw.usage.codexUsage),
+    } : null;
+    })();
+    poolQuotaReads.set(key, { at: Date.now(), result: resultPromise });
+    return resultPromise;
+  };
   const usage = createProviderGroupUsageReader({
     parseSnapshot: providerGroupUsageSnapshot,
-    readLocal: (providerId) => claudeUsageReader?.(providerId) ?? Promise.resolve(null),
+    readLocal: async (providerId) => {
+      const pooled = await readPoolQuota(providerId);
+      return pooled !== undefined ? pooled?.claudeUsage ?? null : claudeUsageReader?.(providerId) ?? null;
+    },
     readRemote: async (deviceId, providerId) => {
+      const pooled = await readPoolQuota(providerId, deviceId);
+      if (pooled !== undefined) return pooled?.claudeUsage ?? null;
       const result = await remoteBackgroundInvoke(deviceId, 'maker:usage:claude-subscription', [providerId], {
         preSend: () => {
           if (activeOwnerScopeKey() !== owner) throw new Error('provider group account changed');
@@ -80,6 +109,8 @@ function runtimeForActiveOwner(): OwnerRuntime {
     now: () => Date.now(),
   });
   const readRemoteCodexUsage = async (deviceId: string, providerId: string, channel: string, args: unknown[]) => {
+    const pooled = await readPoolQuota(providerId, deviceId);
+    if (pooled !== undefined) return channel === 'maker:usage:account' ? pooled?.codexUsage ?? null : null;
     const result = await remoteBackgroundInvoke(deviceId, channel, args, {
       preSend: () => {
         if (activeOwnerScopeKey() !== owner) throw new Error('provider group account changed');
@@ -96,7 +127,10 @@ function runtimeForActiveOwner(): OwnerRuntime {
   const codexUsage = createProviderGroupUsageReader({
     parseSnapshot: providerGroupCodexUsageSnapshot,
     cacheLocal: true,
-    readLocal: (providerId) => codexUsageReader?.(providerId) ?? Promise.resolve(null),
+    readLocal: async (providerId) => {
+      const pooled = await readPoolQuota(providerId);
+      return pooled !== undefined ? pooled?.codexUsage ?? null : codexUsageReader?.(providerId) ?? null;
+    },
     readRemote: (deviceId, providerId) => readRemoteCodexUsage(deviceId, providerId, 'maker:usage:account', ['codex', providerId]),
     isCurrent: () => activeOwnerScopeKey() === owner,
     now: () => Date.now(),
@@ -104,7 +138,10 @@ function runtimeForActiveOwner(): OwnerRuntime {
   const codexLimits = createProviderGroupUsageReader({
     parseSnapshot: providerGroupCodexUsageSnapshot,
     cacheLocal: true,
-    readLocal: async (providerId) => providerGroupCodexUsageFromReads(null, await codexRateLimitsReader?.(providerId), Date.now()),
+    readLocal: async (providerId) => {
+      const pooled = await readPoolQuota(providerId);
+      return pooled !== undefined ? pooled?.codexUsage ?? null : providerGroupCodexUsageFromReads(null, await codexRateLimitsReader?.(providerId), Date.now());
+    },
     readRemote: async (deviceId, providerId) => providerGroupCodexUsageFromReads(null,
       await readRemoteCodexUsage(deviceId, providerId, 'maker:usage:codex-rate-limits', [providerId]), Date.now()),
     isCurrent: () => activeOwnerScopeKey() === owner,
@@ -115,6 +152,7 @@ function runtimeForActiveOwner(): OwnerRuntime {
     return providerGroupCodexUsageSnapshot({
       appServerBuckets: limits?.appServerBuckets ?? account?.appServerBuckets,
       webSnapshot: account?.webSnapshot,
+      nativeAccountPool: account?.nativeAccountPool || limits?.nativeAccountPool,
     });
   };
   const directory = createProviderGroupDirectory({
@@ -391,6 +429,7 @@ export async function readProviderGroupOfSession(sessionId: string): Promise<Pro
 export interface ProviderGroupSessionRebalance {
   suggest(sessionId: string): Promise<ProviderGroupRebalanceSuggestion>;
   decide(sessionId: string, memberKey: string, remember: boolean, clientId?: string): Promise<boolean>;
+  preference(sessionId: string, enabled: boolean): Promise<boolean>;
 }
 
 let sessionRebalance: ProviderGroupSessionRebalance | null = null;
@@ -417,6 +456,12 @@ export async function recordProviderGroupRebalanceDecision(sessionId: string, me
   } catch {
     return false;
   }
+}
+
+/** 任务偏好由所属电脑保存；失败不伪报成功。 */
+export async function setProviderGroupRebalancePreference(sessionId: string, enabled: boolean): Promise<boolean> {
+  if (!sessionRebalance) return false;
+  return sessionRebalance.preference(sessionId, enabled);
 }
 
 /** register 装配会话表后注入：这台电脑上每个供应商正在运行一轮的任务数(localLoad.ts)。 */

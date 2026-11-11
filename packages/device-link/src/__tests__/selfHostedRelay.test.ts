@@ -19,6 +19,11 @@ const keys = { ownerPublicKey: OWNER, pairSecret: SECRET };
 const keyQuery = `&o=${OWNER}&s=${SECRET}`;
 
 describe('relay join links', () => {
+  it('round-trips the optional V2 code without changing the original V1 code or allowing malformed V2 data', () => {
+    const link = buildRelayJoinLink({ baseUrl: 'http://192.168.1.20:47820', code: CODE, ...keys, app: 'cindy', agentNetCode: 'a'.repeat(32) });
+    expect(parseRelayJoinLink(link)).toEqual({ baseUrl: 'http://192.168.1.20:47820', code: CODE, ...keys, agentNetCode: 'a'.repeat(32) });
+    expect(parseRelayJoinLink(link.replace('a'.repeat(32), 'invalid'))).toBeNull();
+  });
   it('round-trips through every app scheme and the router path form', () => {
     for (const app of ['cindy', 'cindycn', 'cindydev'] as const) {
       const link = buildRelayJoinLink({ baseUrl: 'http://192.168.1.20:47820/', code: CODE, ...keys, app });
