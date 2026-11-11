@@ -32,6 +32,8 @@ import { REMOTE_AGENT_RELAY_KEY_PATTERN, type RemoteAgentKind } from '@cindy/dev
 import {
   channelForceConfirmMutatingToolCall,
   channelForceConfirmToolCall,
+  channelGuestForceConfirmMutatingToolCall,
+  channelGuestForceConfirmToolCall,
 } from '../im/shared/channelToolPolicy';
 
 export const REMOTE_AGENT_MAX_ATTACHMENT_BYTES = 20 * 1024 * 1024;
@@ -687,6 +689,12 @@ interface WireTurnPolicy {
   confirmationTimeoutMs?: number;
   autoReviewContext?: unknown;
   stateCallback?: boolean;
+  /**
+   * 访客轮次: 对 Cindy 记忆的调用也要主人确认 (channelToolPolicy 的 guest 变体)。
+   * 可选、只增: 旧版本不认识就忽略, 行为与它原来一致 —— 账号级记忆和这条规则同一版本上线,
+   * 旧版本的电脑上本来就没有这份记忆可读。
+   */
+  guestMemory?: true;
 }
 
 export interface RemoteAgentWireSendOptions {
@@ -724,9 +732,17 @@ export interface EncodedSendOptions {
 }
 
 function forceConfirmKind(policy: TurnPermissionPolicy): WireForceConfirm {
-  if (policy.forceConfirmToolCall === channelForceConfirmToolCall) return 'channel';
-  if (policy.forceConfirmToolCall === channelForceConfirmMutatingToolCall) return 'channel-mutating';
+  const force = policy.forceConfirmToolCall;
+  if (force === channelForceConfirmToolCall || force === channelGuestForceConfirmToolCall) return 'channel';
+  if (force === channelForceConfirmMutatingToolCall || force === channelGuestForceConfirmMutatingToolCall) {
+    return 'channel-mutating';
+  }
   return 'all';
+}
+
+function carriesGuestMemoryRule(policy: TurnPermissionPolicy): boolean {
+  return policy.forceConfirmToolCall === channelGuestForceConfirmToolCall
+    || policy.forceConfirmToolCall === channelGuestForceConfirmMutatingToolCall;
 }
 
 export async function encodeSendOptions(
@@ -755,6 +771,7 @@ export async function encodeSendOptions(
       confirmationTimeoutMs: policy.confirmationTimeoutMs,
       autoReviewContext: jsonSafe(policy.autoReviewContext),
       stateCallback: policy.onInteractionStateChange ? true : undefined,
+      guestMemory: carriesGuestMemoryRule(policy) ? (true as const) : undefined,
     });
   }
   const cindy: NonNullable<RemoteAgentWireSendOptions['cindy']> = {};
@@ -819,10 +836,11 @@ export async function decodeSendOptions(value: unknown, callbacks: DecodeSendCal
     const origin = decodeOrigin(policy.origin);
     if (!origin) throw new Error('REMOTE_AGENT_INVALID: unsupported turn permission origin');
     const surface = policy.confirmationSurface === 'channel' ? 'channel' : 'desktop';
+    const guestMemory = policy.guestMemory === true;
     const force = policy.forceConfirm === 'channel'
-      ? channelForceConfirmToolCall
+      ? (guestMemory ? channelGuestForceConfirmToolCall : channelForceConfirmToolCall)
       : policy.forceConfirm === 'channel-mutating'
-        ? channelForceConfirmMutatingToolCall
+        ? (guestMemory ? channelGuestForceConfirmMutatingToolCall : channelForceConfirmMutatingToolCall)
         : () => true;
     opts.turnPermissionPolicy = prune({
       origin,

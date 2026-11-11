@@ -779,6 +779,26 @@ describe('MakerMemoryManager · 账号级与项目两份记忆', () => {
     expect(index).not.toContain('scope "user"');
   });
 
+  it('withholdUser: 账号级索引不进提示词, 只留一句说明; 项目索引照常', async () => {
+    // 对话里别人也能说话的任务 (cindy-memory.md §7): 索引里的标题和摘要不能交给访客。
+    await (await manager.getStore(USER_MEMORY_SCOPE_KEY)).write(record('user', 'home-address'));
+    await (await manager.getStore(WORKDIR)).write(record('project', 'arch'));
+
+    const index = await manager.getPromptIndex(WORKDIR, { withholdUser: true });
+
+    expect(index).not.toContain('home-address');
+    expect(index).toContain('scope "user"');
+    expect(index).toContain('memory_list');
+    expect(index).toContain('[project_arch.md]');
+    // 一次性对话只有账号级一份: 提示词里只剩说明。
+    const dialogue = await manager.getPromptIndex(DIALOGUE_DIR, { withholdUser: true });
+    expect(dialogue).not.toContain('home-address');
+    expect(dialogue).toContain('memory_list');
+    // 伙伴只有自己那一份, 不受影响。
+    await (await manager.getStore(BOT_SCOPE)).write(record('user', 'bot-habit'));
+    expect(await manager.getPromptIndex(BOT_SCOPE, { withholdUser: true })).toContain('[user_bot-habit.md]');
+  });
+
   it('resetAll 连账号级记忆一起清空', async () => {
     await (await manager.getStore(USER_MEMORY_SCOPE_KEY)).write(record('user', 'tone'));
     await (await manager.getStore(WORKDIR)).write(record('project', 'arch'));

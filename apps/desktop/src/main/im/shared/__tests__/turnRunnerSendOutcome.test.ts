@@ -30,6 +30,7 @@ import { createTelegramGuestTurnPermissionPolicy } from '../../telegram/permissi
 import { createDingTalkTurnPermissionPolicy } from '../../dingtalk/permissionPolicy';
 import { createFeishuGroupTurnPermissionPolicy } from '../../feishu/permissionPolicy';
 import { createWechatTurnPermissionPolicy } from '../../wechat/permissionPolicy';
+import { withGuestMemoryConfirmation } from '../channelToolPolicy';
 import { enqueueAskCardPatch } from '../askCardPatchQueue';
 import { createSerializedConnectionLifecycle } from '../../connectionLifecycle';
 
@@ -1701,7 +1702,11 @@ describe('turnRunner send outcome policy (feishu adapter characterization)', () 
         } else {
           expect(result.kind).toBe('accepted');
           expect(runtime.mode).toBe('auto');
-          expect(h.send.mock.calls[0]?.[1]?.turnPermissionPolicy).toBe(policy);
+          // 访客轮次、渠道自有任务: 渠道给的策略保留, 另加「记忆调用要主人确认」
+          // (cindy-memory.md §7), 所以不再是同一个对象。
+          const sentPolicy = h.send.mock.calls[0]?.[1]?.turnPermissionPolicy;
+          expect(sentPolicy).toEqual({ ...policy, forceConfirmToolCall: expect.any(Function) });
+          expect(sentPolicy?.forceConfirmToolCall('Read', {})).toBe(true);
           expect(h.releaseTurnLease).not.toHaveBeenCalled();
           if (ending === 'user-change') runtime = { mode: 'ask', generation: runtime.generation + 1 };
           if (ending === 'dispose') localRunner.disposeAllSessions();
@@ -1718,12 +1723,14 @@ describe('turnRunner send outcome policy (feishu adapter characterization)', () 
   );
 
   it.each([
-    ['telegram', () => createTelegramGuestTurnPermissionPolicy('guest', false)],
-    ['dingtalk', () => createDingTalkTurnPermissionPolicy('guest', false)],
-    ['dingtalk-owner', () => createDingTalkTurnPermissionPolicy('owner', true)],
-    ['feishu', () => createFeishuGroupTurnPermissionPolicy('guest', false)],
-    ['wechat', () => createWechatTurnPermissionPolicy('unknown')],
-  ] as const)('retains the %s policy and keeps the real Session occupied through Auto restoration', async (_channel, makePolicy) => {
+    // 第三列: 这一轮里读主人的记忆要不要主人确认 (cindy-memory.md §7)。访客要; 主人自己、
+    // 个人微信 (私聊、身份恒为 unknown) 不要。
+    ['telegram', () => createTelegramGuestTurnPermissionPolicy('guest', false), true],
+    ['dingtalk', () => createDingTalkTurnPermissionPolicy('guest', false), true],
+    ['dingtalk-owner', () => createDingTalkTurnPermissionPolicy('owner', true), false],
+    ['feishu', () => createFeishuGroupTurnPermissionPolicy('guest', false), true],
+    ['wechat', () => createWechatTurnPermissionPolicy('unknown'), false],
+  ] as const)('retains the %s policy and keeps the real Session occupied through Auto restoration', async (_channel, makePolicy, memoryNeedsOwner) => {
     const terminal = deferred<void>();
     const ended = deferred<void>();
     const restoreStarted = deferred<void>();
@@ -1774,7 +1781,14 @@ describe('turnRunner send outcome policy (feishu adapter characterization)', () 
       });
       expect(result.kind).toBe('accepted');
       expect(handle.send).toHaveBeenCalledOnce();
-      expect(handle.validateSendOptions).toHaveBeenCalledWith(expect.objectContaining({ turnPermissionPolicy: policy }));
+      // 访客轮次的策略多带一条记忆规则, 其余字段是渠道给的那一份。
+      expect(handle.validateSendOptions).toHaveBeenCalledWith(
+        expect.objectContaining({ turnPermissionPolicy: withGuestMemoryConfirmation(policy) }),
+      );
+      const sentPolicy = vi.mocked(handle.validateSendOptions!).mock.calls[0]![0]!.turnPermissionPolicy!;
+      expect(sentPolicy.forceConfirmToolCall('mcp__cindy_memory__call_tool', { name: 'memory_read', args: {} }))
+        .toBe(memoryNeedsOwner);
+      if (!memoryNeedsOwner) expect(sentPolicy).toBe(policy);
       expect(mode).toBe('auto');
       terminal.resolve();
       await restoreStarted.promise;

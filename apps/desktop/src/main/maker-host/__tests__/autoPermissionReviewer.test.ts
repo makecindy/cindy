@@ -558,3 +558,66 @@ it('keeps registered plugin scope separate from actual user restrictions', () =>
  expect(prompt).toContain('Actual user restrictions and revocations in userIntent always win');
  expect(prompt).not.toContain('host-revision');
 });
+
+/**
+ * 访客轮次里的 Cindy 记忆 (docs/product-rules/cindy-memory.md §7)。
+ *
+ * 入口: Auto 档下被渠道策略送进审批链的一次记忆调用, 动作形状与三种 Agent 实际发来的
+ * 一致 (kind 'other' + 含 toolName / input 的 JSON 描述)。保护的规则: 这类调用不交给模型
+ * 判断风险 —— 模型会把读记忆当成访客的普通只读放行 —— 而是直接转给主人确认。
+ */
+describe('createAutoPermissionReviewer · guest memory calls', () => {
+  const memoryAction = (toolName: string, input: unknown): AutoReviewRequest['action'] => ({
+    kind: 'other',
+    description: JSON.stringify({ toolName, input }),
+  });
+  const read = memoryAction('mcp__cindy_memory__call_tool', { name: 'memory_read', args: { filename: 'user_tone.md' } });
+  const allowing = () => vi.fn(async () => '{"verdict":"allow"}');
+
+  it.each([
+    ['a guest in a group', { requesterAuthority: 'guest', source: 'group' }],
+    ['a guest in a private chat', { requesterAuthority: 'guest', source: 'direct' }],
+    ['an unidentified speaker in a group', { requesterAuthority: 'unknown', source: 'group' }],
+  ] as const)('asks the owner without consulting the model when %s reads memory', async (_label, authorizationContext) => {
+    const requestText = allowing();
+    const reviewer = createAutoPermissionReviewer({ requestText, logger: { debug: vi.fn(), warn: vi.fn() } });
+
+    const decision = await reviewer(request({ authorizationContext, action: read }));
+
+    expect(decision?.verdict).toBe('ask');
+    expect(requestText).not.toHaveBeenCalled();
+  });
+
+  it('covers the Codex call shape too', async () => {
+    const requestText = allowing();
+    const reviewer = createAutoPermissionReviewer({ requestText, logger: { debug: vi.fn(), warn: vi.fn() } });
+    const action = memoryAction('mcp:cindy_memory', {
+      toolParams: { name: 'call_tool', args: { name: 'memory_search', args: { query: 'address' } } },
+    });
+
+    await expect(reviewer(request({ authorizationContext: { requesterAuthority: 'guest', source: 'group' }, action })))
+      .resolves.toMatchObject({ verdict: 'ask' });
+    expect(requestText).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    ['the owner', { requesterAuthority: 'owner', source: 'group' }],
+    ['a private chat with an unverified sender', { requesterAuthority: 'unknown', source: 'direct' }],
+  ] as const)('leaves the decision to the normal review for %s', async (_label, authorizationContext) => {
+    const requestText = allowing();
+    const reviewer = createAutoPermissionReviewer({ requestText, logger: { debug: vi.fn(), warn: vi.fn() } });
+
+    await expect(reviewer(request({ authorizationContext, action: read }))).resolves.toEqual({ verdict: 'allow' });
+    expect(requestText).toHaveBeenCalledOnce();
+  });
+
+  it('does not change how a guest\'s other tool calls are reviewed', async () => {
+    const requestText = allowing();
+    const reviewer = createAutoPermissionReviewer({ requestText, logger: { debug: vi.fn(), warn: vi.fn() } });
+    const action = memoryAction('mcp__cindy_scheduler__call_tool', { name: 'schedule_list', args: {} });
+
+    await expect(reviewer(request({ authorizationContext: { requesterAuthority: 'guest', source: 'group' }, action })))
+      .resolves.toEqual({ verdict: 'allow' });
+    expect(requestText).toHaveBeenCalledOnce();
+  });
+});

@@ -302,6 +302,16 @@ async function readUnmergedScopePath(dir: string): Promise<string | null> {
 /** 拼进 system prompt 时两份索引各自的标题; 括号里是 memory 工具的 scope 取值。 */
 const USER_INDEX_HEADING = `${MEMORY_INDEX_HEADING} — user (scope "user": applies in every project)`;
 const PROJECT_INDEX_HEADING = `${MEMORY_INDEX_HEADING} — project (scope "project": this repository or folder)`;
+/**
+ * 账号级索引不写进提示词时放在它位置上的一句说明 (见 getPromptIndex 的 withholdUser)。
+ * 只说事实: 这里不列、要用时怎么查、别人发起的查询要等主人确认。
+ */
+const WITHHELD_USER_INDEX = [
+  USER_INDEX_HEADING,
+  '',
+  '_(not listed in this conversation: people other than the owner can talk to you here. Look entries up with `memory_list` / `memory_search` (scope "user") when they are needed; a lookup made for someone other than the owner waits for the owner\'s confirmation.)_',
+  '',
+].join('\n');
 
 export class MakerMemoryManager {
   private enabled: boolean;
@@ -904,17 +914,21 @@ export class MakerMemoryManager {
    * 任务启动时拼进 system prompt 的记忆索引快照: 账号级在前 (变动少, 对 prompt
    * cache 前缀更友好), 项目在后。只有一份时不加作用域标题以外的内容。
    */
-  async getPromptIndex(scopeKey: string): Promise<string> {
+  async getPromptIndex(scopeKey: string, options: { withholdUser?: boolean } = {}): Promise<string> {
     const scopes = this.memoryScopesFor(scopeKey);
     if (!scopes.user) return (await this.getStore(scopeKey)).getIndex();
     // 两份索引分两次打开 store, 每次打开都只按「当时」的账号校验自己; 中间账号若切换,
     // 会拼出旧账号的账号级记忆加新账号的项目记忆。入口先绑定账号, 返回前复核。
     this.ensureOwnerScope();
     const scopeAtEntry = this.deps.ownerScopeKey?.() ?? null;
-    const user = (await (await this.getStore(scopes.user)).getIndex()).replace(
-      MEMORY_INDEX_HEADING,
-      USER_INDEX_HEADING,
-    );
+    // withholdUser: 对话里别人也能说话的任务 (群聊等) 不把账号级索引写进提示词 —— 索引里是
+    // 每条记忆的标题和摘要, 写进去就等于交给了对话里的每个人。记忆本身仍可用工具读写。
+    const user = options.withholdUser === true
+      ? WITHHELD_USER_INDEX
+      : (await (await this.getStore(scopes.user)).getIndex()).replace(
+          MEMORY_INDEX_HEADING,
+          USER_INDEX_HEADING,
+        );
     if (!scopes.project) {
       this.assertScopeUnchanged(scopeAtEntry);
       return user;

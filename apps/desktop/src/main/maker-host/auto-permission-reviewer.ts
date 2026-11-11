@@ -18,6 +18,7 @@ import { splitAutoReviewUserReferences } from '@cindy/maker-shared/auto-review-i
 import { redactSensitiveText } from '@cindy/maker-shared/error-redaction';
 
 import { untrustedJsonBlock } from '../../shared/untrustedPrompt.js';
+import { isCindyMemoryToolCall, isGuestTurnAuthority } from '../im/shared/channelToolPolicy.js';
 
 interface AutoPermissionReviewerLogger {
   debug(message: string, fields?: Record<string, unknown>): void;
@@ -350,6 +351,26 @@ function hasNoUserIntent(intent: AutoReviewRequest['userIntent']): boolean {
     && normalized.earlierUserMessages.every((message) => !message.trim());
 }
 
+/**
+ * 访客轮次里对 Cindy 记忆的调用 (docs/product-rules/cindy-memory.md §7)。
+ *
+ * 渠道策略把这类调用送进审批链; Auto 档下审批先到这里。规则是「要主人确认」, 不是
+ * 「看风险」—— 读记忆在风险表里是低风险的读, 交给模型判断就会被当成访客的普通只读放行,
+ * 所以在调模型之前直接定为 ask。工具名与入参取自 harness 写进动作描述的那份 JSON。
+ */
+function isGuestMemoryAction(request: AutoReviewRequest): boolean {
+  if (!isGuestTurnAuthority(request.authorizationContext)) return false;
+  if (request.action.kind !== 'other' || !request.action.description) return false;
+  try {
+    const parsed: unknown = JSON.parse(request.action.description);
+    if (!parsed || typeof parsed !== 'object') return false;
+    const { toolName, input } = parsed as { toolName?: unknown; input?: unknown };
+    return typeof toolName === 'string' && isCindyMemoryToolCall(toolName, input);
+  } catch {
+    return false;
+  }
+}
+
 export function createAutoPermissionReviewer(
   deps: AutoPermissionReviewerDeps,
   timeoutPolicy: Readonly<AutoReviewTimeoutPolicy> = DEFAULT_AUTO_REVIEW_TIMEOUT_POLICY,
@@ -366,6 +387,12 @@ export function createAutoPermissionReviewer(
         maxActionTextChars: MAX_AUTO_REVIEW_ACTION_TEXT_CHARS,
       });
       return null;
+    }
+    if (isGuestMemoryAction(request)) {
+      return {
+        verdict: 'ask',
+        reason: "Someone other than the owner asked for this. Reading or changing the owner's saved memory needs the owner's confirmation.",
+      };
     }
     // Risk-first models wave "low risk" steps through even when nothing at all was user-authored.
     // Decide that case here, after the Host attached any delegated task.

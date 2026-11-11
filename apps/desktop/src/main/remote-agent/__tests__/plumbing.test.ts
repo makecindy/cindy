@@ -9,6 +9,11 @@ import { StreamableHTTPClientTransport } from '@modelcontextprotocol/sdk/client/
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import WebSocket from 'ws';
 
+import {
+  channelForceConfirmToolCall,
+  channelGuestForceConfirmMutatingToolCall,
+  channelGuestForceConfirmToolCall,
+} from '../../im/shared/channelToolPolicy';
 import { mapClaudeHostedEvent } from '../controller/eventMap';
 import { execServerActions, execServerCommand } from '../controller/execServerRelay';
 import { collectProjectInstructionFiles } from '../controller/projectFiles';
@@ -742,6 +747,28 @@ describe('wire payloads', () => {
       writeAttachment: async () => '',
     });
     expect(decoded.turnPermissionPolicy?.forceConfirmToolCall('Read', {})).toBe(true);
+  });
+
+  // 访客轮次的记忆规则随策略过线: 少了它, 托管在另一台电脑上的群任务里访客读记忆不会问主人。
+  it('carries the guest memory rule across the wire and leaves owner turns without it', async () => {
+    const callbacks = { onTranscriptUserEntry: async () => {}, onInteractionStateChange() {}, writeAttachment: async () => '' };
+    const origin = { kind: 'im', channel: 'telegram', taskId: 't' } as const;
+    const read = ['mcp__cindy_memory__call_tool', { name: 'memory_read', args: {} }] as const;
+    const roundtrip = async (force: (toolName: string, input: unknown) => boolean) => {
+      const encoded = await encodeSendOptions({
+        turnPermissionPolicy: { origin, confirmationSurface: 'channel', forceConfirmToolCall: force },
+      }, async () => Buffer.alloc(0));
+      return decodeSendOptions(JSON.parse(JSON.stringify(encoded.wire)), callbacks);
+    };
+
+    const guest = await roundtrip(channelGuestForceConfirmToolCall);
+    expect(guest.turnPermissionPolicy?.forceConfirmToolCall(...read)).toBe(true);
+    expect(guest.turnPermissionPolicy?.forceConfirmToolCall('Read', {})).toBe(false);
+    const guestMutating = await roundtrip(channelGuestForceConfirmMutatingToolCall);
+    expect(guestMutating.turnPermissionPolicy?.forceConfirmToolCall).toBe(channelGuestForceConfirmMutatingToolCall);
+
+    const owner = await roundtrip(channelForceConfirmToolCall);
+    expect(owner.turnPermissionPolicy?.forceConfirmToolCall(...read)).toBe(false);
   });
 
   // #9263 unit: no previous wire roundtrip included the new IM origin. Both

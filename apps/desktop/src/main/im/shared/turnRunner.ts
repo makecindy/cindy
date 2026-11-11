@@ -146,7 +146,8 @@ import {
   registerPendingExternal,
   rejectAllPending,
 } from './pendingInteractions';
-import { checkChannelDestructiveToolCall } from './channelToolPolicy';
+import { checkChannelDestructiveToolCall, withGuestMemoryConfirmation } from './channelToolPolicy';
+import { isSharedChannelTurn, noteSharedChannelSession } from './channelSessionLanes';
 import { readXdGatewayApiKey } from './apiKey';
 import {
   hasAuthForImRoute,
@@ -1119,6 +1120,9 @@ export function createTurnRunner(
       }
     }
     const row = target.row;
+    // 任务启动 (ensureSessionWired) 之前登记: 这段对话里别人也能说话的话, 启动时不把主人
+    // 账号级记忆的索引写进系统提示词。伙伴任务用伙伴自己的记忆, 不登记。
+    if (!target.botOwned && isSharedChannelTurn(args)) noteSharedChannelSession(row.id);
     const allowedFileRoots = resolveTurnFileRoots(row.workingDir, row.remoteHostId);
     let followTarget: ImDefaultRoute | null | undefined = null;
     // 伙伴任务(主任务 / channel 专线)用伙伴自己的模型链, 不跟随渠道默认。
@@ -1405,9 +1409,16 @@ export function createTurnRunner(
       ...(args.onRouteResolved ? { onRouteResolved: args.onRouteResolved } : {}),
       // Binding presence is insufficient: unavailable companions fall back to
       // channel-owned sessions, which must retain the mandatory policy.
+      // 渠道自有任务用的是 Cindy 记忆 (含主人账号级的那一份): 访客轮次里对它的读写要主人确认。
+      // 伙伴任务用伙伴自己的记忆, 策略原样。
       ...(args.turnPermissionPolicy && !(args.inheritCompanionOwnerPermissions === true
         && args.requesterIsOwner === true && target.botOwned)
-        ? { turnPermissionPolicy: args.turnPermissionPolicy } : {}),
+        ? {
+            turnPermissionPolicy: target.botOwned
+              ? args.turnPermissionPolicy
+              : withGuestMemoryConfirmation(args.turnPermissionPolicy),
+          }
+        : {}),
       ...(args.requesterIsOwner === true ? { requesterIsOwner: true } : {}),
       ...(args.onEarlyReject ? { onEarlyReject: args.onEarlyReject } : {}),
       ...(args.protectedContent === true ? { protectedContent: true } : {}),
