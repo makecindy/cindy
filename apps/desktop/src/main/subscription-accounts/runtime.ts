@@ -11,11 +11,16 @@ import {
 } from '../maker-host/nativeProviderAuthBinding.js';
 import { pickProviderGroupMember } from '../provider-group/scheduler.js';
 import { providerGroupMemberUsageState } from '../provider-group/usage.js';
+import { coolingScope, currentCooling, PROVIDER_GROUP_COOLING_SCOPE_CAP } from '../provider-group/cooling.js';
+import { PROVIDER_GROUP_DEFAULT_COOLDOWN_MS } from '../provider-group/router.js';
+import { decideProviderGroupFailure, providerGroupFailureSignals } from '../provider-group/failurePolicy.js';
+import { readTurnUsageResetAt } from '../goal-host/usageLimit.js';
 import { providerGroupCodexUsageFromReads } from '../provider-group/usage.js';
 import { providerGroupCodexUsageSnapshot } from '../provider-group/usage.js';
 import { codexLimitBucketKey } from '@cindy/maker-shared/codex-usage-buckets';
 import {
   mergeClaudeSubscriptionUsageSnapshot,
+  mergeClaudeSubscriptionUsageDuringRead,
   parseClaudeSdkRateLimitInfo,
 } from '../../shared/claudeSubscriptionUsage.js';
 import type {
@@ -70,6 +75,8 @@ interface OwnerRuntime {
   lastPicked: Map<SubscriptionProvider, string>;
   logins: Map<string, { abort: AbortController; accountId: string }>;
   invalidated: Map<string, { token: string; reason: string }>;
+  /** Actual account failures outrank optimistic cached quota for new assignments. */
+  quotaCooling: Map<string, Record<string, number>>;
 }
 let runtime: OwnerRuntime | undefined;
 const listeners = new Set<(providerId: SubscriptionProvider) => void>();
@@ -102,11 +109,20 @@ function currentRuntime(): OwnerRuntime {
       lastPicked: new Map(),
       logins: new Map(),
       invalidated: new Map(),
+      quotaCooling: new Map(),
     };
   }
   return runtime;
 }
 const keyOf = (provider: SubscriptionProvider, id: string) => `${provider}:${id}`;
+function accountCooling(state: OwnerRuntime, provider: SubscriptionProvider, id: string, model?: string): boolean {
+  const key = keyOf(provider, id);
+  const scopes = currentCooling(state.quotaCooling.get(key), Date.now());
+  if (Object.keys(scopes).length) state.quotaCooling.set(key, scopes);
+  else state.quotaCooling.delete(key);
+  const scope = coolingScope(provider === 'openai' ? model?.replace(/^chatgpt\//, '') : model);
+  return Boolean(scopes[''] || scopes[scope]);
+}
 function legacyCodexDefault(provider: SubscriptionProvider): boolean {
   if (provider !== 'openai') return false;
   const pool = readPool(provider);
@@ -177,7 +193,7 @@ export function observeSubscriptionAccountUsage(
   });
   // Notifications contain one bucket directly. Merge it before sanitizing, retaining
   // omitted fields and unrelated model buckets instead of treating it as an RPC reply.
-  const codexUsage =
+  let codexUsage =
     codexEvent && ('primary' in codexEvent || 'secondary' in codexEvent)
       ? providerGroupCodexUsageSnapshot({
           appServerBuckets: {
@@ -191,6 +207,19 @@ export function observeSubscriptionAccountUsage(
           webSnapshot: previousCodex?.webSnapshot,
         })
       : previousCodex;
+  if (codexUsage !== previousCodex && codexUsage?.appServerBuckets?.[bucketKey] && codexEvent) {
+    const bucket = codexUsage.appServerBuckets[bucketKey];
+    const previous = previousCodex?.appServerBuckets?.[bucketKey];
+    // Preserve references for fields the event did not observe. This makes the
+    // concurrent delta distinguish a repeated 100% event from an omitted window.
+    codexUsage = { ...codexUsage, appServerBuckets: {
+      ...previousCodex?.appServerBuckets,
+      [bucketKey]: { ...bucket,
+        primary: 'primary' in codexEvent ? bucket.primary : previous?.primary ?? null,
+        secondary: 'secondary' in codexEvent ? bucket.secondary : previous?.secondary ?? null,
+      },
+    } };
+  }
   const usage: Usage =
     provider === 'anthropic'
       ? {
@@ -199,7 +228,9 @@ export function observeSubscriptionAccountUsage(
             : cached.usage?.claudeUsage,
         }
       : { ...cached.usage, codexUsage };
-  state.cache.set(key, { ...cached, usage, at: Date.now() });
+  // The event updates usage, not the last account/endpoint read. Renewing `at`
+  // here lets a stream of SDK events postpone authoritative polling indefinitely.
+  state.cache.set(key, { ...cached, usage });
   changed(provider);
 }
 async function snapshot(
@@ -234,22 +265,59 @@ async function snapshot(
             auth = { ...auth, authenticated: false, errorReason: invalidated.reason };
           else if (state.invalidated.get(key) === invalidated) state.invalidated.delete(key);
         }
+        // Auth reads yield: quota events may have replaced the captured cache.
+        const current = state.cache.get(key);
+        const sameAccount = current?.auth.identity === auth.identity;
         const reuseUsage =
-          cached?.auth.identity === auth.identity &&
-          cached?.usageAt !== undefined &&
-          Date.now() - cached.usageAt < 180_000;
-        const usage = auth.authenticated
+          sameAccount &&
+          current?.usageAt !== undefined &&
+          Date.now() - current.usageAt < 180_000;
+        let usage = auth.authenticated
           ? reuseUsage
-            ? cached?.usage
+            ? current?.usage
             : await readNativeAccountUsage(provider, directory).catch(() =>
-                cached?.auth.identity === auth.identity ? cached?.usage : undefined,
+                state.cache.get(key)?.auth.identity === auth.identity ? state.cache.get(key)?.usage : undefined,
               )
           : undefined;
+        const latest = state.cache.get(key);
+        const eventDuringRead = auth.authenticated && latest?.auth.identity === auth.identity
+          && latest?.usage !== current?.usage;
+        // A successful read owns the full snapshot; overlay only concurrent
+        // events, not the old endpoint fields carried along in the event cache.
+        if (eventDuringRead && usage !== latest?.usage) {
+          if (provider === 'anthropic' && latest?.usage?.claudeUsage) {
+            usage = { ...usage, claudeUsage: usage?.claudeUsage ? mergeClaudeSubscriptionUsageDuringRead(
+              current?.usage?.claudeUsage, usage.claudeUsage, latest.usage.claudeUsage,
+            ) : latest.usage.claudeUsage };
+          } else if (provider === 'openai' && latest?.usage?.codexUsage) {
+            const buckets = { ...usage?.codexUsage?.appServerBuckets };
+            for (const [id, bucket] of Object.entries(latest.usage.codexUsage.appServerBuckets ?? {})) {
+              const previous = current?.usage?.codexUsage?.appServerBuckets?.[id];
+              if (bucket === previous) continue;
+              // Omitted event fields still belong to the fresh RPC result.
+              const delta = Object.fromEntries(Object.entries(bucket).filter(([field, value]) => {
+                if (value === previous?.[field as keyof typeof previous]) return false;
+                if (field === 'primary' || field === 'secondary') {
+                  const eventReset = bucket[field]?.resetsAt;
+                  const readReset = buckets[id]?.[field]?.resetsAt;
+                  if (eventReset != null && readReset != null && eventReset < readReset) return false;
+                }
+                return true;
+              }));
+              buckets[id] = { ...buckets[id], ...delta,
+                updatedAt: Math.max(bucket.updatedAt ?? 0, buckets[id]?.updatedAt ?? 0) } as typeof bucket;
+            }
+            usage = { ...usage, codexUsage: providerGroupCodexUsageSnapshot({
+              ...usage?.codexUsage, appServerBuckets: buckets,
+            }) };
+          }
+        }
         result = {
           auth,
           usage,
           at: Date.now(),
-          usageAt: reuseUsage ? cached?.usageAt : Date.now(),
+          usageAt: reuseUsage ? current?.usageAt
+            : eventDuringRead && usage === latest?.usage ? latest?.usageAt : Date.now(),
         };
       } catch {
         result = { auth: { authenticated: false }, unavailable: true, at: Date.now() };
@@ -323,6 +391,41 @@ export async function readSubscriptionSessionUsage(provider: SubscriptionProvide
   assertOwner(state);
   if (!current() || !info.auth.authenticated) return null;
   return info.usage ?? null;
+}
+
+/** A positive result can retire a member/model cooldown, so unknown quota is
+ * not enough. This never selects/binds an account or changes an existing task. */
+export async function readSubscriptionPoolModelAvailability(
+  provider: SubscriptionProvider,
+  model: string,
+  options: { remote?: boolean } = {},
+): Promise<boolean | null> {
+  const pool = readPool(provider);
+  if (!pool || pool.accounts.length < 2) return null;
+  if (pool.disconnected) return false;
+  const state = currentRuntime();
+  const infos = await Promise.all(pool.accounts.map((a) => snapshot(state, provider, a.id)));
+  // Match new-account allocation without loading remote-access dependencies for
+  // unrelated providers. Check current grants after the asynchronous quota read.
+  const legacyAccess = provider === 'openai' ? await import('./legacyAccountAccess.js') : null;
+  assertOwner(state);
+  const latest = readPool(provider);
+  if (!latest || latest.disconnected) return false;
+  return latest.accounts.some((account) => {
+    const info = infos[pool.accounts.findIndex((a) => a.id === account.id)];
+    if (account.paused || !info?.auth.authenticated || info.unavailable
+      || accountCooling(state, provider, account.id, model)
+      || [...state.logins].some(([key, login]) => key.startsWith(provider + ':') && login.accountId === account.id)
+      || (account.id === 'default' && !defaultAccountBound(provider))) return false;
+    const imported = provider === 'openai' ? readLegacyCodexProviderId(account.id) : undefined;
+    if (imported && !legacyAccess?.legacyCodexAccountCanRun(imported, model, {
+      remote: options.remote === true, newRoute: true,
+    })) return false;
+    const usage = providerGroupMemberUsageState(info.usage ?? {},
+      provider === 'openai' ? model.replace(/^chatgpt\//, '') : model,
+      Date.now(), provider === 'openai' ? 'codex' : 'claude-code');
+    return !usage.limited && usage.quota !== null;
+  });
 }
 
 /**
@@ -571,6 +674,9 @@ export async function readSubscriptionPool(
 
 export interface SubscriptionAccountLease {
   account: NativeSubscriptionAccount;
+  /** New turns must not reuse an account explicitly disabled by the user. */
+  assertDispatchable(): void;
+  observeFailure(error: unknown, model: string | undefined, phase: 'start' | 'run'): void;
   changeModel(model: string, apply: () => Promise<void>): Promise<void>;
   bind(keys: string[]): Promise<void>;
   running(active: boolean): void;
@@ -588,7 +694,12 @@ export async function acquireSubscriptionAccount(
   if (!pool) return null;
   if (pool.disconnected) throw new Error('Subscription provider was disconnected');
   const state = currentRuntime();
-  const binding = keys.map((key) => readAccountBinding(key, provider)).find(Boolean);
+  const bindings = keys.map((key) => readAccountBinding(key, provider)).filter(Boolean);
+  const binding = bindings[0];
+  // A stale caller may still carry the pre-switch native id. Never resume it in
+  // the newly bound task account's home or overwrite its historical ownership.
+  if (bindings.some(entry => entry?.accountId !== binding?.accountId))
+    throw new Error('The task subscription account changed');
   const snapshots = await Promise.all(pool.accounts.map((a) => snapshot(state, provider, a.id)));
   // Remote access stores also wire share lifecycle dependencies. Load them only
   // for actual OpenAI selection, not while unrelated catalogs initialize.
@@ -614,7 +725,8 @@ export async function acquireSubscriptionAccount(
       ...a,
       paused: control ? false : a.paused,
       key: a.id,
-      usable: !loggingIn && info?.auth.authenticated === true && (control || !usage.limited)
+      usable: !loggingIn && info?.auth.authenticated === true && (control || (!usage.limited
+        && (Boolean(binding) || latest.accounts.length < 2 || !accountCooling(state, provider, a.id, model))))
         && (control || !imported || legacyAccess?.legacyCodexAccountCanRun(imported, model, {
           remote: options.remote === true, newRoute: !binding && !options.resuming,
         }) === true),
@@ -633,7 +745,7 @@ export async function acquireSubscriptionAccount(
       lastPicked: state.lastPicked.get(provider),
     });
   const member = members.find((a) => a.id === selected);
-  if (!selected || !member || !member.usable)
+  if (!selected || !member || !member.usable || (!control && member.paused))
     throw new Error(
       pinned
         ? 'The task subscription account requires login or quota reset'
@@ -665,6 +777,27 @@ export async function acquireSubscriptionAccount(
       throw new Error(options.remote ? 'Subscription account remote access was revoked' : 'Subscription account does not allow this model');
   };
   return {
+    assertDispatchable: () => {
+      assertCurrent();
+      if (readPool(provider)?.accounts.find(a => a.id === selected)?.paused)
+        throw new Error('The task subscription account is disabled; retry to switch accounts');
+    },
+    observeFailure(error, failedModel, phase) {
+      try { assertCurrent(); } catch { return; } // Ignore late failures after owner/account removal.
+      const signals = providerGroupFailureSignals(error);
+      const decision = decideProviderGroupFailure(signals, phase);
+      if (decision.action !== 'switch' || decision.cause !== 'usage-limit') return;
+      const now = Date.now();
+      const resetAt = readTurnUsageResetAt(signals, now);
+      const scope = coolingScope(provider === 'openai' ? failedModel?.replace(/^chatgpt\//, '') : failedModel);
+      const scopes = currentCooling(state.quotaCooling.get(key), now);
+      const until = resetAt !== null && resetAt > now ? resetAt : now + PROVIDER_GROUP_DEFAULT_COOLDOWN_MS;
+      // Refresh the scope's insertion order and bound remembered model failures.
+      const previous = scopes[scope] ?? 0;
+      delete scopes[scope];
+      scopes[scope] = Math.max(previous, until);
+      state.quotaCooling.set(key, Object.fromEntries(Object.entries(scopes).slice(-PROVIDER_GROUP_COOLING_SCOPE_CAP)));
+    },
     account: {
       id: `${accountOwnerPrefix()}:${provider}:${selected}`,
       configDir: directoryFor(provider, selected),
@@ -795,6 +928,7 @@ export async function runSubscriptionAccountCommand(
       accounts: pool.accounts.filter((a) => a.id !== command.accountId),
     }));
     state.cache.delete(keyOf(provider, command.accountId));
+    state.quotaCooling.delete(keyOf(provider, command.accountId));
   } else {
     const initial = readPool(provider);
     const adding = command.action === 'add' || command.action === 'connect';
@@ -891,6 +1025,7 @@ export async function runSubscriptionAccountCommand(
       assertOwner(state);
       state.cache.delete(keyOf(provider, accountId));
       state.invalidated.delete(keyOf(provider, accountId));
+      state.quotaCooling.delete(keyOf(provider, accountId));
       await snapshot(state, provider, accountId, true);
     } finally {
       state.logins.delete(key);

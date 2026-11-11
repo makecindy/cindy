@@ -15,7 +15,7 @@ vi.mock('../../imageCacheStore.desktop.js', () => ({ resolveSafe: imageResolve }
 vi.mock('../../videoCacheStore.js', () => ({ resolveSafe: videoResolve }));
 
 const uploadLocalFile = vi.hoisted(() => vi.fn());
-vi.mock('../mediaTransfer.js', () => ({
+vi.mock('../mediaTransfer.desktop.js', () => ({
   uploadLocalFile,
   mimeOf: () => 'application/octet-stream',
 }));

@@ -69,7 +69,8 @@
       "react-native-screens@4.30.1": "dependency-patches/react-native-screens@4.30.1.patch",
       "expo-router@58.0.30": "dependency-patches/expo-router@58.0.30.patch",
       "react-native-gesture-handler@3.3.0": "dependency-patches/react-native-gesture-handler@3.3.0.patch",
-      "expo-modules-core@58.0.30": "dependency-patches/expo-modules-core@58.0.30.patch"
+      "expo-modules-core@58.0.30": "dependency-patches/expo-modules-core@58.0.30.patch",
+      "expo-image@58.0.18": "dependency-patches/expo-image@58.0.18.patch"
     },
     "allowUnusedPatches": true
   },

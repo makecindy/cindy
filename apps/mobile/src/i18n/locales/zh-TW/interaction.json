@@ -193,6 +193,7 @@
     "fromLead": "來自 Lead 的訊息",
     "fromWorkerNamed": "來自 Worker「{{role}}」的訊息",
     "fromWorker": "來自 Worker 的訊息",
+    "fromWorkerBatch": "系統回傳的 {{count}} 條 Worker 結果",
     "emptyMessageBody": "（空訊息）"
   },
   "contextSheet": {

@@ -973,10 +973,11 @@ Source: `apps/desktop/src/renderer/themes/`
 - `color-registry.ts` — the `ColorRegistry` singleton and the `registerColor(id, defaults, description)` API
 - `colors.ts` — registers every token, organized "semantic slots first, aliases and singletons after" (counts drift constantly — **the registration API in `colors.ts` is the live inventory; generated defaults are edited in `packages/design-tokens/src`**; this document does not track totals)
 - `theme-service.ts` — `applyTheme(theme)` serializes all tokens into `:root{}` and injects `<style id="theme-vars">`
-- `builtin/` — built-in theme objects (`cindy-light.ts` / `cindy-dark.ts` / `eclipse.ts` / `default-light.ts` / `default-dark.ts` and the community palettes)
-- `registry.ts` — the `builtinThemes` registry + `listThemesByType('light' | 'dark')`
+- `builtin/` — built-in theme objects (`cindy-light.ts` / `cindy-dark.ts` / `eclipse.ts` / `default-light.ts` / `default-dark.ts` and the community palettes). Their colors live in a `GENERATED DS-8: theme` block written by `packages/design-tokens`; only identity (`id` / `name` / `type`) and hand-kept runtime expressions sit outside it
+- `registry.ts` — the `builtinThemes` registry (id → theme lookup, legacy id aliases, `listThemesByType('light' | 'dark')`)
+- `families.ts` — `BUILTIN_FAMILIES`, the theme list shown in Settings, each family pairing an optional light and dark variant; local themes are appended after them
 
-Theme switching: `useTheme.ts` provides `theme` (System / Light / Dark mode) plus `lightThemeId` / `darkThemeId` (which concrete theme). Settings → Appearance is the UI entry.
+Theme switching: `useTheme.ts` provides `theme` (System / Light / Dark mode) plus `familyId` / `setFamily` (which theme family). The variant actually rendered comes from `resolveFamilyVariant(familyId, requestedType)`; when the family has no variant for that mode it falls back to the other one and `fallbackFromType` reports it (the “Light only” / “Dark only” state below). Older saved `theme.lightId` / `theme.darkId` values are migrated to a family on read. Settings → Appearance is the UI entry and lists `getThemeFamilies()`.
 
 Settings → Appearance opens with the settings page title (see “Desktop settings rows”). The theme card follows the page title directly, without its own section title; Wallpaper, Fonts, Sidebar & panels and Reply Animation follow, each titled outside its card and laid out as settings rows (see “Desktop settings rows”). In the theme card, Theme, Appearance mode and Local themes are separate rows divided by lines. Theme is a single row whose picker is the same 320×36 pill select as Settings → General → Display language (same trigger, popover, option and selected styles). Theme, Local themes and Wallpaper carry no extra description line. Wide controls (wallpaper grid, sliders, and the font pickers, whose preview popovers must match the trigger width) sit under their row label. The appearance mode is one row: label on the left, three 92×60 window thumbnails on the right with a 12px caption. Each thumbnail draws a miniature Cindy window (sidebar, user message, reply lines, composer with send dot) from the selected color theme’s own `surface`, `surface-chip`, `border-default`, `surface-elevated`, `text-primary` and `text-tertiary` values; “System” shows the light half on the left and the dark half on the right. The selected thumbnail gets a 2px `--settings-theme-preview-border-active` ring with a 2px gap (12px outer / 8px inner radius), unselected ones show the ordinary preview border on hover. The theme picker comes before the appearance mode. A theme family with only one variant is tagged “Light only” / “Dark only” in the theme list. While such a theme is selected, the three mode cards are disabled and show the variant actually rendered, with one line under the mode label explaining it; the saved mode is not changed and applies again when a two-variant theme is chosen (owner request, 2026-10-17). Implementation: [AppearanceSection.tsx](../../apps/desktop/src/renderer/components/settings/AppearanceSection.tsx); regressions in `AppearanceSection.accessibility.test.tsx`.
 
@@ -1093,29 +1094,39 @@ this decision does not grant new uses of warning/status colors.
 
 ### Built-in Themes
 
-The implementation truth is `builtinThemes` in `apps/desktop/src/renderer/themes/registry.ts`; adding or removing themes does not require updating this document. The default light/dark (base) themes are exactly the §2 palette.
+The implementation truth is `builtinThemes` in `apps/desktop/src/renderer/themes/registry.ts` for lookup and `BUILTIN_FAMILIES` in `themes/families.ts` for what Settings shows; adding or removing themes does not require updating this document. The default light/dark (base) themes are exactly the §2 palette.
 
 ### Adding a New Theme (full flow)
 
-1. Create `apps/desktop/src/renderer/themes/builtin/<id>.ts` exporting a `Theme` object:
+Built-in theme colors are not hand-written in the theme file. They are edited in `packages/design-tokens/src` and generated into it (see `packages/design-tokens/README.md`). One theme file per variant; a family with both modes needs two files.
+
+1. **Add the theme file** `apps/desktop/src/renderer/themes/builtin/<file>.ts` with an empty generated block and the theme identity:
    ```ts
+   import type { Theme } from '../types';
+
+   // BEGIN GENERATED DS-8: theme
+   const GENERATED_OVERRIDES = {} as const;
+   // END GENERATED DS-8: theme
+
    export const myTheme: Theme = {
-     id: "my-theme",
-     name: "My Theme",
-     type: "light" | "dark",
-     colors: {
-       // Override only the tokens that differ from the base theme;
-       // an empty object {} is also valid (identical to base).
-       surface: "#xxx",
-       "text-primary": "#xxx",
-       // ... most themes only need to override 30–90 tokens
-     },
+     id: 'my-theme',
+     name: 'My Theme',
+     type: 'dark',
+     colors: GENERATED_OVERRIDES,
    };
    ```
-2. Register it in `builtinThemes` in `themes/registry.ts`
-3. The Light/Dark Theme dropdowns in Settings → Appearance pick it up automatically
+2. **Register the colors in `packages/design-tokens/src`**, all three files in the same change:
+   - `reference/themes.json` — literal palette values under `reference.themes.<id>.palette-<NAME>` (only the reference layer may hold literals);
+   - `themes/builtin.json` — the override roles under `themes.<id>.<token>`, each aliasing a reference or semantic token;
+   - `desktop-bindings.json` — `themes["<file>.ts"]` with `type` (`light` / `dark`), `tokens` (registry id → `themes.<id>.<token>`) and `retained` (expressions kept by hand outside the generated block; usually `{}`).
 
-Use any existing non-default theme under `apps/desktop/src/renderer/themes/builtin/` as a template.
+   Override only the roles that differ from the base theme; the ported community themes override 108–111 (the import template's 108 base roles plus a few local ones). Every file in `builtin/` must have a `desktop-bindings.json` entry, otherwise generation stops with `Theme bindings must cover every builtin file`.
+3. **Generate**: `pnpm --filter @cindy/design-tokens generate` fills the theme file's generated block; `pnpm --filter @cindy/design-tokens generate -- --check` must then pass. Never edit the generated block by hand.
+4. **Register the theme** in `builtinThemes` in `themes/registry.ts`. This alone does not show it in Settings.
+5. **Add the family** to `BUILTIN_FAMILIES` in `themes/families.ts` (`{ id, name, light, dark }`, `null` for a missing variant; array order is the Settings order). Only families appear in Settings → Appearance → Theme; a single-variant family is tagged “Light only” / “Dark only” there.
+6. **Verify and update the deliberate freezes** in the same change: `themes/__tests__/fixtures/builtin-theme-overrides.json` (`builtinThemesFreeze.test.ts`), the builtin theme list in `themes/__tests__/cindyThemes.test.ts`, and the generated-output count in `packages/design-tokens/src/__tests__/structure.test.ts`; then run the theme contrast guards (`switchThemeContrast`, `buttonStateContrast`, `searchHighlightContrast`, `formHintContrast`, …) under `themes/__tests__/` and the `packages/design-tokens` tests. New built-in colors need design approval and real evidence in both modes ([design-governance.md §6](./design-governance.md)).
+
+Use any existing non-default theme as a template: its file under `themes/builtin/` and its entries in the three token files.
 
 ### Token Naming Conventions
 
@@ -1142,10 +1153,10 @@ Settings → Appearance can import a VSCode color theme (`*.json` / jsonc) or an
 
 - **One template, taken from the hand-ported community themes.** The seven ported themes under `apps/desktop/src/renderer/themes/builtin/` (one-dark-pro, github-dark, eclipse, material-ocean-hc, monokai-pro, atom-one-light, solarized-light) share a 108-token base template (DS-11 additionally gives One Dark Pro / Solarized Light a local `form-field-hint` override, outside the import template), derived from 13 palette roles plus the optional light-only `inputBg` role (CREATE AGENT card/input background, e.g. Solarized base2; absent ⇒ collapses to `surface`). Within the template, when a light palette supplies an `inputBg` distinct from `surface` (e.g. Solarized base2 cards), CREATE AGENT `*-hover` and the resting `quick-card-icon-bg` lift to `surface` (icon drops back to `chip` on hover); otherwise `*-hover`=`hover` and `quick-card-icon-bg` is `border` in dark / `chip` in light — keeping default/hover/icon visually distinct in every theme. `control-bg-pressed` is `chip` in dark and `hover` in light. `send-btn-bg`/`send-btn-icon` use the inverse-neutral pair (`textPrimary`/`surface`), not the accent, because the shared send tokens also render 10–12px text that must clear 4.5:1. `apps/desktop/src/shared/theme-import/palette.ts` is that derivation, code-ified; `one-dark-pro.ts`'s header comment is the source-of-truth for which VSCode key feeds which role. The template is **allow-list only** — it emits those 108 base ids plus the imported-theme-only `switch-track-off` / `switch-thumb-off` safety pair. Because external muted/comment colors are unconstrained, the track keeps the source `textSecondary` only when it clears the 3.2:1 derivation target (above the 3:1 non-text floor) against the relevant surfaces and thumb; otherwise the converter takes the smaller passing correction along the source-to-black/source-to-white paths, or rejects the palette with the dedicated contrast error rather than reporting it as an unrecognized file or internal error. Existing local snapshots created before this pair existed are backfilled with the same 3.2:1 target at renderer load time only when both tokens are absent and the complete legacy semantic palette is parseable; if no track can satisfy the target, the runtime restores the pre-upgrade `border-default` track and `surface` thumb instead of falling through to unchecked aliases. Disk JSON and explicit user overrides are never changed. Optional Markdown tokens (`md-h1-fg`…`md-h6-fg` / `md-strong-fg`) are added when the source theme provides heading or bold colors.
 - **Exemption families are never imported.** `--login-*`, brand red, `--destructive`, `--error-*`, `--warning-accent`, `--status-bar-accent`, `--focus-ring*`, `--diff-*`, shadows and overlays stay at their spec values under every imported theme (see the exemption table above and §16). `apps/desktop/src/shared/theme-import/protected-tokens.ts` enforces it as a second gate; the import report tells the user how many tokens were held back.
-- **`-hsl` tokens are computed, not copied.** Both forms of a color must denote the same color, so the converter derives every HSL triplet from its hex via `toHslTriplet()`. (Note: a few hand-written builtin themes carry approximate HSL values — `github-dark`'s `SURFACE_BG_HSL` was copied off one-dark-pro. Those are left as-is; new imports are exact.)
+- **`-hsl` tokens are computed, not copied.** Both forms of a color must denote the same color, so the converter derives every HSL triplet from its hex via `toHslTriplet()`. (Note: a few hand-ported builtin themes carry approximate HSL values — `github-dark`'s surface triplet (`reference.themes.github-dark.palette-SURFACE_BG_HSL` in `packages/design-tokens/src/reference/themes.json`) was copied off one-dark-pro. Those are left as-is; new imports are exact.)
 - **Markdown text colors go through `--md-h1-fg`…`--md-h6-fg` / `--md-strong-fg`, and default to `inherit`.** Before these tokens existed, Markdown headings and bold text inherited their color from the container (`baseComponents` sets size/weight only). Defaulting to `var(--text-primary)` would have repainted headings inside blockquotes, tool cards and secondary-text regions, so the defaults are `inherit` — every built-in theme renders exactly as before. Imported themes fill them from Obsidian `--hN-color` / `--bold-color` or VSCode `markup.heading` / `markup.bold`. Guard: `themes/__tests__/markdownColorTokens.test.ts`.
 - **Obsidian import is a palette import, not a theme port.** Only CSS custom properties are read; selectors, layout, radii and fonts are discarded — Cindy's layout and typography stay owned by §3/§5. Values that cannot be evaluated statically (`color-mix()`, undefined `var()`) are skipped and reported rather than guessed.
-- **Checked Switch track = theme accent.** The seven ported theme files each override `switch-track-on` to their own accent (user ruling 2026-08-05; solarized-light uses `GREEN_DEEP` — the official `#859900` fails the 3:1 floor). The registry default stays `hsl(var(--primary))`: Classic and imported themes keep the pre-existing neutral checked track. CINDY Light and Dark use blue `#417CDD` (owner decision 2026-09-15, §15.17), replacing their former neutral checked tracks. Guard: `switchThemeContrast.test.ts` asserts every builtin theme's checked track ≥3:1 against the checked thumb (`switch-thumb-on`, defaulting to `hsl(var(--background))`) and all five surfaces.
+- **Checked Switch track = theme accent.** The seven ported themes each override `switch-track-on` to their own accent (user ruling 2026-08-05; bound in `packages/design-tokens/src/themes/builtin.json`). Solarized Light uses the deeper green `reference.themes.solarized-light.palette-GREEN_DEEP` (`#5e6a00`, in `reference/themes.json`) — the official `#859900` fails the 3:1 floor. The registry default stays `hsl(var(--primary))`: Classic and imported themes keep the pre-existing neutral checked track. CINDY Light and Dark use blue `#417CDD` (owner decision 2026-09-15, §15.17), replacing their former neutral checked tracks. Guard: `switchThemeContrast.test.ts` asserts every builtin theme's checked track ≥3:1 against the checked thumb (`switch-thumb-on`, defaulting to `hsl(var(--background))`) and all five surfaces.
 - **Local themes may declare an optional `family`.** Same-family light + dark variants merge into one switchable family (`themes/families.ts`); files without the field keep behaving exactly as before (family id = theme id). Obsidian's dual-mode CSS uses this to land as a single theme that follows Light/Dark mode.
 - **Omarchy live theme (Linux).** When `~/.local/state/omarchy/current/theme.name` exists, the main loader (`apps/desktop/src/main/local-themes/omarchy.ts`) converts Omarchy's generated `theme/vscode-theme.json` with the same VSCode converter and lists it as family `omarchy` (no `-local` suffix, no local badge, one variant matching Omarchy's light/dark). The main process watches the `current` directory; each `theme.name` write (Omarchy writes it after swapping the theme directory) reloads themes and pushes `local-themes:changed` to trusted Cindy windows, which retint at once. Cindy never writes Omarchy files. A read that lands inside Omarchy's swap keeps the last good theme and records a path-free diagnostic, so the user's selection is not reset.
 

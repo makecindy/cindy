@@ -477,6 +477,30 @@ describe('projectInvokeResultForTunnel — maker:provider:list 投影', () => {
     expect(providers[0].routing).toEqual({ codex: {} });
   });
 
+  // PR #9941 review, unit: the enterprise artwork set by the host reaches this account's
+  // current controllers only. Other accounts (shared-task / provider-share guests), legacy
+  // controllers and non-organization sources never receive it.
+  it('企业专属图标只透传给同账号的当前控制端，且只认企业来源', () => {
+    const enterprise = {
+      ...xdProviderWithFullRouting(),
+      id: 'byok-1b2c3d4e',
+      source: 'organization',
+      logoKind: 'openai-spectrum',
+      routing: { codex: { upstream: 'https://gateway.example.invalid/v1' } },
+    };
+    const forged = { ...enterprise, id: 'custom-provider', source: 'user' };
+    const projectFor = (supportsFullLogoKinds: boolean, sameAccount: boolean) =>
+      (__testing.projectInvokeResultForTunnel(
+        'maker:provider:list', { providers: [enterprise, forged] }, supportsFullLogoKinds, [], sameAccount,
+      ) as { providers: Record<string, unknown>[] }).providers;
+
+    const own = projectFor(true, true);
+    expect(own[0].logoKind).toBe('openai-spectrum');
+    expect(own[1]).not.toHaveProperty('logoKind');
+    expect(projectFor(true, false)[0]).not.toHaveProperty('logoKind');
+    expect(projectFor(false, true)[0]).not.toHaveProperty('logoKind');
+  });
+
   it('混合品牌 routing 不产生 logoKind,也不透传伪造值', () => {
     const { providers } = project({
       providers: [

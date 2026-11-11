@@ -540,6 +540,15 @@ describe('pending bubble source labels', () => {
     origin,
   }) as QueuedRemoteMessage;
 
+  // 回归：合批数量不能被首个 Worker 的名字替代；正文保持原样（unit）。
+  it('labels a system batch by count while preserving every report', () => {
+    const body = 'Worker A (worker-1): done\nA full report\nWorker B (worker-2): error\nB full report';
+    const [item] = build({ queue: [withOrigin('batch', { kind: 'orca', senderLabel: 'A',
+      autoBridge: true, autoBridgeBatchCount: 2 }, body, JSON.stringify({ orcaSource: 'worker', content: body }))] });
+    expect(item.source).toEqual({ kind: 'orca', label: '系统回传的 2 条 Worker 结果' });
+    expect(item.text).toBe(body);
+  });
+
   it('labels automation, task, teammate, Orca and plugin rows like the desktop queue panel', () => {
     const items = build({
       queue: [

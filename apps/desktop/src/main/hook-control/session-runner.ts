@@ -951,7 +951,10 @@ export function createMakerHookSessionRunner(deps: {
         }
       }
       try {
-        await prepareUnhealthySessionForSend(req.sessionId);
+        if (await prepareUnhealthySessionForSend(req.sessionId)) {
+          // Recovery retained the context but retired the original native id.
+          createOpts.resumeSessionId = undefined;
+        }
         session = req.isNew
           ? await openChannelSession(req.sessionId, newSessionRoute, (admitted) => {
               sessionProviderId = admitted.providerId;
