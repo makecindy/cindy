@@ -1064,6 +1064,25 @@ describe('scheduleToUserCreateInput', () => {
     expect(input).not.toHaveProperty('projectConfigId');
     expect(original.agentKind).toBe('codex');
   });
+
+  // 测试价值
+  // - 生产入口与可观察结果：scheduleToUserCreateInput，即「复制为个人自动化」和「移除并转为个人自动化」
+  //   直接交给 IPC schedule.create 的输入；用户看到的是复制出的检查是否仍然静默、没变化时是否仍不启动模型。
+  // - Bug／规则依据：PR #8285 review（packages/maker-scheduler/src/types.ts 的 programChangeGate）；
+  //   docs/product-rules/bot-routines.md「没变化不启动模型」。
+  // - 现有覆盖缺口：上面的用例只锁模型选择；projectAutomationConfig.test.ts 只覆盖个人 → 项目方向。
+  // - 最小失败输入：{ silentWhenIdle: true, programChangeGate: true } 的项目检查，修复前两个字段都不在输出里，
+  //   create 按 false 落库，检查每轮都启动模型。
+  // - tier：unit，纯函数，无 I/O。
+  // - 实测耗时：pnpm --dir apps/desktop exec vitest run <本文件>，整文件墙钟约 2.6s，本组 <5ms。
+  it.each([
+    { silentWhenIdle: true, programChangeGate: true },
+    { silentWhenIdle: true, programChangeGate: false },
+  ])('keeps the silent and program-change-gate choice when a project check becomes a personal one (%j)', (choice) => {
+    const original = { id: 'project-check', name: 'Check', source: 'project', projectConfigId: 'check',
+      agentKind: 'claude-code', ...choice } as Schedule;
+    expect(scheduleToUserCreateInput(original)).toMatchObject(choice);
+  });
 });
 
 
