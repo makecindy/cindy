@@ -272,7 +272,7 @@ describe('Windows Store PowerShell execution aliases', () => {
     });
   });
 
-  it('preserves PATH priority for ordinary MSI executables and skips a broken alias', () => {
+  it('prefers an ordinary MSI executable over an alias regardless of PATH order', () => {
     const alias = path.win32.join(windowsApps, 'pwsh.exe');
     setExistingFiles([msi, target]);
     fixture.statErrors.set(alias, 'EACCES');
@@ -281,10 +281,27 @@ describe('Windows Store PowerShell execution aliases', () => {
     expect(resolveShellForCreate('pwsh').command).toBe(msi);
 
     process.env.PATH = `${windowsApps};${path.win32.dirname(msi)}`;
-    expect(resolveShellForCreate('pwsh').command).toBe(alias);
+    expect(resolveShellForCreate('pwsh').command).toBe(msi);
+    expect(probeAvailableShells().find((shell) => shell.id === 'pwsh')?.command).toBe(msi);
     expect(resolveShellForCreate('auto').command).toBe(msi);
     fixture.statErrors.set(target, 'ENOENT');
     expect(resolveShellForCreate('pwsh').command).toBe(msi);
+  });
+
+  it('uses the first valid alias in PATH when no ordinary executable is available', () => {
+    const alias = path.win32.join(windowsApps, 'pwsh.exe');
+    const packageDir = path.win32.join(windowsApps, 'Microsoft.PowerShell_8wekyb3d8bbwe');
+    const packageAlias = path.win32.join(packageDir, 'pwsh.exe');
+    process.env.PATH = `${windowsApps};${packageDir}`;
+    setExistingFiles([target]);
+    fixture.statErrors.set(alias, 'EACCES');
+    fixture.statErrors.set(packageAlias, 'EACCES');
+    fixture.links.set(alias, target);
+    fixture.links.set(packageAlias, target);
+
+    expect(resolveShellForCreate('pwsh').command).toBe(alias);
+    fixture.links.delete(alias);
+    expect(resolveShellForCreate('pwsh').command).toBe(packageAlias);
   });
 });
 

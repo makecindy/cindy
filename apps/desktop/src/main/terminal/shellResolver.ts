@@ -114,6 +114,7 @@ function whichSync(bin: string, allowWindowsAppAliases = false): string | null {
     const lowerBin = bin.toLowerCase();
     const hasExt = pathext.some((e) => lowerBin.endsWith(e));
     const exts = hasExt ? [''] : ['', ...pathext];
+    let appAliasFallback: string | null = null;
     for (const dir of (process.env.PATH ?? '').split(';')) {
       if (!dir) continue;
       for (const ext of exts) {
@@ -125,15 +126,17 @@ function whichSync(bin: string, allowWindowsAppAliases = false): string | null {
           const code = (error as NodeJS.ErrnoException).code;
           if (
             allowWindowsAppAliases &&
+            appAliasFallback === null &&
             (code === 'EACCES' || code === 'EPERM') &&
             isAvailableWindowsAppAlias(candidate)
           ) {
-            return candidate;
+            // 保留普通安装的选择优先级；仅在整条 PATH 找不到普通文件时使用首个有效别名。
+            appAliasFallback = candidate;
           }
         }
       }
     }
-    return null;
+    return appAliasFallback;
   }
   for (const dir of (process.env.PATH ?? '').split(':')) {
     if (!dir) continue;
