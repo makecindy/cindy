@@ -22,11 +22,29 @@ interface MinimizableWindow extends LinuxCloseBehaviorWindow, WindowsTrayWindow 
  * `tty`, so any value other than an explicit `x11` falls back to a set
  * `WAYLAND_DISPLAY` — the same independent positive signal as
  * remote-desktop/waylandCapture.ts `isWaylandDesktop`.
+ *
+ * Wrappers/services may strip even `WAYLAND_DISPLAY` while still propagating the
+ * desktop identity vars, so Hyprland identity is the final fallback (PR #6105
+ * review, 2026-11-11): Hyprland has no native minimize surface, including for
+ * XWayland windows, so those environments must keep hide-to-tray too.
  */
 export function isWaylandSession(env: NodeJS.ProcessEnv): boolean {
   if (env.XDG_SESSION_TYPE === 'x11') return false;
   if (env.XDG_SESSION_TYPE === 'wayland') return true;
-  return Boolean(env.WAYLAND_DISPLAY);
+  if (env.WAYLAND_DISPLAY) return true;
+  return isHyprlandDesktop(env);
+}
+
+/** Hyprland has no native minimize surface, including for XWayland windows. */
+export function isHyprlandDesktop(env: NodeJS.ProcessEnv): boolean {
+  const desktop =
+    env.XDG_CURRENT_DESKTOP?.trim() ||
+    env.XDG_SESSION_DESKTOP?.trim() ||
+    env.DESKTOP_SESSION?.trim();
+  if (desktop) {
+    return desktop.split(':').some((name) => name.trim().toLowerCase() === 'hyprland');
+  }
+  return Boolean(env.HYPRLAND_INSTANCE_SIGNATURE?.trim());
 }
 
 /**

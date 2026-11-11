@@ -191,6 +191,20 @@ describe('main window close behavior prompt', () => {
   });
 
   it.each([
+    { XDG_CURRENT_DESKTOP: 'Hyprland' },
+    { XDG_SESSION_DESKTOP: 'hyprland' },
+    { DESKTOP_SESSION: 'Hyprland' },
+    { HYPRLAND_INSTANCE_SIGNATURE: 'instance' },
+  ])('supports desktop identity fallbacks: %j', (env) => {
+    // Wrapper/service environments can strip WAYLAND_DISPLAY and XDG_SESSION_TYPE
+    // while propagating identity vars; Hyprland cannot minimize (XWayland
+    // included), so these keep hide-to-tray (PR #6105 review, 2026-11-11).
+    const { window, options } = waylandHarness();
+    minimizeDesktopWindow(window, { ...options, env });
+    expect(window.visible).toBe(false);
+  });
+
+  it.each([
     { platform: 'win32' as const },
     { platform: 'darwin' as const },
     { isMainWindow: false },
@@ -230,6 +244,8 @@ describe('main window close behavior prompt', () => {
     ['wayland display fallback', { WAYLAND_DISPLAY: 'wayland-0' }],
     ['tty session on a wayland compositor', { XDG_SESSION_TYPE: 'tty', WAYLAND_DISPLAY: 'wayland-1' }],
     ['unclassified session on a wayland compositor', { XDG_SESSION_TYPE: 'mir', WAYLAND_DISPLAY: 'wayland-1' }],
+    ['hyprland identity without session vars', { XDG_CURRENT_DESKTOP: 'Hyprland' }],
+    ['hyprland instance signature only', { HYPRLAND_INSTANCE_SIGNATURE: 'sig' }],
   ])('detects a %s', (_label, env) => {
     expect(isWaylandSession(env)).toBe(true);
   });
@@ -238,6 +254,7 @@ describe('main window close behavior prompt', () => {
     ['x11 session', { XDG_SESSION_TYPE: 'x11' }],
     ['tty session without a wayland display', { XDG_SESSION_TYPE: 'tty' }],
     ['session type unset without wayland display', {}],
+    ['non-hyprland identity', { XDG_CURRENT_DESKTOP: 'GNOME' }],
   ])('does not treat %s as Wayland', (_label, env) => {
     expect(isWaylandSession(env)).toBe(false);
   });
@@ -245,6 +262,12 @@ describe('main window close behavior prompt', () => {
   it('prefers an explicit x11 session over WAYLAND_DISPLAY when both are set', () => {
     expect(
       isWaylandSession({ XDG_SESSION_TYPE: 'x11', WAYLAND_DISPLAY: 'wayland-0' }),
+    ).toBe(false);
+  });
+
+  it('prefers an explicit x11 session over the Hyprland identity fallback', () => {
+    expect(
+      isWaylandSession({ XDG_SESSION_TYPE: 'x11', XDG_CURRENT_DESKTOP: 'Hyprland' }),
     ).toBe(false);
   });
 
