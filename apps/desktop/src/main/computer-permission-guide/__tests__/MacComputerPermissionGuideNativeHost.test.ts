@@ -139,6 +139,7 @@ describe('MacComputerPermissionGuideNativeHost', () => {
 
     expect(source).toContain('case ja');
     expect(source).toContain('case ko');
+    expect(source).toContain('case tr');
     expect(source).toContain('GuideLocale(rawValue: CommandLine.arguments[2])');
     expect(source).not.toContain('usesChineseCopy');
     expect(source).toContain('NSColor.controlBackgroundColor.cgColor');

@@ -22,6 +22,7 @@ private enum GuideLocale: String {
     case ptBR = "pt-BR"
     case lzh = "zh-Hant-x-lzh"
     case lzhHans = "zh-Hans-x-lzh"
+    case tr
 }
 
 /** Localized native copy selected from the renderer-synchronized app locale. */
@@ -209,6 +210,21 @@ private struct GuideCopy {
                 waiting: "待君打开",
                 dragTitle: "将 CuaDriver 拖入「{{permission}}」",
                 dragHint: "拖拽"
+            )
+        case .tr:
+            return GuideCopy(
+                close: "Kapat",
+                turnThisOn: "Bunu açın",
+                pointsToSwitch: "Anahtarı işaret eder",
+                accessibility: "Erişilebilirlik",
+                screenRecording: "Ekran Kaydı",
+                completeEyebrow: "İzinler tamamlandı",
+                readyTitle: "Computer Use hazır",
+                step: "Bilgisayar otomasyonunu açın",
+                turnOnAppTitle: "{{permission}} içinde CuaDriver'ı açın",
+                waiting: "Açmanız bekleniyor",
+                dragTitle: "CuaDriver'ı {{permission}} içine sürükleyin",
+                dragHint: "Sürükle"
             )
         case .en:
             return GuideCopy(
