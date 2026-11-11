@@ -8,7 +8,7 @@ import type { RemoteTerminalConnection, RemoteTerminalDescription } from '../../
 import type { TabKindBodyProps } from '../../types';
 import type { TerminalState } from './index';
 import { TerminalSessionBody } from './TerminalTabBody';
-import { getOrCreateXterm, type XtermEntry } from './lib/xtermPool';
+import { getOrCreateXterm, getXterm, type XtermEntry } from './lib/xtermPool';
 
 const prefix = 'rightSidebar.terminal.remote.';
 
@@ -16,12 +16,17 @@ const prefix = 'rightSidebar.terminal.remote.';
 export function RemoteTerminalSetup(props: TabKindBodyProps<TerminalState>) {
   const { ctx } = props;
   const { t } = useTranslation();
-  const entry = useMemo(() => getOrCreateXterm(ctx.tabId), [ctx.tabId]);
+  const initialEntry = useMemo(() => getOrCreateXterm(ctx.tabId), [ctx.tabId]);
+  // Follow restored entries without interrupting detached streams on each render.
+  // A missing entry was actually disposed: never recreate it from a stale render.
+  const pooled = getXterm(ctx.tabId);
+  const entry = pooled ? ('terminal' in pooled ? pooled : getOrCreateXterm(ctx.tabId)) : initialEntry;
   const draftKey = JSON.stringify([ctx.sessionId, ctx.deviceLinkDeviceId, ctx.remoteHostId]);
   const prepareState = useCallback(() => {
-    const draft = entry.remoteDraft?.contextKey === draftKey ? entry.remoteDraft : undefined;
+    const current = getXterm(ctx.tabId);
+    const draft = current?.remoteDraft?.contextKey === draftKey ? current.remoteDraft : undefined;
     return { phase: 'prepare' as const, connection: draft?.submitted ? draft.connection : undefined, editing: draft ? !draft.submitted : false };
-  }, [entry, draftKey]);
+  }, [ctx.tabId, draftKey]);
   const context = useMemo(() => ({
     sessionId: ctx.sessionId,
     ...(ctx.deviceLinkDeviceId ? { deviceId: ctx.deviceLinkDeviceId } : {}),
@@ -37,7 +42,10 @@ export function RemoteTerminalSetup(props: TabKindBodyProps<TerminalState>) {
   });
 
   useEffect(() => {
-    if (setup.phase !== 'prepare') return;
+    if (setup.phase !== 'prepare' || !getXterm(ctx.tabId)) return;
+    // Child cleanup precedes this effect: restore an already serialized entry
+    // or cancel its pending suspension before registering close cancellation.
+    const preparingEntry = getOrCreateXterm(ctx.tabId);
     let cancelled = false;
     const retryAfterClose = () => {
       // Invalidate the old request synchronously, before React runs cleanup.
@@ -45,21 +53,21 @@ export function RemoteTerminalSetup(props: TabKindBodyProps<TerminalState>) {
       cancelled = true;
       setSetup(current => current === setup ? { ...current } : current);
     };
-    entry.closeCancelledListeners.add(retryAfterClose);
-    if (!entry.closing) void window.electronAPI.terminal.describeRemote({ id: ctx.tabId, ...context, ...(setup.connection ? { connection: setup.connection } : {}) }).then((result) => {
-      if (cancelled || entry.closing) return;
+    preparingEntry.closeCancelledListeners.add(retryAfterClose);
+    if (!preparingEntry.closing) void window.electronAPI.terminal.describeRemote({ id: ctx.tabId, ...context, ...(setup.connection ? { connection: setup.connection } : {}) }).then((result) => {
+      if (cancelled || preparingEntry.closing || getXterm(ctx.tabId) !== preparingEntry) return;
       // Release may confirm editing while this description is in flight.
       if (result.ticket && !setup.editing && !prepareState().editing) {
         setSetup({ phase: 'terminal', ticket: result.ticket });
       } else {
         setSetup({ phase: 'form', description: result });
       }
-    }).catch(() => { if (!cancelled && !entry.closing) setSetup({ ...setup, phase: 'error' }); });
+    }).catch(() => { if (!cancelled && !preparingEntry.closing && getXterm(ctx.tabId) === preparingEntry) setSetup({ ...setup, phase: 'error' }); });
     return () => {
       cancelled = true;
-      entry.closeCancelledListeners.delete(retryAfterClose);
+      preparingEntry.closeCancelledListeners.delete(retryAfterClose);
     };
-  }, [context, ctx.tabId, entry, setup, prepareState]);
+  }, [context, ctx.tabId, setup, prepareState]);
 
   const ticket = setup.phase === 'terminal' ? setup.ticket : undefined;
   const remote = useMemo(() => ({ ...context, ...(ticket ? { ticket } : {}) }), [context, ticket]);
@@ -67,8 +75,9 @@ export function RemoteTerminalSetup(props: TabKindBodyProps<TerminalState>) {
   // at recovery time, using the same draft policy as the initial mount.
   const prepare = useCallback(() => setSetup(prepareState()), [prepareState]);
   const connectionDisposed = useCallback(() => {
+    if (getXterm(ctx.tabId) !== entry || entry.closing) return;
     entry.remoteDraft = { contextKey: draftKey, submitted: false };
-  }, [entry, draftKey]);
+  }, [ctx.tabId, entry, draftKey]);
   const editConnection = useCallback(() => {
     setSetup({ phase: 'prepare', editing: true });
   }, []);

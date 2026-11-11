@@ -6,6 +6,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { TabKindHostContext } from '../../../types';
 import type { TerminalExitEvent } from '@/../shared/terminal-bridge';
 
+let realPool = false;
 const fit = vi.fn();
 const proposeDimensions = vi.fn((): { cols: number; rows: number } | undefined => ({ cols: entry.terminal.cols, rows: entry.terminal.rows }));
 const resize = vi.fn(async () => undefined);
@@ -47,12 +48,25 @@ vi.mock('@/components/ui/select', () => ({
     </select>
   ),
 }));
-vi.mock('../lib/xtermPool', async (importOriginal) => ({
-  ...(await importOriginal<typeof import('../lib/xtermPool')>()),
-  detachXterm: vi.fn(),
+vi.mock('../lib/xtermPool', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../lib/xtermPool')>();
+  return {
+  ...actual,
+  detachXterm: vi.fn((id: string) => { if (realPool) actual.detachXterm(id); }),
   getXtermExit: vi.fn(() => null),
   onXtermExit: vi.fn(() => () => undefined),
-  getOrCreateXterm: () => {
+  getOrCreateXterm: (id: string) => {
+    if (realPool) {
+      const current = actual.getOrCreateXterm(id);
+      vi.spyOn(current.terminal, 'open').mockImplementation(() => undefined);
+      vi.spyOn(current.terminal, 'focus').mockImplementation(() => undefined);
+      // Flush the serializer barrier synchronously; keep the real serializer,
+      // snapshot map, disposal and restoration rather than a fixed fake entry.
+      vi.spyOn(current.terminal, 'write').mockImplementation((_data, callback) => { callback?.(); });
+      vi.spyOn(current.fitAddon, 'fit').mockImplementation(() => undefined);
+      vi.spyOn(current.fitAddon, 'proposeDimensions').mockReturnValue({ cols: 80, rows: 24 });
+      return current;
+    }
     xtermEntries.set('terminal-1', entry as unknown as XtermEntry);
     registerClosing('terminal-1', (closing) => {
       const wasClosing = entry.closing;
@@ -63,7 +77,8 @@ vi.mock('../lib/xtermPool', async (importOriginal) => ({
   },
   getXterm: vi.fn(() => entry),
   disposeXterm: () => { entry.remoteDraft = undefined; },
-}));
+};
+});
 
 import { TerminalTabBody, TerminalSessionBody } from '../TerminalTabBody';
 import { _resetStore, ensureHydrated, getTabSnapshot, importTabSnapshot } from '../../../store';
@@ -73,7 +88,7 @@ import { TERMINAL_RENDERER_INSTANCE_ID } from '../index';
 import { toast } from '@/lib/toast';
 import { getSessionDeviceId } from '@/features/device-link/remoteProjectsStore';
 import { getTabKind } from '../../../registry';
-import { finishClosing, registerClosing, unregisterClosing } from '../../../lib/tabClosingSignal';
+import { finishClosing, markClosing, registerClosing, unregisterClosing } from '../../../lib/tabClosingSignal';
 
 
 class TestResizeObserver {
@@ -101,6 +116,7 @@ function makeContext(overrides: Partial<TabKindHostContext> = {}): TabKindHostCo
 }
 
 beforeEach(() => {
+  realPool = false;
   __resetPoolForTesting();
   xtermEntries.set('terminal-1', entry as unknown as XtermEntry);
   vi.mocked(getSessionDeviceId).mockReset();
@@ -161,7 +177,100 @@ afterEach(() => {
   vi.unstubAllGlobals();
 });
 
+async function useRealPool() {
+  const actual = await vi.importActual<typeof import('../lib/xtermPool')>('../lib/xtermPool');
+  __resetPoolForTesting();
+  realPool = true;
+  vi.mocked(getXterm).mockImplementation(actual.getXterm);
+  vi.mocked(getXtermExit).mockImplementation(actual.getXtermExit);
+  vi.mocked(onXtermExit).mockImplementation(actual.onXtermExit);
+  return actual;
+}
+
 describe('TerminalTabBody sidebar visibility', () => {
+  // PR8881 r4535640528 / unit: existing tests fix the pool entry identity.
+  // Exercise real restart rollback, detach serialization and restoration, then
+  // edit and remount: drafts must survive without launching the saved host.
+  it.each([false, true])('keeps editing after repeated missing-PTY snapshot recovery (typed draft: %s)', async typed => {
+    const actual = await useRealPool();
+    const api = window.electronAPI.terminal;
+    const ctx = makeContext({ remoteHostId: 'ssh-host' });
+    const state = { created: true, exited: { code: 255, signal: null }, title: '', shellId: '', shellDisplayName: '' };
+    const description = { context: { sessionId: ctx.sessionId }, target: { key: 'target', label: 'Host', cwd: '/remote' }, connection: { host: 'saved-host' }, candidates: [], ticket: 'saved-ticket' };
+    vi.mocked(api.describeRemote).mockResolvedValue(description);
+    vi.mocked(api.restart).mockRejectedValue(new Error('[TERMINAL_NOT_FOUND] missing'));
+    const first = actual.getOrCreateXterm(ctx.tabId);
+    first.ptyAttached = true;
+    actual.setXtermExit(ctx.tabId, state.exited);
+    let view = render(<TerminalTabBody state={state} ctx={ctx} active />);
+    for (let cycle = 0; cycle < 2; cycle++) {
+      const creates = vi.mocked(api.create).mock.calls.length;
+      let finish!: (result: typeof description) => void;
+      vi.mocked(api.describeRemote).mockImplementationOnce(() => new Promise(resolve => { finish = resolve; }));
+      await act(async () => { fireEvent.click(screen.getByText('rightSidebar.terminal.restart')); });
+      await waitFor(() => expect(finish).toBeDefined());
+      await act(async () => { finish(description); });
+      await waitFor(() => expect(api.create).toHaveBeenCalledTimes(creates + 1));
+      expect(api.create).toHaveBeenLastCalledWith(expect.objectContaining({ remote: expect.objectContaining({ ticket: 'saved-ticket' }) }));
+      await act(async () => { actual.setXtermExit(ctx.tabId, state.exited); });
+    }
+    const current = actual.getXterm(ctx.tabId);
+    expect(current).not.toBe(first);
+    await act(async () => { fireEvent.click(screen.getByText('rightSidebar.terminal.remote.editConnection')); });
+    const hostLabel = 'rightSidebar.terminal.remote.host';
+    await screen.findByLabelText(hostLabel);
+    if (typed) fireEvent.change(screen.getByLabelText(hostLabel), { target: { value: 'user-chosen-host' } });
+    view.unmount();
+    const creates = vi.mocked(api.create).mock.calls.length;
+    view = render(<TerminalTabBody state={state} ctx={ctx} active />);
+    expect(await screen.findByDisplayValue(typed ? 'user-chosen-host' : 'saved-host')).toBeTruthy();
+    expect(api.create).toHaveBeenCalledTimes(creates);
+    view.unmount();
+    __resetPoolForTesting();
+  });
+  // Same snapshot recovery with a description still pending: current edit and
+  // close intent win, while a removed/replaced tab never consumes its old ticket.
+  it.each(['edit', 'close-rollback', 'disposed', 'replaced'] as const)('checks preparation ownership after snapshot restoration (%s)', async outcome => {
+    const actual = await useRealPool();
+    const api = window.electronAPI.terminal;
+    const ctx = makeContext({ remoteHostId: 'ssh-host' });
+    const state = { created: true, exited: { code: 255, signal: null }, title: '', shellId: '', shellDisplayName: '' };
+    const description = { context: { sessionId: ctx.sessionId }, target: { key: 'target', label: 'Host', cwd: '/remote' }, connection: { host: 'saved-host' }, candidates: [], ticket: 'stale-ticket' };
+    let finish!: (result: typeof description) => void;
+    vi.mocked(api.describeRemote).mockImplementationOnce(() => new Promise(resolve => { finish = resolve; }));
+    vi.mocked(api.describeRemote).mockResolvedValue({ ...description, ticket: 'fresh-ticket' });
+    vi.mocked(api.restart).mockRejectedValue(new Error('[TERMINAL_NOT_FOUND] missing'));
+    const original = actual.getOrCreateXterm(ctx.tabId);
+    original.ptyAttached = true;
+    actual.setXtermExit(ctx.tabId, state.exited);
+    const view = render(<TerminalTabBody state={state} ctx={ctx} active />);
+    await act(async () => { fireEvent.click(screen.getByText('rightSidebar.terminal.restart')); });
+    expect(finish).toBeDefined();
+    const creates = vi.mocked(api.create).mock.calls.length;
+    const current = actual.getOrCreateXterm(ctx.tabId);
+    expect(current).not.toBe(original);
+    if (outcome === 'edit') {
+      current.remoteDraft = { contextKey: JSON.stringify([ctx.sessionId, ctx.deviceLinkDeviceId, ctx.remoteHostId]), submitted: false, connection: { host: 'late-edit-host' } };
+    } else if (outcome === 'close-rollback') {
+      await act(async () => { markClosing(ctx.tabId); finishClosing(ctx.tabId); });
+    } else {
+      actual.disposeXterm(ctx.tabId);
+      if (outcome === 'replaced') actual.getOrCreateXterm(ctx.tabId);
+    }
+    await act(async () => { finish(description); });
+    expect(vi.mocked(api.create).mock.calls.some(([params]) => params.remote?.ticket === 'stale-ticket')).toBe(false);
+    if (outcome === 'edit') expect(await screen.findByDisplayValue('late-edit-host')).toBeTruthy();
+    else if (outcome === 'close-rollback') {
+      await waitFor(() => expect(api.create).toHaveBeenCalledWith(expect.objectContaining({ remote: expect.objectContaining({ ticket: 'fresh-ticket' }) })));
+    } else {
+      expect(api.create).toHaveBeenCalledTimes(creates);
+      expect(actual.getXterm(ctx.tabId)?.remoteDraft).toBeUndefined();
+      if (outcome === 'disposed') expect(actual.getXterm(ctx.tabId)).toBeUndefined();
+    }
+    view.unmount();
+    __resetPoolForTesting();
+  });
+
   // Unit: #9815 discussion_r4528361916. A failed pending restart must restore
   // the action in the replacement view, not just the now-unmounted initiator.
   it('shows the restored exit when restart rejects after the view remounts', async () => {
