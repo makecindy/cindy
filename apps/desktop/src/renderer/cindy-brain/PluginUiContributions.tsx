@@ -328,9 +328,10 @@ function PluginUiSidebarSection({ entry, sessionId }: { entry: PluginUiEntry; se
   const title = `${state?.title ?? entry.contribution.title} · ${entry.ghost.manifest.name}`;
   if (state?.visible === false) return null;
   return <div ref={root} className="min-w-0">
+    {/* Ordinary action hover frame: DESIGN §5 Step 2 pill; the chevron is an intrinsic icon. */}
     <button type="button" aria-expanded={expanded} disabled={!available || state?.disabled}
       onClick={() => setExpanded(value => !value)} title={title}
-      className="flex min-h-8 w-full min-w-0 items-center gap-2 rounded-lg px-2 text-left text-12 text-[var(--text-secondary)] hover:bg-sidebar-item-hover disabled:opacity-40">
+      className="flex min-h-8 w-full min-w-0 items-center gap-2 rounded-full px-2 text-left text-12 text-[var(--text-secondary)] hover:bg-sidebar-item-hover disabled:opacity-40">
       {expanded ? <ChevronDown size={13} className="shrink-0" /> : <ChevronRight size={13} className="shrink-0" />}
       <span className="truncate">{title}</span>
     </button>

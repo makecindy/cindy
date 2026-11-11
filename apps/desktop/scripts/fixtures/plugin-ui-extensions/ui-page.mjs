@@ -40,5 +40,6 @@ export default {
       await page.getByRole('button', { name: await ui.t('settings.defaults.restore'), exact: true }).waitFor({ state: 'visible' });
       assert.equal(await size.inputValue(), '12');
     }
+    if (ui.case !== 'menu') await page.getByRole('button', { name: '示例摘要 · 插件界面示例', exact: true }).hover();
   },
 };
