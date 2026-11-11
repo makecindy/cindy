@@ -12,6 +12,10 @@ import type {
 type ResponseTool = NonNullable<ResponsesRequest['tools']>[number];
 const CHAT_TOOL_NAME_MAX_LENGTH = 64;
 const TOOL_SEARCH_CHAT_NAME = 'tool_search';
+// Codex groups ordinary tools under this reserved namespace; they are bare tools on every wire.
+const BUILTIN_FUNCTIONS_NAMESPACE = 'functions';
+// `exec` also switches on nested-helper normalization upstream, so it never answers a bare selector.
+const CODE_MODE_EXEC_TOOL_NAME = 'exec';
 const CUSTOM_TOOL_INPUT_DESCRIPTION =
   'Raw string input for the original custom tool. Preserve formatting exactly.';
 const CUSTOM_EXEC_DESCRIPTION_MAX_BYTES = 32 * 1024;
@@ -86,6 +90,23 @@ function responseToolIdentity(
   return `${kind}\0${namespace ?? ''}\0${name}`;
 }
 
+/**
+ * Position of the `additional_tools` group that belongs to this turn.
+ *
+ * Codex appends the current turn's declarations last; earlier groups are replayed history that
+ * must stay reachable for the provider but must not grant new tools.
+ */
+function indexOfCurrentTurnInlineTools(input: ResponsesRequest['input']): number {
+  if (!Array.isArray(input)) return -1;
+  for (let index = input.length - 1; index >= 0; index -= 1) {
+    const item = input[index];
+    if (isPlainObject(item) && item.type === 'additional_tools' && Array.isArray(item.tools)) {
+      return index;
+    }
+  }
+  return -1;
+}
+
 function specIdentity(spec: ChatBridgeToolSpec): string {
   const kind = spec.kind === 'custom' || spec.kind === 'tool_search'
     ? spec.kind
@@ -102,6 +123,8 @@ export class ChatBridgeToolContext {
   private readonly chatToolsValue: NonNullable<ChatCompletionsRequest['tools']> = [];
   private readonly specsByChatName = new Map<string, ChatBridgeToolSpec>();
   private readonly chatNamesByResponseName = new Map<string, string>();
+  /** Current-turn bare selector -> Chat name; null means the bare name is ambiguous. */
+  private readonly currentSelectors = new Map<string, string | null>();
 
   static fromRequest(request: ResponsesRequest): ChatBridgeToolContext {
     const context = new ChatBridgeToolContext();
@@ -136,6 +159,39 @@ export class ChatBridgeToolContext {
       ?? clampChatToolName(namespace ? `${namespace}__${name}` : name);
   }
 
+  /**
+   * Resolve a `tool_choice` selector to the Chat name this turn actually declares.
+   *
+   * An unqualified selector may name a child of a namespaced group declared in this turn's
+   * inline catalog. Resolve it only when exactly one catalogued tool carries that bare name:
+   * two matches mean the caller must say which group it meant, so it stays unqualified.
+   * Response restoration keeps using chatNameForResponse and is unaffected.
+   */
+  chatNameForToolChoice(
+    name: string,
+    namespace?: string,
+    kind: ResponseToolIdentityKind = 'function',
+  ): string {
+    const exact = this.chatNamesByResponseName.get(responseToolIdentity(kind, name, namespace));
+    if (exact !== undefined) return exact;
+    // A reserved-group selector names a bare tool, but only one this turn declared: a name that
+    // merely exists in replayed history must not become a forced selector.
+    const selectorNamespace = namespace === BUILTIN_FUNCTIONS_NAMESPACE ? undefined : namespace;
+    if (selectorNamespace === undefined) {
+      const bare = this.resolveUniqueBareSelector(kind, name);
+      if (bare !== undefined) return bare;
+    }
+    return clampChatToolName(selectorNamespace ? `${selectorNamespace}__${name}` : name);
+  }
+
+  private resolveUniqueBareSelector(
+    kind: ResponseToolIdentityKind,
+    name: string,
+  ): string | undefined {
+    const recorded = this.currentSelectors.get(`${kind === 'custom' ? 'custom' : 'function'}\0${name}`);
+    return recorded === null ? undefined : recorded;
+  }
+
   private reserveName(preferred: string, identity: string): string {
     const clamped = clampChatToolName(preferred);
     const existing = this.specsByChatName.get(clamped);
@@ -154,7 +210,9 @@ export class ChatBridgeToolContext {
       ? (tool as unknown as Record<string, unknown>).function
       : undefined;
     const source = nested ? { ...tool, ...nested } as ResponsesFunctionTool : tool;
-    if (!source.name?.trim()) return;
+    // Malformed declarations arrive through untrusted JSON; skip them instead of throwing a
+    // TypeError the handler does not translate into a 400.
+    if (typeof source.name !== 'string' || source.name.trim().length === 0) return;
     const identity = responseToolIdentity('function', source.name, namespace);
     const chatName = this.reserveName(namespace ? `${namespace}__${source.name}` : source.name, identity);
     if (this.specsByChatName.has(chatName)) return;
@@ -178,7 +236,7 @@ export class ChatBridgeToolContext {
   }
 
   private addCustom(tool: ResponsesCustomTool, namespace?: string): void {
-    if (!tool.name?.trim()) return;
+    if (typeof tool.name !== 'string' || tool.name.trim().length === 0) return;
     const identity = responseToolIdentity('custom', tool.name, namespace);
     const chatName = this.reserveName(namespace ? `${namespace}__${tool.name}` : tool.name, identity);
     if (this.specsByChatName.has(chatName)) return;
@@ -238,11 +296,19 @@ export class ChatBridgeToolContext {
   }
 
   private addNamespace(tool: ResponsesNamespaceTool): void {
-    if (!tool.name?.trim()) return;
-    for (const child of tool.tools ?? tool.children ?? []) {
+    if (typeof tool.name !== 'string' || tool.name.trim().length === 0) return;
+    // The reserved functions namespace holds ordinary top-level tools; it has no wire prefix, so
+    // its children are catalogued by bare name and restored without a namespace, matching the
+    // upstream lowering and the undeclared-tool guard.
+    const namespace = tool.name === BUILTIN_FUNCTIONS_NAMESPACE ? undefined : tool.name;
+    // Untrusted JSON can put a non-array here; a raw TypeError would escape the handler, which
+    // only maps UnsupportedResponsesFeatureError to a 400. Treat it as a malformed declaration.
+    const children = tool.tools ?? tool.children;
+    if (!Array.isArray(children)) return;
+    for (const child of children) {
       if (!isPlainObject(child) || typeof child.name !== 'string') continue;
-      if (child.type === 'function') this.addFunction(child as unknown as ResponsesFunctionTool, tool.name);
-      if (child.type === 'custom') this.addCustom(child as unknown as ResponsesCustomTool, tool.name);
+      if (child.type === 'function') this.addFunction(child as unknown as ResponsesFunctionTool, namespace);
+      if (child.type === 'custom') this.addCustom(child as unknown as ResponsesCustomTool, namespace);
     }
   }
 
@@ -258,9 +324,49 @@ export class ChatBridgeToolContext {
     if (tool.type === 'namespace') this.addNamespace(tool as unknown as ResponsesNamespaceTool);
   }
 
+  /**
+   * Snapshot the bare selectors this turn's own declarations may answer for `tool_choice`.
+   *
+   * Taken from the catalog after the current declarations are registered, so aliases and
+   * collisions keep exactly the names the Chat request advertises. Replayed history is excluded:
+   * a name that only appears there must not become a forced selector.
+   */
+  private recordCurrentSelectors(): void {
+    for (const [identity, chatName] of this.chatNamesByResponseName) {
+      const [kind, namespace, name] = identity.split('\0');
+      if (!namespace || !name) continue;
+      if (name === CODE_MODE_EXEC_TOOL_NAME) continue;
+      // Codex accepts both the bare child name and the dotted `namespace.name` spelling for a
+      // selector; index both so either choice resolves to the flattened Chat name, using the
+      // same ambiguity rule for each.
+      this.recordCurrentSelector(kind, name, chatName);
+      this.recordCurrentSelector(kind, namespace + '.' + name, chatName);
+    }
+  }
+
+  private recordCurrentSelector(kind: string, selector: string, chatName: string): void {
+    const key = kind + '\0' + selector;
+    const existing = this.currentSelectors.get(key);
+    this.currentSelectors.set(key, existing === undefined || existing === chatName ? chatName : null);
+  }
+
   private collectHistoryTools(input: ResponsesRequest['input']): void {
     if (!Array.isArray(input)) return;
-    for (const item of input) {
+    // Responses Lite / v2 inline top-level tool groups as input items. Only the newest group
+    // belongs to this turn: a replayed declaration is still reachable on the wire, but it must
+    // not widen the Chat catalog, or the provider could select a tool this turn never declared.
+    const currentInlineTools = indexOfCurrentTurnInlineTools(input);
+    // Declarations first, replays second: a replay only fills gaps, so a current declaration keeps
+    // its own description and grammar instead of losing them to a metadata-free replay placeholder.
+    if (currentInlineTools >= 0) {
+      const declared = (input[currentInlineTools] as { tools?: unknown }).tools;
+      if (Array.isArray(declared)) {
+        for (const tool of declared) this.addResponseTool(tool as ResponseTool);
+        this.recordCurrentSelectors();
+      }
+    }
+    for (let index = 0; index < input.length; index += 1) {
+      const item = input[index];
       if (!isPlainObject(item)) continue;
       if (item.type === 'tool_search_call') this.addToolSearch();
       if (item.type === 'custom_tool_call' && typeof item.name === 'string') {
@@ -279,4 +385,6 @@ export class ChatBridgeToolContext {
       }
     }
   }
+
 }
+
