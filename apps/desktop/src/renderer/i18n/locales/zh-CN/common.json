@@ -1805,7 +1805,8 @@
       "about": "关于",
       "imBot": "IM 机器人",
       "ghosts": "插件",
-      "cindyMake": "Cindy Make"
+      "cindyMake": "Cindy Make",
+      "modelGroups": "模型组"
     },
     "sections": {
       "user": "用户",
@@ -19876,5 +19877,104 @@
     "detail": "请求来自「{{device}}」\n用途：{{purpose}}\n\n开启后，同账号设备可以远程控制这台电脑，包括运行任务和访问文件。此设置持续有效，可随时在设置中关闭。",
     "decline": "暂不开启",
     "enable": "开启远程控制"
+  },
+  "modelGroups": {
+    "title": "模型组",
+    "description": "把模型供应商里已有的几个来源合成一个可选项。选模型时在「模型组」里选它，由 Cindy 决定这次用哪个来源。",
+    "routes": "路线",
+    "modes": "模式",
+    "routesDescription": "一条路线里放几个来源，开新任务时按选法挑一个。",
+    "modesDescription": "模式把一条路线或一个模型连同推理强度存成一项。",
+    "sourceCount_other": "{{count}} 个来源",
+    "strategy": {
+      "expiring": {
+        "title": "快作废的先用",
+        "hint": "剩得多又快重置的订阅配额先用，不浪费；读不到配额的来源排在后面。"
+      },
+      "order": {
+        "title": "按顺序",
+        "hint": "排在前面的用不了，才用下一个。"
+      },
+      "rotate": {
+        "title": "轮流",
+        "hint": "每个新任务换下一个来源，平均分担。"
+      }
+    },
+    "picker": {
+      "empty": "还没有模型组。在设置里把几个来源合成一条路线，就能在这里选它。",
+      "manage": "管理模型组"
+    },
+    "why": {
+      "expiringQuota": "还剩 {{left}}% 配额，{{reset}} 重置，先用它",
+      "expiring": "按配额排在最前",
+      "order": "排在最前面的可用来源",
+      "rotate": "这次轮到它",
+      "only": "现在只有它能用",
+      "soonest": "所有来源的配额都用完了，它最早恢复",
+      "soonestUntil": "所有来源的配额都用完了，它最早恢复（{{reset}}）",
+      "standby": "这次没轮到",
+      "standbyQuota": "还剩 {{left}}% 配额，{{reset}} 才重置，先留着",
+      "off": "已在这条路线里停用",
+      "unavailable": "没有连接，或这个模型现在不可选",
+      "limited": "配额用完了",
+      "limitedUntil": "配额用完了，{{reset}} 恢复",
+      "tight": "5 小时配额快满了，先不用"
+    },
+    "settings": {
+      "newRoute": "新建路线",
+      "newRouteName": "新路线",
+      "newMode": "新建模式",
+      "newModeName": "新模式",
+      "routesEmpty": "还没有路线。新建一条，把几个来源放进去。",
+      "modesEmpty": "还没有模式。",
+      "modesNeedRoute": "先建一条路线，再把它存成模式。",
+      "scopeNote": "模型组用于在这台电脑上开的新任务：开始时选定一个来源，任务进行中不会换。",
+      "back": "返回模型组",
+      "name": "名字",
+      "nameHint": "选模型时显示这个名字。",
+      "routeShownAs": "选模型时在「模型组」里显示。",
+      "modeShownAs": "选模型时在「模型组」里显示。",
+      "pick": "这次用哪个",
+      "sources": "可以用的来源",
+      "sourcesHint": "可以放不同的模型；实际用了哪个会写在任务里。",
+      "sourcesEmpty": "还没有来源。从下面添加已经连接的模型。",
+      "sourcesFull": "一条路线最多 {{count}} 个来源。",
+      "addSource": "添加来源",
+      "chooseModel": "选一个模型",
+      "notConnected": "没有连接",
+      "moveUp": "上移",
+      "moveDown": "下移",
+      "remove": "移出这条路线",
+      "useSource": "让这条路线使用 {{name}}",
+      "try": {
+        "title": "试一下",
+        "hint": "看看现在开新任务会用谁。不发消息，不花配额。",
+        "run": "看看会选谁",
+        "picked": "用它",
+        "standby": "备用",
+        "skipped": "跳过",
+        "unavailable": "这条路线里现在没有能用的来源，新任务会用你原来选的模型。"
+      },
+      "deleteRoute": "删除这条路线",
+      "deleteRouteConfirmTitle": "删除「{{name}}」？",
+      "deleteRouteConfirmDescription": "用到它的模式会一起删除。已经开始的任务不受影响。",
+      "deleteMode": "删除这个模式",
+      "deleteModeConfirmTitle": "删除「{{name}}」？",
+      "deleteModeConfirmDescription": "已经开始的任务不受影响。",
+      "delete": "删除",
+      "cancel": "取消",
+      "saveFailed": "没有保存成功，请重试。",
+      "mode": {
+        "target": "走哪条路线",
+        "targetHint": "选一条路线，或在下面指定一个模型。",
+        "oneModel": "指定的模型",
+        "model": "或者指定一个模型",
+        "modelHint": "不指定时按上面的路线选。",
+        "followRoute": "按路线选",
+        "effort": "推理强度",
+        "effortDefault": "跟随模型默认",
+        "effortHint": "选中的模型不支持这一档时，按它的默认档运行。"
+      }
+    }
   }
 }

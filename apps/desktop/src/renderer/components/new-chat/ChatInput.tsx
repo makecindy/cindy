@@ -141,6 +141,7 @@ import {
   type UnifiedSelectionAgentDevice,
 } from './ModelSelector';
 import type { PluginModelsPickerProps } from './PluginModelsSection';
+import type { ModelGroupsPickerProps } from './ModelGroupsPickerSection';
 import {
   enqueueEffortChange,
   getEffortChangeCoordinator,
@@ -914,6 +915,8 @@ interface ChatInputProps {
   botMentions?: readonly ComposerBotMention[];
   /** 新任务的「让插件选」(只有新任务草稿传)。 */
   pluginModels?: PluginModelsPickerProps;
+  /** 新任务的模型组(只有新任务草稿传)。 */
+  modelGroups?: ModelGroupsPickerProps;
   /**
    * 新会话统一模型选择器(model-selector-unified M5)的**选中直通**。
    *
@@ -1389,6 +1392,7 @@ export function ChatInput({
   botMentions = [],
   onUnifiedDraftSelect,
   pluginModels,
+  modelGroups,
   selectedFavoriteUid = null,
 }: ChatInputProps) {
   // Keep the existing draft/editor mounted during a companion call, but reuse
@@ -10097,6 +10101,7 @@ export function ChatInput({
                         : undefined
                     }
                     {...(!sessionId && unifiedPanelActive && pluginModels ? { pluginModels } : {})}
+                    {...(!sessionId && unifiedPanelActive && modelGroups ? { modelGroups } : {})}
                     // 草稿取调用方持有的锚点,会话取本组件的内存态(见 effectiveSelectedFavoriteUid)。
                     selectedFavoriteUid={effectiveSelectedFavoriteUid}
                     // 会话内同引擎选中一行后回传该行的收藏锚点(跨引擎那一路在

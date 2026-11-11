@@ -1835,7 +1835,8 @@
       "about": "About",
       "imBot": "IM bots",
       "ghosts": "Plugins",
-      "cindyMake": "Cindy Make"
+      "cindyMake": "Cindy Make",
+      "modelGroups": "Model groups"
     },
     "sections": {
       "user": "User",
@@ -19948,5 +19949,105 @@
     "detail": "Request from {{device}}\nPurpose: {{purpose}}\n\nEnabling this setting lets devices on your account control this computer, including running tasks and accessing files. It stays enabled until you turn it off in Settings.",
     "decline": "Not now",
     "enable": "Enable remote control"
+  },
+  "modelGroups": {
+    "title": "Model groups",
+    "description": "Combine sources you already have under Model providers into one choice. Pick it under Model groups in the model picker and Cindy decides which source to use.",
+    "routes": "Routes",
+    "modes": "Modes",
+    "routesDescription": "A route holds several sources. Each new task picks one by the route's rule.",
+    "modesDescription": "A mode saves a route or a model together with a reasoning effort.",
+    "sourceCount_one": "{{count}} source",
+    "sourceCount_other": "{{count}} sources",
+    "strategy": {
+      "expiring": {
+        "title": "Expiring first",
+        "hint": "Uses subscription quota that is plentiful and about to reset first, so none is wasted. Sources without readable quota come after."
+      },
+      "order": {
+        "title": "In order",
+        "hint": "Moves to the next source only when the one above cannot be used."
+      },
+      "rotate": {
+        "title": "Take turns",
+        "hint": "Each new task goes to the next source, sharing the load evenly."
+      }
+    },
+    "picker": {
+      "empty": "No model groups yet. Combine a few sources into a route in Settings to pick it here.",
+      "manage": "Manage model groups"
+    },
+    "why": {
+      "expiringQuota": "{{left}}% of its quota is left and resets {{reset}}, so it goes first",
+      "expiring": "First by quota",
+      "order": "The first available source",
+      "rotate": "Its turn this time",
+      "only": "The only one available now",
+      "soonest": "Every source is out of quota; this one recovers first",
+      "soonestUntil": "Every source is out of quota; this one recovers first ({{reset}})",
+      "standby": "Not its turn this time",
+      "standbyQuota": "{{left}}% of its quota is left and does not reset until {{reset}}, so it is kept for later",
+      "off": "Turned off in this route",
+      "unavailable": "Not connected, or this model cannot be selected now",
+      "limited": "Out of quota",
+      "limitedUntil": "Out of quota until {{reset}}",
+      "tight": "Its 5-hour quota is almost full, so it is skipped for now"
+    },
+    "settings": {
+      "newRoute": "New route",
+      "newRouteName": "New route",
+      "newMode": "New mode",
+      "newModeName": "New mode",
+      "routesEmpty": "No routes yet. Create one and add a few sources.",
+      "modesEmpty": "No modes yet.",
+      "modesNeedRoute": "Create a route first, then save it as a mode.",
+      "scopeNote": "Model groups apply to new tasks started on this computer. A source is chosen when the task starts and does not change during the task.",
+      "back": "Back to model groups",
+      "name": "Name",
+      "nameHint": "Shown in the model picker.",
+      "routeShownAs": "Shown under Model groups in the model picker.",
+      "modeShownAs": "Shown under Model groups in the model picker.",
+      "pick": "Which one to use",
+      "sources": "Sources it can use",
+      "sourcesHint": "Different models can sit together. The task shows which one was used.",
+      "sourcesEmpty": "No sources yet. Add a connected model below.",
+      "sourcesFull": "A route can hold up to {{count}} sources.",
+      "addSource": "Add source",
+      "chooseModel": "Choose a model",
+      "notConnected": "Not connected",
+      "moveUp": "Move up",
+      "moveDown": "Move down",
+      "remove": "Remove from this route",
+      "useSource": "Let this route use {{name}}",
+      "try": {
+        "title": "Try it",
+        "hint": "See which source a new task would use right now. Nothing is sent and no quota is used.",
+        "run": "See the pick",
+        "picked": "Use this",
+        "standby": "Standby",
+        "skipped": "Skipped",
+        "unavailable": "No source in this route can be used right now. A new task will use the model you had selected."
+      },
+      "deleteRoute": "Delete this route",
+      "deleteRouteConfirmTitle": "Delete “{{name}}”?",
+      "deleteRouteConfirmDescription": "Modes that use it are deleted too. Tasks already started are not affected.",
+      "deleteMode": "Delete this mode",
+      "deleteModeConfirmTitle": "Delete “{{name}}”?",
+      "deleteModeConfirmDescription": "Tasks already started are not affected.",
+      "delete": "Delete",
+      "cancel": "Cancel",
+      "saveFailed": "Could not save. Try again.",
+      "mode": {
+        "target": "Route",
+        "targetHint": "Choose a route, or set a single model below.",
+        "oneModel": "A single model",
+        "model": "Or a single model",
+        "modelHint": "When not set, the route above decides.",
+        "followRoute": "Follow the route",
+        "effort": "Reasoning effort",
+        "effortDefault": "Model default",
+        "effortHint": "If the chosen model does not support this level, it runs at its own default."
+      }
+    }
   }
 }

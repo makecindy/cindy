@@ -1452,6 +1452,15 @@ contextBridge.exposeInMainWorld('electronAPI', {
 
   // 意识仓库 (shared/ghost.ts)。listSync 走 sendSync:意识面板要与内置
   // 面板同帧注册进布局引擎(规则 7 无跳变);目录扫描极小,同步读不卡启动。
+  /** 模型组：路线与模式的配置，以及把选中的一项解析成现在能用的具体模型。 */
+  modelGroups: {
+    get: (): Promise<import('../shared/modelGroups').ModelGroupsConfig> => ipcRenderer.invoke('model-groups:get'),
+    set: (config: import('../shared/modelGroups').ModelGroupsConfig): Promise<import('../shared/modelGroups').ModelGroupsConfig> =>
+      ipcRenderer.invoke('model-groups:set', config),
+    resolve: (request: import('../shared/modelGroups').ModelGroupResolveRequest): Promise<import('../shared/modelGroups').ModelGroupResolveResult> =>
+      ipcRenderer.invoke('model-groups:resolve', request),
+  },
+
   ghosts: {
     activateBrowser: (id: string): Promise<{ ok: boolean }> => ipcRenderer.invoke('ghosts:activate-browser', id),
     mailPreview: (sessionId: string, url: string, read: boolean, opened = false, providerId?: string) => ipcRenderer.invoke('ghosts:mail-preview', sessionId, url, read, opened, providerId),

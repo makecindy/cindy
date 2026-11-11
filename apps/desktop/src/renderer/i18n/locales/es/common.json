@@ -1873,7 +1873,8 @@
       "about": "Acerca de",
       "imBot": "Bots de mensajería",
       "ghosts": "Complementos",
-      "cindyMake": "Cindy Make"
+      "cindyMake": "Cindy Make",
+      "modelGroups": "Grupos de modelos"
     },
     "sections": {
       "user": "Usuario",
@@ -20135,5 +20136,106 @@
     "detail": "Solicitud de {{device}}\nMotivo: {{purpose}}\n\nLos dispositivos de tu cuenta podrán controlar este ordenador, ejecutar tareas y acceder a archivos. Seguirá activado hasta que lo desactives en Ajustes.",
     "decline": "Ahora no",
     "enable": "Activar control remoto"
+  },
+  "modelGroups": {
+    "title": "Grupos de modelos",
+    "description": "Combina varias fuentes que ya tienes en Proveedores en una sola opción. Elígela en «Grupos de modelos» del selector de modelos y Cindy decide qué fuente usar cada vez.",
+    "routes": "Rutas",
+    "modes": "Modos",
+    "routesDescription": "Una ruta contiene varias fuentes. Cada tarea nueva elige una según la regla de la ruta.",
+    "modesDescription": "Un modo guarda una ruta o un modelo junto con una intensidad de razonamiento.",
+    "sourceCount_one": "{{count}} fuente",
+    "sourceCount_many": "{{count}} fuentes",
+    "sourceCount_other": "{{count}} fuentes",
+    "strategy": {
+      "expiring": {
+        "title": "Primero lo que caduca",
+        "hint": "Usa primero la cuota de suscripción que más sobra y que está a punto de restablecerse, para no desperdiciarla. Las fuentes sin cuota legible van después."
+      },
+      "order": {
+        "title": "En orden",
+        "hint": "Pasa a la siguiente fuente solo cuando la anterior no se puede usar."
+      },
+      "rotate": {
+        "title": "Por turnos",
+        "hint": "Cada tarea nueva pasa a la siguiente fuente y reparte la carga."
+      }
+    },
+    "picker": {
+      "empty": "Aún no hay grupos de modelos. Combina varias fuentes en una ruta en Ajustes para elegirla aquí.",
+      "manage": "Gestionar grupos de modelos"
+    },
+    "why": {
+      "expiringQuota": "Le queda un {{left}}% de cuota y se restablece el {{reset}}, así que va primero",
+      "expiring": "Primera por cuota",
+      "order": "La primera fuente disponible",
+      "rotate": "Esta vez le toca",
+      "only": "La única disponible ahora",
+      "soonest": "Todas las fuentes agotaron su cuota; esta se recupera antes",
+      "soonestUntil": "Todas las fuentes agotaron su cuota; esta se recupera antes ({{reset}})",
+      "standby": "Esta vez no le toca",
+      "standbyQuota": "Le queda un {{left}}% de cuota y no se restablece hasta el {{reset}}, así que se reserva",
+      "off": "Desactivada en esta ruta",
+      "unavailable": "Sin conexión, o este modelo no se puede elegir ahora",
+      "limited": "Cuota agotada",
+      "limitedUntil": "Cuota agotada hasta el {{reset}}",
+      "tight": "Su cuota de 5 horas está casi llena, así que se omite por ahora"
+    },
+    "settings": {
+      "newRoute": "Nueva ruta",
+      "newRouteName": "Nueva ruta",
+      "newMode": "Nuevo modo",
+      "newModeName": "Nuevo modo",
+      "routesEmpty": "Aún no hay rutas. Crea una y añade varias fuentes.",
+      "modesEmpty": "Aún no hay modos.",
+      "modesNeedRoute": "Crea primero una ruta y luego guárdala como modo.",
+      "scopeNote": "Los grupos de modelos se aplican a las tareas nuevas iniciadas en este ordenador. La fuente se elige al empezar y no cambia durante la tarea.",
+      "back": "Volver a grupos de modelos",
+      "name": "Nombre",
+      "nameHint": "Se muestra en el selector de modelos.",
+      "routeShownAs": "Se muestra en «Grupos de modelos» del selector de modelos.",
+      "modeShownAs": "Se muestra en «Grupos de modelos» del selector de modelos.",
+      "pick": "Cuál usar",
+      "sources": "Fuentes que puede usar",
+      "sourcesHint": "Puede haber modelos distintos. La tarea indica cuál se usó.",
+      "sourcesEmpty": "Aún no hay fuentes. Añade abajo un modelo conectado.",
+      "sourcesFull": "Una ruta admite hasta {{count}} fuentes.",
+      "addSource": "Añadir fuente",
+      "chooseModel": "Elegir un modelo",
+      "notConnected": "Sin conexión",
+      "moveUp": "Subir",
+      "moveDown": "Bajar",
+      "remove": "Quitar de esta ruta",
+      "useSource": "Permitir que esta ruta use {{name}}",
+      "try": {
+        "title": "Probar",
+        "hint": "Mira qué fuente usaría ahora una tarea nueva. No se envía nada ni se gasta cuota.",
+        "run": "Ver la elección",
+        "picked": "Usar esta",
+        "standby": "En reserva",
+        "skipped": "Omitida",
+        "unavailable": "Ninguna fuente de esta ruta se puede usar ahora. Una tarea nueva usará el modelo que tenías seleccionado."
+      },
+      "deleteRoute": "Eliminar esta ruta",
+      "deleteRouteConfirmTitle": "¿Eliminar «{{name}}»?",
+      "deleteRouteConfirmDescription": "Los modos que la usan también se eliminan. Las tareas ya iniciadas no se ven afectadas.",
+      "deleteMode": "Eliminar este modo",
+      "deleteModeConfirmTitle": "¿Eliminar «{{name}}»?",
+      "deleteModeConfirmDescription": "Las tareas ya iniciadas no se ven afectadas.",
+      "delete": "Eliminar",
+      "cancel": "Cancelar",
+      "saveFailed": "No se pudo guardar. Inténtalo de nuevo.",
+      "mode": {
+        "target": "Ruta",
+        "targetHint": "Elige una ruta o indica abajo un único modelo.",
+        "oneModel": "Un único modelo",
+        "model": "O un único modelo",
+        "modelHint": "Si no se indica, decide la ruta de arriba.",
+        "followRoute": "Seguir la ruta",
+        "effort": "Intensidad de razonamiento",
+        "effortDefault": "Predeterminado del modelo",
+        "effortHint": "Si el modelo elegido no admite este nivel, se ejecuta con su valor predeterminado."
+      }
+    }
   }
 }
