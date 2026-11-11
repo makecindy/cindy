@@ -76,7 +76,7 @@ export function SidebarInlineSearch({
     : null;
   const lockedProjectLabel = lockedProject
     ? projectDisplayLabelWithMachine(lockedProject)
-    : search.lockedProjectName;
+    : search.lockedSessionGroupName ?? search.lockedProjectName;
 
   // 程序化展开信号:展开并聚焦输入框(input 在展开态才挂载,置 forceOpen 触发挂载后再 focus)。
   useEffect(() => {
@@ -97,11 +97,12 @@ export function SidebarInlineSearch({
     onSearchActiveRef.current = onSearchActive;
   });
   useEffect(() => {
-    if (search.query.length > 0) onSearchActiveRef.current?.();
-  }, [search.query]);
+    if (search.trimmed) onSearchActiveRef.current?.();
+  }, [search.trimmed]);
 
   // 静息态行:点击 / 键盘聚焦时展开并把焦点交给真正的输入框(鼠标 hover 时其实已提前展开)。
   const activate = () => {
+    search.resume();
     setForceOpen(true);
     window.setTimeout(() => inputRef.current?.focus(), 0);
   };
@@ -137,7 +138,7 @@ export function SidebarInlineSearch({
       <Search size={15} strokeWidth={1.8} className="shrink-0 text-[var(--sidebar-nav-text)]" />
       {expanded ? (
         <>
-          {search.lockedProjectKey && (
+          {(search.lockedProjectKey || search.lockedSessionGroupName) && (
             // 锁定项目 chip:展开态显示「在此项目内搜索」锁定的项目名 + 解锁 X。
             <span className="flex min-w-0 max-w-[48%] shrink items-center gap-1 rounded-full bg-[var(--surface-chip)] py-0.5 pl-2 pr-0.5 text-xs text-[var(--text-secondary)]">
               <span className="min-w-0 truncate">{lockedProjectLabel}</span>
@@ -162,6 +163,8 @@ export function SidebarInlineSearch({
           )}
           <input
             ref={inputRef}
+            onFocus={search.resume}
+            onClick={search.resume}
             value={search.query}
             onChange={(event) => search.setQuery(event.target.value)}
             placeholder={t('ccAgent.search.placeholder')}
@@ -169,7 +172,7 @@ export function SidebarInlineSearch({
             // leading-none 与静息态「搜索」文字(及其余导航行)完全一致(2026-07
             // 已随导航行一起去掉 mt-0.5,改为纯 flex 垂直居中),避免 hover 展开成
             // 输入框时占位符相对「搜索」发生位移。
-            className="min-w-0 flex-1 bg-transparent text-sm leading-none text-[var(--text-primary)] outline-none placeholder:text-[var(--text-tertiary)]"
+            className="min-w-0 flex-1 bg-transparent text-sm leading-none text-[var(--text-primary)] outline-none placeholder:text-[var(--text-placeholder)]"
           />
           {search.query && (
             <Tip text={t('ccAgent.search.clear')} side="bottom">
@@ -204,6 +207,7 @@ export function SidebarInlineSearch({
             activeCount={search.activeFilterCount}
             lockedProjectKey={search.lockedProjectKey}
             lockedProjectName={search.lockedProjectName}
+            lockedSessionGroupName={search.lockedSessionGroupName}
             onStatusChange={search.setStatusFilter}
             onAgentKindChange={search.setAgentFilter}
             onLastActivityChange={search.setLastActivityFilter}

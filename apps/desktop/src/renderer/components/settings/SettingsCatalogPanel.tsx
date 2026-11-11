@@ -2,7 +2,8 @@ import { useState } from 'react';
 
 import { GhostPluginPage } from '@/features/plugin/GhostPluginPage';
 import { SkillhubHomeView } from '@/features/skillhub/SkillhubHomeView';
-import { useSkillhubStoreSync } from '@/features/skillhub/SkillhubFeatureLayout';
+import { LocalSkillhubStoreSync } from '@/features/skillhub/SkillhubFeatureLayout';
+import { useCatalogDevice } from '@/features/plugin/useCatalogDevice';
 
 /**
  * Settings → Plugins embeds the same Plugin / Skill catalogs.
@@ -20,6 +21,7 @@ export function SettingsCatalogPanel() {
       <div className={catalogTab === 'plugins' ? 'h-full min-h-0' : 'hidden'}>
         <GhostPluginPage
           embedded
+          active={catalogTab === 'plugins'}
           onSelectCatalogTab={(tab) => {
             if (tab === 'skills') setSkillsVisited(true);
             setCatalogTab(tab);
@@ -40,10 +42,11 @@ function SettingsSkillsPane({
   active: boolean;
   onSelectTab: (tab: 'plugins' | 'skills') => void;
 }) {
-  useSkillhubStoreSync();
+  const { device } = useCatalogDevice();
   return (
     <div className={active ? 'h-full min-h-0' : 'hidden'}>
-      <SkillhubHomeView embedded onSelectCatalogTab={onSelectTab} />
+      {!device ? <LocalSkillhubStoreSync /> : null}
+      <SkillhubHomeView embedded active={active} onSelectCatalogTab={onSelectTab} />
     </div>
   );
 }

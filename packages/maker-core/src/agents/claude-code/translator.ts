@@ -1,3 +1,4 @@
+import { collectNativeToolMedia, type NativeToolMedia } from '@cindy/maker-shared/tool-process-media';
 /**
  * Claude Code SDKMessage → maker-core 语义 AgentEvent 翻译器。
  *
@@ -39,17 +40,19 @@ import type { UsageTracker } from '../shared/usage-tracker.js';
 import { isModelAccessDenied } from './model-access-error.js';
 import { attachLiveGeneration, sampleGenerationDuration } from '../shared/live-generation-snapshot.js';
 import {
-  beginClaudeGeneration,
   beginClaudeGenerationAtRequestStart,
   finalizeClaudeGeneration,
   markClaudeGenerationUnreliable,
   newClaudeGenerationState,
   noteClaudeParentStreamedOutputIncomplete,
   noteClaudeSubagent,
+  observeClaudeSpeedEvent,
   pauseClaudeGeneration,
   resetClaudeGenerationTiming,
   resumeClaudeGeneration,
+  settleClaudeSpeedRequest,
   type ClaudeGenerationState,
+  type ClaudeSpeedStreamEvent,
 } from './generation-timing.js';
 
 // ── 共享 turn / runtime 状态 ─────────────────────────────────────────────────
@@ -343,11 +346,13 @@ function ccLiveStatus(
   return {
     status,
     ...attachLiveGeneration(ctx.tracker.snapshot(), {
+      tokenSpeed: ctx.rt.generation.tokenSpeed.snapshot(),
       outputTokens: mainTurnOutputTokens(ctx.tracker),
       durationMs: ctx.rt.generation.outputDurationMs,
       openStartedAt: ctx.rt.generation.startedAt,
       reliable: ctx.rt.generation.reliable,
     }),
+    requestUsage: ctx.tracker.getRequestMetering(),
     isRunning,
   };
 }
@@ -376,6 +381,18 @@ type ResultUsageAggregate = {
   cacheReadTokens?: number;
   cacheCreateTokens?: number;
 };
+
+/**
+ * Anthropic 在 usage.cache_creation 里把缓存写入按 TTL 拆开；1h 写入单价高于 5m，
+ * 计价需单独带上这部分。上游不给拆分时返回 undefined（按 5m 单价兜底）。
+ */
+function cacheCreate1hTokensFromUsage(usage: unknown): number | undefined {
+  if (!usage || typeof usage !== 'object') return undefined;
+  const split = (usage as { cache_creation?: unknown }).cache_creation;
+  if (!split || typeof split !== 'object') return undefined;
+  const value = (split as { ephemeral_1h_input_tokens?: unknown }).ephemeral_1h_input_tokens;
+  return typeof value === 'number' && Number.isFinite(value) && value > 0 ? value : undefined;
+}
 
 function resultUsageToTurnDelta(
   previous: ResultUsageAggregate | null,
@@ -480,6 +497,7 @@ export function extractAssistantMeta(rawMsg: unknown): Record<string, unknown> {
 const TERMINAL_OUTPUT_TOOL_NAMES = new Set(['Bash', 'PowerShell']);
 
 interface ToolResultPair {
+  processMedia: NativeToolMedia[];
   toolUseId: string;
   fullText: string;
   isError: boolean;
@@ -492,7 +510,7 @@ function normalizeToolResultFullText(
   const toolName = rt.toolUseIdToName.get(pair.toolUseId);
   if (!toolName || !TERMINAL_OUTPUT_TOOL_NAMES.has(toolName)) return pair;
   return {
-    toolUseId: pair.toolUseId,
+    ...pair,
     fullText: stripTerminalControlSequences(pair.fullText),
     isError: pair.isError,
   };
@@ -509,7 +527,7 @@ function extractToolResultFullText(
     const pair = readToolResultFullText(block);
     if (pair) {
       const normalized = normalizeToolResultFullText(pair, rt);
-      if (normalized.fullText.length > 0) out.push(normalized);
+      if (normalized.fullText.length > 0 || normalized.processMedia.length > 0) out.push(normalized);
     }
   }
   return out;
@@ -534,7 +552,7 @@ function readToolResultFullText(blockRaw: unknown): ToolResultPair | null {
     }
     fullText = parts.join('\n');
   }
-  return { toolUseId: b.tool_use_id, fullText, isError: b.is_error === true };
+  return { toolUseId: b.tool_use_id, fullText, isError: b.is_error === true, processMedia: collectNativeToolMedia(inner) };
 }
 
 /**
@@ -702,12 +720,14 @@ interface TranslateContext {
   /**
    * upstream-response-idle watchdog / loop guard: assistant / stream_event 含 tool_use 时回调。
    * parentToolUseId 用于隔离并发 subagent；缺省表示顶层 agent。
+   * inputStreaming 表示参数尚在流入，不能据此认定工具已执行并暂停上游计时。
    */
   onToolUseStart?: (
     toolUseId: string,
     toolName?: unknown,
     input?: unknown,
     parentToolUseId?: string,
+    inputStreaming?: boolean,
   ) => void;
   /**
    * upstream-response-idle watchdog: user 含 tool_result 时出队, 配对 onToolUseStart。
@@ -808,7 +828,7 @@ export function translateSdkMessage(
       for (const pair of fullPairs) {
         queue.push({
           type: 'tool_result_full',
-          data: { toolUseId: pair.toolUseId, fullText: pair.fullText },
+          data: { toolUseId: pair.toolUseId, fullText: pair.fullText, ...(pair.processMedia.length ? { processMedia: pair.processMedia } : {}) },
           source: 'claude-code',
           ...(parentToolUseId ? { agentMeta: { parentUuid: parentToolUseId } } : {}),
         });
@@ -969,6 +989,24 @@ export function translateSdkMessage(
       return;
     }
 
+    case 'command_lifecycle': {
+      // CLI 2.1.312 emits these command receipts although SDK 0.3.292's
+      // SDKMessage union omits them. A command may be folded into another turn;
+      // completed can precede OR follow result, so it must not drive Cindy's
+      // input queue, UI status or onTurnEnd. The existing result path owns that.
+      const commandUuid = msg.command_uuid;
+      const state = msg.state;
+      if (
+        typeof commandUuid === 'string' && commandUuid.length > 0 &&
+        (state === 'queued' || state === 'started' || state === 'completed')
+      ) return;
+      // cancelled/discarded/refused can describe a command that never ran.
+      // Keep them, malformed receipts and future states diagnosable without
+      // treating a command-level receipt as a whole-turn failure or retry signal.
+      ctx.log.warn('SDK ▷ non-success or unknown command lifecycle', { commandUuid, state });
+      return;
+    }
+
     default: {
       // 未识别 type: 走 logger.warn (诊断用), 不再 emit vendor-raw —— renderer
       // default case 直接丢, 走 IPC 也是浪费。Codex translator 同款做法。
@@ -1068,6 +1106,8 @@ function handleSystem(
     return;
   }
   if (msg.subtype === 'api_retry') {
+    // The backoff wait is not generation time; the retried request's first block resumes.
+    ctx.rt.generation.tokenSpeed.pause();
     // SDKAPIRetryMessage 明确表示本次 API 失败仍在自动重试，不是 turn 终态。
     // 除日志外也暂存最后一次 retry 的错误详情，覆盖 SDK 没有额外发送
     // assistant.error envelope、最终 ResultMessage 又没有 result 文本的路径。
@@ -1666,6 +1706,17 @@ function observeClaudeSubagentStream(
 
 // ── stream_event 子分支(content_block_delta / message_delta / message_start) ──
 
+/** Main-thread live tok/s: the stream feeds the meter, each request's usage corrects it. */
+function observeClaudeTokenSpeed(
+  event: ClaudeSpeedStreamEvent,
+  queue: EventQueue,
+  ctx: TranslateContext,
+): void {
+  if (observeClaudeSpeedEvent(ctx.rt.generation, event)) {
+    queue.push({ type: 'status', data: ccLiveStatus(ctx, 'Generating...', true), source: 'claude-code' });
+  }
+}
+
 function handleStreamEvent(
   msg: {
     event?: Record<string, unknown>;
@@ -1688,7 +1739,9 @@ function handleStreamEvent(
     ? msg.parent_tool_use_id
     : undefined;
 
-  // 冗余 add: 防 SDK 顺序契约变化 (stream_event 先于 assistant message yield), Set 幂等。
+  if (!parentToolUseId) observeClaudeTokenSpeed(event, queue, ctx);
+
+  // 流式开头先登记工具身份；完整 assistant 消息才表示参数已交付。
   if (event.type === 'content_block_start') {
     const cb = event.content_block;
     if (cb && cb.type === 'text') {
@@ -1698,12 +1751,13 @@ function handleStreamEvent(
     if (cb && cb.type === 'tool_use') {
       const toolUseId = rememberClaudeToolUseId(ctx, cb.id, cb.name);
       if (toolUseId) {
-        // watchdog / loop-guard 仍要立刻拿到 tool id。生成计时要等
-        // message_delta 或完整 assistant tool_use: content_block_start
+        // loop-guard 仍要立刻拿到 tool id；上游 watchdog 等完整 assistant
+        // tool_use 或 canUseTool 才停表。生成计时要等 message_delta 或完整
+        // assistant tool_use: content_block_start
         // 早于参数 input_json_delta,这里停表会把参数生成时间从分母抠掉,
         // 而后续 message_delta 仍把这些 token 加进 outputTokens。
         if (!parentToolUseId) ctx.rt.mainRequestToolUseIds.add(toolUseId);
-        ctx.onToolUseStart?.(toolUseId, cb.name, cb.input, parentToolUseId);
+        ctx.onToolUseStart?.(toolUseId, cb.name, cb.input, parentToolUseId, true);
       }
     }
   }
@@ -1796,13 +1850,18 @@ function handleStreamEvent(
     // 第一个事件。在此停表,才能排除工具执行/审批等待,又不把参数生成
     // 区间从 tok/s 分母里抠掉。只有主流自己的 message_delta 才停主时钟:
     // 子代理 delta 到达时父级可能正在并行生成(后台 Agent),不许提前切断。
-    if (!parentToolUseId) pauseClaudeGenerationForCurrentRequestTools(ctx);
+    if (!parentToolUseId) {
+      pauseClaudeGenerationForCurrentRequestTools(ctx);
+      // The response is complete: nothing generates until the next request's first block.
+      ctx.rt.generation.tokenSpeed.pause();
+    }
     const usage = event.usage;
     if (usage) {
       const dIn = usage.input_tokens ?? 0;
       const dOut = usage.output_tokens ?? 0;
       const dCacheRead = usage.cache_read_input_tokens ?? 0;
       const dCacheCreate = usage.cache_creation_input_tokens ?? 0;
+      const dCacheCreate1h = cacheCreate1hTokensFromUsage(usage);
       // 累加进 tracker (跨多个 message_delta 会一直涨 —— 对标老 agentManager.ts:2362-2365
       // 的 session.currentTurn{Input,Output,CacheRead,CacheCreate}Tokens += dX)
       const segmentId =
@@ -1829,16 +1888,27 @@ function handleStreamEvent(
         outputTokens: dOut,
         cacheReadTokens: dCacheRead,
         cacheCreateTokens: dCacheCreate,
+        ...(dCacheCreate1h !== undefined ? { cacheCreate1hTokens: dCacheCreate1h } : {}),
         complete: hasCompleteUsageSnapshot,
       });
       if (parentToolUseId) noteClaudeSubagent(ctx.rt.generation);
-      else if (ctx.tracker.getTurnUsage().output > previousOutput) {
-        // Upserts retain the largest output count. Input-only, duplicate, and
-        // older usage must not advance the paired denominator on their own.
-        ctx.rt.generation.outputDurationMs = sampleGenerationDuration(
-          ctx.rt.generation.durationMs,
-          ctx.rt.generation.startedAt,
-        );
+      else {
+        if (ctx.tracker.getTurnUsage().output > previousOutput) {
+          // Upserts retain the largest output count. Input-only, duplicate, and
+          // older usage must not advance the paired denominator on their own.
+          ctx.rt.generation.outputDurationMs = sampleGenerationDuration(
+            ctx.rt.generation.durationMs,
+            ctx.rt.generation.startedAt,
+          );
+        }
+        // The request's real output replaces what the stream could only estimate.
+        const calibration = settleClaudeSpeedRequest(ctx.rt.generation, mainTurnOutputTokens(ctx.tracker), usage);
+        if (calibration) {
+          ctx.log.debug('SDK ▷ token speed calibration', {
+            sdkSessionId: ctx.getSdkSessionId(),
+            ...calibration,
+          });
+        }
       }
       // 每次 API 回合的 token 增量打一行 —— 一个 turn 可能多个 message_delta(工具循环),
       // 让人看日志能直观看到 token 是怎么涨上去的, 而不是只在 turn end 看到一个总数。
@@ -1898,6 +1968,7 @@ function handleStreamEvent(
       const dIn = usage.input_tokens ?? 0;
       const dCacheRead = usage.cache_read_input_tokens ?? 0;
       const dCacheCreate = usage.cache_creation_input_tokens ?? 0;
+      const dCacheCreate1h = cacheCreate1hTokensFromUsage(usage);
       if (dIn > 0 || dCacheRead > 0 || dCacheCreate > 0) {
         ctx.tracker.upsertApiCallUsage(segmentId, {
           id: segmentId,
@@ -1907,6 +1978,7 @@ function handleStreamEvent(
           outputTokens: 0,
           cacheReadTokens: dCacheRead,
           cacheCreateTokens: dCacheCreate,
+          ...(dCacheCreate1h !== undefined ? { cacheCreate1hTokens: dCacheCreate1h } : {}),
           complete: false,
         });
       }
@@ -2196,6 +2268,9 @@ function handleResult(
     resultUsage != null && segmentTotals.outputTokens === resultUsage.outputTokens,
   );
   const liveGeneration = ctx.rt.generation;
+  // Snap to this turn's streamed main-thread usage: the result aggregate can be
+  // a session total turned into a wrong delta, and a bad snap is worse than the estimate.
+  liveGeneration.tokenSpeed.stop(mainTurnOutputTokens(ctx.tracker));
   const endSnapshot = ctx.tracker.endTurn(
     resultUsage
       ? {
@@ -2303,15 +2378,15 @@ function handleResult(
       source: 'claude-code',
     });
   }
-  // silent-stop 判定: turn 内干过活(有 tool 调用),或整轮没有任何用户可见正文,且最后
-  // 一条 assistant 消息没有实质内容(典型: 只有 thinking 块),result 也没兜出可补的
-  // 文本 —— 上游把 turn 静默收了尾,用户侧表现为"干着干着停了、看起来像正常结束"。已知
+  // silent-stop 判定: 整轮没有任何用户可见正文,且最后一条 assistant 消息没有实质内容
+  // (典型: 只有 thinking 块),result 也没兜出可补的文本 —— 上游把 turn 静默收了尾,
+  // 用户侧表现为"干着干着停了、看起来像正常结束"。末尾不可见 reasoning 不能推翻前面
+  // 已交付的正文；否则工具调用后的正常回答会被误判并触发额外自动执行 (#8240)。已知
   // 上游形态: 模型偶发 thinking-only 空响应(anthropics/claude-code#50597,
   // stop_reason=end_turn)与 SSE 流被静默中断后 SDK 按正常结束处理(#38905, 此形态
   // stop_reason 常缺失)。与 isEmptyResponseTurn(整轮 0 产出 + usage 全 0)互斥:
-  // 零 tool 但零可见正文也必须命中:第一次自动补发「继续」后,上游可能再次只返回
-  // thinking；旧的 toolUses > 0 守卫会把第二次当正常完成。已有可见正文的零 tool turn
-  // 则不扩张判定。沿用 turn 收尾同款排除项: is_error(另有 error 收尾)、
+  // 零 tool 且零可见正文也要命中:第一次自动补发「继续」后,上游可能再次只返回
+  // thinking。沿用 turn 收尾同款排除项: is_error(另有 error 收尾)、
   // interruptRequested(用户停止/watchdog)、sawCompactBoundary(compact 轮合法空)。
   // 命中后事件流仍走正常 Done/done 收尾(记账/收口零变更), 只在 done.data 附加
   // silentStop 标记交给 host 的自动续跑守卫决策; WARN 日志保留作 dev 排查。
@@ -2320,7 +2395,7 @@ function handleResult(
     !ctx.turn.interruptRequested &&
     !ctx.turn.sawCompactBoundary &&
     !isEmptyResponseTurn &&
-    (ctx.turn.toolUses > 0 || ctx.turn.uiEmittedText.length === 0) &&
+    ctx.turn.uiEmittedText.length === 0 &&
     !ctx.turn.lastAssistantMsgHadSubstance &&
     fallbackTail.length === 0;
   if (isSilentStopTurn) {
@@ -2477,6 +2552,7 @@ function handleResult(
     data: {
       status: 'Done',
       ...attachLiveGeneration(endSnapshot, {
+        tokenSpeed: liveGeneration.tokenSpeed.snapshot(),
         outputTokens: liveTurnOutput,
         durationMs: liveGeneration.outputDurationMs,
         openStartedAt: null,
@@ -2500,6 +2576,7 @@ function handleResult(
       : msg;
   const resultWithUsageSegments = {
     ...safeResult,
+    requestUsage: ctx.tracker.getRequestMetering(),
     usageSegments: turnUsageSegments,
     usageSegmentsComplete,
     modelUsageCumulativeStartsAtZero: ctx.modelUsageCumulativeStartsAtZero?.() === true,

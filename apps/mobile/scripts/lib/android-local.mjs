@@ -43,10 +43,48 @@ export function resolveAndroidArtifactKinds(authRegion, rawArtifacts) {
 }
 
 /** @param {Array<'apk'|'aab'>} kinds */
-export function androidGradleTasksForArtifacts(kinds) {
+export function androidGradleTasksForArtifacts(kinds, { splitGooglePlay = false } = {}) {
   const selected = Array.isArray(kinds) ? kinds : [];
   if (!selected.length) throw new Error('Android 构建至少需要一种产物');
-  return selected.map((kind) => kind === 'apk' ? 'assembleRelease' : 'bundleRelease');
+  return selected.map((kind) => kind === 'apk'
+    ? (splitGooglePlay ? 'assembleWebsiteRelease' : 'assembleRelease')
+    : (splitGooglePlay ? 'bundlePlayRelease' : 'bundleRelease'));
+}
+
+/** Global APK and Play AAB share one JS-compatible runtime, but only the APK may install packages. */
+export function patchBuildGradleDistributionFlavors(source) {
+  if (typeof source !== 'string' || !source) throw new Error('Android build.gradle 为空');
+  if (source.includes('flavorDimensions "distribution"')) return source;
+  const anchor = /^android\s*\{/m;
+  if (!anchor.test(source)) throw new Error('未找到 android { 块，无法配置官网 / Play 构建变体');
+  return source.replace(anchor, (match) => `${match}
+    flavorDimensions "distribution"
+    productFlavors {
+        website { dimension "distribution" }
+        play { dimension "distribution" }
+    }`);
+}
+
+export const GOOGLE_PLAY_MANIFEST_OVERLAY = `<manifest xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:tools="http://schemas.android.com/tools">
+    <uses-permission android:name="android.permission.REQUEST_INSTALL_PACKAGES" tools:node="remove" />
+</manifest>\n`;
+
+const INSTALL_PACKAGES_PERMISSION = 'android.permission.REQUEST_INSTALL_PACKAGES';
+
+export function assertAndroidInstallPermissionPresent(permissionsDump) {
+  if (!String(permissionsDump).includes(INSTALL_PACKAGES_PERMISSION)) {
+    throw new Error('官网 APK 缺少 REQUEST_INSTALL_PACKAGES 权限');
+  }
+}
+
+export function assertGooglePlayInstallPermissionAbsent(manifestBytes) {
+  if (!Buffer.isBuffer(manifestBytes) || manifestBytes.length === 0) {
+    throw new Error('无法读取 Play AAB 的最终 manifest');
+  }
+  if (manifestBytes.includes(Buffer.from(INSTALL_PACKAGES_PERMISSION))) {
+    throw new Error('Play AAB 仍包含 REQUEST_INSTALL_PACKAGES 权限，停止归档');
+  }
 }
 
 export const ANDROID_UPLOAD_CERT_SHA256_ENV = 'XDT_ANDROID_UPLOAD_CERT_SHA256';

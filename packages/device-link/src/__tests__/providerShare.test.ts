@@ -21,6 +21,16 @@ const BOTH = { sharedTask: true, providerShare: true };
 const TOKEN = 'a'.repeat(43);
 
 describe('provider share local handles', () => {
+  // Unit: cross-account catalogs must not reveal enterprise membership via branding.
+  it('removes organization branding from shared catalogs while preserving ordinary brands', async () => {
+    const { scrubSharedProviderCatalog } = await import('../providerShareCatalog.js');
+    const enterprise = { id: 'byok-test', source: 'organization', name: 'Team provider', logoKind: 'openai-spectrum' };
+    const ordinary = { id: 'openai', source: 'builtin', name: 'OpenAI', logoKind: 'openai' };
+    expect(scrubSharedProviderCatalog({ providers: [enterprise, ordinary] }).providers).toEqual([
+      { id: enterprise.id, source: enterprise.source, name: enterprise.name }, ordinary,
+    ]);
+    expect(enterprise.logoKind).toBe('openai-spectrum');
+  });
   it('round-trips host and guest keys and never collides with shared-task keys or device ids', () => {
     const host = providerShareHostPeer('share-1', 'desktop');
     const guest = providerShareGuestPeer('share-1', 'member-1', 'laptop');
@@ -107,12 +117,45 @@ describe('provider share api', () => {
     expect(shares[0].owner).toEqual({ displayName: 'Magi', avatarUrl: 'https://cdn.example/a.png', region: 'global' });
   });
 
+  it('keeps original host presence distinct from an authorized standby and accepts legacy servers', async () => {
+    const row = { shareId: 's1', memberId: 'm1', providerId: 'p', providerLabel: 'Fake', hostDeviceId: 'primary', deviceName: 'Fake',
+      owner: { displayName: 'Fake', avatarUrl: null, region: 'global' }, status: 'active', hostOnline: false, hostCapable: true };
+    expect((await api({ shares: [{ ...row, standbyOnline: true }] }).listReceived())[0]).toMatchObject({ hostOnline: true, hostDeviceOnline: false, standbyOnline: true });
+    const legacy = (await api({ shares: [row] }).listReceived())[0];
+    expect(legacy.hostOnline).toBe(false);
+    expect(legacy).not.toHaveProperty('hostDeviceOnline');
+  });
+
   it('rejects malformed pairing codes and sends invitations only in the body', async () => {
     await expect(api({ requestId: 'r1', status: 'pending', pairingCode: '12a4', expiresAt: new Date().toISOString() })
       .sendRequest(TOKEN, 'card')).rejects.toThrow();
     const calls: Array<{ path: string; body?: unknown }> = [];
     await api({ requestId: 'r1', status: 'pending', pairingCode: '0042', expiresAt: new Date().toISOString() }, calls).sendRequest(TOKEN, 'card');
     expect(calls[0]).toEqual({ path: '/api/device-link/provider-shares/requests', body: { invitation: TOKEN, identityCard: 'card' } });
+  });
+
+  it.each([undefined, 'a'.repeat(64)])('accepts old and new link responses and preserves linkId %s', async (linkId) => {
+    const expiresAt = new Date().toISOString();
+    const result = await api({ shareId: 's1', invitation: TOKEN, expiresAt, linkId }).createLink({
+      providerId: 'anthropic', providerLabel: 'Anthropic', deviceName: 'Computer', identityCard: 'card',
+    });
+    expect(result.linkId).toBe(linkId);
+    const request = { requestId: 'r1', linkId, displayName: 'Guest', avatarUrl: null, region: 'global',
+      pairingCode: '0042', createdAt: expiresAt, expiresAt };
+    const shares = await api({ shares: [{ shareId: 's1', providerId: 'anthropic', providerLabel: 'Anthropic',
+      hostDeviceId: 'desktop', createdAt: expiresAt, members: [], requests: [request] }] }).listOwned();
+    expect(shares[0].requests[0].linkId).toBe(linkId);
+  });
+
+  it.each(['invalid', 'A'.repeat(64), 'a'.repeat(63), null])('rejects malformed linkId %s on links and owner requests', async (linkId) => {
+    const expiresAt = new Date().toISOString();
+    await expect(api({ shareId: 's1', invitation: TOKEN, expiresAt, linkId }).createLink({
+      providerId: 'anthropic', providerLabel: 'Anthropic', deviceName: 'Computer', identityCard: 'card',
+    })).rejects.toThrow('Invalid provider share link id');
+    await expect(api({ shares: [{ shareId: 's1', providerId: 'anthropic', providerLabel: 'Anthropic',
+      hostDeviceId: 'desktop', createdAt: expiresAt, members: [], requests: [{ requestId: 'r1', linkId,
+        displayName: 'Guest', avatarUrl: null, region: 'global', pairingCode: '0042', createdAt: expiresAt, expiresAt }] }] })
+      .listOwned()).rejects.toThrow('Invalid provider share link id');
   });
 });
 
@@ -128,9 +171,45 @@ describe('provider share received catalogs', () => {
     expect(parsed).toEqual([{ ...entry, owner: { displayName: 'Magi', avatarUrl: null } }]);
     expect(parseProviderShareReceivedCatalogs(null)).toEqual([]);
   });
+
+  it('keeps a matching favorite identity and drops a mismatched one without dropping the catalog', async () => {
+    const { parseProviderShareReceivedCatalogs } = await import('../providerShareCatalog.js');
+    const entry = {
+      agentDeviceId: 'share:s1', shareId: 's1', providerId: 'anthropic', providerLabel: 'Anthropic', deviceName: 'Mac',
+      owner: { displayName: 'Magi', avatarUrl: null }, status: 'active', hostOnline: true, catalog: { providers: [] },
+    };
+    const favoriteSource = { shareId: 's1', memberId: 'member-1', providerId: 'anthropic', owner: { region: 'global' } };
+    const [matched, mismatched, malformed] = parseProviderShareReceivedCatalogs({ shares: [
+      { ...entry, favoriteSource },
+      { ...entry, favoriteSource: { ...favoriteSource, memberId: 'other', shareId: 'other' } },
+      { ...entry, favoriteSource: { shareId: 's1', memberId: '', providerId: 'anthropic', owner: { region: 'global' } } },
+    ] });
+    expect(matched?.favoriteSource).toEqual(favoriteSource);
+    expect(mismatched?.favoriteSource).toBeUndefined();
+    expect(malformed?.favoriteSource).toBeUndefined();
+    expect(mismatched?.providerId).toBe('anthropic');
+  });
 });
 
 describe('provider share identity scrubbing', () => {
+  // provider-sharing.md §6: org/membership suffixes must not cross accounts.
+  // Existing cases covered subscription identities, not Cindy AI membership names.
+  it.each(['Cindy AI · 个人', 'Cindy AI · 心动', 'Cindy AI · Example Studio'])('removes membership identity from shared labels and catalogs: %s', async (name) => {
+    const { scrubProviderShareLabel, scrubSharedProviderCatalog, parseProviderShareReceivedCatalogs } = await import('../providerShareCatalog.js');
+    const provider = { id: 'xd', name, logoKind: 'xd' };
+    expect(scrubProviderShareLabel(name)).toBe('Cindy AI');
+    expect(scrubSharedProviderCatalog({ providers: [provider] })).toEqual({ providers: [{ id: 'xd', name: 'Cindy AI' }] });
+    const [entry] = parseProviderShareReceivedCatalogs({ shares: [{
+      agentDeviceId: 'share:s1', shareId: 's1', providerId: 'xd', providerLabel: name, deviceName: 'Cindy',
+      owner: { displayName: 'Alice', avatarUrl: null }, status: 'active', hostOnline: true,
+      catalog: { providers: [provider] },
+    }] });
+    expect(entry?.providerLabel).toBe('Cindy AI');
+    expect(entry?.catalog).toEqual({ providers: [{ id: 'xd', name: 'Cindy AI' }] });
+    expect(provider.name).toBe(name); // Same-account presentation is not mutated.
+    expect(provider.logoKind).toBe('xd');
+  });
+
   it('drops account identity fields and removes login names or emails from provider names', async () => {
     const { scrubProviderShareLabel, scrubSharedProvider, scrubSharedProviderCatalog } = await import('../providerShareCatalog.js');
     expect(scrubProviderShareLabel('OpenAI · alice@corp.com')).toBe('OpenAI');
@@ -139,11 +218,84 @@ describe('provider share identity scrubbing', () => {
     expect(scrubProviderShareLabel('My Gateway')).toBe('My Gateway');
     const provider = {
       id: 'openai-2', name: 'OpenAI · alice@corp.com', connected: true,
+      // The guest still uses this original shared connection, not the owner's whole account pool.
+      subscriptionPoolAlias: true,
       subscriptionAccount: { source: 'local', identity: 'alice@corp.com' },
       openAiAccount: { source: 'oauth', identity: 'alice@corp.com' },
     };
     expect(scrubSharedProvider(provider)).toEqual({ id: 'openai-2', name: 'OpenAI', connected: true });
     expect(JSON.stringify(scrubSharedProviderCatalog({ providers: [provider], providerOrder: ['openai-2'] }))).not.toContain('alice');
+    // 供应商组摘要列着组内电脑，只给同账号电脑。
+    expect(scrubSharedProvider({ id: 'anthropic', name: 'Anthropic', group: { members: [{ label: 'Mini' }] } }))
+      .toEqual({ id: 'anthropic', name: 'Anthropic' });
+  });
+
+  it('keeps only a sane group size for guests', async () => {
+    const { readProviderShareGroupSize, scrubSharedProvider } = await import('../providerShareCatalog.js');
+    expect(scrubSharedProvider({ id: 'anthropic', name: 'Anthropic', groupSize: 3, group: { members: [{ label: 'Mini' }] } }))
+      .toEqual({ id: 'anthropic', name: 'Anthropic', groupSize: 3 });
+    for (const groupSize of [0, -1, 2.5, 513, '3', null]) {
+      expect(scrubSharedProvider({ id: 'anthropic', groupSize })).toEqual({ id: 'anthropic' });
+    }
+    expect(readProviderShareGroupSize({ groupSize: 4 })).toBe(4);
+    expect(readProviderShareGroupSize({ groupSize: '4' })).toBeNull();
+    expect(readProviderShareGroupSize(null)).toBeNull();
+  });
+
+  // provider-groups.md §6 / provider-sharing.md §5.1 (2026-11-02): the sharer's group still places tasks on
+  // other members when its own login is down, so guests (desktop, phone, scheduled checks) must not drop the
+  // whole shared group from the model list because the group computer's own copy reports connected: false.
+  it.each([
+    ['a shared group whose own login is down stays selectable', { groupSize: 3, connected: false }, true],
+    ['a plain share keeps its own connection state', { connected: false }, false],
+    ['an invalid group size is not treated as a group', { groupSize: 0, connected: false }, false],
+  ])('%s', async (_name, fields, connected) => {
+    const { scrubSharedProviderCatalog } = await import('../providerShareCatalog.js');
+    const [provider] = scrubSharedProviderCatalog({ providers: [{ id: 'anthropic', ...fields }] }).providers;
+    expect(provider).toMatchObject({ id: 'anthropic', connected });
+  });
+
+  it('keeps only anonymous status enums and preserves positions for unknown or malicious entries', async () => {
+    const { readProviderShareGroupStatus, scrubSharedProvider } = await import('../providerShareCatalog.js');
+    const provider = {
+      id: 'anthropic', groupSize: 3, group: { members: [{ label: 'private-name' }] },
+      groupStatus: ['available', { state: 'busy', label: 'private-name', running: 7 }, 'private-device-id'],
+    };
+    expect(scrubSharedProvider(provider)).toEqual({ id: 'anthropic', groupSize: 3, groupStatus: ['available', 'unknown', 'unknown'] });
+    for (const groupStatus of [null, {}, ['available'], Array(513).fill('available')]) {
+      expect(readProviderShareGroupStatus({ groupSize: 3, groupStatus })).toBeNull();
+      expect(scrubSharedProvider({ groupSize: 3, groupStatus })).toEqual({ groupSize: 3 });
+    }
+    expect(readProviderShareGroupStatus({ groupStatus: ['available'] })).toBeNull();
+    expect(readProviderShareGroupStatus({ groupSize: 2, groupStatus: ['needs-update', 'busy'] })).toEqual(['needs-update', 'busy']);
+  });
+
+  it('keeps only a sane guest running count', async () => {
+    const { readProviderShareGuestRunning, scrubSharedProvider } = await import('../providerShareCatalog.js');
+    expect(scrubSharedProvider({ id: 'anthropic', name: 'Anthropic', guestRunning: 0 }))
+      .toEqual({ id: 'anthropic', name: 'Anthropic', guestRunning: 0 });
+    expect(scrubSharedProvider({ id: 'anthropic', guestRunning: 3 })).toEqual({ id: 'anthropic', guestRunning: 3 });
+    for (const guestRunning of [-1, 2.5, 4097, '3', null]) {
+      expect(scrubSharedProvider({ id: 'anthropic', guestRunning })).toEqual({ id: 'anthropic' });
+    }
+    expect(readProviderShareGuestRunning({ guestRunning: 4 })).toBe(4);
+    expect(readProviderShareGuestRunning({ guestRunning: '4' })).toBeNull();
+    expect(readProviderShareGuestRunning(null)).toBeNull();
+  });
+
+  it('keeps the computer-wide running count out of shared catalogs', async () => {
+    const { scrubSharedProvider } = await import('../providerShareCatalog.js');
+    const { readProviderRunningTurns } = await import('../providerGroup.js');
+    // 那台的总数含分享者本人与其他受邀者的任务，只给同账号电脑。
+    expect(scrubSharedProvider({ id: 'anthropic', runningTurns: 5, guestRunning: 1 }))
+      .toEqual({ id: 'anthropic', guestRunning: 1 });
+    expect(readProviderRunningTurns({ runningTurns: 0 })).toBe(0);
+    expect(readProviderRunningTurns({ runningTurns: 12 })).toBe(12);
+    for (const runningTurns of [-1, 2.5, 4097, '3', null]) {
+      expect(readProviderRunningTurns({ runningTurns })).toBeNull();
+    }
+    expect(readProviderRunningTurns([])).toBeNull();
+    expect(readProviderRunningTurns(null)).toBeNull();
   });
 
   it('drops a login name cut short by the 50-character auto-name limit', async () => {

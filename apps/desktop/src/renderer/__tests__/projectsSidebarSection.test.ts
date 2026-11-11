@@ -94,7 +94,7 @@ describe('Projects sidebar section', () => {
     expect(headerSource).not.toContain(
       'group-focus-within/sidebar-header:pointer-events-auto',
     );
-    expect(headerSource).toContain('className={HEADER_ACTIONS_CLASS}');
+    // 各按钮在 hover/归档下的显隐由 MainListScopeHeader.test.tsx 通过组件渲染验证。
   });
 
   it('the project tree renders unconditionally (section collapse removed)', () => {

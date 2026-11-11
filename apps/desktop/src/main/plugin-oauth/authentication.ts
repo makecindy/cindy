@@ -82,6 +82,7 @@ interface Connection {
   binding: OauthCardBinding;
   started: boolean;
   finished: boolean;
+  current(): boolean;
   innerId?: string;
   messages: Map<string, { box: string; promise: Promise<unknown> }>;
 }
@@ -116,7 +117,8 @@ export class AuthenticatedOauthHost {
   }
   private assertCurrent(c: Connection): void {
     if (
-      this.connections.get(c.id) !== c ||
+      (this.connections.get(c.id) !== c && !c.binding.settingsPage) ||
+      !c.current() ||
       c.owner !== this.deps.owner() ||
       !this.deps.available(c.peer) ||
       this.now() >= c.expiresAtMs
@@ -156,24 +158,30 @@ export class AuthenticatedOauthHost {
     if ((raw as { op?: unknown })?.op === 'hello') {
       const hello = parsePluginOauthHello(raw);
       for (const [id, c] of this.connections) if (c.finished) this.connections.delete(id);
-      if (
-        this.connections.size >= 16 ||
-        [...this.connections.values()].filter((c) => c.peer === peer).length >= 4
-      )
-        throw fail();
       const generation = this.generation,
         peerGeneration = this.peerGenerations.get(peer) ?? 0;
       const binding = await this.deps.bind(hello.action);
       const currentIdentity = await this.deps.identity();
+      const previous = binding?.settingsPage
+        ? [...this.connections.values()].filter(
+            (c) =>
+              c.peer === peer &&
+              c.binding.settingsPage &&
+              c.binding.ghostId === binding.ghostId &&
+              sameAction(c.hello.action, hello.action),
+          )
+        : [];
+      const remaining = [...this.connections.values()].filter((c) => !previous.includes(c));
       if (
         !binding?.current() ||
+        (binding.controllerDeviceId !== undefined && binding.controllerDeviceId !== peer) ||
         this.deps.owner() !== owner ||
         !this.deps.available(peer) ||
         generation !== this.generation ||
         peerGeneration !== (this.peerGenerations.get(peer) ?? 0) ||
         currentIdentity?.key !== identity.key ||
-        this.connections.size >= 16 ||
-        [...this.connections.values()].filter((c) => c.peer === peer).length >= 4
+        remaining.length >= 16 ||
+        remaining.filter((c) => c.peer === peer).length >= 4
       )
         throw fail();
       const key = new OauthBox(),
@@ -188,6 +196,16 @@ export class AuthenticatedOauthHost {
         ghostId: binding.ghostId,
         expiresAtMs,
       };
+      const signature = identity.key.sign(
+        transcript(
+          hello,
+          reply,
+          { ...identity, publicKey: identity.key.descriptor.publicKey },
+          peer,
+        ),
+      );
+      // Retire old keys for new requests; accepted responses keep their original key and lease.
+      for (const c of previous) this.connections.delete(c.id);
       this.connections.set(id, {
         id,
         peer,
@@ -198,18 +216,15 @@ export class AuthenticatedOauthHost {
         binding,
         started: false,
         finished: false,
+        current: () =>
+          generation === this.generation &&
+          peerGeneration === (this.peerGenerations.get(peer) ?? 0) &&
+          (!binding.settingsPage || binding.current()),
         messages: new Map(),
       });
       return {
         ...reply,
-        signature: identity.key.sign(
-          transcript(
-            hello,
-            reply,
-            { ...identity, publicKey: identity.key.descriptor.publicKey },
-            peer,
-          ),
-        ),
+        signature,
       };
     }
     const v = oauthExact(raw, ['op', 'id', 'box']);
@@ -229,7 +244,15 @@ export class AuthenticatedOauthHost {
       return prior.promise;
     }
     if (c.messages.size >= 1024) throw fail();
-    if (request.op === 'start') {
+    if (c.binding.settingsPage) {
+      if (
+        request.op !== 'settings' ||
+        request.id !== c.hello.action.requestId ||
+        !c.binding.current()
+      )
+        throw fail();
+    } else if (request.op === 'settings') throw fail();
+    else if (request.op === 'start') {
       if (c.started || !sameAction(request, c.hello.action) || !c.binding.current()) throw fail();
       c.started = true;
     } else if (request.op !== 'capabilities' && (!c.innerId || request.id !== c.innerId))
@@ -247,6 +270,7 @@ export class AuthenticatedOauthHost {
         }
         if (
           request.op === 'cancel' ||
+          (request.op === 'settings' && request.command.kind === 'close') ||
           ['succeeded', 'failed', 'cancelled', 'expired'].includes(
             String((result as { phase?: unknown })?.phase),
           )

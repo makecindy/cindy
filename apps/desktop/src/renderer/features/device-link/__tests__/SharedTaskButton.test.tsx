@@ -9,12 +9,14 @@ import { SharedTaskButton } from '../SharedTaskButton';
 import { setDataOwnerGeneration } from '@/contexts/dataOwnerGeneration';
 import type { Session } from '@/lib/ccAgent.types';
 import { toast } from '@/lib/toast';
-const state = vi.hoisted(() => ({ invoke: vi.fn(), openLink: vi.fn(), host: vi.fn(), account: vi.fn(), closeLink: vi.fn(), removeDevice: vi.fn(), resetFence: vi.fn() }));
+const state = vi.hoisted(() => ({ invoke: vi.fn(), openLink: vi.fn(), host: vi.fn(), account: vi.fn(), closeLink: vi.fn(), removeDevice: vi.fn(), resetFence: vi.fn(), findById: vi.fn(), rawSessions: vi.fn() }));
+vi.mock('@/lib/sessionsStore', () => ({ sessionsStore: { findById: state.findById } }));
+vi.mock('@/lib/sessionService', () => ({ get: vi.fn() }));
 vi.mock('react-i18next', () => ({ useTranslation: () => ({ t: (key: string, values?: { title: string; link: string }) => key === 'sharedTask.invitationMessage' ? `Join “${values?.title}”\n${values?.link}\nOpen the link, or copy it and open Cindy on mobile.` : key }) }));
 vi.mock('@/contexts/AuthContext', () => ({ useAuth: () => ({ dataOwnerId: 'owner', isAuthenticated: true }) }));
 vi.mock('@/lib/toast', () => ({ toast: { error: vi.fn(), success: vi.fn() } }));
 vi.mock('@/lib/remoteDataOwnerPushFence', () => ({ resetRemoteDataOwnerPushFence: state.resetFence, bindSharedTaskPushOwner: vi.fn() }));
-vi.mock('../remoteProjectsStore', () => ({ remoteProjectsStore: { getDeviceName: () => undefined, removeDevice: state.removeDevice }, isRemoteDeviceMarkedDisconnected: () => false }));
+vi.mock('../remoteProjectsStore', () => ({ remoteProjectsStore: { getDeviceName: () => undefined, removeDevice: state.removeDevice, getDeviceSessions: state.rawSessions }, isRemoteDeviceMarkedDisconnected: () => false }));
 const ownerSession = { id: 'session-1', title: 'Task A' } as Session;
 const detail = {
   sharedTaskId: 'st1', sessionId: 'session-1', ownerAccountId: 'owner', hostDeviceId: 'device-a',
@@ -26,6 +28,9 @@ const memberDetail: SharedTaskDetail = { ...detail,
 };
 beforeEach(() => {
   vi.clearAllMocks(); setDataOwnerGeneration('owner');
+  state.findById.mockImplementation(sessionId => ({ id: sessionId, source: 'desktop' }));
+  state.rawSessions.mockImplementation((deviceId: string) => ['device-a', 'other-pc'].includes(deviceId)
+    ? ['session-1', 'other-session'].map(id => ({ id, source: 'desktop' })) : []);
   state.host.mockResolvedValue({ available: true, detail });
   state.openLink.mockResolvedValue(undefined); state.closeLink.mockResolvedValue(undefined);
   state.account.mockImplementation(async ({ action, sharedTaskId }) => {

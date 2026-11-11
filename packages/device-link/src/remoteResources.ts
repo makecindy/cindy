@@ -73,9 +73,17 @@ export interface RemoteResourceDisplay {
   preview?: RemoteText;
   /** Ephemeral public generation state. Absent when idle; never a connectivity signal. */
   generation?: { phase: string; startedAt: number | null };
+  /** Optional roster activity; older hosts omit it, older controllers ignore it. */
+  teammateActivity?: { phase: string };
   timestamp?: number;
-  /** Latest visible reply in host time; controllers keep their own read position. */
+  /** Latest visible reply in host time. */
   lastReplyAt?: number;
+  /**
+   * Read position the host keeps for this conversation, in host time (0 = none yet). A host that
+   * sends it accepts the resource's `read` action; controllers merge it forward with their own
+   * position, so reading on any device clears the badge on the others. Older hosts omit it.
+   */
+  lastReadAt?: number;
   avatar?: RemoteResourceAvatar;
   status?: RemoteResourceStatus;
   badges?: RemoteResourceBadge[];
@@ -140,6 +148,8 @@ export interface RemoteResourceBlock {
 export interface RemoteCollectionItem {
   ref: RemoteResourceRef;
   display: RemoteResourceDisplay;
+  /** Optional Host-owned plugin chronology. Missing dates remain unknown on older Hosts. */
+  pluginOrder?: { addedAt?: number; recentIndex?: number };
   links: RemoteResourceLink[];
   actions?: RemoteActionDescriptor[];
   /** Opaque provider revision. Controllers compare it but never interpret it. */
@@ -225,6 +235,7 @@ export interface RemoteResourceChangedPayload {
 }
 
 const MAX_ID_CHARS = 160;
+const MAX_RESOURCE_ID_CHARS = 256;
 const MAX_CURSOR_CHARS = 1_024;
 const MAX_QUERY_CHARS = 1_000;
 const MAX_LOCALE_CHARS = 64;
@@ -282,7 +293,7 @@ export function parseRemoteResourceRef(value: unknown): RemoteResourceRef | null
   if (!record) return null;
   const collectionId = boundedText(record.collectionId, MAX_ID_CHARS);
   const kind = boundedText(record.kind, MAX_ID_CHARS);
-  const id = boundedText(record.id, MAX_ID_CHARS);
+  const id = boundedText(record.id, MAX_RESOURCE_ID_CHARS);
   return collectionId && kind && id ? { collectionId, kind, id } : null;
 }
 
@@ -397,6 +408,10 @@ export function resolveRemoteText(value: RemoteText, locale?: string): string {
   if (!locale || !value.translations || typeof value.translations !== 'object') return value.fallback;
   const exact = value.translations[locale];
   if (typeof exact === 'string' && exact) return exact;
+  // Copy from hosts that predate the classical editions falls back to their modern base.
+  const modernBase = locale === 'zh-Hant-x-lzh' ? 'zh-TW' : locale === 'zh-Hans-x-lzh' ? 'zh-CN' : undefined;
+  const modern = modernBase ? value.translations[modernBase] : undefined;
+  if (typeof modern === 'string' && modern) return modern;
   const language = locale.split('-')[0];
   const translated = value.translations[language];
   return typeof translated === 'string' && translated ? translated : value.fallback;

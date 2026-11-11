@@ -6,39 +6,48 @@
  * you are talking to, and the way into their settings. Two entrances, both
  * leading to the same place — the name/avatar lockup itself, and the gear at the
  * right end of the bar — because "click the name" is the discoverable one and
- * "the gear is on the right" is the learned one. Local teammates also get a
- * permanent way into their workbench here: the sidebar tab can be closed, and
- * nothing else reopens it.
+ * "the gear is on the right" is the learned one. Every teammate with a live main
+ * task (this computer's or another computer's) also gets the 近况 popover here —
+ * where it runs (and switching computers), the user's todos and its outputs —
+ * plus, for local teammates, the IM-style "add people" entry that turns this chat
+ * into a group or brings the teammate into one.
  */
 import { useMemo } from 'react';
-import { LayoutGrid, Settings2 } from 'lucide-react';
+import { Settings2 } from 'lucide-react';
 import { useLocation, useNavigate } from 'react-router-dom';
 import { useTranslation } from 'react-i18next';
 
 import { WINDOW_NO_DRAG_STYLE } from '@/components/layout/windowDrag';
 import { useRegisterContentHeader } from '../feature-context';
-import { openBotWorkbenchTab } from '@/features/right-sidebar/lib/openBotWorkbenchTab';
+import { BotAddToGroupMenu } from './BotAddToGroupMenu';
 import { BotAvatar } from './BotAvatar';
-import { isCindyDeviceBot } from './cindyDeviceRoster';
-import { CindyHeaderDevicePicker } from './CindyDevicePicker';
+import { BotGlanceButton } from './BotGlancePopover';
+import { useCompanionCloud } from './companionCloudStore';
 
 export interface BotChatIdentity {
   id: string;
   templateId?: string;
   deviceId?: string;
   deviceName?: string;
-  /** 本机伙伴主任务的 session id;有它才有工作台入口。远程名册里为 null。 */
+  /** 伙伴主任务的 session id(本机或那台电脑上的);有它才有近况入口。名册里尚未就绪时为 null。 */
   sessionId?: string | null;
   name: string;
   avatar?: string | null;
   avatarColor?: string | null;
+  /** Only the teammate's own canonical private chat (not channel routes or read-only history) can start a group. */
+  canonicalChat?: boolean;
 }
 
 export function BotSessionContentHeader({ bot }: { bot: BotChatIdentity }) {
   const { t } = useTranslation();
   const navigate = useNavigate();
   const location = useLocation();
-  const isCindy = isCindyDeviceBot(bot);
+  const cloud = useCompanionCloud();
+  // A cloud companion is one teammate wherever it runs: 近况 names its main computer and
+  // switches it, instead of listing per-computer copies (the older Cindy device picker).
+  const homeKnown =
+    cloud.enabled &&
+    cloud.actors.some((actor) => actor.externalId === bot.id && !!actor.homeDeviceId);
   const openSettings = () => {
     const search = new URLSearchParams(location.search);
     search.set('settings', '1');
@@ -60,25 +69,9 @@ export function BotSessionContentHeader({ bot }: { bot: BotChatIdentity }) {
         <BotAvatar bot={bot} size="xs" />
         <span className="min-w-0 truncate">{bot.name}</span>
       </button>
-      {isCindy ? <CindyHeaderDevicePicker bot={bot} /> : null}
       <div className="ml-auto flex shrink-0 items-center gap-1">
-        {bot.deviceId && !isCindy ? (
-          <span className="max-w-32 truncate text-12 text-[var(--text-tertiary)]">
-            {bot.deviceName}
-          </span>
-        ) : null}
-        {!bot.deviceId && bot.sessionId ? (
-          <button
-            type="button"
-            onClick={() => void openBotWorkbenchTab(bot.sessionId!, bot.id).catch(() => undefined)}
-            aria-label={t('bots.workbench.open')}
-            title={t('bots.workbench.open')}
-            className="flex h-7 w-7 shrink-0 items-center justify-center rounded-full text-[var(--text-tertiary)] hover:bg-[var(--surface-hover)] hover:text-[var(--text-primary)]"
-            style={WINDOW_NO_DRAG_STYLE}
-          >
-            <LayoutGrid size={15} />
-          </button>
-        ) : null}
+        {bot.canonicalChat && !bot.deviceId ? <BotAddToGroupMenu botId={bot.id} /> : null}
+        {bot.sessionId ? <BotGlanceButton bot={bot} cloudHome={homeKnown} /> : null}
         <button
           type="button"
           onClick={openSettings}
@@ -98,7 +91,8 @@ export function BotSessionContentHeader({ bot }: { bot: BotChatIdentity }) {
  * mounting registers, unmounting clears, and only the route-owning chat instance
  * renders it.
  */
-export function BotSessionContentHeaderRegistration({ bot }: { bot: BotChatIdentity }) {
+export function BotSessionContentHeaderRegistration(props: { bot: BotChatIdentity }) {
+  const { bot } = props;
   useRegisterContentHeader(useMemo(() => <BotSessionContentHeader bot={bot} />, [bot]));
   return null;
 }

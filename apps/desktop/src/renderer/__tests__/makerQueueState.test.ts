@@ -127,6 +127,7 @@ const state = (overrides: Partial<SessionChatState> = {}): SessionChatState => (
   lastAgentMeta: null,
   ...overrides,
   pendingRemoteDesktopConfirmation: overrides.pendingRemoteDesktopConfirmation ?? null,
+  pendingInputHandoff: overrides.pendingInputHandoff ?? null,
   pendingRemoteDesktopConfirmationQueue:
     overrides.pendingRemoteDesktopConfirmationQueue ?? [],
 });

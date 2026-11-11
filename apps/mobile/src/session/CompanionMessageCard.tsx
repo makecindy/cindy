@@ -1,14 +1,14 @@
+import { prNumberLabel } from '@cindy/maker-shared';
+import { prStatusQuery } from '@cindy/maker-shared';
 import { formatLocalizedSeconds } from './sessionDurationFormat';
 import { CompanionTaskResultCard } from './CompanionTaskResultCard';
 import { Component, useEffect, useRef, useState, useSyncExternalStore, type ReactNode } from 'react';
-import { useLocalSearchParams } from 'expo-router';
 import { useGuardedPush } from '@/utils/useGuardedPush';
 import { Animated, Easing, Linking, Pressable, StyleSheet, View } from 'react-native';
 import {
   CircleAlert,
   CircleCheck,
   GitPullRequest,
-  Square,
   ChevronRight,
   Layers,
   Megaphone,
@@ -23,11 +23,7 @@ import {
   type PrStatusResult,
 } from '@cindy/maker-shared';
 import { useTranslation } from 'react-i18next';
-import {
-  BOT_DELEGATION_STATUSES,
-  type BotDelegationListResult,
-  type BotDelegationCancelResult,
-} from '@cindy/maker-shared/botDelegation';
+import type { BotDelegationListResult, BotDelegationStatus } from '@cindy/maker-shared/botDelegation';
 import type { BotCollaborationMeta } from '@cindy/maker-shared/botCollaboration';
 import type { BotDirectMessageMeta } from '@cindy/maker-shared/botDirectMessage';
 import { resolveRemoteText } from '@cindy/device-link';
@@ -52,6 +48,7 @@ const TRACE_HIT_SLOP = { top: 6, bottom: 6 } as const;
 const AUX_HIT_SLOP = { top: 6, bottom: 6 } as const;
 import { useRemoteCompanionQuery } from './useRemoteCompanionQuery';
 import { prStatusVisual } from './prStatusVisual';
+import { useCompanionTaskSession } from './useCompanionTaskSession';
 
 class CompanionRenderBoundary extends Component<
   { children: ReactNode; fallback: ReactNode; resetKey: string },
@@ -72,8 +69,9 @@ class CompanionRenderBoundary extends Component<
   }
 }
 
-export function CompanionMessageCard({ message, renderMarkdown }: {
+export function CompanionMessageCard({ message, deviceId, renderMarkdown }: {
   message: NormalizedRemoteMessage;
+  deviceId: string;
   /** The conversation's Markdown renderer for frozen task results. */
   renderMarkdown?: (text: string) => ReactNode;
 }) {
@@ -84,18 +82,17 @@ export function CompanionMessageCard({ message, renderMarkdown }: {
       fallback={<Text style={styles.note}>{t('devices.companions.actionFailed')}</Text>}
       resetKey={message.key}
     >
-      <CompanionMessageCardContent message={message} renderMarkdown={renderMarkdown} />
+      <CompanionMessageCardContent message={message} deviceId={deviceId} renderMarkdown={renderMarkdown} />
     </CompanionRenderBoundary>
   );
 }
 
-function CompanionMessageCardContent({ message, renderMarkdown }: {
+function CompanionMessageCardContent({ message, deviceId, renderMarkdown }: {
   message: NormalizedRemoteMessage;
+  deviceId: string;
   renderMarkdown?: (text: string) => ReactNode;
 }) {
   const { t } = useTranslation();
-  const params = useLocalSearchParams<{ deviceId?: string }>();
-  const deviceId = typeof params.deviceId === 'string' ? params.deviceId : '';
   const styles = useThemedStyles(makeStyles);
   const { colors } = useTheme();
   const card = message.companion;
@@ -170,7 +167,14 @@ function CompanionPrivateTrace({ deviceId, meta }: { deviceId: string; meta: Bot
   );
 }
 
-function CompanionTaskCard({
+/** Stored rows that ended; an unfinished stored row is never shown as live (nothing updates it now). */
+const TERMINAL_STATUSES: ReadonlySet<BotDelegationStatus> = new Set(['completed', 'failed', 'cancelled', 'timed-out']);
+
+/**
+ * Read-only card of a V1 background task a teammate started (also from a group, BotGroupTaskCard).
+ * Live state comes from the original task; the stored row only supplies its ended status and facts.
+ */
+export function CompanionTaskCard({
   deviceId,
   parentSessionId,
   meta,
@@ -181,7 +185,6 @@ function CompanionTaskCard({
 }) {
   const { t } = useTranslation();
   const push = useGuardedPush();
-  const { invoke } = useDeviceLink();
   const styles = useThemedStyles(makeStyles);
   const { colors } = useTheme();
   const { value, online, error, refresh } = useRemoteCompanionQuery<BotDelegationListResult>(
@@ -193,29 +196,31 @@ function CompanionTaskCard({
     value?.ok && Array.isArray(value.delegations)
       ? (value.delegations.find((item) => item.id === meta.delegationId) ?? null)
       : null;
-  // Desktop parity: until the first read settles the task is still starting;
-  // a settled read without this row, or a host that cannot be read, is unverifiable.
-  const resolved = value !== null || error || !online;
+  const childSessionId = row?.childSessionId || meta.childSessionId;
+  const task = useCompanionTaskSession(deviceId, childSessionId);
+  // Like Desktop, the original task can still be running after the stored task ended.
+  const rowEnded = Boolean(row && TERMINAL_STATUSES.has(row.status));
   const status =
-    row && (BOT_DELEGATION_STATUSES as readonly string[]).includes(row.status)
-      ? row.status
-      : resolved ? 'unknown' : 'queued';
-  const title = row?.title || meta.objective.trim().split('\n')[0] || t('devices.companions.backgroundTask');
-  const [pending, setPending] = useState(false);
+    task.activity?.phase === 'error' ? 'failed'
+    : task.waiting || task.activity?.phase === 'needs-interaction' ? 'waiting'
+    : task.running ? 'running'
+    : task.activity?.phase === 'completed' ? 'completed'
+    : row && rowEnded ? row.status
+    : 'unknown';
+  const title = task.session?.title || row?.title || meta.objective.trim().split('\n')[0] || t('devices.companions.backgroundTask');
   const [actionFailed, setActionFailed] = useState(false);
   const [showPrs, setShowPrs] = useState(false);
   const [now, setNow] = useState(Date.now);
-  const childSessionId = row?.childSessionId || meta.childSessionId;
-  const active = Boolean(row && ['queued', 'running', 'waiting'].includes(row.status));
+  const ticking = Boolean(row) && !rowEnded && status === 'running';
   useEffect(() => {
-    if (!active) return;
+    if (!ticking) return;
     const timer = setInterval(() => setNow(Date.now()), 1000);
     return () => clearInterval(timer);
-  }, [active]);
-  const seconds = row
+  }, [ticking]);
+  const seconds = row && (ticking || rowEnded)
     ? Math.max(
         0,
-        Math.floor(((active ? now : (row.completedAt ?? row.updatedAt)) - row.createdAt) / 1000),
+        Math.floor(((ticking ? now : (row.completedAt ?? row.updatedAt)) - row.createdAt) / 1000),
       )
     : null;
   const duration =
@@ -250,7 +255,7 @@ function CompanionTaskCard({
     [
       {
         sessionId: childSessionId,
-        queries: prs.map(({ owner, repo, prNumber }) => ({ owner, repo, prNumber })),
+        queries: prs.map(prStatusQuery),
       },
     ],
     {
@@ -262,7 +267,11 @@ function CompanionTaskCard({
     const result = Array.isArray(prStatuses.value)
       ? prStatuses.value.find((s) => prStatusKey(s) === prStatusKey(ref))
       : undefined;
-    const { Icon, color } = prStatusVisual(result?.ok ? result.status : null, colors);
+    const { Icon, color } = prStatusVisual(
+      result?.ok ? result.status : null,
+      colors,
+      result?.ok ? result.conflicts : null,
+    );
     return <Icon size={iconSize.sm} color={color} />;
   };
   const openPr = (url: string) => {
@@ -270,34 +279,29 @@ function CompanionTaskCard({
     setActionFailed(false);
     void Linking.openURL(url).catch(() => setActionFailed(true));
   };
-  const stop = async () => {
-    if (!online || pending) return;
-    setPending(true);
-    setActionFailed(false);
-    try {
-      const result = await invoke<BotDelegationCancelResult>(
-        deviceId,
-        'maker:bot-delegation:cancel',
-        [parentSessionId, meta.delegationId],
-      );
-      setActionFailed(!result.ok);
-      refresh();
-    } catch {
-      setActionFailed(true);
-    } finally {
-      setPending(false);
-    }
-  };
-  const openTask = childSessionId ? () => push({
+  const openTask = childSessionId && deviceId && !task.originConflict ? () => push({
     pathname: '/sessions/[sessionId]',
     params: { deviceId, sessionId: childSessionId },
   }) : undefined;
   const stale = (!online || error || associated.error || prStatuses.error
-    || (Array.isArray(prStatuses.value) && prStatuses.value.some((result) => !result.ok))) && row;
+    || (Array.isArray(prStatuses.value) && prStatuses.value.some((result) => !result.ok))) && (row || task.session);
   const facts = [
     duration,
-    Array.isArray(row?.artifacts) && row.artifacts.length > 0 ? t('devices.companions.artifactCount', { count: row.artifacts.length }) : null,
-    prs.length === 1 ? `${prs[0].owner}/${prs[0].repo} #${prs[0].prNumber}` : prs.length > 1 ? t('devices.companions.prCount', { count: prs.length }) : null,
+    Array.isArray(row?.artifacts) && row.artifacts.length > 0
+      ? t('devices.companions.artifactCount', { count: row.artifacts.length })
+      : null,
+    prs.length === 1
+      ? `${prs[0].owner}/${prs[0].repo} ${prNumberLabel(prs[0])}`
+      : prs.length > 1
+        ? t(
+            prs.every((pr) => pr.provider === 'gitlab')
+              ? 'devices.companions.mrCount'
+              : prs.some((pr) => pr.provider === 'gitlab')
+                ? 'devices.companions.prMrCount'
+                : 'devices.companions.prCount',
+            { count: prs.length },
+          )
+        : null,
   ].filter((part): part is string => !!part);
   return (
     <View style={styles.card} testID="companion.taskCard">
@@ -326,47 +330,54 @@ function CompanionTaskCard({
       ) : !online ? (
         <Text style={styles.note}>{t('devices.resources.hostOffline')}</Text>
       ) : null}
-      {row?.status === 'waiting' ? (
-        <Text numberOfLines={2} style={styles.note}>
-          {row.pendingInteraction?.summary || t('devices.companions.retrying')}
-        </Text>
-      ) : null}
       {row?.lastError && (row.status === 'failed' || row.status === 'timed-out') ? (
         <Text numberOfLines={2} style={styles.error}>
           {row.lastError.replace(/^[A-Z_]+:\s*/, '')}
         </Text>
       ) : null}
-      {prs.length > 0 || active || error ? <View style={styles.actions}>
-        {prs.length > 0 ? (
-          <Pressable
-            accessibilityRole="button"
-            accessibilityState={prs.length > 1 ? { expanded: showPrs } : undefined}
-            hitSlop={AUX_HIT_SLOP}
-            style={({ pressed }) => [styles.action, pressed && mobileInteractionStyles.pressed]}
-            onPress={() => (prs.length === 1 ? openPr(sessionPrUrl(prs[0])) : setShowPrs(!showPrs))}
-          >
-            {prs.length === 1 ? prIcon(prs[0]) : <GitPullRequest size={iconSize.sm} color={colors.textPrimary} />}
-            <Text style={styles.actionLabel}>{t('devices.companions.viewPr')}</Text>
-          </Pressable>
-        ) : null}
-        {active ? (
-          <Pressable
-            accessibilityRole="button"
-            disabled={!online || pending}
-            hitSlop={AUX_HIT_SLOP}
-            style={({ pressed }) => [styles.action, (!online || pending) && styles.disabled, pressed && mobileInteractionStyles.pressed]}
-            onPress={() => void stop()}
-          >
-            <Square size={iconSize.sm} color={colors.textPrimary} />
-            <Text style={styles.actionLabel}>{t('devices.companions.stopTask')}</Text>
-          </Pressable>
-        ) : null}
-        {error ? (
-          <Pressable accessibilityRole="button" hitSlop={AUX_HIT_SLOP} style={({ pressed }) => [styles.action, pressed && mobileInteractionStyles.pressed]} onPress={refresh}>
-            <Text style={styles.actionLabel}>{t('devices.resources.retry')}</Text>
-          </Pressable>
-        ) : null}
-      </View> : null}
+      {prs.length > 0 || error ? (
+        <View style={styles.actions}>
+          {prs.length > 0 ? (
+            <Pressable
+              accessibilityRole="button"
+              accessibilityState={prs.length > 1 ? { expanded: showPrs } : undefined}
+              hitSlop={AUX_HIT_SLOP}
+              style={({ pressed }) => [styles.action, pressed && mobileInteractionStyles.pressed]}
+              onPress={() =>
+                prs.length === 1 ? openPr(sessionPrUrl(prs[0])) : setShowPrs(!showPrs)
+              }
+            >
+              {prs.length === 1 ? (
+                prIcon(prs[0])
+              ) : (
+                <GitPullRequest size={iconSize.sm} color={colors.textPrimary} />
+              )}
+              <Text style={styles.actionLabel}>
+                {t(
+                  prs.some((pr) => pr.provider === 'gitlab')
+                    ? prs.every((pr) => pr.provider === 'gitlab')
+                      ? 'devices.companions.viewMr'
+                      : 'devices.companions.viewPrMr'
+                    : 'devices.companions.viewPr',
+                )}
+              </Text>
+            </Pressable>
+          ) : null}
+          {error ? (
+            <Pressable
+              accessibilityRole="button"
+              hitSlop={AUX_HIT_SLOP}
+              style={({ pressed }) => [styles.action, pressed && mobileInteractionStyles.pressed]}
+              onPress={() => {
+                refresh();
+                task.refresh();
+              }}
+            >
+              <Text style={styles.actionLabel}>{t('devices.resources.retry')}</Text>
+            </Pressable>
+          ) : null}
+        </View>
+      ) : null}
       {showPrs && prs.length > 1 ? (
         <View>
           {prs.map((pr) => (
@@ -378,7 +389,7 @@ function CompanionTaskCard({
             >
               {prIcon(pr)}
               <Text style={styles.note}>
-                {pr.owner}/{pr.repo} #{pr.prNumber}
+                {pr.owner}/{pr.repo} {prNumberLabel(pr)}
               </Text>
             </Pressable>
           ))}
@@ -459,5 +470,4 @@ const makeStyles = (colors: ThemeColors) =>
       backgroundColor: colors.surfaceChip,
     },
     prOption: { minHeight: 44, justifyContent: 'center' },
-    disabled: { opacity: 0.5 },
   });

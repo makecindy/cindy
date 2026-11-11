@@ -50,3 +50,12 @@ describe('channel policy for scheduler command execution', () => {
     }
   });
 });
+
+describe('channel policy for Host app update cards', () => {
+  it.each([
+    ['cindy.app.update', { from: '0.1.86', to: '0.1.90' }],
+    ['cindy.app.auto_update', { enabled: true }],
+  ])('lets the owner answer the %s card instead of hard-denying it', (toolName, input) => {
+    expect(checkChannelDestructiveToolCall(toolName, input)).toEqual({ destructive: false });
+  });
+});

@@ -1,4 +1,5 @@
 import { throwIpcError } from '../utils/ipcValidate.js';
+import { assertCindyMakeSessionAvailable } from '../cindy-make/featureGate.js';
 import {
   CINDY_MAKE_SESSION_SOURCE,
   CINDY_MAKE_VENDOR_OPTION_KEY,
@@ -22,7 +23,9 @@ export async function applyPersistedCindyMakeMarker(
   readSource: (sessionId: string) => Promise<string | null>,
 ): Promise<boolean> {
   if (typeof o.id !== 'string' || !o.id) return false;
-  if ((await readSource(o.id)) !== CINDY_MAKE_SESSION_SOURCE) return false;
+  const source = await readSource(o.id);
+  assertCindyMakeSessionAvailable(source);
+  if (source !== CINDY_MAKE_SESSION_SOURCE) return false;
   if (o.remoteHostId) {
     throwIpcError('UNSUPPORTED_CAPABILITY', 'Cindy Make tasks are local-only');
   }

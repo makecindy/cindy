@@ -12,6 +12,8 @@ import {
 } from "./mobileDebugFiles";
 import { getMobileMarkdownRenderMetrics } from "../session/mobileMarkdownRenderMetrics";
 import { getMobileMessageWebViewMetrics } from "../session/mobileMessageWebViewMetrics";
+import { recordLoopLag, recordUiThreadLag, setJankMetricsEnabled, takeJankMetrics, takeSyncWorkMetrics } from "./jankMetrics";
+import { createUiThreadProbe, createWorkletUiPing, UI_THREAD_STALL_MS } from "./uiThreadProbe";
 import {
   MAX_DIAGNOSTIC_EVENTS,
   projectDiagnostic,
@@ -19,6 +21,7 @@ import {
   type DiagnosticEvent,
 } from "./diagnosticEvents";
 
+const LOOP_LAG_SAMPLE_MS = 250;
 const KEY = "cindy.mobile.localDiagnostics.v1";
 const DEFAULT_ENABLED = process.env.EXPO_PUBLIC_CINDY_DIAGNOSTICS === "1";
 let enabled = false;
@@ -36,6 +39,8 @@ let debugBatch = "";
 let debugBytes = 0;
 let dropped = 0;
 const MAX_PENDING_BYTES = 512 * 1024;
+/** About every 30 s on the 2 s probe, plus immediately after any stall. */
+const JANK_METRICS_EVERY_TICKS = 15;
 
 function updateDebugSink(): void {
   setMobileDebugSink(
@@ -239,6 +244,11 @@ export function startLocalDiagnostics(): () => void {
   let lastTick = performance.now();
   let lastWallTick = Date.now();
   let lifecycleAt = lastTick;
+  let lastRenderSnapshot: string | undefined;
+  let lastRenderAt = -Infinity;
+  let lastLoopSample = lastTick;
+  let loopTimer: ReturnType<typeof setInterval> | undefined;
+  let uiProbe: ReturnType<typeof createUiThreadProbe> | null = null;
   void hydrateDiagnostics().then(() => {
     if (!stopped)
       mobileDebugLog("info", "lifecycle", "app started", { appState: state });
@@ -249,13 +259,18 @@ export function startLocalDiagnostics(): () => void {
     lastTick = performance.now();
     lastWallTick = Date.now();
     lifecycleAt = lastTick;
+    lastRenderSnapshot = undefined;
+    uiProbe?.reset();
+    lastLoopSample = lastTick;
     mobileDebugLog("info", "lifecycle", `app ${next}`);
     void flushDiagnostics().catch(() => {});
   });
   let timer: ReturnType<typeof setInterval> | undefined;
+  let ticksSinceJankMetrics = 0;
   const tick = () => {
     const now = performance.now();
-    if (state === "active" && now - lastTick > 3000)
+    const stalled = state === "active" && now - lastTick > 3000;
+    if (stalled)
       mobileDebugLog("warn", "lifecycle", "js stall", {
         elapsedMs: now - lastTick - 2000,
         // A timer gap alone cannot distinguish busy JS from process suspension.
@@ -264,21 +279,62 @@ export function startLocalDiagnostics(): () => void {
       });
     lastTick = now;
     lastWallTick = Date.now();
-    if (enabled)
-      mobileDebugLog("debug", "performance", "render metrics", {
+    if (state === "active") uiProbe?.sample();
+    if (enabled) {
+      const metrics = {
         markdown: getMobileMarkdownRenderMetrics(),
         webViews: getMobileMessageWebViewMetrics(),
-      });
+      };
+      const snapshot = JSON.stringify(metrics);
+      if (stalled || snapshot !== lastRenderSnapshot || now - lastRenderAt >= 30_000) {
+        mobileDebugLog("debug", "performance", "render metrics", metrics);
+        lastRenderSnapshot = snapshot;
+        lastRenderAt = now;
+      }
+    }
+    // Counters cover the interval since the previous line, so a line written
+    // right after a stall attributes the work that ran during it.
+    ticksSinceJankMetrics += 1;
+    if (
+      enabled &&
+      (stalled || ticksSinceJankMetrics >= JANK_METRICS_EVERY_TICKS)
+    ) {
+      ticksSinceJankMetrics = 0;
+      mobileDebugLog("debug", "performance", "jank metrics", takeJankMetrics());
+      mobileDebugLog("debug", "performance", "sync work metrics", takeSyncWorkMetrics());
+    }
     void flushDiagnostics().catch(() => {});
   };
   const syncProbe = () => {
+    setJankMetricsEnabled(enabled && !stopped);
     if (!enabled || stopped) {
       if (timer !== undefined) clearInterval(timer);
       timer = undefined;
+      if (loopTimer !== undefined) clearInterval(loopTimer);
+      loopTimer = undefined;
+      uiProbe = null;
     } else if (timer === undefined) {
       lastTick = performance.now();
       lastWallTick = Date.now();
+      lastRenderSnapshot = undefined;
       timer = setInterval(tick, 2000);
+      lastLoopSample = lastTick;
+      loopTimer = setInterval(() => {
+        const sampledAt = performance.now();
+        if (state === "active") recordLoopLag(Math.max(0, sampledAt - lastLoopSample - LOOP_LAG_SAMPLE_MS));
+        lastLoopSample = sampledAt;
+      }, LOOP_LAG_SAMPLE_MS);
+      const ping = createWorkletUiPing();
+      uiProbe = ping && createUiThreadProbe({
+        ping,
+        onLag: (lagMs) => {
+          recordUiThreadLag(lagMs);
+          if (lagMs >= UI_THREAD_STALL_MS) mobileDebugLog("warn", "lifecycle", "ui thread stall", { lagMs });
+        },
+        onUnanswered: (pendingMs) => {
+          mobileDebugLog("warn", "lifecycle", "ui thread ping unanswered", { pendingMs });
+        },
+      });
     }
   };
   recordingListeners.add(syncProbe);

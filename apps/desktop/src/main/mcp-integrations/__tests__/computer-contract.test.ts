@@ -1,11 +1,47 @@
 import { describe, expect, it } from 'vitest';
 import fixture from './fixtures/cua-driver-0.23.2.json';
-import { adaptComputerDriverArgs, type ComputerDriverToolSchema } from '../computer-contract.js';
+import {
+  adaptComputerDriverArgs,
+  selectAdvertisedComputerDriverArgs,
+  type ComputerDriverToolSchema,
+} from '../computer-contract.js';
 
 const schemas = new Map(
   fixture.tools.map((tool) => [tool.name, tool.inputSchema as ComputerDriverToolSchema]),
 );
 describe('installed Computer Use contract', () => {
+  // #9887 unit regression: desktop click credentials and target must survive
+  // adaptation; older window-only drivers cannot accept this input safely.
+  it('preserves explicit capture-bound desktop input and rejects incompatible drivers', () => {
+    const args = { target: { kind: 'desktop', display_id: 'primary' }, capture_id: 'capture-1', x: 10, y: 20, delivery_mode: 'foreground' };
+    const modern = new Map<string, ComputerDriverToolSchema>([['click', {
+      properties: { target: {}, capture_id: {}, x: {}, y: {}, delivery_mode: {} }, additionalProperties: false,
+    }]]);
+    expect(adaptComputerDriverArgs('click', args, modern)).toEqual(args);
+    expect(() => adaptComputerDriverArgs('click', args, schemas)).toThrow('capture-bound desktop input');
+    expect(() => adaptComputerDriverArgs('get_desktop_state', {}, schemas)).toThrow('does not advertise');
+  });
+  it('adapts 0.47 desktop drag only after host capture validation', () => {
+    const driver = new Map<string, ComputerDriverToolSchema>([
+      ['get_desktop_state', {}],
+      ['drag', { properties: { target: {}, session: {}, from_x: {}, from_y: {}, to_x: {}, to_y: {} }, additionalProperties: false }],
+    ]);
+    const args = { target: { kind: 'desktop', display_id: 'primary' }, session: 'same-session', capture_id: 'observed', from_x: 1, from_y: 2, to_x: 3, to_y: 4 };
+    expect(() => adaptComputerDriverArgs('drag', args, driver)).toThrow('capture-bound');
+    const { capture_id: _captureId, ...expected } = args;
+    expect(adaptComputerDriverArgs('drag', args, driver, { desktopCaptureValidated: true })).toEqual(expected);
+  });
+  // Production argument adapter, unit tier: new incremental evidence requests
+  // must still dispatch with the existing old-driver fixture (previously untested).
+  it('preserves Markdown evidence diffs only for drivers advertising since', () => {
+    const input = { pid: 1, window_id: 2, include_screenshot: false, tree_format: 'markdown', since: 'latest' };
+    const modern = new Map<string, ComputerDriverToolSchema>([['get_window_state', {
+      properties: { pid: {}, window_id: {}, include_screenshot: {}, tree_format: {}, since: {} },
+      additionalProperties: false,
+    }]]);
+    expect(adaptComputerDriverArgs('get_window_state', input, modern)).toEqual(input);
+    expect(adaptComputerDriverArgs('get_window_state', input, schemas)).not.toHaveProperty('since');
+  });
   it('preserves driver credentials and rejects missing observation provenance', () => {
     const args = {
       pid: 1,
@@ -47,6 +83,49 @@ describe('installed Computer Use contract', () => {
       adaptComputerDriverArgs('get_window_state', { include_screenshot: false }, legacy),
     ).toEqual({ capture_mode: 'ax' });
   });
+  it('addresses token-only drivers with the observed row and asks for structured elements', () => {
+    // cua-driver 0.35+: Markdown-only reads by default, actions take only element_token.
+    const tokenOnly = new Map<string, ComputerDriverToolSchema>([
+      ['click', { properties: { pid: {}, window_id: {}, element_token: {} }, additionalProperties: false }],
+      ['get_window_state', {
+        properties: { pid: {}, window_id: {}, include_screenshot: {}, max_elements: {}, max_depth: {}, tree_format: {} },
+        required: ['pid', 'window_id'],
+        additionalProperties: false,
+      }],
+    ]);
+    expect(adaptComputerDriverArgs('click', {
+      pid: 1, window_id: 2, element_index: 5, snapshot_id: 's0000002d',
+    }, tokenOnly)).toEqual({ pid: 1, window_id: 2, element_token: 's0000002d:5' });
+    expect(adaptComputerDriverArgs('click', {
+      pid: 1, window_id: 2, element_index: 5, element_token: 's0000002d:5', snapshot_id: 's0000002d',
+    }, tokenOnly)).toEqual({ pid: 1, window_id: 2, element_token: 's0000002d:5' });
+    expect(() => adaptComputerDriverArgs('click', { pid: 1, window_id: 2, element_index: 5 }, tokenOnly))
+      .toThrow('fresh snapshot_id or element_token');
+    expect(adaptComputerDriverArgs('get_window_state', { pid: 1, window_id: 2 }, tokenOnly))
+      .toMatchObject({ tree_format: 'both' });
+    expect(adaptComputerDriverArgs('get_window_state', { pid: 1, window_id: 2, tree_format: 'markdown' }, tokenOnly))
+      .toMatchObject({ tree_format: 'markdown' });
+    // Older drivers have no tree_format; Cindy's internal reads must still dispatch.
+    expect(adaptComputerDriverArgs('get_window_state', { pid: 1, window_id: 2, tree_format: 'markdown' }, schemas))
+      .not.toHaveProperty('tree_format');
+  });
+  // #9695 tool repair: preserve the screenshot point on capable drivers, and
+  // fail before input on older closed contracts rather than silently scrolling
+  // their window center. Existing coverage only exercised click arguments; unit.
+  it('preserves scroll coordinates or rejects an older driver without them', () => {
+    const point = { pid: 1, window_id: 2, x: 1055.5, y: 609, direction: 'down', delivery_mode: 'foreground' };
+    const current = new Map<string, ComputerDriverToolSchema>([['scroll', {
+      properties: { pid: {}, window_id: {}, x: {}, y: {}, direction: {}, delivery_mode: {} },
+      additionalProperties: false,
+    }]]);
+    expect(adaptComputerDriverArgs('scroll', point, current)).toEqual(point);
+    const older = new Map<string, ComputerDriverToolSchema>([['scroll', {
+      properties: { pid: {}, window_id: {}, direction: {}, delivery_mode: {} },
+      additionalProperties: false,
+    }]]);
+    expect(() => adaptComputerDriverArgs('scroll', point, older)).toThrow('does not accept x');
+  });
+
   it('rejects unavailable tools and incompatible arguments before dispatch', () => {
     expect(() => adaptComputerDriverArgs('missing', {}, schemas)).toThrow('does not advertise');
     const olderClick = new Map([['click', {
@@ -75,5 +154,38 @@ describe('installed Computer Use contract', () => {
     expect(() =>
       adaptComputerDriverArgs('verify_state', { pid: 1, window_id: 2 }, schemas),
     ).toThrow('requires expect');
+  });
+  // 测试价值：#6979 中 cua-driver 0.38 的闭合 schema 移除了旧光标样式字段；生产契约
+  // 协商必须在派发前跳过无兼容参数的可选装饰，避免每个新会话产生拒绝日志。旧覆盖只验证
+  // 必需动作的 fail-closed 适配；最小失败输入是一个仅声明新运动字段的闭合 schema，unit tier。
+  it('negotiates optional cursor decoration against the advertised schema', () => {
+    const legacyInput = {
+      cursor_id: 'session',
+      cursor_icon: 'arrow',
+      cursor_color: '#DF0C27',
+    };
+    const v038 = new Map<string, ComputerDriverToolSchema>([
+      ['set_agent_cursor_motion', {
+        properties: { arc_flow: {}, style: {}, timing: {} },
+        additionalProperties: false,
+      }],
+    ]);
+    expect(selectAdvertisedComputerDriverArgs('set_agent_cursor_motion', legacyInput, v038)).toBeNull();
+    expect(selectAdvertisedComputerDriverArgs('set_agent_cursor_style', legacyInput, v038)).toBeNull();
+
+    const compatible = new Map<string, ComputerDriverToolSchema>([
+      ['set_agent_cursor_motion', {
+        properties: { cursor_color: {} },
+        additionalProperties: false,
+      }],
+    ]);
+    expect(selectAdvertisedComputerDriverArgs('set_agent_cursor_motion', legacyInput, compatible))
+      .toEqual({ cursor_color: '#DF0C27' });
+
+    const permissive = new Map<string, ComputerDriverToolSchema>([
+      ['set_agent_cursor_motion', { additionalProperties: true }],
+    ]);
+    expect(selectAdvertisedComputerDriverArgs('set_agent_cursor_motion', legacyInput, permissive))
+      .toEqual(legacyInput);
   });
 });

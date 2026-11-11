@@ -1,8 +1,11 @@
-import { getAgentIslandEnabled, isAgentIslandSupported } from '@/hooks/useAgentIslandSettings';
+import { hasAgentIslandNotificationSound } from '../../shared/agentIsland';
+import { getAgentIslandEnabled, getAgentIslandSoundSettings, isAgentIslandSupported } from '@/hooks/useAgentIslandSettings';
 import { getFeishuNotificationsEnabled } from '@/hooks/useFeishuNotificationSettings';
 import { getNotificationsEnabled } from '@/hooks/useNotificationSettings';
 import { isDefaultDraftSessionTitle } from '@cindy/maker-shared/session-title';
 import { getRemoteSessionActivity, subscribeRemoteSessionActivity } from '@/features/device-link/remoteSessionActivityStore';
+import { isReviewSessionSource } from '../../shared/sessionSource';
+import { getDataOwnerGeneration, isDataOwnerGenerationCurrent } from '@/contexts/dataOwnerGeneration';
 
 export type SessionEventNotificationKind = 'done' | 'error' | 'needs-reply';
 
@@ -38,6 +41,30 @@ export function findSessionNotificationSession<T extends { id: string; title?: u
  */
 export const BOT_GROUP_LANE_SESSION: unique symbol = Symbol('bot-group-lane-session');
 
+/**
+ * Tasks omitted from the ordinary task list never notify on their own:
+ * - /review Reviewer tasks publish their result to the source task, which is where
+ *   the user (and the source agent) continues;
+ * - plugin background tasks (`hiddenAt`) are disclosed on the plugin detail page
+ *   and notify again once the user shows them in the task list.
+ */
+export async function isReviewSessionNotificationTarget(sessionId: string): Promise<boolean> {
+  const row = await window.electronAPI.localDb.sessions.get(sessionId).catch(() => null);
+  return (
+    !!row
+    && typeof row === 'object'
+    && (
+      isReviewSessionSource((row as { source?: unknown }).source)
+      || isBackgroundTaskNotificationTarget(row as { hiddenAt?: unknown })
+    )
+  );
+}
+
+/** Plugin background task: no OS / in-app completion notification while hidden. */
+export function isBackgroundTaskNotificationTarget(session: { hiddenAt?: unknown } | null | undefined): boolean {
+  return typeof session?.hiddenAt === 'string' && session.hiddenAt.length > 0;
+}
+
 /** Resolve Bot-owned tasks omitted from the ordinary desktop session list. */
 export async function botOwnedSessionNotificationTitle(
   sessionId: string,
@@ -54,7 +81,11 @@ export async function botOwnedSessionNotificationTitle(
       && (row as { id?: unknown }).id === sessionId,
     ) as { title?: unknown; role?: unknown; kind?: unknown } | undefined;
     if (!session) continue;
-    if (session.role === 'group' || session.kind === 'group') return BOT_GROUP_LANE_SESSION;
+    // 群专线与伙伴的 IM 专线都是隐藏专线，不发系统通知。
+    if (
+      session.role === 'group' || session.kind === 'group'
+      || session.role === 'channel' || session.kind === 'channel'
+    ) return BOT_GROUP_LANE_SESSION;
     const sessionTitle = typeof session.title === 'string' ? session.title.trim() : '';
     return sessionTitle && sessionTitle !== bot.name
       ? `${bot.name} · ${sessionTitle}`
@@ -79,19 +110,64 @@ export function sendSessionEventNotification(
      */
     remoteDevice?: boolean;
     remoteDeviceId?: string | null;
+    /** Main owns the fixed-copy phone push for input-handoff steps. */
+    mobile?: boolean;
+    /** Explicit Feishu delivery override for the ordinary notification path. */
+    feishu?: boolean;
+    /** Main owns the phone push; Feishu falls back only without an IM target. */
+    inputHandoff?: true;
+    /** The request that caused this event, independent of later task state. */
+    inputHandoffRequestId?: string;
+    /**
+     * Stable identity of a repeated needs-reply or error. Main collapses two
+     * deliveries of the same id into one desktop toast. Absent when the turn
+     * that produced the event has no clock yet; that delivery still notifies.
+     */
+    alertEventId?: string;
   } = {},
 ): void {
   // The user is already looking at Cindy. In-app attention remains available,
   // but an OS/external notification would be duplicate noise.
   if (typeof document !== 'undefined' && document.hasFocus()) return;
 
-  if (kind === 'done' && options.remoteDeviceId) {
-    sendRemoteCompletionNotification(sessionId, options.remoteDeviceId, () =>
-      deliverSessionEventNotification(sessionId, title, kind, true));
+  if (kind === 'needs-reply' && options.inputHandoff) {
+    // Keep the desktop reminder immediate; Main owns request-scoped IM routing.
+    deliverSessionEventNotification(sessionId, title, kind, options.remoteDevice === true,
+      { ...options, mobile: false, feishu: false });
+    // The controller cannot resolve the execution host's IM bindings locally.
+    if (options.remoteDevice !== true && options.feishu !== false && options.inputHandoffRequestId
+      && getFeishuNotificationsEnabled()) {
+      void sendUnhandledHandoffFeishuNotification(sessionId, title, options.inputHandoffRequestId);
+    }
     return;
   }
 
-  deliverSessionEventNotification(sessionId, title, kind, options.remoteDevice === true);
+  if (kind === 'done' && options.remoteDeviceId) {
+    sendRemoteCompletionNotification(sessionId, options.remoteDeviceId, () =>
+      deliverSessionEventNotification(sessionId, title, kind, true, options));
+    return;
+  }
+
+  deliverSessionEventNotification(sessionId, title, kind, options.remoteDevice === true, options);
+}
+
+/** Main resolves the event's IM ownership; persisted source alone is not a live route. */
+async function sendUnhandledHandoffFeishuNotification(sessionId: string, title: string, requestId: string): Promise<void> {
+  const owner = getDataOwnerGeneration();
+  try {
+    const row = await window.electronAPI.localDb.sessions.get(sessionId);
+    // Missing session data is not proof of a valid local notification target.
+    if (!row || typeof row !== 'object' || Array.isArray(row)) return;
+    if (!isDataOwnerGenerationCurrent(owner) || !getFeishuNotificationsEnabled()
+      || (typeof document !== 'undefined' && document.hasFocus())) return;
+    await window.electronAPI.notificationShowSessionEvent({
+      sessionId, title, kind: 'needs-reply', markAttention: false,
+      inputHandoffRequestId: requestId,
+      channels: { desktop: false, feishu: true, mobile: false },
+    });
+  } catch {
+    // Best effort: a failed lookup never delays the desktop or duplicates an IM pointer.
+  }
 }
 
 const pendingRemoteCompletions = new Map<string, () => void>();
@@ -101,10 +177,13 @@ function sendRemoteCompletionNotification(sessionId: string, deviceId: string, d
   const key = JSON.stringify([deviceId, sessionId]);
   if (pendingRemoteCompletions.has(key)) return;
   const activity = getRemoteSessionActivity(sessionId, deviceId);
-  if (activity?.phase === 'completed' && activity.completionNotification === 'teammate') return;
+  // A clear can arrive before the renderer's delayed done callback. Missing
+  // activity is not proof of a new completion (including on older hosts).
+  if (!activity) return;
+  if (activity.phase === 'completed' && (activity.completionNotification === 'teammate' || activity.completionNotification === 'silent')) return;
   if (activity?.phase === 'error' || activity?.phase === 'needs-interaction') return;
-  if (!activity || (activity.phase === 'completed' && activity.completionNotification !== 'pending')) {
-    deliver(); // Older hosts retain their original notification behavior.
+  if (activity.phase === 'completed' && activity.completionNotification !== 'pending') {
+    deliver(); // Older hosts still publish ordinary unread completion activity.
     return;
   }
   let sawPendingCompletion = activity.phase === 'completed';
@@ -121,12 +200,18 @@ function sendRemoteCompletionNotification(sessionId: string, deviceId: string, d
     pendingRemoteCompletions.delete(key);
     // Read, disconnect, error, interaction or a replacement turn supersedes this
     // completion request. Only the source's resolved ordinary completion sends.
-    if (latest?.phase === 'completed' && latest.completionNotification !== 'teammate') deliver();
+    if (latest?.phase === 'completed' && latest.completionNotification !== 'teammate' && latest.completionNotification !== 'silent') deliver();
   });
   pendingRemoteCompletions.set(key, cancel);
 }
 
-function deliverSessionEventNotification(sessionId: string, title: string, kind: SessionEventNotificationKind, remoteDevice: boolean): void {
+function deliverSessionEventNotification(
+  sessionId: string,
+  title: string,
+  kind: SessionEventNotificationKind,
+  remoteDevice: boolean,
+  options: { mobile?: boolean; feishu?: boolean; remoteDeviceId?: string | null; alertEventId?: string },
+): void {
   // A handoff can finish after the user has opened Cindy or changed preferences.
   if (typeof document !== 'undefined' && document.hasFocus()) return;
 
@@ -137,12 +222,16 @@ function deliverSessionEventNotification(sessionId: string, title: string, kind:
     title,
     kind,
     ...(remoteDevice ? { markAttention: false } : {}),
+    ...(options.remoteDeviceId ? { remoteDeviceId: options.remoteDeviceId } : {}),
+    // Completions keep their own turn identity in main. An alert id on a done
+    // payload is rejected, so only carry it for the two kinds it describes.
+    ...(kind !== 'done' && options.alertEventId ? { alertEventId: options.alertEventId } : {}),
     channels: {
-      desktop: !remoteDevice && getNotificationsEnabled() && !islandActive,
-      feishu: getFeishuNotificationsEnabled(),
+      desktop: !remoteDevice && getNotificationsEnabled() && (!islandActive || !hasAgentIslandNotificationSound(getAgentIslandSoundSettings(), kind)),
+      feishu: options.feishu !== false && getFeishuNotificationsEnabled(),
       // Mobile owns registration/unregistration of its push token. There is
       // deliberately no second desktop setting for the same channel.
-      mobile: true,
+      mobile: options.mobile !== false,
     },
   });
 }

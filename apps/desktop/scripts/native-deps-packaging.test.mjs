@@ -3,6 +3,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { preparePackagedNodePty } from '../forge-node-pty';
+import { prunePackagedRuntime } from '../forge-prune-runtime';
 
 const windowsFiles = [
   'pty.node',
@@ -43,6 +44,11 @@ describe('native dependency packaging', () => {
     ['darwin', 'arm64'],
   ])('uses the complete %s/%s prebuild without requiring compilation', (platform, arch) => {
     const f = fixture(platform, arch);
+    const other = path.join(f.packageDir, 'prebuilds', 'other-platform');
+    fs.mkdirSync(other);
+    fs.writeFileSync(path.join(other, 'pty.node'), 'wrong binding');
+    const license = path.join(f.packageDir, 'prebuilds', 'LICENSE');
+    fs.writeFileSync(license, 'license');
     expect(preparePackagedNodePty(f.buildPath, platform, arch)).toEqual({
       rebuild: false,
       nativePath: path.join(f.prebuildDir, 'pty.node'),
@@ -50,6 +56,8 @@ describe('native dependency packaging', () => {
     for (const file of f.files) {
       expect(fs.readFileSync(path.join(f.prebuildDir, file), 'utf8')).toBe('fixture binary');
     }
+    expect(fs.existsSync(other)).toBe(false);
+    expect(fs.readFileSync(license, 'utf8')).toBe('license');
   });
 
   it.each(windowsFiles)('rejects a missing Windows runtime file: %s', (file) => {
@@ -105,9 +113,45 @@ describe('native dependency packaging', () => {
 
   it.each(['x64', 'arm64'])('keeps the existing Linux/%s source build', (arch) => {
     const f = fixture('linux', arch);
+    const source = path.join(f.packageDir, 'src', 'unix', 'pty.cc');
+    fs.mkdirSync(path.dirname(source), { recursive: true });
+    fs.writeFileSync(source, 'build input');
     expect(preparePackagedNodePty(f.buildPath, 'linux', arch)).toEqual({
       rebuild: true,
       nativePath: path.join(f.packageDir, 'build', 'Release', 'pty.node'),
     });
+    expect(fs.existsSync(f.prebuildDir)).toBe(false);
+    expect(fs.readFileSync(source, 'utf8')).toBe('build input');
+  });
+
+  it('prunes build-only SQLite files and ExcelJS browser bundles, retaining runtime and licenses', () => {
+    const f = fixture();
+    const modules = path.join(f.buildPath, 'node_modules');
+    const removed = [
+      ['better-sqlite3', 'deps', 'sqlite3', 'sqlite3.c'],
+      ['better-sqlite3', 'src', 'better_sqlite3.cpp'],
+      ['better-sqlite3', 'build', 'Release', 'obj', 'gen', 'sqlite3.c'],
+      ['better-sqlite3', 'build', 'Release', 'obj.target', 'sqlite3.o'],
+      ['better-sqlite3', 'build', 'Release', 'sqlite3.a'],
+      ['exceljs', 'dist', 'exceljs.js.map'],
+    ];
+    const kept = [
+      ['better-sqlite3', 'build', 'Release', 'better_sqlite3.node'],
+      ['better-sqlite3', 'lib', 'database.js'],
+      ['better-sqlite3', 'LICENSE'],
+      ['exceljs', 'excel.js'],
+      ['exceljs', 'lib', 'exceljs.nodejs.js'],
+      ['exceljs', 'LICENSE'],
+    ];
+    for (const parts of [...removed, ...kept]) {
+      const file = path.join(modules, ...parts);
+      fs.mkdirSync(path.dirname(file), { recursive: true });
+      fs.writeFileSync(file, 'fixture');
+    }
+    prunePackagedRuntime(f.buildPath);
+    prunePackagedRuntime(f.buildPath);
+    for (const parts of removed) expect(fs.existsSync(path.join(modules, ...parts))).toBe(false);
+    for (const parts of kept)
+      expect(fs.readFileSync(path.join(modules, ...parts), 'utf8')).toBe('fixture');
   });
 });

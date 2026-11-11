@@ -1,4 +1,5 @@
 import { createHash } from 'node:crypto';
+import { scopeSlot } from './moduleScope.js';
 
 /**
  * Feishu's native “同时发送到群聊” option can deliver one logical user send as
@@ -70,11 +71,18 @@ interface RecentFlatRecord {
   state: 'pending' | 'committed' | 'taken-over' | 'abandoned';
 }
 
-const pending = new Map<string, PendingLogicalSend>();
-const recentThreads = new Map<string, number>();
-const recentFlats = new Map<string, RecentFlatRecord>();
-const topicLeases = new Map<string, RecentFlatRecord>();
-const confirmed = new Map<string, number>();
+const dual_SLOT = Symbol('feishu.dual');
+function createDualState() {
+  return {
+    pending: new Map<string, PendingLogicalSend>(),
+    recentThreads: new Map<string, number>(),
+    recentFlats: new Map<string, RecentFlatRecord>(),
+    topicLeases: new Map<string, RecentFlatRecord>(),
+    confirmed: new Map<string, number>(),
+  };
+}
+/** 本实例(FeishuScope)的模块状态; 没有 scope 时落在默认实例上。 */
+const S = () => scopeSlot(dual_SLOT, createDualState);
 
 function logicalSendKey(input: DualDeliveryInput): string | null {
   if (!input.createTime) return null;
@@ -111,24 +119,24 @@ function pruneRecentFlats(now: number): void {
   // outlive the normal late-copy TTL while openThread UUID recovery is still
   // deciding whether this path can emit a turn. Only explicit lifecycle
   // transitions make it eligible for eviction.
-  for (const [key, rec] of recentFlats) {
+  for (const [key, rec] of S().recentFlats) {
     if (rec.state === 'pending') continue;
     if (now - rec.ts > LATE_COPY_TTL_MS) {
-      recentFlats.delete(key);
+      S().recentFlats.delete(key);
     }
   }
-  if (recentFlats.size <= MAX_RECENT) return;
-  for (const [key, rec] of recentFlats) {
-    if (recentFlats.size <= MAX_RECENT) break;
+  if (S().recentFlats.size <= MAX_RECENT) return;
+  for (const [key, rec] of S().recentFlats) {
+    if (S().recentFlats.size <= MAX_RECENT) break;
     if (rec.state === 'pending') continue;
-    recentFlats.delete(key);
+    S().recentFlats.delete(key);
   }
 }
 
 function rememberRecentFlat(key: string, now: number): RecentFlatRecord {
   const rec: RecentFlatRecord = { ts: now, state: 'pending' };
-  recentFlats.delete(key);
-  recentFlats.set(key, rec);
+  S().recentFlats.delete(key);
+  S().recentFlats.set(key, rec);
   pruneRecentFlats(now);
   return rec;
 }
@@ -138,9 +146,9 @@ function commitUnpairedFlatRoute(key: string, rec: RecentFlatRecord): boolean {
   if (rec.state === 'committed') return true;
   rec.state = 'committed';
   rec.ts = Date.now();
-  if (recentFlats.get(key) === rec) {
-    recentFlats.delete(key);
-    recentFlats.set(key, rec);
+  if (S().recentFlats.get(key) === rec) {
+    S().recentFlats.delete(key);
+    S().recentFlats.set(key, rec);
     pruneRecentFlats(rec.ts);
   }
   return true;
@@ -151,22 +159,22 @@ function isUnpairedFlatTakenOver(rec: RecentFlatRecord): boolean {
 }
 
 function pruneTopicLeases(now: number): void {
-  for (const [key, rec] of topicLeases) {
+  for (const [key, rec] of S().topicLeases) {
     if (rec.state === 'pending') continue;
-    if (now - rec.ts > LATE_COPY_TTL_MS) topicLeases.delete(key);
+    if (now - rec.ts > LATE_COPY_TTL_MS) S().topicLeases.delete(key);
   }
-  if (topicLeases.size <= MAX_RECENT) return;
-  for (const [key, rec] of topicLeases) {
-    if (topicLeases.size <= MAX_RECENT) break;
+  if (S().topicLeases.size <= MAX_RECENT) return;
+  for (const [key, rec] of S().topicLeases) {
+    if (S().topicLeases.size <= MAX_RECENT) break;
     if (rec.state === 'pending') continue;
-    topicLeases.delete(key);
+    S().topicLeases.delete(key);
   }
 }
 
 function rememberTopicLease(key: string, now: number): RecentFlatRecord {
   const rec: RecentFlatRecord = { ts: now, state: 'pending' };
-  topicLeases.delete(key);
-  topicLeases.set(key, rec);
+  S().topicLeases.delete(key);
+  S().topicLeases.set(key, rec);
   pruneTopicLeases(now);
   return rec;
 }
@@ -175,9 +183,9 @@ function commitTopicRoute(key: string, rec: RecentFlatRecord): boolean {
   if (rec.state !== 'pending') return false;
   rec.state = 'committed';
   rec.ts = Date.now();
-  if (topicLeases.get(key) === rec) {
-    topicLeases.delete(key);
-    topicLeases.set(key, rec);
+  if (S().topicLeases.get(key) === rec) {
+    S().topicLeases.delete(key);
+    S().topicLeases.set(key, rec);
     pruneTopicLeases(rec.ts);
   }
   return true;
@@ -187,9 +195,9 @@ function abandonTopicRoute(key: string, rec: RecentFlatRecord): void {
   if (rec.state !== 'pending') return;
   rec.state = 'abandoned';
   rec.ts = Date.now();
-  if (topicLeases.get(key) === rec) {
-    topicLeases.delete(key);
-    topicLeases.set(key, rec);
+  if (S().topicLeases.get(key) === rec) {
+    S().topicLeases.delete(key);
+    S().topicLeases.set(key, rec);
     pruneTopicLeases(rec.ts);
   }
 }
@@ -198,7 +206,7 @@ function topicRouteCallbacks(
   key: string,
   existingLease?: RecentFlatRecord,
 ): { commitTopic: () => boolean; abandonTopic: () => void } {
-  const existing = existingLease ?? topicLeases.get(key);
+  const existing = existingLease ?? S().topicLeases.get(key);
   // A committed lease must keep suppressing later topic message ids until
   // `confirmPair`. Replacing it with a fresh pending rec would let a second
   // delivery call `commitTopic()` and start another Agent turn.
@@ -216,17 +224,17 @@ function abandonUnpairedFlatRoute(key: string, rec: RecentFlatRecord): void {
   if (rec.state !== 'pending') return;
   rec.state = 'abandoned';
   rec.ts = Date.now();
-  if (recentFlats.get(key) === rec) {
-    recentFlats.delete(key);
-    recentFlats.set(key, rec);
+  if (S().recentFlats.get(key) === rec) {
+    S().recentFlats.delete(key);
+    S().recentFlats.set(key, rec);
     pruneRecentFlats(rec.ts);
   }
 }
 
 function pruneConfirmed(now: number): void {
-  for (const [key, ts] of confirmed) {
-    if (now - ts <= CONFIRMED_TTL_MS && confirmed.size <= MAX_CONFIRMED) break;
-    confirmed.delete(key);
+  for (const [key, ts] of S().confirmed) {
+    if (now - ts <= CONFIRMED_TTL_MS && S().confirmed.size <= MAX_CONFIRMED) break;
+    S().confirmed.delete(key);
   }
 }
 
@@ -241,17 +249,17 @@ function dispatchRoute(
 
 function settleUnpairedPending(key: string, entry: PendingLogicalSend): void {
   const now = Date.now();
-  if (entry.threadMessageId) rememberRecent(recentThreads, key, now);
+  if (entry.threadMessageId) rememberRecent(S().recentThreads, key, now);
   else if (entry.flatMessageIds.size > 0) entry.flatLease = rememberRecentFlat(key, now);
   entry.resolveDecision(false);
 }
 
 function prunePending(): void {
-  while (pending.size > MAX_PENDING) {
-    const oldestKey = pending.keys().next().value;
+  while (S().pending.size > MAX_PENDING) {
+    const oldestKey = S().pending.keys().next().value;
     if (typeof oldestKey !== 'string') break;
-    const entry = pending.get(oldestKey);
-    pending.delete(oldestKey);
+    const entry = S().pending.get(oldestKey);
+    S().pending.delete(oldestKey);
     if (entry) {
       clearTimeout(entry.timer);
       settleUnpairedPending(oldestKey, entry);
@@ -270,31 +278,31 @@ function createPending(key: string): PendingLogicalSend {
     decision,
     resolveDecision,
     timer: setTimeout(() => {
-      if (pending.get(key) !== entry) return;
-      pending.delete(key);
+      if (S().pending.get(key) !== entry) return;
+      S().pending.delete(key);
       settleUnpairedPending(key, entry);
     }, PAIR_WINDOW_MS),
   };
-  pending.set(key, entry);
+  S().pending.set(key, entry);
   prunePending();
   return entry;
 }
 
 function confirmLogicalSend(key: string, now: number): void {
-  confirmed.delete(key);
-  confirmed.set(key, now);
+  S().confirmed.delete(key);
+  S().confirmed.set(key, now);
   pruneConfirmed(now);
 }
 
 function confirmPair(key: string, entry: PendingLogicalSend): void {
-  if (pending.get(key) === entry) pending.delete(key);
+  if (S().pending.get(key) === entry) S().pending.delete(key);
   clearTimeout(entry.timer);
   const now = Date.now();
   // Topic already dispatched. Keep a recent-thread tombstone so a later
   // distinct-id main-feed copy cannot mint a second pending/Agent turn after
   // `pending` is deleted. `confirmed` is the durable suppress key; the
   // tombstone is consumed by the first extra flat like other late copies.
-  if (entry.threadMessageId) rememberRecent(recentThreads, key, now);
+  if (entry.threadMessageId) rememberRecent(S().recentThreads, key, now);
   confirmLogicalSend(key, now);
   entry.resolveDecision(true);
 }
@@ -306,48 +314,48 @@ export async function coordinateDualDelivery(
   if (!key) return { kind: 'dispatch' };
 
   const now = Date.now();
-  pruneTtlMap(recentThreads, now);
+  pruneTtlMap(S().recentThreads, now);
   pruneRecentFlats(now);
   pruneTopicLeases(now);
   pruneConfirmed(now);
   // Once a logical send has paired, later flats are duplicates even when
   // Feishu assigns a fresh message_id. An elected topic that never committed
   // (inbound claim abandon / reconnect retry) must still be allowed to emit.
-  if (confirmed.has(key)) {
+  if (S().confirmed.has(key)) {
     if (input.threadId) {
-      const lease = topicLeases.get(key);
+      const lease = S().topicLeases.get(key);
       if (lease?.state === 'pending') {
         return dispatchRoute(topicRouteCallbacks(key, lease));
       }
     }
     return { kind: 'suppress-main-copy' };
   }
-  if (input.threadId && topicLeases.get(key)?.state === 'committed') {
+  if (input.threadId && S().topicLeases.get(key)?.state === 'committed') {
     return { kind: 'suppress-main-copy' };
   }
-  if (!input.threadId && recentThreads.has(key)) {
-    recentThreads.delete(key);
+  if (!input.threadId && S().recentThreads.has(key)) {
+    S().recentThreads.delete(key);
     confirmLogicalSend(key, now);
     return { kind: 'suppress-main-copy' };
   }
-  const recentFlat = recentFlats.get(key);
+  const recentFlat = S().recentFlats.get(key);
   if (input.threadId && recentFlat) {
     if (recentFlat.state === 'committed' || recentFlat.state === 'taken-over') {
       confirmLogicalSend(key, now);
-      rememberRecent(recentThreads, key, now);
+      rememberRecent(S().recentThreads, key, now);
       return { kind: 'suppress-main-copy' };
     }
     recentFlat.state = 'taken-over';
     recentFlat.ts = now;
-    recentFlats.delete(key);
-    recentFlats.set(key, recentFlat);
+    S().recentFlats.delete(key);
+    S().recentFlats.set(key, recentFlat);
     confirmLogicalSend(key, now);
-    rememberRecent(recentThreads, key, now);
+    rememberRecent(S().recentThreads, key, now);
     return dispatchRoute(topicRouteCallbacks(key));
   }
   if (!input.threadId && recentFlat) {
     if (recentFlat.state === 'abandoned') {
-      recentFlats.delete(key);
+      S().recentFlats.delete(key);
     } else {
       // A live or committed flat route already owns this logical send. Feishu
       // retries normally keep the same message id and are stopped upstream, but
@@ -356,7 +364,7 @@ export async function coordinateDualDelivery(
     }
   }
 
-  let entry = pending.get(key);
+  let entry = S().pending.get(key);
   if (!entry) entry = createPending(key);
 
   if (input.threadId) {
@@ -392,7 +400,7 @@ export async function coordinateDualDelivery(
 /** Test-only: pending elected-topic leases that pruneTopicLeases will not expire. */
 export function pendingTopicLeaseCountForTest(): number {
   let count = 0;
-  for (const rec of topicLeases.values()) {
+  for (const rec of S().topicLeases.values()) {
     if (rec.state === 'pending') count += 1;
   }
   return count;
@@ -400,13 +408,13 @@ export function pendingTopicLeaseCountForTest(): number {
 
 /** Test-only reset. Production state intentionally survives transport reconnects. */
 export function resetDualDeliveryForTest(): void {
-  for (const entry of pending.values()) {
+  for (const entry of S().pending.values()) {
     clearTimeout(entry.timer);
     entry.resolveDecision(false);
   }
-  pending.clear();
-  recentThreads.clear();
-  recentFlats.clear();
-  topicLeases.clear();
-  confirmed.clear();
+  S().pending.clear();
+  S().recentThreads.clear();
+  S().recentFlats.clear();
+  S().topicLeases.clear();
+  S().confirmed.clear();
 }

@@ -19,7 +19,7 @@ describe('ChatInput Ghost snapshot contract', () => {
     expect(source).toContain(
       'const ghostCommandItems = useMemo(() => {\n    if (!isGhostSigil) return [];\n    return ghostsForCommand',
     );
-    expect(source).toContain('}, [ghostsForCommand, isGhostSigil, t]);');
+    expect(source).toContain('}, [ghostSourceLabels, ghostsForCommand, isGhostSigil, t]);');
   });
 
   it('uses the latest installed snapshot and workdir at send time', () => {
@@ -42,5 +42,11 @@ describe('ChatInput Ghost snapshot contract', () => {
     expect(source).toMatch(
       /isPlanModeComposerCommandText\(\s*editorText,?/,
     );
+  });
+
+  it('persists the explicit no-effort sentinel for Cindy Make creation', () => {
+    expect(source).toContain("const selectedEffort = composerSelection.display.effort ?? initialEffort ?? '';");
+    expect(source).toContain('effort: selectedEffort,');
+    expect(source).not.toContain('...(initialEffort === null ? {} : { effort: activeEffort })');
   });
 });

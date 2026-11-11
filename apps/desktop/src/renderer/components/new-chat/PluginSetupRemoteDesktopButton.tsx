@@ -1,3 +1,4 @@
+import { deviceDisplayName } from '@/lib/deviceName';
 import { useEffect, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { Button } from '@/components/ui/button';
@@ -8,7 +9,7 @@ import { toast } from '@/lib/toast';
 export function PluginSetupRemoteDesktopButton({ deviceId }: { deviceId: string }) {
   const { t } = useTranslation();
   const devices = useDeviceLinkDeviceList();
-  const name = devices?.find((device) => device.deviceId === deviceId)?.name || deviceId;
+  const name = deviceDisplayName(deviceId, undefined, devices ?? []);
   const [opening, setOpening] = useState(false);
   const mounted = useRef(true);
   useEffect(

@@ -259,6 +259,27 @@ describe('ensure', () => {
     child2.emit('close', 0, null);
   });
 
+  // 1c-2. 同 envHash + restart=true（Host 每次 ensure 都传 restart:true）→ 仍 attach。
+  // 提示词走文件后命令行不再随内容变化，这一条就是「内容没变就别重启旧进程」的落点。
+  it('should attach (not restart) when same envHash and restart=true', async () => {
+    const { registry } = await createRegistry();
+
+    const child1 = makeChild();
+    mockSpawn.mockReturnValueOnce(child1);
+    mockCreateServer.mockReturnValueOnce(makeServer());
+
+    const r1 = await registry.ensure('s1', 'cmd', { K: 'v' }, 'hash-same', true);
+    expect(r1.isReattach).toBe(false);
+
+    const r2 = await registry.ensure('s1', 'cmd', { K: 'v' }, 'hash-same', true);
+    expect(r2.isReattach).toBe(true);
+    expect(r2.sockPath).toBe(r1.sockPath);
+    expect(mockSpawn).toHaveBeenCalledTimes(1);
+    expect(child1.kill).not.toHaveBeenCalled();
+
+    child1.emit('close', 0, null);
+  });
+
   // 1d. 不同 envHash + restart=false → 纯 attach（不杀旧）
   it('should pure attach when different envHash and restart=false', async () => {
     const { registry } = await createRegistry();

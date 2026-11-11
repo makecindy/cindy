@@ -4,6 +4,10 @@ import { act, renderHook, waitFor } from '@testing-library/react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 import type { ProviderPrefsView, SlackHookView } from '../../../../shared/hookControlIpc';
+import { IM_DEFAULT_SETTINGS } from '../../../../shared/imDefaultSettings';
+
+// The shared-quota rail observes auth; this component fixture has no auth host.
+vi.mock('@/contexts/AuthContext', () => ({ useOptionalAuthUser: () => null }));
 
 vi.mock('react-i18next', () => ({
   useTranslation: () => ({
@@ -45,6 +49,16 @@ const BASE_HOOK: SlackHookView = {
     defaultWorkspace: null,
     binding: null,
   },
+  feishu: {
+    enabled: false,
+    url: '',
+    status: 'disabled',
+    lastError: null,
+    available: false,
+    capabilityPending: false,
+    defaultWorkspace: null,
+    binding: null,
+  },
 };
 
 const TELEGRAM_CONFIRMED: SlackHookView = {
@@ -67,6 +81,7 @@ const TELEGRAM_CONFIRMED: SlackHookView = {
       scopeId: 'bot-1',
       scopeName: 'cindy_example_bot',
       connectUrl: null,
+      bindCode: null,
       expiresAt: null,
       reason: null,
       remediationUrl: 'https://t.me/cindy_example_bot',
@@ -95,6 +110,7 @@ const X_CONFIRMED: SlackHookView = {
       scopeId: 'bot-x',
       scopeName: 'CindyBot',
       connectUrl: null,
+      bindCode: null,
       expiresAt: null,
       reason: null,
       remediationUrl: 'https://x.com/CindyBot',
@@ -118,7 +134,7 @@ const TELEGRAM_REBOUND: SlackHookView = {
 
 describe('useHookWorkspacePrefs provider isolation', () => {
   const getProviderWorkspacePrefs = vi.fn<
-    (provider: 'telegram' | 'x') => Promise<{ prefs: ProviderPrefsView }>
+    (provider: 'telegram' | 'x' | 'feishu') => Promise<{ prefs: ProviderPrefsView }>
   >(async () => ({
     prefs: {
       provider: 'telegram' as const,
@@ -158,6 +174,45 @@ describe('useHookWorkspacePrefs provider isolation', () => {
     };
   });
 
+  it.each(['slack', 'telegram', 'x'] as const)('%s inherits the default provider and execution location as one route', async (channel) => {
+    vi.mocked(window.electronAPI.maker.imDefaultSettingsGet).mockResolvedValue({
+      ...IM_DEFAULT_SETTINGS,
+      agentKind: 'codex',
+      agents: { ...IM_DEFAULT_SETTINGS.agents, codex: {
+        providerId: 'owner-provider', agentDeviceId: 'share:owner', model: 'owner-model', effort: 'high',
+      } },
+      defaults: IM_DEFAULT_SETTINGS, isCustomized: true, customizedKeys: [],
+    });
+    const hook = channel === 'telegram' ? TELEGRAM_CONFIRMED : channel === 'x' ? X_CONFIRMED : BASE_HOOK;
+    const { result } = renderHook(() => useHookWorkspacePrefs(hook, channel));
+    await waitFor(() => expect(result.current.agentDeviceFor('inherited')).toBe('share:owner'));
+    expect(result.current.providerSourceFor('inherited')).toBe('owner-provider');
+    expect(window.electronAPI.maker.imDefaultSettingsGet).toHaveBeenCalledWith(channel === 'slack' ? 'slack' : undefined);
+  });
+
+  it('keeps explicit local sources local and inherits the defaults of an explicitly selected engine', async () => {
+    vi.mocked(window.electronAPI.maker.imDefaultSettingsGet).mockResolvedValue({
+      ...IM_DEFAULT_SETTINGS,
+      agents: { ...IM_DEFAULT_SETTINGS.agents,
+        'claude-code': { providerId: 'claude-owner', agentDeviceId: 'share:claude', model: 'claude-model', effort: 'high' },
+        codex: { providerId: 'codex-owner', agentDeviceId: 'share:codex', model: 'codex-model', effort: 'high' },
+      },
+      defaults: IM_DEFAULT_SETTINGS, isCustomized: true, customizedKeys: [],
+    });
+    getWorkspacePrefs.mockResolvedValueOnce({ prefs: { bound: true, prefs: [
+      { workspace: 'codex', agentKind: 'codex', model: null, effort: null, permissionMode: null },
+    ] } });
+    vi.mocked(window.electronAPI.hookControl.getWorkspaceProviderSources).mockResolvedValue({ entries: [
+      { channel: 'slack', teamId: null, workspace: 'local', providerId: 'local-provider' },
+    ] });
+    const { result } = renderHook(() => useHookWorkspacePrefs(BASE_HOOK, 'slack'));
+    await waitFor(() => expect(result.current.agentDeviceFor('codex')).toBe('share:codex'));
+    expect(result.current.providerSourceFor('codex')).toBe('codex-owner');
+    expect(result.current.agentDeviceFor('inherited')).toBe('share:claude');
+    expect(result.current.agentDeviceFor('local')).toBeNull();
+    expect(result.current.providerSourceFor('local')).toBe('local-provider');
+  });
+
   it('Telegram 未连接时不发起 provider prefs 请求，绑定确认后沿 ready 边沿首次拉取', async () => {
     const { result, rerender } = renderHook(({ hook }) => useHookWorkspacePrefs(hook, 'telegram'), {
       initialProps: { hook: BASE_HOOK },
@@ -186,6 +241,32 @@ describe('useHookWorkspacePrefs provider isolation', () => {
     renderHook(() => useHookWorkspacePrefs(BASE_HOOK, 'slack'));
     await waitFor(() => expect(getWorkspacePrefs).toHaveBeenCalledTimes(1));
     expect(getProviderWorkspacePrefs).not.toHaveBeenCalled();
+  });
+
+  it.each(['confirmed', 'pending', 'failed'] as const)('keeps store Feishu defaults editable while the latest authorization is %s', async (state) => {
+    const first = { ...TELEGRAM_CONFIRMED.telegram.binding!, provider: 'feishu' as const, scopeId: 'cli_store' };
+    const second = { ...first, bindingId: 'binding-2', principalId: 'ou_second' };
+    const hook: SlackHookView = { ...BASE_HOOK, feishu: {
+      ...TELEGRAM_CONFIRMED.telegram,
+      bindings: [first, second], multiBindAvailable: true,
+      binding: { ...second, state, bindingId: state === 'confirmed' ? second.bindingId : null },
+    } };
+    const prefs = [{ workspace: 'cindy', model: 'shared-model', effort: null, agentKind: null, permissionMode: null }];
+    getProviderWorkspacePrefs.mockResolvedValueOnce({ prefs: {
+      provider: 'feishu', bindingId: first.bindingId, scopeId: null, bound: true, prefs,
+    } });
+    let push!: (view: ProviderPrefsView) => void;
+    vi.mocked(window.electronAPI.hookControl.onProviderPrefsChanged).mockImplementation((listener) => {
+      push = listener;
+      return () => {};
+    });
+    const { result } = renderHook(() => useHookWorkspacePrefs(hook, 'feishu'));
+    await waitFor(() => expect(result.current.editable).toBe(true));
+    expect(getProviderWorkspacePrefs).toHaveBeenCalledWith('feishu');
+    expect(result.current.prefsFor('cindy').model).toBe('shared-model');
+    act(() => push({ provider: 'feishu', bindingId: second.bindingId, scopeId: null, bound: true,
+      prefs: [{ ...prefs[0], model: 'second-only-model' }] }));
+    expect(result.current.prefsFor('cindy').model).toBe('shared-model');
   });
 
   it('Slack 开关开着但 hook 掉线时仍拉取本机偏好，可编辑', async () => {

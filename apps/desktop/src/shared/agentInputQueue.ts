@@ -1,3 +1,4 @@
+import type { AgentRequestReceipt } from './forwardedRequest.js';
 import { coordinationModelPrefix, type BotTaskCoordination } from './botTaskCoordination.js';
 /**
  * Agent input queue wire contract.
@@ -8,6 +9,8 @@ import { coordinationModelPrefix, type BotTaskCoordination } from './botTaskCoor
  * drain wakeups. Keeping the serializable shape in shared code prevents the two
  * sides from quietly inventing different meanings for the same queued row.
  */
+
+import type { OutputLimitDetails } from '@cindy/maker-shared';
 
 import { stripChatQuoteMarkerLines } from '@cindy/maker-shared/chat-quotes';
 import type { SharedTaskAuthor } from '@cindy/maker-shared';
@@ -166,7 +169,7 @@ export interface AgentInputCreateOpts {
   providerId?: string | null;
   orcaRole?: 'lead' | 'worker' | null;
   effort?: string;
-  fastMode?: boolean;
+  fastMode?: boolean | 'ultrafast';
   permissionMode?: string;
   /** 计划模式一级开关(与 permissionMode 正交), lazy-create / rehydrate 时透传给 maker。 */
   planMode?: boolean;
@@ -209,9 +212,34 @@ export interface AutoResumeInfo {
    * 后的续跑同一条路径)：活动行据此显示「{from} {原因}，已换到 {to} 继续」。旧端忽略该字段。
    */
   agentSwitch?: AutoResumeAgentSwitch;
+  /**
+   * 供应商组里任务所在的那台连不上，等它恢复后留在原电脑继续(reason 同样为 USAGE_LIMIT_RESET_AUTO_RESUME_REASON)：
+   * 活动行显示「{computer} 已重新连上，继续运行」，读不到名称时不写电脑名。旧端忽略该字段，显示成「用量已恢复，
+   * 已自动继续」(与 agentSwitch 相同)。
+   */
+  agentReconnect?: AutoResumeAgentReconnect;
+  /**
+   * 分享的人这边的自动换电脑(分享者的供应商组替它换了一台，本机不知道是哪台)：活动行显示「已自动换一台
+   * 电脑继续」，不出现电脑名称(docs/product-rules/provider-groups.md §8)。旧端忽略该字段。
+   */
+  groupSwitch?: AutoResumeGroupSwitch;
+  /**
+   * 只出现在投影的进行中行：供应商组正在为这次失败换电脑，错误先不呈现，行内显示「正在换一台电脑继续」
+   * (provider-groups.md §6.1)。此时 attempt / maxAttempts / sessionTotal 都是 0(不是重连，不显示次数)；
+   * 旧端忽略该字段，显示成「重新连接中」。
+   */
+  groupSwitchPending?: AutoResumeGroupSwitch;
 }
 
-export type AutoResumeAgentSwitchCause = 'usage-limit' | 'auth' | 'unavailable' | 'overload';
+export interface AutoResumeGroupSwitch {
+  cause: AutoResumeAgentSwitchCause;
+}
+
+/**
+ * 换电脑的原因(docs/product-rules/provider-groups.md §6.1)。`failed` = 那台出了别的问题(Agent 意外退出、服务报错
+ * 用尽重试等)。旧端不认识的原因整条忽略，活动行退回「用量已恢复，已自动继续」。
+ */
+export type AutoResumeAgentSwitchCause = 'usage-limit' | 'auth' | 'unavailable' | 'overload' | 'failed';
 
 export interface AutoResumeAgentSwitch {
   /** 原电脑的显示名。 */
@@ -219,6 +247,11 @@ export interface AutoResumeAgentSwitch {
   /** 换到的电脑的显示名。 */
   to: string;
   cause: AutoResumeAgentSwitchCause;
+}
+
+export interface AutoResumeAgentReconnect {
+  /** 重新连上的那台电脑的显示名；读不到时为空。 */
+  computer: string;
 }
 
 /** 账号额度重置后自动继续时 `AutoResumeInfo.reason` 的取值（活动行据此换文案）。 */
@@ -264,13 +297,15 @@ export interface RecoveryCheckpoint {
 export const HOST_ONLY_AGENT_PREFIX = Symbol('host-only-agent-prefix');
 
 export interface AgentInputQueuedMessage {
+  /** Rejection marker only. The positive authorization is a Main-only, non-persisted guard. */
+  taskActionRequiresAuthorization?: true;
   /** Main-owned delegation receipt; stripped from renderer/device-link input. */
   botTaskCoordination?: BotTaskCoordination;
   [HOST_ONLY_AGENT_PREFIX]?: string;
   /** Host-stamped attribution, retained in durable queue snapshots and messages. */
   sharedTaskAuthor?: SharedTaskAuthor;
   /** Host-captured authored text before plugin/reference decoration; omitted from wire projections. */
-  autoReviewUserText?: string | { kind: 'delegated-continuation' };
+  autoReviewUserText?: string | AgentRequestReceipt;
   /** Host-owned text-only input; retained by queue persistence and retry. */
   toolsDisabled?: boolean;
   clientId: string;
@@ -314,6 +349,8 @@ export interface AgentInputQueuedMessage {
         displayText?: string;
         /** 发出本条的 Lead / Worker 会话；接收方据此渲染可点击的来源标签。老快照没有。 */
         senderSessionId?: string;
+        autoBridge?: true;
+        autoBridgeBatchCount?: number;
       }
     | {
         /**
@@ -361,6 +398,8 @@ export interface AgentInputQueuedMessage {
   fromMobileClient?: boolean;
   /** Main-stamped interface language for this turn. Wire text is not trusted as prompt text. */
   uiLanguage?: string;
+  /** Main-stamped classical output style for this turn (only a catalog id; see classical-reply). */
+  classicalStyle?: string;
   /** Main-owned provenance: this queue item entered through device-link input IPC. */
   fromDeviceLinkClient?: boolean;
   /**
@@ -409,6 +448,7 @@ export interface AgentInputQueuedMessage {
   /**
    * 本次自动续跑的展示信息（中断原因 + 本轮第几次 + 会话累计）。随 `autoResume`
    * 一起透传到落库 agentMeta，供「已重新连接」活动行的展开详情用。
+   * 首次派发前的组限额恢复只带 info、不设 autoResume：保留原用户气泡与用户轮记账，另显示恢复活动。
    */
   autoResumeInfo?: AutoResumeInfo;
   /** Bounded, durable handoff state shared by manual and automatic recovery. */
@@ -464,6 +504,8 @@ export function normalizeAgentInputClearBoundaryMs(value: unknown): number | nul
 
 export interface AgentInputProjection {
   sessionId: string;
+  /** Host still owns a turn/dispatch/interaction boundary. Older hosts may omit it. */
+  turnInProgress?: boolean;
   pendingQueue: AgentInputQueuedMessage[];
   /**
    * 被控端最近一次 `/clear` 的权威毫秒 token。只在会话至少 clear 过一次时出现；
@@ -490,10 +532,14 @@ export interface AgentInputProjection {
   queueEditLocks: string[];
   queueAbortPending: boolean;
   error: string | null;
+  /** Exact persisted error row owned by this banner; older hosts may omit it. */
+  errorPersistId?: string | null;
   /** Stable error reason for live clients; older controlled hosts may omit it. */
   errorReason?: string | null;
   /** Bounded details for tool-loop errors; never carries the raw provider message. */
   toolLoop?: AgentInputToolLoopDetails | null;
+  /** Final-request output usage; optional for older controlled hosts. */
+  outputLimit?: OutputLimitDetails | null;
   recovery: AgentInputRecovery;
   /**
    * Compatibility display value for the existing ErrorBanner. It is no longer
@@ -501,6 +547,9 @@ export interface AgentInputProjection {
    * resending this string through the normal composer path.
    */
   errorRetryText: string | null;
+  /** Host confirms this error belongs to a persisted scheduled input whose recovery ended.
+   * Missing on older hosts means unavailable; never infer it from conversation history. */
+  errorCanContinue?: boolean;
   /**
    * 凭证切换等待态:发送需要重启共享 codex 进程,但被列出的会话(其它本地 Codex
    * 任务)挡住。等待中的那条消息保留在队首,挡路任务结束后 main 自动重发;renderer
@@ -541,14 +590,16 @@ export function queuedMessageRetryToken(queued: AgentInputQueuedMessage): string
 }
 
 /**
- * 队列崩溃恢复快照不能持久化跨设备引用正文或瞬时 Bot 状态。两者只在当前
- * 进程内存中存活；恢复后正文保留 fail-closed 标记，Bot 状态必须重新查询，
- * 不能把崩溃前的 working/idle 当成当前事实。
+ * 队列崩溃恢复快照不能持久化跨设备引用正文、瞬时 Bot 状态或尚未落库的
+ * 原用户消息自动继续标记。它们只在当前进程内存中存活；恢复后正文保留
+ * fail-closed 标记，Bot 状态必须重新查询，手动恢复不能冒充自动继续。
  */
 export function sanitizeQueuedMessageForPersistence(
   item: AgentInputQueuedMessage,
 ): AgentInputQueuedMessage {
-  let changed = false;
+  const transientUsageResume = !item.autoResume
+    && item.autoResumeInfo?.reason === USAGE_LIMIT_RESET_AUTO_RESUME_REASON;
+  let changed = transientUsageResume;
   let persistedContent = item.persistedContent;
   let agentReferences = item.agentReferences;
   let chatMessage = item.chatMessage;
@@ -626,6 +677,7 @@ export function sanitizeQueuedMessageForPersistence(
       : {}),
   };
   delete sanitized[HOST_ONLY_AGENT_PREFIX];
+  if (transientUsageResume) delete sanitized.autoResumeInfo;
   if (!item.agentReferences) delete sanitized.agentReferences;
   if (item.trustedSessionReferenceContexts) delete sanitized.trustedSessionReferenceContexts;
   return sanitized;
@@ -1191,4 +1243,26 @@ export function buildMakerUserMessage(
   return blocks.length === 1 && first?.type === 'text'
     ? { type: 'user', content: first.text as string }
     : { type: 'user', content: blocks };
+}
+
+/**
+ * 把宿主说明追加到发给模型的正文末尾（附件与引用 block 的顺序不变）。
+ * 说明只存在于这一次派发的 wire 消息里：不写回队列项，因此不进排队正文、落库正文，
+ * 派发失败重新入队后也不会带着过期的说明。
+ */
+export function appendNoteToMakerUserMessage(
+  message: AgentInputMakerMessage,
+  note: string | null | undefined,
+): AgentInputMakerMessage {
+  if (!note) return message;
+  const suffix = `\n\n---\n${note}`;
+  if (typeof message === 'string') return `${message}${suffix}`;
+  if (typeof message.content === 'string') {
+    return { ...message, content: `${message.content}${suffix}` };
+  }
+  const [first, ...rest] = message.content;
+  if (first?.type === 'text' && typeof first.text === 'string') {
+    return { ...message, content: [{ ...first, text: `${first.text}${suffix}` }, ...rest] };
+  }
+  return { ...message, content: [{ type: 'text', text: note }, ...message.content] };
 }

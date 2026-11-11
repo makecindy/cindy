@@ -16,7 +16,7 @@ vi.mock('../../remote-desktop/credentialHost', () => ({
     }),
   },
 }));
-vi.mock('../../i18n', () => ({ getResolvedMainLocale: () => 'en' }));
+vi.mock('../../i18n.desktop', () => ({ getResolvedMainLocale: () => 'en' }));
 vi.mock('electron', () => ({ nativeTheme: { shouldUseDarkColors: false } }));
 beforeEach(() => {
   vi.resetAllMocks();

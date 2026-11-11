@@ -1,3 +1,4 @@
+export { forwardedRequestDisplayText } from './forwardedRequestDisplay.js';
 /**
  * 消息来源：界面标签与发给模型的来源说明共用的一份描述。
  *
@@ -207,11 +208,35 @@ export function messageSourceSenderFromMeta(meta: unknown): MessageSourceSender 
   return undefined;
 }
 
-export type MessageSourceIdKind = 'plugin' | 'teammate' | 'session' | 'automation' | 'member';
+/** 来源任务的设备前缀由接收宿主盖章；跳转时拆开设备与任务，不能把复合 ID 当成本机任务。 */
+export function parseSourceSessionTarget(sessionId: string | undefined): { sessionId: string; deviceId?: string } | null {
+  if (!sessionId) return null;
+  const split = sessionId.indexOf('::');
+  if (split < 0) return { sessionId };
+  if (split === 0 || split === sessionId.length - 2) return null;
+  return { deviceId: sessionId.slice(0, split), sessionId: sessionId.slice(split + 2) };
+}
+
+export function isCrossDeviceSourceSessionId(sessionId: string | undefined): boolean {
+  return !!parseSourceSessionTarget(sessionId)?.deviceId;
+}
+
+export type MessageSourceIdKind = 'plugin' | 'mcpApp' | 'localApp' | 'teammate' | 'session' | 'automation' | 'member';
 
 export interface MessageSourceIdEntry {
   kind: MessageSourceIdKind;
   id: string;
+}
+
+/**
+ * Orca 系统兜底回报批次的条数（>=2 才算批次）；非批次返回 undefined。
+ * 批次没有单一发送方：展示/投影层不得据此归属首个 Worker，senderSessionId 仅作 Host 团队授权证据。
+ */
+export function orcaAutoBridgeBatchCount(origin: unknown): number | undefined {
+  const record = asRecord(origin);
+  if (!record || record.kind !== 'orca' || record.autoBridge !== true) return undefined;
+  const count = record.autoBridgeBatchCount;
+  return typeof count === 'number' && Number.isSafeInteger(count) && count >= 2 ? count : undefined;
 }
 
 /**
@@ -221,7 +246,12 @@ export interface MessageSourceIdEntry {
  */
 export function messageSourceIdEntries(meta: unknown): MessageSourceIdEntry[] {
   const sender = messageSourceSenderFromMeta(meta);
-  if (sender?.kind === 'plugin') return [{ kind: 'plugin', id: sender.pluginId }];
+  if (sender?.kind === 'plugin') {
+    if (sender.pluginId.startsWith('local-app:')) return [{ kind: 'localApp', id: sender.pluginId.slice(10) }];
+    return sender.pluginId.startsWith('mcp-app:')
+      ? [{ kind: 'mcpApp', id: sender.pluginId.slice(8) }]
+      : [{ kind: 'plugin', id: sender.pluginId }];
+  }
   if (sender?.kind === 'shared-member') return [{ kind: 'member', id: sender.memberId }];
   if (sender?.kind === 'session') {
     return [
@@ -231,6 +261,8 @@ export function messageSourceIdEntries(meta: unknown): MessageSourceIdEntry[] {
   }
   const origin = asRecord(asRecord(meta)?.origin);
   if (origin?.kind === 'orca') {
+    // 批次没有单一发送方：不挂首个 Worker 的 id（授权证据另由 taskActionHost 消费）。
+    if (orcaAutoBridgeBatchCount(origin) !== undefined) return [];
     const sessionId = readString(origin, 'senderSessionId');
     return sessionId ? [{ kind: 'session', id: sessionId }] : [];
   }
@@ -259,6 +291,8 @@ export function describeMessageSourceSender(sender: MessageSourceSender): string
       return ref ? `由任务${ref} 发送` : '由其他任务发送';
     }
     case 'plugin':
+      if (sender.pluginId.startsWith('local-app:')) return `由本机应用${formatSourceRef(sender.name, 'app_id', sender.pluginId.slice(10))} 发送`;
+      if (sender.pluginId.startsWith('mcp-app:')) return `由 MCP App${formatSourceRef(sender.name, 'mcp_server_id', sender.pluginId.slice(8))} 发送`;
       return `由插件${formatSourceRef(sender.name, 'plugin_id', sender.pluginId)} 发送`;
     case 'shared-member':
       return `由共享任务成员${formatSourceRef(sender.name, 'member_id', sender.memberId)} 发送`;

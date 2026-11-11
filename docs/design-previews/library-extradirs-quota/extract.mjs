@@ -25,9 +25,6 @@ const truth = {
     slotPrefix: extractByPattern(actions, "export const LIBRARY_EXTRA_DIR_SLOT_PREFIX = '([^']+)'", {
       locator: 'extraDirsActions LIBRARY_EXTRA_DIR_SLOT_PREFIX',
     }),
-    systemLabel: extractByPattern(actions, "isLibraryExtraDirSlot\\(dir\\) \\? '([^']+)'", {
-      locator: 'extraDirsActions extraDirDisplayLabel 系统项文案',
-    }),
   },
   wiring: {
     chatInputQuotaSites: makeLeaf(
@@ -41,9 +38,9 @@ const truth = {
       { locator: 'ChatInput ExtraDirsButton extraDirsCount 公式次数' },
     ),
     panelLabelSites: makeLeaf(
-      count(panelSrc, /extraDirDisplayLabel\(p\)/g),
+      count(panelSrc, /extraDirDisplayLabel\(p, libraryReadOnlyLabel\)/g),
       panel,
-      { locator: 'AtMentionPanel extraDirDisplayLabel(p) 次数' },
+      { locator: 'AtMentionPanel extraDirDisplayLabel(p, libraryReadOnlyLabel) 次数' },
     ),
     panelNoRemoveSites: makeLeaf(
       count(panelSrc, /isLibraryExtraDirSlot\(p\) \? null/g),
@@ -53,6 +50,7 @@ const truth = {
   },
   copy: {
     'zh-CN': {
+      libraryReadOnlyLabel: makeLeaf(zhCopy.libraryReadOnlyLabel, zh, { locator: 'extraDirs.libraryReadOnlyLabel', keyPath: 'extraDirs.libraryReadOnlyLabel' }),
       sectionTitle: makeLeaf(zhCopy.sectionTitle, zh, { locator: 'extraDirs.sectionTitle', keyPath: 'extraDirs.sectionTitle' }),
       addReadOnly: makeLeaf(zhCopy.addReadOnly, zh, { locator: 'extraDirs.addReadOnly', keyPath: 'extraDirs.addReadOnly' }),
       atLimit: makeLeaf(zhCopy.atLimit, zh, { locator: 'extraDirs.atLimit', keyPath: 'extraDirs.atLimit' }),
@@ -60,6 +58,7 @@ const truth = {
       empty: makeLeaf(zhCopy.empty, zh, { locator: 'extraDirs.empty', keyPath: 'extraDirs.empty' }),
     },
     en: {
+      libraryReadOnlyLabel: makeLeaf(enCopy.libraryReadOnlyLabel, en, { locator: 'extraDirs.libraryReadOnlyLabel', keyPath: 'extraDirs.libraryReadOnlyLabel' }),
       sectionTitle: makeLeaf(enCopy.sectionTitle, en, { locator: 'extraDirs.sectionTitle', keyPath: 'extraDirs.sectionTitle' }),
       addReadOnly: makeLeaf(enCopy.addReadOnly, en, { locator: 'extraDirs.addReadOnly', keyPath: 'extraDirs.addReadOnly' }),
       atLimit: makeLeaf(enCopy.atLimit, en, { locator: 'extraDirs.atLimit', keyPath: 'extraDirs.atLimit' }),

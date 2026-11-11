@@ -1,5 +1,5 @@
 diff --git a/ios/RNUITextView.mm b/ios/RNUITextView.mm
-index d0c31ed20b4865679ec1397543fc74056e47b978..51594cc1c7587feb5dbc3ce00e745e65958a3fd5 100644
+index d0c31ed20b4865679ec1397543fc74056e47b978..3de5f0c16392e43daa7e446e78edcb48b4ab8ae6 100644
 --- a/ios/RNUITextView.mm
 +++ b/ios/RNUITextView.mm
 @@ -1,4 +1,5 @@
@@ -8,7 +8,7 @@ index d0c31ed20b4865679ec1397543fc74056e47b978..51594cc1c7587feb5dbc3ce00e745e65
  #import "RNUITextViewShadowNode.h"
  #import "RNUITextViewComponentDescriptor.h"
  #import "RNUITextViewChild.h"
-@@ -22,6 +23,35 @@ @implementation RNUITextView{
+@@ -22,6 +23,36 @@ @implementation RNUITextView{
    RNUITextViewShadowNode::ConcreteState::Shared _state;
    UITapGestureRecognizer * _outsideTapRecognizer;
    BOOL _suppressSelectionChange;
@@ -41,10 +41,11 @@ index d0c31ed20b4865679ec1397543fc74056e47b978..51594cc1c7587feb5dbc3ce00e745e65
 +  __weak UIScrollView *_selectionDragScrollView;
 +  // Title of the custom edit-menu action (menuActionLabel prop). Empty = no item.
 +  NSString *_menuActionLabel;
++  NSString *_sideChatMenuActionLabel;
  }
  
  + (ComponentDescriptorProvider)componentDescriptorProvider
-@@ -65,6 +95,18 @@ - (instancetype)initWithFrame:(CGRect)frame
+@@ -65,6 +96,18 @@ - (instancetype)initWithFrame:(CGRect)frame
                                                                      action:@selector(handleOutsideTap:)];
      _outsideTapRecognizer.cancelsTouchesInView = NO;
      _outsideTapRecognizer.delegate = self;
@@ -63,18 +64,50 @@ index d0c31ed20b4865679ec1397543fc74056e47b978..51594cc1c7587feb5dbc3ce00e745e65
    }
  
    return self;
-@@ -77,6 +119,7 @@ - (void)didMoveToWindow
-     [self.window addGestureRecognizer:_outsideTapRecognizer];
-   } else {
-     [_outsideTapRecognizer.view removeGestureRecognizer:_outsideTapRecognizer];
+@@ -73,10 +116,34 @@ - (instancetype)initWithFrame:(CGRect)frame
+ - (void)didMoveToWindow
+ {
+   [super didMoveToWindow];
+-  if (self.window) {
+-    [self.window addGestureRecognizer:_outsideTapRecognizer];
+-  } else {
+-    [_outsideTapRecognizer.view removeGestureRecognizer:_outsideTapRecognizer];
++  [self syncOutsideTapRecognizer];
++  if (!self.window) {
 +    [self invalidateSelectionDisplayLink];
++  }
++}
++
++- (BOOL)hasActiveTextSelection
++{
++  const NSRange range = _textView.selectedRange;
++  if (!_textView.selectable || range.location == NSNotFound || range.length == 0) {
++    return NO;
++  }
++  const NSUInteger length = _textView.text.length;
++  return range.location <= length && range.length <= length - range.location;
++}
++
++- (void)syncOutsideTapRecognizer
++{
++  // A table can mount hundreds of text views. Only a view with a selection
++  // needs to observe touches outside itself; idle cells must not each hit-test
++  // the window and schedule a selection-clear block for every ordinary tap.
++  UIWindow *target = [self hasActiveTextSelection] ? self.window : nil;
++  if (_outsideTapRecognizer.view == target) {
++    return;
++  }
++  [_outsideTapRecognizer.view removeGestureRecognizer:_outsideTapRecognizer];
++  if (target) {
++    [target addGestureRecognizer:_outsideTapRecognizer];
    }
  }
  
-@@ -94,21 +137,27 @@ - (void)prepareForRecycle
+@@ -94,21 +161,28 @@ - (void)prepareForRecycle
    // Reset the frame to zero so that when it properly lays out on the next use
    _textView.frame = CGRectZero;
    _textView.attributedText = nil;
++  [self syncOutsideTapRecognizer];
 +  _lastAppliedAttributedString = facebook::react::AttributedString{};
 +  _hasAppliedText = NO;
 +  _textApplyGeneration += 1;
@@ -107,7 +140,7 @@ index d0c31ed20b4865679ec1397543fc74056e47b978..51594cc1c7587feb5dbc3ce00e745e65
  {
    if (!_state) {
      return;
-@@ -116,19 +165,23 @@ - (void)drawRect:(CGRect)rect
+@@ -116,19 +190,23 @@ - (void)drawRect:(CGRect)rect
  
    const auto &props = *std::static_pointer_cast<RNUITextViewProps const>(_props);
  
@@ -134,11 +167,15 @@ index d0c31ed20b4865679ec1397543fc74056e47b978..51594cc1c7587feb5dbc3ce00e745e65
      // Reassigning attributedText clears any active selection. Save it and
      // restore after, while suppressing the synthetic textViewDidChangeSelection
      // events the clear-then-restore would otherwise produce — those would
-@@ -145,27 +198,56 @@ - (void)drawRect:(CGRect)rect
+@@ -144,28 +222,59 @@ - (void)drawRect:(CGRect)rect
+   if (frameChanged) {
      _textView.frame = _view.frame;
    }
- 
+-
 -  __block std::vector<std::string> lines;
++  // Applying text can clear or restore selection while JS events are suppressed.
++  [self syncOutsideTapRecognizer];
++
 +  os_log_debug(OS_LOG_DEFAULT, "[RNUITextView] apply tag=%ld len=%lu textChanged=%d frameChanged=%d",
 +               (long)self.tag, (unsigned long)convertedAttrString.length, textChanged, frameChanged);
 +
@@ -210,7 +247,7 @@ index d0c31ed20b4865679ec1397543fc74056e47b978..51594cc1c7587feb5dbc3ce00e745e65
  }
  
  - (void)updateProps:(Props::Shared const &)props oldProps:(Props::Shared const &)oldProps
-@@ -181,6 +263,10 @@ - (void)updateProps:(Props::Shared const &)props oldProps:(Props::Shared const &
+@@ -181,6 +290,14 @@ - (void)updateProps:(Props::Shared const &)props oldProps:(Props::Shared const &
      _textView.selectable = newViewProps.selectable;
    }
  
@@ -218,10 +255,21 @@ index d0c31ed20b4865679ec1397543fc74056e47b978..51594cc1c7587feb5dbc3ce00e745e65
 +    _menuActionLabel = [NSString stringWithUTF8String:newViewProps.menuActionLabel.c_str()];
 +  }
 +
++  if (oldViewProps.sideChatMenuActionLabel != newViewProps.sideChatMenuActionLabel) {
++    _sideChatMenuActionLabel = [NSString stringWithUTF8String:newViewProps.sideChatMenuActionLabel.c_str()];
++  }
++
    if (oldViewProps.allowFontScaling != newViewProps.allowFontScaling) {
      if (@available(iOS 11.0, *)) {
        _textView.adjustsFontForContentSizeCategory = newViewProps.allowFontScaling;
-@@ -215,7 +301,15 @@ - (void)updateProps:(Props::Shared const &)props oldProps:(Props::Shared const &
+@@ -209,13 +326,22 @@ - (void)updateProps:(Props::Shared const &)props oldProps:(Props::Shared const &
+   }
+ 
+   [super updateProps:props oldProps:oldProps];
++  [self syncOutsideTapRecognizer];
+ }
+ 
+ // See RCTParagraphComponentView
  - (void)updateState:(const facebook::react::State::Shared &)state oldState:(const facebook::react::State::Shared &)oldState
  {
    _state = std::static_pointer_cast<const RNUITextViewShadowNode::ConcreteState>(state);
@@ -238,7 +286,31 @@ index d0c31ed20b4865679ec1397543fc74056e47b978..51594cc1c7587feb5dbc3ce00e745e65
  }
  
  // MARK: - UIGestureRecognizerDelegate
-@@ -297,4 +391,10 @@
+@@ -229,7 +355,7 @@ - (BOOL)gestureRecognizer:(UIGestureRecognizer *)gestureRecognizer shouldReceive
+ {
+   if (gestureRecognizer == _outsideTapRecognizer) {
+     UIWindow *window = touch.window;
+-    if (!window) {
++    if (!window || window != self.window || ![self hasActiveTextSelection]) {
+       return NO;
+     }
+     UIView *hitView = [window hitTest:[touch locationInView:nil] withEvent:nil];
+@@ -243,11 +369,13 @@ - (void)handleOutsideTap:(UITapGestureRecognizer *)sender
+   // Defer past the current event loop turn so any in-flight edit-menu action
+   // (Copy / Define / Look Up / …) reads the live selection before we clear it.
+   UITextView *textView = _textView;
++  __weak RNUITextView *weakSelf = self;
+   dispatch_async(dispatch_get_main_queue(), ^{
+     UITextRange *range = textView.selectedTextRange;
+     if (range != nil && !range.isEmpty) {
+       textView.selectedTextRange = nil;
+     }
++    [weakSelf syncOutsideTapRecognizer];
+   });
+ }
+ 
+@@ -296,6 +424,12 @@ - (void)handlePressIfNecessary:(UITapGestureRecognizer*)sender
+ 
  - (void)handleLongPressIfNecessary:(UILongPressGestureRecognizer*)sender
  {
 +  // Long presses also report movement and release. Dispatch the action only
@@ -249,7 +321,17 @@ index d0c31ed20b4865679ec1397543fc74056e47b978..51594cc1c7587feb5dbc3ce00e745e65
 +
    const auto location = [self getLocationOfPress:sender];
    const auto child = [self getTouchChild:location];
-@@ -328,6 +428,230 @@ - (void)textViewDidChangeSelection:(UITextView *)textView
+ 
+@@ -308,6 +442,8 @@ - (void)handleLongPressIfNecessary:(UILongPressGestureRecognizer*)sender
+ 
+ - (void)textViewDidChangeSelection:(UITextView *)textView
+ {
++  // Native cleanup must also work without a JS listener and during text updates.
++  [self syncOutsideTapRecognizer];
+   if (_suppressSelectionChange) {
+     return;
+   }
+@@ -328,6 +464,249 @@ - (void)textViewDidChangeSelection:(UITextView *)textView
        static_cast<int>(selectedRange.location),
        static_cast<int>(selectedRange.location + selectedRange.length),
      });
@@ -267,32 +349,51 @@ index d0c31ed20b4865679ec1397543fc74056e47b978..51594cc1c7587feb5dbc3ce00e745e65
 +  editMenuForTextInRange:(NSRange)range
 +        suggestedActions:(NSArray<UIMenuElement *> *)suggestedActions API_AVAILABLE(ios(16.0))
 +{
-+  if (_menuActionLabel.length == 0 || range.length == 0) {
++  if (range.length == 0) {
 +    return [UIMenu menuWithChildren:suggestedActions];
 +  }
 +  __weak RNUITextView *weakSelf = self;
-+  UIAction *customAction = [UIAction actionWithTitle:_menuActionLabel
-+                                               image:nil
-+                                          identifier:nil
-+                                             handler:^(__kindof UIAction *action) {
++  void (^performAction)(BOOL) = ^(BOOL sideChat) {
 +    RNUITextView *strongSelf = weakSelf;
 +    if (strongSelf == nil || strongSelf->_eventEmitter == nullptr) {
 +      return;
 +    }
-+    std::dynamic_pointer_cast<const facebook::react::RNUITextViewEventEmitter>(strongSelf->_eventEmitter)
-+      ->onMenuAction(facebook::react::RNUITextViewEventEmitter::OnMenuAction{
++    // Use the live range after any handle adjustment, not the menu's original range.
++    const NSRange selection = strongSelf->_textView.selectedRange;
++    if (selection.location == NSNotFound || selection.length == 0 ||
++        NSMaxRange(selection) > strongSelf->_textView.text.length) {
++      return;
++    }
++    auto emitter = std::dynamic_pointer_cast<const facebook::react::RNUITextViewEventEmitter>(strongSelf->_eventEmitter);
++    if (sideChat) {
++      emitter->onSideChatMenuAction(facebook::react::RNUITextViewEventEmitter::OnSideChatMenuAction{
 +        static_cast<int>(strongSelf.tag),
-+        static_cast<int>(range.location),
-+        static_cast<int>(range.location + range.length),
++        static_cast<int>(selection.location),
++        static_cast<int>(NSMaxRange(selection)),
 +      });
-+    // Clear the selection once the action is consumed; defer past menu dismissal
-+    // so the system teardown never races a live selection mutation.
++    } else {
++      emitter->onMenuAction(facebook::react::RNUITextViewEventEmitter::OnMenuAction{
++        static_cast<int>(strongSelf.tag),
++        static_cast<int>(selection.location),
++        static_cast<int>(NSMaxRange(selection)),
++      });
++    }
++    // Clear after dismissal so the system teardown never races a selection mutation.
 +    UITextView *innerTextView = strongSelf->_textView;
 +    dispatch_async(dispatch_get_main_queue(), ^{
 +      innerTextView.selectedTextRange = nil;
++      [weakSelf syncOutsideTapRecognizer];
 +    });
-+  }];
-+  NSMutableArray<UIMenuElement *> *children = [NSMutableArray arrayWithObject:customAction];
++  };
++  NSMutableArray<UIMenuElement *> *children = [NSMutableArray array];
++  if (_menuActionLabel.length > 0) {
++    [children addObject:[UIAction actionWithTitle:_menuActionLabel image:nil identifier:nil
++      handler:^(__kindof UIAction *action) { performAction(NO); }]];
++  }
++  if (_sideChatMenuActionLabel.length > 0) {
++    [children addObject:[UIAction actionWithTitle:_sideChatMenuActionLabel image:nil identifier:nil
++      handler:^(__kindof UIAction *action) { performAction(YES); }]];
++  }
 +  [children addObjectsFromArray:suggestedActions];
 +  return [UIMenu menuWithChildren:children];
 +}
@@ -577,10 +678,10 @@ index 27797444bfb990b51c5d63d170d362596a384415..b9ba5de9e034f40005e7a555a7a6cdec
  };
  } // namespace facebook::React
 diff --git a/lib/commonjs/RNUITextViewNativeComponent.ts b/lib/commonjs/RNUITextViewNativeComponent.ts
-index 1c571b4ac58cf8155769e789d103f99b6146b6dd..6827cd47b34f22fecba2f885a1b41a81ec290410 100644
+index 1c571b4ac58cf8155769e789d103f99b6146b6dd..9c800ec8aac9f00ba55103b8da738dfd40a13efa 100644
 --- a/lib/commonjs/RNUITextViewNativeComponent.ts
 +++ b/lib/commonjs/RNUITextViewNativeComponent.ts
-@@ -32,6 +32,12 @@ interface NativeProps extends ViewProps {
+@@ -32,6 +32,14 @@ interface NativeProps extends ViewProps {
    allowFontScaling?: WithDefault<boolean, true>
    ellipsizeMode?: WithDefault<EllipsizeMode, 'tail'>
    selectable?: boolean
@@ -590,10 +691,12 @@ index 1c571b4ac58cf8155769e789d103f99b6146b6dd..6827cd47b34f22fecba2f885a1b41a81
 +   * unset renders no custom item. iOS 16+ only (editMenuForTextInRange).
 +   */
 +  menuActionLabel?: string
++  /** Optional second action, placed after menuActionLabel. */
++  sideChatMenuActionLabel?: string
    onTextLayout?: BubblingEventHandler<TextLayoutEvent>
    /**
     * Callback fired when the text selection changes.
-@@ -48,6 +54,12 @@ interface NativeProps extends ViewProps {
+@@ -48,6 +56,13 @@ interface NativeProps extends ViewProps {
     * ```
     */
    onSelectionChange?: BubblingEventHandler<SelectionChangeEvent>
@@ -603,14 +706,15 @@ index 1c571b4ac58cf8155769e789d103f99b6146b6dd..6827cd47b34f22fecba2f885a1b41a81
 +   * the selection after emitting.
 +   */
 +  onMenuAction?: BubblingEventHandler<SelectionChangeEvent>
++  onSideChatMenuAction?: BubblingEventHandler<SelectionChangeEvent>
  }
  
  export default codegenNativeComponent<NativeProps>('RNUITextView', {
 diff --git a/lib/module/RNUITextViewNativeComponent.ts b/lib/module/RNUITextViewNativeComponent.ts
-index 1c571b4ac58cf8155769e789d103f99b6146b6dd..6827cd47b34f22fecba2f885a1b41a81ec290410 100644
+index 1c571b4ac58cf8155769e789d103f99b6146b6dd..9c800ec8aac9f00ba55103b8da738dfd40a13efa 100644
 --- a/lib/module/RNUITextViewNativeComponent.ts
 +++ b/lib/module/RNUITextViewNativeComponent.ts
-@@ -32,6 +32,12 @@ interface NativeProps extends ViewProps {
+@@ -32,6 +32,14 @@ interface NativeProps extends ViewProps {
    allowFontScaling?: WithDefault<boolean, true>
    ellipsizeMode?: WithDefault<EllipsizeMode, 'tail'>
    selectable?: boolean
@@ -620,10 +724,12 @@ index 1c571b4ac58cf8155769e789d103f99b6146b6dd..6827cd47b34f22fecba2f885a1b41a81
 +   * unset renders no custom item. iOS 16+ only (editMenuForTextInRange).
 +   */
 +  menuActionLabel?: string
++  /** Optional second action, placed after menuActionLabel. */
++  sideChatMenuActionLabel?: string
    onTextLayout?: BubblingEventHandler<TextLayoutEvent>
    /**
     * Callback fired when the text selection changes.
-@@ -48,6 +54,12 @@ interface NativeProps extends ViewProps {
+@@ -48,6 +56,13 @@ interface NativeProps extends ViewProps {
     * ```
     */
    onSelectionChange?: BubblingEventHandler<SelectionChangeEvent>
@@ -633,14 +739,15 @@ index 1c571b4ac58cf8155769e789d103f99b6146b6dd..6827cd47b34f22fecba2f885a1b41a81
 +   * the selection after emitting.
 +   */
 +  onMenuAction?: BubblingEventHandler<SelectionChangeEvent>
++  onSideChatMenuAction?: BubblingEventHandler<SelectionChangeEvent>
  }
  
  export default codegenNativeComponent<NativeProps>('RNUITextView', {
 diff --git a/src/RNUITextViewNativeComponent.ts b/src/RNUITextViewNativeComponent.ts
-index 1c571b4ac58cf8155769e789d103f99b6146b6dd..6827cd47b34f22fecba2f885a1b41a81ec290410 100644
+index 1c571b4ac58cf8155769e789d103f99b6146b6dd..9c800ec8aac9f00ba55103b8da738dfd40a13efa 100644
 --- a/src/RNUITextViewNativeComponent.ts
 +++ b/src/RNUITextViewNativeComponent.ts
-@@ -32,6 +32,12 @@ interface NativeProps extends ViewProps {
+@@ -32,6 +32,14 @@ interface NativeProps extends ViewProps {
    allowFontScaling?: WithDefault<boolean, true>
    ellipsizeMode?: WithDefault<EllipsizeMode, 'tail'>
    selectable?: boolean
@@ -650,10 +757,12 @@ index 1c571b4ac58cf8155769e789d103f99b6146b6dd..6827cd47b34f22fecba2f885a1b41a81
 +   * unset renders no custom item. iOS 16+ only (editMenuForTextInRange).
 +   */
 +  menuActionLabel?: string
++  /** Optional second action, placed after menuActionLabel. */
++  sideChatMenuActionLabel?: string
    onTextLayout?: BubblingEventHandler<TextLayoutEvent>
    /**
     * Callback fired when the text selection changes.
-@@ -48,6 +54,12 @@ interface NativeProps extends ViewProps {
+@@ -48,6 +56,13 @@ interface NativeProps extends ViewProps {
     * ```
     */
    onSelectionChange?: BubblingEventHandler<SelectionChangeEvent>
@@ -663,14 +772,15 @@ index 1c571b4ac58cf8155769e789d103f99b6146b6dd..6827cd47b34f22fecba2f885a1b41a81
 +   * the selection after emitting.
 +   */
 +  onMenuAction?: BubblingEventHandler<SelectionChangeEvent>
++  onSideChatMenuAction?: BubblingEventHandler<SelectionChangeEvent>
  }
  
  export default codegenNativeComponent<NativeProps>('RNUITextView', {
 diff --git a/src/Text.tsx b/src/Text.tsx
-index 840d76af5a001021b23fb83de18899f8156e1001..71c4e31e7cf288c7bc81e1d7de5e2970c5f6e018 100644
+index 840d76af5a001021b23fb83de18899f8156e1001..fc87b8324ab00bb4067be6943cf81979e35e326f 100644
 --- a/src/Text.tsx
 +++ b/src/Text.tsx
-@@ -39,6 +39,16 @@ type UITextViewProps = TextProps & {
+@@ -39,6 +39,18 @@ type UITextViewProps = TextProps & {
     * off this event should debounce.
     */
    onSelectionChange?: (event: SelectionChangeEvent) => void
@@ -679,11 +789,13 @@ index 840d76af5a001021b23fb83de18899f8156e1001..71c4e31e7cf288c7bc81e1d7de5e2970
 +   * text selection (iOS 16+). Empty/unset renders no custom item.
 +   */
 +  menuActionLabel?: string
++  sideChatMenuActionLabel?: string
 +  /**
 +   * Fired when the user taps the custom edit-menu action. Payload carries the
 +   * selected range at tap time; the native side clears the selection after.
 +   */
 +  onMenuAction?: (event: SelectionChangeEvent) => void
++  onSideChatMenuAction?: (event: SelectionChangeEvent) => void
  }
  
  function UITextViewChild({style, children, ...rest}: UITextViewProps) {

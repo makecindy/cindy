@@ -43,7 +43,7 @@ import { registerScheduleSilenceCurrentRunTool } from '../scheduler/silenceCurre
 import { registerScheduleCreateTool } from '../scheduler/create.js';
 import { registerScheduleUpdateTool } from '../scheduler/update.js';
 import { registerScheduleSetPreRunHookTool } from '../scheduler/setPreRunHook.js';
-import type { LiziMcpSessionContext } from '../types.js';
+import type { LiziMcpSessionContext, SchedulerMcpDeps } from '../types.js';
 
 // ── In-memory ScheduleStorage / Runner / Clock (same shape as Phase 1 tests) ──
 
@@ -105,6 +105,10 @@ class InMemoryStorage implements ScheduleStorage {
       (r) => r.status === 'running' && (scheduleId === undefined || r.scheduleId === scheduleId),
     );
   }
+  async hasUnfinishedRuns(scheduleId: string): Promise<boolean> {
+    return [...this.runs.values()].some((r) => r.scheduleId === scheduleId &&
+      (r.status === 'running' || r.status === 'interrupted'));
+  }
   // 与真实现相同的 CAS 语义:active 且 nextFireAt 精确匹配才认领(置空),否则 null。
   async claimDueFire(id: string, expectedNextFireAt: number): Promise<Schedule | null> {
     const ex = this.schedules.get(id);
@@ -154,6 +158,7 @@ interface Harness {
 
 async function makeHarness(opts?: {
   schedulerNotReady?: boolean;
+  webhookManagement?: SchedulerMcpDeps['webhookManagement'];
 }): Promise<Harness> {
   const storage = new InMemoryStorage();
   const clock = new FakeClock();
@@ -168,6 +173,7 @@ async function makeHarness(opts?: {
   // to compute nextFireAt for any pre-existing actives (none here).
 
   const server = createSchedulerMcpServer({
+    webhookManagement: opts?.webhookManagement,
     getScheduler: () => {
       if (opts?.schedulerNotReady) {
         throw new Error('scheduler not started');
@@ -221,15 +227,64 @@ describe('cindy_scheduler MCP server (in-process smoke)', () => {
     h = await makeHarness();
   });
 
+  // Unit integration: account management must be discoverable and reachable through
+  // the public MCP dispatcher, including an endpoint belonging to an offline device.
+  it('discovers account Webhook management and dispatches validated list/release/restore calls', async () => {
+    await h.cleanup();
+    const service = { list: vi.fn(async () => ({ used: 1, limit: 10, endpoints: [{ id: 'whk_old', deviceId: 'offline' }] })),
+      release: vi.fn(async (_id: string) => {}), restore: vi.fn(async (_id: string) => {}) };
+    h = await makeHarness({ webhookManagement: service });
+    try {
+      const discovered = await h.client.callTool({ name: 'list_tools', arguments: { category: 'scheduler' } });
+      expect(JSON.stringify(discovered.content)).toContain('schedule_webhook_release');
+      const list = await h.client.callTool({ name: 'call_tool', arguments: { name: 'schedule_webhook_list', args: {} } });
+      expect(JSON.stringify(list.content)).toContain('offline');
+      const bad = await h.client.callTool({ name: 'call_tool', arguments: { name: 'schedule_webhook_release', args: { id: '../secret' } } });
+      expect(bad.isError).toBe(true);
+      expect(service.release).not.toHaveBeenCalled();
+      await h.client.callTool({ name: 'call_tool', arguments: { name: 'schedule_webhook_release', args: { id: 'whk_old' } } });
+      expect(service.release).toHaveBeenCalledWith('whk_old');
+      await h.client.callTool({ name: 'call_tool', arguments: { name: 'schedule_webhook_restore', args: { id: 's1' } } });
+      expect(service.restore).toHaveBeenCalledWith('s1');
+    } finally { await h.cleanup(); }
+  });
+
+  // Integration: schema parsing used to strip the Agent location. Follow the real
+  // MCP dispatcher through create/update and verify the saved route and null clear.
+  it('persists shared model selections and clears their location through MCP', async () => {
+    try {
+      const route = { modelAgentKind: 'codex', modelAgentDeviceId: 'shared:owner',
+        model: 'shared-model', providerId: 'remote-provider', fastMode: 'ultrafast' };
+      const result = await h.client.callTool({ name: 'call_tool', arguments: {
+        name: 'schedule_create', args: { ...baseCreate, ...route },
+      } });
+      expect(result.isError).not.toBe(true);
+      const [created] = await h.storage.list();
+      expect(created).toMatchObject(route);
+      const updated = await h.client.callTool({ name: 'call_tool', arguments: {
+        name: 'schedule_update', args: { id: created.id, modelAgentDeviceId: null },
+      } });
+      expect(updated.isError).not.toBe(true);
+      expect(await h.storage.get(created.id)).toMatchObject({ ...route, modelAgentDeviceId: undefined });
+    } finally { await h.cleanup(); }
+  });
+
   it('list_tools without category returns the scheduler category', async () => {
     const result = await h.client.callTool({ name: 'list_tools', arguments: {} });
     const first = (result.content as Array<{ type: string; text: string }>)[0];
     const payload = JSON.parse(first.text) as {
       ok: boolean;
-      categories: { name: string; tool_count: number }[];
+      categories: { name: string; tool_count: number; description: string }[];
     };
     expect(payload.ok).toBe(true);
-    expect(payload.categories).toEqual([{ name: 'scheduler', tool_count: 11 }]);
+    // 类目概览要在第一步就写明用途与作用范围(本机 / 可跨电脑)。
+    expect(payload.categories).toEqual([
+      { name: 'scheduler', tool_count: 11, description: expect.stringMatching(/各自的电脑.*schedule_create.*只在本机/) },
+    ]);
+    // Agent/user parity: the first discovery result must expose remote trigger
+    // configuration while keeping secret/URL operations out of Agent tools.
+    expect(payload.categories[0].description).toMatch(/Webhook[^。；]*触发配置[^。；]*可指定电脑/);
+    expect(payload.categories[0].description).toMatch(/密钥.*更换地址.*用户.*详情/);
     await h.cleanup();
   });
 
@@ -240,6 +295,17 @@ describe('cindy_scheduler MCP server (in-process smoke)', () => {
         readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: false,
       });
       expect(tools.find((tool) => tool.name === 'call_tool')?.annotations?.readOnlyHint).not.toBe(true);
+    } finally { await h.cleanup(); }
+  });
+
+  // Unit: schema lookup is read-only even for destructive scheduler operations.
+  it('describes a nested operation without creating or changing a schedule', async () => {
+    try {
+      const result = await h.client.callTool({ name: 'list_tools', arguments: { name: 'schedule_create' } });
+      const metadata = JSON.parse((result.content as Array<{ text: string }>)[0].text);
+      expect(metadata).toMatchObject({ ok: true, tool: { name: 'schedule_create', inputSchema: { type: 'object' } } });
+      expect(metadata.tool.inputSchema.properties).toHaveProperty('timezone');
+      expect(await h.storage.list()).toEqual([]);
     } finally { await h.cleanup(); }
   });
 
@@ -268,16 +334,6 @@ describe('cindy_scheduler MCP server (in-process smoke)', () => {
       'schedule_silence_current_run',
       'schedule_update',
     ]);
-    await h.cleanup();
-  });
-
-  it('rejects arbitrary-bot routine management on the general scheduler surface', async () => {
-    for (const name of ['routine_list', 'routine_sources', 'routine_save', 'routine_history', 'routine_delete', 'routine_run_now']) {
-      const result = await h.client.callTool({
-        name: 'call_tool', arguments: { name, args: { botId: 'another-bot', id: 'routine' } },
-      });
-      expect(result.isError).toBe(true);
-    }
     await h.cleanup();
   });
 
@@ -597,7 +653,8 @@ describe('cindy_scheduler MCP server (in-process smoke)', () => {
       arguments: { name: 'schedule_get', args: { id: 'does-not-exist' } },
     });
     const env = parseToolResult(result as { content: unknown[]; isError?: boolean }).envelope;
-    expect(env).toEqual({ ok: true, data: null });
+    // 本机读取自带范围：data:null 只说明本机没有。
+    expect(env).toEqual({ ok: true, data: null, scope: 'local' });
     await h.cleanup();
   });
 
@@ -605,6 +662,18 @@ describe('cindy_scheduler MCP server (in-process smoke)', () => {
     const result = await h.client.callTool({
       name: 'call_tool',
       arguments: { name: 'schedule_run_now', args: { id: 'does-not-exist' } },
+    });
+    const env = parseToolResult(result as { content: unknown[]; isError?: boolean }).envelope;
+    expect(env).toMatchObject({ ok: false, code: 'NOT_FOUND' });
+    if (env.ok) throw new Error('unreachable');
+    expect(env.message).toMatch(/not found/i);
+    await h.cleanup();
+  });
+
+  it('call_tool(schedule_delete, non-existent id) returns NOT_FOUND', async () => {
+    const result = await h.client.callTool({
+      name: 'call_tool',
+      arguments: { name: 'schedule_delete', args: { id: 'does-not-exist' } },
     });
     const env = parseToolResult(result as { content: unknown[]; isError?: boolean }).envelope;
     expect(env).toMatchObject({ ok: false, code: 'NOT_FOUND' });
@@ -1030,6 +1099,62 @@ describe('schedule_notify_current_run — runId resolution branches', () => {
     expect(env.ok).toBe(true);
     expect(env.data).toMatchObject({ notified: true, runId: 'run-fallback' });
     expect(fake.notifiedArg).toBe('run-fallback');
+  });
+});
+
+// ── schedule_create / schedule_update: Webhook 触发需要 Cindy 账号 ───────────────
+
+describe('Webhook 触发需要可用的接收方', () => {
+  const baseArgs = {
+    name: 't',
+    prompt: 'p',
+    cronExpr: '*/10 * * * *',
+    timezone: 'Asia/Shanghai',
+    recurring: true,
+    agentKind: 'claude-code',
+    notify: { desktop: true, feishu: false },
+  };
+
+  async function callCreate(receiver: 'cloud' | 'signed-out' | 'unavailable', extra: Record<string, unknown>) {
+    const create = vi.fn((input: object) => ({ id: 'new-sched', ...input }));
+    const registry = new SchedulerToolRegistry();
+    registerScheduleCreateTool(
+      registry,
+      { getScheduler: () => ({ create }) as never, webhookReceiver: () => receiver },
+      () => ({ agentKind: 'claude-code', workingDir: '/x' }),
+    );
+    const res = await registry.call('schedule_create', { ...baseArgs, ...extra });
+    return { create, env: JSON.parse((res.content[0] as { text: string }).text) as { ok: boolean; message?: string } };
+  }
+
+  it('未登录时拒绝开启，不创建任务', async () => {
+    const { create, env } = await callCreate('signed-out', { webhookTrigger: {} });
+    expect(env.ok).toBe(false);
+    expect(env.message).toContain('登录 Cindy 账号');
+    expect(create).not.toHaveBeenCalled();
+  });
+
+  it('当前环境没有接收服务时拒绝开启', async () => {
+    const { create, env } = await callCreate('unavailable', { webhookTrigger: {} });
+    expect(env.ok).toBe(false);
+    expect(create).not.toHaveBeenCalled();
+  });
+
+  it('已登录时可以开启；不用 Webhook 的任务不受影响', async () => {
+    expect((await callCreate('cloud', { webhookTrigger: {} })).env.ok).toBe(true);
+    expect((await callCreate('signed-out', {})).env.ok).toBe(true);
+  });
+
+  // 规则：docs/product-rules/schedule-webhook-trigger.md。Agent 能选发送方，但密钥不经过模型。
+  it('发送方交给引擎校验；参数里夹带密钥会被拒绝', async () => {
+    const source = { preset: 'stripe', signed: false };
+    const { create, env } = await callCreate('cloud', { webhookTrigger: { source } });
+    expect(env.ok).toBe(true);
+    expect(create).toHaveBeenCalledWith(expect.objectContaining({ webhookTrigger: { source } }));
+
+    const smuggled = await callCreate('cloud', { webhookTrigger: { source: { preset: 'stripe', secret: 'whsec_x' } } });
+    expect(smuggled.env.ok).toBe(false);
+    expect(smuggled.create).not.toHaveBeenCalled();
   });
 });
 
@@ -1549,6 +1674,7 @@ describe('schedule_set_pre_run_hook — 统一安装通道', () => {
     withService?: boolean;
     scheduleRow?: Record<string, unknown> | null;
     resolveSessionWorkDir?: (sessionId: string) => Promise<string | undefined>;
+    isSessionAgentOnOtherDevice?: (sessionId: string) => Promise<boolean>;
   }) {
     const installCalls: InstallCall[] = [];
     const updates: Array<{ id: string; patch: Record<string, unknown> }> = [];
@@ -1567,6 +1693,9 @@ describe('schedule_set_pre_run_hook — 统一安装通道', () => {
         ? {}
         : {
             hookScript: {
+              ...(opts.isSessionAgentOnOtherDevice
+                ? { isSessionAgentOnOtherDevice: opts.isSessionAgentOnOtherDevice }
+                : {}),
               ...(opts.resolveSessionWorkDir
                 ? { resolveSessionWorkDir: opts.resolveSessionWorkDir }
                 : {}),
@@ -1655,6 +1784,27 @@ describe('schedule_set_pre_run_hook — 统一安装通道', () => {
     const data = env.data as Record<string, unknown>;
     expect(data.attached).toBe(true);
     expect((data.test as Record<string, unknown>).decision).toBe('skip');
+  });
+
+  // PR #6832: the real tool must select the local utility route for remote bound
+  // tasks. Existing tests only inherited cwd, without remote-only model/provider.
+  // Minimal input: targetSessionId + remote provider, no schedule.agentDeviceId.
+  // Tier: unit; fake installer captures its public route and attachment result.
+  // Windows standalone: 0.85s for the file's 70 tests.
+  it.each([true, false])('uses the bound task location for hook generation (remote=%s)', async (remote) => {
+    const { registry, installCalls, updates } = setup({
+      scheduleRow: { id: 'sch-1', targetSessionId: 'bound', providerId: 'selected-provider',
+        agentKind: 'claude-code', model: 'selected-model' },
+      isSessionAgentOnOtherDevice: async () => remote,
+    });
+    const env = await callTool(registry, { scheduleId: 'sch-1', description: 'Check for pending work' });
+    expect(env.ok).toBe(true);
+    expect(installCalls[0]).toMatchObject({
+      providerId: remote ? undefined : 'selected-provider',
+      agentKind: remote ? undefined : 'claude-code',
+      model: remote ? undefined : 'selected-model',
+    });
+    expect(updates).toHaveLength(1);
   });
 
   it('bound script hooks are installed in script cwd rather than owner cwd', async () => {

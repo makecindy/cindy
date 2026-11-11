@@ -468,35 +468,29 @@ async function handleTabOpRequest(
       const newTab = await addTab(req.sessionId, 'web-browser', initialState);
 
       // ── Eager webview spawn ─────────────────────────────────────────────
-      // The tab is now in the store, but `<webview>` only exists once
-      // `BrowserTabBody` mounts — which doesn't happen until the user is
-      // looking at this session. If the agent operates on a session OTHER
-      // than the currently-focused one (cross-session automation), the
-      // webview never comes into being, no webContentsId is ever reported
-      // to main, and the very next `backend.navigate` / `evaluate` fails
-      // with "tab not found".
+      // A newly added background tab may not have a BrowserTabBody yet.
+      // Without eager materialization, cross-session automation can reach
+      // backend.navigate / evaluate before main has a webContentsId.
       //
       // Fix: synchronously acquire the pool entry NOW. That creates the
       // <webview> DOM node inside the off-screen parking container (already
       // attached to document.body — see browserWebviewPool.ensureContainer),
       // which is enough for Electron to create the guest webContents.
-      // Setting `src` kicks off navigation. We wait for `dom-ready`, report
-      // (sessionId, tabId, webContentsId) to main, and ONLY THEN ack the
-      // tab-op back to the backend — so by the time the agent's next call
-      // arrives, the registry has the mapping.
+      // Setting `src` kicks off navigation. did-attach / dom-ready attempt
+      // to report the guest id; completion also has an 8s timeout. Reports
+      // are best-effort, so completion does not guarantee a registry entry.
       //
       // When the user later switches into this session, BrowserTabBody
-      // mounts and `useBrowserWebview` acquires the SAME pool entry (key
-      // is tabId) — the loaded page is preserved verbatim (the entire
-      // point of the pool's parking-region design, see browserWebviewPool
-      // line 4-13). Its own dom-ready listener won't re-fire (the event
-      // already passed), but main already has the registry entry, and
-      // BrowserTabBody.tsx's initial-URL-read code (line 175-181 of
-      // useBrowserWebview) syncs the displayed URL from `webview.getURL()`.
+      // mounts and useBrowserWebview may reuse the same pool DOM entry.
+      // Moving its wrapper from parking into the slot can recreate the
+      // guest and lose page state; the hook observes attach / dom-ready
+      // and reports the current id. Retaining already-mounted hosts avoids
+      // reparenting on task switches; it does not cover this first mount
+      // of an eager-spawned background tab or promise its guest survives.
       await eagerSpawnAndReport(req.sessionId, newTab.id, initialState.url);
       // Visibility command runs AFTER the eager-spawn so that by the time
-      // MainLayout reads the new collapsed-state archive (when user later
-      // switches to this session), the webview is already prepared.
+      // MainLayout reads the new collapsed-state archive, the initial
+      // materialization attempt has finished (possibly via timeout).
       // userInitiated:false —— agent 自动化开的标签,不是用户点的:侧边栏该展开
       // 就展开,但 detached 子窗口不得抢走用户当前前台应用的焦点。
       requestRightSidebarVisibility('open', { sessionId: req.sessionId, userInitiated: false });
@@ -587,14 +581,13 @@ function pickDefaultBrowserTab(
 }
 
 /**
- * open / ensure 共用的 webview 物化:acquire pool entry → setAttribute('src')
- * → 等 dom-ready → report (sessionId, tabId, webContentsId) 给 main。
+ * open / ensure 共用的 webview 物化：acquire pool entry，已 attach 时尝试重报；
+ * 否则 setAttribute('src')，在 did-attach / dom-ready 尝试 report 给 main。
  *
- * 为什么要 eager:tab 在 store 里 ≠ `<webview>` 存在 —— `BrowserTabBody` 只在
- * 用户看着这个 session 时才 mount。agent 跨 session 自动化时 webview 永远不会
- * 自然出生,main 的 registry 拿不到 webContentsId,下一个 backend 动作就会报
- * "tab not found"。所以在停车区容器里同步 acquire(创建 guest webContents),
- * report 完成后才让调用方 ack —— backend 下一次解析时 registry 已有映射。
+ * 为什么要 eager：store 中新建的后台 tab 不一定已有 BrowserTabBody，需先
+ * 在停车区物化，避免自动化动作直接遇到 "tab not found"。上报是 best-effort，
+ * 等待也有超时；返回不保证 main 已登记。随后首次附着到 body slot 可能重建
+ * guest，不能把停车区的 DOM 复用当作页面状态保留；该路径未由常驻宿主策略覆盖。
  *
  * 已 attach 过的 entry(getWebContentsId 可取)走幂等 re-report 快路径,
  * 不再动 src(避免把用户正在看的页面重新导航)。

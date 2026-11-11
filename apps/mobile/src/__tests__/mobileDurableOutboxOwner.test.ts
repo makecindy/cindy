@@ -11,7 +11,7 @@ vi.mock('@react-native-async-storage/async-storage', () => ({ default: {
 } }));
 vi.mock('../session/durableOutboxFiles', () => ({ durableOutboxUploadUri: vi.fn(), removeOutboxFiles: mocks.removeFiles }));
 vi.mock('../session/mobileAttachmentUpload', () => ({ discardMobileUploadedAttachment: mocks.discard }));
-import { cleanupOutboxResources, discardOutboxUploads, getCurrentMobileOutboxRecords, mobileDurableOutbox, persistCancelledCreationDraft } from '../session/mobileDurableOutbox';
+import { cleanupOutboxResources, discardOutboxUploads, getCurrentMobileOutboxRecords, mobileDurableOutbox, persistCancelledCreationDraft, suspendCreationDraftForCleanup } from '../session/mobileDurableOutbox';
 
 function record(): DurableOutboxRecord {
   return { version: 1, accountId: getMobileAuthOwner().accountKey, deviceId: 'mac', createdAt: 1,
@@ -56,6 +56,36 @@ it('does not cancel another account draft when the owner switches during activat
   setMobileAuthOwner('bob', 'global');
   await expect(pending).rejects.toThrow('OUTBOX_OWNER_CHANGED');
   expect(mocks.data).toEqual(original);
+});
+
+it('suspends only the matching creation before cleanup without claiming cancellation', async () => {
+  const own = record();
+  own.creation = { draft: { workingDir: '/repo/worktree' } as NonNullable<DurableOutboxRecord['creation']>['draft'],
+    deviceName: 'PC', planModeArm: false, restorePermissionMode: null };
+  const other = { ...own, deviceId: 'other-device' };
+  await mobileDurableOutbox.add(own);
+  await mobileDurableOutbox.add(other);
+  await suspendCreationDraftForCleanup({ sessionId: 'task', deviceId: 'mac' });
+  await mobileDurableOutbox.activate('');
+  await mobileDurableOutbox.activate(getMobileAuthOwner().accountKey);
+  expect(getCurrentMobileOutboxRecords().find(r => r.deviceId === 'mac')).toEqual({ ...own, suspended: true });
+  expect(getCurrentMobileOutboxRecords().find(r => r.deviceId === 'other-device')).toEqual(other);
+});
+
+it('fences an owner change during cleanup suspension and refuses previous-send evidence', async () => {
+  const own = record();
+  own.creation = { draft: {} as NonNullable<DurableOutboxRecord['creation']>['draft'],
+    deviceName: 'PC', planModeArm: false, restorePermissionMode: null };
+  await mobileDurableOutbox.add(own);
+  const original = new Map(mocks.data);
+  const pending = suspendCreationDraftForCleanup({ sessionId: 'task', deviceId: 'mac' });
+  setMobileAuthOwner('bob');
+  await expect(pending).rejects.toThrow('OUTBOX_OWNER_CHANGED');
+  expect(mocks.data).toEqual(original);
+  setMobileAuthOwner('alice');
+  await mobileDurableOutbox.update(own, { enqueueStarted: true });
+  await expect(suspendCreationDraftForCleanup({ sessionId: 'task', deviceId: 'mac' })).rejects.toThrow('OUTBOX_CREATION_OWNERSHIP_UNRESOLVED');
+  expect(getCurrentMobileOutboxRecords()[0].suspended).toBeUndefined();
 });
 
 it('still disposes confirmed-cancelled uploads when local deletion rejects', async () => {

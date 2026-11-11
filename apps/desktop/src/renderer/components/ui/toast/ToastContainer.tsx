@@ -3,8 +3,10 @@ import { useTranslation } from 'react-i18next';
 
 import { cn } from '@/lib/utils';
 import { type ToastItem, getToastSnapshot, subscribeToastStore } from '@/lib/toast';
+import { getFileTransferToasts, subscribeFileTransferToasts } from '@/lib/fileTransferToasts';
 
 import { Toast } from './Toast';
+import { DownloadToast } from './DownloadToast';
 
 // ────────────────────────────────────────────────────────────
 // ToastFadeWrapper — 纯 opacity 淡入淡出（整块，无裁切）
@@ -49,6 +51,7 @@ function ToastFadeWrapper({
 export function ToastContainer() {
   const { t } = useTranslation();
   const items = useSyncExternalStore(subscribeToastStore, getToastSnapshot, getToastSnapshot);
+  const transfers = useSyncExternalStore(subscribeFileTransferToasts, getFileTransferToasts, getFileTransferToasts);
 
   const containerRef = useRef<HTMLDivElement>(null);
   const prevRectsRef = useRef<Map<string, number>>(new Map());
@@ -92,7 +95,7 @@ export function ToastContainer() {
 
       // Play: 下一帧平滑滑到新位置
       requestAnimationFrame(() => {
-        el.style.transition = 'transform 300ms ease-out';
+        el.style.transition = 'transform var(--motion-base) var(--motion-ease-move)';
         el.style.transform = '';
       });
     });
@@ -102,17 +105,29 @@ export function ToastContainer() {
   });
 
   return (
+    <>
     <div
       ref={containerRef}
       aria-label={t('commonUi.toastContainer.ariaLabel')}
       // z-[10100]: 高于所有 Radix Dialog (z-[10000]),避免 toast 被打开的对话框遮挡
       className="pointer-events-none fixed inset-x-0 top-5 z-[10100] flex flex-col items-center gap-[10px]"
     >
-      {items.map((item) => (
+      <DownloadToast items={transfers} />
+      {items.filter(item => item.placement !== 'top-right').map((item) => (
         <ToastFadeWrapper key={item.id} item={item} toastId={item.id}>
           <Toast item={item} />
         </ToastFadeWrapper>
       ))}
     </div>
+    {/* Anchored invitations keep their corner through loading and success updates.
+        They do not participate in the top-center stack's FLIP animation. */}
+    <div className="pointer-events-none fixed right-6 top-16 z-[10100] flex w-96 max-w-[calc(100vw_-_48px)] flex-col items-end gap-[10px] [&>div]:max-w-full">
+      {items.filter(item => item.placement === 'top-right').map(item => (
+        <ToastFadeWrapper key={item.id} item={item} toastId={item.id}>
+          <Toast item={item} />
+        </ToastFadeWrapper>
+      ))}
+    </div>
+    </>
   );
 }

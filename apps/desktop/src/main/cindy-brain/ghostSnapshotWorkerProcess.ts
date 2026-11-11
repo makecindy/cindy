@@ -47,7 +47,10 @@ interface Port {
   postMessage(message: unknown): void;
   on(event: 'message', listener: (event: { data: unknown }) => void): void;
 }
-const port = (process as unknown as { parentPort?: Port }).parentPort;
+const port: Port | undefined = (process as unknown as { parentPort?: Port }).parentPort ?? (process.env.CINDY_SNAPSHOT_WORKER === '1' && process.send ? {
+  postMessage: (message) => { process.send!(message as Parameters<NonNullable<typeof process.send>>[0]); },
+  on: (_event, listener) => { process.on('message', (data) => listener({ data })); },
+} : undefined);
 const send = (message: unknown): void => port?.postMessage(message);
 const hasCode = (error: unknown, code: string): boolean =>
   Boolean(error && typeof error === 'object' && (error as NodeJS.ErrnoException).code === code);
@@ -105,7 +108,10 @@ async function removeVerifiedDirectory(
     || movedStat.isSymbolicLink()
     || movedStat.dev !== targetStat.dev
     || movedStat.ino !== targetStat.ino
-    || !samePath(await fs.promises.realpath(quarantinePath), targetRealPath)
+    || !samePath(
+      await fs.promises.realpath(quarantinePath),
+      path.join(await fs.promises.realpath(path.dirname(quarantinePath)), path.basename(quarantinePath)),
+    )
   ) {
     // Never recursively delete an unverified path. Leave the quarantined
     // directory for a later owner-checked cleanup pass.
@@ -115,7 +121,9 @@ async function removeVerifiedDirectory(
   // owner-bound parent before recursive deletion; on failure the isolated
   // directory is intentionally left for a later guarded cleanup pass.
   await verifyParent(expectedParent, workingDir);
-  await verifyDirectory(workingDir, parentName);
+  if (!samePath(targetPath, path.join(workingDir, parentName))) {
+    await verifyDirectory(workingDir, parentName);
+  }
   await fs.promises.rm(quarantinePath, { recursive: true, force: true });
 }
 async function copyDirectory(source: string, target: string): Promise<void> {

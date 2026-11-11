@@ -19,7 +19,8 @@ import type { ModelAccessCredentialsStore } from './credentialsStore.js';
  *    ——既有 key(无论手填还是旧下发)继续工作,新会话无感。
  *
  * 并发:single-flight——同步进行中再触发(登录三入口并发 / 手动重试)复用在途
- * Promise。写 key 仅在值变化时发生,避免每次登录都触发 codex env-key 重启抖动。
+ * Promise。供应商停用时不发起自动请求/重试,停用边界作废在途响应;重新启用恢复同步。
+ * 写 key 仅在值变化时发生,避免每次登录都触发 codex env-key 重启抖动。
  */
 
 /** 服务端错误的最小切片(serverApiClient.ServerApiError 的结构子集)。 */
@@ -64,6 +65,8 @@ export function isValidCredentialsPayload(p: unknown): p is CredentialsPayload {
 }
 
 export interface CredentialsSyncDeps {
+  /** The owner may suspend automatic provisioning without removing saved credentials. */
+  isProviderEnabled?(): boolean;
   /** GET /api/model-access/credentials(失败抛 ServerApiError 形状)。 */
   fetchCredentials(): Promise<CredentialsPayload>;
   /** POST /api/model-access/credentials/rotate。 */
@@ -93,6 +96,17 @@ export interface CredentialsSync {
   sync(): Promise<ModelAccessStatus>;
   /** UI 手动重试:复位终态限制后重新同步。 */
   retry(): Promise<ModelAccessStatus>;
+  /**
+   * Key 被网关拒绝后的静默重新同步(gatewayKeyRejection 专用)。只在拿到新凭据或服务端给出
+   * 确定终态(503 disabled / 403 unsupported)时才改状态;不广播 syncing,重试用尽或写 key
+   * 失败都只记 warn、保持原状态。原因:401 可能是误报,凭据接口也可能暂时不可用——这时
+   * 降成 failed 会清空 Cindy AI 模型列表、把辅助模型链和对话都停掉,之后不再有带 Key 的
+   * 请求产生 401,窗口过后也无从再触发,只能等手动重试或重启。
+   * 同世代已有同步在途时复用它;unsupported / disabled 下与 sync() 一样直接返回。
+   */
+  resyncAfterKeyRejection(): Promise<ModelAccessStatus>;
+  /** Fence pending automatic work on provider disable/re-enable; resume for the signed-in owner. */
+  handleProviderAccessChange(): void;
   /** 轮换:成功返回新状态;失败抛 CredentialsFetchError 形状(IPC 层映射错误码)。 */
   rotate(): Promise<ModelAccessStatus>;
   /**
@@ -113,6 +127,11 @@ export interface CredentialsSync {
 
 const DEFAULT_RETRY_DELAYS_MS = [2_000, 8_000];
 
+/** 一轮同步的失败处理方式;silent = 失败不降级状态(见 resyncAfterKeyRejection)。 */
+interface SyncMode {
+  silent: boolean;
+}
+
 export function createCredentialsSync(deps: CredentialsSyncDeps): CredentialsSync {
   const sleep = deps.sleep ?? ((ms: number) => new Promise((r) => setTimeout(r, ms)));
   const retryDelays = deps.retryDelaysMs ?? DEFAULT_RETRY_DELAYS_MS;
@@ -120,7 +139,12 @@ export function createCredentialsSync(deps: CredentialsSyncDeps): CredentialsSyn
   let status: ModelAccessStatus = snapshot('idle');
   let inflight: Promise<ModelAccessStatus> | null = null;
   /**
-   * 认证世代号:登出、换账号或同账号跨区时自增。所有写盘(key/endpoint/状态)
+   * 在途同步的失败处理方式。静默同步(resyncAfterKeyRejection)在途时被 sync() / retry()
+   * 复用,会改回非静默,保证这两个入口的失败语义不变。
+   */
+  let inflightMode: SyncMode = { silent: false };
+  /**
+   * 世代号:登出、换账号、同账号跨区或供应商停用变化时自增。所有写盘(key/endpoint/状态)
    * 都以发起时捕获的世代为闸——旧身份的在途请求在世代变更后一律作废。
    */
   let epoch = 0;
@@ -129,6 +153,15 @@ export function createCredentialsSync(deps: CredentialsSyncDeps): CredentialsSyn
   /** 当前登录身份(handleAuthChange 维护),null = 未登录/未知。 */
   let currentUserId: string | null = null;
   let currentRealm: AuthRegion | null = null;
+
+  const isProviderEnabled = () => deps.isProviderEnabled?.() !== false;
+
+  function canContinueSync(myEpoch: number): boolean {
+    if (myEpoch !== epoch) return false;
+    if (isProviderEnabled()) return true;
+    if (status.state === 'syncing') setStatus('idle');
+    return false;
+  }
 
   function snapshot(
     state: ModelAccessStatus['state'],
@@ -160,12 +193,15 @@ export function createCredentialsSync(deps: CredentialsSyncDeps): CredentialsSyn
   }
 
   /** 单次拉取 + 落盘。返回终局状态;'retryable' 可退避重试;'stale' = 世代已过期。 */
-  async function attemptOnce(myEpoch: number): Promise<ModelAccessStatus | 'retryable' | 'stale'> {
+  async function attemptOnce(
+    myEpoch: number,
+    mode: SyncMode,
+  ): Promise<ModelAccessStatus | 'retryable' | 'stale'> {
     let payload: CredentialsPayload;
     try {
       payload = await deps.fetchCredentials();
     } catch (err) {
-      if (myEpoch !== epoch) return 'stale';
+      if (!canContinueSync(myEpoch)) return 'stale';
       const e = asFetchError(err);
       if (e.statusCode === 503 || e.code === 'MODEL_ACCESS_DISABLED') {
         deps.log?.info('model-access disabled on server, falling back to manual key flow');
@@ -178,18 +214,19 @@ export function createCredentialsSync(deps: CredentialsSyncDeps): CredentialsSyn
       deps.log?.warn(`model-access credentials fetch failed: ${e.code} (${e.statusCode})`);
       return 'retryable';
     }
-    if (myEpoch !== epoch) return 'stale'; // 响应归属旧账号,丢弃
+    if (!canContinueSync(myEpoch)) return 'stale'; // Account or provider access changed.
     if (!isValidCredentialsPayload(payload)) {
       deps.log?.warn('model-access credentials response invalid (empty key / bad endpoint), kept local');
       return 'retryable';
     }
-    return applyPayload(payload, myEpoch);
+    return applyPayload(payload, myEpoch, mode);
   }
 
   /** 下发结果落盘(sync 与 rotate 共用,世代闸)。值未变不写 key,不触发 codex 重启。 */
   async function applyPayload(
     payload: CredentialsPayload,
     myEpoch: number,
+    mode: SyncMode = { silent: false },
   ): Promise<ModelAccessStatus> {
     if (myEpoch !== epoch) return status;
     const current = deps.readXdKey();
@@ -197,6 +234,11 @@ export function createCredentialsSync(deps: CredentialsSyncDeps): CredentialsSyn
       const ok = await deps.writeXdKey(payload.apiKey);
       if (myEpoch !== epoch) return status;
       if (!ok) {
+        if (mode.silent) {
+          // 静默同步:保持原状态,下一次 401 窗口过后还能再试。
+          deps.log?.warn('model-access key write failed after key rejection, keeping current status');
+          return status;
+        }
         deps.log?.warn('model-access key write failed (safeStorage unavailable?)');
         return setStatus('failed', 'SAFE_STORAGE_UNAVAILABLE');
       }
@@ -205,14 +247,19 @@ export function createCredentialsSync(deps: CredentialsSyncDeps): CredentialsSyn
     return setStatus('ok');
   }
 
-  async function runSync(myEpoch: number): Promise<ModelAccessStatus> {
+  async function runSync(myEpoch: number, mode: SyncMode): Promise<ModelAccessStatus> {
     if (myEpoch !== epoch) return status;
-    setStatus('syncing');
+    if (!mode.silent) setStatus('syncing');
     for (let attempt = 0; ; attempt++) {
-      const result = await attemptOnce(myEpoch);
+      if (!canContinueSync(myEpoch)) return status;
+      const result = await attemptOnce(myEpoch, mode);
       if (result === 'stale' || myEpoch !== epoch) return status; // 登出/换账号,放弃本轮
       if (result !== 'retryable') return result;
       if (attempt >= retryDelays.length) {
+        if (mode.silent) {
+          deps.log?.warn('model-access re-sync after key rejection failed, keeping current status');
+          return status;
+        }
         return setStatusIfFresh(myEpoch, 'failed', 'SYNC_FAILED');
       }
       await sleep(retryDelays[attempt]);
@@ -220,13 +267,19 @@ export function createCredentialsSync(deps: CredentialsSyncDeps): CredentialsSyn
     }
   }
 
-  function startSync(): Promise<ModelAccessStatus> {
+  function startSync(silent = false): Promise<ModelAccessStatus> {
+    if (!isProviderEnabled()) return Promise.resolve(status);
     // 只复用**同世代**的在途请求;旧世代 inflight 会因世代闸自行作废,
     // 这里直接为当前账号发起新一轮(短暂并行无害,旧轮零写盘)。
-    if (inflight && inflightEpoch === epoch) return inflight;
+    if (inflight && inflightEpoch === epoch) {
+      if (!silent) inflightMode.silent = false;
+      return inflight;
+    }
     const myEpoch = epoch;
     inflightEpoch = myEpoch;
-    const run = runSync(myEpoch).finally(() => {
+    const mode: SyncMode = { silent };
+    inflightMode = mode;
+    const run = runSync(myEpoch, mode).finally(() => {
       if (inflight === run) inflight = null;
     });
     inflight = run;
@@ -250,6 +303,21 @@ export function createCredentialsSync(deps: CredentialsSyncDeps): CredentialsSyn
       // 手动重试允许从任何状态(含 disabled——灰度可能刚打开)重新发起;
       // 同世代在途请求由 startSync 内部复用。
       return startSync();
+    },
+
+    resyncAfterKeyRejection() {
+      if (status.state === 'unsupported' || status.state === 'disabled') {
+        return Promise.resolve(status);
+      }
+      return startSync(true);
+    },
+
+    handleProviderAccessChange() {
+      epoch++;
+      if (status.state === 'syncing') setStatus('idle');
+      if (currentUserId !== null && isProviderEnabled()) {
+        void startSync().catch(() => undefined);
+      }
     },
 
     async rotate() {

@@ -36,7 +36,16 @@ import {
 import { BRAND_IDENTITY } from '@cindy/maker-shared/brand-identity';
 
 import { supportsBetaUpdateChannel } from '../shared/updateChannelCapability';
-import { fetchManifest, getBaseUrl, isDev, probeBetaManifest, clearCachedManifest } from './manifestService';
+import {
+  fetchAppUpdateManifest,
+  fetchManifest,
+  getAppUpdateTargetArch,
+  getBaseUrl,
+  isDev,
+  probeBetaManifest,
+  clearCachedManifest,
+} from './manifestService';
+import { isRunningUnderArm64Translation } from './arm64Translation';
 import type { Manifest } from './manifestService';
 import { download, DownloadError } from './downloader/index';
 import { ProgressNormalizer } from './updateProgressNormalizer';
@@ -44,6 +53,8 @@ import { compareAppUpdateVersions } from './updateVersionPolicy';
 import { CURRENT_APP_ID } from '../shared/brandRegion';
 import { syncWindowsVersionAfterUpdate, windowsInstallKey } from './windowsInstallationVersion';
 import { writeStartupBinaryUpdateMarker } from './agent-binaries/startup-update';
+import { prefetch as prefetchAgentBinary } from './agent-binaries/index.js';
+import { getVendorAsset } from './agent-binaries/manifest.js';
 
 import { createLogger, maskPath } from './logger';
 import {
@@ -68,7 +79,7 @@ import {
 import { throwIpcError } from './utils/ipcValidate';
 import { noteExpectedExit } from './startup-diagnostics';
 import { buildMacOSUpdateScript } from './updateScriptMacOS';
-import { buildLinuxUpdateScript, normalizeLinuxDebSha256 } from './updateScriptLinux';
+import { buildLinuxUpdateScript, linuxRelaunchDisplayArgs, normalizeLinuxDebSha256 } from './updateScriptLinux';
 import {
   checkDebianManagedInstallation,
   findLinuxUserInstallation,
@@ -132,6 +143,31 @@ interface PatchInfo {
    * 旧 patch-info 没有这个字段,保持原行为。
    */
   enableBeta?: boolean;
+  /**
+   * 补丁的目标架构，仅在 Rosetta 下的 x64 包下载 arm64 原生包时写 'arm64'。
+   * 冷启动据此把同版本补丁认作待安装的换装，换装后进程已是 arm64 即按「已应用」清理。
+   * 旧 patch-info 没有这个字段，保持原行为。
+   */
+  targetArch?: string;
+}
+
+/**
+ * 应用更新只前进不后退；唯一例外是 Apple 芯片上经 Rosetta 运行的 darwin-x64 包换装
+ * 同版本的 arm64 原生包——版本不变，但把整个 .app 换成原生架构。macOS 更新脚本整包删除
+ * 再移入新 .app，不会残留 x64 文件。其它任何同版本、旧版本都沿用原拒绝。
+ */
+function appUpdateRelation(version: unknown, targetArch: string | undefined) {
+  const relation = compareAppUpdateVersions(version, app.getVersion());
+  if (
+    relation === 'same'
+    && targetArch === 'arm64'
+    && process.platform === 'darwin'
+    && process.arch === 'x64'
+    && isRunningUnderArm64Translation()
+  ) {
+    return 'newer' as const;
+  }
+  return relation;
 }
 
 /**
@@ -174,9 +210,13 @@ const STARTUP_MANIFEST_TIMEOUT_MS = 8_000;
 
 let currentStatus: UpdateStatus = 'idle';
 let readyVersion: string | undefined;
+/** Version of the patch currently being downloaded (downloading / superseding only). */
+let downloadingVersion: string | undefined;
 let readyFilePath: string | undefined;
 /** 当前 staged 补丁对应的渠道代际。延迟清理用它区分「同路径上的新旧包」。 */
 let readyChannelEpoch: number | undefined;
+/** 当前 staged 补丁是换装原生架构的包时为 'arm64'（见 appUpdateRelation）。 */
+let readyTargetArch: string | undefined;
 /**
  * 更新渠道代际计数:用户在下载进行中关掉 beta(clearStagedPatch)时 +1,
  * 让 in-flight 的 checkForUpdate 在写回 patch-info / 恢复旧 patch 前察觉
@@ -244,6 +284,7 @@ function broadcastChannelSettings(): void {
 
 function setStatus(status: UpdateStatus, extra?: Partial<UpdateStatusPayload>): void {
   currentStatus = status;
+  if (status !== 'downloading' && status !== 'superseding') downloadingVersion = undefined;
   lastErrorCode = extra?.errorCode;
   broadcastStatus({ status, ...extra });
   if (status === 'ready' && !startupUpdateCheckInProgress && !extra?.errorCode) {
@@ -606,9 +647,14 @@ export function setUpdateAutoRelaunchBusyProbe(
   void evaluateAutoRelaunch('busy-probe-installed');
 }
 
+/**
+ * Only records the activity. Evaluating here can never pass: lastBusyAtMs was just
+ * set, so the result is always busy / recent-busy. Busy edges can arrive dozens of
+ * times per second (remote invokes), and each evaluation re-ran the busy probe and
+ * logged a block. The 30s poller picks the relaunch up after the quiet period.
+ */
 export function notifyUpdateAutoRelaunchBusyStateChanged(): void {
   markRecentBusyActivity();
-  void evaluateAutoRelaunch('busy-state-changed');
 }
 
 /**
@@ -664,7 +710,11 @@ export function clearReloginFlag(): void {
  *   - 'none'     → (Reserved; current implementation never returns this — kept
  *                  in the union for backward compatibility with prior callers.)
  */
-function checkExistingPatch(): { action: 'relaunch' | 'check' | 'none'; version?: string } {
+function checkExistingPatch(): {
+  action: 'relaunch' | 'check' | 'none';
+  version?: string;
+  targetArch?: string;
+} {
   if (isCindyPersonalRuntime()) return { action: 'none' };
   const updatesDir = getUpdatesDir();
   const infoPath = path.join(updatesDir, PATCH_INFO_FILE);
@@ -704,9 +754,10 @@ function checkExistingPatch(): { action: 'relaunch' | 'check' | 'none'; version?
   }
 
   const currentVersion = app.getVersion();
-  const versionRelation = compareAppUpdateVersions(patchInfo.version, currentVersion);
+  const versionRelation = appUpdateRelation(patchInfo.version, patchInfo.targetArch);
   if (versionRelation === 'same') {
     // Patch matches current version → already applied; clean up and re-check.
+    // 换装原生架构的补丁在换装完成后（进程已是 arm64）同样走这里清理。
     // Keep the matching relogin flag: auth initialization owns consuming it.
     discardExistingPatch(patchInfo, patchFilePath, false);
     return { action: 'check' };
@@ -737,7 +788,8 @@ function checkExistingPatch(): { action: 'relaunch' | 'check' | 'none'; version?
   readyVersion = patchInfo.version;
   readyFilePath = patchFilePath;
   readyChannelEpoch = updateChannelEpoch;
-  return { action: 'relaunch', version: patchInfo.version };
+  readyTargetArch = patchInfo.targetArch;
+  return { action: 'relaunch', version: patchInfo.version, targetArch: patchInfo.targetArch };
 }
 
 function writePatchInfo(info: PatchInfo): void {
@@ -888,6 +940,7 @@ function discardStagedPatchFiles(): void {
   readyVersion = undefined;
   readyFilePath = undefined;
   readyChannelEpoch = undefined;
+  readyTargetArch = undefined;
   linuxStagedDebSha256 = null;
   linuxStagedDebSize = null;
   removePatchInfo();
@@ -916,6 +969,7 @@ function flushDeferredStagedPatchClear(): void {
       readyVersion = undefined;
       readyFilePath = undefined;
       readyChannelEpoch = undefined;
+      readyTargetArch = undefined;
     }
     return;
   }
@@ -1140,6 +1194,7 @@ async function doCheckForUpdate(manifestOverride?: Manifest | null): Promise<Che
   const previousReadyVersion = wasReady ? readyVersion : undefined;
   const previousReadyFilePath = wasReady ? readyFilePath : undefined;
   const previousReadyChannelEpoch = wasReady ? readyChannelEpoch : undefined;
+  const previousReadyTargetArch = wasReady ? readyTargetArch : undefined;
 
   // 只有非 ready 路径才广播 'checking' — wasReady 路径下广播 checking 会让 banner
   // 的可见条件(status === 'ready' || 'superseding')瞬间不满足,banner 抖一下。
@@ -1147,7 +1202,7 @@ async function doCheckForUpdate(manifestOverride?: Manifest | null): Promise<Che
     setStatus('checking');
   }
 
-  const manifest = manifestOverride ?? await fetchManifest();
+  const manifest = manifestOverride ?? await fetchAppUpdateManifest();
   if (!manifest) {
     log.info('Manifest fetch failed');
     if (!wasReady) currentStatus = 'idle';
@@ -1158,7 +1213,9 @@ async function doCheckForUpdate(manifestOverride?: Manifest | null): Promise<Che
   const currentVersion = app.getVersion();
   log.info('Version check: current=%s, latest=%s, ready=%s', currentVersion, latestVersion, previousReadyVersion ?? '<none>');
 
-  const versionRelation = compareAppUpdateVersions(latestVersion, currentVersion);
+  const targetArch = getAppUpdateTargetArch(manifest);
+  if (targetArch) log.info('Rosetta-translated x64 build: checking the %s native package', targetArch);
+  const versionRelation = appUpdateRelation(latestVersion, targetArch);
   if (versionRelation === 'invalid') {
     log.error(
       'Refusing app update because version comparison is invalid: current=%s latest=%s',
@@ -1208,7 +1265,7 @@ async function doCheckForUpdate(manifestOverride?: Manifest | null): Promise<Che
   }
 
   // wasReady 且 manifest 仍是已下好的同一个版本 → 无事发生,保持 ready。
-  if (wasReady && latestVersion === previousReadyVersion) {
+  if (wasReady && latestVersion === previousReadyVersion && targetArch === previousReadyTargetArch) {
     log.info('Ready patch v%s still matches latest — no superseding needed', previousReadyVersion);
     return 'ready';
   }
@@ -1221,6 +1278,7 @@ async function doCheckForUpdate(manifestOverride?: Manifest | null): Promise<Che
 
   // wasReady 路径下,旧的 a.zip 必须保留到 b 通过 SHA 校验之后才能删,否则 b 下载失败
   // 时用户连旧的 a 都装不上了。非 wasReady 路径保持原行为(下载前清理腾空间)。
+  downloadingVersion = latestVersion;
   if (!wasReady) {
     cleanOldFiles(fileName);
     setStatus('downloading', { version: latestVersion, progress: 0 });
@@ -1334,13 +1392,17 @@ async function doCheckForUpdate(manifestOverride?: Manifest | null): Promise<Che
       return 'idle';
     }
 
-    const requireRelogin = manifest.app.requireRelogin === true;
+    // 重新授权是版本级迁移：只在版本真正前进时生效。同版本换装原生架构的用户已在当前
+    // 版本完成过这次迁移，再写标记会在冷启动时清掉已保存的账号登录。
+    const requireRelogin = manifest.app.requireRelogin === true
+      && compareAppUpdateVersions(latestVersion, currentVersion) === 'newer';
     writePatchInfo({
       version: latestVersion,
       fileName,
       sha256: asset.sha256.toLowerCase(),
       requireRelogin,
       enableBeta: channelEnableBetaAtStart,
+      ...(targetArch ? { targetArch } : {}),
     });
     // release-relogin-on-update: drop the marker the moment we've committed a
     // good patch on disk. Doing it here (rather than inside the platform
@@ -1353,6 +1415,7 @@ async function doCheckForUpdate(manifestOverride?: Manifest | null): Promise<Che
     readyVersion = latestVersion;
     readyFilePath = result.path;
     readyChannelEpoch = updateChannelEpoch;
+    readyTargetArch = targetArch;
     // 信任锚:manifest 里的 installer 摘要与大小,进本进程内存,不落用户可写盘。
     linuxStagedDebSha256 = normalizeLinuxDebSha256(asset.sha256 ?? '');
     linuxStagedDebSize = typeof asset.size === 'number' && asset.size > 0 ? asset.size : null;
@@ -1385,6 +1448,7 @@ async function doCheckForUpdate(manifestOverride?: Manifest | null): Promise<Che
         readyVersion = undefined;
         readyFilePath = undefined;
         readyChannelEpoch = undefined;
+        readyTargetArch = undefined;
         removePatchInfo();
         setStatus('idle');
         return 'idle';
@@ -1393,6 +1457,7 @@ async function doCheckForUpdate(manifestOverride?: Manifest | null): Promise<Che
       readyVersion = previousReadyVersion;
       readyFilePath = previousReadyFilePath;
       readyChannelEpoch = previousReadyChannelEpoch;
+      readyTargetArch = previousReadyTargetArch;
       setStatus('ready', { version: previousReadyVersion });
       return 'ready';
     }
@@ -1423,6 +1488,7 @@ function handleApplyFailure(reason: string): void {
   readyVersion = undefined;
   readyFilePath = undefined;
   readyChannelEpoch = undefined;
+  readyTargetArch = undefined;
   isRelaunching = false;
   autoRelaunchInProgress = false;
   // Every failure exit converges here, including the two that fire *after*
@@ -1831,7 +1897,10 @@ function executeUpdateLinux(debPath: string, installation: LinuxUserInstallation
     script = buildLinuxUpdateScript({
       pid, debPath, sha256, sizeBytes, exePath, lockFilePath, logPath,
       userInstallation: installation ? { ...installation, version: readyVersion! } : undefined,
-      relaunchArgs: linuxPasswordStoreRelaunchArgs(app.commandLine?.getSwitchValue('password-store') ?? ''),
+      relaunchArgs: [
+        ...linuxRelaunchDisplayArgs(process.argv),
+        ...linuxPasswordStoreRelaunchArgs(app.commandLine?.getSwitchValue('password-store') ?? ''),
+      ],
     });
   } catch (err) {
     log.error('failed to build Linux update script:', err);
@@ -1896,10 +1965,18 @@ function executeUpdateLinux(debPath: string, installation: LinuxUserInstallation
   });
 }
 
-async function executeRelaunch(theme: 'light' | 'dark'): Promise<void> {
+interface RelaunchOptions {
+  /**
+   * Last check after Subagent reclaim, immediately before the platform updater
+   * spawns. Returning false keeps the patch staged and does not restart.
+   */
+  shouldProceed?: () => boolean;
+}
+
+async function executeRelaunch(theme: 'light' | 'dark', options?: RelaunchOptions): Promise<void> {
   if (isCindyPersonalRuntime()) return;
   try {
-    await executeRelaunchUnguarded(theme);
+    await executeRelaunchUnguarded(theme, options);
   } catch (err) {
     log.error('executeRelaunch() failed: %s', err instanceof Error ? err.stack ?? err.message : String(err));
     try {
@@ -1919,7 +1996,10 @@ async function executeRelaunch(theme: 'light' | 'dark'): Promise<void> {
   }
 }
 
-async function executeRelaunchUnguarded(theme: 'light' | 'dark'): Promise<void> {
+async function executeRelaunchUnguarded(
+  theme: 'light' | 'dark',
+  options?: RelaunchOptions,
+): Promise<void> {
   if (isRelaunching) {
     log.info('executeRelaunch() skipped — already in progress');
     return;
@@ -1965,7 +2045,7 @@ async function executeRelaunchUnguarded(theme: 'light' | 'dark'): Promise<void> 
   }
 
   const currentVersion = app.getVersion();
-  const versionRelation = compareAppUpdateVersions(readyVersion, currentVersion);
+  const versionRelation = appUpdateRelation(readyVersion, readyTargetArch);
   if (versionRelation !== 'newer') {
     log.error(
       'executeRelaunch() refused non-upgrade patch: current=%s patch=%s relation=%s',
@@ -2033,13 +2113,24 @@ async function executeRelaunchUnguarded(theme: 'light' | 'dark'): Promise<void> 
     return;
   }
 
+  // The reclaim above can wait several seconds; a caller-bound condition (an
+  // Agent install's confirming account) is re-checked after it, at the last
+  // point where not restarting is still possible.
+  if (options?.shouldProceed && !options.shouldProceed()) {
+    log.info('executeRelaunch() cancelled by caller condition; patch remains staged');
+    isRelaunching = false;
+    autoRelaunchInProgress = false;
+    return;
+  }
+
   log.info(
     'Executing relaunch with file: %s (%s bytes)',
     maskPath(readyFilePath), fs.statSync(readyFilePath).size,
   );
 
-  // Every applied app update — manual, idle or startup auto-relaunch — checks
-  // agent binaries once on the next launch; ordinary launches do not.
+  // Keep the legacy marker for rollback compatibility. New startups adopt only
+  // completed binary downloads and reuse usable local runtimes otherwise;
+  // application-update readiness never waits for optional binary preparation.
   if (readyVersion) {
     cancelStartupBinaryUpdateCheck = writeStartupBinaryUpdateMarker(app.getPath('userData'), readyVersion);
   }
@@ -2095,6 +2186,14 @@ function agentUpdateApplyBlockReason(): string | null {
   return null;
 }
 
+/** Build and installation blockers shared by every Agent-facing update entry. */
+function agentUpdateUnsupportedReason(): string | null {
+  if (!app.isPackaged || isDev() || isCindyPersonalRuntime() || isVersionlessAppVersion(app.getVersion())) {
+    return '此构建不支持应用内更新。';
+  }
+  return agentUpdateApplyBlockReason();
+}
+
 export async function checkAppUpdateForAgent(): Promise<{
   status: string;
   currentVersion: string;
@@ -2102,22 +2201,29 @@ export async function checkAppUpdateForAgent(): Promise<{
   reason?: string;
 }> {
   const currentVersion = app.getVersion();
-  if (!app.isPackaged || isDev() || isCindyPersonalRuntime() || isVersionlessAppVersion(currentVersion)) {
-    return { status: 'unsupported', currentVersion, reason: '此构建不支持应用内更新。' };
+  const unsupported = agentUpdateUnsupportedReason();
+  if (unsupported) return { status: 'unsupported', currentVersion, reason: unsupported };
+  // Agent 的安装结果按「重启后版本前进」判定：同版本换装 Apple 芯片包（下载中或已就绪）
+  // 不交给 Agent，落到下面按清单严格比较，只走侧栏更新提示。
+  const advancesVersion = (version: string | undefined) =>
+    compareAppUpdateVersions(version, currentVersion) === 'newer';
+  if (
+    (currentStatus === 'downloading' || currentStatus === 'superseding')
+    && advancesVersion(downloadingVersion)
+  ) {
+    // `readyVersion` is unset during a first download and still names the old
+    // patch while superseding; report the version actually being downloaded.
+    return { status: 'downloading', currentVersion, targetVersion: downloadingVersion };
   }
-  const platformBlock = agentUpdateApplyBlockReason();
-  if (platformBlock) return { status: 'unsupported', currentVersion, reason: platformBlock };
-  if (currentStatus === 'downloading' || currentStatus === 'superseding') {
-    return { status: 'downloading', currentVersion, targetVersion: readyVersion };
-  }
-  if (currentStatus === 'ready' && readyVersion) {
+  if (currentStatus === 'ready' && readyVersion && advancesVersion(readyVersion)) {
     return { status: 'ready', currentVersion, targetVersion: readyVersion };
   }
   // An Agent check must not stage a patch: checkForUpdate() downloads it and
   // enables the existing auto-relaunch-on-idle path. Read only the manifest;
   // the user can download and install through the built-in update action.
-  const manifest = await fetchManifest();
+  const manifest = await fetchAppUpdateManifest();
   if (!manifest) return { status: 'manifest_failed', currentVersion, reason: '无法读取当前渠道的更新信息。' };
+  // Agent 的安装结果按「重启后版本前进」判定，同版本换装原生架构只走侧栏更新提示。
   const relation = compareAppUpdateVersions(manifest.app?.version, currentVersion);
   if (relation === 'invalid') return {
     status: 'manifest_failed', currentVersion, reason: '当前渠道的更新版本信息无效。',
@@ -2129,6 +2235,137 @@ export async function checkAppUpdateForAgent(): Promise<{
     status: 'no_installable_update', currentVersion,
     reason: '当前渠道没有适用于这台设备的可安装更新；也可能已是最新版本。',
   };
+}
+
+/** Longer than the Windows / Linux updater spawn timeout (5 s). */
+const AGENT_RELAUNCH_SETTLE_MS = 10_000;
+
+const AGENT_UPDATE_FAILURE_REASONS: Record<Exclude<CheckForUpdateResult, 'ready'>, string> = {
+  manifest_failed: '无法读取当前渠道的更新信息。',
+  download_failed: '下载更新失败，请稍后重试。',
+  manual_download: '当前安装需要手动下载新版本。',
+  idle: '当前渠道没有适用于这台设备的可安装更新。',
+};
+
+export type AgentConfirmedAppUpdateResult =
+  | { status: 'relaunching'; targetVersion?: string }
+  | { status: 'failed'; reason: string; errorCode?: string; stagedVersion?: string };
+
+/**
+ * Apply an update the user approved on the Host confirmation card. This is the
+ * built-in Check for Updates → Restart path, not a parallel one:
+ * `checkForUpdate()` stages the patch (its in-flight guard keeps a repeated or
+ * concurrent request on the same download) and `executeRelaunch()` applies it
+ * with every existing platform, Subagent and channel guard.
+ *
+ * `expectedVersion` is the version shown on the card the owner approved; a
+ * different staged version (the channel moved on meanwhile) is not installed
+ * without a new confirmation. `beforeRelaunch` runs after the patch is staged;
+ * returning false keeps the patch staged and skips the restart.
+ */
+export async function applyConfirmedAppUpdateForAgent(options: {
+  expectedVersion?: string;
+  beforeRelaunch: () => Promise<boolean>;
+  /** Re-checked inside the relaunch, after Subagent reclaim and right before the updater spawns. */
+  beforeSpawn?: () => boolean;
+}): Promise<AgentConfirmedAppUpdateResult> {
+  // The single version rule for every checkpoint: the staged patch is the
+  // confirmed version and no newer one is being downloaded over it. Like the
+  // built-in banner, never restart while superseding.
+  const versionChanged = (): AgentConfirmedAppUpdateResult | null => {
+    if (!options.expectedVersion) return null;
+    const current = currentStatus === 'superseding' ? downloadingVersion : readyVersion;
+    if (current === options.expectedVersion && currentStatus !== 'superseding') return null;
+    return {
+      status: 'failed',
+      reason: `当前渠道的新版本是 ${current ?? '未知版本'}，与确认的 ${options.expectedVersion} 不同，本次没有安装；请重新发起更新。`,
+      errorCode: 'version_changed',
+      ...(current ? { stagedVersion: current } : {}),
+    };
+  };
+  const relaunchCancelled: AgentConfirmedAppUpdateResult = {
+    status: 'failed', reason: '更新已下载，但本次没有重启。', errorCode: 'relaunch_cancelled',
+  };
+  /**
+   * Wait until a relaunch settles: success exits the process (Windows / Linux
+   * from their spawn callbacks), failure clears the flags in
+   * handleApplyFailure() or an early refusal. Whatever is still relaunching at
+   * the deadline is reported as relaunching.
+   */
+  const awaitRelaunchOutcome = async (
+    targetVersion: string | undefined,
+    timeoutMs: number,
+  ): Promise<AgentConfirmedAppUpdateResult> => {
+    const deadline = Date.now() + timeoutMs;
+    while ((isRelaunching || autoRelaunchInProgress) && Date.now() < deadline) {
+      await new Promise((resolve) => setTimeout(resolve, 100));
+    }
+    if (isRelaunching || autoRelaunchInProgress) return { status: 'relaunching', targetVersion };
+    return {
+      status: 'failed',
+      reason: '更新器没有启动，Cindy 未重启。',
+      errorCode: lastErrorCode ?? 'relaunch_not_started',
+    };
+  };
+  // A relaunch already started elsewhere (Settings banner or idle auto-install)
+  // is not this request's: report it instead of claiming its outcome.
+  const relaunchInProgress: AgentConfirmedAppUpdateResult = {
+    status: 'failed',
+    reason: 'Cindy 已经在通过设置页或空闲自动安装重启更新，本次请求没有另外安装。',
+    errorCode: 'relaunch_in_progress',
+  };
+  const unsupported = agentUpdateUnsupportedReason();
+  if (unsupported) return { status: 'failed', reason: unsupported, errorCode: 'unsupported' };
+  if (isRelaunching || autoRelaunchInProgress) return relaunchInProgress;
+  if (currentStatus !== 'ready') {
+    const result = await checkForUpdate();
+    if (result !== 'ready') {
+      return { status: 'failed', reason: AGENT_UPDATE_FAILURE_REASONS[result], errorCode: result };
+    }
+  }
+  const changedAfterDownload = versionChanged();
+  if (changedAfterDownload) return changedAfterDownload;
+  if (!await options.beforeRelaunch()) return relaunchCancelled;
+  if (isRelaunching || autoRelaunchInProgress) return relaunchInProgress;
+  // A background check may have superseded the staged patch during the wait.
+  const changedBeforeRelaunch = versionChanged();
+  if (changedBeforeRelaunch) return changedBeforeRelaunch;
+  if (currentStatus !== 'ready' || !readyVersion) {
+    return { status: 'failed', reason: '已下载的更新不再可用，请重新检查更新。', errorCode: 'not_ready' };
+  }
+  const targetVersion = readyVersion;
+  // Both bindings are re-checked once more inside the relaunch, after its
+  // Subagent reclaim wait: the confirmed version and the caller's condition.
+  let cancelledBeforeSpawn: AgentConfirmedAppUpdateResult | null = null;
+  await executeRelaunch(resolvedRelaunchTheme, {
+    shouldProceed: () => {
+      cancelledBeforeSpawn = versionChanged()
+        ?? (options.beforeSpawn?.() === false ? relaunchCancelled : null);
+      return cancelledBeforeSpawn === null;
+    },
+  });
+  if (cancelledBeforeSpawn) return cancelledBeforeSpawn;
+  // macOS exits inside the call. Windows and Linux return with `isRelaunching`
+  // still set and settle within their 5 s spawn timeout; wait for that outcome
+  // so a failed spawn is reported now rather than after a later restart.
+  if (process.platform === 'darwin') {
+    return isRelaunching
+      ? { status: 'relaunching', targetVersion }
+      : { status: 'failed', reason: '更新器没有启动，Cindy 未重启。', errorCode: lastErrorCode ?? 'relaunch_not_started' };
+  }
+  return awaitRelaunchOutcome(targetVersion, AGENT_RELAUNCH_SETTLE_MS);
+}
+
+/** Effective idle auto-install switch (Settings → About), shared with the Agent tools. */
+export function readAutoRelaunchOnIdleForAgent(): boolean {
+  return readAutoUpdateSettings().autoRelaunchOnIdle;
+}
+
+/** Same write as the Settings toggle IPC; only called after the user confirmed the Host card. */
+export function setAutoRelaunchOnIdleForAgent(enabled: boolean): boolean {
+  writeAutoRelaunchOnIdle(enabled);
+  void evaluateAutoRelaunch('agent-settings-set');
+  return readAutoUpdateSettings().autoRelaunchOnIdle;
 }
 
 export function initUpdateService(): void {
@@ -2303,18 +2540,47 @@ export function initUpdateService(): void {
     app.quit();
   });
 
+  // About downloads before showing the restart confirmation. A failed preparation
+  // leaves both the application update state and the running harness untouched.
+  const preparedHarnessVersions = new Map<'claude-code' | 'codex', string>();
+  ipcMain.handle('update-harness-prepare', async (event, kind: unknown, expectedVersion: unknown) => {
+    assertTrustedAppRendererEvent(event);
+    if ((kind !== 'claude-code' && kind !== 'codex') || typeof expectedVersion !== 'string'
+      || expectedVersion.length === 0 || expectedVersion.length > 128) {
+      throwIpcError('INVALID_PARAMS', 'kind and expectedVersion required');
+    }
+    preparedHarnessVersions.delete(kind);
+    const signal = AbortSignal.timeout(180_000);
+    const manifest = await fetchManifest(undefined, signal);
+    const asset = manifest && getVendorAsset(manifest, kind === 'claude-code' ? 'claudeCode' : 'codexPackage');
+    if (!manifest || !asset || asset.version !== expectedVersion) {
+      throwIpcError('INTERNAL', 'harness update changed or is unavailable; check again');
+    }
+    if (!await prefetchAgentBinary(kind, { manifest, signal })) {
+      throwIpcError('INTERNAL', 'could not prepare harness update; retry later');
+    }
+    preparedHarnessVersions.set(kind, expectedVersion);
+    return { ready: true };
+  });
+
   // About → Agent version update: keep the same graceful app relaunch lifecycle,
-  // but ask the next startup to refresh managed harness binaries before they are
-  // exposed to Maker. The marker is consumed once by agent-binaries/prepare and
-  // is scoped to the harness the user confirmed; Pi has its own kernel manager.
-  ipcMain.handle('update-harness-relaunch', (event, kind: unknown) => {
+  // with cache-only adoption for prepared targets. Only legacy kind-only callers
+  // retain a scoped repair marker: a newer manifest must not cause a prepared
+  // update to download again in Splash. Pi has its own kernel manager.
+  ipcMain.handle('update-harness-relaunch', (event, kind: unknown, preparedVersion?: unknown) => {
     assertTrustedAppRendererEvent(event);
     if (kind !== 'claude-code' && kind !== 'codex') {
       throwIpcError('INVALID_PARAMS', 'kind required (claude-code | codex)');
     }
-    const cancelMarker = writeStartupBinaryUpdateMarker(app.getPath('userData'), app.getVersion(), [kind]);
-    if (!cancelMarker) {
-      throwIpcError('INTERNAL', 'failed to schedule harness update');
+    if (preparedVersion !== undefined) {
+      if (typeof preparedVersion !== 'string' || preparedHarnessVersions.get(kind) !== preparedVersion) {
+        throwIpcError('INVALID_PARAMS', 'prepare the requested harness version before restarting');
+      }
+    } else {
+      const cancelMarker = writeStartupBinaryUpdateMarker(app.getPath('userData'), app.getVersion(), [kind]);
+      if (!cancelMarker) {
+        throwIpcError('INTERNAL', 'failed to schedule harness update');
+      }
     }
     log.info(`harness update relaunch requested: ${kind}`);
     app.relaunch({ args: process.argv.slice(1) });
@@ -2375,7 +2641,7 @@ export function initUpdateService(): void {
       // Step 1: prefer manifest (so we don't relaunch into a stale intermediate version).
       // 启动态用短超时，避免 external CDN 慢时阻塞启动关键路径（#26）。
       // 后台 30-min 轮询仍走默认 30s 超时。
-      const manifest = await fetchManifest(STARTUP_MANIFEST_TIMEOUT_MS);
+      const manifest = await fetchAppUpdateManifest(STARTUP_MANIFEST_TIMEOUT_MS);
 
       if (!manifest) {
         // Network unavailable — fall back to local patch.
@@ -2398,7 +2664,8 @@ export function initUpdateService(): void {
       const currentVersion = app.getVersion();
       log.info('Startup: current=%s, latest=%s', currentVersion, latestVersion);
 
-      const startupVersionRelation = compareAppUpdateVersions(latestVersion, currentVersion);
+      const startupTargetArch = getAppUpdateTargetArch(manifest);
+      const startupVersionRelation = appUpdateRelation(latestVersion, startupTargetArch);
       if (startupVersionRelation !== 'newer') {
         // The online manifest is authoritative. A local patch that is no longer
         // advertised must not survive into a later offline startup.
@@ -2429,7 +2696,11 @@ export function initUpdateService(): void {
 
       // Step 2: local patch may already match latest → skip download.
       const patchResult = checkExistingPatch();
-      if (patchResult.action === 'relaunch' && patchResult.version === latestVersion) {
+      if (
+        patchResult.action === 'relaunch'
+        && patchResult.version === latestVersion
+        && patchResult.targetArch === startupTargetArch
+      ) {
         log.info('Local patch v%s matches latest, requesting relaunch', patchResult.version);
         if (process.platform === 'linux') {
           // 冷启动匹配旧补丁:把这份 CDN manifest 的 installer 摘要与大小
@@ -2460,6 +2731,7 @@ export function initUpdateService(): void {
         readyVersion = undefined;
         readyFilePath = undefined;
         readyChannelEpoch = undefined;
+        readyTargetArch = undefined;
         linuxStagedDebSha256 = null;
         linuxStagedDebSize = null;
       }
@@ -2539,7 +2811,7 @@ export function initUpdateService(): void {
 export async function enableUncustomizedBetaChannel(
   shouldWrite: () => boolean = () => true,
 ): Promise<boolean> {
-  // Linux 目前仅 x64 发布 beta .deb；arm64 等不支持构建不得写入组织默认。
+  // Linux x64 / arm64 支持 beta .deb；其他不支持的构建不得写入组织默认。
   if (!supportsBetaUpdateChannel(process.platform, process.arch)) return false;
   const wasBeta = readUpdateChannelSettings().enableBeta;
   // 先拦住 apply 再等落盘。身份守卫拒绝或写入失败时,旧补丁还得能用。

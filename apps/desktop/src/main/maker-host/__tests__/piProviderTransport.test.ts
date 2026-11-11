@@ -1,7 +1,7 @@
 import { describe, expect, it, vi } from 'vitest';
 import * as openaiCompletions from '@earendil-works/pi-ai/api/openai-completions';
-import { PROVIDER_MODEL_CATALOG, BUNDLED_CATALOG, buildUserProvider, parseModelsListResponse, mergeDiscoveredRuntimeModels } from '@cindy/model-providers';
-import { createPiProviderFetch, hostCredentialEndpointAllowed, invocationModelRecord, nativeBridgeApiKey, NATIVE_ADAPTER_ERROR_BODY_LIMIT, NATIVE_BRIDGE_SESSION_HEADER, readBoundedResponseText } from '../pi-provider-transport.js';
+import { PROVIDER_MODEL_CATALOG, BUNDLED_CATALOG, buildUserProvider, modelProtocolComparison, parseModelsListResponse, mergeDiscoveredRuntimeModels } from '@cindy/model-providers';
+import { probePiProvider, createPiProviderFetch, handlePiProviderRequest, hostCredentialEndpointAllowed, invocationModelRecord, nativeBridgeApiKey, NATIVE_ADAPTER_ERROR_BODY_LIMIT, NATIVE_BRIDGE_SESSION_HEADER, readBoundedResponseText } from '../pi-provider-transport.js';
 
 vi.mock('@earendil-works/pi-ai/api/openai-completions', async (importOriginal) => ({
   ...await importOriginal<typeof import('@earendil-works/pi-ai/api/openai-completions')>(),
@@ -13,6 +13,157 @@ const reply = [
 ].map(value => `data: ${JSON.stringify(value)}\n\n`).join('') + 'data: [DONE]\n\n';
 
 describe('Pi-owned transport for Cindy harnesses', () => {
+  // #9630 review, unit: a retained preset ID must not reintroduce the same
+  // Messages extension through Claude/Codex's native bridge descriptor.
+  it('keeps message-scoped effort out of an edited Anthropic preset bridge', () => {
+    const row = invocationModelRecord({ id: 'claude-opus-5', name: 'Opus', group: 'custom',
+      contextWindow: 200_000, efforts: ['low', 'medium', 'high'], defaultEffort: 'medium',
+      catalogPresetId: 'anthropic-api', api: 'anthropic-messages' }, 'https://relay.example')!;
+    expect(row.execution.pi.compat).not.toHaveProperty('supportsMidConvoEffort');
+    expect(row.execution.pi.compat).toMatchObject({ forceAdaptiveThinking: true });
+  });
+
+  // #9101, unit: preset import + installed Chat SDK serialization protects all
+  // harnesses from assuming Messages/Responses based on their names. Existing
+  // cases use other suppliers/protocols; the minimum input is the Hinoki seed.
+  it.each(['claude-code', 'codex', 'pi'] as const)
+  ('serializes the Hinoki %s preset through Bearer Chat without changing the wire model', async agent => {
+    const preset = BUNDLED_CATALOG.presets!.find(p => p.id === 'hinoki')!;
+    const runtime = preset.runtimes[agent]!;
+    const provider = buildUserProvider({ id: 'hinoki-test', name: 'Hinoki', runtimes: {
+      [agent]: { ...runtime, catalogPresetId: preset.id },
+    } }, { presets: BUNDLED_CATALOG.presets, modelRegistry: BUNDLED_CATALOG.modelRegistry });
+    const model = provider.models[agent]![0];
+    const api = modelProtocolComparison(provider, { [agent]: model }).forAgent(agent)!.outbound!;
+    const row = invocationModelRecord(model, model.route?.baseUrl ?? runtime.baseUrl, api)!;
+    const send = createPiProviderFetch({ row, providerId: provider.id, apiKey: 'fixture-key', fetchImpl: async (url, init) => {
+      expect(String(url)).toBe('https://inference.hinoki.security/v1/chat/completions');
+      expect(new Headers(init?.headers).get('authorization')).toBe('Bearer fixture-key');
+      expect(JSON.parse(String(init?.body))).toMatchObject({ model: 'hinoki-offensive', stream: true });
+      return new Response(reply, { headers: { 'content-type': 'text/event-stream' } });
+    } });
+    const output = await (await send('https://unused.invalid', { body: JSON.stringify({
+      model: model.id, input: 'Hello', max_output_tokens: 128, stream: true,
+    }) })).text();
+    expect(output).toContain('response.completed');
+    expect(output).not.toContain('response.failed');
+  });
+  it.each(['deepseek-v4-flash', 'kimi-k3.1-pro', 'glm-5.3'])
+  ('sends the OpenHubs %s template through the installed Pi Chat adapter', async id => {
+    const preset = BUNDLED_CATALOG.presets!.find(p => p.id === 'openhubs')!;
+    const runtime = preset.runtimes.pi!;
+    const provider = buildUserProvider({ id: 'openhubs-test', name: 'OpenHubs', runtimes: { pi: {
+      ...runtime, catalogPresetId: preset.id, models: runtime.models.filter(m => m.id === id),
+    } } }, { presets: BUNDLED_CATALOG.presets, modelRegistry: BUNDLED_CATALOG.modelRegistry });
+    const model = provider.models.pi![0];
+    const row = invocationModelRecord(model, model.route?.baseUrl ?? runtime.baseUrl)!;
+    const requests: string[] = [];
+    const send = createPiProviderFetch({ row, providerId: provider.id, apiKey: 'fixture-key', fetchImpl: async (url, init) => {
+      requests.push(String(url));
+      expect(new Headers(init?.headers).get('authorization')).toBe('Bearer fixture-key');
+      expect(JSON.parse(String(init?.body))).toMatchObject({ model: id, stream: true });
+      return new Response(reply, { headers: { 'content-type': 'text/event-stream' } });
+    } });
+    const output = await (await send('https://unused.invalid', { body: JSON.stringify({
+      model: id, input: 'Hello', max_output_tokens: 128, stream: true,
+    }) })).text();
+    expect(requests).toEqual(['https://openhubs.zhidemai.com/v1/chat/completions']);
+    expect(output).toContain('response.completed');
+    expect(output).not.toContain('response.failed');
+  });
+  // Unit protocol regression: official Pi SDK defaults must not override Cindy
+  // or an explicit legacy title at the final fetch boundary.
+  it.each([undefined, { 'x-title': 'Custom app', 'http-referer': 'https://custom.example' }])
+  ('retains application attribution through native serialization (%j)', async headers => {
+    const upstream = 'https://openrouter.ai/api/v1';
+    const row = { id: 'fixture-model', name: 'Fixture', upstream,
+      execution: { pi: { api: 'openai-completions' as const,
+        headers: { 'HTTP-Referer': 'https://pi.example', 'X-Title': 'pi' } } } };
+    let sent = new Headers();
+    const send = createPiProviderFetch({ row, providerId: 'router', apiKey: 'fixture-key', headers,
+      fetchImpl: async (_url, init) => {
+        sent = new Headers(init?.headers);
+        return new Response(reply, { headers: { 'content-type': 'text/event-stream' } });
+      },
+    });
+    const output = await (await send('https://unused.invalid', {
+      body: JSON.stringify({ model: row.id, input: 'Hello', stream: true }),
+    })).text();
+    expect(output).toContain('response.completed');
+    expect(sent.get('http-referer')).toBe(headers?.['http-referer'] ?? 'https://cindy.app');
+    expect(sent.get('x-openrouter-title') ?? sent.get('x-title')).toBe(headers?.['x-title'] ?? 'Cindy');
+    expect(sent.get('x-title')).not.toBe('pi');
+    expect(sent.get('authorization')).toBe('Bearer fixture-key');
+  });
+  // PR server#1096 P1: route-label checks missed the SDK appending /v1/messages
+  // to a versioned base. Exercise the production default and official serializer.
+  it.each(['agnes', 'openhubs'].flatMap(id => (['claude-code', 'pi', 'codex'] as const).map(agent => [id, agent] as const)))
+  ('sends %s %s defaults to a single version prefix', async (id, agent) => {
+    const preset = BUNDLED_CATALOG.presets!.find(p => p.id === id)!;
+    const runtime = preset.runtimes[agent]!;
+    const provider = buildUserProvider({ id: 'agnes-request', name: 'Agnes', runtimes: {
+      [agent]: { ...runtime, catalogPresetId: id },
+    } }, { presets: BUNDLED_CATALOG.presets, modelRegistry: BUNDLED_CATALOG.modelRegistry });
+    const model = provider.models[agent]![0];
+    const row = invocationModelRecord(model, model.route?.baseUrl ?? runtime.baseUrl)!;
+    let destination = '';
+    const send = createPiProviderFetch({ row, providerId: provider.id, apiKey: 'fixture-key', fetchImpl: async (url) => {
+      destination = String(url);
+      const events = [
+        { type: 'message_start', message: { id: 'msg-agnes', type: 'message', role: 'assistant', model: model.id, content: [], stop_reason: null, usage: { input_tokens: 1, output_tokens: 0 } } },
+        { type: 'message_delta', delta: { stop_reason: 'end_turn' }, usage: { output_tokens: 0 } },
+        { type: 'message_stop' },
+      ];
+      return new Response(agent === 'codex'
+        ? 'data: {"type":"response.completed","response":{"id":"fixture","status":"completed","output":[],"usage":{"input_tokens":1,"output_tokens":0,"total_tokens":1}}}\n\n'
+        : agent === 'pi' ? reply : events.map(event => `event: ${event.type}\ndata: ${JSON.stringify(event)}\n\n`).join(''),
+      { headers: { 'content-type': 'text/event-stream' } });
+    } });
+    const result = await (await send('https://unused.invalid', { body: JSON.stringify({
+      model: model.id, input: 'Hello', max_output_tokens: 1024, stream: true,
+    }) })).text();
+    expect(destination.split('?')[0]).toBe(`https://${id === 'agnes' ? 'apihub.agnes-ai.com' : 'openhubs.zhidemai.com'}/v1/${agent === 'pi' ? 'chat/completions' : agent === 'codex' ? 'responses' : 'messages'}`);
+    expect(result).toContain('response.completed');
+    expect(result).not.toContain('response.failed');
+    expect(runtime.modelsUrl).toBe(`https://${id === 'agnes' ? 'apihub.agnes-ai.com' : 'openhubs.zhidemai.com'}/v1/models`);
+  });
+
+  // Tier 2: exercise official serializers, not just selected API labels. Responses
+  // input is converted once and must reach Kimi's matching endpoint and wire ID.
+  it.each(['anthropic-messages', 'openai-responses', 'openai-completions'] as const)(
+    'serializes Kimi V6 %s through the installed official adapter', async api => {
+      const provider = buildUserProvider({ id: 'kimi-v6', name: 'Kimi', runtimes: { codex: {
+        baseUrl: 'https://api.kimi.com/coding/v1', catalogPresetId: 'moonshot-kimi-code', wireProtocol: 'openai-chat',
+        models: [{ id: 'k3.1-pro', name: 'K3.1', interfaceId: `moonshot-kimi-code-${api}` }],
+      } } }, { modelRegistry: BUNDLED_CATALOG.modelRegistry });
+      const model = provider.models.codex![0];
+      const row = invocationModelRecord(model, model.route!.baseUrl)!;
+      let sent: Record<string, unknown> | undefined;
+      let destination = '';
+      const send = createPiProviderFetch({ row, providerId: provider.id, apiKey: 'fixture-key', fetchImpl: async (url, init) => {
+        destination = String(url);
+        sent = JSON.parse(String(init?.body));
+        const events = [
+          { type: 'message_start', message: { id: 'msg-fixture', type: 'message', role: 'assistant', model: 'k3.1-pro', content: [], stop_reason: null, usage: { input_tokens: 1, output_tokens: 0 } } },
+          { type: 'message_delta', delta: { stop_reason: 'end_turn' }, usage: { output_tokens: 0 } },
+          { type: 'message_stop' },
+        ];
+        const body = api === 'openai-completions' ? reply : api === 'openai-responses'
+          ? 'data: {"type":"response.completed","response":{"id":"fixture","status":"completed","output":[],"usage":{"input_tokens":1,"output_tokens":0,"total_tokens":1}}}\n\n'
+          : events.map(e => `event: ${e.type}\ndata: ${JSON.stringify(e)}\n\n`).join('');
+        return new Response(body, { headers: { 'content-type': 'text/event-stream' } });
+      } });
+      const result = await (await send('https://unused.invalid', { body: JSON.stringify({
+        model: model.id, input: 'Hello', max_output_tokens: 1024, stream: true,
+      }) })).text();
+      expect(destination.split('?')[0]).toBe('https://api.kimi.com/coding' + (api === 'anthropic-messages' ? '/v1/messages' : api === 'openai-responses' ? '/v1/responses' : '/v1/chat/completions'));
+      expect(result).toContain('response.completed');
+      expect(result).not.toContain('response.failed');
+      expect(sent).toMatchObject({ model: 'k3.1-pro' });
+      expect(Array.isArray(sent?.[api === 'openai-responses' ? 'input' : 'messages'])).toBe(true);
+    },
+  );
+
   it.each([true, false, undefined])('sends discovered Sub2API effort and declared Fast (%s) through the native Chat adapter', async supportsFastMode => {
     const upstream = 'https://sub2api.example/custom/v1';
     const models = parseModelsListResponse({ data: [{ id: 'grok-4.7',
@@ -294,6 +445,78 @@ it.each(['gemini-3.6-flash', 'gemini-3.5-flash', 'gemini-3.5-flash-lite'])('send
 });
 
 
+describe('imported Gemini native image capability', () => {
+  const id = 'gemini-4-argon';
+  const preset = BUNDLED_CATALOG.presets!.find(p => p.id === 'google-gemini-api')!;
+  const imported = mergeDiscoveredRuntimeModels([], parseModelsListResponse({ data: [{ id }] })!);
+  const provider = buildUserProvider({ id: 'google-image-import', name: 'Google', runtimes: {
+    pi: { ...preset.runtimes.pi!, catalogPresetId: preset.id, models: imported },
+  } }, { presets: [preset] });
+  it.each([undefined, true, false])('keeps imported Gemini image input consistent for supportsImageInput=%s', async supportsImageInput => {
+    expect(provider.models.pi![0].supportsImageInput).toBe(true);
+    expect(provider.models.pi![0].modalities?.input).toContain('image');
+    // Compare the same imported model with no declaration and explicit on/off values.
+    const model = { ...provider.models.pi![0], supportsImageInput };
+    const row = invocationModelRecord(model, model.route?.baseUrl ?? provider.routing.pi!.upstream!)!;
+    const requests: Request[] = [];
+    let sent: { contents: Array<{ parts: Array<Record<string, unknown>> }> } | undefined;
+    vi.stubGlobal('fetch', async (input: RequestInfo | URL, init?: RequestInit) => {
+      const request = new Request(input, init); requests.push(request);
+      expect(new URL(request.url).pathname).toBe(`/v1beta/models/${id}:streamGenerateContent`);
+      sent = await request.json() as typeof sent;
+      return new Response(`data: ${JSON.stringify({ candidates: [{ content: { role: 'model', parts: [{ text: 'OK' }] }, finishReason: 'STOP' }] })}\n\n`, { headers: { 'content-type': 'text/event-stream' } });
+    });
+    try {
+      const send = createPiProviderFetch({ row, providerId: provider.id, apiKey: 'fixture-key',
+        fetchImpl: async () => { throw new Error('Google uses its native SDK transport'); } });
+      const response = await send('https://unused.invalid', { body: JSON.stringify({ model: id, input: [{ role: 'user', content: [
+        { type: 'input_text', text: 'describe the image' },
+        // Existing bridge fixture bytes; this checks serialization, not real recognition.
+        { type: 'input_image', image_url: 'data:image/png;base64,aW1hZ2U=' },
+      ] }], max_output_tokens: 128, stream: true }) });
+      expect(await response.text()).toContain('response.completed');
+      expect(requests).toHaveLength(1);
+      const parts = sent!.contents[0].parts;
+      expect(parts.some(part => 'inlineData' in part)).toBe(supportsImageInput !== false);
+      if (supportsImageInput !== false) expect(parts).toContainEqual({ inlineData: { mimeType: 'image/png', data: 'aW1hZ2U=' } });
+    } finally { vi.unstubAllGlobals(); }
+  });
+});
+
+it('keeps explicitly text-only modalities closed despite the unknown-capability fallback', () => {
+  const upstream = 'https://unknown.example/v1';
+  const provider = buildUserProvider({ id: 'unknown', name: 'Unknown', runtimes: {
+    pi: { baseUrl: upstream, wireProtocol: 'google-generative-ai', models: [{ id: 'unknown-model', name: 'Unknown' }] },
+  } });
+  const model = { ...provider.models.pi![0], supportsImageInput: undefined, modalities: { input: ['text'], output: ['text'] } };
+  expect(invocationModelRecord(model, upstream, 'google-generative-ai')!.supportsImageInput).toBe(false);
+});
+
+it.each(['flag', 'modalities'])('prioritizes active catalog text-only %s over a native image-capable descriptor', declaration => {
+  const native = PROVIDER_MODEL_CATALOG.providers.google.find(row => row.id === 'gemini-2.5-flash')!;
+  expect(native.supportsImageInput).toBe(true);
+  const provider = buildUserProvider({ id: 'google-catalog-override', name: 'Google', runtimes: {
+    pi: { baseUrl: native.upstream, wireProtocol: 'google-generative-ai', models: [{ id: native.id, name: native.name }] },
+  } });
+  const model = { ...provider.models.pi![0],
+    supportsImageInput: declaration === 'flag' ? false : undefined,
+    modalities: declaration === 'modalities' ? { input: ['text'], output: ['text'] } : undefined,
+  };
+  expect(invocationModelRecord(model, native.upstream, 'google-generative-ai')!.supportsImageInput).toBe(false);
+});
+
+it('keeps an undeclared active catalog model closed when its native descriptor explicitly disables images', () => {
+  const native = PROVIDER_MODEL_CATALOG.providers.deepseek.find(row => row.supportsImageInput === false)!;
+  expect(native.supportsImageInput).toBe(false);
+  expect(native.execution.pi.api).toBe('openai-completions');
+  const provider = buildUserProvider({ id: 'deepseek-catalog-undeclared', name: 'DeepSeek', runtimes: {
+    pi: { baseUrl: native.upstream, wireProtocol: 'openai-chat', models: [{ id: native.id, name: native.name }] },
+  } });
+  const model = { ...provider.models.pi![0], supportsImageInput: undefined, modalities: undefined };
+  expect(invocationModelRecord(model, native.upstream, 'openai-completions')!.supportsImageInput).toBe(false);
+});
+
+
 it.each(['individual', 'business', 'enterprise'])('sends Copilot Responses editor headers to the %s host', async account => {
   const row = PROVIDER_MODEL_CATALOG.providers['github-copilot'].find(row => row.execution.pi.api === 'openai-responses')!;
   let captured = false;
@@ -424,6 +647,36 @@ it.each([undefined, 200, 302])('keeps iterator exceptions private after HTTP %s 
   }
 });
 
+describe('Codex 原生传输的确定性错误终态 (#9344)', () => {
+  const row = PROVIDER_MODEL_CATALOG.providers.together.find(
+    row => row.execution.pi.api === 'openai-completions',
+  )!;
+
+  it('把「协议特性不支持」落成终态 400,而不是冒泡成可重试的 502', async () => {
+    const writeHead = vi.fn();
+    const end = vi.fn();
+    const res = { once: vi.fn(), off: vi.fn(), writeHead, end, headersSent: false } as never;
+    const upstream = vi.fn(async () => new Response(reply, { headers: { 'content-type': 'text/event-stream' } }));
+    const send = createPiProviderFetch({ row, providerId: 'together', apiKey: 'fixture-key', fetchImpl: upstream });
+
+    // user 消息的 content 为 null:Chat Completions 桥接无法翻译,抛确定性错误。
+    await handlePiProviderRequest(send, {
+      model: row.id,
+      input: [{ type: 'message', role: 'user', content: null }],
+      stream: true,
+    } as never, res);
+
+    expect(writeHead).toHaveBeenCalledWith(400, expect.objectContaining({
+      'content-type': 'application/json; charset=utf-8',
+    }));
+    expect(JSON.parse(String(end.mock.calls[0][0]))).toMatchObject({
+      error: { type: 'invalid_request_error', code: 'unsupported_feature' },
+    });
+    expect(upstream).not.toHaveBeenCalled();
+  });
+});
+
+
 describe('OpenCode Go session header on the native transport (#5325)', () => {
   const goUpstream = 'https://opencode.ai/zen/go/v1';
   function rowFor(providerId: string, baseUrl: string, catalogPresetId?: string) {
@@ -487,4 +740,23 @@ describe('OpenCode Go session header on the native transport (#5325)', () => {
     expect(seen[1]!.get('x-opencode-session')).toMatch(/^[0-9a-f-]{36}$/);
     expect(seen[2]!.get('x-opencode-session')).not.toBe(seen[1]!.get('x-opencode-session'));
   });
+});
+
+// The new protocol probe may opt into a larger reasoning budget; old callers must not change.
+it.each([undefined, 256])('keeps legacy probe options isolated from automatic probes: %s', async budget => {
+  const upstream = 'https://fixture.example/v1';
+  const provider = buildUserProvider({ id: 'probe-scope', name: 'Probe scope', runtimes: {
+    pi: { baseUrl: upstream, wireProtocol: 'openai-chat', models: [{ id: 'scope-model', name: 'Scope', reasoning: true, reasoningEfforts: ['low', 'high'] }] },
+  } });
+  const row = invocationModelRecord(provider.models.pi![0], upstream, 'openai-completions')!;
+  const stream = vi.spyOn(openaiCompletions, 'streamSimple');
+  try {
+    await probePiProvider({ row, providerId: provider.id, upstream, apiKey: 'fixture-key',
+      fetchImpl: async () => new Response(reply, { headers: { 'content-type': 'text/event-stream' } }),
+    }, new AbortController().signal, budget);
+    const options = stream.mock.calls.at(-1)![2];
+    expect(options?.maxTokens).toBe(budget ?? 16);
+    if (budget === undefined) expect(options).not.toHaveProperty('reasoning');
+    else expect(options).toHaveProperty('reasoning');
+  } finally { stream.mockRestore(); }
 });

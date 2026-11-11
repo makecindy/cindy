@@ -28,15 +28,16 @@ vi.mock('@/lib/toast', () => ({
 vi.mock('@/contexts/AuthContext', () => ({
   useAuth: () => auth,
 }));
+// The real App shell has completed environment checks before opening this route.
+vi.mock('@/contexts/EnvCheckContext', () => ({
+  useEnvCheck: () => ({ status: 'passed' }),
+}));
 
 vi.mock('@/lib/secondaryWindow', () => ({
   isSecondaryWindow: () => false,
 }));
 vi.mock('@/lib/sidebarWindow', () => ({
   isSidebarWindow: () => false,
-}));
-vi.mock('@/lib/ghostPanelWindow', () => ({
-  isGhostPanelWindow: () => false,
 }));
 
 vi.mock('../LoginPage', () => ({

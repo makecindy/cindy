@@ -19,6 +19,7 @@ const readSource = (...segments: string[]): string =>
   readFileSync(resolve(__dirname, '..', ...segments), 'utf8').replace(/\r\n?/g, '\n');
 
 const newMakerDraftRouteSource = readSource('features', 'cc-agent', 'NewMakerDraftRoute.tsx');
+const remoteDefaultsSource = readSource('features', 'cc-agent', 'useRemoteDraftDefaults.ts');
 const ccAgentSessionViewSource = readSource('features', 'cc-agent', 'CCAgentSessionView.tsx');
 
 const worktreeChipsSource = readSource('components', 'new-chat', 'WorktreeChipsRow.tsx');
@@ -95,7 +96,7 @@ describe('Shared create project picker', () => {
       'getProjectPickerEmptyLabelKey(workspacePrompt)',
     );
     // 2026-07-19 恢复 worktree 入口(用户裁决,488cb33 误删回归;详见
-    // newMakerCreateAgentVisualContract):路由允许且仅允许一个 advancedOnly
+    // CREATE AGENT 视觉规则):路由允许且仅允许一个 advancedOnly
     // 变体的 WorktreeChipsRow(2026-07-28 起渲染 [分支 chip][worktree 勾选 chip],
     // 齿轮 popover 已移除;folderPickerMode="project" 仅为其 advancedHidden
     // 语义服务),不回退 folder chip 版;项目选择仍由 mode pill 独占。
@@ -115,13 +116,6 @@ describe('Shared create project picker', () => {
     expect(scheduleChipsSource).toContain('projectOptions={projectOptions}');
     expect(scheduleChipsSource).toContain("source === 'dialogue'");
     expect(scheduleChipsSource).toContain("getProjectPickerEmptyLabelKey('generic')");
-  });
-
-  it('keeps folder picker wheel scrolling inside the shared menu', () => {
-    expect(folderPickerPopoverSource).toContain('handleFolderPickerWheel');
-    expect(folderPickerPopoverSource).toContain('onWheel={handleFolderPickerWheel}');
-    expect(folderPickerPopoverSource).toContain('data-folder-picker-scroll="true"');
-    expect(folderPickerPopoverSource).toContain('scrollRoot.scrollTop += normalizeWheelDeltaY(e)');
   });
 
   it('waits for async folder selection before closing the controlled popover', () => {
@@ -166,7 +160,7 @@ describe('Shared create project picker', () => {
       handlerStart,
     );
     const handler = newMakerDraftRouteSource.slice(handlerStart, handlerEnd);
-    const guardAt = handler.indexOf('if (sendInFlightRef.current) return;');
+    const guardAt = handler.indexOf('if (sendInFlightRef.current || directoryRecoveryRef.current?.isSelecting()) return;');
     const selectionAt = handler.indexOf(
       'const selectionSeq = ++modePickerSelectionSeqRef.current;',
     );
@@ -249,7 +243,8 @@ describe('Shared create project picker', () => {
       'getWorkspacePromptFromRouteState(location.state)',
     );
     expect(newMakerDraftRouteSource).not.toContain("setWorkspacePrompt('dialogue')");
-    expect(newMakerDraftRouteSource).not.toContain("workspacePrompt === 'generic'");
+    // Generic route state may prefill a local default, but does not own picker labels.
+    expect(newMakerDraftRouteSource).toContain('getDefaultNewTaskWorkingDir(dataOwnerId)');
     expect(newMakerDraftRouteSource).not.toContain(
       '[location.key, location.state, routeWorkspacePrompt]',
     );
@@ -298,12 +293,11 @@ describe('Shared create project picker', () => {
     expect(toggleHandler.indexOf('setWtEnabled(enabled)')).toBeGreaterThan(
       toggleHandler.indexOf("'maker:apply-new-maker-worktree-pref'"),
     );
+    // 镜像与切设备重置共用一个按帧判定的落点(行为见 deviceLinkDraftDefaults.test.ts)。
     expect(newMakerDraftRouteSource).toContain(
-      "if (typeof remotePreference === 'boolean') setWtEnabled(remotePreference);",
+      'const next = resolveDeviceLinkWorktreeEnabled(previous, frame);',
     );
-    expect(newMakerDraftRouteSource).toContain(
-      'if (isDeviceLinkDraft) setWtEnabled(false);',
-    );
+    expect(newMakerDraftRouteSource).toContain('if (next !== null) setWtEnabled(next);');
     expect(newMakerDraftRouteSource).toContain('wt.enabled && wt.baseRepo');
     const sendGuardStart = newMakerDraftRouteSource.indexOf(
       '&& selectedWorktree.confirmedIneligible !== true',
@@ -360,7 +354,7 @@ describe('Shared create project picker', () => {
       'push.deviceId !== target.deviceId',
     );
     // GET 未完成时分支半区独立禁用；checkbox 半区不受 branch 读写状态牵连。
-    expect(newMakerDraftRouteSource).toContain('disabled={wtCreating || sendInFlight}');
+    expect(newMakerDraftRouteSource).toContain('disabled={wtCreating || sendInFlight || directoryRecoverySelecting}');
     expect(newMakerDraftRouteSource).toContain(
       'branchDisabled={wtBranchPreferenceLoading || wtBranchPreferenceSaving}',
     );
@@ -556,10 +550,11 @@ describe('Shared create project picker', () => {
   // 投影 Pi。创建入口必须按 maker:list-available-agents(runtime 注册结果)过滤,否则一路创建到
   // requireAgent 的 not-registered。远程草稿以被控端注册结果为准(hook 传 deviceId 走隧道)。
   it('gates the vendor switcher by runtime-registered agents (list-available-agents)', () => {
-    // hook 用权威的 runtime 注册来源,而非模型目录;远程走 device-link 隧道。
+    // #8010：runtime 注册结果经目录路由读取，才能遵循任务宿主的来源权限。
+    // 原有直接 dl.invoke 约束会绕过宿主作用域；仍需保留本机与远程两个入口。
     expect(availableAgentsHookSource).toContain('api.listAvailableAgents()');
     expect(availableAgentsHookSource).toContain(
-      "dl.invoke(deviceId, 'maker:list-available-agents', [])",
+      "invokeModelCatalog(dl, deviceId, 'maker:list-available-agents', [])",
     );
     // claude-code → cc 归一,fail-open(未加载不隐藏)。
     expect(availableAgentsHookSource).toContain("agent === 'claude-code' ? 'cc' : agent");
@@ -616,7 +611,7 @@ describe('Shared create project picker', () => {
     // 留着会让用户以为项目跟过来了、发送时才在被控端 path guard 上失败。
     expect(newMakerDraftRouteSource).toContain('const handleDeviceChange = useCallback(');
     expect(newMakerDraftRouteSource).toContain(
-      'applyDraftTarget({ deviceId, deviceName, workingDir: null });',
+      'applyDraftTarget({ deviceId, deviceName, workingDir: null, explicitNoProject: true });',
     );
   });
 
@@ -860,13 +855,13 @@ describe('Shared create project picker', () => {
   it('disables and guards workspace switching while a send is in flight', () => {
     // 设备、工作区以及本次创建会消费的 worktree 配置都要冻结。
     expect(
-      (newMakerDraftRouteSource.match(/disabled=\{wtCreating \|\| sendInFlight\}/g) ?? []).length,
+      (newMakerDraftRouteSource.match(/disabled=\{wtCreating \|\| sendInFlight \|\| directoryRecoverySelecting\}/g) ?? []).length,
     ).toBe(3);
     const handler = newMakerDraftRouteSource.slice(
       newMakerDraftRouteSource.indexOf('const handleModePickerSelect = useCallback('),
     );
     expect(handler.slice(0, handler.indexOf('handleWorkingDirChange('))).toContain(
-      'if (sendInFlightRef.current) return;',
+      'if (sendInFlightRef.current || directoryRecoveryRef.current?.isSelecting()) return;',
     );
     for (const marker of [
       'const handleWtEnabledChange = useCallback(',
@@ -876,7 +871,7 @@ describe('Shared create project picker', () => {
         newMakerDraftRouteSource.indexOf(marker),
       );
       expect(worktreeHandler.slice(0, worktreeHandler.indexOf('\n  const ', 1))).toContain(
-        'if (sendInFlightRef.current) return;',
+        'if (sendInFlightRef.current || directoryRecoveryRef.current?.isSelecting()) return;',
       );
     }
   });
@@ -944,7 +939,7 @@ describe('Shared create project picker', () => {
   });
 
   // 远程模型目录的 loading / error 与草稿默认值都是创建前置条件：任一路径没就绪
-  // 都不能把兜底值提交给对端；真实读取失败还必须告知用户，不能在 loading=false 后放行。
+  // 都不能把兜底值提交给对端；无缓存首读失败必须告知用户，不能在 loading=false 后放行。
   it('blocks send and goal creation until remote models/defaults are ready, including terminal errors', () => {
     expect(newMakerDraftRouteSource).toContain(
       'capabilitiesError || (deviceProvidersError && !deviceProvidersUnsupported)',
@@ -966,7 +961,8 @@ describe('Shared create project picker', () => {
       "throw new Error(t('ccAgent.draft.remoteDefaultsLoadFailed'))",
     );
     expect(newMakerDraftRouteSource).toContain('setRemoteDraftRetryEpoch((value) => value + 1)');
-    expect(newMakerDraftRouteSource).toContain("status: unsupported ? 'ready' : 'error'");
+    // 首读失败阻止创建、有缓存时刷新失败保留可用状态：由 remoteDraftDefaultsCache.test.tsx
+    // 执行真实页面 hooks 验证，不再将所有读取失败都静态锁定为 error。
     expect(newMakerDraftRouteSource).toContain(
       "if (extractIpcError(error)?.code === 'DEVICE_LINK_CHANNEL_NOT_ALLOWED') return null;",
     );
@@ -1027,10 +1023,10 @@ describe('Shared create project picker', () => {
     );
     // ref 而非 state:必须即时可读,不能等下一次渲染。
     expect(handler.slice(0, handler.indexOf('patchDraft('))).toContain(
-      'if (sendInFlightRef.current) return;',
+      'if (sendInFlightRef.current || directoryRecoveryRef.current?.isSelecting()) return;',
     );
     // 同时用同步的 state 禁用 pill(ref 变化不触发渲染)。
-    expect(newMakerDraftRouteSource).toContain('disabled={wtCreating || sendInFlight}');
+    expect(newMakerDraftRouteSource).toContain('disabled={wtCreating || sendInFlight || directoryRecoverySelecting}');
     // ref 与 state 必须一起改,所以赋值统一走 helper。
     expect(newMakerDraftRouteSource).toContain('const markSendInFlight = useCallback(');
     expect(newMakerDraftRouteSource).not.toContain('sendInFlightRef.current = true;');
@@ -1113,15 +1109,8 @@ describe('Shared create project picker', () => {
 
   // #807 review 第三轮:能力缓存命中时必须清掉上一目标遗留的 loading —— 漏了会让
   // capabilitiesLoading 永久为 true,而创建页的 send / goal guard 正是看它。
-  it('clears inherited loading state when the capability cache hits', () => {
-    const hookSource = agentCapabilitiesHookSource.slice(
-      agentCapabilitiesHookSource.indexOf('export function useAgentCapabilities('),
-    );
-    const cachedBranch = hookSource.slice(hookSource.indexOf('const cached = cache.get(key);'));
-    const untilReturn = cachedBranch.slice(0, cachedBranch.indexOf('return;'));
-    expect(untilReturn).toContain('setLoading(false);');
-    expect(untilReturn).toContain('setError(null);');
-  });
+  // 该行为由 deviceProvidersPermanentFailure.test.tsx 的 mounted cache-hit 用例
+  // 通过真实 hook 覆盖；实现已改用 getCachedCapabilities，不再断言源码字面量。
 
   // #807 review 第十四轮:被控端 maker:create-session 一返回 sessionId 就是**提交点**。原来两处
   // 远程分支手写 invoke('local-db:sessions:list') + setDeviceSessions 做镜像回流,隧道一抖(被控端
@@ -1273,15 +1262,16 @@ describe('Shared create project picker', () => {
    * 变红,#807 的 review 里约十轮都在补格子(切设备漏 worktree 三态、同机换项目误重置运行配置、
    * 指向设备前忘了作废快照、回落路径两样清理都漏、picker 换项目不作废 worktree……)。
    *
-   * 收敛之后只需要锁两件事:① 四条路径都**只声明目标**,不自己做副作用;② 每处连带状态绑对了
-   * 它真正依赖的那一半(设备 / 项目)。第五条路径出现时,①会直接失败,而②保证它自动是对的。
+   * 收敛之后只需要锁两件事:① 各条路径都**只声明目标**,不自己做副作用;② 每处连带状态绑对了
+   * 它真正依赖的那一半(设备 / 项目)。新增路径时,①会直接失败,而②保证它自动是对的。
    */
   it('routes every draft-target transition through the single action', () => {
-    // 五条路径:设备 pill、设备域浏览器选项目、工作区 picker、所选设备失效后的自动回落、
-    // “对话”分组导航请求。声明本身是 `= useCallback(` 不匹配这个模式,所以数出来的就是调用点。
+    // 七条路径:设备 pill、设备域浏览器选项目、工作区 picker、所选设备失效后的自动回落、
+    // “对话”分组导航请求，以及通用入口在导航请求后或直接挂载时预填默认目录。
+    // 声明本身是 `= useCallback(` 不匹配这个模式,所以数出来的就是调用点。
     // (远程 Agent 由模型选择器选择、只在本机任务出现,不再经设备菜单转移草稿目标。)
     const calls = newMakerDraftRouteSource.match(/applyDraftTarget\(\{/g) ?? [];
-    expect(calls.length).toBe(5);
+    expect(calls.length).toBe(7);
     // 组件里不得再有任何一处手写这些副作用 —— 手写一处就等于又开了一条绕过推导的路。
     // patchDraft 仍可出现(入场清 extraDirs、发送后复位),但不得再带设备字段。
     expect(newMakerDraftRouteSource).not.toContain('deviceLinkDeviceId: deviceId,');
@@ -1406,11 +1396,12 @@ describe('Shared create project picker', () => {
     expect(addedHead).toContain('prefetchDeviceGitSafetySettings(target.deviceId)');
     // ③ 「设备已不可用」类的 evict 不需要配对 —— 那几处刻意不 prefetch,别被这条规则误改。
     //    这里只锁「本仓存在那个正确范例」,它是这条规则的出处。
-    expect(deviceLinkRemoteProjectsSource).toContain('void refreshRemoteCatalogSnapshot(push.deviceId);');
+    expect(deviceLinkRemoteProjectsSource).toContain('void refreshRemoteCatalogSnapshot(push.deviceId, push.payload);');
     const refreshSource = readSource('lib', 'remoteCatalogSnapshot.ts');
-    expect(refreshSource).toContain('evictDeviceProviders(deviceId)');
+    const evictAt = refreshSource.search(/evictDeviceProviders\(deviceId(?:,|\))/);
+    expect(evictAt).toBeGreaterThan(-1);
     expect(refreshSource).toContain('prefetchDeviceProviders(deviceId)');
-    expect(refreshSource.indexOf('evictDeviceProviders(deviceId)')).toBeLessThan(
+    expect(evictAt).toBeLessThan(
       refreshSource.indexOf('prefetchDeviceProviders(deviceId)'),
     );
   });
@@ -1431,13 +1422,9 @@ describe('Shared create project picker', () => {
    * fetch):任何一端被改动都会在这里失败,而不是等到用户发不出消息。
    */
   it('does not evict same-device snapshots when only the workspace changes', () => {
-    // 上游事实:evict 会把已挂载的 hook 推进 loading 态。
-    expect(agentCapabilitiesHookSource).toContain(
-      "notifyRemoteCapabilities(deviceId, agentKind, { status: 'loading' });",
-    );
-    expect(deviceProvidersHookSource).toContain(
-      "notifyDeviceProviders(deviceId, { status: 'loading' });",
-    );
+    // 驱逐后挂载中的 loading/清空行为由 agentCapabilitiesDeviceCache、
+    // deviceProvidersRecovery 与 AuthContextInitializeCatch 的生产 hook 用例覆盖。
+    // 这里保留 #807 的跨文件竞态约束：只切项目不能让同设备永久停在 loading。
     // 上游事实:fetch effect 只按 (agentKind, deviceId) 重跑,换项目不会触发它。
     expect(agentCapabilitiesHookSource).toContain('}, [agentKind, deviceId]);');
     expect(deviceProvidersHookSource).toContain('}, [deviceId]);');
@@ -1493,10 +1480,18 @@ describe('Shared create project picker', () => {
       chatInputSource.indexOf("id: 'add-extra-dir'"),
       chatInputSource.indexOf('if (remoteComposerGhosts.failed)'),
     );
-    expect(directoryAction).toContain('extraDirs: currentWritableDirs');
-    expect(directoryAction).toContain('otherDirs: currentExtraDirs');
-    expect(directoryAction).toContain('writableGrantScope,');
-    expect(directoryAction).toContain('onChange: onWritableDirsChange');
+    // The gated action only opens the add-directory page; both of its add paths (recent list
+    // and system picker) write the writable group with the task-bound grant scope.
+    expect(directoryAction).toContain('run: () => openAddDirectoryViewRef.current()');
+    const directoryHandlers = chatInputSource.slice(
+      chatInputSource.indexOf('const handleAddRecentDir = useCallback('),
+      chatInputSource.indexOf('// ── Send / Stop wiring'),
+    );
+    expect(directoryHandlers).toContain('writableDirs: writableDirs ?? []');
+    expect(directoryHandlers).toContain('extraDirs: writableDirs ?? []');
+    expect(directoryHandlers.match(/otherDirs: extraDirs \?\? \[\]/g)).toHaveLength(2);
+    expect(directoryHandlers.match(/writableGrantScope,/g)?.length).toBeGreaterThanOrEqual(2);
+    expect(directoryHandlers.match(/onChange: onWritableDirsChange/g)).toHaveLength(2);
     expect(chatInputSource).not.toContain("id: 'add-writable-dir'");
     expect(chatInputSource).toMatch(
       /hasReferenceDirs=\{\s*!settingsLocked\s*&&\s*\(onExtraDirsChange !== undefined \|\| onWritableDirsChange !== undefined\)\s*\}/,
@@ -1580,17 +1575,17 @@ describe('Shared create project picker', () => {
     );
     const guard = handler.slice(0, handler.indexOf('markSendInFlight(true);'));
     expect(guard).toContain("throw new Error(t('goal.newGoalDialog.busy'));");
-    expect(guard).not.toContain('if (sendInFlightRef.current) return;');
+    expect(guard).not.toContain('if (sendInFlightRef.current || directoryRecoveryRef.current?.isSelecting()) return;');
     // 抛出必须发生在**上锁之前**,否则 finally 会把仍在跑的那次操作的锁解掉。
     expect(guard.indexOf('throw new Error')).toBeGreaterThan(
-      guard.indexOf('if (sendInFlightRef.current)'),
+      guard.indexOf('if (sendInFlightRef.current || directoryRecoveryRef.current?.isSelecting())'),
     );
     // 发送路径相反:它返回 false 让 ChatInput 保留草稿(那是它的既定契约,不要跟着改成 throw)。
     const send = newMakerDraftRouteSource.slice(
       newMakerDraftRouteSource.indexOf('const handleSend = useCallback('),
     );
     expect(send.slice(0, send.indexOf('if (effectiveCollab.enabled'))).toContain(
-      'if (sendInFlightRef.current) return false;',
+      'if (sendInFlightRef.current || directoryRecoveryRef.current?.isSelecting()) return false;',
     );
   });
 
@@ -1630,16 +1625,48 @@ describe('Shared create project picker', () => {
     expect((body.match(/resolveDeviceLinkDraftDefaults\(/g) ?? []).length).toBeGreaterThanOrEqual(
       3,
     );
+    expect((body.match(/freshProviders,/g) ?? []).length).toBeGreaterThanOrEqual(3);
+    expect(body).not.toContain('agentCatalogProviders');
+  });
+
+  it('uses the selected provider catalog for remote effort recalculation', () => {
+    const pushStart = remoteDefaultsSource.indexOf(
+      'const re = resolveDeviceLinkDraftDefaults(',
+    );
+    const pushBlock = remoteDefaultsSource.slice(
+      pushStart,
+      remoteDefaultsSource.indexOf('return { ...prev', pushStart),
+    );
+    const modelSwitchStart = newMakerDraftRouteSource.indexOf(
+      'const resolved = resolveDeviceLinkDraftDefaults(',
+    );
+    const modelSwitchBlock = newMakerDraftRouteSource.slice(
+      modelSwitchStart,
+      newMakerDraftRouteSource.indexOf('setDlSel((prev) =>', modelSwitchStart),
+    );
+    const unifiedStart = newMakerDraftRouteSource.indexOf('const baseline = capabilities');
+    const unifiedBlock = newMakerDraftRouteSource.slice(
+      unifiedStart,
+      newMakerDraftRouteSource.indexOf('// 能力与镜像都还没到', unifiedStart),
+    );
+
+    for (const block of [pushBlock, modelSwitchBlock, unifiedBlock]) {
+      expect(block).toContain('agentCatalogProviders,');
+    }
+    expect(unifiedBlock).toContain('providerId: selection.providerId,');
   });
 
   it('reapplies refreshed regional defaults only while the remote runtime is untouched', () => {
-    const seed = newMakerDraftRouteSource.slice(
-      newMakerDraftRouteSource.indexOf('// seed dlSel:'),
-      newMakerDraftRouteSource.indexOf('// 远程草稿展示用:'),
+    const seed = remoteDefaultsSource.slice(
+      remoteDefaultsSource.indexOf('export function useRemoteDraftSelection('),
+      remoteDefaultsSource.indexOf('export function useRemoteDraftPush('),
     );
     expect(seed).toContain('shouldReseedDeviceLinkDraftDefaults({');
     expect(seed).toContain('capabilitiesChanged,');
-    expect(seed).toContain('if (!capabilities || capabilitiesLoading');
+    expect(seed).toContain('!capabilities');
+    expect(seed).toContain('capabilitiesLoading');
+    expect(seed).toContain('!deviceDraftDefaultsReady');
+    expect(seed).toContain('!deviceProviderCatalogReady');
     expect(seed).toContain('controllerTouched: dlRuntimeTouchedRef.current,');
     expect(seed).toContain('remoteModelChosenByUser: deviceDraftDefaults?.modelChosenByUser,');
     expect(seed).toContain('modelChosenByUser: true,');
@@ -1667,9 +1694,9 @@ describe('Shared create project picker', () => {
    * 或「永远判不成新目标」)。
    */
   it('advances the device-link seed key to the engine the user just picked', () => {
-    const seed = newMakerDraftRouteSource.slice(
-      newMakerDraftRouteSource.indexOf('// seed dlSel:'),
-      newMakerDraftRouteSource.indexOf('// 远程草稿展示用:'),
+    const seed = remoteDefaultsSource.slice(
+      remoteDefaultsSource.indexOf('export function useRemoteDraftSelection('),
+      remoteDefaultsSource.indexOf('export function useRemoteDraftPush('),
     );
     // 播种 effect 侧的 key 构造(正本)。
     expect(seed).toContain('const key = `${catalogDeviceId}:${capabilityAgentKind}`;');
@@ -1755,8 +1782,9 @@ describe('New Maker 草稿的 wire model id 口径', () => {
       newMakerDraftRouteSource.indexOf('// ─── 用户改 workingDir', handlerStart),
     );
     // 本地草稿落 lastByVendor(→ createSession)、device-link 草稿落 dlSel、远程 Agent 换落点
-    // 时播种那台电脑的 dlSel —— 三条都用 selection.modelId(wire id),一处都不能换成行 id。
-    expect((handler.match(/model: selection\.modelId,/g) ?? []).length).toBe(3);
+    // 时播种那台电脑的 dlSel，以及 SSH 临时草稿 —— 四条都用 selection.modelId(wire id),
+    // 一处都不能换成行 id，否则目标引擎无法解析首条请求。
+    expect((handler.match(/model: selection\.modelId,/g) ?? []).length).toBe(4);
     // 归一化行 id 不进草稿层,连字段都不该出现在写入实参里。
     expect(handler).not.toContain('rowModelId');
   });

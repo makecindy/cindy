@@ -23,8 +23,10 @@
 按 [治理合同 §6](../../design-rules/design-governance.md#6-证据合同)，栅格文件只保留在 Git 忽略的临时目录，不提交到仓库。本 PR 尚未上传公开图片附件；下列命令可重建四张供审阅的 PNG，均带 fixture 标记。上传附件后可将对应 PR 评论链接追加到本索引。
 
 ```sh
-node apps/desktop/scripts/check-group-control-layout.mjs /path/to/chromium tmp/group-control-evidence/review-screenshots
+pnpm ui:check --page group-chat --case all --theme all --viewport 720x600,800x600,1280x800
 ```
+
+（原 `check-group-control-layout.mjs` 已并入单页验证；截图写到 `artifacts/ui-check/`。）
 
 已目检：Light 1280px 单行、Dark 720px 八行，侧栏均为 280px；展开和收起各一张。保留的截图 SHA-256 用于核对原始文件；重跑时呼吸动画可能使图片字节不同。
 

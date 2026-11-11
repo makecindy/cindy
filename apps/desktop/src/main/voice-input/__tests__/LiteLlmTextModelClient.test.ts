@@ -9,6 +9,11 @@ vi.mock('undici', async (importOriginal) => {
   };
 });
 
+const reportKeyRejectedMock = vi.hoisted(() => vi.fn());
+vi.mock('../../model-access/gatewayKeyRejection.js', () => ({
+  reportCindyGatewayKeyRejected: reportKeyRejectedMock,
+}));
+
 import { LiteLlmTextModelClient } from '../LiteLlmTextModelClient.js';
 import { isRefinerModelOutputError } from '../refinerErrorKind.js';
 
@@ -29,7 +34,37 @@ function chatCompletionSseChunk(content: string): string {
 describe('LiteLlmTextModelClient', () => {
   afterEach(() => {
     undiciFetchMock.mockReset();
+    reportKeyRejectedMock.mockReset();
     vi.useRealTimers();
+  });
+
+  it('reports the Cindy AI key when the gateway proxy rejects it with HTTP 401', async () => {
+    undiciFetchMock.mockResolvedValueOnce(new Response(JSON.stringify({
+      error: { message: 'invalid key' },
+    }), { status: 401 }));
+
+    const client = new LiteLlmTextModelClient({
+      proxyApiKey: 'proxy-key-sent',
+      baseUrl: 'https://llm-proxy.example.com',
+    });
+
+    await expect(client.requestJson({ model: 'm', schemaName: 's', system: 'sys', user: {} }))
+      .rejects.toThrow();
+    expect(undiciFetchMock).toHaveBeenCalledTimes(1);
+    expect(reportKeyRejectedMock).toHaveBeenCalledTimes(1);
+    expect(reportKeyRejectedMock).toHaveBeenCalledWith('proxy-key-sent');
+  });
+
+  it('does not report non-401 proxy failures', async () => {
+    undiciFetchMock.mockResolvedValueOnce(new Response('{}', { status: 403 }));
+    const client = new LiteLlmTextModelClient({
+      proxyApiKey: 'proxy-key-sent',
+      baseUrl: 'https://llm-proxy.example.com',
+    });
+
+    await expect(client.requestJson({ model: 'm', schemaName: 's', system: 'sys', user: {} }))
+      .rejects.toThrow();
+    expect(reportKeyRejectedMock).not.toHaveBeenCalled();
   });
 
   it('streams chat completion deltas, emits text snapshots, and reports usage', async () => {
@@ -122,6 +157,88 @@ describe('LiteLlmTextModelClient', () => {
     expect(isRefinerModelOutputError(error)).toBe(true);
   });
 
+  it('accepts a long refinement whose SSE framing exceeds the output limit', async () => {
+    // Real gateways send one or two characters per event wrapped in ~180 chars
+    // of JSON; a 1,000-character refinement streams over 100,000 bytes.
+    const refined = '长'.repeat(1_000);
+    const deltas = ['{"text":"', ...refined, '"}'];
+    undiciFetchMock.mockImplementation(async () => makeChatCompletionSseResponse(deltas.map((content) => ({
+      id: 'chatcmpl-EXxrC3CJkbLLnU1qOjh6Hn6s6iSdr',
+      object: 'chat.completion.chunk',
+      created: 1791763622,
+      model: 'gpt-5.4-mini',
+      choices: [{ index: 0, delta: { content } }],
+    }))));
+
+    const client = new LiteLlmTextModelClient({
+      proxyApiKey: 'proxy-key',
+      baseUrl: 'https://llm-proxy.example.com',
+    });
+
+    await expect(client.requestJson<{ text: string }>({
+      model: 'm',
+      schemaName: 's',
+      system: 'sys',
+      user: {},
+    })).resolves.toEqual({ text: refined });
+  });
+
+  it('rejects runaway model output as a model-output error', async () => {
+    undiciFetchMock.mockImplementation(async () => makeChatCompletionSseResponse([
+      { choices: [{ delta: { content: `{"text":"${'长'.repeat(64_001)}` } }] },
+    ]));
+
+    const client = new LiteLlmTextModelClient({
+      proxyApiKey: 'proxy-key',
+      baseUrl: 'https://llm-proxy.example.com',
+    });
+
+    const error = await client.requestJson<{ text: string }>({
+      model: 'm',
+      schemaName: 's',
+      system: 'sys',
+      user: {},
+    }).then(
+      () => null,
+      (caught: unknown) => caught,
+    );
+    expect(error).toBeInstanceOf(Error);
+    expect((error as Error).message).toContain('exceeded 64000 characters');
+    expect(isRefinerModelOutputError(error)).toBe(true);
+  });
+
+  it.each([
+    ['one oversized event with little output', [
+      { padding: 'x'.repeat(64_001), choices: [{ delta: { content: '{"text":"短"}' } }] },
+    ]],
+    ['endless framing-only events', Array.from({ length: 12_000 }, () => ({
+      id: 'chatcmpl-EXxrC3CJkbLLnU1qOjh6Hn6s6iSdr',
+      object: 'chat.completion.chunk',
+      created: 1791763622,
+      model: 'gpt-5.4-mini',
+      choices: [{ index: 0, delta: {} }],
+    }))],
+  ])('bounds the stream when the gateway sends %s', async (_case, events) => {
+    undiciFetchMock.mockImplementation(async () => makeChatCompletionSseResponse(events));
+
+    const client = new LiteLlmTextModelClient({
+      proxyApiKey: 'proxy-key',
+      baseUrl: 'https://llm-proxy.example.com',
+    });
+
+    const error = await client.requestJson<{ text: string }>({
+      model: 'm',
+      schemaName: 's',
+      system: 'sys',
+      user: {},
+    }).then(
+      () => null,
+      (caught: unknown) => caught,
+    );
+    expect((error as Error).message).toMatch(/exceeded \d+ characters/);
+    expect(isRefinerModelOutputError(error)).toBe(true);
+  });
+
   it('does not mark HTTP transport failures as model-output errors', async () => {
     undiciFetchMock.mockImplementation(async () => new Response('upstream exploded', { status: 502 }));
 
@@ -173,6 +290,38 @@ describe('LiteLlmTextModelClient', () => {
     expect(undiciFetchMock.mock.calls[0]?.[1]).toMatchObject({
       headers: expect.objectContaining({ Authorization: 'Bearer stale-token' }),
     });
+    expect(undiciFetchMock.mock.calls[1]?.[1]).toMatchObject({
+      headers: expect.objectContaining({ Authorization: 'Bearer fresh-token' }),
+    });
+    // Managed voice tokens are not Cindy AI keys.
+    expect(reportKeyRejectedMock).not.toHaveBeenCalled();
+  });
+
+  it('keeps the first target URL when the auth retry resolves a newer session', async () => {
+    // An ASR reconnect replaced the managed session between the two attempts;
+    // the retry must still go to the session the request was counted against.
+    const requestTargetProvider = vi.fn(async (options?: { forceRefresh?: boolean }) => ({
+      url: `https://voice.example.com/api/voice/sessions/${options?.forceRefresh ? 'session-2' : 'session-1'}/refine`,
+      authorization: options?.forceRefresh ? 'Bearer fresh-token' : 'Bearer stale-token',
+    }));
+    undiciFetchMock
+      .mockResolvedValueOnce(new Response('', { status: 401 }))
+      .mockResolvedValueOnce(makeChatCompletionSseResponse([
+        { choices: [{ delta: { content: '{"text":"refined"}' } }] },
+      ]));
+
+    const client = new LiteLlmTextModelClient({ requestTargetProvider });
+    await expect(client.requestJson<{ text: string }>({
+      model: 'm',
+      schemaName: 's',
+      system: 'sys',
+      user: {},
+    })).resolves.toEqual({ text: 'refined' });
+
+    expect(undiciFetchMock.mock.calls.map((call) => call[0])).toEqual([
+      'https://voice.example.com/api/voice/sessions/session-1/refine',
+      'https://voice.example.com/api/voice/sessions/session-1/refine',
+    ]);
     expect(undiciFetchMock.mock.calls[1]?.[1]).toMatchObject({
       headers: expect.objectContaining({ Authorization: 'Bearer fresh-token' }),
     });

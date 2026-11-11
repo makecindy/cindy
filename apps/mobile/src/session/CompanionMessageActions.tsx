@@ -1,11 +1,12 @@
-import { iconSize } from '@/theme';
+import { iconSize, iconStroke } from '@/theme';
 import { useRef, useState } from 'react';
 import { Pressable, View } from 'react-native';
 import { Copy, Check, Ellipsis } from 'lucide-react-native';
 import { useTranslation } from 'react-i18next';
 import { Text } from '@/components/AppText';
+import { ChatReplyIcon } from '@/components/ChatReplyIcon';
 import { NativePullDownMenu, usesNativePullDownMenu, type NativePullDownAction } from '@/platform/chrome/NativePullDownMenu';
-import { useTheme, spacing } from '@/theme';
+import { useTheme, spacing, radius } from '@/theme';
 import { fontWeight, lineHeight, typeScale } from '@/theme/tokens';
 
 /** §3 menu-item role: 16/22 medium. */
@@ -20,19 +21,29 @@ export function CompanionMessageActions({ user, copied, copying, disabled, onCop
   const { t } = useTranslation(); const { colors } = useTheme();
   const [open, setOpen] = useState(false);
   const pending = useRef<string | null>(null);
-  const hit = { width: 44, height: 44, alignItems: 'center' as const, justifyContent: 'center' as const };
+  // Desktop exposes this existing composer action as Reply in companion chats.
+  const reply = actions.find(action => action.id === 'add-to-chat');
+  const menuActions = actions.filter(action => action.id !== 'add-to-chat');
+  // Align the 14pt glyph with the body while preserving a 44pt touch target.
+  // Own bubbles have 12pt padding plus a border; assistant bodies have no inset.
+  const hit = ({ pressed }: { pressed: boolean }) => ({ width: 44, height: 44, borderRadius: radius.pill, alignItems: 'center' as const, justifyContent: 'center' as const, backgroundColor: pressed ? colors.surfaceChip : 'transparent', opacity: disabled ? 0.5 : 1 });
   const more = <Pressable style={hit} disabled={disabled} accessibilityRole="button" accessibilityState={{ disabled }} accessibilityLabel={t('message.renderer.moreActions')} testID="companion.messageMore" onPress={() => { if (!usesNativePullDownMenu()) setOpen(true); }}>
     <Ellipsis size={iconSize.sm} color={colors.textSecondary} />
   </Pressable>;
-  return <View style={{ flexDirection: 'row', justifyContent: user ? 'flex-end' : 'flex-start' }} testID="companion.messageActions">
-    {!user && onCopy ? <Pressable style={hit} disabled={disabled || copying} accessibilityRole="button" accessibilityLabel={t(copied ? 'message.renderer.copyStateCopied' : 'message.renderer.copyStateCopy')} onPress={onCopy} testID="message.copyButton">
+  return <View style={{ flexDirection: 'row', justifyContent: user ? 'flex-end' : 'flex-start', marginTop: spacing.xs, ...(user ? { marginRight: spacing.md + 1 - (44 - iconSize.sm) / 2 } : { marginLeft: -(44 - iconSize.sm) / 2 }) }} testID="companion.messageActions">
+    {onCopy ? <Pressable style={hit} disabled={disabled || copying} accessibilityRole="button" accessibilityLabel={t(copied ? 'message.renderer.copyStateCopied' : 'message.renderer.copyStateCopy')} onPress={onCopy} testID="message.copyButton">
       {copied ? <Check size={iconSize.sm} color={colors.textSecondary} /> : <Copy size={iconSize.sm} color={colors.textSecondary} />}
+    </Pressable> : null}
+    {reply ? <Pressable style={hit} disabled={disabled || reply.disabled} accessibilityRole="button"
+      accessibilityState={{ disabled: disabled || !!reply.disabled }} accessibilityLabel={t('message.renderer.reply')}
+      onPress={() => onAction(reply.id)} testID="companion.messageReply">
+      <ChatReplyIcon size={iconSize.sm} color={colors.textSecondary} strokeWidth={iconStroke.regular} />
     </Pressable> : null}
     {/* The system menu (UIMenu / Android PopupMenu) opens over the trigger regardless of its
         own disabled state, so a disabled More button is rendered without one. */}
-    {disabled ? more : <NativePullDownMenu actions={actions} onAction={onAction}>{more}</NativePullDownMenu>}
+    {disabled ? more : <NativePullDownMenu actions={menuActions} onAction={onAction}>{more}</NativePullDownMenu>}
     <CompanionSheet visible={open} title="" onClose={() => { pending.current = null; setOpen(false); }} onClosed={() => { const id = pending.current; pending.current = null; if (id) onAction(id); }}>
-      {actions.map(action => <Pressable key={action.id} disabled={action.disabled} accessibilityRole="button" style={{ minHeight: 44, justifyContent: 'center', paddingHorizontal: spacing.md }} onPress={() => { pending.current = action.id; setOpen(false); }}>
+      {menuActions.map(action => <Pressable key={action.id} disabled={action.disabled} accessibilityRole="button" style={{ minHeight: 44, justifyContent: 'center', paddingHorizontal: spacing.md }} onPress={() => { pending.current = action.id; setOpen(false); }}>
         <Text style={{ ...menuItemText, color: action.destructive ? colors.destructive : action.disabled ? colors.textSecondary : colors.textPrimary }}>{action.title}</Text>
       </Pressable>)}
     </CompanionSheet>

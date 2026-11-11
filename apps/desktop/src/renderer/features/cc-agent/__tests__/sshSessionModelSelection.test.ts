@@ -144,9 +144,23 @@ describe('SSH creation model selection', () => {
     expect(getPresetFast).toHaveBeenCalledWith('codex', 'openai', 'available-model');
   });
 
-  it('retains the ordinary draft policy when the catalog has no effort levels', () => {
+  it('omits effort when the catalog explicitly declares no effort levels', () => {
     expect(
       resolve([sshNativeCodexProvider([sshModel('plain', { efforts: [], defaultEffort: null })])]),
+    ).toMatchObject({
+      ok: true,
+      effort: null,
+      fastMode: false,
+    });
+  });
+
+  it('retains the draft effort when the catalog has not declared effort capabilities', () => {
+    expect(
+      resolve([
+        sshNativeCodexProvider([
+          sshModel('unknown', { efforts: [], defaultEffort: null, effortsUnknown: true }),
+        ]),
+      ]),
     ).toMatchObject({
       ok: true,
       effort: 'medium',

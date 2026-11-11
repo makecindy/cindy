@@ -78,7 +78,9 @@ describe('任务消息内存治理页面接线', () => {
     expect(screen).toContain('remoteSessionStore.mergeMessages(sessionIdAtStart, rows, { authority: messageAuthority });');
     // First open and reopen now share the same authority-fenced history read.
     expect(screen).toContain('syncSessionMessageWindow({');
-    expect(screen.match(/maker\.listMessages\(/g)).toHaveLength(3);
+    // 第 4 处是重连补读(bridgeLatestMessagePage)沿 before 的往前读,结果仍经同一 authority 的
+    // setLatestMessageWindow 提交。
+    expect(screen.match(/maker\.listMessages\(/g)).toHaveLength(4);
   });
 
   it('schedule 关闭翻历史入口，页面工作租约覆盖发送与附件状态', () => {
@@ -89,8 +91,12 @@ describe('任务消息内存治理页面接线', () => {
     expect(screen).toContain('enabled: appStateActive && remoteHistoryAvailable && !isScheduleDetail,');
     expect(screen).toContain('remoteSessionStore.acquireSessionMessageWork(sessionId, pageHasMessageWork)');
     const bridge = source('src/session/MobileOutboxBridge.tsx');
-    expect(bridge).toMatch(/remoteSessionStore\.acquireSessionMessageWork\(\s*record\.item\.sessionId,\s*true,?\s*\)/);
-    expect(bridge).toContain('for (const lease of leases.values()) lease.release()');
+    // Lease acquisition/release behavior is exercised through the production
+    // adapter in newSessionCreation.test.ts. This guard protects effect cleanup.
+    expect(bridge).toContain('const messageLeases = createOutboxMessageLeases({');
+    expect(bridge).toContain('store: remoteSessionStore,');
+    expect(bridge).toContain('messageLeases.refresh();');
+    expect(bridge).toContain('messageLeases.dispose();');
     expect(screen).toContain('remoteSessionStore.acquireSessionMessageWork(sessionId, true)');
     expect(screen.match(/messageWorkLease\.release\(\);/g)).toHaveLength(1);
     for (const signal of [

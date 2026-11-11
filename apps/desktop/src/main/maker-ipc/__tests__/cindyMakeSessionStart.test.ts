@@ -1,9 +1,29 @@
-import { describe, expect, it, vi } from 'vitest';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { CINDY_MAKE_VENDOR_OPTION_KEY } from '../../../shared/cindyMakeSession';
 import { applyPersistedCindyMakeMarker } from '../cindyMakeSessionStart';
 
+const feature = vi.hoisted(() => ({ enabled: true }));
+vi.mock('@cindy/maker-shared/cindy-make-feature', async (importOriginal) => ({
+  ...await importOriginal<typeof import('@cindy/maker-shared/cindy-make-feature')>(),
+  get CINDY_MAKE_ENABLED() { return feature.enabled; },
+}));
+beforeEach(() => { feature.enabled = true; });
+
 describe('applyPersistedCindyMakeMarker', () => {
+  it.each(['cindy-make', 'cindy-make-merge'])('refuses to resume a persisted %s task while disabled', async (source) => {
+    feature.enabled = false;
+    const options = { id: 'old-task', vendorOptions: { source: 'draft' } };
+    await expect(applyPersistedCindyMakeMarker(options, async () => source)).rejects.toThrow(
+      /\[UNSUPPORTED_CAPABILITY\]/,
+    );
+    expect(options.vendorOptions).toEqual({ source: 'draft' });
+  });
+
+  it('still allows ordinary tasks while disabled', async () => {
+    feature.enabled = false;
+    await expect(applyPersistedCindyMakeMarker({ id: 'ordinary' }, async () => 'desktop')).resolves.toBe(false);
+  });
   it('does not give an upstream merge task the personal-build harness', async () => {
     const options: { id: string; vendorOptions?: Record<string, unknown> } = { id: 'merge' };
     expect(await applyPersistedCindyMakeMarker(options, async () => 'cindy-make-merge')).toBe(false);

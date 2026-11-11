@@ -6,11 +6,25 @@ import {
   InterruptedTurnAutoResumeGuard,
   interruptedTurnResumeDelayMs,
   isAcceptedTurnContinuationOnlyReason,
+  isContinuationOnlyAutoResumeReason,
   isAutoResumeUserMessage,
   isInterruptedTurnError,
   isSubstantiveProgressEvent,
   shouldPreserveWaitingContinuationOnlyAutoResume,
+  shouldPreserveRuntimeFallbackAutoResume,
 } from '../interruptedTurnAutoResume.js';
+
+describe('runtime fallback rebuild ownership', () => {
+  it.each(['runtime-refresh', 'requested', 'unexpected', 'agent-switch', 'deleted'])('preserves the exact live retry only for its own rebuild: %s', closeReason => {
+    const input = { closeReason, leasedAttemptToken: 1, guardIsCurrentAttempt: true,
+      bookIsCurrentAttempt: true, coordinatorAttemptToken: 1, isAutoResumePending: true, hasLiveSchedule: true };
+    expect(shouldPreserveRuntimeFallbackAutoResume(input)).toBe(['runtime-refresh', 'requested', 'agent-switch'].includes(closeReason));
+    for (const stale of [{ leasedAttemptToken: undefined }, { guardIsCurrentAttempt: false },
+      { bookIsCurrentAttempt: false }, { coordinatorAttemptToken: 2 }, { isAutoResumePending: false }, { hasLiveSchedule: false }]) {
+      expect(shouldPreserveRuntimeFallbackAutoResume({ ...input, ...stale })).toBe(false);
+    }
+  });
+});
 
 // 判定单测的核心是**白名单收紧**:自动重试一个确定性失败(认证过期、协议错)会反复
 // 烧额度并反复报错,所以只有识别得了的"上游把 turn 打断了"才允许自愈。
@@ -150,6 +164,15 @@ describe('isInterruptedTurnError', () => {
     expect(isAcceptedTurnContinuationOnlyReason('upstream-overload')).toBe(false);
     expect(isAcceptedTurnContinuationOnlyReason('turn-failed')).toBe(false);
     expect(isAcceptedTurnContinuationOnlyReason(undefined)).toBe(false);
+  });
+
+  it('continues a lost remote agent without letting ordinary tasks resume it', () => {
+    for (const reason of ['remote_agent_closed', 'remote_agent_lost']) {
+      expect(isContinuationOnlyAutoResumeReason(reason)).toBe(true);
+      expect(isAcceptedTurnContinuationOnlyReason(reason)).toBe(false);
+      expect(isInterruptedTurnError({ reason, message: 'The computer running this agent is unreachable.' })).toBe(false);
+    }
+    expect(isContinuationOnlyAutoResumeReason('remote_agent_restarted')).toBe(false);
   });
 
   it('preserves waiting continuation-only auto-resume only across unexpected close', () => {

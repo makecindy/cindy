@@ -10,7 +10,7 @@
  *
  * 本测试钉住修复后的两条:
  *   1. 收起态组头按整组汇总点红(不是只看最新一条);
- *   2. 收起态把带告警的那条运行提上来单独成行,用户能直接点开处置。
+ *   2. 收起态的未读及告警可由组头或独立子行打开，同一任务不重复显示。
  * 都从同一份判据(resolveCollapsedAttention)出发,所以不可能再「汇总说有、列表没有」。
  */
 
@@ -19,6 +19,10 @@ import { act, cleanup, fireEvent, render, screen } from '@testing-library/react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import type { Session } from '@/lib/ccAgent.types';
+import type {
+  AutomationScheduleAction,
+  AutomationSessionGroup,
+} from '../../lib/automationSidebarGrouping';
 import { addSessionAttention, clearSessionAttention } from '@/lib/sessionAttentionStore';
 import {
   applyRemoteSessionActivity,
@@ -55,10 +59,31 @@ vi.mock('@/components/ui/tooltip', () => ({
 }));
 
 vi.mock('@/components/ui/dropdown-menu', () => ({
-  DropdownMenu: ({ children }: { children: React.ReactNode }) => children,
+  // Radix only mounts the menu while it is open, so a case has to reach the menu through the
+  // real entry point (right-click on the group header) instead of assuming it is in the tree.
+  DropdownMenu: ({ open, children }: { open?: boolean; children: React.ReactNode }) =>
+    open ? children : null,
   DropdownMenuTrigger: ({ children }: { children: React.ReactNode }) => children,
-  DropdownMenuContent: () => null,
-  DropdownMenuItem: () => null,
+  DropdownMenuContent: ({ children }: { children: React.ReactNode }) => children,
+  DropdownMenuItem: ({
+    children,
+    onSelect,
+    disabled,
+  }: {
+    children: React.ReactNode;
+    onSelect?: () => void;
+    disabled?: boolean;
+  }) =>
+    createElement(
+      'button',
+      {
+        role: 'menuitem',
+        onClick: onSelect,
+        disabled,
+        ...(disabled ? { 'data-disabled': '' } : {}),
+      },
+      children,
+    ),
   DropdownMenuSeparator: () => null,
 }));
 
@@ -117,12 +142,19 @@ function GroupHarness({
   urgentSessionIds,
   initialCollapsed,
   onSessionClick = noop,
+  onScheduleAction = noop,
+  deviceLinkDeviceId,
+  scheduleId = 'sched-1',
 }: {
   sessions: Session[];
   notifications: string[];
   urgentSessionIds: ReadonlySet<string>;
   initialCollapsed: boolean;
   onSessionClick?: (sessionId: string) => void;
+  onScheduleAction?: (group: AutomationSessionGroup, action: AutomationScheduleAction) => void;
+  deviceLinkDeviceId?: string;
+  /** null models an automation that has been deleted: the group keeps its runs but loses its schedule. */
+  scheduleId?: string | null;
 }) {
   const [collapsed, setCollapsed] = useState(initialCollapsed);
   return createElement(SessionAttentionUrgencyProvider, {
@@ -130,8 +162,9 @@ function GroupHarness({
     children: createElement(AutomationSessionGroupItem, {
       group: {
         id: 'schedule:sched-1',
-        scheduleId: 'sched-1',
+        scheduleId: scheduleId ?? undefined,
         scheduleStatus: 'active',
+        deviceLinkDeviceId,
         title: '产品决策巡检',
         sessions,
         attentionSessionIds: notifications,
@@ -145,7 +178,7 @@ function GroupHarness({
       onAction: noop,
       onRename: noop,
       onTogglePin: noop,
-      onScheduleAction: noop,
+      onScheduleAction,
     }),
   });
 }
@@ -174,6 +207,11 @@ function renderGroup({
   );
 }
 
+/** The entry point under test: right-clicking the group header opens the same 更多 menu. */
+function openGroupMenu() {
+  fireEvent.contextMenu(screen.getByText('产品决策巡检'));
+}
+
 const childRunIds = (container: HTMLElement): string[] =>
   [...container.querySelectorAll('[data-child-run]')].map(
     (node) => node.getAttribute('data-child-run') ?? '',
@@ -190,19 +228,136 @@ beforeEach(() => {
 });
 
 describe('AutomationSessionGroupItem — 收起态的未处理告警', () => {
+  // Feature regression (unit): the actual group menu must dispatch all members,
+  // even while collapsed. Existing alert tests do not exercise menu actions.
+  // Minimal input: two hidden runs; remote and archived-only groups cannot archive.
+  // Standalone validation: Vitest 2.71s, tests 159ms (2026-10-27).
+  it.each(['local', 'remote', 'archived'] as const)(
+    'offers bulk archive only for active local groups (%s)',
+    (kind) => {
+      const onScheduleAction = vi.fn();
+      const sessions = RUNS.slice(0, 2).map((run) => ({
+        ...run,
+        status: kind === 'archived' ? ('archived' as const) : ('active' as const),
+      }));
+      const { container } = render(
+        createElement(GroupHarness, {
+          sessions,
+          notifications: [],
+          urgentSessionIds: new Set<string>(),
+          initialCollapsed: true,
+          onScheduleAction,
+          deviceLinkDeviceId: kind === 'remote' ? 'other-computer' : undefined,
+        }),
+      );
+      expect(childRunIds(container)).toEqual([]);
+      openGroupMenu();
+      const menuItem = screen.queryByRole('menuitem', {
+        name: 'ccAgent.sidebar.projectAction.archivedAll',
+      });
+      if (kind === 'remote') {
+        expect(menuItem).toBeNull();
+      } else {
+        expect(menuItem).not.toBeNull();
+        fireEvent.click(menuItem!);
+        if (kind === 'archived') expect(onScheduleAction).not.toHaveBeenCalled();
+        else
+          expect(onScheduleAction).toHaveBeenCalledWith(
+            expect.objectContaining({ sessions }),
+            'archive-all',
+          );
+      }
+    },
+  );
+
+  // #8594 regression (unit). Deleting an automation leaves its past runs under a fallback
+  // group key with no scheduleId, and the header used to gate its whole action slot on
+  // scheduleId — so the user could neither hover-archive nor right-click a group whose runs
+  // are still active. Production entry: AutomationSessionGroupItem header menu; observable
+  // result: the archive-all menu item dispatches 'archive-all' for the group's sessions.
+  // Gap in existing coverage: every case above renders a group that still has a schedule.
+  // Minimal failing input: scheduleId undefined with an active run.
+  function renderOrphanGroup(sessions: Session[], onScheduleAction = vi.fn()) {
+    const { container } = render(
+      createElement(GroupHarness, {
+        sessions,
+        notifications: [],
+        urgentSessionIds: new Set<string>(),
+        initialCollapsed: true,
+        onScheduleAction,
+        scheduleId: null,
+      }),
+    );
+    return { container, onScheduleAction };
+  }
+
+  it('keeps the bulk archive entry for runs of a deleted automation', () => {
+    const sessions = RUNS.slice(0, 2);
+    const { container, onScheduleAction } = renderOrphanGroup(sessions);
+    expect(childRunIds(container)).toEqual([]);
+    expect(
+      screen.queryByRole('menuitem', { name: 'ccAgent.sidebar.projectAction.archivedAll' }),
+    ).toBeNull();
+    openGroupMenu();
+    const menuItem = screen.getByRole('menuitem', {
+      name: 'ccAgent.sidebar.projectAction.archivedAll',
+    });
+    expect(menuItem.hasAttribute('data-disabled')).toBe(false);
+    fireEvent.click(menuItem);
+    expect(onScheduleAction).toHaveBeenCalledWith(
+      expect.objectContaining({ sessions }),
+      'archive-all',
+    );
+  });
+
+  it('does not offer to delete an automation that is already gone', () => {
+    renderOrphanGroup(RUNS.slice(0, 2));
+    openGroupMenu();
+    expect(
+      screen.queryByRole('menuitem', { name: 'ccAgent.sidebar.automationGroup.menu.delete' }),
+    ).toBeNull();
+  });
+
+  // An orphan group with nothing left to archive gets no action slot at all, so the header
+  // does not offer an operation that can only fail.
+  it('offers no bulk archive entry once an orphan group has nothing active', () => {
+    const sessions = RUNS.slice(0, 2).map((run) => ({ ...run, status: 'archived' as const }));
+    const { onScheduleAction } = renderOrphanGroup(sessions);
+    openGroupMenu();
+    expect(
+      screen.queryByRole('menuitem', { name: 'ccAgent.sidebar.projectAction.archivedAll' }),
+    ).toBeNull();
+    expect(onScheduleAction).not.toHaveBeenCalled();
+  });
+
+  it('still offers delete for a group whose automation exists', () => {
+    render(
+      createElement(GroupHarness, {
+        sessions: RUNS.slice(0, 2),
+        notifications: [],
+        urgentSessionIds: new Set<string>(),
+        initialCollapsed: true,
+      }),
+    );
+    openGroupMenu();
+    expect(
+      screen.getByRole('menuitem', { name: 'ccAgent.sidebar.automationGroup.menu.delete' }),
+    ).not.toBeNull();
+  });
+
   it('无告警时收起就是收起:组头不点状态、不渲染子行', () => {
     const { container } = renderGroup();
     expect(childRunIds(container)).toEqual([]);
     expect(screen.queryByLabelText('Failed — click to view')).toBeNull();
   });
 
-  it('组内非最新一条留下告警时,组头点红且该条被提上来成行', () => {
-    // run-2 = 「第 3 新、turn 从未收尾」的那条;组头代表的是 run-0。
+  it('组内旧运行留下告警时由红色组头代表,不重复成行', () => {
+    // 收起态组头直接打开 run-2，下面不能重复同一任务。
     addSessionAttention('run-2', 'error');
     const { container } = renderGroup({ notifications: ['run-2'] });
 
     expect(screen.getByLabelText('Failed — click to view')).toBeTruthy();
-    expect(childRunIds(container)).toEqual(['run-2']);
+    expect(childRunIds(container)).toEqual([]);
   });
 
   it('定时任务失败未读(attention kind 缺失)同样算告警,不被涂成完成绿', () => {
@@ -213,15 +368,56 @@ describe('AutomationSessionGroupItem — 收起态的未处理告警', () => {
 
     expect(screen.getByLabelText('Failed — click to view')).toBeTruthy();
     expect(screen.queryByLabelText('Completed — click to view')).toBeNull();
-    expect(childRunIds(container)).toEqual(['run-3']);
+    expect(childRunIds(container)).toEqual([]);
   });
 
-  it('只有完成未读时组头补绿点,但不提行(绿点不是待处理告警)', () => {
+  it('完成未读时组头补绿点且运行单独成行', () => {
     addSessionAttention('run-2', 'done');
     const { container } = renderGroup({ notifications: ['run-2'] });
 
     expect(screen.getByLabelText('Completed — click to view')).toBeTruthy();
     expect(screen.queryByLabelText('Failed — click to view')).toBeNull();
+    expect(childRunIds(container)).toEqual(['run-2']);
+  });
+
+  // 用户规则（unit）：非静默未读全部露出；最小缺口是没有 chat attention kind 的
+  // scheduler 未读，以及超过五条的情况。通过真实组件验证已读后收回和远程镜像。
+  it.each(['local', 'remote'] as const)('所有完成未读可见,已读或静默成功隐藏 (%s)', (kind) => {
+    const sessions = MANY_RUNS.map((run) => ({
+      ...run,
+      deviceLinkDeviceId: kind === 'remote' ? 'remote' : undefined,
+    }));
+    const unreadIds = ALL_IDS.slice(1, 7);
+    if (kind === 'remote') {
+      for (const session of sessions)
+        applyRemoteSessionActivity('remote', {
+          sessionId: session.id,
+          phase: 'completed',
+          attention: unreadIds.includes(session.id),
+          compactDetail: '',
+        });
+    }
+    const { container, rerender } = renderGroup({ sessions, notifications: unreadIds });
+    expect(childRunIds(container)).toEqual(unreadIds);
+    // 无未读的 run-0 / run-7（已读或静默成功）不因最近活动而显示。
+    if (kind === 'remote')
+      act(() => {
+        for (const id of unreadIds)
+          applyRemoteSessionActivity('remote', {
+            sessionId: id,
+            phase: 'completed',
+            attention: false,
+            compactDetail: '',
+          });
+      });
+    rerender(
+      createElement(GroupHarness, {
+        sessions,
+        notifications: [],
+        urgentSessionIds: new Set<string>(),
+        initialCollapsed: true,
+      }),
+    );
     expect(childRunIds(container)).toEqual([]);
   });
 
@@ -237,14 +433,42 @@ describe('AutomationSessionGroupItem — 收起态的未处理告警', () => {
     expect(onSessionClick).not.toHaveBeenCalledWith('run-0');
   });
 
+  // 用户规则（unit）：只在折叠时排除组头任务；展开后无论已读未读都保留子行。
+  // 从真实组头点击、冻结与显示全部验证，覆盖展开／收起往返。
+  it.each([true, false])('组头任务展开时有子行,折叠时不重复 (未读=%s)', (unread) => {
+    const onSessionClick = vi.fn();
+    const { container } = renderGroup({
+      sessions: MANY_RUNS, notifications: unread ? ['run-0', 'run-7'] : ['run-7'], onSessionClick,
+    });
+    expect(childRunIds(container)).toEqual(['run-7']);
+    fireEvent.click(screen.getByText('产品决策巡检'));
+    expect(onSessionClick).toHaveBeenLastCalledWith('run-0');
+    fireEvent.click(screen.getByLabelText('ccAgent.sidebar.automationGroup.expand'));
+    expect(childRunIds(container)).toEqual(['run-0', 'run-1', 'run-2', 'run-3', 'run-4', 'run-7']);
+    fireEvent.click(screen.getByText('产品决策巡检'));
+    expect(childRunIds(container)).toContain('run-0');
+    fireEvent.click(screen.getByText(/ccAgent\.sidebar\.showAllSessions/));
+    expect(childRunIds(container)).toEqual(ALL_IDS);
+    fireEvent.click(screen.getByLabelText('ccAgent.sidebar.automationGroup.collapse'));
+    expect(childRunIds(container)).toEqual(['run-7']);
+  });
+
   it('等待回复的旧运行单独成行,组头仍代表最新运行', () => {
     addSessionAttention('run-2', 'awaiting');
-    const { container } = renderGroup({ notifications: ['run-2'] });
+    const { container, rerender } = renderGroup({ notifications: ['run-2'] });
 
     expect(screen.queryByLabelText('Failed — click to view')).toBeNull();
     expect(screen.queryByLabelText('Awaiting your input')).toBeNull();
     expect(childRunIds(container)).toEqual(['run-2']);
     act(() => clearSessionAttention('run-2', { intent: 'explicit' }));
+    rerender(
+      createElement(GroupHarness, {
+        sessions: RUNS,
+        notifications: [],
+        urgentSessionIds: new Set<string>(),
+        initialCollapsed: true,
+      }),
+    );
     expect(childRunIds(container)).toEqual([]);
   });
 
@@ -252,23 +476,35 @@ describe('AutomationSessionGroupItem — 收起态的未处理告警', () => {
     const sessions = RUNS.map((run) => ({ ...run, deviceLinkDeviceId: 'remote' }));
     addSessionAttention('run-2', 'awaiting');
     applyRemoteSessionActivity('remote', {
-      sessionId: 'run-2', phase: 'needs-interaction', attention: true, compactDetail: '',
+      sessionId: 'run-2',
+      phase: 'needs-interaction',
+      attention: true,
+      compactDetail: '',
     });
     const { container, rerender } = renderGroup({ sessions });
     expect(childRunIds(container)).toEqual(['run-2']);
     expect(screen.queryByLabelText('Awaiting your input')).toBeNull();
-    act(() => applyRemoteSessionActivity('remote', {
-      sessionId: 'run-2', phase: 'running', attention: false, compactDetail: '',
-    }));
-    rerender(createElement(GroupHarness, {
-      sessions, notifications: ['run-2'], urgentSessionIds: new Set<string>(), initialCollapsed: true,
-    }));
+    act(() =>
+      applyRemoteSessionActivity('remote', {
+        sessionId: 'run-2',
+        phase: 'running',
+        attention: false,
+        compactDetail: '',
+      }),
+    );
+    rerender(
+      createElement(GroupHarness, {
+        sessions,
+        notifications: ['run-2'],
+        urgentSessionIds: new Set<string>(),
+        initialCollapsed: true,
+      }),
+    );
     expect(childRunIds(container)).toEqual([]);
   });
 
-  it('收起态点过显示全部后再展开,不会把整组历史一次摊开', () => {
-    // 运行全部 >24h,展开态没有 24h 豁免;告警 6 条超过收起上限 5,所以能点「显示全部」。
-    // 收起态靠 urgent 提行,展开态既无 24h 也无未读 —— 只有残留 showAll 才会把第 8 条带出来。
+  it('收起态显示全部待处理运行,展开后仍按普通历史上限折叠', () => {
+    // 收起态的六条待处理运行全部可见；展开后普通旧历史仍保留前五条上限。
     const staleRuns = Array.from({ length: 8 }, (_, index) => {
       const iso = new Date(
         Date.parse('2026-08-10T12:00:00.000Z') - index * 3_600_000,
@@ -281,9 +517,7 @@ describe('AutomationSessionGroupItem — 收起态的未处理告警', () => {
       urgentSessionIds: new Set(alerts),
     });
 
-    expect(childRunIds(container)).toHaveLength(5);
-    fireEvent.click(screen.getByText(/ccAgent\.sidebar\.showAllSessions/));
-    expect(childRunIds(container)).toEqual(alerts);
+    expect(childRunIds(container)).toEqual(alerts.slice(1));
 
     fireEvent.click(screen.getByLabelText('ccAgent.sidebar.automationGroup.expand'));
     const expandedIds = childRunIds(container);

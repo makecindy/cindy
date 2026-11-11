@@ -1,11 +1,14 @@
+import { projectRegistryV5 } from './modelInterfaceContract.js';
 import {
   registryEntryDefaults,
   findBaseModel,
   referencePricesForRoute,
 } from "./modelMetadataLayers.js";
 import { modelRegistryCanonicalJson } from "./modelRegistryCanonical.js";
+import { MODEL_ACCESS_WIRE_PROTOCOLS } from './modelAccessBean.js';
 import type {
   ModelAccessV2Agent,
+  ModelAgent,
   ModelPriceVariant,
   ModelReferencePrice,
   ModelRegistry,
@@ -16,6 +19,34 @@ import type {
 export type ModelRegistryRevisionRelation =
   "newer" | "older" | "same" | "conflict" | "invalid-incoming";
 
+/** Same owned subscription aliases as the native API lookup; Gateway namespaces stay intact. */
+function registryRouteModelId(providerId: string, modelId: string): string {
+  const rawId = modelId.replace(/\[1m\]$/, "");
+  return providerId === "openai"
+    ? rawId.replace(/^chatgpt\//, "")
+    : providerId === "xai" && !rawId.startsWith("xai/")
+      ? `xai/${rawId}`
+      : rawId;
+}
+
+/** Catalog-recommended engine for one source and model: exact IDs win over the longest prefix.
+ * The result is advice only; callers still choose among engines this route actually offers. */
+export function resolveRecommendedAgent(
+  registry: ModelRegistry | undefined,
+  providerId: string,
+  modelId: string,
+): ModelAgent | undefined {
+  const rules = registry?.recommendedAgents?.filter((rule) => rule.providerId === providerId);
+  if (!rules?.length) return undefined;
+  const id = registryRouteModelId(providerId, modelId);
+  return (
+    rules.find((rule) => rule.modelId === id) ??
+    rules
+      .filter((rule) => rule.modelIdPrefix !== undefined && id.startsWith(rule.modelIdPrefix))
+      .sort((a, b) => b.modelIdPrefix!.length - a.modelIdPrefix!.length)[0]
+  )?.agent;
+}
+
 /** Explicit entries win, then the most specific rule for this exact provider route.
  * Missing data stays unknown; a retired or explicitly unverified entry suppresses family rules.
  */
@@ -23,6 +54,7 @@ export function resolveModelNativeApi(
   registry: ModelRegistry | undefined,
   providerId: string,
   modelId: string,
+  mode?: string,
 ): import("./modelAccessBean.js").ModelNativeApi | null | undefined {
   if (!registry) return undefined;
   const rawId = modelId.replace(/\[1m\]$/, "");
@@ -52,12 +84,18 @@ export function resolveModelNativeApi(
     ),
   ];
   if (explicit.length) return explicit.length === 1 ? explicit[0] : null;
+  const effectiveMode = mode ?? entries.map(entry => registryEntryDefaults(registry, entry).mode)
+    .find(value => value !== undefined) ?? findBaseModel(registry, id)?.defaults.mode;
+  // Family prefixes describe chat APIs, not every model sharing the name (e.g. gpt-*-tts).
+  // Keep media protocols unknown unless they are declared; mode is not a transport adapter.
   return registry.nativeApiRules
     ?.filter(
       (rule) =>
         rule.providerId === providerId &&
         id.startsWith(rule.modelIdPrefix) &&
-        !id.slice(rule.modelIdPrefix.length).includes("/"),
+        !id.slice(rule.modelIdPrefix.length).includes("/") &&
+        (effectiveMode === undefined || effectiveMode === 'chat' || effectiveMode === 'responses' ||
+          !(MODEL_ACCESS_WIRE_PROTOCOLS as readonly string[]).includes(rule.nativeApi)),
     )
     .sort((a, b) => b.modelIdPrefix.length - a.modelIdPrefix.length)[0]
     ?.nativeApi;
@@ -71,6 +109,7 @@ export function resolveModelNativeApi(
 export function resolveCatalogModelNativeApi(
   registry: ModelRegistry | undefined,
   modelId: string,
+  mode?: string,
 ): import("./modelAccessBean.js").ModelNativeApi | null | undefined {
   if (!registry) return undefined;
   const base = findBaseModel(registry, modelId);
@@ -86,7 +125,8 @@ export function resolveCatalogModelNativeApi(
   ));
   if (declarations.size) return declarations.size === 1 ? [...declarations][0] : null;
   const canonicalId = base?.id ?? modelId;
-  const declared = resolveModelNativeApi(registry, 'xd', canonicalId);
+  const effectiveMode = mode ?? (target ? registryEntryDefaults(registry, target).mode : base?.defaults.mode);
+  const declared = resolveModelNativeApi(registry, 'xd', canonicalId, effectiveMode);
   if (declared !== undefined) return declared;
   if (canonicalId.includes('/')) return undefined;
   // Direct catalogs may omit the vendor namespace (gemini-*, claude-*, qwen*).
@@ -95,7 +135,7 @@ export function resolveCatalogModelNativeApi(
     const slash = rule.modelIdPrefix.lastIndexOf('/');
     const prefix = rule.modelIdPrefix.slice(slash + 1);
     return rule.providerId === 'xd' && slash >= 0 && prefix && canonicalId.startsWith(prefix)
-      ? [{ prefix, nativeApi: resolveModelNativeApi(registry, 'xd', `${rule.modelIdPrefix.slice(0, slash + 1)}${canonicalId}`) }]
+      ? [{ prefix, nativeApi: resolveModelNativeApi(registry, 'xd', `${rule.modelIdPrefix.slice(0, slash + 1)}${canonicalId}`, effectiveMode) }]
       : [];
   }) ?? [];
   const longest = Math.max(0, ...rules.map(rule => rule.prefix.length));
@@ -125,6 +165,12 @@ export function compareModelRegistryRevisions(
   if (incomingRevision > currentRevision) return "newer";
 
   const canonicalUpdatedAt = new Date(incomingRevision).toISOString();
+  // Same revision, negotiated projection upgrade. Compare the exact old contract,
+  // never waive a conflict within one schema or downgrade an accepted V6 snapshot.
+  if (incoming.schemaVersion === 6 && current.schemaVersion === 5 &&
+      modelRegistryCanonicalJson({ ...projectRegistryV5(incoming), updatedAt: canonicalUpdatedAt }) === modelRegistryCanonicalJson({ ...current, updatedAt: canonicalUpdatedAt })) return 'newer';
+  if (incoming.schemaVersion === 5 && current.schemaVersion === 6 &&
+      modelRegistryCanonicalJson({ ...incoming, updatedAt: canonicalUpdatedAt }) === modelRegistryCanonicalJson({ ...projectRegistryV5(current), updatedAt: canonicalUpdatedAt })) return 'older';
   const incomingDigest = modelRegistryCanonicalJson({
     ...incoming,
     updatedAt: canonicalUpdatedAt,

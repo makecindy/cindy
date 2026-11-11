@@ -186,8 +186,10 @@ const bindings = {
   Text: ({ children }: any) => createElement("span", {}, children),
   BlurBackdrop: () => null,
   FLOATING_CHROME_BLUR_INTENSITY: 55,
-  Platform: { OS: "ios" },
-  Sparkles: () => null,
+  makeComposerActivityPillStyles: () => ({}),
+  composerActivityPillOverlayColor: () => "transparent",
+  ComposerActivityPill: ({ label, live, children }: any) =>
+    createElement("span", { "data-testid": "session.composerActivityPill", "aria-live": live ? "polite" : undefined }, label, children),
   ArrowDown: () => null,
   iconSize: {},
   iconStroke: {},
@@ -585,4 +587,35 @@ it("moves screen reader focus into the pinned card and back to the trigger, exce
   await act(async () => harness.outsideTap!.onOutsideTap());
   expect(card()).toBeNull();
   expect(harness.focus).toEqual(["text:session.screen.currentRate"]);
+});
+
+it.each([
+  { label: 'switching computers' },
+  { label: 'reconnecting', attempt: 2, maxAttempts: 5 },
+])('shows only $label, without timer or token metadata, while recovery is pending', async (pendingRecovery) => {
+  await act(async () => root.render(createElement(ActivityStatus, {
+    ...base, visible: true, tokenUsage: 500, sideTaskRunning: false, reconnectAttempt: null,
+    slowSendPhase: 'sending', pendingRecovery,
+  })));
+  const progress = pendingRecovery.attempt ? `${pendingRecovery.attempt}/${pendingRecovery.maxAttempts}` : '';
+  expect(host.textContent).toBe(pendingRecovery.label + progress);
+  expect(host.querySelector('[data-testid="session.composerActivityPill"]')).not.toBeNull();
+  expect(host.querySelector('[data-testid="session.tokenRate.trigger"]')).toBeNull();
+});
+
+it('keeps a slow new-task send in the activity row, then continues as thinking', async () => {
+  const show = async (slowSendPhase: string | null) => act(async () => root.render(createElement(ActivityStatus, {
+    ...base, visible: true, tokenUsage: 0, sideTaskRunning: false, reconnectAttempt: null, slowSendPhase,
+  })));
+  const pillNode = () => host.querySelector('[data-testid="session.composerActivityPill"]');
+  const pill = () => pillNode()?.textContent;
+  await show('connecting');
+  expect(pill()).toBe('session.new.slowSend.connecting');
+  // Phases are announced (the old in-composer notice was a polite live region); thinking is not.
+  expect(pillNode()?.getAttribute('aria-live')).toBe('polite');
+  await show('sending');
+  expect(pill()).toBe('session.new.slowSend.sending');
+  await show(null);
+  expect(pill()).toBe('session.screen.thinking');
+  expect(pillNode()?.getAttribute('aria-live')).toBeNull();
 });

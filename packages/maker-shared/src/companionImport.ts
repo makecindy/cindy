@@ -1,6 +1,7 @@
 /** Public import projection. Source paths, credentials and configuration stay on the owning host. */
 export type CompanionImportSourceKind = 'hermes' | 'openclaw';
-export type CompanionImportCategory = 'personality' | 'memory' | 'skills' | 'connections' | 'automations';
+export type CompanionImportCategory = 'personality' | 'memory' | 'skills' | 'bots' | 'connections' | 'automations';
+export type CompanionImportBotPlatform = 'telegram' | 'discord' | 'feishu' | 'wecom' | 'dingtalk';
 
 export interface CompanionImportSource {
   id: string;
@@ -21,6 +22,10 @@ export interface CompanionImportEntry {
   exclusiveWith?: string[];
   /** An explicit compatibility problem, never silently discarded configuration. */
   issues?: string[];
+  /** `bots` only: messaging platform of the source bot. */
+  platform?: CompanionImportBotPlatform;
+  /** `bots` only: inferred owner id on that platform; alternatives differ only by owner. */
+  owner?: string;
 }
 
 export interface CompanionImportPreview {
@@ -90,7 +95,7 @@ export interface CompanionImportApi {
   status(requestId: string): Promise<CompanionImportResult | undefined>;
 }
 
-export const companionImportCategories: CompanionImportCategory[] = ['personality', 'memory', 'skills', 'connections', 'automations'];
+export const companionImportCategories: CompanionImportCategory[] = ['personality', 'memory', 'skills', 'bots', 'connections', 'automations'];
 
 /** Preserve exact choices while keeping large selections below the existing action budget. */
 export function compactCompanionImportSelection(preview: CompanionImportPreview, selected: string[]): Pick<CompanionImportSelection, 'entryIds' | 'entryRanges'> {
@@ -149,6 +154,12 @@ export function companionImportIssueKey(code?: string): string {
 export const COMPANION_IMPORT_CHUNK_PRIMITIVE = 'companion-import-chunks-v1';
 export const COMPANION_IMPORT_CHUNK_LENGTH = 256 * 1024;
 export const COMPANION_IMPORT_READ_MAX_LENGTH = 128 * 1024 * 1024;
+/**
+ * Additive preview capability: the controller renders the `bots` category, and importing a
+ * bot stops it in the source agent before the teammate connects it. Controllers without it
+ * keep receiving those bots under `connections`, with no source stop.
+ */
+export const COMPANION_IMPORT_BOTS_PRIMITIVE = 'companion-import-bots-v1';
 
 /** Transport-neutral client: Desktop and Mobile use their existing Remote Resource adapters. */
 export function remoteCompanionImportApi(
@@ -232,13 +243,21 @@ export function companionImportReasonKey(code?: string): string {
     MEMORY_DESCRIPTION_TOO_LONG: 'memoryMetadata', MEMORY_TITLE_TOO_LONG: 'memoryMetadata', MEMORY_METADATA_INVALID: 'memoryMetadata',
     MEMORY_CONTENT_TOO_LARGE: 'fileTooLarge', MEMORY_WRITE_FAILED: 'memoryWrite', MEMORY_CHANGED: 'memoryChanged',
     MEMORY_STORAGE_UNAVAILABLE: 'memoryWrite', MEMORY_ATTACHMENT_UNSUPPORTED: 'attachmentUnsupported',
-    SOURCE_FILE_TOO_LARGE: 'fileTooLarge', SOURCE_SNAPSHOT_TOO_LARGE: 'fileTooLarge', SOURCE_ITEM_TOO_LARGE: 'fileTooLarge',
+    SOURCE_FILE_TOO_LARGE: 'sourceFileTooLarge', SOURCE_SNAPSHOT_TOO_LARGE: 'snapshotTooLarge', SOURCE_ITEM_TOO_LARGE: 'itemTooLarge',
     IMPORT_DISK_FULL: 'diskFull', IMPORT_PERMISSION_DENIED: 'permissionDenied',
     IMPORT_SETUP_DEFERRED: 'setupDeferred', SOURCE_TOOL_POLICY_NEEDS_MAPPING: 'toolMapping', AUTOMATION_MODEL_NEEDS_MAPPING: 'modelMapping',
     AUTOMATION_CONTEXT_NEEDS_MAPPING: 'contextMapping', AUTOMATION_WORKDIR_NEEDS_MAPPING: 'contextMapping',
     SOURCE_AUTOMATION_INVALID: 'automationInvalid', AUTOMATION_TRIGGER_NEEDS_ADAPTER: 'automationInvalid',
     AUTOMATION_DATA_READ_FAILED: 'readFailed', AUTOMATION_READ_NOT_VERIFIED: 'readFailed',
     NATIVE_AUTH_REFRESH_REQUIRED: 'authRefresh', AUTOMATION_DEPENDENCY_NOT_SELECTED: 'missingSelection',
+    SOURCE_COMMAND_UNAVAILABLE: 'sourceCommand',
+    // 导入的 Telegram / Discord 机器人没能直接变成伙伴的消息平台连接(凭证仍保留给自动化投递)。
+    IMPORT_IM_BOT_OWNER_MISSING: 'imBotOwnerMissing', IMPORT_IM_BOT_GATEWAY_RUNNING: 'imBotGatewayRunning',
+    IMPORT_IM_BOT_IN_USE: 'imBotInUse', IMPORT_IM_BOT_CONNECT_FAILED: 'imBotConnectFailed',
+    // 原 Agent 里的机器人没能确认停下,没有接给伙伴。
+    IMPORT_IM_BOT_SOURCE_STOP_UNCONFIRMED: 'imBotSourceStopUnconfirmed',
+    // 预览后原来位置上的机器人换了，没有停用它。
+    IMPORT_IM_BOT_SOURCE_CHANGED: 'imBotSourceChanged',
   };
   return code && keys[code] || 'itemFailed';
 }

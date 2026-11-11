@@ -14,6 +14,11 @@ override 语义见 [`configuration-and-overrides.md`](configuration-and-override
 
 ## 事实来源
 
+用户主动录制的性能报告见 [Desktop 性能跟踪](performance-tracing.md)：2026-10-29 用户明确要求
+通过日志链路提交完整性能文件。专用上传入口只读取该次录制的四个固定文件，将 JSON 值用现有
+脱敏器处理后压缩、分片，复用本模块的目标、授权和发送器。原始文件保留在本地；这不扩充普通
+日志来源白名单、不进入崩溃自动上传，界面明确告知路径和性能标记仍可能包含在上传副本中。
+
 | 内容 | 权威来源 |
 |---|---|
 | 记录边界格式（写侧＋读侧共用） | `apps/desktop/src/shared/mainLogRecordFormat.ts` |
@@ -26,6 +31,13 @@ override 语义见 [`configuration-and-overrides.md`](configuration-and-override
 | 上报目标（构建期注入的校验侧） | `scripts/shared/log-upload-build-env.mjs`、配置骨架 `config/log-upload.json.example` |
 | 待补传标记 | `apps/desktop/src/main/log-upload/pendingMarkers.ts` |
 | 崩溃判定 | `apps/desktop/src/main/lifecycle.ts`（`isFatalShutdownReason` / `onFatalShutdown`） |
+
+远程卡顿诊断新增精确来源 `device-link:ipc-diagnostics`、
+`device-link:execution-diagnostics`、`device-link-transfer`，仅含固定操作类别、短请求标识、
+计数、字节数和时长；其子 scope 继续默认拒绝。`device-link diagnostic` 将较大的现场拆成
+低于 2,000 字符的 JSON 记录，用 `instance + event + part` 关联，避免单条截断丢掉队头证据。
+采样省略数由 `suppressed` 明示；总量裁剪仍遵守现有上限，不放宽来源、记录边界或脱敏规则。
+新增诊断须验证默认 INFO → 正式 writer → collectLogs 后的内容，不能只断言 logger 被调用。
 
 ## 1. 三条不变量
 
@@ -186,6 +198,12 @@ proxy 根下的记录**（双闸）。同一文件里还有 `maker` 源的日志
 
 ## 4. 上报目标与区域
 
+上传编号统一采用 `CN-XXXX-XXXX` / `GLOBAL-XXXX-XXXX`，内部 Dev 构建使用
+`DEV-XXXX-XXXX`。前缀来自当前构建区域，随机部分仍保留 8 位；前缀只保证不同区域的
+新编号不重号，同一区域内仍是随机编号，不承诺严格全局唯一。用户看到和复制的编号、
+SLS `__tags__.uploadCode` 与每条记录的 `uploadCode` 使用同一个完整值。历史无前缀
+`XXXX-XXXX` 编号继续被格式校验器接受，既有日志不改写。
+
 目标 = 日志服务的 project + logstore + 服务区域接入域名，**构建期注入、运行期只读**。
 
 链路（与 `config/endpoint.dev.json` / `release-regions.json` 同款约定）：
@@ -273,6 +291,9 @@ Mobile 的设置 → 调试 / 开发者提供 Debug 开关、导出与手动上�
   保留级别、错误原因与堆栈，
   `mobileDebugRecord.ts` 在落盘前过滤敏感字段、凭证、地址参数等；禁止传入消息正文、请求体或完整鉴权信息，
   不接管全局 console，不重复保存被控端任务记录。
+  `auth` / `network` 在错误转换前记录原始异常及原因，仍走上述落盘脱敏；不记录成功认证响应，
+  JSON 语法异常只记录 `SyntaxError` 与响应状态，避免消息或堆栈夹带响应正文；
+  不扩展上传摘要白名单，也不改变 Debug 开关。
 - 详细日志在 `Paths.document/cindy-debug/`，NDJSON 文件每份最多 1 MiB、最多 8 份、保留最近 7 天。
   每 2 秒及前后台切换时批量落盘；内存待写最多 512 KiB，溢出或写失败在后续记录中标明丢失，不能无限重试堆积。
   突然杀进程可能丢失尚未落盘的最后一批，JS 停摆只能在恢复后测得。Documents 属 App 持久容器，可能随系统备份。

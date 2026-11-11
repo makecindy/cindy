@@ -17,7 +17,7 @@ afterEach(() => {
 });
 
 describe('BYOK live credential readers', () => {
-  it('enables managed BYOK only for external organization identities', () => {
+  it('enables managed BYOK for organization identities, including xd', () => {
     expect(isExternalOrganizationByokUser(null)).toBe(false);
     expect(
       isExternalOrganizationByokUser({
@@ -34,7 +34,7 @@ describe('BYOK live credential readers', () => {
         orgSlug: 'xd',
         orgName: 'XD',
       }),
-    ).toBe(false);
+    ).toBe(true);
     expect(
       isExternalOrganizationByokUser({
         membershipKind: 'org',

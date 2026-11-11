@@ -17,6 +17,9 @@ import { buildPullDownMenuSections, resolvePullDownSubmenu } from "@/platform/ch
 import {
   buildHomeDisplayPullDownActions,
   buildHomeScopePullDownActions,
+  homeScopeCollections,
+  openHomeRemoteCollection,
+  parseHomeScopePullDownAction,
 } from "@/session/homeChromeMenus";
 
 const readSource = (path: string) =>
@@ -101,6 +104,7 @@ describe("Android home chrome menus follow the iOS pull-down", () => {
       ["filter", "devices.list.menu.summaryNone", true],
       ["view", "devices.list.menu.view.list", true],
       ["taskInfo", "devices.list.menu.taskInfo.time", true],
+      ["teammates", "", true],
     ]);
     const sort = resolvePullDownSubmenu(actions, ["sort"]);
     expect(sort?.subactions?.map((action) => [action.id, action.state])).toEqual([
@@ -121,10 +125,11 @@ describe("Android home chrome menus follow the iOS pull-down", () => {
     );
     expect(androidHeader).toContain("actions={homeScopePullDownActions}");
     expect(androidHeader).toContain("onAction={handleHomeScopeAction}");
-    expect(androidHeader).toContain("actions={homeDisplayPullDownActions}");
+    expect(androidHeader).toContain("actions={stableDisplayActions}");
     // 自绘范围面板只在包里没有 MenuView 时兜底;显示菜单兜底用同一份菜单模型的自绘下拉。
     expect(androidHeader).toContain("onPress={nativeHomeMenus ? () => undefined : openDeviceMenu}");
-    expect(androidHeader).toContain("<HomeDisplayMenu actions={homeDisplayPullDownActions} onAction={handleDisplayAction}>");
+    // Display selection is exercised through the rendered platform component in
+    // nativeGlassControls.test.tsx; do not freeze its JSX prop list here.
     const iosHeader = home.slice(home.indexOf("<HomeNativeStackHeader"), home.indexOf("/>", home.indexOf("<HomeNativeStackHeader")));
     expect(iosHeader).toContain("scopeActions={homeScopePullDownActions}");
     // iOS 系统顶栏的菜单项属于顶栏选项:传结构稳定的同一份菜单,后台同步不重建顶栏(会关掉菜单)。
@@ -133,16 +138,34 @@ describe("Android home chrome menus follow the iOS pull-down", () => {
     const nativeHeader = readSource("src/platform/chrome/HomeNativeStackHeader.tsx");
     expect(nativeHeader).toContain("export const HomeNativeStackHeader = memo(");
     // 三层菜单(分组 → 选项)只能走 Stack.Toolbar.Menu;MenuView 的 iOS 原生层只转两层。
-    expect(nativeHeader).toContain('<Stack.Toolbar.Menu icon="ellipsis"');
+    // 图标/提醒点的选择由 HomeNativeStackHeader.test.tsx 渲染验证。
+    expect(nativeHeader).toContain('<Stack.Toolbar.Menu');
   });
 
-  it("routes settings pickers and local-log options through the pull-down on Android", () => {
+  it("never offers Teammates as a scope: they are the home's own section", () => {
+    const collections = [
+      { id: "teammates", title: "Teammates", resourceKind: "bot", targets: [{ deviceId: "mac", deviceName: "Mac" }] },
+      { id: "tools", title: "Tools", resourceKind: "tool", targets: [{ deviceId: "mac", deviceName: "Mac" }] },
+    ];
+    const offered = homeScopeCollections(collections, "teammates");
+    const actions = buildHomeScopePullDownActions([], "All", offered);
+    expect(actions.map(action => action.id)).not.toContain("scope.collection:teammates");
+    const parsed = parseHomeScopePullDownAction("scope.collection:tools");
+    const collection = parsed.kind === "collection" ? offered.find(item => item.id === parsed.collectionId) : undefined;
+    const push = vi.fn();
+    openHomeRemoteCollection(collection!, push);
+    expect(push).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({ pathname: "/resources/[collectionId]",
+      params: expect.objectContaining({ collectionId: "tools", targets: JSON.stringify(collections[1].targets) }) }));
+  });
+
+  it("routes settings pickers through the pull-down on Android", () => {
     const settings = readSource("app/settings.tsx");
     // 只按 MenuView 是否可用分流,不按平台:Android 与 iOS 同走系统下拉,自绘 sheet / Alert 仅作回退。
     expect(settings).not.toMatch(/Platform\.OS\s*===\s*['"]ios['"]/);
     expect(settings).toContain("onPress={usesNativePullDownMenu() ? () => undefined : openAppearancePicker}");
     expect(settings).toContain("onPress={usesNativePullDownMenu() ? () => undefined : openLanguagePicker}");
-    expect(settings).toContain("onPress={usesNativePullDownMenu() ? undefined : () => Alert.alert(t('settings.localLogs.options')");
-    expect(settings.match(/<NativePullDownMenu/g)).toHaveLength(3);
+    expect(settings).toContain("onPress={usesNativePullDownMenu() ? () => undefined : () => openClassicalPicker('script')}");
+    expect(settings).toContain("onPress={usesNativePullDownMenu() ? () => undefined : () => openClassicalPicker('style')}");
+    expect(settings.match(/<NativePullDownMenu/g)).toHaveLength(4);
   });
 });

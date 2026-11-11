@@ -10,6 +10,12 @@
   推理、渠道报价与协议字段。Pi 专属请求兼容字段放在执行适配数据中。
 - 供应商 API 发现更新按连接保存，准确 ID 合并，不模糊匹配；无声明与明确 false 分开。
 - 渠道资料只借给地址和协议相符的连接，不能跨代理地址继承报价或协议承诺。
+- Anthropic 的 `supportsMidConvoEffort` 只随匹配的实际端点或合法账号端点模板继承；
+  修改地址后保留的预设 ID 不代表新中转声明了此能力，精确型号与代际兜底共用此边界。
+  Pi 宿主先按既有规则归一化无显式型号路由的 `/v1` 地址，再借用渠道能力；自定义请求
+  路径保持原义。陌生中转不带此开关，避免 Pi 将顶层 effort 固定为 high。
+  普通思考参数仍可补缺，原生显式配置不变。回归见 `modelGeneration.test.ts`、
+  `piNativeProviders.test.ts` 和真实 Pi 的 `pi-agent.integration.test.ts`（#9630）。
 - 生成过程输出可重现的数据文件与来源，校验完成才替换；离线继续使用最后有效目录。
 - 保留模型原始 ID、账号、Key、开关、用户覆盖；刷新不把默认值固化成用户设置。
 
@@ -40,12 +46,43 @@
 - 从 Cindy 已固定版本的 Pi 二进制读取生成数据：
   `pnpm sync:pi-model-catalog --pi-bundle /path/to/pi --source-version 0.85.1 --generated-at 2026-09-12T00:00:00Z`。
   仅解析生成的字面量数据，不执行二进制。旧版本已有的 Astra/xAI 修正由具名函数保留，新版本不套旧版本修正。
+  Pi 1.x 的每个分片包在惰性 `__esm` 初始化里，同一分片还混有图片与分类模型；读取器两种布局都认，
+  只收 `type` 为空或 `chat` 的行。
 - OpenRouter 全量资料审计：`pnpm exec tsx tools/pi/audit-openrouter.mts`。
   只调用公开 `GET /api/v1/models`，不用 Key、不发推理请求；也可传本地响应 JSON 路径离线审计。
 
 本次导入 Pi 0.85.1 共 39 个有模型的供应商、1,355 条记录（另有一个空 `.manifest` 元数据键，不计作供应商），包含同型号的不同渠道。
 这不是可调用数量：账号准入、余额和实时供应状态仍由实际连接决定。
 未更改 Server 正本，也未声称生产客户端已部署。用户已授权启动隔离 DEV 并反馈实测问题。
+
+2026-10-30 只把 Pi 1.4.0 中 ID 含 `deepseek` 的行合并进来（`supplementalSources` 有记录），其它型号
+仍是 0.85.1 资料，整表同步随 Pi 版本升级另做。新地址与原供应商记录不同的行（OpenCode Zen/Go 已改到
+`/inference`）没有合并，否则会悄悄改掉已有连接的请求地址。
+
+2026-11-11：[#9863](https://github.com/makecindy/cindy/issues/9863) 的 Copilot Astra
+在官方个人端点拒绝 Chat Completions。`tools/pi/catalog-format.mjs` 对精确供应商、型号、
+地址及旧 API 做具名纠正为 Responses，随包条目同步；在线刷新与 bundle 导入共用该入口。
+按 [Pi #9253](https://github.com/earendil-works/pi/pull/9253) 的生成规则同时替换适配字段：
+禁止 `off` / `minimal`，保留 `low` 至 `max`，启用语法约束工具并移除旧 Chat 兼容标记。
+不把 `nativeApi` 当通用路由覆盖，不改用户显式接口、其他地址或已有任务的接口快照。
+回归覆盖生成、三引擎预设/ID-only 导入及 Pi 启动描述符；真实 Copilot 账号推理仍需验收。
+
+2026-11-11 再次读取 Pi 公共目录：43 个供应商成功，旧 `azure-openai-responses` 端点不可用。
+本轮仅补入已有 39 个供应商中、已有上游地址上的新 ID，共 28 个供应商、394 条记录；
+所有原有记录逐项保持不变。Copilot 新增 9 条，包括 Gemini 4 Argon、GPT-6.1 Sol/Terra。
+来源快照时间为 `2026-11-10T13:56:48.000Z`，记录在 `supplementalSources`。
+复核方法：先用 `sync-model-catalog.mjs` 获取完整候选，再按旧供应商 ID、旧 upstream 集合、
+新增模型 ID 筛选；以旧记录为正本合并，不能把完整候选直接覆盖当前文件。
+未采用上游对既有型号的参数、协议与价格改写或删除；旧地址迁移（包括 OpenCode）、
+新增供应商 Azure / Meta / Radius / Qwen individual CN 未接入，不能视为本轮已更新。
+全目录解析、已有预设三引擎投影与路由回归属于离线验证，不代表各账号实际可调用。
+Server Registry 与运行时二进制未修改；原生订阅的账号准入仍由原生发现控制。
+
+Copilot 发现使用官方账号主机的 `/models`，不依赖推理使用 Messages、Responses 还是 Chat。
+登录后的地址推导、手动获取和旧连接 `/v1/models` 读取共用
+`maker-host/copilot-account-url.ts`，客户端标识取已有渠道目录；不写回用户连接，不重置登录。
+自定义主机和自定义路径保留原义。回归见 `genericOAuth.test.ts`、`providerModelFetch.test.ts`。
+发现失败仍沿用现有备用目录，成功发现仍沿用现有合并规则；备用条目不是账号权限声明。
 
 ## 用户实测后的补充验收
 

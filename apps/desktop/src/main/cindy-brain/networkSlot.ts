@@ -17,7 +17,7 @@
  *     → 响应文本化(体积上限截断;响应头只回白名单字段)
  *     → 只回结构化 GhostPipeFetchResult(永不 reject)
  *
- * 安全纪律:凭证明文与响应体永不进日志(只记 ghostId / host / 状态码 /
+ * 安全纪律:凭证明文与响应体永不进日志(只记 instanceKey / host / 状态码 /
  * callId);URL 只记 host + pathname,query 可能携带敏感参数,不记。
  *
  * 依赖注入(规则 14):凭证读取与 HTTP 执行全部经 deps,单测直测零 Electron。
@@ -26,7 +26,14 @@
 import { randomUUID } from 'node:crypto';
 
 import { sniffMediaMime, additionalMp3BytesNeeded } from '../cindy-media/sniffMediaMime.js';
-import { isCindyOfficialTrustInfo } from './GhostManager.js';
+import { classifyFetchNetworkFailure, fetchTimeoutFailure } from './fetchFailure.js';
+import { canUseGithubHostCredentials } from './GhostManager.js';
+import {
+  applyMcpAppsManualHeaders,
+  pluginDeclaresMcpAppsUi,
+  toolOpensMcpAppsPage,
+  type McpAppsManualRef,
+} from './mcpAppsManualHeaders.js';
 
 import {
   GHOST_FETCH_BODY_MAX_BYTES,
@@ -57,6 +64,9 @@ import {
   type GhostConnectionDecl,
   type GhostFetchMethod,
   type GhostSecretOauthDecl,
+  isSafeGhostRelativePath,
+  GHOST_HANDOFF_REF_RE,
+  GHOST_HANDOFF_UNAVAILABLE,
   type GhostPipeFetchResult,
   type GhostSecretDecl,
   type InstalledGhost,
@@ -64,9 +74,22 @@ import {
 
 export interface NetworkSlotDeps {
   getGhost(id: string): InstalledGhost | null;
+  createTransferProgress?(instanceKey: string, callId?: string): (bytes: number | undefined, total: number | undefined, message: string) => void;
+  readLibraryFile?(instanceKey: string, path: string, signal: AbortSignal): Promise<Response>;
+  /** Live handoff copy of this instance; null when expired, deleted or never handed over, `changed` when altered on disk. */
+  readHandoffFile?(instanceKey: string, ref: string, signal: AbortSignal): Promise<{ bytes: Uint8Array; name: string; mimeType: string } | 'changed' | null>;
+  /** A successful upload counts as use of these handoff copies; renewal never fails the request. */
+  touchHandoffFiles?(instanceKey: string, refs: readonly string[]): Promise<void>;
+  uploadFileSize?(instanceKey: string, value: string, library: boolean): Promise<number | undefined>;
+  saveLibraryStream?(instanceKey: string, input: {
+    path: string; source: AsyncIterable<Uint8Array>; totalBytes?: number;
+    assertCurrent(): void; onProgress?(bytes: number, total?: number): void;
+  }): Promise<{ ok: true; path: string; bytes: number; sha256: string; ref: string } |
+    { ok: false; errorCode: string; message: string }>;
+  captureRequestGuard?(instanceKey: string): () => void;
   /**
    * callId → 严格在途的 Agent 调用上下文。只有 channel:'session'、
-   * sessionId 存在、明确是本地会话(remoteHostId === null)且 ghostId
+   * sessionId 存在、明确是本地会话(remoteHostId === null)且 instanceKey
    * 匹配时，才能复用外层 ghost_call 已经通过的 Cindy Agent 授权；
    * 面板、订阅、后台、远程 SSH 与脚本通道都不在此列。
    */
@@ -76,12 +99,19 @@ export interface NetworkSlotDeps {
     /** null = 已证明是本地会话；string = SSH remote；undefined = 未知。 */
     remoteHostId: string | null | undefined;
     channel: 'session' | 'script';
+    /** 该次调用的插件工具名；旧登记缺省时不按工具自动带手册头。 */
+    tool?: string;
   } | null;
+  /**
+   * 本客户端内置《Cindy MCP Apps 页面生成手册》的 CDN 地址与 sha256；版本无关或
+   * 找不到手册时 null。未注入时不带手册头。
+   */
+  mcpAppsManual?(): McpAppsManualRef | null;
   /**
    * 读某意识某条凭证的明文(safeStorage 现读,不缓存——用户改了 key 下一单
    * 即生效);未配置 / 读失败返回 null。
    */
-  readSecret(ghostId: string, secretKey: string): string | null;
+  readSecret(instanceKey: string, secretKey: string): string | null;
   /** source:'gh-cli' 的宿主 GitHub CLI 登录 token；不可用返回 null。 */
   readGhCliToken?: () => Promise<string | null>;
   /**
@@ -121,17 +151,17 @@ export interface NetworkSlotDeps {
    * ghostCanRead——出生自它 / 挂它画廊 / 用户显式过户;越权与不存在统一
    * 返回 null,不给探测空间)。ext 含点(如 '.png')。
    */
-  readGhostMedia(ghostId: string, hash: string): Promise<{
+  readGhostMedia(instanceKey: string, hash: string): Promise<{
     buffer: Uint8Array;
     mimeType: string;
     ext: string;
   } | null>;
   /**
    * 目录上传通道:凭一次性过户票据取货(生产为 dirDeposit 票据库的 take——
-   * ghostId 绑定 + TTL + 单次消费;无效原因不分类统一 null,不给探测空间)。
+   * instanceKey 绑定 + TTL + 单次消费;无效原因不分类统一 null,不给探测空间)。
    * 文件字节经 read() 闭包按需读盘,networkSlot 保持零 fs 依赖。
    */
-  takeDirDeposit(ghostId: string, token: string): {
+  takeDirDeposit(instanceKey: string, token: string, callId?: string): {
     files: Array<{ relPath: string; size: number; read(): Promise<Uint8Array> }>;
     totalBytes: number;
   } | null;
@@ -140,8 +170,7 @@ export interface NetworkSlotDeps {
    * 响应字节写进主 agent 过户的 workdir 目录——文件名主机消毒去重,绝对
    * 路径不出主机;无效票据统一 null。
    */
-  writeSaveDeposit(
-    ghostId: string,
+  writeSaveDeposit(instanceKey: string,
     token: string,
     fileName: string,
     bytes: Uint8Array,
@@ -158,6 +187,7 @@ export interface NetworkSlotDeps {
     /** 署名调用的 tool-call callId(记入 ghostMediaLedger 供收口带回);
      *  未署名('unattributed')不传、不记账。 */
     callId?: string;
+    assertStillValid?: () => void;
   }): Promise<{ url: string; hash: string; ext: string }>;
   /** 归一化后的 mime 是否可入总仓(生产为 cindy-media 的 supportedMime)。 */
   isSupportedMediaMime(mime: string): boolean;
@@ -168,8 +198,7 @@ export interface NetworkSlotDeps {
    * 未注入时 oauth 凭证一律快速失败(接线缺失是主机 bug,不静默跳过)。
    */
   oauthTokens?: {
-    getFreshAccessToken(
-      ghostId: string,
+    getFreshAccessToken(instanceKey: string,
       secretKey: string,
       decl: GhostSecretOauthDecl,
       accountId?: string,
@@ -187,14 +216,14 @@ export interface NetworkSlotDeps {
           detail?: string;
         }
     >;
-    invalidateAccessToken(ghostId: string, secretKey: string, accountId: string): void;
+    invalidateAccessToken(instanceKey: string, secretKey: string, accountId: string): void;
   };
   /**
    * Cindy organization identity assertions (`source: 'oidc-token'`). Audience
    * resolution is Host-owned; manifests and runtime messages cannot choose it.
    */
   connectionTokens?: {
-    resolve(ghostId: string): {
+    resolve(instanceKey: string): {
       membershipId: string;
       audience: string;
       allowedHosts: readonly string[];
@@ -213,8 +242,8 @@ export interface NetworkSlotDeps {
    * 未注入时连接声明形同虚设(动态地址不放行),fail-closed。
    */
   connections?: {
-    hostsFor(ghostId: string): string[];
-    tokenFor(ghostId: string, hostname: string): { value: string; header: string; format: string } | null;
+    hostsFor(instanceKey: string): string[];
+    tokenFor(instanceKey: string, hostname: string): { value: string; header: string; format: string } | null;
   };
   log?: {
     info: (msg: string, meta?: Record<string, unknown>) => void;
@@ -755,7 +784,7 @@ export class GhostNetworkSlot {
   private mediaReadsInflight = 0;
   /**
    * 交换型凭证的令牌缓存(内存,不落盘——重启重换一次开销可忽略,也免去
-   * 磁盘上多一份凭证态文件)。键 `${ghostId}\u0000${secretKey}`;sourceValue
+   * 磁盘上多一份凭证态文件)。键 `${instanceKey}\u0000${secretKey}`;sourceValue
    * 是换令牌时用的原始 key,用户改了 key 立即失配重换。
    */
   private readonly exchangedTokens = new Map<
@@ -767,11 +796,27 @@ export class GhostNetworkSlot {
 
   constructor(private readonly deps: NetworkSlotDeps) {}
 
+  hasInFlightRequests(instanceKey: string): boolean {
+    return (this.inflight.get(instanceKey) ?? 0) > 0;
+  }
+
   /**
    * 处理一条 fetch-request(ghost-pipe:send 的 invoke 返回值即本结果)。
    * 永不 reject——一切失败折叠成 { ok:false, message }。
    */
-  async handleFetchRequest(ghostId: string, payload: unknown): Promise<GhostPipeFetchResult> {
+  /** Private Node bridge only: the bearer never enters the browser pipe. */
+  async handleAuthenticatedNodeFetch(instanceKey: string, payload: Record<string, unknown>,
+    authorization: string, assertCurrent: () => void, signal: AbortSignal): Promise<GhostPipeFetchResult> {
+    if (!/^Bearer [A-Za-z0-9._~+\/=-]{1,8192}$/.test(authorization))
+      return { ok: false, message: 'NODE_AUTH_INVALID' };
+    if (payload.method !== 'POST' || !payload.uploadDir || payload.upload !== undefined || payload.body !== undefined)
+      return { ok: false, message: 'NODE_AUTH_UPLOAD_REQUIRED' };
+    return this.handleFetchRequest(instanceKey, payload, { authorization, assertCurrent, signal });
+  }
+
+  async handleFetchRequest(instanceKey: string, payload: unknown, nodeAuth?: {
+    authorization: string; assertCurrent(): void; signal: AbortSignal;
+  }): Promise<GhostPipeFetchResult> {
     const p = payload as {
       url?: unknown;
       method?: unknown;
@@ -781,9 +826,11 @@ export class GhostNetworkSlot {
       uploadDir?: unknown;
       timeoutMs?: unknown;
       as?: unknown;
+      path?: unknown;
       label?: unknown;
       authAccount?: unknown;
       callId?: unknown;
+      mcpAppsManual?: unknown;
     };
 
     // ── 载荷形状校验(不占在途名额)──────────────────────────────────
@@ -802,6 +849,9 @@ export class GhostNetworkSlot {
     }
     const requestCallId = p.callId as string | undefined;
     const callId = requestCallId ?? 'unattributed';
+    if (p.mcpAppsManual !== undefined && typeof p.mcpAppsManual !== 'boolean') {
+      return { ok: false, message: 'mcpAppsManual 必须是布尔值(或不传)' };
+    }
     let body: string | Uint8Array | undefined;
     if (p.body !== undefined) {
       if (typeof p.body !== 'string') return { ok: false, message: 'body 必须是字符串' };
@@ -817,12 +867,18 @@ export class GhostNetworkSlot {
     }
     // ── 响应模式:text(缺省)/ media(字节落总仓)/ file(字节落 save
     // 票据目录)——后两种字节都不进沙箱。
-    let asMode: 'text' | 'media' | 'file' = 'text';
+    let asMode: 'text' | 'media' | 'file' | 'library' = 'text';
     if (p.as !== undefined) {
-      if (p.as !== 'text' && p.as !== 'media' && p.as !== 'file') {
-        return { ok: false, message: "as 仅支持 'text' / 'media' / 'file'" };
+      if (p.as !== 'text' && p.as !== 'media' && p.as !== 'file' && p.as !== 'library') {
+        return { ok: false, message: "as 仅支持 'text' / 'media' / 'file' / 'library'" };
       }
       asMode = p.as;
+    }
+    if (asMode === 'library' && (typeof p.path !== 'string' || !isSafeGhostRelativePath(p.path))) {
+      return { ok: false, errorCode: 'PATH_INVALID', message: 'Library 下载需要安全的相对 path' };
+    }
+    if (asMode === 'library' && !this.deps.saveLibraryStream) {
+      return { ok: false, errorCode: 'PERMISSION_DENIED', message: '插件未声明或宿主不支持 Library 下载' };
     }
     // 下行落盘票据(仅 as:'file' 必填):形状校验在此,验票在写盘时。
     let saveTo: { token: string; filename?: string } | undefined;
@@ -850,24 +906,43 @@ export class GhostNetworkSlot {
     }
     // ── 上传通道(媒体模式的镜像):意识只报指纹,主机验归属读字节代组
     // multipart。字节不进沙箱。
-    let upload: { hashes: string[]; field: string; fields: Record<string, string> } | undefined;
+    let upload: { hashes: string[]; library: string[]; handoff: string[]; field: string; fields: Record<string, string> } | undefined;
     if (p.upload !== undefined) {
       if (typeof p.upload !== 'object' || p.upload === null || Array.isArray(p.upload)) {
         return { ok: false, message: 'upload 必须是对象({ hashes, field?, fields? })' };
       }
-      const u = p.upload as { hashes?: unknown; field?: unknown; fields?: unknown };
-      if (!Array.isArray(u.hashes) || u.hashes.length === 0 || u.hashes.length > GHOST_FETCH_UPLOAD_MAX_FILES) {
+      const u = p.upload as { hashes?: unknown; library?: unknown; handoff?: unknown; field?: unknown; fields?: unknown };
+      const sources = [u.hashes, u.library, u.handoff].filter((value) => value !== undefined).length;
+      if (sources !== 1) {
+        return { ok: false, message: u.handoff === undefined
+          ? 'upload 必须提供 hashes 或 library 其中一项'
+          : 'upload 必须提供 hashes、library 或 handoff 其中一项' };
+      }
+      const values = u.hashes ?? u.library ?? u.handoff;
+      if (!Array.isArray(values) || values.length === 0 || values.length > GHOST_FETCH_UPLOAD_MAX_FILES) {
         return { ok: false, message: `upload.hashes 必须是 1–${GHOST_FETCH_UPLOAD_MAX_FILES} 条的数组` };
       }
       const hashes: string[] = [];
-      for (const h of u.hashes) {
-        if (typeof h !== 'string' || !GHOST_MEDIA_HASH_RE.test(h)) {
+      const library: string[] = [];
+      const handoff: string[] = [];
+      const target = u.handoff !== undefined ? handoff : u.library === undefined ? hashes : library;
+      for (const h of values) {
+        if (u.handoff !== undefined && (typeof h !== 'string' || !GHOST_HANDOFF_REF_RE.test(h))) {
+          return { ok: false, message: 'upload.handoff 只接受 handoff:<uuid> 交接引用' };
+        }
+        if (typeof h !== 'string' || (u.handoff === undefined && (u.library === undefined ? !GHOST_MEDIA_HASH_RE.test(h) : !isSafeGhostRelativePath(h)))) {
           return { ok: false, message: 'upload.hashes 含非法指纹(需 64 位十六进制)' };
         }
-        if (hashes.includes(h)) {
+        if (target.includes(h)) {
           return { ok: false, message: 'upload.hashes 含重复指纹' };
         }
-        hashes.push(h);
+        target.push(h);
+      }
+      if (library.length && !this.deps.readLibraryFile) {
+        return { ok: false, errorCode: 'PERMISSION_DENIED', message: '插件未声明或宿主不支持 Library 上传' };
+      }
+      if (handoff.length && !this.deps.readHandoffFile) {
+        return { ok: false, errorCode: 'PERMISSION_DENIED', message: '宿主不支持交接文件上传' };
       }
       let field = 'file';
       if (u.field !== undefined) {
@@ -903,11 +978,11 @@ export class GhostNetworkSlot {
       }
       if (method !== 'POST') return { ok: false, message: 'upload 仅在 POST 时允许' };
       if (body !== undefined) return { ok: false, message: 'upload 与 body 互斥(multipart 体由主机代组)' };
-      if (asMode === 'media') {
+      if (asMode === 'media' || asMode === 'library') {
         // 上传响应(入库回执 JSON)按文本回;禁掉组合免与取件闸互相占坑。
-        return { ok: false, message: "upload 与 as:'media' 不可同时使用(上传响应按文本形态返回)" };
+        return { ok: false, message: asMode === 'media' ? "upload 与 as:'media' 不可同时使用(上传响应按文本形态返回)" : 'upload 与 Library 下载不能同时使用' };
       }
-      upload = { hashes, field, fields: uploadFields };
+      upload = { hashes, library, handoff, field, fields: uploadFields };
     }
     // ── 目录上传通道(uploadDir):意识只报过户票据,主机凭票读盘代组
     // multipart(文件字段 file-N,filename=相对路径)。路径与字节都不进沙箱。
@@ -996,7 +1071,7 @@ export class GhostNetworkSlot {
     }
 
     // 超时分档:媒体/文件下载与上传天然更久,缺省/上限用 MEDIA_* 档;下限共用。
-    const isHeavy = asMode === 'media' || asMode === 'file' || upload !== undefined || uploadDir !== undefined;
+    const isHeavy = asMode === 'media' || asMode === 'file' || asMode === 'library' || upload !== undefined || uploadDir !== undefined;
     const timeoutDefault = isHeavy ? GHOST_FETCH_MEDIA_TIMEOUT_DEFAULT_MS : GHOST_FETCH_TIMEOUT_DEFAULT_MS;
     const timeoutMax = isHeavy ? GHOST_FETCH_MEDIA_TIMEOUT_MAX_MS : GHOST_FETCH_TIMEOUT_MAX_MS;
     let timeoutMs = timeoutDefault;
@@ -1037,16 +1112,19 @@ export class GhostNetworkSlot {
     const url = parsed.url;
 
     // ── 资格审:意识在场 + 能力详单 ───────────────────────────────────
-    const ghost = this.deps.getGhost(ghostId);
+    const ghost = this.deps.getGhost(instanceKey);
     if (!ghost || !ghost.enabled) {
       return { ok: false, message: '意识不在可用状态' };
+    }
+    if ((asMode === 'library' || upload?.library.length) && ghost.manifest.library !== true) {
+      return { ok: false, errorCode: 'PERMISSION_DENIED', message: '插件未声明 Library' };
     }
     const net = ghost.manifest.network;
     const hasLiveAgentAuthorization = (): boolean => {
       const callInfo = requestCallId
         ? this.deps.inFlightCallInfo?.(requestCallId) ?? null
         : null;
-      return callInfo?.ghostId === ghostId
+      return callInfo?.ghostId === instanceKey
         && callInfo.channel === 'session'
         && callInfo.sessionId !== null
         && callInfo.remoteHostId === null;
@@ -1061,16 +1139,13 @@ export class GhostNetworkSlot {
     const declaredHosts = net?.hosts ?? [];
     const declaredSecrets = net?.secrets ?? [];
     const ghCliSecrets = declaredSecrets.filter((secret) => secret.source === 'gh-cli');
-    if (
-      ghCliSecrets.length > 0 &&
-      (ghost.manifest.id !== 'cindy-github' || !isCindyOfficialTrustInfo(ghost.trust))
-    ) {
-      return { ok: false, message: '本意识未通过官方 GitHub 宿主凭证信任校验，已阻断 gh-cli 凭证请求' };
+    if (ghCliSecrets.length > 0 && !canUseGithubHostCredentials(ghost)) {
+      return { ok: false, message: '本插件尚未批准或安装身份待确认，已阻断 gh-cli 凭证请求' };
     }
     // 连接地址每单现读快照(用户在设置页增删地址下一单即生效);本单内含
     // 重定向逐跳都用同一份快照,避免跳转中途清单变化产生放行摇摆。
     const connectionHosts =
-      connectionDecls.length > 0 ? (this.deps.connections?.hostsFor(ghostId) ?? []) : [];
+      connectionDecls.length > 0 ? (this.deps.connections?.hostsFor(instanceKey) ?? []) : [];
     // 自主调用仍只能访问 manifest 声明的地址。Agent 在途调用已经
     // 通过外层 ghost_call 的 Cindy 授权，因此可以访问未预声明的普通
     // 地址；但只有真正命中 manifest 详单的 host 才可获得 Host 托管凭证。
@@ -1079,6 +1154,8 @@ export class GhostNetworkSlot {
       connectionHosts.includes(hostname);
     const hostAllowed = (hostname: string): boolean =>
       hostDeclared(hostname) || hasLiveAgentAuthorization();
+    if (nodeAuth && (!net || !declaredHosts.some(pattern => ghostNetworkHostMatches(pattern, url.hostname))))
+      return { ok: false, message: 'NODE_AUTH_HOST_NOT_DECLARED' };
     if (!hostAllowed(url.hostname)) {
       const declared = [...declaredHosts, ...connectionHosts];
       return {
@@ -1088,6 +1165,8 @@ export class GhostNetworkSlot {
           (connectionDecls.length > 0 ? ';如是自建服务地址,请先在意识设置页添加该连接' : ''),
       };
     }
+    // 手册头只在沙箱 cindy.fetch 上生效；Node 工作进程的请求只剥除插件自带的同名头。
+    const mcpAppsManual = nodeAuth ? null : this.selectMcpAppsManual(instanceKey, ghost, requestCallId, p.mcpAppsManual);
 
     // ── 凭证注入:命中本次目标域名的每条声明凭证,保险库现读明文拼头
     // (交换型凭证在此换取/取缓存令牌)。未配置的凭证快速失败(带清晰
@@ -1095,37 +1174,38 @@ export class GhostNetworkSlot {
     // 即使目标是 Agent 临时放行的未声明 host，也必须走一遍
     // injectSecrets：它会删掉上一跳/插件伪造的凭证头，只是不会注入
     // 任何未命中 manifest 详单的 Host 托管凭证。
-    const inject0 = await this.injectSecrets(
-      ghostId,
-      declaredSecrets,
-      connectionDecls,
-      url.hostname,
-      declaredHosts,
-      requestHeaders,
-      authAccount,
-    );
-    if (inject0.error) return { ok: false, message: inject0.error };
-    let usedExchange = inject0.usedExchange;
-    const oauthInjected = new Map(inject0.oauthInjected);
-    const connectionInjected = new Map(inject0.connectionInjected);
-    let initialConnectionInjected = new Map(inject0.connectionInjected);
-
     // ── 在途并发闸(常量硬顶,防死循环刷单;不是配额)──────────────────
-    const inflight = this.inflight.get(ghostId) ?? 0;
+    const inflight = this.inflight.get(instanceKey) ?? 0;
     if (inflight >= GHOST_FETCH_INFLIGHT_LIMIT) {
       return { ok: false, message: `同时进行的网络请求已达上限(${GHOST_FETCH_INFLIGHT_LIMIT}),请等在途请求返回` };
     }
 
-    this.inflight.set(ghostId, inflight + 1);
+    this.inflight.set(instanceKey, inflight + 1);
     const controller = new AbortController();
+    const abortNode = () => controller.abort();
+    nodeAuth?.signal.addEventListener('abort', abortNode, { once: true });
+    if (nodeAuth?.signal.aborted) controller.abort();
     const timer = setTimeout(() => controller.abort(), timeoutMs);
     timer.unref?.();
     let holdingMediaGate = false;
+    const progress = this.deps.createTransferProgress?.(instanceKey, requestCallId);
+    const hasTransfer = !!upload || asMode === 'library';
     const guardedFetchReleases: Array<() => Promise<void>> = [];
     try {
-      this.deps.log?.info('ghost fetch-request start', {
-        ghostId, callId, method, host: url.hostname, path: url.pathname,
-        ...(upload ? { uploadFiles: upload.hashes.length } : {}),
+      const hostGuard = this.deps.captureRequestGuard?.(instanceKey) ?? (() => {});
+      const assertStillValid = () => { hostGuard(); nodeAuth?.assertCurrent(); };
+      assertStillValid();
+      const inject0 = await this.injectSecrets(
+        instanceKey, declaredSecrets, connectionDecls, url.hostname, declaredHosts, requestHeaders, authAccount,
+      );
+      assertStillValid();
+      if (inject0.error) return { ok: false, message: inject0.error };
+      let usedExchange = inject0.usedExchange;
+      const oauthInjected = new Map(inject0.oauthInjected);
+      const connectionInjected = new Map(inject0.connectionInjected);
+      let initialConnectionInjected = new Map(inject0.connectionInjected);
+      this.deps.log?.info('ghost fetch-request start', { ghostId: instanceKey, callId, method, host: url.hostname, path: url.pathname,
+        ...(upload ? { uploadFiles: upload.hashes.length + upload.library.length } : {}),
         ...(uploadDir ? { dirUpload: true } : {}),
       });
 
@@ -1137,8 +1217,10 @@ export class GhostNetworkSlot {
         }
         this.mediaReadsInflight += 1;
         holdingMediaGate = true;
-        const built = await this.buildUploadBody(ghostId, upload);
-        if ('error' in built) return { ok: false, message: built.error };
+        const built = await this.buildUploadBody(instanceKey, upload, controller.signal, assertStillValid, progress);
+        if ('error' in built) return { ok: false, message: built.error,
+          ...(built.limitBytes !== undefined ? { errorCode: 'TOO_LARGE', limitBytes: built.limitBytes } : {}),
+          ...(built.errorCode ? { errorCode: built.errorCode } : {}) };
         body = built.body;
         // multipart 的 Content-Type(含 boundary)由主机独占,意识自带的删干净。
         deleteHeaderVariants(requestHeaders, 'Content-Type');
@@ -1152,13 +1234,14 @@ export class GhostNetworkSlot {
         }
         this.mediaReadsInflight += 1;
         holdingMediaGate = true;
-        const built = await this.buildDirUploadBody(ghostId, uploadDir);
+        const built = await this.buildDirUploadBody(instanceKey, uploadDir, nodeAuth ? requestCallId : undefined);
         if ('error' in built) return { ok: false, message: built.error };
         body = built.body;
         deleteHeaderVariants(requestHeaders, 'Content-Type');
         requestHeaders['Content-Type'] = `multipart/form-data; boundary=${built.boundary}`;
       }
 
+      if (upload) progress?.(undefined, undefined, '正在上传');
       // ── 执行(重定向逐跳手动跟,每跳重验白名单 + 重算凭证注入)────────
       // 外层 attempt 循环只为交换型 / oauth / Connection 凭证的 401 兜底:令牌可能被
       // 服务端提前作废,作废本地缓存重换/重刷一次再整链重试;第二次仍
@@ -1166,11 +1249,12 @@ export class GhostNetworkSlot {
       // 降级成 GET,仍不得在 401 后重放最初的副作用请求。
       let response: Response | null = null;
       const originalRequestMethod = method;
-      for (let attempt = 0; attempt < 2; attempt++) {
+      for (let attempt = 0; attempt < (nodeAuth ? 1 : 2); attempt++) {
+        assertStillValid();
         if (attempt > 0) {
-          this.invalidateExchangedTokens(ghostId, declaredSecrets);
+          this.invalidateExchangedTokens(instanceKey, declaredSecrets);
           for (const [secretKey, accountId] of oauthInjected) {
-            this.deps.oauthTokens?.invalidateAccessToken(ghostId, secretKey, accountId);
+            this.deps.oauthTokens?.invalidateAccessToken(instanceKey, secretKey, accountId);
           }
           for (const input of connectionInjected.values()) {
             this.deps.connectionTokens?.invalidate({
@@ -1179,7 +1263,7 @@ export class GhostNetworkSlot {
             });
           }
           const reInject = await this.injectSecrets(
-            ghostId,
+            instanceKey,
             declaredSecrets,
             connectionDecls,
             url.hostname,
@@ -1191,8 +1275,7 @@ export class GhostNetworkSlot {
           initialConnectionInjected = new Map(reInject.connectionInjected);
           for (const [k, v] of reInject.oauthInjected) oauthInjected.set(k, v);
           for (const [k, v] of reInject.connectionInjected) connectionInjected.set(k, v);
-          this.deps.log?.info('ghost fetch-request 401 → re-auth retry', {
-            ghostId, callId, host: url.hostname,
+          this.deps.log?.info('ghost fetch-request 401 → re-auth retry', { ghostId: instanceKey, callId, host: url.hostname,
           });
         }
         let currentUrl = url;
@@ -1204,6 +1287,7 @@ export class GhostNetworkSlot {
         response = null;
         let currentConnectionInjected = initialConnectionInjected;
         for (let hop = 0; hop <= MAX_REDIRECTS; hop++) {
+          assertStillValid();
           const hopHeaders = { ...requestHeaders };
           // 降级丢 body 后 Content-Type 也要跟着剥(fetch 规范的 request-body-
           // headers 语义;multipart 的 boundary 头留着会误导服务端)。
@@ -1212,7 +1296,7 @@ export class GhostNetworkSlot {
             // 换了域名的跳转:上一跳注入的凭证不能跟着走,按新 host 重算
             // (injectSecrets 开头会先把所有声明凭证头的大小写变体删干净)。
             const hopInject = await this.injectSecrets(
-              ghostId,
+              instanceKey,
               declaredSecrets,
               connectionDecls,
               currentUrl.hostname,
@@ -1233,7 +1317,7 @@ export class GhostNetworkSlot {
               allowedHosts: readonly string[];
             } | null = null;
             try {
-              current = this.deps.connectionTokens?.resolve(ghostId) ?? null;
+              current = this.deps.connectionTokens?.resolve(instanceKey) ?? null;
             } catch {
               current = null;
             }
@@ -1253,6 +1337,13 @@ export class GhostNetworkSlot {
               };
             }
           }
+          // 与凭证头一样逐跳重判：只带给 network 已声明的主机，换到其它主机即删掉。
+          applyMcpAppsManualHeaders(hopHeaders, mcpAppsManual && hostDeclared(currentUrl.hostname) ? mcpAppsManual : null);
+          if (nodeAuth) {
+            assertStillValid();
+            deleteHeaderVariants(hopHeaders, 'Authorization');
+            hopHeaders.Authorization = nodeAuth.authorization;
+          }
           const fetchInit = {
             method: currentMethod,
             headers: hopHeaders,
@@ -1262,6 +1353,7 @@ export class GhostNetworkSlot {
           };
           const hopHostDeclared = hostDeclared(currentUrl.hostname);
           const hopAgentMediated = !hopHostDeclared && hasLiveAgentAuthorization();
+          assertStillValid();
           if (!hopHostDeclared && !hopAgentMediated) {
             return { ok: false, message: '当前 Agent 调用已结束，未声明目标不再允许访问' };
           }
@@ -1270,6 +1362,7 @@ export class GhostNetworkSlot {
               currentUrl.toString(),
               fetchInit,
               () => {
+                assertStillValid();
                 if (!hasLiveAgentAuthorization()) {
                   throw new Error('当前 Agent 调用已结束，未声明目标不再允许访问');
                 }
@@ -1280,9 +1373,11 @@ export class GhostNetworkSlot {
           } else {
             response = await this.deps.fetchImpl(currentUrl.toString(), fetchInit);
           }
+          assertStillValid();
           responseConnectionInjected = currentConnectionInjected;
           responseMethod = currentMethod;
           if (![301, 302, 303, 307, 308].includes(response.status)) break;
+          if (nodeAuth) { await response.body?.cancel(); return { ok: false, message: 'NODE_AUTH_REDIRECT_BLOCKED' }; }
           const location = response.headers.get('location');
           if (!location) break; // 3xx 无 Location:按普通响应回给意识
           if (hop === MAX_REDIRECTS) {
@@ -1324,8 +1419,7 @@ export class GhostNetworkSlot {
               audience: input.audience,
             });
           }
-          this.deps.log?.info('ghost fetch-request Connection 401 cache invalidated without replay', {
-            ghostId, callId, method: responseMethod, host: url.hostname,
+          this.deps.log?.info('ghost fetch-request Connection 401 cache invalidated without replay', { ghostId: instanceKey, callId, method: responseMethod, host: url.hostname,
           });
           break;
         }
@@ -1345,6 +1439,10 @@ export class GhostNetworkSlot {
         break;
       }
       if (!response) return { ok: false, message: '请求未获得响应' };
+      assertStillValid();
+      if (upload?.handoff?.length && response.status >= 200 && response.status < 300) {
+        await this.deps.touchHandoffFiles?.(instanceKey, upload.handoff).catch(() => {});
+      }
 
       // ── 响应收敛:媒体落仓 / 文本透传;体积护栏;响应头白名单 ──────────
       const contentType = response.headers.get('content-type') ?? '';
@@ -1360,6 +1458,32 @@ export class GhostNetworkSlot {
       // 文件模式:2xx 的任意类型字节凭票写进 save 目录(不进沙箱不进总仓);
       // 非 2xx 回落文本形态(错误 JSON 意识看得到)。与媒体取件共用全局
       // 串行闸(体整体驻内存直到写盘,峰值封顶)。
+      if (asMode === 'library' && response.status >= 200 && response.status < 300) {
+        const declared = Number(response.headers.get('content-length') ?? NaN);
+        const totalBytes = Number.isSafeInteger(declared) && declared >= 0 && !response.headers.has('content-encoding') ? declared : undefined;
+        const reader = response.body?.getReader();
+        async function* source() {
+          if (!reader) return;
+          while (true) {
+            controller.signal.throwIfAborted();
+            assertStillValid();
+            const chunk = await reader.read();
+            if (chunk.done) break;
+            yield chunk.value;
+          }
+        }
+        try {
+          const saved = await this.deps.saveLibraryStream!(instanceKey, {
+            path: p.path as string, source: source(), totalBytes,
+            assertCurrent: () => { controller.signal.throwIfAborted(); assertStillValid(); },
+            onProgress: (bytes, total) => progress?.(bytes, total, '正在保存文件'),
+          });
+          assertStillValid();
+          if (!saved.ok) return saved;
+          return { ok: true, status: response.status, headers: responseHeaders, library: saved };
+        } finally { await reader?.cancel().catch(() => {}); reader?.releaseLock(); }
+      }
+
       if (asMode === 'file' && saveTo && response.status >= 200 && response.status < 300) {
         const declaredLength = Number(response.headers.get('content-length') ?? Number.NaN);
         if (Number.isFinite(declaredLength) && declaredLength > GHOST_FETCH_FILE_MAX_BYTES) {
@@ -1389,12 +1513,12 @@ export class GhostNetworkSlot {
             }
           }
           if (!suggested) suggested = url.pathname.split('/').filter(Boolean).pop() ?? 'download';
-          const written = await this.deps.writeSaveDeposit(ghostId, saveTo.token, suggested, fileBytes);
+          assertStillValid();
+          const written = await this.deps.writeSaveDeposit(instanceKey, saveTo.token, suggested, fileBytes);
           if (!written) {
             return { ok: false, message: '落盘票据无效(过期 / 已用完 / 超预算)——请让主 agent 重新过户 save_dir' };
           }
-          this.deps.log?.info('ghost fetch-request done (file)', {
-            ghostId, callId, method, host: url.hostname, status: response.status,
+          this.deps.log?.info('ghost fetch-request done (file)', { ghostId: instanceKey, callId, method, host: url.hostname, status: response.status,
             bytes: fileBytes.byteLength, fileName: written.fileName,
           });
           return {
@@ -1455,8 +1579,7 @@ export class GhostNetworkSlot {
           }
           if (sniffed.kind === 'text') {
             const bodyText = new TextDecoder('utf-8', { fatal: false }).decode(sniffed.bytes);
-            this.deps.log?.info('ghost fetch-request done', {
-              ghostId, callId, method, host: url.hostname, status: response.status,
+            this.deps.log?.info('ghost fetch-request done', { ghostId: instanceKey, callId, method, host: url.hostname, status: response.status,
               bytes: sniffed.bytes.byteLength, mediaSniffMiss: true,
               ...(sniffed.truncated ? { truncated: true } : {}),
             });
@@ -1471,17 +1594,17 @@ export class GhostNetworkSlot {
           if (sniffed.overLimit) {
             return { ok: false, message: `媒体过大(上限 ${GHOST_FETCH_MEDIA_MAX_BYTES} 字节)——截断的媒体是坏文件,整单拒` };
           }
-          const saved = await this.deps.saveGhostMedia({
-            ghostId,
+          assertStillValid();
+          const saved = await this.deps.saveGhostMedia({ ghostId: instanceKey,
             buffer: sniffed.bytes,
             // Always persist the MIME recovered from bytes, never the external
             // declaration. This also corrects a valid but misdeclared response.
             mimeType: sniffed.mime,
             ...(label !== undefined ? { label } : {}),
             ...(callId !== 'unattributed' ? { callId } : {}),
+            assertStillValid,
           });
-          this.deps.log?.info('ghost fetch-request done (media)', {
-            ghostId, callId, method, host: url.hostname, status: response.status,
+          this.deps.log?.info('ghost fetch-request done (media)', { ghostId: instanceKey, callId, method, host: url.hostname, status: response.status,
             bytes: sniffed.bytes.byteLength, hash: saved.hash, mime: sniffed.mime,
             ...(sniffGeneric ? { recoveredBySniff: true } : {}),
             declaredMime,
@@ -1521,9 +1644,9 @@ export class GhostNetworkSlot {
         return { ok: false, message: '文本响应超过 1MB 且大响应通道正忙(全局同时只读一单),请稍后重试' };
       }
       const { bytes: rawBytes, truncated } = textRead;
+      assertStillValid();
       const bodyText = new TextDecoder('utf-8', { fatal: false }).decode(rawBytes);
-      this.deps.log?.info('ghost fetch-request done', {
-        ghostId, callId, method, host: url.hostname, status: response.status,
+      this.deps.log?.info('ghost fetch-request done', { ghostId: instanceKey, callId, method, host: url.hostname, status: response.status,
         bytes: rawBytes.byteLength, ...(truncated ? { truncated } : {}),
       });
       return {
@@ -1535,22 +1658,50 @@ export class GhostNetworkSlot {
       };
     } catch (err) {
       const aborted = controller.signal.aborted;
-      const message = aborted
-        ? `请求超时(${timeoutMs}ms)`
+      // 网络层失败带稳定 errorCode,原因码进 message;识别不出的(守门抛错等)保持原文、不打码。
+      const network = nodeAuth ? null : aborted ? fetchTimeoutFailure(timeoutMs) : classifyFetchNetworkFailure(err);
+      const message = nodeAuth ? (aborted ? 'NODE_AUTH_REQUEST_ABORTED' : 'NODE_AUTH_REQUEST_FAILED')
+        : network ? network.reason
         : err instanceof Error ? err.message : String(err);
       // 错误消息可能带 URL(含 query),日志只记 host,消息本身回给沙箱前不动
       // (意识本来就知道自己请求了什么,不构成泄露)。
-      this.deps.log?.warn('ghost fetch-request failed', {
-        ghostId, callId, method, host: url.hostname, aborted, error: message,
+      this.deps.log?.warn('ghost fetch-request failed', { ghostId: instanceKey, callId, method, host: url.hostname, aborted, error: message,
+        ...(network ? { errorCode: network.errorCode, ...(network.causeCode ? { causeCode: network.causeCode } : {}) } : {}),
       });
-      return { ok: false, message: `请求失败:${message}` };
+      return { ok: false, message: `请求失败:${message}`, ...(network ? { errorCode: network.errorCode } : {}) };
     } finally {
+      if (hasTransfer) progress?.(undefined, undefined, '文件处理结束');
+      nodeAuth?.signal.removeEventListener('abort', abortNode);
       clearTimeout(timer);
       await Promise.allSettled(guardedFetchReleases.map((release) => release()));
       if (holdingMediaGate) this.mediaReadsInflight -= 1;
-      const left = (this.inflight.get(ghostId) ?? 1) - 1;
-      if (left <= 0) this.inflight.delete(ghostId);
-      else this.inflight.set(ghostId, left);
+      const left = (this.inflight.get(instanceKey) ?? 1) - 1;
+      if (left <= 0) this.inflight.delete(instanceKey);
+      else this.inflight.set(instanceKey, left);
+    }
+  }
+
+  /**
+   * 本次请求是否带手册头：插件显式传 mcpAppsManual 时以它为准；否则仅当 callId
+   * 对应的在途工具在 mcpApps.ui 中对模型可见（会打开页面卡片）时带上。
+   */
+  private selectMcpAppsManual(
+    instanceKey: string,
+    ghost: InstalledGhost,
+    callId: string | undefined,
+    option: boolean | undefined,
+  ): McpAppsManualRef | null {
+    if (option === false) return null;
+    if (option !== true) {
+      // 没声明 MCP Apps 页面的插件不查在途调用，保持原有请求路径不变。
+      if (!callId || !pluginDeclaresMcpAppsUi(ghost.manifest)) return null;
+      const call = this.deps.inFlightCallInfo?.(callId) ?? null;
+      if (call?.ghostId !== instanceKey || !toolOpensMcpAppsPage(ghost.manifest, call.tool)) return null;
+    }
+    try {
+      return this.deps.mcpAppsManual?.() ?? null;
+    } catch {
+      return null;
     }
   }
 
@@ -1561,8 +1712,7 @@ export class GhostNetworkSlot {
    * 据此决定 401 是否触发重换重试)。凭证值只进 headers,不进日志、不进
    * 返回值。
    */
-  private async injectSecrets(
-    ghostId: string,
+  private async injectSecrets(instanceKey: string,
     secrets: readonly GhostSecretDecl[],
     connectionDecls: readonly GhostConnectionDecl[],
     hostname: string,
@@ -1600,7 +1750,7 @@ export class GhostNetworkSlot {
     for (const secret of secrets) {
       const scope = secret.inject.hosts ?? allHosts;
       if (!scope.some((pattern) => ghostNetworkHostMatches(pattern, hostname))) continue;
-      const resolved = await this.resolveSecretValue(ghostId, secret, hostname, authAccount);
+      const resolved = await this.resolveSecretValue(instanceKey, secret, hostname, authAccount);
       if ('error' in resolved) {
         return { error: resolved.error, usedExchange, oauthInjected, connectionInjected };
       }
@@ -1617,9 +1767,9 @@ export class GhostNetworkSlot {
     // 地址但 token 读不到 = 半身位(理论上不该出现:入库先 token 后清单),
     // 与 secrets 同款快速失败,不发一个注定 401 的请求。
     if (connectionDecls.length > 0 && this.deps.connections) {
-      const connHosts = this.deps.connections.hostsFor(ghostId);
+      const connHosts = this.deps.connections.hostsFor(instanceKey);
       if (connHosts.includes(hostname)) {
-        const tok = this.deps.connections.tokenFor(ghostId, hostname);
+        const tok = this.deps.connections.tokenFor(instanceKey, hostname);
         if (!tok) {
           return {
             error: `连接地址 ${hostname} 的凭证读取失败——请到主界面侧边栏「插件」的本插件详情页重新添加该连接`,
@@ -1642,8 +1792,7 @@ export class GhostNetworkSlot {
    * 换了登录账号或缓存过期则重换,单飞去重——交换缓存按 sourceValue 失配重换,
    * 登录邮箱变更天然生效)。
    */
-  private async resolveSecretValue(
-    ghostId: string,
+  private async resolveSecretValue(instanceKey: string,
     secret: GhostSecretDecl,
     hostname: string,
     authAccount?: string,
@@ -1660,13 +1809,12 @@ export class GhostNetworkSlot {
       try {
         ghToken = (await this.deps.readGhCliToken?.()) ?? null;
       } catch (error) {
-        this.deps.log?.warn('ghost gh-cli credential source failed', {
-          ghostId,
+        this.deps.log?.warn('ghost gh-cli credential source failed', { ghostId: instanceKey,
           error: error instanceof Error ? error.message : String(error),
         });
       }
       if (ghToken && ghToken.trim().length > 0) return { value: ghToken.trim() };
-      const fallback = this.deps.readSecret(ghostId, secret.key);
+      const fallback = this.deps.readSecret(instanceKey, secret.key);
       if (fallback && fallback.length > 0) return { value: fallback };
       return {
         error: `凭证「${secret.label}」不可用——未检测到本机 gh 登录，且尚未配置备用 Personal Access Token；请先运行 gh auth login，或到主界面侧边栏「插件」的本插件详情页填写 PAT`,
@@ -1683,21 +1831,19 @@ export class GhostNetworkSlot {
         allowedHosts: readonly string[];
       } | null;
       try {
-        resolution = manager.resolve(ghostId);
+        resolution = manager.resolve(instanceKey);
       } catch {
-        this.deps.log?.warn('ghost Connection audience resolver unavailable', { ghostId });
+        this.deps.log?.warn('ghost Connection audience resolver unavailable', { ghostId: instanceKey});
         return { error: 'Cindy 企业身份暂时不可用，请稍后重试或反馈' };
       }
       if (!resolution) {
-        this.deps.log?.warn('ghost Connection audience resolution returned no result', {
-          ghostId,
+        this.deps.log?.warn('ghost Connection audience resolution returned no result', { ghostId: instanceKey,
           host: hostname,
         });
         return { error: '当前 Cindy 企业身份不可用于此插件，请确认已登录正确的企业账号' };
       }
       if (!resolution.allowedHosts.includes(hostname)) {
-        this.deps.log?.warn('ghost Connection audience host rejected', {
-          ghostId,
+        this.deps.log?.warn('ghost Connection audience host rejected', { ghostId: instanceKey,
           host: hostname,
         });
         return { error: '当前 Cindy 企业身份不可用于此服务地址' };
@@ -1713,8 +1859,7 @@ export class GhostNetworkSlot {
           connectionTokenKey: { ...tokenInput, hostname },
         };
       } catch (error) {
-        this.deps.log?.warn('ghost Connection token issuance failed', {
-          ghostId,
+        this.deps.log?.warn('ghost Connection token issuance failed', { ghostId: instanceKey,
           host: hostname,
           error: error instanceof Error ? error.message : String(error),
         });
@@ -1731,7 +1876,7 @@ export class GhostNetworkSlot {
       if (!mgr) {
         return { error: 'OAuth 凭证通道未就绪(主机未接线),请升级应用或反馈' };
       }
-      const result = await mgr.getFreshAccessToken(ghostId, secret.key, secret.oauth, authAccount);
+      const result = await mgr.getFreshAccessToken(instanceKey, secret.key, secret.oauth, authAccount);
       if (!result.ok) {
         switch (result.error) {
           case 'NO_CLIENT_CONFIG':
@@ -1756,21 +1901,21 @@ export class GhostNetworkSlot {
       if ('error' in resolved) return resolved;
       raw = resolved.value;
     } else {
-      const stored = this.deps.readSecret(ghostId, secret.key);
+      const stored = this.deps.readSecret(instanceKey, secret.key);
       if (stored === null || stored.length === 0) {
         return { error: `凭证「${secret.label}」尚未配置——请到主界面侧边栏「插件」的本插件详情页填入后再试` };
       }
       raw = stored;
     }
     if (secret.exchange === undefined) return { value: raw };
-    const cacheKey = `${ghostId}\u0000${secret.key}`;
+    const cacheKey = `${instanceKey}\u0000${secret.key}`;
     const cached = this.exchangedTokens.get(cacheKey);
     if (cached && cached.sourceValue === raw && Date.now() < cached.expiresAt) {
       return { value: cached.token };
     }
     let inflightExchange = this.exchangeInflight.get(cacheKey);
     if (!inflightExchange) {
-      inflightExchange = this.performExchange(ghostId, secret, raw, cacheKey).finally(() => {
+      inflightExchange = this.performExchange(instanceKey, secret, raw, cacheKey).finally(() => {
         this.exchangeInflight.delete(cacheKey);
       });
       this.exchangeInflight.set(cacheKey, inflightExchange);
@@ -1788,8 +1933,7 @@ export class GhostNetworkSlot {
    * 名额(主机内部动作,自带 15s 超时),重定向一律阻断(令牌端点没有
    * 跳转的正当理由,跟跳只会把 key 带去别处)。
    */
-  private async performExchange(
-    ghostId: string,
+  private async performExchange(instanceKey: string,
     secret: GhostSecretDecl,
     raw: string,
     cacheKey: string,
@@ -1848,8 +1992,7 @@ export class GhostNetworkSlot {
         token,
         expiresAt: Date.now() + ttlMs,
       });
-      this.deps.log?.info('ghost secret exchange done', {
-        ghostId, secretKey: secret.key, host: new URL(ex.url).hostname,
+      this.deps.log?.info('ghost secret exchange done', { ghostId: instanceKey, secretKey: secret.key, host: new URL(ex.url).hostname,
       });
       return token;
     } catch (err) {
@@ -1889,10 +2032,10 @@ export class GhostNetworkSlot {
   }
 
   /** 作废某意识全部交换型凭证的令牌缓存(401 重试前调用)。 */
-  private invalidateExchangedTokens(ghostId: string, secrets: readonly GhostSecretDecl[]): void {
+  private invalidateExchangedTokens(instanceKey: string, secrets: readonly GhostSecretDecl[]): void {
     for (const secret of secrets) {
       if (secret.exchange === undefined) continue;
-      this.exchangedTokens.delete(`${ghostId}\u0000${secret.key}`);
+      this.exchangedTokens.delete(`${instanceKey}\u0000${secret.key}`);
     }
   }
 
@@ -1902,31 +2045,95 @@ export class GhostNetworkSlot {
    * 手工拼接(确定性,规则 9;不依赖运行时 FormData 的实现差异)。
    * filename 用指纹前 16 位 + 总仓后缀,不含任何用户可控文本。
    */
-  private async buildUploadBody(
-    ghostId: string,
-    upload: { hashes: string[]; field: string; fields?: Record<string, string> },
-  ): Promise<{ body: Uint8Array; boundary: string } | { error: string }> {
+  private async buildUploadBody(instanceKey: string,
+    upload: { hashes: string[]; library: string[]; handoff?: string[]; field: string; fields?: Record<string, string> },
+    signal: AbortSignal, assertCurrent: () => void,
+    progress?: (bytes: number | undefined, total: number | undefined, message: string) => void,
+  ): Promise<{ body: Uint8Array; boundary: string } | { error: string; limitBytes?: number; errorCode?: string }> {
     const boundary = `----cindy-ghost-${randomUUID()}`;
     const encoder = new TextEncoder();
     const chunks: Uint8Array[] = [];
     let total = 0;
     const fileParts: Uint8Array[] = [];
-    for (const hash of upload.hashes) {
-      const media = await this.deps.readGhostMedia(ghostId, hash);
+    const entries = [...upload.hashes.map(value => ({ value, library: false })), ...upload.library.map(value => ({ value, library: true }))];
+    // Handoff copies are capped at import time; read them first and reuse the media path below.
+    const handoffs = new Map<string, { buffer: Buffer; name: string; mimeType: string }>();
+    let handoffBytes = 0;
+    for (const ref of upload.handoff ?? []) {
+      const copy = await this.deps.readHandoffFile!(instanceKey, ref, signal);
+      assertCurrent(); signal.throwIfAborted();
+      if (!copy) return { error: '交接文件已过期或已被删除,请让用户重新发送', errorCode: GHOST_HANDOFF_UNAVAILABLE };
+      if (copy === 'changed') return { error: '交接文件在交出后被改动,已拒绝上传,请让用户重新发送', errorCode: GHOST_HANDOFF_UNAVAILABLE };
+      // Stop as soon as the batch cannot fit instead of holding every copy first.
+      handoffBytes += copy.bytes.byteLength;
+      if (handoffBytes > GHOST_FETCH_UPLOAD_MAX_TOTAL_BYTES) return { error: '上传文件超出总量上限', limitBytes: GHOST_FETCH_UPLOAD_MAX_TOTAL_BYTES };
+      const buffer = Buffer.from(copy.bytes.buffer, copy.bytes.byteOffset, copy.bytes.byteLength);
+      handoffs.set(ref, { buffer, name: copy.name, mimeType: copy.mimeType });
+      entries.push({ value: ref, library: false });
+    }
+    let expectedTotal: number | undefined = 0;
+    for (const entry of entries) {
+      const handoffCopy = handoffs.get(entry.value);
+      if (handoffCopy) { expectedTotal = (expectedTotal ?? 0) + handoffCopy.buffer.byteLength; continue; }
+      const size = await this.deps.uploadFileSize?.(instanceKey, entry.value, entry.library);
+      assertCurrent(); signal.throwIfAborted();
+      if (size === undefined) { expectedTotal = undefined; break; }
+      if (size > GHOST_FETCH_UPLOAD_MAX_BYTES_PER_FILE) return { error: '上传文件超出单件上限', limitBytes: GHOST_FETCH_UPLOAD_MAX_BYTES_PER_FILE };
+      expectedTotal += size;
+      if (expectedTotal > GHOST_FETCH_UPLOAD_MAX_TOTAL_BYTES) return { error: '上传文件超出总量上限', limitBytes: GHOST_FETCH_UPLOAD_MAX_TOTAL_BYTES };
+    }
+    const reportRead = (bytes: number) => progress?.(bytes, expectedTotal !== undefined && bytes <= expectedTotal ? expectedTotal : undefined, '正在读取文件');
+    for (const entry of entries) {
+      assertCurrent(); signal.throwIfAborted();
+      const hash = entry.value;
+      let media;
+      if (entry.library) {
+        const response = await this.deps.readLibraryFile!(instanceKey, hash, signal);
+        if (!response.ok) return { error: 'Library 文件不可用' };
+        const reader = response.body?.getReader();
+        const parts: Uint8Array[] = [];
+        let size = 0;
+        try {
+          const declared = Number(response.headers.get('content-length'));
+          if (declared > GHOST_FETCH_UPLOAD_MAX_BYTES_PER_FILE) return { error: '上传文件超出单件上限', limitBytes: GHOST_FETCH_UPLOAD_MAX_BYTES_PER_FILE };
+          if (total + declared > GHOST_FETCH_UPLOAD_MAX_TOTAL_BYTES) return { error: '上传文件超出总量上限', limitBytes: GHOST_FETCH_UPLOAD_MAX_TOTAL_BYTES };
+          while (reader) {
+            const chunk = await reader.read();
+            assertCurrent(); signal.throwIfAborted();
+            if (chunk.done) break;
+            size += chunk.value.byteLength;
+            if (size > GHOST_FETCH_UPLOAD_MAX_BYTES_PER_FILE) return { error: '上传文件超出单件上限', limitBytes: GHOST_FETCH_UPLOAD_MAX_BYTES_PER_FILE };
+            if (total + size > GHOST_FETCH_UPLOAD_MAX_TOTAL_BYTES) return { error: '上传文件超出总量上限', limitBytes: GHOST_FETCH_UPLOAD_MAX_TOTAL_BYTES };
+            parts.push(chunk.value);
+            reportRead(total + size);
+          }
+        } finally { await reader?.cancel().catch(() => {}); reader?.releaseLock(); }
+        media = { buffer: Buffer.concat(parts), ext: '', mimeType: normalizeMime(response.headers.get('content-type') ?? '') || 'application/octet-stream' };
+      } else media = handoffs.get(hash) ? { ...handoffs.get(hash)!, ext: '' } : await this.deps.readGhostMedia(instanceKey, hash);
+      assertCurrent(); signal.throwIfAborted();
       if (!media) {
         return { error: `媒体不存在或不属于本意识(${hash.slice(0, 8)}…)——只能上传自己名下/用户过户的总仓媒体` };
       }
       if (media.buffer.byteLength > GHOST_FETCH_UPLOAD_MAX_BYTES_PER_FILE) {
-        return { error: `上传文件过大(${media.buffer.byteLength} 字节,单文件上限 ${GHOST_FETCH_UPLOAD_MAX_BYTES_PER_FILE})` };
+        return { error: `上传文件过大(${media.buffer.byteLength} 字节,单文件上限 ${GHOST_FETCH_UPLOAD_MAX_BYTES_PER_FILE})`, limitBytes: GHOST_FETCH_UPLOAD_MAX_BYTES_PER_FILE };
       }
       total += media.buffer.byteLength;
       if (total > GHOST_FETCH_UPLOAD_MAX_TOTAL_BYTES) {
-        return { error: `上传总量超上限(${GHOST_FETCH_UPLOAD_MAX_TOTAL_BYTES} 字节)` };
+        return { error: `上传总量超上限(${GHOST_FETCH_UPLOAD_MAX_TOTAL_BYTES} 字节)`, limitBytes: GHOST_FETCH_UPLOAD_MAX_TOTAL_BYTES };
       }
+      reportRead(total);
+      const handoffName = handoffs.get(hash)?.name;
+      const filename = handoffName !== undefined
+        ? handoffName.replace(/[^a-zA-Z0-9_.-]/g, '_')
+        : entry.library ? (hash.split('/').pop() ?? 'file').replace(/[^a-zA-Z0-9_.-]/g, '_') : `${hash.slice(0, 16)}${media.ext}`;
+      // The user's original name (often non-ASCII) travels as RFC 5987 filename*.
+      // RFC 5987 ext-value: encodeURIComponent leaves ' ( ) * literal, which attr-char forbids.
+      const utf8Name = handoffName !== undefined && filename !== handoffName
+        ? `; filename*=UTF-8''${encodeURIComponent(handoffName).replace(/['()*]/g, (char) => `%${char.charCodeAt(0).toString(16).toUpperCase()}`)}` : '';
       fileParts.push(
         encoder.encode(
           `--${boundary}\r\n` +
-          `Content-Disposition: form-data; name="${upload.field}"; filename="${hash.slice(0, 16)}${media.ext}"\r\n` +
+          `Content-Disposition: form-data; name="${upload.field}"; filename="${filename}"${utf8Name}\r\n` +
           `Content-Type: ${media.mimeType}\r\n\r\n`,
         ),
         media.buffer,
@@ -1958,21 +2165,23 @@ export class GhostNetworkSlot {
 
   /**
    * 组装目录上传的 multipart/form-data 体:凭一次性过户票据取货(票据由
-   * ghost_call 的 dir 过户发放,ghostId 绑定 + 单次消费 + TTL),先拼普通
+   * ghost_call 的 dir 过户发放,instanceKey 绑定 + 单次消费 + TTL),先拼普通
    * 表单字段,再逐文件读盘拼 `<prefix>N` 文件段(filename = 相对路径,
    * 服务端按它还原目录结构;Content-Type 统一 octet-stream,与 MCP 版
    * FormData+Blob 行为一致)。读盘期间总量再钳一次(过户后文件可能被改)。
    */
-  private async buildDirUploadBody(
-    ghostId: string,
+  private async buildDirUploadBody(instanceKey: string,
     uploadDir: {
       token: string;
       fields: Record<string, string>;
       fileFieldPrefix: string;
       fileField?: string;
     },
+    callId?: string,
   ): Promise<{ body: Uint8Array; boundary: string } | { error: string }> {
-    const deposit = this.deps.takeDirDeposit(ghostId, uploadDir.token);
+    const deposit = callId === undefined
+      ? this.deps.takeDirDeposit(instanceKey, uploadDir.token)
+      : this.deps.takeDirDeposit(instanceKey, uploadDir.token, callId);
     if (!deposit) {
       return { error: '目录过户票据无效(不存在 / 已使用 / 已过期)——请让主 agent 重新经 ghost_call 的 dir 参数过户目录' };
     }
@@ -2006,8 +2215,7 @@ export class GhostNetworkSlot {
       } catch (err) {
         // fs 错误的 message 自带绝对路径,绝不能回沙箱("路径不进沙箱"
         // 不变量);诊断走主机日志,沙箱只见相对路径 + 分类原因。
-        this.deps.log?.warn('ghost dir-upload read failed', {
-          ghostId, relPath: file.relPath,
+        this.deps.log?.warn('ghost dir-upload read failed', { ghostId: instanceKey, relPath: file.relPath,
           error: err instanceof Error ? err.message : String(err),
         });
         return { error: `读取文件失败(${file.relPath}):文件可能已被移动、删除或占用——请让主 agent 重新过户目录后重试` };

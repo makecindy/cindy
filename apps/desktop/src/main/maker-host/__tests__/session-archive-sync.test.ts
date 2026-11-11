@@ -1,7 +1,6 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import Database from 'better-sqlite3';
 import { createSessionArchiveSync, prepareArchiveSessions, type ArchiveSessionRow } from '../session-archive-sync.js';
-import { projectNativeSessionMetadata } from '../native-session-metadata.js';
 import { setCurrentDbClient, clearCurrentDbClient } from '../../localDb/client/current.js';
 import type { DbClient } from '../../localDb/client/DbClient.js';
 
@@ -39,13 +38,14 @@ describe('task archive projection', () => {
     const live = { getStatus: () => 'active', isTurnRunning: () => false, closeIfIdle: vi.fn(async () => true) };
     f.prepare.mockImplementation(rows => prepareArchiveSessions(rows, () => live));
     await f.coordinator.request();
-    await vi.advanceTimersByTimeAsync(5 * 60_000);
+    await vi.advanceTimersByTimeAsync(60 * 60_000);
     expect(f.sync).toHaveBeenCalledTimes(2);
     expect(f.sync).toHaveBeenLastCalledWith(expect.objectContaining({ archived: false }));
     expect(live.closeIfIdle).not.toHaveBeenCalled();
   });
 
   it('defers running handles and closes idle archived handles before syncing', async () => {
+    vi.useFakeTimers();
     const f = fixture();
     f.insert('task');
     const live = { getStatus: () => 'active', isTurnRunning: vi.fn(() => true), closeIfIdle: vi.fn(async () => true) };
@@ -53,8 +53,9 @@ describe('task archive projection', () => {
     await f.coordinator.request();
     expect(f.sync).not.toHaveBeenCalled();
     expect(live.closeIfIdle).not.toHaveBeenCalled();
+    // Turn completion writes no status, so the backed-off tick must pick it up.
     live.isTurnRunning.mockReturnValue(false);
-    await f.coordinator.request();
+    await vi.advanceTimersByTimeAsync(60_000);
     expect(live.closeIfIdle).toHaveBeenCalledTimes(1);
     expect(f.sync).toHaveBeenCalledTimes(1);
   });
@@ -70,9 +71,10 @@ describe('task archive projection', () => {
 
     // Another native client changes the thread; Cindy's row is unchanged.
     nativeArchived = !nativeArchived;
-    await vi.advanceTimersByTimeAsync(60_000);
+    // Unchanged rows must not spawn a native control process on every tick.
+    await vi.advanceTimersByTimeAsync(59 * 60_000);
     expect(f.sync).toHaveBeenCalledTimes(1);
-    await vi.advanceTimersByTimeAsync(4 * 60_000);
+    await vi.advanceTimersByTimeAsync(60_000);
     expect(f.sync).toHaveBeenCalledTimes(2);
     expect(nativeArchived).toBe(status === 'archived');
     expect(f.db.prepare('SELECT status FROM sessions').get()).toEqual({ status });
@@ -95,16 +97,21 @@ describe('task archive projection', () => {
       .toEqual({ working_dir: '/project', extra_dirs: '["/reference"]', writable_dirs: '["/output"]' });
   });
 
-  it('retries busy and failed records without repeating successful work', async () => {
+  it('backs off busy and failed records, then retries without repeating successful work', async () => {
+    vi.useFakeTimers();
     const f = fixture();
     f.insert('a'); f.insert('b');
     f.prepare.mockResolvedValueOnce(false);
     f.sync.mockRejectedValueOnce(new Error('offline'));
     await f.coordinator.request();
     expect(f.warn).toHaveBeenCalledWith(1);
+    expect(f.sync).toHaveBeenCalledTimes(1);
+    // Unrelated requests before the backoff expires must not retry native work.
     await f.coordinator.request();
+    expect(f.sync).toHaveBeenCalledTimes(1);
+    await vi.advanceTimersByTimeAsync(60_000);
     expect(f.sync).toHaveBeenCalledTimes(3);
-    await f.coordinator.request();
+    await vi.advanceTimersByTimeAsync(10 * 60_000);
     expect(f.sync).toHaveBeenCalledTimes(3);
   });
 
@@ -123,30 +130,24 @@ describe('task archive projection', () => {
     expect(f.sync).toHaveBeenLastCalledWith(expect.objectContaining({ threadId: 'thread', archived: true, remoteHostId: 'remote' }));
   });
 
+  it('does not let an hourly pass that skipped an offline remote hide it until the next hour', async () => {
+    vi.useFakeTimers();
+    const f = fixture();
+    f.insert('c', 'codex', 'archived', 'thread', 'remote');
+    await f.coordinator.request();
+    expect(f.sync).toHaveBeenCalledTimes(1);
+    f.canUseRemote.mockReturnValue(false);
+    await vi.advanceTimersByTimeAsync(61 * 60_000);
+    expect(f.sync).toHaveBeenCalledTimes(1);
+    f.canUseRemote.mockReturnValue(true);
+    await vi.advanceTimersByTimeAsync(60_000);
+    expect(f.sync).toHaveBeenCalledTimes(2);
+  });
+
   it('stops a backfill when the owner changes', async () => {
     const f = fixture(); f.insert('a'); f.insert('b');
     f.sync.mockImplementationOnce(async () => { f.assertCurrent.mockImplementation(() => { throw new Error('changed'); }); });
     await f.coordinator.request();
     expect(f.sync).toHaveBeenCalledTimes(1);
-  });
-
-  it.each(['cc', 'codex'] as const)('overlays %s archive and project scope onto CLI scan results', async kind => {
-    const f = fixture(); f.insert('task', kind, 'archived', 'native');
-    const candidate = { id: 'native', cwd: '/old-project', archived: false };
-    expect(await projectNativeSessionMetadata(kind, [candidate])).toEqual([
-      { ...candidate, archived: true, cwd: '/project', workspaceKind: 'project', extraDirs: ['/reference'], writableDirs: ['/output'] },
-    ]);
-    f.db.prepare("UPDATE sessions SET status='active'").run();
-    expect(await projectNativeSessionMetadata(kind, [{ ...candidate, archived: true }])).toEqual([
-      expect.objectContaining({ archived: false }),
-    ]);
-    f.db.prepare("UPDATE sessions SET status='deleted'").run();
-    expect(await projectNativeSessionMetadata(kind, [candidate])).toEqual([candidate]);
-  });
-
-  it('does not overlay another harness or SSH task with an identical native ID', async () => {
-    const f = fixture(); f.insert('cc', 'cc', 'archived', 'same'); f.insert('remote', 'codex', 'archived', 'same', 'ssh');
-    const candidate = { id: 'same', cwd: '/cli', archived: false };
-    expect(await projectNativeSessionMetadata('codex', [candidate])).toEqual([candidate]);
   });
 });

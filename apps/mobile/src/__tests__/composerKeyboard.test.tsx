@@ -9,11 +9,13 @@ import type {
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { ComposerKeyboardAvoidingView } from '@/session/ComposerKeyboardAvoidingView';
 import { useMobileKeyboardState } from '@/session/useMobileKeyboardState';
+import { __resetDockedKeyboardHeightsForTest } from '@/session/keyboardOverlap';
 import { useComposerCardTransition } from '@/session/useComposerCardTransition';
 import { motionDuration } from '@/theme/tokens';
+import { usePendingQuestionScroll } from '@/session/usePendingQuestionScroll';
 
 const native = vi.hoisted(() => ({
-  platform: { OS: 'ios' },
+  platform: { OS: 'ios', isPad: false },
   viewport: { width: 390, height: 844, scale: 3, fontScale: 1 },
   shown: false,
   metrics: undefined as KeyboardMetrics | undefined,
@@ -77,13 +79,20 @@ vi.mock('react-native', async () => {
     UIManager: {},
   };
 });
+const storage = vi.hoisted(() => new Map<string, string>());
+vi.mock('@react-native-async-storage/async-storage', () => ({
+  default: {
+    getItem: vi.fn(async (key: string) => storage.get(key) ?? null),
+    setItem: vi.fn(async (key: string, value: string) => { storage.set(key, value); }),
+  },
+}));
 vi.mock('@/hooks/useReduceMotion', () => ({
   getCachedReduceMotionEnabled: () => native.reducedMotion,
   useReduceMotionEnabled: () => native.reducedMotion,
 }));
 
-function Harness({ active = false, inset = 0 }) {
-  const keyboard = useMobileKeyboardState();
+function Harness({ active = false, inset = 0, enabled = true }) {
+  const keyboard = useMobileKeyboardState(enabled);
   useComposerCardTransition(active, keyboard);
   return (
     <ComposerKeyboardAvoidingView
@@ -104,6 +113,8 @@ function keyboardEvent(
   return {
     duration,
     easing: 'keyboard',
+    startCoordinates: { screenX: 0, screenY: 844, width: 390, height: 0 },
+    isEventFromThisApp: true,
     endCoordinates: { screenX: 0, screenY, width: 390, height },
   };
 }
@@ -133,9 +144,62 @@ function padding() {
   return (container.firstElementChild as HTMLElement).style.paddingBottom;
 }
 
+// PR #6313: the screen's focus flag outlived an input removed without blur.
+// Unit: exercise the production hook's scroll position, including a request
+// switch before native blur. Existing geometry tests do not cover input lifetime.
+describe('pending question input visibility', () => {
+  let controls: ReturnType<typeof usePendingQuestionScroll>;
+  function QuestionHarness({ requestId }: { requestId: string | null }) {
+    controls = usePendingQuestionScroll(requestId);
+    return null;
+  }
+  it('stops revealing a removed input without requiring a blur event', () => {
+    act(() => root.render(<QuestionHarness requestId="q1" />));
+    const viewport = { offset: 0, end: 600 };
+    controls.scrollRef.current = {
+      scrollToEnd: () => { viewport.offset = viewport.end; },
+    } as unknown as NonNullable<typeof controls.scrollRef.current>;
+    let focused = true;
+    const input = { isFocused: () => focused };
+    controls.onFocus({ target: input } as unknown as Parameters<typeof controls.onFocus>[0]);
+    expect(viewport.offset).toBe(600);
+    viewport.end = 700;
+    controls.reveal();
+    expect(viewport.offset).toBe(700);
+    // Native TextInput clears its focus on unmount even when no blur bubbles.
+    focused = false;
+    viewport.offset = 0;
+    controls.reveal();
+    expect(viewport.offset).toBe(0);
+  });
+
+  it('does not carry focus into another queued question or a non-question panel', () => {
+    act(() => root.render(<QuestionHarness requestId="q1" />));
+    let offset = 0;
+    controls.scrollRef.current = {
+      scrollToEnd: () => { offset = 600; },
+    } as unknown as NonNullable<typeof controls.scrollRef.current>;
+    const event = { target: { isFocused: () => true } } as unknown as Parameters<typeof controls.onFocus>[0];
+    controls.onFocus(event);
+    expect(offset).toBe(600);
+    for (const requestId of ['q2', null]) {
+      offset = 0;
+      act(() => root.render(<QuestionHarness requestId={requestId} />));
+      controls.reveal();
+      expect(offset).toBe(0);
+    }
+    act(() => root.render(<QuestionHarness requestId="q2" />));
+    controls.onFocus(event);
+    expect(offset).toBe(600);
+  });
+});
+
 beforeEach(() => {
   Object.assign(globalThis, { IS_REACT_ACT_ENVIRONMENT: true });
   native.platform.OS = 'ios';
+  native.platform.isPad = false;
+  storage.clear();
+  __resetDockedKeyboardHeightsForTest();
   native.viewport = { width: 390, height: 844, scale: 3, fontScale: 1 };
   native.shown = false;
   native.metrics = undefined;
@@ -155,6 +219,37 @@ afterEach(() => {
 });
 
 describe('composer keyboard geometry and motion', () => {
+  it('does no keyboard work while disabled and refreshes native geometry when enabled again', () => {
+    render({ enabled: false });
+    expect(native.listeners.size).toBe(0);
+    emit('keyboardDidShow');
+    expect(height()).toBe(0);
+    render();
+    expect(height()).toBe(300);
+    expect(native.schedule).not.toHaveBeenCalled();
+    expect(native.configure).not.toHaveBeenCalled();
+    render({ enabled: false });
+    expect([...native.listeners.values()].every(listeners => listeners.size === 0)).toBe(true);
+    emit('keyboardDidHide');
+    render();
+    expect(height()).toBe(0);
+    emit('keyboardWillShow');
+    expect(height()).toBe(300);
+    expect(native.schedule).toHaveBeenCalledOnce();
+  });
+
+  it('ignores a delayed cross-fade query after disabling and reopening', async () => {
+    let finish!: (crossFade: boolean) => void;
+    native.crossFade.mockImplementation(() => new Promise(resolve => { finish = resolve; }));
+    render();
+    emit('keyboardWillShow', keyboardEvent(0, 844));
+    render({ enabled: false });
+    emit('keyboardDidShow', keyboardEvent(444, 400));
+    render();
+    await act(async () => finish(true));
+    expect(height()).toBe(400);
+  });
+
   it('updates both available height and iOS avoidance when an already-open keyboard changes height', () => {
     render();
     emit('keyboardWillShow');
@@ -189,6 +284,7 @@ describe('composer keyboard geometry and motion', () => {
   });
 
   it('removes avoidance on hide and ignores late floating keyboard frames until the next show', () => {
+    native.platform.isPad = true;
     render();
     emit('keyboardWillShow');
     emit('keyboardWillChangeFrame', keyboardEvent(300, 300));
@@ -201,11 +297,107 @@ describe('composer keyboard geometry and motion', () => {
   });
 
   it('does not move the whole page for a narrow floating iPad keyboard', () => {
+    native.platform.isPad = true;
     render();
-    const floating = keyboardEvent();
-    floating.endCoordinates.width = 250;
+    const event = keyboardEvent();
+    const floating = { ...event, endCoordinates: { ...event.endCoordinates, width: 250 } };
     emit('keyboardWillShow', floating);
     expect(height()).toBe(0);
+  });
+
+  // 2026-11-01 iPhone Duo：远程桌面返回进入画中画后，iOS 把键盘坐标按另一块屏幕发来
+  // （274×154 落在 466×678 右下角，或整宽却悬在屏幕中间），键盘实际仍停靠在底部，
+  // 旧判定把遮挡算成 0，输入框被盖住且直到冷启动都不恢复。iPhone 没有悬浮键盘，
+  // 这类坐标改用同宽度下最近一次正常的停靠高度；iPad 悬浮键盘由上面两例保持原判定。
+  it('keeps the last docked height when iPhone reports an impossible keyboard frame', () => {
+    native.viewport = { width: 400, height: 900, scale: 3, fontScale: 1 };
+    const corner: KeyboardEvent = {
+      duration: 383,
+      easing: 'keyboard',
+    startCoordinates: { screenX: 0, screenY: 844, width: 390, height: 0 },
+    isEventFromThisApp: true,
+      endCoordinates: { screenX: 192, screenY: 500, width: 274, height: 178 },
+    };
+    const frame = (screenY: number, height: number): KeyboardEvent => ({
+      ...keyboardEvent(screenY, height),
+      endCoordinates: { screenX: 0, screenY, width: 400, height },
+    });
+    render();
+    // 冷启动后从未见过正常键盘：按窗口比例估算，而不是让键盘盖住输入框。
+    emit('keyboardWillShow', corner);
+    expect(height()).toBe(342);
+    emit('keyboardWillHide', corner);
+    // 只见过比估算矮的键盘时仍取估算，避免沿用偏矮的记录盖住输入框。
+    emit('keyboardWillShow', frame(600, 300));
+    emit('keyboardWillHide');
+    emit('keyboardWillShow', corner);
+    expect(height()).toBe(342);
+    emit('keyboardWillHide', corner);
+    emit('keyboardWillShow', frame(520, 380));
+    emit('keyboardWillHide');
+    expect(height()).toBe(0);
+    expect(JSON.parse(storage.get('cindy.mobile.keyboard-docked-height.v2') ?? '{}')).toMatchObject({ 400: 380 });
+    emit('keyboardWillShow', corner);
+    expect(height()).toBe(380);
+    emit('keyboardDidChangeFrame', frame(368, 301));
+    expect(height()).toBe(380);
+    emit('keyboardWillHide', corner);
+    // 转屏中途或换输入法时出现更矮的正常键盘，不能把沿用高度压低到盖住输入框。
+    emit('keyboardWillShow', frame(650, 250));
+    expect(height()).toBe(250);
+    emit('keyboardWillChangeFrame', corner);
+    expect(height()).toBe(380);
+    emit('keyboardWillHide', corner);
+    expect(height()).toBe(0);
+  });
+
+  // 2026-11-03 Duo：转屏途中 iOS 发来整宽贴底的过渡帧（横屏 308，实际 264），被记成最高值后，
+  // 之后每次遇到异常坐标都把横屏输入框抬高约 44pt。转屏后短时间内的帧只用于当下，不记录。
+  it('does not remember a docked frame that arrives while the window is rotating', () => {
+    const now = vi.spyOn(Date, 'now').mockReturnValue(10_000);
+    native.viewport = { width: 420, height: 880, scale: 3, fontScale: 1 };
+    render();
+    native.viewport = { width: 880, height: 420, scale: 3, fontScale: 1 };
+    now.mockReturnValue(20_000);
+    render();
+    const docked = (height: number): KeyboardEvent => ({
+      ...keyboardEvent(420 - height, height),
+      endCoordinates: { screenX: 0, screenY: 420 - height, width: 880, height },
+    });
+    const corner: KeyboardEvent = {
+      ...keyboardEvent(),
+      endCoordinates: { screenX: 0, screenY: 178, width: 274, height: 0 },
+    };
+    now.mockReturnValue(20_300);
+    emit('keyboardWillShow', docked(300));
+    expect(height()).toBe(300);
+    emit('keyboardWillHide');
+    emit('keyboardWillShow', corner);
+    expect(height()).toBe(220);
+    emit('keyboardWillHide', corner);
+    now.mockReturnValue(22_000);
+    emit('keyboardWillShow', docked(230));
+    emit('keyboardWillHide');
+    emit('keyboardWillShow', corner);
+    expect(height()).toBe(230);
+  });
+
+  // PR #8665 review：本机记录异步读出，读完前遇到异常坐标只能先用估算；读完若记录更高，
+  // 已显示的键盘占位必须重算，而不是停在估算值直到下一次键盘事件。
+  it('recomputes an already-shown impossible frame once the saved height finishes loading', async () => {
+    native.viewport = { width: 400, height: 900, scale: 3, fontScale: 1 };
+    storage.set('cindy.mobile.keyboard-docked-height.v2', JSON.stringify({ 400: 380 }));
+    render();
+    emit('keyboardWillShow', {
+      duration: 383,
+      easing: 'keyboard',
+    startCoordinates: { screenX: 0, screenY: 844, width: 390, height: 0 },
+    isEventFromThisApp: true,
+      endCoordinates: { screenX: 192, screenY: 500, width: 274, height: 178 },
+    });
+    expect(height()).toBe(342);
+    await act(async () => {});
+    expect(height()).toBe(380);
   });
 
   it('subtracts the new-page safe area once without affecting the full-window detail page', () => {

@@ -18,6 +18,11 @@ import {
   readBotSkillForBot,
   saveBotSkillForSession,
 } from '../botSkillService';
+import {
+  beginChannelToolScope,
+  readChannelToolScope,
+  type LaneTurnScope,
+} from '../../im/shared/channelToolScope';
 
 let userDataDir = '';
 
@@ -160,8 +165,10 @@ describe('设置页与会话挂载读的是同一份磁盘事实', () => {
     expect(cindy.baseline.skill.name).toBe('teammate-guide');
     expect(cindy.baseline.pluginRoot).not.toContain('bot-cindy');
     const source = await fs.readFile(fresh.baseline.skill.filePath, 'utf8');
-    for (const tool of ['start_session_task', 'send_to_agent', 'create_teammate', 'get_app_default_model', 'set_app_default_model', 'save_teammate_skill', 'ghost_call', 'routine_list', 'schedule_set_pre_run_hook', 'schedule_notify_current_run'])
+    // The mounted core mirrors the preloaded one: orchestration plus the read_teammate_skill index.
+    for (const tool of ['send_to_session', 'get_app_default_model', 'update_teammate_profile', 'set_teammate_capability', 'ghost_list', 'read_teammate_skill'])
       expect(source).toContain(tool);
+    expect(source).not.toContain('routine_list');
     expect(cindy.skills).toEqual([]);
     expect(fresh.skills).toEqual([]);
     await saveBotSkillForSession(SAVE, depsFor('bot-fresh'));
@@ -190,6 +197,32 @@ describe('设置页与会话挂载读的是同一份磁盘事实', () => {
     expect(await deleteBotSkillForBot('bot-1', 'weekly-report', { userDataDir })).toBe(true);
     expect(await listBotSkillsForBot('bot-1', { userDataDir })).toEqual([]);
     expect((await collectBotOwnSkillMounts('bot-1', { userDataDir })).skills).toEqual([]);
+  });
+
+  it('mounts a V2 teammate\'s project Skills, never its old copies, and follows later project edits', async () => {
+    // The V1 copy stays in the teammate's old folder after the upgrade.
+    await saveBotSkillForSession({ ...SAVE, body: 'OLD COPY' }, { ...depsFor('bot-2'), readProjectMode: async () => false });
+    const v2 = { ...depsFor('bot-2'), readProjectMode: async () => true };
+    const projectSkills = path.join(userDataDir, 'bots', 'bot-2', 'workspace', '.agents', 'skills');
+    await saveBotSkillForSession(SAVE, v2);
+
+    const mounts = await collectBotOwnSkillMounts('bot-2', v2);
+    // A Claude Code plugin root of the old folder would load `skills/` (the V1 copies).
+    expect(mounts.pluginRoot).not.toBe(path.join(userDataDir, 'bots', 'bot-2'));
+    const catalog = await fs.readFile(path.join(mounts.pluginRoot, 'catalog.jsonl'), 'utf8');
+    expect(catalog).toContain(JSON.stringify(path.join(projectSkills, 'weekly-report', 'SKILL.md')).slice(1, -1));
+    expect(catalog).not.toContain(JSON.stringify(path.join(userDataDir, 'bots', 'bot-2', 'skills')).slice(1, -1));
+
+    // The teammate edits its own project directly, without the save tool.
+    await fs.mkdir(path.join(projectSkills, 'standup'));
+    await fs.writeFile(path.join(projectSkills, 'standup', 'SKILL.md'), '---\nname: standup\ndescription: Daily standup notes\n---\nSteps');
+    const later = await fs.readFile(path.join((await collectBotOwnSkillMounts('bot-2', v2)).pluginRoot, 'catalog.jsonl'), 'utf8');
+    expect(later).toContain(JSON.stringify(path.join(projectSkills, 'standup', 'SKILL.md')).slice(1, -1));
+
+    // Updating a Skill through the save tool refreshes what the next turn mounts right away.
+    await saveBotSkillForSession({ ...SAVE, description: 'Updated weekly report steps' }, v2);
+    const updated = await fs.readFile(path.join((await collectBotOwnSkillMounts('bot-2', v2)).pluginRoot, 'catalog.jsonl'), 'utf8');
+    expect(updated).toContain('Updated weekly report steps');
   });
 
   it('returns nothing to mount for a Bot that never learned anything', async () => {

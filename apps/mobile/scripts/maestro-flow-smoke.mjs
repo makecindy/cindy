@@ -23,6 +23,7 @@ const requiredFlows = [
   'plan_review.yaml',
   'fork_rewind.yaml',
   'message_selection.yaml',
+  'session_back_gesture.yaml',
   'fixture_controls_smoke.yaml',
   'file_preview.yaml',
   'file_browser.yaml',

@@ -25,6 +25,12 @@
     "fastTag": "빠름"
   },
   "options": {
+    "speed": {
+      "label": "속도",
+      "standard": "표준",
+      "fast": "빠름",
+      "ultrafast": "초고속"
+    },
     "fastMode": "빠른 모드",
     "fastModeAccessibility": "빠른 모드 {{model}}",
     "reasoningEffort": "추론 강도",
@@ -63,10 +69,14 @@
     "titleHost": "Agent를 다시 “{{host}}”에서 실행할까요?",
     "titleHostUnnamed": "Agent를 다시 세션이 있는 컴퓨터에서 실행할까요?",
     "message": "원래 컴퓨터에 있는 대화 기록은 옮길 수 없어 인수인계 요약으로 이어집니다. 사고 내용 등은 완전히 이어지지 않을 수 있습니다. 다음 메시지를 보낼 때 적용됩니다.",
+    "messageNativeHistory": "전체 대화 기록을 복사해 이어서 진행합니다. 복원할 수 없으면 인수인계 요약으로 이어지며, 사고 내용 등은 완전히 이어지지 않을 수 있습니다. 다음 메시지를 보낼 때 적용됩니다.",
     "confirm": "컴퓨터 전환",
     "cancel": "그대로 두기"
   },
   "unified": {
+    "accountUnassigned": "계정 미배정",
+    "accountCount_other": "계정 {{count}}개",
+    "accountFallback": "계정 {{index}}",
       "favoriteConfiguration": "이 설정을 즐겨찾기에 추가",
       "savedConfiguration": "즐겨찾기에 추가됨 · 눌러서 해제",
       "currentConfiguration": "현재 설정",
@@ -92,6 +102,10 @@
     "recommended": "추천",
     "source": "공급원",
     "remoteProvider": "{{provider}} · {{device}}",
+    "remoteProviderGroup": "{{provider}} · {{device}} · {{group}}",
+    "providerGroup": "{{provider}} · {{group}}",
+    "groupBadge_one": "제공자 그룹 · 컴퓨터 {{count}}대",
+    "groupBadge_other": "제공자 그룹 · 컴퓨터 {{count}}대",
     "harness": "Harness",
     "restoreRecommended": "권장 설정 복원",
     "saveFailed": "저장하지 못했습니다. 다시 시도하세요.",
@@ -102,6 +116,12 @@
       "hour": "시간",
       "minute": "분",
       "second": "초"
-    }
+    },
+    "quotaAverage": "평균 잔여량 {{percent}}%",
+    "quotaUpdating": "잔여량 업데이트 대기",
+    "quotaResetSoon": "곧 초기화",
+    "quotaResetIn": "{{duration}} 후 초기화",
+    "quotaAverageHint": "주간 한도 · 계정별 동일 가중 평균",
+    "quotaResetHint": "현재 사용 속도라면 초기화 시 할당량이 남을 수 있습니다. 24시간 이내는 노란색, 6시간 이내는 빨간색입니다."
   }
 }

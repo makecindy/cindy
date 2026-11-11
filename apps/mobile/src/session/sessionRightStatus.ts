@@ -1,3 +1,4 @@
+import { getSessionListActivityAt } from '@cindy/maker-shared/session-activity';
 /**
  * sessionRightStatus —— 会话行右侧状态槽的档位判定(纯函数,便于单测)。
  *
@@ -30,8 +31,8 @@ export type MobileSessionRightStatus = SessionRightStatus;
 export function latestMobileSessionRow(item: SessionRow): SessionRow {
   return (
     item.automationGroup?.items.reduce((a, b) =>
-      Date.parse(b.session.userSendAt ?? b.session.updatedAt ?? b.session.createdAt) >
-      Date.parse(a.session.userSendAt ?? a.session.updatedAt ?? a.session.createdAt)
+      Date.parse(getSessionListActivityAt(b.session) ?? b.session.createdAt) >
+      Date.parse(getSessionListActivityAt(a.session) ?? a.session.createdAt)
         ? b
         : a,
     ) ?? item

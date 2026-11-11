@@ -23,6 +23,74 @@ const queueInput = (current: readonly QueuedRemoteMessage[] = [], overrides: Par
 });
 
 describe('sent message handoff', () => {
+  it.each([false, true])('places a late harness boundary before the reserved send (history ready=%s)', async (ready) => {
+    const previous: RemoteMessage = { ...echo, id: 'previous', clientId: 'previous', role: 'assistant',
+      createdAt: '2026-09-16T23:59:00Z' };
+    const boundary: RemoteMessage = { ...echo, id: 'switch', clientId: 'switch', role: 'agent_switch',
+      content: { fromAgentKind: 'cc', toAgentKind: 'codex' }, createdAt: '2026-09-16T23:59:59Z' };
+    let history = [previous];
+    const view = new HistoryViewController<RemoteMessage>({
+      page: async () => ({ version: 1, items: projectHistoryView(history, false), hasMore: false, nextCursor: null }),
+      details: async () => ({ version: 1, messages: [], hasMore: false, nextCursor: null }),
+      expanded: async () => undefined,
+    });
+    if (ready) await view.refresh();
+    let slots = appendOptimisticUserMessage([], [previous], queued, 's');
+    const raw = [previous, boundary];
+    const handoff = new HistoryViewHandoff<RemoteMessage>(() => false);
+    const render = () => {
+      const snapshot = view.getSnapshot();
+      const state = handoff.reconcile(snapshot, raw);
+      slots = reconcileOptimisticUserMessages(slots, raw, new Set(['sent']), confirmedHistoryUserClientIds(snapshot, raw));
+      const messages = projectOptimisticUserMessages(state.messages, slots);
+      return (snapshot.ready ? buildMobileHistoryRenderItems({ view, snapshot, messages,
+        pendingHandoff: state.pending, staleTail: state.tail,
+        localUserClientIds: new Set(slots.map((entry) => entry.message.clientId)), streaming: false, sessionId: 's' })
+        : buildMobileMessageRenderItems(messages, { preserveSourceOrder: true })).map((item) => item.key);
+    };
+    const expected = ['message-previous', 'message-switch', 'message-sent'];
+    expect(projectOptimisticUserMessages(raw, slots).map((message) => message.clientId))
+      .toEqual(['previous', 'switch', 'sent']);
+    if (!ready) expect(render()).toEqual(expected);
+    history = [previous, boundary];
+    await view.refresh();
+    expect(render()).toEqual(expected);
+    raw.push(echo);
+    expect(render()).toEqual(expected);
+    history = [...raw];
+    await view.refresh();
+    expect(render()).toEqual(expected);
+    expect(slots).toEqual([]);
+    view.setActive(false);
+  });
+
+  it('does not pull a later harness switch across a reply into an earlier send', () => {
+    const reply: RemoteMessage = { ...echo, id: 'reply', clientId: 'reply', role: 'assistant' };
+    const boundary: RemoteMessage = { ...echo, id: 'switch', clientId: 'switch', role: 'agent_switch' };
+    const first = appendOptimisticUserMessage([], [], queued, 's');
+    const slots = appendOptimisticUserMessage(first, [echo, reply], { ...queued, clientId: 'next' }, 's');
+    expect(projectOptimisticUserMessages([echo, reply, boundary], slots).map((message) => message.clientId))
+      .toEqual(['sent', 'reply', 'switch', 'next']);
+  });
+
+  it.each([false, true])('keeps consecutive switches with their sends without a reply (next echoed=%s)', (echoed) => {
+    const firstSwitch: RemoteMessage = { ...echo, id: 'switch-first', clientId: 'switch-first', role: 'agent_switch' };
+    const secondSwitch: RemoteMessage = { ...firstSwitch, id: 'switch-next', clientId: 'switch-next' };
+    const nextEcho: RemoteMessage = { ...echo, id: 'db-next', clientId: 'next' };
+    const first = reconcileOptimisticUserMessages(appendOptimisticUserMessage([], [], queued, 's'), [echo], none, none);
+    let slots = appendOptimisticUserMessage(first, [firstSwitch, echo], { ...queued, clientId: 'next' }, 's');
+    const raw = [firstSwitch, echo, secondSwitch, ...(echoed ? [nextEcho] : [])];
+    const expected = ['switch-first', 'sent', 'switch-next', 'next'];
+    expect(projectOptimisticUserMessages(raw, slots).map((message) => message.clientId)).toEqual(expected);
+    // A stale history page can still omit the first echo held by its reservation.
+    expect(projectOptimisticUserMessages(raw.filter((message) => message.clientId !== 'sent'), slots)
+      .map((message) => message.clientId)).toEqual(expected);
+    const history = [firstSwitch, echo, secondSwitch, nextEcho];
+    slots = reconcileOptimisticUserMessages(slots, history, none, new Set(expected));
+    expect(slots).toEqual([]);
+    expect(projectOptimisticUserMessages(history, slots).map((message) => message.clientId)).toEqual(expected);
+  });
+
   it.each([false, true])('keeps a new send after history-only replies (echo=%s)', async (hasEcho) => {
     const previousUser = { ...echo, id: 'previous-user', clientId: 'previous-user', createdAt: '2026-09-16T23:59:00Z' };
     const previousReply: RemoteMessage = { ...echo, id: 'previous-reply', clientId: 'previous-reply', role: 'assistant', createdAt: '2026-09-16T23:59:10Z' };

@@ -19,27 +19,39 @@
  */
 
 import { randomUUID } from 'node:crypto';
+import { getPluginToolUi, pluginToolVisible } from '@cindy/plugin-protocol';
 
 import type {
   GhostPipeToolCall,
+  GhostPipeToolProgress,
   GhostToolCallResult,
-  GhostToolDecl,
+  GhostManifest,
   InstalledGhost,
 } from '../../shared/ghost.js';
 import { GHOST_PIPE_CALL_MAX_TOTAL_MS, isGhostPluginErrorCode } from '../../shared/ghost.js';
+import { installedGhostStoragePart } from '../../shared/pluginIdentity.js';
 import type { GhostRuntimeState } from './runtime/GhostRuntime.js';
 import { isGhostOwnerScopeUsable, type GhostOwnerScope } from './ghostOwnerScope.js';
+import { normalizeGhostModelImages } from './ghostModelImages.js';
+import type { PluginUsageOutcome } from '../../shared/pluginUsage.js';
+
+/** Internal observation only; no parameters or result bodies leave the dispatcher. */
+export interface GhostCallUsageObserver {
+  accepted(occurredAt: number): void;
+  settled(outcome: PluginUsageOutcome): void;
+}
 
 export interface PipeDispatcherDeps {
   /** 按 id 取已装意识(未装 → null)。 */
-  getGhost(id: string): InstalledGhost | null;
+  getGhost(id: string, namespace?: string | null): InstalledGhost | null;
   /** 当前运行时状态。 */
   runtimeStateOf(id: string): GhostRuntimeState;
   /** 拉起沙箱(幂等;fused/stopping 拒绝)。 */
   spawn(ghost: InstalledGhost): Promise<{ ok: true } | { ok: false; reason: string }>;
   /** 把下行消息发到该意识的电子脑逻辑页;false = 逻辑页不在线。 */
-  sendToGhost(ghostId: string, payload: GhostPipeToolCall): boolean;
+  sendToGhost(ghostId: string, payload: GhostPipeToolCall): boolean | Promise<boolean>;
   ownerScope?: GhostOwnerScope;
+  prepareUsage?(ghost: InstalledGhost, callId: string, toolName: string, sessionId?: string): GhostCallUsageObserver | null;
   /** 单次调用超时(默认 330s,见 DEFAULT_TIMEOUT_MS 注释)。 */
   timeoutMs?: number;
   setTimeoutFn?: typeof setTimeout;
@@ -58,7 +70,14 @@ interface PendingBindingClaim {
   consumed: boolean;
 }
 
+export type GhostToolProgress = Pick<GhostPipeToolProgress, 'progress' | 'total' | 'message'> & { progress: number };
+
 interface PendingCall {
+  onProgress?: (progress: GhostToolProgress) => void;
+  progressHighWater?: number;
+  usage?: GhostCallUsageObserver | null;
+  usageAccepted?: boolean;
+  usageOutcome?: PluginUsageOutcome;
   sessionId?: string;
   ghostId: string;
   tool: string;
@@ -102,7 +121,8 @@ const HOLD_SETTLE_GRACE_MS = 60_000;
  * 甚至误判"插件没有写能力"(2026-07-30 实测:二级分派型插件 cindy-github 的
  * 操作名被两个模型先后当作顶层 tool 直调,均在此卡死)。
  * 分派型插件(暴露了 call_tool)把 agent 想调的名字直接回填进正确调用形态;
- * 普通插件列出实际可用的顶层工具名。
+ * 普通插件列出实际可用的顶层工具名。调用方须传完整 manifest，不能先过滤工具，
+ * 否则无法区分未声明和仅页面可见；已知 audience 时只推荐该调用方可用的入口。
  * 消费方:本派发器 + ghost_call 主路径预检(mcp-integrations/ghost.ts)+
  * setup 恢复校验(maker-ipc/register.ts validateTarget)——所有 TOOL_NOT_FOUND
  * 返回点必须共用本函数,新增返回点不得自写文案。导出供单测直测(规则 14)。
@@ -110,9 +130,22 @@ const HOLD_SETTLE_GRACE_MS = 60_000;
 export function toolNotFoundMessage(
   ghostId: string,
   tool: string,
-  declaredTools: GhostToolDecl[] | undefined,
+  manifest: Partial<Pick<GhostManifest, 'schemaVersion' | 'tools' | 'mcpApps' | 'network'>>,
+  audience?: 'model' | 'app',
 ): string {
-  const names = (declaredTools ?? []).map((t) => t.name);
+  const declaredTools = manifest.tools ?? [];
+  const names = declaredTools
+    .filter((t) => !audience || pluginToolVisible(manifest, t.name, audience))
+    .map((t) => t.name);
+  if (audience === 'model' && declaredTools.some((t) => t.name === tool) &&
+      !pluginToolVisible(manifest, tool, 'model') && pluginToolVisible(manifest, tool, 'app')) {
+    const ui = getPluginToolUi(manifest);
+    const openers = names.filter((name) => ui?.tools[name]?.resourceUri);
+    const next = openers.length
+      ? `请先通过 ghost_call 调用模型可见的开页面工具: ${openers.join(', ')}，再由页面调用 ${tool}。`
+      : `当前没有模型可见的开页面工具；请先查看模型可见的工具: ${names.length ? names.join(', ') : '(无)'}。`;
+    return `插件 ${ghostId} 已声明工具 ${tool}，但它只供插件页面调用，模型不能直接 ghost_call。${next}不要据此判定插件缺少该能力。`;
+  }
   if (names.includes('call_tool')) {
     return (
       `插件 ${ghostId} 没有名为 ${tool} 的顶层工具——它采用二级分派:具体操作经 call_tool 下发,` +
@@ -172,6 +205,7 @@ export class GhostPipeDispatcher {
 
   private async dispatchCall(request: {
     ghostId: string;
+    namespace?: string | null;
     tool: string;
     args: Record<string, unknown>;
     /**
@@ -185,11 +219,16 @@ export class GhostPipeDispatcher {
     signal?: AbortSignal;
     /** Trusted Host session attribution, never accepted from plugin input. */
     sessionId?: string;
+    /** Host debug actions are explicitly excluded. Never exposed in plugin payloads. */
+    recordUsage?: false;
+    onProgress?: (progress: GhostToolProgress) => void;
+    /** Native reader's explicit opening intent. Never sourced from tool args. */
+    mailReaderOpened?: true;
   }): Promise<GhostToolCallResult> {
-    const { ghostId, tool, args } = request;
+    const { ghostId, namespace, tool, args } = request;
 
     // ── 资格审 ─────────────────────────────────────────────────────────
-    const ghost = this.deps.getGhost(ghostId);
+    const ghost = this.deps.getGhost(ghostId, namespace);
     if (!ghost) {
       return { ok: false, errorCode: 'GHOST_NOT_FOUND', message: `插件 ${ghostId} 未安装或已卸载` };
     }
@@ -198,9 +237,10 @@ export class GhostPipeDispatcher {
     }
     const declared = ghost.manifest.tools?.some((t) => t.name === tool);
     if (!declared) {
-      return { ok: false, errorCode: 'TOOL_NOT_FOUND', message: toolNotFoundMessage(ghostId, tool, ghost.manifest.tools) };
+      return { ok: false, errorCode: 'TOOL_NOT_FOUND', message: toolNotFoundMessage(ghostId, tool, ghost.manifest) };
     }
-    if (this.deps.runtimeStateOf(ghostId) === 'fused') {
+    const storagePart = installedGhostStoragePart(ghost);
+    if (this.deps.runtimeStateOf(storagePart) === 'fused') {
       return { ok: false, errorCode: 'GHOST_CRASHED', message: `插件 ${ghostId} 已熔断(反复崩溃),重载或重新启用后再试` };
     }
     let ownerScopeSnapshot: unknown;
@@ -210,27 +250,42 @@ export class GhostPipeDispatcher {
       return this.ownerBoundaryResult();
     }
 
+    const callId = request.callId && request.callId.length > 0 ? request.callId : randomUUID();
     // ── 按需拉起 ────────────────────────────────────────────────────────
-    if (this.deps.runtimeStateOf(ghostId) !== 'running') {
+    if (this.deps.runtimeStateOf(storagePart) !== 'running') {
+      this.deps.log?.info('ghost tool waiting for sandbox readiness', {
+        ghostId: storagePart, tool, callId, state: this.deps.runtimeStateOf(storagePart),
+      });
       const spawned = await this.deps.spawn(ghost);
       if (!spawned.ok) {
         return { ok: false, errorCode: 'GHOST_CRASHED', message: `插件启动失败:${spawned.reason}` };
       }
     }
-    if (!this.ownerScopeUsable(ghostId, ownerScopeSnapshot)) {
+    if (!this.ownerScopeUsable(storagePart, ownerScopeSnapshot)) {
       return this.ownerBoundaryResult();
+    }
+    if (this.deps.runtimeStateOf(storagePart) !== 'running') {
+      return { ok: false, errorCode: 'GHOST_CRASHED', message: '插件就绪前已停止' };
     }
 
     // ── 派发 + 配对等待 ────────────────────────────────────────────────
-    const callId = request.callId && request.callId.length > 0 ? request.callId : randomUUID();
-    const payload: GhostPipeToolCall = { type: 'tool-call', callId, tool, args };
+    let toolArgs = args;
+    if (ghost.manifest.mail === true && ghost.manifest.mailReader?.tool === tool) {
+      toolArgs = { ...args };
+      delete toolArgs.markRead;
+      delete toolArgs.openDraft;
+      if (request.mailReaderOpened === true) toolArgs.openDraft = true;
+      if (request.mailReaderOpened === true && ghost.manifest.mailReader.markRead === true)
+        toolArgs.markRead = true;
+    }
+    const payload: GhostPipeToolCall = { type: 'tool-call', callId, tool, args: toolArgs };
 
     return new Promise<GhostToolCallResult>((resolve) => {
       const startedAt = Date.now();
       const baseTimeoutMs = this.baseTimeoutMs(request.timeoutMs);
       const entry: PendingCall = {
         sessionId: request.sessionId,
-        ghostId,
+        ghostId: storagePart,
         tool,
         ownerScopeSnapshot,
         claimedBindings: new Map(),
@@ -243,18 +298,40 @@ export class GhostPipeDispatcher {
         holds: 0,
         lifetime: new AbortController(),
         sourceSignal: request.signal,
+        onProgress: request.onProgress,
       };
+      if (request.recordUsage !== false) {
+        this.observeUsage(() => { entry.usage = this.deps.prepareUsage?.(ghost, callId, tool, request.sessionId); });
+      }
       this.pending.set(callId, entry);
       this.armTimer(callId, entry);
 
-      if (!this.ownerScopeUsable(ghostId, ownerScopeSnapshot)) {
+      if (!this.ownerScopeUsable(storagePart, ownerScopeSnapshot)) {
         this.settle(callId, this.ownerBoundaryResult());
         return;
       }
-      if (!this.deps.sendToGhost(ghostId, payload)) {
+      const delivered = (accepted: boolean) => {
+        if (!this.ownerScopeUsable(storagePart, ownerScopeSnapshot)) {
+          this.settle(callId, this.ownerBoundaryResult());
+          return;
+        }
+        if (!accepted) {
         // 逻辑页不在线(拉起后瞬时死亡等):立即收卷。
         this.settle(callId, { ok: false, errorCode: 'GHOST_CRASHED', message: '电子脑离线,派发失败' });
-      }
+        } else {
+        entry.usageAccepted = true;
+        this.observeUsage(() => entry.usage?.accepted(Date.now()));
+        // A synchronous transport/test may already have returned the result.
+        if (entry.usageOutcome) this.observeUsage(() => entry.usage?.settled(entry.usageOutcome!));
+        }
+      };
+      try {
+        const delivery = this.deps.sendToGhost(storagePart, payload);
+        // Desktop IPC is synchronous; the headless Chromium transport confirms
+        // delivery asynchronously. Both use the same once-only result record.
+        if (typeof delivery === 'boolean') delivered(delivery);
+        else void delivery.then(delivered, () => delivered(false));
+      } catch { delivered(false); }
     });
   }
 
@@ -264,10 +341,10 @@ export class GhostPipeDispatcher {
   }
 
   private cancelBoundCall(callId: string): void {
-    this.settle(callId, { ok: false, errorCode: 'INTERNAL', message: 'Plugin tool call cancelled' });
+    this.settle(callId, { ok: false, errorCode: 'CANCELLED', message: 'Plugin tool call cancelled' }, 'cancelled');
   }
 
-  /** Called only for an explicit cancelWithCall Node request. Legacy tools keep their lifetime. */
+  /** Explicit call-bound capabilities (Node cancelWithCall / pick). Legacy tools keep their lifetime. */
   getPendingCallSignal(ghostId: string, callId: string): AbortSignal | null {
     const entry = this.pending.get(callId);
     if (!entry || entry.ghostId !== ghostId || !this.ownerScopeUsable(ghostId, entry.ownerScopeSnapshot)) return null;
@@ -373,6 +450,7 @@ export class GhostPipeDispatcher {
     const setT = this.deps.setTimeoutFn ?? setTimeout;
     entry.timer = setT(() => {
       if (this.pending.delete(callId)) {
+        this.noteUsageOutcome(entry, 'timed-out');
         entry.detachAbort?.();
         entry.lifetime.abort();
         this.deps.log?.warn('ghost tool call timed out', {
@@ -448,7 +526,7 @@ export class GhostPipeDispatcher {
    * 重新续满一个基础档;天花板由 extendDeadline 统一钳制。
    */
   handleToolProgress(senderGhostId: string, payload: unknown): { accepted: boolean; reason?: string } {
-    const p = payload as { callId?: unknown };
+    const p = payload as { callId?: unknown; progress?: unknown; total?: unknown; message?: unknown };
     if (typeof p?.callId !== 'string') {
       return { accepted: false, reason: 'tool-progress 载荷形状不合法' };
     }
@@ -463,10 +541,38 @@ export class GhostPipeDispatcher {
       this.settle(p.callId, this.ownerBoundaryResult());
       return { accepted: false, reason: '账号边界已变化' };
     }
+    if (p.progress !== undefined) {
+      if (typeof p.progress !== 'number' || !Number.isFinite(p.progress) || p.progress < 0 ||
+          (p.total !== undefined && (typeof p.total !== 'number' || !Number.isFinite(p.total) || p.total < p.progress)) ||
+          (p.message !== undefined && (typeof p.message !== 'string' || p.message.length > 4096))) {
+        return { accepted: false, reason: 'tool-progress 进度值不合法' };
+      }
+      entry.progressHighWater = Math.max(entry.progressHighWater ?? 0, p.progress);
+      // The observer is Host-owned. It cannot change the legacy call's outcome.
+      try { entry.onProgress?.({ progress: p.progress, ...(typeof p.total === 'number' ? { total: p.total } : {}),
+        ...(typeof p.message === 'string' ? { message: p.message } : {}) }); } catch { /* detached View */ }
+    }
     if (entry.timeoutExtensionsAllowed) {
       this.extendDeadline(p.callId, entry, Date.now() + entry.baseTimeoutMs);
     }
     return { accepted: true };
+  }
+
+  /** Host transfers use cumulative work units across phases; byte counts stay in the phase message. */
+  createHostProgress(ghostId: string, callId: string | undefined) {
+    const entry = callId ? this.pending.get(callId) : undefined;
+    let previousBytes = 0;
+    return (bytes: number | undefined, total: number | undefined, message: string): void => {
+      if (!entry || !callId || this.pending.get(callId) !== entry || entry.ghostId !== ghostId) return;
+      const delta = bytes === undefined ? 1 : Math.max(0, bytes - previousBytes);
+      if (bytes !== undefined) previousBytes = bytes;
+      if (delta === 0) return;
+      const progress = (entry.progressHighWater ?? 0) + delta;
+      this.handleToolProgress(ghostId, { callId, progress,
+        ...(total !== undefined && bytes !== undefined ? { total: progress + Math.max(0, total - bytes) } : {}),
+        message: bytes === undefined ? message : `${message} (${bytes}${total === undefined ? '' : ` / ${total}`} bytes)`,
+      });
+    };
   }
 
   /**
@@ -479,6 +585,7 @@ export class GhostPipeDispatcher {
       callId?: unknown;
       ok?: unknown;
       result?: unknown;
+      images?: unknown;
       errorCode?: unknown;
       message?: unknown;
     };
@@ -502,8 +609,13 @@ export class GhostPipeDispatcher {
       this.settle(p.callId, this.ownerBoundaryResult());
       return { accepted: false, reason: '账号边界已变化' };
     }
+    // Images for the model ride next to `result`; invalid ones are dropped here.
+    const shown = p.ok ? normalizeGhostModelImages(p.images) : { images: [], dropped: 0 };
+    if (shown.dropped) {
+      this.deps.log?.warn('ghost tool result images dropped', { callId: p.callId, dropped: shown.dropped });
+    }
     const result: GhostToolCallResult = p.ok
-      ? { ok: true, result: p.result ?? null }
+      ? { ok: true, result: p.result ?? null, ...(shown.images.length ? { images: shown.images } : {}) }
       : {
           ok: false,
           errorCode: isGhostPluginErrorCode(p.errorCode) ? p.errorCode : 'INTERNAL',
@@ -531,10 +643,11 @@ export class GhostPipeDispatcher {
     }
   }
 
-  private settle(callId: string, result: GhostToolCallResult): void {
+  private settle(callId: string, result: GhostToolCallResult, outcome: PluginUsageOutcome = result.ok ? 'succeeded' : 'failed'): void {
     const entry = this.pending.get(callId);
     if (!entry) return;
     this.pending.delete(callId);
+    this.noteUsageOutcome(entry, outcome);
     (this.deps.clearTimeoutFn ?? clearTimeout)(entry.timer);
     entry.detachAbort?.();
     entry.lifetime.abort();
@@ -547,6 +660,15 @@ export class GhostPipeDispatcher {
       totalMs: Date.now() - entry.startedAt,
     });
     entry.resolve(result);
+  }
+
+  private noteUsageOutcome(entry: PendingCall, outcome: PluginUsageOutcome): void {
+    entry.usageOutcome = outcome;
+    if (entry.usageAccepted) this.observeUsage(() => entry.usage?.settled(outcome));
+  }
+
+  private observeUsage(fn: () => void): void {
+    try { fn(); } catch { this.deps.log?.warn('plugin usage observer unavailable'); }
   }
 
   private ownerScopeUsable(ghostId: string, captured: unknown): boolean {

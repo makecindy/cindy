@@ -7,7 +7,11 @@ import { retryBotInvitation, type BotProfile } from './botStore';
 import { useBotTranslation } from './botPronounContext';
 
 /** The same welcome appears while inviting and when returning to a pending companion. */
-export function BotInvitationWelcome({ bot }: { bot: BotProfile }) {
+export function BotInvitationWelcome({ bot, onConfigureModel, onRetry }: {
+  bot: BotProfile;
+  onConfigureModel?: () => void;
+  onRetry?: () => Promise<void>;
+}) {
   const { t } = useBotTranslation();
   const [retrying, setRetrying] = useState(false);
   const [retryFailed, setRetryFailed] = useState(false);
@@ -36,7 +40,7 @@ export function BotInvitationWelcome({ bot }: { bot: BotProfile }) {
           onClick={() => {
             setRetrying(true);
             setRetryFailed(false);
-            void retryBotInvitation(bot.id)
+            void Promise.resolve().then(() => onRetry ? onRetry() : retryBotInvitation(bot.id))
               .catch(() => setRetryFailed(true))
               .finally(() => setRetrying(false));
           }}
@@ -56,6 +60,11 @@ export function BotInvitationWelcome({ bot }: { bot: BotProfile }) {
           })}
         </p>
       )}
+      {onConfigureModel ? (
+        <Button variant="secondary" size="lg" type="button" disabled={retrying} onClick={onConfigureModel}>
+          {t('bots.invitation.changeModel')}
+        </Button>
+      ) : null}
       {retryFailed ? (
         <p role="alert" className="text-12 text-[var(--text-danger)]">
           {t('bots.invitation.retryFailed')}

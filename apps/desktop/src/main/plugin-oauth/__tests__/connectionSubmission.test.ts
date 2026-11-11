@@ -7,6 +7,8 @@ import { GhostSetupCoordinator } from '../../cindy-brain/ghostSetupCoordinator.j
 import { GhostSetupInteractionBridge } from '../../cindy-brain/ghostSetupInteractionBridge.js';
 import { GhostConnectionManager } from '../../cindy-brain/ghostConnections.js';
 import { executeGhostSetupConnectionSubmission } from '../../cindy-brain/ghostSetupConnectionExecutor.js';
+import { createGhostProductionCallbacks } from '../../cindy-brain/__tests__/ghostProductionCallbacksFixture.js';
+import { withRemoteOauthContext } from '../context.js';
 import { initializePluginOauthCards } from '../cards.js';
 import { assistPluginOauth, type OauthControllerDeps } from '../controller.js';
 import {
@@ -211,6 +213,31 @@ async function harness(fault?: 'vault' | 'owner' | 'manifest' | 'stale', configu
 }
 
 describe('authenticated exact-host connection form', () => {
+  it.each(['current', 'replacement', 'revoked'])('production connection binder checks its original receipt (%s)', async (state) => {
+    const h = await harness();
+    let token: string | null = 'original';
+    const action = { id: 'manage_connection:connection:service', kind: 'manage_connection' as const };
+    const manifest: GhostManifest = { schemaVersion: 3, id: 'demo', name: 'Demo', version: '1', kind: 'chip',
+      entry: 'main.js', network: { hosts: [], connections: [{ key: 'service', label: 'Service',
+        inject: { header: 'PRIVATE-TOKEN', format: '{value}' } }] } };
+    const load = createGhostProductionCallbacks<{
+      bindGhostSetupConnectionAction(args: { ghostId: string; actionId: string; onCommitted(): void }):
+        ((value: typeof input) => boolean) | null;
+    }>({ functions: ['bindGhostSetupConnectionAction'] });
+    const { bindGhostSetupConnectionAction } = load({
+      findGhostForInstanceId: () => ({ manifest }), installedGhostStoragePart: () => 'demo',
+      ghostInstallMutationTargetFor: () => token, executeGhostSetupConnectionSubmission,
+      getGhostConnectionManager: () => h.manager, getGhostSetupChangeBus: () => ({ emit() {} }),
+      getGhostSetupAssessment: () => ({ groups: [{ items: [{ kind: 'connection', ref: 'connection:service', actions: [action] }] }] }),
+    });
+    const submit = bindGhostSetupConnectionAction({ ghostId: 'demo', actionId: action.id, onCommitted: vi.fn() })!;
+    if (state !== 'current') token = state === 'replacement' ? 'replacement' : null;
+    const accepted = withRemoteOauthContext({ scope: 'test', assertCurrent: vi.fn(), authorize: vi.fn(),
+      submitConnection: async () => input, finish: vi.fn() }, () => submit(input));
+    expect(accepted).toBe(state === 'current');
+    expect(h.manager.resolveTokenByHost('demo', 'service', 'git.example.test')).toBe(state === 'current' ? input.token : null);
+    if (state !== 'current') expect(h.store).not.toHaveBeenCalled();
+  });
   it('reopens an existing connection and replaces only its token after the signed submission commits', async () => {
     const h = await harness(undefined, true);
     const before = h.manager.list('demo', 'service');

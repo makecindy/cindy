@@ -38,9 +38,18 @@ export const ui = {
       `没认出 \`${cmd}\` 这个命令 🤔\n我能听懂的: /new、/session、/project、/model、/permission、/settings、/ctr、/exctr、/stop、/help`,
     settings: ({ workspace, agent, model, effort, permission }) =>
       `⚙️ 当前设置\n\n项目：${workspace}\nAgent：${agent}\n模型：${model}\n推理强度：${effort}\n权限：${permission}\n\n想改就发 /project、/model、/permission～`,
+    // 连接已交给伙伴: 五项读的是伙伴这条任务实际在用的, 要改去伙伴设置。
+    settingsCompanion: ({ workspace, agent, model, effort, permission }) =>
+      `⚙️ 当前设置（伙伴）\n\n项目：${workspace}\nAgent：${agent}\n模型：${model}\n推理强度：${effort}\n权限：${permission}\n\n模型、权限和工作目录跟随伙伴设置，请在 Cindy 的伙伴设置里修改。`,
     detachedBySlash: '🚪 接管结束，咱们回到 Telegram 对话。下次想远程操控 desktop 再 /ctr',
     detachedByRevoke: '⚠️ 你在 desktop 那边把接管收回去了，后续消息回到 Telegram 对话。',
     notAttached: '🤷 你现在没在接管任何任务，/exctr 闲着也没事可干。',
+    // 连接已交给伙伴(伙伴即 IM 本体)时的命令提示。
+    companionDmNew:
+      '🧭 这里是伙伴的主对话，会一直接着聊，不会另开新任务。想换个话题直接说就好；需要单独做的事，伙伴会自己开后台任务。',
+    companionLaneNew: '🌱 已为这个群开始一段新对话，之前的上下文收起来了，从头开始吧~',
+    companionManagedCommand:
+      '🧭 这个连接已交给伙伴，模型、权限和工作目录跟随伙伴设置。请在 Cindy 的伙伴设置里修改。',
   },
 
   agent: {
@@ -86,12 +95,15 @@ export const ui = {
     unsupportedNotice: (entries: IMUnsupportedEntry[]) =>
       `ℹ️ 以下内容我消化不了，先丢一边了：\n${entries.map((e) => `• ${e.label}`).join('\n')}\n\n` +
       `其它部分收到啦，正在处理~`,
+    companionUnavailable: (reason: string) => `⏸ 伙伴现在接不了消息：${reason.slice(0, 200)}`,
   },
 
   error: {
     agentUnsupported: '🤔 当前 Agent 无法在 Telegram 群里完成所需的权限确认，请换一个 Agent 再试。',
     permissionModeUnsupported:
-      '🤔 当前权限设置无法用于这条 Telegram 群对话。发 /permission 换成「自动审批」后再试。',
+      (mode: string) => mode === 'bypassPermissions'
+        ? '这条群消息尚未执行：当前任务设为「完全访问」，但其他群成员的请求仍需经过审批，本次未能切换到自动审批。请机器人绑定的用户在 Cindy 中把当前任务改为「自动审批」，或发送 /permission 修改后重发。'
+        : '这条群消息尚未执行：当前权限档位无法提供群消息所需的操作审批。请机器人绑定的用户在 Cindy 中把当前任务改为「自动审批」，或发送 /permission 修改后重发。',
   },
 
   cards: {
@@ -227,4 +239,4 @@ export const ui = {
   },
 } satisfies ImUiTextPack;
 
-export const PROCESSING_EMOJI = '👨‍💻';
+export const PROCESSING_EMOJI = '🤔';

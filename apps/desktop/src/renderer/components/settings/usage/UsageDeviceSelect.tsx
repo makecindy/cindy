@@ -8,8 +8,9 @@
 
 import React from 'react';
 import { useTranslation } from 'react-i18next';
-import * as Select from '@radix-ui/react-select';
+import { SelectParts as Select, SELECT_WIDTHS } from '@/components/ui/select';
 import { Check, ChevronDown } from 'lucide-react';
+import { Button } from '@/components/ui/button';
 
 import type { UsageHistoryDevice } from '@/hooks/useUsageHistory';
 
@@ -67,7 +68,7 @@ const STATUS_KEY: Record<Exclude<UsageHistoryDevice['status'], 'ok' | 'syncing'>
 };
 
 const itemClassName =
-  'flex w-full cursor-pointer select-none items-center justify-between gap-2 rounded-lg px-3 py-2 text-left text-13 text-[var(--text-primary)] outline-none data-[highlighted]:bg-[var(--surface-hover)] data-[state=checked]:bg-[var(--settings-menu-bg-selected)] data-[state=checked]:font-medium data-[state=checked]:text-[var(--settings-menu-text-selected)]';
+  'flex w-full cursor-pointer select-none items-center justify-between gap-2 rounded-lg px-3 py-2 text-left text-13 text-[var(--text-primary)] outline-none data-[state=checked]:font-medium data-[state=checked]:text-[var(--settings-menu-text-selected)]';
 
 export function UsageDeviceSelect({
   value,
@@ -111,16 +112,23 @@ export function UsageDeviceSelect({
 
   return (
     <Select.Root value={value} onValueChange={onValueChange}>
-      <Select.Trigger
-        aria-label={t('usageHistory.device.ariaLabel')}
-        className="flex h-9 w-[190px] items-center justify-between gap-2 rounded-full border border-[var(--border-default)] bg-[var(--surface-elevated)] px-3 text-13 text-[var(--text-primary)] outline-none focus:ring-2 focus:ring-[var(--focus-ring-soft)]"
-      >
-        <span className="min-w-0 truncate">
-          <Select.Value />
-        </span>
-        <Select.Icon asChild>
-          <ChevronDown size={15} className="shrink-0 text-[var(--text-tertiary)]" />
-        </Select.Icon>
+      {/* Shared Select trigger (secondary Button, 36px pill) at the 220px width preset;
+          SelectParts keeps the two-line options the shared Select does not render. */}
+      <Select.Trigger data-settings-search-action="Choose which devices the usage history covers" asChild>
+        <Button data-settings-search-action="Choose which devices the usage history covers"
+          pressFeedback={false}
+          variant="secondary"
+          size="lg"
+          aria-label={t('usageHistory.device.ariaLabel')}
+          className={`${SELECT_WIDTHS.sm} min-w-0 max-w-full justify-between gap-2 px-3 font-normal`}
+        >
+          <span className="min-w-0 truncate text-left">
+            <Select.Value />
+          </span>
+          <Select.Icon asChild>
+            <ChevronDown size={14} className="shrink-0" aria-hidden="true" />
+          </Select.Icon>
+        </Button>
       </Select.Trigger>
       <Select.Portal>
         <Select.Content
@@ -128,7 +136,7 @@ export function UsageDeviceSelect({
           side="bottom"
           align="end"
           sideOffset={4}
-          className="z-[10010] w-[var(--radix-select-trigger-width)] overflow-hidden rounded-xl border border-[var(--border-default)] bg-[var(--surface-elevated)] p-1"
+          className="z-[10010] w-[var(--radix-select-trigger-width)] overflow-hidden rounded-xl border border-[var(--border-default)] bg-[var(--surface-elevated)] p-1.5"
         >
           <Select.Viewport>
             {options.map((option) => {

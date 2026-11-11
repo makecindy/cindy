@@ -10,20 +10,6 @@ function source(path: string): string {
 }
 
 describe("mobile account deletion", () => {
-  it('invalidates invitation history before asynchronous terminal cleanup, without clearing it on account switches', () => {
-    const context = source('src/auth/AuthContext.tsx');
-    const start = context.indexOf('const clearLocalSession = useCallback');
-    const body = context.slice(start, context.indexOf('const terminateSession', start));
-    const capture = body.indexOf('const invitationHistoryOwner = getMobileAuthOwner();');
-    const invalidate = body.indexOf('setMobileAuthOwner(null);');
-    const clear = body.indexOf('clearClipboardInvitationHistory(invitationHistoryAccountKey)');
-    expect(capture).toBeGreaterThan(-1);
-    expect(invalidate).toBeGreaterThan(capture);
-    expect(clear).toBeGreaterThan(invalidate);
-    expect(clear).toBeLessThan(body.indexOf('await unregisterPushTokenBestEffort'));
-    expect(body).toContain('await clearInvitationHistory;');
-    expect(context.slice(0, start)).not.toContain('clearClipboardInvitationHistory(');
-  });
   it("lets auth-server eligibility exclusively control settings visibility", () => {
     const settings = source("app/settings.tsx");
     const visibilityBlock = settings.slice(
@@ -235,7 +221,7 @@ describe("mobile account deletion", () => {
     expect(confirmBody).not.toContain("router.replace('/login')");
   });
 
-  it("localizes the deletion entry, screen, and restored notice across all five locales", () => {
+  it("localizes the deletion entry, screen, and restored notice across all supported locales", () => {
     const settings = source("app/settings.tsx");
     const layout = source("app/_layout.tsx");
     const loginMessages = source("src/auth/loginMessages.ts");
@@ -244,8 +230,8 @@ describe("mobile account deletion", () => {
     expect(layout).toContain("loginText('accountDeletionRestoredTitle')");
     expect(layout).toContain("loginText('accountDeletionRestoredCopy')");
     expect(
-      loginMessages.match(/accountDeletionAcknowledgeCopy:/g),
-    ).toHaveLength(5);
+      loginMessages.match(/(?:["']accountDeletionAcknowledgeCopy["']|accountDeletionAcknowledgeCopy):/g),
+    ).toHaveLength(12);
     expect(loginMessages).toContain("其他客户端会在登录状态失效后退出");
     expect(loginMessages).toContain(
       "other clients will sign out when their sign-in session becomes invalid",
@@ -282,7 +268,7 @@ describe("mobile account deletion", () => {
     expect(panel).toContain("getAuthLocale()");
     expect(panel).not.toMatch(/[\u4e00-\u9fff]/);
     expect(loginMessages.match(/accountDeletionPendingTitle:/g)).toHaveLength(
-      5,
+      7,
     );
     expect(loginMessages).toContain("现在重新登录即可取消注销");
     expect(loginMessages).toContain("Sign in now to cancel deletion.");

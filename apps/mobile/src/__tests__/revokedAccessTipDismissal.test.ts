@@ -1,3 +1,4 @@
+// guard: DESIGN.md Dialog & Modal closing affordance: backdrop, explicit close and system Back must use the same closing contract.
 import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
 import { describe, expect, it } from "vitest";

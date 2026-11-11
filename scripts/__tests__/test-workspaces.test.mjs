@@ -1,8 +1,9 @@
 import assert from "node:assert/strict";
 import fs from "node:fs";
+import net from "node:net";
 import os from "node:os";
 import path from "node:path";
-import { spawn } from "node:child_process";
+import { execFileSync, spawn } from "node:child_process";
 import { EventEmitter } from "node:events";
 import test from "node:test";
 import { fileURLToPath } from "node:url";
@@ -33,6 +34,9 @@ import {
 	discoverTestFiles,
 	expandWorkspacePatterns,
 	filterRunsByWorkspace,
+	findDependencyInstallIssues,
+	selectionNeedsElectron,
+	stripAgentEnvPollutants,
 	isIgnoredFile,
 	mapWithConcurrency,
 	normalizeRelPath,
@@ -44,6 +48,7 @@ import {
 	printSummary,
 	readAllFiles,
 	resolveOutputStream,
+	resolveTestInvocation,
 	runCommand,
 	runPlannedTests,
 	runWithExclusiveBarriers,
@@ -56,8 +61,230 @@ import {
 	usablePnpmExecPath,
 } from "../shared/pnpm-invocation.mjs";
 import { findSymlinkPlatformSkips } from "../shared/symlink-test-guard.mjs";
+import {
+	assertMigrationReplayRan,
+	databaseEntrypoints,
+	databaseTestRuns,
+	detectDatabaseChanges,
+	needsDatabaseTests,
+	requireDatabasePlatform,
+} from "../ci-database-tests.mjs";
+
+import { detectHostChanges, needsHostTests } from "../ci-host-tests.mjs";
+
+// Runner tier: the experimental Host must not allocate three OS jobs for a
+// mobile/docs-only change, or silently skip shared inputs/deletions/unknown
+// event ranges. Existing DB selection tests do not cover this new CI entry.
+test("Host CI selects shared runtime and infrastructure but skips unrelated changes", () => {
+	for (const file of [
+		"apps/host/src/main.ts", "apps/web/shim.js",
+		"apps/desktop/src/main/localDb/schema.ts", "apps/desktop/src/renderer/main.tsx",
+		"apps/desktop/drizzle/0145.sql", "apps/desktop/native/sqlite-vec/vec0.dll",
+		"apps/codex-package-bin/package.json", "packages/maker-core/src/index.ts",
+		"packages/auth-client/src/index.ts", "scripts/ci-host-tests.mjs",
+		"scripts/shared/pnpm-invocation.mjs", "patches/tsx.patch",
+		"pnpm-lock.yaml", "package.json", "pnpm-workspace.yaml", ".npmrc", ".github/workflows/ci.yml",
+	]) assert.equal(needsHostTests([file]), true, file);
+	assert.equal(needsHostTests(["README.md", "docs/host/basic-web.md", "apps/mobile/app/index.tsx", ".github/ISSUE_TEMPLATE/bug.yml"]), false);
+	assert.equal(needsHostTests([]), false);
+});
+
+test("Host CI compares PR, merge queue and push ranges without losing deleted paths", () => {
+	const base = "a".repeat(40), head = "b".repeat(40);
+	for (const [eventName, event] of [
+		["pull_request", { pull_request: { base: { sha: base } } }],
+		["merge_group", { merge_group: { base_sha: base } }],
+		["push", { before: base }],
+	]) {
+		const result = detectHostChanges({ eventName, event, head, git(command, args) {
+			assert.equal(command, "git");
+			assert.deepEqual(args, ["diff", "--name-only", "--no-renames", "-z", base, head, "--"]);
+			return "apps/host/removed.mjs\0docs/moved file\nname.mjs\0";
+		} });
+		assert.equal(result.required, true);
+		assert.deepEqual(result.files, ["apps/host/removed.mjs", "docs/moved file\nname.mjs"]);
+		assert.equal(detectHostChanges({ eventName, event, head, git: () => "apps/mobile/app/index.tsx\0" }).required, false);
+	}
+});
+
+test("Host CI runs manual or unknown ranges and never treats Git errors as unrelated", () => {
+	for (const [eventName, event] of [["workflow_dispatch", {}], ["pull_request", {}], ["push", { before: "0".repeat(40) }]]) {
+		assert.equal(detectHostChanges({ eventName, event, git() { assert.fail("absent base"); } }).required, true);
+	}
+	assert.throws(() => detectHostChanges({ eventName: "push", event: { before: "bad" }, head: "b".repeat(40) }), /complete event base\/head/);
+	assert.throws(() => detectHostChanges({ eventName: "push", event: { before: "a".repeat(40) }, head: "b".repeat(40), git() { throw new Error("missing commit"); } }), /missing commit/);
+});
 
 const ROOT = path.resolve(fileURLToPath(new URL("../..", import.meta.url)));
+
+// Runner tier regression: db:validate is static and Linux silently skips replay.
+// The CI entry must select real DB tests for sensitive changes, preserve event
+// boundaries, and reject missing/skipped replay evidence. Existing runner tests
+// only covered manual tier selection; these minimal inputs cover the CI gap.
+test("database CI distinguishes database/runtime inputs from unrelated PRs", () => {
+	for (const file of [
+		"apps/desktop/drizzle/0145_example.sql",
+		"apps/desktop/drizzle/scripts/0145_example.ts",
+		"apps/desktop/drizzle/meta/_journal.json",
+		"apps/desktop/src/main/localDb/schema.ts",
+		"apps/desktop/src/main/localDb/ipc/conversationSearch.ts",
+		"apps/desktop/src/main/localDb/__tests__/fixtures/v39.sql",
+		"apps/desktop/src/main/__tests__/schemaDriftRepair.test.ts",
+		"apps/desktop/src/main/scheduler-host/store.ts",
+		"apps/desktop/native/sqlite-vec/win32-x64/vec0.dll",
+		"apps/desktop/package.json", "pnpm-lock.yaml", ".github/workflows/ci.yml",
+		"scripts/ci-database-tests.mjs", "scripts/test-workspaces.config.mjs",
+		"scripts/vitest-database-ci.config.mjs",
+	]) assert.equal(needsDatabaseTests([file]), true, file);
+	assert.equal(needsDatabaseTests([
+		"README.md", "docs/dev-rules/database-and-migrations.md",
+		"apps/mobile/app/index.tsx", "apps/desktop/src/renderer/main.tsx",
+		"packages/maker-core/src/agents/codex/translator.ts",
+		"apps/desktop/src/main/localDbOther/example.ts",
+	]), false);
+});
+
+test("database CI gates sources outside localDb that DB-tier tests import directly", () => {
+	const files = readAllFiles(path.join(ROOT, "apps/desktop")).map(file => `apps/desktop/${file}`);
+	const entrypoints = databaseEntrypoints(files, ROOT);
+	const changed = "apps/desktop/src/main/git-context/prRefsStore.ts";
+	assert.equal(needsDatabaseTests([changed]), false);
+	assert.equal(needsDatabaseTests([changed], entrypoints), true);
+	assert.equal(needsDatabaseTests(["apps/desktop/src/renderer/main.tsx"], entrypoints), false);
+	const runs = databaseTestRuns(ROOT, files, os.tmpdir(), [changed]);
+	assert.deepEqual(runs.map(run => run.tier), ["migration", "db", "db-related"]);
+	assert.ok(runs[2].pnpmArgs.includes("src/main/git-context/prRefsStore.ts"));
+});
+
+test("database CI compares each event base to the checked-out head and preserves removed paths", () => {
+	const base = "a".repeat(40);
+	const head = "b".repeat(40);
+	for (const [eventName, event] of [
+		["pull_request", { pull_request: { base: { sha: base } } }],
+		["merge_group", { merge_group: { base_sha: base } }],
+		["push", { before: base }],
+	]) {
+		const result = detectDatabaseChanges({ eventName, event, head, git(command, args) {
+			assert.equal(command, "git");
+			assert.deepEqual(args, ["diff", "--name-only", "--no-renames", "-z", base, head, "--"]);
+			return "apps/desktop/src/main/localDb/removed.ts\0docs/moved file\nname.ts\0";
+		} });
+		assert.equal(result.required, true);
+		assert.deepEqual(result.files, ["apps/desktop/src/main/localDb/removed.ts", "docs/moved file\nname.ts"]);
+	}
+	assert.equal(detectDatabaseChanges({ eventName: "push", event: { before: base }, head, git: () => "README.md\0" }).required, false);
+});
+
+test("database CI runs conservatively without a base and fails on unusable Git evidence", () => {
+	for (const [eventName, event] of [["workflow_dispatch", {}], ["pull_request", {}], ["push", { before: "0".repeat(40) }]]) {
+		assert.equal(detectDatabaseChanges({ eventName, event, git() { assert.fail("must not compare an absent base"); } }).required, true);
+	}
+	assert.throws(() => detectDatabaseChanges({ eventName: "push", event: { before: "bad" }, head: "b".repeat(40) }), /complete event base\/head/);
+	assert.throws(() => detectDatabaseChanges({ eventName: "push", event: { before: "a".repeat(40) }, head: "b".repeat(40), git() { throw new Error("missing commit"); } }), /missing commit/);
+});
+
+test("database CI detects a real rename out of the DB tree and writes the Actions output", () => {
+	const root = fs.mkdtempSync(path.join(os.tmpdir(), "cindy-db-ci-git-"));
+	try {
+		const git = (...args) => execFileSync("git", args, { cwd: root, encoding: "utf8" }).trim();
+		git("init", "--quiet");
+		const oldFile = path.join(root, "apps/desktop/src/main/localDb/example.ts");
+		fs.mkdirSync(path.dirname(oldFile), { recursive: true });
+		fs.writeFileSync(oldFile, "export const fixture = true;\n");
+		git("add", ".");
+		const commit = () => git("-c", "user.name=CI Fixture", "-c", "user.email=ci-fixture@example.invalid", "-c", "commit.gpgsign=false", "commit", "--quiet", "--no-verify", "-m", "fixture");
+		commit();
+		const base = git("rev-parse", "HEAD");
+		fs.renameSync(oldFile, path.join(root, "renamed.ts"));
+		git("add", "--all");
+		commit();
+		const result = detectDatabaseChanges({ root, eventName: "push", event: { before: base }, head: git("rev-parse", "HEAD") });
+		assert.equal(result.required, true);
+		assert.ok(result.files.includes("apps/desktop/src/main/localDb/example.ts"));
+		assert.ok(result.files.includes("renamed.ts"));
+		const eventFile = path.join(root, "event.json");
+		const outputFile = path.join(root, "output.txt");
+		fs.writeFileSync(eventFile, "{}");
+		execFileSync(process.execPath, [path.join(ROOT, "scripts/ci-database-tests.mjs"), "detect"], {
+			env: { ...process.env, GITHUB_EVENT_NAME: "workflow_dispatch", GITHUB_EVENT_PATH: eventFile, GITHUB_OUTPUT: outputFile },
+		});
+		assert.equal(fs.readFileSync(outputFile, "utf8"), "required=true\n");
+	} finally {
+		fs.rmSync(root, { recursive: true, force: true });
+	}
+});
+
+test("database CI selects core DB for infrastructure, related DB for sources, and full DB for unknown or removed inputs", () => {
+	const files = readAllFiles(path.join(ROOT, "apps/desktop")).map(file => `apps/desktop/${file}`);
+	const runs = databaseTestRuns(ROOT, files, os.tmpdir());
+	assert.deepEqual(runs.map(run => run.tier), ["migration", "db"]);
+	const desktop = manifest.workspaces.find(workspace => workspace.name === "desktop");
+	for (const run of runs) {
+		assert.deepEqual(run.selected, selectFilesForTier(desktop, desktop.tiers[run.tier], files));
+		assert.ok(run.pnpmArgs.includes("--maxWorkers=2"));
+		assert.ok(run.pnpmArgs.includes("--reporter=json"));
+		assert.equal(run.pnpmArgs.includes("--passWithNoTests"), false);
+		assert.equal(run.selected.some(file => file.endsWith("drizzle-proxy-perf.test.ts")), false);
+		assert.equal(run.pnpmArgs[2], "exec");
+		assert.equal(run.pnpmArgs[3], "vitest");
+	}
+	assert.ok(runs[0].selected.some(file => file.endsWith("/migrationReplay.test.ts")));
+	const migrationFiles = runs[0].selected;
+	const fullDbFiles = runs[1].selected;
+	for (const changed of [[".github/workflows/ci.yml"], ["pnpm-lock.yaml"], ["apps/desktop/drizzle/0145_example.sql"]]) {
+		const core = databaseTestRuns(ROOT, files, os.tmpdir(), changed);
+		assert.deepEqual(core.map(run => run.tier), ["migration", "db"]);
+		assert.deepEqual(core[0].selected, migrationFiles);
+		assert.ok(core[1].selected.length < fullDbFiles.length);
+		assert.ok(core[1].selected.every(file => fullDbFiles.includes(file)));
+		assert.ok(core[1].selected.includes("apps/desktop/src/main/localDb/__tests__/migrationCompatibility.test.ts"));
+		assert.ok(core[1].selected.includes("apps/desktop/src/main/__tests__/betterSqliteFactory.test.ts"));
+		assert.equal(core[1].selected.some(file => file.endsWith("/migrationReplay.test.ts")), false);
+	}
+	for (const changed of [
+		"apps/desktop/src/main/localDb/sessionQueries.ts",
+		"apps/desktop/src/main/localDb/__tests__/sessionListPagination.test.ts",
+	]) {
+		const related = databaseTestRuns(ROOT, files, os.tmpdir(), [changed]);
+		assert.deepEqual(related.map(run => run.tier), ["migration", "db", "db-related"]);
+		assert.deepEqual(related[0].selected, migrationFiles);
+		assert.deepEqual(related[2].selected, fullDbFiles);
+		const args = related[2].pnpmArgs;
+		assert.equal(args[4], "related");
+		assert.ok(args.includes(changed.slice("apps/desktop/".length)));
+		assert.equal(args[args.indexOf("--config") + 1], path.join(ROOT, "scripts/vitest-database-ci.config.mjs"));
+		assert.ok(args.includes("--exclude"));
+		assert.ok(args.includes("src/main/localDb/__tests__/drizzle-proxy-perf.test.ts"));
+	}
+	for (const changed of [
+		"apps/desktop/src/main/localDb/removed-source.ts",
+		"apps/desktop/src/main/localDb/__tests__/fixtures/schema-v39-orca-workflow.sql",
+		"apps/desktop/src/main/localDb/__tests__/fixtures/schemaLeaseChild.ts",
+	]) {
+		const full = databaseTestRuns(ROOT, files, os.tmpdir(), [changed]);
+		assert.deepEqual(full.map(run => run.tier), ["migration", "db"]);
+		assert.deepEqual(full[0].selected, migrationFiles);
+		assert.deepEqual(full[1].selected, fullDbFiles);
+	}
+	assert.throws(() => databaseTestRuns(ROOT, [], os.tmpdir()), /matched no tests/);
+});
+
+test("database CI requires a supported platform and actual replay evidence, not other passing migrations", () => {
+	for (const platform of ["darwin", "win32"]) assert.doesNotThrow(() => requireDatabasePlatform(platform));
+	assert.throws(() => requireDatabasePlatform("linux"), /skips on linux/);
+	const replay = {
+		name: path.join(ROOT, "apps/desktop/src/main/localDb/__tests__/migrationReplay.test.ts"),
+		status: "passed", assertionResults: [{ status: "passed" }],
+	};
+	assert.doesNotThrow(() => assertMigrationReplayRan({ success: true, testResults: [replay] }));
+	for (const report of [
+		{}, { success: true, testResults: [] },
+		{ success: true, testResults: [{ ...replay, name: "otherMigration.test.ts" }] },
+		{ success: false, testResults: [replay] },
+		{ success: true, testResults: [{ ...replay, assertionResults: [] }] },
+		...['pending', 'skipped', 'todo', 'failed'].map(status => ({ success: true, testResults: [{ ...replay, assertionResults: [{ status: "passed" }, { status }] }] })),
+	]) assert.throws(() => assertMigrationReplayRan(report), /Migration replay/);
+});
 
 function readRootScripts() {
 	return JSON.parse(fs.readFileSync(path.join(ROOT, "package.json"), "utf8"))
@@ -214,16 +441,25 @@ test("unit workspace concurrency reserves the full worker budget for heavy works
 		"--maxWorkers=4",
 		...unitTestShardArgs(),
 	]);
-	assert.equal(makerCore.tiers.unit.execution, undefined);
+	// maker-core scales linearly with workers, so it must not overlap the
+	// one-worker package pool where it used to finish last in every shard.
+	assert.equal(makerCore.tiers.unit.execution, "exclusive");
 	assert.deepEqual(makerCore.tiers.unit.exclude, [
 		"**/*.integration.test.ts",
 		"**/*.e2e.test.ts",
 		"**/*.git-integration.test.ts",
+		"src/agents/shared/auto-review-remote-wiring.test.ts",
+		"src/agents/pi/__tests__/pi-extra-dirs-prompt.test.ts",
 	]);
 	assert.deepEqual(makerCore.tiers.unit.command, {
 		type: "packageBin",
 		bin: "vitest",
-		args: ["run", "--pool=forks", "--maxWorkers=1", ...unitTestShardArgs()],
+		args: [
+			"run",
+			"--pool=forks",
+			`--maxWorkers=${desktopUnitWorkerCount()}`,
+			...unitTestShardArgs(),
+		],
 	});
 });
 
@@ -253,7 +489,13 @@ test("real agent integration tests are explicit tiers outside unit", () => {
 	]);
 	assert.deepEqual(desktop.tiers.e2e.include, [
 		"src/main/maker-host/__tests__/*.e2e.test.ts",
+		"src/main/maker-host/__tests__/codexTerraProxy.integration.test.ts",
+		"src/main/remote-agent/__tests__/groupRelayClaudeFork.e2e.test.ts",
+		"src/main/remote-agent/__tests__/startupProbe.e2e.test.ts",
 	]);
+	const terraProxyTest = "apps/desktop/src/main/maker-host/__tests__/codexTerraProxy.integration.test.ts";
+	assert.deepEqual(selectFilesForTier(desktop, desktop.tiers.e2e, [terraProxyTest]), [terraProxyTest]);
+	assert.deepEqual(selectFilesForTier(desktop, desktop.tiers.unit, [terraProxyTest]), []);
 });
 
 test("Pi RPC lifecycle stays in unit while binary resource discovery stays in integration", () => {
@@ -503,6 +745,7 @@ test("desktop unit excludes integration, migration, direct db-tier, and source-c
 			"src/main/scheduler-host/__tests__/*.db.test.ts",
 			"src/main/__tests__/directSessionSendGuard.test.ts",
 			"src/main/__tests__/makerSendToSessionOrdering.test.ts",
+			"src/main/__tests__/authCaptchaIpcSecurity.test.ts",
 			"**/*.bench.ts",
 		],
 	};
@@ -522,6 +765,7 @@ test("desktop unit excludes integration, migration, direct db-tier, and source-c
 			"apps/desktop/src/main/scheduler-host/__tests__/storage.test.ts",
 			"apps/desktop/src/main/__tests__/directSessionSendGuard.test.ts",
 			"apps/desktop/src/main/__tests__/makerSendToSessionOrdering.test.ts",
+			"apps/desktop/src/main/__tests__/authCaptchaIpcSecurity.test.ts",
 			"apps/desktop/src/main/__tests__/lifecycle.test.ts",
 		]),
 		[
@@ -691,16 +935,35 @@ test("desktop guard selects source-contract tests only", () => {
 	const tier = workspace.tiers.guard;
 	assert.equal(tier.status, "required");
 	assert.equal(tier.coverage, "allowlist");
+	// Allowlist entries are exact paths: a renamed or deleted guard file would
+	// otherwise drop out of the gate silently, and one not excluded from unit
+	// would run twice in CI.
+	for (const file of tier.include) {
+		assert.ok(
+			fs.existsSync(path.join(ROOT, workspace.cwd, file)),
+			`guard allowlist entry does not exist: ${file}`,
+		);
+		assert.ok(
+			workspace.tiers.unit.exclude.includes(file),
+			`guard file must be excluded from desktop unit: ${file}`,
+		);
+	}
 	assert.deepEqual(
 		selectFilesForTier(workspace, tier, [
+			"apps/desktop/src/main/plugin-oauth/__tests__/runtimePrompt.test.ts",
 			"apps/desktop/src/main/__tests__/directSessionSendGuard.test.ts",
 			"apps/desktop/src/main/__tests__/makerSendToSessionOrdering.test.ts",
+			"apps/desktop/src/main/__tests__/authCaptchaIpcSecurity.test.ts",
+			"apps/desktop/src/main/cindy-brain/__tests__/ghostIpcSenderTrust.test.ts",
 			"apps/desktop/src/main/__tests__/lifecycle.test.ts",
 			"apps/desktop/src/main/localDb/ipc/messages.test.ts",
 		]),
 		[
+			"apps/desktop/src/main/plugin-oauth/__tests__/runtimePrompt.test.ts",
 			"apps/desktop/src/main/__tests__/directSessionSendGuard.test.ts",
 			"apps/desktop/src/main/__tests__/makerSendToSessionOrdering.test.ts",
+			"apps/desktop/src/main/__tests__/authCaptchaIpcSecurity.test.ts",
+			"apps/desktop/src/main/cindy-brain/__tests__/ghostIpcSenderTrust.test.ts",
 		],
 	);
 });
@@ -710,11 +973,6 @@ test("manifest reasons use current local-test terminology", () => {
 	assert.doesNotMatch(manifestText, /Phase 1/);
 	assert.doesNotMatch(manifestText, /uses Electron and DB worker setup/);
 
-	const desktop = manifest.workspaces.find(
-		(workspace) => workspace.cwd === "apps/desktop",
-	);
-	assert.match(desktop.tiers.db.reason, /explicit DB tier/);
-	assert.match(desktop.tiers.migration.reason, /explicit DB tier/);
 });
 
 test("desktop DB tiers are explicit manual tiers outside test:all", () => {
@@ -927,12 +1185,31 @@ test("planRuns includes manual tiers only for explicit tier runs", () => {
 	assert.equal(planRuns(workspaces, { tier: "db", explicit: false }).length, 0);
 });
 
-test("planRuns includes the required desktop guard tier", () => {
+test("planRuns keeps required guard tiers from competing with the typed-send scan", async () => {
 	const runs = planRuns(manifest.workspaces, { tier: "guard" });
 	assert.deepEqual(
 		runs.map((run) => [run.workspace.cwd, run.tier]),
-		[["apps/desktop", "guard"]],
+		[
+			["apps/desktop", "guard"],
+			["apps/mobile", "guard"],
+			["packages/maker-core", "guard"],
+		],
 	);
+	// PR #6196: CI ran both default CPU-sized pools beside the 1 GiB TS
+	// Program and twice hit its existing 15s limit. Use the real manifest and
+	// scheduler: two guard runs plus one microtask must never overlap Desktop.
+	// This observes scheduling, not source text or host-dependent timings.
+	let active = 0;
+	await runWithExclusiveBarriers(runs, 2, async (run) => {
+		assert.equal(active, 0, "Desktop's runtime guard must have the workspace budget");
+		active += 1;
+		await Promise.resolve();
+		active -= 1;
+		if (run.workspace.cwd === "apps/desktop") {
+			assert.ok(run.tierConfig.command.args.includes("--maxWorkers=1"),
+				"other Desktop guards must not compete with the TypeScript Program");
+		}
+	});
 });
 
 test("filterRunsByWorkspace selects by manifest name or cwd and supports exclude", () => {
@@ -1233,7 +1510,7 @@ function raceWithDeadline(candidates, deadlineMs, deadlineValue) {
 	});
 }
 
-test("two real test gate lock holders serialize on the same identity", async () => {
+test("two real test gate lock holders serialize after a probe resets its connection", async () => {
 	const root = fs.mkdtempSync(path.join(os.tmpdir(), "test-gate-real-lock-"));
 	let firstLock;
 	let secondLockPromise;
@@ -1249,6 +1526,16 @@ test("two real test gate lock holders serialize on the same identity", async () 
 			lockPortCount: REAL_LOCK_TEST_PORT_COUNT,
 			lockPortStride: REAL_LOCK_TEST_PORT_STRIDE,
 			output: () => {},
+		});
+		// Regression: an early-disconnecting probe emitted an unhandled ECONNRESET
+		// on the holder's accepted socket, terminating the gate before tests finished.
+		// Existing serialization coverage only exercised graceful probes. One real
+		// loopback RST now verifies the public lock entry stays available (runner tier).
+		await new Promise((resolve, reject) => {
+			const probe = net.createConnection({ host: "127.0.0.1", port: firstLock.port });
+			probe.once("error", reject);
+			probe.once("connect", () => probe.resetAndDestroy());
+			probe.once("close", resolve);
 		});
 		secondLockPromise = acquireTestGateLock({
 			repoRoot: root,
@@ -2038,14 +2325,14 @@ test("runPlannedTests passes selected include files to packageBin commands", asy
 			return { exitCode: 0, output: "PASS" };
 		},
 	});
-	// Windows 上 resolvePnpmInvocation 会通过 cmd.exe 包装，实际 pnpm 参数
-	// 放在 env 的 CINDY_PNPM_CMD_ARG_N 里。其他平台参数直接在 args 里。
+	// Non-Vitest wrappers may carry arguments through cmd environment slots;
+	// directly launched Vitest keeps them in the argv array on every platform.
 	const call = calls[0];
-	const pnpmArgs = call.options?.env
-		? Object.keys(call.options.env)
-				.filter((k) => k.startsWith("CINDY_PNPM_CMD_ARG_"))
-				.sort()
-				.map((k) => call.options.env[k])
+	const cmdEnvKeys = Object.keys(call.options?.env ?? {})
+		.filter((k) => k.startsWith("CINDY_PNPM_CMD_ARG_"))
+		.sort();
+	const pnpmArgs = cmdEnvKeys.length
+		? cmdEnvKeys.map((k) => call.options.env[k])
 		: call.args;
 	assert.deepEqual(pnpmArgs.slice(-1), [
 		"src/__tests__/orca-bridge-mcp.test.ts",
@@ -2065,6 +2352,56 @@ test("buildPnpmArgs rejects selected files outside the workspace", () => {
 			),
 		/Selected test file is outside workspace packages\/orca-workflow: packages\/other\/src\/foo\.test\.ts/,
 	);
+});
+
+// PR #6196: the guard exclusion list crossed cmd.exe's 8191-character limit
+// inside pnpm exec on Windows. Exercise the real runner and a small existing
+// suite; nonmatching exclusions reproduce the launch failure without changing
+// test selection or creating another Vitest harness.
+test("Windows long Vitest arguments reach the test process without cmd truncation", async () => {
+	const values = ["a space", "中文", 'a"quote', "%TEMP%", "a&b", "a^b", "long-".repeat(1800)];
+	const echoArgs = ["--dir", ROOT, "exec", "vitest", "process.stdout.write(JSON.stringify(process.argv.slice(1)))", "--", ...values];
+	const options = { platform: "win32", execPath: process.execPath, vitestEntry: "-e", env: { ...process.env, Path: "original-path", PATH: "duplicate-path" } };
+	for (const npmExecPath of [undefined, "pnpm.cmd"]) {
+		const invocation = resolveTestInvocation(echoArgs, { ...options, npmExecPath });
+		assert.equal(invocation.command, process.execPath);
+		assert.equal(invocation.shell, false);
+		assert.equal(Object.keys(invocation.env).filter((key) => key.toLowerCase() === "path").length, 1);
+		const echoed = await runCommand(invocation.command, invocation.args, { env: invocation.env, shell: false, stdout: null, stderr: null });
+		assert.equal(echoed.exitCode, 0, echoed.output);
+		assert.deepEqual(JSON.parse(echoed.output), values);
+	}
+	for (const [args, platform] of [[echoArgs, "linux"], [["--dir", ROOT, "run", "test"], "win32"], [["--dir", ROOT, "exec", "other-tool"], "win32"]]) {
+		const fallbackOptions = { platform, npmExecPath: "/tools/pnpm.cjs", execPath: process.execPath };
+		assert.deepEqual(resolveTestInvocation(args, fallbackOptions), resolvePnpmInvocation(args, fallbackOptions));
+	}
+	const file = "src/main/agent-island/__tests__/nativeContracts.test.ts";
+	const workspace = {
+		name: "desktop",
+		cwd: "apps/desktop",
+		status: "required",
+		tiers: {
+			guard: {
+				status: "required",
+				coverage: "allowlist",
+				command: { type: "packageBin", bin: "vitest", args: ["run", "--pool=forks", "--maxWorkers=1"] },
+				include: [file],
+				exclude: Array.from({ length: 90 }, (_, i) => "src/never-selected/" + "long-path-".repeat(10) + i + ".test.ts"),
+			},
+		},
+	};
+	const files = ["apps/desktop/" + file];
+	const pnpmArgs = buildPnpmArgs(ROOT, workspace, workspace.tiers.guard.command, workspace.tiers.guard, files);
+	assert.ok(pnpmArgs.join(" ").length > 8191);
+	const [result] = await runPlannedTests({
+		root: ROOT,
+		workspaceCwds: [workspace.cwd],
+		manifest: { workspaces: [workspace] },
+		allFiles: files,
+		tier: "guard",
+	});
+	assert.equal(result.exitCode, 0, result.output);
+	assert.match(result.output, /nativeContracts\.test\.ts/);
 });
 
 test("buildPnpmArgs switches vitest to related mode when related files are provided", () => {
@@ -2115,6 +2452,15 @@ test("buildPnpmArgs only loosens Vitest sharding for undersized workspaces", () 
 		]).includes("--passWithNoTests"),
 		false,
 	);
+
+	// Vitest slices ceil(6 / 4) = 2 files per shard, leaving shard 4 empty even
+	// though the workspace has more files than shards.
+	const sixFiles = Array.from(
+		{ length: 6 },
+		(_, i) => `packages/example/src/case-${i}.test.ts`,
+	);
+	assert.equal(buildShard("3/4", sixFiles).includes("--passWithNoTests"), false);
+	assert.equal(buildShard("4/4", sixFiles).includes("--passWithNoTests"), true);
 });
 
 test("runPlannedTests all mode runs required configured tiers and skips manual tiers", async () => {
@@ -2225,10 +2571,11 @@ test("CLI runs independently while another worktree budget is held, and waits on
 	const root = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), "test-lock-opt-in-")));
 	let heldLock;
 	try {
-		for (const dir of [".git", "scripts/shared", "packages/sample"]) {
+		for (const dir of [".git", "scripts/shared", "packages/sample", "node_modules"]) {
 			fs.mkdirSync(path.join(root, dir), { recursive: true });
 		}
-		for (const file of ["test-workspaces.mjs", "test-related.mjs", "shared/pnpm-invocation.mjs"]) {
+		fs.writeFileSync(path.join(root, "node_modules/.modules.yaml"), "{}");
+		for (const file of ["test-workspaces.mjs", "test-related.mjs", "ensure-deps.mjs", "shared/pnpm-invocation.mjs"]) {
 			fs.copyFileSync(path.join(ROOT, "scripts", file), path.join(root, "scripts", file));
 		}
 		// Both the holder and the real CLI child must use the same dispersed test
@@ -2262,6 +2609,7 @@ export const acquireTestGateLock = (options) => acquire({ ...options, ...${JSON.
 			});
 			let output = "";
 			let failure;
+			// real-wait: watchdog for a real CLI child; the close event clears it without waiting.
 			const timer = setTimeout(() => {
 				failure = new Error(`CLI did not finish: ${output}`);
 				child.kill();
@@ -2298,4 +2646,49 @@ export const acquireTestGateLock = (options) => acquire({ ...options, ...${JSON.
 		await heldLock?.release();
 		fs.rmSync(root, { recursive: true, force: true });
 	}
+});
+
+test("dependency preflight explains missing installs and incomplete Electron", () => {
+	const root = fs.mkdtempSync(path.join(os.tmpdir(), "cindy-dep-preflight-"));
+	try {
+		assert.match(findDependencyInstallIssues(root, {})[0], /pnpm install/);
+
+		fs.mkdirSync(path.join(root, "node_modules/electron"), { recursive: true });
+		fs.writeFileSync(path.join(root, "node_modules/.modules.yaml"), "{}");
+		assert.match(findDependencyInstallIssues(root, {})[0], /node_modules\/electron/);
+		fs.writeFileSync(
+			path.join(root, "node_modules/electron/package.json"),
+			JSON.stringify({ name: "electron", version: "1.0.0" }),
+		);
+		const [electronIssue] = findDependencyInstallIssues(root, {});
+		assert.match(electronIssue, /Electron/);
+		assert.match(electronIssue, /--electron-binary/);
+		assert.deepEqual(
+			findDependencyInstallIssues(root, { ELECTRON_OVERRIDE_DIST_PATH: "/stub" }),
+			[],
+		);
+		assert.deepEqual(findDependencyInstallIssues(root, {}, { needsElectron: false }), []);
+	} finally {
+		fs.rmSync(root, { recursive: true, force: true });
+	}
+});
+
+test("only selections that include Desktop need the Electron binary", () => {
+	const workspaces = manifest.workspaces;
+	assert.equal(selectionNeedsElectron(workspaces), true);
+	assert.equal(selectionNeedsElectron(workspaces, { workspaces: ["apps/desktop"] }), true);
+	assert.equal(selectionNeedsElectron(workspaces, { workspaces: ["desktop", "packages/auth-client"] }), true);
+	assert.equal(selectionNeedsElectron(workspaces, { workspaces: ["packages/auth-client"] }), false);
+	assert.equal(selectionNeedsElectron(workspaces, { excludeWorkspaces: ["desktop"] }), false);
+	assert.equal(selectionNeedsElectron([{ name: "sample", cwd: "packages/sample" }]), false);
+});
+
+// Unit: suites run inside an agent session failed on variables the agent shell carried (#880:
+// CLAUDE_CODE_IDE_SKIP_AUTO_INSTALL; a remotely controlled Cindy task's CINDY_INPUT_HANDOFF_ROUTE),
+// though nothing in the code under test changed. Children inherit the runner's env.
+test("the runner drops agent-shell variables that change test results, and nothing else", () => {
+	const env = { NODE_ENV: "production", CINDY_INPUT_HANDOFF_ROUTE: "route-1", CLAUDE_CODE_IDE_SKIP_AUTO_INSTALL: "1", PATH: "/bin", CI: "true" };
+	assert.deepEqual(stripAgentEnvPollutants(env), ["NODE_ENV", "CLAUDE_CODE_IDE_SKIP_AUTO_INSTALL", "CINDY_INPUT_HANDOFF_ROUTE"]);
+	assert.deepEqual(env, { PATH: "/bin", CI: "true" });
+	assert.deepEqual(stripAgentEnvPollutants(env), []);
 });

@@ -22,6 +22,8 @@ import type { ShouldStartLoadRequest } from 'react-native-webview/lib/WebViewTyp
 import { buildSelectableMarkdownHtml } from '@/session/selectableMarkdownHtml';
 import { MARKDOWN_FILE_PAGER_SCRIPT, parseMarkdownPageSwipe } from '@/session/markdownFilePager';
 import { selectionQuoteMenuLabel } from '@/session/selectionQuote';
+import { useHtmlBrowserViewport } from '@/session/useHtmlBrowserViewport';
+import type { BrowserInsets } from '@/session/htmlBrowserViewport';
 import { lineHeight, useTheme } from '@/theme';
 import { spacing, typeScale } from '@/theme/tokens';
 
@@ -31,6 +33,8 @@ export function MarkdownFileReader({
   onQuoteSelection,
   targetLine,
   testID,
+  viewportInsets,
+  imageSources,
 }: {
   markdown: string;
   /** 由文件预览 pager 消费的明确横向翻页；纵向移动会让该手势失败给 WebView。 */
@@ -40,9 +44,14 @@ export function MarkdownFileReader({
   /** 定位到源码行(1-based):加载后滚到覆盖该行的块并闪两下高亮(不驻留)。 */
   targetLine?: number | null;
   testID?: string;
+  viewportInsets?: BrowserInsets;
+  imageSources?: ReadonlyMap<string, { uri: string }>;
 }) {
   const { t } = useTranslation();
   const { colors } = useTheme();
+  const { viewRef, measure, viewportStyle, obscuredContentInsets } = useHtmlBrowserViewport(
+    viewportInsets ?? { top: 0, bottom: 0, left: 0, right: 0 },
+  );
   const quoteEnabled = !!onQuoteSelection;
   // 菜单项在渲染时构造(而非模块常量):label 走 i18n;依赖 t 使语言切换后随重渲更新。
   const quoteMenuItems = useMemo(
@@ -50,6 +59,7 @@ export function MarkdownFileReader({
     [t],
   );
   const html = useMemo(() => buildSelectableMarkdownHtml(markdown, {
+    ...(imageSources ? { imageSources } : {}),
     borderColor: colors.border,
     chipColor: colors.surfaceChip,
     inlineCodeColor: colors.chatInlineCodeText,
@@ -72,7 +82,7 @@ export function MarkdownFileReader({
     },
     textColor: colors.textPrimary,
     ...(targetLine ? { targetLine } : {}),
-  }), [colors, markdown, targetLine]);
+  }), [colors, imageSources, markdown, targetLine]);
 
   // 回调走 ref:onQuoteSelection 引用变化(页面重渲)不应重建 handler,
   // 更不应让 WebView 重载。
@@ -94,8 +104,12 @@ export function MarkdownFileReader({
   }, [onPageSwipe]);
 
   return (
-    <View style={styles.fill} testID={testID}>
+    <View ref={viewRef} onLayout={measure} collapsable={false} style={[styles.fill, viewportStyle]} testID={testID}>
       <WebView
+        automaticallyAdjustContentInsets={false}
+        contentInsetAdjustmentBehavior="never"
+        obscuredContentInsets={obscuredContentInsets}
+        contentInset={obscuredContentInsets}
         injectedJavaScript={onPageSwipe ? MARKDOWN_FILE_PAGER_SCRIPT : undefined}
         onMessage={onPageSwipe ? handleMessage : undefined}
         menuItems={quoteEnabled ? quoteMenuItems : undefined}

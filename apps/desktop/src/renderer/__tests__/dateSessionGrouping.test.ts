@@ -30,6 +30,7 @@ function s(partial: Partial<Session>): Session {
     clearedAt: null,
     pinnedAt: partial.pinnedAt ?? null,
     userSendAt,
+    lastActivityAt: partial.lastActivityAt,
     status: partial.status ?? 'active',
     agentKind: partial.agentKind ?? 'cc',
     parentSessionId: partial.parentSessionId ?? null,
@@ -44,6 +45,16 @@ function s(partial: Partial<Session>): Session {
 }
 
 describe('groupSessionsByActivityDate', () => {
+  it('mixes new handoff timestamps with legacy human-send and metadata fallbacks', () => {
+    const groups = groupSessionsByActivityDate([
+      s({ id: 'legacy', userSendAt: '2026-05-16T12:00:00', updatedAt: '2026-05-17T15:00:00' }),
+      s({ id: 'handoff', lastActivityAt: '2026-05-17T10:00:00', userSendAt: '2026-05-01T00:00:00' }),
+      s({ id: 'draft', userSendAt: null, updatedAt: '2026-05-17T09:00:00' }),
+    ], new Date('2026-05-17T12:00:00'));
+    expect(groups.map(group => group.sessions.map(session => session.id))).toEqual([
+      ['handoff', 'draft'], ['legacy'],
+    ]);
+  });
   it('groups sessions into Today, Yesterday, concrete dates, and Older', () => {
     const now = new Date('2026-05-17T12:00:00');
     const groups = groupSessionsByActivityDate(

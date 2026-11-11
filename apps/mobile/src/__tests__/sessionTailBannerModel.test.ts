@@ -57,6 +57,7 @@ describe('resolveSessionTailBanner — error-tail', () => {
       clientId: 'e1',
       text: i18n.t('session.tail.replyFailed'),
       rawError: 'process exited unexpectedly',
+      reason: null,
       summaryKey: 'session.tail.replyFailed',
       continueKind: 'error',
       retryable: true,
@@ -89,6 +90,17 @@ describe('resolveSessionTailBanner — error-tail', () => {
     }));
     expect(state).toMatchObject({ kind: 'error-tail', retryable: false });
     expect((state as { text: string }).text).toContain('设置 → 模型供应商');
+  });
+
+  it('shows reasoning exhaustion details from a restored error tail', () => {
+    const state = resolveSessionTailBanner(baseInput({
+      messages: [errorRow('limit', '2026-01-01T00:00:02.000Z', {
+        message: 'limit', reason: 'output-limit', outputLimit: { outputTokens: 131072, reasoningTokens: 131064 },
+      })],
+    }));
+    expect(state).toMatchObject({ kind: 'error-tail', retryable: true });
+    expect((state as { text: string }).text).toContain('131064');
+    expect((state as { text: string }).text).toContain(i18n.t('session.tail.outputLimitReasoning'));
   });
 
   it('localizes a persisted output limit and keeps manual continuation available', () => {
@@ -136,6 +148,37 @@ describe('resolveSessionTailBanner — error-tail', () => {
     expect(encrypted).toMatchObject({ kind: 'error-tail', retryable: false });
     expect((encrypted as { text: string }).text).toContain('加密');
   });
+
+  it('does not relabel a concrete compact overflow as unreadable encrypted history', () => {
+    const state = resolveSessionTailBanner(baseInput({
+      messages: [errorRow('overflow', '2026-01-01T00:00:02.000Z', {
+        message: 'Error running remote compact task: maximum context length exceeded',
+        reason: 'context-overflow',
+      })],
+    }));
+    expect(state).toMatchObject({ kind: 'error-tail', text: i18n.t('session.tail.replyFailed'), retryable: true });
+    expect((state as { text: string }).text).not.toContain(i18n.t('session.tail.remoteCompactEncryptedContent'));
+  });
+
+  // Compact-specific failures can be rebuilt by the host, unlike bare ciphertext errors.
+  it.each([
+    ['context-overflow', 'Error running remote compact task: invalid_encrypted_content'],
+    ['remote-compact-encrypted-content', 'Error running remote compact task: invalid_encrypted_content'],
+    ['context-overflow', 'Error running remote compact task'],
+  ])(
+    'keeps recovery available for a compact ciphertext failure (%s)',
+    (reason, message) => {
+      const state = resolveSessionTailBanner(baseInput({
+        messages: [errorRow('compact', '2026-01-01T00:00:02.000Z', {
+          message, reason,
+        })],
+      }));
+      expect(state).toMatchObject({
+        kind: 'error-tail', retryable: true,
+        text: i18n.t('session.tail.remoteCompactEncryptedContent'),
+      });
+    },
+  );
 
   it('does not fire when the error row is dismissed, superseded, or locally hidden', () => {
     const dismissed = resolveSessionTailBanner(baseInput({

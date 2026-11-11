@@ -109,6 +109,16 @@ describe('resolveCollabEntryPolicy 五类场景', () => {
     ).toBe(false);
   });
 
+  it('另一台电脑派来的远端 Worker:同样不挂入口', () => {
+    expect(
+      resolveCollabEntryPolicy({
+        workspaceKind: 'project',
+        workingDir: '/Users/me/Interviews',
+        orcaRemoteWorker: true,
+      }).eligible,
+    ).toBe(false);
+  });
+
   it('Orca Lead 会话本身仍 eligible(ON 态的 pill 要能渲染成关闭按钮)', () => {
     expect(
       resolveCollabEntryPolicy({

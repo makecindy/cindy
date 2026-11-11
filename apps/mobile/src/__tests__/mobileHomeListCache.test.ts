@@ -61,6 +61,15 @@ describe('mobileHomeListCache', () => {
     vi.useRealTimers();
   });
 
+  it('retains lane ownership and creator avatars across cold starts', async () => {
+    const { getCachedHomeListSnapshot, cacheHomeListSnapshot } = await import('@/session/mobileHomeListCache');
+    const companion = { id: 'cindy-default', role: 'routine' };
+    const taskTeammate = { id: 'cindy-default', name: 'Cindy', avatar: { kind: 'asset', value: 'cindy://avatar/preset/cindy', fallbackText: 'C' } };
+    await cacheHomeListSnapshot(USER_ID, [makeSession('routine', 'mac', { source: 'bot', companion, taskTeammate })]);
+    const [cached] = await getCachedHomeListSnapshot(USER_ID);
+    expect(cached.sessions[0]).toMatchObject({ companion, taskTeammate });
+  });
+
   it('round-trips a grouped device snapshot from a flat stamped session list', async () => {
     const { cacheHomeListSnapshot, getCachedHomeListSnapshot } = await import('@/session/mobileHomeListCache');
 
@@ -80,6 +89,21 @@ describe('mobileHomeListCache', () => {
     expect(snapshot[0].sessions[0].workingDir).toBe('/repo/demo');
     expect(snapshot[1].sessions.map((s) => s.id)).toEqual(['s-b1']);
   });
+
+  // #7972: list-cache round trip must preserve project identity independently of cwd.
+  // Existing snapshots only exercised matching directories; unit, remote POSIX paths.
+  it.each([{ projectDir: `/projects/${'long-project/'.repeat(24)}` }, { projectDir: null }, {}])(
+    'preserves optional project membership through cold-start serialization: %j',
+    async (membership) => {
+      const { cacheHomeListSnapshot, getCachedHomeListSnapshot } = await import('@/session/mobileHomeListCache');
+      await cacheHomeListSnapshot(USER_ID, [makeSession('s-project', 'dev-a', {
+        workingDir: '/tmp/checkout', ...membership,
+      })]);
+      const [cached] = await getCachedHomeListSnapshot(USER_ID);
+      expect(cached.sessions[0]).toMatchObject({ workingDir: '/tmp/checkout', ...membership });
+      if (!('projectDir' in membership)) expect(cached.sessions[0]).not.toHaveProperty('projectDir');
+    },
+  );
 
   it('returns [] for missing cache, corrupt JSON, or wrong shapes', async () => {
     const { __testing, getCachedHomeListSnapshot } = await import('@/session/mobileHomeListCache');
@@ -131,6 +155,7 @@ describe('mobileHomeListCache', () => {
         source: 'scheduler',
         orcaRole: 'lead',
         worktreePath: '/repo/demo/.claude/worktrees/x',
+        remoteHostId: 'ssh-build-machine',
       }),
     ]);
 
@@ -140,6 +165,7 @@ describe('mobileHomeListCache', () => {
     expect(cached.source).toBe('scheduler');
     expect(cached.orcaRole).toBe('lead');
     expect(cached.worktreePath).toBe('/repo/demo/.claude/worktrees/x');
+    expect(cached.remoteHostId).toBe('ssh-build-machine');
     expect(cached.hasDraft).toBe(true);
     expect(cached.hasPausedQueue).toBe(true);
     // 显示菜单「任务信息」的 Token / 费用在行内展示,冷启动也要有。
@@ -341,6 +367,43 @@ describe('mobileHomeListCache', () => {
     await new Promise((resolve) => setTimeout(resolve, 0));
     expect(store.has(__testing.legacyStorageKey)).toBe(false);
   });
+
+  it('restores the home cache when an outbox task arrived before the full list', async () => {
+    const { remoteSessionStore } = await import('@/session/remoteSessionStore');
+    const { cacheHomeListSnapshot, getCachedHomeListSnapshot } = await import('@/session/mobileHomeListCache');
+    remoteSessionStore.clear();
+    try {
+      await cacheHomeListSnapshot(USER_ID, [makeSession('s-outbox', 'dev-a'), makeSession('s-other', 'dev-a')]);
+      const snapshot = await getCachedHomeListSnapshot(USER_ID);
+      const restored = makeSession('s-outbox', 'dev-a', { title: 'restored draft', pendingLocalCreation: true });
+      remoteSessionStore.upsertDeviceSession('dev-a', 'current computer', restored);
+      remoteSessionStore.hydrateDeviceSessionsIfEmpty('dev-a', 'cached computer', snapshot[0].sessions);
+      expect(remoteSessionStore.getSessions().map(s => s.id).sort()).toEqual(['s-other', 's-outbox']);
+      expect(remoteSessionStore.getSessions().find(s => s.id === 's-outbox')).toMatchObject({
+        title: 'restored draft', pendingLocalCreation: true, deviceLinkDeviceName: 'current computer',
+      });
+      expect(remoteSessionStore.getSessions().find(s => s.id === 's-outbox')?.cacheSeeded).toBeUndefined();
+      expect(remoteSessionStore.getSessions().find(s => s.id === 's-other')?.cacheSeeded).toBe(true);
+      remoteSessionStore.setDeviceSessions('dev-a', 'current computer', [makeSession('s-new', 'dev-a')]);
+      expect(remoteSessionStore.getSessions().map(s => s.id).sort()).toEqual(['s-new', 's-outbox']);
+    } finally { remoteSessionStore.clear(); }
+  });
+
+  it.each(['empty-list', 'removed-device', 'deleted', 'archived'] as const)(
+    'does not restore stale home rows after %s', async (boundary) => {
+      const { remoteSessionStore } = await import('@/session/remoteSessionStore');
+      remoteSessionStore.clear();
+      try {
+        const cached = [makeSession('s-old', 'dev-a'), makeSession('s-other', 'dev-a')];
+        remoteSessionStore.upsertDeviceSession('dev-a', 'computer', cached[0]);
+        if (boundary === 'empty-list') remoteSessionStore.setDeviceSessions('dev-a', 'computer', []);
+        else if (boundary === 'removed-device') remoteSessionStore.removeDevice('dev-a');
+        else remoteSessionStore.applySessionPatch('dev-a', 's-old', { status: boundary });
+        remoteSessionStore.hydrateDeviceSessionsIfEmpty('dev-a', 'computer', cached);
+        expect(remoteSessionStore.getSessions()).toEqual([]);
+      } finally { remoteSessionStore.clear(); }
+    },
+  );
 
   it('hydrateDeviceSessionsIfEmpty seeds an absent shard and never clobbers fresh data', async () => {
     const { remoteSessionStore } = await import('@/session/remoteSessionStore');

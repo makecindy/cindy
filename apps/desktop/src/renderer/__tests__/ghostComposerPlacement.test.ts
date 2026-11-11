@@ -86,6 +86,38 @@ describe('placeGhostAtComposerStart', () => {
     expect(editor.state.selection.to).toBe(editor.state.doc.content.size - 1);
   });
 
+  it('qualifies a namespaced Plugin command only when its command is shared', () => {
+    const editor = editorWith('keep going');
+    const selected = ghost('draw', 'art');
+    selected.namespace = 'acme';
+    selected.dir = '/tmp/_ns/acme/art';
+    expect(placeGhostAtComposerStart(editor, selected, [selected])).toBe(true);
+    expect(editor.getText()).toBe('$draw keep going');
+
+    const sharedEditor = editorWith('keep going');
+    const root = ghost('draw', 'art');
+    root.namespace = null;
+    expect(placeGhostAtComposerStart(sharedEditor, selected, [root, selected])).toBe(true);
+    expect(sharedEditor.getText()).toBe('$draw/acme keep going');
+  });
+
+  it('replaces a bare command that became ambiguous after a same-name install', () => {
+    // `$draw` was inserted while the organization instance was unique; a root sibling arrived later.
+    const org = ghost('draw', 'art');
+    org.namespace = 'acme';
+    org.dir = '/tmp/_ns/acme/art';
+    const root = ghost('draw', 'art');
+    root.namespace = null;
+
+    const pickRoot = editorWith('$draw keep going');
+    expect(placeGhostAtComposerStart(pickRoot, root, [org, root])).toBe(true);
+    expect(pickRoot.getText()).toBe('$draw/@root keep going');
+
+    const pickOrg = editorWith('$draw keep going');
+    expect(placeGhostAtComposerStart(pickOrg, org, [org, root])).toBe(true);
+    expect(pickOrg.getText()).toBe('$draw/acme keep going');
+  });
+
   it('replaces an existing Plugin command instead of stacking commands', () => {
     const current = ghost('mivo');
     const selected = ghost('feishu');

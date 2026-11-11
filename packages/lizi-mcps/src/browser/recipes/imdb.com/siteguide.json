@@ -1,13 +1,15 @@
 {
   "site": "imdb.com",
-  "auth": "只读搜索/详情/榜单无需登录(公开页面)",
+  "auth": "鉴权以具体命令为准：public。需要登录的命令复用当前浏览器会话。",
   "entry": {
-    "searchPage": "https://www.imdb.com/find/?q=<query>&ref_=nv_sr_sm&language=en-US",
-    "titlePage": "https://www.imdb.com/title/<ttID>/?language=en-US",
-    "namePage": "https://www.imdb.com/name/<nmID>/?language=en-US",
-    "top250": "https://www.imdb.com/chart/top/?language=en-US",
-    "mostPopular": "https://www.imdb.com/chart/moviemeter/?language=en-US"
+    "home": "https://www.imdb.com"
   },
-  "recipes": ["imdb-search"],
-  "notes": "IMDb 无干净的公开 JSON 接口,数据嵌在页面里,所以套路统一是:先 navigate 到目标页(URL 带 &language=en-US 稳定结构),再在页面内解析嵌入的 JSON。两类数据源:\n• 搜索页 /find/?q=<词>:数据在 <script id=\"__NEXT_DATA__\"> 里,props.pageProps.titleResults.results[] 与 nameResults.results[],每条形如 {index:'tt0133093'|'nm...', listItem:{titleText/nameText/releaseYear/titleType,...}}。结果可能晚于 load 才注入,需轮询等待(imdb-search 配方已封装,结果直接在 output(已自动解包),含 title/name 两类,字段 id/kind/title/year/type/url)。\n• 详情页 /title/<ttID>/ 与榜单页 /chart/top/、/chart/moviemeter/:数据在 <script type=\"application/ld+json\"> 里。详情页取 @type 为 Movie/TVSeries/TVEpisode 等的对象(name,datePublished,aggregateRating.{ratingValue,ratingCount},genre,director/creator,actor,duration(ISO PT2H28M),contentRating,description)。榜单页取 @type='ItemList' 的对象,itemListElement[] 每条 {position,item:{name,url,aggregateRating}}。\n• id 格式:影视 tt + 7~8 位数字,人物 nm + 7~8 位。IMDb 偶尔出机器人验证页(标题含 Robot Check / captcha),命中时换正常浏览器会话或稍后重试。"
+  "recipes": [
+    "imdb-search"
+  ],
+  "notes": "兼容入口 imdb-search 现执行内置 imdb/search，原参数名保留；结果采用新版适配器的结构化输出。可用 opencli:<站点>/<命令> 调用完整目录，siteguide 查询参数默认值、类型及 read/write 分类。网站可能变更或要求登录、验证；有 Cookie 不保证绕过风控。",
+  "upstream": {
+    "repository": "https://github.com/jackwener/opencli",
+    "revision": "fe5f1d96aff01c32fd84f86b52af922bfe6ca93f"
+  }
 }

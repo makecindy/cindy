@@ -1,5 +1,5 @@
 import type { GhostManifest, InstalledGhost } from './ghost';
-import type { PluginIconMetadata } from '@cindy/plugin-protocol';
+import type { GhostReadmeContent, PluginDownloadStatistics, PluginIconMetadata, PluginUsageStatistics } from '@cindy/plugin-protocol';
 
 export type PluginMarketScope = 'public' | 'organization' | 'personal';
 export type PluginMarketInstallState =
@@ -13,11 +13,19 @@ export type PluginMarketItemSource = 'server' | 'git-market' | 'local-market';
 
 /** Renderer-safe Plugin 市场列表项；所有字段都来自协议或本地安装事实。 */
 export interface PluginMarketItem {
+  usageStatistics?: PluginUsageStatistics;
+  downloadStatistics?: PluginDownloadStatistics;
   pluginId: string;
   ghostId: string;
+  /** Host-verified namespace. Missing is legacy wire; null is root. */
+  namespace?: string | null;
   name: string;
   description: string | null;
   author: string | null;
+  /** Display identity from verified public publishing; never grants runtime trust. */
+  publisherKind?: 'official' | 'personal' | null;
+  /** Main verified a public installation's market origin; attribution spans versions. */
+  installedAuthor?: string | null;
   scope: PluginMarketScope;
   organizationId: string | null;
   defaultInstall: boolean;
@@ -51,6 +59,34 @@ export interface PluginMarketSnapshot {
   customSourceNames: string[];
   /** 本轮发现失败的自定义市场名；失败来源不影响其它来源和官方市场。 */
   unavailableCustomSourceNames: string[];
+  /**
+   * 企业目录单独不可用时的错误码，包含客户端尚未认识的新码。null 或缺失表示本轮没有这个状态；
+   * 公开目录和已安装插件照常。
+   */
+  organizationAccessError?: string | null;
+}
+
+export interface PluginMarketQuery {
+  query?: string;
+  scope?: 'all' | PluginMarketScope | 'custom';
+  cursor?: string | null;
+  limit?: number;
+  excludeInstalled?: boolean;
+  /** Readers that only need items/cursors can omit the complete first-page count. */
+  counts?: boolean;
+}
+export interface PluginMarketCounts {
+  all: number;
+  public: number;
+  organization: number;
+  personal: number;
+  custom: number;
+}
+export interface PluginMarketPage extends PluginMarketSnapshot {
+  customSourceCounts?: Array<{ name: string; count: number }>;
+  nextCursor: string | null;
+  /** Complete query counts on the first page; subsequent pages reuse them. */
+  counts: PluginMarketCounts | null;
 }
 
 /** 服务端清理的一次性汇总提示：按 owner 缓存，consume 前跨多轮对账累加，consume 后即清。 */
@@ -63,6 +99,11 @@ export interface PluginRemovalUserNotice {
 /** 详情携带安装前展示给用户的 manifest；官方来自 release，自定义来自本地发现。 */
 export interface PluginMarketDetail extends PluginMarketItem {
   manifest: GhostManifest;
+  /**
+   * 详细介绍，只在详情页请求时提供：官方市场的图片是服务端签发的短期地址，自定义市场
+   * 的图片是 data URL。`null` 表示没有介绍；字段缺省表示调用方没有请求。
+   */
+  readme?: GhostReadmeContent | null;
 }
 
 /** Main 生成并接受的自定义市场图标身份键形状；首位 0 为保留值。 */

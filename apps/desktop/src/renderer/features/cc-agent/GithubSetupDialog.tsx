@@ -1,3 +1,4 @@
+import { ErrorNotice } from '@/components/ui/error-notice';
 import { useEffect, useRef, useState } from 'react';
 import * as Dialog from '@radix-ui/react-dialog';
 import { Check, Copy } from 'lucide-react';
@@ -183,7 +184,7 @@ export function GithubSetupDialog({
                       type="button"
                       onClick={() => void copyCode()}
                       aria-label={copyLabel}
-                      className="flex size-8 shrink-0 items-center justify-center rounded-full text-[var(--text-secondary)] hover:bg-[var(--surface-hover)] focus-visible:outline focus-visible:outline-2 focus-visible:outline-[var(--focus-ring)]"
+                      className="flex size-8 shrink-0 items-center justify-center rounded-full text-[var(--text-secondary)] hover:bg-[var(--surface-hover)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--focus-ring)]"
                     >
                       {copiedCode === state.userCode ? <Check size={16} /> : <Copy size={16} />}
                     </button>
@@ -196,9 +197,7 @@ export function GithubSetupDialog({
             </div>
           )}
           {feedback && (
-            <p role="alert" className="text-12 text-[var(--error-fg)]">
-              {copy(feedback)}
-            </p>
+            <ErrorNotice role="alert" message={copy(feedback)} />
           )}
           <div className="flex justify-end gap-2 pt-1">
             {completed || unsupported ? (

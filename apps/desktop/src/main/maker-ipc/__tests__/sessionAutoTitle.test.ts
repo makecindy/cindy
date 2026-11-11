@@ -60,6 +60,15 @@ function persistCalls(deps: SessionAutoTitleDeps): Array<[string, string | undef
 }
 
 describe('runSessionAutoTitle — 用户写了字', () => {
+  // unit: plugin context should inform the generated title without flashing
+  // capture headers in the immediate sidebar placeholder.
+  it('uses the visible instruction as placeholder while naming from the full separate context', async () => {
+    const deps = makeDeps();
+    const text = 'Look here\n\nWindow details: login request failed';
+    await runSessionAutoTitle({ sessionId: 's1', text, placeholderText: 'Look here', agentKind: 'codex' }, deps);
+    expect(persistCalls(deps)[0]).toEqual(['Look here', 'New Maker']);
+    expect(deps.generateTitle).toHaveBeenCalledWith(text, 'codex', 's1');
+  });
   it('先写原话占位,再用智能标题覆盖占位(期望值 = 占位串)', async () => {
     const deps = makeDeps();
 

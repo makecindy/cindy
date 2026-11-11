@@ -56,7 +56,8 @@ it('indexes aliases and script subtrees while preserving dependency order and in
   const item = normalizeAutomation(source, { id: 'report', skills: ['folder', 'alias'], script: 'reports/run.py', monitor_script: 'reports/data/check.py', schedule: { kind: 'interval', minutes: 5 } }, dependencies, 'UTC');
   expect(item.view.dependsOn).toEqual(['mcp', 'skill', 'main', 'data']);
   expect(item.envDependencies?.names).toEqual(['SKILL_TOKEN', 'SCRIPT_TOKEN']);
-  expect(item.view.issues).toEqual(['SOURCE_TOOL_POLICY_NEEDS_MAPPING', 'AUTOMATION_MODEL_NEEDS_MAPPING']);
+  // A script job also stays at its source: project automations only run a prompt.
+  expect(item.view.issues).toEqual(['SOURCE_TOOL_POLICY_NEEDS_MAPPING', 'AUTOMATION_CONTEXT_NEEDS_MAPPING', 'AUTOMATION_MODEL_NEEDS_MAPPING']);
   expect(normalizeAutomation(source, { id: 'missing', script: 'reports/missing.py' }, dependencies, 'UTC').view.issues).toContain('AUTOMATION_SCRIPT_MISSING');
 });
 
@@ -74,25 +75,25 @@ it.each([
   const task = snapshot.items.find(item => item.automation)!;
   const transfer: TransferDeps = { assertOwner: vi.fn(), readReceipt: vi.fn(async () => undefined), saveReceipt: vi.fn(async () => {}),
     createCompanion: vi.fn(async () => {}), importItem: vi.fn(async () => {}), saveEnvironment: vi.fn(async () => {}), saveCheckpoint: vi.fn(async () => {}),
-    createConversation: vi.fn(async () => 'chat'), createRoutine: vi.fn(async () => 'routine'),
-    verifyAutomation: vi.fn(async () => ({ verified: true })), pauseSource: vi.fn(async () => {}), resumeSource: vi.fn(async () => {}), enableRoutine: vi.fn(async () => {}) };
+    createConversation: vi.fn(async () => 'chat'), createAutomation: vi.fn(async () => 'routine'),
+    verifyAutomation: vi.fn(async () => ({ verified: true })), pauseSource: vi.fn(async () => {}), resumeSource: vi.fn(async () => {}), enableAutomation: vi.fn(async () => {}) };
   const result = await transferCompanion(snapshot, { requestId: 'fixture-model-request', previewId: 'preview', name: 'Ada', entryIds: snapshot.items.filter(item => item.view.selected).map(item => item.view.id), takeover: true }, transfer);
-  expect(transfer.createRoutine).toHaveBeenCalledWith(expect.any(String), expect.objectContaining({ enabled: false }), expect.any(String), task);
+  expect(transfer.createAutomation).toHaveBeenCalledWith(expect.any(String), expect.objectContaining({ enabled: false }), expect.any(String), task);
   if (blocked) {
     expect(task.view.issues).toContain('AUTOMATION_MODEL_NEEDS_MAPPING');
     expect(result.checks.find(check => check.entryId === task.view.id)).toMatchObject({ status: 'needs-attention', message: 'AUTOMATION_MODEL_NEEDS_MAPPING' });
     expect(transfer.verifyAutomation).not.toHaveBeenCalled();
     expect(transfer.pauseSource).not.toHaveBeenCalled();
-    expect(transfer.enableRoutine).not.toHaveBeenCalled();
+    expect(transfer.enableAutomation).not.toHaveBeenCalled();
   } else {
     expect(task.view.issues).toBeUndefined();
     expect(result.checks.find(check => check.entryId === task.view.id)?.status).toBe('taken-over');
     expect(transfer.pauseSource).toHaveBeenCalledOnce();
-    expect(transfer.enableRoutine).toHaveBeenCalledOnce();
+    expect(transfer.enableAutomation).toHaveBeenCalledOnce();
   }
 });
 
-it('retains an over-budget skill for retry without dropping healthy siblings', async () => {
+it('keeps resource bodies out of the preview budget even when multiple skills are used by automations', async () => {
   await write('.hermes/config.yaml', 'name: Ada\n');
   for (const name of ['first', 'second']) {
     await write(`.hermes/skills/${name}/SKILL.md`, `---\nname: ${name}\n---\nRead data.txt`);
@@ -102,12 +103,12 @@ it('retains an over-budget skill for retry without dropping healthy siblings', a
   await write('.hermes/cron/jobs.json', jobs(['first']));
   const reader = deps(); const [source] = await discoverImportSources(reader);
   const snapshot = await inspectImportSource(source!, reader, createImportBudget(6000));
-  expect(snapshot.items.find(item => item.view.name === 'first')?.files?.find(file => file.name === 'data.txt')?.bytes.length).toBe(2048);
-  expect(snapshot.items.find(item => item.view.name === 'second')?.files).toHaveLength(1);
+  expect(snapshot.items.find(item => item.view.name === 'first')?.files).toBeUndefined();
+  expect(snapshot.items.find(item => item.view.name === 'second')?.files).toBeUndefined();
   await write('.hermes/cron/jobs.json', jobs(['first', 'second']));
   const partial = await inspectImportSource(source!, reader, createImportBudget(6000));
-  expect(partial.items.find(item => item.view.name === 'second')?.captureIssue).toBe('SOURCE_SNAPSHOT_TOO_LARGE');
-  expect(partial.items.find(item => item.view.name === 'first')?.files).toHaveLength(2);
+  expect(partial.items.filter(item => item.view.category === 'skills')).toHaveLength(2);
+  expect(partial.items.filter(item => item.view.category === 'skills').every(item => !item.captureIssue && !item.files)).toBe(true);
 });
 
 it('counts configuration includes and memory against the same source budget', async () => {
@@ -187,6 +188,120 @@ describe('installed agent imports', () => {
     for (const secret of [profile.access, profile.refresh]) expect(JSON.stringify(snapshot.items.map(item => item.view))).not.toContain(secret);
     const selection = { requestId: 'fixture-oauth-request', previewId: 'preview', name: 'Ada', takeover: false, entryIds: [] };
     expect(validateImportSelection(selection, snapshot).some(item => item.credential)).toBe(false);
+  });
+  // Owner IDs let the import create the companion's own bot connection (OpenClaw channels/telegram.md,
+  // channels/discord.md, tools/slash-commands.md; Hermes TELEGRAM_/DISCORD_ALLOWED_USERS).
+  it('reads OpenClaw bot owners from ownerAllowFrom or the inherited allowFrom, and Discord SecretRef tokens', async () => {
+    await write('.openclaw/openclaw.json', JSON.stringify({
+      commands: { ownerAllowFrom: ['discord:123456789012345678'] },
+      channels: {
+        telegram: { allowFrom: ['tg:424242'], accounts: { main: { botToken: '1234567:fixture-a' }, team: { botToken: '1234567:fixture-b', allowFrom: ['1', '2', '*'] } } },
+        discord: { token: { source: 'env', provider: 'default', id: 'DISCORD_BOT_TOKEN' }, allowFrom: ['user:999999999999999999'] },
+      },
+      env: { vars: { DISCORD_BOT_TOKEN: 'fixture-discord-token' } },
+    }));
+    const reader = deps(); const [source] = await discoverImportSources(reader);
+    const snapshot = await inspectImportSource(source!, reader);
+    const values = Object.fromEntries(snapshot.items.filter(item => item.credential?.format === 'telegram' || item.credential?.format === 'discord')
+      .map(item => [item.view.name, item.credential!.value]));
+    expect(values).toEqual({
+      'Telegram · main': { token: '1234567:fixture-a', account: 'main', ownerUserId: '424242' },
+      // Several allowed users are not one owner; the import asks for it instead of guessing.
+      'Telegram · team': { token: '1234567:fixture-b', account: 'team' },
+      'Discord · default': { token: '${DISCORD_BOT_TOKEN}', account: 'default', ownerUserId: '123456789012345678' },
+    });
+    const discord = snapshot.items.find(item => item.credential?.format === 'discord')!;
+    expect(resolveImportReferences(discord.credential!.value, selectedImportEnvironment(snapshot.items))).toMatchObject({ token: 'fixture-discord-token' });
+  });
+
+  it('reads Hermes bot owners from the single allowed user', async () => {
+    await write('.hermes/config.yaml', 'name: Ada\n');
+    await write('.hermes/.env', 'TELEGRAM_BOT_TOKEN=12345:fake-telegram-token\nTELEGRAM_ALLOWED_USERS=424242\nDISCORD_BOT_TOKEN=fake-discord-token\nDISCORD_ALLOWED_USERS=111111111111111111,222222222222222222');
+    const reader = deps(); const [source] = await discoverImportSources(reader);
+    const snapshot = await inspectImportSource(source!, reader);
+    expect(snapshot.items.find(item => item.credential?.format === 'telegram')?.credential?.value).toEqual({ token: '${TELEGRAM_BOT_TOKEN}', account: 'default', ownerUserId: '424242' });
+    expect(snapshot.items.find(item => item.credential?.format === 'discord')?.credential?.value).toEqual({ token: '${DISCORD_BOT_TOKEN}', account: 'default' });
+  });
+  // Bots category (companion-import-bots-v1): one entry per bot, preselected unless the source disabled it.
+  it('lists Hermes bots on every platform with the inferred owner, and keeps legacy previews unchanged', async () => {
+    await write('.hermes/config.yaml', [
+      'name: Ada', 'platforms:', '  feishu:', '    enabled: false', '    extra:', '      admins: [ou_fixtureowner]',
+      '  telegram:', '    extra:', '      group_allow_admin_from: [424242]',
+    ].join('\n'));
+    await write('.hermes/.env', ['TELEGRAM_BOT_TOKEN=12345:fake-telegram-token', 'TELEGRAM_ALLOWED_USERS=424242,515151', 'TELEGRAM_HOME_CHANNEL=515151',
+      'FEISHU_APP_ID=cli_fixture', 'FEISHU_APP_SECRET=fake-feishu-secret', 'FEISHU_BOT_NAME=Ada Lark', 'FEISHU_DOMAIN=lark',
+      'WECOM_BOT_ID=fixture-wecom', 'WECOM_SECRET=fake-wecom-secret', 'WECOM_ALLOWED_USERS=alice'].join('\n'));
+    const reader = deps(); const [source] = await discoverImportSources(reader);
+    const snapshot = await inspectImportSource(source!, reader, undefined, { bots: true });
+    const bots = snapshot.items.filter(item => item.view.category === 'bots');
+    expect(bots.map(({ view }) => ({ platform: view.platform, name: view.name, selected: view.selected, enabled: view.enabled, owner: view.owner }))).toEqual([
+      // Two allowed users: the one that is also the home chat is the owner.
+      { platform: 'telegram', name: 'Ada', selected: true, enabled: undefined, owner: '515151' },
+      { platform: 'feishu', name: 'Ada Lark', selected: false, enabled: false, owner: 'ou_fixtureowner' },
+      { platform: 'wecom', name: 'Ada', selected: true, enabled: undefined, owner: 'alice' },
+    ]);
+    // A bot carries its own credential, so it never also requires selecting its token under connections.
+    expect(bots[1]!.credential?.value).toEqual({ appId: 'cli_fixture', appSecret: 'fake-feishu-secret', account: 'default', service: 'lark', ownerUserId: 'ou_fixtureowner' });
+    expect(bots[1]!.bot).toEqual({ platform: 'feishu', account: 'default', enabledPath: ['platforms', 'feishu', 'enabled'] });
+    for (const bot of bots) expect(bot.view.dependsOn).toEqual([]);
+    expect(JSON.stringify(bots.map(item => item.view))).not.toMatch(/fake-|cli_fixture|fixture-wecom/);
+    // Controllers without the bots category keep today's Telegram / Discord connections and no others.
+    const legacy = await inspectImportSource(source!, reader);
+    expect(legacy.items.some(item => item.view.category === 'bots' || ['feishu', 'wecom'].includes(item.credential?.format ?? ''))).toBe(false);
+    expect(legacy.items.find(item => item.credential?.format === 'telegram')?.view).toMatchObject({ category: 'connections', name: 'Telegram · default' });
+    // Every platform needs a known owner before its source bot can be stopped.
+    await write('.hermes/.env', ['FEISHU_APP_ID=cli_fixture', 'FEISHU_APP_SECRET=fake-feishu-secret',
+      'WECOM_BOT_ID=fixture-wecom', 'WECOM_SECRET=fake-wecom-secret', 'WECOM_ALLOWED_USERS=alice,bob'].join('\n'));
+    await write('.hermes/config.yaml', 'name: Ada\n');
+    const unowned = (await inspectImportSource(source!, reader, undefined, { bots: true })).items.filter(item => item.view.category === 'bots');
+    expect(unowned.map(({ view }) => [view.platform, view.owner, view.selected, view.issues])).toEqual([
+      ['feishu', undefined, true, ['IMPORT_IM_BOT_OWNER_MISSING']],
+      ['wecom', 'alice', false, undefined],
+      ['wecom', 'bob', false, undefined],
+    ]);
+    expect(unowned[1]!.view.exclusiveWith).toEqual([unowned[2]!.view.id]);
+  });
+
+  it('offers exclusive owner alternatives for a few allowed users and asks for an owner beyond five', async () => {
+    await write('.hermes/config.yaml', 'name: Ada\n');
+    await write('.hermes/.env', ['TELEGRAM_BOT_TOKEN=12345:fake-telegram-token', 'TELEGRAM_ALLOWED_USERS=1111,2222,3333',
+      'DISCORD_BOT_TOKEN=fake-discord-token', `DISCORD_ALLOWED_USERS=${Array.from({ length: 6 }, (_, index) => `11111111111111111${index}`).join(',')}`].join('\n'));
+    const reader = deps(); const [source] = await discoverImportSources(reader);
+    const snapshot = await inspectImportSource(source!, reader, undefined, { bots: true });
+    const telegram = snapshot.items.filter(item => item.view.platform === 'telegram');
+    expect(telegram.map(item => [item.view.owner, item.view.selected, item.view.exclusiveWith?.length])).toEqual([['1111', false, 2], ['2222', false, 2], ['3333', false, 2]]);
+    expect(telegram[0]!.view.exclusiveWith).toEqual([telegram[1]!.view.id, telegram[2]!.view.id]);
+    expect(snapshot.items.filter(item => item.view.platform === 'discord').map(item => item.view.issues)).toEqual([['IMPORT_IM_BOT_OWNER_MISSING']]);
+    const selection = { requestId: 'fixture-owner-request', previewId: 'preview', name: 'Ada', takeover: false };
+    const env = snapshot.items.filter(item => item.env?.TELEGRAM_BOT_TOKEN).map(item => item.view.id);
+    expect(validateImportSelection({ ...selection, entryIds: [...env, telegram[1]!.view.id] }, snapshot)).toHaveLength(2);
+    expect(() => validateImportSelection({ ...selection, entryIds: [...env, telegram[0]!.view.id, telegram[1]!.view.id] }, snapshot)).toThrow('INVALID_SELECTION');
+  });
+
+  it('lists an OpenClaw bot only for the agent its account routes to, unselected when other agents share it', async () => {
+    await write('.openclaw/openclaw.json', JSON.stringify({
+      agents: { list: [{ id: 'main', default: true }, { id: 'email' }, { id: 'quiet' }] },
+      commands: { ownerAllowFrom: ['telegram:424242', 'feishu:ou_fixtureowner'] },
+      bindings: [{ agentId: 'email', match: { channel: 'telegram', accountId: 'default', peer: { kind: 'direct', id: '1' } } }, { agentId: 'main', match: { channel: 'telegram' } },
+        { agentId: 'quiet', match: { channel: 'feishu', accountId: 'work' } }],
+      channels: {
+        telegram: { botToken: '1234567:fixture-channel', accounts: { default: { name: 'Ada Bot', enabled: true } } },
+        feishu: { appSecret: { source: 'env', provider: 'default', id: 'FEISHU_APP_SECRET' }, domain: 'lark', accounts: { work: { appId: 'cli_fixture', name: 'Work' } } },
+      },
+    }));
+    const reader = deps(); const sources = await discoverImportSources(reader);
+    const bots = async (agent: string) => (await inspectImportSource(sources.find(source => source.agentId === agent)!, reader, undefined, { bots: true }))
+      .items.filter(item => item.view.category === 'bots');
+    const [telegram, ...others] = await bots('main');
+    expect(others).toEqual([]);
+    // The account inherits the channel token; the email agent's peer route shares this bot.
+    expect(telegram).toMatchObject({ view: { platform: 'telegram', name: 'Ada Bot', selected: false, owner: '424242' },
+      credential: { value: { token: '1234567:fixture-channel', account: 'default', ownerUserId: '424242' } },
+      bot: { enabledPath: ['channels', 'telegram', 'accounts', 'default', 'enabled'] } });
+    expect(await bots('email')).toEqual([]);
+    const [feishu] = await bots('quiet');
+    expect(feishu).toMatchObject({ view: { platform: 'feishu', name: 'Work', selected: true, owner: 'ou_fixtureowner' },
+      credential: { value: { appId: 'cli_fixture', appSecret: '${FEISHU_APP_SECRET}', service: 'lark' } } });
   });
   it('keeps secret references unexpanded until the final env and connection selection', async () => {
     await write('.hermes/config.yaml', 'name: Ada\nmcp_servers:\n  data:\n    url: https://example.invalid/mcp\n    headers:\n      Authorization: Bearer ${DATA_TOKEN}\n');
@@ -277,7 +392,8 @@ it('preserves every script while tracking only actual entry and monitor dependen
   const reader = deps(); const [source] = await discoverImportSources(reader);
   const snapshot = await inspectImportSource(source!, reader);
   const automation = snapshot.items.find(item => item.automation)!;
-  expect(automation.view.issues).toBeUndefined();
+  // Kept for the record; the job itself stays at its source (project automations only run a prompt).
+  expect(automation.view.issues).toEqual(['AUTOMATION_CONTEXT_NEEDS_MAPPING']);
   const files = snapshot.items.filter(item => item.asset);
   expect(files.filter(item => item.view.selected).map(item => item.asset!.name).sort()).toEqual([
     'scripts/monitor/check.sh', 'scripts/monitor/data/value.txt', 'scripts/reports/daily.sh', 'scripts/reports/data/template.txt', 'scripts/reports/helper.sh', 'scripts/reports-unused/other.sh',
@@ -302,7 +418,8 @@ it.each(['daily-report', 'Daily report'])('matches a skill reference %s against 
   expect(automation.view.dependsOn).toEqual(expect.arrayContaining([
     skill.view.id, ...snapshot.items.filter(item => item.env).map(item => item.view.id),
   ]));
-  expect(skill.files?.find(file => file.name === 'scripts/query.py')).toBeDefined();
+  expect(skill.resourceReferences).toContain('REPORT_TOKEN');
+  expect(skill.resourceReferences).toContain('REPORT_URL');
 });
 
 it('requires an explicit credential account and binds variables to the chosen profile, including MCP references', async () => {
@@ -423,7 +540,14 @@ it('discovers 142 grouped Hermes skills and all memory documents, excluding arch
   for (let i = 0; i < 142; i++) {
     await write(`.hermes/skills/group-${i % 13}/skill-${i}/SKILL.md`, `---\nname: skill-${i}\n---\nInstructions ${i}`);
   }
-  for (let i = 0; i < 2100; i++) await write(`.hermes/memories/note-${i}.md`, `Memory ${i}`);
+  const memoryRoot = path.join(home, '.hermes/memories');
+  await fs.mkdir(memoryRoot, { recursive: true });
+  for (let offset = 0; offset < 2100; offset += 32) {
+    await Promise.all(Array.from({ length: Math.min(32, 2100 - offset) }, (_, index) => {
+      const i = offset + index;
+      return fs.writeFile(path.join(memoryRoot, `note-${i}.md`), `Memory ${i}`);
+    }));
+  }
   await write('.hermes/skills/.archive/old/SKILL.md', 'archived');
   await write('.hermes/skills/group-0/skill-0/references/example/SKILL.md', 'example');
   await write('extra-skills/category/extra/SKILL.md', '---\nname: extra\n---\nExtra');
@@ -454,7 +578,7 @@ it('uses OpenClaw declared names, skillKey, grouped roots and plugin sources in 
   const skills = snapshot.items.filter(item => item.view.category === 'skills');
   expect(skills.map(item => item.view.name)).toEqual(['report', 'project', 'personal', 'extra', 'example']);
   expect(skills[0]?.view).toMatchObject({ selected: true, enabled: false });
-  expect(skills[0]?.files?.[0]?.bytes.toString()).toContain('Workspace');
+  expect(skills[0]?.sourceDirectory).toBe(await fs.realpath(path.join(home, '.openclaw/workspace/skills/category/renamed')));
   expect(snapshot.items.find(item => item.env?.SERVICE_TOKEN)?.view.selected).toBe(true);
 });
 
@@ -632,7 +756,7 @@ it('preserves sorted skill-name precedence after streaming directory entries', a
   const items = await discoverImportSkills({ kind: 'hermes', agentId: 'main', name: 'Ada', root, workspace: root, configFile: path.join(root, 'config.yaml') }, {}, home, {}, createImportBudget());
   expect(items).toHaveLength(1);
   expect(items[0]!.sourceAlias).toBe('a-first');
-  expect(items[0]!.files![0]!.bytes.toString()).toContain('First');
+  expect(items[0]!.sourceDirectory).toBe(await fs.realpath(path.join(home, '.hermes/skills/a-first')));
 });
 
 it('does not synchronously sort a whole 100,000-entry Skill root before visiting children', async () => {
@@ -720,7 +844,8 @@ it('preserves native commands, heartbeat jobs and their instruction document', a
   expect(tasks).toHaveLength(3);
   expect(tasks[0]?.automation?.input).toMatchObject({ name: 'Command report', enabled: false });
   expect(tasks[0]?.automation?.original.payload).toEqual(command);
-  expect(tasks[0]?.view.issues).toBeUndefined();
+  // A native command stays at its source: project automations only run a prompt.
+  expect(tasks[0]?.view.issues).toEqual(['AUTOMATION_CONTEXT_NEEDS_MAPPING']);
   expect(tasks[1]?.automation?.input).toMatchObject({ enabled: false, triggers: [{ kind: 'interval', intervalMs: 60000 }] });
   expect(tasks[1]?.automation?.original.payload).toEqual({ kind: 'heartbeat' });
   expect(tasks[1]?.view.issues).toContain('AUTOMATION_CONTEXT_NEEDS_MAPPING');

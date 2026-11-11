@@ -12,6 +12,7 @@ import {
   mediaRequestParamsForLog,
   mediaRequestUrlForLog,
 } from '../../cindy-media/mediaRequestLog.js';
+import { parseDataUrl } from '../../cindy-media/dataUrl.js';
 
 export class GatewayImageError extends Error {
   constructor(
@@ -26,6 +27,8 @@ export class GatewayImageError extends Error {
 
 export interface CreateGatewayImageClientOptions {
   getApiKey(): CindyProxyMediaMaybePromise<string | null>;
+  /** Host-owned connection headers; used by standalone custom Images connections. */
+  getRequestHeaders?(): CindyProxyMediaMaybePromise<Record<string, string>>;
   proxy: CindyProxyMediaProxyConfig;
   fetchImplementation?: typeof fetch;
   logger?: LiziMcpLogger;
@@ -51,6 +54,8 @@ export interface CreateGatewayImageClientOptions {
   allowSizeQuality?: boolean;
   /** 未配置凭证时的人话报错(各来源引导不同:xd 是登录飞书,BYO key 是去设置填 key)。 */
   missingKeyMessage?: string;
+  /** Bound the complete JSON body before buffering/parsing (including error responses). */
+  maxResponseBytes?: number;
 }
 
 function gatewayErrorCode(body: unknown): string | null {
@@ -83,8 +88,9 @@ async function parseResponse(
   res: Response,
   model: string,
   brandLabel: string,
+  maxResponseBytes?: number,
 ): Promise<GatewayImageResponse> {
-  const text = await res.text();
+  const text = await readResponseText(res, model, brandLabel, maxResponseBytes);
   let parsed: unknown;
   try {
     parsed = JSON.parse(text);
@@ -127,6 +133,36 @@ async function parseResponse(
     );
   }
   return body;
+}
+
+/** Custom endpoints cannot grow the main-process buffer without a byte budget. */
+async function readResponseText(res: Response, model: string, brandLabel: string, maxBytes?: number): Promise<string> {
+  if (maxBytes === undefined) return res.text();
+  const tooLarge = () => new GatewayImageError(requestErrorMessage({
+    status: res.status, model, brandLabel, message: `response exceeds ${maxBytes} byte limit`,
+  }), res.status);
+  const declared = res.headers.get('content-length');
+  if (declared !== null && Number(declared) > maxBytes) {
+    await res.body?.cancel().catch(() => {});
+    throw tooLarge();
+  }
+  if (!res.body) return '';
+  const reader = res.body.getReader();
+  const chunks: Uint8Array[] = [];
+  let bytes = 0;
+  try {
+    for (;;) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      bytes += value.byteLength;
+      if (bytes > maxBytes) throw tooLarge();
+      chunks.push(value);
+    }
+    return Buffer.concat(chunks, bytes).toString('utf8');
+  } finally {
+    await reader.cancel().catch(() => {});
+    reader.releaseLock();
+  }
 }
 
 function mimeFromFilename(filename: string): string {
@@ -204,9 +240,21 @@ export function createGatewayImageClient(opts: CreateGatewayImageClientOptions):
     return key;
   }
 
-  function assertSizeQualityAllowed(params: { size?: string; quality?: string }): void {
+  async function requestHeaders(): Promise<Record<string, string>> {
+    if (opts.getRequestHeaders) return { ...await opts.getRequestHeaders() };
+    return { Authorization: `Bearer ${await requireApiKey()}` };
+  }
+
+  function assertSizeQualityAllowed(params: {
+    size?: string;
+    quality?: string;
+    nativeParameters?: Record<string, unknown>;
+  }): void {
     if (allowSizeQuality) return;
-    if (params.size !== undefined || params.quality !== undefined) {
+    if (
+      params.size !== undefined || params.quality !== undefined ||
+      params.nativeParameters?.size !== undefined || params.nativeParameters?.quality !== undefined
+    ) {
       throw new GatewayImageError(
         `${brandLabel} 图像通道不支持画幅/档位参数(size/quality),请去掉后重试`,
         400,
@@ -219,15 +267,16 @@ export function createGatewayImageClient(opts: CreateGatewayImageClientOptions):
     signal?: AbortSignal,
   ): Promise<GatewayImageResponse> {
     assertSizeQualityAllowed(params);
-    const apiKey = await requireApiKey();
+    const headers = await requestHeaders();
     const body: Record<string, unknown> = {
-      model: params.model,
-      prompt: params.prompt,
       n: params.n ?? 1,
       // 不接受 size 的来源连缺省 'auto' 也不发(assert 只能挡显式参数)。
       ...(allowSizeQuality ? { size: params.size ?? 'auto' } : {}),
+      ...(params.quality ? { quality: params.quality } : {}),
+      ...params.nativeParameters,
+      model: params.model,
+      prompt: params.prompt,
     };
-    if (params.quality) body.quality = params.quality;
 
     // 停用轴派发前重查(PR #744 review 第二十一轮):凭证获取是 await,期间该
     // (供应商, 模型) 可能被用户停用 —— payload 就绪、请求发出的紧前再验一次。
@@ -237,7 +286,7 @@ export function createGatewayImageClient(opts: CreateGatewayImageClientOptions):
       {
         method: 'POST',
         headers: {
-          Authorization: `Bearer ${apiKey}`,
+          ...headers,
           'Content-Type': 'application/json',
         },
         body: JSON.stringify(body),
@@ -246,7 +295,7 @@ export function createGatewayImageClient(opts: CreateGatewayImageClientOptions):
       params.model,
       body,
     );
-    return parseResponse(res, params.model, brandLabel);
+    return parseResponse(res, params.model, brandLabel, opts.maxResponseBytes);
   }
 
   async function editImage(
@@ -257,18 +306,36 @@ export function createGatewayImageClient(opts: CreateGatewayImageClientOptions):
       throw new GatewayImageError(`${brandLabel} 图像通道不支持改图,请换支持改图的模型`, 400);
     }
     assertSizeQualityAllowed(params);
-    const apiKey = await requireApiKey();
+    const headers = await requestHeaders();
     if (params.imagePaths.length === 0) {
       throw new GatewayImageError('image_edit requires at least 1 image', 400);
     }
 
+    const body: Record<string, unknown> = {
+      n: params.n ?? 1,
+      ...(allowSizeQuality ? { size: params.size ?? 'auto' } : {}),
+      ...(params.quality ? { quality: params.quality } : {}),
+      ...params.nativeParameters,
+      model: params.model,
+      prompt: params.prompt,
+    };
     const form = new FormData();
-    form.append('model', params.model);
-    form.append('prompt', params.prompt);
-    form.append('n', String(params.n ?? 1));
-    // 同 generateImage:不接受 size 的来源连缺省 'auto' 也不发。
-    if (allowSizeQuality) form.append('size', params.size ?? 'auto');
-    if (params.quality) form.append('quality', params.quality);
+    for (const [key, value] of Object.entries(body)) {
+      if (value === undefined) continue;
+      const media = key !== 'model' && key !== 'prompt' && typeof value === 'string'
+        ? parseDataUrl(value) : null;
+      if (media?.base64) {
+        // Core expands managed native media (for example a mask) to data URLs.
+        // Multipart endpoints need those bytes as files, never local paths.
+        form.append(
+          key,
+          new Blob([Buffer.from(media.payload, 'base64')], { type: media.mimeType }),
+          `input.${media.mimeType.split('/')[1]}`,
+        );
+      } else {
+        form.append(key, typeof value === 'object' ? JSON.stringify(value) : String(value));
+      }
+    }
 
     const imageParams: Array<{ filename: string; mimeType: string; bytes: number }> = [];
     for (const p of params.imagePaths) {
@@ -285,23 +352,14 @@ export function createGatewayImageClient(opts: CreateGatewayImageClientOptions):
       editUrl,
       {
         method: 'POST',
-        headers: {
-          Authorization: `Bearer ${apiKey}`,
-        },
+        headers,
         body: form as unknown as BodyInit,
         signal,
       },
       params.model,
-      {
-        model: params.model,
-        prompt: params.prompt,
-        n: params.n ?? 1,
-        ...(allowSizeQuality ? { size: params.size ?? 'auto' } : {}),
-        ...(params.quality ? { quality: params.quality } : {}),
-        images: imageParams,
-      },
+      { ...body, images: imageParams },
     );
-    return parseResponse(res, params.model, brandLabel);
+    return parseResponse(res, params.model, brandLabel, opts.maxResponseBytes);
   }
 
   return { generateImage, editImage };

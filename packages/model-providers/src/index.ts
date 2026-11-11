@@ -1,3 +1,6 @@
+export { parseModelDisplayPricing, type ModelDisplayPricing, type ModelDisplayPricingSummary, type SummaryQuote } from './modelDisplayPricing.js';
+export { providerProtocolCandidates, type ProviderProtocolCandidate } from './providerProtocolProbe.js';
+export { remoteInvocationModels, withEffectiveModelContextWindows } from './remoteModels.js';
 /**
  * @cindy/model-providers — 模型供应商目录 + 路由抽象（纯逻辑，零 Electron / maker-core 运行时依赖）。
  *
@@ -24,6 +27,7 @@ export type {
 
 export type {
   AgentKind,
+  ModelInterfaceSnapshot,
   ProviderWireProtocol,
   CodexCompatibilityWireProtocol,
   Effort,
@@ -44,6 +48,7 @@ export type {
   ProviderRuntimeModelConfig,
   PiReasoningEffort,
   PiModelApi,
+  ProviderVideoApi,
   NativeSubscriptionAuth,
   ProviderPreset,
   ProviderPresetRuntime,
@@ -53,8 +58,8 @@ export type {
   OAuthProviderDescriptor,
 } from "./types.js";
 
-export { NATIVE_SUBSCRIPTION_AUTHS, NATIVE_SUBSCRIPTION_DEFAULT_PROVIDER_IDS, PI_MODEL_APIS, PI_REASONING_EFFORTS } from "./types.js";
-export { isLocalOnlyProviderForAgent, isOpenAiSubscriptionProvider, providerCatalogId, isCustomRoutedProvider, isOrganizationManagedProvider } from './provider-identity.js';
+export { NATIVE_SUBSCRIPTION_AUTHS, NATIVE_SUBSCRIPTION_DEFAULT_PROVIDER_IDS, PI_MODEL_APIS, PI_REASONING_EFFORTS, PROVIDER_VIDEO_APIS, isProviderVideoApi } from "./types.js";
+export { isLocalOnlyProviderForAgent, isOpenAiSubscriptionProvider, supportsSubscriptionFastPolicy, providerCatalogId, isCustomRoutedProvider, isOrganizationManagedProvider, isCindyDistributedProvider, isCindyAutoModelId } from './provider-identity.js';
 export { sourceProviderForPreset } from './providerPresetIdentity.js';
 export { isMimoTokenPlanPreset } from './mimoPresentation.js';
 
@@ -113,6 +118,7 @@ export {
   decideModelRegistrySnapshot,
   findModelRegistryRoute,
   resolveModelNativeApi,
+  resolveRecommendedAgent,
   resolveCatalogModelNativeApi,
   resolveModelReferencePrice,
   resolveBaseModelReferencePrice,
@@ -147,6 +153,7 @@ export {
   connectedProvidersForAgent,
   nativeDefaultSourceId,
   effectiveSourceIdForModel,
+  movedCindyAutoSourceId,
   actualSourceIdForModel,
   providerOffersModel,
   getModel,
@@ -190,6 +197,7 @@ export {
   defaultEffortForCapabilities,
   resolveEffort,
   resolveRequestedEffort,
+  resolveRemoteSwitchEffort,
   composeAtomicModelSelection,
   resolveIntentReselectEffort,
   resolveProviderSwitchEffort,
@@ -252,6 +260,7 @@ export {
   normalizeModelIdForClassification,
   catalogModelIdCandidates,
   findCatalogModel,
+  uniqueRenamedSessionModelId,
   resolveWireModelId,
   candidateAgentsForModel,
   nativeAgentForProviderModel,
@@ -259,6 +268,8 @@ export {
   recommendedAgentForModel,
   resolveAgentCapability,
   unifiedModelEntries,
+  resolveStoredModelEntry,
+  displayNameOfStoredModelId,
   partitionEntriesByNativeAgent,
   sortEntriesForAgent,
 } from "./unifiedSelection.js";
@@ -288,6 +299,7 @@ export type { VisionCapability } from "./visionCapability.js";
 
 export {
   parseLocalModelCatalog,
+  localModelDescription,
   isLocalModelLibraryName,
 } from "./localModelCatalog.js";
 export type {
@@ -323,7 +335,7 @@ export { PROVIDER_MEDIA_FIELDS, providerMediaField, projectProviderMediaModels }
 
 export { PROVIDER_MODEL_CATALOG, providerModelRecord, providerModelGenerationRecord, providerModelAdapterId, providerPresetModelRecord, providerModelMetadata, providerCatalogForPi, providerModelsForRoute } from "./providerModelCatalog.js";
 
-export { parseModelsListResponse, isOpenRouterModelsUrl } from "./modelDiscovery.js";
+export { parseModelsListResponse, isOpenRouterModelsUrl, isOpenHubsModelsUrl } from "./modelDiscovery.js";
 
 export type { ProviderModelRecord } from "./providerModelCatalog.js";
 
@@ -333,3 +345,13 @@ export { providerSetupLink } from './providerSetupLinks.js';
 export { providerPresetOAuth, providerPresetOAuthRuntimes, providerOAuthContract } from './providerPresetOAuth.js';
 
 export { alignModelApiRoute, providerWireProtocolForApi, providerBaseUrlForApi } from "./providerInterfaceRoutes.js";
+
+export { availableModelInterfaces, modelWithInterface, MODEL_INTERFACE_CAPABILITIES } from './providerInterfaceRoutes.js';
+export * from './providerDetection.js';
+
+export { validDiscoveredModelSource, modelSupplierLabel } from './modelSource.js';
+export type { DiscoveredModelSource } from './modelSource.js';
+export {
+  markedSelectionAliasGroups, projectSelectionAliases, inheritSelectionAliasPreferences,
+  selectionAliasTargets, type SelectionAliasGroup, type SelectionAliasPreferences,
+} from './selectionAliasGroups.js';

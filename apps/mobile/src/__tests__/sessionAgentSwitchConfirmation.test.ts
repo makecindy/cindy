@@ -41,6 +41,8 @@ describe('confirmAgentLocationForPick (remote Agent)', () => {
     movable: true,
     session: { agentDeviceId: null },
     intent: null,
+    sourceAgentKind: 'claude-code' as const,
+    targetAgentKind: 'claude-code' as const,
     deviceName: (deviceId: string) => (deviceId === 'device-studio-mac' ? '工作室 Mac' : deviceId),
     hostName: '家里的 Mac',
   };
@@ -60,9 +62,20 @@ describe('confirmAgentLocationForPick (remote Agent)', () => {
     await expect(confirmAgentLocationForPick({ ...base, catalogDeviceId: 'device-studio-mac' }, showAlert))
       .resolves.toEqual({ agentDeviceId: 'device-studio-mac' });
     expect(showAlert.mock.calls[0]?.[0]).toBe('改到「工作室 Mac」上运行 Agent？');
-    expect(showAlert.mock.calls[0]?.[1]).toContain('交接摘要');
     expect(showAlert.mock.calls[0]?.[2]?.map((button: { text: string }) => button.text))
       .toEqual(['保持不变', '换电脑运行']);
+  });
+
+  // #7573 后同引擎换电脑会复制完整原生记录;跨引擎、分享来源仍只能走摘要,不能说成记录已带过去。
+  it.each([
+    ['same engine', {}, '完整对话记录会复制过去'],
+    ['different engine', { targetAgentKind: 'codex' as const }, '对话记录带不过来'],
+    ['shared target', { catalogDeviceId: 'share:abc' }, '对话记录带不过来'],
+    ['shared source', { session: { agentDeviceId: 'share:abc' } }, '对话记录带不过来'],
+  ])('describes what a relocation keeps: %s', async (_name, override, expected) => {
+    const showAlert = confirm();
+    await confirmAgentLocationForPick({ ...base, catalogDeviceId: 'device-studio-mac', ...override }, showAlert);
+    expect(showAlert.mock.calls[0]?.[1]).toContain(expected);
   });
 
   it('asks before moving back to the controlled computer', async () => {
@@ -104,6 +117,18 @@ describe('confirmAgentLocationForPick (remote Agent)', () => {
     await expect(confirmAgentLocationForPick({
       ...base, movable: false, catalogDeviceId: 'device-studio-mac',
     }, showAlert)).resolves.toBeNull();
+    expect(showAlert).not.toHaveBeenCalled();
+  });
+
+  it('keeps an immovable remote Agent on its current computer, even with a stale relocation intent', async () => {
+    const showAlert = vi.fn();
+    const fixed = { ...base, movable: false, session: { agentDeviceId: 'device-studio-mac' },
+      intent: { targetAgentKind: 'codex' as const, model: 'm', providerId: null, agentDeviceId: 'other' } };
+    await expect(confirmAgentLocationForPick({ ...fixed, catalogDeviceId: 'device-studio-mac' }, showAlert))
+      .resolves.toEqual({});
+    for (const catalogDeviceId of [null, 'other']) {
+      await expect(confirmAgentLocationForPick({ ...fixed, catalogDeviceId }, showAlert)).resolves.toBeNull();
+    }
     expect(showAlert).not.toHaveBeenCalled();
   });
 });

@@ -4,7 +4,10 @@ import { promises as fsp } from 'node:fs';
 import { createHash, randomUUID } from 'node:crypto';
 import { parse as parseToml, stringify as stringifyToml } from 'smol-toml';
 import yaml from 'js-yaml';
-import type { CapabilityRoutingPolicy } from '@cindy/maker-core';
+import {
+  isCodexExplicitOnlyOverlayRoute,
+  type CapabilityRoutingPolicy,
+} from '@cindy/maker-core';
 
 import {
   ensureDirectoryLink,
@@ -127,13 +130,7 @@ function codexCapabilityOverlays(
   if (!policy) return [];
   const overlays: CodexPluginOverlay[] = [];
   for (const directive of policy.overrides) {
-    if (
-      directive.invocation !== 'explicit-only' ||
-      directive.source.harness !== 'codex' ||
-      directive.source.kind !== 'harness-plugin'
-    ) {
-      continue;
-    }
+    if (!isCodexExplicitOnlyOverlayRoute(directive)) continue;
     const pluginKey = directive.source.containerId;
     if (!pluginKey) continue;
     const marketplace = marketplaceOfPluginKey(pluginKey);
@@ -151,11 +148,7 @@ function codexCapabilityOverlays(
       });
       continue;
     }
-    if (
-      directive.source.surface === 'mcp' &&
-      directive.source.artifactId &&
-      directive.source.artifactId !== directive.source.id
-    ) {
+    if (directive.source.surface === 'mcp' && directive.source.artifactId) {
       overlays.push({
         ...base,
         kind: 'mcp',

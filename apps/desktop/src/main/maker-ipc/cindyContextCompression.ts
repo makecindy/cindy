@@ -21,8 +21,8 @@ export type CompressionBudgetState = 'ok' | 'violated' | 'unknown';
 /**
  * tokens='violated' 只允许这些证据（普通 timeout / 网络 / 鉴权不算）：
  * - 终态 context-overflow（含 PI prompt RPC 超时）
- * - 本机占用 ≥ 100%
- * - 官方 compact 确定性失败（needsRollover：空摘要、compact 路径 invalid-request）
+ * - Claude Code／Pi 本机占用 ≥ 100%（伙伴与普通 Session 相同；Codex token 压力交原生压缩）
+ * - 官方 compact 确定性失败（needsRollover，或伙伴已记录的压缩空摘要／invalid-request）
  *
  * bytes='violated'：Codex 活尾巴可剥超大内联图（>8MB 且可剥 ≥ 一半且剥完 ≤8MB），
  * 或 Pi 的真实 413 经一次原生压缩仍无法恢复。

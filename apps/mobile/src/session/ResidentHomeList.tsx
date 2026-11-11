@@ -1,26 +1,47 @@
-import { useHomeMode } from './useHomeMode';
+import type { ViewInstance } from 'react-native';
 import { createContext, useCallback, useContext, useId, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from 'react';
-import { StyleSheet, View } from 'react-native';
+import { Platform, StyleSheet, View } from 'react-native';
 import Animated from 'react-native-reanimated';
 import { useSegments } from 'expo-router';
 import { useAdaptiveWindow } from '@/platform/AdaptiveWindowContext';
 import { useReduceMotionEnabled } from '@/hooks/useReduceMotion';
+import { AnimationVisibilityProvider } from '@/hooks/useLoopingAnimation';
 import { motionDuration } from '@/theme/tokens';
 import { RemoteSessionStoreSubscriptionGate } from './remoteSessionStore';
 import { sessionPaneLayout } from './sessionPaneLayout';
+import { SessionPaneDivider } from './SessionPaneDivider';
+
+const PaneLayoutContext = createContext<ReturnType<typeof sessionPaneLayout> | null>(null);
+type SidebarWidthPreference = { width: number | null; setWidth(width: number): void };
+const SidebarWidthContext = createContext<SidebarWidthPreference | null>(null);
+
+export function useSessionPaneLayout() {
+  const geometry = useAdaptiveWindow();
+  return useContext(PaneLayoutContext) ?? sessionPaneLayout(geometry);
+}
 
 type Frame = { left: number; top: number; width: number; height: number };
 type Entry = { owner: string; frame: Frame; children: ReactNode };
 const Context = createContext<{
-  enabled: boolean;
+  persistent: boolean;
   mounted: { current: boolean };
   publish(entry: Entry): void;
-  host: React.RefObject<View | null>;
+  unpublish(owner: string): void;
+  host: React.RefObject<ViewInstance | null>;
 } | null>(null);
 
-export function useResidentHomeList() {
+export function useResidentHomeList(embedded = false) {
   const context = useContext(Context);
-  return { enabled: context?.enabled ?? false, mounted: context?.mounted };
+  // UIKit must find Home's list inside its covered screen during interactive
+  // back, before JS focus changes. Keep that ownership at every window width.
+  // Android retains the root host; modal drawers always stay in their surface.
+  return { enabled: !!context && (embedded ? context.persistent : Platform.OS !== 'ios'), mounted: context?.mounted };
+}
+
+/** A native-docked Home already owns its whole list. Keep the list within that
+ * surface in both orientations instead of moving it to the legacy root host. */
+export function LocalHomeList({ children }: { children: ReactNode }) {
+  return <Context.Provider value={null}>{children}</Context.Provider>;
 }
 
 /** Preserve the resident-list owner when route content is re-hosted above this
@@ -35,41 +56,71 @@ export function useResidentHomeListContextBridge(children: ReactNode) {
   );
 }
 
+/** One task-list width for the side column and the floating quick-switch
+ * drawer: resizing either one is the same choice, with the same default and
+ * drag range. Only a constrained window or an actual hinge can override it. */
+export function useSessionSidebarWidthPreference(): SidebarWidthPreference {
+  const context = useContext(SidebarWidthContext);
+  const [width, setWidth] = useState<number | null>(null);
+  return context ?? { width, setWidth };
+}
+
 /** The list lives above route lifetimes. Owners only supply its frame and props;
  * never key the host by route, session, or presentation width. */
 export function ResidentHomeListProvider({ children }: { children: ReactNode }) {
   const geometry = useAdaptiveWindow();
-  const enabled = sessionPaneLayout(geometry).persistent;
+  // Window preference, shared by retained routes and the floating drawer;
+  // rotation clamps only the displayed width, so returning to a wide window
+  // restores the user's choice.
+  const [sidebarWidth, setSidebarWidth] = useState<number | null>(null);
+  const paneLayout = useMemo(() => sessionPaneLayout(geometry, sidebarWidth), [geometry, sidebarWidth]);
+  const { persistent } = paneLayout;
   const segments = useSegments() as string[];
-  const { mode } = useHomeMode();
-  // The retained task list must not overlay the teammate home pane.
-  const visible = enabled && ((mode === 'tasks' && (segments.length === 0 || segments[0] === 'index' || (segments[0] === 'devices' && (segments.length === 1 || segments[1] === 'index'))))
-    || (segments[0] === 'sessions' && segments[1] === '[sessionId]'));
-  const host = useRef<View>(null);
+  const homeRoute = segments.length === 0 || segments[0] === 'index'
+    || (segments[0] === 'devices' && (segments.length === 1 || segments[1] === 'index'));
+  // iOS Home keeps its list in its own route; Android draws it here on the home too.
+  const rootHome = Platform.OS !== 'ios';
+  const visible = (rootHome && homeRoute)
+    || (persistent && isPaneDetailRoute(segments));
+  const host = useRef<ViewInstance>(null);
   const mounted = useRef(false);
   const [entry, setEntry] = useState<Entry | null>(null);
   const reduceMotion = useReduceMotionEnabled();
   const publish = useCallback((next: Entry) => { setEntry(next); }, []);
-  const context = useMemo(() => ({ enabled, mounted, publish, host }), [enabled, publish]);
+  const unpublish = useCallback((owner: string) => {
+    setEntry(current => current?.owner === owner ? null : current);
+  }, []);
+  const context = useMemo(() => ({ persistent, mounted, publish, unpublish, host }), [persistent, publish, unpublish]);
+  const widthPreference = useMemo(() => ({ width: sidebarWidth, setWidth: setSidebarWidth }), [sidebarWidth]);
   useLayoutEffect(() => {
-    mounted.current = enabled && !!entry;
-    if (!enabled) setEntry(null);
-  }, [enabled, entry]);
-  return <Context.Provider value={context}>
+    mounted.current = !!entry;
+  }, [entry]);
+  return <SidebarWidthContext.Provider value={widthPreference}>
+    <PaneLayoutContext.Provider value={paneLayout}><Context.Provider value={context}>
     <View ref={host} collapsable={false} style={styles.root}>
       {children}
-      {entry ? <Animated.View pointerEvents={visible ? 'box-none' : 'none'}
+      {entry ? <Animated.View collapsable={false} pointerEvents={visible ? 'box-none' : 'none'}
         accessibilityElementsHidden={!visible}
         importantForAccessibility={visible ? 'auto' : 'no-hide-descendants'}
         style={[styles.host, entry.frame, {
-          opacity: visible ? 1 : 0,
           transitionProperty: ['left', 'top', 'width', 'height'],
-          transitionDuration: reduceMotion === false ? motionDuration.fast : 0,
-        }]}>
-        <RemoteSessionStoreSubscriptionGate enabled={visible}>{entry.children}</RemoteSessionStoreSubscriptionGate>
+          // The measured slot already follows the divider. Do not start a
+          // second size animation when the final asynchronous measure arrives
+          // after release; keep the sidebar's native host above the route.
+          transitionDuration: !persistent && reduceMotion === false ? motionDuration.fast : 0,
+        }, { opacity: visible ? 1 : 0 }]}>
+        <AnimationVisibilityProvider visible={visible}>
+          <RemoteSessionStoreSubscriptionGate enabled={visible}>{entry.children}</RemoteSessionStoreSubscriptionGate>
+        </AnimationVisibilityProvider>
       </Animated.View> : null}
+      {visible && !homeRoute && paneLayout.resizeBounds ? <SessionPaneDivider
+        width={paneLayout.sidebarWidth} bounds={paneLayout.resizeBounds}
+        left={paneLayout.detail.x} top={geometry.insets.top} bottom={geometry.insets.bottom}
+        onResize={setSidebarWidth}
+      /> : null}
     </View>
-  </Context.Provider>;
+  </Context.Provider></PaneLayoutContext.Provider>
+  </SidebarWidthContext.Provider>;
 }
 
 /** A route supplies a measuring slot, not another native list. Its header stays
@@ -78,27 +129,43 @@ export function ResidentHomeList({ children, focused, top, left, right }: {
   children: ReactNode; focused: boolean; top: number; left: number; right: number;
 }) {
   const context = useContext(Context);
+  const unpublish = context?.unpublish;
   const owner = useId();
-  const anchor = useRef<View>(null);
+  const anchor = useRef<ViewInstance>(null);
   const latest = useRef({ children, focused });
   latest.current = { children, focused };
   const measureRevision = useRef(0);
   const measure = useCallback(() => {
     const revision = ++measureRevision.current;
-    if (!context?.enabled || !latest.current.focused || !context.host.current) return;
-    anchor.current?.measureLayout(context.host.current, (x, y, width, height) => {
-      if (revision !== measureRevision.current || !latest.current.focused || width <= 0 || height <= 0) return;
-      context.publish({ owner, frame: { left: x, top: y, width, height }, children: latest.current.children });
+    if (!context || !latest.current.focused || !context.host.current) return;
+    anchor.current?.measureInWindow((x, y, width, height) => {
+      context.host.current?.measureInWindow((hostX, hostY) => {
+        if (revision !== measureRevision.current || !latest.current.focused || width <= 0 || height <= 0) return;
+        context.publish({ owner, frame: { left: x - hostX, top: y - hostY, width, height }, children: latest.current.children });
+      });
     });
   }, [context, owner]);
   useLayoutEffect(() => {
     measure();
     return () => { ++measureRevision.current; };
   }, [measure, children, focused, top, left, right]);
+  // iOS Home lives in its native route, so an unmounted drawer has no successor
+  // in this host. Android retains the root list through route-owner handoffs.
+  // Layout/prop updates keep the live list; an old owner cannot clear a new one.
+  useLayoutEffect(() => {
+    if (Platform.OS === 'ios') return () => { unpublish?.(owner); };
+  }, [unpublish, owner]);
   return <View ref={anchor} collapsable={false} pointerEvents="none" onLayout={measure}
     style={{ flex: 1, marginTop: top, marginLeft: -left, marginRight: -right }} />;
 }
+/** Routes shown beside the resident list: tasks (including a teammate's own
+ * chat) and group chats, which share one teammate list with them. */
+function isPaneDetailRoute(segments: string[]) {
+  if (segments[0] === 'sessions') return segments[1] === '[sessionId]' || segments[1] === 'new';
+  return segments[0] === 'companions' && segments[1] === 'groups' && segments[2] === '[groupId]';
+}
+
 const styles = StyleSheet.create({
   root: { flex: 1 },
-  host: { position: 'absolute' },
+  host: { position: 'absolute', zIndex: 1 },
 });

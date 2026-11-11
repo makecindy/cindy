@@ -40,13 +40,7 @@ import {
 import { getLiziMcpSessionContext, type LiziMcpSessionContext } from '@cindy/mcps';
 
 import type { Logger as MakerLogger } from '@cindy/maker-core';
-
-import {
-  REMOTE_COLLAB_SERVER_NAMES,
-  startCodexHttpBridge,
-  type CodexHttpBridge,
-  withMcpRouteIdentity,
-} from './codexHttpBridge.js';
+import type { CodexHttpBridge } from './codexHttpBridge.js';
 import {
   CODEX_ALLOWED_BUILTIN_PLUGIN_IDS_KEY,
   CODEX_DISABLED_BUILTIN_PLUGIN_IDS_KEY,
@@ -63,6 +57,9 @@ import { pluginIdForKnownProviderName } from '../maker-host/plugins/builtin-plug
 import { createPluginRegistry } from '../maker-host/plugins/index.js';
 import { isAllowedRemoteMcpUrl, isDesktopLoopbackMcpUrl } from './piMcpTransport.js';
 import { RUNTIME_MCP_NAMES_KEY } from '../maker-host/agentCapabilityCatalog.js';
+import { hasImChannelVendorOptions } from '../../shared/botImConnection.js';
+import { REMOTE_COLLAB_SERVER_NAMES } from './codexHttpBridge.js';
+
 
 interface StartedPiBridge {
   bridge: CodexHttpBridge | null;
@@ -74,6 +71,11 @@ interface StartedPiBridge {
   retired: boolean;
   shutdownPromise: Promise<void> | null;
 }
+
+/** Shared MCP transport with launcher-owned runtime and credentials. */
+export function createPiEnvironment(ports: { startCodexHttpBridge: ReturnType<typeof import('./codexHttpBridge.js').createCodexHttpBridgeRuntime>['startCodexHttpBridge']; withMcpRouteIdentity: ReturnType<typeof import('./codexHttpBridge.js').createCodexHttpBridgeRuntime>['withMcpRouteIdentity']; }) {
+const { startCodexHttpBridge, withMcpRouteIdentity } = ports;
+
 
 let startPromise: Promise<StartedPiBridge | null> | null = null;
 let activeGeneration: StartedPiBridge | null = null;
@@ -158,7 +160,7 @@ function releaseGeneration(started: StartedPiBridge): void {
  * bridge 单例懒启动并缓存;每次调用按传入 sessionCtx 产出 per-session 的
  * server URL(带/不带 `?session=`)并做对应的身份注册。
  */
-export async function getPiExtraSpawnConfig(
+async function getPiExtraSpawnConfig(
   providers: McpProvider[],
   logger: MakerLogger,
   sessionCtx?: PiExtraSpawnConfigContext,
@@ -211,6 +213,13 @@ export async function getPiExtraSpawnConfig(
         server.name === CINDY_MAKE_MCP_SERVER_NAME
         && !isCindyMakeVendorOptions(sessionCtx?.vendorOptions)
       ) return false;
+      // Telegram Bot API 直通只给带 Telegram 渠道标记的会话(专线 chat / 伙伴绑了 Telegram);
+      // 共享 bridge 上它常注册, 可见性在这里按会话收。
+      if (
+        server.name === 'cindy_telegram_bot'
+        && !hasImChannelVendorOptions(sessionCtx?.vendorOptions, 'telegram')
+      ) return false;
+      if (server.name === 'cindy_imessage' && !hasImChannelVendorOptions(sessionCtx?.vendorOptions, 'imessage')) return false;
       if (!isBotMcpServerAllowed(sessionCtx?.botMcpPolicy, server.name)) return false;
       if (!collabEnabled && REMOTE_COLLAB_SERVER_NAMES.has(server.name)) return false;
       // Custom HTTP MCPs are `s.remote` and skip the SSH URL rewriter. Desktop
@@ -387,7 +396,7 @@ export async function getPiExtraSpawnConfig(
  * 会话 close 后才关桥。这样撤销/新增工具能作用于新会话，又不会把正在执行的工具
  * 请求从脚下切断。
  */
-export function invalidatePiEnvironment(): void {
+function invalidatePiEnvironment(): void {
   environmentEpoch += 1;
   const current = activeGeneration;
   activeGeneration = null;
@@ -395,7 +404,7 @@ export function invalidatePiEnvironment(): void {
   if (current) retireGeneration(current);
 }
 
-export async function shutdownPiEnvironment(): Promise<void> {
+async function shutdownPiEnvironment(): Promise<void> {
   // 轮 40-w4-t10 MEDIUM:先置关停门闩再收口 —— 关停期间 ensureBridge fail-closed。
   environmentShuttingDown = true;
   environmentEpoch += 1;
@@ -419,7 +428,7 @@ export async function shutdownPiEnvironment(): Promise<void> {
  * @internal 测试钩子:重置模块级单例状态(ensureBridge 的 startPromise /
  * activeGeneration / generations)。仅在测试文件里调用 —— 生产代码不依赖。
  */
-export function resetPiEnvironmentForTest(): void {
+function resetPiEnvironmentForTest(): void {
   startPromise = null;
   activeGeneration = null;
   nextGeneration = 0;
@@ -644,7 +653,7 @@ async function doStart(
     if (!toClaudeSdkConfig) continue;
 
     const createServer = (): McpServer => {
-      const cfg = toClaudeSdkConfig(ctx) as { type?: string; instance?: unknown } | null;
+      const cfg = toClaudeSdkConfig.call(provider, ctx) as { type?: string; instance?: unknown } | null;
       if (cfg?.type !== 'sdk' || !cfg.instance) {
         throw new Error(`provider ${provider.name} did not return an SDK McpServer instance`);
       }
@@ -703,4 +712,6 @@ async function doStart(
     ...(bridge ? { port: bridge.port } : {}),
   });
   return { bridge, serverNames, remoteServers, mcpEnv };
+}
+return { getPiExtraSpawnConfig, invalidatePiEnvironment, shutdownPiEnvironment, resetPiEnvironmentForTest };
 }

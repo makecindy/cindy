@@ -58,6 +58,8 @@ export interface DesktopCommandDefinition {
   description: string;
   /** Optional dynamic gate for commands backed by a user-toggleable capability. */
   isVisible?: (ctx?: Pick<DesktopCommandContext, 'deviceId'>) => boolean;
+  /** Lightweight display-only check; execute always rechecks isVisible. */
+  isVisibleForListing?: (ctx?: Pick<DesktopCommandContext, 'deviceId'>) => boolean;
   /**
    * 主入口 —— 命中此命令时由 main 执行。
    * 同步/异步皆可; 抛错由调用方 catch + 上报, 不会自动 swallow。
@@ -82,7 +84,7 @@ export class DesktopCommandRegistry {
    */
   list(ctx?: Pick<DesktopCommandContext, 'deviceId'>): DesktopCommandMeta[] {
     return Array.from(this.commands.values())
-      .filter((c) => c.isVisible?.(ctx) !== false)
+      .filter((c) => (c.isVisibleForListing ?? c.isVisible)?.(ctx) !== false)
       .map((c) => ({
         kind: 'desktop' as const,
         name: c.name,

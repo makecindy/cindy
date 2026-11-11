@@ -23,6 +23,15 @@ const targets = [
 ];
 
 describe('remote resource discovery', () => {
+  // plugin-security-and-authoring §1.1: preserve Host capability declarations so mobile never guesses support.
+  // Existing discovery tests omitted collection actions. Minimal regression: one plugins management action (unit).
+  it('retains bounded collection capability actions from the Host manifest', async () => {
+    const invoke = vi.fn(async () => ({ protocolVersion: 1, collections: [{
+      id: 'plugins', resourceKind: 'plugin', title: 'Plugins', actions: [{ id: 'management:snapshot', label: 'Manage' }],
+    }] })) as RemoteInvoke;
+    const manifest = await loadRemoteResourceManifest(invoke, targets[0]);
+    expect(manifest?.collections[0].actions).toEqual([{ id: 'management:snapshot', label: 'Manage' }]);
+  });
   it('omits desktop routines from live discovery and offline fallback while keeping other collections', async () => {
     const collections = [
       { id: 'routines', title: '例行任务', resourceKind: 'routine', placement: 'home-scope', targets },
@@ -115,6 +124,17 @@ describe('remote resource discovery', () => {
       .rejects.toThrow('temporarily offline');
   });
 
+  it('commits an authoritative empty manifest even when an uncached sibling fails', async () => {
+    const invoke = vi.fn(async (deviceId: string) => {
+      if (deviceId === 'mac-2') throw new Error('temporarily offline');
+      return { protocolVersion: 1, collections: [] };
+    }) as RemoteInvoke;
+    const previous = [{ id: 'teammates', title: 'Teammates', resourceKind: 'bot', placement: 'home-scope', targets: [targets[0]] }];
+    const progress = vi.fn();
+    await expect(discoverRemoteHomeCollections(invoke, targets, 'en', previous, progress)).resolves.toEqual([]);
+    expect(progress).toHaveBeenLastCalledWith([]);
+  });
+
   it('treats an old host as unsupported while retaining collections from newer hosts', async () => {
     const invoke = vi.fn(async (deviceId: string) => {
       if (deviceId === 'mac-1') throw new DeviceLinkError('CHANNEL_NOT_ALLOWED', 'old desktop');
@@ -167,6 +187,13 @@ describe('remote resource discovery', () => {
 });
 
 describe('remote resource response boundaries', () => {
+  it('retains maximum-length namespace instance refs while bounding malformed ids', () => {
+    const id = '_ns__' + 'a'.repeat(128) + '__' + 'p'.repeat(32);
+    const item = (value: string) => ({ ref: { collectionId: 'plugins', kind: 'plugin', id: value },
+      display: { title: 'Plugin' }, links: [], revision: '1' });
+    expect(normalizeRemoteCollectionItems({ items: [item(id), item('x'.repeat(257))] }, 'plugins')
+      .map((entry) => entry.ref.id)).toEqual([id]);
+  });
   it('keeps valid additive items and drops malformed or cross-collection items', () => {
     expect(normalizeRemoteCollectionItems({ items: [
       {
@@ -302,4 +329,16 @@ describe('bot group chat block', () => {
     const resource = await getRemoteResource(invoke, targets[0], ref);
     expect(resource.blocks?.[0]).toEqual({ id: 'chat', primitive: 'bot-group-chat', fallbackMarkdown: '**阿布**: 写好了' });
   });
+});
+
+// Unit: the actual controller normalizer must retain the host state before any chat is opened.
+// Existing generation coverage missed this optional field and legacy/future host fallback.
+it('preserves optional teammate activity, without interpreting unknown phases', () => {
+  const input = (teammateActivity?: unknown) => ({ items: [{ ref: { collectionId: 'teammates', kind: 'bot', id: 'bot' },
+    display: { title: 'Cindy', teammateActivity }, links: [], revision: '1' }] });
+  for (const phase of ['needs-interaction', 'completed', 'future-state']) {
+    expect(normalizeRemoteCollectionItems(input({ phase }), 'teammates')[0].display.teammateActivity).toEqual({ phase });
+  }
+  expect(normalizeRemoteCollectionItems(input(), 'teammates')[0].display.teammateActivity).toBeUndefined();
+  expect(normalizeRemoteCollectionItems(input({ phase: {} }), 'teammates')[0].display.teammateActivity).toBeUndefined();
 });

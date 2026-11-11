@@ -17,6 +17,14 @@ import {
 } from "@cindy/maker-shared/message-source";
 import { i18n } from "@/i18n";
 
+/** 系统合批只按数量命名；身份与状态保留在原始正文，不归到首个 Worker。 */
+export function orcaAutoBridgeBatchCount(origin: unknown): number | undefined {
+  const record = origin && typeof origin === 'object' ? origin as Record<string, unknown> : null;
+  return record?.kind === 'orca' && record.autoBridge === true
+    && Number.isSafeInteger(record.autoBridgeBatchCount) && (record.autoBridgeBatchCount as number) >= 2
+    ? record.autoBridgeBatchCount as number : undefined;
+}
+
 /** 与桌面 HookTaskCard 同一份平台集合；未知平台 fail closed，不渲染卡片。 */
 export const MOBILE_IM_PLATFORMS = [
   "slack",
@@ -28,6 +36,7 @@ export const MOBILE_IM_PLATFORMS = [
   "wechat",
   "wecom",
   "dingtalk",
+  "imessage",
 ] as const;
 
 export type MobileImPlatform = (typeof MOBILE_IM_PLATFORMS)[number];
@@ -111,6 +120,14 @@ export function isSourceDeviceRemoved(
 }
 
 export function sourcePluginLabel(plugin: MessageSourcePlugin): string {
+  if (plugin.pluginId.startsWith('local-app:')) {
+    return i18n.t('message.renderer.sourceLocalApp', { name: plugin.name ?? plugin.pluginId.slice(10) });
+  }
+  if (plugin.pluginId.startsWith('mcp-app:')) {
+    return i18n.t('mcpApps.messageSource', {
+      name: plugin.name ?? plugin.pluginId.slice(8),
+    });
+  }
   return plugin.name
     ? i18n.t("message.renderer.sourcePluginNamed", { name: plugin.name })
     : i18n.t("message.renderer.sourcePlugin");
@@ -147,7 +164,9 @@ export function sessionOriginLabel(origin: {
 export function orcaMessageTitle(
   source: "lead" | "worker",
   senderLabel?: string,
+  autoBridgeBatchCount?: number,
 ): string {
+  if (autoBridgeBatchCount) return i18n.t('interaction.collab.fromWorkerBatch', { count: autoBridgeBatchCount });
   if (source === "lead") return i18n.t("interaction.collab.fromLead");
   const role = sanitizeSourceName(senderLabel);
   return role && !/^(lead|worker)$/i.test(role)
@@ -157,6 +176,8 @@ export function orcaMessageTitle(
 
 const SOURCE_ID_I18N_KEYS: Record<MessageSourceIdKind, string> = {
   plugin: "message.renderer.sourcePluginId",
+  mcpApp: "mcpApps.serverId",
+  localApp: "message.renderer.sourceLocalAppId",
   teammate: "message.renderer.sourceTeammateId",
   session: "message.renderer.sourceSessionId",
   automation: "message.renderer.sourceAutomationId",

@@ -25,6 +25,7 @@ import {
 } from '@/features/device-link/remoteSessionActivityStore';
 
 import { SessionCard } from '../SessionCard';
+import type { Session } from '@/lib/ccAgent.types';
 import { SessionItem } from '../SessionItem';
 import { sessionCardVisualCases } from '../__fixtures__/sessionCardVisualCases';
 import { SPLIT_GROUP_SESSION_MIME } from '../../splitGroupDnd';
@@ -122,6 +123,16 @@ vi.mock('@/components/sidebar/WorktreeBadge', () => ({
       : null,
 }));
 
+vi.mock('@/lib/worktreeRemovalWarning', async (importOriginal) => ({
+  ...await importOriginal<typeof import('@/lib/worktreeRemovalWarning')>(),
+  prefetchDirtyWorktreeForRemoval: vi.fn(),
+}));
+
+vi.mock('@/features/device-link/useDeviceLinkDeviceList', async (importOriginal) => ({
+  ...await importOriginal<typeof import('@/features/device-link/useDeviceLinkDeviceList')>(),
+  useDeviceLinkDeviceList: () => [],
+}));
+
 vi.mock('@/contexts/WorktreeContext', () => {
   const reportLiveness = vi.fn();
   const refreshObserved = vi.fn();
@@ -164,10 +175,8 @@ vi.mock('@/hooks/useSessionPausedQueue', () => ({
 
 vi.mock('@/lib/sessionAttentionStore', () => ({
   useSessionAttentionKind: (sessionId: string) => mocks.attentionKindBySession.get(sessionId),
-}));
-
-vi.mock('../../lib/scrollIntoNearestView', () => ({
-  scrollIntoNearestView: vi.fn(),
+  getSessionAttentionKinds: () => mocks.attentionKindBySession,
+  subscribeSessionAttention: () => () => undefined,
 }));
 
 vi.mock('@/lib/toast', () => ({
@@ -241,7 +250,13 @@ function sessionRowEl(): HTMLElement {
 }
 
 describe('SessionCard visual cases', () => {
+  const originalScrollIntoView = Object.getOwnPropertyDescriptor(HTMLElement.prototype, 'scrollIntoView');
+
   beforeEach(() => {
+    Object.defineProperty(HTMLElement.prototype, 'scrollIntoView', {
+      configurable: true,
+      value: vi.fn(),
+    });
     clearRemoteSessionActivity();
     mocks.navigate.mockReset();
     mocks.dropdownMenuOpen = false;
@@ -257,6 +272,60 @@ describe('SessionCard visual cases', () => {
   afterEach(() => {
     cleanup();
     vi.restoreAllMocks();
+    if (originalScrollIntoView) {
+      Object.defineProperty(HTMLElement.prototype, 'scrollIntoView', originalScrollIntoView);
+    } else {
+      delete (HTMLElement.prototype as Partial<HTMLElement>).scrollIntoView;
+    }
+  });
+
+  it.each(['list', 'card'] as const)(
+    'shows the sorting timestamp in the %s row with legacy fallback',
+    (variant) => {
+      const session: Session = {
+        ...sessionCardVisualCases[0].session,
+        updatedAt: '2026-10-24T09:00:00.000Z',
+        userSendAt: '2026-10-24T08:00:00.000Z',
+        lastActivityAt: '2026-10-24T10:00:00.000Z',
+      };
+      for (const expected of [session.lastActivityAt, session.userSendAt, session.updatedAt]) {
+        const view = renderCase(sessionCardVisualCases[0].id, { session, variant });
+        expect(view.container.querySelector('time')?.getAttribute('dateTime')).toBe(expected);
+        view.unmount();
+        if (session.lastActivityAt) delete session.lastActivityAt;
+        else session.userSendAt = null;
+      }
+    },
+  );
+
+  it('scrolls a text row into nearest view only when it becomes active', () => {
+    const props = {
+      session: sessionCardVisualCases[0].session,
+      isActive: false,
+      isRunning: false,
+      hasAttentionNotification: false,
+      onClick: vi.fn(),
+      onAction: vi.fn(),
+      onRename: vi.fn(),
+      onTogglePin: vi.fn(),
+    };
+    const view = render(createElement(SessionItem, props));
+    const row = view.container.querySelector(`[data-session-id="${props.session.id}"]`);
+    const scrollIntoView = vi.mocked(HTMLElement.prototype.scrollIntoView);
+    expect(row).toBeTruthy();
+    expect(scrollIntoView).not.toHaveBeenCalled();
+
+    // The old source guard never exercised this transition. Keep the real
+    // SessionItem effect and helper in this unit regression; only stub native DOM.
+    view.rerender(createElement(SessionItem, { ...props, isActive: true }));
+    expect(scrollIntoView).toHaveBeenCalledExactlyOnceWith({ block: 'nearest', behavior: 'smooth' });
+    expect(scrollIntoView.mock.contexts).toEqual([row]);
+
+    const updatedSession = { ...props.session, preview: 'Updated preview' };
+    view.rerender(createElement(SessionItem, { ...props, session: updatedSession, isActive: true }));
+    expect(scrollIntoView).toHaveBeenCalledTimes(1);
+    view.rerender(createElement(SessionItem, { ...props, session: updatedSession, isActive: false }));
+    expect(scrollIntoView).toHaveBeenCalledTimes(1);
   });
 
   it.each(['list', 'text'] as const)('reuses the %s presentation for shared navigation without task actions', (variant) => {
@@ -301,6 +370,25 @@ describe('SessionCard visual cases', () => {
     mocks.pendingPluginSetupSessionIds.add(visualCase.session.id);
     renderCase(visualCase.id, { variant: 'list', navigationOnly: true });
     expect(screen.getByText('等待插件设置')).toBeTruthy();
+  });
+
+  // Regression: remote-supplier tasks have local messages, but agentDeviceId hid export.
+  // The existing shared-task menu cases cover guests, not owner tasks using a remote agent.
+  // Unit tier: render the production rows and inspect the menu opened by a context click.
+  // Standalone file: 5.28s on Windows; existing imports take 3.50s, test bodies 0.76s.
+  it.each(['list', 'text'] as const)('offers history export for a remote supplier in the %s row', async (variant) => {
+    const session = { ...sessionCardVisualCases[0].session, agentDeviceId: 'remote-device' };
+    const props = {
+      session, isActive: false, isRunning: false, hasAttentionNotification: false,
+      onClick: vi.fn(), onRename: vi.fn(), onAction: vi.fn(), onTogglePin: vi.fn(),
+    };
+    const view = render(variant === 'list'
+      ? createElement(SessionCard, { ...props, variant: 'list' })
+      : createElement(SessionItem, props));
+    await act(async () => {
+      fireEvent.contextMenu(view.container.querySelector<HTMLElement>('[data-sidebar-session-row="true"]')!);
+    });
+    expect(screen.getByRole('menuitem', { name: 'ccAgent.sidebar.sessionMenu.exportShare' })).toBeTruthy();
   });
 
   it.each(['list', 'text'] as const)('shows only leave sharing on a guest %s row', (variant) => {
@@ -561,7 +649,7 @@ describe('SessionCard visual cases', () => {
 
       const card = container.querySelector<HTMLElement>('[data-sidebar-session-row="true"]');
       const title = within(card!).getByText(visualCase.session.title, {
-        selector: variant === 'list' ? '.sidebar-title-marquee__ellipsis' : undefined,
+        selector: '.sidebar-title-marquee__ellipsis',
       });
       const actionButton = card?.querySelector<HTMLButtonElement>(
         'button[aria-label="ccAgent.sidebar.sessionMenu.moreActions"]',
@@ -624,16 +712,64 @@ describe('SessionCard visual cases', () => {
     },
   );
 
-  it('keeps single-line cards naturally shorter than long summary cards', () => {
-    renderCase('short-idle-cc');
-    const shortCard = screen
-      .getByTestId('visual-case')
-      .querySelector('[data-sidebar-session-row="true"]');
-    expect(shortCard?.className).not.toContain('h-full');
-    cleanup();
+  // 2026-11-08 用户定稿:置顶卡片统一高度(标题 1 行 + 正文固定 2 行位 + meta 行)。
+  // 旧版无正文时不渲染正文区、summary 正文放宽到 3 行,同列卡片高度不一、两列底边错开。
+  it('keeps pinned cards on one height budget whether the body is empty, short or a long summary', () => {
+    const shortCase = sessionCardVisualCases.find((item) => item.id === 'short-idle-cc')!;
+    const summaryCase = sessionCardVisualCases.find((item) => item.id === 'summary-long-body')!;
+    const cases = [
+      { caseId: 'short-idle-cc', overrides: { session: { ...shortCase.session, preview: null } } },
+      { caseId: 'short-idle-cc', overrides: {} },
+      { caseId: 'summary-long-body', overrides: {} },
+    ];
+    const budgets = cases.map(({ caseId, overrides }) => {
+      const view = renderCase(caseId, overrides);
+      const card = sessionRowEl();
+      expect(card.className).not.toContain('h-full');
+      const bodies = card.querySelectorAll('p');
+      expect(bodies).toHaveLength(1);
+      const budget = {
+        body: bodies[0].textContent,
+        bodyBox: `${bodies[0].className}|${bodies[0].getAttribute('style') ?? ''}`,
+      };
+      view.unmount();
+      return budget;
+    });
 
-    renderCase('summary-long-body');
-    expect(screen.getByText(/汇总玩家/)).toBeTruthy();
+    expect(budgets.map((item) => item.body)).toEqual([
+      '',
+      shortCase.session.preview,
+      summaryCase.session.summary,
+    ]);
+    expect(new Set(budgets.map((item) => item.bodyBox)).size).toBe(1);
+  });
+
+  // 2026-11-09 用户定:置顶卡片标题单行但不能只截断,悬停卡片时与列表行一样用跑马灯带过全名。
+  it('plays the shared title marquee when hovering a pinned card with an overflowing title', () => {
+    const widths = [
+      vi.spyOn(HTMLElement.prototype, 'scrollWidth', 'get').mockImplementation(function (this: HTMLElement) {
+        return this.classList.contains('sidebar-title-marquee__track') ? 300 : 0;
+      }),
+      vi.spyOn(HTMLElement.prototype, 'clientWidth', 'get').mockImplementation(function (this: HTMLElement) {
+        return this.classList.contains('sidebar-title-marquee') ? 100 : 0;
+      }),
+    ];
+    try {
+      renderCase('very-long-title');
+      const card = sessionRowEl();
+      const marquee = card.querySelector<HTMLElement>('.sidebar-title-marquee')!;
+      expect(marquee.title).toBe(sessionCardVisualCases.find((item) => item.id === 'very-long-title')!.session.title);
+      expect(marquee.dataset.titleOverflowing).toBeUndefined();
+
+      fireEvent.mouseEnter(card);
+      expect(marquee.dataset.titleOverflowing).toBe('true');
+      expect(marquee.style.getPropertyValue('--sidebar-title-marquee-shift')).toBe('-200px');
+
+      fireEvent.mouseLeave(card);
+      expect(marquee.dataset.titleOverflowing).toBeUndefined();
+    } finally {
+      widths.forEach((spy) => spy.mockRestore());
+    }
   });
 
   it('shows plugin setup as a needs-interaction preview', () => {
@@ -735,9 +871,7 @@ describe('SessionCard visual cases', () => {
 
     // card 变体(评审定稿):标题纯文字,自动化标志下沉到底部 meta 行。
     const { container: cardContainer } = render(createElement(SessionCard, commonProps));
-    const cardTitle = Array.from(cardContainer.querySelectorAll('div')).find((node) =>
-      node.className.includes('[-webkit-line-clamp:2]'),
-    );
+    const cardTitle = cardContainer.querySelector('.sidebar-title-marquee');
     expect(cardTitle?.textContent).toContain('自动化日报巡检');
     // 标题里不再有自动化图标……
     expect(cardTitle?.querySelector('[aria-label="查看自动化任务"]')).toBeNull();
@@ -827,9 +961,7 @@ describe('SessionCard visual cases', () => {
     );
 
     const card = container.querySelector<HTMLElement>('[data-sidebar-session-row="true"]')!;
-    const title = Array.from(card.querySelectorAll<HTMLElement>('div')).find((node) =>
-      node.className.includes('[-webkit-line-clamp:2]'),
-    )!;
+    const title = card.querySelector<HTMLElement>('.sidebar-title-marquee')!.parentElement!;
     expect(title.classList.contains('invisible')).toBe(false);
 
     fireEvent.doubleClick(card);
@@ -839,6 +971,8 @@ describe('SessionCard visual cases', () => {
     const titleSlot = title.parentElement!;
     expect(card.contains(title)).toBe(true);
     expect(title.classList.contains('invisible')).toBe(true);
+    // 编辑时不渲染跑马灯轨道:轨道自带 visibility:visible,会穿透 invisible 从透明输入框下透出旧标题。
+    expect(title.querySelector('.sidebar-title-marquee__track')).toBeNull();
     expect(titleSlot).toBe(overlay.parentElement);
     expect(titleSlot.classList.contains('relative')).toBe(true);
     expect(overlay.classList.contains('absolute')).toBe(true);
@@ -852,7 +986,9 @@ describe('SessionCard visual cases', () => {
 
   it('keeps archived sessions on the archive visual branch', () => {
     renderCase('archived');
-    expect(screen.getByText('已归档的历史分析任务')).toBeTruthy();
+    expect(
+      screen.getByText('已归档的历史分析任务', { selector: '.sidebar-title-marquee__ellipsis' }),
+    ).toBeTruthy();
   });
 
   it('matches text-mode action chrome in list mode while preserving card buttons', () => {
@@ -1034,9 +1170,7 @@ describe('SessionCard visual cases', () => {
                   node.className.includes('truncate') &&
                   node.textContent?.includes(visualCase.session.title),
               )
-            : Array.from(container.querySelectorAll('div')).find((node) =>
-                node.className.includes('[-webkit-line-clamp:2]'),
-              );
+            : container.querySelector('.sidebar-title-marquee__ellipsis');
         const preview = Array.from(container.querySelectorAll('p')).find((node) =>
           node.textContent?.includes('正在分析本周项目数据与异常波动。'),
         );
@@ -1271,8 +1405,9 @@ describe('SessionCard visual cases', () => {
       expect(actions.compareDocumentPosition(titleRow) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
       expect(actions.parentElement).toBe(titleRow.parentElement);
       cleanup();
+      // 无标签时同样让位:悬停跑马灯要在操作钮左侧带完全名(2026-11-09)。
       const { container: untagged } = renderVariant('card', { ...baseSession, tags: [] });
-      expect(untagged.querySelector('[class*="group-hover/card:pr-14"]')).toBeNull();
+      expect(untagged.querySelector('[class*="group-hover/card:pr-14"]')).not.toBeNull();
     });
 
     it('card: 归档确认胶囊按实际宽度让位(同文案同样式的隐形占位)', () => {

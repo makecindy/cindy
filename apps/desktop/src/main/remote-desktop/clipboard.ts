@@ -14,8 +14,10 @@ import {
   supportsLinuxClipboard,
 } from './linuxClipboardNative';
 
-const IMAGE_BYTES = 8 * 1024 * 1024;
-const IMAGE_PIXELS = 4_000_000;
+import {
+  CLIPBOARD_IMAGE_BYTES as IMAGE_BYTES,
+  CLIPBOARD_IMAGE_PIXELS as IMAGE_PIXELS,
+} from './clipboardLimits';
 
 function checkImageSize(width: number, height: number): void {
   if (

@@ -7,8 +7,8 @@
  * 「不是 Bot 任务 / 已归档 / 只读历史任务」三种拒绝口径不该有两套。
  */
 
+import path from 'node:path';
 import { app } from 'electron';
-import { authorizeGroupTool, GroupToolAuthorizationError } from './botGroupToolAuthorization.js';
 import { collectTeammateGuideMount } from './teammateGuideStore.js';
 import { botSkillRuntimeSummary, projectBotSkillMounts } from './botSkillRuntimeProjection.js';
 import { queryBotSkillIndex } from './botSkillQueryIndex.js';
@@ -18,15 +18,26 @@ import { requestBotRuntimeEpochRefresh } from './botRuntimeEpochRefreshSignal.js
 import { and, eq } from 'drizzle-orm';
 
 import { migrateBotSkillsIntoProfileFolder } from './botProfileFolder.js';
+import { readTeammateProjectMode } from './botWorkspaceRuntime.js';
 import {
   BotSkillStoreError,
   botSkillRootDir,
+  botSkillsDir,
+  setBotProjectSkillsDir,
   deleteBotSkill,
   listBotSkills,
   readBotSkill,
+  readBotSkillSource,
+  listBotSkillSources,
+  applyBotSkillFiles,
+  listBotSkillFiles,
+  readBotSkillFiles,
   saveBotSkill,
+  saveBotSkillSource,
+  setBotSkillEnabled,
   type BotSkillSummary,
 } from './botSkillStore.js';
+import type { BotSkillFile, LocalBotSkillFile } from './botSkillFiles.js';
 import type {
   BotSkillDetail,
   BotSkillSummary as SharedBotSkillSummary,
@@ -64,8 +75,13 @@ export interface BotSkillServiceDeps {
   userDataDir?: string;
   ownerScopeKey?: () => string;
   ownerBoundaryPending?: () => boolean;
+  /**
+   * Whether the stored profile is a V2 (project-mode) teammate, whose skills are its project's.
+   * Defaults to the database when the userData root is not injected.
+   */
+  readProjectMode?: (botId: string) => Promise<boolean>;
   requestRefresh?: typeof requestBotRuntimeEpochRefresh;
-  resolveBotId?: (callerSessionId: string) => Promise<
+  resolveBotId?: (callerSessionId: string, callerSessionInstanceId?: string) => Promise<
     | { ok: true; botId: string; canonicalSessionId?: string | null; refresh?: () => Promise<void> }
     | { ok: false; errorCode: string; message: string }
   >;
@@ -120,11 +136,22 @@ async function skillHomeOf(
     botId,
     deps.userDataDir ? undefined : app.getPath('userData'),
   ).catch(() => {});
+  // Every entry decides the skills folder from the stored profile: a cloud upload or take-over
+  // may come before anything else registered it, and must never read the old `skills/` folder
+  // of a V2 teammate (its skills would look deleted). An unreadable profile keeps the last answer.
+  const readProjectMode = deps.readProjectMode ?? (deps.userDataDir ? undefined : readTeammateProjectMode);
+  if (readProjectMode) {
+    const projectMode = await readProjectMode(botId).catch(() => null);
+    assertOwnerBoundary(deps, boundary);
+    if (projectMode !== null) setBotProjectSkillsDir(dir, botId, projectMode);
+  }
   assertOwnerBoundary(deps, boundary);
   return dir;
 }
 
-async function defaultResolveBotId(callerSessionId: string, readOnly = false): Promise<
+async function defaultResolveBotId(
+  callerSessionId: string,
+): Promise<
   { ok: true; botId: string; canonicalSessionId: string | null; refresh?: () => Promise<void> } | { ok: false; errorCode: string; message: string }
 > {
   const db = getDbClient().drizzle;
@@ -132,7 +159,6 @@ async function defaultResolveBotId(callerSessionId: string, readOnly = false): P
     .select({
       botId: botSessionLinks.botId,
       canonicalSessionId: botProfiles.canonicalSessionId,
-      role: botSessionLinks.role,
       sessionStatus: sessions.status,
       remoteHostId: sessions.remoteHostId,
       profileStatus: botProfiles.status,
@@ -149,22 +175,16 @@ async function defaultResolveBotId(callerSessionId: string, readOnly = false): P
   if (row.sessionStatus !== 'active' || row.profileStatus !== 'active' || row.linkArchivedAt !== null) {
     return { ok: false, errorCode: 'BOT_SESSION_INACTIVE', message: '已归档的 Bot 任务不能沉淀技能' };
   }
-  const authority = row.role === 'group' && readOnly
-    ? await authorizeGroupTool(callerSessionId, row.botId, 'read-self') : null;
-  if (row.role !== 'canonical' && row.role !== 'delegation' && !authority) {
-    return { ok: false, errorCode: 'BOT_SESSION_READ_ONLY', message: '当前 Bot 历史任务为只读状态' };
-  }
   // Runtime hydration cannot mount the local personal shelf on an SSH host.
   // Reject before migration/read/write and before refreshing the local canonical.
   // Device-link callers executing on this desktop still have no remoteHostId.
   if (row.remoteHostId) {
     return { ok: false, errorCode: 'REMOTE_SKILLS_UNAVAILABLE', message: '当前远端任务尚未挂载伙伴自有 Skill 存储，不能读取或保存本机 Skill，也不能承诺远端生效' };
   }
-  return { ok: true, botId: row.botId, canonicalSessionId: row.canonicalSessionId, ...authority };
+  return { ok: true, botId: row.botId, canonicalSessionId: row.canonicalSessionId };
 }
 
 function storeError(cause: unknown): { ok: false; errorCode: string; message: string } {
-  if (cause instanceof GroupToolAuthorizationError) return { ok: false, errorCode: cause.code, message: cause.message };
   if (cause instanceof BotSkillStoreError) {
     return { ok: false, errorCode: cause.errorCode, message: cause.message };
   }
@@ -182,7 +202,15 @@ function storeError(cause: unknown): { ok: false; errorCode: string; message: st
  * 不打断当前轮、授权卡或后台工作；未配置刷新桥的宿主仍诚实返回 next-session。
  */
 export async function saveBotSkillForSession(
-  params: { callerSessionId: string; name: string; description: string; body: string; slug?: string; expectedUpdatedAt?: string | null },
+  params: {
+    callerSessionId: string;
+    callerSessionInstanceId?: string;
+    name: string;
+    description: string;
+    body: string;
+    slug?: string;
+    expectedUpdatedAt?: string | null;
+  },
   deps: BotSkillServiceDeps = {},
 ): Promise<
   BotSkillResult<{
@@ -193,7 +221,10 @@ export async function saveBotSkillForSession(
 > {
   try {
     const boundary = captureOwnerBoundary(deps);
-    const owner = await (deps.resolveBotId ?? defaultResolveBotId)(params.callerSessionId);
+    const owner = await (deps.resolveBotId
+      ?? defaultResolveBotId)(
+      params.callerSessionId, params.callerSessionInstanceId,
+    );
     if (!owner.ok) return owner;
     assertOwnerBoundary(deps, boundary);
     const { record, created } = await saveBotSkill(await skillHomeOf(deps, owner.botId, boundary), owner.botId, {
@@ -226,12 +257,15 @@ export async function saveBotSkillForSession(
 
 /** 列出这个伙伴已经学会的技能,供模型避免重复学 / 决定该更新哪一条。 */
 export async function listBotSkillsForSession(
-  params: { callerSessionId: string; query?: string; offset?: number; limit?: number },
+  params: { callerSessionId: string; callerSessionInstanceId?: string; query?: string; offset?: number; limit?: number },
   deps: BotSkillServiceDeps = {},
 ): Promise<BotSkillResult<{ skills: ReturnType<typeof botSkillRuntimeSummary>[]; total: number; nextOffset?: number }>> {
   try {
     const boundary = captureOwnerBoundary(deps);
-    const owner = await (deps.resolveBotId ?? (id => defaultResolveBotId(id, true)))(params.callerSessionId);
+    const owner = await (deps.resolveBotId
+      ?? defaultResolveBotId)(
+      params.callerSessionId, params.callerSessionInstanceId,
+    );
     if (!owner.ok) return owner;
     assertOwnerBoundary(deps, boundary);
     const home = await skillHomeOf(deps, owner.botId, boundary);
@@ -273,8 +307,65 @@ export async function readBotSkillForBot(
         description: record.description,
         updatedAt: record.updatedAt,
         body: record.body,
+        ...(record.enabled === false ? { enabled: false } : {}),
       }
     : null;
+}
+
+/** One own skill's SKILL.md exactly as stored (cloud companions upload it unchanged). */
+export async function readBotSkillSourceForBot(botId: string, slug: string, deps: BotSkillServiceDeps = {}): Promise<string | null> {
+  const boundary = captureOwnerBoundary(deps);
+  const source = await readBotSkillSource(await skillHomeOf(deps, botId, boundary), botId, slug);
+  assertOwnerBoundary(deps, boundary);
+  return source;
+}
+
+/** Every own skill's SKILL.md for cloud sync; read errors propagate instead of reading as "no skill". */
+export async function listBotSkillSourcesForBot(botId: string, deps: BotSkillServiceDeps = {}): Promise<Array<{ slug: string; source: string; enabled: boolean }>> {
+  const boundary = captureOwnerBoundary(deps);
+  const sources = await listBotSkillSources(await skillHomeOf(deps, botId, boundary), botId);
+  assertOwnerBoundary(deps, boundary);
+  return sources;
+}
+
+/** Restore one own skill's SKILL.md verbatim (cloud companions), keeping its native frontmatter. */
+export async function saveBotSkillSourceForBot(botId: string, slug: string, source: string,
+  options: { enabled?: boolean; expectedUpdatedAt?: string } = {}, deps: BotSkillServiceDeps = {}): Promise<void> {
+  const boundary = captureOwnerBoundary(deps);
+  await saveBotSkillSource(await skillHomeOf(deps, botId, boundary), botId, slug, source, options);
+  assertOwnerBoundary(deps, boundary);
+}
+
+/** The files beside one own skill's SKILL.md (cloud companions). */
+export async function listBotSkillFilesForBot(botId: string, slug: string, enabled: boolean, deps: BotSkillServiceDeps = {}): Promise<LocalBotSkillFile[]> {
+  const boundary = captureOwnerBoundary(deps);
+  const files = await listBotSkillFiles(await skillHomeOf(deps, botId, boundary), botId, slug, enabled);
+  assertOwnerBoundary(deps, boundary);
+  return files;
+}
+
+/** The same, wherever the skill lives now. */
+export async function readBotSkillFilesForBot(botId: string, slug: string, deps: BotSkillServiceDeps = {}): Promise<LocalBotSkillFile[]> {
+  const boundary = captureOwnerBoundary(deps);
+  const files = await readBotSkillFiles(await skillHomeOf(deps, botId, boundary), botId, slug);
+  assertOwnerBoundary(deps, boundary);
+  return files;
+}
+
+/** Restore the files beside one own skill's SKILL.md (cloud companions). */
+export async function applyBotSkillFilesForBot(botId: string, slug: string, files: BotSkillFile[],
+  fetch: (file: BotSkillFile) => Promise<string | null>, options: { removeOthers: boolean; keep?: string[] }, deps: BotSkillServiceDeps = {}): Promise<string[]> {
+  const boundary = captureOwnerBoundary(deps);
+  const missing = await applyBotSkillFiles(await skillHomeOf(deps, botId, boundary), botId, slug, files, fetch, options);
+  assertOwnerBoundary(deps, boundary);
+  return missing;
+}
+
+/** 设置页开关一条学会的技能：只移动文件夹，不改内容。 */
+export async function setBotSkillEnabledForBot(botId: string, slug: string, enabled: boolean, deps: BotSkillServiceDeps = {}): Promise<void> {
+  const boundary = captureOwnerBoundary(deps);
+  await setBotSkillEnabled(await skillHomeOf(deps, botId, boundary), botId, slug, enabled);
+  assertOwnerBoundary(deps, boundary);
 }
 
 /** 设置页删除一条技能。 */
@@ -301,14 +392,18 @@ export async function collectBotOwnSkillMounts(
 ): Promise<{
   pluginRoot: string;
   baseline: Awaited<ReturnType<typeof collectTeammateGuideMount>>;
-  skills: { name: string; description: string; path: string; filePath: string }[];
+  skills: { name: string; description: string; path: string; filePath: string; updatedAt?: string }[];
 }> {
   const boundary = captureOwnerBoundary(deps);
   const userDataDir = await skillHomeOf(deps, botId, boundary);
   const baseline = await collectTeammateGuideMount(userDataDir);
   const root = botSkillRootDir(userDataDir, botId);
-  const projected = await cachedBotSkillRuntime(root, async () =>
-    projectBotSkillMounts(root, iterateBotSkillRuntimeSummaries(userDataDir, botId)));
+  // A V2 teammate's Skills are in its project, not in `root/skills` (its V1 copies): no native
+  // mount of root, and the cache follows the project's Skills folder instead.
+  const skillsDir = botSkillsDir(userDataDir, botId);
+  const native = skillsDir === path.join(root, 'skills');
+  const projected = await cachedBotSkillRuntime(native ? root : path.dirname(skillsDir), async () =>
+    projectBotSkillMounts(root, iterateBotSkillRuntimeSummaries(userDataDir, botId), { native }));
   assertOwnerBoundary(deps, boundary);
   return { ...projected, baseline };
 }

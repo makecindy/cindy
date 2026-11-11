@@ -1,4 +1,13 @@
 {
+  "teammateProcess": {"retry": "重試",
+    "empty": "本輪沒有可顯示的過程記錄","unavailable": "未能讀取過程記錄","record":"處理紀錄","operations":"操作記錄","elapsed":"已處理 {{duration}}","took":"用時 {{duration}}","processing":"正在處理","worked":"處理紀錄","thinking":"正在思考","thought":"已思考","failed_one":"{{count}} 次呼叫失敗","failed_other":"{{count}} 次呼叫失敗","separator":"、","actions":{"running":{"read":"正在檢視檔案","edit":"正在編輯檔案","search":"正在尋找內容","web":"正在查閱網頁","command":"正在執行指令","tools":"正在使用工具","delegate":"正在委派工作","plan":"正在整理計畫"},"done":{"read":"檢視了檔案","edit":"編輯了檔案","search":"尋找了內容","web":"查閱了網頁","command":"執行了指令","tools":"使用了工具","delegate":"委派了工作","plan":"整理了計畫"}}},
+  "imageDelivery": {
+    "stored": "圖片已交付",
+    "failed": "圖片交付失敗，可重試傳輸已有圖片。",
+    "retry": "重試交付",
+    "retrying": "正在交付…",
+    "retryFailed": "暫時無法交付，請確認產生圖片的電腦在線。"
+  },
   "agentActionRow": {
     "noContent": "無可展示內容",
     "fileChange": {
@@ -144,5 +153,13 @@
     "working": "正在工作…",
     "worked": "已工作 {{duration}}",
     "workDetails": "工作過程"
+  },
+  "subscriptionAccountError": {
+    "limited": "此任務使用的訂閱帳號用量已達上限。可等用量重設後重試，或選擇其他模型來源。此任務仍繫結原帳號，不會自動換號。",
+    "limitedUntil": "此任務使用的訂閱帳號用量已達上限，預計於 {{resetAt}} 重設。可等重設後重試，或選擇其他模型來源。此任務仍繫結原帳號，不會自動換號。",
+    "loginRequired": "此任務使用的訂閱帳號需要重新登入。請在執行任務的電腦上重新登入該帳號，再重試。",
+    "signingIn": "此任務使用的訂閱帳號正在登入，請完成登入後重試。",
+    "unavailable": "此任務繫結的訂閱帳號無法用於本次請求。請在執行任務的電腦上檢查模型供應商中的帳號設定，或選擇其他模型來源。",
+    "legacy": "此任務繫結的訂閱帳號暫不可用。請在執行任務的電腦上檢查該帳號的登入與用量狀態，或選擇其他模型來源。此任務不會自動換號。"
   }
 }

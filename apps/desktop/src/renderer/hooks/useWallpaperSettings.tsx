@@ -3,7 +3,6 @@ import {
   useCallback,
   useContext,
   useEffect,
-  useLayoutEffect,
   useMemo,
   useRef,
   useState,
@@ -20,27 +19,39 @@ import {
   type WallpaperMotion,
   normalizeCustomWallpaperUrl,
   isCustomWallpaperVideo,
-  getWallpaperVisibility,
+  getBackgroundVisibility,
 } from '@/../shared/appearanceSettings';
 
 import { getBuiltinWallpaperBackground } from '@/lib/wallpaper';
 import { useIsDarkMode } from '@/components/markdown/useIsDarkMode';
 import { WallpaperVideo } from '@/components/layout/WallpaperVideo';
+import { useWallpaperAsset } from './useWallpaperAsset';
+import { useWallpaperBackground } from './useWallpaperBackground';
+import { useReducedMotion } from './useReducedMotion';
 
 export interface WallpaperSettings {
   wallpaperId: WallpaperId;
   wallpaperOverlay: number;
   wallpaperVisibility?: number | null;
+  desktopVisibility?: number | null;
   wallpaperBlur?: number | null;
   wallpaperMotion: WallpaperMotion;
   customWallpaperUrl?: string;
+  customWallpaperFallbackUrl?: string;
 }
 
 interface WallpaperSettingsContextValue extends WallpaperSettings {
   playbackFailed: boolean;
+  downloadPending: boolean;
+  downloadFailed: boolean;
+  downloadProgress: number;
+  retryDownload: () => void;
   visibility: number;
+  /** Last nonzero saved blur; survives settings-section remounts (default 10). */
+  lastBlur: number;
   setWallpaper: (id: WallpaperId) => void;
   setVisibility: (value: number) => void;
+  previewVisibility: (value: number | null) => void;
   setBlur: (value: number) => void;
   previewBlur: (value: number | null) => void;
   setMotion: (value: WallpaperMotion) => void;
@@ -67,56 +78,78 @@ function pickWallpaperSettings(settings: AppearanceSettings): WallpaperSettings 
     wallpaperId: settings.wallpaperId,
     wallpaperOverlay: settings.wallpaperOverlay,
     wallpaperVisibility: settings.wallpaperVisibility,
+    desktopVisibility: settings.desktopVisibility,
     wallpaperBlur: settings.wallpaperBlur,
     wallpaperMotion: settings.wallpaperMotion,
     customWallpaperUrl: settings.customWallpaperUrl,
+    customWallpaperFallbackUrl: settings.customWallpaperFallbackUrl,
   };
 }
 
-export function WallpaperSettingsProvider({ children }: { children: ReactNode }) {
+/** `desktopBackground={false}` is for windows without the native backdrop bridge: with no
+ * wallpaper they keep their opaque themed canvas instead of mixing with a fixed window backing. */
+export function WallpaperSettingsProvider({
+  children,
+  desktopBackground = true,
+}: {
+  children: ReactNode;
+  desktopBackground?: boolean;
+}) {
   const [settings, setSettings] = useState<WallpaperSettings>(getInitialWallpaperSettings);
   const [blurPreview, setBlurPreview] = useState<number | null>(null);
+  const [visibilityPreview, setVisibilityPreview] = useState<number | null>(null);
   const [failedUrl, setFailedUrl] = useState('');
+  const lastBlurRef = useRef(10);
+  if (settings.wallpaperBlur) lastBlurRef.current = settings.wallpaperBlur;
   const onPlaybackFailure = useCallback(
     () => setFailedUrl(settings.customWallpaperUrl ?? ''),
     [settings.customWallpaperUrl],
   );
   const onPlaybackReady = useCallback(() => setFailedUrl(''), []);
   const isDark = useIsDarkMode();
-  const visibility = getWallpaperVisibility(settings, isDark);
-  // Document-level surface also covers settings, split panes, portals and detached
-  // app windows, without changing the layout tree or stacking order of its panes.
-  useLayoutEffect(() => {
-    const root = document.documentElement;
-    const customUrl = normalizeCustomWallpaperUrl(settings.customWallpaperUrl);
-    const background =
-      settings.wallpaperId === 'custom'
-        ? customUrl
-          ? isCustomWallpaperVideo(customUrl)
-            ? 'none'
-            : `url("${customUrl}")`
-          : undefined
+  const isDarkRef = useRef(isDark);
+  isDarkRef.current = isDark;
+  const visibility = visibilityPreview ?? getBackgroundVisibility(settings, isDark);
+  const reducedMotion = useReducedMotion();
+  const imageAsset = useWallpaperAsset(settings.wallpaperId, 'image', visibility > 0);
+  const videoAsset = useWallpaperAsset(
+    settings.wallpaperId,
+    'video',
+    visibility > 0 && settings.wallpaperMotion === 'dynamic' && !reducedMotion,
+  );
+  const downloadPending = imageAsset.loading || videoAsset.loading;
+  const downloadFailed = imageAsset.failed || videoAsset.failed;
+  const downloadBytes = imageAsset.total + videoAsset.total;
+  const downloadProgress =
+    downloadBytes > 0 ? (imageAsset.loaded + videoAsset.loaded) / downloadBytes : 0;
+  const retryDownload = useCallback(() => {
+    imageAsset.retry();
+    videoAsset.retry();
+  }, [imageAsset.retry, videoAsset.retry]);
+  const customUrl = normalizeCustomWallpaperUrl(settings.customWallpaperUrl);
+  const background =
+    settings.wallpaperId === 'custom'
+      ? customUrl
+        ? isCustomWallpaperVideo(customUrl)
+          ? settings.customWallpaperFallbackUrl ? `url("${normalizeCustomWallpaperUrl(settings.customWallpaperFallbackUrl)}")` : 'none'
+          : `url("${customUrl}")`
+        : undefined
+      : imageAsset.url
+        ? `url("${imageAsset.url}")`
         : getBuiltinWallpaperBackground(settings.wallpaperId);
-    const active = Boolean(background);
-    if (active) {
-      root.dataset.wallpaperActive = 'true';
-      root.style.setProperty('--app-wallpaper-image', background!);
-      // One cover-fitted canvas; theme-derived veil keeps messages readable.
-      const veil = 100 - visibility * 100;
-      root.style.setProperty('--app-wallpaper-veil', `${veil}%`);
-      const blur = blurPreview ?? settings.wallpaperBlur ?? 0;
-      if (blur > 0 && visibility > 0) {
-        root.dataset.wallpaperBlur = 'true';
-        root.style.setProperty('--app-wallpaper-blur', `${blur}px`);
-      }
-    }
-    return () => {
-      delete root.dataset.wallpaperActive;
-      delete root.dataset.wallpaperBlur;
-      for (const name of ['--app-wallpaper-image', '--app-wallpaper-veil', '--app-wallpaper-blur'])
-        root.style.removeProperty(name);
-    };
-  }, [settings, visibility, blurPreview]);
+  useWallpaperBackground({
+    background,
+    // 0% keeps the original window backdrop (frosted sidebar over the theme material)
+    // until opt-in; above it, the sidebar tint follows the same transparency.
+    desktopBackground: desktopBackground && settings.wallpaperId === 'none' && visibility > 0,
+    visibility,
+    blur: blurPreview ?? settings.wallpaperBlur ?? 0,
+    reducedMotion,
+    decodeUrl:
+      settings.wallpaperId === 'custom' && !isCustomWallpaperVideo(customUrl)
+        ? customUrl || undefined
+        : undefined,
+  });
   const settingsRef = useRef(settings);
   const confirmedRef = useRef(settings);
   const pendingRef = useRef<Array<{ id: number; patch: Partial<WallpaperSettings> }>>([]);
@@ -193,11 +226,24 @@ export function WallpaperSettingsProvider({ children }: { children: ReactNode })
       });
   }, []);
 
-  const setWallpaper = useCallback((wallpaperId: WallpaperId) => patch({ wallpaperId }), [patch]);
+  const setWallpaper = useCallback((wallpaperId: WallpaperId) => {
+    setVisibilityPreview(null);
+    patch({ wallpaperId });
+  }, [patch]);
   const setVisibility = useCallback(
-    (value: number) => patch({ wallpaperVisibility: clampAppearanceWallpaperVisibility(value) }),
+    (value: number) => {
+      setVisibilityPreview(null);
+      const key = settingsRef.current.wallpaperId === 'none' ? 'desktopVisibility' : 'wallpaperVisibility';
+      patch({ [key]: clampAppearanceWallpaperVisibility(value) });
+    },
     [patch],
   );
+  const previewVisibility = useCallback((value: number | null) => {
+    const next = value === null ? null : clampAppearanceWallpaperVisibility(value);
+    // Keyboard commit precedes change in Radix. Read the optimistic committed
+    // value synchronously so a failed save cannot leave a stale preview behind.
+    setVisibilityPreview(next === getBackgroundVisibility(settingsRef.current, isDarkRef.current) ? null : next);
+  }, []);
   const setMotion = useCallback(
     (value: WallpaperMotion) => patch({ wallpaperMotion: value }),
     [patch],
@@ -214,18 +260,19 @@ export function WallpaperSettingsProvider({ children }: { children: ReactNode })
     // Radix keyboard input commits before its change callback. Do not recreate
     // a preview for the value already queued for saving (or the unchanged value).
     setBlurPreview(
-      settingsRef.current.wallpaperId === 'none' ||
-        blur === (settingsRef.current.wallpaperBlur ?? 0)
+      blur === (settingsRef.current.wallpaperBlur ?? 0)
         ? null
         : blur,
     );
   }, []);
   const resetWallpaper = useCallback(() => {
     setBlurPreview(null);
+    setVisibilityPreview(null);
     patch({
       wallpaperId: DEFAULT_APPEARANCE_SETTINGS.wallpaperId,
       wallpaperOverlay: DEFAULT_APPEARANCE_SETTINGS.wallpaperOverlay,
       wallpaperVisibility: null,
+      desktopVisibility: null,
       wallpaperBlur: null,
       wallpaperMotion: DEFAULT_APPEARANCE_SETTINGS.wallpaperMotion,
     });
@@ -236,9 +283,15 @@ export function WallpaperSettingsProvider({ children }: { children: ReactNode })
       ...settings,
       wallpaperBlur: blurPreview ?? settings.wallpaperBlur,
       visibility,
+      lastBlur: lastBlurRef.current,
       playbackFailed: !!failedUrl && failedUrl === settings.customWallpaperUrl,
+      downloadPending,
+      downloadFailed,
+      downloadProgress,
+      retryDownload,
       setWallpaper,
       setVisibility,
+      previewVisibility,
       setBlur,
       previewBlur,
       setMotion,
@@ -248,13 +301,19 @@ export function WallpaperSettingsProvider({ children }: { children: ReactNode })
       resetWallpaper,
       setMotion,
       setVisibility,
+      previewVisibility,
       setBlur,
       previewBlur,
       blurPreview,
       setWallpaper,
       settings,
+      settings.wallpaperBlur,
       failedUrl,
       visibility,
+      downloadPending,
+      downloadFailed,
+      downloadProgress,
+      retryDownload,
     ],
   );
 
@@ -265,6 +324,7 @@ export function WallpaperSettingsProvider({ children }: { children: ReactNode })
           wallpaperId={settings.wallpaperId}
           motion={settings.wallpaperMotion}
           customWallpaperUrl={settings.customWallpaperUrl}
+          officialVideoUrl={videoAsset.url}
           onFailure={onPlaybackFailure}
           onReady={onPlaybackReady}
         />

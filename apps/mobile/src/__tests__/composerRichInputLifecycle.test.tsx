@@ -2,9 +2,34 @@
 import { act, createElement, createRef } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
 import { runInNewContext } from 'node:vm';
+import { readFileSync } from 'node:fs';
+import ts from 'typescript';
 import { afterEach, expect, it, vi } from 'vitest';
-import { ComposerRichInput, type ComposerRichInputHandle } from '@/session/ComposerRichInput';
-import { textComposerDocument, type ComposerDocument } from '@/session/composerDocument';
+import { Platform } from 'react-native';
+import { ComposerRichInput, type ComposerRichInputHandle, type ComposerRichInputProps } from '@/session/ComposerRichInput';
+import { composerDocumentProjectedText, composerDocumentQuotes, composerDocumentsEqual, composerDocumentHasContent, normalizeComposerDocument, textComposerDocument, type ComposerDocument } from '@/session/composerDocument';
+import { createComposerDraftSource } from '@/session/composerDraftSource';
+
+// Execute the page's real cancellation/persistence callbacks with the mounted
+// editor below, without importing the unrelated native/network page UI.
+const pageSource = ts.createSourceFile('session.tsx', readFileSync('app/sessions/[sessionId].tsx', 'utf8'), ts.ScriptTarget.Latest, true, ts.ScriptKind.TSX);
+const pageCallbacks = new Map<string, string>();
+function collectPageCallbacks(node: ts.Node) {
+  if (ts.isVariableDeclaration(node) && ['restoreDraftAfterFailure', 'composerImagePasteHandlers', 'exitQueueEdit', 'cancelQueueEdit', 'finishQueueEditSave', 'applyComposerDocument', 'applyRichComposerChange'].includes(node.name.getText(pageSource))
+    && node.initializer && (ts.isCallExpression(node.initializer) || ts.isArrowFunction(node.initializer))) {
+    const callback = ts.isCallExpression(node.initializer) ? node.initializer.arguments[0] : node.initializer;
+    pageCallbacks.set(node.name.getText(pageSource), ts.transpileModule(`(${callback.getText(pageSource)})`, {
+      compilerOptions: { target: ts.ScriptTarget.ES2022 },
+    }).outputText);
+  }
+  ts.forEachChild(node, collectPageCallbacks);
+}
+collectPageCallbacks(pageSource);
+function pageCallback(name: string, bindings: Record<string, unknown>) {
+  const compiled = pageCallbacks.get(name);
+  if (!compiled) throw new Error(`Missing page callback: ${name}`);
+  return runInNewContext(compiled, bindings);
+}
 
 const bridge = vi.hoisted(() => ({
   onMessage: (_event: { nativeEvent: { data: string } }) => {},
@@ -15,6 +40,9 @@ const bridge = vi.hoisted(() => ({
   mounts: 0,
   clipboard: vi.fn<() => Promise<string>>(),
   inject: vi.fn(),
+  requestFocus: vi.fn(),
+  writeImage: vi.fn(),
+  deleteImage: vi.fn(),
 }));
 vi.mock('react-native', () => ({
   Platform: { OS: 'ios' }, StyleSheet: { create: (styles: unknown) => styles },
@@ -33,7 +61,7 @@ vi.mock('react-native-webview', async () => {
     bridge.onContentProcessDidTerminate = props.onContentProcessDidTerminate;
     bridge.onRenderProcessGone = props.onRenderProcessGone;
     useEffect(() => { bridge.mounts += 1; }, []);
-    useImperativeHandle(ref, () => ({ injectJavaScript: bridge.inject }));
+    useImperativeHandle(ref, () => ({ injectJavaScript: bridge.inject, requestFocus: bridge.requestFocus }));
     return null;
   }) };
 });
@@ -41,14 +69,27 @@ vi.mock('react-native-reanimated', () => ({
   default: { View: ({ children }: { children: unknown }) => children },
   useAnimatedStyle: (factory: () => unknown) => factory(),
 }));
-vi.mock('expo-file-system', () => ({ File: class {}, Paths: { cache: '/unused' } }));
+vi.mock('expo-file-system', () => ({
+  File: class { uri: string; constructor(_directory: string, name: string) { this.uri = `file:///cache/${name}`; } },
+  Paths: { cache: '/unused' },
+}));
+vi.mock('expo-file-system/legacy', () => ({
+  EncodingType: { Base64: 'base64' },
+  writeAsStringAsync: bridge.writeImage,
+  deleteAsync: bridge.deleteImage,
+}));
 vi.mock('expo-clipboard', () => ({ getStringAsync: bridge.clipboard }));
+vi.mock('@/platform/gestureHandler', () => {
+  const gesture = { enabled: () => gesture };
+  return { Gesture: { Native: () => gesture }, GestureDetector: ({ children }: { children: unknown }) => children };
+});
 
 Object.assign(globalThis, { IS_REACT_ACT_ENVIRONMENT: true });
 let root: Root | undefined;
 afterEach(() => {
   act(() => root?.unmount()); root = undefined; bridge.inject.mockReset();
-  bridge.state = 'active'; bridge.mounts = 0; bridge.clipboard.mockReset(); vi.useRealTimers();
+  bridge.requestFocus.mockReset(); bridge.writeImage.mockReset(); bridge.deleteImage.mockReset(); bridge.state = 'active'; bridge.mounts = 0; bridge.clipboard.mockReset(); vi.useRealTimers();
+  Platform.OS = 'ios';
   expect(bridge.listeners.size).toBe(0);
 });
 
@@ -56,7 +97,7 @@ function appState(state: string) {
   act(() => { bridge.state = state; bridge.listeners.forEach(listener => listener(state)); });
 }
 
-function mount(hidden = false) {
+function mount(hidden = false, pasteHandlers: Pick<ComposerRichInputProps, 'onPasteImages' | 'onPasteImagesLoading'> = {}) {
   const ref = createRef<ComposerRichInputHandle>();
   const onChangeDocument = vi.fn();
   const onPasteImagesLoadFailed = vi.fn();
@@ -69,19 +110,168 @@ function mount(hidden = false) {
     }),
     setConfig: vi.fn(),
     focus: vi.fn(),
+    snapshot: vi.fn((requestId: number) => bridge.onMessage({ nativeEvent: { data: JSON.stringify({
+      type: 'snapshot', requestId, documentId: page.id, document: page.document, pendingPaste: false,
+    }) } })),
     ping: vi.fn((id: number) => bridge.onMessage({ nativeEvent: { data: JSON.stringify({ type: 'pong', id }) } })),
   };
   bridge.inject.mockImplementation((script: string) => runInNewContext(script, { window: { cindyComposer: page } }));
   root = createRoot(document.createElement('div'));
+  let currentPasteHandlers = pasteHandlers;
   const renderDocument = (document: ComposerDocument) => act(() => root!.render(createElement(ComposerRichInput, {
-    ref, document, hidden, onChangeDocument, onPasteImagesLoadFailed,
+    ref, document, hidden, onChangeDocument, onPasteImagesLoadFailed, ...currentPasteHandlers,
     accessibilityLabel: 'input', placeholder: '', height: 40, maxHeight: 264,
     theme: { background: '#fff', border: '#aaa', chip: '#ddd', focus: '#555', placeholder: '#777', text: '#111', textSecondary: '#333' },
   })));
   renderDocument(page.document);
   const send = (message: unknown) => act(() => bridge.onMessage({ nativeEvent: { data: JSON.stringify(message) } }));
-  return { ref, page, send, onChangeDocument, onPasteImagesLoadFailed, renderDocument };
+  const renderPasteHandlers = (next: typeof pasteHandlers) => {
+    currentPasteHandlers = next;
+    renderDocument(page.document);
+  };
+  return { ref, page, send, onChangeDocument, onPasteImagesLoadFailed, renderDocument, renderPasteHandlers };
 }
+
+// #7508 / #7509, unit: the real WebView bridge must hand Send the visible document,
+// including preedit, without echoing it back into the IME. Earlier tests only covered
+// unsolicited change events; the minimal missing case is a DOM edit with no change yet.
+it('reads the visible send snapshot and acknowledges it without replacing the editor', async () => {
+  const { ref, page, send, onChangeDocument, renderDocument } = mount();
+  send({ type: 'ready' });
+  page.document = { version: 1, nodes: [
+    { type: 'quote', quote: { text: 'retained reference' } },
+    { type: 'text', text: '자동완성 껐는데 그래도 잘리네' },
+  ] };
+  page.applyDocument.mockClear();
+  let snapshot!: ComposerDocument;
+  await act(async () => { snapshot = await ref.current!.flushDocument!(); });
+  expect(snapshot).toEqual(page.document);
+  expect(onChangeDocument).toHaveBeenLastCalledWith(snapshot);
+  renderDocument(snapshot);
+  expect(page.applyDocument).not.toHaveBeenCalled();
+});
+
+it.each(['replacement', 'termination', 'unmount', 'timeout'] as const)(
+  'rejects an unavailable send snapshot after %s and ignores a late reply', async reason => {
+    vi.useFakeTimers();
+    const { ref, page, send, renderDocument, onChangeDocument } = mount();
+    send({ type: 'ready' });
+    page.snapshot.mockImplementation(() => {});
+    const oldId = page.id;
+    const result = ref.current!.flushDocument!().then(() => 'accepted', () => 'rejected');
+    const requestId = page.snapshot.mock.lastCall![0];
+    if (reason === 'replacement') renderDocument(textComposerDocument('new draft'));
+    else if (reason === 'termination') act(() => bridge.onRenderProcessGone());
+    else if (reason === 'unmount') { act(() => root!.unmount()); root = undefined; }
+    else act(() => vi.advanceTimersByTime(5000));
+    expect(await result).toBe('rejected');
+    send({ type: 'snapshot', requestId, documentId: oldId, document: textComposerDocument('stale'), pendingPaste: false });
+    expect(onChangeDocument).not.toHaveBeenCalled();
+  },
+);
+
+it('does not submit a partially replaced paste or an editor that has not loaded', async () => {
+  const { ref, page, send, onChangeDocument } = mount();
+  await expect(ref.current!.flushDocument!()).rejects.toThrow();
+  send({ type: 'ready' });
+  page.snapshot.mockImplementation(requestId => send({
+    type: 'snapshot', requestId, documentId: page.id, document: textComposerDocument('partial'), pendingPaste: true,
+  }));
+  await expect(ref.current!.flushDocument!()).rejects.toThrow();
+  expect(onChangeDocument).not.toHaveBeenCalled();
+});
+
+// #7508 review, unit: cancelling queue edit restores the draft synchronously,
+// but its WebView props wait for the next frame. A solicited snapshot can arrive
+// in that gap even without typing; replacement-after-render coverage misses it.
+it('rejects an invalidated send scope before a late snapshot can overwrite the restored draft', async () => {
+  vi.useFakeTimers();
+  const { ref, page, send, onChangeDocument } = mount();
+  send({ type: 'ready' });
+  page.snapshot.mockImplementation(() => {});
+  const editing = { clientId: 'queued-message' };
+  let queueEdit: typeof editing | null = editing;
+  const source = createComposerDraftSource(textComposerDocument('edited queued message'));
+  const unsubscribe = source.subscribe(() => {});
+  onChangeDocument.mockImplementation((document: ComposerDocument) => source.setDocument(document));
+  const result = ref.current!.flushDocument!(() => queueEdit === editing).then(() => 'accepted', () => 'rejected');
+  const requestId = page.snapshot.mock.lastCall![0];
+  queueEdit = null;
+  const restored = textComposerDocument('unsent personal draft');
+  source.setDocument(restored);
+  // Deliberately do not render the restored document or advance its frame yet.
+  send({ type: 'snapshot', requestId, documentId: page.id,
+    document: textComposerDocument('edited queued message'), pendingPaste: false });
+  expect(await result).toBe('rejected');
+  expect(onChangeDocument).not.toHaveBeenCalled();
+  expect(source.getSnapshot().document).toEqual(restored);
+  unsubscribe();
+});
+
+// PR #9242 review: after the sent snapshot is cleared, text/quote atoms typed
+// while updateContent waits must join the stashed draft on success. Existing
+// cancellation coverage had no successful-save/new-draft branch (unit).
+// #7536 review, unit: a queued IME change can arrive after cancelQueueEdit but
+// before its scheduled React frame. Snapshot guards do not cover this unsolicited
+// message; the restored personal draft must survive in memory and persistence.
+it.each([false, true])('restores queue-edit draft without losing later typing or accepting stale IME events (saved=%s)', (saved) => {
+  vi.useFakeTimers();
+  Platform.OS = 'android';
+  const { ref, page, send, onChangeDocument, renderDocument } = mount();
+  send({ type: 'ready' });
+  const edited: ComposerDocument = saved
+    ? { version: 1, nodes: [{ type: 'text', text: 'next message' }, { type: 'quote', quote: { text: 'next quote' } }] }
+    : textComposerDocument('edited queued message');
+  const stashed = textComposerDocument('unsent personal draft');
+  const restored: ComposerDocument = saved
+    ? { version: 1, nodes: [{ type: 'text', text: 'unsent personal draft\n\nnext message' }, { type: 'quote', quote: { text: 'next quote' } }] }
+    : stashed;
+  renderDocument(edited);
+  const oldId = page.id;
+  const source = createComposerDraftSource(edited);
+  const publish = vi.fn();
+  const unsubscribe = source.subscribe(publish);
+  const composerDocumentRef = { current: edited };
+  const queueEditingRef = { current: { clientId: 'queue-1', stashedDocument: stashed, stashedAttachments: [] } };
+  const saveComposerDocumentDraft = vi.fn();
+  const saveComposerDraft = vi.fn();
+  const applyComposerDocument = pageCallback('applyComposerDocument', {
+    composerDocumentRef, draftRef: { current: '' }, pendingSkillSelectionRef: { current: null },
+    composerDocumentProjectedText, composerDraftSource: source, sessionId: 'task',
+    voiceDictionaryLearningTrackerRef: { current: null }, saveComposerDocumentDraft, saveComposerDraft,
+  });
+  onChangeDocument.mockImplementation(pageCallback('applyRichComposerChange', { applyComposerDocument, queueEditingRef, messageEditingRef: { current: null } }));
+  const exitQueueEdit = pageCallback('exitQueueEdit', {
+    queueEditingRef, composerInputRef: ref, composerDocumentRef, composerDocumentProjectedText,
+    composerDocumentHasContent, normalizeComposerDocument,
+    setQueueEditing: vi.fn(), queueEditLockOwnerRef: { current: null },
+    queueEditSaveOwnerRef: { current: null }, queueEditSaveInFlightRef: { current: null },
+    discardQueueEditTransientAttachments: vi.fn(), applyComposerDocument,
+    attachmentsRef: { current: [] }, setAttachments: vi.fn(),
+  });
+  const exit = pageCallback(saved ? 'finishQueueEditSave' : 'cancelQueueEdit', { exitQueueEdit });
+  try {
+    act(() => exit());
+    // Do not render the restored props or advance the scheduled frame.
+    send({ type: 'change', documentId: oldId, document: edited });
+    expect(onChangeDocument).not.toHaveBeenCalled();
+    expect(composerDocumentRef.current).toEqual(restored);
+    expect(source.getSnapshot().document).toEqual(restored);
+    expect(saveComposerDocumentDraft).toHaveBeenCalledExactlyOnceWith('task', restored);
+    expect(saveComposerDraft).toHaveBeenCalledExactlyOnceWith('task', composerDocumentProjectedText(restored));
+    expect(publish).not.toHaveBeenCalled();
+    expect(bridge.requestFocus).not.toHaveBeenCalled();
+    expect(page.applyDocument.mock.lastCall?.[1]).toBe(false);
+    // The new document remains editable; rejecting stale messages must not
+    // permanently suppress normal input after cancellation.
+    const continued = textComposerDocument('unsent personal draft continued');
+    send({ type: 'change', documentId: page.id, document: continued });
+    expect(composerDocumentRef.current).toEqual(continued);
+    expect(saveComposerDocumentDraft).toHaveBeenLastCalledWith('task', continued);
+  } finally {
+    unsubscribe();
+  }
+});
 
 it('never writes an older native edit back over later typing, but applies external replacements', () => {
   const { page, send, onChangeDocument, renderDocument } = mount();
@@ -162,6 +352,19 @@ it('does not probe slow initial loading or discard pending focus', () => {
   expect(page.focus).toHaveBeenCalledTimes(1);
   appState('background'); appState('active');
   expect(page.ping).toHaveBeenCalledTimes(1);
+});
+
+it('requests native WebView focus on Android when the editor receives focus', () => {
+  const { ref, send } = mount();
+  Platform.OS = 'android';
+  send({ type: 'ready' });
+
+  act(() => ref.current?.focus());
+  expect(bridge.requestFocus).toHaveBeenCalledOnce();
+
+  bridge.requestFocus.mockClear();
+  act(() => ref.current?.applyDocumentAndSetSelectionToEnd(textComposerDocument('recommendation')));
+  expect(bridge.requestFocus).toHaveBeenCalledOnce();
 });
 
 it('recovers a terminated initial load but does not probe the replacement before ready', () => {
@@ -247,7 +450,7 @@ it('does not let an old pong or duplicate active event cancel the current probe'
 });
 
 it('settles interrupted paste placeholders and drops late clipboard results', async () => {
-  const { send, onPasteImagesLoadFailed } = mount();
+  const { send, onPasteImagesLoadFailed } = mount(false, { onPasteImages: vi.fn(), onPasteImagesLoading: vi.fn() });
   send({ type: 'ready' });
   let resolveClipboard!: (value: string) => void;
   bridge.clipboard.mockReturnValue(new Promise(resolve => { resolveClipboard = resolve; }));
@@ -258,6 +461,17 @@ it('settles interrupted paste placeholders and drops late clipboard results', as
   send({ type: 'ready' }); bridge.inject.mockClear();
   await act(async () => resolveClipboard('late text'));
   expect(bridge.inject).not.toHaveBeenCalled();
+});
+
+it.each(['text', 'empty', 'failure'])('settles a native clipboard fallback with %s', async (result) => {
+  const { send, page } = mount();
+  const commit = vi.fn();
+  Object.assign(page, { commitPaste: commit });
+  send({ type: 'ready' });
+  if (result === 'failure') bridge.clipboard.mockRejectedValueOnce(new Error('clipboard unavailable'));
+  else bridge.clipboard.mockResolvedValueOnce(result === 'text' ? 'pasted text' : '');
+  await act(async () => send({ type: 'paste-text-request', requestId: 'clipboard' }));
+  expect(commit).toHaveBeenCalledExactlyOnceWith('clipboard', result === 'text' ? [{ type: 'text', text: 'pasted text' }] : []);
 });
 
 it('retains structural endpoints when only a zero-width quote is selected', () => {
@@ -281,6 +495,17 @@ it('keeps pending caret intent on first ready but does not replay it on reload',
   expect(page.applyDocument.mock.lastCall?.slice(1, 3)).toEqual([false, null]);
 });
 
+it('applies the final dictation document without focusing and keeps the remembered caret', () => {
+  const { ref, page, send } = mount();
+  send({ type: 'ready' });
+  act(() => ref.current?.rememberSelection('voice suffix', { start: 5, end: 5 }));
+  act(() => ref.current?.applyDocumentAndSetSelection(textComposerDocument('voice suffix'), 5));
+  expect(page.document).toEqual(textComposerDocument('voice suffix'));
+  expect(page.applyDocument.mock.lastCall?.slice(1, 3)).toEqual([false, { nodeIndex: 0, offset: 5 }]);
+  expect(page.focus).not.toHaveBeenCalled();
+  expect(ref.current?.getSelection('voice suffix')).toEqual({ start: 5, end: 5 });
+});
+
 it('restores a hidden dictation draft without focusing or losing its saved insertion end', () => {
   const { ref, page, send } = mount(true);
   send({ type: 'ready' });
@@ -292,4 +517,118 @@ it('restores a hidden dictation draft without focusing or losing its saved inser
   expect(page.focus).not.toHaveBeenCalled();
   send({ type: 'selection', documentId: page.id, before: { textLength: 0, atomCount: 0 }, through: { textLength: 0, atomCount: 0 } });
   expect(ref.current?.getSelection('voice suffix')).toEqual({ start: 5, end: 5 });
+});
+
+// PR #9242 review: sending still accepts text, but a newly pasted image must
+// never reach the current send's attachment handoff. The previous suite tested
+// paste cancellation, not the page's sending-time attachment entry (unit).
+it.each([false, true])('keeps image paste behind the sending lock while text remains editable (sending=%s)', async (sending) => {
+  bridge.writeImage.mockResolvedValue(undefined);
+  bridge.deleteImage.mockResolvedValue(undefined);
+  const addAttachments = vi.fn();
+  const beginPlaceholders = vi.fn();
+  const pasteHandlers = pageCallback('composerImagePasteHandlers', {
+    sending, onPasteImages: addAttachments,
+    beginPastePlaceholders: beginPlaceholders, failPastePlaceholders: vi.fn(),
+  })();
+  const { send, page, onChangeDocument } = mount(false, pasteHandlers);
+  send({ type: 'ready' });
+  const nextDraft = textComposerDocument('next draft while sending');
+  send({ type: 'change', documentId: page.id, document: nextDraft });
+  expect(onChangeDocument).toHaveBeenLastCalledWith(nextDraft);
+  send({ type: 'paste-images-start', requestId: 'next-image', count: 1 });
+  await act(async () => {
+    send({ type: 'paste-image', requestId: 'next-image', index: 0, mimeType: 'image/png', name: 'next.png', base64: 'eA==' });
+  });
+  if (sending) {
+    expect(beginPlaceholders).not.toHaveBeenCalled();
+    expect(addAttachments).not.toHaveBeenCalled();
+    expect(bridge.deleteImage).toHaveBeenCalled();
+  } else {
+    expect(beginPlaceholders).toHaveBeenCalledWith(1);
+    expect(addAttachments).toHaveBeenCalledWith([expect.stringContaining('file:///cache/')]);
+  }
+});
+
+// PR #9242 r4500543539, unit: the start event can precede Send while FileReader
+// finishes afterwards. Existing fixed-state tests missed both directions of the
+// state transition. A batch must keep its original accepted/rejected decision.
+it.each([true, false])('keeps the image batch acceptance from its start across a send transition (accepted=%s)', async (accepted) => {
+  bridge.writeImage.mockResolvedValue(undefined);
+  bridge.deleteImage.mockResolvedValue(undefined);
+  const addAttachments = vi.fn();
+  const beginPlaceholders = vi.fn();
+  const handlers = (sending: boolean) => pageCallback('composerImagePasteHandlers', {
+    sending, onPasteImages: addAttachments,
+    beginPastePlaceholders: beginPlaceholders, failPastePlaceholders: vi.fn(),
+  })();
+  const { send, renderPasteHandlers, onPasteImagesLoadFailed } = mount(false, handlers(!accepted));
+  send({ type: 'ready' });
+  send({ type: 'paste-images-start', requestId: 'before-send', count: 1 });
+  renderPasteHandlers(handlers(accepted));
+  await act(async () => {
+    send({ type: 'paste-image', requestId: 'before-send', index: 0, mimeType: 'image/png', name: 'before.png', base64: 'eA==' });
+  });
+  if (accepted) {
+    expect(beginPlaceholders).toHaveBeenCalledExactlyOnceWith(1);
+    expect(addAttachments).toHaveBeenCalledExactlyOnceWith([expect.stringContaining('file:///cache/')]);
+    expect(bridge.deleteImage).not.toHaveBeenCalled();
+  } else {
+    expect(beginPlaceholders).not.toHaveBeenCalled();
+    expect(addAttachments).not.toHaveBeenCalled();
+    expect(bridge.deleteImage).toHaveBeenCalled();
+  }
+  expect(onPasteImagesLoadFailed).not.toHaveBeenCalled();
+});
+
+// PR #9242 r4500630852, unit: queue-save rejection after a subsequent edit must
+// recover the captured edit exactly once, including quote atoms, without taking
+// over a cancelled edit. Previous coverage only exercised successful queue saves.
+it.each(['empty', 'follow-up', 'not-cleared', 'cancelled'] as const)('preserves queue-save failure drafts without duplicate recovery (%s)', (scenario) => {
+  const submitted: ComposerDocument = { version: 1, nodes: [
+    { type: 'text', text: 'submitted change' }, { type: 'quote', quote: { text: 'submitted quote' } },
+  ] };
+  const later: ComposerDocument = scenario === 'follow-up'
+    ? { version: 1, nodes: [{ type: 'text', text: 'later text' }, { type: 'quote', quote: { text: 'later quote' } }] }
+    : textComposerDocument(scenario === 'empty' ? '' : 'current draft');
+  const { ref, page, send, renderDocument, onChangeDocument } = mount();
+  send({ type: 'ready' });
+  renderDocument(later);
+  const oldId = page.id;
+  const source = createComposerDraftSource(later);
+  const composerDocumentRef = { current: later };
+  const saveComposerDocumentDraft = vi.fn();
+  const applyComposerDocument = pageCallback('applyComposerDocument', {
+    composerDocumentRef, draftRef: { current: '' }, pendingSkillSelectionRef: { current: null },
+    composerDocumentProjectedText, composerDraftSource: source, sessionId: 'task',
+    voiceDictionaryLearningTrackerRef: { current: null }, saveComposerDocumentDraft, saveComposerDraft: vi.fn(),
+  });
+  const editing = { clientId: 'queue-1' };
+  const restore = pageCallback('restoreDraftAfterFailure', {
+    independent: false, documentBeforeSend: submitted, documentAfterOptimisticClear: textComposerDocument(''),
+    queueEditAtSendStart: editing,
+    queueEditingRef: { current: scenario === 'cancelled' ? null : editing },
+    directDraftCleared: scenario !== 'not-cleared', queueEditDraftRestored: false,
+    composerDocumentRef, composerInputRef: ref, composerDocumentsEqual, composerDocumentHasContent,
+    composerDocumentProjectedText, normalizeComposerDocument, applyComposerDocument,
+  });
+  act(() => { restore(); restore(); }); // update rejection and outer catch can both restore.
+  const restored = source.getSnapshot().document;
+  expect(composerDocumentRef.current).toEqual(restored);
+  if (scenario === 'empty' || scenario === 'follow-up') {
+    expect(composerDocumentProjectedText(restored)).toBe(scenario === 'empty' ? 'submitted change' : 'submitted change\n\nlater text');
+    expect(composerDocumentQuotes(restored).map((quote) => quote.text)).toEqual(scenario === 'empty' ? ['submitted quote'] : ['submitted quote', 'later quote']);
+  } else {
+    expect(restored).toEqual(later);
+  }
+  if (scenario === 'cancelled') {
+    expect(saveComposerDocumentDraft).not.toHaveBeenCalled();
+  } else {
+    expect(saveComposerDocumentDraft).toHaveBeenCalledExactlyOnceWith('task', restored);
+    expect(page.document).toEqual(restored);
+    if (scenario !== 'not-cleared') {
+      send({ type: 'change', documentId: oldId, document: later });
+      expect(onChangeDocument).not.toHaveBeenCalled();
+    }
+  }
 });

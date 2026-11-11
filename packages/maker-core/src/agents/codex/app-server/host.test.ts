@@ -257,6 +257,63 @@ describe('AppServerHost assistant text delta routing', () => {
   });
 });
 
+// 保护: account/rateLimits/updated 按 limitId 去重后, 不变的快照不再重复广播 (原先每
+// ~3.5s 一条 account_usage), 但内容变化仍立即下发, 且晚到的 subscriber 仍能经 replay
+// 立即拿到当前配额 (Codex chip 冷启动依赖它)。
+describe('AppServerHost account rate limit fan-out', () => {
+  it('drops only consecutive duplicate snapshots (keeping bucket order) and still replays the latest to late subscribers', async () => {
+    const transport = new NotificationTransport();
+    const host = new AppServerHost({
+      createTransport: () => transport,
+      logger,
+      clientInfo: { name: 'cindy-test', version: '0.0.0' },
+    });
+    await host.ensureStarted();
+    const early = vi.fn();
+    const earlySubscription = host.subscribeThread('thread-1', { accountRateLimitsUpdated: early });
+    const snapshot = (limitId: string, usedPercent: number) => ({
+      method: 'account/rateLimits/updated',
+      params: { rateLimits: { limitId, primary: { usedPercent, windowDurationMins: 300, resetsAt: 1 } } },
+    });
+
+    transport.emit(snapshot('codex', 10));
+    transport.emit(snapshot('codex', 10));
+    transport.emit(snapshot('codex_spark', 10));
+    transport.emit(snapshot('codex', 10));
+    transport.emit(snapshot('codex', 20));
+
+    expect(early.mock.calls.map(([p]) => [p.rateLimits.limitId, p.rateLimits.primary.usedPercent])).toEqual([
+      ['codex', 10],
+      ['codex_spark', 10],
+      ['codex', 10],
+      ['codex', 20],
+    ]);
+
+    transport.emit(snapshot('codex', 20));
+    const late = vi.fn();
+    const lateSubscription = host.subscribeThread('thread-2', { accountRateLimitsUpdated: late });
+    expect(late.mock.calls.map(([p]) => [p.rateLimits.limitId, p.rateLimits.primary.usedPercent])).toEqual([
+      ['codex_spark', 10],
+      ['codex', 20],
+    ]);
+    expect(early).toHaveBeenCalledTimes(4);
+
+    // 无 limitId 的稀疏更新不去重, 且仅在它是最新一条时才排在回放最后。
+    const sparse = { method: 'account/rateLimits/updated', params: { rateLimits: { primary: { usedPercent: 30, windowDurationMins: 300, resetsAt: 1 } } } };
+    transport.emit(sparse);
+    transport.emit(sparse);
+    expect(early).toHaveBeenCalledTimes(5);
+    const afterSparse = vi.fn();
+    const sparseSubscription = host.subscribeThread('thread-3', { accountRateLimitsUpdated: afterSparse });
+    expect(afterSparse.mock.calls.map(([p]) => p.rateLimits.limitId ?? null)).toEqual(['codex_spark', 'codex', null]);
+    await sparseSubscription.release();
+
+    await earlySubscription.release();
+    await lateSubscription.release();
+    await host.shutdown();
+  });
+});
+
 describe('AppServerHost custom Provider subagent policy', () => {
   const routes = [
     {
@@ -328,6 +385,33 @@ describe('AppServerHost custom Provider subagent policy', () => {
 });
 
 describe('AppServerHost shutdown completion', () => {
+  // A provider change must not kill another task, overlap native writers, or
+  // restart an unchanged route. The native integration test covers turn output.
+  it('changes the process provider only after releasing subscriptions and confirming exit', async () => {
+    const transport = new NotificationTransport();
+    const createTransport = vi.fn().mockReturnValueOnce(transport).mockImplementation(() => new NotificationTransport());
+    const host = new AppServerHost({ createTransport, supportsModelProviderSelection: true,
+      logger, clientInfo: { name: 'test', version: '0' } });
+    try {
+      await host.selectModelProvider('cindy_codex');
+      await host.ensureStarted();
+      expect(createTransport).toHaveBeenLastCalledWith('cindy_codex');
+      const subscription = host.subscribeThread('source', {});
+      await host.selectModelProvider('cindy_codex');
+      await expect(host.selectModelProvider('cindy_summary')).rejects.toThrow('threads are subscribed');
+      expect(createTransport).toHaveBeenCalledOnce();
+      await subscription.release();
+      const close = vi.spyOn(transport, 'close').mockRejectedValue(new Error('exit not confirmed'));
+      await expect(host.selectModelProvider('cindy_summary')).rejects.toThrow('exit not confirmed');
+      expect(createTransport).toHaveBeenCalledOnce();
+      close.mockResolvedValue(undefined);
+      await host.selectModelProvider('cindy_summary');
+      await host.ensureStarted();
+      expect(createTransport).toHaveBeenLastCalledWith('cindy_summary');
+      expect(createTransport).toHaveBeenCalledTimes(2);
+    } finally { await host.shutdown(); }
+  });
+
   it.each([false, true])('shutdown and retire wait for the same process (failure=%s)', async (fails) => {
     const transport = new NotificationTransport();
     let finish!: () => void;
@@ -1142,15 +1226,19 @@ describe('AppServerHost descendant thread routing', () => {
     );
     expect(commandExecutionApproval).toHaveBeenCalledWith(
       expect.objectContaining({ threadId: 'child-thread' }),
+      { requestId: 'server-command' },
     );
     expect(fileChangeApproval).toHaveBeenCalledWith(
       expect.objectContaining({ threadId: 'child-thread' }),
+      { requestId: 'server-file' },
     );
     expect(mcpServerElicitation).toHaveBeenCalledWith(
       expect.objectContaining({ threadId: 'child-thread' }),
+      { requestId: 'server-elicitation' },
     );
     expect(permissionsApproval).toHaveBeenCalledWith(
       expect.objectContaining({ threadId: 'child-thread' }),
+      { requestId: 'server-permissions' },
     );
     expect(requestUserInput).toHaveBeenCalledWith(
       expect.objectContaining({ threadId: 'child-thread' }),
@@ -1211,6 +1299,7 @@ describe('AppServerHost descendant thread routing', () => {
     });
     expect(mcpServerElicitation).toHaveBeenCalledWith(
       expect.objectContaining({ threadId: 'child-thread', serverName: 'node_repl' }),
+      { requestId: 'early-elicitation' },
     );
 
     await subscription.release();

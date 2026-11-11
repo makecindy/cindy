@@ -1,3 +1,17 @@
+import { matchPath } from 'react-router-dom';
+
+/** Read HashRouter's current URL at navigation time, even if the initiating view unmounted. */
+export function isSessionRemovalRouteCurrent(sessionId: string): boolean {
+  const pathname = window.location.hash.slice(1).split(/[?#]/, 1)[0];
+  return [
+    '/cc-agent/:sessionId',
+    '/cc-agent/files/:sessionId',
+    '/cc-agent/orca/:sessionId',
+    '/bots/:botId/session/:sessionId',
+    '/bots/:botId/history/:sessionId',
+  ].some((path) => matchPath(path, pathname)?.params.sessionId === sessionId);
+}
+
 export function getVisibleSidebarSessionIds(root?: Document | Element | null): string[] {
   if (root == null && typeof document === 'undefined') return [];
   const queryRoot = root ?? document;

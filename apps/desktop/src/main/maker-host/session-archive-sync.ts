@@ -12,7 +12,11 @@ const SELECT = `SELECT id, sdk_session_id AS sdkSessionId, remote_host_id AS rem
   FROM sessions WHERE agent_kind = 'codex' AND sdk_session_id IS NOT NULL
   AND status IN ('active', 'archived')`;
 
-const NATIVE_RECHECK_MS = 5 * 60_000;
+// Native CLI actions can change storage without updating Cindy. Every group is
+// re-verified in one batched pass at this interval; each pass spawns a native
+// control process, so it stays far apart from the 60s tick.
+const NATIVE_RECHECK_MS = 60 * 60_000;
+const TICK_MS = 60_000;
 
 /** Keep idle active handles available to their native writer; only archived
  * handles need closing before the native archive operation. Called under route locks. */
@@ -41,13 +45,19 @@ export function createSessionArchiveSync(deps: {
   release(): Promise<void>;
   warn(failures: number): void;
 }) {
-  const applied = new Map<string, { signature: string; checkedAt: number }>();
+  const applied = new Map<string, string>();
+  // Busy or failed groups back off per signature. A Cindy status write changes
+  // the signature, so it is synced on the request that follows it.
+  const deferred = new Map<string, { signature: string; attempts: number; retryAt: number }>();
+  let nativeCheckedAt = Number.NEGATIVE_INFINITY;
   let stopped = false;
   let pending = false;
   let running: Promise<void> | undefined;
   let timer: ReturnType<typeof setTimeout> | undefined;
 
   async function reconcile(): Promise<void> {
+    const startedAt = Date.now();
+    const recheckNative = startedAt - nativeCheckedAt >= NATIVE_RECHECK_MS;
     const scope = deps.capture();
     const assertCurrent = () => {
       if (stopped) throw new Error('Archive sync stopped');
@@ -63,16 +73,29 @@ export function createSessionArchiveSync(deps: {
       groups.set(key, group);
     }
     for (const key of applied.keys()) if (!groups.has(key)) applied.delete(key);
+    for (const key of deferred.keys()) if (!groups.has(key)) deferred.delete(key);
     let failures = 0;
+    const defer = (key: string, signature: string) => {
+      const previous = deferred.get(key);
+      const attempts = previous?.signature === signature ? previous.attempts + 1 : 1;
+      const delay = Math.min(TICK_MS * 2 ** (attempts - 1), NATIVE_RECHECK_MS);
+      applied.delete(key);
+      deferred.set(key, { signature, attempts, retryAt: Date.now() + delay });
+    };
     for (const [key, group] of groups) {
       assertCurrent();
       const signature = JSON.stringify(group.map(row => [row.id, row.status]).sort());
-      const previous = applied.get(key);
-      // Native CLI actions can change storage without updating Cindy. Bound the
-      // cache lifetime, while avoiding a full native scan on every UI mutation.
-      if (previous?.signature === signature && Date.now() - previous.checkedAt < NATIVE_RECHECK_MS) continue;
+      if (!recheckNative) {
+        if (applied.get(key) === signature) continue;
+        const backoff = deferred.get(key);
+        if (backoff?.signature === signature && Date.now() < backoff.retryAt) continue;
+      }
       const first = group[0]!;
-      if (first.remoteHostId && !deps.canUseRemote(first.remoteHostId)) continue;
+      if (first.remoteHostId && !deps.canUseRemote(first.remoteHostId)) {
+        // 这一轮没能核验: 不让整点复核的标记掩盖它, 远端恢复后下一次 tick 就补做。
+        applied.delete(key);
+        continue;
+      }
       try {
         await withSessionRouteLocks(group.map(row => row.id), async () => {
           const current = await scope.client.query<ArchiveSessionRow>(
@@ -83,7 +106,8 @@ export function createSessionArchiveSync(deps: {
           // A copied task can share a native ID. Active references win; a changed
           // group is retried under its complete set of locks on the next pass.
           const currentSignature = JSON.stringify(current.map(row => [row.id, row.status]).sort());
-          if (currentSignature !== signature || !await deps.prepare(current)) return;
+          if (currentSignature !== signature) return;
+          if (!await deps.prepare(current)) { defer(key, signature); return; }
           assertCurrent();
           await deps.sync({
             threadId: first.sdkSessionId,
@@ -92,13 +116,16 @@ export function createSessionArchiveSync(deps: {
             assertCurrent,
           });
           assertCurrent();
-          applied.set(key, { signature, checkedAt: Date.now() });
+          applied.set(key, signature);
+          deferred.delete(key);
         });
       } catch {
         assertCurrent();
+        defer(key, signature);
         failures++;
       }
     }
+    if (recheckNative) nativeCheckedAt = startedAt;
     if (failures) deps.warn(failures);
   }
 
@@ -118,7 +145,9 @@ export function createSessionArchiveSync(deps: {
       if (!stopped) {
         // Also covers internal lifecycle writers and retries after a busy task,
         // offline SSH target, unavailable credentials or an interrupted backfill.
-        timer = setTimeout(() => { void request(); }, pending ? 0 : 60_000);
+        // The tick itself only reads the database; native work happens only for
+        // changed, backed-off-and-due, or hourly re-verified groups.
+        timer = setTimeout(() => { void request(); }, pending ? 0 : TICK_MS);
         timer.unref?.();
       }
     });

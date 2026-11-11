@@ -18,6 +18,7 @@
 
 import { describe, it, expect } from 'vitest';
 import { join } from 'node:path';
+import { attachBotStartedTasks } from '../components/chat/BotStartedTasks';
 import {
   assistantHasFollowingUserBoundary,
   buildRenderItems,
@@ -127,7 +128,7 @@ it.each(['running', 'failed', 'cancelled', 'completed'])(
 );
 
 describe('Bot 流式正文呈现', () => {
-  it('preserves consecutive Claude final text blocks only after the turn seal', () => {
+  it('preserves Claude progress and folds it only after the turn seal', () => {
     let state = { ...EMPTY_SESSION_STATE, isStreaming: true, messages: [mkUser('u1')] };
     const visibleProse = () => simplifyBotRenderItems(
       groupWorkRuns(buildRenderItems(state.messages).items, state.isStreaming), state.isStreaming,
@@ -149,9 +150,9 @@ describe('Bot 流式正文呈现', () => {
       data: { toolUseId: 'tool', result: 'ok' },
     });
     emitText('first', 'first');
-    expect(visibleProse()).toEqual([]);
+    expect(visibleProse()).toEqual(['我查一下：', 'first']);
     emitText('second', 'second');
-    expect(visibleProse()).toEqual([]);
+    expect(visibleProse()).toEqual(['我查一下：', 'first', 'second']);
     state = handleStreamEvent(state, {
       sessionId: 'claude-multi-block', type: 'text', persistId: 'second',
       data: { text: 'second', isFinal: true, isFullText: true },
@@ -162,7 +163,7 @@ describe('Bot 流式正文呈现', () => {
     expect(visibleProse()).toEqual(['first', 'second']);
   });
 
-  it('运行中从首字隐藏未封口正文与工具，不保留过程入口', () => {
+  it('运行中从首字显示未封口正文，工具留在普通工作组里', () => {
     const messages = [
       mkUser('u1'),
       mkTool('t1', 'Bash'),
@@ -174,22 +175,26 @@ describe('Bot 流式正文呈现', () => {
 
     expect(
       visible.flatMap((item) => (item.type === 'message' ? [item.message.clientId] : [])),
-    ).toEqual(['u1']);
-    expect(visible.some((item) => item.type === 'work_group')).toBe(false);
+    ).toEqual(['u1', 'a1']);
+    // 与普通任务同一个工作组：正文开始后，前面的动作段不再是运行中尾段。
+    const groups = visible.filter((item) => item.type === 'work_group');
+    expect(groups).toHaveLength(1);
+    expect(groups[0].type === 'work_group' && groups[0].children.map((child) => child.type)).toEqual(['tool_segment']);
   });
 
   // Contracts: claude-code/translator assistant text blocks; pi/translator
   // message_end authoritative full text; codex/translator phase-marked deltas.
-  // A closed block is not a turn seal. Only a provider-marked final can stream early.
+  // A closed block is not a turn seal: progress stays visible until the final seal.
   it.each(['claude-code', 'pi', 'codex'] as const)(
-    '%s: hides intermediate text and preserves provider final through the turn seal', (source) => {
+    '%s: preserves progress and provider final through the turn seal', (source) => {
       let state = { ...EMPTY_SESSION_STATE, isStreaming: true, messages: [mkUser('u1')] };
       const project = () => simplifyBotRenderItems(
         groupWorkRuns(buildRenderItems(state.messages).items, state.isStreaming), state.isStreaming,
       );
       const visibleProse = () => project().flatMap((item) =>
         item.type === 'message' && item.message.role === 'assistant' ? [item.message.content] : []);
-      for (const [index, text] of ['我查一下：', '已找到线索，继续核实', '这是最终答复'].entries()) {
+      const progressTexts = ['我查一下：', '已找到线索，继续核实', '这是最终答复'];
+      for (const [index, text] of progressTexts.entries()) {
         const persistId = `answer-${index}`;
         const providerFinal = source === 'codex' && index === 2;
         state = handleStreamEvent(state, {
@@ -198,13 +203,13 @@ describe('Bot 流式正文呈现', () => {
             ...(source === 'codex' ? { agentMessageId: persistId, phase: index === 2 ? 'final_answer' : 'commentary' } : {}),
           },
         });
-        expect(visibleProse()).toEqual(providerFinal ? ['这是'] : []);
+        expect(visibleProse()).toEqual([...progressTexts.slice(0, index), providerFinal ? '这是' : text]);
         if (providerFinal) {
           state = handleStreamEvent(state, {
             sessionId: 'bot-event-fixture', type: 'text', persistId,
             data: { text: '最终答复', isFinal: false, agentMessageId: persistId, phase: 'final_answer' },
           });
-          expect(visibleProse()).toEqual(['这是最终答复']);
+          expect(visibleProse()).toEqual(progressTexts);
         }
         state = handleStreamEvent(state, {
           sessionId: 'bot-event-fixture', type: 'text', persistId,
@@ -213,7 +218,7 @@ describe('Bot 流式正文呈现', () => {
             ...(source === 'codex' ? { agentMessageId: persistId, phase: index === 2 ? 'final_answer' : 'commentary' } : {}),
           },
         });
-        expect(visibleProse()).toEqual(providerFinal ? ['这是最终答复'] : []);
+        expect(visibleProse()).toEqual(progressTexts.slice(0, index + 1));
         if (index < 2) {
           state = handleStreamEvent(state, {
             sessionId: 'bot-event-fixture', type: 'tool_use', persistId: `tool-${index}`,
@@ -223,7 +228,7 @@ describe('Bot 流式正文呈现', () => {
             sessionId: 'bot-event-fixture', type: 'tool_result', persistId: `result-${index}`,
             data: { toolUseId: `tool-${index}`, result: 'ok' },
           });
-          expect(visibleProse()).toEqual([]);
+          expect(visibleProse()).toEqual(progressTexts.slice(0, index + 1));
         }
       }
       const streamingFinalKey = project().find(item => item.type === 'message'
@@ -240,7 +245,10 @@ describe('Bot 流式正文呈现', () => {
         expect(project().find(item => item.type === 'message'
           && item.message.clientId === 'answer-2')?.key).toBe(streamingFinalKey);
       }
-      expect(project().filter((item) => item.type === 'work_group')).toHaveLength(0);
+      // Intermediate prose and both tool runs fold into one normal summary group.
+      const groups = project().filter((item) => item.type === 'work_group');
+      expect(groups).toHaveLength(1);
+      expect(groups[0].key.startsWith('work-summary-')).toBe(true);
       expect(state.messages.filter((message) => message.role === 'assistant').map((message) => message.content))
         .toEqual(['我查一下：', '已找到线索，继续核实', '这是最终答复']);
       state = { ...state, isStreaming: false };
@@ -278,7 +286,7 @@ describe('Bot 流式正文呈现', () => {
 
     expect(
       visible.flatMap((item) => (item.type === 'message' ? [item.message.clientId] : [])),
-    ).toEqual(['u1', 'dm-sent', 'dm-received']);
+    ).toEqual(['u1', 'dm-sent', 'dm-received', 'a1']);
   });
 });
 
@@ -820,6 +828,41 @@ describe('buildRenderItems — key stability', () => {
   // 真机验收:伙伴对话里只看到工程 diff 卡「已更改 1 个文件 +137 −0 撤销/审查」,
   // 交付物卡一次都没出现。根因就在这里 —— changeSet 把本轮文件从产出候选里排它
   // 剔除,再自己渲染成 turn_changes。伙伴会话的方向是反的。
+  // Tier: behavior. A teammate's started tasks were reachable only through its reply text; the
+  // chat now lists them from the send_to_session receipts of the turn (2026-11-10).
+  it('lists the tasks a teammate turn started or handed work to, once each, in teammate chats only', () => {
+    const receipt = (id: string, wake: string, title: string) => JSON.stringify({ ok: true, target_session_id: id, wake_kind: wake, target_title: title });
+    const messages = [
+      mkUser('u1'),
+      mkTool('send-1', 'mcp__cindy_helper__call_tool', { name: 'send_to_session', args: { title: 'Fix login' } }),
+      mkResult('send-1-r', 'tu-send-1', receipt('s-a', 'created', 'Fix login')),
+      mkTool('send-2', 'mcp:cindy_helper:call_tool', JSON.stringify({ name: 'send_to_session', args: {} })),
+      mkResult('send-2-r', 'tu-send-2', receipt('s-b', 'resumed', 'Release notes')),
+      mkTool('send-3', 'mcp__cindy_helper__call_tool', { name: 'send_to_session', args: {} }),
+      mkResult('send-3-r', 'tu-send-3', receipt('s-a', 'already-active', 'Fix login · running')),
+      mkTool('other', 'mcp__cindy_helper__call_tool', { name: 'list_sessions', args: {} }),
+      mkResult('other-r', 'tu-other', receipt('s-c', 'created', 'Not a hand-off')),
+      mkUser('u2'),
+    ];
+    const started = (botSessionId?: string) => buildRenderItems(messages, undefined, undefined, { botSessionId })
+      .items.filter((item) => item.type === 'bot_started_tasks');
+    expect(started('bot-chat')).toEqual([{ type: 'bot_started_tasks', key: 'started-tasks-u1', tasks: [
+      { sessionId: 's-a', title: 'Fix login · running', created: true },
+      { sessionId: 's-b', title: 'Release notes', created: false },
+    ] }]);
+    expect(started(undefined)).toEqual([]);
+
+    // The owner reads them at the foot of the reply that announced them; a turn with no
+    // reply yet keeps them as a row of their own.
+    const withReply = [...messages.slice(0, -1), mkAssistant('reply', 'Started it.'), mkUser('u2')];
+    const attached = attachBotStartedTasks(buildRenderItems(withReply, undefined, undefined, { botSessionId: 'bot-chat' }).items);
+    expect(attached.some((item) => item.type === 'bot_started_tasks')).toBe(false);
+    const reply = attached.find((item) => item.type === 'message' && item.message.clientId === 'reply');
+    expect(reply?.type === 'message' ? reply.message.botStartedTasks?.map((task) => task.sessionId) : null).toEqual(['s-a', 's-b']);
+    expect(attachBotStartedTasks(buildRenderItems(messages, undefined, undefined, { botSessionId: 'bot-chat' }).items)
+      .filter((item) => item.type === 'bot_started_tasks')).toHaveLength(1);
+  });
+
   describe('bot sessions hand the turn over to deliverables', () => {
     const messages = [
       mkUser('u1'),
@@ -1177,6 +1220,56 @@ describe('buildRenderItems — key stability', () => {
     expect(segment.toolCalls.map((tool) => tool.clientId)).toEqual(['t1', 't2']);
   });
 
+  it.each(['none', 'TodoWrite', 'update_plan'])(
+    'keeps ordinary history and %s plans unchanged in an incomplete window', (source) => {
+      const messages: ChatMessage[] = [mkUser('u1')];
+      for (let index = 0; index < 80; index += 1) {
+        messages.push(mkTool(`read-${index}`, 'Read'), mkResult(`result-${index}`, `tu-read-${index}`));
+      }
+      if (source === 'TodoWrite') {
+        messages.push(mkTool('plan', source, { todos: [
+          { content: 'Inspect', status: 'completed' },
+          { content: 'Verify', status: 'pending' },
+        ] }));
+      } else if (source === 'update_plan') {
+        messages.push(mkTool('plan', source, { plan: [
+          { step: 'Inspect', status: 'completed' },
+          { step: 'Verify', status: 'pending' },
+        ] }));
+      }
+      messages.push(mkAssistant('answer', 'Done'));
+      const complete = buildRenderItems(messages);
+      const partial = buildRenderItems(messages, undefined, undefined, { historyWindowIncomplete: true });
+      expect(partial).toEqual(complete);
+      expect(partial.items.filter((item) => item.type === 'agent_plan')).toHaveLength(source === 'none' ? 0 : 1);
+    },
+  );
+
+  it('keeps independent Task plans with delayed results across user turns', () => {
+    const messages: ChatMessage[] = [];
+    const lateResults: ChatMessage[] = [];
+    for (let turn = 0; turn < 6; turn += 1) {
+      messages.push(mkUser(`user-${turn}`), mkTool(`plan-${turn}`, 'TaskList'));
+      lateResults.push(mkResult(`result-${turn}`, `tu-plan-${turn}`, JSON.stringify({ tasks: [
+        { id: `${turn}-1`, subject: `Inspect ${turn}`, status: 'in_progress' },
+        { id: `${turn}-2`, subject: `Verify ${turn}`, status: 'pending' },
+      ] })));
+      messages.push(mkAssistant(`answer-${turn}`, 'Progress'));
+    }
+    messages.push(...lateResults.reverse());
+    const plans = buildRenderItems(messages, undefined, undefined, { historyWindowIncomplete: true })
+      .items.filter((item) => item.type === 'agent_plan');
+    expect(plans.map((plan) => ({ key: plan.key, todos: plan.todos }))).toEqual(
+      Array.from({ length: 6 }, (_, turn) => ({
+        key: `todo-plan-${turn}`,
+        todos: [
+          { content: `Inspect ${turn}`, status: 'in_progress' },
+          { content: `Verify ${turn}`, status: 'pending' },
+        ],
+      })),
+    );
+  });
+
   it('waits for older Task history before showing a partial inline plan', () => {
     const first = mkTool('tc2', 'TaskCreate', { subject: 'Fix renderer' });
     const second = mkTool('tc3', 'TaskCreate', { subject: 'Run tests' });
@@ -1252,6 +1345,71 @@ describe('buildRenderItems — key stability', () => {
         { content: 'Run tests', status: 'pending' },
       ],
     });
+  });
+
+  it('keeps late Task results attached after a long history prefix', () => {
+    const messages: ChatMessage[] = [
+      mkUser('u1', 'Show the current tasks'),
+      mkTool('task-list', 'TaskList'),
+    ];
+    for (let index = 0; index < 200; index += 1) {
+      messages.push(mkAssistant(`history-${index}`, `history ${index}`));
+    }
+    messages.push(mkResult(
+      'r-task-list-late',
+      'tu-task-list',
+      JSON.stringify({
+        tasks: [
+          { id: '1', subject: 'Inspect renderer', status: 'in_progress' },
+          { id: '2', subject: 'Run tests', status: 'pending' },
+        ],
+      }),
+    ));
+
+    const plans = buildRenderItems(messages, undefined, undefined, {
+      historyWindowIncomplete: true,
+    }).items.filter(
+      (item): item is Extract<RenderItem, { type: 'agent_plan' }> => item.type === 'agent_plan',
+    );
+
+    expect(plans).toHaveLength(1);
+    expect(plans[0]?.todos).toEqual([
+      { content: 'Inspect renderer', status: 'in_progress' },
+      { content: 'Run tests', status: 'pending' },
+    ]);
+  });
+
+  it('black-box: repeated history-window renders keep one stable plan result', () => {
+    const messages: ChatMessage[] = [
+      mkUser('u-blackbox', 'Review the task list'),
+      mkTool('task-list', 'TaskList'),
+    ];
+    for (let index = 0; index < 200; index += 1) {
+      messages.push(mkAssistant(`blackbox-history-${index}`, `history ${index}`));
+    }
+    messages.push(mkResult(
+      'r-task-list-blackbox',
+      'tu-task-list',
+      JSON.stringify({
+        tasks: [
+          { id: 'blackbox-task-1', subject: 'Keep the task visible', status: 'in_progress' },
+          { id: 'blackbox-task-2', subject: 'Keep the second task visible', status: 'pending' },
+        ],
+      }),
+    ));
+
+    const render = () => buildRenderItems(messages, undefined, undefined, {
+      historyWindowIncomplete: true,
+    }).items;
+    const first = render();
+    const second = render();
+    const summarize = (items: RenderItem[]) => items.map((item) => {
+      if (item.type !== 'agent_plan') return item.type;
+      return { type: item.type, key: item.key, todos: item.todos };
+    });
+
+    expect(summarize(second)).toEqual(summarize(first));
+    expect(second.filter((item) => item.type === 'agent_plan')).toHaveLength(1);
   });
 
   it('renders a new Task plan after a real user turn despite an older orphan update', () => {
@@ -2313,7 +2471,7 @@ it('places the same Bot task card after its introduction and keeps it through st
   const project = (streaming: boolean) => simplifyBotRenderItems(
     buildRenderItems(messages, undefined, undefined, { botSessionId: 'bot' }).items, streaming,
   ).flatMap((item) => item.type === 'message' ? [item.message.clientId] : []);
-  expect(project(true)).toEqual(['start', 'intro', 'task-card']);
+  expect(project(true)).toEqual(['start', 'intro', 'task-card', 'done']);
   expect(project(false).filter((id) => id !== 'finished-trigger')).toEqual(['start', 'intro', 'task-card', 'done']);
 });
 

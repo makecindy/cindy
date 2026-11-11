@@ -115,6 +115,50 @@ describe('SystemCard auto-resume 行', () => {
     ).toBeNull();
   });
 
+  it('供应商组换电脑进行中 → 「正在换一台电脑继续」,不带先不呈现的原始错误', () => {
+    render(
+      <SystemCard
+        cardType="auto-resume-pending"
+        data={{
+          error: "You've hit your session limit",
+          attempt: 0,
+          maxAttempts: 0,
+          sessionTotal: 0,
+          groupSwitchPending: { cause: 'usage-limit' },
+        }}
+      />,
+    );
+    expect(screen.getByText('chat.systemCard.autoResumePending.groupSwitch')).toBeTruthy();
+    expect(screen.queryByText(/session limit/)).toBeNull();
+    expect(screen.queryByText('chat.systemCard.autoResumePending.label')).toBeNull();
+  });
+
+  it('供应商组等回原电脑后在原电脑继续 → 「已重新连上 {电脑}，继续运行」,读不到名称时不写电脑名', () => {
+    const { unmount } = render(
+      <SystemCard
+        cardType="auto-resume"
+        data={{
+          reason: 'usage-limit-reset',
+          attempt: 1,
+          maxAttempts: 1,
+          sessionTotal: 0,
+          agentReconnect: { computer: 'Mac mini' },
+        }}
+      />,
+    );
+    expect(
+      screen.getByText('chat.systemCard.autoResume.agentReconnect.named({"computer":"Mac mini"})'),
+    ).toBeTruthy();
+    unmount();
+    render(
+      <SystemCard
+        cardType="auto-resume"
+        data={{ reason: 'usage-limit-reset', attempt: 1, maxAttempts: 1, sessionTotal: 0, agentReconnect: {} }}
+      />,
+    );
+    expect(screen.getByText('chat.systemCard.autoResume.agentReconnect.unnamed')).toBeTruthy();
+  });
+
   it('已回填时 inFlight 不参与:终态优先,仍定格 ✓ / ✗', () => {
     render(
       <SystemCard

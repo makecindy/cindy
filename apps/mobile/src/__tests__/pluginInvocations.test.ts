@@ -1,7 +1,8 @@
 import { describe, expect, it } from 'vitest';
 import { projectLargeSettledToolInputs } from '@/session/messageToolPayloadProjection';
 import { normalizeRemoteMessages } from '@/session/messageNormalize';
-import { companionPluginWorkEntries, collectCompanionPluginInvocations } from '@/session/pluginInvocations';
+import { companionPluginSourceMessages, companionPluginWorkEntries, collectCompanionPluginInvocations } from '@/session/pluginInvocations';
+import { sameArrayIdentity } from '@/utils/valueEquality';
 import { buildMobileMessageRenderItems, type MobileWorkGroupItem } from '@/session/messageRenderModel';
 import type { RemoteMessage } from '@/session/types';
 const msg = (id: string, role: RemoteMessage['role'], content: unknown, extra: Partial<RemoteMessage> = {}): RemoteMessage => ({
@@ -10,6 +11,27 @@ const msg = (id: string, role: RemoteMessage['role'], content: unknown, extra: P
 const call = (id: string, name = 'mcp__cindy__ghost_call', input: unknown = { ghost_id: 'art', tool: 'generate' }) =>
   msg(id, 'tool_use', { toolName: name, toolUseId: id, input }, { toolUseId: id });
 describe('plugin annotations on user messages', () => {
+  it('keeps root and organization calls with the same id independent, even after projection', () => {
+    const rows = [msg('u', 'user', 'Use both'),
+      call('root', undefined, { ghost_id: 'helper', namespace: null, tool: 'root_tool' }),
+      msg('done', 'tool_result', 'done', { toolUseId: 'root' }),
+      call('org', undefined, { ghost_id: 'helper', namespace: 'acme', tool: 'org_tool' })];
+    expect(normalizeRemoteMessages(rows)[0].pluginInvocations).toMatchObject([
+      { id: 'helper', namespace: null, tools: ['root_tool'], hasPendingCalls: false },
+      { id: 'helper', namespace: 'acme', tools: ['org_tool'], hasPendingCalls: true },
+    ]);
+    for (const namespace of [null, 'acme']) {
+      const tool = namespace === null ? 'root_tool' : 'org_tool';
+      const projected = projectLargeSettledToolInputs([
+        msg('u2', 'user', 'Use plugin'),
+        call('big', undefined, { ghost_id: 'helper', namespace, tool, args: { data: 'x'.repeat(40_000) } }),
+        msg('result', 'tool_result', 'done', { toolUseId: 'big' }),
+      ]);
+      expect(normalizeRemoteMessages(projected)[0].pluginInvocations).toMatchObject([
+        { id: 'helper', namespace, tools: [tool], hasPendingCalls: false },
+      ]);
+    }
+  });
   it('retains call identity when large arguments are released after completion', () => {
     const source = [msg('u', 'user', 'Draw'), call('c', undefined, { ghost_id: 'art', tool: 'generate', args: { data: 'x'.repeat(40_000) } }), msg('r', 'tool_result', 'done', { toolUseId: 'c' })];
     const projected = projectLargeSettledToolInputs(source);
@@ -37,6 +59,18 @@ describe('plugin annotations on user messages', () => {
     rows.push(msg('rb', 'tool_result', '{"ok":false}', { toolUseId: 'b' }),
       msg('ra2', 'tool_result', 'done', { toolUseId: 'a2' }));
     expect(plugins()?.map((plugin) => plugin.hasPendingCalls)).toEqual([false, false]);
+  });
+  it('narrows the companion source rows without changing legacy adjacency pairing', () => {
+    // A legacy ID-less call pairs only with the row right after it. Assistant output in between
+    // means the later result is not its own, so the plugin is still running.
+    const legacyCall = msg('c', 'tool_use', { toolName: 'mcp__cindy__ghost_call', input: { ghost_id: 'art', tool: 'generate' } });
+    const rows = [msg('u', 'user', 'Draw'), legacyCall, msg('text', 'assistant', 'Working'), msg('other', 'tool_result', 'done')];
+    expect(collectCompanionPluginInvocations(rows).get('u')?.[0].hasPendingCalls).toBe(true);
+    const narrowed = companionPluginSourceMessages(rows);
+    expect(collectCompanionPluginInvocations(narrowed)).toEqual(collectCompanionPluginInvocations(rows));
+    // A streaming flush that only replaces the assistant row keeps the narrowed rows identical.
+    const flushed = [...rows.slice(0, 2), msg('text', 'assistant', 'Working on it'), rows[3]];
+    expect(sameArrayIdentity(companionPluginSourceMessages(flushed), narrowed)).toBe(true);
   });
   it('keeps steers in their owner turn and never carries calls into the next question', () => {
     const rows = normalizeRemoteMessages([msg('u1', 'user', 'art'), msg('steer', 'user', 'blue', { agentMeta: { delivery: 'steer' } }), call('c'), msg('u2', 'user', 'art')]);

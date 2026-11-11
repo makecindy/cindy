@@ -33,6 +33,7 @@ describe("resolveMobileInvokeTimeoutMs", () => {
     // fork:载入完整消息前缀 + SDK fork + 事务批量拷贝,大会话 15-30s;非幂等,
     // 误超时后桌面仍会建出新会话,重试会分叉重复副本。
     expect(resolveMobileInvokeTimeoutMs('maker:fork')).toBe(30_000);
+    expect(resolveMobileInvokeTimeoutMs('maker:fork-strip-encrypted')).toBe(30_000);
     // rewind:commit:DB 读 + 线程回滚 + Git 回退 + SQLite 事务,非幂等——误超时
     // 后对话与文件已被回退,重试会作用在已变更的历史上。
     expect(resolveMobileInvokeTimeoutMs('maker:rewind:commit')).toBe(30_000);

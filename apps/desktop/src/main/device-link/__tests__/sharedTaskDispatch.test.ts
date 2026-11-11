@@ -1,4 +1,5 @@
-import { sharedTaskGuestPeer } from '@cindy/device-link';
+import { authorizeSharedTaskOperation, sharedTaskGuestPeer } from '@cindy/device-link';
+import { HistoryViewController, historyWorkSummaries, projectHistoryView, type HistoryMessageSource } from '@cindy/maker-shared/message-window';
 import { afterEach, describe, expect, it } from 'vitest';
 import { assertSharedTaskInteractionResolveCurrent, assertSharedTaskInvoke, assertSharedTaskReferences, captureSharedTaskPush, setSharedTaskInteractionReader, setSharedTaskQueueReader, type SharedTaskInteractionCapture, type SharedTaskPeerCapture } from '../sharedTaskDispatch.js';
 
@@ -6,7 +7,11 @@ function capture(): SharedTaskPeerCapture {
   return {
     author: { sharedTaskId: 'sharedTask', sessionId: 'task', memberId: 'member', accountId: 'guest', displayName: 'Guest' },
     isCurrent: () => true,
-    authorize: (operation, item) => operation !== 'input.edit' && operation !== 'input.withdraw' || item?.authorAccountId === 'guest',
+    authorize: (operation, item) => authorizeSharedTaskOperation({
+      sharedTaskId: 'sharedTask', sessionId: 'task', ownerAccountId: 'owner', hostDeviceId: 'host',
+      status: 'active', revision: 1,
+      guests: [{ memberId: 'member', accountId: 'guest', version: 1, deviceIds: ['phone'] }],
+    }, { accountId: 'guest', deviceId: 'phone' }, 'task', operation, item).allowed,
   };
 }
 afterEach(() => { setSharedTaskQueueReader(null); setSharedTaskInteractionReader(null); });
@@ -31,7 +36,11 @@ describe('sharedTask dispatch scope', () => {
     expect(() => assertSharedTaskInvoke(capture(), payload)).toThrow();
   });
   it('never inherits the full-device allowlist or wildcard subscriptions', () => {
-    for (const channel of ['maker:create-session', 'maker:set-permission-mode', 'device-link:voice:credential-sync', 'local-db:sessions:list', 'maker:remote-resources:list']) {
+    // #8010: shared-task permission does not grant the owner's complete model catalog.
+    expect(() => assertSharedTaskInvoke(capture(), {
+      channel: 'maker:model-catalog:read', args: [{ op: 'locations' }],
+    })).toThrow('PERMISSION_DENIED');
+    for (const channel of ['git-context:pr-refs:manage', 'maker:usage:codex-reset-auto-use', 'maker:create-session', 'maker:set-permission-mode', 'device-link:voice:credential-sync', 'local-db:sessions:list', 'maker:remote-resources:list']) {
       expect(() => assertSharedTaskInvoke(capture(), { channel, args: ['task'] })).toThrow('PERMISSION_DENIED');
     }
     for (const topics of [['*'], ['sessions'], ['session:other'], ['session:task', 'session:other']]) {
@@ -39,10 +48,71 @@ describe('sharedTask dispatch scope', () => {
     }
     expect(() => assertSharedTaskInvoke(capture(), { channel: 'device-link:subscribe', args: [{ topics: ['session:task'] }] })).not.toThrow();
   });
-  it('allows shared task history and Agent settings, rejecting another task', () => {
-    for (const channel of ['local-db:messages:list', 'maker:set-model', 'maker:set-effort', 'maker:input:stop']) {
+  it('allows shared task history and stopping the Agent, rejecting another task', () => {
+    for (const channel of ['local-db:messages:list', 'maker:input:stop']) {
       expect(() => assertSharedTaskInvoke(capture(), { channel, args: ['task'] })).not.toThrow();
       expect(() => assertSharedTaskInvoke(capture(), { channel, args: ['other'] })).toThrow();
+    }
+  });
+  // Regression: expanding a shared work group sent its display-only artifact paths
+  // through the input-reference gate and failed with PERMISSION_DENIED. Existing
+  // scope tests used bare session IDs, never Host-projected work summaries.
+  // Entry/result: real HistoryViewController + assertSharedTaskInvoke must expose
+  // the detail rows and admit expansion intent. Minimal input: one command artifact.
+  // Tier: unit; all history and authorization data remain in memory.
+  // Standalone run: Vitest 3.07s; pnpm command 6.91s on Windows.
+  it.each(['expand', 'locate'] as const)('reads shared work details containing file artifacts through %s', async (mode) => {
+    const rows: HistoryMessageSource[] = [
+      { id: '1', clientId: 'c1', role: 'tool_use', toolUseId: 'command',
+        content: { toolName: 'Bash', input: { command: 'echo done > /work/report.txt' } },
+        createdAt: '2026-10-26T00:00:01Z',
+        historyArtifacts: [{ path: '/work/report.txt', source: 'command', createdAt: '2026-10-26T00:00:01Z' }] },
+      { id: '2', clientId: 'c2', role: 'tool_result', toolUseId: 'command', content: 'done', createdAt: '2026-10-26T00:00:02Z' },
+    ];
+    const items = projectHistoryView(rows, false, true);
+    const summary = historyWorkSummaries(items)[0];
+    const intents: string[][] = [];
+    const queue = { tail: Promise.resolve() };
+    const view = new HistoryViewController<HistoryMessageSource>({
+      page: async () => ({ version: 1, items, hasMore: false, nextCursor: null }),
+      details: async (ref, after) => {
+        assertSharedTaskInvoke(capture(), { channel: 'local-db:messages:work-details', args: ['task', ref, { after }] });
+        return { version: 1, messages: rows, hasMore: false, nextCursor: null };
+      },
+      expanded: async (refs) => {
+        assertSharedTaskInvoke(capture(), { channel: 'local-db:messages:view-intent', args: ['task', refs] });
+        intents.push(refs.map(ref => ref.key));
+      },
+    }, queue);
+    try {
+      expect(summary.artifacts).toHaveLength(1);
+      await view.refresh();
+      await queue.tail;
+      if (mode === 'expand') {
+        view.setExpanded(summary.key, true);
+        await view.loadDetails(summary);
+        await queue.tail;
+        expect(intents).toContainEqual([summary.key]);
+      } else {
+        expect(await view.locate('c1', rows[0].createdAt)).toEqual(rows[0]);
+        expect(view.getSnapshot().expanded.size).toBe(0);
+      }
+      expect(view.getSnapshot().details.get(summary.key)).toMatchObject({ complete: true, error: null, messages: rows });
+      expect(historyWorkSummaries(view.getSnapshot().items)[0].artifacts).toEqual(summary.artifacts);
+    } finally {
+      view.setActive(false);
+      await queue.tail;
+    }
+  });
+  it.each([
+    ['maker:set-model', ['task', 'gpt-6-sol', 'openai', undefined, { effort: 'high', fastMode: true }]],
+    ['maker:set-effort', ['task', 'high']],
+    ['maker:set-fast-mode', ['task', true]],
+    ['maker:set-thinking-enabled', ['task', true]],
+    ['maker:switch-session-agent', ['task', 'codex', 'gpt-6-sol', 'openai']],
+  ])('rejects guest model settings through %s before execution or result replay', (channel, args) => {
+    for (const phase of ['invoke', 'result'] as const) {
+      expect(() => assertSharedTaskInvoke(capture(), { channel, args }, undefined, phase)).toThrow('PERMISSION_DENIED');
     }
   });
   it('allows guests to resolve generic Agent interaction cards for the shared task', () => {
@@ -53,6 +123,17 @@ describe('sharedTask dispatch scope', () => {
       'plan-1': { sessionId: 'task', kind: 'plan_review' },
     };
     setSharedTaskInteractionReader((requestId) => interactions[requestId]);
+    for (const confirmed of [true, false]) {
+      // The generic Agent reader never contains host-owned issue confirmations.
+      // Neither a host-only id nor a forged generic id may accept/replay them.
+      for (const requestId of ['issue-1', 'permission-1']) {
+        for (const phase of ['invoke', 'result'] as const) {
+          expect(() => assertSharedTaskInvoke(capture(), {
+            channel: 'maker:resolve-interaction', args: [requestId, { kind: 'issue_confirm', confirmed }],
+          }, undefined, phase)).toThrow('PERMISSION_DENIED');
+        }
+      }
+    }
     for (const [requestId, decision] of [
       ['permission-1', { kind: 'permission', behavior: 'allow' }],
       ['question-1', { kind: 'ask_user_question', answers: { choice: 'A' } }],
@@ -86,6 +167,22 @@ describe('sharedTask dispatch scope', () => {
       channel: 'maker:resolve-interaction',
       args: ['permission-1', { kind: 'permission', behavior: 'allow', permissionUpdates: [permissionSuggestion] }],
     })).not.toThrow();
+  });
+  it.each(['cindy.app.update', 'cindy.app.auto_update', 'ghost_contribution_submit', 'ghost_cancel_plugin_review'])('keeps the owner-only %s card away from guests', (toolName) => {
+    setSharedTaskInteractionReader(() => ({ sessionId: 'task', kind: 'permission', toolName }));
+    for (const behavior of ['allow', 'deny']) {
+      const args = ['app-update-1', { kind: 'permission', behavior }];
+      expect(() => assertSharedTaskInvoke(capture(), { channel: 'maker:resolve-interaction', args })).toThrow('PERMISSION_DENIED');
+      expect(() => assertSharedTaskInteractionResolveCurrent(capture(), args)).toThrow('PERMISSION_DENIED');
+    }
+  });
+  it('keeps host-owned consent cards away from guests even under a generic tool name', () => {
+    // Provider credential sharing reuses tool names such as Bash; plugin install and
+    // media download use their own names. The host-owned marker decides, not the name.
+    setSharedTaskInteractionReader(() => ({ sessionId: 'task', kind: 'permission', toolName: 'Bash', hostOwnedConfirmation: true }));
+    const args = ['credential-1', { kind: 'permission', behavior: 'allow' }];
+    expect(() => assertSharedTaskInvoke(capture(), { channel: 'maker:resolve-interaction', args })).toThrow('PERMISSION_DENIED');
+    expect(() => assertSharedTaskInteractionResolveCurrent(capture(), args)).toThrow('PERMISSION_DENIED');
   });
   it.each([{ command: 'different-command' }, {}, null])('rejects guest replacement input %j at admission and consumption', (updatedInput) => {
     setSharedTaskInteractionReader(() => ({ sessionId: 'task', kind: 'permission', toolName: 'Bash' }));
@@ -146,11 +243,16 @@ describe('sharedTask dispatch scope', () => {
     expect(() => assertSharedTaskInvoke(noHistory, { channel, args: ['task', 'bash-1'] })).toThrow();
   });
   it('accepts media preparation and OSS fallback without granting the file-peer channel', () => {
-    for (const prepareOnly of [true, false]) {
-      expect(() => assertSharedTaskInvoke(capture(), {
-        channel: 'device-link:media:fetch', args: [{ url: 'xdt-image://task/a.png', prepareOnly }],
-      })).not.toThrow();
+    for (const options of [{ prepareOnly: true, metadataOnly: true }, { prepareOnly: true }, { prepareOnly: false }]) {
+      const request = { channel: 'device-link:media:fetch', args: [{ url: 'xdt-image://task/a.png', ...options }] };
+      for (const phase of ['invoke', 'result'] as const) {
+        expect(() => assertSharedTaskInvoke(capture(), request, undefined, phase)).not.toThrow();
+        expect(() => assertSharedTaskInvoke({ ...capture(), authorize: () => false }, request, undefined, phase)).toThrow('PERMISSION_DENIED');
+      }
     }
+    expect(() => assertSharedTaskInvoke(capture(), {
+      channel: 'device-link:media:fetch', args: [{ url: 'xdt-image://task/a.png', metadataOnly: 'true' }],
+    })).toThrow('PERMISSION_DENIED');
     expect(() => assertSharedTaskInvoke(capture(), {
       channel: 'device-link:media:fetch', args: [{ url: 'xdt-image://task/a.png', prepareOnly: true, sessionId: 'other' }],
     })).toThrow();
@@ -178,6 +280,37 @@ describe('sharedTask dispatch scope', () => {
     expect(() => assertSharedTaskInvoke(capture(), payload)).not.toThrow();
     setSharedTaskQueueReader(() => undefined);
     expect(() => assertSharedTaskInvoke(capture(), payload, undefined, 'result')).not.toThrow();
+  });
+  it('lets guests read and write task files like the owner, but never run export jobs', () => {
+    const channel = 'file-browser:remote-op';
+    const call = (request: unknown, peer = capture(), extra: unknown[] = []) =>
+      () => assertSharedTaskInvoke(peer, { channel, args: [request, ...extra] });
+    for (const op of ['caps', 'listDir', 'listAllFiles', 'readFile', 'stat', 'searchCollect', 'thumbnail', 'fileUrl',
+      'writeFile', 'createFile', 'createFolder', 'renameEntry', 'deleteEntry']) {
+      expect(call({ op, workdir: '/host/task' })).not.toThrow();
+    }
+    for (const op of ['exportFileStart', 'exportFileStatus', 'exportDirStart', 'exportDirStatus', 'unknown']) {
+      expect(call({ op, workdir: '/host/task' })).toThrow('PERMISSION_DENIED');
+    }
+    expect(call({ op: 'listDir' })).toThrow('PERMISSION_DENIED');
+    expect(call({ op: 'listDir', workdir: '/host/task' }, capture(), ['extra'])).toThrow('PERMISSION_DENIED');
+    const readOnly: SharedTaskPeerCapture = { ...capture(), authorize: (operation) => operation !== 'file.write' };
+    expect(call({ op: 'readFile', workdir: '/host/task' }, readOnly)).not.toThrow();
+    expect(call({ op: 'writeFile', workdir: '/host/task' }, readOnly)).toThrow('PERMISSION_DENIED');
+    expect(call({ op: 'listDir', workdir: '/host/task' }, { ...capture(), isCurrent: () => false })).toThrow();
+  });
+  it('subscribes a workdir watch only after async admission, including merged reconnect frames', () => {
+    const subscribe = (topics: string[], verified: string[] = [], peer = capture()) =>
+      () => assertSharedTaskInvoke(peer, { channel: 'device-link:subscribe', args: [{ topics }] }, undefined, 'invoke', new Set(verified));
+    expect(subscribe(['fs-watch:/host/task'])).toThrow('PERMISSION_DENIED');
+    expect(subscribe(['fs-watch:/host/task'], ['fs-watch:/host/task'])).not.toThrow();
+    expect(subscribe(['session:task', 'fs-watch:/host/task'], ['fs-watch:/host/task'])).not.toThrow();
+    expect(subscribe(['session:other', 'fs-watch:/host/task'], ['fs-watch:/host/task'])).toThrow('PERMISSION_DENIED');
+    expect(subscribe(['fs-watch:/host/task'], ['fs-watch:/host/task'], { ...capture(), authorize: (operation) => operation !== 'file.read' }))
+      .toThrow('PERMISSION_DENIED');
+    // Results and unsubscribes carry no file data, so they only re-check access.
+    expect(() => assertSharedTaskInvoke(capture(), { channel: 'device-link:subscribe', args: [{ topics: ['fs-watch:/host/task'] }] }, undefined, 'result')).not.toThrow();
+    expect(() => assertSharedTaskInvoke(capture(), { channel: 'device-link:unsubscribe', args: [{ topics: ['fs-watch:/host/task'] }] })).not.toThrow();
   });
   it('rejects expired captured authorization and unbound sharedTask pushes without changing same-account traffic', () => {
     expect(() => assertSharedTaskInvoke({ ...capture(), isCurrent: () => false }, { channel: 'local-db:messages:list', args: ['task'] })).toThrow();

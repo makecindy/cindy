@@ -6,6 +6,7 @@
  */
 
 export type BrowserControlAction =
+  | 'recipeCommand'
   | 'doctor'
   | 'status'
   | 'start'
@@ -94,10 +95,14 @@ export interface BrowserActRequest {
   textGone?: string;
   timeoutMs?: number;
   fn?: string;
+  /** Host-built structured read. Runtimes without this optimization use fn. */
+  domRead?: import('./dom-read.js').BrowserDomRead;
 }
 
 export interface BrowserControlRequest {
   action: BrowserControlAction;
+  /** Host-internal transport for bundled adapters; never exposed as an MCP action. */
+  recipeCommand?: { method: string; sessionId?: string; params?: Record<string, unknown> };
   /** Per-start proxy URL. Credentials are accepted only in-memory by the host. */
   proxyServer?: string;
   /** Public DNS patterns allowed for page navigation while proxyServer is active. */
@@ -107,6 +112,8 @@ export interface BrowserControlRequest {
   profile?: string;
   targetUrl?: string;
   url?: string;
+  /** Host-only override for user-initiated pages. Agent opens default to background. */
+  background?: boolean;
   targetId?: string;
   label?: string;
   limit?: number;

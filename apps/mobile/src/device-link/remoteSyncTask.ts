@@ -138,6 +138,46 @@ export interface RemoteSyncCoordinator {
   isRunning(): boolean;
 }
 
+/** Cached reading can coalesce with ACK, but a broken subscription must not stall snapshots.
+ * This is only a validation grace period; cold reads and the subscription retry loop remain independent.
+ */
+export async function waitForCachedSubscription(
+  run: Pick<RemoteSyncRun, 'signal'>,
+  cached: boolean,
+  subscription: Promise<unknown>,
+  isSubscribed: () => boolean,
+): Promise<void> {
+  let failed = false;
+  const settled = subscription.then(
+    () => undefined,
+    () => { failed = true; },
+  );
+  if (!cached) return;
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  let stopped = false;
+  const deadline = Date.now() + 2000;
+  try {
+    await waitForRemoteSync(run.signal, () => new Promise<void>(resolve => {
+      const check = () => {
+        if (stopped) return;
+        if (timer !== undefined) clearTimeout(timer);
+        // Promise completion can belong to an old connection. Only the current
+        // ACK table proves both topics are ready. This samples local state only,
+        // for at most two seconds; it never sends or retries a subscription.
+        if (failed || isSubscribed() || Date.now() >= deadline) {
+          stopped = true;
+          resolve();
+        } else timer = setTimeout(check, Math.min(50, deadline - Date.now()));
+      };
+      check();
+      void settled.then(check);
+    }));
+  } finally {
+    stopped = true;
+    if (timer !== undefined) clearTimeout(timer);
+  }
+}
+
 interface PendingRemoteSync {
   reasons: Set<string>;
   replaceMessages: boolean;

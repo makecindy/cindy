@@ -1,5 +1,6 @@
 // @vitest-environment jsdom
 import { readFileSync } from 'node:fs';
+import { createRequire } from 'node:module';
 import { resolve } from 'node:path';
 import * as jsxRuntime from 'react/jsx-runtime';
 import { act, Children, createContext, forwardRef, Fragment, isValidElement, useContext, useRef, useState, type ReactElement, type ReactNode } from 'react';
@@ -19,6 +20,59 @@ const declaration = source.statements.find((node): node is ts.FunctionDeclaratio
 const compiled = ts.transpileModule(declaration.getText(source), {
   compilerOptions: { target: ts.ScriptTarget.ES2022, module: ts.ModuleKind.CommonJS, jsx: ts.JsxEmit.ReactJSX },
 }).outputText;
+
+// Unit regression for #7083: the native drag callback must transfer only its
+// small payload, not the project's task/history tree. Existing window tests
+// count mounted rows but never exercise Babel's actual worklet closure.
+it('keeps task data out of the project drag worklet while preserving drag actions', () => {
+  const projectRow = source.statements.find((node): node is ts.FunctionDeclaration => ts.isFunctionDeclaration(node)
+    && node.name?.text === 'ProjectRow')!;
+  let gesture!: ts.VariableDeclaration;
+  function visit(node: ts.Node) {
+    if (ts.isVariableDeclaration(node) && node.name.getText(source) === 'dragGesture') gesture = node;
+    ts.forEachChild(node, visit);
+  }
+  visit(projectRow);
+  const require = createRequire(import.meta.url);
+  const { transformSync } = require('@babel/core');
+  const code = transformSync(`function build(project, onDragStart, onDragMove, onDragEnd) {
+    const kind = 'project', displayTitle = project.title;
+    return ${gesture.initializer!.getText(source)};
+  }`, {
+    filename: __filename, babelrc: false, configFile: false,
+    plugins: [require.resolve('react-native-worklets/plugin')],
+  }).code;
+  const callbacks: Record<string, ((event?: unknown) => void) & { __closure?: object }> = {};
+  const pan: Record<string, (...args: any[]) => unknown> = {};
+  for (const method of ['activateAfterLongPress', 'activeOffsetY', 'failOffsetX', 'onStart', 'onUpdate', 'onFinalize']) {
+    pan[method] = (value: any) => {
+      if (method.startsWith('on')) callbacks[method] = value;
+      return pan;
+    };
+  }
+  const build = new Function('Gesture', 'useMemo', 'runOnJS', `${code}; return build;`)(
+    { Pan: () => pan }, (factory: () => unknown) => factory(), (callback: unknown) => callback,
+  );
+  const start = vi.fn(), move = vi.fn(), finish = vi.fn();
+  const project = { key: 'project', title: 'Project', sessionCount: 1,
+    get sessions(): never { throw new Error('task data crossed into a gesture worklet'); } };
+  build(project, start, move, finish);
+  // Serializable conversion enumerates captured objects, including their
+  // nested fields. A single sentinel task collection catches the old transfer.
+  const visited = new Set<object>();
+  function inspect(value: unknown) {
+    if (!value || typeof value !== 'object' || visited.has(value)) return;
+    visited.add(value);
+    Object.values(value).forEach(inspect);
+  }
+  expect(() => Object.values(callbacks).forEach(callback => inspect(callback.__closure))).not.toThrow();
+  callbacks.onStart({ absoluteY: 140 });
+  callbacks.onUpdate({ absoluteY: 160 });
+  callbacks.onFinalize();
+  expect(start).toHaveBeenCalledWith({ absoluteY: 140, count: 1, key: 'project', title: 'Project' });
+  expect(move).toHaveBeenCalledWith(160);
+  expect(finish).toHaveBeenCalledOnce();
+});
 
 function renderChildren(count: number, anchor: number, old = false) {
   const now = Date.now();
@@ -78,6 +132,15 @@ it('bounds 200 recent runs before layout, while scrolling, and when reversing to
       expect(rows.at(-1)!.props.hideDivider).toBe(true);
     }
   }
+});
+
+// PR #6298 review: retained expanded groups must not multiply initial native
+// mounts (23 groups x 23 rows). Unit tier, actual production child renderer;
+// earlier coverage allowed every unmeasured group to mount a full window.
+it('does not eagerly mount runs for multiple unmeasured expanded groups', () => {
+  const rows = Array.from({ length: 23 }, () => renderChildren(23, -1).elements)
+    .flat().filter(node => node.type === 'row');
+  expect(rows).toHaveLength(0);
 });
 
 it('preserves small previews and the view-all action for old runs', () => {
@@ -154,12 +217,16 @@ it('connects native layout and scroll measurements through the real tracker to r
     act(() => root.render(<Viewport.Provider value={{ scrollY, viewportHeight: 800 }}>
       <Group group={{ key: 'group', items, sessionCount: 200 }} testID="fixture" onOpenSession={open} />
     </Viewport.Provider>));
-    frame(200, 0);
+    frame(2400, 0);
     expect(measure).not.toHaveBeenCalled();
     expect(rows()).toHaveLength(0);
     act(() => onLayout());
-    frame(200, 0);
+    frame(2400, 0);
+    expect(rows()).toHaveLength(0);
+    frame(1200, 1200); // Preload one viewport before actually becoming visible.
     expect(rows()).toHaveLength(23);
+    expect(rows()[0].dataset.row).toBe('s0');
+    frame(200, 2200);
     expect(rows()[0].dataset.row).toBe('s0');
     frame(-6000, 6200);
     expect(rows()[0].dataset.row).toBe('s96');
@@ -170,7 +237,13 @@ it('connects native layout and scroll measurements through the real tracker to r
     frame(-11800, 12000);
     expect(rows().at(-1)?.dataset.row).toBe('s199');
     frame(-12000, 12200);
-    expect(rows()).toHaveLength(0); // Fully outside the viewport.
+    // Leaving the viewport must not discard the last bounded window: a
+    // reverse scroll can reveal it before the JS update is delivered.
+    expect(rows().at(-1)?.dataset.row).toBe('s199');
+    frame(-13000, 13200); // Far outside the preload band: release nested rows.
+    expect(rows()).toHaveLength(0);
+    frame(-12400, 12600); // Preload the tail before it re-enters on reversal.
+    expect(rows().at(-1)?.dataset.row).toBe('s199');
     frame(-11800, 12000);
     expect(rows().at(-1)?.dataset.row).toBe('s199');
     frame(200, 0);

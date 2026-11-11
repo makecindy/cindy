@@ -1,3 +1,5 @@
+import { detectCwd } from './detectCwd.js';
+export { detectCwd } from './detectCwd.js';
 /**
  * worktree-parallel-sessions M1: 主入口。
  *
@@ -25,7 +27,6 @@ import {
   validateWorktreeName,
 } from './nameGenerator';
 import { readAttachedWorktreeBranch } from './attachedBranch';
-import { createCwdProbeScheduler } from './cwdProbeScheduler';
 import { classifyError, type ClassifyInput } from './errorClassifier';
 import {
   gitExec,
@@ -34,6 +35,7 @@ import {
   safeDirectorySpellings,
 } from './gitExec';
 import { gitPathOutput } from './gitPathOutput';
+import { ensureManagedWorktreeExcluded } from './managedWorktreeExclude';
 import { withCrossProcessLock } from '../device-link/crossProcessLock';
 import { applyWorktreeIncludeFile, listChangedWorktreeIncludeFiles } from './includePatternsEngine';
 import { hasKeepSentinel, isManagedWorktreePath } from './safety';
@@ -44,8 +46,13 @@ import {
 import { hasLiveSessionReference, loadLiveSessionPathKeys } from './liveSessionRefs';
 import { withWorktreeRestoreMutation } from './restoreLock';
 import { recycleManagedWorktree } from './managedRecycle';
-import { physicalWorktreeKey, withWorktreeResourceLock } from './resourceLock';
-import { acquireWorktreeRuntimeLease, releaseWorktreeRuntimeLease } from './runtimeLeases';
+import { withWorktreeResourceLock } from './resourceLock';
+import {
+  acquireWorktreeRuntimeLease,
+  recordWorktreeRuntimeLeaseChild,
+  reclaimOrphanedWorktreeRuntimeLeases,
+  releaseWorktreeRuntimeLease,
+} from './runtimeLeases';
 import * as store from './worktreeStore';
 import { assertPrecreatedSessionNotCancelled, sealPrecreatedSessionCancellation, withPrecreatedSessionOperationLock } from './precreatedCancellation';
 import { createLogger } from '../logger';
@@ -60,7 +67,6 @@ const log = createLogger('WorktreeManager');
 import type {
   CreateWorktreeReq,
   CreateWorktreeResp,
-  DetectCwdResp,
   ListBranchesResp,
   WorktreeMeta,
 } from './types';
@@ -400,119 +406,6 @@ async function withPrecreatedWorktreeOperationQueue<T>(
 /**
  * 探测 cwd 状态: 是否 git repo / 是否在 worktree 内 / git 是否可用 / 当前分支 / repo root
  */
-export const detectCwd = createCwdProbeScheduler(detectCwdOnce);
-
-// 每条探测命令都有界；复用 gitExec 的整树清理后才释放 scheduler slot。
-const CWD_PROBE_GIT_OPTS = { timeoutMs: 10_000 };
-
-async function detectCwdOnce(cwd: string): Promise<DetectCwdResp> {
-  // One Git process returns the same snapshot that previously needed five.
-  // Unborn HEADs, older Git versions and newline-containing paths retain the
-  // individual-query fallback below rather than changing the IPC contract.
-  try {
-    const { stdout } = await gitExec(
-      ['rev-parse', '--show-toplevel', '--abbrev-ref', 'HEAD', '--git-dir', '--git-common-dir'],
-      cwd,
-      CWD_PROBE_GIT_OPTS,
-    );
-    const lines = gitPathOutput(stdout).split(process.platform === 'win32' ? /\r?\n/ : /\n/);
-    if (lines.length === 4 && lines.every((line) => line.trim().length > 0)) {
-      const [root, branch, gitDir, commonDir] = lines;
-      return {
-        isGitRepo: true,
-        isInsideWorktree: path.resolve(cwd, gitDir) !== path.resolve(cwd, commonDir),
-        gitInstalled: true,
-        supportsRecoveryKeyDiscard: true,
-        repoRoot: path.resolve(root),
-        ...(branch !== 'HEAD' ? { currentBranch: branch.trim() } : {}),
-      };
-    }
-  } catch (err) {
-    if (err instanceof GitExecError && err.timedOut) throw err;
-    // Preserve the existing partial results and error classification.
-  }
-  const out: DetectCwdResp = {
-    isGitRepo: false,
-    isInsideWorktree: false,
-    gitInstalled: true,
-    supportsRecoveryKeyDiscard: true,
-  };
-  // 1. git --version 探测安装
-  try {
-    await gitExec(['--version'], undefined, CWD_PROBE_GIT_OPTS);
-  } catch (err) {
-    if (err instanceof GitExecError && err.timedOut) throw err;
-    if (err instanceof GitExecError && err.cause?.code === 'ENOENT') {
-      out.gitInstalled = false;
-      return out;
-    }
-    // 其他失败也视为不可用(极罕见)
-    out.gitInstalled = false;
-    return out;
-  }
-
-  // 2. rev-parse --show-toplevel: 拿 repo 根
-  try {
-    const { stdout } = await gitExec(['rev-parse', '--show-toplevel'], cwd, CWD_PROBE_GIT_OPTS);
-    const toplevel = gitPathOutput(stdout);
-    if (toplevel) {
-      out.isGitRepo = true;
-      out.repoRoot = path.resolve(toplevel);
-    }
-  } catch (err) {
-    if (err instanceof GitExecError && err.timedOut) throw err;
-    out.isGitRepo = false;
-  }
-
-  if (!out.isGitRepo) return out;
-
-  // 3. 当前分支
-  try {
-    const { stdout } = await gitExec(['rev-parse', '--abbrev-ref', 'HEAD'], cwd, CWD_PROBE_GIT_OPTS);
-    const branch = stdout.trim();
-    if (branch && branch !== 'HEAD') out.currentBranch = branch;
-  } catch (err) {
-    if (err instanceof GitExecError && err.timedOut) throw err;
-    // ignore — 分支信息不影响主流程
-  }
-
-  // 4. 是否在 linked worktree 内
-  // 权威判定: `git rev-parse --git-dir` 在 linked worktree 里指向 `.git/worktrees/<name>`,
-  // 而 `--git-common-dir` 始终指向主仓库的 `.git`。两者解析后的绝对路径不一致 → linked worktree。
-  // 这种判断是 git 自己用来区分主/linked worktree 的方式, 不依赖目录命名约定 ——
-  // 任何工具(CC Desktop / 手工 git worktree add 等) 创建的 worktree 都能被检出。
-  try {
-    // 任一命令失败后仍等另一条完成清理，不能提前释放目录探测槽位。
-    const results = await Promise.allSettled([
-      gitExec(['rev-parse', '--git-dir'], cwd, CWD_PROBE_GIT_OPTS),
-      gitExec(['rev-parse', '--git-common-dir'], cwd, CWD_PROBE_GIT_OPTS),
-    ]);
-    for (const result of results) {
-      if (result.status === 'rejected' && result.reason instanceof GitExecError && result.reason.timedOut) {
-        throw result.reason;
-      }
-    }
-    const [gitDirResult, commonDirResult] = results;
-    if (gitDirResult.status === 'rejected') throw gitDirResult.reason;
-    if (commonDirResult.status === 'rejected') throw commonDirResult.reason;
-    const gitDirRaw = gitDirResult.value.stdout;
-    const gitCommonDirRaw = commonDirResult.value.stdout;
-    const gitDir = path.resolve(cwd, gitPathOutput(gitDirRaw));
-    const gitCommonDir = path.resolve(cwd, gitPathOutput(gitCommonDirRaw));
-    if (gitDir && gitCommonDir && gitDir !== gitCommonDir) {
-      out.isInsideWorktree = true;
-    }
-  } catch (err) {
-    if (err instanceof GitExecError && err.timedOut) throw err;
-    // 解析失败 → 兜底走托管目录名启发式, 至少识别出 Cindy 自己创建的 worktree
-    const normalizedRepoRoot = out.repoRoot?.replace(/\\/g, '/');
-    if (normalizedRepoRoot && getManagedWorktreeBasePath(normalizedRepoRoot) != null) {
-      out.isInsideWorktree = true;
-    }
-  }
-
-  return out;
-}
 
 /**
  * 列出 baseRepo 的所有本地分支 + 当前分支。
@@ -618,102 +511,6 @@ export function getForSession(sessionId: string): WorktreeMeta | null {
   return store.get(sessionId);
 }
 
-/** Caller holds the session/resource locks. Unknown DB outcomes retain the intent. */
-async function reconcileSessionTransferLocked(meta: WorktreeMeta, beforeMutation?: () => Promise<void>): Promise<void> {
-  const transfer = meta.pendingSessionTransfer;
-  if (!transfer) return;
-  if (!transfer.sessionId || transfer.sessionId === meta.sessionId
-    || !transfer.delegationId || !transfer.requestingBotId) {
-    throw new Error('Invalid worktree transfer intent preserved');
-  }
-  const row = await getDbClient().queryOne<{
-    childSessionId: string; requestingBotId: string; worktreePath: string | null; persistedSessionId: string | null;
-    targetExists: number;
-  }>(`SELECT d.child_session_id AS childSessionId, d.requesting_bot_id AS requestingBotId,
-      s.worktree_path AS worktreePath, s.id AS persistedSessionId,
-      EXISTS(SELECT 1 FROM sessions WHERE id = ?) AS targetExists
-    FROM bot_delegations d LEFT JOIN sessions s ON s.id = d.child_session_id WHERE d.id = ?`,
-  [transfer.sessionId, transfer.delegationId]);
-  if (!row || !row.persistedSessionId || row.requestingBotId !== transfer.requestingBotId
-    // The previous registry is authoritative if its historical display snapshot
-    // is absent. A committed target must have the snapshot from the same DB tx.
-    || (row.childSessionId === transfer.sessionId && !row.worktreePath)
-    || (row.worktreePath && await physicalWorktreeKey(row.worktreePath) !== await physicalWorktreeKey(meta.path))
-    || (row.childSessionId !== transfer.sessionId
-      && (row.childSessionId !== meta.sessionId || row.targetExists))) {
-    throw new Error('Worktree ownership changed; pending transfer preserved for reconciliation');
-  }
-  const key = await physicalWorktreeKey(meta.path);
-  for (const other of store.getAll()) {
-    if (other.sessionId !== meta.sessionId && await physicalWorktreeKey(other.path) === key) {
-      throw new Error('Worktree ownership changed; another session owns this resource');
-    }
-  }
-  const next = { ...meta, sessionId: row.childSessionId };
-  delete next.pendingSessionTransfer;
-  await store.replace(meta.sessionId, next.sessionId, next, meta, beforeMutation);
-}
-
-/** Startup/dispatch/retry reconciliation, scoped to the affected execution only. */
-export async function reconcileSessionTransfer(sessionId: string, beforeMutation?: () => Promise<void>): Promise<void> {
-  const pending = store.getAll().find(meta => meta.pendingSessionTransfer
-    && (meta.sessionId === sessionId || meta.pendingSessionTransfer.sessionId === sessionId));
-  if (!pending?.pendingSessionTransfer) return;
-  if (pending.pendingSessionTransfer.sessionId === pending.sessionId) throw new Error('Invalid worktree transfer intent preserved');
-  await withWorktreeRestoreMutation(pending.sessionId, () =>
-    withWorktreeRestoreMutation(pending.pendingSessionTransfer!.sessionId, () =>
-      withWorktreeResourceLock(pending.path, async () => {
-        const current = store.get(pending.sessionId);
-        if (current?.pendingSessionTransfer) await reconcileSessionTransferLocked(current, beforeMutation);
-      })));
-}
-
-/** Journal before the DB transaction; move registration only after authoritative readback. */
-export async function withTransferredSession<T extends { reopened: boolean }>(
-  previousSessionId: string,
-  sessionId: string,
-  worktreePath: string,
-  commit: () => Promise<T>,
-  identity: { delegationId: string; requestingBotId: string },
-): Promise<T> {
-  if (previousSessionId === sessionId) throw new Error('Worktree transfer requires a new session');
-  return withWorktreeRestoreMutation(previousSessionId, () =>
-    withWorktreeRestoreMutation(sessionId, () =>
-      withWorktreeResourceLock(worktreePath, async () => {
-        const previous = store.get(previousSessionId);
-        if (!previous || previous.pendingSessionTransfer || path.resolve(previous.path) !== path.resolve(worktreePath)
-          || store.get(sessionId)) {
-          throw new Error('Worktree ownership changed; restore the previous task before continuing');
-        }
-        const key = await physicalWorktreeKey(worktreePath);
-        for (const other of store.getAll()) {
-          if (other.sessionId !== previousSessionId && await physicalWorktreeKey(other.path) === key) {
-            throw new Error('Worktree ownership changed; another session owns this resource');
-          }
-        }
-        const pending = { ...previous, pendingSessionTransfer: { ...identity, sessionId } };
-        await store.replace(previousSessionId, previousSessionId, pending, previous);
-        try {
-          const result = await commit();
-          await reconcileSessionTransferLocked(pending);
-          return result;
-        } catch (error) {
-          // A rejected worker receipt is not proof of rollback. Never reverse a
-          // committed transfer; failed readback leaves durable retry evidence.
-          const current = store.get(previousSessionId);
-          if (JSON.stringify(current) === JSON.stringify(pending)) {
-            await reconcileSessionTransferLocked(pending).catch(reconcileError => {
-              log.warn('Worktree transfer reconciliation deferred', { sessionId: previousSessionId,
-                error: reconcileError instanceof Error ? reconcileError.message : String(reconcileError) });
-            });
-          }
-          throw error;
-        }
-      }),
-    ),
-  );
-}
-
 export function listAll(): WorktreeMeta[] {
   return store.getAll();
 }
@@ -750,6 +547,7 @@ const STAGE_CHECKOUT_PATHS = [
  */
 async function stageCheckout(
   worktreePath: string,
+  onCheckoutChildSpawn?: (pid: number) => void,
 ): Promise<{ fullCheckoutPromise: Promise<void> }> {
   const t0 = Date.now();
 
@@ -763,6 +561,7 @@ async function stageCheckout(
     const { stdout } = await gitExec(
       ['ls-tree', '--name-only', 'HEAD', '--', ...STAGE_CHECKOUT_PATHS],
       worktreePath,
+      { onSpawn: onCheckoutChildSpawn },
     );
     existingPaths = stdout
       .split(/\r?\n/)
@@ -779,7 +578,9 @@ async function stageCheckout(
   // 2. 选择性 checkout 白名单文件(同步, 用户可见)
   if (existingPaths.length > 0) {
     try {
-      await gitExec(['checkout', 'HEAD', '--', ...existingPaths], worktreePath);
+      await gitExec(['checkout', 'HEAD', '--', ...existingPaths], worktreePath, {
+        onSpawn: onCheckoutChildSpawn,
+      });
       log.info(
         `[stageCheckout] selective checkout done in ${Date.now() - t0}ms (${existingPaths.length} paths)`,
       );
@@ -798,7 +599,7 @@ async function stageCheckout(
   const fullCheckoutPromise = gitExec(
     ['checkout', 'HEAD', '--', '.', ':(exclude).claude', ':(exclude).sivi'],
     worktreePath,
-    { extraEnv: { LC_ALL: 'C' } },
+    { extraEnv: { LC_ALL: 'C' }, onSpawn: onCheckoutChildSpawn },
   )
     .then(() => {
       log.info(
@@ -1016,15 +817,31 @@ export async function copyClaudeSiviDirs(
  *   (不再无条件写全局 safe.directory:dubious-ownership 时由 gitExec 幂等按需处理;
  *    删除/归档时由 removeWorktreeForSession 清理该 path 的条目, 见 #2627)
  */
-export async function createWorktree(req: CreateWorktreeReq): Promise<CreateWorktreeResp> {
+// Only opt-in creators retain a handle for failure compensation; normal startup stays asynchronous.
+const backgroundCheckouts = new Map<string, Promise<void>>();
+export async function awaitBackgroundCheckout(sessionId: string): Promise<void> {
+  await backgroundCheckouts.get(sessionId)?.catch(() => undefined);
+}
+
+export interface CreateWorktreeOptions {
+  /** Keep a handle on the background checkout so failure compensation can wait for it. */
+  trackBackgroundCheckout?: boolean;
+  /**
+   * Return only after the whole tree is checked out, and fail (with rollback) if that checkout fails.
+   * For callers that hand the directory to a running agent, which must not see a half-written tree.
+   */
+  awaitFullCheckout?: boolean;
+}
+
+export async function createWorktree(req: CreateWorktreeReq, options?: CreateWorktreeOptions): Promise<CreateWorktreeResp> {
   const create = () => withCreateWorktreeQueue(req.baseRepo, () => {
     assertPrecreatedSessionNotCancelled(req.sessionId);
-    return createWorktreeInner(req);
+    return createWorktreeInner(req, options);
   });
   return withPrecreatedWorktreeOperationQueue(req.sessionId, create);
 }
 
-async function createWorktreeInner(req: CreateWorktreeReq): Promise<CreateWorktreeResp> {
+async function createWorktreeInner(req: CreateWorktreeReq, options?: CreateWorktreeOptions): Promise<CreateWorktreeResp> {
   const snap: CreatedSnapshot = {};
   const totalStartedAt = Date.now();
   try {
@@ -1131,6 +948,7 @@ async function createWorktreeInner(req: CreateWorktreeReq): Promise<CreateWorktr
 
     // 4. mkdirp parent
     return await withWorktreeResourceLock(worktreePath, async (): Promise<CreateWorktreeResp> => {
+      await ensureManagedWorktreeExcluded(baseRepo, worktreePath);
       const parentDir = path.dirname(worktreePath);
       await timed('ensure parent directory', () => fs.mkdir(parentDir, { recursive: true }));
       snap.parentEnsured = parentDir;
@@ -1164,8 +982,18 @@ async function createWorktreeInner(req: CreateWorktreeReq): Promise<CreateWorktr
       const checkoutLease = await acquireWorktreeRuntimeLease(`checkout:${req.sessionId}`, worktreePath);
       if (!checkoutLease) throw new Error('managed checkout runtime lease is missing');
       try {
-        const stageRes = await timed('stage checkout', () => stageCheckout(worktreePath));
+        const stageRes = await timed('stage checkout', () => stageCheckout(
+          worktreePath,
+          (pid) => recordWorktreeRuntimeLeaseChild(checkoutLease, pid),
+        ));
         bgPromise = stageRes.fullCheckoutPromise.finally(() => releaseWorktreeRuntimeLease(checkoutLease));
+        if (options?.trackBackgroundCheckout) {
+          const settled = bgPromise.catch(() => undefined);
+          backgroundCheckouts.set(req.sessionId, settled);
+          void settled.finally(() => {
+            if (backgroundCheckouts.get(req.sessionId) === settled) backgroundCheckouts.delete(req.sessionId);
+          });
+        }
       } catch (err) {
         await releaseWorktreeRuntimeLease(checkoutLease);
         // stageCheckout 内部已记 warn, 这里再保险记一条; 不视为致命
@@ -1181,6 +1009,7 @@ async function createWorktreeInner(req: CreateWorktreeReq): Promise<CreateWorktr
       try {
         await timed('configure hooks', () => configureHooksPath(worktreePath, baseRepo));
       } catch (err) {
+        if (options?.trackBackgroundCheckout) await awaitBackgroundCheckout(req.sessionId);
         await rollbackPartialCreate(snap);
         return { ok: false, error: classifyError(classifyAny(err)) };
       }
@@ -1224,6 +1053,7 @@ async function createWorktreeInner(req: CreateWorktreeReq): Promise<CreateWorktr
         await bgPromise?.catch(() => undefined);
         throw error;
       }
+      if (options?.awaitFullCheckout && bgPromise) await bgPromise;
       // store + DB
       const meta: WorktreeMeta = {
         sessionId: req.sessionId,
@@ -1243,6 +1073,8 @@ async function createWorktreeInner(req: CreateWorktreeReq): Promise<CreateWorktr
       return { ok: true, meta };
     });
   } catch (err) {
+    // Failed worker creation must also wait when metadata has not been published yet.
+    if (options?.trackBackgroundCheckout) await awaitBackgroundCheckout(req.sessionId);
     // 兜底: 任何未捕获的异常走 classifier + rollback
     await rollbackPartialCreate(snap);
     log.warn(
@@ -1286,6 +1118,12 @@ export interface RemoveWorktreeOptions {
    * 命中 dirty 时保留整个 worktree。
    */
   preserveDirty?: boolean;
+  /**
+   * Explicit cancellation of an unclaimed pre-created worktree may reclaim
+   * dead-owner runtime leases for its exact path. Ordinary task removal keeps
+   * those leases protective because they may belong to detached children.
+   */
+  reclaimOrphanedRuntimeLeases?: boolean;
 }
 
 /**
@@ -1384,7 +1222,23 @@ async function removeWorktreeForSessionInner(
     excludeSessionId: sessionId,
     isSessionRuntimeAlive: options.isSessionRuntimeAlive,
   });
-  if (hasLiveSessionReference(meta, liveKeys)) {
+  if (options.reclaimOrphanedRuntimeLeases) {
+    const reclaimed = await reclaimOrphanedWorktreeRuntimeLeases(worktreePath);
+    if (reclaimed > 0) {
+      log.info(
+        '[worktree] reclaimed ' + reclaimed
+          + ' dead-owner runtime lease(s) for cancelled pre-created worktree at ' + worktreePath,
+      );
+    }
+  }
+  const refreshedLiveKeys = options.reclaimOrphanedRuntimeLeases
+    ? await loadLiveSessionPathKeys({
+      contextPath: worktreePath,
+      excludeSessionId: sessionId,
+      isSessionRuntimeAlive: options.isSessionRuntimeAlive,
+    })
+    : liveKeys;
+  if (hasLiveSessionReference(meta, refreshedLiveKeys)) {
     log.info(
       `[worktree] preserved worktree at ${worktreePath}: still referenced by another live session`,
     );
@@ -1627,7 +1481,12 @@ export async function cancelPrecreatedWorktree(
     if (meta?.ephemeral) return { status: 'preserved' };
     if (!options.canRemove || !(await options.canRemove())) return { status: 'preserved' };
     sealPrecreatedSessionCancellation(sessionId);
-    return meta ? discardPrecreatedWorktree(sessionId, meta.path, options) : { status: 'absent' };
+    return meta
+      ? discardPrecreatedWorktree(sessionId, meta.path, {
+        ...options,
+        reclaimOrphanedRuntimeLeases: true,
+      })
+      : { status: 'absent' };
   });
 }
 export { assertPrecreatedSessionNotCancelled } from './precreatedCancellation';
@@ -1640,7 +1499,7 @@ export { assertPrecreatedSessionNotCancelled } from './precreatedCancellation';
 export async function discardPrecreatedWorktreeByRecoveryKey(
   sessionId: string,
   recoveryKey: string,
-  options: Pick<RemoveWorktreeOptions, 'canRemove'> = {},
+  options: Pick<RemoveWorktreeOptions, 'canRemove' | 'reclaimOrphanedRuntimeLeases'> = {},
 ): Promise<DiscardPrecreatedWorktreeResult> {
   return withPrecreatedWorktreeOperationQueue(sessionId, async () => {
     const meta = store.get(sessionId);
@@ -1665,7 +1524,7 @@ export async function discardPrecreatedWorktreeByRecoveryKey(
 export async function discardPrecreatedWorktree(
   sessionId: string,
   expectedPath: string,
-  options: Pick<RemoveWorktreeOptions, 'canRemove'> = {},
+  options: Pick<RemoveWorktreeOptions, 'canRemove' | 'reclaimOrphanedRuntimeLeases'> = {},
 ): Promise<DiscardPrecreatedWorktreeResult> {
   const meta = store.get(sessionId);
   if (!meta) return { status: 'absent' };

@@ -1,3 +1,4 @@
+import { ErrorNotice } from '@/components/ui/error-notice';
 import { FileTypeIcon } from '@/components/ui/file-type-icon';
 import { SegmentedControl } from '@/components/ui/segmented-control';
 /**
@@ -2198,7 +2199,7 @@ function FileJumpPopover({
           event.preventDefault();
           requestAnimationFrame(() => inputRef.current?.focus());
         }}
-        className="w-[280px] rounded-[12px] border border-[var(--cmd-palette-border)] bg-[var(--cmd-palette-bg)] p-2 shadow-[var(--shadow-menu)]"
+        className="w-[280px] rounded-[12px] border border-[var(--cmd-palette-border)] bg-[var(--cmd-palette-bg)] p-2 shadow-[shadow:var(--shadow-menu)]"
       >
         <div onKeyDown={handleKeyDown}>
           <label className="relative block">
@@ -2905,23 +2906,24 @@ function OperationNotice({
   const errorDetails = errorLines.slice(1).join('\n').trim();
   if (!error && failed.length === 0) return null;
   return (
-    <div className="mt-2 rounded-[8px] border border-[var(--error-border)] bg-[var(--error-bg)] px-2.5 py-2 text-11 leading-relaxed text-[var(--error-fg)]">
-      {errorTitle ??
+    <ErrorNotice
+      className="mt-2"
+      message={
+        errorTitle ??
         t('rightSidebar.review.actions.partialFailure', {
           succeeded: summary?.succeeded.length ?? 0,
           failed: failed.length,
-        })}
-      {errorDetails && (
-        <div className="mt-1 max-h-24 overflow-auto whitespace-pre-wrap break-words font-mono text-10 text-[var(--error-fg-strong)]">
-          {errorDetails}
-        </div>
-      )}
-      {failed.length > 0 && (
-        <div className="mt-1 max-h-24 overflow-auto whitespace-pre-wrap break-words font-mono text-10 text-[var(--error-fg-strong)]">
-          {failed[0].path}: {failed[0].stderr || failed[0].error}
-        </div>
-      )}
-    </div>
+        })
+      }
+      details={
+        [
+          errorDetails,
+          failed.length > 0 ? `${failed[0].path}: ${failed[0].stderr || failed[0].error}` : '',
+        ]
+          .filter(Boolean)
+          .join('\n') || undefined
+      }
+    />
   );
 }
 
@@ -3547,7 +3549,7 @@ export function BatchActionPill({
   return (
     <div
       data-review-batch-action-pill="true"
-      className="pointer-events-none absolute bottom-3 left-1/2 z-30 flex -translate-x-1/2 items-center gap-1 overflow-hidden rounded-full border border-[var(--border-default)] bg-[color-mix(in_srgb,var(--surface-elevated)_92%,transparent)] p-1 shadow-[var(--shadow-menu)] backdrop-blur-sm"
+      className="pointer-events-none absolute bottom-3 left-1/2 z-30 flex -translate-x-1/2 items-center gap-1 overflow-hidden rounded-full border border-[var(--border-default)] bg-[color-mix(in_srgb,var(--surface-elevated)_92%,transparent)] p-1 shadow-[shadow:var(--shadow-menu)] backdrop-blur-sm"
       style={{ maxWidth: 'calc(100% - 16px)' }}
     >
       {writeAction.sectionDiscardVisible && writeAction.onSectionDiscard && (

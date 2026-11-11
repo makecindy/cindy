@@ -122,7 +122,7 @@ function finiteNonNegative(value: unknown): number {
 }
 
 function isAgentKind(value: unknown): value is DailyModelUsageRow['agentKind'] {
-  return value === 'claude-code' || value === 'codex' || value === 'pi';
+  return value === 'claude-code' || value === 'codex' || value === 'pi' || value === 'media';
 }
 
 /** 控制端和缓存共用的逐行校验:远端 / 磁盘数据一律当不可信输入。 */
@@ -176,6 +176,7 @@ export function sanitizeUsageDeviceRows(value: unknown): UsageDeviceRows | null 
       title: typeof task.title === 'string' ? task.title.slice(0, 500) : '',
       model: typeof task.model === 'string' ? task.model.slice(0, 256) : '',
       providerId: isShortString(task.providerId) ? task.providerId : null,
+      source: isShortString(task.source) ? task.source : null,
       contextTokens: finiteNonNegative(task.contextTokens),
       contextWindow: finiteNonNegative(task.contextWindow),
       lastActiveAt: isUnixMs(task.lastActiveAt) ? task.lastActiveAt : 0,

@@ -245,3 +245,33 @@ describe('SlashCommandPalette project Skill rows', () => {
     expect(screen.queryByText('skillhub.builtIn.official')).toBeNull();
   });
 });
+
+describe('SlashCommandPalette plugin rows', () => {
+  it('shows the personal sibling without a qualifier or tag', () => {
+    const root: UnifiedCommand = {
+      kind: 'desktop', name: 'xd-sites/@root', description: 'XD Sites', label: 'xd-sites',
+    };
+    const onSelect = vi.fn();
+    render(<SlashCommandPalette query="" commands={[root]} focusedIndex={-1}
+      onFocusedIndexChange={vi.fn()} onSelect={onSelect} onClose={vi.fn()} />);
+    const row = screen.getByRole('button', { name: 'xd-sites' });
+    expect(row.textContent).toBe('xd-sites');
+    fireEvent.mouseDown(row);
+    expect(onSelect).toHaveBeenCalledWith(root);
+  });
+
+  it('shows the display label and source tag but selects the qualified token', () => {
+    const qualified: UnifiedCommand = {
+      kind: 'desktop', name: 'xd-sites/xd', description: 'XD Sites', label: 'xd-sites', meta: '团队共享',
+    };
+    const onSelect = vi.fn();
+    render(<SlashCommandPalette query="" commands={[qualified]} focusedIndex={-1}
+      onFocusedIndexChange={vi.fn()} onSelect={onSelect} onClose={vi.fn()} />);
+    // The accessible name carries the source tag so same-name rows stay distinguishable.
+    const row = screen.getByRole('button', { name: 'xd-sites 团队共享' });
+    expect(row.textContent).toContain('团队共享');
+    expect(row.textContent).not.toContain('/xd');
+    fireEvent.mouseDown(row);
+    expect(onSelect).toHaveBeenCalledWith(qualified);
+  });
+});

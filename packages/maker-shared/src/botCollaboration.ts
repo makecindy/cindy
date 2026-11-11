@@ -3,6 +3,7 @@
  *
  * 事实源仍是 `bot_delegations` 行。这里是父任务消息流里的持久锚点，让 renderer 在原位
  * 投影唯一任务卡与补充消息留痕。字段名 `botCollaboration` 为 v1 持久化兼容保留。
+ * V1 伙伴后台任务已退役（2026-11-08）：不再生成新标记，历史标记只读呈现。
  *
  * 设计约束：
  *  - 只增不改。老数据（没有本标记的镜像消息）继续按普通文本渲染，不回填、不迁移。
@@ -42,6 +43,12 @@ export interface BotCollaborationMeta {
   childSessionId: string | null;
   /** 委派目标摘要，用于卡片折叠态文案。 */
   objective: string;
+  /**
+   * 仅 `interjection`：补充消息的首行摘要（≤ BOT_INTERJECTION_PREVIEW_MAX 字），
+   * 让主聊天留痕说清楚「告诉了后台任务什么」。完整指令仍只保存在后台任务里；
+   * 旧记录没有此字段，留痕回退为通用文案。
+   */
+  interjectionPreview?: string;
   result?: {
     /** Task title at completion; older receipts fall back to the known task title. */
     title?: string;
@@ -54,6 +61,15 @@ export interface BotCollaborationMeta {
     error?: string;
     artifacts: Array<{ absolutePath: string }>;
   };
+}
+
+/** 补充消息留痕摘要的上限：只取首行，主聊天不复制完整指令。 */
+export const BOT_INTERJECTION_PREVIEW_MAX = 200;
+
+/** First non-empty line, bounded; never the full instruction. */
+export function botInterjectionPreview(text: string): string {
+  const line = text.split(/\r?\n/).map((value) => value.trim()).find(Boolean) ?? '';
+  return Array.from(line).slice(0, BOT_INTERJECTION_PREVIEW_MAX).join('');
 }
 
 const ROLES = new Set<BotCollaborationRole>([
@@ -108,39 +124,23 @@ export function readBotCollaborationMeta(value: unknown): BotCollaborationMeta |
     childSessionId,
     ...(receipt.result ? { result: receipt.result } : {}),
     objective: raw.objective,
+    ...(raw.role === 'interjection' && typeof raw.interjectionPreview === 'string'
+      && botInterjectionPreview(raw.interjectionPreview)
+      ? { interjectionPreview: botInterjectionPreview(raw.interjectionPreview) }
+      : {}),
   };
 }
 
-/** 委派相关消息的幂等 clientId 前缀，main 与测试共用同一份常量。 */
+/** 历史委派消息的幂等 clientId（只读：识别旧回执，不再生成新消息）。 */
 export const BOT_DELEGATION_CLIENT_ID = {
   resultRun: (delegationId: string, runSequence: number) =>
     `bot-delegation-result:${delegationId}:${runSequence}`,
-  /** 父任务里的任务卡锚点。 */
-  parentRequest: (delegationId: string) => `bot-delegation-request:${delegationId}`,
-  /** 父任务里的结果回传（历史值，不可改）。 */
-  completion: (delegationId: string) => `bot-delegation-completion:${delegationId}`,
-  /** 同一任务结束后继续执行时，每一轮必须有独立的完成回执。首轮保持历史值兼容。 */
+  /** 父任务里的结果回传；同一任务续跑的每一轮各有一条，首轮是历史值。 */
   completionRun: (delegationId: string, runSequence: number) =>
     runSequence <= 1
       ? `bot-delegation-completion:${delegationId}`
       : `bot-delegation-completion:${delegationId}:${runSequence}`,
-  /** 插话：投进子任务的那条。 */
-  interjection: (delegationId: string, token: string) =>
-    `bot-delegation-interject:${delegationId}:${token}`,
-  /** 插话：留在父任务里的留痕。 */
-  interjectionMirror: (delegationId: string, token: string) =>
-    `bot-delegation-interject-mirror:${delegationId}:${token}`,
 } as const;
-
-export type BotDelegationInterjectResult =
-  | {
-      ok: true;
-      delegationId: string;
-      childSessionId: string;
-      /** 子任务当时是否正忙：忙则本条进它的输入队列，当前回合结束后被读到。 */
-      queued: boolean;
-    }
-  | { ok: false; errorCode: string; message: string };
 
 /**
  * Place a task anchor after its initiating explanation, preserving identity and all

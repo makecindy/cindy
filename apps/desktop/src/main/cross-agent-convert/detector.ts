@@ -1,7 +1,8 @@
 /**
  * cross-agent-convert / detector
  *
- * 4 项独立判断（双向）。每一项"对面端有内容 ∧ 本端缺失" → 推入 items。
+ * 配置项独立判断："对面端有内容 ∧ 本端缺失" → 推入 items。
+ * 指令文件仅保留 CLAUDE.md → AGENTS.md；不再提示为 Claude Code 创建 CLAUDE.md。
  *
  * 关键：用 codex 同款 `is_missing_or_empty_text_file` 语义 ——
  *   目标"不存在 OR trim 后为空" 才视为缺失。
@@ -13,6 +14,11 @@
 import fs from 'node:fs/promises';
 import path from 'node:path';
 import yaml from 'js-yaml';
+
+import {
+  appendHookEvents, extractCodexEvents, hasMissingHookScripts, isPlainObject,
+  missingHookEvents, readCodexTomlHooks, readHookJson, unwrapNestedClaudeHooks,
+} from './hookConfig.js';
 
 import type {
   AgentKind,
@@ -98,7 +104,7 @@ export async function detect(input: DetectInput): Promise<DetectResult> {
   const items: MigrationItem[] = [];
   const direction: MigrationDirection = input.agentKind === 'claude-code' ? 'to-claude' : 'to-codex';
 
-  // ── 第 1 项：CLAUDE.md ↔ AGENTS.md ────────────────────────────────────
+  // ── 第 1 项：CLAUDE.md → AGENTS.md ────────────────────────────────────
   await detectAgentsMd(wd, direction, items);
 
   // ── 第 2 项：agents/ ─────────────────────────────────────────────────
@@ -116,18 +122,7 @@ export async function detect(input: DetectInput): Promise<DetectResult> {
 async function detectAgentsMd(wd: string, direction: MigrationDirection, items: MigrationItem[]): Promise<void> {
   const claudeMd = path.join(wd, 'CLAUDE.md');
   const agentsMd = path.join(wd, 'AGENTS.md');
-  if (direction === 'to-claude') {
-    if ((await isNonEmptyTextFile(agentsMd)) && (await isMissingOrEmptyTextFile(claudeMd))) {
-      items.push({
-        id: 'agents-md:0',
-        kind: 'agents-md',
-        direction,
-        label: 'AGENTS.md → CLAUDE.md',
-        source: agentsMd,
-        target: claudeMd,
-      });
-    }
-  } else {
+  if (direction === 'to-codex') {
     if ((await isNonEmptyTextFile(claudeMd)) && (await isMissingOrEmptyTextFile(agentsMd))) {
       items.push({
         id: 'agents-md:0',
@@ -204,42 +199,39 @@ async function detectAgents(wd: string, direction: MigrationDirection, items: Mi
 async function detectHooks(wd: string, direction: MigrationDirection, items: MigrationItem[]): Promise<void> {
   const claudeHooksDir = path.join(wd, '.claude', 'hooks');
   const claudeSettings = path.join(wd, '.claude', 'settings.json');
-  const codexHooksDir = path.join(wd, '.codex', 'hooks');
-  const codexHooksJson = path.join(wd, '.codex', 'hooks.json');
-
-  if (direction === 'to-claude') {
-    // 源：codex 端
-    const hasSourceDir = await isDir(codexHooksDir);
-    const hasSourceJson = await isNonEmptyTextFile(codexHooksJson);
-    if (!hasSourceDir && !hasSourceJson) return;
-    // 目标缺失判断：claude settings.json 不存在 / 不含 hooks 段，或 .claude/hooks/ 不存在
-    const claudeSettingsHasHooks = await fileHasJsonKey(claudeSettings, 'hooks');
-    const claudeHooksDirExists = await isDir(claudeHooksDir);
-    if (claudeSettingsHasHooks && claudeHooksDirExists) return;
-    items.push({
-      id: 'hooks:0',
-      kind: 'hooks',
-      direction,
-      label: 'Codex hooks → Claude hooks',
-      source: codexHooksJson, // converter 内部据此推算 dir
-      target: claudeSettings,
-    });
-  } else {
-    const hasSourceDir = await isDir(claudeHooksDir);
-    const hasSourceJson = await fileHasJsonKey(claudeSettings, 'hooks');
-    if (!hasSourceDir && !hasSourceJson) return;
-    const codexHooksJsonExists = await isNonEmptyTextFile(codexHooksJson);
-    const codexHooksDirExists = await isDir(codexHooksDir);
-    if (codexHooksJsonExists && codexHooksDirExists) return;
-    items.push({
-      id: 'hooks:0',
-      kind: 'hooks',
-      direction,
-      label: 'Claude hooks → Codex hooks',
-      source: claudeHooksDir, // converter 据此推算 settings.json 路径
-      target: codexHooksJson,
-    });
-  }
+  const codexDir = path.join(wd, '.codex');
+  const codexHooksDir = path.join(codexDir, 'hooks');
+  const codexHooksJson = path.join(codexDir, 'hooks.json');
+  // 检测保持只读、容错；转换时严格解析，不能因检测失败而覆盖用户文件。
+  const [claudeRoot, codexRoot, tomlEvents] = await Promise.all([
+    readHookJson(claudeSettings).catch(() => ({} as Record<string, unknown>)),
+    readHookJson(codexHooksJson).catch(() => ({} as Record<string, unknown>)),
+    readCodexTomlHooks(codexDir).catch(() => ({} as Record<string, unknown>)),
+  ]);
+  const rawClaudeHooks = isPlainObject(claudeRoot.hooks) ? claudeRoot.hooks : {};
+  const claudeEvents = unwrapNestedClaudeHooks(rawClaudeHooks);
+  const jsonEvents = extractCodexEvents(codexRoot);
+  const codexEvents = appendHookEvents(jsonEvents, missingHookEvents(tomlEvents, [jsonEvents]));
+  const toCodex = direction === 'to-codex';
+  const source = toCodex ? claudeEvents : codexEvents;
+  const targets = toCodex ? [jsonEvents, tomlEvents] : [claudeEvents];
+  const missingScripts = await hasMissingHookScripts(
+    toCodex ? claudeHooksDir : codexHooksDir,
+    toCodex ? codexHooksDir : claudeHooksDir,
+  );
+  const hasSource = Object.keys(source).length > 0 || missingScripts;
+  const repair = toCodex
+    ? !isPlainObject(codexRoot.hooks) && Object.keys(jsonEvents).length > 0
+    : claudeEvents !== rawClaudeHooks;
+  if (!hasSource || (!repair && !missingScripts && Object.keys(missingHookEvents(source, targets, direction)).length === 0)) return;
+  items.push({
+    id: 'hooks:0',
+    kind: 'hooks',
+    direction,
+    label: toCodex ? 'Claude hooks → Codex hooks' : 'Codex hooks → Claude hooks',
+    source: toCodex ? claudeHooksDir : codexHooksJson,
+    target: toCodex ? codexHooksJson : claudeSettings,
+  });
 }
 
 async function detectMcp(wd: string, direction: MigrationDirection, items: MigrationItem[]): Promise<void> {

@@ -1,6 +1,6 @@
 import type { Session } from '@cindy/maker-core';
-import { publishChannelTurn } from './channelTurnSignal';
-import { MANAGED_LLAMACPP_PROVIDER_ID } from '../../shared/llamaCpp.js';
+import { createChannelTurnObserver } from './channelTurnSignal';
+import { isManagedSidecarProviderId } from '../../shared/localModelRuntime.js';
 import { ensureManagedOllamaReadyForSession } from '../local-model-runtime/preflight.js';
 import { createLogger } from '../logger.js';
 import { throwIpcError } from '../utils/ipcValidate.js';
@@ -9,8 +9,10 @@ import { isProviderShareAgentDeviceId } from '../../shared/providerShare.js';
 import { verdictForModelRoute } from '../maker-host/model-route-guard-live.js';
 import { describeModelRouteRejection } from '../maker-host/model-route-guard.js';
 import { SilentStopTurnLeaseGate, SessionTurnLeaseTracker } from './sessionTurnLease.js';
+import { prepareBotPermissionDispatch } from './botPermissionDispatch.js';
 
 export interface InstallSessionTurnObserverDeps {
+  readonly onProviderInitiatedTurn?: (session: Session, generation: number) => void;
   readonly beforeLocalProviderStart?: (session: Session) => Promise<void>;
   readonly silentStopTurnLeaseGate: Pick<
     SilentStopTurnLeaseGate,
@@ -25,12 +27,20 @@ export interface InstallSessionTurnObserverDeps {
 }
 
 export function installSessionTurnObserver(deps: InstallSessionTurnObserverDeps, session: Session) {
+  let assertPermissionDispatch: (() => void) | undefined;
+  const channelTurn = createChannelTurnObserver(session);
   session.setTurnLifecycleObserver({
-    beforeProviderStart: async (turnGeneration) => {
+    onDispatching: () => {
+      assertPermissionDispatch?.();
+      channelTurn.onDispatching();
+    },
+    beforeProviderStart: async (turnGeneration, signal) => {
+      assertPermissionDispatch = undefined;
       if (session.remoteHostId) {
-        await publishChannelTurn(session, 'starting');
+        await channelTurn.beforeProviderStart();
         return;
       }
+      assertPermissionDispatch = await prepareBotPermissionDispatch(session);
       await deps.beforeLocalProviderStart?.(session);
       // 每条本地 Session.send 都经过这一个 Main-owned 边界，包括 renderer、IM、
       // Goal、Learn、Hook 与 Scheduler。付费权限不能只挂在普通 IPC 发送事务上。
@@ -79,12 +89,19 @@ export function installSessionTurnObserver(deps: InstallSessionTurnObserverDeps,
           throwIpcError('INVALID_PARAMS', describeModelRouteRejection(verdict.reason, model, getSessionProvider(session.id)));
         }
       }
-      // Existing tasks must restore the managed service after a manual stop too.
-      // Reuse the common send boundary so IM/Goal/Scheduler get the same behavior.
+      // 既有任务在手动停止托管 sidecar（llama.cpp / Ollama）后也要恢复服务。
+      // 复用公共发送边界，IM/Goal/Scheduler 与 renderer 拿到同一行为；新会话已由
+      // create-session 的 admitLocalRoute 做同一次就绪探测。托管 sidecar 是每台电脑
+      // 一份的本机服务，Agent 在另一台电脑上运行时不代远端启动（见上方注释）。
       const providerId = getSessionProvider(session.id);
-      if (!providerOnOtherDevice && providerId === MANAGED_LLAMACPP_PROVIDER_ID) {
-        await ensureManagedOllamaReadyForSession({ providerId, onlyIfStopped: true });
+      if (
+        !providerOnOtherDevice
+        && providerId !== null
+        && isManagedSidecarProviderId(providerId)
+      ) {
+        await ensureManagedOllamaReadyForSession({ providerId, onlyIfStopped: true, signal });
       }
+      signal?.throwIfAborted();
       deps.silentStopTurnLeaseGate.supersede(session.id);
       // Keep Review's exact-instance liveness listener lazy. PID-only turn
       // leases remain fail-closed until this process actually starts Review.
@@ -92,15 +109,21 @@ export function installSessionTurnObserver(deps: InstallSessionTurnObserverDeps,
         session.id,
         deps.providerTurnLeaseId(session.instanceId, turnGeneration),
       );
-      await publishChannelTurn(session, 'starting');
+      await channelTurn.beforeProviderStart();
     },
     onUndispatched: async (turnGeneration) => {
-      await publishChannelTurn(session, 'undispatched');
+      await channelTurn.onUndispatched();
       if (session.remoteHostId) return;
       await deps.sessionTurnLeaseTracker.markTurnEnded(
         session.id,
         deps.providerTurnLeaseId(session.instanceId, turnGeneration),
       );
+    },
+    onProviderInitiatedTurn: (generation) => {
+      deps.onProviderInitiatedTurn?.(session, generation);
+      // Harness wake-ups (Claude Code background task notifications) skip beforeProviderStart.
+      // IM relay decides synchronously inside this call, before the first event fans out.
+      channelTurn.onProviderInitiatedTurn();
     },
     onTerminal: ({ turnGeneration, event, isCurrentGeneration }) => {
       if (session.remoteHostId) return;

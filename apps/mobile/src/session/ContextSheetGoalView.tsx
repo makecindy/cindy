@@ -1,3 +1,4 @@
+import { ErrorNotice } from '@/components/ErrorNotice';
 /**
  * Context 面板的「目标模式」二级视图(对照设计稿 S3)。
  *
@@ -161,6 +162,8 @@ export function ContextSheetGoalCreateForm({
         onChangeText={setObjective}
         placeholder={t('interaction.contextSheet.goalPlaceholder')}
         placeholderTextColor={colors.textPlaceholder}
+        selectionColor={colors.inputCaret}
+        cursorColor={colors.inputCaret}
         style={styles.objectiveInput}
         testID="contextSheet.goalObjectiveInput"
         value={objective}
@@ -212,7 +215,7 @@ export function ContextSheetGoalCreateForm({
         </>
       ) : null}
       {error ? (
-        <Text style={styles.errorText}>{error}</Text>
+        <ErrorNotice message={error} />
       ) : disabled && disabledHint ? (
         <Text style={styles.hintText} testID="contextSheet.goalDisabledHint">{disabledHint}</Text>
       ) : null}
@@ -220,7 +223,7 @@ export function ContextSheetGoalCreateForm({
         accessibilityHint={disabled ? disabledHint : undefined}
         accessibilityLabel={t('interaction.contextSheet.startGoal')}
         accessibilityRole="button"
-        accessibilityState={{ disabled: busy || disabled || !objective.trim() }}
+        accessibilityState={{ busy, disabled: busy || disabled || !objective.trim() }}
         disabled={busy || disabled || !objective.trim()}
         onPress={submit}
         style={({ pressed }) => [
@@ -277,7 +280,7 @@ function GoalStatusView({
         {t('interaction.contextSheet.goalMeta', { turns: turnsText, tokens: tokensText })}
       </Text>
       {reasonText ? <Text style={styles.hintText}>{reasonText}</Text> : null}
-      {error ? <Text style={styles.errorText}>{error}</Text> : null}
+      {error ? <ErrorNotice message={error} /> : null}
       <View style={styles.actionGroup}>
         {canPause ? (
           <GoalActionButton busy={busy} label={t('interaction.contextSheet.pause')} onPress={onPauseGoal} testID="contextSheet.goalPauseButton" />
@@ -448,7 +451,7 @@ function makeGoalStyles(colors: ThemeColors) {
       lineHeight: lineHeight.body,
       marginTop: spacing.sm,
       minHeight: 120,
-      padding: spacing.md + 2,
+      padding: spacing.lg,
       textAlignVertical: 'top' as const,
     },
     // 「高级设置」折叠行:整行 44pt 可点,标题在左、展开指示在右(对齐 iOS DisclosureGroup)。
@@ -459,6 +462,7 @@ function makeGoalStyles(colors: ThemeColors) {
       justifyContent: 'space-between' as const,
       marginTop: spacing.md,
       minHeight: 44,
+      paddingVertical: spacing.sm,
     },
     advancedToggleText: {
       color: colors.textPrimary,
@@ -517,7 +521,9 @@ function makeGoalStyles(colors: ThemeColors) {
       alignItems: 'center' as const,
       backgroundColor: colors.cta,
       borderRadius: radius.pill,
-      height: 50,
+      minHeight: 50,
+      paddingHorizontal: spacing.lg,
+      paddingVertical: spacing.md,
       justifyContent: 'center' as const,
       marginTop: spacing.xl,
     },

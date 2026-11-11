@@ -55,6 +55,20 @@ function setup(opts?: { now?: () => number; loadFails?: boolean }) {
 }
 
 describe('GhostRuntime · 状态机', () => {
+  it('does not start an instance the host holds stopped until restart', async () => {
+    const handles: FakeHandle[] = [];
+    let blocked: string | null = 'restart Cindy';
+    const runtime = new GhostRuntime({
+      adapter: { create: () => { const handle = new FakeHandle(); handles.push(handle); return handle; } },
+      startBlockedReason: (id) => (id === 'demo' ? blocked : null),
+    });
+    await expect(runtime.spawn(chipGhost())).resolves.toEqual({ ok: false, reason: 'restart Cindy' });
+    expect(handles).toHaveLength(0);
+    expect(runtime.stateOf('demo')).toBe('off');
+    blocked = null;
+    await expect(runtime.spawn(chipGhost())).resolves.toMatchObject({ ok: true });
+  });
+
   it('spawn → running;stop → off,沙箱被销毁', async () => {
     const { runtime, handles } = setup();
     const ghost = chipGhost();
@@ -70,6 +84,22 @@ describe('GhostRuntime · 状态机', () => {
     await runtime.spawn(chipGhost());
     await runtime.spawn(chipGhost());
     expect(handles.length).toBe(1);
+  });
+
+  it('换版后再 spawn:旧安装拉起的沙箱销毁并按新回执重开(面板分区才同源)', async () => {
+    const { runtime, handles } = setup();
+    await runtime.spawn(chipGhost());
+    const updated = chipGhost();
+    updated.manifest = { ...updated.manifest, version: '1.0.1' };
+    updated.approval = { state: 'approved', revision: '00000000-0000-4000-8000-000000000002' };
+    const result = await runtime.spawn(updated);
+    expect(result).toEqual({ ok: true, state: 'running' });
+    expect(handles.length).toBe(2);
+    expect(handles[0].destroyed).toBe(true);
+    expect(handles[1].destroyed).toBe(false);
+    // 同一份新记录再 spawn 仍幂等。
+    await runtime.spawn(updated);
+    expect(handles.length).toBe(2);
   });
 
   it('adapter.create 同步 throw(如 app 未 ready)→ 结构化失败 + crashed 记账,state 不卡 starting', async () => {
@@ -165,4 +195,55 @@ describe('GhostRuntime · 状态机', () => {
     expect(runtime.stateOf('a')).toBe('off');
     expect(runtime.stateOf('b')).toBe('off');
   });
+
+  it('同 ghostId 的 root 与企业实例可同时 running', async () => {
+    const { runtime, handles } = setup();
+    const root = chipGhost('helper');
+    const enterprise: InstalledGhost = {
+      ...chipGhost('helper'),
+      namespace: 'acme',
+      dir: '/fake/brain/_ns/acme/helper',
+    };
+    expect((await runtime.spawn(root)).ok).toBe(true);
+    expect((await runtime.spawn(enterprise)).ok).toBe(true);
+    expect(handles.length).toBe(2);
+    expect(runtime.stateOf('helper')).toBe('running');
+    expect(runtime.stateOf('_ns__acme__helper')).toBe('running');
+    runtime.stop('helper');
+    expect(runtime.stateOf('helper')).toBe('off');
+    expect(runtime.stateOf('_ns__acme__helper')).toBe('running');
+  });
+});
+
+// PR #6569: a resident plugin can still be loading when sync calls spawn again.
+// Existing tests used immediately-loaded sandboxes; these deferred loads exercise
+// the production readiness boundary and stale-handle rejection without real waits (unit).
+it.each(['ready', 'failed', 'replaced'] as const)('waits for the same sandbox load before delivery: %s', async (outcome) => {
+  const loads: Array<{ resolve(): void; reject(error: Error): void }> = [];
+  const runtime = new GhostRuntime({ adapter: { create: () => {
+    const handle = new FakeHandle();
+    handle.load = () => new Promise<void>((resolve, reject) => { loads.push({ resolve, reject }); });
+    return handle;
+  } } });
+  const first = runtime.spawn(chipGhost());
+  expect(await runtime.spawn(chipGhost())).toEqual({ ok: true, state: 'starting' });
+  let delivered = false;
+  const readiness = runtime.waitUntilRunning('demo').then(ready => { delivered = ready; return ready; });
+  await Promise.resolve();
+  expect(delivered).toBe(false);
+  if (outcome === 'replaced') {
+    runtime.stop('demo');
+    const replacement = runtime.spawn(chipGhost());
+    loads[0].resolve(); await first;
+    expect(await readiness).toBe(false);
+    expect(runtime.stateOf('demo')).toBe('starting');
+    loads[1].resolve(); await replacement;
+    expect(await runtime.waitUntilRunning('demo')).toBe(true);
+  } else {
+    if (outcome === 'failed') loads[0].reject(new Error('load failed'));
+    else loads[0].resolve();
+    await first;
+    expect(await readiness).toBe(outcome === 'ready');
+  }
+  runtime.destroyAll();
 });

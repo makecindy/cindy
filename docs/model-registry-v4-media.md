@@ -80,16 +80,79 @@
 - 自定义型号表单可选择媒体类型或恢复继承；刷新选择器、确认和保存均保留显式类型。
 - 统一模型管理页展示上述类型，既有停用偏好同样作用于音频型号。
 
+### 第三方 API key 连接的语音目录
+
+通用发现保留接口显式返回的 `mode`（含 `model_info.mode`）和已认识的
+`nativeApi` / `native_api`，型号 ID 接受既有字段及 `model_id`。仅返回 ID 时，
+公共资料仍只按精确 ID／唯一 alias 匹配；不因名称含 `tts` 或 `speech` 就把未知私有
+型号改成语音模型。不提供类型的服务可在连接设置中手动指定「语音合成」；同一 ID
+可更新类型，「自动识别」删除类型覆盖，重新使用发现快照／目录资料。
+
+ElevenLabs 及兼容转发的[模型列表响应](https://elevenlabs.io/docs/api-reference/models/list)
+以匹配的 `model_id` 和布尔 `can_do_text_to_speech` 声明能力：`true` 归一为
+`audio_speech`；明确 `false` 归为 `other`，避免刷新继续保留旧 TTS 分类，也不推断
+聊天或语音识别能力。缺失／非法值不补类型，沿用已有缺项继承；接口显式 `mode` /
+`model_info.mode` 和用户类型覆盖仍优先。只解析能力，不推断 `nativeApi`。
+直连目录鉴权可复用自定义请求头 `xi-api-key`；没有新增凭证存储或 TTS 执行器。
+
+2026-10-12 同步 Server 公共 Registry：新增 OpenAI TTS-1 / HD 和 Mini TTS 日期快照、
+ElevenLabs、MiniMax Speech、Qwen TTS / Qwen Audio TTS、CosyVoice 共 30 个准确型号，
+连同原有 Mini TTS 共 31 个语音合成公共条目。每条只使用官方 API ID 的精确别名，
+带有官方文档链接；不同日期和变体保留各自身份，原始上游 ID 不被改写。
+流式语音合成仍声明 `audio_speech`，名称中的 `realtime` 不代表实时音频对话。
+Server 正本和本离线副本以相同 revision 整表同步；未增加供应商成员、路由、价格或协议
+声明，也不把官方旧型号收录等同于账号仍可调用。没有新 schema 或能力协商依赖，
+目录数据两端可独立合并；本记录不代表服务端已部署或对应 TTS 执行器已实现。
+
+显式媒体类型不套用聊天协议的名称前缀规则（例如 `gpt-*`）；语音协议缺失仍保持未知，
+不凭 `audio_speech` 推断具体厂商协议。模型的原生协议资料与连接的聊天 `wireProtocol`
+是两件事，保留资料不会新增语音合成执行器。
+
+纯非对话连接沿用「获取模型列表」检查目录访问并管理型号，不进行聊天探测；手动添加
+后可直接保存，无需先添加虚假的聊天模型。获取目录不代表语音合成、鉴权范围或计费
+调用已经验证。用户类型、名称、开关及协议覆盖刷新后保留，同 ID 的不同连接独立。
+本能力属于客户端的个人 API key／自定义连接，不扩展组织 BYOK 协议、Gateway 成员或权限。
+
+实现与回归：`modelDiscovery.ts`、`modelRegistry.ts`、`user-provider.ts`、
+`speechModelDiscovery.test.ts`、`ProviderConnectionDialog.tsx` 及其组件测试。
+
 ## 执行与兼容边界
 
-OpenAI 授权登录的图像能力统一显示为 **GPT Image Gen**，由托管 `image_generation` 工具选择底层型号，
-不从公共 API 目录推导订阅型号。内部保留各连接原有的 `gpt-image-2` ID，兼容 Art/Core
-已有选择与显示开关；该 ID 不再作为图像 `model` 参数发送。Responses 顶层的宿主模型
-仍保留。配置 Images API key 时，内置 OpenAI 连接继续使用公共 API 的真实模型名单和
+OpenAI 授权登录的图像能力统一显示为 **GPT Image Gen**，不从公共 API 目录推导订阅型号。
+内部保留各连接原有的 `gpt-image-2` ID，兼容 Art/Core 已有选择与显示开关；目录 ID
+仍是本地兼容句柄。执行使用 ChatGPT Codex 独立的 `images/generations` / `images/edits`
+JSON 接口，图片模型按上游 Codex 实现使用 `gpt-image-2`，不再依赖 Responses 宿主模型。
+编辑输入为 `images: [{ image_url: "data:…" }]`，返回 `data[].b64_json` 交现有 Core 校验入库；
+实际图片尺寸以结果字节为准，不把请求尺寸当成生成结果。
+配置 Images API key 时，内置 OpenAI 连接继续使用公共 API 的真实模型名单和
 `model` 参数；独立订阅账号不受该 key 影响。切换凭证后重算活动目录，发现失败也不
 改变用户选择的接入方式。实现见 `active-catalog.ts`、`codexImageClient.ts`。
 
 其它媒体执行器及 Gateway Guide 保持各自协议与凭证边界，不添加新认证方式。
+
+### ChatGPT 订阅图片接口迁移验证（2026-10-15）
+
+- 原因：旧 Responses 请求固定使用 `gpt-5.5` 宿主，部分 ChatGPT 账号返回 HTTP 400，
+  提示该模型不受支持。迁移只改订阅图片适配器，不改 Art、模型目录或公共 API key 路由。
+- 上游依据：[Codex Images 客户端](https://github.com/openai/codex/blob/160b2b1ef62114eeb41e41e5e3be0000d944b713/codex-rs/codex-api/src/endpoint/images.rs)
+  与 [独立出图工具](https://github.com/openai/codex/blob/160b2b1ef62114eeb41e41e5e3be0000d944b713/codex-rs/ext/image-generation/src/tool.rs)。
+- 继续使用所选账号的 OAuth Bearer / `ChatGPT-Account-Id`，派发前复核账号、模型启用状态
+  和取消信号。失败不自动换供应商或重新提交；保留现有 Core 结果未知与付费重提保护。
+- 自动回归覆盖 JSON 文生图、多参考图编辑、旧目录 ID、多账号隔离、参数透传、取消、
+  HTTP 错误、断网、截断 JSON 和空结果；上游不再返回 SSE，旧 SSE 解析随协议一起移除。
+- 实际适配器验证：从当前源码编译，仅替换日志输出，注入当前已绑定账号的只读鉴权；
+  文生图与改图均 HTTP 200，分别约 14 秒和 18 秒，目检确认蓝圆改成红圆。凭证未入仓。
+- 尺寸限制：请求 `1024x1024` 实测返回 `1272x1236` / `1273x1236`。适配器不缩放，
+  不以请求尺寸伪造产物元数据；要求精确尺寸的流程仍需单独处理。
+- 未验证：打包 Desktop 中 Art → Core → 媒体入库的完整交互、Windows 真实运行，以及
+  其它订阅套餐/账号权限。接口级实测与自动回归不代替这些验收。
+- 回滚可还原本次适配器修改；但旧固定宿主的账号兼容问题会重新出现。
+- 白盒补测：适配器从 21 项扩至 34 项，覆盖独立 token/account 变化、准备与解析阶段
+  的取消、无效参考图、混合有效/无效结果、错误体读取失败等；连同鉴权、参数、注册表及
+  Core 调用状态/作品路径共 283 项通过。未使用覆盖率工具，不宣称 100% 分支覆盖。
+- 主干既有限制：订阅适配器抛出的明确 HTTP 4xx 仍由 Core 的第三方通道统一映射为
+  `SUBMISSION_OUTCOME_UNKNOWN`（`invocationService.ts` 的 provider 提交 catch）。
+  重复提交保护保留，但错误分类不够准确；本次迁移未扩大到跨通道错误协议改造。
 
 V1–V3 解析保持原有契约；新媒体字段、媒体原生协议和空 Agent 路由属于 V4。
 服务端以后按这套本地规范维护下发数据；旧消费者需要其既有媒体列表投影，不能直接
@@ -132,6 +195,6 @@ Registry 不因这项能力标识递增 schema 版本，已有 V4/V5 语义保�
 也不会让尚未实现的音频协议自动变得可调用。
 
 验证覆盖 V4 全类型解析和投影、用户配置持久化、实报与覆盖优先级、目录刷新、
-停用展示、旧版拒绝新字段、订阅图像请求省略工具级 `model`、Art 旧选择的生成/编辑兼容性，
+停用展示、旧版拒绝新字段、订阅图像请求不依赖宿主模型、Art 旧选择的生成/编辑兼容性，
 以及 API key 与订阅目录切换时保留各自的型号语义。真实账号作图、
 服务端热下发及正式版 UI 验收不能用本地测试替代。

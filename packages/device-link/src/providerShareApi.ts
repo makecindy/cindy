@@ -22,6 +22,8 @@ export interface ProviderShareMember extends ProviderSharePerson {
 
 export interface ProviderShareRequestItem extends ProviderSharePerson {
   requestId: string;
+  /** SHA-256 of this request's invitation; absent on older servers. Not an invitation or credential. */
+  linkId?: string;
   pairingCode: string;
   createdAt: string;
   expiresAt: string;
@@ -68,7 +70,18 @@ export interface ProviderShareReceived {
   owner: ProviderSharePerson;
   status: 'active' | 'paused';
   hostOnline: boolean;
+  /** Original device presence, separate from an authorized standby. */
+  hostDeviceOnline?: boolean;
+  standbyOnline?: boolean;
   hostCapable: boolean;
+}
+export type ProviderShareListing<T> = T[] & { unavailableShareIds?: readonly string[]; authorityIncomplete?: true };
+function listing<T>(value: Record<string, unknown>, parse: (value: unknown) => T): ProviderShareListing<T> {
+  const result: ProviderShareListing<T> = list(value.shares).map(parse);
+  if (value.unavailableShareIds !== undefined) Object.defineProperty(result, 'unavailableShareIds', {
+    value: list(value.unavailableShareIds).map(providerShareIdentifier), enumerable: false });
+  if (value.authorityIncomplete === true) Object.defineProperty(result, 'authorityIncomplete', { value: true, enumerable: false });
+  return result;
 }
 
 export interface ProviderShareApiOptions {
@@ -139,6 +152,14 @@ export function isProviderShareInvitation(value: unknown): value is string {
   return typeof value === 'string' && INVITATION.test(value);
 }
 
+function linkId(value: unknown): { linkId?: string } {
+  if (value === undefined) return {};
+  if (typeof value !== 'string' || !/^[a-f0-9]{64}$/.test(value)) {
+    throw new Error('Invalid provider share link id');
+  }
+  return { linkId: value };
+}
+
 function parseOwned(value: unknown): ProviderShareOwned {
   const item = row(value);
   return {
@@ -161,6 +182,7 @@ function parseOwned(value: unknown): ProviderShareOwned {
       return {
         ...person(request),
         requestId: providerShareIdentifier(request.requestId),
+        ...linkId(request.linkId),
         pairingCode: pairing(request.pairingCode),
         createdAt: timestamp(request.createdAt),
         expiresAt: timestamp(request.expiresAt),
@@ -205,8 +227,9 @@ function parseReceived(value: unknown): ProviderShareReceived {
     deviceName: text(item.deviceName, 256),
     owner: person(item.owner),
     status: oneOf(item.status, ['active', 'paused'] as const),
-    hostOnline: bool(item.hostOnline),
-    hostCapable: bool(item.hostCapable),
+    hostOnline: bool(item.hostOnline) || item.standbyOnline === true,
+    ...(typeof item.standbyOnline === 'boolean' ? { hostDeviceOnline: bool(item.hostOnline), standbyOnline: item.standbyOnline } : {}),
+    hostCapable: bool(item.hostCapable) || item.standbyOnline === true,
   };
 }
 
@@ -224,9 +247,9 @@ export function createProviderShareApi(options: ProviderShareApiOptions) {
   }
   const segment = (value: string) => `/${encodeURIComponent(providerShareIdentifier(value))}`;
   return {
-    async listOwned(): Promise<ProviderShareOwned[]> {
+    async listOwned(): Promise<ProviderShareListing<ProviderShareOwned>> {
       const value = await request('');
-      return list(value.shares).map(parseOwned);
+      return listing(value, parseOwned);
     },
     async createLink(input: { providerId: string; providerLabel: string; deviceName: string; identityCard: string }) {
       const value = await request('/links', 'POST', {
@@ -236,7 +259,7 @@ export function createProviderShareApi(options: ProviderShareApiOptions) {
         identityCard: text(input.identityCard, 8192),
       });
       if (!isProviderShareInvitation(value.invitation)) throw new Error('Invalid provider share invitation');
-      return { shareId: providerShareIdentifier(value.shareId), invitation: value.invitation, expiresAt: timestamp(value.expiresAt) };
+      return { shareId: providerShareIdentifier(value.shareId), invitation: value.invitation, expiresAt: timestamp(value.expiresAt), ...linkId(value.linkId) };
     },
     async approve(requestId: string) {
       const value = await request(`/requests${segment(requestId)}/approve`, 'POST', {});
@@ -264,9 +287,9 @@ export function createProviderShareApi(options: ProviderShareApiOptions) {
     async withdraw(requestId: string) {
       await request(`/requests${segment(requestId)}/withdraw`, 'POST', {});
     },
-    async listReceived(): Promise<ProviderShareReceived[]> {
+    async listReceived(): Promise<ProviderShareListing<ProviderShareReceived>> {
       const value = await request('/received');
-      return list(value.shares).map(parseReceived);
+      return listing(value, parseReceived);
     },
     async leave(memberId: string) {
       await request(`/received${segment(memberId)}/leave`, 'POST', {});

@@ -15,7 +15,9 @@ import { PluginDetailTopBar, usePluginDetailScrolled } from '../PluginDetailTopB
 
 /** jsdom 下 `-webkit-app-region` 只能从 React 写进 style 对象的驼峰键读回。 */
 function appRegionOf(element: HTMLElement): string {
-  return (element.style as CSSStyleDeclaration & { WebkitAppRegion?: string }).WebkitAppRegion ?? '';
+  return (
+    (element.style as CSSStyleDeclaration & { WebkitAppRegion?: string }).WebkitAppRegion ?? ''
+  );
 }
 
 afterEach(() => {
@@ -49,7 +51,7 @@ describe('PluginDetailTopBar', () => {
     render(<Harness onBack={onBack} />);
 
     const event = new KeyboardEvent('keydown', { key: 'Escape', cancelable: true });
-    window.dispatchEvent(event);
+    document.dispatchEvent(event);
 
     expect(onBack).toHaveBeenCalledTimes(1);
     expect(event.defaultPrevented).toBe(true);
@@ -60,7 +62,7 @@ describe('PluginDetailTopBar', () => {
     const onBack = vi.fn();
     render(<Harness onBack={onBack} />);
 
-    fireEvent.keyDown(window, { key: 'Escape', metaKey: true });
+    fireEvent.keyDown(document, { key: 'Escape', metaKey: true });
 
     const input = document.createElement('input');
     document.body.appendChild(input);
@@ -69,18 +71,18 @@ describe('PluginDetailTopBar', () => {
 
     const consumed = new KeyboardEvent('keydown', { key: 'Escape', cancelable: true });
     consumed.preventDefault();
-    window.dispatchEvent(consumed);
+    document.dispatchEvent(consumed);
 
     expect(onBack).not.toHaveBeenCalled();
   });
 
-  it.each(['altKey', 'ctrlKey', 'metaKey', 'shiftKey', 'isComposing'])(
+  it.each(['altKey', 'ctrlKey', 'metaKey', 'shiftKey', 'isComposing', 'repeat'])(
     'does not navigate back when Escape carries %s',
     (flag) => {
       const onBack = vi.fn();
       render(<Harness onBack={onBack} />);
 
-      fireEvent.keyDown(window, { key: 'Escape', [flag]: true });
+      fireEvent.keyDown(document, { key: 'Escape', [flag]: true });
 
       expect(onBack).not.toHaveBeenCalled();
     },

@@ -16,6 +16,7 @@ function createPlayer() {
     duration: 0,
     bufferedPosition: -1,
     pause: vi.fn(),
+    play: vi.fn(),
     addListener(event: string, listener: Listener) {
       if (!listeners.has(event)) listeners.set(event, new Set());
       listeners.get(event)!.add(listener);
@@ -48,10 +49,11 @@ vi.mock('expo', () => ({
   },
 }));
 vi.mock('expo-video', () => ({
-  useVideoPlayer: () => {
+  useVideoPlayer: (_url: string, setup?: (player: any) => void) => {
     const [player] = useState(() => {
       const next = createPlayer();
       h.players.push(next);
+      setup?.(next);
       return next;
     });
     return player;
@@ -76,13 +78,14 @@ import { NativeVideoPlayer } from '@/session/NativeVideoPlayer';
 let container: HTMLDivElement;
 let root: Root;
 
-function render(props: { visible: boolean; onError?: (detail: string) => void }) {
+function render(props: { visible: boolean; autoPlay?: boolean; onError?: (detail: string) => void }) {
   act(() => {
     root.render(el(NativeVideoPlayer, {
       onError: props.onError ?? vi.fn(),
       testID: 'player',
       url: 'https://example.test/movie.mp4',
       visible: props.visible,
+      autoPlay: props.autoPlay,
     }));
   });
   return h.players[h.players.length - 1];
@@ -104,6 +107,14 @@ afterEach(() => {
 });
 
 describe('NativeVideoPlayer', () => {
+  it('starts inline playback only after an explicit play action on a visible message', () => {
+    const player = render({ visible: true, autoPlay: true });
+    expect(player.play).toHaveBeenCalledOnce();
+    render({ visible: false, autoPlay: true });
+    expect(player.pause).toHaveBeenCalledOnce();
+    render({ visible: true, autoPlay: true });
+    expect(player.play).toHaveBeenCalledOnce();
+  });
   it('shows buffered percent only after a sustained loading state and hides it on resume', () => {
     const player = render({ visible: true });
     player.duration = 100;

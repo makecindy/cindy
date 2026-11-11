@@ -1,54 +1,25 @@
 /**
- * Host-side first-party privilege resolver.
- *
- * Collects "where this installed plugin came from" into a structured
- * conclusion. Callers decide whether to refuse install or only withhold
- * privileges; this module does not refuse loading.
- *
- * Call sites that previously used only `isBrokerEligibleGhostId` now ask this
- * resolver **after** the static official-prefix hit (`cindy-` / `filo-` / `xd-`).
- * Official-prefix plugins keep today's grant. Everything else is decided here.
- *
- * Input priority: first evaluable of
- *   1. builtin seed → static official table
- *   2. explicit agent-forge install + current organization prefix
- *   3. plugin-market ledger (source + scope + organizationId + Release sha256)
- *      paired with the approved receipt packageSha256
- *   4. neither → fail-closed, no privilege
- *
- * Discriminator is the combination of `source` and `scope`, not `scope`
- * alone. Custom / git market rows write `scope: 'public'` as a placeholder
- * (`plugin-market/service.ts`); that is not a trust statement. Server-market
- * public is only trusted when `source === 'market'`.
- *
- * A matching official prefix is never a security proof by itself. The
- * static table is only a criterion on the builtin branch and on trusted
- * server-market public installs.
- *
- * `facts.builtin` is id-based, not byte-based: it means "this id is on the
- * bundled seed roster" (`listBuiltinSeedIds` / directory name), not "these
- * bytes came from the bundled seed". Byte-level guarantees live in
- * provisioning content matching and `approveTrustedBundledInstall`. That is
- * the same strength as today's `isOfficialGhostId(id)`.
+ * Enterprise Broker authorization from approved installation facts.
+ * Names, bundled origin and public-market origin grant no generic Host capability.
+ * Current-organization market and explicit Forge installs retain their existing
+ * enterprise checks. Historical source helpers below are used only for approved
+ * package compatibility and one-time credential-alias migration.
  */
-import { PLUGIN_PREFIX_PATTERN, type PluginScope } from '@cindy/plugin-protocol';
+import type { PluginScope } from '@cindy/plugin-protocol';
 
-import { isBrokerEligibleGhostId, isOfficialGhostId } from '../../shared/ghost.js';
+import { GHOST_OFFICIAL_ID_PREFIX, isOfficialGhostId } from '../../shared/ghost.js';
 
 const PACKAGE_SHA256_RE = /^[a-f0-9]{64}$/;
 
-/**
- * Ghost ids that share Host credential aliases (`GHOST_SECRET_STORAGE_ALIASES`).
- * A local package impersonating these ids must never receive first-party
- * privilege. Keep this list in sync with `shared/providerSecrets.ts`.
- */
+/** Historical alias owners, retained only for migration and compatibility evidence. */
 export const FIRST_PARTY_ALIAS_GHOST_IDS = Object.freeze(['cindy-web-search', 'xd-mivo'] as const);
 
 export type GhostFirstPartyBasis =
   | 'builtin-official'
   | 'market-public'
   | 'market-organization-current'
-  | 'forge-current-org-prefix'
+  | 'forge-current-org'
+  | 'legacy-existing-install'
   | 'denied-alias'
   | 'denied-foreign-org'
   | 'denied-unknown-origin';
@@ -72,26 +43,73 @@ export interface GhostFirstPartyMarketRecord {
 
 export interface GhostFirstPartyCurrentOrganization {
   organizationId: string;
-  pluginPrefix: string | null;
+  pluginPrefix?: string | null;
+  /** Permanent org slug; required to bind Forge self-test to the install namespace. */
+  orgSlug?: string | null;
 }
 
 export interface GhostFirstPartyFacts {
   ghostId: string;
+  /** Install namespace. null is root; a string is the bound orgSlug. */
+  namespace: string | null;
   /** True when the id is on the bundled seed roster (`InstalledGhost.builtin`). */
   builtin: boolean;
   marketRecord: GhostFirstPartyMarketRecord | null;
   currentOrganization: GhostFirstPartyCurrentOrganization | null;
   /** 仅显式 ghost_forge_install 写入 agent-forge；其它入口均为 manual。 */
   installOrigin: 'manual' | 'agent-forge';
+  legacyPendingForge?: boolean;
+  legacyPendingNamespace?: boolean;
+  trustedSource?: GhostFirstPartyTrustedSource | null;
+  approvedPackageSha256?: string | null;
+  legacyFirstPartyEligible?: boolean;
 }
 
-function matchesCurrentOrgPrefix(
-  ghostId: string,
-  currentOrganization: GhostFirstPartyCurrentOrganization | null,
-): boolean {
-  const prefix = currentOrganization?.pluginPrefix;
-  if (!prefix || !PLUGIN_PREFIX_PATTERN.test(prefix)) return false;
-  return ghostId.startsWith(`${prefix}-`);
+export interface GhostFirstPartyTrustedSource {
+  kind: 'builtin-official';
+  ghostId: string;
+  namespace: string | null;
+  packageSha256: string;
+}
+
+export function hasTrustedFirstPartySource(facts: GhostFirstPartyFacts): boolean {
+  const source = facts.trustedSource;
+  return source != null && source.ghostId === facts.ghostId &&
+    source.namespace === facts.namespace &&
+    PACKAGE_SHA256_RE.test(source.packageSha256) &&
+    source.packageSha256 === facts.approvedPackageSha256;
+}
+
+export function isTrustedPublicCindyResource(facts: GhostFirstPartyFacts): boolean {
+  const record = facts.marketRecord;
+  return facts.namespace === null && facts.ghostId.startsWith(GHOST_OFFICIAL_ID_PREFIX) &&
+    record !== null && record.installed && record.source === 'market' &&
+    record.scope === 'public' && record.organizationId === null &&
+    record.approvedPackageSha256 !== null && PACKAGE_SHA256_RE.test(record.sha256) &&
+    record.sha256 === record.approvedPackageSha256;
+}
+
+export function captureLegacyFirstPartyEligibility(input: {
+  legacyExistingInstall: boolean;
+  ghostId: string;
+  namespace: string | null;
+  approved: boolean;
+  approvedPackageSha256: string | null;
+  marketRecord: (GhostFirstPartyMarketRecord & { ghostId: string; namespace?: string | null }) | null;
+  approvedOfficialTrust?: boolean;
+}): boolean {
+  const record = input.marketRecord;
+  if (!input.legacyExistingInstall || !input.approved || input.namespace !== null ||
+      !isOfficialGhostId(input.ghostId) || input.approvedPackageSha256 === null ||
+      !PACKAGE_SHA256_RE.test(input.approvedPackageSha256)) return false;
+  if (input.approvedOfficialTrust === true) return true;
+  return record !== null && record.ghostId === input.ghostId &&
+    record.namespace == null &&
+    record.installed && record.source === 'market' &&
+    record.scope === 'public' && record.organizationId === null &&
+    record.approvedPackageSha256 !== null && PACKAGE_SHA256_RE.test(record.sha256) &&
+    record.approvedPackageSha256 === input.approvedPackageSha256 &&
+    record.sha256 === record.approvedPackageSha256;
 }
 
 function isCurrentOrganizationRecord(
@@ -125,6 +143,23 @@ export function marketInstallationMatchesApprovedPackage(
   );
 }
 
+export function isTrustedMivoSecretAlias(facts: GhostFirstPartyFacts, pendingLegacy: boolean): boolean {
+  if (facts.ghostId !== 'xd-mivo') return false;
+  if (facts.builtin && facts.trustedSource?.kind === 'builtin-official' &&
+      hasTrustedFirstPartySource(facts)) return true;
+  const record = facts.marketRecord;
+  if (!record || record.source !== 'market' || record.scope !== 'organization' ||
+      !record.installed || !record.organizationId) return false;
+  // Org id is an install fact. The session slug is not: a relabel must not move the key.
+  if (facts.currentOrganization &&
+      record.organizationId !== facts.currentOrganization.organizationId) return false;
+  if (!(facts.namespace === 'xd' || (facts.namespace === null && pendingLegacy))) return false;
+  return record.approvedPackageSha256 !== null &&
+    PACKAGE_SHA256_RE.test(record.sha256) &&
+    PACKAGE_SHA256_RE.test(record.approvedPackageSha256) &&
+    record.sha256 === record.approvedPackageSha256;
+}
+
 function allow(basis: GhostFirstPartyBasis, hostPrimitiveEligible: boolean): GhostFirstPartyPrivilege {
   return { brokerEligible: true, hostPrimitiveEligible, basis };
 }
@@ -133,42 +168,70 @@ function deny(basis: Extract<GhostFirstPartyBasis, `denied-${string}`>): GhostFi
   return { brokerEligible: false, hostPrimitiveEligible: false, basis };
 }
 
+export function matchesPendingLegacyForge(
+  ghostId: string,
+  namespace: string | null,
+  pending: boolean,
+  pluginPrefix: string | null,
+): boolean {
+  return pending && namespace === null && !!pluginPrefix && ghostId.startsWith(pluginPrefix + '-');
+}
+
 /**
  * Pure first-party privilege conclusion from already-collected facts.
  * Does not read disk, ledger, or Electron.
  */
+/**
+ * Installed from the public market with the bytes the user approved (root namespace, not a Forge
+ * self-test). Unlike isTrustedPublicCindyResource it does not require the reserved `cindy-` prefix:
+ * the official Cindy Chrome plugin predates it. This is source evidence, not a privilege grant.
+ */
+export function isTrustedPublicMarketPackage(facts: GhostFirstPartyFacts): boolean {
+  const record = facts.marketRecord;
+  return facts.namespace === null && facts.installOrigin === 'manual' &&
+    record !== null && record.installed && record.source === 'market' &&
+    record.scope === 'public' && record.organizationId === null &&
+    record.approvedPackageSha256 !== null && PACKAGE_SHA256_RE.test(record.sha256) &&
+    record.sha256 === record.approvedPackageSha256;
+}
+
 export function resolveGhostFirstPartyPrivilege(facts: GhostFirstPartyFacts): GhostFirstPartyPrivilege {
-  if (facts.builtin) {
-    return isOfficialGhostId(facts.ghostId)
-      ? allow('builtin-official', true)
-      : deny('denied-unknown-origin');
+  if (facts.namespace === 'local') return deny('denied-unknown-origin');
+
+  if (facts.namespace === null && facts.installOrigin === 'manual' &&
+      facts.legacyFirstPartyEligible === true && facts.currentOrganization?.pluginPrefix != null &&
+      facts.ghostId.startsWith(facts.currentOrganization.pluginPrefix + '-') && isOfficialGhostId(facts.ghostId) &&
+      (facts.marketRecord === null || (facts.marketRecord.installed &&
+        facts.marketRecord.source === 'market' && facts.marketRecord.scope === 'public' &&
+        facts.marketRecord.organizationId === null &&
+        PACKAGE_SHA256_RE.test(facts.marketRecord.sha256) &&
+        facts.marketRecord.sha256 === facts.marketRecord.approvedPackageSha256))) {
+    return allow('legacy-existing-install', false);
   }
 
-  if ((FIRST_PARTY_ALIAS_GHOST_IDS as readonly string[]).includes(facts.ghostId)) {
-    return deny('denied-alias');
-  }
-
-  // 企业作者的显式 Forge 自测资格来自本次安装来源与当前组织前缀，和市场账本
+  // 企业作者的显式 Forge 自测资格来自本次安装来源与当前组织身份，和市场账本
   // 是否已有同 id、是否仍标记 installed 无关。它只开放 Broker / oidc-token，
   // 宿主原语仍保持拒绝。
-  if (
-    facts.installOrigin === 'agent-forge' &&
-    matchesCurrentOrgPrefix(facts.ghostId, facts.currentOrganization)
-  ) {
-    return allow('forge-current-org-prefix', false);
+  if (facts.installOrigin === 'agent-forge') {
+    const orgSlug = facts.currentOrganization?.orgSlug;
+    const legacyMatchesCurrentOrg = matchesPendingLegacyForge(
+      facts.ghostId,
+      facts.namespace,
+      facts.legacyPendingForge === true,
+      facts.currentOrganization?.pluginPrefix ?? null,
+    );
+    if (!orgSlug || (facts.namespace !== orgSlug && !legacyMatchesCurrentOrg)) {
+      return deny(facts.currentOrganization ? 'denied-foreign-org' : 'denied-unknown-origin');
+    }
+    return allow('forge-current-org', false);
   }
 
   const record = facts.marketRecord;
   if (record !== null) {
     if (!record.installed) {
       // Uninstalled ledger rows stay denied. Explicit Forge self-test is
-      // decided above from origin + org prefix, before this market branch.
+      // decided above from origin + current organization, before this market branch.
       return deny('denied-unknown-origin');
-    }
-    if (record.scope === 'public' && record.source === 'market') {
-      return isOfficialGhostId(facts.ghostId)
-        ? allow('market-public', true)
-        : deny('denied-unknown-origin');
     }
     if (record.scope === 'organization') {
       // Same discipline as the public branch: scope is only meaningful together
@@ -179,13 +242,19 @@ export function resolveGhostFirstPartyPrivilege(facts: GhostFirstPartyFacts): Gh
       // that organization's server market". `git-market` / `local-market` rows
       // carry a placeholder scope, which is likewise not a trust statement.
       if (record.source !== 'market') return deny('denied-unknown-origin');
-      if (!isCurrentOrganizationRecord(record, facts.currentOrganization)) {
+      const organization = facts.currentOrganization;
+      // Same gate as OIDC: a known namespace must be the current orgSlug.
+      // A missing namespace is only the upgrade census, not an implicit root.
+      if (facts.namespace === null) {
+        if (facts.legacyPendingNamespace !== true) return deny('denied-unknown-origin');
+      } else if (organization?.orgSlug != null && facts.namespace !== organization.orgSlug) {
+        // Old tokens omit orgSlug. Reject only an explicit different slug.
         return deny('denied-foreign-org');
       }
-      if (!marketInstallationMatchesApprovedPackage(record, facts.currentOrganization)) {
-        return deny('denied-unknown-origin');
+      if (!isCurrentOrganizationRecord(record, organization)) {
+        return deny('denied-foreign-org');
       }
-      if (!matchesCurrentOrgPrefix(facts.ghostId, facts.currentOrganization)) {
+      if (!marketInstallationMatchesApprovedPackage(record, organization)) {
         return deny('denied-unknown-origin');
       }
       return allow('market-organization-current', false);
@@ -197,15 +266,22 @@ export function resolveGhostFirstPartyPrivilege(facts: GhostFirstPartyFacts): Gh
 }
 
 /**
- * Incremental broker gate: official prefix (`cindy-` / `filo-` / `xd-`) keeps
- * today's grant without consulting facts. Everything else asks the resolver.
- * Unavailable facts are fail-closed (no broker).
+ * Broker gate from collected facts. Prefixes are not a grant.
+ * Unavailable facts are fail-closed.
  */
 export function authorizeGhostTokenBroker(
-  ghostId: string,
+  _ghostId: string,
   load: { kind: 'ready'; facts: GhostFirstPartyFacts } | { kind: string },
 ): boolean {
-  if (isBrokerEligibleGhostId(ghostId)) return true;
   if (load.kind !== 'ready' || !('facts' in load)) return false;
   return resolveGhostFirstPartyPrivilege(load.facts).brokerEligible;
+}
+
+/** Port reclaim / identity avatar download. Prefixes are not a grant. */
+export function authorizeGhostHostPrimitive(
+  _ghostId: string,
+  load: { kind: 'ready'; facts: GhostFirstPartyFacts } | { kind: string },
+): boolean {
+  if (load.kind !== 'ready' || !('facts' in load)) return false;
+  return resolveGhostFirstPartyPrivilege(load.facts).hostPrimitiveEligible;
 }

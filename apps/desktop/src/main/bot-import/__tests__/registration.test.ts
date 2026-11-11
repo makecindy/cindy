@@ -1,7 +1,7 @@
 import { beforeAll, expect, it, vi } from 'vitest';
-const h = vi.hoisted(() => ({ channel: 'maker:remote-resources:invoke', remote: vi.fn(), start: vi.fn(), sources: vi.fn(), preview: vi.fn(), status: vi.fn(), handlers: new Map<string, (event: unknown, operation: unknown, input?: unknown) => Promise<unknown>>() }));
+const h = vi.hoisted(() => ({ channel: 'maker:remote-resources:invoke', remote: vi.fn(), start: vi.fn(), sources: vi.fn(), preview: vi.fn(), status: vi.fn(), packages: vi.fn(), invitePackage: vi.fn(), handlers: new Map<string, (event: unknown, operation: unknown, input?: unknown) => Promise<unknown>>() }));
 vi.mock('electron', () => ({ ipcMain: { handle: (name: string, fn: (event: unknown, operation: unknown, input?: unknown) => Promise<unknown>) => h.handlers.set(name, fn) } }));
-vi.mock('../host.js', () => ({ startCompanionImport: h.start, submitRemoteCompanionImport: h.start, listCompanionImportSources: h.sources, previewCompanionImport: h.preview, getCompanionImportResult: h.status, readRemoteCompanionImport: h.remote }));
+vi.mock('../host.js', () => ({ startCompanionImport: h.start, submitRemoteCompanionImport: h.start, listCompanionImportSources: h.sources, previewCompanionImport: h.preview, getCompanionImportResult: h.status, readRemoteCompanionImport: h.remote, listNativeBotPackages: h.packages, inviteNativeBotPackage: h.invitePackage }));
 vi.mock('../../security/trustedAppRenderer.js', () => ({ assertTrustedAppRendererEvent: vi.fn() }));
 vi.mock('../../device-link/invoke-context.js', () => ({ getDeviceLinkInvokeContext: () => ({ controllerDeviceId: 'phone', channel: h.channel }) }));
 import { registerCompanionImport } from '../registration.js';
@@ -10,6 +10,15 @@ import { CompanionImportError } from '../types.js';
 import { extractIpcError } from '../../../shared/ipcError.js';
 import { COMPANION_IMPORT_ERROR_CODES } from '../../../shared/ipc-errors.js';
 beforeAll(() => { registerCompanionImport(); registerRemoteResourcesIpc(); });
+it('routes the native catalog and package identity to the same trusted import owner', async () => {
+  h.packages.mockResolvedValueOnce([{ packageId: 'engineer-bot' }]);
+  const handler = h.handlers.get('companion-import')!;
+  expect(await handler({ sender: { id: 23 } }, 'packages')).toEqual([{ packageId: 'engineer-bot' }]);
+  const identity = { packageId: 'engineer-bot', packageVersion: '0.2.0', packageHash: 'a'.repeat(64), locale: 'zh-CN' };
+  h.invitePackage.mockResolvedValueOnce({ botId: 'original-bot', requestId: 'original-request' });
+  expect(await handler({ sender: { id: 23 } }, 'invite-package', identity)).toEqual({ botId: 'original-bot', requestId: 'original-request' });
+  expect(h.invitePackage).toHaveBeenCalledWith(identity, 'renderer:23');
+});
 it.each([
   ['sources', 'SOURCE_CONFIG_INVALID'], ['preview', 'PREVIEW_EXPIRED'],
   ['start', 'INVALID_SELECTION'], ['status', 'OWNER_CHANGED'],
@@ -44,11 +53,12 @@ it('continues to hide unexpected provider failures from mobile', async () => {
   await expect(invoke()).rejects.toThrow('[INTERNAL] remote resource provider failed');
 });
 
-it.each([false, true])('negotiates chunk reads without changing the legacy resource (%s)', async supported => {
+it.each([false, true])('negotiates chunk reads and the bots category without changing the legacy resource (%s)', async supported => {
   h.channel = 'maker:remote-resources:get';
   h.remote.mockResolvedValueOnce({ preview: { id: 'preview', entries: [] } });
-  await h.handlers.get('maker:remote-resources:get')!({}, { ref: { collectionId: 'companion-import', kind: 'import', id: 'preview:source' }, client: { protocolVersion: 1, primitives: ['companion-import', ...(supported ? ['companion-import-chunks-v1'] : [])] } });
-  expect(h.remote).toHaveBeenLastCalledWith('preview:source', 'phone', supported);
+  await h.handlers.get('maker:remote-resources:get')!({}, { ref: { collectionId: 'companion-import', kind: 'import', id: 'preview:source' }, client: { protocolVersion: 1, primitives: ['companion-import', ...(supported ? ['companion-import-chunks-v1', 'companion-import-bots-v1'] : [])] } });
+  // A controller that never advertised the bots category keeps receiving bots under connections.
+  expect(h.remote).toHaveBeenLastCalledWith('preview:source', 'phone', supported, supported);
 });
 
 it('acknowledges a selection chunk without navigating before the host accepts the full import', async () => {

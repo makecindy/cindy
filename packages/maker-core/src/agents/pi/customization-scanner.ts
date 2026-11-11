@@ -130,6 +130,12 @@ export async function scanPiCustomizations(opts: ListCustomizationsOptions): Pro
   result.items.sort((a, b) => {
     if (a.scope !== b.scope) return a.scope.localeCompare(b.scope);
     if (a.name !== b.name) return a.name.localeCompare(b.name);
+    // 同名时直接项优先：`<root>/<skill>` 比 `<root>/<namespace>/<skill>` 浅，下游
+    // mergeCommands 保留名单里靠前的那条。按路径字典序排会把命名空间(bar/foo)排在
+    // 前面，面板就显示嵌套项的描述与详情路径，而共享投影 / 远程扫描 / `/learn` 选直接项。
+    const depth = (value: string) => value.split(/[\\/]/).length;
+    const depthDiff = depth(a.absolutePath) - depth(b.absolutePath);
+    if (depthDiff !== 0) return depthDiff;
     return a.absolutePath.localeCompare(b.absolutePath);
   });
   return result;

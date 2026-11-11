@@ -5,11 +5,55 @@
  * 预设角色、新建任务的首个 Worker 任务拼接,以及被控端 wire 记录的防御性解析。
  */
 
-/** 创建 Worker 面板的预设角色(与桌面 CreateWorkerPopover 同一份)。 */
-export const ORCA_PREDEFINED_WORKER_ROLES = ['developer', 'designer', 'reviewer', 'tester', 'merger'] as const;
+/**
+ * 创建 Worker 面板的预设角色(桌面创建 / 编辑弹窗与手机协同面板同一份)。
+ * 只留主流分工里最常用的三类：审查、实现、测试(2026-11-10 用户要求精简，审查排第一)；
+ * 拆解与规划由 Lead 承担，其余分工用自定义角色名。
+ */
+export const ORCA_PREDEFINED_WORKER_ROLES = ['reviewer', 'developer', 'tester'] as const;
+
+/**
+ * 带现成首条任务的内置角色：它们检查的对象就是 Lead 已有的工作，不需要用户再描述。
+ * 其余角色要做的事因人而异，任务留空由用户填写或交给 Lead 分派。文字由各端自己的文案提供。
+ */
+export const ORCA_STARTER_TASK_WORKER_ROLES: readonly string[] = ['reviewer', 'tester'];
+
+/**
+ * 添加角色时输入的名字对应的角色：输入的是某个内置角色的角色名或它在当前语言下的显示名时
+ * (不分大小写)，就是那个内置角色 —— 移除过的内置角色这样找回来；其余按输入的名字。
+ */
+export function resolveOrcaWorkerRoleName(
+  name: string,
+  builtinDisplayName: (role: string) => string,
+): string {
+  const typed = name.trim();
+  const lower = typed.toLowerCase();
+  return (
+    ORCA_PREDEFINED_WORKER_ROLES.find(
+      (role) => role === lower || builtinDisplayName(role).trim().toLowerCase() === lower,
+    ) ?? typed
+  );
+}
+
+/**
+ * 换角色后任务框里应有的内容：只有任务框为空，或仍是上一个角色原样带出的任务时才替换；
+ * 用户自己写过或改过的内容保持不动。
+ */
+export function orcaWorkerTaskAfterRoleChange(
+  current: string,
+  previousDefault: string,
+  nextDefault: string,
+): string {
+  return current.trim() === '' || current === previousDefault ? nextDefault : current;
+}
 
 /** 自定义角色名的长度上限(被控端 `maker:worker:create` 同口径校验)。 */
 export const ORCA_WORKER_ROLE_MAX_LENGTH = 32;
+
+/** Worker label 的长度上限(被控端 `maker:worker:create` / `maker:worker:update` 同口径校验)。 */
+export const ORCA_WORKER_LABEL_MAX_LENGTH = 32;
+
+const ORCA_WORKER_LABEL_PATTERN = /^[a-z0-9_-]+$/i;
 
 export type OrcaWorkerAgentKind = 'claude-code' | 'codex' | 'pi';
 export type OrcaWorkerPermissionMode = 'auto' | 'bypassPermissions';
@@ -27,6 +71,46 @@ export const DEFAULT_ORCA_WORKER_MODELS: Readonly<Record<OrcaWorkerAgentKind, st
   // 与被控端 orcaWorkerCreationService 的 pi 默认一致。
   pi: 'claude-sonnet-4-6',
 };
+
+/**
+ * 归一/校验 Worker label(创建与改名共用同一组 slug 约束)。
+ * label 是 switch_focus 的稳定定位键,团队内唯一性由被控端负责,这里只做形态校验。
+ */
+export function normalizeOrcaWorkerLabel(
+  value: string,
+): { ok: true; value: string } | { ok: false; message: string } {
+  const label = value.trim();
+  if (!label) return { ok: false, message: 'label required' };
+  if (label.length > ORCA_WORKER_LABEL_MAX_LENGTH) {
+    return { ok: false, message: 'label must be 1-32 chars' };
+  }
+  if (!ORCA_WORKER_LABEL_PATTERN.test(label)) {
+    return { ok: false, message: 'label may only contain letters, numbers, hyphens and underscores' };
+  }
+  return { ok: true, value: label.toLowerCase() };
+}
+
+/** 归一/校验 Worker 展示角色名(创建与改名共用):trim 后 1-32 字符。 */
+export function normalizeOrcaWorkerRole(
+  value: string,
+): { ok: true; value: string } | { ok: false; message: string } {
+  const role = value.trim();
+  if (!role) return { ok: false, message: 'role required' };
+  if (role.length > ORCA_WORKER_ROLE_MAX_LENGTH) {
+    return { ok: false, message: 'role must be 1-32 chars' };
+  }
+  return { ok: true, value: role };
+}
+
+/**
+ * Worker session 的生成标题。创建与改名共用同一形态;改名只在标题仍是这个形态时同步改写,不覆盖用户自定义标题。
+ * role 与 label（忽略大小写/首尾空白）相同时只写一次(「Worker · reader」)。
+ */
+export function orcaWorkerSessionTitle(role: string, label: string): string {
+  return role.trim().toLowerCase() === label.trim().toLowerCase()
+    ? `Worker · ${role}`
+    : `Worker · ${role} · ${label}`;
+}
 
 /**
  * 按角色派生 Worker label(被控端要求 /^[a-z0-9_-]+$/i、≤32、团队内唯一)。
@@ -102,6 +186,37 @@ export interface OrcaTeamWorker {
   model: string | null;
   effort: string | null;
   title: string | null;
+  /**
+   * Worker 的 Agent 在另一台电脑或分享上运行(远程供应商)时那台的 id；任务仍在被控电脑。
+   * Agent 在被控电脑或旧被控端不返回时缺省。
+   */
+  agentDeviceId?: string;
+  /**
+   * 在同账号另一台电脑运行的 Worker：那台的设备 id 与真实任务 id(sessionId 是本机不跑
+   * Agent 的代理任务)。旧被控端不返回，按本机 Worker 处理。
+   */
+  executionDevice?: OrcaWorkerExecutionDevice;
+}
+
+export interface OrcaWorkerExecutionDevice {
+  deviceId: string;
+  remoteSessionId: string;
+  deviceName: string | null;
+  /** false = 被控端当前连不上那台；null = 尚未探测。 */
+  reachable: boolean | null;
+}
+
+function executionDevice(value: unknown): OrcaWorkerExecutionDevice | undefined {
+  const row = record(value);
+  const deviceId = text(row?.deviceId);
+  const remoteSessionId = text(row?.remoteSessionId);
+  if (!row || !deviceId || !remoteSessionId) return undefined;
+  return {
+    deviceId,
+    remoteSessionId,
+    deviceName: text(row.deviceName),
+    reachable: typeof row.reachable === 'boolean' ? row.reachable : null,
+  };
 }
 
 /** 被控端 `maker:collaboration-settings:get` 的控制端投影。 */
@@ -163,6 +278,10 @@ export function parseOrcaTeamWorkers(value: unknown): OrcaTeamWorker[] {
       model: text(session?.model),
       effort: text(session?.effort),
       title: text(session?.title),
+      ...(text(session?.agentDeviceId) ? { agentDeviceId: text(session?.agentDeviceId)! } : {}),
+      ...(executionDevice(row.executionDevice)
+        ? { executionDevice: executionDevice(row.executionDevice) }
+        : {}),
     });
   }
   return workers;

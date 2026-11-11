@@ -26,13 +26,73 @@ import {
   claudeAccountUsageLimit,
   codexAccountUsageLimit,
   readAccountUsageLimit,
+  readRemoteAccountUsageLimit,
   sessionUsesOtherMachineAccount,
   subscriptionFamilyOf,
   xaiAccountUsageLimit,
 } from '../accountUsageLimit';
+import { CodexResetAutoUse, DEFAULT_CODEX_RESET_AUTO_USE } from '../codexResetAutoUse';
+import { createCodexAccountUsageSnapshotReader } from '../codexAccountUsageRefresh';
+import { UsageLimitAutoResume } from '../../maker-ipc/usageLimitAutoResume';
+import type { MobileCodexRateLimitsResult } from '@cindy/maker-shared/device-link-contract';
+import type { CodexAccountUsagePayload } from '../../usageBroadcaster';
+import { readLegacySubscriptionQuota } from '../../subscription-accounts/legacyQuota';
 
 // 远程 Agent 的任务撞上限额时,本机订阅快照属于另一个账号(2026-10-09:与 SSH 同一边界)。
 describe('sessionUsesOtherMachineAccount', () => {
+  // Unit regression, PR #9295: a task reset lookup must retain its exhausted
+  // account's reset time when another account makes the provider pool usable.
+  // Existing remote tests returned a single snapshot without the real pool adapter.
+  it.each(['claude', 'codex'] as const)('keeps the exhausted task account reset time with a usable %s pool', async family => {
+    const reset = Date.now() / 1000 + 3600;
+    const now = Date.now();
+    const bucket = { limitId: 'codex', limitName: null, updatedAt: now,
+      primary: { usedPercent: 12, resetsAt: reset, windowMinutes: 300 }, secondary: null };
+    const pool = async () => ({
+      claudeUsage: { updatedAt: now, fiveHour: { utilization: 12, resetsAt: reset }, sevenDay: null, scoped: [] },
+      codexUsage: { appServerBuckets: { codex: bucket }, webSnapshot: bucket },
+    });
+    const invoke = async (_device: string, channel: string, args: unknown[]) => {
+      const projected = await readLegacySubscriptionQuota(pool, channel, args);
+      return { ok: true, result: projected === undefined
+        ? family === 'claude' ? { fiveHour: { utilization: 100, resetsAt: reset } }
+          : { primary: { usedPercent: 100, resetsAt: reset } }
+        : projected };
+    };
+    const limit = await readRemoteAccountUsageLimit({ deviceId: 'remote', family,
+      providerId: family === 'claude' ? 'anthropic' : 'openai', agentKind: family === 'claude' ? 'claude-code' : 'codex' }, invoke);
+    expect(limit).toEqual({ limited: true, resetAtMs: reset * 1000 });
+  });
+
+  it.each(['codex', 'claude-code', 'pi'])('reads the pinned native account reset time for remote %s', async agentKind => {
+    const now = Date.now();
+    const reset = now / 1000 + 3600;
+    const bucket = { limitId: 'codex', limitName: null, updatedAt: now,
+      primary: { usedPercent: 100, resetsAt: reset, windowMinutes: 300 }, secondary: null };
+    const pool = vi.fn(async () => null);
+    const session = vi.fn(async () => ({ codexUsage: { appServerBuckets: { codex: bucket }, webSnapshot: bucket } }));
+    const invoke = async (_device: string, channel: string, args: unknown[]) => ({ ok: true,
+      result: await readLegacySubscriptionQuota(pool, channel, args, session) });
+    const limit = await readRemoteAccountUsageLimit({ deviceId: 'remote', family: 'codex',
+      providerId: 'openai', agentKind, sdkSessionId: 'native-task', modelId: 'chatgpt/gpt-5.5' }, invoke);
+    expect(limit).toEqual({ limited: true, resetAtMs: reset * 1000 });
+    expect(session).toHaveBeenCalledExactlyOnceWith('openai', 'native-task');
+    expect(pool).not.toHaveBeenCalled();
+  });
+
+  it('reads the executing computer and rejects an unverified named-account reply', async () => {
+    const reset = Date.now() / 1000 + 86400;
+    const invoke = vi.fn(async () => ({ ok: true, result: {
+      fiveHour: { utilization: 100, resetsAt: reset - 3600 },
+      sevenDay: { utilization: 100, resetsAt: reset }, scoped: [],
+    } }));
+    const route = { deviceId: 'remote', providerId: 'anthropic', family: 'claude' as const, agentKind: 'claude-code' };
+    expect(await readRemoteAccountUsageLimit(route, invoke)).toEqual({ limited: true, resetAtMs: reset * 1000 });
+    expect(invoke).toHaveBeenCalledWith('remote', 'maker:usage:claude-subscription', ['anthropic', true, 'default-subscription-account']);
+    expect(await readRemoteAccountUsageLimit({ ...route, providerId: 'named' }, invoke)).toBeNull();
+    expect(mocks.claude).not.toHaveBeenCalled();
+  });
+
   it('SSH 远程工作区与远程 Agent(含分享来的供应商)都用另一台机器的账号', () => {
     expect(sessionUsesOtherMachineAccount({ remoteHostId: 'host-1' })).toBe(true);
     expect(sessionUsesOtherMachineAccount({ agentDeviceId: 'device-agent' })).toBe(true);
@@ -73,6 +133,55 @@ beforeEach(() => {
 });
 
 describe('codexAccountUsageLimit', () => {
+  it.each(['pi', 'claude-code'])('automatic reset refreshes the 100%% web slot before resuming %s', async agentKind => {
+    // Integration: old WHAM quota must not strand an existing wait after app-server redemption.
+    const now = Date.now();
+    const secondary = { usedPercent: 100, windowMinutes: 10080, resetsAt: now / 1000 + 4 * 86400 };
+    let payload: CodexAccountUsagePayload = { accountId: 'account-id', secondary,
+      webSnapshot: { accountId: 'account-id', secondary } };
+    mocks.codex.mockImplementation(async () => payload);
+    let redeemed = false;
+    const webReader = createCodexAccountUsageSnapshotReader({
+      readAccessToken: async () => 'token', readAccountId: async () => 'account-id',
+      fetchWebUsageSnapshot: async () => ({ accountId: 'account-id', source: 'openai-web', secondary: { ...secondary, usedPercent: redeemed ? 0 : 100 } }),
+      recordSnapshot: async webSnapshot => { payload = { ...payload, webSnapshot }; },
+      clearSnapshot: async () => {}, readCachedSnapshot: async () => payload, now: () => now, onRefreshError: vi.fn(),
+    });
+    await webReader({ fresh: true }); // Prime the throttle with the old 100% web quota.
+    const continueSession = vi.fn(async () => 'resumed' as const);
+    let arm!: () => void;
+    const armed = new Promise<void>(resolve => { arm = resolve; });
+    const waiter = new UsageLimitAutoResume({
+      now: () => now, random: () => 0, isEligible: async () => true,
+      resolveResetAt: async () => secondary.resetsAt * 1000,
+      arm: () => true, isCurrent: () => true, cancel() {}, log() {}, continueSession,
+      setTimer: () => { arm(); return 1; }, clearTimer() {},
+    });
+    waiter.onTurnError('waiting-task', { sdkError: 'rate_limit', message: 'usage limit reached' }, 1);
+    await armed;
+    const read = async (): Promise<MobileCodexRateLimitsResult> => ({
+      account: { email: null, accountId: 'account-id', planType: 'plus' },
+      rateLimits: { secondary: { ...secondary, usedPercent: redeemed ? 0 : 100 } }, rateLimitsByLimitId: null,
+      rateLimitResetCredits: { availableCount: redeemed ? 0 : 1, credits: [] },
+      resetOffer: { idempotencyKey: 'key', validUntil: now + 60_000, expiresAt: secondary.resetsAt },
+      autoUse: { accountKey: 'account', settings: { ...DEFAULT_CODEX_RESET_AUTO_USE, enabled: true }, customized: true, lastUsedAt: null },
+    });
+    const engine = new CodexResetAutoUse({
+      scope: () => 'owner', now: () => now, read, authorized: () => true, record: async () => {}, warn: vi.fn(),
+      consume: async () => {
+        redeemed = true;
+        expect((await readAccountUsageLimit(agentKind, 'openai'))?.limited).toBe(true);
+        return { outcome: 'reset', rateLimits: null };
+      },
+      refreshWeb: async () => { await webReader({ fresh: true }); },
+      restored: async () => waiter.resumeRestored(async () => (await readAccountUsageLimit(agentKind, 'openai'))?.limited === false),
+    });
+    await engine.check('openai');
+    expect(continueSession).toHaveBeenCalledOnce();
+    expect((await readAccountUsageLimit(agentKind, 'openai'))?.limited).toBe(false);
+    waiter.dispose();
+  });
+
   const buckets = {
     codex: { limitId: 'codex', primary: { usedPercent: 40, resetsAt: RESET_5H } },
     spark: {

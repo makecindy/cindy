@@ -6,18 +6,14 @@ import type {
   MakeSourcePreparation,
 } from '../../../shared/cindyMakeDoctor';
 
-export function CindyMakeSourceDetails({
-  source,
-  latestVersion,
-  showComparison = true,
-}: {
-  source: MakeSourcePreparation;
-  latestVersion?: MakeSourceLatestVersion;
-  /** Progress and errors may occupy the status area while version facts remain visible. */
-  showComparison?: boolean;
-}) {
-  const { t } = useTranslation();
-  const unknown = t('cindyMake.source.details.unknown');
+/**
+ * Verified relationship between the personal source, local main and the online target.
+ * Shared by the plain-language summary and the technical comparison so both always agree.
+ */
+export function compareCindyMakeSource(
+  source: MakeSourcePreparation,
+  latestVersion?: MakeSourceLatestVersion,
+) {
   const { personalAhead: ahead, personalBehind: behind } = source;
   const comparison =
     !source.commit || !source.mainCommit
@@ -33,7 +29,6 @@ export function CindyMakeSourceDetails({
               : 'diverged';
   const latestChannel = latestVersion?.channel ?? source.channel;
   const latestLabel = latestChannel ?? (source.ref === 'main' ? 'dev' : 'unknown');
-  const onlineLabel = t('cindyMake.source.details.latest.' + latestLabel);
   const mainMatchesOnline =
     latestVersion?.status === 'ready' && source.mainCommit === latestVersion.commit;
   const personalIncludesMain = comparison === 'same' || comparison === 'personalAhead';
@@ -62,11 +57,51 @@ export function CindyMakeSourceDetails({
         (comparison === 'same' ||
           (ahead !== undefined && ahead < latestVersion.behind) ||
           (latestVersion.ahead === 0 && behind !== undefined && behind > 0)));
-  const personalStatus = personalIsLatest
+  const personalStatus: 'upToDate' | 'updateAvailable' | 'unverified' = personalIsLatest
     ? 'upToDate'
     : personalNeedsUpdate
       ? 'updateAvailable'
       : 'unverified';
+  return {
+    ahead,
+    behind,
+    comparison,
+    latestLabel,
+    mainMatchesOnline,
+    personalMatchesOnline,
+    personalIsLatest,
+    personalNeedsUpdate,
+    personalStatus,
+  };
+}
+
+export function CindyMakeSourceDetails({
+  source,
+  latestVersion,
+  showComparison = true,
+  announce = true,
+}: {
+  source: MakeSourcePreparation;
+  latestVersion?: MakeSourceLatestVersion;
+  /** Progress and errors may occupy the status area while version facts remain visible. */
+  showComparison?: boolean;
+  /** Off when a plain-language summary elsewhere already announces the same status. */
+  announce?: boolean;
+}) {
+  const { t } = useTranslation();
+  const unknown = t('cindyMake.source.details.unknown');
+  const {
+    ahead,
+    behind,
+    comparison,
+    latestLabel,
+    mainMatchesOnline,
+    personalMatchesOnline,
+    personalIsLatest,
+    personalNeedsUpdate,
+    personalStatus,
+  } = compareCindyMakeSource(source, latestVersion);
+  const onlineLabel = t('cindyMake.source.details.latest.' + latestLabel);
   const PersonalStatusIcon = personalIsLatest
     ? CircleCheck
     : personalNeedsUpdate
@@ -163,8 +198,10 @@ export function CindyMakeSourceDetails({
         <dt>
           <Tip text={showComparison ? personalStatusDescription : undefined}>
             <span
-              role={showComparison ? 'status' : undefined}
-              aria-label={showComparison ? `${personalName} · ${personalStatusLabel}` : undefined}
+              role={showComparison && announce ? 'status' : undefined}
+              aria-label={
+                showComparison && announce ? `${personalName} · ${personalStatusLabel}` : undefined
+              }
               tabIndex={showComparison ? 0 : undefined}
               className={`inline-flex max-w-full items-center gap-1.5 rounded-full font-medium focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--focus-ring)] ${
                 !showComparison

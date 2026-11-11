@@ -16,7 +16,7 @@ vi.mock('@/hooks/useSessionGitContext', () => ({
     prRefs: [
       { id: 'ref', owner: 'o', repo: 'r', prNumber: 1, url: 'https://github.com/o/r/pull/1' },
     ],
-    prStatuses: new Map([['o/r#1', { ok: false, reason: 'gh-missing' }]]),
+    prStatuses: new Map([['github:github.com/o/r#1', { ok: false, reason: 'gh-missing' }]]),
   }),
 }));
 afterEach(cleanup);
@@ -35,7 +35,8 @@ describe('GitHub setup UI', () => {
     await screen.findByText(`${key}.stages.preparing.title`);
     await screen.findByText(`${key}.stages.unavailable.title`);
     await screen.findByText(`${key}.done`, {}, { timeout: 2000 });
-    expect(connected).toHaveBeenCalledOnce();
+    // The connected notification runs in a passive effect after the DOM commit.
+    await waitFor(() => expect(connected).toHaveBeenCalledOnce());
   });
   it('ignores outside clicks during authorization but still allows explicit cancellation', async () => {
     const close = vi.fn();
@@ -60,7 +61,7 @@ describe('GitHub setup UI', () => {
     await waitFor(() => expect(close).toHaveBeenCalledOnce());
     expect(cancel).toHaveBeenCalledOnce();
   });
-  it('opens setup from a missing-gh PR badge without depending on a composer', async () => {
+  it('opens setup from the missing-gh PR summary without depending on a composer', async () => {
     window.electronAPI = {
       gitContext: { githubSetupStatus: async () => ({ phase: 'idle' }) },
     } as any;
@@ -71,7 +72,9 @@ describe('GitHub setup UI', () => {
     );
     fireEvent.click(screen.getByText('#1'));
     expect(await screen.findByRole('dialog')).toBeTruthy();
-    expect(screen.getByText(`${key}.install`)).toBeTruthy();
+    expect(screen.queryByText(`${key}.install`)).toBeNull();
+    fireEvent.click(screen.getByText('ccAgent.gitContext.pr.guidance.install.hint'));
+    expect(await screen.findByText(`${key}.install`)).toBeTruthy();
   });
   it('requires the connect action, shows the code and opens only GitHub device authorization', async () => {
     const start = vi.fn(async () => ({ phase: 'authorizing', userCode: 'ABCD-1234' }));

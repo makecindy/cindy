@@ -66,8 +66,11 @@ vi.mock('@/lib/logger', () => ({
 
 vi.mock('@/lib/imageRef', () => ({
   parseUserContent: vi.fn((c: string) => ({ text: c, images: [], files: [] })),
-  stringifyUserContent: vi.fn((text: string, images = [], files = []) =>
-    JSON.stringify({ text, images, files }),
+  stringifyUserContent: vi.fn(
+    (text: string, images = [], files = [], ...rest: unknown[]) => {
+      const replyQuote = rest[5];
+      return JSON.stringify({ text, images, files, ...(replyQuote ? { replyQuote } : {}) });
+    },
   ),
 }));
 
@@ -374,6 +377,11 @@ describe('renderer input queue facade', () => {
     expect(snap.queueInteractionLocks).toEqual(['drag']);
     expect(snap.queueEditLocks).toEqual(['q-1']);
     expect(snap.queueAbortPending).toBe(true);
+    // Queue menus subscribe to the lightweight view, not the full message store.
+    // The full-state assertions alone cannot catch missing lock/stop projection.
+    expect(makerChatStore.getLightSnapshot(sid)).toMatchObject({
+      queueEditLocks: ['q-1'], queueInteractionLocks: ['drag'], queueAbortPending: true,
+    });
     expect(snap.error).toBe('paused');
     expect(snap.errorRetryText).toBe('from main');
 
@@ -381,6 +389,9 @@ describe('renderer input queue facade', () => {
     // Continue 标记永久留在 renderer。
     projectionHandler?.(projection(sid));
     expect(makerChatStore.getSnapshot(sid).continuationInFlightClientId).toBeNull();
+    expect(makerChatStore.getLightSnapshot(sid)).toMatchObject({
+      queueEditLocks: [], queueInteractionLocks: [], queueAbortPending: false,
+    });
   });
 
   it('delegates queue row operations to main input intents', async () => {
@@ -415,6 +426,8 @@ describe('renderer input queue facade', () => {
     const item = queued('q-content', 'keep metadata');
     item.chatMessage.quotesEncoded = true;
     item.chatMessage.slashCommandRanges = [{ start: 0, end: 4 }];
+    const replyQuote = { clientId: 'quoted-1', role: 'assistant' as const, excerpt: 'the quoted reply' };
+    item.chatMessage.replyQuote = replyQuote;
 
     makerChatStore.initGlobalListeners();
     projectionHandler?.(projection(sid, { pendingQueue: [item] }));
@@ -452,9 +465,36 @@ describe('renderer input queue facade', () => {
         chatMessage: expect.objectContaining({
           quotesEncoded: true,
           slashCommandRanges: [{ start: 0, end: 4 }],
+          replyQuote,
         }),
       }),
     );
+    const replacement = input.updateContent.mock.calls.at(-1)?.[2] as AgentInputQueuedMessage;
+    expect(JSON.parse(replacement.persistedContent ?? '{}').replyQuote).toEqual(replyQuote);
+  });
+
+  it('keeps the model copy of a supplementary answer when its queue edit is saved untouched', async () => {
+    const sid = `reply-edit-${Math.random().toString(36).slice(2, 8)}`;
+    const nativeText = '<send_user_message_question_reply>\n[{"questionItemId":"q1","answer":"A"}]\n</send_user_message_question_reply>';
+    const readable = '> Which one?\n\nA';
+    const item = queued('question-reply:r1:abc', nativeText);
+    item.persistedContent = JSON.stringify({ text: readable, images: [], files: [] });
+    item.chatMessage.content = readable;
+    makerChatStore.initGlobalListeners();
+    projectionHandler?.(projection(sid, { pendingQueue: [item] }));
+    const draft = (text: string) => ({
+      content: { text, mentions: [], hasQuotes: false, agentReferences: [], pastedTextRanges: [], slashCommandRanges: [] },
+      files: [],
+    });
+
+    await makerChatStore.updateQueueItemContent(sid, item.clientId, draft(readable));
+    const untouched = input.updateContent.mock.calls.at(-1)?.[2] as AgentInputQueuedMessage;
+    expect(untouched.text).toBe(nativeText);
+    expect(untouched.chatMessage.content).toBe(readable);
+
+    await makerChatStore.updateQueueItemContent(sid, item.clientId, draft('> Which one?\n\nB'));
+    const edited = input.updateContent.mock.calls.at(-1)?.[2] as AgentInputQueuedMessage;
+    expect(edited.text).toBe('> Which one?\n\nB');
   });
 
   it('accepts queue attachment projections after transport materializes base64', async () => {

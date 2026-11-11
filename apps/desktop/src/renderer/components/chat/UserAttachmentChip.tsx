@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useRef, useState } from 'react';
 import { Download } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
 
@@ -18,6 +18,7 @@ import {
 import { isBrowserOpenablePath } from '../../../shared/browserOpenableExts';
 import { useChatSessionFile } from './ChatSessionFileContext';
 import { useFileChipContextMenu } from './useFileChipContextMenu';
+import { activateInlineLinkFromKeyboard, linkMenuPosition } from './linkInteraction';
 
 /**
  * UserAttachmentChip — 用户消息下方的文件附件 chip(与正文里的 `@file` 引用
@@ -41,10 +42,12 @@ export function UserAttachmentChip({
   const downloadOnly = isSafetyDowngradedAttachment(file);
   // Rules-of-hooks:两个菜单 hook/状态都无条件建,按 downloadOnly 选用其一。
   const ctxMenu = useFileChipContextMenu({
+    fileName: file.name,
     getAbsPath: () => file.path,
     canOpenInBrowser: isBrowserOpenablePath(file.path),
   });
   const [saveMenuPos, setSaveMenuPos] = useState<{ x: number; y: number } | null>(null);
+  const saveMenuTriggerRef = useRef<HTMLButtonElement | null>(null);
 
   const saveOnlyMenu = (
     <DropdownMenu
@@ -67,7 +70,17 @@ export function UserAttachmentChip({
           }}
         />
       </DropdownMenuTrigger>
-      <DropdownMenuContent align="start" sideOffset={2} onClick={(e) => e.stopPropagation()}>
+      <DropdownMenuContent
+        align="start"
+        sideOffset={2}
+        onClick={(e) => e.stopPropagation()}
+        onCloseAutoFocus={(event) => {
+          event.preventDefault();
+          if (saveMenuTriggerRef.current?.isConnected) {
+            saveMenuTriggerRef.current.focus({ preventScroll: true });
+          }
+        }}
+      >
         <DropdownMenuItem
           onClick={() => {
             setSaveMenuPos(null);
@@ -85,23 +98,35 @@ export function UserAttachmentChip({
     <>
       <button
         type="button"
+        title={file.name}
         aria-label={
           downloadOnly ? t('chat.userMessage.saveAttachmentAs', { name: file.name }) : undefined
         }
+        onKeyDown={activateInlineLinkFromKeyboard}
         onClick={async (e) => {
           if (downloadOnly) {
             await saveChatAttachmentWithToasts(sessionFileCtx, file);
             return;
           }
           const chip = e.currentTarget;
-          if (!(await shouldOpenTextLightboxForOrigin(sessionFileCtx, file.path))) return;
-          onOpenTextPreview(chip);
+          ctxMenu.onActivate(e, async () => {
+            if (!(await shouldOpenTextLightboxForOrigin(sessionFileCtx, file.path))) return;
+            onOpenTextPreview(chip);
+          });
+        }}
+        onAuxClick={(event) => {
+          if (event.button !== 1 || downloadOnly) return;
+          const chip = event.currentTarget;
+          ctxMenu.onActivate(event, async () => {
+            if (await shouldOpenTextLightboxForOrigin(sessionFileCtx, file.path)) onOpenTextPreview(chip);
+          });
         }}
         onContextMenu={(e) => {
           if (downloadOnly) {
             e.preventDefault();
             e.stopPropagation();
-            setSaveMenuPos({ x: e.clientX, y: e.clientY });
+            saveMenuTriggerRef.current = e.currentTarget;
+            setSaveMenuPos(linkMenuPosition(e));
             return;
           }
           ctxMenu.onContextMenu(e);
@@ -116,7 +141,7 @@ export function UserAttachmentChip({
           'text-[var(--msg-user-text)]',
           'hover:bg-[var(--cmd-palette-item-hover)]',
           'transition-colors cursor-pointer',
-          'max-w-[280px]',
+          'min-w-0 max-w-[min(280px,100%)]',
         )}
       >
         {downloadOnly ? (

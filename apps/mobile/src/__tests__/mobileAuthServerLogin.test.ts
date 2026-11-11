@@ -1,3 +1,4 @@
+// guard: credentials-and-local-storage.md and protocol-compatibility.md: PKCE, rotating credentials, account replacement and native login bridges must preserve their cross-file trust boundaries.
 import { readFileSync as readFileSyncRaw } from 'node:fs';
 import { resolve } from 'node:path';
 import { describe, expect, it } from 'vitest';

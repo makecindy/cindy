@@ -1,6 +1,8 @@
 import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
-import { describe, expect, it } from 'vitest';
+import { runInNewContext } from 'node:vm';
+import ts from 'typescript';
+import { describe, expect, it, vi } from 'vitest';
 
 import {
   computeLoginKeyboardShift,
@@ -16,7 +18,7 @@ import {
  * PR4b 键盘契约参数化单测(Step 5b.1 冻结向量;SC-7 slice pr4b keyboard 行)。
  * U-8b 硬标准:每例断言「当前输入框 + 主按钮完整可见」(clamped-fallback 除外,
  * 该模式按定义回退窄窗弹性规则);U-11=B:Android 悬浮键盘显式例外。
- * 纯函数直测(判定引擎零 RN)+ hook/页面接线走读源码断言(仓内既有双轨形态)。
+ * 纯函数直测 + 真 hook 事件回调与页面坐标换算执行，不以源码字面量替代行为。
  */
 
 // 基线场景(iPhone 15 档 393×852 pt;union = 输入框顶(158)到主按钮底(380),
@@ -225,62 +227,66 @@ describe('loginKeyboard U-8b 键盘可见性硬标准(参数化冻结向量)', (
   });
 });
 
-describe('loginKeyboard 接线(hook 订阅拓扑 + 登录页测量拓扑,读源码断言)', () => {
-  const hookSource = readFileSync(
-    resolve(process.cwd(), 'src/session/useMobileKeyboardState.ts'),
-    'utf8',
-  );
-  const loginSource = readFileSync(
-    resolve(process.cwd(), 'app/(auth)/login.tsx'),
-    'utf8',
-  );
-  const stageSource = readFileSync(
-    resolve(process.cwd(), 'src/components/MobileLoginHandoffStage.tsx'),
-    'utf8',
-  );
+// Existing vectors cover the engine. These production callbacks additionally prove
+// iOS frame changes reach it and that unmount removes native subscriptions (U-8b/U-11).
+const hookAst = ts.createSourceFile('keyboard.ts', readFileSync(resolve(process.cwd(), 'src/session/useMobileKeyboardState.ts'), 'utf8'), ts.ScriptTarget.Latest, true);
+const hook = hookAst.statements.find(node => ts.isFunctionDeclaration(node) && node.name?.text === 'useLoginKeyboardRect');
+if (!hook) throw new Error('login keyboard hook missing');
+const hookCode = ts.transpileModule(hook.getText(hookAst), { compilerOptions: { module: ts.ModuleKind.CommonJS } }).outputText;
+const loginAst = ts.createSourceFile('login.tsx', readFileSync(resolve(process.cwd(), 'app/(auth)/login.tsx'), 'utf8'), ts.ScriptTarget.Latest, true, ts.ScriptKind.TSX);
+const coordinates: ts.VariableStatement[] = [];
+function findCoordinates(node: ts.Node) {
+  if (ts.isVariableStatement(node) && node.declarationList.declarations.some(decl => ts.isIdentifier(decl.name) && ['ssoOrgHistoryBottom', 'controlsUnionBottom', 'shiftResult'].includes(decl.name.text))) coordinates.push(node);
+  ts.forEachChild(node, findCoordinates);
+}
+findCoordinates(loginAst);
+if (coordinates.length !== 3) throw new Error('login keyboard coordinate block missing');
+const coordinatesCode = ts.transpileModule(coordinates.map(node => node.getText(loginAst)).join(String.fromCharCode(10)), { compilerOptions: { target: ts.ScriptTarget.ES2022 } }).outputText;
 
-  it('iOS 订阅升级(v6.7):will show/hide + keyboardWillChangeFrame,卸载全移除', () => {
-    expect(hookSource).toContain("Keyboard.addListener('keyboardWillChangeFrame'");
-    expect(hookSource).toContain("Platform.OS === 'ios' ? 'keyboardWillShow' : 'keyboardDidShow'");
-    expect(hookSource).toContain("Platform.OS === 'ios' ? 'keyboardWillHide' : 'keyboardDidHide'");
-    expect(hookSource).toContain('for (const subscription of subscriptions) subscription.remove();');
+describe('login keyboard native event and coordinate behavior', () => {
+  it.each(['ios', 'android'])('updates native keyboard rectangles and unsubscribes on %s', (platform) => {
+    let state: any = { visible: false, rect: null };
+    let cleanup: (() => void) | undefined;
+    const callbacks = new Map<string, (event: any) => void>();
+    const removes: Array<ReturnType<typeof vi.fn>> = [];
+    const exports: Record<string, any> = {};
+    runInNewContext(hookCode, {
+      exports, Platform: { OS: platform },
+      useState: () => [state, (update: any) => { state = typeof update === 'function' ? update(state) : update; }],
+      useEffect: (effect: () => (() => void)) => { cleanup = effect(); },
+      Keyboard: { addListener: (event: string, callback: (event: any) => void) => {
+        callbacks.set(event, callback);
+        const remove = vi.fn(() => callbacks.delete(event)); removes.push(remove); return { remove };
+      } },
+    });
+    exports.useLoginKeyboardRect();
+    const prefix = platform === 'ios' ? 'keyboardWill' : 'keyboardDid';
+    callbacks.get(prefix + 'Show')!({ endCoordinates: { screenX: 10, screenY: 500, width: 200, height: 300 } });
+    expect(state).toEqual({ visible: true, rect: { x: 10, y: 500, width: 200, height: 300 } });
+    if (platform === 'ios') {
+      callbacks.get('keyboardWillChangeFrame')!({ endCoordinates: { screenX: 150, screenY: 450, width: 200, height: 300 } });
+      expect(state.rect).toEqual({ x: 150, y: 450, width: 200, height: 300 });
+    } else expect(callbacks.has('keyboardWillChangeFrame')).toBe(false);
+    callbacks.get(prefix + 'Hide')!({});
+    callbacks.get('keyboardWillChangeFrame')?.({ endCoordinates: { screenX: 150, screenY: 450, width: 200, height: 300 } });
+    expect(state).toEqual({ visible: false, rect: null });
+    cleanup!();
+    expect(callbacks.size).toBe(0);
+    for (const remove of removes) expect(remove).toHaveBeenCalledOnce();
   });
 
-  it('v5 冻结测量拓扑:外层未变换 wrapper measureInWindow,内层 translate 容器施加位移', () => {
-    expect(loginSource).toContain('measureInWindow');
-    expect(loginSource).toContain('外层未变换测量 wrapper');
-    expect(loginSource).toContain('translateY: -keyboardShift');
-    expect(loginSource).toContain('computeLoginKeyboardShift');
-    // 候选层收在面板内：停靠锚恒为面板底，悬浮键盘 union 仍纳入候选层。
-    expect(loginSource).toContain(
-      'LOGIN_SSO_ORG_HISTORY.y + LOGIN_SSO_ORG_HISTORY.maxHeight',
-    );
-    expect(loginSource).toContain(
-      'panelBottomY: groupBaseline.y + loginSizes.panelHeight * groupScale',
-    );
-    expect(loginSource).toContain(
-      'height: (controlsUnionBottom - LOGIN_CONTROL.inputY) * groupScale',
-    );
-    expect(loginSource).toContain('LOGIN_CONTROL.inputY * groupScale');
-    // Android 未缩窗兜底:page 跟踪全高 + 传系统栏底(computeDockedKeyboardTop)
-    expect(loginSource).toContain('fullViewportHeight');
-    expect(loginSource).toContain('systemBarBottom: insets.bottom');
-  });
-
-  it('品牌层随键盘整体上顶(demo kb-shift 同构),纯平底锚定根 View 不动', () => {
-    expect(stageSource).toContain('keyboardShiftPx');
-    expect(stageSource).toContain('translateY: -keyboardShiftPx');
-    // 背景钉在根 View 的 backgroundColor 上,位于键盘位移层之外
-    // (源码顺序:根 View 底色声明先于位移容器;wave4 双红渐变叠层已撤,对齐 PR#104)
-    const backgroundAt = stageSource.indexOf('backgroundColor: colors.login.bgBase');
-    const shiftAt = stageSource.indexOf('translateY: -keyboardShiftPx');
-    expect(backgroundAt).toBeGreaterThan(0);
-    expect(shiftAt).toBeGreaterThan(backgroundAt);
-  });
-
-  it('AndroidManifest 键盘配置零改动(方案 B):不出现 windowSoftInputMode 自定义', () => {
-    expect(loginSource).not.toContain('windowSoftInputMode');
-    expect(hookSource).not.toContain('windowSoftInputMode');
-    expect(stageSource).not.toContain('windowSoftInputMode');
+  it.each([false, true])('includes expanded organization history in floating-keyboard avoidance (expanded=%s)', (expanded) => {
+    const keyboard = { visible: true, rect: { x: 80, y: 520, width: 220, height: 200 } };
+    const result = runInNewContext(`${coordinatesCode}
+shiftResult`, {
+      ssoOrgMode: true, ssoOrgHistoryOpen: expanded, ssoOrgHistory: ['one', 'two'],
+      LOGIN_SSO_ORG_HISTORY: { y: 120, maxHeight: 120 },
+      LOGIN_CONTROL: { x: 20, inputY: 0, width: 280, buttonY: 100, height: 20 },
+      useMemo: (compute: () => any) => compute(), computeLoginKeyboardShift,
+      groupBaseline: { x: 40, y: 500 }, loginSizes: { panelHeight: 150 }, groupScale: 1,
+      keyboard, Platform: { OS: 'ios' }, stage: { viewportWidth: 393, viewportHeight: 852 },
+      insets: { top: 59, bottom: 48 }, fullViewportHeight: 852,
+    });
+    expect(result).toEqual({ mode: 'floating-overlap', shift: expanded ? 220 : 100 });
   });
 });

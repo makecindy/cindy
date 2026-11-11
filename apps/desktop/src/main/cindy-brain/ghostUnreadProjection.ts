@@ -13,6 +13,7 @@
  */
 
 import type { InstalledGhost } from '../../shared/ghost.js';
+import { installedGhostStoragePart } from '../../shared/pluginIdentity.js';
 
 /**
  * 该意识当前是否还持有未读角标能力(资格,与启用与否无关)。
@@ -46,7 +47,7 @@ export function selectRevokedGhostUnreadIds(
   if (entries.length === 0) return [];
   if (ghosts.length === 0 && !rosterAuthoritative) return [];
   const stillDeclared = new Set(
-    ghosts.filter(ghostDeclaresBadge).map((ghost) => ghost.manifest.id),
+    ghosts.filter(ghostDeclaresBadge).map(installedGhostStoragePart),
   );
   return entries.map((entry) => entry.ghostId).filter((id) => !stillDeclared.has(id));
 }

@@ -58,7 +58,12 @@ export function patchForModelChange(
 /** IM 新会话默认设置的最小消费形状(shared/imDefaultSettings 的 ImDefaultSettings)。 */
 export interface ImDefaultsLike {
   agentKind: string;
-  agents: Partial<Record<string, { model: string; effort: string }>>;
+  agents: Partial<Record<string, {
+    model: string;
+    effort: string;
+    providerId?: string | null;
+    agentDeviceId?: string | null;
+  }>>;
 }
 
 /** 单字段的生效视图: 显式值或解析后的默认值。 */

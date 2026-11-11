@@ -184,8 +184,14 @@ gh-cli、oidc-token 或账号 vault 写入；临时 Node Secret 卡只允许其�
   卡片动作在提交前复核，插件 WebView、普通频道和通用 invoke 不能收取这些输入。
   手机使用 Expo SecureStore 固定执行电脑公钥，按 realm/membership/本手机/执行电脑分域；
   安全存储失败拒绝，已登记身份换钥直接拒绝，不能通过卡片信任或替换新钥。
-  PKCE 和 loopback 回调仍需电脑端入口；手机不能把电脑 localhost 当作手机地址。
-  旧手机继续查看/取消并通过电脑入口完成。网站 Cookie/全量 vault 同步不在范围。
+  新原生包通过独立 CindyPluginOauth 模块，在手机 127.0.0.1 上绑定原回调端口接收
+  顶层 GET 回调；provider URL、clientId、redirect_uri 和 PKCE verifier 不改写。
+  手机系统浏览器完成授权后，只把内存中的 code/error 经原 v3 密封交回执行 Host；
+  Host 完成交换与保存才显示成功。监听限定非特权固定端口、原 path/Host/state、期限和一次消费；
+  端口冲突拒绝，不抢占或换端口。localhost、IPv6、带 Origin/CORS 的回调暂不支持。
+  iOS 使用 SFSafariViewController，Android 使用 CustomTabs；短暂切出处理两步验证不清监听，
+  取消、owner 失效、超时或进程销毁清理。Android 回前台后才提交密文，不将 opened 当成功。
+  缺少原生模块的旧包明确提示更新，不回退远端电脑开浏览器。网站 Cookie/全量 vault 同步不在范围。
   新版路径尚须真实 iOS/Android 验收，单测不代表第三方实际授权成功。
 - Auth、relay、CIS、Model Access 不需要本功能的新服务接口或部署；双方客户端需升级。
 
@@ -223,3 +229,72 @@ Claude/Codex/Pi 二进制，也不能证明 Anthropic 原生缓存、真实双 D
 Node 回收、设备码/保密表单和重配回执。OS secureStorage、relay 准入及第三方 HTTP 可为
 测试替身，不能将这些结果报告为真实平台登录或线上部署完成。
 发布前应另行验证各目标平台安全存储、双 Desktop 实际登录、provider 风控/MFA/回调策略。
+
+
+## 插件页发起的配置
+
+Desktop A 的远程插件详情直接展示 B 包内原 settingsHtml、脚本与样式，不按凭证类型
+重新生成表单，也不要求作者追加 mobile 声明。A Main 使用临时内存分区承载原页面，
+复用本机 CSP 和 WebView 隔离；页面没有 Node、preload 或任意外网访问能力。
+
+资源读取、KV、Secret、OAuth、connection 和原 BroadcastChannel 经绑定页面租约的
+签名、密封 v3 exchange 交给 B 的原执行器。凭证留在 B；A 的应用 Renderer 只持有
+页面标识，不接收凭证、通用密封回复或保险库内容。原页面继续使用原保存按钮与错误
+回显；读取凭证状态时仍只返回已有的 saved/tail 与脱敏账号信息。
+
+OAuth connect 为原 endpoint 创建一次性页面动作，复用浏览器授权桥，返回原 HTTP
+结果。目录选择复用 A 已有的远程目录选择器，固定 B；选择结果交回 B 校验并授权，
+不把 A 路径交给 B。模型、任务与侧栏偏好继续使用原 Host 控件及 B 的偏好存储。
+
+租约绑定 controllerDeviceId、owner、peer 代次、物理安装实例及批准版本。普通 OAuth
+卡片的签名连接不能执行 settings 操作；另一控制端不能接管页面。关闭、切设备、
+撤权、断链或重装使旧页面失效，配置写入在原持久化边界再次检查；不重放未知写操作。
+无假任务，无凭证复制。协议及验收边界见
+[兼容合同](dev-rules/protocol-compatibility.md)与[实施记录](remote-plugin-management-implementation.md)。
+
+### 手机原配置页授权的增量能力
+
+`settings:open` 文档可选返回 `controllerAuthorization: true`，明确当前 Host 的原设置页
+`POST /oauth/:key/connect` 会携带来源控制端上下文。该标记与 `ghostOauthEndpoint` 的
+remote context 接线一同发布；通用 OAuth capabilities 存在不代表原设置页路由完整。
+手机缺少此标记时，在创建 `settings-oauth` 动作之前提示更新所选电脑，不调用旧 Host
+的 connect。配置读取、普通保存与既有账号不受影响。旧查看端忽略新增字段；无新 channel、
+无批准状态迁移、无本次新增原生指纹输入。此标记不代替原账号/实例/批准/页面租约校验。
+
+手机原配置页的 HTTP(S) 外链与新窗口请求复用同一个原生确认入口，在当前手机浏览器打开。
+包内 HTML 与锚点继续留在设置容器；协议/凭证 URL 被拒绝，目标电脑 loopback 链接明确提示
+在电脑打开，不把它当作手机本地服务。回退或切换身份后的迟到确认不打开浏览器。
+
+包内文档导航保留 Host 租约与授权上下文，但旧文档的轮询事件、排队确认和迟到答案不能进入
+新文档；旧 BroadcastChannel 订阅先释放，再建立新文档订阅。已经从 Host 消费的普通通知
+仍按当前账号、目标与租约投递，不因文档切换丢失。
+
+Host 文档可选声明 `documentIsolation: true`。支持此能力的手机在每次文档加载时先发送
+`document`（递增 epoch），再放行该文档的 fetch、频道操作和 poll。Host 为每代文档生成
+新的、不透明的 UUID 来源，仍通过现有 `mobilePageId` 字段交给插件；插件继续原样回传，
+无需改包、重装或重新批准。切代立即取消旧确认和目录选择；旧来源迟到的新请求、旧回答、
+目录校验中的迟到完成与延迟 fetch 确认均不能作用于新文档。已启动的旧 poll 也不能带走
+新文档的确认。普通通知可由已退役来源投递到仍有效的同一租约，身份和插件校验不变。
+来源映射只在内存中，每个租约最多 1024 个文档，关闭时全部释放；达到上限走现有配置
+重载入口取得新租约，不重放写操作。
+
+该能力是双端增量：旧手机忽略标记，新 Host 在未收到 document 命令前保留旧页面语义；
+新手机连接旧 Host 不发送未知命令，保留原配置功能与已有本地 epoch 保护，但未轮询到的
+旧确认隔离仍需升级 Host。无服务端、持久化或原生 fingerprint 变更。
+
+管理操作回执丢失时，手机详情显示“结果未确认”及“核实结果”入口。查询沿用原 operationId，
+期间保持写操作和配置页停用；不重放 begin，核实终态并读回快照后恢复对应操作。
+
+### 原配置页普通凭证校验
+
+可选的 `network.secrets[].check` 固定校验地址、JSON 请求模板和有限响应投影；
+只用于 user 凭证，目标同时命中 network.hosts 和该凭证 inject.hosts。
+`GET /secrets` 仅对已声明且 Host 支持的条目增加 `checkSupported:true`。
+原页 `POST /secrets/<key>/check {value}` 复用专用加密 settings fetch，
+不经过 BroadcastChannel 或通用 invoke 明文；本机 PC 复用同一 endpoint。
+Host 临时执行候选值 exchange/header 注入，不写保险库、全局 token 缓存或日志；
+只返回 `{valid,expiresAt?}`，不返回原响应。整个检查 15 秒、单实例最多 2 个并发、
+每次响应最多 64 KiB，禁止跟随重定向。取消页面/切身份后的结果作废。
+缺少 checkSupported 的旧 Host 仍可保存，作者页面应明确显示“已保存、未校验”，
+不得回退凭证 BC；保存与校验分别反馈，不能因后一步失败称前一步未保存。
+所有旧清单和既有凭证保持原样，不新增自动迁移或强制重新授权。

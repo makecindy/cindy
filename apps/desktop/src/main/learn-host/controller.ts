@@ -91,7 +91,7 @@ export interface LearnSessionLike {
   id: string;
   send(
     message: { type: 'user'; content: string },
-    opts?: { onAccepted?: () => Promise<void> | void },
+    opts?: { onAccepted?: (signal?: AbortSignal) => Promise<void> | void },
   ): Promise<LearnSessionSendResult>;
   onEvent(listener: (ev: { type: string; data?: unknown; turnContinuationId?: number }) => void): () => void;
   abort(): Promise<void>;
@@ -145,7 +145,7 @@ export interface LearnControllerDeps {
   persistUserMessage(sessionId: string, content: string): Promise<void>;
   /** 修正 sessions 行(source='learn' + acceptEdits + 继承的 providerId),失败仅 warn。 */
   backfillSessionMeta(sessionId: string): Promise<void>;
-  beforeDispatchUserTurn?: (sessionId: string) => void | Promise<void>;
+  beforeDispatchUserTurn?: (sessionId: string, signal?: AbortSignal) => void | Promise<void>;
   onUndispatchedUserTurn?: (sessionId: string) => void;
   peekPendingHandoff?: (sessionId: string) => Promise<string | null>;
   consumePendingHandoff?: (sessionId: string) => void;
@@ -593,12 +593,12 @@ export class LearnController {
       const sendResult = await session.send(
         outgoingMessage,
         {
-          onAccepted: async () => {
+          onAccepted: async (signal) => {
             await this.deps.persistUserMessage(session.id, cleanMessage).catch((err) => {
               this.deps.logger.warn('[learn] persist user message failed (non-fatal)', err);
             });
             if (this.deps.beforeDispatchUserTurn) {
-              await this.deps.beforeDispatchUserTurn(session.id);
+              await this.deps.beforeDispatchUserTurn(session.id, signal);
               baselineStarted = true;
             }
           },

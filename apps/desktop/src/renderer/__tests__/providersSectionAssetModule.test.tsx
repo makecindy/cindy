@@ -16,6 +16,7 @@ import { MemoryRouter, Route, Routes, useLocation } from 'react-router-dom';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import type { ProviderView } from '@cindy/model-providers';
+import { ProviderAccountUsageModule } from '../components/settings/ProviderAccountUsageModule';
 
 const {
   providersState,
@@ -33,6 +34,7 @@ const {
     dataOwnerId: 'account-1' as string | null,
   },
   quotaState: {
+    unlimited: false,
     usage: null as import('../hooks/useClaudeAccountUsage').ClaudeAccountUsageSnapshot | null,
   },
   creditUsageState: { available: null as string | null },
@@ -48,8 +50,6 @@ const {
   },
 }));
 
-// 供应商组一行有自己的测试(features/provider-group)；这里只验证详情页其余部分。
-vi.mock('@/features/provider-group/ProviderGroupRow', () => ({ ProviderGroupRow: () => null }));
 vi.mock('react-i18next', () => ({
   useTranslation: () => ({
     t: (key: string) => key,
@@ -85,6 +85,7 @@ vi.mock('@/hooks/useModelAccessCreditUsage', () => ({
 vi.mock('@/hooks/useClaudeAccountUsage', () => ({
   useClaudeAccountUsageResult: (enabled: boolean) => ({
     usage: enabled ? quotaState.usage : null,
+    unlimited: enabled && quotaState.unlimited,
     loading: false,
     refresh: vi.fn(),
   }),
@@ -220,6 +221,7 @@ beforeEach(() => {
   authState.dataOwnerId = 'account-1';
   creditUsageState.available = '18.42';
   quotaState.usage = null;
+  quotaState.unlimited = false;
   modelAccessState.state = 'ok';
   modelAccessState.source = 'server';
   modelAccessState.accountTier = null;
@@ -244,7 +246,74 @@ afterEach(() => {
   vi.clearAllMocks();
 });
 
+// PR #7031: settings and chip must both open the queried account's dashboard.
+// Unit/jsdom, a CN-first configuration whose usable key belongs to Global/Pi.
+it.each(['ready', 'unavailable'])('uses the queried dashboard in the settings card (%s)', async (status) => {
+  const dashboardUrl = 'https://z.ai/manage-apikey/coding-plan/personal/my-plan';
+  Object.assign(window.electronAPI, { openExternal: vi.fn(async () => undefined) });
+  Object.assign(window.electronAPI.maker, { fetchProviderAccountUsage: vi.fn(async () => ({
+    status, dashboardUrl,
+    ...(status === 'ready'
+      ? { agent: 'pi', stale: false, snapshot: { kind: 'zhipu-coding-plan-quota', noPlan: true, level: null, fiveHour: null, weekly: null, fetchedAt: 1 } }
+      : { error: 'auth' }),
+  })) });
+  render(<ProviderAccountUsageModule provider={{
+    id: 'mixed-glm', auth: { method: 'apiKey' },
+    routing: {
+      'claude-code': { upstream: 'https://open.bigmodel.cn/api/anthropic', authStrategy: 'api-key-header' },
+      pi: { upstream: 'https://api.z.ai/api/coding/paas/v4', authStrategy: 'api-key-header' },
+    },
+  } as ProviderView} />);
+  await screen.findByText(status === 'ready' ? 'Pi' : 'providerAccountUsage.error.auth');
+  fireEvent.click(screen.getByRole('button', { name: 'providerAccountUsage.zhipuCodingPlan.usage' }));
+  expect(window.electronAPI.openExternal).toHaveBeenCalledExactlyOnceWith(dashboardUrl);
+});
+
+it('keeps the manual refresh action after the first OpenCode Go quota snapshot', async () => {
+  Object.assign(window.electronAPI.maker, {
+    fetchProviderAccountUsage: vi.fn(async () => ({
+      status: 'ready',
+      stale: false,
+      snapshot: {
+        kind: 'opencode-go-quota',
+        fetchedAt: Date.now(),
+        windows: [
+          { id: 'rolling', usedPercent: 10, limited: false, resetsAt: null },
+          { id: 'weekly', usedPercent: 45, limited: false, resetsAt: null },
+          { id: 'monthly', usedPercent: 65, limited: false, resetsAt: null },
+        ],
+      },
+    })),
+  });
+  render(
+    <ProviderAccountUsageModule
+      provider={{
+        id: 'opencode-go',
+        connected: true,
+        auth: { method: 'apiKey' },
+        routing: {
+          codex: {
+            upstream: 'https://opencode.ai/zen/go/v1',
+            authStrategy: 'api-key-header',
+          },
+        },
+      } as ProviderView}
+    />,
+  );
+
+  await screen.findByText('OpenCode Go');
+  expect(screen.getByRole('button', { name: 'providerAccountUsage.kimi.refresh' })).toBeTruthy();
+});
+
 describe('ProvidersSection — Cindy AI 账户资产模块', () => {
+  it.each(['Cindy AI · 个人', 'Cindy AI · 心动', 'Cindy AI · Example Studio'])(
+    'shows the source name %s in the provider list and detail header', async (name) => {
+      providersState.providers = [{ ...makeXd(), name }];
+      renderSection();
+      expect((await screen.findAllByText(name)).length).toBeGreaterThanOrEqual(2);
+      expect(screen.queryByText('settings.providers.xd.title')).toBeNull();
+    },
+  );
   it('仅免费个人账号在 Cindy AI 名称后显示身份标签', async () => {
     modelAccessState.accountTier = 'free';
     renderSection();
@@ -365,6 +434,17 @@ describe('ProvidersSection — Cindy AI 账户资产模块', () => {
     expect(screen.getByText('USD:75')).toBeTruthy();
     expect(primaryActionState.lastEnabled).toBe(false);
     expect(screen.queryByText('billing.settings.topupCard.action')).toBeNull();
+  });
+
+  it('shows no personal limit rather than an unavailable quota for an enterprise', async () => {
+    authState.user = { membershipKind: 'org' };
+    quotaState.unlimited = true;
+    renderSection();
+    expect(await screen.findByText('settings.providers.xd.asset.noPersonalLimit')).toBeTruthy();
+    expect(screen.queryByText('settings.providers.xd.asset.unavailable')).toBeNull();
+    expect(screen.getByText('settings.providers.xd.asset.refresh')).toBeTruthy();
+    expect(screen.queryByText('billing.balance.title')).toBeNull();
+    expect(primaryActionState.lastEnabled).toBe(false);
   });
 
   it('local 会话(未登录云账号):同样不渲染', async () => {

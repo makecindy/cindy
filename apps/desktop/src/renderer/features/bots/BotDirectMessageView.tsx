@@ -1,3 +1,5 @@
+import { copyChatSelection } from '@/components/chat/chatSelectionClipboard';
+import { forwardedRequestDisplayText } from '@cindy/maker-shared/message-source';
 import { Button } from '@/components/ui/button';
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { ArrowLeftRight, CircleAlert, LockKeyhole } from 'lucide-react';
@@ -7,10 +9,10 @@ import { useLocation, useNavigate, useParams } from 'react-router-dom';
 import { makerApiForDevice } from '@/lib/makerTransport';
 import { isDeviceLinkRemotePushCurrent } from '@/lib/remoteDataOwnerPushFence';
 import { Spinner } from '@/components/ui/spinner';
+import { MarkdownRenderer } from '@/components/chat/MarkdownRenderer';
 import {
   getDataOwnerGeneration,
   isDataOwnerGenerationCurrent,
-  isDataOwnerPushCurrent,
 } from '@/contexts/dataOwnerGeneration';
 import { useRegisterContentHeader } from '../feature-context';
 import type { BotDirectMessageThreadView } from '../../../shared/botDirectMessage';
@@ -54,16 +56,14 @@ export function BotDirectMessageView() {
       }
     };
     void load();
+    // A thread is read-only history; only a computer still on the older version can extend it.
     const unsubscribe = deviceId
       ? window.electronAPI.deviceLink.onRemotePush((push, stamp) => {
           if (push.deviceId !== deviceId || push.channel !== 'maker:bot-direct-message:changed'
             || !isDeviceLinkRemotePushCurrent(push, stamp)) return;
           if ((push.payload as { threadId?: string })?.threadId === threadId) void load();
         })
-      : window.electronAPI.maker.onBotDirectMessageChanged((payload, ownerStamp) => {
-          if (!isDataOwnerPushCurrent(ownerStamp) || payload.threadId !== threadId) return;
-          void load();
-        });
+      : () => {};
     const offStatus = deviceId ? window.electronAPI.deviceLink.onStatusChanged((state) => {
       if (state.status === 'online') void load();
       else requestVersion += 1;
@@ -138,7 +138,7 @@ export function BotDirectMessageView() {
   if (!thread || !botId) {
     return (
       <main className="flex h-full items-center justify-center bg-[var(--surface)] p-6">
-        <section className="w-full max-w-md rounded-[12px] border border-[var(--border-default)] bg-[var(--surface-elevated)] p-5 text-center">
+        <section className="w-full max-w-md rounded-xl border border-[var(--border-default)] bg-[var(--surface-elevated)] p-5 text-center">
           <CircleAlert size={24} className="mx-auto text-[var(--text-danger)]" aria-hidden />
           <p className="mt-3 text-13 text-[var(--text-secondary)]">
             {t('bots.directMessage.unavailable')}
@@ -153,7 +153,7 @@ export function BotDirectMessageView() {
 
   return (
     <main className="flex h-full min-w-0 flex-col overflow-hidden bg-[var(--surface)]">
-      <div className="min-h-0 flex-1 overflow-y-auto px-5 py-6">
+      <div onCopy={copyChatSelection} className="min-h-0 flex-1 overflow-y-auto px-5 py-6">
         <div className="mx-auto flex w-full max-w-[760px] flex-col gap-4">
           {thread.messages.map((message) => {
             const ownSide = message.senderBotId === botId;
@@ -171,13 +171,14 @@ export function BotDirectMessageView() {
                     {sender.name} · {formatBotMessageGroupTime(message.createdAt, i18n.language)}
                   </div>
                   <div
-                    className={`whitespace-pre-wrap break-words rounded-[12px] border px-3.5 py-2.5 text-14 leading-[1.6] text-[var(--text-primary)] ${
+                    className={`min-w-0 max-w-full break-words rounded-xl border px-3.5 py-2.5 text-14 leading-[1.6] text-[var(--text-primary)] ${
                       ownSide
                         ? 'border-[var(--msg-user-border)] bg-[var(--msg-user-bg)]'
                         : 'border-[var(--border-default)] bg-[var(--surface-chip)]'
                     }`}
                   >
-                    {message.content}
+                    {/* Teammate-authored text: rendered like chat, never with privileged links. */}
+                    <MarkdownRenderer workingDir="" content={forwardedRequestDisplayText(message.content)} allowPrivilegedLinks={false} />
                   </div>
                 </div>
                 {ownSide ? <BotAvatar bot={sender} size="sm" /> : null}

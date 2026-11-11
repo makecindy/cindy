@@ -134,6 +134,7 @@ describe.skipIf(!existsSync(PI_BINARY))('Pi device-hosted guest context files (r
         deviceHosted,
       });
       const systems: string[] = [];
+      const toolLists: string[][] = [];
       for (let turn = 0; turn < 2; turn++) {
         const start = bodies.length;
         const events: AgentEvent[] = [];
@@ -149,7 +150,15 @@ describe.skipIf(!existsSync(PI_BINARY))('Pi device-hosted guest context files (r
         const request = bodies.slice(start).find((entry) => entry.url.includes('/messages'));
         expect(request, JSON.stringify(events)).toBeDefined();
         systems.push(JSON.stringify(JSON.parse(request!.body).system));
+        toolLists.push((JSON.parse(request!.body).tools ?? []).map((tool: { name: string }) => tool.name));
       }
+      // 受邀者：模型只看到 Cindy 扩展注册的工具，Pi 自带而没被替换的(Windows 上默认开着的 powershell)不出现；
+      // 工具清单在轮次之间不变。
+      if (guest) {
+        expect(toolLists[0]).toEqual(expect.arrayContaining(['read', 'bash', 'edit', 'write', 'grep', 'find', 'ls']));
+        expect(toolLists[0]).not.toContain('powershell');
+      }
+      expect(toolLists[1]).toEqual(toolLists[0]);
       const text = systems[0]!;
       expect(text).toContain('GUEST_PROJECT_CANARY');
       expect(text).toContain('GUEST_PERSONAL_CANARY');

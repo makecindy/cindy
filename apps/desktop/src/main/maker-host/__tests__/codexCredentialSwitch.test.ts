@@ -16,6 +16,7 @@ const nativeLogin = vi.hoisted(() => ({ connected: false }));
 vi.mock('../claude-native-auth.js', () => ({ hasClaudeNativeLogin: () => nativeLogin.connected }));
 
 import {
+  codexImportedThreadModelProviderId,
   isCodexThreadModelProviderIdentityMismatch,
   prepareLocalSessionCredentialModeSwitch,
   prepareLocalCodexCredentialModeSwitch,
@@ -64,6 +65,20 @@ describe('shouldCloseSessionForCredentialSwitch codex mode', () => {
       currentModel: 'codex/gpt-5.5',
       nextModel: 'codex/gpt-5.4',
       currentCodexProxyActive: true,
+    })).toBe(false);
+  });
+
+  // 导入的外部 Codex 线程记录的是 openai，Cindy 按路由身份恢复会被拒绝（会话导入 #新导入器）。
+  it.each([
+    ['xd', 'openai/gpt-6.1-sol', 'cindy_gateway'],
+    ['xd', 'codex/gpt-5.5', 'cindy_codex'],
+    ['openai', 'gpt-5.4', 'cindy_openai'],
+  ])('tags an imported thread with the identity Cindy resumes %s %s under', (providerId, model, expected) => {
+    const identity = codexImportedThreadModelProviderId({ providerId, model });
+    expect(identity).toBe(expected);
+    expect(isCodexThreadModelProviderIdentityMismatch({ agentKind: 'codex',
+      currentProviderId: providerId, nextProviderId: providerId, currentModel: model, nextModel: model,
+      currentCodexProxyActive: true, currentCodexThreadModelProviderId: identity,
     })).toBe(false);
   });
 
@@ -735,6 +750,56 @@ describe('prepareLocalCodexCredentialModeSwitch', () => {
 
 
 describe('Codex host-scoped credential coordination', () => {
+  it('soft-closes all selected gateway hosts while preserving busy siblings and history resources', async () => {
+    const sideEffect = vi.fn(async () => undefined);
+    const closeSession = vi.fn(async (sessionId: string) => {
+      await rehydrateCloseSuppression.runOnCloseSideEffects(sessionId, sideEffect);
+    });
+    const result = await prepareLocalCodexCredentialModeSwitch({
+      hostKeys: ['local', 'local-custom-context:gateway:external-auth'],
+      maker: {
+        listActiveSessions: () => [
+          { id: 'shared', agentKind: 'codex', isTurnRunning: () => false },
+          { id: 'isolated', agentKind: 'codex', codexHostKey: 'local-custom-context:gateway:external-auth', isTurnRunning: () => false },
+          { id: 'oauth', agentKind: 'codex', codexHostKey: 'local-account:openai:oauth', isTurnRunning: () => true },
+          { id: 'remote', agentKind: 'codex', remoteHostId: 'ssh', isTurnRunning: () => true },
+        ],
+        closeSession,
+      },
+    });
+    expect(result.closedSessionIds).toEqual(['shared', 'isolated']);
+    expect(closeSession.mock.calls.map(([id]) => id)).toEqual(['shared', 'isolated']);
+    expect(sideEffect).not.toHaveBeenCalled();
+  });
+
+  it('refuses the entire key refresh before closing any selected busy host', async () => {
+    const closeSession = vi.fn(async () => undefined);
+    await expect(prepareLocalCodexCredentialModeSwitch({
+      hostKeys: ['local', 'local:external-auth'],
+      maker: {
+        listActiveSessions: () => [
+          { id: 'idle', agentKind: 'codex', codexHostKey: 'local', isTurnRunning: () => false },
+          { id: 'busy', agentKind: 'codex', codexHostKey: 'local:external-auth', isTurnRunning: () => true },
+        ],
+        closeSession,
+      },
+    })).rejects.toThrow(/busy/);
+    expect(closeSession).not.toHaveBeenCalled();
+  });
+
+  it('does not close sessions when no host uses the rotated key', async () => {
+    const closeSession = vi.fn(async () => undefined);
+    const result = await prepareLocalCodexCredentialModeSwitch({
+      hostKeys: [],
+      maker: {
+        listActiveSessions: () => [{ id: 'oauth', agentKind: 'codex', isTurnRunning: () => true }],
+        closeSession,
+      },
+    });
+    expect(result.closedSessionIds).toEqual([]);
+    expect(closeSession).not.toHaveBeenCalled();
+  });
+
   it.each(['local', 'local:external-auth'])('does not block or close a busy sibling when replacing %s', async (hostKey) => {
     const sibling = hostKey === 'local' ? 'local:external-auth' : 'local';
     const closeSession = vi.fn(async () => undefined);

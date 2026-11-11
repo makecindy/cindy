@@ -5,6 +5,23 @@ import {
   parsePluginAuthorizationResult,
 } from "../pluginAuthorization.js";
 import { parsePluginOauthRequest } from "../pluginOauth.js";
+import { parsePluginOauthHelloReply } from "../pluginOauthAuthentication.js";
+
+it.each([
+  { field: "ghostId", value: "_ns__" + "a".repeat(128) + "__p", accepted: true },
+  { field: "ghostId", value: "_ns__" + "a".repeat(128) + "__" + "p".repeat(32), accepted: true },
+  { field: "ghostId", value: "_ns__" + "a".repeat(129) + "__p", accepted: false },
+  { field: "ghostId", value: "_ns__" + "a".repeat(128) + "__" + "p".repeat(33), accepted: false },
+  { field: "ghostId", value: "p".repeat(129), accepted: false },
+  { field: "ghostId", value: "_ns__" + "a".repeat(128) + "__/p", accepted: false },
+  { field: "id", value: "_ns__" + "a".repeat(128) + "__p", accepted: false },
+  { field: "bootId", value: "_ns__" + "a".repeat(128) + "__p", accepted: false },
+])("bounds the signed OAuth $field without enlarging other identities: $accepted", ({ field, value, accepted }) => {
+  const reply = { version: 3, id: "transaction", bootId: "boot", ghostId: "p",
+    publicKey: "a".repeat(59), signature: "s".repeat(86), expiresAtMs: 1000, [field]: value };
+  if (accepted) expect(parsePluginOauthHelloReply(reply)).toEqual(reply);
+  else expect(() => parsePluginOauthHelloReply(reply)).toThrow("OAUTH_BRIDGE_UNAVAILABLE");
+});
 
 function loopback() {
   const callbackUrl = "http://127.0.0.1:45678/callback";

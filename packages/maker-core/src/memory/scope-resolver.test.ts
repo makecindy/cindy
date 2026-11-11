@@ -15,7 +15,7 @@ import { promises as fs } from 'node:fs';
 import * as os from 'node:os';
 import * as path from 'node:path';
 
-import { beforeEach, describe, expect, it } from 'vitest';
+import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 
 import {
   __clearMemoryScopeKeyCacheForTests,
@@ -301,28 +301,39 @@ describe('resolveMemoryScopeKey — fake probe 回落与缓存', () => {
 // 默认 unit tier 唯一一条真实 Git smoke (§3.1): 端到端打通「真实 git 探测 +
 // 映射」主路径。组合矩阵见 scope-resolver.git-integration.test.ts。
 describe.skipIf(!gitAvailable())('resolveMemoryScopeKey — 真实 Git smoke', () => {
-  it('linked worktree 子目录 cwd → 主仓根 + 相对子路径', async () => {
-    const tmpRoot = await fs.realpath(await fs.mkdtemp(path.join(os.tmpdir(), 'scope-resolver-')));
-    const repoRoot = path.join(tmpRoot, 'repo');
+  let tmpRoot: string | undefined;
+  let repoRoot: string;
+  let sub: string;
+
+  // 建仓与清理使用独立的 hook 预算,不占用真实探测断言的 5 秒时限。
+  beforeAll(async () => {
+    tmpRoot = await fs.realpath(await fs.mkdtemp(path.join(os.tmpdir(), 'scope-resolver-')));
+    repoRoot = path.join(tmpRoot, 'repo');
     const wt = path.join(tmpRoot, 'wt');
     const git = (args: string[], cwd: string) =>
       execFileSync('git', args, { cwd, stdio: 'ignore' });
+    await fs.mkdir(repoRoot, { recursive: true });
+    git(['init'], repoRoot);
+    git([
+      '-c', 'user.email=test@example.com',
+      '-c', 'user.name=scope-resolver-test',
+      'commit', '--allow-empty', '-m', 'init',
+    ], repoRoot);
+    git(['worktree', 'add', '-b', 'wt-branch', wt], repoRoot);
+    sub = path.join(wt, 'apps', 'a');
+    await fs.mkdir(sub, { recursive: true });
+  });
+
+  afterAll(async () => {
+    if (!tmpRoot) return;
     try {
-      await fs.mkdir(repoRoot, { recursive: true });
-      git(['init'], repoRoot);
-      git(['config', 'user.email', 'test@example.com'], repoRoot);
-      git(['config', 'user.name', 'scope-resolver-test'], repoRoot);
-      git(['commit', '--allow-empty', '-m', 'init'], repoRoot);
-      git(['worktree', 'add', '-b', 'wt-branch', wt], repoRoot);
-      const sub = path.join(wt, 'apps', 'a');
-      await fs.mkdir(sub, { recursive: true });
-      expect(await resolveMemoryScopeKey(sub)).toBe(path.join(repoRoot, 'apps', 'a'));
-    } finally {
-      try {
-        await fs.rm(tmpRoot, { recursive: true, force: true, maxRetries: 3 });
-      } catch {
-        /* Windows 上 git 只读对象偶发 EPERM — temp 目录交给 OS 清理 */
-      }
+      await fs.rm(tmpRoot, { recursive: true, force: true, maxRetries: 3 });
+    } catch {
+      /* Windows 上 git 只读对象偶发 EPERM — temp 目录交给 OS 清理 */
     }
+  });
+
+  it('linked worktree 子目录 cwd → 主仓根 + 相对子路径', async () => {
+    expect(await resolveMemoryScopeKey(sub)).toBe(path.join(repoRoot, 'apps', 'a'));
   });
 });

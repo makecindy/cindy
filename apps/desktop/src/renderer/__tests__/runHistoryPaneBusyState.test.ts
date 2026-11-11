@@ -17,6 +17,17 @@ vi.mock('@/hooks/useCCSessions', () => ({
   useCCSessions: () => ({ sessions: [] }),
 }));
 
+// This test covers run-now isolation between schedules; the Webhook panel has
+// separate component coverage and must not initialize account/chat stores here.
+vi.mock('@/features/scheduler/components/WebhookTriggerPanel', () => ({
+  WebhookTriggerPanel: () => null,
+}));
+
+// Project names come from the teammate and project stores, which are not part of this test.
+vi.mock('@/features/scheduler/hooks/useProjectLabel', () => ({
+  useProjectLabel: () => (workingDir: string) => workingDir,
+}));
+
 vi.mock('@/components/ui/confirm-dialog-provider', () => ({
   useConfirmDialog: () => ({
     confirm: vi.fn(async () => true),

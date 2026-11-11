@@ -1,4 +1,10 @@
 {
+  "stale": {
+    "since": "2026-10-18",
+    "reason": "#5929 将系统项接入五语资源并同步提取器和预览；原报告仍为 2026-09-01 快照，未对当前输入重跑 QA。",
+    "warning": "下方 ok:true 仅对应原 inputHashes，不代表当前工件已通过门 A-F。",
+    "howToClear": "在装有 qa-hifi-demo 工具链的环境跑 node <skill>/scripts/verify.mjs --demo docs/design-previews/library-extradirs-quota 并提交重新生成的 report.json。"
+  },
   "ok": true,
   "partial": false,
   "toolVersion": "qa-hifi-demo@2026-07-30-component-mode-r14",

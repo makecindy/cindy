@@ -20,7 +20,7 @@ afterEach(() => {
   vi.useRealTimers();
 });
 
-function setup() {
+function setup(instance = target) {
   const registry = new LocalDeviceCodeSessions();
   let clipboard = '';
   let current = true;
@@ -40,7 +40,7 @@ function setup() {
   const openExternal = vi.fn(async (_url: string) => {});
   const close = registry.present(
     scope,
-    target,
+    instance,
     { userCode: 'TEST-CODE', authorizeUrl: 'https://github.com/login/device', expiresAt: 61_000 },
     {
       assertCurrent: () => {
@@ -64,7 +64,7 @@ function setup() {
     stale: () => {
       current = false;
     },
-    read: () => registry.handle(scope, { ...target, operation: 'read' }),
+    read: () => registry.handle(scope, { ...instance, operation: 'read' }),
   };
 }
 
@@ -89,6 +89,14 @@ it('returns only the display projection and supports repeated copy and exact reo
   h.clear();
   expect(await h.read()).toEqual({ phase: 'completed' });
   expect(h.clipboard()).toBe('');
+});
+
+it('keeps long enterprise instance ids bound to the device-code display lease', async () => {
+  const instance = { ...target, ghostId: '_ns__' + 'a'.repeat(128) + '__cindy-github' };
+  const context = setup(instance);
+  expect(await context.read()).toMatchObject({ phase: 'ready' });
+  await context.registry.handle(scope, { ...instance, operation: 'copy' });
+  expect(context.copy).toHaveBeenCalledExactlyOnceWith('TEST-CODE');
 });
 
 it.each(['deviceId', 'ghostId', 'requestId', 'actionId'] as const)(

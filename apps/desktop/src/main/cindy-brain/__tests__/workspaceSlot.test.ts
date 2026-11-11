@@ -41,6 +41,7 @@ function makeSlot(
   let clock = 0;
   const deps: WorkspaceSlotDeps = {
     getGhost: () => workspaceGhost(),
+    getMutationTarget: () => 'original-installation',
     showDirectoryDialog: vi.fn(async () => '/Users/me/projects/demo'),
     resolveCallContext: vi.fn(() => ({ ghostId: 'ws-ghost', sessionId: 'sess-1' })),
     getSessionDirInfo: vi.fn(async () => ({
@@ -65,6 +66,130 @@ const DIR_REQ = {
   dir: '/Users/me/other/repo',
   callId: 'call-1',
 } as const;
+
+describe('workspace installed target boundary', () => {
+  it('does not grant a late selection after the plugin is disabled without a new receipt', async () => {
+    let enabled = true;
+    let finishDialog!: (directory: string) => void;
+    const service = makeService();
+    const { slot } = makeSlot({
+      getGhost: () => workspaceGhost({ enabled }),
+      showDirectoryDialog: () => new Promise<string>((resolve) => { finishDialog = resolve; }),
+    }, service);
+    const pending = slot.handleRequest('ws-ghost', PICK_REQ);
+    enabled = false;
+    finishDialog('/Users/me/projects/demo');
+    expect(await pending).toMatchObject({ ok: false, errorCode: 'CANCELLED' });
+    expect(service.findActiveSessionByWorkdir).not.toHaveBeenCalled();
+  });
+
+  it('rejects an unavailable installed target before asking for a directory', async () => {
+    const service = makeService();
+    const { slot, deps } = makeSlot({ getMutationTarget: () => null }, service);
+    expect(await slot.handleRequest('ws-ghost', PICK_REQ)).toMatchObject({ ok: false, errorCode: 'PERMISSION_DENIED' });
+    expect(deps.showDirectoryDialog).not.toHaveBeenCalled();
+    expect(service.findActiveSessionByWorkdir).not.toHaveBeenCalled();
+  });
+
+  it.each(['relocated-installation', 'replacement-source', 'new-owner', null])(
+    'cancels a late directory selection when the target becomes %s', async (nextTarget) => {
+      let target: string | null = 'original-installation';
+      let finishDialog!: (directory: string) => void;
+      const service = makeService();
+      const { slot } = makeSlot({
+        getMutationTarget: () => target,
+        showDirectoryDialog: () => new Promise<string>((resolve) => { finishDialog = resolve; }),
+      }, service);
+      const pending = slot.handleRequest('ws-ghost', { ...PICK_REQ, focus: true });
+      target = nextTarget;
+      finishDialog('/Users/me/projects/demo');
+      expect(await pending).toMatchObject({ ok: false, errorCode: 'CANCELLED' });
+      expect(service.findActiveSessionByWorkdir).not.toHaveBeenCalled();
+      expect(service.createDraftSession).not.toHaveBeenCalled();
+      expect(service.focusSession).not.toHaveBeenCalled();
+    },
+  );
+
+  it.each(['reuse', 'create'] as const)('does not %s after the target changes during lookup', async (outcome) => {
+    let target = 'original-installation';
+    const service = makeService({
+      findActiveSessionByWorkdir: vi.fn(async () => {
+        target = 'replacement-source';
+        return outcome === 'reuse' ? 'existing-session' : null;
+      }),
+    });
+    const { slot } = makeSlot({ getMutationTarget: () => target }, service);
+    expect(await slot.handleRequest('ws-ghost', { ...PICK_REQ, focus: true })).toMatchObject({ ok: false, errorCode: 'CANCELLED' });
+    expect(service.createDraftSession).not.toHaveBeenCalled();
+    expect(service.focusSession).not.toHaveBeenCalled();
+  });
+
+  it('passes the installed target guard to draft creation and refuses late focus', async () => {
+    let target = 'original-installation';
+    const service = makeService({
+      createDraftSession: vi.fn(async ({ shouldContinue }) => {
+        expect(shouldContinue?.()).toBe(true);
+        target = 'replacement-source';
+        expect(shouldContinue?.()).toBe(false);
+        return 'late-session';
+      }),
+    });
+    const { slot } = makeSlot({ getMutationTarget: () => target }, service);
+    expect(await slot.handleRequest('ws-ghost', { ...PICK_REQ, focus: true })).toMatchObject({ ok: false, errorCode: 'CANCELLED' });
+    expect(service.focusSession).not.toHaveBeenCalled();
+  });
+
+  it('rechecks the installed target when an authorized request leaves the ensure queue', async () => {
+    let secondCurrent = true;
+    let finishFirst!: (sessionId: string) => void;
+    const service = makeService({
+      createDraftSession: vi.fn(async () => 'second-session')
+        .mockImplementationOnce(() => new Promise<string>((resolve) => { finishFirst = resolve; })),
+    });
+    const { slot, deps } = makeSlot({
+      getMutationTarget: (id) => id === 'second-ghost' && !secondCurrent ? 'replacement-source' : id,
+    }, service);
+    const first = slot.handleRequest('first-ghost', PICK_REQ);
+    await vi.waitFor(() => expect(service.createDraftSession).toHaveBeenCalledOnce());
+    const second = slot.handleRequest('second-ghost', { ...PICK_REQ, focus: true });
+    await vi.waitFor(() => expect(deps.showDirectoryDialog).toHaveBeenCalledTimes(2));
+    secondCurrent = false;
+    finishFirst('first-session');
+    expect(await first).toMatchObject({ ok: true });
+    expect(await second).toMatchObject({ ok: false, errorCode: 'CANCELLED' });
+    expect(service.findActiveSessionByWorkdir).toHaveBeenCalledOnce();
+    expect(service.createDraftSession).toHaveBeenCalledOnce();
+    expect(service.focusSession).not.toHaveBeenCalled();
+  });
+
+  it.each(['stat', 'session', 'review', 'confirm'] as const)(
+    'stops a dir request when its installed target changes during %s', async (phase) => {
+      let target = 'original-installation';
+      const service = makeService({ reviewPermissionAction: vi.fn(async () => {
+        if (phase === 'review') target = 'replacement-source';
+        return { verdict: 'ask' as const };
+      }) });
+      const { slot, deps } = makeSlot({
+        getMutationTarget: () => target,
+        resolveCallContext: () => ({ ghostId: 'ws-ghost', sessionId: 'sess-1', sessionInstanceId: 'instance-1' }),
+        isInsideWorkdir: () => false,
+        statDir: vi.fn(async () => { if (phase === 'stat') target = 'replacement-source'; return 'ok' as const; }),
+        getSessionDirInfo: vi.fn(async () => {
+          if (phase === 'session') target = 'replacement-source';
+          return { workingDir: '/Users/me/projects/demo', remoteHostId: null };
+        }),
+        confirmDir: vi.fn(async () => { target = 'replacement-source'; return { ok: true as const }; }),
+      }, service);
+      expect(await slot.handleRequest('ws-ghost', { ...DIR_REQ, focus: true })).toMatchObject({ ok: false, errorCode: 'CANCELLED' });
+      expect(deps.getSessionDirInfo).toHaveBeenCalledTimes(phase === 'stat' ? 0 : 1);
+      expect(service.reviewPermissionAction).toHaveBeenCalledTimes(phase === 'stat' || phase === 'session' ? 0 : 1);
+      expect(deps.confirmDir).toHaveBeenCalledTimes(phase === 'confirm' ? 1 : 0);
+      expect(service.findActiveSessionByWorkdir).not.toHaveBeenCalled();
+      expect(service.createDraftSession).not.toHaveBeenCalled();
+      expect(service.focusSession).not.toHaveBeenCalled();
+    },
+  );
+});
 
 describe('workspaceSlot · 资格审与载荷校验', () => {
   it('未声明 workspace 能力 / 未启用 一律 PERMISSION_DENIED', async () => {
@@ -117,6 +242,7 @@ describe('workspaceSlot · pick 流(亲选即授权)', () => {
       dirAbs: '/Users/me/projects/demo',
       title: '选择项目',
       ghostId: 'ws-ghost',
+      shouldContinue: expect.any(Function),
     });
     expect(JSON.stringify(result)).not.toContain('/Users');
   });

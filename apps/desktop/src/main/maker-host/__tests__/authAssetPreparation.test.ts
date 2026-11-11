@@ -1,29 +1,88 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { PreparationCache } from '../preparation-cache.js';
+import { existsSync, mkdtempSync, mkdirSync, rmSync } from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
 
 const state = vi.hoisted(() => ({
   owner: { dataOwnerId: 'a', generation: 1, mode: 'cloud' },
   boundary: false,
   bridge: vi.fn(),
+  links: vi.fn(),
+  fingerprint: 'fp-1',
+  logs: [] as Array<{ level: string; scope: string; warning?: unknown }>,
 }));
-vi.mock('electron', () => ({ app: { getPath: () => '', isPackaged: true }, safeStorage: {} }));
+vi.mock('electron', () => ({ app: { getPath: () => '', getAppPath: () => '', isPackaged: true }, safeStorage: {} }));
 vi.mock('@cindy/maker-core', () => ({}));
+vi.mock('../../appCapabilities.js', () => ({ getAppCapabilities: () => ({ canUseCindyGateway: false }) }));
 vi.mock('../../appSessionState.js', async (original) => ({
   ...await original<typeof import('../../appSessionState.js')>(),
   getActiveAppSession: () => ({ ...state.owner }),
   isAppSessionBoundaryPending: () => state.boundary,
 }));
 vi.mock('../codex-global-plugins.js', () => ({ prepareCodexGlobalPluginsBridge: state.bridge }));
+vi.mock('../shared-global-skills.js', async (original) => ({
+  ...await original<typeof import('../shared-global-skills.js')>(),
+  prepareSharedGlobalSkillLinks: state.links,
+  sharedGlobalSkillLinksFingerprint: async () => state.fingerprint,
+}));
+vi.mock('../built-in-skills.js', async (original) => ({
+  ...await original<typeof import('../built-in-skills.js')>(),
+  resolveBundledSystemSkillsRoot: () => 'unused-bundle',
+  prepareBuiltInSkills: async () => ({ descriptors: [], projectionSafe: false, warnings: [] }),
+}));
+vi.mock('../../authBoundaryQuarantine.js', async (original) => ({
+  ...await original<typeof import('../../authBoundaryQuarantine.js')>(),
+  withSharedGlobalSkillProjectionMutation: (_owner: unknown, run: () => unknown) => run(),
+}));
+vi.mock('../../logger.js', async (original) => {
+  const record = (scope: string, level: string) => (_msg: string, meta?: { warning?: unknown }) => {
+    state.logs.push({ level, scope, warning: meta?.warning });
+  };
+  return {
+    ...await original<typeof import('../../logger.js')>(),
+    createLogger: (scope: string) => Object.fromEntries(
+      ['trace', 'debug', 'info', 'warn', 'error', 'fatal'].map((level) => [level, record(scope, level)]),
+    ),
+  };
+});
 
 import { DesktopClaudeAuthAdapter, DesktopCodexAuthAdapter } from '../auth-adapters.js';
+import { SHARED_GLOBAL_SKILL_SYNC_DISABLED_NOTICE } from '../shared-global-skills.js';
 
 beforeEach(() => {
   state.owner = { dataOwnerId: 'a', generation: 1, mode: 'cloud' };
   state.boundary = false;
   state.bridge.mockReset().mockResolvedValue({ warnings: [], routingFailures: [] });
+  state.links.mockReset();
+  state.fingerprint = 'fp-1';
+  state.logs = [];
 });
 
 describe('asset preparation boundaries', () => {
+  // Unit regression: startup must not initialize unused Codex runtime assets.
+  // Existing coverage exercised launch preparation only, not the startup entry.
+  it('reconciles existing login at startup without preparing runtime assets', async () => {
+    const root = mkdtempSync(path.join(os.tmpdir(), 'cindy-codex-lazy-assets-'));
+    const home = path.join(root, 'codex-home');
+    try {
+      const reconcile = vi.fn().mockResolvedValue(undefined);
+      const adapter = Object.assign(Object.create(DesktopCodexAuthAdapter.prototype), {
+        ensureInvalidationMarkerLoaded: vi.fn(),
+        reconcileWithSystemCodex: reconcile,
+        ensureGlobalCodexAssets: async () => { mkdirSync(home); },
+      }) as DesktopCodexAuthAdapter;
+      Object.defineProperty(adapter, 'codexHome', { value: home });
+      await adapter.warmUp();
+      expect(existsSync(home)).toBe(false);
+      expect(reconcile).toHaveBeenCalledOnce();
+      expect(await adapter.getAuthEnv({ credentialMode: 'gateway-key' })).toEqual({ CODEX_HOME: home });
+      expect(existsSync(home)).toBe(true);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
   it('rechecks plugin capability revocation and Skill projections at each launch', async () => {
     const skills = vi.fn(async () => true);
     // Avoid constructor credential reconciliation; exercise the real preparation entry points.
@@ -56,5 +115,41 @@ describe('asset preparation boundaries', () => {
     state.boundary = false; state.owner.generation++;
     await adapter.ensureSharedGlobalSkills();
     expect(prepare).toHaveBeenCalledTimes(4);
+  });
+
+  // Regression (idle CPU): the default sync opt-out and user-owned conflicting paths were
+  // returned as warnings, so the 30s completion cache never held and every agent env build
+  // re-ran the whole projection and re-logged the same lines. Unit tier, in-process fakes.
+  it('caches past persistent projection warnings, reports them once, and reruns on input changes', async () => {
+    const conflict = 'cannot link skill x from a to b: path exists and is not a managed symlink/junction';
+    const persistent = [SHARED_GLOBAL_SKILL_SYNC_DISABLED_NOTICE, conflict];
+    state.links.mockResolvedValue({ warnings: persistent, persistentWarnings: persistent });
+    const adapter = new DesktopClaudeAuthAdapter();
+    await adapter.ensureSharedGlobalSkills();
+    await adapter.ensureSharedGlobalSkills();
+    expect(state.links).toHaveBeenCalledTimes(1);
+    const reported = () => state.logs.filter((entry) => entry.scope === 'auth-adapters:asset-prep');
+    expect(reported()).toEqual([
+      { level: 'info', scope: 'auth-adapters:asset-prep', warning: SHARED_GLOBAL_SKILL_SYNC_DISABLED_NOTICE },
+      { level: 'warn', scope: 'auth-adapters:asset-prep', warning: conflict },
+    ]);
+
+    // A settings toggle or root listing change must not be hidden by the cache;
+    // the unchanged persistent set is not reported again.
+    state.fingerprint = 'fp-2';
+    await adapter.ensureSharedGlobalSkills();
+    expect(state.links).toHaveBeenCalledTimes(2);
+    expect(reported()).toHaveLength(2);
+
+    // A retryable failure still defeats the cache and is reported every run.
+    state.fingerprint = 'fp-3';
+    state.links.mockResolvedValue({ warnings: ['cannot link skill y: EACCES'], persistentWarnings: [] });
+    await adapter.ensureSharedGlobalSkills();
+    await adapter.ensureSharedGlobalSkills();
+    expect(state.links).toHaveBeenCalledTimes(4);
+    expect(reported().slice(2).map((entry) => entry.warning)).toEqual([
+      'cannot link skill y: EACCES',
+      'cannot link skill y: EACCES',
+    ]);
   });
 });

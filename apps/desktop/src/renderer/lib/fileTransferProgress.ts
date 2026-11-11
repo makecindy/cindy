@@ -1,6 +1,6 @@
 import { i18n } from '@/i18n';
 import { formatBytes } from '@/features/cc-agent/workdir-browse/lib/fileMeta';
-import { toast } from './toast';
+import { addFileTransferToast, removeFileTransferToast, updateFileTransferToast } from './fileTransferToasts';
 
 export type FileTransferProgress = {
   received: number;
@@ -69,23 +69,51 @@ export function observeFileTransferProgressText(onProgress: (text: string) => vo
   return observeFileTransferProgress((e) => onProgress(format(e)));
 }
 
-/** Same delayed, persistent loading toast for open/reveal/copy and explicit downloads. */
-export function createFileTransferToast() {
-  let id: string | null = null;
+/**
+ * Same delayed, persistent loading toast for open/reveal/copy and explicit downloads.
+ * Its Cancel button aborts the chatFetch / chatDownload started with `requestId`;
+ * callers check `cancelled` and skip the follow-up action and failure toast.
+ */
+export function createFileTransferToast(absPath: string) {
+  let cancelled = false;
+  let disposed = false;
   let text = i18n.t('chat.remoteFile.fetching');
   const progress = observeFileTransferProgressText((next) => {
     text = next;
-    if (id) toast.update(id, text);
+    updateFileTransferToast(progress.requestId, text);
   });
   const delayed = setTimeout(() => {
-    id = toast.loading(text);
+    addFileTransferToast({
+      id: progress.requestId,
+      name: absPath.split(/[\\/]/).filter(Boolean).at(-1) ?? absPath,
+      message: text,
+      variant: 'loading',
+      duration: 0,
+      createdAt: Date.now(),
+      exiting: false,
+      action: {
+        label: i18n.t('chat.remoteFile.cancelTransfer'),
+        onClick: () => {
+          if (cancelled || disposed) return;
+          cancelled = true;
+          progress.dispose();
+          removeFileTransferToast(progress.requestId);
+          void window.electronAPI.fileBrowser.chatCancel(progress.requestId).catch(() => {});
+        },
+      },
+    });
   }, 600);
   return {
     requestId: progress.requestId,
+    get cancelled() {
+      return cancelled;
+    },
     dispose() {
+      if (disposed) return;
+      disposed = true;
       clearTimeout(delayed);
       progress.dispose();
-      if (id) toast.dismiss(id);
+      removeFileTransferToast(progress.requestId);
     },
   };
 }

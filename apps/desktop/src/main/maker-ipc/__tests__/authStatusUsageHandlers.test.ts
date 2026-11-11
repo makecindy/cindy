@@ -1310,6 +1310,17 @@ describe('maker usage IPC handlers', () => {
     expect(triggerClaudeAccountUsageRefresh).toHaveBeenCalledWith(true);
   });
 
+  it('only returns authoritative quota clear to opted-in readers', async () => {
+    const harness = new IpcHarness();
+    registerMakerUsageHandlers(harness, makeUsageDeps({
+      readClaudeAccountUsageSnapshot: vi.fn(() => null),
+      readClaudeAccountQuotaClear: vi.fn(() => ({ quotaState: 'unlimited' as const })),
+      triggerClaudeAccountUsageRefresh: vi.fn().mockResolvedValue(undefined),
+    }));
+    await expect(harness.invoke(MAKER_INVOKE.USAGE_ACCOUNT, 'claude-code')).resolves.toBeNull();
+    await expect(harness.invoke(MAKER_INVOKE.USAGE_ACCOUNT, 'claude-code', 'cindy-quota-state-v1')).resolves.toEqual({ quotaState: 'unlimited' });
+  });
+
   it('refreshes a cached Gateway quota through the throttled fetcher and returns the updated value', async () => {
     const harness = new IpcHarness();
     const previous = {
@@ -1450,6 +1461,16 @@ describe('maker usage IPC handlers', () => {
     );
     expect(readReferenceModelPricing).toHaveBeenCalledOnce();
     expect(readModelPricing).not.toHaveBeenCalled();
+  });
+
+  it('routes account-bound automatic settings and rejects unknown fields', async () => {
+    const harness = new IpcHarness();
+    const setCodexResetAutoUse = vi.fn().mockResolvedValue({ saved: true });
+    registerMakerUsageHandlers(harness, makeUsageDeps({ setCodexResetAutoUse }));
+    await expect(harness.invoke(MAKER_INVOKE.USAGE_CODEX_RESET_AUTO_USE, { minimumDays: 7 }, 'account-key', 'openai')).resolves.toEqual({ saved: true });
+    expect(setCodexResetAutoUse).toHaveBeenCalledWith({ minimumDays: 7 }, 'account-key', 'openai');
+    await expect(harness.invoke(MAKER_INVOKE.USAGE_CODEX_RESET_AUTO_USE, { creditId: 'unexpected' }, 'account-key')).rejects.toMatchObject({ code: 'INVALID_PARAMS' });
+    expect(setCodexResetAutoUse).toHaveBeenCalledOnce();
   });
 
   it('reads Codex reset credits and consumes only a UUID offer key', async () => {

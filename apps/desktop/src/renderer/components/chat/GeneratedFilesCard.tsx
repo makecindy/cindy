@@ -36,7 +36,7 @@ import { FileTypeIcon } from '@/components/ui/file-type-icon';
  */
 
 import { CHAT_FOCUS_CLASS, CHAT_COLOR_TRANSITION_CLASS } from './chatChrome';
-import { memo, useEffect, useRef, useState } from 'react';
+import { memo, useEffect, useRef, useState, type ReactNode } from 'react';
 import { ChevronDown, ChevronUp, Globe2 } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
 
@@ -62,8 +62,9 @@ import { rewriteToRemoteMediaOrigin } from '../../../shared/remoteMediaUrl';
 import { isBrowserOpenablePath } from '../../../shared/browserOpenableExts';
 import { useChatSessionFile } from './ChatSessionFileContext';
 import { useFileChipContextMenu } from './useFileChipContextMenu';
+import { activateInlineLinkFromKeyboard } from './linkInteraction';
 import { ImageLightbox } from './ImageLightbox';
-import { TextLightbox } from './TextLightbox';
+import { TextLightbox } from './lazyPreviewLightboxes';
 import { ModelLightbox } from './ModelLightbox';
 import { isHtmlFilePath, openHtmlFileByPreference } from './useOpenWithMenu';
 
@@ -263,6 +264,7 @@ function GeneratedFileChip({
   const htmlWithSession = isHtmlFilePath(file.path) ? fileCtx.sessionId : undefined;
   const sidebarTargetSessionId = useSidebarTargetSessionId(htmlWithSession);
   const ctxMenu = useFileChipContextMenu({
+    fileName: file.path,
     getAbsPath: () => file.path,
     // HTML 左键看渲染结果；源码仍可从右键菜单进入。其它生成文件沿用原菜单。
     canOpenInBrowser: isBrowserOpenablePath(file.path),
@@ -352,10 +354,15 @@ function GeneratedFileChip({
   return (
     <>
       <button
+        data-chat-copy-content
         type="button"
         title={file.path}
         disabled={pending}
-        onClick={pending ? undefined : () => void open()}
+        onClick={pending ? undefined : (event) => ctxMenu.onActivate(event, open)}
+        onKeyDown={pending ? undefined : activateInlineLinkFromKeyboard}
+        onAuxClick={pending ? undefined : (event) => {
+          if (event.button === 1) ctxMenu.onActivate(event, open);
+        }}
         onContextMenu={pending ? undefined : ctxMenu.onContextMenu}
         className={cn(
           CHAT_FOCUS_CLASS,
@@ -732,6 +739,7 @@ function generatedFilesCardPropsEqual(
     turnEndMs: number | null;
     turnSealed?: boolean;
     botArtifacts?: boolean;
+    renderBotArtifacts?: (content: ReactNode, renderItemKey?: string) => ReactNode;
     onVisibilityChange?: (checkKey: string, visible: boolean) => void;
   },
   next: {
@@ -741,12 +749,14 @@ function generatedFilesCardPropsEqual(
     turnEndMs: number | null;
     turnSealed?: boolean;
     botArtifacts?: boolean;
+    renderBotArtifacts?: (content: ReactNode, renderItemKey?: string) => ReactNode;
     onVisibilityChange?: (checkKey: string, visible: boolean) => void;
   },
 ): boolean {
   return (
     prev.renderItemKey === next.renderItemKey &&
     prev.botArtifacts === next.botArtifacts &&
+    prev.renderBotArtifacts === next.renderBotArtifacts &&
     prev.onVisibilityChange === next.onVisibilityChange &&
     generatedFilesCheckKey(prev.files, prev.turnStartMs, prev.turnEndMs, prev.turnSealed) ===
       generatedFilesCheckKey(next.files, next.turnStartMs, next.turnEndMs, next.turnSealed)
@@ -760,6 +770,7 @@ export const GeneratedFilesCard = memo(function GeneratedFilesCard({
   turnEndMs,
   turnSealed = false,
   botArtifacts = false,
+  renderBotArtifacts,
   onVisibilityChange,
 }: {
   renderItemKey?: string;
@@ -769,6 +780,8 @@ export const GeneratedFilesCard = memo(function GeneratedFilesCard({
   turnSealed?: boolean;
   /** 伙伴会话专属：成果优先、辅助文件默认收起。 */
   botArtifacts?: boolean;
+  /** Wrap nonempty Bot content, including disabled cache seeds awaiting stat. */
+  renderBotArtifacts?: (content: ReactNode, renderItemKey?: string) => ReactNode;
   /** Report the same checked visibility used by the card, never candidate paths. */
   onVisibilityChange?: (checkKey: string, visible: boolean) => void;
 }) {
@@ -980,9 +993,9 @@ export const GeneratedFilesCard = memo(function GeneratedFilesCard({
     const visiblePrimary = expanded ? primary : primary.slice(0, MAX_VISIBLE_BOT_ARTIFACTS);
     const hiddenPrimaryCount = primary.length - visiblePrimary.length;
 
-    return (
+    const card = (
       <div
-        data-render-item-key={renderItemKey}
+        data-render-item-key={renderBotArtifacts ? undefined : renderItemKey}
         className="my-1 flex max-w-[680px] flex-col gap-2"
         data-testid="bot-generated-artifacts"
       >
@@ -1054,6 +1067,7 @@ export const GeneratedFilesCard = memo(function GeneratedFilesCard({
         ) : null}
       </div>
     );
+    return renderBotArtifacts ? renderBotArtifacts(card, renderItemKey) : card;
   }
 
   // 折叠(对标 Codex 的可展开产物列表):超过 MAX_VISIBLE_FILES 时只显示前

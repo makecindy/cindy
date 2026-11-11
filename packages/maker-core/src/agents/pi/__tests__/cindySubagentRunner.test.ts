@@ -218,6 +218,7 @@ async function makeFixture(options: {
   outputText?: string;
   chain?: boolean;
   approval?: boolean;
+  cacheQueries?: boolean;
   /**
    * Emit several approval requests from one prompt, the way a turn whose
    * parallel tool calls each ask before running does. The fake child only
@@ -244,6 +245,8 @@ async function makeFixture(options: {
   surviveStdinEnd?: boolean;
   /** Model a wedged runner: publish status, never consume the stop mailbox. */
   ignoreStopControl?: boolean;
+  /** Inject OS signal failures into the real runner, without faking its receipt. */
+  failChildTermination?: boolean;
   /** Runner config of a shared-user (guest) hosted session. */
   guestIsolation?: boolean;
   /**
@@ -265,6 +268,8 @@ async function makeFixture(options: {
    * permissions or mocking fs.
    */
   poisonResultPath?: boolean;
+  /** Override the per-task profile prompt, e.g. to blow the spawn argv budget. */
+  profilePrompt?: string;
 } = {}) {
   const root = await tempRoot();
   const runId = randomUUID();
@@ -278,7 +283,7 @@ async function makeFixture(options: {
   // the control mailbox. Written *into the run dir* so its argv path carries the
   // run UUID, exactly as the production runner does — that path is the identity
   // the host verifies before signalling.
-  const runnerFile = options.ignoreStopControl
+  const runnerFile = options.ignoreStopControl || options.failChildTermination
     ? path.join(runDir, 'runner.cjs')
     : await sharedRunnerFile();
   const fakePiFile = path.join(root, 'fake-pi.cjs');
@@ -292,6 +297,22 @@ async function makeFixture(options: {
   const tokensFile = path.join(root, 'tokens.jsonl');
   const pidsFile = path.join(root, 'child-pids.jsonl');
   const poisonedSessionDir = path.join(root, 'poisoned-session-dir');
+  if (options.failChildTermination) {
+    await writeFile(runnerFile, `
+const cp = require('node:child_process');
+const originalSpawn = cp.spawn;
+cp.spawn = function (...args) {
+  const child = originalSpawn(...args);
+  child.kill = function () { return false; };
+  return child;
+};
+const originalKill = process.kill.bind(process);
+process.kill = function (pid, signal) {
+  if (pid < 0) throw Object.assign(new Error('injected EPERM'), { code: 'EPERM' });
+  return originalKill(pid, signal);
+};
+` + CINDY_SUBAGENT_RUNNER_SOURCE, { mode: 0o700 });
+  }
   if (options.ignoreStopControl) {
     await writeFile(runnerFile, `
 'use strict';
@@ -383,6 +404,12 @@ fs.appendFileSync(process.env.CINDY_TEST_PI_ARGS, JSON.stringify(process.argv.sl
 if (process.env.CINDY_TEST_PI_PIDS) {
   fs.appendFileSync(process.env.CINDY_TEST_PI_PIDS, String(process.pid) + '\\n');
 }
+${options.surviveStdinEnd
+    // An orphan must outlive its runner's pipes. A prompt already delivered
+    // when the runner dies is still answered; that write fails with EPIPE and,
+    // unhandled, ends this process, so the case would race its own premise.
+    ? "process.stdout.on('error', () => {});\nprocess.stderr.on('error', () => {});"
+    : ''}
 if (process.env.CINDY_TEST_PI_TOKENS) {
   fs.appendFileSync(process.env.CINDY_TEST_PI_TOKENS, JSON.stringify(process.env.CINDY_PI_SESSION_TOKEN || null) + '\\n');
 }
@@ -407,6 +434,16 @@ let buffer = '';
 const expectedApprovals = ${JSON.stringify(approvalIds)};
 const answeredApprovals = new Set();
 let allowedApprovals = 0;
+${options.cacheQueries ? `let cacheQueryStage = 0;
+function cacheQuery(kind) {
+  const message = { role: 'user', content: [{ type: 'text', text: kind }], timestamp: 123 };
+  const key = require('node:crypto').createHash('sha256').update(JSON.stringify(message)).digest('hex');
+  const emit = event => process.stdout.write(JSON.stringify(event) + '\\n');
+  emit({ type: 'queue_update', steering: kind === 'steer' ? [kind] : [], followUp: kind === 'followUp' ? [kind] : [] });
+  emit({ type: 'queue_update', steering: [], followUp: [] });
+  emit({ type: 'message_start', message });
+  emit({ type: 'extension_ui_request', id: 'cache-query', method: 'input', title: 'cindy:cache-input', placeholder: JSON.stringify({ key, direct: false }) });
+}` : ''}
 process.stdin.setEncoding('utf8');
 process.stdin.on('data', (chunk) => {
   buffer += chunk;
@@ -421,6 +458,7 @@ process.stdin.on('data', (chunk) => {
     if (command.type === 'prompt') {
       fs.appendFileSync(process.env.CINDY_TEST_PI_PROMPTS, JSON.stringify(command.message) + '\\n');
       process.stdout.write(JSON.stringify({ type: 'response', command: 'prompt', success: true }) + '\\n');
+      ${options.cacheQueries ? `cacheQuery('steer'); continue;` : ''}
       ${approvalIds.length > 0
     ? `for (const id of expectedApprovals) {
         process.stdout.write(JSON.stringify({ type: 'extension_ui_request', id, method: ${JSON.stringify(approvalMethod)}, title: 'cindy:permission', ${approvalMethod === 'input' ? 'placeholder' : 'message'}: JSON.stringify({ toolName: 'write', input: { path: 'a.txt' } }) }) + '\\n');
@@ -431,6 +469,13 @@ process.stdin.on('data', (chunk) => {
       ${fixtureLifecycle}
       ${options.hangOnMessage ? '}' : ''}`}
     }
+    ${options.cacheQueries ? `if (command.type === 'extension_ui_response' && command.id === 'cache-query') {
+      const receipt = JSON.parse(command.value);
+      if (receipt.followUp !== (cacheQueryStage === 1)) process.exit(14);
+      cacheQueryStage++;
+      if (cacheQueryStage === 1) cacheQuery('followUp');
+      else { ${fixtureLifecycle} }
+    }` : ''}
     if (command.type === 'extension_ui_response' && expectedApprovals.includes(command.id)) {
       answeredApprovals.add(command.id);
       if (command.confirmed || command.value === 'allow') allowedApprovals += 1;
@@ -468,7 +513,7 @@ process.stdin.on('end', () => {
     version: 1,
     runId,
     taskId: 'tool-fixture',
-    parentSessionId: 'parent-fixture',
+    parentSessionId: path.basename(root),
     ...(options.runtimeOwnerId ? { runtimeOwnerId: options.runtimeOwnerId } : {}),
     ...(options.guestIsolation ? { guestIsolation: true } : {}),
     runDir,
@@ -495,7 +540,7 @@ process.stdin.on('end', () => {
       title: `scout ${index + 1}`,
       task: `task ${index + 1}`,
       tools: 'read,grep,find,ls',
-      profilePrompt: 'fixture prompt',
+      profilePrompt: options.profilePrompt ?? 'fixture prompt',
       provider: 'fixture',
       model: 'fixture-model',
       thinking: 'high',
@@ -555,8 +600,8 @@ afterEach(async () => {
 
 describe('Cindy durable PI Subagent runner', () => {
   /**
-   * result.json is an attachment, not the verdict. Nothing in the product reads
-   * it back; status.json is what the Host converges on. So a failure to write it
+   * result.json is a best-effort attachment; status.json is the primary record.
+   * Account-boundary recovery may read a valid receipt, but a failure to write it
    * must not be able to change what the run reports — the old code let the throw
    * from the success path land in the failure handler, which rewrote the state
    * to `failed` and republished, and a throw from the failure handler escaped it
@@ -596,6 +641,106 @@ describe('Cindy durable PI Subagent runner', () => {
       });
       await waitForClose(fixture.child, fixture.stderr);
     });
+  });
+
+  // #6694 integration: use the actual runner's persisted receipt, after its
+  // child and runner have exited. A hand-built JSON fixture alone cannot prove
+  // that the independent artifact has the identity required by recovery.
+  it('recovers account teardown from a real terminal receipt after status corruption', async () => {
+    const fixture = await makeFixture();
+    await waitForClose(fixture.child, fixture.stderr);
+    const files = ['result.json', 'transcript.jsonl', 'config.json'];
+    const before = await Promise.all(files.map(file => readFile(path.join(fixture.runDir, file))));
+    await writeFile(path.join(fixture.runDir, 'status.json'), Buffer.alloc(72_506));
+    // #6928 Windows CI: a cold OS inventory can exhaust its 8s budget even after
+    // the real runner exits. That probe must fail closed; this test verifies
+    // receipt recovery, not first-probe latency. Keep the production deadline
+    // and wait for positive OS evidence, as the live-orphan case below does.
+    await waitFor(async () => await stopForAccountBoundary(fixture.root, { timeoutMs: 0 }) ? true : null,
+      undefined, 'the independent process inventory to confirm the completed runner exited');
+    expect(await Promise.all(files.map(file => readFile(path.join(fixture.runDir, file)))))
+      .toEqual(before);
+  });
+
+  it.skipIf(process.platform === 'win32')('refuses a real signal receipt until the orphan child has exited', async () => {
+    // SIGTERM handlers are a POSIX path; Windows abrupt termination cannot
+    // execute this handler. Keep the actual runner's signal/result code intact.
+    const fixture = await makeFixture({ hang: true, surviveStdinEnd: true, failChildTermination: true });
+    const childPid = await waitFor(async () => {
+      const content = await readFile(fixture.pidsFile, 'utf8').catch(() => '');
+      const pid = Number(content.trim().split('\n')[0]);
+      return Number.isSafeInteger(pid) && pid > 0 ? pid : null;
+    });
+    try {
+      // CI #6768: the PID is published before the fake child's prompt output.
+      // Killing the runner in that window can make the child exit on EPIPE,
+      // invalidating the live-orphan premise. Wait until the real runner has
+      // persisted the last startup event, so no output races its pipe closing.
+      await waitFor(async () => {
+        const [run] = await listPiSubagentRuns(fixture.root);
+        return run?.state === 'running' && run.tasks[0]?.toolUses === 1 ? true : null;
+      }, undefined, 'the runner to receive the hanging child startup output');
+      fixture.child.kill('SIGTERM');
+      await waitForClose(fixture.child, fixture.stderr);
+      await waitFor(async () => readFile(fixture.stdinEndedFile, 'utf8').catch(() => null),
+        undefined, 'the orphan to observe stdin closing and remain alive');
+      const receipt = JSON.parse(await readFile(path.join(fixture.runDir, 'result.json'), 'utf8'));
+      expect(receipt.state).toBe('stopped');
+      expect(receipt.tasks[0].status).toBe('stopped');
+      expect(process.kill(childPid, 0)).toBe(true);
+      await writeFile(path.join(fixture.runDir, 'status.json'), Buffer.alloc(72_506));
+      await expect(stopForAccountBoundary(fixture.root, { timeoutMs: 0 })).resolves.toBe(false);
+      // The read-only inventory must not kill a discovered process by its PID.
+      expect(process.kill(childPid, 0)).toBe(true);
+    } finally {
+      // This PID is from our own fixture, never from a product recovery scan.
+      try { process.kill(childPid, 'SIGKILL'); } catch { /* already gone */ }
+    }
+    await waitFor(async () => await stopForAccountBoundary(fixture.root, { timeoutMs: 0 }) ? true : null,
+      undefined, 'the independent process inventory to confirm the orphan exited');
+  });
+
+  // A profile prompt long enough to blow the platform spawn command line budget
+  // must fail closed as a readable task error. Without the guard the spawn
+  // itself throws (ENAMETOOLONG / EINVAL on Windows) and the run ends with an
+  // opaque error instead of saying which argument was too long.
+  it('fails a task closed when its profile prompt exceeds the spawn argv budget', async () => {
+    // Over the budget on both platforms: 30k on Windows, 128k on POSIX.
+    const fixture = await makeFixture({
+      profilePrompt: 'profile prompt. '.repeat(process.platform === 'win32' ? 3000 : 9000),
+    });
+    const failed = await waitFor(async () => {
+      const [run] = await listPiSubagentRuns(fixture.root);
+      return run?.state === 'failed' ? run : null;
+    });
+    expect(failed.tasks[0]?.status).toBe('failed');
+    expect(failed.tasks[0]?.error).toMatch(/spawn budget/i);
+    expect(await readCommandsIfPresent(fixture.commandsFile)).toBeNull();
+  });
+
+  // 两种口径：Windows CreateProcess 上限是 32767 个 UTF-16 字符（按字节算会把中文
+  // 放大三倍、误拒），POSIX 的 ARG_MAX 按字节算（按字符算会漏检中文长提示词）。
+  it('measures argv in characters on Windows and in UTF-8 bytes on POSIX', async () => {
+    // ~4.5 万字符 ≈ 13.5 万 UTF-8 字节：字符数超 Windows 的 30k、字节数超 POSIX
+    // 的 128k，两边都该被拒。
+    const oversized = await makeFixture({
+      profilePrompt: '中文提示词'.repeat(9000),
+    });
+    const failed = await waitFor(async () => {
+      const [run] = await listPiSubagentRuns(oversized.root);
+      return run?.state === 'failed' ? run : null;
+    });
+    expect(failed.tasks[0]?.error).toMatch(/spawn budget/i);
+    expect(await readCommandsIfPresent(oversized.commandsFile)).toBeNull();
+
+    // ~1.8 万字符 ≈ 5.4 万 UTF-8 字节：两边都没超，必须照常跑完 —— 这条在
+    // Windows 上按字节估时会被误拒。
+    const fits = await makeFixture({ profilePrompt: '中文'.repeat(9000) });
+    const completed = await waitFor(async () => {
+      const [run] = await listPiSubagentRuns(fits.root);
+      return run?.state === 'completed' ? run : null;
+    });
+    expect(completed.tasks[0]?.status).toBe('completed');
   });
 
   it('uses unique exact child session ids and persists terminal output/usage', async () => {
@@ -681,9 +826,16 @@ describe('Cindy durable PI Subagent runner', () => {
   it('accepts steering while a child is backing off for automatic retry', async () => {
     const fixture = await makeFixture({ retryThenHang: true });
     try {
+      // Regression: Linux CI #7232 observed the failed attempt's status snapshot
+      // together with the later auto_retry_start transcript entry. The runner
+      // appends events immediately but batches status publication, so these two
+      // reads are not an atomic snapshot. Wait for both before asserting readiness.
+      // Existing unit coverage still uses the real runner/list/control entries
+      // and verifies that the child receives the correction; no timeout is widened.
       const retrying = await waitFor(async () => {
         const [run] = await listPiSubagentRuns(fixture.root);
-        if (run?.totalTokens !== 1 || run.state !== 'running') return null;
+        if (run?.totalTokens !== 1 || run.state !== 'running'
+          || run.tasks[0]?.resultReady !== false) return null;
         const transcript = await readFile(path.join(fixture.runDir, 'transcript.jsonl'), 'utf8');
         return transcript.includes('auto_retry_start') ? run : null;
       });
@@ -787,6 +939,45 @@ describe('Cindy durable PI Subagent runner', () => {
         },
       };
     }
+
+    it('freezes cache route rules into a resumed generation and rejects oversized artifacts', async () => {
+      const { fixture, first } = await resumableFixture();
+      const sourceFile = path.join(fixture.root, first.runId, 'pi-home', 'pi-cache-compatibility.json');
+      const rules = JSON.stringify([{ provider: 'fixture', id: 'wire', routeKey: 'a'.repeat(64) }]);
+      await writeFile(sourceFile, rules);
+      const launchRunner = vi.fn(async () => {});
+      const id = await resumePiSubagentRun(fixture.root, first.runId, 'continue', { ...resumeLaunch(fixture), runtimeSnapshot: undefined, launchRunner });
+      if (!id) throw new Error('Expected a resumed generation');
+      expect(await readFile(path.join(fixture.root, id, 'pi-home', 'pi-cache-compatibility.json'), 'utf8')).toBe(rules);
+      expect(launchRunner).toHaveBeenCalledOnce();
+      // This unlaunched queued generation would otherwise block the second attempt.
+      await rm(path.join(fixture.root, id), { recursive: true, force: true });
+      await writeFile(sourceFile, 'x'.repeat(256 * 1024 + 1));
+      await expect(resumePiSubagentRun(fixture.root, first.runId, 'continue', { ...resumeLaunch(fixture), runtimeSnapshot: undefined, launchRunner }))
+        .rejects.toThrow('cache rules escaped');
+      expect(launchRunner).toHaveBeenCalledOnce();
+    });
+
+    it.each([true, false])('keeps resumed cache rules in the current model generation (rules present: %s)', async hasRules => {
+      const { fixture, first } = await resumableFixture();
+      const rules = (endpoint: string, digest: string) => JSON.stringify([{
+        provider: 'fixture', id: 'wire', api: 'openai-completions', providerId: 'connection',
+        baseUrl: endpoint, routeKey: digest.repeat(64),
+      }]);
+      await writeFile(path.join(fixture.root, first.runId, 'pi-home', 'pi-cache-compatibility.json'), rules('https://old.invalid/v1', 'a'));
+      const currentRules = Buffer.from(rules('https://current.invalid/v1', 'b'));
+      const launch = resumeLaunch(fixture);
+      const currentModels = Buffer.from('{"providers":{"fixture":{"baseUrl":"https://current.invalid/v1"}}}');
+      const runtimeSnapshot = { ...launch.runtimeSnapshot, modelsJson: currentModels, cacheRulesJson: hasRules ? currentRules : undefined };
+      const id = await resumePiSubagentRun(fixture.root, first.runId, 'continue', {
+        ...launch, runtimeSnapshot, launchRunner: vi.fn(async () => {}),
+      });
+      if (!id) throw new Error('Expected a resumed generation');
+      await expect(readFile(path.join(fixture.root, id, 'pi-home', 'models.json'))).resolves.toEqual(currentModels);
+      const savedRules = readFile(path.join(fixture.root, id, 'pi-home', 'pi-cache-compatibility.json'));
+      if (hasRules) await expect(savedRules).resolves.toEqual(currentRules);
+      else await expect(savedRules).rejects.toMatchObject({ code: 'ENOENT' });
+    });
 
     it('refuses when a live instance already holds the claim', async () => {
       const { fixture, first } = await resumableFixture();
@@ -899,21 +1090,39 @@ describe('Cindy durable PI Subagent runner', () => {
       const claimPath = path.join(fixture.root, first.runId, 'resume.claim');
       await writeFile(claimPath, '', { mode: 0o600 });
 
-      const attempt = resumePiSubagentRun(
-        fixture.root, first.runId, 'continue', resumeLaunch(fixture),
-      );
-      // The racer completes its write inside the re-read budget. Late enough
-      // that a single-read implementation has certainly already given up on it,
-      // early enough to land before the budget expires.
-      await new Promise((resolve) => setTimeout(resolve, 250));
-      await writeFile(
-        claimPath,
-        // process.ppid is certainly alive and is not us.
-        `${JSON.stringify({ version: 1, hostPid: process.ppid, claimedAt: Date.now() })}\n`,
-        { mode: 0o600 },
-      );
+      // Freeze only the retry timers after the real runner fixture has exited.
+      // A wall-clock delay races slow Windows file I/O against the read budget.
+      vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
+      try {
+        const attempt = Promise.allSettled([
+          resumePiSubagentRun(
+            fixture.root,
+            first.runId,
+            'continue',
+            resumeLaunch(fixture),
+          ),
+        ]);
+        // Observe the failed first read before publishing the holder. A
+        // single-read implementation never schedules this retry and fails here.
+        await vi.waitFor(() => expect(vi.getTimerCount()).toBeGreaterThan(0), { interval: 10, timeout: 30_000 });
+        await writeFile(
+          claimPath,
+          // process.ppid is certainly alive and is not us.
+          `${JSON.stringify({ version: 1, hostPid: process.ppid, claimedAt: Date.now() })}\n`,
+          { mode: 0o600 },
+        );
+        await vi.runOnlyPendingTimersAsync();
 
-      await expect(attempt).rejects.toThrow(/already resuming this Subagent generation/i);
+        const [outcome] = await attempt;
+        expect(outcome.status).toBe('rejected');
+        if (outcome.status === 'rejected') {
+          expect(() => {
+            throw outcome.reason;
+          }).toThrow(/already resuming this Subagent generation/i);
+        }
+      } finally {
+        vi.useRealTimers();
+      }
       // The decisive part: no second generation was launched over that session.
       const runs = await listPiSubagentRuns(fixture.root);
       expect(runs.filter((run) => run.taskId === first.taskId)).toHaveLength(1);
@@ -1247,6 +1456,22 @@ describe('Cindy durable PI Subagent runner', () => {
     expect(failed.tasks[1]?.error).toBe('Timed out before launch.');
     const argLines = (await readFile(fixture.argsFile, 'utf8')).trim().split('\n');
     expect(argLines).toHaveLength(1);
+    await waitForClose(fixture.child, fixture.stderr);
+  });
+
+  it('answers cache provenance privately for consumed steer and followUp in the real runner', async () => {
+    const fixture = await makeFixture({ cacheQueries: true });
+    const completed = await waitFor(async () => {
+      const [run] = await listPiSubagentRuns(fixture.root);
+      return run?.state === 'completed' ? run : null;
+    });
+    expect(completed.tasks[0]?.output).toBe('fixture result');
+    expect(completed.tasks[0]?.pendingApproval).toBeUndefined();
+    const commands = (await readFile(fixture.commandsFile, 'utf8')).trim().split('\n').map(line => JSON.parse(line));
+    const replies = commands.filter(command => command.id === 'cache-query');
+    expect(replies).toHaveLength(2);
+    expect(replies.map(command => JSON.parse(command.value).followUp)).toEqual([false, true]);
+    expect(await readFile(path.join(fixture.runDir, 'transcript.jsonl'), 'utf8')).not.toContain('cindy:cache-input');
     await waitForClose(fixture.child, fixture.stderr);
   });
 
@@ -1613,7 +1838,7 @@ describe('Cindy durable PI Subagent runner', () => {
    * exercises it in full.
    */
   it.skipIf(process.platform === 'win32')('bounds control dedupe and abandoned receipts without replaying the legacy mailbox', async () => {
-    const fixture = await makeFixture({ hang: true });
+    const fixture = await makeFixture({ hang: true, timeoutMs: CONTROL_BACKLOG_TEST_TIMEOUT_MS });
     const running = await waitFor(async () => {
       const [run] = await listPiSubagentRuns(fixture.root);
       return run?.state === 'running' ? run : null;

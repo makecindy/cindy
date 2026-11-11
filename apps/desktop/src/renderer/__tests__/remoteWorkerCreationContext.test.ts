@@ -20,17 +20,31 @@ describe('remote Orca Worker creation context', () => {
     expect(selection).toContain('target.hostId');
     expect(read('components/settings/RemoteHostDetail.tsx')).toContain('loadSshSessionModelSelection(hostId)');
   });
+
+  it('writes the SSH no-effort sentinel instead of omitting the session field', () => {
+    const draft = read('features/cc-agent/NewMakerDraftRoute.tsx');
+    const start = draft.indexOf('const newSession = await createSession(');
+    const end = draft.indexOf('if (!newSession)', start);
+    expect(start).toBeGreaterThan(-1);
+    expect(end).toBeGreaterThan(start);
+    expect(draft.slice(start, end)).toContain("effort: sshEffort ?? '',");
+  });
   it('scopes capabilities, providers, and the nested model selector to the controlled device', () => {
     const popover = read('features/cc-agent/CreateWorkerPopover.tsx');
 
-    expect(popover).toContain("useAgentCapabilities('claude-code', deviceId)");
-    expect(popover).toContain("useAgentCapabilities('codex', deviceId)");
-    expect(popover).toContain('useDeviceProviders(deviceId)');
+    // #8010：能力、供应商和嵌套选择器共用宿主作用域；整机执行仍读执行电脑。
+    // 行为与实际提交 ID 由 CreateWorkerPopover.test.tsx 验证，此处保留跨文件接线约束。
+    expect(popover).toContain(
+      'const catalogDeviceId = modelCatalogKey(deviceId, executionDeviceId ? undefined : catalogHostDeviceId);',
+    );
+    expect(popover).toContain("useAgentCapabilities('claude-code', catalogDeviceId)");
+    expect(popover).toContain("useAgentCapabilities('codex', catalogDeviceId)");
+    expect(popover).toContain('useDeviceProviders(catalogDeviceId)');
     expect(popover).toContain(
       'providersUnsupported: deviceId ? remoteProviders.unsupported : false',
     );
     expect(popover).toContain('!remoteModelListBlocked');
-    expect(popover).toContain('deviceId={deviceId}');
+    expect(popover).toContain('deviceId={catalogDeviceId}');
   });
 
   it('blocks existing remote session sends while the model catalog is loading or failed', () => {

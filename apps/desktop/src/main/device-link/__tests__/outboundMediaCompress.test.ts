@@ -7,10 +7,10 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 
 const uploadLocalFile = vi.hoisted(() => vi.fn());
 const uploadBuffer = vi.hoisted(() => vi.fn());
-vi.mock('../mediaTransfer', () => ({ uploadLocalFile, uploadBuffer }));
+vi.mock('../mediaTransfer.desktop', () => ({ uploadLocalFile, uploadBuffer }));
 
 const resolveSafe = vi.hoisted(() => vi.fn());
-vi.mock('../../imageCacheStore', () => ({ resolveSafe }));
+vi.mock('../../imageCacheStore.desktop', () => ({ resolveSafe }));
 
 const compressOutboundImage = vi.hoisted(() => vi.fn());
 const mayCompressOutboundImage = vi.hoisted(() => vi.fn());
@@ -32,7 +32,7 @@ vi.mock('../../logger', () => ({
   createLogger: () => ({ info: vi.fn(), debug: vi.fn(), warn: vi.fn(), error: vi.fn() }),
 }));
 
-import { rewriteOutboundMedia } from '../outboundMedia';
+import { rewriteOutboundMedia, withPeerAttachmentUpload } from '../outboundMedia';
 import { isAttachmentOssRef } from '../../../shared/attachmentOssRef';
 
 const SHA256 = 'a'.repeat(64);
@@ -60,6 +60,19 @@ beforeEach(() => {
 });
 
 describe('base64 来源', () => {
+  // Unit regression: old coverage checked upload bytes, not the retained offline copy.
+  // A compressed send must retain the same bytes/ref before handing off its message.
+  it('retains the actual compressed upload for offline history before returning', async () => {
+    const bytes = Buffer.from([9, 9]);
+    compressOutboundImage.mockResolvedValue({ bytes, contentType: 'image/jpeg', ext: 'jpg' });
+    let retained: { source: string | Buffer; ref: string } | undefined;
+    const result = await withPeerAttachmentUpload(async () => null, () => rewriteOutboundMedia('maker:send', [
+      'session', { type: 'user', content: [{ type: 'image', base64: 'AQID', mimeType: 'image/png' }] },
+    ]), async (source, ref) => { retained = { source, ref }; });
+    const ref = (result[1] as { content: Array<{ path: string }> }).content[0].path;
+    expect(retained).toEqual({ source: bytes, ref });
+  });
+
   it('压缩命中 → uploadBuffer 收到压缩字节与压缩后的 contentType/ext', async () => {
     const compressedBytes = Buffer.from([9, 9]);
     compressOutboundImage.mockResolvedValue({

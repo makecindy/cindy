@@ -1,3 +1,8 @@
+import { readFailedImageDelivery, readToolProcessMedia, readToolProcessText } from '@cindy/maker-shared/tool-process-media';
+import { isSharedTaskPeer } from '@cindy/device-link';
+import { Button } from '@/components/ui/button';
+import { ChatVideoView } from './ChatVideoView';
+import { ChatImageView } from './ChatImageView';
 import { FileTypeIcon } from '@/components/ui/file-type-icon';
 /**
  * AgentActionRow
@@ -80,12 +85,21 @@ import { extractDisplayParam } from '@/lib/agent-actions/actionPresentation';
 import { SUPPORTED_IMAGE_EXTS, extractExt } from '@/lib/fileTypes';
 import { toLocalFileUrl, resolveToolFilePath } from '@/lib/localPathResolver';
 import { isBrowserOpenablePath } from '../../../shared/browserOpenableExts';
-import { isGhostCallToolName } from '../../../shared/ghost';
+import { isGhostCallToolName, isValidGhostId } from '../../../shared/ghost';
+import {
+  createPluginLogicalIdentity,
+  findInstalledGhostByIdentity,
+  findInstalledGhostByInstanceId,
+  resolveInstalledGhost,
+} from '../../../shared/pluginIdentity';
+import { isValidPluginNamespace } from '@cindy/plugin-protocol';
 import { shouldOpenTextLightboxForOrigin } from '@/lib/filePreview';
 import { toRemoteMediaOrigin } from '@/lib/sessionFileOrigin';
 import { rewriteToRemoteMediaOrigin } from '../../../shared/remoteMediaUrl';
 import { useInstalledGhosts } from '@/cindy-brain/useInstalledGhosts';
 import { useChatSessionFile } from './ChatSessionFileContext';
+import { renderPluginUiBody, type PluginUiMessageCandidates } from '@/cindy-brain/PluginUiContributions';
+import { isRemoteFileOrigin } from '@/lib/sessionFileOrigin';
 import {
   ACTIVITY_ROW_CHEVRON_SLOT_CLASS,
   ACTIVITY_ROW_COLOR_TRANSITION_CLASS,
@@ -93,9 +107,10 @@ import {
   ACTIVITY_ROW_RADIUS_CLASS,
 } from './activityRowChrome';
 import { ImageLightbox } from './ImageLightbox';
-import { TextLightbox } from './TextLightbox';
+import { TextLightbox } from './lazyPreviewLightboxes';
 import { ToolPayloadLightbox, type ToolPayloadMode } from './ToolPayloadLightbox';
 import { useFileChipContextMenu } from './useFileChipContextMenu';
+import { activateInlineLinkFromKeyboard } from './linkInteraction';
 import {
   formatToolResultCompactionBytes,
   parseToolResultCompactionMarker,
@@ -722,6 +737,7 @@ function buildDiffPayload(
 }
 
 export interface AgentActionRowProps {
+  pluginUi: PluginUiMessageCandidates;
   message: ChatMessage;
   toolResult?: string;
   /** 工作过程展开 / live preview 使用：仅无法识别的命令另显原文兜底。 */
@@ -733,6 +749,13 @@ export interface AgentActionRowProps {
    * isSessionStreaming 计算后传入;缺省按已完成渲染(历史消息路径)。
    */
   status?: 'running' | 'done';
+  /**
+   * Host-resolved descriptor of a remote single-line activity. Its input is not on this
+   * device, so the row never re-describes a partial input.
+   */
+  descriptorOverride?: ToolUseDescriptor;
+  /** Replaces the row's own details: a remote line opens its whole work group instead. */
+  onActivateOverride?: () => void;
 }
 
 type LightboxState =
@@ -764,19 +787,24 @@ function isImagePath(filePath: string): boolean {
 }
 
 export function AgentActionRow({
+  pluginUi,
   message,
   toolResult,
   showRawCommand = false,
   intentOverride,
   status = 'done',
+  descriptorOverride,
+  onActivateOverride,
 }: AgentActionRowProps) {
   const { t } = useTranslation();
-  const compactedToolResult = parseToolResultCompactionMarker(toolResult);
+  const processMedia = useMemo(() => readToolProcessMedia(toolResult), [toolResult]);
+  const resultText = readToolProcessText(toolResult);
+  const compactedToolResult = parseToolResultCompactionMarker(resultText);
   const displayedToolResult = compactedToolResult
     ? t('chat.toolResultCompacted', {
         size: formatToolResultCompactionBytes(compactedToolResult.originalBytes),
       })
-    : toolResult;
+    : resultText;
   // 会话文件来源:remote 时 Read 图片走远程媒体改写、文件打开走远程分流。
   const fileCtx = useChatSessionFile();
   const toolName = message.toolName ?? '';
@@ -789,7 +817,22 @@ export function AgentActionRow({
   const ghostInfo = useMemo(() => {
     if (!isGhostCallToolName(toolName) || !inp) return null;
     const gid = typeof inp.ghost_id === 'string' ? inp.ghost_id : '';
-    const hit = installedGhosts.find((g) => g.manifest.id === gid);
+    const namespace = inp.namespace;
+    const identity = isValidGhostId(gid) &&
+      (namespace === null || (typeof namespace === 'string' && isValidPluginNamespace(namespace)))
+      ? createPluginLogicalIdentity(namespace, gid)
+      : null;
+    // 裸 ID 与 main 侧一样按唯一逻辑身份解析；实例键才按物理键精确查找。
+    const bareIdResult = namespace === undefined && isValidGhostId(gid)
+      ? resolveInstalledGhost(installedGhosts, gid)
+      : null;
+    const hit = identity
+      ? findInstalledGhostByIdentity(installedGhosts, identity)
+      : bareIdResult?.status === 'unique'
+        ? bareIdResult.ghost
+        : namespace === undefined && !isValidGhostId(gid)
+          ? findInstalledGhostByInstanceId(installedGhosts, gid)
+          : undefined;
     return {
       name: hit?.manifest.name ?? (gid || 'ghost'),
       tool: typeof inp.tool === 'string' ? inp.tool : '',
@@ -797,10 +840,11 @@ export function AgentActionRow({
   }, [toolName, inp, installedGhosts]);
 
   const descriptor = useMemo(() => {
+    if (descriptorOverride) return descriptorOverride;
     const resolved = describeToolUse(toolName, inp);
     if (!intentOverride || resolved.kind !== 'command' || resolved.description) return resolved;
     return { ...resolved, intent: intentOverride };
-  }, [toolName, inp, intentOverride]);
+  }, [toolName, inp, intentOverride, descriptorOverride]);
   const isFileChange = descriptor.kind === 'fileChange';
   // command 类带模型 description 时,description 自含动词语义("查看工作区
   // 状态"),再渲染英文动词 label 会变成"Ran 查看工作区状态"的中英混排 —
@@ -921,6 +965,10 @@ export function AgentActionRow({
    *   - Read → 文稿/图片 lightbox
    */
   const onActivate = async (anchor: HTMLElement) => {
+    if (onActivateOverride) {
+      onActivateOverride();
+      return;
+    }
     const diffPayload = buildDiffPayload(descriptor, inp, asyncDiff ?? syncDiff);
     if (diffPayload) {
       triggerRef.current = anchor;
@@ -973,6 +1021,7 @@ export function AgentActionRow({
   // Claude 取 file_path，Codex 单文件 change 取目标路径 —— 模型可能给相对
   // 路径(见 onActivate 注释),菜单动作统一经 resolveToolFilePath 补成绝对路径。
   const fileChipMenu = useFileChipContextMenu({
+    fileName: chipFilePath,
     getAbsPath: () => resolveToolFilePath(chipFilePath, fileCtx.workingDir),
     canOpenInBrowser: isBrowserOpenablePath(chipFilePath),
   });
@@ -1042,23 +1091,36 @@ export function AgentActionRow({
 
   const onRowKeyDown = (e: ReactKeyboardEvent<HTMLButtonElement>) => {
     if (!chipFilePath) return;
+    if (e.key === 'Enter' || e.key === ' ') {
+      activateInlineLinkFromKeyboard(e);
+      return;
+    }
     if (e.key !== 'ContextMenu' && !(e.shiftKey && e.key === 'F10')) return;
     e.preventDefault();
     e.stopPropagation();
     const chipRect = fileChipRef.current?.getBoundingClientRect();
     const rowRect = e.currentTarget.getBoundingClientRect();
     const rect = chipRect ?? rowRect;
-    fileChipMenu.openAt(rect.left, rect.bottom + 2);
+    fileChipMenu.openAt(rect.left, rect.bottom + 2, e.currentTarget);
   };
 
   return (
     <div className="flex flex-col" data-message-client-id={message.clientId}>
       <button
         type="button"
-        onClick={(e) => void onActivate(e.currentTarget)}
+        onClick={(e) => {
+          const anchor = e.currentTarget;
+          if (chipFilePath) fileChipMenu.onActivate(e, () => onActivate(anchor));
+          else void onActivate(anchor);
+        }}
+        onAuxClick={(e) => {
+          if (e.button !== 1 || !chipFilePath) return;
+          const anchor = e.currentTarget;
+          fileChipMenu.onActivate(e, () => onActivate(anchor));
+        }}
         onContextMenu={onRowContextMenu}
         onKeyDown={onRowKeyDown}
-        aria-expanded={isInlineExpand ? expanded : undefined}
+        aria-expanded={isInlineExpand && !onActivateOverride ? expanded : undefined}
         aria-label={
           ghostInfo
             ? `${rowVerbLabel} ${ghostInfo.name} ${ghostInfo.tool}`
@@ -1121,6 +1183,14 @@ export function AgentActionRow({
           {rawCommand}
         </div>
       )}
+      {readFailedImageDelivery(resultText) && <GeneratedImageRetry imageId={readFailedImageDelivery(resultText)!} />}
+      {processMedia.length > 0 && (
+        <div className="flex min-w-0 flex-col gap-3 py-2 pl-8" data-tool-process-media="true">
+          {processMedia.map((media) => media.kind === 'image'
+            ? <ChatImageView key={media.url} src={media.url} variant="tool-output" sessionId={fileCtx.sessionId} filename={media.url.split('/').pop() ?? media.kind} />
+            : <ChatVideoView key={media.url} src={media.url} variant="tool-output" sessionId={fileCtx.sessionId} filename={media.url.split('/').pop() ?? media.kind} />)}
+        </div>
+      )}
       {chipFilePath ? fileChipMenu.menu : null}
 
       {/* v10 就地展开内容:命令类工具(Bash/Grep/Glob/WebFetch/WebSearch/...)
@@ -1129,7 +1199,10 @@ export function AgentActionRow({
           v11 (2026-04-20):背景色 + 边框对齐"用户输入气泡"
           (`--msg-user-bg` + `--msg-user-border`),与 hover 嵌入式 inline-code
           灰区分开,把就地展开视觉上提升为一个独立"卡片"。 */}
-      {isInlineExpand && expanded && (
+      {renderPluginUiBody(pluginUi.toolBody ? { position: 'tool.body', sessionId: fileCtx.sessionId, tool: toolName,
+        disabled: isRemoteFileOrigin(fileCtx.origin), plugin: message.sourcePlugin?.pluginId,
+        context: () => ({ tool: { clientId: message.clientId, name: toolName, input: message.toolInput, result: toolResult, status } }) } : undefined,
+      isInlineExpand && expanded && (
         <div
           // 行按钮本身是 select-none,这里必须显式 select-text,让用户能复制
           // grep pattern、bash command 这种关键文本。
@@ -1138,7 +1211,7 @@ export function AgentActionRow({
             'bg-[var(--msg-user-bg)]',
             'border border-[var(--msg-user-border)]',
             'font-mono text-[length:calc(var(--app-code-font-size)_-_1px)] leading-[calc(var(--app-code-font-size)_+_4px)]',
-            'text-[var(--foreground)]',
+            'text-foreground',
             'select-text cursor-text',
           )}
         >
@@ -1161,8 +1234,7 @@ export function AgentActionRow({
             </span>
           )}
         </div>
-      )}
-
+      ))}
       {/*
         tool 返回 JSON 里若带 xdt_image_url(单张) / xdt_image_urls(多张)的图片,
         不在这里渲染——MessageStream Pass 2 会把它们提取出来作为独立的
@@ -1189,4 +1261,21 @@ export function AgentActionRow({
       )}
     </div>
   );
+}
+
+function GeneratedImageRetry({ imageId }: { imageId: string }) {
+  const { t } = useTranslation();
+  const { sessionId, origin } = useChatSessionFile();
+  const [pending, setPending] = useState(false);
+  const [failed, setFailed] = useState(false);
+  return <div className="flex flex-wrap items-center gap-2 py-2 pl-8 text-13 text-muted-foreground">
+    <span role="status">{t(failed ? 'chat.imageDelivery.retryFailed' : 'chat.imageDelivery.failed')}</span>
+    {sessionId && !(origin.kind === 'device' && isSharedTaskPeer(origin.deviceId)) && <Button variant="secondary" size="sm" disabled={pending} onClick={async () => {
+      setPending(true); setFailed(false);
+      try {
+        if (origin.kind === 'device') await window.electronAPI.deviceLink.invoke(origin.deviceId, 'maker:images:retry', [sessionId, imageId]);
+        else await window.electronAPI.maker.input.retryImageDelivery(sessionId, imageId);
+      } catch { setFailed(true); } finally { setPending(false); }
+    }}>{t(pending ? 'chat.imageDelivery.retrying' : 'chat.imageDelivery.retry')}</Button>}
+  </div>;
 }

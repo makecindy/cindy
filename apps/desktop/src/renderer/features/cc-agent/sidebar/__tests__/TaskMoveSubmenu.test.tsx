@@ -118,6 +118,17 @@ it('moves a remote task to a project on its source computer using the host busin
     ]),
   );
 });
+// #7972: the current project must be disabled even when execution uses a checkout.
+// Real menu entry; old coverage used identical project/cwd, unit interaction tier.
+it('disables explicit membership rather than the execution directory', async () => {
+  await mount({ ...session, projectDir: '/source/current', workingDir: '/tmp/checkout' });
+  const current = screen.getByRole('menuitem', { name: /current\/source\/current/ });
+  expect(current.getAttribute('aria-disabled')).toBe('true');
+  fireEvent.click(current);
+  expect(h.request).not.toHaveBeenCalled();
+  expect(screen.getByRole('menuitem', { name: /another/ }).getAttribute('aria-disabled')).toBeNull();
+});
+
 it('opens the source folder picker and hides offline devices', async () => {
   await mount();
   expect(screen.queryByRole('menuitem', { name: 'A' })).toBeNull();
@@ -162,6 +173,13 @@ it.each(['bot'] as const)(
     expect(h.destination).not.toHaveBeenCalled();
   },
 );
+
+it('keeps project moves but hides cross-computer copies when the agent runs on another computer', async () => {
+  await mount({ ...session, agentDeviceId: 'C' });
+  expect(screen.getByRole('menuitem', { name: /another/ })).toBeTruthy();
+  expect(screen.queryByText('taskMove.otherComputers')).toBeNull();
+  expect(screen.queryByRole('menuitem', { name: 'B' })).toBeNull();
+});
 
 it.each(['desktop', 'shared', 'feishu'] as const)(
   'keeps cross-computer migration for a %s task',

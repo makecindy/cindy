@@ -1,3 +1,4 @@
+import { segmentTeammateWork, summarizeTeammateWork, teammateWorkSummaryText } from '@cindy/maker-shared/work-activity-projection';
 /**
  * WorkGroupBlock
  * ---------------------------------------------------------------------------
@@ -22,6 +23,8 @@
 import { CHAT_CHEVRON_TRANSITION_CLASS } from './chatChrome';
 import {
   Fragment,
+  createContext,
+  useContext,
   useCallback,
   useEffect,
   useLayoutEffect,
@@ -30,7 +33,8 @@ import {
   useState,
   type ReactNode,
 } from 'react';
-import { ChevronRight, Layers, Sparkles } from 'lucide-react';
+import { ChevronRight, Layers, Sparkles, Terminal } from 'lucide-react';
+import { TOOL_ROW_VERB_I18N_KEY, INTENT_ROW_VERB_KEY, UPDATED_VERB_I18N_KEY, FILE_CHANGE_FILES_I18N_KEY } from '../../../shared/agentActionVerbKeys';
 import { useStableTranslation as useTranslation } from '@/hooks/useStableTranslation';
 
 import { cn } from '@/lib/utils';
@@ -102,6 +106,7 @@ export function collectLiveWorkActivities(
 }
 
 export interface WorkGroupBlockProps {
+  pluginUi: import('@/cindy-brain/PluginUiContributions').PluginUiMessageCandidates;
   /** Teammates keep public execution details collapsed, including while running. */
   compact?: boolean;
   deferred?: import('@cindy/maker-shared/message-window').DeferredHistoryWork;
@@ -116,12 +121,17 @@ export interface WorkGroupBlockProps {
    *  the first activity — falling back to the first activity timestamp. */
   startedAtMs?: number;
   childItems: WorkGroupChild[];
+  /** The header hugs its text (teammate chats) instead of pinning the chevron to the far edge. */
+  fitHeader?: boolean;
+  journal?: boolean;
+  journalTitle?: ReactNode | ((elapsed: ReactNode) => ReactNode);
 }
 
-function ToolActivityRow({ activity }: { activity: ProjectedToolActivity }) {
+function ToolActivityRow({ activity, pluginUi }: { activity: ProjectedToolActivity; pluginUi: WorkGroupBlockProps['pluginUi'] }) {
   return (
     <div data-live-work-activity="tool" className="w-full min-w-0">
       <AgentActionRow
+        pluginUi={pluginUi}
         message={activity.message}
         toolResult={activity.toolResult}
         showRawCommand
@@ -207,6 +217,84 @@ function ThinkingActivityRow({ activity }: { activity: ProjectedThinkingActivity
   );
 }
 
+type HistoryWorkLine = import('@cindy/maker-shared/message-window').HistoryWorkLine;
+
+/** Remote running line: the Host already resolved the descriptor from the full input. */
+function ToolLineRow({
+  line,
+  onActivate,
+  pluginUi,
+}: {
+  line: Extract<HistoryWorkLine, { kind: 'tool' }>;
+  onActivate: () => void;
+  pluginUi: WorkGroupBlockProps['pluginUi'];
+}) {
+  const message = useMemo<ChatMessage>(
+    () => ({
+      clientId: line.key,
+      role: 'tool_use',
+      content: '',
+      toolName: line.toolName,
+      toolInput: line.ghost ? { ghost_id: line.ghost.id, tool: line.ghost.tool } : null,
+    }),
+    [line.key, line.toolName, line.ghost],
+  );
+  return (
+    <div data-live-work-activity="tool" className="w-full min-w-0">
+      <AgentActionRow
+        pluginUi={pluginUi}
+        message={message}
+        showRawCommand
+        status={line.status}
+        descriptorOverride={line.descriptor}
+        onActivateOverride={onActivate}
+      />
+    </div>
+  );
+}
+
+/** Remote running thought: only its opening is on this device; the full text opens with the group. */
+function ThinkingLineRow({
+  line,
+  onActivate,
+}: {
+  line: Extract<HistoryWorkLine, { kind: 'thinking' }>;
+  onActivate: () => void;
+}) {
+  return (
+    <button
+      type="button"
+      data-live-work-activity="thinking"
+      data-message-client-id={line.key}
+      data-scroll-disclosure-header=""
+      onClick={onActivate}
+      className={cn(
+        'group flex w-full min-w-0 cursor-pointer select-none items-center gap-1.5 px-2 py-[3px] text-left outline-none',
+        'focus-visible:ring-2 focus-visible:ring-[var(--focus-ring)]',
+        ACTIVITY_ROW_RADIUS_CLASS,
+        ACTIVITY_ROW_COLOR_TRANSITION_CLASS,
+        ACTIVITY_ROW_HOVER_SURFACE_CLASS,
+      )}
+    >
+      <span
+        aria-hidden="true"
+        className="inline-flex h-[18px] w-4 shrink-0 items-center justify-center text-[var(--msg-tool-card-chevron)]"
+      >
+        <Sparkles size={13} />
+      </span>
+      <span
+        className="min-w-0 flex-1 truncate text-14 italic text-[var(--thinking-body-text)]"
+        title={line.text}
+      >
+        <ThinkingText content={line.text} />
+      </span>
+      <span aria-hidden="true" className={ACTIVITY_ROW_CHEVRON_SLOT_CLASS}>
+        <ChevronRight size={13} />
+      </span>
+    </button>
+  );
+}
+
 /** 展开动作段里的 thinking:与 live preview 共用 ThinkingActivityRow,
  *  保证右侧三角槽同一套布局;redacted 仍走 ThinkingCard。 */
 function ExpandedThinkingRow({ message }: { message: ChatMessage }) {
@@ -228,16 +316,18 @@ function ExpandedWorkGroupChild({
   child,
   toolActivities,
   compact,
+  pluginUi,
 }: {
   child: WorkGroupChild;
   toolActivities?: ProjectedToolActivity[];
   compact?: boolean;
+  pluginUi: WorkGroupBlockProps['pluginUi'];
 }) {
   if (child.kind === 'tools') {
     return (
       <>
         {toolActivities?.map((activity) => (
-          <ToolActivityRow key={activity.key} activity={activity} />
+          <ToolActivityRow key={activity.key} activity={activity} pluginUi={pluginUi} />
         ))}
       </>
     );
@@ -248,6 +338,7 @@ function ExpandedWorkGroupChild({
   if (child.kind === 'group') {
     return (
       <WorkGroupBlock
+        pluginUi={pluginUi}
         compact={compact}
         blockId={child.blockId}
         durationMs={child.durationMs}
@@ -261,7 +352,122 @@ function ExpandedWorkGroupChild({
   return <>{child.renderNode()}</>;
 }
 
-export function WorkGroupBlock({
+export function WorkGroupBlock(props: WorkGroupBlockProps) {
+  return props.journal ? <TeammateProcessBlock {...props} /> : <ActivityWorkGroupBlock {...props} />;
+}
+
+const InspectTeammateProcess = createContext<(() => void) | null>(null);
+
+/** One turn contains ordered work segments separated by unchanged public prose. */
+function TeammateProcessBlock({ blockId, childItems, isStreaming = false, journalTitle, deferred, durationMs, startedAtMs, pluginUi }: WorkGroupBlockProps) {
+  const { t } = useTranslation();
+  const memory = useExpandedBlockMemory(blockId);
+  const manual = useExpandedBlockMemory(`${blockId}:manual`);
+  const expanded = manual.expanded ? memory.expanded : isStreaming;
+  const flattened = useMemo(() => {
+    const leaves: WorkGroupChild[] = [];
+    const loaders: NonNullable<WorkGroupBlockProps['deferred']>[] = [];
+    if (deferred) loaders.push(deferred);
+    const walk = (children: WorkGroupChild[]) => children.forEach(child => {
+      if (child.kind === 'group') {
+        if (child.deferred) loaders.push(child.deferred);
+        walk(child.childItems);
+      } else leaves.push(child);
+    });
+    walk(childItems);
+    return { leaves, loaders };
+  }, [childItems, deferred]);
+  const loadersRef = useRef(flattened.loaders);
+  loadersRef.current = flattened.loaders;
+  const loaderKey = flattened.loaders.map(loader => `${loader.owner}:${loader.key}`).join('|');
+  useLayoutEffect(() => {
+    const loaders = loadersRef.current;
+    const releases = loaders.map(loader => {
+      if (loader.setVisible) return loader.setVisible(expanded, false);
+      if (expanded && !loader.expanded) loader.toggle();
+      return undefined;
+    });
+    return () => releases.forEach(release => release?.());
+  }, [loaderKey, expanded]);
+  const segments = useMemo(() => segmentTeammateWork(flattened.leaves, child => child.kind === 'tools' || child.kind === 'thinking'), [flattened.leaves]);
+  // Detail reads also refresh while work is running. Keep their feedback in the
+  // existing heading slot so each read cannot add/remove a row and shift the chat.
+  const loadingDetails = flattened.loaders.some(loader => loader.loading);
+  const inspect = () => { memory.setExpanded(true); manual.setExpanded(true); };
+  const elapsed = <TeammateElapsedTitle running={isStreaming} durationMs={durationMs} startedAtMs={startedAtMs} />;
+  const title = typeof journalTitle === 'function' ? journalTitle(elapsed) : journalTitle || elapsed;
+  return <div className="min-w-0" data-teammate-process="">
+    <button type="button" data-scroll-disclosure-header="" aria-expanded={expanded}
+      onClick={() => { memory.setExpanded(!expanded); manual.setExpanded(true); }}
+      className="flex min-h-8 w-fit max-w-full items-center gap-2 rounded-none py-1 text-left text-14 text-[var(--text-secondary)] focus-ring">
+      <span className="inline-flex w-4 shrink-0 items-center justify-center" aria-hidden>{isStreaming || loadingDetails ? <Spinner size={14} /> : <Layers size={14} />}</span>
+      <span className="min-w-0 break-words">{title}</span>
+      <ChevronRight size={14} className={cn(CHAT_CHEVRON_TRANSITION_CLASS, 'shrink-0', expanded && 'rotate-90')} />
+    </button>
+    <Collapse open={expanded}>
+      <div className="relative ml-2 mb-2 mt-1 min-w-0 pl-4 py-0.5">
+        <span aria-hidden data-process-guide="" className="pointer-events-none absolute -left-[0.5px] top-0.5 bottom-0.5 w-px bg-[var(--agent-actions-rail)]" />
+        <InspectTeammateProcess.Provider value={inspect}><div className="flex min-w-0 flex-col gap-3 text-[var(--text-primary)]">
+          {segments.map((segment, index) => segment.kind === 'content'
+            ? <Fragment key={segment.key}>{segment.item.kind === 'rendered' && segment.item.renderNode()}</Fragment>
+            : <TeammateWorkSegment key={segment.key} blockId={`${blockId}:${segment.key}`} childItems={segment.items}
+                pluginUi={pluginUi}
+                active={isStreaming && index === segments.length - 1} onInspect={inspect} />)}
+          {flattened.loaders.filter(loader => loader.failed).map(loader => <Button key={loader.key} variant="secondary" onClick={loader.retry}>{t('chat.errorBanner.retry')}</Button>)}
+        </div></InspectTeammateProcess.Provider>
+      </div>
+    </Collapse>
+  </div>;
+}
+
+export function TeammateElapsedTitle({ running, durationMs, startedAtMs }: { running: boolean; durationMs?: number; startedAtMs?: number }) {
+  const { t } = useTranslation();
+  const [now, setNow] = useState(Date.now);
+  useEffect(() => {
+    if (!running || startedAtMs === undefined) return;
+    setNow(Date.now());
+    const timer = window.setInterval(() => setNow(Date.now()), 1000);
+    return () => window.clearInterval(timer);
+  }, [running, startedAtMs]);
+  const elapsed = running && startedAtMs !== undefined ? Math.max(0, now - startedAtMs) : durationMs;
+  return <>{elapsed !== undefined && Number.isFinite(elapsed)
+    ? t(running ? 'chat.teammateProcess.elapsed' : 'chat.teammateProcess.took', { duration: formatDuration(elapsed, t) })
+    : t(running ? 'chat.teammateProcess.processing' : 'chat.teammateProcess.worked')}</>;
+}
+
+export function TeammateWorkSegment({ blockId, childItems, active = false, onInspect, pluginUi }: {
+  blockId: string; childItems: WorkGroupChild[]; active?: boolean; onInspect?(): void;
+  pluginUi: WorkGroupBlockProps['pluginUi'];
+}) {
+  const { t } = useTranslation();
+  const memory = useExpandedBlockMemory(blockId);
+  const inspectParent = useContext(InspectTeammateProcess);
+  const projection = useMemo(() => projectWorkActivities(childItems, active, true), [childItems, active]);
+  const summary = useMemo(() => ({ ...summarizeTeammateWork(projection.activities),
+    thinking: childItems.some(child => child.kind === 'thinking') }), [projection, childItems]);
+  const title = teammateWorkSummaryText(summary, active, t, {
+    verb: key => t(TOOL_ROW_VERB_I18N_KEY[key]),
+    intentVerb: action => t(INTENT_ROW_VERB_KEY[action]),
+    updateFilesLabel: count => `${t(UPDATED_VERB_I18N_KEY)} ${t(FILE_CHANGE_FILES_I18N_KEY, { count })}`,
+  });
+  const tools = childItems.filter(child => child.kind === 'tools');
+  const icon = active && (summary.running || !summary.toolCount) ? <Spinner size={14} />
+    : summary.toolCount ? <Terminal size={14} /> : <Sparkles size={14} />;
+  const content = <><span aria-hidden className="inline-flex w-4 shrink-0 items-center justify-center">{icon}</span><span className="min-w-0 break-words">{title}</span></>;
+  return <div className="min-w-0" data-teammate-segment="">
+    {tools.length ? <button type="button" aria-expanded={memory.expanded} data-scroll-disclosure-header=""
+      onClick={() => { memory.setExpanded(value => !value); (onInspect ?? inspectParent)?.(); }}
+      className="flex min-h-7 w-fit max-w-full items-center gap-2 rounded-none text-left text-14 text-[var(--text-secondary)] focus-ring">
+      {content}<ChevronRight size={12} className={cn(CHAT_CHEVRON_TRANSITION_CLASS, 'shrink-0', memory.expanded && 'rotate-90')} />
+    </button> : <div className="flex min-h-7 items-center gap-2 text-14 text-[var(--text-secondary)]">{content}</div>}
+    {tools.length > 0 && <Collapse open={memory.expanded}><div className="mt-1 ml-6 flex min-w-0 flex-col gap-1">
+      {tools.map(child => <ExpandedWorkGroupChild key={child.key} child={child} pluginUi={pluginUi} toolActivities={projection.toolActivitiesByChildKey.get(child.key)} />)}
+    </div></Collapse>}
+  </div>;
+}
+
+function ActivityWorkGroupBlock({
+  pluginUi,
   compact = false,
   deferred,
   blockId,
@@ -269,6 +475,7 @@ export function WorkGroupBlock({
   isStreaming = false,
   startedAtMs,
   childItems,
+  fitHeader = false,
 }: WorkGroupBlockProps) {
   const { t } = useTranslation();
   const { expanded: rememberedExpanded, setExpanded } = useExpandedBlockMemory(blockId);
@@ -277,14 +484,18 @@ export function WorkGroupBlock({
     : (deferred?.expanded ?? rememberedExpanded);
   const deferredRef = useRef(deferred);
   deferredRef.current = deferred;
+  // A Host that projects running lines makes the folded preview need no detail read.
+  // Older Hosts omit them and keep the latest-five detail tail below.
+  const workLines = !compact && isStreaming ? deferred?.lines : undefined;
+  const lineMode = workLines !== undefined;
   // Register before paint. Switching back to a running task remounts this group;
   // a passive effect can lag 50–300ms behind the stream's mount, showing a
   // preview-less header until the cached tail reappears and the pinned list jumps.
-  useLayoutEffect(() => {
-    const current = deferredRef.current;
-    current?.setVisible?.(expanded, !compact && isStreaming);
-    return () => current?.setVisible?.(false, false);
-  }, [deferred?.owner, deferred?.key, expanded, isStreaming, compact]);
+  // The read tail regroups this item, so its own isStreaming must not drive the read.
+  useLayoutEffect(
+    () => deferredRef.current?.setVisible?.(expanded, !compact),
+    [deferred?.owner, deferred?.key, deferred?.livePreview, expanded, compact],
+  );
   const [elapsedMs, setElapsedMs] = useState(0);
 
   useEffect(() => {
@@ -299,10 +510,10 @@ export function WorkGroupBlock({
   // 多取一条即可判断展开是否能露出更多活动，显示仍只取最近 5 条。
   const recentActivities = useMemo(
     () =>
-      !compact && isStreaming
+      !compact && isStreaming && !lineMode
         ? projectRecentWorkActivities(childItems, true, MAX_LIVE_WORK_ACTIVITIES + 1)
         : [],
-    [childItems, isStreaming, compact],
+    [childItems, isStreaming, compact, lineMode],
   );
   const liveActivities = useMemo(
     () => recentActivities.slice(-MAX_LIVE_WORK_ACTIVITIES),
@@ -323,13 +534,18 @@ export function WorkGroupBlock({
   // 运行中预览已经等于全部内容时，折叠/展开是视觉空操作 — 组头不提供交互。
   const canToggle =
     compact ||
+    lineMode ||
     (!!deferred && !deferred.previewComplete) ||
     !isStreaming ||
     hasBeyondPreviewChild ||
     recentActivities.length > MAX_LIVE_WORK_ACTIVITIES;
   const effectiveExpanded = expanded && canToggle;
+  // Expanding keeps the running lines on screen until the detail read has rows to replace them.
+  // The body opens right away (spinner only), so the handoff swaps rows inside an open Collapse.
+  const holdLines = effectiveExpanded && deferred?.awaitingDetails === true && !!workLines?.length;
   const isLivePreviewVisible =
-    !compact && isStreaming && !effectiveExpanded && liveActivities.length > 0;
+    !compact && isStreaming && (!effectiveExpanded || holdLines)
+    && (workLines ? workLines.length > 0 : liveActivities.length > 0);
   // 完成态只计算一次完整摘要；运行态保持折叠时走上面的反向 latest-five
   // 热路径，用户主动展开后才投影全部历史。
   const activityProjection = useMemo(
@@ -396,7 +612,7 @@ export function WorkGroupBlock({
           data-scroll-disclosure-header=""
           disabled={!canToggle}
           className={cn(
-            'flex w-full items-center gap-1.5 py-[2px]',
+            fitHeader ? 'flex w-fit max-w-full items-center gap-1.5 py-[2px]' : 'flex w-full items-center gap-1.5 py-[2px]',
             'select-none',
             compact && 'min-h-8 rounded-full px-2 focus-ring hover:bg-[var(--surface-hover)]',
             'text-left',
@@ -415,7 +631,7 @@ export function WorkGroupBlock({
           <span className="text-14 text-[var(--msg-tool-card-chevron)] truncate min-w-0 translate-y-[1px]">
             {summaryText}
           </span>
-          <div className="flex-1" />
+          {!fitHeader && <div className="flex-1" />}
           {!compact && isStreaming && startedAtMs !== undefined && (
             <span className="font-mono text-12 text-[var(--msg-tool-card-chevron)]">
               {formatDuration(elapsedMs, t)}
@@ -441,13 +657,21 @@ export function WorkGroupBlock({
               'flex flex-col',
             )}
           >
-            {liveActivities.map((activity) =>
-              activity.kind === 'tool' ? (
-                <ToolActivityRow key={activity.key} activity={activity} />
-              ) : (
-                <ThinkingActivityRow key={activity.key} activity={activity} />
-              ),
-            )}
+            {workLines
+              ? workLines.map((line) =>
+                  line.kind === 'tool' ? (
+                    <ToolLineRow key={line.key} line={line} onActivate={onToggle} pluginUi={pluginUi} />
+                  ) : (
+                    <ThinkingLineRow key={line.key} line={line} onActivate={onToggle} />
+                  ),
+                )
+              : liveActivities.map((activity) =>
+                  activity.kind === 'tool' ? (
+                    <ToolActivityRow key={activity.key} activity={activity} pluginUi={pluginUi} />
+                  ) : (
+                    <ThinkingActivityRow key={activity.key} activity={activity} />
+                  ),
+                )}
           </div>
         )}
 
@@ -459,10 +683,11 @@ export function WorkGroupBlock({
               'flex flex-col gap-2',
             )}
           >
-            {effectiveExpanded &&
+            {effectiveExpanded && !holdLines &&
               childItems.map((child) => (
                 <Fragment key={child.key}>
                   <ExpandedWorkGroupChild
+                    pluginUi={pluginUi}
                     child={child}
                     compact={compact}
                     toolActivities={

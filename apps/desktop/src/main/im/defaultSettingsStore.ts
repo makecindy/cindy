@@ -196,6 +196,8 @@ function normalizeAgentSettings(
   const defaults = IM_DEFAULT_SETTINGS.agents[agentKind];
   if (!isRecord(raw)) return { ...defaults };
   return {
+    ...(typeof raw.agentDeviceId === 'string' && raw.agentDeviceId.trim()
+      ? { agentDeviceId: raw.agentDeviceId.trim() } : {}),
     providerId:
       typeof raw.providerId === 'string' && raw.providerId.trim() ? raw.providerId.trim() : null,
     model: typeof raw.model === 'string' && raw.model.trim() ? raw.model.trim() : defaults.model,
@@ -386,7 +388,8 @@ function settingsCustomizedKeys(value: ImDefaultSettings, defaults: ImDefaultSet
 }
 
 function agentSettingsEqual(a: ImDefaultAgentSettings, b: ImDefaultAgentSettings): boolean {
-  return a.providerId === b.providerId && a.model === b.model && a.effort === b.effort;
+  return (a.agentDeviceId ?? null) === (b.agentDeviceId ?? null)
+    && a.providerId === b.providerId && a.model === b.model && a.effort === b.effort;
 }
 
 function cloneSettings(settings: ImDefaultSettings): ImDefaultSettings {

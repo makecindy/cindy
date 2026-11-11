@@ -21,7 +21,8 @@
  * 真实组装在 cindy-brain/index.ts(账本/字节仓/webContents)。
  */
 
-import { GHOST_SCHEME } from '../../shared/ghost.js';
+import { GHOST_SCHEME, type GhostPanelMediaTarget } from '../../shared/ghost.js';
+import { parsePluginStoragePart } from '../../shared/pluginIdentity.js';
 
 /** 面板导航到该路径前缀 = 预览请求(不是真页面,协议 handler 也不会服务它)。 */
 export const GHOST_PREVIEW_PATH_PREFIX = '/preview/';
@@ -135,9 +136,15 @@ export type GhostPanelMediaResolved =
   | { url: string; kind: 'image' }
   | { url: string; kind: 'video'; absPath: string; size: number; name: string; ext: string; mimeType: string };
 
+function ghostPanelMediaStoragePart(ghostId: string, target?: GhostPanelMediaTarget): string | null {
+  if (target && target.ghostId !== ghostId) return null;
+  const instanceId = target?.instanceId ?? ghostId;
+  return parsePluginStoragePart(instanceId)?.ghostId === ghostId ? instanceId : null;
+}
+
 /**
  * 面板媒体换发闸(拖拽引渡 / 右键菜单共用一条校验链):
- * 形状 → 账本归属(绑定 URL 里声明的意识 id)→ mime(账本为准,不信后缀)。
+ * 形状 → 账本归属(绑定 Main 核准的安装实例)→ mime(账本为准,不信后缀)。
  * 图片 / 视频都放行:图片回 cindy-media 地址;视频额外解析指纹仓磁盘路径与
  * 体积(路径解析或 stat 失败视同查无,统一 null)。
  * 任一环不过返回 null,调用方统一 NOT_FOUND,不区分原因。
@@ -152,11 +159,13 @@ export async function resolveGhostPanelMedia(
     /** 文件体积(附件托盘/发送链路要 size;文件缺失时 reject)。 */
     statSize(absPath: string): Promise<number>;
   },
+  target?: GhostPanelMediaTarget,
 ): Promise<GhostPanelMediaResolved | null> {
   // 两用途同一形状预筛(图片 + 视频);保留 purpose 是给未来通道分化留位。
   const parsed = purpose === 'menu' ? parseGhostPanelMediaUrl(uri) : parseGhostMediaHandoverUrl(uri);
   if (!parsed) return null;
-  if (!(await deps.ghostCanRead(parsed.hash, parsed.ghostId))) return null;
+  const instanceId = ghostPanelMediaStoragePart(parsed.ghostId, target);
+  if (!instanceId || !(await deps.ghostCanRead(parsed.hash, instanceId))) return null;
   const info = await deps.getBlobInfo(parsed.hash);
   const kind = !info
     ? null
@@ -334,23 +343,24 @@ export class GhostPreviewGate {
 
   constructor(private readonly deps: GhostPreviewGateDeps) {}
 
-  async request(params: {
-    ghostId: string;
+  async request(params: GhostPanelMediaTarget & {
     url: string;
     /** 面板 webview 当前是否持有焦点(guestContents.isFocused)。 */
     isPanelFocused: () => boolean;
   }): Promise<GhostPreviewOutcome> {
     const parsed = parseGhostPreviewUrl(params.url, params.ghostId);
     if (!parsed) return { ok: false, reason: 'bad-url' };
+    const instanceId = ghostPanelMediaStoragePart(params.ghostId, params);
+    if (!instanceId) return { ok: false, reason: 'bad-url' };
     // 焦点闸:用户不在面板上 = 不是用户点的,拒。lightbox 打开后焦点离开
     // 面板,自动触发的连环预览在这里断链。
     if (!params.isPanelFocused()) return { ok: false, reason: 'not-focused' };
     const now = this.deps.now?.() ?? Date.now();
-    const last = this.lastOpenedAt.get(params.ghostId);
+    const last = this.lastOpenedAt.get(instanceId);
     if (last !== undefined && now - last < GHOST_PREVIEW_MIN_INTERVAL_MS) {
       return { ok: false, reason: 'rate-limited' };
     }
-    if (!(await this.deps.ghostCanRead(parsed.hash, params.ghostId))) {
+    if (!(await this.deps.ghostCanRead(parsed.hash, instanceId))) {
       return { ok: false, reason: 'not-owned' };
     }
     // ext/mime 以账本为准(URL 后缀只是预筛):图片/视频各归各的 lightbox
@@ -364,7 +374,7 @@ export class GhostPreviewGate {
           ? ('video' as const)
           : null;
     if (!info || !kind) return { ok: false, reason: 'not-media' };
-    this.lastOpenedAt.set(params.ghostId, now);
+    this.lastOpenedAt.set(instanceId, now);
     return { ok: true, src: this.deps.blobUrl(parsed.hash, info.ext), kind };
   }
 }

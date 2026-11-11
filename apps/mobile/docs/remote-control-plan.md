@@ -1,5 +1,9 @@
 # Cindy Mobile Remote Control Plan
 
+## 反馈卡片当前范围
+
+反馈范围修订（2026-11-11）：本文旧有的 Issue Confirm「desktop-only／不做手机表单」限制及全屏表单方案已被替代。同账号手机在宿主声明 `remoteConfirmSupported: true` 时，以消息流内反馈卡片预览、按需编辑并明确确认公开提交或取消，正常聊天输入框保留；旧宿主继续显示回电脑处理的提示，共享访客不可处理。当前协议见[反馈确认](../../../docs/dev-rules/protocol-compatibility/mobile-feedback-confirmation.md)，实现见 [`IssueConfirmCard`](../src/session/IssueConfirmCard.tsx)，行为回归见 [`InteractionPanelReceipt.test.tsx`](../src/__tests__/InteractionPanelReceipt.test.tsx)。`mobile-scope-guard` 不再排除反馈 UI／E2E／截图；下文相关旧范围仅作历史记录。真实跨设备与自建 relay 尚未验收。
+
 > 自动化范围修订（2026-09-27）：手机已移除旧 Scheduler 管理页和 Routines，包括「所有任务」下拉及伙伴资料入口；不再把查看、创建、编辑或运行规则列为手机交付、后续计划或验收项。PC 管理与执行、已有任务数据和运行历史保留。本文所有旧自动化管理实现、原型验证和计划记录仅作历史背景，不代表待恢复功能；当前边界以[伙伴运行时合同](../../../docs/product-rules/cindy-bots-runtime.md)为准。
 
 > 版本: 2026-06-16
@@ -180,7 +184,7 @@
 
 本轮补充 16:`ControlActionButton` 现在会把缺少 handler 的入口当作 disabled,避免 controls sheet 动作出现“可点但无动作”的状态。该改动不改变 rename/pin/archive/delete/model/effort/permission/fast/extraDirs/context 的远程协议、capability projection 或锚点。
 
-本轮补充 17:composer 输入框和附件移除状态已回到 shared `buildSessionComposerLayout` 输出,发送中会锁定输入、语音入口和附件调整,附件处理中会锁定附件入口与移除动作。移动端只消费 `composerLayout.input` / `composerLayout.attachment.remove` 渲染原生输入区和附件 chip,不再在页面里分散维护这组状态;enqueue、附件上传、语音转写和 device-link 协议不变。
+本轮补充 17:composer 输入框和附件移除状态已回到 shared `buildSessionComposerLayout` 输出,发送中会锁定语音入口和附件调整；输入框在 2026-11-07 修正为保持可编辑与键盘焦点，完成态仅清除匹配的发送快照，见 `docs/dev-rules/mobile-development.md`「Android 组字与发送快照」。附件处理中会锁定附件入口与移除动作。移动端只消费 `composerLayout.input` / `composerLayout.attachment.remove` 渲染原生输入区和附件 chip,不再在页面里分散维护这组状态;enqueue、附件上传、语音转写和 device-link 协议不变。
 
 本轮补充 18:`ScreenHeader` 左侧返回按钮已从裸 `Pressable` 收敛成内部 `ScreenBackButton`,主窗口 header 的返回入口现在也具备统一 pressed / disabled / accessibility state。该改动不改变返回箭头视觉、`deviceDetail.backButton` / `session.backButton` / `files.backButton` 等锚点,也不改变 `router.back()` 行为。
 
@@ -1564,9 +1568,23 @@ V2 完成标准:
 ## HTML 文件预览
 
 消息里的 `xdt-file` 链接与文件浏览共用 `/files/preview/[sessionId]`。HTML 渲染态通过
-`mobileHtmlPreview.ts` 按网页实际请求读取资源，再由 `modules/cindy-html-preview`
+`mobileHtmlPreview.ts` 先取回 HTML 主文件，其余资源按网页实际请求读取，再由 `modules/cindy-html-preview`
 在手机的 `127.0.0.1` 随机端口提供只读 HTTP，交给应用内 WebView。源码查看保持原有文本
-读取和大小限制，不影响完整网页的渲染。
+读取和大小限制，只在切到源码时启动，不与渲染态重复传输同一份 HTML。
+
+- 主文件完整取回并加固后才打开 WebView，避免远程传输占用浏览器的首文档请求等待。
+  等待沿用文件通道已有的进展超时与临时故障重试，不用浏览器的文档超时判断远程下载失败。
+  下载及首次渲染期间显示加载提示；每个资源的接收字节通过本机回调显示文件名、百分比与
+  采样速度，未知总量不显示百分比，上传准备阶段不编造进度。切换传输路径时重新计数，
+  关闭、后台或切文件后忽略旧进度；只取消该预览，不重置共享连接或其他设备。
+  这些调整只涉及 JS，兼容两套既有原生接口，不改变 runtime fingerprint。
+
+- 手机与桌面的远程 HTML 预览都先读磁盘缓存；命中时不等待联网、远端 stat 或目录检查。
+  手机复用账号文件缓存及磁盘压力回收，内联、直连与 OSS 取回的原始文件均可缓存；
+  身份包含账号/区域、设备、SSH 来源和目录。桌面复用 `remote-file-cache`，本机文件仍直接读取。
+  当前页面使用独立副本并重新添加 CSP，后台更新只写缓存，失败保留可读页面，下一次打开使用新副本。
+  旧手机原生接口先发布已有缓存及目录清单；目录清单或部分资源被回收时仍可打开缓存主文件，
+  未缓存资源需后台目录快照刷新后再打开；新接口可按请求补取缺失资源。切换账号关闭当前预览。
 
 - 新原生接口 `startOnDemand` / `resolveRequest` 通过事件请求单个资源；打开时不枚举目录，
   不检查目录文件数和总大小。资源复用既有内联、WebRTC 直连/TURN、OSS 回退及 SSH 读取链路。
@@ -1584,8 +1602,8 @@ V2 完成标准:
   临时文件正常关闭时删除，进程异常退出的残留在下次预览时回收。
 - 手机端只承诺应用内预览；切到系统浏览器会使 App 进入后台，不承诺外置浏览器可持续访问。
   不运行项目的后端、开发服务器或动态构建，也不自动访问快照目录外的资源。
-- 此功能新增原生模块，改变 iOS/Android runtime fingerprint，现有安装包需冷更；合并仍遵守
-  `docs/dev-rules/mobile-development.md` 的冷更确认门。服务端不需要新增接口。
+- 此功能新增原生模块，改变 iOS/Android runtime fingerprint，现有安装包需冷更；冷更说明见
+  `docs/dev-rules/mobile-development.md` 的冷更边界。服务端不需要新增接口。
 
 定向行为测试为 `htmlDirectorySnapshot.test.ts`、`mobileHtmlPreview.test.ts` 及既有预览/链接
 测试；macOS 可运行 `node apps/mobile/scripts/test-html-preview-native.mjs --on-demand` 验证生产 Swift

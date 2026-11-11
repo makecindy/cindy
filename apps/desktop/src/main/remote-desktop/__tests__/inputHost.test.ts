@@ -1,24 +1,32 @@
 import { EventEmitter } from 'node:events';
+import { screen } from 'electron';
 import type { ChildProcessWithoutNullStreams } from 'node:child_process';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { DesktopInputHost } from '../inputHost';
+import { x11InputGeometry, isX11Desktop } from '../linuxInput';
 import { HUMAN_INPUT_QUIET_MS, withAgentDesktopInput } from '../inputOwnership';
 import { openWindowsDesktopConnection } from '../windowsHost';
 
 const platform = process.platform;
 afterEach(() => {
   vi.useRealTimers();
+  vi.unstubAllEnvs();
   Object.defineProperty(process, 'platform', { value: platform });
 });
 const flush = async () => {
   for (let i = 0; i < 20; i++) await Promise.resolve();
 };
 
+// The system cursor, which the local user can move between the viewer's batches.
+let cursor = { x: 0, y: 0 };
 vi.mock('electron', () => ({
   app: {},
   screen: {
-    getAllDisplays: () => [{ id: 1, bounds: { x: 0, y: 0, width: 100, height: 100 } }],
+    getAllDisplays: () => [
+      { id: 1, scaleFactor: 1, bounds: { x: 0, y: 0, width: 100, height: 100 } },
+    ],
     dipToScreenPoint: (point: unknown) => point,
+    getCursorScreenPoint: () => cursor,
   },
 }));
 vi.mock('../windowsHost', () => ({
@@ -354,6 +362,80 @@ describe('native input lifecycle', () => {
     expect(c.child.stdin.write).not.toHaveBeenCalled();
     c.exit();
   });
+  // The controlled overlay passes the viewer's pointer through only while its batch is
+  // injected: a batch queued behind an unacknowledged one must not change it early.
+  it('reports a batch’s pointer positions when its injection starts, not when queued', async () => {
+    const c = childProcess();
+    const pointer = vi.fn();
+    const settled = vi.fn();
+    const host = new DesktopInputHost(
+      vi.fn(),
+      {
+        platform: 'darwin',
+        resolveBinary: async () => '/test/helper',
+        spawn: () => {
+          queueMicrotask(() => c.child.stdout.emit('data', Buffer.from('ready\n')));
+          return c.typed;
+        },
+      },
+      (points) => {
+        pointer(points, c.child.stdin.write.mock.calls.length);
+        return () => settled(points);
+      },
+    );
+    await host.start('1');
+    host.input([
+      { kind: 'button', button: 0, down: true, x: 0.5, y: 0.5 },
+      { kind: 'key', code: 'KeyA', down: true },
+      { kind: 'move', x: 0.25, y: 0.75 },
+    ]);
+    host.input([{ kind: 'move', x: 0.1, y: 0.1 }]);
+    host.input([{ kind: 'key', code: 'KeyB', down: true }]);
+    await flush();
+    // Only the first batch has started; it reports every position at once, before its write.
+    expect(pointer.mock.calls).toEqual([
+      [
+        [
+          { x: 50, y: 50 },
+          { x: 25, y: 74 },
+        ],
+        0,
+      ],
+    ]);
+    // The first batch is not finished until the helper acknowledges it.
+    expect(settled).not.toHaveBeenCalled();
+    c.child.stdout.emit('data', Buffer.from('ok\n'));
+    await flush();
+    expect(settled).toHaveBeenCalledTimes(1);
+    expect(pointer.mock.calls.at(-1)).toEqual([[{ x: 10, y: 10 }], 1]);
+    c.child.stdout.emit('data', Buffer.from('ok\n'));
+    await flush();
+    // A batch without pointer events never reports.
+    expect(pointer).toHaveBeenCalledTimes(2);
+    // A wheel has no position: it reports the live system cursor, which the local user
+    // may have moved since the viewer's last batch, ahead of any positions in its batch.
+    cursor = { x: 7, y: 8 };
+    host.input([
+      { kind: 'scroll', dx: 0, dy: 3 },
+      { kind: 'move', x: 0.9, y: 0.9 },
+    ]);
+    await flush();
+    c.child.stdout.emit('data', Buffer.from('ok\n'));
+    await flush();
+    expect(pointer.mock.calls.at(-1)![0]).toEqual([
+      { x: 7, y: 8 },
+      { x: 89, y: 89 },
+    ]);
+    cursor = { x: 30, y: 40 };
+    host.input([{ kind: 'scroll', dx: 0, dy: -3 }]);
+    await flush();
+    c.child.stdout.emit('data', Buffer.from('ok\n'));
+    await flush();
+    expect(pointer.mock.calls.at(-1)![0]).toEqual([{ x: 30, y: 40 }]);
+    expect(pointer).toHaveBeenCalledTimes(4);
+    host.stop();
+    c.exit();
+  });
 });
 
 it('keeps Linux whole-desktop coordinates normalized and releases input before returning ownership', async () => {
@@ -411,5 +493,134 @@ it('keeps Linux whole-desktop coordinates normalized and releases input before r
   } finally {
     host.stop();
     c.exit();
+  }
+});
+
+describe('代输入 window input', () => {
+  it('starts the helper confined to one window and passes fractions through untouched', async () => {
+    const c = childProcess();
+    const spawn = vi.fn((_binary: string, _args?: string[]) => {
+      void Promise.resolve().then(() => c.child.stdout.emit('data', Buffer.from('ready\n')));
+      return c.typed;
+    });
+    const host = new DesktopInputHost(vi.fn(), {
+      platform: 'darwin',
+      resolveBinary: async () => '/test/helper',
+      spawn,
+    });
+    try {
+      // A display the screen does not know is fine: the window, not a display, is the target.
+      await host.start('9', { windowId: 4242, pid: 77 });
+      expect(spawn).toHaveBeenCalledWith('/test/helper', ['--window', '4242', '77']);
+      host.input([{ kind: 'button', button: 0, down: true, x: 0.25, y: 0.75 }]);
+      await flush();
+      expect(c.child.stdin.write).toHaveBeenCalledWith(
+        '[{"kind":"button","button":0,"down":true,"x":0.25,"y":0.75}]\n',
+        expect.any(Function),
+      );
+    } finally {
+      host.stop();
+      c.exit();
+      await flush();
+    }
+  });
+
+  it('refuses a window it cannot confine', async () => {
+    const spawn = vi.fn();
+    for (const [platform, window] of [
+      ['win32', { windowId: 1, pid: 2 }],
+      ['darwin', { windowId: 0, pid: 2 }],
+      ['darwin', { windowId: 1, pid: -1 }],
+    ] as const) {
+      const host = new DesktopInputHost(vi.fn(), {
+        platform,
+        resolveBinary: async () => '/x',
+        spawn,
+      });
+      await expect(host.start('1', window)).rejects.toThrow('DESKTOP_INPUT_UNSUPPORTED');
+    }
+    expect(spawn).not.toHaveBeenCalled();
+  });
+});
+
+// GX102/X11: the existing helper lifecycle must also cover physical XTest input.
+it('starts an X11 helper with monitor geometry and releases held keys on teardown', async () => {
+  vi.useFakeTimers();
+  vi.stubEnv('DISPLAY', ':test');
+  vi.stubEnv('XDG_SESSION_TYPE', 'x11');
+  vi.stubEnv('WAYLAND_DISPLAY', '');
+  const c = childProcess();
+  const spawn = vi.fn(() => {
+    queueMicrotask(() => c.child.stdout.emit('data', Buffer.from('ready\n')));
+    return c.typed;
+  });
+  const host = new DesktopInputHost(vi.fn(), {
+    platform: 'linux',
+    resolveBinary: async () => '/test/input',
+    spawn,
+  });
+  try {
+    await host.start('1');
+    expect(spawn).toHaveBeenCalledWith('/test/input', ['--x11', '0', '0', '100', '100']);
+    const events = [{ kind: 'button' as const, x: 1, y: 0, button: 0 as const, down: true }];
+    host.input(events);
+    await flush();
+    expect(c.child.stdin.write.mock.calls[0][0]).toBe(JSON.stringify(events) + '\n');
+    c.child.stdout.emit('data', Buffer.from('ok\n'));
+    await flush();
+    const releasing = host.release();
+    expect(c.child.stdin.end).toHaveBeenCalledWith('[{"kind":"release"}]\n');
+    c.exit();
+    await releasing;
+  } finally {
+    host.stop();
+    c.exit();
+  }
+});
+
+it('maps an X11 display from scaled desktop coordinates and rejects ambiguous layouts', () => {
+  const left = { id: 1, scaleFactor: 2, bounds: { x: -100, y: 0, width: 100, height: 80 } };
+  const right = { id: 2, scaleFactor: 2, bounds: { x: 0, y: 0, width: 120, height: 100 } };
+  expect(x11InputGeometry([left, right], '2')).toEqual(['200', '0', '240', '200']);
+  expect(() => x11InputGeometry([left, right], '3')).toThrow('DESKTOP_DISPLAY_MISSING');
+  expect(() => x11InputGeometry([left, { ...right, scaleFactor: 1 }], '2')).toThrow(
+    'DESKTOP_INPUT_UNSUPPORTED',
+  );
+  vi.stubEnv('DISPLAY', ':1');
+  vi.stubEnv('XDG_SESSION_TYPE', 'wayland');
+  expect(isX11Desktop('linux')).toBe(false); // XWayland is not X11 desktop access.
+});
+
+it('drops queued X11 input if monitor geometry changes while an earlier batch is pending', async () => {
+  vi.useFakeTimers();
+  vi.stubEnv('DISPLAY', ':test');
+  vi.stubEnv('XDG_SESSION_TYPE', 'x11');
+  vi.stubEnv('WAYLAND_DISPLAY', '');
+  const c = childProcess();
+  const failure = vi.fn();
+  const display = { id: 1, scaleFactor: 1, bounds: { x: 0, y: 0, width: 100, height: 100 } };
+  const query = vi.spyOn(screen, 'getAllDisplays').mockReturnValue([display] as any);
+  const host = new DesktopInputHost(failure, {
+    platform: 'linux',
+    resolveBinary: async () => '/test/input',
+    spawn: () => {
+      queueMicrotask(() => c.child.stdout.emit('data', Buffer.from('ready\n')));
+      return c.typed;
+    },
+  });
+  try {
+    await host.start('1');
+    host.input([{ kind: 'move', x: 0, y: 0 }]);
+    await flush();
+    host.input([{ kind: 'button', button: 0, down: true, x: 1, y: 1 }]);
+    display.bounds.width = 200;
+    c.child.stdout.emit('data', Buffer.from('ok\n'));
+    await flush();
+    expect(c.child.stdin.write).toHaveBeenCalledTimes(1);
+    expect(failure).toHaveBeenCalledOnce();
+  } finally {
+    host.stop();
+    c.exit();
+    query.mockRestore();
   }
 });

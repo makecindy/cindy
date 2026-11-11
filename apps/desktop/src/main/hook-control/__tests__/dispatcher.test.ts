@@ -5,12 +5,26 @@
  */
 
 import path from 'node:path';
+import { mkdtempSync, rmSync, readFileSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
 
 import { describe, expect, it, vi } from 'vitest';
-import { Session, type AgentEvent, type AgentSessionHandle, type Capabilities } from '@cindy/maker-core';
+import {
+  Session,
+  TurnDispatchRejectedError,
+  type AgentEvent,
+  type AgentSessionHandle,
+  type Capabilities,
+  type TurnContinuationState,
+} from '@cindy/maker-core';
 import { observeHookTurn } from '../turnObserver';
+import {
+  onChannelTurn,
+  createChannelTurnObserver,
+  withChannelTurnSource,
+} from '../../maker-ipc/channelTurnSignal';
 import { bindRuntimeRecoveryNotice } from '../../im/shared/runtimeRecoveryNotice';
-import { setMainLocale } from '../../i18n';
+import { setMainLocale } from '../../i18n.desktop';
 
 import {
   HOOK_FEATURE_MESSAGE_OPS,
@@ -20,6 +34,7 @@ import {
   HOOK_FEATURE_TELEGRAM_FINAL_OPS,
   HOOK_FEATURE_TELEGRAM_PROGRESS_OPS,
   HOOK_FEATURE_TURN_DELIVERY,
+  HOOK_FEATURE_X_MEDIA_RELAY,
   HOOK_FEATURE_TURN_REOPEN,
   type HookMessage,
   type TaskDispatchPayload,
@@ -36,9 +51,10 @@ import {
   type HookSessionRunner,
   type PrepareWorktreeResult,
 } from '../dispatcher';
+import type { HookMediaStore } from '../../cindy-media/hookOutbox';
 import type { HookBindingStore } from '../bindings';
 import { isPathWithin } from '../paths';
-import type { HookRequestLedger, HookTerminalRecord } from '../requestLedger';
+import { createHookRequestLedger, type HookRequestLedger, type HookTerminalRecord } from '../requestLedger';
 import type { HookConnectionConfig } from '../store';
 
 const noopLog = { info: () => {}, warn: () => {} };
@@ -211,6 +227,7 @@ function makeDispatcher(overrides?: {
   runner?: HookSessionRunner;
   bindings?: HookBindingStore;
   terminalLedger?: HookRequestLedger;
+  mediaStore?: HookMediaStore;
   config?: HookConnectionConfig | null;
   prepareWorktree?: HookDispatcherDeps['prepareWorktree'];
   buildContextPrefix?: HookDispatcherDeps['buildContextPrefix'];
@@ -234,6 +251,7 @@ function makeDispatcher(overrides?: {
       (() => (overrides?.config === undefined ? CONFIG : overrides.config)),
     bindings,
     terminalLedger: overrides?.terminalLedger,
+    mediaStore: overrides?.mediaStore,
     runner,
     prepareWorktree: overrides?.prepareWorktree,
     buildContextPrefix: overrides?.buildContextPrefix,
@@ -250,6 +268,48 @@ function makeDispatcher(overrides?: {
   });
   return { d, bindings, fr };
 }
+
+describe('任务失败原因进主日志(issue #5912)', () => {
+  it('runner 抛出路由不可用: 主日志记 requestId / 渠道 / 原因, turn.end 带同一 errorMessage', async () => {
+    const message =
+      'hook session route unavailable: selected provider "openai" cannot serve model "claude-test"。请在 设置 → IM 机器人 中为这个渠道的工作目录重新选择模型。';
+    const runner: HookSessionRunner = {
+      isBusy: () => false,
+      inspect: async () => null,
+      run: async () => {
+        throw new Error(message);
+      },
+    };
+    const log = { info: vi.fn(), warn: vi.fn() };
+    const { d } = makeDispatcher({ runner, log });
+    const c = collector();
+    d.onConnected('conn-1', c.send);
+    await d.handleDispatch('conn-1', dispatch({ requestId: 'req-route', source: { im: 'x' } }), c.send);
+    await tick();
+
+    expect(log.warn).toHaveBeenCalledWith(
+      `hook task req-route failed: im=x via=throw reason=${message}`,
+    );
+    expect(c.last('turn.end')?.payload).toMatchObject({ status: 'error', errorMessage: message });
+    d.dispose();
+  });
+
+  it('其它失败原因不原样进日志, 只记类别', async () => {
+    const fr = fakeRunner();
+    const log = { info: vi.fn(), warn: vi.fn() };
+    const { d } = makeDispatcher({ runner: fr.runner, log });
+    const c = collector();
+    d.onConnected('conn-1', c.send);
+    await d.handleDispatch('conn-1', dispatch({ requestId: 'req-other' }), c.send);
+    await tick();
+    fr.finish({ status: 'error', finalText: '', errorMessage: 'ENOENT /Users/someone/secret/path' });
+    await tick();
+
+    expect(log.warn).toHaveBeenCalledWith('hook task req-other failed: im=none via=outcome reason=unclassified');
+    expect(log.warn.mock.calls.flat().join('\n')).not.toContain('/Users/someone');
+    d.dispose();
+  });
+});
 
 describe('background results during normal turn delivery', () => {
   it.each(['telegram:dm:bot:user:g0', 'slack:T:C:1.2'])('%s observes the next turn before the previous run returns', async (externalKey) => {
@@ -271,14 +331,186 @@ describe('background results during normal turn delivery', () => {
     signal(req.sessionId, req.workingDir, 'starting');
     expect(watches).toHaveLength(0);
     req.onTurnTerminal?.();
-    signal(req.sessionId, req.workingDir, 'starting');
+    signal(req.sessionId, req.workingDir, 'starting', 'other-task');
     expect(watches).toHaveLength(1);
+    watches[0]!.onSettling?.();
     watches[0]!.onEnd({ status: 'ok', finalText: 'next result', errorMessage: null, durationMs: 1 });
     fr.finish({ finalText: 'original result' });
     await tick();
     expect(c.ofType('turn.end').map((frame) => [frame.payload.background, frame.payload.finalText]))
       .toEqual([[true, 'next result'], [undefined, 'original result']]);
     d.dispose();
+  });
+});
+
+describe('harness wake-ups of an IM-bound task (real Session)', () => {
+  /** Claude-like handle: the test pushes provider events, including turns no send started. */
+  function wakeableSession(id: string) {
+    const queue: Array<AgentEvent | null> = [];
+    let waiter: ((event: AgentEvent | null) => void) | null = null;
+    let running = false;
+    const continuations = new Map<number, TurnContinuationState>();
+    const push = (event: AgentEvent | null) => {
+      if (!waiter) { queue.push(event); return; }
+      const deliver = waiter;
+      waiter = null;
+      deliver(event);
+    };
+    const handle = {
+      id: 'claude', agentKind: 'claude-code', model: 'm',
+      send: vi.fn(async () => { running = true; }),
+      steer: vi.fn(async () => {}),
+      abort: vi.fn(async () => {}),
+      close: vi.fn(async () => { running = false; push(null); }),
+      isTurnRunning: () => running,
+      setInteractionResolver() {},
+      beginTurnContinuationWait: (continuationId?: number) =>
+        continuationId === undefined ? null : continuations.get(continuationId) ?? null,
+      async *events() {
+        for (;;) {
+          const next = queue.length > 0
+            ? queue.shift() ?? null
+            : await new Promise<AgentEvent | null>((resolve) => { waiter = resolve; });
+          if (next === null) return;
+          yield next;
+        }
+      },
+    } as unknown as AgentSessionHandle;
+    const logger = { ...noopLog, debug() {}, trace() {}, error() {}, fatal() {}, child() { return this; } };
+    const session = new Session({ id, agentKind: 'claude-code', workDir: WS_DIR,
+      handle, capabilities: {} as Capabilities, logger, turnStallMs: 0 });
+    // Production wiring: maker-ipc/sessionTurnObserver.ts.
+    session.setTurnLifecycleObserver({
+      ...createChannelTurnObserver(session),
+      onTerminal: () => undefined,
+    });
+    return {
+      session,
+      handle,
+      continuations,
+      /** One provider event; a terminal `done` without keepRunning flips the handle idle. */
+      async emit(event: Partial<AgentEvent>, opts: { keepRunning?: boolean } = {}) {
+        if (event.type !== 'done' || opts.keepRunning) running = true;
+        else running = false;
+        push({ source: 'claude-code', data: {}, ...event } as AgentEvent);
+        await new Promise((resolve) => setTimeout(resolve, 0));
+      },
+    };
+  }
+
+  function hookSessionObserver(session: Session, onTurnTerminal?: () => void) {
+    return observeHookTurn(session, {
+      ...(onTurnTerminal ? { onTurnTerminal } : {}),
+      onSilentStopSettled: () => () => {},
+      log: noopLog,
+    });
+  }
+
+  it.each(['telegram:group:bot:-100200:user-7:g1', 'slack:T:C:1.2'])(
+    '%s keeps desktop-started background results in Cindy after a channel turn', async (externalKey) => {
+    let live: ReturnType<typeof wakeableSession> | undefined;
+    const run = vi.fn(async (req: HookRunRequest): Promise<HookRunOutcome> => {
+      live = wakeableSession(req.sessionId);
+      const observer = hookSessionObserver(live.session, req.onTurnTerminal);
+      await live.session.send(req.prompt, { origin: { kind: 'user', surface: 'im' } });
+      await observer.finished;
+      return { status: 'ok', finalText: observer.finalText(), errorMessage: null, durationMs: 1 };
+    });
+    // Same shape as session-runner's watchContinuation: observe from the claim, settle on the turn end.
+    const watchContinuation = vi.fn((req: HookContinuationWatchRequest) => {
+      const observer = hookSessionObserver(live!.session, () => req.onSettling?.());
+      req.onClaim();
+      void observer.finished.then(
+        () => req.onEnd({ status: 'ok', finalText: observer.finalText(), errorMessage: null, durationMs: 1 }),
+        (error: unknown) => req.onEnd({ status: 'error', finalText: '', errorMessage: String(error), durationMs: 1 }),
+      );
+      return () => observer.stop();
+    });
+    const bindings = memoryBindings();
+    bindings.findBySession = (sessionId) => bindings.get('conn-1', externalKey) === sessionId
+      ? [{ connectionId: 'conn-1', externalKey }] : [];
+    let signal!: Parameters<NonNullable<HookDispatcherDeps['subscribeChannelTurn']>>[0];
+    const { d } = makeDispatcher({
+      runner: { isBusy: () => false, inspect: async () => null, run, watchContinuation },
+      bindings,
+      // Production wiring: hook-control/ipc.ts.
+      subscribeChannelTurn: (listener) => {
+        signal = listener;
+        return onChannelTurn((session, phase, source) => listener(session.id, session.workDir, phase, source));
+      },
+    });
+    expect(signal).toBeDefined();
+    const c = collector();
+    d.onConnected('conn-1', c.send, [HOOK_FEATURE_SESSION_RESULT]);
+    const turnEnds = () => c.ofType('turn.end').map((frame) => [frame.payload.background ?? false, frame.payload.finalText]);
+    try {
+      d.handleDispatch('conn-1', dispatch({ externalKey }), c.send);
+      await vi.waitFor(() => expect(live).toBeDefined());
+      const h = live!;
+      // The hook turn launches background agents and replies; the wake task claim keeps it open,
+      // so the first wake-up belongs to the hook turn and is not sent a second time.
+      await h.emit({ type: 'text', data: { text: 'Still working.', isFinal: true } }, { keepRunning: true });
+      h.continuations.set(1, 'awaiting');
+      await h.emit({ type: 'done', turnContinuationId: 1 }, { keepRunning: true });
+      h.continuations.set(1, 'active');
+      await h.emit({ type: 'text', data: { text: 'Agent A finished.', isFinal: true } }, { keepRunning: true });
+      await h.emit({ type: 'done' });
+      await vi.waitFor(() => expect(turnEnds()).toHaveLength(1));
+      expect(turnEnds()[0]![0]).toBe(false);
+      expect(turnEnds()[0]![1]).toContain('Agent A finished.');
+
+      // Background subagent output while the task is idle is not a turn.
+      await h.emit({ type: 'text', data: { text: 'subagent notes' }, agentMeta: { parentUuid: 'toolu_b' } });
+      expect(watchContinuation).not.toHaveBeenCalled();
+
+      // Claude wakes the session itself for each later task notification: no send, no hook request.
+      for (const report of ['Agent B finished.', 'Final report.']) {
+        await h.emit({ type: 'thinking', data: { text: 'task notification' } }, { keepRunning: true });
+        await h.emit({ type: 'text', data: { text: report, isFinal: true } }, { keepRunning: true });
+        await h.emit({ type: 'done' });
+        await vi.waitFor(() => expect(turnEnds().at(-1)).toEqual([true, report]));
+      }
+
+      // Typed on the desktop: Session.send without other-task stamp stays in the app.
+      await h.session.send('desktop question');
+      await h.emit({ type: 'text', data: { text: 'desktop answer', isFinal: true } }, { keepRunning: true });
+      await h.emit({ type: 'done' });
+      await new Promise((resolve) => setTimeout(resolve, 10));
+      expect(turnEnds()).toHaveLength(3);
+      // Regression: a task created in Slack later runs tests from Cindy. Their completion
+      // wakes the provider without Session.send; it must inherit the desktop destination.
+      for (const report of ['Desktop test results.', 'Desktop final report.']) {
+        await h.emit({ type: 'text', data: { text: report, isFinal: true } });
+        await h.emit({ type: 'done' });
+        expect(turnEnds()).toHaveLength(3);
+      }
+      // A failed channel send must not turn the previous desktop work into channel output.
+      vi.mocked(h.handle.send).mockRejectedValueOnce(new TurnDispatchRejectedError('rejected'));
+      await expect(h.session.send('rejected channel request', { origin: { kind: 'user', surface: 'im' } }))
+        .resolves.toEqual({ accepted: false, reason: 'provider-rejected-before-dispatch' });
+      await expect(h.session.send('failed channel request', {
+        origin: { kind: 'user', surface: 'im' },
+        beforeProviderStart: async () => { throw new Error('preflight failed'); },
+      })).rejects.toThrow('preflight failed');
+      await h.emit({ type: 'text', data: { text: 'More desktop results.', isFinal: true } });
+      await h.emit({ type: 'done' });
+      expect(turnEnds()).toHaveLength(3);
+
+      // An actual new other-task request changes the destination again, including later wakes.
+      await withChannelTurnSource(h.session.id, 'other-task', () => h.session.send('other task request'));
+      await h.emit({ type: 'text', data: { text: 'Other task result.', isFinal: true } });
+      await h.emit({ type: 'done' });
+      await h.emit({ type: 'text', data: { text: 'Other task background result.', isFinal: true } });
+      await h.emit({ type: 'done' });
+      expect(turnEnds().slice(-2)).toEqual([[true, 'Other task result.'], [true, 'Other task background result.']]);
+      expect(run).toHaveBeenCalledOnce();
+      expect(c.ofType('turn.end').filter((frame) => frame.payload.background).every(
+        (frame) => frame.payload.externalKey === externalKey && frame.payload.sessionId === h.session.id,
+      )).toBe(true);
+    } finally {
+      d.dispose();
+      await live?.session.close();
+    }
   });
 });
 
@@ -464,10 +696,10 @@ describe('normalizeTaskSource', () => {
       teamId: 'i'.repeat(200),
       teamName: 'n'.repeat(200),
       userText: 'u'.repeat(20_100),
-      threadContext: Array.from({ length: 25 }, (_, index) => ({
+      threadContext: Array.from({ length: 55 }, (_, index) => ({
         author: `author-${index}-${'a'.repeat(140)}`,
-        text: 't'.repeat(4_100),
-        isBot: index === 0,
+        text: 't'.repeat(9_000),
+        isBot: index === 5,
       })),
     });
 
@@ -475,14 +707,14 @@ describe('normalizeTaskSource', () => {
     expect(source.teamId).toHaveLength(128);
     expect(source.teamName).toHaveLength(160);
     expect(source.userText).toHaveLength(20_000);
-    expect(source.threadContext).toHaveLength(20);
+    expect(source.threadContext).toHaveLength(50);
     expect(source.threadContext?.[0]).toEqual({
       author: expect.any(String),
       text: expect.any(String),
       isBot: true,
     });
     expect(source.threadContext?.[0]?.author).toHaveLength(128);
-    expect(source.threadContext?.[0]?.text).toHaveLength(4_000);
+    expect(source.threadContext?.[0]?.text).toHaveLength(8_256);
     expect(source.threadContext?.[1]).not.toHaveProperty('isBot');
   });
 
@@ -514,9 +746,9 @@ describe('normalizeTaskSource', () => {
     const fr = fakeRunner();
     const { d } = makeDispatcher({ runner: fr.runner });
     const c = collector();
-    // A 21-ancestor X chain ending in the current request: display keeps the oldest 20.
+    // A 51-ancestor X chain ending in the current request: display keeps the newest 50.
     const threadContext = [
-      ...Array.from({ length: 21 }, (_, index) => ({ messageId: `m${index}`, author: `@a${index}`, text: `ancestor ${index}` })),
+      ...Array.from({ length: 51 }, (_, index) => ({ messageId: `m${index}`, author: `@a${index}`, text: `ancestor ${index}` })),
       { messageId: 'current', author: '@user', text: '@bot is this true?' },
     ];
     d.handleDispatch('conn-1', dispatch({
@@ -524,15 +756,15 @@ describe('normalizeTaskSource', () => {
     }), c.send);
     await tick();
 
-    expect(fr.calls[0]?.source?.threadContext).toHaveLength(20);
-    expect(fr.calls[0]?.source?.threadContext?.at(-1)?.text).toBe('ancestor 19');
-    expect(fr.calls[0]?.autoReviewReplyTarget).toEqual({ author: '@a20', text: 'ancestor 20' });
+    expect(fr.calls[0]?.source?.threadContext).toHaveLength(50);
+    expect(fr.calls[0]?.source?.threadContext?.at(-1)?.text).toBe('ancestor 50');
+    expect(fr.calls[0]?.autoReviewReplyTarget).toEqual({ author: '@a50', text: 'ancestor 50' });
     fr.finish();
   });
 
   // laneKind 的唯一消费者是群轮次的 turn lease(见 session-runner);派生判据必须
   // 在正常派发与续跑观察两条路径上一致, 否则续跑轮会丢掉那层独占。
-  it('laneKind 派生: telegram group/topic externalKey → group, DM 与 Slack → dm', async () => {
+  it('laneKind 派生: telegram group/topic 与飞书话题 externalKey → group, DM 与 Slack → dm', async () => {
     const fr = fakeRunner();
     const { d } = makeDispatcher({ runner: fr.runner });
     const c = collector();
@@ -542,6 +774,9 @@ describe('normalizeTaskSource', () => {
       'telegram:topic:bot:-900:77:9:g0',
       'telegram:dm:bot:user:g0',
       'team-slack:C1:1.1',
+      // 官方飞书 / Lark: 群里一律在话题回复, 话题 lane 是多人可见的群轮次。
+      'feishu:topic:cli_app:oc_chat:om_root:ou_user:g0',
+      'feishu:dm:cli_app:ou_user:g0',
     ];
     for (const [i, externalKey] of keys.entries()) {
       d.handleDispatch('conn-1', dispatch({ requestId: `req-lane-${i}`, externalKey }), c.send);
@@ -549,7 +784,7 @@ describe('normalizeTaskSource', () => {
       fr.finish();
       await tick();
     }
-    expect(fr.calls.map((call) => call.laneKind)).toEqual(['group', 'group', 'dm', 'dm']);
+    expect(fr.calls.map((call) => call.laneKind)).toEqual(['group', 'group', 'dm', 'dm', 'group', 'dm']);
     expect(fr.calls[0]?.groupHistoryAccess).toEqual({
       access: 'lane',
       provider: 'telegram:9',
@@ -787,7 +1022,7 @@ describe('dispatcher 核心语义', () => {
       userText: '查看 PR', triggerMessageId: '2', xContext: { requesterId: 'u' },
     });
     expect(fr.calls[0]?.source?.threadContext).toEqual([
-      expect.objectContaining({ messageId: '1', author: '@other', text: longText.slice(0, 4000) }),
+      expect.objectContaining({ messageId: '1', author: '@other', text: longText }),
     ]);
   });
 
@@ -1155,7 +1390,9 @@ describe('dispatcher 核心语义', () => {
     d.handleDispatch('conn-1', dispatch({ requestId: 'req-2' }), c.send);
     await tick();
     expect(c.last('task.ack')!.payload).toMatchObject({ result: 'accepted', sessionId: first });
-    expect(fr.calls[1]).toMatchObject({ isNew: false, sessionId: first, workingDir: INSIDE });
+    expect(fr.calls[1]).toMatchObject({
+      isNew: false, sessionId: first, workingDir: INSIDE, workspaceAlias: 'xdmaker',
+    });
 
     fr.finish({ finalText: '在子目录里跑完了' });
     await tick();
@@ -2751,6 +2988,121 @@ describe('dispatcher 核心语义', () => {
     expect(stored.records[0]?.delivery).toBe('sent');
   });
 
+  // 分块转传只给声明能力的 X 连接: 发给旧 server 的新帧会被丢弃, 上传只能等到超时。
+  // unit, 入口 handleDispatch。最小失败输入: 带能力的 welcome。
+  it.each([
+    ['x', [HOOK_FEATURE_X_MEDIA_RELAY], true],
+    ['x', [], false],
+    ['slack', [HOOK_FEATURE_X_MEDIA_RELAY], false],
+  ])('只有声明能力的 X 连接才转传视频 (%s, %j)', async (im, features, expected) => {
+    const fr = fakeRunner();
+    const { d } = makeDispatcher({ runner: fr.runner });
+    const c = collector();
+    d.onConnected('conn-1', c.send, features);
+    d.handleDispatch('conn-1', dispatch({ source: { im } }), c.send);
+    await tick();
+    expect(typeof fr.calls[0]?.relayXVideo === 'function').toBe(expected);
+  });
+
+  // IM 轮次流程 §9：明确停止包含 Agent 结束后的上传；此前只 abort Agent，回执仍可能等 35 分钟。
+  // 生产入口 cancel；最小失败输入：init 在途时 task.cancel。其他连接不能取消，取消后也不能重新开始上传。
+  it('task.cancel immediately stops its video upload and prevents a late upload', async () => {
+    const fr = fakeRunner();
+    const { d } = makeDispatcher({ runner: fr.runner });
+    const c = collector();
+    d.onConnected('conn-1', c.send, [HOOK_FEATURE_X_MEDIA_RELAY]);
+    d.handleDispatch('conn-1', dispatch({ source: { im: 'x' } }), c.send);
+    await tick();
+    const dir = mkdtempSync(path.join(tmpdir(), 'cindy-dispatch-relay-'));
+    const file = path.join(dir, 'clip.mp4');
+    writeFileSync(file, 'video');
+    try {
+      const relayVideo = fr.calls[0]!.relayXVideo!;
+      const upload = relayVideo(file, 'video/mp4').catch((error: unknown) => error);
+      await vi.waitFor(() => expect(c.ofType('x.media.init')).toHaveLength(1));
+      d.cancel('other-connection', 'req-1');
+      expect(c.ofType('x.media.abort')).toHaveLength(0);
+      d.cancel('conn-1', 'req-1');
+      expect(await upload).toMatchObject({ code: 'X_MEDIA_RELAY_CANCELLED' });
+      expect(c.ofType('x.media.abort')).toHaveLength(1);
+      await expect(relayVideo(file, 'video/mp4')).rejects.toMatchObject({ code: 'X_MEDIA_RELAY_CANCELLED' });
+      expect(c.ofType('x.media.init')).toHaveLength(1);
+      fr.finish();
+      await tick();
+      expect(c.ofType('turn.end').at(-1)?.payload).toMatchObject({ status: 'cancelled' });
+    } finally {
+      d.dispose();
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  // 断线只结束已开始的上传。Agent 还在生成时短暂断连，恢复后的首个上传必须仍可开始。
+  it.each([true, false])('uses the current relay capability after reconnecting while the Agent was generating (%s)', async (supportsRelay) => {
+    const fr = fakeRunner();
+    const { d } = makeDispatcher({ runner: fr.runner });
+    const c = collector();
+    const send = (message: HookMessage): boolean => {
+      const accepted = c.send(message);
+      if (message.type === 'x.media.init' || message.type === 'x.media.append' || message.type === 'x.media.finalize') {
+        d.handleXMediaResult('conn-1', {
+          uploadId: message.payload.uploadId,
+          step: message.type === 'x.media.init' ? 'init' : message.type === 'x.media.append' ? 'append' : 'finalize',
+          segmentIndex: message.type === 'x.media.append' ? message.payload.segmentIndex : null,
+          mediaId: message.type === 'x.media.finalize' ? '700' : null, error: null,
+        });
+      }
+      return accepted;
+    };
+    d.onConnected('conn-1', send, [HOOK_FEATURE_X_MEDIA_RELAY]);
+    d.handleDispatch('conn-1', dispatch({ source: { im: 'x' } }), send);
+    await tick();
+    d.onDisconnected('conn-1');
+    d.onConnected('conn-1', send, supportsRelay ? [HOOK_FEATURE_X_MEDIA_RELAY] : []);
+    const dir = mkdtempSync(path.join(tmpdir(), 'cindy-dispatch-relay-'));
+    const file = path.join(dir, 'clip.mp4');
+    writeFileSync(file, 'video');
+    try {
+      const upload = fr.calls[0]!.relayXVideo!(file, 'video/mp4');
+      if (supportsRelay) await expect(upload).resolves.toBe('700');
+      else {
+        await expect(upload).rejects.toMatchObject({ code: 'X_MEDIA_RELAY_OFFLINE' });
+        expect(c.ofType('x.media.init')).toHaveLength(0);
+        expect(c.ofType('x.media.abort')).toHaveLength(0);
+      }
+      fr.finish(supportsRelay ? { xMediaIds: ['700'] } : {});
+      await tick();
+      expect(c.ofType('turn.end').at(-1)?.payload).toMatchObject({ status: 'ok', ...(supportsRelay ? { xMediaIds: ['700'] } : {}) });
+    } finally {
+      d.dispose();
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  // media id 必须随终稿发回, 否则视频已上传但回帖不带它。
+  it('turn.end 带上已转传的 media id, 断线时结束等待中的上传', async () => {
+    const fr = fakeRunner();
+    const { d } = makeDispatcher({ runner: fr.runner });
+    const c = collector();
+    d.onConnected('conn-1', c.send, [HOOK_FEATURE_X_MEDIA_RELAY]);
+    d.handleDispatch('conn-1', dispatch({ source: { im: 'x' } }), c.send);
+    await tick();
+    const dir = mkdtempSync(path.join(tmpdir(), 'cindy-dispatch-relay-'));
+    const file = path.join(dir, 'clip.mp4');
+    writeFileSync(file, 'video');
+    try {
+      const upload = fr.calls[0]!.relayXVideo!(file, 'video/mp4').catch((error: unknown) => error);
+      await vi.waitFor(() => expect(c.ofType('x.media.init')).toHaveLength(1));
+      d.onDisconnected('conn-1');
+      expect(await upload).toMatchObject({ code: 'X_MEDIA_RELAY_DISCONNECTED' });
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+    d.onConnected('conn-1', c.send, [HOOK_FEATURE_X_MEDIA_RELAY]);
+    fr.finish({ finalText: '', xMediaIds: ['700'] });
+    await tick();
+    expect(c.ofType('turn.end').at(-1)?.payload).toMatchObject({ xMediaIds: ['700'] });
+  });
+
   it('协商 delivery ACK 后，accepted 前按退避重放同一 turn.end，accepted 后停止并释放正文', async () => {
     vi.useFakeTimers();
     const fr = fakeRunner();
@@ -3028,48 +3380,90 @@ describe('dispatcher 核心语义', () => {
     }
   });
 
-  it('ACK 模式回执前重启 -> 新 dispatcher 从账本经 ACK 缓冲补发, 回执后收口 sent', async () => {
-    vi.useFakeTimers();
-    const firstRunner = fakeRunner();
-    const terminalLedger = memoryTerminalLedger();
-    const first = makeDispatcher({ runner: firstRunner.runner, terminalLedger });
-    const firstCollector = collector();
-    try {
-      first.d.onConnected('conn-1', firstCollector.send, [HOOK_FEATURE_TURN_DELIVERY]);
-      first.d.handleDispatch('conn-1', dispatch(), firstCollector.send);
-      await tick();
-      firstRunner.finish({ finalText: '重启前完成' });
-      await tick();
-      expect(terminalLedger.records[0]?.delivery).toBe('pending');
-      first.d.dispose();
+  // #6447: direct ledger tests missed dispatcher stripping media before persistence.
+  // Unit with a temporary ledger: offline X completion -> fresh dispatcher -> exact bytes + ACK.
+  it.each([['x', 'image/png'], ['x', 'video/mp4'], ['telegram', 'image/png']] as const)(
+    '%s 离线 %s 回复恢复遵循渠道附件约定, 回执后停止补发', async (provider, mimeType) => {
+      vi.useFakeTimers();
+      const firstRunner = fakeRunner();
+      const directory = mkdtempSync(path.join(tmpdir(), 'hook-media-recovery-'));
+      const mediaStore: HookMediaStore = {
+        prepare: vi.fn(async () => [{ url: `cindy-media://blobs/${'a'.repeat(64)}.mp4`,
+          refId: 'outbox-pin', name: 'clip.mp4', mimeType, bytes: 6 * 1024 * 1024 }]),
+        restore: vi.fn(async (turn) => ({ ...turn, attachments })),
+        release: vi.fn(async () => {}), prune: vi.fn(async () => {}),
+      };
+      const openLedger = () => createHookRequestLedger({ filePath: path.join(directory, 'ledger.json'),
+        log: noopLog, releaseMedia: mediaStore.release });
+      const terminalLedger = openLedger();
+      const attachments = [{
+        mimeType,
+        name: mimeType === 'video/mp4' ? 'clip.mp4' : 'shot.png',
+        dataBase64: Buffer.alloc(mimeType === 'video/mp4' ? 6 * 1024 * 1024 : 32, 7).toString('base64'),
+      }];
+      const first = makeDispatcher({ runner: firstRunner.runner, terminalLedger, mediaStore });
+      const firstCollector = collector();
+      let secondDispatcher: ReturnType<typeof makeDispatcher>['d'] | undefined;
+      try {
+        first.d.onConnected('conn-1', firstCollector.send, [HOOK_FEATURE_TURN_DELIVERY]);
+        first.d.handleDispatch('conn-1', dispatch({ source: { im: provider } }), firstCollector.send);
+        await tick();
+        firstCollector.setOnline(false);
+        firstRunner.finish({ finalText: '重启前完成', attachments });
+        await tick();
+        expect(terminalLedger.get('conn-1', 'req-1')?.delivery).toBe('pending');
+        expect(readFileSync(path.join(directory, 'ledger.json'), 'utf8')).not.toContain('dataBase64');
+        first.d.dispose();
 
-      const secondRunner = fakeRunner();
-      const second = makeDispatcher({ runner: secondRunner.runner, terminalLedger });
-      const secondCollector = collector();
-      second.d.onConnected('conn-1', secondCollector.send, [HOOK_FEATURE_TURN_DELIVERY]);
-      expect(secondRunner.calls).toHaveLength(0);
-      expect(secondCollector.ofType('turn.end')).toHaveLength(1);
-      expect(secondCollector.last('turn.end')?.payload).toMatchObject({
-        requestId: 'req-1',
-        finalText: '重启前完成',
-      });
-      // 回执到达前账本保持 pending; 回执后收口, 停止重放。
-      expect(terminalLedger.records[0]?.delivery).toBe('pending');
-      second.d.handleTurnDelivery('conn-1', {
-        requestId: 'req-1',
-        state: 'accepted',
-        attempt: 0,
-        retryAt: null,
-        error: null,
-      });
-      expect(terminalLedger.records[0]?.delivery).toBe('sent');
-      await vi.advanceTimersByTimeAsync(120_000);
-      expect(secondCollector.ofType('turn.end')).toHaveLength(1);
-      second.d.dispose();
-    } finally {
-      vi.useRealTimers();
-    }
-  });
+        const secondRunner = fakeRunner();
+        const restoredLedger = openLedger();
+        const second = makeDispatcher({ runner: secondRunner.runner, terminalLedger: restoredLedger, mediaStore });
+        secondDispatcher = second.d;
+        const secondCollector = collector();
+        second.d.onConnected('conn-1', secondCollector.send, [HOOK_FEATURE_TURN_DELIVERY]);
+        await tick();
+        expect(secondRunner.calls).toHaveLength(0);
+        expect(secondCollector.ofType('turn.end')).toHaveLength(1);
+        expect(secondCollector.last('turn.end')?.payload).toMatchObject({
+          requestId: 'req-1',
+          finalText: '重启前完成',
+        });
+        const restoredAttachments = secondCollector.last('turn.end')?.payload.attachments;
+        if (provider === 'x') {
+          expect(restoredAttachments).toHaveLength(1);
+          expect(restoredAttachments?.[0]?.mimeType).toBe(mimeType);
+          expect(restoredAttachments?.[0]?.dataBase64 === attachments[0]!.dataBase64).toBe(true);
+        } else {
+          expect(restoredAttachments).toBeUndefined();
+        }
+        // 回执到达前账本保持 pending; 回执后收口, 停止重放。
+        expect(restoredLedger.get('conn-1', 'req-1')?.delivery).toBe('pending');
+        second.d.handleTurnDelivery('conn-1', {
+          requestId: 'req-1',
+          state: 'accepted',
+          attempt: 0,
+          retryAt: null,
+          error: null,
+        });
+        expect(restoredLedger.get('conn-1', 'req-1')?.delivery).toBe('sent');
+        expect(restoredLedger.get('conn-1', 'req-1')?.media).toBeUndefined();
+        if (provider === 'x') {
+          expect(mediaStore.release).toHaveBeenCalledTimes(1);
+          second.d.handleDispatch('conn-1', dispatch({ source: { im: provider } }), secondCollector.send);
+          await tick();
+          expect(secondCollector.ofType('turn.end')).toHaveLength(1); // no text-only duplicate
+        }
+        await vi.advanceTimersByTimeAsync(120_000);
+        expect(secondCollector.ofType('turn.end')).toHaveLength(1);
+        second.d.dispose();
+      } finally {
+        first.d.dispose();
+        secondDispatcher?.dispose();
+        rmSync(directory, { recursive: true, force: true });
+        vi.useRealTimers();
+      }
+    },
+  );
 
   it('同 socket 能力降级且回落发送失败 -> 旧退避 timer 被缴械, 不再向老 server 重放', async () => {
     vi.useFakeTimers();
@@ -4765,7 +5159,7 @@ describe('官方 bot ack 表情(msg.op)', () => {
 
     expect(c.last('task.ack')?.payload).toMatchObject({ result: 'queued' });
     // 第一条已经处理中，第二条仍显示排队。
-    expect(reactionEmojis(c.sent)).toEqual(['👀', expect.stringMatching(/^(👨‍💻|🤔|🤓|✍)$/), '👀']);
+    expect(reactionEmojis(c.sent)).toEqual(['👀', expect.stringMatching(/^(🤔|🤓|✍)$/), '👀']);
   });
 
   it('排队中被取消 → 👀 换成终态, 不永远挂着「在做」', async () => {
@@ -4784,7 +5178,7 @@ describe('官方 bot ack 表情(msg.op)', () => {
     await tick();
 
     // 取消排队任务时清掉它的状态，不影响正在执行的任务。
-    expect(reactionEmojis(c.sent)).toEqual(['👀', expect.stringMatching(/^(👨‍💻|🤔|🤓|✍)$/), '👀', '']);
+    expect(reactionEmojis(c.sent)).toEqual(['👀', expect.stringMatching(/^(🤔|🤓|✍)$/), '👀', '']);
   });
 
   it('账号停用: 已打 👀 而终态没人发的任务, 停用时撤销那个 👀', async () => {
@@ -4803,7 +5197,7 @@ describe('官方 bot ack 表情(msg.op)', () => {
     await tick();
     d.handleDispatch('conn-1', telegramDispatch({ requestId: 'queued' }), c.send);
     await tick();
-    expect(reactionEmojis(c.sent)).toEqual(['👀', expect.stringMatching(/^(👨‍💻|🤔|🤓|✍)$/), '👀']); // 两条各一个在册
+    expect(reactionEmojis(c.sent)).toEqual(['👀', expect.stringMatching(/^(🤔|🤓|✍)$/), '👀']); // 两条各一个在册
 
     const draining = d.deactivateAccount();
     await tick();
@@ -4825,7 +5219,7 @@ describe('官方 bot ack 表情(msg.op)', () => {
     d.setEmojiReactionsMode('minimal');
     d.handleDispatch('conn-1', telegramDispatch({ requestId: 'offline-final' }), online.send);
     await tick();
-    expect(reactionEmojis(online.sent)).toEqual(['👀', expect.stringMatching(/^(👨‍💻|🤔|🤓|✍)$/)]);
+    expect(reactionEmojis(online.sent)).toEqual(['👀', expect.stringMatching(/^(🤔|🤓|✍)$/)]);
 
     d.onDisconnected('conn-1');
     fr.finish({ status: 'ok' });
@@ -4879,7 +5273,7 @@ describe('官方 bot ack 表情(msg.op)', () => {
     d.setEmojiReactionsMode('minimal');
     d.handleDispatch('conn-1', telegramDispatch({ requestId: 'hydrated' }), c.send);
     await tick();
-    expect(reactionEmojis(c.sent)).toEqual(['👀', expect.stringMatching(/^(👨‍💻|🤔|🤓|✍)$/)]);
+    expect(reactionEmojis(c.sent)).toEqual(['👀', expect.stringMatching(/^(🤔|🤓|✍)$/)]);
   });
 
   it('账号切换后档位打回未知 —— 不拿上一位主人的选择顶上', async () => {
@@ -4890,7 +5284,7 @@ describe('官方 bot ack 表情(msg.op)', () => {
     d.setEmojiReactionsMode('minimal');
     d.handleDispatch('conn-1', telegramDispatch({ requestId: 'first-owner' }), c.send);
     await tick();
-    expect(reactionEmojis(c.sent)).toEqual(['👀', expect.stringMatching(/^(👨‍💻|🤔|🤓|✍)$/)]);
+    expect(reactionEmojis(c.sent)).toEqual(['👀', expect.stringMatching(/^(🤔|🤓|✍)$/)]);
 
     const draining = d.deactivateAccount();
     fr.finish({ status: 'ok' });
@@ -5109,6 +5503,50 @@ describe('官方 Telegram 终稿 / 交互卡 / 命令菜单由客户端发布', 
     expect(ledger.get('conn-1', 'req-1')?.turnEnd?.clientFinal).toEqual({ complete: true });
   });
 
+  // 规则: 官方飞书 / Lark 与官方 Telegram 走同一套协商与收口(im-turn-flow.md「官方飞书 / Lark」),
+  // 排版用个人飞书 bot 的卡片。入口: 真实 dispatcher 的 handleDispatch → turn.end; 此前飞书任务
+  // 不建载体, 这条分支没有覆盖。最小输入: 一轮带过程记录的成功任务; unit。
+  it.each([
+    ['协商了电脑排版', ['msg-op-v1', 'feishu-progress-ops-v1', 'feishu-final-ops-v1'], true],
+    ['服务端没有宣告电脑排版', [], false],
+  ] as const)('官方飞书: %s', async (_name, features, clientRenders) => {
+    const fr = fakeRunner();
+    const { d } = makeDispatcher({ runner: fr.runner });
+    const c = respondingCollector(d, () => ({}));
+    d.onConnected('conn-1', c.send, [...features]);
+    d.handleDispatch(
+      'conn-1',
+      dispatch({ externalKey: 'feishu:dm:cli_app:ou_alice:g1', source: { im: 'feishu' } }),
+      c.send,
+    );
+    await tick();
+    fr.finish({
+      finalText: '**答案**',
+      process: { title: '过程记录 · 1 项 · 3s', lines: ['✓ 读取 a.ts'] },
+    });
+    await tick(40);
+
+    const end = c.last('turn.end')!.payload;
+    expect(end.finalText).toBe('**答案**');
+    expect(end).not.toHaveProperty('process');
+    if (!clientRenders) {
+      expect(ops(c.sent)).toHaveLength(0);
+      expect(end.clientFinal).toBeUndefined();
+      return;
+    }
+    const finals = ops(c.sent, 'turn-final');
+    expect(finals).toHaveLength(1);
+    expect(finals[0].payload).toMatchObject({ finalPart: 0, action: { kind: 'send' } });
+    const action = finals[0].payload.action;
+    const card = JSON.parse(action.kind === 'send' ? action.text : '{}') as {
+      body: { elements: Array<{ tag: string; content?: string }> };
+    };
+    expect(card.body.elements.map((element) => element.tag)).toEqual(['collapsible_panel', 'markdown']);
+    expect(card.body.elements[1].content).toBe('**答案**');
+    expect(c.sent.findIndex((m) => m.type === 'turn.end')).toBeGreaterThan(c.sent.indexOf(finals[0]));
+    expect(end.clientFinal).toEqual({ complete: true });
+  });
+
   it('客户端终稿没有完整确认 → turn.end 带 clientFinal.complete=false(服务端照旧发布)', async () => {
     vi.useFakeTimers();
     try {
@@ -5124,6 +5562,51 @@ describe('官方 Telegram 终稿 / 交互卡 / 命令菜单由客户端发布', 
       const end = c.last('turn.end')!.payload;
       expect(end.clientFinal).toEqual({ complete: false });
     } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  // 2026-10-27 长期 pending 回归：经真实 dispatcher 验证小时级 429 后完整正文
+  // 进入既有出箱交接，且下一轮能执行；已有未知回执用例不覆盖长退避。unit 假时钟。
+  it('终稿长退避到期后交回完整正文、释放同任务队列，不重跑已完成轮次', async () => {
+    vi.useFakeTimers();
+    const ledger = memoryTerminalLedger();
+    const fr = fakeRunner();
+    const { d } = makeDispatcher({ runner: fr.runner, terminalLedger: ledger });
+    try {
+      const c = respondingCollector(d, (p) =>
+        p.requestId === 'req-1' && p.purpose === 'turn-final'
+          ? { ok: false, channelErrorCode: 429, retryAfterMs: 3_600_000 }
+          : {},
+      );
+      d.onConnected('conn-1', c.send, ALL_FEATURES);
+      d.handleDispatch('conn-1', telegramDispatch(), c.send);
+      await tick();
+      d.handleDispatch('conn-1', telegramDispatch({ requestId: 'req-2' }), c.send);
+      await tick();
+      expect(c.last('task.ack')?.payload.result).toBe('queued');
+      fr.finish({ finalText: '已经生成的完整答案' });
+      await tick(40);
+      expect(ledger.get('conn-1', 'req-1')?.delivery).toBe('pending');
+      expect(c.ofType('turn.end')).toHaveLength(0);
+
+      await vi.advanceTimersByTimeAsync(120_000);
+      await tick(40);
+      expect(c.last('turn.end')?.payload).toMatchObject({
+        requestId: 'req-1',
+        finalText: '已经生成的完整答案',
+        clientFinal: { complete: false },
+      });
+      expect(ledger.get('conn-1', 'req-1')?.delivery).toBe('sent');
+      expect(fr.calls).toHaveLength(2);
+      fr.finish({ finalText: '第二轮答案' });
+      await tick(40);
+      expect(c.ofType('turn.end').map((m) => m.payload.requestId)).toEqual(['req-1', 'req-2']);
+      await vi.advanceTimersByTimeAsync(3_600_000);
+      expect(fr.calls).toHaveLength(2);
+      expect(ops(c.sent, 'turn-final').filter((m) => m.payload.requestId === 'req-1')).toHaveLength(1);
+    } finally {
+      d.dispose();
       vi.useRealTimers();
     }
   });
@@ -5470,5 +5953,48 @@ describe('渠道 /stop 走统一明确停止', () => {
     expect(stopSessionExplicitly).not.toHaveBeenCalled();
     fr.finish();
     await deactivated;
+  });
+});
+
+// Official X companion routing: an authenticated dispatch uses only the host's
+// public lane, never the supplied private session. Revocation also stops queued
+// work. Ordinary workspace tests have no companion binding (unit).
+describe('official X companion assignment', () => {
+  it('routes to the companion lane and rejects queued work after unbinding', async () => {
+    const config = { ...CONFIG, id: 'account:x', workspaces: {}, companionBotId: 'bot-one' as string | null };
+    const fake = fakeRunner();
+    const out = collector();
+    const resolver = vi.fn(async () => ({ sessionId: 'public-lane', workingDir: '/companion/home' }));
+    const dispatcher = createHookDispatcher({ getConnection: () => config, bindings: memoryBindings(),
+      runner: fake.runner, resolveCompanionTarget: resolver, log: noopLog });
+    const payload = dispatch({ externalKey: 'x:thread:principal', source: { im: 'x' }, sessionId: 'private-chat' });
+    dispatcher.handleDispatch(config.id, payload, out.send);
+    await tick(30);
+    expect(fake.calls).toHaveLength(1);
+    expect(fake.calls[0]).toMatchObject({ sessionId: 'public-lane', companionBotId: 'bot-one', isNew: false });
+    expect(fake.calls[0].isDirAuthorized?.('/companion/home')).toBe(true);
+    expect(fake.calls[0].isDirAuthorized?.('/another/private/path')).toBe(false);
+    dispatcher.handleDispatch(config.id, { ...payload, requestId: 'req-2' }, out.send);
+    await tick(30);
+    config.companionBotId = null;
+    expect(fake.calls[0].isDirAuthorized?.('/companion/home')).toBe(false);
+    fake.finish();
+    await tick(60);
+    expect(fake.calls).toHaveLength(1);
+    expect(out.ofType('turn.end').some(frame => frame.payload.requestId === 'req-2' && frame.payload.status === 'error')).toBe(true);
+    dispatcher.dispose();
+  });
+  it('does not fall back to ordinary tasks when the assigned companion is unavailable', async () => {
+    const fake = fakeRunner();
+    const out = collector();
+    const dispatcher = createHookDispatcher({
+      getConnection: () => ({ ...CONFIG, companionBotId: 'missing-bot' }), bindings: memoryBindings(),
+      runner: fake.runner, resolveCompanionTarget: async () => { throw new Error('Companion unavailable'); }, log: noopLog,
+    });
+    dispatcher.handleDispatch('account:x', dispatch({ source: { im: 'x' }, externalKey: 'x:thread:principal' }), out.send);
+    await tick(30);
+    expect(fake.calls).toHaveLength(0);
+    expect(out.last('task.ack')?.payload.result).toBe('rejected');
+    dispatcher.dispose();
   });
 });

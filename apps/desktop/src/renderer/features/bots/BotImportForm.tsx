@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { Button } from '@/components/ui/button';
-import { companionImportReasonKey, companionImportErrorCode, compactCompanionImportSelection, areCompanionImportEntriesSelected, toggleCompanionImportEntries, companionImportCategories, type CompanionImportCategory, type CompanionImportApi, type CompanionImportPreview, type CompanionImportResult, type CompanionImportSelection, type CompanionImportSource } from '@cindy/maker-shared/companion-import';
+import { companionImportReasonKey, companionImportErrorCode, compactCompanionImportSelection, areCompanionImportEntriesSelected, toggleCompanionImportEntries, companionImportCategories, type CompanionImportCategory, type CompanionImportEntry, type CompanionImportApi, type CompanionImportPreview, type CompanionImportResult, type CompanionImportSelection, type CompanionImportSource } from '@cindy/maker-shared/companion-import';
 import { normalizeBotName } from '../../../shared/botCreation';
 import { BOT_PORTRAIT_COUNT, BotPortraitPicker, galleryPortrait } from './BotPortraitPicker';
 import { useBotProfiles } from './botStore';
@@ -13,6 +13,8 @@ export function BotImportForm({ api = window.electronAPI.companionImport, onBack
 }) {
   const { t } = useTranslation();
   const tr = (key: string) => t(`bots.import.${key}`);
+  // Bots read as "platform · name"; their owner alternatives differ only by owner ID.
+  const entryLabel = (entry: CompanionImportEntry) => entry.platform ? `${t(`bots.channels.platform.${entry.platform}`)} · ${entry.name}` : entry.name;
   const bots = useBotProfiles();
   const [sources, setSources] = useState<CompanionImportSource[]>();
   const [preview, setPreview] = useState<CompanionImportPreview>();
@@ -91,8 +93,9 @@ export function BotImportForm({ api = window.electronAPI.companionImport, onBack
     openedRequest.current = result.requestId;
     onCreated(result.botId);
   }, [enterChat, result, onCreated]);
+  const entriesById = new Map(preview?.entries.map(entry => [entry.id, entry]));
   const categoryEntries = preview?.entries.filter(entry => entry.category === category) ?? [];
-  const filtered = categoryEntries.filter(entry => `${entry.name} ${entry.description ?? ''}`.toLocaleLowerCase().includes(query.toLocaleLowerCase()));
+  const filtered = categoryEntries.filter(entry => `${entryLabel(entry)} ${entry.description ?? ''}`.toLocaleLowerCase().includes(query.toLocaleLowerCase()));
   const openCategory = (next: CompanionImportCategory) => { setCategory(next); setQuery(''); setPage(0); };
   const checkbox = (ids: string[], checked: boolean, label: string, partial = false) => <input type="checkbox" aria-label={label}
     disabled={locked} checked={checked} ref={node => { if (node) node.indeterminate = partial; }} onChange={event => toggle(ids, event.target.checked)}
@@ -114,7 +117,7 @@ export function BotImportForm({ api = window.electronAPI.companionImport, onBack
         <Button variant="secondary" onClick={() => { setDetails(!details); setDetailPage(0); }}>{tr('details')} · {outstanding.length}</Button>
         {details ? <div className="space-y-3">
           {outstanding.slice(detailPage * 20, (detailPage + 1) * 20).map(check => <div key={check.entryId} className="break-words text-13">
-            <p className="text-[var(--text-primary)]">{preview?.entries.find(entry => entry.id === check.entryId)?.name ?? tr('itemAttention')}</p>
+            <p className="text-[var(--text-primary)]">{entriesById.has(check.entryId) ? entryLabel(entriesById.get(check.entryId)!) : tr('itemAttention')}</p>
             <p className="text-[var(--text-secondary)]">{tr(check.progress?.saved ? 'partlySaved' : savedIds.has(check.entryId) ? 'savedNeedsSetup' : 'notSaved')} · {tr(companionImportReasonKey(check.message))}</p>
             {check.progress ? <p className="text-[var(--text-secondary)]">{check.progress.saved} / {check.progress.total}</p> : null}
           </div>)}
@@ -131,13 +134,15 @@ export function BotImportForm({ api = window.electronAPI.companionImport, onBack
     </div> : category ? <section className="space-y-3">
       <div className="flex items-center justify-between gap-3"><h3 className="text-16 font-medium">{tr(category)}</h3>
         <label className="flex items-center gap-2 text-13">{checkbox(categoryEntries.map(entry => entry.id), areCompanionImportEntriesSelected(categoryEntries, selected), tr('selectAll'))}{tr('selectAll')}</label></div>
-      <input type="search" aria-label={tr('search')} placeholder={tr('search')} value={query} onChange={event => { setQuery(event.target.value); setPage(0); }}
-        className="h-9 w-full rounded-full border border-[var(--border-default)] bg-[var(--confirm-bg)] px-3 text-14 text-[var(--text-primary)] outline-none focus-visible:ring-2 focus-visible:ring-[var(--focus-ring)]" />
+      {category !== 'bots' || categoryEntries.length > 20 ? <input type="search" aria-label={tr('search')} placeholder={tr('search')} value={query} onChange={event => { setQuery(event.target.value); setPage(0); }}
+        className="h-9 w-full rounded-full border border-[var(--border-default)] bg-[var(--confirm-bg)] px-3 text-14 text-[var(--text-primary)] outline-none focus-visible:ring-2 focus-visible:ring-[var(--focus-ring)]" /> : null}
       <div className="divide-y divide-[var(--border-default)]">
         {filtered.slice(page * 20, (page + 1) * 20).map(entry => <label key={entry.id} className="flex min-h-11 cursor-pointer items-start gap-3 py-3">
-          <span className="flex h-5 shrink-0 items-center">{checkbox([entry.id], selectedSet.has(entry.id), entry.name)}</span>
-          <span className="min-w-0 flex-1 break-words text-14">{entry.name}{entry.description ? <span className="mt-1 line-clamp-2 block text-13 text-[var(--text-secondary)]">{entry.description}</span> : null}</span>
-          {entry.enabled === false ? <span className="shrink-0 text-12 text-[var(--text-secondary)]">{tr('paused')}</span> : null}
+          <span className="flex h-5 shrink-0 items-center">{checkbox([entry.id], selectedSet.has(entry.id), entryLabel(entry))}</span>
+          <span className="min-w-0 flex-1 break-words text-14">{entryLabel(entry)}
+            {entry.owner && entry.exclusiveWith?.length ? <span className="mt-1 block text-13 text-[var(--text-secondary)]">{t('bots.import.botOwner', { id: entry.owner })}</span> : null}
+            {entry.description ? <span className="mt-1 line-clamp-2 block text-13 text-[var(--text-secondary)]">{entry.description}</span> : null}</span>
+          {entry.enabled === false ? <span className="shrink-0 text-12 text-[var(--text-secondary)]">{tr(entry.category === 'bots' ? 'sourceDisabled' : 'paused')}</span> : null}
         </label>)}
       </div>
       {filtered.length > 20 ? <div className="flex items-center justify-between gap-3"><Button variant="secondary" disabled={page === 0} onClick={() => setPage(page - 1)}>{tr('previous')}</Button><span className="text-13 text-[var(--text-secondary)]">{page + 1} / {Math.ceil(filtered.length / 20)}</span><Button variant="secondary" disabled={(page + 1) * 20 >= filtered.length} onClick={() => setPage(page + 1)}>{tr('next')}</Button></div> : null}
@@ -157,7 +162,8 @@ export function BotImportForm({ api = window.electronAPI.companionImport, onBack
           return <div key={group} className="flex min-h-12 items-center gap-3 py-1">
             {checkbox(entries.map(item => item.id), allSelected, tr(group), count > 0 && !allSelected)}
             <button type="button" disabled={locked} className="flex min-h-11 min-w-0 flex-1 items-center justify-between gap-3 text-left text-14" onClick={() => openCategory(group)}>
-              <span>{tr(group)}</span><span className="shrink-0 text-[var(--text-secondary)]">{count} / {entries.length} <span aria-hidden="true">›</span></span>
+              <span className="min-w-0">{tr(group)}{group === 'bots' ? <span className="mt-1 block text-13 text-[var(--text-secondary)]">{t('bots.import.botsNote', { source: preview.source.kind === 'hermes' ? 'Hermes' : 'OpenClaw' })}</span> : null}</span>
+              <span className="shrink-0 text-[var(--text-secondary)]">{count} / {entries.length} <span aria-hidden="true">›</span></span>
             </button>
           </div>;
         })}

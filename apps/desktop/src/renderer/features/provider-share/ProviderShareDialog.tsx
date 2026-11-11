@@ -21,6 +21,7 @@ export function ProviderShareDialog({
   maxWidth = 460,
   closeLabel,
   initialFocusRef,
+  returnFocusTo,
   busy = false,
   role = 'dialog',
   testId,
@@ -32,6 +33,8 @@ export function ProviderShareDialog({
   /** 设了就在右上角显示 ×(带 Tip 与无障碍名称)。有「取消」按钮的弹窗不要设。 */
   closeLabel?: string;
   initialFocusRef?: RefObject<HTMLElement | null>;
+  /** 手动打开的弹窗关闭时回到触发按钮；按钮已从列表或页面移除则不抢焦点。 */
+  returnFocusTo?: HTMLElement | null;
   /** 操作进行中：Esc 不关闭。 */
   busy?: boolean;
   role?: 'dialog' | 'alertdialog';
@@ -64,6 +67,10 @@ export function ProviderShareDialog({
                   }
                 : undefined
             }
+            onCloseAutoFocus={returnFocusTo ? (event) => {
+              event.preventDefault();
+              if (returnFocusTo.isConnected) returnFocusTo.focus();
+            } : undefined}
           >
             {closeLabel && (
               <Tip text={closeLabel} contentClassName="z-[10001]">

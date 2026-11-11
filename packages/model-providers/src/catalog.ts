@@ -153,7 +153,7 @@ function validateModel(
   assert(typeof m.id === 'string' && m.id.length > 0, `model.id missing in provider '${providerId}'`);
   assert(typeof m.name === 'string' && m.name.length > 0, `model.name missing for '${m.id}'`);
   if (m.nativeApi !== undefined && m.nativeApi !== null) {
-    assert(isPiModelApi(m.nativeApi), `model.nativeApi invalid for '${m.id}'`);
+    assert(isPiModelApi(m.nativeApi) || validModelMetadata({ nativeApi: m.nativeApi }), `model.nativeApi invalid for '${m.id}'`);
   }
   if (m.api !== undefined) {
     assert(isPiModelApi(m.api), `model.api invalid for '${m.id}'`);

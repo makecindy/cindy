@@ -1,5 +1,8 @@
 import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
+import { runInNewContext } from 'node:vm';
+import ts from 'typescript';
+import * as endpointContract from '@cindy/maker-shared/client-endpoints';
 import { describe, expect, it } from 'vitest';
 import {
   DEFAULT_DEVICE_LINK_API_BASE_URL,
@@ -95,10 +98,37 @@ describe('mobile env', () => {
     });
   });
 
-  it('selects the bundled dev endpoint manifest from AUTH_REGION', () => {
-    const source = readFileSync(resolve(process.cwd(), 'src/config/env.ts'), 'utf8');
-    expect(source).toContain("AUTH_REGION === 'global'");
-    expect(source).toContain("require('../../../../config/endpoint.global.json')");
-    expect(source).toContain("require('../../../../config/endpoint.json')");
+  // Unit: evaluate the actual module with isolated build inputs, preserving the
+  // production parser. A wrong branch must change the public endpoint output;
+  // checking that both require strings exist did not catch that regression.
+  it('selects each bundled dev manifest and leaves production loading to startup', () => {
+    const compiled = ts.transpileModule(
+      readFileSync(resolve(process.cwd(), 'src/config/env.ts'), 'utf8'),
+      { compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2022 } },
+    ).outputText;
+    const manifests = Object.fromEntries(['cn', 'global', 'dev'].map((region) => [
+      `../../../../config/endpoint${region === 'cn' ? '' : `.${region}`}.json`,
+      { schemaVersion: 1, authApiBaseUrl: `https://${region}.example.invalid` },
+    ]));
+    for (const region of ['cn', 'global', 'dev']) {
+      for (const dev of [false, true]) {
+        const exports: Record<string, unknown> = {};
+        const loaded: string[] = [];
+        runInNewContext(compiled, {
+          exports, __DEV__: dev, process: { env: { EXPO_PUBLIC_CINDY_AUTH_REGION: region } },
+          require(id: string) {
+            if (id === 'expo-application') return {};
+            if (id === 'expo-constants') return { default: { expoConfig: null } };
+            if (id === '@cindy/maker-shared/client-endpoints') return endpointContract;
+            if (id === './endpointManifestLoader') return {};
+            if (Object.hasOwn(manifests, id)) { loaded.push(id); return manifests[id]; }
+            throw new Error(`Unexpected module: ${id}`);
+          },
+        });
+        expect(exports.AUTH_REGION).toBe(region);
+        expect(exports.AUTH_API_BASE_URL).toBe(dev ? `https://${region}.example.invalid` : '');
+        expect(loaded).toHaveLength(dev ? 1 : 0);
+      }
+    }
   });
 });

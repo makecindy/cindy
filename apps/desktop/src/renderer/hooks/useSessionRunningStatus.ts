@@ -20,6 +20,8 @@
  *      the active session (FP-3).
  *    - It has pending local plugin setup (`hasPendingPluginSetup`) while NOT
  *      being the active session.
+ *    - It has a pending input handoff (`hasPendingInputHandoff`, 代输入) while
+ *      NOT being the active session.
  *
  * Notifications are cleared when:
  *    - The user navigates to that session (clicks it) — done / awaiting only。
@@ -39,6 +41,7 @@
 
 import { useCallback, useEffect, useMemo, useRef, useSyncExternalStore } from 'react';
 import { makerChatStore } from '@/lib/makerChatStore';
+import { getDataOwnerGeneration } from '@/contexts/dataOwnerGeneration';
 import type { SessionStatusInfo } from '@/lib/makerChatStore';
 import {
   addSessionAttention,
@@ -53,7 +56,10 @@ import {
   isSessionTerminalNotificationOwnedByScheduler,
   isSessionDoneSilenced,
 } from '@/lib/silencedSessionDoneStore';
-import { noteSessionTurnStartedForAlerts } from '@/hooks/usePendingAlertAttention';
+import {
+  noteSessionTurnStartedForAlerts,
+  refreshPendingAlerts,
+} from '@/hooks/usePendingAlertAttention';
 import {
   ensureAgentIslandActivitySubscribed,
   isSessionCompletionHeldByAgentIsland,
@@ -69,6 +75,57 @@ import {
  */
 const QUEUE_DEBOUNCE_MS = 500;
 
+// Keep only currently pending request IDs across Sidebar remounts. A cleared dot
+// stays cleared for the same request, while a new request can alert immediately.
+// Account switches discard the ledger; settled/deleted tasks are pruned below.
+let pendingReminderOwnerId: string | null = null;
+const notifiedPendingRequests = new Map<string, Set<string>>();
+
+/**
+ * Main drops the whole notification when this field is longer than 256, so the
+ * id itself must stay inside that bound. A needs-reply joins every pending
+ * request key; a handful of long keys already overflows. Fold the tail into a
+ * fixed-width hash instead of letting the payload be rejected.
+ */
+const ALERT_EVENT_ID_MAX_LENGTH = 256;
+
+/** FNV-1a, hex. Stable across reloads and short enough to keep the id bounded. */
+function shortAlertKeyHash(value: string): string {
+  let hash = 0x811c9dc5;
+  for (let i = 0; i < value.length; i += 1) {
+    hash ^= value.charCodeAt(i);
+    hash = Math.imul(hash, 0x01000193);
+  }
+  return (hash >>> 0).toString(16).padStart(8, '0');
+}
+
+/**
+ * Identity of one needs-reply or error, built from the turn that produced it.
+ * The same turn plus the same pending request (or the same failure) is one
+ * desktop toast; a later turn, or a different request, is a new one.
+ * No turn clock means no identity: the caller still notifies, it just cannot
+ * collapse a repeat. Always at most 256 characters.
+ */
+export function sessionAlertEventId(
+  kind: 'error' | 'needs-reply',
+  turnStartedAt: number | null | undefined,
+  requestKey?: string,
+): string | undefined {
+  if (typeof turnStartedAt !== 'number' || !Number.isFinite(turnStartedAt) || turnStartedAt <= 0) {
+    return undefined;
+  }
+  const turn = `turn:${Math.floor(turnStartedAt)}`;
+  if (kind === 'error') return `${turn}:error`;
+  const key = requestKey && requestKey.length > 0 ? requestKey : 'needs-reply';
+  const raw = `${turn}:${key}`;
+  if (raw.length <= ALERT_EVENT_ID_MAX_LENGTH) return raw;
+  // Keep the turn clock readable and fold only the request tail. Two different
+  // long key lists of the same turn must not collapse into one id.
+  const digest = shortAlertKeyHash(key);
+  const room = ALERT_EVENT_ID_MAX_LENGTH - turn.length - 1 - 1 - digest.length;
+  return `${turn}:${key.slice(0, Math.max(0, room))}#${digest}`;
+}
+
 interface UseSessionRunningStatusOptions {
   /**
    * Fired when a session transitions running → done. Filters out errored
@@ -77,21 +134,26 @@ interface UseSessionRunningStatusOptions {
    * the consumer's. The in-app dot still skips active session via its own
    * branch; the callback fires for any non-error done.
    */
-  onSessionDone?: (sessionId: string) => void;
+  onSessionDone?: (sessionId: string, alertEventId?: string) => void;
   /**
    * Fired when a session transitions running → terminal error. It mirrors
    * onSessionDone's no-active-session-filter policy so the consumer can gate
    * on focus state and notification channel settings.
    */
-  onSessionError?: (sessionId: string) => void;
+  onSessionError?: (sessionId: string, alertEventId?: string) => void;
   /**
    * Fired when a session enters a pending state needing user input
    * (`pendingAskUser` / `pendingPermission` / `pendingPlanReview` /
    * `pendingPluginSetup`). Rising
-   * edge only — re-fires only after the pending state clears and re-enters.
+   * edge fires for a new request (or new input-handoff step) in the session.
    * Like onSessionDone, no active-session filter; the consumer decides.
    */
-  onSessionNeedsReply?: (sessionId: string) => void;
+  onSessionNeedsReply?: (
+    sessionId: string,
+    options?:
+      | { inputHandoff: true; inputHandoffRequestId?: string; alertEventId?: string }
+      | { alertEventId: string },
+  ) => void;
 }
 
 /**
@@ -133,6 +195,18 @@ export function useSessionRunningStatus(
   // Track which sessions had pending states last cycle, so we can detect
   // when pending states disappear and auto-clear notifications.
   const prevPendingRef = useRef(new Set<string>());
+  const prevPendingKeysRef = useRef(new Map<string, Set<string>>());
+  const prevPendingOwnerRef = useRef(getDataOwnerGeneration().dataOwnerId);
+
+  /** 本 hook 因 turn 以错误结束而点的红点(新一轮正常结束时据此收掉过期的那颗)。 */
+  const liveErrorMarkedRef = useRef(new Set<string>());
+  /**
+   * 这一段「逻辑上在跑」是协调器的恢复尝试，不是新的供应商回合。
+   * 上升沿读 hasSessionRecoveryPending：配额错误之后的续跑不会再来一帧 running。
+   */
+  const recoveryAttemptRunningRef = useRef(new Set<string>());
+  /** 已经用过的失败告警轮次时间。恢复尝试没推进它时，不能再用同一个 turn:…:error。 */
+  const errorAlertTurnRef = useRef(new Map<string, number>());
 
   /**
    * Pending done-notifications waiting for a debounce window to expire.
@@ -154,6 +228,11 @@ export function useSessionRunningStatus(
     // --- 1. Detect new turn starts ---
     for (const sessionId of currentRunningSet) {
       if (!prevRunning.has(sessionId)) {
+        if (makerChatStore.hasSessionRecoveryPending(sessionId)) {
+          recoveryAttemptRunningRef.current.add(sessionId);
+        } else {
+          recoveryAttemptRunningRef.current.delete(sessionId);
+        }
         // 只清「run 已终态」的标记(用户手动起的新对话或下一个 run);run 还在跑时
         // 是 subagent 续 turn / silent-stop 自动续跑,标记必须留着。兜底定时器不在
         // 这里动 —— 统一由本 effect 末尾的对账按当前 running 状态处理。
@@ -169,10 +248,11 @@ export function useSessionRunningStatus(
         // hasSessionTerminalError 仍为 true 时不清(mivo 等 skipTurnReset 上升沿
         // 不拆横幅);派生账本另走 noteSessionTurnStartedForAlerts,只在仍认领
         // 错误尾行时重算,横幅已灭则差分熄灭红点。
-        if (
-          getSessionAttentionKind(sessionId) === 'error' &&
-          !makerChatStore.hasSessionTerminalError(sessionId)
-        ) {
+        if (getSessionAttentionKind(sessionId) !== 'error') {
+          // 本 hook 点的那颗已被处置(关横幅、重试等)：不再认领，之后别的来源点的红点不归它收。
+          liveErrorMarkedRef.current.delete(sessionId);
+        } else if (!makerChatStore.hasSessionTerminalError(sessionId)) {
+          liveErrorMarkedRef.current.delete(sessionId);
           clearSessionAttention(sessionId, { intent: 'explicit' });
         }
         noteSessionTurnStartedForAlerts(sessionId);
@@ -191,6 +271,7 @@ export function useSessionRunningStatus(
     for (const sessionId of prevRunning) {
       if (!currentRunningSet.has(sessionId)) {
         // Session transitioned from running -> not running.
+        const recoveryAttempt = recoveryAttemptRunningRef.current.delete(sessionId);
         const info = statusMap.get(sessionId);
         // side-task(mivo 等 skipTurnReset)的结束不是 turn 终态:done/error/角标/
         // 通知全部跳过。transition entry 只存活一个投递窗口(store 调度清除),
@@ -228,7 +309,25 @@ export function useSessionRunningStatus(
           // 横幅就在眼前时列表同样亮点(2026-07 统一决策)。不能沿用「活跃会话不亮」
           // 的 done 语义。清除只能来自用户处置横幅或 pending-alerts 派生收敛。
           addSessionAttention(sessionId, 'error');
-          if (!notificationOwnedByScheduler) onSessionErrorRef.current?.(sessionId);
+          liveErrorMarkedRef.current.add(sessionId);
+          if (!notificationOwnedByScheduler) {
+            const turnAlertId = sessionAlertEventId('error', info?.turnStartedAt);
+            const turnClock = turnAlertId
+              ? Number(/^turn:(\d+):error$/.exec(turnAlertId)?.[1])
+              : undefined;
+            // 配额错误已经用这个轮次时间弹过。恢复尝试失败时 applyInputProjection
+            // 不推进 lastStartedAt，再用 turn:…:error 会被主进程账本当成重复吞掉。
+            // 这次不带轮次标识：没有标识就照常通知，不和上一次配额错误抵销。
+            const repeatedRecoveryFailure = recoveryAttempt
+              && turnClock !== undefined
+              && errorAlertTurnRef.current.get(sessionId) === turnClock;
+            if (turnClock !== undefined && !repeatedRecoveryFailure) {
+              errorAlertTurnRef.current.set(sessionId, turnClock);
+            }
+            const alertEventId = repeatedRecoveryFailure ? undefined : turnAlertId;
+            if (alertEventId) onSessionErrorRef.current?.(sessionId, alertEventId);
+            else onSessionErrorRef.current?.(sessionId);
+          }
           continue;
         }
 
@@ -239,6 +338,19 @@ export function useSessionRunningStatus(
         // A recoverable interruption clears the terminal error while waiting to
         // retry. That idle gap is not completion, even if it lasts beyond debounce.
         if (makerChatStore.hasSessionRecoveryPending(sessionId)) continue;
+
+        // 这一轮正常结束、错误已不在，上一次失败的红点却还亮着：新一轮启动那一刻可能还读到旧错误
+        // (撞上限后自动换电脑、额度恢复后自动继续时尤其如此)，当时没收掉，之后就再没人收。本 hook
+        // 自己点的直接收；派生账本(错误尾行 / 中断)重算一次，仍有未处置的告警会重新点亮。
+        if (
+          getSessionAttentionKind(sessionId) === 'error' &&
+          !makerChatStore.hasSessionTerminalError(sessionId)
+        ) {
+          if (liveErrorMarkedRef.current.delete(sessionId)) {
+            clearSessionAttention(sessionId, { intent: 'explicit' });
+          }
+          void refreshPendingAlerts();
+        }
 
         // 正常 done:走 debounce。QUEUE_DEBOUNCE_MS 内若同 session 又变 running
         // (main 自动衔接下一条队列),上面的 "--- 1. Detect new turn starts ---"
@@ -283,7 +395,8 @@ export function useSessionRunningStatus(
             (cur.hasPendingAskUser ||
               cur.hasPendingPermission ||
               cur.hasPendingPlanReview ||
-              cur.hasPendingPluginSetup);
+              cur.hasPendingPluginSetup ||
+              cur.hasPendingInputHandoff === true);
           // silenced 可能在 debounce 窗口内才到:转换当时没静默、进了 debounce,落地必须再读。
           if (!hasTerminalError && (isSessionDoneSilenced(sessionId)
             || makerChatStore.wasLastStopQuietCompletion(sessionId))) return;
@@ -308,36 +421,95 @@ export function useSessionRunningStatus(
     }
 
     // --- 3. Detect pending ask-user / permission / plan-review / plugin-setup ---
+    const ownerId = getDataOwnerGeneration().dataOwnerId;
+    if (pendingReminderOwnerId !== ownerId) {
+      pendingReminderOwnerId = ownerId;
+      notifiedPendingRequests.clear();
+    }
+    if (prevPendingOwnerRef.current !== ownerId) {
+      prevPendingOwnerRef.current = ownerId;
+      prevPendingRef.current.clear();
+      prevPendingKeysRef.current.clear();
+    }
     const currentPendingSet = new Set<string>();
+    const currentPendingKeys = new Map<string, Set<string>>();
+    const previouslyPending = new Set([
+      ...prevPendingRef.current,
+      ...notifiedPendingRequests.keys(),
+    ]);
     for (const [id, info] of statusMap) {
       if (
         info.hasPendingAskUser ||
         info.hasPendingPermission ||
         info.hasPendingPlanReview ||
-        info.hasPendingPluginSetup
+        info.hasPendingPluginSetup ||
+        info.hasActionableInputHandoff === true
       ) {
         currentPendingSet.add(id);
         const isActive = id === activeSessionId;
-        const wasAlreadyPending = prevPendingRef.current.has(id);
-        // In-app dot + dock badge: RISING edge only (mirror onSessionNeedsReply
-        // below), NOT a per-tick re-derive. A backgrounded session keeps
-        // hasPendingX=true until the prompt is answered, so the old
-        // `!hasSessionAttention(id)` guard re-added it on every snapshot tick:
-        // the moment the user cleared the badge (clicked the session / focused
-        // the window → clearAllSessionAttention), the next tick resurrected it,
-        // leaving the macOS Dock red dot impossible to clear. Edge-triggering
-        // means a cleared badge stays cleared until pending clears and re-enters.
+        const keys = info.hasActionableInputHandoff
+          ? info.pendingRequestKeys
+          : info.pendingRequestKeys?.filter((key) => !key.startsWith('handoff:'));
+        const newKeys = keys?.filter((key) =>
+          !notifiedPendingRequests.get(id)?.has(key)
+          && !prevPendingKeysRef.current.get(id)?.has(key));
+        const wasAlreadyPending = keys?.length
+          ? newKeys?.length === 0
+          : prevPendingRef.current.has(id);
+        if (keys?.length) currentPendingKeys.set(id, new Set(keys));
+        // A cleared dot stays cleared for the same request across status ticks
+        // and Sidebar remounts, but a new request raises it immediately.
         if (!isActive && !wasAlreadyPending) {
-          addSessionAttention(id, 'awaiting'); // 待用户回复/选择 → 黄(V5)
+          addSessionAttention(id, 'awaiting');
         }
-        // System notification callback: rising edge only, no active filter.
-        // Same reasoning as onSessionDone — focus state is the consumer's
-        // call. Re-firing for the same session requires the pending state
-        // to clear and re-enter (prevents repeat-pings).
         if (!wasAlreadyPending) {
-          onSessionNeedsReplyRef.current?.(id);
+          // Main owns the fixed-copy phone push. The notification helper checks
+          // existing IM routing before deciding whether Feishu needs a fallback.
+          const handoffOnly = newKeys?.length
+            ? newKeys.every((key) => key.startsWith('handoff:'))
+            : info.hasActionableInputHandoff === true
+              && !info.hasPendingAskUser
+              && !info.hasPendingPermission
+              && !info.hasPendingPlanReview
+              && !info.hasPendingPluginSetup;
+          const alertEventId = sessionAlertEventId(
+            'needs-reply',
+            info.turnStartedAt,
+            (newKeys ?? keys)?.join(','),
+          );
+          if (handoffOnly) {
+            const handoffKey = (newKeys ?? keys)?.find((key) => key.startsWith('handoff:'));
+            const requestId = handoffKey?.slice('handoff:'.length, handoffKey.lastIndexOf(':'));
+            onSessionNeedsReplyRef.current?.(id, {
+              inputHandoff: true,
+              ...(requestId ? { inputHandoffRequestId: requestId } : {}),
+              ...(alertEventId ? { alertEventId } : {}),
+            });
+          } else if (alertEventId) {
+            onSessionNeedsReplyRef.current?.(id, { alertEventId });
+          } else {
+            onSessionNeedsReplyRef.current?.(id);
+          }
+        }
+        // Other hook consumers only read running status. They may add the
+        // in-app dot, but must not consume the system notification owner's edge.
+        if (keys?.length && onSessionNeedsReplyRef.current) {
+          const seen = notifiedPendingRequests.get(id) ?? new Set<string>();
+          for (const key of keys) seen.add(key);
+          notifiedPendingRequests.set(id, seen);
         }
       }
+    }
+
+    // Keep memory bounded to requests still pending. A request resolved while
+    // Sidebar was unmounted is removed on the next snapshot.
+    for (const [id, seen] of notifiedPendingRequests) {
+      const current = currentPendingKeys.get(id);
+      const stillPending = statusMap.get(id)?.pendingRequestKeys;
+      for (const key of seen) {
+        if (!current?.has(key) && !stillPending?.includes(key)) seen.delete(key);
+      }
+      if (seen.size === 0) notifiedPendingRequests.delete(id);
     }
 
     // --- 4. Auto-clear notifications when pending state disappears ---
@@ -346,7 +518,7 @@ export function useSessionRunningStatus(
     // immediately starts a continuation: otherwise the pending falling edge is
     // consumed while running, and no later snapshot can clear the stale badge.
     // Done/error notifications have separate owners and remain sticky.
-    for (const sessionId of prevPendingRef.current) {
+    for (const sessionId of previouslyPending) {
       if (
         !currentPendingSet.has(sessionId) &&
         hasSessionAttention(sessionId) &&
@@ -360,6 +532,7 @@ export function useSessionRunningStatus(
 
     prevRunningRef.current = new Set(currentRunningSet);
     prevPendingRef.current = currentPendingSet;
+    prevPendingKeysRef.current = currentPendingKeys;
   }, [statusMap, activeSessionId]);
 
   // Unmount cleanup:清掉所有还没 fire 的 done debounce 定时器,避免 hook 卸载后

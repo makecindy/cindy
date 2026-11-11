@@ -12,8 +12,16 @@
   "resync": "重新同步",
   "resyncing": "正在重新同步",
   "syncShort": "同步",
-  "deviceUnresponsiveTitle": "电脑端未响应",
-  "deviceUnresponsiveHint": "电脑暂时没有回应请求，正在自动重试。",
+  "deviceUnresponsiveTitle": "连接暂无响应",
+  "deviceUnresponsiveHint": "请求尚未收到回应，正在自动重试。",
+  "localNetwork": {
+    "title": "手机网络不可用",
+    "hint": "请检查手机网络，恢复后会自动连接。"
+  },
+  "serviceConnection": {
+    "title": "暂时连不上服务",
+    "hint": "手机暂时连不上服务，正在自动重连。"
+  },
   "connectStep1": "在电脑上安装并打开 {{appName}}",
   "connectStep2": "用与手机相同的账号登录",
   "connectStep3": "在「设置 → 远程连接」中开启「允许同账号设备控制本机」",
@@ -26,6 +34,8 @@
   "sectionAccessRevoked": "需要重新允许",
   "retryAccess": "重试访问",
   "recheck": "重新检查",
+  "deviceRemovedTitle": "设备已移除",
+  "deviceRemovedHint": "请退出后重新登录，以重新加入设备列表。",
   "authFailedTitle": "登录已失效",
   "authFailedHint": "登录状态已过期，请退出后重新登录。",
   "replacedTitle": "连接被顶替",
@@ -35,7 +45,7 @@
   "versionMismatchTitle": "版本不匹配",
   "versionMismatchHint": "当前 App 版本与服务端协议不一致，请升级到最新版本。",
   "unstableTitle": "连接反复断开",
-  "unstableHint": "本机连接反复断开又重连，远程操作可能一直超时。请检查网络；若持续如此，重启 App 后重试。",
+  "unstableHint": "连接不稳定，请检查网络并等待连接恢复",
   "relay": {
     "label": {
       "online": "Relay 已连接",
@@ -61,7 +71,7 @@
     "remoteDisabled": "远程电脑已关闭允许远程控制。",
     "channelNotAllowed": "当前电脑端版本不支持这个远程能力。",
     "accessRevoked": "这台电脑已撤销手机访问权限。",
-    "deviceUnresponsive": "电脑端未响应，正在自动重试，请稍后再试。",
+    "deviceUnresponsive": "请求尚未收到回应，正在自动重试。",
     "versionMismatch": "与服务端协议版本不一致，请升级 App 后重试。",
     "payloadTooLarge": "这次传输的内容过大，请拆分后重试。",
     "mediaFetchFailed": "获取电脑端文件失败，可以稍后重试。",

@@ -1,9 +1,16 @@
 import { useEffect, useState, type CSSProperties } from 'react';
-import { AlertCircle, X } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
-import { Tip } from '@/components/ui/tooltip';
+import { useNavigate } from 'react-router-dom';
+import { ErrorNotice } from '@/components/ui/error-notice';
+import { Button } from '@/components/ui/button';
+import { readInstalledGhostsSnapshot } from '@/cindy-brain/useInstalledGhosts';
+import type { ErrorDiagnosisSource } from '@/lib/errorDiagnosisPrompt';
 import { cn } from '@/lib/utils';
-import { scheduleFailureMessageKey } from '@cindy/maker-shared/schedule-model';
+import {
+  scheduleFailureMessageKey,
+  type ScheduleMissingPlugin,
+} from '@cindy/maker-shared/schedule-model';
+import { installedGhostStoragePart, resolvePluginInstanceQuery } from '../../../shared/pluginIdentity';
 import {
   compareFailedScheduleRuns,
   dismissScheduleFailure,
@@ -16,6 +23,9 @@ interface BannerProps {
   dataOwnerId: string | null;
   sessionId: string;
   latestFailedRun: FailedScheduleRunSnapshot;
+  /** Remote tasks run on another computer; the plugin pages here would act on this one. */
+  remote?: boolean;
+  onDiagnose?: (error: ErrorDiagnosisSource) => void;
   className?: string;
   style?: CSSProperties;
 }
@@ -34,6 +44,8 @@ function FailedScheduleNotice({
   dataOwnerId,
   sessionId,
   latestFailedRun,
+  remote,
+  onDiagnose,
   className,
   style,
 }: BannerProps) {
@@ -77,31 +89,44 @@ function FailedScheduleNotice({
     setDismissedRun(latestFailedRun);
   };
 
+  const missingPlugin = latestFailedRun.failureKind === 'precheck' ? latestFailedRun.missingPlugin : undefined;
+  const message = t(`chat.unreadFailedScheduleBanner.${scheduleFailureMessageKey(latestFailedRun)}`, {
+    name: missingPlugin?.name,
+  });
+
   return (
-    <div
-      className={cn(
-        'mx-auto flex select-none items-start gap-2 rounded-md px-3 py-2',
-        'border bg-[var(--error-bg)] border-[var(--error-border)]',
-        className,
-      )}
+    <ErrorNotice
+      className={cn('mx-auto', className)}
       style={style}
       data-testid="unread-failed-schedule-banner"
       data-banner-kind="unread-failed-schedule"
-    >
-      <AlertCircle size={14} className="shrink-0 mt-[2px] text-[var(--error-fg)]" />
-      <span className="flex-1 min-w-0 text-xs break-all text-[var(--error-fg)]">
-        {t(`chat.unreadFailedScheduleBanner.${scheduleFailureMessageKey(latestFailedRun)}`)}
-      </span>
-      <Tip text={t('chat.unreadFailedScheduleBanner.dismissTitle')}>
-        <button
-          type="button"
-          onClick={dismiss}
-          aria-label={t('chat.unreadFailedScheduleBanner.dismissTitle')}
-          className="shrink-0 rounded-full p-0.5 text-[var(--error-fg)] hover:bg-[var(--button-primary-hover)] active:bg-[var(--button-primary-pressed)] focus-visible:outline focus-visible:outline-2 focus-visible:outline-[var(--focus-ring)]"
-        >
-          <X size={14} aria-hidden="true" />
-        </button>
-      </Tip>
-    </div>
+      message={message}
+      actions={missingPlugin && !remote ? <MissingPluginAction plugin={missingPlugin} /> : undefined}
+      details={latestFailedRun.errorMsg}
+      onDiagnose={onDiagnose && latestFailedRun.errorMsg ? () => onDiagnose({
+        message,
+        details: latestFailedRun.errorMsg!,
+      }) : undefined}
+      onDismiss={dismiss}
+      dismissLabel={t('chat.unreadFailedScheduleBanner.dismissTitle')}
+    />
+  );
+}
+
+/** Opens the plugin where the user can fix it: its installed page, else its market detail. */
+function MissingPluginAction({ plugin }: { plugin: ScheduleMissingPlugin }) {
+  const { t } = useTranslation();
+  const navigate = useNavigate();
+  const resolved = resolvePluginInstanceQuery(readInstalledGhostsSnapshot(), plugin.ghostId, plugin.namespace ?? null);
+  const installed = resolved.status === 'unique' ? resolved.ghost : null;
+  const open = () => navigate(
+    installed ? `/plugins?ghost=${encodeURIComponent(installedGhostStoragePart(installed))}`
+      : plugin.pluginId ? `/plugins?market=${encodeURIComponent(plugin.pluginId)}`
+        : '/plugins',
+  );
+  return (
+    <Button size="sm" compact type="button" onClick={open}>
+      {t(installed ? 'chat.unreadFailedScheduleBanner.openPlugin' : 'chat.unreadFailedScheduleBanner.installPlugin')}
+    </Button>
   );
 }

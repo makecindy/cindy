@@ -44,6 +44,7 @@ describe('remote desktop state polling', () => {
       assertTrustedAppRendererEvent,
       readDeviceLinkSettings: () => ({ remoteDesktopEnabled: false }),
       remoteDesktop: { state: null },
+      controlledOverlay: { visible: false },
       permissions: { guideOpen: false },
       readWindowsDesktopSupport,
       throwIpcError: (code: string) => {

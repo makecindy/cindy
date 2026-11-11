@@ -1,7 +1,7 @@
 import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { describe, expect, it } from 'vitest';
-import { EDGE_BLUR_FADE_INSIDE, EDGE_BLUR_FADE_OUTSIDE, edgeBlurMask } from '@/session/edgeBlurMask';
+import { EDGE_BLUR_FADE_INSIDE, EDGE_BLUR_FADE_OUTSIDE, HEADER_BLUR_FADE_OUTSIDE, edgeBlurMask, headerBlurLayers } from '@/session/edgeBlurMask';
 
 const readTextLf = (path: string): string =>
   String(readFileSync(resolve(process.cwd(), path), 'utf8')).replace(/\r\n/g, '\n');
@@ -38,6 +38,30 @@ describe('edge blur mask', () => {
     expect(alphas[7] - alphas[8]).toBeLessThan(alphas[4] - alphas[5]);
   });
 
+  it('can keep the whole chrome solid and feather only past its edge', () => {
+    const mask = edgeBlurMask(111, 'top', 0);
+    expect(mask.height).toBe(127);
+    expect(mask.startPoint.y * mask.height).toBeCloseTo(111);
+    expect(mask.endPoint.y).toBe(1);
+  });
+
+  it('thins the header blur progressively: three layers end at a third, two thirds and the full fade', () => {
+    expect(HEADER_BLUR_FADE_OUTSIDE).toBe(24);
+    const layers = headerBlurLayers(100);
+    expect(layers).toHaveLength(3);
+    for (const layer of layers) {
+      expect(layer.height).toBe(124);
+      // Every layer is solid over the chrome until 24pt above its edge.
+      expect(layer.startPoint.y * layer.height).toBeCloseTo(100 - 24);
+    }
+    expect(layers.map(layer => layer.endPoint.y * layer.height)).toEqual([76 + 16, 76 + 32, 124].map(value => expect.closeTo(value)));
+  });
+
+  it('keeps a chat header fully solid and starts every header layer at its edge', () => {
+    for (const layer of headerBlurLayers(111, 0)) expect(layer.startPoint.y * layer.height).toBeCloseTo(111);
+    expect(headerBlurLayers(111, 0).at(-1)!.endPoint.y).toBe(1);
+  });
+
   it('keeps short chrome partly solid by capping the inside feather at half its height', () => {
     const mask = edgeBlurMask(20, 'top');
     expect(mask.startPoint.y * mask.height).toBeCloseTo(10);
@@ -66,7 +90,11 @@ describe('composer edge backdrop placement', () => {
   });
 
   it('frosts the activity pills with the shared chrome glass', () => {
-    expect(source).toContain("const pillOverlayColor = Platform.OS === 'ios' ? 'transparent' : colors.surfaceTranslucent;");
-    expect(source.match(/<BlurBackdrop intensity=\{FLOATING_CHROME_BLUR_INTENSITY\} overlayColor=\{pillOverlayColor\}/g)).toHaveLength(2);
+    const pill = readTextLf('src/session/ComposerActivityPill.tsx');
+    expect(pill).toContain("return Platform.OS === 'ios' ? 'transparent' : colors.surfaceTranslucent;");
+    const glass = /<BlurBackdrop intensity=\{FLOATING_CHROME_BLUR_INTENSITY\} overlayColor=\{composerActivityPillOverlayColor\(colors\)\}/g;
+    // Status pill (shared with the slow-send notice) and the elapsed/rate pill.
+    expect(pill.match(glass)).toHaveLength(1);
+    expect(source.match(glass)).toHaveLength(1);
   });
 });

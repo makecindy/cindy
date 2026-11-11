@@ -1,6 +1,6 @@
 import { readFileSync } from 'node:fs';
 
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 
 import {
   CODEX_DEFAULT_LIMIT_BUCKET,
@@ -344,10 +344,8 @@ describe('module subscription install (behavior)', () => {
       },
     };
     try {
-      const { resetModules } = await import('vitest').then((m) => ({
-        resetModules: m.vi.resetModules,
-      }));
-      resetModules();
+      // reset-modules: observe first installation of the module-level usage listener in this initialization test.
+      vi.resetModules();
       const [{ useAccountUsage: freshUseAccountUsage }, { renderToString }, React] =
         await Promise.all([
           import('@/hooks/useAccountUsage'),

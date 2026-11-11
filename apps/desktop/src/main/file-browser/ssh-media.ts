@@ -20,6 +20,7 @@
  * electron;生产默认走 RemoteFileBrowserManager 单例(getRemoteFileBrowser)。
  */
 
+import { createHash } from 'node:crypto';
 import { createReadStream, promises as fsPromises } from 'node:fs';
 import path from 'node:path';
 import { Readable } from 'node:stream';
@@ -50,6 +51,7 @@ export type MaterializedSshRemoteMedia =
   | {
       ok: true;
       cachePath: string;
+      sourceVersion: string;
       size: number;
       mime: string;
       relPath: string;
@@ -285,7 +287,14 @@ export async function materializeSshRemoteMedia(
       makeSshChunkExecutor(deps.request, origin.remoteHostId, origin.workdir, relPath),
       noopProgress,
     );
-    return { ok: true, cachePath, size: stat.size, mime, relPath };
+    // Source identity belongs to the remote file, not the generation-scoped local copy.
+    // Consumers already isolate their persistent cache by stable account and device.
+    const sourceVersion = createHash('sha256')
+      .update(
+        JSON.stringify(['ssh', origin.remoteHostId, origin.workdir, relPath, stat.size, stat.mtimeMs]),
+      )
+      .digest('hex');
+    return { ok: true, cachePath, sourceVersion, size: stat.size, mime, relPath };
   } catch (err) {
     log.warn('ssh remote media fetch failed', { relPath, error: String(err) });
     return { ok: false, status: 502, message: 'SSH 远程媒体取回失败' };

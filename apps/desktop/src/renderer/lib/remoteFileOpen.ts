@@ -1,4 +1,5 @@
 import { shouldShowOpenPathError } from '../../shared/openPathResult';
+import { isDangerousAttachmentName } from '../../shared/attachmentSafety';
 /**
  * remoteFileOpen — 聊天流文件类交互的远程分流入口(renderer 侧)。
  * ---------------------------------------------------------------------------
@@ -67,7 +68,7 @@ export async function fetchChatFileToCache(
 
 /**
  * 带 toast UX 的取回:成功返回缓存副本路径(stale 时附 warning 提示),失败
- * toast 后返回 null。适用于「取到副本后马上做一个本机动作」的一次性交互
+ * toast 后返回 null;用户在进度 toast 上点了「取消」则静默返回 null。适用于「取到副本后马上做一个本机动作」的一次性交互
  * (打开 / 定位 / 复制文件)。
  */
 export async function fetchChatFileWithToasts(
@@ -75,9 +76,10 @@ export async function fetchChatFileWithToasts(
   workdir: string,
   absPath: string,
 ): Promise<string | null> {
-  const progress = createFileTransferToast();
+  const progress = createFileTransferToast(absPath);
   try {
     const res = await fetchChatFileToCache(origin, workdir, absPath, progress.requestId);
+    if (progress.cancelled) return null;
     if (!res.ok) {
       toast.error(chatFileErrorText(res.code));
       return null;
@@ -95,8 +97,18 @@ export async function openRemoteChatFile(
   workdir: string,
   absPath: string,
 ): Promise<void> {
+  // Remote scripts/installers follow the attachment save-only policy. Guard the
+  // common entry so menu, modifier-click and ordinary fallback cannot diverge.
+  if (isDangerousAttachmentName(absPath)) {
+    await downloadRemoteChatEntry(origin, workdir, absPath);
+    return;
+  }
   const cachePath = await fetchChatFileWithToasts(origin, workdir, absPath);
   if (!cachePath) return;
+  if (isDangerousAttachmentName(cachePath)) {
+    await downloadRemoteChatEntry(origin, workdir, absPath);
+    return;
+  }
   const res = await window.electronAPI.openPath(cachePath);
   if (shouldShowOpenPathError(res)) toast.error(res.error || i18n.t('logic.errors.openFileFailed'));
 }
@@ -121,7 +133,7 @@ export async function downloadRemoteChatEntry(
   workdir: string,
   absPath: string,
 ): Promise<void> {
-  const progress = createFileTransferToast();
+  const progress = createFileTransferToast(absPath);
   const wireOrigin =
     origin.kind === 'device'
       ? ({ kind: 'device', deviceId: origin.deviceId } as const)
@@ -134,6 +146,7 @@ export async function downloadRemoteChatEntry(
         code: 'FETCH_FAILED' as const,
         message: String(err),
       }));
+    if (progress.cancelled) return;
     if (!res.ok) {
       toast.error(chatDownloadErrorText(res.code));
       return;

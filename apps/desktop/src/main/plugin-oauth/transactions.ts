@@ -14,6 +14,9 @@ import {
   type PluginDeviceOpened,
   type PluginOauthCallback,
   parsePluginOauthRequest,
+  parseInputHandoffOffer,
+  parseInputHandoffValueReply,
+  type InputHandoffValueReply,
   type PluginOauthAction,
   type PluginOauthPhase,
   type PluginOauthRequest,
@@ -23,6 +26,9 @@ import { withRemoteOauthContext, type RemoteOauthContext } from './context.js';
 
 export interface OauthCardBinding {
   ghostId: string;
+  settingsPage?: true;
+  /** Page actions belong to the controller that opened that page. */
+  controllerDeviceId?: string;
   /** Must become false on card cancellation, session close/rewind or replacement. */
   current(): boolean;
 }
@@ -31,11 +37,28 @@ export interface OauthTransactionDeps {
   available(peer: string): boolean;
   bind(action: PluginOauthAction): Promise<OauthCardBinding | null>;
   run(action: PluginOauthAction): Promise<boolean> | boolean;
+  settingsRequest?(
+    peer: string,
+    request: import('@cindy/device-link').PluginSettingsRequest,
+  ): Promise<unknown>;
   now?: () => number;
 }
 type TransactionReply =
-  PluginOauthCallback | PluginDeviceOpened | PluginSecretValue | PluginConnectionValue;
-type ReplyMode = 'loopback' | 'device' | 'secret' | 'connection';
+  | PluginOauthCallback
+  | PluginDeviceOpened
+  | PluginSecretValue
+  | PluginConnectionValue
+  | InputHandoffValueReply;
+type ReplyMode = 'loopback' | 'device' | 'secret' | 'connection' | 'input';
+const parseOrNull =
+  <T>(parse: (raw: unknown) => T) =>
+  (raw: unknown): T | null => {
+    try {
+      return parse(raw);
+    } catch {
+      return null;
+    }
+  };
 interface OfferExchange<T> {
   offer: { state: string };
   mode: ReplyMode;
@@ -82,7 +105,8 @@ export class OauthTransactions {
       t.owner === this.deps.owner() &&
       this.deps.available(t.peer) &&
       this.now() < t.expiresAt &&
-      t.binding.current()
+      t.binding.current() &&
+      (!t.binding.controllerDeviceId || t.binding.controllerDeviceId === t.peer)
     );
   }
   private assertCurrent(t: Transaction) {
@@ -147,7 +171,9 @@ export class OauthTransactions {
   ): RemoteOauthContext {
     return {
       scope: t.id,
+      peer: t.peer,
       cancelled: t.lifetime.signal,
+      get expiresAt() { return t.expiresAt; },
       assertCurrent: () => this.assertCurrent(t),
       authorize: (offer, signal) =>
         this.waitForReply(t, {
@@ -203,6 +229,15 @@ export class OauthTransactions {
           parse: parsePluginConnectionValue,
         }).then((reply) => reply.value);
       },
+      submitInput: (rawOffer) => {
+        if (request.inputHandoff !== true) throw failure();
+        const offer = parseInputHandoffOffer(rawOffer);
+        return this.waitForReply(t, {
+          offer,
+          mode: 'input',
+          parse: parseOrNull(parseInputHandoffValueReply),
+        }).then((reply) => reply.submission);
+      },
       finish: (ok) => {
         if (!terminal(t.phase)) this.finish(t, ok && this.current(t) ? 'succeeded' : 'failed');
       },
@@ -225,6 +260,7 @@ export class OauthTransactions {
   async request(peer: string, raw: unknown): Promise<unknown> {
     const request = parsePluginOauthRequest(raw);
     if (!request || !this.deps.owner() || !this.deps.available(peer)) throw failure();
+    if (request.op === 'settings') throw failure();
     for (const t of this.entries.values()) {
       if (!terminal(t.phase) && !this.current(t)) this.finish(t, 'cancelled');
       if (this.now() >= t.expiresAt) this.entries.delete(t.id);
@@ -239,6 +275,7 @@ export class OauthTransactions {
         authorizationV1: true,
         secretSubmission: true,
         connectionSubmission: true,
+        inputHandoff: true,
       };
     if (request.op === 'start') {
       const owner = this.deps.owner()!;
@@ -259,6 +296,7 @@ export class OauthTransactions {
         if (
           !binding ||
           !binding.current() ||
+          (binding.controllerDeviceId !== undefined && binding.controllerDeviceId !== peer) ||
           owner !== this.deps.owner() ||
           !this.deps.available(peer) ||
           epoch !== this.epoch ||
@@ -311,13 +349,15 @@ export class OauthTransactions {
     if (t.phase !== 'authorizing' || !t.key) throw failure();
     const rawCallback = t.key.open(t.publicKey, t.id, 'callback', request.box);
     const callback =
-      t.mode === 'connection'
-        ? parsePluginConnectionValue(rawCallback)
-        : t.mode === 'secret'
-          ? parsePluginSecretValue(rawCallback)
-          : t.mode === 'device'
-            ? parsePluginDeviceOpened(rawCallback)
-            : parsePluginOauthCallback(rawCallback);
+      t.mode === 'input'
+        ? parseOrNull(parseInputHandoffValueReply)(rawCallback)
+        : t.mode === 'connection'
+          ? parsePluginConnectionValue(rawCallback)
+          : t.mode === 'secret'
+            ? parsePluginSecretValue(rawCallback)
+            : t.mode === 'device'
+              ? parsePluginDeviceOpened(rawCallback)
+              : parsePluginOauthCallback(rawCallback);
     if (!callback || callback.state !== t.state) throw failure();
     if (
       'kind' in callback &&

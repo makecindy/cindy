@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { BUNDLED_CATALOG } from '@cindy/model-providers';
-import { subscriptionDirectPriceQuote } from '../../../shared/modelPriceQuote';
+import { providerReferencePriceQuote, subscriptionDirectPriceQuote } from '../../../shared/modelPriceQuote';
 
 import type { ModelUsageDeltaEntry } from '../modelUsageDelta';
 import { __resetActiveLedgerCurrencyForTesting, setActiveLedgerCurrency } from '../ledgerCurrency';
@@ -61,6 +61,13 @@ describe('Astra subscription reference estimates', () => {
       { ...tokens, priceVariant: 'standard' },
       { ...tokens, priceVariant: 'priority' },
     ], astra)).toBeCloseTo(2.94);
+  });
+
+  it('does not price Ultrafast usage using the Standard or Fast tariff', () => {
+    const segments = normalizeTurnUsageSegments([{ ...tokens, priceVariant: 'ultrafast' }]);
+    expect(segments?.[0]?.priceVariant).toBe('ultrafast');
+    expect(computeGatewayTurnCost(tokens, astra, 'ultrafast')).toBeNull();
+    expect(computeGatewaySegmentedTurnCost(segments, astra)).toBeNull();
   });
 
   it('keeps the subscription reference window bound for both tariffs', () => {
@@ -337,6 +344,25 @@ describe('computePriceQuoteTurnMoney', () => {
     cacheReadTokens: 0,
     cacheCreateTokens: 0,
   };
+
+  // Claude Code subscriptions write prompt cache with a 1h TTL. Pricing those
+  // writes at the 5m tariff understated a new task's first-turn value by ~40%.
+  it('prices 1h cache writes at the declared 1h tariff and falls back to 5m when none is quoted', () => {
+    const segments = normalizeTurnUsageSegments([{
+      id: 'claude:1:__main__', model: 'claude-opus-5-5', priceVariant: 'standard', complete: true,
+      inputTokens: 1_400, outputTokens: 501, cacheReadTokens: 0,
+      cacheCreateTokens: 106_846, cacheCreate1hTokens: 106_846,
+    }]);
+    const totals = { inputTokens: 1_400, outputTokens: 501, cacheReadTokens: 0, cacheCreateTokens: 106_846 };
+    const reference = providerReferencePriceQuote(
+      'anthropic', 'claude-opus-5-5', BUNDLED_CATALOG.modelRegistry,
+      { agent: 'claude-code', at: '2026-11-05' },
+    );
+    // 1_400 × $4 + 501 × $20 + 106_846 × $8 (1h), per Mtok.
+    expect(computePriceQuoteTurnMoney(totals, reference, 'USD', segments)?.amount).toBeCloseTo(0.870388, 6);
+    const without1h = quote('claude-opus-5-5', 4, 20, { cacheCreatePerMtok: 5 });
+    expect(computePriceQuoteTurnMoney(totals, without1h, 'USD', segments)?.amount).toBeCloseTo(0.54985, 6);
+  });
 
   it('only marks subscription estimates with the subscription-value reason', () => {
     expect(
@@ -1075,8 +1101,8 @@ describe('subscription value and usage details', () => {
       models: ['claude-opus-4-8', 'claude-haiku-4-5'],
     });
     expect(details?.perModelCost).toEqual([
-      { model: 'claude-opus-4-8', money: usdMoney(0.94) },
-      { model: 'claude-haiku-4-5', money: usdMoney(0.8) },
+      { model: 'claude-opus-4-8', money: usdMoney(0.94), billingSource: 'subscription' },
+      { model: 'claude-haiku-4-5', money: usdMoney(0.8), billingSource: 'subscription' },
     ]);
   });
 

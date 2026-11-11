@@ -6,6 +6,7 @@ export interface MobileModelOption {
   effortDisplayNames: Record<string, string>;
   defaultEffort: string | null;
   supportsFastMode: boolean;
+  supportsUltrafastMode?: boolean;
   /** Host-advertised catalog window when available; omitted by older Desktop versions. */
   contextWindow?: number;
   /** 区域门控后的新任务默认标记。 */
@@ -29,6 +30,20 @@ export interface MobileAgentCapabilities {
   supportsSessionAgentSwitch?: boolean;
   /** host 是否支持创建 Orca Worker 时显式选择 Worker 权限；旧 host 缺省 false(不得开启协同)。 */
   supportsOrcaWorkerPermissionMode?: boolean;
+  /** host 是否支持创建后修改 Orca Worker 的角色名/标识(update_worker)；旧 host 缺省 false。 */
+  supportsOrcaWorkerUpdate?: boolean;
+  /**
+   * host 是否支持给 Orca Worker 单独指定 Agent 所在电脑(远程供应商，`agentDeviceId`)；旧 host 缺省
+   * false：Worker 表单不列远程供应商、不发这个字段(旧 host 会静默丢掉)。
+   */
+  supportsOrcaWorkerAgentDevice?: boolean;
+  /**
+   * host 是否接受给它上面的协同 Lead / 本机 Worker 换 Agent 所在电脑；旧 host 缺省 false：协同任务
+   * 不列其他电脑与分享(v0.1.104–v0.1.110 的 host 会拒绝)。
+   */
+  supportsOrcaAgentRelocation?: boolean;
+  /** host 是否支持定时任务保存模型的运行位置(`modelAgentDeviceId`)；旧 host 缺省 false，会静默丢掉该字段。 */
+  supportsScheduleAgentDeviceSelection?: boolean;
   /** host 是否在 set-model 内执行强制模型窗口保护；旧 host 缺省 false。 */
   supportsModelWindowSwitchGuard?: boolean;
 }
@@ -49,7 +64,7 @@ export interface MobileRuntimeDraft {
   model: string;
   effort: string;
   permissionMode: string;
-  fastMode: boolean;
+  fastMode: boolean | 'ultrafast';
 }
 
 /**
@@ -162,6 +177,10 @@ export function normalizeMobileAgentCapabilities(value: unknown): MobileAgentCap
     supportsSessionAgentSwitch: value.supportsSessionAgentSwitch === true,
     supportsModelWindowSwitchGuard: value.supportsModelWindowSwitchGuard === true,
     supportsOrcaWorkerPermissionMode: value.supportsOrcaWorkerPermissionMode === true,
+    supportsOrcaWorkerUpdate: value.supportsOrcaWorkerUpdate === true,
+    supportsOrcaWorkerAgentDevice: value.supportsOrcaWorkerAgentDevice === true,
+    supportsOrcaAgentRelocation: value.supportsOrcaAgentRelocation === true,
+    supportsScheduleAgentDeviceSelection: value.supportsScheduleAgentDeviceSelection === true,
   };
 }
 
@@ -251,7 +270,7 @@ export function reconcileRuntimeDraftWithCapabilities<T extends MobileRuntimeDra
   const nextPermissionMode = permissionIds.size > 0 && !permissionIds.has(draft.permissionMode)
     ? runtime.permissionOptions[0]?.id ?? draft.permissionMode
     : draft.permissionMode;
-  const nextFastMode = draft.fastMode && runtime.fastModeSupported;
+  const nextFastMode = runtime.fastModeSupported && (draft.fastMode !== 'ultrafast' || currentModel?.supportsUltrafastMode === true) ? draft.fastMode : false;
 
   if (
     draft.model === model
@@ -367,6 +386,7 @@ function normalizeModelOption(value: unknown): MobileModelOption | null {
     effortDisplayNames,
     defaultEffort: readString(value.defaultEffort),
     supportsFastMode: value.supportsFastMode === true,
+    supportsUltrafastMode: value.supportsUltrafastMode === true,
     ...(contextWindow ? { contextWindow } : {}),
     ...(newSessionDefault.length > 0 ? { newSessionDefault } : {}),
   };
@@ -389,4 +409,15 @@ function readString(value: unknown): string | null {
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return !!value && typeof value === 'object' && !Array.isArray(value);
+}
+/** false = Standard, true = Fast; the string extends existing saved preferences. */
+export type FastMode = boolean | 'ultrafast';
+
+/** Legacy databases store Standard/Fast as 0/1. Keep both values unchanged. */
+export function fastModeToStorage(value: unknown): number {
+  return value === 'ultrafast' || value === 2 ? 2 : value === true || value === 1 ? 1 : 0;
+}
+
+export function fastModeFromStorage(value: unknown): FastMode {
+  return value === 2 ? 'ultrafast' : value === 1 || value === true;
 }

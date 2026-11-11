@@ -1,3 +1,4 @@
+// guard: credentials-and-local-storage.md: auth-owned migrations and automatic writes must fence current identity/generation before asynchronous account cleanup.
 import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 

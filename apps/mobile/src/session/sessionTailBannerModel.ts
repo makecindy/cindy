@@ -1,3 +1,4 @@
+import { parseOutputLimitDetails, type OutputLimitDetails } from '@cindy/maker-shared';
 /**
  * 会话尾部收尾提示(error-tail / interrupted)的纯判定模型 —— 对齐桌面
  * CCAgentSessionView 的 errorTailMsg / interruptedFromSession 两套 banner 语义,
@@ -26,10 +27,9 @@ import {
   messageContentToPreview,
   sortMessagesByCreatedAt,
 } from '@cindy/maker-shared/message-normalize';
-import { describeAgentAuthError } from '@/device-link/remoteStatus';
-import { i18n } from '@/i18n';
 import type { InputProjection, QueuedRemoteMessage, RemoteMessage, RemoteSession } from '@/session/types';
 import {
+  describeNonRetryableAgentError,
   localizeAgentError,
   requiresAgentErrorConfigurationChange,
   localizeUnclassifiedAgentError,
@@ -45,6 +45,8 @@ export interface SessionTailErrorBanner {
   /** 本地化展示文案；未知错误的技术原文放入 rawError。 */
   text: string;
   rawError?: string;
+  /** 错误行的稳定 reason key，供诊断提示带上。 */
+  reason?: string | null;
   summaryKey?: string;
   /** 主按钮语义:中断标记行 →「继续任务」;普通失败行 →「重试」。 */
   continueKind: 'interrupted' | 'error';
@@ -104,13 +106,14 @@ export function resolveSessionTailBanner(input: ResolveSessionTailBannerInput): 
 
   const tail = findErrorTailMessage(input.messages);
   if (tail && !input.hiddenErrorClientIds.has(tail.clientId)) {
-    const nonRetryableGuidance = describeNonRetryableTailError(tail.text);
-    const agentErrorGuidance = localizeAgentError(tail.reason, tail.toolLoop);
+    const nonRetryableGuidance = describeNonRetryableAgentError(tail.text, tail.reason);
+    const agentErrorGuidance = localizeAgentError(tail.reason, tail.toolLoop, tail.text, tail.outputLimit);
     return {
       kind: 'error-tail',
       clientId: tail.clientId,
       text: nonRetryableGuidance ?? agentErrorGuidance ?? localizeUnclassifiedAgentError(tail.text, input.session?.source),
       rawError: tail.text,
+      reason: tail.reason,
       ...(!nonRetryableGuidance && !agentErrorGuidance ? { summaryKey: unclassifiedAgentErrorI18nKey(tail.text, input.session?.source) } : {}),
       continueKind: tail.reason === APP_EXIT_INTERRUPTED_REASON ? 'interrupted' : 'error',
       retryable: nonRetryableGuidance === null && !requiresAgentErrorConfigurationChange(tail.text),
@@ -132,36 +135,12 @@ export function resolveSessionTailBanner(input: ResolveSessionTailBannerInput): 
   return null;
 }
 
-/**
- * 不可重试的持久化尾行错误 → 引导文案(null = 可重试,展示原文)。对齐桌面
- * ErrorBanner hide-Retry 门控的核心子集——这些错误重试只会撞同一个失败循环:
- *  - agent 未鉴权(describeAgentAuthError 模板):凭证在被控电脑上,手机改不了;
- *  - codex thread not found:进程重启 / 鉴权模式切换后旧 thread 已随旧进程销毁;
- *  - invalid_encrypted_content:换供应商后协议加密内容不可用,需回桌面处理
- *    (fork 剥离入口仅桌面本地 codex 会话有)。
- * 桌面还有依赖本地上下文的更细分支(codex 401 区分 oauth-bearer / 网关 key、
- * session-expired 的登录引导等),手机端拿不到对应信号,不搬——这些场景重试
- * 失败后错误会重新浮现,不破坏数据。
- */
-function describeNonRetryableTailError(
-  text: string,
-): string | null {
-  const authGuidance = describeAgentAuthError(text);
-  if (authGuidance) return authGuidance;
-  if (/thread not found/i.test(text)) {
-    return i18n.t('session.tail.codexThreadLost');
-  }
-  if (/invalid_encrypted_content/i.test(text)) {
-    return i18n.t('session.tail.encryptedContentInvalid');
-  }
-  return null;
-}
-
 interface ErrorTailMessage {
   clientId: string;
   text: string;
   reason: string | null;
   toolLoop: MobileToolLoopErrorDetails | null;
+  outputLimit: OutputLimitDetails | null;
 }
 
 /**
@@ -195,6 +174,7 @@ function findErrorTailMessage(messages: readonly RemoteMessage[]): ErrorTailMess
       text: rawText,
       reason: typeof content?.reason === 'string' ? content.reason : null,
       toolLoop: parseMobileToolLoopErrorDetails(content?.toolLoop),
+      outputLimit: parseOutputLimitDetails(content?.outputLimit) ?? null,
     };
   }
   return null;

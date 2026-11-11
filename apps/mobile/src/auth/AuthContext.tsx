@@ -1,4 +1,5 @@
 import * as WebBrowser from 'expo-web-browser';
+import { isAgentNetMediaReference } from '@cindy/agent-net-protocol';
 import { requireNativeModule } from 'expo-modules-core';
 import {
   createContext,
@@ -47,7 +48,9 @@ import {
 // 生产构建由 metro resolveRequest 把整模块替换为空 stub(metro.config.js),
 // 运行时另有 __DEV__ guard 双保险。
 import { resolveLoginScenarioFetch } from '@cindy/auth-client/fixtures';
+import { mobileDebugLog } from '@/debug/mobileDebugLog';
 
+import { AskCardAuthContext, type AskCardAuth } from '@/session/askCardAuth';
 import {
   apiFetchRaw,
   ApiError,
@@ -117,16 +120,20 @@ import {
   migrateExistingLoginAsConsented,
 } from '@/analytics/analyticsConsentStore';
 import { unregisterPushTokenBestEffort } from '@/notifications/pushNotifications';
+import { unregisterActivityPush } from '@/widgets/agentActivityPush';
 import { resetAgentCapabilitiesCache } from '@/session/agentCapabilitiesCache';
 import { resetComposerPaletteCache } from '@/session/composerPaletteCache';
 import { clearRemoteResourceCache } from '@/device-link/remoteResourceCache';
+import { isSelfHostedRelayBaseUrl, getSelfHostedRelayRouteGeneration } from '@/device-link/selfHostedRelayRouting';
 import { clearCachedHomeListSnapshot } from '@/session/mobileHomeListCache';
-import { getMobileAuthOwner, invalidateMobileAuthOwnerForSwitch, setMobileAuthOwner } from '@/auth/authOwnerGeneration';
-import { clearClipboardInvitationHistory } from '@/device-link/clipboardInvitationHistory';
+import { clearHomeSessionPrCache } from '@/session/homeSessionPrStore';
+import { getMobileAuthOwner, isMobileAuthOwnerCurrent, invalidateMobileAuthOwnerForSwitch, setMobileAuthOwner } from '@/auth/authOwnerGeneration';
 import { updateCredentialAccessToken } from '@/remote-desktop/credentialIdentity';
+import { clearMobileChatHistoryStore } from '@/chat/chatHistoryStore';
 import { clearCachedSessionMessages } from '@/session/mobileSessionMessageCache';
 import { clearHistoryDisk } from '@/session/remoteHistoryDiskCache';
 import { clearAllMobileVoiceCredentials } from '@/session/mobileVoiceCredentialStore';
+import { clearMobileSpeakerFilterForAccount, retryPendingMobileSpeakerFilterCleanup } from '@/session/mobileSpeakerFilterStorage';
 import {
   clearAllMobileVoiceDictionaryCaches,
   setMobileVoiceDictionaryAccountScope,
@@ -383,7 +390,9 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       apiFetch: visualMockApiFetch,
     };
     return (
-      <AuthContext.Provider value={value}>{children}</AuthContext.Provider>
+      <AuthContext.Provider value={value}>
+        <AskCardAuthContext.Provider value={value as AskCardAuth}>{children}</AskCardAuthContext.Provider>
+      </AuthContext.Provider>
     );
   }
 
@@ -883,6 +892,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const clearAccountScopedRuntimeForSwitch = useCallback(async () => {
     invalidateMobileAuthOwnerForSwitch();
     await Promise.all([
+      unregisterActivityPush(accessTokenRef.current, activeAuthRealmRef.current),
       unregisterPushTokenBestEffort(
         accessTokenRef.current,
         activeAuthRealmRef.current,
@@ -891,9 +901,11 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       clearAllMobileVoiceInputHistories().catch(() => undefined),
       clearAllMobileVoiceDictionaryCaches().catch(() => undefined),
       clearCachedSessionMessages(),
+      clearMobileChatHistoryStore(),
       clearHistoryDisk(),
       clearRemoteResourceCache().catch(() => undefined),
       clearCachedHomeListSnapshot().catch(() => undefined),
+      clearHomeSessionPrCache().catch(() => undefined),
     ]);
     resetComposerPaletteCache();
     resetAgentCapabilitiesCache();
@@ -1445,6 +1457,19 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   );
 
   useEffect(() => {
+    const retry = () => {
+      void retryPendingMobileSpeakerFilterCleanup().catch(() => {
+        console.warn('[auth] speaker filter cleanup pending; will retry');
+      });
+    };
+    retry();
+    const subscription = AppState.addEventListener('change', state => {
+      if (state === 'active') retry();
+    });
+    return () => subscription.remove();
+  }, []);
+
+  useEffect(() => {
     let cancelled = false;
     const epoch = loginFlowEpochRef.current;
     // Authenticated cold starts can stay on Home without mounting LoginScreen.
@@ -1886,7 +1911,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   // SSO returns through cindycn://auth or cindy://auth. The pending PKCE verifier
   // lives in SecureStore so a browser-triggered app restart can still finish safely.
   useEffect(() => {
-    const handleDeepLink = (url: string | null) => {
+    const handleDeepLink = (url: string | null | undefined) => {
       if (!url || !matchesOAuthCallbackUrl(url, MOBILE_REDIRECT_URL)) return;
       void completeOAuthCallback(url).catch(() => undefined);
     };
@@ -2056,11 +2081,21 @@ export function AuthProvider({ children }: { children: ReactNode }) {
               codeChallenge,
               state,
             });
-            const result = await WebBrowser.openAuthSessionAsync(
-              authUrl,
-              MOBILE_REDIRECT_URL,
-            );
-            assertLoginFlowCurrent(expectedLoginFlowEpoch);
+            let result: Awaited<ReturnType<typeof WebBrowser.openAuthSessionAsync>>;
+            try {
+              result = await WebBrowser.openAuthSessionAsync(
+                authUrl,
+                MOBILE_REDIRECT_URL,
+              );
+            } catch (error) {
+              // The browser promise outlives the dispatch body. Report launch
+              // failures here, while preserving a newer attempt's ownership.
+              if (loginFlowEpochRef.current !== expectedLoginFlowEpoch
+                || loginActionInFlightRef.current !== run) return false;
+              setAuthError(authErrorCode(error));
+              return false;
+            }
+            if (loginFlowEpochRef.current !== expectedLoginFlowEpoch) return false;
             // Linking may already have handed ownership to a continuation.
             // A late native result must not cancel or mutate that newer work.
             if (loginActionInFlightRef.current !== run) return true;
@@ -2900,19 +2935,19 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     // 继续收到旧账号的任务通知。token 此刻可能已失效(账号不可用),失败静默,
     // 残留由 server 侧 APNs 410 回收与换账号重注册的让位逻辑兜底。
     // Invalidate in-flight remote creates before any async logout cleanup begins.
-    const invitationHistoryOwner = getMobileAuthOwner();
-    // Switching temporarily empties the owner fence; the committed user/realm
-    // still identify the session being terminated until the new owner is applied.
-    const invitationHistoryAccountKey = invitationHistoryOwner.accountKey || (userRef.current
+    const cleanupOwner = getMobileAuthOwner();
+    // Switching temporarily empties the owner fence; retain the terminating
+    // session's account before clearing its user and realm.
+    const cleanupAccountKey = cleanupOwner.accountKey || (userRef.current
       ? accountVaultKey(activeAuthRealmRef.current, userRef.current.id)
       : '');
     setMobileAuthOwner(null);
-    const clearInvitationHistory = clearClipboardInvitationHistory(invitationHistoryAccountKey).catch(() => undefined);
     setAccountGeneration((value) => value + 1);
     // 同步失效认证代次，必须早于第一个 await。否则推送 token 注销的网络等待窗口内，
     // 迟到的 canary / XD beta 探测仍会把旧账号结果写回本地。
     authGenerationRef.current += 1;
     refreshInFlightRef.current = null;
+    await unregisterActivityPush(accessTokenRef.current, activeAuthRealmRef.current);
     await unregisterPushTokenBestEffort(
       accessTokenRef.current,
       activeAuthRealmRef.current,
@@ -2940,14 +2975,21 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     // 词典缓存按 host 设备分区、不含账号身份:同一台电脑在两个账号下是同一个
     // deviceId,不清就会让下一个账号读到上一个账号的词条并发给润色模型。
     await clearAllMobileVoiceDictionaryCaches().catch(() => undefined);
+    // 声纹是这个账号的生物特征数据,随账号的其他本机数据一起清;模型文件不含账号数据,保留。
+    await clearMobileSpeakerFilterForAccount(cleanupAccountKey).catch(() => {
+      // The storage helper retains the account's retry marker. Still complete
+      // credential removal; neither an account id nor a voiceprint is logged.
+      console.warn('[auth] speaker filter cleanup pending; will retry');
+    });
     await clearCachedSessionMessages().catch(() => undefined);
+    await clearMobileChatHistoryStore().catch(() => undefined);
     await clearHistoryDisk();
     // 首页设备+会话快照与消息缓存一样属于账号数据,登出必须清掉。
     await clearRemoteResourceCache().catch(() => undefined);
     await clearCachedHomeListSnapshot().catch(() => undefined);
+    await clearHomeSessionPrCache().catch(() => undefined);
     resetComposerPaletteCache();
     resetAgentCapabilitiesCache();
-    await clearInvitationHistory;
     await clearCanaryChannel().catch(() => undefined);
     // 使用统计的同意记录也随登出清除。手机端没有游客模式:登出后 NavigationGate 会
     // 把所有路由重定向到 /login,设置页里的统计开关从此不可达。保留同意会让用户处在
@@ -3278,49 +3320,80 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       opts: Omit<ApiFetchOptions, 'token'>,
     ): Promise<T> => {
       opts.assertCurrent?.();
-      const token = await getAccessToken();
-      opts.assertCurrent?.();
-      if (!token) throw new Error('UNAUTHENTICATED');
-      try {
-        return await apiFetchRaw<T>(path, { ...opts, token });
-      } catch (error) {
-        opts.assertCurrent?.();
-        if (!(error instanceof ApiError) || error.status !== 401) throw error;
-        if (error.code === 'ACCOUNT_UNAVAILABLE') {
-          if (userRef.current) {
-            await terminateSession('ACCOUNT_UNAVAILABLE');
-          }
-          throw error;
+      // 自建中转:中转凭证由 apiFetchRaw 按目标地址附上;账号 token 不取、不发,中转的 401
+      // 只说明中转凭证失效,不刷新也不退出账号(docs/self-hosted-relay-plan.md §5.3)。
+      const readLegacy = async (): Promise<T> => {
+        if (isSelfHostedRelayBaseUrl(opts.baseUrl)) {
+          return apiFetchRaw<T>(path, { ...opts, token: null });
         }
-        if (!isRefreshableUnauthorizedCode(error.code)) throw error;
-
-        const fresh = await refresh();
-        opts.assertCurrent?.();
-        if (!fresh) {
-          if (userRef.current) await terminateSession();
-          throw error;
-        }
+        const token = await getAccessToken();
+        nativeGuard();
+        if (!token) throw new Error('UNAUTHENTICATED');
         try {
-          return await apiFetchRaw<T>(path, { ...opts, token: fresh });
-        } catch (retryError) {
-          opts.assertCurrent?.();
-          if (
-            retryError instanceof ApiError &&
-            retryError.status === 401 &&
-            (retryError.code === 'ACCOUNT_UNAVAILABLE' ||
-              isRefreshableUnauthorizedCode(retryError.code))
-          ) {
+          return await apiFetchRaw<T>(path, { ...opts, token });
+        } catch (error) {
+          nativeGuard();
+          if (!(error instanceof ApiError) || error.status !== 401) throw error;
+          if (error.code === 'ACCOUNT_UNAVAILABLE') {
             if (userRef.current) {
-              await terminateSession(
-                retryError.code === 'ACCOUNT_UNAVAILABLE'
-                  ? 'ACCOUNT_UNAVAILABLE'
-                  : undefined,
-              );
+              await terminateSession('ACCOUNT_UNAVAILABLE');
             }
+            throw error;
           }
-          throw retryError;
+          if (!isRefreshableUnauthorizedCode(error.code)) throw error;
+
+          const fresh = await refresh();
+          nativeGuard();
+          if (!fresh) {
+            if (userRef.current) await terminateSession();
+            throw error;
+          }
+          try {
+            return await apiFetchRaw<T>(path, { ...opts, token: fresh });
+          } catch (retryError) {
+            nativeGuard();
+            if (
+              retryError instanceof ApiError &&
+              retryError.status === 401 &&
+              (retryError.code === 'ACCOUNT_UNAVAILABLE' ||
+                isRefreshableUnauthorizedCode(retryError.code))
+            ) {
+              if (userRef.current) {
+                await terminateSession(
+                  retryError.code === 'ACCOUNT_UNAVAILABLE'
+                    ? 'ACCOUNT_UNAVAILABLE'
+                    : undefined,
+                );
+              }
+            }
+            throw retryError;
+          }
         }
+      };
+      const nativeOwner = getMobileAuthOwner(), nativeRoute = getSelfHostedRelayRouteGeneration(), nativeDevice = deviceIdRef.current;
+      const nativeGuard = () => {
+        opts.assertCurrent?.();
+        if (!isMobileAuthOwnerCurrent(nativeOwner) || getSelfHostedRelayRouteGeneration() !== nativeRoute || deviceIdRef.current !== nativeDevice) {
+          throw new Error('AGENT_NET_OWNER_CHANGED');
+        }
+      };
+      if (path.startsWith('/api/device-link/media') && nativeDevice
+        && typeof (opts.body as { key?: unknown })?.key === 'string'
+        && isAgentNetMediaReference((opts.body as { key: string }).key)) {
+        const { mobileAgentNetMediaRequest } = await import('@/device-link/agentNetMediaApi');
+        nativeGuard();
+        const result = await mobileAgentNetMediaRequest<T>(path, { ...opts, assertCurrent: nativeGuard }, { deviceId: nativeDevice,
+          deviceName: nativeDevice, getAccessToken });
+        if (result.handled) return result.value;
       }
+      if (/^\/api\/device-link\/devices(?:\/|$)/.test(path) && nativeDevice) {
+        const { mobileAgentNetDeviceRequest } = await import('@/device-link/agentNetDeviceApi');
+        nativeGuard();
+        const result = await mobileAgentNetDeviceRequest<T>(path, { ...opts, assertCurrent: nativeGuard }, { deviceId: nativeDevice,
+          deviceName: nativeDevice, getAccessToken }, readLegacy);
+        if (result.handled) return result.value;
+      }
+      return readLegacy();
     },
     [getAccessToken, refresh, terminateSession],
   );
@@ -3398,7 +3471,11 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     ],
   );
 
-  return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>;
+  return (
+    <AuthContext.Provider value={value}>
+      <AskCardAuthContext.Provider value={value as AskCardAuth}>{children}</AskCardAuthContext.Provider>
+    </AuthContext.Provider>
+  );
 }
 
 export function useAuth(): AuthContextValue {
@@ -3428,6 +3505,9 @@ function authClientFor(
     clientType: 'mobile',
     locale: getAuthLocale(),
     fetch: scenarioFetch ?? (async (input, init) => fetch(input, init)),
+    onRequestError: (path, status, error) => {
+      mobileDebugLog('warn', 'auth', 'request failed', { path, region, status }, error);
+    },
   });
 }
 

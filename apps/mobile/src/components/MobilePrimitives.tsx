@@ -1,3 +1,4 @@
+import type { ViewInstance } from 'react-native';
 import { useEffect, useRef, useState, type ReactNode, type Ref } from 'react';
 import { useTranslation } from 'react-i18next';
 import { ChevronLeft } from 'lucide-react-native';
@@ -17,7 +18,7 @@ import {
 } from 'react-native';
 import { Text } from '@/components/AppText';
 import { QuietSyncIndicator } from '@/components/QuietSyncIndicator';
-import { useReduceMotionEnabled } from '@/hooks/useReduceMotion';
+import { useLoopingAnimation } from '@/hooks/useLoopingAnimation';
 import { mobileInteractionStyles } from './mobileInteractionStyles';
 import { fontWeight, iconSize, iconStroke, useTheme, useThemedStyles, type ThemeColors } from '@/theme';
 import { lineHeight, radius, spacing, typeScale } from '@/theme/tokens';
@@ -230,8 +231,7 @@ export function StatusDot({
 }) {
   const styles = useThemedStyles(makeStyles);
   const pulse = useRef(new Animated.Value(1)).current;
-  const reduceMotion = useReduceMotionEnabled();
-  const animatePulse = pulsing && reduceMotion === false;
+  const animatePulse = useLoopingAnimation(pulsing);
 
   useEffect(() => {
     if (!animatePulse) {
@@ -622,6 +622,7 @@ export function MainWindowActionButton({
   density = 'default',
   grow = false,
   hitSlop,
+  numberOfLines = 1,
   style,
   textStyle,
   buttonRef,
@@ -631,9 +632,11 @@ export function MainWindowActionButton({
   grow?: boolean;
   /** Compact buttons (38pt) inside content rows extend their touch target to 44pt this way. */
   hitSlop?: PressableProps['hitSlop'];
+  /** Set to 0 for actions that must wrap within their available width. */
+  numberOfLines?: number;
   style?: StyleProp<ViewStyle>;
   textStyle?: StyleProp<TextStyle>;
-  buttonRef?: Ref<View>;
+  buttonRef?: Ref<ViewInstance>;
 }) {
   const styles = useThemedStyles(makeStyles);
   const { colors } = useTheme();
@@ -672,7 +675,7 @@ export function MainWindowActionButton({
         <ActivityIndicator color={tone === 'danger-solid' ? colors.sharedTaskConfirmForeground : tone === 'primary' ? colors.ctaText : colors.textSecondary} size="small" />
       ) : (
         <Text
-          numberOfLines={1}
+          numberOfLines={numberOfLines}
           style={[
             styles.mainActionButtonText,
             compact && styles.mainActionButtonTextCompact,

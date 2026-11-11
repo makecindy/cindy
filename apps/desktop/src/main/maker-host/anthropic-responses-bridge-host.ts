@@ -1,7 +1,17 @@
+import {
+  captureGuestRequestUsage,
+  guestProviderModelDenial,
+  guestProviderOffersModel,
+  guestProviderRouteForSession,
+  hostedProviderOffersModel,
+} from './guest-provider-route-store.js';
+import { hasHostedSessionModelAccess } from './session-provider-store.js';
 import { fastModelId, rewriteFastModel } from './model-fast-mode.js';
 import { captureUsagePricing, createUsagePricingObserver } from './model-usage-pricing.js';
 import type { ResponseObserverSink } from '@cindy/anthropic-compat-proxy';
 import { getSessionFastMode } from './session-effort-store.js';
+import { standardSpeedRequest, type NativeSubscriptionAccount } from '@cindy/maker-core';
+import { subscriptionRequestAllowsFast } from './subscription-fast-request-policy.js';
 import { isXaiSubscriptionProviderId } from './subscription-account-auth.js';
 /**
  * Desktop 端 anthropic-responses-bridge 装配 ——
@@ -26,7 +36,7 @@ import { isXaiSubscriptionProviderId } from './subscription-account-auth.js';
 import { app } from 'electron';
 import fsp from 'node:fs/promises';
 import path from 'node:path';
-import { promisify } from 'node:util';
+import { isDeepStrictEqual, promisify } from 'node:util';
 import { zstdCompress, zstdDecompress } from 'node:zlib';
 
 import {
@@ -37,11 +47,11 @@ import { createResponsesHandler, type BridgeProviderConfig, type ResponsesBridge
 
 import { createMakerLogger } from './logger-adapter.js';
 import { getActiveCatalog } from './active-catalog.js';
-import { outboundFetch } from './outbound-fetch.js';
-import { getGrokAccessToken, peekGrokAccessToken } from './grok-oauth-login.js';
+import { outboundFetch } from './outbound-fetch.desktop.js';
+import { getGrokAccessToken, peekGrokAccessToken } from './grok-oauth-login.desktop.js';
 import { invalidateXaiBridgeAuth } from './xai-auth-invalidation-host.js';
 import { chatgptAccountIdFromTokens, desktopCodexAuthAdapter } from './auth-adapters.js';
-import { codexAccountHome, codexAccountState, invalidateCodexAccount, isOpenAiSubscriptionProviderId } from './codex-account-auth.js';
+import { codexAccountHome, codexAccountState, invalidateCodexAccount, isOpenAiSubscriptionProviderId } from './codex-account-auth.desktop.js';
 import {
   bearerAccessTokenFromHeaders,
   createChatgptBridgeAuthInvalidator,
@@ -240,7 +250,18 @@ const invalidateDefaultChatgptBridgeAuth = createChatgptBridgeAuthInvalidator({
 
 export async function invalidateChatgptBridgeAuth(
   input: Parameters<typeof invalidateDefaultChatgptBridgeAuth>[0], providerId = 'openai',
+  account?: NativeSubscriptionAccount,
 ): Promise<boolean> {
+  if (account) {
+    account.assertCurrent();
+    return createChatgptBridgeAuthInvalidator({
+      getCurrentAccessToken: async () => (await account.readCodexTokens?.())?.accessToken ?? null,
+      invalidate: async reason => {
+        account.assertCurrent();
+        account.invalidateAuth?.(reason, input.failedAccessToken);
+      },
+    })(input);
+  }
   if (providerId === 'openai') return invalidateDefaultChatgptBridgeAuth(input);
   const owner = activeOwnerScopeKey();
   return createChatgptBridgeAuthInvalidator({
@@ -259,9 +280,20 @@ function throwIfOwnerBoundDispatchUnsafe(scopeAtStart: string): void {
 }
 
 /** 经 adapter 判连接态 → 读 codex-home/auth.json → 必要时刷新 → 返回 token 与可选 account id。 */
-export async function getChatgptBridgeAuth(providerId = 'openai'): Promise<{ accessToken: string; accountId: string | null }> {
+export async function getChatgptBridgeAuth(providerId = 'openai', account?: NativeSubscriptionAccount): Promise<{ accessToken: string; accountId: string | null; canDispatch?: () => boolean }> {
   const scopeAtStart = activeOwnerScopeKey();
   throwIfOwnerBoundDispatchUnsafe(scopeAtStart);
+  if (account) {
+    account.assertCurrent();
+    if (providerId !== 'openai' || !account.readCodexTokens || !(await account.readState()).authenticated)
+      throw new Error('The selected OpenAI subscription account requires login');
+    let tokens = await account.readCodexTokens();
+    if (isExpired(tokens.accessToken)) tokens = await account.readCodexTokens(true);
+    account.assertCurrent();
+    throwIfOwnerBoundDispatchUnsafe(scopeAtStart);
+    if (tokens.canDispatch && !tokens.canDispatch()) throw new Error('OpenAI authorization changed while preparing the request');
+    return { accessToken: tokens.accessToken, accountId: tokens.chatgptAccountId, canDispatch: tokens.canDispatch };
+  }
   if (providerId !== 'openai') {
     if (!codexAccountState(providerId).authenticated) throw new Error('OpenAI account is disconnected or requires login');
     const authPath = path.join(codexAccountHome(providerId), 'auth.json');
@@ -307,10 +339,17 @@ export async function getChatgptBridgeAuth(providerId = 'openai'): Promise<{ acc
 }
 
 /** A deferred child request must revalidate both credential and authorization at dispatch/retry. */
-export async function getChatgptBridgeAuthForDispatch(providerId = 'openai'): Promise<{
+export async function getChatgptBridgeAuthForDispatch(providerId = 'openai', account?: NativeSubscriptionAccount): Promise<{
   accessToken: string; accountId: string | null; canDispatch(): boolean;
 }> {
   const ownerScope = activeOwnerScopeKey();
+  if (account) {
+    const auth = await getChatgptBridgeAuth(providerId, account);
+    return { ...auth, canDispatch: () => {
+      try { account.assertCurrent(); return ownerScope === activeOwnerScopeKey() && !isAppSessionBoundaryPending() && (auth.canDispatch?.() ?? true); }
+      catch { return false; }
+    } };
+  }
   for (let attempt = 0; attempt < 2; attempt++) {
     const auth = await getChatgptBridgeAuth(providerId);
     throwIfOwnerBoundDispatchUnsafe(ownerScope);
@@ -328,7 +367,7 @@ export async function getChatgptBridgeAuthForDispatch(providerId = 'openai'): Pr
 }
 
 /** codex(ChatGPT 订阅)provider 配置:chatgpt/ 前缀 → codex 后端,注入订阅 OAuth + codex 专属头。 */
-function codexProviderConfig(providerId = 'openai'): BridgeProviderConfig {
+function codexProviderConfig(providerId = 'openai', account?: NativeSubscriptionAccount, captureProof?: (proof: (() => boolean) | undefined) => void): BridgeProviderConfig {
   return {
     prefix: CHATGPT_MODEL_PREFIX,
     wireProtocol: 'openai-responses',
@@ -341,13 +380,14 @@ function codexProviderConfig(providerId = 'openai'): BridgeProviderConfig {
       ?.find((entry) => entry.id === `${CHATGPT_MODEL_PREFIX}${model}`)?.efforts,
     // codex 后端不支持 max_output_tokens(会 400),保持默认 false。
     buildHeaders: async ({ sessionId }) => {
-      const { accessToken, accountId } = await getChatgptBridgeAuth(providerId);
+      const { accessToken, accountId, canDispatch } = await getChatgptBridgeAuth(providerId, account);
+      captureProof?.(canDispatch);
       return buildChatgptBridgeHeaders({ accessToken, accountId, sessionId });
     },
     onUpstreamError: async ({ status, body, requestHeaders }) => {
       const failedAccessToken = bearerAccessTokenFromHeaders(requestHeaders);
       if (!failedAccessToken) return;
-      await invalidateChatgptBridgeAuth({ status, body, failedAccessToken }, providerId);
+      await invalidateChatgptBridgeAuth({ status, body, failedAccessToken }, providerId, account);
     },
   };
 }
@@ -396,7 +436,19 @@ function xaiProviderConfig(providerId = 'xai'): BridgeProviderConfig {
  * 装配失败(理论上仅配置错误,如未实现的 wireProtocol)→ 返 null 并记 ERROR,routingTransform
  * 据此 passthrough(fail-open),不反复重试刷日志。
  */
-export function getResponsesBridgeHandler(providerId = 'openai'): ResponsesBridgeHandler | null {
+export function getResponsesBridgeHandler(providerId = 'openai', account?: NativeSubscriptionAccount): ResponsesBridgeHandler | null {
+  if (account) {
+    account.assertCurrent();
+    let proof: (() => boolean) | undefined;
+    return createResponsesHandler({
+      providers: [codexProviderConfig(providerId, account, current => { proof = current; })], logger: log,
+      fetchImpl: (...args) => {
+        account.assertCurrent();
+        if (proof && !proof()) throw new Error('OpenAI authorization changed before dispatch');
+        return outboundFetch(...args);
+      },
+    });
+  }
   if (providerId !== 'xai' && isXaiSubscriptionProviderId(providerId)) {
     return createResponsesHandler({ providers: [xaiProviderConfig(providerId)], logger: log, fetchImpl: outboundFetch });
   }
@@ -535,32 +587,6 @@ function withOpenaiContextProfileModel(body: unknown): Record<string, unknown> |
     return null;
   }
   return { ...body, model: body.model.slice(0, -'[1m]'.length) };
-}
-
-async function rewriteOpenaiContextProfileRequest(
-  rawBody: Buffer,
-  parsedBody: unknown,
-  contentEncoding: string | undefined,
-): Promise<{ body: Buffer; contentEncoding: string | undefined } | null> {
-  const parsedProfile = withOpenaiContextProfileModel(parsedBody);
-  if (parsedProfile) {
-    return { body: Buffer.from(JSON.stringify(parsedProfile)), contentEncoding: undefined };
-  }
-  if (parsedBody !== undefined || contentEncoding?.toLowerCase() !== 'zstd') return null;
-  try {
-    // Near-1M-token payloads are large enough to stall Electron main. Node's async
-    // zstd APIs move compression work to the libuv worker pool.
-    const decodedBody = await zstdDecompressAsync(rawBody);
-    const decoded = JSON.parse(decodedBody.toString('utf8')) as unknown;
-    const compressedProfile = withOpenaiContextProfileModel(decoded);
-    if (!compressedProfile) return null;
-    return {
-      body: await zstdCompressAsync(Buffer.from(JSON.stringify(compressedProfile))),
-      contentEncoding,
-    };
-  } catch {
-    return null;
-  }
 }
 
 function parseJsonRecord(rawBody: Buffer): Record<string, unknown> | null {
@@ -755,6 +781,7 @@ export function getPiNativeSubscriptionHandler(
   providerId: PiNativeSubscriptionProvider,
   sessionId: string,
   deps: PiNativeSubscriptionHandlerDeps = defaultPiNativeSubscriptionHandlerDeps,
+  account?: NativeSubscriptionAccount,
 ): LocalRequestHandler {
   return async ({ rawBody, parsedBody, ctx, res }) => {
     const upstream = piNativeUpstream(providerId, ctx.url);
@@ -768,41 +795,84 @@ export function getPiNativeSubscriptionHandler(
     res.once('close', abortOnClose);
     const scopeAtStart = activeOwnerScopeKey();
     const fastAtStart = getSessionFastMode(sessionId);
+    const guest = guestProviderRouteForSession(sessionId);
+    const hostedModelAccess = hasHostedSessionModelAccess(sessionId);
+    // Preserve the original catalog profile across wire rewrites (e.g. [1m])
+    // and recheck after asynchronous codecs/auth before any upstream request.
+    let requestedModel = '';
+    const modelAllowed = async (): Promise<boolean> => {
+      if (!guest && !hostedModelAccess) return true;
+      const allowed = guest
+        ? guest.providerId === providerId && await guestProviderOffersModel(providerId, 'pi', requestedModel, sessionId)
+        : hasHostedSessionModelAccess(sessionId) && hostedProviderOffersModel(sessionId, providerId, 'pi', requestedModel);
+      if (allowed) return true;
+      const denial = guest && requestedModel ? guestProviderModelDenial(sessionId, requestedModel, 'pi') : null;
+      res.writeHead(403, { 'content-type': 'application/json; charset=utf-8', 'cache-control': 'no-store' });
+      res.end(JSON.stringify({ type: 'error', error: {
+        type: 'authorization_error',
+        code: denial?.code ?? (guest ? 'shared_provider_only' : 'remote_model_not_allowed'),
+        message: denial?.message ?? (guest
+          ? `model '${requestedModel}' is not available from the provider shared with you`
+          : 'This model is not available for this remote task.'),
+      } }));
+      return false;
+    };
     try {
       throwIfOwnerBoundDispatchUnsafe(scopeAtStart);
-      let accessToken: string;
-      let headers: Record<string, string>;
-      if (isOpenAiSubscriptionProviderId(providerId)) {
-        const auth = providerId === 'openai' ? await deps.getChatgptAuth() : await deps.getChatgptAuth(providerId);
-        accessToken = auth.accessToken;
-        headers = buildChatgptBridgeHeaders({
-          accessToken,
-          accountId: auth.accountId,
-          sessionId,
-        });
-      } else {
-        accessToken = providerId === 'xai' ? await deps.getGrokToken() : await deps.getGrokToken(providerId);
-        headers = { authorization: `Bearer ${accessToken}` };
-      }
-      headers['content-type'] = ctx.headers['content-type'] ?? 'application/json';
-      headers.accept = ctx.headers.accept ?? 'text/event-stream';
       let recordUsage: ReturnType<typeof captureUsagePricing> | undefined;
+      let recordGuestUsage: ReturnType<typeof captureGuestRequestUsage>;
       let outboundBody = rawBody;
       let contentEncoding: string | undefined = ctx.headers['content-encoding'];
+      let rewriteOpenaiBody: (() => Promise<void> | null) | undefined;
       if (isOpenAiSubscriptionProviderId(providerId)) {
-        const rewritten = await rewriteOpenaiContextProfileRequest(
-          rawBody,
-          parsedBody,
-          contentEncoding,
-        );
-        if (rewritten) {
-          outboundBody = rewritten.body;
-          contentEncoding = rewritten.contentEncoding;
+        // Retain the decoded object across both rewrites. Unchanged requests keep
+        // their original bytes; changed zstd requests stay compressed on the wire.
+        let forceStandard = !subscriptionRequestAllowsFast(sessionId, providerId);
+        const compressed = parsedBody === undefined && contentEncoding?.toLowerCase() === 'zstd';
+        let current: unknown = parsedBody;
+        let decodeError: unknown;
+        try {
+          if (current === undefined) {
+            const bytes = compressed ? await zstdDecompressAsync(rawBody) : rawBody;
+            current = JSON.parse(bytes.toString('utf8')) as unknown;
+          }
+        } catch (error) {
+          decodeError = error;
         }
+        requestedModel = isPlainRecord(current) && typeof current.model === 'string' ? current.model : '';
+        if (!await modelAllowed()) return;
+        recordGuestUsage = captureGuestRequestUsage(sessionId, isPlainRecord(current) && typeof current.model === 'string' ? current.model : '');
+        const profile = withOpenaiContextProfileModel(current);
+        current = profile ?? current;
+        let changed = profile !== null;
+        let standardApplied = false;
+        // Finalize only after credentials and the latest model grant are read.
+        // Return pending codec work so every async rewrite is followed by another
+        // grant/Fast check, with no async gap between the last check and dispatch.
+        rewriteOpenaiBody = () => {
+          forceStandard ||= !subscriptionRequestAllowsFast(sessionId, providerId);
+          if (forceStandard && !standardApplied) {
+            if (decodeError) throw decodeError;
+            const standard = standardSpeedRequest(current);
+            changed ||= !isDeepStrictEqual(standard, current);
+            current = standard;
+            standardApplied = true;
+          }
+          if (!changed) return null;
+          const bytes = Buffer.from(JSON.stringify(current));
+          changed = false;
+          // Keep large codecs off Electron main, as in the existing profile path.
+          if (compressed) return zstdCompressAsync(bytes).then(encoded => { outboundBody = encoded; });
+          outboundBody = bytes;
+          contentEncoding = undefined;
+          return null;
+        };
       } else if (isXaiSubscriptionProviderId(providerId)) {
         const parsed = isPlainRecord(parsedBody)
           ? parsedBody
           : parseJsonRecord(rawBody);
+        requestedModel = parsed && typeof parsed.model === 'string' ? parsed.model : '';
+        if (!await modelAllowed()) return;
         const sanitized = parsed ? sanitizeXaiModelInputBody(parsed) : null;
         const withFast = parsed ? rewriteFastModel(providerId, 'pi', sanitized ?? parsed, fastAtStart) : null;
         const current = withFast ?? sanitized ?? parsed;
@@ -819,8 +889,37 @@ export function getPiNativeSubscriptionHandler(
         }
       }
       throwIfOwnerBoundDispatchUnsafe(scopeAtStart);
+      let accessToken: string;
+      let canDispatch: (() => boolean) | undefined;
+      let headers: Record<string, string>;
+      if (isOpenAiSubscriptionProviderId(providerId)) {
+        const auth = account ? await deps.getChatgptAuth(providerId, account)
+          : providerId === 'openai' ? await deps.getChatgptAuth() : await deps.getChatgptAuth(providerId);
+        accessToken = auth.accessToken;
+        canDispatch = auth.canDispatch;
+        headers = buildChatgptBridgeHeaders({
+          accessToken,
+          accountId: auth.accountId,
+          sessionId,
+        });
+      } else {
+        accessToken = providerId === 'xai' ? await deps.getGrokToken() : await deps.getGrokToken(providerId);
+        headers = { authorization: `Bearer ${accessToken}` };
+      }
+      headers['content-type'] = ctx.headers['content-type'] ?? 'application/json';
+      headers.accept = ctx.headers.accept ?? 'text/event-stream';
+      for (;;) {
+        throwIfOwnerBoundDispatchUnsafe(scopeAtStart);
+        if (!await modelAllowed()) return;
+        throwIfOwnerBoundDispatchUnsafe(scopeAtStart);
+        const pendingRewrite = rewriteOpenaiBody?.();
+        if (!pendingRewrite) break;
+        await pendingRewrite;
+      }
       if (contentEncoding) headers['content-encoding'] = contentEncoding;
-
+      throwIfOwnerBoundDispatchUnsafe(scopeAtStart);
+      account?.assertCurrent();
+      if (canDispatch && !canDispatch()) throw new Error('OpenAI authorization changed before dispatch');
       const response = await deps.fetch(upstream.url, {
         method: 'POST',
         headers,
@@ -841,7 +940,8 @@ export function getPiNativeSubscriptionHandler(
             body: errorText,
             failedAccessToken: accessToken,
           };
-          if (providerId === 'openai') await deps.invalidateChatgpt(failure);
+          if (account) await deps.invalidateChatgpt(failure, providerId, account);
+          else if (providerId === 'openai') await deps.invalidateChatgpt(failure);
           else await deps.invalidateChatgpt(failure, providerId);
         } else {
           const failure = {
@@ -856,8 +956,8 @@ export function getPiNativeSubscriptionHandler(
         res.end(errorBody);
         return;
       }
-      await pipeNativeResponse(response, res, recordUsage
-        ? createUsagePricingObserver(response.headers.get('content-type') ?? '', recordUsage) : undefined);
+      await pipeNativeResponse(response, res, recordUsage || recordGuestUsage
+        ? createUsagePricingObserver(response.headers.get('content-type') ?? '', value => { recordUsage?.(value); recordGuestUsage?.(value); }) : undefined);
     } catch (err) {
       if (controller.signal.aborted || res.destroyed) return;
       // Once a 200/SSE response has started, an upstream body failure cannot

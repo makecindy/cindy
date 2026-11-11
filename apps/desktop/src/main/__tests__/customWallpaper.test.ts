@@ -14,6 +14,11 @@ vi.mock('../../shared/wallpaper-video-manifest.json', () => ({
     official: {
       delivery: 'cdn',
       sha256: 'ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad',
+      image: { sha256: 'ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad' },
+    },
+    still: {
+      delivery: 'cdn',
+      image: { sha256: '88d4266fd4e6338d13b845fcf289579d209c897823b9217da3e161936f031589' },
     },
   },
 }));
@@ -33,6 +38,7 @@ import {
   importCustomWallpaper,
   removeCustomWallpaper,
   prepareWallpaperImage,
+  savePluginWallpaper,
 } from '../custom-wallpaper';
 import {
   customWallpaperStore,
@@ -44,7 +50,7 @@ import {
   readFile,
   readClientWallpaperFile,
   listBlobFiles,
-} from '../cindy-media/blobStore';
+} from '../cindy-media/blobStore.desktop';
 import * as recycler from '../cindy-media/recycler';
 
 beforeEach(() => {
@@ -73,6 +79,19 @@ async function selectImage(color = 'blue') {
 const parent = {} as never;
 
 describe('client-owned custom wallpaper lifecycle', () => {
+  // PR #9496: media publication preceded the appearance CAS. Use real stores,
+  // media and recycler; failed commits must retain the original reference/bytes. tier: unit.
+  it.each([false, true])('retains the old wallpaper when the combined appearance commit fails (published=%s)', async published => {
+    await selectImage('blue'); await importCustomWallpaper(parent);
+    const oldUrl = readCustomWallpaperUrl();
+    const replacement = await prepareWallpaperImage(await selectImage('red'));
+    await expect(savePluginWallpaper(replacement, {
+      pluginSource: { instanceId: 'example', key: 'a'.repeat(64) }, assertCurrent() {},
+      async commit(publish) { if (published) publish(); throw new Error('APPEARANCE_CHANGED'); },
+    })).rejects.toThrow('APPEARANCE_CHANGED');
+    expect(readCustomWallpaperUrl()).toBe(oldUrl);
+    await expect(readClientWallpaperFile(oldUrl)).resolves.toBeDefined();
+  });
   it('rejects a 20–100 MB image after only the header, even with an MP4 filename', async () => {
     const png = await selectImage();
     const file = path.join(h.dir, 'oversized.mp4');
@@ -153,16 +172,23 @@ describe('client-owned custom wallpaper lifecycle', () => {
     await removeCustomWallpaper();
     expect((await listBlobFiles('client-wallpaper')).entries).toHaveLength(0);
   });
-  it('retains an official CDN video when removing custom media', async () => {
+  // User request 2026-10-17: static CDN entries have no video hash. Exercise
+  // custom import/removal with one such cached image to prevent data loss;
+  // previous fixtures only covered two-kind scenes. Unit tier.
+  it.each([
+    ['video/mp4', 'abc'],
+    ['image/webp', 'abc'],
+    ['image/webp', 'abcd'],
+  ])('retains official CDN %s across custom import and removal', async (mimeType, content) => {
     const official = await writeBlob({
-      buffer: Buffer.from('abc'),
-      mimeType: 'video/mp4',
+      buffer: Buffer.from(content),
+      mimeType,
       scope: 'client-wallpaper',
     });
     await selectImage();
     await importCustomWallpaper(parent);
     await removeCustomWallpaper();
-    expect((await readClientWallpaperFile(official.url)).buffer).toEqual(Buffer.from('abc'));
+    expect((await readClientWallpaperFile(official.url)).buffer).toEqual(Buffer.from(content));
     expect((await listBlobFiles('client-wallpaper')).entries).toHaveLength(1);
   });
 

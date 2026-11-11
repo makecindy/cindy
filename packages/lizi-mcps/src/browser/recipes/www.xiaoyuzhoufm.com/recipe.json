@@ -1,16 +1,29 @@
 {
   "id": "xiaoyuzhou-podcast",
-  "match": ["xiaoyuzhoufm.com"],
+  "match": [
+    "xiaoyuzhoufm.com"
+  ],
   "description": "查看小宇宙某个播客的资料与最近单集(节目名/作者/简介/订阅数/单集总数 + 内嵌的最近单集列表 eid/标题/时长/播放量/日期)。输入键 podcast_id 填播客 ID(取自 xiaoyuzhoufm.com/podcast/<ID> 的 URL 路径末段)。小宇宙是 Next.js 静态导出站,页面数据落在 __NEXT_DATA__,无需登录。",
-  "inputs": { "podcast_id": { "required": true } },
+  "inputs": {
+    "podcast_id": {
+      "required": true
+    }
+  },
   "steps": [
-    { "action": "navigate", "url": "https://www.xiaoyuzhoufm.com/podcast/{{podcast_id}}" },
-    { "action": "wait", "loadState": "load" },
+    {
+      "action": "navigate",
+      "url": "https://www.xiaoyuzhoufm.com/podcast/{{podcast_id}}"
+    },
+    {
+      "action": "wait",
+      "loadState": "load"
+    },
     {
       "action": "evaluate",
       "as": "podcast",
       "fn": "() => { const fmtDur = s => { if (!Number.isFinite(s) || s < 0) return '-'; s = Math.round(s); return Math.floor(s/60) + ':' + String(s%60).padStart(2,'0'); }; const nd = window.__NEXT_DATA__; const pp = nd && nd.props && nd.props.pageProps ? nd.props.pageProps : null; const p = pp && pp.podcast; if (!p) throw new Error('未取到小宇宙播客数据(ID 不存在或页面结构变化),请核对 xiaoyuzhoufm.com/podcast/<ID> 中的 ID'); const eps = Array.isArray(p.episodes) ? p.episodes : []; return { title: p.title, author: p.author, description: p.brief, subscribers: p.subscriptionCount, episodeCount: p.episodeCount, latest: (p.latestEpisodePubDate || '').slice(0,10), episodes: eps.slice(0,15).map(e => ({ eid: e.eid, title: e.title, duration: fmtDur(e.duration), plays: e.playCount, date: (e.pubDate || '').slice(0,10) })) }; }"
     }
   ],
-  "output": "{{podcast}}"
+  "output": "{{podcast}}",
+  "access": "read"
 }

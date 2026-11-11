@@ -1,9 +1,11 @@
 import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
+import ts from "typescript";
 
 import {
   buildConversationShareHtml,
+  buildConversationShareContentWidth,
   type ConversationShareWebViewColors,
 } from "@/session/conversationShareWebViewHtml";
 import { i18n } from "@/i18n";
@@ -50,7 +52,59 @@ function buildRichConversationHtml(): string {
   });
 }
 
+it('bounds cleanup to old share PNGs while retaining recent successful files', async () => {
+  const source = ts.createSourceFile('share.tsx', readFileSync(resolve(process.cwd(), 'src/session/ConversationShareWebView.tsx'), 'utf8'), ts.ScriptTarget.Latest, true, ts.ScriptKind.TSX);
+  const declarations = source.statements.filter((node) => ts.isVariableStatement(node) && node.declarationList.declarations.some((item) => ['EXPORT_DIR_NAME', 'SHARE_PNG_RETAIN_COUNT', 'SHARE_PNG_CLEANUP_BATCH'].includes(item.name.getText(source))));
+  const cleanup = source.statements.find((node) => ts.isFunctionDeclaration(node) && node.name?.text === 'cleanupConversationSharePngTemps');
+  if (!cleanup) throw new Error('Missing production share cleanup');
+  class File {
+    extension = '.png'; exists = true; uri: string;
+    constructor(public name: string, public modificationTime: number) { this.uri = 'file:///cache/conversation-share/' + name; }
+  }
+  const files = Array.from({ length: 16 }, (_, i) => new File('conversation-' + i + '.png', i));
+  files.push(new File('unrelated.png', 30));
+  const remove = vi.fn(async (_uri: string) => undefined);
+  const Directory = class { exists = true; list() { return files; } };
+  const code = ts.transpileModule(declarations.map((node) => node.getText(source)).join('\n') + '\n' + cleanup.getText(source).replace(/^export\s+/, ''), { compilerOptions: { target: ts.ScriptTarget.ES2022 } }).outputText;
+  const run = new Function('File', 'Directory', 'Paths', 'deleteConversationSharePngTemp', code + '\nreturn cleanupConversationSharePngTemps;')(File, Directory, { cache: 'cache' }, remove);
+  await run();
+  expect(remove.mock.calls.map((call) => call[0])).toEqual(files.slice(5, 13).reverse().map((file) => file.uri));
+  expect(remove).toHaveBeenCalledTimes(8);
+});
+
+it('keeps approved footer output and a visible gap between non-adjacent selected messages', () => {
+  const footer = buildRichConversationHtml();
+  expect(footer).toContain('width: 22px;');
+  expect(footer).toContain('height: 18px;');
+  expect(footer).toContain('gap: 6px;');
+  const html = buildConversationShareHtml({ allShareableIds: ['first', 'middle', 'third'], colors, contentWidth: 390,
+    selectedMessages: [{ body: 'first', clientId: 'first', kind: 'user' }, { body: 'third', clientId: 'third', kind: 'assistant' }] });
+  expect(html).toContain('<div class="share-gap" aria-hidden="true">⋯</div>');
+});
+
 describe("buildConversationShareHtml 富内容导出", () => {
+  it.each([
+    { width: 390, height: 844, expectedWidth: 390 },
+    { width: 660, height: 390, expectedWidth: 564 },
+    { width: 1024, height: 1366, expectedWidth: 760 },
+    // 双栏右侧面板的宽度；不可用整个窗口宽度代替。
+    { width: 704, height: 768, expectedWidth: 608 },
+  ])("两条出图路径使用聊天可读宽度（$width × $height）", ({ width, height, expectedWidth }) => {
+    const contentWidth = buildConversationShareContentWidth({ width, height });
+    expect(contentWidth).toBe(expectedWidth);
+    const messages = [{ clientId: "user", kind: "user" as const, body: "正文 ".repeat(200) }];
+    const html = buildConversationShareHtml({
+      allShareableIds: ["user"], colors, contentWidth, selectedMessages: messages,
+    });
+    const svg = buildConversationShareSvgLayout({
+      allShareableIds: ["user"], colors, width: contentWidth, messages,
+    });
+    expect(html).toMatch(new RegExp(`#xdt-content\\.share-stage \\{[^}]*width: ${expectedWidth}px`));
+    expect(svg.width).toBe(expectedWidth);
+    expect(svg.bubbles[0]!.width).toBe(Math.round((expectedWidth - 32) * 0.86));
+    expect(svg.bubbles[0]!.x + svg.bubbles[0]!.width).toBe(expectedWidth - 16);
+  });
+
   it.each([
     { contentWidth: 360, dark: false },
     { contentWidth: 360, dark: true },
@@ -287,240 +341,6 @@ describe("buildConversationShareHtml 富内容导出", () => {
     expect(html).not.toContain("https://example.com/image.png");
   });
 
-  it("限制原生与降级 renderer 的完整源尺寸，并安全保留已分享 PNG", () => {
-    const nativeSource = readFileSync(
-      resolve(
-        process.cwd(),
-        "modules/xdt-screenshot-monitor/ios/XdtScreenshotMonitorModule.swift",
-      ),
-      "utf8",
-    );
-    const webViewSource = readFileSync(
-      resolve(process.cwd(), "src/session/ConversationShareWebView.tsx"),
-      "utf8",
-    );
-    const sessionSource = readFileSync(
-      resolve(process.cwd(), "app/sessions/[sessionId].tsx"),
-      "utf8",
-    ).replace(/\r\n/g, "\n");
-
-    expect(nativeSource).toContain("conversationShareMaxSourcePixels");
-    expect(nativeSource).toContain("UIWindow(windowScene: windowScene)");
-    expect(nativeSource).toContain(
-      "hostingWindow.rootViewController = viewController",
-    );
-    expect(nativeSource).toContain("hostingWindow?.isHidden = true");
-    expect(nativeSource).toContain("no active window scene");
-    expect(nativeSource).toContain("UIWindow.Level.normal.rawValue + 1");
-    expect(nativeSource).toContain("hostingWindow.alpha = 0.01");
-    expect(nativeSource).toContain("waitForWebContentPaint(webView)");
-    expect(nativeSource).toContain("requestAnimationFrame(resolve)");
-    expect(nativeSource).toContain("merged.hasVisibleVariation");
-    expect(nativeSource).toContain("Conversation share PNG is blank.");
-    expect(nativeSource).toContain("format.scale = 1");
-    expect(nativeSource).toContain(
-      "captureWidth * captureHeight <= conversationShareMaxSourcePixels",
-    );
-    expect(nativeSource).toContain(
-      "return numericValue.isFinite ? numericValue : nil",
-    );
-    expect(webViewSource).toContain(
-      "await deleteConversationSharePngTemp(file.uri);",
-    );
-    expect(webViewSource).toContain("SHARE_PNG_RETAIN_COUNT = 3");
-    expect(webViewSource).toContain("SHARE_PNG_CLEANUP_BATCH = 8");
-    expect(webViewSource).toContain(
-      "files.slice(SHARE_PNG_RETAIN_COUNT, SHARE_PNG_RETAIN_COUNT + SHARE_PNG_CLEANUP_BATCH)",
-    );
-    expect(sessionSource).toContain("deleteConversationSharePngTemp");
-    expect(sessionSource).toContain("cleanupConversationSharePngTemps");
-    expect(sessionSource).toContain("cache 目录交给下一次有界清理");
-    expect(sessionSource).toContain("if (!shareCompleted && localUri)");
-    expect(sessionSource).toContain("<ConversationShareSvg");
-    expect(sessionSource).toContain(
-      "nativeConversationShareAvailable = Platform.OS === 'ios'",
-    );
-    expect(sessionSource).toContain(
-      "if (!nativeConversationShareAvailable || !shareSelectionActive) return undefined;",
-    );
-    expect(sessionSource).toContain(
-      "const messages = await shareImages.prepare();",
-    );
-    expect(sessionSource).toContain(
-      "nativeConversationShareAvailable\n      && shareCharacterSrc",
-    );
-    expect(sessionSource).toContain("renderConversationShareHtmlToPng({");
-    expect(sessionSource).toContain("nativeShareAssetsReady");
-    expect(sessionSource).toContain("native webview export succeeded");
-    expect(sessionSource).toContain("falling back to svg");
-    expect(sessionSource).not.toContain(
-      "OTA webview export failed; falling back to svg",
-    );
-    expect(sessionSource).toContain("return svg.exportPng();");
-    const shareAsyncIndex = sessionSource.indexOf(
-      "await sharing.shareAsync(localUri, { mimeType: 'image/png' });",
-    );
-    const shareCompletedIndex = sessionSource.indexOf(
-      "shareCompleted = true;",
-      shareAsyncIndex,
-    );
-    const postShareActiveCheckIndex = sessionSource.indexOf(
-      "if (!isShareOperationActive()) return;",
-      shareAsyncIndex,
-    );
-    expect(shareAsyncIndex).toBeGreaterThanOrEqual(0);
-    expect(shareCompletedIndex).toBeGreaterThan(shareAsyncIndex);
-    expect(shareCompletedIndex).toBeLessThan(postShareActiveCheckIndex);
-  });
-
-  it("使用 Mobile 获批的克制页脚尺寸", () => {
-    const designSource = readFileSync(
-      resolve(process.cwd(), "../../docs/design-rules/DESIGN.md"),
-      "utf8",
-    );
-    const svgSource = readFileSync(
-      resolve(process.cwd(), "src/session/ConversationShareSvg.tsx"),
-      "utf8",
-    );
-    const html = buildRichConversationHtml();
-
-    expect(designSource).toContain("Mobile approved 2026-08-08");
-    expect(designSource).toContain("src/session/ConversationShareSvg.tsx");
-    expect(designSource).toContain("22×22px (6px radius)");
-    expect(designSource).toContain("18px-high wordmark with a 6px gap");
-    expect(svgSource).toContain("const SHARE_CHARACTER_SIZE = 22;");
-    expect(svgSource).toContain("const SHARE_LOGO_HEIGHT = 18;");
-    expect(svgSource).toContain("const SHARE_LOCKUP_GAP = 6;");
-    expect(svgSource).toContain("rx={6}");
-    expect(svgSource).toContain("assetGate.waitUntilSettled()");
-    expect(svgSource).toContain('assetGate.markReady("character")');
-    expect(svgSource).toContain('assetGate.markReady("logo")');
-    expect(html).toContain("width: 22px;");
-    expect(html).toContain("height: 18px;");
-    expect(html).toContain("gap: 6px;");
-  });
-
-  it("分享导出保持消息间距，并为隐藏 WebView 复用安全边界", () => {
-    const html = buildConversationShareHtml({
-      allShareableIds: ["first", "middle", "third"],
-      colors,
-      contentWidth: 390,
-      selectedMessages: [
-        { body: "first", clientId: "first", kind: "user" },
-        { body: "third", clientId: "third", kind: "assistant" },
-      ],
-    });
-    const webViewSource = readFileSync(
-      resolve(process.cwd(), "src/session/ConversationShareWebView.tsx"),
-      "utf8",
-    );
-    const shareBarSource = readFileSync(
-      resolve(process.cwd(), "src/session/ShareSelectionBar.tsx"),
-      "utf8",
-    );
-    const selectAllSource = readFileSync(
-      resolve(process.cwd(), "src/session/ShareSelectAllButton.tsx"),
-      "utf8",
-    );
-
-    const messageCheckboxSource = readFileSync(
-      resolve(process.cwd(), "src/session/ShareMessageCheckbox.tsx"),
-      "utf8",
-    );
-    const messageRendererSource = readFileSync(
-      resolve(process.cwd(), "src/session/MessageRenderer.tsx"),
-      "utf8",
-    );
-    const sessionSource = readFileSync(
-      resolve(process.cwd(), "app/sessions/[sessionId].tsx"),
-      "utf8",
-    );
-
-    expect(html).toContain('<div class="share-gap" aria-hidden="true">⋯</div>');
-    expect(html).toMatch(
-      /#xdt-content\.share-stage\s*\{[\s\S]*?display: flex;[\s\S]*?flex-direction: column;[\s\S]*?gap: 16px;/,
-    );
-    expect(shareBarSource).toContain("<HomeHeaderGlassButton");
-    const chromeStyle = readFileSync(
-      resolve(
-        process.cwd(),
-        "src/platform/chrome/nativeGlassButtonStyle.ios.ts",
-      ),
-      "utf8",
-    );
-    expect(chromeStyle).toContain("size = navigationChrome.target");
-    expect(chromeStyle).toContain(": { width: size, height: size })");
-    expect(shareBarSource).toContain("minHeight: 44,");
-    expect(shareBarSource).toContain("minWidth: 112,");
-    expect(shareBarSource).toContain("fontSize: typeScale.body,");
-    expect(selectAllSource).toContain("shareableIds.filter((clientId) =>");
-    expect(selectAllSource).toContain(
-      "selectionBeforeSelectAllRef.current?.includes(clientId)",
-    );
-    expect(selectAllSource).toContain(
-      "<ShareCheckboxMark checked={allSelected} />",
-    );
-    expect(selectAllSource).not.toContain(
-      "backgroundColor: colors.surfaceChip",
-    );
-    expect(messageCheckboxSource).toContain(
-      "onStartShouldSetResponder={() => !disabled}",
-    );
-    expect(messageCheckboxSource).toContain(
-      "onResponderTerminationRequest={() => true}",
-    );
-    expect(messageCheckboxSource).toContain("shouldCommitShareSelectionTap({");
-    expect(messageCheckboxSource).toContain(
-      "<ShareSelectionRowInteractionContext.Provider",
-    );
-    expect(messageCheckboxSource).toContain("if (!gesture.consumed) toggle();");
-    expect(messageCheckboxSource).not.toContain(
-      "fill ? styles.rowButton : styles.button",
-    );
-    expect(messageRendererSource).toContain(
-      "<View style={styles.shareSelectionContent}>",
-    );
-    expect(messageRendererSource).not.toContain(
-      'pointerEvents="none" style={styles.shareSelectionContent}',
-    );
-    expect(messageRendererSource).toContain("useCancelShareSelectionRowTap()");
-    expect(messageRendererSource).toContain("fill");
-    expect(messageRendererSource).toContain(
-      'testID="message.shareStickyCheck"',
-    );
-    expect(messageRendererSource).toContain(
-      "const shareableViews = Array.from(shareableMessageViewsRef.current.entries())",
-    );
-    expect(messageRendererSource).toContain(
-      "candidates.sort((a, b) => (a.frame?.y ?? Number.POSITIVE_INFINITY)",
-    );
-    expect(messageRendererSource).toContain(
-      "const pinned = candidates.find(({ frame }) => frame",
-    );
-    expect(messageRendererSource).toContain(
-      "frame.y + frame.height > dockY + SHARE_STICKY_CHECK_HEIGHT",
-    );
-    expect(messageRendererSource).toContain('pointerEvents="box-none"');
-    expect(messageRendererSource).toContain(
-      "marginLeft: wideContentInset + spacing.lg",
-    );
-    expect(messageRendererSource).not.toContain("styles.stickyShareSpacer");
-    expect(sessionSource).toContain(
-      "shareSelectionLeadingInset={nativeShellLayout.wideViewport",
-    );
-    expect(sessionSource).toContain(
-      "{ paddingLeft: shareSelectionLeadingInset + spacing.sm }",
-    );
-    expect(webViewSource).toContain(
-      "onShouldStartLoadWithRequest={interceptNavigation}",
-    );
-    expect(webViewSource).toContain(
-      "interceptHtmlNavigation(request, documentSettledRef.current)",
-    );
-    expect(webViewSource).toContain("allowFileAccess={false}");
-    expect(webViewSource).toContain('mediaCapturePermissionGrantType="deny"');
-  });
-
   it("导出结构化正文和附件时保留可见投影，不泄露隐藏引用或外链", () => {
     const html = buildConversationShareHtml({
       allShareableIds: ["message"],
@@ -577,5 +397,53 @@ describe("buildConversationShareHtml 富内容导出", () => {
 
     expect(html).toContain("share-attachment-chip-file");
     expect(html).not.toContain('share-bubble-user">');
+  });
+});
+
+describe("buildConversationShareHtml 与聊天气泡同款渲染", () => {
+  const ownUserBubble = { background: "#e8f0ff", border: "#b5c8ef" };
+  const html = buildConversationShareHtml({
+    allShareableIds: ["short", "own", "multi"],
+    colors: { ...colors, ownUserBubble },
+    contentWidth: 390,
+    selectedMessages: [
+      { body: "短消息", clientId: "short", kind: "user" },
+      { body: "自己发的", clientId: "own", kind: "user", ownUserBubble: true },
+      { body: "第一行\n第二行", clientId: "multi", kind: "user" },
+    ],
+  });
+  const css = (selector: string) =>
+    html.match(new RegExp(`\\n\\s*${selector.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")} \\{([^}]*)\\}`))?.[1] ?? "";
+
+  it("用户气泡用细描边与普通边框色,不用次要文字色的粗框", () => {
+    expect(css(".share-bubble-user")).toContain("border: 0.5px solid #dddddd");
+    expect(css(".share-bubble-user")).not.toContain("#555555");
+  });
+
+  it("左右边距与消息流一致,短消息气泡上下更紧凑", () => {
+    expect(css("#xdt-content.share-stage")).toContain("padding: 24px 16px");
+    expect(css(".share-bubble-user.share-bubble-compact")).toContain("padding: 8px 12px");
+    expect(html).toContain("share-bubble-user share-bubble-compact");
+    expect(html).toContain("share-bubble-user share-bubble-standard");
+  });
+
+  it("自己发的消息沿用「我的消息气泡颜色」", () => {
+    expect(css(".share-bubble-own")).toContain("background: #e8f0ff");
+    expect(css(".share-bubble-own")).toContain("border-color: #b5c8ef");
+    expect(html.match(/share-bubble-own"/g)).toHaveLength(1);
+  });
+
+  it("默认气泡外观不输出自定义颜色规则", () => {
+    const plain = buildConversationShareHtml({
+      allShareableIds: ["own"],
+      colors,
+      contentWidth: 390,
+      selectedMessages: [{ body: "x", clientId: "own", kind: "user", ownUserBubble: true }],
+    });
+    expect(plain).not.toContain(".share-bubble-own {");
+  });
+
+  it("段内换行像聊天里一样保留", () => {
+    expect(html).toMatch(/#xdt-content p,[^{]*\{\s*white-space: pre-wrap;/);
   });
 });

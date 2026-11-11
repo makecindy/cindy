@@ -5,7 +5,10 @@ import { getMobileAuthOwner, invalidateMobileAuthOwnerForSwitch, isMobileAuthOwn
 import {
   __resetIncomingShareForTest,
   consumeIncomingShareBatch,
+  discardIncomingShareBatch,
+  leaveIncomingShareChooser,
   incomingShareBatchId,
+  selectIncomingShareDestination,
   selectIncomingShareUploadCandidates,
   stageIncomingShareBatch,
   receiveIncomingShare,
@@ -59,6 +62,32 @@ describe('incoming Share Extension payloads', () => {
     convertToJpeg.mockClear();
   });
 
+  it('leaves after native cancellation fails without losing files or the retryable batch', () => {
+    const acknowledge = vi.fn().mockImplementationOnce(() => { throw new Error('storage unavailable'); });
+    const batch = stageIncomingShareBatch([payload({})], acknowledge)!;
+    const leave = vi.fn();
+    leaveIncomingShareChooser(batch.id, leave);
+    expect(leave).toHaveBeenCalledOnce();
+    expect(deleteAsync).not.toHaveBeenCalled();
+    expect(stageIncomingShareBatch([payload({})], vi.fn())).toBe(batch);
+    expect(consumeIncomingShareBatch(batch.id)).toBe(true);
+    expect(acknowledge).toHaveBeenCalledTimes(2);
+  });
+
+  it('never interprets file-URL text as an upload or cleanup capability', async () => {
+    const text = payload({ shareType: 'text', value: 'file:///private/document.txt', contentUri: 'file:///private/document.txt', contentType: 'text' });
+    expect(selectIncomingShareUploadCandidates([text]).candidates).toEqual([]);
+    const batch = stageIncomingShareBatch([text], vi.fn())!;
+    expect(discardIncomingShareBatch(batch.id)).toBe(true);
+    const clearSharedPayloads = vi.fn();
+    const stop = watchIncomingShareAccount({ getSharedPayloads: () => [text], clearSharedPayloads });
+    stageIncomingShareBatch([text], vi.fn());
+    setMobileAuthOwner('account-b');
+    await new Promise(resolve => setTimeout(resolve, 0));
+    expect(deleteAsync).not.toHaveBeenCalled();
+    stop();
+  });
+
   it('converts non-sendable iOS image formats before entering the attachment uploader', async () => {
     const result = selectIncomingShareUploadCandidates([
       payload({
@@ -86,6 +115,14 @@ describe('incoming Share Extension payloads', () => {
       skipPreprocess: true,
     });
     expect(convertToJpeg).toHaveBeenCalledWith('file:///shared/IMG_0001.HEIC');
+  });
+
+  it.each(['svg', 'psd', 'dng'])('preserves %s image exports as files instead of forcing a JPEG decoder', (extension) => {
+    const input = payload({ shareType: 'image', contentType: 'image', originalName: `drawing.${extension}` });
+    const result = selectIncomingShareUploadCandidates([input]);
+    expect(result.candidates).toEqual([expect.objectContaining({ kind: 'file', name: `drawing.${extension}` })]);
+    expect(result.candidates[0]!.resolve).toBeUndefined();
+    expect(convertToJpeg).not.toHaveBeenCalled();
   });
 
   it('converts supported files and images into the existing attachment upload candidates', () => {
@@ -169,6 +206,33 @@ describe('incoming Share Extension payloads', () => {
     expect(consumeIncomingShareBatch(first!.id)).toBe(false);
   });
 
+  // #7538: native can release its read lock before JS receives the result,
+  // allowing the focused composer (or chooser cancellation) to finish first.
+  it.each(['consume', 'cancel'] as const)('does not requeue a late native result after %s', async (action) => {
+    const raw = [{ shareType: 'text' as const, value: 'shared content' }];
+    let nativeId = action === 'consume' ? 'share-one' : undefined;
+    const native = { getSharedPayloads: () => raw, getSharedPayloadId: () => nativeId, clearSharedPayloads: vi.fn() };
+    const firstId = nativeId ?? incomingShareBatchId([payload({ ...raw[0]!, mimeType: undefined,
+      contentUri: null, contentType: 'text', contentMimeType: null,
+      originalName: raw[0]!.value, contentSize: null })]);
+    receiveIncomingShare(native);
+    let release!: (value: typeof raw) => void;
+    const reading = receiveIncomingShare({ ...native,
+      getSharedPayloadsAsync: () => new Promise<typeof raw>(resolve => { release = resolve; }),
+    });
+    expect(selectIncomingShareDestination(firstId, 'task-a')).toBe(true);
+    expect(action === 'consume' ? consumeIncomingShareBatch(firstId) : discardIncomingShareBatch(firstId)).toBe(true);
+    const next = stageIncomingShareBatch([payload({ value: 'next share' })], vi.fn())!;
+    release(raw); await reading;
+    expect(consumeIncomingShareBatch(next.id)).toBe(true);
+    expect(selectIncomingShareDestination(firstId, 'stale-target')).toBe(false);
+    expect(native.clearSharedPayloads).toHaveBeenCalledTimes(1);
+    // New invocations (including legacy content-derived IDs) remain eligible.
+    nativeId = nativeId ? 'share-two' : undefined;
+    receiveIncomingShare(native);
+    expect(consumeIncomingShareBatch(nativeId ?? firstId)).toBe(true);
+  });
+
   it('retains successive shares during login and does not clear the newer native slot', () => {
     setMobileAuthOwner(null);
     let raw = [{ value: 'file:///group/cindy-share-a/report.pdf', shareType: 'file' as const }];
@@ -234,6 +298,46 @@ describe('incoming Share Extension payloads', () => {
     setMobileAuthOwner('account-a');
     setMobileAuthOwner('account-b');
     expect(consumeIncomingShareBatch(loggedOutBatch.id)).toBe(false);
+  });
+
+  it.each(['text', 'url'] as const)('fences uncleared %s from the next account until retry succeeds', (shareType) => {
+    let raw = [{ value: shareType === 'text' ? 'account A private text' : 'https://private.example/a', shareType }];
+    const native = {
+      getSharedPayloads: () => raw.map(item => ({ ...item })),
+      clearSharedPayloads: vi.fn((): void => { throw new Error('App Group unavailable'); }),
+    };
+    const stop = watchIncomingShareAccount(native);
+    setMobileAuthOwner('account-b');
+    // Foreground refresh must not relabel the surviving native snapshot as B.
+    receiveIncomingShare(native);
+    const next = stageIncomingShareBatch([payload({ value: 'file:///new.pdf', contentUri: 'file:///new.pdf' })], vi.fn())!;
+    expect(consumeIncomingShareBatch(next.id)).toBe(true);
+    native.clearSharedPayloads.mockImplementation(() => { raw = []; });
+    receiveIncomingShare(native);
+    // Once clearing has succeeded, a deliberate identical share belongs to B.
+    raw = [{ value: shareType === 'text' ? 'account A private text' : 'https://private.example/a', shareType }];
+    receiveIncomingShare(native);
+    const id = incomingShareBatchId([payload({
+      ...(shareType === 'text'
+        ? { value: raw[0]!.value, shareType, contentUri: null, contentType: 'text', originalName: raw[0]!.value }
+        : { value: raw[0]!.value, shareType, contentUri: raw[0]!.value, contentType: 'website', originalName: 'a' }),
+      contentSize: null, contentMimeType: null, mimeType: undefined,
+    })]);
+    expect(consumeIncomingShareBatch(id)).toBe(true);
+    stop();
+  });
+
+  it('persists an unknown-slot fence when the account transition cannot read native storage', () => {
+    const native = {
+      getSharedPayloads: vi.fn(() => { throw new Error('App Group unavailable'); }),
+      clearSharedPayloads: vi.fn(),
+      rejectUnreadableSharedPayloads: vi.fn(),
+    };
+    const stop = watchIncomingShareAccount(native);
+    setMobileAuthOwner('account-b');
+    expect(native.rejectUnreadableSharedPayloads).toHaveBeenCalledOnce();
+    expect(native.clearSharedPayloads).not.toHaveBeenCalled();
+    stop();
   });
 
   it('clears an unobserved native slot on switch and allows new shares for the new account', () => {
@@ -341,4 +445,41 @@ describe('incoming Share Extension payloads', () => {
     expect(native.clearSharedPayloads).toHaveBeenCalledOnce();
     stop();
   });
+});
+
+// An async native result cannot cross an account boundary while its lock waits.
+it('drops a late native result after the receiving account changes', async () => {
+  authOwnerTesting.reset(); setMobileAuthOwner('account-a'); __resetIncomingShareForTest();
+  let release!: (raw: Array<{ shareType: 'text'; value: string }>) => void;
+  const raw = [{ shareType: 'text' as const, value: 'private account A content' }];
+  const native = {
+    getSharedPayloads: vi.fn(() => raw),
+    getSharedPayloadsAsync: () => new Promise<typeof raw>(resolve => { release = resolve; }),
+    clearSharedPayloads: vi.fn(),
+  };
+  const receiving = receiveIncomingShare(native);
+  setMobileAuthOwner('account-b');
+  release(raw); await receiving;
+  const lateId = incomingShareBatchId([{ ...raw[0]!, contentUri: null, contentType: 'text',
+    contentMimeType: null, originalName: raw[0]!.value, contentSize: null }]);
+  expect(consumeIncomingShareBatch(lateId)).toBe(false);
+  expect(native.getSharedPayloads).not.toHaveBeenCalled();
+  expect(native.clearSharedPayloads).not.toHaveBeenCalled();
+  __resetIncomingShareForTest();
+});
+
+it('keeps identical text from separate system shares separate from an already chosen target', () => {
+  authOwnerTesting.reset(); setMobileAuthOwner('account-a'); __resetIncomingShareForTest();
+  let id = 'share-one';
+  const raw = [{ shareType: 'text' as const, value: 'same text' }];
+  const native = { getSharedPayloads: () => raw, getSharedPayloadId: () => id, clearSharedPayloads: vi.fn() };
+  receiveIncomingShare(native);
+  expect(selectIncomingShareDestination('share-one', 'companion-a')).toBe(true);
+  id = 'share-two'; receiveIncomingShare(native); receiveIncomingShare(native);
+  expect(consumeIncomingShareBatch('share-one')).toBe(true);
+  expect(selectIncomingShareDestination('share-two', 'task-b')).toBe(true);
+  expect(consumeIncomingShareBatch('share-two')).toBe(true);
+  expect(native.clearSharedPayloads).toHaveBeenCalledTimes(2);
+  expect(consumeIncomingShareBatch('share-two')).toBe(false);
+  __resetIncomingShareForTest();
 });

@@ -14,12 +14,17 @@ import {
   type GhostMediaModelsResult,
   type GhostMediaModelType,
   type InstalledGhost,
+  ghostLoopbackOrigin,
+  ghostPanelLoopbackEmbedAllowed,
 } from '../../../shared/ghost.js';
 import { getActiveAppSession, type ActiveAppSession } from '../../appSessionState.js';
-import { ownerScopedGhostPartition } from '../ghostWebviewPartition.js';
-import { GHOST_BOOT_PATH, ghostBootHtml, ghostFileMime, resolveGhostFilePath } from './ghostFiles.js';
+import { ownerScopedGhostPartition, ownerScopedGhostPartitionForInstalledGhost } from '../ghostWebviewPartition.js';
+import { installedGhostStoragePart } from '../../../shared/pluginIdentity.js';
+import { GHOST_BOOT_PATH, GHOST_MAIL_SDK_PATH, ghostBootHtml, ghostFileMime, mediaTypeForLibraryPath, resolveGhostFilePath } from './ghostFiles.js';
+import { createGhostPageHandler, GHOST_HTML_CSP } from './ghostPageHandler.js';
+export { GHOST_HTML_CSP } from './ghostPageHandler.js';
 import { handleGhostKvRequest, readBoundedBodyText } from './ghostKvEndpoint.js';
-import { resolveHashRef as resolveBlobHashRef } from '../../cindy-media/blobStore.js';
+import { resolveHashRef as resolveBlobHashRef } from '../../cindy-media/blobStore.desktop.js';
 import { buildRangedMediaResponse } from '../../cindy-media/rangeResponse.js';
 import {
   ghostCanRead as ghostCanReadMedia,
@@ -111,30 +116,38 @@ export function sendToGhostLogic(ghostId: string, payload: unknown): boolean {
 }
 
 /** The remote page uses the same owner partition and running logic as desktop. */
-export async function invokeGhostMobileRelay(ghostId: string, operation: MobileRelayOperation): Promise<unknown> {
-  const partition = ownerScopedGhostPartition(ghostId, getActiveAppSession());
+export async function invokeGhostMobileRelay(ghost: InstalledGhost, operation: MobileRelayOperation): Promise<unknown> {
+  const ghostId = installedGhostStoragePart(ghost);
+  const partition = ownerScopedGhostPartitionForInstalledGhost(ghost, getActiveAppSession());
   if (!partition) throw new Error('PLUGIN_PAGE_UNAVAILABLE');
+  const isCurrent = captureGhostProtocolTargetGuard(partition);
+  if (!isCurrent()) throw new Error('PLUGIN_PAGE_UNAVAILABLE');
   const ownerSession = session.fromPartition(partition);
   for (const [id, plugin] of logicWebContentsToGhost) {
     if (plugin !== ghostId) continue;
     const wc = webContents.fromId(id);
     if (wc && !wc.isDestroyed() && wc.session === ownerSession) {
-      return wc.executeJavaScript(mobilePageRelayScript(operation));
+      const result = await wc.executeJavaScript(mobilePageRelayScript(operation));
+      if (!isCurrent()) throw new Error('PLUGIN_PAGE_UNAVAILABLE');
+      return result;
     }
   }
   throw new Error('PLUGIN_PAGE_UNAVAILABLE');
 }
 
 export async function fetchGhostMobilePage(ghost: InstalledGhost, pathname: string, method: string, body?: string, offset = 0, expectedRevision?: string) {
-  const partition = ownerScopedGhostPartition(ghost.manifest.id, getActiveAppSession());
+  const partition = ownerScopedGhostPartitionForInstalledGhost(ghost, getActiveAppSession());
   if (!partition) throw new Error('PLUGIN_PAGE_UNAVAILABLE');
+  ensureGhostProtocolRegistered(ghost);
+  const isCurrent = captureGhostProtocolTargetGuard(partition);
+  if (!isCurrent()) throw new Error('PLUGIN_PAGE_UNAVAILABLE');
   // Read only the requested immutable blob chunk. The desktop protocol buffers
   // the whole file, which would repeat that work for every remote video chunk.
   if (pathname.startsWith('/media/')) {
     const match = /^\/media\/([a-f0-9]{64})(\.[a-z0-9]+)$/.exec(pathname);
     const missing = { status: 404, mime: 'application/octet-stream', base64: '' };
     if (!match || method !== 'GET' || !Number.isSafeInteger(offset) || offset < 0) return missing;
-    if (!(await ghostCanReadMedia(match[1], ghost.manifest.id))) return missing;
+    if (!(await ghostCanReadMedia(match[1], installedGhostStoragePart(ghost)))) return missing;
     let resolved: { absPath: string; mimeType: string };
     try { resolved = resolveBlobHashRef(match[1], match[2]); } catch { return missing; }
     const handle = await fs.open(resolved.absPath, nodeFs.constants.O_RDONLY | nodeFs.constants.O_NOFOLLOW);
@@ -144,12 +157,12 @@ export async function fetchGhostMobilePage(ghost: InstalledGhost, pathname: stri
       const data = Buffer.alloc(Math.min(49_152, stat.size - offset));
       const { bytesRead } = await handle.read(data, 0, data.length, offset);
       if (bytesRead !== data.length) throw new Error('PLUGIN_MEDIA_CHANGED');
+      if (!isCurrent()) throw new Error('PLUGIN_PAGE_UNAVAILABLE');
       return { status: 200, mime: resolved.mimeType, base64: data.toString('base64'), revision: match[1],
         ...(offset + bytesRead < stat.size ? { nextOffset: offset + bytesRead } : {}),
       };
     } finally { await handle.close(); }
   }
-  ensureGhostProtocolRegistered(ghost);
   const file = /^\/(?:library|media)\//.test(pathname);
   const response = await session.fromPartition(partition).fetch(`${GHOST_SCHEME}://${ghost.manifest.id}${pathname}`, { method, body,
     ...(file && offset ? { headers: { Range: `bytes=${offset}-` } } : {}),
@@ -179,9 +192,39 @@ export async function fetchGhostMobilePage(ghost: InstalledGhost, pathname: stri
     } finally { await reader.cancel(); }
   }
   const remaining = Number(response.headers.get('content-length'));
+  if (!isCurrent()) throw new Error('PLUGIN_PAGE_UNAVAILABLE');
   return { status: response.status === 206 ? 200 : response.status, mime: response.headers.get('content-type') ?? 'application/json', base64: Buffer.concat(chunks).toString('base64'), ...(revision ? { revision } : {}),
     ...(file && remaining > total ? { nextOffset: offset + total } : {}),
   };
+}
+
+/** Same configuration executors as local settings, with the remote lease checked at persistence. */
+export async function fetchGhostSettings(ghost: InstalledGhost, pathname: string, method: string, body: string | undefined, current: () => boolean, confirmConnection?: (label: string, host: string) => Promise<boolean>) {
+  const partition = ownerScopedGhostPartitionForInstalledGhost(ghost, getActiveAppSession());
+  if (!partition || !current()) throw new Error('PLUGIN_PAGE_UNAVAILABLE');
+  ensureGhostProtocolRegistered(ghost);
+  const target = captureGhostProtocolTargetGuard(partition);
+  const isCurrent = () => current() && target();
+  const id = installedGhostStoragePart(ghost), path = new URL(pathname, 'https://plugin.invalid').pathname;
+  if (!isCurrent()) throw new Error('PLUGIN_PAGE_UNAVAILABLE');
+  const args = { ghostId: id, pathname: path, method, readBodyText: async () => body ?? '', isCurrent, confirmConnection };
+  const handler = path === '/secrets' || path.startsWith('/secrets/') ? ghostSecretsHandler
+    : path === '/oauth' || path.startsWith('/oauth/') ? ghostOauthHandler
+    : path === '/connections' || path.startsWith('/connections/') ? ghostConnectionsHandler
+    : path === '/models' ? ghostModelsHandler : null;
+  let result: { status: number; body?: string };
+  if (handler) result = await handler(args);
+  else if (path === '/kv' && ghostKvStore) result = await handleGhostKvRequest({
+    method, readBodyText: args.readBodyText, store: ghostKvStore, ghostId: id, isCurrent,
+  });
+  else {
+    if (method !== 'GET') return { status: 405, mime: 'application/json', base64: '' };
+    const response = await fetchGhostMobilePage(ghost, pathname, method);
+    if (!isCurrent()) throw new Error('PLUGIN_PAGE_UNAVAILABLE');
+    return response;
+  }
+  if (!isCurrent()) throw new Error('PLUGIN_PAGE_UNAVAILABLE');
+  return { status: result.status, mime: 'application/json', base64: Buffer.from(result.body ?? '').toString('base64') };
 }
 
 // 管子桥 preload 的产物路径(与 main bundle 同目录,forge VitePlugin 出的
@@ -228,9 +271,13 @@ export function setGhostMediaModelsProvider(
   ghostMediaModelsProvider = provider;
 }
 
-let ghostAgentModelsProvider: ((ghostId: string) => Promise<GhostAgentModelsResult>) | null = null;
+let ghostAgentModelsProvider: ((ghostId: string, agentDeviceId?: string) => Promise<GhostAgentModelsResult>) | null = null;
+let ghostModelPickerProvider: ((id: string, options: unknown, current: () => boolean, signal: AbortSignal) => Promise<import('../../../shared/pluginModelPicker.js').PluginModelPickerResult>) | null = null;
+export function setGhostModelPickerProvider(provider: NonNullable<typeof ghostModelPickerProvider>): void {
+  ghostModelPickerProvider = provider;
+}
 export function setGhostAgentModelsProvider(
-  provider: (ghostId: string) => Promise<GhostAgentModelsResult>,
+  provider: (ghostId: string, agentDeviceId?: string) => Promise<GhostAgentModelsResult>,
 ): void {
   ghostAgentModelsProvider = provider;
 }
@@ -240,15 +287,16 @@ export function setGhostAgentModelsProvider(
  * adapter 反向依赖)。注入的是带"在装态守卫"的包装层——卸下后分区里
  * 残留的 fetch 不能复活写出新文件。
  */
-let ghostKvStore: {
+interface GhostKvProtocolStore {
   read(ghostId: string): Record<string, unknown>;
   write(ghostId: string, value: Record<string, unknown>): void;
-} | null = null;
+  captureTarget(ghostId: string): unknown;
+  isTargetCurrent(ghostId: string, expectedTarget: unknown): boolean;
+}
 
-export function setGhostKvStore(store: {
-  read(ghostId: string): Record<string, unknown>;
-  write(ghostId: string, value: Record<string, unknown>): void;
-}): void {
+let ghostKvStore: GhostKvProtocolStore | null = null;
+
+export function setGhostKvStore(store: GhostKvProtocolStore): void {
   ghostKvStore = store;
 }
 
@@ -261,9 +309,16 @@ type GhostSecretsProtocolHandler = (args: {
   method: string;
   pathname: string;
   readBodyText: () => Promise<string>;
+  isCurrent: () => boolean;
 }) => Promise<{ status: number; body?: string }>;
 
 let ghostSecretsHandler: GhostSecretsProtocolHandler | null = null;
+let ghostModelsHandler: GhostSecretsProtocolHandler | null = null;
+
+/** /models：插件发布它提供给模型选择器的模型(index.ts 注入，形态同 /secrets)。 */
+export function setGhostModelsHandler(handler: GhostSecretsProtocolHandler): void {
+  ghostModelsHandler = handler;
+}
 
 export function setGhostSecretsHandler(handler: GhostSecretsProtocolHandler): void {
   ghostSecretsHandler = handler;
@@ -279,6 +334,7 @@ type GhostOauthProtocolHandler = (args: {
   method: string;
   pathname: string;
   readBodyText: () => Promise<string>;
+  isCurrent: () => boolean;
 }) => Promise<{ status: number; body?: string }>;
 
 let ghostOauthHandler: GhostOauthProtocolHandler | null = null;
@@ -298,6 +354,8 @@ type GhostConnectionsProtocolHandler = (args: {
   method: string;
   pathname: string;
   readBodyText: () => Promise<string>;
+  isCurrent: () => boolean;
+  confirmConnection?: (label: string, host: string) => Promise<boolean>;
 }) => Promise<{ status: number; body?: string }>;
 
 let ghostConnectionsHandler: GhostConnectionsProtocolHandler | null = null;
@@ -308,12 +366,14 @@ export function setGhostConnectionsHandler(handler: GhostConnectionsProtocolHand
 
 /** 该分区是否已挂过协议 handler(session 分区随 app 生命周期,挂一次即可)。 */
 const partitionRegistered = new Set<string>();
-const partitionGhost = new Map<string, { dir: string; entry: string }>();
-type GhostProtocolOwnerIdentity = Pick<ActiveAppSession, 'mode' | 'dataOwnerId'>;
+const revokedPartitions = new Set<string>();
+const partitionGhost = new Map<string, { dir: string; entry: string; storagePart: string }>();
+const partitionTargetGuard = new Map<string, () => boolean>();
+type GhostProtocolOwnerIdentity = Pick<ActiveAppSession, 'mode' | 'dataOwnerId' | 'generation'>;
 const partitionOwner = new Map<string, GhostProtocolOwnerIdentity>();
 
 function ghostProtocolOwnerSnapshot(owner: ActiveAppSession): GhostProtocolOwnerIdentity {
-  return { mode: owner.mode, dataOwnerId: owner.dataOwnerId };
+  return { mode: owner.mode, dataOwnerId: owner.dataOwnerId, generation: owner.generation };
 }
 
 function isSameGhostProtocolOwner(
@@ -324,7 +384,8 @@ function isSameGhostProtocolOwner(
 }
 
 function isGhostProtocolOwnerActive(owner: GhostProtocolOwnerIdentity): boolean {
-  return isSameGhostProtocolOwner(owner, getActiveAppSession());
+  const current = getActiveAppSession();
+  return isSameGhostProtocolOwner(owner, current) && owner.generation === current.generation;
 }
 
 /**
@@ -336,9 +397,18 @@ export function ensureGhostProtocolRegistered(
   ghost: InstalledGhost,
   owner: ActiveAppSession = getActiveAppSession(),
 ): void {
-  const partition = ownerScopedGhostPartition(ghost.manifest.id, owner);
+  const partition = ownerScopedGhostPartitionForInstalledGhost(ghost, owner);
   if (!partition) throw new Error('ghost protocol requires an active data owner');
   registerGhostProtocol(partition, ghost, ghostProtocolOwnerSnapshot(owner));
+}
+
+export function revokeLegacyGhostProtocolPartition(ghostId: string): void {
+  const partition = ownerScopedGhostPartition(ghostId, getActiveAppSession());
+  if (!partition) return;
+  revokedPartitions.add(partition);
+  for (const registered of partitionRegistered) {
+    if (registered.startsWith(partition + ':receipt:')) revokedPartitions.add(registered);
+  }
 }
 
 /**
@@ -347,8 +417,56 @@ export function ensureGhostProtocolRegistered(
  * data:/blob:。
  * 与分区级断网(onBeforeRequest)构成双保险。
  */
-const GHOST_HTML_CSP =
-  "default-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob: https:; media-src 'self' data: blob:";
+
+/** 回环嵌入插件(见 ghostPanelLoopbackEmbedAllowed)额外允许的子帧来源;其余 CSP 不变。 */
+const GHOST_LOOPBACK_FRAME_CSP = "frame-src 'self' http://127.0.0.1:* http://localhost:*";
+
+/** 分区网络闸看到的请求形状(只取判定所需字段,便于单测构造)。 */
+interface LoopbackEmbedRequestDetails {
+  url: string;
+  resourceType: string;
+  referrer?: string;
+  frame?: { url: string; parent?: { url: string } | null } | null;
+}
+
+/**
+ * 回环嵌入请求是否放行:
+ * - 首层子帧(subFrame)到回环地址:父帧必须是本插件自己的页面;
+ * - 更深的子帧:父帧必须是同一回环主机:端口(插件自己那台本机服务内部的
+ *   分层页面),跨到另一个端口一律拒绝;
+ * - 子帧内的其它请求(脚本/样式/XHR/WebSocket/媒体…):发起帧与目标必须是
+ *   同一回环主机:端口;
+ * - 顶层导航(mainFrame)与来自 cindy-ghost 页面自身的回环请求一律拒绝。
+ */
+function loopbackEmbedRequestAllowed(details: LoopbackEmbedRequestDetails, selfPrefix: string): boolean {
+  const target = ghostLoopbackOrigin(details.url);
+  if (!target) return false;
+  if (details.resourceType === 'mainFrame') return false;
+  if (details.resourceType === 'subFrame') {
+    const parent = details.frame?.parent?.url ?? details.referrer ?? '';
+    return parent.startsWith(selfPrefix) || ghostLoopbackOrigin(parent) === target;
+  }
+  const from = details.frame?.url ?? details.referrer;
+  return ghostLoopbackOrigin(from) === target;
+}
+
+function createGhostProtocolTargetGuard(
+  ghostId: string,
+  partition: string,
+  owner: GhostProtocolOwnerIdentity,
+): () => boolean {
+  const store = ghostKvStore;
+  if (!store) return () => false;
+  const expectedTarget = store.captureTarget(ghostId);
+  return () => expectedTarget !== null && expectedTarget !== undefined &&
+    ghostKvStore === store && !revokedPartitions.has(partition) &&
+    isGhostProtocolOwnerActive(owner) &&
+    store.isTargetCurrent(ghostId, expectedTarget);
+}
+
+function captureGhostProtocolTargetGuard(partition: string): () => boolean {
+  return partitionTargetGuard.get(partition) ?? (() => false);
+}
 
 function registerGhostProtocol(
   partition: string,
@@ -359,11 +477,19 @@ function registerGhostProtocol(
   if (registeredOwner && !isSameGhostProtocolOwner(registeredOwner, owner)) {
     throw new Error('ghost protocol partition already belongs to a different data owner');
   }
-  partitionGhost.set(partition, {
+  const binding = {
     dir: ghost.dir,
     entry: ghost.manifest.entry,
-  });
-  if (partitionRegistered.has(partition)) return;
+    storagePart: installedGhostStoragePart(ghost),
+  };
+  if (partitionRegistered.has(partition)) {
+    const registered = partitionGhost.get(partition);
+    if (!registered || registered.dir !== binding.dir || registered.entry !== binding.entry || registered.storagePart !== binding.storagePart) {
+      revokedPartitions.add(partition);
+    }
+    return;
+  }
+  const isRegistrationCurrent = createGhostProtocolTargetGuard(binding.storagePart, partition, owner);
   // 注意:登记发生在全部挂载成功之后(函数末尾)——session.fromPartition 在
   // app ready 前会 throw,若先登记后挂载,失败分区会被永久标记"已注册"而
   // 实际无 handler,面板与电子脑一起哑火(review P0 的中毒模式)。
@@ -378,6 +504,11 @@ function registerGhostProtocol(
   // 任意插件页面发出的 HTTPS image 请求（<img> 与 CSS 图片共用该资源类型）。
   // HTTP 图片、XHR/fetch、脚本、样式、字体、媒体、WebSocket 与其它协议继续拒绝。
   const selfPrefix = `${SCHEME}://${ghostId}/`;
+  // 回环嵌入(ghostPanelLoopbackEmbedAllowed):面板页可以把随包 Node 进程在本机
+  // 提供的页面装进 <iframe>;该子帧内的请求只许回到同一主机:端口(含 WebSocket)。
+  // 面板页自身发出的回环 fetch/XHR 仍被拒;顶层导航到回环地址仍被拒。
+  const loopbackEmbed = ghostPanelLoopbackEmbedAllowed(ghost.manifest);
+  const htmlCsp = loopbackEmbed ? `${GHOST_HTML_CSP}; ${GHOST_LOOPBACK_FRAME_CSP}` : GHOST_HTML_CSP;
   ses.webRequest.onBeforeRequest((details, callback) => {
     let allowed = details.url.startsWith(selfPrefix);
     if (!allowed && isGhostProtocolOwnerActive(owner) && details.resourceType === 'image') {
@@ -387,230 +518,35 @@ function registerGhostProtocol(
         allowed = false;
       }
     }
+    if (!allowed && loopbackEmbed && isGhostProtocolOwnerActive(owner)) {
+      allowed = loopbackEmbedRequestAllowed(details, selfPrefix);
+    }
     callback({ cancel: !allowed });
   });
+  const handleRequest = createGhostPageHandler({
+    ghost, isCurrent: isRegistrationCurrent, log,
+    get ghostKvStore() { return ghostKvStore; },
+    get ghostWakeHandler() { return ghostWakeHandler; },
+    get ghostAppContextProvider() { return ghostAppContextProvider; },
+    get ghostModelPickerProvider() { return ghostModelPickerProvider; },
+    get ghostAgentModelsProvider() { return ghostAgentModelsProvider; },
+    get ghostMediaModelsProvider() { return ghostMediaModelsProvider; },
+    get ghostModelsHandler() { return ghostModelsHandler; },
+    get ghostSecretsHandler() { return ghostSecretsHandler; },
+    get ghostOauthHandler() { return ghostOauthHandler; },
+    get ghostConnectionsHandler() { return ghostConnectionsHandler; },
+    serveGhostMedia, serveGhostLibraryFile,
+    serveGhostGallery: (id, origin) => serveGhostGallery(id, new URL(origin).host),
+  });
   ses.protocol.handle(SCHEME, async (request) => {
-    try {
-      // owner B 提交后，owner A 的旧 guest 仍可能短暂存活并新发请求。
-      // 在 URL 路由、body 读取和任何 provider 调用前拒绝旧 Session；已经
-      // 进入 handler 的请求不在这里取消或排空。
-      if (!isGhostProtocolOwnerActive(owner)) {
-        return new Response(null, {
-          status: 403,
-          headers: { 'Cache-Control': 'no-store' },
-        });
-      }
-      const url = new URL(request.url);
-      // 分区专属通道只认自己的 id,其它 host 一律 403(结构隔离的最后一道断言)。
-      if (url.host !== ghostId) return new Response(null, { status: 403 });
-      // ── 意识面板供图接待员─────────────────────────────────────────
-      // /media/<指纹>.<ext>:面板取自家产物。指纹只当查账钥匙(不拼路径),
-      // 账本验归属(出生自本意识或挂本意识画廊),通过才从字节仓读——
-      // 查无此账与不属于你统一 404,不给沙箱探测面。
-      if (url.pathname.startsWith('/media/')) {
-        return serveGhostMedia(ghostId, url.pathname.slice('/media/'.length), request.headers.get('range'));
-      }
-      // /library/<相对路径>:面板只读投影本意识的持久作品库文件(图片/视频/
-      // 导出物)。解析器由 cindy-brain/index 注入(binding 根 + vault 路径纪律,
-      // 与电子脑 read 同源校验);内容可变,Cache-Control 走 no-cache(与
-      // 内容寻址的 /media 长缓存不同)。失败统一折叠 404。
-      if (url.pathname.startsWith('/library/')) {
-        return serveGhostLibraryFile(ghostId, decodeURIComponent(url.pathname.slice('/library/'.length)), request.headers.get('range'));
-      }
-      // /gallery:本意识画廊清单(重启回放)。分区专属通道天然只答自己的账;
-      // 内容只有指纹地址与备注字符串,零文件字节。
-      if (url.pathname === '/gallery') {
-        return serveGhostGallery(ghostId);
-      }
-      // /wake:面板叫醒自己的电子脑(§4"确实有活才开门"的面板侧入口)。
-      // spawn 幂等(已在跑立即返回);沉睡/熔断由注入的 handler 拒绝。
-      // 分区专属通道天然只能叫醒自己,不构成跨意识或驱动主机的能力面;
-      // 只回状态字符串,不回任何细节。
-      if (url.pathname === '/wake') {
-        if (!ghostWakeHandler) return new Response(null, { status: 503 });
-        const wake = await ghostWakeHandler(ghostId);
-        return new Response(JSON.stringify(wake), {
-          status: 200,
-          headers: { 'Content-Type': 'application/json; charset=utf-8', 'Cache-Control': 'no-cache' },
-        });
-      }
-      // /app-context:设置页/面板读取宿主公开构建上下文。只读、零用户数据,
-      // 与电子脑 cindy.request({kind:'app-context'}) 同返回契约。
-      if (url.pathname === '/app-context') {
-        if (request.method !== 'GET') return new Response(null, { status: 405 });
-        if (!ghostAppContextProvider) return new Response(null, { status: 503 });
-        return new Response(JSON.stringify(ghostAppContextProvider()), {
-          status: 200,
-          headers: {
-            'Content-Type': 'application/json; charset=utf-8',
-            'Cache-Control': 'no-cache',
-          },
-        });
-      }
-      if (url.pathname === '/agent-models') {
-        const headers = { 'Content-Type': 'application/json; charset=utf-8', 'Cache-Control': 'no-store' };
-        if (request.method !== 'GET') return new Response(null, { status: 405, headers });
-        if (url.search) return new Response(null, { status: 400, headers });
-        if (!ghostAgentModelsProvider) return new Response(null, { status: 503, headers });
-        try {
-          const result = await ghostAgentModelsProvider(ghostId);
-          if (!isGhostProtocolOwnerActive(owner)) return new Response(null, { status: 403, headers });
-          return new Response(JSON.stringify(result), {
-            status: result.ok ? 200 : result.errorCode === 'PERMISSION_DENIED' ? 403 : 503,
-            headers,
-          });
-        } catch {
-          if (!isGhostProtocolOwnerActive(owner)) return new Response(null, { status: 403, headers });
-          return new Response(
-            JSON.stringify({ ok: false, errorCode: 'NOT_AVAILABLE', message: 'Model catalog unavailable' }),
-            { status: 503, headers },
-          );
-        }
-      }
-      // /media-models?type=image|video:插件自己的设置页 / 面板读取当前客户端可执行
-      // 模型及 Gateway modalities。兼容判定由 Host provider 完成；端点仍不发起生成，
-      // 也不返回凭证、endpoint、Guide 或内部判定细节。
-      if (url.pathname === '/media-models') {
-        if (request.method !== 'GET') return new Response(null, { status: 405 });
-        const keys = [...url.searchParams.keys()];
-        const types = url.searchParams.getAll('type');
-        if (keys.length !== 1 || keys[0] !== 'type' || types.length !== 1) {
-          return new Response(null, { status: 400 });
-        }
-        const type = types[0];
-        if (type !== 'image' && type !== 'video') {
-          return new Response(null, { status: 400 });
-        }
-        if (!ghostMediaModelsProvider) return new Response(null, { status: 503 });
-        const result = await ghostMediaModelsProvider(ghostId, type);
-        return new Response(JSON.stringify(result), {
-          status: result.ok ? 200 : result.errorCode === 'PERMISSION_DENIED' ? 403 : 503,
-          headers: {
-            'Content-Type': 'application/json; charset=utf-8',
-            'Cache-Control': 'no-store',
-          },
-        });
-      }
-      // /kv:意识自定义参数存取(FORGE_GUIDE §4.8)。设置页/面板/电子脑
-      // 同源共用;分区专属通道天然只碰自己的账。分派与校验在纯函数层
-      // (ghostKvEndpoint,已单测),这里只做 Response 包装。
-      if (url.pathname === '/kv') {
-        if (!ghostKvStore) return new Response(null, { status: 503 });
-        const out = await handleGhostKvRequest({
-          method: request.method,
-          // 有界读取(readBoundedBodyText):content-length 预检 + 流式限额,
-          // 不受信 body 永不全量进主进程内存——沙箱允许死,主机不能被 OOM。
-          readBodyText: () => readBoundedBodyText(request),
-          store: ghostKvStore,
-          ghostId,
-          log,
-        });
-        return new Response(out.body ?? null, {
-          status: out.status,
-          headers: {
-            ...(out.body !== undefined
-              ? { 'Content-Type': 'application/json; charset=utf-8' }
-              : {}),
-            'Cache-Control': 'no-cache',
-          },
-        });
-      }
-      // /secrets:input:'ghost' 凭证的只写入库通道(FORGE_GUIDE §4.7)。
-      // 明文单向进保险库,无任何读回动作;分区专属通道天然只碰自己的账。
-      if (url.pathname === '/secrets' || url.pathname.startsWith('/secrets/')) {
-        if (!ghostSecretsHandler) return new Response(null, { status: 503 });
-        const out = await ghostSecretsHandler({
-          ghostId,
-          method: request.method,
-          pathname: url.pathname,
-          readBodyText: () => readBoundedBodyText(request),
-        });
-        return new Response(out.body ?? null, {
-          status: out.status,
-          headers: {
-            ...(out.body !== undefined
-              ? { 'Content-Type': 'application/json; charset=utf-8' }
-              : {}),
-            'Cache-Control': 'no-cache',
-          },
-        });
-      }
-      // /oauth:source:'oauth' 凭证的设置页通道(FORGE_GUIDE §4.7)。client
-      // 凭证只写入库,连接/断开/默认账号由主机代办;授权令牌无任何读回
-      // 动作;分区专属通道天然只碰自己的账。
-      if (url.pathname === '/oauth' || url.pathname.startsWith('/oauth/')) {
-        if (!ghostOauthHandler) return new Response(null, { status: 503 });
-        const out = await ghostOauthHandler({
-          ghostId,
-          method: request.method,
-          pathname: url.pathname,
-          readBodyText: () => readBoundedBodyText(request),
-        });
-        return new Response(out.body ?? null, {
-          status: out.status,
-          headers: {
-            ...(out.body !== undefined
-              ? { 'Content-Type': 'application/json; charset=utf-8' }
-              : {}),
-            'Cache-Control': 'no-cache',
-          },
-        });
-      }
-      // /connections:network.connections 多连接的设置页通道(FORGE_GUIDE
-      // §4.7)。地址与 token 只写入库(新地址过主机受信确认),GET 只回状态
-      // 与尾 4 位指纹;分区专属通道天然只碰自己的账。
-      if (url.pathname === '/connections' || url.pathname.startsWith('/connections/')) {
-        if (!ghostConnectionsHandler) return new Response(null, { status: 503 });
-        const out = await ghostConnectionsHandler({
-          ghostId,
-          method: request.method,
-          pathname: url.pathname,
-          readBodyText: () => readBoundedBodyText(request),
-        });
-        return new Response(out.body ?? null, {
-          status: out.status,
-          headers: {
-            ...(out.body !== undefined
-              ? { 'Content-Type': 'application/json; charset=utf-8' }
-              : {}),
-            'Cache-Control': 'no-cache',
-          },
-        });
-      }
-      if (url.pathname === GHOST_BOOT_PATH || url.pathname === '/') {
-        const entry = partitionGhost.get(partition)?.entry;
-        if (!entry) return new Response(null, { status: 404 });
-        return new Response(ghostBootHtml(entry), {
-          status: 200,
-          headers: {
-            'Content-Type': 'text/html; charset=utf-8',
-            'Content-Security-Policy': GHOST_HTML_CSP,
-            'Cache-Control': 'no-cache',
-          },
-        });
-      }
-      const installDir = partitionGhost.get(partition)?.dir;
-      if (!installDir) return new Response(null, { status: 404 });
-      const filePath = resolveGhostFilePath(installDir, url.pathname);
-      if (!filePath) return new Response(null, { status: 403 });
-      const data = await fs.readFile(filePath);
-      const mime = ghostFileMime(filePath);
-      return new Response(new Uint8Array(data), {
-        status: 200,
-        headers: {
-          'Content-Type': mime,
-          ...(mime.startsWith('text/html') ? { 'Content-Security-Policy': GHOST_HTML_CSP } : {}),
-          'Cache-Control': 'no-cache',
-        },
-      });
-    } catch (err) {
-      const code = (err as NodeJS.ErrnoException)?.code;
-      if (code === 'ENOENT' || code === 'EISDIR') return new Response(null, { status: 404 });
-      log.error('cindy-ghost protocol error', { error: err instanceof Error ? err.message : String(err) });
-      return new Response(null, { status: 500 });
-    }
+    const response = await handleRequest(request);
+    if (isRegistrationCurrent()) return response;
+    void response.body?.cancel().catch(() => undefined);
+    return new Response(null, { status: 403, headers: { 'Cache-Control': 'no-store' } });
   });
   partitionOwner.set(partition, owner);
+  partitionGhost.set(partition, binding);
+  partitionTargetGuard.set(partition, isRegistrationCurrent);
   partitionRegistered.add(partition); // 全部挂载成功,才算注册完成
 }
 
@@ -725,41 +661,17 @@ async function serveGhostLibraryFile(ghostId: string, relPath: string, rangeHead
   }
 }
 
-/** library 投影的 MIME 按扩展名粗判(面板展示用;嗅探不做,宿主只供已存文件)。 */
-function mediaTypeForLibraryPath(relPath: string): string {
-  const ext = relPath.slice(relPath.lastIndexOf('.')).toLowerCase();
-  switch (ext) {
-    case '.png': return 'image/png';
-    case '.jpg':
-    case '.jpeg': return 'image/jpeg';
-    case '.gif': return 'image/gif';
-    case '.webp': return 'image/webp';
-    case '.svg': return 'image/svg+xml';
-    case '.mp4': return 'video/mp4';
-    case '.webm': return 'video/webm';
-    case '.mov': return 'video/quicktime';
-    case '.mp3': return 'audio/mpeg';
-    case '.wav': return 'audio/wav';
-    case '.ogg': return 'audio/ogg';
-    case '.m4a': return 'audio/mp4';
-    case '.pdf': return 'application/pdf';
-    case '.json': return 'application/json; charset=utf-8';
-    case '.txt': return 'text/plain; charset=utf-8';
-    default: return 'application/octet-stream';
-  }
-}
-
 /** 画廊清单响应:[{src, caption}](新的在前;账本不可用时回空数组不报错)。 */
-async function serveGhostGallery(ghostId: string): Promise<Response> {
+async function serveGhostGallery(storagePart: string, protocolHost: string): Promise<Response> {
   let items: Awaited<ReturnType<typeof listGhostGalleryFromLedger>> = [];
   try {
-    items = await listGhostGalleryFromLedger(ghostId);
+    items = await listGhostGalleryFromLedger(storagePart);
   } catch (err) {
     // 账本未就绪(登录早期等):回空墙,面板照常渲染空态,不给沙箱报错面。
-    log.warn('ghost gallery list unavailable', { ghostId, error: err instanceof Error ? err.message : String(err) });
+    log.warn('ghost gallery list unavailable', { ghostId: storagePart, error: err instanceof Error ? err.message : String(err) });
   }
   const payload = items.map((it) => ({
-    src: `${SCHEME}://${ghostId}/media/${it.hash}${it.ext}`,
+    src: `${SCHEME}://${protocolHost}/media/${it.hash}${it.ext}`,
     caption: it.label ?? '',
   }));
   return new Response(JSON.stringify(payload), {
@@ -770,12 +682,16 @@ async function serveGhostGallery(ghostId: string): Promise<Response> {
 
 class ElectronSandboxHandle implements SandboxHandle {
   private win: BrowserWindow | null;
+  // 建窗时记下:窗口可能先于 destroy() 被外部销毁(更新重启的 forceQuit 会逐个
+  // destroy 全部 BrowserWindow),那时再读 win.webContents 会抛 Object has been
+  // destroyed,打断 destroyAll 让后续沙箱与 Node runtime 都收不掉。
+  private readonly logicWebContentsId: number;
   private goneCb: ((details: { reason: string }) => void) | null = null;
   private destroyed = false;
 
   constructor(private readonly ghost: InstalledGhost) {
     const activeOwner = getActiveAppSession();
-    const partition = ownerScopedGhostPartition(ghost.manifest.id, activeOwner);
+    const partition = ownerScopedGhostPartitionForInstalledGhost(ghost, activeOwner);
     if (!partition) throw new Error('ghost sandbox requires an active data owner');
     registerGhostProtocol(partition, ghost, ghostProtocolOwnerSnapshot(activeOwner));
     this.win = new BrowserWindow({
@@ -796,8 +712,9 @@ class ElectronSandboxHandle implements SandboxHandle {
         devTools: !ghostSandboxDevToolsDisabled,
       },
     });
-    ghostWebContentsIds.add(this.win.webContents.id);
-    logicWebContentsToGhost.set(this.win.webContents.id, ghost.manifest.id);
+    this.logicWebContentsId = this.win.webContents.id;
+    ghostWebContentsIds.add(this.logicWebContentsId);
+    logicWebContentsToGhost.set(this.logicWebContentsId, installedGhostStoragePart(ghost));
     this.win.webContents.on('render-process-gone', (_event, details) => {
       if (this.destroyed) return;
       // 延迟一拍再收尸:不在 Chromium 事件分发中途销毁窗口(重入风险)。
@@ -818,10 +735,8 @@ class ElectronSandboxHandle implements SandboxHandle {
     this.destroyed = true;
     const win = this.win;
     this.win = null;
-    if (win) {
-      logicWebContentsToGhost.delete(win.webContents.id);
-      if (!win.isDestroyed()) win.destroy();
-    }
+    logicWebContentsToGhost.delete(this.logicWebContentsId);
+    if (win && !win.isDestroyed()) win.destroy();
   }
 
   crashForTest(): void {

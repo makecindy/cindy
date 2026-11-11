@@ -16,6 +16,12 @@ import {
   type PluginDeviceOpened,
   type PluginOauthOffer,
   type PluginOauthRequest,
+  parseInputHandoffOffer,
+  parseInputHandoffPresentation,
+  parseInputHandoffValueReply,
+  type InputHandoffPicture,
+  type InputHandoffPresentation,
+  type InputHandoffSubmission,
 } from '@cindy/device-link';
 import { OauthBox } from './box.js';
 import {
@@ -100,6 +106,11 @@ export interface OauthControllerDeps {
   secretPresentation?: PluginSecretPresentation;
   connectionValue?: PluginConnectionInput;
   connectionPresentation?: PluginConnectionPresentation;
+  /** 代输入 step values; only from the dedicated local input IPC. */
+  inputSubmission?: InputHandoffSubmission;
+  inputPresentation?: InputHandoffPresentation;
+  /** 代输入 screenshot step: show the sealed picture, then return the owner's tap or typing. */
+  inputPicture?(picture: InputHandoffPicture): Promise<InputHandoffSubmission>;
   invoke(request: PluginOauthRequest): Promise<unknown>;
   openExternal(url: string): Promise<void>;
   copyDeviceCode?(code: string): () => void;
@@ -126,6 +137,7 @@ export async function assistPluginOauth(
     // Capability/handshake failures happen before a transaction exists too.
     deps.secretValue = undefined;
     deps.connectionValue = undefined;
+    deps.inputSubmission = undefined;
   }
 }
 
@@ -145,6 +157,11 @@ async function runAuthorization(
     (caps.connectionSubmission !== true || deps.secretValue !== undefined)
   )
     throw fail();
+  if (
+    (deps.inputSubmission !== undefined || deps.inputPicture) &&
+    (caps.inputHandoff !== true || deps.secretValue !== undefined || deps.connectionValue !== undefined)
+  )
+    throw fail();
   deps.assertCurrent();
   const key = new OauthBox();
   const deviceUserCode = caps.deviceUserCode === true && !!deps.copyDeviceCode;
@@ -157,6 +174,7 @@ async function runAuthorization(
       ...(caps.authorizationV1 === true ? { authorizationV1: true } : {}),
       ...(deps.secretValue !== undefined ? { secretSubmission: true } : {}),
       ...(deps.connectionValue !== undefined ? { connectionSubmission: true } : {}),
+      ...(deps.inputSubmission !== undefined || deps.inputPicture ? { inputHandoff: true } : {}),
     }),
   );
   if (
@@ -198,6 +216,35 @@ async function runAuthorization(
       if (status.phase === 'authorizing' && !opened) {
         if (typeof status.offer !== 'string') throw fail();
         const rawOffer = object(key.open(peerKey, id, 'offer', status.offer));
+        if (rawOffer.kind === 'input-entry') {
+          if ((deps.inputSubmission === undefined && !deps.inputPicture) || !deps.inputPresentation) throw fail();
+          const offer = parseInputHandoffOffer(rawOffer);
+          // The owner answered exactly this step; anything else is a newer step.
+          if (
+            JSON.stringify(offer.presentation) !==
+            JSON.stringify(parseInputHandoffPresentation(deps.inputPresentation))
+          )
+            throw fail();
+          if (offer.picture) {
+            // Only a caller that asked for this step's picture receives it; a prepared form answer never does.
+            if (!deps.inputPicture || deps.inputSubmission !== undefined) throw fail();
+            deps.inputSubmission = await deps.inputPicture(offer.picture);
+            deps.assertCurrent();
+          }
+          const payload = parseInputHandoffValueReply({
+            kind: 'input-value',
+            state: offer.state,
+            submission: deps.inputSubmission,
+          });
+          deps.assertCurrent();
+          const sealed = key.seal(peerKey, id, 'callback', payload);
+          deps.inputSubmission = undefined;
+          await deliverSealedCallback(sealed);
+          opened = true;
+          continue;
+        }
+        // A step form is never reinterpreted as another mode.
+        if (deps.inputSubmission !== undefined || deps.inputPicture) throw fail();
         if (rawOffer.kind === 'connection-entry') {
           if (caps.connectionSubmission !== true || deps.connectionValue === undefined)
             throw fail();
@@ -306,6 +353,7 @@ async function runAuthorization(
   } finally {
     deps.secretValue = undefined;
     deps.connectionValue = undefined;
+    deps.inputSubmission = undefined;
     listener?.close();
     adapter?.close(finished ? 'completed' : now() >= deadline ? 'expired' : 'ended');
     clearDeviceCode?.();

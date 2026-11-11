@@ -15,22 +15,15 @@ afterAll(() => rmSync(root, { recursive: true, force: true }));
 afterEach(() => vi.unstubAllEnvs());
 
 describe('Bot toolset provider availability', () => {
-  it('follows the real Contacts and LSP gates rather than registry enablement', () => {
-    let contactsEnabled = false;
+  it('follows the real LSP gate rather than registry enablement', () => {
     let lspEnabled = false;
     const providers = createLiziMcpProviders({
-      enabled: ['cindy_contacts', 'cindy_lsp', 'cindy_memory'],
-      contacts: { getManager: vi.fn(), isEnabled: () => contactsEnabled },
+      enabled: ['cindy_lsp', 'cindy_memory'],
       lsp: { pool: {} as never, isUserEnabled: () => lspEnabled },
       memory: { getManager: () => ({ isEnabled: () => false }) as never },
     });
     const available = (toolsetId: string, workingDir = tsDir) =>
       isBotToolsetProviderAvailable(providers, { botId: 'bot-1', agentKind: 'claude-code', workingDir, toolsetId });
-    expect(available('contacts')).toBe(false);
-    contactsEnabled = true;
-    expect(available('contacts')).toBe(true);
-    contactsEnabled = false;
-    expect(available('contacts')).toBe(false);
     expect(available('lsp')).toBe(false);
     lspEnabled = true;
     expect(available('lsp', plainDir)).toBe(false);
@@ -51,12 +44,12 @@ describe('Bot toolset provider availability', () => {
 
   it('keeps target restrictions and never uses custom MCP collisions to bypass a builtin gate', () => {
     const providers = [
-      { name: 'cindy_contacts', isEnabled: () => false },
-      { name: 'cindy_contacts', isEnabled: () => true },
+      { name: 'cindy_scheduler', isEnabled: () => false },
+      { name: 'cindy_scheduler', isEnabled: () => true },
       { name: 'cindy_docs', isEnabled: () => true },
     ];
     const input = { botId: 'bot-1', agentKind: 'claude-code' as const, workingDir: plainDir };
-    expect(isBotToolsetProviderAvailable(providers, { ...input, toolsetId: 'contacts' })).toBe(false);
+    expect(isBotToolsetProviderAvailable(providers, { ...input, toolsetId: 'scheduler' })).toBe(false);
     expect(isBotToolsetProviderAvailable(providers, { ...input, toolsetId: 'docs' })).toBe(true);
     expect(isBotToolsetProviderAvailable(providers, { ...input, toolsetId: 'docs', remoteHostId: 'ssh' })).toBe(false);
     expect(isBotToolsetProviderAvailable(providers, { ...input, agentKind: 'pi', toolsetId: 'docs', remoteHostId: 'ssh' })).toBe(true);

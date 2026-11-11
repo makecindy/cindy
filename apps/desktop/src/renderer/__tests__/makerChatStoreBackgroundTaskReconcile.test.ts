@@ -11,6 +11,9 @@
  */
 
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { setDataOwnerGeneration } from '@/contexts/dataOwnerGeneration';
+
+const logMocks = vi.hoisted(() => ({ warn: vi.fn() }));
 
 vi.mock('@/lib/messageService', () => ({
   list: vi.fn(async () => []),
@@ -48,7 +51,7 @@ vi.mock('@/lib/logger', () => ({
   createLogger: () => ({
     debug: vi.fn(),
     info: vi.fn(),
-    warn: vi.fn(),
+    warn: logMocks.warn,
     error: vi.fn(),
   }),
 }));
@@ -261,10 +264,12 @@ describe('seedBackgroundTaskSnapshots stale running 对账', () => {
 
 // ── 活动熄灭触发的延迟自动对账(initGlobalListeners)─────────────────────────
 
-type FanOutCb = (data: unknown) => void;
+type FanOutCb = (data: unknown, ownerStamp?: unknown) => void;
 
 function makeElectronApiStub(listTasks: ReturnType<typeof vi.fn>) {
   let activityCb: FanOutCb | null = null;
+  let messageCb: FanOutCb | null = null;
+  let remoteCb: FanOutCb | null = null;
   const fanOut = () => () => () => {};
   const stub = {
     maker: {
@@ -284,11 +289,179 @@ function makeElectronApiStub(listTasks: ReturnType<typeof vi.fn>) {
         getProjection: vi.fn(async () => Promise.reject(new Error('n/a in test'))),
       },
     },
-    localDb: { messages: { onCreated: fanOut() } },
-    deviceLink: { onRemotePush: fanOut() },
+    localDb: {
+      messages: {
+        onCreated: vi.fn((cb: FanOutCb) => {
+          messageCb = cb;
+          return () => {
+            messageCb = null;
+          };
+        }),
+      },
+    },
+    deviceLink: {
+      onRemotePush: vi.fn((cb: FanOutCb) => {
+        remoteCb = cb;
+        return () => {
+          remoteCb = null;
+        };
+      }),
+    },
   };
-  return { stub, emitActivity: (payload: unknown) => activityCb?.(payload) };
+  return {
+    stub,
+    emitActivity: (payload: unknown) => activityCb?.(payload),
+    emitMessage: (payload: unknown) => messageCb?.(payload),
+    emitRemote: (payload: unknown) => remoteCb?.(payload),
+  };
 }
+
+// #4655: unit coverage through the real listener lifecycle. The previous stub
+// omitted optional APIs but never asserted diagnostics. An absent capability
+// must be silent; a broken return must warn; supported events must still flow.
+const optionalSubscriptions = [
+  ['usage', 'onUsageMessageTurnCost', 'usage-message-turn-cost'],
+  ['usage', 'onUsageMessageModelMismatch', 'usage-message-model-mismatch'],
+  ['ghosts', 'onUserMessageBlocked', 'ghosts-user-message-blocked'],
+  ['ghosts', 'onUserMessageRewritten', 'ghosts-user-message-rewritten'],
+  ['ghosts', 'onAssistantMessageRewritten', 'ghosts-assistant-message-rewritten'],
+  ['ghosts', 'onAssistantMessagePending', 'ghosts-assistant-message-pending'],
+  ['ghosts', 'onHookFused', 'ghosts-hook-fused'],
+  ['ghosts', 'onNotify', 'ghosts-notify'],
+  ['ghosts', 'onPreviewOpen', 'ghosts-preview-open'],
+  ['maker', 'onSessionBackgroundActivityChanged', 'session-background-activity-reconcile'],
+] as const;
+
+describe('optional IPC subscription lifecycle (#4655)', () => {
+  const sid = 'optional-ipc-subscriptions';
+
+  beforeEach(() => {
+    vi.useFakeTimers();
+    logMocks.warn.mockClear();
+    setDataOwnerGeneration('ipc-owner', 1);
+  });
+
+  afterEach(() => {
+    makerChatStore.__teardownGlobalListeners();
+    makerChatStore.purgeSession(sid);
+    setDataOwnerGeneration(null, 0);
+    delete (globalThis as { window?: unknown }).window;
+    vi.useRealTimers();
+    vi.clearAllMocks();
+  });
+
+  it.each([false, true])(
+    'silently skips absent optional APIs (ghost namespace present: %s)',
+    (hasGhosts) => {
+      const made = makeElectronApiStub(vi.fn());
+      Reflect.deleteProperty(made.stub.maker, 'onSessionBackgroundActivityChanged');
+      Reflect.deleteProperty(made.stub.maker, 'onEvent');
+      const api = { ...made.stub, ...(hasGhosts ? { ghosts: {} } : {}) };
+      (globalThis as { window?: unknown }).window = { electronAPI: api };
+
+      makerChatStore.initGlobalListeners();
+
+      const warnings = logMocks.warn.mock.calls.map(([message]) => message);
+      for (const [, , label] of optionalSubscriptions) {
+        expect(warnings.filter((message) => message.startsWith(`${label}:`))).toEqual([]);
+      }
+      expect(warnings).toContain('maker-event: subscribe is not available; teardown will no-op');
+      expect(api.localDb.messages.onCreated).toHaveBeenCalledTimes(1);
+      expect(api.deviceLink.onRemotePush).toHaveBeenCalledTimes(1);
+      const message = (id: string) => ({
+        id,
+        clientId: id,
+        sessionId: sid,
+        role: 'user',
+        content: id,
+        createdAt: '2026-10-21T00:00:00.000Z',
+      });
+      made.emitMessage({ sessionId: sid, message: message('local-message') });
+      made.emitRemote({
+        channel: 'local-db:messages:created',
+        payload: { sessionId: sid, message: message('remote-message') },
+      });
+      expect(makerChatStore.getSnapshot(sid).messages.map((m) => m.content)).toEqual([
+        'local-message',
+        'remote-message',
+      ]);
+    },
+  );
+
+  it('preserves receivers, event consumption and owner stamps, and unsubscribes exactly once', () => {
+    const made = makeElectronApiStub(vi.fn());
+    const api = { ...made.stub, ghosts: {} };
+    const callbacks = new Map<string, FanOutCb>();
+    const subscriptions = optionalSubscriptions.map(([domain, key, label]) => {
+      const receiver = domain === 'usage' ? api : api[domain];
+      const unsubscribe = vi.fn();
+      const subscribe = vi.fn(function (this: unknown, cb: FanOutCb) {
+        expect(this).toBe(receiver);
+        callbacks.set(label, cb);
+        return unsubscribe;
+      });
+      Object.assign(receiver, { [key]: subscribe });
+      return { subscribe, unsubscribe };
+    });
+    (globalThis as { window?: unknown }).window = { electronAPI: api };
+    makerChatStore.initGlobalListeners();
+    makerChatStore.initGlobalListeners();
+
+    const payload = {
+      sessionId: sid,
+      clientId: 'blocked',
+      ghostId: 'test-ghost',
+      text: 'original',
+    };
+    const stamp = { dataOwnerId: 'ipc-owner', ownerGeneration: 1 };
+    callbacks.get('ghosts-user-message-blocked')?.(payload, { ...stamp, ownerGeneration: 0 });
+    expect(makerChatStore.getSnapshot(sid).messages).toEqual([]);
+    callbacks.get('ghosts-user-message-blocked')?.(payload, stamp);
+    expect(makerChatStore.getSnapshot(sid).messages[0]?.blockedByGhost?.ghostId).toBe('test-ghost');
+    callbacks.get('usage-message-turn-cost')?.({ ...payload, turnCostUsd: 0.25 }, stamp);
+    expect(makerChatStore.getSnapshot(sid).messages[0]?.turnCostUsd).toBe(0.25);
+    callbacks.get('usage-message-turn-cost')?.(
+      { ...payload, turnCostUsd: 9 },
+      { ...stamp, ownerGeneration: 0 },
+    );
+    expect(makerChatStore.getSnapshot(sid).messages[0]?.turnCostUsd).toBe(0.25);
+
+    makerChatStore.__teardownGlobalListeners();
+    makerChatStore.__teardownGlobalListeners();
+    for (const { subscribe, unsubscribe } of subscriptions) {
+      expect(subscribe).toHaveBeenCalledTimes(1);
+      expect(unsubscribe).toHaveBeenCalledTimes(1);
+    }
+    for (const [, , label] of optionalSubscriptions) {
+      expect(logMocks.warn).not.toHaveBeenCalledWith(expect.stringContaining(`${label}:`));
+    }
+  });
+
+  it.each([undefined, 42])(
+    'warns for every supported API returning %s instead of unsubscribe',
+    (result) => {
+      const made = makeElectronApiStub(vi.fn());
+      const api = { ...made.stub, ghosts: {} };
+      const subscriptions = optionalSubscriptions.map(([domain, key, label]) => {
+        const subscribe = vi.fn(() => result);
+        Object.assign(domain === 'usage' ? api : api[domain], { [key]: subscribe });
+        return { subscribe, label };
+      });
+      (globalThis as { window?: unknown }).window = { electronAPI: api };
+
+      makerChatStore.initGlobalListeners();
+      makerChatStore.__teardownGlobalListeners();
+      for (const { subscribe, label } of subscriptions) {
+        expect(subscribe).toHaveBeenCalledTimes(1);
+        expect(
+          logMocks.warn.mock.calls.filter(
+            ([message]) => message === `${label}: unsubscribe not returned; teardown will no-op`,
+          ),
+        ).toHaveLength(1);
+      }
+    },
+  );
+});
 
 describe('活动熄灭触发的 stale running 对账', () => {
   let emitActivity: (payload: unknown) => void;

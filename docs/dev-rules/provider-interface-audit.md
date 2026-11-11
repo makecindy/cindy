@@ -28,10 +28,13 @@ OpenCode 官方文档表本次取得 Zen 69 条、Go 28 条声明，与实时模
 
 ## 维护规则
 
-- 模型原生协议、渠道提供的接口、Harness 请求协议分开记录。固定协议的 Claude Code / Codex
-  与模型原生协议不一致时，即使转换发生在供应商侧，仍显示兼容、默认关闭；不能因为渠道
-  同时提供 Messages / Responses 就将 Gemini 标成三种原生。Pi 使用现有 adapter 直接请求
-  渠道声明的 API，默认原生可用；不因此给 OpenRouter / Hermes 虚构 Google 端点。
+- 模型原生协议、渠道提供的接口、Harness 请求协议分开记录。**兼容模式只指 Cindy 在本地转换
+  请求格式**（Chris 2026-10-30）：上游（厂商、Cindy AI、OpenRouter 等）提供几种接口，就按它
+  提供的接口直接使用，引擎协议与所用接口一致即不是兼容模式、默认开启；界面不解释上游内部如何
+  实现，也不出现“直连”“渠道转换”等概念。原生声明仍只记录厂商事实，不从渠道入口反推；
+  Pi 使用现有 adapter 直接请求渠道声明的 API，不因此给 OpenRouter / Hermes 虚构 Google 端点。
+- 内置订阅（ChatGPT、SuperGrok、Claude）里跨家的引擎经 Cindy 本地桥接到厂商自家接口，
+  路由未声明协议时以厂商接口为实际出站，按兼容模式显示并默认关闭。
 - 自定义渠道与 Gateway 共用 Cindy 的原生声明。服务器缺项时用本地声明补齐；明确修正、
   未知和退役优先。原生声明不携带其他渠道的价格、窗口、账号权限或请求地址。
 - Pi 导入的 API 只说明 Pi 当前选用的 adapter，不代表供应商全部能力。
@@ -40,9 +43,37 @@ OpenCode 官方文档表本次取得 Zen 69 条、Go 28 条声明，与实时模
   它只修正统一模型表的执行协议与地址；不借其他供应商的型号参数，不自动开通未导入模型。
 - 新增 Pi 目录条目、API 发现条目和旧导入投影共用入口规则；用户自定义 host/path 与显式非 Chat 协议不覆盖。
 - Claude Code 优先 Messages、Codex 优先 Responses、Pi 保留可直接调用的 adapter。
-  不匹配才由现有本地转换器提供兼容，兼容默认关闭；保留用户开关。
+  不匹配才由现有本地转换器提供兼容，兼容默认关闭；保留用户开关。厂商官方提供 Responses 时
+  补接口模板，让 Codex 不经本地转换（2026-10-30：DeepSeek、Kimi K3、Z.ai 与智谱 Coding Plan、
+  百炼按量与 Token Plan、MiMo、火山方舟、LongCat）。智谱国内标准 API 仍走 Chat：曾开通 Coding
+  Plan 的账号只能用 Chat 调标准 API。
+- Pi 选用接口按社区共识，其次按 Pi 最新内置定义（DeepSeek、Kimi 为 Chat）。切换须先有对应
+  Chat 兼容资料（`deepseek-flash`、`kimi-k3.1-pro*` 等），资料到位前保持现有接口。
+- 目录预设与 Cindy AI 由 Cindy 自动选接口，模型设置不提供协议下拉；只有用户自己填地址的
+  自定义供应商保留协议选择。
 - 底层 Bedrock/Vertex/Mistral SDK、认证和路由不作为新增 UI 语言；模型管理保持四种公开语言。
 - 供应商升级文档/接口时应更新此记录和精确契约测试。Pi catalog 同步不会覆盖官方逐模型纠正层。
+
+## 官方地址识别补齐（2026-10-21）
+
+`providerDetection.ts` 按精确地址匹配，不对任意供应商统一剥除 `/v1`、改写域名或
+放宽业务路径。混合协议连接同时使用已有 `providerInterfaceDefaultRoute` 和模型独立
+路由识别入口。Mistral 的 `/v1` 输入对应 SDK 使用的根地址，Together 的历史 `.xyz`
+入口对应现有 `.ai/v1` 预设；别名只在预设仍声明原官方地址时启用。
+
+| 入口 | 官方依据 | 客户端处理 |
+| --- | --- | --- |
+| 火山普通 API | [官方 SDK 默认地址](https://github.com/volcengine/volcengine-python-sdk/blob/master/volcenginesdkarkruntime/_constants.py) | 独立于 Coding/Agent Plan，精确 `/api/v3`；使用 Chat 与动态模型发现 |
+| 硅基流动中国大陆 | [官方快速开始](https://docs.siliconflow.cn/cn/userguide/quickstart) | 独立 `.cn/v1` 预设与密钥入口 |
+| SiliconFlow | [官方快速开始](https://docs.siliconflow.com/en/userguide/quickstart) | 独立 `.com/v1` 预设与密钥入口 |
+| Mistral | [官方 API](https://docs.mistral.ai/api/) | 精确 `/v1` 别名，不改变既有 SDK adapter |
+| Together | [官方 SDK](https://github.com/togethercomputer/together-python) | 识别历史 `.xyz/v1`，使用现有 `.ai/v1` 运行配置 |
+| Fireworks | [官方协议说明](https://docs.fireworks.ai/tools-sdks/anthropic-compatibility) | 复用已有 `/inference` 与 `/inference/v1` 协议契约 |
+
+新增三个预设不静态推荐模型，需用账号密钥发现实际清单；识别与进入向导允许空密钥，
+不代表鉴权、模型列表或推理成功。本次仅修改客户端离线预设与识别规则，未修改或部署
+Server 正本。回归见 `providerDetection.test.ts` 与真实添加表单的
+`CustomProviderDialogAccessibility.test.tsx`。
 
 ## 全部预设
 
@@ -180,3 +211,24 @@ OpenCode 官方文档表本次取得 Zen 69 条、Go 28 条声明，与实时模
 - Fireworks 不按模型品牌删 Messages。中国大陆 MiniMax Responses 改用中国大陆官方来源，
   原有别名主机的真实可用性仍单独标注；不把 Global 文档当作中国大陆部署证据。
 - 本批仅使用虚拟凭证、本地模拟及公开文档读取，没有付费生成，也没有重启 DEV。
+
+
+## 自定义连接的一次点击协议验证
+
+- 新建且未绑定预设、未显式指定模型协议的自定义连接，在「测试连接」内按需串行尝试
+  Chat Completions、Responses、Anthropic Messages、Google Generative AI。已有预设与用户显式路由优先；
+  不把供应商身份识别与生成协议验证混为一谈。默认简化添加页保存 Pi，保留独立草稿和编辑态的其他引擎。
+- 候选由同源、可持久化的 Pi base URL + wireProtocol 构成。明确完整接口后缀可优先，
+  根地址采用各 SDK 标准根；保留部署路径，不扫描其它域名或任意目录，不接受带 userinfo/query/hash 的自动候选。
+  Pi 不支持的任意 requestPath 不能作为「只在测试中可用」的成功结果落库。
+- 协议请求默认复用 Pi 原生序列化/解析。Google SDK 不支持注入 fetch，探测使用同源的
+  streamGenerateContent HTTP 流验证，禁止重定向；基础生成通过不等于工具、图片或推理能力全部验证。
+- 只有明确、未进入生成阶段的协议/路由拒绝才尝试下一个。HTTP 状态码、未知字段、空流、
+  HTML 200、超时、5xx、断流均不能单独作为换协议依据。认证/额度/模型错误停止并给出对应提示。
+- 每候选最多一次生成请求，SDK retry=0，最多四候选，自动探测单次 8 秒、整轮 15 秒；明确指定单一路由的测试保留原时间预算。
+  流式结果需同时有有效生成内容和合法结束；取消/超时不保证上游未执行，不自动重发。
+- 自动测试经既有 maker:provider:test-connection IPC 执行，追加可选 strategy/requestId 和取消请求，
+  无字段的旧调用保留单次语义；此设置入口仅可信本机 Renderer 可用，不新增远控/手机凭证入口。
+  请求按 sender 归属，关闭/改输入取消，迟到结果不回填；只在用户保存时持久化成功的 Pi 路由。
+- 回归位于 providerDetection.test.ts、providerDiagnostics.test.ts、providerHandlers.test.ts 和
+  CustomProviderDialogAccessibility.test.tsx；网络使用注入的协议响应，不当成真实第三方部署实测。

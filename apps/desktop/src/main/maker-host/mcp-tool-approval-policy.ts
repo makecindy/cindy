@@ -12,9 +12,11 @@
  *
  * 判定顺序（从最窄到最宽）：
  *   1. READ_ONLY_MCP_TOOLS —— 精确到工具的只读发现入口，server 未整体可信也放行
- *   2. cindy_contacts     —— 按内层 action 细粒度判定（见 contacts/approval.ts）
- *   3. cindy-art ghost_call —— 第一方作图/视频内层工具静默；其它插件继续走会话审批
- *   4. TRUSTED_MCP_SERVERS —— 已 review 的第一方 server，整体静默
+ *   2. 插件 ghost_call    —— 按已装实例的工具声明：`each-call` 逐次审批，用户确认过的
+ *                              `auto` 静默；缺省声明按当前任务审批，不按插件名或来源例外；
+ *                              其余插件调用继续走会话审批
+ *   3. 敏感聚合调用（含 browser recipe）—— 每次进入现有会话审批
+ *   4. TRUSTED_MCP_SERVERS —— 已 review 的第一方 server，其余调用静默
  *   5. 其余                —— 进入会话审批（第三方 server、cindy_ssh、其它 ghost_call…）
  * 风险分类不覆盖会话档位：Full Access 免操作审批，Auto 走统一审阅，Ask 才交用户确认。
  */
@@ -23,7 +25,7 @@ import type {
   McpToolApprovalContext,
   McpToolApprovalPolicy,
 } from '@cindy/maker-core';
-import { canAutoApproveContactsMcpTool } from '@cindy/mcps';
+import { ORCA_TASK_ACTION_TOOLS, TASK_ACTION_TOOLS } from '../maker-ipc/taskActionAuthorization.js';
 
 
 /**
@@ -67,8 +69,12 @@ const READ_ONLY_MCP_TOOLS: ReadonlySet<string> = new Set([
   'cindy_docs::read_sheet',
   'cindy_docs::inspect_pdf',
   'cindy_memory::list_tools',
-  'cindy_contacts::list_tools',
   'cindy_slack::slack_status',
+  // 只读当前 Telegram 对话的信息(chat 由逐轮作用域钉死, 无自由文本参数, 不出境)。
+  'cindy_telegram_bot::get_chat',
+  // 只读当前飞书对话的信息 / 某条消息(chat 由逐轮作用域钉死, message_id 需在本 chat 内)。
+  'cindy_feishu_bot::get_chat',
+  'cindy_feishu_bot::get_message',
 ]);
 
 /**
@@ -76,14 +82,18 @@ const READ_ONLY_MCP_TOOLS: ReadonlySet<string> = new Set([
  *
  * 这里不能按 `cindy_` 前缀放行：namespace 只表示品牌归属，不代表新 provider
  * 已完成权限 review。SSH（在已配置主机上跑任意命令）、插件宿主 `cindy`
- * （`ghost_call` 转发到第三方插件沙箱）与第三方 server 都不在表内，继续走会话审批；
- * Contacts 走 inner-tool 细粒度策略。
+ * （`ghost_call` 转发到第三方插件沙箱）与第三方 server 都不在表内，继续走会话审批。
  */
 const TRUSTED_MCP_SERVERS: ReadonlySet<string> = new Set([
   'cindy_android',
   'cindy_browser',
   'cindy_computer',
+  // 飞书轮次里往当前对话发消息 / 文件、表情、置顶与 send_*_to_user: 与 bot 自己回复同一出口,
+  // 目标由逐轮作用域钉死。call_api / recall_message 单独在下方按次审批。
   'cindy_feishu_bot',
+  // Telegram 轮次里往当前对话发消息 / 媒体 / 投票、表情、下载对方文件: 与 bot 自己
+  // 回复同一出口, 目标 chat 由逐轮作用域钉死。call_api / delete_message 单独在下方按次审批。
+  'cindy_telegram_bot',
   'cindy_slack',
   'cindy_scheduler',
   'cindy_memory',
@@ -123,27 +133,73 @@ function readJsonObject(value: unknown): Record<string, unknown> | undefined {
   return undefined;
 }
 
-/** 第一方 Cindy Art 的媒体生成工具。风险是额度而非越权，用户点名作图即授权。 */
-const CINDY_ART_MEDIA_TOOLS: ReadonlySet<string> = new Set([
-  'gen_image',
-  'edit_image',
-  'gen_video',
-  'edit_video',
-]);
+/**
+ * 插件工具的审批事实，由 Main 按真实已装实例解析：调用参数里的 ghost_id / namespace
+ * 只用来定位实例，不作为授权依据。定位不到唯一实例时返回 null，按默认会话审批处理。
+ */
+export interface GhostToolApprovalFacts {
+  /** 该工具的有效声明：`auto` 只在 receipt 批准过时返回；`each-call` 只收紧，无需批准。 */
+  declared: 'auto' | 'each-call' | null;
+}
+
+export type GhostToolApprovalResolver = (target: {
+  ghostId: string;
+  namespace?: string | null;
+  tool: string;
+}) => GhostToolApprovalFacts | null;
+
+let ghostToolApprovalResolver: GhostToolApprovalResolver | null = null;
+
+/** Main 启动时注册（cindy-brain `registerGhostIpc`）；未注册时插件调用一律按会话审批。 */
+export function setGhostToolApprovalResolver(resolver: GhostToolApprovalResolver | null): void {
+  ghostToolApprovalResolver = resolver;
+}
 
 /**
- * ghost_call 是聚合入口，默认逐次确认。Cindy Art 的作图/改图/视频是第一方媒体
- * 能力，用户发「画一张」即构成授权；Auto-review 下再弹卡会把常规作图变成手动授权。
- * 读不出 ghost_id / tool 时 fail closed，其它插件不受影响。
+ * ghost_call 是聚合入口，风险取决于内层工具：声明 `each-call` 的工具不允许一次「本会话
+ * 允许」覆盖后续调用；用户确认过的 `auto` 工具直接执行（Auto-review 下再弹卡会把常规
+ * 操作变成手动授权）。读不出 ghost_id / tool 或解析不到实例时返回 null，按默认策略处理。
  */
-function canAutoApproveCindyArtGhostCall(context: McpToolApprovalContext): boolean {
-  if (context.serverName !== 'cindy') return false;
-  if (context.toolName !== 'ghost_call' && context.toolName !== undefined) return false;
+function ghostCallPolicy(context: McpToolApprovalContext): McpToolApprovalPolicy | null {
+  if (context.serverName !== 'cindy') return null;
+  if (context.toolName !== 'ghost_call' && context.toolName !== undefined) return null;
   const params = readJsonObject(context.toolParams);
-  if (!params) return false;
+  if (!params) return null;
   const ghostId = typeof params.ghost_id === 'string' ? params.ghost_id.trim() : '';
   const tool = typeof params.tool === 'string' ? params.tool.trim() : '';
-  return ghostId === 'cindy-art' && CINDY_ART_MEDIA_TOOLS.has(tool);
+  if (!ghostId || !tool) return null;
+  const namespace = params.namespace === null || typeof params.namespace === 'string' ? params.namespace : undefined;
+  let facts: GhostToolApprovalFacts | null = null;
+  try {
+    facts = ghostToolApprovalResolver?.({ ghostId, namespace, tool }) ?? null;
+  } catch {
+    facts = null;
+  }
+  if (!facts) return null;
+  if (facts.declared === 'each-call') return 'prompt-each-time';
+  if (facts.declared === 'auto') return 'auto-approve';
+  return null;
+}
+
+/** cindy_scheduler 里接受 `device` 的写工具（与 packages/lizi-mcps/src/scheduler 的 writeDeviceShape 一致）。 */
+const SCHEDULER_CROSS_DEVICE_WRITE_TOOLS: ReadonlySet<string> = new Set([
+  'schedule_update',
+  'schedule_pause',
+  'schedule_resume',
+  'schedule_delete',
+  'schedule_run_now',
+]);
+
+/** `device` 指向本机以外的电脑。缺省与 "local" 是本机；其余值（含形状异常）一律按非本机处理。 */
+function targetsAnotherComputer(device: unknown): boolean {
+  return device !== undefined && device !== null && device !== 'local';
+}
+
+/** `deviceId::sessionId` 的设备段；本机 id（无前缀或前缀残缺）返回 undefined。 */
+function sessionIdDevice(sessionId: unknown): string | undefined {
+  if (typeof sessionId !== 'string') return undefined;
+  const split = sessionId.indexOf('::');
+  return split > 0 && split < sessionId.length - 2 ? sessionId.slice(0, split) : undefined;
 }
 
 /** Claude SDK 工具名格式固定为 `mcp__<server>__<tool>`。 */
@@ -160,7 +216,7 @@ export function getDesktopClaudeReadOnlyAllowedTools(): string[] {
 }
 
 /**
- * 保持可信内置 MCP 安静执行，同时让 destructive / external contacts action 每次确认。
+ * 保持可信内置 MCP 安静执行，同时让敏感聚合调用每次确认。
  */
 export function getDesktopMcpToolApprovalPolicy(
   context: McpToolApprovalContext,
@@ -171,6 +227,37 @@ export function getDesktopMcpToolApprovalPolicy(
   if (toolName && READ_ONLY_MCP_TOOLS.has(`${serverName}::${toolName}`)) {
     return 'auto-approve';
   }
+  // Recipes can write through an authenticated profile or be overridden by L2.
+  // Route the exact invocation through the existing session flow, never trust
+  // caller-supplied access metadata or reuse a server grant. Full Access/Auto/Ask
+  // retain their existing semantics; discovery and ordinary browser actions stay trusted.
+  if (serverName === 'cindy_browser') {
+    const params = readJsonObject(toolParams);
+    // Without an outer name, only an exact progressive envelope is unambiguous.
+    // A direct browser call can itself carry name/args plus action=recipe.
+    if (!toolName && (!params || Object.keys(params).some(key => key !== 'name' && key !== 'args'))) {
+      return 'prompt-each-time';
+    }
+    const progressive = toolName === 'call_tool' || !toolName;
+    const name = progressive ? (typeof params?.name === 'string' ? params.name.trim() : '') : toolName;
+    const args = progressive ? readJsonObject(params?.args) : params;
+    if ((name === 'browser' && args?.action === 'recipe')
+      || (progressive && (!name || !args))) return 'prompt-each-time';
+    // Switching to the user's own browser hands the agent their signed-in Chrome/Edge tabs; a page could
+    // ask the agent to do it. The switch goes through the session's approval like a recipe; the user
+    // choosing My browser in Settings needs no tool call and so no approval.
+    if (name === 'browser' && args?.action === 'setBackend' && args.backend === 'user-browser')
+      return 'prompt-each-time';
+    // Uploading hands a local file to a website. Files are not filtered by name (2026-10-30), so each
+    // upload goes through the task's approval: Ask confirms, Auto reviews, Full Access proceeds.
+    if (name === 'browser' && args?.action === 'upload') return 'prompt-each-time';
+    // The tool refuses these inside a batch. Review such a call anyway, so the actions above can never
+    // ride past approval inside one if that refusal is ever loosened.
+    if (name === 'browser' && args?.action === 'batch' && (!Array.isArray(args.steps) || args.steps.some((step) => {
+      const action = (step as { action?: unknown } | null)?.action;
+      return typeof action !== 'string' || ['recipe', 'upload', 'setBackend', 'batch'].includes(action);
+    }))) return 'prompt-each-time';
+  }
   if (serverName === 'cindy' && toolName === 'ghost_market_install') return 'prompt-each-time';
   // This bridge multiplexes independent imported connections and commands with
   // their credentials. A server-wide grant for one tool must not authorize other
@@ -180,14 +267,8 @@ export function getDesktopMcpToolApprovalPolicy(
   // sources/preview/start share one native tool identity. Never persist a grant
   // from discovery that could bypass the policy callback for a later import.
   if (serverName === 'companion_import') return 'prompt-each-time';
-  if (serverName === 'cindy_contacts') {
-    return canAutoApproveContactsMcpTool({ toolName, toolParams })
-      ? 'auto-approve'
-      : 'prompt-each-time';
-  }
-  if (canAutoApproveCindyArtGhostCall(context)) {
-    return 'auto-approve';
-  }
+  const ghostPolicy = ghostCallPolicy(context);
+  if (ghostPolicy) return ghostPolicy;
   // Rebinding a task's workspace delegates its execution root; publishing a Skill
   // uploads local files under the signed-in account. Review each action instead
   // of reusing the trusted helper server shortcut/grant. Session modes still apply.
@@ -197,38 +278,70 @@ export function getDesktopMcpToolApprovalPolicy(
     const innerName = typeof params?.name === 'string' ? params.name.trim() : '';
     const args = progressive ? readJsonObject(params?.args) : params;
     // Codex can omit tool_name when same-server calls overlap. A direct tool's
-    // input may also have a `name` field (routine_save does), so only treat an
+    // input may also have a `name` field, so only treat an
     // exact name/args envelope as a progressive call without the outer name.
     if (!toolName && (!params || !innerName || !args ||
       Object.keys(params).some((key) => key !== 'name' && key !== 'args'))) {
       return 'prompt-each-time';
     }
     const action = progressive ? innerName : toolName;
+    // Use the normal runtime permission flow once: Full Access bypasses approval,
+    // Auto reviews the call, and Ask requests confirmation. Host guards retain scope checks.
+    if (action && TASK_ACTION_TOOLS.has(action)) return 'prompt-each-time';
     if (toolName === 'call_tool' && (!innerName || !args)) return 'prompt-each-time';
     // Installing or saving a host command uses the session's existing approval flow.
-    if (action === 'schedule_set_pre_run_hook' || (action === 'routine_save' && args?.preRunHook != null)) {
+    if (action === 'schedule_set_pre_run_hook') return 'prompt-each-time';
+    // Creating a task worktree adds a branch and directory to the repository and binds them
+    // to the task, like `git worktree add`; the task's permission mode decides.
+    if (action === 'move_session' || action === 'publish_skill' || action === 'create_task_worktree') {
       return 'prompt-each-time';
     }
-    if (action === 'move_session' || action === 'publish_skill') return 'prompt-each-time';
-  }
-  // Choosing a new Worker root delegates filesystem access. Do not let the
-  // trusted-server shortcut or a cached server grant authorize another root.
-  // Full Access / Auto / Ask still use their existing permission flow.
-  if (serverName === 'cindy_orca') {
-    if (!toolName) return 'prompt-each-time';
-    if (toolName === 'create_worker' || toolName === 'create_workers') {
-      const params = readJsonObject(toolParams);
-      if (!params) return 'prompt-each-time';
-      const workers = toolName === 'create_worker' ? [params] : params.workers;
-      if (!Array.isArray(workers)) return 'prompt-each-time';
-      if (
-        workers.some((worker) => {
-          const spec = readJsonObject(worker);
-          return !spec || Object.hasOwn(spec, 'working_dir');
-        })
-      )
-        return 'prompt-each-time';
+    // Moving a teammate hands its running to another computer: the task's permission mode decides.
+    if (action === 'manage_session_prs' && args?.action !== 'list') return 'prompt-each-time';
+    if (action === 'move_teammate_home') return 'prompt-each-time';
+    // 发给另一台电脑上的任务：作用范围越出本机，交给当前任务的权限档，不走可信 server 的静默放行。
+    if (action === 'send_to_session' && targetsAnotherComputer(sessionIdDevice(args?.target_session_id))) {
+      return 'prompt-each-time';
     }
+    if ((action === 'archive_sessions' || action === 'unarchive_sessions') &&
+      (!Array.isArray(args?.session_ids) || args.session_ids.some((id) =>
+        typeof id !== 'string' || targetsAnotherComputer(sessionIdDevice(id))))) {
+      return 'prompt-each-time';
+    }
+  }
+  // 改动另一台电脑上的定时任务（可改写并触发那台电脑上的命令）同样交给权限档：Full Access
+  // 免审批，Auto 走统一审阅，Ask 由用户确认。本机删除同样走普通审批，不再依赖额外自主确认。
+  if (serverName === 'cindy_scheduler' && (toolName === 'schedule_delete' ||
+    toolName === 'schedule_webhook_release' || toolName === 'schedule_webhook_restore')) return 'prompt-each-time';
+  if (serverName === 'cindy_scheduler' && (toolName === 'call_tool' || !toolName)) {
+    const params = readJsonObject(toolParams);
+    const innerName = typeof params?.name === 'string' ? params.name.trim() : '';
+    const args = readJsonObject(params?.args);
+    // Without an outer name, only an exact progressive envelope identifies the action;
+    // a direct deletion's bare id must not inherit trusted-server approval.
+    if (!toolName && (!params || !innerName || !args ||
+      Object.keys(params).some((key) => key !== 'name' && key !== 'args'))) return 'prompt-each-time';
+    if (innerName === 'schedule_delete' ||
+      innerName === 'schedule_webhook_release' || innerName === 'schedule_webhook_restore') return 'prompt-each-time';
+    if (SCHEDULER_CROSS_DEVICE_WRITE_TOOLS.has(innerName) && targetsAnotherComputer(args?.device)) {
+      return 'prompt-each-time';
+    }
+  }
+  // Telegram 的任意方法直通(call_api)与删消息: 方法名 / 目标由参数决定, 一次放行不能
+  // 变成对后续任意方法的授权, 交给会话权限档按次判定(Full Access 免审批, Auto 审阅,
+  // Ask 确认)。Codex 省略 toolName 时同样按次, 不借 trusted-server 捷径。
+  if (serverName === 'cindy_telegram_bot' && (!toolName || toolName === 'call_api' || toolName === 'delete_message')) {
+    return 'prompt-each-time';
+  }
+  // 飞书同口径: 任意 Open API 与撤回按次审批; 省略 toolName 时无法分辨是不是这两个, fail closed。
+  if (serverName === 'cindy_feishu_bot' && (!toolName || toolName === 'call_api' || toolName === 'recall_message')) {
+    return 'prompt-each-time';
+  }
+  // Orca mutations use the same per-call runtime flow as helper task writes.
+  // Reuse the Host's action set so no mutation slips through the trusted-server
+  // shortcut. Full Access still bypasses; read-only Orca operations stay trusted.
+  if (serverName === 'cindy_orca') {
+    if (!toolName || ORCA_TASK_ACTION_TOOLS.has(toolName)) return 'prompt-each-time';
   }
   if (TRUSTED_MCP_SERVERS.has(serverName)) {
     return 'auto-approve';

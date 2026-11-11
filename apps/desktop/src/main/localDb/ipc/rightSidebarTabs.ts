@@ -33,6 +33,31 @@ import { createLogger } from '../../logger.js';
 
 const log = createLogger('rightSidebarTabs');
 
+/**
+ * 变更广播:同一会话的页签可能同时活在主窗侧边栏与弹出的单页签窗口里,两个
+ * renderer 各有一份 store 缓存。任何写操作落库后通知**其它** renderer 按 DB 刷新
+ * (renderer 只覆盖自己不承载的页签,见 store.refreshSessionFromDb)。由
+ * bootstrap 注入实际的 BrowserWindow 广播实现;未注入(单测)时静默。
+ */
+type RightSidebarTabsChangeBroadcaster = (sessionId: string, senderWebContentsId: number) => void;
+let changeBroadcaster: RightSidebarTabsChangeBroadcaster | null = null;
+
+export function setRightSidebarTabsChangeBroadcaster(
+  broadcaster: RightSidebarTabsChangeBroadcaster | null,
+): void {
+  changeBroadcaster = broadcaster;
+}
+
+function broadcastChange(sessionId: string, event: { sender?: { id?: number } }): void {
+  if (!changeBroadcaster) return;
+  try {
+    // 受信 sender 校验已在各 handler 入口完成;这里只取 id 用于排除发起方。
+    changeBroadcaster(sessionId, event.sender?.id ?? -1);
+  } catch (err) {
+    log.warn('right sidebar tabs change broadcast failed', { sessionId, err });
+  }
+}
+
 /** 单 session 最多 20 个 tab,超抛 RIGHT_SIDEBAR_TOO_MANY_TABS。 */
 const MAX_TABS_PER_SESSION = 20;
 const SINGLETON_TAB_KINDS = new Set(['subagents']);
@@ -192,9 +217,11 @@ export function registerRightSidebarTabsIpc(): void {
       .where(and(eq(rightSidebarTabs.sessionId, sessionId), eq(rightSidebarTabs.kind, kind)))
       .limit(1);
     if (!canonical) throw new Error(`failed to ensure ${kind} tab for session ${sessionId}`);
+    const created = canonical.id === id;
+    if (created) broadcastChange(sessionId, event);
     return {
       tab: rowToTab(canonical),
-      created: canonical.id === id,
+      created,
       persistable: true,
     };
   });
@@ -239,6 +266,7 @@ export function registerRightSidebarTabsIpc(): void {
         target: rightSidebarTabs.id,
         set: { kind, position, state: stateJson, updatedAt: now },
       });
+    broadcastChange(sessionId, event);
     return { ok: true };
   });
 
@@ -250,7 +278,7 @@ export function registerRightSidebarTabsIpc(): void {
     // SELECT 验证存在再 DELETE,不用 `.delete().returning()` —— 本仓 SQLite 上不使用
     // drizzle 的 update/delete `.returning()`(grep 验证全仓 0 处)。
     const exists = await db
-      .select({ id: rightSidebarTabs.id })
+      .select({ id: rightSidebarTabs.id, sessionId: rightSidebarTabs.sessionId })
       .from(rightSidebarTabs)
       .where(eq(rightSidebarTabs.id, id))
       .limit(1);
@@ -258,6 +286,7 @@ export function registerRightSidebarTabsIpc(): void {
       throwIpcError('NOT_FOUND', `tab ${id} not found`);
     }
     await db.delete(rightSidebarTabs).where(eq(rightSidebarTabs.id, id));
+    broadcastChange(exists[0].sessionId, event);
     return { ok: true };
   });
 
@@ -293,6 +322,7 @@ export function registerRightSidebarTabsIpc(): void {
         .set({ isActive: true, updatedAt: now })
         .where(and(eq(rightSidebarTabs.id, targetId), eq(rightSidebarTabs.sessionId, sessionId)));
     }
+    broadcastChange(sessionId, event);
     return { ok: true };
   });
 
@@ -321,6 +351,7 @@ export function registerRightSidebarTabsIpc(): void {
           and(eq(rightSidebarTabs.id, orderedIds[i]), eq(rightSidebarTabs.sessionId, sessionId)),
         );
     }
+    broadcastChange(sessionId, event);
     return { ok: true };
   });
 

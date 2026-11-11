@@ -3,6 +3,8 @@ import {
   buildClientDeviceNote,
   buildMessageSourceNote,
   describeMessageSourceSender,
+  isCrossDeviceSourceSessionId,
+  parseSourceSessionTarget,
   messageSourceIdEntries,
   formatSourceRef,
   promptSafeSourceName,
@@ -44,6 +46,13 @@ describe('promptSafeSourceName', () => {
 });
 
 describe('formatSourceRef', () => {
+  // #7631: the task badge and model note identify a local app, never a plugin.
+  it('keeps local application attribution and IDs consistent for display and handoff', () => {
+    const sourcePlugin = { pluginId: 'local-app:com.taptap.pc', name: 'TapTap' };
+    expect(messageSourceIdEntries({ sourcePlugin })).toEqual([{ kind: 'localApp', id: 'com.taptap.pc' }]);
+    expect(buildMessageSourceNote(messageSourceSenderFromMeta({ sourcePlugin })))
+      .toBe('[消息来源] 本条由本机应用「TapTap」(app_id: com.taptap.pc) 发送，不是用户本人输入。');
+  });
   it('pairs every name with its id', () => {
     expect(formatSourceRef('发布检查', 'session_id', 's-1')).toBe('「发布检查」(session_id: s-1)');
   });
@@ -137,6 +146,14 @@ describe('messageSourceSenderFromMeta', () => {
 });
 
 describe('messageSourceIdEntries', () => {
+  it('uses the same MCP server identity for UI hints and model source notes', () => {
+    const meta = { sourcePlugin: { pluginId: 'mcp-app:reports', name: 'Reports' } };
+    expect(messageSourceIdEntries(meta)).toEqual([{ kind: 'mcpApp', id: 'reports' }]);
+    expect(describeMessageSourceSender(messageSourceSenderFromMeta(meta)!)).toBe(
+      '由 MCP App「Reports」(mcp_server_id: reports) 发送',
+    );
+  });
+
   it('lists the ids of the visible sender label, in the same priority as the label', () => {
     expect(
       messageSourceIdEntries({
@@ -159,6 +176,12 @@ describe('messageSourceIdEntries', () => {
     expect(messageSourceIdEntries({ sharedTaskAuthor: { memberId: 'm-1', displayName: 'A' } })).toEqual([
       { kind: 'member', id: 'm-1' },
     ]);
+  });
+
+  it('does not attribute an auto-bridge batch to its first Worker', () => {
+    expect(messageSourceIdEntries({ origin: { kind: 'orca', senderLabel: '', senderSessionId: 'w-1', autoBridge: true, autoBridgeBatchCount: 2 } })).toEqual([]);
+    // 单条仍定位发送方 Worker。
+    expect(messageSourceIdEntries({ origin: { kind: 'orca', senderLabel: 'Backend', senderSessionId: 'w-1' } })).toEqual([{ kind: 'session', id: 'w-1' }]);
   });
 
   it('returns nothing for hook channels, redacted sources and local input', () => {
@@ -242,5 +265,23 @@ describe('private group reply provenance', () => {
     expect(readMessageSourceGroup(meta)).toEqual({ groupId: 'group-1', name: 'Design Room' });
     expect(describeMessageSourceSender(messageSourceSenderFromMeta(meta)!)).toContain('从群聊「Design Room」(group_id: group-1)');
     expect(readMessageSourceGroup({ sourceGroup: { name: 'No identity' } })).toBeUndefined();
+  });
+});
+
+describe('isCrossDeviceSourceSessionId', () => {
+  it('recognizes only a device-qualified source task id', () => {
+    expect(isCrossDeviceSourceSessionId('dev-A::task-1')).toBe(true);
+    for (const local of [undefined, '', 'task-1', '::task-1', 'dev-A::']) {
+      expect(isCrossDeviceSourceSessionId(local)).toBe(false);
+    }
+  });
+});
+
+// Routing must preserve the explicit device, while redacted/malformed sources stay inert.
+describe('parseSourceSessionTarget', () => {
+  it('splits a stamped source and preserves same-host legacy ids', () => {
+    expect(parseSourceSessionTarget('dev-A::task-1')).toEqual({ deviceId: 'dev-A', sessionId: 'task-1' });
+    expect(parseSourceSessionTarget('task-1')).toEqual({ sessionId: 'task-1' });
+    for (const id of [undefined, '', '::task-1', 'dev-A::']) expect(parseSourceSessionTarget(id)).toBeNull();
   });
 });

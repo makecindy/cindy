@@ -30,14 +30,14 @@ export interface MobileModelMemoryAccessors {
   clearFast?(agent: AgentKind, providerId: string, modelId: string): void;
   getEffort(agent: AgentKind, providerId: string, modelId: string): string | undefined;
   setEffort(agent: AgentKind, providerId: string, modelId: string, effort: string): void;
-  getFast(agent: AgentKind, providerId: string, modelId: string): boolean | undefined;
-  setFast(agent: AgentKind, providerId: string, modelId: string, enabled: boolean): void;
+  getFast(agent: AgentKind, providerId: string, modelId: string): boolean | 'ultrafast' | undefined;
+  setFast(agent: AgentKind, providerId: string, modelId: string, enabled: boolean | 'ultrafast'): void;
 }
 
 /** 单槽:某 (device, agent, 来源) 下每个模型的 effort/fast。 */
 interface Slot {
   effortByModel: Record<string, string>;
-  fastByModel: Record<string, boolean>;
+  fastByModel: Record<string, boolean | 'ultrafast'>;
 }
 
 // deviceId → (`${agent}:${providerId}` → Slot)
@@ -85,10 +85,10 @@ function sanitize(raw: unknown): MemoryMap {
           if (mid && typeof eff === 'string' && eff.length > 0) effortByModel[mid] = eff;
         }
       }
-      const fastByModel: Record<string, boolean> = {};
+      const fastByModel: Record<string, boolean | 'ultrafast'> = {};
       if (rec.fastByModel && typeof rec.fastByModel === 'object' && !Array.isArray(rec.fastByModel)) {
         for (const [mid, fb] of Object.entries(rec.fastByModel as Record<string, unknown>)) {
-          if (mid && typeof fb === 'boolean') fastByModel[mid] = fb;
+          if (mid && (typeof fb === 'boolean' || fb === 'ultrafast')) fastByModel[mid] = fb;
         }
       }
       if (Object.keys(effortByModel).length === 0 && Object.keys(fastByModel).length === 0) continue;

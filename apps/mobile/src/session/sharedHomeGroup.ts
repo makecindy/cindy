@@ -1,4 +1,5 @@
 import { isSharedTaskPeer, type SharedTaskListItem } from '@cindy/device-link';
+import { CINDY_MAKE_ENABLED, isCindyMakeSource } from '@cindy/maker-shared/cindy-make-feature';
 import type { MobileHomePresentation, MobileHomeSessionLike } from './mobileHome';
 import type { RemoteSessionListItem } from './sessionList';
 
@@ -9,7 +10,7 @@ export type SharedHomeRow =
 export type SharedHomeRole = 'owned' | 'joined';
 
 /** Group presentation only: routing IDs, store contents and grants stay untouched. */
-export function splitSharedHomeGroup(home: MobileHomePresentation, owned: readonly SharedTaskListItem[], options: {
+export function splitSharedHomeGroup(home: MobileHomePresentation, owned: readonly (SharedTaskListItem & { source?: string | null })[], options: {
   sessions: readonly MobileHomeSessionLike[];
   searchQuery: string;
   statusFilter: string;
@@ -31,6 +32,7 @@ export function splitSharedHomeGroup(home: MobileHomePresentation, owned: readon
   // Discovery is account-level even before same-account remote control is allowed.
   // Don't recreate a row that the active search/status filter intentionally hid.
   for (const task of owned) {
+    if (!CINDY_MAKE_ENABLED && (task.source === undefined || isCindyMakeSource(task.source))) continue;
     if (options.sessions.some(session => owns(session, task))) continue;
     if (home.selectedDeviceId && home.selectedDeviceId !== task.hostDeviceId) continue;
     if (options.statusFilter !== 'active' && options.statusFilter !== 'all') continue;

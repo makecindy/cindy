@@ -305,6 +305,64 @@ describe('Session.send vision bridge hook', () => {
 });
 
 describe('Session.steer vision bridge hook', () => {
+  function guardedSteerSession(visionBridge?: VisionBridgeHook) {
+    const { handle } = makeRecordingHandle();
+    handle.isTurnRunning = () => true;
+    const steer = vi.fn(async (_message: UserMessage, _options?: SendOptions) => {});
+    handle.steer = steer;
+    const session = new Session({
+      id: 'guarded-steer', agentKind: 'claude-code', workDir: path.join('workspace', 'repo'),
+      handle, capabilities: { sameTurnSteer: { supported: true } } as never,
+      logger: createLogger() as never, visionBridge,
+    });
+    return { session, handle, steer };
+  }
+
+  it('runs the Host grant at final steer dispatch without forwarding it to the provider', async () => {
+    const { session, steer } = guardedSteerSession();
+    const grant = vi.fn(async () => {});
+    await session.steer('App-authored text', { beforeProviderStart: grant, messageUuid: 'app-input' });
+    expect(grant).toHaveBeenCalledOnce();
+    expect(steer).toHaveBeenCalledWith(
+      { type: 'user', content: 'App-authored text' }, expect.objectContaining({ messageUuid: 'app-input' }),
+    );
+    expect(steer.mock.calls[0][1]).not.toHaveProperty('beforeProviderStart');
+    await session.close();
+  });
+
+  it('rejects a Host grant revoked during asynchronous steer preparation', async () => {
+    let visible = true;
+    const bridge: VisionBridgeHook = async message => {
+      await Promise.resolve();
+      visible = false;
+      return { applied: false, message };
+    };
+    const { session, steer } = guardedSteerSession(bridge);
+    const grant = vi.fn(async () => { if (!visible) throw new Error('MCP_APP_CARD_UNAVAILABLE'); });
+    await expect(session.steer({
+      type: 'user', content: [{ type: 'image', path: path.join('fixture', 'app.png') }],
+    }, { beforeProviderStart: grant })).rejects.toThrow('MCP_APP_CARD_UNAVAILABLE');
+    expect(grant).toHaveBeenCalledOnce();
+    expect(steer).not.toHaveBeenCalled();
+    await session.close();
+  });
+
+  it.each(['ended', 'replaced', 'closed'] as const)('rechecks a turn %s while awaiting the Host steer grant', async (change) => {
+    const { session, handle, steer } = guardedSteerSession();
+    const generation = vi.spyOn(session, 'getTurnGeneration').mockReturnValue(1);
+    await expect(session.steer('App-authored text', {
+      beforeProviderStart: async () => {
+        await Promise.resolve();
+        if (change === 'ended') handle.isTurnRunning = () => false;
+        else if (change === 'replaced') generation.mockReturnValue(2);
+        else await session.close();
+      },
+    })).rejects.toThrow(change === 'closed' ? 'closed' : 'has no active turn to steer');
+    expect(steer).not.toHaveBeenCalled();
+    generation.mockRestore();
+    await session.close();
+  });
+
   it('replaces the image message with the bridged text before steering', async () => {
     const steered: UserMessage[] = [];
     const handle = {

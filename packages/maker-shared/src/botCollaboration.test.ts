@@ -1,5 +1,10 @@
 import { describe, expect, it } from 'vitest';
-import { placeBotTaskCardsAfterIntroduction, readBotCollaborationMeta } from './botCollaboration.js';
+import {
+  BOT_INTERJECTION_PREVIEW_MAX,
+  botInterjectionPreview,
+  placeBotTaskCardsAfterIntroduction,
+  readBotCollaborationMeta,
+} from './botCollaboration.js';
 
 describe('task card placement', () => {
   const classify = (s: string) =>
@@ -59,4 +64,26 @@ it('validates exact completion identities and deduplicates frozen attachments', 
     toBotId: null, toBotName: 'Cindy', parentSessionId: 'parent', childSessionId: 'child', objective: 'Report',
     result: { runSequence: 1, status: 'completed', text: 'Saved', artifacts: [] } };
   expect(readBotTaskResults([card, {}, card])).toEqual([card]);
+});
+
+describe('interjection preview', () => {
+  const trace = { v: 1, role: 'interjection', delegationId: 'job', fromBotId: 'bot', fromBotName: 'Cindy',
+    toBotId: null, toBotName: 'Cindy', parentSessionId: 'parent', childSessionId: 'child', objective: 'Report' };
+  it('keeps old traces without a preview readable', () => {
+    expect(readBotCollaborationMeta(trace)).not.toHaveProperty('interjectionPreview');
+  });
+  it('keeps only a bounded first line, and only on interjection traces', () => {
+    expect(readBotCollaborationMeta({ ...trace, interjectionPreview: '\n  测试也要覆盖断网重连  \n私有第二行' })?.interjectionPreview)
+      .toBe('测试也要覆盖断网重连');
+    expect(Array.from(readBotCollaborationMeta({ ...trace, interjectionPreview: '长'.repeat(500) })!.interjectionPreview!))
+      .toHaveLength(BOT_INTERJECTION_PREVIEW_MAX);
+    expect(readBotCollaborationMeta({ ...trace, interjectionPreview: 42 })).not.toHaveProperty('interjectionPreview');
+    expect(readBotCollaborationMeta({ ...trace, interjectionPreview: '   ' })).not.toHaveProperty('interjectionPreview');
+    expect(readBotCollaborationMeta({ ...trace, role: 'delegation-request', interjectionPreview: 'x' }))
+      .not.toHaveProperty('interjectionPreview');
+  });
+  it('derives the persisted preview from the first non-empty line', () => {
+    expect(botInterjectionPreview('\n\n补充：带风险清单。\n读取 /workspace/AGENTS.md')).toBe('补充：带风险清单。');
+    expect(botInterjectionPreview('')).toBe('');
+  });
 });

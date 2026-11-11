@@ -13,7 +13,7 @@ import { randomUUID } from 'node:crypto';
 import { checkpointWorktreeForReuse, recycleManagedWorktree } from './managedRecycle';
 import { withWorktreeResourceLock } from './resourceLock';
 import { readRecycleRecord } from './recycleJournal';
-import { restoreRecordedWorktree } from './restoreRecovery';
+import { hasRecordedRecovery, restoreRecordedWorktree } from './restoreRecovery';
 import { withLegacyWorktreeRuntimeGuard } from './legacyRuntimeGuard';
 import path from 'node:path';
 import fs from 'node:fs/promises';
@@ -235,7 +235,7 @@ async function resetWorktree(
   // 5. 重新拷贝 .claude/.sivi（被 git clean 删掉了，池化路径跳过 stageCheckout 所以必须成功）
   await copyClaudeSiviDirs(baseRepo, worktreePath);
 
-  // 6. 重新拷贝 .xdtworktreeinclude 文件
+  // 6. 重新拷贝 .xdtworktreeinclude / .worktreeinclude 选中的文件
   try {
     await applyWorktreeIncludeFile(baseRepo, worktreePath);
   } catch (err) {
@@ -392,7 +392,7 @@ async function drainEntry(meta: WorktreeMeta): Promise<void> {
         return false;
       }
       const recovery = await readRecycleRecord(meta.path);
-      return recovery?.phase === 'removing' && Boolean(recovery.archive && recovery.snapshot)
+      return recovery?.phase === 'removing' && hasRecordedRecovery(recovery)
         || !(await isWorktreeDirty(meta.path));
     },
   });

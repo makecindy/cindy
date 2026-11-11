@@ -21,10 +21,13 @@ const mocks = vi.hoisted(() => ({
   closeSession: vi.fn(async () => {}),
   getDesktopCcPrefs: vi.fn<() => DesktopCcPrefs | null>(() => null),
   resolveLenientSessionRoute: vi.fn(),
+  // 桌面偏好缺省时 control:new 按新建任务口径解析默认模型;本 harness 不搭目录,固定返回。
+  resolveNewTaskDefaultModelRoute: vi.fn(async () => ({ model: 'claude-sonnet-4-6', providerId: null })),
   applyRuntimeSetModelChange:
     vi.fn<(input: unknown) => Promise<{ status: 'applied' | 'deferred' }>>(),
   applyPiImModelSelectionUnderLock: vi.fn(async (): Promise<{
     status: 'applied' | 'deferred'; generation?: number; effectiveProviderId?: string | null;
+    effectiveModelId?: string;
   }> => ({ status: 'applied' })),
   cancelPendingSessionRuntimeMutation: vi.fn(() => true),
   actualApplyRuntimeSetModelChange: null as null | ((input: never) => Promise<unknown>),
@@ -61,6 +64,7 @@ vi.mock('../../../logger', () => ({ createLogger: () => mocks.logger }));
 vi.mock('../../../maker-host', () => ({ getMaker: mocks.getMaker }));
 vi.mock('../../../maker-host/model-route-guard-live', () => ({
   resolveLenientSessionRoute: mocks.resolveLenientSessionRoute,
+  resolveNewTaskDefaultModelRoute: mocks.resolveNewTaskDefaultModelRoute,
 }));
 vi.mock('../../index', () => ({ getDesktopCcPrefs: mocks.getDesktopCcPrefs }));
 vi.mock('../controlProjects', () => ({
@@ -596,7 +600,7 @@ describe('/permission Full access 确认', () => {
 });
 
 describe('model:pick 持久化失败', () => {
-  async function pressModelPick(im: ChannelIM, providerId = 'anthropic'): Promise<void> {
+  async function pressModelPick(im: ChannelIM, providerId = 'anthropic', modelId = 'claude-opus-4-7'): Promise<void> {
     const attach = createCardActionHandler(adapter, cards, turnRunner);
     let handler: ((e: IMCardActionEvent) => Promise<void>) | null = null;
     (im.onCardAction as ReturnType<typeof vi.fn>).mockImplementation((cb) => {
@@ -610,7 +614,7 @@ describe('model:pick 持久化失败', () => {
       buttonId: 'model:pick',
       payload: {
         sessionId: 'sess-target',
-        modelId: 'claude-opus-4-7',
+        modelId,
         modelLabel: 'Opus 4.7',
         effort: 'high',
         providerId,
@@ -679,6 +683,18 @@ describe('model:pick 持久化失败', () => {
     await pressModelPick(makeIm(), 'disabled-source');
     expect(mocks.updateModelEffort).toHaveBeenCalledWith(
       'sess-target', 'claude-opus-4-7', 'high', 'enabled-source',
+    );
+  });
+
+  it('persists the renamed model ID returned by the Pi host selection', async () => {
+    (turnRunner.getMakerSessionById as ReturnType<typeof vi.fn>).mockReturnValue({ agentKind: 'pi', model: 'gpt-6-luna' });
+    mocks.readModelRouteSnapshot.mockResolvedValue({ model: 'gpt-6-luna', effort: 'high', providerId: 'openai' });
+    mocks.applyPiImModelSelectionUnderLock.mockResolvedValueOnce({
+      status: 'applied', effectiveModelId: 'chatgpt/gpt-6-luna', effectiveProviderId: 'openai',
+    });
+    await pressModelPick(makeIm(), 'openai', 'gpt-6-luna');
+    expect(mocks.updateModelEffort).toHaveBeenCalledWith(
+      'sess-target', 'chatgpt/gpt-6-luna', 'high', 'openai',
     );
   });
 

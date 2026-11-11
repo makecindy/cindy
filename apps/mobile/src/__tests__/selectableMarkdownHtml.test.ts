@@ -165,6 +165,15 @@ describe('buildSelectableMarkdownHtml 本地路径不出死链', () => {
     expect(html).toContain('<a href="https://example.com/a.ts">站点</a>');
   });
 
+  it('加粗 / 删除线里的 http(s) 链接仍是可点 <a>,外层套强调标签', () => {
+    expect(buildSelectableMarkdownHtml('打开 **https://example.com/a** 看')).toContain(
+      '<strong><a href="https://example.com/a">https://example.com/a</a></strong>',
+    );
+    expect(buildSelectableMarkdownHtml('**~~https://example.com/b~~**')).toContain(
+      '<strong><del><a href="https://example.com/b">https://example.com/b</a></del></strong>',
+    );
+  });
+
   it('会话深链渲染成不可点的 chip:保留 chip 观感,但不是 <a>、也不带 href', () => {
     const html = buildSelectableMarkdownHtml('[某会话](cindy://session/abc123)');
     expect(html).toContain('xdt-session-chip');
@@ -173,6 +182,13 @@ describe('buildSelectableMarkdownHtml 本地路径不出死链', () => {
     // 不该是锚点,更不该把 cindy:// 暴露成 href(PR #1144 review 实捉)。
     expect(html).not.toContain('cindy://session/abc123');
     expect(html).not.toMatch(/<a[^>]*xdt-session-chip/);
+  });
+
+  it('查不到标题的会话深链显示中性文字,不露内部任务 ID', () => {
+    const html = buildSelectableMarkdownHtml('cindy://session/03e0c22d-19db-4ac5-814f-1ea04040b471');
+    expect(html).toContain('xdt-session-chip');
+    expect(html).not.toContain('03e0c22d');
+    expect(html).not.toContain('b471');
   });
 });
 
@@ -222,5 +238,16 @@ describe('阅读器里「有下划线 = 可点」不得出现反例(DESIGN.md §
       .not.toMatch(/<a[^>]*README/);
     expect(buildSelectableMarkdownHtml('[联系](mailto:a@b.com)'))
       .not.toContain('<a href="mailto:');
+  });
+});
+
+describe('buildSelectableMarkdownHtml remote images', () => {
+  it('does not expose remote image URLs when an explicit empty image allowlist is supplied', () => {
+    const html = buildSelectableMarkdownHtml(
+      '![tracking pixel](https://tracker.example.test/pixel.png)',
+      { imageSources: new Map() },
+    );
+    expect(html).not.toContain('https://tracker.example.test/pixel.png');
+    expect(html).toContain('<span class="xdt-image-chip">tracking pixel</span>');
   });
 });

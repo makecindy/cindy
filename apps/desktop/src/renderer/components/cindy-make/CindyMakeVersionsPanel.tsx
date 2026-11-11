@@ -1,3 +1,4 @@
+import { ErrorNotice } from '@/components/ui/error-notice';
 import { useEffect, useId, useState, type ReactNode } from 'react';
 import { ChevronDown, ChevronUp } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
@@ -156,9 +157,7 @@ export function CindyMakeVersionsPanel({
             </div>
           )}
           {versions.error && (
-            <p role="alert" className="text-12 text-[var(--error-fg)]">
-              {t('cindyMake.versions.errors.' + versions.error)}
-            </p>
+            <ErrorNotice role="alert" message={t('cindyMake.versions.errors.' + versions.error)} />
           )}
           {expanded && !!alternatives.length && (
             <div id={listId} className="space-y-2 border-t border-[var(--border-default)] pt-3">

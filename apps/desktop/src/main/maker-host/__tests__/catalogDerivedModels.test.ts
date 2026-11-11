@@ -23,6 +23,7 @@ import {
   resolvePiRuntimeModelDescriptor,
   resolveVerifiedContextWindow,
   resolveModelDefaultContextWindow,
+  resolveModelMaxOutputTokens,
   resolveModelContextProviderId,
 } from '../catalog-to-descriptors.js';
 import { sanitizeModelCatalogOverrides } from '../model-plane/localCatalogOverrides.js';
@@ -204,12 +205,14 @@ describe('deriveAvailableModels — dynamic-first catalog contract', () => {
     expect(deriveAvailableModels(catalog, 'pi').find((m) => m.id === 'reasoner')).toMatchObject({
       efforts: ['low', 'high'],
       defaultEffort: 'high',
+      effortsUnknown: false,
     });
     expect(
       resolvePiRuntimeModelDescriptor(catalog, 'explicit-reasoning', 'reasoner'),
     ).toMatchObject({
       efforts: ['low', 'high'],
       defaultEffort: 'high',
+      effortsUnknown: false,
     });
   });
 
@@ -247,6 +250,7 @@ describe('deriveAvailableModels — dynamic-first catalog contract', () => {
     expect(flat[0]).toMatchObject({
       efforts: ['low'],
       defaultEffort: 'low',
+      effortsUnknown: false,
     });
     expect(
       resolvePiRuntimeModelDescriptor(catalog, 'colliding-reasoning', 'grok-4.3'),
@@ -281,6 +285,7 @@ describe('deriveAvailableModels — dynamic-first catalog contract', () => {
     expect(deriveAvailableModels(catalog, 'pi').find((m) => m.id === 'grok-4.5')).toMatchObject({
       efforts: [],
       defaultEffort: null,
+      effortsUnknown: false,
     });
     expect(
       resolvePiRuntimeModelDescriptor(catalog, 'colliding-non-reasoning', 'grok-4.5'),
@@ -400,7 +405,29 @@ describe('deriveAvailableModels — dynamic-first catalog contract', () => {
     expect(codex.find((m) => m.id === 'xai/grok-code-fast')).toMatchObject({
       efforts: [],
       defaultEffort: null,
+      effortsUnknown: false,
     });
+  });
+
+  it('explicitly distinguishes declared effort capabilities from unknown placeholders', () => {
+    const catalog = injectedCatalog();
+    const openai = catalog.providers.find((provider) => provider.id === 'openai')!;
+    openai.models.codex = [
+      model('known-empty'),
+      model('known-efforts', { efforts: ['low', 'high'], defaultEffort: 'high' }),
+      model('known-explicit', { effortsUnknown: false }),
+      model('unknown-placeholder', { effortsUnknown: true }),
+    ];
+
+    const descriptors = deriveAvailableModels(catalog, 'codex');
+    for (const declaration of openai.models.codex) {
+      expect(descriptors.find((descriptor) => descriptor.id === declaration.id)).toMatchObject({
+        efforts: declaration.efforts,
+        defaultEffort: declaration.defaultEffort,
+        effortsUnknown: declaration.effortsUnknown === true,
+      });
+    }
+    expect(openai.models.codex[0]).not.toHaveProperty('effortsUnknown');
   });
 
   // availableModels 是跨 provider 去重后的扁平表 —— provenance 刻意**不**进这份 descriptor:
@@ -828,6 +855,35 @@ describe('resolveModelDefaultContextWindow — settings defaults configure the s
     expect(
       resolveModelDefaultContextWindow(catalog, 'codex', null, 'gpt-5.6-sol'),
     ).toBeNull();
+  });
+});
+
+// Regression: the CC runtime must use this connection's maxOutput, not the
+// first same-ID descriptor. Existing projections only tested display metadata.
+describe('resolveModelMaxOutputTokens', () => {
+  it('uses the selected connection and harness, including user overrides', () => {
+    const catalog = injectedCatalog();
+    for (const [id, maxOutput] of [['output-a', 48_000], ['output-b', 96_000]] as const) {
+      catalog.providers.push(buildUserProvider({
+        id, name: id, runtimes: {
+          'claude-code': { baseUrl: 'https://example.invalid', models: [{ id: 'shared', name: 'shared', maxOutputTokens: maxOutput }] },
+          codex: { baseUrl: 'https://example.invalid', models: [{ id: 'shared', name: 'shared', maxOutputTokens: 16_000 }] },
+        },
+      }));
+      expect(resolveModelMaxOutputTokens(catalog, 'claude-code', id, 'shared')).toBe(maxOutput);
+      expect(resolveModelMaxOutputTokens(catalog, 'codex', id, 'shared')).toBe(16_000);
+    }
+    expect(resolveModelMaxOutputTokens(catalog, 'claude-code', null, 'shared')).toBeNull();
+    expect(resolveModelMaxOutputTokens(catalog, 'claude-code', 'missing', 'shared')).toBeNull();
+    expect(resolveModelMaxOutputTokens(catalog, 'claude-code', 'output-a', 'missing')).toBeNull();
+    const provider = catalog.providers.find(p => p.id === 'output-a')!;
+    for (const invalid of [undefined, 0, -1, Number.NaN, 1.5]) {
+      provider.models['claude-code']![0]!.maxOutput = invalid;
+      expect(resolveModelMaxOutputTokens(catalog, 'claude-code', 'output-a', 'shared')).toBeNull();
+    }
+    provider.models['claude-code']![0]!.maxOutput = 48_000;
+    provider.routing['claude-code']!.disabled = true;
+    expect(resolveModelMaxOutputTokens(catalog, 'claude-code', 'output-a', 'shared')).toBeNull();
   });
 });
 

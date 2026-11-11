@@ -134,4 +134,20 @@ describe('provider group switch presentation', () => {
     expect(readAutoResumeInfo({ reason: 'usage-limit-reset', agentSwitch: { from: 'A', to: 'B', cause: 'other' } }))
       .toEqual({ usageLimitReset: true });
   });
+
+  it('reads a shared user’s switch without any computer names', () => {
+    expect(readAutoResumeInfo({ reason: 'usage-limit-reset', groupSwitch: { cause: 'overload' } }))
+      .toEqual({ usageLimitReset: true, groupSwitch: { cause: 'overload' } });
+    expect(readAutoResumeInfo({ reason: 'usage-limit-reset', groupSwitch: { cause: 'other' } }))
+      .toEqual({ usageLimitReset: true });
+  });
+
+  it('reads a reconnect to the original computer, with or without its name', () => {
+    expect(readAutoResumeInfo({ reason: 'usage-limit-reset', agentReconnect: { computer: 'Mac mini' } }))
+      .toEqual({ usageLimitReset: true, agentReconnect: { computer: 'Mac mini' } });
+    expect(readAutoResumeInfo({ reason: 'usage-limit-reset', agentReconnect: {} }))
+      .toEqual({ usageLimitReset: true, agentReconnect: { computer: '' } });
+    expect(readAutoResumeInfo({ reason: 'usage-limit-reset', agentReconnect: 'Mac mini' }))
+      .toEqual({ usageLimitReset: true });
+  });
 });

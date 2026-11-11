@@ -49,6 +49,7 @@ function toDbAgentKind(kind: AgentKind): string {
 }
 
 export interface ImSessionRow {
+  agentDeviceId?: string | null;
   id: string;
   agentKind: AgentKind;
   workingDir: string;
@@ -57,7 +58,7 @@ export interface ImSessionRow {
   effort: Effort;
   /** Latest persisted permission mode. */
   permissionMode: PermissionMode;
-  fastMode: boolean;
+  fastMode: boolean | 'ultrafast';
   sdkSessionId: string | null;
   /** Non-empty means workingDir and Agent file paths live on an SSH host. */
   remoteHostId?: string | null;
@@ -83,6 +84,7 @@ export interface ImSessionRow {
 }
 
 export interface SessionModelRouteSnapshot {
+  agentDeviceId?: string | null;
   model: string;
   effort: Effort;
   providerId: string | null;
@@ -274,7 +276,7 @@ export function createImSessionRepo(
       return {
         id: row.id,
         agentKind: toCoreAgentKind(row.agentKind),
-        workingDir: row.workingDir ?? ns.ensureWorkingDir(botContextId),
+        workingDir: row.workingDir ?? ns.ensureWorkingDir(botContextId, userId),
         model: row.model,
         effort: row.effort,
         permissionMode: row.permissionMode,
@@ -282,6 +284,7 @@ export function createImSessionRepo(
         sdkSessionId: row.sdkSessionId,
         remoteHostId: row.remoteHostId ?? null,
         providerId: row.providerId ?? null,
+        agentDeviceId: row.agentDeviceId ?? null,
         workspaceKind: readWorkspaceKind(row.workingDir, row.workspaceKind ?? null, botContextId),
       };
     },
@@ -352,7 +355,7 @@ export function createImSessionRepo(
       return {
         id: row.id,
         agentKind: toCoreAgentKind(row.agentKind),
-        workingDir: row.workingDir ?? ns.ensureWorkingDir(botContextId),
+        workingDir: row.workingDir ?? ns.ensureWorkingDir(botContextId, userId),
         model: row.model,
         effort: row.effort,
         permissionMode: row.permissionMode,
@@ -360,6 +363,7 @@ export function createImSessionRepo(
         sdkSessionId: row.sdkSessionId,
         remoteHostId: row.remoteHostId ?? null,
         providerId: row.providerId ?? null,
+        agentDeviceId: row.agentDeviceId ?? null,
         // update 前读到的旧值不能直接回 —— 与 correctedWorkspaceKind 用同一判据现算,
         // caller 拿到的和库里落定的才是同一个答案。
         workspaceKind,
@@ -382,6 +386,7 @@ export function createImSessionRepo(
         sdkSessionId: row.sdkSessionId,
         remoteHostId: row.remoteHostId ?? null,
         providerId: row.providerId ?? null,
+        agentDeviceId: row.agentDeviceId ?? null,
         workspaceKind: row.workspaceKind ?? null,
       };
     },
@@ -389,7 +394,7 @@ export function createImSessionRepo(
     async prepareNewSession(botContextId, userId, scopeKey, providerSnapshot) {
       const assertAccount = captureChannelAccount();
       const id = ns.sessionIdFor(botContextId, userId, scopeKey);
-      const workingDir = ns.ensureWorkingDir(botContextId);
+      const workingDir = ns.ensureWorkingDir(botContextId, userId);
       const row = rowFromDefaults(
         id,
         workingDir,
@@ -427,6 +432,7 @@ export function createImSessionRepo(
         agentKind: defaults.agentKind,
         model: defaults.model,
         providerId: defaults.providerId,
+        agentDeviceId: defaults.agentDeviceId ?? null,
         effort: defaults.effort,
         fastMode: defaults.fastMode,
         permissionMode: defaults.permissionMode,
@@ -465,6 +471,7 @@ export function createImSessionRepo(
               status: 'active',
               agentKind: toDbAgentKind(row.agentKind),
               providerId: row.providerId,
+              agentDeviceId: row.agentDeviceId ?? null,
               imDefaultRoute: defaultRouteRecordFor(row),
               source: ns.source,
               ...ns.extraInsertColumns(botContextId, userId),
@@ -511,6 +518,7 @@ export function createImSessionRepo(
             sdkSessionId: persistedRow.sdkSessionId,
             remoteHostId: persistedRow.remoteHostId ?? null,
             providerId: persistedRow.providerId ?? null,
+            agentDeviceId: persistedRow.agentDeviceId ?? null,
           }
         : row;
       log.info(
@@ -571,6 +579,7 @@ export function createImSessionRepo(
             agentKind: fresh.agentKind,
             model: fresh.model,
             providerId: fresh.providerId,
+            agentDeviceId: fresh.agentDeviceId ?? null,
             effort: fresh.effort,
             fastMode: fresh.fastMode,
             permissionMode: fresh.permissionMode,
@@ -619,6 +628,7 @@ export function createImSessionRepo(
               fastMode: fresh.fastMode,
               agentKind: toDbAgentKind(fresh.agentKind),
               providerId: fresh.providerId,
+              agentDeviceId: fresh.agentDeviceId ?? null,
               imDefaultRoute: defaultRouteRecordFor(fresh),
               source: ns.source,
               imBotContextId,
@@ -665,6 +675,7 @@ function rowFromDefaults(
     sdkSessionId: null,
     remoteHostId: null,
     providerId: defaults.providerId,
+    agentDeviceId: defaults.agentDeviceId ?? null,
     defaultRouteFingerprint: defaults.fingerprint,
   };
 }
@@ -676,6 +687,7 @@ function defaultRouteRecordFor(row: ImSessionRow): string | null {
     agentKind: row.agentKind,
     model: row.model,
     providerId: row.providerId,
+    ...(row.agentDeviceId ? { agentDeviceId: row.agentDeviceId } : {}),
     effort: row.effort,
   });
 }
@@ -740,6 +752,7 @@ export async function resetSessionToDefaults(
       model: defaults.model,
       effort: defaults.effort,
       providerId: defaults.providerId,
+      agentDeviceId: defaults.agentDeviceId ?? null,
       permissionMode: defaults.permissionMode,
       fastMode: defaults.fastMode,
       imDefaultRoute: defaultRouteRecordFor(defaults),
@@ -795,6 +808,7 @@ export async function readModelRouteSnapshot(
       model: sessions.model,
       effort: sessions.effort,
       providerId: sessions.providerId,
+      agentDeviceId: sessions.agentDeviceId,
     })
     .from(sessions)
     .where(eq(sessions.id, sessionId))
@@ -805,6 +819,7 @@ export async function readModelRouteSnapshot(
     model: row.model,
     effort: row.effort as Effort,
     providerId: row.providerId ?? null,
+    agentDeviceId: row.agentDeviceId ?? null,
   };
 }
 

@@ -8,6 +8,7 @@ import {
   CODEX_INLINE_IMAGE_STRIP_MIN_CHARS,
   CODEX_LIVE_TAIL_OVERSIZED_BYTES,
   CodexRolloutScanLimitError,
+  assertCodexRolloutRewriteSupported,
   hasUnsafeForkRolloutPayload,
   isOversizedLiveTailStats,
   measureRolloutLiveTailBytesFromText,
@@ -195,6 +196,26 @@ describe('sanitizeCodexForkRollout', () => {
       expect(out).not.toContain('encrypted_content');
       expect(stats.unsafeLines).toBe(1);
       expect((await fs.readdir(dir)).filter((name) => name.includes('.cindy-sanitize-'))).toEqual([]);
+    } finally {
+      await fs.rm(dir, { recursive: true, force: true });
+    }
+  });
+
+  it('routes legacy encrypted agent messages to readable recovery without modifying history', async () => {
+    const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'cindy-legacy-agent-history-'));
+    const file = path.join(dir, 'history.jsonl');
+    const original = JSON.stringify({ type: 'response_item', payload: {
+      type: 'agent_message', author: '/root/child', recipient: '/root', content: [
+        { type: 'text', text: 'readable child result' },
+        { type: 'encrypted_content', encrypted_content: 'opaque-child-content' },
+      ],
+    } }) + '\n';
+    await fs.writeFile(file, original);
+    try {
+      await expect(assertCodexRolloutRewriteSupported(file)).rejects.toMatchObject({ name: 'CodexHistoryRecoveryRequiredError' });
+      await expect(sanitizeCodexForkRolloutFileInPlace(file)).rejects.toMatchObject({ name: 'CodexHistoryRecoveryRequiredError' });
+      expect(await fs.readFile(file, 'utf8')).toBe(original);
+      expect(await fs.readdir(dir)).toEqual(['history.jsonl']);
     } finally {
       await fs.rm(dir, { recursive: true, force: true });
     }

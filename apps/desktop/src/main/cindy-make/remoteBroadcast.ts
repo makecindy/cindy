@@ -25,3 +25,19 @@ export function broadcastMakeRemoteChanged(
     // A disconnected controller must not fail a persisted local operation.
   }
 }
+
+/** Invalidate every Cindy Make resource because its global projection changed. */
+export function broadcastMakeRemoteCollectionChanged(
+  scope = captureDataOwnerBroadcastScope(),
+): void {
+  if (!isDataOwnerBroadcastScopeCurrent(scope)) return;
+  try {
+    tapWindowBroadcast(
+      REMOTE_RESOURCE_CHANGED_CHANNEL,
+      { collectionId: MAKE_REMOTE_COLLECTION },
+      scope.ownerStamp,
+    );
+  } catch {
+    // A disconnected controller must not fail a persisted local operation.
+  }
+}

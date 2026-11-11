@@ -15,13 +15,14 @@ export function ShareAvatar({
 }: {
   displayName: string;
   avatarUrl: string | null | undefined;
-  size?: 'sm' | 'md' | 'lg';
+  size?: 'xs' | 'sm' | 'md' | 'lg';
   className?: string;
 }) {
   const [failed, setFailed] = useState(false);
   useEffect(() => setFailed(false), [avatarUrl]);
   const frame = cn(
     'inline-flex shrink-0 items-center justify-center overflow-hidden rounded-full',
+    size === 'xs' && 'h-5 w-5 text-10',
     size === 'sm' && 'h-7 w-7 text-12',
     size === 'md' && 'h-8 w-8 text-13',
     size === 'lg' && 'h-10 w-10 text-15',
@@ -40,10 +41,14 @@ export function ShareAvatar({
       />
     );
   }
+  // 有的主题里 chip 色与卡片底几乎一样(cindy-dark 甚至更暗)，细边保证首字头像在任何底色上都是一个圆。
   return (
     <span
       aria-hidden="true"
-      className={cn(frame, 'select-none bg-[var(--surface-chip)] font-medium text-[var(--text-primary)]')}
+      className={cn(
+        frame,
+        'select-none border border-[var(--border-default)] bg-[var(--surface-chip)] font-medium text-[var(--text-primary)]',
+      )}
     >
       {shareAvatarInitial(displayName)}
     </span>

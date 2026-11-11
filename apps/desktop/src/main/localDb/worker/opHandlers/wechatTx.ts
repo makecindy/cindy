@@ -704,6 +704,7 @@ export function wechatStopAll(db: Database.Database, args: unknown): WechatStopA
   const bindingEpoch = expectId(payload.bindingEpoch, 'bindingEpoch');
   const now = expectTimestamp(payload.now, 'now');
   const errorCode = expectMachineCode(payload.errorCode, 'errorCode');
+  const cancelPending = payload.cancelPending === undefined ? false : expectBoolean(payload.cancelPending, 'cancelPending');
 
   return db.transaction(() => {
     db.prepare(
@@ -713,6 +714,10 @@ export function wechatStopAll(db: Database.Database, args: unknown): WechatStopA
     ).run(now, bindingEpoch);
     repairAcceptedTaskAttachments(db, bindingEpoch, now);
     const expired = expirePendingTasks(db, bindingEpoch, now);
+    const cancelled = cancelPending ? db.prepare(
+      `UPDATE wechat_inbox SET status = 'cancelled', lease_until = NULL, last_error_code = ?
+       WHERE binding_epoch = ? AND status IN ('pending', 'dispatching')`,
+    ).run(errorCode, bindingEpoch).changes : 0;
     const requeued = db
       .prepare(
         `UPDATE wechat_inbox
@@ -741,7 +746,7 @@ export function wechatStopAll(db: Database.Database, args: unknown): WechatStopA
       )
       .run(bindingEpoch).changes;
     releaseTerminalMediaRefs(db, bindingEpoch);
-    return { requeued, interrupted, expired, repaired };
+    return { requeued, cancelled, interrupted, expired, repaired };
   })();
 }
 

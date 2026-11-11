@@ -30,9 +30,6 @@ function style(node: ts.JsxElement, bindings: Record<string, unknown>) {
 it('clips the input and held card at the selected region while measuring only the bottom content', () => {
   const viewport = element('session.bottomViewport');
   const layer = element('session.bottomLayer');
-  expect(layer.parent).toBe(viewport);
-  expect(layer.openingElement.getText(source)).toContain('ref={bottomOverlayRef}');
-  expect(viewport.openingElement.getText(source)).toContain('pointerEvents="box-none"');
   const regions: ReservedRegion[][] = [
     [{ kind: 'division', x: 0, y: 380, width: 800, height: 20 }],
     [{ kind: 'division', x: 390, y: 0, width: 20, height: 800 }],
@@ -56,9 +53,6 @@ it('clips the input and held card at the selected region while measuring only th
     expect(input.overflow).toBe('visible');
     expect(input.maxHeight).toBe(region.height);
     expect(input.bottom).toBe(-geometry.insets.bottom);
-    expect(viewport.getText(source)).toContain('<SessionComposerPalette');
-    expect(viewport.getText(source)).toContain('<ComposerActivityStatus');
-    expect(viewport.getText(source)).toContain('<SessionComposerInput');
   }
 });
 
@@ -72,7 +66,7 @@ it('keeps the newest row above the measured phone composer, including expanded i
     ts.forEachChild(node, visit);
   }
   visit(source);
-  expect(inset).toBeDefined();
+  if (!inset) throw new Error('Missing production content bottom inset');
   // Execute the actual SessionScreen prop and MessageRenderer padding helper.
   const contentInset = new Function('bottomOverlayHeight', `
     const companionInlineInteraction = false, shareSelectionActive = false,

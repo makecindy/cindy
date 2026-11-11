@@ -1,18 +1,18 @@
-import { codexAccountState } from '../maker-host/codex-account-auth.js';
+import { codexAccountState } from '../maker-host/codex-account-auth.desktop.js';
 /**
  * oneshotProviderUsability.ts — 快问快答钉档的「已配置凭证」同步探测。
  *
  * 钉档清单只应列出**当下真能跑**的 (供应商 × agent):用户没配 key / 没登录的
  * 供应商,钉上只会在执行期 fail-closed(NO_CANDIDATE)——给一个选了就没用的
- * 选项是清单的失职。这里全部走同步缓存态(cindy-prefs 读 handler 是 sendSync,
+ * 选项是清单的失职。这里全部走同步缓存态(读 handler 是 sendSync,
  * 不能 async);它是展示层过滤,不是安全边界——执行侧仍逐候选现查现验。
  */
 import { storedCustomProviderId, type AgentKind, type Provider } from '@cindy/model-providers';
 
 import { readClaudeApiKey } from '../maker-host/auth-adapters.js';
 import { hasChatgptOneshotReadiness } from '../maker-host/codex-oauth-readiness.js';
-import { readCachedGenericOAuthAccessToken } from '../maker-host/generic-oauth.js';
-import { hasGrokOAuthLogin } from '../maker-host/grok-oauth-login.js';
+import { readCachedGenericOAuthAccessToken } from '../maker-host/generic-oauth.desktop.js';
+import { hasGrokOAuthLogin } from '../maker-host/grok-oauth-login.desktop.js';
 import { effectiveXdGatewayBaseUrl } from '../model-access/effectiveEndpoint.js';
 import { readCustomProviderKey } from '../secrets/providerSecretStore.js';
 

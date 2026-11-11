@@ -3,7 +3,7 @@
 // auth-server 回调 cindycn://auth / cindy://auth 与 Share Extension 的
 // cindycn://expo-sharing / cindy://expo-sharing 都没有对应路由页,默认会落到
 // expo-router 的 +not-found(「Unmatched Route」白屏)。这里在冷启动时把认证回跳重定向到首页，热回跳保留当前页面；分享跳到
-// 新建任务页；分享 payload 由根级 IncomingShareBridge 独立领取。
+// 目标选择页由根级 IncomingShareBridge 在确认待领取 payload 后统一打开。
 //
 // 实际的 PKCE code 交换**不依赖路由**:由 src/auth/AuthContext.tsx 的 Linking.addEventListener /
 // getInitialURL 监听器独立捕获原始 URL 并完成(见其 handleDeepLink)。本文件只负责别让路由 404。
@@ -20,8 +20,10 @@ import {
   PROVIDER_SHARE_LINK_ROUTE,
   receiveProviderShareLinkIntent,
 } from '@/device-link/providerShareLinkIntent';
+import { isRelayJoinPath, RELAY_JOIN_ROUTE, receiveRelayJoinIntent } from '@/device-link/relayJoinIntent';
 import { WECHAT_APP_ID, WECHAT_UNIVERSAL_LINK } from '@/config/env';
 import { isWechatSdkCallback } from '@/auth/wechatCallback';
+import { isChatInviteLinkPath, receiveChatInviteLink } from '@/chat/chatInviteIntent';
 
 export function redirectSystemPath({ path, initial }: { path: string; initial: boolean }): string | null {
   try {
@@ -32,9 +34,15 @@ export function redirectSystemPath({ path, initial }: { path: string; initial: b
       appId: WECHAT_APP_ID,
       universalLink: WECHAT_UNIVERSAL_LINK,
     })) return '/';
+    // Group invitations stay in memory across login. A warm link preserves the
+    // current page; the single root Host presents the invitation after auth.
+    if (receiveChatInviteLink(path)) return initial ? '/' : null;
     // 供应商分享链接只能在电脑上申请:手机只显示「请在电脑上打开」的提示页。口令不进路由
     // 状态与诊断(提示页从内存取走可复制的链接),不合法的链接同样落到提示页、什么都不留。
     if (receiveProviderShareLinkIntent(path)) return PROVIDER_SHARE_LINK_ROUTE;
+    // 加入自建中转(扫电脑上的二维码):加入码只留在内存,加入页不带参数;不合法的链接同样
+    // 落到加入页显示「链接无效」,什么都不留。
+    if (receiveRelayJoinIntent(path)) return RELAY_JOIN_ROUTE;
     const invitationUrl = /^\/(?:shared-session|shared-task\/join)\?/.test(path) ? `cindy:/${path}` : path;
     if (receiveSharedTaskInvitationIntent(invitationUrl)) return '/shared-session';
     // path 可能是完整 URL('cindycn://auth?code=...')或路径('/auth?code=...'),统一取出 pathname。
@@ -45,7 +53,8 @@ export function redirectSystemPath({ path, initial }: { path: string; initial: b
     if (pathname === '/auth') return initial ? '/' : null;
     // A restored launch URL is not proof of an unconsumed share. On cold start,
     // let IncomingShareBridge navigate only after reading an actual pending batch.
-    if (pathname === '/expo-sharing') return initial ? '/' : '/sessions/new';
+    // Warm callbacks must not race that bridge with a second navigation.
+    if (pathname === '/expo-sharing') return initial ? '/' : null;
     // Invalid invitations must not leave secrets in router state or diagnostics.
     if (pathname === '/shared-session' || pathname === '/shared-task/join') {
       clearSharedTaskInvitationIntent();
@@ -53,7 +62,9 @@ export function redirectSystemPath({ path, initial }: { path: string; initial: b
     }
     return path;
   } catch {
-    // 分享口令绝不随原始链接进路由状态。
-    return isProviderShareLinkPath(path) ? PROVIDER_SHARE_LINK_ROUTE : path;
+    if (isChatInviteLinkPath(path)) return initial ? '/' : null;
+    // 分享口令与中转加入码绝不随原始链接进路由状态。
+    if (isProviderShareLinkPath(path)) return PROVIDER_SHARE_LINK_ROUTE;
+    return isRelayJoinPath(path) ? RELAY_JOIN_ROUTE : path;
   }
 }

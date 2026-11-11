@@ -8,6 +8,7 @@ import {
 import { useTranslation } from 'react-i18next';
 import type { TFunction } from 'i18next';
 import { Text } from '@/components/AppText';
+import { ErrorNotice } from '@/components/ErrorNotice';
 import { MainWindowActionGroup } from '@/components/MobilePrimitives';
 import type { RewindPreviewState } from '@/session/rewindPreview';
 import { buildRewindPreviewLayout, rewindPreviewMaxHeight } from '@/session/rewindPreviewLayout';
@@ -104,7 +105,7 @@ export function RewindPreviewPanel({
         ) : null}
 
         {state.kind === 'error' ? (
-          <Text selectable style={styles.errorText}>{state.errorText}</Text>
+          <ErrorNotice message={state.errorText} />
         ) : null}
         {state.kind !== 'loading' ? (
           <MainWindowActionGroup

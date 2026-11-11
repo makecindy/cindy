@@ -1,4 +1,3 @@
-import { projectCoordinationOutput } from './coordinationOutput.js';
 import { observeBotLearningTurn } from './botLearningFeedback.js';
 import { projectQuietScheduledOutput } from '../scheduler-host/silent-output.js';
 import type { AgentEvent, Session } from '@cindy/maker-core';
@@ -32,7 +31,10 @@ export type SessionEventDependencies = PrepareSessionEventDeps &
   FinishSessionTerminalEventDeps &
   RecordSessionClaudeTurnUsageDeps &
   RecordSessionCodexTurnUsageDeps &
-  RecordSessionPiTurnUsageDeps;
+  RecordSessionPiTurnUsageDeps & {
+    /** 按供应商记「本机」用量(远程与分享页的按使用方用量)。不提供 = 不记。 */
+    readonly recordProviderPartyUsage?: (session: Session, event: AgentEvent) => void;
+  };
 
 /** Synchronous delivery boundary. Accepted asynchronous writes retain their original turn. */
 export function handleSessionEvent(
@@ -42,10 +44,7 @@ export function handleSessionEvent(
 ): void {
   const prepared = prepareSessionEvent(deps, session, event);
   if (!prepared) return;
-  const project = (input: AgentEvent) => {
-    const scheduled = projectQuietScheduledOutput(input);
-    return scheduled && projectCoordinationOutput(scheduled, prepared.taskCoordination);
-  };
+  const project = projectQuietScheduledOutput;
   const projected = project(prepared.event);
   if (!projected) return;
   if (projected !== prepared.event) {
@@ -69,4 +68,5 @@ export function handleSessionEvent(
   );
   recordSessionCodexTurnUsage(deps, session, event, terminal.turnAssistantPersistId);
   recordSessionPiTurnUsage(deps, session, event, terminal.turnAssistantPersistId);
+  deps.recordProviderPartyUsage?.(session, event);
 }

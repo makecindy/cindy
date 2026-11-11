@@ -19,6 +19,7 @@ import {
 } from './conversationSearchFanout';
 import type { ConversationSearchResultItem } from '../../shared/conversationSearch';
 import { remoteProjectsStore } from '@/features/device-link/remoteProjectsStore';
+import { remoteConversationSearchRequest } from '@cindy/maker-shared/conversation-search';
 
 function wrap<T>(p: Promise<T>): Promise<T> {
   return p.catch((err: unknown) => {
@@ -144,7 +145,7 @@ async function searchRemoteIndexed(
   request: ConversationSearchRequest,
   invokeRemote: ConversationSearchFanoutDeps['invokeRemote'],
 ): Promise<ConversationSearchResponse> {
-  const response = await invokeRemote(deviceId, 'local-db:conversations:search', [request]);
+  const response = await invokeRemote(deviceId, 'local-db:conversations:search', [remoteConversationSearchRequest(request)]);
   return response as ConversationSearchResponse;
 }
 
@@ -222,7 +223,7 @@ export function searchConversations(
       window.electronAPI.deviceLink.invoke(deviceId, channel, args),
     listCachedRemoteSessions: (deviceId) =>
       remoteProjectsStore
-        .getMergedRemoteSessions()
+        .getVisibleMergedRemoteSessions()
         .filter((session) => session.deviceLinkDeviceId === deviceId),
   });
 }

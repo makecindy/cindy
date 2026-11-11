@@ -2,6 +2,10 @@ import { useCallback } from 'react';
 import { useTranslation } from 'react-i18next';
 
 import { useConfirmDialog } from '@/components/ui/confirm-dialog-provider';
+import {
+  archiveConfirmDescription,
+  loadActiveBoundScheduleNames,
+} from '@/features/scheduler/lib/archiveScheduleWarning';
 import { useSessionRunningStatus } from '@/hooks/useSessionRunningStatus';
 import type { Session } from '@/lib/ccAgent.types';
 import { createLogger } from '@/lib/logger';
@@ -29,8 +33,7 @@ export function useSessionHardwareTaskActions({
 } {
   const { t } = useTranslation();
   const { confirm: confirmDialog } = useConfirmDialog();
-  const { runSessionAction, beginRemoteArchive, cancelRemoteArchive } =
-    useSessionLifecycleActions();
+  const { runSessionAction } = useSessionLifecycleActions();
   const { runningSessionIds } = useSessionRunningStatus(session?.id);
   const sessionId = session?.id ?? null;
   const pinnedAt = session?.pinnedAt ?? null;
@@ -67,39 +70,42 @@ export function useSessionHardwareTaskActions({
       toast.warning(t('ccAgent.sidebar.archiveBlocked.running'));
       return;
     }
-    const attached = await window.electronAPI.binding
-      .resolveSession(sessionId)
-      .then((binding) => binding.attached)
-      .catch(() => false);
-    if (attached) {
-      toast.warning(t('ccAgent.sidebar.archiveBlocked.attached'));
-      return;
-    }
-    // 远程任务先乐观隐藏行并跳离,再等隧道预检(与 sidebar handleActionClick 同口径)。
-    const remoteArchiveToken = deviceLinkDeviceId
-      ? beginRemoteArchive(sessionId, deviceLinkDeviceId, sessionId)
-      : null;
-    const preflight = await resolveWorktreeRemovalPreflight(sessionId, deviceLinkDeviceId);
-    if (preflight !== 'clean') {
-      const ok = await confirmDialog({
-        title: t('ccAgent.sidebar.confirmArchive.title'),
-        description:
-          t('ccAgent.sidebar.confirmArchive.description') +
-          (preflight === 'dirty'
-            ? ' ' + t('ccAgent.sidebar.confirmArchive.dirtyWorktreeWarning')
-            : ''),
-        confirmText: t('ccAgent.sidebar.confirmArchive.confirm'),
-        cancelText: t('ccAgent.sidebar.confirmArchive.cancel'),
-      });
-      if (!ok) {
-        if (remoteArchiveToken) cancelRemoteArchive(remoteArchiveToken);
-        return;
-      }
-    }
-    await runSessionAction(sessionId, 'archive', { activeSessionId: sessionId, remoteArchiveToken });
+    await runSessionAction(sessionId, 'archive', {
+      activeSessionId: sessionId,
+      prepareArchive: async (isCurrent) => {
+        const attached = await window.electronAPI.binding
+          .resolveSession(sessionId)
+          .then((binding) => binding.attached)
+          .catch(() => false);
+        if (attached) {
+          toast.warning(t('ccAgent.sidebar.archiveBlocked.attached'));
+          return false;
+        }
+        const scheduleNames =
+          (await loadActiveBoundScheduleNames([{ id: sessionId, deviceLinkDeviceId }])).get(
+            sessionId,
+          ) ?? [];
+        // 远程列表先乐观换桶；确认前保留详情，取消后恢复行。
+        const preflight = await resolveWorktreeRemovalPreflight(sessionId, deviceLinkDeviceId);
+        if (!isCurrent()) return false;
+        if (preflight !== 'clean' || scheduleNames.length > 0) {
+          const ok = await confirmDialog({
+            title: t('ccAgent.sidebar.confirmArchive.title'),
+            description: archiveConfirmDescription(t, {
+              dirtyWorktree: preflight === 'dirty',
+              scheduleNames,
+            }),
+            confirmText: t('ccAgent.sidebar.confirmArchive.confirm'),
+            cancelText: t('ccAgent.sidebar.confirmArchive.cancel'),
+          });
+          if (!ok) {
+            return false;
+          }
+        }
+        return true;
+      },
+    });
   }, [
-    beginRemoteArchive,
-    cancelRemoteArchive,
     confirmDialog,
     deviceLinkDeviceId,
     onRemoteWriteBlocked,

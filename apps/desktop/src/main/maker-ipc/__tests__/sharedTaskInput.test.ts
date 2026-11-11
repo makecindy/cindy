@@ -19,6 +19,8 @@ describe('sharedTask input uses the task Agent authority', () => {
     expect(result.createOpts).toEqual(task);
     expect(result.permissionMode).toBe(permissionMode);
     expect(result.workingDir).toBe('host-workdir');
+    expect(result.model).toBe('host-model');
+    expect(result.effort).toBe('');
     expect(result).not.toHaveProperty('vendorOptions');
     expect(result).not.toHaveProperty('turnPermissionPolicy');
     expect(result.sharedTaskAuthor).toEqual(author);

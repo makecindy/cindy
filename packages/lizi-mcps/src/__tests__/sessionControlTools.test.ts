@@ -165,9 +165,10 @@ describe('cindy_helper session control tools', () => {
     // 校验明细,调用方一轮自纠。
     const { registry } = setup();
     const result = parse(await registry.call('set_session_runtime', { effort: 'high' }));
+    const data = result.data as Record<string, unknown> | undefined;
     expect(result).toMatchObject({ ok: false, errorCode: 'INVALID_ARGS' });
-    expect(JSON.stringify(result.data?.validation_errors ?? result)).toContain('expected_generation');
-    expect(result.data?.schema).toBeTruthy();
+    expect(JSON.stringify(data?.validation_errors ?? result)).toContain('expected_generation');
+    expect(data?.schema).toBeTruthy();
   });
 
   it('updates and cancels only through the caller-bound ownership context', async () => {

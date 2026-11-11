@@ -1,8 +1,12 @@
+import { configureSqliteVecExtPath } from '../../sqliteVecLoader.js';
+import { configureUserDataDir } from '../../../userDataPath.js';
+import { configureMigrationRuntime } from '../../migrationRuntime.js';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 
 import { afterEach, describe, expect, it, vi } from 'vitest';
+import type { PluginUsageTransaction, PluginUsageHandle } from '../../../../shared/pluginUsage';
 
 vi.mock('electron', () => ({
   app: {
@@ -95,8 +99,15 @@ describe('DbClient in-proc fallback', () => {
     const drizzleDir = path.join(userDataDir, 'drizzle');
     fs.mkdirSync(drizzleDir);
     fs.writeFileSync(path.join(drizzleDir, '0000_init.sql'), INIT_SQL, 'utf-8');
+    for (const fileName of ['0128_demonic_odin.sql', '0132_abnormal_dazzler.sql']) {
+      fs.copyFileSync(new URL(`../../../../../drizzle/${fileName}`, import.meta.url), path.join(drizzleDir, fileName));
+    }
     process.env.XDT_INPROC_TEST_USER_DATA = userDataDir;
     process.env.XDT_DB_INPROC = 'true';
+    configureUserDataDir(userDataDir);
+    configureMigrationRuntime({ drizzleDir, isPackaged: true });
+    // This fixture does not exercise vector search; use its isolated optional path.
+    configureSqliteVecExtPath(path.join(userDataDir, 'optional-vec0'));
     previousResourcesPath = process.resourcesPath;
     Object.defineProperty(process, 'resourcesPath', {
       configurable: true,
@@ -136,6 +147,15 @@ describe('DbClient in-proc fallback', () => {
         currentDatabase: true,
       }),
     ]);
+
+    const identity = { ghostId: 'inproc-plugin', displayName: 'Test', revision: 'revision', sourceKind: 'manual' as const,
+      stableKey: null, pluginId: null, organizationId: null, sourceKey: null, serverRoot: null, version: '1.0', releaseId: null };
+    const bindUsage = { action: 'bind', identity, newId: 'inproc-subject', now: 1 } satisfies PluginUsageTransaction;
+    const handle = await client.tx<PluginUsageHandle | null>('pluginUsage.execute', bindUsage);
+    await client.tx('pluginUsage.execute', { action: 'accept', handle: handle!, callId: 'inproc-call', toolName: 'tool', sessionId: null, occurredAt: 2 });
+    await client.tx('pluginUsage.execute', { action: 'clear', subjectId: handle!.subjectId, now: 3 });
+    await client.tx('pluginUsage.execute', { action: 'settle', handle: handle!, callId: 'inproc-call', outcome: 'failed' });
+    expect(await client.queryOne('SELECT COUNT(*) AS n FROM plugin_usage_events')).toEqual({ n: 0 });
 
     const sourceId = `inproc-source-${Date.now()}`;
     await expect(

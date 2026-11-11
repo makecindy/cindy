@@ -1,0 +1,45 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>Cindy · 插件分享确认</title>
+  <style>
+    *{box-sizing:border-box}body{margin:0;background:#ededeb;color:#242424;font:13px Inter,-apple-system,BlinkMacSystemFont,"PingFang SC",sans-serif}header{background:#fafaf8;border-bottom:1px solid #d7d7d4;padding:14px 22px;display:flex;gap:20px;align-items:center;flex-wrap:wrap}h1{font-size:15px;font-weight:600;margin:0}.subtitle{font-size:12px;color:#767672;margin-top:5px}nav{display:flex;gap:5px;margin-left:auto}button,select,a{font:inherit}button,select{border:1px solid #d7d7d4;border-radius:999px;background:transparent;padding:7px 12px;color:inherit;cursor:pointer}button[aria-current=true]{background:#242424;color:#fafaf8;border-color:#242424}.settings{display:flex;gap:12px;padding:12px 22px;align-items:center;flex-wrap:wrap;border-bottom:1px solid #d7d7d4;background:#fafaf8}.settings label{display:flex;align-items:center;gap:7px;color:#767672}.settings select{background:#fff;color:#242424;font-size:12px;padding:5px 10px}.stage{height:calc(100dvh - 148px);display:flex;justify-content:center;padding:14px 22px 0}.frame{width:100%;height:100%;border:1px solid #d7d7d4;border-radius:12px 12px 0 0;background:#f8f8f6;overflow:hidden;position:relative}iframe{display:block;width:100%;height:100%;border:0}.note{font-size:12px;color:#767672;margin-left:auto}.note a{color:inherit;text-underline-offset:3px}footer{height:26px;font-size:11px;color:#767672;padding:5px 22px;background:#fafaf8;position:fixed;bottom:0;left:0;right:0;border-top:1px solid #d7d7d4}#imageCanvas{height:100%;overflow:auto;padding:24px;text-align:center;background:#e5e5e1}#shareImage{display:block;width:min(100%,660px);height:auto;margin:auto} [hidden]{display:none!important}@media(max-width:800px){header,.settings{padding:10px 12px;gap:8px}nav{margin:0}.stage{height:calc(100dvh - 205px);padding:8px 8px 26px}.note{margin:0}footer{height:auto}}
+  </style>
+</head>
+<body>
+<header><div><h1>Cindy · 插件分享确认</h1><div class="subtitle">下方直接运行本次改动的实际组件与模板</div></div><nav aria-label="确认页面"><button data-view="market" aria-current="true">市场详情</button><button data-view="installed">已安装详情</button><button data-view="image">分享图片</button><button data-view="landing">接收落地页</button></nav></header>
+<div class="settings">
+  <label>区域<select id="region"><option value="cn">中国大陆 · 中文</option><option value="global">Global · English</option></select></label>
+  <label>客户端主题<select id="theme"><option value="light">Default 浅色</option><option value="dark">Default 深色</option><option value="cindy-light">Cindy 浅色</option><option value="cindy-dark">Cindy 深色</option></select></label>
+  <label>场景<select id="state"><option value="ready">正常</option><option value="anonymous">未登录 / 无署名</option><option value="profile-unavailable">署名获取失败</option><option value="loading">素材加载中</option><option value="retry">首次失败，重试成功</option><option value="failed">加载失败</option><option value="unavailable">插件已下架</option><option value="disabled">分享已停用</option><option value="tampered">链接参数被修改</option><option value="not-configured">分享服务未配置</option><option value="copy-failed">复制失败</option><option value="save-canceled">取消保存</option><option value="save-failed">保存失败</option></select></label>
+  <label>画布<select id="width"><option value="full">当前窗口</option><option value="1024">1024 px</option><option value="760">760 px</option><option value="390">390 px</option></select></label>
+  <span class="note" id="hint">点击详情页右上角的分享图标</span>
+</div>
+<div class="stage"><div class="frame" id="frame"><iframe title="实际分享界面" id="canvas" src="/client?view=market&region=cn&theme=light&state=ready"></iframe><div id="imageCanvas" hidden><img id="shareImage" alt="实际模板生成的插件分享图片"></div></div></div>
+<footer>本地演示数据 · 不连接业务服务或读取真实账号 · 安装与使用不执行 · 保存使用浏览器下载，原生系统对话框不在网页中复刻</footer>
+<script>
+  let view='market', revision=0;const el=id=>document.getElementById(id);
+  const fixture=fetch('/share/fixture.json').then(r=>r.json());
+  async function refresh(){const current=++revision;if((view==='market'||view==='installed')&&['disabled','tampered'].includes(el('state').value))el('state').value='ready';const allowed=view==='image'?['ready','anonymous','profile-unavailable']:view==='landing'?['ready','anonymous','profile-unavailable','unavailable','failed','disabled','tampered']:null;[...el('state').options].forEach(o=>o.disabled=(allowed!==null&&!allowed.includes(o.value))||((view==='market'||view==='installed')&&['disabled','tampered'].includes(o.value)));if(allowed&&!allowed.includes(el('state').value))el('state').value='ready';const region=el('region').value,state=el('state').value,theme=el('theme').value;el('frame').style.maxWidth=el('width').value==='full'?'none':el('width').value+'px';el('canvas').hidden=view==='image';el('imageCanvas').hidden=view!=='image';el('theme').disabled=view==='image'||view==='landing';
+    document.querySelectorAll('[data-view]').forEach(b=>b.setAttribute('aria-current',String(b.dataset.view===view)));
+    if(view==='image'||view==='landing'){
+      el('hint').textContent='正在读取分享记录…';
+      try {
+        const f=await fixture;const params=new URLSearchParams({region,lang:region==='cn'?'zh-CN':'en'});let url;
+        if(['unavailable','failed','disabled'].includes(state))url='http://127.0.0.1:4179/s/'+f.shares[region][state]+'?'+params;
+        else {
+          const signed=state!=='anonymous';const response=await fetch('/share/api/shares',{method:'POST',headers:{'Content-Type':'application/json',...(signed?{Authorization:'Bearer '+(state==='profile-unavailable'?'fixture-profile-unavailable':'fixture-'+region)}:{})},body:JSON.stringify({kind:'plugin',reference:f.ids.ready,includeAttribution:signed,region,lang:params.get('lang'),...(signed?{authRealm:region}:{})})});
+          if(!response.ok)throw Error('分享生成失败');url=(await response.json()).url;
+        }
+        if(current!==revision)return;
+        if(state==='tampered'){const changed=new URL(url);changed.search='source=&includeAttribution=false&pluginId=other&region=global&lang=en';url=changed.href;}
+        if(view==='image'){const image=new URL(url);image.pathname+='/preview.svg';el('shareImage').src=image.href;el('hint').textContent='实际输出为 2160 × 2160 PNG；此处按画布缩放';}
+        else{el('canvas').src=url;el('hint').textContent=state==='tampered'?'已修改地址参数；插件、署名和语言仍按服务器记录展示':'接收者页面 · 分享编号与署名由服务器绑定';}
+      }catch(error){if(current===revision)el('hint').textContent='原型分享服务暂不可用，请刷新重试。';}
+    }else{el('canvas').src='/client?'+new URLSearchParams({view,region,theme,state,account:state==='anonymous'?'anonymous':'signed'});el('hint').textContent='点击详情页右上角的分享图标';}
+  }
+  document.querySelectorAll('[data-view]').forEach(b=>b.addEventListener('click',()=>{view=b.dataset.view;void refresh()}));document.querySelectorAll('select').forEach(s=>s.addEventListener('change',()=>void refresh()));
+  window.addEventListener('message',event=>{if(event.origin==='http://127.0.0.1:4179'&&event.source===el('canvas').contentWindow&&event.data?.type==='cindy-share-preview-open')el('hint').textContent='实际会唤起电脑上的 Cindy；原型中已拦截，不执行安装。';});
+</script>
+</body></html>

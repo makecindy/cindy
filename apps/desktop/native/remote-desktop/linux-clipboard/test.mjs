@@ -55,6 +55,12 @@ int main(void) {
   assert(decode("Y!==",4,&bytes,&length)==-1);
   assert(decode("A",1,&bytes,&length)==-1);
   assert(decode("====",4,&bytes,&length)==-1);
+  size_t encoded=((IMAGE_BYTES+2)/3)*4;
+  char *large=malloc(encoded+1);assert(large);memset(large,'A',encoded);large[encoded]=0;
+  large[encoded-1]='=';large[encoded-2]='=';
+  assert(!decode(large,encoded,&bytes,&length) && length==IMAGE_BYTES);free(bytes);
+  large[encoded-2]='A';
+  assert(decode(large,encoded,&bytes,&length)==-1);free(bytes);free(large);
   assert(payload("{\\\"text\\\":3}")==-1);
   assert(payload("{}")==-1);
   assert(!payload("{\\\"text\\\":\\\"test\\\",\\\"html\\\":\\\"<b>test</b>\\\",\\\"png\\\":\\\"YQ==\\\"}"));

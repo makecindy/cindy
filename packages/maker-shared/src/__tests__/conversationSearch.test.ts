@@ -1,16 +1,24 @@
-import { describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import {
   conversationSearchResultKey,
   emptyConversationSearchResponse,
   filterResultsByRequestFilters,
   filterResultsByWorkingDirs,
   mergeConversationSearchFanout,
+  remoteConversationSearchRequest,
   remoteIndexedSearchIgnoredWorkingDirs,
   remoteResultsFromFanoutPages,
   stampRemoteSearchResponse,
+  type ConversationSearchRequest,
   type ConversationSearchResponse,
   type ConversationSearchResultItem,
 } from '../conversationSearch.js';
+
+const feature = vi.hoisted(() => ({ enabled: false }));
+vi.mock('../cindyMakeFeature.js', async (importOriginal) => ({
+  ...await importOriginal<typeof import('../cindyMakeFeature.js')>(),
+  get CINDY_MAKE_ENABLED() { return feature.enabled; },
+}));
 
 function result(
   id: string,
@@ -50,7 +58,70 @@ function response(results: ConversationSearchResultItem[]): ConversationSearchRe
   };
 }
 
+describe('remoteConversationSearchRequest', () => {
+  it('filters by explicit project membership while preserving the execution directory', () => {
+    const page = response([result('checkout', 1, { projectDir: '/project', workingDir: '/tmp/checkout' }), result('legacy', 2)]);
+    expect(filterResultsByWorkingDirs(page, ['/project']).results.map(item => item.session.id)).toEqual(['checkout']);
+    expect(filterResultsByWorkingDirs(page, ['/repo']).results.map(item => item.session.id)).toEqual(['legacy']);
+    expect(remoteIndexedSearchIgnoredWorkingDirs(response([page.results[0]!]), ['/project'])).toBe(false);
+    expect(page.results[0]?.session.workingDir).toBe('/tmp/checkout');
+  });
+  afterEach(() => { feature.enabled = false; });
+
+  it.each([undefined, 1, 3, 24, 50, 100])('uses the bounded remote candidate pool for limit %s', (limit) => {
+    const request = { query: 'needle', limit };
+    expect(remoteConversationSearchRequest(request)).toEqual({ query: 'needle', limit: 50 });
+    expect(request.limit).toBe(limit);
+  });
+
+  it('preserves origin filters and search options without mutating the caller', () => {
+    const request = Object.freeze<ConversationSearchRequest>({
+      query: 'needle',
+      limit: 3,
+      sortBy: 'activityDesc',
+      semanticMode: 'keyword',
+      includeArchived: true,
+      unnamedLabel: 'Untitled',
+      filters: { sessionIds: ['ordinary'], workingDirs: ['/repo'], agentKind: 'pi', status: 'archived', lastActivity: '7d' },
+    });
+    const remoteRequest = remoteConversationSearchRequest(request);
+    expect(remoteRequest).toEqual({ ...request, limit: 50 });
+    expect(remoteRequest.filters).toBe(request.filters);
+    expect(request.limit).toBe(3);
+  });
+
+  it('returns ordinary hits after an older host truncates the expanded request', () => {
+    const request = { query: 'needle', limit: 1 };
+    const candidates = [
+      result('make', 100, { source: 'cindy-make', deviceLinkDeviceId: 'dev-a' }),
+      result('merge', 99, { source: 'cindy-make-merge', deviceLinkDeviceId: 'dev-a' }),
+      result('ordinary', 2, { source: 'desktop', deviceLinkDeviceId: 'dev-a' }),
+      result('ordinary-next', 1, { source: 'desktop', deviceLinkDeviceId: 'dev-a' }),
+    ];
+    const remoteRequest = remoteConversationSearchRequest(request);
+    const page = response(candidates.slice(0, remoteRequest.limit));
+    expect(mergeConversationSearchFanout([page], request.limit).results.map((item) => item.session.id)).toEqual(['ordinary']);
+    expect(remoteResultsFromFanoutPages([page]).map((item) => item.session.id)).toEqual(['ordinary', 'ordinary-next']);
+  });
+
+  it('leaves the original request unchanged when Cindy Make is enabled', () => {
+    feature.enabled = true;
+    const request = { query: 'needle', limit: 3 };
+    expect(remoteConversationSearchRequest(request)).toBe(request);
+  });
+});
+
 describe('merge and stamp', () => {
+  it('excludes hidden Make sources before limiting indexed or reused remote hits', () => {
+    const page = response([
+      result('make', 100, { source: 'cindy-make', deviceLinkDeviceId: 'dev-a' }),
+      result('merge', 99, { source: 'cindy-make-merge', deviceLinkDeviceId: 'dev-a' }),
+      result('ordinary', 1, { source: 'desktop', deviceLinkDeviceId: 'dev-a' }),
+    ]);
+    expect(mergeConversationSearchFanout([page], 1).results.map(item => item.session.id)).toEqual(['ordinary']);
+    expect(remoteResultsFromFanoutPages([page]).map(item => item.session.id)).toEqual(['ordinary']);
+    expect(filterResultsByRequestFilters(page, {}).results.map(item => item.session.id)).toEqual(['ordinary']);
+  });
   it('keeps same-id hits from different devices and stamps origin', () => {
     const remote = stampRemoteSearchResponse(response([result('same', 10)]), {
       deviceId: 'dev-a',
@@ -102,6 +173,57 @@ describe('filterResultsByWorkingDirs', () => {
     );
     expect(page.results.map((item) => item.session.id)).toEqual(['keep']);
   });
+
+  // 回归价值：两个公开过滤入口必须保留同目录、排除异目录；现有 POSIX 用例未覆盖
+  // Windows 大小写变体被误排除的 bug。最小失败输入为仅盘符/UNC 大小写不同的目录（unit）。
+  it.each([
+    {
+      name: 'drive',
+      selected: 'c:\\Work\\Repo',
+      matching: 'C:/work/repo',
+      different: 'C:/Work/Other',
+    },
+    {
+      name: 'UNC',
+      selected: '\\\\Server\\Share\\Repo',
+      matching: '//server/share/repo',
+      different: '//server/share/other',
+    },
+    // #7644 (unit): remote search must keep worktrees when filtering by their base
+    // project; the earlier case-variant fixtures never varied a container name.
+    {
+      name: 'worktree drive',
+      selected: 'c:/Work/Repo',
+      matching: 'C:/work/repo/.CINDY-WORKTREES/topic',
+      different: 'C:/work/other/.CINDY-WORKTREES/topic',
+    },
+    {
+      name: 'worktree UNC',
+      selected: '//Server/Share/Repo',
+      matching: '//server/share/repo/.CLAUDE/Worktrees/topic',
+      different: '//server/share/other/.CLAUDE/Worktrees/topic',
+    },
+  ])('keeps Windows $name case variants but drops genuinely different directories', ({ selected, matching, different }) => {
+    const page = filterResultsByWorkingDirs(
+      response([
+        result('keep', 1, { workingDir: matching }),
+        result('drop', 1, { workingDir: different }),
+      ]),
+      [selected],
+    );
+    expect(page.results.map((item) => item.session.id)).toEqual(['keep']);
+  });
+
+  it('keeps POSIX directory matching case-sensitive', () => {
+    const page = filterResultsByWorkingDirs(
+      response([
+        result('keep', 1, { workingDir: '/Work/Repo' }),
+        result('drop', 1, { workingDir: '/work/repo' }),
+      ]),
+      ['/Work/Repo'],
+    );
+    expect(page.results.map((item) => item.session.id)).toEqual(['keep']);
+  });
 });
 
 describe('filterResultsByRequestFilters', () => {
@@ -145,7 +267,7 @@ describe('filterResultsByRequestFilters', () => {
         },
       },
     );
-    expect(page.results.map((item) => item.session.id)).toEqual(['keep']);
+    expect(page.results.map((item) => item.session.id)).toEqual(['keep', 'worker']);
   });
 
   it('keeps a remote hit when updatedAt is recent but userSendAt is old', () => {
@@ -182,5 +304,48 @@ describe('remoteIndexedSearchIgnoredWorkingDirs', () => {
         ['/repo-remote'],
       ),
     ).toBe(false);
+  });
+
+  it.each([
+    {
+      name: 'drive',
+      selected: 'c:\\Work\\Repo',
+      matching: 'C:/work/repo',
+      different: 'C:/Work/Other',
+    },
+    {
+      name: 'UNC',
+      selected: '\\\\Server\\Share\\Repo',
+      matching: '//server/share/repo',
+      different: '//server/share/other',
+    },
+  ])('uses Windows $name case-insensitive matching when detecting ignored filters', ({ selected, matching, different }) => {
+    expect(
+      remoteIndexedSearchIgnoredWorkingDirs(
+        response([result('keep', 1, { workingDir: matching })]),
+        [selected],
+      ),
+    ).toBe(false);
+    expect(
+      remoteIndexedSearchIgnoredWorkingDirs(
+        response([result('drop', 1, { workingDir: different })]),
+        [selected],
+      ),
+    ).toBe(true);
+  });
+
+  it('uses POSIX case-sensitive matching when detecting ignored filters', () => {
+    expect(
+      remoteIndexedSearchIgnoredWorkingDirs(
+        response([result('keep', 1, { workingDir: '/Work/Repo' })]),
+        ['/Work/Repo'],
+      ),
+    ).toBe(false);
+    expect(
+      remoteIndexedSearchIgnoredWorkingDirs(
+        response([result('drop', 1, { workingDir: '/work/repo' })]),
+        ['/Work/Repo'],
+      ),
+    ).toBe(true);
   });
 });

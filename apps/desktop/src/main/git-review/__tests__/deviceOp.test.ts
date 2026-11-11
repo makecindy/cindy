@@ -31,6 +31,7 @@ vi.mock('../../turn-change-set/store.js', () => ({
 }));
 
 vi.mock('electron', () => ({
+  app: { once: vi.fn() },
   ipcMain: { handle: vi.fn() },
   shell: { openPath: vi.fn() },
 }));

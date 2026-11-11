@@ -11,9 +11,18 @@ import {
   effectiveInstallOrigin,
   type GhostInstallReceipt,
   GhostInstallReceiptStore,
+  isValidGhostSourceStateArchiveId,
 } from '../ghostInstallReceipt';
 
 describe('GhostInstallReceiptStore cleanup', () => {
+  it('accepts only a canonical random archive namespace destination', () => {
+    expect(isValidGhostSourceStateArchiveId('_ns__cindy-archive-00000000-0000-4000-8000-000000000002__hello')).toBe(true);
+    for (const value of ['hello', '../hello', '_ns__acme__hello',
+      'cindy-source-00000000-0000-4000-8000-000000000002',
+      '_ns__cindy-archive-not-random__hello']) {
+      expect(isValidGhostSourceStateArchiveId(value)).toBe(false);
+    }
+  });
   let workDir: string;
   let stateRoot: string;
   let store: GhostInstallReceiptStore;
@@ -32,6 +41,76 @@ describe('GhostInstallReceiptStore cleanup', () => {
     vi.restoreAllMocks();
     await fs.promises.rm(workDir, { recursive: true, force: true });
   });
+
+  it('lists legacy, root and organization journals together', async () => {
+    const ids = ['hello', '_ns/_root/hello', '_ns/acme/hello'];
+    for (const id of ids) await store.writePendingMutation(id, { kind: 'uninstall' });
+    expect(store.listPendingMutationIdsSync()).toEqual({ state: 'ok', ids: expect.arrayContaining(ids), blocked: false });
+  });
+
+  it.each(['_ns/_root', '_ns/acme'])('blocks cleanup for malformed journals under %s', async (parent) => {
+    await store.writePendingMutation(parent + '/hello', { kind: 'uninstall' });
+    await fs.promises.writeFile(path.join(stateRoot, parent, '.pending-BAD!.json'), '{}');
+    expect(store.listPendingMutationIdsSync()).toEqual({
+      state: 'ok', ids: [parent + '/hello'], blocked: true,
+    });
+  });
+
+  it.each(['_ns/_root', '_ns/acme'])('does not ignore journals when %s disappears during scanning', async (parent) => {
+    await store.writePendingMutation(parent + '/hello', { kind: 'uninstall' });
+    const readdir = fs.readdirSync;
+    vi.spyOn(fs, 'readdirSync').mockImplementation((...args) => {
+      if (String(args[0]) === path.join(stateRoot, parent)) {
+        throw Object.assign(new Error('journal parent disappeared'), { code: 'ENOENT' });
+      }
+      return readdir(...args);
+    });
+    expect(store.listPendingMutationIdsSync().state).toBe('unreadable');
+  });
+
+  // Receipt schema stays stable: an unknown/invalid optional capability is
+  // ignored, not a reason to revoke the old plugin. Existing cases only covered
+  // task/target grants. Minimal input is a malformed UI fact; tier: unit.
+  it.each([true, 'invalid', false, undefined])('tolerates optional UI approval fact %j', async fact => {
+    const receipt = createSetupReceipt();
+    await store.write(receipt);
+    const file = path.join(stateRoot, 'hello.json');
+    const raw = JSON.parse(await fs.promises.readFile(file, 'utf8'));
+    raw.uiCapabilityApproved = fact;
+    await fs.promises.writeFile(file, JSON.stringify(raw));
+    const result = store.readForRecovery('hello');
+    expect(result.state).toBe('approved');
+    if (result.state === 'approved') expect(result.receipt.uiCapabilityApproved).toBe(fact === true ? true : undefined);
+  });
+
+  // Unit: main removed Harness grants. Existing optional-UI tests never load a
+  // receipt written by that older Host. A legacy unknown Harness fact must not
+  // revoke the plugin or grant UI; read/write must retain identity and setup.
+  it.each([undefined, ['harness:read:tasks'], { obsolete: true }])(
+    'round-trips legacy receipts without reviving removed grants: %j', async legacyGrant => {
+      const original = createSetupReceipt();
+      original.manifest.schemaVersion = 3;
+      original.manifest.minCindyVersion = '0.1.61';
+      await store.write(original);
+      const file = path.join(stateRoot, 'hello.json');
+      const raw = JSON.parse(await fs.promises.readFile(file, 'utf8'));
+      raw.harnessCapabilityApproved = legacyGrant;
+      if (legacyGrant !== undefined) raw.manifest.harness = { read: ['tasks'] };
+      await fs.promises.writeFile(file, JSON.stringify(raw));
+      const loaded = store.readForRecovery('hello');
+      expect(loaded.state).toBe('approved');
+      if (loaded.state !== 'approved') throw new Error('legacy receipt rejected');
+      expect(loaded.receipt).toMatchObject({ revision: original.revision, enabled: true,
+        manifest: original.manifest, trust: original.trust });
+      expect(loaded.receipt.uiCapabilityApproved).toBeUndefined();
+      expect(loaded.receipt).not.toHaveProperty('harnessCapabilityApproved');
+      await store.write(loaded.receipt);
+      const reread = await store.readAsync('hello');
+      expect(reread).toMatchObject({ state: 'approved', receipt: loaded.receipt });
+      const persisted = JSON.parse(await fs.promises.readFile(file, 'utf8'));
+      expect(persisted).not.toHaveProperty('harnessCapabilityApproved');
+      expect(persisted).not.toHaveProperty('uiCapabilityApproved');
+    });
 
   function createSetupReceipt(): GhostInstallReceipt {
     const parsed = validateGhostManifest({
@@ -83,6 +162,76 @@ describe('GhostInstallReceiptStore cleanup', () => {
       skillContentSha256: {},
     });
   }
+
+  // Async discovery adds an await window: preserve the sync reader's no-follow
+  // parent gate. A linked namespace must never become an approved installation.
+  // Unit; one valid receipt behind a directory link (junction on Windows).
+  it('async reading rejects a linked namespace parent', async () => {
+    const outside = path.join(workDir, 'outside');
+    await fs.promises.mkdir(outside);
+    await fs.promises.writeFile(path.join(outside, 'hello.json'), JSON.stringify(createSetupReceipt()));
+    await fs.promises.mkdir(path.join(stateRoot, '_ns'));
+    await fs.promises.symlink(outside, path.join(stateRoot, '_ns', 'acme'), process.platform === 'win32' ? 'junction' : 'dir');
+    expect(await store.readAsync('_ns/acme/hello')).toMatchObject({ state: 'invalid' });
+  });
+
+  // Unit regression: repeated store.read() must reuse only icon format validation.
+  // Existing receipt tests do not cover unchanged revision/path with replaced icon
+  // bytes. A same-length invalid replacement must fail, and enabled stays fresh.
+  it('reuses unchanged icon validation while checking changed bytes and approval state', () => {
+    const receipt = createSetupReceipt();
+    const icon = 'data:image/png;base64,' + Buffer.from(workDir).toString('base64');
+    const receiptPath = path.join(stateRoot, 'hello.json');
+    const persist = (iconDataUrl: string, enabled = true) => {
+      fs.writeFileSync(receiptPath, JSON.stringify({ ...receipt, iconDataUrl, enabled }));
+    };
+    const regexTest = vi.spyOn(RegExp.prototype, 'test');
+    const iconChecks = (value: string) => regexTest.mock.calls.filter(([input]) => input === value).length;
+
+    persist(icon);
+    expect(store.read('hello')).toMatchObject({ state: 'approved', receipt: { iconDataUrl: icon } });
+    expect(store.read('hello')).toMatchObject({ state: 'approved', receipt: { iconDataUrl: icon } });
+    expect(iconChecks(icon)).toBe(1);
+
+    const originalStat = fs.statSync(receiptPath);
+    const invalidIcon = icon.slice(0, -1) + '!';
+    persist(invalidIcon);
+    fs.utimesSync(receiptPath, originalStat.atime, originalStat.mtime);
+    expect(store.read('hello')).toMatchObject({ state: 'invalid' });
+    expect(iconChecks(invalidIcon)).toBe(1);
+
+    const replacement = icon.replace('image/png', 'image/gif');
+    persist(replacement);
+    expect(store.read('hello')).toMatchObject({ state: 'approved', receipt: { iconDataUrl: replacement } });
+    persist(replacement, false);
+    expect(store.read('hello')).toMatchObject({ state: 'approved', receipt: { enabled: false } });
+    expect(iconChecks(replacement)).toBe(1);
+
+    fs.writeFileSync(receiptPath, JSON.stringify({ ...receipt, iconDataUrl: replacement, trust: null }));
+    expect(store.read('hello')).toMatchObject({ state: 'invalid' });
+  });
+
+  // Unit resource regression: read() must evict validated strings at both cache
+  // budgets; eviction only causes revalidation, never changes approval results.
+  it.each([
+    { budget: 'entry count', count: 70, payloadSize: 32 },
+    { budget: 'retained bytes', count: 7, payloadSize: 700 * 1024 },
+  ])('revalidates evicted icons after exceeding the $budget budget', ({ count, payloadSize }) => {
+    const receipt = createSetupReceipt();
+    const receiptPath = path.join(stateRoot, 'hello.json');
+    const prefix = 'data:image/png;base64,' + Buffer.from(workDir).toString('base64').replace(/=+$/, '');
+    const firstIcon = prefix + 'A'.repeat(payloadSize) + '0';
+    const regexTest = vi.spyOn(RegExp.prototype, 'test');
+    for (let index = 0; index < count; index++) {
+      fs.writeFileSync(receiptPath, JSON.stringify({
+        ...receipt, iconDataUrl: prefix + 'A'.repeat(payloadSize) + index,
+      }));
+      expect(store.read('hello').state).toBe('approved');
+    }
+    fs.writeFileSync(receiptPath, JSON.stringify({ ...receipt, iconDataUrl: firstIcon }));
+    expect(store.read('hello')).toMatchObject({ state: 'approved', receipt: { iconDataUrl: firstIcon } });
+    expect(regexTest.mock.calls.filter(([input]) => input === firstIcon)).toHaveLength(2);
+  });
 
   it('removes a regular receipt and managed snapshot tree', async () => {
     const receipt = path.join(stateRoot, 'hello.json');
@@ -187,6 +336,93 @@ describe('GhostInstallReceiptStore cleanup', () => {
     await store.write(loaded.receipt);
     const saved = JSON.parse(await fs.promises.readFile(file, 'utf8'));
     expect(saved).toEqual(raw);
+  });
+
+  it('round trips independent target approval without inferring it from old tasks grants', async () => {
+    const receipt = createSetupReceipt();
+    receipt.manifest.agent = { tasks: true, targets: true };
+    receipt.taskCapabilityApproved = true;
+    await store.write(receipt);
+    const old = store.read('hello');
+    if (old.state !== 'approved') throw new Error('fixture not approved');
+    expect(old.receipt.targetCapabilityApproved).toBeUndefined();
+    await store.write({ ...old.receipt, targetCapabilityApproved: true });
+    const approved = store.read('hello');
+    expect(approved).toMatchObject({ state: 'approved', receipt: { taskCapabilityApproved: true, targetCapabilityApproved: true, revision: receipt.revision } });
+  });
+
+  // Rule: approved control points persist across reads, keep only names this manifest still declares,
+  // Contract: old receipts stay approved without auto grants; only still-declared grants persist.
+  it('round trips explicit auto tool grants without granting predeclared tools', async () => {
+    const receipt = createSetupReceipt();
+    receipt.manifest.tools = [{ name: 'read', description: 'Read', approval: 'auto' },
+      { name: 'write', description: 'Write', approval: 'each-call' }];
+    await store.write(receipt);
+    const old = store.read('hello');
+    if (old.state !== 'approved') throw new Error('fixture not approved');
+    expect(old.receipt.approvedAutoTools).toBeUndefined();
+    await store.write({ ...old.receipt, approvedAutoTools: ['read', 'read', 'write', 'unknown'] });
+    expect(store.read('hello')).toMatchObject({ state: 'approved', receipt: {
+      approvedAutoTools: ['read'], revision: receipt.revision,
+    } });
+  });
+
+  // Rule: approved control points persist across reads, keep only names this manifest still declares,
+  // and an older receipt without the field stays approved with no control point granted.
+  // Unit: real receipt write/read dropped a static capability because it is
+  // declared outside subscribe.hooks. Installation must preserve that consent.
+  it('round trips approved static prompt fragments through the installation receipt', async () => {
+    const base = createSetupReceipt();
+    const fragments = [{ id: 'style', text: 'Static task instructions', order: 10, scope: 'selected-task' as const }];
+    const receipt = createGhostInstallReceipt({ ...base,
+      manifest: { ...base.manifest, schemaVersion: 3, minCindyVersion: '0.0.0', systemPrompt: fragments },
+      approvedControlPoints: ['system-prompt'],
+    });
+    await store.write(receipt);
+    expect(await store.readAsync('hello')).toMatchObject({ state: 'approved', receipt: {
+      manifest: { systemPrompt: fragments }, approvedControlPoints: ['system-prompt'],
+    } });
+  });
+
+  it('round trips approved control points and keeps older receipts approved without them', async () => {
+    const receipt = createSetupReceipt();
+    receipt.manifest.subscribe = { hooks: ['will-routine-run', 'will-later-point'] as never };
+    await store.write(receipt);
+    const old = store.read('hello');
+    if (old.state !== 'approved') throw new Error('fixture not approved');
+    expect(old.receipt.approvedControlPoints).toBeUndefined();
+    await store.write({ ...old.receipt, approvedControlPoints: ['will-routine-run', 'will-later-point', 'undeclared'] });
+    const approved = store.read('hello');
+    expect(approved).toMatchObject({
+      state: 'approved',
+      receipt: { approvedControlPoints: ['will-later-point', 'will-routine-run'], revision: receipt.revision },
+    });
+  });
+
+  it('round trips independent observe approval without inferring it from tasks or targets grants', async () => {
+    const receipt = createSetupReceipt();
+    receipt.manifest.agent = { tasks: true, targets: true, observe: true };
+    receipt.taskCapabilityApproved = true;
+    receipt.targetCapabilityApproved = true;
+    await store.write(receipt);
+    const old = store.read('hello');
+    if (old.state !== 'approved') throw new Error('fixture not approved');
+    expect(old.receipt.observeCapabilityApproved).toBeUndefined();
+    await store.write({ ...old.receipt, observeCapabilityApproved: true });
+    expect(store.read('hello')).toMatchObject({ state: 'approved', receipt: { observeCapabilityApproved: true, revision: receipt.revision } });
+  });
+
+  it('round trips companions approval without inferring it from other grants', async () => {
+    const receipt = createSetupReceipt();
+    receipt.manifest.agent = { tasks: true, observe: true, companions: true };
+    receipt.taskCapabilityApproved = true;
+    receipt.observeCapabilityApproved = true;
+    await store.write(receipt);
+    const old = store.read('hello');
+    if (old.state !== 'approved') throw new Error('fixture not approved');
+    expect(old.receipt).not.toHaveProperty('companionsCapabilityApproved');
+    await store.write({ ...old.receipt, companionsCapabilityApproved: true });
+    expect(store.read('hello')).toMatchObject({ state: 'approved', receipt: { companionsCapabilityApproved: true, revision: receipt.revision } });
   });
 
   it('writes setup in the author format accepted by the v0.1.48 receipt reader', async () => {

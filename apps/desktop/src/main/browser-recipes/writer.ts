@@ -2,9 +2,8 @@
  * L2 user-recipe writer (host side) — the self-grow persistence path.
  *
  * Writes an agent/user-authored recipe (and optional site guide) into
- * `userData/browser-recipes/<site>/`. Same site → overwrite (a user "optimizing"
- * a site iterates the same recipe; we must NOT auto-rename or the by-id override
- * would split). `resetSite` deletes a site's L2 files so it falls back to the
+ * `userData/browser-recipes/<site>/recipes/`. Same id → overwrite; different
+ * flows on the same site coexist. `resetSite` deletes a site's L2 files so it falls back to the
  * bundled L1 (the "restore default" semantics, like override-settings reset).
  *
  * The L2 `version` is content-derived (see loader.ts), so writing a file is
@@ -12,6 +11,7 @@
  * Modeled on `apps/desktop/src/main/local-themes/writer.ts`.
  */
 import fs from 'node:fs/promises';
+import crypto from 'node:crypto';
 import path from 'node:path';
 
 import { shell } from 'electron';
@@ -19,6 +19,7 @@ import type { Recipe, SiteGuide } from '@cindy/mcps';
 
 import { createLogger } from '../logger.js';
 import { userRecipesDir } from './loader.js';
+import { atomicWriteFileSync } from '../utils/atomicWriteFile.js';
 
 const log = createLogger('browser-recipes');
 
@@ -51,13 +52,14 @@ export async function writeUserRecipe(
   const siteDir = path.join(dir, seg);
   try {
     await fs.mkdir(siteDir, { recursive: true });
-    const recipePath = path.join(siteDir, 'recipe.json');
-    await fs.writeFile(recipePath, `${JSON.stringify(input.recipe, null, 2)}\n`, 'utf8');
+    // Hash arbitrary ids to a bounded, path-safe name on every platform.
+    const name = crypto.createHash('sha256').update(input.recipe.id).digest('hex');
+    const recipePath = path.join(siteDir, 'recipes', `${name}.json`);
+    atomicWriteFileSync(recipePath, `${JSON.stringify(input.recipe, null, 2)}\n`);
     if (input.siteGuide) {
-      await fs.writeFile(
+      atomicWriteFileSync(
         path.join(siteDir, 'siteguide.json'),
         `${JSON.stringify(input.siteGuide, null, 2)}\n`,
-        'utf8',
       );
     }
     return { ok: true, path: recipePath };

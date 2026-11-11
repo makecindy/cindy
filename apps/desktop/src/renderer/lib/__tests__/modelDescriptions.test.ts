@@ -42,6 +42,10 @@ describe('local model descriptions', () => {
     expect(localizedModelDescription({ id: 'chatgpt/gpt-5.6-sol' }, t))
       .toBe(localizedModelDescription({ id: 'codex/gpt-5.6-sol' }, t));
     expect(localizedModelDescription({ id: 'gpt-5.3-codex-spark' }, t)).toBe(cn.modelDescriptions.quickCoding);
+    for (const id of ['muse-wonder-1.0', 'meta/muse-wonder-1.0', 'xd/meta-muse-wonder-1.0']) {
+      expect(localizedModelDescription({ id }, t), id).toBe(cn.modelDescriptions.complexWork);
+    }
+    expect(localizedModelDescription({ id: 'meta/muse-spark-1.3' }, t)).toBe(cn.modelDescriptions.everydayWork);
   });
 
   it('keeps the long-context variant warning instead of replacing it with a general blurb', () => {
@@ -56,6 +60,8 @@ describe('local model descriptions', () => {
     expect(localizedModelDescription({ id: 'gpt-new', mode: 'image_generation' }, t)).toBe(cn.modelDescriptions.image);
     expect(localizedModelDescription({ id: 'gpt-new', mode: 'audio_transcription' }, t)).toBe(cn.modelDescriptions.transcription);
     expect(localizedModelDescription({ id: 'gpt-new', mode: 'future_unknown_mode' }, t)).toBeUndefined();
+    // A new non-chat category must not fall through to a vendor's coding description.
+    expect(localizedModelDescription({ id: 'gpt-new', mode: 'evaluation' }, t)).toBeUndefined();
     expect(localizedModelDescription({ id: 'new-company/new-video', mode: 'video_generation' }, t)).toBe(cn.modelDescriptions.video);
   });
 

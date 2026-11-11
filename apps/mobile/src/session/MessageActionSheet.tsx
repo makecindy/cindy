@@ -4,6 +4,7 @@ import { useTranslation } from 'react-i18next';
 import {
   Link2,
   MessageSquarePlus,
+  Pencil,
   Trash2,
   Undo2,
   type LucideIcon,
@@ -16,8 +17,10 @@ import type { MobileMessageMenuActionId, MobileMessageMenuItem } from '@/session
 import { fontWeight, iconSize, iconStroke, lineHeight, radius, spacing, typeScale, useTheme, useThemedStyles, type ThemeColors } from '@/theme';
 
 const ACTION_ICONS: Record<MobileMessageMenuActionId, LucideIcon> = {
+  'side-chat': MessageSquarePlus,
   'add-to-chat': MessageSquarePlus,
   'copy-link': Link2,
+  edit: Pencil,
   rewind: Undo2,
   delete: Trash2,
 };

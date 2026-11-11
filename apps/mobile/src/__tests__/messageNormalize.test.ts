@@ -27,8 +27,75 @@ function message(patch: Partial<RemoteMessage> & Pick<RemoteMessage, 'id' | 'rol
 }
 
 describe('normalizeRemoteMessages', () => {
+  it('localizes reasoning usage in persisted output-limit messages', () => {
+    const items = normalizeRemoteMessages([message({ id: 'limited', role: 'error', content: JSON.stringify({
+      message: 'limit', reason: 'output-limit', outputLimit: { outputTokens: 131072, reasoningTokens: 131064 },
+    }) })]);
+    expect(items[0]).toMatchObject({ kind: 'system', label: 'error' });
+    expect((items[0] as { body: string }).body).toContain('131064');
+    expect((items[0] as { body: string }).body).toContain(i18n.t('session.tail.outputLimitReasoning'));
+  });
+
+  it('renders a host model-change record as one separator, without an empty reply', () => {
+    const output = normalizeRemoteMessages([message({
+      id: 'model-boundary', role: 'assistant', content: '',
+      agentMeta: { modelChange: { fromModel: 'owner-model', toModel: 'automation-model', modelOnly: true } },
+    })]);
+    expect(output).toHaveLength(1);
+    expect(output[0]).toMatchObject({
+      kind: 'system', systemCardType: 'agent-switch',
+      systemCardData: { fromModel: 'owner-model', toModel: 'automation-model', modelOnly: true },
+    });
+  });
+  // #6351: historical failure metadata must survive remote normalization even
+  // when usage accounting is later attached to the same failed text row.
+  it('keeps failed sampling prose readable without inferring a completed reply from its cost', () => {
+    const output = normalizeRemoteMessages([
+      message({ id: 'failed', role: 'assistant', content: 'Opening from a failed attempt',
+        agentMeta: { failedSamplingAttempt: { threadId: 't', turnId: 'turn', attempt: 1, itemId: 'failed' },
+          turnCompleted: false, turnCostUsd: 0.1 } }),
+      message({ id: 'success', role: 'assistant', content: 'Successful reply', agentMeta: { turnCompleted: true } }),
+    ]);
+    expect(output[0]).toMatchObject({ body: 'Opening from a failed attempt', failedSamplingAttempt: true });
+    expect(output[0].turnCompleted).not.toBe(true);
+    expect(output[1]).toMatchObject({ body: 'Successful reply', turnCompleted: true });
+    expect(output[1].failedSamplingAttempt).toBeUndefined();
+  });
   beforeAll(async () => {
     await i18n.changeLanguage('zh-CN');
+  });
+
+  it('recognizes host-marked MCP App cards and leaves ordinary assistant content unchanged', () => {
+    const content = { mcpApp: { version: 1, serverId: 'example', serverRevision: 'revision', resourceUri: 'ui://example/app', tool: { name: 'draft', title: '申请表', inputSchema: { type: 'object' } }, arguments: {},
+      result: { content: [{ type: 'text', text: 'Saved form result' }], _meta: { private: 'view-only' } } } };
+    const output = normalizeRemoteMessages([
+      message({ id: 'app', role: 'assistant', content, agentMeta: { mcpApp: true } }),
+      message({ id: 'plain', role: 'assistant', content: '工具返回的文本' }),
+    ]);
+    expect(output[0]).toMatchObject({ systemCardType: 'mcp-app', systemCardData: { title: '申请表', fallbackText: 'Saved form result' } });
+    expect(output[1]).toMatchObject({ body: '工具返回的文本' });
+  });
+
+  it("renders public guest MCP App summaries, including pending cards with no text", () => {
+    const rows = ["", "Saved result"].map((text, index) =>
+      message({
+        id: `guest-app-${index}`,
+        role: "assistant",
+        agentMeta: { mcpApp: true },
+        content: { mcpAppHistory: { version: 1, title: "Draft form", text } },
+      }),
+    );
+    expect(
+      normalizeRemoteMessages(rows).map((row) => [
+        row.systemCardType,
+        row.systemCardData,
+      ]),
+    ).toEqual(
+      ["", "Saved result"].map((fallbackText) => [
+        "mcp-app",
+        { title: "Draft form", fallbackText },
+      ]),
+    );
   });
 
   it('renders a projected large tool input from its bounded summary and keeps its result', () => {
@@ -844,6 +911,38 @@ describe('normalizeRemoteMessages', () => {
     expect(items).toEqual([]);
   });
 
+  it('keeps distinct answers in history when question titles are identical', () => {
+    const items = normalizeRemoteMessages([message({ id: 'answered-ids', role: 'ask_user', content: {
+      status: 'answered', questions: [{ id: 'first', question: 'Choose?' }, { id: 'second', question: 'Choose?' }],
+      answers: { first: 'A', second: 'B' },
+    } })]);
+    expect(items[0]).toMatchObject({ kind: 'ask_user', body: 'Q: Choose?\nA: A\n\nQ: Choose?\nA: B' });
+  });
+
+  // Pending history becomes unanswered only after the host has synchronized its live queue.
+  it('keeps orphaned questions readable without duplicating live cards', () => {
+    const row = message({ id: 'orphan', role: 'ask_user', content: {
+      requestId: 'question-id', status: 'pending', questions: [{ question: 'Install this version?' }],
+    } });
+    expect(normalizeRemoteMessages([row])).toEqual([]);
+    expect(normalizeRemoteMessages([row], { pendingQuestionIds: new Set(['question-id']) })).toEqual([]);
+    const expired = normalizeRemoteMessages([row], { pendingQuestionIds: new Set() });
+    expect(expired).toHaveLength(1);
+    expect(expired[0].body).toBe(`Q: Install this version?\n${i18n.t('interaction.panel.questionUnanswered')}`);
+    const cancelled = { ...row, content: { ...row.content as object, status: 'cancelled' } };
+    expect(normalizeRemoteMessages([cancelled])[0].body).toBe(expired[0].body);
+  });
+
+  it('keeps withdrawn history with its reason without inventing an answer', () => {
+    const items = normalizeRemoteMessages([message({ id: 'withdrawn', role: 'ask_user', content: {
+      status: 'cancelled', questions: [{ question: 'Logged in?' }], withdrawalReason: '已从日志确认', answers: {},
+    } })]);
+    expect(items).toHaveLength(1);
+    expect(items[0].body).toContain('Logged in?');
+    expect(items[0].body).toContain('已从日志确认');
+    expect(items[0].body).not.toContain('A:');
+  });
+
   it('renders only answered ask_user history as question and answer pairs', () => {
     const items = normalizeRemoteMessages([
       message({
@@ -1065,6 +1164,18 @@ describe('normalizeRemoteMessages', () => {
     expect(items[0]).toMatchObject({ kind: 'system', label: 'error', body: i18n.t('session.tail.outputLimit') });
   });
 
+  // Legacy hosts persisted the overflow reason but lost the encrypted-content
+  // code in additionalDetails. The actual history normalizer must recover copy.
+  it('localizes a legacy compact error whose details were discarded', () => {
+    const [item] = normalizeRemoteMessages([message({
+      id: 'compact', role: 'error',
+      content: JSON.stringify({ message: 'Error running remote compact task', reason: 'context-overflow' }),
+    })]);
+    expect(item).toMatchObject({
+      kind: 'system', label: 'error', body: i18n.t('session.tail.remoteCompactEncryptedContent'),
+    });
+  });
+
   it('localizes persisted tool-loop errors from reason and bounded details', () => {
     const items = normalizeRemoteMessages([
       message({
@@ -1198,7 +1309,7 @@ describe('normalizeRemoteMessages', () => {
         agentMeta: {
           sourceDevice: { deviceId: 'phone-1', name: 'Dash 的\niPhone', platform: 'mobile' },
           sourcePlugin: { pluginId: 'plugin-1', name: '日报' },
-          sharedTaskAuthor: { displayName: '访客甲', memberId: 'm1' },
+          sharedTaskAuthor: { displayName: '访客甲', memberId: 'm1', accountId: 'acct-guest' },
         },
       }),
       message({
@@ -1220,6 +1331,8 @@ describe('normalizeRemoteMessages', () => {
         ['unknown-platform', undefined, undefined, undefined],
         ['assistant-ignored', undefined, undefined, undefined],
       ]);
+    // 作者账号只用于判断「是不是我的消息」(气泡配色),不作权限依据。
+    expect(items.map((item) => item.sharedAuthorAccountId)).toEqual(['acct-guest', undefined, undefined]);
   });
 
   it('reads the sending session of tool-sent and Orca messages without mixing it into automation', () => {
@@ -1281,7 +1394,9 @@ describe('normalizeRemoteMessages', () => {
     ]);
   });
 
-  it.each(['telegram', 'slack', 'x', 'feishu', 'lark', 'discord', 'wechat', 'wecom', 'dingtalk'])(
+  // #9266 unit regression: imSource.im='imessage' used to lose its card/align.
+  // Extend the real normalize entry's existing long-body/attachment matrix.
+  it.each(['telegram', 'slack', 'x', 'feishu', 'lark', 'discord', 'wechat', 'wecom', 'dingtalk', 'imessage'])(
     'renders local %s IM source as a Cindy card while keeping ordinary user actions and content',
     (im) => {
       const text = 'a'.repeat(20_100);
@@ -1313,7 +1428,7 @@ describe('normalizeRemoteMessages', () => {
         role: 'user',
         content: 'clean text',
         agentMeta: {
-          imSource: { im: 'feishu', userText: 'clean text', contentFormat: 'user-text' },
+          imSource: { im: 'imessage', userText: 'clean text', contentFormat: 'user-text' },
           hookSource: { im: 'slack', userText: 'legacy' },
         },
       }),
@@ -1324,7 +1439,7 @@ describe('normalizeRemoteMessages', () => {
         agentMeta: { imSource: { im: 'myspace', userText: 'spoofed', contentFormat: 'user-text' } },
       }),
     ]);
-    expect(both.hookSource).toMatchObject({ im: 'feishu', userTextContent: true });
+    expect(both.hookSource).toMatchObject({ im: 'imessage', userTextContent: true });
     expect(both.body).toBe('clean text');
     expect(unknown.hookSource).toBeUndefined();
     expect(unknown).toMatchObject({ body: 'plain', align: 'user' });
@@ -1469,6 +1584,19 @@ describe('normalizeRemoteMessages', () => {
       align: 'agent',
     });
   });
+
+  // Unit / PR #6611: quota recovery before the first dispatch must keep the
+  // original bubble and add the same activity as an active-turn continuation.
+  it('keeps the original input alongside a quota-reset activity after reload', () => {
+    const info = { reason: 'usage-limit-reset', attempt: 1, maxAttempts: 3, sessionTotal: 0 };
+    const items = normalizeRemoteMessages([
+      message({ id: 'original', role: 'user', content: 'original task', agentMeta: { autoResumeInfo: info } }),
+    ]);
+    expect(items).toHaveLength(2);
+    expect(items[0]).toMatchObject({ key: 'original', body: 'original task', label: 'user' });
+    expect(items[1]).toMatchObject({ key: 'original:usage-limit-resume', kind: 'system',
+      body: '', systemCardType: 'auto-resume', systemCardData: info });
+  });
 });
 
 describe('context rebuild boundaries', () => {
@@ -1605,6 +1733,21 @@ it.each(['steer', 'new', 'completion'])('pairs companion introduction across ste
   expect(ids.indexOf('task') > ids.indexOf('intro')).toBe(kind === 'steer');
 });
 
+// Bug: answering a Codex question added a bubble holding the reply markup sent to the model.
+// The question card already shows the answer, so its row stays out of the conversation;
+// a reply saved in the model format (older rows, supplements) reads as question and answer.
+it('keeps an answer shown on its question card out of the conversation', () => {
+  const modelCopy = '<send_user_message_question_reply>\n[{"questionItemId":"q1","question":"Install?","answer":"Yes"}]\n</send_user_message_question_reply>';
+  const rows = [
+    message({ id: 'answered', clientId: 'question-reply:answered:q1:digest', role: 'user', content: '> Install?\n\nYes' }),
+    message({ id: 'earlier', clientId: 'question-reply:q1:digest', role: 'user', content: modelCopy }),
+  ];
+  const normalized = normalizeRemoteMessages(JSON.parse(JSON.stringify(rows)));
+  expect(normalized[0]).toMatchObject({ isSyntheticTrigger: true, body: '' });
+  expect(normalized[1].body).toBe('> Install?\n\nYes');
+  expect(normalized[1].isSyntheticTrigger).toBeUndefined();
+});
+
 it('keeps durable coordination hidden on phone history without hiding user-facing inputs or results', () => {
   const rows = [
     message({ id: 'coordination', role: 'user', content: '[UI_ACTION_TRIGGER]File ownership agreement', agentMeta: { origin: { kind: 'session', senderSessionId: 'child' } } }),
@@ -1617,4 +1760,21 @@ it('keeps durable coordination hidden on phone history without hiding user-facin
   expect(JSON.stringify(rendered)).not.toContain('File ownership agreement');
   expect(JSON.stringify(rendered)).toContain('Requested status');
   expect(JSON.stringify(rendered)).toContain('Final result');
+});
+
+
+// Unit regression: historical machine inputs used to expose JSON escapes in bubbles/copy.
+// Same bytes from a human must remain untouched; source content still drives replay.
+it('projects forwarded machine history without rewriting human text or persisted bytes', () => {
+  const content = '[来源] 用户原话由宿主从已接收的输入原样保留。\n用户原话："只检查"\nagent补充："第一段\\n\\n保留 `\\\\n`"';
+  const rows = normalizeRemoteMessages([
+    message({ id: 'forwarded', role: 'user', content, agentMeta: { origin: { kind: 'session', senderSessionId: 'sender' } } }),
+    message({ id: 'human', role: 'user', content }),
+  ]);
+  expect(rows[0].body).toContain('第一段\n\n保留 `\\n`');
+  expect(rows[0].source.content).toBe(content);
+  expect(rows[0].draftBody).toBe(content);
+  expect(composerDocumentFromSerializedMessage(rows[0].draftBody!).nodes).toEqual([{ type: 'text', text: content }]);
+  expect(rows[1].body).toBe(content);
+  expect(rows[1].draftBody).toBeUndefined();
 });

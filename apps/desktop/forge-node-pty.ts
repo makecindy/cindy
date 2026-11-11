@@ -6,6 +6,7 @@ export function preparePackagedNodePty(buildPath: string, platform: string, arch
   const packageDir = path.join(buildPath, 'node_modules', 'node-pty');
   // The pinned npm package ships macOS/Windows prebuilds; Linux still builds from source.
   if (platform !== 'win32' && platform !== 'darwin') {
+    pruneOtherPrebuilds(packageDir);
     return {
       rebuild: true,
       nativePath: path.join(packageDir, 'build', 'Release', 'pty.node'),
@@ -40,6 +41,8 @@ export function preparePackagedNodePty(buildPath: string, platform: string, arch
     );
   }
 
+  pruneOtherPrebuilds(packageDir, `${platform}-${arch}`);
+
   // node-pty loads build/Release and build/Debug before prebuilds. Remove copied
   // local bindings so a stale Node ABI or another architecture cannot shadow the target.
   for (const variant of ['Release', 'Debug']) {
@@ -52,4 +55,15 @@ export function preparePackagedNodePty(buildPath: string, platform: string, arch
     fs.chmodSync(path.join(prebuildDir, 'spawn-helper'), 0o755);
   }
   return { rebuild: false, nativePath: path.join(prebuildDir, 'pty.node') };
+}
+
+function pruneOtherPrebuilds(packageDir: string, keep?: string): void {
+  const prebuilds = path.join(packageDir, 'prebuilds');
+  if (!fs.existsSync(prebuilds)) return;
+  for (const entry of fs.readdirSync(prebuilds, { withFileTypes: true })) {
+    // Preserve loose metadata/licenses. Only platform-specific directories are redundant.
+    if (entry.isDirectory() && entry.name !== keep) {
+      fs.rmSync(path.join(prebuilds, entry.name), { recursive: true, force: true });
+    }
+  }
 }

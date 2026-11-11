@@ -1,3 +1,4 @@
+import { ErrorNotice } from '@/components/ErrorNotice';
 import { useIsFocused, useRouter } from 'expo-router';
 import { useCallback, useEffect, useRef } from 'react';
 import { ActivityIndicator, StyleSheet, View } from 'react-native';
@@ -83,10 +84,7 @@ function DeviceManagementContent() {
         onBack={() => goBackGuarded(router)}
       />
       {manager.error ? (
-        <View style={styles.errorBlock}>
-          <Text accessibilityRole="alert" style={styles.errorText}>
-            {manager.error}
-          </Text>
+        <ErrorNotice accessibilityRole="alert" style={styles.errorBlock} message={manager.error}>
           <MainWindowActionButton
             action={{
               busy: manager.loading,
@@ -96,7 +94,7 @@ function DeviceManagementContent() {
             }}
             style={styles.retryButton}
           />
-        </View>
+        </ErrorNotice>
       ) : null}
       {initialLoading ? (
         <ActivityIndicator color={colors.textSecondary} style={styles.loading} />
@@ -128,7 +126,7 @@ function DeviceManagementContent() {
 
 const makeStyles = (colors: ThemeColors) => StyleSheet.create({
   screen: { backgroundColor: colors.surface, flex: 1 },
-  errorBlock: { alignItems: 'flex-start', gap: spacing.md, padding: spacing.lg },
+  errorBlock: { marginHorizontal: spacing.lg, marginBottom: spacing.md },
   // 报错说明:13/18 errorText(黑白系)。
   errorText: { color: colors.errorText, fontSize: typeScale.footnote, fontWeight: fontWeight.regular, lineHeight: lineHeight.caption },
   retryButton: { alignSelf: 'flex-start' },

@@ -18,6 +18,8 @@
 
 import type { SessionSearchOptions, SessionSearchHit, SessionSearchFn } from '@cindy/mcps';
 
+import { getDeviceId } from '../authManager.js';
+import { buildSessionDeepLink } from '../deepLink.js';
 import { getDbClient } from '../localDb/client/current.js';
 import {
   buildMessagesFtsMatch,
@@ -114,9 +116,11 @@ export async function searchSessionsWithBotScope(
       content: string;
       score: number;
     }>(sql, params);
+    const deviceId = getDeviceId();
     return rows.map((r) => ({
       messageId: r.messageId,
       sessionId: r.sessionId,
+      sessionUrl: buildSessionDeepLink(r.sessionId, { deviceId }),
       role: r.role,
       ts: r.ts,
       snippet: buildSnippetFromContent(r.content, queryTokens),

@@ -13,7 +13,7 @@ import {
 const writeFailure = vi.hoisted(() => vi.fn());
 vi.mock('@/lib/toast', () => ({ toast: { error: writeFailure } }));
 
-vi.mock('react-i18next', () => ({ useTranslation: () => ({ t: (key: string) => key }) }));
+vi.mock('react-i18next', () => ({ useTranslation: () => ({ t: (key: string, values?: { price?: string }) => values?.price ? `${key} ${values.price}` : key, i18n: { resolvedLanguage: 'en' } }) }));
 vi.mock('../components/ui/confirm-dialog-provider', () => ({
   useConfirmDialog: () => ({ confirm: vi.fn() }),
 }));
@@ -108,9 +108,11 @@ it('search and arrangement never write preferences; bulk selection preserves adv
   });
   render(<UnifiedModelList provider={provider} />);
   fireEvent.change(screen.getByRole('textbox'), { target: { value: 'Gemini 0' } });
-  menu();
+  // Arrangement is a Select field beside the Manage menu.
+  Object.defineProperty(Element.prototype, 'scrollIntoView', { configurable: true, value: vi.fn() });
+  fireEvent.keyDown(screen.getByRole('combobox', { name: 'settings.providers.models.manage.arrange' }), { key: 'ArrowDown' });
   fireEvent.click(
-    screen.getByRole('menuitemradio', { name: 'settings.providers.models.manage.byName' }),
+    await screen.findByRole('option', { name: 'settings.providers.models.manage.byName' }),
   );
   expect(enabled('codex')).toBe(true);
   expect(enabled('pi')).toBe(false);

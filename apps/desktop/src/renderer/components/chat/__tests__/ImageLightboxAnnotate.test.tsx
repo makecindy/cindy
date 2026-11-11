@@ -15,6 +15,9 @@ import { act, cleanup, fireEvent, render, screen } from '@testing-library/react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { i18n } from '@/i18n';
+import { ChatSessionFileProvider } from '@/components/chat/ChatSessionFileContext';
+import { AttachmentCollectionPreview } from '@/components/chat/AttachmentCollection';
+import { galleryImagePreviewItem } from '@/components/chat/ImageGalleryContext';
 import { ImageLightbox } from '@/components/chat/ImageLightbox';
 import { ConfirmDialogProvider } from '@/components/ui/confirm-dialog-provider';
 
@@ -95,6 +98,47 @@ afterEach(() => {
 });
 
 describe('ImageLightbox annotate mode', () => {
+  // Normal viewing must leave image clicks available for double-click zoom,
+  // while background clicks close exactly once after the exit animation.
+  it('keeps image clicks open and closes once for repeated background clicks', () => {
+    vi.useFakeTimers();
+    const onClose = vi.fn();
+    render(<ImageLightbox src={SRC} onClose={onClose} />);
+    const image = lightboxImage();
+    loadImage(image);
+    // viewBox-only SVGs also need an explicit fitted box after natural-size load.
+    expect(image.style.width).toBe('200px');
+    expect(image.style.height).toBe('100px');
+    act(() => vi.advanceTimersByTime(200));
+    const overlay = document.activeElement!;
+    expect(overlay.contains(image)).toBe(true);
+    fireEvent.click(image);
+    act(() => vi.advanceTimersByTime(250));
+    expect(onClose).not.toHaveBeenCalled();
+    fireEvent.click(overlay);
+    fireEvent.click(overlay);
+    act(() => vi.advanceTimersByTime(250));
+    expect(onClose).toHaveBeenCalledExactlyOnceWith();
+  });
+
+  // Replaces the deleted source scan: a background misclick during annotation
+  // must preserve unsaved strokes (engineering-conventions §3.2, user data).
+  it('keeps unsaved strokes and the lightbox open after a background click', () => {
+    vi.useFakeTimers();
+    const onClose = vi.fn();
+    render(<ImageLightbox src={SRC} onClose={onClose} annotationEdit={{ onSave: vi.fn() }} />);
+    loadImage(lightboxImage());
+    openAnnotate();
+    drawStroke({ x: 10, y: 10 }, { x: 90, y: 50 });
+    act(() => vi.advanceTimersByTime(200));
+    // FocusScope focuses the real overlay. Target that background itself so
+    // the test cannot pass merely because an image child swallowed the click.
+    fireEvent.click(document.activeElement!);
+    act(() => vi.advanceTimersByTime(250));
+    expect(onClose).not.toHaveBeenCalled();
+    expect(committedPaths('stroke')).toHaveLength(1);
+  });
+
   it('draws with pointer events and saves normalized strokes', async () => {
     const onSave = vi.fn();
     render(
@@ -271,6 +315,7 @@ describe('ImageLightbox annotate mode', () => {
 
     // 等确认框退场后再次放弃并确认:恢复到基线(空)并退出标注模式。
     await act(async () => {
+      // real-wait: verify the production confirmation-exit animation has completed.
       await new Promise((resolve) => setTimeout(resolve, 250));
     });
     await act(async () => {
@@ -350,7 +395,7 @@ describe('ImageLightbox annotate mode', () => {
     expect(onClose).not.toHaveBeenCalled();
   });
 
-  it('still reports a missing image and closes when there is no burned fallback', () => {
+  it('keeps the close and retry controls available when the original image is missing', () => {
     vi.useFakeTimers();
     const onClose = vi.fn();
     render(
@@ -364,6 +409,33 @@ describe('ImageLightbox annotate mode', () => {
     act(() => {
       vi.advanceTimersByTime(250);
     });
+    expect(onClose).not.toHaveBeenCalled();
+    expect(screen.getByRole('button', { name: label('attachmentPreview.retry') })).toBeTruthy();
+    fireEvent.click(screen.getByRole('button', { name: label('chat.lightbox.close') }));
+    act(() => {
+      vi.advanceTimersByTime(250);
+    });
     expect(onClose).toHaveBeenCalledTimes(1);
   });
+});
+
+// #8356 r4436061975: selecting a persisted annotation from a mixed collection must
+// load the unburned source and allow removing old strokes. Previous tests opened it directly.
+it('keeps persisted strokes editable after switching collection items', () => {
+  const burned = 'cindy-media://blobs/burned.png';
+  render(<ChatSessionFileProvider value={{ sessionId: 'task', workingDir: '/repo', origin: { kind: 'local' } }}><AttachmentCollectionPreview
+    items={[
+      galleryImagePreviewItem({ src: burned, annotationSourceUrl: SRC, annotationStrokes: [{ points: [{ x: 0.2, y: 0.2 }, { x: 0.4, y: 0.4 }] }] }, 'annotated'),
+      galleryImagePreviewItem({ src: 'cindy-media://blobs/other.png' }, 'other'),
+    ]}
+    source="cindy-media://blobs/other.png" onClose={vi.fn()}
+  /></ChatSessionFileProvider>);
+  fireEvent.click(screen.getByRole('button', { name: label('attachmentPreview.previous') }));
+  expect(lightboxImage().getAttribute('src')).toBe(SRC);
+  loadImage(lightboxImage());
+  openAnnotate();
+  expect(committedPaths('stroke')).toHaveLength(1);
+  pressKey({ key: 'z', ctrlKey: true });
+  expect(committedPaths('stroke')).toHaveLength(0);
+  expect(lightboxImage().getAttribute('src')).toBe(SRC);
 });

@@ -6,6 +6,7 @@ import {
 } from '../../maker-ipc/sharedPermission';
 import { hasSessionPermissionUpdates } from '@cindy/maker-core';
 import { forgetSharedPending, registerPendingExternal } from './pendingInteractions';
+import type { SessionPermissionRequest } from './interactionCardModel';
 
 /** Receipt only: the Host may hold the choice until the task resumes. */
 export const INTERACTION_CHOICE_RECEIVED_TEXT = '已收到你的选择。';
@@ -26,7 +27,7 @@ export function permissionOutcomeText(decision: InteractionDecision, toolName?: 
 /** Register before network IO; a Desktop decision may arrive while send is in flight. */
 export function presentSharedPermissionCard(args: {
   requestId: string;
-  toolName: string;
+  permissionRequest: SessionPermissionRequest;
   owner: symbol;
   permission: SharedPermission;
   send(): Promise<{ messageId: string }>;
@@ -44,7 +45,7 @@ export function presentSharedPermissionCard(args: {
     () => {
       permission.settle({ kind: 'permission', behavior: 'deny', reason: 'session_disposed' });
     },
-    { owner: args.owner, toolName: args.toolName, sharedPermission: permission },
+    { owner: args.owner, permissionRequest: args.permissionRequest, sharedPermission: permission },
   );
   void permission.result.then(() => forgetSharedPending(requestId, permission));
   // Sending and updating are presentation only: neither delays execution nor

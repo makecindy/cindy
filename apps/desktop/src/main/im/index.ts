@@ -1,3 +1,4 @@
+import { wireIMessageOrchestrator } from './imessage/adapter';
 /**
  * main/im/index.ts
  * ---------------------------------------------------------------------------
@@ -53,10 +54,11 @@
  * the logged-in user's DbClient; a later login reconnects saved credentials.
  */
 
+import { TELEGRAM_DEFAULT_BEHAVIOR } from '@cindy/im';
 import path from 'node:path';
 
 import { ipcMain, BrowserWindow, dialog, type IpcMainEvent } from 'electron';
-import { and, eq, like, ne, sql } from 'drizzle-orm';
+import { and, eq, ne } from 'drizzle-orm';
 
 import { getDbClient } from '../localDb/client/current';
 import {
@@ -73,15 +75,38 @@ import {
   wechatCompatibilityPolicy,
   wechatIm,
   wecomIm,
+  createBotDingTalkIM,
+  createBotDiscordIM,
+  createBotIMessageIM,
+  createBotFeishuIM,
+  createBotTelegramIM,
+  createBotWecomIM,
 } from './host';
 import { wireFeishuOrchestrator, type FeishuOrchestratorConfig } from './feishu';
+import { backfillPersonalFeishuSessions } from './feishu/legacySessionBackfill';
 import { wireDiscordOrchestrator } from './discord';
 import { wireTelegramOrchestrator } from './telegram';
+import { listTelegramKnownGroups } from './telegram/groupWindow';
 import { wireDingTalkOrchestrator } from './dingtalk';
 import { wireWechatOrchestrator } from './wechat';
 import { wireWecomOrchestrator } from './wecom';
 import { resetTelegramGroupContextCursors } from './telegram/groupWindow';
+import { resetChannelGroupContextCursors } from './shared/channelGroupWindow';
 import { getImOrchestrator, listImOrchestrators } from './shared/orchestrator';
+import {
+  configureBotImConnectionRuntime,
+  setWechatCompanionBinding,
+  registerBotImConnectionIpc as registerBotImConnectionRuntimeIpc,
+  startBotImConnections,
+  stopBotImConnections,
+} from './shared/botImConnectionRuntime';
+import {
+  configureBotImPersonalAdoption,
+  registerBotImPersonalAdoptionIpc,
+} from './shared/botImPersonalAdoption';
+import { readTelegramBehavior } from './telegram/behaviorStore';
+import { readBotImConnection, secretKeyPrefixFor } from './shared/botImConnectionStore';
+import { ownerScopedImSecrets } from './ownerScopedStorage';
 import { backfillLegacyImDefaultRoutes, backfillLegacyImDefaultRoutesAtStartup } from './shared/channelDefaultRouteSync';
 import type { ImDefaultSettingsChannel } from '../../shared/imDefaultSettings';
 import { createSerializedConnectionLifecycle } from './connectionLifecycle';
@@ -101,12 +126,18 @@ import { getUpdateStatus, isUpdateRelaunchImminent } from '../updateService';
 
 import { createLogger } from '../logger';
 import { assertTrustedAppRendererEvent } from '../security/trustedAppRenderer';
+import { throwIpcError } from '../utils/ipcValidate';
 import {
   readWechatChannelSettings,
   resetWechatWorkingDir,
   writeWechatWorkingDir,
 } from './wechat/channelSettings';
 
+/** 伙伴「消息平台」的 IPC: 连接增删 / 群聊 / 隐藏任务, 以及把个人 bot 移给伙伴。 */
+export function registerBotImConnectionIpc(): void {
+  registerBotImConnectionRuntimeIpc();
+  registerBotImPersonalAdoptionIpc();
+}
 export {
   registerTelegramBotConfigIpc,
   im,
@@ -122,12 +153,25 @@ const log = createLogger('main:im');
 
 let wired = false;
 
+/** Personal WeChat operations a remote Desktop's teammate settings may drive (set once the IM stack is wired). */
+export interface WechatSettingsApi {
+  getState(): unknown;
+  getChannelSettings(): unknown;
+  setCompanion(botId: string | null): Promise<unknown>;
+  unbind(): Promise<unknown>;
+  cancelAuthorization(): void;
+}
+let wechatSettingsApi: WechatSettingsApi | null = null;
+export function getWechatSettingsApi(): WechatSettingsApi | null {
+  return wechatSettingsApi;
+}
+
 export interface DesktopCcPrefs {
   model: string;
   providerId?: string | null;
   effort: string;
   permissionMode: string;
-  fastMode: boolean;
+  fastMode: boolean | 'ultrafast';
 }
 
 let _desktopCcPrefs: DesktopCcPrefs | null = null;
@@ -235,6 +279,178 @@ export function startImOrchestrators(): void {
   wireWechatOrchestrator(wechatIm, WECHAT_CONFIG);
   wireWecomOrchestrator(wecomIm, WECOM_CONFIG);
 
+  // 伙伴自有 IM 连接: 每条记录一份传输层 + 编排器, 与上面设置页那份并存。
+  // 实例在 initializeImConnection 里按记录起, 这里只注入装配方式。
+  configureBotImConnectionRuntime({
+    removeWechatCompanionBinding: (update, isCurrent) => {
+      const generation = captureImAccountGeneration();
+      if (generation === null) return Promise.reject(new Error('ACCOUNT_CHANGED'));
+      return wechatIm.updateCompanionBinding(() => {
+        if (!isImAccountGenerationCurrent(generation)) throw new Error('ACCOUNT_CHANGED');
+        update();
+      }, { cancelPendingIf: () => {
+        if (!isImAccountGenerationCurrent(generation)) throw new Error('ACCOUNT_CHANGED');
+        return isCurrent();
+      } });
+    },
+    create: (record) => {
+      const prefix = secretKeyPrefixFor(record.id);
+      if (record.channel === 'imessage') {
+        const im = createBotIMessageIM(prefix, record.id);
+        const orchestrator = wireIMessageOrchestrator(im, DINGTALK_CONFIG, { instanceKey: `imessage#${record.id}`, companionBotId: record.botId, connectionId: record.id });
+        return { kind: 'imessage', im, orchestrator };
+      }
+      if (record.channel === 'telegram') {
+        // 群参与模式按连接各一份, 每次使用时现读 → 伙伴页改动即生效, 不重启传输层。
+        const im = createBotTelegramIM(prefix, {
+          behavior: () => {
+            const groupActivation = readBotImConnection(record.id)?.groupActivation;
+            return { ...TELEGRAM_DEFAULT_BEHAVIOR, ...(groupActivation ? { groupActivation } : {}) };
+          },
+        });
+        const orchestrator = wireTelegramOrchestrator(im, TELEGRAM_CONFIG, {
+          instanceKey: `telegram#${record.id}`,
+          companionBotId: record.botId,
+          sessionAuthIpc: false,
+        });
+        return { kind: 'telegram', im, orchestrator };
+      }
+      if (record.channel === 'feishu') {
+        const im = createBotFeishuIM(prefix);
+        const orchestrator = wireFeishuOrchestrator(im, FEISHU_CONFIG, {
+          instanceKey: `feishu#${record.id}`,
+          companionBotId: record.botId,
+        });
+        return { kind: 'feishu', im, orchestrator };
+      }
+      if (record.channel === 'wecom') {
+        const im = createBotWecomIM(prefix);
+        const orchestrator = wireWecomOrchestrator(im, WECOM_CONFIG, {
+          instanceKey: `wecom#${record.id}`,
+          companionBotId: record.botId,
+        });
+        return { kind: 'wecom', im, orchestrator };
+      }
+      if (record.channel === 'dingtalk') {
+        const im = createBotDingTalkIM(prefix);
+        const orchestrator = wireDingTalkOrchestrator(im, DINGTALK_CONFIG, {
+          instanceKey: `dingtalk#${record.id}`,
+          companionBotId: record.botId,
+        });
+        return { kind: 'dingtalk', im, orchestrator };
+      }
+      // 服务器频道白名单按连接各一份、每次使用时现读连接记录：撤销 / 删除连接即时生效，
+      // 不同连接（不同 connectionId）互不串；存量记录没有该字段 = 不开放任何频道。
+      const im = createBotDiscordIM(prefix, {
+        channelAccess: {
+          read: () => readBotImConnection(record.id)?.discordChannelAccess ?? { channels: [] },
+        },
+      });
+      const orchestrator = wireDiscordOrchestrator(im, DISCORD_CONFIG, {
+        instanceKey: `discord#${record.id}`,
+        companionBotId: record.botId,
+        sessionAuthIpc: false,
+      });
+      return { kind: 'discord', im, orchestrator };
+    },
+    settingsIdentity: () => ({
+      telegramToken: ownerScopedImSecrets.read('telegram-bot-token')?.trim() || null,
+      feishuAppId: ownerScopedImSecrets.read('feishu_bot_app_id')?.trim() || null,
+      wecomBotId: ownerScopedImSecrets.read('wecom-bot-id')?.trim() || null,
+      dingtalkAppKey: ownerScopedImSecrets.read('dingtalk-bot-app-key')?.trim() || null,
+      discordToken: ownerScopedImSecrets.read('discord-bot-token')?.trim() || null,
+    }),
+    // 群参与模式只有 Telegram 有(个人 bot 同款); 飞书群按平台自己的 @ 规则触发。
+    listKnownGroups: (record) =>
+      record.channel === 'telegram' && record.botContextId
+        ? listTelegramKnownGroups(record.botContextId)
+        : Promise.resolve([]),
+  });
+
+  // 把设置页那份个人 bot 移给伙伴: 停 = 与登出同一个 dispose(静默、凭证保留),
+  // 恢复 = init(按安全存储里的凭证重连); 凭证删掉之后再 init / clearCredentials 让设置页
+  // 随各渠道的状态广播回到「未配置」。Telegram / Discord 不走 disconnect: 它会给主人发
+  // 「已断开」并删命令菜单, 而同一个 bot 已经由伙伴接着用。
+  configureBotImPersonalAdoption({
+    isReady: () => connectionLifecycle.isStarted(),
+    telegramGroupActivation: () => readTelegramBehavior().groupActivation,
+    personal: {
+      telegram: {
+        identity: () => {
+          const username = telegramIm.getConfigState().botUsername;
+          return username ? `@${username}` : null;
+        },
+        stop: () => telegramIm.dispose(),
+        start: () => telegramIm.init(),
+        clear: () => telegramIm.init(),
+      },
+      feishu: {
+        identity: () => feishuIm.getBotAppId() ?? (ownerScopedImSecrets.read('feishu_bot_app_id')?.trim() || null),
+        stop: () => feishuIm.dispose(),
+        start: () => feishuIm.init(),
+        clear: () => feishuIm.clearCredentials(),
+      },
+      wecom: {
+        identity: () => wecomIm.getConfigState().botId,
+        stop: () => wecomIm.dispose(),
+        start: () => wecomIm.init(),
+        clear: async () => {
+          await wecomIm.clearCredentials();
+        },
+      },
+      dingtalk: {
+        identity: () => dingtalkIm.getPublicState().appKey,
+        stop: () => dingtalkIm.dispose(),
+        start: () => dingtalkIm.init(),
+        clear: () => dingtalkIm.clearCredentials(),
+      },
+      discord: {
+        identity: () => {
+          const status = discordIm.getStatus();
+          return status.kind === 'connected' && status.appId ? status.appId : null;
+        },
+        stop: () => discordIm.dispose(),
+        start: () => discordIm.init(),
+        clear: () => discordIm.init(),
+      },
+    },
+  });
+
+  const setWechatCompanion = (botId: string | null) =>
+    connectionLifecycle.runWhileStarted(async () => {
+      const generation = captureImAccountGeneration();
+      if (generation === null) throwIpcError('PRECONDITION_FAILED', 'Account unavailable');
+      try {
+        await setWechatCompanionBinding(botId, (commit) => wechatIm.updateCompanionBinding(() => {
+          if (!isImAccountGenerationCurrent(generation)) throw new Error('ACCOUNT_CHANGED');
+          commit();
+        }));
+      } catch (error) {
+        const code = error instanceof Error ? error.message : '';
+        throwIpcError('PRECONDITION_FAILED',
+          ['WECHAT_CONNECTION_BUSY', 'BOT_INACTIVE', 'WECHAT_COMPANION_IN_USE'].includes(code)
+            ? code : 'WECHAT_COMPANION_UPDATE_FAILED');
+      }
+      BrowserWindow.getAllWindows().forEach((window) => {
+        if (!window.isDestroyed()) window.webContents.send('wechatBot:channel-settings-changed', readWechatChannelSettings());
+      });
+      return readWechatChannelSettings();
+    });
+  const unbindWechat = () =>
+    connectionLifecycle.runWhileStarted(async () => {
+      await wechatIm.unbind();
+      return { ok: true };
+    });
+  // The teammate settings host (a remote Desktop's pages) uses the same operations; browser
+  // authorization and the native directory chooser stay on this window's IPC.
+  wechatSettingsApi = {
+    getState: () => wechatIm.getState(),
+    getChannelSettings: () => readWechatChannelSettings(),
+    setCompanion: setWechatCompanion,
+    unbind: unbindWechat,
+    cancelAuthorization: () => { wechatIm.cancelAuthorization(); },
+  };
+
   ipcMain.handle('wechatBot:get-state', (event) => {
     assertTrustedAppRendererEvent(event);
     return wechatIm.getState();
@@ -250,14 +466,18 @@ export function startImOrchestrators(): void {
   });
   ipcMain.handle('wechatBot:unbind', (event) => {
     assertTrustedAppRendererEvent(event);
-    return connectionLifecycle.runWhileStarted(async () => {
-      await wechatIm.unbind();
-      return { ok: true };
-    });
+    return unbindWechat();
   });
   ipcMain.handle('wechatBot:get-channel-settings', (event) => {
     assertTrustedAppRendererEvent(event);
     return readWechatChannelSettings();
+  });
+  ipcMain.handle('wechatBot:set-companion', (event, botId: unknown) => {
+    assertTrustedAppRendererEvent(event);
+    if (botId !== null && (typeof botId !== 'string' || !/^[A-Za-z0-9_-]{1,128}$/.test(botId))) {
+      throwIpcError('INVALID_ARGUMENT', 'Invalid teammate');
+    }
+    return setWechatCompanion(botId as string | null);
   });
   ipcMain.handle('wechatBot:choose-working-directory', async (event) => {
     assertTrustedAppRendererEvent(event);
@@ -419,19 +639,9 @@ async function initializeImConnection(): Promise<void> {
     const msg = err instanceof Error ? err.message : String(err);
     log.error(`bindingStore.preload failed (non-fatal): ${msg}`);
   }
-  // 存量 feishu 会话行补 workspaceKind='dialogue' —— 2026-07 起 feishu 会话
-  // 进侧边栏「对话」分组(sessionSource.ts 白名单 + feishu adapter 声明),
-  // 此前落库的行还是默认 'project', 不补会以 im-working-dir/{botAppId}
-  // 聚成一个假项目组。幂等一次性 UPDATE; 不 bump updatedAt(避免重排列表)。
-  try {
-    await getDbClient()
-      .drizzle.update(sessions)
-      .set({ workspaceKind: 'dialogue' })
-      .where(and(eq(sessions.source, 'feishu'), ne(sessions.workspaceKind, 'dialogue')));
-  } catch (err) {
-    const msg = err instanceof Error ? err.message : String(err);
-    log.warn(`feishu sessions workspaceKind backfill failed (non-fatal): ${msg}`);
-  }
+  // 存量个人飞书会话补「对话」分组与新标题; 官方飞书 hook 任务同为
+  // source='feishu', 由 helper 按 feishuBotAppId 排除。
+  await backfillPersonalFeishuSessions(getDbClient().drizzle, log);
   // Discord personal DM sessions use the same managed dialogue bucket as
   // Feishu/Telegram. Older Discord rows were created before the adapter
   // declared workspaceKind='dialogue' and otherwise remain grouped under the
@@ -446,18 +656,10 @@ async function initializeImConnection(): Promise<void> {
     const msg = err instanceof Error ? err.message : String(err);
     log.warn(`discord sessions workspaceKind backfill failed (non-fatal): ${msg}`);
   }
-  // 存量 feishu 会话的旧默认标题 `飞书 · {后6位}` 迁到新风格 `[飞书·DM] {后6位}`。
-  try {
-    await getDbClient()
-      .drizzle.update(sessions)
-      .set({ title: sql`'[飞书·DM] ' || substr(${sessions.title}, 6)` })
-      .where(and(eq(sessions.source, 'feishu'), like(sessions.title, '飞书 · %')));
-  } catch (err) {
-    const msg = err instanceof Error ? err.message : String(err);
-    log.warn(`feishu sessions title backfill failed (non-fatal): ${msg}`);
-  }
   activateImAccountBoundary();
   await im.init();
+  // 伙伴自有连接跟在设置页那份后面起; 各自失败只记日志。
+  await startBotImConnections();
 }
 
 /**
@@ -496,12 +698,14 @@ async function reconcileOwnerScopedImWorkingDirs(): Promise<void> {
           id: sessions.id,
           workingDir: sessions.workingDir,
           botContextId: sessions.imBotContextId,
+          imUserId: sessions.imUserId,
         })
         .from(sessions)
         .where(eq(sessions.source, 'discord'));
       for (const row of rows) {
         if (!row.botContextId) continue;
-        const scoped = discordAdapter.sessions.ensureWorkingDir(row.botContextId);
+        // 服务器频道 lane 各有独立托管目录, 按 lane id 重算, 不能被改写回私聊目录。
+        const scoped = discordAdapter.sessions.ensureWorkingDir(row.botContextId, row.imUserId ?? undefined);
         if (row.workingDir === scoped) continue;
         await db.update(sessions).set({ workingDir: scoped }).where(eq(sessions.id, row.id));
       }
@@ -583,6 +787,8 @@ const connectionLifecycle = createSerializedConnectionLifecycle({
   },
   stopConnection: async (reason) => {
     try {
+      // 伙伴自有连接先放掉(记录保留, 下次登录再起), 再停设置页那份。
+      await stopBotImConnections();
       await im.dispose();
     } finally {
       bindingStore.resetRuntime();
@@ -590,6 +796,8 @@ const connectionLifecycle = createSerializedConnectionLifecycle({
       // 只有明确删除账号数据时才清持久表。Telegram bot 解绑由 hook-control 的
       // binding identity reset 单独处理, 不把 auth logout 误当成数据删除。
       await resetTelegramGroupContextCursors({ clearPersisted: reason === 'account-deletion' });
+      // 企业微信 / 钉钉的群窗口与 Telegram 共用同一张表, 游标同一口径清理。
+      await resetChannelGroupContextCursors({ clearPersisted: reason === 'account-deletion' });
     }
   },
   onStartError: (err) => {

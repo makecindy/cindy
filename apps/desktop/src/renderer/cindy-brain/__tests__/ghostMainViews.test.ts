@@ -74,4 +74,22 @@ describe('projectGhostMainViews', () => {
       ['z-id', 'globe'],
     ]);
   });
+
+  it('gives same-name plugins distinct instance ids for routing', () => {
+    const projection = projectGhostMainViews(
+      [
+        ghost('helper', { dir: '/plugins/helper', namespace: null }),
+        ghost('helper', {
+          dir: '/plugins/_ns/acme/helper',
+          namespace: 'acme',
+        }),
+      ],
+      { locale: 'en', isSidebarVisible: () => true },
+    );
+    expect(projection.routeCapable.map((item) => item.instanceId).sort()).toEqual([
+      '_ns__acme__helper',
+      'helper',
+    ]);
+  });
+
 });

@@ -2,15 +2,20 @@
 import { describe, expect, it } from 'vitest';
 
 import {
+  applyStatusTokenRate,
+  buildActivityRecord,
+  clearRunningIndicators,
   createTurnActivity,
   formatThinkingStep,
   formatToolStep,
   markActivityWriting,
+  MAX_RECORD_STEPS,
   MAX_VISIBLE_STEPS,
   pushThinkingStep,
   pushToolStep,
   renderActivity,
   setActivityNotice,
+  setActivityTokenRate,
   setInteractionNotice,
 } from '../turnActivity';
 
@@ -145,10 +150,54 @@ describe('rolling window and replay de-duplication', () => {
       'notice',
       'recentSteps',
       'startedAt',
+      'tokenRate',
       'totalSteps',
       'writing',
     ]);
     expect(JSON.parse(JSON.stringify(activity))).toEqual(activity);
+  });
+});
+
+// Rule: a finished turn keeps a reviewable record of every step, not just the five
+// rows the running preview shows (the IM final used to drop the process entirely).
+// Production entry: buildActivityRecord, consumed by turnRunner at turn completion.
+// Minimal input: more steps than the preview window, then more than the record cap.
+describe('buildActivityRecord — reviewable record after completion', () => {
+  it('lists every step in order, including rows that rolled out of the running preview', () => {
+    const activity = createTurnActivity(0);
+    pushThinkingStep(activity, { stage: 'final', blockId: 't1', text: '**先看**入口' });
+    for (let index = 1; index <= MAX_VISIBLE_STEPS + 1; index += 1) {
+      pushToolStep(activity, 'Grep', { pattern: `p${index}` }, `tool-${index}`);
+    }
+    setActivityNotice(activity, '上游过载, 正在自动重试');
+    setActivityTokenRate(activity, 120);
+
+    expect(buildActivityRecord(activity, 83_000)).toEqual({
+      title: `过程记录 · ${MAX_VISIBLE_STEPS + 2} 项 · 1m23s`,
+      lines: [
+        '✓ ✦ 先看入口',
+        ...Array.from({ length: MAX_VISIBLE_STEPS + 1 }, (_, index) => `✓ 搜索 p${index + 1}`),
+      ],
+    });
+  });
+
+  it('counts the earliest steps instead of listing them once the record is full', () => {
+    const activity = createTurnActivity(0);
+    for (let index = 1; index <= MAX_RECORD_STEPS + 3; index += 1) {
+      pushToolStep(activity, 'Grep', { pattern: `p${index}` }, `tool-${index}`);
+    }
+    const record = buildActivityRecord(activity, 1_000);
+    expect(record?.title).toBe(`过程记录 · ${MAX_RECORD_STEPS + 3} 项 · 1s`);
+    expect(record?.lines).toHaveLength(MAX_RECORD_STEPS + 1);
+    expect(record?.lines[0]).toBe('… 更早的 3 项未列出');
+    expect(record?.lines[1]).toBe('✓ 搜索 p4');
+    expect(record?.lines.at(-1)).toBe(`✓ 搜索 p${MAX_RECORD_STEPS + 3}`);
+  });
+
+  it('has no record for a text-only quick answer', () => {
+    const activity = createTurnActivity(0);
+    markActivityWriting(activity);
+    expect(buildActivityRecord(activity, 5_000)).toBeNull();
   });
 });
 
@@ -172,6 +221,48 @@ describe('renderActivity', () => {
     // A later tool becomes current even though earlier progress text exists.
     pushToolStep(activity, 'Bash', { command: 'pnpm test' }, 'test-1');
     expect(renderActivity(activity, 91_000)).toContain('> ▸ 运行测试');
+  });
+
+  it('appends the rounded tok/s to the header only when a reading exists', () => {
+    const activity = createTurnActivity(0);
+    pushToolStep(activity, 'Read', { file_path: '/x/relay.ts' }, 'read-1');
+    expect(renderActivity(activity, 5_000).split('\n')[0]).toBe('⚙️ 工作中 · 1 项 · 5s');
+
+    expect(setActivityTokenRate(activity, 116.4)).toBe(true);
+    expect(setActivityTokenRate(activity, 116.2)).toBe(false);
+    expect(renderActivity(activity, 5_000).split('\n')[0]).toBe(
+      '⚙️ 工作中 · 1 项 · 5s · 116 tok/s',
+    );
+
+    for (const missing of [null, 0, -3, Number.NaN, Number.POSITIVE_INFINITY]) {
+      setActivityTokenRate(activity, 50);
+      expect(setActivityTokenRate(activity, missing)).toBe(true);
+      expect(renderActivity(activity, 5_000)).not.toContain('tok/s');
+    }
+  });
+
+  it('reads tok/s from status data and clears running indicators at closure', () => {
+    const activity = createTurnActivity(0);
+    pushToolStep(activity, 'Read', { file_path: '/x/relay.ts' }, 'read-1');
+    const speed = { rate: 54.6, average: 50, tokens: 200, elapsedMs: 4_000, streaming: true };
+
+    expect(applyStatusTokenRate(activity, { tokenSpeed: speed })).toBe(true);
+    expect(activity.tokenRate).toBe(55);
+    // 占位帧 / 0 读数 / 非对象: 保留上一个值。
+    expect(applyStatusTokenRate(activity, {})).toBe(false);
+    expect(applyStatusTokenRate(activity, { tokenSpeed: { ...speed, rate: 0 } })).toBe(false);
+    expect(applyStatusTokenRate(activity, null)).toBe(false);
+    expect(activity.tokenRate).toBe(55);
+    // 不可靠读数: 隐藏。
+    expect(applyStatusTokenRate(activity, { generationReliable: false, tokenSpeed: speed })).toBe(true);
+    expect(activity.tokenRate).toBeNull();
+
+    applyStatusTokenRate(activity, { tokenSpeed: speed });
+    setActivityNotice(activity, '模型服务繁忙，正在自动重试（1/4）…');
+    clearRunningIndicators(activity);
+    expect(activity.notice).toBeNull();
+    expect(activity.tokenRate).toBeNull();
+    expect(activity.totalSteps).toBe(1);
   });
 
   it('emits no chrome for a text-only quick answer', () => {

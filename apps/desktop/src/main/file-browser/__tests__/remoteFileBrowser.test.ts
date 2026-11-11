@@ -9,7 +9,7 @@
  */
 
 import { PassThrough } from 'node:stream';
-import { mkdtemp, rm, writeFile as fsWriteFile } from 'node:fs/promises';
+import { mkdtemp, readFile, rm, writeFile as fsWriteFile } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 
@@ -128,6 +128,28 @@ describe('RemoteFileBrowserManager', () => {
     await mgr.disposeAll();
   });
 
+  it('beforeSend runs after the connection is built and can stop the request', async () => {
+    const { deps, calls } = makeDeps({ probeResults: [READY_PROBE] });
+    const mgr = new RemoteFileBrowserManager(deps);
+    let spawnedBeforeGate = -1;
+    await expect(
+      mgr.request(
+        'h1',
+        'writeFile',
+        { workdir, relPath: 'hello.txt', content: 'late\n' },
+        {
+          beforeSend: () => {
+            spawnedBeforeGate = calls.spawn;
+            throw new Error('[PERMISSION_DENIED] revoked');
+          },
+        },
+      ),
+    ).rejects.toThrow('PERMISSION_DENIED');
+    expect(spawnedBeforeGate).toBe(1);
+    expect(await readFile(path.join(workdir, 'hello.txt'), 'utf8')).toBe('hi\n');
+    await mgr.disposeAll();
+  });
+
   it('concurrent first requests share one connection build', async () => {
     const { deps, calls } = makeDeps({ probeResults: [READY_PROBE] });
     const mgr = new RemoteFileBrowserManager(deps);
@@ -169,18 +191,25 @@ describe('RemoteFileBrowserManager', () => {
     await mgr.disposeAll();
   });
 
-  it('stale bundle (schema compatible) → reinstalls then serves', async () => {
-    // schema 相等但 bundle 落后:daemon 行为修复只 bump bundle 版本,必须触发重推。
+  it('upgrades the pre-natural-sort daemon and returns naturally ordered entries', async () => {
+    // #7064, unit: the previous generic stale-version fixture did not catch a
+    // missing bundle bump. 0.2.6 is the released daemon with lexical sorting.
+    await fsWriteFile(path.join(workdir, '3.md'), 'three');
+    await fsWriteFile(path.join(workdir, '10.md'), 'ten');
     const { deps, calls } = makeDeps({
       probeResults: [
-        { ...READY_PROBE, bundleVersion: '0.0.0-stale' },
+        { ...READY_PROBE, bundleVersion: '0.2.6' },
         READY_PROBE,
       ],
     });
     const mgr = new RemoteFileBrowserManager(deps);
-    await mgr.request('h1', 'stat', { workdir, relPath: 'hello.txt' });
-    expect(calls.install).toBe(1);
-    await mgr.disposeAll();
+    try {
+      const { entries } = await mgr.request('h1', 'listDir', { workdir });
+      expect(calls.install).toBe(1);
+      expect(entries.map(entry => entry.name)).toEqual(['3.md', '10.md', 'hello.txt']);
+    } finally {
+      await mgr.disposeAll();
+    }
   });
 
   it('node missing → NODE_MISSING error, nothing spawned', async () => {

@@ -7,6 +7,7 @@ import { describe, expect, it } from 'vitest';
 
 import type { GhostManifest, InstalledGhost } from '../../../shared/ghost';
 import type { PluginMarketItem } from '../../../shared/pluginMarket';
+import { LEGACY_SCAFFOLD_ICON_SHA256 } from '../../features/plugin/__tests__/fixtures/legacyScaffoldIcon';
 import {
   filterGhostPluginItems,
   ghostFallbackIconKind,
@@ -104,6 +105,7 @@ describe('ghostPluginViewModel', () => {
     const items = [
       {
         id: 'xd-mivo',
+        ghostId: 'xd-mivo',
         name: 'XD Mivo',
         description: 'media',
         version: '1',
@@ -117,6 +119,7 @@ describe('ghostPluginViewModel', () => {
             },
       {
         id: 'lizi-mivo',
+        ghostId: 'lizi-mivo',
         name: 'Lizi Mivo',
         description: 'media',
         version: '1',
@@ -130,6 +133,7 @@ describe('ghostPluginViewModel', () => {
             },
       {
         id: 'slack',
+        ghostId: 'slack',
         name: 'Cindy Slack',
         description: 'messages',
         version: '1',
@@ -222,11 +226,26 @@ describe('ghostPluginViewModel', () => {
     });
   });
 
+  it('uses the physical storage part as the instance id', () => {
+    const item = toGhostPluginListItem(
+      installed({
+        manifest: manifest({ id: 'helper' }),
+        namespace: 'acme',
+        dir: '/tmp/cindy-brain/_ns/acme/helper',
+      }),
+    );
+    expect(item).toMatchObject({
+      id: '_ns__acme__helper',
+      ghostId: 'helper',
+    });
+  });
+
   it('maps install-record facts onto the list item', () => {
     const item = toGhostPluginListItem(installed());
 
     expect(item).toMatchObject({
       id: 'xd-mivo',
+      ghostId: 'xd-mivo',
       name: 'XD Mivo',
       enabled: true,
       canUse: true,
@@ -269,7 +288,7 @@ describe('ghostPluginViewModel', () => {
       canUse: true,
     });
     const detail = toGhostPluginDetail(ghost, presentation);
-    expect(detail.author).toBe('Xindong Design');
+    expect(detail.author).toBeNull();
     expect(detail.permissions.map((item) => item.kind)).toEqual([
       'network',
       'network',
@@ -287,6 +306,20 @@ describe('ghostPluginViewModel', () => {
 
     expect(presentation).not.toBeNull();
     expect(toGhostPluginListItem(ghost, presentation)).not.toHaveProperty('iconDataUrl');
+  });
+
+  // 已装版本也会采用市场 URL；旧占位 PNG 必须与缺图走同一显示分支。Tier: unit。
+  it('treats the historical scaffold icon hash as an absent installed market icon', () => {
+    const ghost = installed({ iconDataUrl: 'data:image/png;base64,LOCAL' });
+    const item = marketItem();
+    const presentation = marketPresentationForInstalledGhost(
+      ghost,
+      { ...item, icon: { ...item.icon!, sha256: LEGACY_SCAFFOLD_ICON_SHA256 } },
+    );
+
+    expect(presentation).not.toBeNull();
+    expect(toGhostPluginListItem(ghost, presentation)).not.toHaveProperty('iconDataUrl');
+    expect(toGhostPluginDetail(ghost, presentation)).not.toHaveProperty('iconDataUrl');
   });
 
   it('uses the installed package icon for an exact Git market mapping', () => {

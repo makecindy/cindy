@@ -1,0 +1,16 @@
+plugins {
+  id 'com.android.library'
+  id 'expo-module-gradle-plugin'
+}
+group = 'app.cindy.notifications'
+version = '0.1.0'
+android {
+  namespace 'app.cindy.notifications'
+  defaultConfig { versionCode 1; versionName '0.1.0' }
+}
+dependencies {
+  implementation expoModule.getExpoDependency('expo-notifications')
+  implementation 'androidx.core:core:1.15.0'
+  implementation 'com.squareup.okhttp3:okhttp:4.12.0'
+  implementation 'com.google.firebase:firebase-messaging:25.0.1'
+}

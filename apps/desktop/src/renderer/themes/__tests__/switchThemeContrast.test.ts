@@ -33,10 +33,31 @@ function contrast(first: string, second: string): number {
   return contrastRatio(toRgb(first), toRgb(second));
 }
 
+/**
+ * 表面可能是半透明墨水(CINDY 2026-10-22 起的悬停底):按其 alpha 叠到不透明底上取实际颜色。
+ * 只认 rgba() 与带 `/ alpha` 的 HSL 三元组;不透明值仍走 toRgb 的 fail-closed 解析。
+ */
+function surfaceOver(value: string, base: Rgb): Rgb {
+  const t = value.trim();
+  const rgba = t.match(/^rgba\(\s*([\d.]+),\s*([\d.]+),\s*([\d.]+),\s*([\d.]+)\s*\)$/);
+  const hsla = t.match(/^([\d.]+)\s+([\d.]+)%\s+([\d.]+)%\s*\/\s*([\d.]+)$/);
+  if (!rgba && !hsla) return toRgb(t);
+  const color = rgba
+    ? { r: Number(rgba[1]), g: Number(rgba[2]), b: Number(rgba[3]) }
+    : hslToRgb(Number(hsla![1]), Number(hsla![2]) / 100, Number(hsla![3]) / 100);
+  const alpha = Number((rgba ?? hsla)![4]);
+  return {
+    r: color.r * alpha + base.r * (1 - alpha),
+    g: color.g * alpha + base.g * (1 - alpha),
+    b: color.b * alpha + base.b * (1 - alpha),
+  };
+}
+
+/** 开关实际所在的不透明底;半透明表面逐一叠在它们上面比较。 */
+const OPAQUE_BASES = ['surface', 'surface-elevated', 'surface-card-ivory'] as const;
+
 const SURFACES = [
-  'surface',
-  'surface-elevated',
-  'surface-card-ivory',
+  ...OPAQUE_BASES,
   'surface-hover',
   'surface-hover-soft',
 ] as const;
@@ -133,7 +154,10 @@ describe('Switch contrast', () => {
   });
 
   it.each(Object.values(builtinThemes))('$name keeps both switch states distinguishable', (theme) => {
-    const surfaces = SURFACES.map((id) => [id, resolveColor(theme, id)] as const);
+    const surfaces = OPAQUE_BASES.flatMap((baseId) => {
+      const base = toRgb(resolveColor(theme, baseId));
+      return SURFACES.map((id) => [`${id} on ${baseId}`, surfaceOver(resolveColor(theme, id), base)] as const);
+    });
 
     for (const { state, trackId, thumbId } of CONTROL_STATES) {
       const track = resolveColor(theme, trackId);
@@ -142,8 +166,17 @@ describe('Switch contrast', () => {
       expect(contrast(thumb, track), `${theme.id}: ${state} thumb x track`).toBeGreaterThanOrEqual(3);
 
       for (const [surfaceId, surface] of surfaces) {
-        expect(contrast(track, surface), `${theme.id}: ${state} track x ${surfaceId}`).toBeGreaterThanOrEqual(3);
+        expect(contrastRatio(toRgb(track), surface), `${theme.id}: ${state} track x ${surfaceId}`).toBeGreaterThanOrEqual(3);
       }
     }
+  });
+
+  it('composites translucent hover surfaces instead of reading them as opaque ink', () => {
+    const page = { r: 242, g: 242, b: 237 };
+    // 黑 5% 压在页底上是浅灰 #E6E6E1 一类,不是纯黑。
+    const hover = surfaceOver('rgba(0, 0, 0, 0.05)', page);
+    expect(Math.round(hover.r)).toBe(230);
+    expect(surfaceOver('0.0 0.0% 0.0% / 0.05', page)).toEqual(hover);
+    expect(contrastRatio(toRgb('#808080'), hover)).toBeGreaterThanOrEqual(3);
   });
 });

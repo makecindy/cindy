@@ -1,5 +1,6 @@
 import {
   oauthId,
+  oauthGhostId,
   parsePluginOauthAction,
   type PluginOauthAction,
 } from "./pluginOauth.js";
@@ -118,7 +119,8 @@ export function parsePluginOauthHelloReply(
   ]);
   if (
     v.version !== 3 ||
-    ![v.id, v.bootId, v.ghostId].every(oauthId) ||
+    ![v.id, v.bootId].every(oauthId) ||
+    !oauthGhostId(v.ghostId) ||
     !oauthPublicKey(v.publicKey) ||
     !Number.isSafeInteger(v.expiresAtMs) ||
     typeof v.signature !== "string" ||

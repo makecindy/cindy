@@ -9,6 +9,7 @@ import {
   getAgentFacingText,
   reconcileSessionRefsForText,
   sanitizeQueuedMessageForPersistence,
+  USAGE_LIMIT_RESET_AUTO_RESUME_REASON,
   updateQueuedMessageContent,
   updateQueuedMessageText,
 } from '../../shared/agentInputQueue.js';
@@ -511,6 +512,23 @@ describe('agentInputQueue', () => {
       .toHaveProperty('text', 'process-local referenced body');
   });
 
+  // Unit contract (#6611, usage-limit-auto-continue.md): sanitizing either snapshot
+  // boundary must copy out a first-input marker without mutating the live send.
+  // Existing reference sanitization did not cover this metadata or hidden continuations.
+  it.each([false, true])('sanitizes quota activity while preserving hidden continuation metadata (hidden=%s)', hidden => {
+    const entry = queuedMessage(undefined);
+    entry.autoResume = hidden;
+    entry.autoResumeInfo = {
+      reason: USAGE_LIMIT_RESET_AUTO_RESUME_REASON,
+      attempt: 1,
+      maxAttempts: 3,
+      sessionTotal: 0,
+    };
+    const persisted = sanitizeQueuedMessageForPersistence(entry);
+    expect(persisted.autoResumeInfo).toEqual(hidden ? entry.autoResumeInfo : undefined);
+    expect(entry.autoResumeInfo.reason).toBe(USAGE_LIMIT_RESET_AUTO_RESUME_REASON);
+  });
+
   it('strips transient Bot host state from crash-recovery snapshots', () => {
     const entry = queuedMessage(undefined);
     const href = 'cindy://bot/bot-b';
@@ -647,8 +665,8 @@ describe('agentInputQueue', () => {
 
     const projected = getAgentFacingText(entry);
     expect(projected).toContain('Complete target message body');
-    expect(projected).toContain('Session ID: session-a');
-    expect(projected).toContain('Message ID: message-a');
+    expect(projected).toContain('Session ID: "session-a"');
+    expect(projected).toContain('Message ID: "message-a"');
     expect(projected).not.toContain(href);
   });
 

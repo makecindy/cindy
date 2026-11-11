@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest';
+import { companionHomes } from '../../../companion-cloud/homes.js';
 
 import {
   botRemoteCollectionItemFromSource,
@@ -47,6 +48,18 @@ describe('bot remote resource projection', () => {
     });
   });
 
+  // Mobile task rows draw the follow mark from these links; the revision must move when they do.
+  it('links the open tasks a teammate looks after and revises the row when they change', () => {
+    const before = botRemoteCollectionItemFromSource(source);
+    const after = botRemoteCollectionItemFromSource({ ...source, followingSessionIds: ['task-a', 'task-b'] });
+    expect(after.links).toEqual([
+      { rel: 'conversation', target: { kind: 'session', sessionId: 'session-1' } },
+      { rel: 'following', target: { kind: 'session', sessionId: 'task-a' } },
+      { rel: 'following', target: { kind: 'session', sessionId: 'task-b' } },
+    ]);
+    expect(after.revision).not.toBe(before.revision);
+  });
+
   it('uses generic attention presentation without exposing Bot internals', () => {
     const projected = botRemoteCollectionItemFromSource({
       ...source,
@@ -85,5 +98,16 @@ describe('bot remote resource projection', () => {
     ]);
 
     expect(ordered.map((item) => item.id)).toEqual(['pinned-old', 'recent', 'old']);
+  });
+
+  it('does not list a demoted copy whose main computer is another device', () => {
+    companionHomes.update({ enabled: true, selfDeviceId: 'desk', humanActorId: 'human', demotedBotIds: ['moved'],
+      actors: [{ id: 'actor', externalId: 'moved', name: 'Moved', avatar: null, homeDeviceId: 'laptop' }] });
+    try {
+      const visible = visibleBotRemoteResourceSources([{ ...source, id: 'moved' }, { ...source, id: 'here' }]);
+      expect(visible.map((item) => item.id)).toEqual(['here']);
+    } finally {
+      companionHomes.reset();
+    }
   });
 });

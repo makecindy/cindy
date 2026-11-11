@@ -21,8 +21,11 @@ vi.mock('react-native', async () => {
     StyleSheet: { create: (value: unknown) => value, hairlineWidth: 1 },
     useWindowDimensions: () => ({ width: 390, height: 844 }) };
 });
+vi.mock('@/components/MobilePrimitives', () => ({
+  MainWindowActionButton: ({ action }: any) => <button onClick={action.onPress} disabled={action.disabled || action.busy}>{action.label}</button>,
+}));
 vi.mock('@/components/AppText', async () => ({ Text: (await import('react-native')).Text }));
-vi.mock('lucide-react-native', () => ({ Check: () => null, GitBranch: () => null, MessageSquare: () => null }));
+vi.mock('lucide-react-native', () => ({ CircleAlert: () => null, Check: () => null, GitBranch: () => null, MessageSquare: () => null }));
 vi.mock('react-native-safe-area-context', () => ({ useSafeAreaInsets: () => ({ top: 0, bottom: 0 }) }));
 vi.mock('@/theme', async () => {
   const tokens = await import('@/theme/tokens');

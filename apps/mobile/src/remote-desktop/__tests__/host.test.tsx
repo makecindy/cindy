@@ -14,7 +14,7 @@ const fixture = vi.hoisted(() => ({
   stopped: vi.fn(),
   push: vi.fn(),
   replace: vi.fn(),
-  resetRoot: vi.fn(),
+  reset: vi.fn(),
   props: {} as Record<string, any>,
 }));
 vi.mock("react-native", () => ({
@@ -25,7 +25,11 @@ vi.mock("react-native", () => ({
 vi.mock("expo-router", () => ({
   useNavigationContainerRef: () => ({
     getRootState: () => fixture.navigationState(),
-    resetRoot: fixture.resetRoot,
+    dispatch: (action: any) => {
+      expect(action.type).toBe("RESET");
+      expect(action.target).toBe(fixture.navigationState().key);
+      fixture.reset(action.payload);
+    },
     addListener: () => () => {},
   }),
   useRouter: () => ({ push: fixture.push, replace: fixture.replace }),
@@ -75,6 +79,7 @@ const desktop = (key = "desktop-a") => ({
 });
 const stack = (...routes: any[]) => ({
   key: "root",
+  routeKeySeq: 10,
   type: "stack",
   stale: false,
   routeNames: ["devices/index", "sessions/[sessionId]", REMOTE_DESKTOP_ROUTE],
@@ -111,7 +116,7 @@ describe.each([false, true])(
               routeNames: ["__root"],
             }
           : fixture.state;
-      fixture.resetRoot.mockImplementation((state) => {
+      fixture.reset.mockImplementation((state) => {
         if (nested) {
           expect(state.key).toBe("expo-root-stack");
           expect(state.routes[0].name).toBe("__root");
@@ -128,7 +133,28 @@ describe.each([false, true])(
       expect(fixture.props.deviceId).toBe("computer");
       expect(fixture.props.focused).toBe(true);
       expect(host.querySelector('[data-pointer-events="auto"]')).not.toBeNull();
-      expect(fixture.resetRoot).not.toHaveBeenCalled();
+      expect(fixture.reset).not.toHaveBeenCalled();
+    });
+    it("opens a 代输入 window view as its own viewer and restores it as the same view", () => {
+      const windowView = {
+        key: "desktop-w",
+        name: REMOTE_DESKTOP_ROUTE,
+        params: { deviceId: "computer", deviceName: "Computer", handoff: "req1" },
+      };
+      fixture.state = stack(home, windowView);
+      render();
+      expect(fixture.props.handoff).toBe("req1");
+      // The whole-desktop viewer of the same computer is replaced, not reused.
+      expect(fixture.stopped).toHaveBeenCalledOnce();
+      expect(fixture.mounted).toHaveBeenCalledTimes(2);
+      act(() => fixture.props.onBack());
+      render();
+      fixture.props.onRestore();
+      expect(fixture.push).toHaveBeenCalledWith(
+        expect.objectContaining({
+          params: { deviceId: "computer", deviceName: "Computer", handoff: "req1" },
+        }),
+      );
     });
     it("retains one mounted viewer across back and fullscreen restoration", () => {
       act(() => fixture.props.onBack());

@@ -1,7 +1,7 @@
 import type { InteractionDecision, InteractionRequest } from '@cindy/maker-core';
 import { escapeWecomMarkdown, type IMMessageEvent, type WecomIM } from '@cindy/im';
 
-import { autoReviewUnavailablePromptLine } from '../shared/autoReviewUnavailablePrompt';
+import { autoReviewUnavailablePromptLine, permissionOperationPreview, permissionPromptDescription } from '../shared/autoReviewUnavailablePrompt';
 import { isStopCommand } from '../shared/controlCommands';
 import type { SharedPermission } from '../../maker-ipc/sharedPermission';
 import { INTERACTION_CHOICE_RECEIVED_TEXT, permissionOutcomeText } from '../shared/permissionPresentation';
@@ -13,7 +13,6 @@ interface PendingInteraction {
 }
 
 const INTERACTION_TIMEOUT_MS = 10 * 60_000;
-const MAX_PERMISSION_INPUT_PREVIEW = 800;
 
 export class WecomTextInteractions {
   private readonly pending = new Map<string, PendingInteraction>();
@@ -105,32 +104,18 @@ export class WecomTextInteractions {
   }
 }
 
-function previewPermissionInput(input: Record<string, unknown>): string {
-  try {
-    const json = JSON.stringify(input, null, 2);
-    if (!json) return '<无法序列化>';
-    const preview = json.length > MAX_PERMISSION_INPUT_PREVIEW
-      ? `${json.slice(0, MAX_PERMISSION_INPUT_PREVIEW)}\n…（已截断）`
-      : json;
-    // Keep the surrounding template fence intact even when a string value
-    // contains model-controlled backticks. JSON's unicode escape stays valid.
-    return preview.replaceAll('`', '\\u0060');
-  } catch {
-    return '<无法序列化>';
-  }
-}
-
 export function formatWecomInteractionPrompt(request: InteractionRequest): string {
   if (request.kind === 'permission') {
     const toolName = escapeWecomMarkdown(request.displayName ?? request.toolName);
     const unavailable = autoReviewUnavailablePromptLine(request);
     return `需要确认工具“${toolName}”。
-${request.description ?? ''}
+${permissionPromptDescription(request) ?? ''}
 ${unavailable ? `\n${unavailable}\n` : ''}
-参数：
-\`\`\`json
-${previewPermissionInput(request.input)}
+${permissionOperationPreview(request) ? `操作：
 \`\`\`
+${permissionOperationPreview(request)}
+\`\`\`
+` : ''}
 
 回复“允许”执行一次，或回复“拒绝”取消本次操作。企业微信内不支持永久授权。`;
   }

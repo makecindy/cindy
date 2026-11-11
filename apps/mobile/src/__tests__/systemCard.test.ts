@@ -241,6 +241,15 @@ describe('formatMobileSystemCard — Agent 切换', () => {
     }).title).toBe(
       `${i18n.t('message.systemCard.agentSwitchLocation', { device: 'Studio Mac' })} · Codex`,
     );
+    // 用户确认为了先用那台的配额换过去(provider-groups.md §6.2)：与桌面一样写明原因。
+    expect(formatMobileSystemCard('agent-switch', {
+      ...base,
+      toAgentDeviceId: 'device-office-pc',
+      toAgentDeviceName: 'Office PC',
+      switchReason: 'quota-rebalance',
+    }).title).toBe(
+      `${i18n.t('message.systemCard.agentSwitchLocation', { device: 'Office PC' })} · ${i18n.t('message.systemCard.agentSwitchLocationQuotaRebalance')}`,
+    );
   });
 });
 

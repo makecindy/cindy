@@ -1,0 +1,14 @@
+{
+  "site": "api.crossref.org",
+  "auth": "公开信息，无需登录。",
+  "recipes": [
+    "crossref-search"
+  ],
+  "notes": "Crossref 官方公开元数据，最多 20 条；只返回文献记录，不把检索结果当作全文或已核实的学术结论。 输入 DOI 或 doi.org 链接时精确查询单篇；普通文本按书目关键词检索。",
+  "source": "Cindy",
+  "verifiedAt": "2026-10-23",
+  "aliases": [
+    "crossref",
+    "crossref.org"
+  ]
+}

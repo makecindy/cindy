@@ -54,6 +54,7 @@ export interface HookDefaultsDeps {
 }
 
 export interface ResolvedHookSessionConfig {
+  agentDeviceId?: string | null;
   agentKind: 'claude-code' | 'codex' | 'pi';
   model: string;
   effort: Effort | undefined;

@@ -5,7 +5,9 @@ import { afterEach, beforeEach, expect, it, vi } from 'vitest';
 import { SharedTasksSection } from '../SharedTasksSection';
 import { setDataOwnerGeneration } from '@/contexts/dataOwnerGeneration';
 import type { Session } from '@/lib/ccAgent.types';
-const state = vi.hoisted(() => ({ sessions: [] as Session[], account: vi.fn(), openLink: vi.fn(), pin: vi.fn(), row: vi.fn(), mode: 'list' as 'list' | 'text' }));
+const state = vi.hoisted(() => ({ sessions: [] as Session[], account: vi.fn(), openLink: vi.fn(), invoke: vi.fn(), getSession: vi.fn(), pin: vi.fn(), row: vi.fn(), mode: 'list' as 'list' | 'text' }));
+vi.mock('@/lib/sessionsStore', () => ({ sessionsStore: { findById: () => undefined } }));
+vi.mock('@/lib/sessionService', () => ({ get: state.getSession }));
 vi.mock('@/hooks/useSidebarCardMode', () => ({ useSidebarMainViewMode: () => ({ mode: state.mode }) }));
 vi.mock('@/features/cc-agent/sidebar/SessionCard', () => ({
   SessionCard: (props: { session: Session; onClick(): void; sharedTaskRole?: 'owned' | 'joined' }) => {
@@ -25,7 +27,7 @@ vi.mock('../JoinSharedTaskDialog', () => ({ JoinSharedTaskDialog: () => null }))
 vi.mock('@/lib/toast', () => ({ toast: { error: vi.fn() } }));
 vi.mock('../remoteProjectsStore', () => ({
   useRemoteProjectSessions: () => state.sessions, isRemoteDeviceMarkedDisconnected: () => false,
-  remoteProjectsStore: { pinSessionOrigin: state.pin },
+  remoteProjectsStore: { pinSessionOrigin: state.pin, getDeviceSessions: (deviceId: string) => state.sessions.filter(session => session.deviceLinkDeviceId === deviceId) },
 }));
 const guestTask = { id: 'joined-1', title: 'Joined task', deviceLinkDeviceId: sharedTaskHostPeer('share-1', 'desktop') } as Session;
 beforeEach(() => {
@@ -33,9 +35,35 @@ beforeEach(() => {
   state.mode = 'list';
   state.sessions = [guestTask, { id: 'own-device-task', title: 'Own device task', deviceLinkDeviceId: 'my-computer' } as Session];
   state.account.mockResolvedValue([]);
-  Object.assign(window, { electronAPI: { sharedTask: { account: state.account }, deviceLink: { openLink: state.openLink } } });
+  state.invoke.mockImplementation(async (_peer, _channel, [sessionId]) => ({ id: sessionId, source: 'desktop' }));
+  state.getSession.mockImplementation(async sessionId => ({ id: sessionId, source: 'desktop' }));
+  Object.assign(window, { electronAPI: { sharedTask: { account: state.account }, deviceLink: { openLink: state.openLink, invoke: state.invoke } } });
 });
 afterEach(cleanup);
+it.each(['cindy-make', 'cindy-make-merge'])('does not expose a cold legacy %s share or trust another device with the same ID', async source => {
+  const item = { sharedTaskId: 'legacy-share', sessionId: 'legacy-task', ownerAccountId: 'guest', hostDeviceId: 'old-host', local: false, title: 'Hidden legacy title' };
+  state.account.mockResolvedValue([item]);
+  state.sessions = [{ id: item.sessionId, source: 'desktop', deviceLinkDeviceId: 'unrelated-host' } as Session];
+  state.invoke.mockResolvedValue({ id: item.sessionId, source });
+  render(<SharedTasksSection onSelect={vi.fn()} />);
+  await waitFor(() => expect(state.invoke).toHaveBeenCalledWith(item.hostDeviceId, 'local-db:sessions:get', [item.sessionId]));
+  await act(async () => {});
+  expect(screen.queryByText(item.title)).toBeNull();
+  expect(state.openLink).not.toHaveBeenCalled();
+});
+it('keeps an offline unknown owner share hidden until its ordinary source is confirmed', async () => {
+  const item = { sharedTaskId: 'offline-share', sessionId: 'offline-task', ownerAccountId: 'guest', hostDeviceId: 'offline-host', local: false, title: 'Recovered ordinary share' };
+  state.account.mockResolvedValue([item]); state.sessions = [];
+  state.invoke.mockRejectedValue(new Error('offline'));
+  render(<SharedTasksSection onSelect={vi.fn()} />);
+  await waitFor(() => expect(state.invoke).toHaveBeenCalled());
+  await act(async () => {});
+  expect(screen.queryByText(item.title)).toBeNull();
+  state.invoke.mockResolvedValue({ id: item.sessionId });
+  fireEvent(window, new Event('focus'));
+  expect(await screen.findByText(item.title)).toBeTruthy();
+  expect(state.openLink).not.toHaveBeenCalled();
+});
 it('uses the ordinary list row with the joined session preview and live status props', async () => {
   const session = { ...guestTask, preview: 'Latest shared message', agentKind: 'codex' } as Session;
   state.sessions = [session];
@@ -72,7 +100,7 @@ it('uses the local session title and preview instead of device labels and follow
   expect(onTogglePin).toHaveBeenCalledWith(session.id, false);
 });
 it('keeps undiscovered host tasks navigable and only hydrates from the matching host mirror', async () => {
-  const item = { sharedTaskId: 'owned-1', sessionId: 'host-task', hostDeviceId: 'other-pc', local: false, title: 'Hosted task' };
+  const item = { sharedTaskId: 'owned-1', sessionId: 'host-task', ownerAccountId: 'guest', hostDeviceId: 'other-pc', local: false, title: 'Hosted task' };
   state.account.mockResolvedValue([item]);
   state.sessions = [{ id: item.sessionId, title: 'Wrong host', preview: 'Wrong preview', deviceLinkDeviceId: 'unrelated-pc' } as Session];
   state.openLink.mockResolvedValue(undefined);
@@ -213,7 +241,7 @@ it('keeps the sidebar empty until sharing starts and hides it when the last owne
   await waitFor(() => expect(screen.queryByRole('region')).toBeNull());
 });
 it('does not register a remote origin or navigate after an account change during opening', async () => {
-  state.sessions=[]; state.account.mockResolvedValue([{ sharedTaskId: 'owned-1', sessionId: 'host-task', hostDeviceId: 'other-pc', local: false, title: 'Hosted task' }]);
+  state.sessions=[]; state.account.mockResolvedValue([{ sharedTaskId: 'owned-1', sessionId: 'host-task', ownerAccountId: 'guest', hostDeviceId: 'other-pc', local: false, title: 'Hosted task' }]);
   let finish!: () => void; state.openLink.mockImplementation(() => new Promise<void>(resolve => { finish=resolve; }));
   const select=vi.fn(); render(<SharedTasksSection onSelect={select} />);
   fireEvent.click(await screen.findByRole('button', { name: /Hosted task/ }));

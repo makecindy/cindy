@@ -22,6 +22,8 @@ import {
  * 追加在 wire 消息上,与 IM 渠道说明(hook-control/outbound.buildHookPromptNote)
  * 及引擎交接前缀(agentHandoff.prependHandoffToUserMessage)同一层、同一套语义:
  * **只进喂给 agent 的内容,不进落库/显示的用户消息原话。**
+ * 「逐轮」不等于每轮都重复一份:同一原生上下文里内容没变就不再前置(wireNoteMemory.ts),
+ * 换窗、原生压缩、/clear 之后整体重发一次——长对话里几十份一模一样的说明只占窗口。
  *
  * ── 与代码职责的分界(§2 能用代码保证的不甩给 prompt) ────────────────────
  * 「产出物在手机上打不开」已经由代码解决:手机端能渲染 HTML 并把同目录资源取回来。
@@ -98,7 +100,7 @@ function singleTextContent(message: unknown): string | null {
 
 /**
  * 原生命令必须位于消息开头；环境说明不能抢占这个位置。
- * Claude 旁路 /compact；Pi 的 slash 输入交由运行时自己的命令发现处理。
+ * Claude 旁路 /compact 和 Learn 技能调用；Pi 的 slash 输入交由运行时自己的命令发现处理。
  */
 export function shouldPrependMobileClientPromptNote(
   message: unknown,
@@ -115,7 +117,11 @@ export function shouldPrependMobileClientPromptNote(
     return !(text ?? firstText ?? '').trimStart().startsWith('/');
   }
   if (agentKind !== 'claude-code') return true;
-  return text === null || !/^\/compact(?:\s|$)/.test(text);
+  if (text === null) return true;
+  // Learn's exact-path pin is expanded at the provider boundary, where the
+  // command must still lead the input. Keep its aliases free of wire notes.
+  return !/^\/compact(?:\s|$)/.test(text)
+    && !/^\/(?:(?:skill|cindy):)?learn(?:\s|$)/i.test(text.trimStart());
 }
 
 /**
@@ -185,6 +191,7 @@ const MAIN_ONLY_SEND_FIELDS = [
   'fromMobileClient',
   'fromDeviceLinkClient',
   'uiLanguage',
+  'classicalStyle',
   'expectedInputGeneration',
   'expectedTurnSession',
   'expectedTurnGeneration',

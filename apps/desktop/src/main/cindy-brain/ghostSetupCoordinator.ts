@@ -34,9 +34,11 @@ export type GhostSetupEnsureResult =
         | 'TIMEOUT'
         | 'INTERNAL'
         | 'GHOST_NOT_FOUND'
+        | 'GHOST_NAMESPACE_MISMATCH'
         | 'GHOST_RETIRED'
         | 'GHOST_ASLEEP'
         | 'GHOST_DISABLED_IN_WORKDIR'
+        | 'GHOST_AMBIGUOUS'
         | 'TOOL_NOT_FOUND';
       message: string;
       setup?: GhostSetupAssessment;
@@ -47,8 +49,15 @@ export type GhostSetupTargetValidation =
   | {
       ok: false;
       errorCode:
-        'GHOST_NOT_FOUND' | 'GHOST_ASLEEP' | 'GHOST_DISABLED_IN_WORKDIR' | 'GHOST_RETIRED' | 'TOOL_NOT_FOUND';
+        | 'GHOST_NOT_FOUND'
+        | 'GHOST_NAMESPACE_MISMATCH'
+        | 'GHOST_RETIRED'
+        | 'GHOST_ASLEEP'
+        | 'GHOST_DISABLED_IN_WORKDIR'
+        | 'GHOST_AMBIGUOUS'
+        | 'TOOL_NOT_FOUND';
       message: string;
+      candidates?: Array<{ ghostId: string; namespace: string | null }>;
     };
 
 export type GhostSetupActionResult =
@@ -82,6 +91,7 @@ export interface GhostSetupInlineActionInput {
 }
 
 export interface GhostSetupCoordinatorDeps {
+  getTargetToken?: (ghostId: string) => string | null;
   remoteConnection?: true;
   changeBus: GhostSetupChangeBus;
   bridge: GhostSetupInteractionBridge;
@@ -101,15 +111,19 @@ export interface GhostSetupCoordinatorDeps {
     ghostId: string;
     action: GhostSetupAllowedAction;
     responseTarget?: GhostSetupInteractionResponseTarget;
+    assertCurrent?: () => void;
   }) => Promise<GhostSetupActionResult>;
   executeInlineAction?: (args: GhostSetupInlineActionInput) => Promise<GhostSetupActionResult>;
   timeoutMs?: number;
   terminalGraceMs?: number;
   timeoutMessage?: () => string;
+  cancelledMessage?: () => string;
   createRequestId?: () => string;
   logger?: {
     warn: (message: string, context?: Record<string, unknown>) => void;
   };
+  /** Map MCP/logical ghostId onto the credential/store instance id. */
+  resolveStoreId?: (ghostId: string) => string;
 }
 
 export interface GhostSetupEnsureRequest {
@@ -150,20 +164,27 @@ export class GhostSetupCoordinator {
 
   async ensureReady(request: GhostSetupEnsureRequest): Promise<GhostSetupEnsureResult> {
     const cancelled = (): GhostSetupEnsureResult => ({
-      ok: false, errorCode: 'SETUP_CANCELLED', message: 'Plugin setup was cancelled; no plugin operation was executed.',
+      ok: false, errorCode: 'SETUP_CANCELLED', message: this.cancelledMessage(),
     });
     if (request.signal?.aborted) return cancelled();
+    const expectedTarget = this.deps.getTargetToken?.(request.ghostId);
+    const isTargetCurrent = () => !this.deps.getTargetToken ||
+      (expectedTarget != null && this.deps.getTargetToken(request.ghostId) === expectedTarget);
+    const validateTarget = (): GhostSetupTargetValidation => isTargetCurrent()
+      ? this.deps.validateTarget(request.ghostId, request.tool, request.workingDir)
+      : { ok: false, errorCode: 'GHOST_NOT_FOUND', message: 'Plugin installation changed; open a new setup request.' };
     let assessment: GhostSetupAssessment;
     let unsubscribe = () => {};
     let wakeVerify: (() => void) | null = null;
     let assessmentDirty = false;
     const reconnectedActions = new Set<string>();
     let localConnectionAction: { id: string; ref: string; revision: number } | undefined;
+    const storeId = this.deps.resolveStoreId?.(request.ghostId) ?? request.ghostId;
 
     // Subscribe before the initial read. A committed settings write racing the
     // first assessment will then keep the read loop running until one complete
     // assessment observes a quiet revision.
-    unsubscribe = this.deps.changeBus.subscribe(request.ghostId, event => {
+    unsubscribe = this.deps.changeBus.subscribe(storeId, event => {
       if (localConnectionAction && event.source === 'connection' && event.ref === localConnectionAction.ref &&
           event.revision > localConnectionAction.revision) {
         reconnectedActions.add(localConnectionAction.id);
@@ -178,13 +199,13 @@ export class GhostSetupCoordinator {
     > => {
       for (;;) {
         assessmentDirty = false;
-        const startRevision = this.deps.changeBus.currentRevision(request.ghostId);
-        const target = this.deps.validateTarget(request.ghostId, request.tool, request.workingDir);
+        const startRevision = this.deps.changeBus.currentRevision(storeId);
+        const target = validateTarget();
         if (!target.ok) return { ok: false, target };
         const next = await this.deps.assess(request.ghostId);
         if (
           !assessmentDirty &&
-          this.deps.changeBus.currentRevision(request.ghostId) === startRevision
+          this.deps.changeBus.currentRevision(storeId) === startRevision
         ) {
           return { ok: true, assessment: next };
         }
@@ -391,7 +412,7 @@ export class GhostSetupCoordinator {
             await verify();
             return;
           }
-          const target = this.deps.validateTarget(request.ghostId, request.tool, request.workingDir);
+          const target = validateTarget();
           if (!target.ok) {
             settleTargetFailure(target);
             return;
@@ -417,7 +438,8 @@ export class GhostSetupCoordinator {
                 ? `session:${sessionId}:target:${responseTarget.id}`
                 : `session:${sessionId}`;
           const flightKey = `${request.ghostId}\u0000${action.id}\u0000${flightScope}`;
-          let flight = this.actionFlights.get(flightKey);
+          const targetFlightKey = JSON.stringify([flightKey, expectedTarget]);
+          let flight = this.actionFlights.get(targetFlightKey);
           if (!flight) {
             flight = this.trackAction(
               this.deps
@@ -426,10 +448,13 @@ export class GhostSetupCoordinator {
                   ghostId: request.ghostId,
                   action,
                   ...(responseTarget ? { responseTarget } : {}),
+                  assertCurrent: () => {
+                    if (!validateTarget().ok) throw new Error('PLUGIN_SETUP_TARGET_STALE');
+                  },
                 })
-                .finally(() => this.actionFlights.delete(flightKey)),
+                .finally(() => this.actionFlights.delete(targetFlightKey)),
             );
-            this.actionFlights.set(flightKey, flight);
+            this.actionFlights.set(targetFlightKey, flight);
           }
           let result: GhostSetupActionResult;
           try {
@@ -474,7 +499,7 @@ export class GhostSetupCoordinator {
             {
               ok: false,
               errorCode: 'SETUP_CANCELLED',
-              message: '用户取消了插件设置，本次调用未执行。',
+              message: this.cancelledMessage(),
             },
             'cancelled',
             command.cleanupReason ? 0 : undefined,
@@ -500,7 +525,7 @@ export class GhostSetupCoordinator {
           await verify();
           return;
         }
-        const target = this.deps.validateTarget(request.ghostId, request.tool, request.workingDir);
+        const target = validateTarget();
         if (!target.ok) {
           settleTargetFailure(target);
           return;
@@ -523,7 +548,7 @@ export class GhostSetupCoordinator {
             if (settled || committed || request.signal?.aborted || !inlineSubmitting ||
                 activeActionId !== action.id || ghostId !== request.ghostId ||
                 actionId !== action.id || requirementRef !== boundItem.ref ||
-                !this.deps.validateTarget(request.ghostId, request.tool, request.workingDir).ok) {
+                !validateTarget().ok) {
               throw new Error('PLUGIN_SETUP_INLINE_STALE');
             }
           },
@@ -583,7 +608,7 @@ export class GhostSetupCoordinator {
           reconnectedActions.add(actionId);
           assessmentDirty = true;
           void verify();
-        });
+        }, isTargetCurrent);
       } catch (error) {
         settle(this.internalFailure('插件设置卡片打开失败', error), 'open-failed', 0);
         return;
@@ -605,6 +630,10 @@ export class GhostSetupCoordinator {
         );
       }, this.deps.timeoutMs ?? DEFAULT_SETUP_TIMEOUT_MS);
     });
+  }
+
+  private cancelledMessage(): string {
+    return this.deps.cancelledMessage?.() ?? 'Plugin setup was cancelled; this call was not run.';
   }
 
   private internalFailure(message: string, error: unknown): GhostSetupEnsureResult {

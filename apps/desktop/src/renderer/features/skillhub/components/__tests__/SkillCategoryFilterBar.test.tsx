@@ -3,7 +3,7 @@
 import { fireEvent, render, screen } from '@testing-library/react';
 import { describe, expect, it, vi } from 'vitest';
 
-import { SkillCategoryFilterBar, skillCategoryScrollStep } from '../SkillCategoryFilterBar';
+import { SkillCategoryFilterBar } from '../SkillCategoryFilterBar';
 
 const categories = [
   { slug: 'automation', name: 'Automation', count: 10, myCount: 1 },
@@ -19,30 +19,10 @@ function renderBar(onSelectCategory = vi.fn()) {
         selectedCategory="automation"
         allLabel="All"
         ariaLabel="Filter skills by category"
-        scrollLeftLabel="Scroll categories left"
-        scrollRightLabel="Scroll categories right"
-        scrollStartLabel="Already at the first category"
-        scrollEndLabel="Already at the last category"
         onSelectCategory={onSelectCategory}
       />,
     ),
   };
-}
-
-function mockScroller(
-  scroller: HTMLElement,
-  values: { scrollLeft: number; clientWidth: number; scrollWidth: number },
-) {
-  let scrollLeft = values.scrollLeft;
-  Object.defineProperty(scroller, 'clientWidth', { configurable: true, value: values.clientWidth });
-  Object.defineProperty(scroller, 'scrollWidth', { configurable: true, value: values.scrollWidth });
-  Object.defineProperty(scroller, 'scrollLeft', {
-    configurable: true,
-    get: () => scrollLeft,
-    set: (value: number) => {
-      scrollLeft = value;
-    },
-  });
 }
 
 describe('SkillCategoryFilterBar', () => {
@@ -59,36 +39,49 @@ describe('SkillCategoryFilterBar', () => {
     expect(onSelectCategory).toHaveBeenCalledWith('productivity');
   });
 
-  it('shows edge controls only when the category row overflows', () => {
+  it('keeps the overflowing category row free of arrow controls', () => {
     renderBar();
-    expect(screen.queryByRole('button', { name: 'Scroll categories right' })).toBeNull();
-
     const scroller = screen.getByTestId('skill-category-filter-scroller');
-    mockScroller(scroller, { scrollLeft: 0, clientWidth: 200, scrollWidth: 600 });
+    Object.defineProperty(scroller, 'clientWidth', { configurable: true, value: 200 });
+    Object.defineProperty(scroller, 'scrollWidth', { configurable: true, value: 600 });
     fireEvent.scroll(scroller);
 
-    expect(
-      screen
-        .getByRole('button', { name: 'Already at the first category' })
-        .hasAttribute('disabled'),
-    ).toBe(true);
-    expect(
-      screen.getByRole('button', { name: 'Scroll categories right' }).hasAttribute('disabled'),
-    ).toBe(false);
+    expect(screen.queryAllByRole('button')).toHaveLength(0);
+    expect(screen.getAllByRole('radio')).toHaveLength(3);
   });
 
-  it('scrolls by a bounded portion of the visible row', () => {
+  it('reveals the focused category without centering the page', () => {
     renderBar();
-    const scroller = screen.getByTestId('skill-category-filter-scroller');
-    const scrollBy = vi.fn();
-    mockScroller(scroller, { scrollLeft: 0, clientWidth: 200, scrollWidth: 600 });
-    scroller.scrollBy = scrollBy;
-    fireEvent.scroll(scroller);
+    const category = screen.getByRole('radio', { name: 'Productivity' });
+    category.scrollIntoView = vi.fn();
 
-    fireEvent.click(screen.getByRole('button', { name: 'Scroll categories right' }));
-    expect(scrollBy).toHaveBeenCalledWith({
-      left: skillCategoryScrollStep(200),
-      behavior: 'smooth',
+    fireEvent.focus(category);
+    expect(category.scrollIntoView).toHaveBeenCalledWith({
+      block: 'nearest',
+      inline: 'nearest',
     });
+  });
+
+  it('preserves arrow-key selection and follows focus at both ends', () => {
+    const { onSelectCategory } = renderBar();
+    const all = screen.getByRole('radio', { name: 'All' });
+    const automation = screen.getByRole('radio', { name: 'Automation' });
+    const productivity = screen.getByRole('radio', { name: 'Productivity' });
+    for (const category of [all, automation, productivity]) {
+      category.scrollIntoView = vi.fn();
+    }
+
+    fireEvent.keyDown(automation, { key: 'ArrowRight' });
+    expect(document.activeElement).toBe(productivity);
+    expect(onSelectCategory).toHaveBeenLastCalledWith('productivity');
+    expect(productivity.scrollIntoView).toHaveBeenCalled();
+
+    fireEvent.keyDown(productivity, { key: 'Home' });
+    expect(document.activeElement).toBe(all);
+    expect(all.scrollIntoView).toHaveBeenCalled();
+
+    fireEvent.keyDown(all, { key: 'End' });
+    expect(document.activeElement).toBe(productivity);
+    expect(onSelectCategory).toHaveBeenLastCalledWith('productivity');
   });
 });

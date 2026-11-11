@@ -20,6 +20,7 @@ import { useEffect, useMemo, useState } from 'react';
 import { skillhubCatalogKey } from '../../../../shared/skillhubCatalog';
 import { syncUninstallCleanupNotices, resetUninstallCleanupNotices } from '../lib/uninstallCleanupNotifications';
 import { invalidateSkillSyncRequests, registerSyncStoreSetters } from './useSkillSync';
+import { useSkillhubTarget } from '../SkillhubTargetContext';
 
 interface SkillhubProject {
   /** 项目资产归属根目录，来自会话分组后的 project root。 */
@@ -30,7 +31,7 @@ interface SkillhubProject {
   displayName: string;
 }
 
-interface SkillhubState {
+export interface SkillhubState {
   skills: SkillhubSkill[];
   sources: SkillhubSourceReport[];
   loading: boolean;
@@ -270,9 +271,11 @@ interface UseSkillhubReturn extends SkillhubState {
 }
 
 export function useSkillhub(): UseSkillhubReturn {
+  const target = useSkillhubTarget();
   const [snapshot, setSnapshot] = useState<SkillhubState>(state);
 
   useEffect(() => {
+    if (target) return;
     ensureAuthListener();
     const sync = () => setSnapshot(state);
     listeners.add(sync);
@@ -280,11 +283,11 @@ export function useSkillhub(): UseSkillhubReturn {
     return () => {
       listeners.delete(sync);
     };
-  }, []);
+  }, [target === null]);
 
   return {
-    ...snapshot,
-    refresh,
+    ...(target?.state ?? snapshot),
+    refresh: target?.refresh ?? refresh,
   };
 }
 

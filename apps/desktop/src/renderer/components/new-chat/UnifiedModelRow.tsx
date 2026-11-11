@@ -1,6 +1,7 @@
 import { localizedModelDescription } from '@/lib/modelDescriptions';
 import { localizedModelName } from '@/lib/modelDisplayNames';
-import { Lock, SlidersHorizontal, Star, Zap } from 'lucide-react';
+import { Lock, SlidersHorizontal, Star } from 'lucide-react';
+import { SpeedIcon } from './SpeedIcon';
 import { useTranslation } from 'react-i18next';
 import type { KeyboardEvent as ReactKeyboardEvent, MouseEvent as ReactMouseEvent } from 'react';
 
@@ -9,7 +10,8 @@ import type { ProviderView, UnifiedModelEntry } from '@cindy/model-providers';
 import type { AgentKind } from '@/hooks/useAgentCapabilities';
 import { cn } from '@/lib/utils';
 import { COMPOSER_MENU_ROW, menuRowAttrs } from '@/components/ui/menu-row';
-import { providerAccountLabel } from '@/lib/providerDisplayName';
+import { providerDisplayName } from '@/lib/providerDisplayName';
+import { modelSupplierLabel } from '@cindy/model-providers';
 import type { Effort } from '@/lib/userPreferences.types';
 
 import { PriceFreeBadge, PriceTierMarks, type UnifiedRowPriceDisplay } from './priceTierMarks';
@@ -30,6 +32,26 @@ export type { UnifiedRowPriceDisplay } from './priceTierMarks';
 /** 整格点亮(classic,Chris 2026-08-14 第二版):亮几格 = round(实付比例 × 格数),至少 1 格。 */
 const litWholeMarks = (paidPct: number, tier: 1 | 2 | 3): number =>
   Math.min(tier, Math.max(1, Math.round((paidPct / 100) * tier)));
+
+// Catalog provider snapshots are immutable. Resolve duplicate display labels once
+// per snapshot rather than scanning the entire gateway catalog for every row.
+const supplierOwners = new WeakMap<ProviderView, Map<string, Set<string>>>();
+function hasDuplicateSupplier(provider: ProviderView | undefined, label: string | undefined): boolean {
+  if (!provider || !label) return false;
+  let owners = supplierOwners.get(provider);
+  if (!owners) {
+    owners = new Map();
+    for (const models of Object.values(provider.models)) for (const model of models ?? []) {
+      const supplier = modelSupplierLabel(model.discoveredSource);
+      if (!supplier || !model.discoveredSource) continue;
+      const ids = owners.get(supplier) ?? new Set<string>();
+      ids.add(model.discoveredSource.providerId);
+      owners.set(supplier, ids);
+    }
+    supplierOwners.set(provider, owners);
+  }
+  return (owners.get(label)?.size ?? 0) > 1;
+}
 /** 单行(双行布局):L1 图标 · 名称 · ☆ · 三元组 · 勾;L2 一句描述。 */
 export function UnifiedModelRow({
   entry,
@@ -48,13 +70,20 @@ export function UnifiedModelRow({
   onRevealForKeyboard,
   priceDisplay,
   configurationEnabled = true,
+  customizable = true,
   paymentRequired = false,
   paymentRequiredLabel,
   paymentRequiredUnlockLabel,
   onPaymentRequired,
   sourceLabel,
+  measurementOnly = false,
 }: {
-  /** Supplied only in the combined All / Favorites views. */
+  /** Hidden intrinsic-width probe: share row typography, omit interaction and fixed-size artwork. */
+  measurementOnly?: boolean;
+  /**
+   * Supplied only in the combined All / Favorites views; omitted = the local description.
+   * The panel omits it only for this catalog's own Cindy AI (see UnifiedModelPanel aggregateSourceLabel).
+   */
   sourceLabel?: string;
   entry: UnifiedModelEntry;
   anchor: UnifiedAnchor;
@@ -75,6 +104,11 @@ export function UnifiedModelRow({
   /** 行内价格展示;不传 = 无报价。字段语义见 `UnifiedRowPriceDisplay`。 */
   priceDisplay?: UnifiedRowPriceDisplay;
   configurationEnabled?: boolean;
+  /**
+   * false = 这一行不出配置浮层(不画自定义按钮、不响应右键 / ←),行内仍按 configurationEnabled
+   * 显示深度与 Fast。用于收藏区里另一台电脑的收藏:它的配置要在那台电脑的目录里调。
+   */
+  customizable?: boolean;
   /** 付费锁定行保留在原位置，可聚焦但不能选中、收藏或打开配置。 */
   paymentRequired?: boolean;
   paymentRequiredLabel?: string;
@@ -85,14 +119,28 @@ export function UnifiedModelRow({
   const displayName = localizedModelName(entry.displayName, t);
   const description = localizedModelDescription({ id: entry.modelId, group: entry.group }, t);
   const provider = providers.find((item) => item.id === entry.providerId);
+  // Read the effective engine's exact wire entry, never the recommended sibling's source.
+  const source = entry.capabilities[config.agent]?.discoveredSource;
+  const supplier = modelSupplierLabel(source);
+  const duplicateSupplier = hasDuplicateSupplier(provider, supplier);
+  const supplierLabel = duplicateSupplier ? `${supplier} (${source!.providerId})` : supplier;
+  const connectionLabel = provider ? providerDisplayName(provider, t) : entry.providerId;
+  const descriptionLabel = supplierLabel ?? connectionLabel;
+  // Remote rows append device/group/unavailability information to this exact
+  // connection label. Replace only that prefix; keep the rest of the source.
+  const sourceDisplayLabel = supplierLabel && sourceLabel
+    ? sourceLabel === connectionLabel ? supplierLabel
+      : sourceLabel.startsWith(`${connectionLabel} · `)
+        ? supplierLabel + sourceLabel.slice(connectionLabel.length) : sourceLabel
+    : sourceLabel;
   const priceSymbol = priceDisplay?.symbol ?? '$';
   const engineOption = agentOptionOf(config.engine);
   const openConfig = (element: HTMLElement, toggle = false) => {
-    if (!paymentRequired) onReveal(anchor, element, toggle);
+    if (!paymentRequired && customizable) onReveal(anchor, element, toggle);
   };
   const tripleTitle = `${engineOption.label}${
     configurationEnabled && config.effort ? ` · ${effortLabelOf(config.agent, config.effort)}` : ''
-  }${configurationEnabled && config.fast ? ' · Fast' : ''}`;
+  }${configurationEnabled && config.fast ? ` · ${t(config.fast === 'ultrafast' ? 'newChat.modelSelector.speed.ultrafast' : 'newChat.modelSelector.speed.fast')}` : ''}`;
   const paymentRequiredActionLabel = paymentRequired
     ? [displayName, paymentRequiredUnlockLabel ?? paymentRequiredLabel]
         .filter(Boolean)
@@ -100,7 +148,7 @@ export function UnifiedModelRow({
     : undefined;
 
   // 行根节点统一处理选中、浮层与键盘，内嵌按钮阻止事件冒泡。
-  const rowRootProps = {
+  const rowRootProps = measurementOnly ? {} : {
     role: 'option' as const,
     'aria-selected': selected,
     // 付费行不能被选为模型，但它本身是“查看付费说明”的可执行入口；只有真正
@@ -108,7 +156,7 @@ export function UnifiedModelRow({
     'aria-disabled': interactionDisabled ? true : undefined,
     'aria-label': paymentRequiredActionLabel,
     // ← 开配置浮层是这一行唯一的键盘入口,不声明就只有摸索得到(读屏用户尤甚)。
-    'aria-keyshortcuts': paymentRequired ? undefined : 'ArrowLeft',
+    'aria-keyshortcuts': paymentRequired || !customizable ? undefined : 'ArrowLeft',
     tabIndex: interactionDisabled ? -1 : 0,
     'data-model-selected': selected ? ('true' as const) : undefined,
     // Shared menu row: the panel's glide highlight; the chosen row keeps its static fill (below).
@@ -116,7 +164,8 @@ export function UnifiedModelRow({
     'data-state': active ? 'open' : selected ? 'checked' : undefined,
     'data-unified-anchor': anchorKey(anchor),
     onContextMenu: (event: ReactMouseEvent<HTMLDivElement>) => {
-      if (interactionDisabled || paymentRequired) return;
+      // 不出配置浮层的行(远程收藏 / 最近行 / 设置类入口)不抢原生右键菜单。
+      if (interactionDisabled || paymentRequired || !customizable) return;
       event.preventDefault();
       openConfig(event.currentTarget);
     },
@@ -135,6 +184,7 @@ export function UnifiedModelRow({
         return;
       }
       if (event.key === 'ArrowLeft') {
+        if (!customizable) return;
         event.preventDefault();
         onRevealForKeyboard(anchor, event.currentTarget);
         return;
@@ -145,7 +195,7 @@ export function UnifiedModelRow({
     },
   };
 
-  const starButton = onStar ? (
+  const starButton = !measurementOnly && onStar ? (
     <button
       type="button"
       disabled={interactionDisabled || paymentRequired}
@@ -173,7 +223,7 @@ export function UnifiedModelRow({
       <Star size={14} fill={isFavoriteRow || justFavorited ? 'currentColor' : 'none'} />
     </button>
   ) : null;
-  const customizeButton = (
+  const customizeButton = !measurementOnly && (
     <button
       type="button"
       data-row-customize
@@ -235,15 +285,17 @@ export function UnifiedModelRow({
         {/* 设计稿 .mark:18×18 定位盒(图标本体 13-17px 居中)。没有这个盒,名字起点
             随图标实际宽度浮动,第二行描述的 26px 缩进(18+8)就对不上第一行的名字。 */}
         <span className="flex h-[18px] w-[18px] shrink-0 items-center justify-center">
-          <ModelIconMark
-            {...(entry.icon !== undefined ? { icon: entry.icon } : {})}
-            providerId={entry.providerId}
-            {...(provider?.name !== undefined ? { name: provider.name } : {})}
-            {...(provider?.routing !== undefined ? { routing: provider.routing } : {})}
-            {...(provider?.logoKind !== undefined ? { logoKind: provider.logoKind } : {})}
-            colorClass="text-[var(--text-secondary)]"
-            withMargin={false}
-          />
+          {!measurementOnly && (
+            <ModelIconMark
+              {...(entry.icon !== undefined ? { icon: entry.icon } : {})}
+              providerId={entry.providerId}
+              {...(provider?.name !== undefined ? { name: provider.name } : {})}
+              {...(provider?.routing !== undefined ? { routing: provider.routing } : {})}
+              {...(provider?.logoKind !== undefined ? { logoKind: provider.logoKind } : {})}
+              colorClass="text-[var(--text-secondary)]"
+              withMargin={false}
+            />
+          )}
         </span>
         <span
           // 布局同设计稿 .m-name:内容宽、不 grow —— 徽标/钱串紧贴模型名左排,
@@ -268,8 +320,10 @@ export function UnifiedModelRow({
             tier={priceDisplay.tier}
           />
         )}
-        {starButton}
-        {configurationEnabled && customizeButton}
+        {onStar && (measurementOnly ? <span className="h-5 w-5 shrink-0" /> : starButton)}
+        {configurationEnabled && customizable && (
+          measurementOnly ? <span className="h-5 w-5 shrink-0" /> : customizeButton
+        )}
         {/* 常驻三元组:引擎图标 + 推理强度 + ⚡。所有行同构,自定义行整组提亮一档。
             设计稿 .l1-right:margin-left auto 把右侧簇推到最右,左侧簇贴名字排。 */}
         <span data-model-row-meta className="ml-auto flex shrink-0 items-center gap-2">
@@ -279,18 +333,15 @@ export function UnifiedModelRow({
             // 颜色恒定,不随「已自定义」提亮(Chris 2026-08-16 裁决,所有行一致)。
             className="flex max-w-[118px] shrink-0 items-center gap-1 truncate text-12 font-normal text-[var(--text-tertiary)]"
           >
-            <engineOption.Mark size={12} className="shrink-0" />
+            {measurementOnly
+              ? <span className="h-3 w-3 shrink-0" />
+              : <engineOption.Mark size={12} className="shrink-0" />}
             {configurationEnabled && config.effort && (
               <span className="truncate">{effortLabelOf(config.agent, config.effort)}</span>
             )}
-            {configurationEnabled && config.fast && (
-              <Zap
-                size={11}
-                fill="currentColor"
-                className="shrink-0"
-                aria-label={t('newChat.modelSelector.meta.fastBadge')}
-              />
-            )}
+            {configurationEnabled && config.fast && (measurementOnly
+              ? <span style={{ width: 11, height: 11 }} className="shrink-0" />
+              : <SpeedIcon mode={config.fast} size={11} className="shrink-0" />)}
           </span>
           {paymentRequiredUnlock}
           {paymentRequiredBadge}
@@ -299,26 +350,30 @@ export function UnifiedModelRow({
             还平白吃掉一列宽度);选中态语义由 aria-selected 承载。模型面板是输入框菜单
             「选中 = 勾 + 500」约定的唯一例外,2026-10-04 用户再次确认保留整行底色、不加勾。 */}
       </div>
-      {sourceLabel && entry.providerId !== 'xd' ? (
-        <ModelSourceDetails
-          providerId={entry.providerId}
-          label={providerAccountLabel(
-            sourceLabel,
-            provider?.openAiAccount?.identity?.trim() ||
-              provider?.subscriptionAccount?.identity?.trim(),
-          )}
-          modelId={config.wireModelId ?? entry.modelId}
-        />
+      {sourceLabel ? (
+        // Source details use w-0/min-w-full and do not contribute intrinsic width.
+        // Do not mount another quota-clock subscriber just to measure this row.
+        !measurementOnly && (
+          <ModelSourceDetails
+            providerId={entry.providerId}
+            label={sourceDisplayLabel ?? sourceLabel}
+            accountIdentity={
+              provider?.openAiAccount?.identity?.trim() ||
+                provider?.subscriptionAccount?.identity?.trim()
+            }
+            modelId={config.wireModelId ?? entry.modelId}
+          />
+        )
       ) : description ? (
         // 单行截断 + title 全文;宽度上限收紧到约等于最长模型名的量级(~30ch)——
         // 描述是辅助信息,不该比模型名更长地占据视线(2026-08-13 实测反馈)。
         // 颜色按旧选择器恢复用 --text-secondary(同日裁决:tertiary 太淡看不清;
         // 与名字的区分靠名字的 14px/medium,不靠把描述压淡)。
         <div
-          title={description}
+          title={descriptionLabel}
           className="min-w-0 max-w-[30ch] truncate pl-[26px] pt-px text-12 font-normal leading-[1.4] text-[var(--text-secondary)]"
         >
-          {description}
+          {descriptionLabel}
         </div>
       ) : null}
     </div>

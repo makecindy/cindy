@@ -6,8 +6,11 @@ import { messages, sessions } from '../../schema';
 import * as taskImages from '../../../cindy-media/taskImageDelivery';
 import * as currentDb from '../../client/current';
 import { runDeviceLinkInvokeContext } from '../../../device-link/invoke-context';
-import { MAX_HISTORY_SCAN_ROWS } from '../historyViewReader';
+import { MAX_HISTORY_SCAN_ROWS, type HistoryPageShape } from '../historyViewReader';
 import { historyViewLeaves, type HistoryViewPage, type HistoryDetailPage, type HistoryMessageSource } from '@cindy/maker-shared/message-window';
+import type { DbClient } from '../../client/DbClient';
+import { captureMediaUserTurn, refreshMediaUserTurnCost } from '../../../usage/mediaTurnCost';
+import { readSessionCostDetails } from '../../../usage/sessionCostDetails';
 
 const h = vi.hoisted(() => ({
   db: null as ReturnType<typeof drizzle> | null,
@@ -60,11 +63,8 @@ vi.mock('../../../logger', () => ({
 vi.mock('../../../logger.js', () => ({
   createLogger: () => ({ debug: vi.fn(), info: vi.fn(), warn: vi.fn(), error: vi.fn() }),
 }));
-vi.mock('../../../maker-host/codex-local-sessions', () => ({
-  importExternalCodexMessagesForSession: vi.fn(async () => undefined),
-}));
-vi.mock('../../../maker-host/claude-local-sessions', () => ({
-  importExternalClaudeCodeMessagesForSession: vi.fn(async () => undefined),
+vi.mock('../../../session-import/legacy', () => ({
+  adoptLegacySessionBeforeOpen: vi.fn(async () => undefined),
 }));
 vi.mock('../../../embedders/chat-history-embedder', () => ({
   onMessageCreated: vi.fn(async () => undefined),
@@ -91,7 +91,6 @@ import {
   findForkParentSessionId,
   findPendingForkOrigin,
   getMessageDeletionTarget,
-  commitMessageDeletion,
   markLatestAgentHandoffConsumed,
   readPriorUserRoundCost,
   registerMessageIpc,
@@ -104,6 +103,7 @@ function createDb(): Database.Database {
     CREATE TABLE sessions (
       id TEXT PRIMARY KEY,
       cleared_at INTEGER,
+      source TEXT NOT NULL DEFAULT 'desktop',
       parent_session_id TEXT,
       status TEXT NOT NULL DEFAULT 'active',
       created_at INTEGER NOT NULL DEFAULT 0,
@@ -186,11 +186,23 @@ describe('local-db:messages:list cursor', () => {
       parent ? JSON.stringify({ parentUuid: parent, model: 'actual-child-model' }) : null, Number(id));
     add('0', 'user', 'Visible question');
     add('1', 'tool_use', { toolName: 'Agent', toolUseId: 'agent', input: { description: 'Inspect' } });
-    for (let n = 2; n < 103; n++) add(String(n), 'thinking', { text: 'hidden '.repeat(1000), durationMs: 10 }, 'agent');
+    const unchangedByteTail = 'q'.repeat(200);
+    for (let n = 2; n < 103; n++) add(String(n), 'thinking', {
+      text: n === 2 ? `ab${unchangedByteTail}` : 'hidden '.repeat(1000), durationMs: 10,
+    }, 'agent');
     add('103', 'assistant', 'Visible answer');
     registerMessageIpc();
-    const invoke = (channel: string, ...args: unknown[]) => runDeviceLinkInvokeContext({ controllerDeviceId: 'd', channel }, () => h.handlers.get(channel)!({}, 's1', ...args));
-    const page = await invoke('local-db:messages:view', { lazyDetails: true }) as HistoryViewPage<HistoryMessageSource>;
+    const shapes: HistoryPageShape[] = [];
+    const historyView = {
+      disable() {}, setExpanded() {},
+      update(_keys: readonly string[], latest?: { shape?: HistoryPageShape }) {
+        if (latest?.shape) shapes.push(latest.shape);
+      },
+    };
+    const invoke = (channel: string, ...args: unknown[]) => runDeviceLinkInvokeContext({
+      controllerDeviceId: 'd', channel, historyView,
+    }, () => h.handlers.get(channel)!({}, 's1', ...args));
+    const page = await invoke('local-db:messages:view', { lazyDetails: true, workLines: true }) as HistoryViewPage<HistoryMessageSource>;
     expect(page.hasMore).toBe(false);
     expect(JSON.stringify(page)).not.toContain('hidden ');
     expect(JSON.stringify(page)).toContain('Visible answer');
@@ -201,9 +213,14 @@ describe('local-db:messages:list cursor', () => {
     expect(detail.messages.length).toBeGreaterThan(0);
     expect(detail.messages.every((row) => (row.agentMeta as { parentUuid?: string })?.parentUuid === 'agent')).toBe(true);
     expect(JSON.stringify(detail)).toContain('hidden ');
-    expect(await invoke('local-db:messages:view', { lazyDetails: true })).toEqual(page);
-    sqlite.prepare('UPDATE messages SET content = ? WHERE id = ?').run(JSON.stringify({ text: 'edited '.repeat(1000), durationMs: 10 }), '2');
-    expect(await invoke('local-db:messages:view', { lazyDetails: true })).not.toEqual(page);
+    expect(await invoke('local-db:messages:view', { lazyDetails: true, workLines: true })).toEqual(page);
+    expect(shapes.at(-1)?.fingerprints).toEqual(shapes.at(-2)?.fingerprints);
+    // Same UTF-8 byte length and unchanged last 96 bytes, but a different character
+    // count ("ab" → "é"): the production UPDATE → outline entry must invalidate.
+    sqlite.prepare('UPDATE messages SET content = ? WHERE id = ?')
+      .run(JSON.stringify({ text: `é${unchangedByteTail}`, durationMs: 10 }), '2');
+    expect(await invoke('local-db:messages:view', { lazyDetails: true, workLines: true })).not.toEqual(page);
+    expect(shapes.at(-1)?.fingerprints).not.toEqual(shapes.at(-2)?.fingerprints);
   });
   it('keeps a command larger than the scan budget folded without losing its trailing artifact or full details', async () => {
     const sqlite = createDb();
@@ -311,6 +328,23 @@ describe('local-db:messages:list cursor', () => {
       const rows=await listMessagesForAgentHandoff('s1',null,undefined,'authorization');
       expect(rows).toHaveLength(109);expect(rows[0]?.clientId).toBe('human-20');expect(rows.at(-1)?.clientId).toBe('human-128');
       expect(await listMessagesForAgentHandoff('s1',100,undefined,'authorization')).toHaveLength(100);
+    } finally { sqlite.close(); }
+  });
+
+  // Side-chat fork boundary: inherited history remains readable but cannot authorize new actions.
+  // This real SQLite fixture covers the query predicate missing from ordinary history tests (unit).
+  it('keeps inherited context out of side-chat authorization, including late answers to old cards', async () => {
+    const sqlite = createDb();
+    try {
+      sqlite.prepare("INSERT INTO sessions (id, source, created_at) VALUES ('s1', 'side-chat', 100)").run();
+      insertCostMessage(sqlite, { id: 'parent-grant', role: 'user', createdAt: 10 });
+      insertCostMessage(sqlite, { id: 'parent-card', role: 'ask_user', createdAt: 20,
+        agentMeta: { autoReviewUserText: { text: 'Deploy now', acceptedAt: 150 } } });
+      insertCostMessage(sqlite, { id: 'side-question', role: 'user', createdAt: 100 });
+      expect((await listMessagesForAgentHandoff('s1', null)).map(row => row.clientId))
+        .toEqual(['parent-grant', 'parent-card', 'side-question']);
+      expect((await listMessagesForAgentHandoff('s1', null, undefined, 'authorization')).map(row => row.clientId))
+        .toEqual(['side-question']);
     } finally { sqlite.close(); }
   });
 
@@ -1099,6 +1133,143 @@ describe('findParkedEngineSession context rebuild boundary', () => {
 
     await expect(findParkedEngineSession('s1', 'codex')).resolves.toBeNull();
   });
+
+  it('does not resume a thread parked on another computer', async () => {
+    const sqlite = createDb();
+    sqlite.prepare('INSERT INTO sessions (id, cleared_at) VALUES (?, NULL)').run('s1');
+    sqlite
+      .prepare(
+        `
+      INSERT INTO messages (
+        id, client_id, session_id, role, content, tool_use_id, agent_meta,
+        agent_kind, created_at, rewind_at
+      ) VALUES ('sw', 'sw', 's1', 'agent_switch', ?, NULL, NULL, 'codex', 1000, NULL)
+    `,
+      )
+      .run(JSON.stringify({
+        fromAgentKind: 'codex',
+        fromSdkSessionId: 'parked-codex',
+        fromAgentDeviceId: 'device-a',
+      }));
+
+    await expect(findParkedEngineSession('s1', 'codex', 'device-b')).resolves.toBeNull();
+    await expect(findParkedEngineSession('s1', 'codex', 'device-a')).resolves.toMatchObject({
+      sdkSessionId: 'parked-codex',
+    });
+  });
+
+  it('does not trust a legacy boundary after the task moved devices', async () => {
+    const sqlite = createDb();
+    const insertBoundary = sqlite.prepare(
+      `
+      INSERT INTO messages (
+        id, client_id, session_id, role, content, tool_use_id, agent_meta,
+        agent_kind, created_at, rewind_at
+      ) VALUES (?, ?, ?, 'agent_switch', ?, NULL, NULL, 'codex', ?, NULL)
+    `,
+    );
+    sqlite.prepare('INSERT INTO sessions (id, cleared_at) VALUES (?, NULL)').run('legacy');
+    insertBoundary.run('legacy-codex', 'legacy-codex', 'legacy', JSON.stringify({
+      fromAgentKind: 'codex',
+      fromSdkSessionId: 'parked-codex',
+    }), 1000);
+    insertBoundary.run('legacy-move', 'legacy-move', 'legacy', JSON.stringify({
+      fromAgentKind: 'cc',
+      fromAgentDeviceId: 'device-a',
+      toAgentDeviceId: 'device-b',
+    }), 2000);
+
+    await expect(findParkedEngineSession('legacy', 'codex', 'device-b')).resolves.toBeNull();
+
+    // With no later relocation the legacy boundary keeps its historical resume.
+    sqlite.prepare('INSERT INTO sessions (id, cleared_at) VALUES (?, NULL)').run('legacy-local');
+    insertBoundary.run('legacy-local-codex', 'legacy-local-codex', 'legacy-local', JSON.stringify({
+      fromAgentKind: 'codex',
+      fromSdkSessionId: 'parked-local',
+    }), 1000);
+    await expect(findParkedEngineSession('legacy-local', 'codex', null)).resolves.toMatchObject({
+      sdkSessionId: 'parked-local',
+    });
+  });
+
+  it('invalidates a parked thread after a forced relocation with the same logical device', async () => {
+    const sqlite = createDb();
+    const insertBoundary = sqlite.prepare(
+      `
+      INSERT INTO messages (
+        id, client_id, session_id, role, content, tool_use_id, agent_meta,
+        agent_kind, created_at, rewind_at
+      ) VALUES (?, ?, ?, 'agent_switch', ?, NULL, NULL, 'codex', ?, NULL)
+    `,
+    );
+    sqlite.prepare('INSERT INTO sessions (id, cleared_at) VALUES (?, NULL)').run('share');
+    insertBoundary.run('share-codex', 'share-codex', 'share', JSON.stringify({
+      fromAgentKind: 'codex',
+      fromSdkSessionId: 'parked-share',
+      fromAgentDeviceId: 'share:alice',
+    }), 1000);
+    insertBoundary.run('share-move', 'share-move', 'share', JSON.stringify({
+      fromAgentKind: 'cc',
+      fromAgentDeviceId: 'share:alice',
+      toAgentDeviceId: 'share:alice',
+    }), 2000);
+
+    await expect(findParkedEngineSession('share', 'codex', 'share:alice')).resolves.toBeNull();
+  });
+
+  it('keeps a normal-device parked thread when the task returns to that device', async () => {
+    const sqlite = createDb();
+    const insertBoundary = sqlite.prepare(
+      `
+      INSERT INTO messages (
+        id, client_id, session_id, role, content, tool_use_id, agent_meta,
+        agent_kind, created_at, rewind_at
+      ) VALUES (?, ?, ?, 'agent_switch', ?, NULL, NULL, 'codex', ?, NULL)
+    `,
+    );
+    sqlite.prepare('INSERT INTO sessions (id, cleared_at) VALUES (?, NULL)').run('return');
+    insertBoundary.run('return-codex', 'return-codex', 'return', JSON.stringify({
+      fromAgentKind: 'codex',
+      fromSdkSessionId: 'parked-return',
+      fromAgentDeviceId: 'device-a',
+    }), 1000);
+    insertBoundary.run('return-move', 'return-move', 'return', JSON.stringify({
+      fromAgentKind: 'cc',
+      fromAgentDeviceId: 'device-a',
+      toAgentDeviceId: 'device-b',
+    }), 2000);
+
+    await expect(findParkedEngineSession('return', 'codex', 'device-a')).resolves.toMatchObject({
+      sdkSessionId: 'parked-return',
+    });
+    await expect(findParkedEngineSession('return', 'codex', 'device-b')).resolves.toBeNull();
+  });
+
+  it('keeps a same-device boundary when another engine switched without relocating', async () => {
+    const sqlite = createDb();
+    const insertBoundary = sqlite.prepare(
+      `
+      INSERT INTO messages (
+        id, client_id, session_id, role, content, tool_use_id, agent_meta,
+        agent_kind, created_at, rewind_at
+      ) VALUES (?, ?, ?, 'agent_switch', ?, NULL, NULL, 'codex', ?, NULL)
+    `,
+    );
+    sqlite.prepare('INSERT INTO sessions (id, cleared_at) VALUES (?, NULL)').run('same-device');
+    insertBoundary.run('same-device-codex', 'same-device-codex', 'same-device', JSON.stringify({
+      fromAgentKind: 'codex',
+      fromSdkSessionId: 'parked-same-device',
+      fromAgentDeviceId: 'device-a',
+    }), 1000);
+    insertBoundary.run('same-device-cc', 'same-device-cc', 'same-device', JSON.stringify({
+      fromAgentKind: 'cc',
+      fromAgentDeviceId: 'device-a',
+    }), 2000);
+
+    await expect(findParkedEngineSession('same-device', 'codex', 'device-a')).resolves.toMatchObject({
+      sdkSessionId: 'parked-same-device',
+    });
+  });
 });
 
 describe('getMessageDeletionTarget', () => {
@@ -1376,6 +1547,8 @@ describe('readPriorUserRoundCost', () => {
       },
       costUsd: 18.934191,
       hasEstimatedValue: true,
+      // autoResume 不算新的用户请求：这仍是任务的第一轮。
+      isFirstUserRound: true,
     });
   });
 
@@ -1414,6 +1587,192 @@ describe('readPriorUserRoundCost', () => {
       },
       costUsd: 0.5,
       hasEstimatedValue: false,
+      // /clear 之后的第一轮同样没有可复用的缓存。
+      isFirstUserRound: true,
     });
+  });
+
+  // 「缓存命中率偏低」建议据此排除第一轮；第二条真实用户请求起不再标记。
+  it('首轮运行中的插话不算新的用户请求', async () => {
+    const sqlite = createDb();
+    sqlite.prepare('INSERT INTO sessions (id, cleared_at) VALUES (?, NULL)').run('s1');
+    insertCostMessage(sqlite, { id: 'user-1', role: 'user', createdAt: 1_000 });
+    insertCostMessage(sqlite, {
+      id: 'steer', role: 'user', createdAt: 1_100, agentMeta: { delivery: 'steer' },
+    });
+    insertCostMessage(sqlite, { id: 'target', role: 'assistant', createdAt: 1_200 });
+
+    const prior = await readPriorUserRoundCost('s1', 'target');
+    expect(prior.isFirstUserRound).toBe(true);
+  });
+
+  it('第二条真实用户请求起不再标记为第一轮', async () => {
+    const sqlite = createDb();
+    sqlite.prepare('INSERT INTO sessions (id, cleared_at) VALUES (?, NULL)').run('s1');
+    insertCostMessage(sqlite, { id: 'user-1', role: 'user', createdAt: 1_000 });
+    insertCostMessage(sqlite, { id: 'reply-1', role: 'assistant', createdAt: 1_100 });
+    insertCostMessage(sqlite, { id: 'user-2', role: 'user', createdAt: 1_200 });
+    insertCostMessage(sqlite, { id: 'target', role: 'assistant', createdAt: 1_300 });
+
+    const prior = await readPriorUserRoundCost('s1', 'target');
+    expect(prior.isFirstUserRound).toBeUndefined();
+  });
+});
+
+describe('media user-round costs', () => {
+  const actual = (amount: number) => ({ amount, currency: 'USD', approximate: false, kind: 'actual-cost' });
+  function fixture() {
+    const sqlite = createDb();
+    sqlite.prepare('INSERT INTO sessions (id) VALUES (?)').run('s1');
+    const db = {
+      drizzle: h.db,
+      queryOne: async (query: string, params: unknown[] = []) => sqlite.prepare(query).get(...params),
+      query: async (query: string, params: unknown[] = []) => sqlite.prepare(query).all(...params),
+      exec: async (query: string, params: unknown[] = []) => sqlite.prepare(query).run(...params),
+    } as unknown as DbClient;
+    return { sqlite, db };
+  }
+
+  it('adds media to the visible round, keeps raw subscription valuation, and does not carry it to the next user', async () => {
+    const { sqlite, db } = fixture();
+    insertCostMessage(sqlite, { id: 'user', role: 'user', createdAt: 1, agentMeta: { mediaCosts: [actual(0.75)] } });
+    insertCostMessage(sqlite, { id: 'segment', role: 'assistant', createdAt: 2, agentMeta: { turnCost: actual(0.25) } });
+    insertCostMessage(sqlite, { id: 'resume', role: 'user', createdAt: 3, agentMeta: { autoResume: true } });
+    insertCostMessage(sqlite, { id: 'final', role: 'assistant', createdAt: 4,
+      agentMeta: { turnCostUsd: 2, turnCostIsEstimate: true, model: 'keep-model' } });
+    expect(await captureMediaUserTurn(db, 's1')).toEqual({ clientId: 'user' });
+    expect(await refreshMediaUserTurnCost(db, 's1', 'user')).toMatchObject({
+      clientId: 'final', userTurnMoney: { amount: 3, kind: 'actual-cost' }, userTurnCostIsEstimate: true,
+    });
+    const meta = JSON.parse((sqlite.prepare("SELECT agent_meta FROM messages WHERE id = 'final'").get() as { agent_meta: string }).agent_meta);
+    expect(meta).toMatchObject({ turnCostUsd: 2, turnCostIsEstimate: true, model: 'keep-model', userTurnCost: { amount: 3 } });
+    // The next real user begins a new round, including for same-millisecond rows.
+    insertCostMessage(sqlite, { id: 'next-user', role: 'user', createdAt: 4 });
+    insertCostMessage(sqlite, { id: 'next-answer', role: 'assistant', createdAt: 4 });
+    expect((await readPriorUserRoundCost('s1', 'next-answer')).money).toBeNull();
+    expect((await refreshMediaUserTurnCost(db, 's1', 'user'))?.clientId).toBe('final');
+  });
+
+  // Integration: real SQLite projection, same model on different channels and a
+  // late fee. Protects against cumulative totals and subsequent rounds being billed twice.
+  it('reads model/channel details from the owning round and refreshes mixed subscription value once', async () => {
+    const { sqlite, db } = fixture();
+    const estimate = { ...actual(2), kind: 'value-estimate', approximate: true };
+    insertCostMessage(sqlite, { id: 'user', role: 'user', createdAt: 1, agentMeta: {
+      mediaCosts: [actual(.75)], mediaCostDetails: [{ model: 'extra-model', category: 'additional',
+        billingSource: 'cindy-ai', money: actual(.75) }],
+    } });
+    insertCostMessage(sqlite, { id: 'answer', role: 'assistant', createdAt: 2, agentMeta: {
+      turnCost: actual(1), userTurnCostUsd: 999, turnUsageDetails: {
+        inputTokens: 100, perModelCost: [
+          { model: 'same-model', billingSource: 'subscription', money: estimate },
+          { model: 'same-model', billingSource: 'cindy-ai', money: actual(1) },
+        ],
+      },
+    } });
+    insertCostMessage(sqlite, { id: 'next', role: 'user', createdAt: 3 });
+    insertCostMessage(sqlite, { id: 'other', role: 'assistant', createdAt: 4, agentMeta: { turnCost: actual(5) } });
+    const rows = await readSessionCostDetails(db, 's1', 'answer');
+    expect(rows.map(row => [row.model, row.billingSource, row.money.amount]))
+      .toEqual([['extra-model', 'cindy-ai', .75], ['same-model', 'subscription', 2], ['same-model', 'cindy-ai', 1]]);
+    for (let i = 0; i < 2; i++) {
+      expect(await refreshMediaUserTurnCost(db, 's1', 'user')).toMatchObject({
+        clientId: 'answer', userTurnMoney: { amount: 3.75 }, userTurnCostIsEstimate: true,
+        turnUsageDetails: { additionalCosts: [actual(.75)] },
+      });
+    }
+    expect(await readSessionCostDetails(db, 'other-session')).toEqual([]);
+    sqlite.prepare("UPDATE messages SET rewind_at = 5 WHERE id = 'answer'").run();
+    expect(await readSessionCostDetails(db, 's1', 'answer')).toEqual([]);
+    sqlite.prepare('UPDATE sessions SET cleared_at = 4').run();
+    expect(await readSessionCostDetails(db, 's1')).toEqual([]);
+  });
+
+  it('projects media-only responses without inventing a chat segment price and ignores clear/rewind', async () => {
+    const { sqlite, db } = fixture();
+    insertCostMessage(sqlite, { id: 'user', role: 'user', createdAt: 10, agentMeta: { mediaCosts: [actual(0.75)] } });
+    expect(await refreshMediaUserTurnCost(db, 's1', 'user')).toBeNull();
+    insertCostMessage(sqlite, { id: 'answer', role: 'assistant', createdAt: 11 });
+    expect(await refreshMediaUserTurnCost(db, 's1', 'user')).toMatchObject({
+      clientId: 'answer', userTurnMoney: actual(0.75), userTurnCostIsEstimate: false,
+    });
+    const meta = JSON.parse((sqlite.prepare("SELECT agent_meta FROM messages WHERE id = 'answer'").get() as { agent_meta: string }).agent_meta);
+    expect(meta.turnCost).toBeUndefined();
+    sqlite.prepare("UPDATE messages SET rewind_at = 12 WHERE id = 'user'").run();
+    expect(await captureMediaUserTurn(db, 's1')).toBeNull();
+    expect(await refreshMediaUserTurnCost(db, 's1', 'user')).toBeNull();
+    sqlite.prepare('UPDATE messages SET rewind_at = NULL').run();
+    sqlite.prepare('UPDATE sessions SET cleared_at = 10').run();
+    expect(await captureMediaUserTurn(db, 's1')).toBeNull();
+    expect(await refreshMediaUserTurnCost(db, 's1', 'user')).toBeNull();
+  });
+
+  it('reads only the target round through the target message, including same-timestamp and auto-resume rows', async () => {
+    const { sqlite, db } = fixture();
+    insertCostMessage(sqlite, { id: 'old-user', role: 'user', createdAt: 1 });
+    insertCostMessage(sqlite, { id: 'old-answer', role: 'assistant', createdAt: 1, agentMeta: { turnCost: actual(50) } });
+    insertCostMessage(sqlite, { id: 'user', role: 'user', createdAt: 2, agentMeta: { mediaCosts: [actual(.75)] } });
+    insertCostMessage(sqlite, { id: 'resume', role: 'user', createdAt: 2, agentMeta: { autoResume: true } });
+    insertCostMessage(sqlite, { id: 'answer', role: 'assistant', createdAt: 2, agentMeta: { turnCost: actual(1) } });
+    insertCostMessage(sqlite, { id: 'later', role: 'assistant', createdAt: 2, agentMeta: { turnCost: actual(20) } });
+    insertCostMessage(sqlite, { id: 'next-user', role: 'user', createdAt: 2 });
+    const query = vi.spyOn(db, 'query');
+    expect((await readSessionCostDetails(db, 's1', 'answer')).map(row => row.money.amount)).toEqual([.75, 1]);
+    const fetched = await query.mock.results[0].value as Array<{ clientId: string }>;
+    expect(fetched.map(row => row.clientId)).toEqual(['user', 'resume', 'answer']);
+    expect(await readSessionCostDetails(db, 's1', 'missing')).toEqual([]);
+    const select = vi.spyOn(h.db!, 'select');
+    registerMessageIpc();
+    const result = await h.handlers.get('local-db:messages:estimatedSessionValue')!({}, 's1', {
+      includeBreakdown: true, clientId: 'answer',
+    }) as { costBreakdown: Array<{ money: { amount: number } }> };
+    expect(result.costBreakdown.map(row => row.money.amount)).toEqual([.75, 1]);
+    expect(select).not.toHaveBeenCalled();
+    select.mockRestore();
+  });
+
+  // A committed media fee must survive a missing follow-up patch. The older
+  // stale-total cases did not exercise unpriced assistants or absent metadata.
+  // Real list/around IPC over SQLite; billing metadata must remain untouched.
+  it.each([
+    { name: 'current total', original: { turnCost: actual(1), userTurnCost: actual(1.75) }, amount: 1.75 },
+    { name: 'stale total', original: { turnCost: actual(1), userTurnCost: actual(1) }, amount: 1.75 },
+    { name: 'no total', original: { turnCost: actual(1) }, amount: 1.75 },
+    { name: 'zero price', original: { turnCostUsd: 0 }, amount: .75 },
+    { name: 'usage only', original: {}, amount: .75 },
+    { name: 'no metadata', original: undefined, amount: .75 },
+    { name: 'legacy USD with subscription value', original: { turnCostUsd: 1 }, amount: 3.75, subscriptionValue: 2 },
+    { name: 'stale media snapshot', original: { turnCost: actual(1), userTurnCost: actual(1.5) }, amount: 1.75, snapshotAmount: .5 },
+    { name: 'snapshot without total', original: {}, amount: .75, snapshotAmount: .75 },
+  ])('hydrates a committed media fee with $name without rewriting billing', async ({ original: costs, amount, subscriptionValue, snapshotAmount }) => {
+    const { sqlite } = fixture();
+    insertCostMessage(sqlite, { id: 'user', role: 'user', createdAt: 1,
+      agentMeta: { mediaCosts: [actual(.75)] } });
+    const original = costs && { ...costs,
+      turnUsageDetails: { inputTokens: 1, billingSource: 'cindy-ai', model: 'existing',
+        ...(subscriptionValue ? { perModelCost: [{ model: 'subscription-model', billingSource: 'subscription',
+          money: { ...actual(subscriptionValue), kind: 'value-estimate', approximate: true } }] } : {}),
+        ...(snapshotAmount ? { additionalCosts: [actual(snapshotAmount)] } : {}),
+      } };
+    insertCostMessage(sqlite, { id: 'resume', role: 'user', createdAt: 2, agentMeta: { autoResume: true } });
+    insertCostMessage(sqlite, { id: 'answer', role: 'assistant', createdAt: 2, agentMeta: original });
+    insertCostMessage(sqlite, { id: 'next-user', role: 'user', createdAt: 2 });
+    insertCostMessage(sqlite, { id: 'next-answer', role: 'assistant', createdAt: 2 });
+    registerMessageIpc();
+    const rows = await h.handlers.get('local-db:messages:list')!({}, 's1', { limit: 10 }) as Array<{ id: string; agentMeta: unknown }>;
+    const expected = {
+      ...original, userTurnCost: { ...actual(amount), approximate: !!subscriptionValue },
+      userTurnCostIsEstimate: !!subscriptionValue, turnUsageDetails: {
+        ...original?.turnUsageDetails, additionalCosts: [actual(.75)],
+      },
+    };
+    expect(rows.find(row => row.id === 'answer')?.agentMeta).toMatchObject(expected);
+    expect(rows.find(row => row.id === 'next-answer')?.agentMeta).toBeNull();
+    // A narrow history window must recover the prior user outside that window,
+    // including repeated reads and same-millisecond next-round boundaries.
+    const around = await h.handlers.get('local-db:messages:around')!({}, 's1', 'answer', { radius: 1 }) as typeof rows;
+    expect(around.find(row => row.id === 'answer')?.agentMeta).toMatchObject(expected);
+    expect((sqlite.prepare("SELECT agent_meta FROM messages WHERE id = 'answer'").get() as { agent_meta: string | null }).agent_meta)
+      .toBe(original ? JSON.stringify(original) : null);
   });
 });

@@ -299,6 +299,20 @@ describe('active-catalog discovered augment', () => {
     }
   });
 
+  it('keeps account Ultrafast capability through the active Codex catalog and clears it on refresh', () => {
+    setActiveCatalog(bundledWithoutRegistry(), { authorityCatalog: bundledWithoutRegistry() });
+    const model = { ...fake('gpt-6-astra'), supportsFastMode: true, supportsUltrafastMode: true };
+    setDiscoveredCodexModels([model], { source: 'list' });
+    const native = () => getActiveCatalog().providers.find(p => p.id === 'openai')!.models.codex!.find(m => m.id === model.id);
+    expect(native()?.supportsUltrafastMode).toBe(true);
+    const provider = getActiveCatalog().providers.find(p => p.id === 'openai')!;
+    for (const agent of ['claude-code', 'pi'] as const) {
+      expect(provider.models[agent]?.some(m => m.supportsUltrafastMode)).not.toBe(true);
+    }
+    setDiscoveredCodexModels([{ ...model, supportsUltrafastMode: false }], { source: 'list' });
+    expect(native()?.supportsUltrafastMode).toBe(false);
+  });
+
   it('partial live lists retain cached metadata, replace membership, and respect auth clearing', () => {
     setActiveCatalog(bundledWithoutRegistry(), { authorityCatalog: bundledWithoutRegistry() });
     const cached = {

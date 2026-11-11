@@ -27,6 +27,7 @@ import type {
   TurnPermissionPolicy,
 } from '@cindy/maker-core';
 import type { GroupHistoryAccessScope } from './groupHistoryAccess';
+import type { ChannelToolScope } from './channelToolScope';
 import type { ImChannelNoteSource } from './channelNote';
 import type { ImOutputDriver, IMAttachment, IMMessageEvent, IMUnsupportedEntry, TextChannelIM } from '@cindy/im';
 
@@ -38,7 +39,8 @@ export type ImChannelName =
   | 'wechat'
   | 'telegram'
   | 'dingtalk'
-  | 'wecom';
+  | 'wecom'
+  | 'imessage';
 
 /**
  * IM 编排层的产品默认配置(由 main/im/index.ts 产品接线层注入)。
@@ -87,8 +89,11 @@ export interface ImSessionNamespace {
    * workingDir 是 app 托管目录(im-working-dir),不该以它聚成假项目组。
    */
   workspaceKind?: 'project' | 'dialogue';
-  /** 该渠道 session 的工作目录(必须已创建好)。 */
-  ensureWorkingDir(botContextId: string): string;
+  /**
+   * 该渠道 session 的工作目录(必须已创建好)。`userId` 只给「一个路由键一个独立目录」的会话
+   * 用(Discord 服务器频道 / thread lane); 其余渠道忽略它, 私聊目录保持 botContextId 一个。
+   */
+  ensureWorkingDir(botContextId: string, userId?: string): string;
   /** 渠道专属列(feishu: feishuBotAppId/feishuOpenId;slack: imBotContextId/imUserId)。 */
   extraInsertColumns(botContextId: string, userId: string): Record<string, unknown>;
   /**
@@ -135,9 +140,30 @@ export interface ImSessionNamespace {
 }
 
 /**
+ * 连接交给伙伴后, 一个入站 userId 落在伙伴的哪条任务上:
+ *   - owner-dm: 已验证的主人私聊 → 伙伴主任务(canonical);
+ *   - group: 群 / 话题 → 伙伴的 `channel` 专线(按 chat + topic 一条);
+ *   - guest-dm: 获准的非主人私聊 → 伙伴的 `channel` 专线(按 userId 一条)。
+ */
+export type ImCompanionLane =
+  | { kind: 'owner-dm' }
+  | { kind: 'group'; chatId: string; threadId: string }
+  | { kind: 'guest-dm'; userId: string };
+
+/**
  * 渠道适配器 — 编排层所有渠道差异的唯一注入点。
  */
 export interface ImChannelAdapter {
+  /**
+   * 连接交给伙伴时的落点解析(见 ImCompanionLane)。只有支持「交给伙伴」的渠道
+   * 实现; 缺省 = 这个渠道的连接不能交给伙伴, 保持原有路由。
+   */
+  companionLane?: (userId: string) => ImCompanionLane;
+  /**
+   * 公共对话(服务器频道 / thread)不接入本机桌面任务与项目: /ctr /exctr /session /project 及其卡片
+   * 按钮对这个 userId 一律不执行。接管会把主人私人桌面任务挂到公共场合, 与频道隔离的承诺冲突。
+   */
+  blocksLocalTaskAccess?: (userId: string) => boolean;
   /** Resolve an authenticated private notification topic before any default-session or command routing. */
   resolveNotificationReply?: (event: IMMessageEvent) => Promise<string | null>;
   notificationReplyText?: { unavailable: string; commands: string };
@@ -149,6 +175,8 @@ export interface ImChannelAdapter {
   im: TextChannelIM;
   /** Stable inbound contextId when connected status.appId is only a display label. */
   getBotContextId?(): string;
+  /** 已连接 bot 的展示名，用于失败时定位当前入口。 */
+  getBotDisplayName?(): string;
   /** Terminal output strategy; existing channels use rich-card. */
   output: ImOutputDriver;
   config: ImOrchestratorConfig;
@@ -232,6 +260,13 @@ export interface ImChannelAdapter {
    * transcript**(它们不是触发用户发的)。与用户自己 attachments 的语义边界
    * 正在于此: 触发消息附件照常走 attachments 落库。
    */
+  /**
+   * 全响应·自主判断(event.ambient)消息的前置判定: 返回 'skip' 则本条既不落库也不起
+   * 轮次(群窗口游标也不推进, 消息留在窗口里当下次的背景)。在 ack / 提前落库之前
+   * 调用。钩子抛错或判不出来按 'proceed' 走原路径(主模型仍可用 NO_REPLY 沉默)。
+   * 只对 ambient 消息调用; 被召唤的消息从不经过这里。
+   */
+  ambientTurnGate?(event: IMMessageEvent): Promise<'proceed' | 'skip'>;
   prepareAgentTurnText?(event: IMMessageEvent): Promise<{
     agentText: string;
     contextSnapshot?: ImContextSnapshot;
@@ -246,16 +281,16 @@ export interface ImChannelAdapter {
   /**
    * 按入站事件给该轮挂 per-turn 权限策略(telegram 群成员触发 → 破坏性调用
    * 强制确认卡, 卡片只认 owner 点击)。返回 undefined = 本轮不挂策略。
-   * 会话权限档不支持 turn 策略(acceptEdits/bypassPermissions)时 maker 拒跑
-   * 该轮(fail-closed), 不会静默放开。
+   * 保留的策略在完全访问下由 runner 临时切到 Auto 执行；不支持临时切档或
+   * 其他不兼容模式仍由 maker 拒跑(fail-closed)，不会静默放开。
    */
   turnPermissionPolicyFor?(event: IMMessageEvent): TurnPermissionPolicy | undefined;
   /**
    * 群轮次强确认策略对指定权限档「可选」的渠道判定 — 同时传入本轮 policy，
    * 让渠道能把会话档位授权限定到具体触发者。返回 true 时 dispatch 不挂
    * turnPermissionPolicy(maker 不再 fail-closed, 按用户显式选择直接执行)。
-   * 群上下文的防注入过滤/包裹独立于权限档, 照常生效。其它渠道不实现即保持
-   * fail-closed。
+   * 群上下文的防注入过滤/包裹独立于权限档, 照常生效。不实现本钩子则保留策略，
+   * 完全访问下先尝试临时 Auto，不能兑现策略时 fail-closed。
    */
   turnPolicyOptionalForMode?(
     permissionMode: PermissionMode,
@@ -263,6 +298,11 @@ export interface ImChannelAdapter {
   ): boolean;
   /** Telegram 每轮的群历史检索授权；其它渠道不实现即 fail closed。 */
   groupHistoryAccessFor?(event: IMMessageEvent): GroupHistoryAccessScope | undefined;
+  /**
+   * 本轮渠道工具(`cindy_telegram_bot`)的作用域：当前 chat、触发者身份与出站 transport。
+   * provider 开始前登记、终态释放(channelToolScope.ts)；不实现即本轮没有渠道工具。
+   */
+  channelToolScopeFor?(event: IMMessageEvent): ChannelToolScope | undefined;
   /**
    * 本条消息的 `[渠道说明]` 来源事实（只进模型正文, 见 channelNote.ts）。
    * 缺省按入站事件通用推断（imChannelNoteSourceFromEvent）; 渠道有更准确的
@@ -305,9 +345,28 @@ export interface ImUiTextPack {
       effort: string;
       permission: string;
     }) => string;
+    /**
+     * 连接已交给伙伴时的 /settings: 同样五项, 但读的是伙伴那条任务(主任务 / 本群专线)
+     * 实际在用的配置, 尾注指向伙伴设置而不是 /model /permission。缺省回落 `settings`。
+     */
+    settingsCompanion?: (info: {
+      workspace: string;
+      agent: string;
+      model: string;
+      effort: string;
+      permission: string;
+    }) => string;
+    /** blocksLocalTaskAccess 的会话里收到接管 / 项目类命令时的提示。缺省回 unknownCommand。 */
+    localTaskAccessUnavailable?: (cmd: string) => string;
     detachedBySlash: string;
     detachedByRevoke: string;
     notAttached: string;
+    /** 连接已交给伙伴时, 主人私聊里 `/new` 的提示(伙伴主任务不轮换)。缺省回 `new`。 */
+    companionDmNew?: string;
+    /** 连接已交给伙伴时, 群 / 话题里 `/new` 换了一条新专线后的提示。缺省回 `new`。 */
+    companionLaneNew?: string;
+    /** 连接已交给伙伴时, 改模型 / 权限 / 项目这类命令的提示(这些归伙伴设置管)。 */
+    companionManagedCommand?: string;
   };
   agent: {
     completedNoText: string;
@@ -335,6 +394,8 @@ export interface ImUiTextPack {
     scheduledTaskHeader: (name: string | null) => string;
     unsupportedOnly: (entries: IMUnsupportedEntry[]) => string;
     unsupportedNotice: (entries: IMUnsupportedEntry[]) => string;
+    /** 伙伴当前不能接消息(暂停 / 归档等)时的渠道提示。缺省用 runtimeError 包一层。 */
+    companionUnavailable?: (reason: string) => string;
   };
   /**
    * 派发前失败文案。agentUnsupported 用于「所选 Agent 无法提供渠道所需的

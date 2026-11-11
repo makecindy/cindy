@@ -26,7 +26,7 @@ function presentation(requestId: string, send = vi.fn(async () => ({ messageId: 
   const onError = vi.fn();
   const result = presentSharedPermissionCard({
     requestId,
-    toolName: 'Bash',
+    permissionRequest: { toolName: 'Bash' },
     owner: Symbol(),
     permission,
     send,

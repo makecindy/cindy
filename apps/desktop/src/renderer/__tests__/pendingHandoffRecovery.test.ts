@@ -5,13 +5,14 @@
  * await 被控端起 Worker(慢设备可到 30s 隧道超时 + 6×3s 回查)。内存 Map 已经删了,
  * 这段时间 app 被关掉正文就没有第二份。所以进等待前另存一份到 localStorage。
  *
- * 本文件锁住这份副本的语义:只存正文、按 kind 各取各的、按归属人分命名空间、
+ * 本文件锁住这份副本的语义:正文与可选内置 Skill 意图、按 kind 各取各的、按归属人分命名空间、
  * 天级 TTL 兜底、localStorage 不可用时静默降级(绝不能把首轮发送本身弄失败)。
  *
  * 项目 vitest env=node,无 window。沿用 newMakerDraft.test.ts 的做法,
  * 用 vi.stubGlobal 注入最小 localStorage,而不是为这一个文件切 jsdom。
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import * as pendingHandoff from '@/state/pendingFirstMessage';
 
 const STORAGE_KEY = 'xdt:pendingHandoffRecovery:v1';
 
@@ -37,7 +38,7 @@ beforeEach(() => {
   memStorage = new MemLocalStorage();
   vi.stubGlobal('window', { localStorage: memStorage });
   vi.stubGlobal('localStorage', memStorage);
-  vi.resetModules();
+  pendingHandoff.__clearAllForTest();
 });
 
 afterEach(() => {
@@ -46,7 +47,7 @@ afterEach(() => {
 });
 
 async function loadModule() {
-  return await import('@/state/pendingFirstMessage');
+  return pendingHandoff;
 }
 
 describe('可恢复副本的基本语义', () => {
@@ -56,6 +57,20 @@ describe('可恢复副本的基本语义', () => {
 
     expect(m.takeRecoverableHandoff('s1', 'message')).toBe('写个登录页');
     expect(m.takeRecoverableHandoff('s1', 'message')).toBeNull();
+  });
+
+  // PR #6433 / unit: creator identity must survive both the route handoff and
+  // its persistent recovery copy. Plain-text recovery coverage missed this.
+  it('keeps the built-in identity in pending and recovery payloads', async () => {
+    vi.useFakeTimers();
+    const m = await loadModule();
+    const text = '/cindy-plugin-creator Make a plugin';
+    const intent = { name: 'cindy-plugin-creator', commandName: 'cindy-plugin-creator' };
+    m.setPending('creator', { text, builtInSkillIntent: intent });
+    expect(m.consumePending('creator')?.builtInSkillIntent).toEqual(intent);
+    m.rememberRecoverableHandoff('creator', 'message', text, intent);
+    expect(m.takeRecoverableHandoffPayload('creator', 'message')).toMatchObject({ text, builtInSkillIntent: intent });
+    expect(m.takeRecoverableHandoffPayload('creator', 'message')).toBeNull();
   });
 
   it('kind 不匹配时不取走 —— 首条消息与目标各自恢复各自的', async () => {
@@ -139,9 +154,9 @@ describe('跨重启与命名空间', () => {
     const m = await loadModule();
     m.rememberRecoverableHandoff('s1', 'message', '重启前没发出去的话');
 
-    // 重置模块内存态,memStorage 不清:等价于渲染进程重新起来。
+    // reset-modules: 模拟渲染进程重启；仅清模块内存，保留 localStorage 副本。
     vi.resetModules();
-    const fresh = await loadModule();
+    const fresh = await import('@/state/pendingFirstMessage');
 
     expect(fresh.takeRecoverableHandoff('s1', 'message')).toBe('重启前没发出去的话');
   });

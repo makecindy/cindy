@@ -77,6 +77,8 @@ import { promises as fs } from 'node:fs';
 import { createHash } from 'node:crypto';
 import path from 'node:path';
 
+import { teammateFolderName } from '@cindy/maker-shared/teammate-project';
+
 /** 原子写的临时文件序号,进程内自增 —— 见 writeTextAtomic 里的并发说明。 */
 let writeSeq = 0;
 /**
@@ -109,7 +111,7 @@ export class BotProfileFolderError extends Error {
 function botDirName(botId: string): string {
   const trimmed = botId.trim();
   if (!trimmed) throw new BotProfileFolderError('INVALID_ARGS', 'botId required');
-  const safe = trimmed.replace(/[^A-Za-z0-9._-]/g, '-').replace(/^\.+/, '');
+  const safe = teammateFolderName(trimmed);
   if (!safe) {
     throw new BotProfileFolderError('INVALID_ARGS', 'botId is not usable as a directory name');
   }
@@ -190,10 +192,12 @@ function resolveInside(userDataDir: string, botId: string, relative: string): st
 }
 
 /** 读一个文本槽。缺失或读不动一律当空,不抛 —— 坏文件不该卡死伙伴。 */
-async function readTextSlot(absPath: string): Promise<string> {
+async function readTextSlot(absPath: string, strict = false): Promise<string> {
   try {
     return await fs.readFile(absPath, 'utf8');
-  } catch {
+  } catch (error) {
+    // Strict readers (cloud sync) must not mistake an unreadable file for an empty one.
+    if (strict && (error as NodeJS.ErrnoException)?.code !== 'ENOENT') throw error;
     return '';
   }
 }
@@ -303,13 +307,15 @@ function parseJsonOr<T>(raw: string, fallback: T, accept: (value: unknown) => bo
 export async function readBotProfileFolder(
   userDataDir: string,
   botId: string,
+  options: { strict?: boolean } = {},
 ): Promise<BotProfileFolderContent> {
   const at = (relative: string) => resolveInside(userDataDir, botId, relative);
+  const strict = options.strict === true;
   const [identitySource, userContextSource, systemPromptOverride, configRaw] = await Promise.all([
-    readTextSlot(at(SLOT.soul)),
-    readTextSlot(at(SLOT.userContext)),
-    readTextSlot(at(SLOT.systemPrompt)),
-    readTextSlot(at(SLOT.config)),
+    readTextSlot(at(SLOT.soul), strict),
+    readTextSlot(at(SLOT.userContext), strict),
+    readTextSlot(at(SLOT.systemPrompt), strict),
+    readTextSlot(at(SLOT.config), strict),
   ]);
   return {
     identitySource,

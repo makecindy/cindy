@@ -1,3 +1,4 @@
+import { ErrorNotice } from '@/components/ui/error-notice';
 /**
  * Small shared chrome for the Subagent panel: status glyph, panel/detail
  * headers, section titles, centered states, the classified error notice and the
@@ -7,7 +8,7 @@
 
 import type { ReactNode } from 'react';
 import { useTranslation } from 'react-i18next';
-import { AlertCircle, ArrowLeft, type LucideIcon } from 'lucide-react';
+import { ArrowLeft, type LucideIcon } from 'lucide-react';
 import type {
   SubagentActivityEntry,
   SubagentRun,
@@ -17,6 +18,7 @@ import type {
 import { Spinner } from '@/components/ui/spinner';
 import { Tip } from '@/components/ui/tooltip';
 import { cn } from '@/lib/utils';
+import type { ErrorDiagnosisSource } from '@/lib/errorDiagnosisPrompt';
 import {
   classifySubagentError,
   formatClockTime,
@@ -128,27 +130,22 @@ export function CenteredState({
  * Classified failure card: an actionable sentence up front, the harness's raw
  * payload kept collapsed (DESIGN.md §11 — say what happened and what to do).
  */
-export function SubagentErrorNotice({ rawError }: { rawError: string }) {
+export function SubagentErrorNotice({ rawError, onDiagnose }: {
+  rawError: string;
+  onDiagnose?: (source: ErrorDiagnosisSource) => void;
+}) {
   const { t } = useTranslation();
   const kind = classifySubagentError(rawError);
   return (
-    <div
+    <ErrorNotice
       data-subagent-error-kind={kind}
-      className="rounded-xl border border-[color-mix(in_srgb,var(--error-fg)_28%,var(--border-default))] bg-[color-mix(in_srgb,var(--error-fg)_7%,var(--surface-elevated))] px-3 py-2.5"
-    >
-      <div className="flex items-start gap-2 text-13 leading-5 text-[var(--error-fg)]">
-        <AlertCircle size={15} className="mt-0.5 shrink-0" aria-hidden="true" />
-        <span>{t(`rightSidebar.subagents.errors.${kind}`)}</span>
-      </div>
-      <details className="mt-2 text-11 text-[var(--text-tertiary)]">
-        <summary className="w-fit cursor-pointer rounded-full hover:text-[var(--text-secondary)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--focus-ring)]">
-          {t('rightSidebar.subagents.errors.rawDetails')}
-        </summary>
-        <pre className="mt-2 max-h-64 select-text overflow-auto whitespace-pre-wrap break-words rounded-lg bg-[var(--msg-code-block-bg)] p-2 font-mono text-11 leading-4 text-[var(--text-secondary)]">
-          {rawError}
-        </pre>
-      </details>
-    </div>
+      message={t(`rightSidebar.subagents.errors.${kind}`)}
+      details={rawError}
+      onDiagnose={onDiagnose ? () => onDiagnose({
+        message: t(`rightSidebar.subagents.errors.${kind}`),
+        details: rawError,
+      }) : undefined}
+    />
   );
 }
 

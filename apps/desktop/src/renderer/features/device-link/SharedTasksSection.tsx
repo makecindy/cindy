@@ -16,6 +16,7 @@ import { cn } from '@/lib/utils';
 import { useRemoteProjectSessions, remoteProjectsStore } from './remoteProjectsStore';
 import { JoinSharedTaskDialog } from './JoinSharedTaskDialog';
 import { sharedTaskErrorKey } from './sharedTaskCompatibility';
+import { filterVisibleSharedTasks } from './sharedTaskVisibility';
 
 /** Uses the existing session mirror; choosing a task must not reconnect or fetch it again. */
 const EMPTY_IDS: ReadonlySet<string> = new Set();
@@ -74,7 +75,9 @@ export function SharedTasksSection({ activeSessionId, localSessions = [], runnin
       loading = true;
       try {
         const items = await window.electronAPI.sharedTask.account({ action: 'owned' }) as SharedTaskOwnedItem[];
-        if (captured === epoch.current && isDataOwnerGenerationCurrent(owner)) setOwned(items);
+        const current = () => captured === epoch.current && isDataOwnerGenerationCurrent(owner);
+        const visible = await filterVisibleSharedTasks(items, current);
+        if (current()) setOwned(visible);
       } catch { /* Retain the last confirmed list during transient network failures. */ }
       finally { loading = false; }
     };

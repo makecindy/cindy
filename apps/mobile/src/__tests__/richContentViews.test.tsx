@@ -6,10 +6,11 @@ import { MermaidDiagramWebView, type MermaidDiagramWebViewHandle } from '@/sessi
 import { MathFormulaWebView } from '@/session/mathWebView';
 import { RichContentContext } from '@/session/richContentContext';
 import { RichContentRuntime } from '@/session/richContentRuntime';
+import { VideoSitePreview } from '@/session/VideoSitePreview';
 
 const state = vi.hoisted(() => ({
   props: {} as any, image: null as any, layout: null as any, mounts: 0, live: 0, imageLive: 0, height: 0,
-  dark: false, inject: vi.fn(),
+  dark: false, inject: vi.fn(), play: null as any, openURL: vi.fn().mockResolvedValue(undefined),
 }));
 vi.mock('react-native', async () => {
   const { useEffect } = await import('react');
@@ -19,6 +20,13 @@ vi.mock('react-native', async () => {
       state.height = props.style?.find((style: any) => typeof style?.height === 'number')?.height;
       return props.children;
     },
+    Text: (props: any) => props.children,
+    Pressable: (props: any) => {
+      if (props.accessibilityRole === 'button') state.play = props.onPress;
+      return props.children;
+    },
+    AppState: { addEventListener: () => ({ remove: () => undefined }) },
+    Linking: { openURL: state.openURL },
     Image: (props: any) => {
       state.image = props;
       useEffect(() => { state.imageLive++; return () => { state.imageLive--; }; }, []);
@@ -37,6 +45,12 @@ vi.mock('react-native-webview', async () => {
   }) };
 });
 vi.mock('expo-file-system', () => ({ Directory: class {}, File: class {}, Paths: {} }));
+vi.mock('expo-router', () => ({ useIsFocused: () => true }));
+vi.mock('react-i18next', async importOriginal => ({
+  ...await importOriginal<typeof import('react-i18next')>(),
+  useTranslation: () => ({ t: (key: string) => key }),
+}));
+vi.mock('@/theme/ThemeProvider', () => ({ useTheme: () => ({ colors: {} }) }));
 vi.mock('@/theme', () => ({
   useThemedStyles: () => ({}),
   useTheme: () => ({ mode: state.dark ? 'dark' : 'light', colors: {
@@ -60,9 +74,30 @@ function message(props: any, payload: unknown) { act(() => props.onMessage({ nat
 beforeEach(() => {
   vi.useFakeTimers(); runtime = new RichContentRuntime();
   state.mounts = 0; state.live = 0; state.imageLive = 0; state.image = null; state.layout = null; state.dark = false;
+  state.openURL.mockClear(); state.play = null;
   root = createRoot(document.createElement('div'));
 });
 afterEach(() => { act(() => root.unmount()); runtime.clear(); vi.useRealTimers(); });
+
+// Unit: login was blocked by the actual video component's navigation callback.
+// Existing diagram tests do not exercise site navigation or native cookie policy.
+it('keeps video login and return navigation inside the persistent native WebView', () => {
+  act(() => root.render(createElement(VideoSitePreview, { src: 'https://youtu.be/E5wWVwe7-6E', title: 'Sound Burger' })));
+  expect(state.live).toBe(0);
+  act(() => state.play());
+  expect(state.live).toBe(1);
+  const player = state.props;
+  expect(player.incognito).not.toBe(true);
+  expect(player.thirdPartyCookiesEnabled).not.toBe(false);
+  expect(player.setSupportMultipleWindows).toBe(false);
+  for (const url of ['https://accounts.google.com/ServiceLogin', player.source.uri, 'https://www.youtube.com/watch?v=E5wWVwe7-6E']) {
+    expect(player.onShouldStartLoadWithRequest({ url, isTopFrame: true })).toBe(true);
+  }
+  for (const url of ['file:///private', 'javascript:alert(1)', 'https://user@www.youtube.com/watch?v=E5wWVwe7-6E']) {
+    expect(player.onShouldStartLoadWithRequest({ url, isTopFrame: true })).toBe(false);
+  }
+  expect(state.openURL).not.toHaveBeenCalled();
+});
 
 it('cancels unseen work, keeps visible content during a drag and reuses a snapshot on revisit', () => {
   runtime.onScroll(); render('mermaid', 'graph TD; A-->B'); tick(100);

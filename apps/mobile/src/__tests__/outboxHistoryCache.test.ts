@@ -1,20 +1,39 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { readFileSync } from 'node:fs';
-import ts from 'typescript';
 import { HistoryViewController, projectHistoryView, type HistoryViewPage } from '@cindy/maker-shared/message-window';
 import { setMobileAuthOwner } from '@/auth/authOwnerGeneration';
 import { cacheOutboxHistory } from '@/session/outboxHistoryCache';
 import { clearHistoryDisk, historyDiskAuthority, readHistoryDisk } from '@/session/remoteHistoryDiskCache';
 import { cacheSessionMessagesIfCurrent, captureSessionMessageCacheWriteAuthority, getCachedSessionMessages } from '@/session/mobileSessionMessageCache';
-import { remoteSessionStore } from '@/session/remoteSessionStore';
+import { remoteSessionStore, useSessionMessages } from '@/session/remoteSessionStore';
 import { clearRemoteHistoryViews, getRemoteHistoryView, mountRemoteHistoryView } from '@/session/remoteHistoryViews';
 import type { RemoteMessage } from '@/session/types';
 
+type Effect = () => void | (() => void);
+// `mount` (when set) keeps one hook instance across renders: refs keep their slot, and an effect
+// re-runs only when its deps change, after the previous run's cleanup, like React.
+interface Mount { refs: { current: unknown }[]; effects: { deps?: readonly unknown[]; cleanup?: () => void }[];
+  pending: (() => void)[]; cursor: { ref: number; effect: number } }
 const state = vi.hoisted(() => ({ rows: [] as RemoteMessage[], fail: false,
+  effects: [] as Effect[], mount: null as Mount | null, rawWrites: 0,
   files: new Map<string, string>(), raw: new Map<string, string>() }));
-vi.mock('@/session/remoteSessionStore', () => ({ remoteSessionStore: {
-  getMessages: () => state.rows, getSessionRetention: () => 'regular',
-} }));
+vi.mock('react', async (importOriginal) => ({
+  ...await importOriginal<typeof import('react')>(),
+  useEffect: (effect: Effect, deps?: readonly unknown[]) => {
+    const mount = state.mount;
+    if (!mount) { state.effects.push(effect); return; }
+    const index = mount.cursor.effect++;
+    const slot = mount.effects[index];
+    if (slot && deps && slot.deps?.length === deps.length && deps.every((dep, i) => Object.is(dep, slot.deps![i]))) return;
+    mount.pending.push(() => { slot?.cleanup?.(); mount.effects[index] = { deps, cleanup: effect() || undefined }; });
+  },
+  useRef: <T>(current: T) => {
+    const mount = state.mount;
+    if (!mount) return { current };
+    const index = mount.cursor.ref++;
+    return (mount.refs[index] ??= { current }) as { current: T };
+  },
+  useSyncExternalStore: (_subscribe: unknown, snapshot: () => unknown) => snapshot(),
+}));
 vi.mock('@/config/env', () => ({ getActiveMobileSessionRealm: () => 'global' }));
 vi.mock('@/session/historyDiskStoreExpo', () => ({ createHistoryDiskIO: () => ({
   read: async (name: string) => state.files.get(name) ?? null,
@@ -29,6 +48,7 @@ vi.mock('@/session/messageCacheStorage', () => ({ messageCacheStorage: {
   getItem: async (key: string) => state.raw.get(key) ?? null,
   setItem: async (key: string, value: string) => {
     if (state.fail) throw new Error('disk full');
+    state.rawWrites += 1;
     state.raw.set(key, value);
   },
 } }));
@@ -53,35 +73,66 @@ async function opened(rows: RemoteMessage[], error?: string) {
   return { entry, source };
 }
 const save = (current = () => true) => cacheOutboxHistory('d', 's', 'sent', current);
-// Execute the actual unmount effect without mounting the native message screen.
-const source = ts.createSourceFile('remoteSessionStore.ts', readFileSync(
-  new URL('../session/remoteSessionStore.ts', import.meta.url), 'utf8'), ts.ScriptTarget.Latest, true);
-const hook = source.statements.find(node => ts.isFunctionDeclaration(node) && node.name?.text === 'useSessionMessageCacheSync')!;
-let cleanupSource = '';
-function findCleanup(node: ts.Node) {
-  if (ts.isCallExpression(node) && node.expression.getText(source) === 'useEffect') {
-    const callback = node.arguments[0];
-    if (ts.isArrowFunction(callback) && ts.isArrowFunction(callback.body)) cleanupSource = callback.body.getText(source);
-  }
-  ts.forEachChild(node, findCleanup);
-}
-findCleanup(hook);
+// Run the production hook's effect lifecycle without loading a native renderer.
 function flushUnmount(rendered: RemoteMessage[]) {
-  const bindings = { persistTimerRef: { current: setTimeout(() => {}, 60_000) },
-    ctxRef: { current: { deviceId: 'd', sessionId: 's', messages: rendered } },
-    remoteSessionStore, captureSessionMessageCacheWriteAuthority, cacheSessionMessagesIfCurrent, clearTimeout };
-  const js = ts.transpileModule(`const { ${Object.keys(bindings).join(',')} } = bindings; (${cleanupSource})();`,
-    { compilerOptions: { target: ts.ScriptTarget.ES2022 } }).outputText;
-  new Function('bindings', js)(bindings);
+  const latest = state.rows;
+  state.rows = rendered;
+  useSessionMessages('s', 'd');
+  const cleanups = state.effects.splice(0).map(effect => effect());
+  state.rows = latest;
+  for (const cleanup of cleanups) cleanup?.();
 }
-beforeEach(() => { state.rows = [row('sent', 2)]; state.fail = false; setMobileAuthOwner('a'); });
+// One mounted instance of the production hook: render with the given rows, commit its effects.
+function mountSessionMessages() {
+  const mount: Mount = { refs: [], effects: [], pending: [], cursor: { ref: 0, effect: 0 } };
+  return {
+    render(rows: RemoteMessage[]) {
+      state.rows = rows;
+      state.mount = mount;
+      mount.cursor = { ref: 0, effect: 0 };
+      try { useSessionMessages('s', 'd'); } finally { state.mount = null; }
+      mount.pending.splice(0).forEach(commit => commit());
+    },
+    unmount() { mount.effects.forEach(slot => slot?.cleanup?.()); },
+  };
+}
+beforeEach(() => {
+  state.rows = [row('sent', 2)]; state.fail = false; state.mount = null; state.rawWrites = 0; setMobileAuthOwner('a');
+  vi.spyOn(remoteSessionStore, 'getMessages').mockImplementation(() => state.rows);
+  vi.spyOn(remoteSessionStore, 'getSessionRetention').mockReturnValue('regular');
+});
 afterEach(async () => {
   state.fail = false;
   releases.splice(0).forEach(release => release());
   clearRemoteHistoryViews(); await clearHistoryDisk(); state.raw.clear(); setMobileAuthOwner(null);
+  vi.restoreAllMocks();
 });
 
 describe('outbox to offline history handoff', () => {
+  // Regression: reopened old tasks retain host-owned bubbles even though history
+  // already cached their user rows. Existing cases always populated the raw store.
+  // Unit: a cached user row, empty raw window, and no network response must suffice.
+  it('hands off a cached user row without fetching it back into the raw window', async () => {
+    const { source } = await opened([row('sent', 2)]);
+    expect(await save()).toBe(true);
+    releases.splice(0).forEach(release => release());
+    clearRemoteHistoryViews();
+    state.rows = [];
+    const entry = getRemoteHistoryView('d', 's', source);
+    entry.view.setNetworkAvailable(false);
+    releases.push(mountRemoteHistoryView(entry, source, true));
+    await entry.view.restoreCachedView(() => readHistoryDisk(historyDiskAuthority('d', 's')));
+    expect(entry.view.getSnapshot().stale).toBe(true);
+    expect(await save()).toBe(true);
+    expect(source.readHistoryView).toHaveBeenCalledTimes(1);
+    expect(JSON.stringify((await readHistoryDisk(historyDiskAuthority('d', 's')))?.items))
+      .toContain('message sent');
+  });
+  it('does not use another role with the same client id as proof of a sent user row', async () => {
+    await opened([{ ...row('sent', 2), role: 'assistant' }]);
+    state.rows = [];
+    expect(await save()).toBe(false);
+  });
   it('retains display ownership when the page is absent or its snapshot predates the send', async () => {
     expect(await save()).toBe(false);
     await opened([row('previous', 1)]);
@@ -189,10 +240,50 @@ describe('outbox to offline history handoff', () => {
     expect(await save()).toBe(false);
   });
   it('does not release a row removed by clear or rewind', async () => {
-    const { entry } = await opened([row('sent', 2)]);
+    const { entry, source } = await opened([row('sent', 2)]);
     state.rows = [];
+    // reset refreshes an active view: the host must reflect the deletion too,
+    // rather than reintroducing the row as new authoritative history.
+    source.readHistoryView.mockResolvedValue({ version: 1, items: [], hasMore: false, nextCursor: null });
     entry.view.reset();
     await clearHistoryDisk('d', 's');
     expect(await save()).toBe(false);
+  });
+  // Perf regression (mobile streaming jank): the debounced raw-cache write used to fire at every
+  // 600 ms pause of a streaming reply, serializing the whole window on the JS thread mid-turn.
+  // Production entry: useSessionMessages' persist effect. Minimal failing input: one assistant row
+  // with agentMeta.isStreaming=true. The write must wait for the final (settled) snapshot.
+  it('defers the debounced raw write while a reply is still streaming, then writes once settled', async () => {
+    vi.useFakeTimers();
+    const hook = mountSessionMessages();
+    try {
+      const streaming: RemoteMessage = { ...row('reply', 3), role: 'assistant', agentMeta: { isStreaming: true } };
+      hook.render([row('sent', 2), streaming]);
+      hook.render([row('sent', 2), { ...streaming, content: 'message reply, more' }]);
+      await vi.advanceTimersByTimeAsync(2_000);
+      expect(state.rawWrites).toBe(0);
+      // The final flush of the same mount settles the deferred snapshot through the debounce.
+      hook.render([row('sent', 2), { ...streaming, agentMeta: { turnCompleted: true } }]);
+      await vi.advanceTimersByTimeAsync(2_000);
+      expect(state.rawWrites).toBe(1);
+      expect([...state.raw.values()].join('')).toContain('message reply');
+      // Nothing is left unsaved, so leaving the task does not write the same snapshot again.
+      hook.unmount();
+      await vi.advanceTimersByTimeAsync(2_000);
+      expect(state.rawWrites).toBe(1);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+  // Leaving the task mid-stream has no pending debounce timer any more; the deferred snapshot
+  // must still be flushed by the unmount path, otherwise the rows that arrived during the turn
+  // (including the user's own send) are missing from the offline cache until the next visit.
+  it('flushes the deferred snapshot on unmount while the reply is still streaming', async () => {
+    const streaming: RemoteMessage = { ...row('reply', 3), role: 'assistant', agentMeta: { isStreaming: true } };
+    state.rows = [row('sent', 2), streaming];
+    flushUnmount(state.rows);
+    await vi.waitFor(async () => {
+      expect((await getCachedSessionMessages('d', 's')).map(message => message.id)).toEqual(['sent', 'reply']);
+    });
   });
 });

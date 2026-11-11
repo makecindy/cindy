@@ -87,6 +87,7 @@ const plugin: TabKindPlugin<ReviewState> = {
   menu: {
     kind: 'review',
     labelKey: 'rightSidebar.tabs.kinds.review',
+    descriptionKey: 'rightSidebar.tabs.descriptions.review',
     icon: FileDiff,
     order: 15, // file-browser=10, web-browser=20 之间
     enabled: true,

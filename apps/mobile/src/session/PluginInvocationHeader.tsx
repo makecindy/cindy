@@ -16,13 +16,14 @@ const SUMMON_CYCLE_MS = 2400;
 export function PluginInvocationHeader({ plugins, running, deviceId, sessionId, showCompletionBadge = true }: {
   plugins: readonly PluginInvocation[]; running: boolean; deviceId?: string; sessionId: string; showCompletionBadge?: boolean;
 }) {
-  return <View>{plugins.map((plugin) => <PluginInvocationRow key={plugin.id} plugin={plugin} running={running && plugin.hasPendingCalls} deviceId={deviceId} sessionId={sessionId} showCompletionBadge={showCompletionBadge} />)}</View>;
+  return <View>{plugins.map((plugin) => <PluginInvocationRow key={JSON.stringify([plugin.id, plugin.namespace === undefined ? false : plugin.namespace])} plugin={plugin} running={running && plugin.hasPendingCalls} deviceId={deviceId} sessionId={sessionId} showCompletionBadge={showCompletionBadge} />)}</View>;
 }
 
 function PluginInvocationRow({ plugin, running, deviceId, sessionId, showCompletionBadge }: {
   plugin: PluginInvocation; running: boolean; deviceId?: string; sessionId: string; showCompletionBadge: boolean;
 }) {
-  const identity = useSessionPluginResource(deviceId, sessionId, plugin.id, 'plugin-identities', 'plugin');
+  const resourceId = plugin.namespace === undefined ? plugin.id : JSON.stringify([plugin.namespace, plugin.id]);
+  const identity = useSessionPluginResource(deviceId, sessionId, resourceId, 'plugin-identities', 'plugin');
   const name = identity.title || plugin.name;
   const icon = (identity.blocks?.find((block) => block.id === 'icon')?.data as { url?: unknown } | undefined)?.url;
   const iconUrl = typeof icon === 'string' && icon.length <= 256_000 && /^data:image\/(?:png|jpeg|webp);base64,[A-Za-z0-9+/=]+$/.test(icon) ? icon : undefined;

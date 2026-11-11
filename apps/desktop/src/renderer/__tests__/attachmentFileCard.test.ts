@@ -7,7 +7,7 @@
  * 正中只印大写扩展名 —— 并排两份 PDF 完全认不出谁是谁,文件名只在 hover
  * tooltip 里出现。现在改成横向文件卡:图标块 + 文件名 + 「类型 · 大小」。
  *
- * 与同目录 thumbnailClickPreview.test.ts 同族,走源码断言:ThumbnailItem 依赖
+ * 与同目录的预览行为测试同族,走源码断言:ThumbnailItem 依赖
  * ChatInput 的大量本地状态,单独挂载成本远高于收益,这里把关键契约钉在源码层,
  * 防止后续重构悄悄退回「只有扩展名」的形态。托盘组件在 ComposerAttachments.tsx
  * (ChatInput 与伙伴群聊输入框共用)。
@@ -61,9 +61,9 @@ describe('Attachment thumbnail — non-image file card (attachment-file-card)', 
     expect(block).toMatch(/liveByteSize !== null \? shownSize >= 0 : shownSize > 0/);
     // 显示的大小优先用复核回来的当前值,file.size 只是拖入那一刻的快照。
     expect(block).toMatch(/const shownSize = liveByteSize \?\? file\.size/);
-    // formatBytes 走 TextLightbox 的具名导出,不要在这里重造一份。
+    // formatBytes 复用 TextLightbox 同一份实现(独立模块,不连带按需加载的弹窗),不要在这里重造一份。
     expect(chatInput).toMatch(
-      /import\s+\{\s*formatBytes,\s*TextLightbox\s*\}\s+from\s+'@\/components\/chat\/TextLightbox'/,
+      /import\s+\{\s*formatBytes\s*\}\s+from\s+'@\/components\/chat\/formatBytes'/,
     );
   });
 

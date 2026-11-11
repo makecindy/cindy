@@ -55,12 +55,15 @@ function remoteWorkerPermissionModeUnsupportedError(): Error {
 
 async function readRemoteCollabCapabilities(
   deviceId: string,
-  workerAgent: EnableOrcaOptions['workerAgent'],
+  options: Pick<EnableOrcaOptions, 'workerAgent' | 'agentDeviceId'>,
 ): Promise<{
   supportsOrcaWorkerPermissionMode?: boolean;
   supportsDeferredOrcaUiAssignment?: boolean;
 }> {
-  const raw = await agentCapabilitiesForDevice(deviceId, workerAgent);
+  // Worker 的 Agent 在另一台电脑运行时，那个 Agent 不一定装在被控电脑上；这些是整台电脑的协议位，
+  // 改用被控电脑一定注册的 Claude Code 读。
+  const probeAgent = typeof options.agentDeviceId === 'string' ? 'claude-code' : options.workerAgent;
+  const raw = await agentCapabilitiesForDevice(deviceId, probeAgent);
   if (
     !raw
     || typeof raw !== 'object'
@@ -68,6 +71,15 @@ async function readRemoteCollabCapabilities(
     || (raw as Record<string, unknown>).supportsOrcaWorkerPermissionMode !== true
   ) {
     throw remoteWorkerPermissionModeUnsupportedError();
+  }
+  // 旧被控端会静默丢掉 Worker 的 Agent 位置、把 Worker 建在 Lead 那里：弹窗之后降级了就直接失败。
+  if (
+    options.agentDeviceId !== undefined
+    && (raw as Record<string, unknown>).supportsOrcaWorkerAgentDevice !== true
+  ) {
+    throw new Error(
+      '[DEVICE_LINK_CHANNEL_NOT_ALLOWED] controlled device does not support choosing the Worker agent location',
+    );
   }
   return raw;
 }
@@ -204,7 +216,7 @@ export async function enableRemoteCollabForSession(
 }> {
   // 弹窗展示时的 capability 只是一份快照。真正 mutation 前重新向同一被控端确认，
   // 防止断线重连后设备降级到旧版本、把显式权限字段静默忽略。
-  const capabilities = await readRemoteCollabCapabilities(p.deviceId, p.options.workerAgent);
+  const capabilities = await readRemoteCollabCapabilities(p.deviceId, p.options);
   const deferDelegateTask =
     p.options.deferDelegateTask === true
     && capabilities.supportsDeferredOrcaUiAssignment === true;

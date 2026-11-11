@@ -2,7 +2,7 @@ import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { InMemoryTransport } from '@modelcontextprotocol/sdk/inMemory.js';
 import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import type { McpProviderContext } from '@cindy/maker-core';
-import { describe, expect, it, vi } from 'vitest';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 import {
   CINDY_MAKE_MCP_SERVER_NAME,
@@ -10,6 +10,14 @@ import {
   CINDY_MAKE_VENDOR_OPTION_KEY,
 } from '../../../shared/cindyMakeSession';
 import { createCindyMakeMcpProvider, isCindyMakeServerVisible } from '../mcpProvider';
+
+
+const feature = vi.hoisted(() => ({ enabled: true }));
+vi.mock('@cindy/maker-shared/cindy-make-feature', async (importOriginal) => ({
+  ...await importOriginal<typeof import('@cindy/maker-shared/cindy-make-feature')>(),
+  get CINDY_MAKE_ENABLED() { return feature.enabled; },
+}));
+beforeEach(() => { feature.enabled = true; });
 
 const logger = { info: vi.fn(), warn: vi.fn() };
 
@@ -127,5 +135,17 @@ describe('cindy_make report_complete', () => {
     const { result } = await callReportComplete(marked(), reportCompletion);
     expect(result.isError).toBe(true);
     expect(JSON.stringify(result.content)).toContain('REPORT_FAILED');
+  });
+});
+describe('disabled Cindy Make', () => {
+  it('hides marked sessions and global bridges and never registers the tool', () => {
+    feature.enabled = false;
+    for (const context of [marked(), { agentKind: 'codex', workingDir: '', vendorOptions: {} }, { agentKind: 'pi', workingDir: '', vendorOptions: {} }] as McpProviderContext[]) {
+      expect(isCindyMakeServerVisible(context)).toBe(false);
+      const reportCompletion = vi.fn();
+      const provider = createCindyMakeMcpProvider({ reportCompletion, logger });
+      expect(provider.toClaudeSdkConfig?.(context)).toBeNull();
+      expect(reportCompletion).not.toHaveBeenCalled();
+    }
   });
 });

@@ -912,6 +912,7 @@ function SplitGroupToolbar({ root }: { root: SplitNode }) {
     <div
       data-split-group-toolbar
       className="flex h-8 shrink-0 items-center justify-end gap-1 border-b border-border/40 px-2"
+      style={{ paddingRight: 'calc(0.5rem + var(--content-top-right-actions-inset, 0px))' }}
     >
       <button
         type="button"

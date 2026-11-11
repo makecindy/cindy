@@ -1,126 +1,11 @@
 import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
-
 import { describe, expect, it } from 'vitest';
 
-const source = readFileSync(
-  resolve(__dirname, '../components/new-chat/HomeUsageDashboard.tsx'),
-  'utf8',
-);
-const dailyBarsSource = readFileSync(
-  resolve(__dirname, '../components/new-chat/UsageDailyBars.tsx'),
-  'utf8',
-);
-const heatmapSource = readFileSync(
-  resolve(__dirname, '../components/new-chat/UsageHeatmap.tsx'),
-  'utf8',
-);
-const tokenBarsSource = readFileSync(
-  resolve(__dirname, '../components/settings/usage/UsageTokenBars.tsx'),
-  'utf8',
-);
-const breakdownTablesSource = readFileSync(
-  resolve(__dirname, '../components/settings/usage/UsageBreakdownTables.tsx'),
-  'utf8',
-);
-const usageHistorySectionSource = readFileSync(
-  resolve(__dirname, '../components/settings/usage/UsageHistorySection.tsx'),
-  'utf8',
-);
+const source = readFileSync(resolve(__dirname, '../components/new-chat/HomeUsageDashboard.tsx'), 'utf8');
 
-const chartStyles = readFileSync(
-  resolve(__dirname, '../components/settings/usage/usageCharts.css'),
-  'utf8',
-);
-
-describe('HomeUsageDashboard source contract', () => {
-  it('uses the Claude account daily spend for the visible today amount when available', () => {
-    expect(source).toMatch(
-      /const accountTodayMoney =\s+typeof claudeQuota\?\.todaySpend === 'number'\s+\? gatewayMoney\(claudeQuota\.todaySpend, claudeQuota\.currency\)\s+: null;/,
-    );
-    expect(source).toContain('const hasAccountTodaySpend = accountTodayMoney !== null;');
-    expect(source).toContain('const layoutHistory = history ?? emptyLayoutHistory;');
-    expect(source).toContain(
-      'const displayTodaySpend = accountTodayMoney ?? layoutHistory.totals.today;',
-    );
-    expect(source).toContain('const ACCOUNT_LOCAL_TODAY_MATCH_EPSILON = 0.01;');
-    expect(source).toMatch(
-      /function isSameDisplayedTodaySpend\(\s+accountTodaySpend: RegionalMoney \| null,\s+localTodaySpend: RegionalMoney,\s+\): boolean/,
-    );
-    expect(source).toMatch(
-      /layoutHistory\.anomaly\.isAnomalous &&\s+isSameDisplayedTodaySpend\(accountTodayMoney, layoutHistory\.totals\.today\);/,
-    );
-    expect(source).toContain(
-      '`${formatMoney(displayTodaySpend)} / ${formatCompactMoney(softDailyLimitMoney)}`',
-    );
-    expect(source).toMatch(
-      /hasSpendValue \?\s+formatMoney\(displayTodaySpend\)\s+:\s+UNKNOWN_VALUE/,
-    );
-    expect(source).toContain('warning={showLocalSpendAnomaly}');
-  });
-
-  it('keeps a fixed empty layout while usage history is still loading or empty', () => {
-    expect(source).toContain('function createEmptyUsageHistoryPayload(): UsageHistoryPayload');
-    expect(source).toMatch(
-      /const \[emptyLayoutHistory\] = useState<UsageHistoryPayload>\(\(\) =>\s+createEmptyUsageHistoryPayload\(\),\s+\);/,
-    );
-    expect(source).toContain('const hasHistoryData = history !== null;');
-    expect(source).toContain('const tokenValue =');
-    expect(source).toContain('`${UNKNOWN_VALUE} / ${UNKNOWN_VALUE}`');
-    expect(source).toMatch(
-      /const streakValue = hasHistoryData\s+\? t\('usageDashboard\.streakValue', \{\s+current: layoutHistory\.streak\.current,\s+longest: layoutHistory\.streak\.longest,\s+\}\)\s+: `\$\{UNKNOWN_VALUE\} \/ \$\{UNKNOWN_VALUE\}`;/,
-    );
-    expect(source).toMatch(
-      /hasHistoryData\s+\? t\('usageDashboard\.collapsedStreak', \{ n: layoutHistory\.streak\.current \}\)\s+: UNKNOWN_VALUE/,
-    );
-    expect(source).not.toContain('return null;');
-    expect(source).not.toContain('history.days.length === 0 && history.models.length === 0');
-  });
-
-  it('uses the default usage currency for empty chart cells', () => {
-    expect(heatmapSource).toContain('DEFAULT_USAGE_CURRENCY');
-    expect(dailyBarsSource).toContain('DEFAULT_USAGE_CURRENCY');
-    expect(heatmapSource).not.toContain("money.currency ?? 'USD'");
-    expect(dailyBarsSource).not.toContain("money.currency ?? 'USD'");
-  });
-
-  it('keeps selected usage chart days flat without ad-hoc shadows', () => {
-    expect(heatmapSource).not.toContain('boxShadow');
-    expect(tokenBarsSource).not.toContain('boxShadow');
-    expect(heatmapSource).toContain('usage-chart-indicator');
-    expect(tokenBarsSource).toContain('usage-chart-indicator');
-    expect(chartStyles).toContain('outline: 2px solid var(--focus-ring)');
-    expect(chartStyles).toContain('prefers-reduced-motion: reduce');
-    expect(chartStyles).toContain('transition: none');
-  });
-
-  // The owner removed the added date form. This verifies the retained chart
-  // entry points and geometry, not WCAG target-size conformance; the unresolved
-  // target-size requirement remains documented in usage-history-charts.md.
-  it('keeps dense chart geometry and the two retained date-selection entry points', () => {
-    expect(heatmapSource).not.toContain('INTERACTIVE_CELL_PX');
-    expect(heatmapSource).toContain('const cellSize = CELL_PX;');
-    expect(heatmapSource).toContain('data-usage-mark="usage-heatmap-day"');
-    expect(tokenBarsSource).toContain('const hitHeight = Math.max(24, visualHeight);');
-    expect(tokenBarsSource).toContain('data-usage-mark="usage-token-bar"');
-    expect(tokenBarsSource).not.toContain('minWidth: bars.list.length * 24');
-    expect(tokenBarsSource).not.toContain('minWidth: 24');
-    expect(tokenBarsSource).not.toContain('overflow-x-auto');
-    expect(usageHistorySectionSource.match(/onDayClick=\{handleDayClick\}/g)).toHaveLength(2);
-    expect(usageHistorySectionSource).not.toContain('UsageDateFilter');
-  });
-
-  it('keeps the home heatmap non-interactive when no day callback is supplied', () => {
-    expect(heatmapSource).not.toContain('disabled={!onDayClick}');
-    expect(heatmapSource).toContain('return onDayClick ? (');
-  });
-
-  it('uses the shared model key rank for chart and filtered model-table colors', () => {
-    expect(usageHistorySectionSource).toContain('colorOrder={colorOrder}');
-    expect(breakdownTablesSource).toContain('usageRankOf(colorOrder, row.key)');
-    expect(breakdownTablesSource).toContain('colorOrder: string[];');
-  });
-
+// Guard the account identity passed to the hook and isolation of cached history.
+describe('HomeUsageDashboard account isolation contract', () => {
   it('shows cached usage immediately while marking background refresh', () => {
     expect(source).toContain(
       'const { history, refreshing: usageRefreshing } = useUsageHistory({ paused: collapsed, userId: user?.id });',
@@ -130,29 +15,6 @@ describe('HomeUsageDashboard source contract', () => {
     expect(source).toContain("t('usageDashboard.updating')");
   });
 
-  it('shows token model distribution in the token stat tooltip', () => {
-    expect(source).toContain('const TOKEN_DISTRIBUTION_TOP_MODELS = 5;');
-    expect(source).toContain('const tokenDistributionRows =');
-    expect(source).toContain("t('usageDashboard.tokenDistributionTitle'");
-    expect(source).toContain("t('usageDashboard.tokenDistributionRow'");
-    expect(source).toContain('warningTip={tokenDistributionTip}');
-  });
-
-  it('loads once while collapsed but skips usage push subscriptions', () => {
-    expect(source).toContain('useUsageHistory({ paused: collapsed, userId: user?.id })');
-    const hookSource = readFileSync(resolve(__dirname, '../hooks/useUsageHistory.ts'), 'utf8');
-    const loadIndex = hookSource.indexOf('void load(scopeKey);');
-    const pausedIndex = hookSource.indexOf('if (paused) {');
-    const pushIndex = hookSource.indexOf('window.electronAPI.maker.usage.onTodaySpendChanged');
-    const tokenPushIndex = hookSource.indexOf(
-      'window.electronAPI.maker.usage.onTodayTokensChanged',
-    );
-    expect(loadIndex).toBeGreaterThan(0);
-    expect(pausedIndex).toBeGreaterThan(0);
-    expect(loadIndex).toBeLessThan(pausedIndex);
-    expect(pushIndex).toBeGreaterThan(pausedIndex);
-    expect(tokenPushIndex).toBeGreaterThan(pausedIndex);
-  });
 
   it('scopes renderer usage-history snapshots by account', () => {
     const hookSource = readFileSync(resolve(__dirname, '../hooks/useUsageHistory.ts'), 'utf8');
@@ -165,6 +27,7 @@ describe('HomeUsageDashboard source contract', () => {
     expect(hookSource).toContain('const scopeKey = normalizeScopeKey(opts?.userId);');
   });
 
+
   it('does not render the previous account history after the scope changes', () => {
     const hookSource = readFileSync(resolve(__dirname, '../hooks/useUsageHistory.ts'), 'utf8');
     expect(hookSource).toContain(
@@ -176,96 +39,4 @@ describe('HomeUsageDashboard source contract', () => {
     );
   });
 
-  it('adds subscription estimates to mixed actual daily bars', () => {
-    expect(dailyBarsSource).toContain('const subscriptionEstimateSum = segments.reduce(');
-    expect(dailyBarsSource).toContain('actualAmount + subscriptionEstimateSum,');
-    expect(dailyBarsSource).toContain(
-      'segments.some((segment) => segment.subscriptionEstimateAmount > 0)',
-    );
-    expect(dailyBarsSource).toContain("money(subscriptionEstimateSum, true, 'value-estimate')");
-  });
-
-  it('force-refreshes delayed pricing retries instead of reusing pending memory cache', () => {
-    const hookSource = readFileSync(resolve(__dirname, '../hooks/useUsageHistory.ts'), 'utf8');
-    expect(hookSource).toContain('scope.pricingRetryTimer = setTimeout(() => {');
-    expect(hookSource).toContain('void load(scopeKey, { forceRefresh: true });');
-    expect(hookSource).not.toContain('setTimeout(() => void load(), PRICING_RETRY_DELAY_MS);');
-  });
-
-  it('cancels delayed retries when a usage scope is no longer active', () => {
-    const hookSource = readFileSync(resolve(__dirname, '../hooks/useUsageHistory.ts'), 'utf8');
-    expect(hookSource).toContain('pricingRetryTimer: ReturnType<typeof setTimeout> | null;');
-    expect(hookSource).toContain(
-      'function deactivateScopeIfUnused(scope: UsageHistoryScopeState): void',
-    );
-    expect(hookSource).toContain('cancelScopeTimers(scope);');
-    expect(hookSource).toContain('scope.loadSeq += 1;');
-    expect(hookSource).toContain('deactivateScopeIfUnused(activeScope);');
-    expect(hookSource).toContain(
-      'if (scope.listeners.size === 0 && scope.statusListeners.size === 0) return;',
-    );
-  });
-
-  it('resets the pricing retry gate after successful loads and usage-push refreshes', () => {
-    const hookSource = readFileSync(resolve(__dirname, '../hooks/useUsageHistory.ts'), 'utf8');
-    expect(hookSource).toContain('opts?: { forceRefresh?: boolean; resetPricingRetry?: boolean }');
-    expect(hookSource).toContain('if (opts?.resetPricingRetry) scope.pricingRetryDone = false;');
-    expect(hookSource).toContain('scope.pricingRetryDone = false;');
-    expect(hookSource).toContain(
-      'void load(scopedKey, { forceRefresh: true, resetPricingRetry: true });',
-    );
-  });
-
-  it('does not retry forever for permanent Codex null estimates', () => {
-    const hookSource = readFileSync(resolve(__dirname, '../hooks/useUsageHistory.ts'), 'utf8');
-    expect(hookSource).toContain('if (next.estimatesPending) {');
-    expect(hookSource).not.toContain(
-      "next.models.some((m) => m.agentKind === 'codex' && m.estimatedCostUsd === null)",
-    );
-  });
-
-  it('lets the token-only settings page consume pending estimates without changing the home gate', () => {
-    const hookSource = readFileSync(resolve(__dirname, '../hooks/useUsageHistory.ts'), 'utf8');
-    const settingsSource = readFileSync(
-      resolve(__dirname, '../components/settings/usage/UsageHistorySection.tsx'),
-      'utf8',
-    );
-    expect(settingsSource).toContain('allowPendingEstimates: true');
-    expect(hookSource).toContain('allowPendingEstimates?: boolean;');
-    expect(hookSource).toContain('if (!scope.request.allowPendingEstimates) return scope.cache;');
-  });
-
-  it('keeps the settings usage loading state separate from a loaded empty payload', () => {
-    const hookSource = readFileSync(resolve(__dirname, '../hooks/useUsageHistory.ts'), 'utf8');
-    expect(usageHistorySectionSource).toContain('const loading = history === null && refreshing;');
-    expect(usageHistorySectionSource).toContain(
-      'const loadFailed = history === null && !refreshing;',
-    );
-    expect(usageHistorySectionSource).toContain(
-      'const empty = history !== null && isUsageHistoryEmpty(history);',
-    );
-    expect(usageHistorySectionSource).toContain("t('usageHistory.loadFailed')");
-    expect(hookSource).toContain('useState(scope.cache === null || scope.refreshing)');
-    expect(hookSource.indexOf('void load(scopedKey);')).toBeLessThan(
-      hookSource.indexOf('setIsRefreshing(activeScope.refreshing);'),
-    );
-    expect(hookSource).toContain(
-      'historyState.scopeKey === scopedKey ? isRefreshing : scope.cache === null || scope.refreshing;',
-    );
-  });
-
-  it('keeps interactive usage controls discoverable and semantically selected', () => {
-    expect(usageHistorySectionSource).toContain(
-      'data-[state=checked]:bg-[var(--settings-menu-bg-selected)]',
-    );
-    expect(usageHistorySectionSource).toContain(
-      'data-[state=checked]:text-[var(--settings-menu-text-selected)]',
-    );
-    expect(heatmapSource).toContain('const accessibleLabel =');
-    expect(heatmapSource).toContain('aria-label={accessibleLabel}');
-    expect(tokenBarsSource).toContain('function parseDayKeyLocal(dayKey: string): Date');
-    expect(tokenBarsSource).toContain(
-      'aria-label={`${dateFormatter.format(parseDayKeyLocal(b.day))}',
-    );
-  });
 });

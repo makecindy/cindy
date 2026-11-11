@@ -3,7 +3,8 @@ import path from 'node:path';
 import type { CindyMakeTaskPreparation, MakeTaskWorkspace } from '../../shared/cindyMakeDoctor.js';
 import { runSourceGit } from './sourceGit.js';
 import { contentRef, snapshotContent, applyContent, taskContentRef } from './sourceContent.js';
-import { runSourcePnpm } from './sourcePnpm.js';
+import { assertPnpmInstallContained, assertPnpmInstallLinksContained } from './pnpmWriteRoots.js';
+import { runSourcePnpm, unverifiedPnpmEnv } from './sourcePnpm.js';
 import {
   CINDY_MAKE_RUN_ID_PATTERN,
   CINDY_PERSONAL_BRANCH,
@@ -15,6 +16,8 @@ import {
 } from './sourcePaths.js';
 
 export type TaskWorkspacePhase = 'checking' | 'creating' | 'installing';
+
+/** What an unverified install may see of the environment: see `unverifiedPnpmEnv`. */
 
 export interface TaskWorkspaceDeps {
   /** Toolchain PATH (system tools first, managed copies otherwise). */
@@ -156,6 +159,8 @@ export async function installCindyMakeWorktree(
   deps: TaskWorkspaceDeps,
   onPhase: (phase: TaskWorkspacePhase) => void = () => {},
   onProgress?: (progress: NonNullable<CindyMakeTaskPreparation['dependencies']>) => void,
+  /** `ignoreScripts`: the content is not verified yet; its lifecycle scripts do not run. */
+  options: { ignoreScripts?: boolean } = {},
 ): Promise<MakeTaskWorkspace> {
   const pnpm = deps.pnpm ?? runSourcePnpm;
   onPhase('installing');
@@ -163,14 +168,49 @@ export async function installCindyMakeWorktree(
   if (!isCindyMakeWorktreePath(userData, workspace.path)) {
     throw Object.assign(new Error('invalid task workspace'), { code: 'gitFailed' });
   }
+  if (options.ignoreScripts) {
+    // Unverified synced content must not point pnpm's write roots outside the
+    // worktree: a tracked `node_modules` symlink would have it install through
+    // the link, and content `.npmrc` / `pnpm-workspace.yaml` settings move the
+    // write roots outright. Every write root must be a real descendant of the
+    // worktree (see `pnpmWriteRoots`).
+    await assertPnpmInstallContained(workspace.path);
+  }
   await pnpm(
-    deps.processEnvironment,
-    ['install', '--frozen-lockfile', '--prefer-offline', '--prod=false'],
+    options.ignoreScripts
+      ? // Unverified synced content runs no install-time code and sees only the
+        // credential-free environment (see `unverifiedPnpmEnv`): no lifecycle
+        // scripts, no `.pnpmfile.cjs` hooks (which `--ignore-scripts` alone would
+        // still execute), the write roots pinned over any `.npmrc` of the
+        // content's own, and no inherited variable to expand into a credential
+        // sent to a registry the content chooses.
+        unverifiedPnpmEnv(deps.processEnvironment)
+      : deps.processEnvironment,
+    [
+      'install',
+      '--frozen-lockfile',
+      '--prefer-offline',
+      '--prod=false',
+      ...(options.ignoreScripts
+        ? [
+            '--ignore-scripts',
+            '--ignore-pnpmfile',
+            '--config.modules-dir=node_modules',
+            '--config.virtual-store-dir=node_modules/.pnpm',
+            '--config.store-dir=node_modules/.cindy-make-store',
+            '--config.strict-ssl=true',
+          ]
+        : []),
+    ],
     workspace.path,
     signal,
     ...(onProgress ? [onProgress] : []),
   );
   signal.throwIfAborted();
+  // The install populated the write roots the pre-install scan could not see
+  // into: whatever it linked must resolve inside the worktree (see
+  // `pnpmWriteRoots`).
+  if (options.ignoreScripts) await assertPnpmInstallLinksContained(workspace.path);
   return workspace;
 }
 

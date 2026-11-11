@@ -12,6 +12,7 @@
  */
 
 /** 结构化错误码 —— renderer 按 `providerError.<code>` 取 i18n 文案。 */
+import { isContextOverflowErrorMessage } from '@cindy/maker-shared/context-overflow-error';
 import {
   matchesDeterministicUsageExhaustionText,
   redactSensitiveText,
@@ -80,9 +81,6 @@ const TIMEOUT_CODES = new Set(['ETIMEDOUT', 'ABORT_ERR', 'TimeoutError', 'AbortE
  *  litellm "Invalid model name"、通用 "model_not_found"。 */
 const MODEL_NOT_FOUND_RE =
   /model[^\n]{0,80}(not.{0,4}(found|exist)|does not exist|invalid|unknown|unsupported)|model_not_found|invalid model/i;
-/** 上下文超长：Anthropic "prompt is too long"、OpenAI "maximum context length"、通用 token limit 措辞。 */
-const CONTEXT_TOO_LONG_RE =
-  /prompt is too long|maximum (?:context|prompt) length|context.{0,20}(length|window).{0,40}(exceed|too)|context_length_exceeded/i;
 /** wire 兼容性：端点不认识请求里的字段 / 参数（典型：litellm/Azure 对 Anthropic-only 字段报错）。 */
 const WIRE_RE =
   /(unknown|unexpected|unsupported|extra|unrecognized).{0,16}(field|parameter|argument|inputs?|property|request param)|extra inputs are not permitted|invalid_request_error[^\n]{0,120}(field|param)/i;
@@ -100,6 +98,23 @@ const AUTH_RE = /invalid.{0,10}(api.?key|token)|authentication_error|unauthorize
  */
 export function matchesQuotaExhaustedText(text: string): boolean {
   return matchesDeterministicUsageExhaustionText(text);
+}
+
+/**
+ * 状态码兜底:402 常以 `HTTP 402` / `status 402` / `code: 402` / `(402)` /
+ * `402 Payment Required` 之类的形态透出到 message。只认**带状态码上下文**的 402 ——
+ * 裸 `\b402\b` 会把正文里恰好出现的独立数字(报价、行号、金额)也判成额度耗尽,
+ * 而这条判定会改写错误文案并挂上充值入口,误伤代价高。
+ */
+const HTTP_402_RE =
+  /(?:\b(?:http|status|code|error)\b[^0-9a-z]{0,10}402\b|\(\s*402\s*\)|\b402\s+payment\s+required\b)/i;
+
+/**
+ * 只拿得到一条错误 message 时的「余额 / 配额耗尽」判定:文案 pattern + 带状态码上下文
+ * 的 402。桌面错误横幅与 IM 渠道的失败说明共用这一份。
+ */
+export function isQuotaExhaustedErrorMessage(message: string): boolean {
+  return matchesQuotaExhaustedText(message) || HTTP_402_RE.test(message);
 }
 
 /**
@@ -136,7 +151,7 @@ export function classifyProviderError(input: ProviderErrorInput): ProviderErrorC
   }
   if (status === 400 || status === 422) {
     if (MODEL_NOT_FOUND_RE.test(body)) return { code: 'MODEL_NOT_FOUND', retryable: false, detail };
-    if (CONTEXT_TOO_LONG_RE.test(body)) return { code: 'CONTEXT_TOO_LONG', retryable: false, detail };
+    if (isContextOverflowErrorMessage(body)) return { code: 'CONTEXT_TOO_LONG', retryable: false, detail };
     if (matchesDeterministicUsageExhaustionText(body)) {
       return { code: 'QUOTA_EXCEEDED', retryable: false, detail };
     }

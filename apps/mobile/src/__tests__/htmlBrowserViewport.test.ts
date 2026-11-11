@@ -93,9 +93,52 @@ describe('page-local viewport contract', () => {
   });
   it('works on the next document and never forces body padding or height', () => {
     run();
-    expect(document.body.style.cssText).toBe('');
+    for (const property of ['padding', 'padding-top', 'padding-bottom', 'height', 'min-height']) {
+      expect(document.body.style.getPropertyValue(property)).toBe('');
+    }
     delete (window as any).cindyViewport;
     run();
     expect((window as any).cindyViewport.version).toBe(1);
+  });
+});
+
+describe('page canvas fallback', () => {
+  const painted = Symbol.for('cindy.browserViewport.canvas');
+  const page = (root: Partial<CSSStyleDeclaration>, body: Partial<CSSStyleDeclaration> = {}) => {
+    const computed = (style: Partial<CSSStyleDeclaration>) => ({ backgroundColor: 'rgba(0, 0, 0, 0)', backgroundImage: 'none', ...style });
+    vi.stubGlobal('getComputedStyle', (element: Element) => computed(element === document.documentElement ? root : body));
+  };
+  afterEach(() => {
+    document.documentElement.style.backgroundColor = '';
+    document.body.style.backgroundColor = '';
+    delete (document.body as any)[painted];
+  });
+  it('paints body, so the propagated canvas resolves with body color-scheme, when html and body set no background', () => {
+    page({});
+    run();
+    expect(document.body.style.backgroundColor.toLowerCase()).toBe('canvas');
+  });
+  it('treats an inline transparent html background as no background', () => {
+    document.documentElement.style.backgroundColor = 'transparent';
+    page({ backgroundColor: 'transparent' });
+    run();
+    expect(document.body.style.backgroundColor.toLowerCase()).toBe('canvas');
+  });
+  it.each(['rgba(255, 0, 0, 0)', 'rgb(255 0 0 / 0)', 'color(srgb 1 0 0 / 0%)', 'transparent'])('treats zero-alpha %s as no background', (color) => {
+    page({ backgroundColor: color }, { backgroundColor: color });
+    run();
+    expect(document.body.style.backgroundColor.toLowerCase()).toBe('canvas');
+  });
+  it.each([
+    ['opaque black', { backgroundColor: 'rgb(0, 0, 0)' }, {}],
+    ['translucent body', {}, { backgroundColor: 'rgba(0, 0, 0, 0.5)' }],
+    ['html color', { backgroundColor: 'rgb(17, 22, 27)' }, {}],
+    ['body color', {}, { backgroundColor: 'rgb(17, 22, 27)' }],
+    ['body gradient', {}, { backgroundImage: 'linear-gradient(red, blue)' }],
+    ['html image', { backgroundImage: 'url("bg.png")' }, {}],
+  ])('leaves a page-defined background alone (%s)', (_, root, body) => {
+    page(root, body);
+    run();
+    expect(document.body.style.backgroundColor).toBe('');
   });
 });

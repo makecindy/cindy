@@ -39,8 +39,7 @@ function BotDirectMessageCardBody({ meta, sessionId }: { meta: BotDirectMessageM
   );
 
   return (
-    <div className="flex w-full select-none items-center gap-3 py-2" role="separator">
-      <div className="h-px flex-1 bg-[var(--msg-tool-card-border)]" />
+    <div className="flex w-full min-w-0 select-none items-center py-1" data-bot-direct-message={meta.direction}>
       <button
         type="button"
         onClick={() =>
@@ -54,19 +53,19 @@ function BotDirectMessageCardBody({ meta, sessionId }: { meta: BotDirectMessageM
           )
         }
         className={cn(
-          'flex min-w-0 max-w-full items-center gap-1.5 rounded-full border',
+          'flex min-h-7 min-w-0 max-w-full items-center gap-1.5 rounded-full border',
           'border-[var(--msg-tool-card-border)] bg-[var(--surface)] px-2.5 py-1',
           'text-11 text-[var(--text-secondary)] transition-colors',
           'hover:bg-[var(--msg-tool-card-bg)] hover:text-[var(--text-primary)]',
+          'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--focus-ring)]',
         )}
         title={t('bots.directMessage.open')}
       >
         <BotAvatar bot={peer} size="xs" />
         <ArrowLeftRight size={12} className="shrink-0 text-[var(--text-tertiary)]" aria-hidden />
-        <span className="truncate">{label}</span>
+        <span className="truncate" title={label}>{label}</span>
         <ChevronRight size={12} className="shrink-0 text-[var(--text-tertiary)]" aria-hidden />
       </button>
-      <div className="h-px flex-1 bg-[var(--msg-tool-card-border)]" />
     </div>
   );
 }

@@ -302,7 +302,8 @@ describe("buildUserProvider (per-runtime)", () => {
       efforts: [],
       defaultEffort: null,
       group: "custom:openrouter",
-      defaultEnabled: false,
+      // Codex sends Responses to the supplier's own endpoint: enabled without local conversion.
+      defaultEnabled: true,
     });
   });
 
@@ -1073,6 +1074,7 @@ describe("buildUserProvider (per-runtime)", () => {
           baseUrl: "https://images.example/v1",
           wireProtocol: "openai-responses",
           supportsImageGeneration: true,
+          imageApi: "openai-images",
           models: [
             { id: "generate", name: "Generate" },
             { id: "input", name: "Input", supportsImageInput: true },
@@ -1081,6 +1083,7 @@ describe("buildUserProvider (per-runtime)", () => {
       },
     });
     expect(p.routing.codex?.supportsImageGeneration).toBe(true);
+    expect(p.routing.codex?.imageApi).toBe("openai-images");
     expect(p.models.codex?.[0]?.supportsImageInput).toBeUndefined();
     expect(p.models.codex?.[1]?.supportsImageInput).toBe(true);
   });
@@ -1768,11 +1771,13 @@ describe('imported model native engine defaults', () => {
   });
 
   it.each([
-    [null, 'openai-responses', null, [false, false, true]],
-    ['anthropic-messages', 'openai-responses', 'anthropic-messages', [true, false, true]],
-    ['openai-responses', 'anthropic-messages', 'openai-responses', [false, true, true]],
-    [undefined, 'anthropic-messages', 'anthropic-messages', [true, false, true]],
-    [undefined, undefined, 'openai-responses', [false, true, true]],
+    // Each engine already sends its own API to this endpoint, so all three stay enabled
+    // whatever the manufacturer declaration says (Chris 2026-10-30).
+    [null, 'openai-responses', null, [true, true, true]],
+    ['anthropic-messages', 'openai-responses', 'anthropic-messages', [true, true, true]],
+    ['openai-responses', 'anthropic-messages', 'openai-responses', [true, true, true]],
+    [undefined, 'anthropic-messages', 'anthropic-messages', [true, true, true]],
+    [undefined, undefined, 'openai-responses', [true, true, true]],
   ] as const)('applies current native declaration %s ahead of live %s and bundled fallback',
     (declaration, live, expectedApi, expectedEnabled) => {
       const agents = ['claude-code', 'codex', 'pi'] as const;

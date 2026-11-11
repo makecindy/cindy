@@ -41,6 +41,8 @@ export function RemoteDesktopToolbar({
   onWorkspaceLeft,
   onWorkspaceRight,
   onOmarchyMenu,
+  windowOnly,
+  device,
 }: {
   landscape: boolean;
   canControl: boolean;
@@ -53,6 +55,13 @@ export function RemoteDesktopToolbar({
   onWorkspaceLeft?: () => void;
   onWorkspaceRight?: () => void;
   onOmarchyMenu?: () => void;
+  /** 代输入 window view: no desktop to navigate, so only keyboard and settings. */
+  windowOnly?: boolean;
+  /**
+   * A plugin live screen: its device buttons replace desktop navigation, and
+   * the keyboard shows only when the device takes text.
+   */
+  device?: { buttons: RemoteDesktopDeviceButton[]; keyboard: boolean };
 }) {
   const { t } = useTranslation();
   const { colors } = useTheme();
@@ -63,6 +72,7 @@ export function RemoteDesktopToolbar({
     press(): void;
     selected?: boolean;
     disabled?: boolean;
+    label?: string;
   }> = [
     {
       key: onWorkspaceLeft ? "workspaceLeft" : "allWindows",
@@ -100,18 +110,29 @@ export function RemoteDesktopToolbar({
       selected: operations,
     },
   ];
+  // 代输入 window view: no desktop to navigate, so only keyboard and settings.
+  const shown: typeof actions = device
+    ? [
+        ...device.buttons.map((button) => ({ ...button, disabled: !canControl })),
+        ...actions.filter(
+          ({ key }) => (key === "keyboard" && device.keyboard) || key === "operations",
+        ),
+      ]
+    : windowOnly
+      ? actions.filter(({ key }) => key === "keyboard" || key === "operations")
+      : actions;
   return (
     <View
       style={[styles.toolbar, landscape && styles.rail]}
       testID="remoteDesktop.toolbar"
     >
-      {(landscape ? [...actions].reverse() : actions).map(
-        ({ key, icon: Icon, press, selected, disabled }) => (
+      {(landscape ? [...shown].reverse() : shown).map(
+        ({ key, icon: Icon, press, selected, disabled, label }) => (
           <RemoteDesktopActionButton
             key={key}
             testID={`remoteDesktop.${key}`}
             accessibilityRole="button"
-            accessibilityLabel={t(`remoteDesktop.${key}`)}
+            accessibilityLabel={label ?? t(`remoteDesktop.${key}`)}
             accessibilityState={{ selected, disabled }}
             disabled={disabled}
             onPress={press}
@@ -128,13 +149,21 @@ export function RemoteDesktopToolbar({
               color={colors.textPrimary}
             />
             <Text numberOfLines={2} style={styles.label}>
-              {t(`remoteDesktop.${key}`)}
+              {label ?? t(`remoteDesktop.${key}`)}
             </Text>
           </RemoteDesktopActionButton>
         ),
       )}
     </View>
   );
+}
+
+/** One button of a plugin live screen, as the toolbar and controls panel show it. */
+export interface RemoteDesktopDeviceButton {
+  key: string;
+  icon: LucideIcon;
+  label: string;
+  press(): void;
 }
 
 // Keep the panel inside the viewport so it can anchor at the bottom or right

@@ -35,6 +35,15 @@ describe('localized model display names', () => {
     expect(localizedBrandName(modelBrand({ id: 'moonshotai/kimi-k3' })!, t)).toBe('月之暗面');
     expect(localizedBrandName(modelBrand({ id: 'new-maker/new-model' })!, t)).toBe('new-maker');
   });
+  it('shows a model-group Auto by its server name, grouped like the preset Auto rather than under an "auto" vendor', () => {
+    expect(modelBrand({ id: 'auto/grp_123' })).toBeUndefined();
+    expect(modelBrand({ id: 'auto' })).toBeUndefined();
+    const t = i18n.getFixedT('zh-CN');
+    expect(localizedModelName('Auto (研发组)', t)).toBe('Auto (研发组)');
+    expect(matchesModelName({ id: 'auto/grp_123', name: 'Auto (研发组)' }, '研发组', t)).toBe(true);
+    // A real vendor namespace that merely starts with "auto" is still a vendor.
+    expect(modelBrand({ id: 'autoglm/model' })).toMatchObject({ label: 'autoglm' });
+  });
   it('searches both languages, manufacturer and exact model ID without modifying model data', () => {
     const model = Object.freeze({ id: 'qwen/qwen3.8-max', name: 'Qwen3.8 Max' });
     for (const locale of ['zh-CN', 'zh-TW', 'en']) {

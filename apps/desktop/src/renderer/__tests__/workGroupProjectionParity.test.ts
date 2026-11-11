@@ -18,6 +18,7 @@ interface Event {
   sealed?: boolean;
   autoResume?: boolean;
   delivery?: 'steer' | 'turn';
+  failedSamplingAttempt?: boolean;
 }
 
 const iso = (seconds: number) => new Date(Date.UTC(2026, 0, 1) + seconds * 1000).toISOString();
@@ -76,6 +77,7 @@ function desktopItems(events: readonly Event[]): RenderItem[] {
           : {}),
         createdAt: iso(event.at),
         turnCompleted: event.sealed,
+        failedSamplingAttempt: event.failedSamplingAttempt,
         delivery: event.delivery,
         ...(event.autoResume ? { systemCardType: 'auto-resume' as const } : {}),
         ...(event.kind === 'compact' ? { systemCardType: 'compact' as const } : {}),
@@ -95,6 +97,7 @@ function normalized(events: readonly Event[]): MessageRenderNormalizedMessage[] 
     body: event.body ?? (event.kind === 'thinking' ? 'Thinking' : ''),
     createdAt: iso(event.at),
     turnCompleted: event.sealed,
+    failedSamplingAttempt: event.failedSamplingAttempt,
     settledAt: event.end === undefined ? undefined : iso(event.end),
     source: {
       clientId: event.id,
@@ -161,6 +164,48 @@ function tree(items: readonly Projection[]): unknown[] {
 }
 
 const cases: Array<{ name: string; events: Event[]; streaming?: boolean; expected: unknown[] }> = [
+  // #6351: both platform consumers must fold failed native attempts without
+  // waiting for a successful final. Normal multi-message answers stay intact.
+  {
+    name: 'failed sampling attempts fold while the native retry is still running',
+    streaming: true,
+    events: [user(),
+      { ...answer('failed1', 1, true, '# Opening'), failedSamplingAttempt: true },
+      { ...answer('failed2', 2), failedSamplingAttempt: true }],
+    expected: [['u'], ['work-failed1', [['failed1'], ['failed2']]]],
+  },
+  {
+    name: 'exhausted or stopped sampling attempts fold without a successful final',
+    events: [user(),
+      { ...answer('failed1', 1, true, '# Opening'), failedSamplingAttempt: true },
+      { ...answer('failed2', 2), failedSamplingAttempt: true },
+      { id: 'failure', kind: 'error', at: 3, body: 'Reply interrupted' }],
+    expected: [['u'], ['work-failed1', [['failed1'], ['failed2']]], ['failure']],
+  },
+  {
+    name: 'a successful retry preserves all normal contiguous assistant answer blocks',
+    events: [user(),
+      { ...answer('failed1', 1), failedSamplingAttempt: true },
+      { ...answer('failed2', 2), failedSamplingAttempt: true },
+      answer('intro', 3), answer('final', 4, true)],
+    expected: [['u'], ['work-failed1', [['failed1'], ['failed2']]], ['intro'], ['final']],
+  },
+  {
+    name: 'manual recovery leaves the prior failed fold and error in their own user turn',
+    events: [user(),
+      { ...answer('failed1', 1), failedSamplingAttempt: true },
+      { id: 'failure', kind: 'error', at: 2, body: 'Reply interrupted' },
+      user('recovery', 3), answer('final', 4, true)],
+    expected: [['u'], ['work-failed1', [['failed1']]], ['failure'], ['recovery'], ['final']],
+  },
+  {
+    name: 'steering stays ordered between failed samples and the successful reply',
+    events: [user(),
+      { ...answer('failed1', 1), failedSamplingAttempt: true },
+      { ...user('steer', 2), delivery: 'steer' },
+      { ...answer('failed2', 3), failedSamplingAttempt: true }, answer('final', 4, true)],
+    expected: [['u'], ['work-failed1', [['failed1']]], ['steer'], ['work-failed2', [['failed2']]], ['final']],
+  },
   {
     name: 'running subagent remains visible between completed work groups',
     events: [

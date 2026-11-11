@@ -1,6 +1,9 @@
 import { describe, expect, it } from 'vitest';
 
-import { botSessionInputBlockReason } from '../botSessionInputGuard.js';
+import {
+  botSessionInputBlockReason,
+  isShadowedCompanionSession,
+} from '../botSessionInputGuard.js';
 
 describe('Bot task input guard', () => {
   it('does not affect ordinary Cindy tasks', () => {
@@ -25,5 +28,22 @@ describe('Bot task input guard', () => {
     expect(
       botSessionInputBlockReason({ source: 'bot', role: null, profileStatus: null }),
     ).toContain('归属信息不完整');
+  });
+});
+
+describe('shadowed companion guard', () => {
+  const shadowed = (botId: string) => botId === 'bot_mia';
+  // #7256: routine history must not restart a companion on its old computer.
+  it.each(['canonical', 'routine'])('blocks the %s task of a demoted copy', (role) => {
+    expect(isShadowedCompanionSession({ role, botId: 'bot_mia' }, shadowed)).toBe(
+      true,
+    );
+    expect(isShadowedCompanionSession({ role: 'delegation', botId: 'bot_mia' }, shadowed)).toBe(
+      false,
+    );
+    expect(isShadowedCompanionSession({ role, botId: 'bot_other' }, shadowed)).toBe(
+      false,
+    );
+    expect(isShadowedCompanionSession(null, shadowed)).toBe(false);
   });
 });

@@ -37,6 +37,11 @@ export {
   ResponsesNullArrayRepairTransform,
 } from './responses-null-array-repair.js';
 export {
+  isUnsupportedResponsesFeatureError,
+  unsupportedFeatureErrorBody,
+  unsupportedFeatureOf,
+} from './unsupported-feature.js';
+export {
   isResponsesImageContentPartType,
   isUnsupportedResponsesImageErrorPayload,
   UnsupportedResponsesFeatureError,

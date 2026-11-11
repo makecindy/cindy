@@ -7,11 +7,11 @@ vi.mock('electron', () => ({
   powerSaveBlocker: { start: () => 0, stop: () => {}, isStarted: () => false },
   nativeImage: { createFromPath: () => ({ isEmpty: () => true }) },
 }));
-vi.mock('../settings-store', () => ({
+vi.mock('../settings-store.desktop', () => ({
   readDeviceLinkSettings: () => ({ remoteControlEnabled: true, revokedControllers: [] }),
 }));
 
-import { __testing } from '../dispatch';
+import { __testing } from '../dispatch.desktop';
 import * as subscriptions from '../subscriptions';
 import { setSharedTaskDispatchHost } from '../sharedTaskDispatch';
 import type { SharedTaskHost } from '../sharedTaskHost';
@@ -41,7 +41,7 @@ beforeEach(() => {
   __testing.reset();
   grants.clear();
   grants.set(guestA, 'task-a'); grants.set(guestB, 'task-b');
-  setSharedTaskDispatchHost({ capturePeer(source: string) {
+  setSharedTaskDispatchHost({ peerStatus: (source: string) => grants.has(source) ? 'available' : 'revoked', capturePeer(source: string) {
     const sessionId = grants.get(source);
     if (!sessionId) return null;
     const current = () => grants.get(source) === sessionId;
@@ -184,6 +184,28 @@ describe('shared task guests never see the owner private message sources', () =>
     expect(sent.get('own-task').message.agentMeta).toEqual(message.agentMeta);
   });
 
+  it('redacts an auto-bridge batch for the guest: keeps count, drops senderSessionId and worker_id', async () => {
+    const transport = client();
+    __testing.setActiveClient(transport as never);
+    subscriptions.subscribe(guestA, ['session:task-a']);
+    subscriptions.subscribe('own-task', ['session:task-a']);
+    // 批次可见正文在构造时已去 worker_id（只留 role 前缀）；origin 仍带首条 senderSessionId 作 Host 授权证据。
+    const batchBody = '[Auto-bridged batch: 2 worker reports]\n\n[From Orca Worker backend]\n[Auto-bridged: worker 已完成，系统自动回传结果]\n\nAPI ready\n\n---\n\n[From Orca Worker frontend]\n[Auto-bridged: worker 异常终止]\n\nUI ready';
+    const batchMessage = {
+      clientId: 'mb1', sessionId: 'task-a', role: 'user',
+      content: JSON.stringify({ orcaSource: 'worker', content: batchBody }),
+      agentMeta: { origin: { kind: 'orca', senderLabel: '', senderSessionId: 'backend-session', displayText: batchBody, autoBridge: true, autoBridgeBatchCount: 2 } },
+    };
+    __testing.forwardPush('local-db:messages:created', { sessionId: 'task-a', message: batchMessage });
+    await vi.advanceTimersByTimeAsync(300);
+    const sent = new Map(transport.sendPush.mock.calls.map((call) => [call[0], call[2]]));
+    const guestMessage = sent.get(guestA).message;
+    expect(guestMessage.agentMeta.origin).toEqual({ kind: 'orca', senderLabel: '', displayText: batchBody, autoBridge: true, autoBridgeBatchCount: 2 });
+    expect(guestMessage.content).toContain('API ready');
+    expect(JSON.stringify(sent.get(guestA))).not.toMatch(/backend-session|worker_id/);
+    expect(sent.get('own-task').message.agentMeta).toEqual(batchMessage.agentMeta);
+  });
+
   it('redacts queued-message sources in input projection pushes for the guest', async () => {
     const transport = client();
     __testing.setActiveClient(transport as never);
@@ -217,6 +239,33 @@ describe('shared task guests never see the owner private message sources', () =>
     expect(guestView.recovery.item.text).toBe('please review');
     expect(guestView.recovery.item.origin).toEqual({ kind: 'session', senderSessionId: '', displayText: 'please review' });
     expect(JSON.stringify(guestView)).not.toMatch(/Cindy|owner-private-task|Owner private plan|bot-1|lead-task/);
+    expect(sent.get('own-task')).toEqual(projection);
+  });
+
+  it('redacts an auto-bridge batch in the guest queue projection: text drops worker_id', async () => {
+    const transport = client();
+    __testing.setActiveClient(transport as never);
+    subscriptions.subscribe(guestA, ['session:task-a']);
+    subscriptions.subscribe('own-task', ['session:task-a']);
+    // 批次 agent text 保留 worker_id 供 Lead 路由；访客投影只能拿可见正文（origin.displayText）。
+    const cleanBody = '[From Orca Worker backend]\n[Auto-bridged: worker 已完成，系统自动回传结果]\n\nAPI ready\n\n---\n\n[From Orca Worker frontend]\n[Auto-bridged: worker 异常终止]\n\nUI ready';
+    const agentText = `[Auto-bridged batch: 2 worker reports]\n\n[From Orca Worker backend (worker_id: backend)]\nAPI ready\n\n---\n\n[From Orca Worker frontend (worker_id: frontend)]\nUI ready`;
+    const projection = {
+      sessionId: 'task-a',
+      pendingQueue: [{
+        clientId: 'qb',
+        text: agentText,
+        persistedContent: JSON.stringify({ orcaSource: 'worker', content: cleanBody }),
+        origin: { kind: 'orca', senderLabel: '', senderSessionId: 'backend-session', displayText: cleanBody, autoBridge: true, autoBridgeBatchCount: 2 },
+      }],
+    };
+    __testing.forwardPush('maker:input:projection', projection);
+    await vi.advanceTimersByTimeAsync(300);
+    const sent = new Map(transport.sendPush.mock.calls.map((call) => [call[0], call[2]]));
+    const guestItem = sent.get(guestA).pendingQueue[0];
+    expect(guestItem.text).toBe(cleanBody);
+    expect(guestItem.origin).toEqual({ kind: 'orca', senderLabel: '', displayText: cleanBody, autoBridge: true, autoBridgeBatchCount: 2 });
+    expect(JSON.stringify(sent.get(guestA))).not.toMatch(/backend-session|worker_id/);
     expect(sent.get('own-task')).toEqual(projection);
   });
 
@@ -307,5 +356,174 @@ describe('shared task guests never see the owner private message sources', () =>
     expect(JSON.stringify(results.get('r1'))).not.toMatch(privateText);
     expect(results.get('r2').result[0].agentMeta.origin).toEqual(privateOrigin);
     expect(results.get('r3').result.pendingQueue[0].origin).toEqual({ kind: 'session', senderSessionId: '', displayText: 'please review' });
+  });
+});
+
+describe('shared task MCP App data stays at the owner boundary', () => {
+  const message = {
+    clientId: 'app-card',
+    sessionId: 'task-a',
+    role: 'assistant',
+    agentMeta: { mcpApp: true },
+    content: {
+      mcpApp: {
+        version: 1,
+        serverId: 'private-server',
+        serverRevision: 'private-revision',
+        resourceUri: 'ui://private/app',
+        connectionId: 'private-connection',
+        tool: {
+          name: 'draft',
+          title: 'Draft form',
+          inputSchema: { type: 'object', description: 'private-schema' },
+          _meta: { private: 'tool' },
+        },
+        arguments: { private: 'input' },
+        result: {
+          content: [
+            { type: 'text', text: 'Saved result', _meta: { private: 'block' } },
+            { type: 'resource', resource: { text: 'private-html' } },
+            { type: 'image', data: 'private-image' },
+            { type: 'text', text: 'Second paragraph' },
+          ],
+          structuredContent: { private: 'structured' },
+          _meta: { private: 'view-only' },
+        },
+        future: 'private-future',
+      },
+      future: 'private-envelope',
+    },
+  };
+  const expected = {
+    mcpAppHistory: { version: 1, title: 'Draft form', text: 'Saved result\n\nSecond paragraph' },
+  };
+
+  it.each(['online', 'reconnecting'])(
+    'redacts %s pushes before delivery or offline queueing',
+    async (status) => {
+      const transport = client();
+      transport.getStatus.mockReturnValue(status);
+      __testing.setActiveClient(transport as never);
+      subscriptions.subscribe(guestA, ['session:task-a']);
+      subscriptions.subscribe('own-task', ['session:task-a']);
+      __testing.forwardPush('local-db:messages:created', { sessionId: 'task-a', message });
+      await vi.advanceTimersByTimeAsync(300);
+      const payload = (peer: string) =>
+        status === 'online'
+          ? transport.sendPush.mock.calls.find((call) => call[0] === peer)![2]
+          : __testing.queuedPushesFor(peer)[0].payload;
+      expect(payload(guestA).message.content).toEqual(expected);
+      expect(JSON.stringify(payload(guestA))).not.toMatch(
+        /private-|structuredContent|arguments|_meta/,
+      );
+      expect(payload('own-task').message.content).toEqual(message.content);
+      expect(message.content.mcpApp.arguments).toEqual({ private: 'input' });
+    },
+  );
+
+  it.each(['local-db:messages:list', 'local-db:messages:view', 'local-db:messages:work-details'])(
+    'redacts %s history while preserving same-account results',
+    (channel) => {
+      const transport = client();
+      __testing.setActiveClient(transport as never);
+      const page =
+        channel === 'local-db:messages:list'
+          ? [message]
+          : {
+              messages: [message],
+              items: [
+                {
+                  type: 'work',
+                  key: 'work',
+                  summary: {},
+                  children: [{ type: 'messages', key: 'prose', messages: [message] }],
+                },
+              ],
+            };
+      __testing.sendInvokeResultSafe(
+        transport as never,
+        guestA,
+        'guest',
+        { ok: true, result: page },
+        channel,
+        ['task-a'],
+      );
+      __testing.sendInvokeResultSafe(
+        transport as never,
+        'own-task',
+        'owner',
+        { ok: true, result: page },
+        channel,
+        ['task-a'],
+      );
+      const results = new Map(
+        transport.sendInvokeResult.mock.calls.map((call) => [call[1], call[2].result]),
+      );
+      const guest = results.get('guest');
+      expect(
+        channel === 'local-db:messages:list' ? guest[0].content : guest.messages[0].content,
+      ).toEqual(expected);
+      if (channel !== 'local-db:messages:list')
+        expect(guest.items[0].children[0].messages[0].content).toEqual(expected);
+      expect(JSON.stringify(guest)).not.toMatch(/private-|structuredContent|arguments|_meta/);
+      expect(results.get('owner')).toEqual(page);
+    },
+  );
+});
+
+describe('shared task workdir watch', () => {
+  it('delivers file tree events only to the guest whose admitted watch matches, and stops after revoke', async () => {
+    const transport = client();
+    __testing.setActiveClient(transport as never);
+    const watch = 'fs-watch:/host/task-a';
+    // Without admission the watch is refused; the task stream in the same frame survives only if admitted.
+    expect(__testing.handleSubscriptionFrame(guestA, { channel: DL_SUBSCRIBE_CHANNEL, args: [{ topics: [watch] }] }).ok).toBe(false);
+    expect(__testing.handleSubscriptionFrame(guestA, {
+      channel: DL_SUBSCRIBE_CHANNEL, args: [{ topics: ['session:task-a', watch] }],
+    }, new Set([watch])).ok).toBe(true);
+    subscriptions.subscribe(guestB, ['session:task-b']);
+    subscriptions.subscribe('own-task', [watch]);
+    const event = { workdir: '/host/task-a', type: 'add', relPath: 'a.ts' };
+    __testing.forwardPush('maker:file-browser:event', event);
+    await vi.advanceTimersByTimeAsync(300);
+    expect(transport.sendPush.mock.calls.map((call) => call[0]).sort()).toEqual([guestA, 'own-task'].sort());
+    transport.sendPush.mockClear();
+    grants.delete(guestA);
+    __testing.forwardPush('maker:file-browser:event', event);
+    await vi.advanceTimersByTimeAsync(300);
+    expect(transport.sendPush.mock.calls.map((call) => call[0])).toEqual(['own-task']);
+  });
+
+  it('releases a guest watch on the old workdir when the owner moves the task', async () => {
+    const transport = client();
+    __testing.setActiveClient(transport as never);
+    const oldWatch = 'fs-watch:/host/task-a';
+    expect(__testing.handleSubscriptionFrame(guestA, {
+      channel: DL_SUBSCRIBE_CHANNEL, args: [{ topics: ['session:task-a', oldWatch] }],
+    }, new Set([oldWatch])).ok).toBe(true);
+    subscriptions.subscribe(guestB, ['session:task-b', 'fs-watch:/host/task-b']);
+    subscriptions.subscribe('own-task', [oldWatch]);
+    // Same workdir (normalized) and unrelated patches keep the watch.
+    __testing.forwardPush('local-db:sessions:patched', { sessionId: 'task-a', patch: { workingDir: '/host/task-a/' } });
+    __testing.forwardPush('local-db:sessions:patched', { sessionId: 'task-a', patch: { title: 'Renamed' } });
+    expect(subscriptions.controllerHasTopic(guestA, oldWatch)).toBe(true);
+    __testing.forwardPush('local-db:sessions:patched', { sessionId: 'task-a', patch: { workingDir: '/host/moved' } });
+    expect(subscriptions.controllerHasTopic(guestA, oldWatch)).toBe(false);
+    expect(subscriptions.controllerHasTopic(guestA, 'session:task-a')).toBe(true);
+    // Another task's guest and same-account controllers are untouched.
+    expect(subscriptions.controllerHasTopic(guestB, 'fs-watch:/host/task-b')).toBe(true);
+    expect(subscriptions.controllerHasTopic('own-task', oldWatch)).toBe(true);
+    transport.sendPush.mockClear();
+    __testing.forwardPush('maker:file-browser:event', { workdir: '/host/task-a', type: 'add', relPath: 'a.ts' });
+    await vi.advanceTimersByTimeAsync(300);
+    expect(transport.sendPush.mock.calls.map((call) => call[0])).toEqual(['own-task']);
+  });
+
+  it('rejects an oversized topic frame without admitting it', async () => {
+    const frame = await __testing.handleSubscriptionFrame(guestA, {
+      channel: DL_SUBSCRIBE_CHANNEL, args: [{ topics: Array.from({ length: 50 }, (_, i) => `fs-watch:/host/x-${i}`) }],
+    });
+    expect(frame.ok).toBe(false);
+    expect(subscriptions.getControllerTopics(guestA)).toEqual([]);
   });
 });

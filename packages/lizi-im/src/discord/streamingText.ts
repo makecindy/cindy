@@ -10,6 +10,7 @@ export function startStreaming(
   deps: {
     send: (text: string) => Promise<string>;
     edit: (messageId: string, text: string) => Promise<void>;
+    remove: (messageId: string) => Promise<void>;
     markdownToDiscord: typeof markdownToDiscord;
     chunk: typeof chunkDiscordText;
     resolveImageUrl?: (url: string) => string;
@@ -99,9 +100,12 @@ class DiscordStreamingTextHandle implements StreamingTextHandle {
     const chunks = this.deps.chunk(text);
     const firstChunk = chunks[0] ?? '';
     if (firstChunk.trim().length > 0) {
-      await this.deps.edit(this.messageId, firstChunk);
+      await this.settleFirstMessage(firstChunk);
     } else if (imageAbsPaths.length > 0) {
-      await this.deps.edit(this.messageId, IMAGE_ONLY_PLACEHOLDER);
+      await this.settleFirstMessage(IMAGE_ONLY_PLACEHOLDER);
+    } else {
+      await this.deps.remove(this.messageId);
+      return;
     }
     for (const chunk of chunks.slice(1)) {
       await this.deps.send(chunk);
@@ -109,6 +113,19 @@ class DiscordStreamingTextHandle implements StreamingTextHandle {
 
     if (imageAbsPaths.length > 0) {
       await this.deps.uploadImages(this.messageId, imageAbsPaths);
+    }
+  }
+
+  /**
+   * 终稿首条：优先就地编辑占位消息；编辑不了（消息对象已失效、连接重建后拿不到、频道里
+   * 没有读取历史权限等）就改发新消息，绝不让最终回复静默丢失。占位消息尽力撤掉。
+   */
+  private async settleFirstMessage(text: string): Promise<void> {
+    try {
+      await this.deps.edit(this.messageId, text);
+    } catch {
+      await this.deps.send(text);
+      await this.deps.remove(this.messageId).catch(() => undefined);
     }
   }
 

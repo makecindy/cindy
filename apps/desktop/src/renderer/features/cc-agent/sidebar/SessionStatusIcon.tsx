@@ -27,6 +27,10 @@ import { useComposerDraftPresence } from '@/hooks/useComposerDraftPresence';
 import { useSessionPausedQueue } from '@/hooks/useSessionPausedQueue';
 import { useGhostSessionBusy } from '@/cindy-brain/ghostSessionActivityStore';
 import { useSessionAttentionKind } from '@/lib/sessionAttentionStore';
+import {
+  mergeOrcaLeadAttentionKind,
+  useOrcaLeadWorkerAttentionKind,
+} from '../lib/orcaLeadWorkerAttention';
 import { useSessionAttentionUrgency } from '../contexts/SessionAttentionUrgencyContext';
 import { AttentionDot } from '@/components/sidebar/AttentionDot';
 import {
@@ -140,7 +144,12 @@ export function SessionStatusIcon({
   // 角标 tone:error(含定时任务失败的 urgency context)红 > awaiting 蓝 > 完成未读绿。
   // 两个 hook 都是按 sessionId 的 primitive 精准订阅(性能不变量,见 SessionItem 头注),
   // 本组件也被逐行挂载,禁止退回整表订阅。
-  const attentionKind = useSessionAttentionKind(session.id);
+  // Orca Lead 另并入其 Worker 的出错 / 等待确认(同为按 id 的 primitive 订阅),
+  // 见 lib/orcaLeadWorkerAttention.ts。
+  const ownAttentionKind = useSessionAttentionKind(session.id);
+  const orcaWorkerAttentionKind = useOrcaLeadWorkerAttentionKind(session.id);
+  const attentionKind = mergeOrcaLeadAttentionKind(ownAttentionKind, orcaWorkerAttentionKind);
+  const hasAttentionDot = hasAttentionNotification || orcaWorkerAttentionKind !== undefined;
   const isUrgentFromContext = useSessionAttentionUrgency(session.id);
   const attentionTone =
     attentionToneOverride ??
@@ -205,7 +214,7 @@ export function SessionStatusIcon({
         <AgentDeviceVendorIcon
           deviceId={agentDeviceId}
           controlledTask={Boolean(session.deviceLinkDeviceId)}
-          showSignal={!(showAttentionDot && hasAttentionNotification)}
+          showSignal={!(showAttentionDot && hasAttentionDot)}
           vendor={vendor}
           size={size ?? (vendor === 'cc' ? 13 : 12)}
           running={isRunning}
@@ -219,7 +228,7 @@ export function SessionStatusIcon({
           colorClassName={isActive ? 'text-[var(--sidebar-item-active-foreground)]' : undefined}
         />
       )}
-      {showAttentionDot && hasAttentionNotification && (
+      {showAttentionDot && hasAttentionDot && (
         <AttentionDot size={6} tone={attentionTone} className="absolute -top-0.5 -right-0.5" />
       )}
       {showDraftIndicator && (

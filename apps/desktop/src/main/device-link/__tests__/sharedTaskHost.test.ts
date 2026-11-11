@@ -4,8 +4,9 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { createSharedTaskApi, parseSharedTaskSnapshot, type SharedTaskDetail } from '@cindy/device-link';
 import type { SharedTaskJournalEntry } from '../../localDb/sharedTasks.js';
 import { SharedTaskHost, type SharedTaskHostOptions } from '../sharedTaskHost.js';
-import { executeSharedTaskHostCommand } from '../sharedTaskCommands.js';
+import { captureSharedTaskAgentCommand, executeSharedTaskAccountCommand, executeSharedTaskHostCommand } from '../sharedTaskCommands.js';
 import { createIpcError } from '../../../shared/ipc-errors.js';
+import { createSharedTaskTools, type SharedTaskCaller } from '../../mcp-integrations/sharedTaskTools.js';
 
 const detail = (revision = 1): SharedTaskDetail => ({
   sharedTaskId: 'sharedTask', sessionId: 'session', ownerAccountId: 'owner', hostDeviceId: 'desktop',
@@ -53,7 +54,321 @@ beforeEach(() => {
   };
   host = new SharedTaskHost(options);
 });
+// Unit: the public helper uses the real native host/command path. A lost create
+// receipt and changes during invitation were not covered by the UI lifecycle tests.
+// shared-task-mode.md: one original task, owner-only, read before uncertain retry.
+describe('native task invitation helper', () => {
+  const context = { agentKind: 'codex' as const, workingDir: '/fixture', sessionId: 'session', sessionInstanceId: 'instance' };
+  const invitation = 'A'.repeat(43);
+  const invitationLink = 'https://relay.example.test/shared-task/join#' + invitation;
+  const setup = () => {
+    let caller: SharedTaskCaller = { key: 'owner:instance:input:permission', current: true, accountScoped: true, planMode: false };
+    let available = true;
+    const group = { assertCurrent: vi.fn(), refresh: vi.fn(async () => {}) };
+    const action = vi.fn(async () => {});
+    const captureGroupAccess = vi.fn(async () => group);
+    const ready = vi.fn(async () => {});
+    const tool = createSharedTaskTools({
+      caller: () => caller, captureGroupAccess, assertActionCurrent: action,
+      captureCommand: (sessionId, assertCurrent) => captureSharedTaskAgentCommand(sessionId, assertCurrent, {
+        ready, online: () => true, available: () => available, host: () => host,
+        runScoped: async (_guard, work) => work(),
+      }),
+    });
+    api.invite.mockResolvedValue({ sharedTaskId: 'sharedTask', invitation, invitationLink });
+    return { tool, group, action, ready, captureGroupAccess, change: (patch: Partial<SharedTaskCaller>) => { caller = { ...caller, ...patch }; }, unsupported: () => { available = false; } };
+  };
+
+  it('opens the original task once and returns the exact native invitation, including loopback development links', async () => {
+    const { tool } = setup();
+    serverDetail = { ...detail(), status: 'closed' };
+    api.create.mockImplementation(async () => { serverDetail = detail(); return { sharedTaskId: 'sharedTask', revision: 1 }; });
+    expect(await tool(context, 'invite')).toEqual({ ok: true, sessionId: 'session', device: 'local', available: true, sharedTaskId: 'sharedTask', invitationLink });
+    const localLink = 'http://127.0.0.1:5090/shared-task/join#' + invitation + '?app=cindycn';
+    api.invite.mockResolvedValue({ sharedTaskId: 'sharedTask', invitation, invitationLink: localLink });
+    expect(await tool(context, 'invite')).toMatchObject({ ok: true, invitationLink: localLink });
+    expect(api.create).toHaveBeenCalledExactlyOnceWith('session', 'Task', expect.any(Function));
+    expect(api.invite).toHaveBeenCalledTimes(2);
+    expect(api.close).not.toHaveBeenCalled();
+  });
+
+  it('finds a share after the create response was lost, without any mutation on a state query', async () => {
+    const { tool } = setup();
+    serverDetail = { ...detail(), status: 'closed' };
+    api.create.mockImplementationOnce(async () => { serverDetail = detail(); throw new Error('private request details'); });
+    const uncertain = await tool(context, 'invite');
+    expect(uncertain).toMatchObject({ ok: false, errorCode: 'SHARED_TASK_RESULT_UNKNOWN' });
+    expect(JSON.stringify(uncertain)).not.toContain('private request details');
+    expect(await tool(context, 'state')).toMatchObject({ ok: true, available: true, sharedTaskId: 'sharedTask' });
+    expect(api.create).toHaveBeenCalledOnce();
+    expect(api.invite).not.toHaveBeenCalled();
+    expect(api.close).not.toHaveBeenCalled();
+    expect(await tool(context, 'invite')).toMatchObject({ ok: true, sharedTaskId: 'sharedTask' });
+    expect(api.create).toHaveBeenCalledOnce();
+  });
+
+  it('distinguishes unsupported hosts from an empty share without opening either', async () => {
+    const { tool, unsupported } = setup();
+    serverDetail = { ...detail(), status: 'closed' };
+    expect(await tool(context, 'state')).toMatchObject({ ok: true, available: true, sharedTaskId: null });
+    unsupported();
+    expect(await tool(context, 'state')).toMatchObject({ ok: true, available: false, sharedTaskId: null });
+    expect(await tool(context, 'invite')).toMatchObject({ ok: false, errorCode: 'UNSUPPORTED_CAPABILITY' });
+    expect(api.create).not.toHaveBeenCalled();
+    expect(api.invite).not.toHaveBeenCalled();
+  });
+
+  it('reports a definite creation limit rather than an unknown write outcome', async () => {
+    const { tool } = setup();
+    serverDetail = { ...detail(), status: 'closed' };
+    api.create.mockRejectedValue(createIpcError('SHARED_TASK_HOST_LIMIT', 'Shared task limit reached'));
+    expect(await tool(context, 'invite')).toMatchObject({ ok: false, errorCode: 'SHARED_TASK_HOST_LIMIT' });
+    expect(api.create).toHaveBeenCalledOnce();
+    expect(api.invite).not.toHaveBeenCalled();
+  });
+
+  it('reports unknown after creation committed but the following authority read was denied', async () => {
+    const { tool } = setup();
+    serverDetail = { ...detail(), status: 'closed' };
+    api.create.mockImplementationOnce(async () => { serverDetail = detail(); return { sharedTaskId: 'sharedTask', revision: 1 }; });
+    api.get.mockRejectedValueOnce(createIpcError('PERMISSION_DENIED', 'Shared task request rejected'));
+    expect(await tool(context, 'invite')).toMatchObject({ ok: false, errorCode: 'SHARED_TASK_RESULT_UNKNOWN' });
+    expect(api.create).toHaveBeenCalledOnce();
+    expect(api.invite).not.toHaveBeenCalled();
+  });
+
+  it.each(['group', 'relay'])('captures closure before awaiting %s readiness', async (stage) => {
+    const { tool, ready, captureGroupAccess, group } = setup();
+    await host.open('session');
+    api.create.mockClear();
+    if (stage === 'relay') ready.mockImplementationOnce(async () => { await host.close('sharedTask'); });
+    else captureGroupAccess.mockImplementationOnce(async () => { await host.close('sharedTask'); return group; });
+    expect(await tool(context, 'invite')).toMatchObject({ ok: false });
+    expect(api.create).not.toHaveBeenCalled();
+    expect(api.invite).not.toHaveBeenCalled();
+  });
+
+  it('does not reopen sharing if the owner closes it during the first state query', async () => {
+    const { tool } = setup();
+    await host.open('session');
+    api.create.mockClear();
+    api.list.mockImplementationOnce(async () => {
+      await host.close('sharedTask');
+      return [];
+    });
+    expect(await tool(context, 'invite')).toMatchObject({ ok: false });
+    expect(api.create).not.toHaveBeenCalled();
+    expect(api.invite).not.toHaveBeenCalled();
+  });
+
+  it('does not reopen a known share that disappeared on the server during preparation', async () => {
+    const { tool } = setup();
+    await host.open('session');
+    api.create.mockClear();
+    api.list.mockResolvedValue([]);
+    expect(await tool(context, 'state')).toMatchObject({ ok: true, sharedTaskId: null });
+    expect(await tool(context, 'invite')).toMatchObject({ ok: false });
+    expect(api.create).not.toHaveBeenCalled();
+    expect(api.invite).not.toHaveBeenCalled();
+  });
+
+  it('does not reopen a cold share that closes between its list and detail responses', async () => {
+    const { tool } = setup();
+    api.get.mockImplementationOnce(async () => { serverDetail = { ...detail(2), status: 'closed' }; return serverDetail; });
+    expect(await tool(context, 'invite')).toMatchObject({ ok: false, errorCode: 'SHARED_TASK_UNAVAILABLE' });
+    expect(api.create).not.toHaveBeenCalled();
+    expect(api.invite).not.toHaveBeenCalled();
+    expect(await tool(context, 'state')).toMatchObject({ ok: true, sharedTaskId: null });
+  });
+
+  it.each(['active', 'empty'])('does not reopen a cold share closed by background refresh during a pending %s list', async (response) => {
+    const { tool } = setup();
+    api.list.mockImplementationOnce(async () => {
+      const stale = serverDetail;
+      serverDetail = { ...detail(2), status: 'closed' };
+      await host.refresh('sharedTask');
+      return response === 'active' ? [stale] : [];
+    });
+    expect(await tool(context, 'invite')).toMatchObject({ ok: false });
+    expect(api.create).not.toHaveBeenCalled();
+    expect(api.invite).not.toHaveBeenCalled();
+    expect(await tool(context, 'state')).toMatchObject({ ok: true, sharedTaskId: null });
+    // A later explicit request can still create a fresh share after closure.
+    api.create.mockImplementationOnce(async () => {
+      serverDetail = { ...detail(), sharedTaskId: 'fresh' };
+      return { sharedTaskId: 'fresh', revision: 1 };
+    });
+    api.invite.mockResolvedValueOnce({ sharedTaskId: 'fresh', invitation, invitationLink });
+    expect(await tool(context, 'invite')).toMatchObject({ ok: true, sharedTaskId: 'fresh', invitationLink });
+    expect(api.create).toHaveBeenCalledOnce();
+  });
+
+  it('acquires the native runtime outside the invocation scope and retains the same host', async () => {
+    let inScope = false;
+    const acquire = vi.fn(() => { expect(inScope).toBe(false); return host; });
+    const command = await captureSharedTaskAgentCommand('session', () => {}, {
+      ready: async () => { expect(inScope).toBe(false); }, online: () => true, available: () => true, host: acquire,
+      runScoped: async (_guard, work) => { inScope = true; try { return await work(); } finally { inScope = false; } },
+    });
+    await command({ action: 'state', sessionId: 'session' });
+    await command({ action: 'state', sessionId: 'session' });
+    expect(acquire).toHaveBeenCalledOnce();
+  });
+
+  it('denies a guest, a stale instance, and Plan writes; Plan state stays read-only', async () => {
+    const { tool, change } = setup();
+    change({ accountScoped: false });
+    expect(await tool(context, 'invite')).toMatchObject({ ok: false, errorCode: 'PERMISSION_DENIED' });
+    change({ accountScoped: true, current: false });
+    expect(await tool(context, 'invite')).toMatchObject({ ok: false, errorCode: 'PERMISSION_DENIED' });
+    change({ current: true, planMode: true });
+    expect(await tool(context, 'invite')).toMatchObject({ ok: false, errorCode: 'PLAN_MODE' });
+    expect(await tool(context, 'state')).toMatchObject({ ok: true, sharedTaskId: 'sharedTask' });
+    expect(api.create).not.toHaveBeenCalled();
+    expect(api.invite).not.toHaveBeenCalled();
+  });
+
+  it.each(['input', 'permission', 'account', 'instance'])('withholds a late invitation after the %s boundary changes', async (boundary) => {
+    const { tool, change } = setup();
+    api.invite.mockImplementationOnce(async () => {
+      change({ key: boundary + ':changed' });
+      return { sharedTaskId: 'sharedTask', invitation, invitationLink };
+    });
+    const result = await tool(context, 'invite');
+    expect(result).toMatchObject({ ok: false, errorCode: 'SHARED_TASK_RESULT_UNKNOWN' });
+    expect(JSON.stringify(result)).not.toContain(invitation);
+    expect(api.invite).toHaveBeenCalledOnce();
+    expect(api.close).not.toHaveBeenCalled();
+  });
+
+  it('rechecks group and task action permission before writing', async () => {
+    const { tool, group, action } = setup();
+    action.mockImplementation(async () => { group.assertCurrent.mockImplementation(() => { throw new Error('revoked'); }); });
+    expect(await tool(context, 'invite')).toMatchObject({ ok: false });
+    expect(group.refresh).toHaveBeenCalledOnce();
+    expect(api.list).not.toHaveBeenCalled();
+    expect(api.invite).not.toHaveBeenCalled();
+  });
+
+  it('does not return an invitation for a share closed and replaced while its response was pending', async () => {
+    const { tool } = setup();
+    api.invite.mockImplementationOnce(async () => {
+      serverDetail = { ...detail(2), sharedTaskId: 'replacement' };
+      return { sharedTaskId: 'sharedTask', invitation, invitationLink };
+    });
+    expect(await tool(context, 'invite')).toMatchObject({ ok: false, errorCode: 'SHARED_TASK_RESULT_UNKNOWN' });
+    expect(api.invite).toHaveBeenCalledOnce();
+    expect(api.create).not.toHaveBeenCalled();
+  });
+
+  it('does not treat another owner or host as the current task share', async () => {
+    const { tool } = setup();
+    api.list.mockResolvedValue([{ ...detail(), ownerAccountId: 'other' }, { ...detail(), hostDeviceId: 'other' }]);
+    expect(await tool(context, 'state')).toMatchObject({ ok: true, sharedTaskId: null });
+    expect(api.get).not.toHaveBeenCalled();
+    expect(api.create).not.toHaveBeenCalled();
+  });
+
+  it('never leaks a malformed or mismatched native invitation receipt', async () => {
+    const { tool } = setup();
+    api.invite.mockResolvedValue({ sharedTaskId: 'other', invitation, invitationLink });
+    expect(await tool(context, 'invite')).toMatchObject({ ok: false, errorCode: 'SHARED_TASK_RESULT_UNKNOWN' });
+    api.invite.mockResolvedValue({ sharedTaskId: 'sharedTask', invitation, invitationLink: 'http://unsafe.example.test/shared-task/join#' + invitation });
+    expect(await tool(context, 'invite')).toMatchObject({ ok: false, errorCode: 'SHARED_TASK_RESULT_UNKNOWN' });
+  });
+});
+
 describe('task host sharedTask lifecycle', () => {
+  // V2 private-authority outage must not permanently close a V1/V2 journal row.
+  // Existing restore tests assumed all rows came from one authoritative service.
+  // Minimal input: a successful partial list omits one unavailable resource.
+  // Unit tier; public Host restore/authorize/journal, no real waits.
+  it('preserves an unavailable share and still reconciles another authority that closed its share', async () => {
+    await host.open('session');
+    const other = { ...detail(), sharedTaskId: 'other-share', sessionId: 'other-session' };
+    records.set('other-share', { sharedTaskId: other.sharedTaskId, sessionId: other.sessionId,
+      terminal: false, snapshot: parseSharedTaskSnapshot(other) });
+    const partial = Object.assign([], { unavailableSharedTaskIds: ['sharedTask'], authorityIncomplete: true as const });
+    api.list.mockResolvedValue(partial);
+    await host.restore();
+    expect(records.get('sharedTask')?.terminal).toBe(false);
+    expect(canRead()).toBe(true);
+    expect(records.get('other-share')?.terminal).toBe(true);
+    api.list.mockResolvedValue([]);
+    await host.restore();
+    expect(records.get('sharedTask')?.terminal).toBe(true);
+    expect(canRead()).toBe(false);
+  });
+  it.each(['cindy-make', 'cindy-make-merge'])('closes an upgraded %s share and removes it from owner and guest directories', async (source) => {
+    records.set('sharedTask', { sharedTaskId: 'sharedTask', sessionId: 'session', terminal: false, snapshot: parseSharedTaskSnapshot(detail()) });
+    options.readSession = vi.fn(async id => ({ id, title: 'Task', status: 'active', source }));
+    api.close.mockImplementation(async () => { serverDetail = { ...detail(2), status: 'closed', guests: [] }; });
+    await host.restore();
+    expect(records.get('sharedTask')?.terminal).toBe(true);
+    expect(api.close).toHaveBeenCalledExactlyOnceWith('sharedTask');
+    expect(api.get).not.toHaveBeenCalled();
+    expect(canRead()).toBe(false);
+    expect(host.capturePeer(sharedTaskGuestPeer('sharedTask', 'member-a', 'phone-a'))).toBeNull();
+    await expect(executeSharedTaskAccountCommand({ action: 'owned' }, api, 'owner')).resolves.toEqual([]);
+    await expect(executeSharedTaskAccountCommand({ action: 'list' }, api, 'guest-a')).resolves.toEqual([]);
+    await expect(api.list()).resolves.toEqual([]);
+    await expect(host.open('session')).rejects.toThrow('unavailable');
+    expect(api.create).not.toHaveBeenCalled();
+  });
+
+  it.each(['cindy-make', 'cindy-make-merge'])('closes an unjournaled legacy %s share without restoring access', async (source) => {
+    options.readSession = vi.fn(async id => ({ id, title: 'Task', status: 'active', source }));
+    await host.restore();
+    expect(records.get('sharedTask')?.terminal).toBe(true);
+    expect(api.close).toHaveBeenCalledExactlyOnceWith('sharedTask');
+    expect(api.get).not.toHaveBeenCalled();
+  });
+
+  it('revokes only a hidden share offline and retries server closure after restart', async () => {
+    await host.open('session');
+    const hiddenCapture = host.capturePeer(sharedTaskGuestPeer('sharedTask', 'member-a', 'phone-a'))!;
+    const otherDetail = { ...detail(), sharedTaskId: 'other-share', sessionId: 'other-session' };
+    api.create.mockResolvedValueOnce({ sharedTaskId: 'other-share', revision: 1 });
+    api.get.mockResolvedValueOnce(otherDetail);
+    await host.open('other-session');
+    const otherCapture = host.capturePeer(sharedTaskGuestPeer('other-share', 'member-b', 'phone-b'))!;
+    api.list.mockResolvedValue([detail(), otherDetail]);
+    api.get.mockImplementation(async sharedTaskId => sharedTaskId === 'other-share' ? otherDetail : detail());
+    options.readSession = vi.fn(async id => ({ id, title: 'Task', status: 'active', source: id === 'session' ? 'cindy-make' : 'cc' }));
+    await host.restore(false);
+    expect(hiddenCapture.isCurrent()).toBe(false);
+    expect(otherCapture.isCurrent()).toBe(true);
+    expect(records.get('sharedTask')?.terminal).toBe(true);
+    expect(records.get('other-share')?.terminal).toBe(false);
+    expect(api.close).not.toHaveBeenCalled();
+    api.close.mockRejectedValueOnce(new Error('offline'));
+    await expect(host.restore()).rejects.toThrow('offline');
+    expect(hiddenCapture.isCurrent()).toBe(false);
+    const restarted = new SharedTaskHost(options);
+    await restarted.restore();
+    expect(api.close.mock.calls).toEqual([['sharedTask'], ['sharedTask']]);
+    expect(records.get('other-share')?.terminal).toBe(false);
+    expect(restarted.capturePeer(sharedTaskGuestPeer('other-share', 'member-b', 'phone-b'))?.isCurrent()).toBe(true);
+    expect(restarted.authorize('sharedTask', { accountId: 'guest-a', deviceId: 'phone-a' }, 'session', 'history.read').allowed).toBe(false);
+  });
+
+  it('does not grant an already-shared hidden task through a direct refresh', async () => {
+    options.readSession = vi.fn(async id => ({ id, title: 'Task', status: 'active', source: 'cindy-make' }));
+    await expect(host.refresh('sharedTask')).rejects.toThrow('unavailable');
+    expect(records.size).toBe(0);
+    expect(canRead()).toBe(false);
+  });
+
+  it('does not close a cold ordinary share offline when local metadata is still absent', async () => {
+    records.set('sharedTask', { sharedTaskId: 'sharedTask', sessionId: 'session', terminal: false, snapshot: parseSharedTaskSnapshot(detail()) });
+    options.readSession = vi.fn(async () => null);
+    await host.restore(false);
+    expect(records.get('sharedTask')?.terminal).toBe(false);
+    expect(api.close).not.toHaveBeenCalled();
+    expect(api.list).not.toHaveBeenCalled();
+    expect(options.revoke).not.toHaveBeenCalled();
+  });
+
   it('consumes another instance closure offline and invalidates captured access without touching another share', async () => {
     await host.open('session');
     const old = host.capturePeer(sharedTaskGuestPeer('sharedTask', 'member-a', 'phone-a'))!;
@@ -89,6 +404,71 @@ describe('task host sharedTask lifecycle', () => {
     expect(records.get('sharedTask')?.terminal).toBe(true);
     expect(api.close).toHaveBeenCalledWith('sharedTask');
     expect(api.get).not.toHaveBeenCalled();
+  });
+  // Idle hosts stop polling the server; open shares and unconfirmed closures keep it.
+  it('needs server authority only while a share is open or a closure is unconfirmed', async () => {
+    serverDetail = { ...detail(), status: 'closed' };
+    await host.restore();
+    expect(host.needsAuthorityRefresh()).toBe(false);
+    // Another process archived a task; the server has not confirmed that closure.
+    records.set('archived', { sharedTaskId: 'archived', sessionId: 'old', terminal: true, snapshot: null });
+    await host.restore(false);
+    expect(host.needsAuthorityRefresh()).toBe(true);
+    await host.restore();
+    expect(host.needsAuthorityRefresh()).toBe(false);
+    serverDetail = detail();
+    await host.open('session');
+    expect(host.needsAuthorityRefresh()).toBe(true);
+    api.close.mockRejectedValueOnce(new Error('offline'));
+    await expect(host.close('sharedTask')).rejects.toThrow('offline');
+    expect(host.needsAuthorityRefresh()).toBe(true);
+    api.close.mockImplementation(async () => { serverDetail = { ...detail(2), status: 'closed', guests: [] }; });
+    await host.restore();
+    expect(api.close).toHaveBeenLastCalledWith('sharedTask');
+    expect(host.needsAuthorityRefresh()).toBe(false);
+  });
+  it('does not settle a share created while a list request was in flight', async () => {
+    serverDetail = { ...detail(), status: 'closed' };
+    await host.restore();
+    // The server built this list before the create committed; it returns after.
+    let finishList!: (items: unknown[]) => void;
+    api.list.mockImplementationOnce(() => new Promise(resolve => { finishList = resolve; }));
+    const restoring = host.restore();
+    await vi.waitFor(() => expect(finishList).toBeTypeOf('function'));
+    serverDetail = detail();
+    let finishGet!: () => void;
+    api.get.mockImplementationOnce(() => new Promise(resolve => { finishGet = () => resolve(serverDetail); }));
+    const opening = host.open('session');
+    await vi.waitFor(() => expect(finishGet).toBeTypeOf('function'));
+    finishList([]); await restoring;
+    finishGet(); await opening;
+    api.close.mockRejectedValueOnce(new Error('offline'));
+    await expect(host.close('sharedTask')).rejects.toThrow('offline');
+    // The unconfirmed close must keep the server retry scheduled.
+    expect(host.needsAuthorityRefresh()).toBe(true);
+  });
+  it('rechecks the server after a create whose response was lost', async () => {
+    serverDetail = { ...detail(), status: 'closed' };
+    await host.restore();
+    api.create.mockRejectedValueOnce(new Error('timeout'));
+    await expect(host.open('session')).rejects.toThrow('timeout');
+    expect(host.needsAuthorityRefresh()).toBe(true);
+    await host.restore();
+    expect(host.needsAuthorityRefresh()).toBe(false);
+  });
+  // Fault radius of the reconnect sync: with two guests, an unchanged or failed
+  // server read revokes nobody; existing captures stay valid.
+  it('keeps every guest of an open share unaffected by reconnect syncs', async () => {
+    await host.open('session');
+    const capture = host.capturePeer(sharedTaskGuestPeer('sharedTask', 'member-a', 'phone-a'))!;
+    vi.mocked(options.revoke).mockClear();
+    await host.restore();
+    api.list.mockRejectedValueOnce(new Error('offline'));
+    await expect(host.restore()).rejects.toThrow('offline');
+    expect(options.revoke).not.toHaveBeenCalled();
+    expect(canRead('a')).toBe(true);
+    expect(canRead('b')).toBe(true);
+    expect(capture.isCurrent()).toBe(true);
   });
   it('allows first sharing after an unshared task is archived and restored', async () => {
     await host.closeLocallyForBoundary('session');

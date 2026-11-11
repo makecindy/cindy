@@ -34,8 +34,8 @@ import { pickModelMetadata } from '@cindy/model-providers';
  *
  * contextWindow 规则:
  *   旧缓存恢复的精确窗口用之;否则读取当前 modelRegistry 的已知窗口；
- *   目录未知时默认 1M,仅 id 含 "haiku" 例外 200k。这样已知旧模型不会被错误提升到
- *   1M,未来新模型仍可在目录更新前按当代默认工作。
+ *   目录未知时默认 1M,仅 Haiku 4 及更早型号例外 200k。这样已知旧模型不会被错误提升到
+ *   1M,未来新模型(含 Haiku 5 起)仍可在目录更新前按当代默认工作。
  *
  * 磁盘缓存:`<userData>/model-discovery/anthropic-models.json`
  * ({ fetchedAt, models, explicitEffortModelIds, explicitFastModeModelIds });只缓存动态获取的
@@ -57,8 +57,10 @@ import {
   setAnthropicDiscoveredModels,
 } from '../active-catalog.js';
 import { hasClaudeNativeLogin } from '../claude-native-auth.js';
+import { hasConnectedSubscriptionPool } from '../../subscription-accounts/runtime.js';
 
 const log = createLogger('model-discovery:anthropic');
+const hasConnectedClaudeAccount = () => hasClaudeNativeLogin() || hasConnectedSubscriptionPool('anthropic');
 
 const VALID_EFFORTS: ReadonlySet<string> = new Set([
   'minimal',
@@ -98,7 +100,7 @@ function enqueueCacheMutation(task: () => Promise<void>): Promise<void> {
 }
 
 function generationCanApply(generation: number, models: CatalogModel[]): boolean {
-  return generation === authGeneration && (models.length === 0 || hasClaudeNativeLogin());
+  return generation === authGeneration && (models.length === 0 || hasConnectedClaudeAccount());
 }
 
 /**
@@ -118,7 +120,8 @@ const unresolvedAliasLogged = new Set<string>();
 /**
  * SDK 条目 → 目录模型 id;无法确定时返回 null(该条目不进清单)。
  *
- * 显式 `claude-*` id 原样归一化。SDK 对每个系列的当前型号常只报简称
+ * SDK resolvedModel 优先提供真实型号；显式 `claude-*` id 原样归一化。
+ * 旧 SDK 对每个系列的当前型号常只报简称
  * (`default` / `opus` / `sonnet` …),具体版本只写在 description 开头
  * (如 "Opus 5.5 · …" / "Opus 4.7 with 1M context · …")。简称按说明里的系列与版本
  * 拼出 `claude-<系列>-<主>-<次>`(Anthropic 的 id 规则)。目录尚未登记的新版本
@@ -184,6 +187,15 @@ function labelFromClaudeModelId(id: string): string | null {
 }
 
 /**
+ * Haiku 4 及更早:200K 窗口、不收 effort。Haiku 5 起(如 Haiku 5.5)与当代模型一致:1M、五档 effort,
+ * 不能再按名称里的 haiku 一律判成不可调。
+ */
+function isLegacyHaiku(id: string): boolean {
+  const match = /haiku-(\d+)/.exec(id);
+  return /haiku/.test(id) && !(match && Number(match[1]) >= 5);
+}
+
+/**
  * contextWindow 规则:缓存恢复的精确值 > 目录已知值 > 未知模型启发式(默认 1M,Haiku 200k)。
  *
  * 前两档是**显式声明**的真实上限,一并标记 contextWindowVerified 让下游可以拿它收敛
@@ -201,7 +213,7 @@ function contextWindowFor(
   if (catalogWindow !== null) {
     return { contextWindow: catalogWindow, contextWindowVerified: true };
   }
-  return { contextWindow: /haiku/.test(id) ? 200_000 : 1_000_000 };
+  return { contextWindow: isLegacyHaiku(id) ? 200_000 : 1_000_000 };
 }
 
 function pickDefaultEffort(efforts: Effort[]): Effort | null {
@@ -237,14 +249,14 @@ export interface SdkMappedModel {
 }
 
 /**
- * 动态通道无能力信息时:产品目录基线优先；未知非 Haiku 模型按当代旗舰能力合成
- * 5 档，让新 Opus / Sonnet 上线后无需等客户端目录更新即可使用 xhigh / max。
- * Haiku 保持 0 档；上游后续明确返回能力时仍会逐字段覆盖此临时基线。
+ * 动态通道无能力信息时:产品目录基线优先；未知模型按当代旗舰能力合成 5 档，让新 Opus /
+ * Sonnet / Haiku 上线后无需等客户端目录更新即可使用 xhigh / max。
+ * Haiku 4 及更早保持 0 档；上游后续明确返回能力时仍会逐字段覆盖此临时基线。
  */
 function fallbackEffortBaseline(id: string): { efforts: Effort[]; defaultEffort: Effort | null } {
   const catalogBaseline = getCindyModelEffortBaseline(id);
   if (catalogBaseline) return catalogBaseline;
-  const efforts: Effort[] = /haiku/.test(id) ? [] : ['low', 'medium', 'high', 'xhigh', 'max'];
+  const efforts: Effort[] = isLegacyHaiku(id) ? [] : ['low', 'medium', 'high', 'xhigh', 'max'];
   return { efforts, defaultEffort: pickDefaultEffort(efforts) };
 }
 
@@ -266,6 +278,7 @@ export function mapAnthropicSdkModels(raw: unknown): SdkMappedModel[] {
     if (!entry || typeof entry !== 'object') continue;
     const e = entry as {
       value?: unknown;
+      resolvedModel?: unknown;
       displayName?: unknown;
       description?: unknown;
       supportsEffort?: unknown;
@@ -273,7 +286,12 @@ export function mapAnthropicSdkModels(raw: unknown): SdkMappedModel[] {
       supportsFastMode?: unknown;
     };
     if (typeof e.value !== 'string' || e.value.length === 0) continue;
-    const id = resolveSdkModelId(e.value, e.description);
+    // Claude Code 2.1.321 的说明不再包含版本；使用 SDK 明示的执行型号。
+    // 未提供真实 Claude id 时保留旧版 value/description 解析路径。
+    const resolved = typeof e.resolvedModel === 'string' ? normalizeModelId(e.resolvedModel) : null;
+    const id = resolved?.startsWith('claude-')
+      ? resolved
+      : resolveSdkModelId(e.value, e.description);
     if (!id || seen.has(id)) continue;
     seen.add(id);
     const reportedName =
@@ -469,11 +487,11 @@ async function applyModels(
  * 残留缓存也不能代表可用性);缓存缺失 / 坏 JSON 静默跳过(等 SDK 通道)。
  */
 export async function loadAnthropicModelsFromDiskCache(): Promise<void> {
-  if (!hasClaudeNativeLogin()) return;
+  if (!hasConnectedClaudeAccount()) return;
   const generation = authGeneration;
   try {
     const raw: unknown = JSON.parse(await fsp.readFile(cacheFilePath(), 'utf-8'));
-    if (generation !== authGeneration || !hasClaudeNativeLogin()) return;
+    if (generation !== authGeneration || !hasConnectedClaudeAccount()) return;
     const models = (raw as { models?: unknown } | null)?.models;
     if (!Array.isArray(models) || models.length === 0) return;
     // 恢复「窗口来自 HTTP 明说」的记账,否则重启后首个 SDK 捕获会把精确窗口打回猜测值。
@@ -597,7 +615,7 @@ export function noteAnthropicSdkSupportedModels(
   raw: unknown,
   generation: number = authGeneration,
 ): void {
-  if (!hasClaudeNativeLogin() || generation !== authGeneration) return;
+  if (!hasConnectedClaudeAccount() || generation !== authGeneration) return;
   const mapped = mapAnthropicSdkModels(raw);
   if (mapped.length === 0) return;
   const mappedWithWindows = mapped.map(({ model, hasEffortInfo, hasFastModeInfo }) => {
@@ -715,7 +733,7 @@ export function setAnthropicModelProbe(probe: AnthropicModelProbe | null): void 
  */
 export function refreshAnthropicModelsFromProbe(): Promise<boolean> {
   const probe = modelProbe;
-  if (!probe || !hasClaudeNativeLogin()) return Promise.resolve(false);
+  if (!probe || !hasConnectedClaudeAccount()) return Promise.resolve(false);
   const generation = authGeneration;
   if (probeInflight?.generation === generation) return probeInflight.promise;
   const isCurrent = () => modelProbe === probe && generation === authGeneration;
@@ -750,6 +768,7 @@ export function syncAnthropicModelsWithClaudeLogin(status: {
   email?: string;
 }): void {
   if (!status.loggedIn) {
+    if (hasConnectedSubscriptionPool('anthropic')) { requestAnthropicModelProbe(); return; }
     lastClaudeLoginEmail = undefined;
     void clearAnthropicDiscoveredModels().catch(() => undefined);
     return;

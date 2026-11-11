@@ -7,9 +7,9 @@ import JSZip from 'jszip';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import type { InstalledGhost } from '../../../shared/ghost';
-import { exportGhostPackage, sanitizeExportFileNamePart } from '../exportGhostPackage';
+import { exportGhostPackage, inspectInstalledGhostPackageContent, snapshotInstalledGhostPackage, sanitizeExportFileNamePart } from '../exportGhostPackage';
 import { MAX_BASIC_ZIP_ENTRIES } from '../GhostManager';
-import { signGhostPackage } from '../ghostSignature';
+import { signGhostPackage, verifyGhostZipSignatures } from '../ghostSignature';
 
 /** 测试用发布者密钥对(每次进程一对,签名/验签都走真实 ed25519)。 */
 const { privateKey: publisherKey } = crypto.generateKeyPairSync('ed25519');
@@ -135,6 +135,107 @@ function makeDeps(overrides: Partial<Parameters<typeof exportGhostPackage>[1]> =
     ...overrides,
   };
 }
+
+describe('snapshotInstalledGhostPackage', () => {
+  // Sharing reuses content identity across ZIP metadata/entry-order changes.
+  // Ordinary exports and contributions keep their existing ZIP timestamps.
+  // Unit tier: real tiny directory, ZIP and signatures; only Date is fake.
+  it.each([false, true])('keeps content identity stable without normalizing export ZIP metadata (signed=%s)', async signed => {
+    await fs.promises.mkdir(path.join(ghostDir, 'templates', 'empty'), { recursive: true });
+    await fs.promises.mkdir(path.join(ghostDir, 'another-empty'));
+    if (signed) await writeStatement(['ghost.json', 'locales/en.json', 'main.js']);
+    const realOpendir = fs.promises.opendir;
+    let reverse = false;
+    const spy = vi.spyOn(fs.promises, 'opendir').mockImplementation(async (p: fs.PathLike) => {
+      const entries: fs.Dirent[] = [];
+      for await (const entry of await realOpendir(p)) entries.push(entry);
+      if (reverse) entries.reverse();
+      return { async *[Symbol.asyncIterator]() { yield* entries; } } as fs.Dir;
+    });
+    vi.useFakeTimers({ toFake: ['Date'] });
+    const compression = vi.spyOn(JSZip.prototype, 'generateAsync');
+    try {
+      vi.setSystemTime(new Date('2026-10-28T00:00:00.000Z'));
+      const content = await inspectInstalledGhostPackageContent('hello', makeDeps());
+      expect(compression).not.toHaveBeenCalled();
+      compression.mockRestore();
+      const first = await snapshotInstalledGhostPackage('hello', makeDeps());
+      reverse = true;
+      vi.setSystemTime(new Date('2026-10-29T12:34:56.000Z'));
+      const second = await snapshotInstalledGhostPackage('hello', makeDeps());
+      if (first.status !== 'prepared' || second.status !== 'prepared') throw new Error('Expected package snapshots');
+      expect(second.bytes).not.toEqual(first.bytes);
+      expect(content).toMatchObject({ status: 'prepared', contentSha256: first.shareContentSha256 });
+      expect(second.shareContentSha256).toBe(first.shareContentSha256);
+      expect(second.contentSha256).toBe(first.contentSha256);
+      const zip = await JSZip.loadAsync(second.bytes);
+      expect(zip.files['main.js']?.date.getUTCFullYear()).toBe(2026);
+      expect(zip.files['templates/empty/']?.dir).toBe(true);
+      expect(await verifyGhostZipSignatures(zip, '', makeGhost().manifest)).toMatchObject({ ok: true });
+      if (signed) expect(await zip.file('cindy-signatures.json')!.async('string'))
+        .toBe(await fs.promises.readFile(path.join(ghostDir, 'cindy-signatures.json'), 'utf8'));
+    } finally {
+      compression.mockRestore();
+      spy.mockRestore();
+      vi.useRealTimers();
+    }
+  });
+
+  // Regression: checking whether a 255 MB local package was uploaded used to
+  // compress it first. This unit entry checks real tiny files without ZIP work;
+  // existing archive tests cannot protect preflight identity or no compression.
+  it.each(['source', 'icon', 'manifest', 'empty-directory'])('changes the uncompressed content identity for same-version %s changes', async change => {
+    await fs.promises.writeFile(path.join(ghostDir, 'icon.png'), 'first');
+    const first = await inspectInstalledGhostPackageContent('hello', makeDeps());
+    if (first.status !== 'prepared') throw new Error('Expected content snapshot');
+    await fs.promises.writeFile(path.join(ghostDir, '.cindy-trust.json'), '{"host":"changed"}');
+    expect(await inspectInstalledGhostPackageContent('hello', makeDeps())).toMatchObject({ contentSha256: first.contentSha256 });
+    if (change === 'empty-directory') await fs.promises.mkdir(path.join(ghostDir, 'empty'));
+    else if (change === 'manifest') await fs.promises.appendFile(path.join(ghostDir, 'ghost.json'), '\n');
+    else await fs.promises.writeFile(path.join(ghostDir, change === 'icon' ? 'icon.png' : 'main.js'), 'changed');
+    const second = await inspectInstalledGhostPackageContent('hello', makeDeps());
+    if (second.status !== 'prepared') throw new Error('Expected changed content snapshot');
+    expect(second.contentSha256).not.toBe(first.contentSha256);
+  });
+
+  it.skipIf(process.platform === 'win32')('changes the uncompressed identity when archive permissions change', async () => {
+    await fs.promises.chmod(path.join(ghostDir, 'main.js'), 0o644);
+    const first = await inspectInstalledGhostPackageContent('hello', makeDeps());
+    await fs.promises.chmod(path.join(ghostDir, 'main.js'), 0o755);
+    const second = await inspectInstalledGhostPackageContent('hello', makeDeps());
+    if (first.status !== 'prepared' || second.status !== 'prepared') throw new Error('Expected content snapshots');
+    expect(second.contentSha256).not.toBe(first.contentSha256);
+  });
+
+  it('changes package bytes when same-version source content changes', async () => {
+    const first = await snapshotInstalledGhostPackage('hello', makeDeps());
+    await fs.promises.writeFile(path.join(ghostDir, 'main.js'), 'console.log("ho")');
+    const second = await snapshotInstalledGhostPackage('hello', makeDeps());
+    if (first.status !== 'prepared' || second.status !== 'prepared') throw new Error('Expected package snapshots');
+    expect(second.bytes).not.toEqual(first.bytes);
+    const zip = await JSZip.loadAsync(second.bytes);
+    expect(await zip.file('main.js')!.async('string')).toBe('console.log("ho")');
+  });
+
+  it('pins bytes of the exact root instance without opening a picker or saving a file', async () => {
+    const root = { ...makeGhost(), namespace: null, namespaceState: 'confirmed' as const };
+    const otherDir = path.join(workDir, 'other-owner');
+    await fs.promises.mkdir(otherDir);
+    await fs.promises.writeFile(path.join(otherDir, 'ghost.json'), JSON.stringify(root.manifest));
+    await fs.promises.writeFile(path.join(otherDir, 'main.js'), 'OTHER_OWNER');
+    const deps = makeDeps({ listInstalled: () => [{ ...root, namespace: 'another-org', dir: otherDir }, root] });
+    const result = await snapshotInstalledGhostPackage('hello', deps);
+    expect(result.status).toBe('prepared');
+    if (result.status !== 'prepared') throw new Error('Expected a package snapshot');
+    await fs.promises.writeFile(path.join(ghostDir, 'main.js'), 'CHANGED_AFTER_PREPARING');
+    const zip = await JSZip.loadAsync(result.bytes);
+    expect(await zip.file('main.js')!.async('string')).toBe('console.log("hi")');
+    expect(result.ghost.dir).toBe(ghostDir);
+    expect(deps.showSaveDialog).not.toHaveBeenCalled();
+    expect(Object.keys(zip.files)).not.toContain('.cindy-trust.json');
+    expect(Object.keys(zip.files)).not.toContain('.disabled');
+  });
+});
 
 describe('exportGhostPackage', () => {
   it.skipIf(process.platform === 'win32')(

@@ -1,8 +1,8 @@
 /**
  * main/im/discord/uiText.ts
  * ---------------------------------------------------------------------------
- * Discord 渠道的用户文案包。P1 Discord 只支持 DM, 不启用 threadScoped, 因此
- * 只提供共享编排层的非 thread 文案字段。
+ * Discord 私聊与服务器频道 / thread 的用户文案。thread 已编码进 lane id，
+ * 不启用共享编排层的 threadScoped 文案。
  */
 
 import type { IMUnsupportedEntry } from '@cindy/im';
@@ -30,9 +30,13 @@ export const ui = {
 平时直接发消息就行，我在听~`,
     unknownCommand: (cmd: string) =>
       `没认出 \`${cmd}\` 这个命令 🤔\n我能听懂的: /new、/model、/permission、/ctr、/exctr、/help`,
+    localTaskAccessUnavailable: (cmd: string) =>
+      `🔒 \`${cmd}\` 在服务器频道里用不了——它会把你桌面上的私人任务 / 项目挂到公共场合。想用的话，请在和我的私信里发。`,
     detachedBySlash: '🚪 接管结束，咱们回到 Discord 私聊。下次想远程操控 desktop 再 /ctr',
     detachedByRevoke: '⚠️ 你在 desktop 那边把接管收回去了，后续消息回到我们俩的 Discord 私聊。',
     notAttached: '🤷 你现在没在接管任何任务，/exctr 闲着也没事可干。',
+    companionManagedCommand:
+      '🧭 这个 bot 已经交给伙伴啦 — 模型、权限和工作目录都跟着伙伴设置走，想改的话去 Cindy 的伙伴设置里调~',
   },
 
   agent: {
@@ -189,4 +193,4 @@ export const ui = {
   },
 } satisfies ImUiTextPack;
 
-export const PROCESSING_EMOJI = '👨‍💻';
+export const PROCESSING_EMOJI = '👩🏻‍💻';

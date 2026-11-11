@@ -20,12 +20,12 @@ import path from 'node:path';
 import { app } from 'electron';
 import type { RemoteHost } from '@cindy/maker-remote-ssh';
 
-import type { CodexHttpBridge } from '../mcp-integrations/codexHttpBridge.js';
+import type { CodexHttpBridge } from '../mcp-integrations/codexHttpBridge.desktop.js';
 import {
   computeRemoteMcpFingerprint,
   selectRemoteInjectableServerNames,
   withMcpRouteIdentity,
-} from '../mcp-integrations/codexHttpBridge.js';
+} from '../mcp-integrations/codexHttpBridge.desktop.js';
 import { getRemoteMcpBridgeToken } from '../mcp-integrations/remoteMcpBridgeToken.js';
 import { isFrozenBuiltinPluginAllowed } from '../mcp-integrations/codexBuiltinToolPolicy.js';
 import { getSessionOrcaRole, getWorkerLink } from '../localDb/orcaTeamStore.js';
@@ -204,11 +204,13 @@ export async function buildCcRemoteHttpMcpServers(
   // 这个改动只会**收窄**注入(allowed 键不存在时行为逐字不变),不会放开任何原本
   // 被禁的东西。names 变化会经 computeRemoteMcpFingerprint 变成新代际,策略变更
   // 触发 forceFresh 正是既定语义。
+  const mounted = vendorOptions?.cindyRuntimeMcpServerNames;
   const names = selectRemoteInjectableServerNames(started.serverNames, {
+    appServerNames: args.botSession ? (Array.isArray(mounted) ? mounted.filter((name): name is string => typeof name === 'string') : []) : undefined,
     collabEnabled:
       (deps.isCollabEnabled?.() ?? true) && isFrozenBuiltinPluginAllowed(vendorOptions, 'collab'),
     memoryEnabled: args.makerMemoryEnabled === true,
-    botHelperEnabled: args.botSession === true && !!args.sessionInstanceId
+    botHelperEnabled: !!args.sessionInstanceId
       && isFrozenBuiltinPluginAllowed(vendorOptions, 'xdt_helper'),
   });
   if (names.length === 0) {

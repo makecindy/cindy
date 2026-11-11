@@ -5,16 +5,23 @@
  * 取件 null 语义、GC 上限按最旧淘汰。
  */
 
-import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import Database from 'better-sqlite3';
 import { drizzle } from 'drizzle-orm/better-sqlite3';
 import fs from 'node:fs';
 import path from 'node:path';
 import type { GhostCardDb } from '../cardStoreDb';
+import { GhostCardService } from '../cardService';
+import { GhostCardActionDispatcher } from '../cardActionDispatch';
+import { GHOST_CARD_REOPEN_WINDOW_MS, type InstalledGhost } from '../../../shared/ghost';
 
 vi.mock('electron', () => ({
   app: { getPath: () => '/tmp/never-used-here' },
 }));
+
+import { setCurrentDbClient, clearCurrentDbClient } from '../../localDb/client/current';
+import type { DbClient } from '../../localDb/client/DbClient';
+import { createOwnerEnsureCoordinator } from '../../localDb/ipc/ownerEnsureCoordinator';
 
 const schema = await import('../../localDb/schema');
 const store = await import('../cardStoreDb');
@@ -50,7 +57,130 @@ beforeEach(() => {
   db = freshDb();
 });
 
+afterEach(() => { clearCurrentDbClient(); vi.restoreAllMocks(); });
+
 describe('cardStoreDb', () => {
+  // 2026-11-10: plugin provisioning discarded DbClient-not-ready, so aliases
+  // remained on old cards. Existing relocation tests had an already-open DB.
+  // Unit/in-memory SQLite: run the real owner coordinator + DB repair after a
+  // controlled slow open; inspect persisted rows, including idempotent replay.
+  it('completes renamed builtin card repair after slow DB readiness without changing card contents', async () => {
+    await store.upsertGhostCard(row('mivo', { ghostId: 'cindy-mivo', sessionId: 'task' }), db);
+    await store.upsertGhostCard(row('feishu', { ghostId: 'cindy-feishu' }), db);
+    await store.upsertGhostCard(row('other', { ghostId: 'other' }), db);
+    const original = await store.getGhostCard('mivo', db);
+    let release!: () => void;
+    const opened = new Promise<void>(resolve => { release = resolve; });
+    const ensure = createOwnerEnsureCoordinator({
+      isOwnerCurrent: () => true,
+      ensureReady: async () => {
+        await opened;
+        setCurrentDbClient({ drizzle: db } as DbClient, 'owner');
+        return { ready: true };
+      },
+      onReady: store.reconcileRenamedBuiltinGhostCards,
+      discardReadyOwner: () => clearCurrentDbClient(),
+    });
+    let completed = false;
+    const result = ensure('owner').then(value => { completed = true; return value; });
+    expect(await store.getGhostCard('mivo', db)).toEqual(original);
+    expect(completed).toBe(false);
+    release();
+    await expect(result).resolves.toEqual({ ready: true });
+    await expect(ensure('owner')).resolves.toEqual({ ready: true });
+    expect(await store.getGhostCard('mivo', db)).toEqual({ ...original, ghostId: 'xd-mivo' });
+    expect((await store.getGhostCard('feishu', db))?.ghostId).toBe('xd-feishu');
+    expect((await store.getGhostCard('other', db))?.ghostId).toBe('other');
+  });
+
+  it('does not declare startup complete after a failed card repair and repairs it on the next ensure', async () => {
+    await store.upsertGhostCard(row('old', { ghostId: 'cindy-mivo' }), db);
+    const ensure = createOwnerEnsureCoordinator({
+      isOwnerCurrent: () => true,
+      ensureReady: async () => {
+        setCurrentDbClient({ drizzle: db } as DbClient, 'owner');
+        return { ready: true };
+      },
+      onReady: store.reconcileRenamedBuiltinGhostCards,
+      discardReadyOwner: () => clearCurrentDbClient(),
+    });
+    vi.spyOn(db, 'update').mockImplementationOnce(() => { throw new Error('database busy'); });
+    await expect(ensure('owner')).resolves.toMatchObject({ ready: false, error: { code: 'DB_INIT_FAILED' } });
+    expect((await store.getGhostCard('old', db))?.ghostId).toBe('cindy-mivo');
+    await expect(ensure('owner')).resolves.toEqual({ ready: true });
+    expect((await store.getGhostCard('old', db))?.ghostId).toBe('xd-mivo');
+  });
+
+  it('rejects a repair for a different database owner without changing historical cards', async () => {
+    await store.upsertGhostCard(row('old', { ghostId: 'cindy-mivo' }), db);
+    setCurrentDbClient({ drizzle: db } as DbClient, 'new-owner');
+    await expect(store.reconcileRenamedBuiltinGhostCards('old-owner')).rejects.toThrow('owner is not ready');
+    expect((await store.getGhostCard('old', db))?.ghostId).toBe('cindy-mivo');
+  });
+
+  it.each(['_ns__acme__helper', '_archive_helper'])('drains queued inserts before reassigning live and historical actions: %s', async (target) => {
+    let releaseWrite!: () => void;
+    let now = 1_000_000;
+    const pending = new Promise<void>((resolve) => { releaseWrite = resolve; });
+    const svc = new GhostCardService({
+      hasCardSlot: () => true,
+      sanitize: (html) => ({ ok: true, html }),
+      persist: async (card) => { await pending; await store.upsertGhostCard(card, db); },
+      broadcast: vi.fn(),
+      now: () => now,
+    });
+    svc.registerCall('old', { ghostId: 'helper', toolUseId: null, sessionId: 'org-session' });
+    expect(svc.handleCardUpdate('helper', { type: 'card-update', callId: 'old', html: '<p>org</p>' }).accepted).toBe(true);
+    svc.finalizeCall('old');
+
+    const reassign = vi.fn(() => store.reassignGhostCards('helper', target, db));
+    const relocation = svc.relocateGhost('helper', target).then(reassign);
+    await Promise.resolve();
+    expect(reassign).not.toHaveBeenCalled();
+    releaseWrite();
+    await relocation;
+    expect(await store.getGhostCard('old', db)).toEqual(expect.objectContaining({ ghostId: target, sessionId: 'org-session' }));
+    await svc.relocateGhost('helper', target);
+    await store.reassignGhostCards('helper', target, db);
+
+    const archived = target.startsWith('_archive');
+    const sendToGhost = vi.fn();
+    const issueUserActionToken = vi.fn(() => 'user-action-token');
+    const dispatcher = new GhostCardActionDispatcher({
+      resolveLiveInfo: (callId) => svc.callInfoOf(callId),
+      resolvePersistedCard: (callId) => store.getGhostCard(callId, db),
+      reopenForAction: (callId, info) => svc.reopenForAction(callId, info),
+      getGhost: (ghostId) => ghostId === 'helper' || (!archived && ghostId === target)
+        ? { manifest: { id: 'helper', card: {} }, namespace: ghostId === target ? 'acme' : null, enabled: true } as InstalledGhost : null,
+      isRunning: () => true,
+      wake: async () => {},
+      sendToGhost,
+      issueUserActionToken,
+      now: () => now,
+    });
+    for (const historical of [false, true]) {
+      if (historical) {
+        now += GHOST_CARD_REOPEN_WINDOW_MS + 31_000;
+        svc.registerCall('root', { ghostId: 'helper', toolUseId: null, sessionId: 'root-session' });
+        expect(svc.callInfoOf('old')).toBeNull();
+      }
+      expect(await dispatcher.dispatch('old', 'retry', 'org prompt')).toEqual(
+        archived ? { ok: false, reason: 'ghost-unavailable' } : { ok: true },
+      );
+    }
+    if (archived) {
+      expect(sendToGhost).not.toHaveBeenCalled();
+      expect(issueUserActionToken).not.toHaveBeenCalled();
+    } else {
+      expect(sendToGhost.mock.calls.map(([ghostId]) => ghostId)).toEqual([target, target]);
+      expect(sendToGhost).toHaveBeenCalledWith(target, expect.objectContaining({ sessionId: 'org-session', prompt: 'org prompt' }));
+      expect(issueUserActionToken.mock.calls).toEqual([[target, 'org-session'], [target, 'org-session']]);
+    }
+    await svc.relocateGhost(target, 'helper');
+    await store.reassignGhostCards(target, 'helper', db);
+    expect(await store.getGhostCard('old', db)).toEqual(expect.objectContaining({ ghostId: 'helper', sessionId: 'org-session', html: '<p>org</p>' }));
+  });
+
   it('upsert 幂等:同 callId 二次写入覆盖为最新版本', async () => {
     await store.upsertGhostCard(row('c1', { html: '<p>过程</p>' }), db);
     await store.upsertGhostCard(row('c1', { html: '<p>终版</p>', height: 400, updatedAt: 2000 }), db);

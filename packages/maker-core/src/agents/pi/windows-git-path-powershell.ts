@@ -1,17 +1,9 @@
-import { execFileSync } from 'node:child_process';
-
 import type { Logger } from '../../interfaces/logger.js';
 
 export type WindowsGitPathLogger = Pick<Logger, 'warn'>;
 
 const DIAGNOSTIC_PREFIX = '__CINDY_WINDOWS_GIT_PATH_DIAGNOSTIC__';
-// 忙碌的 Windows 宿主(如 CI hosted runner)上 PowerShell 冷启动就可能超过
-// 5 秒:2 秒预算会让清理进程在 Stop-Process 执行前就被 execFileSync 超时
-// 杀掉,后代进程泄漏(#3574 的偶发失败正是这个竞态)。清理只在探测已经
-// 失败的收尾路径运行,放宽预算不影响任何成功路径的耗时。
-const WINDOWS_DESCENDANT_CLEANUP_TIMEOUT_MS = 10_000;
-
-type WindowsPowerShellProbe = 'registry' | 'network-drives' | 'path-kinds' | 'path-cleanup';
+type WindowsPowerShellProbe = 'registry' | 'network-drives' | 'path-kinds';
 
 export function buildWindowsRegistryProbeScript(registryPaths: readonly string[]): string {
   const quotedPaths = registryPaths.map((registryPath) => `'${registryPath.replaceAll("'", "''")}'`).join(', ');
@@ -44,56 +36,63 @@ export function buildWindowsNetworkDriveProbeScript(): string {
   ].join('\n');
 }
 
-export function buildWindowsDescendantCleanupScript(rootProcessId: number): string {
-  if (!Number.isInteger(rootProcessId) || rootProcessId <= 0) {
-    throw new RangeError('rootProcessId must be a positive integer');
+// Put the coordinator itself in a private, non-inheritable kill-on-close job
+// BEFORE it creates a child. Children inherit membership, not the job handle:
+// even TerminateProcess / execFileSync's outer timeout closes the last handle
+// and Windows reaps the whole probe tree. No second PowerShell/CIM cleanup
+// process (which can itself time out before killing anything) is required.
+// Nested jobs are supported by the Windows versions supported by Electron.
+const WINDOWS_PROBE_JOB_SOURCE = `
+using System;
+using System.ComponentModel;
+using System.Runtime.InteropServices;
+public static class CindyWindowsPathProbeJob {
+  [StructLayout(LayoutKind.Sequential)]
+  struct BasicLimits {
+    public long ProcessTime, JobTime;
+    public uint Flags;
+    public UIntPtr MinWorkingSet, MaxWorkingSet;
+    public uint ActiveProcesses;
+    public UIntPtr Affinity;
+    public uint Priority, Scheduling;
   }
-  return [
-    '$pending = New-Object System.Collections.ArrayList',
-    '$descendants = New-Object System.Collections.ArrayList',
-    `[void]$pending.Add(${rootProcessId})`,
-    'while ($pending.Count -gt 0) {',
-    '  $parentProcessId = [int]$pending[0]',
-    '  $pending.RemoveAt(0)',
-    '  $children = @(Get-CimInstance Win32_Process -Filter ("ParentProcessId = " + $parentProcessId) -ErrorAction SilentlyContinue)',
-    '  foreach ($child in $children) {',
-    '    $childProcessId = [int]$child.ProcessId',
-    '    [void]$descendants.Add($childProcessId)',
-    '    [void]$pending.Add($childProcessId)',
-    '  }',
-    '}',
-    'for ($index = $descendants.Count - 1; $index -ge 0; $index -= 1) {',
-    '  $childProcessId = [int]$descendants[$index]',
-    '  Stop-Process -Id $childProcessId -Force -ErrorAction SilentlyContinue',
-    "  & taskkill.exe /PID $childProcessId /F /T 2>$null | Out-Null",
-    '}',
-  ].join('\n');
-}
-
-export function terminateWindowsPowerShellDescendants(
-  powershell: string,
-  rootProcessId: number | undefined,
-  logger?: WindowsGitPathLogger,
-): void {
-  if (typeof rootProcessId !== 'number' || !Number.isInteger(rootProcessId) || rootProcessId <= 0) return;
-  try {
-    // EncodedCommand keeps the cleanup script as one argv on Windows. A
-    // multiline -Command can be split or fail to parse, which leaves probe
-    // descendants running after the coordinator has already exited.
-    const encoded = Buffer.from(buildWindowsDescendantCleanupScript(rootProcessId), 'utf16le').toString('base64');
-    execFileSync(
-      powershell,
-      ['-NoLogo', '-NoProfile', '-NonInteractive', '-EncodedCommand', encoded],
-      {
-        stdio: 'ignore',
-        timeout: WINDOWS_DESCENDANT_CLEANUP_TIMEOUT_MS,
-        windowsHide: true,
-      },
-    );
-  } catch (error) {
-    warnWindowsGitPathProbeFailure(logger, 'path-cleanup', error);
+  [StructLayout(LayoutKind.Sequential)]
+  struct IoCounters {
+    public ulong ReadOps, WriteOps, OtherOps, ReadBytes, WriteBytes, OtherBytes;
   }
-}
+  [StructLayout(LayoutKind.Sequential)]
+  struct ExtendedLimits {
+    public BasicLimits Basic;
+    public IoCounters Io;
+    public UIntPtr ProcessMemory, JobMemory, PeakProcessMemory, PeakJobMemory;
+  }
+  [DllImport("kernel32.dll", CharSet = CharSet.Unicode, SetLastError = true)]
+  static extern IntPtr CreateJobObject(IntPtr attributes, string name);
+  [DllImport("kernel32.dll", SetLastError = true)]
+  static extern bool SetInformationJobObject(IntPtr job, int infoClass, ref ExtendedLimits limits, uint length);
+  [DllImport("kernel32.dll", SetLastError = true)]
+  static extern bool AssignProcessToJobObject(IntPtr job, IntPtr process);
+  [DllImport("kernel32.dll")]
+  static extern IntPtr GetCurrentProcess();
+  [DllImport("kernel32.dll")]
+  static extern bool CloseHandle(IntPtr handle);
+  // Intentionally kept open until OS process teardown, never inherited by a child.
+  static IntPtr ownedJob;
+  public static void Attach() {
+    if (ownedJob != IntPtr.Zero) return;
+    IntPtr job = CreateJobObject(IntPtr.Zero, null);
+    if (job == IntPtr.Zero) throw new Win32Exception(Marshal.GetLastWin32Error());
+    ExtendedLimits limits = new ExtendedLimits();
+    limits.Basic.Flags = 0x2000; // JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE
+    if (!SetInformationJobObject(job, 9, ref limits, (uint)Marshal.SizeOf(typeof(ExtendedLimits)))
+        || !AssignProcessToJobObject(job, GetCurrentProcess())) {
+      int error = Marshal.GetLastWin32Error();
+      CloseHandle(job);
+      throw new Win32Exception(error);
+    }
+    ownedJob = job;
+  }
+}`;
 
 function windowsPathKindProbeLines(outputLine: string): string[] {
   return [
@@ -152,6 +151,15 @@ export function buildWindowsPathKindProbeScript(
   ].join('\n'), 'utf16le').toString('base64');
   return [
     ...inputPrelude,
+    'try {',
+    "  Add-Type -TypeDefinition @'",
+    WINDOWS_PROBE_JOB_SOURCE,
+    "'@ -ErrorAction Stop",
+    '  [CindyWindowsPathProbeJob]::Attach()',
+    '} catch {',
+    `  [Console]::Out.WriteLine("${DIAGNOSTIC_PREFIX}\`tpath-process-job")`,
+    '  exit 1',
+    '}',
     '$allGroups = @($json | ConvertFrom-Json)',
     `$groups = @($allGroups | Select-Object -First ${maxOperationCount})`,
     'if ($allGroups.Count -gt $groups.Count) {',

@@ -17,7 +17,7 @@ import {
   GHOST_INSTALL_CONSENT_TOOL_NAME,
   type GhostInstallConsentRequest,
 } from '../../shared/ghostInstallConsent.js';
-import { t as mainTranslate } from '../i18n.js';
+import { t as mainTranslate } from '../i18n.desktop.js';
 import {
   trackGhostInstallConsentPrompt,
   type GhostInstallConsentPrompt,
@@ -36,6 +36,16 @@ function interpolate(template: string, args: Record<string, string> | undefined)
 
 function consentText(translate: Translate, key: string, args?: Record<string, string>): string {
   return interpolate(translate(`settings.ghosts.installConsent.${key}`), args);
+}
+/** Shared copy for native file imports and task permission cards. */
+export function ghostInstallTargetText(translate: Translate, target: GhostInstallConsentRequest['target']): string[] {
+  if (!target) return [];
+  return [
+    consentText(translate, 'targetIdentity', { name: target.namespace === 'local' ? consentText(translate, 'localTarget') : target.namespace || consentText(translate, 'personalTarget') }),
+    ...(target.organizationIdentityUnavailable ? [consentText(translate, 'localOidcUnavailable')] : []),
+    ...(target.sourceChanged ? [consentText(translate, 'sourceChanged')] : []),
+    ...(target.otherCopies > 0 ? [consentText(translate, 'otherCopies', { count: String(target.otherCopies) })] : []),
+  ];
 }
 
 /** 来源说明：包从哪里来，Agent 发起时再标明发起方。桌面确认框与任务卡共用。 */
@@ -83,8 +93,10 @@ export function renderGhostInstallConsentText(
   const { facts } = request;
   const source = ghostInstallConsentSourceText(translate, request);
   const lines: string[] = [];
+  const targetLines = ghostInstallTargetText(translate, request.target);
   if (facts.kind === 'install') {
     lines.push(consentText(translate, 'installMeta', { version: facts.version, source }));
+    lines.push(...targetLines);
     lines.push(consentText(translate, 'installDescription'));
     if (facts.permissions.length === 0) {
       lines.push(consentText(translate, 'noPermissions'));
@@ -100,6 +112,7 @@ export function renderGhostInstallConsentText(
   lines.push(
     consentText(translate, 'updateMeta', { from: facts.previousVersion, to: facts.version, source }),
   );
+  lines.push(...targetLines);
   lines.push(consentText(translate, 'updateDescription'));
   if (facts.builtinOauthClientChanged) lines.push(consentText(translate, 'oauthClientChanged'));
   if (facts.added.length > 0) {
@@ -160,7 +173,7 @@ export function createTaskInstallConsentPrompt(
   task: { sessionId: string; sessionInstanceId: string } | null,
   requestHostPermission: HostPermissionRequester | undefined,
 ): GhostInstallConsentPrompt {
-  return async (request) => {
+  const prompt: GhostInstallConsentPrompt = async (request) => {
     if (!task || !requestHostPermission) {
       throw new Error('Plugin install confirmation requires the calling task');
     }
@@ -185,4 +198,6 @@ export function createTaskInstallConsentPrompt(
       untrack();
     }
   };
+  prompt.hostUiCapabilityApproval = true;
+  return prompt;
 }

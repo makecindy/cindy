@@ -8,10 +8,14 @@ import {
   createEmptyAssistantMessageRecoveryRule,
   createEmptyTextRecoveryRule,
   createEmptyThinkingRecoveryRule,
+  createAnthropicContextManagementRecoveryRule,
   createEncryptedContentRecoveryRule,
+  createResponsesReasoningContentRecoveryRule,
   createImageGenerationIdRecoveryRule,
   createToolExchangeAdjacencyRecoveryRule,
   createToolUseProviderSpecificFieldsRecoveryRule,
+  createToolReferenceRecoveryRule,
+  lowerToolReferencesFromBody,
   dedupeDuplicateToolUseIds,
   dedupeDuplicateToolUseIdsFromBody,
   repairToolExchangeAdjacency,
@@ -21,6 +25,7 @@ import {
   stripEmptyTextFromBody,
   stripEmptyThinkingFromBody,
   stripEncryptedContentFromBody,
+  stripResponsesReasoningContentFromBody,
   stripImageGenerationItemsWithoutIdFromBody,
   stripNonAnthropicFields,
   stripNonCanonicalResponsesItemIdsFromBody,
@@ -43,6 +48,34 @@ const ctx: RequestTransformCtx = {
   url: '/v1/responses',
   headers: { 'thread-id': 'thread-a' },
 };
+
+describe('tool reference protocol lowering (#8593)', () => {
+  it('only lowers tool-result content, preserving opaque inputs and other content', () => {
+    const reference = { type: 'tool_reference', tool_name: 'lookup' };
+    const image = { type: 'image', source: { type: 'base64', data: 'opaque' } };
+    const tool = { type: 'tool_use', id: 'call-1', name: 'lookup', input: { content: [reference] } };
+    const schema = { name: 'lookup', input_schema: { example: reference } };
+    const body = { model: 'glm-5.3-flash', tools: [schema], messages: [
+      { role: 'assistant', content: [tool] },
+      { role: 'user', content: [{ type: 'tool_result', tool_use_id: 'call-1', is_error: false,
+        content: [reference, image] }] },
+    ] };
+    const lowered = JSON.parse(lowerToolReferencesFromBody(buf(body))!.toString());
+    expect(lowered.messages[0].content).toEqual([tool]);
+    expect(lowered.tools).toEqual([schema]);
+    expect(lowered.messages[1].content[0]).toEqual({ type: 'tool_result', tool_use_id: 'call-1', is_error: false,
+      content: [{ type: 'text', text: 'Available tool: lookup' }, image] });
+    expect(lowerToolReferencesFromBody(buf(lowered))).toBeNull();
+    expect(body.messages[1]!.content[0]).toMatchObject({ content: [reference, image] });
+  });
+  it('does not rewrite clean or invalid requests or match unrelated failures', () => {
+    for (const raw of [Buffer.from('invalid'), buf({ input: [{ type: 'tool_reference', tool_name: 'lookup' }] }),
+      buf({ messages: [{ content: 'hello' }] })]) expect(lowerToolReferencesFromBody(raw)).toBeNull();
+    const rule = createToolReferenceRecoveryRule();
+    expect(rule.matches('invalid API key')).toBe(false);
+    expect(rule.matches('Unknown field tool_reference')).toBe(false);
+  });
+});
 
 describe('compactOversizedImageHistory', () => {
   it('drops older history images before the newest tool-result and newest user image', () => {
@@ -957,6 +990,78 @@ describe('stripEmptyAssistantMessagesFromBody', () => {
   it('returns null for non-JSON / missing messages', () => {
     expect(stripEmptyAssistantMessagesFromBody(Buffer.from('not json', 'utf8'))).toBeNull();
     expect(stripEmptyAssistantMessagesFromBody(buf({ model: 'x' }))).toBeNull();
+  });
+});
+
+describe('Responses raw reasoning recovery', () => {
+  const error = "Invalid 'input[15].content': array too long. Expected an array with maximum length 0, but got an array with length 1 instead.";
+  const rawReasoning = {
+    type: 'reasoning', summary: [], encrypted_content: 'deepseek-only-blob',
+    content: [{ type: 'reasoning_text', text: 'Private provider reasoning' }],
+  };
+
+  it('recognizes only the observed zero-length content rejection', () => {
+    const rule = createResponsesReasoningContentRecoveryRule();
+    expect(rule.enabled()).toBe(true);
+    expect(rule.matches(error)).toBe(true);
+    expect(rule.matches(JSON.stringify({ error: { message: error, code: 'array_above_max_length' } }))).toBe(true);
+    expect(rule.matches(JSON.stringify({ message: error.replaceAll("'", '"') }))).toBe(true);
+    for (const other of [
+      error.replace('.content', '.summary'),
+      error.replace('input[15].content', 'tools'),
+      error.replace('maximum length 0', 'maximum length 10'),
+      'array_above_max_length',
+      'invalid_encrypted_content',
+    ]) expect(rule.matches(other)).toBe(false);
+    // This destructive repair must neither piggyback on unrelated errors nor
+    // cascade into broad encrypted-content stripping on the same retry.
+    expect(rule.applyOnUnmatchedRetry).toBe(false);
+    expect(rule.allowExtraRules).toBe(false);
+  });
+
+  it('preserves conversation, tool payloads, valid GPT reasoning and compaction without mutating history', () => {
+    const kept = [
+      { type: 'message', role: 'user', content: [{ type: 'input_text', text: 'Continue verification' }, { type: 'input_image', image_url: 'fixture:image' }] },
+      { type: 'message', role: 'assistant', content: [{ type: 'output_text', text: 'The service is running.' }] },
+      { type: 'reasoning', id: 'rs_native', summary: [{ type: 'summary_text', text: 'A useful summary' }], encrypted_content: 'openai-blob' },
+      { type: 'reasoning', summary: [], content: [], encrypted_content: 'openai-empty-content' },
+      { type: 'compaction', encrypted_content: 'compact-blob' },
+      { type: 'context_compaction', encrypted_content: 'context-blob' },
+      { type: 'function_call', call_id: 'call_fn', name: 'inspect', arguments: JSON.stringify(rawReasoning) },
+      { type: 'function_call_output', call_id: 'call_fn', output: JSON.stringify(rawReasoning) },
+      { type: 'custom_tool_call', call_id: 'call_custom', name: 'exec', input: JSON.stringify(rawReasoning) },
+      { type: 'custom_tool_call_output', call_id: 'call_custom', output: JSON.stringify(rawReasoning) },
+      { type: 'message', role: 'user', content: [{ ...rawReasoning }] },
+    ];
+    const history = { model: 'gpt-6.1-sol', instructions: 'Keep working', input: [rawReasoning, ...kept, { ...rawReasoning, encrypted_content: undefined }] };
+    const original = JSON.stringify(history);
+    const body = buf(history);
+    const result = stripResponsesReasoningContentFromBody(body)!;
+    expect(JSON.parse(result.toString())).toEqual({ ...history, input: kept });
+    expect(body.toString()).toBe(original);
+    expect(JSON.stringify(history)).toBe(original);
+    expect(stripResponsesReasoningContentFromBody(result)).toBeNull();
+  });
+
+  it('leaves unrelated or malformed bodies unchanged', () => {
+    for (const body of [
+      Buffer.from('not json'), buf(null), buf({}), buf({ input: 'text' }),
+      buf({ input: [{ type: 'message', content: [{ type: 'reasoning_text', text: 'ordinary content' }] }] }),
+      buf({ input: [{ type: 'reasoning', content: [], encrypted_content: 'native' }] }),
+    ]) expect(stripResponsesReasoningContentFromBody(body)).toBeNull();
+  });
+
+  it('pre-cleans only the recovered thread and model, and forgets the marker on a model switch', () => {
+    const controller = createThreadStripController();
+    const rule = createResponsesReasoningContentRecoveryRule({ onRetry: (thread, model) => controller.markActive(thread, model) });
+    const transform = createActiveStripTransform({ controller, enabled: () => true, strip: rule.strip });
+    const body = { model: 'gpt-6-astra', input: [rawReasoning, { role: 'user', content: 'Continue' }] };
+    expect(transform(body, ctx)).toBeNull();
+    rule.onRetry?.('thread-a', body.model);
+    expect(transform(body, ctx)).toEqual({ ...body, input: [body.input[1]] });
+    expect(transform(body, { ...ctx, headers: { 'thread-id': 'thread-b' } })).toBeNull();
+    expect(transform({ ...body, model: 'deepseek/deepseek-v4.1-flash' }, ctx)).toBeNull();
+    expect(transform(body, ctx)).toBeNull();
   });
 });
 
@@ -2149,5 +2254,34 @@ describe('repair → dedupe 链式顺序(host 主动链同序)', () => {
       ],
     });
     expect(repairToolExchangeStructureFromBody(clean)).toBeNull();
+  });
+});
+
+describe('Anthropic context management recovery (#7041)', () => {
+  it('only removes the top-level rejected field and preserves the original request', () => {
+    const rule = createAnthropicContextManagementRecoveryRule();
+    const request = { messages: [{ role: 'user', content: 'hello' }], context_management: {},
+      metadata: { context_management: 'user data' } };
+    const body = Buffer.from(JSON.stringify(request));
+    const stripped = rule.strip(body);
+    expect(stripped).not.toBeNull();
+    expect(JSON.parse(stripped!.toString())).toEqual({ messages: request.messages, metadata: request.metadata });
+    expect(JSON.parse(body.toString())).toEqual(request);
+    expect(rule.strip(stripped!)).toBeNull();
+    expect(rule.strip(Buffer.from('{invalid'))).toBeNull();
+    expect(rule.strip(Buffer.from(JSON.stringify({ input: [], context_management: {} })))).toBeNull();
+  });
+
+  it('does not trigger on unrelated fields or participate in other recovery rules', () => {
+    const rule = createAnthropicContextManagementRecoveryRule();
+    expect(rule.matches('ValidationException: context_management: Extra inputs are not permitted')).toBe(true);
+    for (const message of ['context_management: authentication required',
+      'other_context_management: Extra inputs are not permitted',
+      'messages.0.context_management: Extra inputs are not permitted',
+      'context_management is supported; other_field: Extra inputs are not permitted']) {
+      expect(rule.matches(message)).toBe(false);
+    }
+    expect(rule.applyOnUnmatchedRetry).toBe(false);
+    expect(rule.allowExtraRules).toBe(false);
   });
 });

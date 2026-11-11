@@ -3,14 +3,24 @@ import React, { act, type ReactNode } from 'react';
 import { createRoot } from 'react-dom/client';
 import { expect, it, vi } from 'vitest';
 import { MobileComposerInputRow } from '@/session/MobileComposerInputRow';
+import type { SharedValue } from 'react-native-reanimated';
 
+const nativeLayout = vi.hoisted(() => new WeakMap<Element, (height: number) => void>());
+
+const scrollViewProps = vi.hoisted(() => ({ current: {} as Record<string, unknown> }));
 vi.mock('expo-constants', () => ({ default: { executionEnvironment: 'bare' }, ExecutionEnvironment: { StoreClient: 'storeClient' } }));
 vi.mock('react-native', async () => {
   const React = await import('react');
-  const View = ({ children, testID }: { children?: ReactNode; testID?: string }) =>
-    React.createElement('div', { 'data-testid': testID }, children);
-  const ScrollView = ({ children, testID, scrollEnabled }: { children?: ReactNode; testID?: string; scrollEnabled?: boolean }) =>
-    React.createElement('div', { 'data-testid': testID, 'data-scroll': String(scrollEnabled) }, children);
+  const flatten = (style: unknown): Record<string, unknown> => Array.isArray(style)
+    ? Object.assign({}, ...style.map(flatten)) : style && typeof style === 'object' ? style as Record<string, unknown> : {};
+  const View = ({ children, testID, style, onLayout }: { children?: ReactNode; testID?: string; style?: unknown; onLayout?: (event: unknown) => void }) =>
+    React.createElement('div', { 'data-testid': testID, style: flatten(style), ref: (node: HTMLDivElement | null) => {
+      if (node && onLayout) nativeLayout.set(node, height => onLayout({ nativeEvent: { layout: { height } } }));
+    } }, children);
+  const ScrollView = ({ children, testID, scrollEnabled, ...props }: { children?: ReactNode; testID?: string; scrollEnabled?: boolean }) => {
+    scrollViewProps.current = props;
+    return React.createElement('div', { 'data-testid': testID, 'data-scroll': String(scrollEnabled) }, children);
+  };
   return { View, ScrollView, Pressable: View, Platform: { OS: 'ios' },
     StyleSheet: { hairlineWidth: 1, absoluteFill: {} }, Animated: {}, Easing: {} };
 });
@@ -64,5 +74,99 @@ it('keeps send/voice/grabber outside the scrolling body and retains the editor a
     render(true);
     expect(container.querySelector('textarea')).toBe(editor);
     expect(body.getAttribute('data-scroll')).toBe('true');
+  } finally { act(() => root.unmount()); }
+});
+
+// PR #6291: removing the last attachment left its measured height behind. The
+// existing viewport test covers tree placement, not measurements during a drag.
+it("releases attachment height after deletion and remeasures before the next drag", () => {
+  const container = document.createElement("div");
+  const root = createRoot(container);
+  const progress = { value: 0 } as SharedValue<number>;
+  const render = (hasImage: boolean, inputHeight = 40) =>
+    act(() =>
+      root.render(
+        <MobileComposerInputRow
+          accessibilityLabel="Message"
+          inputTestID="input"
+          placeholder="Message"
+          placeholderTextColor="inherit"
+          value=""
+          onChangeText={() => {}}
+          cardActive
+          collapseProgress={progress}
+          inputFrameHeight={inputHeight}
+          inputElement={<textarea />}
+          accessoryAbove={
+            <>{hasImage ? <div data-testid="attachment">Image</div> : null}</>
+          }
+          testID="composer"
+        />,
+      ),
+    );
+  try {
+    render(true);
+    const measured = container.querySelector(
+      '[data-testid="attachment"]',
+    )!.parentElement!;
+    const folding = measured.parentElement!;
+    act(() => nativeLayout.get(measured)!(80));
+    progress.value = 0.5;
+    render(true, 120);
+    expect(folding.style.height).toBe("40px");
+    expect(
+      container.querySelector("textarea")!.parentElement!.style.height,
+    ).toBe("120px");
+    progress.value = 0;
+    render(false);
+    expect(folding.style.height).toBe("auto");
+    act(() => nativeLayout.get(measured)!(0));
+    progress.value = 0.5;
+    render(false);
+    expect(folding.style.height).toBe("0px");
+    progress.value = 0;
+    render(true);
+    act(() => nativeLayout.get(measured)!(100));
+    progress.value = 0.5;
+    render(true);
+    expect(folding.style.height).toBe("50px");
+  } finally {
+    act(() => root.unmount());
+  }
+});
+
+it('keeps typed text visible when the card body overflows and reports a hidden tray as zero height', () => {
+  const container = document.createElement('div');
+  const root = createRoot(container);
+  const scrollToEnd = vi.fn();
+  const outerRef = React.createRef<unknown>();
+  const onTrayHeight = vi.fn();
+  const gesture = {} as NonNullable<React.ComponentProps<typeof MobileComposerInputRow>['bodyScrollGesture']>;
+  const render = (cardActive: boolean) => act(() => root.render(<MobileComposerInputRow
+    accessibilityLabel="Message" inputTestID="input" placeholder="Message" placeholderTextColor="inherit" value="Long text"
+    onChangeText={() => {}} cardActive={cardActive} bodyScrollGesture={gesture} bodyScrollRef={outerRef as never}
+    accessoryAbove={<div data-testid="tray">Image</div>} onAccessoryAboveHeightChange={onTrayHeight} testID="composer"
+  />));
+  try {
+    render(true);
+    const props = scrollViewProps.current as {
+      ref: (node: unknown) => void; onContentSizeChange: () => void; onLayout: () => void;
+    };
+    const node = { scrollToEnd };
+    act(() => props.ref(node));
+    expect(outerRef.current).toBe(node);
+    props.onContentSizeChange();
+    props.onLayout();
+    expect(scrollToEnd).toHaveBeenCalledTimes(2);
+    expect(scrollToEnd).toHaveBeenLastCalledWith({ animated: false });
+    expect(onTrayHeight).not.toHaveBeenCalled();
+    // 托盘量到非零高度时必须原样上报，页面据此缩小文字区上限。
+    const measured = container.querySelector('[data-testid="tray"]')!.parentElement!;
+    act(() => nativeLayout.get(measured)!(72));
+    expect(onTrayHeight).toHaveBeenLastCalledWith(72);
+    render(false);
+    (scrollViewProps.current as typeof props).onContentSizeChange();
+    expect(scrollToEnd).toHaveBeenCalledTimes(2);
+    expect(onTrayHeight).toHaveBeenLastCalledWith(0);
   } finally { act(() => root.unmount()); }
 });

@@ -21,6 +21,7 @@ import {
   type CreateGatewayImageClientOptions,
 } from '../cindy-proxy-media/api/gatewayImageClient.js';
 import type { ImageChannel, ImageChannelRegistry } from './imageChannelRegistry.js';
+import { isCustomImageProvider } from './customImageChannel.js';
 
 /**
  * Consciousness aspect → gpt-image size enum. Mirrors LEGACY_SIZES in
@@ -81,17 +82,18 @@ export function createByokImageChannel(opts: CreateByokImageChannelOptions): Ima
     get supportsEdit() {
       return opts.getSupportsEdit();
     },
-    generateImage: ({ model, prompt, aspectRatio, size: requestedSize, quality, signal }) =>
+    generateImage: ({ model, prompt, aspectRatio, size: requestedSize, quality, nativeParameters, signal }) =>
       client().generateImage(
         {
           model,
           prompt,
           ...(requestedSize ? { size: requestedSize } : size(aspectRatio)),
           ...(quality ? { quality } : {}),
+          ...(nativeParameters ? { nativeParameters } : {}),
         },
         signal,
       ),
-    editImage: ({ model, prompt, imagePaths, aspectRatio, size: requestedSize, quality, signal }) =>
+    editImage: ({ model, prompt, imagePaths, aspectRatio, size: requestedSize, quality, nativeParameters, signal }) =>
       client().editImage(
         {
           model,
@@ -99,6 +101,7 @@ export function createByokImageChannel(opts: CreateByokImageChannelOptions): Ima
           imagePaths,
           ...(requestedSize ? { size: requestedSize } : size(aspectRatio)),
           ...(quality ? { quality } : {}),
+          ...(nativeParameters ? { nativeParameters } : {}),
         },
         signal,
       ),
@@ -111,6 +114,7 @@ export function pruneDynamicImageChannels(
   providers: readonly Provider[],
   registeredCodex: Set<string>,
   registeredByok: Set<string>,
+  registeredCustom: Set<string> = new Set(),
 ): void {
   const codexIds = new Set(providers.filter((provider) =>
     !isOrganizationManagedProvider(provider) && provider.auth.native === 'codex',
@@ -118,8 +122,11 @@ export function pruneDynamicImageChannels(
   const byokIds = new Set(providers.filter((provider) =>
     isOrganizationManagedProvider(provider) && provider.imageModels?.length,
   ).map((provider) => provider.id));
-  // Prune both kinds before registering either: their IDs can collide across owners.
-  for (const [registered, current] of [[registeredCodex, codexIds], [registeredByok, byokIds]]) {
+  const customIds = new Set(providers.filter(isCustomImageProvider).map(provider => provider.id));
+  // Prune every dynamic kind before registration: IDs can collide across owners.
+  for (const [registered, current] of [
+    [registeredCodex, codexIds], [registeredByok, byokIds], [registeredCustom, customIds],
+  ]) {
     for (const id of registered) {
       if (current.has(id)) continue;
       registry.unregister(id);

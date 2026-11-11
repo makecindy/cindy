@@ -10,7 +10,7 @@ import type { AgentKind } from '@cindy/maker-core';
 
 import type { ImSessionRow } from './sessionRepo';
 
-type AuthRow = Pick<ImSessionRow, 'agentKind' | 'model' | 'providerId'>;
+type AuthRow = Pick<ImSessionRow, 'agentKind' | 'model' | 'providerId' | 'agentDeviceId'>;
 
 export type ImAuthMissing =
   'gateway-key' | 'agent-oauth' | 'provider-key' | 'provider-disconnected';
@@ -28,6 +28,7 @@ export interface ImAuthCheckDeps {
   hasCustomProviderKey(providerId: string, agentKind: AgentKind): boolean;
   getAgentAuthState(agentKind: AgentKind): Promise<{ authenticated: boolean }>;
   listProviders(): Promise<ProviderView[]>;
+  checkRemoteRoute?(row: AuthRow & { agentDeviceId: string }): Promise<{ provider: ProviderView }>;
   warn(message: string): void;
 }
 
@@ -44,6 +45,7 @@ export async function checkImRouteAuth(
   providerSnapshot: ProviderView[] | null | undefined,
   deps: ImAuthCheckDeps,
 ): Promise<ImAuthCheckResult> {
+  if (row.agentDeviceId) return checkRemoteAuth(row, deps);
   const resolution = resolveEffectiveProvider(
     row,
     providerSnapshot === undefined ? await listProvidersForAuth(deps) : providerSnapshot,
@@ -109,6 +111,7 @@ export async function checkImRouteAuthDetailed(
   providerSnapshot: ProviderView[] | null | undefined,
   deps: ImAuthCheckDeps,
 ): Promise<ImAuthRouteStatus> {
+  if (row.agentDeviceId) return checkRemoteAuth(row, deps);
   const providers =
     providerSnapshot === undefined ? await listProvidersForAuth(deps) : providerSnapshot;
   const resolution = resolveEffectiveProvider(row, providers);
@@ -123,6 +126,17 @@ export async function checkImRouteAuthDetailed(
     providerId: row.providerId ?? effectiveProvider?.id ?? null,
     providerLabel: effectiveProvider?.name ?? null,
   };
+}
+
+async function checkRemoteAuth(row: AuthRow, deps: ImAuthCheckDeps): Promise<ImAuthRouteStatus> {
+  try {
+    if (!row.agentDeviceId || !deps.checkRemoteRoute) throw new Error('Remote route checker unavailable');
+    const { provider } = await deps.checkRemoteRoute({ ...row, agentDeviceId: row.agentDeviceId });
+    return { ok: true, missing: null, providerId: row.providerId, providerLabel: provider.name };
+  } catch (error) {
+    deps.warn(`remote provider unavailable: ${error instanceof Error ? error.message : String(error)}`);
+    return { ok: false, missing: 'provider-disconnected', providerId: row.providerId, providerLabel: null };
+  }
 }
 
 export function hasCustomProviderAuth(

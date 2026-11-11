@@ -10,10 +10,11 @@ import {
   DropdownMenuItem,
   DropdownMenuSeparator,
   DropdownMenuSub,
+  DropdownMenuSubContent,
   DropdownMenuSubTrigger,
   DropdownMenuTrigger,
 } from '../dropdown-menu';
-import { lockMenuWidth } from '../dropdown-menu-highlight';
+import { attachMenuHighlight, lockMenuWidth } from '../dropdown-menu-highlight';
 import * as menuStyles from '@/features/cc-agent/sidebar/menuStyles';
 import { MENU_ITEM_CLASS, MENU_ROW_CLASS } from '@/features/cc-agent/sidebar/menuStyles';
 import { SessionProjectMoveSubmenu } from '@/features/cc-agent/sidebar/SessionProjectMoveSubmenu';
@@ -130,6 +131,31 @@ describe('shared dropdown menu glide highlight', () => {
     expect(document.activeElement?.textContent).toBe('Rename');
     await key('Enter');
     expect(onRename).toHaveBeenCalledTimes(1);
+  });
+
+  it('opens submenu content outside the parent menu in the document body', async () => {
+    render(
+      <DropdownMenu defaultOpen modal={false}>
+        <DropdownMenuTrigger>Open</DropdownMenuTrigger>
+        <DropdownMenuContent>
+          <DropdownMenuSub>
+            <DropdownMenuSubTrigger>Move</DropdownMenuSubTrigger>
+            <DropdownMenuSubContent>
+              <DropdownMenuItem>Cindy</DropdownMenuItem>
+            </DropdownMenuSubContent>
+          </DropdownMenuSub>
+        </DropdownMenuContent>
+      </DropdownMenu>,
+    );
+    const parentMenu = menu();
+    expect(screen.queryByRole('menu', { name: 'Move' })).toBeNull();
+    fireEvent.click(screen.getByRole('menuitem', { name: 'Move' }));
+    const submenu = await screen.findByRole('menu', { name: 'Move' });
+    // A nested submenu was clipped by the parent's glass/overflow. This unit
+    // regression checks the actual SubContent DOM boundary after opening it.
+    expect(parentMenu.contains(submenu)).toBe(false);
+    expect(document.body.contains(submenu)).toBe(true);
+    expect(submenu.contains(screen.getByRole('menuitem', { name: 'Cindy' }))).toBe(true);
   });
 
   it('follows the Radix highlighted item with one decorative layer per panel', async () => {
@@ -517,6 +543,135 @@ describe('shared dropdown menu glide highlight', () => {
     ])
       expect(cls).toContain(token);
     expect(Object.keys(menuStyles).sort()).toEqual(['MENU_ITEM_CLASS', 'MENU_ROW_CLASS']);
+  });
+
+  it('places the layer in layout px while the open animation scales the panel', () => {
+    // Panel laid out at 200×100, drawn at half size from (100, 50) mid-animation.
+    const panel = document.createElement('div');
+    panel.setAttribute('data-menu-panel', '');
+    const layer = document.createElement('span');
+    const row = document.createElement('div');
+    row.setAttribute('data-menu-row', '');
+    row.setAttribute('data-highlighted', '');
+    panel.append(layer, row);
+    document.body.append(panel);
+    const size = (el: HTMLElement, w: number, h: number) => {
+      Object.defineProperty(el, 'offsetWidth', { configurable: true, value: w });
+      Object.defineProperty(el, 'offsetHeight', { configurable: true, value: h });
+    };
+    size(panel, 200, 100);
+    size(row, 188, 32);
+    vi.spyOn(panel, 'getBoundingClientRect').mockReturnValue(new DOMRect(100, 50, 100, 50));
+    // Row at layout (6, 40) → drawn at (103, 70), 94×16.
+    vi.spyOn(row, 'getBoundingClientRect').mockReturnValue(new DOMRect(103, 70, 94, 16));
+    const detach = attachMenuHighlight(panel, layer, {
+      current: (rows) => rows.find((r) => r.hasAttribute('data-highlighted')),
+    });
+    expect(layer.style.width).toBe('188px');
+    expect(layer.style.height).toBe('32px');
+    expect(layer.style.transform).toBe('translate(6px, 40px)');
+    detach();
+    panel.remove();
+  });
+
+  // #9687: the model picker inserts a cross-engine warning above the same open row.
+  // Unit tier: existing placement tests only covered the initial box, not a later layout.
+  it('repositions the same active row when content is inserted and removed above it', async () => {
+    const panel = document.createElement('div');
+    panel.setAttribute('data-menu-panel', '');
+    const layer = document.createElement('span');
+    const row = document.createElement('div');
+    row.setAttribute('data-menu-row', '');
+    row.setAttribute('data-state', 'open');
+    panel.append(layer, row);
+    document.body.append(panel);
+    vi.spyOn(panel, 'getBoundingClientRect').mockReturnValue(new DOMRect(100, 50, 200, 160));
+    const rowBox = vi.spyOn(row, 'getBoundingClientRect').mockReturnValue(new DOMRect(108, 80, 184, 32));
+    const detach = attachMenuHighlight(panel, layer, { current: () => row });
+    try {
+      expect(layer.style.transform).toBe('translate(8px, 30px)');
+      const warning = document.createElement('div');
+      warning.textContent = 'Switching engines rebuilds context';
+      await act(async () => {
+        rowBox.mockReturnValue(new DOMRect(108, 104, 184, 32));
+        panel.insertBefore(warning, row);
+      });
+      expect(panel.querySelector('[data-menu-active]')).toBe(row);
+      expect(layer.style.transform).toBe('translate(8px, 54px)');
+      await act(async () => {
+        rowBox.mockReturnValue(new DOMRect(108, 80, 184, 32));
+        warning.remove();
+      });
+      expect(layer.style.transform).toBe('translate(8px, 30px)');
+    } finally {
+      detach();
+      panel.remove();
+    }
+  });
+
+  it('coalesces layout resizes without pointer input and releases pending work on detach', () => {
+    const targets = new Set<Element>();
+    let notifyResize: ResizeObserverCallback = () => {};
+    const disconnect = vi.fn(() => targets.clear());
+    vi.stubGlobal('ResizeObserver', class {
+      constructor(callback: ResizeObserverCallback) { notifyResize = callback; }
+      observe(target: Element) { targets.add(target); }
+      unobserve(target: Element) { targets.delete(target); }
+      disconnect = disconnect;
+    });
+    let nextFrame = 0;
+    const frames = new Map<number, FrameRequestCallback>();
+    vi.stubGlobal('requestAnimationFrame', (cb: FrameRequestCallback) => {
+      frames.set(++nextFrame, cb);
+      return nextFrame;
+    });
+    vi.stubGlobal('cancelAnimationFrame', (id: number) => frames.delete(id));
+    const flush = () => {
+      const pending = [...frames.values()];
+      frames.clear();
+      pending.forEach((cb) => cb(0));
+    };
+    const panel = document.createElement('div');
+    panel.setAttribute('data-menu-panel', '');
+    const layer = document.createElement('span');
+    const preceding = document.createElement('div');
+    const row = document.createElement('div');
+    preceding.setAttribute('data-menu-row', '');
+    row.setAttribute('data-menu-row', '');
+    panel.append(layer, preceding, row);
+    document.body.append(panel);
+    vi.spyOn(panel, 'getBoundingClientRect').mockReturnValue(new DOMRect(100, 50, 200, 160));
+    const rowBox = vi.spyOn(row, 'getBoundingClientRect').mockReturnValue(new DOMRect(108, 90, 184, 32));
+    const detach = attachMenuHighlight(panel, layer, { current: () => row });
+    try {
+      flush();
+      expect(layer.style.transform).toBe('translate(8px, 40px)');
+      // A previous row grows; later the active row itself grows. Neither replaces DOM.
+      expect(targets.has(preceding)).toBe(true);
+      expect(targets.has(row)).toBe(true);
+      expect(targets.has(layer)).toBe(false);
+      const selectionTransition = layer.style.transition;
+      notifyResize([], {} as ResizeObserver);
+      flush();
+      expect(layer.style.transition).toBe(selectionTransition);
+      rowBox.mockReturnValue(new DOMRect(108, 114, 176, 48));
+      for (let i = 0; i < 3; i++) notifyResize([], {} as ResizeObserver);
+      expect(frames.size).toBe(1);
+      expect(layer.style.transform).toBe('translate(8px, 40px)');
+      flush();
+      expect(panel.querySelector('[data-menu-active]')).toBe(row);
+      expect(layer.style.transform).toBe('translate(8px, 64px)');
+      expect(layer.style.width).toBe('176px');
+      expect(layer.style.height).toBe('48px');
+      notifyResize([], {} as ResizeObserver);
+    } finally {
+      detach();
+      panel.remove();
+    }
+    expect(disconnect).toHaveBeenCalledOnce();
+    expect(targets.size).toBe(0);
+    expect(frames.size).toBe(0);
+    expect(row.hasAttribute('data-menu-active')).toBe(false);
   });
 
   it('coalesces pointer moves into one update per frame and caches row geometry lookups', () => {

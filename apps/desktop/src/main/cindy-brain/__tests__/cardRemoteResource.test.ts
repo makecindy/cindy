@@ -1,15 +1,131 @@
 import { describe, it, expect, vi } from 'vitest';
 vi.mock('../cardStoreDb.js', () => ({ getGhostCard: vi.fn(), upsertGhostCard: vi.fn() }));
 vi.mock('../../device-link/broadcast-tap.js', () => ({ captureDataOwnerBroadcastScope: vi.fn(), isDataOwnerBroadcastScopeCurrent: vi.fn(), tapWindowBroadcast: vi.fn(), getSafeDataOwnerPushStamp: vi.fn() }));
-import { createPluginIdentityRemoteProvider, createGhostCardRemoteProvider, projectGhostCardBlocks, projectGhostCardActions, persistGhostCardWithRemoteChange } from '../cardRemoteResource.js';
+import { createPluginIdentityRemoteProvider, createGhostCardRemoteProvider, projectGhostCardBlocks, projectRichCardParts, omitEndedPrOpenOnly, projectGhostCardActions, persistGhostCardWithRemoteChange, findGhostForRemotePluginIdentity } from '../cardRemoteResource.js';
 import { upsertGhostCard } from '../cardStoreDb.js';
 import { isDataOwnerBroadcastScopeCurrent, tapWindowBroadcast } from '../../device-link/broadcast-tap.js';
+import { buildAttachmentOssRef } from '@cindy/device-link';
+import { renderMailCard } from '../mailCards';
+import { parseMailAttachmentUpload } from '../mailAttachmentUpload';
+import { configureMailAttachmentHost, prepareMailAttachmentUpload } from '../mailAttachmentUpload';
+import fs from 'node:fs/promises';
+import os from 'node:os';
+import path from 'node:path';
+import { createHash } from 'node:crypto';
+const uploadFixture = vi.hoisted(() => ({ materialize: vi.fn() }));
 const image = `cindy-media://blobs/${'b'.repeat(64)}.png`;
 const audio = `cindy-media://blobs/${'c'.repeat(64)}.mp3`;
 const request = { ref: { collectionId: 'plugin-results', kind: 'card', id: JSON.stringify(['s', 'c']) }, client: { protocolVersion: 1, primitives: [] } };
 const context = { controllerDeviceId: 'phone' };
 
+// Unit: the same card viewed by old and new phones must expose exactly one usable
+// entry. Host version alone cannot establish the viewing phone's navigation support.
+it('negotiates native task navigation per reader and retains the fallback action for old phones', async () => {
+  const html = '<button data-ghost-action="open" data-ghost-session-link="cindy://session/target">Open task</button>';
+  let permitted = true;
+  const provider = createGhostCardRemoteProvider({
+    readCard: async () => ({ sessionId: 's', callId: 'c', ghostId: 'example', html, v: 2, height: 80 }),
+    authorize: async () => {}, captureScope: () => () => true,
+    interactions: { externalLinks: () => permitted, dispatch: async () => true },
+  });
+  const read = async (native: boolean) => {
+    const result = await provider.get!(context, { ...request, client: { protocolVersion: 1,
+      primitives: ['plugin-card-actions', ...(native ? ['plugin-card-session-links'] : [])] } });
+    return result.blocks?.find(block => block.id === 'actions')?.data;
+  };
+  expect(await read(false)).toMatchObject({ items: [{ id: 'open', label: 'Open task' }] });
+  expect((await read(false) as { items: unknown[] }).items[0]).not.toHaveProperty('url');
+  expect(await read(true)).toMatchObject({ items: [{ id: 'link:0', label: 'Open task', url: 'cindy://session/target' }] });
+  permitted = false;
+  expect((await read(true) as { items: unknown[] }).items[0]).not.toHaveProperty('url');
+});
+
+it('mail imports reuse task attachment cleanup and verify downloaded bytes before provider delivery', async () => {
+  const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'mail-upload-test-'));
+  try {
+    const file = path.join(dir, 'plan.pdf'), bytes = Buffer.from('test attachment');
+    await fs.writeFile(file, bytes);
+    const accepted = vi.fn(), discard = vi.fn(async () => {});
+    uploadFixture.materialize.mockResolvedValue({ message: { content: [{ type: 'file', path: file }] },
+      cleanupAfterAcceptance: accepted, cleanupBeforeAcceptance: discard });
+    const upload = { name: 'plan.pdf', url: buildAttachmentOssRef({ ossKey: 'fixture', size: bytes.length, sha256: createHash('sha256').update(bytes).digest('hex') }) };
+    configureMailAttachmentHost({ writeTempFile: vi.fn(), materializeDirectSendOssAttachments: uploadFixture.materialize });
+    const result = await prepareMailAttachmentUpload(upload, 'task');
+    expect(uploadFixture.materialize).toHaveBeenCalledWith('task', expect.objectContaining({ type: 'user' }), {});
+    expect(result.attachment).toMatchObject({ path: file, filename: 'plan.pdf', bytes: bytes.length });
+    result.accepted(); expect(accepted).toHaveBeenCalledOnce(); expect(discard).not.toHaveBeenCalled();
+    await fs.writeFile(file, 'wrong bytes');
+    await expect(prepareMailAttachmentUpload(upload, 'task')).rejects.toThrow('MAIL_ATTACHMENT_INTEGRITY');
+    expect(discard).toHaveBeenCalledOnce();
+  } finally { await fs.rm(dir, { recursive: true, force: true }); }
+});
+
+it('projects phone attachment support and rejects local paths, oversized uploads and terminal drafts', async () => {
+  const mail = { accountId: 'a', draftId: 'd', key: '12345678-1234-1234-1234-123456789abc', from: 'self@example.test',
+    state: 'draft' as const, status: 'Ready', sendLabel: 'Send', fromLabel: 'From', attachments: [],
+    fields: [...['to', 'cc', 'bcc', 'subject', 'body'].map(name => ({ name, label: name, value: name })),
+      { name: 'attachmentItems', label: 'Files', value: '[]', kind: 'mail-attachments' as const }] };
+  let html = renderMailCard(mail);
+  const dispatch = vi.fn(async () => true);
+  const provider = createGhostCardRemoteProvider({
+    readCard: async () => ({ sessionId: 's', callId: 'c', ghostId: 'mail', html, v: 2, height: 100 }),
+    authorize: async () => {}, captureScope: () => () => true, interactions: { externalLinks: () => false, dispatch },
+  });
+  const resource = await provider.get!(context, { ...request, client: { protocolVersion: 1, primitives: ['plugin-card-actions', 'plugin-card-forms'] } });
+  expect(resource.blocks?.[0].data).toHaveProperty('mailUpload', true);
+  const upload = { name: 'plan.pdf', url: buildAttachmentOssRef({ ossKey: 'fixture', size: 100, sha256: 'a'.repeat(64), mimeType: 'application/pdf' }) };
+  const values = Object.fromEntries(mail.fields.map(f => [f.name, f.value]));
+  const base = { client: request.client, collectionId: 'plugin-results', resourceRef: request.ref, actionId: `mail:attach:${mail.key}`,
+    input: { revision: resource.revision, pageId: 'page', mailAttachment: upload, formValues: values } };
+  await provider.invoke!(context, base);
+  expect(dispatch).toHaveBeenLastCalledWith('c', base.actionId, undefined, 'page', 'mail', 'phone', values, false, upload);
+  for (const invalid of [{ ...upload, url: '/private/mail.pdf' }, { ...upload, name: '../secret' },
+    { ...upload, url: buildAttachmentOssRef({ ossKey: 'large', size: 17 * 1024 * 1024, sha256: 'a'.repeat(64) }) }]) {
+    expect(parseMailAttachmentUpload(invalid)).toBeNull();
+    await expect(provider.invoke!(context, { ...base, input: { ...base.input, mailAttachment: invalid } })).rejects.toThrow();
+  }
+  html = renderMailCard({ ...mail, state: 'deleted' });
+  await expect(provider.invoke!(context, base)).rejects.toThrow();
+  expect(dispatch).toHaveBeenCalledTimes(1);
+});
+
 describe('native mobile card actions', () => {
+  it('accepts edits across autosave revisions but rejects replaced form identities and forged actions', async () => {
+    const fields = JSON.stringify([{ name: 'body', label: 'Message', value: 'Saved' }]).replace(/"/g, '&quot;');
+    let html = `<div data-ghost-form="${fields}" data-ghost-change="change:one">Saved</div><button data-ghost-action="send:one" data-ghost-submit="true">Send</button>`;
+    const dispatch = vi.fn(async () => true);
+    const provider = createGhostCardRemoteProvider({ readCard: async () => ({ sessionId: 's', callId: 'c', ghostId: 'mail', html, v: 2, height: 100 }),
+      authorize: async () => {}, captureScope: () => () => true, interactions: { externalLinks: () => false, dispatch } });
+    const base = { client: request.client, collectionId: 'plugin-results', resourceRef: request.ref, actionId: 'change:one',
+      input: { revision: 'earlier-save', pageId: 'page', formChange: true, formValues: { body: 'Latest' } } };
+    await provider.invoke!(context, base);
+    expect(dispatch).toHaveBeenLastCalledWith('c', 'change:one', undefined, 'page', 'mail', 'phone', { body: 'Latest' }, true);
+    await provider.invoke!(context, { ...base, actionId: 'send:one', input: { ...base.input, formChange: false, formKey: 'change:one' } });
+    await expect(provider.invoke!(context, { ...base, actionId: 'forged' })).rejects.toThrow();
+    html = html.replaceAll(':one', ':two');
+    await expect(provider.invoke!(context, base)).rejects.toThrow();
+    expect(dispatch).toHaveBeenCalledTimes(2);
+  });
+  it('projects editable fields and rejects old-client, partial and stale submissions', async () => {
+    const form = [{ name: 'body', label: 'Message', value: 'Original', multiline: true }];
+    const html = `<div data-ghost-form="${JSON.stringify(form).replace(/"/g, '&quot;')}">Original</div><button data-ghost-action="send" data-ghost-submit="true">Send</button>`;
+    const dispatch = vi.fn(async () => true);
+    const provider = createGhostCardRemoteProvider({ readCard: async () => ({ sessionId: 's', callId: 'c', ghostId: 'mail', html, v: 2, height: 160 }),
+      authorize: async () => {}, captureScope: () => () => true, interactions: { externalLinks: () => false, dispatch } });
+    const legacy = await provider.get!(context, { ...request, client: { protocolVersion: 1, primitives: ['plugin-card-actions'] } });
+    expect(legacy.blocks?.find(block => block.id === 'text')?.fallbackMarkdown).toContain('Original');
+    expect(legacy.blocks?.find(block => block.id === 'actions')?.data).toEqual(expect.objectContaining({ items: [expect.objectContaining({ disabled: true })] }));
+    const resource = await provider.get!(context, { ...request, client: { protocolVersion: 1, primitives: ['plugin-card-actions', 'plugin-card-forms'] } });
+    expect(resource.blocks?.find(block => block.id === 'actions')?.data).toEqual(expect.objectContaining({ form }));
+    expect(resource.blocks?.find(block => block.id === 'text')?.fallbackMarkdown).not.toContain('Original');
+    const base = { client: request.client, collectionId: 'plugin-results', resourceRef: request.ref, actionId: 'send', input: { revision: resource.revision, pageId: 'page' } };
+    for (const values of [undefined, {}, { extra: 'text' }, { body: 'x'.repeat(16001) }])
+      await expect(provider.invoke!(context, { ...base, input: { ...base.input, formValues: values } })).rejects.toThrow();
+    await provider.invoke!(context, { ...base, input: { ...base.input, formValues: { body: 'Edited' } } });
+    expect(dispatch).toHaveBeenCalledWith('c', 'send', undefined, 'page', 'mail', 'phone', { body: 'Edited' });
+    await expect(provider.invoke!(context, { ...base, input: { ...base.input, revision: 'old', formValues: { body: 'Edited' } } })).rejects.toThrow();
+    expect(dispatch).toHaveBeenCalledTimes(1);
+  });
   it('projects declared buttons and approved links, preserving required text input and disabled state', () => {
     const html = '<button data-ghost-action="edit" data-ghost-prompt="Describe &amp; edit">Edit <b>image</b></button><button data-ghost-action="delete" disabled>Delete</button><a data-ghost-link="https://example.com/?a=1&amp;b=2">Visit</a>';
     expect(projectGhostCardActions(html, false)).toEqual([
@@ -33,9 +149,17 @@ describe('native mobile card actions', () => {
     await expect(provider.invoke!(context, { ...base, actionId: 'forged' })).rejects.toThrow();
     await expect(provider.invoke!(context, { ...base, input: { ...base.input, prompt: '' } })).rejects.toThrow();
     await provider.invoke!(context, base);
-    expect(dispatch).toHaveBeenCalledWith('c', 'edit', 'Change it', 'page', 'art', 'phone');
+    expect(dispatch).toHaveBeenCalledWith('c', 'edit', 'Change it', 'page', 'art', 'phone', undefined);
     html = '<p>Changed</p>';
     await expect(provider.invoke!(context, base)).rejects.toThrow();
+    expect(dispatch).toHaveBeenCalledTimes(1);
+    // A card moved to a newer call: older phones keep its fallback text, newer phones get supersededBy
+    // to hide it, and none can press its buttons any more.
+    html = '<div data-cindy-superseded-by="new" hidden></div><p>Latest status is below</p><button data-ghost-action="edit">Edit</button>';
+    const moved = await provider.get!(context, { ...request, client: { protocolVersion: 1, primitives: ['plugin-card-actions'] } });
+    expect(moved.blocks?.[0].fallbackMarkdown).toContain('Latest status is below');
+    expect(moved.blocks?.find(b => b.primitive === 'plugin-card-actions')?.data).toMatchObject({ supersededBy: 'new', items: [] });
+    await expect(provider.invoke!(context, { ...base, input: { ...base.input, revision: moved.revision } })).rejects.toThrow();
     expect(dispatch).toHaveBeenCalledTimes(1);
   });
 });
@@ -46,6 +170,10 @@ describe('read-only plugin card projection', () => {
     expect(blocks[0].fallbackMarkdown).toBe('Result & title\nDone\n\nDelete');
     expect(blocks.filter((b) => b.data).map((b) => b.data)).toEqual([{ url: image }, { url: audio }]);
     expect(JSON.stringify(blocks)).not.toMatch(/<|secret|color:red|data-ghost-action/);
+  });
+  it('does not let tags assembled from leftover pieces survive the text projection', () => {
+    const blocks = projectGhostCardBlocks('<p>a<scr<b></b>ipt>x</scr<b></b>ipt>b</p><sc<script></script>ript>y</sc<script></script>ript>');
+    expect(blocks[0].fallbackMarkdown).not.toMatch(/<|script/i);
   });
   it('preserves image descriptions and declared destinations as inert text', () => {
     const blocks = projectGhostCardBlocks(`<img src="${image}" alt="A chart"/><a data-ghost-link="https://example.com/?a=1&amp;b=2">Report</a>`);
@@ -94,6 +222,38 @@ describe('read-only plugin card projection', () => {
 
 
 describe('plugin identity for mobile annotations', () => {
+  it('resolves explicit root and organization identities, but never guesses an ambiguous legacy id', () => {
+    const root = { manifest: { id: 'helper' }, namespace: null, name: 'Root' };
+    const org = { manifest: { id: 'helper' }, namespace: 'acme', name: 'Organization' };
+    expect(findGhostForRemotePluginIdentity([root, org], JSON.stringify([null, 'helper']))).toBe(root);
+    expect(findGhostForRemotePluginIdentity([root, org], JSON.stringify(['acme', 'helper']))).toBe(org);
+    expect(findGhostForRemotePluginIdentity([root, org], '_ns__acme__helper')).toBe(org);
+    expect(findGhostForRemotePluginIdentity([root, org], '_ns/acme/helper')).toBe(org);
+    expect(findGhostForRemotePluginIdentity([root, org], 'helper')).toBeUndefined();
+    expect(findGhostForRemotePluginIdentity([org], 'helper')).toBe(org);
+    expect(findGhostForRemotePluginIdentity([root, org], JSON.stringify(['other', 'helper']))).toBeUndefined();
+    expect(findGhostForRemotePluginIdentity([root, org], '["acme","../helper"]')).toBeUndefined();
+  });
+  it('projects the requested organization identity through the task-scoped resource', async () => {
+    const ghosts = [
+      { manifest: { id: 'helper' }, namespace: null, name: 'Root' },
+      { manifest: { id: 'helper' }, namespace: 'acme', name: 'Organization' },
+    ];
+    const provider = createPluginIdentityRemoteProvider({
+      readIdentity: (id) => {
+        const ghost = findGhostForRemotePluginIdentity(ghosts, id);
+        return ghost ? { name: ghost.name } : undefined;
+      },
+      authorize: async () => {}, captureScope: () => () => true,
+    });
+    const ref = { ...request.ref, id: JSON.stringify(['s', JSON.stringify(['acme', 'helper'])]) };
+    expect((await provider.get!(context, { ...request, ref })).display.title).toBe('Organization');
+    await expect(provider.get!(context, { ...request, ref: { ...ref, id: JSON.stringify(['s', 'helper']) } })).rejects.toThrow('Plugin not found');
+    const longNamespace = 'a'.repeat(126);
+    ghosts.push({ manifest: { id: 'helper' }, namespace: longNamespace, name: 'Long Namespace' });
+    const longRef = { ...ref, id: JSON.stringify(['s', JSON.stringify([longNamespace, 'helper'])]) };
+    expect((await provider.get!(context, { ...request, ref: longRef })).display.title).toBe('Long Namespace');
+  });
   const request = { ref: { collectionId: 'plugin-identities', kind: 'plugin', id: '["s","art"]' }, client: { protocolVersion: 1, primitives: [] } };
   it('projects only public name and bounded raster data, never credentials or local URLs', async () => {
     const readIdentity = vi.fn(() => ({ name: 'Art', iconDataUrl: 'data:image/png;base64,YQ==', secret: 'private' }));
@@ -116,4 +276,130 @@ describe('plugin identity for mobile annotations', () => {
     await expect(denied.get!(context, request)).rejects.toThrow('denied');
     expect(readIdentity).not.toHaveBeenCalled();
   });
+});
+
+// Unit: on the phone the PR card read as a raw URL glued to its title, a row of identical grey
+// buttons and "开启「…」" buttons for its settings. Newer phones ask for `plugin-card-rich` and get
+// the parts they draw natively; older phones keep the plain projection (minus the raw link URL).
+describe('plugin-card-rich projection', () => {
+  const html = '<div><div><a data-ghost-link="https://github.com/o/r/pull/9">#9 Fix login</a></div>'
+    + '<div data-ghost-pr-status="O/R#9"><div>CI 运行中</div><div>等待合并</div></div>'
+    + '<div data-ghost-live-label="跟进中"><span data-ghost-live=""></span>跟进中</div>'
+    + '<button data-ghost-action="pr:ready" aria-label="转为正式 PR" data-ghost-primary=""></button>'
+    + '<button data-ghost-action="prset:rename" data-ghost-toggle="on" aria-label="关闭「自动改名」"><div>自动改名</div><div>改成 PR 号</div></button>'
+    + '<button data-ghost-action="prset:model" aria-label="指定模型（当前）">指定模型</button>'
+    + '<button data-ghost-action="prset:modelPick" aria-label="更换模型（当前：Opus）"><span>Opus</span><span>高</span></button></div>';
+  const provider = (prStatus = vi.fn(async () => undefined as never)) => createGhostCardRemoteProvider({
+    readCard: async () => ({ sessionId: 's', callId: 'c', ghostId: 'github', html, v: 2, height: 100 }),
+    authorize: async () => {}, captureScope: () => () => true, prStatus,
+    interactions: { externalLinks: () => true, dispatch: vi.fn(async () => true) },
+  });
+  const read = async (primitives: string[], prStatus?: Parameters<typeof provider>[0]) => {
+    const resource = await provider(prStatus).get!(context, { ...request, client: { protocolVersion: 1, primitives } });
+    const text = resource.blocks?.find(block => block.id === 'text')?.fallbackMarkdown.replace(/\\(.)/g, '$1');
+    return { text, data: resource.blocks?.find(block => block.id === 'actions')?.data as Record<string, unknown> };
+  };
+
+  it('cuts nested and doubly marked parts once, keeping the text after them', () => {
+    const parts = projectRichCardParts('<p>before</p><div data-ghost-pr-status="o/r#1"><span data-ghost-live-label="live">inner</span> tail</div><p>after</p>'
+      + '<span data-ghost-live-label="x" data-ghost-pr-status="o/r#2">both</span><p>end</p>');
+    expect(parts.textHtml).toBe('<p>before</p><div data-ghost-pr-status="o/r#1"></div><p>after</p><span data-ghost-live-label="x" data-ghost-pr-status="o/r#2"></span><p>end</p>');
+  });
+  it('keeps older phones on the plain projection without the raw link address', async () => {
+    const { text, data } = await read(['plugin-card-actions', 'plugin-card-forms']);
+    expect(text).toBe('#9 Fix login\nCI 运行中\n等待合并\n\n跟进中\n自动改名\n改成 PR 号\n指定模型Opus高');
+    expect(data.items).toEqual([
+      { id: 'link:0', label: '#9 Fix login', url: 'https://github.com/o/r/pull/9', disabled: false },
+      { id: 'pr:ready', label: '转为正式 PR', disabled: false },
+      { id: 'prset:rename', label: '关闭「自动改名」', disabled: false },
+      { id: 'prset:model', label: '指定模型（当前）', disabled: false },
+      { id: 'prset:modelPick', label: '更换模型（当前：Opus）', disabled: false },
+    ]);
+    expect(data).not.toHaveProperty('live');
+  });
+
+  it('keeps the link address in the text for a client without the actions primitive', async () => {
+    const { text } = await read([]);
+    expect(text).toContain('https://github.com/o/r/pull/9');
+  });
+
+  // Unit: with PR settings open the phone showed 「跟随当前任务指定模型」「Sonnet 5.5 · Anthropic高」 as card
+  // text — the inside of buttons it already draws from their labels.
+  it('gives newer phones switches, the primary action, the live label and the title bar PR status', async () => {
+    const status = { ok: true as const, owner: 'o', repo: 'r', prNumber: 9, status: 'open' as const, title: '', htmlUrl: '', branch: '', unresolvedCount: 0 };
+    const lookup = vi.fn(async () => status as never);
+    const { text, data } = await read(['plugin-card-actions', 'plugin-card-forms', 'plugin-card-rich'], lookup);
+    expect(text).toBe('#9 Fix login');
+    expect(lookup).toHaveBeenCalledWith('s', 'o/r#9');
+    // The PR link carries the PR's state so the phone can mark the title with the app's PR icon.
+    expect((data.items as Array<Record<string, unknown>>)[0]).toMatchObject({ id: 'link:0', prState: 'open' });
+    expect(data).toMatchObject({ live: '跟进中', prStatus: [{ key: 'o/r#9', fallback: ['CI 运行中', '等待合并'], status }] });
+    expect((data.items as Array<Record<string, unknown>>).slice(1)).toEqual([
+      { id: 'pr:ready', label: '转为正式 PR', disabled: false, primary: true },
+      { id: 'prset:rename', label: '关闭「自动改名」', disabled: false, toggle: { on: true, title: '自动改名', hint: '改成 PR 号' } },
+      { id: 'prset:model', label: '指定模型（当前）', disabled: false },
+      { id: 'prset:modelPick', label: '更换模型（当前：Opus）', disabled: false },
+    ]);
+  });
+
+  // Rule (2026-11-06): parts that only hold while the PR is open leave the phone card once the title
+  // bar's status says merged, for older phones too. Minimal input: the same card, open vs merged.
+  it('drops open-only parts from every projection once the PR was merged', async () => {
+    const card = '<div><span data-ghost-pr-open-only="O/R#9">开放中</span>'
+      + '<div data-ghost-pr-open-only="O/R#9"><button data-ghost-action="pr:stop" aria-label="停止跟进"></button>'
+      + '<div data-ghost-live-label="跟进中">跟进中</div></div><p>tail</p></div>';
+    const projected = async (state: 'open' | 'merged', primitives: string[]) => {
+      const lookup = vi.fn(async () => ({ ok: true, owner: 'o', repo: 'r', prNumber: 9, status: state, title: '', htmlUrl: '', branch: '' }) as never);
+      const resource = await createGhostCardRemoteProvider({
+        readCard: async () => ({ sessionId: 's', callId: 'c', ghostId: 'github', html: card, v: 2, height: 100 }),
+        authorize: async () => {}, captureScope: () => () => true, prStatus: lookup,
+        interactions: { externalLinks: () => true, dispatch: vi.fn(async () => true) },
+      }).get!(context, { ...request, client: { protocolVersion: 1, primitives } });
+      const data = resource.blocks?.find(block => block.id === 'actions')?.data as Record<string, unknown>;
+      return { text: resource.blocks?.find(block => block.id === 'text')?.fallbackMarkdown, items: data.items, live: data.live, lookups: lookup.mock.calls.length };
+    };
+    const rich = ['plugin-card-actions', 'plugin-card-forms', 'plugin-card-rich'];
+    expect(await projected('open', rich)).toMatchObject({ text: '开放中\n\ntail', live: '跟进中', items: [{ id: 'pr:stop' }] });
+    expect(await projected('merged', rich)).toMatchObject({ text: 'tail', live: undefined, items: [], lookups: 1 });
+    expect(await projected('merged', ['plugin-card-actions'])).toMatchObject({ text: 'tail', items: [] });
+  });
+
+  // Bug (2026-11-08): the phone card never offered the archive button or the auto-archive notice, because
+  // the button has no action and no text. Minimal input: one merged card, varying the task-wide facts.
+  it('tells newer phones when to offer the archive button, using the desktop task page rule', async () => {
+    const card = '<div><p>#9 Fix login</p><button data-ghost-task-archive="O/R#9" data-ghost-task-archive-auto="" aria-label="归档任务"></button></div>';
+    const projected = async (state: 'open' | 'merged', facts: { allMerged: boolean; attached: boolean }, primitives = ['plugin-card-actions', 'plugin-card-rich']) => {
+      const resource = await createGhostCardRemoteProvider({
+        readCard: async () => ({ sessionId: 's', callId: 'c', ghostId: 'github', html: card, v: 2, height: 100 }),
+        authorize: async () => {}, captureScope: () => () => true,
+        prStatus: async () => ({ ok: true, owner: 'o', repo: 'r', prNumber: 9, status: state, title: '', htmlUrl: '', branch: '' }) as never,
+        taskArchive: async () => facts,
+        interactions: { externalLinks: () => true, dispatch: vi.fn(async () => true) },
+      }).get!(context, { ...request, client: { protocolVersion: 1, primitives } });
+      return (resource.blocks?.find(block => block.id === 'actions')?.data as Record<string, unknown>).taskArchive;
+    };
+    expect(await projected('merged', { allMerged: true, attached: false })).toEqual({ auto: true });
+    // An IM channel took the task over: the button stays, the silent archive does not.
+    expect(await projected('merged', { allMerged: true, attached: true })).toEqual({ auto: false });
+    // Another PR of the task is still open, or this card's PR is not merged: no button at all.
+    expect(await projected('merged', { allMerged: false, attached: false })).toBeUndefined();
+    expect(await projected('open', { allMerged: true, attached: false })).toBeUndefined();
+    expect(await projected('merged', { allMerged: true, attached: false }, ['plugin-card-actions'])).toBeUndefined();
+  });
+
+  // Review (Greptile P2 on #9022): markedElements returns only outermost matches, so a mark for an
+  // ended PR nested inside a mark for an open one stayed on the phone. Minimal input: B inside A (unit).
+  it('also drops a nested open-only part whose own PR ended', async () => {
+    const html = '<div data-ghost-pr-open-only="o/r#1">one<div data-ghost-pr-open-only="o/r#2">two</div> end1</div><p>tail</p>';
+    const ended = async (key: string) => key === 'o/r#2';
+    expect(await omitEndedPrOpenOnly(html, ended)).toBe('<div data-ghost-pr-open-only="o/r#1">one end1</div><p>tail</p>');
+    expect(await omitEndedPrOpenOnly(html, async () => true)).toBe('<p>tail</p>');
+  });
+});
+
+
+it('projects an in-card task link to mobile without turning it into a plugin action', () => {
+  const html = '<a data-ghost-link="cindy://session/task-42">打开原任务</a>';
+  expect(projectGhostCardActions(html, true)).toEqual([{ id: 'link:0', label: '打开原任务', url: 'cindy://session/task-42', disabled: false }]);
+  expect(projectGhostCardActions(html, false)).toEqual([]);
 });

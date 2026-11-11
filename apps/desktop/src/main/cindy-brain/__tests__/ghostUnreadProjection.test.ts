@@ -15,7 +15,13 @@ import type { InstalledGhost } from '../../../shared/ghost';
 
 function ghost(
   id: string,
-  opts: { enabled?: boolean; notify?: boolean; badge?: boolean } = {},
+  opts: {
+    enabled?: boolean;
+    notify?: boolean;
+    badge?: boolean;
+    namespace?: string | null;
+    dir?: string;
+  } = {},
 ): InstalledGhost {
   const badge = opts.badge ?? true;
   return {
@@ -31,8 +37,9 @@ function ghost(
       ...(badge ? { badge: true } : {}),
 
     },
-    dir: `/fake/${id}`,
+    dir: opts.dir ?? `/fake/${id}`,
     enabled: opts.enabled ?? true,
+    ...(Object.hasOwn(opts, 'namespace') ? { namespace: opts.namespace } : {}),
   } as InstalledGhost;
 }
 
@@ -56,6 +63,31 @@ describe('ghostUnreadProjection', () => {
   it('停用**不**进撤销名单:记录保留,唤醒后那颗点要回来', () => {
     const entries = [{ ghostId: 'a' }];
     expect(selectRevokedGhostUnreadIds(entries, [ghost('a', { enabled: false })])).toEqual([]);
+  });
+
+  it.each([true, false])('已迁移的组织插件按物理实例保留未读, enabled=%s', (enabled) => {
+    const installed = ghost('helper', {
+      enabled, namespace: 'acme', dir: '/fake/_ns/acme/helper',
+    });
+    expect(selectRevokedGhostUnreadIds([{ ghostId: '_ns__acme__helper' }], [installed], true))
+      .toEqual([]);
+  });
+
+  it.each([undefined, null, 'acme'])('未搬迁的实例按原物理键保留未读, namespace=%s', (namespace) => {
+    const installed = ghost('helper', { namespace });
+    expect(selectRevokedGhostUnreadIds([{ ghostId: 'helper' }], [installed], true)).toEqual([]);
+  });
+
+  it('同名 root 与组织实例的权限分别撤销,不会互相保留或误删', () => {
+    const entries = [{ ghostId: 'helper' }, { ghostId: '_ns__acme__helper' }];
+    const root = ghost('helper', { namespace: null });
+    const organization = ghost('helper', { namespace: 'acme', dir: '/fake/_ns/acme/helper' });
+    expect(selectRevokedGhostUnreadIds(entries, [
+      ghost('helper', { namespace: null, badge: false }), organization,
+    ], true)).toEqual(['helper']);
+    expect(selectRevokedGhostUnreadIds(entries, [
+      root, ghost('helper', { namespace: 'acme', dir: '/fake/_ns/acme/helper', badge: false }),
+    ], true)).toEqual(['_ns__acme__helper']);
   });
 
   it('能力撤销进撤销名单:更新后不再声明 badge / 包已卸载', () => {

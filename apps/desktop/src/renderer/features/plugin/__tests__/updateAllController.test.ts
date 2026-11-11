@@ -14,12 +14,14 @@ vi.mock('@/lib/toast', () => ({ toast: { success: vi.fn(), error: vi.fn() } }));
 let installedGhosts: Array<{
   manifest: GhostManifest;
   approval?: GhostInstallApproval;
+  namespace?: string | null;
+  dir?: string;
 }> = [];
 vi.mock('@/cindy-brain/useInstalledGhosts', () => ({
   readInstalledGhostsSnapshot: () =>
     installedGhosts.map((ghost) => ({
       ...ghost,
-      dir: 'C:/test/ghost',
+      dir: ghost.dir ?? `C:/test/${ghost.manifest.id}`,
       enabled: true,
       approval: ghost.approval ?? {
         state: 'approved',
@@ -275,6 +277,101 @@ describe('updateAllController', () => {
     resolveRefresh?.();
     await waitForFinishedBatch();
     expect(toast.success).toHaveBeenCalledTimes(1);
+  });
+
+
+  it('updates the physical root when a namespaced twin shares the ghostId', async () => {
+    const namespacedApproval = {
+      state: 'approved' as const,
+      revision: 'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb',
+    };
+    installedGhosts = [
+      {
+        manifest: manifest({ version: '9.0.0' }),
+        namespace: 'xd',
+        dir: 'C:/test/_ns/xd/ghost-a',
+        approval: namespacedApproval,
+      },
+      { manifest: manifest({ version: '1.0.0' }), dir: 'C:/test/ghost-a' },
+    ];
+
+    startUpdateAllBatch([marketItem()]);
+    await waitForFinishedBatch();
+
+    expect(getUpdateAllBatchState().rows?.[0]).toMatchObject({
+      status: 'done',
+      fromVersion: '1.0.0',
+    });
+    expect(installMock).toHaveBeenCalledTimes(1);
+    expect(installMock.mock.calls[0]?.[1]).toMatchObject({
+      expectedInstalledApproval: DEFAULT_APPROVAL_TOKEN,
+    });
+  });
+
+  it('updates the namespaced instance for an organization market row', async () => {
+    const namespacedApproval = {
+      state: 'approved' as const,
+      revision: 'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb',
+    };
+    installedGhosts = [
+      { manifest: manifest({ version: '1.0.0' }), dir: 'C:/test/ghost-a' },
+      {
+        manifest: manifest({ version: '9.0.0' }),
+        namespace: 'xd',
+        dir: 'C:/test/_ns/xd/ghost-a',
+        approval: namespacedApproval,
+      },
+    ];
+    detailMock.mockResolvedValue(
+      detail({
+        pluginId: 'plugin-org',
+        namespace: 'xd',
+        scope: 'organization',
+        version: '9.1.0',
+        releaseId: 'release-org',
+      }),
+    );
+
+    startUpdateAllBatch([
+      marketItem({
+        pluginId: 'plugin-org',
+        namespace: 'xd',
+        scope: 'organization',
+        version: '9.1.0',
+        releaseId: 'release-org',
+      }),
+    ]);
+    await waitForFinishedBatch();
+
+    expect(getUpdateAllBatchState().rows?.[0]).toMatchObject({
+      status: 'done',
+      fromVersion: '9.0.0',
+    });
+    expect(installMock.mock.calls[0]).toEqual([
+      'plugin-org',
+      {
+        expectedReleaseId: 'release-org',
+        expectedManifest: manifest({ version: '9.1.0' }),
+        expectedInstalledApproval: 'approved:bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb',
+        allowSourceReplacement: false,
+      },
+    ]);
+  });
+
+  it('skips a public update when only a namespaced twin is installed', async () => {
+    installedGhosts = [
+      {
+        manifest: manifest({ version: '9.0.0' }),
+        namespace: 'xd',
+        dir: 'C:/test/_ns/xd/ghost-a',
+      },
+    ];
+
+    startUpdateAllBatch([marketItem()]);
+    await waitForFinishedBatch();
+
+    expect(getUpdateAllBatchState().rows?.[0]?.status).toBe('skipped');
+    expect(installMock).not.toHaveBeenCalled();
   });
 
   it('reconciles a pending row removed while an earlier row is installing', async () => {

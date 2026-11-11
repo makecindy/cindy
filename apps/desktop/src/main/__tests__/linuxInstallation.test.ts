@@ -2,8 +2,9 @@ import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { execFileSync, spawnSync } from 'node:child_process';
+import { execFile, execFileSync, spawnSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
+import { promisify } from 'node:util';
 import {
   checkDebianManagedInstallation,
   findLinuxUserInstallation,
@@ -74,31 +75,49 @@ describe.skipIf(process.platform !== 'linux')('user installer transaction smoke 
   let prefix: string;
   const installer = path.resolve(__dirname, '../../../resources/linux/install-user.sh');
   const packages = new Map<string, { file: string; digest: string; size: number }>();
-  // Six bsdtar+ar fixtures under a contended Linux unit shard exceed vitest's
-  // 10s hookTimeout (CI: 10758ms). Spawn timeouts below are already 15s.
-  beforeAll(() => {
+  const execFileAsync = promisify(execFile);
+  // These two short-name members need only the standard 60-byte ar header and
+  // even-byte padding. Build the fixture in-process instead of launching six ar
+  // children; the installer still parses and extracts the real archive via bsdtar.
+  function arMember(name: string, data: Buffer): Buffer {
+    const header = [
+      `${name}/`.padEnd(16), '0'.padEnd(12), '0'.padEnd(6), '0'.padEnd(6),
+      '100644'.padEnd(8), String(data.length).padEnd(10), '`\n',
+    ].join('');
+    return Buffer.concat([Buffer.from(header, 'ascii'), data, Buffer.from(data.length % 2 ? '\n' : '')]);
+  }
+  beforeAll(async () => {
     root = fs.mkdtempSync(path.join(os.tmpdir(), 'cindy-install-test-'));
     prefix = path.join(root, 'home', "Cindy's space $literal");
     fs.mkdirSync(path.join(root, 'home'));
-    for (const version of ['1.0.0', '1.0.1', '1.0.2', '1.0.3', '1.0.4', '1.0.5']) {
+    const results = await Promise.allSettled(['1.0.0', '1.0.1', '1.0.2', '1.0.3', '1.0.4', '1.0.5'].map(async (version) => {
       const pkg = path.join(root, version);
       const appDir = path.join(pkg, 'usr', 'lib', 'cindy');
       fs.mkdirSync(path.join(appDir, 'resources'), { recursive: true });
       fs.writeFileSync(path.join(appDir, 'Cindy'), '#!/bin/sh\nprintf "%s\\n" "fixture"\n', { mode: 0o755 });
       if (version === '1.0.4' || version === '1.0.5') {
         fs.writeFileSync(path.join(appDir, 'Cindy'), [
-          '#!/bin/sh', 'printf "%s\\n" "$$" "$@" > "$CINDY_TEST_LAUNCH_LOG"', 'exec sleep 10', '',
+          '#!/bin/sh', 'printf "%s\\n" "$$" "$@" > "$CINDY_TEST_LAUNCH_LOG"',
+          // Like Electron without a usable Ozone backend: up briefly, then exit(1) with only stderr.
+          'if [ -n "${CINDY_TEST_FAKE_EXIT:-}" ]; then echo "fake: ozone init failed" >&2; sleep 1.5; exit 1; fi',
+          'echo "fake: started" >&2', 'exec sleep 10', '',
         ].join('\n'), { mode: 0o755 });
       }
       fs.writeFileSync(path.join(appDir, 'resources', 'app.asar'), 'fake archive');
       stageLinuxBuildInfo(appDir, 'linux', process.arch, version, 'global');
       if (version === '1.0.3') fs.symlinkSync('/etc/passwd', path.join(appDir, 'escape'));
-      execFileSync('bsdtar', ['-czf', 'data.tar.gz', './usr'], { cwd: pkg });
-      fs.writeFileSync(path.join(pkg, 'debian-binary'), '2.0\n');
+      await execFileAsync('bsdtar', ['-czf', 'data.tar.gz', './usr'], { cwd: pkg, timeout: 15_000 });
       const file = path.join(pkg, 'package.deb');
-      execFileSync('ar', ['rc', file, 'debian-binary', 'data.tar.gz'], { cwd: pkg });
-      const bytes = fs.readFileSync(file);
+      const bytes = Buffer.concat([
+        Buffer.from('!<arch>\n'),
+        arMember('debian-binary', Buffer.from('2.0\n')),
+        arMember('data.tar.gz', fs.readFileSync(path.join(pkg, 'data.tar.gz'))),
+      ]);
+      fs.writeFileSync(file, bytes);
       packages.set(version, { file, digest: createHash('sha256').update(bytes).digest('hex'), size: bytes.length });
+    }));
+    for (const result of results) {
+      if (result.status === 'rejected') throw result.reason;
     }
   }, 30_000);
   afterAll(() => fs.rmSync(root, { recursive: true, force: true }));
@@ -261,8 +280,8 @@ describe.skipIf(process.platform !== 'linux')('user installer transaction smoke 
         debPath: pkg.file, sha256: valid ? pkg.digest : 'f'.repeat(64), sizeBytes: pkg.size,
         exePath: path.join(prefix, before, 'Cindy'), lockFilePath, logPath,
         userInstallation: { prefix, current: before, region: 'global', version },
-        relaunchArgs: ['--password-store=gnome-libsecret'],
-        timings: { lockHeartbeatSeconds: 1, verifyTimeoutSeconds: 3, verifyRetryAtSeconds: 2 },
+        relaunchArgs: ['--ozone-platform=wayland', '--password-store=gnome-libsecret'],
+        timings: { lockHeartbeatSeconds: 1, verifyTimeoutSeconds: 3, verifyRetryAtSeconds: 2, verifyStableSeconds: 1 },
       });
       fs.rmSync(launchLog, { force: true });
       const result = spawnSync('setsid', ['bash', '-c', script], {
@@ -277,12 +296,38 @@ describe.skipIf(process.platform !== 'linux')('user installer transaction smoke 
       try {
         expect(result.stderr).toBe('');
         expect(result.status).toBe(valid ? 0 : 1);
-        expect(args).toEqual(['--password-store=gnome-libsecret']);
+        expect(args).toEqual(['--ozone-platform=wayland', '--password-store=gnome-libsecret']);
         expect(fs.readlinkSync(path.join(prefix, 'current'))).toBe(valid ? 'releases/' + version + '-' + pkg.digest : before);
         expect(fs.existsSync(lockFilePath)).toBe(false);
+        if (valid) {
+          expect(fs.readFileSync(logPath, 'utf8')).toContain('PROCESS VERIFIED');
+          expect(fs.readFileSync(path.join(root, 'cindy-relaunch.log'), 'utf8')).toContain('fake: started');
+        }
       } finally {
         process.kill(Number(pid), 'SIGTERM'); // Only the fake app this test launched.
       }
     }
+
+    // #9723: the relaunched app is up for 1.5 s, then exits 1. A single kill -0
+    // one second after the retry reported it as running and dropped its stderr.
+    const current = fs.readlinkSync(path.join(prefix, 'current'));
+    const pkg = packages.get('1.0.4')!;
+    fs.rmSync(logPath, { force: true });
+    const result = spawnSync('setsid', ['bash', '-c', buildLinuxUpdateScript({
+      pid: 2147483647, debPath: pkg.file, sha256: pkg.digest, sizeBytes: pkg.size,
+      exePath: path.join(prefix, current, 'Cindy'), lockFilePath, logPath,
+      userInstallation: { prefix, current, region: 'global', version: '1.0.4' },
+      timings: { lockHeartbeatSeconds: 1, verifyTimeoutSeconds: 6, verifyRetryAtSeconds: 2, verifyStableSeconds: 3 },
+    })], {
+      env: { ...process.env, HOME: path.join(root, 'home'), CINDY_TEST_LAUNCH_LOG: launchLog, CINDY_TEST_FAKE_EXIT: '1' },
+      encoding: 'utf8', timeout: 15_000,
+    });
+    const log = fs.readFileSync(logPath, 'utf8');
+    expect(result.stderr).toBe('');
+    expect(log.match(/exited with code 1 /g)).toHaveLength(2);
+    expect(log).toContain('    app: fake: ozone init failed');
+    expect(log).toContain('retrying relaunch');
+    expect(log).toContain('WARNING: relaunch not verified');
+    expect(log).not.toContain('PROCESS VERIFIED');
   }, 30_000);
 });

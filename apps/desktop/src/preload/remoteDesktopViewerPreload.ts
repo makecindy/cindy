@@ -57,6 +57,8 @@ contextBridge.exposeInMainWorld('electronAPI', {
         return { success: false, error: String(error), themes: [], diagnostics: [] };
       }
     },
+    onChanged: (cb: (payload: LocalThemesResult) => void): (() => void) =>
+      onPayload('local-themes:changed', cb),
   },
   appShortcuts: {
     getState: (): { overrides: Record<string, unknown>; platform: string } =>
@@ -98,6 +100,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
     preferences: (generation, patch) =>
       ipcRenderer.invoke(REMOTE_VIEWER.PREFERENCES, generation, patch),
     safety: (generation, retry) => ipcRenderer.invoke(REMOTE_VIEWER.SAFETY, generation, retry),
+    clipboardSync: (generation) => ipcRenderer.invoke(REMOTE_VIEWER.CLIPBOARD_SYNC, generation),
     resolution: (generation, displayId, value) =>
       ipcRenderer.invoke(REMOTE_VIEWER.RESOLUTION, generation, displayId, value),
     onChannelRequest: (cb) => onPayload(REMOTE_VIEWER.CHANNEL_REQUEST, cb),

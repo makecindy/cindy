@@ -1,8 +1,12 @@
+import { HostConnectionNotice } from '@/components/HostConnectionNotice';
+import { AppPreferenceControl } from './components/AppPreferenceControl';
+import { AppWindowSync } from './components/layout/AppWindowSync';
+import { readLocalWorkerCreationSelection } from './state/workerCreationPrefs';
 import { useModelFavoritesHost } from './state/useModelFavoritesHost';
 import { getDataOwnerGeneration } from './contexts/dataOwnerGeneration';
 import { RouterProvider } from 'react-router-dom';
 
-import { useEffect } from 'react';
+import { lazy, Suspense, useEffect } from 'react';
 import { RemoteDesktopHost } from '@/features/remote-desktop/RemoteDesktopHost';
 
 import { useCloseWindowFallbackShortcut } from '@/hooks/useCloseWindowShortcut';
@@ -13,6 +17,7 @@ import { WallpaperSettingsProvider } from '@/hooks/useWallpaperSettings';
 import { FontSettingsProvider } from '@/hooks/useFontSettings';
 import { LocaleProvider } from '@/hooks/useLocale';
 import { AuthProvider, useAuth } from '@/contexts/AuthContext';
+import { PluginReviewUpdatesProvider } from '@/contexts/PluginReviewUpdatesContext';
 import { AppShellCoverProvider, useAppShellCover } from '@/contexts/AppShellCoverContext';
 import { LoginHandoffProvider } from '@/contexts/LoginHandoffContext';
 import { EnvCheckProvider, EnvCheckGuard } from '@/contexts/EnvCheckContext';
@@ -22,9 +27,11 @@ import { MainViewHistoryProvider } from '@/contexts/MainViewHistoryContext';
 import { SplashScreen } from '@/components/splash/SplashScreen';
 import { LoginFirstLaunchLightGateBridge } from '@/components/login/LoginFirstLaunchLightGateBridge';
 import { LoginBrandStage } from '@/components/login/LoginBrandStage';
+import { StartupLogSupport } from '@/components/log-support/StartupLogSupport';
 import { isSecondaryWindow } from '@/lib/secondaryWindow';
 import { isSidebarWindow } from '@/lib/sidebarWindow';
-import { isGhostPanelWindow } from '@/lib/ghostPanelWindow';
+import { installGithubStarPrompt } from '@/lib/githubStarPrompt';
+import { createGithubStarPromptEnvironment } from '@/lib/githubStarPromptHost';
 import { ToastContainer } from '@/components/ui/toast';
 import { LegacyMigrationDialog } from '@/components/auth/LegacyMigrationDialog';
 import { Tooltip } from '@/components/ui/tooltip';
@@ -32,10 +39,17 @@ import { ConfirmDialogProvider } from '@/components/ui/confirm-dialog-provider';
 import { FindInPageBar } from '@/components/find-in-page/FindInPageBar';
 import { ProjectAutomationNotifyBridge } from '@/features/scheduler/components/ProjectAutomationNotifyBridge';
 import { GhostConfirmDialogHost } from '@/cindy-brain/GhostConfirmDialogHost';
+import { PluginModelPickerHost } from '@/cindy-brain/PluginModelPickerHost';
+import { LocalAgentConfirmationHost } from '@/components/LocalAgentConfirmationHost';
 import { ForgeOidcInstallConfirmHost } from '@/cindy-brain/ForgeOidcInstallConfirmHost';
 import { GhostInstallConsentHost } from '@/cindy-brain/GhostInstallConsentHost';
+const PluginUiHost = lazy(() => import('@/cindy-brain/PluginUiHost').then(module => ({ default: module.PluginUiHost })));
+import { PluginUiProvider } from '@/cindy-brain/PluginUiContributions';
+import { SetupMigrationHost } from '@/features/setup-migration/SetupMigrationHost';
 import { PluginPublisherConfirmHost } from '@/features/plugin/PluginPublisherConfirmHost';
+import { GithubSetupRequestHost } from '@/features/cc-agent/GithubSetupRequestHost';
 import { makerChatStore } from '@/lib/makerChatStore';
+import { schedulePreviewLightboxPreload } from '@/components/chat/lazyPreviewLightboxes';
 import {
   initializePromptRecommendationStore,
   setPromptRecommendationOwner,
@@ -53,6 +67,7 @@ import {
 } from '@/lib/localCatalogSnapshot';
 import { useResyncAgentIslandSettingsAfterLogin } from '@/hooks/useAgentIslandSettings';
 import {
+  getDraft,
   getDraftForOwnerPreferenceSync,
   applyAppDefaultModelSelection,
   subscribeDraft,
@@ -60,8 +75,12 @@ import {
   setFastModeForModel,
   setWorktreePreference,
   patchVendorPrefs,
+  patchVendorPrefsFromTaskModelSwitch,
   patchVendorPrefsPreservingModelChoice,
 } from '@/state/newMakerDraft';
+import { getCachedProvidersSnapshot } from '@/lib/providersSnapshotStore';
+import { resolveDraftEffectiveProviderId } from '@/lib/draftModelCalibration';
+import { isModelEnabled } from '@/state/modelVisibilityPrefs';
 import {
   snapshotForSeed,
   setProviderModelChoice,
@@ -71,28 +90,26 @@ import {
   subscribeProviderModelMemory,
 } from '@/state/providerModelMemory';
 import {
+  applyWorkerRolesMutation,
   readWorkerCreationPrefs,
   setWorkerPermissionModePreference,
   subscribeWorkerCreationPrefs,
+  toRemoteWorkerRoles,
+  writeWorkerCreationPrefs,
 } from '@/state/workerCreationPrefs';
+import type { OrcaWorkerRolesMutation } from '@cindy/device-link';
 import type { Effort } from '@/lib/userPreferences.types';
 
 import { router } from './router';
 
 /**
- * LoginHandoffProvider 的 auth 接线壳:LoginHandoffContext 模块本身不 import
- * AuthContext(避免传递性引入重依赖),推进锚里的「auth 初始化完成」由本壳从
- * useAuth 取值下传(Step 3b WHAT2 宿主契约)。
+ * 动画消费 AppShellCover 派生的当前目标；AuthContext 仍拥有认证和账号边界。
  */
 function LoginHandoffHost({ children }: { children: React.ReactNode }) {
-  const { isInitializing, isAuthenticated, canEnterApp } = useAuth();
-  const { coverHeld } = useAppShellCover();
+  const { isInitializing, canEnterApp } = useAuth();
+  const { startupTarget } = useAppShellCover();
   return (
-    <LoginHandoffProvider
-      authResolved={!isInitializing}
-      authenticated={isAuthenticated || canEnterApp}
-      coverHeld={coverHeld}
-    >
+    <LoginHandoffProvider target={startupTarget}>
       {/* 认证恢复后已登录(直进受保护路由、LoginPage 不挂载)时结束首启亮色门,
           避免 renderer localStorage 被清空但主进程仍持有会话时整个已登录会话
           被永久锁亮色;未登录场景仍由 LoginPage 卸载结束门(见组件头注释)。 */}
@@ -102,7 +119,34 @@ function LoginHandoffHost({ children }: { children: React.ReactNode }) {
   );
 }
 
+function syncWorkerPrefs() {
+  const owner = getDataOwnerGeneration();
+  window.electronAPI.syncWorkerCreationPrefs({
+    workerPermissionMode: readWorkerCreationPrefs().workerPermissionMode,
+    selection: readLocalWorkerCreationSelection(owner.dataOwnerId),
+    // 角色清单与每个角色的记忆：手机与远程控制的电脑读的就是这份镜像。
+    roles: toRemoteWorkerRoles(readWorkerCreationPrefs(), owner.dataOwnerId),
+    ownerStamp: { dataOwnerId: owner.dataOwnerId, ownerGeneration: owner.generation },
+  });
+}
+
+/** 手机或远程控制的电脑改了这台电脑的角色清单：只在仍是同一个账号时写回真源。 */
+function applyRemoteWorkerRolesMutation(payload: {
+  mutation: OrcaWorkerRolesMutation;
+  ownerStamp: { dataOwnerId: string | null; ownerGeneration: number };
+}) {
+  const owner = getDataOwnerGeneration();
+  if (
+    payload.ownerStamp.dataOwnerId !== owner.dataOwnerId
+    || payload.ownerStamp.ownerGeneration !== owner.generation
+  ) return;
+  writeWorkerCreationPrefs(
+    applyWorkerRolesMutation(readWorkerCreationPrefs(), owner.dataOwnerId, payload.mutation),
+  );
+}
+
 function syncNewMakerPrefs(appDefaultModelRequestId?: string) {
+  syncWorkerPrefs();
   // 多 renderer 的模块内存彼此独立；跨窗口通知必须从共享持久快照同步，避免旧窗口把
   // 自己的 model / workingDir 等完整旧草稿覆盖进 main 缓存。
   const owner = getDataOwnerGeneration();
@@ -115,7 +159,7 @@ function syncNewMakerPrefs(appDefaultModelRequestId?: string) {
     model: cc.model,
     effort: cc.effort,
     permissionMode: cc.permissionMode,
-    fastMode: draft.fastModeByModel[cc.model] === true,
+    fastMode: (draft.fastModeByModel[cc.model] ?? false),
     // /ctr 新建会话需要与模型配套的供应商路由；缺省会走隐式路由落到官方网关，
     // 用户供应商专有的模型（如 deepseek-v4-pro）会被网关 400 拒绝。
     providerId: cc.providerId ?? null,
@@ -129,11 +173,12 @@ function syncNewMakerPrefs(appDefaultModelRequestId?: string) {
     ...(appDefaultModelRequestId ? { appDefaultModelRequestId } : {}),
     ownerStamp: { dataOwnerId: owner.dataOwnerId, ownerGeneration: owner.generation },
     selectedRoute: {
+      ...(draft.agentDeviceId ? { agentDeviceId: draft.agentDeviceId } : {}),
       harness: draft.vendor === 'cc' || draft.vendor === 'orca' ? 'claude' : draft.vendor,
       providerId: selected.providerId ?? null,
       model: selected.model,
       effort: selected.effort ?? '',
-      fastMode: draft.fastModeByModel[selected.model] === true,
+      fastMode: (draft.fastModeByModel[selected.model] ?? false),
     },
     lastByVendor: {
       cc: {
@@ -173,6 +218,15 @@ function MakerBootstrap() {
 
   useResyncAgentIslandSettingsAfterLogin(isAuthenticated);
 
+  // Remote SSH handlers register during the environment check. Read the
+  // snapshot only after that gate passes, then keep receiving live pushes.
+  useEffect(() => installCcMgrUpgradeListener(), []);
+
+  useEffect(() => {
+    if (!isAuthenticated || isSecondaryWindow() || isSidebarWindow()) return;
+    return installGithubStarPrompt(createGithubStarPromptEnvironment(router));
+  }, [isAuthenticated, dataOwnerId, dataOwnerRecoveryEpoch]);
+
   useEffect(() => {
     setPromptRecommendationOwner(`${dataOwnerId ?? 'signed-out'}:${dataOwnerRecoveryEpoch}`);
     initializePromptRecommendationStore();
@@ -208,12 +262,14 @@ function MakerBootstrap() {
 }
 
 function OwnerScopedRouter() {
-  const { dataOwnerId, dataOwnerRecoveryEpoch } = useAuth();
+  const { dataOwnerId, dataOwnerRecoveryEpoch, canEnterApp } = useAuth();
   const ownerKey = `${dataOwnerId ?? 'signed-out'}:${dataOwnerRecoveryEpoch}`;
   return (
+    <PluginUiProvider enabled={canEnterApp} host={<Suspense fallback={null}><PluginUiHost /></Suspense>}>
     <MainViewHistoryProvider ownerKey={ownerKey} locationKey={router.state.location.key}>
       <RouterProvider key={ownerKey} router={router} />
     </MainViewHistoryProvider>
+    </PluginUiProvider>
   );
 }
 
@@ -242,25 +298,25 @@ export function App() {
     return subscribeDraft(syncNewMakerPrefs);
   }, []);
 
+  // 文本／Mermaid 预览弹窗不进首屏;窗口可见、首帧稳定后空闲预取,首次点开不必等加载。
+  useEffect(() => schedulePreviewLightboxPreload(), []);
+
   useModelFavoritesHost();
 
-  // Worker 创建偏好的真源是 renderer localStorage；main 只缓存权限默认值供
+  // Worker 创建偏好的真源是 renderer localStorage；main 缓存权限与当前账号本机路线供
   // Orca UI / agent tool 的创建路径读取。tool 显式改默认时再经 apply push 回写真源。
   useEffect(() => {
-    const sync = () => {
-      const prefs = readWorkerCreationPrefs();
-      window.electronAPI.syncWorkerCreationPrefs({
-        workerPermissionMode: prefs.workerPermissionMode,
-      });
-    };
-    sync();
-    const unsubscribe = subscribeWorkerCreationPrefs(sync);
+    syncWorkerPrefs();
+    const unsubscribe = subscribeWorkerCreationPrefs(syncWorkerPrefs);
     const offApply = window.electronAPI.onWorkerCreationPrefsApply(({ workerPermissionMode }) => {
       setWorkerPermissionModePreference(workerPermissionMode);
     });
+    // 写回后 subscribeWorkerCreationPrefs 会把新的角色清单再镜像给 main。
+    const offRoles = window.electronAPI.onWorkerRolesApplyRequest(applyRemoteWorkerRolesMutation);
     return () => {
       unsubscribe();
       offApply();
+      offRoles();
     };
   }, []);
 
@@ -291,6 +347,7 @@ export function App() {
         fast,
         thinking,
         markModelChoice,
+        taskProviderId,
         appDefaultSelection,
       }) => {
         if (appDefaultSelection) {
@@ -308,7 +365,27 @@ export function App() {
           return;
         }
         const vendor = agentKindToVendor(agent);
-        if (active) {
+        if (active && taskProviderId && markModelChoice !== false) {
+          // 控制端在本机任务里只换了模型:按本机自己的新建默认判断是否写回(同本机换模)。
+          patchVendorPrefsFromTaskModelSwitch(
+            vendor,
+            {
+              model: modelId,
+              providerId: providerId || null,
+              ...(effort !== undefined ? { effort: effort as Effort } : {}),
+            },
+            taskProviderId,
+            (prefs) =>
+              resolveDraftEffectiveProviderId({
+                providers: getCachedProvidersSnapshot()?.providers ?? [],
+                agent,
+                model: prefs.model,
+                providerId: prefs.providerId,
+                chosenByUser: getDraft().modelChosenByVendor[vendor] === true,
+                isModelEnabled,
+              }),
+          );
+        } else if (active) {
           const patch =
             markModelChoice === false ? patchVendorPrefsPreservingModelChoice : patchVendorPrefs;
           const shouldPatchActiveModel = markModelChoice !== false || effort !== undefined;
@@ -395,21 +472,17 @@ export function App() {
     return installAutoPermissionFallbackToastListener();
   }, []);
 
-  // cc-mgr 版本不匹配的 UpgradeBanner: 订阅 main 的 CC_MGR_UPGRADE_AVAILABLE push +
-  // 启动时拉一次 pending snapshot, 写进 ccMgrUpgradeStore。没挂这个 listener 的话
-  // main 探到版本差异 broadcast 了也没人接, banner 永不显示。详见 ccMgrUpgradeStore.ts。
-  useEffect(() => {
-    return installCcMgrUpgradeListener();
-  }, []);
-
   return (
     <ThemeProvider>
       <FontSettingsProvider>
         <WallpaperSettingsProvider>
           <LocaleProvider>
+            <AppPreferenceControl />
             <ConfirmDialogProvider>
               <EnvCheckProvider>
                 <AuthProvider>
+                  <HostConnectionNotice />
+                  <PluginReviewUpdatesProvider>
                   <AppShellCoverProvider>
                     <WorktreeProvider>
                       <PrRefsProvider>
@@ -423,38 +496,38 @@ export function App() {
                             {/* 副窗口(「在新窗口打开」)/ 右侧栏子窗口跳过 splash:env/热更检查
                             由主窗启动时完成,附属窗 EnvCheckProvider 初始即 'passed',
                             不需要也不应再走 splash 流程。 */}
-                            {!isSecondaryWindow() &&
-                              !isSidebarWindow() &&
-                              !isGhostPanelWindow() && <LoginBrandStage />}
-                            {!isSecondaryWindow() &&
-                              !isSidebarWindow() &&
-                              !isGhostPanelWindow() && <SplashScreen />}
+                            {!isSecondaryWindow() && !isSidebarWindow() && <LoginBrandStage />}
+                            {!isSecondaryWindow() && !isSidebarWindow() && <SplashScreen />}
                             <EnvCheckGuard>
                               <MakerBootstrap />
-                              {!isSecondaryWindow() &&
-                                !isSidebarWindow() &&
-                                !isGhostPanelWindow() && <RemoteDesktopHost />}
+                              <AppWindowSync />
+                              {!isSecondaryWindow() && !isSidebarWindow() && <RemoteDesktopHost />}
                               <ProjectAutomationNotifyBridge />
                               {/* confirm 槽:插件请主机弹确认框。必须在 ConfirmDialogProvider
                               内(要 useConfirmDialog);main 只投单个窗口,所以每个窗口
                               都挂、谁收到谁弹,不按窗口类型 gate。 */}
                               <GhostConfirmDialogHost />
+                              <PluginModelPickerHost />
+                              <LocalAgentConfirmationHost />
                               <ForgeOidcInstallConfirmHost />
                               <GhostInstallConsentHost />
+                              {/* 新电脑设置:只挂主窗(应答界面偏好读取、首次建议与迁移弹窗)。 */}
+                              {!isSecondaryWindow() && !isSidebarWindow() && <SetupMigrationHost />}
                               <PluginPublisherConfirmHost />
+                              <GithubSetupRequestHost />
                               <OwnerScopedRouter />
                             </EnvCheckGuard>
+                            {!isSecondaryWindow() && !isSidebarWindow() && <StartupLogSupport />}
                           </LoginHandoffHost>
                           <FindInPageBar />
                           <ToastContainer />
                           {/* 首登轻量数据迁移弹窗:只挂主窗(副窗/侧栏窗不重复弹) */}
-                          {!isSecondaryWindow() && !isSidebarWindow() && !isGhostPanelWindow() && (
-                            <LegacyMigrationDialog />
-                          )}
+                          {!isSecondaryWindow() && !isSidebarWindow() && <LegacyMigrationDialog />}
                         </Tooltip.Provider>
                       </PrRefsProvider>
                     </WorktreeProvider>
                   </AppShellCoverProvider>
+                  </PluginReviewUpdatesProvider>
                 </AuthProvider>
               </EnvCheckProvider>
             </ConfirmDialogProvider>

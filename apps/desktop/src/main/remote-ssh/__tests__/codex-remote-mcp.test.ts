@@ -29,6 +29,8 @@ vi.mock('../../mcp-integrations/remoteMcpBridgeToken.js', () => ({
 }));
 
 import { getRemoteMcpBridgeToken } from '../../mcp-integrations/remoteMcpBridgeToken.js';
+import { registerAppServer, clearAppServerConfigs } from '../../mcp-apps/runtime.js';
+import { CODEX_ALLOWED_BUILTIN_PLUGIN_IDS_KEY } from '../../mcp-integrations/codexBuiltinToolPolicy.js';
 
 const SERVERS = ['cindy_orca', 'orca_worker_bridge'];
 
@@ -1558,13 +1560,14 @@ describe('codex-connector R27 regressions', () => {
 });
 
 
-describe('remote Bot helper transport', () => {
+describe('remote helper transport', () => {
   const helperConfigOpts = {
     bridgeInstanceId: 'helper-bridge', serverNames: ['cindy_helper'],
     collabEnabled: false, makerMemoryEnabled: false,
   };
 
-  it('keeps the shared helper disabled and binds per-thread URLs with collab and memory off', async () => {
+  // #8406: a plain SSH thread must enable its bound helper without a Bot policy.
+  it('keeps the shared helper disabled and enables a bound ordinary thread with collab and memory off', async () => {
     const { host, inputs } = fakeHost('host-helper-only', '');
     const ensured = await ensureRemoteCodexMcpBridge(host, {
       ensureBridgeStarted: async () => ({ port: 38991, serverNames: ['cindy_helper'], bridgeInstanceId: 'helper-bridge' }),
@@ -1577,8 +1580,12 @@ describe('remote Bot helper transport', () => {
     expect(config).toMatchObject({
       'mcp_servers.cindy_helper.url': 'http://127.0.0.1:47921/mcp/cindy_helper?instance=bot-instance',
       'mcp_servers.cindy_helper.bearer_token_env_var': 'LIZI_MCP_TOKEN',
-      'mcp_servers.cindy_helper.enabled': false,
+      'mcp_servers.cindy_helper.enabled': true,
     });
+    expect(buildRemoteCodexSessionMcpConfig(host.id, '', helperConfigOpts)).toEqual({});
+    expect(buildRemoteCodexSessionMcpConfig(host.id, 'bot-instance', {
+      ...helperConfigOpts, vendorOptions: { __cindyDisabledBuiltinPluginIds: ['xdt_helper'] },
+    })['mcp_servers.cindy_helper.enabled']).toBe(false);
     expect(buildRemoteCodexSessionMcpConfig('missing-host', 'bot-instance', helperConfigOpts)).toEqual({});
     expect(buildRemoteCodexSessionMcpConfig(host.id, 'bot-instance', { ...helperConfigOpts, serverNames: [] })).toEqual({});
     expect(hasPendingRemoteMcpDrift(host.id, {
@@ -1622,4 +1629,40 @@ describe('remote Bot helper transport', () => {
       }
     },
   );
+});
+
+describe('remote App transports', () => {
+  it('renders custom App transports disabled without depending on the current registry', () => {
+    const block = parseToml(renderManagedMcpBlock({
+      remotePort: 47921, serverNames: ['example'], tokenFingerprint: 'test-fingerprint',
+    })) as { mcp_servers: Record<string, { enabled?: boolean }> };
+    expect(block.mcp_servers.example.enabled).toBe(false);
+  });
+  it.each([false, true])('disables process-wide discovery and binds ordinary/Bot threads with helper=%s', async (helper) => {
+    registerAppServer('example', () => ({ id: 'example', url: 'https://example.invalid/mcp', transport: 'http' }));
+    try {
+      const { host, inputs } = fakeHost(`host-app-${helper}`, '');
+      const serverNames = ['example', ...(helper ? ['cindy_helper'] : [])];
+      expect(await ensureRemoteCodexMcpBridge(host, {
+        ensureBridgeStarted: async () => ({ port: 38991, serverNames, bridgeInstanceId: 'app-bridge' }),
+        isCollabEnabled: () => false, isMakerMemoryEnabled: () => false,
+      })).toMatchObject({ ok: true });
+      const written = parseToml(decodeWrittenConfig(inputs)!) as { mcp_servers: Record<string, { enabled?: boolean }> };
+      expect(written.mcp_servers.example.enabled).toBe(false);
+      const opts = { bridgeInstanceId: 'app-bridge', serverNames, collabEnabled: false, makerMemoryEnabled: false };
+      const ordinary = buildRemoteCodexSessionMcpConfig(host.id, 'app-instance', opts);
+      expect(ordinary).toMatchObject({
+        'mcp_servers.example.url': 'http://127.0.0.1:47921/mcp/example?instance=app-instance',
+        'mcp_servers.example.enabled': true,
+        'mcp_servers.example.bearer_token_env_var': 'LIZI_MCP_TOKEN',
+      });
+      const vendorOptions = { [CODEX_ALLOWED_BUILTIN_PLUGIN_IDS_KEY]: [], cindyRuntimeMcpServerNames: [] as string[] };
+      expect(buildRemoteCodexSessionMcpConfig(host.id, 'bot-instance', { ...opts, vendorOptions }))
+        .toHaveProperty('mcp_servers.example.enabled', false);
+      vendorOptions.cindyRuntimeMcpServerNames = ['example'];
+      expect(buildRemoteCodexSessionMcpConfig(host.id, 'bot-instance', { ...opts, vendorOptions }))
+        .toHaveProperty('mcp_servers.example.enabled', true);
+      if (helper) expect(ordinary['mcp_servers.cindy_helper.enabled']).toBe(true);
+    } finally { clearAppServerConfigs(); }
+  });
 });

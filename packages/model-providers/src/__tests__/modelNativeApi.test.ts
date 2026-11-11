@@ -117,6 +117,7 @@ describe("canonical model APIs in registry v3", () => {
     ["z-ai/glm-99", "openai-completions"],
     ["tencent/hy99-preview", "openai-completions"],
     ["meta/muse-spark-99", "openai-responses"],
+    ["meta/muse-wonder-99", "openai-responses"],
     ["x-ai/grok-99", "openai-responses"],
     ["minimax/MiniMax-M99", "anthropic-messages"],
     ["openai-codex/gpt-99", "openai-responses"],

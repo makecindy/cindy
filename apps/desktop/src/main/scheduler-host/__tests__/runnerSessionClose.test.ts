@@ -60,7 +60,7 @@ vi.mock('../runners/_shared', () => ({
   backfillSessionMeta: mocks.backfillSessionMeta,
 }));
 
-import { MakerScheduleRunner } from '../runner';
+import { MakerScheduleRunner } from '../runner.desktop';
 import { isHeadlessGhostSetupTurn } from '../../mcp-integrations/ghostSetupInteractionSurface';
 
 type SessionSendOptions = Parameters<Session['send']>[1];
@@ -135,6 +135,8 @@ function baseSchedule(overrides: Partial<Schedule> = {}): Schedule {
     recurring: true,
     manual: false,
     agentKind: 'codex',
+    // 留空模型要靠默认解析(本 harness 未接),这里显式给模型。
+    model: 'gpt-6-astra',
     workspaceKind: 'dialogue',
     useWorktree: false,
     notify: { desktop: true, feishu: false },
@@ -163,6 +165,7 @@ function createRunnerHarness(session: Session) {
     getSessionMeta: vi.fn(async () => null),
     isSessionAlive: vi.fn(() => false),
     closeSession,
+    recyclePiRuntimeIfResourcesDrifted: vi.fn(async () => false),
   } as unknown as Maker;
   const runner = new MakerScheduleRunner({
     maker,

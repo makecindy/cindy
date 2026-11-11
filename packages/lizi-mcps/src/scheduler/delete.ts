@@ -15,7 +15,7 @@
 
 import { z } from 'zod';
 
-import { withScheduler } from './_shared.js';
+import { runOnDevice, writeDeviceShape } from './_devices.js';
 import type { LiziMcpSessionContext, SchedulerMcpDeps } from '../types.js';
 import type { SchedulerToolRegistry } from '../cindy_schedulerToolRegistry.js';
 
@@ -28,12 +28,13 @@ export function registerScheduleDeleteTool(
     name: 'schedule_delete',
     category: 'scheduler',
     description:
-      '永久删除一条 schedule（同时级联删 schedule_runs 表里它的所有历史 run），不可撤销。先核对目标与授权；本次自动跟进达到既定停止和清理条件时，可清理自身调度，无需重复确认。其他未获授权的删除须先确认，不得扩展到其他调度。在自动化任务 run 内删除自己所属的 schedule 时，本轮 run 会被豁免、自然跑完，不会被删除动作中断。',
+      '永久删除一条定时任务（同时级联删 schedule_runs 表里它的所有历史 run），不可撤销。默认删本机的；其它电脑上的任务传 device。先核对目标与授权；本次自动跟进达到既定停止和清理条件时，可清理自身调度，无需重复确认。其他未获授权的删除须先确认，不得扩展到其他调度。在自动化任务 run 内删除自己所属的 schedule 时，本轮 run 会被豁免、自然跑完，不会被删除动作中断。',
     inputShape: {
       id: z.string().min(1).describe('要删除的 schedule id'),
+      ...writeDeviceShape,
     },
-    handler: async ({ id }) =>
-      withScheduler(deps, async (scheduler) => {
+    handler: async ({ id, device }) =>
+      runOnDevice(deps, device, async (scheduler) => {
         // 与 silenceCurrentRun 同源的 caller-ownership 解析:按调用方 session 反查
         // in-flight runId。它可能属于别的 schedule(agent 在 A 的 run 里删 B)——
         // 那种情况 runId 不在被删 schedule 的 inflight set 里,豁免天然不命中。
@@ -43,6 +44,6 @@ export function registerScheduleDeleteTool(
           : undefined;
         await scheduler.delete(id, exemptRunId ? { exemptRunId } : undefined);
         return { deleted: id };
-      }),
+      }, { op: 'delete', args: [id], map: () => ({ deleted: id }) }),
   });
 }

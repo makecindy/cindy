@@ -19,7 +19,7 @@ import { useCallback, useEffect, useMemo, useReducer, useRef, useState } from 'r
 import { useNavigate } from 'react-router-dom';
 import { useTranslation } from 'react-i18next';
 import * as Dialog from '@radix-ui/react-dialog';
-import * as Select from '@radix-ui/react-select';
+import { SelectParts as Select } from '@/components/ui/select';
 import { X, CloudUpload, Globe, Users, Lock, RefreshCw, CircleAlert, Check, ChevronDown, ChevronUp } from 'lucide-react';
 
 import { cn } from '@/lib/utils';
@@ -339,7 +339,7 @@ export function SelectInput({
           'flex h-10 w-full items-center justify-between gap-2 rounded-full border px-3 text-sm',
           'bg-[var(--settings-input-bg)] text-[var(--settings-input-text)]',
           'border-[var(--settings-input-border)]',
-          'focus:outline-none focus:ring-2 focus:ring-[var(--focus-ring-soft)] focus:border-transparent',
+          'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--focus-ring-soft)]',
           'transition-colors data-[disabled]:cursor-not-allowed data-[disabled]:opacity-60',
           'data-[placeholder]:text-[var(--settings-input-placeholder)]',
         )}
@@ -358,10 +358,9 @@ export function SelectInput({
           align="start"
           sideOffset={4}
           className={cn(
-            'z-[10010] w-[var(--radix-select-trigger-width)] overflow-hidden rounded-xl border p-1',
+            'z-[10010] w-[var(--radix-select-trigger-width)] overflow-hidden rounded-xl border p-1.5',
             'max-h-[min(15rem,var(--radix-select-content-available-height))]',
             'border-[var(--cmd-palette-border)] bg-[var(--cmd-palette-bg)]',
-            '[box-shadow:var(--cmd-palette-shadow)]',
           )}
         >
           <Select.ScrollUpButton className="flex h-5 items-center justify-center text-[var(--settings-section-desc)]">
@@ -376,7 +375,6 @@ export function SelectInput({
                 className={cn(
                   'flex w-full cursor-pointer select-none items-center gap-2 rounded-lg px-2.5 py-1.5 text-left text-sm outline-none',
                   'text-[var(--msg-assistant-text)] transition-colors',
-                  'data-[highlighted]:bg-[var(--surface-hover)]',
                   'data-[disabled]:cursor-not-allowed data-[disabled]:opacity-60',
                 )}
               >

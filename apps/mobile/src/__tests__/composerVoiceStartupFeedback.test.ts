@@ -45,8 +45,10 @@ function readCallbacks(page: string) {
         const canUseComposer = true;
         const composerFocused = false, firstMessageInputFocused = false;
         const modelSheetOpen = false, permissionSheetOpen = false, composerVoiceHoldActive = false;
+        const composerImageHoldActive = false;
         // 收起胶囊点开的过渡期(useComposerPillOpen)不在本用例范围:语音按下前后都未点胶囊。
         const composerPillOpen = { opening: false };
+        const composerDragOpen = false;
         return ${cardActive};
       } };`,
       { compilerOptions: { target: ts.ScriptTarget.ES2022 } },
@@ -90,6 +92,7 @@ describe.each(['new.tsx', '[sessionId].tsx'])('%s voice startup feedback', (page
       selectedDeviceId: 'host', deviceId: 'host',
       isMobileRealtimeAudioAvailable: () => true,
       prewarmMobileRealtimeAudio: vi.fn(), prewarmMobileVoiceStart: vi.fn(),
+      warmMobileSpeakerFilter: vi.fn(),
       auth: { apiFetch: vi.fn() },
       voiceStartedOnPressInRef: { current: false },
       voiceRecordingActiveRef: recording,

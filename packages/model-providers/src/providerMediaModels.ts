@@ -99,17 +99,23 @@ export function projectProviderMediaModels(
           ),
       )
       .map((model): ProviderMediaModel => {
+        const userMetadata = options.userMetadata?.(model.id, model);
         const metadata = resolveModelMetadata(
           registry,
           catalogId,
           catalogModelId(model.id),
           options.live ? pickModelMetadata(model) : model.discoveredMetadata,
-          options.userMetadata?.(model.id, model),
+          userMetadata,
         );
         const declaredMatch = declared.find(
           ({ route }) => route.modelId === catalogModelId(model.id),
         );
-        const nativeApi = declaredMatch?.entry.nativeApi;
+        // Custom runtime media already has declaration/discovery precedence resolved
+        // by buildUserProvider. Reapplying discovery here would undo that decision.
+        const customNativeApi = provider.source === "user" && model.sourceAgent
+          ? userMetadata?.nativeApi !== undefined ? userMetadata.nativeApi : model.nativeApi
+          : undefined;
+        const nativeApi = customNativeApi !== undefined ? customNativeApi : declaredMatch?.entry.nativeApi;
         const defaultEnabled = declaredMatch?.entry.defaultEnabled;
         // Preserve the source's real ID, payment state and disable flag.
         return {

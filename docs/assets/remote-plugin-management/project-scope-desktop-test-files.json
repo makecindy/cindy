@@ -1,0 +1,14 @@
+[
+  "src/main/cindy-brain/__tests__/remotePluginProjects.test.ts",
+  "src/main/cindy-brain/__tests__/remotePluginManagement.test.ts",
+  "src/main/cindy-brain/__tests__/remotePluginPreferences.test.ts",
+  "src/main/cindy-brain/__tests__/mobilePageService.test.ts",
+  "src/renderer/features/plugin/__tests__/PluginScopePicker.test.tsx",
+  "src/renderer/features/plugin/__tests__/RemotePluginPage.test.tsx",
+  "src/renderer/features/plugin/__tests__/remotePluginManagementClient.test.ts",
+  "src/renderer/features/plugin/__tests__/GhostPluginPage.navigation.test.tsx",
+  "src/renderer/components/new-chat/__tests__/AddRemoteProjectDialog.test.tsx",
+  "src/renderer/features/skillhub/lib/__tests__/marketRoutes.test.ts",
+  "src/renderer/__tests__/remoteBrowseAdapters.test.ts",
+  "src/renderer/features/plugin/__tests__/useCatalogDevice.test.tsx"
+]

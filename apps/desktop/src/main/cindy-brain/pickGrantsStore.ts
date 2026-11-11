@@ -24,8 +24,15 @@ import { normalizeWorkingDirForStorage } from '../../shared/workingDir.js';
 import { desktopMakerLogger } from '../maker-host/logger-adapter.js';
 import { createOverrideSettingsFile } from '../maker-host/override-settings-file.js';
 import { ownerScopedUserDataPath } from '../appSessionState.js';
+import { assertGhostPrefsWritable, relocateGhostPreferenceMaps } from './ghostPreferenceRelocation.js';
 
 const log = desktopMakerLogger.child('pick-grants-store');
+
+export async function relocateGhostPickedDirs(from: string, to: string): Promise<void> {
+  await relocateGhostPreferenceMaps('ghost-pick-grants.json', ['grants'], from, to, () => {
+    store = createStore();
+  });
+}
 
 /** 每插件保留的亲选目录条数(超出淘汰最旧;够覆盖"换过几次项目目录")。 */
 export const GRANTS_PER_GHOST = 8;
@@ -58,16 +65,22 @@ function normalize(raw: unknown): GhostPickGrants {
   return { grants };
 }
 
-const store = createOverrideSettingsFile<GhostPickGrants>({
-  filePath: () => ownerScopedUserDataPath('ghost-pick-grants.json'),
-  defaults: DEFAULTS,
-  normalize,
-  log,
-  label: 'ghost-pick-grants',
-});
+function createStore() {
+  return createOverrideSettingsFile<GhostPickGrants>({
+    filePath: () => ownerScopedUserDataPath('ghost-pick-grants.json'),
+    defaults: DEFAULTS,
+    normalize,
+    log,
+    label: 'ghost-pick-grants',
+    preserveUnreadableFile: true,
+  });
+}
+
+let store = createStore();
 
 /** 记一笔亲选目录(pick 槽成功交付时调用;重选同目录提位到最前)。 */
 export function recordGhostPickedDir(ghostId: string, dirAbs: string): void {
+  assertGhostPrefsWritable('ghost-pick-grants.json');
   const dir = normalizeWorkingDirForStorage(dirAbs);
   if (!dir || dir.length > MAX_DIR_LEN) return;
   store.invalidateIfChanged();

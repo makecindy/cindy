@@ -24,7 +24,12 @@ it.skipIf(process.platform !== 'darwin')(
       await writeFile(main, `${await readFile(callerPath, 'utf8')}\n${source}\n${tests}`);
       await exec('swiftc', ['-D', 'DESKTOP_INPUT_TEST', main, '-o', binary], { timeout: 120_000 });
       const { stdout } = await exec(binary, [], { timeout: 5000 });
-      expect(stdout.trim()).toBe('native keyboard flags passed');
+      expect(stdout.trim().split('\n')).toEqual([
+        'native keyboard flags passed',
+        'native window confinement passed',
+        'native qr detection passed',
+        'native away input gate passed',
+      ]);
     } finally {
       await rm(directory, { recursive: true, force: true });
     }
@@ -49,6 +54,7 @@ it.skipIf(process.platform !== 'darwin')(
         [],
         ['--check'],
         ['--privacy-input'],
+        ['--away-guard'],
         ['--lock-screen'],
         ['--request-permission'],
         ['--clipboard-version'],

@@ -1,12 +1,37 @@
 {
   "id": "hf-model-search",
-  "match": ["huggingface.co"],
-  "description": "用 Hugging Face 公开 API 搜索模型,返回 JSON 数组(模型 id/下载量/likes)。读接口而非扒页面。",
-  "inputs": { "query": { "required": true } },
-  "steps": [
-    { "action": "navigate", "url": "https://huggingface.co/api/models?search={{query|url}}&limit=20" },
-    { "action": "wait", "loadState": "load" },
-    { "action": "extract", "as": "json", "extract": { "fields": { "body": "body" } } }
+  "match": [
+    "huggingface.co"
   ],
-  "output": "{{json}}"
+  "description": "Top Hugging Face models (downloads / likes / trending / freshness).",
+  "access": "read",
+  "adapter": "hf/models",
+  "adapterInputMap": {
+    "query": "search"
+  },
+  "inputs": {
+    "sort": {
+      "required": false,
+      "type": "string",
+      "default": "downloads",
+      "description": "Sort key: downloads, likes, trending, created_at, last_modified"
+    },
+    "query": {
+      "required": false,
+      "type": "string",
+      "description": "Optional name/owner substring filter (e.g. \"llama\", \"mistralai/\")"
+    },
+    "pipeline": {
+      "required": false,
+      "type": "string",
+      "description": "Filter by pipeline tag (e.g. text-generation, image-classification)"
+    },
+    "limit": {
+      "required": false,
+      "type": "int",
+      "default": 20,
+      "description": "Max models (max 100; one API page)."
+    }
+  },
+  "steps": []
 }

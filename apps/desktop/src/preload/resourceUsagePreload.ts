@@ -48,7 +48,7 @@ function readPreferredSystemLocale(): ApplicationMenuLocale {
   }
 }
 
-const appearanceSnapshot = createAppearanceSnapshotBridge();
+const appearanceSnapshot = createAppearanceSnapshotBridge({ wallpaperAssets: true });
 
 const fanOutFullscreenChange = (cb: (isFullscreen: boolean) => void): (() => void) =>
   onPayload('fullscreen-change', cb);
@@ -78,6 +78,8 @@ contextBridge.exposeInMainWorld('electronAPI', {
         return { success: false, error: String(error), themes: [], diagnostics: [] };
       }
     },
+    onChanged: (cb: (payload: LocalThemesResult) => void): (() => void) =>
+      onPayload('local-themes:changed', cb),
   },
   appShortcuts: {
     getState: (): { overrides: Record<string, unknown>; platform: string } =>

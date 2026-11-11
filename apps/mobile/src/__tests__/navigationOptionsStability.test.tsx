@@ -1,6 +1,7 @@
 // @vitest-environment jsdom
 import { cleanup, render } from '@testing-library/react';
-import type { ReactNode } from 'react';
+import { useMemo, type ReactNode } from 'react';
+import ts from 'typescript';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 const seenScreenOptions: unknown[] = [];
@@ -59,9 +60,26 @@ describe('navigation option stability', () => {
     const { resolve } = await import('node:path');
     const source = await readFile(resolve(process.cwd(), 'app/(auth)/login.tsx'), 'utf8');
 
-    expect(source).toContain("const loginStatusBarOptions = useMemo(() => ({");
-    expect(source).toContain("statusBarStyle: stageTheme === 'dark' ? 'light' : 'dark',");
-    expect(source).toContain("} as const), [stageTheme]);");
-    expect(source).toContain('<Stack.Screen options={loginStatusBarOptions} />');
+    const tree = ts.createSourceFile('login.tsx', source, ts.ScriptTarget.Latest, true, ts.ScriptKind.TSX);
+    let initializer: ts.Expression | undefined;
+    function visit(node: ts.Node) {
+      if (ts.isVariableDeclaration(node) && node.name.getText(tree) === 'loginStatusBarOptions') initializer = node.initializer;
+      ts.forEachChild(node, visit);
+    }
+    visit(tree);
+    if (!initializer) throw new Error('Missing production login status-bar options');
+    const compiled = ts.transpileModule('const options = ' + initializer.getText(tree) + ';', { compilerOptions: { target: ts.ScriptTarget.ES2022 } }).outputText;
+    const optionsFor = new Function('useMemo', 'stageTheme', compiled + '\nreturn options;');
+    function LoginOptions({ stageTheme }: { stageTheme: 'light' | 'dark' }) {
+      return <Screen options={optionsFor(useMemo, stageTheme)} />;
+    }
+    const view = render(<LoginOptions stageTheme="light" />);
+    const initial = seenScreenOptions.at(-1);
+    expect(initial).toMatchObject({ statusBarStyle: 'dark' });
+    view.rerender(<LoginOptions stageTheme="light" />);
+    expect(seenScreenOptions.at(-1)).toBe(initial);
+    view.rerender(<LoginOptions stageTheme="dark" />);
+    expect(seenScreenOptions.at(-1)).not.toBe(initial);
+    expect(seenScreenOptions.at(-1)).toMatchObject({ statusBarStyle: 'light' });
   });
 });

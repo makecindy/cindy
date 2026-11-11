@@ -1,7 +1,7 @@
 import { mkdtempSync, writeFileSync, readFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { readSimEnvironment } from '../../scripts/lib/sim-environment.mjs';
+import { applySimMockArg, readSimEnvironment } from '../../scripts/lib/sim-environment.mjs';
 import { describe, expect, it } from 'vitest';
 import { validateSimMetroIdentity, resolveSimMetroHandoff } from '../../scripts/lib/sim-whoami.mjs';
 
@@ -51,6 +51,21 @@ describe('shared simulator environment', () => {
       writeFileSync(file, 'EXPO_PUBLIC_TEST_VALUE=two\n');
       expect(readSimEnvironment(dir, {}).envFingerprint).not.toBe(first.envFingerprint);
       expect(readFileSync(file, 'utf8')).toBe('EXPO_PUBLIC_TEST_VALUE=two\n');
+    } finally { rmSync(dir, { recursive: true, force: true }); }
+  });
+  // `--mock` is only a bundle env: a Metro started without it must read as stale,
+  // and leaving it off must keep fingerprints of Metros started before the flag existed.
+  it('treats the --mock UI data switch as part of the Metro environment', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'cindy-sim-env-'));
+    try {
+      const env = {} as NodeJS.ProcessEnv;
+      expect(applySimMockArg(['--mock', '--json'], env)).toEqual(['--json']);
+      const real = readSimEnvironment(dir, {}, {} as NodeJS.ProcessEnv);
+      const mock = readSimEnvironment(dir, {}, env);
+      expect([real.uiMock, mock.uiMock]).toEqual([false, true]);
+      expect(mock.envFingerprint).not.toBe(real.envFingerprint);
+      expect(validateSimMetroIdentity({ ...fresh, currentEnvFingerprint: mock.envFingerprint,
+        runningEnvFingerprint: real.envFingerprint }).code).toBe('target-env-stale');
     } finally { rmSync(dir, { recursive: true, force: true }); }
   });
 });

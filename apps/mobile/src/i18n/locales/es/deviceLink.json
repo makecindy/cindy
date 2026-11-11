@@ -1,0 +1,88 @@
+{
+  "cachedHistory": {
+    "title": "Computadora no conectada",
+    "hint": "El contenido guardado está disponible. Conecte su computadora para cargar más."
+  },
+  "recovery": {
+    "syncing": "Sincronizando…",
+    "recovered": "Restaurado",
+    "syncingHint": "Actualización de contenidos desde tu ordenador."
+  },
+  "syncFailed": "Error de sincronización",
+  "resync": "resincronizar",
+  "resyncing": "Resincronización",
+  "syncShort": "Sincronizar",
+  "deviceUnresponsiveTitle": "Aún no hay respuesta",
+  "deviceUnresponsiveHint": "Aún no se ha recibido respuesta. Reintentando automáticamente.",
+  "localNetwork": {
+    "title": "Red telefónica no disponible",
+    "hint": "Verifique la red de su teléfono. La reconexión es automática cuando se recupera."
+  },
+  "serviceConnection": {
+    "title": "No puedo llegar al servicio",
+    "hint": "Su teléfono no puede acceder al servicio en este momento. Reconectándose automáticamente."
+  },
+  "connectStep1": "Instale y abra {{appName}} en su computadora",
+  "connectStep2": "Inicia sesión con la misma cuenta que tu teléfono",
+  "connectStep3": "En Configuración → Conexión remota, active \"Permitir que dispositivos con la misma cuenta controlen esta computadora\"",
+  "brandEyebrow": "Cindy Móvil",
+  "cloudTeaserTitle": "{{appName}} en la nube, próximamente",
+  "cloudTeaserCopy": "Una vez que se inicia, la aplicación móvil funciona por sí sola, no se necesita computadora.",
+  "sectionFirstRun": "Empezar",
+  "sectionOffline": "Dispositivos conectados",
+  "sectionRemoteDisabled": "En tu computadora",
+  "sectionAccessRevoked": "Aprobar acceso nuevamente",
+  "retryAccess": "Reintentar acceso",
+  "recheck": "Comprobar de nuevo",
+  "deviceRemovedTitle": "Dispositivo eliminado",
+  "deviceRemovedHint": "Cierre sesión y vuelva a iniciar sesión para volver a unirse a la lista de dispositivos.",
+  "authFailedTitle": "El inicio de sesión expiró",
+  "authFailedHint": "Su inicio de sesión ha caducado. Cierra sesión y vuelve a iniciar sesión.",
+  "replacedTitle": "Conexión reemplazada",
+  "replacedHint": "La conexión de este dispositivo fue reemplazada en otro lugar. Reconectándonos ahora.",
+  "tooManyConnectionsTitle": "Demasiadas conexiones",
+  "tooManyConnectionsHint": "Hay demasiados dispositivos en línea para esta cuenta. Desconecta otro dispositivo y vuelve a intentarlo.",
+  "versionMismatchTitle": "La versión no coincide",
+  "versionMismatchHint": "Esta versión de la aplicación es incompatible con el servicio. Actualice a la última versión e inténtelo nuevamente.",
+  "unstableTitle": "La conexión sigue cayendo",
+  "unstableHint": "La conexión es inestable. Verifique su red y espere a que se recupere la conexión.",
+  "relay": {
+    "label": {
+      "online": "Relé conectado",
+      "connecting": "Conexión al relé",
+      "stopped": "Relé desconectado"
+    },
+    "hint": {
+      "online": "Las tareas remotas se pueden sincronizar.",
+      "lastSynced": "Última sincronización {{time}}",
+      "connecting": "Las tareas remotas se volverán a suscribir automáticamente cuando la red se recupere.",
+      "stopped": "La conexión se reanudará cuando regrese a la aplicación o inicie sesión nuevamente."
+    }
+  },
+  "agentAuth": {
+    "noKey": "{{agent}} no se puede utilizar porque no hay ninguna clave API configurada en la computadora. Configure uno en {{appName}} en la computadora en Configuración → Proveedores de modelos, luego inténtelo nuevamente.",
+    "noOauth": "{{agent}} no se puede utilizar porque la autorización de la cuenta no está completa en la computadora. Vuelva a conectar la cuenta en {{appName}} en la computadora en Configuración → Proveedores de modelos, luego intente nuevamente.",
+    "noCredentials": "{{agent}} no se puede utilizar porque no se ha iniciado sesión en la computadora. Inicie sesión a través de {{appName}} en la computadora en Configuración → Proveedores de modelos, luego inténtelo nuevamente.",
+    "noEncryption": "{{agent}} no se puede utilizar porque el almacenamiento seguro del sistema en la computadora no está disponible. Verifique el llavero en macOS o el cifrado de cuenta en Windows, luego reinicie {{appName}} en la computadora.",
+    "proxyNotReady": "{{agent}} aún no está listo en la computadora. Vuelva a intentarlo en breve; Si esto continúa, reinicie {{appName}} en la computadora.",
+    "default": "{{agent}} no se puede utilizar porque el inicio de sesión en su computadora no está disponible. Inicie sesión nuevamente a través de {{appName}} en la computadora en Configuración → Proveedores de modelos. ({{reason}})"
+  },
+  "remoteError": {
+    "remoteDisabled": "La computadora remota ha desactivado el control remoto.",
+    "channelNotAllowed": "La versión de escritorio actual no admite esta capacidad remota.",
+    "accessRevoked": "Esta computadora ha revocado el acceso móvil.",
+    "deviceUnresponsive": "Aún no se ha recibido respuesta. Reintentando automáticamente.",
+    "versionMismatch": "La versión del protocolo de servicio no coincide. Actualiza la aplicación y vuelve a intentarlo.",
+    "payloadTooLarge": "Esta transferencia es demasiado grande. Divídelo en partes más pequeñas y vuelve a intentarlo.",
+    "mediaFetchFailed": "No se pudo recuperar el archivo de la computadora. Vuelve a intentarlo más tarde.",
+    "voiceTranscribeFailed": "Error en la transcripción de voz. Inténtalo de nuevo o usa el teclado.",
+    "linkNotOpen": "El enlace de control a la computadora se desconectó y se está reconectando.",
+    "accountChanged": "La cuenta o el espacio de trabajo Codex cambió. Actualiza la cuota y confirma nuevamente.",
+    "offerExpired": "La oferta de reinicio de Codex expiró. Actualiza la cuota y confirma nuevamente.",
+    "preconditionFailed": "Las condiciones de operación cambiaron. Actualiza y confirma nuevamente.",
+    "transient": "La red o la computadora remota no está disponible temporalmente. Sincroniza nuevamente más tarde.",
+    "callFailed": "La llamada remota no finalizó. Inténtalo de nuevo en un momento.",
+    "unclassified": "Esta acción no terminó. Inténtalo de nuevo en un momento.",
+    "notFound": "Ese artículo ya no existe. Vuelva a la lista y actualice antes de volver a intentarlo."
+  }
+}

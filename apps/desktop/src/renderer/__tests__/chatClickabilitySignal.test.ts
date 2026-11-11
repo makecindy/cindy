@@ -78,7 +78,13 @@ describe('聊天正文的可点性信号(DESIGN.md §14.5)', () => {
   });
 
   it('规则⑤:远程会话的点亮判据只有一处,且不在本文件里自己判', () => {
-    const src = stripComments(read(CHAT_BODY_FILES[0]));
+    const renderer = stripComments(read(CHAT_BODY_FILES[0]));
+    // Authored links can recheck on click; the single-source rule applies to
+    // render-time auto-detection, not an explicit attempt to open a file.
+    const src = renderer.slice(
+      renderer.indexOf('function useResolvedMarkdownTarget('),
+      renderer.indexOf('async function activateResolvedLocalTarget('),
+    );
     // 远程会话 fs:stat 回 unknown 时,歧义形状(裸名 `array.map`、分隔符无扩展
     // `and/or`)不得乐观升级成 resolved-local —— 否则加了常显下划线后,普通行内 code
     // 会被展示成可点文件、点了必失败(PR #1144 review 实捉桌面侧漏了这道门槛)。

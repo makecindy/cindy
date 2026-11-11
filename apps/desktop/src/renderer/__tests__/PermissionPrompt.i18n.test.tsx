@@ -45,7 +45,9 @@ describe('PermissionPrompt i18n', () => {
       />,
     );
 
-    expect(screen.getByText('允许 PowerShell？')).toBeTruthy();
+    // Say what happens instead of the harness tool name or its English title.
+    expect(screen.getByText('允许运行这条命令？')).toBeTruthy();
+    expect(screen.getByText('Get-ChildItem')).toBeTruthy();
     expect(screen.getByText('拒绝')).toBeTruthy();
     expect(screen.getByText('本任务总是允许')).toBeTruthy();
     expect(screen.getByText('允许一次')).toBeTruthy();
@@ -53,7 +55,7 @@ describe('PermissionPrompt i18n', () => {
     expect(screen.getByText('Provider-supplied reason stays verbatim.')).toBeTruthy();
   });
 
-  it('preserves an action-specific title when no display name is available', () => {
+  it('replaces English harness file titles with a localized one and shows the path', () => {
     render(
       <PermissionPrompt
         permission={{
@@ -66,8 +68,9 @@ describe('PermissionPrompt i18n', () => {
       />,
     );
 
-    expect(screen.getByText('Allow Codex to edit /tmp/example.txt?')).toBeTruthy();
-    expect(screen.queryByText('允许 file_change？')).toBeNull();
+    expect(screen.getByText('允许修改文件？')).toBeTruthy();
+    expect(screen.getByText('/tmp/example.txt')).toBeTruthy();
+    expect(screen.queryByText('Allow Codex to edit /tmp/example.txt?')).toBeNull();
   });
 
   it('localizes the tool fallback when no richer title is available', () => {
@@ -75,14 +78,47 @@ describe('PermissionPrompt i18n', () => {
       <PermissionPrompt
         permission={{
           requestId: 'permission-3',
-          toolName: 'Bash',
-          input: { command: 'pwd' },
+          toolName: 'WebFetch',
+          input: { url: 'https://example.com' },
         }}
         onRespond={vi.fn()}
       />,
     );
 
-    expect(screen.getByText('允许 Bash？')).toBeTruthy();
+    expect(screen.getByText('允许 WebFetch？')).toBeTruthy();
+  });
+
+  // 2026-10-24: Auto asks showed no reason, so users could not tell why they were asked.
+  it('shows why Auto review asked and names the plugin being called', () => {
+    render(
+      <PermissionPrompt
+        permission={{
+          requestId: 'permission-ask',
+          toolName: 'mcp:cindy:ghost_call',
+          input: { ghost_id: 'cindy-github', tool: 'call_tool', args: { name: 'add_repo_collaborator', args: { username: 'octo' } } },
+          autoReviewReason: '这会给 octo 开通仓库权限，你只让我查看协作者。',
+        }}
+        onRespond={vi.fn()}
+      />,
+    );
+
+    expect(screen.getByText('允许使用插件「cindy-github」？')).toBeTruthy();
+    expect(screen.getByText('自动审批需要你决定：这会给 octo 开通仓库权限，你只让我查看协作者。')).toBeTruthy();
+    expect(screen.getByText('add_repo_collaborator {"username":"octo"}')).toBeTruthy();
+  });
+
+  // The shared MCP classifier used to overwrite this Host-owned title with “plugin”.
+  // Real permission card, unit tier: preserve the title, exact operation and allow-once response.
+  it('preserves the Host title and operation for an internal MCP confirmation', () => {
+    const onRespond = vi.fn();
+    render(<PermissionPrompt permission={{ requestId: 'mcp-permission',
+      toolName: 'mcp__cindy_scheduler__schedule_delete', title: '确认任务操作',
+      input: { id: 'completed-followup' } }} onRespond={onRespond} />);
+    expect(screen.getByText('确认任务操作')).toBeTruthy();
+    expect(screen.getByText('schedule_delete {"id":"completed-followup"}')).toBeTruthy();
+    expect(screen.queryByText(/允许使用插件/)).toBeNull();
+    fireEvent.click(screen.getByText('允许一次'));
+    expect(onRespond).toHaveBeenCalledExactlyOnceWith({ behavior: 'allow' });
   });
 
   it('keeps the session boundary explicit in the English approval label', async () => {

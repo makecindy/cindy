@@ -49,10 +49,11 @@ function deferredReviewer() {
 }
 
 describe('ToolLoopMonitor', () => {
-  it('interrupts immediately when no reviewer is configured', () => {
+  it('allows suspicion without a reviewer but retains the final limit', () => {
     const t = setup();
-    const verdicts = t.repeatTimes(4);
-    expect(verdicts[3]).toMatchObject({ kind: 'hard', reason: 'consecutive', count: 4, final: false });
+    const verdicts = t.repeatTimes(30);
+    expect(verdicts.slice(0, 29).every((verdict) => verdict.kind === 'ok')).toBe(true);
+    expect(verdicts[29]).toMatchObject({ kind: 'hard', count: 30, final: true });
   });
 
   it('keeps running during review and grants a grace window on continue', async () => {
@@ -85,11 +86,12 @@ describe('ToolLoopMonitor', () => {
     expect(t.stops).toEqual([expect.objectContaining({ reason: 'consecutive', count: 4 })]);
   });
 
-  it('treats reviewer failure and timeout as stop', async () => {
+  it('allows reviewer failure and timeout, with grace and no late stop', async () => {
     const failing = setup(vi.fn<ToolLoopReviewer>(async () => { throw new Error('no model'); }));
     failing.repeatTimes(4);
     await vi.advanceTimersByTimeAsync(0);
-    expect(failing.stops).toHaveLength(1);
+    expect(failing.stops).toHaveLength(0);
+    expect(failing.repeatTimes(20).every((v) => v.kind === 'ok')).toBe(true);
 
     const { reviewer, pending } = deferredReviewer();
     const slow = setup(reviewer);
@@ -97,12 +99,13 @@ describe('ToolLoopMonitor', () => {
     await vi.advanceTimersByTimeAsync(19_999);
     expect(slow.stops).toHaveLength(0);
     await vi.advanceTimersByTimeAsync(1);
-    expect(slow.stops).toHaveLength(1);
+    expect(slow.stops).toHaveLength(0);
     expect(pending[0]?.signal.aborted).toBe(true);
-    // 超时后迟到的 continue 不再生效。
-    pending[0]?.resolve('continue');
+    // 超时后迟到的 STOP 不能误停仍在继续的任务。
+    pending[0]?.resolve('stop');
     await vi.advanceTimersByTimeAsync(0);
-    expect(slow.stops).toHaveLength(1);
+    expect(slow.stops).toHaveLength(0);
+    expect(slow.repeatTimes(20).every((v) => v.kind === 'ok')).toBe(true);
   });
 
   it('returns final verdicts immediately and discards the in-flight review', async () => {
@@ -132,6 +135,29 @@ describe('ToolLoopMonitor', () => {
     pending[0]?.resolve('stop');
     await vi.advanceTimersByTimeAsync(0);
     expect(t.stops).toEqual([]);
+  });
+
+  // greptile P1(#6388):突发重复不计数,但也不能当作「模式已打破」取消进行中的复核。
+  it('keeps a pending review when a burst repeat is ignored', async () => {
+    vi.useFakeTimers();
+    const { reviewer, pending } = deferredReviewer();
+    const stops: HardToolLoopVerdict[] = [];
+    const monitor = new ToolLoopMonitor(new ToolLoopGuard({ burstRepeatGapMs: 2_000 }), {
+      reviewer, context: () => ({ sessionId: 's1', agentKind: 'codex', model: 'm1' }),
+      onReviewedStop: (verdict) => stops.push(verdict), logger,
+    });
+    for (let i = 0; i < 12; i++) {
+      vi.advanceTimersByTime(3_000);
+      monitor.onToolUse(`r${i}`, 'read', { path: 'same.ts' });
+      expect(monitor.onToolResult(`r${i}`, `changed ${i}`).kind).toBe('ok');
+    }
+    expect(reviewer).toHaveBeenCalledTimes(1);
+    monitor.onToolUse('burst', 'read', { path: 'same.ts' });
+    expect(monitor.onToolResult('burst', 'changed again').kind).toBe('ok');
+    expect(pending[0]?.signal.aborted).toBe(false);
+    pending[0]?.resolve('stop');
+    await vi.advanceTimersByTimeAsync(0);
+    expect(stops).toHaveLength(1);
   });
 
   it('discards a pending review once a different call replaces the flagged pattern', async () => {
@@ -204,7 +230,7 @@ describe('ToolLoopMonitor', () => {
     expect(reviewer).toHaveBeenCalledTimes(3);
     const verdicts = t.repeatTimes(21, true);
     expect(verdicts.slice(0, 20).every((verdict) => verdict.kind === 'ok')).toBe(true);
-    expect(verdicts[20]).toMatchObject({ kind: 'hard', reason: 'pingpong', final: false });
+    expect(verdicts[20]).toEqual({ kind: 'ok' });
     expect(reviewer).toHaveBeenCalledTimes(3);
   });
 
@@ -239,7 +265,27 @@ describe('ToolLoopMonitor', () => {
     await vi.advanceTimersByTimeAsync(0);
     expect(reviewer).toHaveBeenCalledTimes(3);
     const verdicts = second.repeatTimes(21, true);
-    expect(verdicts[20]).toMatchObject({ kind: 'hard', reason: 'pingpong', final: false });
+    expect(verdicts[20]).toEqual({ kind: 'ok' });
     expect(reviewer).toHaveBeenCalledTimes(3);
+  });
+
+  // 流式说明属于本轮本 scope，工具后新说明应替换旧说明；缺失时不得带上一轮理由。
+  it('captures the latest streamed explanation with bounded evidence and clears it on a new turn', async () => {
+    const reviewer = vi.fn<ToolLoopReviewer>(async () => 'continue');
+    const t = setup(reviewer);
+    t.monitor.onAssistantText('Old plan.');
+    t.repeat();
+    t.monitor.onAssistantText('The animation ');
+    t.monitor.onAssistantText('is still changing.\n');
+    t.monitor.onAssistantText('x'.repeat(5_000));
+    t.repeatTimes(3);
+    const explanation = reviewer.mock.calls[0]![0].assistantExplanation!;
+    expect(explanation).toMatch(/^The animation is still changing\.\n…\(/);
+    expect(explanation).not.toContain('Old plan.');
+    expect(explanation.length).toBeLessThan(100);
+    await vi.advanceTimersByTimeAsync(0);
+    t.monitor.resetTurn();
+    t.repeatTimes(4);
+    expect(reviewer.mock.calls[1]?.[0].assistantExplanation).toBe('');
   });
 });

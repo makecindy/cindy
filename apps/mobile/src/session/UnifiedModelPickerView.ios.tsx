@@ -1,9 +1,12 @@
+import { NativeErrorNotice } from "@/components/NativeErrorNotice.ios";
+import { ModelSpeedIcon } from "./ModelSpeedIcon";
+import { ModelQuotaBar } from "./ModelQuotaBar";
 import {
   Button,
   HStack,
   Picker,
-  ProgressView,
   RNHostView,
+  Spacer,
   VStack,
   Text,
   TextField,
@@ -18,7 +21,6 @@ import {
   foregroundStyle,
   frame,
   pickerStyle,
-  progressViewStyle,
   tint,
   tag,
   padding,
@@ -166,11 +168,28 @@ export function UnifiedModelPickerView(p: UnifiedMobilePickerViewProps) {
     <>
       {p.error ? (
         <Section>
-          <Text modifiers={[foregroundStyle(colors.errorText)]}>{p.error}</Text>
+          <NativeErrorNotice message={p.error} />
         </Section>
       ) : null}
       {p.groups.map((group) => (
-        <Section key={group.key} title={group.title}>
+        <Section key={group.key} title={group.title} header={group.quota?.summary ? (
+          <HStack spacing={8}>
+            <Text modifiers={[font({ textStyle: 'footnote' }), foregroundStyle(colors.textTertiary)]}>{group.title}</Text>
+            <Spacer/>
+            <Button onPress={() => setPage('sources')} testID={`${p.testID}.group.${group.key}.quota`}
+              modifiers={[buttonStyle('plain'), accessibilityLabel([group.quota.summary, group.quota.resetSoon ? t('models.unified.quotaResetSoon') : null, group.quota.resetDescription].filter(Boolean).join(' · '))]}>
+              <HStack spacing={4}>
+                <Text modifiers={[font({ textStyle: 'caption' }), foregroundStyle(colors.textSecondary)]}>{typeof group.quota.remaining === 'number' ? `${group.quota.remaining}%` : group.quota.summary}</Text>
+                {group.quota.reset && <HStack spacing={4}>
+                  <Text modifiers={[font({ textStyle: 'caption' }), foregroundStyle(colors.textSecondary)]}>· {group.quota.reset.remaining}%</Text>
+                  {!!group.quota.resetParts?.[0] && <Text modifiers={[font({ textStyle: 'caption' }), foregroundStyle(colors.textSecondary)]}>{group.quota.resetParts[0]}</Text>}
+                  <Text modifiers={[font({ textStyle: 'caption' }), foregroundStyle(group.quota.reset.level === 'crit' ? colors.quotaBarCrit : group.quota.reset.level === 'warn' ? colors.quotaBarWarn : colors.textSecondary)]}>{group.quota.reset.time}</Text>
+                  {!!group.quota.resetParts?.[1] && <Text modifiers={[font({ textStyle: 'caption' }), foregroundStyle(colors.textSecondary)]}>{group.quota.resetParts[1]}</Text>}
+                </HStack>}
+              </HStack>
+            </Button>
+          </HStack>
+        ) : undefined}>
           {group.rows.map((row) => (
             <ComposerNativeRow
               key={row.key}
@@ -215,7 +234,14 @@ export function UnifiedModelPickerView(p: UnifiedMobilePickerViewProps) {
                       {row.effortLabel}
                     </Text>
                   ) : null}
-                  {row.config.fast ? mark(Zap, true) : null}
+                  {row.config.fast ? (
+                    <NativeMark>
+                      <ModelSpeedIcon
+                        mode={row.config.fast}
+                        color={colors.textSecondary}
+                      />
+                    </NativeMark>
+                  ) : null}
                 </HStack>
               }
               subtitleContent={
@@ -296,18 +322,21 @@ export function UnifiedModelPickerView(p: UnifiedMobilePickerViewProps) {
             <NativeMark>
               <ProviderSourceMark filter={item} />
             </NativeMark>
-            {item.quota ? (
-              <ProgressView
-                value={item.quota.remaining / 100}
-                modifiers={[
-                  progressViewStyle("linear"),
-                  frame({ width: 24 }),
-                  tint(colors.textSecondary),
-                  accessibilityLabel(item.quota.label),
-                ]}
-                testID={`${p.testID}.source.${item.id}.quota`}
-              />
+            {typeof item.quota?.remaining === 'number' ? (
+              <RNHostView matchContents>
+                <ModelQuotaBar
+                  remaining={item.quota.remaining}
+                  label={item.quota.label}
+                  testID={`${p.testID}.source.${item.id}.quota`}
+                />
+              </RNHostView>
             ) : null}
+            {item.quota?.members?.map((member, index) => typeof member.remaining === 'number' ? (
+              <RNHostView matchContents key={index}>
+                <ModelQuotaBar remaining={member.remaining} label={member.label}
+                  testID={`${p.testID}.source.${item.id}.quota.${index}`} />
+              </RNHostView>
+            ) : null)}
           </VStack>
         ) : (
           mark(
@@ -348,7 +377,7 @@ export function UnifiedModelPickerView(p: UnifiedMobilePickerViewProps) {
     >
       {p.error ? (
         <Section>
-          <Text modifiers={[foregroundStyle(colors.errorText)]}>{p.error}</Text>
+          <NativeErrorNotice message={p.error} />
         </Section>
       ) : null}
       {page === "sources" ? (
@@ -462,12 +491,40 @@ export function UnifiedModelPickerView(p: UnifiedMobilePickerViewProps) {
                 )}
               </Picker>
             ) : null}
-            {options.fastCapable ? (
+            {options.fastCapable &&
+            options.row.entry.capabilities[config.agent]
+              ?.supportsUltrafastMode ? (
+              <Picker
+                label={t("models.options.speed.label")}
+                selection={
+                  config.fast === "ultrafast"
+                    ? "ultrafast"
+                    : config.fast
+                      ? "fast"
+                      : "standard"
+                }
+                onSelectionChange={(value: string) =>
+                  options.onChange({
+                    ...config,
+                    fast:
+                      value === "ultrafast" ? "ultrafast" : value === "fast",
+                  })
+                }
+                modifiers={[pickerStyle("menu"), disabled(p.busy)]}
+                testID={`${p.testID}.speed`}
+              >
+                {(["standard", "fast", "ultrafast"] as const).map((value) => (
+                  <Text key={value} modifiers={[tag(value)]}>
+                    {t(`models.options.speed.${value}`)}
+                  </Text>
+                ))}
+              </Picker>
+            ) : options.fastCapable ? (
               <HStack>
                 {mark(Zap, true)}
                 <Toggle
                   label={t("models.options.fastMode")}
-                  isOn={config.fast}
+                  isOn={!!config.fast}
                   onIsOnChange={(fast) => options.onChange({ ...config, fast })}
                   modifiers={[disabled(p.busy), tint(colors.inputCaret)]}
                   testID={`${p.testID}.fast`}

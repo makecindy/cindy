@@ -25,6 +25,12 @@
     "fastTag": "Fast"
   },
   "options": {
+    "speed": {
+      "label": "Speed",
+      "standard": "Standard",
+      "fast": "Fast",
+      "ultrafast": "Ultrafast"
+    },
     "fastMode": "Fast Mode",
     "fastModeAccessibility": "Fast mode {{model}}",
     "reasoningEffort": "Reasoning Effort",
@@ -63,10 +69,15 @@
     "titleHost": "Run the Agent on “{{host}}” again?",
     "titleHostUnnamed": "Run the Agent on the session’s computer again?",
     "message": "The conversation record on the other computer can’t be moved over, so it continues from a handoff summary. Thinking and similar details may not carry over completely. Takes effect when you send the next message.",
+    "messageNativeHistory": "The full conversation record is copied over and continues from where it left off. If it can’t be restored, it continues from a handoff summary instead, and thinking and similar details may not carry over completely. Takes effect when you send the next message.",
     "confirm": "Switch computer",
     "cancel": "Keep as is"
   },
   "unified": {
+    "accountUnassigned": "Account not assigned",
+    "accountCount_one": "{{count}} account",
+    "accountCount_other": "{{count}} accounts",
+    "accountFallback": "Account {{index}}",
       "favoriteConfiguration": "Favorite This Configuration",
       "savedConfiguration": "Favorited · Tap to Remove",
       "currentConfiguration": "Current Configuration",
@@ -92,6 +103,10 @@
     "recommended": "Recommended",
     "source": "Source",
     "remoteProvider": "{{provider}} · {{device}}",
+    "remoteProviderGroup": "{{provider}} · {{device}} · {{group}}",
+    "providerGroup": "{{provider}} · {{group}}",
+    "groupBadge_one": "Provider Group · {{count}} computer",
+    "groupBadge_other": "Provider Group · {{count}} computers",
     "harness": "Harness",
     "restoreRecommended": "Restore recommended",
     "saveFailed": "Could not save. Please try again.",
@@ -102,6 +117,12 @@
       "hour": "h",
       "minute": "m",
       "second": "s"
-    }
+    },
+    "quotaAverage": "Average remaining {{percent}}%",
+    "quotaUpdating": "Quota updating",
+    "quotaResetSoon": "Resets soon",
+    "quotaResetIn": "Resets in {{duration}}",
+    "quotaAverageHint": "Weekly quota · Equal weight per account",
+    "quotaResetHint": "At the current pace, quota may remain at reset: yellow within 24 hours, red within 6 hours."
   }
 }

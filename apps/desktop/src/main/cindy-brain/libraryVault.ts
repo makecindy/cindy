@@ -25,6 +25,7 @@ import { randomUUID } from 'node:crypto';
 import * as crypto from 'node:crypto';
 import * as fs from 'node:fs';
 import * as path from 'node:path';
+import { replaceFile } from '../utils/replaceFile.js';
 
 import { isSafeGhostRelativePath } from '../../shared/ghost.js';
 import {
@@ -182,6 +183,11 @@ const META_DIR = '.cindy-library';
 const META_FILE = 'meta.json';
 const USAGE_FILE = 'usage.json';
 const TMP_DIR = 'tmp';
+
+/** Host-owned sibling staging is never a user Library entry, even after a crash. */
+export function isLibraryPublishTempName(name: string): boolean {
+  return /^\.cindy-library-publish-[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\.tmp$/.test(name);
+}
 
 /**
  * Library 相对路径校验:isSafeGhostRelativePath 之上再拒 Windows 保留设备名、
@@ -498,7 +504,7 @@ export class LibraryVault {
   /* ── 打开与状态 ─────────────────────────────────────────────────── */
 
   /**
-   * 打开(幂等):建目录骨架 → 清理超龄 staging 残渣 → 读/建 meta → 读/扫
+   * 打开(幂等):建目录骨架 → 读/建 meta → 清理超龄 staging 残渣 → 读/扫
    * 用量账本。meta 存在但读不出/不合法 → unavailable(corrupt),**不重建**。
    */
   async open(): Promise<LibraryResult<{ state: LibraryState; reason: string | null; usedBytes: number; fileCount: number }>> {
@@ -540,6 +546,9 @@ export class LibraryVault {
               ghostId: dirSeg,
             });
             if (existing.ok) {
+              if (this.deps.ghostId && existing.meta.ghostId !== this.deps.ghostId) {
+                return this.customRootUnavailable('binding-moved');
+              }
               this.meta = existing.meta;
               if (existing.usage) customUsage = existing.usage;
             } else if (existing.code === 'MISSING') {
@@ -599,7 +608,6 @@ export class LibraryVault {
         return { ok: true as const, state: this.state, reason: this.unavailableReason, usedBytes: 0, fileCount: 0 };
       }
       const customOpen = (this.deps.locationKind ?? 'default') === 'custom';
-      if (!customOpen) await this.sweepStaleTmp();
 
       // meta:已存在必须可解析(不可用 ≠ 空);不存在则首建。custom 首次 open 用 held-fd 已写的 meta,不再 path 写。
       if (!this.meta) {
@@ -609,6 +617,7 @@ export class LibraryVault {
         if (
           typeof parsed !== 'object' || parsed === null || parsed.version !== 1 ||
           typeof parsed.ghostId !== 'string' || typeof parsed.createdAt !== 'number'
+          || (this.deps.ghostId !== undefined && parsed.ghostId !== this.deps.ghostId)
         ) {
           throw new Error('malformed meta');
         }
@@ -633,6 +642,8 @@ export class LibraryVault {
         }
       }
       }
+
+      if (!customOpen) await this.sweepStaleTmp();
 
       // 用量:合法账本只读复用;坏/缺才 scan。custom 首次 open 不 persist/unlink。
       let ledger: UsageLedger | null = customUsage;
@@ -902,6 +913,7 @@ export class LibraryVault {
         continue;
       }
       for (const entry of entries) {
+        if (isLibraryPublishTempName(entry.name)) continue;
         if (dir === this.root && entry.name === META_DIR) continue; // 宿主命名空间不入账
         if (++visited > this.limits.usageScanFuse) return { files, bytes, tripped: true };
         const full = path.join(dir, entry.name);
@@ -1098,7 +1110,49 @@ export class LibraryVault {
     });
   }
 
-  async writeCommit(req: { streamId: unknown }): Promise<LibraryResult<{ path: string; bytes: number; sha256: string }>> {
+  /** Host-only streaming import. The public writeBegin contract still requires an exact length. */
+  async importStream(req: {
+    path: string;
+    source: AsyncIterable<Uint8Array>;
+    totalBytes?: number;
+    assertCurrent(): void;
+    onProgress?(bytes: number, total?: number): void;
+  }): Promise<LibraryResult<{ path: string; bytes: number; sha256: string }>> {
+    req.assertCurrent();
+    const opened = await this.writeBegin({ path: req.path, totalBytes: req.totalBytes ?? 0 });
+    if (!opened.ok) return opened;
+    try {
+      req.assertCurrent();
+      const stream = this.streams.get(opened.streamId);
+      if (!stream) return fail('STREAM_INVALID', '文件导入已取消');
+      for await (const incoming of req.source) {
+        req.assertCurrent();
+        for (let offset = 0; offset < incoming.byteLength; offset += this.limits.writeMaxBytes) {
+          const bytes = incoming.subarray(offset, offset + this.limits.writeMaxBytes);
+          if (stream.written + bytes.byteLength > this.limits.streamMaxTotalBytes) {
+            return fail('TOO_LARGE', `文件超出 ${this.limits.streamMaxTotalBytes} 字节上限`);
+          }
+          const disk = await this.checkDiskReserve(bytes.byteLength);
+          req.assertCurrent();
+          if (disk) return disk;
+          if (req.totalBytes === undefined) stream.totalBytes = stream.written + bytes.byteLength;
+          const written = await this.writeChunk({
+            streamId: stream.streamId, seq: stream.nextSeq,
+            content: Buffer.from(bytes).toString('base64'), encoding: 'base64',
+          });
+          req.assertCurrent();
+          if (!written.ok) return written;
+          req.onProgress?.(stream.written, req.totalBytes);
+        }
+      }
+      req.assertCurrent();
+      return await this.writeCommit({ streamId: stream.streamId, assertCurrent: req.assertCurrent });
+    } finally {
+      await this.writeAbort({ streamId: opened.streamId });
+    }
+  }
+
+  async writeCommit(req: { streamId: unknown; assertCurrent?: () => void }): Promise<LibraryResult<{ path: string; bytes: number; sha256: string }>> {
     if (!this.opened) return fail('LIBRARY_UNAVAILABLE', 'Library 未打开(先调用 open)');
     return this.runSerialized(async () => {
       const gate = this.requireWritable();
@@ -1133,12 +1187,21 @@ export class LibraryVault {
       }
       const prior = await this.lstatTarget(resolved.target);
       const existedBytes = prior && prior.isFile() ? prior.size : 0;
+      const publishing = path.join(path.dirname(resolved.target), `.cindy-library-publish-${randomUUID()}.tmp`);
       try {
+        req.assertCurrent?.();
         await fs.promises.mkdir(path.dirname(resolved.target), { recursive: true });
-        await fs.promises.rename(stream.tmpAbs, resolved.target);
+        req.assertCurrent?.();
+        // Native Windows replacement requires distinct siblings. A cross-volume
+        // mount fails this rename before touching the destination; never copy over it.
+        await fs.promises.rename(stream.tmpAbs, publishing);
+        req.assertCurrent?.();
+        await replaceFile(publishing, resolved.target);
       } catch (err) {
         await this.abortStreamUnlocked(stream.streamId).catch(() => {});
         return this.tmpFailure(err, '分块提交失败(主机 IO 错误)');
+      } finally {
+        await fs.promises.rm(publishing, { force: true });
       }
       const after = await this.lstatTarget(resolved.target);
       if (!after || !after.isFile()) {
@@ -1327,7 +1390,7 @@ export class LibraryVault {
     try {
       if (!recursive) {
         const dirents = await fs.promises.readdir(listRoot, { withFileTypes: true });
-        const names = dirents.map((d) => d.name).filter((n) => !(listRoot === base && n === META_DIR)).sort();
+        const names = dirents.map((d) => d.name).filter((n) => !isLibraryPublishTempName(n) && !(listRoot === base && n === META_DIR)).sort();
         for (const name of names) {
           const full = path.join(listRoot, name);
           let st: fs.Stats;
@@ -1364,6 +1427,7 @@ export class LibraryVault {
             continue;
           }
           for (const entry of dirents) {
+            if (isLibraryPublishTempName(entry.name)) continue;
             if (dir === base && entry.name === META_DIR) continue; // 宿主命名空间不可见
             const full = path.join(dir, entry.name);
             const rel = path.relative(base, full).split(path.sep).join('/');
@@ -1482,6 +1546,7 @@ export class LibraryVault {
         continue;
       }
       for (const entry of entries) {
+        if (isLibraryPublishTempName(entry.name)) continue;
         const full = path.join(cur, entry.name);
         if (entry.isDirectory()) stack.push(full);
         else if (entry.isFile()) {

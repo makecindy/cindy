@@ -19,7 +19,7 @@ import path from 'node:path';
 
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
-import type { AgentDeps } from '../../base-agent.js';
+import type { AgentDeps, StartSessionOptions } from '../../base-agent.js';
 import { Session } from '../../../session.js';
 import type { AuthAdapter } from '../../../interfaces/auth-adapter.js';
 import type { AgentEvent } from '../../../types/events.js';
@@ -206,12 +206,19 @@ async function startRewindableSession(
     autoCompactThresholdPct?: number;
     idleTimeoutMs?: number;
     remoteHostId?: string;
+    fastMode?: boolean;
+    fastModePolicy?: StartSessionOptions['fastModePolicy'];
     model?: string;
     effort?: Effort;
     availableModels?: ModelDescriptor[];
     resolveModelContextLimit?: AgentDeps['resolveModelContextLimit'];
+    resolveModelMaxOutputTokens?: AgentDeps['resolveModelMaxOutputTokens'];
+    resolveLocalMcpDuplicateChoices?: AgentDeps['resolveLocalMcpDuplicateChoices'];
+    providerId?: string;
+    resolveModelCompactionPct?: AgentDeps['resolveModelCompactionPct'];
     resolveModelEfforts?: AgentDeps['resolveModelEfforts'];
     shouldHandoffAfterContextAssessment?: (tokens: number, window: number) => boolean;
+    stream?: ReturnType<typeof createControlledStream>;
   } = {},
 ) {
   const configDir = await makeTempDir();
@@ -220,7 +227,7 @@ async function startRewindableSession(
   process.env.XDT_CC_SSE_IDLE_TIMEOUT_MS = String(options.idleTimeoutMs ?? 0);
   const workingDir = await makeTempDir();
 
-  const firstQuery = createFakeQuery();
+  const firstQuery = createFakeQuery(options.stream);
   sdkMock.query.mockReturnValue(firstQuery);
   const remoteStartParams: Array<Record<string, unknown>> = [];
   const remoteCcQueryFactory = options.remoteHostId
@@ -243,19 +250,25 @@ async function startRewindableSession(
     ),
     capabilityAdditions: { availableModels: options.availableModels ?? TEST_MODELS },
     resolveModelContextLimit: options.resolveModelContextLimit,
+    resolveModelMaxOutputTokens: options.resolveModelMaxOutputTokens,
+    resolveLocalMcpDuplicateChoices: options.resolveLocalMcpDuplicateChoices,
+    resolveModelCompactionPct: options.resolveModelCompactionPct,
     ...(options.resolveModelEfforts ? { resolveModelEfforts: options.resolveModelEfforts } : {}),
     ...(remoteCcQueryFactory ? { remoteCcQueryFactory } : {}),
   });
   const handle = await agent.startSession({
     sessionId: 'session-rewind',
     model: options.model ?? 'claude-opus-4-6',
+    ...(options.providerId ? { providerId: options.providerId } : {}),
     ...(options.effort ? { effort: options.effort } : {}),
     workingDir,
     permissionMode: 'acceptEdits',
+    ...(options.fastMode !== undefined ? { fastMode: options.fastMode } : {}),
+    ...(options.fastModePolicy ? { fastModePolicy: options.fastModePolicy } : {}),
     ...(options.remoteHostId ? { remoteHostId: options.remoteHostId } : {}),
   });
 
-  return { agent, handle, firstQuery, infoCalls, remoteStartParams };
+  return { agent, handle, firstQuery, infoCalls, remoteStartParams, workingDir };
 }
 
 afterEach(async () => {
@@ -277,6 +290,211 @@ afterEach(async () => {
 });
 
 describe('ClaudeCodeAgent runtime settings during rewind window', () => {
+  it.each([false, true])('fences an in-flight rewind preview and releases the fence on completion (failure: %s)', async (fail) => {
+    const { agent, handle, firstQuery, workingDir } = await startRewindableSession();
+    let finish!: () => void;
+    const gate = new Promise<void>(resolve => { finish = resolve; });
+    firstQuery.rewindFiles.mockImplementationOnce(async () => {
+      await gate;
+      if (fail) throw new Error('preview failed');
+      return { canRewind: true, filesChanged: [], insertions: 0, deletions: 0 };
+    });
+    const session = new Session({ id: 'preview-idle-release', agentKind: 'claude-code',
+      workDir: workingDir, handle, capabilities: agent.capabilities,
+      logger: createNoopLogger(), turnStallMs: 0 });
+    try {
+      const preview = session.previewRewindFiles('preview-user');
+      await vi.waitFor(() => expect(firstQuery.rewindFiles).toHaveBeenCalledOnce());
+      expect(session.hasPendingHostOperation()).toBe(true);
+      await expect(session.closeIfIdle()).resolves.toBe(false);
+      expect(firstQuery.close).not.toHaveBeenCalled();
+      finish();
+      expect((await preview).canRewind).toBe(!fail);
+      expect(session.hasPendingHostOperation()).toBe(false);
+      await expect(session.closeIfIdle()).resolves.toBe(true);
+    } finally { finish(); await session.close(); }
+  });
+
+  // Idle release must retain the controller's deferred rewind point. Re-enter
+  // the production Session close guard, then verify the next send still forks
+  // at that point on native Claude and a non-Anthropic model route. Unit tier.
+  it.each(['claude-opus-4-6', 'gpt-5.6-sol'])(
+    'keeps a pending rewind through idle close and applies it on next send (%s)', async (model) => {
+      const { agent, handle, firstQuery, workingDir } = await startRewindableSession({
+        model,
+        availableModels: [...TEST_MODELS, { id: 'gpt-5.6-sol', displayName: 'GPT fixture',
+          contextWindow: 256_000, efforts: ['high'], defaultEffort: 'high' }],
+      });
+      const session = new Session({ id: 'rewind-idle-release', agentKind: 'claude-code',
+        workDir: workingDir, handle, capabilities: agent.capabilities,
+        logger: createNoopLogger(), turnStallMs: 0 });
+      try {
+        expect(session.hasPendingHostOperation()).toBe(false);
+        await session.commitRewindFiles('user-before-rewind', 'assistant-rewind-point');
+        expect(firstQuery.close).toHaveBeenCalledOnce();
+        expect(session.isTurnRunning()).toBe(false);
+        await expect(session.closeIfIdle()).resolves.toBe(false);
+        expect(session.getStatus()).toBe('active');
+
+        sdkMock.query.mockReturnValue(createFakeQuery());
+        await session.send('continue after the idle scan');
+        const rebuilt = sdkMock.query.mock.calls[1][0].options;
+        expect(rebuilt.resumeSessionAt).toBe('assistant-rewind-point');
+        expect(rebuilt.forkSession).toBe(true);
+      } finally { await session.close(); }
+    },
+  );
+
+  // Regression: connection metadata reached the catalog, but never the Claude spawn.
+  // Existing window tests do not exercise output limits. Unit SDK-boundary assertions
+  // cover two same-name routes, refresh/removal and the settings-file precedence layer.
+  it.each([undefined, 'ssh-test'])('scopes output limits to the current route (%s)', async (remoteHostId) => {
+    let limit: number | null = 48_000;
+    const { handle, remoteStartParams } = await startRewindableSession({
+      remoteHostId, providerId: 'connection-a',
+      resolveModelMaxOutputTokens: (provider) => provider === 'connection-a' ? limit : 96_000,
+    });
+    try {
+      const start = remoteHostId ? remoteStartParams[0] : sdkMock.query.mock.calls[0][0].options;
+      expect(start.env.CLAUDE_CODE_MAX_OUTPUT_TOKENS).toBe('48000');
+      const settings = remoteHostId ? start.extraOptions.settings : start.settings;
+      expect(settings.env.CLAUDE_CODE_MAX_OUTPUT_TOKENS).toBe('48000');
+      expect(await handle.requiresModelSwitchRebuild?.('claude-opus-4-6')).toBe(false);
+      expect(await handle.requiresModelSwitchRebuild?.('claude-opus-4-6', { providerId: 'connection-b' })).toBe(true);
+      if (remoteHostId) {
+        await expect(handle.setModel?.('claude-opus-4-6', { providerId: 'connection-b' }))
+          .rejects.toThrow('REMOTE_MODEL_SWITCH_ROUTE_CHANGE');
+      }
+      limit = 64_000;
+      expect(await handle.requiresModelSwitchRebuild?.('claude-opus-4-6')).toBe(true);
+      limit = null;
+      expect(await handle.requiresModelSwitchRebuild?.('claude-opus-4-6')).toBe(true);
+    } finally { await handle.close(); }
+  });
+
+  it('restores the original output environment when a live model switch removes the route limit', async () => {
+    const original = process.env.CLAUDE_CODE_MAX_OUTPUT_TOKENS;
+    process.env.CLAUDE_CODE_MAX_OUTPUT_TOKENS = '20000';
+    const { handle, firstQuery } = await startRewindableSession({
+      providerId: 'connection-a',
+      resolveModelMaxOutputTokens: (_provider, model) => model === 'claude-opus-4-6' ? 48_000 : null,
+    });
+    try {
+      void (async () => { for await (const _event of handle.events()) { /* drain */ } })();
+      firstQuery.stream.emit({ type: 'system', subtype: 'init', session_id: 'sdk-output-limit' });
+      await vi.waitFor(() => expect(handle.id).toBe('sdk-output-limit'));
+      await handle.setModel?.('claude-sonnet-5');
+      sdkMock.query.mockReturnValue(createFakeQuery());
+      await handle.send({ type: 'user', content: 'continue with the other model' });
+      const restarted = sdkMock.query.mock.calls[1][0].options;
+      expect(restarted.env.CLAUDE_CODE_MAX_OUTPUT_TOKENS).toBe('20000');
+      expect(restarted.settings.env?.CLAUDE_CODE_MAX_OUTPUT_TOKENS).toBeUndefined();
+      expect(restarted.forkSession).toBe(true);
+      expect(process.env.CLAUDE_CODE_MAX_OUTPUT_TOKENS).toBe('20000');
+    } finally {
+      await handle.close();
+      if (original === undefined) delete process.env.CLAUDE_CODE_MAX_OUTPUT_TOKENS;
+      else process.env.CLAUDE_CODE_MAX_OUTPUT_TOKENS = original;
+    }
+  });
+
+  it.each([96_000, null])('uses the latest route output limit after async rebuild preparation (%s)', async (targetLimit) => {
+    let releasePreparation!: () => void;
+    let enteredPreparation!: () => void;
+    const preparation = new Promise<void>((resolve) => { releasePreparation = resolve; });
+    const entered = new Promise<void>((resolve) => { enteredPreparation = resolve; });
+    const resolveChoices = vi.fn(async () => ({ skipHostServers: [], denyNativeServers: [] }));
+    const { handle } = await startRewindableSession({
+      providerId: 'connection-a',
+      resolveModelMaxOutputTokens: (provider) => provider === 'connection-a' ? 48_000 : targetLimit,
+      resolveLocalMcpDuplicateChoices: resolveChoices,
+    });
+    try {
+      await handle.commitRewindFiles?.('user-output-race', 'assistant-output-race');
+      resolveChoices.mockImplementationOnce(async () => {
+        enteredPreparation();
+        await preparation;
+        return { skipHostServers: [], denyNativeServers: [] };
+      });
+      sdkMock.query.mockReturnValue(createFakeQuery());
+      const send = handle.send({ type: 'user', content: 'continue after route switch' });
+      await entered;
+      await handle.setModel?.('claude-opus-4-6', { providerId: 'connection-b' });
+      releasePreparation();
+      await send;
+      const rebuilt = sdkMock.query.mock.calls[1][0].options;
+      expect(rebuilt.env.CLAUDE_CODE_MAX_OUTPUT_TOKENS)
+        .toBe(targetLimit === null ? process.env.CLAUDE_CODE_MAX_OUTPUT_TOKENS : String(targetLimit));
+      expect(rebuilt.settings.env?.CLAUDE_CODE_MAX_OUTPUT_TOKENS)
+        .toBe(targetLimit === null ? undefined : String(targetLimit));
+      expect(await handle.requiresModelSwitchRebuild?.('claude-opus-4-6', { providerId: 'connection-b' })).toBe(false);
+      await handle.send({ type: 'user', content: 'same route again' });
+      expect(sdkMock.query).toHaveBeenCalledTimes(2);
+    } finally {
+      releasePreparation();
+      await handle.close();
+    }
+  });
+
+  it('retries a rebuild if the output route changes after its spawn snapshot', async () => {
+    const { handle } = await startRewindableSession({
+      providerId: 'connection-a',
+      resolveModelMaxOutputTokens: (provider) => provider === 'connection-a' ? 48_000 : 96_000,
+    });
+    try {
+      await handle.commitRewindFiles?.('user-late-output', 'assistant-late-output');
+      const superseded = createFakeQuery();
+      const finalQuery = createFakeQuery();
+      sdkMock.query.mockImplementationOnce(() => {
+        void handle.setModel?.('claude-opus-4-6', { providerId: 'connection-b' });
+        return superseded;
+      }).mockReturnValue(finalQuery);
+      await handle.send({ type: 'user', content: 'must use the latest output env' });
+      expect(sdkMock.query).toHaveBeenCalledTimes(3);
+      const stale = sdkMock.query.mock.calls[1][0];
+      const ready = sdkMock.query.mock.calls[2][0];
+      expect(stale.options.settings.env.CLAUDE_CODE_MAX_OUTPUT_TOKENS).toBe('48000');
+      expect(stale.prompt.pending).toBe(0);
+      expect(superseded.close).toHaveBeenCalledTimes(1);
+      expect(ready.options.settings.env.CLAUDE_CODE_MAX_OUTPUT_TOKENS).toBe('96000');
+      expect(ready.options.resume).toBe(stale.options.resume);
+      expect(ready.options.resumeSessionAt).toBe('assistant-late-output');
+      expect(ready.prompt.pending).toBe(1);
+      expect(await handle.requiresModelSwitchRebuild?.('claude-opus-4-6', { providerId: 'connection-b' })).toBe(false);
+    } finally { await handle.close(); }
+  });
+
+  it('leaves native subscription output defaults alone', async () => {
+    const { handle } = await startRewindableSession({
+      providerId: 'anthropic', resolveModelMaxOutputTokens: () => 384_000,
+    });
+    try {
+      expect(sdkMock.query.mock.calls[0][0].options.settings.env?.CLAUDE_CODE_MAX_OUTPUT_TOKENS).toBeUndefined();
+    } finally { await handle.close(); }
+  });
+
+  it('keeps the explicit standard override when a suppressed task restarts after relaxation', async () => {
+    const policy = { isAllowed: () => true, isRequestAllowed: () => false, subscribe: () => () => {} };
+    const { handle } = await startRewindableSession({ fastMode: false, fastModePolicy: policy });
+    try {
+      expect(sdkMock.query.mock.calls[0][0].options.settings).toHaveProperty('fastMode', false);
+      expect(handle.getFastMode?.()).toBe(false);
+    } finally { await handle.close(); }
+  });
+
+  it('starts with explicit standard settings, clamps stale Fast enables and never re-enables on relaxation', async () => {
+    let allowed = false;
+    const policy = { isAllowed: () => allowed, subscribe: () => () => {} };
+    const { handle, firstQuery } = await startRewindableSession({ fastMode: true, fastModePolicy: policy });
+    try {
+      expect(sdkMock.query.mock.calls[0][0].options.settings).toHaveProperty('fastMode', false);
+      await handle.setFastMode?.(true);
+      expect(firstQuery.applyFlagSettings).toHaveBeenCalledWith({ fastMode: false });
+      expect(handle.getFastMode?.()).toBe(false);
+      allowed = true;
+      expect(handle.getFastMode?.()).toBe(false);
+    } finally { await handle.close(); }
+  });
   it('does not relabel an in-flight result with a newly saved budget', async () => {
     let budget = 1_000;
     const { handle, firstQuery } = await startRewindableSession({ resolveModelContextLimit: () => budget });
@@ -303,6 +521,42 @@ describe('ClaudeCodeAgent runtime settings during rewind window', () => {
       budget = 140_000;
       expect(await handle.requiresModelSwitchRebuild?.('claude-opus-4-6')).toBe(true);
       budget = null;
+      expect(await handle.requiresModelSwitchRebuild?.('claude-opus-4-6')).toBe(true);
+    } finally { await handle.close(); }
+  });
+
+  it('uses the model compaction policy in the native environment and preserves the legacy fallback', async () => {
+    for (const pct of [75, null]) {
+      sdkMock.query.mockClear();
+      const { handle } = await startRewindableSession({
+        autoCompactThresholdPct: 85,
+        resolveModelCompactionPct: () => pct,
+      });
+      try {
+        expect(sdkMock.query.mock.calls[0]?.[0]?.options?.env.CLAUDE_AUTOCOMPACT_PCT_OVERRIDE).toBe(String(pct ?? 85));
+      } finally { await handle.close(); }
+    }
+  });
+
+  // PR #7460 P1: equal windows do not imply equal native percentage overrides.
+  // Unit: the production rebuild predicate must cover local/SSH and sub-100K scaling;
+  // existing budget tests changed only the window, so missed this same-window switch.
+  it.each([
+    [undefined, 80_000], ['ssh-test', 80_000],
+    [undefined, 200_000], ['ssh-test', 200_000],
+  ] as const)('rebuilds same-window model switches when native compaction differs (%s, %s)', async (remoteHostId, window) => {
+    let pct = 50;
+    const { handle } = await startRewindableSession({
+      remoteHostId,
+      autoCompactThresholdPct: 90,
+      resolveModelContextLimit: () => window,
+      resolveModelCompactionPct: (_provider, model) => model === 'claude-sonnet-5' ? 90 : pct,
+    });
+    try {
+      expect(await handle.requiresModelSwitchRebuild?.('claude-opus-4-6')).toBe(false);
+      expect(await handle.requiresModelSwitchRebuild?.('claude-sonnet-5')).toBe(true);
+      // An in-place preference edit needs the same refresh, even without a model change.
+      pct = 90;
       expect(await handle.requiresModelSwitchRebuild?.('claude-opus-4-6')).toBe(true);
     } finally { await handle.close(); }
   });
@@ -344,6 +598,77 @@ describe('ClaudeCodeAgent runtime settings during rewind window', () => {
         process.env.CLAUDE_AUTOCOMPACT_PCT_OVERRIDE = originalCompactPctOverride;
       }
     }
+  });
+
+  it('keeps a long Claude model catalog off the Windows command line (#9753)', async () => {
+    // Windows CreateProcess rejects a command line over 32767 characters. The SDK
+    // turns an inline settings object into one `--settings <json>` argument, so a
+    // catalog of ~1000 model ids (measured at ~34000 chars) fails spawn with
+    // ENAMETOOLONG before the session starts. A file path stays well under the cap;
+    // the file must carry the same allowlist the inline object would have.
+    const availableModels = Array.from({ length: 1000 }, (_, index) => ({
+      id: `vendor/model-${String(index).padStart(4, '0')}-gateway-route`,
+      displayName: `Model ${index}`,
+      contextWindow: 128_000,
+      efforts: ['high' as const],
+      defaultEffort: 'high' as const,
+    }));
+    const { handle } = await startRewindableSession({
+      model: availableModels[0].id,
+      availableModels,
+    });
+
+    const startArgs = sdkMock.query.mock.calls[0]?.[0] as {
+      options: { settings?: string | { availableModels?: string[] } };
+    };
+    const settings = startArgs.options.settings;
+    expect(typeof settings).toBe('string');
+    const settingsPath = settings as string;
+    expect(settingsPath.length).toBeLessThan(1024);
+    const parsed = JSON.parse(await fs.readFile(settingsPath, 'utf8')) as {
+      availableModels?: string[];
+      apiKeyHelper?: string;
+    };
+    expect(parsed.availableModels).toHaveLength(1000);
+    expect(parsed.availableModels?.[0]).toBe(availableModels[0].id);
+    expect(parsed.availableModels).toContain(availableModels[999].id);
+    expect(parsed.apiKeyHelper).toBe('');
+
+    await handle.close();
+    await vi.waitFor(async () => {
+      await expect(fs.stat(settingsPath)).rejects.toMatchObject({ code: 'ENOENT' });
+    });
+  });
+
+  it('removes the long-catalog settings file when the handle dies without close() (#9753)', async () => {
+    // teardownDeadHandle() sets closed = true before close() is ever called, and
+    // close() returns early in that state — so the dead-handle path has to drop the
+    // temp settings file itself, or every crashed run leaves one behind.
+    const availableModels = Array.from({ length: 1000 }, (_, index) => ({
+      id: `vendor/model-${String(index).padStart(4, '0')}-gateway-route`,
+      displayName: `Model ${index}`,
+      contextWindow: 128_000,
+      efforts: ['high' as const],
+      defaultEffort: 'high' as const,
+    }));
+    const stream = createControlledStream();
+    const { handle } = await startRewindableSession({
+      model: availableModels[0].id,
+      availableModels,
+      stream,
+    });
+    const startArgs = sdkMock.query.mock.calls[0]?.[0] as { options: { settings?: string | object } };
+    const settingsPath = startArgs.options.settings as string;
+    expect(typeof settingsPath).toBe('string');
+    await expect(fs.stat(settingsPath)).resolves.toBeTruthy();
+
+    stream.fail(new Error('transport crashed'));
+
+    await vi.waitFor(async () => {
+      await expect(fs.stat(settingsPath)).rejects.toMatchObject({ code: 'ENOENT' });
+    });
+    // 死亡路径已经删过一次, 宿主后来补的 close() 再删一遍必须是安全的空操作。
+    await expect(handle.close()).resolves.toBeUndefined();
   });
 
   it('keeps the selected and catalog Claude wire models available for a live model switch', async () => {
@@ -579,6 +904,31 @@ describe('ClaudeCodeAgent runtime settings during rewind window', () => {
       /REMOTE_MODEL_SWITCH_ROUTE_CHANGE/,
     );
     expect(handle.model).toBe('claude-fable-5');
+
+    await handle.close();
+  });
+
+  // 宿主在没有可续接回复时只借原生检查点回滚文件,随后自己关闭会话;这里不能 close
+  // Query 或设续接点,否则同一 handle 上的下一次发送会去 resume 一个不存在的时点。
+  it('rolls back files only when the host restarts the native session', async () => {
+    const { handle, firstQuery } = await startRewindableSession();
+
+    await handle.commitRewindFiles?.('user-uuid-1', '', { rewindsToNativeThreadStart: true });
+
+    expect(firstQuery.rewindFiles).toHaveBeenCalledWith('user-uuid-1', { dryRun: false });
+    expect(firstQuery.close).not.toHaveBeenCalled();
+
+    await handle.close();
+  });
+
+  it('surfaces a file restore failure instead of reporting a files-only rewind as done', async () => {
+    const { handle, firstQuery } = await startRewindableSession();
+    firstQuery.rewindFiles.mockRejectedValueOnce(new Error('EACCES: cannot restore'));
+
+    await expect(
+      handle.commitRewindFiles?.('user-uuid-1', '', { rewindsToNativeThreadStart: true }),
+    ).rejects.toThrow('EACCES');
+    expect(firstQuery.close).not.toHaveBeenCalled();
 
     await handle.close();
   });

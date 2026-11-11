@@ -7,6 +7,7 @@ import {
   BotModelSelectionRequiredError,
   duplicateBotProfile,
   getBotProfiles,
+  ensureBotProfilesLoaded,
   removeBotProfile,
   setCanonicalBotSession,
   setBotHidden,
@@ -18,6 +19,9 @@ import { getCachedProvidersSnapshot } from '@/lib/providersSnapshotStore';
 import { getDataOwnerGeneration, setDataOwnerGeneration } from '@/contexts/dataOwnerGeneration';
 import { getPersistedVendorModel } from '@/state/newMakerDraft';
 import { readCachedBotWelcomeContext } from '../botWelcomeContext';
+import { createIpcError } from '../../../../shared/ipc-errors';
+import { getBotLastReadAt, markBotRead, resetBotReadStateForTests, startBotReadStateSync, getBotReadStateSyncStatus } from '../botReadState';
+import { botReadStateFixture } from './botReadStateFixture';
 vi.mock('../botWelcomeContext', () => ({ readCachedBotWelcomeContext: vi.fn() }));
 
 vi.mock('@/state/newMakerDraft', async (importOriginal) => ({
@@ -112,12 +116,44 @@ describe('bot profile store', () => {
       vendorKey: 'pi',
     });
     setProviders([
-      piProvider('xd', true, [piModel('z-ai/glm-5.3-flash')]),
+      piProvider('xd', true, [piModel('auto')]),
     ]);
   });
 
   afterEach(() => {
     for (const id of createdIds.splice(0)) removeBotProfile(id);
+  });
+
+  // R3 / unit: the real profile hydration must not prune another window's read
+  // based on a stale/visibility-filtered list. Existing CRUD tests never hydrated that list.
+  it('keeps a newer companion read position when an older profile list finally resolves', async () => {
+    const previousOwner = getDataOwnerGeneration();
+    setDataOwnerGeneration('read-projection-owner');
+    const reads = botReadStateFixture();
+    let finish!: (rows: unknown[]) => void;
+    const list = vi.fn(() => new Promise<unknown[]>(resolve => { finish = resolve; }));
+    const target = new EventTarget();
+    vi.stubGlobal('window', {
+      addEventListener: target.addEventListener.bind(target), removeEventListener: target.removeEventListener.bind(target),
+      electronAPI: { maker: reads.bridge, localDb: { bots: { list } } },
+      localStorage: { getItem: () => null, length: 0, key: () => null },
+    });
+    resetBotReadStateForTests();
+    const stop = startBotReadStateSync();
+    try {
+      await vi.waitFor(() => expect(getBotReadStateSyncStatus().phase).toBe('ready'));
+      const pending = ensureBotProfilesLoaded(true);
+      await vi.waitFor(() => expect(list).toHaveBeenCalledOnce());
+      markBotRead('new-companion', 300);
+      finish([]); await pending;
+      expect(getBotProfiles()).toEqual([]);
+      expect(getBotLastReadAt('new-companion')).toBe(300);
+    } finally {
+      stop(); resetBotReadStateForTests();
+      const owner = getDataOwnerGeneration();
+      await reads.bridge.botReadState({ owner: { ...owner, dataOwnerId: owner.dataOwnerId! }, action: 'snapshot' });
+      reads.dispose(); vi.unstubAllGlobals(); setDataOwnerGeneration(previousOwner.dataOwnerId, previousOwner.generation);
+    }
   });
 
   it('creates a Bot profile without a fake Session projection', () => {
@@ -143,25 +179,25 @@ describe('bot profile store', () => {
 
     expect(bot.capabilities).toMatchObject({
       harness: 'pi',
-      model: 'z-ai/glm-5.3-flash',
+      model: 'auto',
       providerId: 'xd',
       effort: 'high',
     });
   });
 
-  it('uses Cindy selected default when it is selectable', () => {
+  it('uses the teammate recommendation independently of the new-task draft', () => {
     const bot = addBotProfile({ name: 'Pi Bot', description: '' });
     createdIds.push(bot.id);
 
     expect(bot.capabilities).toMatchObject({
       harness: 'pi',
-      model: 'z-ai/glm-5.3-flash',
+      model: 'auto',
       providerId: 'xd',
       effort: 'high',
     });
   });
 
-  it('does not replace an unavailable Cindy default with another connected model', async () => {
+  it('does not recommend a subscription on an unsupported default harness', async () => {
     setProviders([
       piProvider(
         'openai',
@@ -526,6 +562,36 @@ describe('保存失败只回滚自己那一行', () => {
         next(error);
       };
   }
+
+  it('accepts the saved primary through the existing version check without persisting the intent flag', async () => {
+    const bot = addBotProfile({ name: 'Reselect primary', description: '' });
+    bot.currentVersion = 3;
+    createdIds.push(bot.id);
+    stubDeferredUpdates();
+    const update = vi.fn(async (_input: unknown) => ({ ...bot, currentVersion: 4 }));
+    const api = (globalThis as unknown as { window: { electronAPI: { localDb: { bots: { update: unknown } } } } }).window.electronAPI.localDb.bots;
+    api.update = update;
+    await updateBotProfile(bot.id, { acceptModelSelection: true });
+    expect(update).toHaveBeenCalledWith(expect.objectContaining({ id: bot.id, acceptSavedModelSelectionVersion: 3 }));
+    expect(update.mock.calls[0]?.[0]).not.toHaveProperty('acceptModelSelection');
+    expect(getBotProfiles().find(item => item.id === bot.id)).not.toHaveProperty('acceptModelSelection');
+  });
+
+  it('rereads the local version after model acceptance conflicts so retry does not repeat the stale version', async () => {
+    const bot = addBotProfile({ name: 'Retry primary', description: '' });
+    bot.currentVersion = 1;
+    createdIds.push(bot.id);
+    stubDeferredUpdates();
+    const update = vi.fn(async (_input: unknown) => ({ ...bot, currentVersion: 3 }))
+      .mockRejectedValueOnce(createIpcError('PRECONDITION_FAILED', 'Profile changed'));
+    const get = vi.fn(async () => ({ ...bot, currentVersion: 2 }));
+    Object.assign(window.electronAPI!.localDb!.bots, { update, get });
+    await expect(updateBotProfile(bot.id, { acceptModelSelection: true })).rejects.toMatchObject({ code: 'PRECONDITION_FAILED' });
+    expect(get).toHaveBeenCalledWith(bot.id);
+    expect(getBotProfiles().find(item => item.id === bot.id)?.currentVersion).toBe(2);
+    await updateBotProfile(bot.id, { acceptModelSelection: true });
+    expect(update).toHaveBeenLastCalledWith(expect.objectContaining({ acceptSavedModelSelectionVersion: 2 }));
+  });
 
   it('forwards the editing baseline to Main without adding it to optimistic profile state', async () => {
     const bot = addBotProfile({ name: 'Settings merge', description: '' });

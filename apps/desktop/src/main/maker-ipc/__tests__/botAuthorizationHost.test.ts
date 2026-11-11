@@ -1,6 +1,6 @@
 import { advanceSessionRewindGeneration, withSendToSessionLock } from '../sendToSessionLock';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import type { GhostSetupAssessment } from '../../../shared/ghost';
+import type { GhostSetupAssessment, InstalledGhost } from '../../../shared/ghost';
 import type { BotAuthorizationCard } from '../../../shared/botAuthorization';
 import type { initBotAuthorizationService } from '../botAuthorizationService';
 
@@ -12,13 +12,15 @@ const state = vi.hoisted(() => ({
   login: vi.fn(async () => ({ ok: true })),
   continued: vi.fn(),
   visible: true,
+  ghost: null as InstalledGhost | null,
   realService: false,
   persistedCard: null as BotAuthorizationCard | null,
   deps: null as unknown as Parameters<typeof initBotAuthorizationService>[0],
   execute: vi.fn(async () => ({ ok: true })),
+  addImConnection: vi.fn<(input: unknown) => Promise<unknown>>(async () => ({})),
 }));
 vi.mock('electron', () => ({ shell: { openExternal: vi.fn() } }));
-vi.mock('../../i18n.js', () => ({ t: (key: string) => key }));
+vi.mock('../../i18n.desktop.js', () => ({ t: (key: string) => key }));
 vi.mock('../../logger.js', () => ({ createLogger: () => ({ warn: vi.fn() }) }));
 vi.mock('../botAuthorizationService.js', async (importOriginal) => {
   const actual = await importOriginal<typeof import('../botAuthorizationService.js')>();
@@ -53,20 +55,30 @@ vi.mock('../../cindy-brain/index.js', () => ({
   isGhostAvailableForActiveSession: () => true,
   acquireGhostMutationLeaseForMcp: () => () => {}, captureGhostMutationOwnerForMcp: () => ({}),
 }));
-vi.mock('../../cindy-brain/ghostVisibility.js', () => ({
+vi.mock('../../cindy-brain/ghostVisibility.desktop.js', () => ({
   classifyGhostVisibility: () => state.visible
-    ? { ok: true, ghost: { manifest: { id: 'art', name: 'Art' } } }
+    ? { ok: true, ghost: state.ghost }
     : { ok: false, errorCode: 'GHOST_DISABLED_IN_WORKDIR' },
 }));
 vi.mock('../../cindy-brain/ghostWorkdirPrefs.js', () => ({ isGhostDisabledForWorkdir: () => false }));
 vi.mock('../../cindy-brain/ghostSetupChangeBus.js', () => ({
   getGhostSetupChangeBus: () => ({ subscribe: state.subscribe, currentRevision: () => 1 }),
 }));
-vi.mock('../../maker-host/grok-oauth-login.js', () => ({
+vi.mock('../../maker-host/grok-oauth-login.desktop.js', () => ({
   getGrokAccessToken: vi.fn(), hasGrokOAuthLogin: () => false, runGrokOAuthLogin: state.login,
   getGrokOAuthCredentialGeneration: () => 0, cancelGrokOAuthLogin: vi.fn(),
 }));
+// The real runtime pulls the IM transports; its parser is covered by the settings-page path.
+vi.mock('../../im/shared/botImConnectionRuntime.js', () => ({
+  parseBotImConnectionAddInput: (payload: Record<string, unknown>) => {
+    const input = { ...payload };
+    delete input.service;
+    return input;
+  },
+  addBotImConnection: state.addImConnection,
+}));
 import { initializeBotAuthorizationHost } from '../botAuthorizationHost';
+import { createIpcError } from '../../../shared/ipc-errors';
 
 const target = { kind: 'plugin' as const, id: 'art' };
 describe('authorization Host live plugin policy', () => {
@@ -74,6 +86,10 @@ describe('authorization Host live plugin policy', () => {
     state.assessment.mockReturnValue({ state: 'ready', revision: 1, groups: [] });
     state.subscribe.mockClear();
     state.visible = true;
+    state.ghost = { dir: '/fake/art', namespace: null,
+      manifest: { id: 'art', name: 'Art' },
+      approval: { state: 'approved', revision: '00000000-0000-4000-8000-000000000001' },
+    } as InstalledGhost;
     state.realService = false;
     state.persistedCard = null;
     state.save.mockClear();
@@ -85,6 +101,62 @@ describe('authorization Host live plugin policy', () => {
       await validate();
       state.continued();
     });
+  });
+
+  it.each(['move', 'replace'] as const)('rejects a stale adapter after its physical target changes by %s', async (change) => {
+    state.ghost = { ...state.ghost!, namespace: 'acme' };
+    const adapter = await state.deps.adapter('session', { kind: 'plugin', id: 'art', namespace: 'acme' });
+    state.ghost = change === 'move'
+      ? { ...state.ghost, dir: '/fake/_ns/acme/art' }
+      : { ...state.ghost, approval: { state: 'approved', revision: '00000000-0000-4000-8000-000000000002' } };
+    await expect(adapter.assess()).rejects.toThrow();
+    await expect(adapter.execute({ id: 'save', kind: 'inline_form' } as never,
+      undefined, 'synthetic-secret')).rejects.toThrow();
+    expect(state.execute).not.toHaveBeenCalled();
+    const current = await state.deps.adapter('session', { kind: 'plugin', id: 'art', namespace: 'acme' });
+    await expect(current.assess()).resolves.toMatchObject({ state: 'ready' });
+  });
+
+  it.each(['move', 'replace'] as const)('restores a moved card but rejects a changed approval (%s)', async (change) => {
+    state.realService = true;
+    state.ghost = { ...state.ghost!, namespace: 'acme' };
+    state.save.mockImplementation(async (_sessionId, message) => {
+      state.persistedCard = structuredClone(message.agentMeta.botAuthorization);
+    });
+    state.assessment.mockReturnValue({ state: 'required', revision: 1, groups: [{
+      id: 'account', mode: 'any_of', items: [{ ref: 'oauth:account', kind: 'oauth', label: 'Account', state: 'missing',
+        actions: [{ id: 'connect', kind: 'oauth_connect' }] }],
+    }] });
+    const service = initializeBotAuthorizationHost(async () => {});
+    const sender = { id: 1, isDestroyed: () => false, send: vi.fn() };
+    try {
+      await service.request('session', { kind: 'plugin', id: 'art', namespace: 'acme' });
+      const original = structuredClone(state.persistedCard!);
+      service.invalidatePlugin('art');
+      state.ghost = change === 'move' ? { ...state.ghost!, dir: '/fake/_ns/acme/art' }
+        : { ...state.ghost!, approval: { state: 'approved', revision: 'replacement' } };
+      const action = { kind: 'plugin_setup' as const, action: 'run_action' as const,
+        actionId: original.snapshot.steps[0]!.action!.id, expectedRevision: original.snapshot.revision };
+      expect(await service.resolve(original.snapshot.requestId, action, sender)).toBe(change === 'move');
+      expect(state.execute).not.toHaveBeenCalled();
+      const restored = state.persistedCard!;
+      if (change === 'replace') {
+        expect(restored.snapshot.terminal).toBe(true);
+        return;
+      }
+      expect(restored.snapshot.ghost.id).toBe('_ns__acme__art');
+      expect(restored.snapshot.revision).toBeGreaterThan(original.snapshot.revision);
+      expect(await service.resolve(restored.snapshot.requestId, { ...action, expectedRevision: restored.snapshot.revision }, sender)).toBe(true);
+      await vi.waitFor(() => expect(state.execute).toHaveBeenCalledTimes(1));
+      expect(state.execute).toHaveBeenCalledWith(expect.objectContaining({ ghostId: '_ns__acme__art' }));
+      expect(await service.resolve(restored.snapshot.requestId, {
+        kind: 'plugin_setup', action: 'cancel', expectedRevision: state.persistedCard!.snapshot.revision,
+      }, sender)).toBe(true);
+      expect(state.persistedCard!.snapshot.terminal).toBe(true);
+    } finally {
+      await service.dispose();
+      state.save.mockReset();
+    }
   });
 
   it('runs the real Host and card lifecycle: dynamic plugin login saves a card and completion resumes once', async () => {
@@ -239,5 +311,92 @@ describe('authorization Host live plugin policy', () => {
     expect(state.execute).toHaveBeenCalledTimes(1);
     state.visible = false;
     await expect(state.deps.adapter('session', { kind: 'host', id: 'grok' })).resolves.toMatchObject({ identity: { id: 'grok' } });
+  });
+
+  describe('messaging platform connection (im-<channel>)', () => {
+    const TOKEN = '123456789:AAFakeTelegramTokenForCardTests_x';
+    const OWNER = '424242';
+    const imTarget = { kind: 'host' as const, id: 'im-telegram' as const };
+    const saved: string[] = [];
+    let resumed: BotAuthorizationCard[] = [];
+    const fill = async (service: ReturnType<typeof initializeBotAuthorizationHost>, key: string, value: string) => {
+      const card = state.persistedCard!;
+      const step = card.snapshot.steps.find(s => s.action?.id === `im-telegram:${key}`)!;
+      expect(step.action?.kind).toBe('inline_form');
+      const revision = card.snapshot.revision;
+      expect(await service.submit(card.snapshot.requestId, { actionId: step.action!.id, expectedRevision: revision, value })).toBe(true);
+      await vi.waitFor(() => expect(state.persistedCard!.snapshot.steps.some(s => s.phase === 'action_running')).toBe(false));
+      await vi.waitFor(() => expect(state.persistedCard!.snapshot.revision).toBeGreaterThan(revision + 1));
+    };
+    const start = async () => {
+      state.realService = true;
+      saved.length = 0;
+      resumed = [];
+      state.addImConnection.mockReset().mockResolvedValue({});
+      state.save.mockImplementation(async (_sessionId, message) => {
+        saved.push(JSON.stringify(message));
+        state.persistedCard = structuredClone(message.agentMeta.botAuthorization);
+      });
+      const service = initializeBotAuthorizationHost(async (card, validate) => {
+        await validate();
+        resumed.push(card);
+      });
+      const result = await service.request('session', imTarget);
+      expect(result).toMatchObject({ ok: false, errorCode: 'SETUP_REQUIRED' });
+      return service;
+    };
+
+    it('collects each field on the trusted card, adds the connection for the session teammate once, then resumes', async () => {
+      const service = await start();
+      try {
+        expect(state.persistedCard!.snapshot.steps.map(s => [s.title, s.action?.kind])).toEqual([
+          ['bots.channels.add.telegram.tokenLabel', 'inline_form'],
+          ['bots.channels.add.telegram.ownerLabel', 'inline_form'],
+        ]);
+        await fill(service, 'token', ` ${TOKEN} `);
+        expect(state.addImConnection).not.toHaveBeenCalled();
+        expect(state.persistedCard!.snapshot.steps.find(s => s.title.endsWith('tokenLabel'))?.phase).toBe('satisfied');
+        await fill(service, 'ownerUserId', OWNER);
+        await vi.waitFor(() => expect(resumed).toHaveLength(1));
+        // The Host-resolved teammate, never a model-supplied identity.
+        expect(state.addImConnection).toHaveBeenCalledTimes(1);
+        expect(state.addImConnection).toHaveBeenCalledWith({ botId: 'bot', channel: 'telegram', token: TOKEN, ownerUserId: OWNER });
+        await vi.waitFor(() => expect(state.persistedCard!.snapshot.terminal).toBe(true));
+        const { buildBotAuthorizationContinuation } = await import('../botAuthorizationService');
+        const continuation = JSON.stringify(buildBotAuthorizationContinuation(resumed[0]!));
+        for (const text of [...saved, continuation]) {
+          expect(text).not.toContain(TOKEN.slice(10));
+          expect(text).not.toContain(OWNER);
+        }
+      } finally {
+        await service.dispose();
+        state.save.mockReset();
+      }
+    });
+
+    it('shows a rejected value or failed connection on the card and asks for the fields again', async () => {
+      const service = await start();
+      try {
+        await fill(service, 'ownerUserId', '@not-numeric');
+        expect(state.persistedCard!.snapshot.steps.find(s => s.action?.id === 'im-telegram:ownerUserId'))
+          .toMatchObject({ phase: 'failed', errorCode: 'INLINE_INVALID' });
+        state.addImConnection.mockRejectedValueOnce(
+          createIpcError('PRECONDITION_FAILED', 'TOKEN_IN_USE: this Telegram bot is already connected on this computer'));
+        await fill(service, 'token', TOKEN);
+        await fill(service, 'ownerUserId', OWNER);
+        expect(state.addImConnection).toHaveBeenCalledTimes(1);
+        expect(state.persistedCard!.snapshot.steps.find(s => s.action?.id === 'im-telegram:ownerUserId'))
+          .toMatchObject({ phase: 'failed', errorCode: 'AUTH_FAILED' });
+        expect(resumed).toHaveLength(0);
+        // The values were used once: entering only the owner again cannot reconnect with the old token.
+        await fill(service, 'ownerUserId', OWNER);
+        expect(state.addImConnection).toHaveBeenCalledTimes(1);
+        expect(state.persistedCard!.snapshot.steps.find(s => s.action?.id === 'im-telegram:token')?.phase).toBe('pending');
+        expect(saved.join('')).not.toContain(TOKEN.slice(10));
+      } finally {
+        await service.dispose();
+        state.save.mockReset();
+      }
+    });
   });
 });

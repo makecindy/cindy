@@ -1,16 +1,29 @@
 {
   "id": "steam-search",
-  "match": ["store.steampowered.com"],
-  "description": "按关键词搜索 Steam 商店里的游戏/应用(名称/AppID/价格/平台/Metacritic 评分/详情页链接)。走 Steam 公开商店搜索接口 storesearch,无需登录;价格字段是货币最小单位整数(如 999=$9.99)。",
-  "inputs": { "query": { "required": true } },
-  "steps": [
-    { "action": "navigate", "url": "https://store.steampowered.com/" },
-    { "action": "wait", "loadState": "load" },
-    {
-      "action": "evaluate",
-      "as": "items",
-      "fn": "async () => { const r = await fetch('/api/storesearch/?cc=us&l=english&term=' + encodeURIComponent('{{query|js}}'), { credentials: 'include' }); const t = await r.text(); let d; try { d = JSON.parse(t); } catch (e) { throw new Error('Steam 返回非 JSON(被风控挡),请稍后重试或在持久浏览器里正常访问 store.steampowered.com'); } return (d && d.items ? d.items : []).map(g => ({ appid: g.id, name: g.name, type: g.type, price: g.price ? g.price.final : null, currency: g.price ? g.price.currency : '', metascore: g.metascore || '', platforms: g.platforms ? Object.keys(g.platforms).filter(k => g.platforms[k]).join(',') : '', url: g.id ? 'https://store.steampowered.com/app/' + g.id : '' })); }"
-    }
+  "match": [
+    "store.steampowered.com"
   ],
-  "output": "{{items}}"
+  "description": "Search the Steam storefront by name keyword",
+  "access": "read",
+  "adapter": "steam/search",
+  "inputs": {
+    "query": {
+      "required": true,
+      "type": "str",
+      "description": "Search keyword (e.g. \"portal\", \"stardew\")"
+    },
+    "limit": {
+      "required": false,
+      "type": "int",
+      "default": 20,
+      "description": "Max results (1-50)"
+    },
+    "currency": {
+      "required": false,
+      "type": "str",
+      "default": "us",
+      "description": "Storefront country code (e.g. us / cn / jp / de)"
+    }
+  },
+  "steps": []
 }

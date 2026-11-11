@@ -1,7 +1,7 @@
 import { getSessionRewindGeneration, withSendToSessionLock } from './sendToSessionLock.js';
 import { shell } from 'electron';
-import { t } from '../i18n.js';
-import { and, eq, isNull, ne, or, gt, like, desc } from 'drizzle-orm';
+import { t } from '../i18n.desktop.js';
+import { and, eq, inArray, isNull, ne, or, gt, like, desc } from 'drizzle-orm';
 import { getDbClient } from '../localDb/client/current.js';
 import { botSessionLinks, botProfiles, sessions, messages } from '../localDb/schema.js';
 import {
@@ -24,7 +24,9 @@ import {
   captureGhostMutationOwnerForMcp,
 } from '../cindy-brain/index.js';
 import { getGhostSetupChangeBus } from '../cindy-brain/ghostSetupChangeBus.js';
-import { classifyGhostVisibility } from '../cindy-brain/ghostVisibility.js';
+import { ghostInstallApprovalToken } from '../../shared/ghost.js';
+import { classifyGhostVisibility } from '../cindy-brain/ghostVisibility.desktop.js';
+import { installedGhostStoragePart, installedGhostMutationTargetToken } from '../../shared/pluginIdentity.js';
 import { isGhostDisabledForWorkdir } from '../cindy-brain/ghostWorkdirPrefs.js';
 import {
   getGrokAccessToken,
@@ -32,35 +34,18 @@ import {
   runGrokOAuthLogin,
   getGrokOAuthCredentialGeneration,
   cancelGrokOAuthLogin,
-} from '../maker-host/grok-oauth-login.js';
+} from '../maker-host/grok-oauth-login.desktop.js';
 import { toReauthInteractionAssessment } from '../cindy-brain/ghostSetupCoordinator.js';
 import { initBotAuthorizationService } from './botAuthorizationService.js';
-import { readBotAuthorizationCard } from '../../shared/botAuthorization.js';
+import { botAuthorizationImChannel, readBotAuthorizationCard } from '../../shared/botAuthorization.js';
+import { createBotImAuthorizationAdapter } from './botImAuthorization.js';
 import type { BotAuthorizationCard } from '../../shared/botAuthorization.js';
 import { sanitizeGhostSetupSnapshotForDesktop } from '../cindy-brain/ghostSetupInteractionBridge.js';
 import { createLogger } from '../logger.js';
 const log = createLogger('bot-authorization');
 
-/** Uses the canonical DB link, never an agent-supplied bot identity. */
-export async function isBotAuthorizationSession(sessionId: string): Promise<boolean> {
-  const [row] = await getDbClient()
-    .drizzle.select({ id: botSessionLinks.botId, status: botProfiles.status })
-    .from(botSessionLinks)
-    .innerJoin(sessions, eq(sessions.id, botSessionLinks.sessionId))
-    .innerJoin(botProfiles, eq(botProfiles.id, botSessionLinks.botId))
-    .where(
-      and(
-        eq(botSessionLinks.sessionId, sessionId),
-        eq(botSessionLinks.role, 'canonical'),
-        isNull(botSessionLinks.archivedAt),
-        ne(sessions.status, 'deleted'),
-        ne(sessions.status, 'archived'),
-        isNull(sessions.remoteHostId),
-      ),
-    )
-    .limit(1);
-  return row?.status === 'active';
-}
+export { isBotAuthorizationSession } from './botAuthorizationIdentity.js';
+import { isBotAuthorizationSession, readBotAuthorizationBot } from './botAuthorizationIdentity.js';
 
 /** Adapts existing Host credentials and plugin configuration into the same card lifecycle. */
 export function initializeBotAuthorizationHost(
@@ -88,6 +73,17 @@ export function initializeBotAuthorizationHost(
       ownerScopes.set(sessionId, scope);
       await assertSession(sessionId);
       const bus = getGhostSetupChangeBus();
+      const imChannel = target.kind === 'host' ? botAuthorizationImChannel(target.id) : null;
+      if (imChannel) {
+        const bot = await readBotAuthorizationBot(sessionId);
+        if (!bot) throw new Error('Authorization owner or teammate is unavailable');
+        return createBotImAuthorizationAdapter({
+          channel: imChannel,
+          bot,
+          assertSession: () => assertSession(sessionId),
+          currentBotId: async () => (await readBotAuthorizationBot(sessionId))?.id ?? null,
+        });
+      }
       if (target.kind === 'host') {
         if (target.id !== 'grok') throw new Error('Unsupported Host connection');
         const credentialGeneration = getGrokOAuthCredentialGeneration();
@@ -155,27 +151,34 @@ export function initializeBotAuthorizationHost(
         .from(sessions)
         .where(eq(sessions.id, sessionId))
         .limit(1);
-      const validate = async () => {
+      const validate = async (expectedTarget?: string | null) => {
         await assertSession(sessionId);
         const result = classifyGhostVisibility(target.id, session?.workingDir ?? null, {
           listGhosts: () => getGhostManager().list(),
           isAvailableForActiveSession: isGhostAvailableForActiveSession,
           isDisabledForWorkdir: isGhostDisabledForWorkdir,
-        });
+        }, target.namespace);
         if (!result.ok) throw new Error('Plugin is unavailable');
+        if (expectedTarget !== undefined && (expectedTarget === null ||
+            installedGhostMutationTargetToken(result.ghost, '') !== expectedTarget)) {
+          throw new Error('Authorization plugin instance changed');
+        }
         return result.ghost;
       };
       const ghost = await validate();
+      const expectedTarget = installedGhostMutationTargetToken(ghost, '');
+      const instanceId = installedGhostStoragePart(ghost);
       let reconnected = false;
       return {
+        pluginApprovalToken: ghostInstallApprovalToken(ghost.approval),
         identity: {
-          id: target.id,
+          id: instanceId,
           name: ghost.manifest.name,
           ...(ghost.iconDataUrl ? { iconDataUrl: ghost.iconDataUrl } : {}),
         },
         async assess() {
-          await validate();
-          const assessment = getGhostSetupAssessment(target.id);
+          await validate(expectedTarget);
+          const assessment = getGhostSetupAssessment(instanceId);
           if (!target.reauthorize) return assessment;
           const suggested = toReauthInteractionAssessment(assessment);
           // A plugin-wide OAuth event (or successful action) cannot satisfy a
@@ -196,12 +199,12 @@ export function initializeBotAuthorizationHost(
           return groups.length ? { ...assessment, state: 'required' as const, groups } : assessment;
         },
         subscribe: (wake) =>
-          bus.subscribe(target.id, (event) => {
+          bus.subscribe(instanceId, (event) => {
             if (event.source === 'oauth') reconnected = true;
             wake();
           }),
         async execute(action, sender, value, onAuthorizationUrl, assertCurrent, beforeCommit) {
-          await validate();
+          await validate(expectedTarget);
           assertCurrent?.();
           const release = acquireGhostMutationLeaseForMcp(captureGhostMutationOwnerForMcp());
           try {
@@ -209,14 +212,14 @@ export function initializeBotAuthorizationHost(
               if (value === undefined) return { ok: false, errorCode: 'INLINE_UNAVAILABLE' };
               return await executeGhostSetupInlineAction({
                 sessionId,
-                ghostId: target.id,
+                ghostId: instanceId,
                 action,
                 value,
               });
             }
             const result = await executeGhostSetupAction({
               sessionId,
-              ghostId: target.id,
+              ghostId: instanceId,
               action,
               responseTarget: sender,
               onAuthorizationUrl,
@@ -327,6 +330,7 @@ export function initializeBotAuthorizationHost(
           !card.snapshot.terminal &&
           card.target.kind === target.kind &&
           card.target.id === target.id &&
+          (card.target.kind !== 'plugin' || card.target.namespace === (target.kind === 'plugin' ? target.namespace : undefined)) &&
           !!card.target.reauthorize === !!target.reauthorize
         )
           return card;

@@ -1,4 +1,5 @@
 import { useEffect } from 'react';
+import { MODEL_FAVORITE_TEXT_MAX_LENGTH } from '@cindy/device-link';
 import {
   getDataOwnerGeneration,
   isDataOwnerPushStampCurrent,
@@ -14,7 +15,9 @@ export function useModelFavoritesHost(): void {
         if (Date.now() > request.expiresAt || !isDataOwnerPushStampCurrent(request.ownerStamp))
           throw new Error('Expired favorite request');
         const items = accessHostModelFavorites(request.ownerStamp.dataOwnerId, request.mutation);
-        api.reply({ requestId: request.requestId, items: [...items] });
+        // Long local composite sources cannot be represented by the existing wire
+        // protocol. Keep them on disk without breaking older readers' entire list.
+        api.reply({ requestId: request.requestId, items: items.filter((item) => item.providerId.length <= MODEL_FAVORITE_TEXT_MAX_LENGTH) });
       } catch {
         api.reply({ requestId: request.requestId, failed: true });
       }

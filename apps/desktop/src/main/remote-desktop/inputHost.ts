@@ -10,7 +10,7 @@ import type {
   RemoteDesktopDisplayMode,
 } from '@cindy/device-link';
 import { HumanDesktopInput } from './inputOwnership';
-import { resolveLinuxInputBinary } from './linuxInput';
+import { resolveLinuxInputBinary, isX11Desktop, x11InputGeometry } from './linuxInput';
 import { readLinuxUnlockState } from './linuxCredentials';
 import { WAYLAND_DISPLAY_ID } from './waylandCapture';
 import {
@@ -28,13 +28,30 @@ import {
 } from './windowsHost';
 
 const exec = promisify(execFile);
-const binaryName =
+const inputBinaryName = () =>
   process.platform === 'darwin' ? 'cindy-macos-desktop-input' : 'cindy-windows-desktop-input.exe';
 let build: Promise<string> | null = null;
 async function resolveBinary(): Promise<string> {
   if (process.platform === 'linux') return resolveLinuxInputBinary();
   if (app.isPackaged)
-    return path.join(process.resourcesPath, 'tools', 'remote-desktop', binaryName);
+    return path.join(process.resourcesPath, 'tools', 'remote-desktop', inputBinaryName());
+  if (process.platform === 'darwin') {
+    // Personal source releases run writable JS, but their input helper is sealed
+    // inside the stable signed shell. Never silently replace it with a cache build.
+    let personal: { capabilities?: { desktopInput?: boolean } } | undefined;
+    try {
+      personal = JSON.parse(
+        await fs.readFile(path.join(app.getAppPath(), 'resources/personal-native.json'), 'utf8'),
+      );
+    } catch {
+      /* Ordinary source checkout, or legacy personal runtime. */
+    }
+    if (personal?.capabilities?.desktopInput === true) {
+      const shipped = path.join(process.resourcesPath, 'tools', 'remote-desktop', inputBinaryName());
+      await fs.access(shipped);
+      return shipped;
+    }
+  }
   if (build) return build;
   const resolve = async () => {
     const sourceRoot = path.join(app.getAppPath(), 'native', 'remote-desktop');
@@ -59,6 +76,7 @@ async function resolveBinary(): Promise<string> {
     digest.update(callerSource);
     if (process.platform === 'darwin') digest.update(process.execPath).update('dev-caller-v1');
     if (process.platform === 'win32') {
+      digest.update(await fs.readFile(path.join(sourceRoot, '.cargo', 'config.toml')));
       digest.update(await fs.readFile(path.join(sourceRoot, 'windows-input', 'src', 'desktop.rs')));
       digest.update(await fs.readFile(path.join(sourceRoot, 'windows-input', 'src', 'privacy.rs')));
       digest.update(
@@ -69,7 +87,7 @@ async function resolveBinary(): Promise<string> {
     }
     const hash = digest.digest('hex');
     const directory = path.join(app.getPath('userData'), 'remote-desktop', 'native', hash);
-    const binary = path.join(directory, binaryName);
+    const binary = path.join(directory, inputBinaryName());
     try {
       await fs.access(binary);
       return binary;
@@ -103,6 +121,8 @@ async function resolveBinary(): Promise<string> {
           'build',
           '--release',
           '--locked',
+          '--config',
+          path.join(sourceRoot, '.cargo', 'config.toml'),
           '--manifest-path',
           manifest,
           '--target-dir',
@@ -110,7 +130,7 @@ async function resolveBinary(): Promise<string> {
         ],
         { timeout: 180_000 },
       );
-      await fs.copyFile(path.join(directory, 'build', 'release', binaryName), temporary);
+      await fs.copyFile(path.join(directory, 'build', 'release', inputBinaryName()), temporary);
     }
     await fs.rename(temporary, binary);
     return binary;
@@ -213,25 +233,46 @@ export class DesktopInputHost {
   private heartbeat: ReturnType<typeof setInterval> | null = null;
   private stopping: Promise<void> = Promise.resolve();
   private privacyPaused = false;
+  private x11Geometry: string[] | null = null;
   private linuxPoint: ((x: number, y: number) => { x: number; y: number }) | null = null;
+  /** 代输入 live view: the helper confines input to this window and maps 0–1 fractions itself. */
+  private window: { windowId: number; pid: number } | null = null;
   constructor(
     private readonly onFailure: () => void,
     private readonly runtime: {
       platform?: NodeJS.Platform;
       resolveBinary(): Promise<string>;
-      spawn(binary: string): ChildProcessWithoutNullStreams;
+      spawn(binary: string, args?: string[]): ChildProcessWithoutNullStreams;
     } = {
       resolveBinary,
-      spawn: (binary: string) => spawn(binary, [], { stdio: 'pipe', windowsHide: true }),
+      spawn: (binary: string, args: string[] = []) =>
+        spawn(binary, args, { stdio: 'pipe', windowsHide: true }),
     },
+    /** The whole-display pointer positions (global DIP) of one batch, reported as that
+     * batch starts its native injection, i.e. after every earlier batch has finished.
+     * The returned callback runs once the batch has finished (or failed) injecting. */
+    private readonly onPointer?: (points: { x: number; y: number }[]) => (() => void) | void,
   ) {}
-  async start(displayId: string): Promise<void> {
+  async start(displayId: string, window?: { windowId: number; pid: number }): Promise<void> {
     this.stop();
     const platform = this.runtime.platform ?? process.platform;
     if (platform !== 'darwin' && platform !== 'win32' && platform !== 'linux')
       throw new Error('DESKTOP_INPUT_UNSUPPORTED');
+    // Only the macOS helper can keep input inside one window.
+    if (
+      window &&
+      (platform !== 'darwin' ||
+        !Number.isSafeInteger(window.windowId) ||
+        window.windowId <= 0 ||
+        window.windowId > 0xffff_ffff ||
+        !Number.isSafeInteger(window.pid) ||
+        window.pid <= 0)
+    )
+      throw new Error('DESKTOP_INPUT_UNSUPPORTED');
+    const x11 = platform === 'linux' && isX11Desktop(platform);
     if (
       platform === 'linux' &&
+      !x11 &&
       displayId !== WAYLAND_DISPLAY_ID &&
       !/^hyprland:[A-Za-z0-9_.-]{1,80}$/.test(displayId)
     )
@@ -245,7 +286,8 @@ export class DesktopInputHost {
     if (generation !== this.generation) throw new Error('DESKTOP_LEASE_EXPIRED');
     this.activity = new HumanDesktopInput();
     try {
-      if (platform === 'linux' && displayId !== WAYLAND_DISPLAY_ID) {
+      this.x11Geometry = x11 ? x11InputGeometry(screen.getAllDisplays(), displayId) : null;
+      if (platform === 'linux' && !x11 && displayId !== WAYLAND_DISPLAY_ID) {
         this.linuxPoint = linuxInputMapping(await linuxMonitors(), displayId);
         if (generation !== this.generation) throw new Error('DESKTOP_LEASE_EXPIRED');
       } else this.linuxPoint = null;
@@ -268,9 +310,12 @@ export class DesktopInputHost {
       }
       const binary = await this.runtime.resolveBinary();
       if (generation !== this.generation) throw new Error('DESKTOP_LEASE_EXPIRED');
-      const child = this.runtime.spawn(binary);
+      const child = window
+        ? this.runtime.spawn(binary, ['--window', String(window.windowId), String(window.pid)])
+        : this.runtime.spawn(binary, this.x11Geometry ? ['--x11', ...this.x11Geometry] : []);
       this.child = child;
       this.displayId = displayId;
+      this.window = window ? { windowId: window.windowId, pid: window.pid } : null;
       child.stderr.resume(); // never log typed text or protocol payloads
       child.stdin.on('error', () => {
         if (this.child === child) this.onFailure();
@@ -326,6 +371,7 @@ export class DesktopInputHost {
     if (this.privacyPaused) return;
     if ((this.runtime.platform ?? process.platform) === 'linux') {
       if (!this.child) throw new Error('DESKTOP_INPUT_UNAVAILABLE');
+      this.checkX11Geometry();
       // Native text is paced for Wayland clients/IMEs. Bound each acknowledged
       // command so long phone pastes cannot exceed the helper heartbeat timeout.
       let pending: DesktopInput[] = [];
@@ -344,32 +390,56 @@ export class DesktopInputHost {
         }
         flush();
         const chars = Array.from(event.text);
-        for (let i = 0; i < chars.length; i += 256) {
-          pending = [{ kind: 'text', text: chars.slice(i, i + 256).join('') }];
+        for (let i = 0, chunk = this.x11Geometry ? 64 : 256; i < chars.length; i += chunk) {
+          pending = [{ kind: 'text', text: chars.slice(i, i + chunk).join('') }];
           flush();
         }
       }
       flush();
       return; // Wayland's virtual pointer maps normalized coordinates to the output layout.
     }
+    if (this.window) {
+      // The helper places fractions on the window's live frame and drops what falls outside.
+      if (!this.child) throw new Error('DESKTOP_INPUT_UNAVAILABLE');
+      if (events.length) this.write(events, this.activity!.begin(events));
+      return;
+    }
     const display = screen.getAllDisplays().find((item) => String(item.id) === this.displayId);
     if (!display || (!this.child && !this.windows)) throw new Error('DESKTOP_INPUT_UNAVAILABLE');
     if (events.length === 0) return;
     const batch = this.activity!.begin(events);
+    const points: { x: number; y: number }[] = [];
+    const native = events.map((event) => {
+      if (event.kind !== 'move' && event.kind !== 'button') return event;
+      const point = {
+        x: Math.round(display.bounds.x + event.x * (display.bounds.width - 1)),
+        y: Math.round(display.bounds.y + event.y * (display.bounds.height - 1)),
+      };
+      points.push(point);
+      const mapped = process.platform === 'win32' ? screen.dipToScreenPoint(point) : point;
+      return { ...event, ...mapped };
+    });
     this.write(
-      events.map((event) => {
-        if (event.kind !== 'move' && event.kind !== 'button') return event;
-        const point = {
-          x: Math.round(display.bounds.x + event.x * (display.bounds.width - 1)),
-          y: Math.round(display.bounds.y + event.y * (display.bounds.height - 1)),
-        };
-        const native = process.platform === 'win32' ? screen.dipToScreenPoint(point) : point;
-        return { ...event, ...native };
-      }),
+      native,
       batch,
+      points,
+      events.some((event) => event.kind === 'scroll'),
     );
   }
-  private write(events: unknown[], batch?: { ready: Promise<void>; complete: () => void }): void {
+  private checkX11Geometry(): void {
+    if (
+      this.x11Geometry &&
+      x11InputGeometry(screen.getAllDisplays(), this.displayId).join(',') !==
+        this.x11Geometry.join(',')
+    )
+      throw new Error('DESKTOP_DISPLAY_MISSING');
+  }
+  private write(
+    events: unknown[],
+    batch?: { ready: Promise<void>; complete: () => void },
+    points: { x: number; y: number }[] = [],
+    wheel = false,
+  ): void {
     const child = this.child;
     const line = `${JSON.stringify(events)}\n`;
     const connection = this.windows;
@@ -384,25 +454,38 @@ export class DesktopInputHost {
       if (generation !== this.generation) return;
       this.writing = this.writing.then(async () => {
         if (generation !== this.generation) return;
-        if (connection) {
-          if ((await connection.request(line.slice(0, -1))) !== 'ok\n')
-            throw new Error('DESKTOP_INPUT_UNAVAILABLE');
-        } else {
-          // stdin.write completion only proves bytes were queued. Hold ownership
-          // until the helper has finished posting the entire native batch.
-          await new Promise<void>((resolve, reject) => {
-            const timer = setTimeout(() => finish(new Error('DESKTOP_INPUT_TIMEOUT')), 10_000);
-            const finish = (error?: Error) => {
-              clearTimeout(timer);
-              if (this.acknowledge === finish) this.acknowledge = null;
-              if (error) reject(error);
-              else resolve();
-            };
-            this.acknowledge = finish;
-            child!.stdin.write(line, (error) => {
-              if (error) finish(error);
+        // Local-only windows must pass this batch's pointer through for as long as it is
+        // being injected, not from when it was queued nor after a fixed delay.
+        // A wheel carries no position: it lands on the system cursor as it is when this
+        // batch starts, which the local user may have moved since the viewer last did.
+        const settled =
+          points.length || wheel
+            ? this.onPointer?.(wheel ? [screen.getCursorScreenPoint(), ...points] : points)
+            : undefined;
+        try {
+          this.checkX11Geometry(); // Recheck after waiting for earlier native batches.
+          if (connection) {
+            if ((await connection.request(line.slice(0, -1))) !== 'ok\n')
+              throw new Error('DESKTOP_INPUT_UNAVAILABLE');
+          } else {
+            // stdin.write completion only proves bytes were queued. Hold ownership
+            // until the helper has finished posting the entire native batch.
+            await new Promise<void>((resolve, reject) => {
+              const timer = setTimeout(() => finish(new Error('DESKTOP_INPUT_TIMEOUT')), 10_000);
+              const finish = (error?: Error) => {
+                clearTimeout(timer);
+                if (this.acknowledge === finish) this.acknowledge = null;
+                if (error) reject(error);
+                else resolve();
+              };
+              this.acknowledge = finish;
+              child!.stdin.write(line, (error) => {
+                if (error) finish(error);
+              });
             });
-          });
+          }
+        } finally {
+          settled?.();
         }
       });
       await this.writing;
@@ -427,6 +510,7 @@ export class DesktopInputHost {
   async pauseForPrivacy(): Promise<() => Promise<void>> {
     if (!this.child && !this.windows) throw new Error('DESKTOP_INPUT_UNAVAILABLE');
     const displayId = this.displayId;
+    const window = this.window ?? undefined;
     this.stop();
     // The old activity stays owned until native exit. Hold a separate existing
     // activity reservation for the local confirmation, released by stop/start.
@@ -438,7 +522,7 @@ export class DesktopInputHost {
     return async () => {
       if (generation !== this.generation) return;
       try {
-        await this.start(displayId);
+        await this.start(displayId, window);
       } catch (error) {
         if (!(error instanceof Error && error.message === 'DESKTOP_LEASE_EXPIRED'))
           this.onFailure();
@@ -448,6 +532,7 @@ export class DesktopInputHost {
   stop(): void {
     this.generation++;
     this.privacyPaused = false;
+    this.window = null;
     this.acknowledge?.(new Error('DESKTOP_LEASE_EXPIRED'));
     const windows = this.windows;
     const writing = this.writing;

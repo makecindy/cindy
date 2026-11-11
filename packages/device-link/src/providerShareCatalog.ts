@@ -3,9 +3,68 @@
  * 手机读不到另一个账号的电脑，所以由被控电脑代读分享者电脑的 `maker:provider:list` 后转交；
  * 身份只有昵称与头像，目录里分享者的账号身份(登录邮箱等)在每一跳都去掉。
  */
+import { providerShareFavoriteSource, type ProviderShareFavoriteSource } from './modelFavorites.js';
+import { PROVIDER_RUNNING_TURNS_FIELD } from './providerGroup.js';
 import { providerShareIdentifier, sharedTaskDeviceId } from './protocol.js';
 
 export const PROVIDER_SHARE_RECEIVED_CATALOGS_CHANNEL = 'maker:provider-share:received-catalogs';
+
+/**
+ * 分享者电脑的名字不给受邀者(provider-sharing.md §6)：生成链接与转交已收到的分享时，
+ * `deviceName` 一律填这个占位。字段本身不能省，旧版受邀者与手机按必填解析，空了会丢掉整条分享。
+ */
+export const PROVIDER_SHARE_NEUTRAL_DEVICE_NAME = 'Cindy';
+
+/**
+ * 分享出去的目录里，供应商建了组时带上组里有几台电脑(`groupSize`)：受邀者只知道背后是个组、有几台，
+ * 不知道是哪几台；详情可另取匿名状态。组内电脑的名单(`group`)只给同账号电脑。
+ */
+export const PROVIDER_SHARE_GROUP_SIZE_FIELD = 'groupSize';
+const MAX_SHARE_GROUP_SIZE = 512;
+
+/** 读目录里一条供应商带的组规模；没有组或不是合理的正整数时返回 null。 */
+export function readProviderShareGroupSize(provider: unknown): number | null {
+  if (!provider || typeof provider !== 'object' || Array.isArray(provider)) return null;
+  const value = (provider as Record<string, unknown>)[PROVIDER_SHARE_GROUP_SIZE_FIELD];
+  return typeof value === 'number' && Number.isInteger(value) && value >= 1 && value <= MAX_SHARE_GROUP_SIZE
+    ? value
+    : null;
+}
+
+/** 只在分享详情请求时附带匿名状态；普通目录读取不探测组员，避免组之间递归查询。 */
+export const PROVIDER_SHARE_GROUP_STATUS_REQUEST = 'includeSharedGroupStatus';
+export const PROVIDER_SHARE_GROUP_STATUS_FIELD = 'groupStatus';
+export const PROVIDER_SHARE_GROUP_STATES = [
+  'available', 'busy', 'cooling', 'offline', 'paused', 'unavailable', 'needs-update', 'unknown',
+] as const;
+export type ProviderShareGroupState = typeof PROVIDER_SHARE_GROUP_STATES[number];
+
+/** 顺序对应当前组的顺序，不发送名称、设备标识、来源、运行数或配额。未知状态保留位置。 */
+export function readProviderShareGroupStatus(provider: unknown): ProviderShareGroupState[] | null {
+  const size = readProviderShareGroupSize(provider);
+  if (size === null) return null;
+  const value = (provider as Record<string, unknown>)[PROVIDER_SHARE_GROUP_STATUS_FIELD];
+  if (!Array.isArray(value) || value.length !== size) return null;
+  return Array.from(value, (state) => PROVIDER_SHARE_GROUP_STATES.includes(state) ? state : 'unknown');
+}
+
+/**
+ * 分享出去的目录里，读目录的这个受邀者账号(它的每台电脑)此刻在这个分享上正在运行一轮的任务数
+ * (`guestRunning`)：受邀者把这个分享加进自己的供应商组时，组页面据此显示这台在跑几个。只是调用方
+ * 自己的数，不含分享者本人与其他受邀者。
+ */
+export const PROVIDER_SHARE_GUEST_RUNNING_FIELD = 'guestRunning';
+/** 远高于分享者电脑实际允许的任务数，只用来挡异常值。 */
+const MAX_SHARE_GUEST_RUNNING = 4096;
+
+/** 读目录里一条供应商带的受邀者运行数；没有或不是合理的非负整数时返回 null。 */
+export function readProviderShareGuestRunning(provider: unknown): number | null {
+  if (!provider || typeof provider !== 'object' || Array.isArray(provider)) return null;
+  const value = (provider as Record<string, unknown>)[PROVIDER_SHARE_GUEST_RUNNING_FIELD];
+  return typeof value === 'number' && Number.isInteger(value) && value >= 0 && value <= MAX_SHARE_GUEST_RUNNING
+    ? value
+    : null;
+}
 
 export interface ProviderShareReceivedCatalog {
   /** 任务记录里「Agent 在哪台电脑」的值：`share:<shareId>`。 */
@@ -13,10 +72,16 @@ export interface ProviderShareReceivedCatalog {
   shareId: string;
   providerId: string;
   providerLabel: string;
+  /** 兼容字段：新版本固定为 {@link PROVIDER_SHARE_NEUTRAL_DEVICE_NAME}，界面不显示。 */
   deviceName: string;
   owner: { displayName: string; avatarUrl: string | null };
   status: 'active' | 'paused';
   hostOnline: boolean;
+  /**
+   * 收藏身份（分享、成员、供应商与归属区域）。只用于写成被控电脑收藏里的来源键，
+   * 不是凭证，也不授予运行权限。旧客户端忽略；没有该字段时不得用别的成员身份代替。
+   */
+  favoriteSource?: ProviderShareFavoriteSource;
   /** 分享者电脑上 `maker:provider:list` 的结果(只含分享的那个供应商)；读不到时为 null。 */
   catalog: unknown;
 }
@@ -27,7 +92,7 @@ const MAX_SHARES = 64;
 const EMAIL_LIKE = /[^\s@＠<>()[\]{},;:"'`·]+[@＠][^\s@＠<>()[\]{},;:"'`·]+/g;
 const EDGE_SEPARATORS = /^[\s·•|:：\-–—/]+|[\s·•|:：\-–—/]+$/g;
 // 登录后自动生成的名称「<供应商> · <登录名>」，截到 50 字符后可能只剩半个登录名(也可能不是邮箱)。
-const GENERATED_ACCOUNT_NAME = /^(?:OpenAI|Anthropic|Claude|xAI|Grok)\s*·/;
+const GENERATED_ACCOUNT_NAME = /^(?:OpenAI|Anthropic|Claude|xAI|Grok|Cindy AI)\s*·/;
 // 同名时自动追加的序号「 (2)」：保留，同一台电脑分享的两个同类账号才分得清。
 const COPY_SUFFIX = /\s\((?:[2-9]|[1-9]\d+)\)$/;
 // 登录名去掉后留下的空括号。
@@ -74,7 +139,7 @@ function stripNestedUrlSecrets(value: unknown, depth: number): unknown {
 }
 
 /**
- * 分享给他人的供应商名称：去掉分享者的账号身份(订阅或 ChatGPT 登录名、任何邮箱)。
+ * 分享给他人的供应商名称：去掉分享者的账号身份(订阅或 ChatGPT 登录名、任何邮箱、Cindy AI 个人/企业后缀)。
  * 例如自动命名的「OpenAI · alice@example.com」→「OpenAI」。带账号身份的供应商、或名称是
  * 自动生成的形状时，第一个「·」之后的部分整段去掉(登录名可能被截断，按原文匹配不到)。
  * 去空后用 fallback。
@@ -103,11 +168,32 @@ function accountIdentity(value: unknown): string | undefined {
 /**
  * 分享出去的一条供应商：去掉分享者的账号身份字段(`subscriptionAccount` / `openAiAccount`，
  * 含登录邮箱)并清理名称，地址里的用户名密码与查询参数也去掉；其余展示字段沿用同账号投影。
+ * 供应商组摘要(`group`，列着组内电脑)只给同账号电脑，这里也去掉；只留组里有几台(`groupSize`)、
+ * 匿名状态(`groupStatus`)与受邀者自己的运行数(`guestRunning`)，不合理的值一并去掉；这台电脑上的总运行数(`runningTurns`)含分享者
+ * 本人与其他人的任务，只给同账号电脑，这里去掉。
+ * 分享来的供应商组不按组所在电脑本机这一份是否登录判断能否选用，见函数内说明。
  * 分享者电脑、受邀者电脑与手机都各过一遍。
  */
 export function scrubSharedProvider<T>(provider: T): T {
   if (!provider || typeof provider !== 'object' || Array.isArray(provider)) return provider;
-  const { subscriptionAccount, openAiAccount, ...fields } = provider as Record<string, unknown>;
+  const groupSize = readProviderShareGroupSize(provider);
+  const groupStatus = readProviderShareGroupStatus(provider);
+  const guestRunning = readProviderShareGuestRunning(provider);
+  const { subscriptionAccount, openAiAccount, subscriptionPoolAlias: _poolAlias, ...fields } = provider as Record<string, unknown>;
+  delete fields.group;
+  // Gateway and organization artwork must not disclose the owner's organization identity.
+  if (fields.id === 'xd' || fields.source === 'organization') delete fields.logoKind;
+  delete fields[PROVIDER_RUNNING_TURNS_FIELD];
+  delete fields[PROVIDER_SHARE_GROUP_SIZE_FIELD];
+  delete fields[PROVIDER_SHARE_GROUP_STATUS_FIELD];
+  delete fields[PROVIDER_SHARE_GUEST_RUNNING_FIELD];
+  if (groupSize !== null) fields[PROVIDER_SHARE_GROUP_SIZE_FIELD] = groupSize;
+  // 分享来的供应商组由组所在电脑按组选电脑：它本机这一份没登录时不会被选中，任务照样分给组里其他电脑
+  // (provider-groups.md §6)。目录里的 connected 只是本机那一份，受邀者不能据此隐藏整个组；组里一台都
+  // 不能用时由分享者电脑在发送时回 REMOTE_AGENT_UNAVAILABLE。分享者电脑投影时还没有 groupSize，不受影响。
+  if (groupSize !== null && fields.connected === false) fields.connected = true;
+  if (groupStatus !== null) fields[PROVIDER_SHARE_GROUP_STATUS_FIELD] = groupStatus;
+  if (guestRunning !== null) fields[PROVIDER_SHARE_GUEST_RUNNING_FIELD] = guestRunning;
   const rest = stripNestedUrlSecrets(fields, 0) as Record<string, unknown>;
   if (typeof rest.name === 'string') {
     rest.name = scrubProviderShareLabel(rest.name, [accountIdentity(subscriptionAccount), accountIdentity(openAiAccount)],
@@ -141,6 +227,35 @@ function avatar(value: unknown): string | null {
   }
 }
 
+/** 可选收藏身份必须就是这一条分享。不合法时丢掉字段，保留目录。 */
+function readFavoriteSource(
+  item: Record<string, unknown>,
+  shareId: string,
+  providerId: string,
+): ProviderShareFavoriteSource | undefined {
+  const raw = item.favoriteSource;
+  if (raw === undefined) return undefined;
+  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return undefined;
+  const source = raw as Record<string, unknown>;
+  const owner = source.owner && typeof source.owner === 'object' && !Array.isArray(source.owner)
+    ? source.owner as Record<string, unknown> : {};
+  const region = owner.region === 'cn' || owner.region === 'global' ? owner.region : undefined;
+  if (!region) return undefined;
+  try {
+    const favoriteSource: ProviderShareFavoriteSource = {
+      shareId: providerShareIdentifier(source.shareId),
+      memberId: providerShareIdentifier(source.memberId),
+      providerId: text(source.providerId, 256),
+      owner: { region },
+    };
+    if (favoriteSource.shareId !== shareId || favoriteSource.providerId !== providerId) return undefined;
+    providerShareFavoriteSource(favoriteSource);
+    return favoriteSource;
+  } catch {
+    return undefined;
+  }
+}
+
 /** 严格解析；单条不合法时丢弃这一条，不影响其他分享。 */
 export function parseProviderShareReceivedCatalogs(value: unknown): ProviderShareReceivedCatalog[] {
   const shares = value && typeof value === 'object' && !Array.isArray(value) ? (value as { shares?: unknown }).shares : undefined;
@@ -153,15 +268,18 @@ export function parseProviderShareReceivedCatalogs(value: unknown): ProviderShar
       const shareId = providerShareIdentifier(item.shareId);
       if (item.agentDeviceId !== `share:${shareId}`) continue;
       const owner = item.owner && typeof item.owner === 'object' ? item.owner as Record<string, unknown> : {};
+      const providerId = text(item.providerId, 256);
+      const favoriteSource = readFavoriteSource(item, shareId, providerId);
       out.push({
         agentDeviceId: `share:${shareId}`,
         shareId,
-        providerId: text(item.providerId, 256),
+        providerId,
         providerLabel: scrubProviderShareLabel(text(item.providerLabel, 256)),
         deviceName: text(sharedTaskDeviceId(item.deviceName), 256),
         owner: { displayName: text(owner.displayName, 128), avatarUrl: avatar(owner.avatarUrl) },
         status: item.status === 'paused' ? 'paused' : 'active',
         hostOnline: item.hostOnline === true,
+        ...(favoriteSource ? { favoriteSource } : {}),
         catalog: scrubSharedProviderCatalog(item.catalog ?? null),
       });
     } catch {

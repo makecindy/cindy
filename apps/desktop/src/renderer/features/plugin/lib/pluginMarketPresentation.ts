@@ -5,10 +5,24 @@
  * public Plugin is installed by default is an installation policy, not a source.
  * An installed Ghost without a matching market record remains local.
  */
-import { isCindyAccountGhostId, type GhostInstallApproval } from '../../../../shared/ghost';
+import type { GhostInstallApproval } from '../../../../shared/ghost';
+import {
+  createPluginLogicalIdentity,
+  findInstalledGhostByIdentity,
+  hasDeliveryNamespace,
+  installedGhostStoragePart,
+} from '../../../../shared/pluginIdentity';
 import type { PluginMarketItem } from '../../../../shared/pluginMarket';
 
 export type PluginPresentationOrigin = 'public' | 'organization' | 'local' | 'custom';
+
+/** Public contributors stay anonymous even when an older payload includes an author. */
+export function pluginPresentationAuthor(
+  item: Pick<PluginMarketItem, 'scope' | 'sourceType' | 'publisherKind' | 'author'>,
+): string | null {
+  return item.sourceType === 'server' && item.scope === 'public' && item.publisherKind !== 'official'
+    ? null : item.author;
+}
 
 export type PluginCatalogPresentationItem<TInstalled> =
   { kind: 'installed'; item: TInstalled } | { kind: 'market'; item: PluginMarketItem };
@@ -76,6 +90,54 @@ export function ghostReapprovalRoute(
 }
 
 /**
+ * Bind a market row to the installed instance it is allowed to update.
+ *
+ * An explicit namespace must hit that logical identity. A legacy row
+ * (missing namespace) binds the physical root, including an
+ * in-place stamped plugin whose storage part is still the bare ghostId. It must
+ * not fall through to a `_ns/...` twin.
+ */
+export function findInstalledGhostForMarketItem<
+  T extends {
+    manifest: { id: string };
+    dir?: string;
+    namespace?: string | null;
+  },
+>(ghosts: readonly T[], item: Pick<PluginMarketItem, 'ghostId' | 'namespace'>): T | undefined {
+  const sameId = ghosts.filter((ghost) => ghost.manifest.id === item.ghostId);
+  if (sameId.length === 0) return undefined;
+  if (hasDeliveryNamespace(item)) {
+    return findInstalledGhostByIdentity(
+      sameId,
+      createPluginLogicalIdentity(item.namespace, item.ghostId),
+    );
+  }
+  return sameId.find((ghost) => installedGhostStoragePart(ghost) === item.ghostId);
+}
+
+/** True when this market row is the update/origin route for this installed instance. */
+export function marketItemMatchesInstalledGhost(
+  item: Pick<PluginMarketItem, 'ghostId' | 'namespace'>,
+  ghost: { manifest: { id: string }; dir?: string; namespace?: string | null },
+): boolean {
+  if (item.ghostId !== ghost.manifest.id) return false;
+  if (hasDeliveryNamespace(item) && hasDeliveryNamespace(ghost)) {
+    return item.namespace === ghost.namespace;
+  }
+  if (hasDeliveryNamespace(item) && item.namespace !== null) return false;
+  return installedGhostStoragePart(ghost) === item.ghostId;
+}
+
+export function marketItemForInstalledGhost(
+  items: readonly PluginMarketItem[],
+  ghost: { manifest: { id: string }; dir?: string; namespace?: string | null },
+): PluginMarketItem | null {
+  return items.find((item) =>
+    (item.installState === 'installed' || item.installState === 'update-available') &&
+    marketItemMatchesInstalledGhost(item, ghost)) ?? null;
+}
+
+/**
  * Keeps the complete catalog in server order while rendering an installed card
  * for market records already owned by this client. Local-only installs have no
  * server position, so they remain visible after the ordered market catalog.
@@ -118,11 +180,11 @@ export function orderPluginCatalogItems<TInstalled extends { id: string }>(
   return ordered;
 }
 
-/** 浏览可看公开目录；安装只在当前会话真能跑这个插件时露出。 */
+/** 目录不按名字推测账号依赖；包确认和运行时根据真实声明处理。 */
 export function canOfferMarketInstall(
   mode: 'signed-out' | 'local' | 'cloud',
-  ghostId: string,
+  _ghostId: string,
 ): boolean {
   if (mode === 'signed-out') return false;
-  return mode === 'cloud' || !isCindyAccountGhostId(ghostId);
+  return true;
 }

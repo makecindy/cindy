@@ -15,7 +15,7 @@ vi.mock('../../localDb/client/current.js', async () => {
 import { tx } from '../../localDb/worker/opHandlers/tx.js';
 import { BotPlanWorkDirUnavailableError, prepareBotWorkspaceRuntime } from '../botWorkspaceRuntime.js';
 import { ensureBotChatOnlyWorkspaceDir } from '../botProfileFolder.js';
-import { chatGroupLaneRouteKey } from '../../../shared/botGroupChat.js';
+import { chatGroupLaneRouteKey, chatGroupTalkRouteKey } from '../../../shared/botGroupChat.js';
 import type { MakerSessionCreateOpts } from '../sessionRequest.js';
 
 function laneSession(id: string) {
@@ -54,14 +54,17 @@ describe('Bot group lane transactions', () => {
         status TEXT NOT NULL,
         current_version INTEGER NOT NULL DEFAULT 1
       );
+      CREATE TABLE bot_profile_versions (bot_id TEXT, version INTEGER, capabilities_json TEXT);
+      INSERT INTO bot_profile_versions VALUES ('mimi',3,'{"permissions":"ask"}'), ('abu',1,'{"permissions":"ask"}');
       CREATE TABLE sessions (
-        id TEXT PRIMARY KEY, title TEXT, working_dir TEXT, workspace_kind TEXT, model TEXT,
+        id TEXT PRIMARY KEY, title TEXT, working_dir TEXT, project_dir TEXT, workspace_kind TEXT, model TEXT,
+        scheduled_model_baseline TEXT,
         effort TEXT, permission_mode TEXT, status TEXT NOT NULL, sdk_session_id TEXT,
         total_token_usage INTEGER, total_cost_usd REAL, context_tokens INTEGER,
         context_window INTEGER, fast_mode INTEGER, plan_mode_enabled INTEGER, cleared_at INTEGER,
         pinned_at INTEGER, user_send_at INTEGER, agent_kind TEXT, orca_role TEXT,
         parent_session_id TEXT, forked_at_message_id TEXT, worktree_path TEXT, extra_dirs TEXT,
-        remote_host_id TEXT, provider_id TEXT, source TEXT NOT NULL, created_at INTEGER,
+        remote_host_id TEXT, agent_device_id TEXT, provider_id TEXT, source TEXT NOT NULL, created_at INTEGER,
         updated_at INTEGER NOT NULL
       );
       CREATE TABLE bot_session_links (
@@ -140,6 +143,20 @@ describe('Bot group lane transactions', () => {
     expect(ensureWorkspaceDir).not.toHaveBeenCalled();
   });
 
+  // bot-group-chat.md §7.0: a queue turn has no project folder. It starts where its group lane works:
+  // the teammate's own place, or the grant's isolated chat folder for chat-only access.
+  it.each(['owner', 'tools', 'chat'] as const)('starts a %s queue lane where its group lane works', async mode => {
+    const access = { mode, revision: 1 };
+    const routeKey = chatGroupTalkRouteKey('g1', access, 'queue-1');
+    const workingDir = mode === 'chat' ? await ensureBotChatOnlyWorkspaceDir(ownerRoot, 'mimi', chatGroupLaneRouteKey('g1', access)) : '/private-bot-home';
+    const session = { ...laneSession('queue-step'), workingDir, workspaceKind: 'dialogue' };
+    tx(db, { name: 'bots.createGroupLane', args: { botId: 'mimi', groupId: 'g1', routeKey, session } });
+    const ensureWorkspaceDir = vi.fn(async () => '/private-bot-home');
+    const opts: MakerSessionCreateOpts = { id: session.id, agentKind: 'claude-code', model: session.model, workingDir: '', workspaceKind: 'project', remoteHostId: 'stale-host' };
+    await prepareBotWorkspaceRuntime(opts, { ownerUserDataPath: () => ownerRoot, ensureWorkspaceDir });
+    expect(opts).toMatchObject({ workingDir, workspaceKind: 'dialogue', remoteHostId: undefined });
+  });
+
   it.each(['', ':plan:server-plan'])('isolates chat-only startup%s even with a matching legacy project plan and stale session directory', async suffix => {
     const routeKey = `${chatGroupLaneRouteKey('g1', { mode: 'chat', revision: 2 })}${suffix}`;
     const workingDir = await ensureBotChatOnlyWorkspaceDir(ownerRoot, 'mimi', routeKey);
@@ -203,5 +220,94 @@ describe('Bot group lane transactions', () => {
       { id: 'mimi-main', source: 'desktop', status: 'archived' },
     ]);
     expect(db.prepare("SELECT COUNT(*) AS n FROM bot_group_members WHERE bot_id = 'mimi'").get()).toEqual({ n: 0 });
+  });
+
+  describe('IM channel lanes (connection handed to a Bot)', () => {
+    const groupKey = 'im:telegram:777:g:-100123';
+    const topicKey = 'im:telegram:777:g:-100123:t:9';
+
+    it('creates one hidden channel lane per route key without a group-member check and reuses it', () => {
+      // abu is active but not a member of any local group.
+      const args = { botId: 'abu', routeKey: groupKey, session: laneSession('im-lane-1') };
+      expect(tx(db, { name: 'bots.createChannelLane', args })).toEqual({ sessionId: 'im-lane-1', created: true });
+      expect(tx(db, { name: 'bots.createChannelLane', args: { ...args, session: laneSession('im-lane-2') } }))
+        .toEqual({ sessionId: 'im-lane-1', created: false });
+      // A topic is its own lane.
+      expect(tx(db, { name: 'bots.createChannelLane', args: { ...args, routeKey: topicKey, session: laneSession('im-topic') } }))
+        .toEqual({ sessionId: 'im-topic', created: true });
+      expect(db.prepare("SELECT bot_id, role, route_key, profile_version FROM bot_session_links WHERE session_id = 'im-lane-1'").get())
+        .toEqual({ bot_id: 'abu', role: 'channel', route_key: groupKey, profile_version: 1 });
+      expect(db.prepare("SELECT source, status FROM sessions WHERE id = 'im-lane-1'").get())
+        .toEqual({ source: 'bot', status: 'active' });
+    });
+
+    it('opens a fresh lane once the previous one for the same route key is archived', () => {
+      tx(db, { name: 'bots.createChannelLane', args: { botId: 'mimi', routeKey: groupKey, session: laneSession('im-old') } });
+      expect(tx(db, {
+        name: 'bots.archiveChannelLanes',
+        args: { routeKey: groupKey, routeKeyPrefix: null, exceptBotId: null, now: 77 },
+      })).toEqual({ archivedSessionIds: ['im-old'] });
+      expect(db.prepare("SELECT archived_at FROM bot_session_links WHERE session_id = 'im-old'").get())
+        .toEqual({ archived_at: 77 });
+      expect(db.prepare("SELECT status FROM sessions WHERE id = 'im-old'").get()).toEqual({ status: 'archived' });
+      expect(tx(db, { name: 'bots.createChannelLane', args: { botId: 'mimi', routeKey: groupKey, session: laneSession('im-new') } }))
+        .toEqual({ sessionId: 'im-new', created: true });
+    });
+
+    it('archives a whole connection by prefix, keeping the newly bound Bot and other connections', () => {
+      tx(db, { name: 'bots.createChannelLane', args: { botId: 'mimi', routeKey: groupKey, session: laneSession('im-mimi') } });
+      tx(db, { name: 'bots.createChannelLane', args: { botId: 'abu', routeKey: topicKey, session: laneSession('im-abu') } });
+      tx(db, { name: 'bots.createChannelLane', args: { botId: 'mimi', routeKey: 'im:telegram:7770:g:1', session: laneSession('im-other') } });
+      tx(db, { name: 'bots.createGroupLane', args: { botId: 'mimi', groupId: 'g1', routeKey: 'group:g1', session: laneSession('lane-1') } });
+      expect(tx(db, {
+        name: 'bots.archiveChannelLanes',
+        args: { routeKey: null, routeKeyPrefix: 'im:telegram:777:', exceptBotId: 'abu', now: 5 },
+      })).toEqual({ archivedSessionIds: ['im-mimi'] });
+      expect(db.prepare("SELECT id, status FROM sessions WHERE id IN ('im-mimi','im-abu','im-other','lane-1') ORDER BY id").all())
+        .toEqual([
+          { id: 'im-abu', status: 'active' },
+          { id: 'im-mimi', status: 'archived' },
+          { id: 'im-other', status: 'active' },
+          { id: 'lane-1', status: 'active' },
+        ]);
+    });
+
+    it('refuses lanes for unavailable Bots and non-IM route keys', () => {
+      expect(() => tx(db, {
+        name: 'bots.createChannelLane',
+        args: { botId: 'kapi', routeKey: groupKey, session: laneSession('im-x') },
+      })).toThrow(expect.objectContaining({ code: 'BOT_UNAVAILABLE' }));
+      expect(() => tx(db, {
+        name: 'bots.createChannelLane',
+        args: { botId: 'mimi', routeKey: 'group:g1', session: laneSession('im-y') },
+      })).toThrow();
+      expect(() => tx(db, {
+        name: 'bots.archiveChannelLanes',
+        args: { routeKey: groupKey, routeKeyPrefix: 'im:telegram:777:', exceptBotId: null, now: 1 },
+      })).toThrow();
+      expect(db.prepare("SELECT COUNT(*) AS n FROM sessions WHERE id LIKE 'im-%'").get()).toEqual({ n: 0 });
+    });
+
+    it('starts a channel lane in the Bot Home workspace', async () => {
+      tx(db, { name: 'bots.createChannelLane', args: { botId: 'mimi', routeKey: groupKey, session: laneSession('im-lane-1') } });
+      const ensureWorkspaceDir = vi.fn(async () => '/bots/mimi/workspace');
+      const opts: MakerSessionCreateOpts = { id: 'im-lane-1', agentKind: 'claude-code', model: 'model-a', workingDir: '/stale', workspaceKind: 'project', remoteHostId: 'stale-host' };
+      await prepareBotWorkspaceRuntime(opts, { ownerUserDataPath: () => ownerRoot, ensureWorkspaceDir, legacyUserDataPath: () => '/legacy' });
+      expect(opts).toMatchObject({ workingDir: '/bots/mimi/workspace', workspaceKind: 'dialogue', remoteHostId: undefined });
+      expect(ensureWorkspaceDir).toHaveBeenCalledWith(ownerRoot, 'mimi', '/legacy');
+    });
+
+    it('deletes channel lanes instead of keeping them as task history when a Bot is deleted', () => {
+      tx(db, { name: 'bots.createChannelLane', args: { botId: 'mimi', routeKey: groupKey, session: laneSession('im-lane-1') } });
+      db.exec("UPDATE bot_profiles SET status = 'archived' WHERE id = 'mimi'");
+      expect(tx(db, {
+        name: 'bots.deleteProfile',
+        args: { botId: 'mimi', sessionIds: ['mimi-main', 'im-lane-1'], keepTaskHistory: true, at: 50 },
+      })).toEqual({ sessionIds: ['mimi-main', 'im-lane-1'], status: 'archived' });
+      expect(db.prepare('SELECT id, source, status FROM sessions ORDER BY id').all()).toEqual([
+        { id: 'im-lane-1', source: 'bot', status: 'deleted' },
+        { id: 'mimi-main', source: 'desktop', status: 'archived' },
+      ]);
+    });
   });
 });

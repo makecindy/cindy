@@ -1,3 +1,4 @@
+import type { ViewInstance } from 'react-native';
 /**
  * HomeChromeDrawer —— 首页左上角系统菜单。
  *
@@ -10,7 +11,7 @@
  *   走透明 RN Modal(独立 Dialog 窗口),返回键由 onRequestClose 接管。
  * 新窗口里要自带 GestureHandlerRootView,左滑关闭才有效。动画遵循 reduce-motion。
  */
-import { Building2, LogOut, Monitor, Puzzle, Search, Settings, UsersRound } from 'lucide-react-native';
+import { Building2, LogOut, Monitor, Plug, Search, Settings, UsersRound } from 'lucide-react-native';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   AccessibilityInfo,
@@ -61,8 +62,6 @@ import {
 
 import { PluginMenuUnreadDot } from '@/plugins/PluginMenuUnreadDot';
 import { confirmLogout } from './confirmLogout';
-import { HomeModeSwitch } from './HomeModeSwitch';
-import type { HomeMode } from './homeViewPreferenceStore';
 
 const DRAWER_CLOSE_DISTANCE_RATIO = 1 / 3;
 const DRAWER_CLOSE_VELOCITY = -800;
@@ -81,8 +80,6 @@ export function HomeChromeDrawer({
   onLogout,
   hasRunningTasks = false,
   loggingOut = false,
-  mode = 'tasks',
-  onModeChange,
   open,
   user,
 }: {
@@ -100,8 +97,6 @@ export function HomeChromeDrawer({
   /** 退出确认文案用:有运行中任务时额外说明任务会继续在电脑上运行。 */
   hasRunningTasks?: boolean;
   loggingOut?: boolean;
-  mode?: HomeMode;
-  onModeChange?(mode: HomeMode): void;
   open: boolean;
   user: {
     avatar: string | null;
@@ -148,7 +143,7 @@ export function HomeChromeDrawer({
     onClosedRef.current?.();
   }, [mounted]);
 
-  const settingsButtonRef = useRef<View>(null);
+  const settingsButtonRef = useRef<ViewInstance>(null);
   useEffect(() => {
     if (!open) return;
     const timer = setTimeout(() => {
@@ -280,8 +275,11 @@ export function HomeChromeDrawer({
 
   const overlay = (
     <View
-      accessibilityViewIsModal
-      pointerEvents="auto"
+      accessibilityViewIsModal={open}
+      accessibilityElementsHidden={!open}
+      importantForAccessibility={open ? 'auto' : 'no-hide-descendants'}
+      // Keep the exit animation mounted without accepting a second menu/backdrop action.
+      pointerEvents={open ? 'auto' : 'none'}
       style={styles.overlay}
       testID="home.chromeDrawer"
     >
@@ -310,8 +308,7 @@ export function HomeChromeDrawer({
             paddingTop: insets.top + spacing.xl,
           }]}>
             <View style={styles.accountRow} testID="home.chromeDrawer.account">
-              {/* Default letter avatar; the organisation logo is only the small icon below. */}
-              <MobileUserAvatar name={accountName} />
+              <MobileUserAvatar imageUrl={user?.avatar} name={accountName} />
               <View style={styles.accountTexts}>
                 <Text numberOfLines={1} style={styles.accountName}>{accountName}</Text>
                 {accountEmail && accountEmail !== accountName ? (
@@ -331,7 +328,6 @@ export function HomeChromeDrawer({
             </View>
 
             <View style={styles.divider} />
-            {onModeChange ? <HomeModeSwitch mode={mode} onModeChange={onModeChange} /> : null}
 
             <Pressable
               accessibilityLabel={t("devices.list.a11y.openSearch")}
@@ -352,7 +348,7 @@ export function HomeChromeDrawer({
 
             {onOpenPlugins ? <Pressable accessibilityRole="button" accessibilityLabel={t('plugins.title')}
               onPress={onOpenPlugins} style={({ pressed }) => [styles.menuRow, pressed && styles.pressed]} testID="home.chromeDrawer.plugins">
-              <Puzzle color={colors.textSecondary} size={iconSize.md} strokeWidth={iconStroke.regular} />
+              <Plug color={colors.textSecondary} size={iconSize.md} strokeWidth={iconStroke.regular} />
               <Text numberOfLines={1} style={styles.menuLabel}>{t('plugins.title')}</Text>
               <PluginMenuUnreadDot active={open} />
             </Pressable> : null}

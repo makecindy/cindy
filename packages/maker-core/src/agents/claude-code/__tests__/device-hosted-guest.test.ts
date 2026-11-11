@@ -18,7 +18,7 @@ import {
 } from '../../base-agent.js';
 import type { AuthAdapter } from '../../../interfaces/auth-adapter.js';
 import type { Logger } from '../../../interfaces/logger.js';
-import { CONTACTS_RULES_DISABLED } from '../../../contacts/system-prompt.js';
+import { DEVICE_HOSTED_GUEST_CLAUDE_TOOLS, DEVICE_HOSTED_MCP_TIMEOUT_MS } from '../../shared/device-hosted.js';
 
 const sdkMock = vi.hoisted(() => ({
   forkSession: vi.fn(),
@@ -74,16 +74,47 @@ async function makeTempDir(): Promise<string> {
 
 const GHOST_ROSTER = 'HOST GHOST ROSTER';
 
+type CapturedHook = (input: Record<string, unknown>, toolUseId: string | undefined, options: { signal: AbortSignal }) => Promise<{
+  hookSpecificOutput?: { permissionDecision?: string; permissionDecisionReason?: string };
+}>;
+
 interface CapturedOptions {
   plugins?: Array<{ type: string; path: string }>;
   systemPrompt?: { append?: string };
   settings?: {
     disableAllHooks?: boolean;
+    disableClaudeAiConnectors?: boolean;
+    disableRemoteControl?: boolean;
+    disableSkillShellExecution?: boolean;
     claudeMdExcludes?: string[];
     availableModels?: string[];
     env?: Record<string, string>;
   };
   env?: Record<string, string>;
+  tools?: unknown;
+  disallowedTools?: string[];
+  hooks?: { PreToolUse?: Array<{ hooks: CapturedHook[] }> };
+}
+
+/** 依次跑 PreToolUse 回调，返回第一个拒绝原因；都放行时返回 null。 */
+async function preToolUseDenial(options: CapturedOptions, toolName: string, toolInput: unknown): Promise<string | null> {
+  const input = {
+    hook_event_name: 'PreToolUse',
+    session_id: 'sdk-session',
+    transcript_path: '',
+    cwd: '',
+    tool_name: toolName,
+    tool_input: toolInput,
+  };
+  for (const matcher of options.hooks?.PreToolUse ?? []) {
+    for (const hook of matcher.hooks) {
+      const result = await hook(input, 'tool-use-1', { signal: new AbortController().signal });
+      if (result?.hookSpecificOutput?.permissionDecision === 'deny') {
+        return result.hookSpecificOutput.permissionDecisionReason ?? '';
+      }
+    }
+  }
+  return null;
 }
 
 const GUEST_PROVIDER: DeviceHostedGuestProvider = {
@@ -102,7 +133,14 @@ const HOST_MODELS = ['shared/model-a', 'shared/model-b', 'other/model-c'].map((i
 
 async function startHostedSession(
   guest: boolean,
-  overrides: { guestProvider?: DeviceHostedGuestProvider | null; providerId?: string } = {},
+  overrides: {
+    guestProvider?: DeviceHostedGuestProvider | null;
+    providerId?: string;
+    local?: boolean;
+    ghostRosterSnapshot?: string;
+    mcpServers?: string[];
+    controllerManagedSkills?: { claudePluginRoots: string[] };
+  } = {},
 ): Promise<{ options: CapturedOptions; sessionRoot: string }> {
   const configDir = await makeTempDir();
   process.env.CLAUDE_CONFIG_DIR = configDir;
@@ -128,12 +166,15 @@ async function startHostedSession(
   };
   const deps: AgentDeps = {
     auth,
-    runtimeConfig: { systemPrompt: 'GLOBAL CINDY HOST PROMPT', subagentModel: 'other/model-c' },
+    runtimeConfig: {
+      systemPrompt: 'GLOBAL CINDY HOST PROMPT',
+      subagentModel: 'other/model-c',
+      taskShellEnv: ({ sessionId }) => ({ CINDY_INPUT_HANDOFF_ROUTE: `route-${sessionId}` }),
+    },
     capabilityAdditions: { availableModels: HOST_MODELS },
     binaryPath: process.execPath,
     logger: createNoopLogger(),
     getGhostRosterPrompt: () => GHOST_ROSTER,
-    getContactsPromptState: () => 'disabled',
     getManagedSkills: async () => [{
       kind: 'agent-skill',
       name: 'learn',
@@ -152,10 +193,11 @@ async function startHostedSession(
     isGitRepo: false,
     tunnelUrl: 'http://127.0.0.1:4000/t/tok/',
     tunnelToken: 'tok',
-    mcpServers: [],
+    mcpServers: overrides.mcpServers ?? [],
     mirrorRoot,
     ...(guest ? { guest: true } : {}),
     ...(guest && overrides.guestProvider !== null ? { guestProvider: overrides.guestProvider ?? GUEST_PROVIDER } : {}),
+    ...(overrides.controllerManagedSkills ? { controllerManagedSkills: overrides.controllerManagedSkills } : {}),
   };
   const handle = await new ClaudeCodeAgent(deps).startSession({
     sessionId: 'hosted-session',
@@ -163,7 +205,8 @@ async function startHostedSession(
     providerId: overrides.providerId ?? 'shared-provider',
     workingDir,
     permissionMode: 'acceptEdits',
-    deviceHosted,
+    ...(overrides.ghostRosterSnapshot !== undefined ? { ghostRosterSnapshot: overrides.ghostRosterSnapshot } : {}),
+    ...(overrides.local ? {} : { deviceHosted }),
   });
   liveHandles.push(handle);
   const options = sdkMock.query.mock.calls.at(-1)?.[0]?.options as CapturedOptions | undefined;
@@ -197,20 +240,66 @@ describe('Claude Code device-hosted guest sessions', () => {
     const parentClaudeMd = path.join(path.dirname(sessionRoot), 'CLAUDE.md').split(path.sep).join('/');
     expect(options.settings?.claudeMdExcludes).toContain(parentClaudeMd);
     expect(options.plugins).toBeUndefined();
-    // 不带本机的插件清单与通讯录说明(system prompt 改动已经维护者确认)。
+    // 不带本机的插件清单(system prompt 改动已经维护者确认)。
     expect(options.systemPrompt?.append).not.toContain(GHOST_ROSTER);
-    expect(options.systemPrompt?.append).not.toContain(CONTACTS_RULES_DISABLED);
+  });
+
+  // 插件工具经隧道回到任务所在电脑：花名册用那台带来的快照，本机的仍不进来；那台没提供插件工具就不注入。
+  it('injects the task computer roster instead of this computer roster when its plugin tools are tunnelled', async () => {
+    const ownerRoster = 'TASK COMPUTER GHOST ROSTER';
+    for (const guest of [true, false]) {
+      const { options } = await startHostedSession(guest, { ghostRosterSnapshot: ownerRoster, mcpServers: ['cindy'] });
+      expect(options.systemPrompt?.append).toContain(ownerRoster);
+      expect(options.systemPrompt?.append).not.toContain(GHOST_ROSTER);
+    }
+    const { options } = await startHostedSession(true, { ghostRosterSnapshot: ownerRoster, mcpServers: [] });
+    expect(options.systemPrompt?.append).not.toContain(ownerRoster);
+    // 任务所在电脑没有可召回的插件(空快照)：同账号也不能退回本机的花名册。
+    const empty = await startHostedSession(false, { ghostRosterSnapshot: '', mcpServers: ['cindy'] });
+    expect(empty.options.systemPrompt?.append).not.toContain(GHOST_ROSTER);
+  });
+
+  // 内置与插件带的 Skill 以任务所在电脑为准(工具与脚本都在那台)：挂它带来的插件目录，本机的不加载；受邀者也一样。
+  it('mounts the task computer managed skills instead of this computer ones', async () => {
+    for (const guest of [true, false]) {
+      const shadow = await makeTempDir();
+      const root = path.join(shadow, '.cindy', 'managed-skills', 'cindy');
+      const { options } = await startHostedSession(guest, { controllerManagedSkills: { claudePluginRoots: [root] } });
+      expect(options.plugins).toEqual([{ type: 'local', path: root }]);
+      // 插件目录属于影子目录，随任务清理；这里提前删掉，好让公共收尾只核对本机临时挂载的插件。
+      await fs.rm(path.join(shadow, '.cindy'), { recursive: true, force: true });
+    }
   });
 
   it('routes only through the shared provider: route token, shared models, no host subagent model', async () => {
     const { options } = await startHostedSession(true);
     const header = `${DEVICE_HOSTED_GUEST_ROUTE_HEADER}: guest-route-token`;
     expect(options.env?.ANTHROPIC_CUSTOM_HEADERS?.split('\n')).toContain(header);
-    // 最高优先级设置层再写一次，会话中途的项目设置改不掉它。
-    expect(options.settings?.env?.ANTHROPIC_CUSTOM_HEADERS).toBe(options.env?.ANTHROPIC_CUSTOM_HEADERS);
+    // 令牌只走子进程环境。设置对象会被整份序列化落盘，里面不能有明文令牌；
+    // 项目设置改不掉它，靠的是 host-managed 会话从 settings env 里剥掉这个头。
+    expect(JSON.stringify(options.settings ?? {})).not.toContain('guest-route-token');
+    expect(options.settings?.env).toBeUndefined();
     expect(options.settings?.availableModels).toEqual(['shared/model-a', 'shared/model-b']);
     expect(options.env?.CLAUDE_CODE_SUBAGENT_MODEL).toBeUndefined();
     expect(options.env?.ANTHROPIC_SMALL_FAST_MODEL).toBe('shared/model-a');
+  });
+
+  it('exposes only the allowlisted built-in tools and turns off account and shell features', async () => {
+    const { options } = await startHostedSession(true);
+    // 白名单是显式数组：不是 preset，也不是缺省(缺省 = Claude Code 全部自带工具)。
+    expect(options.tools).toEqual([...DEVICE_HOSTED_GUEST_CLAUDE_TOOLS]);
+    expect(options.tools).not.toContain('WebFetch');
+    expect(options.disallowedTools).toContain('Bash');
+    expect(options.settings?.disableClaudeAiConnectors).toBe(true);
+    expect(options.settings?.disableRemoteControl).toBe(true);
+    expect(options.settings?.disableSkillShellExecution).toBe(true);
+  });
+
+  it('denies subagent isolation for guests but not ordinary subagents', async () => {
+    const { options } = await startHostedSession(true);
+    expect(await preToolUseDenial(options, 'Agent', { description: 'd', prompt: 'p', isolation: 'remote' }))
+      .toMatch(/isolation/);
+    expect(await preToolUseDenial(options, 'Agent', { description: 'd', prompt: 'p' })).toBeNull();
   });
 
   it('refuses a guest session without a provider boundary or on another provider', async () => {
@@ -223,12 +312,32 @@ describe('Claude Code device-hosted guest sessions', () => {
     const { options } = await startHostedSession(false);
     expect(options.settings?.disableAllHooks).toBeUndefined();
     expect(options.settings?.claudeMdExcludes).toBeUndefined();
+    expect(options.tools).toBeUndefined();
+    expect(options.settings?.disableClaudeAiConnectors).toBeUndefined();
+    expect(options.settings?.disableRemoteControl).toBeUndefined();
+    expect(options.settings?.disableSkillShellExecution).toBeUndefined();
+    expect(await preToolUseDenial(options, 'Agent', { description: 'd', prompt: 'p', isolation: 'worktree' })).toBeNull();
     expect(options.plugins?.length).toBe(1);
     expect(options.systemPrompt?.append).toContain(GHOST_ROSTER);
-    expect(options.systemPrompt?.append).toContain(CONTACTS_RULES_DISABLED);
     expect(options.env?.ANTHROPIC_CUSTOM_HEADERS).toBeUndefined();
     expect(options.settings?.env).toBeUndefined();
     expect(options.settings?.availableModels).toEqual(['shared/model-a', 'shared/model-b', 'other/model-c']);
     expect(options.env?.CLAUDE_CODE_SUBAGENT_MODEL).toBe('other/model-c');
+  });
+
+  it('gives terminal password prompts to the owner only for tasks running on this computer', async () => {
+    expect((await startHostedSession(false)).options.env?.CINDY_INPUT_HANDOFF_ROUTE).toBeUndefined();
+    expect((await startHostedSession(true)).options.env?.CINDY_INPUT_HANDOFF_ROUTE).toBeUndefined();
+    const { options } = await startHostedSession(false, { local: true });
+    expect(options.env?.CINDY_INPUT_HANDOFF_ROUTE).toBe('route-hosted-session');
+  });
+
+  // 2026-11-04: on a slow relay, Claude Code's default 30s MCP connect limit dropped all
+  // 91 tunnelled tools at the start of a turn. Local tasks keep Claude Code's default.
+  it('waits for tunnelled tools on a slow link, only for tasks hosted for another computer', async () => {
+    for (const guest of [true, false]) {
+      expect((await startHostedSession(guest)).options.env?.MCP_TIMEOUT).toBe(String(DEVICE_HOSTED_MCP_TIMEOUT_MS));
+    }
+    expect((await startHostedSession(false, { local: true })).options.env?.MCP_TIMEOUT).toBeUndefined();
   });
 });

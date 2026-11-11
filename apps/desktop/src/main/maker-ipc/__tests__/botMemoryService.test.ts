@@ -49,7 +49,7 @@ afterEach(async () => {
   await fs.rm(dir, { recursive: true, force: true });
 });
 
-function setup(options: { bot?: { canonicalSessionId: string | null } | null } = {}) {
+function setup(options: { bot?: { canonicalSessionId: string | null; scopeKey?: string } | null } = {}) {
   const store = {
     list: () => storage.list(),
     read: (filename: string) => storage.read(filename),
@@ -60,8 +60,9 @@ function setup(options: { bot?: { canonicalSessionId: string | null } | null } =
   } as unknown as MakerMemoryStore;
   const timers: Array<() => void> = [];
   const requestRefresh = vi.fn(async () => true);
+  const getStore = vi.fn(async (_scopeKey: string) => store);
   const service = createBotMemoryService({
-    getStore: async () => store,
+    getStore,
     readBot: async () => (options.bot === undefined ? { canonicalSessionId: 'session-1' } : options.bot),
     requestRefresh,
     setTimer: (callback) => {
@@ -73,7 +74,7 @@ function setup(options: { bot?: { canonicalSessionId: string | null } | null } =
     },
   });
   const flushTimers = () => timers.splice(0).forEach((run) => run());
-  return { service, store, requestRefresh, flushTimers };
+  return { service, store, requestRefresh, flushTimers, getStore };
 }
 
 describe('bot memory service', () => {
@@ -88,6 +89,16 @@ describe('bot memory service', () => {
         preview: '回复前主动核实事实。 没有核实的内容标注待验证； 已有证据可以复用。',
       }),
     ]);
+  });
+
+  // 依据：项目模式伙伴的记忆在项目里；缺口：设置页仍读旧的 bot: 记忆。tier：unit。
+  it('reads a project-mode teammate\'s memory from its project', async () => {
+    const { service, getStore } = setup({ bot: { canonicalSessionId: 'session-1', scopeKey: '/bots/bot-1/workspace' } });
+    await service.list('bot-1');
+    expect(getStore).toHaveBeenCalledWith('/bots/bot-1/workspace');
+    const classic = setup();
+    await classic.service.list('bot-1');
+    expect(classic.getStore).toHaveBeenCalledWith('bot:bot-1');
   });
 
   it('searches through the store and skips internal or vanished hits', async () => {
@@ -303,4 +314,29 @@ it('retries legacy imported shards using their original trimmed-body semantics',
   await service.importDocument('bot-1', 'legacy', 'legacy', '  original\n\n');
   expect(await fs.readFile(file, 'utf8')).toBe(before);
   await expect(service.importDocument('bot-1', 'legacy', 'legacy', 'different')).rejects.toMatchObject({ code: 'version-conflict' });
+});
+
+describe('cloud companion restore', () => {
+  it('restores a raw memory file exactly through the store and removes tombstones', async () => {
+    const { service, requestRefresh, flushTimers } = setup();
+    const raw = await fs.readFile(path.join(dir, 'feedback_verify-before-claiming.md'), 'utf8');
+    await service.restoreRaw('bot-1', 'user_tea.md', raw.replace('feedback', 'user'));
+    const restored = await storage.read('user_tea.md');
+    expect(restored.frontmatter).toMatchObject({ title: '说结论前核实', description: '先核实再陈述事实', type: 'user' });
+    expect(restored.body).toBe((await storage.read('feedback_verify-before-claiming.md')).body);
+    expect(await storage.getIndex()).toContain('user_tea.md');
+    // Updating an existing file keeps going through the same path.
+    await service.restoreRaw('bot-1', 'user_tea.md', '---\ntitle: Tea\n---\nlikes green tea');
+    expect((await storage.read('user_tea.md')).body).toBe('likes green tea');
+    await service.removeRaw('bot-1', 'user_tea.md');
+    await service.removeRaw('bot-1', 'user_tea.md');
+    await expect(storage.read('user_tea.md')).rejects.toMatchObject({ code: 'not-found' });
+    flushTimers();
+    expect(requestRefresh).toHaveBeenCalledWith('session-1');
+  });
+
+  it('rejects filenames outside the memory naming rule', async () => {
+    const { service } = setup();
+    await expect(service.restoreRaw('bot-1', '../evil.md', 'x')).rejects.toThrow();
+  });
 });

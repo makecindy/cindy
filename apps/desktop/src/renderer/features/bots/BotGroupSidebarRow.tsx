@@ -1,16 +1,23 @@
+import { SIDEBAR_LIST_ROW_ACTIVE_CLASS, SIDEBAR_LIST_ROW_HEIGHT_CLASS } from '@/features/cc-agent/sidebar/listRowStyle';
+import { TeammateRowStatus } from './TeammateStatusDot';
+import { groupTeammateStatus } from './teammateRosterStatus';
 /**
  * 统一伙伴列表里的群聊行，和伙伴私聊共同按最新消息排序。
  *
- * 群行与伙伴行同一套 IM 行几何（见 __tests__/botsSidebarSpacing.test.ts）：左侧两位
- * 成员的叠放头像，第一行群名，第二行最近一条消息「作者：内容」。有伙伴正在发言时，
+ * 群行与伙伴行同一套 IM 行几何（见 __tests__/teammatesSectionSpacing.test.ts）：左侧按人数
+ * 显示组合头像，第一行群名，第二行最近一条消息「作者：内容」。有伙伴正在发言时，
  * 第二行临时让位给运行中标记（橙色 sparkles + 发言伙伴的工作状态，DESIGN.md §2
  * Thinking Orange 的侧栏运行态），一轮结束就落回最近消息。
  *
  * 分工（docs/product-rules/bot-group-chat.md §7）：负责人正在安排时写「谁 正在安排…」，
  * 某一步进行中写「分工 k/n · 谁 正在做」，两者同样用运行中标记；安排待开始、做完一步
  * 等继续或没做完时，第二行换成对应的提示，提醒用户回来看看。
+ *
+ * 未读角标是真实条数：main 随摘要给出最近（至多 99 条）别人发来的消息时间
+ * （`incomingMessageTimes`），与本机读位比较；旧宿主没有这份列表时只显示 1。多人群里
+ * 别人带来的伙伴按「伙伴名 (主人昵称)」显示（与群聊页同一规则）。
  */
-import type { ReactNode } from 'react';
+import type { KeyboardEventHandler, MouseEventHandler, ReactNode } from 'react';
 import { Sparkles } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
 
@@ -18,17 +25,18 @@ import { cn } from '@/lib/utils';
 import type { AgentIslandSessionActivity } from '../../../shared/agentIsland';
 import type { BotGroupSummary } from '../../../shared/botGroupChat';
 import { BotGenerationLabel } from './BotGenerationLabel';
-import { BotGroupDuoAvatar } from './BotGroupAvatars';
+import { BotGroupSidebarAvatar } from './BotGroupAvatars';
 import { isBotGroupLaneSession } from './botGroupLane';
 import {
   botGroupNoticeKey,
+  botGroupActivityAt,
   botGroupPreviewLine,
   botGroupSidebarPlanPreview,
   isRunningBotGroupSidebarPreview,
   type BotGroupSidebarPlanPreview,
 } from './botGroupPresentation';
-import { isBotGroupUnread } from './botReadState';
-import { NavigationCountBadge } from '@/components/sidebar/NavigationCountBadge';
+import { botGroupMemberDisplayName } from './BotGroupTimelineModel';
+import { botGroupUnreadCount } from './botReadState';
 import { formatBotListTimestamp } from './botListDisplay';
 import type { BotProfile } from './botStore';
 
@@ -54,6 +62,9 @@ export function BotGroupSidebarRow({
   now,
   selected,
   onOpenGroup,
+  onContextMenu,
+  onKeyDown,
+  children,
 }: {
   group: BotGroupSummary;
   bots: readonly BotProfile[];
@@ -61,6 +72,9 @@ export function BotGroupSidebarRow({
   now: number;
   selected: boolean;
   onOpenGroup: (groupId: string) => void;
+  onContextMenu?: MouseEventHandler<HTMLButtonElement>;
+  onKeyDown?: KeyboardEventHandler<HTMLButtonElement>;
+  children?: ReactNode;
 }) {
   const { t } = useTranslation();
 
@@ -79,6 +93,12 @@ export function BotGroupSidebarRow({
       const key = botGroupNoticeKey(last.noticeCode ?? null, false);
       return key ? t(key, { name: last.authorName }) : botGroupPreviewLine(last.preview);
     }
+    // A share names who posted it; the card's own text is never quoted here.
+    if (last.threadShare) {
+      return last.authorKind === 'user' && last.isSelf !== false
+        ? t('bots.groupChat.sidebar.sharedReplyYou')
+        : t('bots.groupChat.sidebar.sharedReply', { name: last.authorName.trim() });
+    }
     const text = botGroupPreviewLine(last.preview);
     if (last.authorKind === 'user' && last.isSelf !== false) return t('bots.groupChat.sidebar.previewYou', { text });
     if (last.authorName.trim()) {
@@ -88,20 +108,34 @@ export function BotGroupSidebarRow({
   };
 
   const renderSubtitle = (group: BotGroupSummary, mutedClass: string): ReactNode => {
+    if (group.archived) return <span className={cn('min-w-0 flex-1 truncate text-12 leading-4', mutedClass)}>
+      {previewText(group, null)}
+    </span>;
     // Several Bots may think at once in a broadcast round's first circle.
-    const speakers = group.speakingBotIds
+    const speakingIds = group.round?.speakers.filter(speaker => speaker.executionStatus !== 'queued').map(speaker => speaker.botId) ?? group.speakingBotIds;
+    const speakers = speakingIds
       .map((botId) => group.members.find((member) => member.botId === botId))
       .filter((member): member is BotGroupSummary['members'][number] => member !== undefined);
     const plan = botGroupSidebarPlanPreview(group);
+    const executions = group.round?.speakers.filter(speaker => speaker.activity !== 'planning');
+    const queued = executions?.find(speaker => speaker.executionStatus === 'queued');
+    const queuedStep = executions?.some(speaker => speaker.activity === 'step' && speaker.executionStatus === 'queued')
+      && !executions?.some(speaker => speaker.activity === 'step' && speaker.executionStatus !== 'queued');
+    if (queued && executions?.every(speaker => speaker.executionStatus === 'queued') && !group.planningBotId) {
+      const member = group.members.find(member => member.botId === queued.botId);
+      return <span data-testid="bot-group-running" className="min-w-0 flex-1 truncate text-12 leading-4 text-[var(--status-bar-accent)]">
+        {t('bots.groupChat.header.queued', { name: member ? botGroupMemberDisplayName(member) : '' })}
+      </span>;
+    }
     const activities = speakers.map((member) =>
       speakingLaneActivity(bots.find((bot) => bot.id === member.botId), islandActivity));
     const activity = activities[0];
     const waiting = activities.some((item) => item?.phase === 'needs-interaction');
-    const names = speakers.map((member) => member.name).join(t('bots.groupChat.memberSeparator'));
+    const names = speakers.map(botGroupMemberDisplayName).join(t('bots.groupChat.memberSeparator'));
     // Planning and a step in progress read as one line; a step waiting for the user's
     // go-ahead keeps the confirmation hint below instead.
     const planLine =
-      !waiting && isRunningBotGroupSidebarPreview(plan)
+      !waiting && isRunningBotGroupSidebarPreview(plan) && !(plan.kind === 'running' && queuedStep)
         ? plan.kind === 'planning'
           ? t('bots.groupChat.sidebar.planPlanning', { name: plan.botName || names })
           : plan.step !== null && plan.total > 0
@@ -134,59 +168,73 @@ export function BotGroupSidebarRow({
             {planLine}
           </span>
         ) : (
-          <>
-            <span className="shrink-0">{names}</span>
-            <span className="min-w-0 truncate">
-              {waiting ? (
-                t('bots.groupChat.sidebar.waiting')
-              ) : (
-                <BotGenerationLabel
-                  sessionId={activity?.sessionId}
-                  phase={activity?.workingPhase ?? 'thinking'}
-                  startedAt={activity?.startedAtMs ?? null}
-                />
-              )}
-            </span>
-          </>
+          <span className="min-w-0 flex-1 truncate" title={names}>
+            {names}{' '}
+            {waiting ? (
+              t('bots.groupChat.sidebar.waiting')
+            ) : (
+              <BotGenerationLabel
+                sessionId={activity?.sessionId}
+                phase={activity?.workingPhase ?? 'thinking'}
+                startedAt={activity?.startedAtMs ?? null}
+              />
+            )}
+          </span>
         )}
       </span>
     );
   };
 
   const mutedClass = selected ? 'opacity-70' : 'text-[var(--sidebar-list-muted)]';
+  const unread = botGroupUnreadCount(group);
   const timestamp = formatBotListTimestamp(
-    group.speakingBotIds.length > 0 ? now : group.lastMessage?.createdAt ?? group.updatedAt,
+    !group.archived && group.speakingBotIds.length > 0 ? now : botGroupActivityAt(group),
     now,
+    t,
   );
   return (
+    <div className="relative">
     <button
       key={group.id}
       type="button"
+      data-bot-group-id={group.id}
       aria-current={selected ? 'page' : undefined}
       onClick={() => onOpenGroup(group.id)}
+      onContextMenu={onContextMenu}
+      onKeyDown={onKeyDown}
+      aria-haspopup={onContextMenu ? 'menu' : undefined}
       className={cn(
-        'group flex w-full min-w-0 items-center gap-2.5 rounded-xl px-2.5 py-2 text-left outline-none transition-colors focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring',
+        'group flex w-full min-w-0 items-center gap-2.5 rounded-lg px-2.5 py-2 text-left outline-none transition-colors focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring',
+        SIDEBAR_LIST_ROW_HEIGHT_CLASS,
         selected
-          ? 'bg-sidebar-item-active text-sidebar-item-active-foreground'
+          ? SIDEBAR_LIST_ROW_ACTIVE_CLASS
           : 'text-[var(--sidebar-nav-text)] hover:bg-sidebar-item-hover',
       )}
     >
-      <BotGroupDuoAvatar members={group.members} selected={selected} />
+      <span className="relative flex shrink-0"><BotGroupSidebarAvatar members={group.members} selected={selected} />
+      </span>
       <span className="flex min-w-0 flex-1 flex-col gap-0.5">
-        <span className="min-w-0 truncate text-14 leading-5" title={group.name}>
-          {group.name}
+        <span className="flex min-w-0 items-center gap-1.5">
+          <span className="min-w-0 truncate text-14 leading-5" title={group.name}>{group.name}</span>
+          {group.archived && <span className={cn('shrink-0 text-11 leading-4', mutedClass)}>{t('bots.archived')}</span>}
         </span>
-        <span className="flex min-w-0 items-center gap-2">{renderSubtitle(group, mutedClass)}</span>
+        <span className="flex min-w-0 items-center gap-2">
+          {renderSubtitle(group, mutedClass)}
+          <TeammateRowStatus status={groupTeammateStatus(group, bots, islandActivity, unread > 0)} groupUnread={unread} mentioned={unread > 0 && group.serverUnread?.mentioned === true} />
+        </span>
       </span>
       <span
+        data-teammate-timestamp
         className={cn(
-          'w-10 shrink-0 self-start pt-0.5 text-right text-11 tabular-nums',
+          'min-w-10 shrink-0 self-start whitespace-nowrap pt-0.5 text-right text-11 tabular-nums',
           mutedClass,
         )}
       >
         {timestamp}
-        <NavigationCountBadge count={isBotGroupUnread(group) ? 1 : 0} label={t('sidebar.teammateUnreadCount', { count: 1 })} className="ml-auto mt-1 w-fit" />
+        <span aria-hidden className="mt-1 flex items-center justify-end gap-1" />
       </span>
     </button>
+    {children}
+    </div>
   );
 }

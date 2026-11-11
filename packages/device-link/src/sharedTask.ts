@@ -12,7 +12,8 @@ export function isSharedTaskAttachment(value: string, sharedTaskId: string): boo
   const parts = ref?.ossKey.split('/');
   return !!parts && parts.length === 6 && parts[0] === 'cindy' && parts[1] === 'device-link' &&
     parts[2] === 'shared-task' && parts[3] === sharedTaskId &&
-    parts.slice(3).every((part) => /^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/.test(part));
+    parts.slice(3, 5).every((part) => /^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/.test(part)) &&
+    (/^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/.test(parts[5]) || /^an3-(?:[0-9a-f]{2}){1,1536}$/.test(parts[5]));
 }
 
 export const SHARED_TASK_CAPABILITY = 'shared-task-v2';
@@ -51,7 +52,7 @@ export interface SharedTaskSnapshot extends SharedTaskIdentity {
 
 export type SharedTaskOperation =
   | 'history.read' | 'events.subscribe' | 'attachment.read' | 'attachment.upload'
-  | 'file.read' | 'input.send' | 'input.edit' | 'input.withdraw' | 'agent.stop'
+  | 'file.read' | 'file.write' | 'input.send' | 'input.edit' | 'input.withdraw' | 'agent.stop'
   | 'agent.configure' | 'approval.resolve' | 'permission.configure'
   | 'workdir.configure' | 'plugins.configure' | 'history.delete'
   | 'session.archive' | 'session.export' | 'session.fork'
@@ -81,10 +82,11 @@ export type SharedTaskDecision =
 
 const sharedOperations: ReadonlySet<string> = new Set<SharedTaskOperation>([
   'history.read', 'events.subscribe', 'attachment.read', 'attachment.upload',
-  'file.read', 'input.send', 'agent.stop', 'agent.configure', 'approval.resolve',
+  // Task workdir files follow the owner's read/write access (2026-10-10 product decision).
+  'file.read', 'file.write', 'input.send', 'agent.stop', 'approval.resolve',
 ]);
 const ownerOperations: ReadonlySet<string> = new Set<SharedTaskOperation>([
-  'permission.configure', 'workdir.configure', 'plugins.configure',
+  'agent.configure', 'permission.configure', 'workdir.configure', 'plugins.configure',
   'history.delete', 'session.archive', 'session.export', 'session.fork',
   'background.create', 'schedule.create', 'sharedTask.manage',
 ]);

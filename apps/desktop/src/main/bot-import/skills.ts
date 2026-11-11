@@ -1,9 +1,10 @@
-import { constants, promises as fs } from 'node:fs';
+import { promises as fs } from 'node:fs';
 import path from 'node:path';
 import yaml from 'js-yaml';
-import { fingerprint, inside, readImportFile, readImportTree, type ImportReadBudget } from './files.js';
+import { captureImportReads, fingerprint, inside, MAX_FILE_BYTES, MAX_SNAPSHOT_BYTES, readImportFile, readImportTree, type ImportReadBudget } from './files.js';
 import { CompanionImportError, object, string, type ImportItem, type ImportSource } from './types.js';
 import { orderedSkillDirectories } from './skillDirectories.js';
+import { readImportSkillInterpreters, readImportSkillManifest } from './skillFileStreams.js';
 
 /** Discovery roots are derived on the host from the selected source, never from IPC paths. */
 // `any` preserves native Hermes personal/external and OpenClaw managed/personal
@@ -87,37 +88,15 @@ async function rootsFor(source: ImportSource, values: Record<string, unknown>, h
 /** A native venv declares its Python home. Preserve interpreter aliases and captured
  * executable bytes, without granting access to other files beside that interpreter. */
 export async function readImportSkillTree(root: string, include?: (name: string) => boolean, budget?: ImportReadBudget) {
-  const interpreters: string[] = [];
-  for (const folder of ['.venv', 'venv']) {
-    let config: string;
-    try { config = (await readImportFile(root, path.join(root, folder, 'pyvenv.cfg'), budget)).bytes.toString('utf8'); }
-    catch (error) { if ((error as NodeJS.ErrnoException).code === 'ENOENT') continue; throw error; }
-    const home = /^home\s*=\s*(.+)$/m.exec(config)?.[1]?.trim();
-    if (!home || !path.isAbsolute(home)) continue;
-    const realHome = await fs.realpath(home).catch(() => undefined);
-    if (!realHome) continue;
-    const bin = path.join(root, folder, process.platform === 'win32' ? 'Scripts' : 'bin');
-    let entries: Awaited<ReturnType<typeof fs.opendir>>;
-    try { entries = await fs.opendir(bin); }
-    catch (error) { if ((error as NodeJS.ErrnoException).code === 'ENOENT') continue; throw error; }
-    for await (const entry of entries) {
-      budget?.reserve(128 + Buffer.byteLength(path.join(bin, entry.name)));
-      if (!entry.isSymbolicLink() || !/^python(?:[23](?:\.\d+)?)?(?:\.exe)?$/.test(entry.name)) continue;
-      const real = await fs.realpath(path.join(bin, entry.name));
-      if (path.dirname(real) !== realHome || !/^python(?:[23](?:\.\d+)?)?(?:\.exe)?$/.test(path.basename(real))) continue;
-      // Check only a bounded native executable header. Text credentials are
-      // never made importable by renaming their link or forging pyvenv.cfg.
-      const handle = await fs.open(real, constants.O_RDONLY | (constants.O_NOFOLLOW ?? 0));
-      try {
-        const stat = await handle.stat();
-        if (!stat.isFile() || process.platform !== 'win32' && !(stat.mode & 0o111)) continue;
-        const header = Buffer.alloc(4);
-        if ((await handle.read(header, 0, 4, 0)).bytesRead !== 4) continue;
-        if (['7f454c46', 'feedface', 'cefaedfe', 'feedfacf', 'cffaedfe', 'cafebabe', 'bebafeca'].includes(header.toString('hex')) || header.subarray(0, 2).toString() === 'MZ') interpreters.push(real);
-      } finally { await handle.close(); }
-    }
-  }
-  const files = await readImportTree(root, include, budget, undefined, root, interpreters);
+  return captureImportReads(budget, scoped => captureImportSkillTree(root, include, scoped));
+}
+
+async function captureImportSkillTree(root: string, include?: (name: string) => boolean, budget?: ImportReadBudget) {
+  const interpreters = await readImportSkillInterpreters(root, budget);
+  // Resource libraries and data are not configuration documents. Let them use
+  // the snapshot budget; keep the parser-facing entrypoint bound unchanged.
+  const files = await readImportTree(root, include, budget, undefined, root, interpreters,
+    name => name === 'SKILL.md' ? MAX_FILE_BYTES : MAX_SNAPSHOT_BYTES);
   for (const file of files) {
     if (!/^(?:\.venv|venv)\/(?:bin|Scripts)\/python(?:[23](?:\.\d+)?)?(?:\.exe)?$/.test(file.name)) continue;
     const entry = path.join(root, file.name);
@@ -151,7 +130,7 @@ export function normalizeImportSkill(kind: ImportSource['kind'], alias: string, 
 }
 
 /** Follow native precedence by declared name; grouped layouts stop at a skill entrypoint. */
-export async function discoverImportSkills(source: ImportSource, values: Record<string, unknown>, home: string, env: NodeJS.ProcessEnv, budget: ImportReadBudget, used = new Set<string>()): Promise<ImportItem[]> {
+export async function discoverImportSkills(source: ImportSource, values: Record<string, unknown>, home: string, env: NodeJS.ProcessEnv, budget: ImportReadBudget): Promise<ImportItem[]> {
   const items: ImportItem[] = [];
   const names = new Set<string>();
   const visited = new Set<string>();
@@ -168,7 +147,7 @@ export async function discoverImportSkills(source: ImportSource, values: Record<
       budget.reserve(128 + Buffer.byteLength(real));
       visited.add(real);
       let manifest;
-      try { manifest = await readImportFile(real, path.join(real, 'SKILL.md'), budget); }
+      try { manifest = await readImportSkillManifest(real); }
       catch (error) {
         if ((error as NodeJS.ErrnoException).code !== 'ENOENT') {
           const name = path.basename(directory);
@@ -177,19 +156,15 @@ export async function discoverImportSkills(source: ImportSource, values: Record<
           return;
         }
       }
-      if (manifest?.bytes.toString('utf8').trim()) {
-        const metadata = normalizeImportSkill(source.kind, path.basename(directory), manifest.bytes.toString('utf8'), config, disabled);
+      if (manifest?.trim()) {
+        const metadata = normalizeImportSkill(source.kind, path.basename(directory), manifest, config, disabled);
         const name = metadata.view.name;
         if (names.has(name)) return;
         if (root.bundled && Array.isArray(config.allowBundled) && !strings(config.allowBundled).includes(name)) return;
         names.add(name);
-        const item: ImportItem = { ...metadata, sourceDirectory: real, files: [manifest], filesComplete: false };
-        if (used.has(name) || used.has(path.basename(directory))) {
-          try {
-            item.files = [manifest, ...await readImportSkillTree(real, name => name !== 'SKILL.md', budget)];
-            item.filesComplete = true;
-          } catch (error) { item.captureIssue = error instanceof CompanionImportError ? error.code : 'IMPORT_ITEM_FAILED'; }
-        }
+        const item: ImportItem = { ...metadata, sourceDirectory: real, filesComplete: false };
+        // Charge retained catalog metadata, never the unretained Skill body.
+        budget.reserve(Buffer.byteLength(JSON.stringify(item)));
         items.push(item); return;
       }
       if (source.kind === 'openclaw' && depth >= 6) return;

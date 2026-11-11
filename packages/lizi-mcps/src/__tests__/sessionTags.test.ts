@@ -116,4 +116,15 @@ describe('task label tools', () => {
       ).errorCode,
     ).toBe('INVALID_CONFIRMATION');
   });
+
+  it('unwraps the XML-style {item:[...]} folded tag id arrays', async () => {
+    // glm 兼容层把数组参数序列化成 <item> 重复标签(images/queued_message_ids 同病)。
+    const h = setup();
+    await h.call('add_task_tags', { tag_ids: { item: ['red', 'blue'] } });
+    expect(h.execute).toHaveBeenLastCalledWith('a', {
+      action: 'attach',
+      sessionIds: ['a'],
+      tagIds: ['red', 'blue'],
+    });
+  });
 });

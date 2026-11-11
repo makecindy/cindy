@@ -80,6 +80,44 @@ const prepared = {
 };
 
 describe('PluginPublisherOrchestrator', () => {
+  it('waits for trusted identity refresh before inspecting and confirming an old legal prefix package', async () => {
+    const filePath = await packagePath();
+    let resolveIdentity!: (value: { membershipId: string; orgSlug: string; orgName: string }) => void;
+    const identity = new Promise<{ membershipId: string; orgSlug: string; orgName: string }>((resolve) => {
+      resolveIdentity = resolve;
+    });
+    const inspectPackage = vi.fn(async () => ({ ghostId: 'legacy-helper', name: 'Helper', version: '1.0.0' }));
+    const confirm = vi.fn(async () => false);
+    const orch = createPluginPublisherOrchestrator({
+      api: { prepare: vi.fn(), commit: vi.fn(), status: vi.fn() } as unknown as PluginPublisherApi,
+      identity: () => identity, inspectPackage, confirm,
+    });
+    const started = orch.start(filePath);
+    await Promise.resolve();
+    expect(inspectPackage).not.toHaveBeenCalled();
+    resolveIdentity({ membershipId: 'm1', orgSlug: 'actual-org', orgName: 'Acme' });
+    await vi.waitFor(() => expect(orch.snapshot(started.transferId)?.errorCode).toBe('CONFIRM_UNAVAILABLE'));
+    expect(inspectPackage).toHaveBeenCalledWith(filePath);
+    expect(confirm).toHaveBeenCalledWith(expect.objectContaining({
+      orgSlug: 'actual-org', ghostId: 'legacy-helper',
+    }), expect.any(AbortSignal));
+  });
+
+  it('reports missing namespace separately from non-organization membership and does not inspect or upload', async () => {
+    const filePath = await packagePath();
+    const inspectPackage = vi.fn(async () => ({ ghostId: 'legacy-helper', name: 'Helper', version: '1.0.0' }));
+    const prepare = vi.fn();
+    const orch = createPluginPublisherOrchestrator({
+      api: { prepare, commit: vi.fn(), status: vi.fn() } as unknown as PluginPublisherApi,
+      identity: async () => ({ membershipId: 'm1', orgSlug: null, orgName: 'Acme' }),
+      inspectPackage, confirm: vi.fn(async () => true),
+    });
+    const started = orch.start(filePath);
+    await vi.waitFor(() => expect(orch.snapshot(started.transferId)?.errorCode).toBe('PUBLISHER_IDENTITY_UNAVAILABLE'));
+    expect(inspectPackage).not.toHaveBeenCalled();
+    expect(prepare).not.toHaveBeenCalled();
+  });
+
   it('caps pending confirmations per owner before opening another package', async () => {
     const filePath = await packagePath();
     const snapshots: PluginPublisherProgress[] = [];
@@ -690,16 +728,23 @@ describe('PluginPublisherOrchestrator', () => {
     { status: 503, code: 'INTERNAL_ERROR', expected: 'PUBLISH_UNSUPPORTED' },
     { status: 503, code: 'RATE_LIMIT_UNAVAILABLE', expected: 'RATE_LIMIT_UNAVAILABLE' },
     { status: 503, code: 'STORAGE_UNAVAILABLE', expected: 'STORAGE_UNAVAILABLE' },
+    { status: 409, code: 'PLUGIN_NAMESPACE_CLIENT_REQUIRED', expected: 'PLUGIN_NAMESPACE_CLIENT_REQUIRED' },
+    { status: 503, code: 'PLUGIN_ORGANIZATION_CONTEXT_UNAVAILABLE', expected: 'PLUGIN_ORGANIZATION_CONTEXT_UNAVAILABLE' },
+    { status: 409, code: 'PLUGIN_NAMESPACE_CONFIG_REQUIRED', expected: 'PLUGIN_NAMESPACE_CONFIG_REQUIRED' },
+    { status: 409, code: 'PUBLISH_GHOST_ID_INVALID', expected: 'PUBLISH_GHOST_ID_INVALID' },
+    { status: 409, code: 'PLUGIN_GHOST_ID_RESERVED', expected: 'PLUGIN_GHOST_ID_RESERVED' },
   ])('maps prepare $status/$code to $expected', async ({ status, code, expected }) => {
     const filePath = await packagePath();
     const snapshots: PluginPublisherProgress[] = [];
+    const commit = vi.fn();
+    const statusCall = vi.fn();
     const orch = createPluginPublisherOrchestrator({
       api: {
         prepare: async () => {
           throw new PluginPublisherApiError(code, status, 'redacted');
         },
-        commit: vi.fn(),
-        status: vi.fn(),
+        commit,
+        status: statusCall,
       } as unknown as PluginPublisherApi,
       inspectPackage: async () => ({ ghostId: 'demo', name: 'Demo', version: '1.0.0' }),
       confirm: async () => true,
@@ -709,5 +754,22 @@ describe('PluginPublisherOrchestrator', () => {
     orch.start(filePath);
     const failed = await waitFor(snapshots, (progress) => progress.stage === 'failed');
     expect(failed.errorCode).toBe(expected);
+    if (code === 'PLUGIN_NAMESPACE_CLIENT_REQUIRED') {
+      expect(failed.message).toBe('请更新 Cindy 后再发布此组织的插件');
+    }
+    if (code === 'PLUGIN_ORGANIZATION_CONTEXT_UNAVAILABLE') {
+      expect(failed.message).toBe('暂时无法确认企业身份，请稍后重试');
+    }
+    if (code === 'PLUGIN_NAMESPACE_CONFIG_REQUIRED') {
+      expect(failed.message).toBe('企业插件发布暂不可用，请稍后重试');
+    }
+    if (code === 'PUBLISH_GHOST_ID_INVALID') {
+      expect(failed.message).toBe('新插件 ID 必须以小写字母开头，请修改 ID 后重新发布');
+    }
+    if (code === 'PLUGIN_GHOST_ID_RESERVED') {
+      expect(failed.message).toBe('cindy- 开头的 ID 为官方保留，请修改 ID 后重新发布');
+    }
+    expect(commit).not.toHaveBeenCalled();
+    expect(statusCall).not.toHaveBeenCalled();
   });
 });

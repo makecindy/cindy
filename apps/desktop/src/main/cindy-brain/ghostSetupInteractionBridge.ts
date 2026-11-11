@@ -115,6 +115,7 @@ interface PendingSetupInteraction {
   ) => Promise<void> | void;
   onInlineSubmit?: (submit: GhostSetupInlineSubmit) => Promise<void> | void;
   onConnectionCommitted?: (actionId: string) => void;
+  isTargetCurrent?: () => boolean;
 }
 
 export class GhostSetupInteractionBridge {
@@ -128,6 +129,7 @@ export class GhostSetupInteractionBridge {
     onCommand: PendingSetupInteraction['onCommand'],
     onInlineSubmit?: PendingSetupInteraction['onInlineSubmit'],
     onConnectionCommitted?: PendingSetupInteraction['onConnectionCommitted'],
+    isTargetCurrent?: PendingSetupInteraction['isTargetCurrent'],
   ): void {
     if (this.pending.has(snapshot.requestId)) {
       throw new Error(`plugin setup interaction already exists: ${snapshot.requestId}`);
@@ -139,6 +141,7 @@ export class GhostSetupInteractionBridge {
       onCommand,
       ...(onInlineSubmit ? { onInlineSubmit } : {}),
       ...(onConnectionCommitted ? { onConnectionCommitted } : {}),
+      ...(isTargetCurrent ? { isTargetCurrent } : {}),
     });
     try {
       this.broadcastSnapshot(sessionId, snapshot);
@@ -186,7 +189,7 @@ export class GhostSetupInteractionBridge {
    */
   submitInline(requestId: string, rawSubmit: unknown): boolean {
     const entry = this.pending.get(requestId);
-    if (!entry || entry.completed) return false;
+    if (!entry || entry.completed || entry.isTargetCurrent?.() === false) return false;
     const submit = parseGhostSetupInlineSubmit(rawSubmit);
     if (!submit || !entry.onInlineSubmit) {
       this.deps.logger?.warn('plugin setup interaction received invalid inline submission', {
@@ -207,7 +210,8 @@ export class GhostSetupInteractionBridge {
   connectionCommitted(requestId: string, actionId: string, expectedRevision: number): boolean {
     const entry = this.pending.get(requestId);
     if (!entry || entry.completed || entry.snapshot.terminal ||
-        entry.snapshot.revision !== expectedRevision || !entry.onConnectionCommitted) return false;
+        entry.snapshot.revision !== expectedRevision || !entry.onConnectionCommitted ||
+        entry.isTargetCurrent?.() === false) return false;
     const step = entry.snapshot.steps.find(step => step.action?.id === actionId &&
       step.action.kind === 'manage_connection' && (step.phase === 'pending' || step.phase === 'failed'));
     if (!step) return false;
@@ -293,7 +297,8 @@ export class GhostSetupInteractionBridge {
   }> {
     return Array.from(this.pending.values())
       .filter(
-        (entry) => !entry.completed && (sessionId === undefined || entry.sessionId === sessionId),
+        (entry) => !entry.completed && entry.isTargetCurrent?.() !== false &&
+          (sessionId === undefined || entry.sessionId === sessionId),
       )
       .map((entry) => ({ sessionId: entry.sessionId, request: entry.snapshot }));
   }
@@ -306,166 +311,10 @@ export class GhostSetupInteractionBridge {
   }
 }
 
-/** Persist only presentation fields, plus validated Desktop credential-page links. */
-export function sanitizeGhostSetupSnapshotForDesktop(
-  snapshot: GhostSetupInteractionSnapshot,
-): GhostSetupInteractionSnapshot {
-  const safe = sanitizeGhostSetupSnapshotForRemote(snapshot);
-  safe.steps.forEach((step, index) => {
-    const source = snapshot.steps[index].action;
-    if (step.action?.kind !== 'inline_form' || source?.kind !== 'inline_form') return;
-    const url = source.form.fields[0].externalLink?.url;
-    if (!url || url.length > 200) return;
-    try {
-      const parsed = new URL(url);
-      if (parsed.protocol === 'https:' && !parsed.username && !parsed.password)
-        step.action.form.fields[0].externalLink = { url };
-    } catch { /* omit invalid credential-page links */ }
-  });
-  return safe;
-}
+import { createInteractionProjection } from './interactionProjection.js';
+export const { sanitizeGhostSetupSnapshotForDesktop, sanitizeBotAuthorizationMetaForRemote, sanitizeGhostSetupSnapshotForRemote, sanitizeGhostSetupRequestForRemote, projectInteractionRequestForRemote } = createInteractionProjection(supportsRemotePluginOauth);
 
-/** Local durable cards retain Desktop helpers; every remote message path strips them. */
-export function sanitizeBotAuthorizationMetaForRemote(meta: Record<string, unknown>): Record<string, unknown> {
-  if (!('botAuthorization' in meta)) return meta;
-  const { botAuthorization: raw, ...rest } = meta;
-  const card = readBotAuthorizationCard(raw);
-  return card ? {
-    ...rest,
-    botAuthorization: { ...card, snapshot: sanitizeGhostSetupSnapshotForRemote(card.snapshot) },
-  } : rest;
-}
-
-/**
- * Device-link only projection of a Host-owned setup snapshot.
- *
- * Desktop keeps richer presentation helpers (for example an external URL next
- * to a Secret field). Remote clients only receive the stable interaction
- * contract. Rebuilding every nested object from an allowlist also keeps future
- * Desktop-only helper metadata from crossing the device-link boundary.
- */
-export function sanitizeGhostSetupSnapshotForRemote(
-  snapshot: GhostSetupInteractionSnapshot,
-): GhostSetupInteractionSnapshot {
-  return {
-    kind: snapshot.kind,
-    ...(supportsRemotePluginOauth() ? { remoteOauth: true as const } : {}),
-    ...(supportsRemotePluginOauth() && snapshot.remoteSecret ? { remoteSecret: true as const } : {}),
-    ...(supportsRemotePluginOauth() && snapshot.remoteConnection ? { remoteConnection: true as const } : {}),
-    requestId: snapshot.requestId,
-    revision: snapshot.revision,
-    ...(snapshot.terminal ? { terminal: true as const } : {}),
-    ghost: {
-      id: snapshot.ghost.id,
-      name: snapshot.ghost.name,
-      ...(snapshot.ghost.iconDataUrl ? { iconDataUrl: snapshot.ghost.iconDataUrl } : {}),
-    },
-    ...(snapshot.intro !== undefined ? { intro: snapshot.intro } : {}),
-    steps: snapshot.steps.map((step) => ({
-      id: step.id,
-      groupId: step.groupId,
-      groupMode: step.groupMode,
-      title: step.title,
-      description: step.description,
-      phase: step.phase,
-      ...(isGhostSetupErrorCode(step.errorCode) ? { errorCode: step.errorCode } : {}),
-      ...(step.action
-        ? {
-            action:
-              step.action.kind === 'inline_form'
-                ? {
-                    id: step.action.id,
-                    kind: step.action.kind,
-                    form: {
-                      fields: [
-                        {
-                          id: step.action.form.fields[0].id,
-                          type: step.action.form.fields[0].type,
-                          label: step.action.form.fields[0].label,
-                          ...(step.action.form.fields[0].description !== undefined
-                            ? { description: step.action.form.fields[0].description }
-                            : {}),
-                          ...(step.action.form.fields[0].placeholder !== undefined
-                            ? { placeholder: step.action.form.fields[0].placeholder }
-                            : {}),
-                          required: step.action.form.fields[0].required,
-                          maxLength: step.action.form.fields[0].maxLength,
-                        },
-                      ],
-                    },
-                  }
-                : {
-                    id: step.action.id,
-                    kind: step.action.kind,
-                  },
-          }
-        : {}),
-    })),
-  };
-}
-
-/**
- * Preserve non-plugin interactions by identity while projecting plugin setup
- * snapshots at a remote transport boundary.
- */
-export function sanitizeGhostSetupRequestForRemote<T>(request: T): T {
-  if (
-    !request ||
-    typeof request !== 'object' ||
-    (request as { kind?: unknown }).kind !== 'plugin_setup'
-  ) {
-    return request;
-  }
-  return sanitizeGhostSetupSnapshotForRemote(
-    request as unknown as GhostSetupInteractionSnapshot,
-  ) as T;
-}
-
-function isDesktopOnlyConfirmationRequest(request: unknown): boolean {
-  if (!request || typeof request !== 'object' || Array.isArray(request)) return false;
-  const kind = (request as { kind?: unknown }).kind;
-  return (
-    kind === 'issue_confirm' || kind === 'rename_sessions_confirm' || kind === 'ghost_grant_confirm'
-  );
-}
-
-// Device Link must not receive a host confirmation's real request id: it is the
-// capability checked by the trusted Desktop resolver. A process-keyed HMAC
-// keeps request/dismissal correlation stable without retaining source ids.
-
-function projectDesktopOnlyConfirmation(request: Record<string, unknown>): Record<string, unknown> | null {
-  const requestId = request.requestId;
-  if (typeof requestId !== 'string' || requestId.length === 0) return null;
-  // Preserve only the known kind so mobile can render its existing read-only
-  // guidance. Drafts, file paths, previews, identities, and the real id stay
-  // on the controlled Desktop.
-  return { kind: request.kind, requestId: projectDesktopOnlyConfirmationRequestId(requestId) };
-}
-
-/**
- * Host-owned confirmations stay on the trusted Desktop. This keeps their
- * request ids and local payload details (for example file paths and previews)
- * out of Device Link while preserving the existing sanitized plugin-setup
- * projection used for remote status/cancellation.
- */
-export function projectInteractionRequestForRemote<T>(request: T): T | null {
-  if (isDesktopOnlyConfirmationRequest(request)) {
-    return projectDesktopOnlyConfirmation(request as Record<string, unknown>) as T | null;
-  }
-  return sanitizeGhostSetupRequestForRemote(request);
-}
-
-/** Rewrites a Host-only dismissal to the same opaque id exposed by its request projection. */
-export function projectInteractionDismissedForRemote<T>(payload: T): T {
-  if (!payload || typeof payload !== 'object' || Array.isArray(payload)) return payload;
-  const requestId = (payload as { requestId?: unknown }).requestId;
-  if (typeof requestId !== 'string') return payload;
-  if (!isDesktopOnlyConfirmationRequestId(requestId)) return payload;
-  return {
-    ...(payload as Record<string, unknown>),
-    requestId: projectDesktopOnlyConfirmationRequestId(requestId),
-  } as T;
-}
+export { projectInteractionDismissedForRemote } from './interactionProjection.js';
 
 export function projectPendingInteractionsForRemote<T extends { request: unknown }>(
   pending: T[],

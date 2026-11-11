@@ -26,6 +26,15 @@ function settings(patch: Partial<ImDefaultSettings> = {}): ImDefaultSettings {
 }
 
 describe('fingerprintImDefaultSettings', () => {
+  it('distinguishes the same provider/model on local and shared computers', () => {
+    const base = settings();
+    const shared = structuredClone(base);
+    shared.agents[shared.agentKind].agentDeviceId = 'share:a';
+    expect(fingerprintImDefaultSettings(shared)).not.toBe(fingerprintImDefaultSettings(base));
+    expect(sameImDefaultRoute(OLD, { ...OLD, agentDeviceId: 'share:a' })).toBe(false);
+    const route = { ...OLD, agentDeviceId: 'share:a' };
+    expect(parseImDefaultRouteRecord(buildImDefaultRouteRecord('fp', route))?.route).toEqual(route);
+  });
   it('changes with any engine route setting but not with permission modes', () => {
     const base = settings();
     const fp = fingerprintImDefaultSettings(base);

@@ -373,110 +373,100 @@ export class CodexMicroGuardStore {
   }
 }
 
+/** Retires legacy global preloads across all Cindy profiles in the current user's GUI domain. */
 export class CodexMicroGuardManager {
   readonly token: string;
+  private readonly rootStore: CodexMicroGuardStore;
 
   constructor(
     readonly store: CodexMicroGuardStore,
     private readonly runner: GuardCommandRunner,
     private readonly launchctlDomain: string,
-    private readonly leaseId: string,
+    private readonly environment: NodeJS.ProcessEnv = process.env,
   ) {
     this.token = `--require=${store.hookPath}`;
+    this.rootStore = new CodexMicroGuardStore(path.dirname(store.supportPath));
   }
 
-  async enable(hookContents: string, now: number = Date.now()): Promise<void> {
-    await this.store.withLeaseLock(() => this.enableLocked(hookContents, now));
-  }
-
-  async disable(now: number = Date.now()): Promise<void> {
-    await this.store.withLeaseLock(() => this.disableLocked(now));
-  }
-
-  async refreshHeartbeat(now: number = Date.now()): Promise<void> {
-    await this.store.withLeaseLock(async () => this.store.refreshLease(this.leaseId, now));
-  }
-
-  private async enableLocked(hookContents: string, now: number): Promise<void> {
-    if (/\s/u.test(this.store.hookPath)) {
-      throw new Error('guard hook path must not contain whitespace');
-    }
-    this.store.removeReceipt();
-    const original = await this.readNodeOptions();
-    this.store.installHook(hookContents);
-    const existing = this.store.readState();
-    const canReuse = existing !== null && nodeOptionsContains(this.token, original);
-    if (canReuse && !nodeOptionsContains(this.token, existing.installedNodeOptions)) {
-      throw new Error('guard recovery state is inconsistent');
-    }
-    const installed = canReuse ? (original ?? this.token) : mergeNodeOptions(original, this.token);
-    const stateWasCreated = !canReuse;
-    if (stateWasCreated) {
-      this.store.writeState({
-        version: 1,
-        originalNodeOptions: original,
-        installedNodeOptions: installed,
-      });
-    }
-
-    let environmentInstalled = false;
-    try {
-      if (installed !== original) {
-        await this.runLaunchctl(['setenv', 'NODE_OPTIONS', installed]);
-        environmentInstalled = true;
-      }
-      this.store.registerLease(this.leaseId, now);
-      this.store.markEnabled();
-    } catch (error) {
-      let rollbackFailed = false;
-      let otherLeasesRemain = false;
+  /**
+   * Protection is suspended (#5985). Retire every profile's preload, even if
+   * an old instance still has a live lease. Keep hook files for processes that
+   * already inherited NODE_OPTIONS; removing the environment cannot update them.
+   */
+  async recover(): Promise<void> {
+    const inherited = this.environment.NODE_OPTIONS;
+    let inheritedFailed = false;
+    if (inherited !== undefined) {
       try {
-        otherLeasesRemain = this.store.releaseLease(this.leaseId, now);
-        if (!otherLeasesRemain) this.store.removeEnabled();
+        const cleaned = this.stripNodeOptions(inherited);
+        if (cleaned === null) delete this.environment.NODE_OPTIONS;
+        else this.environment.NODE_OPTIONS = cleaned;
       } catch {
-        rollbackFailed = true;
+        inheritedFailed = true;
       }
-      if (environmentInstalled && !otherLeasesRemain) {
-        try {
-          await this.restoreEnvironment(original);
-        } catch {
-          rollbackFailed = true;
-        }
-      }
-      if (stateWasCreated && !otherLeasesRemain && !rollbackFailed) this.store.removeState();
-      if (rollbackFailed) throw new Error('guard activation rollback failed');
-      throw error;
     }
+    // Profiles share launchctl's environment. New instances must serialize the
+    // complete read/remove/write transaction, not just each profile's files.
+    await this.rootStore.withLeaseLock(() => this.recoverLocked());
+    if (inheritedFailed) throw new Error('guard inherited environment could not be cleaned');
   }
 
-  private async disableLocked(now: number): Promise<void> {
-    if (this.store.releaseLease(this.leaseId, now)) return;
-    this.store.removeEnabled();
-    try {
-      let state: CodexMicroGuardStateRecord | null;
+  private stripNodeOptions(value: string | null): string | null {
+    return stripLegacyGuardNodeOptions(value, this.rootStore.supportPath, this.store.hookPath);
+  }
+
+  private async recoverLocked(): Promise<void> {
+    const profiles = new Set<string>();
+    if (fs.existsSync(this.store.supportPath)) profiles.add(this.store.supportPath);
+    for (const name of fs.readdirSync(this.rootStore.supportPath)) {
+      if (/^[0-9a-f]{12}$/u.test(name)) profiles.add(path.join(this.rootStore.supportPath, name));
+    }
+    const cleanedStores: CodexMicroGuardStore[] = [];
+    const states: CodexMicroGuardStateRecord[] = [];
+    let filesFailed = false;
+    for (const profile of profiles) {
+      const store = new CodexMicroGuardStore(profile);
       try {
-        state = this.store.readState();
+        await store.withLeaseLock(async () => {
+          store.removeEnabled();
+          store.removeHeartbeat();
+          store.removeReceipt();
+          try {
+            const state = store.readState();
+            if (state) states.push(state);
+          } catch {
+            // A missing/corrupt snapshot must not keep the known preload active.
+          }
+        });
+        cleanedStores.push(store);
       } catch {
-        // Emergency recovery cannot reconstruct a corrupt snapshot. Removing
-        // only Cindy's bounded token is safer than leaving a global preload in
-        // place, and preserves every unrelated current option.
-        state = null;
+        // Still remove the global preload if one profile's files are unsafe or
+        // inaccessible. Expose recovery-required so cleanup can be retried.
+        filesFailed = true;
       }
-      const current = await this.readNodeOptions();
-      const restored = state
-        ? restoreNodeOptions(
-            state.originalNodeOptions,
-            state.installedNodeOptions,
-            current,
-            this.token,
-          )
-        : removeNodeOption(this.token, current);
+    }
+
+    const current = await this.readNodeOptions();
+    let restored = this.stripNodeOptions(current);
+    // Preserve an explicitly empty original value. Never restore snapshot text:
+    // another profile's original value can contain a preload already retired.
+    if (restored === null && current !== null && hasEmptyOriginalNodeOptions(current, states))
+      restored = '';
+    if (restored !== current) {
       await this.restoreEnvironment(restored);
-      this.store.removeState();
-    } finally {
-      this.store.removeHeartbeat();
-      this.store.removeReceipt();
+      const actual = await this.readNodeOptions();
+      if (this.stripNodeOptions(actual) !== actual) {
+        throw new Error('guard preload remains in the launch environment');
+      }
     }
+    for (const store of cleanedStores) {
+      try {
+        await store.withLeaseLock(async () => store.removeState());
+      } catch {
+        filesFailed = true;
+      }
+    }
+    if (filesFailed) throw new Error('guard legacy files could not be deactivated');
   }
 
   private async readNodeOptions(): Promise<string | null> {
@@ -496,6 +486,21 @@ export class CodexMicroGuardManager {
     if (result.status !== 0) throw new Error('launchctl command failed');
     return result;
   }
+}
+
+function hasEmptyOriginalNodeOptions(
+  current: string,
+  states: readonly CodexMicroGuardStateRecord[],
+): boolean {
+  const values = new Set([current]);
+  for (const value of values) {
+    for (const state of states) {
+      if (state.installedNodeOptions !== value) continue;
+      if (state.originalNodeOptions === '') return true;
+      if (state.originalNodeOptions !== null) values.add(state.originalNodeOptions);
+    }
+  }
+  return false;
 }
 
 export function parseLaunchEnvironmentNodeOptions(input: string): LaunchEnvironmentNodeOptions {
@@ -556,6 +561,68 @@ export function parseLaunchEnvironmentNodeOptions(input: string): LaunchEnvironm
     return { kind: 'invalid' };
   }
   return nodeOptions === null ? { kind: 'absent' } : { kind: 'present', value: nodeOptions };
+}
+
+/** Remove only preload arguments pointing at Cindy's known legacy hook layout. */
+export function stripLegacyGuardNodeOptions(
+  value: string | null,
+  supportRoot: string,
+  currentHookPath: string,
+): string | null {
+  if (value === null) return null;
+  const arguments_: Array<{ start: number; end: number; value: string }> = [];
+  let cursor = 0;
+  while (cursor < value.length) {
+    if (/\s/u.test(value[cursor])) {
+      cursor += 1;
+      continue;
+    }
+    const start = cursor;
+    let argument = '';
+    let quoted = false;
+    while (cursor < value.length) {
+      const character = value[cursor];
+      if (!quoted && /\s/u.test(character)) break;
+      if (character === '"') quoted = !quoted;
+      else if (quoted && character === '\\' && cursor + 1 < value.length) {
+        argument += value[++cursor];
+      } else argument += character;
+      cursor += 1;
+    }
+    if (quoted) throw new Error('guard cannot safely parse NODE_OPTIONS');
+    arguments_.push({ start, end: cursor, value: argument });
+  }
+  const isGuardHook = (filename: string): boolean => {
+    if (filename === currentHookPath) return true;
+    const profile = path.basename(path.dirname(filename));
+    return (
+      /^[0-9a-f]{12}$/u.test(profile) &&
+      filename === path.join(supportRoot, profile, 'guard-hook.cjs')
+    );
+  };
+  const removals: Array<{ start: number; end: number }> = [];
+  for (let index = 0; index < arguments_.length; index += 1) {
+    const argument = arguments_[index];
+    if (argument.value.startsWith('--require=') && isGuardHook(argument.value.slice(10))) {
+      removals.push(argument);
+    } else if (
+      (argument.value === '--require' || argument.value === '-r') &&
+      arguments_[index + 1] &&
+      isGuardHook(arguments_[index + 1].value)
+    ) {
+      removals.push({ start: argument.start, end: arguments_[++index].end });
+    }
+  }
+  let cleaned = value;
+  for (const removal of removals.reverse()) {
+    let { start, end } = removal;
+    // Retain unrelated options, quoting and whitespace byte-for-byte, removing
+    // just one separator owned by the appended token (as legacy recovery did).
+    if (start > 0) start -= 1;
+    else if (end < cleaned.length) end += 1;
+    cleaned = cleaned.slice(0, start) + cleaned.slice(end);
+  }
+  return cleaned.length > 0 || removals.length === 0 ? cleaned : null;
 }
 
 export function nodeOptionsContains(token: string, value: string | null): boolean {

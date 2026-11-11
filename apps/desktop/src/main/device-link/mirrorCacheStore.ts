@@ -1,3 +1,4 @@
+import { getSessionListActivityAt } from '@cindy/maker-shared/session-activity';
 /**
  * mirrorCacheStore —— 控制端「远程会话镜像」的本地冷缓存(落盘)。
  * ---------------------------------------------------------------------------
@@ -31,6 +32,7 @@
  */
 
 import path from 'node:path';
+import { historyCacheReceiptFollows } from '@cindy/maker-shared/message-window';
 import fsp from 'node:fs/promises';
 import { createHash, randomBytes } from 'node:crypto';
 
@@ -224,7 +226,7 @@ function messageOrderKey(message: Record<string, unknown>): number {
 }
 
 /**
- * 会话列表瘦身:只留列表渲染(标题 / 预览 / 时间 / 图标)、分组(workingDir / workspaceKind)
+ * 会话列表瘦身:只留列表渲染(标题 / 预览 / 时间 / 图标)、分组(projectDir / workingDir / workspaceKind)
  * 与跳转(id)需要的字段白名单,长文本截断。
  * 刻意丢弃 live-only 字段(deviceLinkConnectionStatus / attached / 运行态)与大字段
  * (_count / extraDirs / token 统计):前者会画出假在线,后者列表行不消费。
@@ -234,6 +236,7 @@ const SESSION_FIELD_WHITELIST = [
   'userId',
   'title',
   'workingDir',
+  'projectDir',
   'workspaceKind',
   'worktreePath',
   'model',
@@ -248,6 +251,7 @@ const SESSION_FIELD_WHITELIST = [
   'pinnedAt',
   'preview',
   'userSendAt',
+  'lastActivityAt',
   'createdAt',
   'updatedAt',
 ] as const;
@@ -271,6 +275,12 @@ export function coerceCachedSession(input: unknown): Record<string, unknown> | n
     if (value === undefined) continue;
     out[key] =
       typeof value === 'string' && TRUNCATED_TEXT_FIELDS.has(key) ? truncateText(value) : value;
+  }
+  const companion = input.companion;
+  if (isRecord(companion) && typeof companion.id === 'string' && typeof companion.role === 'string') {
+    out.companion = { id: companion.id, role: companion.role,
+      ...(typeof companion.channel === 'string' ? { channel: companion.channel } : {}),
+      ...(typeof companion.routineId === 'string' ? { routineId: companion.routineId } : {}) };
   }
   return out;
 }
@@ -308,7 +318,7 @@ export function normalizeDeviceSessions(
 function lastActivityTime(session: Record<string, unknown> | undefined): number {
   if (!session) return 0;
   return (
-    parseTime(session.userSendAt) || parseTime(session.updatedAt) || parseTime(session.createdAt)
+    parseTime(getSessionListActivityAt({ lastActivityAt: session.lastActivityAt, userSendAt: session.userSendAt, updatedAt: session.updatedAt })) || parseTime(session.createdAt)
   );
 }
 
@@ -1054,6 +1064,7 @@ export function createMirrorCache(resolveRoot: () => string): MirrorCache {
           const dir = path.join(rootAtStart, MESSAGES_DIR);
           const file = path.join(dir, messageFileName(deviceId, sessionId));
           let normalized = normalizeMessages(messages);
+          let retainedListReceipts = false;
           const history = decodeRemoteHistory(historyView);
           // Sanitize the whole projection, including images outside message.content.
           let sanitizedHistory = history ? JSON.stringify(stripInlineMedia(JSON.parse(encodeRemoteHistory(history)), 0)) : undefined;
@@ -1159,6 +1170,15 @@ export function createMirrorCache(resolveRoot: () => string): MirrorCache {
             normalized = normalizeMessages([...rows.filter(row => row.id !== message.id
               && (!message.clientId || row.clientId !== message.clientId)), message]);
             if (isRecord(previous) && decodeRemoteHistory(previous.historyView)) sanitizedHistory = previous.historyView as string;
+          } else if (history) {
+            // A delayed page write must not erase list bodies received after
+            // that page started reading. Older receipts are covered by the page.
+            if (!(await canCommitNonEmpty())) return { invalidation: -1 };
+            const previous = await readJson(file);
+            const rows = isRecord(previous) && Array.isArray(previous.messages) ? normalizeMessages(previous.messages) : [];
+            const arrivals = rows.filter(row => historyCacheReceiptFollows(row.cacheReceipt, history.readReceipt));
+            retainedListReceipts = arrivals.length > 0;
+            normalized = normalizeMessages([...normalized, ...arrivals]);
           }
           const body = sanitizedHistory === undefined ? JSON.stringify(normalized) : JSON.stringify([normalized, sanitizedHistory]);
           const payload: StoredMessages = {
@@ -1170,7 +1190,7 @@ export function createMirrorCache(resolveRoot: () => string): MirrorCache {
           const serialized = JSON.stringify(payload);
           if (Buffer.byteLength(serialized, 'utf8') > MAX_MESSAGE_FILE_BYTES) {
             // Prefetch is additive: if it cannot fit, retain the usable history.
-            if (mergeListMessage) return { invalidation: numericCounter(await readClearCounter(rootAtStart, sessionKey)) };
+            if (mergeListMessage || retainedListReceipts) return { invalidation: numericCounter(await readClearCounter(rootAtStart, sessionKey)) };
             // 单会话超限:新页写不下 —— 但旧正本此刻可能是 rewind / 删消息**之前**的窗口,
             // 而同一个超限页每次对账都会走到这里,永远不会有第二次机会更新它。所以**作废**
             // 旧缓存,而不是留一份会骗人的旧页(review: codex P1)。

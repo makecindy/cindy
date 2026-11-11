@@ -3,7 +3,7 @@ import { Suspense, startTransition, useState } from 'react';
 import { act, cleanup, render, screen } from '@testing-library/react';
 import { afterEach, expect, it } from 'vitest';
 import { useViewedPriorityHold } from '../useViewedPriorityHold';
-import { holdViewedPriorityRank, type ViewedPriorityHoldState } from '../../lib/mainListModel';
+import { advanceViewedPriorityHold, holdViewedPriorityRank, type ViewedPriorityHoldState } from '../../lib/mainListModel';
 import { LIVE_TASK_PRIORITY } from '../../../../../shared/liveTaskPriority';
 
 afterEach(cleanup);
@@ -69,4 +69,42 @@ it('retains click-time unread priority across an interrupted route render until 
   act(() => navigate('C'));
   expect(state.heldPriorityRanks.has('B')).toBe(false);
   expect(state.recentlyViewedAtMs.has('B')).toBe(true);
+});
+
+it('does not replace a shared switch projection when projection is disabled', () => {
+  const state: ViewedPriorityHoldState = {
+    prevViewedId: 'A',
+    heldPriorityRanks: new Map([['A', LIVE_TASK_PRIORITY.unread]]),
+    recentlyViewedAtMs: new Map(),
+  };
+  const ctx = {
+    runningSessionIds: new Set<string>(),
+    attentionSessionIds: new Set<string>(),
+  };
+  const shared = advanceViewedPriorityHold(
+    {
+      prevViewedId: state.prevViewedId,
+      heldPriorityRanks: new Map(state.heldPriorityRanks),
+      recentlyViewedAtMs: new Map(state.recentlyViewedAtMs),
+    },
+    'B',
+    ctx,
+    1_700_000_000_000,
+  );
+  function Passive() {
+    useViewedPriorityHold(state, 'B', ctx, { project: false });
+    return null;
+  }
+  render(<Passive />);
+  expect(state.prevViewedId).toBe('A');
+  expect(state.recentlyViewedAtMs.has('A')).toBe(false);
+  state.prevViewedId = shared.prevViewedId;
+  state.heldPriorityRanks = shared.heldPriorityRanks;
+  state.recentlyViewedAtMs = shared.recentlyViewedAtMs;
+  cleanup();
+  render(<Passive />);
+  expect(state.prevViewedId).toBe('B');
+  expect(state.heldPriorityRanks.has('A')).toBe(false);
+  expect(state.recentlyViewedAtMs.get('A')).toBe(1_700_000_000_000);
+  expect(shared.heldPriorityRanks.get('B')).toBe(LIVE_TASK_PRIORITY.rest);
 });

@@ -1,6 +1,7 @@
+import { hasRichAnswer, richAnswerMediaSources } from './richAnswer';
 import { groupWorkRuns } from './workRunGrouping.js';
 import { isContinuationMessage } from './syntheticTrigger.js';
-export { groupWorkRuns, type WorkRunGroupingAdapter } from './workRunGrouping.js';
+export { groupWorkRuns, groupTeammateProcess, type WorkRunGroupingAdapter } from './workRunGrouping.js';
 import {
   type AgentTaskTerminalStatus,
   type AgentTaskUpdate,
@@ -105,10 +106,14 @@ export interface MessageRenderNormalizedMessage<
   agentTaskStatus?: AgentTaskTerminalStatus;
   /** Host 在 SDK done 边界写入。同一 user turn 的最后一次 seal 是最终答复；更早的 seal 只在带交付内容时留在工作过程外。 */
   turnCompleted?: boolean;
+  /** SDK-proven failed sampling output remains readable inside the work fold. */
+  failedSamplingAttempt?: boolean;
   /** tool 消息专用:配对 tool_result 提取出的产出媒体(驱动 tool_media 独立渲染项)。 */
   media?: readonly MessageRenderToolMediaLike[];
   files?: readonly { url: string; title: string }[];
   cardIds?: readonly string[];
+  /** cardIds 中声明排到本轮末尾的卡(tool_result 的 xdt_card_turn_end)。 */
+  turnEndCardIds?: readonly string[];
 }
 
 export interface MessageRenderOptions {
@@ -210,6 +215,8 @@ export interface MessageRenderWorkGroupItem<
   TMessage extends MessageRenderNormalizedMessage = MessageRenderNormalizedMessage,
 > {
   type: 'work_group';
+  /** Teammate-only continuous public progress, with ordered activity segments. */
+  teammateJournal?: boolean;
   key: string;
   children: MessageRenderWorkChildItem<TMessage>[];
   deferred?: import('./historyView.js').DeferredHistoryWork;
@@ -298,6 +305,19 @@ function buildLinearItems<
   includeOrphanTaskUpdates = false,
 ): MessageRenderItem<TMessage>[] {
   const sourceMessages = messages.map((message) => message.source);
+  // Each turn shares one set, filled before projecting tool artifacts. Keep the
+  // original tool rows intact so expanding the work history still shows results.
+  const inlineMediaByMessage = new Map<TMessage, Set<string>>();
+  let inlineMedia = new Set<string>();
+  for (const message of messages) {
+    if (message.kind === 'user' && isPlanUserBoundary({ ...message.source, role: 'user' })) {
+      inlineMedia = new Set<string>();
+    }
+    inlineMediaByMessage.set(message, inlineMedia);
+    if (message.kind === 'assistant' && !message.isStreaming && !message.failedSamplingAttempt) {
+      for (const url of richAnswerMediaSources(message.body)) inlineMedia.add(url);
+    }
+  }
   const todoInsertAt = findMessageTodoInsertions(sourceMessages);
   const agentPlanToolUseIds = collectAgentPlanToolUseIds(sourceMessages);
   const items: MessageRenderItem<TMessage>[] = [];
@@ -315,6 +335,18 @@ function buildLinearItems<
     pendingToolsEndMs = pendingToolsEndMs === null ? ms : Math.max(pendingToolsEndMs, ms);
   };
 
+  // 声明排到本轮末尾的插件卡(如「要发 PR 吗」):不跟所属工具组走,攒到下一条用户消息
+  // 之前(或列表末尾)再出,与桌面把它排在本轮最后同口径。
+  let pendingTurnEndTools: TMessage[] = [];
+  const flushTurnEndCards = () => {
+    if (pendingTurnEndTools.length === 0) return;
+    items.push({
+      type: 'tool_media',
+      key: `turn-end-media-${messageClientId(pendingTurnEndTools[0])}`,
+      tools: pendingTurnEndTools,
+    });
+    pendingTurnEndTools = [];
+  };
   const flushTools = () => {
     pendingToolsEndMs = null;
     if (pendingTools.length === 0) return;
@@ -326,7 +358,17 @@ function buildLinearItems<
     // tool 产出媒体(agent 出图等)提为独立 tool_media 项,紧跟所属 tool_group,
     // 跳出折叠卡可见(对齐桌面 MessageStream flushSegment)。key 派生自组首 tool
     // 的 clientId(与 tool_group 同源、prefix 不同),流式中组内新增 tool 时稳定。
-    const mediaTools = pendingTools.filter((tool) => (tool.media?.length ?? 0) > 0 || (tool.files?.length ?? 0) > 0 || (tool.cardIds?.length ?? 0) > 0);
+    const mediaTools = pendingTools.map((tool) => {
+      // Look the inline URLs up by the original message: splitting off the turn-end card copies it.
+      const urls = inlineMediaByMessage.get(tool);
+      const turnEnd = tool.turnEndCardIds?.length ? new Set(tool.turnEndCardIds) : undefined;
+      if (turnEnd && tool.cardIds?.some((id) => turnEnd.has(id))) {
+        pendingTurnEndTools.push({ ...tool, media: [], files: [], cardIds: tool.cardIds.filter((id) => turnEnd.has(id)) });
+        tool = { ...tool, cardIds: tool.cardIds.filter((id) => !turnEnd.has(id)) };
+      }
+      if (!urls?.size || !tool.media?.some(media => urls.has(media.url))) return tool;
+      return { ...tool, media: tool.media.filter(media => !urls.has(media.url)) };
+    }).filter((tool) => (tool.media?.length ?? 0) > 0 || (tool.files?.length ?? 0) > 0 || (tool.cardIds?.length ?? 0) > 0);
     if (dedupeToolMediaByUrl(mediaTools.flatMap((tool) => tool.media ?? [])).length > 0
       || mediaTools.some((tool) => (tool.files?.length ?? 0) > 0 || (tool.cardIds?.length ?? 0) > 0)) {
       items.push({
@@ -397,6 +439,7 @@ function buildLinearItems<
     }
 
     flushTools();
+    if (message.kind === 'user' && !isSteerUserRow(message.source)) flushTurnEndCards();
     if (message.kind === 'thinking') {
       const thinking = parseThinking(message.source);
       items.push({
@@ -416,6 +459,7 @@ function buildLinearItems<
     });
   }
   flushTools();
+  flushTurnEndCards();
   if (includeOrphanTaskUpdates) {
     appendOrphanAgentTasks(items, taskUpdates, renderedTaskKeys);
   }
@@ -550,8 +594,8 @@ function hasSubagentParent(message: MessageRenderSourceMessageLike): boolean {
   return false;
 }
 
-/** Live Claude/Codex SDK tool-use ids;裸 uuid 形态的 legacy transcript 链边不算。 */
-const SUBAGENT_PARENT_ID_RE = /^(?:toolu|call)[_-]/iu;
+/** SDK tool-use ids，含 HY4 的 chatcmpl-tool-*；裸 legacy transcript uuid 不算。 */
+const SUBAGENT_PARENT_ID_RE = /^(?:(?:toolu|call)[_-]|chatcmpl-tool-)/iu;
 /**
  * 兼容模型(kimi 系等)的 tool-use id 形态:`${ToolName}_${序号}`。resume 前的
  * 转录归一化(maker-core 的 jsonl-tool-id-normalize)还会把它改写成 `Task_x1`
@@ -1528,6 +1572,7 @@ function groupMessageWorkRuns<TMessage extends MessageRenderNormalizedMessage>(
       isUserBoundary: (item) => item.type === 'message' && item.message.kind === 'user' && !isSteerUserRow(item.message.source),
       isContinuationBoundary: (item) => item.type === 'message' && isContinuationMessage(item.message.source),
       isAnswer: isAssistantAnswerCandidate,
+      canPrependToAnswer: (item) => item.type !== 'message' || item.message.source.agentMeta?.assistantPhase !== 'commentary',
       isSealedAnswer: (item) => item.type === 'message' && isCompletedAssistantMessage(item.message),
       isCompactBoundary: isCompactBoundaryItem,
       isActivity: isWorkActivityItem,
@@ -1573,7 +1618,7 @@ function isRunningAgentTaskItem<
 }
 
 function isCompletedAssistantMessage(message: MessageRenderNormalizedMessage): boolean {
-  return message.turnCompleted === true;
+  return !message.failedSamplingAttempt && message.turnCompleted === true;
 }
 
 function isAssistantAnswerCandidate<
@@ -1581,6 +1626,7 @@ function isAssistantAnswerCandidate<
 >(item: MessageRenderItem<TMessage>): item is MessageRenderMessageItem<TMessage> {
   return item.type === 'message'
     && item.message.kind === 'assistant'
+    && !item.message.failedSamplingAttempt
     && item.message.body.trim().length > 0;
 }
 
@@ -1631,6 +1677,7 @@ const HTML_IMAGE_RE = /<img(?=[\s/>])[^<>]*\ssrc\s*=\s*["']?[^\s"'<>]+[^<>]*>/i;
 export function isDeliveryProseText(text: string): boolean {
   const trimmed = text.trim();
   if (trimmed.length === 0) return false;
+  if (hasRichAnswer(trimmed)) return true;
   if (trimmed.length >= DELIVERY_PROSE_MIN_LENGTH) return true;
   if (MARKDOWN_HEADING_RE.test(trimmed)) return true;
   if (MARKDOWN_TABLE_DIVIDER_RE.test(trimmed)) return true;
@@ -1654,6 +1701,7 @@ function isDeliveryProseItem<TMessage extends MessageRenderNormalizedMessage>(
 ): boolean {
   return item.type === 'message'
     && item.message.kind === 'assistant'
+    && !item.message.failedSamplingAttempt
     && isDeliveryProseText(item.message.body);
 }
 
@@ -1672,12 +1720,13 @@ function isWorkChild<
   );
 }
 
-/** Assistant progress text remains visible while running and never consumes the latest-five window. */
+/** Normal progress stays visible; proven failed sampling output uses the existing fold. */
 function isWorkActivityItem<TMessage extends MessageRenderNormalizedMessage>(
   item: MessageRenderItem<TMessage>,
-): item is MessageRenderThinkingItem<TMessage> | MessageRenderToolGroupItem<TMessage> | MessageRenderAgentTaskItem<TMessage> {
+): item is Exclude<MessageRenderWorkChildItem<TMessage>, MessageRenderWorkGroupItem<TMessage>> {
   return !isRunningAgentTaskItem(item)
-    && (item.type === 'thinking' || item.type === 'tool_group' || item.type === 'agent_task');
+    && (item.type === 'thinking' || item.type === 'tool_group' || item.type === 'agent_task' ||
+      (item.type === 'message' && item.message.kind === 'assistant' && item.message.failedSamplingAttempt === true));
 }
 
 /** 边界项（用户消息 / assistant 正文）的时间戳；非 message 卡片不作为时间边界。 */
@@ -1724,7 +1773,7 @@ function createCompletedWorkGroup<TMessage extends MessageRenderNormalizedMessag
   previousBoundaryMs: number | null = null,
 ): MessageRenderWorkGroupItem<TMessage> {
   const hasAssistantText = run.some(
-    (item) => item.type === 'message' && item.message.kind === 'assistant',
+    (item) => item.type === 'message' && item.message.kind === 'assistant' && !item.message.failedSamplingAttempt,
   );
   if (!hasAssistantText) return createWorkGroup(run, nextItem, false, previousBoundaryMs);
 

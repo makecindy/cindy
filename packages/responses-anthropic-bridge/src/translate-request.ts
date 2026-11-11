@@ -1114,6 +1114,22 @@ export interface TranslatedResponsesRequest {
   toolContext: ToolContext;
 }
 
+function isEmptyAssistantMessageWithSupportedMetadata(item: JsonObject): boolean {
+  if (item.role !== 'assistant' || item.content !== null) return false;
+  if (item.type !== undefined && item.type !== 'message') return false;
+  if (['id', 'status', 'phase'].some((fieldName) => (
+    item[fieldName] !== undefined && typeof item[fieldName] !== 'string'
+  ))) return false;
+  return Object.keys(item).every((fieldName) => (
+    fieldName === 'type'
+    || fieldName === 'id'
+    || fieldName === 'role'
+    || fieldName === 'content'
+    || fieldName === 'status'
+    || fieldName === 'phase'
+  ));
+}
+
 export function translateResponsesRequest(
   raw: ResponsesRequest,
   options: TranslateResponsesRequestOptions = {},
@@ -1267,6 +1283,7 @@ export function translateResponsesRequest(
         continue;
       }
       if (role !== 'user' && role !== 'assistant') throw new UnsupportedResponsesFeatureError(`input role '${role}'`);
+      if (isEmptyAssistantMessageWithSupportedMetadata(rawItem)) continue;
       const parts = inputContentToAnthropic(rawItem.content, role);
       if (role === 'assistant') {
         assistant ??= { role: 'assistant', content: [] };

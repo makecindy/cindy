@@ -1,3 +1,4 @@
+import type { SupportedLocale } from './locale.js';
 /**
  * Shared types for the help-assistant IPC contract.
  *
@@ -8,7 +9,7 @@
  * main turns that history into a prompt and returns one assistant answer.
  */
 
-export type HelpLocale = 'zh-CN' | 'zh-TW' | 'en' | 'ja' | 'ko';
+export type HelpLocale = SupportedLocale;
 
 export type HelpRole = 'user' | 'assistant';
 
@@ -17,6 +18,7 @@ export type HelpRole = 'user' | 'assistant';
  *  dependency. main validates LLM-emitted tab ids against this same set. */
 export type HelpTabId =
   | 'general'
+  | 'appearance'
   | 'personalization'
   | 'api-keys'
   | 'providers'

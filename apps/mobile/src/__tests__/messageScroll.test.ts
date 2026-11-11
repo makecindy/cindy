@@ -37,6 +37,7 @@ import {
   mobileMessageListTopPadding,
   mobileTopPaddingCompensationOffset,
   MOBILE_FOLLOW_REPIN_DIRECTION_DEAD_ZONE,
+  MOBILE_FOLLOW_REPIN_END_TOLERANCE,
   MOBILE_FOLLOW_UNPIN_DRAG_DEAD_ZONE,
   MOBILE_MVCP_SETTLE_QUIET_MS,
   resolveMobileNearBottomOnScroll,
@@ -425,7 +426,7 @@ describe('shouldUnpinMobileFollowOnDrag', () => {
 
 describe('resolveMobileNearBottomOnScroll', () => {
   // 阈值:96 + 132(无浮层)= 228。内容 2000,视口 800 → end offset 1200,
-  // 阈值带 = offsetY > 972。
+  // 阈值带 = offsetY > 972(只用于判定「保持跟随」;恢复跟随要求距末端 ≤ 容差)。
   const metricsAt = (offsetY: number) => ({ contentHeight: 2000, offsetY, viewportHeight: 800 });
 
   it('距底超出阈值 + 明确上滑 / 已解除 → false(原有离底解除行为不变)', () => {
@@ -470,10 +471,31 @@ describe('resolveMobileNearBottomOnScroll', () => {
     })).toBe(false);
   });
 
-  it('阈值带内 + 已解除 + 明确向下 → 恢复跟随', () => {
+  it('已解除 + 明确向下 + 真正到底 → 恢复跟随', () => {
     expect(resolveMobileNearBottomOnScroll({
-      wasNearBottom: false, metrics: metricsAt(1100), scrollDelta: 2,
+      wasNearBottom: false, metrics: metricsAt(1200), scrollDelta: 2,
     })).toBe(true);
+    expect(resolveMobileNearBottomOnScroll({
+      wasNearBottom: false, metrics: metricsAt(1200 - MOBILE_FOLLOW_REPIN_END_TOLERANCE), scrollDelta: 2,
+    })).toBe(true);
+    // iOS 回弹越过末端同样算到底。
+    expect(resolveMobileNearBottomOnScroll({
+      wasNearBottom: false, metrics: metricsAt(1240), scrollDelta: 6,
+    })).toBe(true);
+  });
+
+  it('已解除 + 停在距底几行处的向下微调/抬手位移 → 保持解除(不在近底阈值带内恢复)', () => {
+    // 距末端约三行(~70px):仍在 228px 近底阈值带内,但不是「回到底部」。
+    expect(resolveMobileNearBottomOnScroll({
+      wasNearBottom: false, metrics: metricsAt(1130), scrollDelta: 3,
+    })).toBe(false);
+    expect(resolveMobileNearBottomOnScroll({
+      wasNearBottom: false, metrics: metricsAt(1200 - MOBILE_FOLLOW_REPIN_END_TOLERANCE - 1), scrollDelta: 2,
+    })).toBe(false);
+    // 恢复的距离口径与底部浮层高度无关:留白已计入 contentHeight。
+    expect(resolveMobileNearBottomOnScroll({
+      wasNearBottom: false, metrics: metricsAt(1000), scrollDelta: 3, bottomOverlayHeight: 400,
+    })).toBe(false);
   });
 
   it('bottomOverlayHeight 放大阈值(与 isNearMobileMessageListBottom 同口径)', () => {
