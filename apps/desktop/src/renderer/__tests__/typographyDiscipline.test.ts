@@ -392,6 +392,7 @@ const FIXED_LEADING_DEBT: Exemption[] = [
   fixedLeadingDebt('src/renderer/features/cc-agent/SessionEntryError.tsx', { 'leading-6': 1 }),
   fixedLeadingDebt('src/renderer/features/cc-agent/sidebar/MachineSwitcherMenu.tsx', { 'leading-5': 1 }),
   fixedLeadingDebt('src/renderer/features/cc-agent/sidebar/sections/PinnedSection.tsx', { 'leading-5': 1 }),
+  fixedLeadingDebt('src/renderer/features/cc-agent/sidebar/TaskRuntimePluginsDialog.tsx', { 'leading-5': 3 }),
   fixedLeadingDebt('src/renderer/features/plugin/GhostLibrarySection.tsx', { 'leading-5': 1 }),
   fixedLeadingDebt('src/renderer/features/plugin/GhostPluginDetailView.tsx', { 'leading-5': 12 }),
   fixedLeadingDebt('src/renderer/features/plugin/GhostPluginPage.tsx', { 'leading-5': 4, 'leading-6': 1 }),

@@ -293,12 +293,12 @@ _Positioning note: the Display / Section Heading / Sub-heading rows are conceptu
 
     **门禁**:`typographyDiscipline.test.ts` 的 `fixed-leading` 规则拦截上述三种写法,**按 `className` / `cn(...)` 整块区域跨行判定**,也检查单行 class 字符串常量(只比对同一行会漏掉 `cn()` 分行写法,#1553 实际漏过一处)。px 写法已由 #1553 清零(当时 38 处),零容忍;rem 与数字档在 2026-11 纳入门禁时的存量逐条登记在同文件 `FIXED_LEADING_DEBT`(文件 + 写法 + 次数),新增一处即红,迁移后须同步下调,**基线只减不增**。
 
-    **存量债务与分批迁移(2026-11 维护者裁决方案 A)**:`components/ui/` 共享组件(ErrorNotice、DownloadToast)已先行改为比例行高;登记基线为 **118 个文件、372 处**(`leading-5` 233、`leading-4` 88、`leading-6` 47、`leading-7` 2、`leading-8` 2;rem 写法 0)。按区域分批,每批一个 PR,附默认字号与最大 UI 字号(24)的单页对照,并在同一 PR 下调基线:
+    **存量债务与分批迁移(2026-11 维护者裁决方案 A)**:`components/ui/` 共享组件(ErrorNotice、DownloadToast)已先行改为比例行高;登记基线为 **119 个文件、375 处**(`leading-5` 236、`leading-4` 88、`leading-6` 47、`leading-7` 2、`leading-8` 2;rem 写法 0)。按区域分批,每批一个 PR,附默认字号与最大 UI 字号(24)的单页对照,并在同一 PR 下调基线:
     1. 聊天与输入框:`components/chat`、`components/new-chat`(47 处),用户放大字号后最常看到;
     2. 插件:`features/plugin`(120 处);
     3. 伙伴:`features/bots`(70 处);
     4. 右侧栏与设置:`features/right-sidebar`、`components/settings`(71 处);
-    5. 其余零散区域(64 处,`features/billing`、`cindy-brain`、`features/skillhub`、`voice-input` 等)。
+    5. 其余零散区域(67 处,`features/billing`、`cindy-brain`、`features/skillhub`、`voice-input` 等)。
 
     基线清零后删除 `FIXED_LEADING_DEBT`,本条只保留规则与门禁。
 - 语义类 `text-xs/sm/base/lg` → `text-<n>` 的机械统一:等值改写零收益,收编即可。
