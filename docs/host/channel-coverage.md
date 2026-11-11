@@ -1,14 +1,14 @@
 # Host 通道覆盖清单（脚本生成）
 
 > 由 `node scripts/host-channel-coverage.mjs` 生成，不要手工修改；行号只在 `--json` 输出里。
-> 生成时的源码提交：`8599e2d25d`。归属规则见下方「归属规则」，正本在脚本的 `OWNERSHIP_RULES`。
+> 生成时的源码提交：`edfa5aff6a`。归属规则见下方「归属规则」，正本在脚本的 `OWNERSHIP_RULES`。
 
 统计对象是桌面主进程（`apps/desktop/src/main`，不含测试）里所有 `ipcMain.handle/on`
 及其包装函数注册的通道；同名通道按 invoke / event 各计一次。
 
 ## 总口径
 
-**真正要 Host 做的 = A + C-后台 + C-两段式 = 918 + 32 + 39 = 989**；巡检实际调用到 **133** 个（722 次，其中 A 131）。
+**真正要 Host 做的 = A + C-后台 + C-两段式 = 918 + 32 + 40 = 990**；巡检实际调用到 **133** 个（722 次，其中 A 131）。
 同步通道（S）与回执通道（R）已单列，不在 A 里；C-窗口本地与 C-专项设计不计入。
 
 | 分类 | 含义 | 通道数 |
@@ -22,17 +22,17 @@
 | 　S·本地 | 同步·界面设置（窗口本地读 profile） | 7（巡检调用 7） |
 | 　S·镜像 | 同步·数据归 Host（需窗口缓存镜像） | 7（巡检调用 4） |
 | **R** | 回执通道：主进程向界面要数据，界面回执；先不排期 | 6（巡检调用 2） |
-| **C** | 跨两边，按处理方式分四种 | 86（巡检调用 4） |
+| **C** | 跨两边，按处理方式分四种 | 87（巡检调用 4） |
 | 　C-后台 | | 32（巡检调用 2） |
-| 　C-两段式（窗口做界面动作，数据调 Host） | | 39（巡检调用 0） |
+| 　C-两段式（窗口做界面动作，数据调 Host） | | 40（巡检调用 0） |
 | 　C-窗口本地 | | 11（巡检调用 2） |
 | 　C-专项设计（安全边界） | | 4（巡检调用 0） |
-| 合计 | | 1454 |
+| 合计 | | 1455 |
 
 **窗口类**（B + W + S·本地 + C-窗口本地）在客户端模式下：
 已注册 **371**、未注册 **12**（今天被拒或无人监听，见下文）、快照无法判断 2。
 
-判定依据：A:default 109、A:rule 809、B:rule 361、C:dependency 16、C:rule 70、R:rule 6、S:dependency 14、W:rule 6（rule = 规则表，dependency = 窗口 API 或同步返回值判定，default = 未登记前缀且没用窗口 API）。
+判定依据：A:default 109、A:rule 809、B:rule 361、C:dependency 17、C:rule 70、R:rule 6、S:dependency 14、W:rule 6（rule = 规则表，dependency = 窗口 API 或同步返回值判定，default = 未登记前缀且没用窗口 API）。
 
 转发适配器 2 处（把通道原样转给另一个注册表，通道已在调用处计入）：
 `maker-ipc/electronIpcRegistry.ts`、`maker-ipc/register.ts`
@@ -257,7 +257,7 @@ S·本地：界面设置，由窗口本地读同一份 profile 文件，客户�
 | `model-favorites:host-reply` | event | R | 主进程向界面要数据的回执协议：数据在界面本地存储，Host 要用需经窗口往返，先不排期 | 0 | `maker-ipc/modelFavoritesSync.ts` |
 | `setup-migration:host-reply` | event | R | 主进程向界面要数据的回执协议：数据在界面本地存储，Host 要用需经窗口往返，先不排期 | 0 | `setup-migration/rendererPrefsHost.ts` |
 
-## C 类全量（86）
+## C 类全量（87）
 
 C-后台：换窗口时不能断、网页和手机也要用，计入要 Host 做的（终端优先级低）。C-两段式：窗口保留处理者做界面动作，数据那一半调 Host，每个需要一个 Host 接口，计入但低频、排在后面。C-窗口本地：路径来自用户在本窗口的选择，客户端模式下照常注册，不计入。C-专项设计：安全边界，先读 docs/product-rules/input-handoff.md，方案出来前不动。
 
@@ -271,6 +271,7 @@ C-后台：换窗口时不能断、网页和手机也要用，计入要 Host 做
 | `app:open-cindy-make-source-dir` | invoke | C-两段式（窗口做界面动作，数据调 Host） | 在访达／资源管理器或系统浏览器里打开后台持有的内容 | 0 | `bootstrap-electron.ts` |
 | `app:open-cindy-make-tools-dir` | invoke | C-两段式（窗口做界面动作，数据调 Host） | 在访达／资源管理器或系统浏览器里打开后台持有的内容 | 0 | `bootstrap-electron.ts` |
 | `appearance-settings:import-wallpaper` | invoke | C-两段式（窗口做界面动作，数据调 Host） | 设置与偏好，但处理函数用到窗口 API：BrowserWindow.fromWebContents；窗口做界面动作，数据那一半调 Host | 0 | `appearance-settings-ipc.ts` |
+| `appearance-settings:plugin-font` | invoke | C-两段式（窗口做界面动作，数据调 Host） | 设置与偏好，但处理函数用到窗口 API：BrowserWindow.fromWebContents；窗口做界面动作，数据那一半调 Host | 0 | `appearance-settings-ipc.ts` |
 | `billing:open-payment-redirect` | invoke | C-两段式（窗口做界面动作，数据调 Host） | 在访达／资源管理器或系统浏览器里打开后台持有的内容 | 0 | `billing/index.ts` |
 | `billing:open-subscription-portal` | invoke | C-两段式（窗口做界面动作，数据调 Host） | 在访达／资源管理器或系统浏览器里打开后台持有的内容 | 0 | `billing/index.ts` |
 | `cindy-media:chat-attachments-clear` | invoke | C-两段式（窗口做界面动作，数据调 Host） | 附件与媒体库，但处理函数用到窗口 API：BrowserWindow.fromWebContents、dialog；窗口做界面动作，数据那一半调 Host | 0 | `bootstrap-electron.ts` |
@@ -327,7 +328,7 @@ C-后台：换窗口时不能断、网页和手机也要用，计入要 Host 做
 | `maker:file-browser:write-file` | invoke | C-后台 | 任务范围内的文件操作：换窗口时不能断，网页和手机也要用，路径授权跟着运行时 | 0 | `file-browser/index.ts` |
 | `maker:html-preview:cancel` | invoke | C-后台 | 任务范围内的文件操作：换窗口时不能断，网页和手机也要用，路径授权跟着运行时 | 0 | `file-browser/html-preview-ipc.ts` |
 | `maker:html-preview:open` | invoke | C-后台 | 任务范围内的文件操作：换窗口时不能断，网页和手机也要用，路径授权跟着运行时 | 0 | `file-browser/html-preview-ipc.ts` |
-| `maker:mcp-apps:v1` | invoke | C-两段式（窗口做界面动作，数据调 Host） | 插件、技能与 MCP，但处理函数用到窗口 API：shell；窗口做界面动作，数据那一半调 Host | 0 | `mcp-apps/ipc.ts` |
+| `maker:mcp-apps:v1` | invoke | C-两段式（窗口做界面动作，数据调 Host） | 插件、技能与 MCP，但处理函数用到窗口 API：BrowserWindow.fromWebContents、shell；窗口做界面动作，数据那一半调 Host | 0 | `mcp-apps/ipc.ts` |
 | `maker:mcp:duplicates:choose` | invoke | C-两段式（窗口做界面动作，数据调 Host） | 弹出系统选择框后写入后台数据：选择在窗口，结果归后台 | 0 | `maker-ipc/mcpHandlers.ts` |
 | `maker:remote-ssh:review-host-key` | invoke | C-两段式（窗口做界面动作，数据调 Host） | 设备互联与远程执行，但处理函数用到窗口 API：BrowserWindow.fromWebContents、dialog；窗口做界面动作，数据那一半调 Host | 0 | `remote-ssh/index.ts` |
 | `maker:search:cancel` | invoke | C-后台 | 任务范围内的文件操作：换窗口时不能断，网页和手机也要用，路径授权跟着运行时 | 0 | `file-browser/search/index.ts` |
@@ -408,7 +409,7 @@ C-后台：换窗口时不能断、网页和手机也要用，计入要 Host 做
 | setup-migration | 0 | 5 | 0 | 0 | 0 | 2 | 0 | 7 |
 | wecomGroupNotification | 0 | 5 | 0 | 0 | 0 | 0 | 0 | 5 |
 | analyticsSettingsService | 0 | 4 | 0 | 0 | 0 | 0 | 0 | 4 |
-| appearance-settings-ipc | 2 | 4 | 0 | 0 | 1 | 0 | 1 | 8 |
+| appearance-settings-ipc | 2 | 4 | 0 | 0 | 1 | 0 | 2 | 9 |
 | app-shortcuts | 0 | 3 | 1 | 0 | 1 | 0 | 0 | 5 |
 | remotePrecreatedWorktreeLedger | 0 | 3 | 0 | 0 | 0 | 0 | 0 | 3 |
 | cross-agent-convert | 0 | 2 | 0 | 0 | 0 | 0 | 0 | 2 |
@@ -527,6 +528,7 @@ C-后台：换窗口时不能断、网页和手机也要用，计入要 Host 做
 | `appearance-settings:get` | invoke | A（设置与偏好） | 1 | `appearance-settings-ipc.ts` |
 | `appearance-settings:get-sync` | event | 同步·界面设置（窗口本地读 profile）（同步通道·界面设置：窗口本地读同一份 profile 文件） | 3 | `appearance-settings-ipc.ts` |
 | `appearance-settings:import-wallpaper` | invoke | C-两段式（窗口做界面动作，数据调 Host）（设置与偏好，但处理函数用到窗口 API：BrowserWindow.fromWebContents；窗口做界面动作，数据那一半调 Host） | 0 | `appearance-settings-ipc.ts` |
+| `appearance-settings:plugin-font` | invoke | C-两段式（窗口做界面动作，数据调 Host）（设置与偏好，但处理函数用到窗口 API：BrowserWindow.fromWebContents；窗口做界面动作，数据那一半调 Host） | 0 | `appearance-settings-ipc.ts` |
 | `appearance-settings:remove-wallpaper` | invoke | A（设置与偏好） | 0 | `appearance-settings-ipc.ts` |
 | `appearance-settings:reset` | invoke | contract | 0 | `appearance-settings-ipc.ts` |
 | `appearance-settings:set-patch` | invoke | contract | 0 | `appearance-settings-ipc.ts` |
@@ -1672,7 +1674,7 @@ C-后台：换窗口时不能断、网页和手机也要用，计入要 Host 做
 
 | 通道 | 类型 | 归属 | 调用次数 | 注册文件 |
 |---|---|---|---:|---|
-| `maker:mcp-apps:v1` | invoke | C-两段式（窗口做界面动作，数据调 Host）（插件、技能与 MCP，但处理函数用到窗口 API：shell；窗口做界面动作，数据那一半调 Host） | 0 | `mcp-apps/ipc.ts` |
+| `maker:mcp-apps:v1` | invoke | C-两段式（窗口做界面动作，数据调 Host）（插件、技能与 MCP，但处理函数用到窗口 API：BrowserWindow.fromWebContents、shell；窗口做界面动作，数据那一半调 Host） | 0 | `mcp-apps/ipc.ts` |
 
 ### mcp-integrations
 
