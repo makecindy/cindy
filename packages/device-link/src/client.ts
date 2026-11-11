@@ -2469,6 +2469,12 @@ export class DeviceLinkClient {
   private async connect(reason: string): Promise<void> {
     if (this.stopped) return;
     for (const waiter of this.handshakeWaiters) waiter();
+    // The previous watchdog is epoch-stale; leaving it armed would let new waiters
+    // treat this attempt's token fetch as an active socket handshake.
+    if (this.handshakeTimer) {
+      clearTimeout(this.handshakeTimer);
+      this.handshakeTimer = null;
+    }
     this.clearNetworkProbe();
     this.resetLegacyInboundQueue();
     this.connectionStartedAt = this.monotonicNow();

@@ -7003,6 +7003,33 @@ describe('DeviceLinkClient', () => {
     }
   });
 
+  // Unit / review: replacing an in-flight handshake left the previous watchdog
+  // armed, so a new read waited for the replacement's token fetch instead of its budget.
+  it('does not extend a handshake wait while the replacement is still fetching a token', async () => {
+    vi.useFakeTimers({ toFake: ['Date', 'performance', 'setTimeout', 'clearTimeout', 'setInterval', 'clearInterval'] });
+    let calls = 0;
+    const client = new DeviceLinkClient({
+      getWsUrl: () => 'ws://test/api/device-link/ws',
+      getToken: () => (++calls === 1 ? Promise.resolve('jwt-token') : new Promise<string | null>(() => {})),
+      getHello: () => ({ deviceName: 'Test Mac', platform: 'darwin', appVersion: '1.0.0', remoteControlEnabled: true, busy: false }),
+      createWebSocket: () => new FakeWs(),
+      timing: { handshakeTimeoutMs: 12_000, getTokenTimeoutMs: 10_000, reconnectBaseMs: 400, reconnectMaxMs: 400 },
+    });
+    try {
+      client.start();
+      await vi.advanceTimersByTimeAsync(0);
+      client.restartConnection('test-replacement');
+      let failure: unknown;
+      const waiting = client.waitUntilOnline(1500, { waitForHandshake: true }).catch(error => { failure = error; });
+      await vi.advanceTimersByTimeAsync(1500);
+      expect(failure).toMatchObject({ code: 'NOT_CONNECTED', message: 'not online within 1500ms' });
+      await waiting;
+    } finally {
+      client.stop();
+      vi.useRealTimers();
+    }
+  });
+
   it('waitUntilOnline:online 时立即 resolve', async () => {
     const h = makeHarness();
     h.client.start();
