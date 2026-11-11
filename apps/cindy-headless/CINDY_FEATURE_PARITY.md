@@ -5,6 +5,15 @@ This inventory applies to Cindy Headless `0.4.3`, based on Cindy upstream commit
 only when the Headless CLI or Harbor adapter can exercise it; vendored source
 alone is not sufficient.
 
+## Pi runtime pin alignment: 2026-11-11
+
+Pi example and smoke profiles follow `tools/pi/latest.json` at `1.5.0`, with
+the production Pi profile lock regenerated via `pnpm profiles:freeze`.
+Pi's message-scoped Anthropic effort keeps a fixed top-level `low` default;
+per-reply markers preserve the selected effort and its history. The real-binary
+PiAgent integration test checks both markers and ordinary relay requests.
+This is a runtime pin update, not a Headless release or live-model validation.
+
 ## Runtime pin alignment: 2026-11-10
 
 Claude example and smoke profiles now follow Claude Code `2.1.321` (from
