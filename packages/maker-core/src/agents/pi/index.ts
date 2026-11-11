@@ -3410,11 +3410,13 @@ export class PiAgent extends BaseAgent {
     // 会导致 bridge/subagent 静默失效)。
     const bridgeExtensionPath = joinRemotePosixPath(extensionsDir, CINDY_BRIDGE_EXTENSION_FILENAME);
     await writeFile(bridgeExtensionPath, CINDY_BRIDGE_EXTENSION_SOURCE);
-    // cindy-tool-fold: 老工具往返折叠成一行。默认开，CINDY_PI_TOOL_FOLD=off 可关。
+    // cindy-tool-fold: 老工具往返折叠成一行。实验开关,默认关闭 —— 用户在
+    // 「设置 → 通用 → 实验功能」里打开后,之后启动的 Pi 任务才加载这个扩展。
     // 取回工具 toolfold_read 在受邀者/Review/仅宿主工具会话里被各自工具门拦下
     // (受邀者名单只登记经 bridge 代理注册的工具,Review 锁只读工具面,hostToolsOnly
     // 只放行网关);没有取回路径时截断会把全文真的丢掉 —— 这些会话不加载扩展。
-    const toolFoldSupported = !reviewMode && !guestRoot && !opts[LOCAL_AGENT_CLIENT]?.hostToolsOnly;
+    const toolFoldEnabled = this.deps.resolvePiToolFoldEnabled?.() ?? false;
+    const toolFoldSupported = toolFoldEnabled && !reviewMode && !guestRoot && !opts[LOCAL_AGENT_CLIENT]?.hostToolsOnly;
     const toolFoldExtensionPath = joinRemotePosixPath(extensionsDir, CINDY_TOOL_FOLD_EXTENSION_FILENAME);
     if (toolFoldSupported) await writeFile(toolFoldExtensionPath, CINDY_TOOL_FOLD_EXTENSION_SOURCE);
     // cindy-subagent extension:与 bridge 并列的独立扩展(职责分离 —— bridge 管权限门与

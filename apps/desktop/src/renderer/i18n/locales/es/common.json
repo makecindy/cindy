@@ -4613,6 +4613,18 @@
         "toggleFailed": "No se pudo alternar LSP"
       }
     },
+    "toolFold": {
+      "cell": {
+        "title": "Plegado de cargas útiles de herramientas (experimental)",
+        "description": "En las sesiones largas del Agent, cada ida y vuelta de herramienta (comando más salida) se reenvía en cada paso. Al activarlo, las nuevas sesiones del Agent Pi pliegan las idas y vueltas antiguas en una sola línea y truncan los resultados demasiado grandes antes de entrar en el historial; el modelo puede recuperar el original con toolfold_read. Medido en dos sesiones largas: alrededor de un 23 % a 27 % menos de tokens de entrada. Solo afecta a las sesiones del Agent Pi iniciadas después; desactivado, el comportamiento es exactamente el de antes."
+      },
+      "toggleAria": "Alternar plegado de cargas útiles de herramientas",
+      "toast": {
+        "enabled": "Plegado de cargas útiles de herramientas habilitado: entra en vigor en las nuevas sesiones del Agent Pi",
+        "disabled": "Plegado de cargas útiles de herramientas deshabilitado: entra en vigor en las nuevas sesiones del Agent Pi",
+        "toggleFailed": "No se pudo alternar el plegado de cargas útiles de herramientas"
+      }
+    },
     "betaChannel": {
       "title": "canal beta",
       "badge": "Beta",

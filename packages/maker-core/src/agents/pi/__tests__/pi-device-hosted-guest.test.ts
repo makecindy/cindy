@@ -162,6 +162,9 @@ describe('Pi device-hosted guest sessions', () => {
       resolvePiGatewayModelApi: () => 'openai-responses',
       resolvePiAgentHome: () => agentHome,
       resolvePiGlobalContextHome: () => globalHome,
+      // 工具载荷折叠是实验功能，默认关闭；本文件断言的是扩展清单顺序，
+      // 所以显式打开它（真实产品默认不开，见 ToolFoldCell）。
+      resolvePiToolFoldEnabled: () => true,
       mutatePiManagedPackage: async () => ({}),
       spawnPiSubagentRunner: () => {
         const handle = {

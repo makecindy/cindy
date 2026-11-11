@@ -38,6 +38,7 @@ import path from 'node:path';
 import { app } from 'electron';
 
 import { readModelContextLimit, resolveModelCompactionPct } from './model-context-limit-store.js';
+import { readToolFoldSettings } from './tool-fold-store.js';
 import { toolchainThreadCapEnv } from './toolchain-thread-cap.js';
 import { inputHandoffTaskShellEnv } from '../input-handoff/askpass/index.js';
 
@@ -1414,6 +1415,9 @@ export function buildPiAgent(opts: BuildPiAgentOpts): PiAgent | null {
       const source = resolveModelContextProviderId(getActiveCatalog(), 'pi', providerId, modelId);
       return resolveModelCompactionPct(getActiveCatalog(), 'pi', source, modelId);
     },
+    // 实验开关：工具载荷折叠。每次 startSession 现读 —— 与 LSP Beta 同一口径
+    // (toggle 后新会话生效)。默认 false：不加载扩展，行为与改动前一致。
+    resolvePiToolFoldEnabled: () => readToolFoldSettings().enabled,
     auth: desktopPiAuthAdapter,
     runtimeConfig: buildDesktopPiRuntimeConfig(),
     get binaryPath() { return resolvePiBinaryPath() ?? binaryPath; },

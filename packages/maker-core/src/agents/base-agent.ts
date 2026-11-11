@@ -818,6 +818,17 @@ export interface AgentDeps {
   ) => PiSubagentRunnerProcess;
 
   /**
+   * Pi-only: 实验开关「工具载荷折叠」(cindy-tool-fold 扩展)。
+   *
+   * 打开时 maker-core 把内置的折叠扩展写进本会话 internal-extensions 并显式
+   * --extension 加载(与 cindy-bridge 同一形态)。缺省 / 返回 false → 不加载,
+   * 行为与没有该扩展时完全一致(默认关闭:实验性功能,用户显式 opt-in 才生效)。
+   *
+   * 扩展在 pi 进程启动时一次性加载,所以开关只对**之后启动**的 Pi 任务生效。
+   */
+  resolvePiToolFoldEnabled?: () => boolean;
+
+  /**
    * Pi-only: resolve the immutable Cindy project-approval input for one new
    * runtime. The host owns identity canonicalization, approval audit/revocation,
    * and discovered-resource provenance. Missing/throwing resolvers fail closed.

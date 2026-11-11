@@ -6941,6 +6941,11 @@ interface ElectronAPI {
     /** 仅对新 session 生效; 已开 session 的 mcp providers 已固化 */
     lspModeSet: (enabled: boolean) => Promise<{ effective: 'next-session' }>;
 
+    /** 工具载荷折叠实验开关 — 控制是否加载内置 cindy-tool-fold 扩展 (默认 false) */
+    toolFoldGet: () => Promise<{ enabled: boolean }>;
+    /** 仅对新 session 生效; 扩展在 pi 进程启动时一次性加载 */
+    toolFoldSet: (enabled: boolean) => Promise<{ effective: 'next-session' }>;
+
     /** 对话语义索引开关 — owner-scoped；企业组织账号默认开，其余默认关 */
     chatEmbeddingGet: () => Promise<{
       enabled: boolean;
