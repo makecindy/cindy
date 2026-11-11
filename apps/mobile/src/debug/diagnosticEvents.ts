@@ -11,6 +11,7 @@ const names = [
   "app background",
   "app inactive",
   "js stall",
+  "js error",
   "recovery phase",
   "getToken failed",
   "createWebSocket failed",
@@ -38,6 +39,30 @@ const numericKeys = [
   "count",
 ];
 const phases = ["subscription", "history", "pending", "projection", "goal"];
+/** Where a JS error surfaced: a React render (caught by the root boundary) or an uncaught callback. */
+export const JS_ERROR_KINDS = ["render", "uncaught"] as const;
+/** Error class names only; anything else is recorded as "other". Messages are never kept. */
+export const JS_ERROR_NAMES = [
+  "Error",
+  "TypeError",
+  "RangeError",
+  "ReferenceError",
+  "SyntaxError",
+  "EvalError",
+  "URIError",
+  "AggregateError",
+  "Invariant Violation",
+  "other",
+] as const;
+/** Bundle positions of the top stack frames; they need the release's source map to mean anything. */
+export const JS_ERROR_FRAME_KEYS = [
+  "line1",
+  "column1",
+  "line2",
+  "column2",
+  "line3",
+  "column3",
+] as const;
 const outcomes = ["applied", "superseded", "failed"];
 function boundedNumber(value: unknown): value is number {
   return (
@@ -84,6 +109,20 @@ export function projectDiagnostic(
         )
           fields.outcome = record.outcome;
       }
+    }
+  }
+  // A JS error keeps its class name and bundle positions only: the message and the stack text can
+  // carry user content, so neither is ever read here.
+  if (event === "js error") {
+    const data = args[1];
+    if (data && typeof data === "object") {
+      const record = data as Record<string, unknown>;
+      const kind = JS_ERROR_KINDS.find((value) => value === record.kind);
+      if (kind) fields.kind = kind;
+      const name = JS_ERROR_NAMES.find((value) => value === record.name);
+      if (name) fields.name = name;
+      for (const key of JS_ERROR_FRAME_KEYS)
+        if (boundedNumber(record[key])) fields[key] = record[key];
     }
   }
   // Extract only client-generated timing fields. Never retain the original interpolated message.

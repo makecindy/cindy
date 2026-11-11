@@ -307,6 +307,21 @@ relay 以 close 1013 `inbound backpressure` 主动断连，此时任何「立即
 
 ## 远程 Agent 的拉取与恢复(`maker:remote-agent:v1`)
 
+控制端载荷交付（2026-11-10）：512KiB 上传块经 base64 后约 683KiB，慢中转链路收齐分片可能超过
+单次 invoke 的 30 秒期限；大内联 JSON 也有相同问题。`RemoteAgentRunClient.payload` 按 UTF-8 字节
+控制内联大小，超过 64KiB 先 gzip，普通载荷以 64KiB 压缩数据为一块顺序上传。每块确认后再发下一块，
+让同链路的其它请求能在块间推进；不延长通道超时、不自动重放上传、`open` 或 `call`。
+为保留原容量，大载荷会增大块大小以符合旧接收端最多 128 块、每块 512KiB、总共 64MiB 的合同；
+这些数值仍是接收上限，不能因发送偏好变小而拒收旧端的大块。既有取消检查继续覆盖压缩与各块之间。
+`abort` / `requestGracefulStop` 还会使此前尚在准备或上传的 `send` / `steer` 失效；
+压缩后、块间及最终调用前检查同一发送代次，以 `AbortError` 收口，不让停止之后再启动旧消息。
+停止请求不排在上传之后，也不关闭连接；停止之后的新消息仍可正常发送。
+Session 准备期柔性停止的 `SendOptions.signal` 由本机代理传到同一守卫，不序列化进协议；
+已经发出的业务调用保留原结果语义，不能把远端已接收的消息事后改报为未发送。
+故障半径：仅改变当前载荷的编码与分块，不重建 link、不重连共享 relay、不改授权或其它 peer 的状态。
+回归为 `runClientReply.test.ts` 的有界慢链路完整交付，以及 `roundtrip.test.ts` 的上传中取消。
+协议兼容与中转边界见 [远程 Agent 协议](protocol-compatibility/remote-agent.md)。
+
 供应商进程重启（2026-10-29）：已打开的 run 收到 `missing`、`provider-restarting` 或旧端的
 `aborted` 时只释放这条远程连接，保留本机执行器和 MCP 身份。空闲任务下次发送再接回；进行中的
 一轮通过现有供应商组恢复租约、五次有界探测和输入队列自动续跑一次，未归组的供应商也适用。

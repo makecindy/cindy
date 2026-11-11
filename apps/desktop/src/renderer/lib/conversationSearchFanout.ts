@@ -490,6 +490,7 @@ export function sessionToSearchSummary(session: Session): ConversationSearchSess
   return {
     id: session.id,
     title: session.title,
+    tags: session.tags,
     workingDir: session.workingDir,
     projectDir: session.projectDir,
     workspaceKind: session.workspaceKind,
