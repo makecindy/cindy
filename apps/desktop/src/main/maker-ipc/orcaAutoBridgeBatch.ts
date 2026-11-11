@@ -1,12 +1,15 @@
 import { formatOrcaCommunicationMessage } from '@cindy/orca-workflow';
 import type { AgentInputQueuedMessage } from '../../shared/agentInputQueue.js';
+import { isOrcaCollaborationMessage } from './orcaQueueNote.js';
 
 type OrcaQueueOrigin = Extract<NonNullable<AgentInputQueuedMessage['origin']>, { kind: 'orca' }>;
 
-/** 只有宿主盖章的系统兜底回报可合批；主动 send_to_lead / Lead 派单不命中。 */
+/** 只有宿主盖章的系统兜底回报可合批；主动 send_to_lead / Lead 派单不命中。
+ * Retry／自动续跑等恢复输入沿用 origin.autoBridge 但属宿主恢复指令、非成员新消息，一律排除。 */
 export function isOrcaAutoBridgeQueueItem(item: AgentInputQueuedMessage): boolean {
   const origin = item.origin;
   if (!origin || origin.kind !== 'orca' || origin.autoBridge !== true) return false;
+  if (!isOrcaCollaborationMessage(item)) return false;
   if (item.files?.length || item.mentions?.length || item.sessionRefs?.length || item.agentReferences?.length) return false;
   return batchCount(origin) > 0;
 }
@@ -86,7 +89,9 @@ export function buildOrcaAutoBridgeBatch(
       if (record.orcaSource !== 'worker' || typeof record.content !== 'string') return null;
       const section = target.text.replace(BATCH_HEADER, '');
       modelSections.push(section);
-      visibleSections.push(stripHostPrefixWorkerId(section));
+      // 已有批次复用其已脱敏的可见正文（record.content，各 Worker 前缀均已剥尽），避免再次合并时
+      // 只剥首行而漏掉后续 Worker 的 worker_id；单条报告才剥宿主首行前缀。模型正文始终保留 worker_id。
+      visibleSections.push(currentCount > 1 ? record.content : stripHostPrefixWorkerId(section));
       count += currentCount;
     } catch {
       return null;

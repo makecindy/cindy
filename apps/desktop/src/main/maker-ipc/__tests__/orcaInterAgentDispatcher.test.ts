@@ -1710,6 +1710,45 @@ describe('Orca auto-bridge queue coalescing at dispatch', () => {
     expect(h.sent[0]!.opts.persistUserMessage?.origin).toMatchObject({ autoBridgeBatchCount: 3 });
   });
 
+  it('keeps every worker_id out of the visible body when a requeued batch is re-merged', async () => {
+    const h = createQueueHarness({ failFirstDispatch: 'session-running' });
+    await h.coordinator.ensureQueueRestored(sid);
+    h.coordinator.enqueue(sid, report('r1', 'w1', 'first'));
+    h.coordinator.enqueue(sid, report('r2', 'w2', 'second'));
+    h.setRunning(false);
+    h.coordinator.wakeSession(sid, 'idle');
+    await vi.waitFor(() => {
+      const origin = h.coordinator.getProjection(sid).pendingQueue[0]?.origin;
+      expect(origin?.kind === 'orca' ? origin.autoBridgeBatchCount : undefined).toBe(2);
+    });
+    h.coordinator.enqueue(sid, report('r3', 'w3', 'third'));
+    h.coordinator.wakeSession(sid, 'retry');
+    await vi.waitFor(() => expect(h.sent).toHaveLength(1));
+    const persisted = JSON.parse(h.sent[0]!.opts.persistUserMessage?.content ?? '{}');
+    expect(persisted.content).not.toContain('(worker_id:');
+    expect(persisted.content).toContain('first');
+    expect(persisted.content).toContain('second');
+    expect(persisted.content).toContain('third');
+    const text = sentText(h.sent[0]!.message);
+    expect(text).toContain('(worker_id: w1)');
+    expect(text).toContain('(worker_id: w2)');
+    expect(text).toContain('(worker_id: w3)');
+  });
+
+  it('does not merge a retry recovery copy with a fresh report', async () => {
+    const h = createQueueHarness();
+    await h.coordinator.ensureQueueRestored(sid);
+    h.coordinator.enqueue(sid, { ...report('a', 'w1', 'A'), retrySourceClientId: 'orig-a' });
+    h.coordinator.enqueue(sid, report('b', 'w2', 'B'));
+    h.setRunning(false);
+    h.coordinator.wakeSession(sid, 'idle');
+    await vi.waitFor(() => expect(h.sent).toHaveLength(1));
+    expect(sentText(h.sent[0]!.message)).not.toContain('[Auto-bridged batch:');
+    expect(sentText(h.sent[0]!.message)).toContain('A');
+    // 恢复副本单独派发，B 未被合批吞掉，仍留在队列等待送达。
+    expect(h.coordinator.getProjection(sid).pendingQueue.map((i) => i.clientId)).toEqual(['b']);
+  });
+
   it('preserves report order in the batch', async () => {
     const h = createQueueHarness();
     await h.coordinator.ensureQueueRestored(sid);
