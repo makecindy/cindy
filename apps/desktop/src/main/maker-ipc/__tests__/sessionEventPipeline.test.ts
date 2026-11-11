@@ -81,9 +81,6 @@ vi.mock('../../turnCostBroadcaster.js', () => ({
 vi.mock('../../modelMismatchBroadcaster.js', () => ({
   recordModelMismatchOnMessage: effects.fn('recordModelMismatchOnMessage'),
 }));
-vi.mock('../botLearningReview.js', () => ({
-  reviewTeammateLearning: effects.fn('reviewTeammateLearning'),
-}));
 vi.mock('../../usage/claudeAccountUsage.js', () => ({
   triggerClaudeAccountUsageRefresh: effects.fn('triggerClaudeAccountUsageRefresh'),
 }));
@@ -171,7 +168,11 @@ vi.mock('../../messagePersistBroadcaster.desktop.js', () => ({
   resetTurnPersistState: effects.fn('resetTurnPersistState'),
   saveTurnStartedAtForDeferred: effects.fn('saveTurnStartedAtForDeferred'),
 }));
-vi.mock('../../maker-host/claude-session-background-activity.js', () => ({
+vi.mock('../../maker-host/claude-session-background-activity.js', async (importOriginal) => ({
+  hasWorkingBackgroundCommand: (
+    await importOriginal<typeof import('../../maker-host/claude-session-background-activity.js')>()
+  ).hasWorkingBackgroundCommand,
+  noteClaudeSessionBackgroundCommandWork: effects.fn('noteClaudeSessionBackgroundCommandWork'),
   noteClaudeSessionTurnState: effects.fn('noteClaudeSessionTurnState'),
 }));
 vi.mock('../../subagentObservationRewindFence.js', () => ({
@@ -297,10 +298,8 @@ function harness() {
     deferUnsuccessfulProductTurn: (owner: Parameters<typeof failureGate.defer>[0]) => failureGate.defer(owner),
     log,
     botCompactRuntimeRefreshCoordinator: { noteBoundary: vi.fn() },
-    workingMemoryRefresh: { markCompacted: vi.fn() },
     wireNoteMemory: { reset: vi.fn() },
     attemptBotCompactRuntimeRefresh: vi.fn(),
-    botDelegationServiceHolder: { settleSession: vi.fn(async () => {}) },
     isFencedStaleSessionTerminal: vi.fn(() => false),
     redactEventForRenderer: vi.fn((value: AgentEvent): AgentEvent => ({ ...value, data: { redacted: true } })),
     interruptedTurnAutoResumeGuard: {
@@ -1572,6 +1571,39 @@ describe('production Session event pipeline', () => {
     await h.dispose();
   });
 
+  // 任务列表的「后台命令仍在工作」来自会话的权威后台任务快照:任务表变化与回合收尾各刷新一次
+  // (收尾先刷新再记回合结束,换代清表不带事件)。SSH 远程任务的终态可能丢在断连窗口里,不参与。
+  it.each([
+    ['local task still running a test command', null, 'work', [true, true]],
+    ['local task that only left a dev server', null, 'service', [false, false]],
+    ['SSH remote task', 'ssh-host', 'work', []],
+  ] as const)(
+    'refreshes background command work from the session snapshot: %s',
+    async (_label, remoteHostId, backgroundCommandKind, expected) => {
+      const h = harness();
+      Object.defineProperty(h.session, 'remoteHostId', { value: remoteHostId });
+      vi.spyOn(h.session, 'listBackgroundTasks').mockReturnValue([
+        { taskId: 'bash-1', taskType: 'local_bash', backgroundCommandKind },
+      ]);
+      h.emit(event('status', { isRunning: true }));
+      h.emit(event('agent_task_update', { provider: 'claude-code', taskId: 'bash-1', status: 'running' }));
+      h.emit(event('done', { reason: 'completed' }));
+      expect(effects.fn('noteClaudeSessionBackgroundCommandWork').mock.calls).toEqual(
+        expected.map((hasWork) => ['task', hasWork]),
+      );
+      if (expected.length > 0) {
+        const calls = effects.calls.filter(
+          (name) => name === 'noteClaudeSessionBackgroundCommandWork' || name === 'noteClaudeSessionTurnState',
+        );
+        expect(calls.slice(-2)).toEqual([
+          'noteClaudeSessionBackgroundCommandWork',
+          'noteClaudeSessionTurnState',
+        ]);
+      }
+      await h.dispose();
+    },
+  );
+
   it.each([null, 'ssh-host'])(
     'only records local Codex account snapshots (remote=%s)',
     async (remoteHostId) => {
@@ -2509,24 +2541,6 @@ describe('usage through the production event pipeline', () => {
 
 
 describe('Bot adapters in the shared event pipeline', () => {
-  it.each(['a long but incomplete answer', ''])('settles output-limit with its available result (%j) before the paired done', async (result) => {
-    const h = harness();
-    h.emit(event('error', {
-      reason: 'output-limit', message: 'Pi reached the model output limit.',
-      isTerminal: true, result,
-    }, { source: 'pi', sessionTurnGeneration: 4 }));
-    await microtasks();
-    expect(h.deps.botDelegationServiceHolder.settleSession).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({
-      childSessionId: 'task', outcome: 'error', resultText: result,
-      error: 'Pi reached the model output limit.',
-    }));
-    h.deps.autoResumeBookkeeping.consumeFailedTurnCompletionTail.mockReturnValue(true);
-    h.emit(event('done', { status: 'failed', result }, { source: 'pi', sessionTurnGeneration: 4 }));
-    await microtasks();
-    expect(h.deps.botDelegationServiceHolder.settleSession).toHaveBeenCalledOnce();
-    await h.dispose();
-  });
-
   it('keeps peer replies private in persistence and broadcast before done clears the input', () => {
     const h = harness();
     h.deps.agentInputCoordinatorHolder.getActiveInputClientId.mockReturnValue('bot-dm:thread:delivery');
@@ -2766,17 +2780,12 @@ describe('Bot adapters in the shared event pipeline', () => {
     h.deps.attemptBotCompactRuntimeRefresh.mockImplementation(() => { void coordinator.attempt(h.session); });
     h.emit(event('compact_boundary'));
     expect(h.deps.botCompactRuntimeRefreshCoordinator.noteBoundary).not.toHaveBeenCalled();
-    // 原生摘要可能丢掉账本内容:下一次发送补一份工作记忆。
-    expect(h.deps.workingMemoryRefresh.markCompacted).toHaveBeenCalledWith('task');
     // 原生摘要可能丢掉了环境说明:下一轮整体重发。
     expect(h.deps.wireNoteMemory.reset).toHaveBeenCalledWith('task');
     expect(h.deps.attemptBotCompactRuntimeRefresh).not.toHaveBeenCalled();
     h.deps.agentInputCoordinatorHolder.getQueueControlSnapshot.mockReturnValue({ pendingQueue: [{}] });
     h.emit(event('done', { result: 'first result' }));
     await microtasks();
-    expect(h.deps.botDelegationServiceHolder.settleSession).toHaveBeenCalledWith(expect.objectContaining({
-      childSessionId: 'task', resultText: 'first result', hadPendingInputAtTerminal: true,
-    }));
     expect(h.deps.attemptBotCompactRuntimeRefresh).toHaveBeenCalledWith(h.session, 'event:done');
     expect(close).not.toHaveBeenCalled();
     expect(bootstrap).not.toHaveBeenCalled();

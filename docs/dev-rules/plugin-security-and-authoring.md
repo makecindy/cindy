@@ -291,12 +291,15 @@ Library 请求同时绑定迁移代次和安装批准，根解析、排队及开
   仍按特殊用途／私有地址拒绝。
 - **控制节点（2026-10-31）**：Host 预埋的 `will-` 拦截点目录在 `shared/ghost.ts`
   `GHOST_CONTROL_POINTS`，新增节点 = 加目录项 + 在对应流程按任务配置调用 `screenGhostControlPoint`，
-  插件不需要 Host 再发版。四条不变量：只问用户在该任务里选定的插件（定时任务 / 例行任务的
-  `preRunPlugin`），不是装了就管所有任务；插件只能收紧（allow 只表示不反对，不能替用户批准）；
+  插件不需要 Host 再发版。四条不变量：只问用户在该任务里选定的插件（定时任务的
+  `preRunPlugin`；伙伴例行任务 2026-11-08 起已转为项目自动化），不是装了就管所有任务；插件只能收紧（allow 只表示不反对，不能替用户批准）；
   出错处理（没装、停用、超时、崩溃、熔断）由用户按任务设置，插件不能自报；只有 receipt
   `approvedControlPoints` 记录的节点可被任务选用——批准来自安装/更新确认里实际显示过的权限行，
   旧 receipt 缺字段视为未批准但插件照常可用，提前声明 Host 当时不认识的节点不会随 Host 升级
   静默生效，下一次更新会把它作为新增权限复核。随包种子与服务端默认安装视为已批准声明的节点。
+  **伙伴例行任务退役（2026-11-08，存量兼容）**：`will-routine-run` 与 manifest `routineEvents` 照常解析、
+  安装和保留批准记录，但不再触发；`routineEvents` 不再让插件常驻；`routine-request` 管子（`cindy.routines.request`）
+  的 status / publish 照旧校验与限额后返回稳定的空操作（publish 为 `accepted: 0`），不报错。插件与用户无需重装或重新确认。
   `will-start-task`（新任务选模型）是唯一能回 `route` 的节点：只在本机新任务第一条消息发出前、
   用户在模型选择器里选了这个插件发布的模型时询问一次，任务中途和伙伴任务都不问（换模型会让提示缓存失效）。
   Gateway 只保留 route 的 `agentKind` / `model` / `providerId` / `effort` 四个字段；Main 再按当前已连接、
@@ -858,6 +861,11 @@ Host receipt 的 `simulatorPreviousRelId` 只允许这对 ID 和 root 路径，�
 - 同一 owner、会话 generation、市场端点及执行策略的并发请求合并为一轮；延后维护的槽位
   保留到实际维护结束。不同账号或端点不复用在途结果。一次同步扫描只读一组市场账本，
   这组事实不跨 `await` 保存，也不作为运行时授权缓存。
+- 已装列表的发布来源展示在每次扫描内复用一组账本事实。异步扫描可在该轮内跨 `await`
+  使用展示快照，但返回前必须重读并核对全部账本事实，变化或核对失败则重试；owner、安装变更、
+  注册表与 locale 的现有复核保持。展示快照不跨扫描保存，也不用于运行时授权；授权查询仍实时读取。
+  实现见 `GhostManager.listAsync()` 与 `PluginMarketLedger.createListingLookup()`，回归见
+  `cindy-brain/__tests__/GhostManager.test.ts` 和 `plugin-market/__tests__/ledger.test.ts`。
 - `pending-but-not-listed` 是注册表中的旧实例脱离普查清单，不能只记日志后永远跳过。
   修复不得扩大冻结的普查名单，也不能用 receipt 的 namespace 字段直接确认身份。必须核对
   唯一的已安装市场记录、包指纹、namespace 和当前组织；实例已有 pluginId 时，市场记录必须
@@ -1157,7 +1165,7 @@ create / setModel 接受 `PluginTaskRoute.agentDeviceId`，send/accept 重读精
 留在插件。每次请求和回执重新核验 owner、安装 revision、namespace 与 peer。
 不向插件提供设备私钥、账号 token 或其他插件数据，不为通道增加远程 Renderer IPC。
 接口和失败语义见 `FORGE_GUIDE` §4.10.2，协议与兼容边界见
-[协议兼容](protocol-compatibility.md#插件资料设备同步)。
+[协议兼容](protocol-compatibility/plugin-data-device-sync.md)。
 
 ## 社区插件贡献入口
 
@@ -1207,4 +1215,4 @@ Node 工作进程的方向：用户从手机经远程桌面打开设备画面时
 任何手机或远程桌面凭证。回复是插件数据，逐字段校验后才交给远程桌面；帧流地址只接受
 `http://127.0.0.1:<端口>`，由 Main 读取，采集页与手机都拿不到地址。旧版插件的权限不变；
 声明该字段的更新属于能力增加，按 3.1 节处理。接口见 `FORGE_GUIDE` §4.22.1，协议与兼容边界见
-[协议兼容](protocol-compatibility.md)的「插件实时屏幕」。
+[协议兼容 · 代输入](protocol-compatibility/input-handoff.md)的「插件实时屏幕」。

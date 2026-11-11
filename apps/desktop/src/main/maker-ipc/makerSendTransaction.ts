@@ -259,6 +259,8 @@ export interface MakerSendTransactionSession {
   /** Codex host-owned evidence: a provider turn crossed acceptance on this runtime. */
   codexThreadMayHaveRollout?: boolean;
   isTurnRunning(): boolean;
+  /** 项目资源漂移且满足回收空闲口径(仅 pi 本地根任务实现;其余会话缺省,永不回收)。 */
+  hasRecyclableProjectResourceDrift?(): boolean;
   send(message: UserMessage | string, opts?: SessionSendOptions): Promise<SessionSendResult>;
 }
 
@@ -270,6 +272,9 @@ export interface MakerSendTransactionLog {
 export interface MakerSendTransactionDeps {
   getSession(sessionId: string): MakerSendTransactionSession | undefined | null;
   closeSession(sessionId: string): Promise<void>;
+  /** 资源漂移回收必须走 Maker 的 runtime-refresh 原因(直接 Session.close 会被
+   * IM runner 当 unexpected 丢弃排队回合);内部用 closeSessionIfCurrent 幂等。 */
+  closeSessionIfCurrent(sessionId: string): Promise<void>;
   preflightBotRuntimeResources(opts: CreateOpts): Promise<void>;
   getSessionMeta(sessionId: string): Promise<{ title?: string } | null>;
   /** The same clear/rewind-filtered transcript used for native context handoffs. */
@@ -426,14 +431,6 @@ export interface MakerSendTransactionDeps {
   readWorkingDirectoryRecoveryCreateOpts(sessionId: string): Promise<CreateOpts>;
   consumeWorkingDirectoryRecoveryNote?(sessionId: string, note: string): void;
   /**
-   * 伙伴工作记忆刷新(botWorkingMemory):原生自动压缩之后的下一次发送前置一次账本,
-   * 只进 wire payload;交接首条(pending handoff)已含账本时不重复。
-   * 返回 null = 没有待刷新;`note` 为 null = 有标记但该会话没有账本(仍要消费)。
-   * accepted 后只消费当时读到的 `generation`:发送在途时再来一次压缩边界,新一代留给下次。
-   */
-  peekWorkingMemoryRefresh?(sessionId: string): Promise<{ generation: number; note: string | null } | null>;
-  consumeWorkingMemoryRefresh?(sessionId: string, generation: number): void;
-  /**
    * 计划对账:会话里若有待处理计划,返回一段只进 wire payload 的指示文本。
    * sealedTurnId 只用于已完成计划的一次性保护,跨过 accepted 后才消费。
    */
@@ -479,7 +476,6 @@ export interface MakerSendTransactionDeps {
    * 与 `[客户端说明]` 同层,只进 wire 消息。
    */
   readBotThreadNote?(sessionId: string): Promise<string | null>;
-  readTaskDeliveryNote?(sessionId: string): Promise<string | null>;
   /** The owner's message closed a waiting 代输入 card: the agent hears it here, with no turn of its own. */
   readInputHandoffOwnerNote?(sessionId: string): string | null;
   inputHandoffOwnerNoteDelivered?(sessionId: string): void;
@@ -1114,6 +1110,17 @@ export function createMakerSendTransaction(deps: MakerSendTransactionDeps): Make
         deps.log.info('send: error session requires recovery before dispatch', { sessionId });
         sess = undefined;
       }
+      // 会话中途新增的项目资源(如 openspec init):空闲时经 Maker 以
+      // 'runtime-refresh' 回收运行时(session:closed 带刷新原因,IM runner 保留
+      // 排队回合),下面的 lazy bootstrap 会重扫重算 argv 后再投递
+      // (见 Session.hasRecyclableProjectResourceDrift 的空闲口径说明)。
+      // 无 createOpts 的直发/老链路调用无法走 lazy-create 重建,跳过回收按
+      // 原运行时投递(维持回收前行为,不把触发消息拒成 NOT_FOUND)。
+      if (createOpts && sess?.hasRecyclableProjectResourceDrift?.()) {
+        await deps.closeSessionIfCurrent(sessionId);
+        deps.log.info('send: project resources drifted, recycling runtime before dispatch', { sessionId });
+        sess = undefined;
+      }
       if (sess?.isTurnRunning()) {
         throwIpcError('SESSION_RUNNING', `Session ${sessionId} is already running a turn`);
       }
@@ -1366,17 +1373,9 @@ export function createMakerSendTransaction(deps: MakerSendTransactionDeps): Make
       const pendingHandoff = shouldPrependMobileClientPromptNote(normalized, sess.agentKind)
         ? (await deps.peekPendingHandoff?.(sessionId)) ?? null
         : null;
-      // 原生压缩后的账本刷新:交接首条已含账本时不重复(但同样在 accepted 后消费当时那一代)。
-      const workingMemoryRefresh = shouldPrependMobileClientPromptNote(normalized, sess.agentKind)
-        ? ((await deps.peekWorkingMemoryRefresh?.(sessionId).catch(() => null)) ?? null)
-        : null;
-      const workingMemoryRefreshNote = !pendingHandoff ? workingMemoryRefresh?.note ?? null : null;
-      const withWorkingMemoryRefresh = workingMemoryRefreshNote
-        ? prependNoteToWireUserMessage(withRecoveryNote as HandoffWireMessage, workingMemoryRefreshNote)
-        : withRecoveryNote;
       const withHandoff = pendingHandoff
-        ? prependHandoffToUserMessage(withWorkingMemoryRefresh as HandoffWireMessage, pendingHandoff)
-        : withWorkingMemoryRefresh;
+        ? prependHandoffToUserMessage(withRecoveryNote as HandoffWireMessage, pendingHandoff)
+        : withRecoveryNote;
       // 计划对账:旧的未收口计划让 agent 顺手交代(更新/修订/清掉)。位置在交接段
       // 之前——两段各自带"以下是用户的新消息"式结束标记,对账在外层不破坏交接正文。
       // 只对"用户真的开口"的普通新轮次注入,判定用白名单而非枚举内部来源
@@ -1523,7 +1522,6 @@ export function createMakerSendTransaction(deps: MakerSendTransactionDeps): Make
         'side-chat': allowsEnvironmentNotes && taskSource === 'side-chat'
           ? SIDE_CHAT_CONTEXT : null,
         'bot-thread': botThreadNote,
-        'task-delivery': allowsEnvironmentNotes ? await deps.readTaskDeliveryNote?.(sessionId) ?? null : null,
         'client-environment': mobileClientNote,
         'cindy-make': cindyMakeNote,
         'ui-language': uiLanguageNote,
@@ -1543,9 +1541,6 @@ export function createMakerSendTransaction(deps: MakerSendTransactionDeps): Make
         : withCindyMakeNote;
       if (plannedNotes['side-chat']) {
         outgoing = prependNoteToWireUserMessage(outgoing as HandoffWireMessage, plannedNotes['side-chat']);
-      }
-      if (plannedNotes['task-delivery']) {
-        outgoing = prependNoteToWireUserMessage(outgoing as HandoffWireMessage, plannedNotes['task-delivery']);
       }
       if (plannedNotes['bot-thread']) {
         outgoing = prependNoteToWireUserMessage(outgoing as HandoffWireMessage, plannedNotes['bot-thread']);
@@ -1999,11 +1994,6 @@ export function createMakerSendTransaction(deps: MakerSendTransactionDeps): Make
         if (sendResult.accepted) wireNotePlan?.commit();
         if (workdirRecoveryNote && sendResult.accepted) {
           deps.consumeWorkingDirectoryRecoveryNote?.(sessionId, workdirRecoveryNote);
-        }
-        // 只消费构造本次说明时读到的那一代;交接首条已带账本时同样消费。发送期间新来的
-        // 压缩边界代次不同,留给下一次发送。
-        if (workingMemoryRefresh && sendResult.accepted) {
-          deps.consumeWorkingMemoryRefresh?.(sessionId, workingMemoryRefresh.generation);
         }
         if (planReconcile?.sealedTurnId && sendResult.accepted) {
           try {

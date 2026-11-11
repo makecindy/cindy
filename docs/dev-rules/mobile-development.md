@@ -191,7 +191,7 @@ Desktop 仅在官方连接在线时上传本机完整活动摘要，排除远程
 本地降级模式的 `staleDate` 为更新时加 120 秒，前台每分钟续期，检测到连接中断则立即标记过期；
 账号清理与无任务结束不等待一秒合并。
 
-接口与发布顺序见[协议兼容的任务汇总与实时活动](protocol-compatibility.md#任务汇总与-activitykit-push2026-11-10未发布)。
+接口与发布顺序见[协议兼容的任务汇总与实时活动](protocol-compatibility/task-activity-summary-activitykit-push.md)。
 定向验证覆盖 token 轮换、旧服务端、自建中转跳过、账号切换与在途注册后注销；服务端另有真实
 PostgreSQL 的多电脑、版本、设备移除和活动 start/update/end 集成测试。原生编译不是系统
 推送验收：后台／冷启动、跨端已读与真实 APNs 仍需在部署后的签名安装包上核验。
@@ -200,6 +200,20 @@ PostgreSQL 的多电脑、版本、设备移除和活动 start/update/end 集成
 安装均需升级对应原生包才能继续接收新指纹的 OTA，PR 须按冷更边界写明原因、影响与发版节奏。
 原生验收需检查紧凑／展开／锁屏、浅深模式、点击任务定位、账号切换、后台过期和关闭实时活动。
 TypeScript 测试不能替代这些原生验收。
+
+### 推送 token 事件与验收
+
+iOS 每次 `getDevicePushTokenAsync()` 完成都会发出 token 事件，不代表 token 已轮换。
+`PushNotificationsBridge` 的监听器必须直接把事件携带的 token 交给注册函数，不能再次
+读取原生 token；否则“读取 → 事件 → 注册 → 读取”会持续向两个推送端点重复注册。
+事件注册必须持有本代次非事件注册成功产生的内存许可；相同 token 不再请求，真实轮换
+仍注册。注销同步撤销许可，注册全过程复查 AuthOwner，防止 React 仍显示已登录的清理
+窗口重新 PUT 旧账号。原生读取在注销时产生的事件也只能 skipped。
+回归分别由 `pushNotificationsBridge.test.ts`（事件接线与去重）和
+`pushNotificationsRealm.test.ts`（真实注册函数与端点请求）覆盖。
+
+注册 API 成功、桌面提交 notify 帧成功都不是 APNs 送达证明。验收需分别记录签名环境、
+手机注册结果、服务端 APNs 回执（可取得时）和真机是否实际收到，不能用本地通知代替。
 
 Release 构建必须使用 `NODE_ENV=production BABEL_ENV=production`，包括手动调用
 `xcodebuild`、Gradle 或 `expo export:embed --dev false`。Expo 会保留父进程的环境变量，
@@ -540,6 +554,23 @@ A、B、L1、R1 会占用其原有操作，设置页有明确提示。
 偏好与跨页按住交接回归：`src/__tests__/handheldMode.test.ts`。Android 窗口按键拦截和换屏
 必须随新原生包交付，仍受下文冷更审核门约束。
 
+## 手机推送排障：注册不等于投递
+
+`cindy.push.enabled` 只记录偏好；`cindy.push.registered` 是请求前写入的注销补偿标记，
+不能证明服务器注册成功。Desktop 的 `sendNotify()` 返回 true 也只说明已向 relay 发送，
+不是 APNs 接受或手机展示的回执。不要据此宣布推送恢复。
+
+手机在 AsyncStorage `cindy.push.lastRegistration` 保留最近一次启用注册尝试的单条状态，
+CindyDev 按 `.dev` / `.release` 分开。状态记录时间、账号区域（不含身份）、签名对应的
+APNs 环境、失败阶段和 device-link/chat 分别接受、失败或不支持的结果及 HTTP 状态码。
+它不依赖调试日志开关，不含 token、账号 ID、地址、正文或原始错误；写入失败不影响注册。
+这是有时间戳的历史尝试，关闭推送或切换账号后不能当作当前订阅状态；`registered` 只证明
+注册 API 请求完成，不能替代实际通知验收。回归见 `pushNotificationsRealm.test.ts`。
+
+若注册成功仍无通知，继续核对签名 team/topic 与服务端配置、服务端 token 选择及 APNs
+响应，最后核对手机的系统通知展示条件。本地服务器源码不能证明线上部署；缺少投递日志时
+保留“尚未确定”的结论，不让用户反复切开关，也不通过不断广播测试通知替代定位。
+
 ## 原生配置与 runtime fingerprint(冷更边界)
 
 ### 伙伴通信通知
@@ -768,3 +799,9 @@ Android 后台连接默认「自动」：中国大陆账号、设备地区 CN、
 
 普通任务直连新增 Android 原生接收器，必须随新 APK 冷更；旧包通过可选 native 方法检测继续使用原聊天接口，不能靠 OTA 获得任务直连。
 配套服务端先部署 SSE 和通知 ID，再发布 Android 新包。旧服务端 404 时后台退避一分钟并保留 FCM，不能把该状态记成直连可用。
+
+### 手动 APNs 诊断（iOS）
+
+「设置 → 开发者 → 推送诊断」仅在用户点击「读取推送状态」后读取系统通知权限、签名中的 APNs 环境和当前设备令牌。它不请求或变更通知权限，不写入诊断日志或持久存储，也不自行发送服务端请求；原生读取可能触发已有 token 事件，该事件继续遵守推送注册的账号围栏和去重。页面离开、应用进入后台或读取超时后丢弃结果，迟到的原生回调不能重新展示令牌。复制是独立的显式操作，剪贴板内容不会随页面退出自动清除。
+
+排查个人签名包时，应先核对该页的应用 ID、构建号和环境，再使用同一 Apple 开发者团队的 Push Notifications Console 给该设备令牌发送匹配环境的通知。不要把 ActivityKit token 当作 APNs device token，不把令牌粘贴到任务日志或提交到仓库；不要以「注册成功」或「服务端已发送」代替真机收到通知的验收。此入口只依赖现有 Expo 模块，不改变原生指纹、登录存储或应用身份。

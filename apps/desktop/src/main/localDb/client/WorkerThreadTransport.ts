@@ -1624,6 +1624,10 @@ function orcaReserveWorkerCreation(readyDb, args) {
   const expiresAt = expectNumber(payload.expiresAt, 'expiresAt');
   return readyDb.transaction(() => {
     readyDb.prepare('DELETE FROM orca_worker_creation_reservations WHERE expires_at <= ?').run(now);
+    // 与 worker/opHandlers/tx.ts 的 orcaReserveWorkerCreation 保持一致：已归档／已删除任务的 Worker 让出名字。
+    readyDb.prepare(\`UPDATE orca_workers SET label = label || '~' || id, updated_at = ?
+      WHERE team_id = ? AND label = ? COLLATE NOCASE
+        AND session_id IN (SELECT id FROM sessions WHERE status != 'active')\`).run(now, teamId, label);
     const duplicateWorker = readyDb.prepare(
       'SELECT 1 FROM orca_workers WHERE team_id = ? AND label = ? COLLATE NOCASE LIMIT 1',
     ).get(teamId, label);

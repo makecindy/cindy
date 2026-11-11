@@ -1,0 +1,60 @@
+--- a/src/connection.rs
++++ b/src/connection.rs
+@@ -80,6 +80,10 @@
+ const REORDER_DECAY_RTTS: u64 = 16;
+ /// 空闲分片缓冲的数量上限，避免收发路径上反复申请内存。
+ const MAX_SPARE_BUFFERS: usize = 256;
++/// 收到的包平均间隔短于这个值（每秒两万个包以上）时，每个包都马上确认。
++const FAST_ARRIVAL_GAP_US: u64 = 50;
++/// 丢包率比随机丢包率的两倍还高出这么多，又量到了上限，就当成限速器在丢包。
++const LIMITER_EXCESS_LOSS_PPM: u64 = 30_000;
+ /// 待发和没确认的数据加起来不超过这么多个分片，算零散消息。
+ const SPARSE_BACKLOG_SEGMENTS: u64 = 64;
+ 
+@@ -336,6 +340,9 @@
+     ack_pending: bool,
+     ack_deadline: u64,
+     unacked_packets: u32,
++    /// 收到的包之间的平均间隔。
++    arrival_gap_us: u64,
++    last_arrival_at: u64,
+ }
+ 
+ impl Connection {
+@@ -427,6 +434,8 @@
+             ack_pending: false,
+             ack_deadline: 0,
+             unacked_packets: 0,
++            arrival_gap_us: u64::MAX,
++            last_arrival_at: 0,
+             config,
+         }
+     }
+@@ -821,8 +830,14 @@
+             self.largest_received_at = now_us;
+         }
+         if ack_eliciting {
++            let gap = now_us.saturating_sub(self.last_arrival_at);
++            self.arrival_gap_us = if self.last_arrival_at == 0 || self.arrival_gap_us == u64::MAX { gap } else { (self.arrival_gap_us * 7 + gap) / 8 };
++            self.last_arrival_at = now_us;
+             self.unacked_packets += 1;
+-            if urgent || self.unacked_packets >= self.config.ack_every {
++            // 包挨得极近（每秒两万个以上）时往返通常只有几毫秒，每个包都马上确认：窗口卡住时，
++            // 一串包的最后一个单独等确认延迟的话，整个窗口要多等这么久才能往前走，占往返的比例不小。
++            let every = if self.arrival_gap_us < FAST_ARRIVAL_GAP_US { 1 } else { self.config.ack_every };
++            if urgent || self.unacked_packets >= every {
+                 self.request_ack(now_us);
+             } else if !in_order {
+                 self.schedule_ack(now_us + REORDER_ACK_DELAY_US);
+@@ -1348,7 +1363,10 @@
+         let floor = if self.last_heard < self.parity_floor_until { PARITY_MIN_LOSS_PPM } else { 0 };
+         let holes = if warmup { 50_000 } else { (self.loss_ppm + self.late_ppm).max(floor) };
+         let useful = (PARITY_MIN_LOSS_PPM..=PARITY_MAX_LOSS_PPM).contains(&holes);
+-        if (!warmup && !self.congestion.window_bound_path()) || !useful || self.congestion.is_rate_limited() {
++        // 量到了上限（还没确认也算）、丢得又远多于随机丢包：丢的是限速器挡下的包，校验包只会占掉限速的额度。
++        let limiter_losses = self.congestion.rate_cap() > 0
++            && self.loss_ppm as u64 > (self.congestion.random_loss_ppm() as u64).saturating_mul(2).saturating_add(LIMITER_EXCESS_LOSS_PPM);
++        if (!warmup && !self.congestion.window_bound_path()) || !useful || self.congestion.is_rate_limited() || limiter_losses {
+             return None;
+         }
+         // 成片地丢是撞上了容量，这时多发只会丢得更多，校验也修不过来。随机丢包是零散的。

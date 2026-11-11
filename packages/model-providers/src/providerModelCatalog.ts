@@ -124,7 +124,11 @@ export function providerModelGenerationRecord(modelId: string, upstream: string,
     execution: { pi: piParametersForEndpoint(parameters, previous.upstream, upstream) } };
 }
 
-function piParametersForEndpoint(parameters: ProviderModelRecord['execution']['pi'], declaredUpstream: string, upstream: string) {
+function piParametersForEndpoint(
+  parameters: ProviderModelRecord['execution']['pi'],
+  declaredUpstream: string,
+  upstream: string,
+): ProviderModelRecord['execution']['pi'] {
   const inherited = structuredClone(parameters);
   let endpoint = normalize(upstream);
   try { endpoint = normalize(new URL(endpoint).href); } catch { /* Invalid endpoints cannot match a catalog route. */ }
@@ -135,7 +139,36 @@ function piParametersForEndpoint(parameters: ProviderModelRecord['execution']['p
       providerEndpointBindings(normalize(declaredUpstream), endpoint) === null) {
     delete inherited.compat.supportsMidConvoEffort;
   }
+  // A vendor thinking dialect is a promise about one endpoint. Pi sends DeepSeek's
+  // top-level `thinking` object only when `thinkingFormat` is explicit; keeping the
+  // dialect on an unrelated host would make a strict OpenAI-compatible gateway receive
+  // a payload it never agreed to. Pinned catalog rows and declared account templates
+  // keep it; self-hosted templates bind every URL and therefore count as unrelated.
+  const format = inherited.compat?.thinkingFormat;
+  if (typeof format === 'string' && format !== 'openai' && !sameUpstreamTemplate(declaredUpstream, endpoint)) {
+    const { thinkingFormat: _thinkingFormat, ...compat } = inherited.compat ?? {};
+    return { ...inherited, ...(Object.keys(compat).length > 0 ? { compat } : { compat: undefined }) };
+  }
   return inherited;
+}
+
+/**
+ * True when the caller is the host the dialect was published for. Catalog rows pin a
+ * concrete path (`https://api.deepseek.com`), while a saved connection may append `/v1`.
+ * Account-pinned templates (Cloudflare account/gateway, Azure resource, Vertex location)
+ * still name one vendor host, so a successful binding counts; the self-hosted
+ * `{endpoint}` template binds any URL and never counts.
+ */
+function sameUpstreamTemplate(template: string, endpoint: string): boolean {
+  if (template.includes('{')) {
+    if (template.includes('{endpoint}')) return false;
+    return providerEndpointBindings(template, endpoint) !== null;
+  }
+  const source = normalize(template);
+  const target = normalize(endpoint);
+  if (source === target) return true;
+  const withVersion = `${source}/v1`;
+  return target === withVersion || target.startsWith(`${withVersion}/`);
 }
 
 /** Account-specific endpoints may still explicitly reference a maintained connection template. */
