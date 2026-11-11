@@ -3,10 +3,18 @@ import { piSupportedEfforts } from "../../packages/model-providers/src/piThinkin
 // Copilot rejects Astra on /chat/completions (makecindy/cindy#9863).
 // Correct this exact source route on both bundle imports and online refreshes;
 // nativeApi describes model identity and is not a general execution override.
+// Responses adapter metadata: earendil-works/pi#9253 (generate-models.ts).
 function correctCopilotAstraApi(row) {
   return row.provider === 'github-copilot' && row.id === 'gpt-6-astra' &&
     row.baseUrl === 'https://api.individual.githubcopilot.com' && row.api === 'openai-completions'
-    ? { ...row, api: 'openai-responses' }
+    ? {
+        ...row, api: 'openai-responses',
+        thinkingLevelMap: {
+          off: null, minimal: null, low: 'low', medium: 'medium', high: 'high', xhigh: 'xhigh', max: 'max',
+        },
+        // Chat compatibility flags must not survive a change of adapter.
+        compat: { supportsOpenAIGrammarTools: true },
+      }
     : row;
 }
 

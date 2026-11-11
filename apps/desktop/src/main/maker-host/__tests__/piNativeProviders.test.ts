@@ -3251,6 +3251,11 @@ it('launches Copilot Astra with Responses while preserving other model APIs', ()
     'openai-responses', 'openai-responses', 'openai-completions',
   ]);
   expect(providers[0].models[0].baseUrl ?? providers[0].baseUrl).toBe('https://api.individual.githubcopilot.com');
+  expect(providers[0].models[0]).toMatchObject({
+    thinkingLevelMap: { off: null, minimal: null, low: 'low', xhigh: 'xhigh', max: 'max' },
+    compat: { supportsOpenAIGrammarTools: true },
+  });
+  expect(providers[0].models[0].compat).not.toHaveProperty('supportsReasoningEffort');
 });
 
 it('carries every unambiguous portable catalog model into the Pi descriptor', () => {

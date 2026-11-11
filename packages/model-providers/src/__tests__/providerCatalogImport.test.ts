@@ -46,6 +46,27 @@ describe("Pi source import", () => {
     expect(refreshed.providers['github-copilot']).toEqual(previous.providers['github-copilot']);
   });
 
+  // #9863 review: changing only api leaves Chat adapter flags and unsupported
+  // reasoning levels. Verify the generated Responses contract, not only its name.
+  it('replaces Copilot Astra Chat adapter metadata when correcting its API', () => {
+    const stale = { id: 'gpt-6-astra', provider: 'github-copilot',
+      baseUrl: 'https://api.individual.githubcopilot.com', api: 'openai-completions', reasoning: true,
+      thinkingLevelMap: { xhigh: 'xhigh', max: 'max' },
+      compat: { supportsStore: false, supportsDeveloperRole: false, supportsReasoningEffort: false },
+    };
+    const before = structuredClone(stale);
+    const catalog = toCindyCatalog({ 'github-copilot': [stale] }, 'fixture');
+    const corrected = catalog.providers['github-copilot'][0];
+    expect(corrected.efforts).toEqual(['low', 'medium', 'high', 'xhigh', 'max']);
+    expect(corrected.execution.pi).toEqual({
+      api: 'openai-responses',
+      thinkingLevelMap: { off: null, minimal: null, low: 'low', medium: 'medium', high: 'high', xhigh: 'xhigh', max: 'max' },
+      compat: { supportsOpenAIGrammarTools: true },
+    });
+    expect(toCindyCatalog({ 'github-copilot': [stale] }, 'fixture', { previous: catalog })).toEqual(catalog);
+    expect(stale).toEqual(before);
+  });
+
   it('does not turn the bundled manifest into a provider to refresh', () => {
     const manifest = '// ../ai/src/providers/data/.manifest.json\nvar manifest_default = { "providers": {} };\n';
     const providers = readBundledCatalog(manifest + shard(JSON.stringify({ 'openai-completions': { 'new-model': model } })));

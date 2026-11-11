@@ -21,6 +21,8 @@ describe("standard provider catalog", () => {
     ]);
     expect(provider.models[agent]?.[0]).toMatchObject({
       route: { baseUrl, wireProtocol: 'openai-responses' },
+      reasoningRequired: true,
+      efforts: ['low', 'medium', 'high', 'xhigh', 'max'],
       ...(agent === 'pi' ? { piApi: 'openai-responses' } : {}),
       userModelConfig: models[0],
     });
@@ -29,6 +31,7 @@ describe("standard provider catalog", () => {
     const presetProvider = buildUserProvider({ id: 'copilot-preset', name: 'Copilot', runtimes: preset.runtimes });
     expect(presetProvider.models[agent]?.find(model => model.id === 'gpt-6-astra')).toMatchObject({
       api: 'openai-responses', route: { baseUrl, wireProtocol: 'openai-responses' },
+      reasoningRequired: true, efforts: ['low', 'medium', 'high', 'xhigh', 'max'],
     });
   });
 

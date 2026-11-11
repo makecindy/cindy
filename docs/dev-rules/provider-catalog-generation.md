@@ -62,6 +62,8 @@
 2026-11-11：[#9863](https://github.com/makecindy/cindy/issues/9863) 的 Copilot Astra
 在官方个人端点拒绝 Chat Completions。`tools/pi/catalog-format.mjs` 对精确供应商、型号、
 地址及旧 API 做具名纠正为 Responses，随包条目同步；在线刷新与 bundle 导入共用该入口。
+按 [Pi #9253](https://github.com/earendil-works/pi/pull/9253) 的生成规则同时替换适配字段：
+禁止 `off` / `minimal`，保留 `low` 至 `max`，启用语法约束工具并移除旧 Chat 兼容标记。
 不把 `nativeApi` 当通用路由覆盖，不改用户显式接口、其他地址或已有任务的接口快照。
 回归覆盖生成、三引擎预设/ID-only 导入及 Pi 启动描述符；真实 Copilot 账号推理仍需验收。
 
