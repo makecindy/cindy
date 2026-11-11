@@ -63,6 +63,9 @@ function stableToolDescription(tool: ResponsesCustomTool): string {
 
 function chatCustomToolDescription(tool: ResponsesCustomTool, namespace?: string): string {
   const metadata = stableToolDescription(tool);
+  // Untrusted JSON: a non-string description would make Buffer.byteLength throw, and the
+  // handler only maps UnsupportedResponsesFeatureError to a 400. Fall back to metadata.
+  if (typeof tool.description !== 'string') return metadata;
   if (!tool.description) return metadata;
   const description = namespace === undefined
     && tool.name === 'exec'
@@ -335,11 +338,11 @@ export class ChatBridgeToolContext {
     for (const [identity, chatName] of this.chatNamesByResponseName) {
       const [kind, namespace, name] = identity.split('\0');
       if (!namespace || !name) continue;
-      if (name === CODE_MODE_EXEC_TOOL_NAME) continue;
       // Codex accepts both the bare child name and the dotted `namespace.name` spelling for a
       // selector; index both so either choice resolves to the flattened Chat name, using the
-      // same ambiguity rule for each.
-      this.recordCurrentSelector(kind, name, chatName);
+      // same ambiguity rule for each. `exec` keeps only the dotted alias: a bare `exec` would
+      // switch on upstream nested-helper normalization, but `clock.exec` still names this tool.
+      if (name !== CODE_MODE_EXEC_TOOL_NAME) this.recordCurrentSelector(kind, name, chatName);
       this.recordCurrentSelector(kind, namespace + '.' + name, chatName);
     }
   }

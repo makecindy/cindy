@@ -846,6 +846,41 @@ describe('translateResponsesRequest', () => {
     expect(out.tools?.map(tool => (tool as { function: { name: string } }).function.name)).toEqual(['clock__now']);
   });
 
+  it('resolves a dotted namespace selector for a non-bare child (#9715)', () => {
+    const out = translateResponsesRequest(base({
+      input: [
+        {
+          type: 'additional_tools',
+          role: 'developer',
+          tools: [{
+            type: 'namespace',
+            name: 'clock',
+            tools: [{ type: 'function', name: 'exec', parameters: { type: 'object' } }],
+          }],
+        },
+        { type: 'message', role: 'user', content: 'hello' },
+      ],
+      tool_choice: { type: 'function', name: 'clock.exec' },
+    }));
+
+    expect(out.tool_choice).toEqual({ type: 'function', function: { name: 'clock__exec' } });
+  });
+
+  it('tolerates a non-string custom description instead of throwing (#9715)', () => {
+    const out = translateResponsesRequest(base({
+      input: [
+        {
+          type: 'additional_tools',
+          role: 'developer',
+          tools: [{ type: 'custom', name: 'writer', description: 1 }],
+        },
+        { type: 'message', role: 'user', content: 'hello' },
+      ],
+    }));
+
+    expect(out.tools?.map(tool => (tool as { function: { name: string } }).function.name)).toEqual(['writer']);
+  });
+
   it('keeps a namespaced web_search function when search itself is dropped (#9715)', () => {
     const out = translateResponsesRequest(base({
       tools: [{ type: 'web_search' }],
