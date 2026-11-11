@@ -140,6 +140,8 @@ export async function resolveWorkerCreationDefaults(
         ? 'the shared provider is paused'
         : message.includes('REMOTE_AGENT_SHARE_REMOVED')
           ? 'the shared provider was removed'
+          : message.includes('REMOTE_AGENT_SHARE_LEGACY_DISABLED')
+            ? 'encrypted-only connections block this older shared provider'
           : rememberedLocation?.startsWith('share:')
             ? 'the shared provider is unavailable'
             : rememberedLocation

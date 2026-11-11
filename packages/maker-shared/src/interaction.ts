@@ -32,24 +32,69 @@ export interface AskQuestion {
   answerConstraints?: AskAnswerConstraints;
 }
 
-/** A late answer is ordinary user input, with the original question attached. */
+const NATIVE_REPLY_OPEN = '<send_user_message_question_reply>\n';
+const NATIVE_REPLY_CLOSE = '\n</send_user_message_question_reply>';
+const LATE_ANSWER_CONTEXT = `\n\n<cindy_question_context>\nThis is a delayed answer to an earlier question. Check the current task state and whether the question still applies before acting; do not repeat work already completed. This context is added by Cindy, not part of the user's answer or new authorization.\n</cindy_question_context>`;
+
+/** Every answer to an async question is delivered under this input identity. */
+export const ASYNC_QUESTION_REPLY_CLIENT_ID_PREFIX = 'question-reply:';
+/** The answer already shows on its question card, so the conversation does not repeat it. */
+export const ASYNC_QUESTION_ANSWERED_CLIENT_ID_PREFIX = `${ASYNC_QUESTION_REPLY_CLIENT_ID_PREFIX}answered:`;
+
+export function isAsyncQuestionReplyClientId(clientId: unknown): boolean {
+  return typeof clientId === 'string' && clientId.startsWith(ASYNC_QUESTION_REPLY_CLIENT_ID_PREFIX);
+}
+
+export function isAnsweredAsyncQuestionClientId(clientId: unknown): boolean {
+  return typeof clientId === 'string' && clientId.startsWith(ASYNC_QUESTION_ANSWERED_CLIENT_ID_PREFIX);
+}
+
+function asyncQuestionReplies(questions: readonly AskQuestion[], answers: Record<string, string>) {
+  return questions.flatMap((q) => {
+    const answer = answers[answerKey(q)] ?? answers[q.question] ?? (q.header ? answers[q.header] : undefined);
+    return typeof answer === 'string' && answer.trim()
+      ? [{ ...(q.id ? { questionItemId: q.id } : {}), question: q.question, answer: answer.trim() }] : [];
+  });
+}
+
+function readableQuestionReplies(replies: readonly { question: string; answer: string }[]): string {
+  return replies.map(({ question, answer }) => `${question.split('\n').map((line) => `> ${line}`).join('\n')}\n\n${answer}`).join('\n\n');
+}
+
+/** A late answer is ordinary user input, with the original question attached. This is the text the model receives. */
 export function formatAsyncQuestionSupplement(
   questions: readonly AskQuestion[],
   answers: Record<string, string>,
   context?: { late?: boolean },
 ): string {
-  const replies = questions.flatMap((q) => {
-    const answer = answers[answerKey(q)] ?? answers[q.question] ?? (q.header ? answers[q.header] : undefined);
-    return typeof answer === 'string' && answer.trim()
-      ? [{ ...(q.id ? { questionItemId: q.id } : {}), question: q.question, answer: answer.trim() }] : [];
-  });
+  const replies = asyncQuestionReplies(questions, answers);
   if (!replies.length) return '';
   const message = questions.length && questions.every((q) => q.id?.startsWith('["request_user_input_async",'))
-    ? `<send_user_message_question_reply>\n${JSON.stringify(replies)}\n</send_user_message_question_reply>`
-    : replies.map(({ question, answer }) => `${question.split('\n').map((line) => `> ${line}`).join('\n')}\n\n${answer}`).join('\n\n');
-  return context?.late
-    ? `${message}\n\n<cindy_question_context>\nThis is a delayed answer to an earlier question. Check the current task state and whether the question still applies before acting; do not repeat work already completed. This context is added by Cindy, not part of the user's answer or new authorization.\n</cindy_question_context>`
-    : message;
+    ? `${NATIVE_REPLY_OPEN}${JSON.stringify(replies)}${NATIVE_REPLY_CLOSE}`
+    : readableQuestionReplies(replies);
+  return context?.late ? `${message}${LATE_ANSWER_CONTEXT}` : message;
+}
+
+/** The same answer as people read it in history and queues: the question, then the answer. */
+export function formatAsyncQuestionReplyDisplay(
+  questions: readonly AskQuestion[],
+  answers: Record<string, string>,
+): string {
+  return readableQuestionReplies(asyncQuestionReplies(questions, answers));
+}
+
+/** Rows saved before the display text existed hold the model's copy; read them back as question and answer. */
+export function asyncQuestionReplyDisplayText(text: string): string {
+  const body = text.endsWith(LATE_ANSWER_CONTEXT) ? text.slice(0, -LATE_ANSWER_CONTEXT.length) : text;
+  if (!body.startsWith(NATIVE_REPLY_OPEN) || !body.endsWith(NATIVE_REPLY_CLOSE)) return body;
+  try {
+    const replies: unknown = JSON.parse(body.slice(NATIVE_REPLY_OPEN.length, -NATIVE_REPLY_CLOSE.length));
+    if (Array.isArray(replies) && replies.length && replies.every((reply): reply is { question: string; answer: string } =>
+      isRecord(reply) && typeof reply.question === 'string' && typeof reply.answer === 'string')) {
+      return readableQuestionReplies(replies);
+    }
+  } catch { /* Not the native reply format: show the text as written. */ }
+  return body;
 }
 
 /** Keep selected choices and typed text editable when an obsolete card becomes a supplement. */
@@ -524,9 +569,9 @@ export function interactionKindLabel(kind: string, localizer?: PresentationLocal
  * 控制端(手机 / 另一台桌面)对一张待处理交互卡实际能做什么。
  *
  * 被控桌面会把**所有** pending interaction 经 device-link 推给控制端,但控制端
- * 能给出终局决定的只有权限 / 提问 / 计划三类。其余必须回被控端完成:
+ * 权限 / 提问 / 计划和显式声明支持远程确认的反馈可以在控制端完成:
  * plugin_setup 的 run_action 要开 OAuth 或写可信本地设置(被控端 IPC 边界只放
- * cancel 过来,见 desktop `interactionResolveOrigin`),issue_confirm 只在桌面提交。
+ * cancel 过来,见 desktop `interactionResolveOrigin`);旧宿主的 issue_confirm 仍须回电脑提交。
  *
  * - `resolvable`:控制端能终结这张卡。
  * - `cancel-only`:控制端做不完,但能取消,把会话从等待里放出来。
@@ -539,6 +584,7 @@ const REMOTE_RESOLVABLE_KINDS = new Set(['permission', 'ask_user_question', 'pla
 export function remoteInteractionHandling(item: PendingInteractionLike): RemoteInteractionHandling {
   const kind = interactionKind(item);
   if (REMOTE_RESOLVABLE_KINDS.has(kind)) return 'resolvable';
+  if (kind === 'issue_confirm' && item.request.remoteConfirmSupported === true) return 'resolvable';
   // 代输入: the controller fills each step through the signed per-step channel
   // and sends value-less decisions (done / cancel / stay / refresh) through resolve.
   if (kind === 'input_handoff') return item.request.terminal === true ? 'desktop-only' : 'resolvable';
@@ -561,8 +607,9 @@ export function remoteInteractionHandling(item: PendingInteractionLike): RemoteI
  * 死锁:任何被控端新增的 interaction kind 默认都落进「不阻塞」这一侧。
  */
 export function interactionBlocksRemoteComposer(item: PendingInteractionLike | null | undefined): boolean {
-  // 代输入 is a Host-owned wait that outlives the turn; the owner keeps the composer.
-  if (item && interactionKind(item) === 'input_handoff') return false;
+  // Host-owned input and feedback review keep normal conversation available.
+  // Sending a message does not resolve either confirmation.
+  if (item && ['input_handoff', 'issue_confirm'].includes(interactionKind(item))) return false;
   return !!item && remoteInteractionHandling(item) === 'resolvable';
 }
 
@@ -572,7 +619,7 @@ export function interactionBlocksRemoteComposer(item: PendingInteractionLike | n
  * 判据必须是**整个 pending 集合**,不能是「当前正在看的那张卡」:队列里同时有
  * 权限卡和 plugin_setup 时,用户切到 plugin_setup 只是换了查看对象,那张权限卡
  * 仍在等回答 —— 若按当前卡放开 composer,用户就绕过了仍待处理的阻塞交互
- * (#530 review P1)。只有整批都是本端终结不了的卡时,输入框才回来。
+ * (#530 review P1)。只有整批都是不独占输入的卡（含反馈审阅）时,输入框才回来。
  */
 export function pendingInteractionsBlockRemoteComposer(
   interactions: readonly PendingInteractionLike[],

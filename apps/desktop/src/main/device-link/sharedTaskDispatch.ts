@@ -346,6 +346,6 @@ export function captureSharedTaskPush(source: string, channel: string, payload: 
       channel.startsWith('usage:message-') || channel === 'usage:session-spend-changed' || channel === 'usage:session-tokens-changed')) return null;
   if (channel === 'maker:event:batch' && (!Array.isArray(row.events) || row.events.some((event) => record(event)?.sessionId !== sessionId))) return null;
   // 代输入 is the owner's own sign-in step; guests never see or answer it.
-  if (channel === 'maker:interaction-request' && record(row.request)?.kind === 'input_handoff') return null;
+  if (channel === 'maker:interaction-request' && ['input_handoff', 'issue_confirm'].includes(String(record(row.request)?.kind))) return null;
   return () => capture.isCurrent();
 }

@@ -162,8 +162,9 @@ export function useRemoteBotSync(): void {
         }
         publish([...snapshot.filter((bot) => bot.deviceId !== deviceId), ...bots]);
         flushUnreportedReads(deviceId, bots);
-        // Older released hosts already expose the task-card list, even when their
-        // directory has no task links. Read serially per host; never per task row.
+        // Every host answers the V1 task-card list (newer ones read-only from stored rows):
+        // the children a teammate started there keep their "opened by" mark. Read serially
+        // per host; never per task row.
         for (const bot of bots) {
           if (!current() || generations.get(deviceId) !== epoch) return;
           if (!bot.sessionId) continue;
@@ -188,6 +189,8 @@ export function useRemoteBotSync(): void {
         publish(snapshot.map(bot => bot.deviceId === deviceId ? { ...bot, generation: undefined } : bot));
       }
     }
+    // Older hosts still run V1 background tasks and push `maker:bot-delegation:changed`;
+    // newer hosts never do. Either way it only refreshes this host's created-task marks.
     // The app's existing remote-session synchronizer owns the sessions topic.
     // Sharing its pushes avoids competing subscribe/unsubscribe owners.
     // Subscribe before reading status: a stopped/connecting relay cannot inherit

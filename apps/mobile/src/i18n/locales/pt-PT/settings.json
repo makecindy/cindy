@@ -1,4 +1,31 @@
 {
+  "pushDiagnostics": {
+    "title": "Diagnóstico de notificações",
+    "read": "Ler estado das notificações",
+    "busy": "A ler…",
+    "failed": "Não foi possível ler o estado. Tente novamente.",
+    "copyFailed": "Não foi possível copiar o token.",
+    "copied": "Token copiado.",
+    "bundle": "ID da aplicação",
+    "build": "Compilação",
+    "environment": "Ambiente APNs",
+    "permission": "Permissão do sistema",
+    "alerts": "Avisos",
+    "lockScreen": "Ecrã bloqueado",
+    "notificationCenter": "Central de notificações",
+    "copy": "Copiar token APNs",
+    "hide": "Ocultar resultado",
+    "unknown": "Desconhecido",
+    "on": "Ativado",
+    "off": "Desativado",
+    "hint": "Lê apenas quando solicitado. O token APNs aparece só neste ecrã, sem ser guardado no diagnóstico ou enviado por esta ferramenta. Fica oculto ao sair ou passar para segundo plano. Copie apenas para a consola de notificações da Apple; o texto copiado permanece na área de transferência.",
+    "permissions": {
+      "granted": "Permitida",
+      "denied": "Negada",
+      "undetermined": "Não solicitada",
+      "provisional": "Entrega silenciosa"
+    }
+  },
   "localLogs": {
     "upload": "Carregar registos",
     "uploadResult": {

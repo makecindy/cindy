@@ -343,10 +343,16 @@ function makePermissionModeFake() {
 }
 
 /** fake maker: createSession 返回"send 即接受、随后立刻 done"的会话。 */
-function makeFakeSession(id: string) {
+function makeFakeSession(
+  id: string,
+  status: 'active' | 'aborting' | 'closed' | 'error' = 'active',
+) {
   const permission = makePermissionModeFake();
   return {
     id,
+    // close 失败会让真实 Session 停在 error;测试用初始状态复刻这一后果。
+    getStatus: () => status,
+
     ...({ instanceId: `instance-${id}` } as { instanceId?: string }),
     workDir: 'D:/repo',
     get permissionModeState() {
@@ -395,6 +401,8 @@ function makeFakeSession(id: string) {
 
 const fakeMaker = {
   createSession: vi.fn(async (opts: { id?: string }) => makeFakeSession(opts.id ?? 'sess-x')),
+  // 默认无漂移:漂移相关用例按需覆写(maker 方法缺省 false → 不回收)
+  recyclePiRuntimeIfResourcesDrifted: vi.fn(async () => false),
   getSessionMeta: vi.fn(async () => ({
     workDir: 'D:/repo',
     model: 'meta-model',
@@ -815,6 +823,53 @@ describe('hook task model selection on next send', () => {
     }));
     expect(result.status).toBe('error');
     expect(release).toHaveBeenCalledOnce();
+  });
+
+  it('surfaces the real rebuild failure after a drift recycle instead of sending on the closed instance', async () => {
+    // 回收已关旧实例后重建失败:错误必须原样上抛,不得吞掉后拿已关闭实例投递
+    // (那只会报误导性的「会话已关闭」,真正的启动原因被吞 —— Greptile P2)。
+    const oldSession = makeFakeSession('sess-old');
+    fakeMaker.recyclePiRuntimeIfResourcesDrifted.mockResolvedValueOnce(true);
+    fakeMaker.createSession
+      .mockImplementationOnce(async () => oldSession)
+      .mockRejectedValueOnce(new Error('pi startup failed: bad extension'));
+    const result = await createMakerHookSessionRunner({ log }).run(baseReq({ isNew: false }));
+    expect(result.status).toBe('error');
+    expect(result.errorMessage).toContain('pi startup failed: bad extension');
+    expect(fakeMaker.createSession).toHaveBeenCalledTimes(2);
+    expect(oldSession.send).not.toHaveBeenCalled();
+  });
+
+  it('keeps delivering on the live instance when the recycle itself fails', async () => {
+    // 回收本身失败但实例仍 active → 原样投递(hook 轮次不因回收故障中断)。
+    const session = makeFakeSession('sess-new');
+    session.send.mockResolvedValue({ accepted: true });
+    fakeMaker.createSession.mockResolvedValueOnce(session);
+    fakeMaker.recyclePiRuntimeIfResourcesDrifted.mockRejectedValueOnce(new Error('recycle boom'));
+    const run = createMakerHookSessionRunner({ log }).run(baseReq({ isNew: false }));
+    await vi.waitFor(() => expect(session.send).toHaveBeenCalledOnce());
+    h.eventCbs.get('sess-new')!({ type: 'done', data: null });
+    const result = await run;
+    expect(result.status).toBe('ok');
+    expect(fakeMaker.createSession).toHaveBeenCalledTimes(1);
+    expect(session.send).toHaveBeenCalledOnce();
+  });
+
+  it('rebuilds when the recycle fails and the session is no longer active', async () => {
+    // Codex P2:close 抛出时 Session 已停在 error,旧实例不可用 —— 必须重建,
+    // 否则 send 被 ensureActive 拒、runner 永远绑在坏实例上。
+    const broken = makeFakeSession('sess-new', 'error');
+    const rebuilt = makeFakeSession('sess-new');
+    rebuilt.send.mockResolvedValue({ accepted: true });
+    fakeMaker.createSession.mockResolvedValueOnce(broken).mockResolvedValueOnce(rebuilt);
+    fakeMaker.recyclePiRuntimeIfResourcesDrifted.mockRejectedValueOnce(new Error('close boom'));
+    const run = createMakerHookSessionRunner({ log }).run(baseReq({ isNew: false }));
+    await vi.waitFor(() => expect(rebuilt.send).toHaveBeenCalledOnce());
+    h.eventCbs.get('sess-new')!({ type: 'done', data: null });
+    const result = await run;
+    expect(result.status).toBe('ok');
+    expect(fakeMaker.createSession).toHaveBeenCalledTimes(2);
+    expect(broken.send).not.toHaveBeenCalled();
   });
 
   it('does not send with the old model when applying the choice fails', async () => {
@@ -1741,6 +1796,8 @@ describe('进度快照(turn.progress 链路)', () => {
         return permission.permissionModeState;
       },
       id,
+      // 与 makeFakeSession 同形状:生产代码按 getStatus 判定实例是否仍可用。
+      getStatus: () => 'active' as const,
       workDir: 'D:/repo',
       onEvent(
         cb: (ev: {
@@ -2738,6 +2795,7 @@ describe('上游过载自动重试期间的渠道进度(零产出窗口)', () =>
     return {
       ...makePermissionModeFake(),
       id,
+      getStatus: () => 'active' as const,
       workDir: 'D:/repo',
       onEvent(cb: (ev: { type: string; data: unknown }) => void) {
         h.eventCbs.set(id, cb);
@@ -3058,6 +3116,7 @@ describe('交互卡链路(interaction listener 覆盖)', () => {
     return {
       ...makePermissionModeFake(),
       id,
+      getStatus: () => 'active' as const,
       workDir: 'D:/repo',
       onEvent(
         cb: (ev: {

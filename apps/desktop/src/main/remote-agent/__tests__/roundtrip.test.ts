@@ -1535,7 +1535,7 @@ describe('shared startup lease budget', () => {
     const allocation = deferred();
     let allocations = 0;
     const state = { device: 'executor-m' as unknown, duration: 2000 as unknown, delayCaps: 0, ready: false,
-      blockClose: false, blockPrepare: false, blockAllocation: false, ownerOffline: false, loseGrantOnOpen: false };
+      blockClose: false, blockPrepare: false, blockAllocation: false, ownerOffline: false, ownerPaused: false, loseGrantOnOpen: false };
     const emit = (run: Run, value: unknown) => run.onData(Buffer.from(JSON.stringify(value) + '\n'), false);
     const started = (run: Run) => emit(run, { t: 'started', handle: { id: 'sdk-' + run.runId, model: 'm', shadowDir: '', methods: ['setModel'], state: {} } });
     vi.spyOn(RemoteAgentPoller.prototype, 'register').mockImplementation(run => {
@@ -1547,6 +1547,8 @@ describe('shared startup lease budget', () => {
       const request = args[0] as { op: string; sessionId?: string; generation?: string; runId?: string; callId?: string; payload?: { json?: { sessionId: string } } };
       calls.push({ device, ...request });
       if (device === owner && state.ownerOffline) throw Object.assign(new Error('owner offline'), { code: 'NOT_CONNECTED' });
+      // remoteBackgroundInvoke resolves `share:` before any transport and throws the share's own state.
+      if (device === owner && state.ownerPaused) throw new Error('[REMOTE_AGENT_SHARE_PAUSED] the owner has paused this share');
       if (request.op === 'direct-locate') return { ok: true, result: { deviceId: 'executor-m', agentKind: 'codex' } };
       if (request.op === 'allocate') {
         const grant = ++allocations === 1 ? generation : '22222222-2222-4222-8222-222222222222';
@@ -1804,6 +1806,17 @@ describe('shared startup lease budget', () => {
     await expect(f.open('historical', f.owner, 'm', 'native-original')).rejects.toThrow('[SHARED_TASK_RECOVERY_relay] [SHARED_TASK_STAGE_owner] [SHARED_TASK_CODE_NOT_CONNECTED]');
     expect(f.calls.filter(call => call.op === 'open')).toHaveLength(1);
     await handle.close();
+  });
+
+  // Real guest (2026-11-10): after the owner paused the share, the next send wrapped the guest's
+  // own [REMOTE_AGENT_SHARE_PAUSED] as an unknown owner-stage recovery ("pick another computer").
+  it('reports an owner pause as the share state, not as a machine recovery failure', async () => {
+    const f = fixture(); f.state.ready = true; f.state.ownerPaused = true;
+    // Resuming native history asks O where the task lives; that lookup is where the pause surfaces.
+    const opening = f.open('historical', f.owner, 'm', 'native-original');
+    await expect(opening).rejects.toThrow(/^\[REMOTE_AGENT_SHARE_PAUSED\]/);
+    await expect(opening).rejects.not.toThrow('SHARED_TASK_RECOVERY');
+    expect(f.calls.filter(call => call.op === 'open' || call.op === 'allocate')).toHaveLength(0);
   });
 
   it.each(['send', 'setModel'] as const)('ends the original grant on wall-clock expiry before %s even if the monotonic clock did not advance', async action => {

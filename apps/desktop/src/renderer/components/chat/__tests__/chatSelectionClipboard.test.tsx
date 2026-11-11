@@ -196,13 +196,11 @@ describe('chat selection clipboard', () => {
       <p>after task</p></>);
     root.classList.toggle('select-text', selectText);
     const buttons = [...root.querySelectorAll('button')];
-    expect(buttons.some(button => button.textContent?.includes(state === 'waiting' ? 'bots.collab.lookAt' : 'bots.collab.watchWork'))).toBe(true);
-    const action = buttons.find(button => button.textContent?.includes(state === 'waiting' ? 'bots.collab.lookAt' : 'bots.collab.watchWork'))!;
+    // Old delegation cards are read-only since V1 delegation was removed (PR #9314): every state only
+    // opens its task (no look-at, add-a-note or stop).
+    const action = buttons.find(button => button.textContent?.includes('bots.collab.watchWork'))!;
     expect(getComputedStyle(action).userSelect).toBe(selectText ? 'text' : 'none');
-    if (state === 'running') {
-      expect(buttons.some(button => button.textContent?.includes('bots.collab.addNote'))).toBe(true);
-      expect(buttons.some(button => button.textContent?.includes('bots.collab.stop'))).toBe(true);
-    }
+    expect(buttons.some(button => /bots\.collab\.(?:lookAt|addNote|stop)/.test(button.textContent ?? ''))).toBe(false);
     if (state === 'completed') fireEvent.click(buttons.find(button => button.textContent?.includes('bots.collab.expandResult'))!);
     select();
     const formats = copy().clipboardData.setData.mock.calls;

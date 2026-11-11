@@ -130,18 +130,16 @@ it('distinguishes model selections from identity and capability-only refreshes',
 });
 
 
-describe('independent task model configuration', () => {
-  const route = { harness: 'codex', model: 'gpt-6-astra', providerId: 'openai', effort: 'high', fastMode: false };
-  it('preserves the complete route without changing the primary model or its selection revision', () => {
+// 2026-11-09: the teammate task model setting is retired. A profile that still carries one (even a
+// damaged one) loads and saves; the value stays as it is for an older computer (cloud carry-over).
+describe('retired task model', () => {
+  it('keeps a stored value opaque without validating it or changing the model selection', () => {
     const before = { modelChainOverride: null, model: 'primary' };
-    const after = normalizeBotProfileModelChain({ ...before, taskModelOverride: route });
-    expect(after).toEqual({ ...before, taskModelOverride: route });
-    expect(botProfileModelSelectionChanged(before, after)).toBe(false);
-    expect(normalizeBotProfileModelChain({ ...after, taskModelOverride: null }).taskModelOverride).toBeNull();
-    expect(normalizeBotProfileModelChain(before)).toEqual(before);
-  });
-  it.each([{ ...route, harness: 'unknown' }, { ...route, model: '' }, { ...route, fastMode: 'true' }])('rejects incomplete task routes: %j', taskModelOverride => {
-    expect(() => normalizeBotProfileModelChain({ taskModelOverride })).toThrow();
+    for (const taskModelOverride of [{ harness: 'codex', model: 'gpt-6-astra', providerId: 'openai', effort: 'high', fastMode: false }, { harness: 'unknown', model: '' }, 'garbage']) {
+      const after = normalizeBotProfileModelChain({ ...before, taskModelOverride });
+      expect(after).toEqual({ ...before, taskModelOverride });
+      expect(botProfileModelSelectionChanged(before, after)).toBe(false);
+    }
   });
 });
 
