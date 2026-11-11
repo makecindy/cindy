@@ -2080,6 +2080,16 @@ describe('interactive page declarations', () => {
   });
   // UI opening: old unknown positions confer no authority; newly understood
   // placements and provider input must be separately approved. Tier: unit.
+  it('keeps all eight legacy subjects unchanged when old packages contain previously unknown provider metadata', () => {
+    const positions = ['composer.toolbar', 'session.header', 'statusbar', 'message.actions', 'message.menu', 'turn.footer', 'message.body', 'tool.body'];
+    const host = { views: [{ id: 'page', title: 'Page', resourceUri: 'ui://planner' }],
+      contributions: positions.map((position, index) => ({ id: `old-${index}`, title: 'Old entry', position, view: 'page' })) };
+    const historical = { ...host, contributions: host.contributions.map(entry => ({ ...entry,
+      trigger: '@' as const, accept: { extensions: ['.pdf'] } })) };
+    expect(validateStoredGhostManifest({ ...base, mcpApps: { ...base.mcpApps, host: historical } })).toMatchObject({ ok: true,
+      manifest: { mcpApps: { host: { contributions: historical.contributions } } } });
+    expect(hostUiApprovalSubjects(historical)).toEqual(hostUiApprovalSubjects(host));
+  });
   it.each(['sidebar.navigation', 'session.menu', 'settings.section', 'composer.completion', 'window.titlebar'])(
     'approves the understood %s placement without changing an existing entry token', position => {
       const old = { id: 'legacy', title: 'Open', position: 'composer.toolbar', tool: 'help' };

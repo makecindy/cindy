@@ -73,7 +73,7 @@ export const __testing = {
 };
 
 /** New-computer setup: values the user changed here (docs/product-rules/new-device-setup-migration.md). */
-export const appearancePortableSettings = portableOverrideSettings(store, {
+const portableAppearance = portableOverrideSettings(store, {
   // Host-owned media reference; a custom wallpaper image is not copied.
   omitKeys: ['customWallpaperUrl', 'customWallpaperFallbackUrl', 'uiFontResource', 'codeFontResource', 'bodyFontResource'],
   optionalKeys: ['wallpaperBlur', 'wallpaperVisibility', 'desktopVisibility'],
@@ -84,3 +84,21 @@ export const appearancePortableSettings = portableOverrideSettings(store, {
     return rest;
   },
 });
+
+export const appearancePortableSettings = {
+  ...portableAppearance,
+  readCustomized() {
+    // Omit device-local families together with their resource pointers on export.
+    // Keep applyPatch's original local-choice conflict guard unchanged.
+    const values = portableAppearance.readCustomized(), current = store.read();
+    if (current.uiFontResource && values.uiFamily === current.uiFontResource.family) delete values.uiFamily;
+    if (current.codeFontResource && values.codeFamily === current.codeFontResource.family) delete values.codeFamily;
+    const bodyFont = values.bodyFont as AppearanceSettings['bodyFont'];
+    if (current.bodyFontResource && bodyFont?.family === current.bodyFontResource.family) {
+      const { family: _family, ...traits } = bodyFont;
+      if (Object.keys(traits).length) values.bodyFont = traits;
+      else delete values.bodyFont;
+    }
+    return values;
+  },
+};

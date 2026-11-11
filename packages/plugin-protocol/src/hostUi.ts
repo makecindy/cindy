@@ -136,7 +136,6 @@ export function parseGhostHostUi(
       if (item.position === 'settings.section' && (item.view === undefined ||
           (raw.views as GhostHostUiView[]).find(view => view.id === item.view)?.scope === 'task')) return null;
       if (item.position === 'composer.completion' && (item.tool === undefined || !['/', '@'].includes(String(item.trigger)))) return null;
-      if (item.trigger !== undefined && item.position !== 'composer.completion') return null;
       if (item.position === 'sidebar.section' && item.view === undefined) return null;
       if (item.position === 'composer.attachment') {
         if (item.tool === undefined || !object(item.accept) || !item.accept.extensions && !item.accept.mimeTypes) return null;
@@ -144,7 +143,7 @@ export function parseGhostHostUi(
             item.accept.extensions.some(ext => !/^\.[a-z0-9][a-z0-9._+-]{0,31}$/.test(ext)))) return null;
         if (item.accept.mimeTypes !== undefined && (!strings(item.accept.mimeTypes) ||
             item.accept.mimeTypes.some(mime => !/^(?:\*\/\*|[a-z0-9!#$&^_.+-]+\/(?:\*|[a-z0-9!#$&^_.+-]+))$/.test(mime)))) return null;
-      } else if (item.accept !== undefined) return null;
+      }
       if (item.presentation !== undefined && (!['sidebar', 'popover'].includes(String(item.presentation)) ||
           item.view === undefined || item.kind !== undefined && item.kind !== 'button' ||
           ['message.body', 'tool.body', 'message.menu', 'session.menu', 'sidebar.navigation', 'settings.section', 'composer.completion', 'composer.attachment', 'sidebar.section', 'window.titlebar'].includes(item.position as string))) return null;
@@ -219,8 +218,8 @@ export function hostUiApprovalSubjects(host: GhostHostUi): { key: string; detail
     result.push({ key: `contribution:${item.id}`, detail: JSON.stringify({ position: item.position,
       kind: item.kind ?? 'button', ...action(item), match,
       ...(item.presentation === 'popover' ? { presentation: 'popover' } : {}),
-      ...(item.trigger ? { trigger: item.trigger } : {}),
-      ...(item.accept ? { accept: { extensions: item.accept.extensions && [...item.accept.extensions].sort(),
+      ...(item.position === 'composer.completion' ? { trigger: item.trigger } : {}),
+      ...(item.position === 'composer.attachment' && item.accept ? { accept: { extensions: item.accept.extensions && [...item.accept.extensions].sort(),
         mimeTypes: item.accept.mimeTypes && [...item.accept.mimeTypes].sort() } } : {}),
       options: item.options?.map(option => option.value) }) });
   }

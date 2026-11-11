@@ -9347,6 +9347,9 @@
     }
   },
   "quotaCard": {
+    "codexRefreshFailed": "ChatGPT 할당량을 업데이트하지 못했습니다. 다시 조회하세요. 다른 사용량 정보는 유지됩니다.",
+    "retryQuota": "할당량 다시 조회",
+    "retryingQuota": "할당량 조회 중…",
     "usageCritical": "사용량이 높습니다",
     "usageWarning": "사용량이 다소 높습니다",
     "usageTitle": "사용량 상세",

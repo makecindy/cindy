@@ -8,6 +8,7 @@ export interface PluginUiAttachmentResult {
   text?: string;
   files?: { name: string; path: string; size: number; mimeType: string; url?: string }[];
 }
+export const PLUGIN_UI_INTEREST_LIMIT = 512;
 export const PLUGIN_UI_STATE_BATCH_LIMIT = 512;
 export const PLUGIN_UI_REGIONS = ['workspace', 'sidebar', 'header', 'messages', 'composer', 'tools', 'windowControls'] as const;
 export type PluginUiRegion = typeof PLUGIN_UI_REGIONS[number];
