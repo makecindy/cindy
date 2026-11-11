@@ -272,6 +272,32 @@ describe('project automation provider reconciliation', () => {
     }
   });
 
+  // PR #9904 review: a save rejected by model validation must not leave the rejected choice in schedules.json.
+  it('restores the project file when the scheduler rejects a save', async () => {
+    const dir = await fs.mkdtemp(path.join(tmpdir(), 'cindy-project-reject-'));
+    try {
+      const create = vi.fn(async () => { throw new Error('model unavailable on that computer'); });
+      const loader = new ProjectAutomationLoader({
+        scheduler: { create, update: vi.fn() } as unknown as ConstructorParameters<typeof ProjectAutomationLoader>[0]['scheduler'],
+        storage: { list: async () => [] } as unknown as ConstructorParameters<typeof ProjectAutomationLoader>[0]['storage'],
+        getDb: () => ({}) as unknown as ReturnType<ConstructorParameters<typeof ProjectAutomationLoader>[0]['getDb']>,
+        logger: { warn: vi.fn(), debug: vi.fn() },
+      });
+      const file = path.join(dir, ...PROJECT_AUTOMATION_REL_SEGMENTS);
+      const config = projectConfig({ model: 'remote-model', providerId: 'remote-provider' });
+      await expect(loader.upsertSchedule(dir, config)).rejects.toThrow('model unavailable');
+      await expect(fs.access(file)).rejects.toThrow();
+
+      const before = JSON.stringify({ version: 1, schedules: [projectConfig({ id: 'other' })] });
+      await fs.mkdir(path.dirname(file), { recursive: true });
+      await fs.writeFile(file, before, 'utf8');
+      await expect(loader.upsertSchedule(dir, config)).rejects.toThrow('model unavailable');
+      expect(await fs.readFile(file, 'utf8')).toBe(before);
+    } finally {
+      await fs.rm(dir, { recursive: true, force: true });
+    }
+  });
+
   it('passes an explicit provider through the loader input and detects changes', () => {
     const config = projectConfig({ providerId: 'openai' });
     const input = __testing.scheduleConfigToUpdateInput(config, workingDir);

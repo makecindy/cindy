@@ -294,8 +294,15 @@ export class ProjectAutomationLoader {
       && sameWorkingDir(s.workingDir, workingDir) && s.projectConfigId === config.id);
     const inserted = current ? 0 : 1;
     const updated = current && schedulesDiffer(current, config, workingDir) ? 1 : 0;
-    if (!current) await this.deps.scheduler.create(scheduleConfigToCreateInput(config, workingDir));
-    else if (updated) await this.deps.scheduler.update(current.id, scheduleConfigToUpdateInput(config, workingDir));
+    try {
+      if (!current) await this.deps.scheduler.create(scheduleConfigToCreateInput(config, workingDir));
+      else if (updated) await this.deps.scheduler.update(current.id, scheduleConfigToUpdateInput(config, workingDir));
+    } catch (err) {
+      // A rejected save (e.g. a model its computer cannot run) must not leave the rejected
+      // choice in the project file while the saved automation keeps its old configuration.
+      await this.restoreProjectAutomationsFile(workingDir, read);
+      throw err;
+    }
     this.emit({ type: 'reconciled', workingDir, inserted, updated, deleted: 0,
       isFirstTime: !current, hashChanged: true });
     return { workingDir, inserted, updated, deleted: 0, skipped: null };
@@ -400,6 +407,27 @@ export class ProjectAutomationLoader {
         error: err instanceof Error ? err.message : String(err),
       });
       return { kind: 'parse-error' };
+    }
+  }
+
+  /** Put the file back exactly as `read` saw it; best effort, the original error stays the one reported. */
+  private async restoreProjectAutomationsFile(workingDir: string, read: CachedRead): Promise<void> {
+    const filePath = path.join(workingDir, AUTOMATIONS_REL_PATH);
+    try {
+      if (read.kind === 'loaded') {
+        const tmpPath = `${filePath}.tmp.${randomUUID()}`;
+        await fs.writeFile(tmpPath, read.content, 'utf8');
+        await fs.rename(tmpPath, filePath);
+      } else if (read.kind === 'missing') {
+        await fs.rm(filePath, { force: true });
+      }
+    } catch (restoreErr) {
+      this.deps.logger.warn?.('[project-automation] restore after rejected save failed', {
+        workingDir,
+        error: restoreErr instanceof Error ? restoreErr.message : String(restoreErr),
+      });
+    } finally {
+      this.cache.delete(path.resolve(workingDir));
     }
   }
 
