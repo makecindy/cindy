@@ -45,7 +45,9 @@ const log = createLogger('terminal/pty-manager');
 const TERMINAL_NAME = 'xterm-256color';
 const DEFAULT_COLS = 80;
 const DEFAULT_ROWS = 24;
-const OUTPUT_BYTES = 1024 * 1024;
+// DSH jobs-local/src/index.ts:37/40; only retainOutput managed jobs use these rings.
+const OUTPUT_BYTES = 256 * 1024;
+const SETTLED_OUTPUT_BYTES = 16 * 1024;
 const OUTPUT_CHUNKS = 256;
 const READ_BYTES = 64 * 1024;
 
@@ -543,7 +545,8 @@ export class PtyManager<Owner extends PtyOwner = WebContents> {
       if (!session.active) return;
       // Bound both memory and frame count; split without breaking surrogate pairs.
       for (let start = 0; start < chunk.length;) {
-        let end = Math.min(chunk.length, start + 16 * 1024);
+        // Each frame also fits the settled ring, including non-ASCII output.
+        let end = Math.min(chunk.length, start + 4 * 1024);
         if (end < chunk.length && /[\uD800-\uDBFF]/.test(chunk[end - 1])) end--;
         const data = chunk.slice(start, end); start = end;
         session.output.push({ sequence: ++session.sequence, data });
@@ -565,6 +568,11 @@ export class PtyManager<Owner extends PtyOwner = WebContents> {
         signal: signal != null ? String(signal) : null,
       };
       session.exit = exitInfo;
+      if (session.retainOutput) {
+        while (session.outputBytes > SETTLED_OUTPUT_BYTES) {
+          session.outputBytes -= Buffer.byteLength(session.output.shift()!.data);
+        }
+      }
       // flush 一下残留输入（exit 后写无意义，但保持状态干净）
       session.pendingInput = '';
       log.info('pty exit', {

@@ -192,7 +192,11 @@ output = unpack(await cindy.host.call('cindy_helper', 'terminal_read', {
 `terminal_stop({id})` 请求停止该进程，收到退出后状态才是 `exited`；
 `terminal_forget({id})` 只清除已退出记录。不能以别的插件或任务的 id 越过归属。
 
-输出缓冲最多 1 MiB / 256 段，每次读取最多 64 KiB，`chunks` 含 sequence/data。
+每个调用方最多同时运行 10 个托管作业（含启动中与停止中）；超出返回
+`TERMINAL_JOB_LIMIT`，`data.current/limit` 为当前数量和上限，不排队或终止已有作业。
+收到退出状态才释放并发名额。已退出作业保留最近 100 条，按结束顺序回收更早的记录；
+`terminal_forget` 可提前释放。这些限制不作用于界面中自行打开的终端。
+运行中输出缓冲最多 256 KiB / 256 段，退出后最多 16 KiB；每次读取最多 64 KiB，`chunks` 含 sequence/data。
 每个客户端独立保存 cursor/generation；相同游标可重复读取，`hasMore` 表示还有保留输出，
 `resetRequired` 表示代次变化或旧输出被淘汰，不能把缺口拼成完整输出。
 作业不随一次调用或读连接结束；重连用 `terminal_list` 找回。停用、更新、卸载或切账号清理

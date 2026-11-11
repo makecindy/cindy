@@ -21,15 +21,28 @@ export type HostTerminalStart = Pick<CreateOptions, 'cwd' | 'program' | 'cols' |
 
 class ProcessOwner extends EventEmitter implements PtyOwner {
   private destroyed = false;
+  readonly settled: string[] = [];
   isDestroyed() { return this.destroyed; }
-  destroy() { if (!this.destroyed) { this.destroyed = true; this.emit('destroyed'); } }
+  destroy() { if (!this.destroyed) { this.destroyed = true; this.settled.length = 0; this.emit('destroyed'); } }
 }
 
 interface ScopeEntry {
   revision: string;
   pluginId?: string;
   owner: ProcessOwner;
+  pendingStarts: number;
   assertCurrent(): void;
+}
+
+// DSH jobs-local/src/index.ts:34 uses 10 active jobs per exact owner.
+const MAX_CONCURRENT_JOBS_PER_OWNER = 10;
+// Cindy additionally bounds terminal history even when callers never forget it.
+const MAX_SETTLED_JOBS_PER_OWNER = 100;
+
+/** Stable admission failure shared by the native tool and plugin result. */
+class TerminalJobLimitError extends Error {
+  readonly limit = MAX_CONCURRENT_JOBS_PER_OWNER;
+  constructor(readonly current: number) { super('TERMINAL_JOB_LIMIT'); }
 }
 
 const isWindow = (owner: PtyOwner): owner is WebContents => 'send' in owner && typeof owner.send === 'function';
@@ -46,7 +59,13 @@ export class HostTerminalService {
     this.manager = new PtyManager<PtyOwner>({ spawn: deps.spawn,
       sink: {
         emitData: (owner, payload) => { if (isWindow(owner)) this.uiSink?.emitData(owner, payload); },
-        emitExit: (owner, payload) => { if (isWindow(owner)) this.uiSink?.emitExit(owner, payload); },
+        emitExit: (owner, payload) => {
+          if (isWindow(owner)) this.uiSink?.emitExit(owner, payload);
+          else if (owner instanceof ProcessOwner) {
+            owner.settled.push(payload.id);
+            while (owner.settled.length > MAX_SETTLED_JOBS_PER_OWNER) this.manager.dispose(owner.settled.shift()!);
+          }
+        },
       },
       resolveFallbackOwner: owner => isWindow(owner) ? this.fallback?.(owner) ?? null : null,
     });
@@ -74,7 +93,7 @@ export class HostTerminalService {
       if (!valid) { this.disposeEntry(scope.key, entry); entry = undefined; }
     }
     if (!entry && create) {
-      entry = { owner: new ProcessOwner(), revision: scope.revision, pluginId: scope.pluginId, assertCurrent: scope.assertCurrent };
+      entry = { owner: new ProcessOwner(), pendingStarts: 0, revision: scope.revision, pluginId: scope.pluginId, assertCurrent: scope.assertCurrent };
       this.scopes.set(scope.key, entry);
     }
     return entry;
@@ -85,20 +104,28 @@ export class HostTerminalService {
     if (!dimensions(input.cols) || !dimensions(input.rows)) throw new Error('INVALID_TERMINAL_SIZE');
     const requested = input.cwd ?? scope.defaultCwd;
     if (!path.isAbsolute(requested) || requested.includes('\0')) throw new Error('INVALID_TERMINAL_CWD');
-    if (input.cwd === undefined && scope.createDefaultCwd) await fs.mkdir(requested, { recursive: true });
-    const cwd = await fs.realpath(requested);
-    if (!(await fs.stat(cwd)).isDirectory()) throw new Error('INVALID_TERMINAL_CWD');
-    scope.assertCurrent(); signal?.throwIfAborted();
     const entry = this.resolve(scope, true)!;
+    const active = entry.pendingStarts + this.manager.list(entry.owner).filter(job => job.status !== 'exited').length;
+    if (active >= MAX_CONCURRENT_JOBS_PER_OWNER) throw new TerminalJobLimitError(active);
+    // Reserve synchronously before filesystem work so parallel starts cannot
+    // oversubscribe. Disposal invalidates this exact entry rather than recreating it.
+    entry.pendingStarts++;
     const id = randomUUID();
     try {
+      if (input.cwd === undefined && scope.createDefaultCwd) await fs.mkdir(requested, { recursive: true });
+      const cwd = await fs.realpath(requested);
+      if (!(await fs.stat(cwd)).isDirectory()) throw new Error('INVALID_TERMINAL_CWD');
+      scope.assertCurrent(); signal?.throwIfAborted();
+      if (this.resolve(scope) !== entry) throw new Error('TERMINAL_SCOPE_CHANGED');
       this.manager.create({ ...input, id, cwd, owner: entry.owner, inheritEnv: false, env: scope.environment, retainOutput: true });
       scope.assertCurrent(); signal?.throwIfAborted();
       return this.manager.list(entry.owner).find(item => item.id === id)!;
     } catch (error) {
       this.manager.dispose(id);
-      if (!this.manager.list(entry.owner).length) this.disposeEntry(scope.key, entry);
       throw error;
+    } finally {
+      entry.pendingStarts--;
+      if (!entry.pendingStarts && !this.manager.list(entry.owner).length) this.disposeEntry(scope.key, entry);
     }
   }
 
@@ -139,7 +166,9 @@ export class HostTerminalService {
     const entry = this.require(scope, id);
     if (this.manager.list(entry.owner).find(item => item.id === id)?.status !== 'exited') throw new Error('TERMINAL_STILL_RUNNING');
     this.manager.dispose(id);
-    if (!this.manager.list(entry.owner).length) this.disposeEntry(scope.key, entry);
+    const index = entry.owner.settled.indexOf(id);
+    if (index >= 0) entry.owner.settled.splice(index, 1);
+    if (!entry.pendingStarts && !this.manager.list(entry.owner).length) this.disposeEntry(scope.key, entry);
   }
 
   disposePlugin(id: string): void {

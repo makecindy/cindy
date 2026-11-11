@@ -5,6 +5,10 @@
 `terminal` 新增同一 helper registry 的 `terminal_start/list/read/write/resize/stop/forget`，不改 Host 调用签名。
 新组仍须显式批准；旧 receipt 和未知字段不自动授予执行命令权限。终端输出用 Host 随机进程代次及
 非消费游标续读，缺口显式 `resetRequired`；执行电脑不支持或重启后记录丢失时报告失败，不重放命令。
+托管作业按调用方最多同时运行 10 个（包括启动和停止中），超出返回 `TERMINAL_JOB_LIMIT`，
+`data.current/limit` 说明数量和上限；不排队、不终止已有作业。输出在运行中最多 256 KiB、
+终态最多 16 KiB；每个调用方保留最近 100 条终态记录，在退出时按结束顺序回收，不新增定时器。
+界面直接创建的终端沿用原生命周期，不受上述托管作业配额影响。
 Node Host 与桌面控制端沿用上述工具签名、manifest 和 receipt。loopback SSE 客户端通过
 `protocol=2&confirmations=1` 显式协商不回放的 `host_prompt` 帧；只有现有四种插件确认请求/
 撤回 channel 可用，不占用或推进任务事件序号。旧客户端不协商就不投递此类帧；旧 Host

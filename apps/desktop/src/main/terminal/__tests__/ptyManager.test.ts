@@ -365,6 +365,81 @@ describe('HostTerminalService caller ownership', () => {
       lastSpawn = fake; allSpawns.push(fake); return fake;
     } });
   }
+  // Performance contract: HostTerminalService is new in this PR; UI create is
+  // covered separately. Unit fake PTYs expose admission, settlement and cleanup
+  // without starting processes. Previous ownership cases never reached capacity.
+  it('rejects the eleventh concurrent start with capacity details and releases a slot only on exit', async () => {
+    const host = service(), a = scope('quota');
+    const results = await Promise.allSettled(Array.from({ length: 11 }, () => host.start(a, {})));
+    expect(results.filter(result => result.status === 'fulfilled')).toHaveLength(10);
+    expect(results.find(result => result.status === 'rejected')).toMatchObject({
+      reason: { message: 'TERMINAL_JOB_LIMIT', current: 10, limit: 10 },
+    });
+    expect(allSpawns).toHaveLength(10);
+    expect(allSpawns.every(pty => !pty.__killed)).toBe(true);
+    const first = host.list(a)[0];
+    host.stop(a, first.id);
+    await expect(host.start(a, {})).rejects.toMatchObject({ message: 'TERMINAL_JOB_LIMIT', current: 10, limit: 10 });
+    allSpawns[0].__triggerExit({ exitCode: 0 });
+    await expect(host.start(a, {})).resolves.toMatchObject({ status: 'running' });
+    await expect(host.start(scope('other'), {})).resolves.toMatchObject({ status: 'running' });
+    host.disposeScoped();
+  });
+  it('bounds live output at 256KiB and settled output at 16KiB without splitting Unicode', async () => {
+    const host = service(), a = scope('output');
+    const job = await host.start(a, {});
+    lastSpawn!.__triggerData('界😀'.repeat(100000));
+    const retained = () => {
+      let cursor = 0, text = '', more = true;
+      while (more) {
+        const page = host.read(a, job.id, cursor, job.generation);
+        text += page.chunks.map(chunk => chunk.data).join('');
+        cursor = page.cursor; more = page.hasMore;
+      }
+      return text;
+    };
+    expect(Buffer.byteLength(retained())).toBeLessThanOrEqual(256 * 1024);
+    lastSpawn!.__triggerExit({ exitCode: 0 });
+    const tail = retained();
+    expect(Buffer.byteLength(tail)).toBeLessThanOrEqual(16 * 1024);
+    expect(tail.length).toBeGreaterThan(0);
+    expect(tail).not.toContain('\uFFFD');
+    host.disposeScoped();
+  });
+  it('evicts the oldest settlement at 101 records while retaining a live job and the most recent 100', async () => {
+    const host = service(), a = scope('history');
+    const live = await host.start(a, {}), livePty = lastSpawn!;
+    const earlierStart = await host.start(a, {}), earlierPty = lastSpawn!;
+    const firstFinished = await host.start(a, {});
+    lastSpawn!.__triggerExit({ exitCode: 0 });
+    earlierPty.__triggerExit({ exitCode: 0 });
+    for (let i = 0; i < 99; i++) {
+      await host.start(a, {});
+      lastSpawn!.__triggerExit({ exitCode: 0 });
+    }
+    const jobs = host.list(a);
+    expect(jobs).toHaveLength(101);
+    expect(jobs.filter(job => job.status === 'exited')).toHaveLength(100);
+    expect(jobs.map(job => job.id)).toContain(earlierStart.id);
+    expect(jobs.map(job => job.id)).toContain(live.id);
+    expect(() => host.read(a, firstFinished.id)).toThrow('TERMINAL_NOT_FOUND');
+    expect(livePty.__killed).toBe(false);
+    host.disposePlugin('history');
+    expect(host.list(a)).toEqual([]);
+    expect(livePty.__killed).toBe(true);
+    expect(allSpawns.every(pty => pty.__dataListenersDisposed && pty.__exitListenersDisposed)).toBe(true);
+    await expect(host.start(a, {})).resolves.toMatchObject({ status: 'running' });
+    host.disposeScoped();
+  });
+  it('cancels pending starts on plugin disposal without spawning or keeping their capacity', async () => {
+    const host = service(), a = scope('pending');
+    const pending = host.start(a, {});
+    host.disposePlugin('pending');
+    await expect(pending).rejects.toThrow('TERMINAL_SCOPE_CHANGED');
+    expect(allSpawns).toHaveLength(0);
+    await expect(host.start(a, {})).resolves.toMatchObject({ status: 'running' });
+    host.disposeScoped();
+  });
   it('keeps one process across readers and rejects another caller before revealing output or writing', async () => {
     const host = service(), a = scope('a'), b = scope('b');
     const started = await host.start(a, { program: { command: '/usr/bin/example', args: [] } });

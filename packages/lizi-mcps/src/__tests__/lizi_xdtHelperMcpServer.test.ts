@@ -61,6 +61,18 @@ it('discovers and dispatches terminal jobs through the shared schema for tasks a
   } finally { await client.close(); await server.close(); }
 });
 
+// Unit: a managed-job admission failure must survive the shared MCP dispatcher;
+// earlier dispatch tests only returned success, losing actionable capacity data.
+it('returns the stable managed-job limit and capacity through the shared terminal tool', async () => {
+  const call = vi.fn(async () => { throw Object.assign(new Error('TERMINAL_JOB_LIMIT'), { current: 10, limit: 10 }); });
+  const server = createXdtHelperMcpServer({ terminal: { call } }, { agentKind: 'codex', workingDir: '' });
+  try {
+    const result = await server.hostTools.call('terminal_start', {});
+    expect(result.isError).toBe(true);
+    expect(parsePayload(result)).toMatchObject({ ok: false, errorCode: 'TERMINAL_JOB_LIMIT', data: { current: 10, limit: 10 } });
+  } finally { await server.close(); }
+});
+
 // §21 unit: production registry discovery and schema validation were missing
 // for authorized directory IO. One plugin reference must be forwarded intact;
 // malformed operations must be rejected before the Host touches any files.

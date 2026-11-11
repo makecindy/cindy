@@ -20,7 +20,10 @@ export function registerTerminalTools(registry: XdtHelperToolRegistry, callbacks
         try { return okPayload(await callbacks.call(current(), name, args, signal)); }
         catch (error) {
           const code = error instanceof Error && /^[A-Z][A-Z0-9_]{0,79}$/.test(error.message) ? error.message : 'TERMINAL_OPERATION_FAILED';
-          return errorPayload(code, '终端操作未完成；请核对进程状态、执行位置与当前授权。');
+          const capacity = code === 'TERMINAL_JOB_LIMIT' && error instanceof Error &&
+            'current' in error && typeof error.current === 'number' && 'limit' in error && typeof error.limit === 'number'
+            ? { current: error.current, limit: error.limit } : {};
+          return errorPayload(code, '终端操作未完成；请核对进程状态、执行位置与当前授权。', capacity);
         }
       },
     });
