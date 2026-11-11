@@ -136,7 +136,7 @@ if (localeKeyErrors.length > 0) {
 
 // terms 必须按 id 升序。新术语若都加在数组开头(或末尾),任意两个加术语的 PR 都会在同一
 // 位置冲突——2026-11-11 有 7 个未合并 PR 卡在这里。按 id 排序让新增落在各自的位置。
-// 顺序不参与任何规则判定:扫描逐条独立,人读版按英文名排序。
+// 顺序不参与任何规则判定:扫描逐条独立,人读版生成时自行重排(已裁决在前,各组内按 id)。
 for (let i = 1; i < glossary.terms.length; i += 1) {
   const previous = glossary.terms[i - 1].id;
   const current = glossary.terms[i].id;
