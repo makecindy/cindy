@@ -201,16 +201,22 @@ test('real git-review open-file chain detects shell in openReviewFile default ar
 });
 
 /** A program over in-memory sources, typed only by its own declarations. */
+/**
+ * In-memory program. TypeScript hands the host forward-slash names even on
+ * Windows, so the virtual files are keyed by that form, not by `path.join`'s.
+ */
 function virtualProgram(ts, files) {
+  const slash = name => name.replaceAll('\\', '/');
+  const virtual = new Map(Object.entries(files).map(([name, text]) => [slash(name), text]));
   const options = { noResolve: true, noLib: true, types: [], target: ts.ScriptTarget.ESNext };
   const host = ts.createCompilerHost(options);
   const read = host.getSourceFile.bind(host);
-  host.getSourceFile = (name, version) => (name in files
-    ? ts.createSourceFile(name, files[name], version, true)
+  host.getSourceFile = (name, version) => (virtual.has(slash(name))
+    ? ts.createSourceFile(slash(name), virtual.get(slash(name)), version, true)
     : read(name, version));
-  host.fileExists = name => name in files;
-  host.readFile = name => files[name];
-  return ts.createProgram(Object.keys(files), options, host);
+  host.fileExists = name => virtual.has(slash(name));
+  host.readFile = name => virtual.get(slash(name));
+  return ts.createProgram([...virtual.keys()], options, host);
 }
 
 test('real host channel contract resolves every desktopChannel, including Object.entries templates', () => {
