@@ -9345,6 +9345,9 @@
     }
   },
   "quotaCard": {
+    "codexRefreshFailed": "ChatGPT 配额更新未成，请重读。其余用量仍存",
+    "retryQuota": "重读配额",
+    "retryingQuota": "正读配额…",
     "usageCritical": "耗用颇高",
     "usageWarning": "耗用偏高",
     "usageTitle": "耗用明细",

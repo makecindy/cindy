@@ -9345,6 +9345,9 @@
     }
   },
   "quotaCard": {
+    "codexRefreshFailed": "ChatGPT のクォータを更新できませんでした。再取得してください。他の使用量情報は保持されます。",
+    "retryQuota": "クォータを再取得",
+    "retryingQuota": "クォータを取得中…",
     "usageCritical": "使用量が高い状態です",
     "usageWarning": "使用量がやや高い状態です",
     "usageTitle": "使用量の詳細",
