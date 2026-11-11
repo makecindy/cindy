@@ -1814,7 +1814,7 @@ export class Maker {
    * 用途: 起标题 / 命名 / 总结摘要 / skillReview 等 "纯文本 → 文本" 任务,
    * 不需要 session 生命周期 / 事件流 / 持久化。
    *
-   * 各 agent 默认模型 (Claude → haiku-4-5, Codex → gpt-5.4-mini), 鉴权与正常 session 同源。
+   * 各 agent 默认模型 (Claude → haiku-4-5, Codex → app-server 自身默认), 鉴权与正常 session 同源。
    * 失败抛 OneShotError (reason: timeout/auth/network/malformed) —— 调用方按 reason
    * 决定 swallow (起标题) 还是上报 (skillReview)。
    */
