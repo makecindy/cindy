@@ -43,6 +43,7 @@ import { registerListTeammatesTool } from './xdt-helper/list_teammates.js';
 import { registerReadSessionAttachmentTool } from './xdt-helper/read_session_attachment.js';
 import { registerDeleteSessionTool, type DeleteSessionCallback } from './xdt-helper/delete_session.js';
 import { registerSessionHistoryTools, type SessionHistoryCallback } from './xdt-helper/session_history_control.js';
+import { registerSessionShareTools, type SessionShareCallbacks } from './xdt-helper/session_share.js';
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { ListToolsRequestSchema, type Tool } from '@modelcontextprotocol/sdk/types.js';
 import { z } from 'zod';
@@ -571,6 +572,7 @@ export interface XdtHelperMcpDeps {
   setSessionsStatus?: ArchiveSessionsDeps['setSessionsStatus'];
   deleteSession?: DeleteSessionCallback;
   sessionHistory?: SessionHistoryCallback;
+  sessionShare?: SessionShareCallbacks;
   setRemoteSessionsStatus?: ArchiveSessionsDeps['setRemoteSessionsStatus'];
   /**
    * 任务导入（与设置 → 任务导入同一实现）。host 注入后, control 类工具
@@ -720,6 +722,10 @@ export function createXdtHelperMcpServer(
       callbacks: deps.sessionImport,
     });
   }
+
+  if (deps.sessionShare) registerSessionShareTools(registry, {
+    getSessionContext: () => resolveLiziMcpSessionContext(sessionCtx), callbacks: deps.sessionShare, history: deps.history,
+  });
 
   // History 类工具: 仅 host 注入了 history 回调时注册。
   if (deps.history) {

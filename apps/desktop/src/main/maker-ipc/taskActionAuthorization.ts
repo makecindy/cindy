@@ -28,6 +28,8 @@ export const TASK_ACTION_TOOLS: ReadonlySet<string> = new Set([
   'delete_session',
   'fork_session',
   'rewind_session',
+  'export_session',
+  'import_session',
   'rename_sessions',
   'move_session',
   'manage_session_prs',
