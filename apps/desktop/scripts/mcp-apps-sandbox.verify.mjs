@@ -146,7 +146,7 @@ try {
     import { app, BrowserWindow, protocol, ipcMain, net, nativeImage } from 'electron';
     import { McpAppsHost, appServerRevision } from '../src/main/mcp-apps/host.ts';
     import { AppConnection } from '../src/main/mcp-apps/connection.ts';
-    import { createAppServerProxy } from '../src/main/mcp-apps/serverProxy.ts';
+    import { createAppServerProxy } from '../src/main/mcp-apps/serverProxy.desktop.ts';
     import { setMcpAppsHost, registerAppServer } from '../src/main/mcp-apps/runtime.ts';
     import { Client } from '@modelcontextprotocol/sdk/client/index.js';
     import { InMemoryTransport } from '@modelcontextprotocol/sdk/inMemory.js';

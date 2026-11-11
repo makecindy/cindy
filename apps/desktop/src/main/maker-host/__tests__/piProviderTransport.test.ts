@@ -13,6 +13,16 @@ const reply = [
 ].map(value => `data: ${JSON.stringify(value)}\n\n`).join('') + 'data: [DONE]\n\n';
 
 describe('Pi-owned transport for Cindy harnesses', () => {
+  // #9630 review, unit: a retained preset ID must not reintroduce the same
+  // Messages extension through Claude/Codex's native bridge descriptor.
+  it('keeps message-scoped effort out of an edited Anthropic preset bridge', () => {
+    const row = invocationModelRecord({ id: 'claude-opus-5', name: 'Opus', group: 'custom',
+      contextWindow: 200_000, efforts: ['low', 'medium', 'high'], defaultEffort: 'medium',
+      catalogPresetId: 'anthropic-api', api: 'anthropic-messages' }, 'https://relay.example')!;
+    expect(row.execution.pi.compat).not.toHaveProperty('supportsMidConvoEffort');
+    expect(row.execution.pi.compat).toMatchObject({ forceAdaptiveThinking: true });
+  });
+
   // #9101, unit: preset import + installed Chat SDK serialization protects all
   // harnesses from assuming Messages/Responses based on their names. Existing
   // cases use other suppliers/protocols; the minimum input is the Hinoki seed.
@@ -443,8 +453,8 @@ describe('imported Gemini native image capability', () => {
     pi: { ...preset.runtimes.pi!, catalogPresetId: preset.id, models: imported },
   } }, { presets: [preset] });
   it.each([undefined, true, false])('keeps imported Gemini image input consistent for supportsImageInput=%s', async supportsImageInput => {
-    expect(provider.models.pi![0].supportsImageInput).toBeUndefined();
-    expect(provider.models.pi![0].modalities).toBeUndefined();
+    expect(provider.models.pi![0].supportsImageInput).toBe(true);
+    expect(provider.models.pi![0].modalities?.input).toContain('image');
     // Compare the same imported model with no declaration and explicit on/off values.
     const model = { ...provider.models.pi![0], supportsImageInput };
     const row = invocationModelRecord(model, model.route?.baseUrl ?? provider.routing.pi!.upstream!)!;

@@ -990,8 +990,8 @@ describe('resolveManualCompactChannel(#1927 压缩通道判定,行为测试)', (
     ).toBe('claude-input');
   });
 
-  it('声明 manualCompact.supported(当前仅 pi)→ compact-session(capability-aware 通道)', () => {
-    expect(resolveManualCompactChannel('pi', { manualCompact: { supported: true } })).toBe(
+  it.each(['pi', 'codex'] as const)('声明 manualCompact.supported 的 %s 使用 compact-session 通道', (agent) => {
+    expect(resolveManualCompactChannel(agent, { manualCompact: { supported: true } })).toBe(
       'compact-session',
     );
   });

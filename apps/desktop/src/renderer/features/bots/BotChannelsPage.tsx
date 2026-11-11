@@ -13,7 +13,7 @@ import { standardSessionRoute } from '@/lib/orcaSessionIdentity';
  */
 
 import { HookConnectionsSection } from '@/components/settings/HookConnectionsSection';
-import { useCallback, useEffect, useId, useRef, useState, type FormEvent } from 'react';
+import { useCallback, useEffect, useId, useMemo, useRef, useState, type FormEvent } from 'react';
 import * as Dialog from '@radix-ui/react-dialog';
 import { Archive, ArrowUpRight, Briefcase, ChevronRight, ChevronUp, Gamepad2, MessageSquare, Plus, Send, Zap, type LucideIcon } from 'lucide-react';
 import { useNavigate } from 'react-router-dom';
@@ -27,6 +27,7 @@ import { FormField } from '@/components/ui/form-field';
 import { Input } from '@/components/ui/input';
 import { SegmentedControl } from '@/components/ui/segmented-control';
 import { Spinner } from '@/components/ui/spinner';
+import { DiscordChannelAccessSection } from '@/components/settings/DiscordChannelAccessSection';
 import { WechatBotSection } from '@/components/settings/WechatBotSection';
 import { cn } from '@/lib/utils';
 import { toast } from '@/lib/toast';
@@ -52,7 +53,9 @@ import {
   archiveBotImConnectionLane,
   botImConnectionLaneArchiveSupported,
   adoptPersonalBot,
+  botImConnectionDiscordChannelsSupported,
   botImConnectionGroupsSupported,
+  discordChannelAccessSourceFor,
   botImConnectionLanesSupported,
   listBotImConnectionGroups,
   listBotImConnectionLanes,
@@ -240,6 +243,9 @@ export function BotChannelsPage({ bot }: { bot: BotProfile }) {
                 {(view.channel === 'telegram' || view.channel === 'imessage') && view.botContextId && botImConnectionGroupsSupported(im) ? (
                   <ConnectionGroups api={im} connectionId={view.id} botName={bot.name} />
                 ) : null}
+                {view.channel === 'discord' && im && botImConnectionDiscordChannelsSupported(im) ? (
+                  <ConnectionDiscordChannels api={im} connectionId={view.id} botName={bot.name} deviceId={target.deviceId} />
+                ) : null}
                 {view.botContextId && botImConnectionLanesSupported(im) ? (
                   <ConnectionLanes api={im} connectionId={view.id} botName={bot.name}
                     platform={platformName(view)} deviceId={target.deviceId} />
@@ -373,6 +379,24 @@ function ConnectionGroups({ api, connectionId, botName }: { api: BotImConnection
         </div>
       ))}
     </div>
+  );
+}
+
+/**
+ * 一条 Discord 连接的「服务器频道」小节：白名单按连接各一份，默认不开放；每个频道可单独允许成员，
+ * 成员沿用这位伙伴的既有权限、工具与共享记忆。读写走连接设置（另一台电脑上的伙伴经远程操作）。
+ */
+function ConnectionDiscordChannels({ api, connectionId, botName, deviceId }: {
+  api: BotImConnectionApi; connectionId: string; botName: string; deviceId: string | null | undefined;
+}) {
+  const source = useMemo(() => discordChannelAccessSourceFor(api, connectionId), [api, connectionId]);
+  return (
+    <DiscordChannelAccessSection
+      connected
+      source={source}
+      sourceKey={`${deviceId ?? 'local'}:${connectionId}`}
+      members={{ botName }}
+    />
   );
 }
 

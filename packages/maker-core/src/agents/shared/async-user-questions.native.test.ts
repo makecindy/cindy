@@ -29,7 +29,7 @@ function reply(res: ServerResponse, model: string, text = 'Independent work comp
 
 for (const agentKind of ['claude-code', 'pi'] as const) {
   const binary = agentKind === 'pi' ? process.env.CINDY_TEST_PI_BINARY : process.env.CINDY_TEST_CLAUDE_BINARY;
-  it.skipIf(!binary).each(['during', 'twice', 'unanswered'] as const)(`${agentKind} native async question: %s`, async (timing) => {
+  it.skipIf(!binary).each(['during', 'twice', 'after', 'withdrawn'] as const)(`${agentKind} native async question: %s`, async (timing) => {
     const root = await mkdtemp(path.join(tmpdir(), 'cindy-async-harness-'));
     const home = path.join(root, 'home');
     const cwd = path.join(root, 'work');
@@ -82,9 +82,9 @@ for (const agentKind of ['claude-code', 'pi'] as const) {
       session.onEvent((event) => events.push(event));
       await session.send('Do independent work.');
       await vi.waitFor(() => expect(held).toBeDefined(), { timeout: 20_000 });
-      const id = session.askUserQuestionAsync([{ question: 'Which scope?' }]);
+      const id = session.askUserQuestionAsync([{ question: 'Which scope?' }]).request_id;
       expect(session.getTurnControlSnapshot().pendingInteractionCount).toBe(0);
-      if (timing !== 'unanswered') {
+      if (timing !== 'after' && timing !== 'withdrawn') {
         answer({ kind: 'ask_user_question', answers: { 'Which scope?': 'BOTH_BOTS_CANARY' } });
         await vi.waitFor(() => expect(steer).toHaveBeenCalledOnce());
         await steer.mock.results[0].value;
@@ -97,7 +97,7 @@ for (const agentKind of ['claude-code', 'pi'] as const) {
       }
       reply(held!, model);
       await vi.waitFor(() => expect(events.some((event) => event.type === 'done')).toBe(true), { timeout: 20_000 });
-      if (timing !== 'unanswered') {
+      if (timing !== 'after' && timing !== 'withdrawn') {
         await vi.waitFor(() => expect(bodies.some((body) => JSON.stringify(body.messages).includes('BOTH_BOTS_CANARY'))).toBe(true), { timeout: 10_000 });
         expect(bodies.at(-1)?.system).toEqual(bodies[0].system);
         expect(bodies.at(-1)?.tools).toEqual(bodies[0].tools);
@@ -106,12 +106,21 @@ for (const agentKind of ['claude-code', 'pi'] as const) {
         await vi.waitFor(() => expect(handle.isTurnRunning?.()).toBe(false));
         if (timing === 'twice') expect(JSON.stringify(bodies.at(-1)?.messages)).toContain('SECOND_ANSWER_CANARY');
         expect(events.filter((event) => event.type === 'done' && event.turnContinuationId === undefined)).toHaveLength(1);
-      } else {
-        expect(events.some((event) => event.type === 'interaction_dismissed' && (event.data as { requestId?: string }).requestId === id)).toBe(true);
-        answer({ kind: 'ask_user_question', answers: { 'Which scope?': 'BOTH_BOTS_CANARY' } });
-        await new Promise((resolve) => setTimeout(resolve, 10));
+      } else if (timing === 'withdrawn') {
+        expect(session.manageAsyncUserQuestions({ action: 'list' }).questions).toHaveLength(1);
+        expect(session.manageAsyncUserQuestions({ action: 'withdraw', request_ids: [id], reason: '已查明，无需回答' }).results)
+          .toEqual([{ request_id: id, status: 'withdrawn' }]);
+        expect(events).toContainEqual(expect.objectContaining({ type: 'interaction_dismissed',
+          data: expect.objectContaining({ reason: 'question_withdrawn', withdrawalReason: '已查明，无需回答' }) }));
+        expect(session.manageAsyncUserQuestions({ action: 'list' }).questions).toEqual([]);
         expect(steer).not.toHaveBeenCalled();
         expect(bodies).toHaveLength(1);
+      } else {
+        expect(events.some((event) => event.type === 'interaction_dismissed' && (event.data as { requestId?: string }).requestId === id)).toBe(false);
+        answer({ kind: 'ask_user_question', answers: { 'Which scope?': 'BOTH_BOTS_CANARY' } });
+        await vi.waitFor(() => expect(bodies.some((body) => JSON.stringify(body.messages).includes('BOTH_BOTS_CANARY'))).toBe(true), { timeout: 10_000 });
+        expect(steer).not.toHaveBeenCalled();
+        expect(bodies).toHaveLength(2);
       }
       expect(events.filter((event) => event.type === 'error')).toEqual([]);
     } finally {

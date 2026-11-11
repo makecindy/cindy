@@ -28,8 +28,8 @@ it('preserves the preload interaction answer and acceptance result', () => {
   const entry = HOST_CONTRACT_CHANNELS.find(c => c.desktopChannel === 'maker:resolve-interaction')!;
   const decision = { behavior: 'allow' };
   expect(entry.body?.(['request-1', decision])).toEqual({ requestId: 'request-1', decision });
-  expect(entry.map?.({ accepted: true })).toBe(true);
-  expect(entry.map?.({ accepted: false })).toBe(false);
+  expect(entry.map?.({ accepted: true })).toEqual({ accepted: true });
+  expect(entry.map?.({ accepted: false, ok: true })).toEqual({ accepted: false });
 });
 
 it('asks for runtime sessions and preserves versioned snapshot options', () => {
@@ -44,4 +44,14 @@ it('routes explicit Host logout to the same writer as refresh', () => {
   const entry = HOST_CONTRACT_CHANNELS.find(c => c.desktopChannel === 'auth:logout')!;
   expect(entry.hostPath).toBe('/api/auth/logout');
   expect(entry.body?.([])).toEqual({});
+});
+
+// The shared coordinator returns the authoritative queue state after steer;
+// older Hosts returned only a boolean. Both remain readable during upgrades.
+it('preserves the steer projection while accepting legacy Host replies', () => {
+  const entry = HOST_CONTRACT_CHANNELS.find(c => c.desktopChannel === 'maker:input:steer')!;
+  const projection = { sessionId: 's', turnInProgress: true, pendingQueue: [] };
+  expect(entry.map?.({ ok: true, projection })).toEqual(projection);
+  expect(entry.map?.({ ok: true })).toBe(true);
+  expect(entry.map?.({ ok: false })).toBe(false);
 });

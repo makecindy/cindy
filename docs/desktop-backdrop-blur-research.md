@@ -66,7 +66,33 @@ pixels after the correction. Unlike blur strength, this clipping is observable
 in single-window captures. Both arm64 and x64 builds passed; only arm64 was run.
 Fullscreen/Spaces and other macOS releases remain unverified.
 
-### Independent task-sidebar material
+### Task-sidebar material (removed 2026-11-10, reinstated without color 2026-11-11)
+
+> **History.** On 2026-11-10 the masked sidebar view was removed so the sidebar would
+> share the main area's backdrop. On 2026-11-11 the user asked for the sidebar to stay
+> distinct but follow the same transparency and blur, in the main area's hue and
+> slightly deeper. The masked HUD view, `theme:set-sidebar-width` and `setSidebar`
+> below were reinstated; 0% desktop transparency still keeps the original backdrop on
+> every platform. Current behavior is specified in
+> [`design-rules/wallpaper.md`](design-rules/wallpaper.md).
+
+**Colorless material (2026-11-11).** Measured over a neutral gray desktop, the HUD
+material gave the sidebar a cooler hue than Cindy's surfaces (dark, 100%
+transparency: sidebar `#7F8083` vs main area `#BFBFBF`; light: `#D1D2D5` vs `#BFBFBF`).
+On macOS 27 the `NSVisualEffectView` layer tree is a `CABackdropLayer`
+(`sdrNormalize`, `gaussianBlur` radius 30, `colorSaturate` 1.6 dark / 1.9 light)
+beside a 40–48% gray tint layer, a lighten/darken blend layer and a 5%
+`CAChameleonLayer` desktop-tinting layer. The addon keeps only `gaussianBlur` and
+`sdrNormalize` and hides the sibling layers; the result matched the unveiled desktop
+exactly (`#BFBFBF`), leaving the color entirely to CSS. AppKit rebuilds these layers on
+appearance changes (and replaces them with an opaque gray in an inactive window), so
+a one-time hook on `NSVisualEffectView` strips them again after `updateLayer`,
+`layout` and `viewDidChangeEffectiveAppearance`, only for views the addon has marked
+(no class swap, so KVO and other views are unaffected), and the marked view's state
+is set to active. Verified live: light/dark switching and focus loss/regain keep the colorless
+blur. Width zero unmarks the view and restores its state and appearance. Any other layer
+layout is left untouched. Other macOS releases, Reduce Transparency and multiple
+displays remain unverified.
 
 The user requested that the original sidebar frost survive background blur zero.
 The sidebar uses Electron's existing `NSVisualEffectView` with `behindWindow`

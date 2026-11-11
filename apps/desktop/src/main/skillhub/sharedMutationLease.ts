@@ -2,7 +2,7 @@ import { createHash } from 'node:crypto';
 import { AsyncLocalStorage } from 'node:async_hooks';
 import fs from 'node:fs';
 import path from 'node:path';
-import { app } from 'electron';
+import { getAppDataDir } from '../userDataPath.js';
 import { withCrossProcessLock } from '../device-link/crossProcessLock';
 import { createLogger } from '../logger';
 import { skillInstallLockKey } from './installLock';
@@ -95,7 +95,7 @@ export async function acquireSharedSkillMutationLease(
 ): Promise<SkillMutationRelease | null> {
   let root: string;
   try {
-    root = path.join(app.getPath('appData'), 'Cindy', 'shared-skill-mutation-locks');
+    root = path.join(getAppDataDir(), 'Cindy', 'shared-skill-mutation-locks');
     fs.mkdirSync(root, { recursive: true });
   } catch {
     log.warn('Skill mutation lock directory is unavailable');

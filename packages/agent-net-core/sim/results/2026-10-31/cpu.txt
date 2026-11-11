@@ -1,0 +1,15 @@
+Run 1
+单核 CPU 性能（内存直连，MiB/s，窗口 1024）：
+  无丢包: agent-net 4310  KCP 213
+  丢 1%: agent-net 4245  KCP 198
+
+Run 2
+单核 CPU 性能（内存直连，MiB/s，窗口 1024）：
+  无丢包: agent-net 4156  KCP 222
+  丢 1%: agent-net 4444  KCP 218
+
+Run 3
+单核 CPU 性能（内存直连，MiB/s，窗口 1024）：
+  无丢包: agent-net 5772  KCP 229
+  丢 1%: agent-net 4371  KCP 219
+

@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { ServerApiError } from '../../serverApiClient';
+import { ServerApiError } from '../../serverApiClient.desktop';
 
 const harness = vi.hoisted(() => ({
   owner: 'A:1',
@@ -23,7 +23,7 @@ vi.mock('../../clientEndpointsService', () => ({
   getClientEndpoint: () => 'https://plugin.test',
   getClientEndpointForRealm: () => 'https://auth.test',
 }));
-vi.mock('../../serverApiClient', () => ({
+vi.mock('../../serverApiClient.desktop', () => ({
   serverApiFetch: harness.fetch,
   ServerApiError: class extends Error {
     constructor(

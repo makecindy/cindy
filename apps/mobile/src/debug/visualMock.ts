@@ -1,4 +1,5 @@
 import { findRemoteHistoryView } from '@/session/remoteHistoryViews';
+import { groupExecutionVisualFixture } from './groupExecutionVisualFixture';
 import { attachmentPreviewFixture } from "./attachmentPreviewFixture";
 import { githubPrVisualFixture } from './githubPrVisualFixture';
 import { groupMaskVisualFixture } from './groupMaskVisualFixture';
@@ -128,6 +129,10 @@ let preparedContextPromise: Promise<DeviceLinkContextValue> | null = null;
 let didWarnRealDataLoad = false;
 const deletedDeviceIds = new Set<string>();
 const renamedDevices = new Map<string, string>();
+// 模拟电脑上的协同角色清单：最近使用在前，增删只在本次进程内生效。
+let workerRoles: Array<{ role: string; [key: string]: unknown }> = [
+  { role: 'reviewer' }, { role: 'developer' }, { role: 'tester' },
+];
 
 export function visualMockDevices(): DeviceView[] {
   const realData = realDataSnapshot;
@@ -286,6 +291,8 @@ async function visualMockInvoke<T = unknown>(
   // Keep the real remote viewer in its initial waiting state for UI screenshots.
   // Only the __DEV__ mock provider reaches this; no computer is contacted.
   if (channel === 'device-link:remote-desktop:v1') return new Promise<T>(() => {});
+  const execution = groupExecutionVisualFixture(channel, args);
+  if (execution !== undefined) return execution as T;
   const github = githubPrVisualFixture(channel, args[0]);
   if (github !== undefined) return github as T;
   const mask = groupMaskVisualFixture(channel, args[0]);
@@ -492,6 +499,17 @@ async function visualMockInvoke<T = unknown>(
       return { success: true, items: [{ type: 'file', name: 'README.md', relPath: 'README.md' }] } as T;
     case 'maker:goal:get-status':
       return null as T;
+    case 'maker:plugins:get-state':
+      // 协同插件在模拟电脑上是开着的(项目与对话任务都可用)。
+      return (args[0] === 'collab' ? { effectiveEnabled: true, collabWorkspaceKind: args[2] } : {}) as T;
+    case 'maker:worker-roles:get':
+      return { roles: workerRoles } as T;
+    case 'maker:worker-roles:apply': {
+      const { kind, ...entry } = args[0] as { kind: string; role: string };
+      const rest = workerRoles.filter((item) => item.role !== entry.role);
+      workerRoles = kind === 'remember' ? [entry, ...rest] : rest;
+      return { ok: true } as T;
+    }
     default:
       return {} as T;
   }
@@ -859,6 +877,15 @@ function message(
 }
 
 function visualMockPendingInteractions(sessionId: string): PendingInteraction[] {
+  if (sessionId === 'visual-issue-confirm') return [{ request: {
+    kind: 'issue_confirm', requestId: 'visual-issue-confirm-request', remoteConfirmSupported: true,
+    draft: { title: '手机无法完成问题反馈确认', type: 'bug',
+      body: '## 问题描述\n在 iPhone 上反馈问题时，确认卡提示只能回电脑处理。\n\n## 预期行为\n可以直接在手机上检查内容、确认并提交反馈。' },
+    env: { appVersion: '开发预览', platform: 'darwin', arch: 'arm64', osVersion: 'macOS',
+      harness: 'Claude Code', modelId: 'claude-sonnet-5', region: 'global' },
+    submissionIdentity: { kind: 'platform', login: 'cindy-bot' },
+    githubUserIdentity: { kind: 'github-user', login: 'demo-user' }, suggestedPublicName: '匿名用户',
+  } }];
   if (sessionId === codexFormSession) return codexFormAnswers === null ? [{ request: {
     kind: 'ask_user_question', requestId: 'visual-codex-form-request', questions: codexFormQuestions(),
   } }] : [];
@@ -967,8 +994,12 @@ function visualMockCapabilities(): unknown {
     permissionModes: [
       { id: 'ask', displayName: 'Ask' },
       { id: 'acceptEdits', displayName: 'Accept Edits' },
+      { id: 'auto', displayName: 'Auto Approval' },
+      { id: 'bypassPermissions', displayName: 'Full Access' },
       { id: 'plan', displayName: 'Plan' },
     ],
+    // 模拟电脑支持协同：+ 面板里的「协同模式」表单可以直接看，不显示「版本过旧」。
+    supportsOrcaWorkerPermissionMode: true,
   };
 }
 

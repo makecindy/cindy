@@ -357,6 +357,7 @@ function readReceivedSnapshot(value: unknown): ProviderShareReceivedSnapshot | n
     ownerStamp: row.ownerStamp,
     confirmedRegions: row.confirmedRegions,
     received: row.received,
+    ...(Array.isArray(row.unavailableShareIds) ? { unavailableShareIds: row.unavailableShareIds.filter((id): id is string => typeof id === 'string') } : {}),
     ...(typeof row.active === 'boolean' ? { active: row.active } : {}),
     ...(regionBudget ? { regionBudget } : {}),
   };
@@ -380,13 +381,14 @@ function applyReceivedSnapshot(snapshot: ProviderShareReceivedSnapshot, requestS
   const acceptedConfirmed = snapshot.confirmedRegions.filter(region =>
     regionSourceCurrent(region, budget?.[region]?.id));
   const confirmed = new Set(acceptedConfirmed);
-  const incoming = snapshot.received.filter(share =>
+  const unavailable = new Set(snapshot.unavailableShareIds);
+  const incoming = snapshot.received.filter(share => !unavailable.has(share.shareId) &&
     retentionLive(share.owner.region) && regionSourceCurrent(share.owner.region, budget?.[share.owner.region]?.id));
   const currentIds = new Set(incoming.map(share => share.shareId));
   // Same-owner incomplete projections keep their unconfirmed rows only within the
   // deadline inherited from their last true confirmation; an owner change must not
   // carry the previous account's rows into the new owner.
-  const retained = ownerChanged ? [] : previous.filter(share => !confirmed.has(share.owner.region)
+  const retained = ownerChanged ? [] : previous.filter(share => !unavailable.has(share.shareId) && !confirmed.has(share.owner.region)
     && !currentIds.has(share.shareId) && retentionLive(share.owner.region));
   // An empty, unconfirmed snapshot is not an authoritative empty list. This also
   // keeps a favorites-side query from claiming the new owner is fully loaded.

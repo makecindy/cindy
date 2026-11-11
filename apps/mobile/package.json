@@ -4,6 +4,8 @@
   "license": "Apache-2.0",
   "main": "index.js",
   "dependencies": {
+    "@cindy/agent-net": "workspace:*",
+    "@cindy/agent-net-protocol": "workspace:*",
     "@cindy/auth-client": "workspace:*",
     "@cindy/device-link": "workspace:*",
     "@cindy/maker-shared": "workspace:*",
@@ -121,6 +123,15 @@
     "test:e2e:local:visual:offline": "node scripts/local-device-link-smoke.mjs --mock-host --mock-host-scenario visual --mock-host-device-id mobile-e2e-host-offline --flow visual_session_offline.yaml",
     "test:e2e:local:full": "node scripts/local-device-link-smoke.mjs --mock-host --flow-suite full",
     "test:e2e:local:full:ios": "node scripts/local-device-link-smoke.mjs --start-server --start-expo --mock-host --flow-suite full --profile ios-iphone-17-pro-expo-go --api-base http://localhost:3333"
+  },
+  "expo": {
+    "autolinking": {
+      "android": {
+        "buildFromSource": [
+          "expo-image"
+        ]
+      }
+    }
   },
   "private": true
 }

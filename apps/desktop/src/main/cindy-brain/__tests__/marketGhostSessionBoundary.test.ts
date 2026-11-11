@@ -195,7 +195,8 @@ describe('market Ghost session boundary', () => {
     expect(assessBody).not.toContain('oauthManager.listAccounts(ghostId, key)');
     const probesStart = source.indexOf('function getGhostSetupProbes(');
     const probesBody = source.slice(probesStart, source.indexOf('export function getGhostSetupAssessment', probesStart));
-    expect(probesBody).toContain('oauthManager.listAccounts(storeId, key)');
+    expect(probesBody).toContain('pluginSetupProbes({');
+    expect(probesBody).toContain('}, storeId, runtimeManifest)');
     expect(probesBody).not.toContain('oauthManager.listAccounts(ghostId, key)');
     expect(source).toContain('return findGhostForInstanceId(id)?.manifest.name ?? null;');
   });
@@ -457,10 +458,10 @@ describe('market Ghost session boundary', () => {
   });
 
   it('Ghost 媒体持久化写入守卫也绑定当前进程的 owner scope', () => {
-    // 这两处是 GhostCindySlot 的 deps,内部 assertStillValid 会在 ingestMedia 的
-    // await 边界反复断言。持久化写入守卫必须同时检查本进程边界与 scope generation。
+    // 这两处是 GhostCindySlot 的源图读取与结果挂引用 deps。
+    // 跨 await 的守卫必须同时检查本进程边界与 scope generation。
     const resolveStart = source.indexOf('resolveOwnedMedia: async (ghostId, hash, ownerScopeKey)');
-    const saveStart = source.indexOf('saveGhostMedia: async ({ ghostId, buffer, mimeType, ownerScopeKey');
+    const saveStart = source.indexOf('saveGhostMedia: async ({ ghostId, media, ownerScopeKey');
     expect(resolveStart).toBeGreaterThan(-1);
     expect(saveStart).toBeGreaterThan(-1);
     const resolveBody = source.slice(resolveStart, resolveStart + 700);

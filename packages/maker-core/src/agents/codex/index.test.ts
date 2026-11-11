@@ -11,9 +11,10 @@ import {
   isExactNoRolloutThreadResumeError,
 } from './index.js';
 import { CodexForkError } from './fork-error.js';
-import { Session } from '../../session.js';
+import { MANUAL_ABORT_RECOVERY_GRACE_MS, Session } from '../../session.js';
 import { withFastModePolicy } from '../shared/fast-mode-policy.js';
 import { AUTO_REVIEW_CONTINUATION_POLICY } from '../shared/continuation-policy.js';
+import { assembleSystemPromptSections } from '../shared/system-prompt-sections.js';
 import { Method, type TurnStartParams } from './app-server/protocol.js';
 import type { Effort } from '../../types/common.js';
 import type { AppServerHost, ThreadEventHandlers } from './app-server/host.js';
@@ -1752,7 +1753,10 @@ describe('CodexAgent oneShot dispatch guard', () => {
   it('rechecks ownership before turn/start and releases the temporary thread', async () => {
     const agent = new CodexAgent(createDeps());
     const request = vi.fn(async (method: string) => {
-      if (method === Method.ThreadStart) return { thread: { id: 'thread-before-turn-guard' } };
+      // No caller model: the app-server picks its own default and reports it back.
+      if (method === Method.ThreadStart) {
+        return { thread: { id: 'thread-before-turn-guard' }, model: 'server-default-model' };
+      }
       throw new Error(`unexpected request: ${method}`);
     });
     const release = vi.fn(async () => undefined);
@@ -1769,7 +1773,7 @@ describe('CodexAgent oneShot dispatch guard', () => {
     });
 
     const beforeDispatch = vi
-      .fn<() => Promise<boolean>>()
+      .fn<(route?: { model?: string }) => Promise<boolean>>()
       .mockResolvedValueOnce(true)
       .mockResolvedValueOnce(false);
 
@@ -1777,8 +1781,12 @@ describe('CodexAgent oneShot dispatch guard', () => {
       .rejects.toMatchObject({ name: 'OneShotError', reason: 'network' });
 
     expect(beforeDispatch).toHaveBeenCalledTimes(2);
+    // A retired hard-coded model id would fail every default one-shot, so no
+    // model is sent; the host still gets the chosen model before the prompt.
+    expect(beforeDispatch).toHaveBeenNthCalledWith(1);
+    expect(beforeDispatch).toHaveBeenNthCalledWith(2, { model: 'server-default-model' });
     expect(request).toHaveBeenCalledTimes(1);
-    expect(request).toHaveBeenCalledWith(Method.ThreadStart, expect.any(Object));
+    expect(request).toHaveBeenCalledWith(Method.ThreadStart, expect.not.objectContaining({ model: expect.anything() }));
     expect(request).not.toHaveBeenCalledWith(Method.TurnStart, expect.any(Object));
     expect(subscribeThread).toHaveBeenCalledWith('thread-before-turn-guard', expect.any(Object));
     expect(release).toHaveBeenCalledOnce();
@@ -5844,6 +5852,24 @@ describe('CodexAgent.refreshLocalModels', () => {
 });
 
 describe('CodexAgent.startSession developerInstructions', () => {
+  // Unit, real thread/start projection: selected static text stays in developer
+  // instructions, after the original prefix, without creating a user message.
+  it('appends selected task fragments to the native developer instructions', async () => {
+    const instructions: string[] = [];
+    for (const selected of [false, true]) {
+      const agent = new CodexAgent(createDeps({ systemPrompt: 'HOST FIXED PREFIX' }));
+      const host = installFakeHost(agent);
+      const handle = await agent.startSession({ sessionId: `task-fragments-${selected}`,
+        model: 'gpt-5.4', workingDir: '/repo', userPrompt: assembleSystemPromptSections('Original task instructions', selected
+          ? [{ name: 'task', order: 0, text: 'STATIC FRAGMENT' }] : []),
+      });
+      const params = host.request.mock.calls.find(([method]) => method === Method.ThreadStart)?.[1] as { developerInstructions: string };
+      instructions.push(params.developerInstructions);
+      await handle.close();
+      await agent.dispose();
+    }
+    expect(instructions[1]).toBe(instructions[0] + '\n\nSTATIC FRAGMENT');
+  });
   it.each([
     { action: 'start', resumeSessionId: undefined, expectedProvider: 'cindy_gateway' },
     {
@@ -19247,8 +19273,8 @@ describe('CodexAgent MCP thread context hooks', () => {
         name: 'cindy__ask_user_question',
       }),
     ]);
-    expect(startParams.dynamicTools?.[0]?.description).toContain('the user asks to choose');
-    expect(startParams.dynamicTools?.[0]?.description).toContain('provide a generic list');
+    expect(startParams.dynamicTools?.[0]?.description).toContain('Prefer native request_user_input');
+    expect(startParams.dynamicTools?.[0]?.description).toContain('Use native request_user_input_async');
     expect(startParams.dynamicTools?.[0]?.description).toContain('Ask 1 to 3 short questions in a single call');
     expect(startParams.dynamicTools?.[0]?.description).toContain('returns the awaited result as a JSON string');
     expect(startParams.dynamicTools?.[0]?.description).toContain('JSON.parse(raw)');
@@ -19794,12 +19820,14 @@ describe('CodexAgent MCP thread context hooks', () => {
           last: { inputTokens: 10, outputTokens: 100, cachedInputTokens: 0 },
         },
       });
-      const expectSample = (outputTokens: number, generationDurationMs: number) =>
+      // A response that streamed nothing is timed by the model time it took, wait included,
+      // until the turn has measured a speed of its own.
+      const expectSample = (outputTokens: number, generationDurationMs: number, streaming: boolean) =>
         expect(handle.getUsageSnapshot()).toMatchObject({
           outputTokens, generationDurationMs, generationReliable: true,
-          tokenSpeed: { tokens: outputTokens, elapsedMs: generationDurationMs, rate: 100, streaming: true },
+          tokenSpeed: { tokens: outputTokens, elapsedMs: generationDurationMs, average: 100, streaming },
         });
-      expectSample(100, 1_000);
+      expectSample(100, 1_000, false);
       const tool = { id: 'tool-1', type: 'mcpToolCall', server: 'test', tool: 'read', arguments: {} };
       handlers.itemStarted!({ threadId: 'start-thread-id', turnId: 'turn-1', item: tool });
       now = 6_000;
@@ -19808,14 +19836,14 @@ describe('CodexAgent MCP thread context hooks', () => {
       handlers.itemStarted!({ threadId: 'start-thread-id', turnId: 'turn-1',
         item: { id: 'reasoning-2', type: 'reasoning', summary: [], content: [] } });
       // No second usage yet: 100 / 1s, never 100 / 5s.
-      expectSample(100, 1_000);
+      expectSample(100, 1_000, true);
       handlers.tokenUsageUpdated!({
         threadId: 'start-thread-id', turnId: 'turn-1', tokenUsage: {
           total: { totalTokens: 120, inputTokens: 20, outputTokens: 100, cachedInputTokens },
           last: { inputTokens: 10, outputTokens: 0, cachedInputTokens },
         },
       });
-      expectSample(100, 1_000);
+      expectSample(100, 1_000, true);
       expect(handle.getUsageSnapshot().tokenUsage).toBe(120 - cachedInputTokens);
       handlers.tokenUsageUpdated!({
         threadId: 'start-thread-id', turnId: 'turn-1', tokenUsage: {
@@ -19823,7 +19851,7 @@ describe('CodexAgent MCP thread context hooks', () => {
           last: { inputTokens: 10, outputTokens: 400, cachedInputTokens: 0 },
         },
       });
-      expectSample(500, 5_000);
+      expectSample(500, 5_000, false);
       now = 11_000;
       handlers.tokenUsageUpdated!({
         threadId: 'start-thread-id', turnId: 'turn-1', tokenUsage: {
@@ -19831,7 +19859,7 @@ describe('CodexAgent MCP thread context hooks', () => {
           last: { inputTokens: 10, outputTokens: 0, cachedInputTokens: 0 },
         },
       });
-      expectSample(500, 5_000);
+      expectSample(500, 5_000, false);
       expect(handle.getUsageSnapshot().tokenUsage).toBe(540 - cachedInputTokens);
       handlers.turnCompleted!({ threadId: 'start-thread-id', turn: { id: 'turn-1', status: 'completed' } });
       await waitForExpectation(() => expect(events.some((event) => event.type === 'done')).toBe(true));
@@ -19890,7 +19918,8 @@ describe('CodexAgent MCP thread context hooks', () => {
       expect(handle.beginTurnContinuationWait?.(events.find(event => event.type === 'done')?.turnContinuationId)).toBe('active');
       await waitForExpectation(() => expect(turnSeq).toBe(2));
       handlers.turnStarted!({ threadId: 'start-thread-id', turn: { id: 'turn-2' } });
-      expect(handle.getUsageSnapshot().generationReliable).toBe(false);
+      // A native continuation keeps the product turn's measurement.
+      expect(handle.getUsageSnapshot().tokenSpeed).toMatchObject({ tokens: 1_000, elapsedMs: 10_000 });
       now = 13_000;
       usage('turn-2', 200, 1_220);
       expect(handle.getUsageSnapshot()).toMatchObject({
@@ -19906,9 +19935,11 @@ describe('CodexAgent MCP thread context hooks', () => {
       handlers.itemCompleted!({ threadId: 'start-thread-id', turnId: 'turn-2', item: tool });
       now = 25_000;
       usage('turn-2', 377, 2_001_617);
+      // The unpaired 2M tokens stay out. Nothing in this turn has streamed, so no speed is
+      // measured yet and each response still counts over the model time it took.
       expect(handle.getUsageSnapshot()).toMatchObject({
         outputTokens: 1_577, generationDurationMs: 22_000, generationReliable: true,
-        tokenSpeed: { tokens: 1_577, elapsedMs: 22_000, rate: 37.7, peak: 100 },
+        tokenSpeed: { tokens: 1_577, elapsedMs: 22_000 },
       });
       expect(handle.getUsageSnapshot().tokenUsage).toBe(2_000_607);
       handlers.turnCompleted!({ threadId: 'start-thread-id', turn: { id: 'turn-2', status: 'completed' } });
@@ -19916,7 +19947,7 @@ describe('CodexAgent MCP thread context hooks', () => {
       handlers.turnStarted!({ threadId: 'start-thread-id', turn: { id: 'turn-3' } });
       now = 35_000;
       usage('turn-3', 377, 2_002_004);
-      expect(handle.getUsageSnapshot().tokenSpeed).toMatchObject({ tokens: 377, elapsedMs: 10_000, average: 37.7, peak: 37.7 });
+      expect(handle.getUsageSnapshot().tokenSpeed).toMatchObject({ tokens: 377, elapsedMs: 10_000, average: 37.7 });
     } finally {
       await handle.close();
       nowSpy.mockRestore();
@@ -21243,277 +21274,30 @@ describe('CodexAgent MCP thread context hooks', () => {
     return { host, handle, handlers, params, decision, resolver, events };
   }
 
-  it.each([
-    { label: 'skip', answers: {} },
-    { label: 'empty text', answers: { 'Proceed?': '' } },
-    { label: 'whitespace', answers: { 'Proceed?': ' \n\t' } },
-    { label: 'empty selections', answers: { 'Proceed?': '[]' } },
-    { label: 'blank selections', answers: { 'Proceed?': '[" "]' } },
-    { label: 'unrelated answer', answers: { 'Another question?': 'Yes' } },
-    { label: 'dismissed answer', answers: { 'Proceed?': 'Yes' }, dismissed: true },
-    { label: 'resolver failure', answers: {}, reject: true },
-  ] as Array<{ label: string; answers: Record<string, string>; dismissed?: boolean; reject?: boolean }>)('does not deliver or retain an async continuation for $label', async ({ answers, dismissed, reject }) => {
-    const s = await runningAsyncQuestion();
-    try {
-      if (reject) s.decision.reject(new Error('resolver unavailable'));
-      else s.decision.resolve({ kind: 'ask_user_question', answers, ...(dismissed ? { dismissed } : {}) });
-      await new Promise((resolve) => setTimeout(resolve, 0));
-      expect(s.host.request.mock.calls.filter(([method]) => method === Method.TurnSteer)).toHaveLength(0);
-      expect(s.handle.isTurnRunning?.()).toBe(true);
-      expect(s.events.filter((event) => event.type === 'done')).toHaveLength(0);
-      s.handlers.turnCompleted?.({ threadId: s.params.threadId,
-        turn: { id: s.params.turnId, status: 'completed' } });
-      await vi.waitFor(() => expect(s.handle.isTurnRunning?.()).toBe(false));
-      await vi.waitFor(() => expect(s.events.filter((event) => event.type === 'done')).toHaveLength(1));
-      expect(s.events.find((event) => event.type === 'done')?.turnContinuationId).toBeUndefined();
-      expect(s.events.filter((event) => event.type === 'interaction_dismissed')).toHaveLength(0);
-      expect(askUserTurnStartCalls(s.host)).toHaveLength(1);
-    } finally { await s.handle.close(); }
-  });
-
-  it('delivers a partially answered async batch once', async () => {
-    const s = await runningAsyncQuestion();
-    const partial = deferred<InteractionDecision>();
-    try {
-      s.resolver.mockImplementationOnce(async () => partial.promise);
-      const next = { ...s.params, item: { ...asyncQuestionItem, id: 'partial-question',
-        questions: [{ title: 'Optional detail?' }, { title: 'Next action?' }] } };
-      s.handlers.itemCompleted?.(next);
-      partial.resolve({ kind: 'ask_user_question', answers: { 'Optional detail?': '', 'Next action?': 'Run tests' } });
-      await vi.waitFor(() => expect(s.host.request.mock.calls.filter(([method]) => method === Method.TurnSteer)).toHaveLength(1));
-      expect(s.host.request.mock.calls.find(([method]) => method === Method.TurnSteer)?.[1]).toMatchObject({
-        expectedTurnId: s.params.turnId, input: [{ text: expect.stringContaining('"answer":"Run tests"') }],
-      });
-      s.handlers.itemCompleted?.(next);
-      expect(s.resolver).toHaveBeenCalledTimes(2);
-      s.handlers.turnCompleted?.({ threadId: s.params.threadId,
-        turn: { id: s.params.turnId, status: 'completed' } });
-      await vi.waitFor(() => expect(s.handle.isTurnRunning?.()).toBe(false));
-      expect(askUserTurnStartCalls(s.host)).toHaveLength(1);
-    } finally { await s.handle.close(); }
-  });
-
-  it.each((['pending', 'answered', 'dismissed'] as const).flatMap((state) =>
-    ['Proceed?', 'Continue testing?'].map((question) => ({ state, question })),
-  ))('keeps only the latest async card for "$question" when the first is $state', async ({ state, question }) => {
-    const s = await runningAsyncQuestion();
-    const second = deferred<InteractionDecision>();
-    const steerCalls = () => s.host.request.mock.calls.filter(([method]) => method === Method.TurnSteer);
-    try {
-      if (state !== 'pending') {
-        s.decision.resolve({ kind: 'ask_user_question', answers: state === 'answered' ? { 'Proceed?': 'Yes' } : {},
-          ...(state === 'dismissed' ? { dismissed: true } : {}) });
-        if (state === 'answered') await vi.waitFor(() => expect(steerCalls()).toHaveLength(1));
-        await new Promise((resolve) => setTimeout(resolve, 0));
-      }
-      s.resolver.mockImplementationOnce(async () => second.promise);
-      const next = { ...s.params, item: { ...asyncQuestionItem, id: 'async-question-2',
-        questions: [{ title: question, options: ['Yes', 'No'] }] } };
-      s.handlers.itemCompleted?.(next);
-      s.handlers.itemCompleted?.(next);
-      s.handlers.itemCompleted?.(s.params);
-      expect(s.resolver).toHaveBeenCalledTimes(2);
-      expect(s.resolver.mock.calls[1][0].requestId).not.toBe(s.resolver.mock.calls[0][0].requestId);
-      await new Promise((resolve) => setTimeout(resolve, 0));
-      expect(s.events.filter((event) => event.type === 'interaction_dismissed')).toEqual(state === 'pending' ? [{
-        type: 'interaction_dismissed', source: 'codex',
-        data: { requestId: s.resolver.mock.calls[0][0].requestId, reason: 'superseded', resolvedAs: 'deny' },
-      }] : []);
-      // Even before the turn ends, a late response to the replaced card cannot
-      // steer the model or remove the current card.
-      s.decision.resolve({ kind: 'ask_user_question', answers: { 'Proceed?': 'Yes' } });
-      await new Promise((resolve) => setTimeout(resolve, 0));
-      expect(steerCalls()).toHaveLength(state === 'answered' ? 1 : 0);
-      second.resolve({ kind: 'ask_user_question', answers: { [question]: 'No' } });
-      await vi.waitFor(() => expect(steerCalls()).toHaveLength(state === 'answered' ? 2 : 1));
-      expect(steerCalls().at(-1)?.[1]).toMatchObject({ input: [{ text: expect.stringContaining('"answer":"No"') }] });
-      s.handlers.turnCompleted?.({ threadId: s.params.threadId,
-        turn: { id: s.params.turnId, status: 'completed' } });
-      await vi.waitFor(() => expect(s.handle.isTurnRunning?.()).toBe(false));
-      await new Promise((resolve) => setTimeout(resolve, 0));
-      expect(s.events.filter((event) => event.type === 'interaction_dismissed')).toHaveLength(state === 'pending' ? 1 : 0);
-      expect(steerCalls()).toHaveLength(state === 'answered' ? 2 : 1);
-      expect(askUserTurnStartCalls(s.host)).toHaveLength(1);
-    } finally { await s.handle.close(); }
-  });
-
-  it.each(['completed', 'failed', 'stop', 'close'] as const)('expires only the latest unanswered async card on %s after replacement', async (outcome) => {
-    const s = await runningAsyncQuestion();
-    const second = deferred<InteractionDecision>();
-    try {
-      s.resolver.mockImplementationOnce(async () => second.promise);
-      const next = { ...s.params, item: { ...asyncQuestionItem, id: 'async-question-2' } };
-      s.handlers.itemCompleted?.(next);
-      // Replayed lifecycle events cannot bring the replaced card back.
-      s.handlers.itemCompleted?.(s.params);
-      expect(s.resolver).toHaveBeenCalledTimes(2);
-      if (outcome === 'stop') await s.handle.abort();
-      else if (outcome === 'close') await s.handle.close();
-      else s.handlers.turnCompleted?.({ threadId: s.params.threadId,
-        turn: { id: s.params.turnId, status: outcome } });
-      await vi.waitFor(() => expect(s.events.filter((event) => event.type === 'interaction_dismissed')).toHaveLength(2));
-      expect(s.events.filter((event) => event.type === 'interaction_dismissed').map((event) => event.data)).toEqual([
-        { requestId: s.resolver.mock.calls[0][0].requestId, reason: 'superseded', resolvedAs: 'deny' },
-        { requestId: s.resolver.mock.calls[1][0].requestId, reason: expect.any(String), resolvedAs: 'deny' },
-      ]);
-      s.decision.resolve({ kind: 'ask_user_question', answers: { 'Proceed?': 'Yes' } });
-      second.resolve({ kind: 'ask_user_question', answers: { 'Proceed?': 'No' } });
-      await new Promise((resolve) => setTimeout(resolve, 0));
-      expect(s.host.request.mock.calls.filter(([method]) => method === Method.TurnSteer)).toHaveLength(0);
-      expect(askUserTurnStartCalls(s.host)).toHaveLength(1);
-    } finally { await s.handle.close(); }
-  });
-
-  it.each(['completed', 'failed', 'stop'] as const)('does not expire an answered async card when %s occurs inside steer dispatch', async (outcome) => {
-    let terminate!: () => void;
-    const s = await runningAsyncQuestion(async () => { terminate(); return {}; });
-    try {
-      terminate = () => {
-        if (outcome === 'stop') void s.handle.abort();
-        else s.handlers.turnCompleted?.({ threadId: s.params.threadId,
-          turn: { id: s.params.turnId, status: outcome } });
-      };
-      s.decision.resolve({ kind: 'ask_user_question', answers: { 'Proceed?': 'Yes' } });
-      await vi.waitFor(() => expect(s.host.request.mock.calls.some(([method]) => method === Method.TurnSteer)).toBe(true));
-      await new Promise((resolve) => setTimeout(resolve, 0));
-      expect(s.events.filter((event) => event.type === 'interaction_dismissed')).toEqual([]);
-    } finally { await s.handle.close(); }
-  });
-
-  it.each(['pending', 'answered'] as const)('does not join a synchronous tool to a %s async answer', async (state) => {
-    const s = await runningAsyncQuestion();
-    const syncDecision = deferred<InteractionDecision>();
-    const syncResolver = vi.fn(async () => syncDecision.promise);
-    try {
-      if (state === 'answered') {
-        s.decision.resolve({ kind: 'ask_user_question', answers: { 'Proceed?': 'Yes' } });
-        await vi.waitFor(() => expect(s.host.request.mock.calls.filter(([method]) => method === Method.TurnSteer)).toHaveLength(1));
-      }
-      s.handle.setInteractionResolver(syncResolver);
-      const sync = s.handlers.requestUserInput!({
-        threadId: s.params.threadId, turnId: s.params.turnId, itemId: 'sync-item',
-        questions: [{ id: 'sync-choice', header: '', question: 'Proceed?', isOther: true,
-          options: [{ label: 'Yes', description: null }, { label: 'No', description: null }] }],
-      }, { requestId: 561 });
-      await vi.waitFor(() => expect(syncResolver).toHaveBeenCalledOnce());
-      // Another optional question cannot cover the blocking card.
-      s.handlers.itemCompleted?.({ ...s.params, item: { ...asyncQuestionItem, id: 'async-later' } });
-      expect(syncResolver).toHaveBeenCalledOnce();
-      s.decision.resolve({ kind: 'ask_user_question', answers: { 'Proceed?': 'Yes' } });
-      syncDecision.resolve({ kind: 'ask_user_question', answers: { 'Proceed?': 'No' } });
-      await expect(sync).resolves.toEqual({ answers: { 'sync-choice': { answers: ['No'] } } });
-      expect(s.host.request.mock.calls.filter(([method]) => method === Method.TurnSteer)).toHaveLength(state === 'answered' ? 1 : 0);
-      s.handlers.turnCompleted?.({ threadId: s.params.threadId,
-        turn: { id: s.params.turnId, status: 'completed' } });
-      await vi.waitFor(() => expect(s.handle.isTurnRunning?.()).toBe(false));
-    } finally { await s.handle.close(); }
-  });
-
-  it('shows an async question once through the existing card and steers its answer without waiting for turn completion', async () => {
+  it('shows one card without fallback prose, and delegates async lifetime to Session', async () => {
     const { host, handle, handlers, params, decision, resolver, events } = await runningAsyncQuestion();
     expect(resolver.mock.calls[0]?.[0]).toMatchObject({ kind: 'ask_user_question', delivery: 'async', questions: [{
       question: 'Proceed?', options: [{ label: 'Yes' }, { label: 'No' }],
     }] });
     handlers.itemCompleted?.(params);
     expect(resolver).toHaveBeenCalledOnce();
-    decision.resolve({ kind: 'ask_user_question', answers: { 'Proceed?': 'Yes' } });
-    await vi.waitFor(() => expect(host.request.mock.calls.filter(([method]) => method === Method.TurnSteer)).toHaveLength(1));
-    const [, input] = host.request.mock.calls.find(([method]) => method === Method.TurnSteer)!;
-    expect(input).toMatchObject({ expectedTurnId: 'async-turn-1', input: [{ text: expect.stringContaining('<send_user_message_question_reply>') }] });
-    handlers.itemCompleted?.(params);
-    expect(resolver).toHaveBeenCalledOnce();
-    expect(events.filter((event) => event.type === 'text')).toMatchObject([{ data: { text: asyncQuestionItem.text } }]);
-    expect(askUserTurnStartCalls(host)).toHaveLength(1);
+    handlers.itemCompleted?.({ ...params, item: { ...asyncQuestionItem, id: 'async-question-2' } });
+    expect(resolver).toHaveBeenCalledTimes(2);
     handlers.turnCompleted?.({ threadId: params.threadId, turn: { id: params.turnId, status: 'completed' } });
-    await waitForExpectation(() => expect(handle.isTurnRunning?.()).toBe(false));
-    await waitForExpectation(() => expect(events.filter((event) => event.type === 'done' && event.turnContinuationId === undefined)).toHaveLength(1));
-    await handle.close();
-  });
-
-  it.each(['accepted', 'rejected'] as const)('handles an async answer whose steer is %s after the original turn finishes', async (outcome) => {
-    const ack = deferred<unknown>();
-    const { host, handle, handlers, params, decision, events } = await runningAsyncQuestion(() => ack.promise);
-    decision.resolve({ kind: 'ask_user_question', answers: { 'Proceed?': 'Yes' } });
-    await vi.waitFor(() => expect(host.request.mock.calls.some(([method]) => method === Method.TurnSteer)).toBe(true));
-    handlers.turnCompleted?.({ threadId: params.threadId, turn: { id: params.turnId, status: 'completed' } });
-    expect(handle.isTurnRunning?.()).toBe(true);
-    if (outcome === 'accepted') ack.resolve({});
-    else ack.reject(Object.assign(new Error('codex app-server turn/steer error -32602: no active turn to steer'), { code: -32602 }));
-    if (outcome === 'rejected') {
-      await vi.waitFor(() => expect(askUserTurnStartCalls(host)).toHaveLength(2));
-      handlers.turnCompleted?.({ threadId: params.threadId, turn: { id: 'async-turn-2', status: 'completed' } });
-    }
-    await waitForExpectation(() => expect(handle.isTurnRunning?.()).toBe(false));
-    expect(askUserTurnStartCalls(host)).toHaveLength(outcome === 'accepted' ? 1 : 2);
-    await waitForExpectation(() => expect(events.filter((event) => event.type === 'done' && event.turnContinuationId === undefined)).toHaveLength(1));
-    await handle.close();
-  });
-
-  it('does not replay an async answer when steer delivery is uncertain', async () => {
-    const { host, handle, handlers, params, decision, events } = await runningAsyncQuestion(async () => {
-      throw new Error('connection lost after dispatch');
-    });
-    decision.resolve({ kind: 'ask_user_question', answers: { 'Proceed?': 'Yes' } });
-    await waitForExpectation(() => expect(events.some((event) => event.type === 'error' && event.data.isTerminal === false)).toBe(true));
-    expect(handle.isTurnRunning?.()).toBe(true);
-    expect(events.filter((event) => event.type === 'done')).toHaveLength(0);
-    handlers.turnCompleted?.({ threadId: params.threadId, turn: { id: params.turnId, status: 'completed' } });
-    await waitForExpectation(() => expect(handle.isTurnRunning?.()).toBe(false));
-    expect(askUserTurnStartCalls(host)).toHaveLength(1);
-    await handle.close();
-  });
-
-  it.each(['stop', 'failed', 'close'] as const)('ignores an async answer after %s', async (action) => {
-    const { host, handle, handlers, params, decision } = await runningAsyncQuestion();
-    if (action === 'stop') await handle.abort();
-    if (action === 'close') await handle.close();
-    if (action === 'failed') handlers.turnCompleted?.({ threadId: params.threadId, turn: { id: params.turnId, status: 'failed' } });
-    decision.resolve({ kind: 'ask_user_question', answers: { 'Proceed?': 'Yes' } });
+    await waitForExpectation(() => expect(events.some((event) => event.type === 'done')).toBe(true));
+    expect(events.filter((event) => event.type === 'interaction_dismissed')).toEqual([]);
+    expect(events.filter((event) => event.type === 'text')).toEqual([]);
+    // Resolving the handoff does not create a second adapter-owned continuation.
+    decision.resolve({ kind: 'ask_user_question', answers: {}, dismissed: true });
     await new Promise((resolve) => setTimeout(resolve, 0));
     expect(host.request.mock.calls.filter(([method]) => method === Method.TurnSteer)).toHaveLength(0);
     expect(askUserTurnStartCalls(host)).toHaveLength(1);
-    await handle.close();
-  });
-
-  it.each([1, 2])('expires all %i unanswered async cards before completing the task and ignores late answers', async (count) => {
-    const { host, handle, handlers, params, decision, resolver, events } = await runningAsyncQuestion();
-    const lastDecision = deferred<InteractionDecision>();
-    if (count === 2) {
-      handle.setInteractionResolver(async () => lastDecision.promise);
-      handlers.itemCompleted?.({ ...params, item: { ...asyncQuestionItem, id: 'async-question-2',
-        questions: [{ title: 'Last question?', options: null }] } });
-    }
-    handlers.itemCompleted?.({ ...params, item: { type: 'agentMessage', id: 'final',
+    await handle.send({ type: 'user', content: 'New work' });
+    handlers.itemCompleted?.({ threadId: params.threadId, turnId: 'async-turn-2', item: { type: 'agentMessage', id: 'final',
       phase: 'final_answer', text: 'Independent work completed.' } });
-    handlers.turnCompleted?.({ threadId: params.threadId, turn: { id: params.turnId, status: 'completed' } });
-    await waitForExpectation(() => expect(events.filter((event) => event.type === 'done')).toHaveLength(1));
-    const doneIndex = events.findIndex((event) => event.type === 'done');
-    expect(events[doneIndex]?.turnContinuationId).toBeUndefined();
-    expect(handle.isTurnRunning?.()).toBe(false);
-    const dismissed = events.filter((event) => event.type === 'interaction_dismissed');
-    expect(dismissed).toHaveLength(count);
-    expect(dismissed.map((event) => event.data.reason)).toEqual(
-      count === 2 ? ['superseded', 'turn_completed'] : ['turn_completed'],
-    );
-    for (const event of dismissed) {
-      expect(events.indexOf(event)).toBeLessThan(doneIndex);
-    }
-    expect(events.some((event) => event.type === 'text'
-      && JSON.stringify(event.data).includes('Independent work completed.'))).toBe(true);
-    expect(events.some((event) => event.type === 'error')).toBe(false);
-    // Neither a repeated completion nor a late item may revive an expired card.
-    handlers.turnCompleted?.({ threadId: params.threadId, turn: { id: params.turnId, status: 'completed' } });
-    handlers.itemCompleted?.(params);
-    expect(resolver).toHaveBeenCalledOnce();
-    decision.resolve({ kind: 'ask_user_question', answers: { 'Proceed?': 'stale' } });
-    lastDecision.resolve({ kind: 'ask_user_question', answers: { 'Last question?': 'free-form answer' } });
-    await new Promise((resolve) => setTimeout(resolve, 0));
-    expect(host.request.mock.calls.filter(([method]) => method === Method.TurnSteer)).toHaveLength(0);
-    expect(askUserTurnStartCalls(host)).toHaveLength(1);
-    expect(events.filter((event) => event.type === 'done')).toHaveLength(1);
-    // The user can still start ordinary new work after the expired questions.
-    await handle.send({ type: 'user', content: 'A new task' });
-    expect(askUserTurnStartCalls(host)).toHaveLength(2);
+    await waitForExpectation(() => expect(events.filter((event) => event.type === 'text')).toMatchObject([
+      { data: { text: 'Independent work completed.' } },
+    ]));
     await handle.close();
   });
 
@@ -24967,6 +24751,21 @@ describe('CodexAgent resume preparation', () => {
 
     expect(host.request.mock.calls.filter(([method]) => method === Method.ThreadResume)).toHaveLength(1);
     expect(host.request.mock.calls.filter(([method]) => method === Method.ThreadStart)).toHaveLength(0);
+  });
+
+  // History actions must not turn an unavailable native timeline into an empty
+  // task. Ordinary-send fallback is covered below; this is the strict path.
+  it.each([resumeSessionId, '<failed>'])('refuses empty history for strict resume %s', async (nativeId) => {
+    const agent = new CodexAgent(createDeps());
+    const host = installFakeHost(agent, (method) => {
+      if (method === Method.ThreadResume) throw exactNoRolloutError();
+      return undefined;
+    });
+    await expect(agent.startSession({ sessionId: 'strict-history', model: 'gpt-5.4',
+      workingDir: '/repo', resumeSessionId: nativeId,
+      vendorOptions: { _cindyRequireNativeResume: true },
+    })).rejects.toThrow(nativeId === '<failed>' ? 'valid Codex thread id' : 'Failed to resume Codex thread');
+    expect(host.request.mock.calls.some(([method]) => method === Method.ThreadStart)).toBe(false);
   });
 
   it('falls back to thread/start only when resume proves the thread has no rollout', async () => {
@@ -36137,5 +35936,211 @@ describe('Codex native model context overrides', () => {
     expect(params.config?.model_context_window).toBeUndefined();
     expect(params.config?.model_auto_compact_token_limit).toBeUndefined();
     await handle.close();
+  });
+});
+
+describe('Codex native manual compaction', () => {
+  async function setup(compactResponse?: () => unknown, consumeEvents = true) {
+    const agent = new CodexAgent(createDeps());
+    const host = installFakeHost(agent, (method) => {
+      if (method === Method.ThreadCompactStart) return compactResponse?.() ?? {};
+      if (method === Method.TurnInterrupt) return {};
+      if (method === Method.TurnStart) return { turn: { id: 'next-user-turn' } };
+      return undefined;
+    });
+    const handle = await agent.startSession({ sessionId: 'manual-compact-test', model: 'gpt-5.4', workingDir: '/repo' });
+    const events: AgentEvent[] = [];
+    if (consumeEvents) void (async () => { for await (const e of handle.events()) events.push(e); })();
+    const handlers = host.getThreadHandlers()!;
+    const started = () => handlers.turnStarted!({ threadId: handle.id, turn: { id: 'manual-turn', status: 'inProgress' } });
+    const completed = (status = 'completed', error?: { message: string }) => handlers.turnCompleted!({ threadId: handle.id, turn: { id: 'manual-turn', status, error } });
+    const boundary = () => handlers.itemCompleted!({ threadId: handle.id, turnId: 'manual-turn', item: { id: 'manual-boundary', type: 'contextCompaction' } });
+    return { agent, host, handle, events, handlers, started, completed, boundary };
+  }
+
+  it('waits beyond the ACK, emits a manual boundary and releases the session for the next send', async () => {
+    const { agent, host, handle, events, started, boundary, completed } = await setup();
+    expect(agent.capabilities.manualCompact?.supported).toBe(true);
+    let resolved = false;
+    const result = handle.compactSession!().then(value => { resolved = true; return value; });
+    await Promise.resolve();
+    expect(resolved).toBe(false);
+    expect(handle.hasPendingHostOperation?.()).toBe(true);
+    expect(handle.isTurnRunning?.()).toBe(true);
+    await waitForExpectation(() => expect(events.some(e => e.type === 'status' && e.data.isRunning === true)).toBe(true));
+    // Desktop ignores background running frames. Stop must be available even
+    // before the daemon produces its first turn/item notification.
+    expect(events.find(e => e.type === 'status' && e.data.isRunning === true)?.turnScope).not.toBe('background');
+    expect(host.request).toHaveBeenCalledWith(Method.ThreadCompactStart, { threadId: handle.id });
+    await expect(handle.send({ type: 'user', content: 'do not race' })).rejects.toThrow('compacting');
+    await expect(handle.compactSession!()).rejects.toThrow('active');
+    started(); boundary();
+    expect(resolved).toBe(false);
+    completed();
+    await expect(result).resolves.toEqual({ tokensBefore: 0, estimatedTokensAfter: undefined });
+    await waitForExpectation(() => expect(events.filter(e => e.type === 'compact_boundary')).toHaveLength(1));
+    expect(events.find(e => e.type === 'compact_boundary')?.data).toMatchObject({ trigger: 'manual' });
+    expect(handle.hasPendingHostOperation?.()).toBe(false);
+    expect(handle.isTurnRunning?.()).toBe(false);
+    await handle.send({ type: 'user', content: 'continue' });
+    expect(host.request.mock.calls.filter(([m]) => m === Method.TurnStart)).toHaveLength(1);
+    await handle.close();
+  });
+
+  it('reports an empty native compact as a no-op, not success', async () => {
+    const { handle, started, completed } = await setup();
+    const result = handle.compactSession!();
+    started(); completed();
+    await expect(result).resolves.toEqual({ noop: true });
+    await handle.close();
+  });
+
+  it('refreshes context from the native zero-cost compact frame with unchanged billing totals', async () => {
+    const { handle, handlers, events, started, boundary, completed } = await setup();
+    const total = { inputTokens: 4000, cachedInputTokens: 0, outputTokens: 50, reasoningOutputTokens: 0, totalTokens: 4050 };
+    handlers.tokenUsageUpdated!({ threadId: handle.id, turnId: 'previous-turn',
+      tokenUsage: { last: total, total, modelContextWindow: 500000 } });
+    const result = handle.compactSession!();
+    started();
+    handlers.tokenUsageUpdated!({ threadId: handle.id, turnId: 'manual-turn', tokenUsage: {
+      total, modelContextWindow: 500000,
+      last: { inputTokens: 0, cachedInputTokens: 0, outputTokens: 0, reasoningOutputTokens: 0, totalTokens: 1200 },
+    } });
+    boundary(); completed();
+    await expect(result).resolves.toEqual({ tokensBefore: 4000, estimatedTokensAfter: 1200 });
+    await waitForExpectation(() => expect(events.some(e => e.type === 'status' && e.data.contextTokens === 1200 && e.data.isRunning === false)).toBe(true));
+    expect(events.find(e => e.type === 'compact_boundary')?.turnScope).toBe('background');
+    await handle.close();
+  });
+
+  it('protects a Session send reservation before the native turn has started', async () => {
+    const { agent, handle, host } = await setup(undefined, false);
+    const session = new Session({ id: 'manual-compact-test', agentKind: 'codex', workDir: '/repo',
+      handle, capabilities: agent.capabilities, logger: createNoopLogger(), turnStallMs: 0 });
+    let release!: () => void;
+    const preparation = new Promise<void>(resolve => { release = resolve; });
+    const sending = session.send('pending input', { afterTurnReserved: () => preparation });
+    await expect(session.compactSession()).rejects.toThrow('reserved');
+    expect(host.request.mock.calls.some(([m]) => m === Method.ThreadCompactStart)).toBe(false);
+    release();
+    await sending;
+    await session.close();
+  });
+
+  it('retires a previous Stop check while preserving bounded recovery for a Stop on the compact', async () => {
+    const { agent, handle, handlers, started } = await setup(undefined, false);
+    const session = new Session({ id: 'manual-compact-test', agentKind: 'codex', workDir: '/repo',
+      handle, capabilities: agent.capabilities, logger: createNoopLogger(), turnStallMs: 0 });
+    session.onEvent(() => {});
+    vi.useFakeTimers();
+    try {
+      await session.send('previous turn');
+      await session.abort();
+      handlers.turnCompleted!({ threadId: handle.id,
+        turn: { id: 'next-user-turn', status: 'interrupted' } });
+      await vi.advanceTimersByTimeAsync(0);
+      const generation = session.getTurnGeneration();
+      await vi.advanceTimersByTimeAsync(MANUAL_ABORT_RECOVERY_GRACE_MS / 2);
+      const compact = session.compactSession();
+      const failure = expect(compact).rejects.toThrow('closed');
+      started();
+      expect(session.getTurnGeneration()).toBe(generation);
+      await vi.advanceTimersByTimeAsync(MANUAL_ABORT_RECOVERY_GRACE_MS / 2 + 1);
+      expect(session.getStatus()).toBe('active');
+      expect(handle.hasPendingHostOperation?.()).toBe(true);
+
+      // Stop on this operation must not be deduplicated against the old turn's
+      // Stop. A rejected repeat compact must not invalidate that new check.
+      await session.abort();
+      await expect(session.compactSession()).rejects.toMatchObject({ code: 'SESSION_RUNNING' });
+      await vi.advanceTimersByTimeAsync(MANUAL_ABORT_RECOVERY_GRACE_MS + 1);
+      await failure;
+      expect(session.getStatus()).toBe('closed');
+    } finally {
+      vi.useRealTimers();
+      await session.close();
+    }
+  });
+
+  it('rejects failed compaction without rollover or replay and permits another send', async () => {
+    const { handle, host, events, handlers, started, completed } = await setup();
+    const result = handle.compactSession!();
+    const failed = expect(result).rejects.toThrow('invalid_encrypted_content');
+    started();
+    const error = { message: 'Error running remote compact task: invalid_encrypted_content' };
+    handlers.error!({ threadId: handle.id, turnId: 'manual-turn', willRetry: false, error });
+    completed('failed', error);
+    await failed;
+    expect(events.some(e => e.type === 'error' || e.type === 'done')).toBe(false);
+    expect(host.request.mock.calls.some(([m]) => m === Method.TurnStart || m === Method.ThreadFork)).toBe(false);
+    await handle.send({ type: 'user', content: 'continue after failure' });
+    expect(handle.isTurnRunning?.()).toBe(true);
+    await handle.close();
+  });
+
+  it('interrupts a compact stopped before its native turn id arrives', async () => {
+    const { handle, host, started, completed } = await setup();
+    const result = handle.compactSession!();
+    const stopped = expect(result).rejects.toThrow('interrupted');
+    await handle.abort();
+    expect(handle.isTurnRunning?.()).toBe(true);
+    started();
+    expect(host.request).toHaveBeenCalledWith(Method.TurnInterrupt, { threadId: handle.id, turnId: 'manual-turn' });
+    completed('interrupted');
+    await stopped;
+    expect(handle.isTurnRunning?.()).toBe(false);
+    await handle.close();
+  });
+
+  it('settles transport loss and close while waiting for the native terminal', async () => {
+    for (const transportLoss of [false, true]) {
+      const { handle, handlers, started } = await setup();
+      const result = handle.compactSession!();
+      const failure = expect(result).rejects.toThrow(transportLoss ? 'disconnected' : 'closed');
+      started();
+      if (transportLoss) handlers.error!({ scope: 'transport', turnId: '', error: { message: 'disconnected' }, willRetry: false });
+      else await handle.close();
+      await failure;
+      expect(handle.hasPendingHostOperation?.()).toBe(false);
+      await handle.close();
+    }
+  });
+
+  it('surfaces unsupported daemons and does not submit a synthetic user prompt', async () => {
+    const { handle, host } = await setup(() => { throw Object.assign(new Error('Method not found'), { code: -32601 }); });
+    await expect(handle.compactSession!()).rejects.toThrow('Method not found');
+    expect(host.request.mock.calls.some(([m]) => m === Method.TurnStart)).toBe(false);
+    await handle.close();
+  });
+
+  it('keeps authoritative completion when the ACK arrives late', async () => {
+    let rejectAck!: (error: Error) => void;
+    const ack = new Promise((_, reject) => { rejectAck = reject; });
+    const { handle, started, boundary, completed } = await setup(() => ack);
+    const result = handle.compactSession!();
+    started(); boundary(); completed();
+    await expect(result).resolves.toEqual({ tokensBefore: 0, estimatedTokensAfter: undefined });
+    rejectAck(new Error('late ACK timeout'));
+    await Promise.resolve();
+    await handle.send({ type: 'user', content: 'continue' });
+    expect(handle.isTurnRunning?.()).toBe(true);
+    await handle.close();
+  });
+
+  it('bounds a missing native terminal and retires the uncertain handle', async () => {
+    const { handle, started } = await setup();
+    vi.useFakeTimers();
+    try {
+      const result = handle.compactSession!();
+      const failure = expect(result).rejects.toThrow('timed out');
+      started();
+      await vi.advanceTimersByTimeAsync(10 * 60_000);
+      await failure;
+      expect(handle.hasPendingHostOperation?.()).toBe(false);
+      await expect(handle.compactSession!()).rejects.toThrow('closed');
+    } finally {
+      vi.useRealTimers();
+      await handle.close();
+    }
   });
 });

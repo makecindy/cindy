@@ -74,6 +74,10 @@
     "cancel": "Keep as is"
   },
   "unified": {
+    "accountUnassigned": "Account not assigned",
+    "accountCount_one": "{{count}} account",
+    "accountCount_other": "{{count}} accounts",
+    "accountFallback": "Account {{index}}",
       "favoriteConfiguration": "Favorite This Configuration",
       "savedConfiguration": "Favorited · Tap to Remove",
       "currentConfiguration": "Current Configuration",
@@ -113,6 +117,12 @@
       "hour": "h",
       "minute": "m",
       "second": "s"
-    }
+    },
+    "quotaAverage": "Average remaining {{percent}}%",
+    "quotaUpdating": "Quota updating",
+    "quotaResetSoon": "Resets soon",
+    "quotaResetIn": "Resets in {{duration}}",
+    "quotaAverageHint": "Weekly quota · Equal weight per account",
+    "quotaResetHint": "At the current pace, quota may remain at reset: yellow within 24 hours, red within 6 hours."
   }
 }

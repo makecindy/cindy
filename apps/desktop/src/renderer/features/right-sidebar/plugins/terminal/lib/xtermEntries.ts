@@ -22,10 +22,20 @@ export interface XtermEntry {
    * 否则 PTY 输出仍推给旧窗口。见 TerminalTabBody effect #2。
    */
   ptyAttached: boolean;
+  /** Finish ANSI replay at its original grid before fitting to a new pane size. */
+  restored?: Promise<void>;
 }
 
 /** tabId → xterm 实例。只由 xtermPool 增删。 */
 export const xtermEntries = new Map<string, XtermEntry>();
+
+/** Compact output for an exited hidden tab; no xterm runtime import here. */
+export const xtermSnapshots = new Map<string, {
+  data: Uint8Array;
+  lastSize: XtermEntry['lastSize'];
+  ptyAttached: boolean;
+  viewportY: number;
+}>();
 
 /**
  * 侧边栏宿主在"内嵌 ↔ 独立子窗口"间迁移时调用(MainLayout detach/attach 转换清理,
@@ -37,6 +47,7 @@ export const xtermEntries = new Map<string, XtermEntry>();
  */
 export function markAllPtyDetached(): void {
   for (const entry of xtermEntries.values()) entry.ptyAttached = false;
+  for (const snapshot of xtermSnapshots.values()) snapshot.ptyAttached = false;
 }
 
 /**
@@ -46,4 +57,6 @@ export function markAllPtyDetached(): void {
 export function markPtyDetached(tabId: string): void {
   const entry = xtermEntries.get(tabId);
   if (entry) entry.ptyAttached = false;
+  const snapshot = xtermSnapshots.get(tabId);
+  if (snapshot) snapshot.ptyAttached = false;
 }

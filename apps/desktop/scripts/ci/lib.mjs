@@ -442,6 +442,26 @@ export function writeReleaseManifest(destPath, ctx) {
 // macOS:   appPath/Contents/Resources/drizzle/
 // Windows: packagedDir/resources/drizzle/
 
+/**
+ * 内置技能的版本号在运行时由随包的记录文件数得出(built-in-skills.ts 的
+ * readBuiltInSkillsBundleVersion)。包里少了记录,新包会把自己的技能判成不比已安装的新,
+ * 用户永远拿不到更新;所以打出来的包必须带着与源码同样多的记录。
+ */
+export function verifyPackagedSkillVersionRecords(systemSkillsOut) {
+  const count = (dir) => (fs.existsSync(dir)
+    ? fs.readdirSync(dir, { withFileTypes: true }).filter((entry) => entry.isFile() && entry.name.endsWith('.md')).length
+    : 0);
+  const packaged = path.join(systemSkillsOut, '_versions');
+  console.log(`==> Verifying packaged built-in Skill version records at ${packaged} ...`);
+  const expected = count(path.join(DESKTOP_ROOT, 'resources', 'system-skills', '_versions'));
+  const actual = count(packaged);
+  if (expected < 1 || actual !== expected) {
+    console.error(`ERROR: packaged built-in Skill version records: expected ${expected}, found ${actual} at ${packaged}`);
+    process.exit(1);
+  }
+  console.log(`    OK (${actual} records)`);
+}
+
 export function verifyPackagedDrizzle(drizzleOut) {
   console.log(`==> Verifying packaged drizzle/ at ${drizzleOut} ...`);
   if (!fs.existsSync(drizzleOut)) {

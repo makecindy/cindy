@@ -621,8 +621,6 @@
       "minutes": "{{n}} 分钟",
       "hoursMinutes": "{{h}} 小时 {{m}} 分"
     },
-    "retrying": "还没开始，正在重试…",
-    "stopTask": "停止任务",
     "actionFailed": "暂时无法读取或完成操作",
     "messages": "消息往来",
     "readOnly": "仅供查看",
@@ -760,8 +758,6 @@
     "artifactsEmpty": "还没有成果，可以让伙伴创作一些内容。",
     "openSourceTask": "打开来源任务",
     "modelFollowsDefault": "跟随当前默认模型链",
-    "taskModel": "任务模型",
-    "taskInheritsPrimary": "继承主模型",
     "modelOverride": "使用此伙伴的自定义模型链",
     "modelsUnavailable": "暂无可用模型，请在电脑上检查此伙伴的模型设置后刷新。",
     "artifactsRecovery": "请从消息卡中打开文件，或在 {{deviceName}} 上浏览文件。",
@@ -867,7 +863,6 @@
   },
   "glance": {
     "open": "{{name}}的近况",
-    "dueUnseen": "有待办到期",
     "computers": "电脑",
     "runningHere": "正在这台上运行",
     "online": "在线",
@@ -875,37 +870,16 @@
     "current": "当前",
     "offlineCount_one": "离线 {{count}} 台",
     "offlineCount_other": "离线 {{count}} 台",
-    "todos": "待办",
     "showMore": "显示更多",
     "showLess": "收起",
     "doneCount_one": "已完成 {{count}}",
     "doneCount_other": "已完成 {{count}}",
-    "delete": "删除",
-    "deleted": "已删除，同一件事以后不再记",
-    "undo": "撤销",
-    "undoFailed": "没能撤销，请重试",
-    "deleteFailed": "没能删除，请重试",
-    "check": "帮我查查",
     "checkMeta": "在已连接的邮件和消息里找新待办",
-    "checkPrompt": "帮我查查已连接的邮箱、消息等来源里，有没有需要我处理的新事项，有就记成待办。",
-    "dailyCheck": "每天帮我查一次",
-    "dailyCheckMeta": "工作日 9:00，没有新待办不打扰",
     "recentTasks": "近期任务",
     "unread": "未读结果",
-    "stopDailyCheck": "停止每天检查",
     "openFailed": "无法打开链接",
-    "dailyCheckFailed": "没能保存，请重试",
-    "loadFailed": "没能读取待办",
     "outputs": "输出内容",
-    "outputMeta": "{{time}} · {{task}}",
-    "source": {
-      "conversation": "你交代的",
-      "mail": "来自邮件",
-      "feishu": "来自飞书",
-      "github": "来自 GitHub",
-      "community": "来自社区",
-      "task": "来自任务"
-    }
+    "outputMeta": "{{time}} · {{task}}"
   },
   "cloudCompanion": {
     "homeOffline": "主力电脑「{{device}}」离线",
@@ -928,6 +902,8 @@
     "moveTo": "换到「{{device}}」",
     "moveTitle": "把 {{name}} 换到「{{device}}」运行？",
     "moveDescription": "从现在起 {{name}} 在「{{device}}」上运行，对话记录一起带过去。工作目录、连接和本机文件留在原来的电脑上。",
+    "olderTarget": "旧版 Cindy",
+    "olderTargetNote": "「{{device}}」上是旧版 Cindy，{{name}} 在那里按旧方式运行：对话记录照常同步，项目规则和自动化在那里不生效。",
     "moveAction": "换到「{{device}}」",
     "moving": "正在把 {{name}} 换到「{{device}}」…",
     "busyTitle": "{{name}} 还在回复",
@@ -996,5 +972,8 @@
       "disk-full": "没导入成功：磁盘空间不足",
       "native-unloadable": "没导入成功：原记录无法加载"
     }
+  },
+  "liveActivity": {
+    "waitingForUpdate": "等待更新"
   }
 }

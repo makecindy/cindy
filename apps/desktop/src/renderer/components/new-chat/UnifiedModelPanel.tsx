@@ -65,6 +65,7 @@ import {
   withMenuLabels,
 } from '@/components/ui/menu-row';
 import { ModelSourceUsageProvider } from './ModelSourceDetails';
+import { ModelPoolQuotaSummary } from './ModelPoolQuota';
 import type { ProviderGroupUsageOf, ProviderUsageScope } from './useProviderWeeklyQuota';
 import {
   anchorKey,
@@ -141,6 +142,8 @@ export interface UnifiedModelPanelProps {
   isVisible: (providerId: string, model: CatalogModel, agent: AgentKind) => boolean;
   /** 整供应商排除(SSH 远程排除 chat-bridged Codex 源等)。 */
   excludeProvider?: (provider: ProviderView, agent: AgentKind) => boolean;
+  /** 只从模型分组里收起、收藏与最近照常解析的供应商(见 buildUnifiedListSections)。 */
+  listHiddenProviderIds?: ReadonlySet<string>;
   /** 单模型排除(SSH 远程排除订阅直连前缀等)。 */
   excludeModel?: (model: CatalogModel, provider: ProviderView, agent: AgentKind) => boolean;
   /**
@@ -390,6 +393,7 @@ export function UnifiedModelPanel({
   scope,
   isVisible,
   excludeProvider,
+  listHiddenProviderIds,
   excludeModel,
   sourceVersion,
   query,
@@ -866,11 +870,12 @@ export function UnifiedModelPanel({
         rail: effectiveRail,
         effectiveEngineOf,
         providerOrder,
+        ...(listHiddenProviderIds?.size ? { listHiddenProviderIds } : {}),
         ...(scope === 'session' && liveEngineAgent
           ? { recommendation: { agent: liveEngineAgent, ...selected } }
           : {}),
       }),
-    [entries, favorites, recentModels, resolveDeviceFavorite, query, effectiveRail, effectiveEngineOf, providerOrder, t, scope, liveEngineAgent, selected.modelId, selected.providerId],
+    [entries, favorites, recentModels, resolveDeviceFavorite, query, effectiveRail, effectiveEngineOf, providerOrder, t, scope, liveEngineAgent, selected.modelId, selected.providerId, listHiddenProviderIds],
   );
 
   // 打开或切视图时，把模型本体的当前行对齐到可视高度 35% 处；收藏可以滚出顶部。
@@ -1176,6 +1181,15 @@ export function UnifiedModelPanel({
         ? providerHeading(section.group.providerId)
         : '';
 
+  const quotaProviderOf = (section: (typeof sections)[number]): string | null => {
+    if (section.group?.type === 'provider') return section.group.providerId;
+    const first = section.rows[0];
+    if (!first || section.rows.some(row => row.agentDeviceId || row.entry.providerId !== first.entry.providerId)) return null;
+    if (sections.some(other => other.group?.type === 'provider' && other.group.providerId === first.entry.providerId)) return null;
+    const firstSourceSection = sections.find(other => other.rows.length > 0 && other.rows.every(row =>
+      !row.agentDeviceId && row.entry.providerId === first.entry.providerId));
+    return firstSourceSection === section ? first.entry.providerId : null;
+  };
   const rows = sections.flatMap((section) => section.rows);
   const hasRows = rows.length > 0;
 
@@ -1327,7 +1341,7 @@ export function UnifiedModelPanel({
         key={key}
         isolated
         providers={provider ? [provider] : NO_PROVIDERS}
-        scope={{ deviceId: rowDeviceId }}
+        scope={{ deviceId: rowDeviceId, taskId: rowDeviceId === providerUsage?.deviceId ? providerUsage.taskId : undefined }}
         {...(providerGroupUsage
           ? { groupUsageOf: (providerId: string) => providerGroupUsage(rowDeviceId, providerId) }
           : {})}
@@ -1516,11 +1530,13 @@ export function UnifiedModelPanel({
                     : {})}
                   // Shared menu group label (DESIGN §4 Menu text): 12px / 500 meta.
                   className={cn(
-                    'flex items-center gap-1.5 px-2.5 text-12 font-medium leading-[1.33] text-[var(--cmd-palette-item-meta)]',
+                    'flex flex-wrap items-center gap-1.5 px-2.5 text-12 font-medium leading-[1.33] text-[var(--cmd-palette-item-meta)]',
                     'pb-1 pt-2',
                   )}
                 >
                   <span className="truncate">{sectionLabel(section)}</span>
+                  {quotaProviderOf(section) && <ModelPoolQuotaSummary providerId={quotaProviderOf(section)!}/>}
+
                 </div>
                 {section.rows.map((row) => {
                   if (row.agentDeviceId) return renderDeviceFavoriteRow(row, false);
@@ -1716,6 +1732,7 @@ export function UnifiedModelPanel({
                 : 'recommended';
             return (
               <ModelConfigFlyout
+                overlayContentClassName={overlayClassName}
                 entry={target.entry}
                 deviceId={deviceId}
                 config={config}

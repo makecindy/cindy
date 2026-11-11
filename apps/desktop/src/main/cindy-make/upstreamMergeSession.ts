@@ -18,7 +18,7 @@ import { normalizeWorkingDirForStorage } from '../../shared/workingDir.js';
 import { formatCindyMakeMergeTitle } from '../../shared/cindyMakeMergeTitle.js';
 import { dispatchCindyMakeMergeTask } from './taskRuntime.js';
 import { mergeError, mergeWorktree } from './upstreamMerge.js';
-import { t } from '../i18n.js';
+import { t } from '../i18n.desktop.js';
 
 /** What to do about personal changes the check found missing from the result. */
 export function missingChangesPrompt(state: CindyMakeMergeState): string {

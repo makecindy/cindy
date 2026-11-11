@@ -1,4 +1,7 @@
+import { isAnsweredAsyncQuestionClientId, isAsyncQuestionReplyClientId } from '@cindy/maker-shared/interaction';
 import { forwardedRequestDisplayText, isHookSchedulerOrigin } from '@cindy/maker-shared/message-source';
+import i18n from '@/i18n';
+import { isOrcaAutoBridgeBatch } from '@/lib/messageAutomationOrigin';
 import { queueItemVisibleSource, queueItemVisibleText } from '@cindy/maker-shared/queue';
 import { UI_ACTION_TRIGGER_PREFIX, type QueuedMessage } from '@/lib/makerChatStore';
 import { stripChatQuoteMarkerLines } from '@/lib/chatQuotes';
@@ -75,6 +78,7 @@ export function getPendingQueueRowPresentation(entry: QueuedMessage): PendingQue
   // Hook 渠道条目同属机器投递(渠道原话),不显示来源行但同样不可编辑/插话。
   const isMachineGenerated = isOrca || isScheduler || isSession || isPlugin || isHookOrigin;
   const isSyntheticTrigger = entry.text.startsWith(UI_ACTION_TRIGGER_PREFIX);
+  const isAnswered = isAnsweredAsyncQuestionClientId(entry.clientId);
   const isContinueTrigger =
     entry.text === CONTINUE_AFTER_APP_EXIT_PROMPT || entry.text === CONTINUE_AFTER_ERROR_PROMPT;
   const isPendingEnqueue = entry.isPendingEnqueue === true;
@@ -84,7 +88,9 @@ export function getPendingQueueRowPresentation(entry: QueuedMessage): PendingQue
     isScheduler,
     isSession,
     isPlugin,
-    senderLabel: isOrca
+    senderLabel: isOrcaAutoBridgeBatch(origin)
+      ? i18n.getFixedT(i18n.language)('chat.userMessage.orcaFromWorkerBatch', { count: origin.autoBridgeBatchCount })
+      : isOrca
       ? origin.senderLabel
       : isScheduler
         ? origin.scheduleName
@@ -102,7 +108,10 @@ export function getPendingQueueRowPresentation(entry: QueuedMessage): PendingQue
         ? (isSession ? forwardedRequestDisplayText(queueItemVisibleText(entry)) : queueItemVisibleText(entry))
         : entry.chatMessage.quotesEncoded === true
           ? stripChatQuoteMarkerLines(entry.text)
-          : entry.text,
+          // An answer to a question shows as the question and the answer, never the reply format sent to the model.
+          : isAsyncQuestionReplyClientId(entry.clientId)
+            ? queueItemVisibleText(entry)
+            : entry.text,
     rangedSourceText:
       isScheduler || isSession || isPlugin
         ? (() => {
@@ -110,9 +119,10 @@ export function getPendingQueueRowPresentation(entry: QueuedMessage): PendingQue
             return source.replaceRanges ? source.text : null;
           })()
         : null,
-    canEdit: !isPendingEnqueue && !isMachineGenerated && !isSyntheticTrigger,
+    canEdit: !isPendingEnqueue && !isMachineGenerated && !isSyntheticTrigger && !isAnswered,
     // 协同消息可以转为插话:插话不改正文与来源,主进程在接受后结清协同回报。
-    canSteer: !isPendingEnqueue && (isOrca || !isMachineGenerated) && !isSyntheticTrigger,
+    // An answer already shown on its question card has no row, so no shortcut may act on it either.
+    canSteer: !isPendingEnqueue && (isOrca || !isMachineGenerated) && !isSyntheticTrigger && !isAnswered,
     isSyntheticTrigger,
     syntheticKind: isSyntheticTrigger ? (isContinueTrigger ? 'continue' : 'generic') : null,
   };

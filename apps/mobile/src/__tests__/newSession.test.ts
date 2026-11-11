@@ -1803,6 +1803,12 @@ describe('new session model', () => {
         status: 'deleted',
         deviceLinkDeviceId: 'mac-a',
       }),
+      // PR #9314: a teammate's own project is reached from the teammate, never offered here.
+      remoteSession('teammate', {
+        workingDir: '/Users/me/Library/Application Support/Cindy/owners/o1/bots/bot_x/workspace',
+        userSendAt: '2026-01-01T00:20:00.000Z',
+        deviceLinkDeviceId: 'mac-a',
+      }),
     ], 'mac-a');
 
     expect(options).toEqual([

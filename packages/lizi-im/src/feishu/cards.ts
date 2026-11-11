@@ -14,7 +14,7 @@
  * `streamingText.ts` 里的 `buildStreamingTextCard`.
  */
 
-import type { InteractiveCardSpec } from '../types.js';
+import type { InteractiveCardSpec, StreamingProcessRecord } from '../types.js';
 import { collectXdtImageRefs } from '../xdtRefs.js';
 
 /**
@@ -162,23 +162,23 @@ export function buildMarkdownCardV2(text: string): unknown {
 }
 
 /**
- * Build a feishu v2 card with mixed markdown text and inline `img` elements
- * for managed-image references resolved to feishu image_keys. Falls back
- * to italicised "_[图片加载失败:alt]_" placeholder text when imageMap is
+ * Body elements of a feishu v2 card with mixed markdown text and inline `img`
+ * elements for managed-image references resolved to feishu image_keys. Falls
+ * back to italicised "_[图片加载失败:alt]_" placeholder text when imageMap is
  * missing the URL (upload failed).
  *
  * 图片引用识别用 xdtRefs 的共享双协议正则(老 xdt-image + 媒体总仓
  * cindy-media)——此前这里是只认 xdt-image 的本地副本,cindy-media 引用
  * 匹配不上:上传拿到了 image_key 却拼不进卡片,正文残留字面量 markdown。
  *
- * Used by streamingText during finalize after all managed image URLs have
- * been uploaded in parallel.
+ * Used by buildReplyCardV2 (streamingText finalize) after all managed image
+ * URLs have been uploaded in parallel.
  */
-export function buildMixedMarkdownCardV2(
+function mixedBodyElements(
   text: string,
   imageMap: Map<string, string>,
   appendImageKeys?: ReadonlyArray<string>,
-): unknown {
+): unknown[] {
   const elements: unknown[] = [];
   let lastIdx = 0;
   for (const ref of collectXdtImageRefs(text)) {
@@ -213,8 +213,71 @@ export function buildMixedMarkdownCardV2(
       });
     }
   }
-  if (elements.length === 0) {
-    elements.push({ tag: 'markdown', content: '_(空回复)_' });
+  return elements;
+}
+
+// ── final reply card: process record + body + part note — schema v2 ───────────
+
+/**
+ * 过程记录的折叠面板: 默认收起成一行标题, 点开是本轮的逐项工作记录。
+ * 收起时不占正文的阅读空间, 想核对「它到底做了什么」时不用回桌面端。
+ */
+function processPanelElement(process: StreamingProcessRecord): unknown {
+  return {
+    tag: 'collapsible_panel',
+    expanded: false,
+    header: {
+      title: { tag: 'plain_text', content: process.title },
+      vertical_align: 'center',
+      icon: { tag: 'standard_icon', token: 'down-small-ccm_outlined', size: '16px 16px' },
+      icon_position: 'right',
+      icon_expanded_angle: -180,
+    },
+    border: { color: 'grey', corner_radius: '5px' },
+    vertical_spacing: '8px',
+    padding: '8px 8px 8px 8px',
+    elements: [
+      {
+        tag: 'markdown',
+        content: stripInlineCode(process.lines.join('\n')),
+        text_size: 'notation',
+      },
+    ],
+  };
+}
+
+export interface ReplyCardSpec {
+  /** 正文 markdown(这一张卡片承载的那一段)。 */
+  text: string;
+  /** 正文里托管图片 → image_key; 传 null 表示本条回复没有图片, 正文按纯文本卡处理。 */
+  imageMap: Map<string, string> | null;
+  /** 挂在正文之后的图片(tool_result 带来的, 没有对应 markdown 链接)。 */
+  appendImageKeys?: ReadonlyArray<string>;
+  /** 过程记录(只放在第一张卡片上)。 */
+  process?: StreamingProcessRecord;
+  /** 分条送达时每张卡片底部的页码附注。 */
+  partNote?: string;
+}
+
+/**
+ * 终稿卡片: [过程记录(折叠)] + 正文 + [页码附注]。没有过程记录、图片也不分条时,
+ * 结果与 buildMarkdownCardV2 完全一致。
+ */
+export function buildReplyCardV2(spec: ReplyCardSpec): unknown {
+  const body =
+    spec.imageMap === null && !spec.appendImageKeys?.length
+      ? [{ tag: 'markdown', content: stripInlineCode(spec.text) }]
+      : mixedBodyElements(spec.text, spec.imageMap ?? new Map(), spec.appendImageKeys);
+  if (body.length === 0) body.push({ tag: 'markdown', content: '_(空回复)_' });
+  const elements: unknown[] = [];
+  if (spec.process) elements.push(processPanelElement(spec.process));
+  elements.push(...body);
+  if (spec.partNote) {
+    elements.push({
+      tag: 'markdown',
+      content: `<font color='grey'>${spec.partNote}</font>`,
+      text_size: 'notation',
+    });
   }
   return { schema: '2.0', config: { update_multi: true }, body: { elements } };
 }
