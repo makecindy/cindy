@@ -40,6 +40,8 @@ import { GhostNotificationIndex } from '../ghostNotificationIndex.js';
 import { GhostTaskEventIndex } from '../taskEventIndex.js';
 import { decodeCursor } from '@cindy/mcps/history-cursor';
 import type { Message } from '../../../renderer/lib/ccAgent.types.js';
+import { clearCurrentDbClient, setCurrentDbClient } from '../../localDb/client/current.js';
+import type { DbClient } from '../../localDb/client/DbClient.js';
 
 const createSessionNotification = createGhostProductionCallbacks<{
   notifyGhostSessionEvent(
@@ -337,6 +339,26 @@ describe('indexed task content and state events', () => {
     index.publish({ kind: 'message', sessionId: 'task', get message(): Message { throw new Error('must not project'); } },
       scenario === 'owner-change' ? { ...owner, ownerGeneration: 2 } : owner, gateway);
     expect(gateway).not.toHaveBeenCalled();
+  });
+
+  // A committed-position read must not deliver a previous owner's or removed
+  // subscription's message after its asynchronous DB response arrives.
+  it.each(['owner', 'database', 'subscription'] as const)('drops a late cursor lookup after %s changes', async change => {
+    let finish!: (row: { rowid: number }) => void;
+    const queryOne = vi.fn(() => new Promise<{ rowid: number }>(resolve => { finish = resolve; }));
+    const index = new GhostTaskEventIndex(), gateway = vi.fn();
+    setCurrentDbClient({ queryOne } as unknown as DbClient, owner.dataOwnerId);
+    index.replace([subscriber()], owner);
+    try {
+      index.publish({ kind: 'message', sessionId: 'task', message: { ...row, rowid: undefined } }, owner, gateway);
+      expect(queryOne).toHaveBeenCalledOnce();
+      if (change === 'owner') index.replace([subscriber()], { ...owner, ownerGeneration: 2 });
+      else if (change === 'database') setCurrentDbClient({} as DbClient, 'next-owner');
+      else index.replace([], owner);
+      finish({ rowid: 4 });
+      await new Promise<void>(resolve => setImmediate(resolve));
+      expect(gateway).not.toHaveBeenCalled();
+    } finally { clearCurrentDbClient(); }
   });
 
   // State-only permission must never deliver tool/activity prose or title-derived labels.

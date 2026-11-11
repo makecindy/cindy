@@ -5,7 +5,11 @@ import {
   type GhostTaskEventTopic, type GhostTaskEventData, type InstalledGhost,
 } from '../../shared/ghost.js';
 import type { TaskChangeEvent } from '../localDb/taskEvents.js';
+import { tryGetDbClient } from '../localDb/client/current.js';
+import { createLogger } from '../logger.js';
 import type { GhostSubscriptionGateway } from './subscriptionGateway.js';
+
+const log = createLogger('ghost-task-events');
 
 /** Rebuilt only on roster changes. Event delivery never enumerates installed plugins. */
 export class GhostTaskEventIndex {
@@ -36,6 +40,20 @@ export class GhostTaskEventIndex {
     if (event.kind === 'message') {
       const msg = event.message;
       if (msg.role !== 'user' && msg.role !== 'assistant') return;
+      // The write path deliberately avoids reading content back after INSERT.
+      // Resolve only its committed cursor position, and only for subscribed messages.
+      if (msg.rowid === undefined) {
+        const db = tryGetDbClient();
+        if (!db) return;
+        void db.queryOne<{ rowid: number }>(
+          'SELECT rowid FROM messages WHERE id = ? AND session_id = ? AND rewind_at IS NULL', [msg.id, event.sessionId],
+        ).then(row => {
+          if (!row || !Number.isSafeInteger(row.rowid) || row.rowid < 1 || db !== tryGetDbClient()) return;
+          // Re-enter the indexed owner/subscription checks after the async read.
+          this.publish({ ...event, message: { ...msg, rowid: row.rowid } }, owner, gateway);
+        }).catch(() => log.warn('committed message cursor lookup failed'));
+        return;
+      }
       data = { sessionId: event.sessionId, messageId: msg.id, role: msg.role,
         content: taskMessageContent(msg.content), createdAt: msg.createdAt,
         historyCursor: encodeCursor({ createdAt: Date.parse(msg.createdAt), id: msg.id, rowid: msg.rowid }) };
