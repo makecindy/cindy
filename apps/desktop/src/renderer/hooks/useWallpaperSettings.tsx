@@ -59,6 +59,8 @@ interface WallpaperSettingsContextValue extends WallpaperSettings {
   previewBlur: (value: number | null) => void;
   setMotion: (value: WallpaperMotion) => void;
   setSidebarVisibility: (value: number) => void;
+  /** Drop the explicit override so the sidebar follows the shared veil again. */
+  resetSidebarVisibility: () => void;
   previewSidebarVisibility: (value: number | null) => void;
   resetWallpaper: () => void;
 }
@@ -267,6 +269,10 @@ export function WallpaperSettingsProvider({
     },
     [patch],
   );
+  const resetSidebarVisibility = useCallback(() => {
+    setSidebarPreview(null);
+    patch({ sidebarVisibility: null });
+  }, [patch]);
   const setMotion = useCallback(
     (value: WallpaperMotion) => patch({ wallpaperMotion: value }),
     [patch],
@@ -323,6 +329,7 @@ export function WallpaperSettingsProvider({
       setMotion,
       sidebarVisibility: sidebarPreview ?? settings.sidebarVisibility,
       setSidebarVisibility,
+      resetSidebarVisibility,
       previewSidebarVisibility,
       resetWallpaper,
     }),
@@ -346,6 +353,7 @@ export function WallpaperSettingsProvider({
       retryDownload,
       sidebarPreview,
       setSidebarVisibility,
+      resetSidebarVisibility,
       previewSidebarVisibility,
     ],
   );

@@ -18,12 +18,14 @@ import { getBuiltinWallpaperPreview, isCdnWallpaper, isSceneWallpaper } from '@/
 import {
   APPEARANCE_LIMITS,
   DEFAULT_APPEARANCE_SETTINGS,
+  isSidebarTransparencyAvailable,
   isCustomWallpaperVideo,
   RETIRED_WALLPAPER_IDS,
   SELECTABLE_WALLPAPER_IDS,
   type WallpaperId,
 } from '@/../shared/appearanceSettings';
 import { SETTINGS_HINT, SettingsBlock, SettingsCard, SettingsRow, SettingsSection } from '@/components/ui/settings-rows';
+import { DefaultOverrideControls } from './DefaultOverrideControls';
 
 export function WallpaperSection() {
   const { t } = useTranslation();
@@ -56,13 +58,14 @@ export function WallpaperSection() {
     sidebarVisibility,
     sidebarTransparency,
     setSidebarVisibility,
+    resetSidebarVisibility,
     previewSidebarVisibility,
     resetWallpaper,
   } = useWallpaperSettings();  // A retired wallpaper stays visible (and selected) only while it is in use.
   // The frosted sidebar is a CINDY-theme surface, and the rule this control drives
   // only applies while a wallpaper is active; elsewhere it would persist a value with
   // no visible effect, so the row stays hidden there.
-  const sidebarTransparencyAvailable = isCindyTheme && wallpaperId !== 'none';
+  const sidebarTransparencyAvailable = isSidebarTransparencyAvailable(isCindyTheme, wallpaperId);
   const retiredInUse = RETIRED_WALLPAPER_IDS.find((id) => id === wallpaperId);
   const pickerIds: readonly WallpaperId[] = retiredInUse
     ? [SELECTABLE_WALLPAPER_IDS[0], retiredInUse, ...SELECTABLE_WALLPAPER_IDS.slice(1)]
@@ -462,7 +465,7 @@ export function WallpaperSection() {
           {sidebarTransparencyAvailable && (
             <>
               <div className="flex items-center gap-3">
-                <span className="shrink-0 text-12 text-[var(--settings-section-sublabel)]">
+                <span id={appearanceSettings.sidebarVisibility.targetId} className="shrink-0 text-12 text-[var(--settings-section-sublabel)]">
                   {t('settings.appearance.wallpaper.sidebarVisibilityLabel')}
                 </span>
                 <Slider data-setting-id={appearanceSettings.sidebarVisibility.id}
@@ -484,6 +487,10 @@ export function WallpaperSection() {
                 <span className="w-10 shrink-0 text-right font-mono text-12 text-[var(--settings-section-sublabel)]">
                   {Math.round(sidebarTransparency * 100)}%
                 </span>
+                <DefaultOverrideControls
+                  isCustomized={sidebarVisibility != null}
+                  onReset={resetSidebarVisibility}
+                />
               </div>
               <p id="sidebar-visibility-hint" className={SETTINGS_HINT}>
                 {t('settings.appearance.wallpaper.sidebarVisibilityHint')}

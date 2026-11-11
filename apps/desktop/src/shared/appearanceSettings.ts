@@ -183,6 +183,19 @@ export function getBackgroundVisibility(
 }
 
 /**
+ * Whether the sidebar transparency control can take effect at all: the tinted
+ * rule it overrides only applies to the CINDY theme family with a wallpaper
+ * active. Both the settings page (mounting the row) and settings search
+ * (offering the hit) must ask this one question so they cannot drift apart.
+ */
+export function isSidebarTransparencyAvailable(
+  isCindyTheme: boolean,
+  wallpaperId: WallpaperId,
+): boolean {
+  return isCindyTheme && wallpaperId !== 'none';
+}
+
+/**
  * Effective sidebar transparency the slider shows (0 = opaque chrome, 1 = fully
  * see-through). Unset (`null`) means the docked sidebar shares the canvas veil,
  * i.e. it is already fully see-through, so the control starts at 100% and only

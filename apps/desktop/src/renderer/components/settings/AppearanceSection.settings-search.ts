@@ -96,7 +96,9 @@ export const appearanceSettings = defineSettings({
     id: 'settings.appearance.wallpaper.sidebarVisibility',
     fallbackTargetId: 'settings-search-target-appearance-wallpaper',
     tab: 'appearance',
-    targetId: 'settings-search-settings-appearance-wallpaper',
+    // Anchored on the row itself: search must land on the control, which sits below
+    // the wallpaper grid, import row and the other sliders of the same card.
+    targetId: 'settings-search-settings-appearance-sidebarVisibility',
     titleKey: 'settings.appearance.wallpaper.sidebarVisibilityLabel',
     sectionKey: 'settings.appearance.wallpaper.title',
     descriptionKey: 'settings.appearance.wallpaper.sidebarVisibilityHint',

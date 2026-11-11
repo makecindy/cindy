@@ -56,6 +56,7 @@ vi.mock('@/hooks/useWallpaperSettings', () => ({
     setVisibility: vi.fn(),
     previewVisibility: vi.fn(),
     setSidebarVisibility: vi.fn(),
+    resetSidebarVisibility: vi.fn(),
     previewSidebarVisibility: vi.fn(),
     sidebarTransparency: 0.4,
     previewBlur: vi.fn(),

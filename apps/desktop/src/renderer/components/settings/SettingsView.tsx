@@ -58,6 +58,7 @@ import { useLocale } from '@/hooks/useLocale';
 import { useWallpaperSettings } from '@/hooks/useWallpaperSettings';
 import { useIsCindyTheme } from '@/hooks/useIsCindyTheme';
 import { isSceneWallpaper } from '@/lib/wallpaper';
+import { isSidebarTransparencyAvailable } from '@/../shared/appearanceSettings';
 import { isCustomWallpaperVideo } from '../../../shared/appearanceSettings';
 import { getLastWorkingDir, subscribeToLastWorkingDir } from '@/state/lastWorkingDir';
 import { BotsGlobalSettingsSection } from '@/features/bots/BotsGlobalSettingsSection';
@@ -119,7 +120,7 @@ function SettingsViewContent() {
   const isCindyTheme = useIsCindyTheme();
   // Mirrors WallpaperSection: the sidebar transparency row only mounts for the CINDY
   // theme family with a wallpaper selected, and search must not offer a dead hit.
-  const sidebarTransparencyAvailable = isCindyTheme && wallpaperId !== 'none';
+  const sidebarTransparencyAvailable = isSidebarTransparencyAvailable(isCindyTheme, wallpaperId);
   const wallpaperMotionAvailable = isSceneWallpaper(wallpaperId) ||
     (wallpaperId === 'custom' && isCustomWallpaperVideo(customWallpaperUrl));
   const voiceModelSelection = useVoiceInputModelSelection();
