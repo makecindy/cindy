@@ -489,7 +489,7 @@ describe('MCP App upstream result authorization', () => {
       tool,
       {},
       expect.any(AbortSignal),
-      { clientId: 'card', serverId: 'example', title: tool.name },
+      { clientId: 'card', serverId: 'example', title: tool.name, caller: 'renderer:1' },
     );
     expect(f.methods.callTool).toHaveBeenCalledOnce();
     expect(f.methods.tools).toHaveBeenCalledOnce();

@@ -2,6 +2,7 @@ import { appendPendingQueueItems } from './pendingQueueItems';
 import { AttachmentCollectionContext, type AttachmentCollectionItem } from './AttachmentCollection';
 import { attachmentPreviewKind, previewSourceName } from '@cindy/maker-shared/attachment-preview';
 import { TeammateProcessStatus } from '@/features/bots/TeammateProcessStatus';
+import { usePluginUiMessageCandidates, type PluginUiMessageCandidates } from '@/cindy-brain/PluginUiContributions';
 import { scrollRangeIntoView } from '@/lib/scrollRangeIntoView';
 import { historyAfter } from './historyAfter';
 import { readGhostCardSupersededBy, readMailCard } from '@cindy/maker-shared/ghost-card-form';
@@ -443,7 +444,7 @@ import { hasReviewableTurnChanges, type TurnChangeSetSummary } from '../../../sh
 
 interface MessageStreamProps {
   pendingMessages?: readonly ChatMessage[];
-  renderPendingMessage?: (message: ChatMessage) => ReactNode;
+  renderPendingMessage?: (message: ChatMessage, pluginUi: PluginUiMessageCandidates) => ReactNode;
   /** Content before history, sharing its scrolling and measured content height. */
   header?: ReactNode;
   /** Host forms share the measured scroll area, outside message virtualization. */
@@ -2790,6 +2791,7 @@ function ShareableToolMedia({
 function renderWorkGroupChild(
   item: Exclude<WorkChildItem, ToolSegmentRenderItem>,
   props: {
+    pluginUi: PluginUiMessageCandidates;
     workingDir: string;
     sessionId?: string;
     sessionTitle?: string | null;
@@ -2838,6 +2840,7 @@ function renderWorkGroupChild(
   return (
     <div data-message-client-id={item.message.clientId}>
       <MessageItem
+        pluginUi={props.pluginUi}
         message={item.message}
         toolResult={props.singleResultMap.get(item.message.clientId)}
         workingDir={props.workingDir}
@@ -2924,6 +2927,7 @@ export const WorkGroupRenderItemView = memo(function WorkGroupRenderItemView({
   const childItems = item.children.map(toWorkGroupChild);
   const block = (
     <WorkGroupBlock
+      pluginUi={context.pluginUi}
       // 单层前缀约定 `work:<clientId>` — item.key 形如 `work-<cid>`,
       // 去掉 `work-` 后拼 `<role>:<id>`,与 agent: / thinking: 同构。
       blockId={`work:${item.key.slice('work-'.length)}`}
@@ -3005,6 +3009,7 @@ export function MessageStream({
   onInlinePlanVisibilityChange,
 }: MessageStreamProps) {
   const { i18n, t } = useTranslation();
+  const pluginUi = usePluginUiMessageCandidates(sessionId);
   const historyView = sessionId ? getRemoteHistoryView(sessionId) : undefined;
   const fullHistorySnapshot = useSyncExternalStore(
     historyView?.subscribe ?? (() => () => undefined),
@@ -6355,6 +6360,7 @@ export function MessageStream({
   );
   const workGroupRenderContext = useMemo<WorkGroupRenderContext>(
     () => ({
+      pluginUi,
       workingDir,
       sessionId,
       sessionTitle,
@@ -6376,6 +6382,7 @@ export function MessageStream({
       userTurnUsageDetailsByAssistantId,
     }),
     [
+      pluginUi,
       workingDir,
       sessionId,
       sessionTitle,
@@ -6640,6 +6647,7 @@ export function MessageStream({
                     if (item.type === 'tool_segment') {
                       return (
                         <AgentActionsBlock
+                          pluginUi={pluginUi}
                           key={item.key}
                           renderItemKey={item.key}
                           toolCalls={item.toolCalls}
@@ -6775,8 +6783,9 @@ export function MessageStream({
                     // 选择模式时 remount(mermaid 重渲、GhostToolCard iframe 重载)。
                     const pending = item.pending === true;
                     const shareable = !pending && Boolean(sessionId) && Boolean(msg.clientId) && isShareableMessage(msg);
-                    const messageNode = pending && renderPendingMessage ? renderPendingMessage(msg) : (
+                    const messageNode = pending && renderPendingMessage ? renderPendingMessage(msg, pluginUi) : (
                       <MessageItem
+                        pluginUi={pluginUi}
                         message={msg}
                         toolResult={singleResultMap.get(msg.clientId)}
                         workingDir={workingDir}
@@ -6969,6 +6978,7 @@ export function withAssistantAvatar(
 }
 
 const MessageItem = memo(function MessageItem({
+  pluginUi,
   message,
   toolResult,
   workingDir,
@@ -6994,6 +7004,7 @@ const MessageItem = memo(function MessageItem({
   sessionSource,
   onDiagnoseError,
 }: {
+  pluginUi: PluginUiMessageCandidates;
   message: ChatMessage;
   toolResult?: string;
   workingDir: string;
@@ -7082,6 +7093,7 @@ const MessageItem = memo(function MessageItem({
       return (
         <>
           <UserMessage
+            pluginUi={pluginUi}
             sharedAuthorName={message.sharedAuthorName}
             sharedAuthorMemberId={message.sharedAuthorMemberId}
             workingDir={workingDir}
@@ -7157,6 +7169,7 @@ const MessageItem = memo(function MessageItem({
         <>
           <MessageSourceLabels sourceGroup={message.sourceGroup} align="start" />
           <AssistantMessage
+            pluginUi={pluginUi}
             workingDir={workingDir}
             localFileRefs={localFileRefs}
             currentSessionId={sessionId}

@@ -8097,6 +8097,8 @@
         "mcpUiDomains": "頁面可連之網域：{{domains}}",
         "mcpAppOnly": "唯頁面可用",
         "uiPageAccess": "頁面：{{pages}}；網域：{{domains}}；頁面可召之工具：{{tools}}",
+        "uiHost": "於 Cindy 提供介面及宿主操作",
+        "uiHostAccess": "{{subject}}：{{access}}",
         "subscribeRoutineRun": "可於君所擇之同僚例行差事運行前行檢",
         "subscribeRoutineRunDetail": "凡於「預檢」擇之之例行差事，每番觸發必先詢之。其可見差事之指令与觸發事件之內容，可令此番略過或止之，不能代君准允。",
         "subscribeScheduleRun": "可於君所擇之自動化運行前行檢",
@@ -19387,6 +19389,12 @@
       "failed": "存之未成，請再試。",
       "restore": "復預設"
     }
+  },
+  "pluginUi": {
+    "display": "示法",
+    "original": "原文",
+    "menu": "法器頁面與指令",
+    "actionFailed": "此法器操作未成，請重試。"
   },
   "mcpApps": {
     "sharedTaskReadOnly": "此卡唯差事之主可操作。",

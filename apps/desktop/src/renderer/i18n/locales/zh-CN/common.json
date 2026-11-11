@@ -8126,7 +8126,9 @@
         "mcpUi": "可在对话中显示交互页面",
         "mcpUiDomains": "页面可连接域名：{{domains}}",
         "mcpAppOnly": "仅页面可用",
-        "uiPageAccess": "页面：{{pages}}；域名：{{domains}}；页面可调用的工具：{{tools}}"
+        "uiPageAccess": "页面：{{pages}}；域名：{{domains}}；页面可调用的工具：{{tools}}",
+        "uiHost": "在 Cindy 中提供界面和宿主操作",
+        "uiHostAccess": "{{subject}}：{{access}}"
       },
       "connections": {
         "confirmTitle": "添加连接地址",
@@ -19387,6 +19389,12 @@
       "failed": "保存失败，请重试。",
       "restore": "恢复默认"
     }
+  },
+  "pluginUi": {
+    "display": "显示方式",
+    "original": "原始内容",
+    "menu": "插件视图与命令",
+    "actionFailed": "未能完成这项插件操作，请重试。"
   },
   "mcpApps": {
     "sharedTaskReadOnly": "此卡片仅任务主人可操作。",
