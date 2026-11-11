@@ -4,7 +4,7 @@
  * Cindy 记忆分范围存放：「关于你」一份（账号级，每个项目都生效），每个项目一份。这里先选范围，
  * 再用与伙伴记忆页相同的列表 / 详情 / 编辑（`MemoryEntriesView`）查看、搜索、修改、删除。
  * 总开关关闭时已存的记忆仍可查看和删除。运行中的任务在启动时冻结了记忆目录，这里的改动
- * 不通知它们。选中范围的整理（「现在整理」、整理记录、撤销）在 MemoryTidyCard。
+ * 不通知它们。
  */
 import { useCallback, useEffect, useMemo, useRef, useState, type MutableRefObject } from 'react';
 import { useTranslation } from 'react-i18next';
@@ -23,7 +23,6 @@ import type {
   MakerMemoryScopeSummary,
   MakerMemoryTaskLocation,
 } from '../../../shared/makerMemoryEntries';
-import { MemoryTidyCard, useMemoryTidy } from './MemoryTidyCard';
 
 const api = () => window.electronAPI.maker.memoryEntries;
 
@@ -79,8 +78,6 @@ export function MemoryEntriesPanel({
   }, [loadScopes]);
 
   const selected = scopes?.find((scope) => scope.scopeKey === scopeKey) ?? null;
-  // 整理或撤销之后条数会变：重新读取范围。
-  const tidy = useMemoryTidy(scopeKey, () => void loadScopes());
   const scopeName = useCallback(
     (scope: MakerMemoryScopeSummary) =>
       scope.kind === 'user' ? t('settings.memory.entries.userScope') : (scope.name ?? scope.scopeKey),
@@ -171,7 +168,6 @@ export function MemoryEntriesPanel({
               source={source}
               texts={texts}
               dimmed={!makerEnabled}
-              revision={tidy.revision}
               onDeleted={() => void loadScopes()}
               backRef={backRef}
               leaveRef={leaveRef}
@@ -209,7 +205,6 @@ export function MemoryEntriesPanel({
                         : scopeLocation(selected)}
                     </p>
                   </div>
-                  <MemoryTidyCard scope={selected} enabled={makerEnabled} tidy={tidy} />
                 </>
               }
             />

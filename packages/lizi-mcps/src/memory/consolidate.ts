@@ -68,7 +68,6 @@ export function registerMemoryConsolidateTool(registry: MemoryToolRegistry, deps
           await other!.delete(source);
           merged.deletedSources.push(source);
         }
-        deps.onStoreChanged?.(deps.getSessionContext?.(), ctx.scopes[dest.scope]!);
         if (ctx.scopes.user) writtenScope = dest.scope;
         return { ...merged, scope: dest.scope };
       });

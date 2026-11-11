@@ -75,8 +75,8 @@ function useSourceRef(source: MemoryEntriesSource) {
   return ref;
 }
 
-/** 记忆页的日期写法:当天写「今天」,其余写月日;`stamp` 再带上时分。整理记录也用它。 */
-export function useDateLabels() {
+/** 记忆页的日期写法:当天写「今天」,其余写月日;`stamp` 再带上时分。 */
+function useDateLabels() {
   const { t, i18n } = useTranslation();
   return useMemo(() => {
     const dayKey = (value: Date) => value.toDateString();
@@ -109,7 +109,6 @@ export function MemoryEntriesView({
   texts,
   dimmed = false,
   listHeader,
-  revision = 0,
   onDeleted,
   backRef,
   leaveRef,
@@ -120,8 +119,6 @@ export function MemoryEntriesView({
   dimmed?: boolean;
   /** 只在列表上方出现的内容(开关、范围选择等)。 */
   listHeader?: ReactNode;
-  /** 这份记忆在页面之外被改动后(整理、撤销整理)加一:列表与正在看的详情重新读取。 */
-  revision?: number;
   /** 一条记忆删除之后(条数变了)。 */
   onDeleted?: () => void;
   backRef: MutableRefObject<(() => Promise<boolean>) | null>;
@@ -164,7 +161,6 @@ export function MemoryEntriesView({
         source={source}
         dimmed={dimmed}
         header={listHeader}
-        revision={revision}
         onOpen={openDetail}
       />
     );
@@ -186,7 +182,6 @@ export function MemoryEntriesView({
       source={source}
       texts={texts}
       filename={view.filename}
-      revision={revision}
       onLoaded={setDetail}
       onEdit={() => setView({ kind: 'edit', filename: view.filename })}
       onDeleted={() => {
@@ -204,13 +199,11 @@ function MemoryList({
   source,
   dimmed,
   header,
-  revision,
   onOpen,
 }: {
   source: MemoryEntriesSource;
   dimmed: boolean;
   header: ReactNode;
-  revision: number;
   onOpen: (filename: string) => void;
 }) {
   const { t } = useTranslation();
@@ -260,7 +253,7 @@ function MemoryList({
       cancelled = true;
       if (timer) clearTimeout(timer);
     };
-  }, [source.key, query, reload, revision]);
+  }, [source.key, query, reload]);
 
   const groups = BOT_MEMORY_TYPES.map((type) => ({
     type,
@@ -353,7 +346,6 @@ function MemoryDetail({
   source,
   texts,
   filename,
-  revision,
   onLoaded,
   onEdit,
   onDeleted,
@@ -362,7 +354,6 @@ function MemoryDetail({
   source: MemoryEntriesSource;
   texts: MemoryEntriesTexts;
   filename: string;
-  revision: number;
   onLoaded: (detail: BotMemoryDetail) => void;
   onEdit: () => void;
   onDeleted: () => void;
@@ -396,7 +387,7 @@ function MemoryDetail({
     return () => {
       cancelled = true;
     };
-  }, [source.key, filename, reload, revision, onLoaded, onMissing]);
+  }, [source.key, filename, reload, onLoaded, onMissing]);
 
   const remove = async () => {
     if (!detail || busy) return;

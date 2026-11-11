@@ -42,7 +42,7 @@ export const personalizationDetailsSettings = defineSettings({
     titleKey: 'settings.memory.entries.title',
     sectionKey: 'settings.sections.memory',
     descriptionKey: 'settings.memory.entries.description',
-    aliases: ['view memories', 'saved memories', 'edit memory', 'delete memory', 'tidy memories', 'tidy history', '查看记忆', '已存的记忆', '删除记忆', '整理记忆', '整理记录'],
+    aliases: ['view memories', 'saved memories', 'edit memory', 'delete memory', '查看记忆', '已存的记忆', '删除记忆'],
   },
   memoryAgentsClaudeCodeLabel: {
     id: 'settings.memory.agents.claude-code.label',

@@ -54,39 +54,3 @@ export interface MakerMemoryScopesResult {
    */
   taskScopeKey: string | null;
 }
-
-/**
- * 整理记录里的一处改动(给界面看的摘要, 不带正文)。
- * - merged: 一条记忆被改写, 把另外几条并了进来; `mergedTitles` 是并入前各条的标题
- *   (含被改写那条原来的标题), `title` 是改写后的标题。
- * - removed: 一条记忆被另一条覆盖而移除; `title` 是被移除那条的标题。
- */
-export interface MakerMemoryTidyChange {
-  kind: 'merged' | 'removed';
-  title: string;
-  mergedTitles: string[];
-  /** 模型给的理由。 */
-  reason: string;
-}
-
-export interface MakerMemoryTidyRun {
-  id: string;
-  /** ISO 时间。 */
-  at: string;
-  trigger: 'auto' | 'manual';
-  undone: boolean;
-  /** 这次整理动到的记忆条数(被改写的与被移除的都算)。 */
-  count: number;
-  changes: MakerMemoryTidyChange[];
-}
-
-/** 「现在整理」的结果。done 且 run 为 null = 看过了, 没有需要整理的。 */
-export type MakerMemoryTidyResult =
-  | { status: 'done'; run: MakerMemoryTidyRun | null }
-  | { status: 'busy' | 'unavailable' | 'failed' };
-
-export interface MakerMemoryTidyUndoResult {
-  restored: number;
-  /** 整理之后又被改过、因此没有恢复的条数。 */
-  skipped: number;
-}

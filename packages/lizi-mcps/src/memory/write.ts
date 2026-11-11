@@ -62,7 +62,6 @@ export function registerMemoryWriteTool(registry: MemoryToolRegistry, deps: Memo
           ? await storeHolding(ctx, `${args.type}_${args.name}.md`, scope as MemoryScopeName | undefined)
           : await storeForNew(ctx, scope as MemoryScopeName | undefined, args.type as string);
         const written = await target.store.write(args as WriteOptions);
-        deps.onStoreChanged?.(deps.getSessionContext?.(), ctx.scopes[target.scope]!);
         // 伙伴只有一份记忆, 回执不带 scope; Cindy 记忆才分账号级和项目。
         if (ctx.scopes.user) writtenScope = target.scope;
         return { ...written, scope: target.scope };

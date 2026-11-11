@@ -1,5 +1,4 @@
 import { botLearningTracker } from './botLearningTracker.js';
-import { memoryTidyTrigger } from './memoryTidyTrigger.js';
 import { learningTurnIdentity } from './botLearningFeedback.js';
 import { settleBotGroupLaneTerminal, type BotGroupChatService, type BotGroupLaneTerminal } from './botGroupChatService.js';
 import type { AgentEvent, Session } from '@cindy/maker-core';
@@ -658,8 +657,6 @@ export function finishSessionTerminalEvent(
       !deps.agentInputCoordinatorHolder?.isAutoResumePending(session.id) &&
       !deps.agentInputCoordinatorHolder?.isAutoResumeDeferred(session.id)
     ) {
-      // 这一轮写过 Cindy 记忆的任务, 结束后看一眼那一份记忆到没到整理线 (没写过即空操作)。
-      void memoryTidyTrigger.onTurnDone(session.id);
       const callback = deps.onSuccessfulProductTurn;
       if (callback && terminalOwner) {
         void callback(session.id, terminalOwner).catch(() =>

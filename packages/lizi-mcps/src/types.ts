@@ -422,13 +422,6 @@ export interface MemoryMcpDeps {
     scope?: 'user' | 'project';
   }) => void);
 
-  /**
-   * A tool call added or rewrote entries in one memory store (`storeKey` is that store's
-   * scope key). The host uses it to decide when that store is worth tidying; it carries
-   * no content.
-   */
-  onStoreChanged?: (context: LiziMcpSessionContext | undefined, storeKey: string) => void;
-
   getManager(): import('@cindy/maker-core').MakerMemoryManager;
   workdir: string;
   getSessionContext?: () => LiziMcpSessionContext;

@@ -8,8 +8,6 @@
  *   跳过开关检查。
  * - 列表 / 搜索 / 读取 / 保存 / 删除的规则与伙伴记忆页共用, 见 memoryEntries.ts。
  * - 运行中的任务在启动时冻结了记忆目录: 这里改完不通知它们, 新任务才读到新内容。
- * - 整理(「现在整理」、整理记录、撤销)直接调用 MakerMemoryManager; 这里只做范围校验, 并把
- *   记录压成界面要的摘要 —— 整理前后的正文不离开 main。
  * - 只在本机可信窗口里可用, 不登记到设备互联的远程通道。
  */
 
@@ -17,20 +15,14 @@ import path from 'node:path';
 
 import type { IpcMain, IpcMainInvokeEvent } from 'electron';
 import {
-  MemoryError,
   type MakerMemoryManager,
   type MakerMemoryStore,
-  type TidyRun,
 } from '@cindy/maker-core';
 
 import type { BotMemoryDetail, BotMemorySummary } from '../../shared/botMemory.js';
 import type {
   MakerMemoryScopesResult,
   MakerMemoryScopeSummary,
-  MakerMemoryTidyChange,
-  MakerMemoryTidyResult,
-  MakerMemoryTidyRun,
-  MakerMemoryTidyUndoResult,
 } from '../../shared/makerMemoryEntries.js';
 import { requireObject, throwIpcError } from '../utils/ipcValidate.js';
 import { MAKER_INVOKE } from './channels.js';
@@ -46,11 +38,10 @@ import {
 /** `buildMemoryScopeKey` 给 SSH 项目的键: `ssh:<encodeURIComponent(hostId)>:<远程路径>`。 */
 const SSH_SCOPE_KEY_RE = /^ssh:([^:]*):(.*)$/s;
 const SCOPE_KEY_MAX = 4096;
-const TIDY_REASON_MAX = 500;
 
 export interface MakerMemoryEntriesDeps {
   /** 当前账号的 Cindy 记忆管理器; 还没就绪时抛 MAKER_MEMORY_NOT_READY。 */
-  getManager(): Pick<MakerMemoryManager, 'listScopes' | 'tidy' | 'listTidyRuns' | 'undoTidy'> & {
+  getManager(): Pick<MakerMemoryManager, 'listScopes'> & {
     getStore(scopeKey: string, opts?: { skipDisabledCheck?: boolean }): Promise<MakerMemoryStore>;
   };
   /**
@@ -82,42 +73,6 @@ function describeScope(scope: {
     return { ...scope, name: path.posix.basename(remotePath) || remotePath, path: remotePath, host };
   }
   return { ...scope, name: path.basename(scope.scopeKey) || scope.scopeKey, path: scope.scopeKey };
-}
-
-/**
- * 把一次整理的原始记录压成界面摘要。记录里一次合并是一条 `updated`(被保留并改写的那条)
- * 后面跟着若干条理由相同的 `deleted`(并进去的那几条); 其余 `deleted` 是被别的记忆覆盖
- * 而移除的。记录本身不带「并进了哪一条」, 这里按这个顺序归组, 只影响显示。
- */
-function summarizeTidyRun(run: TidyRun): MakerMemoryTidyRun {
-  const changes: MakerMemoryTidyChange[] = [];
-  let merging: { change: MakerMemoryTidyChange; reason: string } | null = null;
-  for (const raw of run.changes) {
-    const reason = raw.reason.slice(0, TIDY_REASON_MAX);
-    if (raw.kind === 'updated') {
-      const change: MakerMemoryTidyChange = {
-        kind: 'merged',
-        title: raw.after?.title ?? raw.before.title,
-        mergedTitles: [raw.before.title],
-        reason,
-      };
-      merging = { change, reason: raw.reason };
-      changes.push(change);
-    } else if (merging && merging.reason === raw.reason) {
-      merging.change.mergedTitles.push(raw.before.title);
-    } else {
-      merging = null;
-      changes.push({ kind: 'removed', title: raw.before.title, mergedTitles: [], reason });
-    }
-  }
-  return {
-    id: run.id,
-    at: run.at,
-    trigger: run.trigger,
-    undone: Boolean(run.undoneAt),
-    count: run.changes.length,
-    changes,
-  };
 }
 
 /** 任务位置是 renderer 给的路径: 只接受有界的绝对路径字符串。 */
@@ -224,53 +179,6 @@ export function createMakerMemoryEntriesService(deps: MakerMemoryEntriesDeps) {
       });
       return bound(async () => access.delete(await open(body.scopeKey), target));
     },
-
-    /**
-     * 「现在整理」: 让辅助模型看一遍这份记忆, 合并重复与矛盾的条目。总开关关闭、模型没有
-     * 可用产出等情况不改动记忆, 以 status 或错误码回给界面。
-     */
-    async tidy(rawScopeKey: unknown): Promise<MakerMemoryTidyResult> {
-      return bound(async () => {
-        const { scopeKey, manager } = await listed(rawScopeKey);
-        let outcome;
-        try {
-          outcome = await manager.tidy(scopeKey, 'manual');
-        } catch (error) {
-          // 存储层的拒绝(总开关关闭、账号边界)按错误码回; 模型调用等其它失败不带原文。
-          if (error instanceof MemoryError) return translateMemoryStoreError(error);
-          return { status: 'failed' };
-        }
-        if (outcome.status === 'done') {
-          return { status: 'done', run: outcome.run ? summarizeTidyRun(outcome.run) : null };
-        }
-        return { status: outcome.status === 'not-due' ? 'failed' : outcome.status };
-      });
-    },
-
-    /** 这份记忆的整理记录, 新的在前; 总开关关闭也能看。 */
-    async tidyRuns(rawScopeKey: unknown): Promise<MakerMemoryTidyRun[]> {
-      return bound(async () => {
-        const { scopeKey, manager } = await listed(rawScopeKey);
-        const runs = await manager.listTidyRuns(scopeKey).catch(translateMemoryStoreError);
-        return runs.map(summarizeTidyRun);
-      });
-    },
-
-    /** 撤销一次整理; 整理之后又被改过的条目不覆盖, 计入 skipped。 */
-    async tidyUndo(raw: unknown): Promise<MakerMemoryTidyUndoResult> {
-      const body = requireObject(raw);
-      const runId = body.runId;
-      if (typeof runId !== 'string' || !runId || runId.length > 128) {
-        throwIpcError('INVALID_PARAMS', 'Invalid tidy run');
-      }
-      return bound(async () => {
-        const { scopeKey, manager } = await listed(body.scopeKey);
-        const { restored, skipped } = await manager
-          .undoTidy(scopeKey, runId)
-          .catch(translateMemoryStoreError);
-        return { restored, skipped };
-      });
-    },
   };
 }
 
@@ -304,17 +212,5 @@ export function registerMakerMemoryEntriesIpc(
   ipc.handle(MAKER_INVOKE.MEMORY_ENTRIES_DELETE, async (event, body: unknown) => {
     assertTrustedSender(event);
     await service.delete(body);
-  });
-  ipc.handle(MAKER_INVOKE.MEMORY_ENTRIES_TIDY, async (event, scopeKey: unknown) => {
-    assertTrustedSender(event);
-    return service.tidy(scopeKey);
-  });
-  ipc.handle(MAKER_INVOKE.MEMORY_ENTRIES_TIDY_RUNS, async (event, scopeKey: unknown) => {
-    assertTrustedSender(event);
-    return service.tidyRuns(scopeKey);
-  });
-  ipc.handle(MAKER_INVOKE.MEMORY_ENTRIES_TIDY_UNDO, async (event, body: unknown) => {
-    assertTrustedSender(event);
-    return service.tidyUndo(body);
   });
 }

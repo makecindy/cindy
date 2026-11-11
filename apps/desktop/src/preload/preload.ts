@@ -7938,12 +7938,6 @@ contextBridge.exposeInMainWorld('electronAPI', {
         ipcRenderer.invoke('maker:memory-entries:update', body),
       delete: (body: unknown): Promise<void> =>
         ipcRenderer.invoke('maker:memory-entries:delete', body),
-      tidy: (scopeKey: string): Promise<unknown> =>
-        ipcRenderer.invoke('maker:memory-entries:tidy', scopeKey),
-      tidyRuns: (scopeKey: string): Promise<unknown> =>
-        ipcRenderer.invoke('maker:memory-entries:tidy-runs', scopeKey),
-      tidyUndo: (body: unknown): Promise<unknown> =>
-        ipcRenderer.invoke('maker:memory-entries:tidy-undo', body),
     },
 
     /**

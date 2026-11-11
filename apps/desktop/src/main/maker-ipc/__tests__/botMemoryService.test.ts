@@ -12,12 +12,9 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import {
   DEFAULT_MEMORY_CONFIG,
-  MemoryError,
   MemoryStorage,
-  type MakerMemoryManager,
   type MakerMemoryStore,
   type SearchHit,
-  type TidyRun,
 } from '@cindy/maker-core';
 
 import { BOT_MEMORY_CHANGED } from '../../../shared/botMemory';
@@ -257,16 +254,12 @@ describe('Cindy memory entries service', () => {
       { scopeKey: PROJECT, kind: 'project' as const, count: 1 },
       { scopeKey: 'ssh:build%20box:/srv/app', kind: 'project' as const, count: 2 },
     ]);
-    // 整理由 MakerMemoryManager 完成(调用辅助模型), 这里用替身: 只看服务层的校验与摘要。
-    const tidy = vi.fn<MakerMemoryManager['tidy']>(async () => ({ status: 'done', run: null }));
-    const listTidyRuns = vi.fn<MakerMemoryManager['listTidyRuns']>(async () => []);
-    const undoTidy = vi.fn<MakerMemoryManager['undoTidy']>(async () => ({ restored: 0, skipped: 0 }));
     const service = createMakerMemoryEntriesService({
-      getManager: () => ({ listScopes, getStore, tidy, listTidyRuns, undoTidy }),
+      getManager: () => ({ listScopes, getStore }),
       resolveTaskScopeKey: async () => options.taskScopeKey ?? null,
       captureOwner: () => ({ assertCurrent: options.owner ?? (() => {}) }),
     });
-    return { service, getStore, tidy, listTidyRuns, undoTidy };
+    return { service, getStore };
   }
 
   it('lists the account scope first, then projects with a folder name, path and SSH host', async () => {
@@ -359,85 +352,6 @@ describe('Cindy memory entries service', () => {
     await expect(service.list(PROJECT)).rejects.toThrow('account changed');
     await expect(service.scopes()).rejects.toThrow('account changed');
     expect(getStore).not.toHaveBeenCalled();
-  });
-
-  /**
-   * 测试价值(整理: 「现在整理」、整理记录、撤销; docs/product-rules/cindy-memory.md §3、§4)
-   * - 生产入口与可观察结果: `maker:memory-entries:tidy / tidy-runs / tidy-undo` 的 handler 业务体;
-   *   界面拿到的是摘要(哪几条合并成了哪一条、哪条被移除), 整理前后的正文不离开 main。
-   * - 规则依据: 范围键不可信(§4), 不在 listScopes() 里就不整理、不读记录、不撤销; 撤销结果里的
-   *   skipped 是整理之后又被改过、没有恢复的条数(§3)。
-   * - 现有覆盖缺口: 整理本身由 maker-core 的 tidy.test.ts 覆盖; 服务层的范围校验、记录归组和
-   *   入参校验没有用例。
-   * - 最小失败输入: 不在列表里的路径; 一次合并(一条 updated 加同理由的 deleted)加一次移除;
-   *   不是字符串的 runId 与已不在记录里的 runId。
-   * - tier: unit(MakerMemoryManager 的整理用替身, 不调用模型)。
-   */
-  const snapshot = (title: string) => ({
-    type: 'feedback' as const,
-    title,
-    description: title,
-    body: `${title}(正文)`,
-    updatedAt: '2026-11-01T00:00:00.000Z',
-  });
-  const RUN: TidyRun = {
-    id: 'run-1',
-    at: '2026-11-09T21:40:00.000Z',
-    trigger: 'manual',
-    changes: [
-      { kind: 'updated', filename: 'feedback_use-pnpm.md', before: snapshot('用 pnpm'), after: snapshot('统一用 pnpm'), reason: '说的是同一件事' },
-      { kind: 'deleted', filename: 'feedback_no-npm.md', before: snapshot('不要用 npm'), reason: '说的是同一件事' },
-      { kind: 'deleted', filename: 'project_release-day.md', before: snapshot('周三发版'), reason: '较新的「周二发版」已覆盖' },
-    ],
-  };
-
-  it('never tidies, lists tidy runs or undoes one for a scope key that is not listed', async () => {
-    const { service, tidy, listTidyRuns, undoTidy } = setupEntries();
-    const stray = path.join(os.tmpdir(), 'somewhere-else');
-    await expect(service.tidy(stray)).rejects.toThrow('[NOT_FOUND]');
-    await expect(service.tidyRuns(stray)).rejects.toThrow('[NOT_FOUND]');
-    await expect(service.tidyUndo({ scopeKey: stray, runId: RUN.id })).rejects.toThrow('[NOT_FOUND]');
-    expect(tidy).not.toHaveBeenCalled();
-    expect(listTidyRuns).not.toHaveBeenCalled();
-    expect(undoTidy).not.toHaveBeenCalled();
-  });
-
-  it('returns a finished tidy as a summary of what was merged and removed, without memory bodies', async () => {
-    const { service, tidy } = setupEntries();
-    tidy.mockResolvedValueOnce({ status: 'done', run: RUN });
-    const result = await service.tidy(PROJECT);
-    expect(result).toEqual({
-      status: 'done',
-      run: {
-        id: 'run-1',
-        at: RUN.at,
-        trigger: 'manual',
-        undone: false,
-        count: 3,
-        changes: [
-          { kind: 'merged', title: '统一用 pnpm', mergedTitles: ['用 pnpm', '不要用 npm'], reason: '说的是同一件事' },
-          { kind: 'removed', title: '周三发版', mergedTitles: [], reason: '较新的「周二发版」已覆盖' },
-        ],
-      },
-    });
-    expect(tidy).toHaveBeenCalledWith(PROJECT, 'manual');
-    expect(JSON.stringify(result)).not.toContain('(正文)');
-    // 看过了、没有需要整理的: run 为 null 原样交给界面。
-    expect(await service.tidy(PROJECT)).toEqual({ status: 'done', run: null });
-  });
-
-  it('passes the undo result through and rejects a malformed or unknown run id', async () => {
-    const { service, undoTidy } = setupEntries();
-    undoTidy.mockResolvedValueOnce({ restored: 2, skipped: 1 });
-    expect(await service.tidyUndo({ scopeKey: PROJECT, runId: RUN.id })).toEqual({ restored: 2, skipped: 1 });
-    expect(undoTidy).toHaveBeenCalledWith(PROJECT, RUN.id);
-    // 不是字符串或为空: 不去动记忆。
-    await expect(service.tidyUndo({ scopeKey: PROJECT, runId: 42 })).rejects.toThrow('[INVALID_PARAMS]');
-    await expect(service.tidyUndo({ scopeKey: PROJECT, runId: '' })).rejects.toThrow('[INVALID_PARAMS]');
-    expect(undoTidy).toHaveBeenCalledTimes(1);
-    // 记录里已经没有这次整理(只保留最近 20 次)。
-    undoTidy.mockRejectedValueOnce(new MemoryError('not-found', 'tidy run not found'));
-    await expect(service.tidyUndo({ scopeKey: PROJECT, runId: 'run-gone' })).rejects.toThrow('[NOT_FOUND]');
   });
 });
 

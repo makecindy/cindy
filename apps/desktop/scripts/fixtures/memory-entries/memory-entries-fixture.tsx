@@ -8,7 +8,6 @@ import type { BotMemoryDetail, BotMemorySummary } from '../../../src/shared/botM
 import type {
   MakerMemoryScopeSummary,
   MakerMemoryTaskLocation,
-  MakerMemoryTidyRun,
 } from '../../../src/shared/makerMemoryEntries';
 
 const PROJECT = '/Users/chris/Projects/cindy';
@@ -22,30 +21,6 @@ const details: BotMemoryDetail[] = [
   { filename: 'feedback_small-prs.md', type: 'feedback', title: '改动拆成小的 PR', body: '一个 PR 只做一件事，说明里写清楚怎么验证。超过 400 行先拆。', updatedAt: '2026-11-02T05:01:04.387Z' },
   { filename: 'project_release-train.md', type: 'project', title: 'Release train', body: 'Desktop ships every Tuesday; the branch is cut on Monday evening. Mobile follows one day later.', updatedAt: '2026-10-28T12:00:00.000Z' },
   { filename: 'reference_design-rules.md', type: 'reference', title: 'Design rules live in docs/design-rules', body: 'Read the routing table at the top of DESIGN.md before changing any interface.', updatedAt: '2026-10-11T08:20:00.000Z' },
-];
-// 整理记录：一次自动整理（合并 + 移除），一次已撤销的手动整理。
-const runs: MakerMemoryTidyRun[] = [
-  {
-    id: 'run-2',
-    at: '2026-11-09T21:40:00.000Z',
-    trigger: 'auto',
-    undone: false,
-    count: 3,
-    changes: [
-      { kind: 'merged', title: 'Use pnpm in this repository', mergedTitles: ['Use pnpm in this repository', 'Never run npm install here'], reason: 'Both say to use pnpm; the newer one also covers scripts.' },
-      { kind: 'removed', title: 'Release train leaves on Wednesday', mergedTitles: [], reason: 'Superseded by “Release train”, which was updated later and says Tuesday.' },
-    ],
-  },
-  {
-    id: 'run-1',
-    at: '2026-10-30T08:05:00.000Z',
-    trigger: 'manual',
-    undone: true,
-    count: 2,
-    changes: [
-      { kind: 'merged', title: '改动拆成小的 PR', mergedTitles: ['改动拆成小的 PR', 'PR 不超过 400 行'], reason: '两条都在说 PR 的大小，合成一条。' },
-    ],
-  },
 ];
 const summary = ({ body, ...rest }: BotMemoryDetail): BotMemorySummary => ({ ...rest, preview: body.replace(/\s+/g, ' ') });
 
@@ -77,9 +52,6 @@ mountPage({
           read: async (_scopeKey: string, filename: string) => details.find((entry) => entry.filename === filename)!,
           update: forbid('maker.memoryEntries.update'),
           delete: forbid('maker.memoryEntries.delete'),
-          tidy: forbid('maker.memoryEntries.tidy'),
-          tidyRuns: async (scopeKey: string) => (ctx.case === 'records' && scopeKey === PROJECT ? runs : []),
-          tidyUndo: forbid('maker.memoryEntries.tidyUndo'),
         },
       },
     };

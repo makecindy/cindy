@@ -428,10 +428,6 @@ export const MAKER_INVOKE = {
   MEMORY_ENTRIES_READ: 'maker:memory-entries:read',
   MEMORY_ENTRIES_UPDATE: 'maker:memory-entries:update',
   MEMORY_ENTRIES_DELETE: 'maker:memory-entries:delete',
-  /** 同一页的整理: 现在整理一份记忆 / 读整理记录 / 撤销一次整理。同样仅本机可信窗口。 */
-  MEMORY_ENTRIES_TIDY: 'maker:memory-entries:tidy',
-  MEMORY_ENTRIES_TIDY_RUNS: 'maker:memory-entries:tidy-runs',
-  MEMORY_ENTRIES_TIDY_UNDO: 'maker:memory-entries:tidy-undo',
   /**
    * 启动期 renderer 同步 main 持久化的三个 memory 开关 (maker / claudeCode / codex)。
    * main 的 <userData>/memory-settings.json 是 source of truth, renderer localStorage

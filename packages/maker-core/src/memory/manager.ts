@@ -21,12 +21,11 @@
  *  - settings 持久化 (renderer localStorage 模式)
  */
 
-import { randomUUID } from 'node:crypto';
 import * as path from 'node:path';
 import * as fsSync from 'node:fs';
 import type Database from 'better-sqlite3';
 
-import { hasUndoableTidyRun, MakerMemoryStore, memoryScopeDirName, parseFilename } from './store.js';
+import { MakerMemoryStore, memoryScopeDirName, parseFilename } from './store.js';
 import {
   isUserMemoryScopeKey,
   MEMORY_INDEX_HEADING,
@@ -35,18 +34,6 @@ import {
   USER_MEMORY_SCOPE_KEY,
 } from './storage.js';
 import { resolveMemoryScopeKey } from './scope-resolver.js';
-import {
-  buildTidyPrompt,
-  curatedRecords,
-  isTidyDue,
-  parseTidyPlan,
-  TIDY_MAX_RUNS,
-  tidySnapshot,
-  validateTidyPlan,
-  type TidyChange,
-  type TidyRun,
-  type TidyState,
-} from './tidy.js';
 import {
   MemoryError,
   type MemoryConfig,
@@ -63,27 +50,6 @@ export type SqliteFactory = (filePath: string) => Database.Database;
 
 /** review 一次性调用预算: 一段 ≤200 词的建议, 给足 60s(LLM 冷启 + 长 dump)。 */
 const REVIEW_ONE_SHOT_OPTS = { maxTokens: 800, timeoutMs: 60_000 } as const;
-/** 整理一次性调用预算: 输出是合并后的正文, 比审查建议长得多。 */
-const TIDY_ONE_SHOT_OPTS = { maxTokens: 8000, timeoutMs: 120_000 } as const;
-
-/**
- * 一次整理的结果:
- *  - done: 模型审阅完成; run 为 null 表示没有需要改的;
- *  - not-due: 自动触发线没到 (只对自动整理);
- *  - busy: 同一份记忆正在整理;
- *  - unavailable: 这份记忆不参与整理 (伙伴等独立作用域), 或没有可用的辅助模型
- *    (宿主没接, 或链上没有任何产出); 记忆未改动;
- *  - failed: 模型有产出但不是可解析的计划, 记忆未改动。
- */
-export type TidyOutcome =
-  | { status: 'done'; run: TidyRun | null }
-  | { status: 'not-due' | 'busy' | 'unavailable' | 'failed' };
-
-/** 单条改动可以跳过的失败: 版本冲突、条目已不在、内容不合存储约束。边界与 IO 错误不在此列。 */
-function isSkippableTidyError(e: unknown): boolean {
-  return e instanceof MemoryError && e.code !== 'not-ready' && e.code !== 'io-error';
-}
-
 export interface MakerMemoryManagerDeps {
   /** Maker memory 文件根目录, host 注入 (e.g. <electron userData>/maker-memory) */
   basePath: string;
@@ -254,7 +220,7 @@ const MAX_LEGACY_NAME_ATTEMPTS = 10_000;
 
 /**
  * 把来源目录的分片并入目标目录, 返回并入条数。同名同内容跳过 (重复执行不产生副本);
- * 同名不同内容换成 `<slug>-2`、`-3`… 并入, 两边的记忆都保留, 交给之后的整理去合并。
+ * 同名不同内容换成 `<slug>-2`、`-3`… 并入, 两边的记忆都保留 (之后可在记忆页或用 memory_consolidate 合并)。
  */
 function mergeLegacyShardsSync(sourceDir: string, targetDir: string): number {
   let merged = 0;
@@ -348,10 +314,6 @@ export class MakerMemoryManager {
   private readonly openingStores = new Map<Database.Database, boolean>();
   /** 已扫过旧子目录记忆的作用域 (`<ownerRoot>\n<scopeKey>`), 见 mergeLegacySubScopes。 */
   private readonly mergedSubScopes = new Set<string>();
-  /** 正在整理的 store key; 同一份记忆不并发整理。 */
-  private readonly tidying = new Set<string>();
-  /** 正在撤销的整理记录 (`<store key>\n<run id>`); 同一次整理不并发撤销两回。 */
-  private readonly undoing = new Set<string>();
 
   constructor(private readonly deps: MakerMemoryManagerDeps) {
     this.enabled = deps.initialEnabled ?? false;
@@ -992,8 +954,7 @@ export class MakerMemoryManager {
       // 记忆放在自己项目文件夹里的作用域 (伙伴的项目) 不是 Cindy 记忆; 这里留下的只是搬走前的旧副本。
       if (this.deps.isIndependentScope?.(absPath) === true) continue;
       const count = await countCurated(dir);
-      // 记忆被删光、但还有没撤销的整理记录的项目也要列出, 否则记忆页进不去, 撤销不了。
-      if (count > 0 || (await hasUndoableTidyRun(dir))) scopes.push({ scopeKey: absPath, kind: 'project', count });
+      if (count > 0) scopes.push({ scopeKey: absPath, kind: 'project', count });
     }
     this.assertScopeUnchanged(scopeAtEntry);
     return scopes;
@@ -1361,221 +1322,6 @@ export class MakerMemoryManager {
     // 调用期间发生则建议文本基于旧 owner 数据 — 不得向当前 session 报 ok。
     this.assertScopeUnchanged(scopeAtEntry);
     return { suggestions };
-  }
-
-  // ── 整理 (见 tidy.ts) ────────────────────────────────────────────────────
-
-  /**
-   * 一轮任务结束后由宿主调用: 这次任务用到的每一份记忆 (项目、账号级) 各自检查
-   * 触发线, 到了才整理。不到线时只读一次状态文件和分片列表, 不调用模型。
-   * 伙伴等独立作用域不参与 (伙伴项目有自己的记忆整理自动化); 总开关关闭时不整理。
-   */
-  async tidyIfDue(scopeKey: string): Promise<TidyRun[]> {
-    if (!this.isEnabled() || !this.deps.reviewOneShot) return [];
-    if (this.deps.isIndependentScope?.(scopeKey) === true) return [];
-    const scopes = this.memoryScopesFor(scopeKey);
-    const runs: TidyRun[] = [];
-    // 这一轮任务属于入口时的账号: 逐份整理之间账号若切换, 后面的不再整理
-    // (tidy 各自只绑定自己的入口账号, 不知道上一份是谁的)。
-    const scopeAtEntry = this.deps.ownerScopeKey?.() ?? null;
-    for (const key of [scopes.project, scopes.user]) {
-      if (!key) continue;
-      this.assertScopeUnchanged(scopeAtEntry);
-      const outcome = await this.tidy(key, 'auto');
-      if (outcome.status === 'done' && outcome.run) runs.push(outcome.run);
-    }
-    return runs;
-  }
-
-  /**
-   * 整理一份记忆 (storeKey 是具体那一份的键: 项目 scope key 或账号级键)。
-   * 'auto' 先看触发线; 'manual' (用户点「现在整理」) 不看。
-   */
-  async tidy(storeKey: string, trigger: 'auto' | 'manual'): Promise<TidyOutcome> {
-    if (this.deps.isIndependentScope?.(storeKey) === true) return { status: 'unavailable' };
-    if (this.tidying.has(storeKey)) return { status: 'busy' };
-    this.tidying.add(storeKey);
-    try {
-      const scopeAtEntry = this.deps.ownerScopeKey?.() ?? null;
-      const store = await this.getStore(storeKey);
-      const state = await store.readTidyState();
-      const records = curatedRecords(await store.list());
-      const now = Date.now();
-      if (
-        trigger === 'auto'
-        && !isTidyDue({ records, state, indexBytes: await store.getIndexSize(), config: store.config, now })
-      ) {
-        return { status: 'not-due' };
-      }
-      if (records.length < 2) return { status: 'done', run: null };
-      if (!this.deps.reviewOneShot) return { status: 'unavailable' };
-      const nowIso = new Date(now).toISOString();
-      // 先记下这次尝试: 辅助模型不可用或输出不可解析时, 不在每一轮任务结束后重试。
-      await store.updateTidyState((current) => ({ ...current, lastAttemptAt: nowIso }));
-      // 状态写入横跨 await: 此时账号若已切换, 发出去的请求会以新账号的权限和供应商配置
-      // 携带旧账号的全部记忆, 事后丢弃结果撤不回, 所以要在发请求之前复核。
-      this.assertScopeUnchanged(scopeAtEntry);
-      const text = await this.deps.reviewOneShot(buildTidyPrompt(records), TIDY_ONE_SHOT_OPTS);
-      // 模型调用横跨 await: 账号边界已变则丢弃提议, 不落盘。
-      this.assertScopeUnchanged(scopeAtEntry);
-      // 链上没有任何产出 = 没有可用的辅助模型 (界面据此指向模型设置); 有产出但不是计划 = 失败。
-      if (!text || !text.trim()) return { status: 'unavailable' };
-      const plan = parseTidyPlan(text);
-      if (!plan) return { status: 'failed' };
-      const valid = validateTidyPlan(plan, records, store.config);
-      const byName = new Map(records.map((r) => [r.filename, r]));
-      // 每个文件此刻的版本: 本轮自己改写过的 (合并后的保留条目) 更新, 删掉的移除。
-      // 一项操作用到的每一条记忆都按这里的版本在存储锁内核对, 任一不符整项跳过。
-      const live = new Map(records.map((r) => [r.filename, r.frontmatter.updatedAt]));
-      const changes: TidyChange[] = [];
-      let failure: unknown = null;
-      try {
-        for (const merge of valid.merges) {
-          // 保留最近改过的那一条的文件名, 其余并入后删除。
-          const members = merge.sources
-            .map((name) => byName.get(name)!)
-            .sort((a, b) => b.frontmatter.updatedAt.localeCompare(a.frontmatter.updatedAt));
-          const [keep, ...rest] = members;
-          if (!keep) continue;
-          let applied: Awaited<ReturnType<MakerMemoryStore['applyTidyMerge']>>;
-          try {
-            applied = await store.applyTidyMerge({
-              keep: { filename: keep.filename, updatedAt: live.get(keep.filename)! },
-              sources: rest.map((r) => ({ filename: r.filename, updatedAt: live.get(r.filename)! })),
-              changes: { title: merge.title, description: merge.description, body: merge.body },
-            });
-          } catch (e) {
-            if (isSkippableTidyError(e)) continue;
-            throw e;
-          }
-          live.set(keep.filename, applied.saved.frontmatter.updatedAt);
-          changes.push({
-            kind: 'updated',
-            filename: keep.filename,
-            before: tidySnapshot(keep),
-            after: {
-              title: applied.saved.frontmatter.title,
-              description: applied.saved.frontmatter.description,
-              body: applied.saved.body,
-              updatedAt: applied.saved.frontmatter.updatedAt,
-            },
-            reason: merge.reason,
-          });
-          for (const name of applied.deleted) {
-            live.delete(name);
-            changes.push({ kind: 'deleted', filename: name, before: tidySnapshot(byName.get(name)!), reason: merge.reason });
-          }
-          if (applied.failure) throw applied.failure;
-        }
-        for (const del of valid.deletes) {
-          const record = byName.get(del.filename)!;
-          const target = live.get(record.filename);
-          const covering = live.get(del.supersededBy);
-          // 自己或覆盖它的那一条在本轮已经不在了 (被并入后删掉): 覆盖关系无从核对, 不删。
-          if (target === undefined || covering === undefined) continue;
-          try {
-            const applied = await store.applyTidyCoveredDelete({
-              target: { filename: record.filename, updatedAt: target },
-              coveredBy: { filename: del.supersededBy, updatedAt: covering },
-            });
-            // 返回就说明分片已经删掉; 即使随后重建索引失败 (applied.failure) 也要先记下, 才能撤销。
-            live.delete(record.filename);
-            changes.push({ kind: 'deleted', filename: record.filename, before: tidySnapshot(record), reason: del.reason });
-            if (applied.failure) throw applied.failure;
-          } catch (e) {
-            if (!isSkippableTidyError(e)) throw e;
-          }
-        }
-      } catch (e) {
-        failure = e;
-      }
-      // 中途出错也要把已做的改动记下来, 否则它们无法撤销。
-      const run: TidyRun | null =
-        changes.length > 0 ? { id: randomUUID(), at: nowIso, trigger, changes } : null;
-      // 提交时合并最新的状态: 等模型的这段时间里, 用户可能撤销了旧记录, 整份覆盖会冲掉那个标记。
-      const commit = (current: TidyState): TidyState => ({
-        version: 1,
-        lastAttemptAt: nowIso,
-        lastTidyAt: failure ? current.lastTidyAt : nowIso,
-        runs: run ? [run, ...current.runs].slice(0, TIDY_MAX_RUNS) : current.runs,
-      });
-      if (failure) {
-        await store.updateTidyState(commit).catch((e) =>
-          this.logger.warn('memory tidy: could not record partial run', { error: String(e) }));
-        throw failure;
-      }
-      await store.updateTidyState(commit);
-      this.logger.info('memory tidy finished', { trigger, changes: changes.length });
-      return { status: 'done', run };
-    } finally {
-      this.tidying.delete(storeKey);
-    }
-  }
-
-  /** 这份记忆的整理记录 (新的在前)。关着总开关也能看。 */
-  async listTidyRuns(storeKey: string): Promise<TidyRun[]> {
-    const store = await this.getStore(storeKey, { skipDisabledCheck: true });
-    return (await store.readTidyState()).runs;
-  }
-
-  /**
-   * 撤销一次整理: 把改写过的条目改回去, 把删掉的条目写回来。整理之后被用户或模型
-   * 再改过的条目、已被同名新条目占位的条目不覆盖, 计入 skipped。
-   */
-  async undoTidy(storeKey: string, runId: string): Promise<{ restored: number; skipped: number }> {
-    const store = await this.getStore(storeKey, { skipDisabledCheck: true });
-    const run = (await store.readTidyState()).runs.find((r) => r.id === runId);
-    if (!run) throw new MemoryError('not-found', 'tidy run not found');
-    if (run.undoneAt) return { restored: 0, skipped: 0 };
-    // 同一次整理同时被撤销两回 (连点、两个窗口): 第二个什么都不做, 不把已恢复的条目当成「被改过」。
-    const inFlight = `${storeKey}\n${runId}`;
-    if (this.undoing.has(inFlight)) return { restored: 0, skipped: 0 };
-    this.undoing.add(inFlight);
-    try {
-      let restored = 0;
-      let skipped = 0;
-      for (const change of run.changes) {
-        try {
-          if (change.kind === 'updated') {
-            if (!change.after) {
-              skipped += 1;
-              continue;
-            }
-            await store.restoreSnapshot({
-              kind: 'update',
-              filename: change.filename,
-              expectedUpdatedAt: change.after.updatedAt,
-              changes: {
-                title: change.before.title,
-                description: change.before.description,
-                body: change.before.body,
-              },
-            });
-          } else {
-            await store.restoreSnapshot({
-              kind: 'create',
-              filename: change.filename,
-              title: change.before.title,
-              description: change.before.description,
-              body: change.before.body,
-            });
-          }
-          restored += 1;
-        } catch (e) {
-          if (!isSkippableTidyError(e)) throw e;
-          skipped += 1;
-        }
-      }
-      // 只给这一次的记录打上标记, 其余沿用提交时读到的最新状态 (这段时间里整理可能刚写入了新记录)。
-      const undoneAt = new Date().toISOString();
-      await store.updateTidyState((current) => ({
-        ...current,
-        runs: current.runs.map((r) => (r.id === runId ? { ...r, undoneAt } : r)),
-      }));
-      return { restored, skipped };
-    } finally {
-      this.undoing.delete(inFlight);
-    }
   }
 
   /** 直接给 store 一个 write 入口. mcp-server 层会拿这个 (而不是先 getStore 再 write) */

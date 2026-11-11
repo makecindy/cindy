@@ -234,11 +234,6 @@ export interface MemoryStorageMeta {
   lastUsedAt: string;
 }
 
-/** 撤销整理时恢复一条记忆: 改回整理前的内容, 或把被整理删掉的分片按原文件名建回。 */
-export type RestoreSnapshotInput =
-  | { kind: 'update'; filename: string; expectedUpdatedAt: string; changes: Pick<WriteOptions, 'title' | 'description' | 'body'> }
-  | { kind: 'create'; filename: string; title: string; description: string; body: string };
-
 export class MemoryStorage {
   private indexCache: string | null = null;
   /**
@@ -358,125 +353,6 @@ export class MemoryStorage {
     });
   }
 
-  /**
-   * 整理里的一次合并, 在同一个目录锁内完成: 先核对**每一条**参与的记忆 (保留的和并入的)
-   * 仍是快照时的版本, 任一变了整项不动 (抛 version-conflict / not-found); 通过后写入保留的那条
-   * (索引预算按并入的几条已经不在来估算, 否则满额的记忆连整理都做不了), 再删掉并入的。
-   * 删除中途出错时已做的改动照常返回, 失败原因放在 failure 里, 调用方据此记录再抛。
-   */
-  async applyTidyMerge(input: {
-    keep: { filename: string; updatedAt: string };
-    sources: ReadonlyArray<{ filename: string; updatedAt: string }>;
-    changes: Pick<WriteOptions, 'title' | 'description' | 'body'>;
-  }): Promise<{ saved: MemoryRecord; deleted: string[]; failure?: unknown }> {
-    return this.mutate(async () => {
-      const current = await this.checkVersion(input.keep.filename, input.keep.updatedAt);
-      for (const source of input.sources) await this.checkVersion(source.filename, source.updatedAt);
-      try {
-        await this.writeFile(
-          { ...input.changes, type: current.frontmatter.type, name: current.slug, mode: 'update' },
-          input.keep.filename,
-          input.sources.map((s) => s.filename),
-        );
-      } catch (e) {
-        // 保留条目已经改写、之后重建派生索引才失败: 写入已经提交, 必须把它连同失败一起交给
-        // 调用方记录 (来源一条都没删, 不继续删), 否则改写前的内容没有撤销记录。
-        // 写入之前就失败 (预算、大小、版本) 时文件没变, 照常抛出。
-        const after = await this.read(input.keep.filename).catch(() => null);
-        if (after && after.frontmatter.updatedAt !== input.keep.updatedAt) {
-          return { saved: after, deleted: [], failure: e };
-        }
-        throw e;
-      }
-      const deleted: string[] = [];
-      let failure: unknown;
-      for (const source of input.sources) {
-        try {
-          await this.deleteFile(source.filename);
-          deleted.push(source.filename);
-        } catch (e) {
-          if (e instanceof MemoryError && e.code === 'not-found') continue;
-          // 分片已经删掉、之后重建派生索引才失败: 删除已经提交, 必须记进结果, 否则这条
-          // 记忆只存在于被漏记的来源里, 撤销时恢复不回来。
-          if (await this.shardGone(source.filename)) deleted.push(source.filename);
-          failure = e;
-          break;
-        }
-      }
-      return { saved: await this.read(input.keep.filename), deleted, ...(failure ? { failure } : {}) };
-    });
-  }
-
-  /**
-   * 整理里的一次「已被覆盖」的删除: 被删的和覆盖它的那一条, 在同一个目录锁内核对都仍是
-   * 快照时的版本才删 —— 覆盖方在模型思考期间被删或改写, 这条的内容就可能不再有别处保留。
-   */
-  async applyTidyCoveredDelete(input: {
-    target: { filename: string; updatedAt: string };
-    coveredBy: { filename: string; updatedAt: string };
-  }): Promise<{ failure?: unknown }> {
-    return this.mutate(async () => {
-      await this.checkVersion(input.target.filename, input.target.updatedAt);
-      await this.checkVersion(input.coveredBy.filename, input.coveredBy.updatedAt);
-      try {
-        await this.deleteFile(input.target.filename);
-      } catch (e) {
-        // 与合并同一判定: 分片已删、只是后面重建索引失败时, 删除算已提交, 交给调用方记录并撤销。
-        if (await this.shardGone(input.target.filename)) return { failure: e };
-        throw e;
-      }
-      return {};
-    });
-  }
-
-  /** 分片文件此刻是否已不在存储目录里 (删除是否已经提交, 与派生索引是否重建成功无关)。 */
-  private async shardGone(filename: string): Promise<boolean> {
-    try {
-      await fs.stat(path.join(this.dir, filename));
-      return false;
-    } catch (e) {
-      return isENOENT(e);
-    }
-  }
-
-  /**
-   * 撤销整理时恢复整理前的内容。只恢复整理前已经存在过的记忆, 不受索引硬上限限制:
-   * 升级或旧记忆并入后索引可以原本就超过上限, 整理把它缩小之后, 撤销不能因此被预算挡住。
-   */
-  async restoreSnapshot(opts: RestoreSnapshotInput): Promise<WriteResult | MemoryRecord> {
-    if (opts.kind === 'update') {
-      return this.mutate(async () => {
-        const current = await this.checkVersion(opts.filename, opts.expectedUpdatedAt);
-        await this.writeFile(
-          { ...opts.changes, type: current.frontmatter.type, name: current.slug, mode: 'update' },
-          opts.filename,
-          [],
-          true,
-        );
-        return this.read(opts.filename);
-      });
-    }
-    // 恢复被整理删掉的分片: 用原来的文件名, 不套用新建分片的命名规则 (存量的
-    // `user_user_xxx.md` 双前缀分片能读、能改、能被整理删除, 也必须能撤销回来)。
-    // 文件名仍要能解析成合法的 type + slug, 且不会指到存储目录之外。
-    const parsed = parseFilename(opts.filename);
-    if (!parsed || opts.filename !== path.basename(opts.filename)) {
-      throw new MemoryError('invalid-slug', `cannot restore shard with invalid filename "${opts.filename}"`);
-    }
-    return this.mutate(() =>
-      this.writeFile(
-        { type: parsed.type, name: parsed.slug, title: opts.title, description: opts.description, body: opts.body, mode: 'create' },
-        opts.filename,
-        [],
-        true,
-      ));
-  }
-
-  /** 在目录锁内执行一段读-改-写 (整理状态的提交用), 与分片的写入和删除排同一个队列。 */
-  async runExclusive<T>(run: () => Promise<T>): Promise<T> {
-    return this.mutate(run);
-  }
-
   private async mutate<T>(run: () => Promise<T>): Promise<T> {
     const key = path.resolve(this.dir);
     const previous = mutationQueues.get(key) ?? Promise.resolve();
@@ -505,7 +381,6 @@ export class MemoryStorage {
     opts: WriteOptions,
     filename: string,
     replacing: readonly string[] = [],
-    exemptIndexBudget = false,
   ): Promise<WriteResult> {
     this.validateOpts(opts);
     const fullPath = path.join(this.dir, filename);
@@ -557,7 +432,7 @@ export class MemoryStorage {
       );
     }
 
-    if (!exemptIndexBudget) await this.assertIndexBudget(filename, nextFrontmatter, replacing);
+    await this.assertIndexBudget(filename, nextFrontmatter, replacing);
 
     if (preserveBody) nextFrontmatter.bodyLength = nextBody.length;
     const fileText = matter.stringify({ content: nextBody }, nextFrontmatter);

@@ -6,11 +6,7 @@ import type { MutableRefObject } from 'react';
 
 import { createIpcError } from '../../../../shared/ipc-errors';
 import { BOT_MEMORY_CHANGED, type BotMemoryDetail, type BotMemorySummary } from '../../../../shared/botMemory';
-import type {
-  MakerMemoryTaskLocation,
-  MakerMemoryTidyResult,
-  MakerMemoryTidyRun,
-} from '../../../../shared/makerMemoryEntries';
+import type { MakerMemoryTaskLocation } from '../../../../shared/makerMemoryEntries';
 
 const translate = (key: string, opts?: Record<string, unknown>) =>
   opts ? `${key}:${JSON.stringify(opts)}` : key;
@@ -339,30 +335,16 @@ describe('BotMemorySettings', () => {
 });
 
 /**
- * 测试价值(Cindy 记忆「查看记忆」页, docs/product-rules/cindy-memory.md §3「需要时才整理」、§4)
- * - 生产入口与可观察结果: 真实的 MemoryEntriesPanel + MemoryTidyCard + 共用的 MemoryEntriesView;
- *   断言发给主机的范围键、版本、整理与撤销的入参, 以及页面显示和提示文案。
- * - 规则依据: 回执点开落在写入任务的项目; 读改删带当前范围键; 项目不在列表里时落在「关于你」;
- *   「现在整理」进行中不挡列表, 结束后重新读取列表、条数和记录; 撤销先确认, 整理后被改过的不恢复
- *   并如实告知; 总开关关闭或不足两条时不能整理。
- * - 现有覆盖缺口: 上面的用例只经伙伴的数据来源(botId), 不经范围选择, 也没有整理。
- * - 最小失败输入: 回执带来的任务位置; 一个还没有记忆的项目; 一次要等的整理; 各种整理结果;
- *   一条未撤销和一条已撤销的记录。
+ * 测试价值(Cindy 记忆「查看记忆」页, docs/product-rules/cindy-memory.md §4)
+ * - 生产入口与可观察结果: 真实的 MemoryEntriesPanel + 共用的 MemoryEntriesView;
+ *   断言发给主机的范围键、版本, 以及页面显示。
+ * - 规则依据: 回执点开落在写入任务的项目; 读改删带当前范围键; 项目不在列表里时落在「关于你」。
+ * - 现有覆盖缺口: 上面的用例只经伙伴的数据来源(botId), 不经范围选择。
+ * - 最小失败输入: 回执带来的任务位置; 一个还没有记忆的项目。
  * - tier: unit(jsdom, 与本文件共用替身; 列表 / 详情 / 编辑本身由上面的用例覆盖, 这里不重复)。
  */
 describe('MemoryEntriesPanel (Cindy memory)', () => {
   const TASK: MakerMemoryTaskLocation = { workingDir: '/repo/packages/app' };
-  const run: MakerMemoryTidyRun = {
-    id: 'run-1',
-    at: '2026-09-20T08:00:00.000Z',
-    trigger: 'auto',
-    undone: false,
-    count: 3,
-    changes: [
-      { kind: 'merged', title: '统一用 pnpm', mergedTitles: ['用 pnpm', '不要用 npm'], reason: '说的是同一件事' },
-      { kind: 'removed', title: '周三发版', mergedTitles: [], reason: '已被较新的记忆覆盖' },
-    ],
-  };
   const entries = {
     // 任务的项目解析到 /repo 时指向它; 解析不到(还没有记忆)为 null。
     scopes: vi.fn(async (task?: MakerMemoryTaskLocation) => ({
@@ -376,9 +358,6 @@ describe('MemoryEntriesPanel (Cindy memory)', () => {
     read: vi.fn(async () => detail),
     update: vi.fn(),
     delete: vi.fn(async () => undefined),
-    tidy: vi.fn<(scopeKey: string) => Promise<MakerMemoryTidyResult>>(async () => ({ status: 'done', run })),
-    tidyRuns: vi.fn<(scopeKey: string) => Promise<MakerMemoryTidyRun[]>>(async () => []),
-    tidyUndo: vi.fn(async () => ({ restored: 3, skipped: 0 })),
   };
   const renderPanel = (initialTask: MakerMemoryTaskLocation | null) =>
     render(
@@ -389,13 +368,10 @@ describe('MemoryEntriesPanel (Cindy memory)', () => {
         leaveRef={{ current: null }}
       />,
     );
-  const tidyButton = () => screen.findByRole('button', { name: 'settings.memory.entries.tidy.run' });
 
   beforeEach(() => {
     for (const fn of Object.values(entries)) fn.mockClear();
     entries.list.mockImplementation(async () => summaries);
-    entries.tidy.mockImplementation(async () => ({ status: 'done', run }));
-    entries.tidyRuns.mockImplementation(async () => []);
     setMakerMemoryEnabled(true);
     (window as unknown as { electronAPI: unknown }).electronAPI = { maker: { memoryEntries: entries } };
   });
@@ -426,90 +402,6 @@ describe('MemoryEntriesPanel (Cindy memory)', () => {
     expect(await screen.findByText('bots.memory.empty')).toBeTruthy();
     expect(entries.list).toHaveBeenCalledWith('user:account', undefined);
     expect(screen.getByText('settings.memory.entries.userScopeNote')).toBeTruthy();
-  });
-
-  it('tidies the selected scope without blocking the page, then re-reads the list, the counts and the history', async () => {
-    let finish!: (result: MakerMemoryTidyResult) => void;
-    entries.tidy.mockImplementationOnce(() => new Promise((resolve) => { finish = resolve; }));
-    renderPanel(TASK);
-    fireEvent.click(await tidyButton());
-    expect(entries.tidy).toHaveBeenCalledWith('/repo');
-    // 进行中: 按钮写「正在整理…」, 再点不会发第二次; 列表照常能点进详情。
-    fireEvent.click(await screen.findByRole('button', { name: 'settings.memory.entries.tidy.running' }));
-    expect(entries.tidy).toHaveBeenCalledTimes(1);
-    await openDetail();
-    expect(entries.read).toHaveBeenCalledTimes(1);
-
-    entries.tidyRuns.mockResolvedValue([run]);
-    await act(async () => finish({ status: 'done', run }));
-    expect(mocks.toastSuccess.mock.calls[0]?.[0]).toBe('settings.memory.entries.tidy.merged:{"count":3}');
-    // 正在看的这条可能刚被合并: 详情重新读取; 条数与记录也重新读取。
-    await waitFor(() => expect(entries.read).toHaveBeenCalledTimes(2));
-    expect(entries.scopes).toHaveBeenCalledTimes(2);
-    expect(entries.tidyRuns).toHaveBeenCalledTimes(2);
-  });
-
-  it.each<[string, MakerMemoryTidyResult | Error, 'toastInfo' | 'toastError', string]>([
-    ['nothing to change', { status: 'done', run: null }, 'toastInfo', 'settings.memory.entries.tidy.nothing'],
-    ['already running', { status: 'busy' }, 'toastInfo', 'settings.memory.entries.tidy.busy'],
-    ['no auxiliary model', { status: 'unavailable' }, 'toastError', 'settings.memory.entries.tidy.unavailable'],
-    ['no usable proposal', { status: 'failed' }, 'toastError', 'settings.memory.entries.tidy.failed'],
-    ['a rejected call', new Error('account changed'), 'toastError', 'settings.memory.entries.tidy.failed'],
-  ])('reports a tidy that ends with %s', async (_name, outcome, toast, message) => {
-    entries.tidy.mockImplementationOnce(async () => {
-      if (outcome instanceof Error) throw outcome;
-      return outcome;
-    });
-    renderPanel(TASK);
-    fireEvent.click(await tidyButton());
-    await waitFor(() => expect(mocks[toast].mock.calls[0]?.[0]).toBe(message));
-    expect(mocks.toastSuccess).not.toHaveBeenCalled();
-    expect(await tidyButton()).toBeTruthy();
-  });
-
-  it('does not tidy a scope with fewer than two memories, or any scope while Cindy memory is off', async () => {
-    renderPanel(null);
-    fireEvent.click(await tidyButton());
-    expect((await tidyButton()).getAttribute('aria-disabled')).toBe('true');
-    cleanup();
-    setMakerMemoryEnabled(false);
-    renderPanel(TASK);
-    fireEvent.click(await tidyButton());
-    expect((await tidyButton()).getAttribute('aria-disabled')).toBe('true');
-    expect(entries.tidy).not.toHaveBeenCalled();
-  });
-
-  it('lists what each tidy changed and undoes a run only after confirmation, saying what was left alone', async () => {
-    entries.tidyRuns.mockResolvedValue([run, { ...run, id: 'run-0', trigger: 'manual', undone: true }]);
-    entries.tidyUndo.mockResolvedValueOnce({ restored: 2, skipped: 1 });
-    renderPanel(TASK);
-    // 记录默认收起。
-    const records = await screen.findByRole('button', { name: /settings\.memory\.entries\.tidy\.records/ });
-    expect(records.getAttribute('aria-expanded')).toBe('false');
-    fireEvent.click(records);
-    const history = await screen.findByRole('list', { name: 'settings.memory.entries.tidy.records' });
-    expect(history.textContent).toContain('settings.memory.entries.tidy.undone');
-    fireEvent.click(await screen.findByRole('button', { name: /tidy\.auto/ }));
-    const merged = await screen.findByText(/tidy\.mergedInto/);
-    expect(merged.textContent).toMatch(/用 pnpm.*不要用 npm.*统一用 pnpm/);
-    expect(history.textContent).toContain('说的是同一件事');
-    expect(history.textContent).toMatch(/tidy\.removed.*周三发版/);
-
-    // 已撤销的那次没有「撤销」; 取消确认不撤销。
-    const undo = screen.getAllByRole('button', { name: /tidy\.undoAria/ });
-    expect(undo).toHaveLength(1);
-    mocks.confirm.mockResolvedValueOnce(false);
-    fireEvent.click(undo[0]!);
-    await waitFor(() => expect(mocks.confirm).toHaveBeenCalledTimes(1));
-    expect(entries.tidyUndo).not.toHaveBeenCalled();
-
-    fireEvent.click(undo[0]!);
-    await waitFor(() => expect(entries.tidyUndo).toHaveBeenCalledWith({ scopeKey: '/repo', runId: 'run-1' }));
-    await waitFor(() => expect(mocks.toastSuccess.mock.calls[0]?.[0]).toBe(
-      'settings.memory.entries.tidy.restoredSkipped:{"restored":2,"count":1}',
-    ));
-    await waitFor(() => expect(entries.scopes).toHaveBeenCalledTimes(2));
-    expect(entries.list).toHaveBeenCalledTimes(2);
   });
 });
 

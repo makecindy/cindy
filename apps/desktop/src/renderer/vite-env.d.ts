@@ -6832,13 +6832,6 @@ interface ElectronAPI {
         body: import('../shared/makerMemoryEntries').MakerMemoryEntryUpdateInput,
       ) => Promise<import('../shared/botMemory').BotMemoryDetail>;
       delete: (body: import('../shared/makerMemoryEntries').MakerMemoryEntryDeleteInput) => Promise<void>;
-      /** 「现在整理」: 一次辅助模型调用, 可能要一两分钟。 */
-      tidy: (scopeKey: string) => Promise<import('../shared/makerMemoryEntries').MakerMemoryTidyResult>;
-      tidyRuns: (scopeKey: string) => Promise<import('../shared/makerMemoryEntries').MakerMemoryTidyRun[]>;
-      tidyUndo: (body: {
-        scopeKey: string;
-        runId: string;
-      }) => Promise<import('../shared/makerMemoryEntries').MakerMemoryTidyUndoResult>;
     };
 
     /** 启动期拉 main 持久化的 memory 开关 — 见 preload memoryGetSettings 注释 */

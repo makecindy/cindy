@@ -142,7 +142,6 @@ import { createRemoteSessionHandoff } from './sessionHandoffRemote.js';
 import { createRemoteSessionsStatusSetter } from './sessionStatusRemote.js';
 import { isCindyLearnSkillEnabled } from '../skillhub/activationPreferences.js';
 import { botLearningTracker } from '../maker-ipc/botLearningTracker.js';
-import { memoryTidyTrigger } from '../maker-ipc/memoryTidyTrigger.js';
 import { getLearnController } from '../learn-host/index.js';
 import { HELP_KNOWLEDGE } from '../maker-ipc/helpKnowledge.generated.js';
 import { consumeLearnInvocationGrant } from '../learn-host/invocationGrant.js';
@@ -656,9 +655,6 @@ export function createDesktopMcpProviders(deps: DesktopMcpProvidersDeps): LiziMc
       withAccountDataAccess,
       getManager: deps.getMakerMemoryManager,
       searchProviders: searchGhostRuntimeMemories,
-      // 只记「哪个任务写了哪一份记忆」; 这一轮成功结束后才检查要不要整理。
-      onStoreChanged: (context, storeKey) =>
-        memoryTidyTrigger.noteWrite(context?.sessionId, storeKey, deps.getMakerMemoryManager),
       // 伙伴与普通任务的记忆写入都留保存回执 (Cindy 记忆的回执带 scope: 写的是账号级还是项目那一份);
       // 落到哪条回复、哪些任务可见由 learningReceiptPublisher 判定。
       beginWrite: (context) => {

@@ -1,7 +1,7 @@
 ---
 id: memory
 title: Memory across conversations
-summary: Settings > Personalization > Memory — the "Cindy" switch (on by default) turns on Cindy memory, shared by Claude Code, Codex and Pi tasks; it keeps memories about you (used in every project) and memories per project (one repository or folder each). View Memories on the Cindy row lets you read, search, edit and delete them, tidy them (Tidy Now) and undo a tidy-up, and a reply that saved a memory shows a small "Remembered" note. While it is on, no other memory switches are shown; when it is off, Claude Code and Codex rows appear and those two use their own native memory. Teammates such as Cindy keep their own memory, viewable in the teammate's settings.
+summary: Settings > Personalization > Memory — the "Cindy" switch (on by default) turns on Cindy memory, shared by Claude Code, Codex and Pi tasks; it keeps memories about you (used in every project) and memories per project (one repository or folder each). View Memories on the Cindy row lets you read, search, edit and delete them, and a reply that saved a memory shows a small "Remembered" note. While it is on, no other memory switches are shown; when it is off, Claude Code and Codex rows appear and those two use their own native memory. Teammates such as Cindy keep their own memory, viewable in the teammate's settings.
 tab: personalization
 ---
 Memory lets the agents carry context across your conversations — facts about you, your projects, and how you like to work. Cindy manages memory for every agent — Claude Code, Codex and Pi — so normally there is a single switch.
@@ -34,13 +34,6 @@ Memory lets the agents carry context across your conversations — facts about y
 - If a task updated the same memory after you opened it, your edit isn't written over it: you're shown the latest content and choose **Use latest** or **Keep my changes**.
 - This page also works while the Cindy switch is off — saved memories can still be viewed, edited and deleted.
 - Edits and deletions are picked up by the next agent session; a task that is already running keeps the memory list it started with.
-
-**Tidying memories:**
-
-- Cindy tidies each memory (About you, and each project's) on its own when needed: it merges memories that say the same thing and settles ones that contradict each other, keeping the newer one. This happens in the background after a task has saved memories and that memory has grown — there is nothing to schedule, and no notification.
-- To tidy right away, open **Saved Memories**, pick About you or a project, and click **Tidy Now**. It can take a minute or two, and you can keep using the page meanwhile. It needs the Cindy switch on and at least 2 memories.
-- **Tidy History**, on the same page, appears once that memory has been tidied. It lists each tidy-up — when it ran, whether it was automatic or manual, and what was merged or removed and why.
-- Every tidy-up can be undone: click **Undo** next to it in Tidy History. The memories it changed go back to how they were; memories that were edited after the tidy-up are left as they are.
 
 **The "Remembered" note under a reply:**
 
