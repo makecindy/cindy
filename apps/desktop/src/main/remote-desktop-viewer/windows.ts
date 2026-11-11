@@ -124,6 +124,7 @@ type Entry = {
  */
 export class RemoteDesktopViewerWindows {
   private entries = new Set<Entry>();
+  private pluginViews: PluginLiveScreenViews | null = null;
   /** Device screens shown inside app windows; same authority, no window of their own. */
   private embedded = new EmbeddedLiveScreens({
     owner: activeOwnerScopeKey,
@@ -183,6 +184,7 @@ export class RemoteDesktopViewerWindows {
     for (const e of this.entries) e.controller.setLocale(locale);
   }
   reset(): void {
+    this.pluginViews?.endAll();
     this.embedded.endAll();
     for (const e of this.entries) {
       e.connection.deactivate();
@@ -338,6 +340,7 @@ export class RemoteDesktopViewerWindows {
     return entry;
   }
   private readonly endForLocalLock = () => {
+    this.pluginViews?.endAll();
     this.embedded.endAll();
     for (const entry of this.entries) {
       if (!entry.connection.active) continue;
@@ -357,6 +360,7 @@ export class RemoteDesktopViewerWindows {
    * window that registers here holds those connections and relays the picture.
    */
   register(pluginViews?: PluginLiveScreenViews): void {
+    this.pluginViews = pluginViews ?? null;
     if (pluginViews) {
       pluginViews.connect({
         selfDeviceId: getSelfDeviceId,
