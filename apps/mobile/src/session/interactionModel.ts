@@ -100,6 +100,9 @@ export function shouldUseFullHeightPendingInteractionSurface(input: {
   // 收起时不能再吃固定高度:那正是「收起后仍然霸屏」的成因,收起的全部意义就是把
   // 屏幕还给消息流。
   if (input.collapsed) return false;
+  // Feedback owns its scrolling body and pinned publication footer, like the
+  // expanded plan viewer. An outer ScrollView would scroll the action away.
+  if (input.activeKind === 'issue_confirm') return true;
   return input.activeKind === 'plan_review'
     && (input.planViewerState === 'expanded' || input.planViewerState === 'edit');
 }

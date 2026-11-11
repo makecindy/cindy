@@ -27,12 +27,17 @@ import {
   RefreshCw,
   Server,
   Settings2,
+  Share2,
+  Smartphone,
   Trash2,
   TriangleAlert,
+  UserRound,
+  Users,
 } from 'lucide-react';
-import * as QRCode from 'qrcode';
 
 import { Button } from '@/components/ui/button';
+import { presentRelayApproval } from '@/features/relay-share/relayApprovalStore';
+import { RelayShareDialog } from '@/features/relay-share/RelayShareDialog';
 import { useOptionalConfirmDialog } from '@/components/ui/confirm-dialog-provider';
 import { Input } from '@/components/ui/input';
 import { SegmentedControl } from '@/components/ui/segmented-control';
@@ -48,6 +53,7 @@ import {
   RELAY_DEPLOY_STEPS,
   RELAY_NAME_MAX_LENGTH,
   RELAY_UNINSTALL_STEPS,
+  type SelfHostedRelayAccountRelayView,
   type SelfHostedRelayCommand,
   type SelfHostedRelayCommandResult,
   type SelfHostedRelayDeployJobView,
@@ -56,6 +62,7 @@ import {
   type SelfHostedRelayErrorCode,
   type SelfHostedRelayServerCheck,
   type SelfHostedRelayState,
+  type SelfHostedRelayTenantView,
   type RelayDeployLogEntry,
 } from '../../../shared/selfHostedRelay';
 
@@ -80,6 +87,13 @@ export function useSelfHostedRelayState(enabled: boolean) {
         .catch(() => undefined);
     };
     refresh();
+    // 打开中转页时重读一次同账号其他电脑正在用的中转;之后的变化由 main 推送。
+    void api
+      .command({ type: 'refresh-account-relays' })
+      .then((result) => {
+        if (active) setState(result.state);
+      })
+      .catch(() => undefined);
     const off = api.onChanged((next) => {
       if (active) setState(next);
     });
@@ -297,113 +311,48 @@ function HostForm({
   );
 }
 
-function AddDevice({
-  state,
-  controller,
-  bare = false,
-}: {
-  state: SelfHostedRelayState;
-  controller: SelfHostedRelayController;
-  /** 已放在有边界的区域里时不再画顶部分隔线。 */
-  bare?: boolean;
-}) {
+/**
+ * 等待处理的加入申请:审批本身在全局弹窗里,点「稍后处理」关掉的申请留在这里,点「处理」再打开。
+ * 没有申请时不占位置。
+ */
+function PendingRequests({ state, bare = false }: { state: SelfHostedRelayState; bare?: boolean }) {
   const { t } = useTranslation();
-  const [qr, setQr] = useState<string | null>(null);
-  const link = state.joinLink?.link ?? null;
-  const k = 'settings.remoteControl.relay.add';
-
-  useEffect(() => {
-    if (!link) {
-      setQr(null);
-      return;
-    }
-    let active = true;
-    void QRCode.toDataURL(link, { margin: 2, width: 200 }).then((url) => {
-      if (active) setQr(url);
-    });
-    return () => {
-      active = false;
-    };
-  }, [link]);
-
+  const k = 'settings.remoteControl.relay.requests';
+  if (state.pendingRequests.length === 0) return null;
   return (
-    <div className={cn('flex flex-col gap-3', !bare && 'border-t border-[var(--border-default)] pt-3')}>
-      {link ? (
-        <>
-          <Hint>{t(`${k}.hint`)}</Hint>
-          <div className="flex items-start gap-4">
-            {qr ? (
-              <img src={qr} alt={t(`${k}.qrAlt`)} className="h-[160px] w-[160px] shrink-0 rounded-xl" />
-            ) : (
-              <div className="h-[160px] w-[160px] shrink-0 rounded-xl bg-[var(--surface-elevated)]" />
-            )}
-            <div className="flex min-w-0 flex-col gap-2">
-              <p className="break-all font-mono text-12 text-[var(--text-secondary)]">{link}</p>
-              <div className="flex gap-2">
-                <Button
-                  variant="secondary"
-                  size="sm"
-                  onClick={() => {
-                    void navigator.clipboard.writeText(link).then(() => toast.success(t(`${k}.copied`)));
-                  }}
-                >
-                  {t(`${k}.copy`)}
-                </Button>
-                <Button variant="secondary" size="sm" disabled={controller.busy} onClick={() => void controller.run({ type: 'create-join-link' })}>
-                  {t(`${k}.newLink`)}
-                </Button>
-              </div>
+    <div className={cn('flex flex-col gap-2', !bare && 'border-t border-[var(--border-default)] px-3 py-3')}>
+      <p className="text-11 text-[var(--text-tertiary)]">{t(`${k}.title`, { count: state.pendingRequests.length })}</p>
+      {state.pendingRequests.map((request) => (
+        <div key={request.requestId} className="flex items-center justify-between gap-3">
+          <div className="flex min-w-0 items-center gap-2.5">
+            <span
+              aria-hidden
+              className="flex h-7 w-7 shrink-0 items-center justify-center rounded-full border border-[var(--border-default)] text-[var(--text-secondary)]"
+            >
+              {request.accountName ? (
+                <UserRound size={14} />
+              ) : request.platform === 'ios' || request.platform === 'android' ? (
+                <Smartphone size={14} />
+              ) : (
+                <Monitor size={14} />
+              )}
+            </span>
+            <div className="flex min-w-0 flex-col">
+              <span className="truncate text-13 text-[var(--text-primary)]">{request.accountName ?? request.deviceName}</span>
+              <span className="text-11 text-[var(--text-tertiary)]">
+                {request.accountName ? t(`${k}.waitingAccount`, { device: request.deviceName }) : t(`${k}.waiting`)}
+              </span>
             </div>
           </div>
-          {state.pendingRequests.length === 0 ? <Hint>{t(`${k}.waiting`)}</Hint> : null}
-        </>
-      ) : (
-        <div className="flex items-center justify-between gap-4">
-          <Hint>{t(`${k}.intro`)}</Hint>
-          <Button size="sm" disabled={controller.busy} onClick={() => void controller.run({ type: 'create-join-link' })}>
-            {t(`${k}.create`)}
+          <Button
+            variant="secondary"
+            size="sm"
+            compact
+            data-settings-search-action="Open this relay join request for approval"
+            onClick={(event) => presentRelayApproval(request.requestId, event.currentTarget)}
+          >
+            {t(`${k}.open`)}
           </Button>
-        </div>
-      )}
-      {state.pendingRequests.map((request) => (
-        <div
-          key={request.requestId}
-          className="flex items-center justify-between gap-4 rounded-xl border border-[var(--border-default)] p-3"
-        >
-          <div className="flex min-w-0 flex-col gap-1">
-            <p className="truncate text-13 font-medium text-[var(--text-primary)]">
-              {t('settings.remoteControl.relay.requests.item', { name: request.deviceName })}
-            </p>
-            <p className="text-13 text-[var(--text-primary)]">
-              {t('settings.remoteControl.relay.requests.verify')}{' '}
-              <span className="font-mono text-16 font-medium tracking-[0.2em]">{request.verifyCode}</span>
-            </p>
-            {request.verified ? (
-              <Hint>
-                {t('settings.remoteControl.relay.requests.verifyHint')}
-                {request.replacesExisting ? ` ${t('settings.remoteControl.relay.requests.replaces')}` : ''}
-              </Hint>
-            ) : (
-              <ErrorText>{t('settings.remoteControl.relay.requests.unverified')}</ErrorText>
-            )}
-          </div>
-          <div className="flex shrink-0 gap-2">
-            <Button
-              variant="secondary"
-              size="sm"
-              disabled={controller.busy}
-              onClick={() => void controller.run({ type: 'decide', requestId: request.requestId, approve: false })}
-            >
-              {t('settings.remoteControl.relay.requests.reject')}
-            </Button>
-            <Button
-              size="sm"
-              disabled={controller.busy || !request.verified}
-              onClick={() => void controller.run({ type: 'decide', requestId: request.requestId, approve: true })}
-            >
-              {t('settings.remoteControl.relay.requests.approve')}
-            </Button>
-          </div>
         </div>
       ))}
     </div>
@@ -1490,6 +1439,8 @@ function Stat({ label, value, sub }: { label: string; value: React.ReactNode; su
 }
 
 const DAY_MS = 24 * 60 * 60 * 1000;
+/** 产品名不在连字符处折行(换成不断行连字符,显示相同)。 */
+const keepName = (text: string) => text.replace(/Agent-Net/g, 'Agent‑Net');
 
 /** 只有图标的操作:按 DESIGN.md §14.6 同时给可见 Tip 和无障碍名称。 */
 function IconAction({
@@ -1545,7 +1496,8 @@ function ServerDetails({
           <ErrorText>{t(`${MANAGE}.offline`)}</ErrorText>
         </div>
       ) : null}
-      <dl className="grid grid-cols-3 divide-x divide-[var(--border-default)]">
+      {/* 窄屏两列两行,宽屏四列;格与格之间一条分隔线。 */}
+      <dl className="grid grid-cols-2 border-[var(--border-default)] sm:grid-cols-4 [&>*]:border-[var(--border-default)] [&>*:nth-child(even)]:border-l [&>*:nth-child(n+3)]:border-t sm:[&>*:nth-child(n+3)]:border-t-0 sm:[&>*+*]:border-l">
         <Stat
           label={t(`${MANAGE}.devices`)}
           value={status?.devices !== undefined ? t(`${MANAGE}.deviceCount`, { count: status.devices }) : '—'}
@@ -1566,26 +1518,44 @@ function ServerDetails({
           label={t(`${MANAGE}.version`)}
           value={deployment.relayVersion}
           sub={
-            deployment.upgradeAvailable ? (
-              <Button
-                variant="secondary"
-                size="xs"
-                compact
-                className="mt-1"
-                disabled={busy}
-                onClick={() => void controller.run({ type: 'upgrade-deployment', relayId: deployment.relayId })}
-              >
-                {t(`${SERVER}.upgrade`, { version: state.bundledRelayVersion ?? '' })}
-              </Button>
-            ) : (
-              t(`${MANAGE}.latest`)
-            )
+            <>
+              {/* 中转带哪些连接:两种都有时由两端的 Agent-Net 开关决定实际用哪个。 */}
+              {status?.agentNet !== undefined ? (
+                <span className="block">{keepName(t(status.agentNet ? `${MANAGE}.protocolsBoth` : `${MANAGE}.protocolsLegacy`))}</span>
+              ) : null}
+              {deployment.upgradeAvailable ? (
+                <>
+                  {status?.online && !status.tenants ? <span className="block">{t(`${MANAGE}.upgradeForSharing`)}</span> : null}
+                  <Button
+                    variant="secondary"
+                    size="xs"
+                    compact
+                    className="mt-1"
+                    disabled={busy}
+                    onClick={() => void controller.run({ type: 'upgrade-deployment', relayId: deployment.relayId })}
+                  >
+                    {t(`${SERVER}.upgrade`, { version: state.bundledRelayVersion ?? '' })}
+                  </Button>
+                </>
+              ) : (
+                <span className="block">{t(`${MANAGE}.latest`)}</span>
+              )}
+            </>
           }
         />
+        <Stat
+          label={t(`${MANAGE}.connection`)}
+          value={state.connection === 'agent-net' ? 'Agent-Net' : 'Device Link'}
+          sub={keepName(t(state.connection === 'agent-net' ? `${MANAGE}.connectionEncrypted` : `${MANAGE}.connectionLegacy`))}
+        />
       </dl>
-      <div className="border-t border-[var(--border-default)] px-3 py-3">
-        {task ? <TaskPanel job={task} controller={controller} /> : <AddDevice state={state} controller={controller} bare />}
-      </div>
+      {task ? (
+        <div className="border-t border-[var(--border-default)] px-3 py-3">
+          <TaskPanel job={task} controller={controller} />
+        </div>
+      ) : (
+        <PendingRequests state={state} />
+      )}
     </div>
   );
 }
@@ -1595,6 +1565,49 @@ function ServerDetails({
  * 正在用的那条在自己那一行里展开详情(服务器中转的设备数、证书、添加设备;这台电脑当中转的加入链接)。
  * 部署到服务器的中转每台一行,各自可以切换、改名、移除;随时可以再部署到另一台服务器。
  */
+/**
+ * 主人:这条中转分享给了哪些账号。每个账号在中转上有自己的线路,互相看不到;
+ * 停止分享会删掉它在中转上的线路,它的设备立刻断开。
+ */
+function TenantList({ tenants, controller }: { tenants: SelfHostedRelayTenantView[]; controller: SelfHostedRelayController }) {
+  const { t } = useTranslation();
+  const confirm = useConfirm();
+  const k = 'settings.remoteControl.relay.tenants';
+  if (tenants.length === 0) return null;
+  const revoke = (tenant: SelfHostedRelayTenantView) => {
+    void confirm(
+      t(`${k}.revokeTitle`, { account: tenant.accountName }),
+      t(`${k}.revokeDescription`, { account: tenant.accountName }),
+      t(`${k}.revoke`),
+    ).then((ok) => {
+      if (ok) void controller.run({ type: 'revoke-tenant', tenantId: tenant.tenantId });
+    });
+  };
+  return (
+    <div className="flex flex-col gap-2" data-testid="relay-tenants">
+      <p className="px-1 text-12 font-medium text-[var(--text-secondary)]">{t(`${k}.title`)}</p>
+      <ul className="flex flex-col divide-y divide-[var(--border-default)] overflow-hidden rounded-xl bg-[var(--settings-input-bg)]">
+        {tenants.map((tenant) => (
+          <li key={tenant.tenantId} className="flex items-center justify-between gap-3 px-4 py-2.5">
+            <div className="flex min-w-0 items-center gap-2.5">
+              <UserRound aria-hidden size={15} className="shrink-0 text-[var(--text-tertiary)]" />
+              <div className="flex min-w-0 flex-col">
+                <span className="truncate text-13 font-medium text-[var(--text-primary)]">{tenant.accountName}</span>
+                <span className="text-12 text-[var(--text-secondary)]">
+                  {t(`${k}.devices`, { count: tenant.devices })} · {t(tenant.online ? `${k}.online` : `${k}.offline`)}
+                </span>
+              </div>
+            </div>
+            <IconAction label={t(`${k}.revoke`)} disabled={controller.busy} onClick={() => revoke(tenant)}>
+              <Trash2 aria-hidden size={14} />
+            </IconAction>
+          </li>
+        ))}
+      </ul>
+    </div>
+  );
+}
+
 export function RelayServicePanel({ controller }: { controller: SelfHostedRelayController }) {
   const { t } = useTranslation();
   const confirmDialog = useOptionalConfirmDialog();
@@ -1605,6 +1618,7 @@ export function RelayServicePanel({ controller }: { controller: SelfHostedRelayC
   const [deployInForm, setDeployInForm] = useState(false);
   const [deployOpenKey, setDeployOpenKey] = useState(0);
   const [renaming, setRenaming] = useState<SelfHostedRelayDeploymentView | null>(null);
+  const [sharing, setSharing] = useState(false);
   const { state, error } = controller;
   const hosts = useSshHosts(Boolean(state?.available), deployOpen);
   const k = 'settings.remoteControl.relay';
@@ -1640,7 +1654,11 @@ export function RelayServicePanel({ controller }: { controller: SelfHostedRelayC
   const isHost = relay?.origin === 'host';
   const isServer = relay?.origin === 'server';
   const isMember = relay?.origin === 'join';
-  const confirmKey = isHost ? 'owner' : isServer ? 'server' : 'member';
+  // 别人分享来的中转;这台电脑建的那份(主人)退出时,本账号经它加入的设备一起断开。
+  const shared = isMember ? relay?.shared ?? null : null;
+  const isSharedOwner = Boolean(shared && relay?.role === 'owner');
+  const confirmKey = isHost ? 'owner' : isServer ? 'server' : isSharedOwner ? 'sharedOwner' : 'member';
+  const leavingMember = (name: string) => t(isSharedOwner ? `${ROUTE}.switchFromShared` : `${ROUTE}.switchFromMember`, { name });
   const busy = controller.busy || job?.status === 'running';
 
   const switchToOfficial = async () => {
@@ -1659,10 +1677,9 @@ export function RelayServicePanel({ controller }: { controller: SelfHostedRelayC
   const switchToDeployment = async (deployment: SelfHostedRelayDeploymentView) => {
     const ok = !confirmDialog || (await confirmDialog.confirm({
       title: t(`${ROUTE}.switchTitle`, { name: deployment.name }),
-      description: t(
-        isHost ? `${ROUTE}.switchFromHost` : isMember ? `${ROUTE}.switchFromMember` : `${ROUTE}.switchFromOfficial`,
-        { name: isMember ? relay?.name ?? '' : deployment.name },
-      ),
+      description: isMember
+        ? leavingMember(relay?.name ?? '')
+        : t(isHost ? `${ROUTE}.switchFromHost` : `${ROUTE}.switchFromOfficial`, { name: deployment.name }),
       confirmText: t(`${ROUTE}.switchConfirm`),
       confirmVariant: isHost ? 'destructive' : 'default',
     }));
@@ -1673,6 +1690,19 @@ export function RelayServicePanel({ controller }: { controller: SelfHostedRelayC
   const switchToDeploymentById = (relayId: string) => {
     const deployment = state.deployments.find((item) => item.relayId === relayId);
     if (deployment) void switchToDeployment(deployment);
+  };
+  // 同账号另一台电脑的中转:不用链接,那台电脑自动放行;本机正开着的中转或已加入的中转会先退出。
+  const switchToAccountRelay = async (offer: SelfHostedRelayAccountRelayView) => {
+    const leaving = isHost ? t(`${ROUTE}.switchFromHost`) : isMember ? leavingMember(relay?.name ?? '') : '';
+    const ok = !confirmDialog || (await confirmDialog.confirm({
+      title: t(`${ROUTE}.switchTitle`, { name: offer.name }),
+      description: [t(`${ROUTE}.switchToAccount`, { device: offer.ownerDeviceName }), leaving].filter(Boolean).join(' '),
+      confirmText: t(`${ROUTE}.switchConfirm`),
+      confirmVariant: isHost ? 'destructive' : 'default',
+    }));
+    if (!ok) return;
+    setForm('none');
+    await controller.run({ type: 'join-account-relay', ownerDeviceId: offer.ownerDeviceId, relayId: offer.relayId });
   };
   const removeDeployment = (relayId: string) => {
     void confirm(t(`${SERVER}.removeTitle`), t(`${SERVER}.removeDescription`), t(`${SERVER}.remove`)).then((ok) => {
@@ -1712,6 +1742,19 @@ export function RelayServicePanel({ controller }: { controller: SelfHostedRelayC
   const switchAction = (name: string, onClick: () => void) => (
     <IconAction label={t(`${ROUTE}.useNamed`, { name })} disabled={busy} onClick={onClick}>
       <ArrowRightLeft aria-hidden size={14} />
+    </IconAction>
+  );
+  // 只出现在这台电脑是主人、且正在用的那条中转上(服务器中转或这台电脑当中转)。
+  const shareAction = (
+    <IconAction
+      label={t(`${k}.share.action`)}
+      disabled={busy}
+      onClick={() => {
+        controller.clearError();
+        setSharing(true);
+      }}
+    >
+      <Share2 aria-hidden size={14} />
     </IconAction>
   );
   const runningHint = (text: string) => (
@@ -1775,6 +1818,8 @@ export function RelayServicePanel({ controller }: { controller: SelfHostedRelayC
       <RouteSide
         switchAction={deployment.active ? null : switchAction(deployment.name, () => void switchToDeployment(deployment))}
         actions={[
+          // 分享要用主人凭证向中转要加入码:只有正在用的那个服务器中转能分享。
+          inUse && complete ? shareAction : null,
           <IconAction key="rename" label={t(`${ROUTE}.rename`)} disabled={busy} onClick={() => openRename(deployment)}>
             <Pencil aria-hidden size={14} />
           </IconAction>,
@@ -1811,6 +1856,49 @@ export function RelayServicePanel({ controller }: { controller: SelfHostedRelayC
       ? job
       : null;
 
+  // 同账号其他电脑正在用的中转:每个一行,只能切换;分享和管理在那台电脑上。
+  const accountRelays = state.accountRelays ?? [];
+  const accountJoin = 'accountRelayId' in state.join ? state.join : null;
+  const accountRow = (offer: SelfHostedRelayAccountRelayView) => {
+    const inUse = Boolean(isMember && relay?.relayId === offer.relayId);
+    const joining = accountJoin?.accountRelayId === offer.relayId && (accountJoin.status === 'connecting' || accountJoin.status === 'waiting');
+    const failed = accountJoin?.accountRelayId === offer.relayId && accountJoin.status === 'failed' ? accountJoin.error : null;
+    const address = offer.baseUrl.replace(/^https?:\/\//, '');
+    const kindTag = offer.kind === 'host' ? `${ROUTE}.kindComputer` : offer.kind === 'shared' ? `${ROUTE}.kindShared` : `${ROUTE}.kindServer`;
+    return (
+      <RouteRow
+        key={`${offer.ownerDeviceId}:${offer.relayId}`}
+        selected={inUse}
+        icon={offer.kind === 'host' ? <Monitor size={15} /> : offer.kind === 'shared' ? <Users size={15} /> : <Server size={15} />}
+        title={offer.name}
+        tag={t(kindTag)}
+        hint={
+          joining ? (
+            runningHint(t(`${ROUTE}.accountJoining`, { device: offer.ownerDeviceName }))
+          ) : (
+            <span className="flex min-w-0 flex-wrap items-center gap-x-1.5">
+              <span className="truncate font-mono">{address}</span>
+              {offer.kind === 'shared' && offer.sharedBy ? (
+                <>
+                  <span aria-hidden>·</span>
+                  <span>{t(`${ROUTE}.sharedBy`, { name: offer.sharedBy })}</span>
+                </>
+              ) : null}
+              <span aria-hidden>·</span>
+              <span>
+                {t(offer.kind === 'shared' ? `${ROUTE}.accountJoinedOn` : `${ROUTE}.accountManagedOn`, { device: offer.ownerDeviceName })}
+              </span>
+            </span>
+          )
+        }
+        side={<RouteSide switchAction={inUse || joining ? null : switchAction(offer.name, () => void switchToAccountRelay(offer))} />}
+      >
+        {failed ? <ErrorText>{t(`${k}.errors.${failed}`, { device: offer.ownerDeviceName })}</ErrorText> : null}
+      </RouteRow>
+    );
+  };
+  const joinedAccountRelay = Boolean(isMember && relay && accountRelays.some((offer) => offer.relayId === relay.relayId));
+
   return (
     <div className="flex flex-col gap-4">
       <div className="flex flex-col gap-2">
@@ -1842,6 +1930,7 @@ export function RelayServicePanel({ controller }: { controller: SelfHostedRelayC
               }
             />
           ) : null}
+          {accountRelays.map(accountRow)}
           <RouteRow
             selected={isHost}
             icon={<Monitor size={15} />}
@@ -1858,6 +1947,7 @@ export function RelayServicePanel({ controller }: { controller: SelfHostedRelayC
                 // 这台电脑当中转要先填端口等设置,切换就是打开设置窗口,在窗口里点「开启」。
                 switchAction={isHost ? null : switchAction(t(`${ROUTE}.hostTitle`), () => openForm('host'))}
                 actions={[
+                  isHost && state.host.running ? shareAction : null,
                   isHost ? (
                     <IconAction key="settings" label={t(`${k}.actions.editHost`)} onClick={() => openForm('host')}>
                       <Settings2 aria-hidden size={14} />
@@ -1867,19 +1957,29 @@ export function RelayServicePanel({ controller }: { controller: SelfHostedRelayC
               />
             }
           >
-            {isHost && state.host.running ? (
+            {isHost && state.host.running && state.pendingRequests.length > 0 ? (
               <div className="rounded-lg border border-[var(--border-default)] px-3 py-3">
-                <AddDevice state={state} controller={controller} bare />
+                <PendingRequests state={state} bare />
               </div>
             ) : null}
           </RouteRow>
-          {isMember && relay ? (
+          {isMember && relay && !joinedAccountRelay ? (
             <RouteRow
               selected
-              icon={<Link2 size={15} />}
+              icon={shared ? <Users size={15} /> : <Link2 size={15} />}
               title={relay.name}
-              tag={t(`${ROUTE}.kindJoined`)}
-              hint={<span className="font-mono">{relay.baseUrl}</span>}
+              tag={t(shared ? `${ROUTE}.kindShared` : `${ROUTE}.kindJoined`)}
+              hint={
+                <span className="flex min-w-0 flex-wrap items-center gap-x-1.5">
+                  <span className="truncate font-mono">{relay.baseUrl}</span>
+                  {shared ? (
+                    <>
+                      <span aria-hidden>·</span>
+                      <span>{shared.ownerName ? t(`${ROUTE}.sharedBy`, { name: shared.ownerName }) : t(`${ROUTE}.sharedByOther`)}</span>
+                    </>
+                  ) : null}
+                </span>
+              }
               side={<RouteSide />}
             />
           ) : null}
@@ -1913,11 +2013,18 @@ export function RelayServicePanel({ controller }: { controller: SelfHostedRelayC
         {isHost && state.host.error ? (
           <ErrorText>{t(`${k}.errors.${state.host.error}`, { port: state.host.port })}</ErrorText>
         ) : null}
+        {isServer || (isHost && state.host.running) || isSharedOwner ? (
+          <p className="flex items-start gap-2 text-12 leading-[1.5] text-[var(--text-tertiary)]">
+            <Info aria-hidden size={13} className="mt-0.5 shrink-0" />
+            {t(isSharedOwner ? `${ROUTE}.sharedOwnDevicesHint` : `${ROUTE}.ownDevicesHint`)}
+          </p>
+        ) : null}
         <p className="flex items-start gap-2 text-12 leading-[1.5] text-[var(--text-tertiary)]">
           <Info aria-hidden size={13} className="mt-0.5 shrink-0" />
           {t(`${k}.limits`)}
         </p>
       </div>
+      {state.tenants && (isServer || isHost) ? <TenantList tenants={state.tenants} controller={controller} /> : null}
       {/* 窗口里的命令失败写在窗口里,这里只显示列表上的操作(切换、移除等)出的错。 */}
       {!deployOpen && form === 'none' && !renaming && error && error !== 'CANCELLED' ? (
         <CommandError error={error} port={state.host.port} detail={controller.errorDetail} />
@@ -1931,13 +2038,16 @@ export function RelayServicePanel({ controller }: { controller: SelfHostedRelayC
         <HostForm
           state={state}
           controller={controller}
-          notice={!isHost && isMember ? t(`${ROUTE}.switchFromMember`, { name: relay?.name ?? '' }) : null}
+          notice={!isHost && isMember ? leavingMember(relay?.name ?? '') : null}
           onDone={closeForm}
         />
       </FormDialog>
       <FormDialog open={form === 'join'} onClose={closeJoin} title={t(`${k}.join.title`)} description={t(`${k}.join.hint`)}>
         <JoinForm state={state} controller={controller} onClose={closeJoin} />
       </FormDialog>
+      {sharing && relay && relay.role === 'owner' ? (
+        <RelayShareDialog relayName={relay.name} onClose={() => setSharing(false)} />
+      ) : null}
       <FormDialog open={Boolean(renaming)} onClose={closeRename} title={t(`${ROUTE}.rename`)} description={t(`${ROUTE}.renameHint`)}>
         {renaming ? <RenameForm key={renaming.relayId} deployment={renaming} controller={controller} onClose={closeRename} /> : null}
       </FormDialog>

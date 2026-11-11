@@ -49,6 +49,7 @@ export interface SendToWorkerDeps {
         steerFallbackReason?: SteerFallbackReason;
         /** 目标队列里有用户停点:本条只是入队,不会被自动执行。 */
         queueHeld?: boolean;
+        supersededFailureNotices?: SupersededFailureNotice[];
       },
       'NOT_FOUND' | 'ARCHIVED' | 'DELETED' | 'BUSY' | 'AGENT_NOT_READY' | 'INVALID_ARGS'
     >
@@ -69,14 +70,42 @@ export interface SendToWorkerDeps {
           | 'unconfirmed'
           | 'unsupported';
         queuePaused: boolean;
+        supersededFailureNotices?: SupersededFailureNotice[];
       },
       'NOT_FOUND' | 'ARCHIVED' | 'DELETED' | 'BUSY' | 'AGENT_NOT_READY' | 'INVALID_ARGS'
     >
   >;
 }
 
+/** 这次派发取代的、Lead 还没读到的该 worker 异常终止回报。 */
+export interface SupersededFailureNotice {
+  queuedMessageId: string;
+  text: string;
+}
+
+/**
+ * 回执里说明被撤下的异常终止回报：该 worker 上一轮出错的通知原本排在 Lead 队列里，Lead 既然已经
+ * 重新派活，就不必之后再被它单独唤醒一轮；正文写在这里，信息不丢。
+ */
+function describeSupersededFailureNotices(
+  notices: readonly SupersededFailureNotice[] | undefined,
+): Record<string, unknown> {
+  if (!notices?.length) return {};
+  return {
+    superseded_failure_notices: notices.map((notice) => ({
+      queued_message_id: notice.queuedMessageId,
+      text: notice.text,
+    })),
+    superseded_failure_note:
+      'This worker\'s previous turn ended in error. Its failure notice was still unread in your queue and has been ' +
+      'withdrawn because this dispatch supersedes it; the notice text is in superseded_failure_notices.',
+  };
+}
+
 const DESCRIPTION =
   '向指定 worker 投递消息(派活/追问)。' +
+  '消息正文要自包含:worker 不一定能读到你工作目录里的文件(独立 worktree 里没有你未提交的文件,另一台电脑上的 worker 读不到这台电脑的任何文件),任务要点写进正文,文件只作补充并给绝对路径。' +
+  '出错(status=error)的 worker 原样保留,向它派发即原地继续;它排在你队列里的异常终止回报会随之撤下并写进回执(superseded_failure_notices)。' +
   'worker 正忙时消息自动排队(wake_kind=queued)并回传 queued_message_id;' +
   '同时回传 other_queued_messages:你此前发给它、它还没读到的其他消息(编号与开头一行),非空时先判断该合并、改写还是撤回,不要再发一条让它忽略前面消息的说明;' +
   '在它被消费前可用 get_worker_queue_status / update_queued_message / cancel_queued_message 查看、修改或撤回。' +
@@ -184,6 +213,7 @@ export function registerSendToWorkerTool(
         ...(result.wakeKind === 'queued' && result.queuedMessageId
           ? await describeQueuedMessage(deps, ctx.sessionId, target_session_id, result.queuedMessageId)
           : {}),
+        ...describeSupersededFailureNotices(result.supersededFailureNotices),
       });
     },
   });
@@ -220,6 +250,7 @@ export function registerSendToWorkerTool(
         queued_message_id: result.queuedMessageId,
         stop_outcome: result.stopOutcome,
         queue_paused: result.queuePaused,
+        ...describeSupersededFailureNotices(result.supersededFailureNotices),
       });
     },
   });

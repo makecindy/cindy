@@ -1,8 +1,5 @@
-import type { TaskCompletionDeliveryHost } from './taskCompletionDeliveryHost.js';
 import { botLearningTracker } from './botLearningTracker.js';
-import { countNightlyLearningTurn } from './botNightlyLearningCounter.js';
 import { learningTurnIdentity } from './botLearningFeedback.js';
-import type { BotDelegationService } from './botDelegationService.js';
 import { settleBotGroupLaneTerminal, type BotGroupChatService, type BotGroupLaneTerminal } from './botGroupChatService.js';
 import type { AgentEvent, Session } from '@cindy/maker-core';
 
@@ -73,8 +70,6 @@ export interface FinishSessionTerminalEventDeps {
   ) => Promise<void>;
   /** Hold a recovery-owned terminal until its final failure surface settles. */
   readonly deferUnsuccessfulProductTurn?: (owner: ProductTurnFailureOwner) => void;
-  readonly taskCompletionDeliveryHolder?: Pick<TaskCompletionDeliveryHost, 'settleTerminal'> | null;
-  readonly botDelegationServiceHolder: Pick<BotDelegationService, 'settleSession'> | null;
   /** Resolves a Bot group member turn when its hidden group lane finishes. */
   readonly botGroupChatServiceHolder?: Pick<BotGroupChatService, 'settleLaneTurn'> | null;
   readonly pendingFailedTurnAssistantPersistId: Map<string, string>;
@@ -662,11 +657,6 @@ export function finishSessionTerminalEvent(
       !deps.agentInputCoordinatorHolder?.isAutoResumePending(session.id) &&
       !deps.agentInputCoordinatorHolder?.isAutoResumeDeferred(session.id)
     ) {
-      // 夜间学习只在这里计一次数（不调用模型）；非伙伴、自动输入与重放的终态由计数模块自己排除。
-      if (turnBoundaryAssistantPersistId && !session.remoteHostId) {
-        void countNightlyLearningTurn(session.id, turnBoundaryAssistantPersistId).catch(() =>
-          deps.log.warn('Nightly learning turn count did not complete'));
-      }
       const callback = deps.onSuccessfulProductTurn;
       if (callback && terminalOwner) {
         void callback(session.id, terminalOwner).catch(() =>
@@ -699,54 +689,6 @@ export function finishSessionTerminalEvent(
       ) {
         notifyUnsuccessfulProductTurn();
       }
-      // Group lane turns are attributed by the accepted input, captured before the queue drains.
-      const botDelegationPendingInputClientIds =
-        deps.agentInputCoordinatorHolder
-          ?.getQueueControlSnapshot(session.id)
-          .pendingQueue.flatMap((item) => [
-            item.clientId,
-            ...(item.supersedesUserClientId ? [item.supersedesUserClientId] : []),
-            ...(item.retrySourceClientId ? [item.retrySourceClientId] : []),
-          ]) ?? [];
-      void (async () => {
-        try {
-          const doneData = event.data as {
-            result?: unknown;
-            message?: unknown;
-            reason?: unknown;
-          } | null;
-          if (typeof event.sessionTurnGeneration === 'number') {
-            await deps.taskCompletionDeliveryHolder?.settleTerminal({ sessionId: session.id,
-              execution: { instanceId: event.sessionInstanceId ?? session.instanceId, generation: event.sessionTurnGeneration },
-              successful: !unsuccessfulBoundary && !recoveryOwnsUnsuccessfulBoundary && !autoResumeSuppressesPersist,
-              text: typeof doneData?.result === 'string' ? doneData.result : '', messageClientId: turnAssistantPersistId,
-            }).catch(() => deps.log.warn('Task completion delivery settlement deferred'));
-          }
-          await deps.botDelegationServiceHolder?.settleSession({
-            childSessionId: session.id,
-            execution:
-              typeof event.sessionTurnGeneration === 'number'
-                ? {
-                    instanceId: event.sessionInstanceId ?? session.instanceId,
-                    generation: event.sessionTurnGeneration,
-                  }
-                : null,
-            outcome: isTerminalTurnErrorEvent(event) ? 'error' : 'done',
-            resultText: typeof doneData?.result === 'string' ? doneData.result : '',
-            error: [doneData?.message, doneData?.reason].find(
-              (value): value is string => typeof value === 'string' && value.length > 0,
-            ),
-            hadPendingInputAtTerminal: botDelegationPendingInputClientIds.length > 0,
-            pendingInputClientIds: botDelegationPendingInputClientIds,
-            resultMessageClientId: turnAssistantPersistId,
-          });
-        } catch (error) {
-          deps.log.warn('Bot delegation terminal settlement failed', {
-            sessionId: session.id,
-            error: error instanceof Error ? error.message : String(error),
-          });
-        }
-      })();
       if (
         groupTerminal && deps.botGroupChatServiceHolder &&
         !providerGroupHeldWorkerTerminal

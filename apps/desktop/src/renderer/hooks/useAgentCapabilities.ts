@@ -177,9 +177,9 @@ export function canExposeWritableDirsChange(options: {
 /**
  * 手动压缩调用通道判定 —— 上下文环压缩入口与请求分流的唯一判据(#1927 / #1933 review):
  *   - 真实 Claude Code 会话 → `claude-input`(输入协调器 maker:input:compact,SDK 斜杠命令通道);
- *   - 其余 agent 声明 manualCompact.supported(当前仅 pi)→ `compact-session`
+ *   - 其余 agent 声明 manualCompact.supported(Pi / Codex)→ `compact-session`
  *     (capability-aware 通用通道 maker:compact-session,本地 IPC / device-link 隧道均可路由);
- *   - 其余(Codex 等无手动压缩能力)→ null = 无入口。
+ *   - 其余(未声明手动压缩能力)→ null = 无入口。
  * 刻意不按 agentKind 扩排除列表:新 agent 只需在 maker-core 声明能力即可自动接入。
  */
 export type CompactChannel = 'claude-input' | 'compact-session';

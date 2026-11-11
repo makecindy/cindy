@@ -253,6 +253,20 @@ export function resolveModelDefaultContextWindow(
     ? model.contextWindow : null;
 }
 
+/** Resolve output capacity on the selected connection, without borrowing a same-name route. */
+export function resolveModelMaxOutputTokens(
+  catalog: Pick<Catalog, 'providers'>,
+  agent: AgentKind,
+  providerId: string | null | undefined,
+  modelId: string,
+): number | null {
+  if (!providerId) return null;
+  const provider = catalog.providers.find((entry) => entry.id === providerId);
+  if (!provider || provider.routing[agent]?.disabled === true) return null;
+  const value = provider.models[agent]?.find((entry) => entry.id === modelId)?.maxOutput;
+  return typeof value === 'number' && Number.isSafeInteger(value) && value > 0 ? value : null;
+}
+
 /**
  * 目录运行时刷新后原地替换两个 agent 的模型能力。不能直接赋新数组：本地 Session 持有 agent
  * capabilities 引用，原地 splice 才能让 provider:list 与实际可发送模型在同一次广播前对齐。

@@ -27,7 +27,6 @@
  */
 
 import { createHmac, randomBytes } from 'node:crypto';
-import { BOT_DENIED_TOOLS_VENDOR_KEY } from '../../shared/botSystemSkills.js';
 
 import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import {
@@ -267,9 +266,6 @@ async function getPiExtraSpawnConfig(
       ...((sessionCtx?.botMcpPolicy || sessionCtx?.memoryScopeKey?.startsWith('bot:'))
         && servers.some((server) => server.name === 'cindy_memory' || server.name === 'cindy_helper')
         ? { botMemoryFacade: true }
-        : {}),
-      ...(Array.isArray(vendorOptions[BOT_DENIED_TOOLS_VENDOR_KEY])
-        ? { deniedTools: (vendorOptions[BOT_DENIED_TOOLS_VENDOR_KEY] as unknown[]).filter((name): name is string => typeof name === 'string') }
         : {}),
     };
   };
