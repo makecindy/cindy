@@ -30,6 +30,7 @@ import { UserMessage } from '../UserMessage';
 import { MemoryRouter } from 'react-router-dom';
 import { toMessageAutomationOrigin } from '@/lib/messageAutomationOrigin';
 import { _resetLinkOpenPreferenceForTests } from '@/hooks/useLinkOpenPreference';
+import { EMPTY_PLUGIN_UI_MESSAGE_CANDIDATES } from '@/cindy-brain/PluginUiContributions';
 
 beforeEach(() => {
   vi.clearAllMocks();
@@ -70,7 +71,7 @@ describe('message link entry points', () => {
     const body = 'Worker A (worker-1): done\nA full report\nWorker B (worker-2): error\nB full report';
     const automationOrigin = toMessageAutomationOrigin({ kind: 'orca', senderLabel: 'A', senderSessionId: 'worker-1',
       ...(count ? { autoBridge: true, autoBridgeBatchCount: count } : {}) });
-    render(<MemoryRouter><UserMessage content={JSON.stringify({ orcaSource: 'worker', content: body })}
+    render(<MemoryRouter><UserMessage pluginUi={EMPTY_PLUGIN_UI_MESSAGE_CANDIDATES} content={JSON.stringify({ orcaSource: 'worker', content: body })}
       workingDir="/workspace" automationOrigin={automationOrigin} /></MemoryRouter>);
     fireEvent.click(screen.getByRole('button', { name: count
       ? `chat.userMessage.orcaFromWorkerBatch:${count}` : 'chat.userMessage.orcaFromWorkerNamed:A' }));
