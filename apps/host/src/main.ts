@@ -11,7 +11,7 @@ import { resolveSessionExecutionSelection } from '../../desktop/src/main/maker-i
 import { buildLocalProviderRoutingContext } from '../../desktop/src/main/maker-ipc/orcaProviderRoutingContext.js';
 import { configureProvisionalSessions, isProvisionalSession, forgetProvisionalSession, sweepLeftoverProvisionalSessions } from '../../desktop/src/main/localDb/provisionalSessions.js';
 import { commitProvisionalSession, discardProvisionalSessionRow } from '../../desktop/src/main/localDb/sessionDraftLifecycle.js';
-import { activeOwnerScopeKey, beginAppSessionBoundary, commitVolatileAppSession, getActiveAppSession, isAppSessionBoundaryPending } from '../../desktop/src/main/appSessionState.js';
+import { activeOwnerScopeKey, beginAppSessionBoundary, commitVolatileAppSession, getActiveAppSession, getActiveDataOwnerPushStamp, isAppSessionBoundaryPending } from '../../desktop/src/main/appSessionState.js';
 import { statWorkingDirectory, workdirProbeHostClient } from '../../desktop/src/main/workdir-probe-host/index.js';
 import { mapMembershipToAuthUser, type User as AccountUser } from '../../desktop/src/shared/authUser.js';
 import { resolveSessionDevice, canRegisterHostDevice } from './auth/device-identity.mjs';
@@ -58,7 +58,10 @@ import { attachAgentsToMakerMemory, createHostMemoryManager, createHostMemoryMcp
 import { createHostAgentGraph } from './agent/runtime.mjs';
 import { createHostMcpRuntime } from './agent/mcp-runtime.js';
 import { createHostAgentAuth } from './agent/auth-service.js';
-import { initLogger } from '../../desktop/src/main/logger.js';
+import { createLogger, initLogger } from '../../desktop/src/main/logger.js';
+import { createHostIpcRoute } from './ipc-route.mjs';
+import { projectHostAuthState } from './auth-state.js';
+import { listSideChats } from '../../desktop/src/main/maker-orchestration/side-chat-list.js';
 import { createHostModelAccess } from './agent/model-access.js';
 import { MODEL_ACCESS_STATUS_CHANNEL } from '../../desktop/src/shared/modelAccess.js';
 import { createProviderCatalog } from './agent/providers.mjs';
@@ -925,7 +928,20 @@ function writeProfileAppearance(patch: unknown) {
   return applied;
 }
 
+const ipcLog = createLogger('host-ipc');
+/** Registered desktop IPC channels; local bearer callers only (see ipc-route.mjs). */
+const ipcRoute = createHostIpcRoute({
+  instanceId,
+  bindings: {
+    'maker:side-chat:list:v1': ([sourceSessionId]) => listSideChats(sourceSessionId as string),
+  },
+  readOwnerStamp: getActiveDataOwnerPushStamp,
+  isOwnerBoundaryPending: isAppSessionBoundaryPending,
+  log: event => ipcLog.info('ipc call', event),
+});
+
 const serverDeps = {
+  ipcRoute,
   browserBackend: (handler: keyof NonNullable<typeof platformTools>['browserSettings'], payload: unknown) => {
     if (!platformTools) throw new Error('HOST_RUNTIME_NOT_READY');
     return platformTools.browserSettings[handler](undefined, payload);
@@ -1440,15 +1456,8 @@ const serverDeps = {
 };
 
 function projectAuthState() {
-  const authenticated = Boolean(account.authenticated && accountUser && accountUser.id === runtime.owner);
-  return {
-    authenticated, isAuthenticated: authenticated, user: authenticated ? accountUser : null,
-    realm: account.realm, owner: runtime.owner, dataOwnerId: authenticated ? runtime.owner : null,
-    mode: authenticated ? 'cloud' : 'signed-out', canEnterApp: authenticated,
-    ownerGeneration: getActiveAppSession().generation, isCanary: false, deviceId: currentDeviceId,
-    hasAccountDeletionReceipt: false, accountDeletionRestored: false,
-    credentialStoreUnavailable: Boolean(account.error),
-  };
+  return projectHostAuthState({ account, accountUser, owner: runtime.owner,
+    generation: getActiveAppSession().generation, deviceId: currentDeviceId });
 }
 
 /** Ordered disposal also runs after partial startup or a failed sign-out. */

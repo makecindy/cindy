@@ -41,3 +41,31 @@ Host SSE v2 由 `protocol=2` 和 `x-cindy-event-protocol: 2` 双向确认，新�
 升级工具必须继续尊重 `client-migration.json` / `clientHandoffReady: false`；本 PR 不实施
 profile 所有权迁移或开启日常桌面迁移。实现与验证边界见
 [窗口交接地基](../../host/client-handoff-foundation.md)。
+
+## 实验性 Host 通用 IPC 路由（未发布）
+
+已登记的桌面 IPC 通道在客户端模式下经 `POST /api/ipc/<通道名>` 转给 Host；登记表
+`packages/maker-shared/src/hostIpcRegistry.ts` 是唯一合同，网页、桌面代理与 Host 共用，
+处理函数只在 Host（`apps/host/src/ipc-route.mjs`）绑定。第一批只开放本机 bearer 调用方
+（`local`）与只读条目，不经 Device Link：Host 的 Device Link 只派发 `service.mjs`，碰不到
+这张表；网页 cookie 调用一律 403，且与“通道不存在”的回答相同。
+
+- **跨版本合同**：每个条目带合同指纹（通道名、语义版本、参数与返回形状）。窗口与 Host 可以
+  长期版本不一，改已登记条目的签名必须换通道名，指纹快照测试会拦住原地修改。
+- **协商**：代理在首次调用前取一次 `POST /control/ipc-manifest`（bearer + `x-cindy-host-instance`），
+  按 instance 缓存；清单里没有、指纹不符、旧 Host 回 404，都按 `UNSUPPORTED_CAPABILITY` 处理，
+  已有专用路由照常工作。事件流重连后重新协商。清单只是协商，Host 仍逐次检查。
+- **准入顺序**：调用方受众 → 实例头（缺失 428 `host_instance_required`，不符 409
+  `host_instance_changed`）→ 登记（404 `channel_unknown`；登记但未绑定 501 `channel_unsupported`）
+  → `x-cindy-ipc-contract` 指纹（409 `contract_mismatch`）→ 请求体 `owner`
+  （`{ dataOwnerId, ownerGeneration }`，取自窗口当前显示的 Host 认证状态，与入口的 app session
+  不符回 409 `owner_scope_changed`）→ 参数校验（400 `INVALID_PARAMS`）。处理函数返回后再比一次
+  owner，变了就丢弃结果。成功回 `{ ok: true, result }`，失败回 `{ ok: false, error: { code, message } }`；
+  带类型的 `[CODE] message` 错误保留原码，其它错误不回传原文。日志只记通道、调用方类别、结果码与耗时。
+- **代理恢复**：409 `owner_scope_changed` 不重试，合并刷新一次认证状态。换 instance 或断线时，
+  并发调用共用一次 `/control/attachment` 与重新协商；只读条目仅在 Host 就绪、同一账号
+  （同一 instance 内代次也相同）、清单仍含同一指纹时重试一次。写条目以后在结果不确定时一律不重放。
+- **与内嵌模式的已知差异**：参数不合法时错误码相同（`INVALID_PARAMS`），文字来自 Host 的校验器，
+  可能与内嵌处理函数不同；内嵌 IPC 没有超时，代理按条目超时（默认 30 秒）后中止并回
+  `CONNECTION_TIMEOUT`。
+- 不改变 Device Link 帧、relay、官方或自建中转 API，没有新增需要中转识别的字段。
