@@ -7,6 +7,20 @@ import type {
 } from '../../../src/shared/providerShareInsights';
 import type { ProviderShareReceived } from '@cindy/device-link';
 import { DEFAULT_REMOTE_AGENT_LIMITS, type RemoteAgentLimitsView } from '../../../src/shared/remoteAgentLimits';
+import type { ProviderGroupConfig, ProviderGroupView } from '../../../src/shared/providerGroup';
+
+const ownerGroupConfig: ProviderGroupConfig = {
+  strategy: 'least', autoSwitch: true, allowFast: true,
+  members: [
+    { key: 'local', kind: 'local', agentDeviceId: null, providerId: 'xd', label: 'Mac mini', limit: 10, weight: 1, paused: false },
+    { key: 'device:work-pc:xd', kind: 'device', agentDeviceId: 'work-pc', providerId: 'xd', label: 'Work PC', limit: 10, weight: 1, paused: false },
+  ],
+};
+const ownerGroup: ProviderGroupView = {
+  providerId: 'xd',
+  config: ownerGroupConfig,
+  members: ownerGroupConfig.members.map(member => ({ ...member, state: 'available', running: 1, appVersion: '0.1.130' })),
+};
 
 const now = Date.parse('2026-10-19T12:00:00Z');
 const share: ProviderShareReceived = {
@@ -237,7 +251,11 @@ void mountPage({
         onControlTargetChanged: subscription('controlTarget'),
       },
       providerGroup: {
-        command: async (cmd: { action: string }) => (cmd.action === 'list' ? {} : null),
+        command: async (cmd: { action: string }) => {
+          if (cmd.action === 'list') return ctx.case === 'owner' ? { xd: ownerGroup.config } : {};
+          if (cmd.action === 'get') return ctx.case === 'owner' ? ownerGroup : { providerId: 'xd', config: null, members: [] };
+          return forbid(`providerGroup.${cmd.action}`)();
+        },
         onChanged: subscription('groupChanged'),
       },
       providerShare: {

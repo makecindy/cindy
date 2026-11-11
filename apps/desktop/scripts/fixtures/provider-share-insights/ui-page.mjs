@@ -9,7 +9,7 @@ export default {
     'Live cross-account transport, persisted permissions, real upstream quota, Windows. All numbers and names are fixture data.',
   stubs: {
     'src/renderer/hooks/useProviders': {
-      partial: 'export const useProviders = () => ({ providers: [], loading: false });',
+      partial: `export const useProviders = () => ({ providers: [{ id: 'xd', name: 'Cindy AI', source: 'builtin', auth: { method: 'oauth', native: 'claude' }, routing: {}, models: {}, subscriptionFastPolicy: { allowFast: true } }], loading: false });`,
     },
     'src/renderer/hooks/useDeviceProviders': {
       partial: `export const useDeviceProviders = () => ({ providers: [{ id: 'xd', name: 'Cindy AI', routing: {}, models: { 'claude-code': [{ id: 'claude-sonnet-4-6', name: 'Claude Sonnet 4.6' }, { id: 'claude-opus-4-6', name: 'Claude Opus 4.6' }], codex: [{ id: 'gpt-5.5', name: 'GPT-5.5' }] } }], loading: false, error: null, unsupported: false });`,
@@ -17,7 +17,7 @@ export default {
   },
   cases: {
     owner: {
-      about: 'Owner detail with two independent switches; writes affect fixture memory only',
+      about: 'Owner detail with a two-computer subscription group and independent visibility switches; writes affect fixture memory only',
     },
     default: { about: 'Both capabilities; usage collapsed, models visible at desktop height' },
     expanded: {
@@ -58,6 +58,10 @@ export default {
   },
   async check(page, ui) {
     if (ui.case === 'owner') {
+      // 2026-11-11: a duplicate account Fast card shrank into a line below the page title.
+      // Render the real page with a subscription group (previous fixture had no provider).
+      // UI tier: only the group's Fast switch belongs on this page; account control is in provider details.
+      assert.equal(await page.getByRole('switch', { name: await ui.t('subscriptionFastPolicy.label'), exact: true }).count(), 1);
       // The owner page reads run limits (including idle reclaim) on mount. A missing fixture
       // reply would turn that read into a forbidden operation and render an error.
       const idleMinutes = page.getByTestId('remote-agent-limit-idleMinutes');
