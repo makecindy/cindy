@@ -156,7 +156,7 @@ describe('E4D resolveVibrancyConfig(familyId→vibrancy/backgroundColor 映射)'
     process.env.XDT_BACKDROP_MATERIAL = 'none';
     expect(
       resolveVibrancyConfig('cindy', false, 'win32', {
-        getSystemVersion: () => '10.0.22000',
+        getSystemVersion: () => '10.0.22621',
       }),
     ).toEqual({
       vibrancy: null,
@@ -195,6 +195,33 @@ describe('E4D resolveVibrancyConfig(familyId→vibrancy/backgroundColor 映射)'
       backgroundMaterial: 'none',
     });
   });
+
+  // PR #9689 P2: the desktop override was gated at 22621 but the theme fallback
+  // still enabled Acrylic at 22000. Unit: cover both entry paths and the boundary
+  // in both themes; prior coverage only checked Win10 and supported Win11 builds.
+  it.each(['10.0.22000', '10.0.22620', '10.0.22621'])(
+    'win32 %s uses the same backdrop capability for desktop and theme defaults',
+    (systemVersion) => {
+      const supported = systemVersion === '10.0.22621';
+      const win = {} as BrowserWindow;
+      for (const isDark of [false, true]) {
+        for (const desktopBlur of [null, 0, 7]) {
+          setWindowDesktopBlur(win, desktopBlur);
+          expect(resolveWindowVibrancyConfig(win, 'cindy', isDark, 'win32', {
+            getSystemVersion: () => systemVersion,
+          })).toEqual({
+            vibrancy: null,
+            backgroundMaterial: supported ? 'acrylic' : 'none',
+            backgroundColor: supported
+              ? desktopBlur === null
+                ? isDark ? 'rgba(5, 5, 5, 0.85)' : 'rgba(238, 238, 233, 0.85)'
+                : '#00000000'
+              : isDark ? '#1f1f1e' : '#f8f8f6',
+          });
+        }
+      }
+    },
+  );
 
   it('win32 × 非 CINDY:回退不透明 surface', () => {
     process.env.XDT_BACKDROP_MATERIAL = 'mica';

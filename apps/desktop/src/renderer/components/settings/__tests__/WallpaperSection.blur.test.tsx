@@ -189,6 +189,9 @@ describe('wallpaper blur gesture persistence', () => {
   // slider is unavailable; systems without that material have no desktop to reveal.
   it.each([
     ['10.0.22631', true],
+    ['10.0.22621', true],
+    ['10.0.22620', false],
+    ['10.0.22000', false],
     ['10.0.19045', false],
   ] as const)('Windows %s desktop controls follow the native material', (osRelease, supported) => {
     const api = (window as unknown as { electronAPI: Record<string, unknown> }).electronAPI;

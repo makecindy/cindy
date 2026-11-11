@@ -2,7 +2,7 @@
  * 无壁纸时采用用户的桌面模糊数值；以下为没有桌面覆盖状态的主题默认值。
  * E4D 毛玻璃 vibrancy 配置(R1 audit,用户裁决透壁纸 2026-07-17)。
  * 仅 CINDY family 启用 macOS vibrancy + 透明底(透出桌面壁纸);其他 family 恢复
- * 不透明。Windows 11 CINDY family 启用 Electron backgroundMaterial;Windows 10/Linux
+ * 不透明。Windows 11 22H2+ CINDY family 启用 Electron backgroundMaterial;旧版 Windows/Linux
  * 回退不透明。
  */
 import type { BrowserWindow } from 'electron';
@@ -72,19 +72,6 @@ function readWindowsSystemVersion(options?: ResolveVibrancyConfigOptions): strin
   }
 }
 
-function parseWindowsBuild(systemVersion: string | null): number | null {
-  if (!systemVersion) return null;
-  const parts = systemVersion.trim().split('.');
-  if (parts.length < 3) return null;
-  const build = Number.parseInt(parts[2] ?? '', 10);
-  return Number.isFinite(build) ? build : null;
-}
-
-function isWindows11(options?: ResolveVibrancyConfigOptions): boolean {
-  const build = parseWindowsBuild(readWindowsSystemVersion(options));
-  return build !== null && build >= 22000;
-}
-
 function resolveBackdropMaterial(): WindowsBackdropMaterial {
   const raw = process.env.XDT_BACKDROP_MATERIAL;
   if (!raw) return 'acrylic';
@@ -104,10 +91,13 @@ export function resolveVibrancyConfig(
   platform: string,
   options?: ResolveVibrancyConfigOptions,
 ): VibrancyConfig {
+  const supportsBackdrop = supportsDesktopBackdrop(
+    platform, platform === 'win32' ? readWindowsSystemVersion(options) : null,
+  );
   if (
     !options?.wallpaperCovered &&
     typeof options?.desktopBlur === 'number' &&
-    supportsDesktopBackdrop(platform, platform === 'win32' ? readWindowsSystemVersion(options) : null)
+    supportsBackdrop
   ) {
     return {
       vibrancy: platform === 'darwin' && options.desktopBlur ? 'under-window' : null,
@@ -133,7 +123,7 @@ export function resolveVibrancyConfig(
     };
   }
   if (platform === 'win32') {
-    if (isCindy && isWindows11(options)) {
+    if (isCindy && supportsBackdrop) {
       const backgroundMaterial = resolveBackdropMaterial();
       return {
         vibrancy: null,
