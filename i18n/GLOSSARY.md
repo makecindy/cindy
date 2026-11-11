@@ -31,7 +31,7 @@
 | **Author** | 作者 | 作者 | 作成者 | 작성자 | auteur | Autor | Autor | Autor | Autor | 作者 | 作者 | zh-CN: 提交者（仅当英文含 Author）；zh-CN: 提出者（仅当英文含 Author）；zh-TW: 提交者（仅当英文含 Author）；zh-TW: 提出者（仅当英文含 Author） |
 | **Automation** | 自动化 | 自動化 | 自動化 | 자동화 | automatisation | Automatización | Automatisierung | Automatização | Automação | 自運 | 自运 | ja: オートメーション；ko: 오토메이션 |
 | **Balance** | 余额 | 餘額 | 残高 | 잔액 | solde | Saldo | Guthaben | Saldo | Saldo | 餘資 | 余资 | zh-CN: 额度（仅当英文含 Balance）；zh-TW: 額度（仅当英文含 Balance） |
-| **Discover Buddies** | 发现伙伴 | 發現夥伴 | 仲間を探す | 동반자 찾기 | Découvrir des amis | Descubrir amigos | Freunde entdecken | Descobrir amigos | Descobrir amigos | — | — | — |
+| **Discover Buddies** | 发现伙伴 | 發現夥伴 | 仲間を探す | 동반자 찾기 | Découvrir des amis | Descubrir amigos | Freunde entdecken | Descobrir amigos | Descobrir amigos | 訪同伴 | 访同伴 | — |
 | **Chat** | 对话 | 對話 | チャット | 채팅 | conversation | Conversación | `Chat`（保留英文） | Conversa | Conversa | 言談 | 言谈 | zh-CN: 聊天；zh-TW: 聊天；zh-Hant-x-lzh: 聊天；zh-Hans-x-lzh: 聊天 |
 | **Collaboration** | 协同 | 協同 | 協同 | 협업 | collaboration | Colaboración | Zusammenarbeit | Colaboração | Colaboração | 協同 | 协同 | zh-CN: 协作（仅当英文含 Collaboration）；zh-TW: 協作（仅当英文含 Collaboration） |
 | **Collapse** | 收起 | 收起 | 折りたたむ | 접기 | Réduire | Contraer | Einklappen | Recolher | Recolher | 收 | 收 | zh-CN: 折叠（仅当英文含 Collapse）；zh-TW: 折疊（仅当英文含 Collapse） |
@@ -229,6 +229,18 @@
 | Task | pt-PT | tarefa | 句中使用小写首字母；标题仍可使用大写首字母。 |
 | **Task** | pt-BR | Tarefa | 默认 |
 | Task | pt-BR | tarefa | 句中使用小写首字母；标题仍可使用大写首字母。 |
+| **Buddy** | fr | Ami | 默认 |
+| Buddy | fr | ami | 句中使用小写首字母。 |
+| Buddy | fr | amis | 按语法使用复数形式。 |
+| **Buddy** | es | Amigo | 默认 |
+| Buddy | es | amigo | 句中使用小写首字母。 |
+| Buddy | es | amigos | 按语法使用复数形式。 |
+| **Buddy** | pt-PT | Amigo | 默认 |
+| Buddy | pt-PT | amigo | 句中使用小写首字母。 |
+| Buddy | pt-PT | amigos | 按语法使用复数形式。 |
+| **Buddy** | pt-BR | Amigo | 默认 |
+| Buddy | pt-BR | amigo | 句中使用小写首字母。 |
+| Buddy | pt-BR | amigos | 按语法使用复数形式。 |
 | **Thread** | zh-CN | 任务 | 默认 |
 | Thread | zh-CN | thread | 指 Codex 的 thread 这一外部系统概念时（导入历史、thread 上下文），保留英文 |
 | Thread | zh-CN | 评论 | 指 GitHub PR 的 review thread 时，用「review 评论」 |
