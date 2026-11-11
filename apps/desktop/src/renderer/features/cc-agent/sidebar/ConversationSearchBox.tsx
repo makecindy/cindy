@@ -1,3 +1,4 @@
+import { TaskTagDots } from '@/features/task-tags/TaskTags';
 import { getSearchDraft, setSearchDraft, subscribeSearchDraft } from './conversationSearchDraft';
 import { standardSessionRoute } from '@/lib/orcaSessionIdentity';
 import { Button } from '@/components/ui/button';
@@ -1290,8 +1291,11 @@ function SearchResultRow({
           </div>
           <div className="min-w-0 flex-1">
             <div className="flex min-w-0 items-center gap-2">
-              <span className="min-w-0 flex-1 truncate text-13 font-medium text-[var(--text-primary)]">
-                {highlightSegments(displayTitle, item.titleMatchIndices)}
+              <span className="flex min-w-0 flex-1 items-center gap-1.5">
+                <span className="min-w-0 truncate text-13 font-medium text-[var(--text-primary)]">
+                  {highlightSegments(displayTitle, item.titleMatchIndices)}
+                </span>
+                <TaskTagDots tags={item.session.tags} />
               </span>
               <Tip text={sourceText} side="top" delay={150}>
                 <span className="shrink-0 rounded-full bg-[var(--surface-chip)] px-1.5 py-0.5 text-10 leading-none text-[var(--text-tertiary)]">
