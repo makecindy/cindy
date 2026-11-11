@@ -1,12 +1,12 @@
 import type { InteractionDecision, InteractionRequest } from '@cindy/maker-core';
 import type { DingTalkIM } from '@cindy/im';
 
-import { autoReviewUnavailablePromptLine } from '../shared/autoReviewUnavailablePrompt';
+import { autoReviewUnavailablePromptLine, permissionOperationPreview, permissionPromptDescription } from '../shared/autoReviewUnavailablePrompt';
 import type { SharedPermission } from '../../maker-ipc/sharedPermission';
 import { permissionOutcomeText } from '../shared/permissionPresentation';
 
 export function handleDingTalkTextInteraction(
-  im: DingTalkIM,
+  im: Pick<DingTalkIM, 'requestTextReply' | 'sendText'>,
   userId: string,
   request: InteractionRequest,
   options?: { timeoutMs?: number; sharedPermission?: SharedPermission },
@@ -32,7 +32,7 @@ export function handleDingTalkTextInteraction(
 }
 
 async function answerQuestions(
-  im: DingTalkIM,
+  im: Pick<DingTalkIM, 'requestTextReply' | 'sendText'>,
   userId: string,
   request: Extract<InteractionRequest, { kind: 'ask_user_question' }>,
 ): Promise<InteractionDecision> {
@@ -52,8 +52,9 @@ function formatInteractionPrompt(request: InteractionRequest): string {
     const unavailable = autoReviewUnavailablePromptLine(request);
     return [
       `需要确认操作：${request.toolName}`,
-      ...(request.description ? [request.description] : []),
+      ...(permissionPromptDescription(request) ? [permissionPromptDescription(request)!] : []),
       ...(unavailable ? [unavailable] : []),
+      ...(permissionOperationPreview(request) ? [`操作：${permissionOperationPreview(request)}`] : []),
       '回复“允许”继续，或回复“拒绝”取消。',
     ].join('\n');
   }

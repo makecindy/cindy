@@ -1678,7 +1678,7 @@ describe('new session model', () => {
 
     expect(parseNewSessionDeviceOptions(encoded)).toEqual([
       { deviceId: 'pc', name: 'PC' },
-      { deviceId: 'mac', name: 'mac' },
+      { deviceId: 'mac', name: '另一台电脑' },
     ]);
   });
 
@@ -1687,7 +1687,7 @@ describe('new session model', () => {
       { deviceId: 'pc', name: 'PC' },
     ]);
     expect(parseNewSessionDeviceOptions('not-json', { deviceId: 'pc', name: '' })).toEqual([
-      { deviceId: 'pc', name: 'pc' },
+      { deviceId: 'pc', name: '另一台电脑' },
     ]);
     expect(parseNewSessionDeviceOptions('')).toEqual([]);
   });
@@ -1760,7 +1760,9 @@ describe('new session model', () => {
     expect(scrollParents[0].openingElement.getText(source)).toContain('styles.workspaceProjectList');
   });
 
-  it('builds recent workspace quick picks from mirrored remote sessions', () => {
+  // #7972, unit: both creation pickers share this production projection. Existing
+  // cwd-only fixtures missed persisted membership differing from the checkout.
+  it('builds recent workspace quick picks from project membership with legacy cwd fallback', () => {
     const options = buildRecentWorkspaceOptions([
       remoteSession('old', {
         workingDir: '/repo/old',
@@ -1768,18 +1770,27 @@ describe('new session model', () => {
         deviceLinkDeviceId: 'mac-a',
       }),
       remoteSession('latest-a', {
-        workingDir: '/repo/app',
+        projectDir: '/repo/app',
+        workingDir: '/tmp/checkout-a',
         userSendAt: '2026-01-01T00:05:00.000Z',
         deviceLinkDeviceId: 'mac-a',
       }),
       remoteSession('latest-b', {
+        projectDir: '/repo/app',
+        workingDir: '/repo/code/.cindy-worktrees/branch',
+        userSendAt: '2026-01-01T00:06:00.000Z',
+        deviceLinkDeviceId: 'mac-a',
+      }),
+      remoteSession('legacy', {
+        projectDir: null,
         workingDir: '/repo/app',
         userSendAt: '2026-01-01T00:06:00.000Z',
         deviceLinkDeviceId: 'mac-a',
       }),
       remoteSession('dialogue', {
         workspaceKind: 'dialogue',
-        workingDir: null,
+        projectDir: '/repo/app',
+        workingDir: '/tmp/dialogue',
         deviceLinkDeviceId: 'mac-a',
       }),
       remoteSession('other-device', {
@@ -1792,13 +1803,19 @@ describe('new session model', () => {
         status: 'deleted',
         deviceLinkDeviceId: 'mac-a',
       }),
+      // PR #9314: a teammate's own project is reached from the teammate, never offered here.
+      remoteSession('teammate', {
+        workingDir: '/Users/me/Library/Application Support/Cindy/owners/o1/bots/bot_x/workspace',
+        userSendAt: '2026-01-01T00:20:00.000Z',
+        deviceLinkDeviceId: 'mac-a',
+      }),
     ], 'mac-a');
 
     expect(options).toEqual([
       {
         workingDir: '/repo/app',
         title: 'app',
-        sessionCount: 2,
+        sessionCount: 3,
         lastActivityAt: '2026-01-01T00:06:00.000Z',
       },
       {
@@ -1808,6 +1825,29 @@ describe('new session model', () => {
         lastActivityAt: '2026-01-01T00:01:00.000Z',
       },
     ]);
+  });
+
+  // #6916, unit: the production picker must display host metadata without changing its path.
+  it('uses the selected host alias for recent workspace quick picks', () => {
+    const sessions = [remoteSession('app', { projectDir: '/repo/app', workingDir: '/tmp/checkout', deviceLinkDeviceId: 'mac-a' })];
+    const aliases = new Map([
+      ['device:mac-a:/repo/app', 'Customer Portal'],
+      ['device:mac-b:/repo/app', 'Other Portal'],
+    ]);
+    expect(buildRecentWorkspaceOptions(sessions, 'mac-a', 6, aliases)[0]).toMatchObject({
+      title: 'Customer Portal', workingDir: '/repo/app',
+    });
+    expect(buildRecentWorkspaceOptions(sessions, 'mac-a', 6, new Map())[0].title).toBe('app');
+  });
+
+  it('keeps mixed local/SSH recent-workspace names independent of row order', () => {
+    const aliases = new Map([['device:mac-a:/repo/app', 'Local name']]);
+    const local = remoteSession('local', { workingDir: '/repo/app', deviceLinkDeviceId: 'mac-a' });
+    const ssh = remoteSession('ssh', { workingDir: '/repo/app', deviceLinkDeviceId: 'mac-a', remoteHostId: 'ssh-a' });
+    for (const rows of [[local, ssh], [ssh, local]]) {
+      expect(buildRecentWorkspaceOptions(rows, 'mac-a', 6, aliases)[0]).toMatchObject({ title: 'app', sessionCount: 2 });
+    }
+    expect(buildRecentWorkspaceOptions([ssh], 'mac-a', 6, aliases)[0].title).toBe('app');
   });
 
   // Remote path strings deliberately model the host OS, not the test runner's filesystem.

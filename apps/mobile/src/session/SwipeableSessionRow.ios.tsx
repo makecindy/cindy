@@ -1,3 +1,4 @@
+import { useWindowWidth } from '@/platform/windowDimension';
 /**
  * SwipeableSessionRow —— 首页会话行的 iOS 式滑动操作包装。
  *
@@ -20,8 +21,8 @@
  *  - 全滑判定在 onSwipeableWillOpen(松手后的 JS 回调)同步读 translation,不在
  *    worklet 拖动中触发 —— 手指还按着时行被移除会拆手势树。
  */
-import { memo, useCallback, useEffect, useRef, type ReactNode } from "react";
-import { Pressable, StyleSheet, View, useWindowDimensions } from "react-native";
+import { memo, useCallback, useEffect, useLayoutEffect, useRef, type ReactNode } from "react";
+import { Pressable, StyleSheet, View } from "react-native";
 import {
   ReanimatedSwipeable as Swipeable,
   SwipeDirection,
@@ -120,7 +121,7 @@ function SwipeableSessionRowInner({
   const pinnedAt = session.pinnedAt;
   const styles = useThemedStyles(makeStyles);
   const { colors } = useTheme();
-  const { width: windowWidth } = useWindowDimensions();
+  const windowWidth = useWindowWidth();
   const fullSwipeThreshold = windowWidth * FULL_SWIPE_RATIO;
 
   const methodsRef = useRef<SwipeableMethods | null>(null);
@@ -155,18 +156,27 @@ function SwipeableSessionRowInner({
     methodsRef.current?.close();
   }, []);
 
+  // RNGH rebuilds its serialized worklet graph when these JS callbacks change.
+  // Row refreshes and rotation only update the action's committed inputs.
+  const gestureInputs = useRef({ registry, rowKey, fullSwipeThreshold, onMarkRead, onArchive, session });
+  useLayoutEffect(() => {
+    gestureInputs.current = { registry, rowKey, fullSwipeThreshold, onMarkRead, onArchive, session };
+  });
   const handleOpenStartDrag = useCallback(() => {
+    const { registry, rowKey } = gestureInputs.current;
     registry.onRowOpen(rowKey, close);
-  }, [registry, rowKey, close]);
+  }, [close]);
 
   const handleClose = useCallback(() => {
+    const { registry, rowKey } = gestureInputs.current;
     registry.onRowClose(rowKey);
-  }, [registry, rowKey]);
+  }, []);
 
   // 全滑判定:松手瞬间(库在 release 时派发 WillOpen)读当前位移,超阈值即触发。
   // direction 语义:RIGHT = 右滑(露出左面板/置顶),LEFT = 左滑(露出右面板/归档)。
   const handleWillOpen = useCallback(
     (direction: (typeof SwipeDirection)[keyof typeof SwipeDirection]) => {
+      const { fullSwipeThreshold, onMarkRead, onArchive, session } = gestureInputs.current;
       const translation = translationRef.current;
       if (!translation) return;
       if (direction === SwipeDirection.RIGHT) {
@@ -182,7 +192,7 @@ function SwipeableSessionRowInner({
         onArchive(session);
       }
     },
-    [fullSwipeThreshold, close, onMarkRead, onArchive, session],
+    [close],
   );
 
   const handleReadPress = useCallback(() => {

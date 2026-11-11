@@ -7,6 +7,7 @@ import type { RemoteSession } from "@/session/types";
 import { SwipeableSessionRow } from "@/session/SwipeableSessionRow.ios";
 
 const runtime = vi.hoisted(() => ({
+  width: 400,
   translation: { value: 0 },
   props: null as SwipeableProps | null,
   reset: vi.fn(),
@@ -31,7 +32,7 @@ vi.mock("react-native", () => ({
     </button>
   ),
   StyleSheet: { create: (value: unknown) => value },
-  useWindowDimensions: () => ({ width: 400 }),
+  Dimensions: { get: () => ({ width: runtime.width }), addEventListener: () => ({ remove() {} }) },
 }));
 vi.mock("@/platform/gestureHandler", async () => {
   const { forwardRef, useImperativeHandle } = await import("react");
@@ -168,6 +169,7 @@ function release(direction: "left" | "right") {
 }
 beforeEach(() => {
   vi.clearAllMocks();
+  runtime.width = 400;
   runtime.translation.value = 0;
   runtime.styles = [];
   runtime.reactions.clear();
@@ -177,6 +179,25 @@ beforeEach(() => {
 afterEach(() => act(() => root.unmount()));
 
 describe("iOS swipe runtime contracts (mocked native boundary)", () => {
+  // #7083: refreshed row objects and rotation must not rebuild RNGH's worklet
+  // graph. Existing release tests do not compare the native callback boundary.
+  it("keeps gesture callbacks stable while using the current width and recycled task", () => {
+    render("a");
+    const initial = runtime.props!;
+    render("a");
+    expect(runtime.props!.onSwipeableWillOpen).toBe(initial.onSwipeableWillOpen);
+    runtime.width = 800;
+    render("b");
+    expect(runtime.props!.onSwipeableWillOpen).toBe(initial.onSwipeableWillOpen);
+    expect(runtime.props!.onSwipeableOpenStartDrag).toBe(initial.onSwipeableOpenStartDrag);
+    expect(runtime.props!.onSwipeableClose).toBe(initial.onSwipeableClose);
+    drag(-260);
+    release("left");
+    expect(controls.onArchive).not.toHaveBeenCalled();
+    drag(-500);
+    release("left");
+    expect(controls.onArchive).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({ id: "b" }));
+  });
   it.each([
     ["left", -260, "onArchive"],
     ["right", 260, "onMarkRead"],

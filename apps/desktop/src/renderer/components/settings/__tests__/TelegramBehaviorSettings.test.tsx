@@ -19,13 +19,6 @@ vi.mock('react-i18next', () => ({
   useTranslation: () => ({ t: (key: string) => key }),
 }));
 
-vi.mock('@/lib/contactsService', () => ({
-  contactsService: {
-    settingsGet: vi.fn(async () => ({ enabled: true })),
-    settingsSet: vi.fn(),
-  },
-}));
-
 import {
   TelegramBehaviorSettings,
   TelegramGroupActivationSettings,

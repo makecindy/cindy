@@ -273,7 +273,7 @@ describe('mobile settings overview', () => {
     const filingNumberIndex = source.indexOf('testID="settings.appFilingNumber"');
     const accountActionsIndex = source.indexOf('testID="settings.accountActions"');
 
-    // 链接不再本地写死:与登录页共用 legalLinks 区域分流单点(protocol.xd.cn/.com)
+    // 链接不再本地写死:与登录页共用 legalLinks 区域分流单点(cindy.cn / cindy.app)
     expect(source).toContain("import { LEGAL_LINKS } from '@/config/legalLinks';");
     expect(source).toContain('Linking.openURL(LEGAL_LINKS.privacyPolicy)');
     expect(source).toContain('Linking.openURL(LEGAL_LINKS.termsOfService)');

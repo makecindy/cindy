@@ -100,50 +100,42 @@ export function getCcMgrUpgradeSnapshot(hostId: string, agent: 'cc' | 'pi' = 'cc
 // Listener install (顶层调用一次)
 // ============================================================
 
-/**
- * 顶层挂一次。先同步当前 snapshot (避免 listener 挂载晚于第一次 push 的 race),
- * 再订阅后续 push。返回 unsubscribe (实际生命周期 = renderer 进程, 解绑只在 HMR
- * 触发, 跟 silentInstallToast 同 pattern)。
- */
+/** Install after Maker IPC readiness (MakerBootstrap inside EnvCheckGuard). */
 export function installCcMgrUpgradeListener(): () => void {
-  // 初始 snapshot — App.tsx 挂这个 listener 时, main 端 registerRemoteSshIpc
-  // 可能还没跑到 (race window 几十 ms), 直接 invoke 会触发 main 端
-  // "No handler registered" 的 console.error (electron 内置, 即使 renderer
-  // 端 catch 也吞不掉)。退避重试 3 次 (500/1000/2000ms), 直到 main IPC ready;
-  // 仍失败就接受 (后续 push 自动 sync)。
-  const trySnapshot = (remaining: number, delayMs: number): void => {
-    setTimeout(() => {
-      window.electronAPI.remoteSsh
-        .ccMgrListPendingUpgrades()
-        .then(({ pending }) => {
-          for (const p of pending) {
-            setState(p.hostId, { currentVersion: p.currentVersion, availableVersion: p.availableVersion, agent: p.agent });
-          }
-        })
-        .catch((err) => {
-          const msg = String((err as Error)?.message ?? err);
-          // 只重试 "No handler" race; 真错误(如 SSH 异常)放弃重试。
-          if (msg.includes('No handler') && remaining > 0) {
-            trySnapshot(remaining - 1, delayMs * 2);
-          }
-          // else: 接受失败 — 后续 push 仍工作, 启动 snapshot 只是优化。
-        });
-    }, delayMs);
-  };
-  trySnapshot(3, 500);
-
-  return window.electronAPI.remoteSsh.onCcMgrUpgradeAvailable((payload) => {
-    // 轮 22-F2:available 与 agent 分开 —— available=null 时用 payload.agent 定位。
-    // 轮 22-G4 HIGH:clear 路径显式传 payload.agent(否则 setState 用 null?.agent
-    // 永远清 'cc', pi 的 pending 残留)。
+  let disposed = false;
+  // Pushes received while the snapshot is in flight are newer than that
+  // snapshot, including clears. Do not resurrect a dismissed upgrade banner.
+  const changedDuringSnapshot = new Set<string>();
+  let snapshotPending = true;
+  const unsubscribe = window.electronAPI.remoteSsh.onCcMgrUpgradeAvailable((payload) => {
+    if (disposed) return;
+    if (snapshotPending) changedDuringSnapshot.add(hostAgentKey(payload.hostId, payload.agent));
     setState(
       payload.hostId,
-      payload.available === null
-        ? null
-        : { ...payload.available, agent: payload.agent },
+      payload.available === null ? null : { ...payload.available, agent: payload.agent },
       payload.agent,
     );
   });
+
+  void window.electronAPI.remoteSsh.ccMgrListPendingUpgrades()
+    .then(({ pending }) => {
+      if (disposed) return;
+      for (const p of pending) {
+        if (changedDuringSnapshot.has(hostAgentKey(p.hostId, p.agent))) continue;
+        setState(p.hostId, { currentVersion: p.currentVersion, availableVersion: p.availableVersion, agent: p.agent });
+      }
+    })
+    // Snapshot failure does not disable subsequent live upgrade notifications.
+    .catch(() => {})
+    .finally(() => {
+      snapshotPending = false;
+      changedDuringSnapshot.clear();
+    });
+
+  return () => {
+    disposed = true;
+    unsubscribe();
+  };
 }
 
 // ============================================================

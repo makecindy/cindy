@@ -19,6 +19,7 @@ const log = createLogger('maker-ipc:project-automation');
 
 const PROJECT_AUTOMATION_INVOKE_CHANNELS: readonly string[] = [
   MAKER_INVOKE.PROJECT_AUTOMATION_RECONCILE,
+  MAKER_INVOKE.PROJECT_AUTOMATION_PENDING_IMPORTS,
   MAKER_INVOKE.PROJECT_AUTOMATION_LIST_CONSENTS,
   MAKER_INVOKE.PROJECT_AUTOMATION_REVOKE_CONSENT,
   MAKER_INVOKE.PROJECT_AUTOMATION_UPSERT_SCHEDULE,
@@ -52,20 +53,19 @@ function rewrapProjectAutomationError(err: unknown): never {
   throwIpcError('INTERNAL', msg);
 }
 
-export function registerProjectAutomationIpc(
-  loader: ProjectAutomationLoader,
-): void {
-  log.info('registering maker:project-automation:* IPC handlers');
-
-  for (const ch of PROJECT_AUTOMATION_INVOKE_CHANNELS) ipcMain.removeHandler(ch);
-  if (unsubscribeAutomationEvent) {
-    unsubscribeAutomationEvent();
-    unsubscribeAutomationEvent = null;
-  }
-
+/** Attach to each new owner instance; handlers themselves are registered before startup. */
+export function attachProjectAutomationEventListeners(loader: ProjectAutomationLoader): void {
+  unsubscribeAutomationEvent?.();
   unsubscribeAutomationEvent = loader.onEvent((event: ProjectAutomationEvent) => {
     broadcast(MAKER_PUSH.PROJECT_AUTOMATION_EVENT, event);
   });
+}
+
+export function registerProjectAutomationIpc(
+  getReadyLoader: () => Promise<ProjectAutomationLoader>,
+): void {
+  log.info('registering maker:project-automation:* IPC handlers');
+  for (const ch of PROJECT_AUTOMATION_INVOKE_CHANNELS) ipcMain.removeHandler(ch);
 
   ipcMain.handle(
     MAKER_INVOKE.PROJECT_AUTOMATION_RECONCILE,
@@ -73,15 +73,27 @@ export function registerProjectAutomationIpc(
       const body = requireObject(payload, 'payload');
       const workingDir = requireString(body.workingDir, 'workingDir');
       try {
-        return await loader.reconcile(workingDir);
+        const approvedHash = body.approvedHash === undefined ? undefined : requireString(body.approvedHash, 'approvedHash');
+        const loader = await getReadyLoader();
+        return await loader.reconcile(workingDir, approvedHash);
       } catch (err) {
         rewrapProjectAutomationError(err);
       }
     },
   );
 
+  ipcMain.handle(MAKER_INVOKE.PROJECT_AUTOMATION_PENDING_IMPORTS, async () => {
+    try {
+      const loader = await getReadyLoader();
+      return await loader.listPendingImports();
+    } catch (err) {
+      rewrapProjectAutomationError(err);
+    }
+  });
+
   ipcMain.handle(MAKER_INVOKE.PROJECT_AUTOMATION_LIST_CONSENTS, async () => {
     try {
+      await getReadyLoader();
       const rows = await getDbClient().drizzle.select().from(projectAutomationConsents);
       return rows.map(projectAutomationConsentToCamel);
     } catch (err) {
@@ -95,6 +107,7 @@ export function registerProjectAutomationIpc(
       const body = requireObject(payload, 'payload');
       const workingDir = requireString(body.workingDir, 'workingDir');
       try {
+        const loader = await getReadyLoader();
         await getDbClient().drizzle
           .delete(projectAutomationConsents)
           .where(eq(projectAutomationConsents.workingDir, workingDir));
@@ -113,6 +126,7 @@ export function registerProjectAutomationIpc(
       const workingDir = requireString(body.workingDir, 'workingDir');
       const config = requireObject(body.config, 'config') as unknown as ProjectScheduleConfig;
       try {
+        const loader = await getReadyLoader();
         return await loader.upsertSchedule(workingDir, config);
       } catch (err) {
         rewrapProjectAutomationError(err);
@@ -127,6 +141,7 @@ export function registerProjectAutomationIpc(
       const workingDir = requireString(body.workingDir, 'workingDir');
       const id = requireString(body.id, 'id');
       try {
+        const loader = await getReadyLoader();
         return await loader.removeSchedule(workingDir, id);
       } catch (err) {
         rewrapProjectAutomationError(err);

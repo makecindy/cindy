@@ -2,7 +2,7 @@ import { createHash } from 'node:crypto';
 import { promises as fs } from 'node:fs';
 import path from 'node:path';
 import { parseRoutineInput } from '@cindy/maker-scheduler';
-import { BOT_CAPABILITY_ICONS, botMarketLocale, type BotCapabilityIcon, type BotMarketCopy, type BotMarketEntry, type BotMarketLocale, type BotPackageIdentity } from '../../shared/botMarket.js';
+import { BOT_CAPABILITY_ICONS, botMarketLocale, type BotCapabilityIcon, type BotMarketCopy, type BotMarketEntry, type BotMarketLocale, type BotMarketTranslations, type BotPackageIdentity } from '../../shared/botMarket.js';
 import { validateBotSkillFiles } from '../maker-ipc/botSkillStore.js';
 import { CompanionImportError, type ImportItem, type ImportSnapshot } from './types.js';
 
@@ -10,7 +10,7 @@ import { CompanionImportError, type ImportItem, type ImportSnapshot } from './ty
 export const BOT_PACKAGE_IDS = ['engineer-bot', 'nightly-audit-engineer', 'startup-qa-bot',
   'seo-aeo-desk', 'cooper', 'video-editor', 'proto-bot',
   'ad-spend-watch', 'apple-search-ads-review', 'sable-game-art'] as const;
-export const BOT_PACKAGE_VERSION = '0.5.1';
+export const BOT_PACKAGE_VERSION = '0.5.2';
 const MAX_FILE = 2 * 1024 * 1024;
 const MAX_TOTAL = 16 * 1024 * 1024;
 const invalid = (): never => { throw new CompanionImportError('INVALID_PACKAGE'); };
@@ -70,14 +70,15 @@ function readDetail(value: unknown, known: { skills: string[]; knowledge: string
 
 /** What the host needs of one language at invite time: profile name/description, opening text and routine names. */
 export interface NativeLocalizedCopy { name: string; description: string; welcome: string; capabilityLabels: string[]; starterOptions: string[]; routineNames: Record<string, string> }
-export interface NativeBotPackage { identity: BotPackageIdentity; entry: BotMarketEntry; snapshot: ImportSnapshot; localized: Record<BotMarketLocale, NativeLocalizedCopy> }
+export interface NativeBotPackage { identity: BotPackageIdentity; entry: BotMarketEntry; snapshot: ImportSnapshot; localized: BotMarketTranslations<NativeLocalizedCopy> }
 
-const LOCALES: readonly BotMarketLocale[] = ['en', 'ja', 'ko', 'zh-TW'];
-const LOCALE_SCALE: Record<BotMarketLocale, number> = { en: 3, ja: 1.5, ko: 1.5, 'zh-TW': 1 };
-const VALUE_MAX: Record<BotMarketLocale, number> = { en: 200, ja: 160, ko: 160, 'zh-TW': 120 };
-const LABEL_MAX: Record<BotMarketLocale, number> = { en: 48, ja: 24, ko: 24, 'zh-TW': 16 };
+const LEGACY_LOCALES = ['en', 'ja', 'ko', 'zh-TW'] as const;
+const LOCALES: readonly BotMarketLocale[] = [...LEGACY_LOCALES, 'es', 'fr', 'de', 'pt-PT', 'pt-BR'];
+const LOCALE_SCALE: Record<BotMarketLocale, number> = { en: 3, ja: 1.5, ko: 1.5, 'zh-TW': 1, es: 3, fr: 3, de: 3, 'pt-PT': 3, 'pt-BR': 3 };
+const VALUE_MAX: Record<BotMarketLocale, number> = { en: 200, ja: 160, ko: 160, 'zh-TW': 120, es: 200, fr: 200, de: 200, 'pt-PT': 200, 'pt-BR': 200 };
+const LABEL_MAX: Record<BotMarketLocale, number> = { en: 48, ja: 24, ko: 24, 'zh-TW': 16, es: 48, fr: 48, de: 48, 'pt-PT': 48, 'pt-BR': 48 };
 /** The onboarding Skill is not part of the authored detail copy; its name only shows in a partial-save notice. */
-const ONBOARDING_NAME: Record<BotMarketLocale, string> = { en: 'Getting started', ja: 'はじめの設定', ko: '시작 설정', 'zh-TW': '開場設定' };
+const ONBOARDING_NAME: Record<BotMarketLocale, string> = { en: 'Getting started', ja: 'はじめの設定', ko: '시작 설정', 'zh-TW': '開場設定', es: 'Primeros pasos', fr: 'Premiers pas', de: 'Erste Schritte', 'pt-PT': 'Primeiros passos', 'pt-BR': 'Primeiros passos' };
 
 type Detail = ReturnType<typeof readDetail>;
 /** One language of `presentation.i18n`: same shape and limits family as the base copy, and it must mirror `detailZh`. */
@@ -98,7 +99,7 @@ export function applyNativeLocale(pkg: NativeBotPackage, language: string | unde
   if (!language) return; // no language given: the package's own Simplified Chinese copy
   const key = botMarketLocale(language);
   if (key === 'zh-CN') return;
-  const copy = pkg.localized[key];
+  const copy = pkg.localized[key] ?? pkg.localized.en;
   const native = pkg.snapshot.nativePackage;
   if (!native?.opening) return;
   pkg.snapshot.source.name = copy.name;
@@ -220,10 +221,12 @@ export async function readNativeBotPackage(root: string, packageId: string): Pro
   const bubble = detailText(presentation.bubbleZh, 20);
   // Every language must mirror the Chinese detail copy and starter options.
   const localesRaw = record(presentation.i18n);
-  if (Object.keys(localesRaw).length !== LOCALES.length || LOCALES.some(locale => !(locale in localesRaw))) invalid();
-  const localized = {} as Record<BotMarketLocale, NativeLocalizedCopy>;
-  const locales = {} as Record<BotMarketLocale, BotMarketCopy>;
+  if (Object.keys(localesRaw).some(locale => !LOCALES.includes(locale as BotMarketLocale))
+    || LEGACY_LOCALES.some(locale => !(locale in localesRaw))) invalid();
+  const localized = {} as BotMarketTranslations<NativeLocalizedCopy>;
+  const locales = {} as BotMarketTranslations<BotMarketCopy>;
   for (const locale of LOCALES) {
+    if (!(locale in localesRaw)) continue;
     const l = readLocale(locale, localesRaw[locale], known, detail, starters.length);
     const knowledgeTitles = new Map(l.detail.knowledge.map(doc => [doc.ref, doc.title]));
     const names: Record<string, string> = { 'package-identity': l.name };

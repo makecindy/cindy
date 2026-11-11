@@ -64,10 +64,8 @@ export function currentAutoReviewResourceIntent(
   // Queue admission carries Composer text; direct consumers may already carry
   // its agent-facing projection. Both must match this same persisted envelope.
   if (value.text !== wireText && projectPersistedAgentFacingUserText(content) !== wireText) return '';
-  // Pasted text still lacks a verified authored projection. Structured references,
-  // however, have validated spans: discard those spans, not the owner's adjacent
-  // request. Attached session transcripts are separate from value.text entirely.
-  if (Array.isArray(value.pastedTextRanges) && value.pastedTextRanges.length > 0) return '';
+  // Structured references have validated spans: discard those spans, not the
+  // owner's adjacent request. Attached session transcripts are separate from value.text entirely.
   const references = readAgentInputReferences(value.agentReferences, value.text);
   if (Array.isArray(value.agentReferences) && references.length !== value.agentReferences.length) return '';
   const parts: string[] = [];

@@ -1,5 +1,13 @@
 import type { WorkingPhase } from './workingStatus.js';
 
+export function getSessionListActivityAt<Value>(session: {
+  lastActivityAt?: Value | null;
+  userSendAt?: Value | null;
+  updatedAt: Value;
+}): Value {
+  return session.lastActivityAt ?? session.userSendAt ?? session.updatedAt;
+}
+
 /**
  * Canonical session control-plane status projection.
  *

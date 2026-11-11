@@ -87,8 +87,13 @@ export function normalizeWorkingDirForProjectSettings(
 export function normalizeWorkingDirForGrouping(raw: string | null | undefined): string | null {
   const out = normalizeWorkingDirForProjectSettings(raw);
   if (out == null) return null;
-
   return collapseWorktreeDirForGrouping(out);
+}
+
+/** 搜索比较键：保留分组结果的原始拼写用于展示，只有比较时才折叠 Windows 大小写。 */
+export function normalizeWorkingDirForComparison(raw: string | null | undefined): string | null {
+  const collapsed = normalizeWorkingDirForGrouping(raw);
+  return collapsed && isWindowsPathLike(collapsed) ? collapsed.toLowerCase() : collapsed;
 }
 
 export function stripWindowsLongPathPrefix(p: string): string {

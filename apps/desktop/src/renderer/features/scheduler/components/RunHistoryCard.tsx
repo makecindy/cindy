@@ -31,6 +31,8 @@ import {
   DropdownMenuTrigger,
 } from '@/components/ui/dropdown-menu';
 
+import { buildErrorDiagnosisPrompt, prefillErrorDiagnosisDraft } from '@/lib/errorDiagnosisPrompt';
+import { buildSessionDeepLink } from '@/lib/deepLink';
 import { AgentMark } from './AgentMark';
 import { AttentionDot } from '@/components/sidebar/AttentionDot';
 import { formatDuration, formatRunTimestamp, formatStartedAgo } from '../lib/formatters';
@@ -357,7 +359,21 @@ export function RunHistoryCard({
         )}
       </div>
 
-      {showError && (errorKey && i18n.exists(errorKey) ? (
+      {showError && (run.status === 'failed' ? (
+        <ErrorNotice
+          message={errorKey && i18n.exists(errorKey) ? t(errorKey) : t('chat.unreadFailedScheduleBanner.text')}
+          details={run.errorMsg!}
+          onDiagnose={() => {
+            // 当前自动化可能已切换或重新绑定；只信任这次运行记录保存的任务归属。
+            prefillErrorDiagnosisDraft(buildErrorDiagnosisPrompt(t,
+              run.sessionId ? buildSessionDeepLink(run.sessionId) : null, {
+                message: errorKey && i18n.exists(errorKey) ? t(errorKey) : t('chat.unreadFailedScheduleBanner.text'),
+                details: `scheduleId: ${run.scheduleId}\nrunId: ${run.id}\nfiredAt: ${new Date(run.firedAt).toISOString()}\n${run.errorMsg}`,
+              }));
+            navigate('/cc-agent/new');
+          }}
+        />
+      ) : errorKey && i18n.exists(errorKey) ? (
         <ErrorNotice message={t(errorKey)} details={run.errorMsg!} />
       ) : (
         <p

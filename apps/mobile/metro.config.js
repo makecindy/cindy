@@ -2,6 +2,7 @@ const path = require('path');
 const { getDefaultConfig } = require('expo/metro-config');
 
 const config = getDefaultConfig(__dirname);
+config.transformer.babelTransformerPath = require.resolve('./babel-transformer');
 const workspaceRoot = path.resolve(__dirname, '../..');
 // Shared endpoint discovery bundles the public manifests from the repository config directory.
 config.watchFolders = [...config.watchFolders, path.join(workspaceRoot, 'config')];
@@ -19,11 +20,14 @@ const sharedArrayBufferPolyfill = path.join(__dirname, 'src/polyfills/sharedArra
 
 // mobile 直接吃 TS 源码的 workspace 包(见下方 .js→.ts resolveRequest 分流)。
 const workspaceTsSourcePackages = [
+  'agent-net',
+  'agent-net-protocol',
   'auth-client',
   'device-link',
   'device-link-protocol',
   'maker-shared',
   'model-providers',
+  'plugin-protocol',
   'voice-input-core',
 ];
 

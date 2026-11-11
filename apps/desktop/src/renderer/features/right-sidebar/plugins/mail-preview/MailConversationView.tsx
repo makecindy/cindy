@@ -6,7 +6,11 @@ import { mailPreviewImages } from '@cindy/maker-shared/ghost-card-form';
 import { MAIL_PAPER_COLOR } from '@cindy/maker-shared/mail-text-edit';
 import { GhostCardForm } from '@/components/chat/GhostCardForm';
 import { MailHtmlPreview } from '@/components/chat/MailHtmlPreview';
+import { useChatSessionFile } from '@/components/chat/ChatSessionFileContext';
+import { UserMessageUrlLink } from '@/components/chat/UserMessageUrlLink';
+import { findLinkifyMatches } from '@/components/chat/userMessageLinkify';
 import { Button } from '@/components/ui/button';
+import { MailParticipants, mailAvatarLimits } from './MailParticipant';
 
 type Props = {
   mail: MailMessage;
@@ -15,19 +19,29 @@ type Props = {
   retry: () => void;
 };
 
-function MessageBody({ mail }: { mail: MailMessage }) {
+function MessageBody({ mail, avatarLimits }: { mail: MailMessage; avatarLimits: ReturnType<typeof mailAvatarLimits> }) {
   const { t } = useTranslation();
   const fields = mailMessageFields(mail, key => t(`mailReader.${key}`));
   const values = Object.fromEntries(fields.map(f => [f.name, f.value]));
+  const { sessionId } = useChatSessionFile();
+  const plainBody: ReactNode[] = [];
+  if (!mail.bodyHtml) {
+    let cursor = 0;
+    for (const match of findLinkifyMatches(mail.bodyText).filter(match => match.kind === 'url')) {
+      plainBody.push(mail.bodyText.slice(cursor, match.index), <UserMessageUrlLink key={match.index} url={match.text} sessionId={sessionId} />);
+      cursor = match.index + match.length;
+    }
+    plainBody.push(mail.bodyText.slice(cursor));
+  }
   return <>
     {mail.markReadFailed && <p role="status" className="mb-2 text-12 text-muted-foreground">{t('mailReader.markReadFailed')}</p>}
     <div className="mb-3 space-y-1 border-b border-border pb-3 text-12 text-muted-foreground">
       {fields.filter(f => f.kind === 'recipients' && f.value.trim()).map(f => <div key={f.name} className="flex gap-2">
-        <span className="shrink-0">{f.label}</span><span className="min-w-0 break-words">{f.value}</span>
+        <span className="shrink-0 pt-0.5">{f.label}</span><MailParticipants value={f.value} photos={mail.participantPhotos} avatarLimit={avatarLimits[f.name as 'to' | 'cc' | 'bcc']} />
       </div>)}
     </div>
     {mail.bodyHtml ? <MailHtmlPreview value={mail.bodyHtml} images={mailPreviewImages(values)} reading />
-      : <div className="whitespace-pre-wrap break-words p-1 text-14 leading-relaxed text-foreground">{mail.bodyText}</div>}
+      : <div className="whitespace-pre-wrap break-words p-1 text-14 leading-relaxed text-foreground">{plainBody}</div>}
     <GhostCardForm fields={fields.filter(f => f.kind === 'mail-attachments')} disabled={false} readOnly onChange={() => {}} />
   </>;
 }
@@ -60,6 +74,7 @@ function MessageRow({ summary, initial, selected, initiallyExpanded, accountId, 
   const validDate = !Number.isNaN(date.getTime());
   const formatted = validDate ? new Intl.DateTimeFormat(i18n?.language, { dateStyle: 'medium', timeStyle: 'short' }).format(date) : dateText;
   const from = message?.from || summary.from;
+  const avatarLimits = mailAvatarLimits({ from, to: message?.to || '', cc: message?.cc || '', bcc: message?.bcc || '' });
   return <section className="my-3 overflow-hidden rounded-xl border border-border bg-[var(--mail-paper)] dark:bg-[var(--surface)]"
     style={{ '--mail-paper': MAIL_PAPER_COLOR } as CSSProperties} data-mail-message-id={summary.messageId}>
     <button type="button" aria-expanded={expanded} aria-label={t(expanded ? 'mailReader.collapseMessage' : 'mailReader.expandMessage', { from })}
@@ -67,7 +82,7 @@ function MessageRow({ summary, initial, selected, initiallyExpanded, accountId, 
       {expanded ? <ChevronDown className="mt-1 h-3.5 w-3.5 shrink-0 text-muted-foreground" /> : <ChevronRight className="mt-1 h-3.5 w-3.5 shrink-0 text-muted-foreground" />}
       <span className="min-w-0 flex-1">
         <span className="flex flex-wrap items-baseline justify-between gap-x-3 gap-y-1">
-          <span className="min-w-0 break-words text-13 font-medium text-foreground">{from || t('mailReader.title')}</span>
+          <span className="min-w-0 text-13 font-medium text-foreground"><MailParticipants value={from || t('mailReader.title')} photos={message?.participantPhotos} compact={false} avatarLimit={avatarLimits.from} /></span>
           <span className="flex items-center gap-2 text-12 text-muted-foreground">
             {selected && <span>{t('mailReader.currentMessage')}</span>}
             {dateText && <time dateTime={validDate ? date.toISOString() : undefined} title={dateText}>{formatted}</time>}
@@ -77,7 +92,7 @@ function MessageRow({ summary, initial, selected, initiallyExpanded, accountId, 
       </span>
     </button>
     {expanded && <div className="px-3 pb-3 pt-1">
-      {message ? <MessageBody mail={message} /> : <div className="py-3 text-13 text-muted-foreground" role="status">
+      {message ? <MessageBody mail={message} avatarLimits={avatarLimits} /> : <div className="py-3 text-13 text-muted-foreground" role="status">
         {t(failed ? 'mailReader.failed' : 'mailReader.loading')}
         {failed && <Button className="ml-2" variant="secondary" size="sm" onClick={() => setAttempt(n => n + 1)}>{t('mailReader.retry')}</Button>}
       </div>}

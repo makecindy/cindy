@@ -1,0 +1,31 @@
+{
+  "generatedAt": "2026-10-29T07:04:30.678Z",
+  "platform": "darwin",
+  "arch": "arm64",
+  "electron": "42.11.12",
+  "capture": [],
+  "save": [],
+  "regression": [
+    {
+      "scale": 2,
+      "alpha": 0,
+      "width": 401,
+      "height": 301,
+      "identical": true
+    },
+    {
+      "scale": 2,
+      "alpha": 127,
+      "width": 401,
+      "height": 301,
+      "identical": true
+    },
+    {
+      "scale": 1.5,
+      "alpha": 255,
+      "width": 300,
+      "height": 226,
+      "identical": true
+    }
+  ]
+}

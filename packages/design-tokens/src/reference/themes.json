@@ -2361,9 +2361,9 @@
           "$value": {
             "colorSpace": "srgb",
             "components": [
-              0.082353,
-              0.082353,
-              0.082353
+              0.933333,
+              0.933333,
+              0.933333
             ]
           },
           "$extensions": {
@@ -2396,9 +2396,9 @@
           "$value": {
             "colorSpace": "hsl",
             "components": [
-              0,
-              0,
-              93.3
+              214.3,
+              5.5,
+              24.9
             ]
           },
           "$extensions": {
@@ -2603,24 +2603,6 @@
               0.082353,
               0.082353,
               0.082353
-            ]
-          },
-          "$extensions": {
-            "com.cindy.desktop": {
-              "format": "hex",
-              "uppercase": true,
-              "alpha": false
-            }
-          }
-        },
-        "value-update-btn-hover": {
-          "$type": "color",
-          "$value": {
-            "colorSpace": "srgb",
-            "components": [
-              0.886275,
-              0.886275,
-              0.886275
             ]
           },
           "$extensions": {
@@ -3203,42 +3185,6 @@
               0.27451,
               0.27451,
               0.27451
-            ]
-          },
-          "$extensions": {
-            "com.cindy.desktop": {
-              "format": "hex",
-              "uppercase": true,
-              "alpha": false
-            }
-          }
-        },
-        "value-send-btn-hover-bg": {
-          "$type": "color",
-          "$value": {
-            "colorSpace": "srgb",
-            "components": [
-              0.886275,
-              0.886275,
-              0.886275
-            ]
-          },
-          "$extensions": {
-            "com.cindy.desktop": {
-              "format": "hex",
-              "uppercase": true,
-              "alpha": false
-            }
-          }
-        },
-        "value-send-btn-pressed-bg": {
-          "$type": "color",
-          "$value": {
-            "colorSpace": "srgb",
-            "components": [
-              0.831373,
-              0.831373,
-              0.831373
             ]
           },
           "$extensions": {
@@ -5594,9 +5540,9 @@
           "$value": {
             "colorSpace": "srgb",
             "components": [
-              0.988235,
-              0.988235,
-              0.988235
+              0.160784,
+              0.164706,
+              0.172549
             ]
           },
           "$extensions": {
@@ -5630,8 +5576,8 @@
             "colorSpace": "hsl",
             "components": [
               214.3,
-              5.5,
-              24.9
+              6,
+              99
             ]
           },
           "$extensions": {
@@ -5836,24 +5782,6 @@
               0.988235,
               0.988235,
               0.988235
-            ]
-          },
-          "$extensions": {
-            "com.cindy.desktop": {
-              "format": "hex",
-              "uppercase": true,
-              "alpha": false
-            }
-          }
-        },
-        "value-update-btn-hover": {
-          "$type": "color",
-          "$value": {
-            "colorSpace": "srgb",
-            "components": [
-              0.180392,
-              0.196078,
-              0.215686
             ]
           },
           "$extensions": {
@@ -6436,42 +6364,6 @@
               0.345098,
               0.333333,
               0.333333
-            ]
-          },
-          "$extensions": {
-            "com.cindy.desktop": {
-              "format": "hex",
-              "uppercase": true,
-              "alpha": false
-            }
-          }
-        },
-        "value-send-btn-hover-bg": {
-          "$type": "color",
-          "$value": {
-            "colorSpace": "srgb",
-            "components": [
-              0.180392,
-              0.196078,
-              0.215686
-            ]
-          },
-          "$extensions": {
-            "com.cindy.desktop": {
-              "format": "hex",
-              "uppercase": true,
-              "alpha": false
-            }
-          }
-        },
-        "value-send-btn-pressed-bg": {
-          "$type": "color",
-          "$value": {
-            "colorSpace": "srgb",
-            "components": [
-              0.145098,
-              0.156863,
-              0.172549
             ]
           },
           "$extensions": {

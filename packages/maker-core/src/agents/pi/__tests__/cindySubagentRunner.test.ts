@@ -218,6 +218,7 @@ async function makeFixture(options: {
   outputText?: string;
   chain?: boolean;
   approval?: boolean;
+  cacheQueries?: boolean;
   /**
    * Emit several approval requests from one prompt, the way a turn whose
    * parallel tool calls each ask before running does. The fake child only
@@ -433,6 +434,16 @@ let buffer = '';
 const expectedApprovals = ${JSON.stringify(approvalIds)};
 const answeredApprovals = new Set();
 let allowedApprovals = 0;
+${options.cacheQueries ? `let cacheQueryStage = 0;
+function cacheQuery(kind) {
+  const message = { role: 'user', content: [{ type: 'text', text: kind }], timestamp: 123 };
+  const key = require('node:crypto').createHash('sha256').update(JSON.stringify(message)).digest('hex');
+  const emit = event => process.stdout.write(JSON.stringify(event) + '\\n');
+  emit({ type: 'queue_update', steering: kind === 'steer' ? [kind] : [], followUp: kind === 'followUp' ? [kind] : [] });
+  emit({ type: 'queue_update', steering: [], followUp: [] });
+  emit({ type: 'message_start', message });
+  emit({ type: 'extension_ui_request', id: 'cache-query', method: 'input', title: 'cindy:cache-input', placeholder: JSON.stringify({ key, direct: false }) });
+}` : ''}
 process.stdin.setEncoding('utf8');
 process.stdin.on('data', (chunk) => {
   buffer += chunk;
@@ -447,6 +458,7 @@ process.stdin.on('data', (chunk) => {
     if (command.type === 'prompt') {
       fs.appendFileSync(process.env.CINDY_TEST_PI_PROMPTS, JSON.stringify(command.message) + '\\n');
       process.stdout.write(JSON.stringify({ type: 'response', command: 'prompt', success: true }) + '\\n');
+      ${options.cacheQueries ? `cacheQuery('steer'); continue;` : ''}
       ${approvalIds.length > 0
     ? `for (const id of expectedApprovals) {
         process.stdout.write(JSON.stringify({ type: 'extension_ui_request', id, method: ${JSON.stringify(approvalMethod)}, title: 'cindy:permission', ${approvalMethod === 'input' ? 'placeholder' : 'message'}: JSON.stringify({ toolName: 'write', input: { path: 'a.txt' } }) }) + '\\n');
@@ -457,6 +469,13 @@ process.stdin.on('data', (chunk) => {
       ${fixtureLifecycle}
       ${options.hangOnMessage ? '}' : ''}`}
     }
+    ${options.cacheQueries ? `if (command.type === 'extension_ui_response' && command.id === 'cache-query') {
+      const receipt = JSON.parse(command.value);
+      if (receipt.followUp !== (cacheQueryStage === 1)) process.exit(14);
+      cacheQueryStage++;
+      if (cacheQueryStage === 1) cacheQuery('followUp');
+      else { ${fixtureLifecycle} }
+    }` : ''}
     if (command.type === 'extension_ui_response' && expectedApprovals.includes(command.id)) {
       answeredApprovals.add(command.id);
       if (command.confirmed || command.value === 'allow') allowedApprovals += 1;
@@ -663,6 +682,8 @@ describe('Cindy durable PI Subagent runner', () => {
       }, undefined, 'the runner to receive the hanging child startup output');
       fixture.child.kill('SIGTERM');
       await waitForClose(fixture.child, fixture.stderr);
+      await waitFor(async () => readFile(fixture.stdinEndedFile, 'utf8').catch(() => null),
+        undefined, 'the orphan to observe stdin closing and remain alive');
       const receipt = JSON.parse(await readFile(path.join(fixture.runDir, 'result.json'), 'utf8'));
       expect(receipt.state).toBe('stopped');
       expect(receipt.tasks[0].status).toBe('stopped');
@@ -805,9 +826,16 @@ describe('Cindy durable PI Subagent runner', () => {
   it('accepts steering while a child is backing off for automatic retry', async () => {
     const fixture = await makeFixture({ retryThenHang: true });
     try {
+      // Regression: Linux CI #7232 observed the failed attempt's status snapshot
+      // together with the later auto_retry_start transcript entry. The runner
+      // appends events immediately but batches status publication, so these two
+      // reads are not an atomic snapshot. Wait for both before asserting readiness.
+      // Existing unit coverage still uses the real runner/list/control entries
+      // and verifies that the child receives the correction; no timeout is widened.
       const retrying = await waitFor(async () => {
         const [run] = await listPiSubagentRuns(fixture.root);
-        if (run?.totalTokens !== 1 || run.state !== 'running') return null;
+        if (run?.totalTokens !== 1 || run.state !== 'running'
+          || run.tasks[0]?.resultReady !== false) return null;
         const transcript = await readFile(path.join(fixture.runDir, 'transcript.jsonl'), 'utf8');
         return transcript.includes('auto_retry_start') ? run : null;
       });
@@ -911,6 +939,45 @@ describe('Cindy durable PI Subagent runner', () => {
         },
       };
     }
+
+    it('freezes cache route rules into a resumed generation and rejects oversized artifacts', async () => {
+      const { fixture, first } = await resumableFixture();
+      const sourceFile = path.join(fixture.root, first.runId, 'pi-home', 'pi-cache-compatibility.json');
+      const rules = JSON.stringify([{ provider: 'fixture', id: 'wire', routeKey: 'a'.repeat(64) }]);
+      await writeFile(sourceFile, rules);
+      const launchRunner = vi.fn(async () => {});
+      const id = await resumePiSubagentRun(fixture.root, first.runId, 'continue', { ...resumeLaunch(fixture), runtimeSnapshot: undefined, launchRunner });
+      if (!id) throw new Error('Expected a resumed generation');
+      expect(await readFile(path.join(fixture.root, id, 'pi-home', 'pi-cache-compatibility.json'), 'utf8')).toBe(rules);
+      expect(launchRunner).toHaveBeenCalledOnce();
+      // This unlaunched queued generation would otherwise block the second attempt.
+      await rm(path.join(fixture.root, id), { recursive: true, force: true });
+      await writeFile(sourceFile, 'x'.repeat(256 * 1024 + 1));
+      await expect(resumePiSubagentRun(fixture.root, first.runId, 'continue', { ...resumeLaunch(fixture), runtimeSnapshot: undefined, launchRunner }))
+        .rejects.toThrow('cache rules escaped');
+      expect(launchRunner).toHaveBeenCalledOnce();
+    });
+
+    it.each([true, false])('keeps resumed cache rules in the current model generation (rules present: %s)', async hasRules => {
+      const { fixture, first } = await resumableFixture();
+      const rules = (endpoint: string, digest: string) => JSON.stringify([{
+        provider: 'fixture', id: 'wire', api: 'openai-completions', providerId: 'connection',
+        baseUrl: endpoint, routeKey: digest.repeat(64),
+      }]);
+      await writeFile(path.join(fixture.root, first.runId, 'pi-home', 'pi-cache-compatibility.json'), rules('https://old.invalid/v1', 'a'));
+      const currentRules = Buffer.from(rules('https://current.invalid/v1', 'b'));
+      const launch = resumeLaunch(fixture);
+      const currentModels = Buffer.from('{"providers":{"fixture":{"baseUrl":"https://current.invalid/v1"}}}');
+      const runtimeSnapshot = { ...launch.runtimeSnapshot, modelsJson: currentModels, cacheRulesJson: hasRules ? currentRules : undefined };
+      const id = await resumePiSubagentRun(fixture.root, first.runId, 'continue', {
+        ...launch, runtimeSnapshot, launchRunner: vi.fn(async () => {}),
+      });
+      if (!id) throw new Error('Expected a resumed generation');
+      await expect(readFile(path.join(fixture.root, id, 'pi-home', 'models.json'))).resolves.toEqual(currentModels);
+      const savedRules = readFile(path.join(fixture.root, id, 'pi-home', 'pi-cache-compatibility.json'));
+      if (hasRules) await expect(savedRules).resolves.toEqual(currentRules);
+      else await expect(savedRules).rejects.toMatchObject({ code: 'ENOENT' });
+    });
 
     it('refuses when a live instance already holds the claim', async () => {
       const { fixture, first } = await resumableFixture();
@@ -1389,6 +1456,22 @@ describe('Cindy durable PI Subagent runner', () => {
     expect(failed.tasks[1]?.error).toBe('Timed out before launch.');
     const argLines = (await readFile(fixture.argsFile, 'utf8')).trim().split('\n');
     expect(argLines).toHaveLength(1);
+    await waitForClose(fixture.child, fixture.stderr);
+  });
+
+  it('answers cache provenance privately for consumed steer and followUp in the real runner', async () => {
+    const fixture = await makeFixture({ cacheQueries: true });
+    const completed = await waitFor(async () => {
+      const [run] = await listPiSubagentRuns(fixture.root);
+      return run?.state === 'completed' ? run : null;
+    });
+    expect(completed.tasks[0]?.output).toBe('fixture result');
+    expect(completed.tasks[0]?.pendingApproval).toBeUndefined();
+    const commands = (await readFile(fixture.commandsFile, 'utf8')).trim().split('\n').map(line => JSON.parse(line));
+    const replies = commands.filter(command => command.id === 'cache-query');
+    expect(replies).toHaveLength(2);
+    expect(replies.map(command => JSON.parse(command.value).followUp)).toEqual([false, true]);
+    expect(await readFile(path.join(fixture.runDir, 'transcript.jsonl'), 'utf8')).not.toContain('cindy:cache-input');
     await waitForClose(fixture.child, fixture.stderr);
   });
 

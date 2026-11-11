@@ -7,6 +7,26 @@ const message: HistoryMessageSource = { id: '1', clientId: 'c1', role: 'assistan
 const page: HistoryViewPage<HistoryMessageSource> = { version: 1, items: projectHistoryView([message], false), hasMore: true, nextCursor: 'older' };
 
 describe('offline history reading', () => {
+  // Large folded bodies can be reloaded online, but collapse must not destroy
+  // the only readable copy when offline. Existing tests covered prose only.
+  it('keeps a large loaded detail readable after an offline collapse', async () => {
+    const body = { ...message, role: 'thinking', content: 'x'.repeat(1024 * 1024) };
+    const view = new HistoryViewController<HistoryMessageSource>({
+      page: async () => ({ ...page, hasMore: false, nextCursor: null, items: projectHistoryView([body], false) }),
+      details: async () => ({ version: 1, messages: [body], hasMore: false, nextCursor: null }),
+      expanded: async () => undefined,
+    });
+    await view.refresh();
+    const summary = view.getSnapshot().items[0];
+    if (summary.type !== 'work') throw new Error('Expected recoverable work');
+    view.setExpanded(summary.key, true);
+    await view.loadDetails(summary.summary);
+    view.setNetworkAvailable(false);
+    view.setExpanded(summary.key, false);
+    view.setExpanded(summary.key, true);
+    expect(view.getSnapshot().details.get(summary.key)?.messages[0].content).toBe(body.content);
+    view.setActive(false);
+  });
   it('restores cached content without page, detail or interest requests and reconnects in place', async () => {
     const transport = { page: vi.fn(async () => page), details: vi.fn(), expanded: vi.fn(async () => undefined) };
     const view = new HistoryViewController<HistoryMessageSource>(transport);

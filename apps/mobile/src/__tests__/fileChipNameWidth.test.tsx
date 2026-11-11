@@ -12,7 +12,11 @@ vi.mock('@/platform/gestureHandler', () => {
 });
 vi.mock('@/session/McpAppCard', () => ({ McpAppCard: () => null }));
 vi.mock('react-native-webview', () => ({ WebView: () => null }));
-vi.mock('expo-modules-core', () => ({ requireOptionalNativeModule: () => null }));
+vi.mock('expo-modules-core', () => ({
+  requireOptionalNativeModule: () => null,
+  requireNativeViewManager: () => () => null,
+}));
+vi.mock('@/session/NativeVideoPlayer', () => ({ NativeVideoPlayer: () => null }));
 
 // Keeps the rendered React Native styles of the real file chip (#5875). Node has no Yoga, so the
 // content-sized width below applies Yoga's own flex-basis rule to those styles instead of a layout pass.
@@ -47,7 +51,7 @@ vi.mock('lucide-react-native', () => Object.fromEntries([
   'Mail', 'CalendarDays', 'Folder', 'ChartColumn', 'Info', 'Clock', 'MapPin', 'Coffee', 'Image', 'Users', 'Star',
   'Database', 'FileArchive', 'FileAudio', 'FileChartColumn', 'FileCode', 'FileImage', 'FileSpreadsheet', 'FileText', 'FileVideo',
   'ArrowLeftRight', 'ArrowUp', 'Bot', 'Check', 'ChevronDown', 'ChevronRight', 'ChevronUp', 'Circle', 'CircleAlert', 'CircleCheck',
-  'CircleDashed', 'CircleStop', 'Copy', 'Ellipsis', 'ExternalLink', 'File', 'Ghost', 'Layers', 'ListTodo', 'LoaderCircle',
+  'CircleDashed', 'CircleMinus', 'CircleStop', 'CircleX', 'Copy', 'Ellipsis', 'ExternalLink', 'File', 'Ghost', 'Layers', 'ListTodo', 'LoaderCircle',
   'PencilLine', 'RefreshCw', 'Send', 'Share', 'Sparkles', 'Split', 'Timer', 'Trash2', 'TriangleAlert', 'Undo2', 'X',
 ].map(name => [name, () => null])));
 vi.mock('react-native-svg', () => ({ default: () => null, Circle: () => null, Path: () => null }));
@@ -128,7 +132,7 @@ async function renderServerGroup(align: 'left' | 'right', name: string) {
   root = createRoot(host);
   await act(async () => root!.render(createElement(BotGroupMessageAttachments, {
     messageId: 'message-1', align, attachments: [attachment],
-    onResolveRemoteMedia: vi.fn<ResolveRemoteMediaFn>(), resolveServerMedia: vi.fn(),
+    onResolveRemoteMedia: vi.fn<ResolveRemoteMediaFn>(), resolveServerMedia: vi.fn(async () => attachment),
   })));
   return host.querySelector('[data-testid^="message.filePreviewButton"]')!;
 }
@@ -167,3 +171,8 @@ describe('file chip names keep their width when the chip is content-sized (#5875
     }
   });
 });
+
+vi.mock('@/session/RemoteAttachmentPreview', () => ({ RemoteAttachmentPreview: () => null }));
+
+// Native blur rendering is outside the attachment layout contract.
+vi.mock('expo-blur', () => ({ BlurView: () => null }));

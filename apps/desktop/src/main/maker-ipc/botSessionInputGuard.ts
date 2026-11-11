@@ -25,11 +25,11 @@ export const SHADOWED_COMPANION_INPUT_MESSAGE =
 
 /**
  * A demoted copy's companion runs on another computer (cloud-companions.md §3): its main
- * task never starts a turn here, whichever send path (renderer, internal, queue drain) asks.
+ * and routine tasks never start a turn here, whichever send path (renderer, internal, queue drain) asks.
  */
-export function isShadowedCompanionCanonical(
+export function isShadowedCompanionSession(
   link: { role?: string | null; botId?: string | null } | null | undefined,
   isShadowed: (botId: string) => boolean,
 ): boolean {
-  return link?.role === 'canonical' && !!link.botId && isShadowed(link.botId);
+  return (link?.role === 'canonical' || link?.role === 'routine') && !!link.botId && isShadowed(link.botId);
 }

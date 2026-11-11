@@ -7,7 +7,10 @@ import {
   type WorkLouderCodexDeviceState,
 } from '../../shared/workLouderCodex.js';
 
-export { WORKLOUDER_CODEX_AGENT_SLOT_COUNT } from '../../shared/workLouderCodex.js';
+export {
+  WORKLOUDER_CODEX_AGENT_SLOT_COUNT,
+  WORKLOUDER_CREATOR_LIT_TASK_KEY_COUNT,
+} from '../../shared/workLouderCodex.js';
 
 export const enum WorkLouderLightingEffect {
   Off = 0,
@@ -108,12 +111,17 @@ export function workLouderFirmwareIdlesHidRead(
 }
 
 /**
- * Another process is using the vendor HID, or our own handle was closed under
- * an in-flight RPC. That is contention, not an unplugged cable — recycling the
- * host here just storms `0xE00002E2` / `device has been closed`.
+ * Another process owns the vendor HID, or our handle closed under an in-flight
+ * RPC. IOKit's NotPermitted/NotPrivileged are authorization failures instead.
  */
 export function isWorkLouderHidContention(detail: string): boolean {
-  return /0xE00002C1|0xE00002E2|device has been closed|\(iokit\/common\) not permitted/i.test(
+  return /0xE00002C5|device has been closed/i.test(detail);
+}
+
+export function isWorkLouderHidPermissionError(detail: string): boolean {
+  // Only IOKit's unambiguous codes belong in the platform-neutral classifier.
+  // Generic "access denied" can mean transient handle contention on Windows.
+  return /0xE00002E2|0xE00002C1|\(iokit\/common\) (?:not permitted|not privileged)/i.test(
     detail,
   );
 }
@@ -131,7 +139,7 @@ export function shouldRequestWorkLouderLivenessProbe(
   detail: string,
   deviceType: 'codex-micro' | 'creator-micro-2' | null | undefined,
 ): boolean {
-  if (isWorkLouderHidContention(detail)) return false;
+  if (isWorkLouderHidContention(detail) || isWorkLouderHidPermissionError(detail)) return false;
   if (isWorkLouderIdleFirmwareError(detail, deviceType)) return false;
   return true;
 }
@@ -149,20 +157,20 @@ export function shouldRequestWorkLouderLivenessProbe(
  * unplug. Codex still treats both the timeout and a disconnected handle as a
  * dead cable.
  *
- * HID contention (`0xE00002E2`, `device has been closed`) is also not a dead
- * cable — see `isWorkLouderHidContention`.
+ * HID contention and authorization denial are not dead cables either; the host
+ * handles permission failures separately, without probing or reconnecting.
  */
 
 export function isWorkLouderSdkTransportDeath(
   detail: string,
   deviceType: 'codex-micro' | 'creator-micro-2' | null | undefined,
 ): boolean {
-  if (isWorkLouderHidContention(detail)) return false;
+  if (isWorkLouderHidContention(detail) || isWorkLouderHidPermissionError(detail)) return false;
   if (isWorkLouderIdleFirmwareError(detail, deviceType)) return false;
   if (/hid_read_timeout/i.test(detail)) {
     return Boolean(deviceType) && !workLouderFirmwareIdlesHidRead(deviceType);
   }
-  return /cannot send, no device connected|device disconnected|hid_unavailable|0xE00002C5|error sending message|could not write|hid device disconnected/i.test(
+  return /cannot send, no device connected|device disconnected|hid_unavailable|error sending message|could not write|hid device disconnected/i.test(
     detail,
   );
 }
@@ -503,6 +511,30 @@ export function isCindyExclusiveAgentLayer(layer: WorkLouderKeymapLayer | undefi
   );
 }
 
+/** The firmware answered an RPC with "no such method" rather than failing the transport. */
+export function isWorkLouderUnsupportedRpc(code: unknown, message: unknown): boolean {
+  if (code === -32601) return true;
+  const pattern =
+    /not[_ -]?supported|unsupported|not[_ -]?implemented|method[_ -]?not[_ -]?found|unknown[_ -]?method|enosys/i;
+  return (
+    (typeof code === 'string' && pattern.test(code)) ||
+    (typeof message === 'string' && pattern.test(message))
+  );
+}
+
+/**
+ * Whether to snapshot the live document before Cindy rewrites it. A snapshot that is
+ * still on disk belongs to an occupancy that was never released; keep it when the
+ * layer already looks like Cindy's grid. Codex Micro's factory layer looks the same,
+ * so without a leftover snapshot the live document is the layout to hand back.
+ */
+export function shouldSaveCreatorKeymapSession(
+  liveLayerIsCindy: boolean,
+  sessionExists: boolean,
+): boolean {
+  return !liveLayerIsCindy || !sessionExists;
+}
+
 export function isCindyExclusiveAgentKeymap(
   text: string,
   profileIndex = 0,
@@ -785,7 +817,8 @@ function isWorkLouderCodexDeviceState(value: unknown): value is WorkLouderCodexD
     (device.inputMonitoringPermission === 'granted' ||
       device.inputMonitoringPermission === 'denied' ||
       device.inputMonitoringPermission === 'unknown' ||
-      device.inputMonitoringPermission === 'not-required')
+      device.inputMonitoringPermission === 'not-required') &&
+    (device.factoryKeymap === undefined || typeof device.factoryKeymap === 'boolean')
   );
 }
 

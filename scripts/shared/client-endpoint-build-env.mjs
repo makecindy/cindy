@@ -156,7 +156,10 @@ export function mobileClientBundleProcessEnv({
   repoRoot,
 } = {}) {
   const bundleEnv = mobileClientBundleEnv({ authRegion, repoRoot });
-  const env = { ...baseEnv, ...bundleEnv };
+  // These callers build installable iOS/Android Release bundles. Region "dev"
+  // selects endpoints, not Babel's build mode. Do not inherit an agent/server's
+  // development environment into the production Worklets transform.
+  const env = { ...baseEnv, ...bundleEnv, NODE_ENV: 'production', BABEL_ENV: 'production' };
   if (bundleEnv.EXPO_PUBLIC_CINDY_AUTH_REGION !== 'dev') {
     delete env.EXPO_PUBLIC_CINDY_DEV_RELEASE_ENDPOINT_MANIFEST_BASE_URL;
   }

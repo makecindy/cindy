@@ -122,6 +122,15 @@ describe('MessageSourceLabels device label', () => {
 });
 
 describe('MessageSourceLabels plugin and row', () => {
+  // #7631: local app source IDs must not open an unrelated plugin page.
+  it('identifies a local application and shows its app ID without plugin navigation', () => {
+    render(<MessageSourceLabels sourcePlugin={{ pluginId: 'local-app:com.taptap.pc', name: 'TapTap' }} />);
+    const label = screen.getByText('localAgent.messageSource:TapTap');
+    expect(label.closest('[title]')?.getAttribute('title')).toBe('chat.userMessage.sourceIds.localApp:com.taptap.pc');
+    expect(screen.queryByRole('button')).toBeNull();
+    fireEvent.click(label);
+    expect(mocks.navigate).not.toHaveBeenCalled();
+  });
   it.each([['Reports', 'Reports'], [undefined, 'reports']])(
     'identifies MCP Apps by server name or ID without opening plugin details (%s)',
     (name, expectedLabel) => {

@@ -1,4 +1,4 @@
-import { BrowserWindow, ipcMain } from 'electron';
+import { app, BrowserWindow, ipcMain } from 'electron';
 import { extractIpcError } from '../shared/ipcError.js';
 
 import {
@@ -12,6 +12,7 @@ import {
   clampAppearanceTerminalSize,
   clampAppearanceUiSize,
   clampAppearanceWindowZoom,
+  isAppIcon,
   type AppearanceOverrides,
   type AppearanceSettings,
   type WallpaperId,
@@ -23,6 +24,7 @@ import {
 import { assertTrustedAppRendererEvent } from './security/trustedAppRenderer.js';
 import { throwIpcError } from './utils/ipcValidate.js';
 import { isAppContentWindow } from './windowFocusClassifier.js';
+import { refreshMacSidebarGeometry } from './macosDesktopBlur.js';
 import {
   readAppearanceSettings,
   readAppearanceSettingsState,
@@ -30,6 +32,7 @@ import {
   updateAppearanceSettingsAtomic,
   writeAppearanceSettingsPatch,
 } from './appearance-settings-store.js';
+import { applyDockIcon } from './app-icon.js';
 
 export { writeAppearanceSettingsPatch } from './appearance-settings-store.js';
 
@@ -40,6 +43,13 @@ let registered = false;
 export function registerAppearanceSettingsIpc(): void {
   if (registered) return;
   registered = true;
+  // The saved scale can survive while the native window displays a different
+  // zoom (#7486). Restore it on activation without rewriting the preference or
+  // repeatedly applying an already matching scale. Only app-content windows
+  // participate; embedded webpages and utility windows keep their own zoom.
+  app.on('browser-window-focus', function restoreFocusedWindowZoom(_event, win) {
+    restoreWindowZoom(win);
+  });
 
   // Must be registered before BrowserWindow creation: preload reads this on
   // the first synchronous bootstrap frame.
@@ -107,19 +117,12 @@ export function registerAppearanceSettingsIpc(): void {
 
   ipcMain.handle('appearance-settings:set-patch', async (event, rawPatch: unknown) => {
     assertTrustedAppRendererEvent(event);
-    const patch = parsePatch(rawPatch);
-    const settings = await writeAppearanceSettingsPatch(patch);
-    applyAppearanceToWindows(settings);
-    broadcast(settings);
-    return settings;
+    return updateAppearanceFromSettings(rawPatch);
   });
 
   ipcMain.handle('appearance-settings:reset', async (event) => {
     assertTrustedAppRendererEvent(event);
-    const settings = await resetAppearanceSettings();
-    applyAppearanceToWindows(settings);
-    broadcast(settings);
-    return settings;
+    return resetAppearanceFromSettings();
   });
 }
 
@@ -129,12 +132,44 @@ export function applyAppearanceToWindow(
 ): void {
   if (win.isDestroyed() || win.webContents.isDestroyed() || !isAppContentWindow(win)) return;
   win.webContents.setZoomFactor(settings.windowZoom);
+  if (process.platform === 'darwin') refreshMacSidebarGeometry(win);
 }
 
 export function applyAppearanceToWindows(settings = readAppearanceSettings()): void {
   for (const win of BrowserWindow.getAllWindows()) {
     applyAppearanceToWindow(win, settings);
   }
+}
+
+/**
+ * Re-asserts the persisted window zoom only when the live zoom has drifted.
+ *
+ * Chromium persists a zoom level per URL. A window that navigates to a URL with
+ * a stale record silently keeps that record instead of the saved preference
+ * (#7486). Callers invoke this at points where Chromium can override the zoom.
+ */
+export function restoreWindowZoom(win: BrowserWindow): void {
+  if (!isAppContentWindow(win) || win.webContents.isDestroyed()) return;
+  const settings = readAppearanceSettings();
+  if (Math.abs(win.webContents.getZoomFactor() - settings.windowZoom) > 0.000001) {
+    applyAppearanceToWindow(win, settings);
+  }
+}
+
+/**
+ * Keeps the persisted zoom across in-page navigations.
+ *
+ * The renderer routes conversations through the URL hash, so `did-finish-load`
+ * never fires when the user switches pages. Chromium then restores whatever
+ * zoom level it recorded for the new URL, which makes the window shrink or grow
+ * until the next full load. Re-assert the preference on every in-page
+ * navigation so the saved scale wins.
+ */
+export function installWindowZoomRestoration(win: BrowserWindow): void {
+  win.webContents.on('did-navigate-in-page', (_event, _url, isMainFrame) => {
+    if (!isMainFrame || win.isDestroyed() || win.webContents.isDestroyed()) return;
+    restoreWindowZoom(win);
+  });
 }
 
 export function getPersistedWindowZoom(): number {
@@ -191,8 +226,10 @@ function parsePatch(rawPatch: unknown): AppearanceOverrides {
     'wallpaperId',
     'wallpaperOverlay',
     'wallpaperVisibility',
+    'desktopVisibility',
     'wallpaperBlur',
     'wallpaperMotion',
+    'appIcon',
   ]);
   for (const key of Object.keys(raw)) {
     if (!allowed.has(key)) throwIpcError('INVALID_PARAMS', `unknown appearance field: ${key}`);
@@ -265,6 +302,17 @@ function parsePatch(rawPatch: unknown): AppearanceOverrides {
             APPEARANCE_LIMITS.wallpaperVisibility,
           );
   }
+  if ('desktopVisibility' in raw) {
+    patch.desktopVisibility =
+      raw.desktopVisibility === null
+        ? null
+        : parseNumber(
+            raw.desktopVisibility,
+            'desktopVisibility',
+            clampAppearanceWallpaperVisibility,
+            APPEARANCE_LIMITS.wallpaperVisibility,
+          );
+  }
   if ('wallpaperBlur' in raw) {
     patch.wallpaperBlur =
       raw.wallpaperBlur === null
@@ -275,6 +323,10 @@ function parsePatch(rawPatch: unknown): AppearanceOverrides {
             clampAppearanceWallpaperBlur,
             APPEARANCE_LIMITS.wallpaperBlur,
           );
+  }
+  if ('appIcon' in raw) {
+    if (!isAppIcon(raw.appIcon)) throwIpcError('INVALID_PARAMS', 'appIcon is not supported');
+    patch.appIcon = raw.appIcon;
   }
   return patch;
 }
@@ -304,3 +356,19 @@ function parseNumber(
 }
 
 export const __testing = { parsePatch };
+
+/** UI and Agent edits share validation, persistence, live windows and broadcasts. */
+export async function updateAppearanceFromSettings(rawPatch: unknown) {
+  const settings = await writeAppearanceSettingsPatch(parsePatch(rawPatch));
+  applyAppearanceToWindows(settings);
+  applyDockIcon(settings);
+  broadcast(settings);
+  return settings;
+}
+export async function resetAppearanceFromSettings() {
+  const settings = await resetAppearanceSettings();
+  applyAppearanceToWindows(settings);
+  applyDockIcon(settings);
+  broadcast(settings);
+  return settings;
+}

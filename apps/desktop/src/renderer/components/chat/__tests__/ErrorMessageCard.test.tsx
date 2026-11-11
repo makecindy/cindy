@@ -18,6 +18,16 @@ const STREAM_RAW =
 afterEach(cleanup);
 
 describe('ErrorMessageCard', () => {
+  // Historical execution failures must offer the same diagnosis as live failures.
+  it('offers diagnosis only after expanding a persisted execution error', () => {
+    const onDiagnose = vi.fn();
+    render(<ErrorMessageCard message="provider failed api_key=private-test-value" onDiagnose={onDiagnose} />);
+    expect(screen.queryByText('chat.errorBanner.diagnose')).toBeNull();
+    fireEvent.click(screen.getByText('chat.errorBanner.networkShowRaw'));
+    expect(screen.queryByText(/private-test-value/)).toBeNull();
+    fireEvent.click(screen.getByText('chat.errorBanner.diagnose'));
+    expect(onDiagnose).toHaveBeenCalledWith(expect.objectContaining({ details: 'provider failed api_key=private-test-value' }));
+  });
   it('shows a blocked input explanation directly without treating it as a failed reply', () => {
     const message = 'Please remove the credential before sending: api_key=private-test-value';
     render(createElement(ErrorMessageCard, { kind: 'blocked-input', message }));
@@ -112,5 +122,14 @@ describe('ErrorMessageCard', () => {
     expect(screen.queryByText(raw)).toBeNull();
     fireEvent.click(screen.getByText('chat.errorBanner.networkShowRaw'));
     expect(screen.getByText(raw)).toBeTruthy();
+  });
+});
+
+
+describe('output-limit guidance', () => {
+  it.each([131064, 1000])('renders reasoning-aware usage and guidance (%s)', (reasoningTokens) => {
+    render(createElement(ErrorMessageCard, { message: 'limit', reason: 'output-limit', outputLimit: { outputTokens: 131072, reasoningTokens } }));
+    const expected = reasoningTokens === 131064 ? 'logic.errors.outputLimitReasoning' : 'logic.errors.outputLimit';
+    expect(screen.getByText(`logic.errors.outputLimitUsage ${expected}`)).toBeTruthy();
   });
 });

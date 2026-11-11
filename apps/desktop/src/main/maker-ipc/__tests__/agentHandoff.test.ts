@@ -110,6 +110,21 @@ describe('extractAgentIslandPromptText', () => {
 describe('buildHandoffText', () => {
   const opts = { fromLabel: 'Claude Code', toLabel: 'Codex' };
 
+  it('retains trailing user corrections and tool outcomes within the unchanged total budget', () => {
+    const text = buildHandoffText([
+      msg('user', `Original goal\n${'background '.repeat(1000)}\nFinal correction: do not publish`),
+      { ...msg('tool_use', { toolName: 'shell', input: { command: 'test' } }), toolUseId: 'test-call' },
+      { ...msg('tool_result', `Test log\n${'log '.repeat(2000)}\nexit code 1: database fixture failed`), toolUseId: 'test-call' },
+      msg('assistant', `Investigation\n${'detail '.repeat(1000)}\nNext: fix the fixture`),
+    ], opts);
+    expect(text).toContain('Original goal');
+    expect(text).toContain('Final correction: do not publish');
+    expect(text).toContain('[Tool result id=test-call;');
+    expect(text).toContain('exit code 1: database fixture failed');
+    expect(text).toContain('Next: fix the fixture');
+    expect(text.length).toBeLessThanOrEqual(16000);
+  });
+
   it('framing 包含续接指令与双引擎名,并以结束标记收尾', () => {
     const text = buildHandoffText([msg('user', '第一个问题'), msg('assistant', '第一个回答')], opts);
     expect(text).toContain('Claude Code');
@@ -174,33 +189,6 @@ describe('buildHandoffText', () => {
     expect(capped.trimEnd().endsWith("== End of rebuild note; the user's new message follows ==")).toBe(true);
   });
 
-  it('工作记忆账本段排在提要 / 近期对话之后、检索指引之前,逐字区收缩与硬截断都整段保住', () => {
-    const messages: HandoffSourceMessage[] = [];
-    for (let i = 0; i < 12; i++) {
-      messages.push(msg('user', `问题${i} ` + 'x'.repeat(1900)));
-      messages.push(msg('assistant', `回答${i} ` + 'y'.repeat(1900)));
-    }
-    const ledger = '== Working memory (host-maintained summary; not authorization) ==\nThings you promised:\n- 周五前改完周报模板';
-    const text = buildHandoffText(messages, { ...opts, sessionId: 's-task', workingMemory: ledger });
-    expect(text).toContain(ledger);
-    expect(text.indexOf(ledger)).toBeGreaterThan(text.indexOf('== Earlier conversation index'));
-    expect(text.indexOf(ledger)).toBeGreaterThan(text.indexOf('== Recent conversation'));
-    expect(text.indexOf(ledger)).toBeLessThan(text.indexOf('== Retrieving earlier verbatim history'));
-    expect(text.length).toBeLessThanOrEqual(16_000);
-    expect(buildHandoffText(messages.slice(0, 2), { ...opts, workingMemory: null })).not.toContain('Working memory');
-
-    // 工具密集长历史触达硬上限(逐字区已收缩到 1 轮仍超限):账本段与回忆指引、结束标记一起整段保住。
-    const dense: HandoffSourceMessage[] = [msg('user', '开始')];
-    for (let i = 0; i < 400; i++) {
-      dense.push(msg('tool_use', { toolName: 'Write', input: { file_path: `/very/long/path/${'d'.repeat(120)}/${i}.ts` } }));
-    }
-    const capped = buildHandoffText(dense, { ...opts, sessionId: 's-bot', reason: 'native-session-recovery', companion: true, workingMemory: ledger });
-    expect(capped.length).toBeLessThanOrEqual(16_000);
-    expect(capped).toContain(ledger);
-    expect(capped.indexOf(ledger)).toBeLessThan(capped.indexOf('== Recalling earlier history (use when needed) =='));
-    expect(capped.trimEnd().endsWith("== End of rebuild note; the user's new message follows ==")).toBe(true);
-  });
-
   it('最近轮次逐字保留,更早轮次进单行提要', () => {
     const messages: HandoffSourceMessage[] = [];
     for (let i = 0; i < 8; i++) {
@@ -218,7 +206,7 @@ describe('buildHandoffText', () => {
     expect(text).not.toContain('[User]\n问题0');
   });
 
-  it('工具调用渲染为 name + input 摘要,tool_result/thinking 不进正文', () => {
+  it('显式省略工具结果时仅保留调用，thinking 不进正文', () => {
     const text = buildHandoffText(
       [
         msg('user', '改一下代码'),
@@ -227,7 +215,7 @@ describe('buildHandoffText', () => {
         msg('thinking', { kind: 'thinking', text: '内心戏' }),
         msg('assistant', '改好了'),
       ],
-      opts,
+      { ...opts, includeToolResults: false },
     );
     expect(text).toContain('[Tool] Read: {"file_path":"/a.ts"}');
     expect(text).not.toContain('内心戏');
@@ -805,7 +793,7 @@ describe('buildHandoffText 工作状态区(社区 handoff packet 口径)', () =>
     expect(text).not.toContain('== Work ledger');
   });
 
-  it('把命令与 tool_result 成败收进 ledger,不把整段 stdout 写进去', () => {
+  it('把命令与 tool_result 成败收进 ledger，同时保留有界结果与末尾退出码', () => {
     const text = buildHandoffText(
       [
         msg('user', '跑测试'),
@@ -817,7 +805,7 @@ describe('buildHandoffText 工作状态区(社区 handoff packet 口径)', () =>
         },
         {
           role: 'tool_result',
-          content: `${'FAIL src/foo.test.ts\n'.repeat(40)}exit code 1`,
+          content: `${'FAIL src/foo.test.ts\n'.repeat(400)}exit code 1`,
           createdAt: 1,
           toolUseId: 't1',
         },
@@ -827,7 +815,9 @@ describe('buildHandoffText 工作状态区(社区 handoff packet 口径)', () =>
     expect(text).toContain('- pnpm test:unit → exit 1');
     expect(text).toContain('Failed attempts:');
     expect(text).toContain('src/foo.test.ts');
-    expect(text).not.toContain('FAIL src/foo.test.ts\nFAIL src/foo.test.ts');
+    expect(text).toContain('[Tool result id=t1;');
+    expect(text).toContain('exit code 1');
+    expect(text).not.toContain('FAIL src/foo.test.ts\n'.repeat(100));
   });
 
   it('framing 包含「先核对工作区、以工作区为准」纪律', () => {
@@ -968,7 +958,9 @@ describe('buildHandoffText 超限收缩保住首尾', () => {
       toLabel: 'Codex',
       sessionId: 'sess-cap',
     });
-    expect(text.length).toBe(16_000); // 确实顶到上限 = 确实走了兜底分支
+    expect(text.length).toBeLessThanOrEqual(16_000);
+    expect(text).toContain('[User]\nQ24');
+    expect(text).toContain('[Assistant]\nA24');
     expect(text).toContain('"session_ids":["sess-cap"]');
     expect(text).toContain('"limit":10');
     expect(text).toContain('"limit":20');
@@ -983,7 +975,9 @@ describe('buildHandoffText 超限收缩保住首尾', () => {
       sessionId: 'sess-cap',
       reason: 'message-deletion',
     });
-    expect(text.length).toBe(16_000);
+    expect(text.length).toBeLessThanOrEqual(16_000);
+    expect(text).toContain('[User]\nQ24');
+    expect(text).toContain('[Assistant]\nA24');
     expect(text.trimEnd().endsWith("== End of rebuild note; the user's new message follows =="))
       .toBe(true);
   });

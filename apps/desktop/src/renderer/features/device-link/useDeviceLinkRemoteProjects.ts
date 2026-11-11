@@ -27,21 +27,22 @@ import { evictTaskTagCatalog } from '../task-tags/taskTagEvents';
  *
  * 唯一的盘上痕迹是**非权威冷缓存**:列表快照落在 main 的 userData
  * (`main/device-link/mirrorCacheStore.ts`),仅用于冷启动首屏 —— mount 时
- * `hydrateFromCache` 把上次看到的行画出来并标 disconnected,bootstrap 一到即整片替换;
+ * `hydrateFromCache` 把上次看到的行画出来并标 connecting(检测中,写路径仍按断线对待),
+ * bootstrap 一到即整片替换;link 在 CONNECTING_GRACE_MS 内没上线才降为 disconnected;
  * 设备明确离场(撤销 / 关被控 / 禁用控制)时连它的缓存一起清。整棵缓存的删除归 owner
  * 边界(main 的 teardownAuthAccountBoundary),这里只负责作废未落盘的回写。
  */
 
 import { useEffect, useRef } from 'react';
-import { isSharedTaskPeer } from '@cindy/device-link';
+import { isSharedTaskPeer, readProviderMetadataContinuity } from '@cindy/device-link';
 import { projectScheduleEvent } from '@cindy/maker-shared/schedule-events';
 import { historyTurnEnded } from '@cindy/maker-shared/message-window';
+import { PROJECT_ALIASES_CHANGED_CHANNEL } from '@cindy/maker-shared/project-alias-sync';
 import { useAuth } from '@/contexts/AuthContext';
 import { isDeviceLinkRemotePushCurrent } from '@/lib/remoteDataOwnerPushFence';
 import { createLogger } from '@/lib/logger';
 import { makerChatStore } from '@/lib/makerChatStore';
 import {
-  requestRemoteSessionStatus,
   remoteProjectsStore,
   retryRemoteSessionStatus,
   setRemoteReseedImpl,
@@ -55,7 +56,12 @@ import {
 import { revokedDevicesStore } from './revokedDevicesStore';
 import { unresponsiveDevicesStore } from './unresponsiveDevicesStore';
 import { subscribeDeviceLinkDeviceRemoval } from './useDeviceLinkDeviceList';
-import { collectSessionListSnapshot, refreshRemoteDeviceSessions } from './refreshRemoteSessions';
+import {
+  collectSessionListSnapshot,
+  refreshRemoteDeviceSessions,
+  remoteScheduleIndexLastRead,
+  remoteScheduleIndexReadSeq,
+} from './refreshRemoteSessions';
 import {
   cancelSessionListPersist,
   clearCachedDevice,
@@ -72,6 +78,7 @@ import {
   prefetchDeviceGitSafetySettings,
 } from '@/hooks/useGitSafetySettings';
 import { extractIpcError } from '@/utils/ipcError';
+import { remoteProjectAliases } from './remoteProjectAliases';
 
 const log = createLogger('device-link-remote-projects');
 
@@ -131,6 +138,32 @@ export function startSessionListTokenRefresh(
 
 /** sessions:created reseed 防抖(被控端短时间多次创建会话 / orca 起多 worker 时合并重拉)。 */
 const RESEED_DEBOUNCE_MS = 300;
+// Limit only the startup route's discovery wait, not the request or peer lifetime.
+// Matches the background device directory's 10s budget; late results still apply.
+const INITIAL_DISCOVERY_WAIT_MS = 10_000;
+/**
+ * Schedule events from another computer arrive in pairs (fired, then completed or
+ * skipped, usually seconds apart). Each refresh pulls the whole run index, and the
+ * index alternates between "running" and "not running", so the content cache never
+ * hits. Wait for a quiet period so a pair costs one read whose content is usually
+ * unchanged; the max wait keeps a steady stream of events from postponing it forever.
+ */
+const SCHEDULE_EVENT_QUIET_MS = 10_000;
+const SCHEDULE_EVENT_MAX_WAIT_MS = 30_000;
+/**
+ * Live schedule events already keep the run index current, so the 60 s safety-net
+ * reconcile only re-reads it every few minutes, or at once after events were skipped
+ * while the window was hidden or idle.
+ */
+const PERIODIC_SCHEDULE_INDEX_MS = 5 * 60_000;
+/**
+ * 「检测中」最多撑多久:冷启动缓存种入 / relay 重连期间分片标 connecting,link 过了这么久
+ * 还没上线就降为 disconnected,免得 relay 长时间不可用时侧栏一直显示检测中。
+ * 取值覆盖 device-link 一次完整握手超时(15s)再留余量;上线即清除。
+ */
+const CONNECTING_GRACE_MS = 20_000;
+/** 首台远程设备 bootstrap 完成的启动计时只打一次(与 main 的 startup 里程碑对读)。 */
+let firstRemoteDeviceBootstrapLogged = false;
 
 /**
  * best-effort push 的窗口内 anti-entropy 周期。列表、置顶、归档/删除走 sessions:patched /
@@ -396,6 +429,7 @@ export function useDeviceLinkRemoteProjects(
   const ownerBoundaryGeneration = `${dataOwnerId ?? ''}`;
   useEffect(() => {
     clearMirrorCacheAccountState();
+    remoteProjectAliases.clear();
     // 清完必须**主动补读 session-list** 直到拿到新账号的 owner 锚点:
     //  1. 主 effect 只依赖 isAuthenticated / selfDeviceId,A→B 直接切换(两者都不变)时不会
     //     重跑,而读 session-list 的调用挂在主 effect 里 —— 不补读的话 B 的排程回写会一直
@@ -413,12 +447,20 @@ export function useDeviceLinkRemoteProjects(
     if (!isAuthenticated || !selfDeviceId) {
       // 同 'stopped' / unmount:cancel 在 clear 之后,免得 clear 的同步通知又排一次回写。
       remoteProjectsStore.clear();
+      remoteProjectAliases.clear();
       cancelSessionListPersist();
       // 登出分支:上面的 dataOwnerId effect 已清 mirror 状态,这里补 cancel 去抖回写。
       return;
     }
 
     let disposed = false;
+    const scheduleEventRefreshes = new Map<string, { timer: ReturnType<typeof setTimeout>; firstAt: number }>();
+    /** Count of schedule events skipped while the window was hidden or idle. */
+    const scheduleEventsMissed = new Map<string, number>();
+    const markScheduleEventMissed = (deviceId: string) =>
+      scheduleEventsMissed.set(deviceId, (scheduleEventsMissed.get(deviceId) ?? 0) + 1);
+    const finishInitialDiscovery = remoteProjectsStore.beginInitialDiscovery();
+    const initialDiscoveryTimer = setTimeout(finishInitialDiscovery, INITIAL_DISCOVERY_WAIT_MS);
     /**
      * 「已明确离场、不许被冷缓存种回来」的设备 id。删除 / 撤销访问 / 关闭被控 / 本机停用控制
      * 路径都会往里加 —— 它们清盘是异步的,而 mount 时那次 readCachedSessionList 可能早已
@@ -428,8 +470,34 @@ export function useDeviceLinkRemoteProjects(
     let directoryGeneration = 0;
     /** relay 在线时才跑 anti-entropy；初始状态未知时保守暂停，避免离线失败重试。 */
     let linkOnline: boolean | null = null;
+    let directDataDevices = new Set<string>();
+    const peerReadable = (deviceId: string) => linkOnline !== false || directDataDevices.has(deviceId);
     /** push 一旦到达即权威：迟到的 getState 快照不得覆盖更新的 link status。 */
     let linkStatusPushSeen = false;
+    /**
+     * 「检测中」宽限:缓存种入 / relay 重连时分片标 connecting,到期 link 仍未上线就降为
+     * disconnected。上线(status online)与卸载都清掉它;重复进入 connecting 只重置计时。
+     */
+    let connectingGraceTimer: ReturnType<typeof setTimeout> | null = null;
+    /**
+     * 本机这条 link 会不会去连:getState 的 remoteControlEnabled && !standby,或收到 connecting
+     * push 即为 true;stopped push 或待命 / 关闭远程控制为 false;未知为 null。缓存种入晚于
+     * 这些信号时据此收口,避免留下一个没有宽限计时器、永远「检测中」的分片。
+     */
+    let linkExpectedToConnect: boolean | null = null;
+    const clearConnectingGrace = (): void => {
+      if (connectingGraceTimer) clearTimeout(connectingGraceTimer);
+      connectingGraceTimer = null;
+    };
+    const markAllConnecting = (): void => {
+      remoteProjectsStore.markAllConnecting((deviceId) => !isSharedTaskPeer(deviceId) && !directDataDevices.has(deviceId));
+      clearConnectingGrace();
+      connectingGraceTimer = setTimeout(() => {
+        connectingGraceTimer = null;
+        if (disposed || linkOnline) return;
+        remoteProjectsStore.markAllDisconnected((deviceId) => !isSharedTaskPeer(deviceId) && !directDataDevices.has(deviceId));
+      }, CONNECTING_GRACE_MS);
+    };
     /** 当前合格设备:deviceId → 友好名 */
     const eligible = new Map<string, string>();
     /** 本机主动关闭控制的目标设备(控制端本地偏好)。 */
@@ -503,7 +571,7 @@ export function useDeviceLinkRemoteProjects(
         deviceId,
         setTimeout(() => {
           archivedRetryTimers.delete(deviceId);
-          if (disposed || !eligible.has(deviceId) || !linkOnline) return;
+          if (disposed || !eligible.has(deviceId) || !peerReadable(deviceId)) return;
           retryRemoteSessionStatus(deviceId, 'archived');
         }, delay),
       );
@@ -522,6 +590,7 @@ export function useDeviceLinkRemoteProjects(
       sessionsSubscribeRetry.delete(deviceId);
       revokedDevicesStore.markRevoked(deviceId);
       remoteProjectsStore.removeDevice(deviceId);
+      remoteProjectAliases.remove(deviceId);
       removeRemoteSessionActivityForDevice(deviceId);
       // 被控端明确拒绝我们:盘上那份镜像缓存也不该留(尊重对方的拒绝,不在本机留副本)。
       cacheHydrationBlocked.add(deviceId);
@@ -538,8 +607,12 @@ export function useDeviceLinkRemoteProjects(
      * 任一步返回 ACCESS_REVOKED → 标记已撤销并移除该设备;全程无撤销 → 清掉残留标记(恢复收尾)。
      */
     const canBootstrap = (deviceId: string, lifecycleEpoch: number): boolean =>
-      !disposed && linkOnline !== false && eligible.has(deviceId) && !unresponsiveDevicesStore.has(deviceId) &&
+      !disposed && peerReadable(deviceId) && eligible.has(deviceId) && !unresponsiveDevicesStore.has(deviceId) &&
       remoteProjectsStore.getDeviceLifecycleEpoch(deviceId) === lifecycleEpoch;
+    const refreshAliases = (deviceId: string, invalidate = false): Promise<void> => {
+      const lifecycleEpoch = remoteProjectsStore.getDeviceLifecycleEpoch(deviceId);
+      return remoteProjectAliases.refresh(deviceId, () => canBootstrap(deviceId, lifecycleEpoch), invalidate);
+    };
     const runSubscribeAndBootstrap = async (
       deviceId: string,
       name: string,
@@ -580,6 +653,7 @@ export function useDeviceLinkRemoteProjects(
       if (!canContinue()) return;
       // bootstrap 期间被撤销(subscribe 成功、list 被拒)→ refreshRemoteDeviceSessions 返 'revoked'
       // (而非静默 give-up)→ 这里 handleRevoked,而不是继续预取能力 / 清撤销标记无视拒绝。
+      void refreshAliases(deviceId);
       const result = await refreshRemoteDeviceSessions(deviceId, name, { scope: 'both' });
       if (!canContinue()) return;
       if (result === 'revoked') return void handleRevoked(deviceId);
@@ -596,6 +670,11 @@ export function useDeviceLinkRemoteProjects(
       // 预取被控端能力(model/effort/fast/permission/fork/rewind),使首次打开远程会话时
       // 模型下拉等不为空、modelDefinitions 同步层已热。成功后逐项预取，避免弱网突发。
       if (result === 'ok') {
+        if (!firstRemoteDeviceBootstrapLogged) {
+          firstRemoteDeviceBootstrapLogged = true;
+          // 与 main 的 `startup` 里程碑对读:这里的基准是 renderer 启动,不是进程启动。
+          log.info(`startup milestone first-remote-device-bootstrapped +${Math.round(performance.now())}ms since renderer start peer=${deviceId.slice(0, 8)}`);
+        }
         await prefetchDeviceCapabilities(deviceId);
         if (!canBootstrap(deviceId, lifecycleEpoch)) return;
         await prefetchDeviceProviders(deviceId);
@@ -660,9 +739,13 @@ export function useDeviceLinkRemoteProjects(
         d.remoteControlEnabled &&
         !disabledControlDeviceIds.has(d.deviceId);
       if (ok) {
-        // Confirmed offline waits for the online reseed. Unknown retains the existing
-        // bootstrap fallback when getState fails and no subsequent status push arrives.
-        if (linkOnline === false) return;
+        // Link 还没上线(冷启动 / 重连中):只记下合格性,不发 subscribe。上线那一刻按 eligible
+        // 直接 bootstrap,不再等 reseed 的那次 REST 往返——这正是启动时「先离线再在线」里
+        // 多出来的一跳。Unknown(getState 失败且没收到 status push)保留原有的直接 bootstrap。
+        if (!peerReadable(d.deviceId)) {
+          eligible.set(d.deviceId, d.name);
+          return;
+        }
         const prevName = eligible.get(d.deviceId);
         const wasEligible = prevName !== undefined;
         eligible.set(d.deviceId, d.name);
@@ -693,8 +776,10 @@ export function useDeviceLinkRemoteProjects(
         }
         if (action === 'disconnect') {
           remoteProjectsStore.markDeviceDisconnected(d.deviceId);
+          remoteProjectAliases.suspend(d.deviceId);
         } else {
           remoteProjectsStore.removeDevice(d.deviceId);
+          remoteProjectAliases.remove(d.deviceId);
           removeRemoteSessionActivityForDevice(d.deviceId);
           // 设备明确离场(关被控 / 本机禁用控制 / 是自己):它的冷缓存一起清掉,
           // 否则下次冷启动会把一台已经不该出现的设备画回侧边栏。
@@ -708,11 +793,11 @@ export function useDeviceLinkRemoteProjects(
     };
 
     /** 全量重播(初始 + WS 重连):listDevices 带 isSelf,权威。 */
-    const reseed = (): void => {
+    const reseed = (): Promise<void> => {
       const generation = directoryGeneration;
-      void window.electronAPI.deviceLink
+      return window.electronAPI.deviceLink
         .listDevices()
-        .then(({ devices }) => {
+        .then(({ devices, stale }) => {
           if (disposed || generation !== directoryGeneration) return;
           for (const d of devices) {
             applyDevice({
@@ -732,21 +817,26 @@ export function useDeviceLinkRemoteProjects(
           // 必须遍历 `getAllDeviceIds()`:缓存种入的分片一律标 disconnected,而
           // `getDeviceIds()` 只返回 connected —— 用它的话这个收敛循环恰好**永远看不到**
           // 要收的那些分片(review: codex 指出上一轮的修复因此无效)。
-          const authoritative = new Set(devices.map((d) => d.deviceId));
-          for (const deviceId of remoteProjectsStore.getAllDeviceIds()) {
-            // SharedTask shards are reconciled against membership, not the own-device directory.
-            if (isSharedTaskPeer(deviceId)) continue;
-            if (authoritative.has(deviceId) || eligible.has(deviceId)) continue;
-            log.debug(`removing cached shard absent from listDevices: ${deviceId.slice(0, 8)}`);
-            cancelDeviceReseeds(deviceId);
-            clearArchivedSessionRetry(deviceId);
-            remoteProjectsStore.removeDevice(deviceId);
-            removeRemoteSessionActivityForDevice(deviceId);
-            // 权威列表里没有它 = 明确离场,和撤销 / 关被控同一档:登记进 hydration 黑名单,
-            // 否则在途的那次 readCachedSessionList 落地后又把它种回来,而紧随的 reseed 在
-            // listDevices 离线时纠正不了(review: codex P1)。
-            cacheHydrationBlocked.add(deviceId);
-            clearCachedDevice(deviceId);
+          // A bounded last-known directory cannot prove absence. Keep cached
+          // shards until a fresh REST answer or an explicit permission event.
+          if (!stale) {
+            const authoritative = new Set(devices.map((d) => d.deviceId));
+            for (const deviceId of remoteProjectsStore.getAllDeviceIds()) {
+              // SharedTask shards are reconciled against membership, not the own-device directory.
+              if (isSharedTaskPeer(deviceId)) continue;
+              if (authoritative.has(deviceId) || eligible.has(deviceId)) continue;
+              log.debug(`removing cached shard absent from listDevices: ${deviceId.slice(0, 8)}`);
+              cancelDeviceReseeds(deviceId);
+              clearArchivedSessionRetry(deviceId);
+              remoteProjectsStore.removeDevice(deviceId);
+              remoteProjectAliases.remove(deviceId);
+              removeRemoteSessionActivityForDevice(deviceId);
+              // 权威列表里没有它 = 明确离场,和撤销 / 关被控同一档:登记进 hydration 黑名单,
+              // 否则在途的那次 readCachedSessionList 落地后又把它种回来,而紧随的 reseed 在
+              // listDevices 离线时纠正不了(review: codex P1)。
+              cacheHydrationBlocked.add(deviceId);
+              clearCachedDevice(deviceId);
+            }
           }
         })
         .catch((err) => log.debug('listDevices reseed failed', err));
@@ -761,7 +851,7 @@ export function useDeviceLinkRemoteProjects(
     // 账号里删掉设备的情形,都靠补这一轮收敛(reseed 末尾还会清掉权威列表中缺席的分片)。
     // 仍在 listDevices 里但离线的设备照既有语义保留为 disconnected —— 与「断连保留最近
     // 一次快照让 All Sessions 稳定」一致,不是本次引入的行为。
-    void readCachedSessionList().then((devices) => {
+    const initialCacheRead = readCachedSessionList().then((devices) => {
       if (disposed || devices.length === 0) return;
       // 读快照这一跳期间被**明确移除**的设备(撤销访问 / 关闭被控 / 本机停用控制)不许种回来:
       // 那些路径已经删了分片并清了盘,而这次种入拿的是它们之前读到的旧快照;紧随的 reseed
@@ -769,8 +859,17 @@ export function useDeviceLinkRemoteProjects(
       const usable = devices.filter((device) => !cacheHydrationBlocked.has(device.deviceId));
       if (usable.length === 0) return;
       remoteProjectsStore.hydrateFromCache(usable);
-      reseed();
-    });
+      // 种入的分片是 connecting。link 已上线时由 bootstrap / reseed 接手;否则按已知的连接
+      // 预期收口:不会去连(待命 / 关闭远程控制)直接标离线,会去连或未知则进宽限计时。
+      if (linkOnline !== true) {
+        if (linkExpectedToConnect === false) {
+          remoteProjectsStore.markAllDisconnected((deviceId) => !isSharedTaskPeer(deviceId) && !directDataDevices.has(deviceId));
+        } else {
+          markAllConnecting();
+        }
+      }
+      return reseed();
+    }).catch((err) => log.debug('initial remote cache read failed', err));
 
     // 用户点击失败态重试 → 重走 subscribe + bootstrap，恢复 loading 与完整重试语义。
     setRemoteSessionBootstrapRetryImpl((deviceId) => {
@@ -796,7 +895,7 @@ export function useDeviceLinkRemoteProjects(
         timerKey,
         setTimeout(() => {
           reseedTimers.delete(timerKey);
-          if (!disposed && linkOnline && eligible.has(deviceId)) {
+          if (!disposed && peerReadable(deviceId) && eligible.has(deviceId)) {
             void refreshRemoteDeviceSessions(deviceId, name, {
               snapshotMode: 'merge',
               status,
@@ -821,7 +920,7 @@ export function useDeviceLinkRemoteProjects(
       );
     });
     const periodicReconcile = startRemoteSessionsReconciler(
-      () => (linkOnline ? [...eligible].filter(([id]) => !unresponsiveDevicesStore.has(id)) : []),
+      () => [...eligible].filter(([id]) => peerReadable(id) && !unresponsiveDevicesStore.has(id)),
       async (deviceId, name) => {
         log.debug(`sessions refresh trigger=periodic window=${windowRole} peer=${deviceId.slice(0, 8)} visible=${periodicReconcileActiveRef.current}`);
         if (sessionsSubscribeRetry.has(deviceId)) {
@@ -831,11 +930,23 @@ export function useDeviceLinkRemoteProjects(
         }
         // sessions:list 是 200 条有界窗口；refresh 层会保留窗口外 active 行，并有界补查
         // 缺席缓存 id 的终态，不能直接把响应缺席解释成删除。
+        void refreshAliases(deviceId);
+        const seqBefore = remoteScheduleIndexReadSeq();
+        const missed = scheduleEventsMissed.get(deviceId) ?? 0;
+        // A negative age means the clock moved back; read rather than trust it.
+        const indexAge = Date.now() - (remoteScheduleIndexLastRead(deviceId)?.startedAt ?? 0);
+        const withSchedule = missed > 0 || indexAge < 0 || indexAge >= PERIODIC_SCHEDULE_INDEX_MS;
         const result = await refreshRemoteDeviceSessions(deviceId, name, {
-          scope: 'both',
+          scope: withSchedule ? 'both' : 'sessions',
           snapshotMode: 'merge',
           coalescingMode: 'weak',
         });
+        // Only a read started after these events were skipped covers them; events
+        // skipped during this read stay pending for the next reconcile.
+        if (missed > 0 && (remoteScheduleIndexLastRead(deviceId)?.seq ?? 0) > seqBefore
+          && scheduleEventsMissed.get(deviceId) === missed) {
+          scheduleEventsMissed.delete(deviceId);
+        }
         if (result === 'revoked' && !disposed) handleRevoked(deviceId);
         // 回传结果供 reconciler 的失败退避记账('gave-up' 加深退避,'ok' 复位)。
         return result;
@@ -865,14 +976,22 @@ export function useDeviceLinkRemoteProjects(
       }
     });
 
-    void window.electronAPI.deviceLink
+    const initialDirectoryRead = window.electronAPI.deviceLink
       .getState()
       .then((state) => {
         if (disposed) return;
         if (!linkStatusPushSeen) linkOnline = state.linkStatus === 'online';
+        if (!linkStatusPushSeen) directDataDevices = new Set(state.directDataDeviceIds ?? []);
         // Presence can start bootstrap before this initial snapshot settles.
         // Reuse disconnect cleanup to clear loading and invalidate in-flight snapshots.
-        if (!linkStatusPushSeen && !linkOnline) remoteProjectsStore.markAllDisconnected();
+        if (!linkStatusPushSeen && !linkOnline) {
+          // 本机会去连(远程控制开着、不是待命实例)就是「检测中」,否则才是确认不可达。
+          // 冷启动时 auth 还没完成,linkStatus 多半还是 stopped,但下一步就是 connecting。
+          linkExpectedToConnect = state.remoteControlEnabled && !state.standby;
+          if (linkExpectedToConnect) markAllConnecting();
+          else remoteProjectsStore.markAllDisconnected((deviceId) => !isSharedTaskPeer(deviceId) && !directDataDevices.has(deviceId));
+          for (const deviceId of eligible.keys()) if (!directDataDevices.has(deviceId)) remoteProjectAliases.suspend(deviceId);
+        }
         if (!controlTargetPushSeen) disabledControlDeviceIds = new Set(state.disabledControlDeviceIds ?? []);
         // 「无响应」熔断镜像的初值:按设备合并,已被 push 覆盖的设备以 push 为准
         // (store 初始为空,快照只需补写 unresponsive 的未覆盖设备)。
@@ -881,12 +1000,20 @@ export function useDeviceLinkRemoteProjects(
             unresponsiveDevicesStore.apply(deviceId, true);
           }
         }
-        reseed();
+        return reseed();
       })
       .catch((err) => {
         log.debug('getState before device-link reseed failed', err);
-        if (!disposed) reseed();
+        if (!disposed) return reseed();
       });
+
+    // Neither an empty bootstrap set nor the first completed read alone proves
+    // the remembered remote task is absent. Per-device loading takes over once
+    // discovery starts bootstrap; failures and cleanup must release this gate.
+    void Promise.allSettled([initialCacheRead, initialDirectoryRead]).then(() => {
+      clearTimeout(initialDiscoveryTimer);
+      finishInitialDiscovery();
+    });
 
     const offPresence = window.electronAPI.deviceLink.onPresenceChanged((snap) => {
       applyDevice({
@@ -902,6 +1029,12 @@ export function useDeviceLinkRemoteProjects(
     // 两套缓存订阅会把完整结果原子推给已挂载选择器，刷新期间保留旧列表避免空白跳变。
     const offRemotePush = window.electronAPI.deviceLink.onRemotePush((push, localOwnerStamp) => {
       if (disposed || !eligible.has(push.deviceId)) return;
+      if (push.channel === PROJECT_ALIASES_CHANGED_CHANNEL) {
+        const lifecycleEpoch = remoteProjectsStore.getDeviceLifecycleEpoch(push.deviceId);
+        if (remoteProjectAliases.acceptChanged(push.deviceId, push.ownerStamp, localOwnerStamp,
+          () => canBootstrap(push.deviceId, lifecycleEpoch))) void refreshAliases(push.deviceId, true);
+        return;
+      }
       if (!isDeviceLinkRemotePushCurrent(push, localOwnerStamp)) return;
       if (windowRole === 'main' && push.channel === 'local-db:sessions:patched') {
         const payload = push.payload as { sessionId?: string; patch?: { lastTurnEndedAt?: unknown } } | null;
@@ -920,18 +1053,41 @@ export function useDeviceLinkRemoteProjects(
         // 推送照收；闲着不跟事件去拉整份自动化索引。人回来 / 窗口重新可见时 wake 用 scope both 补上。
         const watching =
           periodicReconcileActiveRef.current && (mainPresenceRef.current?.isActive() ?? true);
-        if (!watching) return;
+        if (!watching) {
+          markScheduleEventMissed(push.deviceId);
+          return;
+        }
         // 与手机同一份事件投影：运行诊断、静默提醒这类不改索引的事件不重拉，
         // 否则 run 进行期间高频推送会反复取消在途的列表 / 索引读取。
         const { refresh } = projectScheduleEvent(push.payload);
         if (!refresh.sessionIndex && !refresh.scheduleList && !refresh.unreadSummary) return;
-        void refreshRemoteDeviceSessions(push.deviceId, eligible.get(push.deviceId), { scope: 'schedule' }).then((result) => {
-          if (result === 'revoked' && !disposed) handleRevoked(push.deviceId);
-        });
+        const deviceId = push.deviceId;
+        const pending = scheduleEventRefreshes.get(deviceId);
+        if (pending) clearTimeout(pending.timer);
+        const firstAt = pending?.firstAt ?? Date.now();
+        const delay = Math.min(SCHEDULE_EVENT_QUIET_MS, Math.max(0, firstAt + SCHEDULE_EVENT_MAX_WAIT_MS - Date.now()));
+        const timer = setTimeout(() => {
+          scheduleEventRefreshes.delete(deviceId);
+          if (disposed || !eligible.has(deviceId)) return;
+          // Hidden again: the wake refresh (scope both) catches up instead.
+          if (!(periodicReconcileActiveRef.current && (mainPresenceRef.current?.isActive() ?? true))) {
+            markScheduleEventMissed(deviceId);
+            return;
+          }
+          void refreshRemoteDeviceSessions(deviceId, eligible.get(deviceId), { scope: 'schedule' }).then((result) => {
+            if (result === 'revoked' && !disposed) handleRevoked(deviceId);
+          });
+        }, delay);
+        scheduleEventRefreshes.set(deviceId, { timer, firstAt });
         return;
       }
       if (push.channel !== 'maker:provider:changed') return;
-      void refreshRemoteCatalogSnapshot(push.deviceId);
+      if (readProviderMetadataContinuity(push.payload)?.remainingMs === 0) {
+        // A Main-observed denial or expired budget must not reopen the target.
+        void refreshRemoteCatalogSnapshot(push.deviceId, push.payload, { retireOnly: true });
+        return;
+      }
+      void refreshRemoteCatalogSnapshot(push.deviceId, push.payload);
     });
 
     // WS 重连后:presence 重新对齐 + 对每个已合格设备重新 subscribe + 重新 bootstrap
@@ -940,13 +1096,24 @@ export function useDeviceLinkRemoteProjects(
       const wasOnline = linkOnline;
       linkStatusPushSeen = true;
       linkOnline = p.status === 'online';
+      directDataDevices = new Set(p.directDataDeviceIds ?? []);
+      if (p.dataPathChangedDeviceId) {
+        const deviceId = p.dataPathChangedDeviceId;
+        if (!linkOnline && !directDataDevices.has(deviceId)) {
+          remoteProjectsStore.markDeviceDisconnected(deviceId);
+          remoteProjectAliases.suspend(deviceId);
+        }
+        return; // One data path changes no other peer's retry/grace lifetime.
+      }
       if (p.status !== 'online') {
         clearAllArchivedSessionRetries();
+        for (const deviceId of eligible.keys()) if (!directDataDevices.has(deviceId)) remoteProjectAliases.suspend(deviceId);
         // relay 瞬时重连(connecting):保留远程会话镜像,只标记 disconnected,让 All Sessions
         // 不因网络抖动反复增删/重排。eligible 保留不动 → 重连 online 时下面的分支自动
         // 重 subscribe+bootstrap。stopped(登出 / 停服)才清空。
         if (p.status === 'connecting') {
-          remoteProjectsStore.markAllDisconnected();
+          linkExpectedToConnect = true;
+          markAllConnecting();
           return;
         }
         // 顺序要紧:cancel 必须在 clear **之后**。`clear()` 在 shards 非空时会同步通知
@@ -954,16 +1121,26 @@ export function useDeviceLinkRemoteProjects(
         // 已空,整份快照被写成 [],main 侧据此把 session-list.json 删掉。于是「relay 停服
         // (非登出)」会在约 1.2s 后抹掉侧边栏冷缓存 —— 而「停服后重启、relay 仍未恢复」
         // 正是这份缓存要解决的场景(review: P2)。整体删除只归 owner 边界的 clearAll。
-        remoteProjectsStore.clear();
+        clearTimeout(initialDiscoveryTimer);
+        remoteProjectsStore.clear((deviceId) => !isSharedTaskPeer(deviceId) && !directDataDevices.has(deviceId));
+        for (const deviceId of new Set([...eligible.keys(), ...remoteProjectAliases.getSnapshot().keys()])) {
+          if (!isSharedTaskPeer(deviceId) && !directDataDevices.has(deviceId)) remoteProjectAliases.remove(deviceId);
+        }
         cancelSessionListPersist();
-        clearRemoteSessionActivity();
+        clearRemoteSessionActivity((deviceId) => !isSharedTaskPeer(deviceId) && !directDataDevices.has(deviceId));
         // 'stopped'(登出 / 停服)还要清掉「已撤销」标记:否则切换栏的 buildSwitcherDevices 仍会拿
         // revoked 集合单独撑起一颗 rejected chip,停服后切换栏残留陈旧被拒 chip。'connecting' 是瞬态
         // 重连,被拒状态应跨重连保留(正常在线期一直可见),故不清。登出 unmount 时的 clearAll 仍是兜底。
-        if (p.status === 'stopped') revokedDevicesStore.clearAll();
+        if (p.status === 'stopped') {
+          linkExpectedToConnect = false;
+          for (const deviceId of revokedDevicesStore.getSnapshot()) {
+            if (!isSharedTaskPeer(deviceId)) revokedDevicesStore.clearRevoked(deviceId);
+          }
+        }
         return;
       }
       if (wasOnline) return;
+      clearConnectingGrace();
       for (const [deviceId, name] of eligible) void subscribeAndBootstrap(deviceId, name);
       reseed();
     });
@@ -973,12 +1150,23 @@ export function useDeviceLinkRemoteProjects(
       if (!disposed) handleRevoked(p.deviceId);
     });
 
+    // A peer reset can lose invalidations while relay presence stays online.
+    const offPeerReset = window.electronAPI.deviceLink.onPeerLinkReset?.(({ deviceId, offline }) => {
+      if (offline) {
+        directDataDevices.delete(deviceId);
+        remoteProjectsStore.markDeviceDisconnected(deviceId);
+      }
+      remoteProjectAliases.suspend(deviceId);
+      if (!disposed && !offline) void refreshAliases(deviceId);
+    });
+
     const offControlTarget = window.electronAPI.deviceLink.onControlTargetChanged((p) => {
       if (disposed) return;
       controlTargetPushSeen = true;
       disabledControlDeviceIds = new Set(p.disabledControlDeviceIds ?? []);
       if (!p.enabled) {
         cancelDeviceReseeds(p.deviceId);
+        remoteProjectAliases.remove(p.deviceId);
         clearArchivedSessionRetry(p.deviceId);
         const wasEligible = eligible.delete(p.deviceId);
         if (wasEligible) {
@@ -1015,6 +1203,7 @@ export function useDeviceLinkRemoteProjects(
       cancelDeviceReseeds(deviceId);
       clearArchivedSessionRetry(deviceId);
       sessionsSubscribeRetry.delete(deviceId);
+      remoteProjectAliases.remove(deviceId);
       if (eligible.delete(deviceId)) {
         window.electronAPI.deviceLink.unsubscribe(deviceId, ['sessions']).catch(() => {});
       }
@@ -1037,6 +1226,10 @@ export function useDeviceLinkRemoteProjects(
 
     return () => {
       disposed = true;
+      clearTimeout(initialDiscoveryTimer);
+      for (const { timer } of scheduleEventRefreshes.values()) clearTimeout(timer);
+      scheduleEventRefreshes.clear();
+      clearConnectingGrace();
       setRemoteReseedImpl(null);
       setRemoteSessionBootstrapRetryImpl(null);
       wakeRemoteReconcileRef.current = () => undefined;
@@ -1049,6 +1242,7 @@ export function useDeviceLinkRemoteProjects(
       offRemotePush();
       offStatus();
       offAccessRevoked();
+      offPeerReset?.();
       offControlTarget();
       offRename();
       offRemoval();
@@ -1067,6 +1261,7 @@ export function useDeviceLinkRemoteProjects(
       // cancel 放在 clear 之后(同 'stopped' 分支):这里 offShardChange 已退订,clear 通知不到
       // 任何订阅者,但顺序保持一致,免得将来有人在两者之间插入新的订阅。
       remoteProjectsStore.clear();
+      remoteProjectAliases.clear();
       cancelSessionListPersist();
       clearRemoteSessionActivity();
       revokedDevicesStore.clearAll();

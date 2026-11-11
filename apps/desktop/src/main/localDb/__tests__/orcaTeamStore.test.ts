@@ -3,7 +3,7 @@ import { drizzle } from 'drizzle-orm/better-sqlite3';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import type { DbClient } from '../client/DbClient.js';
-import { clearCurrentDbClient, setCurrentDbClient } from '../client/current.js';
+import { clearCurrentDbClient, setCurrentDbClient, getCurrentDbClientSnapshot } from '../client/current.js';
 import { tx as runInprocTx } from '../worker/opHandlers/tx.js';
 import { setSessionRouteLockImplementation } from '../sessionRouteLock.js';
 import { setSessionRuntimeCleanup } from '../sessionRuntimeCleanup.js';
@@ -51,6 +51,43 @@ describe('orcaTeamStore', () => {
     }
     rawDb?.close();
     rawDb = null;
+  });
+
+  // F6-B, integration: real SQLite role writes stay in their captured owner.
+  it.each(['owner', 'cancel'] as const)('rejects a stale %s before role mutation', async reason => {
+    const { setSessionOrcaRole } = await import('../orcaTeamStore.js');
+    const client = createTestDbClient(); setCurrentDbClient(client, 'owner-a');
+    await seedOrcaWorkers(client);
+    const owner = getCurrentDbClientSnapshot()!;
+    if (reason === 'owner') setCurrentDbClient(client, 'owner-b');
+    const assertCurrent = () => { if (reason === 'cancel') throw new Error('cancelled attempt'); };
+    const before = await client.queryOne('SELECT orca_role FROM sessions WHERE id = ?', ['lead-session-1']);
+    await expect(setSessionOrcaRole('lead-session-1', 'worker', { owner, assertCurrent })).rejects.toThrow();
+    expect(await client.queryOne('SELECT orca_role FROM sessions WHERE id = ?', ['lead-session-1'])).toEqual(before);
+    expect(h.tapWindowBroadcast).not.toHaveBeenCalled();
+  });
+
+  it('keeps an issued write in its original DB and suppresses its late broadcast', async () => {
+    const { setSessionOrcaRole } = await import('../orcaTeamStore.js');
+    const first = createTestDbClient(); setCurrentDbClient(first, 'owner-a');
+    await seedOrcaWorkers(first);
+    const firstRaw = rawDb!;
+    const owner = getCurrentDbClientSnapshot()!;
+    const second = createTestDbClient();
+    await seedOrcaWorkers(second);
+    try {
+      const before = await second.queryOne('SELECT orca_role FROM sessions WHERE id = ?', ['lead-session-1']);
+      const writing = setSessionOrcaRole('lead-session-1', 'worker', { owner });
+      setCurrentDbClient(second, 'owner-b');
+      await expect(writing).rejects.toThrow('REMOTE_AGENT_EXPIRED');
+      expect(await first.queryOne('SELECT orca_role FROM sessions WHERE id = ?', ['lead-session-1'])).toEqual({ orca_role: 'worker' });
+      expect(await second.queryOne('SELECT orca_role FROM sessions WHERE id = ?', ['lead-session-1'])).toEqual(before);
+      expect(h.tapWindowBroadcast).not.toHaveBeenCalled();
+      expect(h.notifyAgentIslandSessionPatch).not.toHaveBeenCalled();
+      await setSessionOrcaRole('lead-session-1', 'lead');
+      expect(await second.queryOne('SELECT orca_role FROM sessions WHERE id = ?', ['lead-session-1'])).toEqual({ orca_role: 'lead' });
+      expect(h.tapWindowBroadcast).toHaveBeenCalledTimes(1);
+    } finally { firstRaw.close(); }
   });
 
   it.each(['team', 'stranded', 'single'])('rechecks %s archive authority after the existing route lock wait', async action => {
@@ -152,6 +189,23 @@ describe('orcaTeamStore', () => {
     await expect(
       client.queryOne('SELECT role, label FROM orca_workers WHERE id = ?', ['worker-1']),
     ).resolves.toEqual({ role: 'reviewer', label: 'reviewer-2' });
+
+    // 同名 Worker 归档后让出名字（与创建时一致）：改名成功，归档记录保留、label 带上自身 id。
+    // 依据：2026-11-10 协同任务里归档 Worker 仍占名，按原名重建全部 DUPLICATE_LABEL。
+    await client.exec("UPDATE sessions SET status = 'archived' WHERE id = ?", ['worker-session-2']);
+    await expect(
+      updateWorkerIdentity({
+        workerId: 'worker-1',
+        role: 'reviewer',
+        label: 'Tester-2',
+        previousRole: 'reviewer',
+        previousLabel: 'reviewer-2',
+      }),
+    ).resolves.toEqual({ ok: true });
+    await expect(client.query('SELECT id, label FROM orca_workers ORDER BY id')).resolves.toEqual([
+      { id: 'worker-1', label: 'Tester-2' },
+      { id: 'worker-2', label: 'tester-2~worker-2' },
+    ]);
   });
 
   it('requires workerId and workerSessionId to match the same row when both are supplied', async () => {
@@ -581,6 +635,7 @@ describe('orcaTeamStore', () => {
         id TEXT PRIMARY KEY,
         title TEXT NOT NULL DEFAULT 'New Maker',
         working_dir TEXT,
+        project_dir TEXT,
         workspace_kind TEXT NOT NULL DEFAULT 'project',
         model TEXT NOT NULL DEFAULT 'gpt-5.4',
         scheduled_model_baseline TEXT,
@@ -601,8 +656,10 @@ describe('orcaTeamStore', () => {
         cleared_at INTEGER,
         pinned_at INTEGER,
         hidden_at INTEGER,
+      notifications_muted INTEGER NOT NULL DEFAULT 0,
         summary TEXT,
         user_send_at INTEGER,
+        last_activity_at INTEGER,
         agent_kind TEXT NOT NULL DEFAULT 'codex',
         orca_role TEXT,
         parent_session_id TEXT,

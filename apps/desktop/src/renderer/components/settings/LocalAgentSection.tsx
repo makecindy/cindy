@@ -1,6 +1,8 @@
-import { Fragment, useEffect, useRef, useState } from 'react';
+import { localAgentSettings } from './LocalAgentSection.settings-search';
+import { useEffect, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { Button } from '@/components/ui/button';
+import { Switch } from '@/components/ui/switch';
 import { toast } from '@/lib/toast';
 import { extractIpcError } from '@/utils/ipcError';
 import type {
@@ -8,13 +10,11 @@ import type {
   LocalAgentDeveloperConnection,
 } from '../../../shared/localAgent';
 import {
-  SETTINGS_CARD_CLASS,
-  SETTINGS_ROW_CLASS,
-  SETTINGS_ROW_DIVIDER_CLASS,
-  SETTINGS_ROW_HINT_CLASS,
-  SETTINGS_ROW_LABEL_CLASS,
-  SETTINGS_SECTION_TITLE_CLASS,
-} from './settingsRowClasses';
+  SETTINGS_HINT,
+  SettingsCard,
+  SettingsRow,
+  SettingsSection,
+} from '@/components/ui/settings-rows';
 
 export function LocalAgentSection() {
   const { t } = useTranslation();
@@ -22,6 +22,7 @@ export function LocalAgentSection() {
   const [loading, setLoading] = useState(true);
   const [failed, setFailed] = useState(false);
   const [revoking, setRevoking] = useState<string>();
+  const [saving, setSaving] = useState<string>();
   const [developer, setDeveloper] = useState<LocalAgentDeveloperConnection | null>(null);
   const [copying, setCopying] = useState(false);
   const copyingRef = useRef(false);
@@ -97,20 +98,41 @@ export function LocalAgentSection() {
       setRevoking(undefined);
     }
   };
+  const setVisibleSessions = async (id: string, enabled: boolean) => {
+    if (busy.current) return;
+    busy.current = true;
+    setSaving(id);
+    try {
+      if (!(await window.electronAPI.localAgent.setCreateVisibleSessions(id, enabled)))
+        throw new Error('Connection unavailable');
+      setConnections((previous) =>
+        previous.map((connection) =>
+          connection.id === id ? { ...connection, createVisibleSessions: enabled } : connection,
+        ),
+      );
+    } catch (error) {
+      toast.error(extractIpcError(error)?.message ?? t('localAgent.saveFailed'));
+    } finally {
+      busy.current = false;
+      setSaving(undefined);
+    }
+  };
   return (
-    <div id="settings-search-target-local-agent" className="mt-6 flex flex-col gap-[14px]">
-      <h2 className={SETTINGS_SECTION_TITLE_CLASS}>{t('localAgent.title')}</h2>
-      <div className={SETTINGS_CARD_CLASS} aria-busy={loading || Boolean(revoking)}>
-        {developer && (
-          <>
-            <div className={SETTINGS_ROW_CLASS}>
-              <div className="flex min-w-0 flex-col gap-1">
-                <p className={SETTINGS_ROW_LABEL_CLASS}>{t('localAgent.developerConnection')}</p>
-                <p role="status" className={SETTINGS_ROW_HINT_CLASS}>
-                  {t(`localAgent.developerState.${developer.state}`)}
-                </p>
-              </div>
+    <SettingsSection
+      id={localAgentSettings.connections.targetId}
+      className="mt-6"
+      title={t(localAgentSettings.connections.titleKey)}
+      aria-busy={loading || Boolean(revoking) || Boolean(saving)}
+    >
+      {/* 每个连接一张卡片：撤销和它下面的开关属于同一个应用。 */}
+      {developer && (
+        <SettingsCard>
+          <SettingsRow
+            title={t('localAgent.developerConnection')}
+            hint={<span role="status">{t(`localAgent.developerState.${developer.state}`)}</span>}
+            trailing={
               <Button
+                data-setting-id={localAgentSettings.connections.id}
                 variant="secondary"
                 size="sm"
                 className="shrink-0"
@@ -119,40 +141,65 @@ export function LocalAgentSection() {
               >
                 {t('localAgent.copyCode')}
               </Button>
-            </div>
-            <div className={SETTINGS_ROW_DIVIDER_CLASS} />
-          </>
-        )}
-        {connections.length ? (
-          connections.map((connection, index) => (
-            <Fragment key={connection.id}>
-              {index > 0 && <div className={SETTINGS_ROW_DIVIDER_CLASS} />}
-              <div className={SETTINGS_ROW_CLASS}>
-                <div className="flex min-w-0 flex-col gap-1">
-                  <p className={`${SETTINGS_ROW_LABEL_CLASS} break-words`}>{connection.name}</p>
-                  <p className={`${SETTINGS_ROW_HINT_CLASS} break-all`}>
-                    {connection.clientId
-                      ? t('localAgent.clientId', { id: connection.clientId })
-                      : t('localAgent.description')}
-                  </p>
-                </div>
+            }
+          />
+        </SettingsCard>
+      )}
+      {connections.length ? (
+        connections.map((connection) => (
+          <SettingsCard key={connection.id}>
+            <SettingsRow
+              title={connection.name}
+              hint={
+                <span className="break-all">
+                  {connection.clientId
+                    ? t('localAgent.clientId', { id: connection.clientId })
+                    : t('localAgent.description')}
+                </span>
+              }
+              trailing={
                 <Button
+                  data-settings-search-action="Revoke the selected local agent connection"
                   className="shrink-0"
                   variant="secondary"
                   size="sm"
-                  disabled={Boolean(revoking)}
+                  disabled={Boolean(revoking) || Boolean(saving)}
                   aria-label={t('localAgent.revokeConnection', { app: connection.name })}
                   onClick={() => void revoke(connection.id)}
                 >
                   {t(revoking === connection.id ? 'localAgent.revoking' : 'localAgent.revoke')}
                 </Button>
-              </div>
-            </Fragment>
-          ))
-        ) : (
-          <div className={SETTINGS_ROW_CLASS}>
-            <div className="flex min-w-0 flex-col gap-1">
-              <p role={failed ? 'status' : undefined} className={SETTINGS_ROW_LABEL_CLASS}>
+              }
+            />
+            <SettingsRow
+              title={
+                <label htmlFor={`local-agent-visible-${connection.id}`}>
+                  {t('localAgent.createVisibleSessions')}
+                </label>
+              }
+              hint={
+                <span id={`local-agent-visible-hint-${connection.id}`}>
+                  {t('localAgent.createVisibleSessionsHint')}
+                </span>
+              }
+              trailing={
+                <Switch
+                  data-setting-id={localAgentSettings.connections.id}
+                  id={`local-agent-visible-${connection.id}`}
+                  aria-describedby={`local-agent-visible-hint-${connection.id}`}
+                  checked={connection.createVisibleSessions === true}
+                  disabled={Boolean(revoking) || Boolean(saving)}
+                  onCheckedChange={(enabled) => void setVisibleSessions(connection.id, enabled)}
+                />
+              }
+            />
+          </SettingsCard>
+        ))
+      ) : (
+        <SettingsCard>
+          <SettingsRow
+            title={
+              <span role={failed ? 'status' : undefined}>
                 {t(
                   loading
                     ? 'localAgent.loading'
@@ -160,19 +207,17 @@ export function LocalAgentSection() {
                       ? 'localAgent.failed'
                       : 'localAgent.empty',
                 )}
-              </p>
-              {!loading && !failed && (
-                <p className={SETTINGS_ROW_HINT_CLASS}>{t('localAgent.description')}</p>
-              )}
-            </div>
-          </div>
-        )}
-      </div>
+              </span>
+            }
+            hint={!loading && !failed ? t('localAgent.description') : undefined}
+          />
+        </SettingsCard>
+      )}
       {failed && connections.length > 0 && (
-        <p role="status" className={SETTINGS_ROW_HINT_CLASS}>
+        <p role="status" className={SETTINGS_HINT}>
           {t('localAgent.failed')}
         </p>
       )}
-    </div>
+    </SettingsSection>
   );
 }

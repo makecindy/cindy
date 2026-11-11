@@ -1,9 +1,11 @@
+import type { ScheduleWebhookSource } from './webhook-formats.js';
+
 export type ScheduleKind = 'cron';
 export type AgentKind = 'claude-code' | 'codex' | 'pi';
 export type ScheduleStatus = 'active' | 'paused' | 'expired';
 export type ScheduleWorkspaceKind = 'project' | 'dialogue';
 export type ScheduleExecutionMode = 'agent' | 'script';
-export type ScriptCapability = 'jira.read' | 'jira.comment' | 'sessions.dispatch' | 'feishu.read';
+export type ScriptCapability = 'github.read' | 'jira.read' | 'jira.comment' | 'sessions.dispatch' | 'feishu.read';
 
 /**
  * Host-owned session context key for the scheduler run currently dispatched
@@ -101,6 +103,7 @@ export interface SchedulerInflightRunPolicy {
  * 都从这里枚举——host 侧新增能力时只改这一处,选择器自动出现新项。
  */
 export const SCRIPT_CAPABILITIES: readonly ScriptCapability[] = [
+  'github.read',
   'jira.read',
   'jira.comment',
   'sessions.dispatch',
@@ -139,6 +142,34 @@ export interface ScheduleNotifyConfig {
 }
 
 /**
+ * Webhook 触发条件。与定时条件独立：manual=false 时两者并存，manual=true 时只由事件触发。
+ * endpointId 只是接收地址的路由键，由引擎生成；签名密钥由宿主另存，不进任务记录。
+ */
+export interface ScheduleWebhookTrigger {
+  endpointId: string;
+  /** 只响应这些事件，每项为 `event` 或 `event.action`；缺省响应全部。 */
+  events?: string[];
+  /** 发送方：预设及是否签名，或自定义格式。缺省等于 GitHub 预设并签名。 */
+  source?: ScheduleWebhookSource;
+}
+
+/** 写入时不接受 endpointId：新开启由引擎生成，已开启则沿用。 */
+export type ScheduleWebhookTriggerInput = Omit<ScheduleWebhookTrigger, 'endpointId'> & { endpointId?: string };
+
+/** 只含路由所需的扁平元数据；请求正文不落盘，任务需要细节时自行查询。 */
+export interface ScheduleWebhookEvent {
+  deliveryId: string;
+  event: string;
+  action?: string;
+  repository?: string;
+  number?: number;
+  sender?: string;
+  headSha?: string;
+  conclusion?: string;
+  receivedAt: number;
+}
+
+/**
  * 前置检查脚本（Pre-run Hook）配置。任务触发时 runner 先执行该脚本再决定是否
  * 真正启动 agent（不启动 = 零 token 消耗）。协议对齐 Claude Code hooks：
  *   - exit 0 → 放行本轮
@@ -153,6 +184,32 @@ export interface PreRunHookConfig {
   command: string;
   /** 超时毫秒；超时会阻止本轮执行。未配置 = 不限时（无默认超时）。 */
   timeoutMs?: number;
+}
+
+/**
+ * 插件前置检查(2026-10-31)。任务触发时先询问用户选定的插件:插件只能放行、跳过本次或
+ * 停止,不能替用户批准需要确认的事。插件没回应、出错或已不可用时按 onFailure 处理,
+ * 这个选择属于用户,插件不能自报。与 preRunHook 可并存:先问插件,再跑脚本。
+ */
+export const PRE_RUN_PLUGIN_FAILURE_ACTIONS = ['allow', 'skip', 'block'] as const;
+export type PreRunPluginFailureAction = (typeof PRE_RUN_PLUGIN_FAILURE_ACTIONS)[number];
+
+export interface PreRunPluginConfig {
+  /** 插件实例 id(安装身份,不是显示名)。 */
+  pluginId: string;
+  /** 插件没回应、出错或不可用时:allow 照常运行 / skip 跳过本次 / block 停止并记为失败。 */
+  onFailure: PreRunPluginFailureAction;
+}
+
+/** 校验并归一化插件前置检查;null = 清除,undefined = 未提供。 */
+export function normalizePreRunPlugin(value: unknown): PreRunPluginConfig | null | undefined {
+  if (value === undefined) return undefined;
+  if (value === null) return null;
+  if (!value || typeof value !== 'object' || Array.isArray(value)) throw new Error('Invalid pre-run plugin');
+  const { pluginId, onFailure } = value as Record<string, unknown>;
+  if (typeof pluginId !== 'string' || !pluginId.trim() || pluginId.length > 512) throw new Error('Invalid pre-run plugin id');
+  if (!(PRE_RUN_PLUGIN_FAILURE_ACTIONS as readonly unknown[]).includes(onFailure)) throw new Error('Invalid pre-run plugin failure action');
+  return { pluginId: pluginId.trim(), onFailure: onFailure as PreRunPluginFailureAction };
 }
 
 /** 前置检查一次执行的最终状态。 */
@@ -182,6 +239,21 @@ export interface PreRunHookRunResult {
   spawnError?: string;
   /** spawn 失败或未形成有效退出结果时的诊断信息。 */
   error?: string;
+  /** 检查失败时，脚本所属的插件未安装或未启用（插件技能目录随之撤下）。 */
+  missingPlugin?: PreRunHookMissingPlugin;
+}
+
+/** 检查脚本放在插件技能目录里，而该插件当前不可用。界面据此提示安装或启用。 */
+export interface PreRunHookMissingPlugin {
+  ghostId: string;
+  /** 企业插件的 orgSlug；公共插件为 null 或缺省。 */
+  namespace?: string | null;
+  /** 曾从市场安装时的 pluginId，用于打开市场详情；拿不到时缺省。 */
+  pluginId?: string;
+  /** 插件显示名；拿不到时缺省，界面用通用说法。 */
+  name?: string;
+  /** true = 插件仍已安装，只是未启用。 */
+  installed?: boolean;
 }
 
 export interface Schedule {
@@ -217,6 +289,8 @@ export interface Schedule {
   agentKind: AgentKind;
   /** Explicit model-picker Harness. Absent on legacy schedules: bound tasks keep their live Harness. */
   modelAgentKind?: AgentKind;
+  /** Agent location for an explicit model choice: absent = inherit the bound task; '' = task host. */
+  modelAgentDeviceId?: string;
   model?: string;
   /**
    * 显式选定的供应商(来源)id。undefined / 空 → 回落该 agent 原生默认来源
@@ -277,6 +351,10 @@ export interface Schedule {
    * 详见 PreRunHookConfig。
    */
   preRunHook?: PreRunHookConfig;
+  /** 外部事件触发条件；undefined = 未开启。详见 ScheduleWebhookTrigger。 */
+  webhookTrigger?: ScheduleWebhookTrigger;
+  /** 插件前置检查;undefined = 未配置。详见 PreRunPluginConfig。 */
+  preRunPlugin?: PreRunPluginConfig;
   notify: ScheduleNotifyConfig;
   status: ScheduleStatus;
   createdAt: number;
@@ -286,6 +364,27 @@ export interface Schedule {
   lastFinishedAt?: number;
   nextFireAt?: number;
   expireAt?: number;
+}
+
+/** Complete persisted definition captured when a host approval is shown.
+ *
+ * `effectiveWorkingDir` is runtime-only metadata for a bound pre-run hook. It
+ * is intentionally excluded from the persisted schedule comparison, but is
+ * carried to the runner so the target session directory is checked again at
+ * the execution boundary.
+ */
+export type ScheduleMutationGuard = Readonly<Schedule> & {
+  effectiveWorkingDir?: string;
+};
+
+/**
+ * An early run started by host code instead of the cron or a user. `kind: 'watch'`: something the
+ * schedule watches changed (`source` names the watcher, `detail` the watched object, such as a PR URL).
+ */
+export interface ScheduleRunTrigger {
+  kind: 'watch';
+  source: string;
+  detail?: string;
 }
 
 export interface ScheduleRun {
@@ -320,6 +419,8 @@ export interface ScheduleRun {
   resultText?: string;
   /** 本轮实际执行过前置检查时的结构化结果。 */
   preRunHookResult?: PreRunHookRunResult;
+  /** 本轮由什么触发；缺省为定时或手动。 */
+  triggerSource?: 'webhook';
   /** 用户已读时间戳（毫秒）；NULL 表示未读。仅对终态 run 有意义。 */
   readAt?: number;
   /**
@@ -359,6 +460,8 @@ export interface CreateScheduleInput {
   agentKind: AgentKind;
   /** Explicit model-picker Harness. Absent on legacy schedules: bound tasks keep their live Harness. */
   modelAgentKind?: AgentKind;
+  /** Agent location for an explicit model choice: absent = inherit the bound task; '' = task host. */
+  modelAgentDeviceId?: string;
   model?: string;
   /**
    * 显式选定的供应商(来源)id。undefined / 空 → 回落该 agent 原生默认来源
@@ -391,8 +494,13 @@ export interface CreateScheduleInput {
    * create 时 null 与 undefined 同义,引擎归一成 undefined）。
    */
   preRunHook?: PreRunHookConfig | null;
+  /** Webhook 触发条件；null / 缺省 = 不开启。与定时的一次性任务互斥。 */
+  webhookTrigger?: ScheduleWebhookTriggerInput | null;
+  /** 插件前置检查;update 时 null = 清除,省略 = 保留(旧客户端不认识该字段)。 */
+  preRunPlugin?: PreRunPluginConfig | null;
   notify: ScheduleNotifyConfig;
-  expireAt?: number;
+  /** null explicitly clears the deadline across JSON transports. */
+  expireAt?: number | null;
 }
 
 export type UpdateScheduleInput = Partial<CreateScheduleInput>;

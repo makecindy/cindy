@@ -14,6 +14,13 @@ import { extractIpcError } from '../../renderer/utils/ipcError';
 const showItemInFolderMock = vi.fn();
 const suggestNameMock = vi.fn();
 const detectCwdMock = vi.fn();
+const listBranchesMock = vi.fn();
+const readOriginDefaultBranchMock = vi.fn();
+vi.mock('../worktree/branchSync', () => ({
+  readOriginDefaultBranch: (...args: unknown[]) => readOriginDefaultBranchMock(...args),
+  readBranchSyncStatus: vi.fn(),
+  syncBranch: vi.fn(),
+}));
 type Handler = (event: unknown, req: unknown) => unknown | Promise<unknown>;
 const handlers = new Map<string, Handler>();
 const ipcMainMock = {
@@ -46,7 +53,7 @@ vi.mock('../worktree/WorktreeManager', () => ({
   getForSession: vi.fn(),
   listAll: vi.fn(),
   suggestName: (...args: unknown[]) => suggestNameMock(...args),
-  listBranches: vi.fn(),
+  listBranches: (...args: unknown[]) => listBranchesMock(...args),
 }));
 
 let registerWorktreeIpc: typeof import('../worktree/index').registerWorktreeIpc;
@@ -55,6 +62,8 @@ beforeEach(async () => {
   showItemInFolderMock.mockReset();
   suggestNameMock.mockReset();
   detectCwdMock.mockReset();
+  listBranchesMock.mockReset();
+  readOriginDefaultBranchMock.mockReset();
   getAllPathsMock.mockReset();
   handlers.clear();
   if (!registerWorktreeIpc) {
@@ -161,5 +170,22 @@ describe('worktree:reveal whitelist (I-3 fix)', () => {
     expect(resp.ok).toBe(false);
     expect(resp.error?.kind).toBe('unknown');
     expect(showItemInFolderMock).not.toHaveBeenCalled();
+  });
+});
+
+// F1 regression (unit): optional remote grouping must not make the existing branch
+// list fail. Existing reveal/probe cases never exercise this enrichment; the
+// minimal failure is an origin lookup timeout after a successful local list.
+describe('worktree:list-branches optional remote group', () => {
+  it.each([false, true])('preserves local branches when remote lookup fails: %s', async (fails) => {
+    const baseRepo = path.resolve('/repo');
+    const local = { branches: ['main'], current: 'main' };
+    listBranchesMock.mockResolvedValue(local);
+    if (fails) readOriginDefaultBranchMock.mockRejectedValue(new Error('Git timed out'));
+    else readOriginDefaultBranchMock.mockResolvedValue('refs/remotes/origin/main');
+    const result = await handlers.get('worktree:list-branches')!({}, { baseRepo });
+    expect(result).toEqual({ ...local, remoteDefaultBranch: fails ? undefined : 'refs/remotes/origin/main' });
+    expect(listBranchesMock).toHaveBeenCalledExactlyOnceWith(baseRepo);
+    expect(readOriginDefaultBranchMock).toHaveBeenCalledExactlyOnceWith(baseRepo);
   });
 });

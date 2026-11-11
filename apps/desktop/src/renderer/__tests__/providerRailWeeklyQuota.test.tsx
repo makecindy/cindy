@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 import React from 'react';
-import { render, screen, fireEvent, cleanup, act } from '@testing-library/react';
+import { render, renderHook, screen, fireEvent, cleanup, act } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { ProviderShareReceived } from '@cindy/device-link';
 import type { ProviderShareInsights } from '../../shared/providerShareInsights';
@@ -10,7 +10,7 @@ import type { ProviderView } from '@cindy/model-providers';
 import type { MobileCodexRateLimitsResult } from '@cindy/maker-shared/device-link-contract';
 
 // Account generations are driven explicitly below; no full auth host is needed.
-vi.mock('@/contexts/AuthContext', () => ({ useOptionalAuthUser: () => null }));
+vi.mock('@/contexts/AuthContext', () => ({ useOptionalAuthUser: () => null, useOptionalAuthDeviceId: () => 'self-a', useOptionalDataOwnerGeneration: () => 0 }));
 
 const sharing = vi.hoisted(() => ({ received: [] as ProviderShareReceived[] }));
 vi.mock('@/features/provider-share/providerShareStore', () => ({
@@ -51,12 +51,14 @@ vi.mock('react-i18next', () => ({
   }),
 }));
 import { UnifiedModelRail } from '@/components/new-chat/UnifiedModelRail';
+import { ModelSourceDetails, ModelSourceUsageProvider } from '@/components/new-chat/ModelSourceDetails';
 import {
   codexWeeklyQuota,
   localCodexQuotaView,
   remoteCodexQuotaView,
   weeklyQuota,
   providerWeeklyQuotaSource,
+  useProviderWeeklyQuota,
 } from '@/components/new-chat/useProviderWeeklyQuota';
 
 const provider = (id: string, extra: Partial<ProviderView> = {}): ProviderView => ({
@@ -87,6 +89,64 @@ afterEach(() => {
 });
 
 describe('provider weekly quota identity and windows', () => {
+  // #9711 / unit: rail and row must consume the same pool snapshot, not an
+  // identity from B beside a weekly bar borrowed from paused default account A.
+  it('shares the draft account read across the rail and source rows', async () => {
+    reads.codex.mockReturnValue({ snapshot: null });
+    reads.claude.mockImplementation(enabled => enabled ? { sevenDay: { utilization: 93 }, subscriptionType: 'pro' } : null);
+    const command = vi.fn().mockResolvedValue({ providerId: 'anthropic', configured: true, accounts: [
+      { id: 'default', identity: 'a@example.test', paused: true, status: 'ready', running: 0, limit: 4 },
+      { id: 'b', identity: 'b@example.test', plan: 'max', paused: false, status: 'ready', running: 0, limit: 4,
+        usage: { claude: { sevenDay: { utilization: 0 } } } },
+    ] });
+    Object.assign(window, { electronAPI: { subscriptionAccounts: { command, onChanged: () => () => {} } } });
+    const providers = [provider('anthropic', { auth: { method: 'oauth', native: 'claude' }, subscriptionAccount: { source: 'oauth', identity: 'a@example.test' } })];
+    const scope = { deviceId: null, previewSubscriptionPool: true };
+    const view = render(
+      <ModelSourceUsageProvider providers={providers} scope={scope}>
+        <UnifiedModelRail items={[{ kind: 'provider', providerId: 'anthropic' }]} active={{ kind: 'all' }}
+          providers={providers} providerLabel={() => 'Claude'} onSelect={() => {}} providerUsage={scope} />
+        <ModelSourceDetails providerId="anthropic" label="Claude" accountIdentity="a@example.test" modelId="claude-sonnet" />
+      </ModelSourceUsageProvider>,
+    );
+    await act(async () => {});
+    const button = screen.getByRole('button', { name: 'Claude · b@example.test' });
+    expect(button.querySelector('[data-weekly-remaining="100"]')).not.toBeNull();
+    expect(view.container.textContent).toContain('b@example.test · Max');
+    expect(view.container.textContent).not.toContain('a@example.test');
+    expect(command.mock.calls).toEqual([
+      [{ action: 'preview', providerId: 'anthropic' }],
+      [{ action: 'read', providerId: 'anthropic' }],
+    ]);
+  });
+
+  // #8010 merge regression / unit: main added Kimi after self-source normalization.
+  // Run the real quota + account hooks; existing tests only covered other vendors.
+  // Minimum input: A's explicit device ID and a Kimi provider read from B's catalog.
+  it('reads controller-owned Kimi quota locally and keeps other computers remote', async () => {
+    reads.codex.mockReturnValue({ snapshot: null });
+    const value = (usedPercent: number) => ({ status: 'ready', stale: false,
+      snapshot: { kind: 'kimi-coding-quota', fetchedAt: Date.now(),
+        windows: [{ id: 'limit_7d', usedPercent, resetsAt: null }] } });
+    const local = vi.fn().mockResolvedValue(value(30));
+    const remote = vi.fn().mockResolvedValue(value(60));
+    vi.stubGlobal('electronAPI', { maker: { fetchProviderAccountUsage: local }, deviceLink: { invoke: remote } });
+    const kimi = provider('kimi-self', { auth: { method: 'apiKey' },
+      routing: { pi: { upstream: 'https://api.kimi.com/coding/v1', authStrategy: 'api-key-header' } } });
+    const hook = renderHook(({ deviceId }) => useProviderWeeklyQuota(kimi, { deviceId }),
+      { initialProps: { deviceId: 'self-a' } });
+    try {
+      await act(async () => {});
+      expect(hook.result.current?.usedPercent).toBe(30);
+      expect(local).toHaveBeenCalledExactlyOnceWith({ providerId: 'kimi-self', forceRefresh: false });
+      expect(remote).not.toHaveBeenCalled();
+      hook.rerender({ deviceId: 'other-b' });
+      await act(async () => {});
+      expect(hook.result.current?.usedPercent).toBe(60);
+      expect(remote).toHaveBeenCalledExactlyOnceWith('other-b', 'maker:usage:kimi-coding', [{ providerId: 'kimi-self', forceRefresh: false }]);
+      expect(local).toHaveBeenCalledTimes(1);
+    } finally { hook.unmount(); vi.unstubAllGlobals(); }
+  });
   it('selects only the weekly generic bucket, not the latest promotion or short window', () => {
     const data = snapshot(79);
     expect(codexWeeklyQuota(localCodexQuotaView(data), Date.now())?.usedPercent).toBe(79);
@@ -152,6 +212,12 @@ describe('provider weekly quota identity and windows', () => {
     ).toBe('codex');
     expect(providerWeeklyQuotaSource(provider('anthropic'))).toBe('claude');
     expect(providerWeeklyQuotaSource(provider('xai'))).toBe('xai');
+    expect(providerWeeklyQuotaSource(provider('opencode-go', {
+      source: 'user',
+      auth: { method: 'apiKey' },
+      access: { kind: 'api' },
+      routing: { pi: { upstream: 'https://opencode.ai/zen/go/v1', authStrategy: 'api-key-header' } },
+    }))).toBe('opencode-go');
     for (const p of [
       provider('openai', { connected: false }),
       provider('openai', { suspended: true }),
@@ -335,7 +401,7 @@ describe('provider rail weekly remaining bars', () => {
         el.getAttribute('data-weekly-remaining'),
       ),
     ).toEqual(['75', '30']);
-    expect(reads.remoteCodex).toHaveBeenCalledWith('device-1', 'openai');
+    expect(reads.remoteCodex).toHaveBeenCalledWith('device-1', 'openai', { live: true, web: false });
     expect(reads.remoteClaude).toHaveBeenCalledWith('device-1', 'anthropic');
     expect(reads.remoteXai).toHaveBeenCalledWith('device-1', 'xai');
     for (const read of [reads.codex, reads.claude, reads.xai])
@@ -711,7 +777,6 @@ describe('shared provider rail weekly quota', () => {
     expect(bar()).not.toBeNull();
     for (const patch of [
       { status: 'paused' as const },
-      { hostOnline: false },
       { hostCapable: false },
     ]) {
       const calls = command.mock.calls.length;
@@ -760,5 +825,16 @@ describe('shared provider rail weekly quota', () => {
     await tick();
     expect(bar()).toBeNull();
     expect(command).toHaveBeenCalledTimes(calls);
+  });
+  it('keeps live permission/quota checks on a signaling-offline share and clears the result when that actual read fails', async () => {
+    sharing.received = [{ ...share, hostOnline: false }];
+    render(<Rail />);
+    await act(async () => {});
+    expect(command).toHaveBeenCalledTimes(1);
+    expect(bar()).not.toBeNull();
+    command.mockRejectedValueOnce(new Error('[DEVICE_LINK_NOT_CONNECTED] no data path'));
+    await tick();
+    expect(command).toHaveBeenCalledTimes(2);
+    expect(bar()).toBeNull();
   });
 });

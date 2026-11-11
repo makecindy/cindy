@@ -1,8 +1,8 @@
 import type { AgentEvent, Session } from '@cindy/maker-core';
 
 import type { GitSnapshotCoordinator } from '../git-snapshot/gitSnapshotCoordinator.js';
-import { reserveTurnErrorPersistId } from '../messagePersistBroadcaster.js';
-import { AgentInputCoordinator } from './agent-input-coordinator.js';
+import { reserveTurnErrorPersistId } from '../messagePersistBroadcaster.desktop.js';
+import { AgentInputCoordinator } from './agent-input-coordinator.desktop.js';
 import { MAKER_PUSH } from './channels.js';
 import { type OrcaTeamService } from './orcaTeamService.js';
 import {
@@ -10,20 +10,24 @@ import {
   isOversizedHistoryErrorData,
   isUnsupportedRequestOptionErrorData,
 } from './contextOverflowRollover.js';
+import { syncBackgroundCommandWork } from '../maker-host/claude-background-command-work-sync.js';
 import { noteClaudeSessionTurnState } from '../maker-host/claude-session-background-activity.js';
 import { DeferredCodexRestartService } from './deferredCodexRestart.js';
 import {
   isTerminalTurnErrorEvent,
   SessionTurnActivityTracker,
+  SessionListActivityTracker,
 } from './sessionTurnActivityTracker.js';
 import type { PreparedSessionEvent } from './sessionEventPreparation.js';
 import type { SessionStreamResult } from './sessionEventStream.js';
 import { isSessionErrorSuppressed } from './sessionErrorSuppression.js';
 export interface DeliverSessionEventDeps {
+  readonly sessionListActivityTracker: SessionListActivityTracker;
   readonly attemptBotCompactRuntimeRefresh: (session: Session, reason: string) => void;
   readonly orcaTeamServiceForEvents: Pick<OrcaTeamService, 'captureWorkerTerminalTurn'> | null;
   readonly agentInputCoordinatorHolder: Pick<
     AgentInputCoordinator,
+    | 'bindErrorPersistId'
     | 'onExternalTurnSettled'
     | 'isAutoResumePending'
     | 'isAutoResumeDeferred'
@@ -46,7 +50,7 @@ export interface DeliverSessionEventDeps {
   ) => void;
   readonly sessionTurnActivityTracker: Pick<
     SessionTurnActivityTracker,
-    'scheduleIdleAfterTerminalBroadcast' | 'scheduleIdleAfterStatusBroadcast'
+    'isSessionInTurn' | 'scheduleIdleAfterTerminalBroadcast' | 'scheduleIdleAfterStatusBroadcast'
   >;
   readonly notifyGoalIdleAfterTurnSettled: (sessionId: string) => void;
   readonly settlePendingCredentialSwitch: (sessionId: string, source: string) => void;
@@ -141,6 +145,12 @@ export function deliverSessionEvent(
       eventAgentMeta,
     );
   }
+  if (persistId && event.type === 'error') {
+    const message = (broadcastEvent.data as { message?: unknown } | null)?.message;
+    if (typeof message === 'string') {
+      deps.agentInputCoordinatorHolder?.bindErrorPersistId(session.id, persistId, message);
+    }
+  }
   if (suppressOverflowBroadcast) {
     deps.overflowSuppressedBroadcasts.set(session.id, {
       sessionId: session.id,
@@ -164,6 +174,7 @@ export function deliverSessionEvent(
     deps.notifyGoalIdleAfterTurnSettled(session.id);
     // 后台活动检测:done / 终止型 error = 逻辑 turn 结束,记录结束时刻。
     // 此后若该会话进程仍有 API 流量(后台子 agent),record 路径会点亮横幅。
+    syncBackgroundCommandWork(session);
     noteClaudeSessionTurnState(session.id, false);
     // turn 收尾打标(last_turn_ended_at)不在此处:done / terminal error 的本 turn
     // 持久化(assistant flush / orphan tool_result / error 行)在下方 flush 块才
@@ -180,10 +191,25 @@ export function deliverSessionEvent(
     deps.agentInputCoordinatorHolder?.onExternalTurnSettled(session.id);
     deps.refreshRemoteCodexMcpOnTurnSettledHolder?.(session.id);
   } else if (shouldMarkTurnStatusIdleAfterBroadcast) {
+    const wasInTurn = deps.sessionTurnActivityTracker.isSessionInTurn(session.id);
     deps.sessionTurnActivityTracker.scheduleIdleAfterStatusBroadcast(session.id);
     // status:isRunning=false 即逻辑 turn 结束(可重试 error 不发这个信号)。
     deps.markTurnEndedAfterPersistDrain(session.id);
+    if (
+      wasInTurn && event.turnOrigin?.kind !== 'goal'
+    ) {
+      deps.sessionListActivityTracker.end(session.id, {
+        identity: event.sessionTurnGeneration === undefined ? undefined
+          : `${event.sessionInstanceId ?? session.instanceId}:${event.sessionTurnGeneration}`,
+        statusOnly: true,
+        hold: deps.agentInputCoordinatorHolder?.isAutoResumePending(session.id) ||
+          deps.agentInputCoordinatorHolder?.isAutoResumeDeferred(session.id),
+      });
+    }
+    syncBackgroundCommandWork(session);
     noteClaudeSessionTurnState(session.id, false);
+  } else if (event.type === 'agent_task_update') {
+    syncBackgroundCommandWork(session);
   }
   if (event.type === 'done' && !isContinuationBoundary) {
     void deps.gitSnapshotCoordinator?.onTurnEnd(session.id);

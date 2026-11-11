@@ -17,7 +17,10 @@
  *   3. post（富文本）按"扁平化"处理。
  */
 
-export type AttachmentRef =
+export type AttachmentRef = {
+  /** Resource owner for attachments inside a merged forward. */
+  messageId?: string;
+} & (
   | { kind: 'image'; imageKey: string }
   | {
       kind: 'file';
@@ -26,7 +29,7 @@ export type AttachmentRef =
       fileSize?: number;
       /** 视频消息(msg_type=media / 富文本 media 节点): 下载后入媒体总仓。 */
       video?: boolean;
-    };
+    });
 
 export interface UnsupportedEntry {
   type: string;
@@ -49,6 +52,11 @@ export function parseIncoming(
   msgType: string,
   rawContent: string,
 ): ParsedIncoming {
+  // Feishu's merge envelope may contain a literal string rather than JSON.
+  // Its children must be fetched with message.get, never inferred from content.
+  if (msgType === 'merge_forward') {
+    return { text: '[合并转发消息]', attachments: [], unsupported: [] };
+  }
   let parsed: unknown;
   try {
     parsed = JSON.parse(rawContent);
@@ -121,8 +129,7 @@ export function parseIncoming(
     case 'location':
     case 'share_chat':
     case 'share_user':
-    case 'system':
-    case 'merge_forward': {
+    case 'system': {
       return EMPTY_RESULT;
     }
     case 'card':
@@ -200,7 +207,9 @@ function parsePost(c: Record<string, unknown>): ParsedIncoming {
 /**
  * Bot 答案走 interactive 卡片(v2 markdown / v1 lark_md)。引用回复需要把卡片
  * 正文抽出来,抽不出(模板卡等)就留空,让 resolveReplyMessage 返回 null 走群历史。
- * 卡片图只当上下文标记,不当可下载附件——image_key 在卡片里,下载协议与消息图不同。
+ * 这个空结果不能给入站门禁用: 直接转发的第三方卡片会在那里被静默丢掉, 入站侧
+ * 另记 unsupported(#9245)。卡片图只当上下文标记,不当可下载附件——image_key
+ * 在卡片里,下载协议与消息图不同。
  */
 function parseInteractive(c: Record<string, unknown>): ParsedIncoming {
   const parts: string[] = [];

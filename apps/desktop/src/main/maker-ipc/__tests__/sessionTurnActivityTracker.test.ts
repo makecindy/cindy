@@ -30,6 +30,25 @@ describe('SessionTurnActivityTracker.isSessionInTurn', () => {
     expect(isSessionTurnDispatchBoundaryBusy(t, 's', null)).toBe(false);
   });
 
+  it('主监听方与额外旁观者都收到 turn 变化;旁观者出错不影响其他人,可取消订阅', () => {
+    const t = new SessionTurnActivityTracker();
+    const main = vi.fn();
+    const observer = vi.fn();
+    t.setSessionTurnChangeListener(main);
+    t.addSessionTurnObserver(() => {
+      throw new Error('observer failure');
+    });
+    const stop = t.addSessionTurnObserver(observer);
+    t.setSessionInTurn('s1', true);
+    t.setSessionInTurn('s1', false);
+    expect(main).toHaveBeenCalledTimes(2);
+    expect(observer).toHaveBeenCalledTimes(2);
+    stop();
+    t.setSessionInTurn('s1', true);
+    expect(main).toHaveBeenCalledTimes(3);
+    expect(observer).toHaveBeenCalledTimes(2);
+  });
+
   it('terminal 广播 → isSessionInTurn 立即 false(keepalive grace 不拖住它)', () => {
     const t = new SessionTurnActivityTracker();
     t.setSessionInTurn('s', true);

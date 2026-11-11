@@ -209,7 +209,7 @@ function overviewActionCopy(input: {
   if (input.remoteUnavailableReason) return input.remoteUnavailableReason;
   if (input.pendingCount > 0) return '先处理待处理请求，处理后输入区会恢复。';
   if (input.readOnlyReason) return input.readOnlyReason;
-  if (input.sessionStatus === 'archived') return '任务已归档，恢复后才能继续发送。';
+  if (input.sessionStatus === 'archived') return '任务已归档，发送消息会自动取消归档。';
   if (input.sessionStatus === 'deleted') return '任务已删除，不能继续操作。';
   if (input.queuePaused) return '队列已暂停，可在队列面板继续执行。';
   return null;

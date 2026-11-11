@@ -1,3 +1,4 @@
+import { validateCspDomains } from '@cindy/plugin-protocol';
 import { Buffer } from 'node:buffer';
 import type { ReadResourceResult, Tool } from '@modelcontextprotocol/sdk/types.js';
 import { RESOURCE_MIME_TYPE } from '@modelcontextprotocol/ext-apps/server';
@@ -50,24 +51,7 @@ export function toolVisibleTo(tool: Tool, audience: 'model' | 'app'): boolean {
   );
 }
 
-/** No schemes, directives, quotes, whitespace, credentials or paths from a CSP source. */
-export function validateCspDomains(domains: string[] | undefined): string[] {
-  if (domains && (!Array.isArray(domains) || domains.length > 100))
-    throw new Error('MCP_APP_INVALID_CSP_DOMAIN');
-  return (domains ?? []).map((source) => {
-    if (
-      !/^(https?|wss?):\/\/(?:\*\.)?(?:[a-zA-Z0-9.-]+|\[[a-fA-F0-9:]+\])(?::(?:[0-9]{1,5}|\*))?\/?$/.test(
-        source,
-      )
-    ) {
-      throw new Error('MCP_APP_INVALID_CSP_DOMAIN');
-    }
-    const url = new URL(source.replace('://*.', '://wildcard.').replace(/:\*(\/?)$/, ':443$1'));
-    if (!url.hostname || (url.port && Number(url.port) > 65535))
-      throw new Error('MCP_APP_INVALID_CSP_DOMAIN');
-    return source;
-  });
-}
+export { validateCspDomains } from '@cindy/plugin-protocol';
 
 export function appCsp(meta: McpUiResourceMeta = {}): {
   header: string;

@@ -23,8 +23,8 @@ const SCREEN = 'app/sessions/[sessionId].tsx';
 
 describe('mobile optimistic composer while session is not ready', () => {
   it('uses the shared unsent proof to cancel locally before requiring a remote receipt', () => {
-    const source = readSource(SCREEN);
-    const remove = source.slice(source.indexOf('const removeOutboxItem ='), source.indexOf('const outboxDisplayItems ='));
+    const source = readSource('src/session/usePendingSendActions.ts');
+    const remove = source.slice(source.indexOf('const removeOutboxItem ='), source.indexOf('return { findDurableOutboxRecord'));
     expect(remove).toContain('if (isDurableOutboxUnsent(record))');
     expect(remove).toContain("cleanupOutcome: 'cancelled'");
     expect(remove).toContain("else await mobileDurableOutbox.update(record, { cancelRequested: true, state: 'confirming' })");
@@ -119,9 +119,9 @@ describe('mobile optimistic composer while session is not ready', () => {
     expect(helper).toContain('const after = availabilityByDevice.get(deviceId) ?? null;');
     expect(helper).toContain('if (before !== after) setPresenceVersion((version) => version + 1);');
     expect(source).not.toContain('presenceAvailableByDeviceRef.current.set');
-    expect((source.match(
-      /publishPresenceAvailabilityMutation\(deviceId, \(availabilityByDevice\) =>/g,
-    ) ?? [])).toHaveLength(5);
+    // Transport notification behavior is exercised through the real Provider in
+    // historyViewProvider.test.tsx, including a reconnect before its reply arrives.
+    // The number of mutation callers is not a stable cross-file contract.
     expect(source).toContain('connectionEpochRef.current = ++nextDeviceLinkConnectionEpoch;');
     expect(source).toContain('setConnectionEpoch(connectionEpochRef.current);');
     expect(source).toContain('setPresenceVersion((n) => n + 1);\n      const presence = updatePresenceAvailability(');
@@ -137,7 +137,7 @@ describe('mobile optimistic composer while session is not ready', () => {
     expect(bridge).toContain('readSession: (record) => maker(record).getSession(record.item.sessionId)');
     expect(bridge).toContain('const session = await readSessionOnce(r)');
     expect(bridge).toContain('if (!session?.workingDir)');
-    expect(bridge).toContain('}, [link.status, link.connectionEpoch])');
+    expect(bridge).toContain('}, [link.status, link.connectionEpoch, link.getConnectionState])');
   });
 
   it('latches every connection recovery edge until authoritative sync succeeds', () => {
@@ -200,7 +200,7 @@ describe('mobile optimistic composer while session is not ready', () => {
   it('keeps legacy Plan out of deferred delivery without affecting the modern Plan path', () => {
     const source = readSource(SCREEN);
     const guardStart = source.indexOf('const legacyPlanRequiresLiveDispatch =');
-    const optimisticClearStart = source.indexOf('if (!independent && text && !useDurableOutbox) applyComposerDocument(documentAfterOptimisticClear);');
+    const optimisticClearStart = source.indexOf('applyComposerDocument(documentAfterOptimisticClear);');
     const outboxStart = source.indexOf('if (useLocalOutbox) {', guardStart);
     const guard = source.slice(guardStart, outboxStart);
 
@@ -512,7 +512,7 @@ describe('mobile optimistic composer while session is not ready', () => {
     const source = readSource(SCREEN);
     const gate = source.indexOf('commandNeedsRemoteSession(earlyLocalCommand, earlyDesktopCommand)');
     expect(gate).toBeGreaterThan(-1);
-    const clear = source.indexOf('if (!independent && text && !useDurableOutbox) applyComposerDocument(documentAfterOptimisticClear);');
+    const clear = source.indexOf('applyComposerDocument(documentAfterOptimisticClear);');
     expect(clear).toBeGreaterThan(-1);
     expect(gate).toBeLessThan(clear);
     const branch = source.slice(gate, clear);

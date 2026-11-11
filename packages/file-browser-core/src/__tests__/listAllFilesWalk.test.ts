@@ -53,6 +53,21 @@ describe('listAllFilesWalk', () => {
     expect(res.files.length).toBe(2);
   });
 
+  it('only truncates after finding a file beyond the cap', async () => {
+    const exact = path.join(workdir, 'exact');
+    await mkdir(exact);
+    await writeFile(path.join(exact, 'a.ts'), 'a\n', 'utf8');
+    await writeFile(path.join(exact, 'b.ts'), 'b\n', 'utf8');
+
+    const atCap = await listAllFilesWalk({ workdir: exact, cap: 2 });
+    expect(atCap.files).toHaveLength(2);
+    expect(atCap.truncated).toBe(false);
+
+    const overCap = await listAllFilesWalk({ workdir: exact, cap: 1 });
+    expect(overCap.files).toHaveLength(1);
+    expect(overCap.truncated).toBe(true);
+  });
+
   it('skips symlinks (no follow, no loops)', async () => {
     // 指回 workdir 自身的目录链接:follow 会造环,必须跳过。
     // 'junction':Windows 无特权也能建目录链接(POSIX 下该参数被忽略,行为不变)。

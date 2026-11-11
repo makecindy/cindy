@@ -5,9 +5,10 @@ import { useTranslation } from 'react-i18next';
 import type { ConversationSearchJump } from '../../../shared/conversationSearchJump';
 import type { ConversationSearchResponse } from '../../../shared/conversationSearch';
 import type { BotProfile } from './botStore';
-import { runBotLifecycleAction } from './botStore';
+import { useBotSettingsTarget } from './useBotSettingsTarget';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
+import { SettingsCard, SettingsRow } from '@/components/ui/settings-rows';
 import { BotDeleteDialog } from './BotDeleteDialog';
 import { withoutBotHiddenLanes } from './botGroupLane';
 
@@ -30,6 +31,7 @@ export function BotLifecycleSettings({
   onOpenSession: (sessionId: string, searchJump?: ConversationSearchJump) => void;
 }) {
   const { t } = useTranslation();
+  const target = useBotSettingsTarget();
   const [deleting, setDeleting] = useState(false);
   const [query, setQuery] = useState('');
   const [searching, setSearching] = useState(false);
@@ -55,7 +57,7 @@ export function BotLifecycleSettings({
     setActionError(false);
     try {
       if (beforeAction && !(await beforeAction())) return;
-      await runBotLifecycleAction({ botId: bot.id, action });
+      await target.lifecycle.run({ botId: bot.id, action });
       setRestarted(action === 'restart');
     } catch {
       setActionError(true);
@@ -88,7 +90,7 @@ export function BotLifecycleSettings({
     setSearchError(false);
     try {
       setSearchResult(
-        await window.electronAPI.localDb.bots.searchHistory({
+        await target.history.search({
           botId: bot.id,
           query: trimmed,
           limit: 20,
@@ -108,42 +110,32 @@ export function BotLifecycleSettings({
     >
       {mode !== 'history' ? (
         <>
-          <div className="overflow-hidden rounded-xl border border-[var(--border-default)] bg-[var(--surface-elevated)]">
+          <SettingsCard>
             {isPaused ? (
-              <button
-                type="button"
+              <SettingsRow
+                lead={<PlayCircle size={16} aria-hidden className="text-[var(--text-secondary)]" />}
+                title={t(actionBusy === 'resume' ? 'bots.lifecycle.working' : 'bots.lifecycle.resume')}
                 disabled={actionBusy !== null}
                 onClick={() => void runLifecycleAction('resume')}
-                className="flex min-h-12 w-full items-center gap-3 border-b border-[var(--border-default)] px-4 py-3 text-left text-14 text-[var(--text-primary)] hover:bg-[var(--surface-hover)]"
-              >
-                <PlayCircle size={18} />
-                {t(actionBusy === 'resume' ? 'bots.lifecycle.working' : 'bots.lifecycle.resume')}
-              </button>
+              />
             ) : null}
             {!isArchived && !isPaused && bot.status !== 'deleting' ? (
-              <button
-                type="button"
-                onClick={() => void runLifecycleAction('restart')}
+              <SettingsRow
+                lead={<RotateCcw size={16} aria-hidden className="text-[var(--text-secondary)]" />}
+                title={t(actionBusy === 'restart' ? 'bots.lifecycle.restarting' : 'bots.lifecycle.restart')}
                 disabled={actionBusy !== null}
                 aria-busy={actionBusy === 'restart'}
-                className="flex min-h-12 w-full items-center gap-3 border-b border-[var(--border-default)] px-4 py-3 text-left text-14 text-[var(--text-primary)] hover:bg-[var(--surface-hover)] disabled:opacity-50"
-              >
-                <RotateCcw size={18} />
-                {t(
-                  actionBusy === 'restart' ? 'bots.lifecycle.restarting' : 'bots.lifecycle.restart',
-                )}
-              </button>
+                onClick={() => void runLifecycleAction('restart')}
+              />
             ) : null}
-            <button
-              type="button"
+            <SettingsRow
+              danger
+              lead={<Trash2 size={16} aria-hidden className="text-[var(--text-danger)]" />}
+              title={t('bots.lifecycle.deleteTitle')}
               disabled={actionBusy !== null || bot.status === 'deleting'}
               onClick={() => void requestDelete()}
-              className="flex min-h-12 w-full items-center gap-3 px-4 py-3 text-left text-14 text-[var(--text-danger)] hover:bg-[var(--surface-hover)] disabled:opacity-50"
-            >
-              <Trash2 size={18} />
-              {t('bots.lifecycle.deleteTitle')}
-            </button>
-          </div>
+            />
+          </SettingsCard>
           {restarted ? (
             <p className="mt-3 text-12 text-[var(--text-secondary)]" role="status">
               {t('bots.lifecycle.restarted')}

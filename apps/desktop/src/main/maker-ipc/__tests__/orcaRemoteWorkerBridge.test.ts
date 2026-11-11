@@ -72,6 +72,7 @@ function setup() {
         worker.status = status;
       },
     },
+    captureLocalWorkerReport: () => { throw new Error('remote report must not use local settlement'); },
     dispatchInterAgentMessage: dispatch,
     readLeadHistory: async () => ({
       items: [{ id: 'm1', role: 'user', content: 'Lead context', agentMeta: null, createdAt: 1 }],
@@ -191,6 +192,19 @@ describe('cross-device Worker bridge', () => {
     expect(s.worker.status).toBe('done');
     expect(s.settled).toHaveBeenCalledTimes(1);
     expect(s.captureSettlement).toHaveBeenCalledWith('proxy-1', ['input-a']);
+  });
+
+  // 2026-11-10: the four queued-report tools are registered for every Worker, but only the four
+  // allowlisted tools cross devices. Before this check an unknown tool failed protocol validation
+  // with an opaque error. Unit tier: the production execution-device handler, no remote call.
+  it('tells a Worker on another computer that queued-report tools are not available there', async () => {
+    const s = setup();
+    const result = await s.executionProvider.invokeTool(s.ctx, 'cancel_queued_report', {
+      worker_id: 'worker-1', queued_message_id: 'report-1',
+    });
+    expect(result.isError).toBe(true);
+    expect(json(result)).toMatchObject({ code: 'REMOTE_WORKER_NOT_SUPPORTED' });
+    expect(s.remoteInvoke).not.toHaveBeenCalled();
   });
 
   // Review regression: A reports while B is pending. Runtime keeps B, so shared MCP

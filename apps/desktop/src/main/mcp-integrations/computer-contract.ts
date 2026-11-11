@@ -9,6 +9,26 @@ export class ComputerContractError extends Error {
   readonly code = 'COMPUTER_DRIVER_INCOMPATIBLE';
 }
 
+/**
+ * Negotiate arguments for an optional driver decoration. Missing tools or a
+ * closed schema with no compatible Cindy fields mean the decoration is not
+ * available; they must not become rejected driver calls.
+ */
+export function selectAdvertisedComputerDriverArgs(
+  name: string,
+  input: Record<string, unknown>,
+  schemas: ReadonlyMap<string, ComputerDriverToolSchema>,
+): Record<string, unknown> | null {
+  const schema = schemas.get(name);
+  if (!schema) return null;
+  if (schema.additionalProperties !== false) return { ...input };
+  const properties = schema.properties ?? {};
+  const args = Object.fromEntries(
+    Object.entries(input).filter(([key, value]) => value !== undefined && Object.hasOwn(properties, key)),
+  );
+  return Object.keys(args).length > 0 ? args : null;
+}
+
 /** Fields Cindy may advertise after an older installed driver froze its schema. */
 const DRIVER_COMPAT_OPTIONAL_FIELDS = new Set(['delivery_mode']);
 

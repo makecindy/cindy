@@ -66,7 +66,13 @@ export default {
   // the wrapped status group jumping to the left. Measure the chevron's edge.
   async check(page, ui) {
     if (ui.data.hiddenIm) {
-      await page.locator('[title="拉拉, 徐紫旎, 姚刘浏"]').waitFor({ state: 'visible' });
+      const platform = await ui.t('bots.channels.platform.feishu');
+      const record = page.locator('[title="拉拉, 徐紫旎, 姚刘浏"]');
+      await page.getByRole('button', { name: await ui.t('bots.channels.lanes.expand', { platform }), exact: true }).waitFor({ state: 'visible' });
+      assert.equal(await record.isVisible(), false, 'task list is collapsed on entry');
+      await ui.capture('tasks-initial-collapsed');
+      await page.getByRole('button', { name: await ui.t('bots.channels.lanes.expand', { platform }), exact: true }).click();
+      await record.waitFor({ state: 'visible' });
       const row = page.locator('button').filter({ hasText: '8c9b5c' });
       await row.waitFor({ state: 'visible' });
       const resting = await row.evaluate((el) => getComputedStyle(el).boxShadow);
@@ -85,6 +91,23 @@ export default {
       assert.notEqual(focused.boxShadow, 'none', 'focus ring must survive the global outline suppression');
       assert.equal(focused.outlineStyle, 'none');
       await row.evaluate((el) => el.blur());
+      const collapse = page.getByRole('button', { name: await ui.t('bots.channels.lanes.collapse', { platform }), exact: true });
+      await ui.capture('tasks-expanded');
+      const archive = page.getByRole('button', { name: await ui.t('bots.channels.lanes.archiveAria', { lane: '拉拉, 徐紫旎, 姚刘浏' }), exact: true });
+      await archive.click();
+      const inlineConfirm = page.getByRole('button', { name: await ui.t('ccAgent.sidebar.sessionMenu.archived'), exact: true });
+      await inlineConfirm.waitFor({ state: 'visible' });
+      await ui.capture('tasks-archive-confirm');
+      await page.mouse.click(1, 1);
+      await archive.waitFor({ state: 'visible' });
+      assert.equal(await inlineConfirm.isVisible(), false, 'outside click cancels inline archive without a write');
+      await collapse.click();
+      await row.waitFor({ state: 'hidden' });
+      assert.equal(await row.isVisible(), false, 'task records collapse without invoking a write');
+      await ui.capture('tasks-collapsed');
+      await page.getByRole('button', { name: await ui.t('bots.channels.lanes.expand', { platform }), exact: true }).click();
+      await row.waitFor({ state: 'visible' });
+      assert.equal(await row.isVisible(), true, 'task records return after expanding');
       return;
     }
     const trigger = page.locator('#companion-im-wechat-trigger');

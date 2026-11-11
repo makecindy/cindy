@@ -1,5 +1,6 @@
 import { createHash } from 'node:crypto';
 import { MAX_FRAME_BYTES, type ProviderShareOwned } from '@cindy/device-link';
+import type { ProviderShareBudgetStatus } from '../../shared/providerShareBudget.js';
 import type { ProviderUsageHistoryView } from '../../shared/providerShare.js';
 import type {
   ProviderShareInsights,
@@ -19,6 +20,7 @@ export interface ProviderShareInsightsDeps {
   visibility(providerId: string): ProviderShareVisibility & { revision: number };
   shares(): readonly ProviderShareOwned[];
   owner(): { displayName: string; avatarUrl: string | null };
+  budget?(providerId: string, memberId: string): Promise<ProviderShareBudgetStatus | null>;
   history(providerId: string): Promise<ProviderUsageHistoryView>;
   quota(
     providerId: string,
@@ -126,6 +128,7 @@ const INSIGHTS_MAX_BYTES = MAX_FRAME_BYTES - 1_024;
 const jsonBytes = (value: unknown): number => Buffer.byteLength(JSON.stringify(value), 'utf8');
 
 function boundInsightsFrame(result: ProviderShareInsights): void {
+  if (result.memberBudget && jsonBytes({ ...result, usage: null, quota: null }) > INSIGHTS_MAX_BYTES) result.memberBudget = null;
   // An oversized capability must not turn the other capability into a transport error.
   if (result.quota && jsonBytes({ ...result, usage: null }) > INSIGHTS_MAX_BYTES) {
     result.quota = null;
@@ -237,17 +240,22 @@ export function createProviderShareInsightsReader(deps: ProviderShareInsightsDep
         if (histories.get(access.providerId)?.read === read) histories.delete(access.providerId);
       });
     }
-    const [historyResult, quotaResult] = await Promise.allSettled([
+    const [historyResult, quotaResult, budgetResult] = await Promise.allSettled([
       visibility.usage && includeUsage ? cached!.read : null,
       visibility.quota ? deps.quota(access.providerId) : null,
+      deps.budget?.(access.providerId, access.memberId) ?? null,
     ]);
     assertCurrent();
     const share = deps.shares().find((item) => item.shareId === access.shareId);
     if (!share) throwIpcError('PERMISSION_DENIED', 'Provider share is not available');
     const history = historyResult.status === 'fulfilled' ? historyResult.value : null;
     const quota = quotaResult.status === 'fulfilled' ? quotaResult.value : null;
+    const budget = budgetResult.status === 'fulfilled' ? budgetResult.value : null;
+    // Unsaved model previews belong to the owner editor, not the guest wire payload.
+    const { modelUsage: _modelUsage, ...publicBudget } = budget ?? {};
     const result: ProviderShareInsights = {
       version: 1,
+      ...(deps.budget ? { memberBudget: budget ? publicBudget as ProviderShareBudgetStatus : null } : {}),
       capabilities: { quota: visibility.quota, usage: visibility.usage },
       status: {
         quota: !visibility.quota ? 'disabled' : quota ? 'ready' : 'unavailable',

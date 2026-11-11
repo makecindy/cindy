@@ -91,3 +91,18 @@ export function companionRunsHere(cloud: CompanionCloudSnapshot, localBotIds: re
   const home = cloud.enabled ? cloud.actors.find((actor) => actor.externalId === botId)?.homeDeviceId : undefined;
   return !home || home === cloud.selfDeviceId;
 }
+
+/**
+ * The main computer is online but has not allowed remote control. Read from the live device list
+ * (what the devices page shows), since the snapshot's copy of the presence is only rebuilt when a
+ * home changes and goes stale; the snapshot answers only for a computer the list does not have.
+ */
+export function homeControlOff(
+  actor: CompanionCloudActor | undefined,
+  devices: ReadonlyArray<{ deviceId: string; online: boolean; remoteControlEnabled: boolean }> | null,
+): boolean {
+  if (!actor?.homeDeviceId) return false;
+  const live = devices?.find((device) => device.deviceId === actor.homeDeviceId);
+  if (live) return live.online && live.remoteControlEnabled === false;
+  return actor.homeDevice?.online === true && actor.homeDevice.remoteControlEnabled === false;
+}

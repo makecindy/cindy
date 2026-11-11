@@ -79,6 +79,15 @@ describe('inputProjection', () => {
     await i18n.changeLanguage('zh-CN');
   });
 
+  // #7119: only the host may identify a failed input as continuable. Older or
+  // malformed projections must not restart a completed historical task.
+  it('normalizes explicit continuation eligibility without inferring legacy errors', () => {
+    for (const flag of [undefined, false, 'true', 1, true]) {
+      const projection = normalizeInputProjection({ error: 'capacity', errorCanContinue: flag });
+      expect(projection.errorCanContinue).toBe(flag === true);
+    }
+  });
+
   it('builds a text-only queued message that matches the desktop coordinator payload shape', () => {
     vi.setSystemTime(new Date('2026-01-01T00:00:03.000Z'));
     const queued = buildQueuedTextMessage(session(), '  hello mobile  ', new Date(), 'q-1');
@@ -449,6 +458,17 @@ describe('inputProjection', () => {
     }).toolLoop).toBeNull();
   });
 
+  it('carries reasoning usage from the controlled host into localized live guidance', () => {
+    const projection = normalizeInputProjection({ sessionId: 'limited', error: 'limit',
+      errorReason: 'output-limit', outputLimit: { outputTokens: 131072, reasoningTokens: 131064, raw: 'discard' } });
+    expect(projection.outputLimit).toEqual({ outputTokens: 131072, reasoningTokens: 131064 });
+    const text = localizeAgentError(projection.errorReason, null, '', projection.outputLimit);
+    expect(text).toContain('131064');
+    expect(text).toContain('131072');
+    expect(text).toContain(i18n.t('session.tail.outputLimitReasoning'));
+    expect(normalizeInputProjection({ error: 'other error' }).outputLimit).toBeNull();
+  });
+
   it('localizes the output-limit reason carried by the live projection', () => {
     const projection = normalizeInputProjection({
       sessionId: 'output-limit', error: 'Pi reached the model output limit.', errorReason: 'output-limit',
@@ -461,6 +481,16 @@ describe('inputProjection', () => {
   it('localizes incomplete execution without exposing the host cell diagnostic', () => {
     expect(localizeAgentError('yield-continuation-incomplete', null)).toBe(
       i18n.t('session.tail.executionResultUnavailable'),
+    );
+  });
+
+  it('localizes compact ciphertext rejection even when only its reason survives projection', () => {
+    const projection = normalizeInputProjection({
+      sessionId: 'compact', error: 'Error running remote compact task',
+      errorReason: 'remote-compact-encrypted-content',
+    });
+    expect(localizeAgentError(projection.errorReason, null)).toBe(
+      i18n.t('session.tail.remoteCompactEncryptedContent'),
     );
   });
 

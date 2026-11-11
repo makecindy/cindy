@@ -16,6 +16,7 @@ import {
   computeExportScale,
   copyPngBlobToClipboard,
   parseSvgIntrinsicSize,
+  resolveExportBackground,
   svgToPngBlob,
 } from '@/lib/rasterizeToImage';
 
@@ -170,5 +171,40 @@ describe('parseSvgIntrinsicSize', () => {
     expect(parseSvgIntrinsicSize('<div></div>')).toBeNull();
     expect(parseSvgIntrinsicSize('<svg></svg>')).toBeNull();
     expect(parseSvgIntrinsicSize('<svg viewBox="0 0 0 0"></svg>')).toBeNull();
+  });
+});
+
+describe('resolveExportBackground', () => {
+  afterEach(() => {
+    vi.restoreAllMocks();
+    document.documentElement.style.removeProperty('--surface');
+    document.body.innerHTML = '';
+  });
+
+  it('壁纸模式下的半透明面先叠在页底上合成,导出不带 alpha', () => {
+    document.documentElement.style.setProperty('--surface', '#F2F2ED');
+    const el = document.createElement('div');
+    el.style.backgroundColor = 'rgba(253, 253, 248, 0.72)';
+    document.body.appendChild(el);
+    const fills: string[] = [];
+    const ctx = {
+      set fillStyle(value: string) { fills.push(value); },
+      fillRect: vi.fn(),
+      getImageData: () => ({ data: [250, 250, 245, 255] }),
+    };
+    vi.spyOn(HTMLCanvasElement.prototype, 'getContext').mockReturnValue(ctx as never);
+
+    expect(resolveExportBackground(el)).toBe('rgb(250, 250, 245)');
+    expect(fills).toEqual(['#F2F2ED', 'rgba(253, 253, 248, 0.72)']);
+  });
+
+  it('不透明底色原样返回,不经过画布', () => {
+    const el = document.createElement('div');
+    el.style.backgroundColor = 'rgb(253, 253, 248)';
+    document.body.appendChild(el);
+    const getContext = vi.spyOn(HTMLCanvasElement.prototype, 'getContext');
+
+    expect(resolveExportBackground(el)).toBe('rgb(253, 253, 248)');
+    expect(getContext).not.toHaveBeenCalled();
   });
 });

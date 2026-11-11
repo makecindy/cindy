@@ -1,4 +1,8 @@
+import { localizeOutputLimit } from './outputLimitI18n';
+import { type OutputLimitDetails } from '@cindy/maker-shared';
+import { isMemberBudgetPaused } from '../../../shared/providerShareBudget';
 import { remoteAgentLimitErrorKey } from '../../../shared/remoteAgentLimits';
+import { sharedTaskRecoveryFor } from '../../../shared/sharedTaskRecovery';
 import { useCodexRateLimits } from '@/hooks/useCodexRateLimits';
 import { useCodexRateLimitReset } from '@/hooks/useCodexRateLimitReset';
 import { Button } from '@/components/ui/button';
@@ -13,7 +17,7 @@ import { useProviders } from '@/hooks/useProviders';
  * - Retry：只使用上层传入的 retryText。这里不能从 messages[] 里猜最后一条
  *          user，因为排队发送时 messages[] 里的 user 已经发给 agent 了；
  *          猜错会把已发送内容再次塞回队列。
- *          找不到安全 retryText 时隐藏 Retry。
+ *          没有 retryText 时可由上层提供隐藏续跑入口，不猜测或重发旧消息。
  * - Cancel：调用 onCancel()，让上层把 error 状态清掉（仅关掉横幅，不撤回任何东西）。
  * - 远端 codex 401 / Missing bearer:识别为 auth.json 缺失,换上"同步登录态"按钮 +
  *   友好文案。点击同步成功后 Retry 按钮重新出现,用户自行点击重发。
@@ -26,7 +30,9 @@ import {
   canOfferCodexHistoryRecovery,
   isCindyGatewayProxyTokenInvalidError,
   isResponsesLiteParallelToolCallsError,
+  isRemoteCompactEncryptedContentError,
   parseAgentErrorCode,
+  requiresAgentErrorConfigurationChange,
 } from '@cindy/maker-shared/error-redaction';
 import { chatRemoteErrorGuidanceKey } from '@/lib/autoReviewUnavailableGuidance';
 import { AlertCircle, Check, Split, Play, RotateCcw, RefreshCw, Timer, Wallet } from 'lucide-react';
@@ -54,7 +60,7 @@ import {
 import { isQuotaExhaustedErrorMessage } from '@/utils/quotaError';
 import { parseTerminalRateLimitRetryProgress } from '@/utils/rateLimitRetry';
 import type { UsageLimitRecoveryHint } from '@/lib/usageLimitRecovery';
-import { ERROR_REASON_I18N_KEYS } from './errorReasonI18n';
+import { errorReasonI18nKey as resolveErrorReasonI18nKey } from './errorReasonI18n';
 import { getToolLoopI18nKey } from './toolLoopI18n';
 import {
   CLAUDE_GATEWAY_OPUS_PLAN_MISMATCH_REASON,
@@ -65,14 +71,18 @@ import type { ToolLoopErrorDetails } from '@cindy/maker-core';
 import type { ErrorDiagnosisSource } from '@/lib/errorDiagnosisPrompt';
 
 interface ErrorBannerProps {
+  onChooseComputer?: () => void;
   error: string;
   /** terminal error 的稳定 reason key。'silent-stop-exhausted'(silent-stop 自动
    *  续跑额度耗尽)时隐藏 Retry、改显「继续」按钮(onSilentStopContinue)。 */
   errorReason?: string | null;
   /** Structured details for a tool-loop terminal error (optional for legacy rows). */
   toolLoop?: ToolLoopErrorDetails | null;
+  outputLimit?: OutputLimitDetails | null;
   retryText?: string | null;
   onRetry: (text: string) => void;
+  /** 已停止且有任务上下文，但无原始恢复记录：发送现有隐藏续跑指令。 */
+  onContinueAfterError?: () => Promise<void>;
   onCancel?: () => void;
   /** 仅当前可见且拥有键盘操作权的任务启用。 */
   dismissOnEscape?: boolean;
@@ -132,11 +142,14 @@ interface ErrorBannerProps {
 }
 
 export function ErrorBanner({
+  onChooseComputer,
   error,
   errorReason,
   toolLoop,
+  outputLimit,
   retryText,
   onRetry,
+  onContinueAfterError,
   onCancel,
   dismissOnEscape = false,
   onSilentStopContinue,
@@ -247,6 +260,7 @@ export function ErrorBanner({
   // 仅本地 Codex 会话:远端会话 rollout 在远端机器, 本地 fork 剥离做不到, 不给入口。
   const showInvalidEncryptedContentRecovery =
     agentKind === 'codex' &&
+    !isRemoteCompactEncryptedContentError(error, errorReason) &&
     !isAnyRemoteSession &&
     !silentEncryptedRetryEnabled &&
     isInvalidEncryptedContentError(error);
@@ -273,12 +287,13 @@ export function ErrorBanner({
   // Cindy AI 网关的余额耗尽:钱花完那一刻是用户最需要计费页的时刻,给一条能就地
   // 跳过去的出口。判定绑定**错误来源** provider(errorSourceProviderId,错误发生
   // 时刻的快照),不用会话当前的 providerId —— 报错后切换 provider / 恢复历史错误
-  // 时两者会分叉,用当前值会误判来源。来源不明确(null)或非 xd 的错误一个字都不改
-  // (保持原始上游文案与既有交互):没有可跳的余额页时,给按钮点不出结果比不给更糟。
+  // 时两者会分叉,用当前值会误判来源。来源不明确(null)或非 xd 时不提供 Cindy
+  // 充值入口；余额摘要仍可使用供应商通用提示。
+  const isQuotaExhausted = isQuotaExhaustedErrorMessage(error);
   const isGatewayQuotaExhausted =
     (errorSourceProviderId?.trim() || null) === 'xd' &&
     Boolean(onViewBalance) &&
-    isQuotaExhaustedErrorMessage(error);
+    isQuotaExhausted;
   const { providers: errorProviders, refetch: refreshErrorProviders } = useProviders();
   const selectedOpenAiAccount = errorProviders.find((provider) => provider.id === normalizedProviderId);
   const independentOpenAiAccount = selectedOpenAiAccount?.auth.native === 'codex';
@@ -349,18 +364,20 @@ export function ErrorBanner({
   const isOverloadError = isOverloadErrorMessage(error, undefined, errorReason);
   const isStreamInterrupted = isStreamInterruptedErrorMessage(error, errorReason);
   const overloadRetryProgress = parseOverloadRetryProgress(error);
-  const errorReasonI18nKey = errorReason ? ERROR_REASON_I18N_KEYS[errorReason] : undefined;
+  const errorReasonI18nKey = resolveErrorReasonI18nKey(errorReason, error);
   const toolLoopI18nKey =
     errorReason === 'tool_use_loop_detected' ? getToolLoopI18nKey(toolLoop) : undefined;
   const localizedReasonError =
-    toolLoopI18nKey && toolLoop
-      ? t(toolLoopI18nKey, { count: toolLoop.count })
-      : errorReasonI18nKey
-        ? t(errorReasonI18nKey)
-        : undefined;
+    errorReason === 'output-limit'
+      ? localizeOutputLimit(t, outputLimit)
+      : toolLoopI18nKey && toolLoop
+        ? t(toolLoopI18nKey, { count: toolLoop.count })
+        : errorReasonI18nKey
+          ? t(errorReasonI18nKey)
+          : undefined;
   const remoteErrorCode = parseAgentErrorCode(error)?.code;
   const isAttachmentAccessDenied = remoteErrorCode === 'DEVICE_LINK_MEDIA_ACCESS_DENIED';
-  const remoteErrorKey = remoteAgentLimitErrorKey(error) ?? chatRemoteErrorGuidanceKey(remoteErrorCode, sessionSource);
+  const remoteErrorKey = (isMemberBudgetPaused(error) ? 'providerShare.memberBudget.paused' : null) ?? remoteAgentLimitErrorKey(error) ?? chatRemoteErrorGuidanceKey(remoteErrorCode, sessionSource);
   const remoteGuidance = remoteErrorKey && i18n.exists(remoteErrorKey) ? t(remoteErrorKey) : undefined;
   const terminalRateLimitRetryProgress = parseTerminalRateLimitRetryProgress(error, errorReason);
   const isCodexUsageLimitError =
@@ -396,9 +413,7 @@ export function ErrorBanner({
       sameDay ? { timeStyle: 'short' } : { dateStyle: 'medium', timeStyle: 'short' },
     ).format(resumeDate);
   })();
-  // Retry 的显示条件与网络错误文案必须共用同一个判定。外部发起的 turn（例如
-  // scheduler / goal）失败时没有安全的 recovery target，errorRetryText 会是 null；
-  // 此时不能一边隐藏按钮，一边仍提示用户“点击重试”。
+  // 原始恢复记录优先；自动任务收口后可手动续跑。按钮与指引共用同一判定。
   const isSilentStopExhausted = errorReason === 'silent-stop-exhausted';
   const isClaudeGatewayOpusPlanMismatch = errorReason === CLAUDE_GATEWAY_OPUS_PLAN_MISMATCH_REASON;
   const isClaudeSubscriptionOpusPlanMismatch =
@@ -410,7 +425,7 @@ export function ErrorBanner({
   });
   // 订阅套餐错误保留 Retry：用户重新连接 Anthropic 后可从当前错误卡片重试；
   // Gateway 错误则隐藏 Retry，改走切换到 Claude.ai 的明确恢复动作。
-  const hideRetry =
+  const hideRetry = isMemberBudgetPaused(error) ||
     isSilentStopExhausted ||
     isClaudeGatewayOpusPlanMismatch ||
     isGatewayProxyTokenInvalid ||
@@ -421,6 +436,29 @@ export function ErrorBanner({
     openAiReconnectRequired ||
     isCodexLocalOAuthAuthMissing;
   const safeRetryText = !hideRetry && retryText ? retryText : null;
+  const retryAction = safeRetryText
+    ? () => onRetry(safeRetryText)
+    : !hideRetry && !isRecoverable && !requiresAgentErrorConfigurationChange(error)
+      ? onContinueAfterError : undefined;
+  const retryInFlight = useRef(false);
+  const [retrying, setRetrying] = useState(false);
+  const handleRetry = async () => {
+    if (!retryAction || retryInFlight.current) return;
+    if (safeRetryText) {
+      onRetry(safeRetryText);
+      return;
+    }
+    retryInFlight.current = true;
+    setRetrying(true);
+    try {
+      await retryAction();
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : String(err));
+    } finally {
+      retryInFlight.current = false;
+      setRetrying(false);
+    }
+  };
   const [switchingClaudeSubscription, setSwitchingClaudeSubscription] = useState(false);
   useEffect(() => {
     setSwitchingClaudeSubscription(false);
@@ -428,6 +466,7 @@ export function ErrorBanner({
 
   // hasSpecialGuidance: 是否命中下面任一「有专属可操作指引」的特殊分支。用一个在
   // else 兜底里翻转的标志, 而不是另写一遍条件取反，保证原始错误只在通用回退时展开。
+  const sharedRecoveryReason = isCodexUsageLimitError ? undefined : sharedTaskRecoveryFor(error, agentDeviceId);
   let displayError: string;
   let hasSpecialGuidance = true;
   if (isResponsesLiteParallelToolCallsError(error)) {
@@ -494,6 +533,8 @@ export function ErrorBanner({
           : 'chat.errorBanner.codexUsageLimit',
       );
     }
+  } else if (isQuotaExhausted) {
+    displayError = t('providerError.QUOTA_EXCEEDED');
   } else if (terminalRateLimitRetryProgress) {
     // daemon 已耗尽内部 retry budget 的终态 429，由 maker-core 做受限外层重投。
     // 它不是模型容量过载，也不是用户网络异常；独立文案避免误导用户切模型或查网络。
@@ -524,12 +565,12 @@ export function ErrorBanner({
           attempt: overloadRetryProgress.attempt,
           maxAttempts: overloadRetryProgress.maxAttempts,
         })
-      : t(safeRetryText ? 'chat.errorBanner.overloadBusy' : 'chat.errorBanner.overloadBusyNoRetry');
+      : t(retryAction ? 'chat.errorBanner.overloadBusy' : 'chat.errorBanner.overloadBusyNoRetry');
   } else if (isStreamInterrupted) {
     // LiteLLM / Responses 流中途空壳 500。协议客户端会写成 OpenAI API error,
     // 对非 OpenAI 模型是误导。只改展示,不自动续跑。
     displayError = t(
-      safeRetryText
+      retryAction
         ? 'chat.errorBanner.streamInterrupted'
         : 'chat.errorBanner.streamInterruptedNoRetry',
     );
@@ -546,7 +587,7 @@ export function ErrorBanner({
           })
         : t('chat.errorBanner.networkAutoRetrying')
       : t(
-          safeRetryText
+          retryAction
             ? 'chat.errorBanner.networkUnreachable'
             : 'chat.errorBanner.networkUnreachableNoRetry',
         );
@@ -559,6 +600,7 @@ export function ErrorBanner({
     hasSpecialGuidance = false;
   }
   const showUnwrappedRaw = !hasSpecialGuidance || isResponsesLiteParallelToolCallsError(error);
+  if (sharedRecoveryReason) displayError = t(`sharedTaskRecovery.reason.${sharedRecoveryReason}`);
   const canShowErrorDetails =
     isNetworkishError ||
     isOverloadError ||
@@ -568,7 +610,16 @@ export function ErrorBanner({
     terminalRateLimitRetryProgress ||
     isClaudeGatewayOpusPlanMismatch ||
     isClaudeSubscriptionOpusPlanMismatch ||
-    isGatewayProxyTokenInvalid;
+    isGatewayProxyTokenInvalid ||
+    isPiImageInputUnsupportedError(error) ||
+    isCodexAppServerForceRetired ||
+    isCodexThreadStale ||
+    showInvalidEncryptedContentRecovery ||
+    isOversizedHistoryError ||
+    isCodexRemoteAuthMissing ||
+    isOpenAiConnectionExpired ||
+    isCodexLocalOAuthAuthMissing ||
+    isQuotaExhausted;
 
   const handleSwitchToClaudeSubscription = async (): Promise<void> => {
     if (!onSwitchToClaudeSubscription || switchingClaudeSubscription) return;
@@ -707,6 +758,11 @@ export function ErrorBanner({
       }
       actions={
         <>
+          {sharedRecoveryReason && onChooseComputer && !isRecoverable && (
+            <Button size="sm" compact type="button" onClick={onChooseComputer}>
+              {t('sharedTaskRecovery.choose')}
+            </Button>
+          )}
           {openAiReconnectRequired && (
             // 共享凭证直接唤起 ChatGPT App；返回 Cindy 后由 useCodexAuth 自动复检。
             <Button
@@ -820,12 +876,13 @@ export function ErrorBanner({
               {t('chat.errorBanner.usageLimitAutoContinueCancel')}
             </Button>
           )}
-          {safeRetryText && (
+          {retryAction && (
             <Button
               size="sm"
               compact
               disabled={forkStripEncryptedRunning}
-              onClick={() => onRetry(safeRetryText)}
+              loading={retrying}
+              onClick={() => void handleRetry()}
               title={t('chat.errorBanner.retryTitle')}
             >
               <RotateCcw size={12} />

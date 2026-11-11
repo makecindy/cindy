@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from 'vitest';
 import { throwIpcError } from '../../../utils/ipcValidate';
 import { createHistoryViewReader } from '../historyViewReader';
+import { withHistoryArtifacts } from '../historyViewOutline';
 import { historyViewLeaves, projectHistoryView, type HistoryMessageSource, type HistoryViewItem } from '@cindy/maker-shared/message-window';
 function row(n: number, role = 'thinking'): HistoryMessageSource {
   return { id: String(n), clientId: `c${n}`, rowid: n, role, content: 'body '.repeat(200), createdAt: new Date(1700000000000 + n).toISOString() };
@@ -20,6 +21,80 @@ function reader(source: HistoryMessageSource[]) {
   return { list, api: createHistoryViewReader({ list, anchor, running: () => false }) };
 }
 describe('host history view', () => {
+  // Unit performance regression: concurrent closed-history pages duplicated DB
+  // scans/projection. Existing pagination tests never overlapped requests.
+  // Two identical in-flight reads must share work, but later reads remain fresh.
+  it('shares in-flight closed pages, fans out shape callbacks and rereads after completion', async () => {
+    const source = [row(0, 'user'), row(1), row(2, 'assistant')];
+    const base = reader(source);
+    let release!: () => void;
+    const gate = new Promise<void>(resolve => { release = resolve; });
+    const list = vi.fn(async (...args: Parameters<typeof base.list>) => { await gate; return base.list(...args); });
+    let scope = 'local';
+    const api = createHistoryViewReader({ list, outline: list, hydrate: async (_sid, ids) => source.filter(r => ids.includes(r.id)),
+      revision: async () => 'owner-a:1', anchor: async (_sid, id) => source.find(r => r.id === id)!, running: () => false,
+      shareScope: () => scope });
+    const firstShape = vi.fn(), secondShape = vi.fn();
+    const a = api.page('s', undefined, true, { onShape: firstShape });
+    const b = api.page('s', undefined, true, { onShape: secondShape });
+    release();
+    const [first, second] = await Promise.all([a, b]);
+    expect(first).toEqual(second);
+    expect(first.items.map(item => item.type)).toEqual(['messages', 'work', 'messages']);
+    expect(firstShape).toHaveBeenCalledTimes(1);
+    expect(secondShape).toHaveBeenCalledWith(firstShape.mock.calls[0][0]);
+    expect(list).toHaveBeenCalledTimes(1);
+    await api.page('s', undefined, true);
+    expect(list).toHaveBeenCalledTimes(2);
+    // A device-link caller reads with different import side effects: never joined.
+    const local = api.page('s', undefined, true);
+    scope = 'device-link';
+    await Promise.all([local, api.page('s', undefined, true)]);
+    expect(list).toHaveBeenCalledTimes(4);
+  });
+  it('reaches a long run through compact outlines and keeps SDK metadata in hydrated details', async () => {
+    const source = [row(0, 'user'), ...Array.from({ length: 1100 }, (_, i) => ({
+      ...row(i + 1), content: 'thinking', agentMeta: { uuid: `sdk-${i}`, usage: { details: 'x'.repeat(9000) } },
+    })), { ...row(1101, 'assistant'), agentMeta: { turnCompleted: true } }];
+    const base = reader(source);
+    const outlined = reader(source.map(withHistoryArtifacts));
+    const api = createHistoryViewReader({ list: base.list, outline: outlined.list,
+      hydrate: async (_sid, ids) => source.filter(r => ids.includes(r.id)),
+      anchor: async (_sid, id, outline) => {
+        const found = source.find(r => r.id === id)!;
+        return outline ? withHistoryArtifacts(found) : found;
+      }, running: () => false });
+    const page = await api.page('s', undefined, true);
+    expect(page.hasMore).toBe(false);
+    expect(page.items.map(item => item.type)).toEqual(['messages', 'work', 'messages']);
+    const work = page.items[1];
+    if (work.type !== 'work') throw new Error('missing work');
+    const details = await api.details('s', work.summary);
+    expect(details.messages[0].agentMeta).toEqual(source[1].agentMeta);
+    expect(details.hasMore).toBe(true);
+  });
+  // 2026-10-25: ordinary simulator plugin calls cost one page item each although
+  // Mobile folds them. Exercise real paging and details, not just the classifier.
+  it('pages settled plugin work by visible groups and retains every call in details', async () => {
+    const source: HistoryMessageSource[] = [row(0, 'user')];
+    for (let n = 1; n <= 80; n++) {
+      source.push({ ...row(n * 2 - 1, 'tool_use'), content: {
+        toolName: 'mcp:cindy:ghost_call', toolUseId: `t${n}`, input: { ghost_id: 'simulator', tool: 'tap' },
+      } }, { ...row(n * 2, 'tool_result'), toolUseId: `t${n}`, content: 'ok' });
+    }
+    source.push({ ...row(161, 'assistant'), content: 'Done', agentMeta: { turnCompleted: true } });
+    const base = reader(source);
+    const api = createHistoryViewReader({ list: base.list, outline: base.list,
+      hydrate: async (_sid, ids) => source.filter(r => ids.includes(r.id)),
+      anchor: async (_sid, id) => source.find(r => r.id === id)!, running: () => false });
+    const page = await api.page('s', undefined, true);
+    expect(page.items.map(item => item.type)).toEqual(['messages', 'work', 'messages']);
+    expect(page.hasMore).toBe(false);
+    const work = page.items[1];
+    if (work.type !== 'work') throw new Error('missing work');
+    expect((await api.details('s', work.summary)).messages.map(r => r.id))
+      .toEqual(source.slice(1, -1).map(r => r.id));
+  });
   it('paginates visible items across a long hidden run without splitting or sending its bodies', async () => {
     const source = [row(0, 'user'), ...Array.from({ length: 600 }, (_, i) => row(i + 1)), row(601, 'assistant')];
     const { api, list } = reader(source);

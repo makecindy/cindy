@@ -26,7 +26,7 @@
  */
 
 import { createLogger } from '../logger';
-import * as blobStore from './blobStore';
+import * as blobStore from './blobStore.desktop';
 import * as ledger from './ledger';
 import type { LedgerDb } from './ledger';
 
@@ -221,6 +221,10 @@ export async function evictCacheBlobs(
       }
       const removed = await ledger.deleteCacheBlobRecord(hash, db, params.integration);
       if (!removed) {
+        if (params.integration === 'remote-media') {
+          params.assertStillValid?.();
+          await ledger.removeIntegrationCacheRefs(hash, params.integration, db);
+        }
         result.skipped++;
         continue;
       }

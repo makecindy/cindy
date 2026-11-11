@@ -35,7 +35,14 @@ export type VoiceInputSyncErrorResult = {
   message: string;
 };
 
-export type VoiceInputLanguage = 'auto' | SupportedLocale;
+/**
+ * Dictation-only languages: speakable languages the recognition service can be
+ * hinted with, which are NOT client UI locales. Dictation language is decoupled
+ * from the UI language so a speaker is not limited to the UI locales.
+ */
+export const VOICE_INPUT_EXTRA_LANGUAGES = ['es'] as const;
+export type VoiceInputExtraLanguage = (typeof VOICE_INPUT_EXTRA_LANGUAGES)[number];
+export type VoiceInputLanguage = 'auto' | SupportedLocale | VoiceInputExtraLanguage;
 export type VoiceInputDictionaryEntrySource = 'manual' | 'automatic';
 export type VoiceInputShortcutTrigger = 'keyboard' | 'modifier';
 export type VoiceInputModifierShortcutCode =
@@ -178,10 +185,10 @@ export type VoiceInputDictionaryLearningEvidence = Pick<
 export const DEFAULT_DICTIONARY_SYNC_ENABLED = true;
 
 /**
- * 长按输入框语音输入的系统默认值。默认关闭:按住鼠标通常是在选字,只有用户主动
- * 打开才改变这个手势的含义。
+ * 长按输入框语音输入默认开启。设置页不展示开关；手动配置仍可通过
+ * composerLongPressEnabledOverride 显式关闭，删除 override 恢复默认。
  */
-export const DEFAULT_COMPOSER_LONG_PRESS_ENABLED = false;
+export const DEFAULT_COMPOSER_LONG_PRESS_ENABLED = true;
 
 export const MAX_VOICE_INPUT_REFINEMENT_INSTRUCTIONS_CHARS = 1_000;
 export const MAX_VOICE_INPUT_DICTIONARY_ENTRIES = 1_000;
@@ -1025,7 +1032,10 @@ function normalizeSpeakerFilterStrictnessOverride(
 
 function isVoiceInputLanguage(value: unknown): value is VoiceInputLanguage {
   if (value === 'auto') return true;
-  return typeof value === 'string' && (SUPPORTED_LOCALES as readonly string[]).includes(value);
+  return typeof value === 'string' && (
+    (SUPPORTED_LOCALES as readonly string[]).includes(value)
+    || (VOICE_INPUT_EXTRA_LANGUAGES as readonly string[]).includes(value)
+  );
 }
 
 function hasMacNativeModifierGroup(keySet: ReadonlySet<string>, left: string, right: string): boolean {

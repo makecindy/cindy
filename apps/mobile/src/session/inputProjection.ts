@@ -1,3 +1,4 @@
+import { parseOutputLimitDetails } from '@cindy/maker-shared';
 import { readChatReplyQuote, type ChatReplyQuote } from '@cindy/maker-shared/chat-reply-quote';
 import {
   buildAttachmentPersistFileRefs,
@@ -12,7 +13,8 @@ import type { InputProjection, QueuedRemoteMessage, RemoteImageRef, RemoteSessio
 import type { RemoteSerializedAttachment } from '@/session/types';
 import { parseMobileToolLoopErrorDetails } from '@/session/agentErrorI18n';
 import { i18n } from '@/i18n';
-import { resolveSystemLocale } from '@/i18n/locale';
+import { isClassicalLocale, resolveSystemLocale } from '@/i18n/locale';
+import { currentClassicalStyle } from '@/i18n/classicalStyleStore';
 import { permissionModeOrAsk } from '@cindy/maker-shared/permission-mode';
 import {
   composerDocumentsEqual,
@@ -73,6 +75,7 @@ export const EMPTY_INPUT_PROJECTION: InputProjection = Object.freeze({
   error: null,
   errorReason: null,
   toolLoop: null,
+  outputLimit: null,
   recovery: null,
   errorRetryText: null,
   credentialSwitchWait: null,
@@ -100,8 +103,10 @@ export function normalizeInputProjection(value: unknown, fallbackSessionId = '')
     error: readString(record?.error),
     errorReason: readString(record?.errorReason),
     toolLoop: parseMobileToolLoopErrorDetails(record?.toolLoop),
+    outputLimit: parseOutputLimitDetails(record?.outputLimit) ?? null,
     recovery: record?.recovery,
     errorRetryText: readString(record?.errorRetryText),
+    errorCanContinue: record?.errorCanContinue === true,
     autoResumePending: readRecord(record?.autoResumePending),
     continuationTurnClientId: readString(record?.continuationTurnClientId),
     continuationInFlightProjectionCapability,
@@ -169,11 +174,13 @@ export function buildQueuedTextMessage(
   );
   const createdAt = now.toISOString();
   const uiLanguage = resolveSystemLocale(i18n.resolvedLanguage || i18n.language);
+  const classicalStyle = isClassicalLocale(uiLanguage) ? currentClassicalStyle() : undefined;
 
   return {
     clientId,
     text: trimmed,
     uiLanguage,
+    ...(classicalStyle ? { classicalStyle } : {}),
     persistedContent,
     ...(attachments.length > 0 ? { files: [...attachments] } : {}),
     ...(options.agentReferences?.length ? { agentReferences: options.agentReferences } : {}),

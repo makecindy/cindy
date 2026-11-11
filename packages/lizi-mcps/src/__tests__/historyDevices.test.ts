@@ -99,6 +99,44 @@ function setup() {
 }
 
 describe("history device discovery and queries", () => {
+  // Regression: callers could find a task but had no clickable link to return,
+  // especially when the same id appeared on different computers or an older host.
+  it("returns host-built links for local and older remote results without changing tool ids", async () => {
+    const s = setup();
+    const localUrl = "cindy://session/same?device=host";
+    const remoteUrl = "cindy://session/same?device=mac";
+    s.history.sessionUrl = vi.fn((id) => {
+      if (id === "same") return localUrl;
+      if (id === "mac::same") return remoteUrl;
+      throw new Error(`Unexpected session key: ${id}`);
+    });
+    const list = await s.call("list_sessions", { device: "all" });
+    expect(list.groups[0].sessions[0]).toMatchObject({ id: "same", sessionUrl: localUrl });
+    expect(list.groups[1].sessions[0]).toMatchObject({ id: "mac::same", sessionUrl: remoteUrl });
+
+    const meta = { title: "Task", workingDir: null, agentKind: "codex" };
+    vi.mocked(s.history.searchChatHistory).mockResolvedValueOnce({ ok: true, result: {
+      hits: [], sessions: { same: meta }, vectorUsed: false, vectorSkipReason: null,
+      nextOffset: null, hasMore: false, poolSize: 0, poolCapped: false,
+    } });
+    expect((await s.call("search_chat_history", { query: "task" })).sessions.same)
+      .toMatchObject({ ...meta, sessionUrl: localUrl });
+    s.remoteQuery.mockResolvedValueOnce({ ok: true, hits: [], sessions: { same: meta } } as any);
+    expect((await s.call("search_chat_history", { device: "mac", query: "task" })).groups[0].sessions["mac::same"])
+      .toMatchObject({ ...meta, sessionUrl: remoteUrl });
+
+    for (const [id, sessionUrl] of [["same", localUrl], ["mac::same", remoteUrl]]) {
+      vi.mocked(s.history.getMessages).mockResolvedValueOnce({ ok: true, page: {
+        items: [{ id: "m", sessionId: id!, sessionTitle: "Task", sessionWorkingDir: null,
+          sessionAgentKind: "codex", role: "assistant", content: "Done", createdAt: 1,
+          toolUseId: null, agentMeta: null, rewindAt: null }], nextCursor: null, hasMore: false,
+      } });
+      const result = await s.call("get_chat_history", { session_ids: [id] });
+      expect(result.sessions[id!]).toMatchObject({ sessionUrl });
+      expect(result.messages[0]).toMatchObject({ sessionId: id, content: "Done" });
+    }
+  });
+
   // The execution-device Worker has no local orcaRole. Keep its persisted origin
   // visible through the real list_sessions projection so it can identify its Lead.
   it("projects remote Worker origin while leaving local role and Fork fields absent", async () => {
@@ -150,6 +188,23 @@ describe("history device discovery and queries", () => {
       "list_sessions",
       expect.objectContaining({ device: "local", cursor: "remote-cursor" }),
     );
+  });
+  // Optional filters survive forwarding; an old schema failure must never retry unscoped.
+  it("forwards teammate filters and reports an old schema rejection without dropping them", async () => {
+    const s = setup();
+    s.remoteQuery.mockResolvedValueOnce({ ok: false, errorCode: "INVALID_ARGS", message: "Unrecognized key: teammate_id" } as any);
+    const result = await s.call("list_sessions", {
+      device: "all", teammate_id: "bot-a", source: "bot", time_field: "activity",
+    });
+    expect(s.history.listSessions).toHaveBeenCalledWith(expect.objectContaining({ teammateId: "bot-a", source: "bot", timeField: "activity" }));
+    expect(s.remoteQuery).toHaveBeenCalledExactlyOnceWith("mac", "list_sessions", expect.objectContaining({
+      device: "local", teammate_id: "bot-a", source: "bot", time_field: "activity",
+    }));
+    expect(result).toMatchObject({ partial: true, groups: expect.arrayContaining([
+      expect.objectContaining({ deviceId: "mac", ok: false, errorCode: "INVALID_ARGS" }),
+    ]) });
+    await s.call("search_chat_history", { device: "mac", query: "topic", teammate_id: "bot-a", source: "bot" });
+    expect(s.remoteQuery).toHaveBeenLastCalledWith("mac", "search_chat_history", expect.objectContaining({ teammate_id: "bot-a", source: "bot" }));
   });
   it("qualifies search hits, metadata and context and supports reading the returned identity", async () => {
     const s = setup();

@@ -18,7 +18,9 @@ const mocks = vi.hoisted(() => ({
   startEngine: vi.fn<() => Promise<void>>(),
   stopEngine: vi.fn(),
   drainEngine: vi.fn(),
-  engines: [] as Array<{ emit: (chunk: PcmChunk) => void }>,
+  engines: [] as Array<{ emit: (chunk: PcmChunk) => void; keepAlive: boolean }>,
+  prepareMicrophone: vi.fn(),
+  releasePreparation: vi.fn(),
   promptExpired: vi.fn(),
 }));
 vi.mock('react-i18next', () => ({ useTranslation: () => ({ t: mocks.translate }) }));
@@ -49,8 +51,11 @@ vi.mock('../audioContextPool', () => ({
 vi.mock('../WebMicAudioEngine', () => ({
   WebMicAudioEngine: class {
     emit = (_chunk: PcmChunk) => {};
-    constructor() {
+    constructor(readonly options: { keepAlive: boolean }) {
       mocks.engines.push(this);
+    }
+    get keepAlive() {
+      return this.options.keepAlive;
     }
     onPcm16k(callback: (chunk: PcmChunk) => void) {
       this.emit = callback;
@@ -74,9 +79,14 @@ vi.mock('../WebMicAudioEngine', () => ({
   disposeKeepAliveVoiceInputMicrophone: vi.fn().mockResolvedValue(undefined),
   prewarmVoiceInputBenchmarkFixture: vi.fn().mockResolvedValue(undefined),
   prewarmVoiceInputMicrophoneWithAutomaticFallback: vi.fn().mockResolvedValue(undefined),
+  prepareVoiceInputMicrophone: mocks.prepareMicrophone,
 }));
 
 import { useVoiceInput } from '../useVoiceInput';
+import {
+  createComposerLongPressVoiceGesture,
+  COMPOSER_LONG_PRESS_VOICE_INPUT_MS,
+} from '../composerLongPressGesture';
 
 function deferred<T>() {
   let resolve!: (value: T) => void;
@@ -150,6 +160,9 @@ beforeEach(() => {
   mocks.startEngine.mockReset().mockResolvedValue(undefined);
   mocks.stopEngine.mockReset();
   mocks.drainEngine.mockReset();
+  mocks.promptExpired.mockReset();
+  mocks.releasePreparation.mockReset();
+  mocks.prepareMicrophone.mockReset().mockReturnValue(mocks.releasePreparation);
 });
 afterEach(() => {
   cleanup();
@@ -158,6 +171,70 @@ afterEach(() => {
 });
 
 describe('local voice capture independent of startup checks and cloud', () => {
+  it('keeps an authorized microphone closed through a short composer click', async () => {
+    const h = mount();
+    h.api.getMicrophonePermissionCached.mockReturnValue({ ok: true, status: 'granted' });
+    h.api.prewarm.mockClear();
+    const gesture = createComposerLongPressVoiceGesture({
+      getState: () => h.result.current.state,
+      prepare: () => h.result.current.prepare(),
+      start: () => h.result.current.start(),
+      stop: () => h.result.current.stop(),
+    });
+    gesture.press({ x: 0, y: 0 });
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(COMPOSER_LONG_PRESS_VOICE_INPUT_MS - 1);
+    });
+    gesture.release();
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(COMPOSER_LONG_PRESS_VOICE_INPUT_MS);
+    });
+    expect(h.api.prewarm).not.toHaveBeenCalled();
+    // Opening even an authorized device can switch Bluetooth headphones to call audio.
+    expect(mocks.prepareMicrophone).not.toHaveBeenCalled();
+    expect(mocks.startEngine).not.toHaveBeenCalled();
+    expect(h.api.muteSystemAudio).not.toHaveBeenCalled();
+    expect(h.result.current.state).toBe('idle');
+    expect(h.api.start).not.toHaveBeenCalled();
+    expect(mocks.engines).toHaveLength(0);
+    gesture.dispose();
+  });
+
+  it('opens the microphone only after the composer hold threshold', async () => {
+    const h = mount();
+    h.api.getMicrophonePermissionCached.mockReturnValue({ ok: true, status: 'granted' });
+    h.api.prewarm.mockClear();
+    const gesture = createComposerLongPressVoiceGesture({
+      getState: () => h.result.current.state,
+      prepare: () => h.result.current.prepare(),
+      start: () => h.result.current.start(),
+      stop: () => h.result.current.stop(),
+    });
+    gesture.press({ x: 0, y: 0 });
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(COMPOSER_LONG_PRESS_VOICE_INPUT_MS - 1);
+    });
+    expect(h.api.prewarm).not.toHaveBeenCalled();
+    expect(mocks.prepareMicrophone).not.toHaveBeenCalled();
+    expect(mocks.startEngine).not.toHaveBeenCalled();
+    expect(h.api.start).not.toHaveBeenCalled();
+    await act(async () => {
+      h.mute.resolve({ ok: true });
+      h.connection.resolve({ ok: true, runId: 'held-composer' });
+      await vi.advanceTimersByTimeAsync(1);
+    });
+    expect(h.api.prewarm).toHaveBeenCalledOnce();
+    expect(mocks.startEngine).toHaveBeenCalledOnce();
+    expect(mocks.engines[0].keepAlive).toBe(false);
+    expect(h.result.current.state).toBe('listening');
+    await act(async () => {
+      gesture.release();
+    });
+    expect(mocks.stopEngine).toHaveBeenCalled();
+    expect(h.result.current.state).toBe('done');
+    gesture.dispose();
+  });
+
   it('ends before the microphone produces its first frame and closes the late microphone', async () => {
     const h = mount();
     const device = deferred<void>();
@@ -479,6 +556,55 @@ describe('local voice capture independent of startup checks and cloud', () => {
       await nextStart;
     });
     expect(h.api.appendAudio).toHaveBeenCalledExactlyOnceWith(chunk(0));
+  });
+
+  // 测试价值：真实 useVoiceInput 连续 start/stop 后必须仍能停止当前麦克风。
+  // 依据：2026-11-09 旧 done 把新输入置为 done，后续 start 覆盖仍在采集的 engine。
+  // 缺口：已有 immediate-restart 测试只模拟旧 start 返回，没有旧 run 的 IPC 事件。
+  // 最小输入：A stop → B start → A done → B start 返回 → B stop；另保留早到 auth。
+  // tier: unit，mock 设备/IPC、假时钟；修复前定向墙钟 1.47s（16 过/1 失败）。
+  it('ignores a cancelled run finishing while the next microphone is already open', async () => {
+    const h = mount();
+    await act(async () => { h.result.current.start(); });
+    await act(async () => {
+      h.mute.resolve({ ok: true });
+      await h.result.current.stop();
+    });
+    const nextConnection = deferred<{ ok: true; runId: string }>();
+    h.api.start.mockReturnValue(nextConnection.promise);
+    await act(async () => { h.result.current.start(); });
+    const stopCount = mocks.stopEngine.mock.calls.length;
+    await act(async () => {
+      // main can finish the cancelled connection after the next capture starts.
+      h.connection.resolve({ ok: true, runId: 'old' });
+    });
+    act(() => {
+      h.api.onEvent.mock.calls.at(-1)![0]({ type: 'state', runId: 'old', state: 'done' });
+    });
+    expect(h.result.current.state).toBe('listening');
+    expect(mocks.stopEngine).toHaveBeenCalledTimes(stopCount);
+    await act(async () => { nextConnection.resolve({ ok: true, runId: 'new' }); });
+    expect(h.result.current.state).toBe('listening');
+    await act(async () => { await h.result.current.stop(); });
+    expect(mocks.stopEngine).toHaveBeenCalledTimes(stopCount + 1);
+    expect(h.result.current.state).toBe('done');
+  });
+
+  it('delivers an early auth event only after the matching start owns the run', async () => {
+    const h = mount();
+    await act(async () => { h.result.current.start(); });
+    act(() => {
+      h.api.onEvent.mock.calls.at(-1)![0]({
+        type: 'auth-required', runId: 'current', provider: 'codex', reason: 'expired',
+      });
+    });
+    expect(mocks.promptExpired).not.toHaveBeenCalled();
+    await act(async () => { h.connection.resolve({ ok: true, runId: 'current' }); });
+    expect(mocks.promptExpired).toHaveBeenCalledExactlyOnceWith('expired');
+    await act(async () => {
+      h.mute.resolve({ ok: true });
+      await h.result.current.cancel();
+    });
   });
 
   it('cleans up local capture when readiness IPC rejects', async () => {

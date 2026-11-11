@@ -15,12 +15,15 @@ import { app, ipcMain, BrowserWindow, net, shell } from 'electron';
 
 import {
   createIM,
+  BlueBubblesIM,
+  LocalWebhookReceiver,
   createDiscordIM,
   createDingTalkIM,
   createFeishuIM,
   createTelegramIM,
   createWecomIM,
   type DingTalkIM,
+  type DiscordChannelAccessStore,
   type DiscordIM,
   type FeishuIM,
   type IMHost,
@@ -33,16 +36,17 @@ import { TencentIlinkTransport } from '@cindy/wechat-ilink';
 import { inboundFileStaging } from './shared/inboundFileStaging';
 import { verifiedInboundMediaMime } from './shared/inboundMediaVerify';
 import { createLogger } from '../logger';
-import { resolveSafe as resolveXdtImageUrl } from '../imageCacheStore';
-import { resolveSafe as resolveCindyMediaUrl } from '../cindy-media/blobStore';
+import { resolveSafe as resolveXdtImageUrl } from '../imageCacheStore.desktop';
+import { resolveSafe as resolveCindyMediaUrl } from '../cindy-media/blobStore.desktop';
 import {
   integrationCacheGet,
   integrationCacheKey,
   integrationCachePut,
 } from '../cindy-media/integrationCache';
 import { pinBlob } from '../cindy-media/ledger';
-import { t } from '../i18n';
+import { t } from '../i18n.desktop';
 import { discordUiText } from './discord/uiText';
+import { discordChannelAccessStore } from './discord/channelAccessStore';
 import { telegramUiText } from './telegram/uiText';
 import {
   patchTelegramBehavior,
@@ -55,6 +59,7 @@ import { listTelegramKnownGroups } from './telegram/groupWindow';
 import { assertTrustedAppRendererEvent } from '../security/trustedAppRenderer.js';
 import { throwIpcError } from '../utils/ipcValidate.js';
 import { imHostAccountScope } from './accountScopeBridge';
+import { blueBubblesStateStorage } from './imessage/storage';
 import { ownerScopedImSecrets } from './ownerScopedStorage';
 import { captureImAccountGeneration, isImAccountGenerationCurrent } from './accountBoundary';
 import { getDbClient } from '../localDb/client/current';
@@ -65,6 +70,7 @@ import {
 } from './wechat/compatibilityPolicy';
 import { fetchPublicImageBytes } from './publicImageFetch';
 import { buildPersonalBotCommandMenu } from './shared/botCommands';
+import { shouldAnnounceFeishuLifecycle } from './feishu/lifecycleAnnouncements';
 
 const log = createLogger('im/host');
 
@@ -190,15 +196,24 @@ const host: IMHost = {
   createLogger,
 };
 
-export const feishuIm = createFeishuIM(host);
+export const feishuIm = createFeishuIM(host, {
+  shouldAnnounceLifecycle: shouldAnnounceFeishuLifecycle,
+});
 /**
  * 伙伴自有飞书 / Lark 连接的传输层实例: 凭证与 TOFU 主人按连接前缀隔离、不注册设置卡
  * IPC、对外开放(非主人的私聊与群 @ 带非主人标记进业务层)。
  */
 export function createBotFeishuIM(secretKeyPrefix: string): FeishuIM {
-  return createFeishuIM(host, { secretKeyPrefix, ipc: false, guests: true });
+  return createFeishuIM(host, {
+    secretKeyPrefix,
+    ipc: false,
+    guests: true,
+    shouldAnnounceLifecycle: shouldAnnounceFeishuLifecycle,
+  });
 }
 export const discordIm = createDiscordIM(host, {
+  channelAccess: discordChannelAccessStore,
+  ownerOnlyCardNotice: () => t('settings.discordBot.channels.ownerOnlyCardNotice'),
   resolveImageUrl: resolveManagedImageAbsPath,
   expiredCardNotice: discordUiText.expiredCardNotice,
   ownerNoticeText: (phase) => t(`settings.discordBot.ownerNotice.${phase}`),
@@ -253,8 +268,14 @@ export function createBotDingTalkIM(secretKeyPrefix: string): DingTalkIM {
     ipc: false,
   });
 }
-export function createBotDiscordIM(secretKeyPrefix: string): DiscordIM {
+export function createBotDiscordIM(
+  secretKeyPrefix: string,
+  options: { channelAccess?: DiscordChannelAccessStore } = {},
+): DiscordIM {
   return createDiscordIM(host, {
+    // 服务器频道白名单按连接各一份、由连接记录提供（缺省 = 不开放任何频道）。
+    ...(options.channelAccess ? { channelAccess: options.channelAccess } : {}),
+    ownerOnlyCardNotice: () => t('settings.discordBot.channels.ownerOnlyCardNotice'),
     resolveImageUrl: resolveManagedImageAbsPath,
     expiredCardNotice: discordUiText.expiredCardNotice,
     ownerNoticeText: (phase) => t(`settings.discordBot.ownerNotice.${phase}`),
@@ -372,3 +393,17 @@ export const im = createIM([
   dingtalkIm,
   wecomIm,
 ]);
+
+const localImReceivers = new Map<string, LocalWebhookReceiver>();
+export function createBotIMessageIM(secretKeyPrefix: string, connectionId: string): BlueBubblesIM {
+  return new BlueBubblesIM(host, {
+    secretPrefix: secretKeyPrefix,
+    storage: blueBubblesStateStorage(connectionId),
+    receiver: (listenHost, port) => {
+      const key = `${listenHost}:${port}`;
+      let receiver = localImReceivers.get(key);
+      if (!receiver) { receiver = new LocalWebhookReceiver(listenHost, port); localImReceivers.set(key, receiver); }
+      return receiver;
+    },
+  });
+}

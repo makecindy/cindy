@@ -17,6 +17,7 @@ import {
 import {
   buildClaudeUsageCard,
   buildCodexUsageCard,
+  buildOpenCodeGoUsageCard,
   buildXaiUsageCard,
 } from '../components/status/usageCardModel';
 
@@ -25,17 +26,9 @@ const sourcePath = resolve(__dirname, '..', 'components', 'status', 'TodaySpendC
 // Windows CRLF 检出下 \n 字面量断言会失配,统一归一化成 LF 再断言。
 const source = readFileSync(sourcePath, 'utf8').replace(/\r\n/g, '\n');
 describe('TodaySpendChip dashboard routing', () => {
-  it('routes Codex/CC/Pi subscription providers to their account usage pages and keeps gateway routes local', () => {
-    expect(compact(source)).toContain(compact('https://chatgpt.com/codex/settings/usage'));
-    expect(compact(source)).toContain(compact('https://grok.com'));
-    expect(compact(source)).toContain(compact('https://claude.ai/settings/usage'));
-    // 网关 / 托管账号这一路 URL 落到 null(点击无跳转);其余三路指向各自公开看板。
-    expect(source).toMatch(
-      /usesXaiQuotaForm\s*\?\s*XAI_USAGE_DASHBOARD_URL\s*:\s*isCodexOauth \|\| isChatgptBridge\s*\?\s*CODEX_USAGE_DASHBOARD_URL\s*:\s*isClaudeSubscription\s*\?\s*CLAUDE_USAGE_DASHBOARD_URL\s*:\s*null/,
-    );
-    expect(compact(source)).toContain(compact('todaySpend.openCodexUsage'));
-    expect(compact(source)).toContain(compact('todaySpend.openXaiUsage'));
-    expect(compact(source)).toContain(compact('todaySpend.openClaudeUsage'));
+  it('reads Model Access quota only for actual gateway sessions', () => {
+    // Dashboard destinations are exercised through real component clicks in
+    // TodaySpendChip.popover.test.tsx rather than pinning the ternary's source shape.
     // 只有实际 Gateway 会话读取 Model Access quota；自定义供应商只保留本会话统计。
     expect(compact(source)).toContain(
       compact('const usesGatewayQuota = isClaudeGateway || isCodexGateway || isPiGateway;'),
@@ -280,6 +273,21 @@ const t = ((key: string, values?: Record<string, unknown>) =>
   `${key}${values ? ':' + JSON.stringify(values) : ''}`) as TFunction;
 const now = Date.UTC(2026, 8, 5);
 describe('shared usage-card provider projections', () => {
+  it('shows OpenCode Go rolling, weekly, and monthly meters without calling them weekly', () => {
+    const card = buildOpenCodeGoUsageCard({ kind: 'opencode-go-quota', fetchedAt: now, windows: [
+      { id: 'rolling', usedPercent: 20, limited: false, resetsAt: now + 3_600_000 },
+      { id: 'weekly', usedPercent: 30, limited: false, resetsAt: now + 86_400_000 },
+      { id: 'monthly', usedPercent: 100, limited: true, resetsAt: now + 1_800_000_000 },
+    ] }, t);
+    expect(card.title).toBe('OpenCode Go');
+    expect(card.windows.map(window => window.title)).toEqual([
+      'providerAccountUsage.kimi.limit_5h',
+      'providerAccountUsage.kimi.limit_7d',
+      'providerAccountUsage.kimi.limit_month_total',
+    ]);
+    expect(card.notices?.[0]?.text).toBe('quotaCard.limitRejected');
+  });
+
   it.each([
     [' ProLite ', 'ProLite', 'Pro Lite'],
     ['custom_plan', 'Custom_plan', 'Custom Plan'],

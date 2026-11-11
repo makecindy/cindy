@@ -18,6 +18,7 @@ import {
 import type { VoicePreviewController } from './VoicePreviewController';
 import { readSpeechVoiceLabel, rememberSpeechVoiceLabel } from './speechVoiceLabelCache';
 import { SpeechVoiceMenu } from './SpeechVoiceMenu';
+import { useBotSettingsTarget } from '../useBotSettingsTarget';
 
 const MANUAL = 'manual';
 const LOADING = 'loading';
@@ -54,6 +55,7 @@ export function SpeechVoicePicker({
   onChange,
 }: Props) {
   const { t } = useTranslation();
+  const voiceApi = useBotSettingsTarget().voice;
   const [catalogState, setCatalogState] = useState<CatalogState>();
   const [revision, setRevision] = useState(0);
   const [manualRouteKey, setManualRouteKey] = useState<string>();
@@ -137,7 +139,7 @@ export function SpeechVoicePicker({
       catalog: protocol && current?.routeKey === routeKey ? current.catalog : undefined,
     }));
     if (protocol) {
-      void window.electronAPI.voiceConversation
+      void voiceApi
         .voices(route)
         .then((result) => {
           if (version.current === request && isDataOwnerGenerationCurrent(owner))

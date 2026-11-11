@@ -6,6 +6,7 @@ export interface ScheduledModelBaseline {
   /** Permanent profile save not yet accepted by the runtime; survives pause/restart. */
   pendingBotProfileVersion?: number;
   agentKind: MakerAgentKindWire;
+  agentDeviceId?: string | null;
   model: string;
   providerId: string | null;
   effort: 'minimal' | 'low' | 'medium' | 'high' | 'xhigh' | 'max' | 'ultra' | null;
@@ -22,6 +23,7 @@ export function parseScheduledModelBaseline(value: unknown): ScheduledModelBasel
     const effort = parsed?.effort === '' ? null : parsed?.effort;
     if (!parsed || typeof parsed.scopeId !== 'string' ||
       !['claude-code', 'codex', 'pi'].includes(parsed.agentKind) ||
+      (parsed.agentDeviceId !== undefined && parsed.agentDeviceId !== null && typeof parsed.agentDeviceId !== 'string') ||
       typeof parsed.model !== 'string' || !parsed.model ||
       (parsed.providerId !== null && typeof parsed.providerId !== 'string') ||
       (effort !== null && !['minimal', 'low', 'medium', 'high', 'xhigh', 'max', 'ultra'].includes(effort)) ||

@@ -10,8 +10,8 @@
  *  - `FILE_SERVICE_SCHEMA_VERSION` 是协议兼容性判据。client handshake 时带上
  *    自己的版本,不相等即视为不兼容 → 上层重推 bundle(bundle ~几百 KB,重推
  *    是秒级操作,所以不做向后兼容协商,严格相等最简单)。
- *  - `FILE_SERVICE_BUNDLE_VERSION` 是人读的 bundle 版本,手动 bump,probe /
- *    日志用,不参与兼容性判断。
+ *  - `FILE_SERVICE_BUNDLE_VERSION` 标识实现版本,行为变化时手动 bump。
+ *    Desktop 会在 probe 的 bundle 版本不匹配时重推,即使 schema 兼容。
  *
  * 帧类型三种,全部单行 JSON:
  *  - Request  (client → daemon): { id, method, params }
@@ -35,8 +35,8 @@ import type {
 /** 协议兼容版本:client 与 daemon 严格相等才可用。改动任何请求/响应形状时 +1。 */
 export const FILE_SERVICE_SCHEMA_VERSION = 3;
 
-/** 人读 bundle 版本(probe / 日志用),行为变化时手动 bump。 */
-export const FILE_SERVICE_BUNDLE_VERSION = '0.2.6';
+/** 实现版本;含共享扫描器在内的行为变化需 bump,使已安装的远端自动更新。 */
+export const FILE_SERVICE_BUNDLE_VERSION = '0.2.7';
 
 /* ============================== 帧 ============================== */
 

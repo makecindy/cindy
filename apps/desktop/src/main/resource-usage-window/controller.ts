@@ -12,7 +12,7 @@ import {
   RESOURCE_USAGE_WINDOW_SAMPLING_ACTIVE_CHANNEL,
 } from '../../shared/resourceUsageWindow.js';
 
-import { t } from '../i18n.js';
+import { t } from '../i18n.desktop.js';
 import { createLogger } from '../logger.js';
 
 const log = createLogger('resource-usage-window-controller');
@@ -45,7 +45,10 @@ export interface ResourceUsageWindowControllerDeps {
    */
   pauseWhenHidden?: boolean;
   onActivityChanged?: (window: BrowserWindow, active: boolean) => void;
+  /** Runs only when a requested presentation is shown, never during hidden prewarm. */
+  onBeforeShow?: (window: BrowserWindow) => void;
   onCloseRequested?: (window: BrowserWindow) => void;
+  onUnavailable?: () => void;
   isOpenSender: (sender: WebContents) => boolean;
   /** 打开监视器的那扇应用窗；用于跟随显隐并在关闭监视器后恢复焦点。 */
   getOwnerWindow?: (sender: WebContents) => ResourceUsageOwnerWindow | null;
@@ -68,6 +71,8 @@ export class ResourceUsageWindowController {
   private pendingOpen = false;
   private openTimeout: NodeJS.Timeout | null = null;
   private prewarmTimeout: NodeJS.Timeout | null = null;
+  /** 首次挂载后再给首份内容一次有界预热；关闭/主动打开会取消，重复 ready 不续期。 */
+  private prewarmAwaitingRenderer = false;
   private recoveryStabilityTimeout: NodeJS.Timeout | null = null;
   private leaveTimeout: NodeJS.Timeout | null = null;
   private samplingActive = false;
@@ -90,6 +95,17 @@ export class ResourceUsageWindowController {
     this.ensureWindow();
   }
 
+  /** A reused editor is about to receive a different document; wait for its first paint. */
+  resetPresentation(): void {
+    this.presentationReady = false;
+  }
+
+  /** A renderer error boundary can request the same bounded recovery as a process crash. */
+  rendererFailed(sender: WebContents): void {
+    const win = this.windowForSender(sender);
+    if (win) this.invalidateWindow(win, 'renderer reported a rendering failure');
+  }
+
   /** 幂等打开：热窗口立即显示；冷窗口等待首份可展示快照，异常时才显示已挂载的 Loading 壳。 */
   open(sender: WebContents): boolean {
     if (this.disposed) return false;
@@ -99,6 +115,8 @@ export class ResourceUsageWindowController {
     }
     this.automaticRecoveryAttempts = 0;
     this.clearRecoveryStabilityTimeout();
+    this.prewarmAwaitingRenderer = false;
+    this.clearPrewarmTimeout();
     this.pendingOpen = true;
     this.rememberOwner(sender);
     const win = this.ensureWindow();
@@ -125,6 +143,13 @@ export class ResourceUsageWindowController {
     const win = this.windowForSender(sender);
     if (!win) return false;
     this.rendererReady = true;
+    if (this.prewarmAwaitingRenderer) {
+      this.prewarmAwaitingRenderer = false;
+      // 模块加载可能已耗尽建窗时的预算。ready 是唯一一次继续的事件，避免首份
+      // 快照还没开始就一直暂停到用户打开；重复 ready 不续期，也不轮询重试。
+      this.samplingActive = this.deps.prewarmWork ?? this.platform() !== 'win32';
+      if (this.samplingActive) this.schedulePrewarmFallback(win);
+    }
     if (this.locale) this.sendLocale(win, this.locale);
     this.setSamplingActive(win, this.samplingActive);
     if (!this.samplingActive && !this.visible && !this.pendingOpen) this.clearPrewarmTimeout();
@@ -136,6 +161,7 @@ export class ResourceUsageWindowController {
     const win = this.windowForSender(sender);
     if (!win) return false;
     this.presentationReady = true;
+    this.prewarmAwaitingRenderer = false;
     this.scheduleRecoveryStabilityReset(win);
     this.clearPrewarmTimeout();
     if (this.pendingOpen) {
@@ -232,6 +258,7 @@ export class ResourceUsageWindowController {
       win = this.deps.createWindow();
     } catch (error) {
       this.resetWindowState();
+      this.deps.onUnavailable?.();
       log.error('resource-usage window creation failed', {
         error: error instanceof Error ? error.message : String(error),
       });
@@ -241,6 +268,7 @@ export class ResourceUsageWindowController {
     this.rendererReady = false;
     this.presentationReady = false;
     this.visible = false;
+    this.prewarmAwaitingRenderer = !this.pendingOpen;
     // Windows 预热只加载 BrowserWindow / renderer。昂贵且可能触发安全软件管道异常的
     // OS 扫描必须等用户显式 open；其他平台保留既有首份快照预热体验。
     this.samplingActive = this.pendingOpen || (this.deps.prewarmWork ?? this.platform() !== 'win32');
@@ -313,6 +341,7 @@ export class ResourceUsageWindowController {
   }
 
   private showAndFocus(win: BrowserWindow): void {
+    this.prewarmAwaitingRenderer = false;
     this.clearOpenTimeout();
     this.clearPrewarmTimeout();
     this.clearLeaveTimeout();
@@ -320,6 +349,7 @@ export class ResourceUsageWindowController {
     if (!win.isVisible()) this.enteringNativeFullscreen = false;
     this.visibilityGeneration += 1;
     this.setSamplingActive(win, true);
+    this.deps.onBeforeShow?.(win);
     if (win.isMinimized()) win.restore();
     // 打开时只负责显示和聚焦，不再按 owner 状态驱动 setFullScreen。
     // macOS 沿用本窗口的原生 Space / 全屏呈现；仅关闭时显式退出全屏再隐藏。
@@ -329,6 +359,7 @@ export class ResourceUsageWindowController {
   }
 
   private hideWindow(win: BrowserWindow, options: { restoreOwner?: boolean } = {}): void {
+    this.prewarmAwaitingRenderer = false;
     this.clearOpenTimeout();
     this.clearPrewarmTimeout();
     this.clearLeaveTimeout();
@@ -453,6 +484,8 @@ export class ResourceUsageWindowController {
 
   private onNativeVisibilityChanged(win: BrowserWindow, visible: boolean): void {
     if (win !== this.winRef || win.isDestroyed()) return;
+    this.prewarmAwaitingRenderer = false;
+    this.clearPrewarmTimeout();
     this.visible = visible;
     if (this.deps.pauseWhenHidden !== false) this.setSamplingActive(win, visible);
     if (!visible && this.pendingOpen) {
@@ -468,6 +501,7 @@ export class ResourceUsageWindowController {
     this.clearLeaveTimeout();
     this.winRef = null;
     this.rendererReady = false;
+    this.prewarmAwaitingRenderer = false;
     this.presentationReady = false;
     this.visible = false;
     this.pendingOpen = false;
@@ -493,7 +527,11 @@ export class ResourceUsageWindowController {
       this.prewarmTimeout = null;
       if (win !== this.winRef || win.isDestroyed() || this.visible || this.pendingOpen) return;
       this.setSamplingActive(win, false);
-      log.warn('resource-usage prewarm timed out; background sampling paused');
+      log.warn('auxiliary window prewarm timed out; background work paused', {
+        webContentsId: win.webContents.id,
+        activityChannel: this.deps.activityChannel ?? RESOURCE_USAGE_WINDOW_SAMPLING_ACTIVE_CHANNEL,
+        phase: this.rendererReady ? 'presentation' : 'renderer',
+      });
     }, this.deps.prewarmTimeoutMs ?? DEFAULT_PREWARM_TIMEOUT_MS);
     this.prewarmTimeout.unref?.();
   }
@@ -533,6 +571,7 @@ export class ResourceUsageWindowController {
     if (this.visible) win.hide();
     this.rendererReady = false;
     this.presentationReady = false;
+    this.prewarmAwaitingRenderer = !shouldRestore;
     this.setSamplingActive(win, shouldRestore || (this.deps.prewarmWork ?? this.platform() !== 'win32'));
     if (shouldRestore) {
       this.pendingOpen = true;
@@ -551,6 +590,7 @@ export class ResourceUsageWindowController {
     if (!reopen || this.disposed) return;
     if (this.automaticRecoveryAttempts >= MAX_AUTOMATIC_RECOVERY_ATTEMPTS) {
       log.error('resource-usage automatic recovery exhausted', { reason });
+      this.deps.onUnavailable?.();
       return;
     }
     this.automaticRecoveryAttempts += 1;

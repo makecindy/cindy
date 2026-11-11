@@ -22,6 +22,7 @@ import { clearDiagnostics, diagnosticsEnabled, exportDiagnostics, hydrateDiagnos
 import { SimpleStackHeader, simpleScrollInsetProps, simpleScrollScreenSafeAreaEdges } from '@/platform/chrome';
 import { ActionInfoRow, InfoRow, SettingsGroup, SettingsSwitchRow } from '@/session/SettingsGroupRows';
 import { buildMobileDebugRows, type MobileSettingsRow } from '@/settings/mobileSettings';
+import { PushDiagnosticsGroup } from '@/settings/PushDiagnosticsGroup';
 import { buildMobileUpdateInfoRows, currentMobileOtaVersion } from '@/settings/updateInfo';
 import { useThemedStyles, type ThemeColors } from '@/theme';
 import { fontWeight, lineHeight, spacing, typeScale } from '@/theme/tokens';
@@ -114,7 +115,7 @@ export default function DeveloperSettingsScreen() {
       : localLogUploadMessage;
 
   // —— Beta 测试渠道 ——
-  // 落盘即时生效,但 manifest 通道只在下次冷启动/后台轮询切换;打开后引导用户手动重启。
+  // 落盘后通知通道订阅,根部会按有效通道重新检查整包更新。
   const { enabled: betaEnabled, ready: betaReady, setEnabled: setBetaEnabled } = useBetaChannel();
   const [betaBusy, setBetaBusy] = useState(false);
   const toggleBeta = useCallback(async () => {
@@ -134,13 +135,6 @@ export default function DeveloperSettingsScreen() {
         }
       }
       await setBetaEnabled(next);
-      if (next) {
-        Alert.alert(
-          t('settings.betaChannel.title'),
-          t('settings.betaChannel.restartHint'),
-          [{ text: t('settings.betaChannel.ok'), style: 'default' }],
-        );
-      }
     } catch {
       // 只可能是本机存储异常;store 会回推真值,这里仅提示未保存成功。
       Alert.alert(t('settings.betaChannel.title'), t('settings.betaChannel.saveFailed'));
@@ -271,6 +265,7 @@ export default function DeveloperSettingsScreen() {
         title={t('settings.developer.title')}
       />
       <ScrollView {...simpleScrollInsetProps} contentContainerStyle={styles.content} testID="settings.developer.scroll">
+        {Platform.OS === 'ios' ? <PushDiagnosticsGroup /> : null}
         <SettingsGroup
           footer={t('settings.localLogs.footer')}
           messages={[localLogsStatus ? { text: localLogsStatus, testID: 'settings.localLogs.status' } : null]}

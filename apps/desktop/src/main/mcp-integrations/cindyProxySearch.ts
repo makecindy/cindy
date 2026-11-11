@@ -3,7 +3,7 @@ import { createLogger } from '../logger.js';
 import { effectiveXdGatewayBaseUrl } from '../model-access/effectiveEndpoint.js';
 import { reportCindyGatewayKeyRejected } from '../model-access/gatewayKeyRejection.js';
 import { getProviderSecretStore } from '../secrets/providerSecretStore.js';
-import { outboundFetch } from '../maker-host/outbound-fetch.js';
+import { outboundFetch } from '../maker-host/outbound-fetch.desktop.js';
 import {
   matchesDeterministicUsageExhaustionText,
   redactSensitiveText,

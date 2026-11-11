@@ -77,7 +77,7 @@ async function resolvePublisherIdentity(): Promise<PluginPublisherIdentity | nul
   if (!refreshed || refreshed.membershipId !== identity.membershipId) return null;
   if (refreshed.orgSlug !== null) return refreshed;
   try {
-    const { currentOrganization } = await new PluginMarketApi(undefined, () => app.getVersion()).listAll();
+    const { currentOrganization } = await new PluginMarketApi(undefined, () => app.getVersion()).catalog({ scope: 'public', limit: 1, counts: false });
     if (publisherIdentityContextKey() !== contextKey) return null;
     const current = currentPublisherIdentity();
     if (!current || current.membershipId !== identity.membershipId) return null;
@@ -139,7 +139,7 @@ export function getPluginPublisherOrchestrator(): PluginPublisherOrchestrator {
         const inspected = await getGhostManager().inspect(filePath);
         if ('rejection' in inspected) {
           log.warn('plugin publish inspect rejected', { code: inspected.rejection.code });
-          throw new Error('插件包无法发布');
+          throw new Error(`插件包无法发布：${inspected.rejection.reason}`);
         }
         if (isReservedConnectionPluginSlug(inspected.canonicalManifest.id)) {
           throw new Error('该插件 id 不可发布');

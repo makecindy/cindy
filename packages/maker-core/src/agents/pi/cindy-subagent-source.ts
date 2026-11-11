@@ -376,6 +376,29 @@ function modelProviderMap(runtime) {
   return map;
 }
 
+/**
+ * 子任务实际跑的模型(= durable config 里的 displayModel)。与宿主读状态文件时同一
+ * 口径:显式指定的模型 > 解析出的路由模型 > 继承父会话模型。
+ */
+function taskDisplayModel(task, runtime) {
+  return task.model || task.routeModel || runtime.model;
+}
+
+/**
+ * 卡片 chip 的模型:批次里所有子任务跑同一个模型才显示,不一致就不猜 —— 与宿主侧读
+ * 状态文件时的 model:null(多模型批次)同义。
+ */
+function singleTaskDisplayModel(tasks, runtime) {
+  let found;
+  for (const task of tasks) {
+    const model = taskDisplayModel(task, runtime);
+    if (!model) continue;
+    if (found !== undefined && found !== model) return undefined;
+    found = model;
+  }
+  return found;
+}
+
 function resolveTaskModelRoutes(tasks, runtime) {
   const availableModels = Object.keys(runtime.modelRoutes || {}).sort();
   const availableModelHint = availableModels.length > 0
@@ -1042,7 +1065,7 @@ async function launchDurableRun(binary, tasks, runtime, taskId, mode, context, d
         profilePrompt: task.profilePrompt,
         provider: task.routeProvider || runtime.provider,
         model: task.routeModel || runtime.model,
-        displayModel: task.model || task.routeModel || runtime.model,
+        displayModel: taskDisplayModel(task, runtime),
         sourceProviderId: task.routeSourceProviderId,
         proxySessionAuth: task.routeProxySessionAuth === true,
         thinking: task.thinking || undefined,
@@ -1618,7 +1641,10 @@ export default async function cindySubagent(pi: any) {
         };
         details[MARKER] = 1;
         if (summary) details.summary = summary;
-        if (runtime.model) details.model = runtime.model;
+        // 前台(非 async)卡片的 model 只由这些进度帧喂,所以这里必须报子任务实际模型。
+        // 报 runtime.model 会让指定了别的模型的子代理在卡片上显示成父会话模型。
+        const cardModel = singleTaskDisplayModel(tasks, runtime);
+        if (cardModel) details.model = cardModel;
         try {
           onUpdate({ content: [{ type: 'text', text: status === 'running' ? 'Running subagent…' : status }], details: details });
         } catch (err) {

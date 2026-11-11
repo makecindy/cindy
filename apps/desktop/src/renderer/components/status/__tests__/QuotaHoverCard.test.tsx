@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 
-import { fireEvent, render, screen, within } from '@testing-library/react';
+import { fireEvent, isInaccessible, render, screen, within } from '@testing-library/react';
 import { describe, expect, it, vi } from 'vitest';
 
 import type { ClaudeSubscriptionUsageSnapshot } from '../../../../shared/claudeSubscriptionUsage';
@@ -55,7 +55,7 @@ vi.mock('react-i18next', () => ({
 
 import { useTranslation } from 'react-i18next';
 import { QuotaHoverCard as UsageCard, type QuotaHoverCardProps } from '../QuotaHoverCard';
-import { buildClaudeUsageCard } from '../usageCardModel';
+import { buildClaudeUsageCard, buildKimiUsageCard } from '../usageCardModel';
 
 // Exercise the Claude adapter and the shared card together, retaining all existing edge cases.
 function QuotaHoverCard({
@@ -144,9 +144,41 @@ describe('QuotaHoverCard', () => {
     const title = screen.getByText(longTitle);
     expect(title.classList.contains('truncate')).toBe(true);
     expect(title.getAttribute('title')).toBe(longTitle);
-    const countdown = screen.getByText('1小时 5分钟后重置');
+    const countdown = screen.getByTitle('1小时 5分钟后重置');
     expect(countdown.classList.contains('truncate')).toBe(true);
     expect(countdown.getAttribute('title')).toBe('1小时 5分钟后重置');
+  });
+
+  it('keeps full embedded quota and reset wording available to screen readers', () => {
+    render(
+      <UsageCard
+        variant="embedded"
+        nowMs={NOW_MS}
+        account={{
+          windows: [
+            {
+              key: 'a',
+              title: '5 小时',
+              window: { utilization: 4, resetsAt: (NOW_MS + 65 * 60_000) / 1000 },
+            },
+            {
+              key: 'b',
+              title: '周限',
+              window: { utilization: 10, resetsAt: (NOW_MS - 60_000) / 1000 },
+            },
+          ],
+        }}
+      />,
+    );
+    expect(screen.getByText('96%').getAttribute('title')).toBe('剩余 96%');
+    expect(screen.getByRole('progressbar', { name: '5 小时' }).getAttribute('aria-valuetext')).toBe(
+      '剩余 96%',
+    );
+    expect(screen.queryByText('剩余 96%')).toBeNull();
+    expect(isInaccessible(screen.getByText('1小时 5分钟'))).toBe(true);
+    expect(isInaccessible(screen.getByText('1小时 5分钟后重置'))).toBe(false);
+    // An elapsed window has no duration to show, so it keeps the pending notice.
+    expect(screen.getByText('等待重置数据更新')).toBeTruthy();
   });
 
   it('hides duplicate identity without windows and only makes the popover region focusable', () => {
@@ -216,11 +248,11 @@ describe('QuotaHoverCard', () => {
     expect(screen.getByText('周限')).toBeTruthy();
     expect(screen.getByText('Fable 周限')).toBeTruthy();
     expect(screen.getByText('Opus 周限')).toBeTruthy();
-    expect(screen.getByText('剩余 99%')).toBeTruthy();
-    expect(screen.getByText('剩余 96%')).toBeTruthy();
-    expect(screen.getByText('剩余 100%')).toBeTruthy();
-    expect(screen.getByText('剩余 24%')).toBeTruthy();
-    expect(screen.getByText('7小时 5分钟后重置')).toBeTruthy();
+    expect(screen.getByText('99%')).toBeTruthy();
+    expect(screen.getByText('96%')).toBeTruthy();
+    expect(screen.getByText('100%')).toBeTruthy();
+    expect(screen.getByText('24%')).toBeTruthy();
+    expect(screen.getByText('7小时 5分钟')).toBeTruthy();
     expect(screen.queryByText('17:05 重置')).toBeNull();
     expect(screen.queryByRole('button')).toBeNull();
   });
@@ -1004,4 +1036,18 @@ describe('QuotaHoverCard', () => {
     );
     expect(screen.queryByTestId('quota-pace')).toBeNull();
   });
+});
+
+// Unit/jsdom: the Kimi adapter and real card must agree on remaining direction
+// and avoid rendering a contradictory empty-state message below a valid quota.
+it('renders returned Kimi windows without a fabricated empty state or token total', () => {
+  function KimiCard() {
+    const { t } = useTranslation();
+    return <UsageCard account={buildKimiUsageCard({ kind: 'kimi-coding-quota', fetchedAt: NOW_MS, windows: [{ id: 'limit_5h', usedPercent: 23, resetsAt: null }, { id: 'limit_month_code', usedPercent: 0, resetsAt: null }] }, t)} nowMs={NOW_MS} />;
+  }
+  render(<KimiCard />);
+  expect(screen.getByText('剩余 77%')).toBeTruthy();
+  expect(screen.getByText('剩余 100%')).toBeTruthy();
+  expect(screen.queryByText('quotaCard.noWindows')).toBeNull();
+  expect(screen.getAllByRole('progressbar')).toHaveLength(2);
 });

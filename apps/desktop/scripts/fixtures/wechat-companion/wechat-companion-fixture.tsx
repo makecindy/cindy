@@ -41,6 +41,7 @@ mountPage({
           state: 'running', lastActivityAt: Date.now() - 300000, contextMessageCount: 11 },
       ] }),
       resetLane: forbid('botImConnection.resetLane'),
+      archiveLane: forbid('botImConnection.archiveLane'),
       onChanged: subscription('connections'),
     },
     maker: {

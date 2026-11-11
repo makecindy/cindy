@@ -32,7 +32,7 @@ import {
   resetGenericOAuthMemoryCache,
   runGenericOAuthLogin,
   type GenericOAuthStorage,
-} from '../generic-oauth.js';
+} from '../generic-oauth.desktop.js';
 import {
   buildRouteDecision,
   isHostInjectedAuthSession,
@@ -121,6 +121,52 @@ function seedBlob(providerId: string, blob: Record<string, unknown>): void {
   storage.map.set(providerId, JSON.stringify(blob));
   resetGenericOAuthMemoryCache(); // 让下次读走注入 storage
 }
+
+describe('Copilot account-specific model discovery (#6663)', () => {
+  it.each(['individual', 'business', 'enterprise'] as const)('uses the %s account host for automatic model discovery', async account => {
+    const oauth = providerPresetOAuth('github-copilot')!;
+    const token = `test-token;proxy-ep=proxy.${account}.githubcopilot.com;exp=9999999999`;
+    seedBlob('copilot-account', { access_token: token });
+    fetchResponder = () => new Response('{"data":[{"id":"test-model"}]}');
+    const original = 'https://api.individual.githubcopilot.com';
+    const expected = `https://api.${account}.githubcopilot.com/models`;
+    const automatic = await discoverGenericOAuthModels('copilot-account', oauth, `${original}/models`, 'pi');
+    expect(automatic).toMatchObject([{ id: 'test-model' }]);
+    expect(fetchCalls.map(call => call.url)).toEqual([expected]);
+  });
+
+  it.each(['individual', 'business', 'enterprise'] as const)('uses the %s account host when refreshing saved model lists', async account => {
+    const oauth = providerPresetOAuth('github-copilot')!;
+    const token = `test-token;proxy-ep=proxy.${account}.githubcopilot.com;exp=9999999999`;
+    seedBlob('copilot-account', { access_token: token });
+    const original = 'https://api.individual.githubcopilot.com';
+    const expected = `https://api.${account}.githubcopilot.com/models`;
+    const requests: string[] = [];
+    const provider: ProviderView = {
+      id: 'copilot-account', name: 'Copilot', source: 'user', connected: true,
+      auth: { method: 'oauth', oauth }, agents: ['pi'], models: {},
+      routing: { pi: { upstream: original, modelsUrl: `${original}/models`, authStrategy: 'oauth-token', wireProtocol: 'openai-chat' } },
+    };
+    const saved = await fetchSavedOAuthProviderModels(provider, 'pi', 'copilot-account', () => true,
+      async (url, init) => {
+        requests.push(String(url));
+        expect(init?.headers).toEqual({ authorization: `Bearer ${token}` });
+        return new Response('{"data":[{"id":"test-model"}]}');
+      });
+    expect(saved).toMatchObject({ ok: true, models: [{ id: 'test-model' }] });
+    expect(requests).toEqual([expected]);
+  });
+
+  it.each([
+    ['proxy-ep=proxy.business.githubcopilot.com.evil.test;', 'https://api.individual.githubcopilot.com/models'],
+    ['proxy-ep=proxy.business.githubcopilot.com;', 'https://custom.example/models'],
+  ])('preserves custom URLs and rejects untrusted token destinations', async (token, url) => {
+    seedBlob('copilot-account', { access_token: token });
+    fetchResponder = () => new Response('{"data":[{"id":"test-model"}]}');
+    await discoverGenericOAuthModels('copilot-account', providerPresetOAuth('github-copilot')!, url, 'pi');
+    expect(fetchCalls.map(call => call.url)).toEqual([url]);
+  });
+});
 
 describe('manual model refresh for saved OAuth providers', () => {
   function savedProvider(presetId = 'openrouter'): ProviderView {
@@ -971,7 +1017,7 @@ describe('close() 回执路径(裸 done 消除)', () => {
 
 describe('explicit provider metadata fields', () => {
   it('preserves false, empty efforts and null defaults without inventing a supplied name', async () => {
-    const { parseModelsListResponse } = await import('../generic-oauth.js');
+    const { parseModelsListResponse } = await import('../generic-oauth.desktop.js');
     expect(
       parseModelsListResponse({
         data: [

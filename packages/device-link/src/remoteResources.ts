@@ -73,9 +73,17 @@ export interface RemoteResourceDisplay {
   preview?: RemoteText;
   /** Ephemeral public generation state. Absent when idle; never a connectivity signal. */
   generation?: { phase: string; startedAt: number | null };
+  /** Optional roster activity; older hosts omit it, older controllers ignore it. */
+  teammateActivity?: { phase: string };
   timestamp?: number;
-  /** Latest visible reply in host time; controllers keep their own read position. */
+  /** Latest visible reply in host time. */
   lastReplyAt?: number;
+  /**
+   * Read position the host keeps for this conversation, in host time (0 = none yet). A host that
+   * sends it accepts the resource's `read` action; controllers merge it forward with their own
+   * position, so reading on any device clears the badge on the others. Older hosts omit it.
+   */
+  lastReadAt?: number;
   avatar?: RemoteResourceAvatar;
   status?: RemoteResourceStatus;
   badges?: RemoteResourceBadge[];
@@ -400,6 +408,10 @@ export function resolveRemoteText(value: RemoteText, locale?: string): string {
   if (!locale || !value.translations || typeof value.translations !== 'object') return value.fallback;
   const exact = value.translations[locale];
   if (typeof exact === 'string' && exact) return exact;
+  // Copy from hosts that predate the classical editions falls back to their modern base.
+  const modernBase = locale === 'zh-Hant-x-lzh' ? 'zh-TW' : locale === 'zh-Hans-x-lzh' ? 'zh-CN' : undefined;
+  const modern = modernBase ? value.translations[modernBase] : undefined;
+  if (typeof modern === 'string' && modern) return modern;
   const language = locale.split('-')[0];
   const translated = value.translations[language];
   return typeof translated === 'string' && translated ? translated : value.fallback;

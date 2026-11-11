@@ -704,6 +704,15 @@ describe('device-link 远程交互 — dismissed / 顺序 / 本机零回归', ()
       .messages.find((m) => m.askUserRequestId === 'ask-other');
     expect(askMsg?.askUserStatus).toBe('answered'); // 与答题端一致,而非 expired
     expect(askMsg?.askUserAnswers).toEqual({ 'X?': 'A' });
+
+    // #7144: replaying a close through the real remote-push subscription must
+    // not hide the already answered history row. Pending expiry is tested below.
+    host.hostDismiss(s, 'ask-other', 'server_request_resolved');
+    await flush();
+    expect(makerChatStore.getSnapshot(s).messages.find(
+      (m) => m.askUserRequestId === 'ask-other',
+    )).toBe(askMsg);
+    expect(askMsg?.askUserStatus).toBe('answered');
   });
 
   it('对端 dismiss 但无 decision(真·放弃 / 老被控端)→ ask 仍标 expired(兜底)', async () => {
@@ -1662,7 +1671,7 @@ describe('远程交互接线不变式', () => {
 
   it('F6: scheduler 新会话在首条消息落库后广播 created 给 device-link 列表订阅者', () => {
     const runnerSrc = mainSrc('scheduler-host/runner.ts');
-    const hostSrc = mainSrc('scheduler-host/index.ts');
+    const hostSrc = mainSrc('scheduler-host/index.desktop.ts');
     expect(runnerSrc).toContain('this.deps.onSessionCreated?.(session.id)');
     expect(hostSrc).toContain('onSessionCreated: broadcastSessionCreated');
   });
@@ -1678,8 +1687,8 @@ describe('远程交互接线不变式', () => {
     expect(src).toContain('let linkOnline: boolean | null = null');
     expect(src).toContain("if (!linkStatusPushSeen) linkOnline = state.linkStatus === 'online'");
     expect(src).toContain('linkStatusPushSeen = true');
-    // debounce 排队后 relay 可能已进入 connecting；执行时必须重查实时状态，不能离线重试。
-    expect(src).toContain('if (!disposed && linkOnline && eligible.has(deviceId))');
+    // debounce 排队后仍按该目标的实时可读链路判断；健康直连无需等 relay 恢复。
+    expect(src).toContain('if (!disposed && peerReadable(deviceId) && eligible.has(deviceId))');
   });
 
   it('F4: extraDirs 的本地/远程持久化均由 Main 会话事务拥有', () => {

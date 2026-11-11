@@ -9,6 +9,26 @@ function row(id: number, role: string, content: unknown): HistoryMessageSource {
 }
 
 describe('history reading projection', () => {
+  it.each(['pending', 'card', 'media', 'app'] as const)('keeps a plugin %s available outside deferred work', (kind) => {
+    const call = row(1, 'tool_use', { toolName: 'mcp__cindy__ghost_call', toolUseId: 'plugin', input: {} });
+    if (kind === 'app') call.agentMeta = { mcpApp: true };
+    const rows = [row(0, 'user', 'Work'), call];
+    if (kind !== 'pending') rows.push({ ...row(2, 'tool_result', kind === 'card'
+      ? JSON.stringify({ xdt_card_id: 'card' }) : kind === 'media' ? 'cindy-media://blobs/image.png' : 'ready'), toolUseId: 'plugin' });
+    const projected = projectHistoryView(rows, true, true);
+    expect(projected.flatMap(item => item.type === 'messages' ? item.messages : []).map(message => message.id))
+      .toContain('1');
+  });
+  // Tier: behavior. A teammate's reply lists the tasks it started from these receipts; folded into
+  // deferred work they never reached the chat (2026-11-10).
+  it('keeps a send_to_session receipt available outside deferred work', () => {
+    const rows = [row(0, 'user', 'Start a task'), row(1, 'thinking', 'plan'),
+      row(2, 'tool_use', { toolName: 'mcp__cindy_helper__call_tool', toolUseId: 'send', input: { name: 'send_to_session', args: {} } }),
+      { ...row(3, 'tool_result', JSON.stringify({ ok: true, target_session_id: 's-1', wake_kind: 'created', target_title: 'Fix it' })), toolUseId: 'send' },
+      { ...row(4, 'assistant', 'Started it.'), agentMeta: { turnCompleted: true } }];
+    const visible = projectHistoryView(rows, false, true).flatMap(item => item.type === 'messages' ? item.messages : []).map(message => message.id);
+    expect(visible).toEqual(expect.arrayContaining(['2', '3']));
+  });
   it.each([false, true])('archives interrupted progress in recoverable history ranges (streaming=%s)', (streaming) => {
     const rows = [row(0, 'user', 'Work'), row(1, 'assistant', 'Checking the build'),
       row(2, 'thinking', 'detail'), row(3, 'error', { message: 'Usage limit reached' }),
@@ -50,6 +70,44 @@ describe('history reading projection', () => {
     } });
     expect(JSON.stringify(projected).length).toBeLessThan(JSON.stringify(rows).length / 100);
     expect(rows[1].content).toBe('detail '.repeat(1000));
+  });
+
+  it('ends a work summary at the latest child finish, not the last row start', () => {
+    // thinking 行按块起点落库,结束时刻只在 content.finishedAt。并行的动作会乱序完成:
+    // 「15s 思考 + 之后 1s 内结束的工具」里最后一行是工具,拿它的时刻收口会丢掉思考区间。
+    const base = 1_700_000_000_000;
+    const at = (ms: number) => new Date(base + ms).toISOString();
+    const rows: HistoryMessageSource[] = [
+      { id: '0', clientId: 'c0', role: 'user', content: 'Work', createdAt: at(0) },
+      { id: '1', clientId: 'c1', role: 'thinking',
+        content: { text: 'reasoning', durationMs: 15_000, finishedAt: base + 15_000 }, createdAt: at(500) },
+      { ...row(2, 'tool_use', { toolName: 'Read', input: {} }), createdAt: at(800), toolUseId: 'read' },
+      { ...row(3, 'tool_result', 'ok'), createdAt: at(900), toolUseId: 'read' },
+      { id: '4', clientId: 'c4', role: 'assistant', content: 'Done', agentMeta: { turnCompleted: true }, createdAt: at(20_000) },
+    ];
+    const projected = projectHistoryView(rows, false);
+
+    expect(projected[1]).toMatchObject({ summary: { startedAtMs: base, endedAtMs: base + 15_000 } });
+  });
+
+  it('keeps work ranges monotonic when a legacy thinking row is ordered after the answer', () => {
+    // 存量行(锚点是块结束时刻)会排在回答之后。投影不能把它并进回答上方那一组:分页游标
+    // 按消息 id 切点(nextCursor = 首项首条),work 的 lastMessageId 越过回答后,尾随行会
+    // 两页都取不到。渲染端拿到行后自行重新分组。
+    const base = 1_700_000_000_000;
+    const at = (ms: number) => new Date(base + ms).toISOString();
+    const rows: HistoryMessageSource[] = [
+      { id: '0', clientId: 'c0', role: 'user', content: 'Work', createdAt: at(0) },
+      { id: '1', clientId: 'c1', role: 'thinking', content: { text: 'reasoning', durationMs: 3_000 }, createdAt: at(5_000) },
+      { id: '2', clientId: 'c2', role: 'assistant', content: 'Done', agentMeta: { turnCompleted: true }, createdAt: at(9_000) },
+      { id: '3', clientId: 'c3', role: 'thinking',
+        content: { text: 'signing off', durationMs: 1_200, finishedAt: base + 9_700 }, createdAt: at(9_700) },
+    ];
+    const projected = projectHistoryView(rows, false);
+
+    expect(projected.map(item => item.type)).toEqual(['messages', 'work', 'messages', 'work']);
+    expect(historyWorkSummaries(projected).map(({ firstMessageId, lastMessageId }) => [firstMessageId, lastMessageId]))
+      .toEqual([['1', '1'], ['3', '3']]);
   });
 
   it('keeps delivery prose, interaction tools and reference-bearing results outside summaries', () => {
@@ -173,7 +231,7 @@ it('does not bind subagent detail fetching to a desktop summary-only enclosing g
   expect(details).not.toHaveBeenCalled();
   view.setActive(false);
 });
-import type { HistoryViewPage } from '../historyView.js';
+import type { DeferredHistoryWork, HistoryViewPage } from '../historyView.js';
 const ungroupedStructure = {
   placeholder: (summary: import('../historyView.js').HistoryWorkSummary) => ({ ...row(1, 'thinking', ''),
     clientId: summary.anchorClientId ?? summary.key.slice(5) }),
@@ -245,17 +303,20 @@ describe('shared history view lifecycle', () => {
     const completed = projectHistoryView([...rows, row(5, 'assistant', 'Done')], false);
     expect(completed[0].key).not.toBe(running[0].key);
     const replacement = overlap ? completed : projectHistoryView([row(9, 'user', 'Replaced')], false);
-    const read = vi.fn(async () => ({ version: 1 as const, items: running, hasMore: true, nextCursor: 'latest' }));
+    const read = vi.fn(async (): Promise<HistoryViewPage<HistoryMessageSource>> => ({ version: 1 as const, items: running, hasMore: true, nextCursor: 'latest' }));
     const view = new HistoryViewController({ page: read,
       details: async () => ({ version: 1 as const, messages: [], hasMore: false, nextCursor: null }), expanded: async () => undefined });
     await view.refresh();
     read.mockResolvedValueOnce({ version: 1, items: prefix, hasMore: true, nextCursor: 'older' });
     await view.refresh(true);
     read.mockResolvedValueOnce({ version: 1, items: replacement, hasMore: true, nextCursor: 'new' });
+    // With no overlap, walk the authoritative older page before replacing the
+    // cache. A rewound/cleared source ends here and must not revive the old rows.
+    if (!overlap) read.mockResolvedValueOnce({ version: 1, items: [], hasMore: false, nextCursor: null });
     await view.refresh();
     expect(view.getSnapshot().items).toEqual(overlap ? [...prefix, ...completed] : replacement);
-    expect(view.getSnapshot().nextCursor).toBe(overlap ? 'older' : 'new');
-    expect(view.getSnapshot().hasMore).toBe(true);
+    expect(view.getSnapshot().nextCursor).toBe(overlap ? 'older' : null);
+    expect(view.getSnapshot().hasMore).toBe(overlap);
   });
 
   it.each(['success', 'failure', 'blur', 'unavailable'])('reads again after an ACK over an in-flight %s without changing expansion', async (outcome) => {
@@ -383,6 +444,57 @@ describe('shared history view lifecycle', () => {
     expect(view.getSnapshot()).toMatchObject({ ready: false, items: [], hasMore: false, nextCursor: null });
     expect(view.getSnapshot().details.size).toBe(0);
     expect(view.getSnapshot().expanded.size).toBe(0);
+  });
+
+  // Unit: a refreshed projection can remove a work range while its detail read
+  // is pending. That late response must not resurrect an unreachable body.
+  it('discards late details for a range removed by a refreshed page', async () => {
+    let rows = [row(1, 'thinking', 'old')];
+    let resolve!: (page: { version: 1; messages: HistoryMessageSource[]; hasMore: false; nextCursor: null }) => void;
+    const view = new HistoryViewController<HistoryMessageSource>({
+      page: async () => ({ version: 1, items: projectHistoryView(rows, false), hasMore: false, nextCursor: null }),
+      details: () => new Promise<Parameters<typeof resolve>[0]>(done => { resolve = done; }),
+      expanded: async () => undefined,
+    });
+    await view.refresh();
+    const group = view.getSnapshot().items[0];
+    if (group.type !== 'work') throw new Error('Expected a work group');
+    view.setExpanded(group.key, true);
+    const pending = view.loadDetails(group.summary);
+    rows = [row(1, 'assistant', 'updated')];
+    await view.refresh();
+    expect(historyWorkSummaries(view.getSnapshot().items)).toHaveLength(0);
+    resolve({ version: 1, messages: [row(1, 'thinking', 'late body')], hasMore: false, nextCursor: null });
+    await pending;
+    expect(view.getSnapshot().details.size).toBe(0);
+  });
+
+  it('releases a large partial detail body when collapsed during pagination', async () => {
+    const body = row(1, 'thinking', 'x'.repeat(1024 * 1024));
+    let finish!: (page: { version: 1; messages: HistoryMessageSource[]; hasMore: false; nextCursor: null }) => void;
+    let started!: () => void;
+    const secondPage = new Promise<void>(resolve => { started = resolve; });
+    const view = new HistoryViewController<HistoryMessageSource>({
+      page: async () => ({ version: 1, items: projectHistoryView([body], false), hasMore: false, nextCursor: null }),
+      details: async (_ref, after) => {
+        if (!after) return { version: 1, messages: [body], hasMore: true, nextCursor: 'next' };
+        started();
+        return new Promise<Parameters<typeof finish>[0]>(resolve => { finish = resolve; });
+      },
+      expanded: async () => undefined,
+    });
+    await view.refresh();
+    const group = view.getSnapshot().items[0];
+    if (group.type !== 'work') throw new Error('Expected a work group');
+    view.setExpanded(group.key, true);
+    const pending = view.loadDetails(group.summary);
+    await secondPage;
+    expect(view.getSnapshot().details.get(group.key)?.messages).toHaveLength(1);
+    view.setExpanded(group.key, false);
+    expect(view.getSnapshot().details.size).toBe(0);
+    finish({ version: 1, messages: [], hasMore: false, nextCursor: null });
+    await pending;
+    expect(view.getSnapshot().details.size).toBe(0);
   });
 
   it.each([false, true])('joins an expanded detail read through its latest revision (changed=%s)', async (changed) => {
@@ -551,7 +663,7 @@ describe('shared history view lifecycle', () => {
     await view.refresh();
     view.setExpanded(items[0].key, true);
     await new Promise((done) => setTimeout(done, 0));
-    expect(expanded).toHaveBeenLastCalledWith([items[0].type === 'work' ? items[0].summary : undefined]);
+    expect(expanded).toHaveBeenLastCalledWith([{ key: items[0].key, firstMessageId: '1', lastMessageId: '1' }]);
     if (inactive) view.setActive(false);
     view.reset();
     await new Promise((done) => setTimeout(done, 0));
@@ -795,6 +907,39 @@ describe('locating folded history preserves display expansion', () => {
       build: messages => messages.map(message => message.clientId), structure: ungroupedStructure });
     expect(rendered).toContain(rows[0].clientId);
     expect([...view.getSnapshot().expanded]).toEqual(['preview']);
+    view.setActive(false);
+  });
+
+  it.each([false, true])('reads a running tail from the Host range until every split group releases it (Host lines=%s)', async (lines) => {
+    const rows = Array.from({ length: 4 }, (_, i) => row(i + 1, 'thinking', `detail-${i}`));
+    const items = projectHistoryView(rows, true);
+    if (items[0].type !== 'work') throw new Error('missing work');
+    const summary = items[0].summary;
+    summary.preview = { ...summary, key: 'preview' };
+    if (lines) summary.lines = [{ kind: 'thinking', key: 'c4', text: 'detail-3' }];
+    const view = new HistoryViewController<HistoryMessageSource>({
+      page: async () => ({ version: 1, items, hasMore: false, nextCursor: null }),
+      details: async () => ({ version: 1, messages: rows, hasMore: false, nextCursor: null }),
+      expanded: async () => undefined,
+    });
+    await view.refresh();
+    // Read prose can split one Host range into two rendered groups that both bind it.
+    type Item = { ids: string[]; children?: Item[]; deferred?: DeferredHistoryWork };
+    const [first, second] = renderHistoryView<HistoryMessageSource, Item>({
+      view, snapshot: view.getSnapshot(), liveMessages: [], streaming: true,
+      build: (messages) => [0, 1].map(() =>
+        ({ ids: [], children: messages.map((message) => ({ ids: [message.clientId] })) })),
+      structure: { ...ungroupedStructure,
+        children: (item) => item.children, sourceIds: (item) => item.ids,
+        rebuild: (item, children, deferred) => ({ ...item, children, deferred }) },
+    }).map((item) => item.deferred);
+    const releaseFirst = first?.setVisible?.(false, true);
+    const releaseSecond = second?.setVisible?.(false, true);
+    expect([...view.getSnapshot().expanded]).toEqual(lines ? [] : ['preview']);
+    releaseFirst?.();
+    expect([...view.getSnapshot().expanded]).toEqual(lines ? [] : ['preview']);
+    releaseSecond?.();
+    expect(view.getSnapshot().expanded.size).toBe(0);
     view.setActive(false);
   });
 

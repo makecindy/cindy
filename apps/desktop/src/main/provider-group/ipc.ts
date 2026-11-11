@@ -24,11 +24,12 @@ import { tapWindowBroadcast } from '../device-link/broadcast-tap.js';
 import { broadcast, getSelfDeviceId, remoteBackgroundInvoke, remoteInvoke } from '../device-link/index.js';
 import { isProviderManagementRequest } from '../../shared/providerManagement.js';
 import { getDeviceLinkInvokeContext } from '../device-link/invoke-context.js';
+import { captureProviderShareGroupRecovery } from '../device-link/providerShareGuest.js';
 import { createLogger } from '../logger.js';
 import { MAKER_PUSH } from '../maker-ipc/channels.js';
 import { assertTrustedAppRendererEvent } from '../security/trustedAppRenderer.js';
 import { throwIpcError } from '../utils/ipcValidate.js';
-import { pruneProviderGroupBindings } from './bindings.js';
+import { pruneProviderGroupBindings } from './bindings.desktop.js';
 import type { ProviderGroupDirectory } from './directory.js';
 import type { ProviderGroupRouter } from './router.js';
 import {
@@ -38,12 +39,14 @@ import {
   readProviderGroupOfSession,
   readProviderGroupRebalanceSuggestion,
   recordProviderGroupRebalanceDecision,
+  setProviderGroupRebalancePreference,
 } from './runtime.js';
 import { listProviderGroups, readProviderGroup, writeProviderGroup } from './store.js';
 import { invokeProviderManagement } from './managementClient.js';
+import { recoverProviderGroupViewShares } from './remoteClient.js';
 import { captureProviderManagementScope } from './managementScope.js';
 import { groupFastPolicyPending, syncGroupFastPolicy } from './fastPolicyRuntime.js';
-import { notifyProviderShareCatalogChanged } from '../device-link/dispatch.js';
+import { notifyProviderShareCatalogChanged } from '../device-link/dispatch.desktop.js';
 
 const log = createLogger('provider-group');
 
@@ -70,6 +73,7 @@ export interface ProviderGroupCommandDeps {
   rebalanceSuggestion(sessionId: string): Promise<ProviderGroupRebalanceSuggestion>;
   /** 记下用户确认的换号。 */
   rebalanceDecision(sessionId: string, memberKey: string, remember: boolean, clientId?: string): Promise<boolean>;
+  rebalancePreference(sessionId: string, enabled: boolean): Promise<boolean>;
   changed(providerId: string): void;
   /**
    * 转分享(provider-sharing.md §4.3)：分享来的组内电脑的主人对本机分享出去的人逐人同意的结果，设置页据此显示；
@@ -121,12 +125,16 @@ export function parseProviderGroupCommand(raw: unknown): ProviderGroupCommand {
     }
     return { action: 'session-group', sessionId: value.sessionId as string };
   }
-  if (value.action === 'rebalance-suggestion' || value.action === 'rebalance-decision') {
+  if (value.action === 'rebalance-suggestion' || value.action === 'rebalance-decision' || value.action === 'rebalance-preference') {
     if (typeof value.sessionId !== 'string' || !SESSION_ID_PATTERN.test(value.sessionId)) {
       throwIpcError('INVALID_PARAMS', 'sessionId required');
     }
     const sessionId = value.sessionId as string;
     if (value.action === 'rebalance-suggestion') return { action: 'rebalance-suggestion', sessionId };
+    if (value.action === 'rebalance-preference') {
+      if (typeof value.enabled !== 'boolean') throwIpcError('INVALID_PARAMS', 'enabled must be boolean');
+      return { action: 'rebalance-preference', sessionId, enabled: value.enabled };
+    }
     if (typeof value.memberKey !== 'string' || !MEMBER_KEY_PATTERN.test(value.memberKey) || typeof value.remember !== 'boolean') {
       throwIpcError('INVALID_PARAMS', 'memberKey and remember required');
     }
@@ -227,6 +235,9 @@ async function runProviderGroupCommand(
   if (command.action === 'list') return deps.listGroups();
   if (command.action === 'session-group') return deps.sessionGroup(command.sessionId);
   if (command.action === 'rebalance-suggestion') return deps.rebalanceSuggestion(command.sessionId);
+  if (command.action === 'rebalance-preference') {
+    return { ok: await deps.rebalancePreference(command.sessionId, command.enabled) };
+  }
   if (command.action === 'rebalance-decision') {
     return { ok: await deps.rebalanceDecision(command.sessionId, command.memberKey, command.remember, command.clientId) };
   }
@@ -346,6 +357,7 @@ export function createProviderGroupCommandDeps(
     sessionGroup: readProviderGroupOfSession,
     rebalanceSuggestion: readProviderGroupRebalanceSuggestion,
     rebalanceDecision: recordProviderGroupRebalanceDecision,
+    rebalancePreference: setProviderGroupRebalancePreference,
     changed: (providerId) => {
       // 组里的电脑变了：重新报转分享(加进来的分享来的电脑要请它的主人同意，移出的不再列着)。
       reshare?.kick('group');
@@ -377,12 +389,15 @@ export function registerProviderGroupIpc(options: { reshare?: ProviderGroupIpcRe
     const command = parseProviderGroupCommand(raw);
     if (command.action === 'remote-manage') {
       const assertOwner = captureProviderManagementScope(deps.ownerKey);
+      const recoverShares = captureProviderShareGroupRecovery();
       const result = await invokeProviderManagement(remoteInvoke, command.deviceId, command.request, remoteBackgroundInvoke);
       assertOwner();
       if (command.request.action !== 'manage-group' || command.request.command.action === 'candidates') return result;
+      const remoteView = parseProviderGroupRemoteView(result, command.request.command.providerId);
+      recoverProviderGroupViewShares(remoteView, recoverShares);
       // 管理读取与保存后的组视图也按查看端直连能力投影，不能把组所在电脑看到的可用误当成本机可达。
       const view = await markMembersUnreachableHere(
-        parseProviderGroupRemoteView(result, command.request.command.providerId),
+        remoteView,
         deps.directory,
         deps.localDeviceId(),
       );

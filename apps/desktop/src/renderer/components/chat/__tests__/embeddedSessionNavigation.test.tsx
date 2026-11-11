@@ -1,3 +1,4 @@
+import { GhostCardSessionLink } from '../GhostCardSessionLink';
 // @vitest-environment jsdom
 
 import { act, fireEvent, render, screen, waitFor } from '@testing-library/react';
@@ -11,6 +12,7 @@ const mocks = vi.hoisted(() => ({
   writeText: vi.fn(async () => undefined),
   error: vi.fn(),
   navigate: vi.fn(),
+  remoteSessions: [] as Array<{ id: string; title: string; deviceLinkDeviceId: string; orcaRole: 'lead' | 'worker' | null }>,
   pinSessionOrigin: vi.fn(),
   resolveSessionRoute: vi.fn(async (sessionId: string) => `/cc-agent/${sessionId}`),
   getSession: vi.fn(async (sessionId: string) => ({
@@ -39,11 +41,12 @@ vi.mock('react-i18next', () => ({
   }),
 }));
 vi.mock('@/features/device-link/remoteProjectsStore', () => ({
-  useRemoteProjectSessions: () => [],
+  useRemoteProjectSessions: () => mocks.remoteSessions,
   useRemoteSessionTitle: () => null,
   getSessionDeviceId: () => undefined,
   remoteProjectsStore: {
     getSessionDeviceId: () => undefined,
+    getVisibleMergedRemoteSessions: () => mocks.remoteSessions,
     pinSessionOrigin: mocks.pinSessionOrigin,
   },
 }));
@@ -104,6 +107,7 @@ function SidebarTargetProbe({ contentSessionId }: { contentSessionId?: string })
 describe('sidebar-embedded session navigation boundary', () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    mocks.remoteSessions = [];
     Object.defineProperty(window, 'electronAPI', {
       configurable: true, value: { maker: { openSessionInNewWindow: mocks.openSessionInNewWindow } },
     });
@@ -136,6 +140,19 @@ describe('sidebar-embedded session navigation boundary', () => {
     expect(chip?.getAttribute('title')).toBeNull();
     expect(mocks.resolveSessionRoute).not.toHaveBeenCalled();
     expect(mocks.navigate).not.toHaveBeenCalled();
+  });
+
+  // #7115: same-id copies on two computers must use the linked computer's
+  // route metadata as well as its transport origin; unit, real chip activation.
+  it('selects the linked remote computer when another snapshot has the same task id', async () => {
+    const wrong = { id: 'same', title: 'Wrong', deviceLinkDeviceId: 'mac-a', orcaRole: 'worker' as const };
+    const right = { id: 'same', title: 'Right', deviceLinkDeviceId: 'mac-b', orcaRole: null };
+    mocks.remoteSessions = [wrong, right];
+    render(<SessionLinkChip href="cindy://session/same?device=mac-b" label="Task" />);
+    fireEvent.click(screen.getByRole('button', { name: 'Task' }));
+    await waitFor(() => expect(mocks.navigate).toHaveBeenCalled());
+    expect(mocks.pinSessionOrigin).toHaveBeenCalledWith('mac-b', 'same');
+    expect(mocks.resolveSessionRoute).toHaveBeenCalledWith('same', right, { remote: true });
   });
 
   it.each([{ shiftKey: true }, { metaKey: true }, { ctrlKey: true }])(
@@ -271,7 +288,7 @@ describe('sidebar-embedded session navigation boundary', () => {
     );
 
     fireEvent.click(screen.getByRole('button'));
-    expect(mocks.resolveSessionRoute).toHaveBeenCalledWith('session-target', null);
+    expect(mocks.resolveSessionRoute).toHaveBeenCalledWith('session-target', null, { remote: false });
     view.unmount();
 
     await act(async () => {
@@ -546,7 +563,7 @@ describe('sidebar-embedded session navigation boundary', () => {
     render(<SessionLinkChip href="xdt-maker://session/session-d" label="Session D" />);
     fireEvent.click(screen.getByRole('button'));
 
-    await waitFor(() => expect(mocks.resolveSessionRoute).toHaveBeenCalledWith('session-d', null));
+    await waitFor(() => expect(mocks.resolveSessionRoute).toHaveBeenCalledWith('session-d', null, { remote: false }));
     expect(mocks.navigate).toHaveBeenCalledWith('/cc-agent/session-d', undefined);
   });
 
@@ -569,7 +586,7 @@ describe('sidebar-embedded session navigation boundary', () => {
 
     fireEvent.click(screen.getByRole('button'));
     await waitFor(() =>
-      expect(mocks.resolveSessionRoute).toHaveBeenCalledWith('session-message', null),
+      expect(mocks.resolveSessionRoute).toHaveBeenCalledWith('session-message', null, { remote: false }),
     );
     expect(mocks.navigate).toHaveBeenCalledWith('/cc-agent/session-message', {
       state: {
@@ -652,4 +669,35 @@ describe('session navigation interaction policy', () => {
   ] as const)('%s interactive=%s', (mode, expected) => {
     expect(isInteractiveSessionNavigationMode(mode)).toBe(expected);
   });
+});
+
+
+it.each(['link', 'fallback'] as const)('opens the original task from an inert card %s and removes handlers when the card leaves', async (kind) => {
+  mocks.navigate.mockClear();
+  mocks.openSessionInNewWindow.mockClear();
+  const element = document.createElement('button');
+  if (kind === 'fallback') {
+    element.dataset.ghostAction = 'open';
+    element.dataset.ghostSessionLink = 'cindy://session/original-task';
+  } else element.dataset.ghostLink = 'cindy://session/original-task';
+  const view = render(<GhostCardSessionLink element={element} />);
+  fireEvent.click(element);
+  await waitFor(() => expect(mocks.navigate).toHaveBeenCalledWith('/cc-agent/original-task', undefined));
+  mocks.navigate.mockClear();
+  element.disabled = true;
+  fireEvent.keyDown(element, { key: 'Enter' });
+  expect(mocks.navigate).not.toHaveBeenCalled();
+  element.disabled = false;
+  fireEvent.keyDown(element, { key: 'Enter' });
+  await waitFor(() => expect(mocks.navigate).toHaveBeenCalledOnce());
+  mocks.navigate.mockClear();
+  fireEvent(element, new MouseEvent('auxclick', { bubbles: true, cancelable: true, button: 2 }));
+  expect(mocks.openSessionInNewWindow).not.toHaveBeenCalled();
+  fireEvent(element, new MouseEvent('auxclick', { bubbles: true, cancelable: true, button: 1 }));
+  await waitFor(() => expect(mocks.openSessionInNewWindow).toHaveBeenCalledWith('original-task', undefined, null));
+  expect(mocks.navigate).not.toHaveBeenCalled();
+  view.unmount();
+  mocks.navigate.mockClear();
+  fireEvent.click(element);
+  expect(mocks.navigate).not.toHaveBeenCalled();
 });

@@ -138,6 +138,18 @@ describe.each(SUPPORTED_LOCALES)('mobile errors in %s', locale => {
 
 
 describe.each(SUPPORTED_LOCALES)('known mobile remote errors in %s', locale => {
+  // New member-budget refusal can be wrapped by the proxy; old cases only cover top-level codes.
+  // Minimal input is a 403 wrapper. Verify the production history projection in every locale; unit.
+  it('keeps a wrapped member budget pause understandable in history and action errors', async () => {
+    await i18n.changeLanguage(locale);
+    const message = '403 proxy: [REMOTE_AGENT_MEMBER_BUDGET_PAUSED] technical fallback';
+    const key = 'session.remoteError.REMOTE_AGENT_MEMBER_BUDGET_PAUSED';
+    expect(requiresAgentErrorConfigurationChange(message)).toBe(true);
+    expect(remoteActionErrorI18nKey(message)).toBe(key);
+    const [normalized] = normalizeRemoteMessages([row(message)]);
+    expect(normalized.body).toBe(i18n.t(key));
+    expect(normalized.body).not.toContain('technical fallback');
+  });
   it.each(['DEVICE_LIMIT', 'TOTAL_LIMIT'])('recognizes wrapped %s errors from the remote computer', async reason => {
     await i18n.changeLanguage(locale);
     const message = `LAZY_CREATE_FAILED: [REMOTE_AGENT_BUSY] [${reason}] upstream diagnostic`;

@@ -102,6 +102,7 @@
     "fetchAvFailed": "가져오기에 실패했습니다: {{detail}}",
     "fetchPdfFailed": "PDF 가져오기에 실패했습니다: {{detail}}",
     "fetchingPdf": "컴퓨터에서 PDF를 가져오는 중…",
+    "androidPdfHint": "Android에서는 아직 Cindy 안에서 PDF를 미리 볼 수 없습니다. 아래 「내보내기 / 공유」를 눌러 PDF 리더를 선택하세요.",
     "unsupportedType": "이 형식은 휴대폰에서 아직 미리볼 수 없습니다",
     "oversize": "파일이 미리보기 한도({{size}})를 초과했습니다. 원본을 다운로드해 확인하세요",
     "oversizeUnknown": "너무 큼",

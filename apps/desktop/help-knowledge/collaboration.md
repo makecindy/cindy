@@ -1,33 +1,37 @@
 ---
 id: collaboration
 title: Collaboration mode (lead + workers)
-summary: Turn on Collab to bring one or more worker agents in beside your session and delegate tasks to them.
+summary: Turn on Collaboration from the composer's + menu to bring one or more worker agents in beside your session — locally, in their own worktree, or on another computer — and delegate tasks to them.
 ---
 
-Collaboration ("协同" / Collab) lets one session — the **lead** — bring in one or more **worker** agents to run alongside it (a "team"). The lead delegates tasks to workers through a built-in MCP, and you can watch and steer each worker.
+Collaboration ("Collab") lets one session — the **lead** — bring in one or more **worker** agents to run alongside it (a "team"). The lead delegates tasks to workers through built-in collaboration tools, and you can watch and steer each worker.
 
 **Turning it on:**
 
-- In any regular project or dialogue session, open the composer's **+** menu and choose **Collaboration mode**. You can also choose it before sending the first message of a new task. Claude Code, Codex, and Pi can lead locally or over SSH.
-- Pick the first worker's agent (Claude Code, Codex, or Pi), and optionally its role / model / effort / an initial task. If you have not chosen a Worker permission before, the initial default is **Full access** — it is a selectable default, not a fixed mode. You can choose **Auto-review** instead. Once you create a Worker with either mode, Cindy remembers that choice for the next Worker instead of replacing it with the product default.
-- Start. This creates the team plus that first worker.
+- In a regular project or dialogue session, open the composer's **+** menu and choose **Collaboration**. You can also do this before sending the first message of a new session. Claude Code, Codex, and Pi sessions can lead, locally or over SSH. It isn't offered inside a worker or in a teammate chat.
+- The **Start Collaboration** panel ("Bring in a Worker") sets up the first worker:
+  - **Agent** (Claude Code, Codex, or Pi), **Model**, **Reasoning Effort**, an optional **Role Name** (just a label to tell workers apart), and an optional **Initial Task**.
+  - **Permission Mode**: if you haven't chosen one before, it starts at **Full access** (skips routine approvals). You can choose **Auto-review** instead (safe work proceeds automatically; higher-risk actions may still be denied or need confirmation). Switching to Full access asks you to confirm first.
+  - **Project** (local project sessions): work directly in the lead's project and branch, or **Create a worktree for this Worker** branching from a branch you choose. If the directory has uncommitted changes, the worker continues with them.
+  - **Run on**: keep the worker **Local**, or run it on another computer on your account that's online and has remote control enabled. Its session, folder, and commands then stay on that computer (choose **Chat** or **Specify folder** for where it works there).
+- The panel remembers your last Agent, model, effort, and permission choice for the next worker. Changing it doesn't affect the lead or workers that already exist.
+- If the + menu says collaboration is disabled, turn **Collab Mode** back on under **Settings > Tools** (it can also be overridden per project).
 
-**Adding more workers:**
+**Adding and managing workers:**
 
-- From the collaboration tab's worker list, use **Create new worker** (+) to add more.
-- Default limits are a **soft cap of 5** and a **hard cap of 8** workers per lead — you'll see a warning past the soft cap, and creation is blocked at the hard cap. Both are adjustable (1–20) in the Collaboration section under **Settings > General**.
+- Workers appear in the right sidebar's **Team** tab. The worker header lists all workers (choose **Tabs** or **Dropdown** under **Worker list layout**); use **Create new worker** there to add more.
+- Default limits are a **Worker Soft Limit of 5** and a **Worker Hard Limit of 8** per lead — you'll see a warning past the soft limit, and creation is blocked at the hard limit. Both are adjustable (up to 20) in **Settings > General > Collaboration**, which also has **Idle Release (minutes)** to automatically release workers after they sit idle (0, the default, turns it off).
+- Only one worker is shown at a time — switch between them in the worker header. You can message any worker directly, **edit** a worker's role name / label, or **archive** a worker individually (archived workers can't be restored; create a new one instead).
 
 **While collaborating:**
 
-- Each worker is a full session with its own history, tools, working directory, and model. **Full access** skips routine approvals; **Auto-review** lets safe work proceed automatically while higher-risk actions may still be denied or require confirmation. The Worker creation panel remembers your last permission choice alongside its Agent and model preferences. The same remembered choice is used when an agent tool creates a Worker; an explicit `start_team` permission updates that shared choice. Raising it from Auto-review to Full access waits for your confirmation first; cancelling or letting the confirmation time out leaves the preference and team unchanged. Changing it does not affect the lead or workers that already exist. Workers inherit the lead's working directory by default (or share the worktree when the lead uses one).
-- A worker's model defaults to your last new-session choice for that vendor, falling back to the lead's model.
-- Only one worker is **focused** (shown) at a time — switch between them with the worker tabs / dropdown. You can intervene in any worker directly, and archive workers individually.
+- Each worker is a full session with its own history, tools, and model. Workers use the lead's working directory by default (or the shared / new worktree chosen above).
 
 **Turning it off:**
 
-- Closing collab **confirms with you first** (in-progress work is lost), then ends the workflow and archives **all** the team's workers. The conversation history stays searchable.
+- Choose **Collaboration** again in the **+** menu, or close the **Team** tab. Cindy **asks you to confirm first** — running workers stop immediately and in-progress results are lost — then ends the team and archives **all** of its workers. The conversation history stays searchable.
 
 **Notes:**
 
-- A lead can be a Claude Code, Codex, or Pi **project or dialogue** session, locally or over SSH. Remote workers are spawned on the **same remote host**, and the collaboration MCP reaches the remote side over an SSH remote-forward to the local bridge (with a persistent bearer token). A worker can't start its own sub-collab (no nesting).
-- A lead can have only **one active collaboration workflow** at a time. If you have two clients open on the same account (e.g. dev + release) and start collab on the same session in both, the second fails with "开启协同失败" because a workflow is already active — close one client or end the existing collab.
+- With an SSH lead, workers are created on the **same remote host**. A worker can't start its own collaboration (no nesting).
+- A lead can have only **one active collaboration** at a time. If you have two Cindy clients open on the same account and start collaboration on the same session in both, the second fails with "Failed to start collaboration" because one is already active — close one client or stop the existing collaboration.

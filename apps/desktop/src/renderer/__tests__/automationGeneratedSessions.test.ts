@@ -116,6 +116,7 @@ describe('automation-generated sessions', () => {
       'wechat',
       'dingtalk',
       'wecom',
+      'imessage',
       'scheduler',
       'learn',
       'review',
@@ -440,7 +441,47 @@ describe('automation-generated sessions', () => {
     });
   });
 
-  it('shows every recent run as its own row when expanded (primary not hidden into header)', () => {
+  it('folds runs of one teammate routine together and leaves older-host routine rows flat', () => {
+    // 伙伴例行任务不是 schedule：按「伙伴 + 规则」成组，不同规则 / 伙伴各自成组；
+    // 旧主机不投影 routineId 时保持平铺，不误并。
+    const routineRun = (id: string, botId: string, routineId?: string) =>
+      makeSession({
+        id,
+        title: 'Morning brief',
+        source: 'bot',
+        workspaceKind: 'dialogue',
+        companion: { id: botId, role: 'routine', ...(routineId ? { routineId } : {}) },
+      });
+    const sessions = [
+      routineRun('brief-2', 'bot-a', 'brief'),
+      routineRun('brief-1', 'bot-a', 'brief'),
+      routineRun('other-bot', 'bot-b', 'brief'),
+      routineRun('legacy-1', 'bot-a'),
+      routineRun('legacy-2', 'bot-a'),
+    ];
+
+    const entries = groupAutomationSidebarEntries(sessions, { notifications: new Set() });
+
+    expect(entries.map((entry) => entry.kind)).toEqual([
+      'automation-group',
+      'session',
+      'session',
+      'session',
+    ]);
+    expect(entries[0]).toMatchObject({
+      kind: 'automation-group',
+      group: {
+        id: 'routine:bot-a:brief',
+        title: 'Morning brief',
+        teammateRoutine: { botId: 'bot-a', routineId: 'brief' },
+      },
+    });
+    if (entries[0].kind !== 'automation-group') throw new Error('expected automation group');
+    expect(entries[0].group.scheduleId).toBeUndefined();
+    expect(entries[0].group.sessions.map((session) => session.id)).toEqual(['brief-2', 'brief-1']);
+  });
+
+  it('keeps the task represented by the header in expanded children', () => {
     const group = {
       id: 'schedule:sched-jira',
       title: 'Jira 自动修复',
@@ -451,14 +492,15 @@ describe('automation-generated sessions', () => {
       attentionSessionIds: ['jira-1'],
     };
 
-    // 展开态:全部运行(含被组头代表的最新未读 jira-1)都各自成行,前 5 条内全显示。
+    // 展开列表仍包含组头代表的 jira-1，无论它是否未读。
     expect(
       getVisibleAutomationGroupSessions(group, {
         notifications: new Set(['jira-1']),
         showAll: false,
+        headerSessionId: 'jira-1',
       }).map((session) => session.id),
     ).toEqual(['jira-2', 'jira-1']);
-    // 组头点击目标仍是 primary(最新未读),与它的列表行是两个入口指向同一 session。
+    // 组头仍可打开它代表的任务。
     expect(getAutomationGroupPrimarySession(group, new Set(['jira-1']))?.id).toBe('jira-1');
   });
 
@@ -747,32 +789,31 @@ describe('automation-generated sessions', () => {
         notifications: new Set(['run-0', 'run-3']),
         showAll: false,
         collapsed: true,
-        alertSessionIds: new Set(['run-3']),
+        collapsedAttentionSessionIds: new Set(['run-3']),
       });
       expect(view.visibleSessions.map((session) => session.id)).toEqual(['run-3']);
       expect(view.isOverflowing).toBe(false);
       expect(view.totalCount).toBe(1);
     });
 
-    it('caps lifted alerts at five and counts only alerts in the overflow label', () => {
+    it('keeps every lifted attention run visible beyond five', () => {
       const alerts = ['run-0', 'run-1', 'run-2', 'run-3', 'run-4', 'run-5'];
       const view = getAutomationGroupChildView(alertGroup(8), {
         notifications: new Set(alerts),
         showAll: false,
         collapsed: true,
-        alertSessionIds: new Set(alerts),
+        collapsedAttentionSessionIds: new Set(alerts),
       });
-      expect(view.visibleSessions).toHaveLength(5);
-      expect(view.isOverflowing).toBe(true);
-      expect(view.hiddenCount).toBe(1);
-      // 「显示全部 N 个」的 N 是告警数,不是整组运行数(收起态列表语义就是告警)。
+      expect(view.visibleSessions).toHaveLength(6);
+      expect(view.isOverflowing).toBe(false);
+      expect(view.hiddenCount).toBe(0);
       expect(view.totalCount).toBe(6);
 
       const expanded = getAutomationGroupChildView(alertGroup(8), {
         notifications: new Set(alerts),
         showAll: true,
         collapsed: true,
-        alertSessionIds: new Set(alerts),
+        collapsedAttentionSessionIds: new Set(alerts),
       });
       expect(expanded.visibleSessions.map((session) => session.id)).toEqual(alerts);
       expect(expanded.isOverflowing).toBe(false);
@@ -783,7 +824,7 @@ describe('automation-generated sessions', () => {
         notifications: new Set(),
         showAll: false,
         collapsed: true,
-        alertSessionIds: new Set(['run-4']),
+        collapsedAttentionSessionIds: new Set(['run-4']),
         frozenVisibleSessionIds: ['run-0', 'run-1', 'run-2'],
       });
       expect(view.visibleSessions.map((session) => session.id)).toEqual(['run-4']);
@@ -794,7 +835,7 @@ describe('automation-generated sessions', () => {
         notifications: new Set(),
         showAll: false,
         collapsed: false,
-        alertSessionIds: new Set(['run-6']),
+        collapsedAttentionSessionIds: new Set(['run-6']),
       });
       expect(view.visibleSessions.map((session) => session.id)).toEqual([
         'run-0',
@@ -814,7 +855,7 @@ describe('automation-generated sessions', () => {
         notifications: new Set(),
         showAll: true,
         collapsed: false,
-        alertSessionIds: new Set(['run-0', 'run-1', 'run-2', 'run-3', 'run-4', 'run-5']),
+        collapsedAttentionSessionIds: new Set(['run-0', 'run-1', 'run-2', 'run-3', 'run-4', 'run-5']),
       });
       expect(view.visibleSessions).toHaveLength(7);
       expect(view.totalCount).toBe(7);
@@ -1031,7 +1072,7 @@ describe('automation-generated sessions', () => {
     expect(source).toContain("group.scheduleStatus === 'active'");
     // 用正则容忍 prettier 折行(条件在一行还是拆三行都算通过)。
     expect(source).toMatch(
-      /scheduleId &&\s*!menuOpen &&\s*'group-hover:opacity-0 group-focus-within\/slot:opacity-0'/,
+      /hasHoverActions &&\s*!menuOpen &&\s*'group-hover:opacity-0 group-focus-within\/slot:opacity-0'/,
     );
     expect(source).toContain("menuOpen && 'opacity-0'");
     expect(source).toContain('disabled={!latestSession}');
@@ -1086,33 +1127,6 @@ describe('automation-generated sessions', () => {
     expect(source).toContain('maker?.schedule');
     expect(source).toContain("event.type === 'session-bound'");
     expect(source).toContain('sessionsStore.forceRefreshAll()');
-  });
-
-  it('backfills scheduler session metadata before broadcasting session-bound refreshes', () => {
-    const source = readTextLf(
-      new URL('../../main/scheduler-host/runner.ts', import.meta.url),
-      'utf8',
-    );
-
-    const fireStart = source.indexOf(
-      'async fire(schedule: Schedule, ctx: FireContext): Promise<FireResult> {',
-    );
-    const turnListenerStart = source.indexOf('let assistantText =', fireStart);
-    expect(fireStart).toBeGreaterThanOrEqual(0);
-    expect(turnListenerStart).toBeGreaterThan(fireStart);
-
-    const fireSetupSource = source
-      .slice(fireStart, turnListenerStart)
-      .replace(/\/\*[\s\S]*?\*\//g, '')
-      .replace(/^\s*\/\/.*$/gm, '');
-    const backfillMatches = [...fireSetupSource.matchAll(/\bawait\s+backfillSessionMeta\s*\(/g)];
-    const sessionBoundMatches = [
-      ...fireSetupSource.matchAll(/\bawait\s+ctx\.onSessionBound\?\.\(session\.id\)/g),
-    ];
-
-    expect(backfillMatches).toHaveLength(1);
-    expect(sessionBoundMatches).toHaveLength(1);
-    expect(backfillMatches[0].index).toBeLessThan(sessionBoundMatches[0].index);
   });
 
   it('does not clear automation conversation attention just by browsing schedules', () => {

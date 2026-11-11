@@ -28,7 +28,7 @@ vi.mock('../../authManager.js', () => ({
 vi.mock('../../clientEndpointsService.js', () => ({
   getClientEndpoint: vi.fn(() => 'https://voice.example.com'),
 }));
-vi.mock('../../serverApiClient.js', () => ({
+vi.mock('../../serverApiClient.desktop.js', () => ({
   ServerApiError,
   serverApiFetch,
 }));
@@ -67,6 +67,25 @@ describe('CindyVoiceRunContext', () => {
     expect(refresh).toHaveBeenCalledTimes(1);
     expect(serverApiFetch).toHaveBeenCalledTimes(2);
     expect(serverApiFetch.mock.calls[0]).toEqual(serverApiFetch.mock.calls[1]);
+  });
+
+  it('reports the refine budget of the latest session, falling back to 2 for servers that omit it', async () => {
+    serverApiFetch.mockReset();
+    serverApiFetch
+      .mockResolvedValueOnce(SESSION)
+      .mockResolvedValueOnce({
+        ...SESSION,
+        sessionId: 'session-2',
+        refiner: { enabled: true, provider: 'auto', maxRefineRequests: 8 },
+      });
+    const context = new CindyVoiceRunContext('zh-CN', 'auto');
+
+    expect(context.refineRequestBudget()).toEqual({ sessionKey: '', limit: 2 });
+    await context.createAsrConnection('qwen-asr-flash-realtime');
+    expect(context.refineRequestBudget()).toEqual({ sessionKey: 'session-1', limit: 2 });
+    // A reconnect allocates a new session; refines go to it, so its limit applies.
+    await context.createAsrConnection('qwen-asr-flash-realtime');
+    expect(context.refineRequestBudget()).toEqual({ sessionKey: 'session-2', limit: 8 });
   });
 
   it('keeps dictation working on a legacy server that rejects the auto refiner marker', async () => {

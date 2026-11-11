@@ -7,7 +7,7 @@ import { describe, expect, it, vi } from 'vitest';
 
 import { XdtHelperToolRegistry } from '../lizi_xdtHelperToolRegistry.js';
 import type { XdtHelperToolResult } from '../lizi_xdtHelperToolRegistry.js';
-import { registerCreateWorkerTool } from '../xdt-helper/create_worker.js';
+import { registerCreateWorkerTool, type CreateWorkerDeps } from '../xdt-helper/create_worker.js';
 
 function parse(result: XdtHelperToolResult) {
   const [block] = result.content;
@@ -18,7 +18,7 @@ function parse(result: XdtHelperToolResult) {
 }
 
 function setup() {
-  const createWorker = vi.fn(async () => ({
+  const createWorker = vi.fn<CreateWorkerDeps['createWorker']>(async () => ({
     ok: true as const,
     workerId: 'worker-1',
     workerSessionId: 'worker-session-1',
@@ -345,4 +345,17 @@ describe('create_worker tool', () => {
     });
     expect(createWorker).not.toHaveBeenCalled();
   });
+});
+
+// Unit/public registry: optional agent schema and actual route/default provenance are wire behavior.
+// Previous cases supplied agent and could not catch echoing request fields instead of resolved fields.
+it('accepts omitted agent and returns the resolved route and branch fallback', async () => {
+  const { registry, createWorker } = setup();
+  createWorker.mockResolvedValueOnce({ ok: true, workerId: 'worker', workerSessionId: 'session',
+    resolved: { agent: 'pi', model: 'test-model', providerId: 'provider', agentDeviceId: 'device', effort: 'high', fastMode: false },
+    defaults: { source: 'memory' }, worktreeSource: { sourceBranch: 'main', source: 'current', fallbackReason: 'saved branch missing' },
+  });
+  const result = parse(await registry.call('create_worker', { role: 'developer', label: 'worker' }));
+  expect(result).toMatchObject({ agent: 'pi', model: 'test-model', provider_id: 'provider', agent_device_id: 'device',
+    defaults: { source: 'memory' }, worktree_source: { source_branch: 'main', fallback_reason: 'saved branch missing' } });
 });

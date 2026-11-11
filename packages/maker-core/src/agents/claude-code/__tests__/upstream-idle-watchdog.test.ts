@@ -58,7 +58,7 @@ function createNoopLogger(): Logger {
   return logger;
 }
 
-function createDeps(toolLoopReviewer?: ToolLoopReviewer): AgentDeps {
+function createDeps(toolLoopReviewer: ToolLoopReviewer = async () => 'stop'): AgentDeps {
   const auth: AuthAdapter = {
     async getState() {
       return { authenticated: true };
@@ -334,6 +334,11 @@ async function runStableAbabLoop(
 
   try {
     await handle.send({ type: 'user', content: userContent });
+    if (sidechain) {
+      stream.emit({ type: 'assistant', parent_tool_use_id: null,
+        message: { role: 'assistant', content: [{ type: 'tool_use', id: sidechain.parentToolUseId,
+          name: 'Agent', input: { prompt: userContent } }] } });
+    }
     for (let i = 0; i < 12; i += 1) {
       const id = `${idPrefix}_${i}`;
       const isA = i % 2 === 0;
@@ -752,6 +757,11 @@ describe('Claude Code tool-loop guard runtime integration', () => {
     vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout', 'Date'] });
     try {
       await handle.send({ type: 'user', content: 'edit the file' });
+      if (parentToolUseId) {
+        stream.emit({ type: 'assistant', parent_tool_use_id: null,
+          message: { role: 'assistant', content: [{ type: 'tool_use', id: parentToolUseId,
+            name: 'Agent', input: { prompt: 'edit the file' } }] } });
+      }
       for (let i = 0; i < 4; i++) {
         const id = `same-edit-${i}`;
         stream.emit({
@@ -857,10 +867,21 @@ describe('Claude Code tool-loop guard runtime integration', () => {
     };
     try {
       await handle.send({ type: 'user', content: 'wait for the run' });
+      stream.emit({ type: 'stream_event', parent_tool_use_id: null,
+        event: { type: 'content_block_start', index: 0, content_block: { type: 'text', text: '' } } });
+      stream.emit({ type: 'stream_event', parent_tool_use_id: null,
+        event: { type: 'content_block_delta', index: 0,
+          delta: { type: 'text_delta', text: 'The job is still running; ' } } });
+      stream.emit({
+        type: 'assistant', parent_tool_use_id: null,
+        message: { role: 'assistant', content: [{ type: 'text', text: 'The job is still running; I am checking for completion.' }] },
+      });
       for (let i = 0; i < 4; i++) await emitSameBash(i);
       expect(reviewer).toHaveBeenCalledOnce();
       expect(reviewer.mock.calls[0]?.[0]).toMatchObject({
         sessionId: 'session-idle-watchdog', agentKind: 'claude-code', model: 'claude-opus-4-6',
+        userIntent: 'wait for the run',
+        assistantExplanation: 'The job is still running; I am checking for completion.',
         verdict: { reason: 'consecutive', count: 4, toolName: 'Bash' },
       });
       decisions[0]?.('continue');
@@ -936,11 +957,16 @@ describe('Claude Code tool-loop guard runtime integration', () => {
         type: 'assistant', parent_tool_use_id: null,
         message: { role: 'assistant', content: [{ type: 'tool_use', id: 'toolu_task', name: 'Agent', input: { prompt: 'check' } }] },
       });
+      stream.emit({ type: 'assistant', parent_tool_use_id: null,
+        message: { role: 'assistant', content: [{ type: 'text', text: 'Parent continues a different investigation.' }] } });
+      stream.emit({ type: 'assistant', parent_tool_use_id: 'toolu_task',
+        message: { role: 'assistant', content: [{ type: 'text', text: 'Child is observing the running job.' }] } });
       for (let i = 0; i < 4; i++) {
         stream.emit(assistantToolUse(`sub-${i}`, 'gh run view 1', 'toolu_task'));
         stream.emit(userToolResult(`sub-${i}`, 'in_progress', 'toolu_task'));
       }
       await pumpUntil(() => reviewer.mock.calls.length === 1, 'sidechain review started');
+      expect(reviewer.mock.calls[0]?.[0].assistantExplanation).toBe('Child is observing the running job.');
       // 子代理先结束:父 Agent 调用拿到结果。
       stream.emit(userToolResult('toolu_task', 'subagent finished'));
       await pumpUntil(() => events.some(e => e.type === 'tool_result_full'
@@ -984,11 +1010,12 @@ describe('Claude Code tool-loop guard runtime integration', () => {
         await handle.setModel?.(models[round]!);
       }
       expect(toolLoopError(events)).toBeUndefined();
-      // 切模型只清检测轨迹;本 turn 已用完 3 次复核,新的疑似直接中断。
+      // 切模型只清检测轨迹;本 turn 已用完 3 次复核,新的疑似放行且不增加费用。
       for (let i = 0; i < 4; i++) await emitBash(`r3-${i}`, 'gh run view 3');
-      await pumpUntil(() => fakeQuery.interrupt.mock.calls.length === 1, 'loop interrupted without a fourth review');
+      await vi.advanceTimersByTimeAsync(0);
       expect(reviewer).toHaveBeenCalledTimes(3);
-      expect(toolLoopError(events)).toMatchObject({ data: { reason: 'tool_use_loop_detected', loopCount: 4 } });
+      expect(toolLoopError(events)).toBeUndefined();
+      expect(fakeQuery.interrupt).not.toHaveBeenCalled();
     } finally {
       vi.useRealTimers();
       stream.end();

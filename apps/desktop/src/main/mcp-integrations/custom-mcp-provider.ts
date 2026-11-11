@@ -28,7 +28,7 @@ import type {
   McpProviderContext,
 } from '@cindy/maker-core';
 
-import type { CustomMcpConfig } from '../maker-host/custom-mcp-store.js';
+import type { CustomMcpConfig } from '../maker-host/custom-mcp-store.desktop.js';
 import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import type { AppServerConfig } from '../mcp-apps/connection.js';
 

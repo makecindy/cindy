@@ -10,6 +10,7 @@
  * 受邀者任务里，凭证类操作没有批准时先在本机弹确认卡，等待期间这条连接后面的消息排在它后面。
  */
 import { spawn, type ChildProcessWithoutNullStreams } from 'node:child_process';
+import fsp from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
@@ -156,7 +157,12 @@ export function mapExecServerParams(value: unknown, workspace: ExecutorWorkspace
       result[key] = pathToFileURL(workspace.resolve(foreign)).href;
     } else result[key] = workspace.resolve(item);
   }
-  if (Array.isArray(result.argv)) result.argv = result.argv.map((part) => typeof part === 'string' ? workspace.mapCommand(part, resolveExecutorShell().dialect) : part);
+  if (Array.isArray(result.argv)) result.argv = result.argv.map((part, index) => {
+    if (typeof part !== 'string') return part;
+    // argv[0] is passed directly to the OS as an executable name, so Shell quoting would
+    // become part of the filename. Only expand a registered workspace alias here.
+    return index === 0 ? workspace.mapAlias(part) : workspace.mapCommand(part, resolveExecutorShell().dialect);
+  });
   if (typeof result.command === 'string') result.command = workspace.mapCommand(result.command, resolveExecutorShell().dialect);
   if (result.sandbox !== undefined) result.sandbox = mapExecServerSandbox(result.sandbox, workspace);
   return mapFileData ? mapExecServerFileData(result, workspace, method) : result;
@@ -267,6 +273,13 @@ function mapExecServerSandbox(value: unknown, workspace: ExecutorWorkspace): unk
   const policyContext = asJsonRecord(sandbox.policyContext);
   if (policyContext) sandbox.policyContext = mapSandboxDirs(policyContext, mapping);
   const permissions = asJsonRecord(sandbox.permissions);
+  // POSIX Codex 没有 Windows 沙箱，发来的 disabled 不是执行端的可用实现。
+  // 仅为受限权限选择 Windows 原生受限令牌；不改权限、显式 Windows 选择或非受限请求。
+  // 不能落实的规则（如 deny-read）仍由原生 exec-server 拒绝，不能删规则或重试无沙箱。
+  if (process.platform === 'win32' && !mapping.windowsAgent
+    && sandbox.windowsSandboxLevel === 'disabled' && permissions?.type === 'managed') {
+    sandbox.windowsSandboxLevel = 'restricted-token';
+  }
   const fileSystem = asJsonRecord(permissions?.file_system);
   if (permissions && fileSystem && Array.isArray(fileSystem.entries)) {
     const entries = fileSystem.entries.flatMap((entry) => mapSandboxEntry(entry, mapping));
@@ -301,6 +314,32 @@ function existingTextFor(target: unknown, workspace: ExecutorWorkspace): string 
 
 /** 一条结果只解析一次目录；磁盘 realpath 走异步文件系统，不阻塞 Electron 主线程。 */
 export async function mapExecServerResult(value: unknown, workspace: ExecutorWorkspace, method?: string): Promise<unknown> {
+  // Store/MSIX 的 PowerShell 不能用 Windows 受限令牌启动。只为使用上述 Windows
+  // 适配的 POSIX Agent 宣告一份实际存在的非 Store Shell；不改 PATH、不改显式命令。
+  const root = asJsonRecord(value);
+  const result = asJsonRecord(root?.result);
+  const info = asJsonRecord(result?.environmentInfo);
+  const shell = asJsonRecord(info?.shell);
+  const agentPrefixes = workspace.agentPathPrefixes();
+  if (process.platform === 'win32' && agentPrefixes.length > 0
+    && !/^(?:[A-Za-z]:|[\\/]{2})/.test(agentPrefixes[0])
+    && info?.platformOs === 'windows' && shell?.name === 'powershell'
+    && typeof shell.path === 'string' && /[\\/]WindowsApps[\\/]/i.test(shell.path)
+    && /[\\/]pwsh\.exe$/i.test(shell.path)) {
+    const candidates = [
+      process.env.ProgramFiles && path.join(process.env.ProgramFiles, 'PowerShell', '7', 'pwsh.exe'),
+      process.env.SystemRoot && path.join(process.env.SystemRoot, 'System32', 'WindowsPowerShell', 'v1.0', 'powershell.exe'),
+    ];
+    for (const candidate of candidates) {
+      if (!candidate) continue;
+      try {
+        const executable = await fsp.realpath(candidate);
+        if (/[\\/]WindowsApps[\\/]/i.test(executable) || !(await fsp.stat(executable)).isFile()) continue;
+        value = { ...root, result: { ...result, environmentInfo: { ...info, shell: { ...shell, path: executable } } } };
+        break;
+      } catch { /* 不存在可用替代时保留原生声明，由执行端拒绝，不扩大权限。 */ }
+    }
+  }
   const directories: string[] = [];
   const collect = (item: unknown): void => {
     if (!item || typeof item !== 'object') return;

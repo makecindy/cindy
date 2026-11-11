@@ -42,7 +42,7 @@ export const PLUGIN_MEMBER_UPLOAD_STATUSES = [
 export type PluginMemberUploadStatus = (typeof PLUGIN_MEMBER_UPLOAD_STATUSES)[number];
 
 /** Release review state after a member upload has produced a Release. */
-export const PLUGIN_MEMBER_RELEASE_REVIEW_STATUSES = ['pending', 'approved', 'rejected'] as const;
+export const PLUGIN_MEMBER_RELEASE_REVIEW_STATUSES = ['pending', 'approved', 'rejected', 'cancelled'] as const;
 export type PluginMemberReleaseReviewStatus =
   (typeof PLUGIN_MEMBER_RELEASE_REVIEW_STATUSES)[number];
 

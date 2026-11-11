@@ -1,0 +1,9 @@
+   Compiling agent-net-sim v0.0.0 (<home>/Documents/Cindy/cindy/.cindy-worktrees/agent-net/packages/agent-net-core/sim)
+    Finished `sim` profile [optimized] target(s) in 2.77s
+     Running tests/secure.rs (target/sim/deps/secure-5b2766586b069fb2)
+
+running 1 test
+test encrypted_seeds_deliver_intact_streams ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 15 filtered out; finished in 8.25s
+

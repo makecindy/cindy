@@ -9,7 +9,10 @@ import { resetBrowserProxyDnsVerdictCache } from '@cindy/browser-control-runtime
 import {
   BrowserProxyAuthCoordinator,
   closeAdoptedManagedBrowser,
+  commandLineHasArgumentValue,
   commandLineHasExactArgument,
+  terminateManagedChromePortOwner,
+  waitForCdpPortFree,
 } from '../proxy-auth.js';
 
 interface CdpCommand {
@@ -40,6 +43,11 @@ async function createFakeCdp(options: {
   failAttachToTarget?: boolean;
   failFetchEnable?: boolean;
   failFetchEnableForSession?: string;
+  failCloseTarget?: boolean;
+  closeTargetNotFound?: boolean;
+  listWorkerAfterStart?: string;
+  rejectRepeatCloseTarget?: boolean;
+  emitWorkerAutoAttach?: boolean;
   failBrowserClose?: boolean;
   closeOnBrowserClose?: boolean;
   emitAutoAttach?: boolean;
@@ -48,6 +56,7 @@ async function createFakeCdp(options: {
   startupTargets?: Array<{ targetId: string; type: string }>;
 } = {}) {
   const commands: CdpCommand[] = [];
+  const closedTargets = new Set<string>();
   let browserSocket: WebSocket | undefined;
   let getTargetsCalls = 0;
   const wsServer = new WebSocketServer({ noServer: true });
@@ -57,7 +66,16 @@ async function createFakeCdp(options: {
     socket.on('message', (raw) => {
       const command = JSON.parse(raw.toString()) as CdpCommand;
       commands.push(command);
-      if (command.method === 'Target.setAutoAttach' && options.emitAutoAttach) {
+      if (command.method === 'Target.setAutoAttach' && options.emitWorkerAutoAttach && !command.sessionId) {
+        socket.send(JSON.stringify({
+          method: 'Target.attachedToTarget',
+          params: {
+            sessionId: 'session-for-worker-1',
+            targetInfo: { targetId: 'worker-1', type: 'worker' },
+          },
+        }));
+        socket.send(JSON.stringify({ id: command.id, result: {} }));
+      } else if (command.method === 'Target.setAutoAttach' && options.emitAutoAttach) {
         socket.send(JSON.stringify({
           method: 'Target.attachedToTarget',
           params: {
@@ -80,7 +98,14 @@ async function createFakeCdp(options: {
         socket.send(JSON.stringify({
           id: command.id,
           result: {
-            targetInfos: options.startupTargets ?? [{ targetId: 'page-1', type: 'page' }],
+            targetInfos: [
+              ...(options.startupTargets ?? [{ targetId: 'page-1', type: 'page' }])
+                .filter(({ targetId }) => !closedTargets.has(targetId)),
+              // Startup issues two getTargets calls; later ones are rechecks.
+              ...(options.listWorkerAfterStart && getTargetsCalls > 2
+                ? [{ targetId: options.listWorkerAfterStart, type: 'worker' }]
+                : []),
+            ],
           },
         }));
       } else if (command.method === 'Target.attachToTarget') {
@@ -100,6 +125,16 @@ async function createFakeCdp(options: {
         || command.sessionId === options.failFetchEnableForSession
       )) {
         socket.send(JSON.stringify({ id: command.id, error: { message: 'dummy secret must not escape' } }));
+      } else if (command.method === 'Target.closeTarget' && options.rejectRepeatCloseTarget) {
+        const id = (command.params as { targetId?: string } | undefined)?.targetId ?? '';
+        socket.send(JSON.stringify(closedTargets.has(id)
+          ? { id: command.id, error: { message: 'No target with given id' } }
+          : { id: command.id, result: {} }));
+        closedTargets.add(id);
+      } else if (command.method === 'Target.closeTarget' && options.closeTargetNotFound) {
+        socket.send(JSON.stringify({ id: command.id, error: { message: 'No target with given id' } }));
+      } else if (command.method === 'Target.closeTarget' && options.failCloseTarget) {
+        socket.send(JSON.stringify({ id: command.id, error: { message: 'close target failed' } }));
       } else if (command.method === 'Browser.close') {
         if (options.failBrowserClose) {
           socket.send(JSON.stringify({ id: command.id, error: { message: 'close failed' } }));
@@ -183,6 +218,118 @@ describe('commandLineHasExactArgument', () => {
     ]) {
       expect(commandLineHasExactArgument(line, `--user-data-dir=${dir}`), line).toBe(true);
     }
+  });
+});
+
+describe('commandLineHasArgumentValue', () => {
+  const dir = 'C:\\Users\\me\\AppData\\Roaming\\Cindy\\browser-runtime\\browser\\Cindy\\user-data';
+
+  it('matches a Windows value that the shell quoted', () => {
+    // Windows quotes an argument whose value contains spaces, so the very same
+    // option appears as --user-data-dir="..." there. Token matching answered
+    // "not ours" for every Windows profile path, which disabled the identity
+    // proof behind each process kill.
+    expect(commandLineHasArgumentValue(
+      `"C:\\Program Files (x86)\\Microsoft\\Edge\\Application\\msedge.exe" --remote-debugging-port=18800 --user-data-dir="${dir}" --no-startup-window`,
+      '--user-data-dir',
+      dir,
+    )).toBe(true);
+    expect(commandLineHasArgumentValue(
+      `--remote-debugging-port=18800 --user-data-dir="${dir}"`,
+      '--remote-debugging-port',
+      '18800',
+    )).toBe(true);
+  });
+
+  it('matches an unquoted POSIX value', () => {
+    expect(commandLineHasArgumentValue(
+      'chrome --user-data-dir=/Users/me/Cindy/user-data --remote-debugging-port=18800',
+      '--user-data-dir',
+      '/Users/me/Cindy/user-data',
+    )).toBe(true);
+  });
+
+  it('rejects a value that is merely a prefix of the expected one', () => {
+    // The result feeds a process kill, so a different profile must not match.
+    expect(commandLineHasArgumentValue(
+      `chrome --user-data-dir="${dir}-backup"`,
+      '--user-data-dir',
+      dir,
+    )).toBe(false);
+    expect(commandLineHasArgumentValue(
+      'chrome --remote-debugging-port=188000',
+      '--remote-debugging-port',
+      '18800',
+    )).toBe(false);
+  });
+
+  it('rejects a quoted value that carries a suffix after the closing quote', () => {
+    // `"<dir>"-backup` is a different profile that happens to start with the
+    // expected one. Matching it would let a foreign browser be killed.
+    expect(commandLineHasArgumentValue(
+      `chrome --user-data-dir="${dir}"-backup`,
+      '--user-data-dir',
+      dir,
+    )).toBe(false);
+    expect(commandLineHasArgumentValue(
+      `chrome --user-data-dir='${dir}'-backup`,
+      '--user-data-dir',
+      dir,
+    )).toBe(false);
+    expect(commandLineHasArgumentValue(
+      `chrome --remote-debugging-port="18800"0`,
+      '--remote-debugging-port',
+      '18800',
+    )).toBe(false);
+  });
+
+  it('rejects a missing option', () => {
+    expect(commandLineHasArgumentValue('chrome --headless', '--user-data-dir', dir)).toBe(false);
+  });
+});
+
+describe('waitForCdpPortFree', () => {
+  it('keeps probing until the port is released instead of trusting the first answer', async () => {
+    // The signal is delivered before the browser releases the port, so a
+    // single probe right after it reports a survivor and fails the launch
+    // reclaim even though the browser is on its way out.
+    let probes = 0;
+    const probe = vi.fn(async () => {
+      probes += 1;
+      return probes < 3;
+    });
+    const sleep = vi.fn(async () => {});
+
+    await expect(waitForCdpPortFree('http://127.0.0.1:45999', {
+      probe,
+      sleep,
+      deadlineMs: 1_000,
+    })).resolves.toBe(true);
+    expect(probe).toHaveBeenCalledTimes(3);
+  });
+
+  it('gives up when the port stays taken for the whole window', async () => {
+    const probe = vi.fn(async () => true);
+    const sleep = vi.fn(async () => {});
+
+    await expect(waitForCdpPortFree('http://127.0.0.1:45998', {
+      probe,
+      sleep,
+      deadlineMs: 0,
+    })).resolves.toBe(false);
+    expect(probe).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe('terminateManagedChromePortOwner', () => {
+  it('reports the port free when nothing holds it', async () => {
+    // Nothing listens on that port, so the reclaim must succeed — otherwise a
+    // launch is refused because of a browser that is already gone.
+    await expect(terminateManagedChromePortOwner({
+      cdpHttpUrl: 'http://127.0.0.1:45997',
+      cdpPort: 45997,
+      userDataDir: '/managed/browser/Cindy/user-data',
+    })).resolves.toBe(true);
   });
 });
 
@@ -530,6 +677,152 @@ describe('BrowserProxyAuthCoordinator', () => {
     expect(logger.warn).toHaveBeenCalledWith(
       'browser proxy authentication could not prepare a new browser target',
     );
+    await coordinator.dispose();
+  });
+
+  it('closes only a worker whose setup fails and keeps the browser alive', async () => {
+    const cdp = await createFakeCdp({ failFetchEnableForSession: 'session-worker' });
+    const onFailure = vi.fn();
+    const coordinator = new BrowserProxyAuthCoordinator({
+      mode: 'proxied',
+      server: 'http://proxy.test:8080',
+      username: 'user',
+      password: 'password',
+    }, { warn: vi.fn() }, onFailure);
+    await coordinator.start(cdp.cdpUrl);
+
+    cdp.sendEvent({
+      method: 'Target.attachedToTarget',
+      params: {
+        sessionId: 'session-worker',
+        targetInfo: { targetId: 'worker-9', type: 'worker' },
+      },
+    });
+
+    await vi.waitFor(() => {
+      expect(cdp.commands).toContainEqual(expect.objectContaining({
+        method: 'Target.closeTarget',
+        params: { targetId: 'worker-9' },
+      }));
+    });
+    expect(cdp.commands).not.toContainEqual(expect.objectContaining({ method: 'Browser.close' }));
+    expect(cdp.commands).not.toContainEqual(expect.objectContaining({
+      method: 'Runtime.runIfWaitingForDebugger',
+      sessionId: 'session-worker',
+    }));
+    expect(onFailure).not.toHaveBeenCalled();
+    await coordinator.dispose();
+  });
+
+  it('starts when an already-running worker cannot be prepared, closing only that worker', async () => {
+    const cdp = await createFakeCdp({
+      startupTargets: [
+        { targetId: 'page-1', type: 'page' },
+        { targetId: 'worker-1', type: 'worker' },
+      ],
+      failFetchEnableForSession: 'session-for-worker-1',
+    });
+    const coordinator = new BrowserProxyAuthCoordinator({
+      mode: 'proxied',
+      server: 'http://proxy.test:8080',
+      username: 'user',
+      password: 'password',
+    }, { warn: vi.fn() });
+
+    await expect(coordinator.start(cdp.cdpUrl)).resolves.toBeUndefined();
+    expect(cdp.commands).toContainEqual(expect.objectContaining({
+      method: 'Target.closeTarget',
+      params: { targetId: 'worker-1' },
+    }));
+    expect(cdp.commands).not.toContainEqual(expect.objectContaining({ method: 'Browser.close' }));
+    await coordinator.dispose();
+  });
+
+  it('keeps the browser when startup discovery and auto-attach both close the same failing worker', async () => {
+    const cdp = await createFakeCdp({
+      startupTargets: [
+        { targetId: 'page-1', type: 'page' },
+        { targetId: 'worker-1', type: 'worker' },
+      ],
+      failFetchEnableForSession: 'session-for-worker-1',
+      emitWorkerAutoAttach: true,
+      rejectRepeatCloseTarget: true,
+    });
+    const coordinator = new BrowserProxyAuthCoordinator({
+      mode: 'proxied',
+      server: 'http://proxy.test:8080',
+      username: 'user',
+      password: 'password',
+    }, { warn: vi.fn() });
+
+    await expect(coordinator.start(cdp.cdpUrl)).resolves.toBeUndefined();
+    expect(cdp.commands).not.toContainEqual(expect.objectContaining({ method: 'Browser.close' }));
+    await coordinator.dispose();
+  });
+
+  it('treats a worker that already exited as closed and forgets it afterwards', async () => {
+    const cdp = await createFakeCdp({
+      failFetchEnableForSession: 'session-worker',
+      closeTargetNotFound: true,
+    });
+    const onFailure = vi.fn();
+    const coordinator = new BrowserProxyAuthCoordinator({
+      mode: 'proxied',
+      server: 'http://proxy.test:8080',
+      username: 'user',
+      password: 'password',
+    }, { warn: vi.fn() }, onFailure);
+    await coordinator.start(cdp.cdpUrl);
+    const attachWorker = () => cdp.sendEvent({
+      method: 'Target.attachedToTarget',
+      params: {
+        sessionId: 'session-worker',
+        targetInfo: { targetId: 'worker-9', type: 'worker' },
+      },
+    });
+
+    attachWorker();
+    await vi.waitFor(() => {
+      expect(cdp.commands.filter(({ method }) => method === 'Target.closeTarget')).toHaveLength(1);
+    });
+    // The settled close must be evicted, so a reused id is closed afresh
+    // rather than answered from an ever-growing cache.
+    attachWorker();
+    await vi.waitFor(() => {
+      expect(cdp.commands.filter(({ method }) => method === 'Target.closeTarget')).toHaveLength(2);
+    });
+    expect(cdp.commands).not.toContainEqual(expect.objectContaining({ method: 'Browser.close' }));
+    expect(onFailure).not.toHaveBeenCalled();
+    await coordinator.dispose();
+  });
+
+  it('still tears the browser down when a failed worker cannot be closed', async () => {
+    const cdp = await createFakeCdp({
+      failFetchEnableForSession: 'session-worker',
+      failCloseTarget: true,
+      listWorkerAfterStart: 'worker-9',
+    });
+    const onFailure = vi.fn();
+    const coordinator = new BrowserProxyAuthCoordinator({
+      mode: 'proxied',
+      server: 'http://proxy.test:8080',
+      username: 'user',
+      password: 'password',
+    }, { warn: vi.fn() }, onFailure);
+    await coordinator.start(cdp.cdpUrl);
+
+    cdp.sendEvent({
+      method: 'Target.attachedToTarget',
+      params: {
+        sessionId: 'session-worker',
+        targetInfo: { targetId: 'worker-9', type: 'worker' },
+      },
+    });
+
+    await vi.waitFor(() => {
+      expect(cdp.commands).toContainEqual(expect.objectContaining({ method: 'Browser.close' }));
+    });
+    expect(onFailure).toHaveBeenCalledTimes(1);
     await coordinator.dispose();
   });
 

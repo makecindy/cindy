@@ -1,20 +1,23 @@
+import { readFileSync } from 'node:fs';
+import { createHash } from 'node:crypto';
+
 export default {
   name: 'plugin-install-mail',
   entry: './fixture.tsx',
   viewport: { width: 700, height: 600 },
-  real: 'MailPreviewBody provider chooser and unavailable/failed reader states, GhostInstallConsentHost, shared confirmation dialog, buttons and five locales',
+  real: 'MailPreviewBody provider chooser and unavailable/failed reader states, MailHtmlPreview image opt-in and link activation, GhostInstallConsentHost, shared confirmation dialog, buttons and five locales',
   notCovered:
-    'Mailbox tools, installer writes, account credentials, mail bodies, native mobile rendering and network connections',
+    'Mailbox tools, installer writes, account credentials, live mail content, native mobile rendering and external network connections',
   stubs: {
     'src/renderer/features/right-sidebar/lib/mailPreview':
-      'export async function readMailPreview(){ const c=window.__uiPage.ctx.case; if(c==="no-reader")return {supported:false}; if(c==="not-ready")return {supported:true,error:"MAIL_PROVIDER_NOT_READY"}; if(c==="read-failed")return {supported:true,error:"MAIL_READ_FAILED"}; return {providers:[{id:"root",name:"Mail",namespace:null},{id:"team",name:"Mail for a very long organization name",namespace:"long-organization-identity-example"}]}; }',
+      'export async function openMailPreview(){} export async function readMailPreview(){ const c=window.__uiPage.ctx.case; if(c==="no-reader")return {supported:false}; if(c==="not-ready")return {supported:true,error:"MAIL_PROVIDER_NOT_READY"}; if(c==="read-failed")return {supported:true,error:"MAIL_READ_FAILED"}; return {providers:[{id:"root",name:"Mail",namespace:null},{id:"team",name:"Mail for a very long organization name",namespace:"long-organization-identity-example"}]}; }',
     'src/renderer/features/right-sidebar/registry': 'export function registerTabKind(){} export function getTabKind(){return undefined;}',
     'src/renderer/features/right-sidebar/plugins/mail-preview/MailCardBody':
       'export function MailCardBody(){return null;}',
-    'src/renderer/features/right-sidebar/plugins/mail-preview/MailConversationView':
-      'export function MailConversationView(){return null;}',
   },
   cases: {
+    'participant-avatars': { about: 'Real reader with Google contact, public email, domain logo and initials; image endpoints use fixture bytes', viewport: { width: 360, height: 720 } },
+    'read-mail-body': { about: 'External images require a click; links follow chat navigation', viewport: { width: 360, height: 600 } },
     'two-mail-views': { about: 'Typing in either editor updates its peer without iframe navigation or blank paint' },
     'edit-mail-body': { about: 'Native whole-body selection, replace, delete, undo, and saved HTML round trip' },
     'refresh-mail-body': { about: 'Source updates with identical sanitized HTML must reveal the mail body' },
@@ -31,6 +34,85 @@ export default {
   },
   async check(page, ui) {
     const selected = await page.evaluate(() => window.__uiPage.ctx.case);
+    if (selected === 'participant-avatars') {
+      const imageData = name => 'data:image/png;base64,' + readFileSync(new URL('../../../resources/' + name, import.meta.url)).toString('base64');
+      const hash = createHash('sha256').update('alex@example.test').digest('hex');
+      const images = {
+        'https://lh3.googleusercontent.com/fixture-contact': imageData('companion-preset-avatars/cindy.png'),
+        [`https://gravatar.com/avatar/${hash}?s=64&d=404&r=g`]: imageData('legacy-teammate-avatars/lizi.png'),
+        'https://icons.duckduckgo.com/ip3/company.example.com.ico': imageData('icon.png'),
+      };
+      const hashes = Object.fromEntries(['alex@example.test', 'team@company.example.com', 'guest@gmail.com'].map(email =>
+        [email, Array.from(createHash('sha256').update(email).digest())]));
+      await page.evaluate(({ images, hashes }) => {
+        // The isolated harness blocks all off-origin requests and has no
+        // SubtleCrypto. Substitute image bytes at the DOM boundary, retaining
+        // the real component's source selection/load/error handlers. URL and
+        // SHA-256 behavior is separately exercised by MailPreview.test.tsx.
+        if (!crypto.subtle) Object.defineProperty(crypto, 'subtle', { configurable: true, value: {
+          digest: async (_algorithm, bytes) => Uint8Array.from(hashes[new TextDecoder().decode(bytes)]).buffer,
+        } });
+        function substitute(node, value) {
+          if (String(value).startsWith('https://')) {
+            if (images[value]) return images[value];
+            if (String(value).startsWith('https://gravatar.com/')) {
+              queueMicrotask(() => node.dispatchEvent(new Event('error')));
+              return null;
+            }
+            throw new Error('Unexpected avatar endpoint: ' + value);
+          }
+          return value;
+        }
+        const original = Element.prototype.setAttribute;
+        Element.prototype.setAttribute = function (name, value) {
+          const mapped = this instanceof HTMLImageElement && name === 'src' ? substitute(this, value) : value;
+          if (mapped !== null) return original.call(this, name, mapped);
+        };
+        const src = Object.getOwnPropertyDescriptor(HTMLImageElement.prototype, 'src');
+        Object.defineProperty(HTMLImageElement.prototype, 'src', { ...src, set(value) {
+          const mapped = substitute(this, value);
+          if (mapped !== null) src.set.call(this, mapped);
+        } });
+      }, { images, hashes });
+      await page.getByRole('button', { name: 'Open preview' }).click();
+      await page.waitForFunction(() => {
+        const images = [...document.querySelectorAll('section img')];
+        return images.length === 3 && images.every(img => img.complete && img.naturalWidth > 0 && !img.classList.contains('invisible'));
+      });
+      await ui.capture('avatars');
+      await page.locator('main').evaluate(node => { node.style.width = '320px'; });
+      await ui.capture('avatars-narrow-320');
+      await page.locator('main').evaluate(node => { node.style.width = ''; });
+      await page.getByRole('button', { name: await ui.t('mailReader.showExternalImages') }).click();
+      await page.locator('iframe[aria-busy="false"]').waitFor();
+      await page.waitForFunction(() => document.querySelector('iframe').contentDocument.querySelector('img').naturalWidth > 0);
+      await ui.capture('avatars-and-images');
+      return;
+    }
+    if (selected === 'read-mail-body') {
+      await page.locator('iframe[aria-busy="false"]').waitFor();
+      const frame = page.frameLocator('iframe');
+      if (await frame.locator('img').getAttribute('src') !== null) throw new Error('Image requested before consent');
+      const decorations = await page.evaluate(() => {
+        const doc = document.querySelector('iframe').contentDocument;
+        return [...doc.querySelectorAll('a')].map(node => doc.defaultView.getComputedStyle(node).textDecorationLine);
+      });
+      if (!decorations[0].includes('underline')) throw new Error('Sender CSS hid the web link underline');
+      const email = frame.getByText('person@example.test', { exact: true });
+      if (decorations[1].includes('underline')) throw new Error('Unsupported mailto looks clickable');
+      await email.click();
+      if (await page.getByTestId('opened-link').textContent()) throw new Error('Unsupported mailto reached web navigation');
+      await ui.capture('images-blocked');
+      await page.getByRole('button', { name: await ui.t('mailReader.showExternalImages') }).click();
+      await page.locator('iframe[aria-busy="false"]').waitFor();
+      await frame.getByText('Hello Alex,', { exact: true }).waitFor();
+      await frame.getByRole('link', { name: 'View details' }).click();
+      if (await page.getByTestId('opened-link').textContent() !== 'https://example.test/details') throw new Error('Mail link was not delegated to the host');
+      await page.waitForFunction(() => !!document.querySelector('iframe').contentDocument.querySelector('img').getAttribute('src'));
+      await page.waitForFunction(() => document.querySelector('iframe').contentDocument.querySelector('img').naturalWidth > 0);
+      await ui.capture('images-visible');
+      return;
+    }
     if (selected === 'two-mail-views') {
       await page.waitForFunction(() => document.querySelectorAll('iframe[aria-busy="false"]').length === 2);
       await page.evaluate(() => {

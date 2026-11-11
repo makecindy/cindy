@@ -1,3 +1,5 @@
+import { isProviderModelRouteDisabled } from '../maker-host/model-route-availability.js';
+export { isProviderModelRouteDisabled, isProviderRouteSuspended } from '../maker-host/model-route-availability.js';
 import { readUtilityTextStream, streamTextResult } from './streamText.js';
 import { isOpenAiSubscriptionProvider, providerCatalogId } from '@cindy/model-providers';
 import { randomUUID } from 'node:crypto';
@@ -16,10 +18,10 @@ import { getAppCapabilities } from '../appCapabilities.js';
 import { activeOwnerScopeKey, isAppSessionBoundaryPending } from '../appSessionState.js';
 import { readClaudeApiKey } from '../maker-host/auth-adapters.js';
 import { getChatgptBridgeAuth, getChatgptBridgeAuthForDispatch } from '../maker-host/anthropic-responses-bridge-host.js';
-import { getGrokAccessToken, getGrokOAuthCredentialGeneration } from '../maker-host/grok-oauth-login.js';
-import { readCachedGenericOAuthAccessToken } from '../maker-host/generic-oauth.js';
+import { getGrokAccessToken, getGrokOAuthCredentialGeneration } from '../maker-host/grok-oauth-login.desktop.js';
+import { readCachedGenericOAuthAccessToken } from '../maker-host/generic-oauth.desktop.js';
 // undici 的 fetch,但 per-request 现取系统代理(裸 undici 不吃代理设置)。
-import { outboundUndiciFetch as undiciFetch } from '../maker-host/outbound-fetch.js';
+import { outboundUndiciFetch as undiciFetch } from '../maker-host/outbound-fetch.desktop.js';
 import { claudeUpstreamEndpoint } from '../maker-host/runtime-configs.js';
 import {
   getActiveCatalog,
@@ -29,6 +31,7 @@ import { readModelDisableOverrides } from '../maker-host/model-disable-store.js'
 import { isModelDisabled, isProviderDisabled } from '@cindy/model-providers';
 import { getProviderRouteCredentialRevision, isProviderRouteMutationInProgress } from '../maker-host/provider-route.js';
 import { withOpenCodeGoSessionHeader } from '../maker-host/opencode-go-session.js';
+import { withProviderAppAttribution } from '../maker-host/provider-app-attribution.js';
 import { effectiveXdGatewayBaseUrl } from '../model-access/effectiveEndpoint.js';
 import { reportCindyGatewayKeyRejected } from '../model-access/gatewayKeyRejection.js';
 import { readCustomProviderKey } from '../secrets/providerSecretStore.js';
@@ -239,27 +242,6 @@ export function isUtilityRouteDisabled(profile: {
   );
 }
 
-/**
- * 供应商级停用的直查入口(voice ASR / embedding 等非目录模型消费方用):这些链路
- * 的模型不在 chat/media 目录里,逐模型停用无从谈起,但「供应商整体停用」必须生效
- * —— 它们同样是经该供应商凭证的新付费调用(PR #744 review 第十六轮)。
- */
-export function isProviderRouteSuspended(providerId: string): boolean {
-  return isProviderDisabled(readModelDisableOverrides(), providerId);
-}
-
-/**
- * (供应商, 模型) 组合判定:供应商级停用或该模型条目被点名停用任一命中即真。
- * embedding 等「模型 id 可被逐条停用但不在 chat 目录」的消费方用
- * (PR #744 review 第十九轮)。
- */
-export function isProviderModelRouteDisabled(providerId: string, modelId: string): boolean {
-  const overrides = readModelDisableOverrides();
-  return (
-    isProviderDisabled(overrides, providerId) ||
-    isModelDisabled(overrides, providerId, modelId)
-  );
-}
 
 async function resolveUtilityTextCandidates(
   maker: Maker,
@@ -420,12 +402,15 @@ export const DEDICATED_AUTO_REVIEW_CANDIDATES = Object.freeze([
     reasoningEffort: undefined,
   },
   {
-    id: 'chatgpt-nano',
+    // Codex's own Auto-review model. ChatGPT accounts can call it although it is not a
+    // selectable catalog model (gpt-5.4-nano is listed but rejected for ChatGPT accounts).
+    id: 'chatgpt-auto-review',
     providerId: 'openai',
     agentKind: 'codex',
-    model: 'gpt-5.4-nano',
+    model: 'codex-auto-review',
     transport: 'codex-responses',
     reasoningEffort: 'low',
+    catalogExempt: true,
   },
   {
     id: 'chatgpt-luna',
@@ -442,6 +427,8 @@ export const DEDICATED_AUTO_REVIEW_CANDIDATES = Object.freeze([
   model: string;
   transport: UtilityModelTransport;
   reasoningEffort: 'low' | undefined;
+  /** Review-only model that is reachable without being a selectable catalog entry. */
+  catalogExempt?: boolean;
 }>);
 
 export type DedicatedAutoReviewCandidate = (typeof DEDICATED_AUTO_REVIEW_CANDIDATES)[number];
@@ -625,7 +612,7 @@ export async function requestDedicatedAutoReviewCandidateText(
   ) {
     return { ok: false, reason: 'no_candidate', attempts: [skippedAttempt(profile, 'agent_unavailable')] };
   }
-  if (!configured.some((model) => model.id === candidate.model)) {
+  if (!('catalogExempt' in candidate && candidate.catalogExempt) && !configured.some((model) => model.id === candidate.model)) {
     return { ok: false, reason: 'no_candidate', attempts: [skippedAttempt(profile, 'model_unavailable')] };
   }
   if (isProviderModelRouteDisabled(candidate.providerId, candidate.model)) {
@@ -1943,7 +1930,7 @@ async function requestProviderHttpText(input: {
         method: 'POST',
         signal: controller.signal,
         headers: {
-          ...(target.headers ?? {}),
+          ...withProviderAppAttribution(target.endpoint, target.headers),
           'Content-Type': 'application/json',
         },
         body: JSON.stringify(body),

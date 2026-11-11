@@ -5,6 +5,7 @@
  * desktop renderer contracts. Keep this JSON-serializable: it crosses IPC.
  */
 export interface ContextUsageData {
+  textEstimate?: import('@cindy/maker-shared/session-controls').ContextTextEstimate;
   categories: Array<{
     name: string;
     tokens: number;

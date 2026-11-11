@@ -6,7 +6,15 @@ import type { DbClient } from '../client/DbClient.js';
 import { clearCurrentDbClient, setCurrentDbClient } from '../client/current.js';
 import * as schema from '../schema.js';
 import { tx as runDbTx } from '../worker/opHandlers/tx.js';
-const send = vi.hoisted(() => vi.fn());
+import { setBroadcastTapListener } from '../../device-link/broadcast-tap.js';
+import { upsertProjectAlias, listProjectAliases } from '../ipc/projectAliases.js';
+const { send, owner } = vi.hoisted(() => ({ send: vi.fn(), owner: { generation: 1 } }));
+
+vi.mock('../../appSessionState.js', () => ({
+  activeOwnerScopeKey: () => `test-owner:${owner.generation}`,
+  getActiveDataOwnerPushStamp: () => ({ dataOwnerId: 'test-user', ownerGeneration: owner.generation }),
+  isAppSessionBoundaryPending: () => false,
+}));
 
 vi.mock('electron', () => ({
   BrowserWindow: {
@@ -16,13 +24,19 @@ vi.mock('electron', () => ({
     handle: vi.fn(),
   },
 }));
+vi.mock('../../security/trustedAppRenderer.js', () => ({
+  assertTrustedAppRendererEvent: vi.fn(),
+  isTrustedAppRendererWindow: () => true,
+}));
 
 describe('projectAliases localDb helpers', () => {
   let currentClient: DbClient | null = null;
   let rawDb: Database.Database | null = null;
 
   afterEach(() => {
+    setBroadcastTapListener(null);
     send.mockClear();
+    owner.generation = 1;
     if (currentClient) {
       clearCurrentDbClient(currentClient);
       currentClient = null;
@@ -34,7 +48,6 @@ describe('projectAliases localDb helpers', () => {
   it('normalizes project keys and trims aliases through the IPC-equivalent path', async () => {
     const client = createTestDbClient();
     setCurrentDbClient(client, 'test-user');
-    const { upsertProjectAlias, listProjectAliases } = await import('../ipc/projectAliases.js');
 
     const saved = await upsertProjectAlias('local:D:\\repo\\app\\', '  Main App  ');
     const rows = await listProjectAliases();
@@ -47,12 +60,19 @@ describe('projectAliases localDb helpers', () => {
   it('deletes the alias when the new value is blank', async () => {
     const client = createTestDbClient();
     setCurrentDbClient(client, 'test-user');
-    const { upsertProjectAlias, listProjectAliases } = await import('../ipc/projectAliases.js');
 
+    // #6916: persisted rename/clear must invalidate remote project lists, not only
+    // local windows. Existing DB cases did not observe the device-link boundary.
+    const pushed: unknown[] = [];
+    setBroadcastTapListener((channel, payload) => { pushed.push({ channel, payload }); });
     await upsertProjectAlias('local:/repo/app', 'App');
     await upsertProjectAlias('local:/repo/app', '   ');
 
     expect(await listProjectAliases()).toEqual([]);
+    expect(pushed).toEqual([
+      { channel: 'local-db:project-aliases:changed', payload: {} },
+      { channel: 'local-db:project-aliases:changed', payload: {} },
+    ]);
   });
 
   it('atomically replaces every Unicode Windows casing variant', async () => {
@@ -70,7 +90,6 @@ describe('projectAliases localDb helpers', () => {
         'Older alias',
         1_000,
       );
-    const { upsertProjectAlias, listProjectAliases } = await import('../ipc/projectAliases.js');
 
     await upsertProjectAlias('local:D:/ÉCOLE/PROJECT-A', 'Replacement', 'win32');
 
@@ -97,7 +116,6 @@ describe('projectAliases localDb helpers', () => {
         'Older alias',
         1_000,
       );
-    const { upsertProjectAlias, listProjectAliases } = await import('../ipc/projectAliases.js');
 
     await upsertProjectAlias('local:D:/ÉCOLE/PROJECT-A', '', 'win32');
 
@@ -107,7 +125,6 @@ describe('projectAliases localDb helpers', () => {
   it('uses the captured client and checks ownership before writing and broadcasting', async () => {
     const client = createTestDbClient();
     setCurrentDbClient(client, 'test-user');
-    const { upsertProjectAlias, listProjectAliases } = await import('../ipc/projectAliases.js');
     const assertCurrent = vi.fn();
     await upsertProjectAlias('local:/repo/app', 'App', process.platform, { client, assertCurrent });
     expect(assertCurrent).toHaveBeenCalledTimes(2);
@@ -120,6 +137,23 @@ describe('projectAliases localDb helpers', () => {
     const changedDuringWrite = vi.fn().mockImplementationOnce(() => {}).mockImplementationOnce(stale);
     await expect(upsertProjectAlias('local:/repo/app', 'Old account only', process.platform, { client, assertCurrent: changedDuringWrite })).rejects.toThrow('owner changed');
     expect(send).not.toHaveBeenCalled();
+  });
+
+  // #6916, unit: remote reads and broadcasts must not cross an account switch while awaiting DB work.
+  it('rejects stale reads and suppresses stale rename notifications after an owner switch', async () => {
+    const client = createTestDbClient();
+    setCurrentDbClient(client, 'test-user');
+    const pushed = vi.fn();
+    setBroadcastTapListener(pushed);
+    const rename = upsertProjectAlias('local:/repo/app', 'Old owner');
+    owner.generation++;
+    await rename;
+    expect(pushed).not.toHaveBeenCalled();
+    expect(send).not.toHaveBeenCalled();
+
+    const read = listProjectAliases();
+    owner.generation++;
+    await expect(read).rejects.toThrow('Owner changed');
   });
 
   function createTestDbClient(): DbClient {

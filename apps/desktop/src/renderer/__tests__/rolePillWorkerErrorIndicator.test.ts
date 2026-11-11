@@ -13,7 +13,7 @@ const source = readFileSync(
  *  - error 用带 "ERR" 字样的药丸徽章(WorkerErrorBadge)+ tab 整体描红表达, 不用红点
  *    (红点在多数 app 里=下级有新消息, 与"出错"语义不符)。
  *  - 绿色"完成未读"点保留(点=有新结果, 语义正确)。
- *  - 信号统一走 resolveWorkerListAttention，任务 error 与运行态 error 都保留。
+ *  - 信号统一走 resolveWorkerListAttention，本机只读任务 error，远程保留运行态 error。
  */
 describe('RolePillDropdown worker error indicator', () => {
   it('WorkerErrorBadge 是带 ERR 文案的实心药丸(i18n + error token), 不是红点', () => {

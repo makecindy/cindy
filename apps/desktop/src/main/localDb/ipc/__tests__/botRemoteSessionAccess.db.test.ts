@@ -59,12 +59,12 @@ describe('remote visibility batch SQL', () => {
   it('preserves ordinary, visible, hidden, archived, orphan and missing access semantics', async () => {
     const ids = ['ordinary', 'visible', 'hidden', 'archived', 'orphan', 'missing'];
     expect(Object.fromEntries(await readRemoteBotSessionAccessBatch(ids))).toEqual({
-      ordinary: 'ordinary', visible: 'visible', hidden: 'hidden', archived: 'hidden', orphan: 'hidden', missing: 'missing',
+      ordinary: 'ordinary', visible: 'visible', hidden: 'background', archived: 'background', orphan: 'background', missing: 'missing',
     });
     expect(Object.fromEntries(await readRemoteBotSessionAccessBatch(ids, 'bot'))).toEqual({
       ordinary: 'missing', visible: 'visible', hidden: 'hidden', archived: 'hidden', orphan: 'missing', missing: 'missing',
     });
-    expect(await readRemoteBotSessionAccess('hidden')).toBe('hidden');
+    expect(await readRemoteBotSessionAccess('hidden')).toBe('background');
   });
 
   it('returns 1,000 authorized tasks in order without a per-row RPC burst or interactive admission', async () => {

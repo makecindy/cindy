@@ -1,12 +1,150 @@
 // @vitest-environment jsdom
-import { act, cleanup, fireEvent, render, screen } from '@testing-library/react';
+import { act, cleanup, fireEvent, render, screen, within } from '@testing-library/react';
 import { afterEach, expect, it, vi } from 'vitest';
 import { MailHtmlPreview, safeMailHtml } from '../MailHtmlPreview';
 import { GhostCardForm } from '../GhostCardForm';
-import { mailInlineBindingScript, mailInlineRefreshScript } from '@cindy/maker-shared/mail-text-edit';
+import { ChatSessionFileProvider } from '../ChatSessionFileContext';
+import { openUrlInSidebarBrowser } from '@/features/right-sidebar/lib/openInSidebarBrowser';
+import { _resetLinkOpenPreferenceForTests } from '@/hooks/useLinkOpenPreference';
+import { mailInlineBindingScript, mailInlineRefreshScript, mailReadingColor, mailReadingThemeScript } from '@cindy/maker-shared/mail-text-edit';
+import { mailBodySerializer } from '../mailBodyEditing';
 vi.mock('react-i18next', () => ({ useTranslation: () => ({ t: (key: string) => key }) }));
 vi.mock('../ImageLightbox', () => ({ ImageLightbox: ({ src }: { src: string }) => <img alt="attachment-preview" src={src} /> }));
-afterEach(() => { cleanup(); vi.unstubAllGlobals(); });
+vi.mock('@/features/right-sidebar/lib/openInSidebarBrowser', () => ({ openUrlInSidebarBrowser: vi.fn(async () => undefined) }));
+vi.mock('@/features/right-sidebar/lib/mailPreview', () => ({ readMailPreview: vi.fn(async () => ({ supported: false })) }));
+afterEach(() => { cleanup(); vi.unstubAllGlobals(); vi.clearAllMocks(); localStorage.clear(); _resetLinkOpenPreferenceForTests(); });
+
+// Unit regressions: the reader previously had no opt-in and swallowed all links.
+// Exercise the actual iframe event listeners and shared chat navigation policy.
+it('loads external images only after a click and resets consent when changing mail', () => {
+  const first = '<p>First</p><img src="https://images.example.test/first.png">';
+  const second = '<p>Second</p><img src="https://images.example.test/second.png">';
+  const view = render(<MailHtmlPreview value={first} reading />);
+  const load = () => {
+    const frame = screen.getByTitle('chat.ghostCall.mailPreview') as HTMLIFrameElement;
+    const doc = frame.contentDocument!;
+    doc.open(); doc.write(frame.srcdoc); doc.close(); fireEvent.load(frame);
+    return { frame, doc };
+  };
+  const blocked = load();
+  expect(blocked.doc.querySelector('img')!.hasAttribute('src')).toBe(false);
+  fireEvent.click(screen.getByRole('button', { name: 'mailReader.showExternalImages' }));
+  const allowed = load();
+  expect(allowed.frame).not.toBe(blocked.frame);
+  expect(allowed.frame.getAttribute('sandbox')).toBe('allow-same-origin');
+  expect(allowed.doc.querySelector('img')!.getAttribute('src')).toBe('https://images.example.test/first.png');
+  expect(allowed.doc.querySelector('img')!.getAttribute('referrerpolicy')).toBe('no-referrer');
+  expect(screen.queryByRole('button', { name: 'mailReader.showExternalImages' })).toBeNull();
+  view.rerender(<MailHtmlPreview value={second} reading />);
+  expect(load().doc.querySelector('img')!.hasAttribute('src')).toBe(false);
+  view.rerender(<MailHtmlPreview value={first} reading />);
+  expect(screen.getByRole('button', { name: 'mailReader.showExternalImages' })).toBeTruthy();
+  view.rerender(<MailHtmlPreview value='<img src="data:image/png;base64,YQ==">' reading />);
+  expect(screen.queryByRole('button', { name: 'mailReader.showExternalImages' })).toBeNull();
+  view.rerender(<MailHtmlPreview value={first} onChange={vi.fn()} />);
+  expect(screen.queryByRole('button', { name: 'mailReader.showExternalImages' })).toBeNull();
+});
+
+it('opens reader links with chat preferences and modifiers but never navigates the iframe or editor', async () => {
+  const openExternal = vi.fn(async () => ({ success: true }));
+  vi.stubGlobal('electronAPI', { openExternal });
+  localStorage.setItem('chat.webLinkOpenPreference', 'sidebar');
+  _resetLinkOpenPreferenceForTests();
+  const value = '<a href="https://example.test/page"><b>Open</b></a><a href="javascript:alert(1)">Unsafe</a><a href="mailto:person@example.test">Email</a>';
+  const view = render(<ChatSessionFileProvider value={{ sessionId: 'mail-task', workingDir: '', origin: { kind: 'local' } }}>
+    <MailHtmlPreview value={value} reading />
+  </ChatSessionFileProvider>);
+  const frame = screen.getByTitle('chat.ghostCall.mailPreview') as HTMLIFrameElement;
+  const doc = frame.contentDocument!;
+  doc.open(); doc.write(frame.srcdoc); doc.close(); fireEvent.load(frame);
+  const click = (type: string, init: MouseEventInit = {}) => {
+    const event = new MouseEvent(type, { bubbles: true, cancelable: true, ...init });
+    doc.querySelector('b')!.dispatchEvent(event);
+    expect(event.defaultPrevented).toBe(true);
+  };
+  await act(async () => { click('click'); });
+  expect(openUrlInSidebarBrowser).toHaveBeenCalledWith('mail-task', 'https://example.test/page');
+  expect(openExternal).not.toHaveBeenCalled();
+  for (const modifiers of [{ ctrlKey: true }, { metaKey: true }, { shiftKey: true }]) {
+    await act(async () => { click('click', modifiers); });
+  }
+  await act(async () => { click('auxclick', { button: 1 }); });
+  expect(openExternal).toHaveBeenCalledTimes(4);
+  expect(openExternal).toHaveBeenLastCalledWith('https://example.test/page');
+  expect(doc.querySelectorAll('a')[1].hasAttribute('href')).toBe(false);
+  await act(async () => { fireEvent.click(doc.querySelectorAll('a')[1]); });
+  expect(openExternal).toHaveBeenCalledTimes(4);
+  for (const preference of ['sidebar', 'external']) {
+    localStorage.setItem('chat.webLinkOpenPreference', preference);
+    _resetLinkOpenPreferenceForTests();
+    await act(async () => {
+      fireEvent.click(doc.querySelectorAll('a')[2]);
+      doc.querySelectorAll('a')[2].dispatchEvent(new MouseEvent('auxclick', { bubbles: true, cancelable: true, button: 1 }));
+    });
+  }
+  expect(openExternal).toHaveBeenCalledTimes(4);
+  expect(openUrlInSidebarBrowser).toHaveBeenCalledTimes(1);
+  view.rerender(<ChatSessionFileProvider value={{ sessionId: 'mail-task', workingDir: '', origin: { kind: 'local' } }}>
+    <MailHtmlPreview value={value} reading onChange={vi.fn()} />
+  </ChatSessionFileProvider>);
+  await act(async () => { click('click'); });
+  expect(openUrlInSidebarBrowser).toHaveBeenCalledTimes(1);
+});
+
+// Reader links must remain visibly clickable despite sender CSS; preview paint
+// must also leave authored styles intact when this frame becomes an editor.
+// Unit regression for #7062: inert mailto/credential targets must not expose
+// keyboard/AT links; prior tests checked only paint and swallowed clicks.
+it('keeps link affordances and authored colors in both themes and restores source styles for editing', async () => {
+  const root = document.documentElement, originalClass = root.className, originalStyle = root.getAttribute('style');
+  const value = '<style>a{text-decoration:none!important}</style><p><a style="text-decoration:none!important;color:red" href="https://example.test/page">Web</a><a style="text-decoration:underline!important" href="mailto:person@example.test">Email</a><a role="link" href="https://user:pass@example.test">Credentials</a></p>';
+  const change = vi.fn();
+  try {
+    root.classList.remove('dark');
+    root.style.setProperty('--surface', '#181818');
+    root.style.setProperty('--text-primary', '#eeeeee');
+    const view = render(<MailHtmlPreview value={value} reading />);
+    const frame = screen.getByTitle('chat.ghostCall.mailPreview') as HTMLIFrameElement, doc = frame.contentDocument!;
+    doc.open(); doc.write(frame.srcdoc); doc.close(); fireEvent.load(frame);
+    for (const dark of [false, true, false]) {
+      await act(async () => { root.classList.toggle('dark', dark); });
+      const [web, email] = [...doc.querySelectorAll('a')];
+      expect(web.style.textDecoration).toBe('underline');
+      expect(web.style.getPropertyPriority('text-decoration')).toBe('important');
+      if (dark) expect(web.style.color).not.toBe('red');
+      else expect(web.style.color).toBe('red');
+      expect(web.querySelector('[data-cindy-mail-run]')).toBeNull();
+      expect(web.style.cursor).toBe('pointer');
+      expect(email.style.textDecoration).toBe('none');
+      expect(email.style.cursor).toBe('text');
+      expect(email.hasAttribute('href')).toBe(false);
+      expect(within(doc.body).getAllByRole('link')).toEqual([web]);
+    }
+    const targets = (html: string) => [...new DOMParser().parseFromString(html, 'text/html').querySelectorAll('a')]
+      .map(link => [link.getAttribute('href'), link.getAttribute('role')]);
+    const originalTargets = targets(value);
+    // Serialization restores a clone without reactivating the live reader.
+    expect(targets(mailBodySerializer(doc, value)()!.html)).toEqual(originalTargets);
+    expect(within(doc.body).getAllByRole('link')).toHaveLength(1);
+    view.rerender(<MailHtmlPreview value={value} reading onChange={change} />);
+    expect([...doc.querySelectorAll('a')].map(link => [link.getAttribute('href'), link.getAttribute('role')])).toEqual(originalTargets);
+    expect(doc.querySelector('a')!.style.textDecoration).toBe('none');
+    expect(doc.querySelector('a')!.style.color).toBe('red');
+    fireEvent.input(doc.querySelector('p')!);
+    const saved = change.mock.calls.at(-1)![0];
+    const link = new DOMParser().parseFromString(saved, 'text/html').querySelector('a')!;
+    expect(link.style.textDecoration).toBe('none');
+    expect(link.style.color).toBe('red');
+    expect(saved).not.toContain('cursor: pointer');
+    expect(targets(saved)).toEqual(originalTargets);
+    expect(saved).not.toContain('data-cindy-mail-authored-style');
+    view.rerender(<MailHtmlPreview value={value} reading />);
+    expect(within(doc.body).getAllByRole('link')).toHaveLength(1);
+  } finally {
+    cleanup(); root.className = originalClass;
+    if (originalStyle === null) root.removeAttribute('style'); else root.setAttribute('style', originalStyle);
+  }
+});
 // Chromium can expose a document before the srcdoc parser creates its body.
 // Account/CID updates during that interval must wait for load, then apply the
 // latest source without crashing the whole conversation reader.
@@ -84,7 +222,76 @@ it('lets the reader grow with long mail and late images while keeping chat cards
   fireEvent.load(card);
   expect(parseInt(card.style.height)).toBeLessThan(height);
 });
-// Dark neutral backgrounds merge into the reading surface. Light mode keeps
+// EasyVote regression: dim the colored paper without crushing its hue, keeping
+// text structure and original image pixels intact across host theme changes.
+it('adapts the reading palette without changing text structure or accumulating dimming', async () => {
+  const root = document.documentElement, oldClass = root.className, oldStyle = root.getAttribute('style');
+  try {
+    root.classList.add('dark');
+    root.style.setProperty('--surface', '#181818');
+    root.style.setProperty('--text-primary', '#eeeeee');
+    const source = '<body style="background:#f99a3c;color:black"><div style="background:white;border:5px solid white"><p style="margin:0;line-height:28px">\n    Alex\n  </p></div><section style="background:linear-gradient(#fff,#eee);color:#000">Gradient</section><img src="cid:logo"></body>';
+    const view = render(<MailHtmlPreview value={source} reading />);
+    const frame = screen.getByTitle('chat.ghostCall.mailPreview') as HTMLIFrameElement, doc = frame.contentDocument!;
+    doc.open(); doc.write(frame.srcdoc); doc.close(); fireEvent.load(frame);
+    const paragraph = doc.querySelector('p');
+    for (const dark of [true, false, true]) {
+      await act(async () => { root.classList.toggle('dark', dark); });
+      expect(doc.body.style.backgroundColor).toBe(dark ? 'rgb(129, 71, 14)' : 'rgb(249, 154, 60)');
+      expect(doc.body.style.color).toBe(dark ? 'rgb(238, 238, 238)' : 'black');
+      expect(doc.querySelector('div')!.style.backgroundColor).toBe(dark ? 'rgb(24, 24, 24)' : 'white');
+      expect(doc.querySelector('div')!.style.borderTopColor).toBe(dark ? 'rgb(24, 24, 24)' : 'white');
+      expect(doc.querySelector('img')!.getAttribute('style')).toBeNull();
+      // jsdom miscomputes !important longhands beside background shorthand;
+      // the Electron fixture separately checks the real computed background.
+      expect(doc.querySelector('section')!.style.backgroundImage).toBe(dark ? 'none' : 'linear-gradient(rgb(255, 255, 255), rgb(238, 238, 238))');
+      expect(doc.querySelector('[data-cindy-mail-run]')).toBeNull();
+      expect(doc.querySelector('p')).toBe(paragraph);
+      expect(doc.body.contentEditable).toBe('false');
+    }
+    view.rerender(<MailHtmlPreview value={source.replace('Alex', 'Sam')} reading />);
+    expect(frame.contentDocument).toBe(doc);
+    expect(doc.querySelector('p')!.textContent).toBe('\n    Sam\n  ');
+    expect(doc.body.style.backgroundColor).toBe('rgb(129, 71, 14)');
+  } finally {
+    cleanup(); root.className = oldClass;
+    if (oldStyle === null) root.removeAttribute('style'); else root.setAttribute('style', oldStyle);
+  }
+});
+it('uses the same reading palette in native injection and restores the original on light mode', () => {
+  const frame = document.createElement('iframe'); document.body.append(frame);
+  try {
+    const doc = frame.contentDocument!;
+    doc.body.innerHTML = '<p style="background:rgb(249,154,60);color:black;border:5px solid white">Ticket</p><section style="background:linear-gradient(#fff,#eee);color:#000">Gradient</section><img src="data:image/png;base64,YQ==">';
+    const original = doc.body.innerHTML;
+    const palette = { surface: '#181818', text: '#eeeeee' };
+    const apply = (dark: boolean) => new Function('document', 'getComputedStyle', mailReadingThemeScript(dark, palette))(doc, doc.defaultView!.getComputedStyle.bind(doc.defaultView));
+    apply(true);
+    const painted = doc.body.innerHTML;
+    expect(doc.querySelector('p')!.style.backgroundColor).toBe('rgb(129, 71, 14)');
+    expect(mailReadingColor('rgb(249, 154, 60)', 'background', palette)).toBe('rgba(129, 71, 14, 1)');
+    expect(doc.querySelector('p')!.style.color).toBe('rgb(238, 238, 238)');
+    expect(doc.querySelector('img')!.getAttribute('style')).toBeNull();
+    expect(doc.querySelector('section')!.style.backgroundImage).toBe('none');
+    apply(true);
+    expect(doc.body.innerHTML).toBe(painted);
+    apply(false);
+    expect(doc.body.innerHTML).toBe(original);
+    // The native literal must match the desktop function even in Hermes builds,
+    // where serializing the function itself would only return a bytecode stub.
+    for (const color of ['rgb(250, 250, 250)', 'rgb(24, 24, 24)', 'rgb(0, 140, 255)', 'rgb(250, 50, 150)', 'rgb(30, 180, 80)', 'rgba(100, 180, 220, 0.5)', 'rgba(0, 0, 0, 0)']) {
+      doc.body.innerHTML = `<p style="background-color:${color};color:${color}">Color</p>`;
+      const expected = doc.createElement('p');
+      expected.style.backgroundColor = mailReadingColor(color, 'background', palette);
+      expected.style.color = mailReadingColor(color, 'text', palette);
+      apply(true);
+      expect(doc.querySelector('p')!.style.backgroundColor).toBe(expected.style.backgroundColor);
+      expect(doc.querySelector('p')!.style.color).toBe(expected.style.color);
+      apply(false);
+    }
+  } finally { frame.remove(); }
+});
+// Dark neutral backgrounds merge into the composing surface. Light mode keeps
 // authored white paper intact so signature images/tables don't acquire seams.
 // Theme changes must never reload the preview or save a draft (unit regression).
 it('adapts authored mail colors to the app theme and restores them without changing content', async () => {

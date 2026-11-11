@@ -1,9 +1,10 @@
 import { describe, expect, it, vi } from 'vitest';
 import { withSendToSessionLock } from '../sendToSessionLock';
 import { createScheduledModelScope } from '../scheduledModelSelection';
-import { createBotModelRouteReconciler } from '../botModelRouteReconciler';
+import { createBotModelRouteApplier, createBotModelRouteReconciler } from '../botModelRouteReconciler';
 import type { BotModelRoute } from '../../../shared/botModelChain';
-import type { SessionRuntimeProfile } from '../sessionRuntimeControl';
+import { acceptSessionRuntimeMutation, cancelPendingSessionRuntimeMutation, clearSessionRuntimeControlState,
+  getSessionRuntimeControlSnapshot, type SessionRuntimeProfile } from '../sessionRuntimeControl';
 
 function harness() {
   let owner = 'owner-a';
@@ -20,6 +21,66 @@ function harness() {
 }
 
 describe('permanent Bot model selection', () => {
+  // Unit regression: ordinary sends/reopen must keep a verified group member
+  // after failover; the old fallback tests only covered runtime overrides.
+  it('keeps the selected group member across sends and reopen, but applies an explicit profile save', async () => {
+    const h = harness();
+    h.state.current = { agentKind: 'codex', model: 'luna', providerId: 'member-account',
+      agentDeviceId: 'member-device', effort: 'medium', fastMode: false };
+    h.state.chain[0]!.agentDeviceId = 'group-owner';
+    const deps = { ownerEpoch: () => 'owner', read: h.read, apply: h.apply,
+      readAppliedGroup: async () => ({ providerId: 'xd', groupDeviceId: 'group-owner' }) };
+    const reconcile = createBotModelRouteReconciler(deps);
+    await reconcile('canonical');
+    await reconcile('canonical');
+    await createBotModelRouteReconciler(deps)('canonical');
+    expect(h.apply).not.toHaveBeenCalled();
+    expect(await reconcile.preview('canonical')).toEqual(h.state.current);
+    await reconcile.profileChanged('canonical');
+    expect(h.apply).toHaveBeenCalledExactlyOnceWith('canonical', expect.objectContaining({
+      agentDeviceId: 'group-owner', providerId: 'xd',
+    }), h.state.current);
+  });
+  // 依据：Slack 反馈（2026-11-06）——例行任务里手动换的模型每跑一次就被改回伙伴的模型；
+  // 实测确认重开任务后内存记录丢失。最小失败输入：已套用配置后任务里换了模型，再发送 / 重启再发送。tier：unit。
+  it('keeps a model picked in the task across sends and restart until the configuration changes', async () => {
+    const h = harness();
+    const saved = new Map<string, string>();
+    const applied = { get: async (id: string) => saved.get(id), set: async (id: string, key: string) => { saved.set(id, key); } };
+    const deps = { ownerEpoch: () => 'owner', read: h.read, apply: h.apply, applied };
+    await createBotModelRouteReconciler(deps)('lane');
+    expect(h.apply).toHaveBeenCalledOnce();
+    h.apply.mockClear();
+    h.state.current = { agentKind: 'pi', model: 'picked', providerId: 'xd', effort: 'high', fastMode: false };
+    const reconcile = createBotModelRouteReconciler(deps);
+    await reconcile('lane');
+    await createBotModelRouteReconciler(deps)('lane');
+    expect(h.apply).not.toHaveBeenCalled();
+    h.state.chain = [{ harness: 'codex', model: 'sol', providerId: 'xd', effort: 'medium', fastMode: false }];
+    await reconcile('lane');
+    expect(h.apply).toHaveBeenCalledExactlyOnceWith('lane', expect.objectContaining({ model: 'sol' }), h.state.current);
+  });
+  // 实测（2026-11-07）：例行任务跑过一次后留下自动化临时路由，之后在任务里换模型，下次运行仍被改回。tier：unit。
+  it('keeps a task choice made after an automation ran on the task', async () => {
+    const h = harness();
+    const state = { ...h.state, scheduledModelBaseline: JSON.stringify({ ...h.state.current, scopeId: 'automation' }) as string | null };
+    const reconcile = createBotModelRouteReconciler({ ownerEpoch: () => 'owner', read: async () => state, apply: h.apply });
+    await reconcile('lane');
+    state.scheduledModelBaseline = null;
+    state.current = { agentKind: 'pi', model: 'picked', providerId: 'xd', effort: 'high', fastMode: false };
+    await reconcile.acceptTaskChoice('lane');
+    await reconcile('lane');
+    expect(h.apply).not.toHaveBeenCalled();
+  });
+  it.each(['model', 'group', 'unbound'] as const)('applies a changed %s instead of preserving an unrelated group member', async change => {
+    const h = harness();
+    h.state.current = { agentKind: 'codex', model: change === 'model' ? 'old-model' : 'luna',
+      providerId: 'member', agentDeviceId: 'device', effort: 'medium', fastMode: false };
+    const reconcile = createBotModelRouteReconciler({ ownerEpoch: () => 'owner', read: h.read, apply: h.apply,
+      readAppliedGroup: async () => change === 'unbound' ? null : { providerId: change === 'group' ? 'other' : 'xd', groupDeviceId: null } });
+    await reconcile('canonical');
+    expect(h.apply).toHaveBeenCalledExactlyOnceWith('canonical', expect.objectContaining({ model: 'luna', providerId: 'xd' }), h.state.current);
+  });
   // Real companion automation failed before queued dispatch because its ordinary
   // send reconciler switched back to the profile. Cover that consumer's decision,
   // including cold startup and companions following the global default (unit tier).
@@ -32,9 +93,14 @@ describe('permanent Bot model selection', () => {
     await reconcile('canonical');
     await createBotModelRouteReconciler(deps)('canonical');
     expect(h.apply).not.toHaveBeenCalled();
+    // The automation scope restores the task's own route itself; the unchanged
+    // configuration is not applied over it, but a changed one is.
     state.scheduledModelBaseline = null;
     await reconcile('canonical');
-    expect(h.apply).toHaveBeenCalledWith('canonical', expect.objectContaining({ model: 'luna' }), state.current);
+    expect(h.apply).not.toHaveBeenCalled();
+    state.chain = [{ harness: 'codex', model: 'sol', providerId: 'xd', effort: 'medium', fastMode: false }];
+    await reconcile('canonical');
+    expect(h.apply).toHaveBeenCalledWith('canonical', expect.objectContaining({ model: 'sol' }), state.current);
   });
   // Capability grants apply to the next ordinary turn, including after restart.
   // The temporary automation route must not choose a different Harness catalog.
@@ -70,21 +136,47 @@ describe('permanent Bot model selection', () => {
     expect(h.apply).not.toHaveBeenCalled();
     expect(await h.reconcile.preview('canonical')).toBeNull();
   });
-  it('replaces an automatic runtime route when the Bot follows Cindy default', async () => {
+  // Regression: unchanged Cindy defaults used to undo a successful fallback at
+  // each send. Exercise the real reconciler/preview in the unit tier; the old
+  // explicit-chain tests did not cover companions following the app default.
+  it('preserves an effective fallback across repeated sends when Cindy default is unchanged', async () => {
     const h = harness();
     const state = { ...h.state, hasRuntimeOverride: true, followsCindyDefault: true };
     const reconcile = createBotModelRouteReconciler({ ownerEpoch: () => 'owner', read: async () => state, apply: h.apply });
-    await expect(reconcile.preview('canonical')).resolves.toMatchObject({ model: 'luna', agentKind: 'codex' });
+    await expect(reconcile.preview('canonical')).resolves.toEqual(state.current);
     await reconcile('canonical');
-    expect(h.apply).toHaveBeenCalledWith('canonical', expect.objectContaining({ model: 'luna' }), state.current);
+    await reconcile('canonical');
+    await expect(reconcile.preview('canonical')).resolves.toEqual(state.current);
+    expect(h.apply).not.toHaveBeenCalled();
   });
-  it('replaces a pending non-default route even when the live model still equals Cindy default', async () => {
+  it('preserves a pending fallback even when the live model still equals Cindy default', async () => {
     const h = harness();
     const current = { agentKind: 'codex' as const, model: 'luna', providerId: 'xd', effort: 'medium' as const, fastMode: false };
     const state = { ...h.state, current, next: { ...current, model: 'sol' }, hasRuntimeOverride: true, followsCindyDefault: true };
     const reconcile = createBotModelRouteReconciler({ ownerEpoch: () => 'owner', read: async () => state, apply: h.apply });
+    await expect(reconcile.preview('canonical')).resolves.toEqual(state.next);
     await reconcile('canonical');
-    expect(h.apply).toHaveBeenCalledWith('canonical', current, current);
+    expect(h.apply).not.toHaveBeenCalled();
+  });
+  it.each([
+    { followsCindyDefault: true, pending: false },
+    { followsCindyDefault: true, pending: true },
+    { followsCindyDefault: false, pending: false },
+    { followsCindyDefault: false, pending: true },
+  ])('applies an equal chain after changing its configuration source (default=$followsCindyDefault, pending=$pending)', async ({ followsCindyDefault, pending }) => {
+    const h = harness();
+    h.state.hasRuntimeOverride = true;
+    h.state.followsCindyDefault = !followsCindyDefault;
+    if (pending) h.state.next = { ...h.state.current, model: 'pending-fallback' };
+    await h.reconcile('canonical');
+    expect(h.apply).not.toHaveBeenCalled();
+    // Global Restore defaults changes this flag even when the recommended chain
+    // equals the saved custom chain; no per-profile invalidation is emitted.
+    h.state.followsCindyDefault = followsCindyDefault;
+    const expected = expect.objectContaining({ agentKind: 'codex', model: 'luna' });
+    await expect(h.reconcile.preview('canonical')).resolves.toEqual(expected);
+    await h.reconcile('canonical');
+    expect(h.apply).toHaveBeenCalledExactlyOnceWith('canonical', expected, h.state.current);
   });
   it('reads a changed default after acquiring the ordinary send lock without deadlocking a lock holder', async () => {
     const h = harness();
@@ -130,6 +222,40 @@ describe('permanent Bot model selection', () => {
     expect(await h.reconcile.preview('canonical')).toEqual(h.state.next);
     expect(h.apply).not.toHaveBeenCalled();
   });
+  describe.each(['paused', 'no-enabled-model'] as const)('after a temporarily %s profile', (unavailable) => {
+    it.each([
+      { pending: false, changed: false },
+      { pending: true, changed: false },
+      { pending: false, changed: true },
+      { pending: true, changed: true },
+    ])('compares the last known default chain (pending=$pending, changed=$changed)', async ({ pending, changed }) => {
+      const h = harness();
+      h.state.followsCindyDefault = true;
+      h.state.hasRuntimeOverride = true;
+      if (pending) h.state.next = { ...h.state.current, model: 'pending-fallback' };
+      await h.reconcile('canonical');
+      const chain = h.state.chain;
+      if (unavailable === 'paused') {
+        h.read.mockResolvedValueOnce(null);
+        await h.reconcile('canonical');
+      } else {
+        h.state.chain = [];
+        await expect(h.reconcile('canonical')).rejects.toThrow('[PRECONDITION_FAILED]');
+      }
+      expect(h.apply).not.toHaveBeenCalled();
+      h.state.chain = changed ? [{ ...chain[0]!, model: 'new-primary', providerId: 'new-source' }] : chain;
+      const expected = changed
+        ? expect.objectContaining({ agentKind: 'codex', model: 'new-primary', providerId: 'new-source' })
+        : h.state.next ?? h.state.current;
+      await expect(h.reconcile.preview('canonical')).resolves.toEqual(expected);
+      await h.reconcile('canonical');
+      if (changed) {
+        expect(h.apply).toHaveBeenCalledExactlyOnceWith('canonical', expected, h.state.current);
+      } else {
+        expect(h.apply).not.toHaveBeenCalled();
+      }
+    });
+  });
   it('previews a draft and then saved chain without consuming the next-send change', async () => {
     const h = harness();
     h.state.hasRuntimeOverride = true;
@@ -173,15 +299,17 @@ describe('permanent Bot model selection', () => {
     await h.reconcile('canonical');
     expect(h.apply).toHaveBeenCalledWith('canonical', expect.objectContaining({ agentKind: 'codex', model: 'luna' }), h.state.current);
   });
-  it('preserves an automatic runtime override while the configured chain stays unchanged', async () => {
+  it.each([false, true])('preserves fallback until the configured chain changes (default=%s)', async (followsCindyDefault) => {
     const h = harness();
+    h.state.followsCindyDefault = followsCindyDefault;
     h.state.hasRuntimeOverride = true;
     await h.reconcile('canonical');
     await h.reconcile('canonical');
     expect(h.apply).not.toHaveBeenCalled();
     h.state.chain[0].model = 'new-model';
     await h.reconcile('canonical');
-    expect(h.apply).toHaveBeenCalledOnce();
+    expect(h.apply).toHaveBeenCalledExactlyOnceWith('canonical',
+      expect.objectContaining({ model: 'new-model' }), h.state.current);
   });
   it('does not interfere with ordinary or frozen background tasks', async () => {
     const apply = vi.fn();
@@ -205,8 +333,9 @@ describe('permanent Bot model selection', () => {
   });
 });
 
-it('applies an explicit settings save immediately even while an earlier fallback is effective', async () => {
+it.each([false, true])('applies an explicit save even while fallback is effective (default=%s)', async (followsCindyDefault) => {
   const h = harness();
+  h.state.followsCindyDefault = followsCindyDefault;
   h.state.hasRuntimeOverride = true;
   await h.reconcile.profileChanged('canonical');
   expect(h.apply).toHaveBeenCalledWith('canonical', expect.objectContaining({ model: 'luna', agentKind: 'codex' }), h.state.current);
@@ -324,7 +453,9 @@ it.each(['restart', 'changed-chain', 'pending-route', 'follow-default'] as const
     }
     const baseline = h.baseline();
     await h.reconcile('canonical');
-    expect(h.apply).toHaveBeenCalledOnce();
+    // Unchanged defaults now preserve the runtime override; scope.restore must
+    // still restore the saved fallback without needing an intermediate switch.
+    expect(h.apply).toHaveBeenCalledTimes(scenario === 'follow-default' ? 0 : 1);
     expect(h.onSelectionAccepted).not.toHaveBeenCalled();
     expect(h.baseline()).toBe(baseline);
     await h.scope.restore('canonical', 'automation');
@@ -464,4 +595,52 @@ it('rereads a newer durable save when acceptance loses its database compare-and-
   expect(h.state.current.model).toBe('newest-model');
   expect(accepted).toHaveBeenCalledTimes(2);
   expect(baseline).toBe('');
+});
+
+// #7241 / #7177, unit tier: the real runtime control queues a same-Harness
+// selection outside the Harness-switch registry. Earlier tests only rejected
+// staging itself; they did not exercise successful staging that remains pending.
+it.each(['same-engine', 'cross-engine'] as const)('keeps accepted recovery until a deferred %s choice lands', async kind => {
+  const sessionId = `pending-bot-route-${kind}`;
+  const current: SessionRuntimeProfile = { agentKind: 'codex', model: 'old', providerId: 'xd', effort: 'medium', fastMode: false };
+  let baseline: string | null = JSON.stringify({ ...current, scopeId: 'legacy', pendingBotProfileVersion: 2 });
+  const original = baseline;
+  let deferred = true;
+  let harnessPending = false;
+  let effective = current;
+  const apply = createBotModelRouteApplier({
+    stage: async (_id, route) => {
+      const profile: SessionRuntimeProfile = { ...route, effort: 'medium' };
+      if (kind === 'same-engine') acceptSessionRuntimeMutation({ sessionId, source: 'agent', profile, deferred });
+      else harnessPending = deferred;
+      if (!deferred) effective = profile;
+    },
+    isIdle: () => !deferred,
+    applyPendingSwitch: async () => {},
+    hasPendingSwitch: () => harnessPending,
+    onApplied: async () => { baseline = null; },
+  });
+  const reconcile = createBotModelRouteReconciler({ ownerEpoch: () => 'owner',
+    read: async () => ({ chain: [{ harness: kind === 'same-engine' ? 'codex' : 'pi',
+      model: 'saved', providerId: 'xd', effort: 'medium', fastMode: false }],
+      current: effective, hasRuntimeOverride: true, scheduledModelBaseline: baseline }),
+    apply, onSelectionAccepted: async () => { baseline = null; },
+  });
+  try {
+    await expect(reconcile(sessionId)).rejects.toThrow('Saved companion route is still pending');
+    expect(baseline).toBe(original);
+    // A failed safe-boundary apply cancels its pending mutation, not the saved
+    // permanent choice. The next reconciliation must still be able to retry.
+    const pending = getSessionRuntimeControlSnapshot(sessionId).pending;
+    if (pending) cancelPendingSessionRuntimeMutation(sessionId, pending.generation);
+    harnessPending = false;
+    expect(effective.model).toBe('old');
+    expect(baseline).toBe(original);
+    deferred = false;
+    await reconcile(sessionId);
+    expect(effective.model).toBe('saved');
+    expect(baseline).toBeNull();
+  } finally {
+    clearSessionRuntimeControlState(sessionId);
+  }
 });

@@ -52,12 +52,12 @@ vi.mock('../../maker-host/anthropic-responses-bridge-host.js', () => ({
   getChatgptBridgeAuthForDispatch: vi.fn(),
 }));
 
-vi.mock('../../maker-host/grok-oauth-login.js', () => ({
+vi.mock('../../maker-host/grok-oauth-login.desktop.js', () => ({
   getGrokAccessToken: vi.fn(),
   getGrokOAuthCredentialGeneration: vi.fn(() => 0),
 }));
 
-vi.mock('../../maker-host/generic-oauth.js', () => ({
+vi.mock('../../maker-host/generic-oauth.desktop.js', () => ({
   readCachedGenericOAuthAccessToken: vi.fn(),
 }));
 
@@ -112,8 +112,8 @@ import { fetch as undiciFetch } from 'undici';
 import { getAppCapabilities } from '../../appCapabilities.js';
 import { readClaudeApiKey } from '../../maker-host/auth-adapters.js';
 import { getChatgptBridgeAuth, getChatgptBridgeAuthForDispatch } from '../../maker-host/anthropic-responses-bridge-host.js';
-import { getGrokAccessToken, getGrokOAuthCredentialGeneration } from '../../maker-host/grok-oauth-login.js';
-import { readCachedGenericOAuthAccessToken } from '../../maker-host/generic-oauth.js';
+import { getGrokAccessToken, getGrokOAuthCredentialGeneration } from '../../maker-host/grok-oauth-login.desktop.js';
+import { readCachedGenericOAuthAccessToken } from '../../maker-host/generic-oauth.desktop.js';
 import {
   getActiveCatalog,
   isXdGatewayPaymentRequiredRoute,
@@ -1118,7 +1118,8 @@ describe('utility one-shot candidates', () => {
     });
   });
 
-  it('routes an explicitly selected custom provider to its own Codex endpoint', async () => {
+  it.each(['https://custom.example/v1', 'https://openrouter.ai/api/v1'])
+  ('routes an explicit auxiliary selection to %s with the application identity', async upstream => {
     activeCatalog.mockReturnValue({
       providers: [{
         id: 'tapsvc',
@@ -1128,7 +1129,7 @@ describe('utility one-shot candidates', () => {
         auth: { method: 'apiKey' },
         routing: {
           codex: {
-            upstream: 'https://custom.example/v1',
+            upstream,
             authStrategy: 'api-key-header',
             headerOverride: { 'X-Tenant': 'tenant-a' },
           },
@@ -1158,7 +1159,7 @@ describe('utility one-shot candidates', () => {
       transport: 'codex-responses',
     });
     expect(fetchMock).toHaveBeenCalledWith(
-      'https://custom.example/v1/responses',
+      `${upstream}/responses`,
       expect.objectContaining({
         headers: expect.objectContaining({
           Authorization: 'Bearer custom-secret',
@@ -1169,6 +1170,9 @@ describe('utility one-shot candidates', () => {
     expect(JSON.parse(String(vi.mocked(fetchMock).mock.calls[0]?.[1]?.body))).toMatchObject({
       model: 'custom-mini',
     });
+    const headers = new Headers(fetchMock.mock.calls[0][1]?.headers as HeadersInit);
+    expect(headers.get('http-referer')).toBe(upstream.includes('openrouter.ai') ? 'https://cindy.app' : null);
+    expect(headers.get('x-openrouter-title')).toBe(upstream.includes('openrouter.ai') ? 'Cindy' : null);
   });
 
   it('dispatches a saved Pi-only Go Flash auxiliary selection without launching an agent', async () => {
@@ -2996,9 +3000,10 @@ describe('utility one-shot candidates', () => {
   });
 
   it.each([
-    { candidateIndex: 1, model: 'gpt-5.4-nano' },
-    { candidateIndex: 2, model: 'gpt-6-luna' },
-  ])('uses $model with a tool-free subscription Responses body', async ({ candidateIndex, model }) => {
+    // Codex's review model is reachable for ChatGPT accounts without being a catalog entry.
+    { candidateIndex: 1, model: 'codex-auto-review', catalogModel: 'gpt-5.4-nano' },
+    { candidateIndex: 2, model: 'gpt-6-luna', catalogModel: 'gpt-6-luna' },
+  ])('uses $model with a tool-free subscription Responses body', async ({ candidateIndex, model, catalogModel }) => {
     activeCatalog.mockReturnValue({
       providers: [{
         id: 'openai',
@@ -3013,7 +3018,7 @@ describe('utility one-shot candidates', () => {
           },
         },
         models: {
-          codex: [{ id: model, name: model, contextWindow: 272_000 }],
+          codex: [{ id: catalogModel, name: catalogModel, contextWindow: 272_000 }],
         },
       }],
     } as never);

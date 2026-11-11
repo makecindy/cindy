@@ -1,3 +1,4 @@
+import { configureUserDataDir } from '../../userDataPath.js';
 import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import os, { tmpdir } from 'node:os';
 import path from 'node:path';
@@ -34,9 +35,11 @@ vi.mock('../../agent-binaries/index.js', () => ({
 
 vi.mock('../runtime-configs.js', () => ({
   getRipgrepBinaryPath: () => state.ripgrepPath,
+  // Cache route identities now resolve the real upstream even for local Pi.
+  claudeUpstreamEndpoint: () => 'https://upstream.test/v1',
 }));
 
-vi.mock('../../mcp-integrations/piEnvironment.js', () => ({
+vi.mock('../../mcp-integrations/piEnvironment.desktop.js', () => ({
   getPiExtraSpawnConfig: async () => ({ mcpBridge: null, mcpEnv: {} }),
 }));
 
@@ -55,7 +58,7 @@ vi.mock('../claude-native-auth.js', () => ({
   hasClaudeNativeLoginUnbound: () => false,
 }));
 
-vi.mock('../grok-oauth-login.js', () => ({
+vi.mock('../grok-oauth-login.desktop.js', () => ({
   hasGrokOAuthLogin: () => false,
 }));
 
@@ -162,6 +165,7 @@ describe('buildPiAgent roster prompt assembly', () => {
     writeFileSync(path.join(process.env.PI_CODING_AGENT_DIR!, 'AGENTS.md'), 'host global context canary');
     workingDir = path.join(root, 'workspace');
     state.userDataPath = path.join(root, 'user-data');
+    configureUserDataDir(state.userDataPath);
     state.binaryPath = path.join(root, 'pi');
     state.ripgrepPath = path.join(root, 'rg');
     mkdirSync(workingDir, { recursive: true });

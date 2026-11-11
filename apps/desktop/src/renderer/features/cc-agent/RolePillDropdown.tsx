@@ -25,33 +25,32 @@ import { useReducedMotion } from '@/hooks/useReducedMotion';
 import { useConfirmDialog } from '@/components/ui/confirm-dialog-provider';
 import { Tip } from '@/components/ui/tooltip';
 import { AttentionDot } from '@/components/sidebar/AttentionDot';
-import { useSessionsAttentionKindMap, type AttentionKind } from '@/lib/sessionAttentionStore';
+import type { AttentionKind } from '@/lib/sessionAttentionStore';
+import { isLocalOrcaWorkerTask, localOrcaWorkerSessionIds, useOrcaWorkerTaskAttentionKinds } from './lib/orcaWorkerTaskAttention';
 import { VendorIcon, agentKindToVendor } from '@/components/sidebar/VendorIcon';
 import type { WorkerInfo } from './hooks/useWorkers';
 import type { WorkerExecutionDevice } from './hooks/workerProjectionStore';
 import { shouldShowWorkerLabel } from './workerLabel';
 import { clearWorkerAttention, useWorkerAttentionSnapshot } from './lib/workerAttentionStore';
 
-/** 列表保留运行态 error 的旧表达，并补读任务告警；完成未读仍只认 Worker 自己的未读记录。 */
+/** 本机错误只跟任务提醒；无法读取本机提醒的 Worker 才用运行态 error。 */
 export function resolveWorkerListAttention(
-  worker: Pick<WorkerInfo, 'status' | 'executionDevice'>,
+  worker: Pick<WorkerInfo, 'status' | 'sessionId' | 'executionDevice'>,
   taskKind: AttentionKind | undefined,
   focused: boolean,
   hasUnread: boolean,
+  leadSessionId?: string,
 ): AttentionKind | undefined {
-  const localKind = worker.executionDevice ? undefined : taskKind;
-  if (worker.status === 'error' || localKind === 'error') return 'error';
+  const isLocal = isLocalOrcaWorkerTask(worker, leadSessionId);
+  const localKind = isLocal ? taskKind : undefined;
+  if (localKind === 'error' || (!isLocal && worker.status === 'error')) return 'error';
   if (localKind === 'awaiting') return 'awaiting';
   return !focused && hasUnread ? 'done' : undefined;
 }
 
 /** 只订阅本列表本机任务的子映射：底层以 primitive key 比较，其他任务的广播不会重渲染列表。 */
-function useWorkerTaskAttention(workers: readonly WorkerInfo[]) {
-  return useSessionsAttentionKindMap(
-    workers
-      .filter((worker) => !worker.executionDevice && !isRemoteSessionSticky(worker.sessionId))
-      .map((worker) => worker.sessionId),
-  );
+function useWorkerTaskAttention(workers: readonly WorkerInfo[], leadSessionId?: string) {
+  return useOrcaWorkerTaskAttentionKinds(localOrcaWorkerSessionIds(workers, leadSessionId));
 }
 
 // Strip provider prefix: 'deepseek/deepseek-v4-pro' → 'deepseek-v4-pro'.
@@ -177,7 +176,7 @@ function WorkerAvatar({
 }) {
   const { t } = useTranslation();
   const vendor = agentKindToVendor(agent);
-  const isError = attentionKind === 'error' || status === 'error';
+  const isError = attentionKind === 'error';
   const dotTone =
     !isError && (attentionKind === 'awaiting' || attentionKind === 'done')
       ? attentionKind
@@ -209,7 +208,7 @@ function WorkerAvatar({
   );
 }
 
-// WorkerErrorBadge — worker 处于终态 error 时的显式标记药丸(ERR)。刻意不用红点:
+// WorkerErrorBadge — worker 有出错提醒时的显式标记药丸(ERR)。刻意不用红点:
 // 红点在多数 app 里=下级有新消息, 与"出错"语义不符。为醒目做成实心饱和红底 + 浅色字
 // (bg=--error-fg 饱和红, text=--error-bg 近白/深红) —— 比"软红底+红字"更抢眼, 且两个
 // 都是现成 error token、双主题对比度均已定义, 无需新增"恒定白字"token。位置/偏移由调用方
@@ -393,6 +392,7 @@ function WorkerSummary({
 }
 
 export interface RolePillDropdownProps {
+  leadSessionId?: string;
   worker: WorkerInfo | null;
   workers: WorkerInfo[];
   selectedWorkerId: string | null;
@@ -527,6 +527,7 @@ function useAnchorMenuMaxWidth(
 }
 
 function WorkerLayoutMenu({
+  leadSessionId,
   layout,
   onLayoutChange,
   workers,
@@ -536,6 +537,7 @@ function WorkerLayoutMenu({
   onEditWorker,
   clearAttentionWhenVisible = true,
 }: {
+  leadSessionId?: string;
   layout: WorkerListLayout;
   onLayoutChange: (layout: WorkerListLayout) => void;
   workers: WorkerInfo[];
@@ -553,7 +555,7 @@ function WorkerLayoutMenu({
   const hoverOpenTimerRef = useRef<number | null>(null);
   const hoverCloseTimerRef = useRef<number | null>(null);
   const attention = useWorkerAttentionSnapshot();
-  const taskAttention = useWorkerTaskAttention(workers);
+  const taskAttention = useWorkerTaskAttention(workers, leadSessionId);
   const requestArchiveWorker = useRequestArchiveWorker(onArchiveWorker);
   const totalWorkerCount = workers.length;
   const runningCount = workers.filter((item) => isRunningWorkerStatus(item.status)).length;
@@ -689,6 +691,7 @@ function WorkerLayoutMenu({
                     taskAttention.get(w.sessionId),
                     isFocused,
                     attention.has(w.workerId),
+                    leadSessionId,
                   );
                   const isError = attentionKind === 'error';
                   return (
@@ -871,6 +874,7 @@ function CreateWorkerTabButton({
 }
 
 function WorkerTabsList({
+  leadSessionId,
   workers,
   selectedWorkerId,
   onSwitchFocus,
@@ -878,6 +882,7 @@ function WorkerTabsList({
   onEditWorker,
   clearAttentionWhenVisible = true,
 }: {
+  leadSessionId?: string;
   workers: WorkerInfo[];
   selectedWorkerId: string | null;
   onSwitchFocus: (workerId: string) => void;
@@ -890,7 +895,7 @@ function WorkerTabsList({
   const focusedTabRef = useRef<HTMLButtonElement | null>(null);
   const [scrollState, setScrollState] = useState({ left: false, right: false });
   const attention = useWorkerAttentionSnapshot();
-  const taskAttention = useWorkerTaskAttention(workers);
+  const taskAttention = useWorkerTaskAttention(workers, leadSessionId);
   const reducedMotion = useReducedMotion();
   const requestArchiveWorker = useRequestArchiveWorker(onArchiveWorker);
   const focusedWorkerId =
@@ -998,6 +1003,7 @@ function WorkerTabsList({
             taskAttention.get(worker.sessionId),
             selected,
             attention.has(worker.workerId),
+            leadSessionId,
           );
           // error 终态整体描红: 选中态保留 accent 底 (标明当前 tab) 但换红边, 非选中态
           // 走软红底 + 红边 + 红字, 让出错 worker 的 tab 一眼可定位。
@@ -1007,7 +1013,7 @@ function WorkerTabsList({
               key={worker.workerId}
               side="bottom"
               delay={250}
-              contentClassName="min-w-[220px] max-w-[260px] border-[var(--border-default)] bg-[var(--surface-elevated)] text-[var(--text-primary)] shadow-[var(--shadow-menu)]"
+              contentClassName="min-w-[220px] max-w-[260px] border-[var(--border-default)] bg-[var(--surface-elevated)] text-[var(--text-primary)] shadow-[shadow:var(--shadow-menu)]"
               text={
                 <div className="py-0.5">
                   <WorkerSummary worker={worker} attentionKind={attentionKind} />
@@ -1141,6 +1147,7 @@ function WorkerTabsList({
 }
 
 export function WorkerListToolbar({
+  leadSessionId,
   worker,
   workers,
   selectedWorkerId,
@@ -1179,6 +1186,7 @@ export function WorkerListToolbar({
           onOpenSettings={onOpenSettings}
         />
         <WorkerLayoutMenu
+          leadSessionId={leadSessionId}
           layout={layout}
           onLayoutChange={handleLayoutChange}
           workers={workers}
@@ -1205,6 +1213,7 @@ export function WorkerListToolbar({
             onOpenSettings={onOpenSettings}
           />
           <WorkerTabsList
+            leadSessionId={leadSessionId}
             workers={workers}
             selectedWorkerId={selectedWorkerId}
             onSwitchFocus={onSwitchFocus}
@@ -1224,6 +1233,7 @@ export function WorkerListToolbar({
           />
           <div className="min-w-0 flex-1">
             <RolePillDropdown
+              leadSessionId={leadSessionId}
               worker={worker}
               workers={workers}
               selectedWorkerId={selectedWorkerId}
@@ -1237,6 +1247,7 @@ export function WorkerListToolbar({
         </>
       )}
       <WorkerLayoutMenu
+        leadSessionId={leadSessionId}
         layout={layout}
         onLayoutChange={handleLayoutChange}
         workers={workers}
@@ -1252,6 +1263,7 @@ export function WorkerListToolbar({
 }
 
 export function RolePillDropdown({
+  leadSessionId,
   worker,
   workers,
   selectedWorkerId,
@@ -1268,7 +1280,7 @@ export function RolePillDropdown({
   const hoverOpenTimerRef = useRef<number | null>(null);
   const hoverCloseTimerRef = useRef<number | null>(null);
   const attention = useWorkerAttentionSnapshot();
-  const taskAttention = useWorkerTaskAttention(workers);
+  const taskAttention = useWorkerTaskAttention(workers, leadSessionId);
   const requestArchiveWorker = useRequestArchiveWorker(onArchiveWorker);
   const open = openMode !== null;
   const menuPlacement = useAnchorMenuMaxHeight(triggerRef, open);
@@ -1358,9 +1370,10 @@ export function RolePillDropdown({
     taskAttention.get(worker.sessionId),
     true,
     false,
+    leadSessionId,
   );
   const workerAttention = workers.map((item) =>
-    resolveWorkerListAttention(item, taskAttention.get(item.sessionId), true, false),
+    resolveWorkerListAttention(item, taskAttention.get(item.sessionId), true, false, leadSessionId),
   );
   const triggerAttention =
     currentAttention === 'error' || workerAttention.includes('error')
@@ -1459,6 +1472,7 @@ export function RolePillDropdown({
                 taskAttention.get(w.sessionId),
                 isFocused,
                 attention.has(w.workerId),
+                leadSessionId,
               );
               const isError = attentionKind === 'error';
               return (

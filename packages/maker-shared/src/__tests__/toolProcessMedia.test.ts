@@ -24,6 +24,41 @@ describe("tool process media", () => {
       { kind: "image", url: "data:image/png;base64,aW1hZ2U=" },
     ]);
   });
+  it("preserves sibling metadata and media references while truncating long structured results", () => {
+    const refs = [
+      { kind: 'image' as const, url: 'cindy-media://blobs/' + 'a'.repeat(64) + '.png' },
+    ];
+    const input = JSON.stringify({
+      ok: true,
+      text: 'x'.repeat(9000),
+      xdt_video_url: 'https://example.com/final.mp4',
+    });
+    const output = withToolProcessMedia(input, refs);
+    const payload = JSON.parse(output);
+
+    expect(new TextEncoder().encode(output).length).toBeLessThanOrEqual(8192);
+    expect(payload.ok).toBe(true);
+    expect(payload.xdt_video_url).toBe('https://example.com/final.mp4');
+    expect(payload.text.length).toBeLessThan(9000);
+    expect(payload.text).toMatch(/^x+$/);
+    expect('x'.repeat(9000).startsWith(payload.text)).toBe(true);
+    expect(readToolProcessMedia(output)).toEqual(refs);
+  });
+
+  it('falls back to a bounded text-only result when metadata alone exceeds the budget', () => {
+    const refs = [
+      { kind: 'image' as const, url: 'cindy-media://blobs/' + 'a'.repeat(64) + '.png' },
+    ];
+    const input = JSON.stringify({ text: 'note', data: 'x'.repeat(9000) });
+    const output = withToolProcessMedia(input, refs);
+    const payload = JSON.parse(output);
+
+    expect(new TextEncoder().encode(output).length).toBeLessThanOrEqual(8192);
+    expect(payload.data).toBeUndefined();
+    expect(payload.text).toBe('');
+    expect(readToolProcessMedia(output)).toEqual(refs);
+  });
+
   it("round trips media beside existing delivered results", () => {
     const refs = [
       {

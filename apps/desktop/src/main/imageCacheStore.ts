@@ -36,7 +36,6 @@
  * must migrate to `{id}.{ext}` directly under the root to be xdt-image://-renderable.
  */
 
-import { app } from 'electron';
 import path from 'node:path';
 import fs from 'node:fs/promises';
 import { existsSync, readdirSync } from 'node:fs';
@@ -45,9 +44,6 @@ import {
   attachmentExtension,
   isDangerousAttachmentName,
 } from '../shared/attachmentSafety';
-
-const SCHEME = 'xdt-image';
-const META_SUFFIX = '.xdt-meta.json';
 
 export type ImageCacheLifecycle = 'draft' | 'committed';
 
@@ -75,17 +71,23 @@ export interface SweepDraftImagesResult {
  * BEFORE treating the hostname as a session ID. Add new entries here when an
  * integration needs to expose its own cache namespace under xdt-image://.
  */
+
+/** The existing image-cache format; each launcher supplies its own profile root. */
+export function createImageCacheStore(getUserDataDir: () => string) {
+const SCHEME = 'xdt-image';
+const META_SUFFIX = '.xdt-meta.json';
+
 const RESERVED_HOSTS: Record<string, () => string> = {
   'feishu-media-images': () =>
-    path.join(app.getPath('userData'), 'cc-agent', 'feishu-media', 'images'),
+    path.join(getUserDataDir(), 'cc-agent', 'feishu-media', 'images'),
   'feishu-media-files': () =>
-    path.join(app.getPath('userData'), 'cc-agent', 'feishu-media', 'files'),
+    path.join(getUserDataDir(), 'cc-agent', 'feishu-media', 'files'),
   'lizi-art-media-images': () =>
-    path.join(app.getPath('userData'), 'cc-agent', 'lizi-art-media', 'images'),
+    path.join(getUserDataDir(), 'cc-agent', 'lizi-art-media', 'images'),
   'lizi-confluence-attachments': () =>
-    path.join(app.getPath('userData'), 'cc-agent', 'lizi-confluence', 'attachments'),
+    path.join(getUserDataDir(), 'cc-agent', 'lizi-confluence', 'attachments'),
   'lizi-jira-attachments': () =>
-    path.join(app.getPath('userData'), 'cc-agent', 'lizi-jira', 'attachments'),
+    path.join(getUserDataDir(), 'cc-agent', 'lizi-jira', 'attachments'),
 };
 
 const MIME_BY_EXT: Record<string, string> = {
@@ -112,11 +114,11 @@ const SAFE_ATTACHMENT_EXT_RE = /^\.[a-z0-9][a-z0-9+_-]{0,23}$/;
 // Path helpers
 // ---------------------------------------------------------------------------
 
-export function getCacheRoot(): string {
-  return path.join(app.getPath('userData'), 'cc-agent', 'images');
+function getCacheRoot(): string {
+  return path.join(getUserDataDir(), 'cc-agent', 'images');
 }
 
-export function getSessionDir(sessionId: string): string {
+function getSessionDir(sessionId: string): string {
   return path.join(getCacheRoot(), sessionId);
 }
 
@@ -291,7 +293,7 @@ async function writeImageMeta(params: {
 // Write APIs
 // ---------------------------------------------------------------------------
 
-export async function copyFromPath(params: {
+async function copyFromPath(params: {
   sessionId: string;
   sourcePath: string;
   originalName: string;
@@ -312,7 +314,7 @@ export async function copyFromPath(params: {
   return { url: buildUrl(sessionId, filename), filename };
 }
 
-export async function writeBuffer(params: {
+async function writeBuffer(params: {
   sessionId: string;
   buffer: Uint8Array;
   mimeType: string;
@@ -334,7 +336,7 @@ export async function writeBuffer(params: {
   return { url: buildUrl(sessionId, filename), filename };
 }
 
-export async function writeBufferStable(params: {
+async function writeBufferStable(params: {
   sessionId: string;
   buffer: Uint8Array;
   mimeType: string;
@@ -365,12 +367,12 @@ export async function writeBufferStable(params: {
   return { url: buildUrl(sessionId, filename), filename };
 }
 
-export function toSessionImageCacheKey(url: string): string | null {
+function toSessionImageCacheKey(url: string): string | null {
   const parsed = parseSessionImageUrl(url);
   return parsed ? keyFor(parsed.sessionId, parsed.filename) : null;
 }
 
-export function collectSessionImageUrls(value: unknown): string[] {
+function collectSessionImageUrls(value: unknown): string[] {
   const urls = new Set<string>();
   const visit = (item: unknown): void => {
     if (typeof item === 'string') {
@@ -407,7 +409,7 @@ export function collectSessionImageUrls(value: unknown): string[] {
   return [...urls];
 }
 
-export async function markFilesCommitted(urls: Iterable<string>): Promise<{
+async function markFilesCommitted(urls: Iterable<string>): Promise<{
   marked: number;
   skipped: number;
   errors: number;
@@ -445,7 +447,7 @@ export async function markFilesCommitted(urls: Iterable<string>): Promise<{
   return { marked, skipped, errors };
 }
 
-export async function sweepDraftImages(params: {
+async function sweepDraftImages(params: {
   referencedUrls?: Iterable<string>;
   createdBeforeMs: number;
 }): Promise<SweepDraftImagesResult> {
@@ -545,7 +547,7 @@ export async function sweepDraftImages(params: {
 // Read / resolve APIs
 // ---------------------------------------------------------------------------
 
-export function resolveSafe(url: string): { absPath: string; mimeType: string } {
+function resolveSafe(url: string): { absPath: string; mimeType: string } {
   if (typeof url !== 'string' || !url.startsWith(`${SCHEME}://`)) {
     throw new Error('xdt-image: invalid url');
   }
@@ -632,7 +634,7 @@ export function resolveSafe(url: string): { absPath: string; mimeType: string } 
  *      唯一,同步扫一层会话目录定位宿主(过户低频,扫描量 = 会话目录数)。
  * 归一化不放宽任何边界:成功结果永远指向 session 图片缓存根之内的文件。
  */
-export function resolveSessionImageLenient(input: string): { absPath: string; mimeType: string } {
+function resolveSessionImageLenient(input: string): { absPath: string; mimeType: string } {
   let strictErr: unknown;
   try {
     return resolveSafe(input);
@@ -688,13 +690,13 @@ export function resolveSessionImageLenient(input: string): { absPath: string; mi
   throw strictErr;
 }
 
-export async function readFile(url: string): Promise<{ buffer: Buffer; mimeType: string }> {
+async function readFile(url: string): Promise<{ buffer: Buffer; mimeType: string }> {
   const { absPath, mimeType } = resolveSafe(url);
   const buffer = await fs.readFile(absPath);
   return { buffer, mimeType };
 }
 
-export async function readAsBase64(url: string): Promise<{ base64: string; mimeType: string }> {
+async function readAsBase64(url: string): Promise<{ base64: string; mimeType: string }> {
   const { absPath, mimeType } = resolveSafe(url);
   const buffer = await fs.readFile(absPath);
   return { base64: buffer.toString('base64'), mimeType };
@@ -704,7 +706,7 @@ export async function readAsBase64(url: string): Promise<{ base64: string; mimeT
 // Delete APIs
 // ---------------------------------------------------------------------------
 
-export async function removeFile(url: string): Promise<void> {
+async function removeFile(url: string): Promise<void> {
   let absPath: string;
   try {
     absPath = resolveSafe(url).absPath;
@@ -720,7 +722,7 @@ export async function removeFile(url: string): Promise<void> {
   await fs.rm(metaPathFor(absPath), { force: true });
 }
 
-export async function removeSession(sessionId: string): Promise<void> {
+async function removeSession(sessionId: string): Promise<void> {
   assertSafeSessionId(sessionId);
   try {
     await fs.rm(getSessionDir(sessionId), { recursive: true, force: true });
@@ -729,4 +731,7 @@ export async function removeSession(sessionId: string): Promise<void> {
     if (code === 'ENOENT') return;
     throw err;
   }
+}
+
+return { getCacheRoot, getSessionDir, copyFromPath, writeBuffer, writeBufferStable, toSessionImageCacheKey, collectSessionImageUrls, markFilesCommitted, sweepDraftImages, resolveSafe, resolveSessionImageLenient, readFile, readAsBase64, removeFile, removeSession };
 }

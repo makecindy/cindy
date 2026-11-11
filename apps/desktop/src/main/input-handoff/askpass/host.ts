@@ -4,7 +4,7 @@ import http from 'node:http';
 import os from 'node:os';
 import path from 'node:path';
 import type { TerminalPromptRequest } from '../service.js';
-import { createSystemProcessProbe, verifyAskpassChain, type ProcessProbe } from './processChain.js';
+import { createSystemProcessProbe, verifyAskpassChain, verifyAskpassRecoveryChain, type ProcessProbe, type VerifiedAsker } from './processChain.js';
 
 /**
  * Terminal password prompts for 代输入. Each local task's shell gets
@@ -21,7 +21,15 @@ const ROUTE_HEADER = 'x-cindy-route';
 const PID_HEADER = 'x-cindy-pid';
 const PROMPT_MAX_BYTES = 4096;
 
+export interface AuthRecoveryRequest {
+  sessionId: string;
+  prompt: string;
+  asker: VerifiedAsker;
+}
+
 export interface AskpassHostDeps {
+  /** Optional, metadata-only alternative. Never returns or supplies credentials. */
+  getAuthRecovery?(request: AuthRecoveryRequest): Promise<string | null>;
   startTerminalPrompt(request: TerminalPromptRequest): { ok: true; abandon?(): void } | { ok: false };
   /** Teammate owner switch, current policy. Resolves true when 代输入 is off for the task. */
   isDisabledForSession(sessionId: string): Promise<boolean>;
@@ -45,6 +53,17 @@ export function askpassHelperScript(socketPath: string): string {
     '[ -n "$route" ] && [ -S "$sock" ] || exit 1',
     'curl=/usr/bin/curl',
     '[ -x "$curl" ] || exit 1',
+    // The preflight returns only host-authored guidance. Its stdout never reaches
+    // the program's credential input; failures retain the original askpass flow.
+    'if [ "${CINDY_INPUT_HANDOFF_PREFER_TERMINAL:-}" != "1" ]; then',
+    `  recovery=$("$curl" -sf --max-time 25 --unix-socket "$sock" \\`,
+    `    -H "${ROUTE_HEADER}: $route" -H "${PID_HEADER}: $$" \\`,
+    '    --data-urlencode "prompt=$1" http://cindy/auth-recovery) || recovery=',
+    '  if [ -n "$recovery" ]; then',
+    '    printf "%s\\n" "$recovery" >&2',
+    '    exit 1',
+    '  fi',
+    'fi',
     // exec keeps this pid, so Cindy can check that the asker is this process's parent.
     `exec "$curl" -sS -f --no-buffer --max-time 3700 --unix-socket "$sock" \\`,
     `  -H "${ROUTE_HEADER}: $route" -H "${PID_HEADER}: $$" \\`,
@@ -157,14 +176,26 @@ export class AskpassHost {
       if (!res.headersSent) res.writeHead(403, { 'content-type': 'text/plain' });
       res.end();
     };
-    if (req.method !== 'POST' || req.url !== '/askpass') return refuse('request');
+    const recovery = req.url === '/auth-recovery';
+    if (req.method !== 'POST' || (!recovery && req.url !== '/askpass')) return refuse('request');
     const sessionId = this.routes.get(String(req.headers[ROUTE_HEADER] ?? ''));
     const pid = Number(req.headers[PID_HEADER]);
     const prompt = await readPrompt(req).catch(() => null);
     if (!sessionId || !Number.isSafeInteger(pid) || prompt === null) return refuse('request');
-    const verdict = await verifyAskpassChain(this.probe, pid, this.socketPath ?? '\u0000', this.uid);
+    const verdict = recovery
+      ? await verifyAskpassRecoveryChain(this.probe, pid, this.helperPath ?? '\u0000', this.uid)
+      : await verifyAskpassChain(this.probe, pid, this.socketPath ?? '\u0000', this.uid);
     if (!verdict.ok) return refuse(verdict.reason);
     if (await this.deps.isDisabledForSession(sessionId).catch(() => true)) return refuse('disabled');
+    if (recovery) {
+      const message = await this.deps.getAuthRecovery?.({ sessionId, prompt, asker: verdict.asker })
+        .catch(() => null);
+      if (req.socket.destroyed) return;
+      if (await this.deps.isDisabledForSession(sessionId).catch(() => true)) return refuse('disabled');
+      res.writeHead(200, { 'content-type': 'text/plain', 'cache-control': 'no-store' });
+      res.end(message ?? '');
+      return;
+    }
     // The body is consumed, so only the connection tells whether the asker is still waiting.
     if (req.socket.destroyed) return;
 

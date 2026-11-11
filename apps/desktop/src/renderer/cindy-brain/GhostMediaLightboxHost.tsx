@@ -1,4 +1,4 @@
-import { useEffect, useState, type ReactNode } from 'react';
+import { useEffect, useRef, useState, type ReactNode } from 'react';
 
 import { ImageLightbox } from '@/components/chat/ImageLightbox';
 import { VideoLightbox } from '@/components/chat/VideoLightbox';
@@ -23,7 +23,12 @@ export function GhostMediaLightboxHost({
    *  图片 lightbox 显示「发送到对话」——预览的图一键落进该会话的附件托盘。 */
   sessionId?: string;
 }): ReactNode {
-  const [media, setMedia] = useState<{ src: string; kind: 'image' | 'video' } | null>(null);
+  const [media, setMedia] = useState<{ src: string; kind: 'image' | 'video';
+    originSessionId?: string;
+  } | null>(null);
+
+  const openingSession = useRef(sessionId);
+  openingSession.current = sessionId;
 
   useEffect(() => {
     const api = window.electronAPI?.ghosts;
@@ -36,7 +41,7 @@ export function GhostMediaLightboxHost({
       const active = document.activeElement;
       if (active instanceof HTMLElement) active.blur();
       // 旧 main(重启前)不带 kind:按图片处理,与历史行为一致。
-      setMedia({ src: next, kind: kind ?? 'image' });
+      setMedia({ src: next, kind: kind ?? 'image', originSessionId: openingSession.current });
     });
   }, []);
 
@@ -44,5 +49,8 @@ export function GhostMediaLightboxHost({
   if (media.kind === 'video') {
     return <VideoLightbox src={media.src} onClose={() => setMedia(null)} />;
   }
-  return <ImageLightbox src={media.src} onClose={() => setMedia(null)} sessionId={sessionId} />;
+  return (
+    <ImageLightbox src={media.src} onClose={() => setMedia(null)} sessionId={media.originSessionId}
+    />
+  );
 }

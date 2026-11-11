@@ -12,9 +12,10 @@
  *  4. 写入目标"索引"：
  *      - to-codex: 写到 .codex/hooks.json
  *      - to-claude: merge 进 .claude/settings.json 的 hooks 字段（不覆盖现有）
+ *    Codex 原生 config.toml 的 hooks 双向只读参与覆盖判断；仅缺失内容追加进目标 JSON。
  *
  * 安全保证：
- *  - 索引文件已有同名 hook event/key → 跳过
+ *  - 已有同名事件整体跳过，不合并 matcher / handler；原生 TOML 只读参与事件去重
  *  - 脚本目录里同名文件 → 跳过
  *  - 任何子项（脚本 / 索引 entry）失败 → 该项失败但不阻塞其他
  */
@@ -23,14 +24,15 @@ import fs from 'node:fs/promises';
 import path from 'node:path';
 
 import type { MigrationItem, MigrationStepStatus } from '../types.js';
+import {
+  appendHookEvents, extractCodexEvents, isPlainObject, missingHookEvents,
+  readCodexTomlHooks, readHookJson, unwrapNestedClaudeHooks,
+} from '../hookConfig.js';
 
 export interface ConvertOutcome {
   status: MigrationStepStatus;
   detail?: string;
 }
-
-const CLAUDE_HOOKS_PATH_PATTERN = /\.claude\/hooks\//g;
-const CODEX_HOOKS_PATH_PATTERN = /\.codex\/hooks\//g;
 
 async function exists(p: string): Promise<boolean> {
   try {
@@ -41,24 +43,14 @@ async function exists(p: string): Promise<boolean> {
   }
 }
 
-async function readJsonIfExists(p: string): Promise<unknown | null> {
-  try {
-    const raw = await fs.readFile(p, 'utf8');
-    return JSON.parse(raw);
-  } catch (err) {
-    const e = err as NodeJS.ErrnoException;
-    if (e && e.code === 'ENOENT') return null;
-    throw err;
-  }
-}
-
 /** 复制 srcDir 下所有文件到 dstDir（不递归子目录的子目录是 OK 的：hooks 默认平铺）。已存在文件跳过。 */
 async function copyHookScripts(srcDir: string, dstDir: string): Promise<{ copied: number; skipped: number }> {
   let copied = 0;
   let skipped = 0;
   if (!(await exists(srcDir))) return { copied, skipped };
-  await fs.mkdir(dstDir, { recursive: true });
   const entries = await fs.readdir(srcDir, { withFileTypes: true });
+  if (!entries.some((entry) => entry.isFile())) return { copied, skipped };
+  await fs.mkdir(dstDir, { recursive: true });
   for (const ent of entries) {
     if (!ent.isFile()) continue;
     const srcPath = path.join(srcDir, ent.name);
@@ -82,25 +74,6 @@ async function copyHookScripts(srcDir: string, dstDir: string): Promise<{ copied
   return { copied, skipped };
 }
 
-function rewritePathInString(s: string, direction: MigrationItem['direction']): string {
-  if (direction === 'to-codex') return s.replace(CLAUDE_HOOKS_PATH_PATTERN, '.codex/hooks/');
-  return s.replace(CODEX_HOOKS_PATH_PATTERN, '.claude/hooks/');
-}
-
-function rewriteHookEntry(entry: unknown, direction: MigrationItem['direction']): unknown {
-  if (entry === null) return entry;
-  if (typeof entry === 'string') return rewritePathInString(entry, direction);
-  if (Array.isArray(entry)) return entry.map((e) => rewriteHookEntry(e, direction));
-  if (typeof entry === 'object') {
-    const out: Record<string, unknown> = {};
-    for (const [k, v] of Object.entries(entry as Record<string, unknown>)) {
-      out[k] = rewriteHookEntry(v, direction);
-    }
-    return out;
-  }
-  return entry;
-}
-
 /** to-codex: 读 settings.json hooks 段 + 复制脚本 → 写 .codex/hooks.json */
 async function convertToCodex(item: MigrationItem): Promise<ConvertOutcome> {
   const claudeSettingsPath = path.join(path.dirname(item.source), 'settings.json');
@@ -108,7 +81,38 @@ async function convertToCodex(item: MigrationItem): Promise<ConvertOutcome> {
   const codexHooksJson = item.target; // <wd>/.codex/hooks.json
   const codexHooksDir = path.join(path.dirname(codexHooksJson), 'hooks');
 
-  // 1. 复制脚本
+  // 先解析 settings.json 抽 hooks 段
+  let sourceSettings: Record<string, unknown> | null = null;
+  try {
+    const parsed = await readHookJson(claudeSettingsPath);
+    if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) {
+      sourceSettings = parsed as Record<string, unknown>;
+    }
+  } catch (err) {
+    return { status: 'failed', detail: `settings.json 解析失败: ${err instanceof Error ? err.message : String(err)}` };
+  }
+  const claudeHooks = isPlainObject(sourceSettings?.hooks) ? sourceSettings.hooks : {};
+  const sourceEvents = unwrapNestedClaudeHooks(claudeHooks);
+  const tomlEvents = await readCodexTomlHooks(path.dirname(codexHooksJson));
+
+  // 已有 codex hooks.json → merge；否则新建
+  let existing: Record<string, unknown> = {};
+  const hadExisting = await exists(codexHooksJson);
+  if (hadExisting) {
+    const parsed = await readHookJson(codexHooksJson);
+    if (isPlainObject(parsed)) existing = parsed;
+  }
+  // Codex 规范：事件放在顶层 "hooks" 对象内；旧的平铺文件就地升级为包装结构
+  const codexEvents = extractCodexEvents(existing);
+  // 旧平铺文件（有事件但无顶层 hooks 包装）即使没有新增也要写回升级
+  const upgraded = hadExisting && !isPlainObject(existing.hooks) && Object.keys(codexEvents).length > 0;
+  const codexRoot: Record<string, unknown> = {};
+  for (const [k, v] of Object.entries(existing)) {
+    if (k === 'hooks' || k in codexEvents) continue;
+    codexRoot[k] = v;
+  }
+
+  // 配置解析成功后才复制脚本，语法错误不能留下部分写入
   let scriptResult = { copied: 0, skipped: 0 };
   try {
     scriptResult = await copyHookScripts(claudeHooksDir, codexHooksDir);
@@ -116,67 +120,61 @@ async function convertToCodex(item: MigrationItem): Promise<ConvertOutcome> {
     return { status: 'failed', detail: `脚本复制失败: ${err instanceof Error ? err.message : String(err)}` };
   }
 
-  // 2. 解析 settings.json 抽 hooks 段
-  let sourceSettings: Record<string, unknown> | null = null;
-  try {
-    const parsed = await readJsonIfExists(claudeSettingsPath);
-    if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) {
-      sourceSettings = parsed as Record<string, unknown>;
-    }
-  } catch (err) {
-    return { status: 'failed', detail: `settings.json 解析失败: ${err instanceof Error ? err.message : String(err)}` };
-  }
-  const claudeHooks = (sourceSettings?.hooks ?? null) as Record<string, unknown> | null;
-
-  if (!claudeHooks && scriptResult.copied === 0) {
-    return { status: 'skipped', detail: '无可迁移内容' };
-  }
-
-  // 3. 已有 codex hooks.json → merge；否则新建
-  let existing: Record<string, unknown> = {};
-  const hadExisting = await exists(codexHooksJson);
-  if (hadExisting) {
-    const parsed = await readJsonIfExists(codexHooksJson);
-    if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) {
-      existing = parsed as Record<string, unknown>;
-    }
-  }
-
-  let added = 0;
-  let skipped = 0;
-  if (claudeHooks) {
-    for (const [eventName, eventConfig] of Object.entries(claudeHooks)) {
-      if (eventName in existing) {
-        skipped += 1;
-        continue;
-      }
-      existing[eventName] = rewriteHookEntry(eventConfig, 'to-codex');
-      added += 1;
-    }
-  }
-
-  if (added === 0 && scriptResult.copied === 0) {
+  const additions = missingHookEvents(sourceEvents, [codexEvents, tomlEvents], 'to-codex');
+  const added = Object.keys(additions).length;
+  const skipped = Object.keys(sourceEvents).length - added;
+  if (added === 0 && scriptResult.copied === 0 && !upgraded) {
     return { status: 'skipped', detail: '所有 hook 已存在' };
   }
 
-  await fs.mkdir(path.dirname(codexHooksJson), { recursive: true });
-  await fs.writeFile(codexHooksJson, JSON.stringify(existing, null, 2), 'utf8');
+  if (added > 0 || upgraded) {
+    await fs.mkdir(path.dirname(codexHooksJson), { recursive: true });
+    codexRoot.hooks = appendHookEvents(codexEvents, additions);
+    await fs.writeFile(codexHooksJson, JSON.stringify(codexRoot, null, 2), 'utf8');
+  }
 
   const parts: string[] = [];
   if (scriptResult.copied > 0) parts.push(`脚本 ${scriptResult.copied}`);
   if (added > 0) parts.push(`索引 ${added}`);
   if (skipped > 0) parts.push(`跳过 ${skipped}`);
+  if (upgraded) parts.push('升级为 hooks 包装结构');
   return { status: 'success', detail: parts.join(', ') };
 }
 
-/** to-claude: 读 codex hooks.json + 复制脚本 → merge 进 .claude/settings.json hooks 段 */
+/** to-claude: 读 Codex JSON / TOML hooks + 复制脚本 → merge 进 settings.json hooks 段 */
 async function convertToClaude(item: MigrationItem): Promise<ConvertOutcome> {
   const codexHooksJson = item.source; // <wd>/.codex/hooks.json
   const codexHooksDir = path.join(path.dirname(codexHooksJson), 'hooks');
   const claudeSettingsPath = item.target; // <wd>/.claude/settings.json
   const claudeHooksDir = path.join(path.dirname(claudeSettingsPath), 'hooks');
 
-  // 1. 复制脚本
+  // 先解析 codex hooks.json
+  let codexHooks: Record<string, unknown> = {};
+  try {
+    const parsed = await readHookJson(codexHooksJson);
+    if (isPlainObject(parsed)) codexHooks = extractCodexEvents(parsed);
+  } catch (err) {
+    return { status: 'failed', detail: `hooks.json 解析失败: ${err instanceof Error ? err.message : String(err)}` };
+  }
+
+  const tomlEvents = await readCodexTomlHooks(path.dirname(codexHooksJson));
+  codexHooks = appendHookEvents(codexHooks, missingHookEvents(tomlEvents, [codexHooks]));
+
+  // merge 到 settings.json hooks 段
+  let settings: Record<string, unknown> = {};
+  const hadSettings = await exists(claudeSettingsPath);
+  if (hadSettings) {
+    const parsed = await readHookJson(claudeSettingsPath);
+    if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) {
+      settings = parsed as Record<string, unknown>;
+    }
+  }
+  // 存量错误嵌套 settings.hooks.hooks 一并拍平修复
+  const rawHooks = isPlainObject(settings.hooks) ? settings.hooks : {};
+  const existingHooks = unwrapNestedClaudeHooks(rawHooks);
+  const repaired = existingHooks !== rawHooks;
+
+  // 配置解析成功后才复制脚本，语法错误不能留下部分写入
   let scriptResult = { copied: 0, skipped: 0 };
   try {
     scriptResult = await copyHookScripts(codexHooksDir, claudeHooksDir);
@@ -184,55 +182,31 @@ async function convertToClaude(item: MigrationItem): Promise<ConvertOutcome> {
     return { status: 'failed', detail: `脚本复制失败: ${err instanceof Error ? err.message : String(err)}` };
   }
 
-  // 2. 解析 codex hooks.json
-  let codexHooks: Record<string, unknown> = {};
-  try {
-    const parsed = await readJsonIfExists(codexHooksJson);
-    if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) {
-      codexHooks = parsed as Record<string, unknown>;
-    }
-  } catch (err) {
-    return { status: 'failed', detail: `hooks.json 解析失败: ${err instanceof Error ? err.message : String(err)}` };
-  }
-
-  // 3. merge 到 settings.json hooks 段
-  let settings: Record<string, unknown> = {};
-  const hadSettings = await exists(claudeSettingsPath);
-  if (hadSettings) {
-    const parsed = await readJsonIfExists(claudeSettingsPath);
-    if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) {
-      settings = parsed as Record<string, unknown>;
-    }
-  }
-  const existingHooks = (settings.hooks ?? {}) as Record<string, unknown>;
-
-  let added = 0;
-  let skipped = 0;
-  for (const [eventName, eventConfig] of Object.entries(codexHooks)) {
-    if (eventName in existingHooks) {
-      skipped += 1;
-      continue;
-    }
-    existingHooks[eventName] = rewriteHookEntry(eventConfig, 'to-claude');
-    added += 1;
-  }
-
-  if (added === 0 && scriptResult.copied === 0) {
+  const additions = missingHookEvents(codexHooks, [existingHooks], 'to-claude');
+  const added = Object.keys(additions).length;
+  const skipped = Object.keys(codexHooks).length - added;
+  if (added === 0 && scriptResult.copied === 0 && !repaired) {
     return { status: 'skipped', detail: '所有 hook 已存在' };
   }
 
-  settings.hooks = existingHooks;
-  await fs.mkdir(path.dirname(claudeSettingsPath), { recursive: true });
-  await fs.writeFile(claudeSettingsPath, JSON.stringify(settings, null, 2), 'utf8');
+  if (added > 0 || repaired) {
+    settings.hooks = appendHookEvents(existingHooks, additions);
+    await fs.mkdir(path.dirname(claudeSettingsPath), { recursive: true });
+    await fs.writeFile(claudeSettingsPath, JSON.stringify(settings, null, 2), 'utf8');
+  }
 
   const parts: string[] = [];
   if (scriptResult.copied > 0) parts.push(`脚本 ${scriptResult.copied}`);
   if (added > 0) parts.push(`索引 ${added}`);
   if (skipped > 0) parts.push(`跳过 ${skipped}`);
+  if (repaired) parts.push('修复嵌套 hooks.hooks');
   return { status: 'success', detail: parts.join(', ') };
 }
 
 export async function convertHooks(item: MigrationItem): Promise<ConvertOutcome> {
-  if (item.direction === 'to-codex') return convertToCodex(item);
-  return convertToClaude(item);
+  try {
+    return await (item.direction === 'to-codex' ? convertToCodex(item) : convertToClaude(item));
+  } catch (err) {
+    return { status: 'failed', detail: err instanceof Error ? err.message : String(err) };
+  }
 }

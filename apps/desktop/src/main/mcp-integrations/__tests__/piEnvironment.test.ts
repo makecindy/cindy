@@ -1,3 +1,10 @@
+import { mkdtempSync, rmSync } from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
+import { configureUserDataDir } from '../../userDataPath.js';
+import { configureOwnerContext } from '../../ownerContext.js';
+import { Client } from '@modelcontextprotocol/sdk/client/index.js';
+import { StreamableHTTPClientTransport } from '@modelcontextprotocol/sdk/client/streamableHttp.js';
 /**
  * piEnvironment —— pi MCP 桥 per-session 身份接线测试。
  *
@@ -12,10 +19,10 @@
  * getPiExtraSpawnConfig 内部起真 codexHttpBridge,故这里做真 HTTP 往返。
  */
 
-import { afterEach, describe, expect, it, vi } from 'vitest';
+import { beforeEach, afterEach, describe, expect, it, vi } from 'vitest';
 import { PluginRegistry } from '../../maker-host/plugins/plugin-registry';
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
-import { getLiziMcpSessionContext } from '@cindy/mcps';
+import { createLiziMcpProviders, getLiziMcpSessionContext } from '@cindy/mcps';
 import { createOrcaWorkerBridgeMcpProvider } from '@cindy/orca-workflow';
 
 vi.mock('electron', () => ({
@@ -36,7 +43,7 @@ import {
   getPiExtraSpawnConfig,
   invalidatePiEnvironment,
   shutdownPiEnvironment,
-} from '../piEnvironment.js';
+} from '../piEnvironment.desktop.js';
 
 function noopLogger(): Logger {
   const logger: Logger = {
@@ -159,8 +166,44 @@ async function readRpcText(resp: Response): Promise<unknown> {
 }
 
 describe('piEnvironment per-session identity', () => {
+  let profile: string;
+  beforeEach(() => {
+    profile = mkdtempSync(path.join(os.tmpdir(), 'cindy-pi-env-'));
+    configureUserDataDir(profile);
+    configureOwnerContext({
+      read: () => ({ dataOwnerId: null, generation: 0, boundaryPending: false }),
+      fallbackBaseDir: () => profile,
+    });
+  });
   afterEach(async () => {
     await shutdownPiEnvironment();
+    rmSync(profile, { recursive: true, force: true });
+  });
+
+  it('recovers Slack binding in the existing Pi bridge while another session holds its lease', async () => {
+    let bound = false;
+    const providers = createLiziMcpProviders({ slackHook: { getBridge: () => ({
+      availability: () => ({ connected: true, bound, serverSupportsTools: true }),
+      callTool: async () => ({ ok: true as const, result: { bound } }),
+    }) } });
+    const peer = await getPiExtraSpawnConfig(providers, noopLogger(), { sessionId: 'busy-peer', workingDir: '/workspace' });
+    const config = await getPiExtraSpawnConfig(providers, noopLogger(), { sessionId: 'slack-session', workingDir: '/workspace' });
+    const server = config!.mcpBridge!.servers.find((entry) => entry.name === 'cindy_slack')!;
+    const client = new Client({ name: 'slack-recovery', version: '1' });
+    await client.connect(new StreamableHTTPClientTransport(new URL(server.url), {
+      requestInit: { headers: { Authorization: `Bearer ${config!.mcpBridge!.token}` } },
+    }));
+    try {
+      for (const next of [false, true, false]) {
+        bound = next;
+        const result = await client.callTool({ name: 'slack_status', arguments: {} });
+        expect(JSON.parse((result.content as Array<{ text: string }>)[0]!.text)).toMatchObject({ bound });
+      }
+    } finally {
+      await client.close();
+      config!.disposeSessionCtx?.();
+      peer!.disposeSessionCtx?.();
+    }
   });
 
   it('registers a pi session ctx and routes it through session + instance identity', async () => {

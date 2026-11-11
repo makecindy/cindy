@@ -210,6 +210,45 @@ describe('useWechatBot', () => {
   });
 });
 
+describe('useWechatBot for another computer', () => {
+  it("serves that computer's WeChat through the given API and leaves this window's own cache alone", async () => {
+    setDataOwnerGeneration('owner-a');
+    __testing.resetCache();
+    const own = installWechatApi();
+    const other = installWechatApi({ phase: 'connected', bound: true, queuedTasks: 0 });
+    const { result } = renderHook(() => useWechatBot(other.api as never));
+    await waitFor(() => expect(result.current.state.phase).toBe('connected'));
+    await act(async () => { expect(await result.current.setCompanion('bot-1')).toBe(true); });
+    expect(other.api.setCompanion).toHaveBeenCalledWith('bot-1');
+    expect(own.api.getState).not.toHaveBeenCalled();
+    expect(own.api.setCompanion).not.toHaveBeenCalled();
+    expect(__testing.getCache()).toEqual({ state: null, channelSettings: null });
+  });
+});
+
+describe('useWechatBot with a window API that is not identity-stable', () => {
+  it('loads once instead of re-subscribing on every render', async () => {
+    setDataOwnerGeneration('owner-a');
+    __testing.resetCache();
+    const getState = vi.fn(async () => disconnectedState());
+    // UI harnesses (and any bridge that proxies the API) hand out a fresh object per access.
+    (window as unknown as { electronAPI: unknown }).electronAPI = {
+      get wechatBot() {
+        return {
+          getState,
+          getChannelSettings: async () => ({ version: 1, workingDir: null, workingDirAvailable: true }),
+          onStateChange: () => () => undefined,
+          onChannelSettingsChange: () => () => undefined,
+        };
+      },
+    };
+    const { result } = renderHook(() => useWechatBot());
+    await waitFor(() => expect(result.current.channelSettings).not.toBeNull());
+    await act(async () => { await new Promise((resolve) => setTimeout(resolve, 20)); }); // real-wait: let a would-be render loop show itself
+    expect(getState).toHaveBeenCalledTimes(1);
+  });
+});
+
 function disconnectedState(): WechatBotState {
   return {
     phase: 'disconnected',

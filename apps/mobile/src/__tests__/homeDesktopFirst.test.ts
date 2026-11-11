@@ -313,7 +313,8 @@ describe('mobile home desktop-first surface', () => {
     expect(source).toContain('const [groupByProject, setGroupByProject]');
     expect(source).toContain('testID="home.deviceMenu"');
     expect(source).toContain('testID="home.chromeMenu"');
-    expect(source).toContain('testID="home.displaySettingsButton"');
+    // The display-menu e2e anchor belongs to its extracted platform component;
+    // nativeGlassControls.test.tsx checks it on the rendered menu.
     expect(source).toContain('<HomeChromeDrawer');
     expect(source).toContain('<HomeHeaderGlassButton');
     const headerGlass = readSource('src/session/HomeHeaderGlassButton.ios.tsx');
@@ -375,9 +376,6 @@ describe('mobile home desktop-first surface', () => {
       expect(source).not.toContain(`pendingMenuActionRef.current = () => guardedPush('${route}')`);
       expect(source).toContain(`setChromeMenuOpen(false);\n          guardedPush('${route}');`);
     }
-    const teammateHome = readSource('src/session/TeammateHomeScreen.tsx');
-    expect(teammateHome).toContain("onOpenSettings={() => openDrawerPage('/settings')}");
-    expect(teammateHome).toContain("onOpenAccounts={() => afterDrawer(() => setAccounts(true))}");
     const rootLayout = readSource('app/_layout.tsx');
     expect(rootLayout).not.toContain("animation: 'slide_from_left'");
     expect(source).toContain("label={t('devices.list.allConversations')}");
@@ -788,8 +786,10 @@ describe('mobile home desktop-first surface', () => {
     expect(source).toContain('markPresenceFresh(presenceFreshnessRef.current, lastPresenceSnapshot.deviceId);');
     expect(source).toContain('collectFreshPresenceDeviceIds(presenceFreshnessRef.current, presenceEpochAtFetchStart)');
     expect(source).toContain('progressViewOffset={residentList.enabled ? 0 : chromeHeight}');
-    expect(source).toContain('onRefresh={() => void loadHome({ visible: true })}');
-    expect(source).toContain('onPress={() => void loadHome({ visible: true })}');
+    // 下拉刷新与同步按钮都走可见的 loadHome,并一起刷新伙伴段。
+    expect(source).toMatch(/const refreshHome = useCallback\(\(\) => \{\n    void loadHome\(\{ visible: true \}\);/);
+    expect(source).toContain('onRefresh={refreshHome}');
+    expect(source).toContain('onPress={refreshHome}');
     expect(source).toContain('patchDeviceViewsWithPresence(');
     expect(source).toContain('result.becameControllable');
     expect(source).toContain('remoteSessionStore.registerReseedHandler(item.device.deviceId');
@@ -890,7 +890,7 @@ describe('mobile home desktop-first surface', () => {
     expect(source).toContain('const headerNewSession = newSessionInHeader && newSessionEntryVisible;');
     // 顶栏新建与浮动按钮走同一入口(openNewSession → guardedPush → 抽屉 runNavigation 先关再跳)。
     expect(source).toContain('onPress={() => openNewSession()} testID="home.headerNewSessionButton">');
-    expect(source).toContain("if (run) run(() => push(href)); else push(href);");
+    expect(source).toContain("const guardedPush = useTaskListNavigation({ sidebar: sidebarNavigation, runNavigation });");
     // 抽屉与首页左上角都只打开系统菜单(HomeChromeDrawer 自有渲染测试),不再有关闭分支。
     expect(source).toContain('onPress={openChromeMenu}\n          testID="home.chromeMenu"');
     expect(source).not.toContain('onDismiss');

@@ -1,17 +1,19 @@
-import { useHomeMode } from './useHomeMode';
+import type { ViewInstance } from 'react-native';
 import { createContext, useCallback, useContext, useId, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import { Platform, StyleSheet, View } from 'react-native';
-import Animated, { useAnimatedStyle } from 'react-native-reanimated';
-import { HomeModeProgressContext, useHomeModeProgress } from './HomeModeTransition';
+import Animated from 'react-native-reanimated';
 import { useSegments } from 'expo-router';
 import { useAdaptiveWindow } from '@/platform/AdaptiveWindowContext';
 import { useReduceMotionEnabled } from '@/hooks/useReduceMotion';
+import { AnimationVisibilityProvider } from '@/hooks/useLoopingAnimation';
 import { motionDuration } from '@/theme/tokens';
 import { RemoteSessionStoreSubscriptionGate } from './remoteSessionStore';
 import { sessionPaneLayout } from './sessionPaneLayout';
 import { SessionPaneDivider } from './SessionPaneDivider';
 
 const PaneLayoutContext = createContext<ReturnType<typeof sessionPaneLayout> | null>(null);
+type SidebarWidthPreference = { width: number | null; setWidth(width: number): void };
+const SidebarWidthContext = createContext<SidebarWidthPreference | null>(null);
 
 export function useSessionPaneLayout() {
   const geometry = useAdaptiveWindow();
@@ -25,7 +27,7 @@ const Context = createContext<{
   mounted: { current: boolean };
   publish(entry: Entry): void;
   unpublish(owner: string): void;
-  host: React.RefObject<View | null>;
+  host: React.RefObject<ViewInstance | null>;
 } | null>(null);
 
 export function useResidentHomeList(embedded = false) {
@@ -34,6 +36,12 @@ export function useResidentHomeList(embedded = false) {
   // back, before JS focus changes. Keep that ownership at every window width.
   // Android retains the root host; modal drawers always stay in their surface.
   return { enabled: !!context && (embedded ? context.persistent : Platform.OS !== 'ios'), mounted: context?.mounted };
+}
+
+/** A native-docked Home already owns its whole list. Keep the list within that
+ * surface in both orientations instead of moving it to the legacy root host. */
+export function LocalHomeList({ children }: { children: ReactNode }) {
+  return <Context.Provider value={null}>{children}</Context.Provider>;
 }
 
 /** Preserve the resident-list owner when route content is re-hosted above this
@@ -48,30 +56,33 @@ export function useResidentHomeListContextBridge(children: ReactNode) {
   );
 }
 
+/** One task-list width for the side column and the floating quick-switch
+ * drawer: resizing either one is the same choice, with the same default and
+ * drag range. Only a constrained window or an actual hinge can override it. */
+export function useSessionSidebarWidthPreference(): SidebarWidthPreference {
+  const context = useContext(SidebarWidthContext);
+  const [width, setWidth] = useState<number | null>(null);
+  return context ?? { width, setWidth };
+}
+
 /** The list lives above route lifetimes. Owners only supply its frame and props;
  * never key the host by route, session, or presentation width. */
 export function ResidentHomeListProvider({ children }: { children: ReactNode }) {
   const geometry = useAdaptiveWindow();
-  // Window preference, shared by retained routes; rotation clamps only the
-  // displayed width, so returning to a wide window restores the user's choice.
+  // Window preference, shared by retained routes and the floating drawer;
+  // rotation clamps only the displayed width, so returning to a wide window
+  // restores the user's choice.
   const [sidebarWidth, setSidebarWidth] = useState<number | null>(null);
   const paneLayout = useMemo(() => sessionPaneLayout(geometry, sidebarWidth), [geometry, sidebarWidth]);
   const { persistent } = paneLayout;
   const segments = useSegments() as string[];
-  const { mode, hydrated } = useHomeMode();
   const homeRoute = segments.length === 0 || segments[0] === 'index'
     || (segments[0] === 'devices' && (segments.length === 1 || segments[1] === 'index'));
-  // Android pages draw their own bar inside each pane, so sliding them would move it; they switch in place.
-  const progress = useHomeModeProgress(mode, homeRoute && Platform.OS === 'ios', hydrated);
-  // Keep the outgoing resident list drawn during the slide, but never interactive over the new tab.
+  // iOS Home keeps its list in its own route; Android draws it here on the home too.
   const rootHome = Platform.OS !== 'ios';
-  const visible = (rootHome && mode === 'tasks' && homeRoute)
-    || (persistent && segments[0] === 'sessions' && segments[1] === '[sessionId]');
-  const slide = useAnimatedStyle(() => ({
-    opacity: homeRoute ? (rootHome && progress.value < 1 ? 1 : 0) : (visible ? 1 : 0),
-    transform: [{ translateX: homeRoute ? -progress.value * geometry.width : 0 }],
-  }));
-  const host = useRef<View>(null);
+  const visible = (rootHome && homeRoute)
+    || (persistent && isPaneDetailRoute(segments));
+  const host = useRef<ViewInstance>(null);
   const mounted = useRef(false);
   const [entry, setEntry] = useState<Entry | null>(null);
   const reduceMotion = useReduceMotionEnabled();
@@ -80,10 +91,12 @@ export function ResidentHomeListProvider({ children }: { children: ReactNode }) 
     setEntry(current => current?.owner === owner ? null : current);
   }, []);
   const context = useMemo(() => ({ persistent, mounted, publish, unpublish, host }), [persistent, publish, unpublish]);
+  const widthPreference = useMemo(() => ({ width: sidebarWidth, setWidth: setSidebarWidth }), [sidebarWidth]);
   useLayoutEffect(() => {
     mounted.current = !!entry;
   }, [entry]);
-  return <PaneLayoutContext.Provider value={paneLayout}><HomeModeProgressContext.Provider value={progress}><Context.Provider value={context}>
+  return <SidebarWidthContext.Provider value={widthPreference}>
+    <PaneLayoutContext.Provider value={paneLayout}><Context.Provider value={context}>
     <View ref={host} collapsable={false} style={styles.root}>
       {children}
       {entry ? <Animated.View collapsable={false} pointerEvents={visible ? 'box-none' : 'none'}
@@ -95,8 +108,10 @@ export function ResidentHomeListProvider({ children }: { children: ReactNode }) 
           // second size animation when the final asynchronous measure arrives
           // after release; keep the sidebar's native host above the route.
           transitionDuration: !persistent && reduceMotion === false ? motionDuration.fast : 0,
-        }, slide]}>
-        <RemoteSessionStoreSubscriptionGate enabled={visible}>{entry.children}</RemoteSessionStoreSubscriptionGate>
+        }, { opacity: visible ? 1 : 0 }]}>
+        <AnimationVisibilityProvider visible={visible}>
+          <RemoteSessionStoreSubscriptionGate enabled={visible}>{entry.children}</RemoteSessionStoreSubscriptionGate>
+        </AnimationVisibilityProvider>
       </Animated.View> : null}
       {visible && !homeRoute && paneLayout.resizeBounds ? <SessionPaneDivider
         width={paneLayout.sidebarWidth} bounds={paneLayout.resizeBounds}
@@ -104,7 +119,8 @@ export function ResidentHomeListProvider({ children }: { children: ReactNode }) 
         onResize={setSidebarWidth}
       /> : null}
     </View>
-  </Context.Provider></HomeModeProgressContext.Provider></PaneLayoutContext.Provider>;
+  </Context.Provider></PaneLayoutContext.Provider>
+  </SidebarWidthContext.Provider>;
 }
 
 /** A route supplies a measuring slot, not another native list. Its header stays
@@ -115,7 +131,7 @@ export function ResidentHomeList({ children, focused, top, left, right }: {
   const context = useContext(Context);
   const unpublish = context?.unpublish;
   const owner = useId();
-  const anchor = useRef<View>(null);
+  const anchor = useRef<ViewInstance>(null);
   const latest = useRef({ children, focused });
   latest.current = { children, focused };
   const measureRevision = useRef(0);
@@ -142,6 +158,13 @@ export function ResidentHomeList({ children, focused, top, left, right }: {
   return <View ref={anchor} collapsable={false} pointerEvents="none" onLayout={measure}
     style={{ flex: 1, marginTop: top, marginLeft: -left, marginRight: -right }} />;
 }
+/** Routes shown beside the resident list: tasks (including a teammate's own
+ * chat) and group chats, which share one teammate list with them. */
+function isPaneDetailRoute(segments: string[]) {
+  if (segments[0] === 'sessions') return segments[1] === '[sessionId]' || segments[1] === 'new';
+  return segments[0] === 'companions' && segments[1] === 'groups' && segments[2] === '[groupId]';
+}
+
 const styles = StyleSheet.create({
   root: { flex: 1 },
   host: { position: 'absolute', zIndex: 1 },

@@ -1,3 +1,4 @@
+import { deviceDisplayName } from '@/device-link/deviceName';
 /**
  * 手机端语音词典展示模型(纯函数,不碰 UI 与网络)。
  *
@@ -32,7 +33,7 @@ export function collectMobileVoiceDictionaryHosts(
     .filter((device) => !device.isSelf && isDesktopDevice(device.platform))
     .map((device) => ({
       deviceId: device.deviceId,
-      name: device.name?.trim() || device.deviceId.slice(0, 8),
+      name: deviceDisplayName(device.deviceId, device.name),
       online: Boolean(device.online),
     }))
   ;
@@ -61,7 +62,7 @@ export function patchMobileVoiceDictionaryHosts(
   // 无变化时返回原引用:presence 事件很密集(手机、其它电脑的上下线都会来),
   // 每次都造新数组会让设置页无谓重渲染。
   if (!snapshot?.deviceId || !isDesktopDevice(snapshot.platform)) return hosts;
-  const name = snapshot.deviceName?.trim() || snapshot.deviceId.slice(0, 8);
+  const name = deviceDisplayName(snapshot.deviceId, snapshot.deviceName || hosts.find((host) => host.deviceId === snapshot.deviceId)?.name);
   const index = hosts.findIndex((host) => host.deviceId === snapshot.deviceId);
   if (index < 0) {
     return sortHosts([...hosts, { deviceId: snapshot.deviceId, name, online: Boolean(snapshot.online) }]);

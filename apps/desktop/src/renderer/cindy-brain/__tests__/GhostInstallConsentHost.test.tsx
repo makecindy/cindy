@@ -106,6 +106,26 @@ describe('GhostInstallConsentHost', () => {
     await waitFor(()=>expect(resolveInstallConsent).toHaveBeenCalledWith('tasks',true));
   });
 
+  // Shared same-ID packages need a distinct replacement action and accurate
+  // state impact even with no added permissions (unit: real Host, fake Main).
+  it.each([false, true])('explains shared replacement without changing source rules (sourceChanged=%s)', async sourceChanged => {
+    render(<GhostInstallConsentHost />);
+    await act(async () => push?.({
+      requestId: 'share-replace', purpose: 'share-replace', initiator: 'user', origin: 'local-file',
+      target: { namespace: null, sourceChanged, otherCopies: 0 },
+      facts: { kind: 'update', ghostId: 'weather-chip', name: 'Weather', version: '1.0.0',
+        previousVersion: '1.0.0', added: [], removed: [], unchangedCount: 1, builtinOauthClientChanged: false },
+    }));
+    const options = mocks.confirm.mock.calls[0][0];
+    expect(options.title).toBe('sharing.localReplaceTitle:{"name":"Weather"}');
+    expect(options.confirmText).toBe('sharing.localReplaceButton');
+    render(<>{options.content}</>);
+    expect(screen.getByText('sharing.localReplaceNotice')).toBeTruthy();
+    expect(screen.queryByText('sharing.localReplaceRetainsState') !== null).toBe(!sourceChanged);
+    expect(screen.queryByText('settings.ghosts.installConsent.sourceChanged') !== null).toBe(sourceChanged);
+    await waitFor(() => expect(resolveInstallConsent).toHaveBeenCalledWith('share-replace', true));
+  });
+
   it('answers cancel when Main dismisses the pending dialog', async () => {
     let seenSignal: AbortSignal | undefined;
     mocks.confirm.mockImplementation(

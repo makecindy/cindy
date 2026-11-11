@@ -64,6 +64,7 @@ import {
   type QueuedMessageControlErrorCode,
   type QueuedMessageSteerReason,
   type SteerFallbackReason,
+  type SupersededFailureNotice,
   type WorkerQueuedMessageEntry,
   type WorkerSummary,
 } from '../xdt-helper/index.js';
@@ -101,7 +102,7 @@ export interface OrcaMcpDeps {
   createWorker: (params: {
     leadSessionId: string;
     role: string;
-    agent: ControlWorkerAgent;
+    agent?: ControlWorkerAgent;
     model?: string;
     providerId?: string;
     effort?: 'low' | 'medium' | 'high' | 'xhigh' | 'max' | 'ultra';
@@ -116,8 +117,8 @@ export interface OrcaMcpDeps {
     initialTaskImages?: string[];
   }) => Promise<
     ControlResult<
-      { workerId: string; workerSessionId: string; workingDir?: string; worktree?: { path: string; branch: string }; softLimitExceeded?: boolean; dispatched?: boolean; dispatchOutcome?: import('../lizi_xdtHelperMcpServer.js').ControlDispatchOutcome; queuedMessageId?: string },
-      'INVALID_PARAMS' | 'NOT_FOUND' | 'WORKER_LIMIT_HARD_EXCEEDED' | 'DUPLICATE_LABEL' | 'WORKER_CREATION_IN_PROGRESS' | 'BUDGET_MODEL_REQUIRES_API_MODE' | 'NO_PROVIDER_FOR_AGENT' | 'PROVIDER_ROUTE_UNAVAILABLE' | 'REMOTE_AGENT_DEVICE_UNREACHABLE' | 'REMOTE_AGENT_SHARE_PAUSED' | 'REMOTE_AGENT_SHARE_REMOVED' | 'REMOTE_AGENT_SHARE_UNAVAILABLE' | 'UNSUPPORTED_CAPABILITY'
+      import('../xdt-helper/create_worker.js').CreateWorkerSuccessData,
+      'INVALID_PARAMS' | 'NOT_FOUND' | 'WORKER_LIMIT_HARD_EXCEEDED' | 'DUPLICATE_LABEL' | 'WORKER_CREATION_IN_PROGRESS' | 'BUDGET_MODEL_REQUIRES_API_MODE' | 'NO_PROVIDER_FOR_AGENT' | 'PROVIDER_ROUTE_UNAVAILABLE' | 'REMOTE_AGENT_DEVICE_UNREACHABLE' | 'REMOTE_AGENT_SHARE_PAUSED' | 'REMOTE_AGENT_SHARE_REMOVED' | 'REMOTE_AGENT_SHARE_UNAVAILABLE' | 'REMOTE_AGENT_SHARE_LEGACY_DISABLED' | 'UNSUPPORTED_CAPABILITY'
     >
   >;
   /** 列出当前 workflow 所有 worker。 */
@@ -150,6 +151,8 @@ export interface OrcaMcpDeps {
         queuedMessageId?: string;
         /** 请求 steer 但消息进了队列时的原因。 */
         steerFallbackReason?: SteerFallbackReason;
+        /** 这次派发取代并撤下的、Lead 还没读到的该 worker 异常终止回报。 */
+        supersededFailureNotices?: SupersededFailureNotice[];
       },
       'NOT_FOUND' | 'ARCHIVED' | 'DELETED' | 'BUSY' | 'AGENT_NOT_READY' | 'INVALID_ARGS'
     >
@@ -170,6 +173,7 @@ export interface OrcaMcpDeps {
         | 'unconfirmed'
         | 'unsupported';
       queuePaused: boolean;
+      supersededFailureNotices?: SupersededFailureNotice[];
     }>
   >;
   /** 列出 worker 输入队列中排队的消息;省略 workerRef 时列出调用方自身输入队列。 */
@@ -264,7 +268,7 @@ export interface OrcaMcpDeps {
   endTeam: (params: { leadSessionId: string }) => Promise<ControlResult>;
   /** 归档单个 worker。 */
   archiveWorker: (params: { callerLeadSessionId: string; workerId: string }) => Promise<
-    ControlResult<{ workerId: string }, 'WORKER_NOT_FOUND'>
+    ControlResult<{ workerId: string; withdrawnFailureNotices?: number }, 'WORKER_NOT_FOUND'>
   >;
   /** 修改已创建 worker 的角色名 / 标识。 */
   updateWorker: (params: {
@@ -349,6 +353,17 @@ export interface OrcaWorkerDiagnosticStatus {
 
 export interface OrcaWorkerDiagnosticOutput extends OrcaWorkerDiagnosticStatus {
   result: string;
+  /**
+   * Worker **本轮** turn 的 terminal error 摘要(已脱敏);本轮没有以失败收尾时为 null。
+   * 契约里必须声明它:read_worker 的 handler 若只挑字段复制,诊断就永远到不了 Lead。
+   */
+  turnError: {
+    message: string;
+    reason?: string;
+    sdkError?: string;
+    toolLoop?: string;
+    createdAt: string;
+  } | null;
 }
 
 /**
@@ -490,6 +505,9 @@ function registerOrcaDiagnosticTools(
         idle_ms: result.idle_ms,
         restored_from_storage: result.restored_from_storage,
         result: result.result,
+        // 诊断的意义就在这一项:本轮以 terminal error 收尾时把它交给 Lead,
+        // 上一版只复制到 result,新增的 turnError 在 MCP 出口被丢掉了。
+        turnError: result.turnError ?? null,
       });
     },
   });
@@ -540,6 +558,7 @@ export function createOrcaMcpServer(
     getSessionContext,
     sendToWorker: deps.sendToWorker,
     interruptWorker: deps.interruptWorker,
+    listWorkerQueuedMessages: deps.listWorkerQueuedMessages,
   });
   registerGetWorkerQueueStatusTool(sink, {
     getSessionContext,

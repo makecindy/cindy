@@ -50,6 +50,8 @@ export interface RemoteMediaDiskCacheOptions {
   availableBytes?(): number;
   reserveBytes?: number;
   persistAccess?: boolean;
+  /** Limit pressure cleanup to the caller's regenerable media, preserving manual image retention. */
+  canEvict?(mimeType: string): boolean;
   now?(): number;
 }
 
@@ -61,6 +63,8 @@ export interface RemoteMediaDiskCacheHit {
 }
 
 export interface RemoteMediaDiskCache {
+  /** Protect a mounted player's file from cleanup until its consumer releases it. */
+  protect(sourceUrl: string): () => void;
   /** 命中返回本地 file:// 引用并刷新 LRU 时间;未命中 / 文件丢失返回 null。 */
   lookup(sourceUrl: string, version?: string): Promise<RemoteMediaDiskCacheHit | null>;
   /** Frees the oldest copies under disk pressure, excluding the pending copy's source. */
@@ -88,6 +92,9 @@ export interface RemoteMediaDiskCache {
 
 const DEFAULT_MAX_BYTES = Infinity;
 const INDEX_VERSION = 1;
+// Screens can open separate cache handles for the same directory. Protection is
+// by physical URI so another handle cannot reclaim a mounted player's file.
+const protectedFiles = new Map<string, number>();
 
 interface IndexEntry {
   name: string;
@@ -190,6 +197,7 @@ export function createRemoteMediaDiskCache(
     const byOldest = [...entries.entries()].sort((a, b) => a[1].lastUsedAt - b[1].lastUsedAt);
     for (const [key, entry] of byOldest) {
       if (total <= maxBytes) break;
+      if (protectedFiles.has(io.fileUri(entry.name)) || options.canEvict?.(entry.mimeType) === false) continue;
       entries.delete(key);
       total -= entry.size;
       await Promise.resolve(io.deleteFile(entry.name)).catch(() => undefined);
@@ -205,7 +213,8 @@ export function createRemoteMediaDiskCache(
     const oldest = [...entries!.entries()].sort((a, b) => a[1].lastUsedAt - b[1].lastUsedAt);
     for (const [key, entry] of oldest) {
       if (enough()) break;
-      if (key === protectedKey || downloading.has(key)) continue;
+      if (key === protectedKey || downloading.has(key) || protectedFiles.has(io.fileUri(entry.name)) ||
+        options.canEvict?.(entry.mimeType) === false) continue;
       try {
         await io.deleteFile(entry.name);
         entries!.delete(key);
@@ -216,6 +225,20 @@ export function createRemoteMediaDiskCache(
   }
 
   return {
+    protect(sourceUrl) {
+      const entry = entries?.get(cacheKeyOf(sourceUrl));
+      if (!entry) return () => undefined;
+      const uri = io.fileUri(entry.name);
+      protectedFiles.set(uri, (protectedFiles.get(uri) ?? 0) + 1);
+      let released = false;
+      return () => {
+        if (released) return;
+        released = true;
+        const count = protectedFiles.get(uri) ?? 0;
+        if (count <= 1) protectedFiles.delete(uri);
+        else protectedFiles.set(uri, count - 1);
+      };
+    },
     prune,
     async remove(sourceUrl) {
       await init();
@@ -378,6 +401,11 @@ export function extOfMime(mimeType: string): string {
   if (mimeType === 'image/webp') return 'webp';
   if (mimeType === 'image/svg+xml') return 'svg';
   if (mimeType === 'image/bmp') return 'bmp';
+  // AVPlayer uses the local file suffix to select its media demuxer.
+  if (mimeType === 'video/mp4') return 'mp4';
+  if (mimeType === 'video/quicktime') return 'mov';
+  if (mimeType === 'video/webm') return 'webm';
+  if (mimeType === 'video/x-matroska') return 'mkv';
   return 'img';
 }
 

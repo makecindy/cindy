@@ -14,8 +14,8 @@ vi.mock('../botGroupStore', () => ({ useBotGroupList: () => ({ groups: mocks.gro
 vi.mock('@/lib/toast', () => ({ toast: { success: mocks.success, error: mocks.error } }));
 vi.mock('../BotGroupCreateDialog', async importOriginal => ({
   ...await importOriginal<typeof import('../BotGroupCreateDialog')>(),
-  BotGroupCreateDialog: (props: { initialBotIds?: string[]; onCreated: (id: string) => void }) => {
-    mocks.createDialog(props.initialBotIds);
+  BotGroupCreateDialog: (props: { privateChatBotId?: string; onCreated: (id: string) => void }) => {
+    mocks.createDialog(props.privateChatBotId);
     return <div role="dialog"><button type="button" onClick={() => props.onCreated('new-room')}>create</button></div>;
   },
 }));
@@ -59,14 +59,14 @@ it('offers no entry for a teammate that is not on this computer', () => {
   expect(screen.queryByRole('button', { name: /triggerFor/ })).toBeNull();
 });
 
-it('starts a new group with this teammate preselected and opens it', () => {
+it('starts a new group with this teammate fixed and opens it', () => {
   render(<BotAddToGroupMenu botId="bot-1" />);
   openMenu();
   expect(mocks.refresh).toHaveBeenCalled();
   fireEvent.click(screen.getByRole('menuitem', { name: k('newGroup') }));
-  expect(mocks.createDialog).toHaveBeenCalledWith(['bot-1']);
+  expect(mocks.createDialog).toHaveBeenCalledWith('bot-1');
   fireEvent.click(screen.getByRole('button', { name: 'create' }));
-  expect(mocks.navigate).toHaveBeenCalledWith('/bots/groups/new-room');
+  expect(mocks.navigate).toHaveBeenCalledWith('/bots/groups/new-room', { state: { createdGroupInvite: 'new-room' } });
   expect(mocks.manage).not.toHaveBeenCalled();
 });
 

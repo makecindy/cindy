@@ -1,3 +1,5 @@
+import { forwardNavigationLock } from '@/utils/navigationLock';
+import { SessionDrawerNavigationContext } from '@/session/SessionDrawerNavigationContext';
 // @vitest-environment jsdom
 import * as React from 'react';
 import { act } from 'react';
@@ -5,6 +7,7 @@ import { createRoot } from 'react-dom/client';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { SideChatTaskBoundary } from '../session/SideChatTaskBoundary';
 import { SessionTaskLayout } from '../session/SessionTaskLayout';
+import { NewSessionLayout } from '../session/NewSessionLayout';
 import type { ComponentProps } from 'react';
 import type { SessionListDrawer } from '../session/SessionListDrawer';
 import type { RemoteSessionListItem } from '../session/sessionList';
@@ -16,7 +19,7 @@ const state = vi.hoisted(() => ({
   replace: vi.fn(),
   dismissKeyboard: vi.fn(),
   listeners: new Set<(deviceId: string, sessionId: string) => void>(),
-  route: { deviceId: 'host', sessionId: 'child' },
+  route: { deviceId: 'host', sessionId: 'child' } as Record<string, string>,
   sidebar: null as ComponentProps<typeof SessionListDrawer> | null,
   source: 'local',
   replaceParams: vi.fn(),
@@ -38,6 +41,7 @@ vi.mock('expo-router', () => ({
   }),
 }));
 vi.mock('expo-router/react-navigation', () => ({ useIsFocused: () => state.focused }));
+vi.mock('@/session/useSessionHeaderHeight', () => ({ useSessionHeaderHeight: () => 44 }));
 vi.mock('../session/remoteSessionStore', () => ({
   remoteSessionStore: {
     getSessionDeviceId: () => 'host',
@@ -54,10 +58,18 @@ vi.mock('../session/CindyMakeSessionGate', () => ({
 vi.mock('../session/RecentMessageHistories', () => ({
   MessageHistoryOverlay: ({ children }: { children: React.ReactNode }) => children,
 }));
-vi.mock('../session/ResidentHomeList', () => ({ useSessionPaneLayout: () => ({ persistent: true, sidebarWidth: 320 }) }));
-vi.mock('@/platform/AdaptiveWindowContext', () => ({ useAdaptiveWindow: () => ({ barEdge: 'left' }) }));
+vi.mock('../session/NativeResidentHistory', () => ({ NativeTaskDrawerHost: null, NativeHistoryHost: null, NativeHistorySlot: null }));
+vi.mock('react-native-reanimated', () => ({ cancelAnimation: vi.fn() }));
+vi.mock('../session/ResidentHomeList', () => ({ useSessionSidebarWidthPreference: () => ({ width: null }), useSessionPaneLayout: () => ({
+  persistent: true, sidebarWidth: 320, detail: { x: 320, y: 0, width: 680, height: 800 },
+}) }));
+vi.mock('@/platform/AdaptiveWindowContext', () => ({
+  useAdaptiveWindowDimensions: () => ({ width: 1000, height: 800, fontScale: 1 }),
+  useAdaptiveWindow: () => ({ barEdge: 'left', width: 1000, height: 800, insets: { top: 0, left: 0, right: 0, bottom: 0 }, regions: [], regularWidth: true, reservedRegionsSupported: false }),
+  PaneViewportProvider: ({ children }: { children: React.ReactNode }) => children,
+}));
+vi.mock('@/theme', () => ({ useTheme: () => ({ colors: { surface: 'white' } }) }));
 vi.mock('react-i18next', () => ({ useTranslation: () => ({ t: (key: string) => key }) }));
-vi.mock('../session/conversationSearch', () => ({ conversationSearchCompanionParams: () => ({}) }));
 vi.mock('../session/SessionListDrawer', () => ({ SessionListDrawer: (props: ComponentProps<typeof SessionListDrawer>) => {
   state.sidebar = props;
   return <textarea aria-label="Sidebar search" />;
@@ -94,6 +106,28 @@ describe('side chat task lifecycle', () => {
   afterEach(() => {
     act(() => root.unmount());
     expect(state.listeners.size).toBe(0);
+  });
+
+  // Unit regression #7082: sidebar navigation could cover a pending new task,
+  // whose late completion then replaced the selected task. Existing tests only
+  // exercise completed-task drawers. Use the real layout's navigation handler
+  // while the shared submission ref changes without a React rerender.
+  it('blocks new-task sidebar navigation until a pending creation returns to editing', () => {
+    const creatingRef = { current: false };
+    act(() => root.render(<NewSessionLayout creatingRef={creatingRef}><textarea aria-label="New task" /></NewSessionLayout>));
+    const navigate = state.sidebar!.runNavigation;
+    let route = 'new';
+    navigate(() => { route = 'existing'; });
+    expect(route).toBe('existing');
+    route = 'new';
+    creatingRef.current = true;
+    navigate(() => { route = 'existing'; });
+    expect(route).toBe('new');
+    // A failed/pre-submit-aborted creation clears the same lock; retrying the
+    // sidebar action works immediately. Successful handoff keeps it locked.
+    creatingRef.current = false;
+    navigate(() => { route = 'existing'; });
+    expect(route).toBe('existing');
   });
 
   it('unmounts only its own deleted task and returns immediately once', () => {
@@ -189,6 +223,69 @@ describe('side chat task lifecycle', () => {
     expect(host.textContent).toBe('current task failed');
   });
 
+  it.each([undefined, 'sidebar'])('normalizes old history links before mounting without losing entry=%s', (taskListEntry) => {
+    state.route = { deviceId: 'host', sessionId: 'old', resourceHistorySessionId: 'old', resourceId: 'bot', resourceKind: 'bot', focusClientId: 'message' };
+    if (taskListEntry) state.route.taskListEntry = taskListEntry;
+    act(() => root.render(<SessionTaskLayout>{() => <textarea aria-label="Legacy history" />}</SessionTaskLayout>));
+    expect(host.querySelector('textarea')).toBeNull();
+    expect(state.replaceParams).toHaveBeenCalledWith({ deviceId: 'host', deviceName: 'another computer', sessionId: 'old', focusClientId: 'message', ...(taskListEntry ? { taskListEntry } : {}) });
+  });
+
+  // #7105: a same-ID search hit must exit the companion resource skin, whereas
+  // selecting the already-open ordinary row is a no-op. Unit, actual layout consumer.
+  it.each([false, true])('handles the current task selected from search=%s', (search) => {
+    state.route = { deviceId: 'host', sessionId: 'child', resourceCollectionId: 'teammates', resourceKind: 'bot', resourceId: 'bot' };
+    act(() => root.render(<SessionTaskLayout>{() => <textarea />}</SessionTaskLayout>));
+    const target = {
+      session: { id: 'child', canonicalDeviceId: 'host' },
+      ...(search ? { searchLocallyCached: false } : {}),
+    } as unknown as RemoteSessionListItem;
+    act(() => state.sidebar!.onSelectSession!(target));
+    if (search) expect(state.replaceParams).toHaveBeenCalledExactlyOnceWith({
+      deviceId: 'host', deviceName: 'another computer', sessionId: 'child',
+    });
+    else expect(state.replaceParams).not.toHaveBeenCalled();
+  });
+
+  it('keeps the push lock on first mount and releases it after an in-place switch commits', () => {
+    forwardNavigationLock.reset();
+    expect(forwardNavigationLock.shouldAllow('first')).toBe(true);
+    const renderLayout = () => act(() => root.render(<SessionTaskLayout>{() => <textarea />}</SessionTaskLayout>));
+    renderLayout();
+    expect(forwardNavigationLock.shouldAllow('duplicate')).toBe(false);
+    state.route = { deviceId: 'host', sessionId: 'next' };
+    renderLayout();
+    expect(forwardNavigationLock.shouldAllow('next-intent')).toBe(true);
+    forwardNavigationLock.reset();
+  });
+
+  it('reuses the conversation route for companion selection while retaining validation and settings', () => {
+    const order: string[] = [];
+    let dispatch: React.ContextType<typeof SessionDrawerNavigationContext>;
+    function Probe() { dispatch = React.useContext(SessionDrawerNavigationContext); return <textarea />; }
+    state.replaceParams.mockImplementation(() => order.push('navigate'));
+    act(() => root.render(<SessionTaskLayout>{chrome => {
+      chrome.beforeSessionSwitchRef.current = () => order.push('discard');
+      return <Probe />;
+    }}</SessionTaskLayout>));
+    const sidebar = host.querySelector('[aria-label="Sidebar search"]');
+    const params = { sessionId: 'companion-chat', deviceId: 'other-host', deviceName: 'Mac',
+      resourceCollectionId: 'teammates', resourceKind: 'bot', resourceId: 'bot', companionSettings: 'capabilities' };
+    act(() => expect(dispatch!({ pathname: '/sessions/[sessionId]', params })).toBe(true));
+    expect(order).toEqual(['discard', 'navigate']);
+    expect(state.replaceParams).toHaveBeenCalledExactlyOnceWith(params);
+    state.route = params;
+    act(() => root.render(<SessionTaskLayout>{() => <Probe />}</SessionTaskLayout>));
+    expect(host.querySelector('[aria-label="Sidebar search"]')).toBe(sidebar);
+    const { companionSettings: _settings, ...current } = params;
+    expect(dispatch!({ pathname: '/sessions/[sessionId]', params: current })).toBe(true);
+    expect(state.replaceParams).toHaveBeenCalledTimes(1);
+    expect(dispatch!('/settings')).toBe(false);
+    expect(dispatch!({ pathname: '/sessions/[sessionId]', params: { ...params, draft: 'new draft' } })).toBe(false);
+    expect(state.replaceParams).toHaveBeenCalledTimes(1);
+    expect(state.back).not.toHaveBeenCalled();
+  });
+
   it('discards the outgoing attachment scope before sidebar navigation and preserves search focus', () => {
     const order: string[] = [];
     state.replaceParams.mockImplementation(() => order.push('navigate'));
@@ -200,7 +297,7 @@ describe('side chat task lifecycle', () => {
       session: { id: 'next', canonicalDeviceId: 'canonical-host', deviceLinkDeviceId: 'old-host', deviceLinkDeviceName: 'Mac' },
       searchFocusClientId: 'message-42',
     } as unknown as RemoteSessionListItem;
-    act(() => state.sidebar!.onSelectSession(target));
+    act(() => state.sidebar!.onSelectSession!(target));
     expect(order).toEqual(['discard', 'navigate']);
     expect(state.replaceParams).toHaveBeenCalledExactlyOnceWith({
       deviceId: 'canonical-host', deviceName: 'Mac', sessionId: 'next', focusClientId: 'message-42',

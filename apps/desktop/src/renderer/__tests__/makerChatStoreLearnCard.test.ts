@@ -175,6 +175,22 @@ describe('voice call history projection', () => {
 });
 
 describe('agent switch 历史投影', () => {
+  it.each(['restored', 'fallback'] as const)('重新打开任务保留换电脑信息与 %s 状态', async (nativeHistory) => {
+    const id = sid(`agent-relocation-${nativeHistory}`);
+    const relocation = {
+      nativeHistory, resumed: nativeHistory === 'restored',
+      toAgentDeviceId: 'test-macbook', toAgentDeviceName: 'Test MacBook',
+      switchReason: 'quota-rebalance',
+    };
+    transportMocks.listMessages.mockResolvedValueOnce([{
+      id: 'relocation-row', clientId: 'relocation', sessionId: id, role: 'agent_switch',
+      content: { fromAgentKind: 'codex', toAgentKind: 'codex', ...relocation }, createdAt: Date.now(),
+    }] as never);
+    makerChatStore.ensureInitialMessages(id);
+    await vi.waitFor(() => expect(makerChatStore.getSnapshot(id).historyLoaded).toBe(true));
+    expect(makerChatStore.getSnapshot(id).messages[0].systemCardData).toMatchObject(relocation);
+  });
+
   it('保留 resumed=true,让桌面端显示已续接原生会话', async () => {
     const id = sid('agent-switch-resumed');
     transportMocks.listMessages.mockResolvedValueOnce([
@@ -204,6 +220,7 @@ describe('agent switch 历史投影', () => {
       .getSnapshot(id)
       .messages.find((message) => message.systemCardType === 'agent-switch');
     expect(card?.systemCardData).toMatchObject({ resumed: true });
+    expect(card?.systemCardData).not.toHaveProperty('toAgentDeviceId');
   });
 });
 

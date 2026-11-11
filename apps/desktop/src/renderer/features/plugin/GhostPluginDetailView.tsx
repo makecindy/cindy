@@ -1,3 +1,7 @@
+import { getPluginToolUi } from '@cindy/plugin-protocol';
+import { pluginHasToolUi } from '@cindy/plugin-protocol';
+import type { PreparedPluginContribution } from '../../../shared/pluginContributions';
+import { PluginShareButton } from './PluginShareButton';
 import { Button } from '@/components/ui/button';
 import { GithubAccountCard } from '@/features/cc-agent/GithubAccountCard';
 import { shouldShowOpenPathError } from '../../../shared/openPathResult';
@@ -5,7 +9,7 @@ import { shouldShowOpenPathError } from '../../../shared/openPathResult';
  * Plugin detail presentation for configuration, Tools, permissions, and factual metadata.
  *
  * Inputs: the renderer-safe Plugin detail model plus the installed Ghost when available.
- * Outputs: accessible detail interactions, Host-owned configuration rows, a single-row responsive
+ * Outputs: accessible detail interactions, Host-owned configuration rows, a wrapping responsive
  * action hero with the shared Switch, and the sticky top bar with back and macOS window dragging.
  * [PROTOCOL]: 变更时更新此头部，然后检查 CLAUDE.md
  */
@@ -31,10 +35,15 @@ import {
 import { useTranslation } from 'react-i18next';
 
 import { PluginUsageCard } from './PluginUsageCard';
+import { PluginReadmeSection, usePluginReadme } from './PluginReadmeSection';
 import { PluginSharedUsage } from './PluginSharedUsage';
+import { PluginPublisherBadge, PluginPublisherDescription } from './PluginPublisherBadge';
+import { pluginPresentationOrigin, type PluginPresentationOrigin } from './lib/pluginMarketPresentation';
 import type { PluginMarketItem } from '../../../shared/pluginMarket';
 import { GhostLibrarySection } from './GhostLibrarySection';
+import { GhostHandoffFilesSection } from './GhostHandoffFilesSection';
 import { PluginBackgroundTasksSection } from './PluginBackgroundTasksSection';
+import { PluginControlPointsSection } from './PluginControlPointsSection';
 import { PluginTaskPrefs } from '@/cindy-brain/PluginTaskPrefs';
 import { GhostSettingsWebview } from '@/cindy-brain/GhostSettingsWebview';
 import { WINDOW_NO_DRAG_STYLE } from '@/components/layout/windowDrag';
@@ -50,9 +59,10 @@ import { Switch } from '@/components/ui/switch';
 import { toast } from '@/lib/toast';
 import { cn } from '@/lib/utils';
 import {
+  declaredGhostControlPoints,
   ghostDeclaresHiddenTasks,
+  ghostToolDeclaresHandoff,
   ghostTrustLabelKey,
-  isUserInstallReservedGhostId,
   type GhostPermissionItem,
   type GhostToolDecl,
   type InstalledGhost,
@@ -82,6 +92,8 @@ interface GhostPluginDetailViewProps {
   remote?: boolean;
   remoteFileUpdate?: boolean;
   ghost: InstalledGhost | null;
+  /** Only a verified server-market association can offer public sharing. */
+  sharePluginId?: string;
   detail: GhostPluginDetail;
   marketItem?: PluginMarketItem | null;
   panelStatus: string | null;
@@ -89,6 +101,7 @@ interface GhostPluginDetailViewProps {
   onBack: () => void;
   usageOwnerKey?: string;
   confirmClearUsage?: () => Promise<boolean>;
+  publishingSection?: ReactNode;
   onToggle: (enabled: boolean) => void;
   /** 主动作:面板型「使用」/ 指令或 Host 能力型「对话」;纯工具型不渲染主按钮。 */
   onUse: () => void;
@@ -110,6 +123,11 @@ interface GhostPluginDetailViewProps {
   onUninstall: () => void;
   /** 导出 .cindy;当前详情非已装插件(纯市场视图)时缺省,菜单项不渲染。 */
   onExport?: () => void;
+  /** Opens publishing; package preparation and submission belong to the dialog. */
+  onContribute?: () => void;
+  contributionBusy?: boolean;
+  publishingPreview?: PreparedPluginContribution;
+  contributionUnavailableReason?: string;
   toggleDisabled: boolean;
   onIconLoadError?: () => void;
 }
@@ -129,10 +147,12 @@ export function GhostPluginDetailView({
   remoteFileUpdate = false,
   remoteConfiguration,
   ghost,
+  sharePluginId,
   detail,
   panelStatus,
   enabledOverride,
   onBack,
+  publishingSection,
   onToggle,
   onUse,
   marketItem,
@@ -147,14 +167,21 @@ export function GhostPluginDetailView({
   updateBusy = false,
   onUninstall,
   onExport,
+  onContribute,
+  contributionBusy = false,
+  publishingPreview,
+  contributionUnavailableReason,
   toggleDisabled,
   onIconLoadError,
 }: GhostPluginDetailViewProps) {
-  const { t } = useTranslation();
+  const { t, i18n } = useTranslation();
+  const uiLanguage = i18n.resolvedLanguage ?? i18n.language;
   const { scrolled, onScroll } = usePluginDetailScrolled();
   const enableSwitchId = useId();
+  const publicationBlocked = publishingPreview?.preflight?.actions.canSubmit === false;
   const [githubConnectionVersion, setGithubConnectionVersion] = useState(0);
   const [taskApprovalPending, setTaskApprovalPending] = useState(false);
+  const [browserActivation, setBrowserActivation] = useState<{ id: string; state: 'pending' | 'done' | 'failed' } | null>(null);
   // 未批准的安装不可运行；恢复入口与普通停用区分。
   const needsReapproval = detail.approvalState !== 'approved';
   const enabled = (enabledOverride ?? detail.enabled) && !needsReapproval;
@@ -163,18 +190,13 @@ export function GhostPluginDetailView({
     enabled &&
     (primaryAction === 'panel' ||
       (primaryAction === 'command' && detail.canUse));
-  // Local imports with the same id cannot use the host gh credential. Match the
-  // official receipt before advertising that connection in this plugin's UI.
+  // The shared GitHub login is available to any approved declaration.
   const hasGithubConnection =
-    !remote && detail.ghostId === 'cindy-github' &&
-    Boolean(ghost) &&
-    ghost?.trust?.level === 'cindy-official' &&
-    ghost.trust.publisherSigned &&
-    ghost.trust.publisherVerified &&
-    ghost.trust.reviewed &&
-    ghost.trust.publisherName === 'Cindy Plugin Market';
+    !remote && !needsReapproval &&
+    ghost?.manifest.network?.secrets?.some(secret => secret.source === 'gh-cli') === true;
   const hasConfiguration =
     hasGithubConnection ||
+    Boolean(ghost?.manifest.browserExtension) ||
     detail.hasMainView ||
     detail.hasSettingsUi ||
     detail.hasTaskPreferences;
@@ -182,10 +204,16 @@ export function GhostPluginDetailView({
     ? t('ccAgent.gitContext.pr.setup.account.summary')
     : ghostPluginSummary(detail.description, detail.ghostId);
   // 远程文件更新按目标 Host 能力判断，不能使用控制端的 DEV 状态。
-  const localUpdateAvailable = remote
-    ? remoteFileUpdate && !isUserInstallReservedGhostId(detail.ghostId)
-    : import.meta.env.DEV || !isUserInstallReservedGhostId(detail.ghostId);
+  const localUpdateAvailable = (!remote || remoteFileUpdate) && ghost?.publishingSource?.kind !== 'public-market';
   const hasAdditionalActions = localUpdateAvailable || onExport !== undefined;
+  // 远程设备的插件目录不在本机，详细介绍只在本机详情页读取。
+  const readme = usePluginReadme(
+    ghost ? `${detail.id}@${ghost.manifest.version}@${uiLanguage}` : null,
+    ghost?.manifest.readme && !remote ? () => window.electronAPI.ghosts.readme(detail.id, uiLanguage) : null,
+  );
+  const localShareAvailable = !remote && ghost?.publishingSource?.kind === 'local' &&
+    ghost.approval.state === 'approved' && ghost.namespaceState === 'confirmed' && (ghost.namespace === null || ghost.namespace === 'local') &&
+    !ghost.builtin;
 
   return (
     <main
@@ -196,6 +224,7 @@ export function GhostPluginDetailView({
         label={t('settings.ghosts.detail.backToList')}
         onBack={onBack}
         scrolled={scrolled}
+        actions={sharePluginId ? <PluginShareButton pluginId={sharePluginId} /> : localShareAvailable && ghost ? <PluginShareButton ghost={ghost} /> : undefined}
       />
       <article className="plugin-detail-frame mx-auto w-full max-w-[824px] px-8 pb-16 pt-5 max-[760px]:px-6">
         <PluginDetailHeader
@@ -205,11 +234,14 @@ export function GhostPluginDetailView({
           author={detail.author}
           version={detail.version}
           marketItem={marketItem}
+          origin={detail.origin}
+          publisherKind={detail.publisherKind}
+          installationLabel={detail.installationLabelKey ? t(`settings.ghosts.detail.${detail.installationLabelKey}`, { name: detail.installationNamespace }) : undefined}
           iconDataUrl={detail.iconDataUrl}
           onIconLoadError={onIconLoadError}
           actions={
             <div
-              className="plugin-detail-actions flex shrink-0 flex-nowrap items-center gap-1.5"
+              className="plugin-detail-actions flex min-w-0 flex-wrap items-center gap-1.5"
               style={WINDOW_NO_DRAG_STYLE}
             >
               {needsReapproval && !detail.builtin && onReapprove ? (
@@ -264,6 +296,18 @@ export function GhostPluginDetailView({
                       ? 'settings.ghosts.detail.useAction'
                       : 'settings.ghosts.detail.chatAction',
                   )}
+                </Button>
+              ) : null}
+              {!publicationBlocked && onContribute ? (
+                <Button
+                  variant="secondary"
+                  size="lg"
+                  onClick={onContribute}
+                  loading={contributionBusy}
+                  disabled={Boolean(contributionUnavailableReason)}
+                  title={contributionUnavailableReason}
+                >
+                  {t('settings.ghosts.contribution.publishPlugin')}
                 </Button>
               ) : null}
               {/* 启用开关带明确文字(设计定稿):状态一目了然,点文字同样可切换。 */}
@@ -372,6 +416,8 @@ export function GhostPluginDetailView({
           />
         ) : null}
 
+        <PluginReadmeSection readme={readme} />
+
         {remote ? remoteConfiguration : hasConfiguration ? (
           <section
             className={hasGithubConnection ? 'mt-6' : DETAIL_SECTION_CLASS}
@@ -389,6 +435,26 @@ export function GhostPluginDetailView({
                 'space-y-3',
               )}
             >
+              {ghost?.manifest.browserExtension ? (
+                <div className="flex flex-wrap items-center gap-3">
+                  <Button variant="secondary" disabled={!enabled || browserActivation?.id === detail.id && browserActivation.state === 'pending'}
+                    onClick={async () => {
+                      const id = detail.id;
+                      setBrowserActivation({ id, state: 'pending' });
+                      try {
+                        const result = await window.electronAPI.ghosts.activateBrowser(id);
+                        setBrowserActivation({ id, state: result.ok ? 'done' : 'failed' });
+                      } catch { setBrowserActivation({ id, state: 'failed' }); }
+                    }}>
+                    {t('settings.ghosts.detail.browserUse')}
+                  </Button>
+                  {browserActivation?.id === detail.id && browserActivation.state !== 'pending' ? (
+                    <p role="status" className="text-13 leading-5 text-[var(--text-secondary)]">
+                      {t(browserActivation.state === 'done' ? 'settings.ghosts.detail.browserActivated' : 'settings.ghosts.detail.browserActivationFailed')}
+                    </p>
+                  ) : null}
+                </div>
+              ) : null}
               {detail.hasMainView ? (
                 <div
                   className={cn(
@@ -479,9 +545,30 @@ export function GhostPluginDetailView({
           hiddenTasksDeclared={ghostDeclaresHiddenTasks(ghost?.manifest)}
         />
 
+        {ghost && !remote ? (
+          <PluginControlPointsSection
+            ghostId={detail.id}
+            declared={declaredGhostControlPoints(ghost.manifest).length > 0}
+          />
+        ) : null}
+
         {detail.tools.length > 0 ? <ToolsSection tools={detail.tools} /> : null}
 
         {detail.permissions.length > 0 ? <PermissionSummary items={detail.permissions} /> : null}
+        {ghost && pluginHasToolUi(ghost.manifest) && <section className="mt-4 space-y-3">
+          <h3 className="text-14 font-medium text-[var(--text-primary)]">{t('settings.ghosts.perm.mcpUi')}</h3>
+          {ghost.manifest.tools?.filter(tool => getPluginToolUi(ghost.manifest)?.tools[tool.name]).map(tool => <div key={tool.name} className="text-13 text-[var(--text-secondary)]">
+            <p>{tool.name}</p>
+            <p className="break-all text-12">{getPluginToolUi(ghost.manifest)?.tools[tool.name].visibility && !getPluginToolUi(ghost.manifest)?.tools[tool.name].visibility!.includes('model') ? t('settings.ghosts.perm.mcpAppOnly') : `ghost_call: ${tool.name}`}</p>
+          </div>)}
+          {!remote && enabled && ghost.uiCapabilityApproved !== true && <Button variant="secondary" size="sm" disabled={taskApprovalPending} onClick={async () => {
+            setTaskApprovalPending(true);
+            try { await window.electronAPI.ghosts.requestUiApproval(detail.id); }
+            catch { toast.error(t('settings.ghosts.errors.generic')); }
+            finally { setTaskApprovalPending(false); }
+          }}>{t('settings.ghosts.installConsent.updateNeedsConsent')}</Button>}
+        </section>}
+
         {!remote && enabled && ghost?.manifest.agent?.tasks === true && ghost.taskCapabilityApproved !== true ? (
           <Button variant="secondary" size="sm" className="mt-4" disabled={taskApprovalPending} onClick={async () => {
             setTaskApprovalPending(true);
@@ -496,8 +583,44 @@ export function GhostPluginDetailView({
             {t('settings.ghosts.perm.agentTasksRequest')}
           </Button>
         ) : null}
+        {!remote && enabled && ghost?.manifest.agent?.observe === true && ghost.observeCapabilityApproved !== true ? (
+          <Button variant="secondary" size="sm" className="mt-4" disabled={taskApprovalPending} onClick={async () => {
+            setTaskApprovalPending(true);
+            try {
+              await window.electronAPI.ghosts.requestTaskApproval(detail.id, 'observe');
+            } catch {
+              toast.error(t('settings.ghosts.errors.generic'));
+            } finally {
+              setTaskApprovalPending(false);
+            }
+          }}>
+            {t('settings.ghosts.perm.agentObserveRequest')}
+          </Button>
+        ) : null}
+        {!remote && enabled && ghost?.manifest.agent?.companions === true && ghost.companionsCapabilityApproved !== true ? (
+          <Button variant="secondary" size="sm" className="mt-4" disabled={taskApprovalPending} onClick={async () => {
+            setTaskApprovalPending(true);
+            try {
+              await window.electronAPI.ghosts.requestTaskApproval(detail.id, 'companions');
+            } catch {
+              toast.error(t('settings.ghosts.errors.generic'));
+            } finally {
+              setTaskApprovalPending(false);
+            }
+          }}>
+            {t('settings.ghosts.perm.agentCompanionsRequest')}
+          </Button>
+        ) : null}
 
         {!remote ? <GhostLibrarySection ghostId={detail.id} enabled={ghost?.manifest.library === true} /> : null}
+        {!remote ? (
+          <GhostHandoffFilesSection
+            ghostId={detail.id}
+            declared={(ghost?.manifest.tools ?? []).some((tool) => ghostToolDeclaresHandoff(tool))}
+          />
+        ) : null}
+
+        {publishingSection}
 
         <DetailsSection detail={remote ? { ...detail, installDir: null } : detail} panelStatus={panelStatus} />
       </article>
@@ -526,6 +649,9 @@ export function PluginDetailHeader({
   author,
   version,
   marketItem,
+  origin,
+  publisherKind,
+  installationLabel,
   iconDataUrl,
   actions,
   children,
@@ -537,6 +663,9 @@ export function PluginDetailHeader({
   author?: string | null;
   version?: string;
   marketItem?: PluginMarketItem | null;
+  origin?: PluginPresentationOrigin;
+  publisherKind?: PluginMarketItem['publisherKind'];
+  installationLabel?: string;
   iconDataUrl?: string;
   actions?: ReactNode;
   children?: ReactNode;
@@ -544,6 +673,10 @@ export function PluginDetailHeader({
 }) {
   const { t } = useTranslation();
   const [descriptionExpanded, setDescriptionExpanded] = useState(false);
+  const source = marketItem ? pluginPresentationOrigin(marketItem) : origin;
+  const kind = marketItem?.sourceType === 'server' && marketItem.scope === 'public'
+    ? marketItem.publisherKind : publisherKind;
+  const visibleAuthor = source === 'public' && kind !== 'official' ? null : author;
   const [descriptionOverflows, setDescriptionOverflows] = useState(false);
   const descriptionRef = useRef<HTMLParagraphElement>(null);
   useLayoutEffect(() => {
@@ -598,14 +731,17 @@ export function PluginDetailHeader({
           onIconLoadError={onIconLoadError}
         />
         <div className="min-w-0">
-          <h1 className="truncate text-28 font-medium leading-[1.214] text-[var(--text-primary)]">
-            {name}
-          </h1>
-          <GhostPluginMetadata author={author} version={version} marketItem={marketItem} />
+          <div className="flex min-w-0 items-center gap-1.5">
+            <h1 className="truncate text-28 font-medium leading-[1.214] text-[var(--text-primary)]">{name}</h1>
+            <PluginPublisherBadge origin={source} kind={kind} />
+          </div>
+          <GhostPluginMetadata author={visibleAuthor} version={version} marketItem={marketItem} />
+          {installationLabel ? <p className="mt-1 break-words text-12 text-[var(--text-tertiary)]">{installationLabel}</p> : null}
         </div>
 
         {actions}
       </div>
+      <PluginPublisherDescription origin={source} kind={kind} />
       <div className="mt-5">
         <p
           ref={descriptionRef}
@@ -775,7 +911,7 @@ export function ToolDescriptionChip({ tool }: { tool: Pick<GhostToolDecl, 'name'
         sideOffset={8}
         className={cn(
           DETAIL_SURFACE_CLASS,
-          'z-[10000] w-[320px] rounded-xl p-4 text-[var(--text-primary)] shadow-[var(--shadow-menu)] data-[state=open]:animate-none data-[state=closed]:animate-none',
+          'z-[10000] w-[320px] rounded-xl p-4 text-[var(--text-primary)] shadow-[shadow:var(--shadow-menu)] data-[state=open]:animate-none data-[state=closed]:animate-none',
         )}
       >
         <p className="text-13 leading-5 text-[var(--text-secondary)]">

@@ -20,7 +20,8 @@ vi.mock('@/hooks/useAppShortcut', () => ({
   },
 }));
 
-vi.mock('@/components/find-in-page/findInPageOwnership', () => ({
+vi.mock('@/components/find-in-page/findInPageOwnership', async (importOriginal) => ({
+  ...await importOriginal<typeof import('../findInPageOwnership')>(),
   isFindInPageClaimed: () => false,
 }));
 
@@ -58,6 +59,77 @@ function getHighlight(name: string): MockHighlight | undefined {
 }
 
 describe('FindInPageBar', () => {
+  // #8232, unit tier: the real global search must live in the
+  // foreground preview and count its document, not the covered chat. Existing
+  // cases only exercise an unobstructed page; actual stacking is also checked
+  // by the markdown-preview-find Electron fixture (unit cannot hit-test CSS).
+  it('searches only the foreground document and closes search before its preview', async () => {
+    const page = document.createElement('main');
+    page.textContent = 'apple in the covered chat';
+    const card = document.createElement('section');
+    card.dataset.textLightboxCard = '';
+    card.dataset.textLightboxSearchHost = '';
+    const content = document.createElement('article');
+    content.dataset.textLightboxSearchRoot = '';
+    content.textContent = 'apple apple';
+    card.append(content);
+    page.append(card);
+    const input = await openFindBar(page);
+    fireEvent.change(input, { target: { value: 'apple' } });
+
+    expect(screen.getByText('1/2')).toBeTruthy();
+    expect(card.contains(input)).toBe(true);
+    expect(getHighlight(MATCH_HIGHLIGHT_NAME)?.ranges.every(
+      range => content.contains(range.startContainer),
+    )).toBe(true);
+    fireEvent.keyDown(input, { key: 'Enter' });
+    expect(screen.getByText('2/2')).toBeTruthy();
+    fireEvent.keyDown(input, { key: 'Enter', shiftKey: true });
+    expect(screen.getByText('1/2')).toBeTruthy();
+
+    const previewEscape = vi.fn();
+    document.addEventListener('keydown', previewEscape);
+    fireEvent.compositionStart(input);
+    fireEvent.keyDown(input, { key: 'Escape', isComposing: true });
+    expect(screen.getByRole('searchbox')).toBe(input);
+    expect(previewEscape).not.toHaveBeenCalled();
+    fireEvent.compositionEnd(input);
+    fireEvent.keyDown(input, { key: 'Escape', repeat: true });
+    expect(screen.getByRole('searchbox')).toBe(input);
+    expect(previewEscape).not.toHaveBeenCalled();
+    fireEvent.keyUp(input, { key: 'Escape' });
+    fireEvent.keyDown(content, { key: 'Escape' });
+    expect(screen.queryByRole('searchbox')).toBeNull();
+    expect(previewEscape).not.toHaveBeenCalled();
+    expect(getHighlight(MATCH_HIGHLIGHT_NAME)).toBeUndefined();
+    fireEvent.keyDown(content, { key: 'Escape' });
+    expect(previewEscape).toHaveBeenCalledTimes(1);
+    document.removeEventListener('keydown', previewEscape);
+  });
+
+  it('retargets an already open search when a preview opens and clears it on dismissal', async () => {
+    const page = document.createElement('main');
+    page.textContent = 'background apple';
+    const input = await openFindBar(page);
+    fireEvent.change(input, { target: { value: 'apple' } });
+    const card = document.createElement('section');
+    card.dataset.textLightboxCard = '';
+    card.dataset.textLightboxSearchHost = '';
+    const content = document.createElement('article');
+    content.dataset.textLightboxSearchRoot = '';
+    content.textContent = 'document pear';
+    card.append(content);
+    await act(async () => { document.body.append(card); });
+    expect(card.contains(screen.getByRole('searchbox'))).toBe(true);
+    expect(getHighlight(MATCH_HIGHLIGHT_NAME)).toBeUndefined();
+    expect(isPageTextAccessActive()).toBe(false);
+    await act(async () => { card.remove(); });
+    expect(screen.queryByRole('searchbox')).toBeNull();
+    await act(async () => { mocks.shortcutHandler?.(new KeyboardEvent('keydown')); });
+    fireEvent.change(screen.getByRole('searchbox'), { target: { value: 'apple' } });
+    expect(screen.getByText('1/1')).toBeTruthy();
+  });
+
   it('lets the owning message scroller coordinate a match jump', async () => {
     const page = document.createElement('main');
     page.textContent = 'owned search target';

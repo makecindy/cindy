@@ -52,6 +52,7 @@ export const MANAGEMENT_KIND_ORDER = [
   'stt',
   'realtime',
   'embedding',
+  'decision',
   'compression',
   'other',
 ] as const;

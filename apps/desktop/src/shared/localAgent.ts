@@ -3,12 +3,14 @@ export interface LocalAgentConnection {
   id: string;
   name: string;
   clientId?: string;
+  createVisibleSessions?: boolean;
 }
 
 export interface LocalAgentSettingsApi {
   developerConnection(): Promise<LocalAgentDeveloperConnection | null>;
   connections(): Promise<LocalAgentConnection[]>;
   revoke(connectionId?: string): Promise<boolean>;
+  setCreateVisibleSessions(connectionId: string, enabled: boolean): Promise<boolean>;
   onConnectionsChanged(listener: () => void): () => void;
   onConfirmation(listener: (request: LocalAgentConfirmation) => void): () => void;
   onConfirmationDismissed(listener: (requestId: string) => void): () => void;

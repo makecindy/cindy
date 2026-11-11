@@ -1,4 +1,5 @@
 import { BotChatReplyTarget } from '@/features/bots/BotChatQuoteViews';
+import { BotStartedTasksFooter, type BotStartedTask } from './BotStartedTasks';
 import { useBotChatQuote } from '@/features/bots/botChatQuoteContext';
 import { botReplyQuoteFor } from '@/features/bots/botDmQuote';
 import { hasRichAnswer, richAnswerText } from '@cindy/maker-shared/rich-answer';
@@ -47,7 +48,7 @@ import { botTaskResultKey, type BotCollaborationMeta } from '@cindy/maker-shared
  *   直到 finally — 那个体验更差, 没有借鉴。
  */
 
-import { CHAT_BODY_CLASS } from './chatChrome';
+import { ChatBubble, CHAT_BUBBLE_COLUMN_CLASS } from './ChatBubble';
 import { memo, useCallback, useMemo, useState, useSyncExternalStore } from 'react';
 import { useTranslation } from 'react-i18next';
 import { Loader2, TriangleAlert } from 'lucide-react';
@@ -67,7 +68,8 @@ import { buildSessionMessageDeepLink } from '@/lib/deepLink';
 import { getStickySessionDeviceId } from '@/features/device-link/stickySessionOrigin';
 import { insertSessionLinkIntoComposer } from '@/lib/composerActionsBus';
 import { MarkdownRenderer } from './MarkdownRenderer';
-import { BubbleHoverToolbar, MessageActionBar } from './MessageActionBar';
+import { handleAssistantCopy } from '@/lib/assistantSelectionCopy';
+import { MessageActionBar } from './MessageActionBar';
 import { shareSelectionStore } from './shareSelectionStore';
 import { useForkAtMessage } from './useForkAtMessage';
 import { useDeleteMessage } from './useDeleteMessage';
@@ -213,6 +215,8 @@ interface AssistantMessageProps {
   botStarterOptions?: string[];
   starterOptionsLocked?: boolean;
   botTaskResults?: BotCollaborationMeta[];
+  /** Teammate chat: tasks this reply started, shown at the foot of its bubble. */
+  botStartedTasks?: readonly BotStartedTask[];
   /** Per-turn 费用 (USD) — 仅该轮最后一条 assistant 有值, action bar 时间旁显示。 */
   turnMoney?: RegionalMoney;
   turnCostUsd?: number;
@@ -252,6 +256,7 @@ export const AssistantMessage = memo(function AssistantMessage({
   showActionBar = false,
   simplifiedBotConversation = false,
   botTaskResults,
+  botStartedTasks,
   botLearning,
   botStarterOptions,
   starterOptionsLocked,
@@ -352,6 +357,8 @@ export const AssistantMessage = memo(function AssistantMessage({
 
   const actionBar = !isStreaming && showActionBar ? (
     <MessageActionBar
+      sessionId={currentSessionId}
+      clientId={messageClientId}
       createdAt={createdAt}
       copyText={richAnswerText(content)}
       copyLinkText={messageDeepLink}
@@ -361,7 +368,7 @@ export const AssistantMessage = memo(function AssistantMessage({
       readAloudMessage={simplifiedBotConversation && !ghostReplyPending && currentSessionId && messageClientId
         ? { sessionId: currentSessionId, messageId: messageClientId }
         : undefined}
-      compact={botBubble}
+      companionFooter={botBubble}
       replyAction={dmThread && botBubble ? {
         onClick: dmThread.open,
         label: dmThread.thread
@@ -384,27 +391,16 @@ export const AssistantMessage = memo(function AssistantMessage({
 
   return (
     <div
+      data-selection-quote-scope=""
       className={cn('flex w-full flex-col items-start gap-1.5', botBubble && 'group/message')}
       onMouseEnter={() => setHovered(true)}
       onMouseLeave={() => setHovered(false)}
+      onCopy={handleAssistantCopy}
     >
-      <div
+      <ChatBubble
+        bare={!botBubble}
         {...(botBubble ? { 'data-bot-reply-bubble': '' } : {})}
-        className={cn(
-          // min-w-0: flex item 默认 min-width: auto 会被 <pre> 的固有宽度撑爆，
-          // 导致代码块溢出消息流右边界。加上 min-w-0 让 w-full 真正生效，
-          // <pre> 的 overflow-x-auto 才能正常接管横向滚动。
-          // 伙伴私聊：回复放进与群聊同一种气泡（卡片底 + 细边框，无阴影），宽度随内容、
-          // 上限 720；组件式回答按可用宽度排版，气泡取满上限。右侧为回复、朗读和更多留出位置。
-          botBubble
-            ? cn(
-                'relative min-w-0 max-w-[min(720px,calc(100%-96px))] rounded-xl border border-[var(--border-default)] bg-[var(--surface-elevated)] px-3.5 py-2.5',
-                hasRichAnswer(content) ? 'w-full' : 'w-fit',
-              )
-            : 'w-full min-w-0',
-          CHAT_BODY_CLASS,
-          'text-[var(--msg-assistant-text)]',
-        )}
+        className={botBubble ? cn(CHAT_BUBBLE_COLUMN_CLASS, hasRichAnswer(content) ? 'w-full' : 'w-fit') : undefined}
       >
         {botBubble && botQuote && messageClientId ? (
           <BotChatReplyTarget message={{ clientId: messageClientId, replyToClientId }} context={botQuote} />
@@ -414,46 +410,48 @@ export const AssistantMessage = memo(function AssistantMessage({
             {t('chat.failedSamplingAttempt')}
           </div>
         )}
-        {ghostRenderCard && messageClientId && !showOriginal ? (
-          // 出口钩子自绘:意识卡片替换气泡(净化后的静态 HTML,沙箱 iframe)。
-          // 复用 GhostToolCard(自带主机身份头 + 主题注入 + 沙箱),turn 级无
-          // 工具名/参数,running 恒 false(turn 已结束)。
-          <GhostToolCard
-            callId={messageClientId}
-            ghostId={ghostRenderCard.ghostId}
-            toolName=""
-            toolInput={undefined}
-            html={ghostRenderCard.html}
-            height={ghostRenderCard.height}
-            running={false}
-            sessionId={currentSessionId}
-          />
-        ) : isStreaming && USE_LINE_COMMIT_STREAMING && !hasRichAnswer(content) ? (
-          <StreamingBody
-            workingDir={workingDir}
-            content={displayContent}
-            localFileRefs={localFileRefs}
-            currentSessionId={currentSessionId}
-            currentSessionTitle={currentSessionTitle}
-            streamFadeKey={streamFadeKey}
-            allowPrivilegedLinks={allowPrivilegedLinks}
-          />
-        ) : (
-          // 默认分支 (USE_LINE_COMMIT_STREAMING=false) + 非 streaming 都走完整
-          // MarkdownRenderer。isStreaming 透传 — true 时 MarkdownRenderer 内部启用
-          // 100ms throttle, false 时无节流, 行为和该文件性能优化前完全一致。
-          <MarkdownRenderer
-            renderRichAnswers
-            workingDir={workingDir}
-            content={displayContent}
-            isStreaming={isStreaming}
-            streamFadeKey={streamFadeKey}
-            localFileRefs={localFileRefs}
-            currentSessionId={currentSessionId}
-            currentSessionTitle={currentSessionTitle}
-            allowPrivilegedLinks={allowPrivilegedLinks}
-          />
-        )}
+        <div data-selection-quote-body="" className="contents">
+          {ghostRenderCard && messageClientId && !showOriginal ? (
+            // 出口钩子自绘:意识卡片替换气泡(净化后的静态 HTML,沙箱 iframe)。
+            // 复用 GhostToolCard(自带主机身份头 + 主题注入 + 沙箱),turn 级无
+            // 工具名/参数,running 恒 false(turn 已结束)。
+            <GhostToolCard
+              callId={messageClientId}
+              ghostId={ghostRenderCard.ghostId}
+              toolName=""
+              toolInput={undefined}
+              html={ghostRenderCard.html}
+              height={ghostRenderCard.height}
+              running={false}
+              sessionId={currentSessionId}
+            />
+          ) : isStreaming && USE_LINE_COMMIT_STREAMING && !hasRichAnswer(content) ? (
+            <StreamingBody
+              workingDir={workingDir}
+              content={displayContent}
+              localFileRefs={localFileRefs}
+              currentSessionId={currentSessionId}
+              currentSessionTitle={currentSessionTitle}
+              streamFadeKey={streamFadeKey}
+              allowPrivilegedLinks={allowPrivilegedLinks}
+            />
+          ) : (
+            // 默认分支 (USE_LINE_COMMIT_STREAMING=false) + 非 streaming 都走完整
+            // MarkdownRenderer。isStreaming 透传 — true 时 MarkdownRenderer 内部启用
+            // 100ms throttle, false 时无节流, 行为和该文件性能优化前完全一致。
+            <MarkdownRenderer
+              renderRichAnswers
+              workingDir={workingDir}
+              content={displayContent}
+              isStreaming={isStreaming}
+              streamFadeKey={streamFadeKey}
+              localFileRefs={localFileRefs}
+              currentSessionId={currentSessionId}
+              currentSessionTitle={currentSessionTitle}
+              allowPrivilegedLinks={allowPrivilegedLinks}
+            />
+          )}
+        </div>
         {/* 自绘卡在场:提供原文 ↔ 意识卡片切换(信任边界,主机绘制,始终可切回原文)。 */}
         {ghostRenderCard && (
           <button
@@ -479,6 +477,9 @@ export const AssistantMessage = memo(function AssistantMessage({
             shared/modelMismatch.ts)。常显不随 hover —— 用户需要在不悬停的情况
             下知道这轮不是自己选的模型回答的;icon 用 warning 语义色(token 豁免
             簇),文字保持 tertiary 灰阶,不喧宾夺主。 */}
+        {botBubble && botStartedTasks?.length ? (
+          <BotStartedTasksFooter tasks={botStartedTasks} hostSessionId={currentSessionId} />
+        ) : null}
         {modelMismatch && (
           <div className="mt-1 flex items-center gap-1.5 text-11" style={{ color: 'var(--text-tertiary)' }}>
             <TriangleAlert size={11} style={{ color: 'var(--warning-fg)' }} aria-hidden />
@@ -488,8 +489,8 @@ export const AssistantMessage = memo(function AssistantMessage({
             })}
           </div>
         )}
-        {botBubble && actionBar && <BubbleHoverToolbar side="right">{actionBar}</BubbleHoverToolbar>}
-      </div>
+      </ChatBubble>
+      {botBubble && actionBar}
       {dmThread?.thread && !isStreaming ? (
         <BotDmThreadPreview thread={dmThread.thread} bot={dmThread.bot} unread={dmThread.unread} onOpen={dmThread.open} />
       ) : null}
@@ -504,7 +505,7 @@ export const AssistantMessage = memo(function AssistantMessage({
       ) : null}
       {/* Streaming → bar not mounted at all (V1.2 验收 "流式期间不挂载");
           非 turn 收尾正文(showActionBar=false)同样不挂,消息流保持紧凑。
-          伙伴私聊的气泡把操作栏挂在气泡右侧(BubbleHoverToolbar),这里不再另起一行。 */}
+          伙伴私聊的操作栏已紧跟气泡显示；普通任务保持原位置。 */}
       {!botBubble && actionBar}
     </div>
   );

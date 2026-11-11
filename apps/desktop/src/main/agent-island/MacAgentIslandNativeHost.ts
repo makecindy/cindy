@@ -57,6 +57,8 @@ export interface AgentIslandNativeScreenMetrics {
   displayId: number;
   frame: Rectangle;
   hasNotch: boolean;
+  /** Older helpers omit it; parsed as false. */
+  hasSystemIsland: boolean;
   notchWidth: number;
   topBarHeight: number;
   menuBarHeight: number;
@@ -174,6 +176,11 @@ export class MacAgentIslandNativeHost {
 
   get failed(): boolean {
     return this.permanentlyFailed;
+  }
+
+  /** A buffered publish during startup is not delivery to a native window. */
+  get available(): boolean {
+    return this.ready && this.child !== null && !this.permanentlyFailed;
   }
 
   publish(
@@ -745,6 +752,7 @@ function parseNativeScreenMetrics(input: unknown): AgentIslandNativeScreenMetric
       displayId: record.displayId,
       frame,
       hasNotch: record.hasNotch,
+      hasSystemIsland: record.hasSystemIsland === true,
       notchWidth: record.notchWidth,
       topBarHeight: record.topBarHeight,
       menuBarHeight: record.menuBarHeight,

@@ -74,7 +74,8 @@ export function PluginDevicePicker({
   directory: { candidates, target, online, relayOnline },
   projectMenu,
   projectLabel,
-}: CatalogDeviceControl & { projectMenu?: ReactNode; projectLabel?: string }) {
+  disabled,
+}: CatalogDeviceControl & { projectMenu?: ReactNode; projectLabel?: string; disabled?: boolean }) {
   const { t } = useTranslation();
   const computerName = selected
     ? (target?.name ?? selected.name)
@@ -86,6 +87,7 @@ export function PluginDevicePicker({
     <DropdownMenu>
       <DropdownMenuTrigger asChild>
         <Button
+          disabled={disabled}
           variant="secondary"
           size="lg"
           compact

@@ -4,8 +4,13 @@ export interface CompanionCloudHomeDevice {
   /** Device-link name; empty when the device is not in this account's device list. */
   name: string;
   online: boolean;
+  /** The device list says this computer allows remote control; absent when the list had no entry for it. */
+  remoteControlEnabled?: boolean;
   isSelf: boolean;
 }
+
+/** What a move to this computer could not keep of the companion's old setup (cloud-companions.md §2). */
+export type CompanionArrivalNoticeKind = 'permissions' | 'model';
 
 export interface CompanionCloudActor {
   /** Chat Server actor id. */
@@ -18,6 +23,8 @@ export interface CompanionCloudActor {
   homeDeviceId: string | null;
   /** Resolved home computer; only present in the renderer view (state IPC / change push). */
   homeDevice?: CompanionCloudHomeDevice | null;
+  /** Only in the renderer view: shown once after the companion arrived here, then dismissed. */
+  arrivalNotices?: CompanionArrivalNoticeKind[];
 }
 
 export interface CompanionCloudSnapshot {
@@ -43,7 +50,9 @@ export type CompanionCloudFailureCode =
   /** The home runs a Cindy that cannot be asked from another computer; change it there. */
   | 'HOME_OUTDATED'
   /** The companion (one of the copies, for a merge) is paused: resume it first. */
-  | 'PAUSED';
+  | 'PAUSED'
+  /** The chosen computer runs a Cindy too old for a V2 teammate (a project): update it first. */
+  | 'TARGET_OUTDATED';
 
 export type CompanionCloudActionResult =
   | { ok: true }
@@ -93,6 +102,8 @@ export interface CompanionTransferTarget {
   online: boolean;
   /** The computer asking (only in `CompanionHomeChoices`). */
   isSelf?: boolean;
+  /** Its Cindy cannot run a V2 teammate yet: shown, not selectable, until it is updated. */
+  outdated?: boolean;
 }
 
 /**
@@ -110,4 +121,6 @@ export interface CompanionHomeChoices {
   reason?: 'HOME_OUTDATED' | 'NOT_ENABLED' | 'NOT_FOUND';
   /** Computers it can move to (never the current home). */
   targets: CompanionTransferTarget[];
+  /** Why this computer is not among the targets of a remote home: it has not allowed same-account control. */
+  thisComputer?: 'REMOTE_CONTROL_OFF';
 }

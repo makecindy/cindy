@@ -2,11 +2,13 @@
 import { act, cleanup, renderHook } from '@testing-library/react';
 import { afterEach, expect, it, vi } from 'vitest';
 import { useRemoteSessionSync } from '../features/cc-agent/hooks/useRemoteSessionSync';
+import { sharedTaskHostPeer } from '@cindy/device-link';
 
-const mocks = vi.hoisted(() => ({ reconcile: vi.fn(async () => true), running: false }));
+const mocks = vi.hoisted(() => ({ reconcile: vi.fn(async () => true), running: false, devices: ['host', 'neighbor'], query: vi.fn(async () => true), finalize: vi.fn() }));
 vi.mock('@/lib/makerChatStore', () => ({
   makerChatStore: {
     reconcileRemoteMessages: mocks.reconcile,
+    finalizeStuckRemoteTurn: mocks.finalize,
     getSnapshot: () => ({ agentStatus: { isRunning: mocks.running } }),
     subscribe: () => () => {},
     getLastInboundEventAt: () => Date.now(),
@@ -15,9 +17,9 @@ vi.mock('@/lib/makerChatStore', () => ({
 vi.mock('@/lib/logger', () => ({
   createLogger: () => ({ info: vi.fn(), debug: vi.fn(), warn: vi.fn() }),
 }));
-vi.mock('@/lib/makerTransport', () => ({ isSessionTurnRunningFor: async () => true }));
+vi.mock('@/lib/makerTransport', () => ({ getSessionTurnActiveOn: mocks.query }));
 vi.mock('@/features/device-link/remoteProjectsStore', () => ({
-  remoteProjectsStore: { getDeviceIds: () => ['host', 'neighbor'], getDeviceName: () => 'host', subscribe: () => () => {} },
+  remoteProjectsStore: { getDeviceIds: () => mocks.devices, getDeviceName: () => 'host', subscribe: () => () => {} },
 }));
 vi.mock('@/features/device-link/refreshRemoteSessions', () => ({
   refreshRemoteDeviceSessions: vi.fn(),
@@ -36,20 +38,50 @@ function recoveryEvents() {
       emit: (payload: T) => listeners.forEach((cb) => cb(payload)),
     };
   }
+  const reset = event<{ deviceId: string }>();
   const status = event<{ status: string }>();
   const presence = event<{ deviceId: string; online: boolean; remoteControlEnabled: boolean }>();
   const responsiveness = event<{ deviceId: string; unresponsive: boolean; recovered: boolean }>();
   const subscribe = vi.fn(async () => {});
   vi.stubGlobal('electronAPI', { deviceLink: {
     subscribe, unsubscribe: async () => {},
+    onPeerLinkReset: reset.on,
     onStatusChanged: status.on,
     onPresenceChanged: presence.on,
     onResponsivenessChanged: responsiveness.on,
   } });
   mocks.running = false;
+  mocks.devices = ['host', 'neighbor'];
   mocks.reconcile.mockResolvedValue(true);
-  return { status, presence, responsiveness, subscribe };
+  return { reset, status, presence, responsiveness, subscribe };
 }
+
+// PR #8182 / unit: primary relay status must not close an independent shared
+// recovery gate; real hook must still subscribe and reconcile after resync.
+it('keeps shared content readable through primary outages while same-account content pauses', async () => {
+  vi.useFakeTimers();
+  const events = recoveryEvents();
+  const peer = sharedTaskHostPeer('shared-task', 'shared-host');
+  mocks.devices = ['host', peer];
+  const shared = renderHook(() => useRemoteSessionSync('shared-session', peer));
+  const ordinary = renderHook(() => useRemoteSessionSync('ordinary-session', 'host'));
+  await act(async () => { await vi.advanceTimersByTimeAsync(250); });
+  expect(shared.result.current.contentState).toBe('ready');
+  await act(async () => {
+    events.status.emit({ status: 'connecting' });
+    events.status.emit({ status: 'stopped' });
+    await vi.advanceTimersByTimeAsync(250);
+  });
+  expect(shared.result.current.contentState).toBe('ready');
+  expect(ordinary.result.current.contentState).toBe('syncing');
+  mocks.reconcile.mockClear();
+  await act(async () => {
+    shared.result.current.resync();
+    await vi.advanceTimersByTimeAsync(250);
+  });
+  expect(shared.result.current.contentState).toBe('ready');
+  expect(mocks.reconcile).toHaveBeenCalledWith('shared-session');
+});
 
 it.each(['focus', 'manual', 'presence', 'relay', 'response'])('allows %s recovery after a terminal reply clears the breaker', async (trigger) => {
   vi.useFakeTimers();
@@ -268,4 +300,27 @@ it.each(['relay', 'peer', 'disabled', 'unresponsive'])('releases the local topic
   });
   hook.unmount();
   expect(unsubscribe).toHaveBeenCalledExactlyOnceWith('host', ['session:session']);
+});
+
+// Unit regression: a peer-only reset replays history without a terminal event.
+// Fresh inbound events keep the silence watchdog dormant; ask the pinned host.
+it('settles a completed remote turn after peer-reset history recovery', async () => {
+  vi.useFakeTimers();
+  const events = recoveryEvents();
+  mocks.running = true;
+  mocks.query.mockResolvedValue(true);
+  mocks.finalize.mockImplementation(() => { mocks.running = false; });
+  const { result } = renderHook(() => useRemoteSessionSync('session', 'host'));
+  await act(async () => { await vi.advanceTimersByTimeAsync(1_000); });
+  expect(mocks.running).toBe(true);
+  expect(result.current.contentState).toBe('ready');
+  mocks.query.mockClear();
+  mocks.query.mockResolvedValue(false);
+  await act(async () => {
+    events.reset.emit({ deviceId: 'host' });
+    await vi.advanceTimersByTimeAsync(1_000);
+  });
+  expect(mocks.query).toHaveBeenCalledExactlyOnceWith('session', 'host');
+  expect(mocks.running).toBe(false);
+  expect(mocks.reconcile).toHaveBeenCalledWith('session', { force: true });
 });

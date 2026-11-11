@@ -25,6 +25,14 @@ export type HistoryReadErrorCode =
   | 'REMOTE_TIMEOUT'
   | 'REMOTE_PAYLOAD_TOO_LARGE';
 
+/**
+ * history 读取侧可读的 message role 全集。
+ * 'error' 是技术性 role: 由 terminal error 诊断行落库(messagePersistBroadcaster
+ * 写入 role: 'error', content 内 message / sdkError 已过 redactSensitiveText 脱敏,
+ * reason 等其余字段是入库原样内容), 与 tool_use / tool_result / thinking 一样仅在
+ * 调用方显式列出时(roles 数组里包含该项)才返回。跨设备出口会再对 error 行 content
+ * 整体过 redactSensitiveTextDeep, 因此读取侧拿到的是脱敏后的内容。
+ */
 export type HistoryRole =
   | 'user'
   | 'assistant'
@@ -32,7 +40,8 @@ export type HistoryRole =
   | 'tool_result'
   | 'ask_user'
   | 'plan_review'
-  | 'thinking';
+  | 'thinking'
+  | 'error';
 
 export interface HistoryCursor {
   /** unix ms */
@@ -54,6 +63,12 @@ export interface HistoryWorkdir {
   firstSessionAt: number; // unix ms
   lastSessionAt: number; // unix ms
   agentKinds: string[];
+}
+
+export interface HistoryCompanion {
+  id: string;
+  role: string;
+  channel?: string;
 }
 
 export interface HistorySession {
@@ -79,6 +94,8 @@ export interface HistorySession {
   updatedAt: number;
   userSendAt: number | null;
   messageCount: number;
+  lastActivityAt?: number;
+  companion?: HistoryCompanion | null;
 }
 
 export interface HistoryMessage {
@@ -106,6 +123,10 @@ export interface ListWorkdirsArgs {
 }
 
 export interface ListSessionsArgs {
+  /** Optional filters, intersected with the host-authorized scope. */
+  teammateId?: string;
+  source?: string;
+  timeField?: 'created' | 'activity';
   /** Host-owned ownership scope. null = account history; [] = deny all. */
   sessionIds: string[] | null;
   workdir: string | null;
@@ -141,6 +162,8 @@ export interface GetMessagesArgs {
 // 上下文窗口拼装; 向量不可用 / 未开 embedding 时静默退化为纯 FTS。
 
 export interface SearchChatHistoryArgs {
+  teammateId?: string;
+  source?: string;
   /** 自然语言查询(必填)。 */
   query: string;
   sessionIds: string[] | null;
@@ -192,6 +215,8 @@ export interface SearchChatHistoryHit {
 }
 
 export interface SearchChatHistorySessionMeta {
+  source?: string;
+  companion?: HistoryCompanion | null;
   workingDir: string | null;
   agentKind: string;
   title: string;
@@ -217,6 +242,8 @@ export interface SearchChatHistoryResult {
 // ── Deps interface ─────────────────────────────────────────────────────────
 
 export interface XdtHelperHistoryDeps {
+  /** Host-built task link; accepts local ids or deviceId::sessionId. No lookup or permission grant. */
+  sessionUrl?: (sessionId: string) => string;
   remote?: import('./_history_devices.js').HistoryRemoteDeps;
   /** Resolve the maximum history scope for the current runtime Session. */
   resolveSessionScope?: (args: {
@@ -231,6 +258,19 @@ export interface XdtHelperHistoryDeps {
   searchChatHistory: (
     args: SearchChatHistoryArgs,
   ) => Promise<ControlResult<{ result: SearchChatHistoryResult }>>;
+  /** 主力电脑在别处的伙伴的云端房间；调用方不能看时返回 null。 */
+  searchCompanionRooms?: (args: {
+    query: string;
+    teammateId?: string;
+    callerSessionId: string;
+    roles: Array<'user' | 'assistant'>;
+    fromMs: number | null;
+    toMs: number | null;
+  }) => Promise<{
+    hits: Array<{ teammateId: string; teammateName: string; messageId: string; role: 'user' | 'assistant'; text: string; createdAt: number }>;
+    failed: Array<{ teammateId: string; teammateName: string; code: string }>;
+    incomplete: boolean;
+  } | null>;
   /** get_task_digest:一件任务的短摘要(本机 id 或 deviceId::sessionId)。不注入则不注册该工具。 */
   taskDigest?: (args: {
     sessionId: string;

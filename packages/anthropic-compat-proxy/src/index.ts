@@ -14,7 +14,7 @@
  */
 
 export { createAnthropicCompatProxy } from './server.js';
-export { recoverInlineAttachments } from './oversized-attachments.js';
+export { recoverInlineAttachments, recoverOversizedMessage } from './oversized-attachments.js';
 export type { OversizedBody, RecoveredAttachment, AttachmentKeeper } from './oversized-attachments.js';
 export type { OversizedRequestRecovery } from './types.js';
 export {
@@ -38,10 +38,13 @@ export {
 } from './instructions-injection.js';
 export {
   createActiveStripTransform,
+  createToolReferenceRecoveryRule,
+  lowerToolReferencesFromBody,
   createDuplicateToolUseIdRecoveryRule,
   createEmptyAssistantMessageRecoveryRule,
   createEmptyTextRecoveryRule,
   createEmptyThinkingRecoveryRule,
+  createAnthropicContextManagementRecoveryRule,
   createEncryptedContentRecoveryRule,
   createResponsesReasoningContentRecoveryRule,
   createImageGenerationIdRecoveryRule,

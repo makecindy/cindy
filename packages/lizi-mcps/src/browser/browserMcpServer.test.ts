@@ -1,3 +1,4 @@
+import { runInNewContext } from 'node:vm';
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { InMemoryTransport } from '@modelcontextprotocol/sdk/inMemory.js';
 import type { BrowserControlRuntime } from '@cindy/browser-control-runtime';
@@ -5,6 +6,7 @@ import { describe, expect, it } from 'vitest';
 
 import { createBrowserMcpServer } from './server.js';
 import { INLINE_IMAGE_TARGET_BYTES, type BrowserMcpDeps } from '../types.js';
+import type { Recipe } from './recipe-loader.js';
 
 // `respond` lets a test script the result per call (e.g. a navigate that returns
 // a swapped targetId); default echoes the request back as data.
@@ -41,6 +43,415 @@ async function makeHarness(
     },
   };
 }
+
+// New behavior through the public MCP boundary (unit): automatic discovery,
+// structural repetition, candidate lifecycle and recoverable result summaries.
+// Existing tests covered explicit siteguide/validated saves, not these paths.
+describe('browser experience cache', () => {
+  async function invoke(h: Awaited<ReturnType<typeof makeHarness>>, args: Record<string, unknown>) {
+    const r = await h.client.callTool({ name: 'call_tool', arguments: { name: 'browser', args } });
+    return JSON.parse((r.content as Array<{ text: string }>)[0].text);
+  }
+  const draft: Recipe = { id: 'experience-search', access: 'read', match: ['experience.test'], description: 'Search books',
+    inputs: { query: { required: true } }, steps: [{ action: 'evaluate', fn: '() => ({title: "found"})',
+      guard: { url: 'https://experience.test/' }, expect: { requiredFields: ['title'] }, as: 'items' }], output: '{{items}}' };
+  const readDraft: Recipe = { ...draft, steps: [{ action: 'extract', extract: { fields: { title: 'h1' } },
+    guard: { url: 'https://experience.test/' }, expect: { requiredFields: ['title'] }, as: 'items' }] };
+  const extracted = { ok: true, count: 1, records: [{ title: 'found' }] };
+
+  // Review regression, unit/MCP entry: metadata cannot authorize deferred
+  // mutations. Old coverage only rejected access=write, not mislabeled steps.
+  it.each([
+    { action: 'click' as const, selector: '#submit' },
+    { action: 'type' as const, selector: '#input', value: 'fake-value' },
+    { action: 'select' as const, selector: '#choice', values: ['fake-value'] },
+    { action: 'evaluate' as const, fn: "() => fetch('/write', {method:'POST'})" },
+    { action: 'wait' as const, fn: "() => { document.querySelector('form').submit(); return true; }" },
+  ])('rejects deferred $action capabilities at save, discovery and persisted execution', async step => {
+    const unsafe: Recipe = { ...readDraft, id: `unsafe-deferred-${step.action}`,
+      steps: [{ ...step, guard: { url: 'https://experience.test/' } }, ...readDraft.steps] };
+    let loaded: Recipe | undefined;
+    let saves = 0;
+    const h = await makeHarness({
+      getUserRecipes: async () => ({ version: `unsafe-deferred-${step.action}-${Boolean(loaded)}`,
+        recipes: new Map(loaded ? [[loaded.id, loaded]] : []), siteGuides: new Map() }),
+      saveUserRecipe: async () => { saves++; return { ok: true }; },
+    });
+    try {
+      expect((await invoke(h, { action: 'saveRecipe', site: 'experience.test', recipeDraft: unsafe, deferValidation: true })).ok).toBe(false);
+      expect(saves).toBe(0);
+      loaded = { ...unsafe, validation: { site: 'experience.test', state: 'candidate' } };
+      expect((await invoke(h, { action: 'siteguide', site: 'experience.test', intent: 'Search' })).recipes).toEqual([]);
+      expect((await invoke(h, { action: 'recipe', recipeId: unsafe.id, inputs: { query: 'book' } })).ok).toBe(false);
+      expect(h.calls).toHaveLength(0);
+    } finally { await h.cleanup(); }
+  });
+
+  // Review regression, unit/MCP entry: omitted and explicit profile names must
+  // refer to the same host identity; changing the default must not widen scope.
+  it.each([true, false])('binds learned recipes to the resolved host profile (deferred=%s)', async deferred => {
+    const recipe = deferred ? readDraft : draft;
+    let profile = 'Cindy';
+    let stored: Recipe | undefined;
+    let version = 0;
+    const h = await makeHarness({
+      resolveProfile: requested => requested || profile,
+      getUserRecipes: async () => ({ version: `resolved-profile-${deferred}-${version}`,
+        recipes: new Map(stored ? [[stored.id, stored]] : []), siteGuides: new Map() }),
+      saveUserRecipe: async ({ recipe }) => { stored = recipe; version++; return { ok: true }; },
+    }, (_req, i) => ({ targetId: 'tab', result: deferred ? { matched: true, value: extracted } : i % 2 === 0 ? true : { title: 'found' } }));
+    try {
+      if (!deferred) {
+        expect((await invoke(h, { action: 'recipe', site: 'experience.test', recipeDraft: draft,
+          inputs: { query: 'book' } })).verified).toBe(true);
+        profile = 'Cindy-real';
+        expect((await invoke(h, { action: 'saveRecipe', site: 'experience.test', recipeDraft: draft })).ok).toBe(false);
+        profile = 'Cindy';
+      }
+      expect((await invoke(h, { action: 'saveRecipe', site: 'experience.test', recipeDraft: recipe,
+        profile: 'Cindy', deferValidation: deferred })).ok).toBe(true);
+      expect(stored?.validation?.profile).toBe('Cindy');
+      expect((await invoke(h, { action: 'siteguide', site: 'experience.test', intent: 'Search' })).recipes).toHaveLength(1);
+      profile = 'Cindy-real';
+      expect((await invoke(h, { action: 'siteguide', site: 'experience.test', intent: 'Search' })).recipes).toHaveLength(0);
+      const count = h.calls.length;
+      expect((await invoke(h, { action: 'recipe', recipeId: draft.id, inputs: { query: 'book' } })).ok).toBe(false);
+      expect(h.calls).toHaveLength(count);
+      expect((await invoke(h, { action: 'recipe', recipeId: draft.id, profile: 'Cindy', inputs: { query: 'book' } })).ok).toBe(true);
+      expect(h.calls.slice(-2).every(req => (req as { profile: string }).profile === 'Cindy')).toBe(true);
+    } finally { await h.cleanup(); }
+  });
+
+  // Review regression, unit/MCP entry: another task/Settings can change the
+  // shared host while this tool is idle or awaiting a protected-page check.
+  it.each(['idle', 'preflight', 'inflight'] as const)('invalidates original results after an external backend change (%s)', async timing => {
+    let scope = { lifecycle: {}, backend: {} };
+    let switchOnCheck = false;
+    const deps: Partial<BrowserMcpDeps> = {
+      getBackendScope: () => scope,
+      pageReadsRestricted: async () => { if (switchOnCheck) scope = { ...scope, lifecycle: {} }; return false; },
+    };
+    const h = await makeHarness(deps, () => {
+      if (timing === 'inflight') scope = { ...scope, lifecycle: {} };
+      return { targetId: 'tab', result: 'x'.repeat(17_000) };
+    });
+    try {
+      const result = await invoke(h, { action: 'act', targetId: 'tab', request: { kind: 'evaluate', fn: '() => []' } });
+      if (timing === 'inflight') {
+        expect(result.ok).toBe(true);
+        expect(result.fullResult).toBeUndefined();
+      } else {
+        expect(result.fullResult).toBeDefined();
+        if (timing === 'idle') scope = { ...scope, lifecycle: {} };
+        else switchOnCheck = true;
+        expect((await invoke(h, { action: 'readResult', resultId: result.fullResult.id })).ok).toBe(false);
+        switchOnCheck = false;
+        expect((await invoke(h, { action: 'readResult', resultId: result.fullResult.id })).ok).toBe(false);
+      }
+      expect(h.calls).toHaveLength(1);
+    } finally { await h.cleanup(); }
+  });
+
+  it('rejects a backend change during recipe preflight without dispatch or suspension', async () => {
+    let scope = { lifecycle: {}, backend: {} };
+    const stored = { ...draft, validation: { site: 'experience.test', state: 'active' as const } };
+    let saves = 0;
+    const h = await makeHarness({
+      getBackendScope: () => scope,
+      pageReadsRestricted: async () => { scope = { ...scope, backend: {} }; return false; },
+      getUserRecipes: async () => ({ version: 'backend-preflight-rejection', recipes: new Map([[stored.id, stored]]), siteGuides: new Map() }),
+      saveUserRecipe: async () => { saves++; return { ok: true }; },
+    });
+    try {
+      const result = await invoke(h, { action: 'recipe', recipeId: draft.id, inputs: { query: 'book' } });
+      expect(result.ok).toBe(false);
+      expect(h.calls).toHaveLength(0);
+      expect(saves).toBe(0);
+      expect(stored.validation.state).toBe('active');
+    } finally { await h.cleanup(); }
+  });
+
+  it('suggests matching recipes with navigation once per catalog version, without executing them', async () => {
+    let version = 0;
+    const stored = { ...draft, validation: { site: 'experience.test', state: 'active' as const, profile: '' } };
+    const h = await makeHarness({ getUserRecipes: async () => ({ version: `experience-discovery-${version}`,
+      recipes: new Map([[stored.id, stored]]), siteGuides: new Map() }) }, () => ({ targetId: 'tab' }));
+    try {
+      const open = { action: 'navigate', url: 'https://experience.test/', intent: 'Search' };
+      expect((await invoke(h, open)).recipeSuggestions[0]).toMatchObject({ id: draft.id, access: 'read' });
+      expect((await invoke(h, open)).recipeSuggestions).toBeUndefined();
+      version++;
+      expect((await invoke(h, open)).recipeSuggestions).toHaveLength(1);
+      expect((await invoke(h, { ...open, url: 'https://experience.test.evil/' })).recipeSuggestions).toBeUndefined();
+      expect((await invoke(h, { ...open, profile: 'another-account' })).recipeSuggestions).toBeUndefined();
+      expect((await invoke(h, { ...open, intent: 'unrelated' })).recipeSuggestions).toBeUndefined();
+      expect(h.calls).toHaveLength(6);
+      expect(h.calls.every(req => (req as { action: string }).action === 'navigate')).toBe(true);
+      expect(h.calls[0]).not.toHaveProperty('intent');
+    } finally { await h.cleanup(); }
+  });
+
+  // Unit/MCP regression from the X screenshot incident: the shipped catalog
+  // hid x-tweet behind another host and alphabetical writes. Existing tests use
+  // a single custom recipe, so cannot catch real multi-host discovery/ranking.
+  it.each(['x.com', 'twitter.com', 'api.fxtwitter.com'])('lists the public reader in %s siteguide', async site => {
+    const h = await makeHarness();
+    try {
+      const result = await invoke(h, { action: 'siteguide', site });
+      expect(result.ok).toBe(true);
+      expect(result.recipes).toEqual(expect.arrayContaining([expect.objectContaining({ id: 'x-tweet' })]));
+    } finally { await h.cleanup(); }
+  });
+
+  it('recommends a public post reader after home navigation, without replaying or spamming posts', async () => {
+    const h = await makeHarness({}, req => ({ targetId: 'tab', url: req.url }));
+    try {
+      await invoke(h, { action: 'open', url: 'https://x.com/' });
+      const first = await invoke(h, { action: 'navigate', url: 'https://x.com/person/status/123/photo/1' });
+      expect(first.recipeSuggestions[0].id).toBe('x-tweet');
+      expect(first.recipeSuggestions.every((r: { access: string }) => r.access === 'read')).toBe(true);
+      expect((await invoke(h, { action: 'navigate', url: 'https://x.com/person/status/456' })).recipeSuggestions).toBeUndefined();
+      const write = await invoke(h, { action: 'navigate', url: 'https://x.com/person/status/456', intent: 'Like a specific tweet' });
+      expect(write.recipeSuggestions[0].id).toBe('opencli:twitter/like');
+      expect((await invoke(h, { action: 'navigate', url: 'https://x.com.evil/person/status/123' })).recipeSuggestions).toBeUndefined();
+      expect(h.calls.map(req => (req as { action: string }).action)).toEqual(['open', 'tabs', 'navigate', 'navigate', 'navigate', 'navigate']); // only navigation plus open's existing tab check
+    } finally { await h.cleanup(); }
+  });
+
+  // Existing-tab replay: agents may snapshot without navigation, so the
+  // navigation-only suggestions previously never reached this decision point.
+  it('suggests recipes when reading an existing post tab and deduplicates subsequent navigation', async () => {
+    const h = await makeHarness({}, () => ({ targetId: 'tab', url: 'https://x.com/person/status/123', snapshot: 'Public post' }));
+    try {
+      expect((await invoke(h, { action: 'snapshot', targetId: 'tab' })).recipeSuggestions[0].id).toBe('x-tweet');
+      expect((await invoke(h, { action: 'navigate', targetId: 'tab', url: 'https://x.com/person/status/123' })).recipeSuggestions).toBeUndefined();
+      expect(h.calls.filter(req => (req as { action: string }).action === 'navigate')).toHaveLength(1);
+    } finally { await h.cleanup(); }
+  });
+
+  // Unit/MCP: execute the shipped evaluate function on a synthetic API response,
+  // not a copied output object. Previously URL-only media had no reading handoff.
+  it.each([true, false])('hands off unviewed photos only when present: %s', async hasPhoto => {
+    const payload = { tweet: { id: '123', media: { photos: hasPhoto ? [{ url: 'https://images.example/photo.jpg' }] : [] } } };
+    const h = await makeHarness({}, req => {
+      const request = req.request as { kind?: string; fn?: string } | undefined;
+      if (request?.kind === 'evaluate') return { result: runInNewContext(`(${request.fn})()`, {
+        document: { body: { innerText: JSON.stringify(payload) } },
+      }, { timeout: 100 }) };
+      return { targetId: 'tab' };
+    });
+    try {
+      const result = await invoke(h, { action: 'recipe', recipeId: 'x-tweet', targetId: 'tab', inputs: { id: '123' } });
+      expect(result.ok).toBe(true);
+      if (hasPhoto) {
+        expect(result.output.imageReading).toMatchObject({ status: 'not_viewed' });
+        expect(result.output.media).toEqual([{ type: 'photo', url: 'https://images.example/photo.jpg' }]);
+      } else expect(result.output.imageReading).toBeUndefined();
+      expect(h.calls).toHaveLength(3); // the handoff does not silently fetch media
+    } finally { await h.cleanup(); }
+  });
+
+  it('records only structural steps and hints on repetition; errors and protected pages do not learn', async () => {
+    const recorded: unknown[] = [];
+    let restricted = false;
+    let failed = false;
+    const h = await makeHarness({
+      experienceStore: { list: async () => [], record: async input => {
+        recorded.push(input); return { ...input, observations: recorded.length, updatedAt: 1 };
+      } },
+      pageReadsRestricted: async () => restricted,
+    }, () => ({ targetId: 'tab', result: failed ? { ok: false } : { title: 'private-result' } }));
+    try {
+      const read = { action: 'act', targetId: 'tab', request: { kind: 'evaluate', fn: '() => "private-script"' } };
+      for (let i = 0; i < 2; i++) {
+        await invoke(h, { action: 'navigate', url: 'https://experience.test/private-path?token=secret' });
+        await invoke(h, { action: 'act', targetId: 'tab', request: { kind: 'type', selector: '#private-selector', text: 'private-input' } });
+        const result = await invoke(h, read);
+        expect(Boolean(result.learningOpportunity)).toBe(i === 1);
+      }
+      expect(recorded).toEqual(Array.from({ length: 2 }, () => ({ site: 'experience.test', actions: ['navigate', 'type', 'evaluate'] })));
+      await invoke(h, { action: 'navigate', url: 'https://experience.test/' });
+      failed = true;
+      await invoke(h, read);
+      failed = false;
+      await invoke(h, read);
+      expect(recorded).toHaveLength(2);
+      restricted = true;
+      await invoke(h, { action: 'navigate', url: 'https://experience.test/' });
+      await invoke(h, read);
+      expect(recorded).toHaveLength(2);
+    } finally { await h.cleanup(); }
+  });
+
+  // Review regression, unit/MCP entry: a candidate finishing after another
+  // task's validated save must not overwrite that revision. Existing lifecycle
+  // tests ran only one tool instance and could not expose the stale write.
+  it.each([true, false])('keeps another task\'s newer revision when an older candidate finishes (ok=%s)', async ok => {
+    let stored: Recipe = { ...readDraft, validation: { site: 'experience.test', state: 'candidate' } };
+    let saves = 0;
+    let entered!: () => void;
+    let release!: () => void;
+    const dispatched = new Promise<void>(resolve => { entered = resolve; });
+    const finish = new Promise<void>(resolve => { release = resolve; });
+    const deps: Partial<BrowserMcpDeps> = {
+      getUserRecipes: async () => ({ version: `interleaved-candidate-${ok}-${saves}`, recipes: new Map([[stored.id, stored]]), siteGuides: new Map() }),
+      saveUserRecipe: async ({ recipe }) => { stored = recipe; saves++; return { ok: true }; },
+    };
+    const oldTask = await makeHarness({ ...deps, getRuntime: () => ({
+      call: async req => { entered(); await finish; return { ok: true, action: req.action, data: { result: { matched: ok, value: extracted } } }; },
+    }) });
+    const newTask = await makeHarness(deps, () => ({ result: { matched: true, value: extracted } }));
+    const pending = invoke(oldTask, { action: 'recipe', recipeId: readDraft.id, inputs: { query: 'book' } });
+    try {
+      await dispatched;
+      const revised: Recipe = { ...readDraft, steps: readDraft.steps.map(step => ({ ...step, extract: { fields: { title: 'h2' } } })) };
+      expect((await invoke(newTask, { action: 'recipe', site: 'experience.test', recipeDraft: revised, inputs: { query: 'book' } })).verified).toBe(true);
+      expect((await invoke(newTask, { action: 'saveRecipe', site: 'experience.test', recipeDraft: revised })).ok).toBe(true);
+      release();
+      expect((await pending).ok).toBe(ok);
+      expect(stored.steps).toEqual(revised.steps);
+      expect(saves).toBe(1);
+    } finally { release(); await pending; await oldTask.cleanup(); await newTask.cleanup(); }
+  });
+
+  it('validates a read candidate on later real use and enables it only on explicit save without replay', async () => {
+    const draft = readDraft;
+    let stored: Recipe | undefined;
+    let version = 0;
+    const deps: Partial<BrowserMcpDeps> = {
+      getUserRecipes: async () => ({ version: `experience-candidate-${version}`, recipes: new Map(stored ? [[stored.id, stored]] : []), siteGuides: new Map() }),
+      saveUserRecipe: async ({ recipe }) => { stored = recipe; version++; return { ok: true }; },
+    };
+    const h = await makeHarness(deps);
+    try {
+      expect(await invoke(h, { action: 'saveRecipe', site: 'experience.test', recipeDraft: draft, deferValidation: true })).toMatchObject({ ok: true, state: 'candidate' });
+      expect(h.calls).toHaveLength(0);
+      expect(stored?.validation?.state).toBe('candidate');
+      expect((await invoke(h, { action: 'saveRecipe', site: 'experience.test', recipeDraft: draft, deferValidation: true })).ok).toBe(false);
+      expect((await invoke(h, { action: 'saveRecipe', site: 'experience.test', recipeDraft: { ...draft, id: 'write', access: 'write' }, deferValidation: true })).ok).toBe(false);
+    } finally { await h.cleanup(); }
+    const next = await makeHarness(deps, () => ({ result: { matched: true, value: extracted } }));
+    try {
+      expect((await invoke(next, { action: 'recipe', recipeId: draft.id, profile: 'other', inputs: { query: 'book' } })).ok).toBe(false);
+      expect((await invoke(next, { action: 'recipe', recipeId: draft.id })).ok).toBe(false);
+      expect(next.calls).toHaveLength(0);
+      expect(await invoke(next, { action: 'recipe', recipeId: draft.id, inputs: { query: 'book' } })).toMatchObject({ output: extracted, verified: true });
+      expect(next.calls).toHaveLength(1);
+      expect(stored?.validation?.state).toBe('candidate');
+      expect((await invoke(next, { action: 'saveRecipe', site: 'experience.test', recipeDraft: draft })).ok).toBe(true);
+      expect(stored?.validation?.state).toBe('active');
+      expect(next.calls).toHaveLength(1);
+    } finally { await next.cleanup(); }
+  });
+
+  it.each(['guard', 'save'] as const)('keeps candidate %s failures honest without replay', async failure => {
+    const draft = readDraft;
+    let stored: Recipe = { ...draft, validation: { site: 'experience.test', state: 'candidate', profile: '' } };
+    const h = await makeHarness({
+      getUserRecipes: async () => ({ version: `experience-failure-${failure}`, recipes: new Map([[stored.id, stored]]), siteGuides: new Map() }),
+      saveUserRecipe: async ({ recipe }) => { if (failure === 'save') throw new Error('disk full'); stored = recipe; return { ok: true }; },
+    }, () => ({ result: { matched: failure !== 'guard', value: extracted } }));
+    try {
+      const result = await invoke(h, { action: 'recipe', recipeId: draft.id, inputs: { query: 'book' } });
+      if (failure === 'guard') {
+        expect(result.ok).toBe(false);
+        expect(stored.validation?.state).toBe('candidate');
+        expect((await invoke(h, { action: 'recipe', recipeId: draft.id, inputs: { query: 'book' } })).ok).toBe(false);
+        expect(h.calls).toHaveLength(1);
+      } else {
+        expect(result).toMatchObject({ ok: true, verified: true });
+        expect(result.maintenanceMessage).toBeUndefined();
+        expect((await invoke(h, { action: 'saveRecipe', site: 'experience.test', recipeDraft: draft })).ok).toBe(false);
+        expect(stored.validation?.state).toBe('candidate');
+        expect(h.calls).toHaveLength(1);
+      }
+    } finally { await h.cleanup(); }
+  });
+
+  it('reconstructs a large result byte-for-byte without replay, and blocks cached reads after secret handoff', async () => {
+    let restricted = false;
+    const original = { ok: true, action: 'act' as const, data: { targetId: 'tab', result: Array.from({ length: 200 }, (_, i) => ({ title: `item-${i}`, body: '引号"\\'.repeat(40) })) } };
+    const h = await makeHarness({ getRuntime: () => ({ call: async () => original }), pageReadsRestricted: async () => restricted });
+    try {
+      const result = await invoke(h, { action: 'act', targetId: 'tab', request: { kind: 'evaluate', fn: '() => []' } });
+      expect(JSON.stringify(result).length).toBeLessThan(10_000);
+      const id = result.fullResult.id;
+      let offset: number | null = 0;
+      let text = '';
+      while (offset !== null) {
+        const chunk = await invoke(h, { action: 'readResult', resultId: id, offset, maxChars: 12_000 });
+        text += chunk.text; offset = chunk.nextOffset;
+      }
+      expect(JSON.parse(text)).toEqual(original);
+      const other = await makeHarness({ getRuntime: () => ({ call: async () => original }) });
+      try {
+        await invoke(other, { action: 'act', request: { kind: 'evaluate', fn: '() => []' } });
+        // A stale reference must not silently resolve to a new session's first result.
+        expect((await invoke(other, { action: 'readResult', resultId: id })).ok).toBe(false);
+      } finally { await other.cleanup(); }
+      restricted = true;
+      expect((await invoke(h, { action: 'readResult', resultId: id })).ok).toBe(false);
+      restricted = false;
+      expect((await invoke(h, { action: 'readResult', resultId: id })).ok).toBe(false);
+    } finally { await h.cleanup(); }
+  });
+
+  it('never splits a UTF-16 surrogate pair across readResult pages, even at maxChars 1', async () => {
+    const original = { ok: true, action: 'act' as const, data: { targetId: 'tab', result: '😀'.repeat(9_000) } };
+    const h = await makeHarness({ getRuntime: () => ({ call: async () => original }) });
+    const loneSurrogate = /[\ud800-\udbff](?![\udc00-\udfff])|(?<![\ud800-\udbff])[\udc00-\udfff]/;
+    try {
+      const id = (await invoke(h, { action: 'act', targetId: 'tab', request: { kind: 'evaluate', fn: '() => []' } })).fullResult.id;
+      // 首个 emoji 从奇数位开始，12_000 的页尾正好切在代理对中间：页尾须退回一位。
+      const emoji = JSON.stringify(original).indexOf('😀');
+      expect((12_000 - emoji) % 2).toBe(1);
+      const first = await invoke(h, { action: 'readResult', resultId: id, offset: 0, maxChars: 12_000 });
+      expect(first.nextOffset).toBe(11_999);
+      // 每一页都必须是合法 Unicode，拼接后逐字节还原。
+      let offset: number | null = 0;
+      let text = '';
+      while (offset !== null) {
+        const chunk = await invoke(h, { action: 'readResult', resultId: id, offset, maxChars: 12_000 });
+        expect(chunk.text).not.toMatch(loneSurrogate);
+        text += chunk.text; offset = chunk.nextOffset;
+      }
+      expect(JSON.parse(text)).toEqual(original);
+      // maxChars=1 落在代理对上时整对返回并前进，不会卡在原地。
+      expect(await invoke(h, { action: 'readResult', resultId: id, offset: emoji, maxChars: 1 }))
+        .toMatchObject({ text: '😀', nextOffset: emoji + 2 });
+    } finally { await h.cleanup(); }
+  });
+
+  it('evicts old originals and preserves success with advisory warnings or failed experience storage', async () => {
+    let big = true;
+    const h = await makeHarness({
+      experienceStore: { list: async () => [], record: async () => { throw new Error('disk full'); } },
+    }, () => ({ targetId: 'tab', result: big ? 'x'.repeat(17_000) : [{ title: '', body: '<div>raw</div>' }, { title: '', body: '<div>raw</div>' }] }));
+    try {
+      const read = { action: 'act', targetId: 'tab', request: { kind: 'evaluate', fn: '() => []' } };
+      const first = await invoke(h, read);
+      for (let i = 0; i < 4; i++) await invoke(h, read);
+      expect((await invoke(h, { action: 'readResult', resultId: first.fullResult.id })).ok).toBe(false);
+      big = false;
+      await invoke(h, { action: 'navigate', url: 'https://experience.test/' });
+      const result = await invoke(h, read);
+      expect(result.ok).toBe(true);
+      expect(result.advisory).toEqual(expect.arrayContaining(['duplicate_records', 'empty_fields', 'markup']));
+      expect(result.learningOpportunity).toBeUndefined();
+    } finally { await h.cleanup(); }
+  });
+
+  it('reports successful oversized actions honestly when the full result exceeds the retention budget', async () => {
+    const h = await makeHarness({}, () => ({ blob: 'x'.repeat(2_000_001) }));
+    try {
+      const result = await invoke(h, { action: 'act', request: { kind: 'evaluate', fn: '() => []' } });
+      expect(result).toMatchObject({ ok: true, action: 'act', truncated: true });
+      expect(result.fullResult).toBeUndefined();
+      expect(JSON.stringify(result).length).toBeLessThanOrEqual(200_000);
+      expect(h.calls).toHaveLength(1);
+    } finally { await h.cleanup(); }
+  });
+});
 
 describe('createBrowserMcpServer', () => {
   // Historical form replay spent a second model call on every post-click read.
@@ -140,7 +551,7 @@ describe('createBrowserMcpServer', () => {
   });
 
   it('switches modes in the same MCP instance and immediately updates backend capabilities', async () => {
-    let backend: 'external' | 'rsb-webview' = 'external';
+    let backend: 'external' | 'rsb-webview' | 'user-browser' = 'external';
     const switched: string[] = [];
     const h = await makeHarness({
       setBackend: async (next) => { switched.push(next); backend = next; return backend; },
@@ -222,10 +633,13 @@ describe('createBrowserMcpServer', () => {
     };
     expect(parsed.ok).toBe(true);
     // the `browser` tool references the rule keys…
-    expect(parsed.tools.find((t) => t.name === 'browser')?.rules).toEqual(['browser-workflow', 'recipe-author']);
+    expect(parsed.tools.find((t) => t.name === 'browser')?.rules).toEqual(['browser-workflow']);
     // …and each full markdown body is bundled once at the top level.
     expect(parsed.rules?.['browser-workflow']).toContain('snapshot');
-    expect(parsed.rules?.['recipe-author']).toContain('saveRecipe');
+    expect(parsed.rules?.['recipe-author']).toBeUndefined();
+    const help = await h.client.callTool({ name: 'call_tool', arguments: { name: 'browser', args: { action: 'recipeHelp' } } });
+    expect(JSON.parse((help.content as Array<{ text: string }>)[0].text).rules).toContain('saveRecipe');
+    expect(h.calls).toHaveLength(0);
     await h.cleanup();
   });
 
@@ -482,7 +896,7 @@ describe('createBrowserMcpServer', () => {
     await h.cleanup();
   });
 
-  it('compiles extract into an act:evaluate call', async () => {
+  it('sends a structured DOM read with an evaluate fallback for other runtimes', async () => {
     const h = await makeHarness();
     await h.client.callTool({
       name: 'call_tool',
@@ -501,6 +915,9 @@ describe('createBrowserMcpServer', () => {
     expect(call.action).toBe('act');
     expect(call.targetId).toBe('t1');
     expect(call.request?.kind).toBe('evaluate');
+    expect(call.request).toMatchObject({ domRead: { kind: 'extract',
+      extract: { from: '.book', multiple: true, fields: { title: 'h3', price: '.price_color' } },
+    } });
     // The compiled fn carries the field schema and is a function source.
     expect(call.request?.fn).toContain('querySelectorAll');
     expect(call.request?.fn).toContain('.book');
@@ -887,11 +1304,14 @@ describe('createBrowserMcpServer', () => {
     });
     const parsed = JSON.parse((result.content as Array<{ text: string }>)[0].text) as {
       truncated?: boolean;
-      bytes?: number;
-      limit?: number;
+      fullResult: { id: string; chars: number };
     };
     expect(parsed.truncated).toBe(true);
-    expect(parsed.bytes ?? 0).toBeGreaterThan(parsed.limit ?? 0);
+    expect(parsed.fullResult.chars).toBeGreaterThan(300_000);
+    const read = await h.client.callTool({ name: 'call_tool', arguments: { name: 'browser', args: { action: 'readResult', resultId: parsed.fullResult.id, offset: 0, maxChars: 1000 } } });
+    const original = JSON.parse((read.content as Array<{ text: string }>)[0].text);
+    expect(original.text).toContain('"blob":"xxxx');
+    expect(original.nextOffset).toBe(1000);
     await h.cleanup();
   });
 
@@ -1130,7 +1550,8 @@ describe('createBrowserMcpServer', () => {
       expect(parsed.loginWall).toBeUndefined();
     }
     // The check runs on the tab the snapshot came from.
-    expect(h.calls[1]).toMatchObject({ action: 'act', targetId: 't9', request: { kind: 'evaluate' } });
+    expect(h.calls[1]).toMatchObject({ action: 'act', targetId: 't9',
+      request: { kind: 'evaluate', domRead: { kind: 'login-wall' } } });
     await h.cleanup();
   });
 
@@ -1304,6 +1725,20 @@ describe('recipe on-use maintenance', () => {
       expect(saved).toEqual([{ site: 'example.com', recipe: { ...legacy, validation: { site: 'example.com', state: 'suspended' } } }]);
     } finally { await h.cleanup(); }
   });
+  it('persists failure of a legacy recipe listed in several guides under its first match host', async () => {
+    const saved: unknown[] = [];
+    const legacy = { id: 'multi-guide-flow', match: ['api.example.com', 'example.com'], steps: [{ action: 'extract' as const, extract: { fields: { title: 'h1' } } }] };
+    const h = await makeHarness({
+      getUserRecipes: async () => ({ version: 'multi-guide-flow-v1', recipes: new Map([[legacy.id, legacy]]),
+        siteGuides: new Map([['example.com', { site: 'example.com', recipes: [legacy.id] }],
+          ['api.example.com', { site: 'api.example.com', recipes: [legacy.id] }]]) }),
+      saveUserRecipe: async (x) => { saved.push(x); return { ok: true }; },
+    }, () => ({ result: { ok: false, error: 'invalid selector' } }));
+    try {
+      expect((await invoke(h, { action: 'recipe', recipeId: legacy.id })).ok).toBe(false);
+      expect(saved).toEqual([{ site: 'api.example.com', recipe: { ...legacy, validation: { site: 'api.example.com', state: 'suspended' } } }]);
+    } finally { await h.cleanup(); }
+  });
   it('reports a failed suspension write and still prevents this session from rerunning it', async () => {
     const stored = { ...draft, validation: { site: 'example.com', state: 'active' as const } };
     const h = await makeHarness({
@@ -1358,5 +1793,380 @@ describe('recipe on-use maintenance', () => {
       expect((await invoke(next, { action: 'saveRecipe', site: 'example.com', recipeDraft: draft })).ok).toBe(true);
       expect(stored.validation.state).toBe('active');
     } finally { await next.cleanup(); }
+  });
+});
+
+describe('browser · backend capability gating (user browser via extension)', () => {
+  const caps = () => ({ evaluate: false, screenshot: false, network: false, upload: false, dialog: false, console: false, pdf: false, focus: false, close: false, trustedInput: false });
+
+  it.each([
+    { action: 'screenshot', targetId: 't1' },
+    { action: 'requests', targetId: 't1' },
+    { action: 'upload', targetId: 't1', paths: ['/tmp/x'] },
+    { action: 'dialog', targetId: 't1', dialogId: 'd', accept: true },
+    { action: 'focus', targetId: 't1' },
+    { action: 'act', targetId: 't1', request: { kind: 'evaluate', fn: '() => 1' } },
+    { action: 'act', targetId: 't1', request: { kind: 'drag', startRef: 'a', endRef: 'b' } },
+  ])('refuses unsupported work before dispatch and points the agent to the user: %j', async (args) => {
+    const h = await makeHarness({ backendCapabilities: caps });
+    try {
+      const result = await h.client.callTool({ name: 'call_tool', arguments: { name: 'browser', args } });
+      expect(result.isError).toBe(true);
+      expect((result.content as Array<{ text: string }>)[0].text).toContain('不要自行切换');
+      expect(h.calls).toEqual([]);
+    } finally { await h.cleanup(); }
+  });
+
+  it('points out open tabs on the same site after open, and bounds snapshots by maxChars, for any backend', async () => {
+    const h = await makeHarness({}, (request) => {
+      if (request.action === 'open') return { targetId: 'new', url: 'https://play.example.test/console' };
+      if (request.action === 'tabs') return { tabs: [
+        { targetId: 'new', url: 'https://play.example.test/console' },
+        { targetId: 'old', suggestedTargetId: 'play', url: 'https://play.example.test/console/u/1/app', title: 'Release overview' },
+        { targetId: 'other', url: 'https://elsewhere.test/' },
+      ] };
+      if (request.action === 'snapshot') return { targetId: 'old', snapshot: Array.from({ length: 400 }, (_, i) => `line ${i} [ref=e${i}]`).join('\n'), refs: { e1: {}, e399: {} } };
+      return undefined;
+    });
+    try {
+      const opened = await h.client.callTool({ name: 'call_tool', arguments: { name: 'browser', args: { action: 'open', url: 'https://play.example.test/console' } } });
+      const body = JSON.parse((opened.content as Array<{ text: string }>)[0].text);
+      expect(body.sameSiteTabs).toEqual([{ targetId: 'play', url: 'https://play.example.test/console/u/1/app', title: 'Release overview' }]);
+      expect(body.sameSiteHint).toContain('优先在它们上面继续');
+      const snap = await h.client.callTool({ name: 'call_tool', arguments: { name: 'browser', args: { action: 'snapshot', targetId: 'play', maxChars: 500 } } });
+      const data = JSON.parse((snap.content as Array<{ text: string }>)[0].text).data;
+      expect(data.snapshot.length).toBeLessThanOrEqual(500);
+      expect(data.truncated).toBe(true);
+      expect(Object.keys(data.refs)).toEqual(['e1']);
+    } finally { await h.cleanup(); }
+  });
+
+  // 2026-11-06: on My browser the hint sent the agent into the user's own tab, where it clicked and navigated.
+  it('does not send the agent into the user\'s own tab on the same site, only its address', async () => {
+    const h = await makeHarness({}, (request) => {
+      if (request.action === 'open') return { targetId: 'new', url: 'https://play.example.test/console' };
+      if (request.action === 'tabs') return { tabs: [
+        { targetId: 'mine', suggestedTargetId: 't1', url: 'https://play.example.test/console/u/1/app', owner: 'user' },
+        { targetId: 'new', url: 'https://play.example.test/console', owner: 'cindy' },
+      ] };
+      return undefined;
+    });
+    try {
+      const opened = await h.client.callTool({ name: 'call_tool', arguments: { name: 'browser', args: { action: 'open', url: 'https://play.example.test/console' } } });
+      const body = JSON.parse((opened.content as Array<{ text: string }>)[0].text);
+      expect(body.sameSiteTabs).toEqual([{ targetId: 't1', url: 'https://play.example.test/console/u/1/app', owner: 'user' }]);
+      expect(body.sameSiteHint).toContain('不要在上面点击、输入或跳转');
+      expect(body.sameSiteHint).not.toContain('优先在它们上面继续');
+    } finally { await h.cleanup(); }
+  });
+
+  it('accepts extract fields written next to extract, and urls in afterSnapshot, for any backend', async () => {
+    const h = await makeHarness();
+    try {
+      const extracted = await h.client.callTool({ name: 'call_tool', arguments: { name: 'browser', args: { action: 'extract', targetId: 't1', fields: { title: 'h1' }, from: 'main', multiple: true } } });
+      expect(extracted.isError).toBeFalsy();
+      expect(h.calls[0]).toMatchObject({ action: 'act', request: { kind: 'evaluate', domRead: { kind: 'extract', extract: { fields: { title: 'h1' }, from: 'main', multiple: true } } } });
+      const clicked = await h.client.callTool({ name: 'call_tool', arguments: { name: 'browser', args: { action: 'act', targetId: 't1', request: { kind: 'click', ref: 'e1' }, afterSnapshot: { urls: true } } } });
+      expect(clicked.isError).toBeFalsy();
+      expect(h.calls.find((c) => (c as { action?: string }).action === 'snapshot')).toMatchObject({ action: 'snapshot', urls: true });
+    } finally { await h.cleanup(); }
+  });
+
+  it('ignores a browser name passed as target instead of failing schema validation', async () => {
+    const h = await makeHarness({ backendCapabilities: () => ({ ...caps(), pointer: true }) });
+    try {
+      const result = await h.client.callTool({ name: 'call_tool', arguments: { name: 'browser', args: { action: 'status', target: 'user-browser' } } });
+      expect(result.isError).toBeFalsy();
+      expect(h.calls).toHaveLength(1);
+      expect(h.calls[0]).not.toHaveProperty('target');
+    } finally { await h.cleanup(); }
+  });
+
+  it('lets synthetic pointer work through when the backend declares pointer support', async () => {
+    const h = await makeHarness({ backendCapabilities: () => ({ ...caps(), pointer: true }) });
+    try {
+      await h.client.callTool({ name: 'call_tool', arguments: { name: 'browser', args: { action: 'act', targetId: 't1', request: { kind: 'drag', startRef: 'a', endRef: 'b' } } } });
+      expect(h.calls).toHaveLength(1);
+    } finally { await h.cleanup(); }
+  });
+
+  it('still routes extract through the declarative DOM read and leaves other backends unaffected', async () => {
+    const h = await makeHarness({ backendCapabilities: caps });
+    try {
+      await h.client.callTool({ name: 'call_tool', arguments: { name: 'browser', args: { action: 'extract', targetId: 't1', extract: { fields: { title: 'h1' } } } } });
+      expect(h.calls).toHaveLength(1);
+      expect(h.calls[0]).toMatchObject({ action: 'act', request: { kind: 'evaluate', domRead: { kind: 'extract' } } });
+    } finally { await h.cleanup(); }
+    const open = await makeHarness({ backendCapabilities: () => ({}) });
+    try {
+      await open.client.callTool({ name: 'call_tool', arguments: { name: 'browser', args: { action: 'screenshot', targetId: 't1' } } });
+      expect(open.calls).toHaveLength(1);
+    } finally { await open.cleanup(); }
+  });
+
+  it('refuses recipes that need guards, scripts or network capture on a backend without them', async () => {
+    const recipe: Recipe = {
+      id: 'guarded', match: ['example.test'], inputs: {},
+      steps: [
+        { action: 'navigate', url: 'https://example.test/' },
+        { action: 'extract', as: 'rows', guard: { url: 'https://example.test/' }, expect: { minCount: 1 }, extract: { fields: { title: 'h1' } } },
+      ],
+      output: '{{rows}}',
+    } as unknown as Recipe;
+    const h = await makeHarness({
+      backendCapabilities: caps,
+      getUserRecipes: async () => ({ recipes: new Map([[recipe.id, recipe]]), siteGuides: new Map(), version: 'v1' }),
+    });
+    try {
+      const result = await h.client.callTool({ name: 'call_tool', arguments: { name: 'browser', args: { action: 'recipe', recipeId: 'guarded' } } });
+      expect(result.isError).toBe(true);
+      expect((result.content as Array<{ text: string }>)[0].text).toContain('页面脚本能力');
+      expect(h.calls).toEqual([]);
+    } finally { await h.cleanup(); }
+  });
+});
+
+// Sequences in one call and the protocol escape hatch (2026-11-10). Unit tier, production MCP entry.
+// Rules protected: actions that need their own approval (recipe / upload / setBackend) cannot ride
+// inside a batch; a failed step never lets later steps run; cdp keeps cookies out of the model,
+// stays paused on secret pages and always ends its protocol session. No earlier test reached these
+// paths: batch and cdp did not exist, and list_tools returned one untailored rule body.
+describe('browser · batch, cdp and target-tailored rules', () => {
+  type Scripted = (request: Record<string, unknown>) => { ok?: boolean; data?: unknown; message?: string } | undefined;
+  async function scripted(respond: Scripted, extraDeps?: Partial<BrowserMcpDeps>) {
+    const calls: Array<Record<string, unknown>> = [];
+    const runtime: BrowserControlRuntime = {
+      async call(request) {
+        calls.push(request as unknown as Record<string, unknown>);
+        const reply = respond(request as unknown as Record<string, unknown>);
+        return { ok: reply?.ok ?? true, action: request.action, data: reply?.data ?? {}, ...(reply?.message ? { message: reply.message } : {}) };
+      },
+    };
+    const h = await makeHarness({ ...extraDeps, getRuntime: () => runtime });
+    const invoke = async (args: Record<string, unknown>) => {
+      const r = await h.client.callTool({ name: 'call_tool', arguments: { name: 'browser', args } });
+      return { isError: r.isError === true, body: JSON.parse((r.content as Array<{ text: string }>)[0].text) };
+    };
+    return { calls, invoke, client: h.client, cleanup: h.cleanup };
+  }
+
+  it('runs batch steps in order on the tab an earlier step opened and stops at the first failure', async () => {
+    const h = await scripted((request) => {
+      if (request.action === 'open') return { data: { targetId: 'tab-9', url: 'https://example.test/' } };
+      if (request.action === 'tabs') return { data: { tabs: [] } };
+      if ((request.request as { kind?: string } | undefined)?.kind === 'click') return { ok: false, message: 'element is not visible' };
+      return { data: { targetId: request.targetId } };
+    });
+    try {
+      const { isError, body } = await h.invoke({ action: 'batch', steps: [
+        { action: 'open', url: 'https://example.test/' },
+        { action: 'act', request: { kind: 'type', ref: 'e1', text: 'Ada' } },
+        { action: 'act', request: { kind: 'click', ref: 'e2' } },
+        { action: 'extract', extract: { fields: { title: 'h1' } } },
+      ] });
+      expect(isError).toBe(true);
+      expect(body).toMatchObject({ ok: false, action: 'batch', completed: 2, total: 4, failedStep: 2 });
+      expect(body.steps.map((step: { ok: boolean }) => step.ok)).toEqual([true, true, false]);
+      const acts = h.calls.filter((request) => request.action === 'act');
+      // Both acts ran on the opened tab; the read after the failure was never dispatched.
+      expect(acts.map((request) => [request.targetId, (request.request as { kind: string }).kind])).toEqual([['tab-9', 'type'], ['tab-9', 'click']]);
+    } finally { await h.cleanup(); }
+  });
+
+  it.each([
+    { action: 'recipe', recipeId: 'anything' },
+    { action: 'upload', paths: ['/tmp/x'] },
+    { action: 'setBackend', backend: 'user-browser' },
+    { action: 'batch', steps: [{ action: 'tabs' }] },
+    { action: 'navigate', url: 'https://example.test/', unknownField: true },
+    // Not available on the active browser (here: no screenshots): known before the first step runs.
+    { action: 'screenshot' },
+    // A protocol command the agent may not send is known up front too (seen live: it used to surface mid-batch).
+    { action: 'cdp', commands: [{ method: 'Network.getCookies' }] },
+    // Review on #9701 (Greptile P1, Codex P2): what the step's own handler would refuse, schema-valid as it is,
+    // must be refused before the first step runs. Last round only the schema and the backend were asked.
+    { action: 'cdp' },
+    { action: 'navigate', url: 'file:///tmp/x' },
+    { action: 'extract' },
+    { action: 'snapshot', afterSnapshot: {} },
+  ])('refuses the whole batch before dispatch when a step is %j', async (step) => {
+    const h = await scripted(() => undefined, { setBackend: async (backend) => backend, backendCapabilities: () => ({ screenshot: false }) });
+    try {
+      const { isError, body } = await h.invoke({ action: 'batch', steps: [{ action: 'navigate', url: 'https://example.test/' }, step] });
+      expect(isError).toBe(true);
+      expect(body.ok).toBe(false);
+      expect(h.calls).toEqual([]);
+    } finally { await h.cleanup(); }
+  });
+
+  // Review on #9701 (Greptile P2): only the first three images used to be returned and the rest vanished
+  // while their steps still reported success. Now a batch that could not return them is refused whole.
+  it('refuses a batch with more screenshot steps than it can return, before running any', async () => {
+    const h = await scripted(() => undefined);
+    try {
+      const { isError, body } = await h.invoke({ action: 'batch', targetId: 't1', steps: [
+        { action: 'navigate', url: 'https://example.test/' },
+        ...Array.from({ length: 4 }, () => ({ action: 'screenshot' })),
+      ] });
+      expect(isError).toBe(true);
+      expect(body.message).toContain('最多 3 个 screenshot');
+      expect(h.calls).toEqual([]);
+    } finally { await h.cleanup(); }
+  });
+
+  // Review on #9701 (Greptile P1): each step re-entered the handler and accepted whatever backend was
+  // current then, so a switch during a wait let later steps run on another browser with stale tabs and refs.
+  it('stops the rest of a batch when the backend is switched in the middle', async () => {
+    let scope = { lifecycle: {}, backend: {} };
+    const h = await scripted((request) => {
+      if (request.action === 'act') scope = { lifecycle: {}, backend: {} };
+      return undefined;
+    }, { getBackendScope: () => scope });
+    try {
+      const { isError, body } = await h.invoke({ action: 'batch', targetId: 't1', steps: [
+        { action: 'act', request: { kind: 'click', ref: 'e1' } },
+        { action: 'navigate', url: 'https://example.test/next' },
+        { action: 'act', request: { kind: 'click', ref: 'e2' } },
+      ] });
+      expect(isError).toBe(true);
+      expect(body).toMatchObject({ ok: false, completed: 1, total: 3, failedStep: 1 });
+      expect(body.steps[1].message).toContain('被切换');
+      expect(h.calls.map((request) => request.action)).toEqual(['act']);
+    } finally { await h.cleanup(); }
+  });
+
+  it('runs cdp helpers in one session on the resolved tab, stops at a failed command and always ends the session', async () => {
+    const h = await scripted((request) => {
+      const method = (request.recipeCommand as { method: string }).method;
+      if (method === 'Cindy.begin') return { data: { sessionId: 's1', targetId: 'resolved-tab' } };
+      if (method === 'Accessibility.getFullAXTree') return { data: { nodes: [
+        { nodeId: '1', role: { value: 'RootWebArea' }, name: { value: 'Vault' }, backendDOMNodeId: 1 },
+        { nodeId: '2', parentId: '1', role: { value: 'generic' }, name: { value: '' }, backendDOMNodeId: 7 },
+        { nodeId: '3', parentId: '2', role: { value: 'button' }, name: { value: 'Reveal code' }, backendDOMNodeId: 41,
+          properties: [{ name: 'focused', value: { value: true } }, { name: 'disabled', value: { value: false } }] },
+        { nodeId: '4', parentId: '3', role: { value: 'StaticText' }, name: { value: 'Reveal code' }, backendDOMNodeId: 42 },
+        { nodeId: '5', parentId: '2', ignored: true, role: { value: 'button' }, name: { value: 'Hidden' }, backendDOMNodeId: 43 },
+      ] } };
+      if (method === 'DOM.getContentQuads') return { data: { quads: [[10, 20, 110, 20, 110, 60, 10, 60]] } };
+      if (method === 'DOM.focus') return { ok: false, message: 'Element is not focusable' };
+      return { data: {} };
+    });
+    try {
+      const { isError, body } = await h.invoke({ action: 'cdp', targetId: 'checkout', commands: [
+        { method: 'nodes', params: { filter: 'button' } },
+        { method: 'click', params: { node: 41 } },
+        { method: 'DOM.focus', params: { backendNodeId: 41 } },
+        { method: 'Input.insertText', params: { text: 'never sent' } },
+      ] });
+      expect(isError).toBe(true);
+      expect(body.data.results.map((step: { ok: boolean }) => step.ok)).toEqual([true, true, false]);
+      // Only the named, visible button survives: the root does not match the filter, its repeated text and the ignored node are dropped.
+      expect(body.data.results[0].result).toEqual({ nodes: '[41] button "Reveal code" focused', count: 1 });
+      expect(body.data.results[1].result).toEqual({ clicked: 41, x: 60, y: 40 });
+      const sent = h.calls.map((request) => [request.targetId, (request.recipeCommand as { method: string }).method]);
+      expect(sent[0]).toEqual(['checkout', 'Cindy.begin']);
+      expect(sent.slice(1).every(([targetId]) => targetId === 'resolved-tab')).toBe(true);
+      expect(sent.map(([, method]) => method)).not.toContain('Input.insertText');
+      expect(sent.at(-1)).toEqual(['resolved-tab', 'Cindy.end']);
+    } finally { await h.cleanup(); }
+  });
+
+  // Seen live in the sidebar (2026-11-10): its pages sit in the background without focus, so inserted
+  // text went nowhere and the helper still reported success; the form was then submitted empty.
+  it.each([
+    { focused: true, editable: true, via: 'insertText' },
+    { focused: false, editable: true, via: 'value' },
+    { focused: false, editable: false, via: undefined },
+  ])('cdp type leaves the text in the field or says it did not: %j', async ({ focused, editable, via }) => {
+    let value = '';
+    const h = await scripted((request) => {
+      const command = request.recipeCommand as { method: string; params?: { text?: string; functionDeclaration?: string; arguments?: Array<{ value: string }> } };
+      if (command.method === 'Cindy.begin') return { data: { sessionId: 's1' } };
+      if (command.method === 'DOM.resolveNode') return { data: { object: { objectId: 'o1' } } };
+      if (command.method === 'Input.insertText') { if (focused) value = command.params!.text!; return { data: {} }; }
+      if (command.method !== 'Runtime.callFunctionOn') return { data: {} };
+      const fn = command.params!.functionDeclaration!;
+      if (fn.includes('dispatchEvent')) {
+        if (!editable) return { data: { result: {} } };
+        value = command.params!.arguments![0].value;
+      } else if (fn.includes('select')) return { data: { result: {} } };
+      return { data: { result: { value } } };
+    });
+    try {
+      const { isError, body } = await h.invoke({ action: 'cdp', targetId: 't1', commands: [{ method: 'type', params: { node: 21, text: 'E-46667' } }] });
+      expect(isError).toBe(via === undefined);
+      if (via) {
+        expect(body.data.results[0].result).toEqual({ typed: 21, via });
+        expect(value).toBe('E-46667');
+      } else expect(body.data.results[0].error).toContain('输入没有生效');
+    } finally { await h.cleanup(); }
+  });
+
+  // Codex review on #9701 (P1): a raw Runtime.callFunctionOn that throws in the page comes back as a
+  // successful protocol response carrying exceptionDetails. It used to be recorded as success, so the
+  // next command (a submit click) ran on unchanged data, and a batch around it went on too.
+  it('stops cdp and the batch around it when a raw page function throws', async () => {
+    const h = await scripted((request) => {
+      const command = request.recipeCommand as { method: string };
+      if (command.method === 'Cindy.begin') return { data: { sessionId: 's1' } };
+      if (command.method === 'Runtime.callFunctionOn') {
+        return { data: { result: { type: 'object' }, exceptionDetails: { text: 'Uncaught', exception: { description: 'TypeError: x is not a function' } } } };
+      }
+      return { data: {} };
+    });
+    try {
+      const { isError, body } = await h.invoke({ action: 'batch', targetId: 't1', steps: [
+        { action: 'cdp', commands: [
+          { method: 'Runtime.callFunctionOn', params: { objectId: 'o1', functionDeclaration: 'function(){ x() }' } },
+          { method: 'Input.dispatchMouseEvent', params: { type: 'mousePressed', x: 1, y: 1 } },
+        ] },
+        { action: 'navigate', url: 'https://example.test/next' },
+      ] });
+      expect(isError).toBe(true);
+      expect(body).toMatchObject({ ok: false, completed: 0, failedStep: 0 });
+      expect(body.steps[0].data.results).toEqual([{ method: 'Runtime.callFunctionOn', ok: false, error: 'TypeError: x is not a function' }]);
+      const sent = h.calls.map((request) => request.action === 'recipeCommand' ? (request.recipeCommand as { method: string }).method : request.action);
+      expect(sent).toEqual(['recipeCommand', 'recipeCommand', 'recipeCommand'].map((_, i) => ['Cindy.begin', 'Runtime.callFunctionOn', 'Cindy.end'][i]));
+    } finally { await h.cleanup(); }
+  });
+
+  it.each([
+    [{ commands: [{ method: 'nodes' }, { method: 'Network.getCookies' }] }, {}, 'Cookie'],
+    [{ commands: [{ method: 'nodes' }] }, { backendCapabilities: () => ({ rawProtocol: false }) }, '不要自行切换'],
+    [{ commands: [{ method: 'nodes' }] }, { pageReadsRestricted: async () => true }, 'password'],
+  ] as Array<[Record<string, unknown>, Partial<BrowserMcpDeps>, string]>)('refuses cdp without reaching the browser: %j', async (args, deps, reason) => {
+    const h = await scripted(() => undefined, deps);
+    try {
+      const { isError, body } = await h.invoke({ action: 'cdp', targetId: 't1', ...args });
+      expect(isError).toBe(true);
+      expect(body.message).toContain(reason);
+      expect(h.calls).toEqual([]);
+    } finally { await h.cleanup(); }
+  });
+
+  it('returns only the active target\'s rules and says so when the target changes afterwards', async () => {
+    let backend: 'external' | 'user-browser' | undefined;
+    const h = await scripted(() => ({ data: { backend } }), { getBackendKind: () => backend as 'external' });
+    const rules = async () => JSON.parse(((await h.client.callTool({ name: 'list_tools', arguments: { category: 'browser' } }))
+      .content as Array<{ text: string }>)[0].text).rules['browser-workflow'] as string;
+    try {
+      // Unknown target (older hosts): everything, as before.
+      const all = await rules();
+      expect(all).toContain('proxyAllowedHostnames');
+      expect(all).toContain('EVAL_BLOCKED_BY_PAGE');
+      expect(all).not.toContain('<!--');
+      backend = 'external';
+      const external = await rules();
+      expect(external).toContain('proxyAllowedHostnames');
+      expect(external).not.toContain('EVAL_BLOCKED_BY_PAGE');
+      expect(external).not.toContain('<!--');
+      expect((await h.invoke({ action: 'status' })).body.rulesHint).toBeUndefined();
+      backend = 'user-browser';
+      expect((await h.invoke({ action: 'status' })).body.rulesHint).toContain('list_tools');
+      const own = await rules();
+      expect(own).toContain('EVAL_BLOCKED_BY_PAGE');
+      expect(own).not.toContain('proxyAllowedHostnames');
+      expect((await h.invoke({ action: 'status' })).body.rulesHint).toBeUndefined();
+    } finally { await h.cleanup(); }
   });
 });

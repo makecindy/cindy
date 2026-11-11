@@ -183,7 +183,8 @@ function displayOrderedModels(models: readonly CatalogModel[]): CatalogModel[] {
 
 /** Product-facing provider name for the picker; keep the catalog id stable. */
 function displayProviderName(provider: Provider): string {
-  return provider.id === 'xd' ? 'Cindy AI' : provider.name;
+  return provider.id === 'xd' && !provider.name?.startsWith('Cindy AI · ')
+    ? 'Cindy AI' : provider.name;
 }
 
 /**

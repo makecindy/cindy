@@ -1,6 +1,326 @@
 {
   "reference": {
     "defaults": {
+      "plugin-identity-official-text": {
+        "light": {
+          "$type": "color",
+          "$value": {
+            "colorSpace": "srgb",
+            "components": [
+              0.156863,
+              0.407843,
+              0.784314
+            ]
+          },
+          "$extensions": {
+            "com.cindy.desktop": {
+              "format": "hex",
+              "uppercase": false,
+              "alpha": false
+            }
+          }
+        },
+        "dark": {
+          "$type": "color",
+          "$value": {
+            "colorSpace": "srgb",
+            "components": [
+              0.513725,
+              0.709804,
+              1
+            ]
+          },
+          "$extensions": {
+            "com.cindy.desktop": {
+              "format": "hex",
+              "uppercase": false,
+              "alpha": false
+            }
+          }
+        }
+      },
+      "plugin-identity-official-bg": {
+        "light": {
+          "$type": "color",
+          "$value": {
+            "colorSpace": "srgb",
+            "components": [
+              0.254902,
+              0.486275,
+              0.866667
+            ],
+            "alpha": 0.11
+          },
+          "$extensions": {
+            "com.cindy.desktop": {
+              "format": "rgb",
+              "uppercase": false,
+              "alpha": true,
+              "precision": 2
+            }
+          }
+        },
+        "dark": {
+          "$type": "color",
+          "$value": {
+            "colorSpace": "srgb",
+            "components": [
+              0.254902,
+              0.486275,
+              0.866667
+            ],
+            "alpha": 0.18
+          },
+          "$extensions": {
+            "com.cindy.desktop": {
+              "format": "rgb",
+              "uppercase": false,
+              "alpha": true,
+              "precision": 2
+            }
+          }
+        }
+      },
+      "plugin-identity-community-text": {
+        "light": {
+          "$type": "color",
+          "$value": {
+            "colorSpace": "srgb",
+            "components": [
+              0.501961,
+              0.313725,
+              0.733333
+            ]
+          },
+          "$extensions": {
+            "com.cindy.desktop": {
+              "format": "hex",
+              "uppercase": false,
+              "alpha": false
+            }
+          }
+        },
+        "dark": {
+          "$type": "color",
+          "$value": {
+            "colorSpace": "srgb",
+            "components": [
+              0.768627,
+              0.631373,
+              0.937255
+            ]
+          },
+          "$extensions": {
+            "com.cindy.desktop": {
+              "format": "hex",
+              "uppercase": false,
+              "alpha": false
+            }
+          }
+        }
+      },
+      "plugin-identity-community-bg": {
+        "light": {
+          "$type": "color",
+          "$value": {
+            "colorSpace": "srgb",
+            "components": [
+              0.501961,
+              0.313725,
+              0.733333
+            ],
+            "alpha": 0.1
+          },
+          "$extensions": {
+            "com.cindy.desktop": {
+              "format": "rgb",
+              "uppercase": false,
+              "alpha": true,
+              "precision": 2
+            }
+          }
+        },
+        "dark": {
+          "$type": "color",
+          "$value": {
+            "colorSpace": "srgb",
+            "components": [
+              0.607843,
+              0.411765,
+              0.843137
+            ],
+            "alpha": 0.16
+          },
+          "$extensions": {
+            "com.cindy.desktop": {
+              "format": "rgb",
+              "uppercase": false,
+              "alpha": true,
+              "precision": 2
+            }
+          }
+        }
+      },
+      "plugin-identity-team-text": {
+        "light": {
+          "$type": "color",
+          "$value": {
+            "colorSpace": "srgb",
+            "components": [
+              0.035294,
+              0.486275,
+              0.470588
+            ]
+          },
+          "$extensions": {
+            "com.cindy.desktop": {
+              "format": "hex",
+              "uppercase": false,
+              "alpha": false
+            }
+          }
+        },
+        "dark": {
+          "$type": "color",
+          "$value": {
+            "colorSpace": "srgb",
+            "components": [
+              0.427451,
+              0.843137,
+              0.803922
+            ]
+          },
+          "$extensions": {
+            "com.cindy.desktop": {
+              "format": "hex",
+              "uppercase": false,
+              "alpha": false
+            }
+          }
+        }
+      },
+      "plugin-identity-team-bg": {
+        "light": {
+          "$type": "color",
+          "$value": {
+            "colorSpace": "srgb",
+            "components": [
+              0.086275,
+              0.568627,
+              0.517647
+            ],
+            "alpha": 0.1
+          },
+          "$extensions": {
+            "com.cindy.desktop": {
+              "format": "rgb",
+              "uppercase": false,
+              "alpha": true,
+              "precision": 2
+            }
+          }
+        },
+        "dark": {
+          "$type": "color",
+          "$value": {
+            "colorSpace": "srgb",
+            "components": [
+              0.086275,
+              0.568627,
+              0.517647
+            ],
+            "alpha": 0.16
+          },
+          "$extensions": {
+            "com.cindy.desktop": {
+              "format": "rgb",
+              "uppercase": false,
+              "alpha": true,
+              "precision": 2
+            }
+          }
+        }
+      },
+      "plugin-identity-custom-text": {
+        "light": {
+          "$type": "color",
+          "$value": {
+            "colorSpace": "srgb",
+            "components": [
+              0.701961,
+              0.396078,
+              0.094118
+            ]
+          },
+          "$extensions": {
+            "com.cindy.desktop": {
+              "format": "hex",
+              "uppercase": false,
+              "alpha": false
+            }
+          }
+        },
+        "dark": {
+          "$type": "color",
+          "$value": {
+            "colorSpace": "srgb",
+            "components": [
+              0.933333,
+              0.729412,
+              0.439216
+            ]
+          },
+          "$extensions": {
+            "com.cindy.desktop": {
+              "format": "hex",
+              "uppercase": false,
+              "alpha": false
+            }
+          }
+        }
+      },
+      "plugin-identity-custom-bg": {
+        "light": {
+          "$type": "color",
+          "$value": {
+            "colorSpace": "srgb",
+            "components": [
+              0.745098,
+              0.443137,
+              0.113725
+            ],
+            "alpha": 0.1
+          },
+          "$extensions": {
+            "com.cindy.desktop": {
+              "format": "rgb",
+              "uppercase": false,
+              "alpha": true,
+              "precision": 2
+            }
+          }
+        },
+        "dark": {
+          "$type": "color",
+          "$value": {
+            "colorSpace": "srgb",
+            "components": [
+              0.745098,
+              0.443137,
+              0.113725
+            ],
+            "alpha": 0.16
+          },
+          "$extensions": {
+            "com.cindy.desktop": {
+              "format": "rgb",
+              "uppercase": false,
+              "alpha": true,
+              "precision": 2
+            }
+          }
+        }
+      },
       "surface": {
         "light": {
           "$type": "color",
@@ -3325,16 +3645,17 @@
           "$value": {
             "colorSpace": "srgb",
             "components": [
-              0.831373,
-              0.831373,
-              0.831373
-            ]
+              0,
+              0,
+              0
+            ],
+            "alpha": 0.08
           },
           "$extensions": {
             "com.cindy.desktop": {
-              "format": "hex",
-              "uppercase": true,
-              "alpha": false
+              "format": "rgb",
+              "alpha": true,
+              "precision": 2
             }
           }
         },
@@ -3343,16 +3664,17 @@
           "$value": {
             "colorSpace": "srgb",
             "components": [
-              0.262745,
-              0.262745,
-              0.262745
-            ]
+              1,
+              1,
+              1
+            ],
+            "alpha": 0.1
           },
           "$extensions": {
             "com.cindy.desktop": {
-              "format": "hex",
-              "uppercase": true,
-              "alpha": false
+              "format": "rgb",
+              "alpha": true,
+              "precision": 2
             }
           }
         }
@@ -3363,16 +3685,17 @@
           "$value": {
             "colorSpace": "srgb",
             "components": [
-              0.101961,
-              0.094118,
-              0.094118
-            ]
+              0,
+              0,
+              0
+            ],
+            "alpha": 0.95
           },
           "$extensions": {
             "com.cindy.desktop": {
-              "format": "hex",
-              "uppercase": true,
-              "alpha": false
+              "format": "rgb",
+              "alpha": true,
+              "precision": 2
             }
           }
         },
@@ -3381,16 +3704,17 @@
           "$value": {
             "colorSpace": "srgb",
             "components": [
-              0.752941,
-              0.745098,
-              0.745098
-            ]
+              1,
+              1,
+              1
+            ],
+            "alpha": 1
           },
           "$extensions": {
             "com.cindy.desktop": {
-              "format": "hex",
-              "uppercase": true,
-              "alpha": false
+              "format": "rgb",
+              "alpha": true,
+              "precision": 2
             }
           }
         }
@@ -3401,9 +3725,9 @@
           "$value": {
             "colorSpace": "srgb",
             "components": [
-              0.984314,
-              0.984314,
-              0.984314
+              0.992157,
+              0.992157,
+              0.972549
             ]
           },
           "$extensions": {
@@ -3419,9 +3743,9 @@
           "$value": {
             "colorSpace": "srgb",
             "components": [
-              0.192157,
-              0.184314,
-              0.184314
+              0.121569,
+              0.121569,
+              0.121569
             ]
           },
           "$extensions": {
@@ -3439,16 +3763,17 @@
           "$value": {
             "colorSpace": "srgb",
             "components": [
-              0.831373,
-              0.831373,
-              0.831373
-            ]
+              0,
+              0,
+              0
+            ],
+            "alpha": 0.08
           },
           "$extensions": {
             "com.cindy.desktop": {
-              "format": "hex",
-              "uppercase": true,
-              "alpha": false
+              "format": "rgb",
+              "alpha": true,
+              "precision": 2
             }
           }
         },
@@ -3457,16 +3782,17 @@
           "$value": {
             "colorSpace": "srgb",
             "components": [
-              0.262745,
-              0.262745,
-              0.262745
-            ]
+              1,
+              1,
+              1
+            ],
+            "alpha": 0.1
           },
           "$extensions": {
             "com.cindy.desktop": {
-              "format": "hex",
-              "uppercase": true,
-              "alpha": false
+              "format": "rgb",
+              "alpha": true,
+              "precision": 2
             }
           }
         }
@@ -3557,9 +3883,9 @@
           "$value": {
             "colorSpace": "srgb",
             "components": [
-              0.164706,
-              0.156863,
-              0.156863
+              0.235294,
+              0.247059,
+              0.262745
             ]
           },
           "$extensions": {
@@ -3595,8 +3921,8 @@
           "$value": {
             "colorSpace": "srgb",
             "components": [
-              0.262745,
-              0.262745,
+              0.235294,
+              0.247059,
               0.262745
             ]
           },
@@ -3613,9 +3939,9 @@
           "$value": {
             "colorSpace": "srgb",
             "components": [
-              1,
-              1,
-              1
+              0.933333,
+              0.933333,
+              0.933333
             ]
           },
           "$extensions": {
@@ -3633,9 +3959,9 @@
           "$value": {
             "colorSpace": "srgb",
             "components": [
-              0.831373,
-              0.831373,
-              0.831373
+              0.988235,
+              0.988235,
+              0.988235
             ]
           },
           "$extensions": {
@@ -3651,9 +3977,9 @@
           "$value": {
             "colorSpace": "srgb",
             "components": [
-              0.164706,
-              0.156863,
-              0.156863
+              0.082353,
+              0.082353,
+              0.082353
             ]
           },
           "$extensions": {
@@ -3671,9 +3997,9 @@
           "$value": {
             "colorSpace": "srgb",
             "components": [
-              0.984314,
-              0.984314,
-              0.984314
+              0.992157,
+              0.992157,
+              0.972549
             ]
           },
           "$extensions": {
@@ -3689,9 +4015,9 @@
           "$value": {
             "colorSpace": "srgb",
             "components": [
-              0.192157,
-              0.184314,
-              0.184314
+              0.121569,
+              0.121569,
+              0.121569
             ]
           },
           "$extensions": {
@@ -3709,16 +4035,17 @@
           "$value": {
             "colorSpace": "srgb",
             "components": [
-              0.933333,
-              0.933333,
-              0.933333
-            ]
+              0,
+              0,
+              0
+            ],
+            "alpha": 0.05
           },
           "$extensions": {
             "com.cindy.desktop": {
-              "format": "hex",
-              "uppercase": true,
-              "alpha": false
+              "format": "rgb",
+              "alpha": true,
+              "precision": 2
             }
           }
         },
@@ -3727,16 +4054,17 @@
           "$value": {
             "colorSpace": "srgb",
             "components": [
-              0.172549,
-              0.164706,
-              0.164706
-            ]
+              1,
+              1,
+              1
+            ],
+            "alpha": 0.06
           },
           "$extensions": {
             "com.cindy.desktop": {
-              "format": "hex",
-              "uppercase": true,
-              "alpha": false
+              "format": "rgb",
+              "alpha": true,
+              "precision": 2
             }
           }
         }
@@ -3747,16 +4075,17 @@
           "$value": {
             "colorSpace": "srgb",
             "components": [
-              0.933333,
-              0.933333,
-              0.933333
-            ]
+              0,
+              0,
+              0
+            ],
+            "alpha": 0.05
           },
           "$extensions": {
             "com.cindy.desktop": {
-              "format": "hex",
-              "uppercase": true,
-              "alpha": false
+              "format": "rgb",
+              "alpha": true,
+              "precision": 2
             }
           }
         },
@@ -3765,16 +4094,17 @@
           "$value": {
             "colorSpace": "srgb",
             "components": [
-              0.164706,
-              0.156863,
-              0.156863
-            ]
+              1,
+              1,
+              1
+            ],
+            "alpha": 0.06
           },
           "$extensions": {
             "com.cindy.desktop": {
-              "format": "hex",
-              "uppercase": true,
-              "alpha": false
+              "format": "rgb",
+              "alpha": true,
+              "precision": 2
             }
           }
         }
@@ -3785,16 +4115,17 @@
           "$value": {
             "colorSpace": "srgb",
             "components": [
-              1,
-              1,
-              1
-            ]
+              0,
+              0,
+              0
+            ],
+            "alpha": 0.08
           },
           "$extensions": {
             "com.cindy.desktop": {
-              "format": "hex",
-              "uppercase": true,
-              "alpha": false
+              "format": "rgb",
+              "alpha": true,
+              "precision": 2
             }
           }
         },
@@ -3803,16 +4134,17 @@
           "$value": {
             "colorSpace": "srgb",
             "components": [
-              0.262745,
-              0.262745,
-              0.262745
-            ]
+              1,
+              1,
+              1
+            ],
+            "alpha": 0.1
           },
           "$extensions": {
             "com.cindy.desktop": {
-              "format": "hex",
-              "uppercase": true,
-              "alpha": false
+              "format": "rgb",
+              "alpha": true,
+              "precision": 2
             }
           }
         }
@@ -3823,16 +4155,17 @@
           "$value": {
             "colorSpace": "srgb",
             "components": [
-              0.831373,
-              0.831373,
-              0.831373
-            ]
+              0,
+              0,
+              0
+            ],
+            "alpha": 0.08
           },
           "$extensions": {
             "com.cindy.desktop": {
-              "format": "hex",
-              "uppercase": true,
-              "alpha": false
+              "format": "rgb",
+              "alpha": true,
+              "precision": 2
             }
           }
         },
@@ -3841,16 +4174,17 @@
           "$value": {
             "colorSpace": "srgb",
             "components": [
-              0.262745,
-              0.262745,
-              0.262745
-            ]
+              1,
+              1,
+              1
+            ],
+            "alpha": 0.1
           },
           "$extensions": {
             "com.cindy.desktop": {
-              "format": "hex",
-              "uppercase": true,
-              "alpha": false
+              "format": "rgb",
+              "alpha": true,
+              "precision": 2
             }
           }
         }
@@ -3861,16 +4195,17 @@
           "$value": {
             "colorSpace": "srgb",
             "components": [
-              0.164706,
-              0.156863,
-              0.156863
-            ]
+              0,
+              0,
+              0
+            ],
+            "alpha": 0.88
           },
           "$extensions": {
             "com.cindy.desktop": {
-              "format": "hex",
-              "uppercase": true,
-              "alpha": false
+              "format": "rgb",
+              "alpha": true,
+              "precision": 2
             }
           }
         },
@@ -3879,16 +4214,17 @@
           "$value": {
             "colorSpace": "srgb",
             "components": [
-              0.933333,
-              0.933333,
-              0.933333
-            ]
+              1,
+              1,
+              1
+            ],
+            "alpha": 0.82
           },
           "$extensions": {
             "com.cindy.desktop": {
-              "format": "hex",
-              "uppercase": true,
-              "alpha": false
+              "format": "rgb",
+              "alpha": true,
+              "precision": 2
             }
           }
         }
@@ -3899,16 +4235,17 @@
           "$value": {
             "colorSpace": "srgb",
             "components": [
-              0.705882,
-              0.705882,
-              0.705882
-            ]
+              0,
+              0,
+              0
+            ],
+            "alpha": 0
           },
           "$extensions": {
             "com.cindy.desktop": {
-              "format": "hex",
-              "uppercase": true,
-              "alpha": false
+              "format": "rgb",
+              "alpha": true,
+              "precision": 2
             }
           }
         },
@@ -3917,16 +4254,17 @@
           "$value": {
             "colorSpace": "srgb",
             "components": [
-              0.705882,
-              0.705882,
-              0.705882
-            ]
+              1,
+              1,
+              1
+            ],
+            "alpha": 0
           },
           "$extensions": {
             "com.cindy.desktop": {
-              "format": "hex",
-              "uppercase": true,
-              "alpha": false
+              "format": "rgb",
+              "alpha": true,
+              "precision": 2
             }
           }
         }
@@ -4097,9 +4435,9 @@
           "$value": {
             "colorSpace": "srgb",
             "components": [
-              0.164706,
-              0.156863,
-              0.156863
+              0.235294,
+              0.247059,
+              0.262745
             ]
           },
           "$extensions": {
@@ -4135,8 +4473,8 @@
           "$value": {
             "colorSpace": "srgb",
             "components": [
-              0.262745,
-              0.262745,
+              0.235294,
+              0.247059,
               0.262745
             ]
           },
@@ -4153,9 +4491,9 @@
           "$value": {
             "colorSpace": "srgb",
             "components": [
-              1,
-              1,
-              1
+              0.933333,
+              0.933333,
+              0.933333
             ]
           },
           "$extensions": {
@@ -4173,9 +4511,9 @@
           "$value": {
             "colorSpace": "srgb",
             "components": [
-              0.831373,
-              0.831373,
-              0.831373
+              0.988235,
+              0.988235,
+              0.988235
             ]
           },
           "$extensions": {
@@ -4191,9 +4529,9 @@
           "$value": {
             "colorSpace": "srgb",
             "components": [
-              0.164706,
-              0.156863,
-              0.156863
+              0.082353,
+              0.082353,
+              0.082353
             ]
           },
           "$extensions": {
@@ -4211,17 +4549,17 @@
           "$value": {
             "colorSpace": "srgb",
             "components": [
-              1,
-              1,
-              1
+              0,
+              0,
+              0
             ],
-            "alpha": 0.7
+            "alpha": 0
           },
           "$extensions": {
             "com.cindy.desktop": {
               "format": "rgb",
               "alpha": true,
-              "precision": 1
+              "precision": 2
             }
           }
         },
@@ -4234,13 +4572,13 @@
               1,
               1
             ],
-            "alpha": 0.7
+            "alpha": 0
           },
           "$extensions": {
             "com.cindy.desktop": {
               "format": "rgb",
               "alpha": true,
-              "precision": 1
+              "precision": 2
             }
           }
         }
@@ -4251,16 +4589,17 @@
           "$value": {
             "colorSpace": "srgb",
             "components": [
-              0.164706,
-              0.156863,
-              0.156863
-            ]
+              0,
+              0,
+              0
+            ],
+            "alpha": 0.05
           },
           "$extensions": {
             "com.cindy.desktop": {
-              "format": "hex",
-              "uppercase": true,
-              "alpha": false
+              "format": "rgb",
+              "alpha": true,
+              "precision": 2
             }
           }
         },
@@ -4269,16 +4608,17 @@
           "$value": {
             "colorSpace": "srgb",
             "components": [
-              0.164706,
-              0.156863,
-              0.156863
-            ]
+              1,
+              1,
+              1
+            ],
+            "alpha": 0.06
           },
           "$extensions": {
             "com.cindy.desktop": {
-              "format": "hex",
-              "uppercase": true,
-              "alpha": false
+              "format": "rgb",
+              "alpha": true,
+              "precision": 2
             }
           }
         }
@@ -4289,16 +4629,17 @@
           "$value": {
             "colorSpace": "srgb",
             "components": [
-              0.831373,
-              0.831373,
-              0.831373
-            ]
+              0,
+              0,
+              0
+            ],
+            "alpha": 0.32
           },
           "$extensions": {
             "com.cindy.desktop": {
-              "format": "hex",
-              "uppercase": true,
-              "alpha": false
+              "format": "rgb",
+              "alpha": true,
+              "precision": 2
             }
           }
         },
@@ -4307,16 +4648,17 @@
           "$value": {
             "colorSpace": "srgb",
             "components": [
-              0.831373,
-              0.831373,
-              0.831373
-            ]
+              1,
+              1,
+              1
+            ],
+            "alpha": 0.3
           },
           "$extensions": {
             "com.cindy.desktop": {
-              "format": "hex",
-              "uppercase": true,
-              "alpha": false
+              "format": "rgb",
+              "alpha": true,
+              "precision": 2
             }
           }
         }
@@ -4365,16 +4707,17 @@
           "$value": {
             "colorSpace": "srgb",
             "components": [
-              0.164706,
-              0.156863,
-              0.156863
-            ]
+              0,
+              0,
+              0
+            ],
+            "alpha": 0.88
           },
           "$extensions": {
             "com.cindy.desktop": {
-              "format": "hex",
-              "uppercase": true,
-              "alpha": false
+              "format": "rgb",
+              "alpha": true,
+              "precision": 2
             }
           }
         },
@@ -4383,16 +4726,17 @@
           "$value": {
             "colorSpace": "srgb",
             "components": [
-              0.933333,
-              0.933333,
-              0.933333
-            ]
+              1,
+              1,
+              1
+            ],
+            "alpha": 0.82
           },
           "$extensions": {
             "com.cindy.desktop": {
-              "format": "hex",
-              "uppercase": true,
-              "alpha": false
+              "format": "rgb",
+              "alpha": true,
+              "precision": 2
             }
           }
         }
@@ -4403,16 +4747,17 @@
           "$value": {
             "colorSpace": "srgb",
             "components": [
-              0.290196,
-              0.282353,
-              0.282353
-            ]
+              0,
+              0,
+              0
+            ],
+            "alpha": 0.7
           },
           "$extensions": {
             "com.cindy.desktop": {
-              "format": "hex",
-              "uppercase": true,
-              "alpha": false
+              "format": "rgb",
+              "alpha": true,
+              "precision": 2
             }
           }
         },
@@ -4421,16 +4766,17 @@
           "$value": {
             "colorSpace": "srgb",
             "components": [
-              0.658824,
-              0.658824,
-              0.658824
-            ]
+              1,
+              1,
+              1
+            ],
+            "alpha": 0.66
           },
           "$extensions": {
             "com.cindy.desktop": {
-              "format": "hex",
-              "uppercase": true,
-              "alpha": false
+              "format": "rgb",
+              "alpha": true,
+              "precision": 2
             }
           }
         }
@@ -4479,9 +4825,9 @@
           "$value": {
             "colorSpace": "srgb",
             "components": [
-              1,
-              1,
-              1
+              0.992157,
+              0.992157,
+              0.972549
             ]
           },
           "$extensions": {
@@ -4499,7 +4845,7 @@
             "components": [
               0.121569,
               0.121569,
-              0.117647
+              0.121569
             ]
           },
           "$extensions": {
@@ -4517,16 +4863,17 @@
           "$value": {
             "colorSpace": "srgb",
             "components": [
-              0.843137,
-              0.843137,
-              0.831373
-            ]
+              0,
+              0,
+              0
+            ],
+            "alpha": 0.08
           },
           "$extensions": {
             "com.cindy.desktop": {
-              "format": "hex",
-              "uppercase": true,
-              "alpha": false
+              "format": "rgb",
+              "alpha": true,
+              "precision": 2
             }
           }
         },
@@ -4535,16 +4882,17 @@
           "$value": {
             "colorSpace": "srgb",
             "components": [
-              0.235294,
-              0.235294,
-              0.227451
-            ]
+              1,
+              1,
+              1
+            ],
+            "alpha": 0.1
           },
           "$extensions": {
             "com.cindy.desktop": {
-              "format": "hex",
-              "uppercase": true,
-              "alpha": false
+              "format": "rgb",
+              "alpha": true,
+              "precision": 2
             }
           }
         }
@@ -4555,16 +4903,17 @@
           "$value": {
             "colorSpace": "srgb",
             "components": [
-              0.85098,
-              0.85098,
-              0.85098
-            ]
+              0,
+              0,
+              0
+            ],
+            "alpha": 0.1
           },
           "$extensions": {
             "com.cindy.desktop": {
-              "format": "hex",
-              "uppercase": true,
-              "alpha": false
+              "format": "rgb",
+              "alpha": true,
+              "precision": 2
             }
           }
         },
@@ -4573,16 +4922,17 @@
           "$value": {
             "colorSpace": "srgb",
             "components": [
-              0.262745,
-              0.262745,
-              0.262745
-            ]
+              1,
+              1,
+              1
+            ],
+            "alpha": 0.13
           },
           "$extensions": {
             "com.cindy.desktop": {
-              "format": "hex",
-              "uppercase": true,
-              "alpha": false
+              "format": "rgb",
+              "alpha": true,
+              "precision": 2
             }
           }
         }
@@ -4593,16 +4943,17 @@
           "$value": {
             "colorSpace": "srgb",
             "components": [
-              0.145098,
-              0.133333,
-              0.133333
-            ]
+              0,
+              0,
+              0
+            ],
+            "alpha": 0.88
           },
           "$extensions": {
             "com.cindy.desktop": {
-              "format": "hex",
-              "uppercase": true,
-              "alpha": false
+              "format": "rgb",
+              "alpha": true,
+              "precision": 2
             }
           }
         },
@@ -4611,16 +4962,17 @@
           "$value": {
             "colorSpace": "srgb",
             "components": [
-              0.831373,
-              0.831373,
-              0.831373
-            ]
+              1,
+              1,
+              1
+            ],
+            "alpha": 0.82
           },
           "$extensions": {
             "com.cindy.desktop": {
-              "format": "hex",
-              "uppercase": true,
-              "alpha": false
+              "format": "rgb",
+              "alpha": true,
+              "precision": 2
             }
           }
         }
@@ -4631,11 +4983,11 @@
           "$value": {
             "colorSpace": "srgb",
             "components": [
-              1,
-              1,
-              1
+              0,
+              0,
+              0
             ],
-            "alpha": 0.08
+            "alpha": 0.2
           },
           "$extensions": {
             "com.cindy.desktop": {
@@ -4675,13 +5027,13 @@
               0,
               0
             ],
-            "alpha": 0.5
+            "alpha": 0.4
           },
           "$extensions": {
             "com.cindy.desktop": {
               "format": "rgb",
               "alpha": true,
-              "precision": 1
+              "precision": 2
             }
           }
         },
@@ -4700,7 +5052,7 @@
             "com.cindy.desktop": {
               "format": "rgb",
               "alpha": true,
-              "precision": 1
+              "precision": 2
             }
           }
         }
@@ -4711,17 +5063,17 @@
           "$value": {
             "colorSpace": "srgb",
             "components": [
-              1,
-              1,
-              1
+              0,
+              0,
+              0
             ],
-            "alpha": 0.7
+            "alpha": 0.03
           },
           "$extensions": {
             "com.cindy.desktop": {
               "format": "rgb",
               "alpha": true,
-              "precision": 1
+              "precision": 2
             }
           }
         },
@@ -4734,7 +5086,7 @@
               1,
               1
             ],
-            "alpha": 0.08
+            "alpha": 0.04
           },
           "$extensions": {
             "com.cindy.desktop": {
@@ -4755,7 +5107,7 @@
               0,
               0
             ],
-            "alpha": 0.08
+            "alpha": 0.05
           },
           "$extensions": {
             "com.cindy.desktop": {
@@ -4770,11 +5122,11 @@
           "$value": {
             "colorSpace": "srgb",
             "components": [
-              0,
-              0,
-              0
+              1,
+              1,
+              1
             ],
-            "alpha": 0.08
+            "alpha": 0.07
           },
           "$extensions": {
             "com.cindy.desktop": {
@@ -4791,11 +5143,11 @@
           "$value": {
             "colorSpace": "srgb",
             "components": [
-              1,
-              1,
-              1
+              0,
+              0,
+              0
             ],
-            "alpha": 0.08
+            "alpha": 0.03
           },
           "$extensions": {
             "com.cindy.desktop": {
@@ -4814,7 +5166,7 @@
               1,
               1
             ],
-            "alpha": 0.08
+            "alpha": 0.04
           },
           "$extensions": {
             "com.cindy.desktop": {
@@ -4835,7 +5187,7 @@
               0,
               0
             ],
-            "alpha": 0.08
+            "alpha": 0.05
           },
           "$extensions": {
             "com.cindy.desktop": {
@@ -4850,11 +5202,11 @@
           "$value": {
             "colorSpace": "srgb",
             "components": [
-              0,
-              0,
-              0
+              1,
+              1,
+              1
             ],
-            "alpha": 0.08
+            "alpha": 0.07
           },
           "$extensions": {
             "com.cindy.desktop": {
@@ -4875,6 +5227,86 @@
               0,
               0
             ],
+            "alpha": 0.03
+          },
+          "$extensions": {
+            "com.cindy.desktop": {
+              "format": "rgb",
+              "alpha": true,
+              "precision": 2
+            }
+          }
+        },
+        "dark": {
+          "$type": "color",
+          "$value": {
+            "colorSpace": "srgb",
+            "components": [
+              1,
+              1,
+              1
+            ],
+            "alpha": 0.04
+          },
+          "$extensions": {
+            "com.cindy.desktop": {
+              "format": "rgb",
+              "alpha": true,
+              "precision": 2
+            }
+          }
+        }
+      },
+      "login-loading-ring-track": {
+        "light": {
+          "$type": "color",
+          "$value": {
+            "colorSpace": "srgb",
+            "components": [
+              0,
+              0,
+              0
+            ],
+            "alpha": 0.1
+          },
+          "$extensions": {
+            "com.cindy.desktop": {
+              "format": "rgb",
+              "alpha": true,
+              "precision": 2
+            }
+          }
+        },
+        "dark": {
+          "$type": "color",
+          "$value": {
+            "colorSpace": "srgb",
+            "components": [
+              1,
+              1,
+              1
+            ],
+            "alpha": 0.13
+          },
+          "$extensions": {
+            "com.cindy.desktop": {
+              "format": "rgb",
+              "alpha": true,
+              "precision": 2
+            }
+          }
+        }
+      },
+      "login-consent-radio-bg": {
+        "light": {
+          "$type": "color",
+          "$value": {
+            "colorSpace": "srgb",
+            "components": [
+              0,
+              0,
+              0
+            ],
             "alpha": 0.05
           },
           "$extensions": {
@@ -4894,91 +5326,13 @@
               1,
               1
             ],
-            "alpha": 0.05
+            "alpha": 0.06
           },
           "$extensions": {
             "com.cindy.desktop": {
               "format": "rgb",
               "alpha": true,
               "precision": 2
-            }
-          }
-        }
-      },
-      "login-loading-ring-track": {
-        "light": {
-          "$type": "color",
-          "$value": {
-            "colorSpace": "srgb",
-            "components": [
-              0.164706,
-              0.156863,
-              0.156863
-            ],
-            "alpha": 0.18
-          },
-          "$extensions": {
-            "com.cindy.desktop": {
-              "format": "rgb",
-              "alpha": true,
-              "precision": 2
-            }
-          }
-        },
-        "dark": {
-          "$type": "color",
-          "$value": {
-            "colorSpace": "srgb",
-            "components": [
-              0.831373,
-              0.831373,
-              0.831373
-            ],
-            "alpha": 0.18
-          },
-          "$extensions": {
-            "com.cindy.desktop": {
-              "format": "rgb",
-              "alpha": true,
-              "precision": 2
-            }
-          }
-        }
-      },
-      "login-consent-radio-bg": {
-        "light": {
-          "$type": "color",
-          "$value": {
-            "colorSpace": "srgb",
-            "components": [
-              0.945098,
-              0.941176,
-              0.945098
-            ]
-          },
-          "$extensions": {
-            "com.cindy.desktop": {
-              "format": "hex",
-              "uppercase": true,
-              "alpha": false
-            }
-          }
-        },
-        "dark": {
-          "$type": "color",
-          "$value": {
-            "colorSpace": "srgb",
-            "components": [
-              0.164706,
-              0.156863,
-              0.156863
-            ]
-          },
-          "$extensions": {
-            "com.cindy.desktop": {
-              "format": "hex",
-              "uppercase": true,
-              "alpha": false
             }
           }
         }
@@ -4989,8 +5343,48 @@
           "$value": {
             "colorSpace": "srgb",
             "components": [
-              0.262745,
-              0.262745,
+              0,
+              0,
+              0
+            ],
+            "alpha": 0.56
+          },
+          "$extensions": {
+            "com.cindy.desktop": {
+              "format": "rgb",
+              "alpha": true,
+              "precision": 2
+            }
+          }
+        },
+        "dark": {
+          "$type": "color",
+          "$value": {
+            "colorSpace": "srgb",
+            "components": [
+              1,
+              1,
+              1
+            ],
+            "alpha": 0.55
+          },
+          "$extensions": {
+            "com.cindy.desktop": {
+              "format": "rgb",
+              "alpha": true,
+              "precision": 2
+            }
+          }
+        }
+      },
+      "login-consent-radio-checked-bg": {
+        "light": {
+          "$type": "color",
+          "$value": {
+            "colorSpace": "srgb",
+            "components": [
+              0.235294,
+              0.247059,
               0.262745
             ]
           },
@@ -5007,47 +5401,9 @@
           "$value": {
             "colorSpace": "srgb",
             "components": [
-              0.945098,
-              0.941176,
-              0.945098
-            ]
-          },
-          "$extensions": {
-            "com.cindy.desktop": {
-              "format": "hex",
-              "uppercase": true,
-              "alpha": false
-            }
-          }
-        }
-      },
-      "login-consent-radio-checked-bg": {
-        "light": {
-          "$type": "color",
-          "$value": {
-            "colorSpace": "srgb",
-            "components": [
-              0.164706,
-              0.156863,
-              0.156863
-            ]
-          },
-          "$extensions": {
-            "com.cindy.desktop": {
-              "format": "hex",
-              "uppercase": true,
-              "alpha": false
-            }
-          }
-        },
-        "dark": {
-          "$type": "color",
-          "$value": {
-            "colorSpace": "srgb",
-            "components": [
-              0.945098,
-              0.941176,
-              0.945098
+              0.933333,
+              0.933333,
+              0.933333
             ]
           },
           "$extensions": {
@@ -5065,9 +5421,9 @@
           "$value": {
             "colorSpace": "srgb",
             "components": [
-              1,
-              1,
-              1
+              0.988235,
+              0.988235,
+              0.988235
             ]
           },
           "$extensions": {
@@ -5083,9 +5439,9 @@
           "$value": {
             "colorSpace": "srgb",
             "components": [
-              0.164706,
-              0.156863,
-              0.156863
+              0.082353,
+              0.082353,
+              0.082353
             ]
           },
           "$extensions": {
@@ -5143,16 +5499,17 @@
           "$value": {
             "colorSpace": "srgb",
             "components": [
-              0.933333,
-              0.933333,
-              0.933333
-            ]
+              0,
+              0,
+              0
+            ],
+            "alpha": 0.05
           },
           "$extensions": {
             "com.cindy.desktop": {
-              "format": "hex",
-              "uppercase": true,
-              "alpha": false
+              "format": "rgb",
+              "alpha": true,
+              "precision": 2
             }
           }
         },
@@ -5161,16 +5518,17 @@
           "$value": {
             "colorSpace": "srgb",
             "components": [
-              0.262745,
-              0.254902,
-              0.254902
-            ]
+              1,
+              1,
+              1
+            ],
+            "alpha": 0.06
           },
           "$extensions": {
             "com.cindy.desktop": {
-              "format": "hex",
-              "uppercase": true,
-              "alpha": false
+              "format": "rgb",
+              "alpha": true,
+              "precision": 2
             }
           }
         }
@@ -5181,78 +5539,21 @@
           "$value": {
             "colorSpace": "srgb",
             "components": [
-              1,
-              1,
-              1
-            ]
+              0,
+              0,
+              0
+            ],
+            "alpha": 0.08
           },
           "$extensions": {
             "com.cindy.desktop": {
-              "format": "hex",
-              "uppercase": true,
-              "alpha": false
+              "format": "rgb",
+              "alpha": true,
+              "precision": 2
             }
           }
         },
         "dark": {
-          "$type": "color",
-          "$value": {
-            "colorSpace": "srgb",
-            "components": [
-              0.337255,
-              0.329412,
-              0.329412
-            ]
-          },
-          "$extensions": {
-            "com.cindy.desktop": {
-              "format": "hex",
-              "uppercase": true,
-              "alpha": false
-            }
-          }
-        }
-      },
-      "login-secondary-button-text": {
-        "light": {
-          "$type": "color",
-          "$value": {
-            "colorSpace": "srgb",
-            "components": [
-              0.164706,
-              0.156863,
-              0.156863
-            ]
-          },
-          "$extensions": {
-            "com.cindy.desktop": {
-              "format": "hex",
-              "uppercase": true,
-              "alpha": false
-            }
-          }
-        },
-        "dark": {
-          "$type": "color",
-          "$value": {
-            "colorSpace": "srgb",
-            "components": [
-              0.933333,
-              0.933333,
-              0.933333
-            ]
-          },
-          "$extensions": {
-            "com.cindy.desktop": {
-              "format": "hex",
-              "uppercase": true,
-              "alpha": false
-            }
-          }
-        }
-      },
-      "login-overlay-secondary-hover": {
-        "light": {
           "$type": "color",
           "$value": {
             "colorSpace": "srgb",
@@ -5267,7 +5568,28 @@
             "com.cindy.desktop": {
               "format": "rgb",
               "alpha": true,
-              "precision": 1
+              "precision": 2
+            }
+          }
+        }
+      },
+      "login-secondary-button-text": {
+        "light": {
+          "$type": "color",
+          "$value": {
+            "colorSpace": "srgb",
+            "components": [
+              0,
+              0,
+              0
+            ],
+            "alpha": 0.88
+          },
+          "$extensions": {
+            "com.cindy.desktop": {
+              "format": "rgb",
+              "alpha": true,
+              "precision": 2
             }
           }
         },
@@ -5280,7 +5602,47 @@
               1,
               1
             ],
-            "alpha": 0.08
+            "alpha": 0.82
+          },
+          "$extensions": {
+            "com.cindy.desktop": {
+              "format": "rgb",
+              "alpha": true,
+              "precision": 2
+            }
+          }
+        }
+      },
+      "login-overlay-secondary-hover": {
+        "light": {
+          "$type": "color",
+          "$value": {
+            "colorSpace": "srgb",
+            "components": [
+              0,
+              0,
+              0
+            ],
+            "alpha": 0.03
+          },
+          "$extensions": {
+            "com.cindy.desktop": {
+              "format": "rgb",
+              "alpha": true,
+              "precision": 2
+            }
+          }
+        },
+        "dark": {
+          "$type": "color",
+          "$value": {
+            "colorSpace": "srgb",
+            "components": [
+              1,
+              1,
+              1
+            ],
+            "alpha": 0.04
           },
           "$extensions": {
             "com.cindy.desktop": {
@@ -5301,13 +5663,53 @@
               0,
               0
             ],
-            "alpha": 0.1
+            "alpha": 0.05
           },
           "$extensions": {
             "com.cindy.desktop": {
               "format": "rgb",
               "alpha": true,
-              "precision": 1
+              "precision": 2
+            }
+          }
+        },
+        "dark": {
+          "$type": "color",
+          "$value": {
+            "colorSpace": "srgb",
+            "components": [
+              1,
+              1,
+              1
+            ],
+            "alpha": 0.07
+          },
+          "$extensions": {
+            "com.cindy.desktop": {
+              "format": "rgb",
+              "alpha": true,
+              "precision": 2
+            }
+          }
+        }
+      },
+      "login-overlay-apple-pressed": {
+        "light": {
+          "$type": "color",
+          "$value": {
+            "colorSpace": "srgb",
+            "components": [
+              1,
+              1,
+              1
+            ],
+            "alpha": 0.14
+          },
+          "$extensions": {
+            "com.cindy.desktop": {
+              "format": "rgb",
+              "alpha": true,
+              "precision": 2
             }
           }
         },
@@ -5320,13 +5722,53 @@
               0,
               0
             ],
-            "alpha": 0.2
+            "alpha": 0.1
           },
           "$extensions": {
             "com.cindy.desktop": {
               "format": "rgb",
               "alpha": true,
-              "precision": 1
+              "precision": 2
+            }
+          }
+        }
+      },
+      "login-overlay-apple-hover": {
+        "light": {
+          "$type": "color",
+          "$value": {
+            "colorSpace": "srgb",
+            "components": [
+              1,
+              1,
+              1
+            ],
+            "alpha": 0.08
+          },
+          "$extensions": {
+            "com.cindy.desktop": {
+              "format": "rgb",
+              "alpha": true,
+              "precision": 2
+            }
+          }
+        },
+        "dark": {
+          "$type": "color",
+          "$value": {
+            "colorSpace": "srgb",
+            "components": [
+              0,
+              0,
+              0
+            ],
+            "alpha": 0.05
+          },
+          "$extensions": {
+            "com.cindy.desktop": {
+              "format": "rgb",
+              "alpha": true,
+              "precision": 2
             }
           }
         }
@@ -11439,9 +11881,9 @@
           "$value": {
             "colorSpace": "srgb",
             "components": [
-              1.0,
-              1.0,
-              1.0
+              1,
+              1,
+              1
             ]
           },
           "$extensions": {
@@ -11457,9 +11899,9 @@
           "$value": {
             "colorSpace": "srgb",
             "components": [
-              1.0,
-              1.0,
-              1.0
+              1,
+              1,
+              1
             ]
           },
           "$extensions": {

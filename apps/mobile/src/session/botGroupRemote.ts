@@ -13,8 +13,11 @@ import {
   BOT_GROUP_REMOTE_COLLECTION_ID,
   BOT_GROUP_REMOTE_RESOURCE_KIND,
   isBotGroupRuntimeFailureCode,
+  readBotGroupRuntimeFailureReason,
+  isBotGroupCapabilityNoticeCode,
   parseBotGroupQuoteView,
   parseBotGroupTaskCardView,
+  parseBotGroupProcessRef,
   type BotGroupAttachment,
   type BotGroupAttachmentCategory,
   type BotGroupErrorCode,
@@ -113,7 +116,7 @@ const NOTICE_CODES = new Set<string>([
 const PLAN_STATUSES = new Set<BotGroupPlanView['status']>([
   'proposed', 'running', 'waiting', 'done', 'stopped', 'dismissed', 'superseded',
 ]);
-const STEP_STATUSES = new Set<BotGroupPlanStepView['status']>(['pending', 'running', 'done', 'failed']);
+const STEP_STATUSES = new Set<BotGroupPlanStepView['status']>(['pending', 'running', 'done', 'failed', 'skipped']);
 const SPEAKER_ACTIVITIES = new Set<BotGroupSpeaker['activity']>(['reply', 'planning', 'step']);
 const ATTACHMENT_CATEGORIES = new Set<BotGroupAttachmentCategory>(['image', 'pdf', 'text', 'office', 'file']);
 const ATTACHMENT_STATES = new Set<NonNullable<BotGroupAttachment['state']>>(['loading', 'unavailable']);
@@ -160,6 +163,9 @@ function parseMember(value: unknown): BotGroupMemberView | null {
   return {
     botId,
     name,
+    ...(text(record.displayName, MAX_NAME) ? { displayName: text(record.displayName, MAX_NAME)! } : {}),
+    ...(text(record.nickname, MAX_NAME) ? { nickname: text(record.nickname, MAX_NAME)! } : {}),
+    ...(text(record.ownerName, MAX_NAME) ? { ownerName: text(record.ownerName, MAX_NAME)! } : {}),
     ...(id(record.actorId) ? { actorId: id(record.actorId)! } : {}),
     ...(record.actorKind === 'human' || record.actorKind === 'bot' || record.actorKind === 'integration' ? { actorKind: record.actorKind } : {}),
     ...(typeof record.isOwned === 'boolean' ? { isOwned: record.isOwned } : {}),
@@ -176,7 +182,7 @@ function parseMember(value: unknown): BotGroupMemberView | null {
 
 function parseMentions(value: unknown): BotGroupMention {
   const record = recordOf(value);
-  return { all: record?.all === true, botIds: stringList(record?.botIds, 32, MAX_ID) };
+  return { all: record?.all === true, ...(record?.allBots === true ? { allBots: true } : {}), botIds: stringList(record?.botIds, 32, MAX_ID) };
 }
 
 /**
@@ -205,6 +211,15 @@ function parseAttachment(value: unknown): BotGroupAttachment | null {
   };
 }
 
+function parseMaskAttribution(value: unknown): BotGroupMessageView['maskAttribution'] {
+  const record = recordOf(value), self = recordOf(record?.self), companion = recordOf(record?.companion);
+  if (!id(record?.sourceMessageId) || !id(self?.id) || !id(companion?.id)
+    || typeof self?.name !== 'string' || typeof companion?.name !== 'string') return undefined;
+  return { sourceMessageId: id(record?.sourceMessageId)!,
+    self: { id: id(self.id)!, name: self.name, avatarUrl: text(self.avatarUrl, 4096) },
+    companion: { id: id(companion.id)!, name: companion.name, avatarUrl: text(companion.avatarUrl, 4096) } };
+}
+
 function parseMessage(value: unknown): BotGroupMessageView | null {
   const record = recordOf(value);
   const messageId = id(record?.id);
@@ -221,17 +236,27 @@ function parseMessage(value: unknown): BotGroupMessageView | null {
   const quote = parseBotGroupQuoteView(record.quote);
   // A task this teammate started from the group (bot-group-chat.md §10); older computers send none.
   const task = authorKind === 'bot' ? parseBotGroupTaskCardView(record.task) : null;
+  const process = authorKind === 'bot' && record.deleted !== true ? parseBotGroupProcessRef(record.process) : null;
+  const runtimeFailureReason = kind === 'notice' && authorKind === 'system'
+    ? readBotGroupRuntimeFailureReason(record.runtimeFailureCode, record.runtimeFailureReason) : undefined;
   return {
     id: messageId,
     sequence,
+    ...(typeof record.serverSequence === 'string' && /^\d{1,30}$/.test(record.serverSequence) ? { serverSequence: record.serverSequence } : {}),
     kind,
     authorKind,
+    maskAttribution: parseMaskAttribution(record.maskAttribution),
+    ...(typeof record.isSelf === 'boolean' ? { isSelf: record.isSelf } : {}),
+    ...(optionalId(record.threadRootId) ? { threadRootId: optionalId(record.threadRootId) } : {}),
     authorBotId: optionalId(record.authorBotId),
     authorName: text(record.authorName, MAX_NAME) ?? '',
     content,
     mentions: parseMentions(record.mentions),
     noticeCode,
     ...(isBotGroupRuntimeFailureCode(record.runtimeFailureCode) ? { runtimeFailureCode: record.runtimeFailureCode } : {}),
+    ...(runtimeFailureReason ? { runtimeFailureReason } : {}),
+    ...(kind === 'notice' && authorKind === 'bot' && record.deleted !== true && isBotGroupCapabilityNoticeCode(record.capabilityNoticeCode)
+      ? { capabilityNoticeCode: record.capabilityNoticeCode } : {}),
     planId: optionalId(record.planId),
     files: stringList(record.files, MAX_FILES, 1_024),
     // Older computers send no attachments.
@@ -239,6 +264,7 @@ function parseMessage(value: unknown): BotGroupMessageView | null {
     ...(record.deleted === true ? { deleted: true } : {}),
     ...(quote ? { quote } : {}),
     ...(task ? { task } : {}),
+    ...(process ? { process } : {}),
     attachments: Array.isArray(record.attachments)
       ? record.attachments.slice(0, BOT_GROUP_ATTACHMENTS_MAX).flatMap((raw) => {
         const attachment = parseAttachment(raw);
@@ -256,7 +282,10 @@ function parseStep(value: unknown): BotGroupPlanStepView | null {
   const status = enumOf(record?.status, STEP_STATUSES);
   const task = text(record?.task, 4_096);
   if (!record || position === null || !botId || !status || task === null) return null;
-  return { position, botId, botName: text(record.botName, MAX_NAME) ?? '', task, status };
+  return { position, botId, botName: text(record.botName, MAX_NAME) ?? '', task, status,
+    ...(id(record.resultMessageId) ? { resultMessageId: id(record.resultMessageId)! } : {}),
+    ...(id(record.executionId) ? { executionId: id(record.executionId)! } : {}),
+    ...(typeof record.executionStatus === 'string' ? { executionStatus: record.executionStatus } : {}) };
 }
 
 function parsePlan(value: unknown): BotGroupPlanView | null {
@@ -272,9 +301,12 @@ function parsePlan(value: unknown): BotGroupPlanView | null {
     id: planId,
     status,
     kind: record.kind === 'talk' || record.kind === 'work' ? record.kind : undefined,
+    supportsPendingSkip: record.supportsPendingSkip === true,
+    canManage: typeof record.canManage === 'boolean' ? record.canManage : undefined,
     canAdd: typeof record.canAdd === 'boolean' ? record.canAdd : undefined,
-    // The computer's 自动交接 for a 分工 it started; changed only there.
+    // The setting belongs to this computer; only a new host explicitly offers remote control.
     autoContinue: typeof record.autoContinue === 'boolean' ? record.autoContinue : undefined,
+    canSetAutoContinue: record.canSetAutoContinue === true,
     organizerBotId: id(record.organizerBotId) ?? '',
     organizerName: text(record.organizerName, MAX_NAME) ?? '',
     steps: steps as BotGroupPlanStepView[],
@@ -313,6 +345,11 @@ function parseRound(value: unknown): BotGroupRoundView {
         botId,
         sessionId: optionalId(speaker.sessionId),
         activity: enumOf(speaker.activity, SPEAKER_ACTIVITIES) ?? 'reply',
+        ...(id(speaker.executionId) ? { executionId: id(speaker.executionId)! } : {}),
+        ...(typeof speaker.startedAt === 'number' && Number.isFinite(speaker.startedAt) ? { startedAt: speaker.startedAt } : {}),
+        ...(speaker.stopping === true ? { stopping: true } : {}),
+        ...(['queued', 'running', 'needs_input', 'stopping'].includes(String(speaker.executionStatus))
+          ? { executionStatus: speaker.executionStatus as BotGroupSpeaker['executionStatus'] } : {}),
       }];
     })
     : [];
@@ -320,6 +357,7 @@ function parseRound(value: unknown): BotGroupRoundView {
     status: record?.status === 'running' ? 'running' : 'idle',
     speakers,
     canContinue: record?.canContinue === true,
+    ...(record?.othersActive === true ? { othersActive: true } : {}),
   };
 }
 
@@ -367,15 +405,28 @@ export function parseBotGroupChatData(value: unknown): BotGroupRemoteChatData | 
     name,
     serverBacked: record.serverBacked === true,
     singleSpeaker: record.singleSpeaker === true,
+    canStopAll: record.canStopAll === true,
+    supportsScopedStop: record.supportsScopedStop === true,
+    supportsMentionAudiences: record.supportsMentionAudiences === true,
+    allowMentionAllBots: record.allowMentionAllBots === true,
     supportsDivision: record.supportsDivision === true,
     archived: record.archived === true,
     dissolvedAt: text(record.dissolvedAt, 64),
     supportsDissolve: record.supportsDissolve === true,
     supportsGroupLeave: record.supportsGroupLeave === true,
     supportsListRemoval: record.supportsListRemoval === true,
+    supportsNotificationSettings: record.supportsNotificationSettings === true,
+    ...(record.notificationMode === 'all' || record.notificationMode === 'mentions' || record.notificationMode === 'none'
+      ? { notificationMode: record.notificationMode } : {}),
     ...(Number.isSafeInteger(record.revision) && Number(record.revision) > 0 ? { revision: Number(record.revision) } : {}),
+    // 群介绍 shows on the phone; this path only renames (the computer ignores the rest).
+    ...(text(record.topic, 250) ? { topic: text(record.topic, 250)! } : {}),
+    ...(text(record.description, 2_000) ? { description: text(record.description, 2_000)! } : {}),
     supportsMemberRemoval: record.supportsMemberRemoval === true,
     supportsSettingsManagement: record.supportsSettingsManagement === true,
+    supportsReadReceipts: record.supportsReadReceipts === true,
+    ...(record.supportsLocalReadSync === true ? { supportsLocalReadSync: true } : {}),
+    supportsPersonalMask: record.supportsPersonalMask === true,
     replyMode: record.replyMode === 'mentioned' ? 'mentioned' : 'all',
     speakingMode: record.speakingMode === 'sequential' ? 'sequential' : 'auto',
     members,
@@ -423,9 +474,10 @@ const ERROR_CODES: readonly BotGroupErrorCode[] = [
   'LAST_OWNER',
   'MEMBER_LIMIT',
   'MEMBER_UNAVAILABLE',
-  'MENTION_UNAVAILABLE',
+  'MENTION_UNAVAILABLE', 'ALL_BOTS_MENTION_DISABLED',
   'PLAN_OPEN',
   'PLAN_CLOSED',
+  'TURN_ALREADY_STARTED',
   'HOST_NOT_READY',
   'NOT_FOUND',
   'INVALID_PARAMS',
@@ -473,6 +525,7 @@ export interface BotGroupSendAttempt {
   attachmentIds: readonly string[];
   /** Explicit target identity, independent of the displayed names. */
   mentionSignature?: string;
+  quoteMessageId?: string;
   clientId: string;
 }
 
@@ -487,13 +540,16 @@ export function nextBotGroupSendAttempt(
   newClientId: () => string,
   attachmentIds: readonly string[] = [],
   mentions?: BotGroupMention,
+  quoteMessageId?: string,
 ): BotGroupSendAttempt {
-  const mentionSignature = mentions === undefined ? undefined : JSON.stringify([mentions.all, mentions.botIds]);
+  const mentionSignature = mentions === undefined ? undefined : JSON.stringify([mentions.all, mentions.allBots === true, mentions.botIds]);
   return previous && previous.text === text && previous.division === division
+    && previous.quoteMessageId === quoteMessageId
     && previous.mentionSignature === mentionSignature
     && previous.attachmentIds.length === attachmentIds.length
     && previous.attachmentIds.every((attachmentId, index) => attachmentId === attachmentIds[index])
     ? previous
     : { text, division, attachmentIds: [...attachmentIds], clientId: newClientId(),
-      ...(mentionSignature === undefined ? {} : { mentionSignature }) };
+      ...(mentionSignature === undefined ? {} : { mentionSignature }),
+      ...(quoteMessageId ? { quoteMessageId } : {}) };
 }

@@ -1,3 +1,6 @@
+import { getMobileAuthOwner, isMobileAuthOwnerCurrent } from '@/auth/authOwnerGeneration';
+import { readTeammateTasks } from '@/session/readTeammateTasks';
+import { deviceDisplayName } from '@/device-link/deviceName';
 import { useIsFocused, useLocalSearchParams, useRouter } from 'expo-router';
 import { withNewSessionCreationRemoval } from '@/session/newSessionCreation';
 import { useHeaderHeight } from 'expo-router/react-navigation';
@@ -45,6 +48,8 @@ import { formatRemoteError } from '@/device-link/remoteStatus';
 import { isExplicitRemoteNotFoundError } from '@/session/newSessionWorktree';
 import { withTransientRemoteRetry } from '@/device-link/remoteRetry';
 import { useRemoteSyncTask } from '@/device-link/remoteSyncTask';
+import { useRemoteProjectAliases } from '@/session/remoteProjectAliases';
+import { resolveMobileProjectRouteTitle } from '@/session/projectAliasPresentation';
 import {
   automationGroupKey,
   buildRemoteSessionListContext,
@@ -74,15 +79,16 @@ import { useConversationSearchFilterMenu } from '@/session/useConversationSearch
 import { HomeSearchBar } from '@/session/HomeSearchBar';
 import {
   conversationSearchAllowsLocalWrites,
-  conversationSearchCompanionParams,
   listConversationSearchProjects,
   shouldReplaceListWithSearchResults,
 } from '@/session/conversationSearch';
 import { useConversationSearch } from '@/session/useConversationSearch';
 import { selectVisibleDeviceSessions, sessionMatchesProjectDir } from '@/session/mobileHome';
 import { HomeListViewportContext, HomeSessionRow } from '@/session/HomeSurface';
+import { useTeammateRoster } from '@/session/useTeammateRoster';
 import { createDisclosureListCell, ListDisclosureScope, useListDisclosureTransition } from '@/session/listDisclosureTransition';
 import { RenameSessionModal } from '@/session/RenameSessionModal';
+import { SessionImportSheet } from '@/session/SessionImportSheet';
 import { SessionOptionsPresenter } from '@/session/SessionOptionsExpoSheet';
 import { SwipeableSessionRow, type SessionSwipeControls } from '@/session/SwipeableSessionRow';
 import type { SessionSwipeAction } from '@/session/swipeRowRegistry';
@@ -143,6 +149,8 @@ const DeviceListCell = createDisclosureListCell();
 function DeviceDetailScreenContent() {
   const viewport = useContext(HomeListViewportContext);
   const screenFocused = useIsFocused();
+  // Task rows mark the teammate looking after them from the roster cache; keep it current here too.
+  useTeammateRoster(screenFocused);
   const screenFocusedRef = useRef(screenFocused);
   screenFocusedRef.current = screenFocused;
   const [appStateActive, setAppStateActive] = useState(AppState.currentState === 'active');
@@ -168,10 +176,10 @@ function DeviceDetailScreenContent() {
     search?: string;
   }>();
   const deviceId = readRouteString(params.deviceId) ?? '';
-  const deviceName = readRouteString(params.name) ?? readRouteString(params.deviceName) ?? deviceId;
+  const deviceName = deviceDisplayName(deviceId, readRouteString(params.name) ?? readRouteString(params.deviceName));
   // 从首页「查看全部 N 条对话」进来时带 workingDir + 项目名 → 仅显示该项目的会话(项目作用域)。
   const projectWorkingDir = readRouteString(params.workingDir);
-  const projectName = readRouteString(params.projectName);
+  const routeProjectName = readRouteString(params.projectName);
   // 从自动化组「查看全部 N 次运行」进来时带组键 + 任务名 → 仅显示该任务的运行(自动化任务作用域)。
   const automationScopeKey = readRouteString(params.automationGroupKey);
   const automationScopeName = readRouteString(params.automationName);
@@ -192,6 +200,7 @@ function DeviceDetailScreenContent() {
   const scheduleEventSnapshot = useRemoteScheduleEventSnapshot(deviceId);
   const scheduleMirrorInvalidations = useRemoteScheduleMirrorInvalidations();
   const allSessions = useRemoteSessions();
+  const projectAliases = useRemoteProjectAliases();
   // filter 必须 memo:裸 filter 每次渲染都产新数组,会让下游全部 [sessions, ...] 依赖的
   // useMemo 逐 emit 失效,派生链(索引 → sections → 全列表行)整体重建(2026-07-18
   // 重渲染风暴)。store 层已保证 allSessions 引用在内容未变时稳定,这里不能亲手打破。
@@ -202,6 +211,13 @@ function DeviceDetailScreenContent() {
     () => selectVisibleDeviceSessions(allSessions, deviceId, projectWorkingDir),
     [allSessions, deviceId, projectWorkingDir],
   );
+  const projectName = useMemo(() => resolveMobileProjectRouteTitle({
+    deviceId,
+    workingDir: projectWorkingDir,
+    routeTitle: routeProjectName,
+    sessions,
+    projectAliases,
+  }), [deviceId, projectAliases, projectWorkingDir, routeProjectName, sessions]);
   const messageVersion = useRemoteMessageVersion();
   const storeVersion = useRemoteSessionStoreVersion();
   const [statusFilter, setStatusFilter] = useState<RemoteSessionStatusFilter>(
@@ -215,6 +231,7 @@ function DeviceDetailScreenContent() {
   const [filtersOpen, setFiltersOpen] = useState(false);
   const [searchOpen, setSearchOpen] = useState(() => readRouteString(params.search) === '1');
   const [searchFilterOpen, setSearchFilterOpen] = useState(false);
+  const [sessionImportOpen, setSessionImportOpen] = useState(false);
   const insets = useSafeAreaInsets();
   const headerHeight = useHeaderHeight();
   const [loading, setLoading] = useState(false);
@@ -230,14 +247,15 @@ function DeviceDetailScreenContent() {
     reachable: !deviceUnresponsive,
   }] : []), [deviceId, deviceName, deviceUnresponsive]);
   const searchProjects = useMemo(
-    () => listConversationSearchProjects(sessions, deviceId ? new Set([deviceId]) : undefined),
-    [deviceId, sessions],
+    () => listConversationSearchProjects(sessions, deviceId ? new Set([deviceId]) : undefined, projectAliases),
+    [deviceId, sessions, projectAliases],
   );
   const indexedSearch = useConversationSearch({
     enabled: !automationScopeKey && !!deviceId,
     lockedWorkingDirs: projectWorkingDir ? [projectWorkingDir] : null,
     origins: searchOrigins,
     projects: searchProjects,
+    projectAliases,
   });
   const searchQuery = indexedSearch.query;
   const setSearchQuery = indexedSearch.setQuery;
@@ -313,7 +331,8 @@ function DeviceDetailScreenContent() {
 
   const syncSessions = useCallback(async () => {
     if (!deviceId) return;
-    const isCurrentQuery = () => listQueryScopeRef.current === listQueryScope;
+    const owner = getMobileAuthOwner();
+    const isCurrentQuery = () => listQueryScopeRef.current === listQueryScope && isMobileAuthOwnerCurrent(owner);
     if (!isCurrentQuery()) return;
     setLoading(true);
     setError(null);
@@ -321,7 +340,7 @@ function DeviceDetailScreenContent() {
       const mutationEpoch = remoteSessionStore.captureDeviceSessionListMutationEpoch(deviceId);
       const list = await withTransientRemoteRetry(async () => {
         await subscribe(`device:${deviceId}`, deviceId, ['sessions']);
-        return invoke<RemoteSession[]>(deviceId, 'local-db:sessions:list', [
+        const sessions = await invoke<RemoteSession[]>(deviceId, 'local-db:sessions:list', [
           LIST_LIMIT,
           // 自动化任务作用域页承诺展示"该任务的全部 N 次运行",归档的 run 也算,
           // 必须拉全量;其余模式仍按当前筛选拉取。
@@ -329,6 +348,15 @@ function DeviceDetailScreenContent() {
           // 首拉 / reseed / 筛选重拉都是权威快照，不并入被控端写前查询。
           { includePinned: true, fresh: true },
         ]);
+        return readTeammateTasks({ invoke, deviceId, deviceName, scope: JSON.stringify([owner, deviceId, listQueryScope]),
+          sessions: Array.isArray(sessions) ? sessions : [], previous: remoteSessionStore.getHomeSessions(),
+          status: requestedListFilter, limit: LIST_LIMIT, current: isCurrentQuery,
+          publishInitial: rows => {
+            if (isCurrentQuery() && remoteSessionStore.isDeviceSessionListMutationEpochCurrent(deviceId, mutationEpoch)) {
+              remoteSessionStore.setDeviceSessions(deviceId, deviceName, rows);
+            }
+          },
+        });
       });
       if (!isCurrentQuery()) return;
       if (!remoteSessionStore.isDeviceSessionListMutationEpochCurrent(deviceId, mutationEpoch)) {
@@ -431,6 +459,8 @@ function DeviceDetailScreenContent() {
 
   const sections = useMemo(
     () => buildRemoteSessionSections(sessions, Date.now(), {
+      projectAliases,
+      projectAliasDeviceId: deviceId,
       messagePreviewIndex,
       pendingInteractionIndex,
       scheduleIndex,
@@ -446,6 +476,8 @@ function DeviceDetailScreenContent() {
     }),
     [
       automationScopeKey,
+      deviceId,
+      projectAliases,
       i18nInstance.language,
       messagePreviewIndex,
       pendingInteractionIndex,
@@ -530,7 +562,7 @@ function DeviceDetailScreenContent() {
     setBulkNotice(null);
   }, []);
 
-  const openSession = useCallback((targetSessionId: string, focusClientId?: string, companionParams?: Record<string, string>) => {
+  const openSession = useCallback((targetSessionId: string, focusClientId?: string) => {
     if (swipeRegistry.closeOpenRow()) return;
     // 打开会话是远端交互,用当前(可达)设备 endpoint = 页面级 deviceId(对被认领会话即 canonical 当前设备,
     // 其物理机就是当前设备、可达)。不用会话物理旧 shard id:re-link 后旧设备不可达会导致会话根本打不开。
@@ -543,7 +575,6 @@ function DeviceDetailScreenContent() {
         deviceId,
         deviceName,
         ...(focusClientId ? { focusClientId } : {}),
-        ...companionParams,
       },
     });
   }, [deviceId, deviceName, guardedPush, swipeRegistry]);
@@ -724,6 +755,14 @@ function DeviceDetailScreenContent() {
         setActionSheetSession={setActionSheetSession}
         setRenameSessionDraft={setRenameSessionDraft}
       />
+      <SessionImportSheet
+        deviceId={deviceId}
+        deviceName={deviceName}
+        online={status === 'online' && !deviceUnresponsive}
+        onClose={() => setSessionImportOpen(false)}
+        onOpenSession={(id) => openSession(id)}
+        visible={sessionImportOpen}
+      />
     </>
   );
 
@@ -748,7 +787,7 @@ function DeviceDetailScreenContent() {
       if (!key || !scopeKeys.has(key)) return false;
       // 入口带项目维度时,组键匹配的行还要落在同一项目(与首页项目分桶同一归一化语义);
       // 快照内的 id 是入口组的精确成员,不受此过滤影响。
-      return !automationScopeDir || sessionMatchesProjectDir(item.session.workingDir, automationScopeDir);
+      return !automationScopeDir || sessionMatchesProjectDir(item.session, automationScopeDir);
     });
     return (
       <SafeAreaView edges={simpleScrollScreenSafeAreaEdges()} style={styles.safeArea} testID="deviceDetail.screen">
@@ -785,13 +824,12 @@ function DeviceDetailScreenContent() {
               onOpenSession={(it) => openSession(
                 it.session.id,
                 'searchFocusClientId' in it ? (it as { searchFocusClientId?: string }).searchFocusClientId : undefined,
-                conversationSearchCompanionParams(it),
               )}
               swipe={sessionSwipeControls}
               testID={`deviceDetail.automationRunRow.${item.session.id}`}
             />
           )}
-          ListEmptyComponent={suppressListEmptyState ? (
+          ListEmptyComponent={(suppressListEmptyState ? (
             effectiveError ? null : <RemoteListSyncingPlaceholder testID="deviceDetail.automationSyncing" />
           ) : (
             <MainWindowEmptyState
@@ -805,7 +843,7 @@ function DeviceDetailScreenContent() {
               testID="deviceDetail.automationEmpty"
               title={t('devices.detail.automationScope.emptyTitle')}
             />
-          )}
+          )) ?? undefined}
         />
         {actionOverlays}
       </SafeAreaView>
@@ -881,6 +919,7 @@ function DeviceDetailScreenContent() {
                   filterA11y={searchFilterA11y}
                   filterActions={searchFilterMenu.filterActions}
                   filterActive={indexedSearch.activeFilterCount > 0}
+                  searching={indexedSearch.status === 'searching'}
                   onChangeQuery={setSearchQuery}
                   onDismiss={() => setSearchOpen(false)}
                   onFilterAction={searchFilterMenu.onFilterAction}
@@ -922,7 +961,6 @@ function DeviceDetailScreenContent() {
                 onOpenSession={(it) => openSession(
                   it.session.id,
                   'searchFocusClientId' in it ? (it as { searchFocusClientId?: string }).searchFocusClientId : undefined,
-                  conversationSearchCompanionParams(it),
                 )}
                 onToggleAutomationGroup={toggleAutomationGroup}
                 suppressBlockTopBorder={!!section.data[index - 1]?.automationGroup}
@@ -930,7 +968,7 @@ function DeviceDetailScreenContent() {
                 testID={`deviceDetail.projectSessionRow.${item.session.id}`}
               />
             )}
-            ListEmptyComponent={suppressListEmptyState ? (
+            ListEmptyComponent={(suppressListEmptyState ? (
               effectiveError ? null : <RemoteListSyncingPlaceholder testID="deviceDetail.projectSyncing" />
             ) : (
               <MainWindowEmptyState
@@ -944,7 +982,7 @@ function DeviceDetailScreenContent() {
                 testID="deviceDetail.projectEmpty"
                 title={searchQuery.trim() ? deviceSessionEmptyState(statusFilter, searchQuery).title : t('devices.detail.projectScope.emptyTitle')}
               />
-            )}
+            )) ?? undefined}
           />
         </ListDisclosureScope>
         {actionOverlays}
@@ -992,11 +1030,18 @@ function DeviceDetailScreenContent() {
         }}
         testID="deviceDetail.summary"
       >
-        <MainWindowActionButton action={{
-          label: t('remoteDesktop.title'),
-          onPress: () => guardedPush({ pathname: '/devices/desktop/[deviceId]', params: { deviceId, deviceName } }),
-          testID: 'deviceDetail.remoteDesktop',
-        }} />
+        <View style={[styles.summaryActions, { gap: windowLayout.metricGap }]}>
+          <MainWindowActionButton action={{
+            label: t('remoteDesktop.title'),
+            onPress: () => guardedPush({ pathname: '/devices/desktop/[deviceId]', params: { deviceId, deviceName } }),
+            testID: 'deviceDetail.remoteDesktop',
+          }} />
+          <MainWindowActionButton action={{
+            label: t('devices.sessionImport.entry'),
+            onPress: () => setSessionImportOpen(true),
+            testID: 'deviceDetail.sessionImport',
+          }} />
+        </View>
         <View style={[styles.summaryTopRow, { gap: windowLayout.metricGap }]}>
           <MainWindowMetric
             accessibilityLabel={t('devices.detail.metric.activeA11y')}
@@ -1093,6 +1138,7 @@ function DeviceDetailScreenContent() {
             filterA11y={searchFilterA11y}
             filterActions={searchFilterMenu.filterActions}
             filterActive={indexedSearch.activeFilterCount > 0}
+            searching={indexedSearch.status === 'searching'}
             onChangeQuery={setSearchQuery}
             onFilterAction={searchFilterMenu.onFilterAction}
             onOpenFilter={() => setSearchFilterOpen(true)}
@@ -1269,7 +1315,7 @@ function DeviceDetailScreenContent() {
           renderSectionHeader={({ section }) => (
             section.title ? <Text style={styles.sectionTitle}>{section.title}</Text> : null
           )}
-          ListEmptyComponent={suppressListEmptyState ? (
+          ListEmptyComponent={(suppressListEmptyState ? (
             effectiveError ? null : <RemoteListSyncingPlaceholder testID="deviceDetail.syncing" />
           ) : (
             <MainWindowEmptyState
@@ -1283,7 +1329,7 @@ function DeviceDetailScreenContent() {
               testID="deviceDetail.empty"
               title={emptyState.title}
             />
-          )}
+          )) ?? undefined}
           renderItem={({ item }) => (
             <DeviceDetailSessionRow
               expandedAutomationGroups={expandedAutomationGroups}
@@ -1295,7 +1341,6 @@ function DeviceDetailScreenContent() {
               onOpenSession={(it) => openSession(
                   it.session.id,
                   'searchFocusClientId' in it ? (it as { searchFocusClientId?: string }).searchFocusClientId : undefined,
-                  conversationSearchCompanionParams(it),
                 )}
               onPressSelection={conversationSearchAllowsLocalWrites(item)
                 ? () => toggleSelection(sessionIdsForListItem(item))
@@ -1493,6 +1538,10 @@ function readRouteString(value: unknown): string | null {
 
 const makeStyles = (colors: ThemeColors) => StyleSheet.create({
   safeArea: { flex: 1, backgroundColor: colors.surface },
+  summaryActions: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+  },
   summaryTopRow: {
     alignItems: 'stretch',
     flexDirection: 'row',

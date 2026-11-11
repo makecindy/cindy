@@ -4,6 +4,7 @@
  * 本机只有一条不跑 Agent 的代理任务；这里登记运行设备上真实任务的归属、读一次任务行，
  * 然后用普通的远程任务视图展示与收发。直接在这里发的消息按插话处理，不回报给 Lead。
  * 设备连不上时只提示，不判失败；恢复后自动重新读取。
+ * 在本机查看另一台电脑上的 Lead 时，运行设备可能就是本机：那条任务是本机任务，直接按本机打开。
  */
 import { Folder, Monitor, WifiOff } from 'lucide-react';
 import { useEffect, useState } from 'react';
@@ -11,6 +12,7 @@ import { useTranslation } from 'react-i18next';
 
 import { Button } from '@/components/ui/button';
 import { Spinner } from '@/components/ui/spinner';
+import { useOptionalAuthDeviceId } from '@/contexts/AuthContext';
 import {
   getDataOwnerGeneration,
   isDataOwnerGenerationCurrent,
@@ -41,11 +43,19 @@ export function RemoteWorkerSessionPane({
   const [state, setState] = useState<LoadState>('loading');
   const [loadedKey, setLoadedKey] = useState<string | null>(null);
   const [retry, setRetry] = useState(0);
+  const localDeviceId = useOptionalAuthDeviceId();
   const { deviceId, remoteSessionId, reachable } = device;
+  // 本机任务不能登记成「本机这台设备上的远程任务」：侧栏会多出一条同 id 的远程行，
+  // 归档等写入也会按这条归属绕隧道写回本机。
+  const runsHere = localDeviceId !== null && deviceId === localDeviceId;
+  // 本机设备 id 未就绪时还不知道任务在不在本机，先不提示连不上。
+  const showUnreachable = localDeviceId !== null && !runsHere && reachable === false;
   const sessionKey = `${deviceId}:${remoteSessionId}`;
   const name = workerDeviceName(t, device);
 
   useEffect(() => {
+    // 本机设备 id 未就绪时无法判断任务在不在本机，先不登记归属。
+    if (localDeviceId === null || runsHere) return;
     let disposed = false;
     const owner = getDataOwnerGeneration();
     setState('loading');
@@ -88,7 +98,7 @@ export function RemoteWorkerSessionPane({
       disposed = true;
     };
     // name 只用于镜像分片缺名时的兜底，不触发重读。
-  }, [deviceId, remoteSessionId, reachable, retry, sessionKey]);
+  }, [deviceId, remoteSessionId, reachable, retry, sessionKey, localDeviceId, runsHere]);
 
   return (
     <div className="flex h-full min-h-0 flex-col">
@@ -106,13 +116,13 @@ export function RemoteWorkerSessionPane({
             <code className="truncate font-mono">{device.workingDir}</code>
           </span>
         ) : null}
-        {reachable === false ? (
+        {showUnreachable ? (
           <span className="ml-auto inline-flex shrink-0 items-center gap-1 text-[var(--warning-fg)]">
             <WifiOff size={12} aria-hidden />
             {t('orca.rolePill.deviceUnreachable')}
           </span>
         ) : null}
-        {state === 'failed' && reachable !== false ? (
+        {!runsHere && state === 'failed' && reachable !== false ? (
           <Button
             variant="secondary"
             tone="quiet"
@@ -125,7 +135,7 @@ export function RemoteWorkerSessionPane({
         ) : null}
       </div>
       <div className="min-h-0 flex-1">
-        {loadedKey === sessionKey ? (
+        {runsHere || loadedKey === sessionKey ? (
           <CCAgentSessionView
             key={`${deviceId}:${remoteSessionId}`}
             sessionIdProp={remoteSessionId}
@@ -133,7 +143,7 @@ export function RemoteWorkerSessionPane({
             compactToolbar
             viewVisible={viewVisible}
             chatRealtime={chatRealtime}
-            readOnly={reachable === false || state !== 'ready'}
+            readOnly={!runsHere && (reachable === false || state !== 'ready')}
             navigationMode="sidebar-embedded"
             sidebarTargetSessionId={leadSessionId}
           />

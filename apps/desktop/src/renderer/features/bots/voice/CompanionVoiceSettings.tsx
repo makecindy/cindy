@@ -28,20 +28,32 @@ import {
 } from '@/../shared/voiceConversation';
 import { referenceSpeechVoices } from '@/../shared/speechVoices';
 import { PcmSpeechPlayer } from './PcmSpeechPlayer';
+import { useVoiceCallSummary } from './voiceCallStore';
 import { VoicePreviewController } from './VoicePreviewController';
 import { SpeechVoicePicker } from './SpeechVoicePicker';
 import { resolveVoiceConfiguration } from './voiceConfiguration';
+import { useBotSettingsTarget } from '../useBotSettingsTarget';
+
+/** Stands in for the preview service when samples cannot be played from this window. */
+const PREVIEW_UNAVAILABLE = {
+  preview: () => Promise.reject(new Error('preview_unavailable')),
+  readPreview: () => Promise.reject(new Error('preview_unavailable')),
+  stopPreview: () => Promise.resolve(),
+};
 
 type Props = {
   botId: string;
   sessionId?: string;
   beforeLeaveRef?: { current: (() => Promise<boolean>) | null };
-  onOpenProviders(): void;
+  /** Opens this computer's provider settings; absent for a teammate on another computer. */
+  onOpenProviders?(): void;
 };
 
 /** Per-companion settings. Opening this page never starts ASR or submits a message. */
 export function CompanionVoiceSettings(props: Props) {
   const { t } = useTranslation();
+  const target = useBotSettingsTarget();
+  const voiceApi = target.voice;
   const sentencePlaybackId = useId();
   const session = useSyncExternalStore(
     useCallback(
@@ -101,12 +113,12 @@ export function CompanionVoiceSettings(props: Props) {
   const preview = useMemo(
     () =>
       new VoicePreviewController({
-        api: window.electronAPI.voiceConversation,
+        api: voiceApi.previewApi ?? PREVIEW_UNAVAILABLE,
         botId: props.botId,
         sessionId: props.sessionId ?? '',
         player: () => new PcmSpeechPlayer(() => undefined),
       }),
-    [props.botId, props.sessionId],
+    [props.botId, props.sessionId, voiceApi],
   );
   const refreshVersion = useRef(0);
   const preferenceVersion = useRef(0);
@@ -116,16 +128,15 @@ export function CompanionVoiceSettings(props: Props) {
     setCatalogError(false);
     try {
       // A Gateway refresh failure must not hide usable local BYOK connections.
-      if (fetchCatalog)
-        await window.electronAPI.maker.refreshBuiltinProviderModels('xd').catch(() => undefined);
-      const next = await window.electronAPI.voiceConversation.models();
+      if (fetchCatalog) await voiceApi.refreshCatalog?.().catch(() => undefined);
+      const next = await voiceApi.models();
       if (version === refreshVersion.current) setModels(next);
     } catch {
       if (version === refreshVersion.current) setCatalogError(true);
     } finally {
       if (version === refreshVersion.current) setLoading(false);
     }
-  }, []);
+  }, [voiceApi]);
 
   const loadPreference = useCallback(() => {
     const version = ++preferenceVersion.current;
@@ -141,7 +152,7 @@ export function CompanionVoiceSettings(props: Props) {
     setSaving(false);
     dirty.current = false;
     pendingSave.current = null;
-    void window.electronAPI.voiceConversation
+    void voiceApi
       .preference(props.botId)
       .then((result) => {
         if (version !== preferenceVersion.current) return;
@@ -153,7 +164,7 @@ export function CompanionVoiceSettings(props: Props) {
       .catch(() => {
         if (version === preferenceVersion.current) setPreferenceError(true);
       });
-  }, [props.botId]);
+  }, [props.botId, voiceApi]);
 
   useEffect(() => {
     void refresh();
@@ -164,9 +175,12 @@ export function CompanionVoiceSettings(props: Props) {
       void preview.stop();
     };
   }, [preview, loadPreference, refresh]);
+  // A running call holds the voice lease. Its settings stay editable for the next call.
+  const callOpen = useVoiceCallSummary().open;
+  const previewBlocked = blocked || callOpen;
   useEffect(() => {
-    if (blocked) void preview.stop();
-  }, [blocked, preview]);
+    if (previewBlocked) void preview.stop();
+  }, [previewBlocked, preview]);
   useEffect(() => {
     const initialOwner = getDataOwnerGeneration();
     const owner = `${initialOwner.dataOwnerId}:${initialOwner.generation}`;
@@ -202,7 +216,7 @@ export function CompanionVoiceSettings(props: Props) {
       const version = preferenceVersion.current;
       setSaving(true);
       setPreferenceError(false);
-      const api = window.electronAPI.voiceConversation;
+      const api = voiceApi;
       const operation =
         playback === undefined
           ? api.setPreference(props.botId, next)
@@ -235,7 +249,7 @@ export function CompanionVoiceSettings(props: Props) {
       pendingSave.current = pending;
       return pending;
     },
-    [props.botId],
+    [props.botId, voiceApi],
   );
   useEffect(() => {
     const ref = props.beforeLeaveRef;
@@ -319,9 +333,15 @@ export function CompanionVoiceSettings(props: Props) {
             <p className="text-12 leading-relaxed text-[var(--text-secondary)]">
               {t('bots.voiceMode.noModelsSetupHint')}
             </p>
-            <Button variant="secondary" size="sm" compact onClick={props.onOpenProviders}>
-              {t('bots.voiceMode.openProviders')}
-            </Button>
+            {props.onOpenProviders ? (
+              <Button variant="secondary" size="sm" compact onClick={props.onOpenProviders}>
+                {t('bots.voiceMode.openProviders')}
+              </Button>
+            ) : (
+              <p className="text-12 leading-relaxed text-[var(--text-secondary)]">
+                {t('bots.remoteSettings.finishOnHost', { device: target.deviceName })}
+              </p>
+            )}
           </div>
         )}
       </div>
@@ -445,7 +465,7 @@ export function CompanionVoiceSettings(props: Props) {
           autoSelectFirstVoice={autoSelectVoice}
           speed={effectiveSpeed}
           disabled={!ready || saving || blocked}
-          previewDisabled={!ready || saving || blocked || !props.sessionId}
+          previewDisabled={!ready || saving || previewBlocked || !props.sessionId || !voiceApi.previewApi}
           preview={preview}
           onChange={(value, save) => {
             setAutoSelectVoice(false);
@@ -515,7 +535,12 @@ export function CompanionVoiceSettings(props: Props) {
           ) : null}
         </SpeechVoicePicker>
       ) : null}
-      {!props.sessionId ? (
+      {!voiceApi.previewApi ? (
+        // Samples play through the speakers of the computer the page runs on.
+        <p className="text-12 text-[var(--text-secondary)]">
+          {t('bots.remoteSettings.finishOnHost', { device: target.deviceName })}
+        </p>
+      ) : !props.sessionId ? (
         <p className="text-12 text-[var(--text-secondary)]">
           {t('bots.voiceMode.previewNeedsChat')}
         </p>

@@ -11,6 +11,8 @@ appId: ${APP_ID}
     id: "message.markdownBody"
     index: 0
 - extendedWaitUntil:
-    visible: "Copy"
+    visible:
+      text: "^Copy$"
     timeout: 5000
-- tapOn: "Copy"
+- tapOn:
+    text: "^Copy$"

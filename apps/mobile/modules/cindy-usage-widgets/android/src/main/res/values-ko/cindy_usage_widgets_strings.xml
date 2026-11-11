@@ -1,0 +1,8 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Generated from assets/usage-widgets/text.json (the picker reads these). -->
+<resources>
+  <string name="cindy_widget_quota_label">구독 남은 양</string>
+  <string name="cindy_widget_quota_description">구독마다 얼마나 남았는지, 언제 다시 채워지는지.</string>
+  <string name="cindy_widget_usage_label">일일 사용량</string>
+  <string name="cindy_widget_usage_description">오늘 사용량과 최근 며칠의 추이.</string>
+</resources>

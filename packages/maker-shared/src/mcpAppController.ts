@@ -21,6 +21,9 @@ export class McpAppController {
   private finishTeardown?: () => void;
   private closePromise?: Promise<void>;
   private ready = false;
+  private generation = 0;
+  private initialized = false;
+  private handshakeDelivery?: Promise<void>;
   private outbound: AppRpc[] = [];
   private initializeId?: string | number;
   private startupTimer?: ReturnType<typeof setTimeout>;
@@ -49,12 +52,18 @@ export class McpAppController {
     }
     // Resource loading has its own Host/remote budget. Give the App a complete
     // initialization window after the document reaches this controller.
-    this.startupTimer = setTimeout(
-      () => this.fail(new Error('MCP_APP_INITIALIZATION_TIMEOUT')),
-      45_000,
-    );
+    this.armInitializationTimeout();
     if (document.transport !== 'sandbox') void this.poll();
     return document;
+  }
+
+  private armInitializationTimeout(): void {
+    clearTimeout(this.startupTimer);
+    const generation = this.generation;
+    this.startupTimer = setTimeout(() => {
+      if (this.generation === generation && this.startupTimer !== undefined)
+        this.fail(new Error('MCP_APP_INITIALIZATION_TIMEOUT'));
+    }, 45_000);
   }
 
   sandboxReady(resourceUrl?: string): void {
@@ -97,17 +106,39 @@ export class McpAppController {
     }
     if (message.method?.startsWith('ui/notifications/sandbox-')) return;
     if (this.closing && message.method) return;
-    if (message.method === 'ui/initialize') this.initializeId = message.id;
+    if (message.method === 'ui/initialize') {
+      if (this.initialized) {
+        this.generation++;
+        this.initialized = false;
+        this.outbound = [];
+        this.armInitializationTimeout();
+      }
+      this.initializeId = message.id;
+    }
     if (message.method === 'ui/notifications/initialized') {
+      this.initialized = true;
       clearTimeout(this.startupTimer);
       this.startupTimer = undefined;
     }
     this.onState(message);
-    void this.invoke(this.sessionId, {
-      op: 'message',
-      viewId: this.document.viewId,
-      message,
-    }).catch((error) => this.fail(error));
+    const viewId = this.document.viewId;
+    const generation = this.generation;
+    const handshake = message.method === 'ui/initialize' || message.method === 'ui/notifications/initialized';
+    const send = async () => {
+      if (this.stopped || (this.closing && message.method)) return;
+      if (!handshake && this.generation !== generation) return;
+      await this.invoke(this.sessionId, { op: 'message', viewId, message });
+    };
+    // device-link invokes may arrive out of order. Finish each handshake delivery
+    // before sending the next; pending tools must not block document replacement.
+    const delivery = this.handshakeDelivery ? this.handshakeDelivery.then(send) : send();
+    if (handshake) {
+      this.handshakeDelivery = delivery;
+      void delivery.then(() => {
+        if (this.handshakeDelivery === delivery) this.handshakeDelivery = undefined;
+      }, () => {});
+    }
+    void delivery.catch((error) => this.fail(error));
   }
 
   async context(context: Record<string, unknown>): Promise<void> {
@@ -153,8 +184,12 @@ export class McpAppController {
         for (const event of events) {
           if (!Number.isSafeInteger(event.seq) || event.seq <= this.after) continue;
           this.after = event.seq;
+          // Replies already in transit cannot be recalled by the execution Host.
+          // Legacy Hosts omit generation and keep their original unfenced behavior.
+          if (event.generation !== undefined && event.generation !== this.generation) continue;
           if (event.openLink) {
             const viewId = this.document.viewId;
+            const currentDocument = () => event.generation === undefined || event.generation === this.generation;
             void (async () => {
               let success = false;
               try {
@@ -170,7 +205,7 @@ export class McpAppController {
                   )
                     throw new Error('MCP_APP_LINK_NOT_AUTHORIZED');
                   // Closing can win while the execution Host checks the current card.
-                  if (!this.closing && !this.stopped && this.document?.viewId === viewId) {
+                  if (!this.closing && !this.stopped && this.document?.viewId === viewId && currentDocument()) {
                     await this.openLink(event.openLink.url);
                     success = true;
                   }
@@ -178,7 +213,7 @@ export class McpAppController {
               } catch {
                 /* Report the failed link action to the Host so its RPC can finish. */
               }
-              if (!this.stopped && this.document?.viewId === viewId)
+              if (!this.stopped && this.document?.viewId === viewId && currentDocument())
                 await this.invoke(this.sessionId, {
                   op: 'link-result',
                   viewId,
@@ -257,3 +292,37 @@ export function mcpAppFailureKey(error: unknown): 'mcpApps.updateRequired' | 'mc
     : 'mcpApps.loadFailed';
 }
 export { MCP_APPS_INVOKE };
+
+export const MCP_APP_MAX_HEIGHT = 5_000;
+/** Bound oscillating layouts; ordinary content growth uses only the height cap.
+ * A width change starts a new layout; a lock otherwise lasts for this View. */
+export class McpAppHeightGuard {
+  private samples: Array<{ height: number; at: number }> = [];
+  private locked?: number;
+  private width?: number;
+  constructor(private readonly onLock: () => void = () => {}) {}
+  resize(width: number): void {
+    if (this.width === width) return;
+    this.width = width;
+    this.samples = [];
+    this.locked = undefined;
+  }
+  accept(value: number, now = Date.now()): number {
+    if (this.locked !== undefined) return this.locked;
+    const height = Math.max(80, Math.min(MCP_APP_MAX_HEIGHT, Math.ceil(value)));
+    this.samples = this.samples.filter(sample => now - sample.at < 2_000);
+    const previous = this.samples.at(-1);
+    if (!previous || previous.height !== height) this.samples.push({ height, at: now });
+    if (this.samples.length >= 8) {
+      const recent = this.samples.slice(-8).map(sample => sample.height);
+      const oscillating = recent.slice(2).every((h, i) =>
+        (h - recent[i + 1]) * (recent[i + 1] - recent[i]) < 0);
+      if (oscillating) {
+        this.locked = recent[0];
+        this.onLock();
+        return this.locked;
+      }
+    }
+    return height;
+  }
+}

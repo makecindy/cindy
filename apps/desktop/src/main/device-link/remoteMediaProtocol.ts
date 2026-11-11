@@ -26,7 +26,7 @@ import { createLogger } from '../logger';
 import { collectStreamWithLimit, REMOTE_IMAGE_MAX_BYTES } from '../lightboxMediaActions';
 import { parseRemoteMediaUrl, REMOTE_MEDIA_SCHEME } from '../../shared/remoteMediaUrl';
 import { parseRangeHeader } from '../videoProtocol';
-import * as blobStore from '../cindy-media/blobStore';
+import * as blobStore from '../cindy-media/blobStore.desktop';
 import * as ledger from '../cindy-media/ledger';
 import { buildRangedMediaResponse } from '../cindy-media/rangeResponse';
 import { remoteInvoke } from './index';

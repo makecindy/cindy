@@ -19,8 +19,8 @@ function harness() {
   let receipt: ImportReceipt | undefined;
   const deps: TransferDeps = { assertOwner: vi.fn(), readReceipt: async () => structuredClone(receipt), saveReceipt: async value => { receipt = structuredClone(value); },
     createCompanion: vi.fn(async () => {}), importItem: vi.fn(async () => {}), saveEnvironment: vi.fn(async () => {}), saveCheckpoint: vi.fn(async () => {}),
-    createConversation: vi.fn(async () => 'chat'), createRoutine: vi.fn(async () => 'routine'),
-    verifyAutomation: vi.fn(async () => ({ verified: true })), pauseSource: vi.fn(async () => {}), resumeSource: vi.fn(async () => {}), enableRoutine: vi.fn(async () => {}),
+    createConversation: vi.fn(async () => 'chat'), createAutomation: vi.fn(async () => 'routine'),
+    verifyAutomation: vi.fn(async () => ({ verified: true })), pauseSource: vi.fn(async () => {}), resumeSource: vi.fn(async () => {}), enableAutomation: vi.fn(async () => {}),
   };
   return { deps, receipt: () => receipt };
 }
@@ -31,7 +31,7 @@ it('does not rerun failed verification while reconciling another task whose sour
   const second = structuredClone(first); second.view.id = 'second'; second.automation!.sourceId = 'second';
   const source = { ...snapshot, items: [...snapshot.items.filter(item => !item.automation), first, second] };
   const chosen = { ...selection, entryIds: [...selection.entryIds, 'second'] };
-  vi.mocked(deps.createRoutine).mockImplementation(async (_bot, _input, id) => id);
+  vi.mocked(deps.createAutomation).mockImplementation(async (_bot, _input, id) => id);
   vi.mocked(deps.verifyAutomation).mockImplementation(async (_bot, item) => ({ verified: item.view.id === 'second', reason: 'AUTOMATION_DATA_READ_FAILED' }));
   vi.mocked(deps.pauseSource).mockRejectedValue(new CompanionImportError('SOURCE_HANDOVER_PENDING'));
   expect((await transferCompanion(source, chosen, deps)).status).toBe('running');
@@ -56,21 +56,29 @@ it('rejects an explicitly empty avatar before creating any receipt or credential
   expect((await transferCompanion(snapshot, selection, deps)).status).toBe('complete');
 });
 
-it('keeps the source running when a script sibling or resource is deselected', async () => {
-  const items = ['reports/main.py', 'reports/helper.py', 'reports/data/input.json'].map(name => ({
+// Imported jobs became project automations (2026-11-08), which only run a prompt: a job that needs
+// its source's script, command or monitor stays at its source, also from an older checkpoint.
+it('keeps a job that needs its source runtime at the source, giving back a handover under way', async () => {
+  const items = ['reports/main.py'].map(name => ({
     view: { id: name, name, category: 'connections' as const, selected: true }, asset: { name: `scripts/${name}`, bytes: Buffer.from('fixture') },
   }));
   const task = normalizeAutomation(snapshot.source, { id: 'report', script: 'reports/main.py', no_agent: true, schedule: { kind: 'interval', minutes: 5 } }, indexAutomationDependencies(items), 'UTC');
+  expect(task.view.issues).toEqual(['AUTOMATION_CONTEXT_NEEDS_MAPPING']);
+  // A checkpoint saved before the issue existed, its handover already pausing the source.
+  delete task.view.issues;
   const source = { ...snapshot, items: [...items, task] };
-  for (const omitted of ['reports/helper.py', 'reports/data/input.json']) {
-    const { deps } = harness();
-    const entryIds = source.items.map(item => item.view.id).filter(id => id !== omitted);
-    const result = await transferCompanion(source, { ...selection, entryIds }, deps);
-    expect(result.checks.find(check => check.entryId === task.view.id)).toMatchObject({ status: 'needs-attention', message: 'AUTOMATION_DEPENDENCY_NOT_SELECTED' });
-    expect(deps.pauseSource).not.toHaveBeenCalled();
-    expect(deps.enableRoutine).not.toHaveBeenCalled();
+  const chosen = { ...selection, entryIds: source.items.map(item => item.view.id) };
+  for (const phase of ['created', 'pausing-source'] as const) {
+    const { deps, receipt } = harness();
+    await deps.saveReceipt({ selectionHash: fingerprint([chosen.name, undefined, chosen.entryIds.toSorted(), true, source.source.kind, source.source.agentId, source.source.root]), environmentSaved: true, companionCreated: true, checkpointSaved: true, copied: [...chosen.entryIds],
+      routines: { [task.view.id]: { id: 'routine', phase } }, result: { requestId: chosen.requestId, botId: 'existing-bot', status: 'running', saved: true, checks: [] } });
+    const result = await transferCompanion(source, chosen, deps);
+    expect(result.checks.find(check => check.entryId === task.view.id)).toMatchObject({ status: 'needs-attention', message: 'AUTOMATION_CONTEXT_NEEDS_MAPPING' });
     expect(deps.verifyAutomation).not.toHaveBeenCalled();
-    expect(vi.mocked(deps.saveEnvironment).mock.calls[0]![1].some(item => item.view.id === omitted)).toBe(false);
+    expect(deps.pauseSource).not.toHaveBeenCalled();
+    expect(deps.enableAutomation).not.toHaveBeenCalled();
+    expect(deps.resumeSource).toHaveBeenCalledTimes(phase === 'pausing-source' ? 1 : 0);
+    expect(receipt()?.routines[task.view.id]?.phase).toBe(phase === 'created' ? 'created' : 'verified');
   }
 });
 
@@ -92,7 +100,7 @@ it.each([
     expect(task.automation?.deliveries).toEqual([]);
     expect(result.status).toBe('complete');
     expect(deps.pauseSource).toHaveBeenCalledOnce();
-    expect(deps.enableRoutine).toHaveBeenCalledOnce();
+    expect(deps.enableAutomation).toHaveBeenCalledOnce();
     expect(vi.mocked(deps.saveEnvironment).mock.calls[0]![1]).toEqual(items);
   }
 });
@@ -110,7 +118,7 @@ it('reports an imported bot that could not become its own connection without blo
   // The credential is still saved and an automation using it still runs.
   expect(vi.mocked(deps.saveEnvironment).mock.calls[0]![1]).toContain(bot);
   expect(bot.view).not.toHaveProperty('issues');
-  expect(deps.enableRoutine).toHaveBeenCalledOnce();
+  expect(deps.enableAutomation).toHaveBeenCalledOnce();
   expect(result.checks.find(check => check.entryId === task.view.id)?.status).not.toBe('needs-attention');
 });
 
@@ -171,9 +179,9 @@ it.each(['created', 'source-paused'] as const)('resumes a pre-upgrade %s receipt
   expect(deps.importItem).not.toHaveBeenCalled();
   expect(deps.saveCheckpoint).not.toHaveBeenCalled();
   expect(deps.saveEnvironment).not.toHaveBeenCalled();
-  expect(deps.createRoutine).not.toHaveBeenCalled();
+  expect(deps.createAutomation).not.toHaveBeenCalled();
   expect(deps.pauseSource).toHaveBeenCalledTimes(phase === 'created' ? 1 : 0);
-  expect(deps.enableRoutine).toHaveBeenCalledWith('existing-bot', 'existing-routine', expect.objectContaining({ automation: expect.objectContaining({ deliveries: [{ connectionId: 'telegram', chatId: '123' }] }) }));
+  expect(deps.enableAutomation).toHaveBeenCalledWith('existing-bot', 'existing-routine', expect.objectContaining({ automation: expect.objectContaining({ deliveries: [{ connectionId: 'telegram', chatId: '123' }] }) }));
 });
 
 describe('companion takeover transaction', () => {
@@ -181,14 +189,14 @@ describe('companion takeover transaction', () => {
     const { deps, receipt } = harness(); const order: string[] = [];
     vi.mocked(deps.verifyAutomation).mockImplementation(async () => { order.push('verify'); return { verified: true }; });
     vi.mocked(deps.pauseSource).mockImplementation(async () => { expect(receipt()?.routines.task?.phase).toBe('pausing-source'); order.push('pause'); });
-    vi.mocked(deps.enableRoutine).mockImplementation(async () => { expect(receipt()?.routines.task?.phase).toBe('source-paused'); order.push('enable'); });
+    vi.mocked(deps.enableAutomation).mockImplementation(async () => { expect(receipt()?.routines.task?.phase).toBe('source-paused'); order.push('enable'); });
     const result = await transferCompanion(snapshot, selection, deps);
     expect(result.status).toBe('complete'); expect(order).toEqual(['verify', 'pause', 'enable']);
     expect(deps.importItem).toHaveBeenCalledTimes(1);
     const saved = vi.mocked(deps.saveEnvironment).mock.calls[0]![1];
     expect(saved.map(item => item.view.id)).toEqual(['memory', 'env', 'task']);
     await expect(transferCompanion(snapshot, selection, deps)).resolves.toEqual(result);
-    expect(deps.createRoutine).toHaveBeenCalledTimes(1); expect(deps.pauseSource).toHaveBeenCalledTimes(1);
+    expect(deps.createAutomation).toHaveBeenCalledTimes(1); expect(deps.pauseSource).toHaveBeenCalledTimes(1);
   });
   it('retains source execution when a needed credential is deselected or read verification fails', async () => {
     const a = harness();
@@ -196,21 +204,21 @@ describe('companion takeover transaction', () => {
     expect(result.status).toBe('needs-attention'); expect(a.deps.verifyAutomation).not.toHaveBeenCalled(); expect(a.deps.pauseSource).not.toHaveBeenCalled();
     const b = harness(); vi.mocked(b.deps.verifyAutomation).mockResolvedValue({ verified: false });
     await transferCompanion(snapshot, selection, b.deps);
-    expect(b.deps.pauseSource).not.toHaveBeenCalled(); expect(b.deps.enableRoutine).not.toHaveBeenCalled();
+    expect(b.deps.pauseSource).not.toHaveBeenCalled(); expect(b.deps.enableAutomation).not.toHaveBeenCalled();
   });
   it('restores the source if enabling the imported task fails and retries without duplicate creation', async () => {
-    const { deps, receipt } = harness(); vi.mocked(deps.enableRoutine).mockRejectedValueOnce(new Error('fixture failure'));
+    const { deps, receipt } = harness(); vi.mocked(deps.enableAutomation).mockRejectedValueOnce(new Error('fixture failure'));
     expect((await transferCompanion(snapshot, selection, deps)).status).toBe('needs-attention');
     expect(deps.resumeSource).toHaveBeenCalledTimes(1); expect(receipt()?.routines.task?.phase).toBe('verified');
     expect((await transferCompanion(snapshot, selection, deps)).status).toBe('complete');
-    expect(deps.createRoutine).toHaveBeenCalledTimes(1);
+    expect(deps.createAutomation).toHaveBeenCalledTimes(1);
   });
   it('imports disabled tasks without activating or pausing any source task', async () => {
     const source = structuredClone(snapshot); source.items[3]!.view.enabled = false;
     const { deps } = harness();
     const result = await transferCompanion(source, selection, deps);
     expect(result.checks.find(check => check.entryId === 'task')?.status).toBe('paused');
-    expect(deps.verifyAutomation).not.toHaveBeenCalled(); expect(deps.enableRoutine).not.toHaveBeenCalled(); expect(deps.pauseSource).not.toHaveBeenCalled();
+    expect(deps.verifyAutomation).not.toHaveBeenCalled(); expect(deps.enableAutomation).not.toHaveBeenCalled(); expect(deps.pauseSource).not.toHaveBeenCalled();
   });
   it('rejects reusing a request with a different selection', async () => {
     const { deps } = harness(); await transferCompanion(snapshot, selection, deps);
@@ -218,7 +226,7 @@ describe('companion takeover transaction', () => {
   });
   it('keeps the source paused when target acknowledgement is ambiguous, and reconciles on retry', async () => {
     const { deps, receipt } = harness();
-    vi.mocked(deps.enableRoutine).mockRejectedValueOnce(new CompanionImportError('TARGET_HANDOVER_UNCERTAIN'));
+    vi.mocked(deps.enableAutomation).mockRejectedValueOnce(new CompanionImportError('TARGET_HANDOVER_UNCERTAIN'));
     expect((await transferCompanion(snapshot, selection, deps)).status).toBe('running');
     expect(receipt()?.routines.task?.phase).toBe('source-paused');
     expect(deps.resumeSource).not.toHaveBeenCalled();
@@ -231,7 +239,7 @@ describe('companion takeover transaction', () => {
     const { deps } = harness();
     vi.mocked(deps.pauseSource).mockRejectedValueOnce(new CompanionImportError('SOURCE_HANDOVER_UNCERTAIN'));
     expect((await transferCompanion(snapshot, selection, deps)).status).toBe('running');
-    expect(deps.enableRoutine).not.toHaveBeenCalled();
+    expect(deps.enableAutomation).not.toHaveBeenCalled();
     expect((await transferCompanion(snapshot, selection, deps)).status).toBe('complete');
     expect(vi.mocked(deps.pauseSource).mock.calls[1]?.[2]).toBe(true);
   });
@@ -241,13 +249,13 @@ describe('companion takeover transaction', () => {
     vi.mocked(deps.pauseSource).mockImplementationOnce(async () => { owns = false; throw new CompanionImportError('OWNER_CHANGED'); });
     await expect(transferCompanion(snapshot, selection, deps)).rejects.toThrow('OWNER_CHANGED');
     expect(receipt()?.routines.task?.phase).toBe('pausing-source');
-    expect(deps.enableRoutine).not.toHaveBeenCalled(); expect(deps.resumeSource).not.toHaveBeenCalled();
+    expect(deps.enableAutomation).not.toHaveBeenCalled(); expect(deps.resumeSource).not.toHaveBeenCalled();
     await expect(transferCompanion(snapshot, selection, deps)).rejects.toThrow('OWNER_CHANGED');
     expect(deps.pauseSource).toHaveBeenCalledTimes(1);
     owns = true;
     expect((await transferCompanion(snapshot, selection, deps)).status).toBe('complete');
     expect(vi.mocked(deps.pauseSource).mock.calls[1]?.[2]).toBe(true);
-    expect(deps.createRoutine).toHaveBeenCalledTimes(1); expect(deps.enableRoutine).toHaveBeenCalledTimes(1);
+    expect(deps.createAutomation).toHaveBeenCalledTimes(1); expect(deps.enableAutomation).toHaveBeenCalledTimes(1);
   });
 
 });
@@ -320,7 +328,7 @@ it('finishes saving before any login or read probe, then resumes takeover from c
   expect(deps.pauseSource).not.toHaveBeenCalled();
   expect(receipt()?.checkpointSaved).toBe(true);
   expect((await transferCompanion(snapshot, input, deps, false, true)).status).toBe('complete');
-  expect(deps.createRoutine).toHaveBeenCalledOnce();
+  expect(deps.createAutomation).toHaveBeenCalledOnce();
   expect(deps.pauseSource).toHaveBeenCalledOnce();
 });
 
@@ -386,7 +394,7 @@ it.each(([[[0, 2], [2, 3]], [[-1, 0]], [[3, 2]], [[0, 99999]]] as Array<Array<[n
 
 it('saves healthy content and a conversation when a single routine cannot be created', async () => {
   const { deps } = harness();
-  vi.mocked(deps.createRoutine).mockRejectedValue(new Error('fixture write failed'));
+  vi.mocked(deps.createAutomation).mockRejectedValue(new Error('fixture write failed'));
   const result = await transferCompanion(snapshot, { ...selection, deferSetup: true }, deps);
   expect(result).toMatchObject({ saved: true, canonicalSessionId: 'chat', savedEntryIds: ['memory', 'env'] });
   expect(result.checks).toContainEqual({ entryId: 'task', status: 'needs-attention', message: 'IMPORT_ITEM_FAILED' });
@@ -425,13 +433,13 @@ it.each([
   const result = await transferCompanion(content, input, deps);
   expect(result.savedEntryIds).toContain(item.view.id);
   expect(result.checks).toContainEqual({ entryId: item.view.id, status: 'needs-attention', message: item.view.issues![0] });
-  expect(deps.createRoutine).toHaveBeenCalledWith(expect.any(String), item.automation!.input, expect.any(String), item);
+  expect(deps.createAutomation).toHaveBeenCalledWith(expect.any(String), item.automation!.input, expect.any(String), item);
   expect(vi.mocked(deps.saveEnvironment).mock.calls[0]![1][0]!.automation?.original).toEqual(original);
   expect(receipt()?.routines[item.view.id]?.phase).toBe('created');
   await transferCompanion(content, input, deps);
-  expect(deps.createRoutine).toHaveBeenCalledOnce();
+  expect(deps.createAutomation).toHaveBeenCalledOnce();
   expect(deps.pauseSource).not.toHaveBeenCalled();
-  expect(deps.enableRoutine).not.toHaveBeenCalled();
+  expect(deps.enableAutomation).not.toHaveBeenCalled();
   expect(deps.verifyAutomation).not.toHaveBeenCalled();
 });
 
@@ -441,7 +449,7 @@ it('recovers legacy checkpoints that had no converted routine input', async () =
   delete item.automation!.input;
   const result = await transferCompanion({ ...snapshot, items: [item] }, { ...selection, entryIds: [item.view.id], deferSetup: true }, deps);
   expect(result.savedEntryIds).toContain(item.view.id);
-  expect(deps.createRoutine).toHaveBeenCalledWith(expect.any(String), expect.objectContaining({ enabled: false, triggers: [] }), expect.any(String), item);
+  expect(deps.createAutomation).toHaveBeenCalledWith(expect.any(String), expect.objectContaining({ enabled: false, triggers: [] }), expect.any(String), item);
   expect(deps.pauseSource).not.toHaveBeenCalled();
 });
 
@@ -512,7 +520,7 @@ it('batches disabled and deferred routine records without losing their durable s
   expect(saved.routines['task-1']?.phase).toBe('complete');
   expect(saved.result).toEqual(result);
   expect(result.savedEntryIds).toHaveLength(count);
-  expect(deps.pauseSource).not.toHaveBeenCalled(); expect(deps.enableRoutine).not.toHaveBeenCalled();
+  expect(deps.pauseSource).not.toHaveBeenCalled(); expect(deps.enableAutomation).not.toHaveBeenCalled();
 }, 10_000);
 
 it('resumes an interrupted progress batch using stable item IDs without replaying saved batches', async () => {

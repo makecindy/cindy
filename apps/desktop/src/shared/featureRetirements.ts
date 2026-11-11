@@ -10,7 +10,7 @@ export interface FeatureRetirement {
     builtinToolsetIds?: readonly string[];
   };
   /** Display copy lives under `${copyKey}.replacementName`. */
-  replacement?: { ghostId: string; marketId: string };
+  replacement?: { ghostId: string; marketId: string; previousGhostIds?: readonly string[] };
 }
 
 export interface InstalledFeatureRetirement {
@@ -33,15 +33,25 @@ export const FEATURE_RETIREMENTS: readonly FeatureRetirement[] = [
       builtinToolsetIds: ['ios-simulator'],
     },
     replacement: {
-      ghostId: 'baguette-simulator',
+      ghostId: 'cindy-simulator',
       marketId: 'cb93909aaa6ac600bbc2f6b8a',
+      previousGhostIds: ['baguette-simulator'],
     },
   },
 ];
 
+/**
+ * Built-ins removed from Core without an in-app notice; users learn about the
+ * replacement plugin from release notes. `contacts` moved to the cindy-contacts plugin.
+ */
+const REMOVED_BUILTIN_TOOLSET_IDS: readonly string[] = ['contacts'];
+
 /** Retired built-ins must not reappear through saved companion selections. */
 export function isRetiredBuiltinToolset(id: string): boolean {
-  return FEATURE_RETIREMENTS.some(({ source }) => source.builtinToolsetIds?.includes(id));
+  return (
+    REMOVED_BUILTIN_TOOLSET_IDS.includes(id) ||
+    FEATURE_RETIREMENTS.some(({ source }) => source.builtinToolsetIds?.includes(id))
+  );
 }
 
 export function findFeatureRetirement(manifest: {

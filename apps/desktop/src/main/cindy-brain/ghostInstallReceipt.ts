@@ -2,7 +2,8 @@ import crypto from 'node:crypto';
 import fs from 'node:fs';
 import path from 'node:path';
 import { readBoundedFileNoFollow, readBoundedFileNoFollowSync } from '../utils/readBoundedFile.js';
-import { isValidPluginNamespace } from '@cindy/plugin-protocol';
+import { isValidPluginNamespace, isValidPluginResourceId } from '@cindy/plugin-protocol';
+import { validSimulatorMigration } from '../../shared/simulatorIdentityMigration.js';
 
 import {
   createPluginLogicalIdentity,
@@ -18,6 +19,7 @@ import {
 import {
   GHOST_LOCALE_MAX_BYTES,
   GHOST_SKILL_MD_MAX_BYTES,
+  declaredAutoApproveTools,
   ghostManifestToAuthorFormat,
   isValidGhostId,
   validateGhostManifestLocaleResource,
@@ -120,9 +122,29 @@ function isValidIconDataUrl(value: unknown): value is string {
  * 目录加载，只有技能目录因为越出沙箱而被拷成快照。
  */
 export interface GhostInstallReceipt {
+  /** Host-written origin preserves the existing storage key across the official simulator rename. */
+  simulatorPreviousRelId?: string;
+  /** Verified market delivery committed with the rename; repairs a crash before ledger completion. */
+  simulatorMarketRelease?: { pluginId: string; releaseId: string; previousPackageSha256: string };
   /** Explicit Host confirmation; absent on older receipts, never inferred from manifest. */
   taskCapabilityApproved?: true;
   targetCapabilityApproved?: true;
+  uiCapabilityApproved?: true;
+  /** Host-only: historical archive UI entries were absent, non-regular or oversized. Canonical manifest stays intact. */
+  unavailableUiResources?: true;
+  delegationCapabilityApproved?: true;
+  /**
+   * 用户在安装/更新确认里看到并接受过的控制节点(will- 拦截点)。缺项 = 一个都没
+   * 批准：插件提前声明 Host 当时还不认识的节点，升级后不会静默生效。
+   */
+  approvedControlPoints?: string[];
+  /**
+   * 用户在安装/更新确认里看到并接受过的免确认工具(`tools[].approval: "auto"`)。
+   * 缺项 = 一个都没批准：旧 receipt 与旧 Host 装下的声明不会随升级静默生效。
+   */
+  approvedAutoTools?: string[];
+  observeCapabilityApproved?: true;
+  companionsCapabilityApproved?: true;
   schemaVersion: typeof RECEIPT_SCHEMA_VERSION;
   id: string;
   /** Missing is a pre-namespace receipt. null is root; a string is an organization. */
@@ -242,6 +264,7 @@ export type GhostPendingMutation =
       /** Hash of the previously approved bytes, when an approval existed. */
       oldPackageSha256?: string;
       sourceStateArchiveId?: string;
+      simulatorPreviousRelId?: string;
     }
   // uninstall 不带 packageSha256:它的提交信号不是"receipt 写到某版本",而是"receipt +
   // 内容目录都已移除"。恢复见到它就把两者删干净(顺序无关,幂等)。
@@ -975,6 +998,12 @@ export class GhostInstallReceiptStore {
       const oldPackageSha256 = raw.oldPackageSha256;
       const receiptRevision = raw.receiptRevision;
       const sourceStateArchiveId = raw.sourceStateArchiveId;
+      const simulatorPreviousRelId = raw.simulatorPreviousRelId;
+      if (simulatorPreviousRelId !== undefined &&
+          (!validSimulatorMigration(simulatorPreviousRelId, parsePluginInstallRelId(id)?.ghostId ?? '',
+            parsePluginInstallRelId(id)?.namespace) || sourceStateArchiveId !== undefined || receiptRevision === undefined)) {
+        return { state: 'invalid', reason: 'journal simulator migration identity is invalid' };
+      }
       if (sourceStateArchiveId !== undefined &&
           (!isValidGhostSourceStateArchiveId(sourceStateArchiveId) || receiptRevision === undefined)) {
         return { state: 'invalid', reason: 'journal source state archive identity is invalid' };
@@ -1001,6 +1030,7 @@ export class GhostInstallReceiptStore {
           ...(phase !== undefined ? { phase } : {}),
           ...(oldPackageSha256 !== undefined ? { oldPackageSha256 } : {}),
           ...(sourceStateArchiveId !== undefined ? { sourceStateArchiveId } : {}),
+          ...(typeof simulatorPreviousRelId === 'string' ? { simulatorPreviousRelId } : {}),
         },
       };
     }
@@ -1250,9 +1280,38 @@ export function readLegacyInstallTrust(dir: string): GhostTrustInfo | null {
   }
 }
 
+/** 只保留本次批准 manifest 仍声明为 `approval: "auto"` 的工具名。空列表省略字段。 */
+function approvedAutoToolsField(raw: unknown, manifest: GhostManifest): { approvedAutoTools?: string[] } {
+  if (!Array.isArray(raw)) return {};
+  const declared = new Set(declaredAutoApproveTools(manifest));
+  const tools = [...new Set(raw.filter((item): item is string => typeof item === 'string' && declared.has(item)))];
+  return tools.length > 0 ? { approvedAutoTools: tools.sort() } : {};
+}
+
+/**
+ * 只保留仍在本次批准 manifest 里声明的节点名(格式合法即可，不按当前 Host 目录过滤：
+ * 回退到旧版再升级时，旧版不认识的已批准节点不应丢)。空列表省略字段。
+ */
+function approvedControlPointsField(raw: unknown, manifest: GhostManifest): { approvedControlPoints?: string[] } {
+  if (!Array.isArray(raw)) return {};
+  const declared = new Set(manifest.subscribe?.hooks ?? []);
+  const points = [...new Set(raw.filter((item): item is string => typeof item === 'string' && declared.has(item as never)))];
+  return points.length > 0 ? { approvedControlPoints: points.sort() } : {};
+}
+
 export function createGhostInstallReceipt(input: {
+  simulatorPreviousRelId?: string;
+  simulatorMarketRelease?: GhostInstallReceipt['simulatorMarketRelease'];
   taskCapabilityApproved?: true;
   targetCapabilityApproved?: true;
+  uiCapabilityApproved?: true;
+  /** Host-only: historical archive UI entries were absent, non-regular or oversized. Canonical manifest stays intact. */
+  unavailableUiResources?: true;
+  delegationCapabilityApproved?: true;
+  approvedControlPoints?: readonly string[];
+  approvedAutoTools?: readonly string[];
+  observeCapabilityApproved?: true;
+  companionsCapabilityApproved?: true;
   manifest: GhostManifest;
   localeResources: Record<string, GhostManifestLocaleResource>;
   enabled: boolean;
@@ -1272,6 +1331,8 @@ export function createGhostInstallReceipt(input: {
   return {
     schemaVersion: RECEIPT_SCHEMA_VERSION,
     id: input.manifest.id,
+    ...(input.simulatorPreviousRelId ? { simulatorPreviousRelId: input.simulatorPreviousRelId } : {}),
+    ...(input.simulatorMarketRelease ? { simulatorMarketRelease: input.simulatorMarketRelease } : {}),
     ...(hasDeliveryNamespace(input)
       ? { namespace: input.namespace ?? null }
       : {}),
@@ -1281,8 +1342,15 @@ export function createGhostInstallReceipt(input: {
     enabled: input.enabled,
     trust: input.trust,
     skillContentSha256: input.skillContentSha256,
+    ...(input.unavailableUiResources === true ? { unavailableUiResources: true as const } : {}),
+    ...(input.uiCapabilityApproved === true ? { uiCapabilityApproved: true as const } : {}),
     ...(input.taskCapabilityApproved === true ? { taskCapabilityApproved: true as const } : {}),
     ...(input.targetCapabilityApproved === true ? { targetCapabilityApproved: true as const } : {}),
+    ...(input.delegationCapabilityApproved === true ? { delegationCapabilityApproved: true as const } : {}),
+    ...approvedControlPointsField(input.approvedControlPoints, input.manifest),
+    ...approvedAutoToolsField(input.approvedAutoTools, input.manifest),
+    ...(input.observeCapabilityApproved === true ? { observeCapabilityApproved: true as const } : {}),
+    ...(input.companionsCapabilityApproved === true ? { companionsCapabilityApproved: true as const } : {}),
     ...(input.packageSha256 ? { packageSha256: input.packageSha256 } : {}),
     ...(input.iconDataUrl ? { iconDataUrl: input.iconDataUrl } : {}),
     ...(input.installOrigin !== undefined ? { installOrigin: input.installOrigin } : {}),
@@ -1455,6 +1523,22 @@ function validateReceipt(
       typeof value.legacyFirstPartyEligible !== 'boolean') {
     return { ok: false, reason: 'receipt legacyFirstPartyEligible 不合法' };
   }
+  if (value.simulatorPreviousRelId !== undefined &&
+      !validSimulatorMigration(value.simulatorPreviousRelId, expectedId, namespace)) {
+    return { ok: false, reason: 'receipt simulator migration identity is invalid' };
+  }
+  let simulatorMarketRelease: GhostInstallReceipt['simulatorMarketRelease'];
+  if (value.simulatorMarketRelease !== undefined) {
+    const release = value.simulatorMarketRelease as Record<string, unknown> | null;
+    if (!value.simulatorPreviousRelId || !release || typeof release !== 'object' ||
+        !isValidPluginResourceId(release.pluginId) || !isValidPluginResourceId(release.releaseId) ||
+        typeof release.previousPackageSha256 !== 'string' || !/^[a-f0-9]{64}$/.test(release.previousPackageSha256) ||
+        typeof value.packageSha256 !== 'string') {
+      return { ok: false, reason: 'receipt simulator market release is invalid' };
+    }
+    simulatorMarketRelease = { pluginId: release.pluginId, releaseId: release.releaseId,
+      previousPackageSha256: release.previousPackageSha256 };
+  }
   let installOrigin: string | undefined;
   if (value.installOrigin !== undefined) {
     if (
@@ -1470,14 +1554,23 @@ function validateReceipt(
     receipt: {
       schemaVersion: RECEIPT_SCHEMA_VERSION,
       id: expectedId,
+      ...(typeof value.simulatorPreviousRelId === 'string' ? { simulatorPreviousRelId: value.simulatorPreviousRelId } : {}),
+      ...(simulatorMarketRelease ? { simulatorMarketRelease } : {}),
       revision: value.revision,
       manifest: manifestResult.manifest,
       localeResources,
       enabled: value.enabled,
       trust,
       skillContentSha256,
+      ...(value.unavailableUiResources === true ? { unavailableUiResources: true as const } : {}),
+      ...(value.uiCapabilityApproved === true ? { uiCapabilityApproved: true as const } : {}),
       ...(value.taskCapabilityApproved === true ? { taskCapabilityApproved: true as const } : {}),
       ...(value.targetCapabilityApproved === true ? { targetCapabilityApproved: true as const } : {}),
+      ...(value.delegationCapabilityApproved === true ? { delegationCapabilityApproved: true as const } : {}),
+      ...approvedControlPointsField(value.approvedControlPoints, manifestResult.manifest),
+      ...approvedAutoToolsField(value.approvedAutoTools, manifestResult.manifest),
+      ...(value.observeCapabilityApproved === true ? { observeCapabilityApproved: true as const } : {}),
+      ...(value.companionsCapabilityApproved === true ? { companionsCapabilityApproved: true as const } : {}),
       ...(typeof value.packageSha256 === 'string' ? { packageSha256: value.packageSha256 } : {}),
       ...(typeof value.iconDataUrl === 'string' ? { iconDataUrl: value.iconDataUrl } : {}),
       ...(installOrigin !== undefined ? { installOrigin } : {}),

@@ -38,6 +38,7 @@ vi.mock('@/device-link/peerFileCache', () => ({ createPeerFileCache: async (owne
 }) }));
 import { chatGroupView, chatRoomRow, type ChatSnapshot } from '@/chat/chatServerClient';
 import { BotGroupAvatar, BotGroupDuoAvatar, useBotGroupIdentities } from '@/session/BotGroupAvatars';
+import { ChatInviteAvatar } from '@/chat/ChatInviteAvatar';
 import { BotGroupListRow } from '@/session/BotGroupList';
 import { parseBotGroupChatData } from '@/session/botGroupRemote';
 
@@ -170,4 +171,37 @@ it.each(['media', 'public'] as const)('restores a %s avatar before checking pres
   h.store = false; h.auth.user.id = 'other'; h.auth.accountGeneration++;
   await act(async () => root!.render(createElement(BotGroupAvatar, { deviceId: 'mac', identity, size: 28, online: false })));
   expect(host.querySelector('img')?.getAttribute('src')).not.toBe('file:///cached-avatar.png');
+});
+
+// V9 unit regression: roster avatars had no 88pt preview contour or missing-image slot coverage.
+// Render the production invitation identity; no fixture members enter App code.
+it('centers all 1–5 preview contours without changing their membership or first-member foreground', async () => {
+  const host = document.createElement('div'); root = createRoot(host);
+  const members = Array.from({ length: 6 }, (_, i) => ({ avatar: `https://avatars.example.invalid/${i}.png`, initial: String(i) }));
+  for (const count of [1, 2, 3, 4, 5, 6, 0]) {
+    await act(async () => root!.render(createElement(ChatInviteAvatar, { members: members.slice(0, count) })));
+    const images = Array.from(host.querySelectorAll('img'));
+    expect(images.map(img => img.getAttribute('src'))).toEqual(members.slice(0, Math.min(count, 5)).reverse().map(member => member.avatar));
+    if (count < 2) continue;
+    const layers = images.map(img => img.parentElement!);
+    const extent = (axis: 'left' | 'top') => {
+      const starts = layers.map(layer => parseFloat(layer.style[axis]));
+      const ends = layers.map((layer, i) => starts[i] + parseFloat(layer.style.width));
+      return [Math.min(...starts), Math.max(...ends)];
+    };
+    for (const axis of ['left', 'top'] as const) {
+      const [min, max] = extent(axis);
+      expect((min + max) / 2).toBeCloseTo(44);
+      expect(min).toBeGreaterThanOrEqual(-0.001); expect(max).toBeLessThanOrEqual(88.001);
+    }
+  }
+  expect(h.remoteMedia).not.toHaveBeenCalled(); expect(h.invoke).not.toHaveBeenCalled();
+});
+it('keeps a failed preview image in the same slot with its full Unicode initial', async () => {
+  const host = document.createElement('div'); root = createRoot(host);
+  await act(async () => root!.render(createElement(ChatInviteAvatar, { members: [{ avatar: 'https://avatars.example.invalid/failed.png', initial: '👩🏽‍💻' }, { avatar: null, initial: '林' }] })));
+  const before = Array.from(host.firstElementChild!.children).map(node => (node as HTMLElement).style.cssText);
+  act(() => h.failImage!());
+  expect(host.querySelector('img')).toBeNull(); expect(host.textContent).toContain('👩🏽‍💻'); expect(host.textContent).toContain('林');
+  expect(Array.from(host.firstElementChild!.children).map(node => (node as HTMLElement).style.cssText)).toEqual(before);
 });

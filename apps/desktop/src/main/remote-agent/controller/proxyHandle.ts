@@ -10,7 +10,7 @@
  * 调用先连回同一个会话；只改设置的调用(换模型、权限档、计划模式、目录等)只记在本机，连回来时带上。
  */
 import fsp from 'node:fs/promises';
-import { isTerminalAgentErrorEvent } from '@cindy/maker-core';
+import { isTerminalAgentErrorEvent, MAIN_OWNED_SEND_CONTEXT } from '@cindy/maker-core';
 
 import type { RemoteAgentMethod, RemoteAgentReply, RemoteAgentReverseRequest, RemoteAgentTeardownReason } from '@cindy/device-link';
 import type {
@@ -50,6 +50,8 @@ export interface RemoteStartedInfo {
   extraDirs?: string[];
   writableDirs?: string[];
   virtualWorkspace?: boolean;
+  /** Execution host can decode iMessage permission and Main-owned origins. */
+  imessageSendContext?: boolean;
   methods: string[];
   state: Record<string, unknown>;
   requestSessionId?: string;
@@ -70,6 +72,7 @@ export function parseStartedInfo(value: Record<string, unknown>, kind: AgentKind
     model: str(value.model) ?? '',
     shadowDir: str(value.shadowDir) ?? '',
     virtualWorkspace: value.virtualWorkspace === true,
+    imessageSendContext: value.imessageSendContext === true,
     ...(str(value.mirrorRoot) ? { mirrorRoot: str(value.mirrorRoot) } : {}),
     previousMirrorRoots: Array.isArray(value.previousMirrorRoots) ? value.previousMirrorRoots.filter((item): item is string => typeof item === 'string') : [],
     extraDirs: Array.isArray(value.extraDirs) ? value.extraDirs.filter((item): item is string => typeof item === 'string') : [],
@@ -249,6 +252,9 @@ export interface RemoteAgentHandleController {
   onState(state: Record<string, unknown>): void;
   onRequest(request: RemoteAgentReverseRequest): Promise<RemoteAgentReply> | null;
   onClosed(reason: string, message?: string): void;
+  /** Supplier process disappeared; keep the local executor and let host recovery own the next send. */
+  onInterrupted(): void;
+  hasActiveTurn(): boolean;
   /**
    * 本机自己发起的确认(不是 Agent 发来的)：走与 Agent 确认同一个确认卡通道，桌面、手机远控与 IM 都能
    * 处理。只有本机提供了凭证授权建议的确认卡能返回会话级允许；交互还没接上或任务已结束时按拒绝处理。
@@ -269,6 +275,7 @@ export interface RemoteAgentHandleController {
 
 export function createRemoteAgentHandle(deps: RemoteHandleDeps): RemoteAgentHandleController {
   const { started } = deps;
+  let imessageSendContext = started.imessageSendContext === true;
   const link = deps.link ?? fixedRemoteAgentLink(deps.client!);
   const queue = new EventQueue();
   const projection = new RemoteEventProjection(deps.workspace);
@@ -289,10 +296,14 @@ export function createRemoteAgentHandle(deps: RemoteHandleDeps): RemoteAgentHand
   // The provider terminal owns this turn's failure, including its quota reset.
   // A later transport teardown must close the handle without replacing that error.
   let terminalErrorDelivered = false;
+  let activeTurn = state.turnRunning === true;
+  let interruption = 0;
 
   const dispose = (): Promise<void> => {
     if (disposal) return disposal;
     disposed = true;
+    activeTurn = false;
+    state = { ...state, turnRunning: false, preparing: false };
     for (const projected of projection.flush()) queue.push(projected);
     queue.end();
     // onClosed can start cleanup before close/detach reaches it. Every caller
@@ -304,12 +315,15 @@ export function createRemoteAgentHandle(deps: RemoteHandleDeps): RemoteAgentHand
   const teardown = async (mode: 'close' | 'detach', opts?: AgentSessionTeardownOptions) => {
     deps.cancelPendingConfirmations?.();
     const reason = opts?.reason ?? 'navigation';
+    // 远端会话无项目资源启动快照,永不漂移,不存在资源回收关闭;资源刷新关闭由
+    // Maker 侧以 'runtime-refresh' 原因走 closeSessionIfCurrent,不进远端 wire。
+    const wireReason: RemoteAgentTeardownReason = reason;
     if (reason === 'account-boundary') {
       // The Agent uses the other computer's credentials. A failed notification
       // is not evidence of a surviving local Pi process (#6921). Release local
       // resources independently, even while the remote request is still pending.
       const [remote, local] = await Promise.allSettled([
-        Promise.resolve().then(() => link.close(mode, reason)),
+        Promise.resolve().then(() => link.close(mode, wireReason)),
         dispose(),
       ]);
       if (remote.status === 'rejected') {
@@ -321,7 +335,12 @@ export function createRemoteAgentHandle(deps: RemoteHandleDeps): RemoteAgentHand
       return;
     }
     try {
-      await link.close(mode, reason);
+      await link.close(mode, wireReason);
+    } catch (error) {
+      // A remote notification failure cannot keep an already disposed local
+      // Session running. The next explicit send will reopen its native history.
+      // Local cleanup failures still propagate from dispose below.
+      deps.log?.warn('remote agent: close notification failed', { reason, error: String(error) });
     } finally {
       await dispose();
     }
@@ -362,6 +381,16 @@ export function createRemoteAgentHandle(deps: RemoteHandleDeps): RemoteAgentHand
         return block;
       });
     };
+    const client = await link.ensure();
+    // Check the actual executor after reconnect, before either send or steer.
+    // Older hosts silently drop this origin and would execute without its policy.
+    const origins = [opts?.turnPermissionPolicy?.origin, opts?.[MAIN_OWNED_SEND_CONTEXT]?.origin];
+    if (!imessageSendContext && origins.some(origin => origin?.kind === 'im' && origin.channel === 'imessage')) {
+      throw new RemoteAgentRemoteError({
+        code: 'REMOTE_AGENT_PEER_TOO_OLD',
+        message: '[REMOTE_AGENT_PEER_TOO_OLD] Update Cindy on the computer providing this supplier to preserve iMessage permissions.',
+      });
+    }
     const callId = deps.newId();
     if (encoded.onTranscriptUserEntry || encoded.onInteractionStateChange) {
       sendCallbacks.set(callId, {
@@ -372,14 +401,26 @@ export function createRemoteAgentHandle(deps: RemoteHandleDeps): RemoteAgentHand
         sendCallbacks.delete(sendCallbacks.keys().next().value as string);
       }
     }
-    const client = await link.ensure();
     // 连回成功后才取供应商组的「新一轮」标记：连不回时消息没发出，标记要留给重试。
     if (method === 'send' && deps.takeGroupNewRound?.()) encoded.wire.groupNewRound = true;
     // 连回之后才转换路径：让出期间改过的目录要等连回补发后才有虚拟路径。
     projectMessage(wireMessage);
     if (encoded.wire.cindy?.autoReviewSourceContent) projectMessage(encoded.wire.cindy.autoReviewSourceContent);
-    if (method === 'send') terminalErrorDelivered = false;
-    await client.callWithId(callId, method, [wireMessage, encoded.wire]);
+    const beforeInterruption = interruption;
+    if (method === 'send') {
+      terminalErrorDelivered = false;
+      activeTurn = true;
+    }
+    try {
+      await client.callWithId(callId, method, [wireMessage, encoded.wire]);
+    } catch (error) {
+      // The ordered error/done below already settles this send. Do not race it with
+      // a second send rejection that can replace the host-owned recovery receipt.
+      if (method !== 'send' || beforeInterruption === interruption) {
+        if (method === 'send') activeTurn = false;
+        throw error;
+      }
+    }
   }
 
   async function sendLikeTracked(method: 'send' | 'steer', message: UserMessage, opts?: SendOptions): Promise<void> {
@@ -425,6 +466,7 @@ export function createRemoteAgentHandle(deps: RemoteHandleDeps): RemoteAgentHand
     steer: (message, opts) => sendLikeTracked('steer', message, opts),
     // 已让出名额时对方没有在跑的回合，停止什么也不用做。
     abort: async () => {
+      activeTurn = false;
       deps.cancelPendingConfirmations?.();
       await callIfLive('abort');
     },
@@ -562,11 +604,14 @@ export function createRemoteAgentHandle(deps: RemoteHandleDeps): RemoteAgentHand
         && (typed.data as { kind?: unknown } | null)?.kind === 'generation') {
         typed = { ...typed, data: { ...(typed.data as object), pathOrigin: 'remote-agent' } };
       }
+      if (typed.turnScope !== 'background' && (typed.type === 'done' || isTerminalAgentErrorEvent(typed))) activeTurn = false;
       if (typed.type === 'done') rewindPending = false;
       for (const projected of projection.project(deps.mapEvent ? deps.mapEvent(typed) : typed)) queue.push(projected);
     },
     onState(next) {
       state = { ...state, ...next };
+      // An idle state can precede the terminal event; only that event settles the turn.
+      if (next.turnRunning === true) activeTurn = true;
       if (carriedUsage !== undefined) {
         // 新进程开始干活或报了有内容的用量后，以它为准。
         if (state.turnRunning === true || !isEmptyUsage(state.usage)) carriedUsage = undefined;
@@ -574,12 +619,13 @@ export function createRemoteAgentHandle(deps: RemoteHandleDeps): RemoteAgentHand
       }
     },
     readState: () => state,
-    isQuiet: () => !rewindPending
+    isQuiet: () => !activeTurn && !rewindPending
       && state.turnRunning !== true
       && state.preparing !== true
       && !(Array.isArray(state.backgroundTasks) && state.backgroundTasks.length > 0)
       && !(typeof state.pendingWake === 'number' && state.pendingWake > 0),
     onReconnected(next) {
+      imessageSendContext = next.imessageSendContext === true;
       const previousUsage = state.usage;
       state = { ...state, ...next.state };
       if (!isEmptyUsage(previousUsage) && isEmptyUsage(state.usage) && state.turnRunning !== true) {
@@ -633,6 +679,24 @@ export function createRemoteAgentHandle(deps: RemoteHandleDeps): RemoteAgentHand
         && isProviderShareCredentialSessionApproval(decision.permissionUpdates)) return 'session';
       return true;
     },
+    hasActiveTurn: () => activeTurn,
+    onInterrupted() {
+      if (disposed || terminalErrorDelivered) return;
+      const running = activeTurn;
+      activeTurn = false;
+      state = { ...state, turnRunning: false, preparing: false };
+      if (!running) return;
+      interruption += 1;
+      terminalErrorDelivered = true;
+      for (const projected of projection.flush()) queue.push(projected);
+      queue.push({ type: 'error', source: started.agentKind, data: {
+        message: '[REMOTE_AGENT_UNAVAILABLE] The provider process stopped; reconnecting to the original conversation.',
+        reason: 'remote_agent_restarted', isTerminal: true,
+      } });
+      // Drain the failed provider turn without ending the event iterator or disposing
+      // the executor. The coordinator owns cancellation, provenance and continuation.
+      queue.push({ type: 'done', source: started.agentKind, data: { reason: 'remote_agent_restarted' } });
+    },
     onClosed(reason, message) {
       for (const projected of projection.flush()) queue.push(projected);
       // 'superseded'：同一任务被重新打开、旧实例让位给新实例，不是错误，静默收起。
@@ -644,7 +708,10 @@ export function createRemoteAgentHandle(deps: RemoteHandleDeps): RemoteAgentHand
             isTerminal: true,
             // 拉不到那台(连续 2 分钟)只说明连接断了，那台本身可能没事：供应商组先等它恢复、恢复了留在原电脑继续；
             // 其余(对方出错收尾、撤权、流不可信等)是那台那边的问题(provider-group/failurePolicy)。
-            reason: reason === 'unreachable' ? 'remote_agent_lost' : 'remote_agent_closed',
+            // An explicit provider-owner disconnect is a user decision, not an
+            // outage; the existing recovery/group policy must not undo it.
+            reason: reason === 'controller-disconnected' ? 'user-revoked'
+              : reason === 'unreachable' ? 'remote_agent_lost' : 'remote_agent_closed',
           },
           source: started.agentKind,
         });

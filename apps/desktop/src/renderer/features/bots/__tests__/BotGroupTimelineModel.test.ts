@@ -41,6 +41,16 @@ const page = (from: number, to: number) => Array.from({ length: to - from + 1 },
   msg({ id: `m${from + index}`, sequence: from + index, content: `第 ${from + index} 条` }));
 
 describe('push refresh merge', () => {
+  // Unit: edits/deletions of already opened history must arrive without reloading every page.
+  it('applies historical message projections and discards all pages across a history reset', () => {
+    const first: BotGroupLoadedTimeline = { group: { ...detail(page(10, 12), true), historyRevision: 'a' }, older: page(1, 3), olderPlans: [], olderHasMore: true };
+    const edited = { ...first.older[0]!, content: 'edited remotely' };
+    const deleted = { ...first.older[1]!, deleted: true, content: '' };
+    const next = { ...first.group, messageUpdates: [edited, deleted] };
+    const merged = mergeBotGroupLatestPage(first, next);
+    expect(merged.older).toEqual([edited, deleted, first.older[2]]);
+    expect(mergeBotGroupLatestPage(merged, { ...next, historyRevision: 'b', messageUpdates: [] }).older).toEqual([]);
+  });
   it('keeps rows pushed out of the latest page instead of leaving a gap', () => {
     const first: BotGroupLoadedTimeline = { group: detail(page(1, 3), true), older: [], olderPlans: [], olderHasMore: false };
     // Two new messages arrive; a three-message page no longer covers 1 and 2.
