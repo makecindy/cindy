@@ -81,7 +81,7 @@
   自动清理只接受该命名空间独占且仍为 `isCache` 的字节；扫描和条件删除都检查其他
   引用与 pin，不能清理聊天附件或其他集成的共享字节。其他媒体清理维持原手动流程。
   普通 HTML 等非媒体仍走 `remote-file-cache`。完整身份、复验与平台清理策略见
-  [`protocol-compatibility.md`](protocol-compatibility.md)「远程文件连接复用与版本缓存」。
+  [`protocol-compatibility/image-delivery-and-missing-source.md`](protocol-compatibility/image-delivery-and-missing-source.md#远程文件连接复用与版本缓存)「远程文件连接复用与版本缓存」。
 - 桌面聊天的不可变远程图片通过 `device-link/remoteMediaPersistentCache.ts` 复用媒体总仓，
   `remote-media` 索引包含账号、来源设备和原始地址。先查内存、再查磁盘，缓存命中不取件；
   重启和断连不清理，不增加自动到期或容量淘汰。设置中的「远程图片缓存」复用账本扫描和

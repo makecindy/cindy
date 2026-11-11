@@ -2,7 +2,7 @@ import { createHash } from 'node:crypto';
 import fs from 'node:fs/promises';
 import { constants } from 'node:fs';
 import { parseAttachmentOssRef, parsePeerAttachmentRef } from '@cindy/device-link';
-import { blobUrl, extForMime } from '../cindy-media/blobStore';
+import { blobUrl, extForMime } from '../cindy-media/blobStore.desktop';
 import { getActiveAppSession } from '../appSessionState';
 import { getDbClient } from '../localDb/client/current';
 import { integrationCacheGet, integrationCachePut } from '../cindy-media/integrationCache';

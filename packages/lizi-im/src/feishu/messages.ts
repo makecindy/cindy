@@ -55,8 +55,17 @@ export const messages = {
     },
     /** Finalize: card text empty AND no files (rare — agent emitted nothing useful). */
     emptyReply: '_(空回复)_',
-    replyTruncated:
-      '\n\n---\n⚠️ 回复过长，飞书仅展示前半部分；完整内容仍可在 Cindy 桌面端查看。',
+    /**
+     * Intermediate frame only: the answer so far no longer fits one card. The
+     * final answer is delivered in full across several cards (see `partNote`).
+     */
+    replyContinues: '\n\n---\n⏳ 内容较长，写完后会分成多条完整发送。',
+    /** Footnote on each card of a multi-card final answer. */
+    partNote(index: number, total: number): string {
+      return index < total ? `${index}/${total} · 未完，接下一条` : `${index}/${total} · 完`;
+    },
+    /** A later card of a multi-card final answer could not be sent. */
+    continuationFailed: '⚠️ 后面的内容没能发出，完整回复可在 Cindy 桌面端查看。',
     deliveryFailed:
       '⚠️ 这条回复过长或包含飞书暂不支持的内容，请在 Cindy 桌面端查看完整回复。',
   },

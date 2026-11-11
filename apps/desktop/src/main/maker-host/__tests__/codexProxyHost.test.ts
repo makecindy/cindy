@@ -58,6 +58,12 @@ const mockState = vi.hoisted(() => {
 
 vi.mock('../pi-provider-transport.js', async importOriginal => ({ ...await importOriginal<typeof import('../pi-provider-transport.js')>(), createPiProviderFetch: mockState.createPiProviderFetch, handlePiProviderRequest: mockState.handlePiProviderRequest }));
 
+// Proxy routing does not perform standby-share cloud mutations. Keep this
+// external writer outside the test process rather than booting the whole app.
+vi.mock('../../device-link/providerShareAvailabilityTransport.js', () => ({
+  disableShareAvailability: () => { throw new Error('Unexpected standby-share mutation in proxy test'); },
+}));
+
 vi.mock('electron', () => ({
   app: {
     isPackaged: false,
@@ -81,7 +87,7 @@ vi.mock('../../logger.js', () => ({
   getLogDir: () => mockState.logDir,
 }));
 
-vi.mock('../grok-oauth-login.js', async (importOriginal) => ({ ...await importOriginal<typeof import('../grok-oauth-login.js')>(), peekGrokAccessToken: () => 'fixture-xai-token' }));
+vi.mock('../grok-oauth-login.desktop.js', async (importOriginal) => ({ ...await importOriginal<typeof import('../grok-oauth-login.desktop.js')>(), peekGrokAccessToken: () => 'fixture-xai-token' }));
 
 vi.mock('../../usageBroadcaster.js', () => ({
   recordXaiRateLimitSnapshot: mockState.recordXaiRateLimitSnapshot,
@@ -186,7 +192,7 @@ async function freshCodexProxyHost(realStripTransforms = false) {
   mockState.realStripTransforms = realStripTransforms;
   mockState.reportCindyGatewayKeyRejected.mockReset();
   mockState.gatewayBaseUrl = '';
-  const host = await import('../codex-proxy-host.js');
+  const host = await import('../codex-proxy-host.desktop.js');
   await host.disposeCodexProxy();
   host.resetCodexThreadUpstreamForTest();
   host.clearCodexProxyAuthInjection();
@@ -212,7 +218,7 @@ async function freshCodexProxyHost(realStripTransforms = false) {
 // 冷启动,不属于任何断言 —— 文件级 beforeAll 先把模块图焐热(hook 超时独立计;
 // Windows 给 120s,其它平台仍 60s),之后各用例复用已加载的模块。
 beforeAll(async () => {
-  await import('../codex-proxy-host.js');
+  await import('../codex-proxy-host.desktop.js');
 }, process.platform === 'win32' ? 120_000 : 60_000);
 
 
@@ -408,7 +414,7 @@ describe('withCodexUpstreamRecording', () => {
 
 describe('codex gateway config', () => {
   it.each(['oauth-bearer', 'env-key', 'provider-oauth'] as const)('summary fallback preserves %s credentials and endpoint', async (mode) => {
-    const { buildCodexProxySpawnArgs } = await import('../codex-gateway-config.js');
+    const { buildCodexProxySpawnArgs } = await import('../codex-gateway-config.desktop.js');
     const args = buildCodexProxySpawnArgs('http://127.0.0.1:12345', mode);
     const provider = (id: string) => Object.fromEntries(args.filter(v => v.startsWith(`model_providers.${id}.`))
       .map(v => { const [key, ...value] = v.slice(`model_providers.${id}.`.length).split('='); return [key, value.join('=')]; }));
@@ -418,7 +424,7 @@ describe('codex gateway config', () => {
   });
 
   it('所有认证模式都让缺少 model metadata 的 Codex 模型使用 CodeModeOnly', async () => {
-    const { buildCodexProxySpawnArgs } = await import('../codex-gateway-config.js');
+    const { buildCodexProxySpawnArgs } = await import('../codex-gateway-config.desktop.js');
 
     for (const mode of ['oauth-bearer', 'env-key', 'provider-oauth'] as const) {
       const args = buildCodexProxySpawnArgs('http://127.0.0.1:12345', mode);
@@ -427,7 +433,7 @@ describe('codex gateway config', () => {
   });
 
   it('oauth-bearer 模式: requires_openai_auth, 不带 env_key', async () => {
-    const { buildCodexProxySpawnArgs } = await import('../codex-gateway-config.js');
+    const { buildCodexProxySpawnArgs } = await import('../codex-gateway-config.desktop.js');
 
     const args = buildCodexProxySpawnArgs('http://127.0.0.1:12345', 'oauth-bearer');
 
@@ -438,7 +444,7 @@ describe('codex gateway config', () => {
   });
 
   it('oauth-bearer 模式: 追加 OpenAI 身份 provider(远端压缩)并关掉请求 zstd 压缩', async () => {
-    const { buildCodexProxySpawnArgs } = await import('../codex-gateway-config.js');
+    const { buildCodexProxySpawnArgs } = await import('../codex-gateway-config.desktop.js');
 
     const args = buildCodexProxySpawnArgs('http://127.0.0.1:12345', 'oauth-bearer');
 
@@ -459,7 +465,7 @@ describe('codex gateway config', () => {
   });
 
   it('env-key / provider-oauth 声明不被选中的 cindy_openai 占位(#8670: 老 thread resume 校验)', async () => {
-    const { buildCodexProxySpawnArgs } = await import('../codex-gateway-config.js');
+    const { buildCodexProxySpawnArgs } = await import('../codex-gateway-config.desktop.js');
 
     for (const mode of ['env-key', 'provider-oauth'] as const) {
       const args = buildCodexProxySpawnArgs('http://127.0.0.1:12345', mode);
@@ -480,7 +486,7 @@ describe('codex gateway config', () => {
   });
 
   it('env-key 模式: env_key=XDT_CODEX_API_KEY, 不带 requires_openai_auth', async () => {
-    const { buildCodexProxySpawnArgs } = await import('../codex-gateway-config.js');
+    const { buildCodexProxySpawnArgs } = await import('../codex-gateway-config.desktop.js');
 
     const args = buildCodexProxySpawnArgs('http://127.0.0.1:12345', 'env-key');
 
@@ -490,7 +496,7 @@ describe('codex gateway config', () => {
   });
 
   it('provider-oauth 模式: 仍用 env_key 占位,由 proxy 覆盖供应商 OAuth token', async () => {
-    const { buildCodexProxySpawnArgs } = await import('../codex-gateway-config.js');
+    const { buildCodexProxySpawnArgs } = await import('../codex-gateway-config.desktop.js');
 
     const args = buildCodexProxySpawnArgs('http://127.0.0.1:12345', 'provider-oauth');
 
@@ -554,7 +560,7 @@ describe('createCrossProviderCompactionCompatTransform', () => {
   };
 
   it('同时降级 compaction 与 agent 消息密文，保留可读正文和 reasoning(非 GPT 模型)', async () => {
-    const { createCrossProviderCompactionCompatTransform } = await import('../codex-proxy-host.js');
+    const { createCrossProviderCompactionCompatTransform } = await import('../codex-proxy-host.desktop.js');
     const transform = createCrossProviderCompactionCompatTransform();
 
     const out = transform(
@@ -585,7 +591,7 @@ describe('createCrossProviderCompactionCompatTransform', () => {
   });
 
   it('agent_message 只有密文时整条丢弃', async () => {
-    const { createCrossProviderCompactionCompatTransform } = await import('../codex-proxy-host.js');
+    const { createCrossProviderCompactionCompatTransform } = await import('../codex-proxy-host.desktop.js');
     const transform = createCrossProviderCompactionCompatTransform();
 
     const out = transform(
@@ -608,7 +614,7 @@ describe('createCrossProviderCompactionCompatTransform', () => {
   });
 
   it('ChatGPT 上游原样透传(远端压缩语义不受影响)', async () => {
-    const { createCrossProviderCompactionCompatTransform } = await import('../codex-proxy-host.js');
+    const { createCrossProviderCompactionCompatTransform } = await import('../codex-proxy-host.desktop.js');
     const transform = createCrossProviderCompactionCompatTransform();
 
     expect(transform(
@@ -661,7 +667,7 @@ describe('createCrossProviderCompactionCompatTransform', () => {
   });
 
   it('gpt-oss 与非版本化 gpt 标签仍删除父子 Agent 协作密文', async () => {
-    const { createCrossProviderCompactionCompatTransform } = await import('../codex-proxy-host.js');
+    const { createCrossProviderCompactionCompatTransform } = await import('../codex-proxy-host.desktop.js');
     const transform = createCrossProviderCompactionCompatTransform();
     for (const model of ['gpt-oss:20b', 'codex/gpt-oss:20b', 'gpt-image-1']) {
       const out = transform(
@@ -682,14 +688,14 @@ describe('createCrossProviderCompactionCompatTransform', () => {
   });
 
   it('upstreamBase 缺失时不改写(保守方向:宁可维持现状,不误伤 ChatGPT 请求)', async () => {
-    const { createCrossProviderCompactionCompatTransform } = await import('../codex-proxy-host.js');
+    const { createCrossProviderCompactionCompatTransform } = await import('../codex-proxy-host.desktop.js');
     const transform = createCrossProviderCompactionCompatTransform();
 
     expect(transform({ model: 'gpt-5.5', input: [compactionItem] }, CTX_BASE)).toBeNull();
   });
 
   it('无压缩块时零改写', async () => {
-    const { createCrossProviderCompactionCompatTransform } = await import('../codex-proxy-host.js');
+    const { createCrossProviderCompactionCompatTransform } = await import('../codex-proxy-host.desktop.js');
     const transform = createCrossProviderCompactionCompatTransform();
 
     expect(transform(
@@ -699,7 +705,7 @@ describe('createCrossProviderCompactionCompatTransform', () => {
   });
 
   it('不携带加密内容的 compaction 变体原样透传(只处理"上游解不开"的加密块)', async () => {
-    const { createCrossProviderCompactionCompatTransform } = await import('../codex-proxy-host.js');
+    const { createCrossProviderCompactionCompatTransform } = await import('../codex-proxy-host.desktop.js');
     const transform = createCrossProviderCompactionCompatTransform();
 
     expect(transform(
@@ -713,7 +719,7 @@ describe('decideCodexRoute', () => {
   const CHATGPT = 'https://chatgpt.com/backend-api/codex';
 
   it('env-key spawn → 不 override(codex 已带 gateway key, 走默认上游)', async () => {
-    const { decideCodexRoute } = await import('../codex-proxy-host.js');
+    const { decideCodexRoute } = await import('../codex-proxy-host.desktop.js');
     expect(decideCodexRoute({ model: 'gpt-5.5', authInjection: 'env-key', gatewayKey: 'k' })).toBeNull();
     expect(decideCodexRoute({ model: 'codex/gpt-5.5', authInjection: 'env-key', gatewayKey: 'k' })).toBeNull();
   });
@@ -759,7 +765,7 @@ describe('decideCodexRoute', () => {
   });
 
   it('oauth-bearer + codex/ 折扣模型 → 换 gateway key', async () => {
-    const { decideCodexRoute } = await import('../codex-proxy-host.js');
+    const { decideCodexRoute } = await import('../codex-proxy-host.desktop.js');
     expect(decideCodexRoute({ model: 'codex/gpt-5.5', authInjection: 'oauth-bearer', gatewayKey: 'gw' }))
       .toEqual({ headerOverride: { authorization: 'Bearer gw' } });
     expect(decideCodexRoute({ model: 'openai-codex/gpt-6.1-sol', authInjection: 'oauth-bearer', gatewayKey: 'gw' }))
@@ -767,18 +773,18 @@ describe('decideCodexRoute', () => {
   });
 
   it('oauth-bearer + 普通模型 → override 到 ChatGPT, 不换 header(订阅默认)', async () => {
-    const { decideCodexRoute } = await import('../codex-proxy-host.js');
+    const { decideCodexRoute } = await import('../codex-proxy-host.desktop.js');
     expect(decideCodexRoute({ model: 'gpt-5.5', authInjection: 'oauth-bearer', gatewayKey: 'gw' }))
       .toEqual({ upstreamOverride: CHATGPT });
   });
 
   it('oauth-bearer + codex/ 折扣但无 gateway key → null(passthrough)', async () => {
-    const { decideCodexRoute } = await import('../codex-proxy-host.js');
+    const { decideCodexRoute } = await import('../codex-proxy-host.desktop.js');
     expect(decideCodexRoute({ model: 'codex/gpt-5.5', authInjection: 'oauth-bearer', gatewayKey: null })).toBeNull();
   });
 
   it('空 model → null', async () => {
-    const { decideCodexRoute } = await import('../codex-proxy-host.js');
+    const { decideCodexRoute } = await import('../codex-proxy-host.desktop.js');
     expect(decideCodexRoute({ model: '', authInjection: 'oauth-bearer', gatewayKey: 'gw' })).toBeNull();
   });
 });
@@ -3084,13 +3090,13 @@ describe('createModelRoutingTransform —— session-less 控制面请求(桶③
   const CHATGPT = 'https://chatgpt.com/backend-api/codex';
 
   afterEach(async () => {
-    const host = await import('../codex-proxy-host.js');
+    const host = await import('../codex-proxy-host.desktop.js');
     host.clearCodexProxyAuthInjection();
     host.setCodexProxyGatewayKeyReader(() => null);
   });
 
   it('oauth-bearer + 无 session + 无 model(GET /models)→ override 到 ChatGPT 订阅后端', async () => {
-    const host = await import('../codex-proxy-host.js');
+    const host = await import('../codex-proxy-host.desktop.js');
     host.setCodexProxyAuthInjection('oauth-bearer');
     const transform = host.createModelRoutingTransform();
     // GET /models: body=undefined, headers 无 thread-id → 解析不出 session。
@@ -3099,7 +3105,7 @@ describe('createModelRoutingTransform —— session-less 控制面请求(桶③
   });
 
   it('冻结 control-plane auth 形态后不受 session host 的全局模式改写', async () => {
-    const host = await import('../codex-proxy-host.js');
+    const host = await import('../codex-proxy-host.desktop.js');
     host.setCodexProxyAuthInjection('provider-oauth');
     const transform = host.createModelRoutingTransform('oauth-bearer');
 
@@ -3113,14 +3119,14 @@ describe('createModelRoutingTransform —— session-less 控制面请求(桶③
   });
 
   it('env-key + 无 session + 无 model(GET /models)→ null(留默认网关, sk- key 本就有效)', async () => {
-    const host = await import('../codex-proxy-host.js');
+    const host = await import('../codex-proxy-host.desktop.js');
     host.setCodexProxyAuthInjection('env-key');
     const transform = host.createModelRoutingTransform();
     expect(transform(undefined, { reqId: 1, method: 'GET', url: '/models', headers: {} })).toBeNull();
   });
 
   it('provider-oauth + 无 session + 无 model(GET /models)→ 路由到 provider OAuth 上游', async () => {
-    const host = await import('../codex-proxy-host.js');
+    const host = await import('../codex-proxy-host.desktop.js');
     const { setProviderOAuthTokenReader } = await import('../provider-route.js');
     setProviderOAuthTokenReader((providerId, agent) =>
       providerId === 'xai' && agent === 'codex' ? 'xai-live-token' : null,
@@ -3140,7 +3146,7 @@ describe('createModelRoutingTransform —— session-less 控制面请求(桶③
   });
 
   it('无 session 但带 model 的请求不落桶③ —— 仍走 decideCodexRoute(防误伤真实 /responses)', async () => {
-    const host = await import('../codex-proxy-host.js');
+    const host = await import('../codex-proxy-host.desktop.js');
     host.setCodexProxyAuthInjection('oauth-bearer');
     host.setCodexProxyGatewayKeyReader(() => 'gw');
     const transform = host.createModelRoutingTransform();
@@ -3151,7 +3157,7 @@ describe('createModelRoutingTransform —— session-less 控制面请求(桶③
   });
 
   it('env-key host + xAI session still routes through provider OAuth instead of falling back to gateway', async () => {
-    const host = await import('../codex-proxy-host.js');
+    const host = await import('../codex-proxy-host.desktop.js');
     const { setSessionProvider, clearSessionProvider } = await import('../session-provider-store.js');
     const { setProviderOAuthTokenReader } = await import('../provider-route.js');
     host.registerComposed('session-xai-route', 'thread-xai-route', 'PRODUCT_PROMPT');
@@ -3174,7 +3180,7 @@ describe('createModelRoutingTransform —— session-less 控制面请求(桶③
   });
 
   it('implicit xAI model routes through provider OAuth even when sessionProvider is empty', async () => {
-    const host = await import('../codex-proxy-host.js');
+    const host = await import('../codex-proxy-host.desktop.js');
     const { clearSessionProvider } = await import('../session-provider-store.js');
     const { setProviderOAuthTokenReader } = await import('../provider-route.js');
     host.registerComposed('session-xai-implicit-route', 'thread-xai-implicit-route', 'PRODUCT_PROMPT');
@@ -3198,7 +3204,7 @@ describe('createModelRoutingTransform —— session-less 控制面请求(桶③
   it('provider-oauth spawn + xAI session + 非 xai/ 模型 → 换网关 key 的可用默认路由 (#890 review 第二轮)', async () => {
     // scope 门放下来的请求在 provider-oauth spawn 下只带占位 env key,直落网关必 401 ——
     // 必须换真网关 key 兜底(与 cc oauth-spawn 默认换 key 同语义)。
-    const host = await import('../codex-proxy-host.js');
+    const host = await import('../codex-proxy-host.desktop.js');
     const { setSessionProvider, clearSessionProvider } = await import('../session-provider-store.js');
     host.registerComposed('session-xai-fallback', 'thread-xai-fallback', 'PRODUCT_PROMPT');
     setSessionProvider('session-xai-fallback', 'xai');
@@ -5591,7 +5597,7 @@ describe('codex proxy host', () => {
     });
 
     it('独立 xAI 账号目录暂未包含当前模型时,按具体模型回退 first-party xai 目录,不误判成不支持 reasoning(#4892 review)', async () => {
-      const { resolveXaiCodexCatalogModel } = await import('../codex-proxy-host.js');
+      const { resolveXaiCodexCatalogModel } = await import('../codex-proxy-host.desktop.js');
       const model = (id: string, efforts: string[]) => ({ id, name: id, efforts, defaultEffort: efforts[0] ?? 'medium' });
       const providers = [
         { id: 'xai', models: { codex: [model('xai/grok-4.5', ['low', 'medium', 'high']), model('xai/grok-code-fast', [])] } },

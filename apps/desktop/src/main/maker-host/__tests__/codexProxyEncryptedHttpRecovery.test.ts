@@ -19,6 +19,12 @@ import { WebSocket, WebSocketServer } from 'ws';
 
 const proxyUpstream = vi.hoisted(() => ({ url: '' }));
 
+// Proxy routing does not perform standby-share cloud mutations. Keep this
+// external writer outside the test process rather than booting the whole app.
+vi.mock('../../device-link/providerShareAvailabilityTransport.js', () => ({
+  disableShareAvailability: () => { throw new Error('Unexpected standby-share mutation in proxy test'); },
+}));
+
 vi.mock('electron', () => ({
   app: { isPackaged: false, getPath: vi.fn(() => '/tmp/cindy-codex-encrypted-recovery-test'), getAppPath: vi.fn(() => process.cwd()) },
 }));
@@ -66,7 +72,7 @@ import {
   registerComposed,
   setCodexProxyAuthInjection,
   unregister,
-} from '../codex-proxy-host';
+} from '../codex-proxy-host.desktop';
 
 const ENCRYPTED_ERROR = {
   type: 'error',

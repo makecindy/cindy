@@ -27,7 +27,47 @@ vi.mock('@anthropic-ai/claude-agent-sdk', () => ({
   query: sdkMock.query,
 }));
 
+// 设置落盘失败注入: 只有用例显式打开时才拒绝, 其余用例仍走真实实现。
+// 记下这次调用实际建出来的暂存目录, 断言只看它们, 不扫系统临时目录
+// (并行用例也会建 cindy-claude-skills-* , 全局差集会把别人的算进来)。
+const flagSettingsMock = vi.hoisted(() => ({
+  fail: false,
+  stagingDirs: [] as string[],
+  // 本次启动是否把超限设置真的写成了临时文件（内联路径不算）。
+  wroteFile: false,
+}));
+
+vi.mock('../managed-skill-plugins.js', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../managed-skill-plugins.js')>();
+  return {
+    ...actual,
+    prepareManagedSkillPlugins: async (
+      ...args: Parameters<typeof actual.prepareManagedSkillPlugins>
+    ) => {
+      const prepared = await actual.prepareManagedSkillPlugins(...args);
+      if (prepared.stagingDir) flagSettingsMock.stagingDirs.push(prepared.stagingDir);
+      return prepared;
+    },
+  };
+});
+
+vi.mock('../flag-settings-file.js', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../flag-settings-file.js')>();
+  return {
+    ...actual,
+    materializeClaudeFlagSettings: async (
+      ...args: Parameters<typeof actual.materializeClaudeFlagSettings>
+    ) => {
+      if (flagSettingsMock.fail) throw Object.assign(new Error('ENOSPC'), { code: 'ENOSPC' });
+      const delivery = await actual.materializeClaudeFlagSettings(...args);
+      flagSettingsMock.wroteFile = delivery.kind === 'file';
+      return delivery;
+    },
+  };
+});
+
 import { ClaudeCodeAgent } from '../index.js';
+import { CLAUDE_INLINE_SETTINGS_ARGV_BUDGET } from '../flag-settings-file.js';
 
 const tempDirs: string[] = [];
 const liveHandles: Awaited<ReturnType<ClaudeCodeAgent['startSession']>>[] = [];
@@ -111,6 +151,9 @@ async function startBotSession(input: {
   disabled?: boolean;
   allowManaged?: boolean;
   catalogState?: 'failed' | 'disabled' | 'missing' | 'user-collision';
+  projectContext?: boolean;
+  availableModels?: NonNullable<AgentDeps['capabilityAdditions']>['availableModels'];
+  resolveSessionEnvironment?: AgentDeps['resolveSessionEnvironment'];
 }) {
   const configDir = await makeTempDir();
   process.env.CLAUDE_CONFIG_DIR = configDir;
@@ -118,6 +161,8 @@ async function startBotSession(input: {
   sdkMock.query.mockReturnValue(input.query ?? createFakeQuery());
 
   const deps = createDeps();
+  if (input.availableModels) deps.capabilityAdditions = { availableModels: input.availableModels };
+  if (input.resolveSessionEnvironment) deps.resolveSessionEnvironment = input.resolveSessionEnvironment;
   if (input.duplicateResolver) {
     deps.resolveLocalMcpDuplicateChoices = input.duplicateResolver;
     deps.mcpProviders = ['custom_magpie', 'other'].map(name => ({ name,
@@ -185,6 +230,7 @@ async function startBotSession(input: {
       },
       mcpPolicy: { mode: 'inherit', configured: [], catalog: [] },
       toolsetPolicy: { mode: 'inherit', configured: [], catalog: [] },
+      ...(input.projectContext ? { projectContext: true } : {}),
     },
   });
 
@@ -248,6 +294,7 @@ afterEach(async () => {
   }
   sdkMock.forkSession.mockReset();
   sdkMock.query.mockReset();
+  flagSettingsMock.wroteFile = false;
   if (originalClaudeConfigDir === undefined) {
     delete process.env.CLAUDE_CONFIG_DIR;
   } else {
@@ -317,6 +364,23 @@ describe('Claude Code mounts the Bot\'s own learned Skills', () => {
       expect(duplicateResolver).not.toHaveBeenCalled();
     },
   );
+  // 伙伴 V2(项目模式):就是普通项目任务加一层伙伴身份。SDK 选项与普通任务一致(用户/项目设置、
+  // 宿主提示词、不收窄 MCP),伙伴身份与自有技能照常挂上。依据:伙伴 = 包装过的项目 + session
+  // (主人 2026-11-06)。最小输入:projectContext 开关;unit,无进程。
+  it('runs a V2 teammate as an ordinary task with its identity on top', async () => {
+    const ordinary = await startBotSession({ ordinary: true });
+    const v2 = await startBotSession({ projectContext: true, ownSkillPluginRoots: [OWN_SKILL_ROOT] });
+    expect(v2.settingSources).toEqual(ordinary.settingSources);
+    expect(v2.strictMcpConfig).toBeUndefined();
+    expect(v2.settings?.autoMemoryEnabled).toBe(ordinary.settings?.autoMemoryEnabled);
+    expect(v2.plugins).toEqual([{ type: 'local', path: OWN_SKILL_ROOT }]);
+    expect(v2.systemPrompt?.append).toContain('GLOBAL USER PROMPT');
+    expect(v2.systemPrompt?.append).toContain('BOT SOUL');
+    const classic = await startBotSession({});
+    expect(classic.settingSources).toEqual([]);
+    expect(classic.systemPrompt?.append).not.toContain('GLOBAL USER PROMPT');
+  });
+
   it('passes the per-Bot skill root as a local plugin', async () => {
     const options = await startBotSession({ ownSkillPluginRoots: [OWN_SKILL_ROOT] });
     expect(options.plugins).toEqual([{ type: 'local', path: OWN_SKILL_ROOT }]);
@@ -454,5 +518,69 @@ describe('managed skill command collisions', () => {
     }));
     const result = await new ClaudeCodeAgent(deps).listRuntimeSkills({ workingDir: await isolatedWorkingDir(), runtimeConfigDir: configDir });
     expect(result.skills.map((skill) => skill.name)).toEqual(['learn', 'cindy-plugin-a:demo', 'cindy-plugin-b:demo']);
+  });
+});
+
+// 测试价值：托管技能插件的暂存目录在设置落盘失败时必须一起拆掉，否则每次启动失败
+// 都会留下一份 cindy-claude-skills-* 目录与技能链接。
+// 最小输入：一个受管技能 + 让 materializeClaudeFlagSettings 报 ENOSPC；tier unit。
+describe('managed skill staging cleanup when settings materialization fails', () => {
+  it('removes the staging dir created before the failure', async () => {
+    flagSettingsMock.stagingDirs.length = 0;
+    flagSettingsMock.fail = true;
+    try {
+      await expect(startBotSession({ managed: true, allowManaged: true })).rejects.toMatchObject({
+        cause: { code: 'ENOSPC' },
+      });
+    } finally {
+      flagSettingsMock.fail = false;
+    }
+
+    expect(flagSettingsMock.stagingDirs).toHaveLength(1);
+    await expect(fs.stat(flagSettingsMock.stagingDirs[0]!)).rejects.toMatchObject({ code: 'ENOENT' });
+  });
+});
+
+// 测试价值
+// - 生产入口与可观察结果：ClaudeCodeAgent.startSession。本地伙伴会话在设置落盘后作用域失效时，启动 reject，且不调 sdk query。
+// - Bug／规则依据：PR #9776 P1。prepareFlagSettings 的 await 打开异步窗口，回来后必须再调 companionEnvironment.assertCurrent，失效走启动清理而不拉起 SDK。
+// - 现有覆盖缺口：同文件只覆盖落盘失败时拆掉托管技能暂存；没有覆盖落盘期间伙伴被删或换主。
+// - 最小失败输入：带 botRuntimeProfile 的本地会话，模型白名单序列化后超过 CLAUDE_INLINE_SETTINGS_ARGV_BUDGET，assertCurrent 在落盘 await 之后抛 OWNER_CHANGED。
+// - tier：unit。进程内假 SDK 与临时文件，无网络、无真实 CLI。
+// - 实测耗时：见 tmp/fix-9776c-vitest.log
+describe('companion scope invalidated while flag settings are written', () => {
+  it('rejects startSession and does not call the SDK when the Bot scope dies after the settings file is written', async () => {
+    const catalogIds = Array.from({ length: 280 }, (_, index) =>
+      `vendor/${'gateway'.repeat(12)}-model-${index}`,
+    );
+    expect(JSON.stringify(catalogIds).length).toBeGreaterThan(CLAUDE_INLINE_SETTINGS_ARGV_BUDGET);
+
+    // buildQuery 开头和落盘前各有一次围栏。计数器放过这两次；
+    // 只有落盘 await 回来之后的那一次（此时临时文件已写出）才抛。
+    // 拿掉落盘后的复查时，这里不会抛，SDK query 会被调用。
+    let scopeChecks = 0;
+    await expect(startBotSession({
+      availableModels: catalogIds.map((id) => ({
+        id,
+        displayName: 'Catalog',
+        contextWindow: 200_000,
+        efforts: [],
+        defaultEffort: null,
+      })),
+      resolveSessionEnvironment: async (sessionId) => {
+        expect(sessionId).toBe('session-bot-skills');
+        return {
+          identity: 'companion-scope',
+          assertCurrent() {
+            scopeChecks += 1;
+            if (scopeChecks > 2 && flagSettingsMock.wroteFile) throw new Error('OWNER_CHANGED');
+          },
+        };
+      },
+    })).rejects.toThrow('OWNER_CHANGED');
+
+    expect(sdkMock.query).not.toHaveBeenCalled();
+    expect(flagSettingsMock.wroteFile).toBe(true);
+    expect(scopeChecks).toBe(3);
   });
 });

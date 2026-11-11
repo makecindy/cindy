@@ -1,0 +1,158 @@
+[
+  {
+    "step": "build-cost",
+    "command": [
+      "cargo",
+      "build",
+      "--release",
+      "-p",
+      "agent-net-sim",
+      "--example",
+      "secure_cost",
+      "--locked",
+      "--offline"
+    ],
+    "env": {},
+    "exit": 0,
+    "seconds": 2.39,
+    "output": "build-cost.txt"
+  },
+  {
+    "step": "secure-cost",
+    "command": [
+      "<home>/Documents/Cindy/cindy/.cindy-worktrees/agent-net/packages/agent-net-core/target/release/examples/secure_cost",
+      "8",
+      "2"
+    ],
+    "env": {},
+    "exit": 0,
+    "seconds": 18.2,
+    "output": "secure-cost.txt"
+  },
+  {
+    "step": "check",
+    "command": [
+      "cargo",
+      "check",
+      "--profile",
+      "sim",
+      "--workspace",
+      "--all-targets",
+      "--features",
+      "agent-net-sim/kcp",
+      "--locked",
+      "--offline"
+    ],
+    "env": {},
+    "exit": 0,
+    "seconds": 1.86,
+    "output": "check.txt"
+  },
+  {
+    "step": "tests-10000",
+    "command": [
+      "cargo",
+      "test",
+      "--profile",
+      "sim",
+      "--workspace",
+      "--features",
+      "agent-net-sim/kcp",
+      "--locked",
+      "--offline"
+    ],
+    "env": {
+      "AGENT_NET_SEEDS": "10000"
+    },
+    "exit": 0,
+    "seconds": 855.48,
+    "output": "tests.txt"
+  },
+  {
+    "step": "fresh-encrypted_seeds_deliver_intact_streams",
+    "command": [
+      "cargo",
+      "test",
+      "--profile",
+      "sim",
+      "-p",
+      "agent-net-sim",
+      "--test",
+      "secure",
+      "--locked",
+      "--offline",
+      "encrypted_seeds_deliver_intact_streams",
+      "--",
+      "--exact"
+    ],
+    "env": {
+      "AGENT_NET_SEEDS": "1000",
+      "AGENT_NET_SEED_START": "700000"
+    },
+    "exit": 0,
+    "seconds": 11.77,
+    "output": "fresh-encrypted_seeds_deliver_intact_streams.txt"
+  },
+  {
+    "step": "build-compare",
+    "command": [
+      "cargo",
+      "build",
+      "--release",
+      "-p",
+      "agent-net-sim",
+      "--features",
+      "kcp",
+      "--bin",
+      "compare",
+      "--locked",
+      "--offline"
+    ],
+    "env": {},
+    "exit": 0,
+    "seconds": 0.08,
+    "output": "build.txt"
+  },
+  {
+    "step": "simulation-auto",
+    "command": [
+      "<home>/Documents/Cindy/cindy/.cindy-worktrees/agent-net/packages/agent-net-core/target/release/compare"
+    ],
+    "env": {
+      "AGENT_NET_KCP": "none",
+      "AGENT_NET_NO_CPU": "1",
+      "AGENT_NET_POLICY": "auto"
+    },
+    "exit": 0,
+    "seconds": 163.22,
+    "output": "simulation-auto.txt"
+  },
+  {
+    "step": "simulation-lean",
+    "command": [
+      "<home>/Documents/Cindy/cindy/.cindy-worktrees/agent-net/packages/agent-net-core/target/release/compare"
+    ],
+    "env": {
+      "AGENT_NET_KCP": "none",
+      "AGENT_NET_NO_CPU": "1",
+      "AGENT_NET_POLICY": "lean"
+    },
+    "exit": 0,
+    "seconds": 14.23,
+    "output": "simulation-lean.txt"
+  },
+  {
+    "step": "simulation-fast",
+    "command": [
+      "<home>/Documents/Cindy/cindy/.cindy-worktrees/agent-net/packages/agent-net-core/target/release/compare"
+    ],
+    "env": {
+      "AGENT_NET_KCP": "none",
+      "AGENT_NET_NO_CPU": "1",
+      "AGENT_NET_POLICY": "fast"
+    },
+    "exit": 0,
+    "seconds": 158.06,
+    "output": "simulation-fast.txt"
+  }
+]

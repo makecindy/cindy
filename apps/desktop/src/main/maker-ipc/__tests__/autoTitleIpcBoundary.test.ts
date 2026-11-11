@@ -64,7 +64,7 @@ vi.mock('../../maker-host/auxiliary-title-one-shot.js', () => ({
   generateTitleWithAuxiliaryModel: h.generateTitle,
   generateTitleWithAuxiliaryModelResult: h.generateTitleResult,
 }));
-vi.mock('../../messagePersistBroadcaster.js', () => ({
+vi.mock('../../messagePersistBroadcaster.desktop.js', () => ({
   drainPersistQueue: h.drainPersistQueue,
 }));
 vi.mock('../sessionAutoTitle.js', () => ({ runSessionAutoTitle: h.run }));

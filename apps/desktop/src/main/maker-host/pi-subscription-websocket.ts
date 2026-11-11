@@ -4,7 +4,7 @@ import { subscriptionRequestAllowsFast } from './subscription-fast-request-polic
 import { createWebSocketMessageTransform, type ProxyOptions } from '@cindy/anthropic-compat-proxy';
 import { activeOwnerScopeKey, isAppSessionBoundaryPending } from '../appSessionState.js';
 import { getChatgptBridgeAuthForDispatch, invalidateChatgptBridgeAuth } from './anthropic-responses-bridge-host.js';
-import { isOpenAiSubscriptionProviderId } from './codex-account-auth.js';
+import { isOpenAiSubscriptionProviderId } from './codex-account-auth.desktop.js';
 import { detectChatgptBridgeAuthInvalidationReason } from './chatgpt-bridge-auth-invalidation.js';
 import { buildChatgptBridgeHeaders } from './chatgpt-bridge-headers.js';
 import {

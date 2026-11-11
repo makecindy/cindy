@@ -29,7 +29,7 @@ import { createLogger } from '../logger.js';
 import { MAKER_PUSH } from '../maker-ipc/channels.js';
 import { assertTrustedAppRendererEvent } from '../security/trustedAppRenderer.js';
 import { throwIpcError } from '../utils/ipcValidate.js';
-import { pruneProviderGroupBindings } from './bindings.js';
+import { pruneProviderGroupBindings } from './bindings.desktop.js';
 import type { ProviderGroupDirectory } from './directory.js';
 import type { ProviderGroupRouter } from './router.js';
 import {
@@ -46,7 +46,7 @@ import { invokeProviderManagement } from './managementClient.js';
 import { recoverProviderGroupViewShares } from './remoteClient.js';
 import { captureProviderManagementScope } from './managementScope.js';
 import { groupFastPolicyPending, syncGroupFastPolicy } from './fastPolicyRuntime.js';
-import { notifyProviderShareCatalogChanged } from '../device-link/dispatch.js';
+import { notifyProviderShareCatalogChanged } from '../device-link/dispatch.desktop.js';
 
 const log = createLogger('provider-group');
 

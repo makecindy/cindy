@@ -2342,38 +2342,47 @@ describe('ModelSelector trigger variants', () => {
       providersRef.providers = providersRef.DEFAULT_PROVIDERS;
       view.rerender(React.createElement(ModelSelectorContent, props));
 
-      await waitFor(() => expect(instances).toHaveLength(1));
       const firstPane = document.querySelector<HTMLElement>('[data-model-tag-density]');
       expect(firstPane).not.toBeNull();
-      expect(instances[0].observe).toHaveBeenCalledWith(firstPane);
+      // #9687: the real menu also observes highlight geometry. Select the pane's
+      // density observer by its target, not by the number/order of all observers.
+      const observersFor = (pane: HTMLElement | null) => instances.filter((instance) =>
+        instance.disconnect.mock.calls.length === 0
+        && instance.observe.mock.calls.some(([target]) => target === pane),
+      );
+      await waitFor(() => expect(observersFor(firstPane)).toHaveLength(1));
+      const firstObserver = observersFor(firstPane)[0]!;
+      expect(firstObserver.observe).toHaveBeenCalledWith(firstPane);
       expect(firstPane?.getAttribute('data-model-tag-density')).toBe('full');
 
       act(() => {
-        instances[0].callback(
+        firstObserver.callback(
           [
             {
               target: firstPane,
               contentRect: { width: 320 },
             } as unknown as ResizeObserverEntry,
           ],
-          instances[0] as unknown as ResizeObserver,
+          firstObserver as unknown as ResizeObserver,
         );
       });
       expect(firstPane?.getAttribute('data-model-tag-density')).toBe('hidden');
 
       providersRef.providers = [];
       view.rerender(React.createElement(ModelSelectorContent, props));
-      await waitFor(() => expect(instances[0].disconnect).toHaveBeenCalledTimes(1));
+      await waitFor(() => expect(firstObserver.disconnect).toHaveBeenCalledTimes(1));
 
       providersRef.providers = providersRef.DEFAULT_PROVIDERS;
       view.rerender(React.createElement(ModelSelectorContent, props));
-      await waitFor(() => expect(instances).toHaveLength(2));
       const secondPane = document.querySelector<HTMLElement>('[data-model-tag-density]');
       expect(secondPane).not.toBeNull();
-      expect(instances[1].observe).toHaveBeenCalledWith(secondPane);
+      await waitFor(() => expect(observersFor(secondPane)).toHaveLength(1));
+      const secondObserver = observersFor(secondPane)[0]!;
+      expect(secondObserver).not.toBe(firstObserver);
+      expect(secondObserver.observe).toHaveBeenCalledWith(secondPane);
 
       view.unmount();
-      expect(instances[1].disconnect).toHaveBeenCalledTimes(1);
+      expect(secondObserver.disconnect).toHaveBeenCalledTimes(1);
     } finally {
       rectSpy.mockRestore();
       Object.defineProperty(globalThis, 'ResizeObserver', {

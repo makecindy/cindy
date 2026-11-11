@@ -1,3 +1,6 @@
+import { chatgptAccountIdFromIdToken, chatgptAccountIdFromTokens, currentCodexCredentialGeneration, captureCodexOAuthDispatchProof, type CodexCredentialGeneration } from './codexCredentialRead.js';
+export { chatgptAccountIdFromIdToken, chatgptAccountIdFromTokens } from './codexCredentialRead.js';
+import { readCodexLocalAuthState } from './codex-local-auth-state.js';
 import { cindyManagedSkillRoots, listCindyManagedSkills } from './managed-skills.js';
 import { retainInvalidatedProviderPresentation, retainProviderPresentationAfterAuthChange } from './provider-presentation-store.js';
 import { subscriptionAccountKind, subscriptionAccountState } from './subscription-account-auth.js';
@@ -21,7 +24,7 @@ export { getCodexHome } from './codex-home-path.js';
  */
 
 import { app, safeStorage } from 'electron';
-import { isCodexAccountProvider, codexAccountState, codexAccountHome, prepareCodexAccountHome, parseCodexAccountIdentity } from './codex-account-auth.js';
+import { isCodexAccountProvider, codexAccountState, codexAccountHome, prepareCodexAccountHome, parseCodexAccountIdentity } from './codex-account-auth.desktop.js';
 import { createHash, timingSafeEqual } from 'node:crypto';
 import os from 'node:os';
 import path from 'node:path';
@@ -96,11 +99,11 @@ import {
 import {
   CODEX_GATEWAY_ENV_KEY,
   CODEX_PROVIDER_OAUTH_PLACEHOLDER_KEY,
-} from './codex-gateway-config.js';
+} from './codex-gateway-config.desktop.js';
 import { CLAUDE_PROVIDER_AUTH_PLACEHOLDER_KEY, isAnthropicWireModel } from './claude-gateway-config.js';
 import { hasClaudeNativeLogin } from './claude-native-auth.js';
 import { disconnectClaudeNativeLogin, readClaudeNativeLogin } from './claude-native-connection.js';
-import { claudeCliNetworkEnv } from './claude-native-cli.js';
+import { claudeCliNetworkEnv } from './claude-native-cli.desktop.js';
 import { ensureLegacyClaudeConfigMigrated } from './claude-legacy-config-migration.js';
 import { isAnthropicCompatProxyHandleReady } from './anthropic-compat-proxy-host.js';
 import { claudeUpstreamEndpoint } from './runtime-configs.js';
@@ -239,21 +242,6 @@ function readCodexRecoveryCredentialProof(
  * 优先 `https://api.openai.com/auth`.chatgpt_account_id，回落顶层 chatgpt_account_id / sub。
  * export 供 anthropic-responses-bridge-host 复用(同一 auth.json、同一 claim 布局,单点维护)。
  */
-export function chatgptAccountIdFromIdToken(idToken: string): string | null {
-  const workspaceId = codexWorkspaceIdFromTokens({ id_token: idToken });
-  if (workspaceId) return workspaceId;
-  const sub = readChatgptIdTokenClaims(idToken)?.sub;
-  return typeof sub === 'string' && sub.length > 0 ? sub : null;
-}
-
-/** HTTP header identity only; workspace/recovery checks must keep the strict parser. */
-export function chatgptAccountIdFromTokens(
-  tokens: { account_id?: unknown; id_token?: unknown } | undefined,
-): string | null {
-  if (typeof tokens?.account_id === 'string' && tokens.account_id.length > 0) return tokens.account_id;
-  return typeof tokens?.id_token === 'string' ? chatgptAccountIdFromIdToken(tokens.id_token) : null;
-}
-
 /**
  * Codex 一次性轻任务（起会话标题 oneShot）直连 ChatGPT 后端所需的凭证。
  * 读 xdt-maker 自管 codex-home 的 auth.json：`tokens.access_token` 作 Bearer、`account_id`
@@ -334,35 +322,7 @@ function pathsReferToSameFileSync(left: string, right: string): boolean {
   );
 }
 
-type CodexCredentialGeneration = {
-  dev: string;
-  ino: string;
-  size: number;
-  mtimeMs: number;
-  sha256: string;
-};
-
 const DECIMAL_FILE_ID_RE = /^(0|[1-9]\d*)$/;
-
-function currentCodexCredentialGeneration(authPath: string): CodexCredentialGeneration | null {
-  let fd: number | null = null;
-  try {
-    fd = fs.openSync(authPath, 'r');
-    const stat = fs.fstatSync(fd, { bigint: true });
-    const bytes = fs.readFileSync(fd);
-    return {
-      dev: stat.dev.toString(),
-      ino: stat.ino.toString(),
-      size: Number(stat.size),
-      mtimeMs: Number(stat.mtimeMs),
-      sha256: createHash('sha256').update(bytes).digest('hex'),
-    };
-  } catch {
-    return null;
-  } finally {
-    if (fd !== null) fs.closeSync(fd);
-  }
-}
 
 function parseCodexCredentialGeneration(
   value: string | null | undefined,
@@ -1743,32 +1703,15 @@ export class DesktopCodexAuthAdapter implements AuthAdapter {
     const independent = providerId !== 'openai';
     const authenticated = () => independent
       ? codexAccountState(providerId).authenticated : this.hasCodexOAuthLoginReadOnly();
+    // Resolve the account home only after the login check, so an unauthenticated
+    // provider yields null instead of reaching the home lookup.
     if (!authenticated()) return null;
     const home = independent ? codexAccountHome(providerId) : this.codexHome;
-    const authPath = path.join(home, 'auth.json');
-    const credential = () => {
-      const value = currentCodexCredentialGeneration(authPath);
-      return value ? JSON.stringify(value) : null;
-    };
-    // Independent accounts authorize against their existing account record;
-    // inherited OpenAI uses the native provider authorization record.
-    const authorization = () => independent
-      ? JSON.stringify(currentCodexCredentialGeneration(path.join(home, 'account.json')))
-      : captureNativeProviderAuthorizationGeneration('openai');
-    const credentialGeneration = credential();
-    const authorizationGeneration = authorization();
-    if (!credentialGeneration || !authorizationGeneration || authorizationGeneration === 'null') return null;
-    try {
-      const raw = fs.readFileSync(authPath, 'utf8');
-      const auth = JSON.parse(raw) as { tokens?: { access_token?: unknown; account_id?: unknown; id_token?: unknown } };
-      if (auth.tokens?.access_token !== accessToken || chatgptAccountIdFromTokens(auth.tokens) !== accountId) return null;
-    } catch {
-      return null;
-    }
-    const isCurrent = () => authenticated()
-      && credential() === credentialGeneration
-      && authorization() === authorizationGeneration;
-    return isCurrent() ? isCurrent : null;
+    return captureCodexOAuthDispatchProof({ home, accessToken, accountId, authenticated,
+      authorization: () => independent
+        ? JSON.stringify(currentCodexCredentialGeneration(path.join(home, 'account.json')))
+        : captureNativeProviderAuthorizationGeneration('openai'),
+    });
   }
 
   /** Bracket one account-level RPC with compare-and-commit recovery confirmation. */
@@ -1796,43 +1739,7 @@ export class DesktopCodexAuthAdapter implements AuthAdapter {
   }
 
   private async readLocalCodexAuthState(): Promise<AuthState> {
-    if (this.devReadOnlyDetached) return { authenticated: false };
-    const authPath = path.join(this.codexHome, 'auth.json');
-    if (!existsSync(authPath)) return { authenticated: false };
-    // logout 的 marker 先于 unlink 落盘；崩溃 / 文件锁导致旧 auth 残留时也不能复活账号。
-    // 新一次显式 OAuth 会写入不同 fingerprint，因此不会被这条规则误伤。
-    if (shouldSuppressLocalCodexAuth(this.codexHome, authPath)) {
-      return { authenticated: false };
-    }
-    try {
-      const raw = await fsp.readFile(authPath, 'utf-8');
-      const obj = JSON.parse(raw) as {
-        account?: { email?: unknown };
-        expires_at?: unknown;
-        tokens?: { access_token?: unknown };
-      };
-      // Display metadata only: use the same token claims as independently added accounts.
-      // Parsing a label must not change the authentication decision below.
-      const identity = typeof obj.account?.email === 'string' && obj.account.email.trim()
-        ? obj.account.email
-        : parseCodexAccountIdentity(raw)?.label;
-      const expiresAt = typeof obj.expires_at === 'number' ? obj.expires_at : undefined;
-      // authSource='oauth' 必须与 spawn fallback 的判定同源(hasCodexOAuthLogin =
-      // auth.json 含 access_token,见下方 getAccessToken 的字段路径)。`codex login
-      // --api-key` 产生的 auth.json 没有 tokens —— 若仅凭"能解析"就标 oauth,
-      // maker-core 会把隐式会话归一成 oauth-bearer,而 spawn fallback 实际走
-      // gateway key,共享 host 被登记错形态 → 后续显式 oauth 会话静默复用网关
-      // key 进程(review P1)。tokens 缺失时不标 authSource,归一化解析不出
-      // 即回退保守的"重建"语义,登录门禁(authenticated)不受影响。
-      const hasOAuthToken =
-        typeof obj.tokens?.access_token === 'string' && obj.tokens.access_token.length > 0;
-      return hasOAuthToken
-        ? { authenticated: true, identity, expiresAt, authSource: 'oauth' }
-        : { authenticated: true, identity, expiresAt };
-    } catch {
-      // JSON.parse 失败 / IO 错 → 降级为未登录 + errorReason, 不抛
-      return { authenticated: false, errorReason: 'auth_parse_failed' };
-    }
+    return readCodexLocalAuthState(this.codexHome, this.devReadOnlyDetached);
   }
 
   triggerLogin(opts?: AuthLoginOptions): Promise<AuthState> {

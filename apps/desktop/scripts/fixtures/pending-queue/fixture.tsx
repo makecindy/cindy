@@ -1,4 +1,5 @@
 import { useState } from 'react';
+import { appendPendingQueueItems } from '../../../src/renderer/components/chat/pendingQueueItems';
 import { mountPage } from '../../ui-page/harness';
 import { PendingQueueBubble } from '../../../src/renderer/components/chat/PendingQueueBubble';
 import type { QueuedMessage } from '../../../src/renderer/lib/makerChatStore';
@@ -22,13 +23,16 @@ function entry(clientId: string, text: string): QueuedMessage {
 }
 function Fixture() {
   const [queue, setQueue] = useState([
+    entry('question-reply:answered:fixture', '这条回答只在原问题卡片展示。'),
     entry('first', '先检查手机版消息排队的处理逻辑。'),
     entry('second', '再把桌面版的交互对齐：消息显示在对话里，点击「排队中」调整顺序、编辑或取消。'),
   ]);
   const [editing, setEditing] = useState<string | null>(null);
+  const visibleIds = new Set(appendPendingQueueItems([], queue.map(item => item.chatMessage), [])
+    .map(item => item.type === 'message' ? item.message.clientId : ''));
   return (
     <main className="mx-auto flex max-w-[880px] flex-col gap-4 p-6">
-      {queue.map((entry, index) => (
+      {queue.map((entry, index) => visibleIds.has(entry.clientId) ? (
         <PendingQueueBubble
           key={entry.clientId}
           entry={entry}
@@ -53,7 +57,7 @@ function Fixture() {
             })
           }
         />
-      ))}
+      ) : null)}
     </main>
   );
 }
