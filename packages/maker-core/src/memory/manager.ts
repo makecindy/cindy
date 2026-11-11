@@ -907,15 +907,23 @@ export class MakerMemoryManager {
   async getPromptIndex(scopeKey: string): Promise<string> {
     const scopes = this.memoryScopesFor(scopeKey);
     if (!scopes.user) return (await this.getStore(scopeKey)).getIndex();
+    // 两份索引分两次打开 store, 每次打开都只按「当时」的账号校验自己; 中间账号若切换,
+    // 会拼出旧账号的账号级记忆加新账号的项目记忆。入口先绑定账号, 返回前复核。
+    this.ensureOwnerScope();
+    const scopeAtEntry = this.deps.ownerScopeKey?.() ?? null;
     const user = (await (await this.getStore(scopes.user)).getIndex()).replace(
       MEMORY_INDEX_HEADING,
       USER_INDEX_HEADING,
     );
-    if (!scopes.project) return user;
+    if (!scopes.project) {
+      this.assertScopeUnchanged(scopeAtEntry);
+      return user;
+    }
     const project = (await (await this.getStore(scopes.project)).getIndex()).replace(
       MEMORY_INDEX_HEADING,
       PROJECT_INDEX_HEADING,
     );
+    this.assertScopeUnchanged(scopeAtEntry);
     return `${user.trimEnd()}\n\n${project}`;
   }
 

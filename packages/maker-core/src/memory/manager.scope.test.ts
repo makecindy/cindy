@@ -354,6 +354,42 @@ describe('MakerMemoryManager · owner scope guard (#2341)', () => {
     manager.dispose();
   });
 
+  // 评审 (Codex P1): 账号级和项目两份索引分两次打开, 中间切账号不能拼出两个账号的记忆。
+  it('getPromptIndex 读两份索引期间账号切换: 拒绝, 不拼出旧账号的账号级加新账号的项目记忆', async () => {
+    let currentRoot = rootA;
+    let currentScope = 'cloud:abc:1';
+    const manager = new MakerMemoryManager({
+      basePath: rootA,
+      resolveBasePath: () => currentRoot,
+      ownerScopeKey: () => currentScope,
+      sqliteFactory: trackingSqlite().factory,
+      agents: {},
+      logger: noopLogger,
+      initialEnabled: true,
+    });
+    await manager.write(USER_MEMORY_SCOPE_KEY, {
+      type: 'user', name: 'tone', title: 'tone', description: 'account a tone', body: 'a',
+    });
+    await manager.write(WORKDIR, {
+      type: 'project', name: 'arch', title: 'arch', description: 'account a arch', body: 'a',
+    });
+
+    const realGetStore = manager.getStore.bind(manager);
+    let calls = 0;
+    vi.spyOn(manager, 'getStore').mockImplementation(async (...args) => {
+      calls += 1;
+      // 账号级索引已读完, 打开项目 store 之前切换: 这一次打开会重新绑定到新账号。
+      if (calls === 2) {
+        currentRoot = rootB;
+        currentScope = 'cloud:abc:2';
+      }
+      return realGetStore(...args);
+    });
+
+    await expect(manager.getPromptIndex(WORKDIR)).rejects.toThrow(/not-ready|owner scope changed/);
+    manager.dispose();
+  });
+
   it('无 resolveBasePath/ownerScopeKey 的静态 basePath 宿主行为不变 (回归)', async () => {
     const sqlite = trackingSqlite();
     const manager = new MakerMemoryManager({
