@@ -57,6 +57,7 @@ type CopyKey =
   | 'voice-api-key-unauth'
   | 'voice-direct-api-key-unauth'
   | 'codex-voice-unauth'
+  | 'cc-binary-missing'
   | 'codex-binary-missing'
   | 'pi-binary-missing';
 
@@ -93,6 +94,14 @@ function buildCopy(t: (key: string) => string): Record<CopyKey, DialogCopy> {
       cancelText: t('logic.confirm.cancel'),
       settingsTab: 'providers',
     },
+    // 断网首装后 Claude Code 尚未安装:「关于」页联网检查版本时会触发后台补装。
+    'cc-binary-missing': {
+      title: t('logic.confirm.ccBinaryMissingTitle'),
+      description: t('logic.confirm.ccBinaryMissingDescription'),
+      confirmText: t('logic.confirm.goToSettings'),
+      cancelText: t('logic.confirm.cancel'),
+      settingsTab: 'about',
+    },
     'codex-binary-missing': {
       title: t('logic.confirm.codexBinaryMissingTitle'),
       description: t('logic.confirm.codexBinaryMissingDescription'),
@@ -124,6 +133,7 @@ function pickCopy(
   vendor: AgentKind,
   readiness: Readiness,
 ): DialogCopy | null {
+  if (readiness === 'binary-missing' && vendor === 'cc') return copy['cc-binary-missing'];
   if (readiness === 'binary-missing' && vendor === 'codex') return copy['codex-binary-missing'];
   if (readiness === 'binary-missing' && vendor === 'pi') return copy['pi-binary-missing'];
   if (readiness !== 'unauthenticated') return null;
@@ -141,7 +151,7 @@ function pickCopy(
  * 自定义供应商),会把「没登 Codex 但配了其他 GPT 来源」的被控端误判成未登录。
  *
  * 三个输入均可为 null(= 对应信息在已确认的旧端兼容路径里不可用):
- *   - binaryReady:codex 的运行时前提,false 优先返回 binary-missing(cc 随包,不参与);
+ *   - binaryReady:运行时前提,false 优先返回 binary-missing(断网首装时 cc 也可能缺失);
  *   - sourceReady:provider 维度来源判定,可用时是唯一真相;
  *   - authReady:老被控端(allowlist 无 maker:provider:list)的回退口径,仅在
  *     sourceReady 不可用时消费,维持旧行为;
@@ -156,9 +166,7 @@ export function deriveRemoteReadiness(
     authReady: boolean | null;
   },
 ): Readiness {
-  if (vendor !== 'cc' && input.binaryReady === false) {
-    return 'binary-missing';
-  }
+  if (input.binaryReady === false) return 'binary-missing';
   if (input.sourceReady !== null) return input.sourceReady ? 'ready' : 'unauthenticated';
   if (input.authReady !== null) return input.authReady ? 'ready' : 'unauthenticated';
   return 'ready';
@@ -281,7 +289,8 @@ export function useVendorAuthGate(): UseVendorAuthGateReturn {
         // 模型选择器已读到的来源快照(被控端来源变化推送会令其失效)显示已有可用来源时直接复用:
         // provider:list 经隧道实测 1–5 秒,重拉一遍会整段挡在远程新建任务的第一步。
         // 快照缺失或显示未就绪时仍实时探测,旧快照只能放行、不能误弹「未连接」。
-        // cc 不看 binary 轴,有来源结论即可;codex / pi 仍需 agent:status 查二进制。
+        // cc 有来源快照时跳过 binary 查询以免挡住远程新建,缺失运行时由被控端启动任务报错兜底;
+        // codex / pi 仍需 agent:status 查二进制。
         const cachedProviders = getCachedDeviceProviders(deviceId);
         const cachedSourceReady =
           cachedProviders !== null &&
@@ -339,7 +348,9 @@ export function useVendorAuthGate(): UseVendorAuthGateReturn {
         if (remoteReadiness === 'binary-missing') {
           title = t(vendor === 'pi'
             ? 'logic.confirm.remotePiBinaryMissingTitle'
-            : 'logic.confirm.remoteCodexBinaryMissingTitle');
+            : vendor === 'cc'
+              ? 'logic.confirm.remoteCcBinaryMissingTitle'
+              : 'logic.confirm.remoteCodexBinaryMissingTitle');
           description = t('logic.confirm.remoteAuthDescription', { device });
         } else if (vendor === 'codex') {
           title = t('logic.confirm.remoteCodexNoSourceTitle');

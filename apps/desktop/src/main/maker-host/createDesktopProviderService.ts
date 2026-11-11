@@ -357,7 +357,7 @@ export function ensureActiveCatalogLoaded(): Promise<Catalog> {
     return Promise.resolve(activeCatalog);
   }
   if (!activeInflight) {
-    const source = buildSource();
+    const source = { ...buildSource(), remoteBudgetMs: 2_500 };
     const sourceKey = catalogSourceKey(source);
     // 首次加载时顺手清掉旧版磁盘缓存孤儿（fire-and-forget，每进程一次）。
     void cleanupLegacyCatalogCache();
