@@ -1207,6 +1207,78 @@ export function createMacDMG(appPath, dmgPath, volumeName, identity) {
   exec(`/usr/bin/codesign --force --timestamp --sign "${identity.signIdentity}" "${dmgPath}"`);
 }
 
+/** build-info.json 的 files[] 条目。 */
+export function fileEntry(role, filePath) {
+  return {
+    role,
+    name: path.basename(filePath),
+    sha256: sha256(filePath),
+    size: fs.statSync(filePath).size,
+  };
+}
+
+/** 用 lipo 确认 .app 主二进制是目标架构。 */
+export function verifyMacAppArch(appPath, arch) {
+  const exePath = path.join(appPath, 'Contents', 'MacOS', path.basename(appPath, '.app'));
+  const archInfo = execSync(`lipo -archs "${exePath}"`, { encoding: 'utf8' }).trim();
+  const want = arch === 'arm64' ? 'arm64' : 'x86_64';
+  if (!archInfo.includes(want)) {
+    throw new Error(`expected ${want} binary but lipo reports "${archInfo}" (${exePath})`);
+  }
+}
+
+/**
+ * Developer ID 签名 + 公证 + DMG + 热更 ZIP。单步打包(package-desktop.mjs)与分机签名
+ * (sign-desktop.mjs)共用:packagedDir 是 forge 产出的 `<appName>-darwin-<arch>` 目录
+ * 或签名机解开的同一份内容。只在 Team ID 已烘焙进包且给了描述文件时才开 WebAuthn。
+ * @returns {Array<{ role: string, name: string, sha256: string, size: number }>}
+ */
+export function signAndPackMacApp({
+  packagedDir,
+  appName,
+  arch,
+  artifactDir,
+  baseName,
+  identity,
+  webAuthnProvisioningProfile,
+}) {
+  const appPath = path.join(packagedDir, `${appName}.app`);
+  if (!fs.existsSync(appPath)) throw new Error(`${appPath} not found`);
+  fs.mkdirSync(RELEASE_DIR, { recursive: true });
+  const helperEntitlementsPath = path.join(RELEASE_DIR, 'build-helper.entitlements');
+  const mainEntitlementsPath = path.join(RELEASE_DIR, 'build-main.entitlements');
+  const bundleId = readMacBundleIdentifier(appPath);
+  const keychainAccessGroup = webAuthnProvisioningProfile
+    ? macWebAuthnKeychainAccessGroup(identity.teamId, bundleId)
+    : undefined;
+  writeMacEntitlements(helperEntitlementsPath);
+  writeMacEntitlements(mainEntitlementsPath, { appleEvents: true, keychainAccessGroup });
+  if (keychainAccessGroup) {
+    embedMacWebAuthnProvisioningProfile(appPath, webAuthnProvisioningProfile, {
+      teamId: identity.teamId,
+      bundleId,
+      keychainAccessGroup,
+    });
+  }
+  console.log('==> Signing (Developer ID)...');
+  signMacAppWithIdentity(appPath, helperEntitlementsPath, mainEntitlementsPath, identity, { keychainAccessGroup, arch });
+  console.log('==> Notarizing...');
+  notarizeMacApp(appPath, identity);
+  verifyMacAppArch(appPath, arch);
+
+  const dmgPath = path.join(artifactDir, `${baseName}-${arch}.dmg`);
+  console.log('==> Creating DMG...');
+  // DMG 卷名 = 安装窗口标题,走 '<appName> Installer'(cn/global 'Cindy Installer' /
+  // dev 'CindyDev Installer');版本号不进卷名,安装包文件名里已有。
+  createMacDMG(appPath, dmgPath, `${appName} Installer`, identity);
+
+  const hotfixZipPath = path.join(artifactDir, `${baseName}-${arch}-hotfix.zip`);
+  console.log('==> Creating hotfix ZIP...');
+  if (fs.existsSync(hotfixZipPath)) fs.unlinkSync(hotfixZipPath);
+  exec(`/usr/bin/ditto -c -k "${packagedDir}" "${hotfixZipPath}"`);
+  return [fileEntry('installer', dmgPath), fileEntry('hotfix', hotfixZipPath)];
+}
+
 // ── Smoke test (启动 packaged app) ──────────────────────────────────────────
 
 export function runSmokeTest(platform, arch, region = 'global') {

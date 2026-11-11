@@ -86,6 +86,9 @@ export function parsePackageArgs(argv, defaults = {}) {
     // Agent 运行时版本来源:latest | pinned | <build-info.json>。有版本打包缺省 latest
     // (每次发版带上上游最新组件),版本无关包缺省 null(不处理,行为同前)。
     vendors: null,
+    // 'build' = 打包机不持有签名密钥:macOS 只产出未签名 .app 与 pending 状态的 build-info,
+    // 签名、公证、DMG 与热更 ZIP 由签名机的 sign-desktop.mjs 完成。null = 本机一步做完。
+    stage: null,
   };
   let archFlag = null;
   let regionSpecified = false;
@@ -116,8 +119,9 @@ export function parsePackageArgs(argv, defaults = {}) {
       // (放行"缺配置")语义互补。
       case '--no-sign': out.noSign = true; out.allowUnsigned = true; break;
       case '--vendors': out.vendors = takeValue(a, i); i++; break;
+      case '--stage': out.stage = takeValue(a, i); i++; break;
       default:
-        throw new Error(`未知参数: ${a}(支持 --platform/--arch/--region/--version/--skip-smoke/--allow-unsigned/--no-sign/--vendors)`);
+        throw new Error(`未知参数: ${a}(支持 --platform/--arch/--region/--version/--skip-smoke/--allow-unsigned/--no-sign/--vendors/--stage)`);
     }
   }
 
@@ -163,6 +167,20 @@ export function parsePackageArgs(argv, defaults = {}) {
     !isExplicitVersion(out.versionSpec)
   ) {
     throw new Error(`非法 --version: ${out.versionSpec}(可选 x.y.z / major / minor / patch)`);
+  }
+  if (out.stage !== null) {
+    if (out.stage !== 'build') throw new Error(`非法 --stage: ${out.stage}(只支持 build)`);
+    // Windows 签名已经是可插拔外部命令:打包机不持有密钥时把 CINDY_WIN_SIGN_CMD 指向签名服务;
+    // NSIS 卸载器在 make 中途生成并被嵌进安装器,无法事后补签。Linux 包不签名。
+    if (out.platform !== 'darwin') {
+      throw new Error(
+        out.platform === 'win32'
+          ? '--stage build 只用于 macOS;Windows 打包机不持有密钥时把 CINDY_WIN_SIGN_CMD 指向远程签名服务'
+          : '--stage build 只用于 macOS;Linux 包不签名,直接打包即可',
+      );
+    }
+    if (out.versionSpec === null) throw new Error('--stage build 只用于有版本打包(版本无关包本就只做 ad-hoc 签名)');
+    if (out.noSign) throw new Error('--stage build 与 --no-sign 不能同时使用');
   }
   // Release builds run on the signing machine: ship the reviewed, gated pins without executing them.
   out.vendors ??= out.versionSpec !== null ? 'pinned' : null;
@@ -283,4 +301,57 @@ export function assertPageManualCommitted({ porcelain, versionless, manualPath }
   throw new Error(
     `${manualPath} 有未提交改动,不能打有版本的包:安装包会内置未提交的手册,发布的手册就对不上。请先提交或还原。`,
   );
+}
+
+/**
+ * 签名机的入口校验。build-info 由打包机写出,而打包机运行上游代码、可能已被入侵:签名机拼路径与
+ * 命令用到的 region / arch / version / 未签名包文件名都必须是固定格式,不能借字段注入 shell 命令
+ * 或跳出产物目录。返回签名所需的已校验字段。
+ * @param {Record<string, any>} pending
+ * @returns {{ region: string, arch: string, version: string, unsignedName: string }}
+ */
+export function assertSignableBuildInfo(pending) {
+  if (pending.signing?.mode !== 'pending') {
+    throw new Error(`build-info 的 signing.mode 是 ${pending.signing?.mode ?? '(缺失)'},不是待签名的 pending`);
+  }
+  const { platform, region, arch, version } = pending;
+  if (platform !== 'darwin') throw new Error(`build-info 的 platform 不是 darwin: ${JSON.stringify(platform)}`);
+  if (!SUPPORTED_REGIONS.includes(region)) throw new Error(`build-info 的 region 非法: ${JSON.stringify(region)}`);
+  if (!PLATFORM_ARCHS.darwin.includes(arch)) throw new Error(`build-info 的 arch 非法: ${JSON.stringify(arch)}`);
+  if (typeof version !== 'string' || !isExplicitVersion(version)) {
+    throw new Error(`build-info 的 version 非法: ${JSON.stringify(version)}`);
+  }
+  const unsignedName = `${artifactBaseName({ version, versionless: false })}-${arch}-unsigned.zip`;
+  const unsigned = pending.files?.filter((f) => f.role === 'unsigned-app') ?? [];
+  if (unsigned.length !== 1 || unsigned[0].name !== unsignedName) {
+    throw new Error(`build-info 应只记录一个未签名包 ${unsignedName}`);
+  }
+  const bakedTeamId = pending.signing.webAuthnAppleTeamId ?? null;
+  if (bakedTeamId !== null && !/^[A-Z0-9]{10}$/.test(bakedTeamId)) {
+    throw new Error(`build-info 的 webAuthnAppleTeamId 非法: ${JSON.stringify(bakedTeamId)}`);
+  }
+  return { region, arch, version, unsignedName };
+}
+
+/**
+ * 签名机把 --stage build 的 build-info 改写成签名后的版本:只替换 files 与 signing,
+ * 版本、commit、vendors 等构建事实原样保留,并记下签名所用的未签名包。
+ * 构建时烘焙的 WebAuthn Team ID 必须与签名身份一致,否则 Touch ID 的 keychain 访问组对不上。
+ * @param {Record<string, any>} pending  --stage build 写出的 build-info
+ * @param {{ files: Array<{ role: string, name: string, sha256: string, size: number }>, teamId: string }} signed
+ */
+export function signedBuildInfo(pending, { files, teamId }) {
+  assertSignableBuildInfo(pending);
+  const bakedTeamId = pending.signing.webAuthnAppleTeamId ?? null;
+  if (bakedTeamId && bakedTeamId !== teamId) {
+    throw new Error(`包里烘焙的 WebAuthn Team ID ${bakedTeamId} 与签名身份 ${teamId} 不一致`);
+  }
+  const unsigned = pending.files.find((f) => f.role === 'unsigned-app');
+  // 只带回 build-info 规定的字段:pending 来自打包机,多出来的键不进签名后的记录。
+  const known = Object.keys(buildBuildInfo({ files: [], signing: {} }));
+  return {
+    ...Object.fromEntries(known.filter((key) => key in pending).map((key) => [key, pending[key]])),
+    files,
+    signing: { mode: 'developer-id+notarized', signedAt: new Date().toISOString(), signedFrom: unsigned },
+  };
 }

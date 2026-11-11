@@ -43,6 +43,15 @@
 //   --no-sign                       主动跳过签名(即使签名配置在手;隐含 --allow-unsigned)。
 //                                   外部签名命令依赖发布方自己的环境,不具备
 //                                   该环境的机器打版本无关包时用它
+//   --stage build                   构建与签名分机(仅 macOS 有版本打包):本机不读签名配置、
+//                                   不签名,产出 <baseName>-<arch>-unsigned.zip 与
+//                                   signing.mode = pending 的 build-info.json;拷到签名机后
+//                                   跑 sign-desktop.mjs --build-info <该文件> 完成签名、公证、
+//                                   DMG 与热更 ZIP。这只让签名密钥离开打包机,不证明包的内容:
+//                                   签名机照签打包机交来的任何内容,所以发版仍用缺省的
+//                                   --vendors pinned,打包机不执行上游代码。
+//                                   要开 Touch ID 时在打包机设置 APPLE_TEAM_ID(公开信息)。
+//                                   Windows 不需要这一步:CINDY_WIN_SIGN_CMD 指向远程签名服务即可。
 //
 // 产物: release/artifacts/<region>/<version|unversioned>/<platform-arch>/
 //   cindy-<version|unversioned>-Setup.exe / -<arch>.dmg /
@@ -67,7 +76,6 @@ import {
   packagedAppName,
   loadDotenv,
   exec,
-  sha256,
   writePackageVersion,
   runDbValidate,
   verifyPackagedDrizzle,
@@ -78,14 +86,11 @@ import {
   ensureLinuxRuntimeAssets,
   logLinuxPackagingRequirements,
   writeMacEntitlements,
-  macWebAuthnKeychainAccessGroup,
-  embedMacWebAuthnProvisioningProfile,
-  readMacBundleIdentifier,
   adhocSignMacApp,
   resolveAppleIdentity,
-  signMacAppWithIdentity,
-  notarizeMacApp,
-  createMacDMG,
+  fileEntry,
+  verifyMacAppArch,
+  signAndPackMacApp,
 } from './ci/lib.mjs';
 import {
   parsePackageArgs,
@@ -255,26 +260,14 @@ function isPhysicalArm64Mac() {
   }
 }
 
-/** 跳过 smoke 启动前,用 lipo 确认 packaged 主二进制确实是目标架构。 */
+/** 用 lipo 确认 packaged 主二进制是目标架构。 */
 function verifyMacBinaryArch(appName, arch) {
-  const exePath = path.join(
-    DESKTOP_ROOT, 'out', `${appName}-darwin-${arch}`, `${appName}.app`, 'Contents', 'MacOS', appName,
-  );
-  const archInfo = execFileSync('lipo', ['-archs', exePath], { encoding: 'utf8' }).trim();
-  const want = arch === 'arm64' ? 'arm64' : 'x86_64';
-  if (!archInfo.includes(want)) {
-    console.error(`ERROR: expected ${want} binary but lipo reports "${archInfo}" (${exePath})`);
+  try {
+    verifyMacAppArch(path.join(DESKTOP_ROOT, 'out', `${appName}-darwin-${arch}`, `${appName}.app`), arch);
+  } catch (err) {
+    console.error(`ERROR: ${err.message}`);
     process.exit(1);
   }
-}
-
-function fileEntry(role, filePath) {
-  return {
-    role,
-    name: path.basename(filePath),
-    sha256: sha256(filePath),
-    size: fs.statSync(filePath).size,
-  };
 }
 
 // ── 平台收尾:签名 + 产物归集,返回 files/signing 供 build-info ────────────────
@@ -410,73 +403,59 @@ async function finishDarwin({
     process.exit(1);
   }
 
-  fs.mkdirSync(RELEASE_DIR, { recursive: true });
-  const helperEntitlementsPath = path.join(RELEASE_DIR, 'build-helper.entitlements');
-  const mainEntitlementsPath = path.join(RELEASE_DIR, 'build-main.entitlements');
-
   const applePassword = noSign ? undefined : process.env.APPLE_APP_PASSWORD;
   const wantsRealSigning = !versionless && !noSign;
-  let signingMode = 'adhoc';
 
   if (wantsRealSigning && !applePassword && !allowUnsigned) {
     console.error('ERROR: 有版本的 macOS 打包要求 APPLE_APP_PASSWORD(Developer ID 签名 + 公证)。');
     console.error('       确要降级 ad-hoc 签名时加 --allow-unsigned(产物无法过 Gatekeeper 分发)。');
+    console.error('       打包机不持有签名密钥时用 --stage build,再在签名机跑 sign-desktop.mjs。');
     process.exit(1);
   }
 
-  const files = [];
   if (wantsRealSigning && applePassword) {
-    const identity = macSigningIdentity ?? { ...resolveAppleIdentity(), applePassword };
-    const bundleId = readMacBundleIdentifier(appPath);
-    const keychainAccessGroup = webAuthnProvisioningProfile
-      ? macWebAuthnKeychainAccessGroup(identity.teamId, bundleId)
-      : undefined;
-    writeMacEntitlements(helperEntitlementsPath);
-    writeMacEntitlements(mainEntitlementsPath, {
-      appleEvents: true,
-      keychainAccessGroup,
+    const files = signAndPackMacApp({
+      packagedDir,
+      appName,
+      arch,
+      artifactDir,
+      baseName,
+      identity: macSigningIdentity ?? { ...resolveAppleIdentity(), applePassword },
+      webAuthnProvisioningProfile,
     });
-    if (keychainAccessGroup) {
-      embedMacWebAuthnProvisioningProfile(appPath, webAuthnProvisioningProfile, {
-        teamId: identity.teamId,
-        bundleId,
-        keychainAccessGroup,
-      });
-    }
-    console.log('==> Signing (Developer ID)...');
-    signMacAppWithIdentity(appPath, helperEntitlementsPath, mainEntitlementsPath, identity, { keychainAccessGroup, arch });
-    console.log('==> Notarizing...');
-    notarizeMacApp(appPath, identity);
-    signingMode = 'developer-id+notarized';
-    verifyMacBinaryArch(appName, arch);
-
-    const dmgPath = path.join(artifactDir, `${baseName}-${arch}.dmg`);
-    console.log('==> Creating DMG...');
-    // DMG 卷名 = 安装窗口标题,走 '<appName> Installer'(cn/global
-    // 'Cindy Installer' / dev 'CindyDev Installer');版本号不进卷名,
-    // 安装包文件名里已有。
-    createMacDMG(appPath, dmgPath, `${appName} Installer`, identity);
-    files.push(fileEntry('installer', dmgPath));
-
-    const hotfixZipPath = path.join(artifactDir, `${baseName}-${arch}-hotfix.zip`);
-    console.log('==> Creating hotfix ZIP...');
-    if (fs.existsSync(hotfixZipPath)) fs.unlinkSync(hotfixZipPath);
-    exec(`/usr/bin/ditto -c -k "${packagedDir}" "${hotfixZipPath}"`);
-    files.push(fileEntry('hotfix', hotfixZipPath));
-  } else {
-    // 版本无关(或显式放行)→ ad-hoc 签名,产出 .app 的 zip 供本机/内部试用。
-    writeMacEntitlements(helperEntitlementsPath);
-    writeMacEntitlements(mainEntitlementsPath, { appleEvents: true });
-    adhocSignMacApp(appPath, helperEntitlementsPath, mainEntitlementsPath, arch);
-    verifyMacBinaryArch(appName, arch);
-    const appZipPath = path.join(artifactDir, `${baseName}-${arch}.zip`);
-    console.log('==> Creating app ZIP (ad-hoc signed)...');
-    if (fs.existsSync(appZipPath)) fs.unlinkSync(appZipPath);
-    exec(`/usr/bin/ditto -c -k --keepParent "${appPath}" "${appZipPath}"`);
-    files.push(fileEntry('installer', appZipPath));
+    return { files, signing: { mode: 'developer-id+notarized' } };
   }
 
-  return { files, signing: { mode: signingMode } };
+  // 版本无关(或显式放行)→ ad-hoc 签名,产出 .app 的 zip 供本机/内部试用。
+  fs.mkdirSync(RELEASE_DIR, { recursive: true });
+  const helperEntitlementsPath = path.join(RELEASE_DIR, 'build-helper.entitlements');
+  const mainEntitlementsPath = path.join(RELEASE_DIR, 'build-main.entitlements');
+  writeMacEntitlements(helperEntitlementsPath);
+  writeMacEntitlements(mainEntitlementsPath, { appleEvents: true });
+  adhocSignMacApp(appPath, helperEntitlementsPath, mainEntitlementsPath, arch);
+  verifyMacBinaryArch(appName, arch);
+  const appZipPath = path.join(artifactDir, `${baseName}-${arch}.zip`);
+  console.log('==> Creating app ZIP (ad-hoc signed)...');
+  if (fs.existsSync(appZipPath)) fs.unlinkSync(appZipPath);
+  exec(`/usr/bin/ditto -c -k --keepParent "${appPath}" "${appZipPath}"`);
+  return { files: [fileEntry('installer', appZipPath)], signing: { mode: 'adhoc' } };
+}
+
+/**
+ * --stage build:打包机不持有签名密钥,只把 forge 产出的 packaged 目录原样打成
+ * `<baseName>-<arch>-unsigned.zip`,签名、公证、DMG 与热更 ZIP 交给签名机的
+ * sign-desktop.mjs。webAuthnAppleTeamId 是构建时烘焙进包的公开 Team ID,签名机据此核对身份。
+ */
+async function finishDarwinBuildStage({ artifactDir, baseName, appName, arch, webAuthnAppleTeamId }) {
+  const packagedDir = path.join(DESKTOP_ROOT, 'out', `${appName}-darwin-${arch}`);
+  verifyMacBinaryArch(appName, arch);
+  const payloadPath = path.join(artifactDir, `${baseName}-${arch}-unsigned.zip`);
+  console.log('==> Archiving unsigned app for the signing machine...');
+  exec(`/usr/bin/ditto -c -k "${packagedDir}" "${payloadPath}"`);
+  return {
+    files: [fileEntry('unsigned-app', payloadPath)],
+    signing: { mode: 'pending', webAuthnAppleTeamId: webAuthnAppleTeamId ?? null },
+  };
 }
 
 async function finishLinux({ artifactDir, baseName, arch }) {
@@ -508,13 +487,15 @@ async function main() {
     process.exit(1);
   }
   const { platform, archs, region, versionSpec, skipSmoke, allowUnsigned, noSign } = args;
+  // --stage build:本机不持有签名密钥,不读签名配置、不签名,产物交给签名机的 sign-desktop.mjs。
+  const buildStage = args.stage === 'build';
   // ensureBinary 的 CDN fallback 按此 region 选择清单基址；必须早于二进制准备。
   process.env.CINDY_AUTH_REGION = region;
   // mac 签名身份按区域从 release-regions.json 注入(文件缺失时静默跳过,
   // 届时签名要求身份齐备,由 resolveAppleIdentity fail closed)。只在 darwin
   // 且未显式跳签时加载:appPasswordEnv 声明即承诺(指向空 env 会抛错),
   // 不该拦住 win/linux 或 --no-sign 的打包。
-  if (platform === 'darwin' && !noSign) applyMacSigningConfigToEnv(region);
+  if (platform === 'darwin' && !noSign && !buildStage) applyMacSigningConfigToEnv(region);
 
   if (platform !== process.platform) {
     console.error(`ERROR: 不支持交叉打包(当前 ${process.platform},目标 ${platform});请在目标平台机器上执行。`);
@@ -526,7 +507,7 @@ async function main() {
     fetchCdnBaselineVersion(platform === 'darwin' ? 'darwin-arm64' : `${platform}-${archs[0]}`, region),
   );
   const applePassword =
-    platform === 'darwin' && !versionless && !noSign ? process.env.APPLE_APP_PASSWORD : undefined;
+    platform === 'darwin' && !versionless && !noSign && !buildStage ? process.env.APPLE_APP_PASSWORD : undefined;
   const macSigningIdentity = applePassword
     ? { ...resolveAppleIdentity(), applePassword }
     : undefined;
@@ -549,6 +530,11 @@ async function main() {
       'WARN: macOS Touch ID WebAuthn is disabled: set CINDY_MAC_WEBAUTHN_PROVISIONING_PROFILE to a Developer ID provisioning profile that authorizes keychain-access-groups.',
     );
   }
+  // Team ID 构建时烘焙进包(公开信息,不是密钥)。分机构建时由打包机显式给 APPLE_TEAM_ID,
+  // 记进 build-info,签名机核对与签名身份一致并要求描述文件;不给则签出的包不开 Touch ID。
+  const webAuthnAppleTeamId = buildStage
+    ? process.env.APPLE_TEAM_ID?.trim() || undefined
+    : webAuthnProvisioningProfile ? macSigningIdentity?.teamId : undefined;
 
   console.log('='.repeat(60));
   console.log(`==> Package Cindy desktop`);
@@ -574,7 +560,7 @@ async function main() {
       : JSON.parse(fs.readFileSync(path.resolve(vendorsMode), 'utf8')).vendors?.components;
     if (!target) throw new Error(`--vendors ${vendorsMode}: build-info.json 里没有 vendors.components`);
     console.log(`==> Agent runtimes: ${typeof target === 'string' ? target : `versions from ${vendorsMode}`} + smoke/integration gate`);
-    if (!versionless) console.log('WARN: 这会在本机运行刚下载的上游二进制;本机若持有签名密钥,请改用缺省的 --vendors pinned。');
+    if (!versionless && !buildStage) console.log('WARN: 这会在本机运行刚下载的上游二进制;本机若持有签名密钥,请改用缺省的 --vendors pinned。');
     const { changes, steps, dirtyBefore, components, rejected } = await updateVendors({ target });
     vendors = { mode: typeof target === 'string' ? target : 'from-build-info', changes, gate: steps, components, rejected };
     vendorsDirtyBefore = dirtyBefore;
@@ -644,7 +630,7 @@ async function main() {
       version,
       versionless,
       noSign,
-      webAuthnAppleTeamId: webAuthnProvisioningProfile ? macSigningIdentity?.teamId : undefined,
+      webAuthnAppleTeamId,
     });
 
     verifyPackagedSourceMetadata({
@@ -684,7 +670,7 @@ async function main() {
     // 而 build-info.json 未写的半成品目录看起来像可发布结果,不能留。
     let files, signing, buildInfoPath;
     try {
-      ({ files, signing } = await finishers[platform]({
+      ({ files, signing } = await (buildStage ? finishDarwinBuildStage : finishers[platform])({
         artifactDir,
         baseName,
         appName,
@@ -695,6 +681,7 @@ async function main() {
         noSign,
         macSigningIdentity,
         webAuthnProvisioningProfile,
+        webAuthnAppleTeamId,
       }));
 
       const buildInfo = buildBuildInfo({

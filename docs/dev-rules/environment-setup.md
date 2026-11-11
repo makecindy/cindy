@@ -172,7 +172,17 @@ rebase、fetch（包括 Cindy 自己的快照提交与 worktree 池 fetch）都�
   只按 pin 重新下载本平台要带的资产、核对 SHA-256 与大小（只在内存里算哈希，不落盘），并确认 `node_modules`
   里的 SDK 是 pin 的版本。实际带上的版本与各平台 URL／SHA-256 写入 `build-info.json` 的 `vendors`，发布侧据此
   把同一组版本推到 CDN。`--vendors latest` 与 `--vendors <build-info.json>` 会在本机运行上游二进制做测试门，
-  只用于不持有签名密钥的机器。构建与签名分机是后续工作。
+  只用于不持有签名密钥的机器。
+- 构建与签名可以分机。macOS：不持有密钥的打包机跑 `package-desktop.mjs --version … --region … --stage build`，
+  产出 `<基名>-<arch>-unsigned.zip` 与 `signing.mode = pending` 的 `build-info.json`；
+  要开 Touch ID 时在打包机设置公开的 `APPLE_TEAM_ID`，它会被烘焙进包并记进 build-info。把整个产物目录拷到签名机，
+  跑 `pnpm --dir apps/desktop release:sign --build-info <该文件>`：先按 build-info 核对未签名包的 SHA-256 与大小，再做
+  Developer ID 签名、公证、DMG 与热更 ZIP，最后改写同一个 build-info（只换 `files` 与 `signing`，vendors 等构建事实
+  不变）。签名机不跑 forge、pnpm install 或任何 Agent 运行时代码，不需要 `node_modules`；Team ID 与签名身份不一致或
+  缺描述文件时拒签，失败时保留未签名包与 pending build-info 以便重跑。分机只让签名密钥离开打包机，**不证明包的内容**：
+  签名机核对的哈希也来自打包机，只能发现传输损坏，被攻陷的打包机交来的包照样会被签名公证。所以发版打包仍用缺省的
+  `--vendors pinned`（打包机不执行上游代码），打包机本身要按发版环境管理。Windows 不需要这一步：NSIS 卸载器在 make
+  中途生成并嵌进安装器，签名本就走可插拔的 `CINDY_WIN_SIGN_CMD`，打包机不持有密钥时把它指向远程签名服务。Linux 包不签名。
   贡献者和 Agent 不在普通改动里改这些 pin。`pnpm vendors:status` 只读列出差距，`pnpm update:vendors`
   手动走每日流程（`--open-pr` 同样开 PR，`--min-age-hours=0` 不等 24 小时），`pnpm vendors:gate` 只对当前 pin 跑测试。
 - 依赖和命令的事实源是当前 checkout 的 `package.json` 与脚本。文档和脚本冲突时，

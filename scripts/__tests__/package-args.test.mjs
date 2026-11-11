@@ -20,6 +20,7 @@ import {
   pageManualBuildInfo,
   parsePackageArgs,
   packageNodeOptions,
+  signedBuildInfo,
 } from '../../apps/desktop/scripts/ci/package-lib.mjs';
 
 test('package Node options add headroom and preserve explicit limits and unrelated options', () => {
@@ -159,6 +160,49 @@ test('有版本打包缺省用已评审的 pin,并写进 build-info', () => {
   const vendors = { mode: 'latest', changes: [], gate: [], components: { claude: { version: '2.1.321' } } };
   assert.deepEqual(buildBuildInfo({ ...base, vendors }).vendors, vendors);
   assert.equal(buildBuildInfo(base).vendors, null);
+});
+
+// 构建与签名分机:打包机(运行上游代码、不持有密钥)只产出 pending 的 build-info,签名机改写它。
+// 防的错:签名机把已签名或非分机产物再签一遍、Team ID 对不上时签出 Touch ID 失效的包、
+// 改写时丢掉 vendors 等构建事实(发布侧据此推 CDN)、非 macOS 或版本无关包误用 --stage build、
+// 被入侵的打包机借 build-info 字段在签名机上注入命令或跳出产物目录。
+test('--stage build 只用于 macOS 有版本打包,签名机按 pending build-info 改写', () => {
+  const mac = { platform: 'darwin', arch: 'arm64' };
+  const versioned = ['--version', '1.2.3', '--region', 'global'];
+  assert.equal(parsePackageArgs([...versioned, '--stage', 'build'], mac).stage, 'build');
+  assert.equal(parsePackageArgs(versioned, mac).stage, null);
+  assert.throws(() => parsePackageArgs([...versioned, '--stage', 'sign'], mac), /只支持 build/);
+  assert.throws(() => parsePackageArgs(['--stage', 'build'], mac), /有版本打包/);
+  assert.throws(() => parsePackageArgs([...versioned, '--stage', 'build', '--no-sign'], mac), /--no-sign/);
+  assert.throws(() => parsePackageArgs([...versioned, '--stage', 'build'], { platform: 'win32', arch: 'x64' }), /CINDY_WIN_SIGN_CMD/);
+
+  const unsigned = { role: 'unsigned-app', name: 'cindy-1.2.3-arm64-unsigned.zip', sha256: 'a'.repeat(64), size: 1 };
+  const vendors = { mode: 'latest', components: { claude: { version: '2.1.321' } } };
+  const pending = buildBuildInfo({ version: '1.2.3', versionless: false, region: 'global', platform: 'darwin', arch: 'arm64', files: [unsigned], signing: { mode: 'pending', webAuthnAppleTeamId: 'ABCDE12345' }, vendors });
+  const files = [{ role: 'installer', name: 'cindy-1.2.3-arm64.dmg', sha256: 'b'.repeat(64), size: 2 }];
+  const signed = signedBuildInfo(pending, { files, teamId: 'ABCDE12345' });
+  assert.deepEqual(signed.files, files);
+  assert.equal(signed.signing.mode, 'developer-id+notarized');
+  assert.deepEqual(signed.signing.signedFrom, unsigned);
+  assert.deepEqual(signed.vendors, vendors);
+  assert.equal(signed.version, '1.2.3');
+  const injected = signedBuildInfo({ ...pending, scripts: { 'release:sign': 'id' } }, { files, teamId: 'ABCDE12345' });
+  assert.equal('scripts' in injected, false);
+  assert.deepEqual(Object.keys(injected).sort(), Object.keys(signed).sort());
+  assert.throws(() => signedBuildInfo(pending, { files, teamId: 'ZZZZZ99999' }), /Team ID/);
+  assert.throws(() => signedBuildInfo(signed, { files, teamId: 'ABCDE12345' }), /pending/);
+  // 打包机运行上游代码、可能被入侵:进签名机路径与 shell 命令的字段必须是固定格式。
+  for (const bad of [
+    { arch: 'arm64$(touch /tmp/pwned)' },
+    { version: '1.2.3"; id; "' },
+    { region: '../global' },
+    { files: [{ ...unsigned, name: '../../cindy-1.2.3-arm64-unsigned.zip' }] },
+    { signing: { mode: 'pending', webAuthnAppleTeamId: 'X$(id)' } },
+  ]) {
+    assert.throws(() => signedBuildInfo({ ...pending, ...bad }, { files, teamId: 'ABCDE12345' }), /非法|只记录一个未签名包/, JSON.stringify(bad));
+  }
+  const noTeam = { ...pending, signing: { mode: 'pending', webAuthnAppleTeamId: null } };
+  assert.equal(signedBuildInfo(noTeam, { files, teamId: 'ZZZZZ99999' }).signing.mode, 'developer-id+notarized');
 });
 
 test('parsePackageArgs: linux 显式 --arch 指向宿主架构时放行', () => {
