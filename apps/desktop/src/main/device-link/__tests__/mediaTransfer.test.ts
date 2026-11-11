@@ -22,6 +22,18 @@ const netFetchMock = vi.hoisted(() => vi.fn());
 const undiciFetchMock = vi.hoisted(() => vi.fn());
 vi.mock('electron', () => ({ net: { fetch: netFetchMock } }));
 vi.mock('../agentNetDeviceDirectory.js', () => ({ readCurrentDeviceDirectory: vi.fn() }));
+// The API assembly imports these modules statically. Media requests never read
+// device-management secrets or enumerate devices; fail if that boundary changes.
+vi.mock('../agentNetRuntime.js', () => ({
+  agentNetClientForRelay: () => { throw new Error('unexpected device-management runtime'); },
+}));
+vi.mock('../../appSessionState.js', () => ({
+  activeOwnerScopeKey: () => { throw new Error('unexpected device-management owner read'); },
+  isAppSessionBoundaryPending: () => { throw new Error('unexpected device-management boundary read'); },
+}));
+vi.mock('../selfHostedRelayConfig.js', () => ({
+  readRelaySecrets: () => { throw new Error('unexpected device-management secret read'); },
+}));
 vi.stubGlobal('fetch', undiciFetchMock);
 
 const apiFetch = vi.hoisted(() => vi.fn());

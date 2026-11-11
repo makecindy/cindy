@@ -6,6 +6,8 @@ import path from 'node:path';
 import test from 'node:test';
 import { fileURLToPath } from 'node:url';
 import { createMediaTransfer, AttachmentIntegrityError } from '../../desktop/src/main/device-link/mediaTransfer.js';
+import { createDeviceLinkApi } from '../../desktop/src/main/device-link/deviceLinkApi.js';
+import { createServerApiClient } from '../../desktop/src/main/serverApiClient.js';
 
 const srcDir = path.dirname(fileURLToPath(import.meta.url));
 
@@ -56,4 +58,45 @@ test('Node media transfer publishes only integrity-checked attachment bytes', as
     (error) => error instanceof AttachmentIntegrityError && error.reason === 'sha256');
   assert.deepEqual(fs.readFileSync(target), bytes);
   assert.deepEqual(fs.readdirSync(dir), ['attachment.txt']);
+});
+
+// Unit, self-hosted-relay-plan §5.2/§8 and architecture-invariants §5: the Node
+// assembly must preserve credential routing and reject a changed route after
+// preparation. Existing Desktop tests mock Electron and cannot load this boundary.
+test('Node device API isolates relay credentials and rechecks prepared routes', async () => {
+  const requests = [];
+  let accountReads = 0;
+  let status = 401;
+  let relay = { relayId: 'fixture', baseUrl: 'https://relay.invalid', deviceId: 'fixture-device',
+    credential: 'test-relay-credential', scopeKey: 'fixture-owner', ownerPublicKey: 'fixture-key' };
+  const serverApiFetch = createServerApiClient({
+    fetch: async (url, init) => {
+      requests.push({ url, authorization: init.headers.Authorization });
+      return new Response(JSON.stringify(status === 401 ? { error: 'UNAUTHORIZED' } : { ok: true }), { status });
+    },
+    auth: {
+      getAccessToken: () => { accountReads++; return 'test-account-token'; },
+      refresh: async () => { throw new Error('relay must not refresh the account'); },
+      invalidateSession: async () => { throw new Error('relay must not sign out the account'); },
+    },
+    locale: () => 'en',
+    log: { debug() {}, warn() {}, error() {} },
+  });
+  const api = createDeviceLinkApi({
+    getClientEndpoint: () => 'https://official.invalid', serverApiFetch,
+    activeSelfHostedRelay: () => relay,
+    readCurrentDeviceDirectory: async () => { throw new Error('unexpected directory request'); },
+    legacyDeviceView: () => { throw new Error('unexpected directory projection'); },
+    prepareAgentNetRuntime: async () => { throw new Error('unexpected encrypted mutation'); },
+    prepareOwnerScope: async () => { throw new Error('unexpected encrypted mutation'); },
+    prepareRelayConfig: async () => { relay = null; return { readRelaySecrets: () => null }; },
+  });
+  await assert.rejects(api.deviceLinkApiFetch('/api/device-link/media/presign-get'), { statusCode: 401 });
+  assert.deepEqual(requests, [{ url: 'https://relay.invalid/api/device-link/media/presign-get', authorization: 'CindyRelay test-relay-credential' }]);
+  assert.equal(accountReads, 0);
+  status = 200;
+  assert.deepEqual(await api.officialDeviceLinkApiFetch('/api/device-link/media/presign-get'), { ok: true });
+  assert.deepEqual(requests[1], { url: 'https://official.invalid/api/device-link/media/presign-get', authorization: 'Bearer test-account-token' });
+  await assert.rejects(api.deviceLinkApiFetch('/api/device-link/devices/peer', { method: 'DELETE' }), /DEVICE_LINK_SCOPE_CHANGED/);
+  assert.equal(requests.length, 2);
 });

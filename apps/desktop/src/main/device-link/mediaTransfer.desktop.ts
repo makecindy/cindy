@@ -1,6 +1,6 @@
 import { net } from 'electron';
 import { requireAppCapability } from '../appCapabilities.js';
-import { deviceLinkApiFetch, officialDeviceLinkApiFetch } from './deviceLinkApi.js';
+import { deviceLinkApiFetch, officialDeviceLinkApiFetch } from './deviceLinkApi.desktop.js';
 import { createMediaTransfer } from './mediaTransfer.js';
 
 export { mimeOf, MAX_MEDIA_BYTES, AttachmentIntegrityError } from './mediaTransfer.js';

@@ -78,8 +78,8 @@ export interface MediaTransferPorts {
   fetch: FetchLike;
   /** Primary upload transport, including replayable streaming PUT bodies. */
   uploadFetch: FetchLike;
-  deviceLinkApiFetch: typeof import('./deviceLinkApi.js').deviceLinkApiFetch;
-  officialDeviceLinkApiFetch: typeof import('./deviceLinkApi.js').officialDeviceLinkApiFetch;
+  deviceLinkApiFetch: ReturnType<typeof import('./deviceLinkApi.js').createDeviceLinkApi>['deviceLinkApiFetch'];
+  officialDeviceLinkApiFetch: ReturnType<typeof import('./deviceLinkApi.js').createDeviceLinkApi>['officialDeviceLinkApiFetch'];
   requireAppCapability: typeof import('../appCapabilities.js').requireAppCapability;
 }
 

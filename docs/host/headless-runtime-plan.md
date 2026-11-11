@@ -1003,8 +1003,9 @@ Orca Worker 在 `3eb486ea64` 补跑五个隔离场景：导入前/后换号、�
 就视为远程收件可用；账号绑定和 Device Link API 的中转选择仍是接线前置。
 
 静态核对：17 个原有函数体除网络端口读取外相同；调用方和原有测试只修改导入路径，
-测试断言未改。主进程共有 5,709 个模块的相对顺序完全一致，只新增桌面装配；唯一直接
-在模块顶层读取新导出的归一化器装配不在传输装配的依赖闭包里，没有形成初始化循环。
+测试断言未改。主进程共有 5,709 个模块的相对顺序完全一致，只新增桌面装配；所有使用方
+都在函数调用时读取新导出，包括归一化器的箭头函数包装，没有模块顶层取值。此前自查
+把对象属性名误计为读取，Orca Worker 的独立 AST 复核纠正了这一点；没有形成初始化循环。
 共用传输静态闭包 104 个模块，Electron、桌面装配及相应动态引用为 0。
 日志 `/tmp/cindy-media-transfer-{body-audit,initialization-audit,order-diff,core-closure}.log`。
 
@@ -1023,3 +1024,39 @@ Orca Worker 在 `3eb486ea64` 补跑五个隔离场景：导入前/后换号、�
 
 没有重启正式应用，也未做真实桌面附件、手机上传、真实账号/模型、打包版或 Windows 实测；
 静态加载与隔离互通结果不能替代这些验收。本检查点仍仅本地准备，未推送或开 PR。
+
+### 设备互联 API 的共用准备（2026-11-11，Host 尚未接线）
+
+`deviceLinkApi.ts` 保留选路主体，`createDeviceLinkApi` 接收官方端点、账号请求、当前中转、
+设备目录和加密网络依赖；桌面唯一实例在 `deviceLinkApi.desktop.ts` 接回原服务。官方请求
+仍在每次请求/刷新时读官方端点，自建中转使用独立 `CindyRelay` 凭证且禁止账号刷新/登出，
+只走加密网络的设备操作保持身份检查和路由代次检查。没有增加 API、改变 wire 字段或
+把共享任务媒体送到自建中转，自建服务端无需同步实现变更。
+
+原来的三类动态模块读取变为可等待的准备端口。桌面通过静态 namespace import 提供已经
+被设备目录加载的模块，不新增运行时模块加载；所有原来的 await 边界及其后的账号/路由
+检查保留。静态顺序模拟中 5,710 个共有模块相对顺序完全一致，只增加 API 装配。五个原有
+函数体除了端口读取没有其他差异，使用方无顶层取值；这不是对运行时微任务时序逐拍相同的
+证明。日志 `/tmp/cindy-device-api-{body-audit,order-before,order-after,order-diff}.log`。
+
+Host 边界测试新增一个 unit 场景，实际在 Node 加载 API 工厂并调用共享账号请求客户端，
+验证自建中转返回 401 时请求只含中转凭证、账号 token 不被读取且不刷新/登出；同一实例的
+显式官方请求仍发往官方地址并携带账号 token；设备操作准备期间改变路由后零发送。
+依据为自建中转规则 §5.2/§8 与架构约定 §5，已有 Desktop 用例模拟 Electron，不能发现
+Node 加载边界与装配问题；最小失败输入为自建路由上的 401，以及异步准备期间的路由变化。
+Node 静态闭包仅两个模块，无 Electron、桌面装配或动态模块加载。
+
+桌面媒体测试首次因原有目录 mock 屏蔽了传递依赖而无法加载新显式 import；已为三组
+设备管理依赖补上“被调用即失败”的隔离替身，路由、传输和权限断言未改。修正后 API/媒体/
+远程目录 3 文件 103 项通过（1.46 秒），Host 227 项通过（4.81 秒），两端类型检查通过。
+日志 `/tmp/cindy-device-api-desktop-tests{,2}.log`、`/tmp/cindy-device-api-host-tests.log`、
+`/tmp/cindy-device-api-{desktop,host}-types.log`。共享客户端 1,254 项、自建中转 50 项及真实
+中转互通重跑通过，日志 `/tmp/cindy-device-api-{client-tests,relay-tests,relay-interop}.log`。
+文件 Peer、镜像 IPC 边界和远程桌面边界另 3 文件 173 项通过（20.51 秒），日志
+`/tmp/cindy-device-api-additional-callers.log`；文档合同和测试卫生通过，日志
+`/tmp/cindy-device-api-{docs,hygiene}.log`。没有新增真实等待或扩大测试超时。
+
+Host 生产接线继续保留：不能只给 REST 换地址却让 WebSocket 仍带账号 token；加密网络与
+设备目录还需要 Node 装配。另核实 `disableShareAvailability` 在桌面是官方跨账号服务，
+不能直接改为跟随自建中转，后续应复用显式官方服务入口。未验证项仍同上一检查点；没有
+开放 Host 远程附件、没有改正式应用或 profile，本检查点未推送或开 PR。
