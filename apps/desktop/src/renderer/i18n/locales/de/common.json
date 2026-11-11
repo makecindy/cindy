@@ -3628,6 +3628,36 @@
           "invalid": "Vorschau nicht verfügbar; Konfiguration prüfen oder Datei erneut auswählen",
           "skipped": "Übersprungen; Datei erneut auswählen, um diesen Eintrag zu importieren",
           "authorizationPending": "Verbindung hinzugefügt; schließe die Autorisierung in den Anbietereinstellungen ab"
+        },
+        "local": {
+          "title": "Aus lokalen Apps importieren",
+          "note": "Gespeicherte API-Konfigurationen auf diesem Computer lesen, ohne die Quell-Apps zu ändern. Claude Code: nur die settings.json des Benutzers, auch unter CLAUDE_CONFIG_DIR. Shell-Variablen sowie Projekt- und verwaltete Einstellungen werden nicht gelesen.",
+          "review": "Prüfen und importieren ({{count}})",
+          "scanning": "Gespeicherte Konfigurationen werden gelesen…",
+          "empty": "Keine gespeicherten API-Konfigurationen gefunden.",
+          "failed": "Lesen nicht abgeschlossen. Bitte erneut versuchen.",
+          "edit": "Bearbeiten",
+          "editFailed": "URL, Protokoll und Schlüssel prüfen und erneut versuchen.",
+          "editNote": "Ein leeres Schlüsselfeld behält die gelesenen Zugangsdaten bei. Eine geänderte URL oder ein anderes Protokoll erfordert einen neuen Schlüssel.",
+          "name": "Anzeigename",
+          "baseUrl": "Basis-URL",
+          "protocol": "API-Protokoll",
+          "chooseProtocol": "Protokoll auswählen",
+          "apiKey": "API-Schlüssel",
+          "keepKey": "Leer lassen, um den gelesenen Schlüssel zu behalten",
+          "missingUrl": "URL erforderlich",
+          "status": {
+            "missing": "Keine Konfiguration gefunden",
+            "readFailed": "Lesen nicht möglich; Berechtigungen prüfen oder erneut versuchen",
+            "invalid": "Unbekanntes Format; Konfiguration prüfen oder bearbeiten",
+            "limit": "Leselimit erreicht; diese Quelle wurde nicht vollständig gelesen",
+            "unsupported": "Diese Konfiguration kann nicht automatisch importiert werden. Befehle und apiKeyHelper werden nicht ausgeführt; fügen Sie die API-Konfiguration manuell hinzu.",
+            "needsInput": "Konfiguration muss ergänzt werden",
+            "changed": "Quelle geändert; erneut suchen",
+            "duplicate": "Eine identische Verbindung ist bereits vorhanden"
+          },
+          "rescan": "Erneut suchen",
+          "sourceDisabled": "In der Quell-App deaktiviert"
         }
       },
       "order": {

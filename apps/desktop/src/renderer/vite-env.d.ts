@@ -5990,6 +5990,8 @@ interface ElectronAPI {
       options?: { releaseOwner?: boolean; ownerId?: string },
     ) => Promise<{ ok: true }>;
     importProviderFile: () => Promise<string | string[] | null>;
+    scanLocalProviderImports: () => Promise<import('../shared/localProviderImport').LocalProviderImportScan>;
+    editLocalProviderImport: (id: string, input: import('../shared/localProviderImport').LocalProviderImportEdit) => Promise<import('../shared/localProviderImport').LocalProviderImportItem>;
     previewProviderImport: (
       importId: string,
       targetProviderId?: string,
