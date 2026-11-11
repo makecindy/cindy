@@ -37,6 +37,8 @@ const DEFAULT_AWAY_MS = 10 * 60_000;
 const DISPLAY_SLEEP_REFRESH_MS = 60_000;
 
 export interface AwayGuardServiceDeps {
+  /** Publish cover IDs to the shared remote-capture exclusion filter. */
+  excludedWindows(ids: number[]): void;
   enabled(): boolean;
   /** Chosen absence before the cover; null follows the system display-sleep time. */
   delaySeconds(): AwayGuardDelaySeconds | null;
@@ -165,8 +167,8 @@ export function startAwayGuard(deps: AwayGuardServiceDeps): void {
   powerMonitor.on('lock-screen', releaseHeld);
 
   const masks = new PrivacyScreen(
-    // Nothing streams these masks; Agent screenshots read the windows behind them.
-    () => {},
+    // Persistent covers must also be excluded when a viewer reconnects.
+    deps.excludedWindows,
     // The helper or a mask ended on its own: never leave the desktop without a lock.
     async () => {
       const locked = helperLocked || (await lockNow());

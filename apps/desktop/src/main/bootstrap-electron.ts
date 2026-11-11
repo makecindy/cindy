@@ -651,7 +651,7 @@ import {
 } from './remote-desktop/linuxClipboardNative';
 import { initHeartbeatService } from './heartbeatService';
 import { markStartupMilestone } from './startupTimeline';
-import { isLinuxAwayCoverUp, registerRemoteDesktopIpc } from './remote-desktop';
+import { isLinuxAwayCoverUp, registerRemoteDesktopIpc, setAwayCaptureExcludedWindows } from './remote-desktop';
 import { isAwayCoverUp, registerAwayGuardIpc, startAwayGuard } from './remote-desktop/awayGuardService';
 import {
   isDesktopScreenLocked,
@@ -5019,6 +5019,7 @@ const registerIpcHandlers = () => {
   // 本机有人按键/点击即转系统真锁屏。共享 userData 的被动实例不接管本机屏幕。
   if (!authManager.isPassiveSharedUserDataInstance()) {
     startAwayGuard({
+      excludedWindows: setAwayCaptureExcludedWindows,
       enabled: () => readWindowBehaviorSettings().awayGuard,
       delaySeconds: () => readWindowBehaviorSettings().awayGuardDelaySeconds,
       screenLocked: isDesktopScreenLocked,

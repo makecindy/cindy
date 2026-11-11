@@ -183,8 +183,13 @@ const portalWayland = () => wayland() && !nativeWayland();
 // Privacy masks and the controlled-desktop overlay share one capture filter.
 let privacyExcluded: number[] = [];
 let overlayExcluded: number[] = [];
+let awayExcluded: number[] = [];
 const applyExcludedWindows = () =>
-  nativeCapture.setExcludedWindows([...privacyExcluded, ...overlayExcluded]);
+  nativeCapture.setExcludedWindows([...privacyExcluded, ...overlayExcluded, ...awayExcluded]);
+export function setAwayCaptureExcludedWindows(ids: number[]): void {
+  awayExcluded = ids;
+  applyExcludedWindows();
+}
 // While the phone shows picture-in-picture the input helper is stopped on purpose;
 // the local exit confirmation then has nothing to pause, and cancelling it must not
 // bring remote control back.
