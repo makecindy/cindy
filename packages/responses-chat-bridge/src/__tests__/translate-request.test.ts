@@ -866,6 +866,22 @@ describe('translateResponsesRequest', () => {
     expect(out.tool_choice).toEqual({ type: 'function', function: { name: 'clock__exec' } });
   });
 
+  it('does not let a functions selector borrow another namespace child (#9715)', () => {
+    const out = translateResponsesRequest(base({
+      input: [
+        {
+          type: 'additional_tools',
+          role: 'developer',
+          tools: [{ type: 'namespace', name: 'clock', tools: [{ type: 'function', name: 'read', parameters: { type: 'object' } }] }],
+        },
+        { type: 'message', role: 'user', content: 'hello' },
+      ],
+      tool_choice: { type: 'function', name: 'read', namespace: 'functions' },
+    }));
+
+    expect(out.tool_choice).toEqual({ type: 'function', function: { name: 'read' } });
+  });
+
   it('does not honour a bare selector whose kind contradicts the declaration (#9715)', () => {
     const out = translateResponsesRequest(base({
       input: [

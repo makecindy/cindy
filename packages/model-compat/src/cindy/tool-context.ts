@@ -128,6 +128,8 @@ export class ChatBridgeToolContext {
   private readonly chatNamesByResponseName = new Map<string, string>();
   /** Current-turn bare selector -> Chat name; null means the bare name is ambiguous. */
   private readonly currentSelectors = new Map<string, string | null>();
+  /** Bare declarations only; a reserved `functions` selector may match just these. */
+  private readonly currentBareSelectors = new Map<string, string>();
 
   static fromRequest(request: ResponsesRequest): ChatBridgeToolContext {
     const context = new ChatBridgeToolContext();
@@ -178,17 +180,16 @@ export class ChatBridgeToolContext {
     // The current-turn snapshot owns selector resolution: it knows every declaration this turn
     // made, so a name that only replayed history carries cannot become a forced selector, and a
     // name claimed by both a bare and a namespaced tool resolves to null (ambiguous).
-    const reservedSelector = namespace === BUILTIN_FUNCTIONS_NAMESPACE;
-    const selectorName = reservedSelector || namespace === undefined ? name : namespace + '.' + name;
     const selectorKind = kind === 'custom' ? 'custom' : 'function';
+    // A reserved `functions` selector names an ordinary top-level tool, so it may only match a
+    // declaration made directly, never a same-named child of another namespace.
+    if (namespace === BUILTIN_FUNCTIONS_NAMESPACE) {
+      const bareDecl = this.currentBareSelectors.get(`${selectorKind}\0${name}`);
+      return clampChatToolName(bareDecl === undefined ? name : bareDecl);
+    }
+    const selectorName = namespace === undefined ? name : namespace + '.' + name;
     const recorded = this.currentSelectors.get(`${selectorKind}\0${selectorName}`);
     if (recorded) return recorded;
-    // A reserved-group selector and a bare selector that names no declaration fall through to
-    // the restoration map: those entries are what the catalog actually advertises.
-    if (reservedSelector) {
-      const bare = this.chatNamesByResponseName.get(responseToolIdentity(kind, name));
-      if (bare !== undefined) return bare;
-    }
     const exact = this.chatNamesByResponseName.get(responseToolIdentity(kind, name, namespace));
     if (exact !== undefined) return exact;
     // Chat cannot express function vs custom, so a selector naming a different kind of tool
@@ -348,6 +349,7 @@ export class ChatBridgeToolContext {
       // preferring whichever entry happened to be registered first.
       if (!namespace) {
         this.recordCurrentSelector(kind, name, chatName);
+        this.currentBareSelectors.set(kind + '\0' + name, chatName);
         continue;
       }
       // Codex accepts both the bare child name and the dotted `namespace.name` spelling for a
