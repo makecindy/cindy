@@ -1335,6 +1335,20 @@ describe('native account assignment on the executing computer', () => {
       0, 0,
     ]);
   });
+  // PR #9998 review, unit: a healthy but full account still has quota. The
+  // prior read-only tests never held a reservation and missed the false reset.
+  it('reports remaining quota when the only healthy Claude account is full', async () => {
+    h.usage.mockImplementation(async (...[, dir]: [string, string]) => ({ claudeUsage: {
+      updatedAt: Date.now(), fiveHour: { utilization: dir.endsWith('default') ? 100 : 12,
+        resetsAt: Date.now() / 1000 + 3600 }, sevenDay: null, scoped: [],
+    } }));
+    const busy = await acquireSubscriptionAccount('anthropic', undefined, ['task:busy']);
+    try {
+      expect(busy?.accountId).toBe('second');
+      await expect(acquireSubscriptionAccount('anthropic', undefined, ['task:new'])).rejects.toThrow('SUBSCRIPTION_ACCOUNTS_FULL');
+      expect((await readSubscriptionPoolUsage('anthropic'))?.claudeUsage?.fiveHour?.utilization).toBe(12);
+    } finally { busy?.release(); }
+  });
   // #9833, unit: the actual account pool and group router must agree after an
   // old task cools the member. Existing tests exercised these layers separately.
   it.each(['persisted', 'terminal', 'startup'] as const)('assigns a new same-model task to the healthy account after a %s cooldown', async (failure) => {
@@ -1587,10 +1601,13 @@ describe('native account assignment on the executing computer', () => {
     });
     const chosen = await acquireSubscriptionAccount('openai', 'chatgpt/gpt-6-astra', []);
     expect(chosen?.account.configDir).toBe('openai/second');
-    chosen?.release();
-    const quota = (await readSubscriptionPoolUsage('openai'))?.codexUsage?.appServerBuckets;
-    expect(quota?.codex.primary?.usedPercent).toBe(15);
-    expect(quota?.special.primary?.usedPercent).toBe(5);
+    try {
+      // Full is an admission result, not a model-bucket quota limit (PR #9998).
+      await expect(acquireSubscriptionAccount('openai', 'chatgpt/gpt-6-astra', ['task:new'])).rejects.toThrow('SUBSCRIPTION_ACCOUNTS_FULL');
+      const quota = (await readSubscriptionPoolUsage('openai'))?.codexUsage?.appServerBuckets;
+      expect(quota?.codex.primary?.usedPercent).toBe(15);
+      expect(quota?.special.primary?.usedPercent).toBe(5);
+    } finally { chosen?.release(); }
   });
   // Regression: settings showed one weekly bar per account. Each account must carry every
   // window of its own snapshot, and sharing must list only accounts that can serve tasks.

@@ -587,7 +587,9 @@ export async function readSubscriptionPoolUsage(
         key: a.id,
         usable: infos[i].auth.authenticated && !usage.limited,
         running: state.running.get(keyOf(provider, a.id))?.size ?? 0,
-        limit: effectiveConcurrencyLimit(a),
+        // Quota reads reserve nothing: busy accounts still have quota. Only
+        // acquireSubscriptionAccount applies the hard concurrency admission.
+        limit: Number.POSITIVE_INFINITY,
         urgency: usage.urgency,
         fiveHourTight: usage.fiveHourTight,
       };
