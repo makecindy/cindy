@@ -114,9 +114,15 @@
       "expo-secure-store",
       "expo-web-browser",
       "./plugins/with-incoming-share-files",
+      "./plugins/with-android-incoming-share",
       [
         "expo-sharing",
         {
+          "android": {
+            "enabled": true,
+            "singleShareMimeTypes": ["*/*"],
+            "multipleShareMimeTypes": ["*/*"]
+          },
           "ios": {
             "enabled": true,
             "activationRule": {

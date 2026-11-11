@@ -1,6 +1,6 @@
 import { beforeEach, expect, it, vi } from 'vitest';
 
-const native = vi.hoisted(() => ({ readSnapshot: vi.fn(), readSnapshotAsync: vi.fn(), clearSnapshot: vi.fn(), discardSnapshot: vi.fn(), rejectUnreadableSnapshot: vi.fn() }));
+const native = vi.hoisted(() => ({ readSnapshot: vi.fn(), readSnapshotAsync: vi.fn(), clearSnapshot: vi.fn(), discardSnapshot: vi.fn(), rejectUnreadableSnapshot: vi.fn(), discardAllSnapshots: undefined as undefined | (() => void), bindAccount: vi.fn(), addListener: vi.fn() }));
 const fs = vi.hoisted(() => {
   const listings = new Map<string, Array<{ uri: string; name: string }> | Error>();
   class Directory {
@@ -20,10 +20,11 @@ const fs = vi.hoisted(() => {
 });
 vi.mock('expo-modules-core', () => ({ requireOptionalNativeModule: () => native }));
 vi.mock('expo-file-system', () => ({ Directory: fs.Directory }));
-import { getSharedPayloads, getSharedPayloadsAsync, getSharedPayloadId, clearSharedPayloads, discardSharedPayloads, rejectUnreadableSharedPayloads } from '@/session/incomingShareNative';
+import { getSharedPayloads, getSharedPayloadsAsync, getSharedPayloadId, clearSharedPayloads, discardSharedPayloads, rejectUnreadableSharedPayloads, bindSharedPayloadAccount, subscribeSharedPayloads } from '@/session/incomingShareNative';
 
 beforeEach(() => {
   vi.resetAllMocks();
+  native.discardAllSnapshots = undefined;
   native.readSnapshot.mockReturnValue(null);
   getSharedPayloads();
   native.readSnapshot.mockReset();
@@ -232,4 +233,47 @@ it('preserves per-share identity while accepting legacy arrays after upgrading',
   expect(getSharedPayloadId(legacy)).toBeUndefined();
   clearSharedPayloads(a);
   expect(native.clearSnapshot).toHaveBeenCalledExactlyOnceWith(first);
+});
+
+// Native Android queue exposes the same exact-snapshot contract as Apple. These
+// unit tests exercise JS handoff; they do not simulate ContentResolver grants.
+it('fences the entire Android queue even when its current snapshot is empty', () => {
+  const discard = vi.fn(); native.discardAllSnapshots = discard;
+  discardSharedPayloads([]);
+  expect(discard).toHaveBeenCalledOnce();
+  bindSharedPayloadAccount('realm/account-a');
+  expect(native.bindAccount).toHaveBeenCalledExactlyOnceWith('realm/account-a');
+});
+
+it('acknowledges a failed copy and reports failure instead of silently returning an empty draft', () => {
+  const error = JSON.stringify({ version: 1, id: 'failed', payloads: [], error: 'INCOMING_SHARE_COPY_FAILED' });
+  native.readSnapshot.mockReturnValue(error);
+  expect(() => getSharedPayloads()).toThrow('INCOMING_SHARE_COPY_FAILED');
+  expect(native.clearSnapshot).toHaveBeenCalledExactlyOnceWith(error);
+});
+
+it('preserves Android originals and exposes native queue change notifications', () => {
+  native.readSnapshot.mockReturnValue(JSON.stringify({ version: 1, id: 'android', payloads: [
+    { type: 'file', value: 'file:///cache/copy/image.png', preserveOriginal: true },
+  ] }));
+  expect(getSharedPayloads()[0]).toMatchObject({ preserveOriginal: true });
+  native.discardAllSnapshots = vi.fn();
+  const listener = vi.fn(); const remove = vi.fn(); native.addListener.mockReturnValue({ remove });
+  subscribeSharedPayloads(listener).remove();
+  expect(native.addListener).toHaveBeenCalledExactlyOnceWith('onChange', listener);
+  expect(remove).toHaveBeenCalledOnce();
+});
+
+it('does not subscribe Apple binaries to an undeclared Android event', () => {
+  subscribeSharedPayloads(vi.fn()).remove();
+  expect(native.addListener).not.toHaveBeenCalled();
+});
+
+it('rejects a partially expired Android batch rather than delivering a subset', () => {
+  fs.listings.set(root, []);
+  native.readSnapshot.mockReturnValue(JSON.stringify({ version: 1, id: 'partial', payloads: [
+    { type: 'file', value: uri, preserveOriginal: true }, { type: 'text', value: 'caption' },
+  ] }));
+  expect(() => getSharedPayloads()).toThrow('INCOMING_SHARE_COPY_FAILED');
+  expect(native.clearSnapshot).toHaveBeenCalledOnce();
 });
