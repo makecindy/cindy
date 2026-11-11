@@ -14206,6 +14206,7 @@
       "sessionSentNamed": "Enviado por la sesión \"{{name}}\"",
       "sessionViewSource": "Ver sesión de origen",
       "botSentNamed": "Enviado por el compañero \"{{name}}\"",
+      "groupThreadSent": "Enviado por \"{{name}}\" en un hilo de \"{{group}}\"",
       "orcaFromLead": "Mensaje de Lead",
       "orcaFromWorker": "Mensaje de Worker",
       "orcaFromWorkerNamed": "Mensaje del Worker \"{{role}}\"",

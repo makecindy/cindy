@@ -14118,6 +14118,7 @@
       "sessionSentNamed": "Sent by session \"{{name}}\"",
       "sessionViewSource": "View source session",
       "botSentNamed": "Sent by teammate \"{{name}}\"",
+      "groupThreadSent": "Sent by \"{{name}}\" in a thread of \"{{group}}\"",
       "orcaFromLead": "Message from Lead",
       "orcaFromWorker": "Message from Worker",
       "orcaFromWorkerNamed": "Message from Worker \"{{role}}\"",

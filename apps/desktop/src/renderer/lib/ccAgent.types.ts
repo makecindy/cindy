@@ -12,6 +12,7 @@ import type { AgentTaskTerminalStatus } from '@cindy/maker-shared/agent-task';
 import type {
   MessageSourceDevice,
   MessageSourceGroup,
+  MessageSourceGroupThread,
   MessageSourcePlugin,
 } from '@cindy/maker-shared/message-source';
 import type { ToolLoopErrorDetails } from '@cindy/maker-core';
@@ -74,6 +75,8 @@ export interface MessageSessionOrigin {
   /** 来源任务属于某个伙伴时：标签显示伙伴名与头像（名字优先取实时资料，其次用快照）。 */
   senderBotId?: string;
   senderBotName?: string;
+  /** 群成员在伙伴任务卡的话题里说的话，由伙伴转进这件任务：标签写出是谁、在哪个群聊。 */
+  groupThread?: MessageSourceGroupThread;
   /**
    * Orca Lead / Worker 互发的消息：发送方角色名（Worker 为其 role）。卡片标题据此写
    * 「来自 Worker「role」的消息」；来源标签仍只在有 senderSessionId 时出现。

@@ -138,6 +138,11 @@ interface Running {
   workspace?: { workDir: string; branch: string | null; ownerSessionId: string | null };
   beforeFiles?: Map<string, string>;
   pauseStarted?: number;
+  /**
+   * The turn runs in a task card's task, not a lane (bot-group-chat.md §10): the task is shared with
+   * its owner's own turns, so only this turn's exact input settles it and it is never stopped from here.
+   */
+  inTask?: boolean;
   /** Other teammates this reply may name with @ (servers with groupTeammateMentions). */
   mentionable?: BotGroupMentionMember[];
   releaseToolAuthority?: () => void;
@@ -2316,13 +2321,62 @@ function createChatServer(local: BotGroupChatService, deps: BotGroupChatServiceD
         code: failure.code === 'RUNTIME_ERROR' && cachedCode ? cachedCode : failure.code }];
     });
   }
+  /**
+   * Stops the turn's own lane. A task card's task is not stopped from the group: the words are
+   * already in it, like any message sent to a task, and its owner may be using it.
+   */
+  function stopRunSession(run: Running): Promise<void> {
+    return run.sessionId && !run.inTask ? deps.abortLane(run.sessionId).catch(() => undefined) : Promise.resolve();
+  }
+  /**
+   * A person's words in the Thread under a live task card go into the card's task, as one message
+   * marked with who said them, when the task is on this computer and the speaker's access already
+   * lets this teammate open tasks for them (bot-group-chat.md §10). It is this execution's turn:
+   * the task's reply reaches the Thread the way a Thread reply does. Anything else keeps the
+   * Thread lane (returns false).
+   */
+  async function runInCardTask(run: Running, s: Snapshot, sourceRead: Promise<Message | undefined> | undefined): Promise<boolean> {
+    const { execution } = run;
+    const bot = localBot(execution.bot_id);
+    if (!bot || !sourceRead || run.context?.kind !== 'message' || execution.plan_id || execution.mask_owner_id
+      || execution.mask_kind === 'digest' || execution.access_mode === 'chat' || !deps.readGroupTaskStatus) return false;
+    // A source that cannot be read fails on the lane path, as before.
+    const source = await sourceRead.catch(() => undefined);
+    if (!source?.threadRootId || source.deleted || source.origin !== 'user' || source.author?.kind !== 'human' || source.maskAttribution) return false;
+    const card = taskCards().read()[source.threadRootId];
+    if (!card || card.roomId !== s.room.id || card.botId !== execution.bot_id
+      || (card.deviceId && selfDeviceId && card.deviceId !== selfDeviceId)) return false;
+    const words = source.content.filter(block => block.type === 'text').map(block => block.text ?? '').join('\n');
+    if (!words.trim() || !await deps.readGroupTaskStatus(card.taskId).catch(() => null)) return false;
+    // The owner's own words speak for the owner exactly as an owner-started group round does.
+    const ownerWords = execution.access_mode === 'owner' && execution.requester_id === selfId && source.authorId === selfId;
+    if (ownerWords) await validateExecutionAuthority(run); else await updateExecution(run, 'heartbeat');
+    if (!current() || running.get(execution.id) !== run) throw new Error('STALE_EXECUTOR');
+    const speaker = s.members.find(m => m.id === source.authorId);
+    run.sessionId = card.taskId; run.inTask = true;
+    const dispatched = await deps.dispatch({ targetSessionId: card.taskId, clientId: run.clientId, message: words, persistedContent: words,
+      autoReviewUserText: ownerWords
+        ? { kind: 'agent-request', request: { sessionId: card.taskId, clientId: run.clientId, plainBody: true, delegatedText: words } }
+        : { kind: 'agent-request' },
+      origin: { kind: 'session', senderSessionId: '', displayText: words, senderBotId: bot.id, senderBotName: bot.displayName,
+        groupThread: { groupId: s.room.id, groupName: s.room.name, speakerId: source.authorId,
+          speakerName: speaker ? memberName(speaker, s.members) : source.author.name } },
+      onAccepted: async () => {
+        if (!current() || running.get(execution.id) !== run) throw new Error('STALE_EXECUTOR');
+        run.accepted = true;
+      } });
+    // The task went away meanwhile: answer in the Thread as before.
+    if (!dispatched.ok) { run.sessionId = ''; run.inTask = undefined; return false; }
+    changed(s.room.id);
+    return true;
+  }
   /** One execution gets one immutable terminal result, regardless of which boundary ends it. */
   async function cancelExecution(run: Running): Promise<void> {
     if (!current() || running.get(run.execution.id) !== run) return;
     if (!run.settlement?.cancelled) {
       run.settlement = { terminal: { sessionId: run.sessionId, activeInputClientId: run.clientId, outcome: 'done', resultText: '' }, cancelled: true, payload: {}, retryAt: 0 };
       run.releaseToolAuthority?.();
-      if (run.sessionId) await deps.abortLane(run.sessionId).catch(() => undefined);
+      await stopRunSession(run);
     }
     // Keep the lane resolvable while the existing cancel receipt is being delivered.
     // A transport failure retries this receipt, never the model or a completion reply.
@@ -2336,7 +2390,7 @@ function createChatServer(local: BotGroupChatService, deps: BotGroupChatServiceD
       run.settlement = { terminal: { ...terminal }, retryAt: 0 };
       run.releaseToolAuthority?.();
       // Retries and late SDK events must not abort the lane again or change its result.
-      if (abort && run.sessionId) await deps.abortLane(run.sessionId).catch(() => undefined);
+      if (abort) await stopRunSession(run);
     }
     await deliverSettlement(run);
   }
@@ -2537,7 +2591,7 @@ function createChatServer(local: BotGroupChatService, deps: BotGroupChatServiceD
           // without publishing that reply or waiting for the server's lease expiry.
           run.settlement = { terminal: pending.terminal, cancelled: true, payload: {}, retryAt: 0 };
           run.releaseToolAuthority?.();
-          if (run.sessionId) await deps.abortLane(run.sessionId).catch(() => undefined);
+          await stopRunSession(run);
           return;
         }
         // Keep the result during transport/temporary service failures. A definitive
@@ -2642,6 +2696,7 @@ function createChatServer(local: BotGroupChatService, deps: BotGroupChatServiceD
       }
       if (!current() || running.get(execution.id) !== run) throw new Error('STALE_EXECUTOR');
       if (ownDirectRoom) { await runDirectExecution(run, bot.id, s.room.id); return; }
+      if (await runInCardTask(run, s, sourceRead)) return;
       // Lane setup and context metadata reads run together; attachment bytes wait for setup
       // to succeed so a failed setup cannot leave downloads running after settlement.
       const laneSetup = (async () => {
@@ -3246,7 +3301,7 @@ function createChatServer(local: BotGroupChatService, deps: BotGroupChatServiceD
       if (!run.settlement && running.get(run.execution.id) === run) {
         run.releaseToolAuthority?.();
         forgetRun(run);
-        if (run.sessionId) await deps.abortLane(run.sessionId).catch(() => undefined);
+        await stopRunSession(run);
         changed(run.execution.conversation_id);
       }
     } finally {
@@ -4002,7 +4057,9 @@ function createChatServer(local: BotGroupChatService, deps: BotGroupChatServiceD
       } finally { changed(room); }
     }),
     settleLaneTurn: async (terminal: BotGroupLaneTerminal) => {
-      const run = [...running.values()].find(r => r.sessionId === terminal.sessionId);
+      // A task card's task also runs its owner's own turns: only this turn's input ends it.
+      const run = [...running.values()].find(r => r.sessionId === terminal.sessionId
+        && (!r.inTask || r.clientId === terminal.activeInputClientId));
       if (!run) return local.settleLaneTurn(terminal);
       if (terminal.activeInputClientId ? terminal.activeInputClientId !== run.clientId : !run.accepted) return false;
       await settleExecution(run, terminal, terminal.undispatched);
@@ -4060,7 +4117,7 @@ function createChatServer(local: BotGroupChatService, deps: BotGroupChatServiceD
       planCancelRetries.clear();
       for (const run of running.values()) {
         run.releaseToolAuthority?.();
-        if (run.sessionId) void deps.abortLane(run.sessionId).catch(() => undefined);
+        void stopRunSession(run);
       }
       for (const pending of planning.values()) pending.controller.abort();
       planning.clear(); planIntents.clear();

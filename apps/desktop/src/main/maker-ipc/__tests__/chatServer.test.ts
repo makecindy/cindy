@@ -96,7 +96,8 @@ import { projectBotGroupExecutionFailures } from '@cindy/maker-shared/botGroupPr
 import { botGroupRuntimeFailureCode, settleClosedBotGroupTurn, settleUndispatchedBotGroupTurn } from '../botGroupRuntimeFailure.js';
 import { authorizeGroupTool, reportGroupTaskCreated } from '../botGroupToolAuthorization.js';
 import { createAutoPermissionReviewer, type AutoPermissionReviewerDeps } from '../../maker-host/auto-permission-reviewer.js';
-import { createAutoReviewIntentProjection } from '@cindy/maker-shared/auto-review-intent';
+import { createAutoReviewIntentProjection, verifiedOwnerRequestText } from '@cindy/maker-shared/auto-review-intent';
+import { buildMessageSourceNote, messageSourceSenderFromMeta } from '@cindy/maker-shared/message-source';
 import { buildBotGroupCapabilityNotice, botGroupQuoteFromMessage, buildBotGroupQuoteCard, buildBotGroupTaskCard, buildBotGroupThreadShareCard } from '../../../shared/botGroupChat.js';
 import type { BotGroupChatService, BotGroupChatServiceDeps } from '../botGroupChatService.js';
 import type { ChatHistoryState } from '@cindy/maker-shared/chat-history';
@@ -1526,6 +1527,57 @@ describe('Chat Server result delivery and refresh', () => {
       content: [expect.objectContaining({ data: expect.objectContaining({ state: 'idle', prUrl: 'https://github.com/makecindy/cindy/pull/42' }) })] }) }]);
     await vi.advanceTimersByTimeAsync(15_000);
     expect(edits).toHaveLength(1);
+  });
+
+  // bot-group-chat.md §10 (2026-11-11 owner decision): words in the Thread under a task card go
+  // into the card's task as one message from that member, and the task's reply is the Thread reply.
+  // Only the owner's own words speak for the owner; chat-only access or a gone task keep the lane.
+  it.each([
+    ['the owner', 'owner', selfId, true],
+    ['a member with tools access', 'tools', '60000000-0000-4000-8000-000000000001', true],
+    ['a chat-only member', 'chat', '60000000-0000-4000-8000-000000000001', true],
+    ['anyone, once the task is gone', 'tools', '60000000-0000-4000-8000-000000000001', false],
+  ] as const)('passes Thread words under a task card from %s into the task', async (_who, mode, speakerId, taskExists) => {
+    const rootId = '70000000-0000-4000-8000-000000000001';
+    const words = 'Please also update the docs';
+    taskCardStore.value = { [rootId]: { roomId, botId, threadRootId: null, taskId: 'task-1', deviceId: null, title: 'Fix login',
+      requesterName: 'Owner', botName: 'Bot (Owner)', state: 'running', revision: 1, createdAt: Date.now() } };
+    deps.readGroupTaskStatus = vi.fn(async () => taskExists ? { title: 'Fix login', state: 'running' as const } : null);
+    const source = { id: execution.source_message_id, seq: '1', authorId: speakerId, author: { kind: 'human', name: 'Speaker' },
+      origin: 'user', deleted: false, threadRootId: rootId, content: [{ type: 'text', text: words }] };
+    const members = [
+      { id: botId, kind: 'bot', name: 'Bot', displayName: 'Bot', nickname: null, state: 'joined', ownerActorId: selfId, ownerName: 'Owner', role: 'member', guestAccess: 'tools', accessRevision: 1, avatar: null },
+      { id: selfId, kind: 'human', name: 'Owner', displayName: 'Owner', nickname: null, state: 'joined', ownerActorId: selfId, ownerName: 'Owner', role: 'owner', guestAccess: 'none', accessRevision: 1, avatar: null },
+      { id: '60000000-0000-4000-8000-000000000001', kind: 'human', name: 'Ann', displayName: 'Ann', nickname: null, state: 'joined', ownerActorId: null, ownerName: null, role: 'member', guestAccess: 'none', accessRevision: 1, avatar: null },
+    ];
+    fixture.handle.mockImplementation(route => {
+      if (route === '/executions/claim') { const next = claimed ? null : { ...execution, requester_id: speakerId, access_mode: mode }; claimed = true; return { body: { execution: next } }; }
+      if (route.endsWith('/snapshot')) return { body: { room: room(roomId), members, messages: [], cursor: '1' } };
+      if (route.endsWith('/members')) return { body: members };
+      if (route.includes('/messages?') && !route.includes('threadRootId')) return { body: [source] };
+      return response(route);
+    });
+    await start();
+    const input = vi.mocked(deps.dispatch).mock.calls[0][0];
+    if (mode === 'chat' || !taskExists) {
+      expect(deps.ensureLane).toHaveBeenCalledWith(expect.objectContaining({ threadRootId: rootId }));
+      expect(input.targetSessionId).toBe('lane');
+      return;
+    }
+    expect(deps.ensureLane).not.toHaveBeenCalled();
+    expect(input).toMatchObject({ targetSessionId: 'task-1', message: words, persistedContent: words,
+      origin: { kind: 'session', senderSessionId: '', senderBotId: 'local-bot',
+        groupThread: { groupId: roomId, groupName: 'Room', speakerId, speakerName: mode === 'owner' ? 'Owner' : 'Ann' } } });
+    expect(verifiedOwnerRequestText(input.autoReviewUserText)).toBe(mode === 'owner' ? words : undefined);
+    // The model's note and the bubble label read the same stamp.
+    expect(buildMessageSourceNote(messageSourceSenderFromMeta({ origin: input.origin })))
+      .toContain(`在群聊「Room」(group_id: ${roomId})的话题里发送`);
+    // The task's owner may be mid-turn: only this turn's own input ends the execution.
+    expect(await service.settleLaneTurn({ ...terminal, sessionId: 'task-1', resultText: 'Owner turn' })).toBe(false);
+    expect(await service.settleLaneTurn({ ...terminal, sessionId: 'task-1', activeInputClientId: input.clientId, resultText: 'Docs updated' })).toBe(true);
+    expect(deliveries()).toHaveLength(1);
+    expect(deliveries()[0][2].content[0]).toEqual({ type: 'text', text: 'Docs updated' });
+    expect(deps.abortLane).not.toHaveBeenCalled();
   });
 
   // #7583, unit: runtime close without an SDK terminal left the leased execution

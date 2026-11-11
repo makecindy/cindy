@@ -16,6 +16,7 @@ import {
   messages,
 } from '../localDb/schema.js';
 import { UI_ACTION_TRIGGER_PREFIX } from '../../shared/interruptedTurn.js';
+import type { AgentInputQueuedMessage } from '../../shared/agentInputQueue.js';
 import { untrustedJsonBlock } from '../../shared/untrustedPrompt.js';
 import {
   buildPlanStepBrief,
@@ -148,8 +149,13 @@ export interface BotGroupChatServiceDeps {
     targetSessionId: string;
     message: string;
     persistedContent: string;
-    /** Exact owner-authored text verified by the live server execution, never the group envelope. */
-    autoReviewUserText?: string;
+    /**
+     * Exact owner-authored text verified by the live server execution, never the group envelope;
+     * a receipt when the words go into a task card's task (owner words carry `delegatedText`).
+     */
+    autoReviewUserText?: AgentInputQueuedMessage['autoReviewUserText'];
+    /** Host-stamped source of words going into a task card's task (the speaker and the group). */
+    origin?: AgentInputQueuedMessage['origin'];
     clientId: string;
     attachments?: BotGroupAttachment[];
     toolsDisabled?: boolean;

@@ -14206,6 +14206,7 @@
       "sessionSentNamed": "Envoyé par la session « {{name}} »",
       "sessionViewSource": "Voir la session source",
       "botSentNamed": "Envoyé par le coéquipier « {{name}} »",
+      "groupThreadSent": "Envoyé par « {{name}} » dans un fil de « {{group}} »",
       "orcaFromLead": "Message du Lead",
       "orcaFromWorker": "Message du Worker",
       "orcaFromWorkerNamed": "Message du Worker « {{role}} »",

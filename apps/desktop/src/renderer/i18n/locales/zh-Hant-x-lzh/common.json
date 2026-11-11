@@ -14052,6 +14052,7 @@
       "sessionSentNamed": "差事「{{name}}」所遣",
       "sessionViewSource": "觀來源差事",
       "botSentNamed": "同僚「{{name}}」所遣",
+      "groupThreadSent": "「{{name}}」於群聊「{{group}}」之話題所遣",
       "orcaFromLead": "Lead 之訊",
       "orcaFromWorker": "Worker 之訊",
       "orcaFromWorkerNamed": "Worker「{{role}}」之訊",

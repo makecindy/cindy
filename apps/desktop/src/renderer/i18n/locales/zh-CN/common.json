@@ -14061,6 +14061,7 @@
       "sessionSentNamed": "由任务「{{name}}」发送",
       "sessionViewSource": "查看来源任务",
       "botSentNamed": "由伙伴「{{name}}」发送",
+      "groupThreadSent": "由「{{name}}」在群聊「{{group}}」的话题里发送",
       "orcaFromLead": "来自 Lead 的消息",
       "orcaFromWorker": "来自 Worker 的消息",
       "orcaFromWorkerNamed": "来自 Worker「{{role}}」的消息",

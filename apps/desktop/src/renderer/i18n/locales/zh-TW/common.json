@@ -14060,6 +14060,7 @@
       "sessionSentNamed": "由任務「{{name}}」傳送",
       "sessionViewSource": "檢視來源任務",
       "botSentNamed": "由夥伴「{{name}}」傳送",
+      "groupThreadSent": "由「{{name}}」在群聊「{{group}}」的話題裡傳送",
       "orcaFromLead": "來自 Lead 的訊息",
       "orcaFromWorker": "來自 Worker 的訊息",
       "orcaFromWorkerNamed": "來自 Worker「{{role}}」的訊息",

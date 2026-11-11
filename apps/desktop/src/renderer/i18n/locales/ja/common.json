@@ -14061,6 +14061,7 @@
       "sessionSentNamed": "セッション「{{name}}」から送信",
       "sessionViewSource": "送信元のセッションを表示",
       "botSentNamed": "仲間「{{name}}」から送信",
+      "groupThreadSent": "「{{name}}」がグループチャット「{{group}}」のスレッドから送信",
       "orcaFromLead": "Lead からのメッセージ",
       "orcaFromWorker": "Worker からのメッセージ",
       "orcaFromWorkerNamed": "Worker「{{role}}」からのメッセージ",

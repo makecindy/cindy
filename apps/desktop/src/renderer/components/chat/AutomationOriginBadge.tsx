@@ -144,6 +144,27 @@ export function AutomationOriginBadge({
 
   if (!hasAutomationOriginBadge(automationOrigin)) return null;
 
+  // A group member's words a teammate passed in from the Thread under this task's card
+  // (bot-group-chat.md §10): who said them and where, as the model's [消息来源] says.
+  const groupThread = automationOrigin.kind === 'session' ? automationOrigin.groupThread : undefined;
+  if (groupThread) {
+    return (
+      <MessageSourceLabelShell
+        kind="group-thread"
+        icon={<MessageSquare size={11} strokeWidth={1.75} aria-hidden className="shrink-0" />}
+        label={t('chat.userMessage.groupThreadSent', {
+          name: groupThread.speakerName ?? groupThread.speakerId,
+          group: groupThread.groupName ?? groupThread.groupId,
+        })}
+        tooltip={joinSourceTooltip([
+          t('chat.userMessage.sourceIds.member', { id: groupThread.speakerId }),
+          ...(automationOrigin.kind === 'session' && automationOrigin.senderBotId
+            ? [t('chat.userMessage.sourceIds.teammate', { id: automationOrigin.senderBotId })] : []),
+        ])}
+      />
+    );
+  }
+
   if (automationOrigin.kind === 'scheduler' && isHookSchedulerOrigin(automationOrigin)) {
     const channel = hookIm ? imLabel(hookIm, t) : hookConnectionNameFromOrigin(automationOrigin);
     return (

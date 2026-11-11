@@ -14061,6 +14061,7 @@
       "sessionSentNamed": "세션 \"{{name}}\"에서 보냄",
       "sessionViewSource": "보낸 세션 보기",
       "botSentNamed": "동료 \"{{name}}\"에서 보냄",
+      "groupThreadSent": "\"{{name}}\" 님이 그룹 채팅 \"{{group}}\"의 스레드에서 보냄",
       "orcaFromLead": "Lead에서 온 메시지",
       "orcaFromWorker": "Worker에서 온 메시지",
       "orcaFromWorkerNamed": "Worker \"{{role}}\"에서 온 메시지",

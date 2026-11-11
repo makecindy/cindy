@@ -14081,6 +14081,7 @@
       "sessionSentNamed": "Von der Sitzung „{{name}}“ gesendet",
       "sessionViewSource": "Ursprüngliche Sitzung anzeigen",
       "botSentNamed": "Von Teammitglied „{{name}}“ gesendet",
+      "groupThreadSent": "Von „{{name}}“ in einem Thread von „{{group}}“ gesendet",
       "orcaFromLead": "Nachricht vom Lead",
       "orcaFromWorker": "Nachricht vom Worker",
       "orcaFromWorkerNamed": "Nachricht vom Worker „{{role}}“",

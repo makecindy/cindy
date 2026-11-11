@@ -13393,6 +13393,8 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
     autoReviewUserText?: AgentInputQueuedMessage['autoReviewUserText'];
     targetSessionId: string;
     dispatcherSessionId?: string;
+    /** Host-stamped source when there is no dispatching task (a group member's words for a task card's task). */
+    origin?: AgentInputQueuedMessage['origin'];
     authorizationGuard?: BotAuthorizationInputGuard;
     toolsDisabled?: boolean;
     retry?: boolean;
@@ -13495,6 +13497,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
           dispatcherSessionId: params.dispatcherSessionId,
           ...(await readSenderIdentity(params.dispatcherSessionId)),
           message: params.message,
+          explicitOrigin: params.origin,
         }),
       });
       // Chat-only dispatch allocates a queue id; keep the server execution identity
@@ -13702,12 +13705,13 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
         return { ok: false as const, errorCode: 'LANE_UNAVAILABLE', message: error instanceof Error ? error.message : String(error) };
       }
     },
-    dispatch: ({ targetSessionId, message, persistedContent, autoReviewUserText, clientId, attachments, toolsDisabled, onQueued, onAccepted }) =>
+    dispatch: ({ targetSessionId, message, persistedContent, autoReviewUserText, origin, clientId, attachments, toolsDisabled, onQueued, onAccepted }) =>
       dispatchBotSessionMessage({
         targetSessionId,
         message,
         persistedContent,
         autoReviewUserText,
+        ...(origin ? { origin } : {}),
         clientId,
         toolsDisabled,
         onQueued,

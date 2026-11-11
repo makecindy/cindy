@@ -47,6 +47,27 @@ export function readMessageSourceGroup(meta: unknown): MessageSourceGroup | unde
   return { groupId, ...(name ? { name } : {}) };
 }
 
+/**
+ * A group member's words a teammate passed into a task from the Thread under that task's card
+ * (`origin.groupThread`, bot-group-chat.md §10): who said them and in which group.
+ */
+export interface MessageSourceGroupThread {
+  groupId: string;
+  groupName?: string;
+  speakerId: string;
+  speakerName?: string;
+}
+
+export function readMessageSourceGroupThread(origin: unknown): MessageSourceGroupThread | undefined {
+  const raw = asRecord(asRecord(origin)?.groupThread);
+  const groupId = raw && readString(raw, 'groupId');
+  const speakerId = raw && readString(raw, 'speakerId');
+  if (!groupId || !speakerId) return undefined;
+  const groupName = sanitizeSourceName(raw?.groupName);
+  const speakerName = sanitizeSourceName(raw?.speakerName);
+  return { groupId, speakerId, ...(groupName ? { groupName } : {}), ...(speakerName ? { speakerName } : {}) };
+}
+
 export type MessageSourceSender =
   | {
       kind: 'session';
@@ -55,6 +76,7 @@ export type MessageSourceSender =
       botId?: string;
       botName?: string;
       group?: MessageSourceGroup;
+      groupThread?: MessageSourceGroupThread;
     }
   | { kind: 'plugin'; pluginId: string; name?: string }
   | { kind: 'shared-member'; memberId: string; name?: string };
@@ -191,9 +213,11 @@ export function messageSourceSenderFromMeta(meta: unknown): MessageSourceSender 
     const botId = readString(origin, 'senderBotId');
     const botName = readString(origin, 'senderBotName');
     const group = readMessageSourceGroup(record);
+    const groupThread = readMessageSourceGroupThread(origin);
     return {
       kind: 'session',
       ...(group ? { group } : {}),
+      ...(groupThread ? { groupThread } : {}),
       ...(sessionId ? { sessionId } : {}),
       ...(title ? { title } : {}),
       ...(botId ? { botId, ...(botName ? { botName } : {}) } : {}),
@@ -244,6 +268,7 @@ export function messageSourceIdEntries(meta: unknown): MessageSourceIdEntry[] {
   if (sender?.kind === 'shared-member') return [{ kind: 'member', id: sender.memberId }];
   if (sender?.kind === 'session') {
     return [
+      ...(sender.groupThread ? [{ kind: 'member' as const, id: sender.groupThread.speakerId }] : []),
       ...(sender.botId ? [{ kind: 'teammate' as const, id: sender.botId }] : []),
       ...(sender.sessionId ? [{ kind: 'session' as const, id: sender.sessionId }] : []),
     ];
@@ -267,6 +292,11 @@ export function messageSourceIdEntries(meta: unknown): MessageSourceIdEntry[] {
 export function describeMessageSourceSender(sender: MessageSourceSender): string {
   switch (sender.kind) {
     case 'session': {
+      if (sender.groupThread) {
+        const thread = sender.groupThread;
+        const via = sender.botId ? `，经伙伴${formatSourceRef(sender.botName, 'bot_id', sender.botId)}转来` : '';
+        return `由${formatSourceRef(thread.speakerName, 'member_id', thread.speakerId)}在群聊${formatSourceRef(thread.groupName, 'group_id', thread.groupId)}的话题里发送${via}`;
+      }
       if (sender.botId) {
         const bot = formatSourceRef(sender.botName, 'bot_id', sender.botId);
         const sessionId = sanitizeSourceId(sender.sessionId);
