@@ -10545,10 +10545,8 @@ app.on('ready', async () => {
   }
   startupWindowCreationAllowed = true;
   // Resolve selected theme defaults and media before preload's first snapshot.
-  await refreshAppearanceTheme().catch(() => createLogger('appearance').warn('Unable to prepare selected theme appearance; saved selection retained'));
-  nativeTheme.on('updated', () => {
-    void refreshAppearanceTheme().catch(() => createLogger('appearance').warn('Unable to refresh theme appearance'));
-  });
+  const themePreparation = refreshAppearanceTheme();
+  if (themePreparation) await themePreparation.catch(() => createLogger('appearance').warn('Unable to prepare selected theme appearance; saved selection retained'));
   createWindow();
   markStartupMilestone('main-window-created');
   // The macOS release watcher stays disarmed until a task drag begins. Start

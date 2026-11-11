@@ -2201,6 +2201,8 @@
         "startFailed": "No se pudo abrir la tarea de creación de temas"
       },
       "themeAriaLabel": "Selección de tema",
+      "themeApplyFailed": "No se pudo aplicar el tema. Se mantiene la apariencia actual.",
+      "themeFontFailed": "No se pudo cargar la fuente del tema. Se usa la fuente predeterminada.",
       "localBadge": "(locales)",
       "localThemes": {
         "title": "Temas locales",

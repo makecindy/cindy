@@ -2201,6 +2201,8 @@
         "startFailed": "Impossible d’ouvrir la tâche de création de thème"
       },
       "themeAriaLabel": "Sélection du thème",
+      "themeApplyFailed": "Impossible d’appliquer ce thème. L’apparence actuelle est conservée.",
+      "themeFontFailed": "Impossible de charger la police du thème. La police par défaut est utilisée.",
       "localBadge": "(Local)",
       "localThemes": {
         "title": "Thèmes locaux",

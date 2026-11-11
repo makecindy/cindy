@@ -2163,6 +2163,8 @@
         "startFailed": "Could not open the theme creation task"
       },
       "themeAriaLabel": "Theme selection",
+      "themeApplyFailed": "Couldn’t apply this theme. Your current appearance is unchanged.",
+      "themeFontFailed": "Couldn’t load the theme font. Using the default font.",
       "localBadge": "(Local)",
       "localThemes": {
         "title": "Local themes",

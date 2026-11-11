@@ -2133,6 +2133,8 @@
         "startFailed": "테마 제작 작업을 열지 못했습니다"
       },
       "themeAriaLabel": "테마 선택",
+      "themeApplyFailed": "테마를 적용하지 못했습니다. 현재 모양은 유지됩니다.",
+      "themeFontFailed": "테마 글꼴을 불러오지 못했습니다. 기본 글꼴을 사용합니다.",
       "localBadge": "(로컬)",
       "localThemes": {
         "title": "로컬 테마",

@@ -2133,6 +2133,8 @@
         "startFailed": "テーマ作成タスクを開けませんでした"
       },
       "themeAriaLabel": "テーマの選択",
+      "themeApplyFailed": "このテーマを適用できませんでした。現在の外観は変更されていません。",
+      "themeFontFailed": "テーマのフォントを読み込めませんでした。既定のフォントを使用しています。",
       "localBadge": "(ローカル)",
       "localThemes": {
         "title": "ローカルテーマ",

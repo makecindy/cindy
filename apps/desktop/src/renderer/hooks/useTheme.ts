@@ -8,7 +8,7 @@ import {
   tryGetFamily,
 } from '../themes/families';
 import { onLocalThemesChange } from '../themes/local-themes';
-import { presentTheme } from '../appearance/AppearancePresenter';
+import { presentTheme, notifyThemeAppearanceFailure } from '../appearance/AppearancePresenter';
 import { AppearanceMotionContext } from '../appearance/AppearanceMotionContext';
 import type { ThemeType } from '../themes/types';
 import { parseThemeSelection, type ThemeSelection } from '../../shared/appearanceDefinition';
@@ -284,6 +284,7 @@ export function ThemeProvider({
     requestedSelection.current = next;
     void bridge.selectTheme(next).catch(() => {
       window.electronAPI?.logToMain?.('warn', 'renderer/appearance', 'Theme selection write failed; saved selection retained');
+      notifyThemeAppearanceFailure();
     }).finally(() => { if (requestedSelection.current === next) requestedSelection.current = undefined; });
   }, []);
 

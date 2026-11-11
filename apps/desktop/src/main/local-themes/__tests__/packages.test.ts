@@ -3,6 +3,7 @@ import os from 'node:os';
 import path from 'node:path';
 import JSZip from 'jszip';
 import sharp from 'sharp';
+import { nativeImage } from 'electron';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 const home = vi.hoisted(() => ({ value: '' }));
@@ -17,7 +18,7 @@ vi.mock('../../app-settings/preferences', () => ({ manageAppPreferences: task.re
 
 import { inspectCindyFile } from '../../cindy-files/reader';
 import { getLocalThemesDir, loadLocalThemes, loadLocalThemesSync, resetLocalThemesMigrationForTest } from '../loader';
-import { installThemePackage, readThemePackageResourceSync } from '../packages';
+import { installThemePackage, readThemePackageResource } from '../packages';
 import { importThemePackageFromTask } from '../agent';
 import * as atomicWrites from '../../utils/atomicWriteFile';
 
@@ -114,6 +115,52 @@ async function packageFile(themes: unknown[] = [light, dark], assets: Record<str
  * Minimal failure: one declared theme plus one relative brand asset.
  */
 describe('theme package installation and loading', () => {
+  // Unit performance regression: list-sync runs before the first frame. A
+  // declared but unused font must stay discoverable without reading its bytes.
+  it('lists installed themes without opening binary appearance resources', async () => {
+    const font = fs.readFileSync(new URL('../../../../resources/system-skills/cindy-plugin-creator/references/examples/interactive-pages/host-ui/assets/JetBrainsMono-Regular.ttf', import.meta.url));
+    const inspected = await packageFile([{ ...light, appearance: { bodyFont: { resource: 'asset:body' } } }],
+      { 'assets/icon.png': icon, 'assets/body.ttf': font },
+      { formatVersion: 2, resources: [{ id: 'body', kind: 'font', path: 'assets/body.ttf' }] });
+    await installThemePackage(inspected, getLocalThemesDir());
+    const file = path.join(getLocalThemesDir(), '.packages', inspected.packageSha256, 'assets/body.ttf');
+    fs.writeFileSync(file, Buffer.alloc(font.length));
+    const open = vi.spyOn(fs, 'openSync');
+    const result = loadLocalThemesSync();
+    expect(result.themes.map(theme => theme.id)).toEqual(['mist-light-local']);
+    expect(result.diagnostics).toEqual([]);
+    expect(open.mock.calls.some(([opened]) => opened === file)).toBe(false);
+  });
+
+  // The old loose-theme scan already has readdir's answer; no package means no
+  // extra realpath/lstat/read or package-index access on the default startup path.
+  it('skips package file I/O when the existing directory scan has no packages', () => {
+    fs.mkdirSync(getLocalThemesDir(), { recursive: true });
+    const realpath = vi.spyOn(fs, 'realpathSync'), lstat = vi.spyOn(fs, 'lstatSync');
+    expect(loadLocalThemesSync()).toMatchObject({ success: true, themes: [], diagnostics: [] });
+    expect(realpath).not.toHaveBeenCalled();
+    expect(lstat).not.toHaveBeenCalled();
+  });
+
+  // Unit, real package entry: byte/pixel budgets apply before alpha scanning;
+  // metadata for a removed package must not survive its next discovery.
+  it('bounds brand decoding and releases cached bounds for removed packages', async () => {
+    const inspected = await packageFile();
+    await installThemePackage(inspected, getLocalThemesDir());
+    const decodePath = vi.spyOn(nativeImage, 'createFromPath'), decodeBytes = vi.spyOn(nativeImage, 'createFromBuffer');
+    const decoded = () => decodePath.mock.calls.length + decodeBytes.mock.calls.length;
+    const index = path.join(getLocalThemesDir(), '.packages', 'installed.json');
+    const original = fs.readFileSync(index);
+    loadLocalThemesSync(); expect(decoded()).toBe(1);
+    loadLocalThemesSync(); expect(decoded()).toBe(1);
+    fs.writeFileSync(index, JSON.stringify({ formatVersion: 1, themes: [] }));
+    loadLocalThemesSync();
+    fs.writeFileSync(index, original);
+    loadLocalThemesSync(); expect(decoded()).toBe(2);
+    fs.truncateSync(path.join(getLocalThemesDir(), '.packages', inspected.packageSha256, 'assets/icon.png'), 20 * 1024 * 1024 + 1);
+    expect(loadLocalThemesSync().themes).toHaveLength(2);
+    expect(decoded()).toBe(2);
+  });
   // v2's observable contract: all appearance defaults and bundled resources
   // survive installation/restart; v1 tests never exercised these fields. Unit.
   it('loads complete v2 appearance without rewriting authored documents', async () => {
@@ -131,8 +178,18 @@ describe('theme package installation and loading', () => {
     const dir = path.join(getLocalThemesDir(), '.packages', inspected.packageSha256);
     expect(fs.readFileSync(path.join(dir, 'themes/0.json'), 'utf8')).toBe(JSON.stringify(theme));
     expect(fs.readFileSync(path.join(dir, 'assets/body.ttf'))).toEqual(font);
-    expect(readThemePackageResourceSync(getLocalThemesDir(), light.id, 'asset:body').bytes).toEqual(font);
-    expect(() => readThemePackageResourceSync(getLocalThemesDir(), light.id, 'asset:undeclared')).toThrow();
+    expect((await readThemePackageResource(getLocalThemesDir(), light.id, 'asset:body')).bytes).toEqual(font);
+    await expect(readThemePackageResource(getLocalThemesDir(), light.id, 'asset:undeclared')).rejects.toThrow();
+    const open = vi.spyOn(fs, 'openSync');
+    expect((await readThemePackageResource(getLocalThemesDir(), light.id, 'asset:body')).bytes).toEqual(font);
+    expect(open.mock.calls.some(([file]) => file === path.join(dir, 'assets/body.ttf'))).toBe(false);
+  });
+
+  it('rejects a brand image beyond the pixel budget before publishing its package', async () => {
+    const image = await sharp({ create: { width: 3000, height: 3000, channels: 4, background: '#ffffff' } }).png().toBuffer();
+    const inspected = await packageFile([light], { 'assets/icon.png': image });
+    await expect(installThemePackage(inspected, getLocalThemesDir())).rejects.toMatchObject({ code: 'invalid' });
+    expect(fs.existsSync(path.join(getLocalThemesDir(), '.packages'))).toBe(false);
   });
 
   it.each([

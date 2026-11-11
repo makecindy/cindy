@@ -2163,6 +2163,8 @@
         "startFailed": "Die Aufgabe zum Erstellen eines Designs konnte nicht geöffnet werden"
       },
       "themeAriaLabel": "Designauswahl",
+      "themeApplyFailed": "Das Design konnte nicht angewendet werden. Das bisherige Erscheinungsbild bleibt erhalten.",
+      "themeFontFailed": "Die Designschrift konnte nicht geladen werden. Die Standardschrift wird verwendet.",
       "localBadge": "(Lokal)",
       "localThemes": {
         "title": "Lokale Designs",

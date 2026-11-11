@@ -8,7 +8,7 @@
  */
 
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import { act, render, renderHook } from '@testing-library/react';
+import { act, render, renderHook, waitFor } from '@testing-library/react';
 import { createElement, type ReactNode } from 'react';
 
 import '../../themes/colors';
@@ -17,6 +17,9 @@ import { themeService } from '../../themes/theme-service';
 import type { LocalThemesResult } from '../../../shared/local-themes';
 import { normalizeAppearanceSettings, type AppearanceSettings } from '../../../shared/appearanceSettings';
 import { useReducedMotion } from '../useReducedMotion';
+const themeFailureNotice = vi.hoisted(() => vi.fn());
+vi.mock('../../lib/toast', () => ({ toast: { error: themeFailureNotice } }));
+vi.mock('../../i18n', () => ({ default: { t: (key: string) => key } }));
 import {
   __resetLoginFirstLaunchLightGateForTest,
   endLoginFirstLaunchLightGate,
@@ -62,6 +65,7 @@ function dispatchOwnerSelection(key: string, newValue: string | null) {
 describe('useTheme 跨窗口主题同步(D2-3)', () => {
   beforeEach(() => {
     __resetLoginFirstLaunchLightGateForTest();
+    themeFailureNotice.mockClear();
     systemPrefersDark = false;
     localStorage.clear();
     hostSnapshot = undefined; hostListeners.clear();
@@ -81,6 +85,19 @@ describe('useTheme 跨窗口主题同步(D2-3)', () => {
         onChanged: (receive: (settings: AppearanceSettings) => void) => { hostListeners.add(receive); return () => hostListeners.delete(receive); } },
     };
     applyVibrancyMock.mockClear();
+  });
+
+  // Actual theme selection failure used to be logged without a user notice.
+  // Unit: rejected Host preparation must keep the current family and explain it.
+  it('keeps the current selection and notifies the user when theme assets cannot be applied', async () => {
+    hostSnapshot = normalizeAppearanceSettings({ themeSelection: { mode: 'light', familyId: 'cindy' } });
+    selectThemeMock.mockRejectedValueOnce(new Error('Invalid font'));
+    const hook = renderHook(() => useTheme(), { wrapper });
+    await act(async () => hook.result.current.setFamily('cindy'));
+    expect(selectThemeMock).toHaveBeenCalledExactlyOnceWith({ mode: 'light', familyId: 'cindy' });
+    expect(hook.result.current.familyId).toBe('cindy');
+    await waitFor(() => expect(themeFailureNotice).toHaveBeenCalledExactlyOnceWith('settings.appearance.themeApplyFailed'));
+    hook.unmount();
   });
 
   // Unit performance regression: 100 real consumers previously added 100 Host

@@ -19,6 +19,10 @@ const mocks = vi.hoisted(() => ({
   removeWallpaper: vi.fn(),
   ensureVideo: vi.fn(),
   fromWebContents: vi.fn(),
+  refreshTheme: vi.fn(),
+  themeOn: vi.fn(),
+  themeOff: vi.fn(),
+  systemDark: false,
 }));
 
 vi.mock('../appSessionState.js', () => ({
@@ -35,6 +39,7 @@ vi.mock('../wallpaper-video.js', () => ({
 }));
 
 vi.mock('electron', () => ({
+  nativeTheme: { on: mocks.themeOn, removeListener: mocks.themeOff, get shouldUseDarkColors() { return mocks.systemDark; } },
   app: { on: mocks.appOn },
   BrowserWindow: { getAllWindows: () => mocks.allWindows, fromWebContents: mocks.fromWebContents },
   ipcMain: { on: mocks.ipcOn, handle: mocks.ipcHandle },
@@ -55,12 +60,12 @@ vi.mock('../appearance-settings-store.js', () => ({
   writeAppearanceSettingsPatch: mocks.writeAppearanceSettingsPatch,
   resetAppearanceSettings: mocks.resetAppearanceSettings,
   updateAppearanceSettingsAtomic: mocks.updateAppearanceSettingsAtomic,
-  appearanceService: { select: vi.fn(), refresh: vi.fn() },
+  appearanceService: { select: vi.fn(), refresh: mocks.refreshTheme },
   migrateAppearanceThemeSelection: vi.fn(),
   readSelectedThemeFont: vi.fn(() => null),
 }));
 
-import { registerAppearanceSettingsIpc, installWindowZoomRestoration, updateAppearanceFromSettings, __testing } from '../appearance-settings-ipc.js';
+import { registerAppearanceSettingsIpc, installWindowZoomRestoration, updateAppearanceFromSettings, refreshAppearanceTheme, publishAppearanceFromOwner, __testing } from '../appearance-settings-ipc.js';
 import { pluginAppearanceRevision } from '../cindy-brain/pluginAppearanceRevision.js';
 import {
   normalizeAppearanceSettings,
@@ -79,6 +84,41 @@ const persisted = {
 };
 
 describe('appearance settings IPC authorization', () => {
+  // Unit performance contract: no default refresh publication/subscription;
+  // active OS following publishes one snapshot per window only when it changes.
+  it('bounds system-theme refresh to one active listener and one publication per changed window', async () => {
+    const windows = Array.from({ length: 4 }, () => ({ isDestroyed: () => false,
+      webContents: { isDestroyed: () => false, send: vi.fn() } }));
+    mocks.allWindows.push(...windows); mocks.trustedReadWindow.mockReturnValue(true);
+    mocks.refreshTheme.mockReturnValue(undefined);
+    expect(refreshAppearanceTheme()).toBeUndefined();
+    expect(mocks.themeOn).not.toHaveBeenCalled();
+    expect(windows.every(win => win.webContents.send.mock.calls.length === 0)).toBe(true);
+    const selected = normalizeAppearanceSettings({ themeSelection: { mode: 'system', familyId: 'paper-local' } });
+    mocks.readAppearanceSettings.mockReturnValue(selected);
+    try {
+      publishAppearanceFromOwner(selected);
+      publishAppearanceFromOwner(selected);
+      expect(mocks.themeOn).toHaveBeenCalledTimes(1);
+      windows.forEach(win => win.webContents.send.mockClear());
+      const updated = mocks.themeOn.mock.calls[0][1];
+      updated();
+      expect(mocks.refreshTheme).toHaveBeenCalledTimes(1); // only the startup check
+      mocks.refreshTheme.mockResolvedValue(selected);
+      mocks.systemDark = true;
+      updated(); await Promise.resolve();
+      expect(windows.every(win => win.webContents.send.mock.calls.length === 0)).toBe(true);
+      const changed = normalizeAppearanceSettings({ ...selected, uiSize: 19 });
+      mocks.refreshTheme.mockResolvedValue(changed);
+      mocks.systemDark = false;
+      updated(); await Promise.resolve();
+      for (const win of windows) expect(win.webContents.send).toHaveBeenCalledExactlyOnceWith('appearance-settings:changed', expect.objectContaining({ uiSize: 19, themeSelection: selected.themeSelection }));
+    } finally {
+      mocks.allWindows.length = 0;
+      publishAppearanceFromOwner(normalizeAppearanceSettings({}));
+    }
+    expect(mocks.themeOff).toHaveBeenCalledTimes(1);
+  });
   // Theme defaults must survive a single-row reset. Unit: the real trusted IPC
   // deletes only the named overrides, while unknown or state-owner fields fail.
   it('resets individual font and wallpaper overrides without pinning static defaults', async () => {
@@ -251,6 +291,7 @@ describe('appearance settings IPC authorization', () => {
   });
 
   beforeEach(() => {
+    mocks.refreshTheme.mockReset(); mocks.themeOn.mockClear(); mocks.themeOff.mockClear(); mocks.systemDark = false;
     mocks.owner = 'owner-a:1';
     mocks.boundaryPending = false;
     mocks.importWallpaper.mockReset();

@@ -17,7 +17,8 @@ import { findVisibleAlphaBounds } from '../../shared/imageVisibleBounds';
 import type { ImageVisibleBounds } from '../../shared/imageVisibleBounds';
 import { createLogger } from '../logger';
 import { lastGoodOmarchyTheme, OMARCHY_THEME_FILE, readOmarchyTheme } from './omarchy';
-import { readPackagedThemesSync, type PackagedThemeEntry } from './packages';
+import { readPackagedThemesSync, THEME_BRAND_MAX_BYTES, THEME_BRAND_MAX_PIXELS, type PackagedThemeEntry } from './packages';
+import { readBoundedFileNoFollowSync } from '../utils/readBoundedFile';
 
 const log = createLogger('local-themes');
 
@@ -83,13 +84,13 @@ function migrateLegacyThemesDirOnce(): void {
 }
 
 
-const MAX_ALPHA_SCAN_PIXELS = 8_000_000;
+const MAX_ALPHA_SCAN_PIXELS = THEME_BRAND_MAX_PIXELS;
 
 /**
  * 读取品牌图片的文件版本与透明像素边界，只生成运行时元数据，不改写/复制原图。
  * 大图仍提供版本号，但跳过 alpha 扫描，避免同步主题 bootstrap 出现不可控主进程停顿。
  */
-function inspectBrandAsset(filePath: string): InspectedBrandAsset | undefined {
+function inspectBrandAsset(filePath: string, assetRoot?: string): InspectedBrandAsset | undefined {
   try {
     const stat = fs.statSync(filePath);
     if (!stat.isFile()) return undefined;
@@ -101,7 +102,13 @@ function inspectBrandAsset(filePath: string): InspectedBrandAsset | undefined {
         ...(cached.bounds ? { bounds: cached.bounds } : {}),
       };
     }
-    const image = nativeImage.createFromPath(filePath);
+    if (assetRoot && stat.size > THEME_BRAND_MAX_BYTES) {
+      visibleBoundsCache.set(filePath, { size: stat.size, mtimeMs: stat.mtimeMs, bounds: undefined });
+      return { revision };
+    }
+    const bytes = assetRoot ? readBoundedFileNoFollowSync(filePath, THEME_BRAND_MAX_BYTES, { containWithin: assetRoot }) : undefined;
+    if (assetRoot && !bytes) return { revision };
+    const image = bytes ? nativeImage.createFromBuffer(bytes) : nativeImage.createFromPath(filePath);
     if (image.isEmpty()) {
       visibleBoundsCache.set(filePath, {
         size: stat.size,
@@ -124,18 +131,19 @@ function inspectBrandAsset(filePath: string): InspectedBrandAsset | undefined {
     visibleBoundsCache.set(filePath, { size: stat.size, mtimeMs: stat.mtimeMs, bounds });
     return { revision, ...(bounds ? { bounds } : {}) };
   } catch {
+    visibleBoundsCache.delete(filePath);
     return undefined;
   }
 }
 
-function inspectBrandAssets(theme: LocalThemeDocument): {
+function inspectBrandAssets(theme: LocalThemeDocument, assetRoot?: string): {
   bounds?: LocalThemeBrandBounds;
   revisions?: LocalThemeBrandRevisions;
 } {
   const iconPath = theme.brand?.icon;
   const logoPath = theme.brand?.logo;
-  const icon = iconPath ? inspectBrandAsset(iconPath) : undefined;
-  const logo = logoPath ? inspectBrandAsset(logoPath) : undefined;
+  const icon = iconPath ? inspectBrandAsset(iconPath, assetRoot) : undefined;
+  const logo = logoPath ? inspectBrandAsset(logoPath, assetRoot) : undefined;
   const bounds = icon?.bounds || logo?.bounds
     ? {
         ...(icon?.bounds ? { icon: icon.bounds } : {}),
@@ -164,6 +172,7 @@ function processEntries(
   const themes: LocalThemeWire[] = [];
   const diagnostics: LocalThemeDiagnostic[] = [];
   const seenIds = new Set<string>();
+  const activeBrandAssets = new Set<string>();
   const packageIds = new Set(entries.flatMap(entry => 'theme' in entry ? [`${entry.theme.id}${LOCAL_THEME_SUFFIX}`] : []));
 
   for (const entry of entries) {
@@ -184,7 +193,8 @@ function processEntries(
         continue;
       }
       seenIds.add(id);
-      const { bounds: brandBounds, revisions: brandRevisions } = inspectBrandAssets(parsed);
+      for (const file of Object.values(parsed.brand ?? {})) activeBrandAssets.add(file);
+      const { bounds: brandBounds, revisions: brandRevisions } = inspectBrandAssets(parsed, 'theme' in entry ? entry.assetRoot : undefined);
       themes.push({
         ...parsed,
         id,
@@ -197,6 +207,8 @@ function processEntries(
       diagnostics.push({ file: entry.file, error: message });
     }
   }
+
+  for (const file of visibleBoundsCache.keys()) if (!activeBrandAssets.has(file)) visibleBoundsCache.delete(file);
 
   try {
     const omarchy = readOmarchyTheme();
@@ -230,7 +242,8 @@ export async function loadLocalThemes(): Promise<LocalThemesResult> {
   try {
     const dir = getLocalThemesDir();
     await fs.promises.mkdir(dir, { recursive: true });
-    const files = pickJsonFiles(await fs.promises.readdir(dir));
+    const names = await fs.promises.readdir(dir);
+    const files = pickJsonFiles(names);
     const entries = await Promise.all(
       files.map(async (file): Promise<FileEntry | { file: string; error: string }> => {
         try {
@@ -241,7 +254,7 @@ export async function loadLocalThemes(): Promise<LocalThemesResult> {
         }
       }),
     );
-    return processEntries([...readPackagedThemesSync(dir), ...entries]);
+    return processEntries([...(names.includes('.packages') ? readPackagedThemesSync(dir) : []), ...entries]);
   } catch (error) {
     return topLevelFailure(error);
   }
@@ -251,7 +264,8 @@ export function loadLocalThemesSync(): LocalThemesResult {
   try {
     const dir = getLocalThemesDir();
     fs.mkdirSync(dir, { recursive: true });
-    const files = pickJsonFiles(fs.readdirSync(dir));
+    const names = fs.readdirSync(dir);
+    const files = pickJsonFiles(names);
     const entries = files.map((file): FileEntry | { file: string; error: string } => {
       try {
         const content = fs.readFileSync(path.join(dir, file), 'utf8');
@@ -260,7 +274,7 @@ export function loadLocalThemesSync(): LocalThemesResult {
         return { file, error: normalizeError(error) };
       }
     });
-    return processEntries([...readPackagedThemesSync(dir), ...entries]);
+    return processEntries([...(names.includes('.packages') ? readPackagedThemesSync(dir) : []), ...entries]);
   } catch (error) {
     return topLevelFailure(error);
   }

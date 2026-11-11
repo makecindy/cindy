@@ -2,6 +2,7 @@ import { createHash } from 'node:crypto';
 import { DEFAULT_THEME_SELECTION, parseThemeSelection, type ThemeSelection } from '../../shared/appearanceDefinition.js';
 import { DEFAULT_APPEARANCE_SETTINGS, normalizeAppearanceSettings, type AppearanceOverrides, type AppearanceSettings } from '../../shared/appearanceSettings.js';
 import type { OverrideSettingsFile, OverrideSettingsState } from '../maker-host/override-settings-file.js';
+import { LOCAL_THEME_SUFFIX } from '../../shared/local-themes.js';
 
 export const appearanceRevision = (value: AppearanceSettings) => createHash('sha256').update(JSON.stringify(value)).digest('hex');
 export interface AppearanceSnapshot { readonly revision: string; readonly settings: AppearanceSettings }
@@ -22,12 +23,25 @@ export class AppearanceService {
   constructor(private readonly deps: Dependencies) {}
 
   private themeKey(selection: ThemeSelection): string { return JSON.stringify(selection); }
-  private raw() { this.deps.store.invalidateIfChanged(); return this.deps.store.readState(); }
+  private raw() { return this.deps.store.readState(); }
   private defaults(selection?: ThemeSelection): AppearanceSettings {
     return normalizeAppearanceSettings({ ...DEFAULT_APPEARANCE_SETTINGS,
       ...(selection ? this.themes.get(this.themeKey(selection)) : {}) });
   }
   private compose(raw: OverrideSettingsState<AppearanceSettings>): OverrideSettingsState<AppearanceSettings> {
+    const theme = raw.value.themeSelection && this.themes.get(this.themeKey(raw.value.themeSelection));
+    if (!theme || !Object.keys(theme).length) {
+      // Keep the original cached settings path for builtin/default appearances.
+      const media = this.deps.wallpaper();
+      raw.value.customWallpaperUrl = media.url;
+      if (media.fallbackUrl) raw.value.customWallpaperFallbackUrl = media.fallbackUrl;
+      else delete raw.value.customWallpaperFallbackUrl;
+      if (raw.value.wallpaperId === 'custom' && !media.url) raw.value.wallpaperId = 'none';
+      const customizedKeys = raw.customizedKeys.filter(key => key !== 'themeSelection' ||
+        JSON.stringify(raw.value.themeSelection) !== JSON.stringify(DEFAULT_THEME_SELECTION));
+      raw.value.customizedKeys = customizedKeys;
+      return { ...raw, customizedKeys, isCustomized: customizedKeys.length > 0 };
+    }
     const defaults = this.defaults(raw.value.themeSelection);
     const overrides = Object.fromEntries(raw.customizedKeys.filter(key => raw.value[key as keyof AppearanceSettings] !== undefined).map(key => [key, raw.value[key as keyof AppearanceSettings]]));
     const value = normalizeAppearanceSettings({ ...defaults, ...overrides });
@@ -52,9 +66,9 @@ export class AppearanceService {
     return { defaults, value, customizedKeys, isCustomized: customizedKeys.length > 0 };
   }
   readState() { return this.compose(this.raw()); }
-  read() { return this.snapshot().settings; }
+  read() { return this.readState().value; }
   snapshot(): AppearanceSnapshot {
-    const settings = this.readState().value;
+    const settings = structuredClone(this.readState().value);
     return Object.freeze({ revision: appearanceRevision(settings), settings: freeze(settings) });
   }
   async update(updater: (current: AppearanceSettings, overrides: AppearanceOverrides) => AppearanceOverrides) {
@@ -89,18 +103,20 @@ export class AppearanceService {
     await this.deps.cleanupMedia?.();
     return this.read();
   }
-  async refresh(): Promise<AppearanceSettings> {
-    const refresh = ++this.refreshGeneration, generation = this.selectionGeneration;
+  refresh(): Promise<AppearanceSettings> | undefined {
     const selection = this.raw().value.themeSelection;
-    if (selection) {
-      const prepared = await this.prepare(selection);
-      try {
-        // Preparation may finish after a newer selection; never replace its defaults.
-        if (refresh === this.refreshGeneration && generation === this.selectionGeneration &&
-            this.raw().value.themeSelection && this.themeKey(this.raw().value.themeSelection!) === this.themeKey(selection))
-          this.themes.set(this.themeKey(selection), prepared.values);
-      } finally { prepared.release(); }
-    }
+    if (!selection?.familyId.endsWith(LOCAL_THEME_SUFFIX)) return undefined;
+    return this.refreshSelected(selection);
+  }
+  private async refreshSelected(selection: ThemeSelection): Promise<AppearanceSettings> {
+    const refresh = ++this.refreshGeneration, generation = this.selectionGeneration;
+    const prepared = await this.prepare(selection);
+    try {
+      // Preparation may finish after a newer selection; never replace its defaults.
+      if (refresh === this.refreshGeneration && generation === this.selectionGeneration &&
+          this.raw().value.themeSelection && this.themeKey(this.raw().value.themeSelection!) === this.themeKey(selection))
+        this.themes.set(this.themeKey(selection), prepared.values);
+    } finally { prepared.release(); }
     this.prune();
     await this.deps.cleanupMedia?.();
     return this.read();

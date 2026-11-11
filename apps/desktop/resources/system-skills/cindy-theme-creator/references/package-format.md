@@ -97,7 +97,7 @@ final canonical decoding and validation during import/application.
 
 The packager includes only the manifest, named documents, referenced brand assets
 and declared resources, and creates a new file without overwriting one. Limits:
-256 KiB manifest; 1 MiB per document; 20 MiB per brand image; 10 MiB font;
+256 KiB manifest; 1 MiB per document; 20 MiB / 8 megapixels per brand image; 10 MiB font;
 20 MiB wallpaper image / 40 megapixels; 100 MiB MP4; 256 MiB total uncompressed;
 128 MiB archive; 256 variants; 2048 entries. Keep originals beside the deliverable.
 
@@ -148,6 +148,21 @@ updates by default**, keeping runtime IDs/family stable; different IDs coexist.
 Same archive reuses its bytes; IDs absent from an update remain installed. Equal
 asset filenames across archives cannot collide. All referenced content is
 validated before activation; failed updates preserve the old references/assets.
+
+Listing installed themes reads bounded manifest/theme JSON and checks resource
+paths, file types and byte limits. It does not read font or wallpaper binaries.
+Installation and actual use validate those bytes; selected resources are read
+asynchronously. An unused corrupt binary therefore stays in the theme list;
+selecting it is rejected with a notice, retaining the current appearance and
+settings. This keeps large videos off the synchronous first-frame listing path.
+Brand cropping remains synchronous within its image limits, with bounds cached
+by path/size/mtime in memory and released when a package is removed or replaced.
+No derived bounds or second index are written to disk.
+If a previously selected package cannot be restored on cold startup, the saved
+selection is retained, the appearance falls back to defaults and the Host logs
+a warning without showing a toast. Selecting that same package again follows
+the normal rejection notice. A theme font rejected by the browser uses the
+existing default-font fallback and shows a toast.
 
 Keep the previous package to undo a content update by reimporting it. Reselecting
 the same ID does not revert an update. Loose source files remain unchanged even

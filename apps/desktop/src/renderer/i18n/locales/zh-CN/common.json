@@ -2133,6 +2133,8 @@
         "startFailed": "未能打开主题制作任务"
       },
       "themeAriaLabel": "主题选择",
+      "themeApplyFailed": "无法应用此主题，当前外观已保留",
+      "themeFontFailed": "主题字体无法加载，已使用默认字体",
       "localBadge": "(本地)",
       "localThemes": {
         "title": "本地主题",

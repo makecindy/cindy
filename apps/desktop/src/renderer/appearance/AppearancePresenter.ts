@@ -8,6 +8,13 @@ import { SCALABLE_APPEARANCE_TOKENS } from '../styles/generated/token-mappings';
 /** Palette application is one part of the shared document presenter. */
 export function presentTheme(theme: Theme): void { themeService.applyTheme(theme); }
 
+/** Errors use the existing toast; translation/notice modules stay off the default path. */
+export function notifyThemeAppearanceFailure(font = false): void {
+  void Promise.all([import('../lib/toast'), import('../i18n')]).then(([{ toast }, { default: i18n }]) => {
+    toast.error(i18n.t(font ? 'settings.appearance.themeFontFailed' : 'settings.appearance.themeApplyFailed'));
+  }).catch(() => {});
+}
+
 type Bridge = typeof window.electronAPI.appearanceSettings;
 type Faces = Map<string, { key: string; face: FontFace }>;
 type PendingFont = { key: string; promise: Promise<FontFace | undefined>; current(): boolean };
@@ -102,16 +109,28 @@ export async function applyAppearance(settings: AppearanceSettings, options: {
     if (existing?.key === resourceKey) continue;
     let loading = pending.get(role);
     if (loading?.key !== resourceKey) {
-      const entry: PendingFont = { key: resourceKey, current: options.current, promise: Promise.resolve(bridge.loadPluginFont?.(role)).then(loaded => {
+      const entry: PendingFont = { key: resourceKey, current: options.current, promise: Promise.resolve(bridge.loadPluginFont?.(role)).then(async loaded => {
         // A reset, new resource or unmount cancels decoding of the superseded read.
         if (pending.get(role) !== entry || !entry.current() || !loaded || loaded.family !== resource.family) return undefined;
-        return new FontFace(resource.family, loaded.bytes).load();
+        try { return await new FontFace(resource.family, loaded.bytes).load(); }
+        catch (error) {
+          if (entry.current() && 'themeId' in resource.source) notifyThemeAppearanceFailure(true);
+          throw error;
+        }
       }) };
       entry.promise = entry.promise.finally(() => { if (pending.get(role) === entry) pending.delete(role); });
       pending.set(role, entry); loading = entry;
     }
     loading.current = options.current;
-    const face = await loading.promise;
+    let face: FontFace | undefined;
+    try { face = await loading.promise; }
+    catch (error) {
+      if (!options.current()) return 'saved';
+      if (!('themeId' in resource.source)) throw error;
+      // UI/code/body stacks already include the default font; terminals keep
+      // their default until this face is ready. Never register a rejected face.
+      return 'failed';
+    }
     if (!options.current()) return 'saved';
     if (!face) return 'failed';
     const previous = faces.get(role);

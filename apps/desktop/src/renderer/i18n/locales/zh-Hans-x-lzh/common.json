@@ -2133,6 +2133,8 @@
         "startFailed": "未能开启制作格调之差事"
       },
       "themeAriaLabel": "择主题",
+      "themeApplyFailed": "主题未能施用，原有外观不改",
+      "themeFontFailed": "主题字体未能载入，仍用默认字体",
       "localBadge": "(此机)",
       "localThemes": {
         "title": "此机格调",

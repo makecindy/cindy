@@ -1,10 +1,13 @@
 // @vitest-environment jsdom
-import { act, cleanup, renderHook } from '@testing-library/react';
+import { act, cleanup, renderHook, waitFor } from '@testing-library/react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { applyPluginAppearance, applyPluginAppearanceInWindow, usePluginAppearance } from '../usePluginAppearance';
 import { normalizeAppearanceSettings } from '@/../shared/appearanceSettings';
 import { applyFontSettings } from '@/hooks/useFontSettings';
 import { installAppearancePresenter } from '@/appearance/AppearancePresenter';
+const themeFailureNotice = vi.hoisted(() => vi.fn());
+vi.mock('../../lib/toast', () => ({ toast: { error: themeFailureNotice } }));
+vi.mock('../../i18n', () => ({ default: { t: (key: string) => key } }));
 
 // Real preference consumer: scoped CSS, stale resource completion and no font/style
 // work for the default profile. FontFace replaces only the browser font loader.
@@ -12,6 +15,7 @@ afterEach(() => {
   cleanup(); document.head.querySelectorAll('[data-test-appearance]').forEach(node => node.remove());
   document.body.replaceChildren(); document.documentElement.removeAttribute('style');
   delete document.documentElement.dataset.wallpaperActive; vi.unstubAllGlobals(); vi.restoreAllMocks();
+  themeFailureNotice.mockClear();
 });
 function options() {
   const style = document.createElement('style'); style.dataset.testAppearance = ''; document.head.appendChild(style);
@@ -20,6 +24,30 @@ function options() {
     current: () => true, applyFonts: applyFontSettings };
 }
 describe('plugin appearance renderer', () => {
+  // A structurally valid packaged font can still fail Chromium's final decode.
+  // Real shared consumer: reject its FontFace, retain the default fallback and notify.
+  it('rejects a corrupt theme font face and reports the default-font fallback', async () => {
+    const h = options(), hash = 'b'.repeat(64), family = `CindyTheme_${hash}`;
+    const fonts = { add: vi.fn(), delete: vi.fn() }, descriptor = Object.getOwnPropertyDescriptor(document, 'fonts');
+    Object.defineProperty(document, 'fonts', { configurable: true, value: fonts });
+    vi.stubGlobal('FontFace', class { load = async () => { throw new Error('Font decode failed'); }; });
+    h.bridge.loadPluginFont = vi.fn(async () => ({ family, bytes: new Uint8Array([0]).buffer }));
+    const settings = normalizeAppearanceSettings({ uiFamily: family, uiFontResource: {
+      family, hash, reference: 'asset:font', source: { themeId: 'paper-light-local', packageSha256: 'a'.repeat(64) },
+    } });
+    try {
+      vi.mocked(h.bridge.loadPluginFont!).mockRejectedValueOnce(new Error('Resource unavailable'));
+      expect(await applyPluginAppearance(settings, h)).toBe('failed');
+      await act(async () => {});
+      expect(themeFailureNotice).not.toHaveBeenCalled();
+      expect(await applyPluginAppearance(settings, h)).toBe('failed');
+      expect(fonts.add).not.toHaveBeenCalled(); expect(h.faces.size).toBe(0);
+      await waitFor(() => expect(themeFailureNotice).toHaveBeenCalledExactlyOnceWith('settings.appearance.themeFontFailed'));
+    } finally {
+      if (descriptor) Object.defineProperty(document, 'fonts', descriptor);
+      else Reflect.deleteProperty(document, 'fonts');
+    }
+  });
   // Opus F2：大字体逐字节 base64 解码阻塞 UI；原覆盖只验证字体加载次数。
   // 最小输入：含非 ASCII 字节的字体读取结果，观察 FontFace 收到原二进制。tier: unit。
   it('passes binary font bytes directly to the browser without base64 decoding', async () => {

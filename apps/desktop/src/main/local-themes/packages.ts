@@ -20,9 +20,10 @@ interface InstalledThemeReference {
   themePath: string;
 }
 const THEME_MAX_BYTES = 1024 * 1024;
-const ASSET_MAX_BYTES = 20 * 1024 * 1024;
+export const THEME_BRAND_MAX_BYTES = 20 * 1024 * 1024;
+export const THEME_BRAND_MAX_PIXELS = 8_000_000;
 
-export type PackagedThemeEntry = { file: string; theme: LocalThemeDocument } | { file: string; error: string };
+export type PackagedThemeEntry = { file: string; theme: LocalThemeDocument; assetRoot: string } | { file: string; error: string };
 
 /** Only the user's themes root may be redirected, never managed child paths. */
 function packageFilePath(root: string, relative: string): string {
@@ -141,12 +142,12 @@ export function readPackagedThemesSync(themesDir: string): PackagedThemeEntry[] 
       });
       checkVariants(themes);
       for (const resource of manifest.resources ?? []) {
-        const bytes = readBoundedFileNoFollowSync(packageFilePath(dir, resource.path), APPEARANCE_RESOURCE_MAX_BYTES[resource.kind], { containWithin: dir });
-        if (!bytes) throw new CindyFileError('invalid');
-        inspectAppearanceResource(bytes, resource.kind);
+        const size = fs.statSync(packageFilePath(dir, resource.path)).size;
+        if (!size || size > APPEARANCE_RESOURCE_MAX_BYTES[resource.kind]) throw new CindyFileError('invalid');
       }
       const entries = themes.map((theme, i): PackagedThemeEntry => ({
         file: path.join(PACKAGES_DIR, hash, references[i].themePath),
+        assetRoot: dir,
         theme: {
           ...theme,
           ...(theme.brand ? { brand: Object.fromEntries(Object.entries(theme.brand).map(([key, relative]) => [key, packageFilePath(dir, relative)])) } : {}),
@@ -184,12 +185,22 @@ export async function installThemePackage(
   };
   await read(CINDY_PACKAGE_MANIFEST, CINDY_MANIFEST_MAX_BYTES);
   const themes: LocalThemeDocument[] = [];
+  const checkedBrands = new Set<string>();
   for (const relative of inspected.manifest.themes) {
     let raw: unknown;
     try { raw = JSON.parse((await read(relative, THEME_MAX_BYTES)).toString('utf8')); }
     catch { throw new CindyFileError('invalid'); }
     const theme = parseTheme(raw, inspected.manifest);
-    for (const asset of Object.values(theme.brand ?? {})) await read(asset, ASSET_MAX_BYTES);
+    for (const asset of Object.values(theme.brand ?? {})) {
+      const bytes = await read(asset, THEME_BRAND_MAX_BYTES);
+      if (checkedBrands.has(asset)) continue;
+      try {
+        const { default: sharp } = await import('sharp');
+        const metadata = await sharp(bytes, { limitInputPixels: THEME_BRAND_MAX_PIXELS }).metadata();
+        if (!metadata.width || !metadata.height || metadata.width * metadata.height > THEME_BRAND_MAX_PIXELS) throw new CindyFileError('invalid');
+      } catch { throw new CindyFileError('invalid'); }
+      checkedBrands.add(asset);
+    }
     themes.push(theme);
   }
   checkVariants(themes);
@@ -263,9 +274,9 @@ export async function installThemePackage(
 }
 
 /** Resolve a selected package resource from current committed references only. */
-export function readThemePackageResourceSync(themesDir: string, id: string, reference: string): {
-  bytes: Buffer; resource: AppearanceResourceDefinition; packageSha256: string;
-} {
+export async function readThemePackageResource(themesDir: string, id: string, reference: string): Promise<{
+  bytes: Buffer; resource: AppearanceResourceDefinition; packageSha256: string; hash: string;
+}> {
   const root = fs.realpathSync(themesDir);
   const packages = packageDirectory(root, PACKAGES_DIR);
   const ref = readInstalledReferences(packages).find(entry => entry.id === id);
@@ -276,8 +287,8 @@ export function readThemePackageResourceSync(themesDir: string, id: string, refe
   const manifest = parseCindyPackageManifest(JSON.parse(manifestBytes.toString('utf8')));
   const resource = manifest.resources?.find(entry => `asset:${entry.id}` === reference);
   if (!resource) throw new CindyFileError('invalid');
-  const bytes = readBoundedFileNoFollowSync(packageFilePath(dir, resource.path), APPEARANCE_RESOURCE_MAX_BYTES[resource.kind], { containWithin: dir });
+  const bytes = await readBoundedFileNoFollow(packageFilePath(dir, resource.path), APPEARANCE_RESOURCE_MAX_BYTES[resource.kind], { containWithin: dir });
   if (!bytes) throw new CindyFileError('invalid');
-  inspectAppearanceResource(bytes, resource.kind);
-  return { bytes, resource, packageSha256: ref.packageSha256 };
+  const { hash } = inspectAppearanceResource(bytes, resource.kind);
+  return { bytes, resource, packageSha256: ref.packageSha256, hash };
 }

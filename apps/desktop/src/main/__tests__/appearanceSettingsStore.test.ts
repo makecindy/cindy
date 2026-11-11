@@ -26,18 +26,43 @@ import {
 } from '../appearance-settings-store';
 import { inspectCindyFile } from '../cindy-files/reader';
 import { installThemePackage } from '../local-themes/packages';
-import { getLocalThemesDir } from '../local-themes/loader';
+import { getLocalThemesDir, loadLocalThemesSync } from '../local-themes/loader';
 import { appearanceDefinitionToOverrides, appearanceResetPatch } from '../appearance/definition';
 import { readClientWallpaperFile } from '../cindy-media/blobStore.desktop';
 import { readReferencedClientWallpaperUrls } from '../custom-wallpaper-settings';
 import { createOverrideSettingsFile } from '../maker-host/override-settings-file';
 import { AppearanceService } from '../appearance/service';
+import { resolveThemeAppearance } from '../appearance/themes';
 
 describe('terminal appearance overrides', () => {
   beforeEach(() => {
     fixture.userData = fs.mkdtempSync(path.join(os.tmpdir(), 'cindy-terminal-appearance-'));
   });
   afterEach(() => fs.rmSync(fixture.userData, { recursive: true, force: true }));
+
+  // Unit performance regression: the default startup path used to await media
+  // cleanup and every cached read added an appearance-file stat and SHA snapshot.
+  it('keeps builtin refresh synchronous and cached reads free of added file I/O', () => {
+    const file = path.join(fixture.userData, 'cached.json');
+    const store = createOverrideSettingsFile({ filePath: () => file,
+      defaults: DEFAULT_APPEARANCE_SETTINGS, normalize: normalizeAppearanceSettings,
+      log: { info() {}, warn() {} }, label: 'appearance-performance' });
+    const resolveTheme = vi.fn(async () => ({})), cleanupMedia = vi.fn(async () => {});
+    const service = new AppearanceService({ store, wallpaper: () => ({ url: '' }), resolveTheme, cleanupMedia });
+    service.read();
+    // Taking an immutable snapshot must not freeze the store's cached value.
+    const initial = service.snapshot();
+    expect(Object.isFrozen(initial.settings)).toBe(true);
+    const stat = vi.spyOn(fs, 'statSync'), read = vi.spyOn(fs, 'readFileSync');
+    const snapshot = vi.spyOn(service, 'snapshot');
+    try {
+      expect(service.refresh()).toBeUndefined();
+      for (let i = 0; i < 100; i++) expect(service.read().uiSize).toBe(DEFAULT_APPEARANCE_SETTINGS.uiSize);
+      expect(stat).not.toHaveBeenCalled(); expect(read).not.toHaveBeenCalled();
+      expect(snapshot).not.toHaveBeenCalled();
+      expect(resolveTheme).not.toHaveBeenCalled(); expect(cleanupMedia).not.toHaveBeenCalled();
+    } finally { stat.mockRestore(); read.mockRestore(); snapshot.mockRestore(); }
+  });
 
   it('reads old overrides with unchanged values and adds terminal defaults only in memory', () => {
     const oldOverrides = { uiFamily: 'Inter', codeFamily: 'JetBrains Mono', uiSize: 16, codeSize: 18, windowZoom: 1.2 };
@@ -104,14 +129,17 @@ describe('terminal appearance overrides', () => {
   it('composes theme defaults and fixed writes without freezing inherited values', async () => {
     const zip = new JSZip();
     zip.file('cindy.json', JSON.stringify({ formatVersion: 2, type: 'theme', themes: ['light.json', 'dark.json'],
-      resources: [{ id: 'body', kind: 'font', path: 'body.ttf' }, { id: 'bg', kind: 'image', path: 'bg.png' }] }));
+      resources: [{ id: 'body', kind: 'font', path: 'body.ttf' }, { id: 'bg', kind: 'image', path: 'bg.png' }, { id: 'video', kind: 'video', path: 'bg.mp4' }] }));
     const font = fs.readFileSync(new URL('../../../resources/system-skills/cindy-plugin-creator/references/examples/interactive-pages/host-ui/assets/JetBrainsMono-Regular.ttf', import.meta.url));
+    const background = await sharp({ create: { width: 1, height: 1, channels: 4, background: '#808080' } }).png().toBuffer();
+    const video = fs.readFileSync(new URL('../../renderer/assets/wallpapers/cindy-studio.mp4', import.meta.url));
     zip.file('body.ttf', font);
-    zip.file('bg.png', await sharp({ create: { width: 1, height: 1, channels: 4, background: '#808080' } }).png().toBuffer());
+    zip.file('bg.png', background); zip.file('bg.mp4', video);
     for (const mode of ['light', 'dark'] as const) zip.file(`${mode}.json`, JSON.stringify({
       id: `paper-${mode}`, family: 'paper', name: 'Paper', type: mode, colors: {},
       appearance: { uiFont: { family: mode === 'light' ? 'Inter' : 'Helvetica', size: 20 },
-        bodyFont: { resource: 'asset:body' }, wallpaper: { resource: 'asset:bg', visibility: 0.4 },
+        bodyFont: { resource: 'asset:body' }, codeFont: { resource: 'asset:body' },
+        wallpaper: { resource: mode === 'light' ? 'asset:video' : 'asset:bg', fallbackResource: 'asset:bg', visibility: 0.4 },
         reading: { bodyLineHeight: mode === 'light' ? 1.8 : 1.6, maxWidth: 700 }, density: 0.9, motion: 0.5 },
     }));
     const source = path.join(fixture.userData, 'paper.cindy');
@@ -120,9 +148,13 @@ describe('terminal appearance overrides', () => {
     if (inspected.type !== 'theme') throw new Error('Expected theme');
     await installThemePackage(inspected, getLocalThemesDir());
     await writeAppearanceSettingsPatch({ uiSize: 17, terminalFamily: 'Menlo', wallpaperId: 'cindy-night-glance' });
+    const read = vi.spyOn(fs.promises, 'open');
     await migrateAppearanceThemeSelection({ mode: 'light', familyId: 'paper-local' });
+    const packageDir = path.join(getLocalThemesDir(), '.packages', inspected.packageSha256);
+    expect(read.mock.calls.filter(([file]) => file === fs.realpathSync(path.join(packageDir, 'body.ttf')))).toHaveLength(1);
+    read.mockRestore();
     expect(appearanceService.read()).toMatchObject({ uiFamily: 'Inter', uiSize: 17, terminalFamily: 'Menlo', wallpaperId: 'cindy-night-glance', density: 0.9, motion: 0.5 });
-    expect(Buffer.from(readSelectedThemeFont('bodyFont')!.bytes)).toEqual(font);
+    expect(Buffer.from((await readSelectedThemeFont('bodyFont'))!.bytes)).toEqual(font);
     await updateAppearanceSettingsAtomic((_current, overrides) => appearanceDefinitionToOverrides(overrides, { reading: { maxWidth: 800 } }));
     const file = path.join(fixture.userData, 'appearance-settings.json');
     expect(JSON.parse(fs.readFileSync(file, 'utf8')).reading).toEqual({ maxWidth: 800 });
@@ -141,6 +173,29 @@ describe('terminal appearance overrides', () => {
     expect(snapshot.settings.wallpaperId).toBe('custom');
     expect(readReferencedClientWallpaperUrls()).toContain(wallpaperUrl);
     expect((await readClientWallpaperFile(wallpaperUrl)).mimeType).toBe('image/webp');
+    // A corrupt unselected binary stays discoverable. Actual selection rejects
+    // font/image/video corruption before writing settings or publishing defaults.
+    const saved = fs.readFileSync(file);
+    for (const [asset, bytes] of [['body.ttf', font], ['bg.png', background], ['bg.mp4', video]] as const) {
+      try {
+        fs.writeFileSync(path.join(packageDir, asset), Buffer.alloc(bytes.length));
+        expect(loadLocalThemesSync().themes).toHaveLength(2);
+        if (asset === 'body.ttf') {
+          // Cold restore has no in-memory defaults. A failed restore retains
+          // the saved choice; explicitly reselecting that same package rejects.
+          const restartedStore = createOverrideSettingsFile({ filePath: () => file,
+            defaults: DEFAULT_APPEARANCE_SETTINGS, normalize: normalizeAppearanceSettings,
+            log: { info() {}, warn() {} }, label: 'appearance-restart' });
+          const restarted = new AppearanceService({ store: restartedStore, resolveTheme: resolveThemeAppearance, wallpaper: () => ({ url: '' }) });
+          await expect(restarted.refresh()).rejects.toThrow();
+          expect(restarted.read()).toMatchObject({ themeSelection: snapshot.settings.themeSelection, uiFamily: '' });
+          await expect(restarted.select(snapshot.settings.themeSelection)).rejects.toThrow();
+        }
+        await expect(appearanceService.select({ mode: 'light', familyId: 'paper-local' })).rejects.toThrow();
+        expect(appearanceService.snapshot()).toEqual(snapshot);
+        expect(fs.readFileSync(file)).toEqual(saved);
+      } finally { fs.writeFileSync(path.join(packageDir, asset), bytes); }
+    }
     await appearanceService.reset();
     expect((await migrateAppearanceThemeSelection({ mode: 'dark', familyId: 'paper-local' })).themeSelection).toEqual({ mode: 'system', familyId: 'cindy' });
     expect(readAppearanceSettingsState().isCustomized).toBe(false);

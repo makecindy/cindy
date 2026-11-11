@@ -1,4 +1,4 @@
-import { app, BrowserWindow, ipcMain } from 'electron';
+import { app, BrowserWindow, ipcMain, nativeTheme } from 'electron';
 import { extractIpcError } from '../shared/ipcError.js';
 
 import {
@@ -39,6 +39,8 @@ import { parseThemeSelection } from '../shared/appearanceDefinition.js';
 import { APPEARANCE_RESET_FIELDS, appearanceResetPatch } from './appearance/definition.js';
 import { applyDockIcon } from './app-icon.js';
 import { pluginAppearanceRevision } from './cindy-brain/pluginAppearanceRevision.js';
+import { LOCAL_THEME_SUFFIX } from '../shared/local-themes.js';
+import { createLogger } from './logger.js';
 
 export { writeAppearanceSettingsPatch } from './appearance-settings-store.js';
 
@@ -74,7 +76,7 @@ export function registerAppearanceSettingsIpc(): void {
 
   ipcMain.handle('appearance-settings:plugin-font', async (event, role: unknown) => {
     if (!isTrustedAppearanceSettingsReadEvent(event) || typeof role !== 'string') throwIpcError('INVALID_PARAMS', 'Appearance font reader required');
-    const themeFont = readSelectedThemeFont(role);
+    const themeFont = await readSelectedThemeFont(role);
     if (themeFont) return themeFont;
     const { readSelectedPluginFont } = await import('./mcp-apps/appearance.js');
     return readSelectedPluginFont(role);
@@ -401,16 +403,42 @@ export const __testing = { parsePatch };
 
 /** Plugin settings use the same profile owner and existing window broadcast. */
 export function publishAppearanceFromOwner(settings: AppearanceSettings): void {
+  followSystemTheme(settings);
   applyAppearanceToWindows(settings);
   applyDockIcon(settings);
   broadcast(settings);
 }
 
 /** Rebuild the active theme before the first window or a catalog/mode refresh. */
-export async function refreshAppearanceTheme(): Promise<AppearanceSettings> {
-  const settings = await appearanceService.refresh();
-  publishAppearanceFromOwner(settings);
-  return settings;
+export function refreshAppearanceTheme(): Promise<AppearanceSettings> | undefined {
+  const preparation = appearanceService.refresh();
+  if (!preparation) return undefined;
+  const previous = pluginAppearanceRevision(readAppearanceSettings());
+  return preparation.then(settings => {
+    if (pluginAppearanceRevision(settings) !== previous) publishAppearanceFromOwner(settings);
+    else followSystemTheme(settings);
+    return settings;
+  });
+}
+
+let followingSystemTheme = false, lastSystemDark: boolean;
+function onSystemThemeUpdated(): void {
+  const dark = nativeTheme.shouldUseDarkColors;
+  if (dark === lastSystemDark) return;
+  lastSystemDark = dark;
+  void refreshAppearanceTheme()?.catch(() => createLogger('appearance').warn('Unable to refresh theme appearance; current appearance retained'));
+}
+function followSystemTheme(settings: AppearanceSettings): void {
+  const selection = settings.themeSelection;
+  const required = selection?.mode === 'system' && selection.familyId.endsWith(LOCAL_THEME_SUFFIX);
+  if (required && !followingSystemTheme) {
+    lastSystemDark = nativeTheme.shouldUseDarkColors;
+    nativeTheme.on('updated', onSystemThemeUpdated);
+    followingSystemTheme = true;
+  } else if (!required && followingSystemTheme) {
+    nativeTheme.removeListener('updated', onSystemThemeUpdated);
+    followingSystemTheme = false;
+  }
 }
 
 /** UI and Agent edits share validation, persistence, live windows and broadcasts. */
@@ -424,15 +452,11 @@ export async function updateAppearanceFromSettings(rawPatch: unknown, options?: 
     }
     return patch;
   }) : await writeAppearanceSettingsPatch(patch);
-  applyAppearanceToWindows(settings);
-  applyDockIcon(settings);
-  broadcast(settings);
+  publishAppearanceFromOwner(settings);
   return settings;
 }
 export async function resetAppearanceFromSettings() {
   const settings = await resetAppearanceSettings();
-  applyAppearanceToWindows(settings);
-  applyDockIcon(settings);
-  broadcast(settings);
+  publishAppearanceFromOwner(settings);
   return settings;
 }
