@@ -325,15 +325,15 @@ export function LiveCapturePanel({ begin, token, bridge, audioOptions }: { begin
         <Button size="xs" variant="cta" disabled={phase === 'preparing'} onClick={() => void start()}><Play size={14} />{t('regionScreenshot.live.start')}</Button>
       </>}
       {(phase === 'capturing' || phase === 'paused') && <>
-        <Button size="xs" variant="secondary" tone={expanded ? 'default' : 'quiet'} className="w-7 px-0" aria-label={t('regionScreenshot.live.annotate')} aria-pressed={expanded} onClick={() => void moveControls(!expanded)}><Pencil size={14} /></Button>
-        <Button size="xs" variant="secondary" tone="quiet" className="w-7 px-0" disabled={audioChanging || runtime.current.audioFailed} aria-label={t(`regionScreenshot.live.${phase === 'capturing' ? 'pause' : 'resume'}`)} onClick={() => void pause()}>{phase === 'capturing' ? <Pause size={14} /> : <Play size={14} />}</Button>
+        <Button size="sm" variant="secondary" tone={expanded ? 'default' : 'quiet'} className="w-7 px-0" aria-label={t('regionScreenshot.live.annotate')} aria-pressed={expanded} onClick={() => void moveControls(!expanded)}><Pencil size={14} /></Button>
+        <Button size="sm" variant="secondary" tone="quiet" className="w-7 px-0" disabled={audioChanging || runtime.current.audioFailed} aria-label={t(`regionScreenshot.live.${phase === 'capturing' ? 'pause' : 'resume'}`)} onClick={() => void pause()}>{phase === 'capturing' ? <Pause size={14} /> : <Play size={14} />}</Button>
       </>}
       {(phase === 'capturing' || phase === 'paused' || phase === 'finishing') && <Button size="xs" variant="cta" disabled={phase === 'finishing'} onClick={() => void finish()}><Square size={12} />{t(`regionScreenshot.live.${phase === 'finishing' ? 'finishing' : 'finish'}`)}</Button>}
       {phase === 'done' && result && <>
         <Button size="xs" variant="secondary" onClick={() => void previewRecording(result)}>{t('regionScreenshot.live.preview')}</Button>
         <Button size="xs" variant="cta" disabled={saving} onClick={() => void saveRecording()}>{t('regionScreenshot.save')}</Button>
       </>}
-      <Button size="xs" variant="secondary" tone="quiet" className="w-7 px-0" disabled={saving || phase === 'finishing'} aria-label={t('regionScreenshot.cancel')} onClick={() => bridge.cancel(token)}><X size={14} /></Button>
+      <Button size="sm" variant="secondary" tone="quiet" className="w-7 px-0" disabled={saving || phase === 'finishing'} aria-label={t('regionScreenshot.cancel')} onClick={() => bridge.cancel(token)}><X size={14} /></Button>
     </div>
     <p role={error ? 'alert' : 'status'} className={`truncate ${error ? 'text-[var(--text-danger)]' : 'text-[var(--text-secondary)]'}`} title={error ? t(`regionScreenshot.live.${error}`) : undefined}>{t(`regionScreenshot.live.${error || (phase === 'ready' ? 'audioHint' : phase === 'preparing' ? 'preparingAudio' : phase === 'countdown' ? 'countdownHint' : phase === 'finishing' ? 'finishing' : status || (phase === 'paused' ? 'paused' : phase === 'done' ? 'done' : 'recording'))}`)}</p>
     {expanded && <><div className="flex min-h-12 flex-1 items-center justify-center overflow-hidden">

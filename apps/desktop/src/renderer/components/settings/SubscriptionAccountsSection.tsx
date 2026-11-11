@@ -352,7 +352,8 @@ export function SubscriptionAccountsSection({
                           label={t('providerGroup.member.limitAria', { name })}
                           value={String(account.limit)}
                           disabled={busy}
-                          className="h-8 w-[104px]"
+                          size="compact"
+                          width="xs"
                           options={Array.from({ length: 16 }, (_, n) => ({
                             value: String(n + 1),
                             label: t('providerGroup.member.limitOption', { count: n + 1 }),
@@ -372,7 +373,8 @@ export function SubscriptionAccountsSection({
                             label={t('providerGroup.member.weightAria', { name })}
                             value={String(account.weight)}
                             disabled={busy}
-                            className="h-8 w-[120px]"
+                            size="compact"
+                            width="xs"
                             options={[1, 2, 3, 5, 10, 20, 50, 100].map((weight) => ({
                               value: String(weight),
                               label: t('providerGroup.member.weightOption', { weight }),

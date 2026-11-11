@@ -9,7 +9,7 @@
 | 要做的事 | 优先复用 | 规则位置 |
 | --- | --- | --- |
 | 文字按钮 | `components/ui/button.tsx` 的 `Button` | §4 Buttons |
-| 只有图标的按钮 | 标题栏 `ChromeIconButton`、侧栏 `SidebarIconButton`；其他位置暂无通用组件 | §14.6 |
+| 只有图标的按钮 | `Button` 的正方形用法（28 / 32 / 36px）；标题栏用 `ChromeIconButton`、侧栏用 `SidebarIconButton` | §4 Buttons、§14.6 |
 | 输入框 | `components/ui/input.tsx` 的 `Input` / `Textarea`；已有设置页输入用 `SettingsTextInput` | §4 Inputs & Forms |
 | 表单字段的标签、说明和错误 | `components/ui/form-field.tsx` 的 `FormField` | §4 Inputs & Forms |
 | 单选下拉 | `components/ui/select.tsx` 的 `Select` / `SelectParts` | §4 Select & Dropdown |
@@ -371,11 +371,13 @@ button/cta  (Black Pill — maximum emphasis)
 
 **Compact settings actions (owner feedback, 2026-09-21).** Button adds an explicit 28px sm size alongside 32px md and 36px lg. Logs and compact automation actions use this shared size with their existing horizontal spacing. Contacts section actions retain their approved 24px target; appearance actions retain 36px or 32px targets. A 13px identity-removal icon keeps its visible size inside a 24px target. Destructive contacts actions retain semantic red hover/pressed feedback. The authorization-waiting Cancel action remains named and enabled; it is not a disabled loading button. The contacts discard/add-identity treatments are retained per this batch’s explicit keep-before decisions.
 
-**Button inventory migration (owner-authorized 2026-09-22).** Functional text actions in Design Lab's pending-migration Button inventory call the shared Button, directly or through thin wrappers. Standard heights remain 28/32/36px; `xs` (24px) and `xxs` (22px) are compact exceptions. `compact` supplies shared 12px horizontal padding for dense rows and narrow toolbars. `tone` owns quiet and destructive treatments; `palette="confirmation"` preserves existing confirmation theme overrides without copying paint rules into dialogs. The portrait-confirmation row keeps its image-led height; long confirmation labels may wrap and grow. Loading retains an accessible action name and shows only the spinner. A busy action whose purpose is to open progress may explicitly use `allowWhileLoading`; ordinary loading actions remain disabled. Underlined links, pure icon actions and the AI composer/send topic remain separate. Runtime and visual verification are recorded in the migration evidence; this does not claim every native button in the client is a Button.
+**Button inventory migration (owner-authorized 2026-09-22).** Functional text actions in Design Lab's pending-migration Button inventory call the shared Button, directly or through thin wrappers. Standard heights remain 28/32/36px; `xs` (24px) and `xxs` (22px) are compact exceptions. `compact` supplies shared 12px horizontal padding for dense rows and narrow toolbars. `tone` owns quiet and destructive treatments; `palette="confirmation"` preserves existing confirmation theme overrides without copying paint rules into dialogs. The portrait-confirmation row keeps its image-led height; long confirmation labels may wrap and grow. Loading retains an accessible action name and shows only the spinner. A busy action whose purpose is to open progress may explicitly use `allowWhileLoading`; ordinary loading actions remain disabled. Underlined links and the AI composer/send topic remain separate; icon-only actions follow the icon button rule below. Runtime and visual verification are recorded in the migration evidence; this does not claim every native button in the client is a Button.
 
 **Button state audit follow-up (2026-09-22).** Inventory status alone does not prove that an action calls the shared implementation: follow local wrappers to their rendered control. Storage CardButton and the repaired pill wrappers now delegate to Button. Functional action-menu triggers (add plugin, manage subscription, manage skill, manage models) inherit normal press feedback; opening a menu is not itself a reason to disable feedback. Form Select triggers and the excluded input controls retain their separate contract. Audit both computed hover/pressed colors and the 1px face inset; a matching resting screenshot or a color-only assertion cannot prove the press motion. See [state audit evidence](../design-evidence/2026-09-22/button-state-audit.md).
 
-**Source-wide Button audit (2026-09-22).** Scan native actions and local wrappers even when absent from the Lab migration list. Text branches of responsive action wrappers use Button; icon-only branches remain in the icon-action topic. The danger-surface tone retains an opaque theme surface for inline archive confirmations that cover existing text. The permission palette retains the existing permit-action colors and derives hover/pressed from that pair; confirmation handlers and keyboard guards do not change. See [the source-wide audit](../design-evidence/2026-09-22/button-full-source-audit.md).
+**Source-wide Button audit (2026-09-22).** Scan native actions and local wrappers even when absent from the Lab migration list. Text branches of responsive action wrappers use Button; icon-only branches use the square Button below. The danger-surface tone retains an opaque theme surface for inline archive confirmations that cover existing text. The permission palette retains the existing permit-action colors and derives hover/pressed from that pair; confirmation handlers and keyboard guards do not change. See [the source-wide audit](../design-evidence/2026-09-22/button-full-source-audit.md).
+
+**Icon buttons (owner decision C-07, 2026-11-11).** The shared `Button` used as a square is the general icon-only button: `px-0` with the width equal to the height — 28px (`size="sm"`, `w-7`), 32px (`size="md"`, the default, `w-8`) or 36px (`size="lg"`, `w-9`). It has two looks: frameless `variant="secondary"` `tone="quiet"`, and outlined `variant="secondary"`; `tone="danger"` marks destructive ones, and `cta` is kept for the single finishing action of a compact capture toolbar. Icon buttons are always square — no 28×24 or other flattened sizes — and keep the accessible name and `Tip` required by §14.6. The title bar keeps `ChromeIconButton` (28px) and the sidebar `SidebarIconButton` (36px); both share Button's paint layer.
 
 **Why hover / pressed are derived, not aliased** (DS-4; ratios ruled by the designer 2026-09-04): in Dark, `--surface-hover` and `--surface-chip` resolve to the same value in default-dark / cindy-dark / one-dark-pro / monokai-pro, so aliasing primary's hover to `--surface-hover` made the hover state invisible; `--surface-hover-soft` sat within 2/255 of `--surface-elevated` in cindy-dark, breaking secondary the same way. Each state is therefore mixed off **its own variant's rest fill toward its own foreground** — 8% for hover, a further 10% for pressed. The ladder follows any theme override automatically and introduces no theme-blind literals. Guard: `themes/__tests__/buttonStateContrast.test.ts` asserts every builtin theme keeps each step at ΔRGB ≥ 8. These are runtime-derived values, registered but not modeled in the DTCG shadow layer (governance §3.4).
 
@@ -403,8 +405,8 @@ Desktop Settings sections put the 16px/500 section title outside the card. A car
 
 Owner decisions, 2026-11-08. They apply to every Settings page, drawer and settings dialog.
 
-- **Switch or Checkbox.** A setting that takes effect immediately uses `Switch`. An option inside a form, draft or batch selection that only takes effect on Save or Confirm uses `Checkbox` (`components/ui/checkbox.tsx`: native input, 16px, `--text-primary` accent, focus ring, disabled state, `indeterminate` for partial selection). Do not put a Switch inside a Save-gated form, and do not use a Checkbox for an instant setting.
-- **Select size.** Single-value fields use the shared `Select`; menus are for actions only, and a DropdownMenu radio group is not a field. Trigger height is 36px by default (`size` default) or 32px (`size="compact"`) in narrow drawers and dense lists; widths are 220px (`width="sm"`), 320px (`width="md"`) or full width for stacked fields (`width="full"`). No other trigger heights or ad-hoc widths.
+- **Switch or Checkbox.** A setting that takes effect immediately uses `Switch`. An option inside a form, draft or batch selection that only takes effect on Save or Confirm uses `Checkbox` (`components/ui/checkbox.tsx`: native input, 16px, `--text-primary` accent, focus ring, disabled state, `indeterminate` for partial selection). Do not put a Switch inside a Save-gated form, and do not use a Checkbox for an instant setting. Outside Settings too, a checkbox is the shared `Checkbox` inside a `label` row, not a hand-drawn box (owner decision B-10, 2026-11-11); keep `indeterminate` for partial selection. Remaining hand-drawn boxes migrate when touched.
+- **Select size.** Single-value fields use the shared `Select`; menus are for actions only, and a DropdownMenu radio group is not a field. Trigger height is 36px by default (`size` default) or 32px (`size="compact"`) in narrow drawers and dense lists; widths are 220px (`width="sm"`), 320px (`width="md"`) or full width for stacked fields (`width="full"`). **Narrow width (owner decision C-12, 2026-11-11):** a short value paired inline with another control in the same row (concurrency limit, weight, the Classical Chinese script next to its style) uses 120px (`width="xs"`). No other trigger heights or ad-hoc widths: set height with `size` and width with `width`, never with `className`.
 - **Restore default.** A single setting shows the "customized" badge and a 28px pill icon button with a `Tip` (`DefaultOverrideControls`), always to the left of its control and only while the value differs from the default. A page or group reset is a `Button` `variant="secondary"` `size="sm"` with an icon and text, on the right of the page or section title.
 - **Destructive actions.** Irreversible actions (clear memories or caches, delete, remove an account, dissolve a group) use the danger treatment: `Button` `tone="danger"`, with `danger-solid` reserved for the ConfirmDialog confirm button. Reversible actions such as Disconnect stay secondary. Destructive rows in a menu always use `variant="danger"`.
 - **Same setting, same control.** When one setting appears in two places (for example the provider account strategy), both use the same control with the same option order. Known exception (owner decision, 2026-11-09): the group reply and speaking modes stay a segmented control in local groups and a Select in server-backed groups for now.
@@ -523,6 +525,7 @@ input/text
   border      --border-default    #d7d7d4 / #3c3c3a
   radius      9999px (pill — single-line inputs)
   height      32px (sm) / 36px (md) / 40px (lg)  (DS-4 G1; three sizes, shared 4px step with buttons)
+  default     md (36px), the same height as the default Select and Button lg (owner decision C-08, 2026-11-11); pass lg only for a spacious field
   focus       --focus-ring-soft   rgba(65,124,221,0.5)   (50% of #417CDD; opaque border variant = --focus-ring)
               DS-6: approved soft ring; settings retain their local focus-border alias; error styling takes priority. Light/Dark and legacy-theme readability must be verified.
   placeholder --text-placeholder  #c4c4c4 / #525252
@@ -554,7 +557,7 @@ Question navigation, close/skip, validation, voice finalization and approval sem
 ### Typography roles and control pairing (DS-11)
 
 - Preserve the accepted hierarchy: ordinary ConfirmDialog title 18/500; provider/MCP form title 18/600; compact prompt title 15/600 where already specified. Different roles are not interchangeable merely because their font size matches.
-- Pair Button md (32px) with Input sm (32px), Button lg (36px) with Input md (36px). Input lg remains 40px for spacious fields; Button has no 40px size. Size names are local component APIs, not a shared ordinal scale.
+- Pair Button md (32px) with Input sm (32px), Button lg (36px) with Input md (36px, the Input default). Input lg remains 40px for spacious fields and must be passed explicitly; Button has no 40px size. Size names are local component APIs, not a shared ordinal scale.
 - Font aliases may share default numbers while retaining separate line-height/role contracts. Preserve public aliases; do not globally round historical unitless line heights or optical spacing. On affected surfaces, UI text consumes `--text-*`, and line boxes must grow with font settings.
 - FormField reading hints use `--form-field-hint` (defaults to `--text-secondary-mid`; One Dark Pro / Solarized Light override this help role only): in Cindy Light/Dark this is the description ink tier (70% / 66%, §15.16), and other built-in themes get stronger reading contrast. Preserve `text-tertiary` metadata and `text-placeholder` roles.
 - MarketCard's title is a registered frameless text action inside the existing card content, with an independent inset focus indicator. The title button supplies keyboard detail access without nesting the card's Clone/manage controls inside a button. Mouse card selection remains available.
@@ -921,7 +924,7 @@ Making something clickable never moves a layer between Step 1 and Step 2.
 - Don't introduce gradients — flat blocks and borders only; the registered exceptions are the session-loading wordmark sheen and functional edge fades (§2 Gradient System), the Computer Use cursor bloom (§15.7) and the neutral model-budget spectrum bar / GhostTool shimmer (§15.4)
 - Don't hard-code a solid gray for neutral text or fake a text tier with element `opacity` — use the text tier tokens (§2); in the CINDY family they are translucent ink and stay correct on glass and wallpaper
 - Don't overcomplicate the layout — stick to the region structure in §5; no complex nested grids
-- Don't use borders heavier than 1px — containment is always the lightest possible touch
+- Don't give containers or dividers a border heavier than 1px — containment is always the lightest possible touch. The rule covers containers (cards, panels, dialogs, list frames) and dividers, not control strokes (owner decision B-10, 2026-11-11): checkboxes use the shared `Checkbox` (§4 Desktop settings controls) instead of a hand-drawn box; hand-drawn radio dots, edit / focus frames, avatar and status-dot cut-out rings and spinners may use 1.5–2px; the EffortSlider thumb's 2.5px border is a registered exception (§15.18)
 - Don't add decorative or large-motion animation — no bounce, parallax or gratuitous movement, and no looping beyond the loops registered in §14.4 and the optional Dynamic [wallpaper](./wallpaper.md). Short **functional** state transitions (color / background / opacity) are fine and expected; their durations follow the §14.4 tiers.
 
 ## 8. Window & Adaptive Behavior
@@ -1392,6 +1395,10 @@ Only the two registered chart members inside Usage History may enlarge their non
 
 ### 14.6 Icon-only Controls and Tooltips
 
+- **Which component (owner decision C-07, 2026-11-11):** new icon-only actions use the square
+  shared `Button` (28 / 32 / 36px, frameless or outlined — §4 Buttons), `ChromeIconButton` in the
+  title bar and `SidebarIconButton` in the sidebar. Feature-local native icon buttons are legacy
+  and migrate when touched.
 - **Delivery contract for new and modified icon-only controls:** every icon-only interactive
   control has two labels: a localized accessible name (`aria-label`) and a visible `Tip`.
   Familiar glyphs, dense lists, and actions that only appear on hover are not exemptions: if
@@ -1682,7 +1689,7 @@ and media position (`ui/media-scrubber`, seconds in/out). Native media controls 
 
 - Numeric: 6px track, 36px transparent hit height; thumb 16×16 → hover 18×18 → pressed 22×16.
 - Media: 4px track, 28px hit height; thumb 10×10 → hover 12×12 → pressed 14×10.
-- Effort: retain tier-colored 21×21 thumb, 2.5px panel-colored border and 4px same-color 22% halo;
+- Effort: retain tier-colored 21×21 thumb, 2.5px panel-colored border (registered exception to the §7 border rule, owner decision B-10, 2026-11-11) and 4px same-color 22% halo;
   hover 23×23, pressed 27×21. Preserve absolute tier colors, continuous drag and release-to-commit.
 - Geometry changes actual width/height with full pill radius, never elliptical scale. Hit regions
   stay fixed. Geometry uses motion-fast/ease-out; position follows the pointer immediately;

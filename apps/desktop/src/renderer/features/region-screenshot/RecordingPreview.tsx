@@ -76,8 +76,8 @@ export function RecordingPreview({ document: clip, bridge }: { document: Recordi
     <div className="flex h-11 shrink-0 items-center gap-2 border-b border-[var(--border-default)] px-3 [-webkit-app-region:drag] [&_button]:[-webkit-app-region:no-drag]">
       <span className="text-12">{t('regionScreenshot.live.preview')} · {clip.format === 'gif' ? 'GIF' : 'WebM'}</span>
       <span className="flex-1" />
-      <Button size="xs" variant="secondary" tone="quiet" className="w-7 px-0" aria-label={t('titleBar.minimize')} onClick={() => bridge.minimize(clip.token)}><Minus size={14} /></Button>
-      <Button size="xs" variant="secondary" tone="quiet" className="w-7 px-0" disabled={saving} aria-label={t('titleBar.close')} onClick={() => bridge.close(clip.token)}><X size={14} /></Button>
+      <Button size="sm" variant="secondary" tone="quiet" className="w-7 px-0" aria-label={t('titleBar.minimize')} onClick={() => bridge.minimize(clip.token)}><Minus size={14} /></Button>
+      <Button size="sm" variant="secondary" tone="quiet" className="w-7 px-0" disabled={saving} aria-label={t('titleBar.close')} onClick={() => bridge.close(clip.token)}><X size={14} /></Button>
     </div>
     <div className="relative flex min-h-0 flex-1 items-center justify-center overflow-hidden p-4">
       {!ready && !error && <span role="status" className="absolute text-13 text-[var(--text-secondary)]">{t('regionScreenshot.editor.loading')}</span>}

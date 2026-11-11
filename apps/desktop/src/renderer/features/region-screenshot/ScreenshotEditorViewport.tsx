@@ -74,8 +74,8 @@ export function ScreenshotEditorViewport({ image, tools, children, aiMenu, onMin
         <div className="ml-auto flex shrink-0 items-center gap-1">
         <span className="text-12 tabular-nums text-[var(--text-secondary)]">{image && `${image.width} × ${image.height}`}</span>
         {aiMenu}
-        <Button size="xs" variant="secondary" tone="quiet" className="w-7 px-0" aria-label={t('titleBar.minimize')} onClick={onMinimize}><Minus size={14} /></Button>
-        <Button size="xs" variant="secondary" tone="quiet" className="w-7 px-0" aria-label={t('titleBar.close')} onClick={onClose}><X size={14} /></Button>
+        <Button size="sm" variant="secondary" tone="quiet" className="w-7 px-0" aria-label={t('titleBar.minimize')} onClick={onMinimize}><Minus size={14} /></Button>
+        <Button size="sm" variant="secondary" tone="quiet" className="w-7 px-0" aria-label={t('titleBar.close')} onClick={onClose}><X size={14} /></Button>
         </div>
       </div>
       {image && tools}
