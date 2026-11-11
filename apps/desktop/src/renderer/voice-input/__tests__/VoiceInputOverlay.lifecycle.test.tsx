@@ -47,6 +47,8 @@ function mount() {
     const engine = { stop: vi.fn().mockResolvedValue(undefined), drainBufferedAudio: vi.fn().mockResolvedValue(undefined) };
     engines.push(engine);
     options.setEngine(engine);
+    // Model retained PCM so the real start-cue gate releases this recording's mute.
+    options.onCaptureReady?.();
     options.onSoundDetected();
     return { ok: true, drainPendingChunks: vi.fn() };
   });

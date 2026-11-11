@@ -95,6 +95,7 @@
     "ensure-deps": "node scripts/ensure-deps.mjs",
     "sync:browser-runtime": "node scripts/browser-runtime/sync.mjs",
     "repo:worktrees": "node scripts/repo-worktrees.mjs",
+    "repo:conflict-hotspots": "node scripts/repo-conflict-hotspots.mjs",
     "update:claude": "node tools/claude/update.mjs",
     "update:codex": "node tools/codex/update.mjs",
     "update:codex-package": "node tools/codex-package/update.mjs",

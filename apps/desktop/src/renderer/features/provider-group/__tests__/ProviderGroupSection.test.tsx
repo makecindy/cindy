@@ -288,6 +288,16 @@ describe('ProviderGroupSection', () => {
     });
     expect(localSwitch).toBeTruthy();
     expect(within(rows[0]).queryByRole('button', { name: 'providerGroup.member.remove' })).toBeNull();
+    // 「⋯」每行都在、都排在开关后面，行尾对齐；本机那个置灰不能点。
+    const moreName = (name: string) => `providerGroup.member.moreAria:{"name":"${name}"}`;
+    const localMore = within(rows[0]).getByRole('button', { name: moreName('providerGroup.member.local') });
+    const remoteMore = within(rows[1]).getByRole('button', { name: moreName('Mac mini') });
+    expect(localMore.getAttribute('aria-disabled')).toBe('true');
+    expect(localMore.hasAttribute('aria-haspopup')).toBe(false);
+    expect(remoteMore.getAttribute('aria-disabled')).toBeNull();
+    for (const [row, more] of [[rows[0], localMore], [rows[1], remoteMore]] as const) {
+      expect(within(row).getByRole('switch').compareDocumentPosition(more) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    }
     fireEvent.click(
       within(rows[1]).getByRole('switch', { name: 'providerGroup.member.assignAria:{"name":"Mac mini"}' }),
     );

@@ -74,6 +74,9 @@
     "cancel": "このままにする"
   },
   "unified": {
+    "accountUnassigned": "アカウント未割り当て",
+    "accountCount_other": "{{count}} 個のアカウント",
+    "accountFallback": "アカウント {{index}}",
       "favoriteConfiguration": "この設定をお気に入りに追加",
       "savedConfiguration": "登録済み · タップして解除",
       "currentConfiguration": "現在の設定",
@@ -113,6 +116,12 @@
       "hour": "時間",
       "minute": "分",
       "second": "秒"
-    }
+    },
+    "quotaAverage": "クォータ残り {{percent}}%（平均）",
+    "quotaUpdating": "クォータ更新待ち",
+    "quotaResetSoon": "まもなくリセット",
+    "quotaResetIn": "{{duration}}後にリセット",
+    "quotaAverageHint": "週の上限 · アカウントごとの単純平均",
+    "quotaResetHint": "現在の利用ペースではリセット時にクォータが残る見込みです。24時間以内は黄色、6時間以内は赤色で表示します。"
   }
 }

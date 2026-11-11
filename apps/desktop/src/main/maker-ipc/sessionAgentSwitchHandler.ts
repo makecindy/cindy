@@ -49,11 +49,21 @@ import {
 import { throwIpcError } from '../utils/ipcValidate.js';
 import { shouldApplyExclusiveProviderRerouteLive } from '../maker-host/model-route-guard-live.js';
 import { dbToMakerAgentKind, makerToDbAgentKind, normalizeDbAgentKind } from '../../shared/agentKindConversion.js';
+import { decideProviderGroupFailure, providerGroupFailureSignals } from '../provider-group/failurePolicy.js';
 
 function throwIfAgentSwitchAborted(signal: AbortSignal | undefined): void {
   if (signal?.aborted) {
     throw new Error('agent switch aborted');
   }
+}
+
+/**
+ * 要换过去的那台此刻接不了这个任务(连不上、保留的远程任务数已满、不提供这个模型等)，与原生记录能不能恢复无关：
+ * 改用摘要同样打不开。判定沿用供应商组的唯一口径(provider-group/failurePolicy)。
+ */
+function isSwitchTargetUnavailable(error: unknown): boolean {
+  const decision = decideProviderGroupFailure(providerGroupFailureSignals(error), 'target');
+  return decision.action === 'switch' && decision.cause === 'unavailable';
 }
 
 /**
@@ -254,7 +264,8 @@ export interface MakerSessionAgentSwitchHandlerDeps {
   /** 分隔条展示用的电脑名(null = 任务所在电脑)。缺省 = 不记名称。 */
   describeAgentDevice?(deviceId: string | null): string | null;
   getSessionRow(sessionId: string): Promise<AgentSwitchSessionRow | null>;
-  getLiveSession(sessionId: string): { isTurnRunning(): boolean; sdkSessionId?: string } | null | undefined;
+  getLiveSession(sessionId: string): { isTurnRunning(): boolean; sdkSessionId?: string;
+    hasStartedClosing?(): boolean } | null | undefined;
   readOwnerGeneration?(): number;
   confirmNativeHistoryFallback?(sessionId: string, targetDeviceId: string | null): Promise<boolean>;
   relocateNativeHistory?(input: {
@@ -713,6 +724,8 @@ export async function performSessionAgentSwitch(
     /** Recheck caller CAS after asynchronous validation, before staging any intent. */
     assertSelectionCurrent?: () => void;
     beforeMutation?: () => Promise<void>;
+    /** Internal forced group relocation: admit before an actual close or route commit, never during preparation. */
+    onRelocationMutationStart?: () => void;
     /**
      * 仅限 main 内部(不接受 IPC 传入)：Agent 位置不变也按换电脑重新交接、新建原生会话。供应商组替分享的人
      * 换电脑时任务的位置仍是同一个分享，实际运行的电脑由组所在电脑重新选(docs/product-rules/provider-groups.md §6.1)。
@@ -964,6 +977,7 @@ export async function performSessionAgentSwitch(
 
   // 跨引擎选择比此前登记的凭证切换更新；即使旧切换已在 await close，清掉登记后
   // 它也会在收口前重读并放弃，避免 DB 已是新 agent、内存 route 却被旧 provider 覆盖。
+  if (params.onRelocationMutationStart) params.assertSelectionCurrent?.();
   deps.supersedePendingCredentialSwitch?.(sessionId);
 
   // 意图制:外部调用(非 applyNow)一律只登记意图——空闲/运行中同一语义,
@@ -1063,6 +1077,14 @@ export async function performSessionAgentSwitch(
     }
     throwIfAgentSwitchAborted(signal);
     if (live) {
+      if (params.onRelocationMutationStart) {
+        params.assertSelectionCurrent?.();
+        const currentLive = deps.getLiveSession(sessionId);
+        if (currentLive && currentLive !== live) throw new Error('Session runtime changed during agent relocation');
+        // History reads may have outlived the source. A no-op/already-started
+        // close must not admit recovery before the later route commit.
+        if (currentLive && !currentLive.hasStartedClosing?.()) params.onRelocationMutationStart();
+      }
       try {
         await deps.closeSession(sessionId);
       } catch (error) {
@@ -1181,6 +1203,15 @@ export async function performSessionAgentSwitch(
           nativeBootstrapReady = true;
         } catch (error) {
           await restoreNativeProbeSource(error);
+          // The target cannot take the task at all, so a summary would fail the same way
+          // and only discard the native context. Do not ask: the caller keeps the task on
+          // the source computer and sends there (provider-groups.md §6.2「换不过去」).
+          if (isSwitchTargetUnavailable(error)) {
+            deps.log.warn('agent-switch: quota relocation target cannot take the task; staying on the source', {
+              sessionId, error: error instanceof Error ? error.message : String(error),
+            });
+            throw error;
+          }
           relocatedNativeId = null;
           handoff = buildFullHandoff();
           deps.log.warn('agent-switch: native quota relocation failed; restored source before summary confirmation', {
@@ -1198,6 +1229,7 @@ export async function performSessionAgentSwitch(
 
     if (params.providerGroupRelocation && row.source === 'bot') await params.beforeMutation?.();
     if (relocating) assertTransferCurrent();
+    params.onRelocationMutationStart?.();
     // ---- commit point:此后切换生效 ----
     try {
       await deps.applyAgentSwitchToDb(sessionId, {

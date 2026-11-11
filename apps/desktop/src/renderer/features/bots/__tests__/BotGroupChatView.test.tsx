@@ -102,7 +102,7 @@ vi.mock('@/contexts/AuthContext', () => ({ useAuth: () => ({ user: { id: 'accoun
 vi.mock('@/components/chat/MarkdownRenderer', async () => {
   const { RichAnswer } = await import('@/components/chat/RichAnswer');
   const { splitRichAnswer } = await import('@cindy/maker-shared/rich-answer');
-  return { MarkdownRenderer: ({ content, renderRichAnswers, streamFadeKey }: any) => <div data-markdown>
+  return { MarkdownRenderer: ({ content, renderRichAnswers, streamFadeKey }: { content: string; renderRichAnswers?: boolean; streamFadeKey?: string }) => <div data-markdown>
     {renderRichAnswers ? splitRichAnswer(content).map(part => part.kind === 'rich'
       ? <RichAnswer key={part.key} source={part.source} complete stateKey={`${streamFadeKey}:${part.key}`} renderMarkdown={text => <span>{text}</span>} />
       : part.source) : content}
@@ -680,6 +680,90 @@ describe('BotGroupChatView', () => {
     await act(async () => finish(revoked ? { ok: false, errorCode: 'PERMISSION_DENIED' } : { ok: true, group: initial }));
     if (revoked) expect(screen.queryByText('Server confirmed delta')).toBeNull();
     else expect(screen.getAllByText('Server confirmed delta')).toHaveLength(1);
+  });
+
+  // #9398, unit: real timeline + message-only push before a deferred full read.
+  // Existing plan tests start with complete details and miss the transient organizer/missing bubble.
+  it.each(['talk', 'work', undefined] as const)('waits for plan details without delaying ordinary deltas (kind=%s)', async kind => {
+    const initial = detail({ serverBacked: true, historyRevision: 'live', organizerBotId: 'xiaoman',
+      messages: [msg({ id: 'u1', content: 'New discussion request' })] });
+    mocks.getBotGroup.mockResolvedValue({ ok: true, group: initial });
+    renderView(); await screen.findByText('New discussion request');
+    let finish!: (value: { ok: true; group: BotGroupDetail }) => void;
+    mocks.getBotGroup.mockImplementationOnce(() => new Promise(resolve => { finish = resolve; }));
+    const cardMessage = { ...planCard, authorKind: 'user' as const, authorBotId: null, authorName: 'Human creator' };
+    const ordinary = msg({ id: 'ordinary', sequence: 11, authorKind: 'bot', authorBotId: 'xiaoman', content: 'Immediate ordinary reply' });
+    await act(async () => { mocks.pushes.forEach(push => push({ groupId: 'g1', change: 'messages', historyRevision: 'live', messages: [cardMessage, ordinary] })); });
+    expect(screen.getByText('Immediate ordinary reply')).toBeTruthy();
+    expect(screen.queryByText('bots.groupChat.plan.missing')).toBeNull();
+    expect(screen.queryByText('bots.groupChat.organizer')).toBeNull();
+    const ready = plan({ kind, organizerBotId: 'xiaoman', organizerName: '小满' });
+    await act(async () => finish({ ok: true, group: withPlan(ready, [ordinary], { ...initial,
+      messages: [...initial.messages, cardMessage, ordinary], plans: [ready], openPlan: openSummary(ready) }) }));
+    if (kind === 'talk') {
+      expect(screen.getByTestId('bot-group-arrangement').closest('article')).toBeNull();
+      expect(screen.queryByText('bots.groupChat.organizer')).toBeNull();
+    } else {
+      const card = screen.getByTestId('bot-group-plan');
+      expect(card.closest('article')?.textContent).toContain('小满');
+      expect(within(card.closest('article')!).getByText('bots.groupChat.organizer')).toBeTruthy();
+      expect(screen.getByRole('button', { name: 'bots.groupChat.plan.start' })).toBeTruthy();
+    }
+    expect(screen.queryByText('bots.groupChat.plan.missing')).toBeNull();
+    expect(screen.getAllByText('Immediate ordinary reply')).toHaveLength(1);
+  });
+
+  it('keeps a confirmed missing plan visible without inventing an organizer', async () => {
+    mocks.getBotGroup.mockResolvedValue({ ok: true, group: detail({ messages: [
+      { ...planCard, authorKind: 'user', authorBotId: null, authorName: 'Human creator' },
+    ], plans: [] }) });
+    renderView();
+    const missing = await screen.findByText('bots.groupChat.plan.missing');
+    expect(missing.closest('article')).toBeNull();
+    expect(screen.queryByText('bots.groupChat.organizer')).toBeNull();
+    expect(document.querySelector('[aria-busy="true"]')).toBeNull();
+  });
+
+  it('does not publish an incomplete plan when a newer delta overtakes a full read', async () => {
+    const initial = detail({ serverBacked: true, historyRevision: 'live', messages: [msg({ content: 'Before plan push' })] });
+    mocks.getBotGroup.mockResolvedValue({ ok: true, group: initial });
+    renderView(); await screen.findByText('Before plan push');
+    let oldRead!: (value: { ok: true; group: BotGroupDetail }) => void;
+    let newRead!: (value: { ok: true; group: BotGroupDetail }) => void;
+    mocks.getBotGroup.mockImplementationOnce(() => new Promise(resolve => { oldRead = resolve; }))
+      .mockImplementationOnce(() => new Promise(resolve => { newRead = resolve; }));
+    await act(async () => { mocks.pushes.forEach(push => push({ groupId: 'g1', change: 'messages' })); });
+    const ordinary = msg({ id: 'newer-reply', sequence: 11, authorKind: 'bot', content: 'Newer delta stays visible' });
+    await act(async () => { mocks.pushes.forEach(push => push({ groupId: 'g1', change: 'messages', historyRevision: 'live', messages: [planCard, ordinary] })); });
+    await act(async () => oldRead({ ok: true, group: initial }));
+    expect(newRead).toBeTypeOf('function');
+    expect(screen.getByText('Newer delta stays visible')).toBeTruthy();
+    expect(screen.queryByText('bots.groupChat.plan.missing')).toBeNull();
+    expect(screen.queryByText('bots.groupChat.organizer')).toBeNull();
+    await act(async () => newRead({ ok: true, group: withPlan(plan({ kind: 'talk' }), [ordinary], { historyRevision: 'live' }) }));
+    expect(screen.getByTestId('bot-group-arrangement')).toBeTruthy();
+  });
+
+  it('recovers plan details after a failed read without showing a missing-plan bubble', async () => {
+    const initial = detail({ serverBacked: true, historyRevision: 'live', messages: [msg({ content: 'Plan read will retry' })] });
+    mocks.getBotGroup.mockResolvedValue({ ok: true, group: initial });
+    renderView(); await screen.findByText('Plan read will retry');
+    vi.useFakeTimers();
+    try {
+      mocks.getBotGroup.mockResolvedValueOnce({ ok: false, errorCode: 'REQUEST_TIMEOUT', message: '' })
+        .mockResolvedValue({ ok: true, group: withPlan(plan({ kind: 'talk' }), [], { historyRevision: 'live' }) });
+      await act(async () => { mocks.pushes.forEach(push => push({ groupId: 'g1', change: 'messages', historyRevision: 'live', messages: [planCard] })); });
+      expect(screen.queryByText('bots.groupChat.plan.missing')).toBeNull();
+      expect(screen.queryByText('bots.groupChat.organizer')).toBeNull();
+      await act(async () => { await vi.advanceTimersByTimeAsync(30_000); });
+      expect(screen.getByTestId('bot-group-arrangement')).toBeTruthy();
+      const reads = mocks.getBotGroup.mock.calls.length;
+      await act(async () => { await vi.advanceTimersByTimeAsync(60_000); });
+      expect(mocks.getBotGroup).toHaveBeenCalledTimes(reads);
+    } finally {
+      cleanup();
+      vi.useRealTimers();
+    }
   });
 
   // Regression: returning to a group must not replay its consumed creation intent.

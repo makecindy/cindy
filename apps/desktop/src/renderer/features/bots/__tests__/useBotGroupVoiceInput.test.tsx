@@ -34,8 +34,10 @@ vi.mock('@/voice-input/WebMicAudioEngine', () => ({
 }));
 vi.mock('@/voice-input/startGuards', () => ({ resolveVoiceInputStartGuards: mocks.guards }));
 vi.mock('@/voice-input/captureSession', () => ({
-  startVoiceInputCaptureSession: async (input: { onSoundDetected: () => void; setEngine: (engine: unknown) => void }) => {
+  startVoiceInputCaptureSession: async (input: { onCaptureReady?: () => void; onSoundDetected: () => void; setEngine: (engine: unknown) => void }) => {
     if (mocks.captureEngine) { input.setEngine(mocks.captureEngine); mocks.captureEngine = null; }
+    // Model retained PCM so the real start-cue gate releases this recording's mute.
+    input.onCaptureReady?.();
     input.onSoundDetected();
     return { ok: true, drainPendingChunks: () => {} };
   },

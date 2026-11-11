@@ -1070,8 +1070,7 @@ describe('CreateWorkerPopover', () => {
     ).toBe(true);
   });
 
-  it('keeps Auto-review when the Full access confirmation is cancelled', async () => {
-    mocks.confirm.mockResolvedValue(false);
+  it('applies Full access directly without a confirmation', async () => {
     window.localStorage.setItem(
       'workerCreationPrefs',
       JSON.stringify({ workerPermissionMode: 'auto' }),
@@ -1087,13 +1086,13 @@ describe('CreateWorkerPopover', () => {
 
     const selector = screen.getByTestId('permission-selector');
     fireEvent.click(selector);
-    await waitFor(() => expect(mocks.confirm).toHaveBeenCalledTimes(1));
-    expect(selector.getAttribute('data-mode')).toBe('auto');
+    expect(mocks.confirm).not.toHaveBeenCalled();
+    expect(selector.getAttribute('data-mode')).toBe('bypassPermissions');
 
     fireEvent.click(screen.getByRole('button', { name: 'orca.createWorker.submit' }));
     await waitFor(() =>
       expect(onCreate).toHaveBeenCalledWith(
-        expect.objectContaining({ workerPermissionMode: 'auto' }),
+        expect.objectContaining({ workerPermissionMode: 'bypassPermissions' }),
       ),
     );
   });
