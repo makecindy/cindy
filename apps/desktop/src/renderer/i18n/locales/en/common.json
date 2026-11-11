@@ -19969,7 +19969,7 @@
         "hint": "Moves to the next source only when the one above cannot be used."
       },
       "rotate": {
-        "title": "Take turns",
+        "title": "Rotate",
         "hint": "Each new task goes to the next source, sharing the load evenly."
       },
       "cheapest": {
@@ -19985,13 +19985,13 @@
       "expiringQuota": "{{left}}% of its quota is left and resets {{reset}}, so it goes first",
       "expiring": "First by quota",
       "order": "The first available source",
-      "rotate": "Its turn this time",
+      "rotate": "Picked by rotation",
       "only": "The only one available now",
       "soonest": "Every source is out of quota; this one recovers first",
       "soonestUntil": "Every source is out of quota; this one recovers first ({{reset}})",
-      "standby": "Not its turn this time",
+      "standby": "Not picked this time",
       "standbyQuota": "{{left}}% of its quota is left and does not reset until {{reset}}, so it is kept for later",
-      "off": "Turned off in this route",
+      "off": "Off in this route",
       "unavailable": "Not connected, or this model cannot be selected now",
       "limited": "Out of quota",
       "limitedUntil": "Out of quota until {{reset}}",
