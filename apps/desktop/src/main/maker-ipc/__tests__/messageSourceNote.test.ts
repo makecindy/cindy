@@ -139,6 +139,7 @@ describe('delivery-path wiring (source contract)', () => {
   const register = read('src/main/maker-ipc/register.ts');
   const coordinator = read('src/main/maker-ipc/agent-input-coordinator.ts');
   const transaction = read('src/main/maker-ipc/makerSendTransaction.ts');
+  const steer = read('src/main/maker-ipc/makerSteerTransaction.ts');
   const queue = read('src/shared/agentInputQueue.ts');
 
   const between = (source: string, start: string, end: string) => {
@@ -151,8 +152,8 @@ describe('delivery-path wiring (source contract)', () => {
 
   it('builds the note at exactly three final dispatch points, never in the queue', () => {
     expect(transaction.match(/buildWireMessageSourceNote\(/g)).toHaveLength(1);
-    // steerToAgentAccepted + sendUserMessageWithAwaitedGitBaseline.
-    expect(register.match(/buildWireMessageSourceNote\(/g)).toHaveLength(2);
+    expect(steer.match(/buildWireMessageSourceNote\(/g)).toHaveLength(1);
+    expect(register.match(/buildWireMessageSourceNote\(/g)).toHaveLength(1);
     expect(coordinator).not.toContain('buildWireMessageSourceNote');
     expect(queue).not.toMatch(/build(Wire)?MessageSourceNote|buildClientDeviceNote/);
     expect(between(queue, 'export function getAgentFacingText', '\n}\n')).not.toContain('source');
@@ -182,11 +183,7 @@ describe('delivery-path wiring (source contract)', () => {
   });
 
   it('steer prepends the source note from coordinator-transmitted fields', () => {
-    const steer = between(
-      register,
-      'const steerToAgentAccepted = async',
-      'const trustedDesktopSteerText',
-    );
+    expect(register).toContain('const steerToAgentAccepted = createMakerSteerTransaction(');
     expect(steer).toContain('origin: so.sourceOrigin');
     expect(steer).toContain('sourcePlugin: so.sourcePlugin');
     expect(steer).toContain('sharedTaskAuthor: so.sharedTaskAuthor');

@@ -14089,6 +14089,7 @@
       "botSentNamed": "由伙伴「{{name}}」发送",
       "orcaFromLead": "来自 Lead 的消息",
       "orcaFromWorker": "来自 Worker 的消息",
+      "orcaFromWorkerBatch": "系统回传的 {{count}} 条 Worker 结果",
       "orcaFromWorkerNamed": "来自 Worker「{{role}}」的消息",
       "hookChannelFrom": "来自 {{channel}}",
       "deviceSentMobileNamed": "从手机「{{name}}」发送",

@@ -45,8 +45,8 @@
  * 会话不进本进程 maker-core,天然不经过。
  *
  * 写入频率:每个 turn 起止各一次 UPDATE,不在事件热路径,对 maker-core 四指标
- * 无影响(规则 10)。所有写入吞错落日志:这是尽力而为的辅助信号,绝不阻塞
- * turn 主流程。
+ * 无影响(规则 10)。默认写入吞错落日志,不阻塞桌面 turn 主流程。Host 的显式
+ * durable 启动入口把本次失败返回调用方,用于在 provider 启动前确认落盘。
  */
 
 import { and, desc, eq, gt, inArray, isNull, lt, or, sql } from 'drizzle-orm';
@@ -175,12 +175,13 @@ export function drainSessionActiveTurnWrites(sessionId: string): Promise<void> {
   return _writeChains.get(sessionId) ?? Promise.resolve();
 }
 
-/** 返回链上本次写完成(含失败吞错)的 promise,供需要落库确认的调用方 await。 */
-function chainWrite(sessionId: string, op: () => Promise<void>): Promise<void> {
+/** Serialize writes; default callers swallow failures, durable callers receive their own rejection. */
+function chainWrite(sessionId: string, op: () => Promise<void>, propagateFailure = false): Promise<void> {
   const prev = _writeChains.get(sessionId) ?? Promise.resolve();
-  const next = prev.then(op).catch(() => undefined);
+  const pending = prev.then(op);
+  const next = pending.catch(() => undefined);
   _writeChains.set(sessionId, next);
-  return next;
+  return propagateFailure ? pending : next;
 }
 
 /** Freeze the writer at admission, before a queue/barrier can outlive its owner. */
@@ -191,13 +192,25 @@ function captureMarkerDb() {
 
 /** turn 启动:写 active_turn_started_at = now。fire-and-forget,失败只落日志。 */
 export function markSessionTurnStarted(sessionId: string): void {
-  if (_quitFrozen) return;
+  void queueSessionTurnStarted(sessionId, false);
+}
+
+/** Host requires durable evidence before starting a provider; Desktop remains best effort. */
+export function markSessionTurnStartedDurable(sessionId: string): Promise<void> {
+  return queueSessionTurnStarted(sessionId, true);
+}
+
+function queueSessionTurnStarted(sessionId: string, durable: boolean): Promise<void> {
+  if (_quitFrozen) return durable ? Promise.reject(new Error('Turn markers are frozen')) : Promise.resolve();
   const startedAt = Date.now();
   const db = captureMarkerDb();
   _notificationTurns.set(sessionId, { startedAt, sequence: ++_notificationTurnSequence });
-  chainWrite(sessionId, async () => {
+  return chainWrite(sessionId, async () => {
     try {
-      if (!db) return;
+      if (!db) {
+        if (durable) throw new Error('DbClient not ready');
+        return;
+      }
       await db.update(sessions)
         .set({ activeTurnStartedAt: startedAt })
         .where(eq(sessions.id, sessionId));
@@ -206,8 +219,9 @@ export function markSessionTurnStarted(sessionId: string): void {
         sessionId,
         error: err instanceof Error ? err.message : String(err),
       });
+      if (durable) throw err;
     }
-  });
+  }, durable);
 }
 
 /**

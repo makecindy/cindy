@@ -9,7 +9,7 @@ import path from 'node:path';
 const uploadLocalFile = vi.hoisted(() => vi.fn());
 const uploadBuffer = vi.hoisted(() => vi.fn());
 const removeRemote = vi.hoisted(() => vi.fn(async () => {}));
-vi.mock('../mediaTransfer', () => ({ uploadLocalFile, uploadBuffer, removeRemote, mimeOf: () => 'text/plain' }));
+vi.mock('../mediaTransfer.desktop', () => ({ uploadLocalFile, uploadBuffer, removeRemote, mimeOf: () => 'text/plain' }));
 
 const resolveSafe = vi.hoisted(() => vi.fn());
 vi.mock('../../imageCacheStore.desktop', () => ({ resolveSafe }));

@@ -58,7 +58,7 @@ function wrapHandle(
       if (property === 'send')
         return async (...args: Parameters<AgentSessionHandle['send']>) => {
           if (cleanupPending) throw new Error('Subscription account runtime is closing');
-          lease.account.assertCurrent();
+          lease.assertDispatchable();
           lease.running(true);
           try {
             return await target.send(...args);
