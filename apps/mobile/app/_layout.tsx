@@ -427,7 +427,13 @@ function RootAfterUpdateChannel({ channel }: { channel: UpdateChannel }) {
         <AgentActivityBridge />
         {/* 掌机模式:手柄语音键 / 焦点导航 / 副屏(仅含 cindy-handheld 的 Android 原生包,不渲染 UI) */}
         <HandheldModeBridge />
-        <NavigationGate />
+        {/* 渲染兜底:启动稳定后,页面树里任何一处渲染报错都落到这里,显示可重新加载的错误页而不是
+            让 App 退出。只包页面树、留在 AuthProvider / DeviceLinkProvider 里面:重新加载只重挂页面,
+            不会重建登录与设备连接——重建 AuthProvider 会让可能仍在途的令牌刷新与新实例的刷新
+            各用同一个会轮换的令牌,被服务端拒绝时会清掉登录状态(登出)。 */}
+        <RootErrorBoundary fallback={renderErrorFallback}>
+          <NavigationGate />
+        </RootErrorBoundary>
       </DeviceLinkProvider>
     </AuthProvider>
   );
@@ -528,9 +534,6 @@ function RootLayout() {
           <LocaleProvider>
             {/* handoff Provider 常驻 root(PR4b):闸门屏切换不重置衔接状态机 */}
             <MobileLoginHandoffProvider>
-              {/* 渲染兜底:启动稳定后,闸门与业务树里任何一处渲染报错都落到这里,显示可重试的
-                  错误页而不是让 App 退出。外层只留错误页自己要用的主题 / 语言 / 窗口 Provider。 */}
-              <RootErrorBoundary fallback={renderErrorFallback}>
               <EndpointHandoffBridge status={endpointGate.status} />
               {/* 启动闸门全程共用这一个 splash 实例;需要用户交互的闸门屏
                   (端点错误 / 强更阻断)才隐藏它 */}
@@ -540,7 +543,6 @@ function RootLayout() {
                 <ConnectionNoticeProvider>{body}</ConnectionNoticeProvider>
                 <AndroidUpdateSheet />
               </StartupSplashOverlay>
-              </RootErrorBoundary>
             </MobileLoginHandoffProvider>
           </LocaleProvider>
         </ThemeProvider>
@@ -553,7 +555,7 @@ function RootLayout() {
 
 /**
  * 渲染兜底页:与启动闸门同一套阻断内容层(标题 / 说明 / 唯一动作),唯一动作是重新加载——
- * 丢弃出错的子树并重新挂载闸门与业务树。
+ * 丢弃出错的页面树并重新挂载它。
  */
 function renderErrorFallback(retry: () => void): ReactElement {
   return (

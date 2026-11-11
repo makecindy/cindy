@@ -274,8 +274,9 @@ pnpm --filter mobile test:smoke
   | `-[NSException raise]` ← 连续 App 帧 ← dispatch | 启动监控窗口内的 JS 致命错误：expo-updates 的错误恢复放弃后主动崩溃 |
   | `Termination Reason: RUNNINGBOARD 0xdead10cc` | 被挂起时仍持有 App Group 里的文件锁。入站分享读取暂存区时持锁，所以后台启动时不读取，等回到前台（`IncomingShareBridge`） |
 
-- **JS 报错兜底**：启动稳定后（根布局首次提交 20 秒后），渲染报错由根级
-  `RootErrorBoundary` 显示可重试的错误页，回调与定时器里的未捕获报错由 `jsErrorGuard`
+- **JS 报错兜底**：启动稳定后（根布局首次提交 20 秒后），页面树的渲染报错由
+  `RootErrorBoundary`（包在 `NavigationGate` 外、`AuthProvider` / `DeviceLinkProvider` 内，重新加载不会
+  重建登录与设备连接）显示可重新加载的错误页，回调与定时器里的未捕获报错由 `jsErrorGuard`
   降为非致命、App 继续运行。**窗口内两者都保持致命**：expo-updates 的错误恢复靠「首屏出现后
   10 秒内的致命报错」回滚坏掉的热更，20 秒的窗口严格覆盖它，改动这两处时不得缩短或绕过。
   开发构建不启用降级，保留红屏。开启本机诊断记录时会写入 `js error` 事件，只含报错类型与

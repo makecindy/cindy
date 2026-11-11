@@ -9,7 +9,8 @@ type Props = {
 type State = { failed: boolean; error: unknown; attempt: number };
 
 /**
- * 根级渲染兜底：业务树里任何一处渲染报错都落到这里，显示可重试的错误页，而不是让 App 退出。
+ * 页面树的渲染兜底：包在导航树外面、登录与设备连接 Provider 里面（见根布局），树里任何一处渲染报错
+ * 都落到这里，显示可重新加载的错误页，而不是让 App 退出。重新加载只重挂这棵页面树。
  *
  * 启动窗口内不接：此时把报错原样抛回去，它仍是 React 的未捕获错误、照旧致命，
  * expo-updates 的错误恢复才能回滚坏掉的热更（窗口定义见 `jsErrorGuard`）。
