@@ -74,6 +74,9 @@
     "cancel": "그대로 두기"
   },
   "unified": {
+    "accountUnassigned": "계정 미배정",
+    "accountCount_other": "계정 {{count}}개",
+    "accountFallback": "계정 {{index}}",
       "favoriteConfiguration": "이 설정을 즐겨찾기에 추가",
       "savedConfiguration": "즐겨찾기에 추가됨 · 눌러서 해제",
       "currentConfiguration": "현재 설정",
@@ -113,6 +116,12 @@
       "hour": "시간",
       "minute": "분",
       "second": "초"
-    }
+    },
+    "quotaAverage": "평균 잔여량 {{percent}}%",
+    "quotaUpdating": "잔여량 업데이트 대기",
+    "quotaResetSoon": "곧 초기화",
+    "quotaResetIn": "{{duration}} 후 초기화",
+    "quotaAverageHint": "주간 한도 · 계정별 동일 가중 평균",
+    "quotaResetHint": "현재 사용 속도라면 초기화 시 할당량이 남을 수 있습니다. 24시간 이내는 노란색, 6시간 이내는 빨간색입니다."
   }
 }

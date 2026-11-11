@@ -71,6 +71,25 @@ describe('useCodexRateLimits', () => {
     expect(hook.result.current.snapshot).toBe(afterReset);
   });
 
+  // PR #9916: settings mounts two ordinary consumers. A newer rejection can
+  // finish first; accepting Retry must show busy even while its reread is queued.
+  it('marks a manual retry busy while an older consumer read is pending', async () => {
+    let finishOld!: (value: MobileCodexRateLimitsResult) => void;
+    const reader = vi.fn().mockImplementationOnce(() => new Promise(resolve => { finishOld = resolve; }))
+      .mockRejectedValueOnce(new Error('quota unavailable')).mockResolvedValueOnce(result);
+    vi.stubGlobal('electronAPI', { maker: { usage: { getCodexRateLimits: reader } } });
+    const card = renderHook(() => useCodexRateLimits(true));
+    renderHook(() => useCodexRateLimits(true));
+    await act(async () => {});
+    expect(card.result.current).toMatchObject({ failed: true, refreshing: false });
+    act(() => card.result.current.refresh());
+    expect(card.result.current).toMatchObject({ failed: true, refreshing: true });
+    expect(reader).toHaveBeenCalledTimes(2);
+    await act(async () => finishOld(result));
+    expect(reader).toHaveBeenCalledTimes(3);
+    expect(card.result.current).toMatchObject({ snapshot: result, failed: false, refreshing: false });
+  });
+
   // F13 unit regression: the old hook swallowed a rejected read. Exercise the
   // public hook with no cache and with a cache, then retry without losing data.
   it.each([false, true])('reports failed reads and recovers on retry (cached=%s)', async (cached) => {

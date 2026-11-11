@@ -90,6 +90,7 @@ import {
   readSubscriptionPoolUsage,
   readLegacySubscriptionPoolUsage,
   readSubscriptionSessionUsage,
+  readSubscriptionSessionAccount,
   readSubscriptionPoolAccountUsages,
   runSubscriptionAccountCommand,
   observeSubscriptionAccountUsage,
@@ -262,6 +263,19 @@ describe('tasks using imported Codex connections', () => {
 });
 
 describe('native account assignment on the executing computer', () => {
+  it('projects the task binding without selecting, reserving or unpausing an account', async () => {
+    h.pools.anthropic!.accounts[0].paused = true;
+    h.bindings.set('task:existing', { providerId: 'anthropic', accountId: 'default' });
+    const bound = await readSubscriptionPool('anthropic', false, 'existing');
+    expect(bound.boundAccountId).toBe('default');
+    expect(bound.accounts[0]).toMatchObject({ paused: true, running: 0 });
+    expect((await readSubscriptionPool('anthropic', false, 'new-task')).boundAccountId).toBeNull();
+    expect(await readSubscriptionPool('anthropic')).not.toHaveProperty('boundAccountId');
+    h.pools.anthropic!.accounts = [account('second')];
+    expect((await readSubscriptionPool('anthropic', false, 'existing')).boundAccountId).toBe('default');
+    expect(h.bindings.size).toBe(1);
+  });
+
   // #9517 review, unit: Add must recover both bound and unbound managed defaults.
   // A disconnected pool and a first Add bypassed the bound-default fallback.
   it.each([
@@ -345,6 +359,53 @@ describe('native account assignment on the executing computer', () => {
     expect(h.login).toHaveBeenCalledOnce();
     expect(h.login.mock.calls[0][1]).not.toBe('openai/default');
     expect(next.accounts.at(-1)?.status).toBe('ready');
+  });
+
+  // 2026-11-11 user report (unit): the model list and composer usage showed the CLI default
+  // account for a task pinned to another pool account. Display reads must resolve the same
+  // bindings a resume does (task id first, then the native id a remote host knows), and never
+  // substitute the default or the next pool pick. Minimal input: a task bound to `second`.
+  it.each(['anthropic', 'openai'] as const)('names the account a %s task is pinned to', async (provider) => {
+    h.pools[provider] = { strategy: 'order', accounts: [account('default'), account('second')] };
+    h.read.mockImplementation(async (_p: string, directory: string) => ({
+      authenticated: true, identity: directory.endsWith('second') ? 'second@example.test' : 'first@example.test',
+    }));
+    const now = Date.now();
+    h.usage.mockImplementation(async (_p: string, directory: string) => {
+      const used = directory.endsWith('second') ? 30 : 90;
+      const bucket = { limitId: 'codex', limitName: null, updatedAt: now,
+        primary: { usedPercent: used, windowMinutes: 300, resetsAt: now / 1000 + 3600 }, secondary: null };
+      return provider === 'anthropic'
+        ? { claudeUsage: { updatedAt: now, fiveHour: { utilization: used, resetsAt: now / 1000 + 3600 }, sevenDay: null, scoped: [] } }
+        : { codexUsage: { appServerBuckets: { codex: bucket }, webSnapshot: bucket } };
+    });
+    const read = (keys: { sessionId?: string; nativeSessionId?: string }) =>
+      readSubscriptionSessionAccount(provider, keys);
+    h.bindings.set('task:task-1', { providerId: provider, accountId: 'second' });
+    const bound = await read({ sessionId: 'task-1', nativeSessionId: 'unbound-native' });
+    expect(bound).toMatchObject({ state: 'bound', account: {
+      isDefault: false, number: 2, identity: 'second@example.test', status: 'ready',
+    } });
+    expect(bound.state === 'bound' && (provider === 'anthropic'
+      ? bound.account.usage?.claude?.fiveHour?.utilization
+      : bound.account.usage?.codex?.buckets.codex.primary?.usedPercent)).toBe(30);
+    // A remote executor only knows the native id.
+    h.bindings.set('native:sdk-2', { providerId: provider, accountId: 'second' });
+    expect(await read({ sessionId: 'controller-id', nativeSessionId: 'sdk-2' }))
+      .toMatchObject({ state: 'bound', account: { number: 2 } });
+    h.bindings.set('task:task-3', { providerId: provider, accountId: 'default' });
+    expect(await read({ sessionId: 'task-3' }))
+      .toMatchObject({ state: 'bound', account: { isDefault: true, identity: 'first@example.test' } });
+    // Not yet run: the pool picks next turn. Pre-pool resume: the original default readers.
+    expect(await read({ sessionId: 'new' })).toEqual({ providerId: provider, state: 'unassigned' });
+    expect(await read({ sessionId: 'old', nativeSessionId: 'pre-pool' }))
+      .toEqual({ providerId: provider, state: 'legacy' });
+    // A removed account fails visibly instead of naming the remaining default.
+    h.pools[provider]!.accounts = [account('default')];
+    expect(await read({ sessionId: 'task-1' })).toEqual({ providerId: provider, state: 'unavailable' });
+    expect(await read({ sessionId: 'task-3' })).toEqual({ providerId: provider, state: 'legacy' });
+    h.pools = {};
+    expect(await read({ sessionId: 'task-1' })).toEqual({ providerId: provider, state: 'legacy' });
   });
 
   // Unit, #9295 review: reset lookups refresh the pinned profile rather than

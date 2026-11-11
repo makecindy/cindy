@@ -2261,6 +2261,7 @@
         "desktopVisibilityHint": "Cindy 뒤의 바탕 화면과 창이 비칩니다. 텍스트와 컨트롤은 선명하게 유지됩니다.",
         "desktopBlurLabel": "바탕 화면 흐림",
         "desktopBlurHint": "창 뒤의 바탕 화면을 흐리게 합니다. 0이면 꺼지고 값이 클수록 더 흐려집니다. 강도 조절을 지원하지 않는 시스템은 기본 효과를 사용합니다.",
+        "desktopBlurSwitchHint": "Windows 시스템 효과로 창 뒤의 바탕 화면을 흐리게 합니다. Windows 11 버전 22H2 이상이 필요합니다.",
         "blurLabel": "배경화면 흐림",
         "blurHint": "배경화면만 흐리게 합니다. 0이면 꺼집니다. 움직이는 배경화면을 흐리게 하면 GPU 사용량이 늘어납니다.",
         "motionLabel": "표시 방식",
@@ -19803,6 +19804,7 @@
   },
   "subscriptionAccounts": {
     "unassigned": "계정 미배정",
+    "boundUnavailable": "계정을 사용할 수 없음",
     "providerManagedAuth": "현재 Codex 제공자에서는 ChatGPT 계정 정보를 확인할 수 없습니다. 제공자를 추가할 때 ‘$t(subscriptionAccounts.signIn.anotherAccount)’를 선택하면 별도 폴더를 사용할 수 있습니다.",
     "signIn": {
       "checking": "로컬 계정 확인 중…",
@@ -19830,7 +19832,12 @@
     "openDirectory": "계정 폴더 열기",
     "openDirectoryFailed": "계정 폴더를 열 수 없습니다. 이동되었거나 삭제되었을 수 있습니다.",
     "loginAgain": "다시 로그인",
-    "login": "로그인"
+    "login": "로그인",
+    "quotaAverage": "평균 잔여량 {{percent}}%",
+    "quotaUpdating": "잔여량 업데이트 대기",
+    "quotaResetSoon": "곧 초기화",
+    "quotaAverageHint": "주간 한도 · 계정별 동일 가중 평균",
+    "quotaResetHint": "현재 사용 속도라면 초기화 시 할당량이 남을 수 있습니다. 24시간 이내는 노란색, 6시간 이내는 빨간색입니다."
   },
   "sessionNotify": {
     "finished": "이 작업이 이번 턴을 마쳤습니다. 최종 답변:",

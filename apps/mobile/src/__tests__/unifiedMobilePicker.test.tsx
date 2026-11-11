@@ -28,7 +28,7 @@ const test = vi.hoisted(() => ({ view: null as any, favoritesReady:true, quotas:
   // 按传入的目录派生(供应商组用例:每台电脑的供应商各有自己的行与正在用的来源);缺省用上面的固定值。
   entriesFor: null as null | ((providers: any[]) => any[]), activeSource: null as null | ((input: any) => string | null) }));
 vi.mock('@/session/UnifiedModelPickerView', () => ({ UnifiedModelPickerView: (p:any) => {test.view=p;return null;} }));
-vi.mock('@/session/useMobileModelQuotas',()=>({useMobileModelQuotas:()=>({quotas:test.quotas,now:0})}));
+vi.mock('@/session/useMobileModelQuotas',()=>({useMobileModelQuotas:()=>({quotas:test.quotas,now:0,quotaOf:(device:string,id:string)=>test.quotas[JSON.stringify([device,id])]})}));
 vi.mock('@/session/mobileModelPreferences', async () => {
   const {useReducer} = await import('react');
   return {useMobileModelPreferences:()=>{
@@ -122,9 +122,41 @@ it('attaches account remaining quota only to the matching source filter',async()
   expect(test.view.filters.find((item:any)=>item.id==='account').quota).toMatchObject({remaining:37});
   expect(test.view.filters.filter((item:any)=>item.id==='all'||item.id==='favorites').every((item:any)=>item.quota===undefined)).toBe(true);
 });
+// Unit: one account snapshot must label both the source choice and the model
+// row; equal provider ids on different computers must not share identity/quota.
+it('uses the same account identity in source choices and rows for each computer',async()=>{
+  test.quotas={account:{accountIdentity:'local-second@example.test',remaining:80,source:'claude',raw:{sevenDay:{utilization:20}}},
+    '["device-studio-mac","account"]':{accountIdentity:'remote-second@example.test',remaining:60,source:'claude',raw:{sevenDay:{utilization:40}}}};
+  await mountRemote(null,undefined,{...studioCatalog,providers:[{...studioCatalog.providers[0],subscriptionAccount:{identity:'old-default@example.test'}}]});
+  const local=test.view.groups.flatMap((group:any)=>group.rows).find((row:any)=>!row.remoteDevice);
+  const remote=test.view.groups.flatMap((group:any)=>group.rows).find((row:any)=>row.remoteDevice);
+  expect(local.subtitle).toContain('local-second@example.test');
+  expect(remote.subtitle).toContain('remote-second@example.test');
+  expect(remote.subtitle).not.toContain('old-default');
+  expect(remote.quotaLabel).toBe('60%');
+  expect(test.view.filters.find((item:any)=>item.id==='account').label).toContain('local-second@example.test');
+  expect(test.view.filters.find((item:any)=>item.id===remoteId)).toMatchObject({
+    quota:{remaining:60},remote:{providerLabel:'Studio Provider · remote-second@example.test'},
+  });
+});
 it('does not show an empty or full quota bar when account quota is unknown',async()=>{
   await mount();
   expect(test.view.filters.find((item:any)=>item.id==='account').quota).toBeUndefined();
+});
+it('shows one pool average above models and separate source details',async()=>{
+  test.quotas={account:{accountIdentity:null,source:'claude',raw:null,members:[
+    {accountIdentity:'first@example.test',source:'claude',raw:{sevenDay:{utilization:66}},remaining:34},
+    {accountIdentity:'second@example.test',source:'claude',raw:{sevenDay:{utilization:20}},remaining:80},
+  ]}};
+  await mount();
+  expect(test.view.groups[0].rows[0].quotaLabel).toBeNull();
+  expect(test.view.groups[0].quota).toMatchObject({remaining:57,summary:'models.unified.quotaAverage',resetSoon:false});
+  const source=test.view.filters.find((item:any)=>item.id==='account');
+  expect(source.quota.remaining).toBe(57);
+  expect(source.quota.members.map((member:any)=>member.remaining)).toEqual([34,80]);
+  expect(source.quota.label).toContain('first@example.test');
+  expect(source.quota.label).toContain('second@example.test');
+  expect(source.label).toContain('models.unified.accountCount');
 });
 
 it('silences background favorite sync failures',async()=>{
@@ -1063,4 +1095,21 @@ it('saves and edits a Mobile gateway shortcut without downgrading its exact stor
   await act(async () => test.view.options.onChange({ ...test.view.options.row.config, effort: 'high' }));
   await act(async () => test.view.options.onSaveEdit());
   expect(test.prefs.favorites[0]).toMatchObject({ modelId: '["magpie-route","foo"]', effort: 'high' });
+});
+
+it('keeps a reset warning when another account makes the pool average unknown', async()=>{
+  test.quotas={account:{accountIdentity:null,source:'claude',raw:null,members:[
+    {accountIdentity:'unknown@example.test',source:'claude',raw:null},
+    {accountIdentity:'soon@example.test',source:'claude',raw:null,remaining:80,resetsAt:21600},
+  ]}};
+  await mount();
+  const quota=test.view.groups[0].quota;
+  expect(quota.remaining).toBeUndefined();
+  expect(quota.summary).toBe('models.unified.quotaUpdating');
+  expect(quota.resetDescription).toBe('models.unified.quotaResetIn · session.menu.usage.remaining');
+  expect(quota.reset).toEqual({remaining:80,time:'6h',level:'crit'});
+  expect(quota.resetSoon).toBe(true);
+  expect(quota.label).toContain('soon@example.test');
+  expect(quota.label).toContain('models.unified.quotaResetSoon');
+  expect(test.view.groups[0].rows[0].quotaLabel).toBeNull();
 });

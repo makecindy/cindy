@@ -205,6 +205,7 @@ export function useCodexRateLimits(
     if (![...entry.queuedRefreshes].some(request => request.manual && request.version === entry.version)) {
       entry.queuedRefreshes.add({ version: entry.version, manual: true });
     }
+    publish(entry, { refreshing: true });
   }, [enabled, entry]);
   useEffect(() => {
     if (!enabled) return;

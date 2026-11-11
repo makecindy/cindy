@@ -23,6 +23,7 @@ import type {
   SubscriptionAccountUsage,
   SubscriptionProvider,
   SubscriptionPoolView,
+  SubscriptionSessionAccountView,
 } from '../../shared/subscriptionAccounts.js';
 import {
   DEFAULT_SUBSCRIPTION_ACCOUNT,
@@ -324,6 +325,74 @@ export async function readSubscriptionSessionUsage(provider: SubscriptionProvide
   return info.usage ?? null;
 }
 
+/**
+ * The account an existing task is pinned to, for the task's usage display (model list and
+ * the usage under the composer). Bindings are looked up in the same order a resume uses, so the
+ * display never names the default or the next pool pick instead of the task's own account.
+ */
+export async function readSubscriptionSessionAccount(
+  provider: SubscriptionProvider,
+  keys: { sessionId?: string; nativeSessionId?: string },
+): Promise<SubscriptionSessionAccountView> {
+  const state = currentRuntime();
+  assertOwner(state);
+  const pool = readPool(provider);
+  if (!pool) return { providerId: provider, state: 'legacy' };
+  const binding = [
+    keys.sessionId ? `task:${keys.sessionId}` : '',
+    keys.nativeSessionId ? `native:${keys.nativeSessionId}` : '',
+  ]
+    .filter(Boolean)
+    .map((key) => readAccountBinding(key, provider))
+    .find(Boolean);
+  // With only the ordinary CLI default, the original readers are the task's account.
+  const onlyDefault =
+    !pool.disconnected && pool.accounts.length === 1 && pool.accounts[0].id === 'default';
+  // A pre-pool task resumes on the default account; a task that never ran is assigned next turn.
+  if (!binding)
+    return {
+      providerId: provider,
+      state: onlyDefault || keys.nativeSessionId ? 'legacy' : 'unassigned',
+    };
+  if (onlyDefault && binding.accountId === 'default')
+    return { providerId: provider, state: 'legacy' };
+  const index = pool.accounts.findIndex((a) => a.id === binding.accountId);
+  if (
+    pool.disconnected ||
+    index < 0 ||
+    (binding.accountId === 'default' && !defaultAccountBound(provider))
+  )
+    return { providerId: provider, state: 'unavailable' };
+  const config = pool.accounts[index];
+  const info = await snapshot(state, provider, config.id);
+  assertOwner(state);
+  const usage = providerGroupMemberUsageState(
+    info.usage ?? {},
+    undefined,
+    Date.now(),
+    provider === 'openai' ? 'codex' : 'claude-code',
+  );
+  return {
+    providerId: provider,
+    state: 'bound',
+    account: {
+      isDefault: config.id === 'default',
+      number: index + 1,
+      ...(info.auth.identity ? { identity: info.auth.identity } : {}),
+      ...(info.auth.plan ? { plan: info.auth.plan } : {}),
+      paused: config.paused,
+      status: info.unavailable
+        ? 'unavailable'
+        : !info.auth.authenticated
+          ? 'signed-out'
+          : usage.limited
+            ? 'limited'
+            : 'ready',
+      ...(info.auth.authenticated ? accountUsage(info.usage) : {}),
+    },
+  };
+}
+
 export async function readSubscriptionPoolUsage(
   provider: SubscriptionProvider,
 ): Promise<Usage | null | undefined> {
@@ -442,6 +511,7 @@ function accountUsage(usage: Usage | undefined): { usage?: SubscriptionAccountUs
 export async function readSubscriptionPool(
   provider: SubscriptionProvider,
   previewDefault = false,
+  taskId?: string,
 ): Promise<SubscriptionPoolView> {
   const state = currentRuntime();
   const pool = readPool(provider) ?? defaultPool();
@@ -494,6 +564,7 @@ export async function readSubscriptionPool(
     providerId: provider,
     configured: readPool(provider) !== null,
     strategy: pool.strategy,
+    ...(taskId ? { boundAccountId: readAccountBinding(`task:${taskId}`, provider)?.accountId ?? null } : {}),
     accounts,
   };
 }
@@ -684,7 +755,7 @@ export async function runSubscriptionAccountCommand(
   const state = currentRuntime();
   assertOwner(state);
   const provider = command.providerId;
-  if (command.action === 'read') return readSubscriptionPool(provider);
+  if (command.action === 'read') return readSubscriptionPool(provider, false, command.taskId);
   if (command.action === 'preview') return readSubscriptionPool(provider, true);
   if (command.action === 'cancel') {
     state.logins.get(`${provider}:${command.loginKey}`)?.abort.abort();
