@@ -26,6 +26,9 @@ export const hostServiceCatalog = new HostServiceCatalog();
 // Computer element/snapshot references survive individual calls, scoped to the plugin.
 const computerRuntimes = new Map<string, { runtime: HostToolRuntime; revision: string }>();
 
+/** Roster updates must not build an approval projection for an unused service. */
+export function hasPluginHostTools(): boolean { return computerRuntimes.size > 0; }
+
 export function disposePluginHostTools(id: string): void {
   const entry = computerRuntimes.get(id);
   computerRuntimes.delete(id);

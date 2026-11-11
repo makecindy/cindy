@@ -725,7 +725,7 @@ import { isCatalogMediaModelVisible } from './mediaDisplayVisibility.js';
 import { readProviderOrder } from '../maker-host/provider-order-store.js';
 import { guardedOutboundFetch, outboundFetch, createOutboundHttpAgent } from '../maker-host/outbound-fetch.desktop.js';
 import { getDesktopMcpToolApprovalPolicy, setGhostToolApprovalResolver } from '../maker-host/mcp-tool-approval-policy.js';
-import { createHostToolRuntime, disposePluginHostTools, reconcilePluginHostTools } from '../mcp-integrations/hostToolCaller.js';
+import { createHostToolRuntime, disposePluginHostTools, hasPluginHostTools, reconcilePluginHostTools } from '../mcp-integrations/hostToolCaller.js';
 import { getDesktopHostTerminalService } from '../terminal/terminalService.desktop.js';
 import { handlePluginHostToolRequest } from './hostToolSlot.js';
 import { withPluginSchedulerApproval } from './pluginSchedulerApproval.js';
@@ -11667,7 +11667,7 @@ function broadcastGhostsChanged(
   },
 ): void {
   if (!opts?.projectionOnly) {
-    reconcilePluginHostTools(new Map(ghosts.filter(ghost => hasPluginHostToolGroupApproval(ghost, 'computer'))
+    if (hasPluginHostTools()) reconcilePluginHostTools(new Map(ghosts.filter(ghost => hasPluginHostToolGroupApproval(ghost, 'computer'))
       .map(ghost => [installedGhostStoragePart(ghost), ghostInstallApprovalToken(ghost.approval)])));
     taskEventIndex.replace(ghosts, getGhostOwnerPushStamp());
     setTaskChangeListener((event, owner) => {

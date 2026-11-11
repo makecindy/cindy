@@ -17,7 +17,7 @@ const refreshCallbacks = createGhostProductionCallbacks<{
   setGhostWorkdirDisabledAndNotify(dir: string, id: string, disabled: boolean): string[];
 }>({ functions: ['refreshGhostLocalization', 'broadcastGhostsChanged', 'setGhostWorkdirDisabledAndNotify'] });
 
-function routing() {
+function routing(activeComputer = true) {
   const ghosts = [{ manifest: { id: 'plugin-a', agent: { hostTools: ['computer'] } }, enabled: true,
     approval: { state: 'approved', revision: 'fixture' }, approvedHostToolGroups: ['computer'] }] as InstalledGhost[];
   const taskEventIndex = new GhostTaskEventIndex();
@@ -36,6 +36,7 @@ function routing() {
     refreshGhostLocalizationIfChanged, sendToGhostLogic: contextChanged,
     refreshPluginApps: installation.apps, getGhostSetupManifestTracker: () => ({ note: installation.manifest }),
     sweepRevokedGhostUnread: installation.unread, getGhostBrowserExtensionSlot: () => ({ reconcile: installation.browser }),
+    hasPluginHostTools: () => activeComputer,
     reconcilePluginHostTools: installation.computer, hasPluginHostToolGroupApproval, ghostInstallApprovalToken,
     scheduleGhostSkillReconcile: installation.skills,
     isGhostAvailableForActiveSession: () => true, projectGhostForRenderer: (ghost: InstalledGhost) => ghost,
@@ -61,6 +62,17 @@ it('projects a locale change without installation effects, while real roster cha
   expect(apps).toHaveBeenCalledTimes(2);
   for (const effect of Object.values(installation)) expect(effect).toHaveBeenCalledOnce();
   expect(installation.computer).toHaveBeenCalledWith(new Map([['plugin-a', 'approved:fixture']]));
+});
+
+// Unit performance regression: the production roster callback built a computer
+// approval map with no live consumer; existing cases always had one. Zero live
+// connections must skip the new reconciliation without skipping ordinary effects.
+it('skips computer approval reconciliation when no plugin has a live computer runtime', () => {
+  const r = routing(false);
+  r.callbacks.broadcastGhostsChanged(r.ghosts);
+  expect(r.installation.computer).not.toHaveBeenCalled();
+  expect(r.installation.apps).toHaveBeenCalledOnce();
+  expect(r.push).toHaveBeenCalledWith('ghosts:changed', { ghosts: r.ghosts });
 });
 
 it('publishes only the changed directory policy and retains setup and remote invalidation', () => {
