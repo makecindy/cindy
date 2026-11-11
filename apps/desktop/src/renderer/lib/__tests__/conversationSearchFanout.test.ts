@@ -691,6 +691,12 @@ describe('requestForOrigin', () => {
 });
 
 describe('filterResultsByWorkingDirs', () => {
+  it('uses explicit membership for indexed search without changing cwd', () => {
+    const page = response([result('checkout', 1, { projectDir: '/project', workingDir: '/tmp/checkout' })]);
+    expect(filterResultsByWorkingDirs(page, ['/project']).results).toHaveLength(1);
+    expect(filterResultsByWorkingDirs(page, ['/tmp/checkout']).results).toHaveLength(0);
+    expect(remoteIndexedSearchIgnoredWorkingDirs(page, ['/project'])).toBe(false);
+  });
   it('drops remote hits that belong to another project', () => {
     const page = filterResultsByWorkingDirs(
       response([
@@ -810,4 +816,12 @@ describe('remoteIndexedSearchIgnoredWorkingDirs', () => {
       ),
     ).toBe(false);
   });
+});
+
+// Unit regression: offline/legacy title search discarded tags during projection;
+// the existing cached-search cases only supplied untagged tasks.
+it('keeps task labels in cached title search results', () => {
+  const tags = [{ id: 'red', name: 'Important', color: 'red' as const, favoriteOrder: null, revision: 1 }];
+  const page = searchCachedSessionsByTitle([session({ id: 'tagged', title: 'needle', tags })], { query: 'needle' });
+  expect(page.results[0]?.session.tags).toEqual(tags);
 });

@@ -32,7 +32,8 @@ vi.mock("react-native", () => ({
       {children}
     </button>
   ),
-  StyleSheet: { absoluteFill: {} },
+  StyleSheet: { absoluteFill: {}, create: (styles: unknown) => styles },
+  Platform: { OS: 'android', select: (values: any) => values.android ?? values.default },
 }));
 vi.mock("@expo/ui/jetpack-compose", () => {
   const Slot = ({ children }: any) => <>{children}</>;
@@ -84,6 +85,7 @@ vi.mock("@/theme", () => ({
   lineHeight: {},
   spacing: {},
   typeScale: {},
+  useThemedStyles: (make: any) => make({}),
   useTheme: () => ({
     mode: native.mode,
     colors: {
@@ -113,6 +115,7 @@ const click = (label: string) =>
     expect(button).toBeDefined();
     button!.click();
   });
+
 it("keeps groups, check states, disabled choices and repeated selections in the native popup", () => {
   const choose = vi.fn();
   act(() =>

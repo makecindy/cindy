@@ -1,6 +1,6 @@
 {
   "schemaVersion": 6,
-  "updatedAt": "2026-10-27T15:16:20.193Z",
+  "updatedAt": "2026-11-09T03:15:49.561Z",
   "models": [
     {
       "id": "openai/gpt-6.1-sol",
@@ -147,7 +147,8 @@
           "agents": [
             "claude-code",
             "codex"
-          ]
+          ],
+          "referencePriceGroup": "global"
         }
       ],
       "nativeApi": "anthropic-messages",
@@ -165,7 +166,8 @@
           "agents": [
             "claude-code",
             "codex"
-          ]
+          ],
+          "referencePriceGroup": "global"
         }
       ],
       "nativeApi": "anthropic-messages",
@@ -2529,7 +2531,8 @@
           "agents": [
             "claude-code",
             "codex"
-          ]
+          ],
+          "referencePriceGroup": "cn"
         },
         {
           "providerId": "moonshot-kimi-global",
@@ -2537,7 +2540,8 @@
           "agents": [
             "claude-code",
             "codex"
-          ]
+          ],
+          "referencePriceGroup": "global"
         }
       ],
       "nativeApi": "openai-completions",
@@ -2603,7 +2607,8 @@
           "agents": [
             "claude-code",
             "codex"
-          ]
+          ],
+          "referencePriceGroup": "cn"
         },
         {
           "providerId": "moonshot-kimi-global",
@@ -2611,7 +2616,8 @@
           "agents": [
             "claude-code",
             "codex"
-          ]
+          ],
+          "referencePriceGroup": "global"
         }
       ],
       "nativeApi": "openai-completions",
@@ -2676,7 +2682,8 @@
           "agents": [
             "claude-code",
             "codex"
-          ]
+          ],
+          "referencePriceGroup": "cn"
         },
         {
           "providerId": "minimax-global",
@@ -3100,6 +3107,36 @@
       "modelRef": "xd/tencent-hy4-preview"
     },
     {
+      "id": "openai/gpt-image-2.6-sunburst",
+      "name": "GPT Image 2.6 Sunburst",
+      "modelRef": "openai/gpt-image-2.6-sunburst",
+      "mode": "image_generation",
+      "status": "active",
+      "routes": [
+        {
+          "providerId": "openai",
+          "modelId": "openai/gpt-image-2.6-sunburst",
+          "agents": []
+        }
+      ],
+      "nativeApi": "openai-images"
+    },
+    {
+      "id": "openai/gpt-image-2.6-flare",
+      "name": "GPT Image 2.6 Flare",
+      "modelRef": "openai/gpt-image-2.6-flare",
+      "mode": "image_generation",
+      "status": "active",
+      "routes": [
+        {
+          "providerId": "openai",
+          "modelId": "openai/gpt-image-2.6-flare",
+          "agents": []
+        }
+      ],
+      "nativeApi": "openai-images"
+    },
+    {
       "id": "openai/gpt-image-2.5-sunburst",
       "name": "GPT Image 2.5 Sunburst",
       "modelRef": "openai/gpt-image-2.5-sunburst",
@@ -3353,7 +3390,7 @@
               "agnes-openai-responses"
             ],
             "pi": [
-              "agnes-anthropic-messages"
+              "agnes-openai-completions"
             ]
           }
         }
@@ -3400,7 +3437,7 @@
               "agnes-openai-responses"
             ],
             "pi": [
-              "agnes-anthropic-messages"
+              "agnes-openai-completions"
             ]
           }
         }
@@ -3447,7 +3484,7 @@
               "agnes-openai-responses"
             ],
             "pi": [
-              "agnes-anthropic-messages"
+              "agnes-openai-completions"
             ]
           }
         }
@@ -3494,7 +3531,7 @@
               "agnes-openai-responses"
             ],
             "pi": [
-              "agnes-anthropic-messages"
+              "agnes-openai-completions"
             ]
           }
         }
@@ -4523,6 +4560,21 @@
                 "verifiedAt": "2026-09-23"
               },
               "cacheWrite1hPerMtok": 16
+            },
+            {
+              "currency": "USD",
+              "variant": "batch",
+              "inputPerMtok": 2,
+              "outputPerMtok": 10,
+              "effectiveFrom": "2026-10-22",
+              "source": {
+                "kind": "provider-official",
+                "url": "https://assets.claude.com/5633dc848caa431115468f31c7085d695bbfb9cc.pdf",
+                "verifiedAt": "2026-11-06"
+              },
+              "cacheReadPerMtok": 0.1,
+              "cacheWritePerMtok": 2.5,
+              "cacheWrite1hPerMtok": 4
             }
           ]
         }
@@ -4547,7 +4599,29 @@
         ],
         "defaultEffort": "medium",
         "supportsImageInput": true
-      }
+      },
+      "referencePriceGroups": [
+        {
+          "id": "global",
+          "prices": [
+            {
+              "currency": "USD",
+              "variant": "standard",
+              "inputPerMtok": 2,
+              "outputPerMtok": 10,
+              "cacheReadPerMtok": 0.1,
+              "cacheWritePerMtok": 2.5,
+              "cacheWrite1hPerMtok": 4,
+              "effectiveFrom": "2026-11-05",
+              "source": {
+                "kind": "provider-official",
+                "url": "https://platform.claude.com/docs/en/about-claude/pricing",
+                "verifiedAt": "2026-11-05"
+              }
+            }
+          ]
+        }
+      ]
     },
     {
       "id": "anthropic/claude-haiku-5-5",
@@ -4569,7 +4643,72 @@
         ],
         "defaultEffort": "medium",
         "supportsImageInput": true
-      }
+      },
+      "referencePriceGroups": [
+        {
+          "id": "global",
+          "prices": [
+            {
+              "currency": "USD",
+              "variant": "standard",
+              "maxInputTokens": 100001,
+              "inputPerMtok": 0.1,
+              "outputPerMtok": 0.5,
+              "cacheReadPerMtok": 0.01,
+              "cacheWritePerMtok": 0.125,
+              "cacheWrite1hPerMtok": 0.2,
+              "effectiveFrom": "2026-11-05",
+              "source": {
+                "kind": "provider-official",
+                "url": "https://platform.claude.com/docs/en/about-claude/pricing",
+                "verifiedAt": "2026-11-05"
+              }
+            },
+            {
+              "currency": "USD",
+              "variant": "standard",
+              "minInputTokens": 100001,
+              "inputPerMtok": 0.5,
+              "outputPerMtok": 2.5,
+              "cacheReadPerMtok": 0.05,
+              "cacheWritePerMtok": 0.625,
+              "cacheWrite1hPerMtok": 1,
+              "effectiveFrom": "2026-11-05",
+              "source": {
+                "kind": "provider-official",
+                "url": "https://platform.claude.com/docs/en/about-claude/pricing",
+                "verifiedAt": "2026-11-05"
+              }
+            },
+            {
+              "currency": "USD",
+              "variant": "batch",
+              "maxInputTokens": 100001,
+              "inputPerMtok": 0.05,
+              "outputPerMtok": 0.25,
+              "effectiveFrom": "2026-11-06",
+              "source": {
+                "kind": "provider-official",
+                "url": "https://platform.claude.com/docs/en/about-claude/pricing",
+                "verifiedAt": "2026-11-06"
+              }
+            },
+            {
+              "currency": "USD",
+              "variant": "batch",
+              "minInputTokens": 100001,
+              "inputPerMtok": 0.25,
+              "outputPerMtok": 1.25,
+              "effectiveFrom": "2026-11-06",
+              "source": {
+                "kind": "provider-official",
+                "url": "https://platform.claude.com/docs/en/about-claude/pricing",
+                "verifiedAt": "2026-11-06"
+              }
+            }
+          ]
+        }
+      ]
     },
     {
       "id": "openai/gpt-5.6-sol",
@@ -5368,6 +5507,21 @@
               "cacheReadPerMtok": 0.25,
               "cacheWritePerMtok": 12.5,
               "cacheWrite1hPerMtok": 20
+            },
+            {
+              "currency": "USD",
+              "variant": "batch",
+              "inputPerMtok": 5,
+              "outputPerMtok": 25,
+              "effectiveFrom": "2026-10-22",
+              "source": {
+                "kind": "provider-official",
+                "url": "https://assets.claude.com/5633dc848caa431115468f31c7085d695bbfb9cc.pdf",
+                "verifiedAt": "2026-11-06"
+              },
+              "cacheReadPerMtok": 0.125,
+              "cacheWritePerMtok": 6.25,
+              "cacheWrite1hPerMtok": 10
             }
           ]
         }
@@ -5411,6 +5565,21 @@
                 "url": "https://platform.claude.com/docs/en/about-claude/pricing",
                 "verifiedAt": "2026-07-31"
               }
+            },
+            {
+              "currency": "USD",
+              "variant": "batch",
+              "inputPerMtok": 5,
+              "outputPerMtok": 25,
+              "effectiveFrom": "2026-10-22",
+              "source": {
+                "kind": "provider-official",
+                "url": "https://assets.claude.com/5633dc848caa431115468f31c7085d695bbfb9cc.pdf",
+                "verifiedAt": "2026-11-06"
+              },
+              "cacheReadPerMtok": 0.5,
+              "cacheWritePerMtok": 6.25,
+              "cacheWrite1hPerMtok": 10
             }
           ]
         }
@@ -5453,6 +5622,21 @@
                 "url": "https://platform.claude.com/docs/en/about-claude/pricing",
                 "verifiedAt": "2026-07-31"
               }
+            },
+            {
+              "currency": "USD",
+              "variant": "batch",
+              "inputPerMtok": 5,
+              "outputPerMtok": 25,
+              "effectiveFrom": "2026-10-22",
+              "source": {
+                "kind": "provider-official",
+                "url": "https://assets.claude.com/5633dc848caa431115468f31c7085d695bbfb9cc.pdf",
+                "verifiedAt": "2026-11-06"
+              },
+              "cacheReadPerMtok": 0.5,
+              "cacheWritePerMtok": 6.25,
+              "cacheWrite1hPerMtok": 10
             }
           ]
         }
@@ -5511,6 +5695,21 @@
                 "url": "https://platform.claude.com/docs/en/about-claude/pricing",
                 "verifiedAt": "2026-08-02"
               }
+            },
+            {
+              "currency": "USD",
+              "variant": "batch",
+              "inputPerMtok": 2.5,
+              "outputPerMtok": 12.5,
+              "effectiveFrom": "2026-10-22",
+              "source": {
+                "kind": "provider-official",
+                "url": "https://assets.claude.com/5633dc848caa431115468f31c7085d695bbfb9cc.pdf",
+                "verifiedAt": "2026-11-06"
+              },
+              "cacheReadPerMtok": 0.25,
+              "cacheWritePerMtok": 3.125,
+              "cacheWrite1hPerMtok": 5
             }
           ]
         }
@@ -5569,6 +5768,21 @@
                 "url": "https://platform.claude.com/docs/en/about-claude/pricing",
                 "verifiedAt": "2026-08-02"
               }
+            },
+            {
+              "currency": "USD",
+              "variant": "batch",
+              "inputPerMtok": 2.5,
+              "outputPerMtok": 12.5,
+              "effectiveFrom": "2026-10-22",
+              "source": {
+                "kind": "provider-official",
+                "url": "https://assets.claude.com/5633dc848caa431115468f31c7085d695bbfb9cc.pdf",
+                "verifiedAt": "2026-11-06"
+              },
+              "cacheReadPerMtok": 0.25,
+              "cacheWritePerMtok": 3.125,
+              "cacheWrite1hPerMtok": 5
             }
           ]
         }
@@ -5612,6 +5826,21 @@
                 "url": "https://platform.claude.com/docs/en/about-claude/pricing",
                 "verifiedAt": "2026-07-31"
               }
+            },
+            {
+              "currency": "USD",
+              "variant": "batch",
+              "inputPerMtok": 2.5,
+              "outputPerMtok": 12.5,
+              "effectiveFrom": "2026-10-22",
+              "source": {
+                "kind": "provider-official",
+                "url": "https://assets.claude.com/5633dc848caa431115468f31c7085d695bbfb9cc.pdf",
+                "verifiedAt": "2026-11-06"
+              },
+              "cacheReadPerMtok": 0.25,
+              "cacheWritePerMtok": 3.125,
+              "cacheWrite1hPerMtok": 5
             }
           ]
         }
@@ -5654,6 +5883,21 @@
                 "url": "https://platform.claude.com/docs/en/about-claude/pricing",
                 "verifiedAt": "2026-07-31"
               }
+            },
+            {
+              "currency": "USD",
+              "variant": "batch",
+              "inputPerMtok": 2.5,
+              "outputPerMtok": 12.5,
+              "effectiveFrom": "2026-10-22",
+              "source": {
+                "kind": "provider-official",
+                "url": "https://assets.claude.com/5633dc848caa431115468f31c7085d695bbfb9cc.pdf",
+                "verifiedAt": "2026-11-06"
+              },
+              "cacheReadPerMtok": 0.25,
+              "cacheWritePerMtok": 3.125,
+              "cacheWrite1hPerMtok": 5
             }
           ]
         }
@@ -5695,6 +5939,22 @@
                 "url": "https://platform.claude.com/docs/en/about-claude/pricing",
                 "verifiedAt": "2026-07-31"
               }
+            },
+            {
+              "currency": "USD",
+              "variant": "batch",
+              "inputPerMtok": 2.5,
+              "outputPerMtok": 12.5,
+              "effectiveFrom": "2026-10-22",
+              "source": {
+                "kind": "provider-official",
+                "url": "https://assets.claude.com/5633dc848caa431115468f31c7085d695bbfb9cc.pdf",
+                "verifiedAt": "2026-11-06"
+              },
+              "cacheReadPerMtok": 0.25,
+              "cacheWritePerMtok": 3.125,
+              "cacheWrite1hPerMtok": 5,
+              "maxInputTokens": 200001
             }
           ]
         }
@@ -5738,6 +5998,21 @@
                 "url": "https://platform.claude.com/docs/en/about-claude/pricing",
                 "verifiedAt": "2026-08-12"
               }
+            },
+            {
+              "currency": "USD",
+              "variant": "batch",
+              "inputPerMtok": 1,
+              "outputPerMtok": 5,
+              "effectiveFrom": "2026-10-22",
+              "source": {
+                "kind": "provider-official",
+                "url": "https://assets.claude.com/5633dc848caa431115468f31c7085d695bbfb9cc.pdf",
+                "verifiedAt": "2026-11-06"
+              },
+              "cacheReadPerMtok": 0.1,
+              "cacheWritePerMtok": 1.25,
+              "cacheWrite1hPerMtok": 2
             }
           ]
         }
@@ -5780,6 +6055,21 @@
                 "url": "https://platform.claude.com/docs/en/about-claude/pricing",
                 "verifiedAt": "2026-07-31"
               }
+            },
+            {
+              "currency": "USD",
+              "variant": "batch",
+              "inputPerMtok": 1.5,
+              "outputPerMtok": 7.5,
+              "effectiveFrom": "2026-10-22",
+              "source": {
+                "kind": "provider-official",
+                "url": "https://assets.claude.com/5633dc848caa431115468f31c7085d695bbfb9cc.pdf",
+                "verifiedAt": "2026-11-06"
+              },
+              "cacheReadPerMtok": 0.15,
+              "cacheWritePerMtok": 1.875,
+              "cacheWrite1hPerMtok": 3
             }
           ]
         }
@@ -5816,6 +6106,19 @@
                 "url": "https://platform.claude.com/docs/en/about-claude/pricing",
                 "verifiedAt": "2026-07-31"
               }
+            },
+            {
+              "currency": "USD",
+              "variant": "batch",
+              "inputPerMtok": 1.5,
+              "outputPerMtok": 7.5,
+              "effectiveFrom": "2026-11-06",
+              "source": {
+                "kind": "provider-official",
+                "url": "https://platform.claude.com/docs/en/about-claude/pricing",
+                "verifiedAt": "2026-11-06"
+              },
+              "maxInputTokens": 200001
             }
           ]
         }
@@ -5852,6 +6155,22 @@
                 "url": "https://platform.claude.com/docs/en/about-claude/pricing",
                 "verifiedAt": "2026-07-31"
               }
+            },
+            {
+              "currency": "USD",
+              "variant": "batch",
+              "inputPerMtok": 0.5,
+              "outputPerMtok": 2.5,
+              "effectiveFrom": "2026-10-22",
+              "source": {
+                "kind": "provider-official",
+                "url": "https://assets.claude.com/5633dc848caa431115468f31c7085d695bbfb9cc.pdf",
+                "verifiedAt": "2026-11-06"
+              },
+              "cacheReadPerMtok": 0.05,
+              "cacheWritePerMtok": 0.625,
+              "cacheWrite1hPerMtok": 1,
+              "maxInputTokens": 200001
             }
           ]
         }
@@ -7733,7 +8052,38 @@
                 "url": "https://platform.kimi.com/",
                 "verifiedAt": "2026-09-23"
               },
-              "cacheWritePerMtok": 20
+              "cacheWritePerMtok": 20,
+              "effectiveUntil": "2026-11-05"
+            },
+            {
+              "currency": "CNY",
+              "variant": "standard",
+              "inputPerMtok": 20,
+              "outputPerMtok": 100,
+              "cacheReadPerMtok": 2,
+              "effectiveFrom": "2026-11-05",
+              "source": {
+                "kind": "provider-official",
+                "url": "https://platform.kimi.com/docs/guide/context-caching",
+                "verifiedAt": "2026-11-05"
+              },
+              "cacheWritePerMtok": 20,
+              "cacheWrite1hPerMtok": 40
+            },
+            {
+              "currency": "CNY",
+              "variant": "batch",
+              "inputPerMtok": 12,
+              "outputPerMtok": 60,
+              "cacheReadPerMtok": 1.2,
+              "cacheWritePerMtok": 12,
+              "cacheWrite1hPerMtok": 24,
+              "effectiveFrom": "2026-11-07",
+              "source": {
+                "kind": "provider-official",
+                "url": "https://platform.kimi.com/docs/pricing/batch",
+                "verifiedAt": "2026-11-07"
+              }
             }
           ]
         },
@@ -7766,7 +8116,38 @@
                 "url": "https://platform.kimi.ai/",
                 "verifiedAt": "2026-09-23"
               },
-              "cacheWritePerMtok": 3
+              "cacheWritePerMtok": 3,
+              "effectiveUntil": "2026-11-05"
+            },
+            {
+              "currency": "USD",
+              "variant": "standard",
+              "inputPerMtok": 3,
+              "outputPerMtok": 15,
+              "cacheReadPerMtok": 0.3,
+              "effectiveFrom": "2026-11-05",
+              "source": {
+                "kind": "provider-official",
+                "url": "https://platform.kimi.ai/docs/guide/context-caching",
+                "verifiedAt": "2026-11-05"
+              },
+              "cacheWritePerMtok": 3,
+              "cacheWrite1hPerMtok": 6
+            },
+            {
+              "currency": "USD",
+              "variant": "batch",
+              "inputPerMtok": 1.8,
+              "outputPerMtok": 9,
+              "cacheReadPerMtok": 0.18,
+              "cacheWritePerMtok": 1.8,
+              "cacheWrite1hPerMtok": 3.6,
+              "effectiveFrom": "2026-11-07",
+              "source": {
+                "kind": "provider-official",
+                "url": "https://platform.kimi.ai/docs/pricing/batch",
+                "verifiedAt": "2026-11-07"
+              }
             }
           ]
         }
@@ -7994,7 +8375,38 @@
                 "url": "https://platform.kimi.ai/",
                 "verifiedAt": "2026-09-23"
               },
-              "cacheWritePerMtok": 3
+              "cacheWritePerMtok": 3,
+              "effectiveUntil": "2026-11-05"
+            },
+            {
+              "currency": "USD",
+              "variant": "standard",
+              "inputPerMtok": 3,
+              "outputPerMtok": 15,
+              "cacheReadPerMtok": 0.3,
+              "effectiveFrom": "2026-11-05",
+              "source": {
+                "kind": "provider-official",
+                "url": "https://platform.kimi.ai/docs/guide/context-caching",
+                "verifiedAt": "2026-11-05"
+              },
+              "cacheWritePerMtok": 3,
+              "cacheWrite1hPerMtok": 6
+            },
+            {
+              "currency": "USD",
+              "variant": "batch",
+              "inputPerMtok": 1.8,
+              "outputPerMtok": 9,
+              "cacheReadPerMtok": 0.18,
+              "cacheWritePerMtok": 1.8,
+              "cacheWrite1hPerMtok": 3.6,
+              "effectiveFrom": "2026-11-07",
+              "source": {
+                "kind": "provider-official",
+                "url": "https://platform.kimi.ai/docs/pricing/batch",
+                "verifiedAt": "2026-11-07"
+              }
             }
           ]
         }
@@ -8059,7 +8471,49 @@
         ],
         "defaultEffort": "max",
         "officialDocs": "https://platform.kimi.ai/docs/guide/kimi-k3-1-pro-quickstart"
-      }
+      },
+      "referencePriceGroups": [
+        {
+          "id": "cn",
+          "prices": [
+            {
+              "currency": "CNY",
+              "variant": "standard",
+              "inputPerMtok": 13,
+              "outputPerMtok": 68,
+              "cacheReadPerMtok": 1.3,
+              "cacheWritePerMtok": 13,
+              "cacheWrite1hPerMtok": 26,
+              "effectiveFrom": "2026-11-05",
+              "source": {
+                "kind": "provider-official",
+                "url": "https://platform.kimi.com/docs/pricing/chat",
+                "verifiedAt": "2026-11-05"
+              }
+            }
+          ]
+        },
+        {
+          "id": "global",
+          "prices": [
+            {
+              "currency": "USD",
+              "variant": "standard",
+              "inputPerMtok": 2,
+              "outputPerMtok": 10,
+              "cacheReadPerMtok": 0.2,
+              "cacheWritePerMtok": 2,
+              "cacheWrite1hPerMtok": 4,
+              "effectiveFrom": "2026-11-05",
+              "source": {
+                "kind": "provider-official",
+                "url": "https://platform.kimi.ai/docs/pricing/chat",
+                "verifiedAt": "2026-11-05"
+              }
+            }
+          ]
+        }
+      ]
     },
     {
       "id": "moonshotai/kimi-k3.1-pro-highspeed",
@@ -8080,7 +8534,49 @@
         ],
         "defaultEffort": "max",
         "officialDocs": "https://platform.kimi.ai/docs/guide/kimi-k3-1-pro-quickstart"
-      }
+      },
+      "referencePriceGroups": [
+        {
+          "id": "cn",
+          "prices": [
+            {
+              "currency": "CNY",
+              "variant": "standard",
+              "inputPerMtok": 26,
+              "outputPerMtok": 136,
+              "cacheReadPerMtok": 1.3,
+              "cacheWritePerMtok": 26,
+              "cacheWrite1hPerMtok": 52,
+              "effectiveFrom": "2026-11-05",
+              "source": {
+                "kind": "provider-official",
+                "url": "https://platform.kimi.com/docs/pricing/chat",
+                "verifiedAt": "2026-11-05"
+              }
+            }
+          ]
+        },
+        {
+          "id": "global",
+          "prices": [
+            {
+              "currency": "USD",
+              "variant": "standard",
+              "inputPerMtok": 4,
+              "outputPerMtok": 20,
+              "cacheReadPerMtok": 0.2,
+              "cacheWritePerMtok": 4,
+              "cacheWrite1hPerMtok": 8,
+              "effectiveFrom": "2026-11-05",
+              "source": {
+                "kind": "provider-official",
+                "url": "https://platform.kimi.ai/docs/pricing/chat",
+                "verifiedAt": "2026-11-05"
+              }
+            }
+          ]
+        }
+      ]
     },
     {
       "id": "minimax/minimax-m3.1-flash",
@@ -8117,6 +8613,24 @@
                 "kind": "provider-official",
                 "url": "https://platform.minimax.io/docs/pricing/overview",
                 "verifiedAt": "2026-10-24"
+              }
+            }
+          ]
+        },
+        {
+          "id": "cn",
+          "prices": [
+            {
+              "currency": "CNY",
+              "variant": "standard",
+              "inputPerMtok": 1,
+              "outputPerMtok": 4,
+              "cacheReadPerMtok": 0.1,
+              "effectiveFrom": "2026-11-05",
+              "source": {
+                "kind": "provider-official",
+                "url": "https://platform.minimaxi.com/docs/pricing/overview",
+                "verifiedAt": "2026-11-05"
               }
             }
           ]
@@ -8237,6 +8751,44 @@
           "xhigh"
         ],
         "defaultEffort": "medium"
+      }
+    },
+    {
+      "id": "openai/gpt-image-2.6-sunburst",
+      "aliases": [
+        "gpt-image-2.6-sunburst"
+      ],
+      "defaults": {
+        "name": "GPT Image 2.6 Sunburst",
+        "mode": "image_generation",
+        "modalities": {
+          "input": [
+            "text",
+            "image"
+          ],
+          "output": [
+            "image"
+          ]
+        }
+      }
+    },
+    {
+      "id": "openai/gpt-image-2.6-flare",
+      "aliases": [
+        "gpt-image-2.6-flare"
+      ],
+      "defaults": {
+        "name": "GPT Image 2.6 Flare",
+        "mode": "image_generation",
+        "modalities": {
+          "input": [
+            "text",
+            "image"
+          ],
+          "output": [
+            "image"
+          ]
+        }
       }
     },
     {
@@ -9745,6 +10297,19 @@
       ]
     },
     {
+      "id": "deepseek-openai-responses",
+      "providerId": "deepseek",
+      "api": "openai-responses",
+      "baseUrl": "https://api.deepseek.com",
+      "inputBaseUrls": [
+        "https://api.deepseek.com",
+        "https://api.deepseek.com/anthropic"
+      ],
+      "defaultFor": [
+        "codex"
+      ]
+    },
+    {
       "id": "deepseek-openai-completions",
       "providerId": "deepseek",
       "api": "openai-completions",
@@ -9754,7 +10319,6 @@
         "https://api.deepseek.com"
       ],
       "defaultFor": [
-        "codex",
         "pi"
       ]
     },
@@ -9808,7 +10372,8 @@
       "baseUrl": "https://api.z.ai/api/anthropic",
       "inputBaseUrls": [
         "https://api.z.ai/api/anthropic",
-        "https://api.z.ai/api/paas/v4"
+        "https://api.z.ai/api/paas/v4",
+        "https://api.z.ai/api/v1"
       ],
       "defaultFor": [
         "claude-code"
@@ -9818,13 +10383,29 @@
       ]
     },
     {
+      "id": "zhipu-glm-global-openai-responses",
+      "providerId": "zhipu-glm-global",
+      "api": "openai-responses",
+      "baseUrl": "https://api.z.ai/api/v1",
+      "inputBaseUrls": [
+        "https://api.z.ai/api/anthropic",
+        "https://api.z.ai/api/coding/paas/v4",
+        "https://api.z.ai/api/paas/v4",
+        "https://api.z.ai/api/v1"
+      ],
+      "defaultFor": [
+        "codex"
+      ]
+    },
+    {
       "id": "zhipu-glm-global-openai-completions",
       "providerId": "zhipu-glm-global",
       "api": "openai-completions",
       "baseUrl": "https://api.z.ai/api/paas/v4",
       "inputBaseUrls": [
         "https://api.z.ai/api/anthropic",
-        "https://api.z.ai/api/paas/v4"
+        "https://api.z.ai/api/paas/v4",
+        "https://api.z.ai/api/v1"
       ],
       "defaultFor": [
         "codex",
@@ -9837,7 +10418,8 @@
       "api": "openai-completions",
       "baseUrl": "https://api.z.ai/api/coding/paas/v4",
       "inputBaseUrls": [
-        "https://api.z.ai/api/coding/paas/v4"
+        "https://api.z.ai/api/coding/paas/v4",
+        "https://api.z.ai/api/v1"
       ],
       "defaultFor": [
         "codex",
@@ -9862,6 +10444,36 @@
       "legacyApis": [
         "openai-completions"
       ]
+    },
+    {
+      "id": "moonshot-kimi-cn-openai-responses",
+      "providerId": "moonshot-kimi-cn",
+      "api": "openai-responses",
+      "baseUrl": "https://api.moonshot.cn/v1",
+      "inputBaseUrls": [
+        "https://api.moonshot.cn/anthropic",
+        "https://api.moonshot.cn/v1"
+      ],
+      "defaultFor": [
+        "codex"
+      ],
+      "modelIds": [
+        "kimi-k3.1-pro",
+        "kimi-k3.1-pro-highspeed",
+        "kimi-k3"
+      ],
+      "defaults": {
+        "modalities": {
+          "input": [
+            "text",
+            "image"
+          ],
+          "output": [
+            "text"
+          ]
+        },
+        "supportsImageInput": true
+      }
     },
     {
       "id": "moonshot-kimi-cn-openai-completions",
@@ -9909,6 +10521,36 @@
       "legacyApis": [
         "openai-completions"
       ]
+    },
+    {
+      "id": "moonshot-kimi-global-openai-responses",
+      "providerId": "moonshot-kimi-global",
+      "api": "openai-responses",
+      "baseUrl": "https://api.moonshot.ai/v1",
+      "inputBaseUrls": [
+        "https://api.moonshot.ai/anthropic",
+        "https://api.moonshot.ai/v1"
+      ],
+      "defaultFor": [
+        "codex"
+      ],
+      "modelIds": [
+        "kimi-k3.1-pro",
+        "kimi-k3.1-pro-highspeed",
+        "kimi-k3"
+      ],
+      "defaults": {
+        "modalities": {
+          "input": [
+            "text",
+            "image"
+          ],
+          "output": [
+            "text"
+          ]
+        },
+        "supportsImageInput": true
+      }
     },
     {
       "id": "moonshot-kimi-global-openai-completions",
@@ -9964,9 +10606,7 @@
         "https://api.kimi.com/coding",
         "https://api.kimi.com/coding/v1"
       ],
-      "defaultFor": [
-        "codex"
-      ],
+      "defaultFor": [],
       "compatibility": [
         "chat-image-v1"
       ],
@@ -10054,11 +10694,42 @@
       "api": "anthropic-messages",
       "baseUrl": "https://dashscope.aliyuncs.com/apps/anthropic",
       "inputBaseUrls": [
-        "https://dashscope.aliyuncs.com/apps/anthropic"
+        "https://dashscope.aliyuncs.com/apps/anthropic",
+        "https://dashscope.aliyuncs.com/compatible-mode/v1"
       ],
       "defaultFor": [
         "claude-code",
         "pi"
+      ]
+    },
+    {
+      "id": "aliyun-model-studio-cn-openai-responses",
+      "providerId": "aliyun-model-studio-cn",
+      "api": "openai-responses",
+      "baseUrl": "https://dashscope.aliyuncs.com/compatible-mode/v1",
+      "inputBaseUrls": [
+        "https://dashscope.aliyuncs.com/apps/anthropic",
+        "https://dashscope.aliyuncs.com/compatible-mode/v1"
+      ],
+      "defaultFor": [
+        "codex"
+      ],
+      "modelIds": [
+        "qwen3.8-max",
+        "qwen3.8-flash",
+        "qwen3.8-omni-flash",
+        "qwen3.7-max",
+        "qwen3.7-plus",
+        "qwen3.7-flash",
+        "qwen3.6-plus",
+        "qwen3.6-flash",
+        "qwen3.5-plus",
+        "qwen3.5-flash",
+        "deepseek-v4.1-flash",
+        "deepseek-v4-pro",
+        "glm-5.3",
+        "glm-5.2",
+        "kimi-k3"
       ]
     },
     {
@@ -10079,11 +10750,42 @@
       "api": "anthropic-messages",
       "baseUrl": "https://dashscope-intl.aliyuncs.com/apps/anthropic",
       "inputBaseUrls": [
-        "https://dashscope-intl.aliyuncs.com/apps/anthropic"
+        "https://dashscope-intl.aliyuncs.com/apps/anthropic",
+        "https://dashscope-intl.aliyuncs.com/compatible-mode/v1"
       ],
       "defaultFor": [
         "claude-code",
         "pi"
+      ]
+    },
+    {
+      "id": "aliyun-model-studio-global-openai-responses",
+      "providerId": "aliyun-model-studio-global",
+      "api": "openai-responses",
+      "baseUrl": "https://dashscope-intl.aliyuncs.com/compatible-mode/v1",
+      "inputBaseUrls": [
+        "https://dashscope-intl.aliyuncs.com/apps/anthropic",
+        "https://dashscope-intl.aliyuncs.com/compatible-mode/v1"
+      ],
+      "defaultFor": [
+        "codex"
+      ],
+      "modelIds": [
+        "qwen3.8-max",
+        "qwen3.8-flash",
+        "qwen3.8-omni-flash",
+        "qwen3.7-max",
+        "qwen3.7-plus",
+        "qwen3.7-flash",
+        "qwen3.6-plus",
+        "qwen3.6-flash",
+        "qwen3.5-plus",
+        "qwen3.5-flash",
+        "deepseek-v4.1-flash",
+        "deepseek-v4-pro",
+        "glm-5.3",
+        "glm-5.2",
+        "kimi-k3"
       ]
     },
     {
@@ -10145,6 +10847,19 @@
       ]
     },
     {
+      "id": "aliyun-bailian-token-plan-cn-openai-responses",
+      "providerId": "aliyun-bailian-token-plan-cn",
+      "api": "openai-responses",
+      "baseUrl": "https://token-plan.cn-beijing.maas.aliyuncs.com/compatible-mode/v1",
+      "inputBaseUrls": [
+        "https://token-plan.cn-beijing.maas.aliyuncs.com/apps/anthropic",
+        "https://token-plan.cn-beijing.maas.aliyuncs.com/compatible-mode/v1"
+      ],
+      "defaultFor": [
+        "codex"
+      ]
+    },
+    {
       "id": "aliyun-bailian-token-plan-cn-openai-completions",
       "providerId": "aliyun-bailian-token-plan-cn",
       "api": "openai-completions",
@@ -10175,6 +10890,19 @@
       ]
     },
     {
+      "id": "aliyun-bailian-token-plan-team-cn-openai-responses",
+      "providerId": "aliyun-bailian-token-plan-team-cn",
+      "api": "openai-responses",
+      "baseUrl": "https://token-plan.cn-beijing.maas.aliyuncs.com/compatible-mode/v1",
+      "inputBaseUrls": [
+        "https://token-plan.cn-beijing.maas.aliyuncs.com/apps/anthropic",
+        "https://token-plan.cn-beijing.maas.aliyuncs.com/compatible-mode/v1"
+      ],
+      "defaultFor": [
+        "codex"
+      ]
+    },
+    {
       "id": "aliyun-bailian-token-plan-team-cn-openai-completions",
       "providerId": "aliyun-bailian-token-plan-team-cn",
       "api": "openai-completions",
@@ -10195,7 +10923,8 @@
       "baseUrl": "https://open.bigmodel.cn/api/anthropic",
       "inputBaseUrls": [
         "https://open.bigmodel.cn/api/anthropic",
-        "https://open.bigmodel.cn/api/coding/paas/v4"
+        "https://open.bigmodel.cn/api/coding/paas/v4",
+        "https://open.bigmodel.cn/api/v1"
       ],
       "defaultFor": [
         "claude-code"
@@ -10205,13 +10934,28 @@
       ]
     },
     {
+      "id": "zhipu-coding-plan-cn-openai-responses",
+      "providerId": "zhipu-coding-plan-cn",
+      "api": "openai-responses",
+      "baseUrl": "https://open.bigmodel.cn/api/v1",
+      "inputBaseUrls": [
+        "https://open.bigmodel.cn/api/anthropic",
+        "https://open.bigmodel.cn/api/coding/paas/v4",
+        "https://open.bigmodel.cn/api/v1"
+      ],
+      "defaultFor": [
+        "codex"
+      ]
+    },
+    {
       "id": "zhipu-coding-plan-cn-openai-completions",
       "providerId": "zhipu-coding-plan-cn",
       "api": "openai-completions",
       "baseUrl": "https://open.bigmodel.cn/api/coding/paas/v4",
       "inputBaseUrls": [
         "https://open.bigmodel.cn/api/anthropic",
-        "https://open.bigmodel.cn/api/coding/paas/v4"
+        "https://open.bigmodel.cn/api/coding/paas/v4",
+        "https://open.bigmodel.cn/api/v1"
       ],
       "defaultFor": [
         "codex",
@@ -10225,7 +10969,8 @@
       "baseUrl": "https://api.z.ai/api/anthropic",
       "inputBaseUrls": [
         "https://api.z.ai/api/anthropic",
-        "https://api.z.ai/api/coding/paas/v4"
+        "https://api.z.ai/api/coding/paas/v4",
+        "https://api.z.ai/api/v1"
       ],
       "defaultFor": [
         "claude-code"
@@ -10235,13 +10980,28 @@
       ]
     },
     {
+      "id": "zai-coding-plan-global-openai-responses",
+      "providerId": "zai-coding-plan-global",
+      "api": "openai-responses",
+      "baseUrl": "https://api.z.ai/api/v1",
+      "inputBaseUrls": [
+        "https://api.z.ai/api/anthropic",
+        "https://api.z.ai/api/coding/paas/v4",
+        "https://api.z.ai/api/v1"
+      ],
+      "defaultFor": [
+        "codex"
+      ]
+    },
+    {
       "id": "zai-coding-plan-global-openai-completions",
       "providerId": "zai-coding-plan-global",
       "api": "openai-completions",
       "baseUrl": "https://api.z.ai/api/coding/paas/v4",
       "inputBaseUrls": [
         "https://api.z.ai/api/anthropic",
-        "https://api.z.ai/api/coding/paas/v4"
+        "https://api.z.ai/api/coding/paas/v4",
+        "https://api.z.ai/api/v1"
       ],
       "defaultFor": [
         "codex",
@@ -10262,6 +11022,19 @@
       ],
       "legacyApis": [
         "openai-completions"
+      ]
+    },
+    {
+      "id": "xiaomi-mimo-api-cn-openai-responses",
+      "providerId": "xiaomi-mimo-api-cn",
+      "api": "openai-responses",
+      "baseUrl": "https://api.xiaomimimo.com/v1",
+      "inputBaseUrls": [
+        "https://api.xiaomimimo.com/anthropic",
+        "https://api.xiaomimimo.com/v1"
+      ],
+      "defaultFor": [
+        "codex"
       ]
     },
     {
@@ -10295,6 +11068,19 @@
       ]
     },
     {
+      "id": "xiaomi-mimo-token-plan-cn-openai-responses",
+      "providerId": "xiaomi-mimo-token-plan-cn",
+      "api": "openai-responses",
+      "baseUrl": "https://token-plan-cn.xiaomimimo.com/v1",
+      "inputBaseUrls": [
+        "https://token-plan-cn.xiaomimimo.com/anthropic",
+        "https://token-plan-cn.xiaomimimo.com/v1"
+      ],
+      "defaultFor": [
+        "codex"
+      ]
+    },
+    {
       "id": "xiaomi-mimo-token-plan-cn-openai-completions",
       "providerId": "xiaomi-mimo-token-plan-cn",
       "api": "openai-completions",
@@ -10325,6 +11111,19 @@
       ]
     },
     {
+      "id": "volcengine-agent-plan-openai-responses",
+      "providerId": "volcengine-agent-plan",
+      "api": "openai-responses",
+      "baseUrl": "https://ark.cn-beijing.volces.com/api/plan/v3",
+      "inputBaseUrls": [
+        "https://ark.cn-beijing.volces.com/api/plan",
+        "https://ark.cn-beijing.volces.com/api/plan/v3"
+      ],
+      "defaultFor": [
+        "codex"
+      ]
+    },
+    {
       "id": "volcengine-agent-plan-openai-completions",
       "providerId": "volcengine-agent-plan",
       "api": "openai-completions",
@@ -10352,6 +11151,19 @@
       ],
       "legacyApis": [
         "openai-completions"
+      ]
+    },
+    {
+      "id": "volcengine-coding-plan-openai-responses",
+      "providerId": "volcengine-coding-plan",
+      "api": "openai-responses",
+      "baseUrl": "https://ark.cn-beijing.volces.com/api/coding/v3",
+      "inputBaseUrls": [
+        "https://ark.cn-beijing.volces.com/api/coding",
+        "https://ark.cn-beijing.volces.com/api/coding/v3"
+      ],
+      "defaultFor": [
+        "codex"
       ]
     },
     {
@@ -10508,6 +11320,18 @@
       ]
     },
     {
+      "id": "longcat-openai-responses",
+      "providerId": "longcat",
+      "api": "openai-responses",
+      "baseUrl": "https://api.longcat.chat/openai/v1",
+      "inputBaseUrls": [
+        "https://api.longcat.chat/openai/v1"
+      ],
+      "defaultFor": [
+        "codex"
+      ]
+    },
+    {
       "id": "longcat-openai-completions",
       "providerId": "longcat",
       "api": "openai-completions",
@@ -10516,7 +11340,7 @@
         "https://api.longcat.chat/openai/v1"
       ],
       "defaultFor": [
-        "codex"
+        "pi"
       ]
     },
     {
@@ -10761,7 +11585,9 @@
         "https://api.kimi.com/coding",
         "https://api.kimi.com/coding/v1"
       ],
-      "defaultFor": [],
+      "defaultFor": [
+        "codex"
+      ],
       "defaults": {
         "modalities": {
           "input": [
@@ -10786,8 +11612,7 @@
         "https://apihub.agnes-ai.com/v1"
       ],
       "defaultFor": [
-        "claude-code",
-        "pi"
+        "claude-code"
       ],
       "modelIds": [
         "agnes-3.0-flash",
@@ -10824,13 +11649,426 @@
         "https://apihub.agnes-ai.com",
         "https://apihub.agnes-ai.com/v1"
       ],
-      "defaultFor": [],
+      "defaultFor": [
+        "pi"
+      ],
       "modelIds": [
         "agnes-3.0-flash",
         "agnes-2.5-pro",
         "agnes-2.5-pro-beta",
         "agnes-2.5-flash"
       ]
+    },
+    {
+      "id": "openhubs-anthropic-messages",
+      "providerId": "openhubs",
+      "api": "anthropic-messages",
+      "baseUrl": "https://openhubs.zhidemai.com",
+      "inputBaseUrls": [
+        "https://openhubs.zhidemai.com",
+        "https://openhubs.zhidemai.com/v1"
+      ],
+      "defaultFor": [
+        "claude-code"
+      ]
+    },
+    {
+      "id": "openhubs-openai-responses",
+      "providerId": "openhubs",
+      "api": "openai-responses",
+      "baseUrl": "https://openhubs.zhidemai.com/v1",
+      "inputBaseUrls": [
+        "https://openhubs.zhidemai.com",
+        "https://openhubs.zhidemai.com/v1"
+      ],
+      "defaultFor": [
+        "codex"
+      ]
+    },
+    {
+      "id": "openhubs-openai-completions",
+      "providerId": "openhubs",
+      "api": "openai-completions",
+      "baseUrl": "https://openhubs.zhidemai.com/v1",
+      "inputBaseUrls": [
+        "https://openhubs.zhidemai.com",
+        "https://openhubs.zhidemai.com/v1"
+      ],
+      "defaultFor": [
+        "pi"
+      ]
+    }
+  ],
+  "recommendedAgents": [
+    {
+      "providerId": "aliyun-bailian-coding",
+      "modelIdPrefix": "MiniMax-",
+      "agent": "claude-code"
+    },
+    {
+      "providerId": "aliyun-bailian-coding",
+      "modelIdPrefix": "glm-",
+      "agent": "claude-code"
+    },
+    {
+      "providerId": "aliyun-bailian-coding",
+      "modelIdPrefix": "kimi-",
+      "agent": "claude-code"
+    },
+    {
+      "providerId": "aliyun-bailian-coding",
+      "modelIdPrefix": "qwen",
+      "agent": "claude-code"
+    },
+    {
+      "providerId": "aliyun-bailian-token-plan-cn",
+      "modelIdPrefix": "MiniMax-",
+      "agent": "claude-code"
+    },
+    {
+      "providerId": "aliyun-bailian-token-plan-cn",
+      "modelIdPrefix": "glm-",
+      "agent": "claude-code"
+    },
+    {
+      "providerId": "aliyun-bailian-token-plan-cn",
+      "modelIdPrefix": "kimi-",
+      "agent": "claude-code"
+    },
+    {
+      "providerId": "aliyun-bailian-token-plan-cn",
+      "modelIdPrefix": "qwen",
+      "agent": "claude-code"
+    },
+    {
+      "providerId": "aliyun-bailian-token-plan-team-cn",
+      "modelIdPrefix": "MiniMax-",
+      "agent": "claude-code"
+    },
+    {
+      "providerId": "aliyun-bailian-token-plan-team-cn",
+      "modelIdPrefix": "glm-",
+      "agent": "claude-code"
+    },
+    {
+      "providerId": "aliyun-bailian-token-plan-team-cn",
+      "modelIdPrefix": "kimi-",
+      "agent": "claude-code"
+    },
+    {
+      "providerId": "aliyun-bailian-token-plan-team-cn",
+      "modelIdPrefix": "qwen",
+      "agent": "claude-code"
+    },
+    {
+      "providerId": "aliyun-model-studio-cn",
+      "modelIdPrefix": "MiniMax-",
+      "agent": "claude-code"
+    },
+    {
+      "providerId": "aliyun-model-studio-cn",
+      "modelIdPrefix": "glm-",
+      "agent": "claude-code"
+    },
+    {
+      "providerId": "aliyun-model-studio-cn",
+      "modelIdPrefix": "kimi-",
+      "agent": "claude-code"
+    },
+    {
+      "providerId": "aliyun-model-studio-cn",
+      "modelIdPrefix": "qwen",
+      "agent": "claude-code"
+    },
+    {
+      "providerId": "aliyun-model-studio-global",
+      "modelIdPrefix": "MiniMax-",
+      "agent": "claude-code"
+    },
+    {
+      "providerId": "aliyun-model-studio-global",
+      "modelIdPrefix": "glm-",
+      "agent": "claude-code"
+    },
+    {
+      "providerId": "aliyun-model-studio-global",
+      "modelIdPrefix": "kimi-",
+      "agent": "claude-code"
+    },
+    {
+      "providerId": "aliyun-model-studio-global",
+      "modelIdPrefix": "qwen",
+      "agent": "claude-code"
+    },
+    {
+      "providerId": "minimax-cn",
+      "modelIdPrefix": "MiniMax-",
+      "agent": "claude-code"
+    },
+    {
+      "providerId": "minimax-global",
+      "modelIdPrefix": "MiniMax-",
+      "agent": "claude-code"
+    },
+    {
+      "providerId": "moonshot-kimi-cn",
+      "modelIdPrefix": "kimi-k3",
+      "agent": "claude-code"
+    },
+    {
+      "providerId": "moonshot-kimi-code",
+      "modelIdPrefix": "k3",
+      "agent": "claude-code"
+    },
+    {
+      "providerId": "moonshot-kimi-code",
+      "modelIdPrefix": "kimi-for-coding",
+      "agent": "claude-code"
+    },
+    {
+      "providerId": "moonshot-kimi-global",
+      "modelIdPrefix": "kimi-k3",
+      "agent": "claude-code"
+    },
+    {
+      "providerId": "opencode",
+      "modelIdPrefix": "MiniMax-",
+      "agent": "claude-code"
+    },
+    {
+      "providerId": "opencode",
+      "modelIdPrefix": "glm-",
+      "agent": "claude-code"
+    },
+    {
+      "providerId": "opencode",
+      "modelIdPrefix": "kimi-",
+      "agent": "claude-code"
+    },
+    {
+      "providerId": "opencode",
+      "modelIdPrefix": "minimax-",
+      "agent": "claude-code"
+    },
+    {
+      "providerId": "opencode",
+      "modelIdPrefix": "qwen",
+      "agent": "claude-code"
+    },
+    {
+      "providerId": "opencode",
+      "modelIdPrefix": "step-",
+      "agent": "claude-code"
+    },
+    {
+      "providerId": "opencode-go",
+      "modelIdPrefix": "MiniMax-",
+      "agent": "claude-code"
+    },
+    {
+      "providerId": "opencode-go",
+      "modelIdPrefix": "glm-",
+      "agent": "claude-code"
+    },
+    {
+      "providerId": "opencode-go",
+      "modelIdPrefix": "kimi-",
+      "agent": "claude-code"
+    },
+    {
+      "providerId": "opencode-go",
+      "modelIdPrefix": "minimax-",
+      "agent": "claude-code"
+    },
+    {
+      "providerId": "opencode-go",
+      "modelIdPrefix": "qwen",
+      "agent": "claude-code"
+    },
+    {
+      "providerId": "opencode-go",
+      "modelIdPrefix": "step-",
+      "agent": "claude-code"
+    },
+    {
+      "providerId": "openrouter",
+      "modelIdPrefix": "bytedance-seed/",
+      "agent": "claude-code"
+    },
+    {
+      "providerId": "openrouter",
+      "modelIdPrefix": "minimax/",
+      "agent": "claude-code"
+    },
+    {
+      "providerId": "openrouter",
+      "modelIdPrefix": "moonshotai/kimi-",
+      "agent": "claude-code"
+    },
+    {
+      "providerId": "openrouter",
+      "modelIdPrefix": "qwen/qwen",
+      "agent": "claude-code"
+    },
+    {
+      "providerId": "openrouter",
+      "modelIdPrefix": "stepfun/",
+      "agent": "claude-code"
+    },
+    {
+      "providerId": "openrouter",
+      "modelIdPrefix": "tencent/hy",
+      "agent": "claude-code"
+    },
+    {
+      "providerId": "openrouter",
+      "modelIdPrefix": "z-ai/glm-",
+      "agent": "claude-code"
+    },
+    {
+      "providerId": "tencentcloud-coding-plan",
+      "modelIdPrefix": "hunyuan",
+      "agent": "claude-code"
+    },
+    {
+      "providerId": "tencentcloud-coding-plan",
+      "modelIdPrefix": "hy",
+      "agent": "claude-code"
+    },
+    {
+      "providerId": "tencentcloud-coding-plan",
+      "modelIdPrefix": "tc-code",
+      "agent": "claude-code"
+    },
+    {
+      "providerId": "vercel-ai-gateway",
+      "modelIdPrefix": "alibaba/qwen",
+      "agent": "claude-code"
+    },
+    {
+      "providerId": "vercel-ai-gateway",
+      "modelIdPrefix": "bytedance/seed",
+      "agent": "claude-code"
+    },
+    {
+      "providerId": "vercel-ai-gateway",
+      "modelIdPrefix": "minimax/",
+      "agent": "claude-code"
+    },
+    {
+      "providerId": "vercel-ai-gateway",
+      "modelIdPrefix": "moonshotai/kimi-",
+      "agent": "claude-code"
+    },
+    {
+      "providerId": "vercel-ai-gateway",
+      "modelIdPrefix": "stepfun/",
+      "agent": "claude-code"
+    },
+    {
+      "providerId": "vercel-ai-gateway",
+      "modelIdPrefix": "zai/glm-",
+      "agent": "claude-code"
+    },
+    {
+      "providerId": "volcengine-agent-plan",
+      "modelIdPrefix": "ark-code",
+      "agent": "claude-code"
+    },
+    {
+      "providerId": "volcengine-agent-plan",
+      "modelIdPrefix": "doubao-seed",
+      "agent": "claude-code"
+    },
+    {
+      "providerId": "volcengine-agent-plan",
+      "modelIdPrefix": "glm-",
+      "agent": "claude-code"
+    },
+    {
+      "providerId": "volcengine-agent-plan",
+      "modelIdPrefix": "kimi-",
+      "agent": "claude-code"
+    },
+    {
+      "providerId": "volcengine-coding-plan",
+      "modelIdPrefix": "ark-code",
+      "agent": "claude-code"
+    },
+    {
+      "providerId": "volcengine-coding-plan",
+      "modelIdPrefix": "doubao-seed",
+      "agent": "claude-code"
+    },
+    {
+      "providerId": "volcengine-coding-plan",
+      "modelIdPrefix": "glm-",
+      "agent": "claude-code"
+    },
+    {
+      "providerId": "volcengine-coding-plan",
+      "modelIdPrefix": "kimi-",
+      "agent": "claude-code"
+    },
+    {
+      "providerId": "xd",
+      "modelIdPrefix": "bytedance-seed/seed-",
+      "agent": "claude-code"
+    },
+    {
+      "providerId": "xd",
+      "modelIdPrefix": "minimax/",
+      "agent": "claude-code"
+    },
+    {
+      "providerId": "xd",
+      "modelIdPrefix": "moonshot/kimi-",
+      "agent": "claude-code"
+    },
+    {
+      "providerId": "xd",
+      "modelIdPrefix": "moonshotai/kimi-",
+      "agent": "claude-code"
+    },
+    {
+      "providerId": "xd",
+      "modelIdPrefix": "qwen/qwen",
+      "agent": "claude-code"
+    },
+    {
+      "providerId": "xd",
+      "modelIdPrefix": "stepfun/step-",
+      "agent": "claude-code"
+    },
+    {
+      "providerId": "xd",
+      "modelIdPrefix": "tencent/hy",
+      "agent": "claude-code"
+    },
+    {
+      "providerId": "xd",
+      "modelIdPrefix": "z-ai/glm-",
+      "agent": "claude-code"
+    },
+    {
+      "providerId": "zai-coding-plan-global",
+      "modelIdPrefix": "glm-",
+      "agent": "claude-code"
+    },
+    {
+      "providerId": "zhipu-coding-plan-cn",
+      "modelIdPrefix": "glm-",
+      "agent": "claude-code"
+    },
+    {
+      "providerId": "zhipu-glm-cn",
+      "modelIdPrefix": "glm-",
+      "agent": "claude-code"
+    },
+    {
+      "providerId": "zhipu-glm-global",
+      "modelIdPrefix": "glm-",
+      "agent": "claude-code"
     }
   ]
 }

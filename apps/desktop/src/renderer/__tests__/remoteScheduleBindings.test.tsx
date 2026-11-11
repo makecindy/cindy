@@ -180,7 +180,8 @@ describe('remote schedule binding badges', () => {
           { sessionBindings: true },
         ]),
       );
-      remoteProjectsStore[action]('A');
+      if (action === 'clear') remoteProjectsStore.clear();
+      else remoteProjectsStore[action]('A');
       resolve([binding()]);
       expect(await refresh).toBe('superseded');
       expect(remoteProjectsStore.getSessionScheduleBindings('A', 'task')).toEqual([]);

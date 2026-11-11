@@ -167,3 +167,20 @@ it('raises secret eye and remove-row tooltips above the z-10000 modal overlay', 
   expect(removeTip.textContent).toBe('settings.mcp.fields.removeRow');
   expect(removeTip.parentElement!.className).toContain('z-[10001]');
 });
+
+it('embeds the same Settings form and uses its existing save path with user-edited suggestions', async () => {
+  const onSaved = vi.fn();
+  render(<McpServerDialog embedded proposal={{ name: 'Suggestion', url: 'http://example.test/mcp?key=public', transport: 'sse' }}
+    existingIds={['custom_example']} onSaved={onSaved} onClose={vi.fn()} />);
+  expect(screen.queryByRole('dialog')).toBeNull();
+  expect(field('name').value).toBe('Suggestion');
+  change('name', 'Example');
+  change('token', 'test-invalid-token');
+  fireEvent.change(screen.getByPlaceholderText('settings.mcp.fields.headerNamePlaceholder'), { target: { value: 'X-Test' } });
+  fireEvent.change(screen.getByPlaceholderText('settings.mcp.fields.headerValuePlaceholder'), { target: { value: 'test-invalid-header' } });
+  fireEvent.click(save());
+  fireEvent.click(save());
+  await waitFor(() => expect(onSaved).toHaveBeenCalledWith('custom_example-2'));
+  expect(api.create).toHaveBeenCalledExactlyOnceWith({ id: 'custom_example-2', name: 'Example', transport: 'sse',
+    url: 'http://example.test/mcp?key=public', headers: { 'X-Test': 'test-invalid-header' } }, 'test-invalid-token');
+});

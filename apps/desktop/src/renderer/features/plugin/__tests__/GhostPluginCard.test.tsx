@@ -215,12 +215,17 @@ const mainViewPlugin: GhostPluginListItem = {
   mainViewTitle: 'Workspace',
 };
 
+/** 未读角标点:AttentionDot 渲染的 aria-hidden 圆点,颜色走 `--card-status-*` token。 */
+const unreadDot = (container: HTMLElement) =>
+  container.querySelector<HTMLElement>('span[aria-hidden][class*="--card-status-"]');
+
 const marketPlugin: PluginMarketItem = {
   pluginId: 'release-google-calendar',
   ghostId: 'google-calendar',
   name: 'Google Calendar',
   description: 'Connect Google Calendar',
   author: 'Cindy',
+  publisherKind: 'official',
   scope: 'public',
   organizationId: null,
   defaultInstall: false,
@@ -524,17 +529,17 @@ describe('GhostPluginCard', () => {
     const { container } = render(
       <GhostPluginCard item={commandPlugin} onPrimary={vi.fn()} onManage={vi.fn()} />,
     );
-    expect(container.querySelector('.session-card-dot')).toBeNull();
+    expect(unreadDot(container)).toBeNull();
     expect(screen.getByText('Google services')).toBeTruthy();
   });
 
-  it('有未读时:呼吸绿点 + 摘要顶替静态描述', () => {
+  it('有未读时:绿点 + 摘要顶替静态描述', () => {
     __ingestGhostBadgeForTest('filo-google', { unread: true, summary: '2 封新邮件', at: 1 });
     const { container } = render(
       <GhostPluginCard item={commandPlugin} onPrimary={vi.fn()} onManage={vi.fn()} />,
     );
-    // 单条卡片走呼吸形态(session-card-dot 带呼吸关键帧),绿色走 done token。
-    const dot = container.querySelector('.session-card-dot');
+    // 静态绿点(2026-11-11 D-06:不再呼吸),绿色走 done token。
+    const dot = unreadDot(container);
     expect(dot).toBeTruthy();
     expect(dot?.className).toContain('var(--card-status-done)');
     // 摘要顶替静态描述:静态描述用户早读过了,"新内容是什么"才是这一刻的信息。
@@ -547,7 +552,7 @@ describe('GhostPluginCard', () => {
     const { container } = render(
       <GhostPluginCard item={commandPlugin} showLocalUnread={false} onPrimary={vi.fn()} onManage={vi.fn()} />,
     );
-    expect(container.querySelector('.session-card-dot')).toBeNull();
+    expect(unreadDot(container)).toBeNull();
     expect(screen.queryByText('local private summary')).toBeNull();
     expect(screen.getByText('Google services')).toBeTruthy();
   });
@@ -557,7 +562,7 @@ describe('GhostPluginCard', () => {
     const { container } = render(
       <GhostPluginCard item={commandPlugin} onPrimary={vi.fn()} onManage={vi.fn()} />,
     );
-    expect(container.querySelector('.session-card-dot')).toBeTruthy();
+    expect(unreadDot(container)).toBeTruthy();
     expect(screen.getByText('Google services')).toBeTruthy();
   });
 
@@ -566,12 +571,46 @@ describe('GhostPluginCard', () => {
     const { container } = render(
       <GhostPluginCard item={commandPlugin} onPrimary={vi.fn()} onManage={vi.fn()} />,
     );
-    expect(container.querySelector('.session-card-dot')).toBeNull();
+    expect(unreadDot(container)).toBeNull();
     expect(screen.getByText('Google services')).toBeTruthy();
   });
 });
 
 describe('MarketPluginCard', () => {
+  // 用户确认：推荐也展示可信身份和已有下载统计；公开社区保持匿名。
+  // unit：现有真实卡片入口缺少 compact 分支的身份、统计和匿名保护覆盖。
+  it('shows identity and exact download counts on recommendations without publishing community names', () => {
+    const { rerender } = render(<MarketPluginCard compact
+      item={{ ...marketPlugin, downloadStatistics: { requestCount: '9007199254740993' } }}
+      busy={false} onSelect={vi.fn()} onIconLoadError={vi.fn()} />);
+    expect(screen.getByText('settings.ghosts.market.publisherKind.official')).toBeTruthy();
+    expect(screen.getByText('9,007,199,254,740,993 settings.ghosts.usage.downloadsValue')).toBeTruthy();
+    rerender(<MarketPluginCard compact item={{ ...marketPlugin, publisherKind: 'personal', author: 'Private contributor' }}
+      busy={false} onSelect={vi.fn()} onIconLoadError={vi.fn()} />);
+    expect(screen.getByText('settings.ghosts.market.publisherKind.community')).toBeTruthy();
+    expect(screen.queryByText(/Private contributor/)).toBeNull();
+    expect(screen.queryByText(/settings.ghosts.usage.downloadsValue/)).toBeNull();
+  });
+
+  it.each([
+    [{ sourceType: 'server', scope: 'organization' }, 'settings.ghosts.page.origin.organization'],
+    [{ sourceType: 'git-market' }, 'settings.ghosts.page.origin.custom'],
+    [{ sourceType: 'local-market' }, 'settings.ghosts.page.origin.custom'],
+  ] as const)('prioritizes actual source over an official publisher field: %j', (source, label) => {
+    render(<MarketPluginCard item={{ ...marketPlugin, ...source }} busy={false}
+      onSelect={vi.fn()} onIconLoadError={vi.fn()} />);
+    expect(screen.getAllByText(label).length).toBeGreaterThan(1);
+    expect(screen.queryByText('settings.ghosts.market.publisherKind.official')).toBeNull();
+  });
+
+  it('does not guess a public identity from author text when provenance is missing', () => {
+    render(<MarketPluginCard item={{ ...marketPlugin, publisherKind: undefined }} busy={false}
+      onSelect={vi.fn()} onIconLoadError={vi.fn()} />);
+    expect(screen.queryByText('settings.ghosts.market.publisherKind.official')).toBeNull();
+    expect(screen.queryByText('settings.ghosts.market.publisherKind.community')).toBeNull();
+    expect(screen.queryByText('Cindy')).toBeNull();
+  });
+
   it('uses an icon-only details action in the card-level right action rail', () => {
     render(
       <MarketPluginCard

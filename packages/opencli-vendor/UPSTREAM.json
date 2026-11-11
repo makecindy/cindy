@@ -1369,7 +1369,7 @@
     "clis/twitter/lists.js": "a8553e7e2acedde80e7f9e8a03e7762fe03e9ba751585feb1cf9892ca137a9ae",
     "clis/twitter/mute-word.js": "b1c411c56819dc40566e1fedd3b3809006b06e610dfe1e4216159bbc4343bed7",
     "clis/twitter/notifications.js": "ffdc5b84bc00178ef81df61b02646468bba1fbb2031fe984a8126019c446e998",
-    "clis/twitter/post.js": "31eac965ccd9d201da0638e90eceae00b1961c6f915f136f1464eda62587de57",
+    "clis/twitter/post.js": "2e3e0a2c572d622e52ea0b380118b86cb9a0cc67ddc5da3dfd6bb9a300e0a8f8",
     "clis/twitter/profile.js": "a92e986946b35c58c8b7bc0b43ab991709eaf668034abc7f98a040d4712f6f49",
     "clis/twitter/quote.js": "0d4a034d0a6413b9097df752ca1b4edee1cbc66f4030811ba4a72e5a1da2bdf7",
     "clis/twitter/reply-dm.js": "05b84cbb7c32c5ef0abd6011e14ae87f4e555befce37e646a45d101d1fa75302",
@@ -1732,6 +1732,6 @@
     "src/verify.ts": "9ad21f961c94b750dca8db63a6ffc78689dda5186f1d443ab8f912eef30b2fc9",
     "src/version.ts": "7bb1ede5cfc1f796e434cacd08cb9f903022f8c9375b17237aa16ad7d825aa2b",
     "LICENSE": "0210b8b66cf00358242cb921ba2be3a46dfe0190159b1b952388a3880ce1ff54",
-    "cli-manifest.json": "e3db617c4eb424df4256c1d1646a45c4b5bb7da94c170bbf1598c46e0b762fa4"
+    "cli-manifest.json": "87852b905d8b5df8cf1570f9ab4c34f54e953cdd41d4bfed22fb9667e50890e7"
   }
 }

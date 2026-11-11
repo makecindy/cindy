@@ -10,6 +10,7 @@
 export * from "./protocol.js";
 export * from "./allowlist.js";
 export * from "./client.js";
+export * from "./routedClient.js";
 export * from "./directPath.js";
 export * from "./directNegotiation.js";
 export * from "./directRuntimeBridge.js";
@@ -52,9 +53,11 @@ export * from "./providerShareApi.js";
 export * from "./providerShareInvitation.js";
 export * from "./chatInvitation.js";
 export * from "./providerShareCatalog.js";
+export * from "./metadataContinuity.js";
 export * from "./providerShareEnvelope.js";
 export * from "./providerGroup.js";
 export * from "./modelFavorites.js";
+export * from "./orcaWorkerRoles.js";
 export * from "./sessionListTransport.js";
 export * from "./sessionMessageReuse.js";
 
@@ -64,6 +67,7 @@ export * from "./clipboardTransfer.js";
 
 export * from "./selfHostedRelay.js";
 export * from "./selfHostedRelayAuth.js";
+export * from "./relayAccountDirectory.js";
 
 export * from "./pluginOauth.js";
 export * from "./pluginSettings.js";
@@ -75,7 +79,12 @@ export * from "./pluginOauthAuthentication.js";
 export * from "./inputHandoff.js";
 export * from "./inputDelivery.js";
 export * from "./taskMigration.js";
+export * from "./setupSnapshot.js";
+export * from "./setupTransfer.js";
 export * from "./remoteAgent.js";
 export * from "./orcaRemoteWorker.js";
 export * from "./companionCloud.js";
+export * from "./machineStatus.js";
 export * from "./pluginPages.js";
+
+export { StallDiagnostics, diagnosticChannel, diagnosticRef, diagnosticOperation } from './stallDiagnostics.js';

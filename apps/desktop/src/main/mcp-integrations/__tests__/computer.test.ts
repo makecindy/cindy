@@ -1,7 +1,10 @@
 import { EventEmitter } from 'node:events';
 import path from 'node:path';
+import os from 'node:os';
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { app } from 'electron';
 import { PassThrough } from 'node:stream';
-import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi, type MockInstance } from 'vitest';
 import { BRAND_NAME } from '@cindy/maker-shared/branding';
 import { COMPUTER_TOOLS } from '@cindy/mcps/computer';
 import { readForRecovery } from '../../../../../../packages/lizi-mcps/src/computer/recovery';
@@ -95,9 +98,20 @@ vi.mock('../../maker-host/outbound-proxy-resolver.js', () => ({
   resolveDesktopOutboundProxy: resolveDesktopOutboundProxyMock,
 }));
 
+const powerMonitorState = vi.hoisted(() => ({
+  idleSeconds: 3600,
+  idleState: 'active' as 'active' | 'idle' | 'locked' | 'unknown',
+  listeners: new Map<string, () => void>(),
+}));
+
 vi.mock('electron', () => ({
   app: {
     getPath: vi.fn((name: string) => (name === 'temp' ? '/tmp' : '/Users/tester')),
+  },
+  powerMonitor: {
+    getSystemIdleTime: () => powerMonitorState.idleSeconds,
+    getSystemIdleState: () => powerMonitorState.idleState,
+    on: (event: string, listener: () => void) => { powerMonitorState.listeners.set(event, listener); },
   },
 }));
 
@@ -121,6 +135,8 @@ import {
   pickLatestCuaDriverVersion,
   resetComputerDriverPermissionProbeCacheForTests,
   resetAtMentionWindowCacheForTests,
+  resetDesktopInputGuardStateForTests,
+  seedDesktopScreenLocked,
   resetComputerDriverUpdateStateForTests,
   runProcessWithActivityTimeout,
   sampleInstallProcessTree,
@@ -324,7 +340,190 @@ function mockWorkspaceRootExists(workspaceRoot: string): void {
 }
 
 describe('computer mcp integration', () => {
+  // #9887: window-bound tokens cannot address status items. Tier unit: exercise
+  // production dispatch with desktop captures, which existing window tests lack.
+  it('requires fresh desktop evidence and yields after other input or failed capture', async () => {
+    mcpListToolsMock.mockResolvedValue({ tools: COMPUTER_TOOLS.map((tool) => ({
+      name: tool.name, inputSchema: { type: 'object', properties: { target: {}, capture_id: {} }, additionalProperties: true },
+    })) });
+    mcpCallToolMock.mockImplementation(async ({ name }) => ({ structuredContent: name === 'get_desktop_state'
+      ? { capture_id: 'capture-1', screenshot_frame_valid: true } : { ok: true, effect: 'confirmed' } }));
+    const context = { sessionId: 'desktop-evidence' };
+    const pointer = { target: { kind: 'desktop', display_id: 'primary' }, capture_id: 'capture-1', delivery_mode: 'foreground', x: 10, y: 20 };
+    powerMonitorState.idleSeconds = 3600;
+    await expect(callComputerDriverTool('click', pointer, context)).rejects.toMatchObject({ code: 'STALE_SNAPSHOT' });
+    await callComputerDriverTool('get_window_state', { pid: 123, window_id: 7 }, context);
+    await expect(callComputerDriverTool('click', pointer, context)).rejects.toMatchObject({ code: 'STALE_SNAPSHOT' });
+    await callComputerDriverTool('get_desktop_state', {}, context);
+    await expect(callComputerDriverTool('click', { ...pointer, capture_id: 'older-capture' }, context)).rejects.toMatchObject({ code: 'STALE_SNAPSHOT' });
+    await expect(callComputerDriverTool('click', pointer, context)).resolves.toBeDefined();
+    await expect(callComputerDriverTool('click', pointer, context)).rejects.toMatchObject({ code: 'STALE_SNAPSHOT' });
+    expect(mcpCallToolMock.mock.calls.find(([call]) => call.name === 'click')?.[0].arguments)
+      .toMatchObject(pointer);
+    const read = mcpCallToolMock.mock.calls.find(([call]) => call.name === 'get_desktop_state')?.[0].arguments;
+    expect(read?.screenshot_out_file).toMatch(/get_desktop_state/);
+    expect(read?.session).toBe(mcpCallToolMock.mock.calls.find(([call]) => call.name === 'click')?.[0].arguments.session);
+    await callComputerDriverTool('get_desktop_state', {}, context);
+    await callComputerDriverTool('launch_app', { name: 'Own app' }, context);
+    await expect(callComputerDriverTool('click', pointer, context)).rejects.toMatchObject({ code: 'STALE_SNAPSHOT' });
+    await callComputerDriverTool('get_desktop_state', {}, context);
+    await callComputerDriverTool('launch_app', { name: 'Other app' }, { sessionId: 'other-input' });
+    await expect(callComputerDriverTool('click', pointer, context)).rejects.toMatchObject({ code: 'STALE_SNAPSHOT' });
+    await callComputerDriverTool('get_desktop_state', {}, context);
+    mcpCallToolMock.mockImplementation(async () => ({ structuredContent: { screenshot_frame_valid: false } }));
+    await callComputerDriverTool('get_desktop_state', {}, context);
+    await expect(callComputerDriverTool('click', pointer, context)).rejects.toMatchObject({ code: 'STALE_SNAPSHOT' });
+  });
+  // PR #9919 P1: the three-second busy guard expires, but a picture taken before
+  // local HID input stays stale. Unit tier through production dispatch; the old
+  // coverage only invalidated captures for remote/Agent input or a failed read.
+  it.each(['click', 'drag'] as const)('rejects %s from before physical input even after the person pauses', async (tool) => {
+    vi.useFakeTimers();
+    resetDesktopInputGuardStateForTests();
+    try {
+      mcpListToolsMock.mockResolvedValue({ tools: COMPUTER_TOOLS.map((entry) => ({
+        name: entry.name, inputSchema: { type: 'object', properties: { target: {}, capture_id: {} }, additionalProperties: true },
+      })) });
+      mcpCallToolMock.mockImplementation(async ({ name }) => ({ structuredContent: name === 'get_desktop_state'
+        ? { capture_id: 'physical-input-capture', screenshot_frame_valid: true } : { ok: true, effect: 'confirmed' } }));
+      const context = { sessionId: `physical-input-${tool}` };
+      const pointer = { target: { kind: 'desktop', display_id: 'primary' }, capture_id: 'physical-input-capture',
+        delivery_mode: 'foreground', ...(tool === 'click' ? { x: 10, y: 20 } : { from_x: 10, from_y: 20, to_x: 30, to_y: 20 }) };
+      powerMonitorState.idleSeconds = 10;
+      await callComputerDriverTool('get_desktop_state', {}, context);
+      vi.advanceTimersByTime(6_000);
+      powerMonitorState.idleSeconds = 4; // User input two seconds after capture, now quiet.
+      await expect(callComputerDriverTool(tool, pointer, context)).rejects.toMatchObject({ code: 'STALE_SNAPSHOT' });
+      expect(mcpCallToolMock.mock.calls.filter(([call]) => call.name === tool)).toHaveLength(0);
+      await callComputerDriverTool('get_desktop_state', {}, context);
+      await expect(callComputerDriverTool(tool, pointer, context)).resolves.toBeDefined();
+      expect(mcpCallToolMock.mock.calls.filter(([call]) => call.name === tool)).toHaveLength(1);
+    } finally {
+      powerMonitorState.idleSeconds = 3600;
+      resetDesktopInputGuardStateForTests();
+      vi.useRealTimers();
+    }
+  });
+
+  it('keeps input during a slow desktop capture stale and rejects unknown idle time', async () => {
+    vi.useFakeTimers();
+    resetDesktopInputGuardStateForTests();
+    try {
+      mcpListToolsMock.mockResolvedValue({ tools: COMPUTER_TOOLS.map((entry) => ({
+        name: entry.name, inputSchema: { type: 'object', properties: { target: {}, capture_id: {} }, additionalProperties: true },
+      })) });
+      let duringCapture = true;
+      mcpCallToolMock.mockImplementation(async ({ name }) => {
+        if (name === 'get_desktop_state' && duringCapture) {
+          vi.advanceTimersByTime(6_000);
+          powerMonitorState.idleSeconds = 4;
+        }
+        return { structuredContent: name === 'get_desktop_state'
+          ? { capture_id: 'slow-capture', screenshot_frame_valid: true } : { ok: true, effect: 'confirmed' } };
+      });
+      const context = { sessionId: 'physical-input-during-capture' };
+      const pointer = { target: { kind: 'desktop', display_id: 'primary' }, capture_id: 'slow-capture', delivery_mode: 'foreground', x: 10, y: 20 };
+      powerMonitorState.idleSeconds = 10;
+      await callComputerDriverTool('get_desktop_state', {}, context);
+      await expect(callComputerDriverTool('click', pointer, context)).rejects.toMatchObject({ code: 'STALE_SNAPSHOT' });
+      duringCapture = false;
+      await callComputerDriverTool('get_desktop_state', {}, context);
+      powerMonitorState.idleSeconds = Number.NaN;
+      await expect(callComputerDriverTool('click', pointer, context)).rejects.toMatchObject({ code: 'STALE_SNAPSHOT' });
+      expect(mcpCallToolMock.mock.calls.filter(([call]) => call.name === 'click')).toHaveLength(0);
+    } finally {
+      powerMonitorState.idleSeconds = 3600;
+      resetDesktopInputGuardStateForTests();
+      vi.useRealTimers();
+    }
+  });
   let revisionSpy: ReturnType<typeof vi.spyOn>;
+  // PR #9919 P1, unit: real dispatch must release only its generated desktop
+  // files. Existing screenshot tests checked arguments, not disk lifetime.
+  describe('desktop screenshot lifetime', () => {
+    let tempRoot: string;
+    let pathSpy: MockInstance<typeof app.getPath>;
+    let files: string[];
+    beforeEach(() => {
+      tempRoot = mkdtempSync(path.join(os.tmpdir(), 'cindy-capture-test-'));
+      const getPath = app.getPath;
+      pathSpy = vi.spyOn(app, 'getPath').mockImplementation((name) => name === 'temp' ? tempRoot : getPath(name));
+      files = [];
+      mcpCallToolMock.mockImplementation(async ({ name, arguments: args }) => {
+        if (name !== 'get_desktop_state') return { structuredContent: { ok: true } };
+        const file = args.screenshot_out_file as string;
+        writeFileSync(file, 'capture');
+        files.push(file);
+        return { structuredContent: { capture_id: file, screenshot_frame_valid: true, screenshot_file_path: file } };
+      });
+    });
+    afterEach(async () => {
+      await cleanupAllComputerDriverSessions();
+      pathSpy.mockRestore();
+      rmSync(tempRoot, { recursive: true, force: true });
+    });
+
+    it('replaces generated files per session and preserves explicit exports', async () => {
+      await callComputerDriverTool('get_desktop_state', {}, { sessionId: 'capture-a' });
+      await callComputerDriverTool('get_desktop_state', {}, { sessionId: 'capture-b' });
+      await callComputerDriverTool('get_desktop_state', {}, { sessionId: 'capture-a' });
+      expect(() => readFileSync(files[0])).toThrow(expect.objectContaining({ code: 'ENOENT' }));
+      expect(readFileSync(files[1], 'utf8')).toBe('capture');
+      expect(readFileSync(files[2], 'utf8')).toBe('capture');
+      const exported = path.join(tempRoot, 'keep.png');
+      await callComputerDriverTool('get_desktop_state', { screenshot_out_file: exported }, { sessionId: 'capture-a' });
+      expect(() => readFileSync(files[2])).toThrow(expect.objectContaining({ code: 'ENOENT' }));
+      await cleanupComputerDriverSession('capture-a');
+      expect(readFileSync(exported, 'utf8')).toBe('capture');
+      expect(readFileSync(files[1], 'utf8')).toBe('capture');
+      await cleanupAllComputerDriverSessions();
+      expect(() => readFileSync(files[1])).toThrow(expect.objectContaining({ code: 'ENOENT' }));
+      expect(readFileSync(exported, 'utf8')).toBe('capture');
+    });
+
+    it.each(['unavailable', 'error', 'cancelled'])('removes generated files after a read is %s', async (outcome) => {
+      const controller = new AbortController();
+      const capture = mcpCallToolMock.getMockImplementation()!;
+      mcpCallToolMock.mockImplementation(async (call, ...rest) => {
+        const result = await capture(call, ...rest);
+        if (call.name !== 'get_desktop_state') return result;
+        if (outcome === 'error') throw new Error('capture failed');
+        if (outcome === 'cancelled') controller.abort();
+        if (outcome === 'unavailable') result.structuredContent.screenshot_frame_valid = false;
+        return result;
+      });
+      await callComputerDriverTool('get_desktop_state', {}, { sessionId: 'capture-failure', signal: controller.signal }).catch(() => undefined);
+      expect(files).toHaveLength(1);
+      expect(() => readFileSync(files[0])).toThrow(expect.objectContaining({ code: 'ENOENT' }));
+    });
+
+    it.each([false, true])('cleans a late read without deleting its successor (session closed: %s)', async (close) => {
+      const entered = createDeferred<void>();
+      const release = createDeferred<void>();
+      const capture = mcpCallToolMock.getMockImplementation()!;
+      let first = true;
+      mcpCallToolMock.mockImplementation(async (call, ...rest) => {
+        if (call.name === 'get_desktop_state' && first) {
+          first = false;
+          entered.resolve();
+          await release.promise;
+        }
+        return capture(call, ...rest);
+      });
+      const context = { sessionId: 'capture-race' };
+      const pending = callComputerDriverTool('get_desktop_state', {}, context);
+      await entered.promise;
+      if (close) await cleanupComputerDriverSession(context.sessionId);
+      await callComputerDriverTool('get_desktop_state', {}, context);
+      release.resolve();
+      await pending;
+      expect(readFileSync(files[0], 'utf8')).toBe('capture');
+      expect(() => readFileSync(files[1])).toThrow(expect.objectContaining({ code: 'ENOENT' }));
+      await cleanupComputerDriverSession(context.sessionId);
+      expect(() => readFileSync(files[0])).toThrow(expect.objectContaining({ code: 'ENOENT' }));
+    });
+  });
+
   let agentRevisionSpy: ReturnType<typeof vi.spyOn>;
   beforeEach(async () => {
     // Each test starts with a fresh process input history; cleanup of a driver
@@ -641,6 +840,59 @@ describe('computer mcp integration', () => {
     expect(payload.query).toBeUndefined();
     expect(payload.workspace_root).toBeUndefined();
     expect(payload.process_name).toBeUndefined();
+  });
+
+  // CU-016 (2026-10 audit): nine simulator sessions tried synthetic clicks first;
+  // none worked. The identity names the route that does, before any action.
+  it('labels iOS Simulator / Device Hub windows and names the simctl route', async () => {
+    mcpCallToolMock.mockResolvedValueOnce({
+      content: [{ type: 'text', text: '{"ok":true,"windows":[{"pid":77,"window_id":9,"app_name":"Simulator","title":"iPhone 17 Pro"},{"pid":88,"window_id":10,"app_name":"Device Hub","title":"iPhone"},{"pid":99,"window_id":11,"app_name":"Google Chrome","title":"Docs"}]}' }],
+    });
+    mockProcessSnapshotSpawn([
+      { pid: 77, name: 'Simulator', command: '/Applications/Xcode.app/Contents/Developer/Applications/Simulator.app/Contents/MacOS/Simulator' },
+      { pid: 88, name: 'Device Hub', command: '/Applications/Cindy.app/Contents/Frameworks/Device Hub.app/Contents/MacOS/Device Hub' },
+      { pid: 99, name: 'Google Chrome', command: '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome' },
+    ]);
+
+    const result = await callComputerDriverTool('list_windows', { session: 'sim' }, { sessionId: 'sim' }) as {
+      windows: Array<{ pid: number; identity: { kind: string; hints?: string[] } }>;
+    };
+    const byPid = Object.fromEntries(result.windows.map((window) => [window.pid, window.identity]));
+    expect(byPid[77]).toMatchObject({ kind: 'ios-simulator', hints: [expect.stringContaining('xcrun simctl')] });
+    expect(byPid[88]).toMatchObject({ kind: 'ios-simulator', hints: [expect.stringContaining('xcrun simctl')] });
+    expect(byPid[99]).toMatchObject({ kind: 'browser', hints: [expect.stringContaining('set_value')] });
+  });
+
+  // Review (#8227): a page or document titled "Simulator" is not the simulator.
+  it('does not label a browser window as ios-simulator because of its title', async () => {
+    mcpCallToolMock.mockResolvedValueOnce({
+      content: [{ type: 'text', text: '{"ok":true,"windows":[{"pid":99,"window_id":11,"app_name":"Google Chrome","title":"iOS Simulator – Simulator.app guide"},{"pid":55,"window_id":12,"app_name":"Cursor","title":"simulator-notes.md"}]}' }],
+    });
+    mockProcessSnapshotSpawn([
+      { pid: 99, name: 'Google Chrome', command: '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome' },
+      { pid: 55, name: 'Cursor', command: '/Users/x/ios-simulator-tools/node_modules/.bin/cursor' },
+    ]);
+    const result = await callComputerDriverTool('list_windows', { session: 'sim-title' }, { sessionId: 'sim-title' }) as {
+      windows: Array<{ pid: number; identity: { kind: string } }>;
+    };
+    const byPid = Object.fromEntries(result.windows.map((window) => [window.pid, window.identity.kind]));
+    expect(byPid[99]).toBe('browser');
+    expect(byPid[55]).not.toBe('ios-simulator');
+  });
+
+  // Review (#8227 round 8): a title must not out-rank the real application.
+  it('classifies a browser by its process even when the tab title names node or vite', async () => {
+    mcpCallToolMock.mockResolvedValueOnce({
+      content: [{ type: 'text', text: '{"ok":true,"windows":[{"pid":99,"window_id":11,"app_name":"Google Chrome","title":"Node.js documentation – npm and vite guide"}]}' }],
+    });
+    mockProcessSnapshotSpawn([
+      { pid: 99, name: 'Google Chrome', command: '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome' },
+    ]);
+    const result = await callComputerDriverTool('list_windows', { session: 'title-node' }, { sessionId: 'title-node' }) as {
+      windows: Array<{ identity: { kind: string; hints?: string[] } }>;
+    };
+    expect(result.windows[0]!.identity.kind).toBe('browser');
+    expect(result.windows[0]!.identity.hints).toEqual([expect.stringContaining('set_value')]);
   });
 
   it('filters list_windows locally by process name', async () => {
@@ -1532,6 +1784,33 @@ describe('computer mcp integration', () => {
     await callComputerDriverTool('drag', args, { sessionId: 'legacy-drag' });
     expect(mcpCallToolMock).toHaveBeenCalledTimes(1);
     expect(mcpCallToolMock.mock.calls[0]![0].arguments).toEqual(args);
+  });
+
+  // cua-driver 0.37 stopped naming the missing-app failure (2026-10-31 smoke run:
+  // `tool_invocation_failed` + "No installed macOS app found …"); the MCP recovery
+  // path and the smoke keep relying on the stable name.
+  it.each(['tool_invocation_failed', undefined])(
+    'names a missing app APP_NOT_INSTALLED when the driver reports it as %s', async (error) => {
+      mcpCallToolMock.mockResolvedValue({
+        isError: true,
+        content: [{ type: 'text', text: "No installed macOS app found for name 'Example'." }],
+        structuredContent: { ...(error ? { error } : {}), name: 'Example' },
+      });
+      await expect(
+        callComputerDriverTool('launch_app', { name: 'Example' }, { sessionId: 'app-error-generic' }),
+      ).rejects.toMatchObject({ code: 'APP_NOT_INSTALLED' });
+    },
+  );
+
+  it('keeps other snake_case driver codes instead of the generic code', async () => {
+    mcpCallToolMock.mockResolvedValue({
+      isError: true,
+      content: [{ type: 'text', text: 'step 1 of 1 failed' }],
+      structuredContent: { error: 'tool_invocation_failed' },
+    });
+    await expect(
+      callComputerDriverTool('get_window_state', { pid: 1, window_id: 2 }, { sessionId: 'snake-code' }),
+    ).rejects.toMatchObject({ code: 'tool_invocation_failed' });
   });
 
   it('preserves a named driver error stored in the error field', async () => {
@@ -4304,6 +4583,139 @@ function mockRefsThenReleaseFetch() {
     });
 }
 
+/**
+ * CU-014 (2026-10 audit): foreground input competed with the person at the
+ * keyboard in eight sessions. Gap: only remote-desktop input yielded. Tier: unit.
+ */
+describe('foreground input while the person is using this computer', () => {
+  const context = { sessionId: 'user-active' };
+  const target = { pid: 123, window_id: 7 };
+  beforeEach(async () => {
+    await cleanupAllComputerDriverSessions();
+    resetDesktopInputGuardStateForTests();
+    mcpCallToolMock.mockReset().mockResolvedValue({ structuredContent: { ok: true, effect: 'confirmed' } });
+    powerMonitorState.idleSeconds = 3600;
+    powerMonitorState.idleState = 'active';
+  });
+
+  it('refuses foreground delivery after recent system input and keeps background delivery', async () => {
+    await callComputerDriverTool('get_window_state', target, context);
+    powerMonitorState.idleSeconds = 0;
+    await expect(callComputerDriverTool('click', { ...target, x: 1, y: 1, delivery_mode: 'foreground' }, context))
+      .rejects.toMatchObject({ code: 'USER_INPUT_ACTIVE' });
+    expect(mcpCallToolMock.mock.calls.filter(([call]) => call.name === 'click')).toHaveLength(0);
+    await expect(callComputerDriverTool('click', {
+      target: { kind: 'desktop', display_id: 'primary' }, capture_id: 'capture-1', x: 1, y: 1, delivery_mode: 'foreground',
+    }, context)).rejects.toMatchObject({ code: 'USER_INPUT_ACTIVE' });
+    await expect(callComputerDriverTool('click', { ...target, x: 1, y: 1, delivery_mode: 'background' }, context))
+      .resolves.toBeDefined();
+    await expect(callComputerDriverTool('get_window_state', target, context)).resolves.toBeDefined();
+  });
+
+  it('attributes input right after its own dispatch to the Agent, not the person', async () => {
+    vi.useFakeTimers();
+    try {
+      await callComputerDriverTool('get_window_state', target, context);
+      await expect(callComputerDriverTool('type_text', { ...target, text: 'hi', delivery_mode: 'foreground' }, context))
+        .resolves.toBeDefined();
+      // The driver's own keystrokes reset the system idle clock; the clock is
+      // floored, so "1 s ago" read 2.2 s after our dispatch is still ours.
+      powerMonitorState.idleSeconds = 0;
+      await expect(callComputerDriverTool('click', { ...target, x: 1, y: 1, delivery_mode: 'foreground' }, context))
+        .resolves.toBeDefined();
+      vi.advanceTimersByTime(2_200);
+      powerMonitorState.idleSeconds = 1;
+      await expect(callComputerDriverTool('click', { ...target, x: 1, y: 1, delivery_mode: 'foreground' }, context))
+        .resolves.toBeDefined();
+      // Input well after the last dispatch is a person again.
+      vi.advanceTimersByTime(10_000);
+      powerMonitorState.idleSeconds = 1;
+      await expect(callComputerDriverTool('click', { ...target, x: 1, y: 1, delivery_mode: 'foreground' }, context))
+        .rejects.toMatchObject({ code: 'USER_INPUT_ACTIVE' });
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  // Review (#8227): an AX write or app launch sends no HID event, so it must not take
+  // the credit for the person's typing that follows it.
+  it.each([
+    ['set_value', { element_token: 'x:1', value: 'hi' }],
+    ['launch_app', { name: 'Notes' }],
+  ] as const)('does not attribute later input to a %s that synthesized none', async (tool, extra) => {
+    vi.useFakeTimers();
+    try {
+      await callComputerDriverTool('get_window_state', target, context);
+      await callComputerDriverTool(tool, tool === 'launch_app' ? { ...extra } : { ...target, ...extra }, context).catch(() => undefined);
+      powerMonitorState.idleSeconds = 1;
+      await expect(callComputerDriverTool('click', { ...target, x: 1, y: 1, delivery_mode: 'foreground' }, context))
+        .rejects.toMatchObject({ code: expect.stringMatching(/USER_INPUT_ACTIVE|STALE_SNAPSHOT/) });
+      // A fresh read lets the check run on its own merits.
+      await callComputerDriverTool('get_window_state', target, context);
+      await expect(callComputerDriverTool('click', { ...target, x: 1, y: 1, delivery_mode: 'foreground' }, context))
+        .rejects.toMatchObject({ code: 'USER_INPUT_ACTIVE' });
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  // Review (#8227 round 8): input that follows an Agent action by more than the delivery
+  // tail is a person's, however recent the action was.
+  it('treats input after the delivery tail of an Agent action as the person\'s', async () => {
+    vi.useFakeTimers();
+    try {
+      await callComputerDriverTool('get_window_state', target, context);
+      await callComputerDriverTool('click', { ...target, x: 1, y: 1, delivery_mode: 'background' }, context);
+      vi.advanceTimersByTime(2_600);
+      powerMonitorState.idleSeconds = 0;
+      await expect(callComputerDriverTool('click', { ...target, x: 1, y: 1, delivery_mode: 'foreground' }, context))
+        .rejects.toMatchObject({ code: 'USER_INPUT_ACTIVE' });
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  // Review (#8227 round 14): a driver refusal returns as a normal result and sent nothing.
+  it('does not attribute later input to a click the driver refused', async () => {
+    await callComputerDriverTool('get_window_state', target, context);
+    mcpCallToolMock.mockResolvedValue({ structuredContent: { ok: true, effect: 'refused', errorCode: 'background_unavailable' } });
+    await callComputerDriverTool('click', { ...target, x: 1, y: 1, delivery_mode: 'background' }, context);
+    mcpCallToolMock.mockResolvedValue({ structuredContent: { ok: true, effect: 'confirmed' } });
+    await callComputerDriverTool('get_window_state', target, context);
+    powerMonitorState.idleSeconds = 0;
+    await expect(callComputerDriverTool('click', { ...target, x: 1, y: 1, delivery_mode: 'foreground' }, context))
+      .rejects.toMatchObject({ code: 'USER_INPUT_ACTIVE' });
+  });
+
+  it('does not attribute input to a foreground action the guard refused', async () => {
+    await callComputerDriverTool('get_window_state', target, context);
+    powerMonitorState.idleSeconds = 0;
+    await expect(callComputerDriverTool('click', { ...target, x: 1, y: 1, delivery_mode: 'foreground' }, context))
+      .rejects.toMatchObject({ code: 'USER_INPUT_ACTIVE' });
+    await expect(callComputerDriverTool('click', { ...target, x: 1, y: 1, delivery_mode: 'foreground' }, context))
+      .rejects.toMatchObject({ code: 'USER_INPUT_ACTIVE' });
+  });
+
+  it('reports the lock state from power events, else from the idle-state probe', async () => {
+    const deps = getComputerMcpDeps();
+    // Started on a locked screen: macOS never reports 'locked' through the probe.
+    powerMonitorState.idleState = 'idle';
+    seedDesktopScreenLocked(true);
+    await expect(deps.describeDesktop?.()).resolves.toEqual({ screen_locked: true });
+    resetDesktopInputGuardStateForTests();
+    powerMonitorState.idleState = 'locked';
+    await expect(deps.describeDesktop?.()).resolves.toEqual({ screen_locked: true });
+    powerMonitorState.listeners.get('unlock-screen')?.();
+    await expect(deps.describeDesktop?.()).resolves.toEqual({ screen_locked: false });
+    // A startup seed never overrides an event already seen.
+    seedDesktopScreenLocked(true);
+    await expect(deps.describeDesktop?.()).resolves.toEqual({ screen_locked: false });
+    powerMonitorState.listeners.get('lock-screen')?.();
+    await expect(deps.describeDesktop?.()).resolves.toEqual({ screen_locked: true });
+    powerMonitorState.listeners.get('unlock-screen')?.();
+  });
+});
+
 describe('computer driver update check', () => {
   beforeEach(() => {
     spawnMock.mockReset();
@@ -4410,8 +4822,9 @@ describe('computer driver update check', () => {
     expect(fetchImpl).not.toHaveBeenCalled();
   });
 
-  it('silently reports no update when the releases API fails or rate-limits', async () => {
+  it('silently reports no update when the releases API fails', async () => {
     mockDriverSpawn({ stdout: '0.5.8\n' });
+    // 不带配额信息的 403:可能是仓库/权限问题,不能报成「稍后重试就好」。
     const fetchImpl = vi.fn().mockResolvedValue({ ok: false, status: 403 });
 
     await expect(checkComputerDriverUpdate(fetchImpl as unknown as typeof fetch)).resolves.toEqual({
@@ -4420,6 +4833,7 @@ describe('computer driver update check', () => {
       updateAvailable: false,
       updating: false,
       checkStatus: 'error',
+      checkError: { kind: 'network' },
       checkedAt: expect.any(Number),
     });
   });
@@ -4520,6 +4934,28 @@ describe('computer driver update check', () => {
     } finally {
       vi.useRealTimers();
     }
+  });
+
+  it('marks a GitHub rate-limited refresh as retryable instead of a broken check', async () => {
+    mockDriverSpawn({ stdout: 'cua-driver 0.5.8\n' });
+    await checkComputerDriverUpdate(mockRefsThenReleaseFetch() as unknown as typeof fetch);
+
+    // 已知有可安装新版后,后台刷新撞上 403 + 配额见底:要保留安装入口,
+    // 同时把原因报成「限流可重试」,而不是笼统的检查失败。
+    mockDriverSpawn({ stdout: 'cua-driver 0.5.8\n' });
+    const rateLimitedFetch = vi.fn().mockResolvedValue({
+      ok: false,
+      status: 403,
+      headers: { get: (name: string) => (name === 'x-ratelimit-remaining' ? '0' : null) },
+    });
+    await expect(
+      checkComputerDriverUpdate(rateLimitedFetch as unknown as typeof fetch, { force: true }),
+    ).resolves.toMatchObject({
+      latestVersion: '0.7.0',
+      updateAvailable: true,
+      checkStatus: 'error',
+      checkError: { kind: 'rate_limited' },
+    });
   });
 
   it('does not turn an unverified cached tag into an update after a local downgrade and network failure', async () => {

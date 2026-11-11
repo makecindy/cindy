@@ -4,6 +4,7 @@ import path from 'node:path';
 import os from 'node:os';
 import { createCipheriv, createDecipheriv, randomBytes } from 'node:crypto';
 import { COMPANION_SECRET_CHUNK_CHARS, readChunkedSecret, writeChunkedSecret } from '../chunkedSecretFile.js';
+import { readStreamedSecret, writeStreamedSecret } from '../streamedSecretFile.js';
 let root: string;
 const key = randomBytes(32);
 const cipher = {
@@ -55,4 +56,25 @@ it('retains the last committed value and removes temporary ciphertext on owner l
   await expect(writeChunkedSecret(file, 'owner-bot', 'x'.repeat(300000), cipher, () => { if (++calls === 5) throw new Error('owner changed'); })).rejects.toThrow('owner changed');
   expect(await readChunkedSecret(file, 'owner-bot', cipher, () => {})).toBe('previous fixture');
   expect(await fs.readdir(root)).toEqual(['private.enc']);
+});
+
+// Unit: streamed archives yield before the footer, so completion must reject
+// corruption, replay and account substitution before callers publish staging.
+it.each(['truncate', 'reorder', 'context', 'mix', 'digest', 'trailing'] as const)('rejects %s in a streamed resource archive', async kind => {
+  const file = path.join(root, 'resource.enc'), second = path.join(root, 'other.enc');
+  async function* chunks() { yield 'fixture-first'; yield 'fixture-second'; }
+  const digest = await writeStreamedSecret(file, 'owner-bot-skill', chunks(), cipher, () => {});
+  const lines = (await fs.readFile(file, 'utf8')).trimEnd().split('\n');
+  if (kind === 'truncate') lines.pop();
+  if (kind === 'reorder') [lines[1], lines[2]] = [lines[2]!, lines[1]!];
+  if (kind === 'trailing') lines.push(lines[1]!);
+  if (kind === 'mix') {
+    await writeStreamedSecret(second, 'owner-bot-skill', chunks(), cipher, () => {});
+    lines[2] = (await fs.readFile(second, 'utf8')).split('\n')[2]!;
+  }
+  await fs.writeFile(file, lines.join('\n') + '\n');
+  const consume = async () => {
+    for await (const _ of readStreamedSecret(file, kind === 'context' ? 'other-owner' : 'owner-bot-skill', kind === 'digest' ? '0'.repeat(64) : digest, cipher, () => {})) { /* consume through authenticated footer */ }
+  };
+  await expect(consume()).rejects.toThrow();
 });

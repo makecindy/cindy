@@ -4,6 +4,13 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import { createInstance } from 'i18next';
 import { I18nextProvider } from 'react-i18next';
 import { SUPPORTED_LOCALES } from '../../../../shared/locale';
+import es from '@/i18n/locales/es/common.json';
+import fr from '@/i18n/locales/fr/common.json';
+import de from '@/i18n/locales/de/common.json';
+import ptPT from '@/i18n/locales/pt-PT/common.json';
+import ptBR from '@/i18n/locales/pt-BR/common.json';
+import lzh from '@/i18n/locales/zh-Hant-x-lzh/common.json';
+import lzhHans from '@/i18n/locales/zh-Hans-x-lzh/common.json';
 import en from '@/i18n/locales/en/common.json';
 import zhCN from '@/i18n/locales/zh-CN/common.json';
 import zhTW from '@/i18n/locales/zh-TW/common.json';
@@ -24,12 +31,65 @@ import { clearDraft, getDraft, plainTextToTiptapDoc, saveDraft } from '@/lib/com
 import { NEW_MAKER_DRAFT_KEY } from '@/features/cc-agent/newMakerDraftKeys';
 import { getDraft as getNewMakerDraft, patchDraft } from '@/state/newMakerDraft';
 
-const locales = { en, 'zh-CN': zhCN, 'zh-TW': zhTW, ja, ko };
+const locales = { en, 'zh-CN': zhCN, 'zh-TW': zhTW, ja, ko, es, fr, de, 'pt-PT': ptPT, 'pt-BR': ptBR, 'zh-Hant-x-lzh': lzh, 'zh-Hans-x-lzh': lzhHans };
 const raw = JSON.stringify({ error: {
   message: 'X-OpenAI-Internal-Codex-Responses-Lite requires `parallel_tool_calls` to be false.',
   type: 'invalid_request_error', code: 'unsupported_value', param: 'parallel_tool_calls',
 } });
 afterEach(cleanup);
+
+it('keeps the shared Codex account reset guidance instead of replacing it with generic budget text', async () => {
+  const i18n = createInstance();
+  await i18n.init({ lng: 'en', resources: { en: { translation: en } } });
+  render(<I18nextProvider i18n={i18n}><ErrorBanner error='429 usage_limit: usage limit reached'
+    agentKind="codex" agentDeviceId="share:one" onRetry={vi.fn()} onChooseComputer={vi.fn()}
+    usageLimitRecovery={{ isAccountUsageLimit: true, resetAtMs: Date.now() + 60_000 }} /></I18nextProvider>);
+  expect(screen.queryByText(en.sharedTaskRecovery.reason.budget)).toBeNull();
+  expect(screen.queryByRole('button', { name: en.sharedTaskRecovery.choose })).toBeNull();
+});
+
+it.each([['DEVICE_OFFLINE', 'offline'], ['TIMEOUT', 'timeout']] as const)(
+  'distinguishes terminal runtime %s from an unknown allocation failure', async (code, reason) => {
+    const i18n = createInstance();
+    await i18n.init({ lng: 'en', resources: { en: { translation: en } } });
+    render(<I18nextProvider i18n={i18n}><ErrorBanner error={`[${code}] runtime probe failed`}
+      agentDeviceId="share:one" onRetry={vi.fn()} onChooseComputer={vi.fn()} /></I18nextProvider>);
+    expect(screen.getByText(en.sharedTaskRecovery.reason[reason])).toBeTruthy();
+  },
+);
+
+it('offers a route choice for confirmed shared-provider quota exhaustion without misclassifying local billing', async () => {
+  const i18n = createInstance();
+  await i18n.init({ lng: 'en', resources: { en: { translation: en } } });
+  const choose = vi.fn();
+  const error = 'insufficient_quota: You exceeded your current quota, please check your plan and billing details';
+  const h = render(<I18nextProvider i18n={i18n}><ErrorBanner error={error} onRetry={vi.fn()}
+    agentDeviceId="share:one" onChooseComputer={choose} /></I18nextProvider>);
+  expect(screen.getByText(en.sharedTaskRecovery.reason.budget)).toBeTruthy();
+  fireEvent.click(screen.getByRole('button', { name: en.sharedTaskRecovery.choose }));
+  expect(choose).toHaveBeenCalledOnce();
+  h.rerender(<I18nextProvider i18n={i18n}><ErrorBanner error={error} onRetry={vi.fn()}
+    onChooseComputer={choose} /></I18nextProvider>);
+  expect(screen.queryByRole('button', { name: en.sharedTaskRecovery.choose })).toBeNull();
+});
+
+// Unit: both live and persisted terminal errors expose the same reason and
+// route-choice action. An allocation failure must not become "computer offline".
+it.each(['live', 'tail', 'history'] as const)('offers a computer choice for a specific %s shared-task failure', async surface => {
+  const i18n = createInstance();
+  await i18n.init({ lng: 'zh-CN', resources: { 'zh-CN': { translation: zhCN } } });
+  const choose = vi.fn();
+  const message = '[REMOTE_AGENT_UNAVAILABLE] [SHARED_TASK_RECOVERY_timeout] [SHARED_TASK_STAGE_executor] Shared task recovery failed';
+  render(<I18nextProvider i18n={i18n}>{surface === 'live'
+    ? <ErrorBanner error={message} errorReason="turn-failed" onRetry={vi.fn()} onChooseComputer={choose} />
+    : surface === 'tail' ? <ErrorTailErrorBanner errorText={message} errorReason="turn-failed" onContinue={vi.fn()} onDismiss={vi.fn()} onChooseComputer={choose} />
+    : <ErrorMessageCard message={message} reason="turn-failed" />}</I18nextProvider>);
+  expect(screen.getByText(zhCN.sharedTaskRecovery.reason.timeout)).toBeTruthy();
+  if (surface !== 'history') {
+    fireEvent.click(screen.getByRole('button', { name: zhCN.sharedTaskRecovery.choose }));
+    expect(choose).toHaveBeenCalledOnce();
+  }
+});
 
 it.each(['thread not found', 'app-server force-retired: auth changed'])(
   'retains the specific execution failure in details: %s',

@@ -40,12 +40,15 @@ import { ErrorNotice } from '@/components/ui/error-notice';
 
 import {
   forwardRef,
+  lazy,
+  Suspense,
   useCallback,
   useEffect,
   useImperativeHandle,
   useLayoutEffect,
   useRef,
   useState,
+  type ComponentProps,
 } from 'react';
 import { createPortal } from 'react-dom';
 import { Save, Table2 } from 'lucide-react';
@@ -54,7 +57,10 @@ import { fileBrowserApiFor } from '@/lib/fileBrowserTransport';
 import { createFileTransferProgressValues } from '@/lib/fileTransferProgress';
 
 import { Spinner } from '@/components/ui/spinner';
-import { acquireFindInPage } from '@/components/find-in-page/findInPageOwnership';
+import {
+  acquireFindInPage,
+  getTextPreviewHost,
+} from '@/components/find-in-page/findInPageOwnership';
 import { useAppShortcut } from '@/hooks/useAppShortcut';
 import {
   PlaintextEditor,
@@ -73,7 +79,6 @@ import type { FileContent } from './hooks/useFileContent';
 import { useDelayedFlag } from './hooks/useDelayedFlag';
 import { DrawioPreview } from './DrawioPreview';
 import { ImagePreview } from './ImagePreview';
-import { PdfPreview } from './PdfPreview';
 import { UnrenderablePlaceholder } from './UnrenderablePlaceholder';
 import { DocSearchBar } from './DocSearchBar';
 import { setActiveFileBodyHandle } from './lib/activeFileBodyHandle';
@@ -89,6 +94,21 @@ import {
   normalizeBaseline,
   type MarkdownAutosaveHandle,
 } from './lib/markdownAutosave';
+
+// pdf.js (~0.45 MB) would otherwise ride along with every window that can show
+// a file body, including the main window's first screen. PdfPreview renders its
+// own loading state, so the brief chunk load only needs an empty fallback.
+const LazyPdfPreview = lazy(() =>
+  import('./PdfPreview').then((module) => ({ default: module.PdfPreview })),
+);
+
+function PdfPreview(props: ComponentProps<typeof LazyPdfPreview>) {
+  return (
+    <Suspense fallback={null}>
+      <LazyPdfPreview {...props} />
+    </Suspense>
+  );
+}
 
 /**
  * project-search 跳转要的是「目标行第一个**可见**命中的下标」。
@@ -537,7 +557,7 @@ export const FileBodyView = forwardRef<FileBodyHandle, FileBodyViewProps>(functi
   useAppShortcut(
     'find-in-page',
     () => {
-      if (mermaidModalOpen()) return false;
+      if (mermaidModalOpen() || getTextPreviewHost()) return false;
       setBarVisible(true);
       queueMicrotask(() => {
         searchInputRef.current?.focus();
@@ -662,7 +682,7 @@ export const FileBodyView = forwardRef<FileBodyHandle, FileBodyViewProps>(functi
   useEffect(() => {
     if (!barVisible) return;
     const handler = (e: KeyboardEvent) => {
-      if (e.key !== 'Escape') return;
+      if (e.key !== 'Escape' || getTextPreviewHost()) return;
       e.preventDefault();
       e.stopPropagation();
       e.stopImmediatePropagation();
@@ -762,10 +782,13 @@ export const FileBodyView = forwardRef<FileBodyHandle, FileBodyViewProps>(functi
           : null;
     return (
       <div
-        className="flex h-full w-full items-center justify-center px-8 text-center text-13 text-[var(--cmd-palette-item-meta)]"
+        className="flex h-full min-h-0 w-full min-w-0 flex-col overflow-y-auto p-4 text-center text-13 text-[var(--cmd-palette-item-meta)]"
         title={content.message}
       >
-        {friendly ?? t('ccAgent.workdirBrowse.fileBody.readFailed', { message: content.message })}
+        {/* Auto margins center short errors without scrolling the start of tall errors out of reach. */}
+        <div className="my-auto w-full shrink-0 select-text [overflow-wrap:anywhere]">
+          {friendly ?? t('ccAgent.workdirBrowse.fileBody.readFailed', { message: content.message })}
+        </div>
       </div>
     );
   }
@@ -1069,7 +1092,7 @@ export const FileBodyView = forwardRef<FileBodyHandle, FileBodyViewProps>(functi
               'fixed z-[9999] w-[168px] rounded-xl p-0.5 overflow-hidden',
               'bg-[var(--cmd-palette-bg)]',
               'border border-[var(--cmd-palette-border)]',
-              'shadow-[var(--shadow-menu)]',
+              'shadow-[shadow:var(--shadow-menu)]',
             )}
             style={{ left: menuPos.x, top: menuPos.y }}
           >
@@ -1169,7 +1192,7 @@ function EditingChip({
       aria-live="polite"
       className={cn(
         'inline-flex items-center gap-1.5 rounded-full border px-2.5 h-7 text-12 font-medium',
-        'shadow-sm backdrop-blur',
+        'shadow-[shadow:var(--shadow-menu)] backdrop-blur',
         showAmber
           ? cn(
               'border-amber-300/70 bg-amber-50/95 text-amber-800',
@@ -1330,7 +1353,7 @@ function CachedFileBody({
             </>
           )}
         </div>
-        <OpenInSystemActions absPath={cachePath} folderPath={cacheDir} className="shrink-0" />
+        <OpenInSystemActions absPath={cachePath} className="shrink-0" />
       </div>
     );
   }

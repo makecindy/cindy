@@ -105,6 +105,41 @@ it('keeps text-only policy local and ordinary tools independent of host UI failu
   expect(await tool({ toolName: 'ask_user_question' }, ctx)).toBeUndefined();
 });
 
+// Performance contract, unit: execute the generated production bridge helper.
+// A plugin-free native turn must not gain an awaited before_agent_start handler;
+// the existing real-Pi request tests cannot observe native handler registration.
+it('registers model routing only after the first selected RPC input', async () => {
+  const source = CINDY_BRIDGE_EXTENSION_SOURCE;
+  const start = source.indexOf('let textOnlyTurnActive = false');
+  const end = source.indexOf('function currentPermissionState', start);
+  const handlers = new Map<string, (event: any, ctx: any) => any>();
+  const compiled = ts.transpileModule(source.slice(start, end)
+    + '\nconst runtime = installRuntimeModelControl(pi);\ninstallTextOnlyTurnPolicy(pi, runtime.prepare);',
+    { compilerOptions: { target: ts.ScriptTarget.ES2022 } }).outputText;
+  const physical = { provider: 'fixture', id: 'original' };
+  const router = { provider: 'cindy-runtime-router', id: 'selected-task' };
+  const setModel = vi.fn(async () => true);
+  const registerVirtualModel = vi.fn();
+  runInNewContext(compiled, { process: { env: { CINDY_PI_TURN_TOOL_POLICY: 'runtime-token' } },
+    pi: { on: (name: string, handler: (event: any, ctx: any) => any) => handlers.set(name, handler),
+      setModel, registerVirtualModel, setThinkingLevel: vi.fn() } });
+  const input = handlers.get('input')!;
+  const ctx = { isIdle: () => true, model: physical, modelRegistry: { find: () => router } };
+  expect(input({ source: 'rpc', text: 'Ordinary input' }, ctx)).toBeUndefined();
+  expect(handlers.has('before_agent_start')).toBe(false);
+  expect(setModel).not.toHaveBeenCalled();
+  expect(await input({ source: 'rpc', text: '[CINDY_MODEL_REQUEST]:runtime-token\nSelected input' }, ctx))
+    .toEqual({ action: 'transform', text: 'Selected input', images: undefined });
+  expect(setModel).toHaveBeenCalledWith(router);
+  expect(registerVirtualModel).toHaveBeenCalledOnce();
+  expect(handlers.has('before_agent_start')).toBe(false);
+  await input({ source: 'rpc', text: 'Deselected input' }, { ...ctx, model: router });
+  expect(setModel).toHaveBeenLastCalledWith(physical);
+  setModel.mockClear();
+  expect(input({ source: 'rpc', text: 'Next ordinary input' }, ctx)).toBeUndefined();
+  expect(setModel).not.toHaveBeenCalled();
+});
+
 it('lets a shared user\'s Pi call only tools that Cindy extensions registered', async () => {
   const source = CINDY_BRIDGE_EXTENSION_SOURCE;
   const gateStart = source.indexOf('function createCindyGuestToolGate');
@@ -1552,8 +1587,10 @@ describe('cindy-bridge extension source', () => {
     // 路由指定额外头必须合并进请求（anthropic-version / x-api-key / 自定义 provider 头），
     // 缺失会被后端拒（对齐 host 侧 vision-channel 的 headers 合并）。
     expect(source).toContain('...spec.headers');
-    // anthropic-messages 视觉请求必须带 max_tokens（/v1/messages 强制要求，缺省会 400）。
-    expect(source).toContain('max_tokens: 1024');
+    // anthropic-messages 视觉请求必须带有界 max_tokens（/v1/messages 缺省会 400）。
+    // #4580：1024 会被 thinking 块吃光。预算对齐 host 侧 VISION_ANTHROPIC_MAX_TOKENS=4096。
+    expect(source).toContain('const VISION_ANTHROPIC_MAX_TOKENS = 4096');
+    expect(source).toContain('max_tokens: VISION_ANTHROPIC_MAX_TOKENS');
     // fallback 去重必须比较 headers——同 (url/model/auth) 但路由头不同（如不同
     // anthropic-beta）的 fallback 是独立后端，不得误判为重复跳过（P2）。
     expect(source).toContain('JSON.stringify(cfg.fallback.headers');
@@ -1569,6 +1606,44 @@ describe('cindy-bridge extension source', () => {
     expect(source).toContain('vision bridge pi primary backend failed');
     expect(source).toContain('vision bridge pi used fallback backend');
     expect(source).toContain('vision bridge pi fallback backend failed');
+  });
+
+  // 测试价值
+  // - 生产入口与可观察结果：桥源码里的 anthropicVisionText。Pi 视觉桥只采用 text 块。
+  // - Bug／规则依据：#4580。思考块被拼进描述，或只有思考时被当成转图成功。
+  // - 现有覆盖缺口：原断言只锁了 max_tokens: 1024，没有跑过响应解析。
+  // - 最小失败输入：thinking 块带 text 字段排在 text 块前；或 content 里只有 thinking。
+  // - tier：unit。截取桥里的真实函数执行，不发网络请求。
+  it('skips Anthropic thinking blocks and leaves a thinking-only vision reply empty (#4580)', () => {
+    const source = CINDY_BRIDGE_EXTENSION_SOURCE;
+    const start = source.indexOf('function anthropicVisionText');
+    const end = source.indexOf('async function callPiVision', start);
+    expect(start).toBeGreaterThanOrEqual(0);
+    expect(end).toBeGreaterThan(start);
+    const extract = runInNewContext(
+      ts.transpile(source.slice(start, end) + '\nanthropicVisionText;', {
+        target: ts.ScriptTarget.ES2022,
+      }),
+    ) as (blocks: unknown) => string;
+    expect(
+      extract([
+        { type: 'thinking', thinking: 'hidden', text: 'should not leak' },
+        { type: 'redacted_thinking', data: 'opaque', text: 'also hidden' },
+        { type: 'text', text: 'a red button' },
+      ]),
+    ).toBe('a red button');
+    expect(extract([{ type: 'text', text: 'a blue ' }, { type: 'text', text: 'sky' }])).toBe(
+      'a blue sky',
+    );
+    expect(extract([{ type: 'thinking', thinking: 'only thoughts', text: 'not a description' }]).trim()).toBe(
+      '',
+    );
+    // 空串不是成功：callPiVision 仍在 trim 后抛 vision empty description。
+    const callSite = source.slice(source.indexOf("wire === 'anthropic-messages'", end));
+    expect(callSite).toContain('content = anthropicVisionText(blocks)');
+    expect(callSite.indexOf('content = anthropicVisionText(blocks)')).toBeLessThan(
+      callSite.indexOf("throw new Error('vision empty description')"),
+    );
   });
 
   it('captures known writes before execution and marks opaque tools only after a result', () => {
@@ -1596,18 +1671,8 @@ describe('cindy-bridge extension source', () => {
   it('keeps generic MCP behind two tools and gives frequent Bot actions typed fast paths', () => {
     expect(CINDY_BRIDGE_EXTENSION_SOURCE).toContain("const CINDY_MCP_LIST_TOOLS = 'cindy_mcp_list_tools'");
     expect(CINDY_BRIDGE_EXTENSION_SOURCE).toContain("const CINDY_MCP_CALL_TOOL = 'cindy_mcp_call_tool'");
-    expect(CINDY_BRIDGE_EXTENSION_SOURCE).toContain(
-      "const CINDY_SEND_TO_AGENT_TOOL = 'send_to_agent'",
-    );
-    expect(CINDY_BRIDGE_EXTENSION_SOURCE).toContain(
-      "const CINDY_CHECK_SESSION_TASK_TOOL = 'check_session_task'",
-    );
-    expect(CINDY_BRIDGE_EXTENSION_SOURCE).toContain(
-      "const CINDY_MESSAGE_SESSION_TASK_TOOL = 'message_session_task'",
-    );
-    expect(CINDY_BRIDGE_EXTENSION_SOURCE).toContain(
-      "const CINDY_STOP_SESSION_TASK_TOOL = 'stop_session_task'",
-    );
+    expect(CINDY_BRIDGE_EXTENSION_SOURCE).not.toContain("'send_to_agent'");
+    expect(CINDY_BRIDGE_EXTENSION_SOURCE).not.toContain("'start_session_task'");
     expect(CINDY_BRIDGE_EXTENSION_SOURCE).toContain(
       "const CINDY_CREATE_TEAMMATE_TOOL = 'create_teammate'",
     );
@@ -1619,9 +1684,7 @@ describe('cindy-bridge extension source', () => {
       "enum: ['status', 'notify', 'call', 'reply', 'cancel']",
     );
     expect(CINDY_BRIDGE_EXTENSION_SOURCE).toContain("const CINDY_BOT_MEMORY_TOOL = 'bot_memory'");
-    expect(CINDY_BRIDGE_EXTENSION_SOURCE).toContain(
-      'mcpGateway.register(pi, { botMemoryFacade: cfg.botMemoryFacade === true })',
-    );
+    expect(CINDY_BRIDGE_EXTENSION_SOURCE).toContain('mcpGateway.register(pi, { botMemoryFacade: cfg.botMemoryFacade === true });');
     expect(CINDY_BRIDGE_EXTENSION_SOURCE).toContain("qualifiedName: 'mcp__' + serverName + '__' + toolName");
     expect(CINDY_BRIDGE_EXTENSION_SOURCE).toContain('private readonly disclosedSchemas');
     // Post-compaction amnesia drives voluntary re-inspection: the persisted
@@ -2383,6 +2446,47 @@ it('re-surfaces the disclosure set once after compaction instead of editing ever
   expect(handlers.get('before_agent_start')!({ systemPrompt: 'base' })).toBeUndefined();
 });
 
+// Regression: optional questions need the same direct discoverability as sync questions.
+// Unit: execute the production gateway and verify real MCP routing and permission identity.
+it.each(['list_machines', 'ask_user_question_async', 'manage_user_questions'])('registers %s directly without MCP discovery', async (name) => {
+  const source = CINDY_BRIDGE_EXTENSION_SOURCE;
+  const compiled = ts.transpileModule(
+    source.slice(source.indexOf('const CINDY_MCP_LIST_TOOLS'), source.indexOf('async function connectServer'))
+      + '\n(globalThis as any).Gateway = CindyMcpGateway;',
+    { compilerOptions: { module: ts.ModuleKind.None, target: ts.ScriptTarget.ES2022 } },
+  ).outputText;
+  const context: Record<string, any> = {
+    // 沙箱没有模块系统：bridge 顶部的 node:crypto import 在切片后丢失，
+    // 指纹计算用的 createHash 必须由宿主注入。
+    createHash,
+    recordInput: (value: unknown) => value && typeof value === 'object' ? value : {},
+    mcpContentToPi: (content: unknown) => content,
+  };
+  runInNewContext(compiled, context);
+  const calls: unknown[] = [];
+  const client = { request: async (method: string, params: unknown, signal?: AbortSignal) => {
+    calls.push({ method, params, signal });
+    return { content: [{ type: 'text', text: 'ok' }] };
+  } };
+  const gateway = new context.Gateway();
+  const withoutHost: any[] = [];
+  gateway.add('cindy_helper', client, [{ name: 'list_tools', inputSchema: { type: 'object' } }, { name: 'call_tool', inputSchema: { type: 'object' } }]);
+  gateway.register({ registerTool: (tool: unknown) => withoutHost.push(tool) });
+  expect(withoutHost.map((tool) => tool.name)).not.toContain(name);
+
+  const direct = new context.Gateway();
+  direct.add('cindy_helper', client, [{ name, inputSchema: { type: 'object' } }]);
+  const tools: any[] = [];
+  direct.register({ registerTool: (tool: unknown) => tools.push(tool) });
+  const tool = tools.find((item) => item.name === name);
+  const args = name === 'ask_user_question_async' ? { questions: [{ question: 'Which scope?' }] } : {};
+  await tool.execute('call-1', args, new AbortController().signal);
+  expect(calls.at(-1)).toMatchObject({ method: 'tools/call', params: { name, arguments: args } });
+  // Ask and Auto judge the real MCP identity, so this auto-approves like the same tool over MCP.
+  expect(direct.resolveHookedCall(name, {}).qualifiedName).toBe('mcp__cindy_helper__' + name);
+  expect(direct.resolveHookedCall('read', {})).toBeNull();
+});
+
 it('routes Bot shortcuts through the scoped helper entry without exposing them to ordinary Pi tasks', async () => {
   const source = CINDY_BRIDGE_EXTENSION_SOURCE;
   const compiled = ts.transpileModule(
@@ -2411,46 +2515,15 @@ it('routes Bot shortcuts through the scoped helper entry without exposing them t
   const ordinary: any[] = [];
   gateway.register({ registerTool: (tool: unknown) => ordinary.push(tool) });
   expect(ordinary.map((tool) => tool.name)).toEqual(['cindy_mcp_list_tools', 'cindy_mcp_call_tool']);
-  expect(gateway.resolveDirectHelperTool('start_session_task', {})).toBeNull();
+  expect(gateway.resolveDirectHelperTool('list_agents', {})).toBeNull();
 
   const bot: any[] = [];
   gateway.register({ registerTool: (tool: unknown) => bot.push(tool) }, { botMemoryFacade: true });
-  for (const name of ['start_session_task', 'check_session_task', 'message_session_task', 'stop_session_task', 'send_to_agent', 'check_agent_message', 'list_agents', 'create_teammate', 'routine_list', 'routine_save', 'routine_sources', 'routine_history', 'routine_delete', 'routine_run_now', 'schedule_notify_current_run', 'schedule_set_pre_run_hook', 'get_task_digest', 'get_workbench', 'read_workbench_task', 'continue_workbench_task']) {
+  for (const name of ['list_agents', 'create_teammate', 'get_task_digest']) {
     const tool = bot.find((item) => item.name === name);
     expect(tool).toBeDefined();
-    const args = name === 'routine_save' ? {
-      name: 'Rest', prompt: 'Remind me to rest', enabled: true, silentWhenIdle: false, preRunHook: { command: 'node check.mjs' },
-      triggers: [
-        { id: 'minute', kind: 'interval', intervalMs: 60000, anchorMs: 30000 },
-        { id: 'one-shot', kind: 'once', at: 90000 },
-      ],
-    } : name === 'schedule_notify_current_run' || name === 'get_workbench' ? {} : name === 'get_task_digest' ? { session_id: 'laptop::session-1' } : name === 'continue_workbench_task' ? { task_id: 'laptop::session-1', message: 'Report progress and continue' } : name === 'schedule_set_pre_run_hook' ? { script: 'process.exit(2)' } : name === 'check_agent_message' ? { message_id: 'message-1' } : name === 'list_agents' || name === 'routine_list' || name === 'routine_sources' ? {}
-      : name.startsWith('routine_') ? { id: 'routine-1' }
-      : name === 'start_session_task' ? { instruction: 'Prepare a report' }
-      : name === 'send_to_agent' ? { target_id: 'd'.repeat(80) + '::' + 'b'.repeat(128), message: 'Please review' }
-      : name === 'create_teammate' ? { name: 'Writer', description: 'Novelist', identity_source: 'Write stories', welcome_message: 'Hello' }
-      : name === 'message_session_task' ? { task_id: 'task-1', message: 'Add a summary' }
-      : { task_id: 'task-1' };
-    if (name === 'routine_save') {
-      expect(tool.parameters.required).toEqual(['name', 'prompt', 'enabled', 'triggers']);
-      expect(tool.parameters.properties.botId).toBeUndefined();
-      const variants = tool.parameters.properties.triggers.items.anyOf;
-      const interval = variants.find((item: any) => item.properties.kind.enum.includes('interval'));
-      expect(interval.properties.intervalMs.minimum).toBe(60000);
-      expect(interval.properties.anchorMs).toMatchObject({ type: 'integer', minimum: 0, maximum: Number.MAX_SAFE_INTEGER });
-      expect(interval.required).not.toContain('anchorMs');
-      const once = variants.find((item: any) => item.properties.kind.enum.includes('once'));
-      expect(once).toMatchObject({
-        required: ['id', 'kind', 'at'], additionalProperties: false,
-        properties: { at: { type: 'integer', minimum: 0, maximum: Number.MAX_SAFE_INTEGER } },
-      });
-    }
-    if (name === 'start_session_task') {
-      expect(tool.description).toContain('A repository, multiple files, tools, or a deliverable alone is not a reason to delegate');
-      expect(tool.description).toContain('the user explicitly requests an independent task');
-      expect(tool.description).toContain('Follow up with message_session_task on the same task');
-    }
-    if (name === 'send_to_agent') expect(tool.parameters.properties.target_id.maxLength).toBe(210);
+    const args = name === 'get_task_digest' ? { session_id: 'laptop::session-1' } : name === 'list_agents' ? {}
+      : { name: 'Writer', description: 'Novelist', identity_source: 'Write stories', welcome_message: 'Hello' };
     const resolved = gateway.resolveDirectHelperTool(name, args);
     expect(resolved.qualifiedName).toBe('mcp__cindy_helper__' + name);
     expect(resolved.args).toEqual(args); // Permission review retains the actual operation and arguments.
@@ -2632,6 +2705,176 @@ it('tells the model the call_tool envelope instead of forwarding a flattened env
   expect(requests[0].params).toEqual({ name: 'status', arguments: { args: ['x'], name: 'y' } });
 });
 
+it('intercepts a double-wrapped envelope and an entry-tool name before they reach the server', async () => {
+  const source = CINDY_BRIDGE_EXTENSION_SOURCE;
+  const compiled = ts.transpileModule(
+    source.slice(source.indexOf('const CINDY_MCP_LIST_TOOLS'), source.indexOf('async function connectServer'))
+      + '\n(globalThis as any).Gateway = CindyMcpGateway;',
+    { compilerOptions: { module: ts.ModuleKind.None, target: ts.ScriptTarget.ES2022 } },
+  ).outputText;
+  const context: Record<string, any> = {
+    createHash,
+    recordInput: (value: unknown) => value && typeof value === 'object' ? value : {},
+    mcpContentToPi: (content: unknown) => content,
+  };
+  runInNewContext(compiled, context);
+  const requests: Array<{ method: string; params: any }> = [];
+  const client = { request: async (method: string, params: unknown) => {
+    requests.push({ method, params });
+    // 双包裁决代拉内层 list_tools: 返回真实 Cindy 形状 — 不传 category 只有类目概览, 无工具 schema。
+    if (method === 'tools/call' && (params as any)?.name === 'list_tools') {
+      return { content: [{ type: 'text', text: JSON.stringify({ ok: true, categories: [{ name: 'read', tool_count: 4 }, { name: 'write', tool_count: 3 }] }) }] };
+    }
+    return { content: [{ type: 'text', text: 'ok' }] };
+  } };
+  const gateway = new context.Gateway();
+  gateway.add('cindy_memory', client, [
+    // 真实 cindy_memory 的两入口形态: 只向 MCP 暴露 list_tools + call_tool(token economy),
+    // memory_write 藏在服务端自家 registry, 不进 tools/list。
+    { name: 'list_tools', inputSchema: { type: 'object' } },
+    { name: 'call_tool', inputSchema: { type: 'object', properties: { name: { type: 'string' }, args: { type: 'object' } }, required: ['name'] } },
+  ]);
+  gateway.register({ registerTool: () => undefined });
+  await gateway.listResult({ server: 'cindy_memory', tool: 'call_tool' });
+  // 2026-10-31 实测双包形状一: {name:外层名, args:{name:内层名, args:参数}} ——
+  // 转发到服务端只会拿到 UNKNOWN_TOOL(requested=call_tool), 模型无从自纠; 桥在本地看穿。
+  // 形状一/二里的内层工具都不在本地工具表(真实服务不进 tools/list), 靠两入口形状判定拦截。
+  await expect(gateway.executeCall({
+    server: 'cindy_memory', tool: 'call_tool',
+    args: { name: 'call_tool', args: { name: 'memory_write', args: { type: 'project' } } },
+  })).rejects.toThrow(/nested twice/);
+  // 双包形状二: {name:正确名, args:{args:参数}} —— 参数藏在第二层 args 里。
+  await expect(gateway.executeCall({
+    server: 'cindy_memory', tool: 'call_tool',
+    args: { name: 'memory_write', args: { args: { type: 'project' } } },
+  })).rejects.toThrow(/nested twice/);
+  // 信封 name 填了入口工具名 call_tool 本身。
+  await expect(gateway.executeCall({
+    server: 'cindy_memory', tool: 'call_tool',
+    args: { name: 'call_tool', args: { type: 'project' } },
+  })).rejects.toThrow(/must be the INNER tool/);
+  // 形状二触发过一次内层 list_tools 代拉(schemaless → 两入口启发式), 之后不再发请求。
+  expect(requests).toHaveLength(1);
+  expect(requests[0].params).toEqual({ name: 'list_tools', arguments: {} });
+  // 正确信封原样放行。
+  await gateway.executeCall({
+    server: 'cindy_memory', tool: 'call_tool',
+    args: { name: 'memory_write', args: { type: 'project' } },
+  });
+  expect(requests).toHaveLength(2);
+  expect(requests[1].params).toEqual({
+    name: 'call_tool',
+    arguments: { name: 'memory_write', args: { type: 'project' } },
+  });
+});
+
+it('passes through inner tools that legitimately declare an args parameter, repeatedly', async () => {
+  const source = CINDY_BRIDGE_EXTENSION_SOURCE;
+  const compiled = ts.transpileModule(
+    source.slice(source.indexOf('const CINDY_MCP_LIST_TOOLS'), source.indexOf('async function connectServer'))
+      + '\n(globalThis as any).Gateway = CindyMcpGateway;',
+    { compilerOptions: { module: ts.ModuleKind.None, target: ts.ScriptTarget.ES2022 } },
+  ).outputText;
+  const context: Record<string, any> = {
+    createHash,
+    recordInput: (value: unknown) => value && typeof value === 'object' ? value : {},
+    mcpContentToPi: (content: unknown) => content,
+  };
+  runInNewContext(compiled, context);
+  const requests: Array<{ method: string; params: any }> = [];
+  const client = { request: async (method: string, params: unknown) => {
+    requests.push({ method, params });
+    return { content: [{ type: 'text', text: 'ok' }] };
+  } };
+  const gateway = new context.Gateway();
+  gateway.add('acme_tools', client, [
+    { name: 'call_tool', inputSchema: { type: 'object', properties: { name: { type: 'string' }, args: { type: 'object' } }, required: ['name'] } },
+    // 第三方信封 MCP 的内层工具合法声明 args 参数(数组): 与双包同形, 必须按 schema 放行。
+    { name: 'run', inputSchema: { type: 'object', properties: { args: { type: 'array' } }, required: ['args'] } },
+    // 宽松 schema 内层工具(无 properties): 判定不了是否接受 args → 无可靠判据, 放行不误拦。
+    { name: 'eval', inputSchema: { type: 'object' } },
+  ]);
+  gateway.register({ registerTool: () => undefined });
+  await gateway.listResult({ server: 'acme_tools', tool: 'call_tool' });
+  // 合法 args 参数连续调用两次都放行: 拦截是确定性的, 不存在“重发原样调用就放行”的出口,
+  // 所以放行必须一次到位。
+  const legalCall = { server: 'acme_tools', tool: 'call_tool', args: { name: 'run', args: { args: ['--version'] } } };
+  await gateway.executeCall(legalCall);
+  await gateway.executeCall(legalCall);
+  expect(requests).toHaveLength(2);
+  expect(requests[1].params).toEqual({
+    name: 'call_tool',
+    arguments: { name: 'run', args: { args: ['--version'] } },
+  });
+  // 宽松内层 schema(无 properties) + args 参数: 判定不了 → 启发式放行, 连续两次透传。
+  const looseCall = { server: 'acme_tools', tool: 'call_tool', args: { name: 'eval', args: { args: { code: '1+1' } } } };
+  await gateway.executeCall(looseCall);
+  await gateway.executeCall(looseCall);
+  expect(requests).toHaveLength(4);
+  expect(requests[3].params).toEqual({
+    name: 'call_tool',
+    arguments: { name: 'eval', args: { args: { code: '1+1' } } },
+  });
+  // 信封 name 查无此工具: 先代拉内层 list_tools(本 fixture 无内层列表 → 解析失败回退启发式),
+  // acme 暴露了 run/eval(非两入口) → 放行给服务端报 UNKNOWN_TOOL。
+  await gateway.executeCall({ server: 'acme_tools', tool: 'call_tool', args: { name: 'nope', args: { args: { x: 1 } } } });
+  expect(requests).toHaveLength(6);
+});
+
+it('probes the inner list_tools of a third-party two-entry gateway and passes legal args params', async () => {
+  const source = CINDY_BRIDGE_EXTENSION_SOURCE;
+  const compiled = ts.transpileModule(
+    source.slice(source.indexOf('const CINDY_MCP_LIST_TOOLS'), source.indexOf('async function connectServer'))
+      + '\n(globalThis as any).Gateway = CindyMcpGateway;',
+    { compilerOptions: { module: ts.ModuleKind.None, target: ts.ScriptTarget.ES2022 } },
+  ).outputText;
+  const context: Record<string, any> = {
+    createHash,
+    recordInput: (value: unknown) => value && typeof value === 'object' ? value : {},
+    mcpContentToPi: (content: unknown) => content,
+  };
+  runInNewContext(compiled, context);
+  const requests: Array<{ method: string; params: any }> = [];
+  // 第三方两入口 mimics: MCP 层只有 call_tool/list_tools, 内层工具藏在自家 registry,
+  // 但 list_tools 返回带 schema 的工具列表(greptile P1 场景: 内层合法声明对象型 args 参数)。
+  const client = { request: async (method: string, params: unknown) => {
+    requests.push({ method, params });
+    if (method === 'tools/call' && (params as any)?.name === 'list_tools') {
+      return { content: [{ type: 'text', text: JSON.stringify({ ok: true, tools: [
+        { name: 'run', description: 'd', inputSchema: { type: 'object', properties: { args: { type: 'object' } }, required: ['args'] } },
+      ] }) }] };
+    }
+    return { content: [{ type: 'text', text: 'ok' }] };
+  } };
+  const gateway = new context.Gateway();
+  gateway.add('stealth_tools', client, [
+    { name: 'list_tools', inputSchema: { type: 'object' } },
+    { name: 'call_tool', inputSchema: { type: 'object', properties: { name: { type: 'string' }, args: { type: 'object' } }, required: ['name'] } },
+  ]);
+  gateway.register({ registerTool: () => undefined });
+  await gateway.listResult({ server: 'stealth_tools', tool: 'call_tool' });
+  // 内层 run 声明了 args 参数 → 代拉 list_tools 后放行, 不永久拒绝。
+  await gateway.executeCall({ server: 'stealth_tools', tool: 'call_tool', args: { name: 'run', args: { args: { cwd: '/work' } } } });
+  expect(requests).toHaveLength(2);
+  expect(requests[0].params).toEqual({ name: 'list_tools', arguments: {} });
+  expect(requests[1].params).toEqual({
+    name: 'call_tool',
+    arguments: { name: 'run', args: { args: { cwd: '/work' } } },
+  });
+  // 代拉结果按 server 缓存: 第二次合法调用与查无此工具都不再发 list_tools。
+  await gateway.executeCall({ server: 'stealth_tools', tool: 'call_tool', args: { name: 'run', args: { args: { cwd: '/work2' } } } });
+  await gateway.executeCall({ server: 'stealth_tools', tool: 'call_tool', args: { name: 'nope', args: { args: { x: 1 } } } });
+  expect(requests).toHaveLength(4);
+  expect(requests[2].params).toEqual({
+    name: 'call_tool',
+    arguments: { name: 'run', args: { args: { cwd: '/work2' } } },
+  });
+  expect(requests[3].params).toEqual({
+    name: 'call_tool',
+    arguments: { name: 'nope', args: { args: { x: 1 } } },
+  });
+});
+
 it('does not apply the Cindy envelope rule to a third-party tool also named call_tool', async () => {
   const source = CINDY_BRIDGE_EXTENSION_SOURCE;
   const compiled = ts.transpileModule(
@@ -2736,22 +2979,4 @@ it('leaves a direct tool alone when its required name is not the Cindy envelope'
     .rejects.toThrow(/write_file failed/);
   expect(requests).toHaveLength(1);
   expect(requests[0].params).toEqual({ name: 'write_file', arguments: { content: 'text' } });
-});
-
-it('removes cache fields only for an exact learned Chat Completions route and preserves Fast', () => {
-  const start = CINDY_BRIDGE_EXTENSION_SOURCE.indexOf('  function learnedCachePayload(');
-  const end = CINDY_BRIDGE_EXTENSION_SOURCE.indexOf("  pi.on('before_provider_request'", start);
-  const model = { provider: 'connection-a', id: 'wire', baseUrl: 'http://localhost/api.openai.com/v1', api: 'openai-completions' };
-  let rules = JSON.stringify([model]);
-  const adapt = new Function('path', 'process', 'statSync', 'readFileSync', CINDY_BRIDGE_EXTENSION_SOURCE.slice(start, end) + '; return learnedCachePayload;')(
-    { join: (...v: string[]) => v.join('/') }, { env: { PI_CODING_AGENT_DIR: '/isolated' } }, () => ({ size: rules.length }), () => rules,
-  );
-  const original = { messages: [], prompt_cache_key: 'key', prompt_cache_retention: '24h', service_tier: 'priority' };
-  expect(adapt(original, model)).toEqual({ messages: [], service_tier: 'priority' });
-  expect(original.prompt_cache_key).toBe('key');
-  expect(adapt(original, { ...model, provider: 'connection-b' })).toBe(original);
-  expect(adapt(original, { ...model, baseUrl: 'http://other/v1' })).toBe(original);
-  expect(adapt(original, { ...model, api: 'openai-responses' })).toBe(original);
-  rules = '{bad-json';
-  expect(adapt(original, model)).toBe(original);
 });

@@ -59,6 +59,13 @@ function response(results: ConversationSearchResultItem[]): ConversationSearchRe
 }
 
 describe('remoteConversationSearchRequest', () => {
+  it('filters by explicit project membership while preserving the execution directory', () => {
+    const page = response([result('checkout', 1, { projectDir: '/project', workingDir: '/tmp/checkout' }), result('legacy', 2)]);
+    expect(filterResultsByWorkingDirs(page, ['/project']).results.map(item => item.session.id)).toEqual(['checkout']);
+    expect(filterResultsByWorkingDirs(page, ['/repo']).results.map(item => item.session.id)).toEqual(['legacy']);
+    expect(remoteIndexedSearchIgnoredWorkingDirs(response([page.results[0]!]), ['/project'])).toBe(false);
+    expect(page.results[0]?.session.workingDir).toBe('/tmp/checkout');
+  });
   afterEach(() => { feature.enabled = false; });
 
   it.each([undefined, 1, 3, 24, 50, 100])('uses the bounded remote candidate pool for limit %s', (limit) => {

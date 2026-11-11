@@ -2,6 +2,7 @@ import { ErrorNotice } from '@/components/ui/error-notice';
 import { useEffect, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { Button } from '@/components/ui/button';
+import { Select } from '@/components/ui/select';
 import { toast } from '@/lib/toast';
 import { extractIpcError } from '@/utils/ipcError';
 import {
@@ -22,8 +23,6 @@ import {
   LocalModelDownloadButton,
   LocalModelManualDownload,
   LocalRuntimeInstallView,
-  localModelInputClass,
-  localModelInputStyle,
 } from './LocalModelDownloadUI';
 
 export function LlamaCppProviderDetail({ onChanged }: { onChanged: () => void }) {
@@ -228,20 +227,18 @@ export function LlamaCppProviderDetail({ onChanged }: { onChanged: () => void })
       >
         {files.length > 0 && (
           <div className="flex gap-2">
-            <select
-              aria-label={t('settings.providers.llamacpp.file')}
-              className={`${localModelInputClass} flex-1`}
-              style={localModelInputStyle}
+            <Select data-settings-search-action="Choose the GGUF file to download"
+              label={t('settings.providers.llamacpp.file')}
+              className="flex-1"
+              truncateOptions
               value={file}
               disabled={locked}
-              onChange={(event) => setFile(event.target.value)}
-            >
-              {files.map((item) => (
-                <option key={item.name} value={item.name}>
-                  {item.name} · {formatDownloadBytes(item.size)}
-                </option>
-              ))}
-            </select>
+              onValueChange={setFile}
+              options={files.map((item) => ({
+                value: item.name,
+                label: `${item.name} · ${formatDownloadBytes(item.size)}`,
+              }))}
+            />
             <LocalModelDownloadButton
               disabled={locked || !file}
               onClick={() => download({ repo, file })}

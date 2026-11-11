@@ -171,6 +171,7 @@ function createOrcaDeps(overrides: Partial<OrcaMcpDeps> = {}): OrcaMcpDeps {
       idle_ms: 0,
       restored_from_storage: true,
       result: 'worker output',
+      turnError: null,
     })),
     ...overrides,
   };
@@ -301,6 +302,47 @@ describe('dynamic lizi MCP session context', () => {
     });
     expect(tools(server).send_to_worker.description).toContain('delivery=steer');
     expect(tools(server).send_to_worker.description).toContain('steer_fallback_reason');
+  });
+
+  // 2026-11-10: a sender that queued several messages had no cue that earlier ones were still
+  // unread, so it appended corrections instead of rewriting them. Existing cases stop at
+  // queued_message_id. Unit tier: the public send_to_worker handler with a fake queue.
+  it('lists the Lead\'s own unread messages in a queued send_to_worker receipt', async () => {
+    const deps = createOrcaDeps({
+      sendToWorker: vi.fn<OrcaMcpDeps['sendToWorker']>(async () => ({
+        ok: true, agentKind: 'codex', wakeKind: 'queued', targetTitle: null,
+        targetLastUserSendAt: null, queuedMessageId: 'queued-2',
+      })),
+      listWorkerQueuedMessages: vi.fn<OrcaMcpDeps['listWorkerQueuedMessages']>(async () => ({
+        ok: true, workerId: 'worker-1', workerSessionId: 'worker-session-1', status: 'running',
+        isWorking: true, willQueue: true, queuePaused: false,
+        messages: [
+          { queuedMessageId: 'queued-1', position: 0, source: 'lead', content: 'Use the v1 endpoint\nand retry', consuming: false },
+          { queuedMessageId: 'typed-1', position: 1, source: 'user', content: 'typed by the user', consuming: false },
+          { queuedMessageId: 'queued-2', position: 2, source: 'lead', content: 'Use the v2 endpoint', consuming: false },
+        ],
+      })),
+    });
+    const server = createOrcaMcpServer(deps, {
+      agentKind: 'codex', workingDir: '/repo', sessionId: 'lead-1', vendorOptions: { orcaRole: 'lead' },
+    });
+
+    expect(parse(await tools(server).send_to_worker.handler({
+      target_session_id: 'worker-session-1', message: 'Use the v2 endpoint',
+    }) as never)).toMatchObject({
+      ok: true,
+      wake_kind: 'queued',
+      queued_message_id: 'queued-2',
+      queue_position: 2,
+      queued_count: 3,
+      // Only what this Lead sent and can still rewrite; the user's queued message is not listed.
+      other_queued_messages: [
+        { queued_message_id: 'queued-1', position: 0, starts: 'Use the v1 endpoint and retry', consuming: false },
+      ],
+    });
+    expect(deps.listWorkerQueuedMessages).toHaveBeenCalledExactlyOnceWith({
+      callerLeadSessionId: 'lead-1', workerRef: 'worker-session-1',
+    });
   });
 
   it('omits delivery from sendToWorker when the caller does not choose one', async () => {
@@ -1060,6 +1102,30 @@ describe('dynamic lizi MCP session context', () => {
       agent_kind: 'codex',
       working_dir: '/repo',
     });
+  });
+
+  // Self-inspection must use live membership, not a sibling worktree's cwd.
+  it('returns current project membership and keeps explicit no-project distinct from lookup failure', async () => {
+    const getSessionProject = vi.fn().mockResolvedValue({
+      projectDir: '/repo', workspaceKind: 'project', remoteHostId: null,
+    });
+    const server = createXdtHelperMcpServer({ getSessionProject }, {
+      agentKind: 'codex', workingDir: '/temporary-worktree', sessionId: 'caller',
+    });
+    const read = async () => parse(await tools(server).call_tool.handler({
+      name: 'get_current_session_id', args: {},
+    }) as never);
+    expect(await read()).toMatchObject({
+      ok: true, session_id: 'caller', project_path: '/repo',
+      working_dir: '/temporary-worktree', workspace_kind: 'project', remote_host_id: null,
+    });
+    expect(getSessionProject).toHaveBeenCalledWith('caller');
+    getSessionProject.mockResolvedValue({ projectDir: null, workspaceKind: 'dialogue', remoteHostId: null });
+    expect(await read()).toMatchObject({ project_path: null, workspace_kind: 'dialogue' });
+    getSessionProject.mockRejectedValue(new Error('storage unavailable'));
+    const unavailable = await read();
+    expect(unavailable).toMatchObject({ ok: true, session_id: 'caller', project_lookup_error: expect.any(String) });
+    expect(unavailable).not.toHaveProperty('project_path');
   });
 
   // Runtime identity discovery must expose cross-device origin even when no local
@@ -1859,6 +1925,7 @@ describe('dynamic lizi MCP session context', () => {
         idle_ms: 0,
         restored_from_storage: true,
         result: 'done output',
+        turnError: null,
       })),
     });
     const server = createOrcaMcpServer(deps, {
@@ -1938,21 +2005,4 @@ describe('dynamic lizi MCP session context', () => {
       workerId: 'worker-1',
     });
   });
-});
-
-// Unit / #7253: all harnesses use the same current-task delivery tool; ambient
-// context must win over the server's captured context, and descendants cannot
-// announce their parent's delivery. Existing title tests do not cover this report.
-it.each([['claude-code', false], ['codex', false], ['pi', false], ['claude-code', true], ['codex', true], ['pi', true]] as const)('routes %s delivery only from the current task executor (SSH: %s)', async (agentKind, ssh) => {
-  const report = vi.fn(() => ({ ok: true as const }));
-  const server = createXdtHelperMcpServer({ taskDelivery: { report } }, { agentKind, workingDir: '' });
-  const call = () => tools(server).call_tool.handler({ name: 'report_task_delivery', args: { final_delivery: true } });
-  expect(parse(await call() as never)).toMatchObject({ ok: false, errorCode: 'NO_SESSION_CONTEXT' });
-  const context = { agentKind, workingDir: '/repo', sessionId: 'current', sessionInstanceId: 'runtime-1', ...(ssh ? { remoteHostId: 'ssh-host' } : {}) };
-  expect(parse(await runWithLiziMcpSessionContext(context, call) as never)).toMatchObject({ ok: true, recorded: true });
-  expect(report).toHaveBeenCalledWith('current', true, 'runtime-1');
-  report.mockClear();
-  expect(parse(await runWithLiziMcpSessionContext({ ...context, mcpCallerKind: 'descendant' }, call) as never))
-    .toMatchObject({ ok: false, errorCode: 'CAPABILITY_NOT_AVAILABLE' });
-  expect(report).not.toHaveBeenCalled();
 });

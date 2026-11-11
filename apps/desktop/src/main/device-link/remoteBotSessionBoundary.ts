@@ -97,6 +97,22 @@ function sessionIds(value: unknown): string[] {
 
 /** Resolve channel-specific Bot IDs before checking generic Session references. */
 export async function assertRemoteBotInvocationAllowed(args: unknown[], channel = ''): Promise<void> {
+  if (channel === 'local-db:bots:dm-thread:list' || channel === 'local-db:bots:dm-thread:ensure') {
+    const body = record(args[0]);
+    const botId = body?.botId;
+    const rootSessionId = body?.rootSessionId;
+    const rootClientId = body?.rootClientId;
+    if (args.length !== 1 || typeof botId !== 'string' || !/^\S{1,128}$/.test(botId)
+      || typeof rootSessionId !== 'string' || !/^[^:\s]{1,128}$/.test(rootSessionId)
+      || (channel.endsWith(':ensure') && (typeof rootClientId !== 'string' || !/^\S{1,256}$/.test(rootClientId)))) {
+      throw new Error('[INVALID_PARAMS] Invalid private topic root');
+    }
+    if (!lookup) throw new Error('[HOST_NOT_READY] Topic visibility is not ready');
+    if (await lookup(botId, 'bot') !== 'visible' || await lookup(rootSessionId, 'session') === 'hidden') {
+      throw new Error('[NOT_FOUND] Topic does not exist');
+    }
+    return;
+  }
   if (channel === DL_HISTORY_QUERY_CHANNEL) {
     if (!lookup) throw new Error('[HOST_NOT_READY] History visibility is not ready');
     const ids = record(record(args[0])?.args)?.session_ids;

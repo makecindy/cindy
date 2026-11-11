@@ -40,13 +40,15 @@ vi.mock('electron', () => ({
   app: { getPath: () => tmpUserData },
 }));
 
-const blobStore = await import('../blobStore');
+const blobStore = await import('../blobStore.desktop');
 
 const PNG_BYTES = Buffer.from([0x89, 0x50, 0x4e, 0x47, 1, 2, 3, 4]);
 const PNG_HASH = createHash('sha256').update(PNG_BYTES).digest('hex');
 
-beforeAll(() => {
-  tmpUserData = fs.mkdtempSync(path.join(os.tmpdir(), 'cindy-media-test-'));
+beforeAll(async () => {
+  // Match the store's native realpath, including Windows 8.3 and macOS /var aliases,
+  // so the replacement-race fixtures still intercept the actual file access.
+  tmpUserData = await fsp.realpath(fs.mkdtempSync(path.join(os.tmpdir(), 'cindy-media-test-')));
   scratchRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'cindy-media-scratch-'));
 });
 
@@ -554,6 +556,16 @@ describe('parseBlobUrl / resolveSafe(取件形状校验)', () => {
 });
 
 describe('readFile(读回一致性)', () => {
+  // #8673 / unit: write/read the real byte store with a valid RGBA PNG containing
+  // transparent and semitransparent pixels. Existing fixtures are only headers.
+  it('保留原生输出 PNG 的透明与半透明像素字节', async () => {
+    const transparentPng = Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAIAAAABCAYAAAD0In+KAAAADklEQVR4nGP4zwAC/xsACn8Cf0Yvh0oAAAAASUVORK5CYII=', 'base64');
+    const result = await blobStore.writeBlob({ buffer: transparentPng, mimeType: 'image/png' });
+    const { buffer, mimeType } = await blobStore.readFile(result.url);
+    expect(mimeType).toBe('image/png');
+    expect(buffer).toEqual(transparentPng);
+  });
+
   it('读回的字节与写入完全一致', async () => {
     await blobStore.writeBlob({ buffer: PNG_BYTES, mimeType: 'image/png' });
     const { buffer, mimeType } = await blobStore.readFile(

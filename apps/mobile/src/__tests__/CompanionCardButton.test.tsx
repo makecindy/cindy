@@ -25,6 +25,7 @@ vi.mock('@/theme', async () => {
 });
 
 import { CompanionCardActions, CompanionCardButton } from '@/session/CompanionCardButton';
+import { BotGroupPlanActions } from '@/session/BotGroupPlanActions';
 
 Object.assign(globalThis, { IS_REACT_ACT_ENVIRONMENT: true });
 let root: Root;
@@ -42,4 +43,20 @@ it('stacks the work-split card buttons one per row once any label would wrap at 
   expect(stacked()).toBeNull();
   await act(async () => textLayouts.get('Start Next Step')!({ nativeEvent: { lines: [{}, {}] } }));
   expect(stacked()).not.toBeNull();
+});
+
+it('moves Android plan actions below the teammate when a narrow-card label wraps', async () => {
+  const onStacked = vi.fn();
+  await act(async () => root.render(<BotGroupPlanActions onStacked={onStacked} actions={[
+    { label: 'Arbeitsaufteilung beenden', onPress() {} },
+    { label: 'Nächsten Schritt starten', tone: 'primary', onPress() {} },
+  ]} />));
+  await act(async () => textLayouts.get('Nächsten Schritt starten')?.({ nativeEvent: { lines: [{}] } }));
+  expect(onStacked).not.toHaveBeenCalled();
+  expect(textLayouts.has('Nächsten Schritt starten')).toBe(true);
+  await act(async () => textLayouts.get('Nächsten Schritt starten')!({ nativeEvent: { lines: [{}, {}] } }));
+  expect(onStacked).toHaveBeenCalledOnce();
+  expect(host.querySelector('[data-testid="companion.cardActions.stacked"]')).not.toBeNull();
+  expect(host.textContent).toContain('Arbeitsaufteilung beenden');
+  expect(host.textContent).toContain('Nächsten Schritt starten');
 });

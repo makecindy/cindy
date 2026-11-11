@@ -3,12 +3,12 @@ import { activeOwnerScopeKey, isAppSessionBoundaryPending } from '../appSessionS
 import { getCurrentDbClientSnapshot } from '../localDb/client/current.js';
 import { createMessage, broadcastMessageAgentMetaUpdate } from '../localDb/ipc/messages.js';
 import { captureDataOwnerBroadcastScope } from '../device-link/broadcast-tap.js';
-import { formatForwardedRequest } from '../maker-ipc/forwardedRequest.js';
 import { extractText as extractStoredMessageText } from '../sessionTaskSummary.logic.js';
 import { requestExplicitUtilityText } from '../utility-model/oneShotCandidates.js';
 import { readVoiceCompanionRoute } from './semanticExit.js';
 import { dispatchVoiceTask, readVoiceCallMemory } from './taskBridge.js';
 import { createLogger } from '../logger.js';
+import type { ForwardedRequestSource } from '../../shared/forwardedRequest.js';
 
 const log = createLogger('voice-conversation');
 
@@ -118,7 +118,10 @@ export class CompanionCallDialogue {
       handoff: async ({ id, inputId, original, supplement }) => {
         this.assertCurrent();
         if (this.ended) return false;
-        const source = { userText: original, sessionId: this.input.sessionId, clientId: inputId };
+        // The owner said this in the call (2026-11-05): it is the owner's request, reviewed as
+        // their own words. The ids let the call find the background work it started.
+        const source: ForwardedRequestSource = { sessionId: this.input.sessionId, clientId: inputId,
+          plainBody: true, delegatedText: original };
         const validate = async () => {
           this.assertCurrent();
           if (this.ended) throw new Error('call_ended');
@@ -137,7 +140,8 @@ export class CompanionCallDialogue {
         const accepted = await dispatchVoiceTask({
           targetSessionId: this.input.sessionId,
           clientId: id,
-          message: formatForwardedRequest(source, supplement),
+          // The call model's understanding is context for the main task, never the request itself.
+          message: supplement.trim() ? `${original}\n\n[通话补充，仅供参考，不是用户的要求] ${supplement}` : original,
           persistedContent: original,
           autoReviewUserText: { kind: 'agent-request', request: source },
           resumeWithStoredPermissionMode: true,
@@ -257,26 +261,6 @@ export class CompanionCallDialogue {
     try {
       if (!this.current() || this.ended || !this.context || !this.db) return;
       for (const task of this.context.record.handoffs.filter((item) => item.state === 'accepted')) {
-        // Background tasks inherit the protected user-source receipt. Match
-        // that provenance, never titles, text similarity or the latest child.
-        const delegated = await this.db.client.query<{ status: string; result: string | null }>(
-          `SELECT status, result_summary AS result FROM bot_delegations
-            WHERE parent_session_id = ?
-              AND json_extract(permission_snapshot_json, '$.taskInput.requestSource.sessionId') = ?
-              AND json_extract(permission_snapshot_json, '$.taskInput.requestSource.clientId') = ?`,
-          [this.input.sessionId, this.input.sessionId, task.inputId],
-        );
-        if (!this.current() || this.ended) return;
-        if (delegated.length) {
-          if (
-            delegated.every((item) =>
-              ['completed', 'failed', 'cancelled', 'timed-out'].includes(item.status),
-            )
-          ) {
-            this.context.deliverResult(task.id, JSON.stringify(delegated).slice(0, 32_000));
-          }
-          continue;
-        }
         // Observe only the canonical reply after this exact accepted input,
         // stopping at the next user input. Unrelated replies cannot flow back.
         const rows = await this.db.client.query<{

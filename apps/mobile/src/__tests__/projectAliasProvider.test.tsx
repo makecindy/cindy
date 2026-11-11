@@ -40,6 +40,10 @@ vi.mock('@react-native-async-storage/async-storage', () => ({ default: {
 } }));
 // Native WebView lifecycle has separate coverage; this suite exercises Provider subscriptions.
 vi.mock('@/device-link/DirectLinkTransport', () => ({ DirectLinkTransport: () => null }));
+// Exercise the existing V1/no-new-native-binary path without loading Expo's device runtime.
+vi.mock('../../modules/cindy-agent-net/src', () => ({ agentNetNative: null }));
+vi.mock('@/notifications/nativeNotifications', () => ({ default: {} }));
+vi.mock('@/notifications/nativePushEnvironment', () => ({ readIosPushEnvironment: async () => undefined }));
 vi.mock('expo-updates', () => ({ updateId: null, runtimeVersion: null, isEmbeddedLaunch: true }));
 vi.mock('expo-crypto', () => ({ getRandomBytes: (size: number) => new Uint8Array(size) }));
 vi.mock('@/device-link/rnWebSocket', () => ({ createRnWebSocket: vi.fn() }));
@@ -51,27 +55,38 @@ const transport = vi.hoisted(() => {
   class Client {
     invoke = vi.fn<(_device: string, request: InvokePayload) => Promise<InvokeResultPayload>>();
     openLink = vi.fn(async (): Promise<LinkAcceptPayload> => ({ appVersion: 'test', allowlistHash: 'test' }));
+    noteRemoteControlEnabled = vi.fn();
     start = vi.fn();
     stop = vi.fn();
     connectNow = vi.fn();
     notifyNetworkChanged = vi.fn();
     getStatus = () => 'online';
+    hasOnlineConnection = () => true;
+    connectionFor() { return this; }
     hasServerCapability = () => false;
     isOutboundExplicitlyClosed = () => false;
     hasPendingRequestsTo = () => false;
     onStatusChange = () => () => {};
     onPresenceChanged = () => () => {};
     onPeerTransportReset = () => () => {};
+    onPeerPathChanged = () => () => {};
+    hasOfflineDirectPath = () => false;
+    peekOfflineDirectPath = () => false;
     onConnectionIssue = () => () => {};
     frame: (envelope: Envelope) => void = () => {};
     onFrame(listener: Client['frame']) { this.frame = listener; return () => {}; }
     onReliableFrameBeforeLink = () => () => {};
+    onSeparateCrossAccountStatus = () => () => {};
+    onSeparateCrossAccountIssue = () => () => {};
+    onScopedConnectionStatus = () => () => {};
+    crossAccountConnection() { return this; }
+    connectAllNow(...args: unknown[]) { (this.connectNow as (...input: unknown[]) => void)(...args); }
   }
   return { Client, clients: [] as Client[] };
 });
 vi.mock('@cindy/device-link', async (importOriginal) => ({
   ...await importOriginal<typeof import('@cindy/device-link')>(),
-  DeviceLinkClient: class extends transport.Client {
+  RoutedDeviceLinkClient: class extends transport.Client {
     constructor() { super(); transport.clients.push(this); }
   },
 }));
@@ -174,4 +189,16 @@ describe('project aliases follow the Provider sessions subscription lifetime', (
     expect(currentAlias()).toBe('回到前台后的项目名');
     expect(transport.clients[0].stop).not.toHaveBeenCalled();
   });
+});
+
+// Settled reads matter: the existing in-flight test hides redundant requests behind coalescing.
+it('does not reread settled aliases when 20 conversation owners reuse an acknowledged sessions stream', async () => {
+  await act(async () => context.subscribe('home', 'host', ['sessions']));
+  await act(async () => aliasReads[0]('Current project'));
+  for (let n = 0; n < 20; n++) {
+    await act(async () => context.subscribe(`chat-${n}`, 'host', ['sessions', `session:task-${n}`]));
+    await act(async () => context.unsubscribe(`chat-${n}`, 'host', ['sessions', `session:task-${n}`]));
+  }
+  expect(aliasReads).toHaveLength(1);
+  expect(currentAlias()).toBe('Current project');
 });

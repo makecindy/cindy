@@ -14,6 +14,14 @@ const messages = {
     showHiddenDirectories: "顯示隱藏資料夾",
     emptyDirectory: "沒有可顯示的子目錄。",
   },
+  "zh-Hant-x-lzh": {
+    showHiddenDirectories: "顯隱匿之卷匣",
+    emptyDirectory: "無子目錄可示。",
+  },
+  "zh-Hans-x-lzh": {
+    showHiddenDirectories: "显隐匿之卷匣",
+    emptyDirectory: "无子目录可示。",
+  },
   en: {
     showHiddenDirectories: "Show Hidden Folders",
     emptyDirectory: "No folders to show.",
@@ -25,6 +33,27 @@ const messages = {
   ko: {
     showHiddenDirectories: "숨김 폴더 표시",
     emptyDirectory: "표시할 하위 폴더가 없습니다.",
+  },
+
+  "es": {
+    "showHiddenDirectories": "Mostrar carpetas ocultas",
+    "emptyDirectory": "No hay carpetas para mostrar."
+  },
+  "fr": {
+    "showHiddenDirectories": "Afficher les dossiers masqués",
+    "emptyDirectory": "Aucun dossier à afficher."
+  },
+  "de": {
+    "showHiddenDirectories": "Versteckte Ordner anzeigen",
+    "emptyDirectory": "Keine Ordner zum Anzeigen vorhanden."
+  },
+  "pt-PT": {
+    "showHiddenDirectories": "Mostrar pastas ocultas",
+    "emptyDirectory": "Não há pastas para mostrar."
+  },
+  "pt-BR": {
+    "showHiddenDirectories": "Mostrar pastas ocultas",
+    "emptyDirectory": "Não há pastas para exibir."
   },
 } as const;
 

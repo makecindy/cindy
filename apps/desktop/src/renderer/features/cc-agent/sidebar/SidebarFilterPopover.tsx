@@ -52,6 +52,7 @@ import {
   type LucideIcon,
 } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
+import { isTeammateProjectPath } from '@cindy/maker-shared/teammate-project';
 
 import { BotAvatar } from '@/features/bots/BotAvatar';
 import { taskCreatorFilterKey } from '@/features/bots/cindyDeviceRoster';
@@ -396,6 +397,7 @@ export function SidebarFilterPopover({
     creatorOptions,
     toggleCreator,
     setCreatorsAll,
+    setCreatorsNone,
     isFilterActive,
     vendor,
     lastActivity,
@@ -526,6 +528,7 @@ export function SidebarFilterPopover({
       : t('ccAgent.sidebar.filterSelectedProjects', { count: projects.length });
 
   const creatorValue = creators === 'all' ? t('ccAgent.sidebar.filterCreatorsAny')
+    : creators === 'none' ? t('ccAgent.sidebar.filterCreatorsNone')
     : creators.length === 1
       ? (creatorOptions.find(bot => taskCreatorFilterKey(bot) === creators[0])?.name
         ?? t('ccAgent.sidebar.filterSelectedCreators', { count: creators.length }))
@@ -762,6 +765,8 @@ export function SidebarFilterPopover({
                       )}
                     </DropdownMenuItem>
                     {allKnownProjects.map((project) => {
+                      // A teammate's project is chosen through the teammate filter.
+                      if (isTeammateProjectPath(project.workingDir)) return null;
                       const selected =
                         projects === 'all' ||
                         (projectsAsSet != null &&
@@ -813,20 +818,22 @@ export function SidebarFilterPopover({
                 <MenuSubRow label={t('ccAgent.sidebar.filterCreatorsHeading')} value={creatorValue} Icon={Users}>
                   <SelectMenuItem label={t('ccAgent.sidebar.filterCreatorsAny')} selected={creators === 'all'}
                     onSelect={setCreatorsAll} Icon={Users} />
+                  <SelectMenuItem label={t('ccAgent.sidebar.filterCreatorsNone')} selected={creators === 'none'}
+                    onSelect={setCreatorsNone} Icon={Users} />
                   {creatorOptions.length > 0 && <DropdownMenuSeparator />}
                   <div className="max-h-[256px] overflow-y-auto">
                     {creatorOptions.map(bot => {
                       const key = taskCreatorFilterKey(bot);
                       return (
                         <DropdownMenuItem key={key} className={cn(MENU_ITEM_CLASS, bot.deviceName && 'h-auto min-h-8 items-start')}
-                          role="menuitemcheckbox" aria-label={[bot.name, bot.deviceName].filter(Boolean).join(' ')} aria-checked={creators !== 'all' && creators.includes(key)}
+                          role="menuitemcheckbox" aria-label={[bot.name, bot.deviceName].filter(Boolean).join(' ')} aria-checked={Array.isArray(creators) && creators.includes(key)}
                           onSelect={event => { event.preventDefault(); toggleCreator(key); }}>
                           <BotAvatar bot={bot} size="xs" />
                           <span className="min-w-0 flex-1">
                             <span className="block truncate" title={bot.name}>{bot.name}</span>
                             {bot.deviceName && <span className="block truncate text-xs text-[var(--cmd-palette-item-meta)]" title={bot.deviceName}>{bot.deviceName}</span>}
                           </span>
-                          {creators !== 'all' && creators.includes(key) &&
+                          {Array.isArray(creators) && creators.includes(key) &&
                             <Check size={15} className={cn('shrink-0 text-[var(--msg-assistant-text)]', bot.deviceName && 'mt-0.5')} />}
                         </DropdownMenuItem>
                       );

@@ -27,10 +27,12 @@ import { clearSessionListCollator } from '@cindy/maker-shared/session-list';
 import { setManualLocaleOverride } from './appLanguage';
 import { clearPresentationDateFormatters } from './dateFormatters';
 import { i18n, detectSystemLocale, type LocalePreference, type SupportedLocale } from './index';
+import type { ClassicalReplyStyleId } from '@cindy/maker-shared/classical-reply';
 import {
   readLanguagePreference,
   saveLanguagePreference,
 } from './languagePreferenceStore';
+import { currentClassicalStyle, readClassicalStyle, saveClassicalStyle } from './classicalStyleStore';
 
 interface LocaleContextValue {
   /** 用户的偏好选择(含 'system')。 */
@@ -39,6 +41,9 @@ interface LocaleContextValue {
   effectiveLocale: SupportedLocale;
   /** 设置偏好 —— 持久化 override、刷 i18next、同步手写 catalog 桥。 */
   setLocale: (next: LocalePreference) => void;
+  /** 文言等古典界面下 AI 作答的输出风格。 */
+  classicalStyle: ClassicalReplyStyleId;
+  setClassicalStyle: (next: ClassicalReplyStyleId) => void;
 }
 
 const LocaleContext = createContext<LocaleContextValue | undefined>(undefined);
@@ -70,6 +75,24 @@ export function LocaleProvider({ children }: { children: ReactNode }) {
   const [effectiveLocale, setEffectiveLocale] = useState<SupportedLocale>(detectSystemLocale);
   // 用户已手动选择过语言时置位:挂载期的异步读回不得覆盖更晚的手动选择。
   const userChoseRef = useRef(false);
+  const [classicalStyle, setClassicalStyleState] = useState<ClassicalReplyStyleId>(currentClassicalStyle);
+  const userChoseStyleRef = useRef(false);
+
+  useEffect(() => {
+    let cancelled = false;
+    void readClassicalStyle().then((style) => {
+      if (!cancelled && !userChoseStyleRef.current) setClassicalStyleState(style);
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  const setClassicalStyle = useCallback((next: ClassicalReplyStyleId) => {
+    userChoseStyleRef.current = true;
+    setClassicalStyleState(next);
+    void saveClassicalStyle(next);
+  }, []);
 
   // 挂载后恢复持久化的 override;读出前按系统语言渲染(与 i18n init 值一致,
   // 未设置 override 的用户全程无切换)。
@@ -94,8 +117,8 @@ export function LocaleProvider({ children }: { children: ReactNode }) {
   }, []);
 
   const value = useMemo<LocaleContextValue>(
-    () => ({ locale, effectiveLocale, setLocale }),
-    [locale, effectiveLocale, setLocale],
+    () => ({ locale, effectiveLocale, setLocale, classicalStyle, setClassicalStyle }),
+    [locale, effectiveLocale, setLocale, classicalStyle, setClassicalStyle],
   );
 
   return <LocaleContext.Provider value={value}>{children}</LocaleContext.Provider>;

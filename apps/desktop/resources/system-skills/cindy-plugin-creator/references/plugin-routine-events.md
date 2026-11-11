@@ -1,5 +1,11 @@
 ## 本地例行任务事件
 
+> **兼容保留，不再触发（2026-11-08）**：伙伴的例行任务已改成伙伴项目里的普通自动化，宿主不再有消费
+> 这些事件的例行任务。已有插件里的 routineEvents 声明照常安装，不需要删除；它不再让插件常驻；
+> routine-request（含 cindy.routines.request）的 status / publish 仍按下文校验和限额，然后返回成功的空操作（publish 为 {ok:true,accepted:0,duplicate:false}），
+> 不会触发任何执行。新插件不要依赖它；要在流程关键点参与，用控制节点 will-schedule-run（§4.6.2）。
+> 下文保留原契约，供维护旧插件参考。
+
 插件通过 schemaVersion 3 的 routineEvents 声明事件来源：
 声明后，宿主在启动、启用和恢复时自动运行插件的浏览器逻辑页并保持监听，即使 launch 省略或为 on-demand；停用插件仍会停止监听。Node 常驻仍独立要求 node.lifecycle: resident。
 

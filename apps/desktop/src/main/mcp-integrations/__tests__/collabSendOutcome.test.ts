@@ -1,4 +1,7 @@
 import type { SessionSendResult } from '@cindy/maker-core';
+import fs from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
 const mockState = vi.hoisted(() => ({
@@ -22,6 +25,9 @@ const mockState = vi.hoisted(() => ({
   ) => ({ ok: true as const })),
   capturedProvidersConfig: null as null | Record<string, unknown>,
   afterSelectCompanion: null as null | (() => void),
+  invitationSession: null as null | { instanceId: string; stablePermissionModeState: { mode: string; generation: number } },
+  invitationInput: null as null | { key: string; boundary: string; permission: { isCurrent(): boolean; planModeEnabled: boolean; permissionMode: string } },
+  invitationOwner: true,
   personalFeishu: {
     getOwnerOpenId: () => 'ou_personal',
     sendMarkdownText: vi.fn(async () => ({ messageId: 'om_personal_text' })),
@@ -47,32 +53,29 @@ vi.mock('../../logger.js', () => ({
 vi.mock('../../maker-ipc/register.js', () => ({
   tryGetOrcaCollabService: () => mockState.collabService,
   isSessionInTurn: () => false,
-  getTaskActionInputState: () => ({ key: 'owner-input', ownerInput: true, boundary: 'runtime-1' }),
-  getTaskActionSession: () => undefined,
+  getTaskActionInputState: () => mockState.invitationInput ?? ({ key: 'owner-input', ownerInput: true, boundary: 'runtime-1' }),
+  getTaskActionSession: () => mockState.invitationSession ?? undefined,
+  isActiveInputAccountScoped: () => mockState.invitationOwner,
   confirmTaskAction: vi.fn(async () => true),
+  captureTaskActionPermissionRequest: vi.fn(async () => null),
 }));
 
 vi.mock('@cindy/mcps', () => ({
   setSessionPathAuthorizer: vi.fn(),
   createLiziMcpProviders: vi.fn((config: Record<string, unknown>) => {
     mockState.capturedProvidersConfig = config;
-    return [
+    return ['cindy_orca', 'cindy_computer', 'cindy_android'].map((name) => (
       {
-        name: 'cindy_orca',
+        name,
         isEnabled: () => true,
         toClaudeSdkConfig: () => null,
-      },
-    ];
+      }
+    ));
   }),
 }));
 
-vi.mock('../../maker-host/plugins/builtin-plugins.js', () => ({
-  BUILTIN_LIZI_MCP_IDS: ['cindy_orca', 'cindy_helper'],
-  pluginIdForProviderName: (name: string) =>
-    name === 'cindy_orca'
-      ? 'collab'
-      : name,
-}));
+vi.mock('../computer.js', () => ({ getComputerMcpDeps: vi.fn(() => ({})) }));
+vi.mock('../android.js', () => ({ getAndroidMcpDeps: vi.fn(() => ({})) }));
 
 vi.mock('../../maker-host/index.js', () => ({
   getPluginRegistry: () => ({
@@ -80,7 +83,7 @@ vi.mock('../../maker-host/index.js', () => ({
   }),
 }));
 
-vi.mock('../../scheduler-host/index.js', () => ({
+vi.mock('../../scheduler-host/index.desktop.js', () => ({
   getScheduler: () => null,
 }));
 
@@ -137,13 +140,104 @@ import {
 import { createDesktopMcpProviders } from '../mcp-providers.js';
 import { createDbClient } from '../../localDb/client/DbClient.js';
 import { clearCurrentDbClient, setCurrentDbClient } from '../../localDb/client/current.js';
-import type { FeishuBotMcpHostDeps } from '@cindy/mcps';
-import { beginAppSessionBoundary, commitVolatileAppSession } from '../../appSessionState.js';
+import type { FeishuBotMcpHostDeps, XdtHelperMcpDeps } from '@cindy/mcps';
+import { beginAppSessionBoundary, commitVolatileAppSession, ownerScopedUserDataPath } from '../../appSessionState.js';
+import * as userDataPath from '../../userDataPath.js';
+import { createPluginRegistry, resetPluginRegistry } from '../../maker-host/plugins/index.js';
+import { getComputerMcpDeps } from '../computer.js';
+import { getAndroidMcpDeps } from '../android.js';
+import {
+  CODEX_ALLOWED_BUILTIN_PLUGIN_IDS_KEY,
+  CODEX_DISABLED_BUILTIN_PLUGIN_IDS_KEY,
+} from '../codexBuiltinToolPolicy.js';
 
 const botCapabilities = {
   list: vi.fn(async () => ({ ok: true as const, capabilities: [] })),
   select: vi.fn(async () => ({ ok: true as const, joined: true, effective: 'next-turn' as const })),
 };
+
+// #9940, unit: exercise the real Desktop provider gate, registry factory and
+// settings reader across owner commits. Existing registry tests only wrap a
+// fixed registry, so they miss providers constructed before login. Driver
+// factories are isolated; their injected call-time gates are also checked.
+describe('Desktop providers across account changes', () => {
+  it.each(['claude-code', 'codex', 'pi'] as const)(
+    'reads the current owner for %s without widening frozen or bridge policy',
+    async (agentKind) => {
+      const root = fs.mkdtempSync(path.join(os.tmpdir(), 'cindy-provider-owner-'));
+      const userData = vi.spyOn(userDataPath, 'getUserDataDir').mockReturnValue(root);
+      try {
+        commitVolatileAppSession('cloud', 'enabled-owner');
+        const enabledPath = ownerScopedUserDataPath();
+        fs.mkdirSync(enabledPath, { recursive: true });
+        fs.writeFileSync(path.join(enabledPath, 'builtin-tools-settings.json'), JSON.stringify({
+          builtinTools: { computer: { enabled: true }, android: { enabled: true } },
+        }));
+        commitVolatileAppSession('cloud', 'disabled-owner');
+        const disabledPath = ownerScopedUserDataPath();
+        fs.mkdirSync(disabledPath, { recursive: true });
+        fs.writeFileSync(path.join(disabledPath, 'builtin-tools-settings.json'), JSON.stringify({
+          builtinTools: { computer: { enabled: false }, android: { enabled: false } },
+        }));
+        commitVolatileAppSession('signed-out');
+        resetPluginRegistry();
+        const providers = createDesktopMcpProviders({
+          botCapabilities,
+          getMakerMemoryManager: vi.fn(),
+          lspPool: {} as never,
+          get pluginRegistry() { return createPluginRegistry(); },
+          invokeRemote: vi.fn(),
+        });
+        const machines = providers.filter((p) => ['cindy_computer', 'cindy_android'].includes(p.name));
+        expect(machines).toHaveLength(2);
+        const context = { agentKind, workingDir: path.join(root, 'project') };
+        const enabled = () => machines.map((p) => p.isEnabled?.(context));
+        const callContext = { agentKind };
+        const computerGate = vi.mocked(getComputerMcpDeps).mock.calls.at(-1)![0]!.isComputerUseEnabled!;
+        const androidGate = vi.mocked(getAndroidMcpDeps).mock.calls.at(-1)![0]!.isAndroidAutomationEnabled!;
+        const callable = () => [computerGate(callContext), androidGate(callContext)];
+        // Codex keeps its bridge-creation snapshot for busy turns; its outer
+        // provider gate still excludes disabled machine tools when rebuilt.
+        const disabledCalls = agentKind === 'codex' ? [true, true] : [false, false];
+        expect(enabled()).toEqual([false, false]);
+        expect(callable()).toEqual(disabledCalls);
+
+        commitVolatileAppSession('cloud', 'enabled-owner');
+        expect(enabled()).toEqual([true, true]);
+        expect(callable()).toEqual([true, true]);
+        for (const provider of machines) {
+          expect(provider.isEnabled?.({ ...context, workingDir: '' })).toBe(true);
+          expect(provider.isEnabled?.({ ...context, vendorOptions: {
+            [CODEX_ALLOWED_BUILTIN_PLUGIN_IDS_KEY]: ['memory'],
+          } })).toBe(false);
+          expect(provider.isEnabled?.({ ...context, vendorOptions: {
+            [CODEX_DISABLED_BUILTIN_PLUGIN_IDS_KEY]: ['computer', 'android'],
+          } })).toBe(false);
+        }
+        await createPluginRegistry().setEnabled('computer', false);
+        await createPluginRegistry().setEnabled('android', false);
+        expect(enabled()).toEqual([false, false]);
+        expect(callable()).toEqual(disabledCalls);
+        await createPluginRegistry().setEnabled('computer', true);
+        await createPluginRegistry().setEnabled('android', true);
+        expect(enabled()).toEqual([true, true]);
+
+        commitVolatileAppSession('cloud', 'disabled-owner');
+        expect(enabled()).toEqual([false, false]);
+        expect(callable()).toEqual(disabledCalls);
+        expect(machines.map((p) => p.isEnabled?.({ ...context, workingDir: '' }))).toEqual([false, false]);
+        commitVolatileAppSession('signed-out');
+        expect(enabled()).toEqual([false, false]);
+        expect(callable()).toEqual(disabledCalls);
+      } finally {
+        commitVolatileAppSession('signed-out');
+        resetPluginRegistry();
+        userData.mockRestore();
+        fs.rmSync(root, { recursive: true, force: true });
+      }
+    },
+  );
+});
 
 function collabMeta(overrides: Record<string, unknown> = {}) {
   return {
@@ -204,7 +298,52 @@ describe('collab send outcome semantics', () => {
     mockState.consumeLearnInvocationGrant.mockReset();
     mockState.consumeLearnInvocationGrant.mockResolvedValue({ ok: true });
     mockState.capturedProvidersConfig = null;
+    mockState.invitationSession = null;
+    mockState.invitationInput = null;
+    mockState.invitationOwner = true;
     vi.clearAllMocks();
+  });
+
+  // Unit: actual Desktop provider + worker DB. Host tests inject caller facts;
+  // this covers production wiring of live instance, owner input and permissions.
+  it('binds invitations to live task authority regardless of the Agent execution device', async () => {
+    const client = await createDbClient({ transport: 'worker-thread', useInlineWorker: true });
+    try {
+      commitVolatileAppSession('cloud', 'invitation-test-owner');
+      await client.exec('CREATE TABLE bot_session_links (session_id TEXT, bot_id TEXT, role TEXT)');
+      setCurrentDbClient(client, 'invitation-test-owner');
+      mockState.invitationSession = { instanceId: 'instance', stablePermissionModeState: { mode: 'bypass', generation: 1 } };
+      mockState.invitationInput = { key: 'input', boundary: 'instance:1', permission: { isCurrent: () => true, planModeEnabled: false, permissionMode: 'bypass' } };
+      const invitation = 'A'.repeat(43);
+      let changeDuringInvite = false;
+      const command = vi.fn(async (request: { action: string }) => {
+        if (request.action === 'state') return { available: true, detail: { sessionId: 'task', sharedTaskId: 'shared', status: 'active' } };
+        if (changeDuringInvite) mockState.invitationSession!.stablePermissionModeState.generation++;
+        return { sharedTaskId: 'shared', invitation, invitationLink: 'https://relay.example.test/shared-task/join#' + invitation };
+      });
+      createDesktopMcpProviders({ botCapabilities, getMakerMemoryManager: vi.fn(), lspPool: {} as never,
+        pluginRegistry: { isEnabled: () => true, getPlugins: () => [] } as never, invokeRemote: vi.fn(),
+        captureSharedTaskCommand: () => command,
+      });
+      const sharedTask = (mockState.capturedProvidersConfig!.xdtHelper as XdtHelperMcpDeps).sharedTask!;
+      const context = { agentKind: 'codex' as const, workingDir: '/fixture', sessionId: 'task', sessionInstanceId: 'instance', remoteHostId: 'ssh-workspace' };
+      expect(await sharedTask(context, 'invite')).toMatchObject({ ok: true, sessionId: 'task', device: 'local', sharedTaskId: 'shared' });
+      command.mockClear();
+      mockState.invitationOwner = false;
+      expect(await sharedTask(context, 'invite')).toMatchObject({ ok: false, errorCode: 'PERMISSION_DENIED' });
+      mockState.invitationOwner = true;
+      expect(await sharedTask({ ...context, sessionInstanceId: 'old' }, 'invite')).toMatchObject({ ok: false, errorCode: 'PERMISSION_DENIED' });
+      mockState.invitationInput.permission.planModeEnabled = true;
+      expect(await sharedTask(context, 'invite')).toMatchObject({ ok: false, errorCode: 'PLAN_MODE' });
+      expect(command).not.toHaveBeenCalled();
+      expect(await sharedTask(context, 'state')).toMatchObject({ ok: true });
+      mockState.invitationInput.permission.planModeEnabled = false;
+      changeDuringInvite = true;
+      expect(await sharedTask(context, 'invite')).toMatchObject({ ok: false, errorCode: 'SHARED_TASK_RESULT_UNKNOWN' });
+    } finally {
+      mockState.invitationSession = null; mockState.invitationInput = null;
+      commitVolatileAppSession('signed-out'); clearCurrentDbClient(client); await client.dispose();
+    }
   });
 
   it('keeps cindy_orca registered when project policy is disabled at session startup', () => {

@@ -24,9 +24,14 @@
  *   - External Claude installs (for example `/usr/local/bin/claude`) do not
  *     contain the xdt-maker marker and are not historical-orphan candidates.
  *   - Scan / kill failures are best-effort and never block app startup or quit.
+ *
+ * Startup runs the historical sweep asynchronously (the Windows PowerShell scan
+ * alone costs ~0.4 s, up to its 5 s timeout). By the time that scan returns,
+ * this instance may already have launched a task, so the startup sweep never
+ * claims current main-process children; quit still reaps them synchronously.
  */
 
-import { execFileSync, spawnSync } from 'node:child_process';
+import { execFile, execFileSync, spawnSync } from 'node:child_process';
 import { allUserDataDirNames } from '@cindy/maker-shared/brand-identity';
 import { CURRENT_CINDY_REGION } from '../shared/brandRegion.js';
 import { createLogger } from './logger';
@@ -100,26 +105,47 @@ function parseProcessLine(line: string): ProcessRow | null {
   };
 }
 
+// 注意行尾的管道符:没有它,Get-CimInstance 与 ForEach-Object 会被 PowerShell
+// 当成两条独立语句执行——前者输出格式化表格、后者拿不到管道输入,parse 永远
+// 得到 0 行,收割器在 Windows 上整体失明(2026-07-14 实锤修复,曾静默失效)。
+const WINDOWS_SCAN_SCRIPT = [
+  'Get-CimInstance Win32_Process -Filter "Name=\'claude.exe\'" |',
+  'ForEach-Object {',
+  '  $cmd = ([string]$_.CommandLine) -replace "`r|`n", " "',
+  '  Write-Output ("{0}|{1}|{2}" -f $_.ProcessId, $_.ParentProcessId, $cmd)',
+  '}',
+].join('\n');
+const WINDOWS_SCAN_ARGS = ['-NoProfile', '-NonInteractive', '-Command', WINDOWS_SCAN_SCRIPT];
+// 冷启动的 powershell.exe 经常超过 1.5s,超时会被上层吞成"扫到 0 个",
+// 与真实空结果不可区分——放宽到 5s,宁可启动多等一拍也不要静默漏收割。
+const WINDOWS_SCAN_TIMEOUT_MS = 5000;
+const POSIX_PS_ARGS = ['-A', '-o', 'pid=,ppid=,command='];
+const POSIX_PS_TIMEOUT_MS = 1500;
+
+/** Async execFile; `execFile` is resolved per call so module import stays side-effect free. */
+function execFileText(
+  file: string,
+  args: readonly string[],
+  options: { timeout: number; windowsHide?: boolean },
+): Promise<string> {
+  return new Promise((resolve, reject) => {
+    execFile(file, args, { ...options, encoding: 'utf8' }, (error, stdout) => {
+      if (error) reject(error);
+      else resolve(stdout);
+    });
+  });
+}
+
 function scanWindowsClaudeProcesses(): ProcessRow[] {
-  // 注意行尾的管道符:没有它,Get-CimInstance 与 ForEach-Object 会被 PowerShell
-  // 当成两条独立语句执行——前者输出格式化表格、后者拿不到管道输入,parse 永远
-  // 得到 0 行,收割器在 Windows 上整体失明(2026-07-14 实锤修复,曾静默失效)。
-  const script = [
-    'Get-CimInstance Win32_Process -Filter "Name=\'claude.exe\'" |',
-    'ForEach-Object {',
-    '  $cmd = ([string]$_.CommandLine) -replace "`r|`n", " "',
-    '  Write-Output ("{0}|{1}|{2}" -f $_.ProcessId, $_.ParentProcessId, $cmd)',
-    '}',
-  ].join('\n');
+  const stdout = execFileSync('powershell.exe', WINDOWS_SCAN_ARGS, {
+    encoding: 'utf8',
+    timeout: WINDOWS_SCAN_TIMEOUT_MS,
+    windowsHide: true,
+  });
+  return parseWindowsScanOutput(stdout);
+}
 
-  // 冷启动的 powershell.exe 经常超过 1.5s,超时会被上层吞成"扫到 0 个",
-  // 与真实空结果不可区分——放宽到 5s,宁可启动多等一拍也不要静默漏收割。
-  const stdout = execFileSync(
-    'powershell.exe',
-    ['-NoProfile', '-NonInteractive', '-Command', script],
-    { encoding: 'utf8', timeout: 5000, windowsHide: true },
-  );
-
+function parseWindowsScanOutput(stdout: string): ProcessRow[] {
   const lines = stdout
     .split(/\r?\n/)
     .map((line) => line.trim())
@@ -158,20 +184,19 @@ interface ScanResult {
 }
 
 function scanPosixAllProcesses(): ScanResult {
-  const result = spawnSync(
-    'ps',
-    ['-A', '-o', 'pid=,ppid=,command='],
-    { encoding: 'utf8', timeout: 1500 },
-  );
+  const result = spawnSync('ps', POSIX_PS_ARGS, { encoding: 'utf8', timeout: POSIX_PS_TIMEOUT_MS });
   if (result.error) throw result.error;
   if (result.status !== 0 && result.status !== null) {
     throw new Error(`ps exited with status ${result.status}`);
   }
+  return parsePosixPsOutput(result.stdout ?? '');
+}
 
+function parsePosixPsOutput(stdout: string): ScanResult {
   const rows: ProcessRow[] = [];
   const childrenByParent = new Map<number, number[]>();
 
-  for (const raw of (result.stdout ?? '').split(/\r?\n/)) {
+  for (const raw of stdout.split(/\r?\n/)) {
     const line = raw.trim();
     if (!line) continue;
     const match = line.match(POSIX_PS_ROW_RE);
@@ -198,6 +223,19 @@ function scanClaudeProcesses(): ScanResult {
     return { rows: scanWindowsClaudeProcesses(), childrenByParent: new Map() };
   }
   return scanPosixAllProcesses();
+}
+
+async function scanClaudeProcessesAsync(): Promise<ScanResult> {
+  if (process.platform === 'win32') {
+    const stdout = await execFileText('powershell.exe', WINDOWS_SCAN_ARGS, {
+      timeout: WINDOWS_SCAN_TIMEOUT_MS,
+      windowsHide: true,
+    });
+    return { rows: parseWindowsScanOutput(stdout), childrenByParent: new Map() };
+  }
+  // A non-zero `ps` exit rejects here, matching the sync scan's status check.
+  const stdout = await execFileText('ps', POSIX_PS_ARGS, { timeout: POSIX_PS_TIMEOUT_MS });
+  return parsePosixPsOutput(stdout);
 }
 
 function hasXdtClaudeMarker(cmdLine: string): boolean {
@@ -317,5 +355,73 @@ export function reapClaudeOrphansSync(): ReaperResult {
     durationMs: Date.now() - start,
   };
   log.info('claude orphan reap completed', result);
+  return result;
+}
+
+/** Async counterpart of `killProcessTree` with the same success semantics. */
+async function killProcessTreeAsync(
+  pid: number,
+  childrenByParent: Map<number, number[]>,
+): Promise<boolean> {
+  try {
+    if (process.platform === 'win32') {
+      await execFileText('taskkill', ['/T', '/F', '/PID', String(pid)], {
+        timeout: 1000,
+        windowsHide: true,
+      });
+    } else {
+      const pids = collectPosixDescendants(pid, childrenByParent);
+      try {
+        await execFileText('kill', ['-9', ...pids.map(String)], { timeout: 1000 });
+      } catch (err) {
+        // Same as the sync path: a numeric exit code only means some pid was
+        // already gone. Spawn failures and timeouts carry no numeric code.
+        if (typeof (err as { code?: unknown }).code !== 'number') throw err;
+      }
+    }
+    return true;
+  } catch (err) {
+    log.debug('failed to kill claude process tree', {
+      pid,
+      error: err instanceof Error ? err.message : String(err),
+    });
+    return false;
+  }
+}
+
+/**
+ * Startup sweep: reaps only historical same-region bundled Claude processes
+ * whose parent has died, without blocking the main process. Children of this
+ * instance are skipped: any it sees were launched while the scan was running.
+ */
+export async function reapHistoricalClaudeOrphans(): Promise<ReaperResult> {
+  const start = Date.now();
+  let scan: ScanResult = { rows: [], childrenByParent: new Map() };
+
+  try {
+    scan = await scanClaudeProcessesAsync();
+  } catch (err) {
+    log.debug('failed to scan claude processes', {
+      error: err instanceof Error ? err.message : String(err),
+    });
+  }
+
+  let killedHistoricalOrphans = 0;
+  for (const proc of scan.rows) {
+    // isParentAlive already treats this process as alive; the explicit skip
+    // keeps the startup contract independent of that special case.
+    if (proc.pid === process.pid || proc.ppid === process.pid) continue;
+    if (hasXdtClaudeMarker(proc.cmdLine) && !isParentAlive(proc.ppid)) {
+      if (await killProcessTreeAsync(proc.pid, scan.childrenByParent)) killedHistoricalOrphans += 1;
+    }
+  }
+
+  const result = {
+    scannedTotal: scan.rows.length,
+    killedSelfSpawned: 0,
+    killedHistoricalOrphans,
+    durationMs: Date.now() - start,
+  };
+  log.info('claude startup orphan reap completed', result);
   return result;
 }

@@ -84,7 +84,9 @@ function InputHandoffDialogHeader({
   const Icon = inputHandoffIcon(snapshot);
   const warnings = [
     snapshot.source.warning ? t(`inputHandoff.originWarning.${snapshot.source.warning}`) : null,
-    snapshot.agentControlled ? t('inputHandoff.agentControlled') : null,
+    snapshot.agentPicture
+      ? t('inputHandoff.agentPicture')
+      : snapshot.agentControlled ? t('inputHandoff.agentControlled') : null,
     inputBlocked ? t('inputHandoff.remoteUnavailable') : null,
     snapshot.failure && !snapshot.terminal ? t(`inputHandoff.failure.${snapshot.failure}`) : null,
   ].filter((warning): warning is string => Boolean(warning));

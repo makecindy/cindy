@@ -18,6 +18,7 @@ import { useSyncExternalStore, type ReactNode } from 'react';
 import { createPortal } from 'react-dom';
 
 import { getSlotElement, subscribeSlot } from './store';
+import { isPluginUiElementVisible, usePluginUiRegions } from '@/cindy-brain/pluginUiVisibility';
 
 export interface InteractionPromptHostProps {
   /**
@@ -44,8 +45,9 @@ export function InteractionPromptHost({
   // useSyncExternalStore reads the module-level slot signal correctly
   // even under concurrent rendering. Returns the current HTMLElement | null.
   const slot = useSyncExternalStore(subscribeSlot, getSlotElement, getSlotElement);
+  usePluginUiRegions();
 
-  if (!hasInteraction || !slot) {
+  if (!hasInteraction || !slot || !isPluginUiElementVisible(slot)) {
     return <>{children}</>;
   }
 

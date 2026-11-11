@@ -1,4 +1,6 @@
 import { deviceDisplayName } from '@/lib/deviceName';
+import { invokeModelCatalog } from '@/lib/invokeModelCatalog';
+import { parseModelCatalogKey } from '../../shared/controlledModelCatalog';
 /**
  * useVendorAuthGate —— vendor 未就绪时弹通用 confirmDialog,确认后跳 settings。
  *
@@ -38,6 +40,7 @@ import {
 } from '@/hooks/useDeviceProviders';
 import { remoteProjectsStore } from '@/features/device-link/remoteProjectsStore';
 import type { AgentKind } from '@/lib/ccAgent.types';
+import { resolveVoiceInputReadinessRecovery } from '@/voice-input/readinessRecovery';
 
 interface DialogCopy {
   title: string;
@@ -52,9 +55,6 @@ type SettingsTab = 'api-keys' | 'connections' | 'providers' | 'about';
 
 type CopyKey =
   | 'no-source'
-  | 'voice-api-key-unauth'
-  | 'voice-direct-api-key-unauth'
-  | 'codex-voice-unauth'
   | 'codex-binary-missing'
   | 'pi-binary-missing';
 
@@ -66,28 +66,6 @@ function buildCopy(t: (key: string) => string): Record<CopyKey, DialogCopy> {
       title: t('newChat.noProvider.title'),
       description: t('newChat.noProvider.description'),
       confirmText: t('newChat.noProvider.connect'),
-      cancelText: t('logic.confirm.cancel'),
-      settingsTab: 'providers',
-    },
-    'voice-api-key-unauth': {
-      title: t('logic.confirm.voiceApiKeyAuthTitle'),
-      description: t('logic.confirm.voiceApiKeyAuthDescription'),
-      confirmText: t('logic.confirm.goToSettings'),
-      cancelText: t('logic.confirm.cancel'),
-      settingsTab: 'providers',
-    },
-    'voice-direct-api-key-unauth': {
-      title: t('logic.confirm.voiceDirectApiKeyAuthTitle'),
-      description: t('logic.confirm.voiceDirectApiKeyAuthDescription'),
-      confirmText: t('logic.confirm.goToSettings'),
-      cancelText: t('logic.confirm.cancel'),
-      // 「工具密钥」页已下架(2026-07-13),直连 key 引导落到模型供应商页。
-      settingsTab: 'providers',
-    },
-    'codex-voice-unauth': {
-      title: t('logic.confirm.codexVoiceAuthTitle'),
-      description: t('logic.confirm.codexVoiceAuthDescription'),
-      confirmText: t('logic.confirm.goToSettings'),
       cancelText: t('logic.confirm.cancel'),
       settingsTab: 'providers',
     },
@@ -106,15 +84,6 @@ function buildCopy(t: (key: string) => string): Record<CopyKey, DialogCopy> {
       settingsTab: 'about',
     },
   };
-}
-
-export function pickVoiceInputDialogCopy(
-  copy: Record<CopyKey, DialogCopy>,
-  readiness: { auth: 'api-key' | 'codex'; settingsTab: SettingsTab },
-): DialogCopy {
-  if (readiness.auth === 'codex') return copy['codex-voice-unauth'];
-  if (readiness.settingsTab === 'providers') return copy['voice-api-key-unauth'];
-  return copy['voice-direct-api-key-unauth'];
 }
 
 function pickCopy(
@@ -250,18 +219,18 @@ export function useVendorAuthGate(): UseVendorAuthGateReturn {
         const readiness = cached?.ok ? cached : await window.electronAPI.voiceInput.getReadiness();
         if (readiness.ok) return { proceed: true };
 
-        const dialogCopy = pickVoiceInputDialogCopy(copy, readiness);
+        const recovery = resolveVoiceInputReadinessRecovery(readiness, readiness.serviceMode);
         const ok = await confirm({
-          title: dialogCopy.title,
-          description: dialogCopy.description,
-          confirmText: dialogCopy.confirmText,
-          cancelText: dialogCopy.cancelText,
+          title: t('settings.voiceInput.title'),
+          description: t(recovery.messageKey),
+          confirmText: t('logic.confirm.goToSettings'),
+          cancelText: t('logic.confirm.cancel'),
           // 主操作("前往设置")是非破坏性的,默认焦点交给它,
           // 否则 Radix 默认聚焦 Cancel,会让"取消"天然带 focus ring。
           autoFocusConfirm: true,
         });
         if (ok) {
-          navigate(`/settings?tab=${readiness.settingsTab}`);
+          navigate(`/settings?tab=${recovery.settingsTab}`);
         }
         return { proceed: false };
       }
@@ -288,10 +257,10 @@ export function useVendorAuthGate(): UseVendorAuthGateReturn {
         const [statusRes, providersRes] = await Promise.allSettled([
           cachedSourceReady && vendor === 'cc'
             ? Promise.resolve(null)
-            : window.electronAPI.deviceLink.invoke(deviceId, 'maker:agent:status', [providerAgent]),
+            : invokeModelCatalog(window.electronAPI.deviceLink, deviceId, 'maker:agent:status', [providerAgent]),
           cachedSourceReady
             ? Promise.resolve(cachedProviders)
-            : window.electronAPI.deviceLink.invoke(deviceId, 'maker:provider:list', []),
+            : invokeModelCatalog(window.electronAPI.deviceLink, deviceId, 'maker:provider:list', []),
         ]);
         const status =
           statusRes.status === 'fulfilled'
@@ -330,7 +299,8 @@ export function useVendorAuthGate(): UseVendorAuthGateReturn {
         // 直接说清哪台设备缺什么、去那台设备的哪个设置页处理:
         //   codex 二进制缺失 → 组件未就绪;来源未就绪 → 该 agent 暂无已连接的模型来源
         //   (去「设置 → 模型供应商」;codex / cc 文案对称)。
-        const device = deviceDisplayName(deviceId, remoteProjectsStore.getDeviceName(deviceId));
+        const sourceDeviceId = parseModelCatalogKey(deviceId)?.agentDeviceId ?? deviceId;
+        const device = deviceDisplayName(sourceDeviceId, remoteProjectsStore.getDeviceName(sourceDeviceId));
         let title: string;
         let description: string;
         if (remoteReadiness === 'binary-missing') {

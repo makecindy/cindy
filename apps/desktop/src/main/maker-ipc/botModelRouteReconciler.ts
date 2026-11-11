@@ -45,6 +45,9 @@ function configuredRoute(
   // Following defaults must not undo a working fallback on every send. Only a
   // changed chain or an explicit save should supersede the accepted route.
   if (!isDraftChange && state.hasRuntimeOverride && (previous === undefined || previous === key)) return null;
+  // The task owns its model: a configuration already applied here is not applied again,
+  // so a model picked in the task stands until the teammate's configuration changes.
+  if (!isDraftChange && previous === key) return null;
   const primary = chain[0];
   if (!primary) return null;
   return {
@@ -105,11 +108,26 @@ export function createBotModelRouteReconciler(deps: {
   readAppliedGroup?(sessionId: string): Promise<{ providerId: string; groupDeviceId: string | null } | null>;
   /** An accepted permanent choice supersedes temporary preferences, even without a switch. */
   onSelectionAccepted?(sessionId: string, expectedBaseline?: string | null): Promise<void | boolean>;
+  /** Durable record of the configuration last applied to each task, kept across restarts. */
+  applied?: { get(sessionId: string): Promise<string | undefined>; set(sessionId: string, key: string): Promise<void> };
 }) {
   let owner: string | undefined;
   const configured = new Map<string, string>();
   const revisions = new Map<string, number>();
   const inFlight = new Map<string, Promise<void>>();
+  const resolveConfiguredRoute = async (sessionId: string, state: BotRouteState, previous: string | undefined, chain = state.chain) => {
+    const route = configuredRoute(state, previous, chain);
+    // A committed member is the saved group choice in execution, not a model
+    // change. Preserve it after failover/reopen; explicit saves and drafts win.
+    if (!route || state.next || (previous !== undefined && previous !== configuredKey(state))
+      || JSON.stringify(chain) !== JSON.stringify(state.chain) || sameRoute(route, state.current)) return route;
+    const current = state.current;
+    if (route.agentKind !== current.agentKind || route.model !== current.model
+      || route.effort !== current.effort || route.fastMode !== current.fastMode) return route;
+    const group = await deps.readAppliedGroup?.(sessionId);
+    return group && group.providerId === route.providerId && group.groupDeviceId === (route.agentDeviceId ?? null)
+      ? current : route;
+  };
   const syncOwner = () => {
     const epoch = deps.ownerEpoch();
     if (owner !== epoch) {
@@ -141,10 +159,13 @@ export function createBotModelRouteReconciler(deps: {
         }
         const key = configuredKey(state);
         const previous = parseScheduledModelBaseline(state.scheduledModelBaseline)?.pendingBotProfileVersion
-          ? '' : configured.get(sessionId);
-        const route = configuredRoute(state, previous);
+          ? '' : configured.get(sessionId) ?? await deps.applied?.get(sessionId).catch(() => undefined);
+        const route = await resolveConfiguredRoute(sessionId, state, previous);
+        if (deps.ownerEpoch() !== epoch) throw new Error('Bot model route owner changed');
+        if ((revisions.get(sessionId) ?? 0) !== revision) continue;
         if (!route) {
           configured.set(sessionId, key);
+          await deps.applied?.set(sessionId, key).catch(() => {});
           return;
         }
         const current = state.current;
@@ -168,6 +189,7 @@ export function createBotModelRouteReconciler(deps: {
         if (deps.ownerEpoch() !== epoch) throw new Error('Bot model route owner changed');
         if ((revisions.get(sessionId) ?? 0) !== revision) continue;
         configured.set(sessionId, key);
+        await deps.applied?.set(sessionId, key).catch(() => {});
         return;
       }
     };
@@ -189,6 +211,15 @@ export function createBotModelRouteReconciler(deps: {
   };
   return Object.assign(reconcile, {
     invalidate,
+    /** A model chosen in the task itself (composer or an explicit request) stands until the configuration changes. */
+    async acceptTaskChoice(sessionId: string): Promise<void> {
+      const epoch = syncOwner();
+      const state = await deps.read(sessionId, 'apply');
+      if (!state || deps.ownerEpoch() !== epoch) return;
+      const key = configuredKey(state);
+      configured.set(sessionId, key);
+      await deps.applied?.set(sessionId, key).catch(() => {});
+    },
     /** Called under the send lock only after the frozen route is unavailable.
      * Resolve the real saved profile (including routine/location choices), never
      * the session row that may still contain the automation's temporary route. */
@@ -252,13 +283,15 @@ export function createBotModelRouteReconciler(deps: {
       const state = await deps.read(sessionId, 'preview');
       if (deps.ownerEpoch() !== epoch) throw new Error('Bot model route owner changed');
       if (!state?.chain.length) return null;
+      const route = await resolveConfiguredRoute(
+        sessionId, state,
+        parseScheduledModelBaseline(state.scheduledModelBaseline)?.pendingBotProfileVersion
+          ? '' : configured.get(sessionId),
+        draftChain ? normalizeBotModelChain(draftChain) : undefined,
+      );
+      if (deps.ownerEpoch() !== epoch) throw new Error('Bot model route owner changed');
       return (
-        configuredRoute(
-          state,
-          parseScheduledModelBaseline(state.scheduledModelBaseline)?.pendingBotProfileVersion
-            ? '' : configured.get(sessionId),
-          draftChain ? normalizeBotModelChain(draftChain) : undefined,
-        ) ??
+        route ??
         state.next ??
         savedRuntimeRoute(state) ??
         state.current

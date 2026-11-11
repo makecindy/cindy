@@ -1,3 +1,4 @@
+import { withAvailabilityPolicyMutation } from './providerShareAvailabilityPolicy.js';
 import fs from 'node:fs';
 import { isProviderShareMemberBudget, type ProviderShareMemberBudget } from '../../shared/providerShareBudget.js';
 import { activeOwnerScopeKey, ownerScopedUserDataPath } from '../appSessionState.js';
@@ -13,7 +14,9 @@ const object = (value: unknown): value is Record<string, unknown> => Boolean(val
 const selection = (value: unknown): string[] => isRemoteModelSelection(value) && value !== null ? value : [];
 
 /** Remote-only authorization; local model preferences and supplier credentials never pass through this store. */
-export function createRemoteModelAccessStore(options: { filePath(): string; scopeKey(): string }) {
+export function createRemoteModelAccessStore(options: { filePath(): string; scopeKey(): string; withMutation?<T>(providerId: string, work: () => Promise<T>): Promise<T> }) {
+  const listeners = new Set<() => void>();
+  const log = createLogger('remote-model-access');
   const store = createOverrideSettingsFile<Settings>({
     ...options,
     defaults: () => {
@@ -35,7 +38,7 @@ export function createRemoteModelAccessStore(options: { filePath(): string; scop
         }];
       })) };
     },
-    log: createLogger('remote-model-access'), label: 'remote-model-access',
+    log, label: 'remote-model-access',
     maxBytes: 4 * 1024 * 1024, preserveUnreadableFile: true,
     logLoadedValue: false, logReadErrorDetails: false,
   });
@@ -65,11 +68,21 @@ export function createRemoteModelAccessStore(options: { filePath(): string; scop
         return Boolean(model) && (providerModels === null || providerModels.includes(model)) && (models === null || models.includes(model));
       } catch { return false; }
     },
+    /** Offline direct leases cannot enforce O's live per-member usage budget. */
+    allowsDelegatedExecution(providerId: string, model: string, memberId: string): boolean {
+      try {
+        const { models, providerModels, memberBudget } = read(providerId, memberId);
+        return Boolean(model) && (providerModels === null || providerModels.includes(model))
+          && (models === null || models.includes(model))
+          && !(memberBudget?.enabled && memberBudget.rules.length > 0);
+      } catch { return false; }
+    },
     async set(providerId: string, models: RemoteModelSelection, memberId: string | undefined, assertCurrent: () => void, memberBudget?: ProviderShareMemberBudget | null) {
       if (!isRemoteModelSelection(models)) throwIpcError('INVALID_PARAMS', 'Invalid remote model selection');
       if (memberBudget !== undefined && (!memberId || (memberBudget !== null && !isProviderShareMemberBudget(memberBudget))))
         throwIpcError('INVALID_PARAMS', 'Invalid member budget settings');
       assertCurrent();
+      return (options.withMutation ?? ((_id, work) => work()))(providerId, async () => {
       await store.updateAtomic(({ value }) => {
         assertCurrent();
         if (value.providers === null) throwIpcError('PRECONDITION_FAILED', 'Remote model permissions could not be read');
@@ -92,12 +105,23 @@ export function createRemoteModelAccessStore(options: { filePath(): string; scop
         return { providers };
       });
       assertCurrent();
-      return read(providerId, memberId);
+      const updated = read(providerId, memberId);
+      for (const listener of listeners) {
+        try { listener(); }
+        catch (error) { log.warn('remote model access listener failed', { error: String(error) }); }
+      }
+      return updated;
+      });
+    },
+    subscribe(listener: () => void): () => void {
+      listeners.add(listener);
+      return () => { listeners.delete(listener); };
     },
   };
 }
 
 export const remoteModelAccess = createRemoteModelAccessStore({
+  withMutation: withAvailabilityPolicyMutation,
   filePath: () => ownerScopedUserDataPath('remote-model-access.json'),
   scopeKey: () => { captureProviderManagementScope(); return activeOwnerScopeKey(); },
 });

@@ -1,15 +1,27 @@
 // @vitest-environment jsdom
 import { act, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { RemotePluginUiEnablePrompt } from '@/components/new-chat/RemotePluginUiEnablePrompt';
 import { RemotePluginPage } from '../RemotePluginPage';
 import { setDataOwnerGeneration } from '@/contexts/dataOwnerGeneration';
+import { projectPluginUiConsent } from '../../../../shared/pluginUiConsent';
 import { ghostInstallApprovalToken } from '../../../../shared/ghost';
-const { invoke, confirm, localGhosts, notices } = vi.hoisted(() => ({
+const { invoke, confirm, localGhosts, notices, directoryMode } = vi.hoisted(() => ({
+  directoryMode: { real: false },
   notices: { success: vi.fn(), info: vi.fn(), error: vi.fn(), warning: vi.fn(), dismiss: vi.fn() },
   invoke: vi.fn(),
   confirm: vi.fn(async () => true),
   localGhosts: vi.fn(),
 }));
+vi.mock('@/features/device-link/useDeviceLinkDeviceList', () => ({
+  useDeviceLinkDeviceList: () => [{ deviceId: 'computer-a', name: 'Execution computer',
+    online: true, controlEnabled: true, remoteControlEnabled: true, isSelf: false, platform: 'darwin' }],
+}));
+vi.mock('../PluginDevicePicker', async importOriginal => {
+  const original = await importOriginal<typeof import('../PluginDevicePicker')>();
+  return { ...original, usePluginDeviceDirectory: (selected: Parameters<typeof original.usePluginDeviceDirectory>[0]) =>
+    directoryMode.real ? original.usePluginDeviceDirectory(selected) : { online: true, target: { name: 'Execution computer' } } };
+});
 vi.mock('@/lib/toast', () => ({ toast: notices }));
 vi.mock('@/components/new-chat/AddRemoteProjectDialog', () => ({
   AddRemoteProjectDialog: ({ fixedDeviceId, onProjectAdded, onOpenChange }: {
@@ -47,7 +59,7 @@ vi.mock('../GhostPluginPage', () => ({
   GhostPluginCard: ({ item, onManage }: { item: { name: string }; onManage(): void }) => (
     <button onClick={onManage}>{item.name}</button>
   ),
-  MarketPluginCard: () => null,
+  MarketPluginCard: ({ item }: { item: { name: string } }) => <output>{item.name}</output>,
 }));
 vi.mock('../GhostPluginDetailView', async (importOriginal) => ({
   ...(await importOriginal<typeof import('../GhostPluginDetailView')>()),
@@ -153,12 +165,16 @@ const configurationResource = (state = 'configured', id = 'weather') => ({
   ],
 });
 beforeEach(() => {
+  vi.stubGlobal('ResizeObserver', class { observe() {} unobserve() {} disconnect() {} });
   vi.clearAllMocks();
+  directoryMode.real = false;
   setDataOwnerGeneration('test-owner');
   window.electronAPI = {
     deviceLink: {
       invoke,
       onRemotePush: () => () => {},
+      onStatusChanged: () => () => {},
+      onPresenceChanged: () => () => {},
     },
   } as never;
   invoke.mockImplementation(
@@ -186,18 +202,42 @@ afterEach(() => {
   vi.unstubAllGlobals();
 });
 describe('selected plugin host', () => {
-  it('presents cancellation as a neutral overlay without inserting a banner', async () => {
+  // Unit, #9487: reconnect previously refreshed the snapshot but retained stale market pages.
+  // The same installed set with a changed market release must display the new card.
+  it('refreshes cached market cards after reconnect when installed versions are unchanged', async () => {
+    let marketName = 'Old market release';
+    const normal = invoke.getMockImplementation()!;
+    invoke.mockImplementation(async (device, channel, args) => args[0]?.actionId === 'management:snapshot'
+      ? { effects: [], result: { ...snapshot(device), market: { ...snapshot(device).market, items: [{
+        pluginId: `c${'p'.repeat(24)}`, ghostId: 'market-plugin', name: marketName, description: null,
+        author: null, scope: 'public', organizationId: null, defaultInstall: false,
+        releaseId: `c${'r'.repeat(24)}`, version: '1.0.0', publishedAt: '2026-11-01T00:00:00.000Z',
+        icon: null, installState: 'not-installed', enabled: null, sourceType: 'server', sourceMarketName: null,
+      }] } } } : normal(device, channel, args));
+    const view = (online: boolean) => <RemotePluginPage device={{ deviceId: 'computer-a', name: 'A' }} online={online} />;
+    const mounted = render(view(true));
+    await screen.findByText('computer-a');
+    fireEvent.click(screen.getByRole('tab', { name: /^settings.ghosts.page.marketSection/ }));
+    await screen.findByText('Old market release');
+    mounted.rerender(view(false));
+    marketName = 'New market release';
+    mounted.rerender(view(true));
+    await screen.findByText('New market release');
+    expect(screen.queryByText('Old market release')).toBeNull();
+  });
+
+  it.each(['cancelled', 'changed'] as const)('presents the %s receipt with the existing notice', async outcome => {
     const normal = invoke.getMockImplementation()!;
     invoke.mockImplementation(async (device, channel, args) =>
       args[0]?.actionId === 'management:begin'
-        ? { effects: [], result: { operationId: args[0].input.operationId, phase: 'cancelled' } }
+        ? { effects: [], result: { operationId: args[0].input.operationId, phase: outcome === 'changed' ? 'failed' : 'cancelled', ...(outcome === 'changed' ? { errorCode: 'NOT_FOUND' } : {}) } }
         : normal(device, channel, args),
     );
     render(<RemotePluginPage device={{ deviceId: 'computer-a', name: 'A' }} online />);
     fireEvent.click(await screen.findByText('computer-a'));
     fireEvent.click(screen.getByText('Disable'));
     await waitFor(() =>
-      expect(notices.info).toHaveBeenCalledWith('settings.ghosts.remote.cancelled'),
+      expect(outcome === 'changed' ? notices.error : notices.info).toHaveBeenCalledWith(`settings.ghosts.remote.${outcome}`),
     );
     expect(screen.queryByText('settings.ghosts.remote.cancelled')).toBeNull();
     expect(screen.queryByRole('button', { name: 'settings.ghosts.remote.retry' })).toBeNull();
@@ -738,6 +778,7 @@ describe('selected plugin host', () => {
       'ResizeObserver',
       class {
         observe() {}
+        unobserve() {}
         disconnect() {}
       },
     );
@@ -903,4 +944,389 @@ describe('selected plugin host', () => {
     expect(screen.queryByText('settings.ghosts.remote.readFailed')).toBeNull();
     expect(screen.getByRole('button', { name: 'settings.ghosts.remote.refresh' })).toBeTruthy();
   });
+});
+
+// unit: the remote task prompt must negotiate before sending, and a lost approval
+// receipt must never replay consent. Minimum input: one pending UI plugin and one answer.
+describe('remote task interactive-page consent prompt', () => {
+  function setup(capability: boolean, lost = false) {
+    const normal = invoke.getMockImplementation()!;
+    invoke.mockImplementation(async (device, channel, args) => {
+      const action = args?.[0]?.actionId;
+      if (action === 'management:snapshot') {
+        const data = snapshot(device);
+        return { effects: [], result: { ...data, ...(capability ? { uiCapabilityApproval: true } : {}),
+          ghosts: data.ghosts.map(g => ({ ...g, manifest: { ...g.manifest, schemaVersion: 3, tools: [{ name: 'open', description: 'Open page' }], mcpApps: { ui: { resources: [{
+            uri: "ui://planner",
+            file: 'ui.html'
+        }], tools: { open: { resourceUri: 'ui://planner' } } } } } })) } };
+      }
+      if (action === 'management:operation') return { effects: [], result: {
+        operationId: args[0].input.operationId, phase: 'confirmation', consent: {
+          requestId: 'page-consent', purpose: 'ui-capability', initiator: 'user', origin: 'local-file',
+          facts: { kind: 'install', ghostId: 'weather', name: 'Weather', version: '1.0.0', permissions: [] },
+        },
+      } };
+      if (action === 'management:answer' && lost) throw new Error('receipt lost');
+      return normal(device, channel, args);
+    });
+  }
+  it('shows an upgrade hint without sending an unnegotiated operation to an old Host', async () => {
+    setup(false); render(<RemotePluginUiEnablePrompt deviceId="computer-a" />);
+    await screen.findByText('newChat.pluginUi.updateHost');
+    expect(screen.queryByText('newChat.pluginUi.enable')).toBeNull();
+    expect(invoke.mock.calls.some(c => c[2]?.[0]?.actionId === 'management:begin')).toBe(false);
+  });
+  it('answers page consent once, then queries the same operation after a lost receipt', async () => {
+    setup(true, true); render(<RemotePluginUiEnablePrompt deviceId="computer-a" />);
+    const button = await screen.findByText('newChat.pluginUi.enable');
+    vi.useFakeTimers();
+    await act(async () => { fireEvent.click(button); });
+    expect(invoke.mock.calls.filter(c => c[2]?.[0]?.actionId === 'management:answer')).toHaveLength(1);
+    const begin = invoke.mock.calls.find(c => c[2]?.[0]?.actionId === 'management:begin')!;
+    expect(begin[2][0].input).toMatchObject({ kind: 'approve-ui', uiConsentVersion: 1 });
+    expect(confirm).toHaveBeenCalledOnce();
+    // Poll with fake time; no network replay and no second consent dialog.
+    await act(async () => { await vi.advanceTimersByTimeAsync(2400); });
+    expect(invoke.mock.calls.filter(c => c[2]?.[0]?.actionId === 'management:operation').length).toBeGreaterThan(1);
+    expect(invoke.mock.calls.filter(c => c[2]?.[0]?.actionId === 'management:answer')).toHaveLength(1);
+    expect(confirm).toHaveBeenCalledOnce();
+  });
+  // #4423428047, unit: real prompt + RPC adapter; previous coverage only rejected
+  // an already-created operation. A stale begin must refresh and allow an explicit
+  // retry; a lost begin receipt must keep querying without replaying approval.
+  it.each(['NOT_FOUND', 'receipt lost'])('recovers a %s begin without replaying it', async failure => {
+    setup(true);
+    const normal = invoke.getMockImplementation()!;
+    const revision = '00000000-0000-4000-8000-000000000002';
+    let begins = 0;
+    invoke.mockImplementation(async (device, channel, args) => {
+      const request = args?.[0];
+      if (request?.actionId === 'management:begin' && ++begins === 1)
+        throw new Error(failure === 'NOT_FOUND' ? '[NOT_FOUND] Plugin changed' : failure);
+      if (request?.actionId === 'management:operation' && failure === 'NOT_FOUND' && begins === 1)
+        throw new Error('[NOT_FOUND] Operation was not created');
+      if (request?.actionId === 'management:operation' && failure === 'receipt lost')
+        return { effects: [], result: { operationId: request.input.operationId, phase: 'running' } };
+      const result = await normal(device, channel, args);
+      if (request?.actionId === 'management:snapshot' && begins > 0)
+        result.result.ghosts = result.result.ghosts.map((ghost: ReturnType<typeof snapshot>['ghosts'][number]) => ({ ...ghost, approval: { ...ghost.approval, revision } }));
+      return result;
+    });
+    render(<RemotePluginUiEnablePrompt deviceId="computer-a" />);
+    const button = await screen.findByRole('button', { name: 'newChat.pluginUi.enable' });
+    vi.useFakeTimers();
+    await act(async () => { fireEvent.click(button); });
+    await act(async () => { await vi.advanceTimersByTimeAsync(2400); });
+    const operations = invoke.mock.calls.filter(call => call[2]?.[0]?.actionId === 'management:operation');
+    expect(begins).toBe(1);
+    expect(confirm).not.toHaveBeenCalled();
+    if (failure === 'NOT_FOUND') {
+      expect(notices.error).toHaveBeenCalledWith('settings.ghosts.remote.changed');
+      expect((button as HTMLButtonElement).disabled).toBe(false);
+      expect(screen.queryByText('settings.ghosts.remote.unknown')).toBeNull();
+      expect(operations).toHaveLength(0);
+      await act(async () => { fireEvent.click(button); });
+      const requests = invoke.mock.calls.filter(call => call[2]?.[0]?.actionId === 'management:begin');
+      expect(requests).toHaveLength(2);
+      expect(requests[1][2][0].input.expectedInstalledApproval).toBe(ghostInstallApprovalToken({ state: 'approved', revision }));
+      expect(requests[1][2][0].input.operationId).not.toBe(requests[0][2][0].input.operationId);
+      expect(confirm).toHaveBeenCalledOnce();
+    } else {
+      expect((button as HTMLButtonElement).disabled).toBe(true);
+      expect(operations.length).toBeGreaterThan(1);
+      expect(new Set(operations.map(call => call[2][0].input.operationId)).size).toBe(1);
+      expect(notices.error).not.toHaveBeenCalled();
+    }
+  });
+  // M04, unit: a confirmation for an updated install fails; the prompt must not
+  // silently disappear. Existing tests only covered success and lost receipts.
+  it('shows the existing changed-plugin notice for a stale page approval', async () => {
+    setup(true);
+    const normal = invoke.getMockImplementation()!;
+    let answered = false;
+    invoke.mockImplementation(async (device, channel, args) => {
+      const request = args?.[0];
+      if (request?.actionId === 'management:answer') answered = true;
+      if (request?.actionId === 'management:operation' && answered) return { effects: [], result: {
+        operationId: request.input.operationId, phase: 'failed', errorCode: 'NOT_FOUND',
+      } };
+      return normal(device, channel, args);
+    });
+    render(<RemotePluginUiEnablePrompt deviceId="computer-a" />);
+    const button = await screen.findByText('newChat.pluginUi.enable');
+    vi.useFakeTimers();
+    await act(async () => { fireEvent.click(button); });
+    await act(async () => { await vi.advanceTimersByTimeAsync(1200); });
+    expect(notices.error).toHaveBeenCalledWith('settings.ghosts.remote.changed');
+    expect(invoke.mock.calls.filter(c => c[2]?.[0]?.actionId === 'management:answer')).toHaveLength(1);
+    expect(screen.queryByText('newChat.pluginUi.ready')).toBeNull();
+  });
+  // Unit: a failed notification read after a successful empty snapshot must remain
+  // stale, without retrying in a loop; the next actual composer subscription retries.
+  it('retries stale discovery on remount after a failed plugin notification read', async () => {
+    setup(true);
+    const normal = invoke.getMockImplementation()!;
+    let pending = false;
+    let fail = false;
+    invoke.mockImplementation(async (device, channel, args) => {
+      if (args?.[0]?.actionId === 'management:snapshot' && fail) throw new Error('temporary failure');
+      const result = await normal(device, channel, args);
+      if (args?.[0]?.actionId === 'management:snapshot' && !pending) result.result.ghosts = [];
+      return result;
+    });
+    let push: ((value: unknown) => void) | undefined;
+    window.electronAPI.deviceLink.onRemotePush = ((listener: (value: unknown) => void) => { push = listener; return () => {}; }) as never;
+    const reads = () => invoke.mock.calls.filter(c => c[2]?.[0]?.actionId === 'management:snapshot').length;
+    const first = render(<RemotePluginUiEnablePrompt deviceId="computer-a" />);
+    await waitFor(() => expect(reads()).toBe(1));
+    vi.useFakeTimers();
+    pending = true;
+    fail = true;
+    await act(async () => {
+      push!({ deviceId: 'computer-a', channel: 'maker:remote-resources:changed', payload: { collectionId: 'plugins' } });
+      await vi.advanceTimersByTimeAsync(10_000);
+    });
+    expect(reads()).toBe(2);
+    first.unmount();
+    fail = false;
+    const second = render(<RemotePluginUiEnablePrompt deviceId="computer-a" />);
+    await act(async () => { await vi.advanceTimersByTimeAsync(250); });
+    expect(reads()).toBe(3);
+    expect(screen.getByText('newChat.pluginUi.enable')).toBeTruthy();
+    second.unmount();
+    await act(async () => { await vi.advanceTimersByTimeAsync(30_000); });
+  });
+  // Unit: notifications arriving during a failing read must get one follow-up,
+  // even when the composer stays mounted and no further events arrive.
+  it('keeps a coalesced refresh queued during a failed consent read', async () => {
+    setup(true);
+    const normal = invoke.getMockImplementation()!;
+    let reads = 0;
+    let rejectRead!: (error: Error) => void;
+    invoke.mockImplementation(async (device, channel, args) => {
+      if (args?.[0]?.actionId === 'management:snapshot') {
+        reads++;
+        if (reads === 2) return new Promise((_resolve, reject) => { rejectRead = reject; });
+        const result = await normal(device, channel, args);
+        if (reads === 1) result.result.ghosts = [];
+        return result;
+      }
+      return normal(device, channel, args);
+    });
+    let push!: (value: unknown) => void;
+    window.electronAPI.deviceLink.onRemotePush = ((listener: typeof push) => { push = listener; return () => {}; }) as never;
+    const ui = render(<RemotePluginUiEnablePrompt deviceId="computer-a" />);
+    await waitFor(() => expect(reads).toBe(1));
+    vi.useFakeTimers();
+    const notification = { deviceId: 'computer-a', channel: 'maker:remote-resources:changed', payload: { collectionId: 'plugins' } };
+    await act(async () => { push(notification); await vi.advanceTimersByTimeAsync(250); });
+    expect(reads).toBe(2);
+    await act(async () => {
+      for (let i = 0; i < 45; i++) push(notification);
+      rejectRead(new Error('temporary failure'));
+      await vi.advanceTimersByTimeAsync(250);
+    });
+    expect(reads).toBe(3);
+    expect(screen.getByText('newChat.pluginUi.enable')).toBeTruthy();
+    await act(async () => { await vi.advanceTimersByTimeAsync(10_000); });
+    expect(reads).toBe(3);
+    ui.unmount();
+    await act(async () => { await vi.advanceTimersByTimeAsync(30_000); });
+  });
+  // Unit: neither relay nor target disconnects replay missed plugin notifications.
+  // Exercise the retained production entry with no mounted consumers, then remount.
+  it.each(['relay', 'target', 'target-before-relay', 'peer-reset', 'peer-reopened'])('invalidates retained discovery across a %s disconnect without consumers', async source => {
+    setup(true);
+    const normal = invoke.getMockImplementation()!;
+    let pending = false;
+    invoke.mockImplementation(async (device, channel, args) => {
+      const result = await normal(device, channel, args);
+      if (args?.[0]?.actionId === 'management:snapshot' && !pending) result.result.ghosts = [];
+      return result;
+    });
+    let status!: Parameters<typeof window.electronAPI.deviceLink.onStatusChanged>[0];
+    let presence!: Parameters<typeof window.electronAPI.deviceLink.onPresenceChanged>[0];
+    const offStatus = vi.fn(), offPresence = vi.fn();
+    let peerReset!: (event: { deviceId: string }) => void;
+    let peerReopened!: (event: { deviceId: string }) => void;
+    const offPeerReset = vi.fn(), offPeerReopened = vi.fn();
+    window.electronAPI.deviceLink.onPeerLinkReset = listener => { peerReset = listener; return offPeerReset; };
+    window.electronAPI.deviceLink.onPeerLinkReopened = listener => { peerReopened = listener; return offPeerReopened; };
+    window.electronAPI.deviceLink.onStatusChanged = listener => { status = listener; return offStatus; };
+    window.electronAPI.deviceLink.onPresenceChanged = listener => { presence = listener; return offPresence; };
+    const reads = () => invoke.mock.calls.filter(c => c[2]?.[0]?.actionId === 'management:snapshot').length;
+    const first = render(<RemotePluginUiEnablePrompt deviceId="computer-a" />);
+    await waitFor(() => expect(reads()).toBe(1));
+    first.unmount();
+    vi.useFakeTimers();
+    await act(async () => {
+      peerReset({ deviceId: 'other-computer' });
+      peerReopened({ deviceId: 'other-computer' });
+      await vi.advanceTimersByTimeAsync(250);
+    });
+    const unchanged = render(<RemotePluginUiEnablePrompt deviceId="computer-a" />);
+    await act(async () => { await vi.advanceTimersByTimeAsync(250); });
+    expect(reads()).toBe(1);
+    unchanged.unmount();
+    await act(async () => {
+      pending = true;
+      if (source === 'peer-reset') peerReset({ deviceId: 'computer-a' });
+      else if (source === 'peer-reopened') peerReopened({ deviceId: 'computer-a' });
+      else {
+        if (source !== 'relay') presence({ deviceId: 'computer-a', online: false } as never);
+        if (source !== 'target') status({ status: 'connecting' });
+        if (source === 'target') presence({ deviceId: 'computer-a', online: true } as never);
+        // A new relay connection never replays target presence. The directory can
+        // confirm online on remount even though this entry saw the old offline push.
+        else status({ status: 'online' });
+      }
+      await vi.advanceTimersByTimeAsync(1000);
+    });
+    expect(reads()).toBe(1);
+    const second = render(<RemotePluginUiEnablePrompt deviceId="computer-a" />);
+    await act(async () => { await vi.advanceTimersByTimeAsync(250); });
+    expect(reads()).toBe(2);
+    expect(screen.getByText('newChat.pluginUi.enable')).toBeTruthy();
+    second.unmount();
+    await act(async () => { await vi.advanceTimersByTimeAsync(30_000); });
+    expect(offStatus).toHaveBeenCalledOnce();
+    expect(offPresence).toHaveBeenCalledOnce();
+    expect(offPeerReset).toHaveBeenCalledOnce();
+    expect(offPeerReopened).toHaveBeenCalledOnce();
+  });
+  // Unit: the real directory Hook initially reports offline until getState settles.
+  // A second composer used to destroy the first composer's live shared subscription.
+  it('preserves shared consent through directory initialization and refreshes after a real disconnect', async () => {
+    setup(true);
+    directoryMode.real = true;
+    const statusListeners = new Set<(state: { status: string }) => void>();
+    const getState = vi.fn(async () => ({ linkStatus: 'online' }));
+    window.electronAPI.deviceLink.getState = getState as never;
+    window.electronAPI.deviceLink.onStatusChanged = ((listener: (state: { status: string }) => void) => {
+      statusListeners.add(listener);
+      return () => { statusListeners.delete(listener); };
+    }) as never;
+    let push: ((value: unknown) => void) | undefined;
+    const subscribe = vi.fn(listener => { push = listener; return () => {}; });
+    window.electronAPI.deviceLink.onRemotePush = subscribe as never;
+    const first = render(<RemotePluginUiEnablePrompt deviceId="computer-a" />);
+    await screen.findByText('newChat.pluginUi.enable');
+    const reads = () => invoke.mock.calls.filter(c => c[2]?.[0]?.actionId === 'management:snapshot').length;
+    expect(reads()).toBe(1);
+    let resolveState!: (state: { linkStatus: string }) => void;
+    getState.mockImplementationOnce(() => new Promise(resolve => { resolveState = resolve; }));
+    const second = render(<RemotePluginUiEnablePrompt deviceId="computer-a" />);
+    await act(async () => { resolveState({ linkStatus: 'online' }); });
+    expect(screen.getAllByText('newChat.pluginUi.enable')).toHaveLength(2);
+    expect(reads()).toBe(1);
+    expect(subscribe).toHaveBeenCalledTimes(1);
+    const normal = invoke.getMockImplementation()!;
+    invoke.mockImplementation(async (device, channel, args) => {
+      const result = await normal(device, channel, args);
+      if (args?.[0]?.actionId === 'management:snapshot') result.result.ghosts = [];
+      return result;
+    });
+    vi.useFakeTimers();
+    await act(async () => {
+      push!({ deviceId: 'computer-a', channel: 'maker:remote-resources:changed', payload: { collectionId: 'plugins' } });
+      await vi.advanceTimersByTimeAsync(250);
+    });
+    expect(reads()).toBe(2);
+    expect(screen.queryByText('newChat.pluginUi.enable')).toBeNull();
+    await act(async () => { for (const listener of statusListeners) listener({ status: 'offline' }); });
+    await act(async () => { for (const listener of statusListeners) listener({ status: 'online' }); });
+    expect(reads()).toBe(3);
+    expect(subscribe).toHaveBeenCalledTimes(2);
+    first.unmount();
+    second.unmount();
+    // All-composer route replacement also starts with the real Hook's offline value.
+    const switched = render(<RemotePluginUiEnablePrompt deviceId="computer-a" />);
+    await act(async () => {});
+    expect(reads()).toBe(3);
+    expect(subscribe).toHaveBeenCalledTimes(2);
+    switched.unmount();
+    await act(async () => { await vi.advanceTimersByTimeAsync(30_000); });
+  });
+  // Unit: two actual composers and 45 notifications previously caused 90 full reads.
+  // Exercise capability negotiation, old Hosts and the shared production subscription.
+  it.each([true, false])('shares and coalesces consent reads (compact Host: %s)', async compact => {
+    setup(true);
+    const normal = invoke.getMockImplementation()!;
+    invoke.mockImplementation(async (device, channel, args) => {
+      if (args?.[0]?.actionId === 'management:ui-consent') {
+        const legacy = await normal(device, channel, [{ ...args[0], actionId: 'management:snapshot' }]);
+        return { effects: [], result: projectPluginUiConsent(legacy.result.ghosts, true) };
+      }
+      const result = await normal(device, channel, args);
+      if (compact && channel.endsWith(':manifest')) {
+        result.collections.find((c: { id: string }) => c.id === 'plugins').actions.push({ id: 'management:ui-consent' });
+      }
+      return result;
+    });
+    let push: ((value: unknown) => void) | undefined;
+    window.electronAPI.deviceLink.onRemotePush = vi.fn(listener => { push = listener; return () => {}; }) as never;
+    const ui = render(<><RemotePluginUiEnablePrompt deviceId="computer-a" /><RemotePluginUiEnablePrompt deviceId="computer-a" /></>);
+    await waitFor(() => expect(screen.getAllByText('newChat.pluginUi.enable')).toHaveLength(2));
+    const reads = () => invoke.mock.calls.filter(c => c[2]?.[0]?.actionId === (compact ? 'management:ui-consent' : 'management:snapshot')).length;
+    expect(reads()).toBe(1);
+    expect(window.electronAPI.deviceLink.onRemotePush).toHaveBeenCalledTimes(1);
+    if (compact) expect(invoke.mock.calls.some(c => c[2]?.[0]?.actionId === 'management:snapshot')).toBe(false);
+    vi.useFakeTimers();
+    await act(async () => {
+      for (let i = 0; i < 45; i++) push!({ deviceId: 'computer-a', channel: 'maker:remote-resources:changed', payload: { collectionId: 'plugins' } });
+      await vi.advanceTimersByTimeAsync(250);
+    });
+    expect(reads()).toBe(2);
+    ui.unmount();
+    await act(async () => { await vi.advanceTimersByTimeAsync(1000); });
+    const switched = render(<RemotePluginUiEnablePrompt deviceId="computer-a" />);
+    expect(screen.getByText('newChat.pluginUi.enable')).toBeTruthy();
+    expect(reads()).toBe(2);
+    expect(window.electronAPI.deviceLink.onRemotePush).toHaveBeenCalledTimes(1);
+    switched.unmount();
+    await act(async () => {
+      for (let i = 0; i < 45; i++) push!({ deviceId: 'computer-a', channel: 'maker:remote-resources:changed', payload: { collectionId: 'plugins' } });
+      await vi.advanceTimersByTimeAsync(1000);
+    });
+    expect(reads()).toBe(2);
+    const changedWhileAway = render(<RemotePluginUiEnablePrompt deviceId="computer-a" />);
+    await act(async () => { await vi.advanceTimersByTimeAsync(250); });
+    expect(reads()).toBe(3);
+    changedWhileAway.unmount();
+    await act(async () => { await vi.advanceTimersByTimeAsync(30_000); });
+    vi.useRealTimers();
+  });
+  // Unit, real prompt + push listener. Every remote task composer mounts this prompt; a
+  // working teammate's status pushes re-read the ~1 MB plugin snapshot each time and
+  // starved the link to that computer (2026-11-03: 86 snapshots, 129.5 MB). Plugin
+  // changes are always pushed with collectionId "plugins"; other collections must not
+  // re-read it, while a plugin change still must.
+  it.each([
+    ['teammates', 0],
+    ['bot-groups', 0],
+    ['plugin-results', 0],
+    ['plugins', 1],
+  ])('re-reads the plugin snapshot after a %s change: %i', async (collectionId, rereads) => {
+    setup(true);
+    let push: ((value: unknown, stamp?: unknown) => void) | undefined;
+    window.electronAPI.deviceLink.onRemotePush = ((listener: typeof push) => {
+      push = listener;
+      return () => {};
+    }) as never;
+    render(<RemotePluginUiEnablePrompt deviceId="computer-a" />);
+    await screen.findByText('newChat.pluginUi.enable');
+    const snapshots = () => invoke.mock.calls.filter(c => c[2]?.[0]?.actionId === 'management:snapshot').length;
+    const before = snapshots();
+    vi.useFakeTimers();
+    await act(async () => {
+      push!({ deviceId: 'computer-a', channel: 'maker:remote-resources:changed', payload: { collectionId } });
+      await vi.advanceTimersByTimeAsync(250);
+    });
+    vi.useRealTimers();
+    await waitFor(() => expect(snapshots()).toBe(before + rereads));
+    await act(async () => { await new Promise(resolve => setTimeout(resolve, 20)); });
+    expect(snapshots()).toBe(before + rereads);
+  });
+
 });

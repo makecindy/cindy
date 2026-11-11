@@ -1,0 +1,1241 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<meta name="color-scheme" content="light dark" />
+<title>Agent 网络 · 拓扑交互设计稿</title>
+<style>
+  /* 自包含设计稿：数值取自 Cindy 设计 token（DESIGN.md §2 / §4 / §10），全部为模拟数据。 */
+  :root {
+    color-scheme: light;
+    --surface: #f8f8f6;
+    --card: #ffffff;
+    --board: #d7d7d4;
+    --text: #262626;
+    --secondary: #737373;
+    --tertiary: #a3a3a3;
+    --chip: #e5e5e5;
+    --hover: #f2f2ef;
+    --success: #2aae5b;
+    --warning: #ea6b17;
+    --danger: #d91f37;
+    --focus: rgba(65, 124, 221, 0.5);
+    --cta-bg: #000000;
+    --cta-fg: #ffffff;
+  }
+  body.dark {
+    color-scheme: dark;
+    --surface: #1f1f1e;
+    --card: #2c2c2a;
+    --board: #3c3c3a;
+    --text: #d4d4d4;
+    --secondary: #a3a3a3;
+    --tertiary: #737373;
+    --chip: #3c3c3a;
+    --hover: #353533;
+    --success: #55c886;
+    --warning: #ea6b17;
+    --danger: #ef4444;
+    --cta-bg: #ffffff;
+    --cta-fg: #000000;
+  }
+  * { box-sizing: border-box; }
+  html, body { height: 100%; }
+  body {
+    margin: 0;
+    display: flex;
+    flex-direction: column;
+    background: var(--surface);
+    color: var(--text);
+    font: 13px/1.5 Inter, -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif;
+    -webkit-font-smoothing: antialiased;
+  }
+  button { font: inherit; color: inherit; cursor: pointer; }
+  button:focus-visible { outline: 2px solid var(--focus); outline-offset: 2px; }
+
+  /* ---------- 评审工具条（设计稿外壳，不属于产品界面） ---------- */
+  .reviewbar {
+    flex: none;
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 6px 12px;
+    padding: 8px 16px;
+    border-bottom: 1px dashed var(--board);
+    font-size: 12px;
+    color: var(--secondary);
+  }
+  .reviewbar .group { display: flex; flex-wrap: wrap; align-items: center; gap: 4px; }
+  .reviewbar .label { margin-right: 4px; color: var(--tertiary); }
+  .reviewbar button {
+    height: 26px;
+    padding: 0 10px;
+    border: 1px solid transparent;
+    border-radius: 9999px;
+    background: none;
+    color: var(--secondary);
+    white-space: nowrap;
+  }
+  .reviewbar button:hover { background: var(--hover); color: var(--text); }
+  .reviewbar button[aria-pressed="true"] { background: var(--chip); color: var(--text); }
+  .reviewbar .spacer { flex: 1; }
+
+  /* ---------- 产品界面 ---------- */
+  .frame { flex: 1; min-height: 0; display: flex; justify-content: center; }
+  .app { flex: 1; min-width: 0; display: flex; flex-direction: column; }
+  body.phone .frame { padding: 16px 0; }
+  body.phone .app {
+    flex: none;
+    width: 390px;
+    border: 1px solid var(--board);
+    border-radius: 12px;
+    overflow: hidden;
+    position: relative;
+  }
+
+  .topbar {
+    flex: none;
+    display: flex;
+    align-items: center;
+    gap: 24px;
+    min-height: 56px;
+    padding: 12px 20px;
+    border-bottom: 1px solid var(--board);
+  }
+  .title { font-size: 16px; font-weight: 500; white-space: nowrap; }
+  .stats { display: flex; align-items: baseline; gap: 20px; min-width: 0; color: var(--secondary); }
+  .stat { white-space: nowrap; font-size: 13px; }
+  .stat b { font-weight: 500; color: var(--text); font-variant-numeric: tabular-nums; }
+  .stat .warn { color: var(--warning); }
+  body.phone .topbar { flex-direction: column; align-items: flex-start; gap: 4px; padding: 12px 16px; }
+  body.phone .stats { gap: 14px; }
+  body.phone .stat:nth-child(4) { display: none; }
+
+  .stage { flex: 1; min-height: 0; display: flex; position: relative; overflow: hidden; }
+  .canvas-wrap { flex: 1; min-width: 0; position: relative; }
+  canvas { position: absolute; inset: 0; width: 100%; height: 100%; display: block; }
+  .node-list {
+    position: absolute; width: 1px; height: 1px; overflow: hidden;
+    clip-path: inset(50%); white-space: nowrap;
+  }
+
+  .legend {
+    position: absolute; left: 20px; bottom: 14px;
+    display: flex; flex-wrap: wrap; align-items: center; gap: 4px 14px;
+    color: var(--tertiary); font-size: 12px; pointer-events: none;
+  }
+  .legend span { display: inline-flex; align-items: center; gap: 6px; }
+  .legend i { display: inline-block; width: 18px; height: 0; border-top: 1px solid var(--secondary); }
+  .legend i.dashed { border-top-style: dashed; }
+  .legend i.dotted { border-top-style: dotted; }
+  body.phone .legend { left: 16px; right: 16px; bottom: 10px; }
+  body.phone .legend .hint { display: none; }
+
+  .inspector {
+    flex: none;
+    width: 320px;
+    overflow-y: auto;
+    padding: 20px;
+    border-left: 1px solid var(--board);
+  }
+  body.phone .inspector {
+    position: absolute;
+    left: 0; right: 0; bottom: 0;
+    width: auto;
+    max-height: 56%;
+    padding: 16px;
+    border-left: 0;
+    border-top: 1px solid var(--board);
+    border-radius: 12px 12px 0 0;
+    background: var(--card);
+    transform: translateY(100%);
+    transition: transform 225ms ease;
+  }
+  body.phone .inspector.open { transform: none; }
+  body.phone .inspector .close { display: inline-flex; }
+  .inspector .close {
+    display: none;
+    float: right;
+    align-items: center;
+    height: 28px;
+    padding: 0 12px;
+    border: 1px solid var(--board);
+    border-radius: 9999px;
+    background: none;
+    font-size: 12px;
+  }
+  .node-name { font-size: 16px; font-weight: 500; }
+  .node-sub { margin-top: 2px; color: var(--secondary); }
+  .section { margin-top: 20px; }
+  .section h3 {
+    margin: 0 0 6px;
+    font-size: 12px;
+    font-weight: 500;
+    color: var(--tertiary);
+  }
+  .row { display: flex; justify-content: space-between; gap: 16px; padding: 3px 0; }
+  .row span:first-child { color: var(--secondary); white-space: nowrap; }
+  .row span:last-child { text-align: right; font-variant-numeric: tabular-nums; }
+  .row .warn { color: var(--warning); }
+  .service {
+    display: flex; align-items: center; justify-content: space-between; gap: 12px;
+    padding: 4px 0;
+  }
+  .service small { display: block; color: var(--tertiary); font-size: 12px; }
+  .switch {
+    flex: none; position: relative; width: 32px; height: 18px;
+    border: 0; border-radius: 9999px; background: var(--chip); padding: 0;
+    transition: background-color 150ms ease;
+  }
+  .switch::after {
+    content: ""; position: absolute; top: 2px; left: 2px; width: 14px; height: 14px;
+    border-radius: 50%; background: var(--card); transition: transform 150ms ease;
+  }
+  .switch[aria-checked="true"] { background: var(--secondary); }
+  .switch[aria-checked="true"]::after { transform: translateX(14px); }
+  .actions { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 20px; }
+  .btn {
+    height: 32px; padding: 0 14px; border-radius: 9999px;
+    border: 1px solid var(--board); background: none; font-size: 13px; font-weight: 500;
+  }
+  .btn:hover { background: var(--hover); }
+  .btn.primary { border-color: var(--cta-bg); background: var(--cta-bg); color: var(--cta-fg); }
+
+  .events {
+    flex: none;
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    min-height: 36px;
+    padding: 8px 20px;
+    border-top: 1px solid var(--board);
+    color: var(--secondary);
+    overflow: hidden;
+  }
+  .events .time { color: var(--tertiary); font-variant-numeric: tabular-nums; }
+  .events .message { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  body.phone .events { padding: 8px 16px; font-size: 12px; }
+</style>
+</head>
+<body>
+  <div class="reviewbar" aria-label="设计稿评审工具">
+    <div class="group" role="group" aria-label="网络事件">
+      <span class="label">模拟事件</span>
+      <button data-scene="normal" aria-pressed="true">日常</button>
+      <button data-scene="offline">断开外网</button>
+      <button data-scene="cellular">切到蜂窝</button>
+      <button data-scene="udpBlocked">UDP 被封</button>
+      <button data-scene="myRelay">只用我的中继</button>
+      <button data-scene="newNode">新硬件加入</button>
+      <button data-scene="shareOut">分享给别人</button>
+      <button data-scene="guest">接入别人的网络</button>
+      <button data-scene="legacy">旧版设备</button>
+    </div>
+    <span class="spacer"></span>
+    <div class="group">
+      <button id="toggle-fx" aria-pressed="true">效果：酷炫</button>
+      <button id="toggle-theme" aria-pressed="false">深色</button>
+      <button id="toggle-motion" aria-pressed="false">减弱动效</button>
+      <button id="toggle-phone" aria-pressed="false">手机宽度</button>
+    </div>
+  </div>
+
+  <div class="frame">
+    <main class="app">
+      <header class="topbar">
+        <div class="title">Agent 网络</div>
+        <div class="stats" id="stats" aria-live="polite"></div>
+      </header>
+      <div class="stage">
+        <div class="canvas-wrap">
+          <canvas id="net" role="img" aria-label="Agent 网络拓扑图，节点离中心越近，路径越好"></canvas>
+          <div class="node-list" id="node-list" aria-label="节点列表"></div>
+          <div class="legend" aria-hidden="true">
+            <span><i class="solid"></i>直连</span>
+            <span><i class="dashed"></i>经中继</span>
+            <span><i class="dotted"></i>共享</span>
+            <span class="hint">离中心越近，路径越好 · 粒子是实时流量 · 拖动可旋转</span>
+          </div>
+        </div>
+        <aside class="inspector" id="inspector" aria-label="节点详情"></aside>
+      </div>
+      <footer class="events" aria-live="polite">
+        <span class="time" id="event-time"></span>
+        <span class="message" id="event-message"></span>
+      </footer>
+    </main>
+  </div>
+
+<script>
+'use strict';
+
+/* ---------- 数据（全部为模拟） ---------- */
+const RINGS = [
+  { key: 'local', label: '同一台机器', r: 0.17 },
+  { key: 'lan', label: '局域网', r: 0.38 },
+  { key: 'wan', label: '公网直连', r: 0.6 },
+  { key: 'relay', label: '经中继', r: 0.8 },
+  { key: 'shared', label: '共享给我', r: 1 },
+];
+const RING = Object.fromEntries(RINGS.map((ring, index) => [ring.key, index]));
+
+const OFFICIAL_RELAY = '官方中继 · 上海';
+const MY_RELAY = '我的中继 · 香港';
+
+const baseNodes = () => [
+  {
+    id: 'self', name: '这台 MacBook Pro', shape: 'laptop', tier: '完整节点', app: 'Cindy',
+    ring: -1, angle: 0, rtt: 0, mbps: 0, lift: 40,
+    hardware: [['芯片', 'M5 Max · 18 核'], ['内存', '64 GB'], ['显示', '1 块'], ['音频', '麦克风 · 扬声器']],
+    services: [['远程控制', '允许被其它设备控制', true], ['远程供应商', '2 个供应商可被调用', true]],
+  },
+  {
+    id: 'friend', name: 'Cindy Friend', shape: 'chip', tier: '完整节点', app: '同机 App',
+    ring: RING.local, angle: 200, rtt: 0.1, mbps: 12, lift: 18,
+    hardware: [['运行于', '这台 MacBook Pro']],
+    services: [['语音对话', '麦克风与扬声器', true], ['屏幕陪伴', '读取当前窗口', false]],
+  },
+  {
+    id: 'lite', name: 'Cindy 小助手', shape: 'chip', tier: '完整节点', app: '同机 App',
+    ring: RING.local, angle: 20, rtt: 0.1, mbps: 2, lift: 18,
+    hardware: [['运行于', '这台 MacBook Pro']],
+    services: [['快捷任务', '调用本机 Agent', true]],
+  },
+  {
+    id: 'studio', name: 'Mac Studio', shape: 'desktop', tier: '完整节点', app: 'Cindy',
+    ring: RING.lan, angle: 320, rtt: 1.4, mbps: 640, lift: 30,
+    hardware: [['芯片', 'M5 Ultra · 32 核'], ['图形', '80 核 GPU'], ['内存', '192 GB'], ['显示', '2 块']],
+    services: [['远程桌面', '画面与输入', true], ['远程供应商', 'Claude · Codex', true], ['本地模型算力', '可运行 70B 模型', true]],
+  },
+  {
+    id: 'iphone', name: 'iPhone', shape: 'phone', tier: '完整节点', app: 'Cindy',
+    ring: RING.lan, angle: 140, rtt: 6, mbps: 48, lift: 24,
+    hardware: [['摄像头', '3 颗'], ['麦克风', '有'], ['电量', '82%'], ['位置', '可提供']],
+    services: [['控制其它设备', '任务、审批、远程桌面', true], ['拍照', '由 Agent 请求，需确认', false]],
+  },
+  {
+    id: 'camera', name: '书房摄像头', shape: 'camera', tier: '轻节点', app: 'Cindy Lite · Linux',
+    ring: RING.lan, angle: 215, rtt: 3, mbps: 16, lift: 22,
+    hardware: [['画面', '4K · 30fps'], ['麦克风', '有'], ['存储', '256 GB']],
+    services: [['实时画面', '默认关闭，逐项开启', false], ['抓拍', '由 Agent 请求', true]],
+  },
+  {
+    id: 'sensor', name: '桌面传感器', shape: 'dot', tier: '微节点', app: 'ESP32',
+    ring: RING.lan, angle: 265, rtt: 9, mbps: 0.2, lift: 14,
+    hardware: [['传感器', '温度 · 湿度 · 光线']],
+    services: [['读取环境数据', '每分钟一次', true]],
+  },
+  {
+    id: 'speaker', name: '蓝牙音箱', shape: 'speaker', tier: '桥接子节点', app: '经书房摄像头桥接',
+    ring: 1.5, angle: 195, rtt: 24, mbps: 0.8, parent: 'camera', lift: 12,
+    hardware: [['音频', '立体声']],
+    services: [['播放声音', '权限跟随桥接节点', true]],
+  },
+  {
+    id: 'office', name: '公司 Windows', shape: 'desktop', tier: '完整节点', app: 'Cindy',
+    ring: RING.wan, angle: 296, rtt: 18, mbps: 92, lift: 28,
+    hardware: [['处理器', '16 核'], ['图形', 'RTX 5080'], ['内存', '128 GB']],
+    services: [['远程桌面', '画面与输入', true], ['远程供应商', 'Codex', true]],
+  },
+  {
+    id: 'linux', name: '云主机', shape: 'server', tier: '轻节点', app: 'Cindy Lite · Linux',
+    ring: RING.relay, angle: 12, rtt: 74, mbps: 14, via: 'relay', lift: 24,
+    hardware: [['处理器', '8 核'], ['内存', '32 GB']],
+    services: [['后台 Agent', '无人值守任务', true]],
+  },
+  {
+    id: 'relay', name: OFFICIAL_RELAY, shape: 'relay', tier: '中继', app: '只转发密文',
+    ring: 2.3, angle: 40, rtt: 22, mbps: 14, infrastructure: true, lift: 34,
+    hardware: [['可见内容', '谁和谁通信、流量大小'], ['不可见', '消息和文件内容']],
+    services: [],
+  },
+];
+
+/** 设备之间的连接：它们彼此也直连，这张网不是以我为中心的星形。 */
+const MESH = [
+  ['studio', 'iphone', 28],
+  ['studio', 'camera', 12],
+  ['studio', 'office', 64],
+  ['iphone', 'sensor', 0.3],
+  ['office', 'linux', 18],
+];
+
+const GUEST = {
+  id: 'guest', name: 'Lin 的网络', shape: 'cluster', tier: '共享网络', app: '按能力授权',
+  ring: RING.shared, angle: 165, rtt: 31, mbps: 8, lift: 26,
+  hardware: [['授权给你', '算力 · 1 台设备'], ['有效期', '7 天'], ['离线上限', '30 分钟']],
+  services: [['GPU 算力', '只能调用这一项', true]],
+};
+const VISITOR = {
+  id: 'visitor', name: 'Lin 的电脑', shape: 'laptop', tier: '访客', app: '只能使用你授权的能力',
+  ring: RING.shared, angle: 330, rtt: 28, mbps: 36, parent: 'studio', lift: 26,
+  hardware: [['授权内容', 'Mac Studio · 本地模型算力'], ['有效期', '7 天'], ['离线上限', '30 分钟']],
+  services: [['本地模型算力', '随时可以撤销', true], ['远程桌面、文件、Shell', '不可分享', false]],
+};
+const NEW_NODE = {
+  id: 'door', name: '门口摄像头', shape: 'camera', tier: '轻节点', app: '待认领',
+  ring: RING.lan, angle: 62, rtt: 4, mbps: 1, pending: true, lift: 22,
+  hardware: [['画面', '2K · 25fps']],
+  services: [['实时画面', '认领后才能开启', false]],
+};
+
+/* ---------- 场景 ---------- */
+const SCENES = {
+  normal: { message: '网络正常，所有连接已端到端加密', patch: () => {} },
+  offline: {
+    message: '外网已断开。局域网节点继续工作，不需要服务器',
+    pulse: 'self',
+    patch(nodes) {
+      for (const node of nodes) {
+        if (node.id === 'office' || node.id === 'linux' || node.id === 'relay') node.offline = true;
+      }
+    },
+  },
+  cellular: {
+    message: '这台电脑切到蜂窝网络，连接 0.4 秒内恢复，没有请求丢失',
+    pulse: 'self',
+    patch(nodes) {
+      const move = {
+        studio: [RING.wan, 38, 42], iphone: [RING.wan, 44, 36], camera: [RING.relay, 96, 9],
+        sensor: [RING.relay, 110, 0.2], speaker: [3.5, 124, 0.6],
+      };
+      for (const node of nodes) {
+        const next = move[node.id];
+        if (!next) continue;
+        [node.ring, node.rtt, node.mbps] = next;
+        if (node.ring >= RING.relay && !node.parent) node.via = 'relay';
+      }
+    },
+  },
+  udpBlocked: {
+    message: 'UDP 被当前网络拦截，公网连接改走 TCP 443 中继，加密不变',
+    pulse: 'office',
+    patch(nodes) {
+      for (const node of nodes) {
+        if (node.id === 'office') {
+          node.ring = RING.relay; node.rtt = 58; node.mbps = 24; node.via = 'relay';
+        }
+      }
+    },
+  },
+  myRelay: {
+    message: '已切换到我的中继，设备之间的数据不再经过官方中继',
+    pulse: 'relay',
+    patch(nodes) {
+      for (const node of nodes) {
+        if (node.id === 'relay') { node.name = MY_RELAY; node.tier = '我的中继'; node.rtt = 34; }
+      }
+    },
+  },
+  newNode: {
+    message: '发现 1 台新硬件，认领后才能加入网络',
+    pulse: 'door',
+    patch(nodes) { nodes.push({ ...NEW_NODE }); },
+  },
+  shareOut: {
+    message: '你把 Mac Studio 的算力分享给了 Lin，远程桌面、文件和 Shell 不在授权范围内',
+    pulse: 'studio',
+    patch(nodes) { nodes.push({ ...VISITOR }); },
+  },
+  guest: {
+    message: '你接入了 Lin 共享的算力，只能调用授权的这一项能力',
+    pulse: 'guest',
+    patch(nodes) { nodes.push({ ...GUEST }); },
+  },
+  legacy: {
+    message: '公司 Windows 还是旧版，经旧中转通信，内容未加密。更新后自动恢复',
+    pulse: 'office',
+    patch(nodes) {
+      for (const node of nodes) {
+        if (node.id === 'office') {
+          node.legacy = true; node.ring = RING.relay; node.via = 'relay'; node.rtt = 62; node.mbps = 11;
+        }
+      }
+    },
+  },
+};
+
+/* ---------- 状态 ---------- */
+const canvas = document.getElementById('net');
+const ctx = canvas.getContext('2d');
+const reducedMotionQuery = matchMedia('(prefers-reduced-motion: reduce)');
+let reducedMotion = reducedMotionQuery.matches;
+let fx = true;
+let colors = {};
+let width = 0;
+let height = 0;
+let center = { x: 0, y: 0 };
+let plate = 300;
+let tilt = 0.56;
+let tiltTarget = 0.56;
+let nodeScale = 1;
+let spin = 0;
+let spinVelocity = 0;
+let dragging = null;
+let pointerInside = false;
+let selectedId = 'studio';
+let hoveredId = null;
+let nodes = [];
+const placement = new Map();
+const flows = new Map();
+const ripples = [];
+const TWEEN_MS = 1000;
+const TAU = Math.PI * 2;
+
+function readColors() {
+  const style = getComputedStyle(document.body);
+  for (const key of ['surface', 'card', 'board', 'text', 'secondary', 'tertiary', 'chip', 'success', 'warning', 'danger', 'focus']) {
+    colors[key] = style.getPropertyValue(`--${key}`).trim();
+  }
+}
+
+function layout() {
+  const rect = canvas.getBoundingClientRect();
+  const dpr = Math.min(devicePixelRatio || 1, 2);
+  width = rect.width;
+  height = rect.height;
+  canvas.width = Math.round(width * dpr);
+  canvas.height = Math.round(height * dpr);
+  ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+  measure();
+}
+
+function measure() {
+  // 手机是竖屏：盘面改成竖向椭圆，把高度用满，节点同步缩小。
+  const phone = width < 480;
+  nodeScale = phone ? 0.68 : 1;
+  if (phone) tiltTarget = Math.max(0.8, Math.min(1.3, (height - 120) / (width * 0.92)));
+  center = { x: width / 2, y: height / 2 + (fx && !phone ? 8 : 0) };
+  plate = Math.min(width * 0.46, ((height - 90) / 2) / tilt);
+}
+
+function ringRadius(ring) {
+  if (ring < 0) return 0;
+  const low = Math.floor(ring);
+  const high = Math.min(RINGS.length - 1, low + 1);
+  return RINGS[low].r + (RINGS[high].r - RINGS[low].r) * (ring - low);
+}
+
+/** 盘面坐标投影到屏幕。depth：0 在盘面最远端，1 在最近端。 */
+function project(r, theta) {
+  const angle = theta + spin;
+  const depth = (Math.sin(angle) * r + 1) / 2;
+  return {
+    x: center.x + Math.cos(angle) * r * plate,
+    y: center.y + Math.sin(angle) * r * plate * tilt,
+    depth,
+  };
+}
+
+function settle(node, instant) {
+  const to = { r: ringRadius(node.ring), theta: (node.angle * Math.PI) / 180 };
+  const place = placement.get(node.id);
+  if (!place || instant || reducedMotion) {
+    placement.set(node.id, { ...(place ?? { fade: 1 }), ...to, from: to, to, start: 0 });
+    return;
+  }
+  place.from = { r: place.r, theta: place.theta };
+  place.to = to;
+  place.start = performance.now();
+}
+
+function ease(t) {
+  return t < 0.5 ? 4 * t * t * t : 1 - Math.pow(-2 * t + 2, 3) / 2;
+}
+
+function updatePlacements(now) {
+  for (const node of nodes) {
+    const place = placement.get(node.id);
+    if (!place) continue;
+    if (place.start) {
+      const t = Math.min(1, (now - place.start) / TWEEN_MS);
+      const k = ease(t);
+      const turn = ((place.to.theta - place.from.theta + Math.PI * 3) % TAU) - Math.PI;
+      place.r = place.from.r + (place.to.r - place.from.r) * k;
+      place.theta = place.from.theta + turn * k;
+      if (t >= 1) place.start = 0;
+    }
+    place.fade = Math.min(1, place.fade + 0.04);
+    const base = project(place.r, place.theta);
+    const lift = fx ? node.lift * (0.7 + 0.3 * base.depth) * nodeScale : 0;
+    place.bx = base.x;
+    place.by = base.y;
+    place.depth = base.depth;
+    place.x = base.x;
+    place.y = base.y - lift;
+    place.scale = (fx ? 0.82 + 0.26 * base.depth : 1) * nodeScale;
+  }
+}
+
+function pathKey(node) {
+  if (node.offline) return 'offline';
+  if (node.legacy) return 'legacy';
+  if (node.infrastructure) return 'relay';
+  if (node.ring >= RING.shared) return 'shared';
+  if (node.ring >= RING.relay) return 'relay';
+  if (node.ring >= RING.wan) return 'wan';
+  if (node.ring >= RING.lan) return 'lan';
+  return 'local';
+}
+
+const PATH_LABEL = {
+  local: '同机回环', lan: '局域网直连', wan: '公网直连（打洞）', relay: '经中继',
+  shared: '共享网络', offline: '离线', legacy: '旧版中转',
+};
+
+function linkStyle(key) {
+  switch (key) {
+    case 'local': return { width: 1, dash: [], color: colors.tertiary, arc: 0 };
+    case 'lan': return { width: 1.5, dash: [], color: colors.secondary, arc: 0.04 };
+    case 'wan': return { width: 1, dash: [], color: colors.secondary, arc: 0.24 };
+    case 'relay': return { width: 1, dash: [4, 4], color: colors.tertiary, arc: 0.18 };
+    case 'shared': return { width: 1, dash: [1, 4], color: colors.tertiary, arc: 0.3 };
+    case 'legacy': return { width: 1, dash: [4, 4], color: colors.warning, arc: 0.18 };
+    default: return { width: 1, dash: [1, 6], color: colors.board, arc: 0.1 };
+  }
+}
+
+/** 连线是抛物弧：路径越远拱得越高，像飞行航线。 */
+function arc(a, b, height2, points) {
+  const steps = 18;
+  for (let i = 0; i <= steps; i++) {
+    const t = i / steps;
+    const rise = fx ? 4 * t * (1 - t) * height2 : 0;
+    points.push({ x: a.x + (b.x - a.x) * t, y: a.y + (b.y - a.y) * t - rise });
+  }
+}
+
+function routeOf(node, style) {
+  const self = placement.get('self');
+  const here = placement.get(node.id);
+  if (!self || !here) return [];
+  const points = [];
+  if (node.parent && placement.get(node.parent)) {
+    arc(placement.get(node.parent), here, 6, points);
+    return points;
+  }
+  const relay = node.via === 'relay' ? placement.get('relay') : null;
+  if (relay) {
+    arc(self, relay, Math.hypot(relay.x - self.x, relay.y - self.y) * style.arc, points);
+    arc(relay, here, Math.hypot(here.x - relay.x, here.y - relay.y) * style.arc, points);
+    return points;
+  }
+  arc(self, here, Math.hypot(here.x - self.x, here.y - self.y) * style.arc, points);
+  return points;
+}
+
+function buildLinks() {
+  const links = [];
+  for (const node of nodes) {
+    if (node.id === 'self' || node.infrastructure) continue;
+    const key = pathKey(node);
+    const style = linkStyle(key);
+    links.push({ id: node.id, node, style, points: routeOf(node, style), mbps: node.mbps, primary: true });
+  }
+  if (fx) {
+    for (const [a, b, mbps] of MESH) {
+      const left = nodes.find((node) => node.id === a);
+      const right = nodes.find((node) => node.id === b);
+      if (!left || !right || left.offline || right.offline) continue;
+      const from = placement.get(a);
+      const to = placement.get(b);
+      if (!from || !to) continue;
+      const points = [];
+      arc(from, to, Math.hypot(to.x - from.x, to.y - from.y) * 0.1, points);
+      links.push({ id: `${a}-${b}`, node: right, style: { width: 1, dash: [], color: colors.board, arc: 0.1 }, points, mbps, primary: false });
+    }
+  }
+  return links;
+}
+
+function lengthOf(points) {
+  let total = 0;
+  for (let i = 1; i < points.length; i++) total += Math.hypot(points[i].x - points[i - 1].x, points[i].y - points[i - 1].y);
+  return total;
+}
+
+function pointAt(points, distance) {
+  let left = distance;
+  for (let i = 1; i < points.length; i++) {
+    const a = points[i - 1];
+    const b = points[i];
+    const segment = Math.hypot(b.x - a.x, b.y - a.y);
+    if (left <= segment) {
+      const t = segment === 0 ? 0 : left / segment;
+      return { x: a.x + (b.x - a.x) * t, y: a.y + (b.y - a.y) * t };
+    }
+    left -= segment;
+  }
+  return points[points.length - 1];
+}
+
+/* ---------- 绘制 ---------- */
+function drawRings() {
+  ctx.save();
+  ctx.lineWidth = 1;
+  RINGS.forEach((ring, index) => {
+    const outer = index === RINGS.length - 1;
+    ctx.strokeStyle = colors.board;
+    ctx.setLineDash(outer ? [2, 6] : []);
+    if (!fx) {
+      ctx.beginPath();
+      ctx.ellipse(center.x, center.y, ring.r * plate, ring.r * plate * tilt, 0, 0, TAU);
+      ctx.stroke();
+      return;
+    }
+    // 盘面近处实、远处虚，用透明度而不是渐变表现纵深。
+    const segments = 72;
+    for (let i = 0; i < segments; i++) {
+      const a = (i / segments) * TAU;
+      const b = ((i + 1) / segments) * TAU;
+      const depth = (Math.sin(a) + 1) / 2;
+      ctx.globalAlpha = 0.35 + 0.65 * depth;
+      ctx.beginPath();
+      ctx.moveTo(center.x + Math.cos(a) * ring.r * plate, center.y + Math.sin(a) * ring.r * plate * tilt);
+      ctx.lineTo(center.x + Math.cos(b) * ring.r * plate, center.y + Math.sin(b) * ring.r * plate * tilt);
+      ctx.stroke();
+    }
+    if (!outer) {
+      // 刻度随盘面旋转，转动时能看出方向和速度。
+      ctx.setLineDash([]);
+      for (let i = 0; i < 48; i++) {
+        const theta = (i / 48) * TAU;
+        const inner = project(ring.r - 0.006, theta);
+        const outerPoint = project(ring.r + (i % 4 === 0 ? 0.014 : 0.006), theta);
+        ctx.globalAlpha = 0.3 + 0.6 * inner.depth;
+        ctx.beginPath();
+        ctx.moveTo(inner.x, inner.y);
+        ctx.lineTo(outerPoint.x, outerPoint.y);
+        ctx.stroke();
+      }
+    }
+  });
+  ctx.globalAlpha = 1;
+  ctx.setLineDash([]);
+  ctx.font = '11px Inter, -apple-system, "PingFang SC", sans-serif';
+  ctx.textAlign = 'center';
+  ctx.textBaseline = 'middle';
+  RINGS.forEach((ring, index) => {
+    if (index === 0) return;
+    const y = center.y - ring.r * plate * tilt;
+    const measureWidth = ctx.measureText(ring.label).width + 12;
+    ctx.fillStyle = colors.surface;
+    ctx.fillRect(center.x - measureWidth / 2, y - 8, measureWidth, 16);
+    ctx.fillStyle = colors.tertiary;
+    ctx.fillText(ring.label, center.x, y);
+  });
+  ctx.restore();
+}
+
+function drawRipples(now) {
+  for (let i = ripples.length - 1; i >= 0; i--) {
+    const ripple = ripples[i];
+    const t = (now - ripple.start) / 1400;
+    if (t >= 1) {
+      ripples.splice(i, 1);
+      continue;
+    }
+    const place = placement.get(ripple.id);
+    if (!place) continue;
+    ctx.save();
+    ctx.strokeStyle = colors.secondary;
+    ctx.lineWidth = 1;
+    for (const delay of [0, 0.18]) {
+      const local = Math.max(0, t - delay) / (1 - delay);
+      if (local <= 0) continue;
+      const r = (1 - Math.pow(1 - local, 3)) * plate * 0.42;
+      ctx.globalAlpha = (1 - local) * 0.7;
+      ctx.beginPath();
+      ctx.ellipse(place.bx, place.by, r, r * tilt, 0, 0, TAU);
+      ctx.stroke();
+    }
+    ctx.restore();
+  }
+}
+
+function strokeLine(points) {
+  ctx.beginPath();
+  ctx.moveTo(points[0].x, points[0].y);
+  for (let i = 1; i < points.length; i++) ctx.lineTo(points[i].x, points[i].y);
+  ctx.stroke();
+}
+
+function drawLinks(links) {
+  for (const link of links) {
+    if (link.points.length < 2) continue;
+    const emphasized = link.primary && (link.id === selectedId || link.id === hoveredId);
+    ctx.save();
+    ctx.globalAlpha = placement.get(link.node.id).fade * (link.primary ? 1 : 0.8);
+    ctx.strokeStyle = emphasized ? colors.text : link.style.color;
+    ctx.lineWidth = emphasized ? link.style.width + 0.5 : link.style.width;
+    ctx.setLineDash(link.style.dash);
+    strokeLine(link.points);
+    ctx.restore();
+  }
+}
+
+/** 粒子只表达真实流量：数量跟吞吐走，拖尾跟速度走。 */
+function drawPackets(links, delta) {
+  if (reducedMotion) return;
+  const alive = new Set();
+  for (const link of links) {
+    if (link.node.offline || link.points.length < 2) continue;
+    alive.add(link.id);
+    const total = lengthOf(link.points);
+    if (total < 1) continue;
+    let flow = flows.get(link.id);
+    if (!flow) {
+      flow = { items: [], credit: Math.random() };
+      flows.set(link.id, flow);
+    }
+    const rate = Math.min(fx ? 10 : 6, Math.log2(1 + link.mbps) * (fx ? 1.1 : 0.7)) * (link.primary ? 1 : 0.5);
+    flow.credit += (rate * delta) / 1000;
+    while (flow.credit >= 1 && flow.items.length < 18) {
+      flow.credit -= 1;
+      flow.items.push({ at: 0, reverse: Math.random() < 0.38 });
+    }
+    const speed = 170 + Math.min(320, link.mbps * 0.8);
+    const emphasized = link.primary && (link.id === selectedId || link.id === hoveredId);
+    ctx.save();
+    ctx.fillStyle = link.node.legacy ? colors.warning : emphasized ? colors.text : colors.secondary;
+    const fade = placement.get(link.node.id).fade * (link.primary ? 1 : 0.65);
+    flow.items = flow.items.filter((item) => {
+      item.at += (speed * delta) / 1000;
+      if (item.at >= total) return false;
+      const trail = fx ? [0, 5, 10, 15] : [0];
+      trail.forEach((gap, index) => {
+        const at = item.at - gap;
+        if (at < 0) return;
+        const point = pointAt(link.points, item.reverse ? total - at : at);
+        ctx.globalAlpha = fade * (1 - index * 0.27);
+        ctx.beginPath();
+        ctx.arc(point.x, point.y, index === 0 ? 1.8 : 1.3 - index * 0.2, 0, TAU);
+        ctx.fill();
+      });
+      return true;
+    });
+    ctx.restore();
+  }
+  for (const key of flows.keys()) if (!alive.has(key)) flows.delete(key);
+}
+
+function drawShape(node, x, y, size, color) {
+  ctx.strokeStyle = color;
+  ctx.lineWidth = 1.25;
+  ctx.lineJoin = 'round';
+  ctx.lineCap = 'round';
+  const s = size;
+  ctx.beginPath();
+  switch (node.shape) {
+    case 'laptop':
+      ctx.roundRect(x - s * 0.6, y - s * 0.46, s * 1.2, s * 0.78, 2);
+      ctx.moveTo(x - s * 0.82, y + s * 0.52);
+      ctx.lineTo(x + s * 0.82, y + s * 0.52);
+      break;
+    case 'desktop':
+      ctx.roundRect(x - s * 0.66, y - s * 0.52, s * 1.32, s * 0.84, 2);
+      ctx.moveTo(x, y + s * 0.32);
+      ctx.lineTo(x, y + s * 0.6);
+      ctx.moveTo(x - s * 0.3, y + s * 0.6);
+      ctx.lineTo(x + s * 0.3, y + s * 0.6);
+      break;
+    case 'phone':
+      ctx.roundRect(x - s * 0.34, y - s * 0.62, s * 0.68, s * 1.24, 3);
+      ctx.moveTo(x - s * 0.1, y + s * 0.44);
+      ctx.lineTo(x + s * 0.1, y + s * 0.44);
+      break;
+    case 'camera':
+      ctx.arc(x, y, s * 0.6, 0, TAU);
+      ctx.moveTo(x + s * 0.24, y);
+      ctx.arc(x, y, s * 0.24, 0, TAU);
+      break;
+    case 'speaker':
+      ctx.roundRect(x - s * 0.42, y - s * 0.6, s * 0.84, s * 1.2, 2);
+      ctx.moveTo(x + s * 0.22, y + s * 0.14);
+      ctx.arc(x, y + s * 0.14, s * 0.22, 0, TAU);
+      break;
+    case 'server':
+      ctx.roundRect(x - s * 0.62, y - s * 0.5, s * 1.24, s * 0.42, 2);
+      ctx.roundRect(x - s * 0.62, y + s * 0.08, s * 1.24, s * 0.42, 2);
+      break;
+    case 'relay':
+      ctx.moveTo(x, y - s * 0.6);
+      ctx.lineTo(x + s * 0.6, y);
+      ctx.lineTo(x, y + s * 0.6);
+      ctx.lineTo(x - s * 0.6, y);
+      ctx.closePath();
+      break;
+    case 'cluster':
+      ctx.arc(x - s * 0.3, y + s * 0.18, s * 0.26, 0, TAU);
+      ctx.moveTo(x + s * 0.56, y + s * 0.18);
+      ctx.arc(x + s * 0.3, y + s * 0.18, s * 0.26, 0, TAU);
+      ctx.moveTo(x + s * 0.26, y - s * 0.34);
+      ctx.arc(x, y - s * 0.34, s * 0.26, 0, TAU);
+      break;
+    case 'dot':
+      ctx.arc(x, y, s * 0.3, 0, TAU);
+      break;
+    default:
+      ctx.roundRect(x - s * 0.5, y - s * 0.5, s, s, 2);
+      ctx.moveTo(x - s * 0.18, y);
+      ctx.lineTo(x + s * 0.18, y);
+  }
+  ctx.stroke();
+}
+
+function drawStems() {
+  if (!fx) return;
+  ctx.save();
+  ctx.lineWidth = 1;
+  for (const node of nodes) {
+    const place = placement.get(node.id);
+    if (!place) continue;
+    ctx.globalAlpha = place.fade * (node.offline ? 0.3 : 0.75);
+    ctx.strokeStyle = colors.tertiary;
+    ctx.beginPath();
+    ctx.moveTo(place.bx, place.by);
+    ctx.lineTo(place.x, place.y);
+    ctx.stroke();
+    ctx.fillStyle = colors.tertiary;
+    ctx.beginPath();
+    ctx.ellipse(place.bx, place.by, 3, 3 * tilt, 0, 0, TAU);
+    ctx.fill();
+  }
+  ctx.restore();
+}
+
+function drawNodes() {
+  const compact = width < 480;
+  const order = [...nodes].sort((a, b) => (placement.get(a.id)?.depth ?? 0) - (placement.get(b.id)?.depth ?? 0));
+  for (const node of order) {
+    const place = placement.get(node.id);
+    if (!place) continue;
+    const isSelf = node.id === 'self';
+    const selected = node.id === selectedId;
+    const hovered = node.id === hoveredId;
+    const size = (isSelf ? 15 : node.infrastructure ? 8 : node.shape === 'dot' || node.parent ? 9 : 11) * place.scale;
+    const radius = isSelf ? 28 * place.scale : size + 9 * place.scale;
+    ctx.save();
+    ctx.globalAlpha = place.fade * (node.offline ? 0.45 : 1);
+    ctx.beginPath();
+    ctx.arc(place.x, place.y, radius, 0, TAU);
+    ctx.fillStyle = selected ? colors.chip : colors.surface;
+    ctx.fill();
+    ctx.lineWidth = 1;
+    ctx.strokeStyle = selected || hovered ? colors.secondary : colors.board;
+    ctx.setLineDash(node.offline || node.pending ? [3, 3] : []);
+    ctx.stroke();
+    ctx.setLineDash([]);
+    if (fx && !node.offline && !isSelf && !node.infrastructure) {
+      // 外圈弧长表示当前流量，对数刻度。
+      const load = Math.min(1, Math.log10(1 + node.mbps) / 3);
+      ctx.beginPath();
+      ctx.arc(place.x, place.y, radius + 3, -Math.PI / 2, -Math.PI / 2 + load * TAU);
+      ctx.strokeStyle = selected ? colors.text : colors.secondary;
+      ctx.lineWidth = 1.5;
+      ctx.stroke();
+    }
+    drawShape(node, place.x, place.y, size, node.offline ? colors.tertiary : colors.text);
+    if (node.legacy || node.pending) {
+      ctx.beginPath();
+      ctx.arc(place.x + radius * 0.72, place.y - radius * 0.72, 3, 0, TAU);
+      ctx.fillStyle = colors.warning;
+      ctx.fill();
+    }
+    if (!compact || selected || isSelf) {
+      ctx.font = `${selected ? 500 : 400} 12px Inter, -apple-system, "PingFang SC", sans-serif`;
+      ctx.textAlign = 'center';
+      ctx.textBaseline = 'top';
+      const label = isSelf ? '这台电脑' : node.name;
+      const labelY = place.y + radius + 6;
+      const labelWidth = ctx.measureText(label).width + 8;
+      ctx.globalAlpha = place.fade * 0.86;
+      ctx.fillStyle = colors.surface;
+      ctx.fillRect(place.x - labelWidth / 2, labelY - 1, labelWidth, 17);
+      ctx.globalAlpha = place.fade * (node.offline ? 0.5 : 0.7 + 0.3 * place.depth);
+      ctx.fillStyle = selected ? colors.text : colors.secondary;
+      ctx.fillText(label, place.x, labelY);
+    }
+    ctx.restore();
+  }
+}
+
+let lastFrame = performance.now();
+function frame(now) {
+  const delta = Math.min(50, now - lastFrame);
+  lastFrame = now;
+  if (Math.abs(tilt - tiltTarget) > 0.001) {
+    tilt += (tiltTarget - tilt) * 0.12;
+    measure();
+  }
+  if (!dragging) {
+    // 指针在盘面上时停止漂移，方便点选；离开后缓慢转动。
+    const drift = fx && !reducedMotion && !pointerInside ? 0.0002 : 0;
+    spinVelocity += (drift - spinVelocity) * 0.04;
+    spin += spinVelocity * delta;
+  }
+  updatePlacements(now);
+  ctx.clearRect(0, 0, width, height);
+  const links = buildLinks();
+  drawRings();
+  drawRipples(now);
+  drawStems();
+  drawLinks(links);
+  drawPackets(links, delta);
+  drawNodes();
+  requestAnimationFrame(frame);
+}
+
+/* ---------- 界面 ---------- */
+const statsEl = document.getElementById('stats');
+const inspectorEl = document.getElementById('inspector');
+const listEl = document.getElementById('node-list');
+
+function formatRate(mbps) {
+  if (mbps >= 100) return `${Math.round(mbps)} Mbit/s`;
+  if (mbps >= 1) return `${mbps.toFixed(1)} Mbit/s`;
+  return `${Math.round(mbps * 1000)} kbit/s`;
+}
+
+function renderStats() {
+  const peers = nodes.filter((node) => node.id !== 'self' && !node.infrastructure && node.id !== 'visitor');
+  const online = peers.filter((node) => !node.offline);
+  const direct = online.filter((node) => ['local', 'lan', 'wan'].includes(pathKey(node)));
+  const unencrypted = online.filter((node) => node.legacy).length;
+  const relayed = online.filter((node) => ['relay', 'legacy'].includes(pathKey(node))).length;
+  statsEl.innerHTML = `
+    <span class="stat"><b>${online.length}</b> 个节点在线</span>
+    <span class="stat"><b>${direct.length}</b> 个直连</span>
+    <span class="stat"><b>${relayed}</b> 个经中继</span>
+    <span class="stat">${unencrypted ? `<span class="warn">${unencrypted} 个未加密</span>` : '全部端到端加密'}</span>`;
+}
+
+function renderInspector() {
+  const node = nodes.find((item) => item.id === selectedId) ?? nodes[0];
+  const key = pathKey(node);
+  const isSelf = node.id === 'self';
+  const encryption = node.legacy ? '<span class="warn">未加密（旧版）</span>' : node.offline ? '—' : '端到端加密';
+  const pathRows = isSelf ? '' : `
+    <section class="section">
+      <h3>连接</h3>
+      <div class="row"><span>路径</span><span>${PATH_LABEL[key]}</span></div>
+      ${node.offline ? '' : `<div class="row"><span>延迟</span><span>${node.rtt < 1 ? '<1' : Math.round(node.rtt)} ms</span></div>
+      <div class="row"><span>实时流量</span><span>${formatRate(node.mbps)}</span></div>`}
+      <div class="row"><span>加密</span><span>${encryption}</span></div>
+    </section>`;
+  const hardware = node.hardware.map(([label, value]) => `<div class="row"><span>${label}</span><span>${value}</span></div>`).join('');
+  const services = node.services.map(([name, detail, enabled], index) => `
+    <div class="service">
+      <div>${name}<small>${detail}</small></div>
+      <button class="switch" role="switch" aria-checked="${enabled}" aria-label="${name}" data-service="${index}"></button>
+    </div>`).join('');
+  const action = node.pending
+    ? '<button class="btn primary">认领这台硬件</button>'
+    : node.id === 'visitor'
+      ? '<button class="btn">撤销分享</button>'
+      : node.id === 'guest'
+        ? '<button class="btn primary">调用算力</button><button class="btn">退出</button>'
+    : node.legacy
+      ? '<button class="btn primary">提醒更新</button>'
+      : node.infrastructure
+        ? ''
+        : !isSelf && !node.offline && node.shape !== 'dot' && node.shape !== 'speaker'
+          ? '<button class="btn primary">打开</button><button class="btn">分享能力</button>'
+          : '';
+  inspectorEl.innerHTML = `
+    <button class="close" id="close-inspector">关闭</button>
+    <div class="node-name">${node.name}</div>
+    <div class="node-sub">${node.tier} · ${node.app}</div>
+    ${pathRows}
+    <section class="section"><h3>${node.infrastructure ? '隐私' : '硬件'}</h3>${hardware}</section>
+    ${services ? `<section class="section"><h3>能力</h3>${services}</section>` : ''}
+    ${action ? `<div class="actions">${action}</div>` : ''}`;
+  inspectorEl.querySelectorAll('.switch').forEach((button) => {
+    button.addEventListener('click', () => {
+      const index = Number(button.dataset.service);
+      node.services[index][2] = !node.services[index][2];
+      button.setAttribute('aria-checked', String(node.services[index][2]));
+    });
+  });
+  document.getElementById('close-inspector').addEventListener('click', () => inspectorEl.classList.remove('open'));
+}
+
+function renderList() {
+  listEl.innerHTML = '';
+  for (const node of nodes) {
+    const button = document.createElement('button');
+    button.textContent = `${node.name}，${PATH_LABEL[pathKey(node)]}`;
+    button.addEventListener('focus', () => select(node.id));
+    listEl.append(button);
+  }
+}
+
+function select(id) {
+  selectedId = id;
+  renderInspector();
+  inspectorEl.classList.add('open');
+}
+
+function showEvent(message) {
+  const time = new Date();
+  document.getElementById('event-time').textContent =
+    `${String(time.getHours()).padStart(2, '0')}:${String(time.getMinutes()).padStart(2, '0')}:${String(time.getSeconds()).padStart(2, '0')}`;
+  document.getElementById('event-message').textContent = message;
+}
+
+function applyScene(name) {
+  const scene = SCENES[name];
+  const next = baseNodes();
+  scene.patch(next);
+  const previous = new Map(nodes.map((node) => [node.id, node]));
+  for (const node of next) {
+    const old = previous.get(node.id);
+    if (old) node.services = old.services;
+  }
+  nodes = next;
+  for (const id of placement.keys()) if (!nodes.some((node) => node.id === id)) placement.delete(id);
+  for (const node of nodes) {
+    if (!placement.has(node.id)) {
+      // 新节点从盘外滑入，表现“被发现”。
+      const to = { r: ringRadius(node.ring), theta: (node.angle * Math.PI) / 180 };
+      const from = { r: 1.3, theta: to.theta - 0.5 };
+      placement.set(node.id, { ...from, from, to, start: reducedMotion ? 0 : performance.now(), fade: reducedMotion ? 1 : 0 });
+      if (reducedMotion) settle(node, true);
+    } else {
+      settle(node, false);
+    }
+  }
+  if (!nodes.some((node) => node.id === selectedId)) selectedId = 'studio';
+  const focus = { newNode: 'door', guest: 'guest', shareOut: 'visitor', legacy: 'office', udpBlocked: 'office', myRelay: 'relay' }[name];
+  if (focus) selectedId = focus;
+  if (scene.pulse && !reducedMotion) ripples.push({ id: scene.pulse, start: performance.now() });
+  document.querySelectorAll('[data-scene]').forEach((button) => {
+    button.setAttribute('aria-pressed', String(button.dataset.scene === name));
+  });
+  renderStats();
+  renderInspector();
+  renderList();
+  showEvent(scene.message);
+}
+
+function nodeAt(x, y) {
+  let best = null;
+  let bestDistance = 28;
+  for (const node of nodes) {
+    const place = placement.get(node.id);
+    if (!place) continue;
+    const distance = Math.hypot(place.x - x, place.y - y);
+    if (distance < bestDistance) {
+      best = node;
+      bestDistance = distance;
+    }
+  }
+  return best;
+}
+
+function pointerPosition(event) {
+  const rect = canvas.getBoundingClientRect();
+  return { x: event.clientX - rect.left, y: event.clientY - rect.top };
+}
+
+canvas.addEventListener('pointerdown', (event) => {
+  const point = pointerPosition(event);
+  dragging = { x: point.x, moved: 0, last: performance.now() };
+  canvas.setPointerCapture(event.pointerId);
+});
+canvas.addEventListener('pointermove', (event) => {
+  const point = pointerPosition(event);
+  pointerInside = true;
+  if (dragging && fx) {
+    const step = point.x - dragging.x;
+    const now = performance.now();
+    spin += step / plate;
+    spinVelocity = (step / plate) / Math.max(1, now - dragging.last);
+    dragging.moved += Math.abs(step);
+    dragging.x = point.x;
+    dragging.last = now;
+    canvas.style.cursor = 'grabbing';
+    return;
+  }
+  const node = nodeAt(point.x, point.y);
+  hoveredId = node?.id ?? null;
+  canvas.style.cursor = node ? 'pointer' : fx ? 'grab' : 'default';
+});
+canvas.addEventListener('pointerup', (event) => {
+  const point = pointerPosition(event);
+  const wasClick = !dragging || dragging.moved < 4;
+  dragging = null;
+  if (!wasClick) return;
+  const node = nodeAt(point.x, point.y);
+  if (node) select(node.id);
+});
+canvas.addEventListener('pointerleave', () => { hoveredId = null; pointerInside = false; });
+
+document.querySelectorAll('[data-scene]').forEach((button) => {
+  button.addEventListener('click', () => applyScene(button.dataset.scene));
+});
+document.getElementById('toggle-theme').addEventListener('click', (event) => {
+  const dark = document.body.classList.toggle('dark');
+  event.currentTarget.setAttribute('aria-pressed', String(dark));
+  readColors();
+});
+const fxButton = document.getElementById('toggle-fx');
+function setFx(value) {
+  fx = value;
+  tiltTarget = fx ? 0.56 : 0.82;
+  if (width) measure();
+  fxButton.textContent = fx ? '效果：酷炫' : '效果：克制';
+  fxButton.setAttribute('aria-pressed', String(fx));
+  flows.clear();
+}
+fxButton.addEventListener('click', () => setFx(!fx));
+const motionButton = document.getElementById('toggle-motion');
+motionButton.setAttribute('aria-pressed', String(reducedMotion));
+motionButton.addEventListener('click', () => {
+  reducedMotion = !reducedMotion;
+  motionButton.setAttribute('aria-pressed', String(reducedMotion));
+  for (const node of nodes) settle(node, true);
+  flows.clear();
+});
+document.getElementById('toggle-phone').addEventListener('click', (event) => {
+  const phone = document.body.classList.toggle('phone');
+  event.currentTarget.setAttribute('aria-pressed', String(phone));
+  inspectorEl.classList.remove('open');
+  tiltTarget = fx ? 0.56 : 0.82;
+  layout();
+});
+window.addEventListener('resize', layout);
+
+// 实时数值随机游走，模拟真实流量起伏；只更新数据，不改变布局。
+setInterval(() => {
+  for (const node of nodes) {
+    if (node.offline || node.id === 'self') continue;
+    node.mbps = Math.max(0.1, node.mbps * (0.86 + Math.random() * 0.28));
+    node.rtt = Math.max(0.1, node.rtt * (0.94 + Math.random() * 0.12));
+  }
+  if (!document.activeElement?.classList.contains('switch')) renderInspector();
+}, 1500);
+
+const params = new URLSearchParams(location.search);
+if (params.get('theme') === 'dark') {
+  document.body.classList.add('dark');
+  document.getElementById('toggle-theme').setAttribute('aria-pressed', 'true');
+}
+if (params.get('phone') === '1') {
+  document.body.classList.add('phone');
+  document.getElementById('toggle-phone').setAttribute('aria-pressed', 'true');
+}
+if (params.get('fx') === 'calm') {
+  setFx(false);
+  tilt = tiltTarget;
+}
+readColors();
+nodes = baseNodes();
+layout();
+applyScene(params.get('scene') in SCENES ? params.get('scene') : 'normal');
+if (params.get('phone') === '1' && params.get('open') === '1') inspectorEl.classList.add('open');
+requestAnimationFrame(frame);
+</script>
+</body>
+</html>

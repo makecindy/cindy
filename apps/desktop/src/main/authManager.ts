@@ -1,3 +1,7 @@
+import { isDefinitiveRefreshError } from './authRefreshError.js';
+import { mapMembershipToAuthUser, type User, type CurrentUser } from '../shared/authUser.js';
+export type { User } from '../shared/authUser.js';
+import { resolveRuntimeDeviceId } from './deviceId.js';
 /**
  * authManager.ts
  * ---------------------------------------------------------------------------
@@ -46,12 +50,23 @@ import {
   type SocialProvider,
 } from '@cindy/auth-client';
 import { readReloginFlag, clearReloginFlag, enableUncustomizedBetaChannel } from './updateService';
+import { linuxCredentialFailureFields } from './linuxPasswordStore.js';
 import { probeBetaManifest } from './manifestService';
 import { isEnableBetaUserCustomized, readUpdateChannelSettings } from './updateChannelStore';
 import { BRAND_IDENTITY } from '@cindy/maker-shared/brand-identity';
 import * as canaryFlagStore from './canaryFlagStore';
 import { decodeAccessTokenOrgSlug } from './authTokenClaims';
 import { AuthRefreshBackoff } from './authRefreshBackoff';
+import {
+  ACCOUNT_DELETION_RECEIPT_KEY,
+  AUTH_ACCOUNT_LOGOUT_TOMBSTONES_KEY,
+  AUTH_ACCOUNT_VAULT_KEY,
+  AUTH_SESSION_KEY,
+  LEGACY_ACCOUNT_REFRESH_TOKEN_KEY,
+  LEGACY_REFRESH_TOKEN_KEY,
+  LEGACY_RESOURCE_REFRESH_TOKEN_KEY,
+  PERSISTED_AUTH_CREDENTIAL_KEYS,
+} from './authCredentialKeys';
 import { getProviderSecretStore } from './secrets/providerSecretStore.js';
 import {
   runRefreshWithReplacementRetry,
@@ -109,7 +124,7 @@ import {
   withStableOwnerBoundaryMutation,
 } from './authBoundaryQuarantine.js';
 import { buildFocusDeepLink } from './deepLink';
-import { getResolvedMainLocale, t } from './i18n';
+import { getResolvedMainLocale, t } from './i18n.desktop';
 import { atomicWriteFileSync, readAtomicFileSync } from './utils/atomicWriteFile.js';
 import {
   activateClientEndpointRealm,
@@ -202,22 +217,14 @@ const AUTH_REGION: AuthRegion =
 function authServerUrl(realm: AuthRegion = activeAuthRealm): string {
   return getClientEndpointForRealm(realm, 'authApiBaseUrl');
 }
-const AUTH_SESSION_KEY = 'cindy_auth_session_v1';
-const AUTH_ACCOUNT_VAULT_KEY = 'cindy_auth_accounts_v1';
 const AUTH_ACCOUNT_VAULT_LOCK_FILE = '.cindy-auth-accounts-v1.lock';
-const AUTH_ACCOUNT_LOGOUT_TOMBSTONES_KEY = 'cindy_auth_account_logout_tombstones_v1';
 // The aggregate vault stays readable by v1 clients for explicit-login
 // compatibility. Per-membership logout tombstones live in a separate key that
 // older clients never read or rewrite, so their Passport sync cannot resurrect
 // an account explicitly logged out by a newer client.
 const AUTH_ACCOUNT_VAULT_VERSION = 2 as const;
 const AUTH_ACCOUNT_LOGOUT_TOMBSTONES_VERSION = 1 as const;
-const LEGACY_RESOURCE_REFRESH_TOKEN_KEY = 'cindy_auth_refresh_token';
-const ACCOUNT_DELETION_RECEIPT_KEY = 'cindy_auth_account_deletion_receipt';
-const LEGACY_ACCOUNT_REFRESH_TOKEN_KEY = 'cindy_auth_account_refresh_token';
-const LEGACY_REFRESH_TOKEN_KEY = 'refresh_token';
-const DEFAULT_MODEL = 'claude-sonnet-4-6';
-const DEFAULT_EFFORT = 'medium';
+
 
 // ── Types ───────────────────────────────────────────────────────────────────
 
@@ -227,37 +234,6 @@ const DEFAULT_EFFORT = 'medium';
 //    落 main 进程本地标记并通过 AuthState 独立投影给 renderer,不混入 User;
 //  - feishuOpenId → 退役,飞书登录已整体下线,身份锚(identityAnchor)只写 email;
 //  - role(产品级 admin)→ 退役,唯一消费是侧栏头像角标(纯装饰),一并移除。
-export interface User {
-  id: string;
-  name: string;
-  avatar: string | null;
-  email: string | null;
-  defaultModel: string;
-  defaultEffort: string;
-  /** auth-server membership context. */
-  membershipKind: 'personal' | 'org';
-  membershipRole: 'owner' | 'admin' | 'member';
-  orgId: string | null;
-  orgName: string | null;
-  /**
-   * 组织 slug(access token 的 orgSlug claim,ctx=org 时 auth-server 注入)。
-   * 组织的稳定标识(域名派生、全局唯一,如 'xd'),与 orgId(cuid)/orgName(显示名)
-   * 不同,适合做企业功能分流的配置键。个人身份或旧 token 缺 claim 时为 null。
-   * membership 响应不含此字段,由 snapshotAuthState 出口统一从 access token 解码注入。
-   */
-  orgSlug: string | null;
-  /** 企业 logo(auth console 组织设置上传);个人身份或未设置为 null。 */
-  orgLogoUrl: string | null;
-  passportId: string;
-}
-
-/**
- * Main-process-only auth user. Keep the raw membership display name separate
- * from `User.name`, whose UI fallback may be an email address or "Cindy".
- */
-interface CurrentUser extends User {
-  membershipDisplayName: string;
-}
 
 interface StoredResourceSession {
   realm: AuthRegion;
@@ -406,7 +382,7 @@ function isOwnerChangeShellPending(): boolean {
  * desktop 实例模拟「多设备」(device-link 跨设备远程控制本地联调)。deviceId 只是
  * 同账号下区分设备的标识、非鉴权凭证(鉴权走 auth-server 签发的 JWT),覆盖无安全风险。
  */
-const deviceId = process.env.XDT_DEVICE_ID_OVERRIDE?.trim() || machineIdSync();
+const deviceId = resolveRuntimeDeviceId(machineIdSync);
 
 // The offline entry is a renderer landing page, not an auth-server flow step.
 let loginFlowState: Exclude<DesktopLoginState, { step: 'entry' }> | null = null;
@@ -512,6 +488,34 @@ export function isPassiveSharedUserDataInstance(): boolean {
   return !app.isPackaged && process.env.XDT_PASSIVE_SHARED_USER_DATA === '1';
 }
 
+let delegatedAuthState: AuthState | null = null;
+let authRefreshOverride: ((options?: { serverRejectedToken?: boolean }) => Promise<AuthState>) | null = null;
+/**
+ * In host client mode, the background cindy-host is the single writer that
+ * owns token refresh and rotation. This override delegates refresh without
+ * touching persisted credentials on disk.
+ */
+export function setAuthRefreshOverride(
+  fn: ((options?: { serverRejectedToken?: boolean }) => Promise<AuthState>) | null,
+): void {
+  authRefreshOverride = fn;
+  delegatedAuthState = null;
+}
+
+export function receiveHostAuthState(state: AuthState): void {
+  if (!authRefreshOverride) throw new Error('Host auth state requires explicit client mode');
+  // The Host owns durable credentials and owner selection. This client only
+  // commits its in-memory owner so local readers never fall back to a stale
+  // account (and a remote logout clears that owner before notifying windows).
+  if (state.isAuthenticated && state.user?.id) {
+    commitVolatileAppSession('cloud', state.user.id);
+  } else {
+    commitVolatileAppSession('signed-out');
+  }
+  delegatedAuthState = state;
+  notifyRenderer();
+}
+
 /**
  * passive 实例「本进程已登出」的墓碑(进程内,不落盘)。
  *
@@ -554,10 +558,44 @@ function isCredentialEncryptionAvailable(): boolean {
     } catch {
       // Diagnostics must not change credential read behavior.
     }
+    let backend: string | undefined;
+    try {
+      backend = (
+        safeStorage as { getSelectedStorageBackend?: () => string }
+      ).getSelectedStorageBackend?.();
+    } catch {
+      backend = 'unavailable';
+    }
+    let passwordStoreSwitch: string | undefined;
+    try {
+      const commandLine = (app as {
+        commandLine?: {
+          hasSwitch?: (name: string) => boolean;
+          getSwitchValue?: (name: string) => string;
+        };
+      }).commandLine;
+      if (commandLine?.hasSwitch?.('password-store')) {
+        const fromCommandLine = commandLine.getSwitchValue?.('password-store');
+        if (typeof fromCommandLine === 'string') passwordStoreSwitch = fromCommandLine;
+      }
+    } catch {
+      passwordStoreSwitch = undefined;
+    }
+    if (passwordStoreSwitch === undefined) {
+      const prefix = '--password-store=';
+      const arg = process.argv.find((item) => item.startsWith(prefix));
+      if (arg) passwordStoreSwitch = arg.slice(prefix.length);
+    }
     log.warn('credential encryption backend unavailable', {
       appReady: app.isReady(),
       screenState,
       electronVersion: process.versions.electron,
+      ...linuxCredentialFailureFields({
+        platform: process.platform,
+        env: process.env,
+        backend,
+        passwordStoreSwitch,
+      }),
     });
   }
   return available;
@@ -605,14 +643,7 @@ function readSafe(key: string): string | null {
 // logout tombstones. Only definite absence permits the fresh-profile login UI;
 // checking filenames does not probe the encryption backend or decrypt anything.
 function hasPotentiallyPersistedAuthCredentials(): boolean {
-  return [
-    AUTH_SESSION_KEY,
-    AUTH_ACCOUNT_VAULT_KEY,
-    AUTH_ACCOUNT_LOGOUT_TOMBSTONES_KEY,
-    LEGACY_RESOURCE_REFRESH_TOKEN_KEY,
-    LEGACY_ACCOUNT_REFRESH_TOKEN_KEY,
-    LEGACY_REFRESH_TOKEN_KEY,
-  ].some((key) =>
+  return PERSISTED_AUTH_CREDENTIAL_KEYS.some((key) =>
     ['', '.bak'].some((suffix) => {
       try {
         fs.accessSync(path.join(SAFE_STORAGE_DIR(), `${key}.enc${suffix}`), fs.constants.F_OK);
@@ -722,16 +753,31 @@ function writeAtomicSafeCiphertext(key: string, ciphertext: string): boolean {
 
 function isAtomicPersistedSecretAbsent(key: string): boolean {
   if (!isCredentialEncryptionAvailable()) return false;
-  const filepath = path.join(SAFE_STORAGE_DIR(), `${key}.enc`);
-  for (const candidate of [filepath, `${filepath}.bak`]) {
+  return atomicPersistedSecretPresence(key) === 'absent';
+}
+
+/** File presence only. Encryption availability must not turn a missing file into an existing one. */
+function atomicPersistedSecretPresence(key: string): 'absent' | 'present' | 'unknown' {
+  const filepath = path.join(SAFE_STORAGE_DIR(), key + '.enc');
+  for (const candidate of [filepath, filepath + '.bak']) {
     try {
       fs.accessSync(candidate, fs.constants.F_OK);
-      return false;
+      return 'present';
     } catch (error) {
-      if ((error as NodeJS.ErrnoException)?.code !== 'ENOENT') return false;
+      if ((error as NodeJS.ErrnoException)?.code !== 'ENOENT') return 'unknown';
     }
   }
-  return true;
+  return 'absent';
+}
+
+function logUnreadableEncryptedRecord(
+  key: string,
+  presentMessage: string,
+  absentMessage: string,
+): void {
+  const absentAndUnavailable =
+    !isCredentialEncryptionAvailable() && atomicPersistedSecretPresence(key) === 'absent';
+  log.warn(absentAndUnavailable ? absentMessage : presentMessage);
 }
 
 function writeAtomicSafe(key: string, value: string): boolean {
@@ -861,7 +907,11 @@ function readAuthAccountLogoutTombstones(options: { recoverInvalid?: boolean } =
   const raw = readAtomicSafe(AUTH_ACCOUNT_LOGOUT_TOMBSTONES_KEY);
   if (raw === null) {
     if (isAtomicPersistedSecretAbsent(AUTH_ACCOUNT_LOGOUT_TOMBSTONES_KEY)) return [];
-    log.warn('encrypted auth logout tombstones are temporarily unreadable');
+    logUnreadableEncryptedRecord(
+      AUTH_ACCOUNT_LOGOUT_TOMBSTONES_KEY,
+      'encrypted auth logout tombstones are temporarily unreadable',
+      'encrypted auth logout tombstones are absent and the credential backend is unavailable',
+    );
     if (options.recoverInvalid) return [];
     throw new AuthApiError(
       'CREDENTIAL_STORE_UNAVAILABLE',
@@ -972,7 +1022,11 @@ function readAuthAccountVault(
         ? { ...emptyAuthAccountVault(), loggedOutAccountKeys: persistedLogoutKeys }
         : emptyAuthAccountVault();
     }
-    log.warn('encrypted auth account vault exists but is temporarily unreadable');
+    logUnreadableEncryptedRecord(
+      AUTH_ACCOUNT_VAULT_KEY,
+      'encrypted auth account vault exists but is temporarily unreadable',
+      'encrypted auth account vault is absent and the credential backend is unavailable',
+    );
     if (options.allowUnreadable) return emptyAuthAccountVault();
     throw new AuthApiError(
       'CREDENTIAL_STORE_UNAVAILABLE',
@@ -1783,18 +1837,6 @@ function bindResourcePairToSavedAccount(
       };
 }
 
-function isDefinitiveRefreshError(error: unknown): boolean {
-  return (
-    error instanceof AuthApiError &&
-    [
-      'INVALID_REFRESH_TOKEN',
-      'REFRESH_TOKEN_EXPIRED',
-      'DEVICE_MISMATCH',
-      'ACCOUNT_UNAVAILABLE',
-      'MEMBERSHIP_DISABLED',
-    ].includes(error.code)
-  );
-}
 
 /**
  * Refresh a saved Resource session across shared-userData app instances.
@@ -2360,27 +2402,6 @@ function getRefreshErrorCode(result: { data: unknown }): string | undefined {
   return (result.data as AuthErrorResponse | null)?.error?.code;
 }
 
-function mapMembershipToAuthUser(membership: AuthMembership, passportId?: string): CurrentUser {
-  return {
-    id: membership.id,
-    name: membership.displayName || membership.email || 'Cindy',
-    membershipDisplayName: membership.displayName,
-    // auth-server 自助头像(PATCH /api/me/profile);null = 未设置(UI 首字母兜底)。
-    // 产品资料头像回落已随 /api/user/me 退役(2026-07)。
-    avatar: membership.avatarUrl ?? null,
-    email: membership.email,
-    defaultModel: DEFAULT_MODEL,
-    defaultEffort: DEFAULT_EFFORT,
-    membershipKind: membership.kind,
-    membershipRole: membership.role,
-    orgId: membership.orgId,
-    orgName: membership.orgName,
-    orgLogoUrl: membership.orgLogoUrl ?? null,
-    // membership 响应不带 slug;所有出口经 snapshotAuthState 时从 access token 补齐。
-    orgSlug: null,
-    passportId: passportId ?? membership.passportId ?? '',
-  };
-}
 
 function mergeMembershipWithExisting(
   membership: AuthMembership,
@@ -2633,7 +2654,10 @@ async function withAccountFreeOwnerCommit(opts: {
     const release = releaseBoundary as (() => void) | null;
     release?.();
     if (heldOwnerChangeShell) leaveOwnerChangeShellPending();
-    if (release && notify) notifyRenderer();
+    // prepareTransition already published a pending projection. Even silent
+    // cold-start recovery must settle it: renderer auth initialization keeps a
+    // newer push over the IPC response, otherwise startup stays pending forever.
+    if (release) notifyRenderer();
   }
 
   requestStableOwnerPostCommit('owner-commit');
@@ -3162,7 +3186,6 @@ function scheduleRefresh(token: string): void {
  * 系统 resume 或冷启动)。失败采用带随机抖动的指数退避,避免全体客户端集中重试;
  * 确定性凭据失效不走这里(直接 clearAuth + 弹重登)。
  */
-const RUNTIME_REFRESH_RETRY_MS = 60_000;
 const REFRESH_TOKEN_REPLACEMENT_RETRY_LIMIT = 2;
 const COLD_START_REFRESH_TOKEN_REPLACEMENT_RECHECK_DELAYS_MS = [100, 250] as const;
 const RUNTIME_REFRESH_TOKEN_REPLACEMENT_RECHECK_DELAYS_MS = [250, 1000] as const;
@@ -3418,9 +3441,18 @@ function stopColdStartRecovery(): void {
   coldStartRetryWait?.(true);
 }
 
-function scheduleRefreshRetryAfterTransientFailure(epoch: number, retryAt?: number): void {
+function scheduleRefreshRetryAfterTransientFailure(
+  epoch: number,
+  retryAt?: number,
+  networkFailure = false,
+): void {
   if (epoch !== authStateEpoch) return;
-  const delay = refreshBackoff.defer(epoch, retryAt);
+  refreshBackoff.defer(epoch, retryAt, networkFailure);
+  scheduleRefreshRetry(epoch);
+}
+
+function scheduleRefreshRetry(epoch: number): void {
+  const delay = refreshBackoff.runtimeRemaining(epoch);
   if (refreshTimer !== null) {
     clearTimeout(refreshTimer);
     refreshTimer = null;
@@ -3429,7 +3461,7 @@ function scheduleRefreshRetryAfterTransientFailure(epoch: number, retryAt?: numb
   // retry; re-arm it in bounded chunks without extending the original wait.
   const retry = () => {
     if (authStateEpoch !== epoch) return;
-    const remaining = refreshBackoff.remaining(epoch);
+    const remaining = refreshBackoff.runtimeRemaining(epoch);
     if (remaining > 0) refreshTimer = setTimeout(retry, Math.min(remaining, 2_147_483_647));
     else {
       refreshTimer = null;
@@ -3536,6 +3568,7 @@ function broadcastToRenderers(channel: string, payload: unknown): void {
  * 修改直接写 auth-server(updateServerProfile),本地覆写层已退役。
  */
 function snapshotAuthState(): AuthState {
+  if (delegatedAuthState) return delegatedAuthState;
   const appSession = getActiveAppSession();
   const isCloudAuthenticated =
     appSession.mode === 'cloud' && accessToken !== null && currentUser !== null;
@@ -3638,6 +3671,25 @@ function notifyAuthListeners(): void {
       l(state);
     } catch (err) {
       log.error('auth state listener threw (non-fatal)', err);
+    }
+  }
+}
+
+// Token rotation does not imply an identity change. Connections rejected with 401
+// need this synchronous signal even when the retry was started by our timer.
+const accessTokenRefreshListeners = new Set<() => void>();
+
+export function onAccessTokenRefreshed(listener: () => void): () => void {
+  accessTokenRefreshListeners.add(listener);
+  return () => accessTokenRefreshListeners.delete(listener);
+}
+
+function notifyAccessTokenRefreshed(): void {
+  for (const listener of accessTokenRefreshListeners) {
+    try {
+      listener();
+    } catch (err) {
+      log.error('access token refresh listener threw (non-fatal)', err);
     }
   }
 }
@@ -4609,6 +4661,10 @@ export async function updateServerProfile(
 }
 
 export async function initialize(options: AuthInitializeOptions = {}): Promise<AuthState> {
+  if (authRefreshOverride) {
+    receiveHostAuthState(await authRefreshOverride());
+    return delegatedAuthState!;
+  }
   const initializeStartEpoch = authStateEpoch;
   const settledLoginsAtInitialize = settledLoginCommitCount;
   // A renderer can mount after the boundary-pending broadcast. Keep startup
@@ -4771,14 +4827,10 @@ export async function initialize(options: AuthInitializeOptions = {}): Promise<A
   // 进程内去重:主窗流程还挂着(黑洞网络)时,副窗 / 右侧栏窗口 mount 触发的
   // initialize() 复用同一个 in-flight promise,避免并发轮换同一枚 refresh token。
   if (coldStartAuthInFlight === null) {
-    coldStartAuthInFlight = runColdStartRefreshFlow(storedToken, persistedSession.realm).finally(
-      () => {
-        // Keep every fallback edge until the shared refresh settles: sibling renderer
-        // timeouts may append another edge while the network flow is still pending.
-        coldStartTimeoutFallbacks.clear();
-        coldStartAuthInFlight = null;
-      },
-    );
+    coldStartAuthInFlight = runColdStartRefreshFlow(storedToken, persistedSession.realm).finally(() => {
+      coldStartTimeoutFallbacks.clear();
+      coldStartAuthInFlight = null;
+    });
   }
   // 黑洞 / captive-portal 网络护栏:限时等待,超时先以未登录返回解锁 splash,
   // 流程继续后台跑;迟到成功由流程内部广播登录态(renderer 自动跳回主界面)。
@@ -5514,6 +5566,16 @@ async function runLoginAction(
   const loginRealm = startsBuildRealmFlow ? AUTH_REGION : (pendingAuthRealm ?? activeAuthRealm);
   const client = createAuthClient(loginRealm);
   const stateBeforeAction = loginFlowState?.step === 'error' ? null : loginFlowState;
+  // User-triggered check of the already selected backend. Empty desktop identity
+  // is not itself a reason to refuse a code request or browser login.
+  const assertLoginCredentialStoreReady = (): void => {
+    if (isCredentialEncryptionAvailable()) return;
+    throw new AuthApiError(
+      'CREDENTIAL_STORE_UNAVAILABLE',
+      503,
+      'Saved account credentials are temporarily unavailable',
+    );
+  };
   try {
     // Cancellation is intercepted by dispatchLoginAction so it can settle the
     // already-running browser action instead of starting a second action.
@@ -5697,6 +5759,7 @@ async function runLoginAction(
       if (action.kind === 'phone' && !providerConfig?.phone) {
         throw new AuthApiError('PHONE_LOGIN_DISABLED', 400, 'Phone login is disabled');
       }
+      assertLoginCredentialStoreReady();
       await client.requestCode(action.kind, action.identifier, {
         captchaToken: action.captchaToken,
       });
@@ -5712,6 +5775,7 @@ async function runLoginAction(
     }
 
     if (action.type === 'verify-code') {
+      assertLoginCredentialStoreReady();
       return {
         success: true,
         state: await acceptLoginOutcome(
@@ -5722,6 +5786,7 @@ async function runLoginAction(
     }
 
     if (action.type === 'start-browser') {
+      assertLoginCredentialStoreReady();
       if (action.kind === 'social') {
         const provider = action.providerOrConnectionId as SocialProvider;
         if (!providerConfig?.social.includes(provider)) {
@@ -5877,7 +5942,16 @@ async function runLoginAction(
     }
     const code = error instanceof AuthApiError ? error.code : 'AUTH_REQUEST_FAILED';
     const status = error instanceof AuthApiError ? error.statusCode : 0;
-    log.warn(`login action failed action=${action.type} status=${status} code=${code}`);
+    // #9356: keep RATE_LIMITED as the category, and record whether the server
+    // named its own code, gave a usable wait, and a correlation id. Missing
+    // fields stay explicit so a later log can be matched to the auth request
+    // without guessing a window or copying the response body.
+    const serverCode = error instanceof AuthApiError ? (error.serverCode ?? 'none') : 'none';
+    const retryKnown = error instanceof AuthApiError && error.retryAt !== undefined ? 'yes' : 'no';
+    const requestId = error instanceof AuthApiError ? (error.requestId ?? 'none') : 'none';
+    log.warn(
+      `login action failed action=${action.type} status=${status} code=${code} serverCode=${serverCode} retryKnown=${retryKnown} requestId=${requestId}`,
+    );
     const flowCannotRetry = [
       'INVALID_LOGIN_TICKET',
       'INVALID_BIND_TICKET',
@@ -5975,7 +6049,11 @@ export async function dispatchLoginAction(action: unknown): Promise<DesktopLogin
   }
 }
 
-export async function refresh(_options?: { networkRecovered?: boolean }): Promise<boolean> {
+export async function refresh(options?: { serverRejectedToken?: boolean }): Promise<boolean> {
+  if (authRefreshOverride !== null) {
+    receiveHostAuthState(await authRefreshOverride(options));
+    return delegatedAuthState!.isAuthenticated;
+  }
   if (getActiveAppSession().mode === 'local') {
     log.debug('runtime refresh skipped in local mode');
     return false;
@@ -5983,13 +6061,19 @@ export async function refresh(_options?: { networkRecovered?: boolean }): Promis
   // Cold-start recovery owns rotation until it settles. Runtime callers must
   // not consume the same saved refresh token concurrently, or wait indefinitely.
   if (coldStartAuthInFlight !== null && (!accessToken || !currentUser)) return false;
-  // A fleet may observe relay recovery at once. Keep accepting the legacy hint,
-  // but never let it reset the failure count or bypass the randomized deadline.
-  if (refreshPromise !== null) return refreshPromise;
   // Explicit callers (including chat polling and resume) share the same wait
   // as the retry timer; skipped calls must not move the deadline forward.
-  if (refreshBackoff.remaining(authStateEpoch) > 0) return false;
+  if (options?.serverRejectedToken && refreshBackoff.serverRejectedToken(authStateEpoch)) {
+    scheduleRefreshRetry(authStateEpoch);
+  }
+  if (refreshPromise !== null) return refreshPromise;
+  if (refreshBackoff.runtimeRemaining(authStateEpoch) > 0) return false;
+  if (refreshTimer !== null) {
+    clearTimeout(refreshTimer);
+    refreshTimer = null;
+  }
 
+  refreshBackoff.startRuntimeAttempt(authStateEpoch);
   refreshPromise = (async () => {
     const refreshEpoch = authStateEpoch;
     const refreshWasSuperseded = (point: string): boolean => {
@@ -6109,14 +6193,14 @@ export async function refresh(_options?: { networkRecovered?: boolean }): Promis
           });
         } else if (action.kind === 'replacement-retry') {
           log.warn(
-            `runtime refresh failed for a stale token after replacement retries status=${result.status} code=${code ?? '<none>'} — retrying no sooner than ${RUNTIME_REFRESH_RETRY_MS / 1000}s`,
+            `runtime refresh failed for a stale token after replacement retries status=${result.status} code=${code ?? '<none>'} — scheduling retry`,
           );
-          scheduleRefreshRetryAfterTransientFailure(refreshEpoch, result.retryAt);
+          scheduleRefreshRetryAfterTransientFailure(refreshEpoch, result.retryAt, result.status === 0);
         } else {
           log.warn(
-            `runtime refresh failed transiently status=${result.status} code=${code ?? '<none>'} — retrying no sooner than ${RUNTIME_REFRESH_RETRY_MS / 1000}s`,
+            `runtime refresh failed transiently status=${result.status} code=${code ?? '<none>'} — scheduling retry`,
           );
-          scheduleRefreshRetryAfterTransientFailure(refreshEpoch, result.retryAt);
+          scheduleRefreshRetryAfterTransientFailure(refreshEpoch, result.retryAt, result.status === 0);
         }
         return false;
       }
@@ -6229,6 +6313,7 @@ export async function refresh(_options?: { networkRecovered?: boolean }): Promis
           expectedUserId: nextUser.id,
         });
         scheduleRefresh(data.accessToken);
+        notifyAccessTokenRefreshed();
         notifyRenderer();
         if (previousUserId !== nextUser.id || authRealmChanged || membershipKindChanged) {
           notifyAuthListeners();
@@ -6264,6 +6349,7 @@ export async function refresh(_options?: { networkRecovered?: boolean }): Promis
       await migrateLocalProviderBindingsAfterCloudCommit(nextUser.id);
       persistedRefreshTokenNeedsIdentityCheck = false;
       scheduleRefresh(data.accessToken);
+      notifyAccessTokenRefreshed();
       notifyRenderer();
       if (authRealmChanged || membershipKindChanged) {
         notifyAuthListeners();

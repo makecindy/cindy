@@ -1,6 +1,6 @@
 import { beforeEach, expect, it, vi } from 'vitest';
 
-const native = vi.hoisted(() => ({ readSnapshot: vi.fn(), clearSnapshot: vi.fn(), discardSnapshot: vi.fn(), rejectUnreadableSnapshot: vi.fn() }));
+const native = vi.hoisted(() => ({ readSnapshot: vi.fn(), readSnapshotAsync: vi.fn(), clearSnapshot: vi.fn(), discardSnapshot: vi.fn(), rejectUnreadableSnapshot: vi.fn() }));
 const fs = vi.hoisted(() => {
   const listings = new Map<string, Array<{ uri: string; name: string }> | Error>();
   class Directory {
@@ -20,7 +20,7 @@ const fs = vi.hoisted(() => {
 });
 vi.mock('expo-modules-core', () => ({ requireOptionalNativeModule: () => native }));
 vi.mock('expo-file-system', () => ({ Directory: fs.Directory }));
-import { getSharedPayloads, clearSharedPayloads, discardSharedPayloads, rejectUnreadableSharedPayloads } from '@/session/incomingShareNative';
+import { getSharedPayloads, getSharedPayloadsAsync, getSharedPayloadId, clearSharedPayloads, discardSharedPayloads, rejectUnreadableSharedPayloads } from '@/session/incomingShareNative';
 
 beforeEach(() => {
   vi.resetAllMocks();
@@ -207,4 +207,29 @@ it('persists unknown snapshot rejection without App Group reads', () => {
   expect(native.readSnapshot).not.toHaveBeenCalled();
   native.rejectUnreadableSnapshot.mockImplementation(() => { throw new Error('rejection flush failed'); });
   expect(() => rejectUnreadableSharedPayloads()).toThrow('rejection flush failed');
+});
+
+// Foreground receipt must not use the synchronous native lock path.
+it('reads asynchronously but still acknowledges the exact snapshot', async () => {
+  const snapshot = '[{"type":"text","value":"Shared asynchronously"}]';
+  native.readSnapshotAsync.mockResolvedValue(snapshot);
+  const raw = await getSharedPayloadsAsync();
+  expect(raw).toEqual([{ shareType: 'text', value: 'Shared asynchronously', mimeType: undefined }]);
+  expect(native.readSnapshot).not.toHaveBeenCalled();
+  clearSharedPayloads(raw);
+  expect(native.clearSnapshot).toHaveBeenCalledExactlyOnceWith(snapshot);
+});
+
+it('preserves per-share identity while accepting legacy arrays after upgrading', () => {
+  const payloads = [{ type: 'url', value: 'https://example.com' }];
+  const first = JSON.stringify({ version: 1, id: 'first-share', payloads });
+  const second = JSON.stringify({ version: 1, id: 'second-share', payloads });
+  native.readSnapshot.mockReturnValueOnce(first).mockReturnValueOnce(second).mockReturnValueOnce(JSON.stringify(payloads));
+  const a = getSharedPayloads(), b = getSharedPayloads(), legacy = getSharedPayloads();
+  expect(a).toEqual(b); expect(b).toEqual(legacy);
+  expect(getSharedPayloadId(a)).toBe('first-share');
+  expect(getSharedPayloadId(b)).toBe('second-share');
+  expect(getSharedPayloadId(legacy)).toBeUndefined();
+  clearSharedPayloads(a);
+  expect(native.clearSnapshot).toHaveBeenCalledExactlyOnceWith(first);
 });

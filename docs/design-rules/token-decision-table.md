@@ -10,6 +10,8 @@
 >
 > 〔wave4 段历史部分作废（2026-07-24 目录整编标注）〕：本段原钉死的画布落码方案——页面底消费 `var(--surface)`、两层 `#F70121` 渐变代码复现、`--login-window-border-outer/-inner` token——已被后续实现与实机走查推翻。**现行结论**：画布底走 `--login-bg-base` 双态（亮 `#F2F2ED` / 暗 `#181818`，2026-10-01 起与 CINDY 皮肤页底同值；此前为 `#EDEDED` / `#1F1F1E`）,两模式**纯平**,`--login-bg-gradient-radial/-linear` 仅保留 override 锚、值恒 `none`,window-border token 已删除。现行权威 = `DESIGN.md §16.1 / §16.5` 与 `apps/desktop/src/renderer/themes/colors.ts`;本段与本表任何段落均**不再**对冲突拥有优先级,冲突一律以 `DESIGN.md §16` 为准。
 >
+> 〔2026-10-27 取代标注〕：下面 wave5 增补中的 hover「叠白变亮」口径、pressed 叠黑分档及其状态矩阵，已被用户 2026-10-27 裁决的登录叠层二态（`--login-overlay-*`，见 `DESIGN.md §16.5`）取代；本文 §3 表中对应的叠层行也只是历史记录。
+>
 > **⚠ wave5 增补（2026-07-24,组件库更新,权威 = `DESIGN.md §16.5` 状态矩阵；原 `figma-component-spec §11` 已于 2026-10-23 移除，其现行内容已迁入该矩阵，追史见提交 `70b32d7578`）**：(a) **hover 统一「叠白变亮」口径**——全按钮族 hover = normal 底叠 `rgba(255,255,255,0.08/0.1)`（深底 8% / 浅底 10%;唯一例外 `back` 亮色 hover 维持既有白 70%）,旧「白底钮 hover 叠黑」方向作废;pressed 叠黑分档含例外：深底强调钮 50%（`log_in_button`、`light_button_highlight`,不论尺寸）/ `Dark_button_Normal` 20% / 浅底钮 10% / 行类 8%——**落码逐组件对拍 `DESIGN.md §16.5` 状态矩阵,不按类别名推断**;hover / pressed 叠层统一由 `--login-overlay-*` 二态 token 组承载（`DESIGN.md §16.5` 已采纳）,禁止新增字面 rgba 叠层;〔落码状态〕本口径当前仅文档层生效,as-built 组件仍消费改判前旧叠层值,同步随暗色实现 PR 的 overlay token 化落地（`DESIGN.md §16.5(1)`）。(b) 新组件 **radiobutton**（协议勾选）与**双色模式小按钮**（服务条款弹窗）带来的新色值决策已补入 §3 表尾;对应 token 建议随游客登录 / 协议 UI 实现 PR 注册,不提前占位。
 
 ## 1. 现有主题体系结论〔2026-07 决策时点快照,现状以 `colors.ts` 为准〕
@@ -241,5 +243,5 @@ export const loginColors = {
 
 `settings-theme-auto-light` = `#F2F2ED`、`settings-theme-auto-dark` = `#181818`(两模式文件同步);
  `md-table-bg` 随页底;`surface-translucent-overlay` light 暖化 / dark 平移。
-移动端未随本轮同步(342 处命中 + 冷更确认),为已登记 follow-up;
+移动端未随本轮同步(342 处命中 + 冷更确认)〔已取代:2026-09-26 起手机端改用自有「象牙白」色阶,不再追随本表,见 `DESIGN.md §15.13`〕;
 `text-secondary`/`text-tertiary` 命名倒置(改名方案)见 issue #2559。

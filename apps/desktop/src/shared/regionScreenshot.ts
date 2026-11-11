@@ -8,7 +8,12 @@
  * 坐标约定: 浮层内一律是该显示器的 DIP (= 窗口 CSS 像素), 定格原图与导出图是物理像素。
  */
 
+import type { ScreenshotTranslationLanguage, ScreenshotTranslationPreference } from './screenshotTranslation';
+
 export const REGION_SCREENSHOT_CHANNEL = {
+  SET_TRANSLATION_LANGUAGE: 'region-screenshot:set-translation-language',
+  TRANSLATION_LANGUAGE_CHANGED: 'region-screenshot:translation-language-changed',
+  LOCALE_CHANGED: 'region-screenshot:locale-changed',
   /** send: 浮层页面已挂载, 可以接收截图会话 (窗口隐藏预热时发一次)。 */
   SHELL_READY: 'region-screenshot:shell-ready',
   /** main → 浮层: 开始一次截图会话 ({@link RegionScreenshotBegin})。 */
@@ -40,6 +45,9 @@ export const REGION_SCREENSHOT_CHANNEL = {
 
 /** Local-only image editor. Every incoming signal is bound to its top-level renderer. */
 export const REGION_SCREENSHOT_EDITOR_CHANNEL = {
+  SET_TRANSLATION_LANGUAGE: 'region-screenshot-editor:set-translation-language',
+  TRANSLATION_LANGUAGE_CHANGED: 'region-screenshot-editor:translation-language-changed',
+  LOCALE_CHANGED: 'region-screenshot-editor:locale-changed',
   READY: 'region-screenshot-editor:ready',
   BEGIN: 'region-screenshot-editor:begin',
   END: 'region-screenshot-editor:end',
@@ -151,6 +159,7 @@ export interface RegionScreenshotHit {
 }
 
 export interface RegionScreenshotBegin {
+  translationPreference?: ScreenshotTranslationPreference;
   /** 本次会话标识; 迟到的回调凭它与新会话区分。 */
   token: string;
   locale: string;
@@ -173,6 +182,7 @@ export interface RegionScreenshotBegin {
 }
 
 export interface RegionScreenshotExport {
+  translationLanguage?: ScreenshotTranslationLanguage;
   action: RegionScreenshotAction;
   /** 最终选区 (DIP), main 记为「上次区域」并据此放置贴图。 */
   selection: RegionRect;
@@ -194,6 +204,7 @@ export interface RegionScreenshotPinState {
 
 /** 截图交给新任务: 已入仓的图片与用户点的动作。 */
 export interface RegionScreenshotComposeRequest {
+  translationLanguage?: ScreenshotTranslationLanguage;
   id: string;
   ownerStamp: import('./dataOwnerPush').DataOwnerPushStamp;
   action: RegionScreenshotAiAction;

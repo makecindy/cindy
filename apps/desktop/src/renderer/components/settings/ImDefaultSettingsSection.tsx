@@ -16,7 +16,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 
 import { ModelSelector } from '@/components/new-chat/ModelSelector';
-import { useProviderShareAgentDevices } from '@/features/provider-share/useProviderShareAgentDevices';
+import { useModelRouteDevices } from '@/hooks/useModelRouteDevices';
 import { PermissionSelector } from '@/components/new-chat/PermissionSelector';
 import { type ModelDescriptor, useAgentCapabilities } from '@/hooks/useAgentCapabilities';
 import { useProviders } from '@/hooks/useProviders';
@@ -86,7 +86,7 @@ export function ImDefaultSettingsSection({
   const cc = useAgentCapabilities('claude-code', agentDeviceId ?? undefined);
   const codex = useAgentCapabilities('codex', agentDeviceId ?? undefined);
   const pi = useAgentCapabilities('pi', agentDeviceId ?? undefined);
-  const sharedDevices = useProviderShareAgentDevices([agentDeviceId]);
+  const routeDevices = useModelRouteDevices({ controlledDeviceId: null, leadAgentDeviceId: agentDeviceId });
 
   const pickerAgents = useModelPickerAgents(settings?.agentKind ?? 'claude-code', agentDeviceId);
 
@@ -386,7 +386,7 @@ export function ImDefaultSettingsSection({
             </p>
           )}
           <ModelSelector
-            remoteAgent={{ devices: sharedDevices.devices, selectedDeviceId: agentDeviceId }}
+            remoteAgent={routeDevices.devices && { devices: routeDevices.devices, selectedDeviceId: agentDeviceId }}
             fastModeConfigurable={false}
             unifiedAgents={pickerAgents}
             onUnifiedSelect={({ engine, modelId, providerId, effort, agentDevice }) => {

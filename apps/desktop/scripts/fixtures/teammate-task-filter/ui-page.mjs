@@ -41,6 +41,10 @@ export default {
     await page.getByRole('menuitem', { name: await ui.t('ccAgent.sidebar.filterCreatorsAny'), exact: true }).click();
     await page.waitForFunction(() => document.querySelectorAll('[data-task]').length === 7);
     await page.locator('[data-task="remote"] [data-testid="bot-follow-mark"]').waitFor();
+    await page.getByRole('menuitem', { name: await ui.t('ccAgent.sidebar.filterCreatorsNone'), exact: true }).click();
+    await page.waitForFunction(() => document.querySelectorAll('[data-task]').length === 1);
+    assert.equal(await rows.getAttribute('data-task'), 'owner');
+    await ui.capture('hide-all');
     const local = page.getByRole('menuitemcheckbox', { name: 'Dash', exact: true });
     const remote = page.getByRole('menuitemcheckbox', { name: 'Lizi MacBook Pro', exact: true });
     await local.click();

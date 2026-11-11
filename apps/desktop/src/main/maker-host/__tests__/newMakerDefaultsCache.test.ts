@@ -2,6 +2,8 @@ import { beforeEach, describe, expect, it } from 'vitest';
 
 import {
   getNewTaskDraftSelection,
+  setWorkerCreationPrefsCache,
+  getWorkerCreationSelection,
   getSelectedNewMakerRoute,
   getRemoteNewMakerDefaults,
   getRemoteNewMakerDefaultsByVendor,
@@ -301,4 +303,15 @@ it('reads remembered tuning only from the matching owner snapshot, with preset-f
   expect(getNewMakerModelTuning('B:4', 'codex', 'provider', 'target')).toEqual({});
   expect(syncNewMakerDraftCache(payload, { dataOwnerId: 'B', ownerGeneration: 4 }, 'B:4', false)).toBe(false);
   expect(getNewMakerModelTuning('B:4', 'codex', 'provider', 'target')).toEqual({});
+});
+
+// Unit: route mirrors must not cross owner boundaries or disappear on permission-only writes.
+it('retains a submitted worker route across permission updates and fences old owners', () => {
+  const ownerStamp = { dataOwnerId: 'worker-owner', ownerGeneration: 4 };
+  const selection = { agent: 'pi' as const, model: 'test', providerId: 'provider', agentDeviceId: null, effort: 'high', fast: false };
+  setWorkerCreationPrefsCache({ workerPermissionMode: 'auto', ownerStamp, selection });
+  setWorkerCreationPrefsCache({ workerPermissionMode: 'bypassPermissions' });
+  expect(getWorkerCreationSelection(ownerStamp)).toEqual(selection);
+  expect(getWorkerCreationSelection({ ...ownerStamp, ownerGeneration: 5 })).toBeNull();
+  expect(getWorkerCreationSelection({ ...ownerStamp, dataOwnerId: 'other' })).toBeNull();
 });

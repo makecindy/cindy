@@ -40,13 +40,13 @@ vi.mock('../../secrets/providerSecretStore.js', () => ({
   readCustomProviderKey: h.readKey,
   getProviderSecretStore: () => ({ get: () => 'test-key' }),
 }));
-vi.mock('../../maker-host/generic-oauth.js', () => ({
+vi.mock('../../maker-host/generic-oauth.desktop.js', () => ({
   readCachedGenericOAuthAccessToken: h.oauthToken,
 }));
 vi.mock('../../model-access/effectiveEndpoint.js', () => ({
   effectiveXdGatewayBaseUrl: () => 'https://gateway.test/v1',
 }));
-vi.mock('../../maker-host/outbound-fetch.js', () => ({ outboundFetch: vi.fn() }));
+vi.mock('../../maker-host/outbound-fetch.desktop.js', () => ({ outboundFetch: vi.fn() }));
 vi.mock('../../appCapabilities.js', () => ({
   getAppCapabilities: () => ({ canUseCindyGateway: true }),
 }));
@@ -71,9 +71,9 @@ vi.mock('../dialogue.js', () => ({ CompanionCallDialogue: class {
 
 import { normalizeVoiceInputSettings } from '../../../shared/voiceInputData.js';
 import { registerVoiceConversationIpc } from '../index.js';
-import { outboundFetch } from '../../maker-host/outbound-fetch.js';
+import { outboundFetch } from '../../maker-host/outbound-fetch.desktop.js';
 import { clearModelVisibilityMirror, setModelVisibilityMirror } from '../../maker-host/model-visibility-mirror.js';
-const sender = (id = 1) => ({ sender: { id, once: vi.fn() } });
+const sender = (id = 1) => ({ sender: { id, once: vi.fn(), on: vi.fn() } });
 const call = (name: string, ...args: unknown[]) =>
   h.handlers.get(`voice-conversation:${name}`)!(sender(), ...args);
 beforeEach(() => {
@@ -112,14 +112,14 @@ afterEach(async () => {
   await call('end', 'call');
   await call('stop-preview', 'preview');
 });
-const start = () =>
-  call('start', {
-    callId: 'call',
-    botId: 'bot',
-    sessionId: 'canonical',
-    modelId: 'voice-test',
-    voice: 'alloy',
-  });
+const startInput = () => ({
+  callId: 'call',
+  botId: 'bot',
+  sessionId: 'canonical',
+  modelId: 'voice-test',
+  voice: 'alloy',
+});
+const start = () => call('start', startInput());
 
 // PR #6900 unit: injected model tests missed production credential-store wiring.
 // Exercise real IPC -> catalog -> voice query/synthesis with a legacy display ID,
@@ -326,6 +326,27 @@ it('validates preview boundaries before synthesis and cleans up when its sender 
     h.handlers.get('voice-conversation:read-preview')!(event, 'preview'),
   ).rejects.toThrow();
   await expect(start()).resolves.toEqual({ callId: 'call' });
+});
+
+// The call now outlives every route, so only a real reload may release it. A lease
+// left behind would refuse all later calls. Unit, real IPC wiring; under 1s with the file.
+it('reports a held voice lease distinctly and releases it when the owner window reloads', async () => {
+  const event = sender();
+  const input = await h.handlers.get('voice-conversation:start')!(event, startInput());
+  expect(input).toEqual({ callId: 'call' });
+  await expect(h.handlers.get('voice-conversation:start')!(sender(2), startInput())).rejects.toThrow(
+    '[VOICE_CONVERSATION_BUSY]',
+  );
+  const reloaded = event.sender.on.mock.calls.find(([name]) => name === 'did-navigate')?.[1] as
+    | (() => void)
+    | undefined;
+  reloaded!();
+  await vi.waitFor(async () => {
+    await expect(h.handlers.get('voice-conversation:start')!(sender(2), startInput())).resolves.toEqual({
+      callId: 'call',
+    });
+  });
+  await h.handlers.get('voice-conversation:end')!(sender(2), 'call');
 });
 
 it('enforces sender ownership and PCM size/alignment on the non-awaitable capture channel', async () => {

@@ -1,6 +1,8 @@
 import { useEffect, useRef, useState } from "react";
+import { usePluginPromptReads } from './PluginPromptReadsContext';
 import { AppState } from "react-native";
 import { useAuth } from "@/auth/AuthContext";
+import { startFocusedTopicSubscription } from "@/device-link/focusedTopicSubscription";
 import { useDeviceLink } from "@/device-link/DeviceLinkContext";
 import { createPluginManagementClient } from "./pluginManagementClient";
 import {
@@ -15,8 +17,11 @@ export function usePluginManagement(
   online: boolean,
   visible: boolean,
   selectionKey?: string,
+  chatPrompt = false,
 ) {
-  const { invoke } = useDeviceLink();
+  const sharedReads = usePluginPromptReads();
+  const displayReads = chatPrompt ? sharedReads : null;
+  const { invoke, onRemoteResourceChanged, subscribe, unsubscribe, connectionEpoch } = useDeviceLink();
   const { accountGeneration } = useAuth();
   const [state, setState] = useState<PluginManagementState | null>(null);
   const [controller, setController] =
@@ -51,7 +56,9 @@ export function usePluginManagement(
     });
     const next = createPluginManagementController(client, {
       online: availability.current,
+      readDisplay: displayReads ? () => displayReads.read(deviceId) : undefined,
       onChange: (value) => {
+        if (value.operationId) displayReads?.invalidate(deviceId);
         if (!disposed && liveScope.current === scope) setState(value);
       },
     });
@@ -62,10 +69,24 @@ export function usePluginManagement(
       next.dispose();
       disposed = true;
     };
-  }, [deviceId, accountGeneration, invoke, selectionKey]);
+  }, [deviceId, accountGeneration, invoke, selectionKey, displayReads]);
   useEffect(() => {
     controller?.setOnline(availability.current);
   }, [controller, online, visible, foreground]);
+  useEffect(() => {
+    if (!deviceId || !controller || !online || !visible || !foreground) return;
+    // A reconnect can replace the read epoch without changing this chat's identity.
+    if (displayReads) void controller.refresh();
+    const stop = startFocusedTopicSubscription({ deviceId, owner: `plugin-management:${scope}`,
+      topic: 'sessions', subscribe, unsubscribe });
+    const off = onRemoteResourceChanged((source, payload) => {
+      if (source === deviceId && payload.collectionId === 'plugins') {
+        displayReads?.invalidate(deviceId, payload);
+        void controller.refresh();
+      }
+    });
+    return () => { off(); stop(); };
+  }, [deviceId, controller, online, visible, foreground, onRemoteResourceChanged, subscribe, unsubscribe, connectionEpoch, scope, displayReads]);
   return publishedScope === scope
     ? { state, controller }
     : { state: null, controller: null };

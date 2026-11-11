@@ -460,7 +460,7 @@ describe('DeferredCodexRestartService', () => {
     persistedRevision = 2;
     if (kind !== 'runtime') service.schedule('custom-mcp-change');
     persistedRevision = 3;
-    if (kind !== 'runtime') service.schedule('contacts-change');
+    if (kind !== 'runtime') service.schedule('plugin-change');
     resolveRestart();
     await Promise.resolve();
     await Promise.resolve();

@@ -34,10 +34,10 @@
  */
 
 import type { AgentKind } from '@cindy/maker-core';
-import { getDeviceLinkInvokeContext, isDeviceLinkInvoke } from '../device-link/invoke-context.js';
+import { getDeviceLinkInvokeContext, isDeviceLinkInvoke, runOutsideDeviceLinkInvokeContext } from '../device-link/invoke-context.js';
 import { parseOrcaRemoteLead } from '../../shared/orcaRemoteWorker.js';
 import { isProviderShareAgentDeviceId } from '../../shared/providerShare.js';
-import { createSharedTaskSettingGuard } from './sharedTaskSetting.js';
+import { createSharedTaskPendingSelectionGuard, createSharedTaskSettingGuard } from './sharedTaskSetting.js';
 
 import { MAKER_INVOKE } from './channels.js';
 import type { IpcHandlerRegistry } from './ipcHandlerRegistry.js';
@@ -49,11 +49,21 @@ import {
 import { throwIpcError } from '../utils/ipcValidate.js';
 import { shouldApplyExclusiveProviderRerouteLive } from '../maker-host/model-route-guard-live.js';
 import { dbToMakerAgentKind, makerToDbAgentKind, normalizeDbAgentKind } from '../../shared/agentKindConversion.js';
+import { decideProviderGroupFailure, providerGroupFailureSignals } from '../provider-group/failurePolicy.js';
 
 function throwIfAgentSwitchAborted(signal: AbortSignal | undefined): void {
   if (signal?.aborted) {
     throw new Error('agent switch aborted');
   }
+}
+
+/**
+ * 要换过去的那台此刻接不了这个任务(连不上、保留的远程任务数已满、不提供这个模型等)，与原生记录能不能恢复无关：
+ * 改用摘要同样打不开。判定沿用供应商组的唯一口径(provider-group/failurePolicy)。
+ */
+function isSwitchTargetUnavailable(error: unknown): boolean {
+  const decision = decideProviderGroupFailure(providerGroupFailureSignals(error), 'target');
+  return decision.action === 'switch' && decision.cause === 'unavailable';
 }
 
 /**
@@ -139,8 +149,9 @@ export interface AgentSwitchBoundaryContent {
    */
   consumed?: boolean;
   /**
-   * 只在 Agent 换电脑时出现:离场 / 目标位置(null = 任务所在电脑)。名称在切换时快照,
-   * 那台电脑之后改名或移除，分隔条仍看得懂；缺名称时界面显示「另一台电脑」。
+   * 离场设备始终记录；toAgentDeviceId 只在 Agent 换电脑时出现(null = 任务所在电脑)。
+   * 名称只在换电脑时快照,那台电脑之后改名或移除，分隔条仍看得懂；缺名称时界面显示
+   * 「另一台电脑」。
    */
   fromAgentDeviceId?: string | null;
   toAgentDeviceId?: string | null;
@@ -219,6 +230,7 @@ export interface MakerSessionAgentSwitchHandlerDeps {
     applyNow: boolean,
     assertSelectionCurrent?: () => void,
     beforeMutation?: () => Promise<void>,
+    pendingSelectionAccess?: ReturnType<typeof createSharedTaskPendingSelectionGuard>,
   ): Promise<{ deferred: boolean; superseded?: boolean }>;
   /** 与 send / SET_MODEL 共用的 session 锁；生产注入，最小测试 harness 可省略。 */
   withSessionLock?<T>(sessionId: string, task: () => Promise<T>): Promise<T>;
@@ -252,7 +264,8 @@ export interface MakerSessionAgentSwitchHandlerDeps {
   /** 分隔条展示用的电脑名(null = 任务所在电脑)。缺省 = 不记名称。 */
   describeAgentDevice?(deviceId: string | null): string | null;
   getSessionRow(sessionId: string): Promise<AgentSwitchSessionRow | null>;
-  getLiveSession(sessionId: string): { isTurnRunning(): boolean; sdkSessionId?: string } | null | undefined;
+  getLiveSession(sessionId: string): { isTurnRunning(): boolean; sdkSessionId?: string;
+    hasStartedClosing?(): boolean } | null | undefined;
   readOwnerGeneration?(): number;
   confirmNativeHistoryFallback?(sessionId: string, targetDeviceId: string | null): Promise<boolean>;
   relocateNativeHistory?(input: {
@@ -265,15 +278,15 @@ export interface MakerSessionAgentSwitchHandlerDeps {
     sessionId: string,
     after?: { createdAt: number; rowid: number },
   ): Promise<HandoffSourceMessage[]>;
-  /** 伙伴工作记忆账本渲染段(botWorkingMemory);全量交接时带上,增量交接(停泊会话 resume)不带。 */
-  readWorkingMemoryNote?(sessionId: string): Promise<string | null>;
   /**
    * Phase 2:查目标引擎的停泊原生会话(边界行派生)。缺省(测试最小 harness /
-   * 显式关闭)= 恒无绑定,回落 v1 全量交接行为。
+   * 显式关闭)= 恒无绑定,回落 v1 全量交接行为。fromAgentDeviceId 用于排除在
+   * 另一台电脑离场的原生线程——本机没有它的历史,误 resume 会合成错误身份。
    */
   findParkedEngineSession?(
     sessionId: string,
     targetDbKind: DbAgentKind,
+    fromAgentDeviceId: string | null,
   ): Promise<ParkedEngineSessionRef | null>;
   /**
    * 提交切换:update agent_kind/model/provider_id + sdk_session_id + 广播
@@ -535,7 +548,6 @@ export async function relocateForFreshStart(
     MakerSessionAgentSwitchHandlerDeps,
     | 'getSessionRow'
     | 'listMessagesForHandoff'
-    | 'readWorkingMemoryNote'
     | 'applyAgentSwitchToDb'
     | 'setSessionProvider'
     | 'insertBoundaryMessage'
@@ -570,7 +582,6 @@ export async function relocateForFreshStart(
     fromLabel: `${agentEngineLabel(dbKind)} (on a different computer)`,
     toLabel: agentEngineLabel(dbKind),
     sessionId,
-    workingMemory: (await deps.readWorkingMemoryNote?.(sessionId)) ?? null,
   });
   const fromAgentDeviceId = params.from ? params.from.agentDeviceId : row.agentDeviceId ?? null;
   const fromProviderId = params.from ? params.from.providerId : row.providerId;
@@ -713,6 +724,8 @@ export async function performSessionAgentSwitch(
     /** Recheck caller CAS after asynchronous validation, before staging any intent. */
     assertSelectionCurrent?: () => void;
     beforeMutation?: () => Promise<void>;
+    /** Internal forced group relocation: admit before an actual close or route commit, never during preparation. */
+    onRelocationMutationStart?: () => void;
     /**
      * 仅限 main 内部(不接受 IPC 传入)：Agent 位置不变也按换电脑重新交接、新建原生会话。供应商组替分享的人
      * 换电脑时任务的位置仍是同一个分享，实际运行的电脑由组所在电脑重新选(docs/product-rules/provider-groups.md §6.1)。
@@ -964,6 +977,7 @@ export async function performSessionAgentSwitch(
 
   // 跨引擎选择比此前登记的凭证切换更新；即使旧切换已在 await close，清掉登记后
   // 它也会在收口前重读并放弃，避免 DB 已是新 agent、内存 route 却被旧 provider 覆盖。
+  if (params.onRelocationMutationStart) params.assertSelectionCurrent?.();
   deps.supersedePendingCredentialSwitch?.(sessionId);
 
   // 意图制:外部调用(非 applyNow)一律只登记意图——空闲/运行中同一语义,
@@ -1018,9 +1032,10 @@ export async function performSessionAgentSwitch(
   // 交接素材与停泊绑定先于任何状态变更取得(失败不留半切换状态)。
   // Phase 2:目标引擎有停泊原生会话 → resume + 增量交接(只补离开期间的进展,
   // 工作状态区仍按全量历史提取);无绑定 → v1 全量交接 + 全新原生会话。
-  // 换电脑不复用目标电脑旧的停泊记录；关闭当前会话后迁移最新原生历史。
+  // 换电脑不复用目标电脑旧的停泊记录；同机回切也只认在本机离场的线程，
+  // 避免把另一台电脑上的原生会话误当成本机可续接的历史。
   const parked = deps.findParkedEngineSession && !relocating && !orcaGroupReturnRebuild
-    ? await deps.findParkedEngineSession(sessionId, toDbKind)
+    ? await deps.findParkedEngineSession(sessionId, toDbKind, currentAgentDeviceId)
     : null;
   const fullSourceMessages = await deps.listMessagesForHandoff(sessionId);
   throwIfAgentSwitchAborted(signal);
@@ -1033,9 +1048,7 @@ export async function performSessionAgentSwitch(
     // 附带早期原文检索指引(get_chat_history / search_chat_history 定向到本会话)。
     sessionId,
   };
-  // 全量交接(全新原生会话)带伙伴工作记忆账本;增量交接的目标引擎仍持有离场前记忆,不带。
-  const workingMemory = (await deps.readWorkingMemoryNote?.(sessionId)) ?? null;
-  const buildFullHandoff = () => buildHandoffText(fullSourceMessages, { ...handoffOptsBase, workingMemory });
+  const buildFullHandoff = () => buildHandoffText(fullSourceMessages, handoffOptsBase);
   let handoff: string;
   if (parked) {
     const deltaMessages = await deps.listMessagesForHandoff(sessionId, {
@@ -1056,8 +1069,22 @@ export async function performSessionAgentSwitch(
   const orcaLeadLeavingRemote = row.orcaRole === 'lead' && currentAgentDeviceId !== null;
 
   return deps.withCloseSuppressed(sessionId, async () => {
+    // The companion may have been disabled or moved while history was read.
+    // Its host guard is asynchronous; a still-current input lease is not enough.
+    if (params.providerGroupRelocation && row.source === 'bot') {
+      await params.beforeMutation?.();
+      params.assertSelectionCurrent?.();
+    }
     throwIfAgentSwitchAborted(signal);
     if (live) {
+      if (params.onRelocationMutationStart) {
+        params.assertSelectionCurrent?.();
+        const currentLive = deps.getLiveSession(sessionId);
+        if (currentLive && currentLive !== live) throw new Error('Session runtime changed during agent relocation');
+        // History reads may have outlived the source. A no-op/already-started
+        // close must not admit recovery before the later route commit.
+        if (currentLive && !currentLive.hasStartedClosing?.()) params.onRelocationMutationStart();
+      }
       try {
         await deps.closeSession(sessionId);
       } catch (error) {
@@ -1176,6 +1203,15 @@ export async function performSessionAgentSwitch(
           nativeBootstrapReady = true;
         } catch (error) {
           await restoreNativeProbeSource(error);
+          // The target cannot take the task at all, so a summary would fail the same way
+          // and only discard the native context. Do not ask: the caller keeps the task on
+          // the source computer and sends there (provider-groups.md §6.2「换不过去」).
+          if (isSwitchTargetUnavailable(error)) {
+            deps.log.warn('agent-switch: quota relocation target cannot take the task; staying on the source', {
+              sessionId, error: error instanceof Error ? error.message : String(error),
+            });
+            throw error;
+          }
           relocatedNativeId = null;
           handoff = buildFullHandoff();
           deps.log.warn('agent-switch: native quota relocation failed; restored source before summary confirmation', {
@@ -1191,7 +1227,9 @@ export async function performSessionAgentSwitch(
       }
     }
 
+    if (params.providerGroupRelocation && row.source === 'bot') await params.beforeMutation?.();
     if (relocating) assertTransferCurrent();
+    params.onRelocationMutationStart?.();
     // ---- commit point:此后切换生效 ----
     try {
       await deps.applyAgentSwitchToDb(sessionId, {
@@ -1245,9 +1283,13 @@ export async function performSessionAgentSwitch(
       resumed: !!(relocatedNativeId || parked),
       ...(relocating && fromDbKind === toDbKind ? { nativeHistory: relocatedNativeId ? 'restored' as const : 'fallback' as const } : {}),
       consumed: false,
+      // Always record where this engine left from, including same-device engine
+      // switches: a later relocation must not make an old local boundary look
+      // resumable. The renderer only treats toAgentDeviceId as a device change,
+      // so a same-device boundary stays visually unchanged.
+      fromAgentDeviceId: currentAgentDeviceId,
       ...(relocating
         ? {
-            fromAgentDeviceId: currentAgentDeviceId,
             toAgentDeviceId: targetAgentDeviceId,
             // 强制换电脑时实际运行的电脑由对方选，本机不知道是哪台(也不该显示)：分隔条写「另一台电脑」。
             fromAgentDeviceName: forcedRelocation ? null : deps.describeAgentDevice?.(currentAgentDeviceId) ?? null,
@@ -1515,7 +1557,18 @@ export function applyPendingAgentSwitchIfIdle(
     try {
       if (intent.sameAgentSelection) {
         if (!deps.selectSameAgentModel) throw new Error('model selection apply is unavailable');
-        const result = await deps.selectSameAgentModel(sessionId, intent, true);
+        const sharedTask = getDeviceLinkInvokeContext()?.sharedTask;
+        const access = sharedTask ? createSharedTaskPendingSelectionGuard(sharedTask, sessionId) : undefined;
+        access?.();
+        // #7825: the guest triggers a send, but the choice above came from the
+        // host registry. Apply only that choice under host authority; retain the
+        // captured send fence through preflight and admit before mutation. Keep
+        // this admission separate from the guest invoke's settings transaction.
+        const result = await (sharedTask
+          ? runOutsideDeviceLinkInvokeContext(() => deps.selectSameAgentModel!(
+              sessionId, intent, true, undefined, undefined, access,
+            ))
+          : deps.selectSameAgentModel(sessionId, intent, true));
         if (result.deferred || result.superseded) {
           throw new Error('model selection could not be applied before send');
         }

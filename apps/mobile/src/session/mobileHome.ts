@@ -119,7 +119,7 @@ export function excludeOrcaWorkerSessions<T extends Pick<RemoteSession, 'orcaRol
  * 结果必须直接喂给该页的 sections / 计数,不能只在别处调用 helper。
  */
 export function selectVisibleDeviceSessions<
-  T extends Pick<RemoteSession, 'orcaRole' | 'canonicalDeviceId' | 'deviceLinkDeviceId' | 'workingDir'>,
+  T extends Pick<RemoteSession, 'orcaRole' | 'canonicalDeviceId' | 'deviceLinkDeviceId' | 'workingDir' | 'projectDir'>,
 >(
   sessions: readonly T[],
   deviceId: string,
@@ -127,5 +127,5 @@ export function selectVisibleDeviceSessions<
 ): T[] {
   return excludeOrcaWorkerSessions(sessions).filter((session) =>
     (session.canonicalDeviceId ?? session.deviceLinkDeviceId) === deviceId
-    && (!projectWorkingDir || sessionMatchesProjectDir(session.workingDir, projectWorkingDir)));
+    && (!projectWorkingDir || sessionMatchesProjectDir(session, projectWorkingDir)));
 }

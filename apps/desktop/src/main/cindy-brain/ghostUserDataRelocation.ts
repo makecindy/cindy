@@ -6,6 +6,7 @@ const USER_DATA_PATHS = [
   ['ghost-fs', ''],
   ['libraries', ''],
   ['library-staging', ''],
+  ['ghost-handoff', ''],
   ['plugin-downloads', ''],
 ] as const;
 
@@ -21,7 +22,6 @@ const USER_DATA_REFERENCES = [
   'media',
   'cards',
   'unread',
-  'routines',
   'recommendations',
   'recentUsage',
 ] as const;

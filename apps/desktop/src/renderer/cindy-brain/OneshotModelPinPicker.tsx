@@ -21,6 +21,7 @@ export interface OneshotPinOption {
   subscription: boolean;
   /** Provider['routing'](IPC 载荷;ProviderLogoMark 的厂牌图标判定用)。 */
   routing?: import('@cindy/model-providers').Provider['routing'];
+  logoKind?: ProviderView['logoKind'];
   /** Agent used by this exact route. Older snapshots may omit it. */
   agentSuffix?: string;
   /** False for a persisted route that is no longer offered or currently usable. */
@@ -41,6 +42,7 @@ export function oneshotPickerProviders(options: readonly OneshotPinOption[]): Pr
     if (!provider) {
       provider = {
         id: option.providerId, name: option.group, source: 'builtin',
+        logoKind: option.logoKind,
         auth: { method: 'none' }, connected: true, agents: [], routing: {}, models: {},
       };
       providers.set(option.providerId, provider);
@@ -65,11 +67,12 @@ export function oneshotPickerProviders(options: readonly OneshotPinOption[]): Pr
 }
 
 export function OneshotModelPinPicker({
-  value, options, onChange, ariaLabel,
+  value, options, onChange, ariaLabel, 'data-setting-id': settingId,
   dense, defaultOptionLabel, disabled, groupByProvider = false,
 }: {
   /** 当前钉值;undefined = 跟随默认。 */
   value?: string;
+  'data-setting-id'?: string;
   options: readonly OneshotPinOption[];
   /** null = 清除钉档(恢复跟随默认)。 */
   onChange: (pin: string | null) => void | boolean | Promise<void | boolean>;
@@ -101,6 +104,8 @@ export function OneshotModelPinPicker({
   const vendor = currentAgent === 'claude-code' ? 'cc' : currentAgent;
   const unavailable = !!value && (!current || current.available === false);
   return <ModelSelector
+    data-setting-id={settingId}
+    localOnlyReason="one-shot-local-request"
     providersOverride={providers}
     modelId={route?.modelId ?? value ?? ''}
     currentProviderId={route?.providerId ?? null}

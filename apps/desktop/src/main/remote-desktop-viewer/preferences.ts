@@ -61,15 +61,13 @@ export async function writeViewerPreferences(
     throw new Error('INVALID_REQUEST');
   const key = keyFor(device);
   const result = await store.updateAtomic(({ value }) => {
-    const next = { ...DEFAULT_VIEWER_PREFERENCES, ...value[key], ...patch };
-    return {
-      [key]: Object.fromEntries(
-        Object.entries(next).filter(
-          ([name, value]) =>
-            value !== DEFAULT_VIEWER_PREFERENCES[name as keyof RemoteViewerPreferences],
-        ),
-      ),
-    };
+    // Keep explicit toggle choices even when they equal today's default. Unedited
+    // fields remain absent so future defaults do not become frozen overrides.
+    // Choosing the default idle duration clears it, matching Mobile.
+    const next = { ...value[key], ...patch };
+    if (next.idleTimeoutMinutes === DEFAULT_VIEWER_PREFERENCES.idleTimeoutMinutes)
+      delete next.idleTimeoutMinutes;
+    return { [key]: next };
   });
   return { ...DEFAULT_VIEWER_PREFERENCES, ...result[key] };
 }

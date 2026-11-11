@@ -275,6 +275,14 @@ export default {
         1,
       );
       await page.keyboard.press('Escape');
+      // Radix restores focus after closing the model menu. Do not type the
+      // manual draft until that transition completes: its late focus restore
+      // would otherwise blur the input and correctly save the new draft.
+      await page.getByRole('listbox').waitFor({ state: 'hidden' });
+      await page.waitForFunction(
+        (label) => document.activeElement?.getAttribute('aria-label') === label,
+        modelLabel,
+      );
       if (ui.data.menu)
         await page
           .getByRole('button', { name: await ui.t('bots.voiceMode.voice'), exact: true })

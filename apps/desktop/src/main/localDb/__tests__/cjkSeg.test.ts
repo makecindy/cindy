@@ -111,6 +111,28 @@ describe('buildSnippetFromContent', () => {
     expect(snippet.endsWith('…')).toBe(true);
   });
 
+  it('ASCII 快路保持重复命中、实体转义和 16384 码点窗口边界', () => {
+    expect(buildSnippetFromContent('LOGIN login LoGiN & <tag>', ['login'])).toBe(
+      '<mark>LOGIN</mark> <mark>login</mark> <mark>LoGiN</mark> &amp; &lt;tag&gt;',
+    );
+
+    const atLastWindowPosition = `${'a'.repeat(SNIPPET_SOURCE_MAX_CHARS - 6)}Needleafter`;
+    expect(buildSnippetFromContent(atLastWindowPosition, ['needle'])).toBe(
+      `…${'a'.repeat(24)}<mark>Needle</mark>`,
+    );
+    const justOutsideWindow = `${'a'.repeat(SNIPPET_SOURCE_MAX_CHARS)}needle`;
+    expect(buildSnippetFromContent(justOutsideWindow, ['needle'])).toBe(`${'a'.repeat(24)}…`);
+  });
+
+  it('Unicode 慢路保持 combining mark、emoji 和孤立 surrogate 的码点坐标', () => {
+    expect(buildSnippetFromContent('😀甲\u0301乙 e\u0301', ['甲\u0301乙', 'e\u0301'])).toBe(
+      '😀<mark>甲́乙</mark> <mark>é</mark>',
+    );
+    expect(buildSnippetFromContent('😀\ud800needle\udc00', ['needle'])).toBe(
+      '😀\ud800<mark>needle</mark>\udc00',
+    );
+  });
+
   it('真实 FTS 链路：snippet 不篡改中英相邻与原文真实空格', () => {
     const db = new Database(':memory:');
     registerCjkSeg(db);

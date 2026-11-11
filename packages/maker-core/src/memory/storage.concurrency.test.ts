@@ -116,3 +116,36 @@ describe('conditional memory mutations', () => {
     expect((await storage.read(filename)).body).toBe('Recovered');
   });
 });
+
+/*
+ * 测试价值
+ * - 生产入口与可观察结果：MemoryStorage 的 write / list / rebuildIndex 对记忆文件夹里被换成链接的文件的处理，
+ *   看链接指向的真实文件是否被改写或读进记忆。
+ * - 规则依据：伙伴记忆搬进伙伴项目 `.cindy/memory/`（2026-11-09），该文件夹可被任务的文件工具改动；
+ *   宿主写记忆不得顺着链接写到文件夹外，也不得把链接指向的文件读成记忆。
+ * - 现有覆盖缺口：记忆此前只在任务碰不到的宿主目录，没有链接相关覆盖。
+ * - 最小失败输入：一条记录与 MEMORY.md 被换成指向文件夹外文件的链接后再写一次。
+ * - tier：unit（临时目录真实文件 I/O）。
+ */
+// symlink-platform-skip: Windows creates file symbolic links only with Developer Mode or administrator rights.
+describe.skipIf(process.platform === 'win32')('links in the memory folder', () => {
+  it('never writes through a link and never reads one as a memory', async () => {
+    const outside = path.join(dir, '..', `${path.basename(dir)}-outside.txt`);
+    await fs.writeFile(outside, 'not a memory', 'utf8');
+    try {
+      await fs.rm(path.join(dir, filename));
+      await fs.symlink(outside, path.join(dir, filename));
+      await fs.rm(path.join(dir, 'MEMORY.md'));
+      await fs.symlink(outside, path.join(dir, 'MEMORY.md'));
+      expect(await storage.list()).toEqual([]);
+
+      await storage.write({ ...seed, body: 'Rewritten' });
+      expect(await fs.readFile(outside, 'utf8')).toBe('not a memory');
+      expect((await fs.lstat(path.join(dir, filename))).isSymbolicLink()).toBe(false);
+      expect((await fs.lstat(path.join(dir, 'MEMORY.md'))).isSymbolicLink()).toBe(false);
+      expect((await storage.read(filename)).body).toBe('Rewritten');
+    } finally {
+      await fs.rm(outside, { force: true });
+    }
+  });
+});

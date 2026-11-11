@@ -20,8 +20,10 @@ export interface PluginTargetCandidate {
   detail: string;
 }
 export type PluginTargetRequest =
+  | { kind: 'capabilities' }
   | { kind: 'list'; targetKind: PluginTargetKind }
-  | { kind: 'resolve'; target: PluginTargetRef }
+  | { kind: 'resolve'; target: PluginTargetRef; session?: never }
+  | { kind: 'resolve'; session: string; target?: never }
   | {
       kind: 'send';
       requestKey: string;
@@ -36,7 +38,10 @@ export type PluginTargetRequest =
       /** Only project creation may select a permission within the user's plugin policy. */
       permissionMode?: PluginTaskPermissionMode;
       delivery?: PluginTargetDelivery;
+      /** Opt-in scoped Auto work; requires independent agent.delegation approval. Bot + queue only. */
+      delegation?: { task: string };
       /** Reference an already confirmed Host tool invocation; never grants execution authority. */
       invocationId?: string;
     }
+  | { kind: 'get'; requestKey: string }
   | { kind: 'cancel'; requestKey: string };
