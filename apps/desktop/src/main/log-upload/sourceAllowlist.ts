@@ -131,6 +131,12 @@ const ALLOWED_EXACT_SCOPES: readonly string[] = [
   // Linux 远程桌面黑屏诊断(#9712,remote-desktop/index.ts):每次运行至多一条,只有固定标签
   // 与 `wayland-N` socket 名,不带路径、窗口标题或画面内容。`remote-desktop` 根与其他子 scope 不放行。
   'remote-desktop:display-backend',
+  // Linux SNI 托盘生命周期(PR #6105 review r4290780115): Wayland「收起到托盘」失败时唯一
+  // 的排障证据。仓库里唯一调用点是 bootstrap 的 createLogger('linux-tray'),只打 linuxTray
+  // 控制器 ensure/refreshMenu/dispose 的 Electron 托盘操作 error 消息(图标取应用自带资源
+  // 路径),任何级别都不含用户内容。精确放行:将来新增 linux-tray:* 子 scope 默认仍拒,
+  // 需显式评审后再加(同 device-link 的方向,不学 windows-tray 的根放行)。
+  'linux-tray',
 ];
 
 /**

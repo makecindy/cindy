@@ -38,6 +38,30 @@ describe('remote desktop display backend scope', () => {
   });
 });
 
+/**
+ * PR #6105 review（r4290780115）：Wayland 收起到托盘的失败只记在 bootstrap 的
+ * `createLogger('linux-tray')` 下（linuxTray 控制器的 Electron 托盘操作错误），此前白名单
+ * 只有 `windows-tray`，deny-by-default 把这些排障证据整类丢弃。精确放行而非根放行：
+ * 该 scope 目前没有子 scope，将来新增的 `linux-tray:*` 默认仍拒，需显式评审。
+ */
+describe('linux-tray：精确匹配，子 scope 不跟着放行', () => {
+  it('bare linux-tray 放行（Wayland 收起到托盘的失败诊断）', () => {
+    expect(isAllowedScope('linux-tray')).toBe(true);
+  });
+
+  it('⚠️ linux-tray 下任何未列出的子 scope 默认不放行（含将来新增的）', () => {
+    for (const scope of [
+      'linux-tray:menu',
+      'linux-tray/sni',
+      'linux-tray:some-future-sub-scope',
+      'r:linux-tray',
+      'linux-trays',
+    ]) {
+      expect(isAllowedScope(scope)).toBe(false);
+    }
+  });
+});
+
 describe('放行：基础设施来源', () => {
   it.each([
     ['lifecycle', '退出编排与 render-process-gone'],

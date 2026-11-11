@@ -131,6 +131,31 @@ it('preserves correlated bounded queue evidence through actual collection and re
   expect(JSON.stringify(collected)).not.toContain('PRIVATE_PAYLOAD');
 });
 
+// PR #6105 review（r4290780115）：Wayland「收起到托盘」失败只由 bootstrap 的
+// createLogger('linux-tray') 记录。规则要求按「默认级别 → 真实记录格式 → collectLogs」
+// 验证诊断确实被保留，而不是只断言 logger 被调用或 isAllowedScope 为真：scope 是精确
+// 放行，bare `linux-tray` 的托盘失败必须随采集离开本机，而它未来的子 scope 与未知来源
+// 仍然整类丢弃。
+it('keeps linux-tray failure diagnostics through actual collection, drops its children and unknown scopes', async () => {
+  const logDir = path.join('/tmp', 'cindy-logs');
+  const files: Record<string, string> = {
+    [path.join(logDir, `main-${dayKey(NOW)}.log`)]: [
+      SENTINEL,
+      mainLine(NOW - 1_000, 'ERROR', 'linux-tray',
+        'Linux tray operation failed {"error":"tray icon is empty: /usr/lib/cindy/resources/icon.png"}'),
+      mainLine(NOW - 1_000, 'ERROR', 'linux-tray:menu', 'PRIVATE_MENU_PAYLOAD'),
+      mainLine(NOW - 1_000, 'ERROR', 'some-future-scope', 'PRIVATE_UNKNOWN_PAYLOAD'),
+    ].join('\n'),
+  };
+  const { deps } = harness(files);
+  const collected = await collectLogs(deps, { reason: 'manual', anchors: [] });
+  expect(collected.records).toHaveLength(1);
+  expect(collected.records[0].scope).toBe('linux-tray');
+  expect(collected.records[0].msg).toContain('Linux tray operation failed');
+  expect(JSON.stringify(collected)).not.toContain('PRIVATE_MENU_PAYLOAD');
+  expect(JSON.stringify(collected)).not.toContain('PRIVATE_UNKNOWN_PAYLOAD');
+});
+
 describe('第一层源白名单：会话目录与调试原文永不被打开', () => {
   it('诱饵文件存在也不被读取，且内容不出现在结果里', async () => {
     const logDir = path.join('/tmp', 'cindy-logs');
