@@ -1376,4 +1376,52 @@ describe('live compact 1.1.5: failure diagnostics completeness, checkpoint floor
     // 不传地板时旧行为不变:三轮全保留。
     expect(keptToolRounds(events, 3)).toEqual([{ start: 0, end: 1 }, { start: 3, end: 4 }, { start: 5, end: 6 }]);
   });
+
+  it('a successful oversized result stays a plain omission and does not veto the excerpt', () => {
+    // Greptile P2(4fb89e1d92):上游 incomplete() 闭包自带 built.failed 守卫 —— 失败记账只属于
+    // 失败工具,成功结果超预算仍是普通省略+备份,不得拒掉整刀。unknown 块每行截 240、
+    // 只留末 3 行,单块最大 ~770;要触发省略,用多个成功工具把共享预算挤满。
+    const line = (tag) => [`${tag}1 ${'x'.repeat(190)}`, `${tag}2 ${'x'.repeat(190)}`, `${tag}3 ${'x'.repeat(190)}`].join('\n');
+    const spans = Array.from({ length: 5 }, (_, i) => ({ role: 'tool', text: line(`t${i} `), isError: false }));
+    const excerpt = toolExcerpt(spans);
+    expect(excerpt.omitted).toBeGreaterThan(0);
+    expect(excerpt.needsBackup).toBe(true);
+    expect(excerpt.failureDiagnosticsComplete).toBe(true);
+    expect(excerpt.incompleteFailures).toEqual([]);
+  });
+
+  it('refuses a pointer-only cut when the expanded span holds a sibling failure', () => {
+    // Greptile P1(4fb89e1d92):上游的失败检查发生在 pairStart 扩展之后、查整段 ——
+    // 同一条 assistant 发两个调用(短失败 + 成功超大 read)时,扩展会把失败结果也换掉,
+    // 只查超大结果本身会漏检。同构对照:无兄弟失败时这刀照常走指针。
+    const mk = (withFailure) => [
+      entry('system', 'sys'),
+      entry('user', 'go'),
+      ...(() => [
+        entry('assistant', 'ask c1', { calls: ['c1'], callMeta: new Map([['c1', { name: 'shell', command: '', filePath: '', jobId: '', hiddenArgs: false }]]) }),
+        entry('toolResult', 'out c1', { results: ['c1'] }),
+      ])(),
+      entry('assistant', 'do two', {
+        calls: ['f1', 'r0'],
+        callMeta: new Map([
+          ['f1', { name: 'shell', command: '', filePath: '', jobId: '', hiddenArgs: false }],
+          ['r0', { name: 'read', command: '', filePath: '', jobId: '', hiddenArgs: false }],
+        ]),
+      }),
+      ...(withFailure
+        ? [entry('toolResult', 'boom\n[exit code: 2]', { results: ['f1'], isError: true })]
+        : [entry('toolResult', 'fine', { results: ['f1'] })]),
+      entry('toolResult', `${'x'.repeat(200000)} ok`, { results: ['r0'] }),
+      ...(() => [
+        entry('assistant', 'ask c2', { calls: ['c2'], callMeta: new Map([['c2', { name: 'shell', command: '', filePath: '', jobId: '', hiddenArgs: false }]]) }),
+        entry('toolResult', 'out c2', { results: ['c2'] }),
+      ])(),
+      ...(() => [
+        entry('assistant', 'ask c3', { calls: ['c3'], callMeta: new Map([['c3', { name: 'shell', command: '', filePath: '', jobId: '', hiddenArgs: false }]]) }),
+        entry('toolResult', 'out c3', { results: ['c3'] }),
+      ])(),
+    ];
+    expect(selectNewestChunk(mk(false), undefined, { drain: true, totalTokens: 90000 })).not.toBeNull();
+    expect(selectNewestChunk(mk(true), undefined, { drain: true, totalTokens: 90000 })).toBeNull();
+  });
 });

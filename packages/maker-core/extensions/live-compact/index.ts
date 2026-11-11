@@ -1283,9 +1283,6 @@ export function toolExcerpt(spans: SpanPiece[] | null, backupId = "") {
   const chosen: Array<{ index: number; block: string; sourceId: any; text: string }> = [];
   // 1.1.5(#33): 失败诊断被截/被丢都要记账,buildCard 据此把卡片标为不可执行。
   const incompleteFailures = new Map<number, string>();
-  const incomplete = (sourceId: any, reason: string) => {
-    if (!incompleteFailures.has(sourceId)) incompleteFailures.set(sourceId, reason);
-  };
   // 1.0.9: 每个工具来源都记「哪些是硬行、哪些普通行被省略」,卡片按 (来源, 行) 核覆盖。
   const stats: Array<{ sourceId: any; hardLines: string[]; omittedOrdinaryToolLines: number }> = [];
   let used = 0;
@@ -1294,14 +1291,19 @@ export function toolExcerpt(spans: SpanPiece[] | null, backupId = "") {
     const built = toolBlock(item.span);
     let block = built.block;
     const sourceId = (item.span as any).id;
-    if (!built.failureDiagnosticsComplete) incomplete(sourceId, "failed-tool-lines-truncated");
+    // 上游口径:只给失败记账 —— 成功结果超预算仍按「省略正文+备份」走,不拒整刀。
+    const incomplete = (reason: string) => {
+      if (!built.failed || incompleteFailures.has(sourceId)) return;
+      incompleteFailures.set(sourceId, reason);
+    };
+    if (!built.failureDiagnosticsComplete) incomplete("failed-tool-lines-truncated");
     if (item.index === lastFailure && used + block.length > TOOL_BUDGET) {
       block = fitFailure(block, Math.max(0, TOOL_BUDGET - used));
-      incomplete(sourceId, "failed-tool-budget-truncated");
+      incomplete("failed-tool-budget-truncated");
     }
     if (used + block.length > TOOL_BUDGET) {
       needsBackup = true;
-      incomplete(sourceId, "failed-tool-budget-omitted");
+      incomplete("failed-tool-budget-omitted");
       stats.push({ sourceId, hardLines: built.hardLines, omittedOrdinaryToolLines: built.ordinaryLines.length });
       continue;
     }
@@ -2776,10 +2778,6 @@ export function selectNewestChunk(
   let card: any;
   let tokens = spanTokens(items, start, spanEnd);
   if (picked.pointerOnly) {
-    // 1.1.5(#33): 段里有已知失败就不许只留指针 —— 失败诊断可能正是下一步要用的东西。
-    if (spanPieces(picked.start, spanEnd).some((piece) => normalizeRole(piece.role) === "tool" && isToolFailure(piece.text, piece.isError))) {
-      return warn(`pointer-only span ${picked.start}..${spanEnd} holds a known failure`);
-    }
     // 超大工具结果:只留指针,并连同发这个调用的 assistant 一起换掉。
     const toolCallId = entries[spanEnd].results[0] || '';
     let pairStart = -1;
@@ -2796,6 +2794,11 @@ export function selectNewestChunk(
     start = pairStart;
     tokens = spanTokens(items, start, spanEnd);
     const pointerPieces = spanPieces(start, spanEnd);
+    // 1.1.5(#33): 上游的失败检查发生在 pairStart 扩展之后、查整段 —— 同一轮的短失败结果
+    // 会随 pairStart 一起被换掉,只查超大结果本身会漏检。
+    if (pointerPieces.some((piece) => normalizeRole(piece.role) === "tool" && isToolFailure(piece.text, piece.isError))) {
+      return warn(`pointer-only span ${start}..${spanEnd} holds a known failure`);
+    }
     // 指针核不上时(原文快照的 meta 缺失或损坏),卡片里就没有任何可回查的路径。
     // 主 shadow 里存着这一段的正文,把它挂上 —— 切走之后模型还能找回原文。
     const pointerMissing = pointerPieces.some(
