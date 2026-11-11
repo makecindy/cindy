@@ -359,12 +359,14 @@ describe('RightSidebarShell empty state', () => {
   // or write created=true again. Real Shell/host/store; only IPC and xterm are
   // faked, in the unit tier. Defer rejection until the optimistic render commits.
   // PR8881 discussion_r4476762727: continue after DB recovery through a real
-  // exit and explicit restart; remote restart also requires created=true.
+  // exit and explicit restart. PR8881 discussion_r4535095939 adds failure of
+  // that exit write too: runtime attachment must still permit a real restart.
   it.each([
-    { busy: false, remoteHostId: null },
-    { busy: true, remoteHostId: null },
-    { busy: true, remoteHostId: 'ssh-host' },
-  ])('preserves terminal lifecycle through hydration ($busy, $remoteHostId)', async ({ busy, remoteHostId }) => {
+    { busy: false, remoteHostId: null, busyExit: false },
+    { busy: true, remoteHostId: null, busyExit: false },
+    { busy: true, remoteHostId: 'ssh-host', busyExit: false },
+    { busy: true, remoteHostId: 'ssh-host', busyExit: true },
+  ])('preserves terminal lifecycle through hydration ($busy, $remoteHostId, $busyExit)', async ({ busy, remoteHostId, busyExit }) => {
     await import('../plugins/terminal');
     terminalPlugin ??= getTabKind('terminal');
     if (!getTabKind('terminal')) registerTabKind(terminalPlugin!);
@@ -417,7 +419,9 @@ describe('RightSidebarShell empty state', () => {
       const writesBeforeExit = tabsIpc.upsert.mock.calls.length;
       act(() => exitListener({ id: 'another-terminal', exit: { code: 99, signal: null } }));
       expect(tabsIpc.upsert).toHaveBeenCalledTimes(writesBeforeExit);
-      act(() => exitListener({ id: 'terminal-live', exit: { code: 17, signal: null } }));
+      if (busyExit) tabsIpc.upsert.mockRejectedValue(new Error('SQLITE_BUSY: database is locked'));
+      await act(async () => exitListener({ id: 'terminal-live', exit: { code: 17, signal: null } }));
+      if (busyExit) expect(getBucket('terminal-task').tabs[0].state).toMatchObject({ created: false });
       expect(await screen.findByText('rightSidebar.terminal.processExited')).toBeTruthy();
       fireEvent.click(screen.getByRole('button', { name: 'rightSidebar.terminal.restart' }));
       await waitFor(() => expect(restart).toHaveBeenCalledTimes(1));

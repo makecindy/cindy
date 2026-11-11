@@ -18,7 +18,10 @@ export function RemoteTerminalSetup(props: TabKindBodyProps<TerminalState>) {
   const { t } = useTranslation();
   const entry = useMemo(() => getOrCreateXterm(ctx.tabId), [ctx.tabId]);
   const draftKey = JSON.stringify([ctx.sessionId, ctx.deviceLinkDeviceId, ctx.remoteHostId]);
-  const hasDraft = entry.remoteDraft?.contextKey === draftKey;
+  const prepareState = useCallback(() => {
+    const draft = entry.remoteDraft?.contextKey === draftKey ? entry.remoteDraft : undefined;
+    return { phase: 'prepare' as const, connection: draft?.submitted ? draft.connection : undefined, editing: draft ? !draft.submitted : false };
+  }, [entry, draftKey]);
   const context = useMemo(() => ({
     sessionId: ctx.sessionId,
     ...(ctx.deviceLinkDeviceId ? { deviceId: ctx.deviceLinkDeviceId } : {}),
@@ -28,9 +31,10 @@ export function RemoteTerminalSetup(props: TabKindBodyProps<TerminalState>) {
     | { phase: 'prepare'; connection?: RemoteTerminalConnection; editing?: boolean }
     | { phase: 'form'; description: RemoteTerminalDescription }
     | { phase: 'error'; connection?: RemoteTerminalConnection; editing?: boolean }
-  >(hasDraft && !entry.remoteDraft?.submitted
-    ? { phase: 'prepare', connection: entry.remoteDraft?.submitted ? entry.remoteDraft.connection : undefined, editing: !entry.remoteDraft?.submitted }
-    : { phase: 'terminal' });
+  >(() => {
+    const preparation = prepareState();
+    return preparation.editing ? preparation : { phase: 'terminal' };
+  });
 
   useEffect(() => {
     if (setup.phase !== 'prepare') return;
@@ -44,7 +48,8 @@ export function RemoteTerminalSetup(props: TabKindBodyProps<TerminalState>) {
     entry.closeCancelledListeners.add(retryAfterClose);
     if (!entry.closing) void window.electronAPI.terminal.describeRemote({ id: ctx.tabId, ...context, ...(setup.connection ? { connection: setup.connection } : {}) }).then((result) => {
       if (cancelled || entry.closing) return;
-      if (result.ticket && !setup.editing) {
+      // Release may confirm editing while this description is in flight.
+      if (result.ticket && !setup.editing && !prepareState().editing) {
         setSetup({ phase: 'terminal', ticket: result.ticket });
       } else {
         setSetup({ phase: 'form', description: result });
@@ -54,11 +59,13 @@ export function RemoteTerminalSetup(props: TabKindBodyProps<TerminalState>) {
       cancelled = true;
       entry.closeCancelledListeners.delete(retryAfterClose);
     };
-  }, [context, ctx.tabId, entry, setup]);
+  }, [context, ctx.tabId, entry, setup, prepareState]);
 
   const ticket = setup.phase === 'terminal' ? setup.ticket : undefined;
   const remote = useMemo(() => ({ ...context, ...(ticket ? { ticket } : {}) }), [context, ticket]);
-  const prepare = useCallback(() => setSetup({ phase: 'prepare', connection: entry.remoteDraft?.contextKey === draftKey && entry.remoteDraft.submitted ? entry.remoteDraft.connection : undefined }), [entry, draftKey]);
+  // A release can commit editing intent after this body mounted. Read the pool
+  // at recovery time, using the same draft policy as the initial mount.
+  const prepare = useCallback(() => setSetup(prepareState()), [prepareState]);
   const connectionDisposed = useCallback(() => {
     entry.remoteDraft = { contextKey: draftKey, submitted: false };
   }, [entry, draftKey]);

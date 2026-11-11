@@ -1190,6 +1190,61 @@ describe('TerminalTabBody remote ownership', () => {
     }
   });
 
+  // PR8881 discussion_r4535095951: unlike the remount-after-release case,
+  // this body mounts before release and prepares only after its attach fails.
+  // Unit: real setup/body and pool transitions, deferred IPC, saved-host ticket.
+  it.each([
+    { deviceLinkDeviceId: null, releaseDuringDescribe: false },
+    { deviceLinkDeviceId: 'device-1', releaseDuringDescribe: false },
+    { deviceLinkDeviceId: null, releaseDuringDescribe: true },
+  ])('keeps late confirmed edit intent when the remounted body prepares ($deviceLinkDeviceId, $releaseDuringDescribe)', async ({ deviceLinkDeviceId, releaseDuringDescribe }) => {
+    const api = window.electronAPI.terminal;
+    vi.mocked(api.create).mockImplementationOnce(async () => {
+      vi.mocked(api.onExit).mock.calls.at(-1)![0]({ id: 'terminal-1', exit: { code: 255, signal: null } });
+      return { shellId: 'sh', shellDisplayName: 'SSH', pid: 1 };
+    });
+    vi.mocked(api.describeRemote).mockImplementation(async ({ connection }) => ({
+      context: { sessionId: 'session-1' }, target: { key: 'target', label: 'Host', cwd: '/remote' },
+      connection: connection ?? { host: 'old-host' }, candidates: [], ticket: 'prepared-ticket',
+    }));
+    let finishDispose!: () => void;
+    let rejectAttach!: (error: Error) => void;
+    vi.mocked(api.dispose).mockImplementationOnce(() => new Promise(resolve => { finishDispose = resolve; }));
+    const ctx = makeContext({ remoteHostId: 'ssh-host', deviceLinkDeviceId });
+    const state = { created: true, exited: { code: 255, signal: null }, title: '', shellId: '', shellDisplayName: '' };
+    const view = render(<TerminalTabBody state={state} ctx={ctx} active />);
+    await act(async () => {});
+    fireEvent.click(screen.getByText('rightSidebar.terminal.remote.editConnection'));
+    view.unmount();
+    vi.mocked(api.create).mockImplementationOnce(() => new Promise((_, reject) => { rejectAttach = reject; }));
+    render(<TerminalTabBody state={state} ctx={ctx} active />);
+    await act(async () => {});
+    expect(api.describeRemote).not.toHaveBeenCalled();
+    if (releaseDuringDescribe) {
+      let finishDescribe!: () => void;
+      vi.mocked(api.describeRemote).mockImplementationOnce(() => new Promise(resolve => {
+        finishDescribe = () => resolve({
+          context: { sessionId: 'session-1' }, target: { key: 'target', label: 'Host', cwd: '/remote' },
+          connection: { host: 'old-host' }, candidates: [], ticket: 'old-ticket',
+        });
+      }));
+      await act(async () => { rejectAttach(new Error('[PRECONDITION_FAILED] prepare')); });
+      expect(api.describeRemote).toHaveBeenCalledOnce();
+      await act(async () => { finishDispose(); });
+      await act(async () => { finishDescribe(); });
+    } else {
+      await act(async () => { finishDispose(); });
+      await act(async () => { rejectAttach(new Error('[PRECONDITION_FAILED] prepare')); });
+    }
+    expect((await screen.findByLabelText('rightSidebar.terminal.remote.host') as HTMLInputElement).value).toBe('old-host');
+    expect(api.create).toHaveBeenCalledTimes(2);
+    fireEvent.change(screen.getByLabelText('rightSidebar.terminal.remote.host'), { target: { value: 'new-host' } });
+    fireEvent.click(screen.getByText('rightSidebar.terminal.remote.connect'));
+    await act(async () => {});
+    expect(api.describeRemote).toHaveBeenLastCalledWith(expect.objectContaining({ connection: { host: 'new-host' } }));
+    expect(api.create).toHaveBeenCalledTimes(3);
+  });
+
   it('recovers on close rollback after edit disposal successfully releases the retained PTY', async () => {
     const api = window.electronAPI.terminal;
     vi.mocked(api.create).mockImplementationOnce(async () => {

@@ -344,7 +344,9 @@ export function TerminalSessionBody({ state, ctx, active, shellVisible = true, r
   // ─── 5. Restart 按钮 handler ───
   const onRestart = useCallback(async () => {
     if (restarting) return;
-    if (remote && (!state.created || !entryRef.current?.ptyAttached)) {
+    // Persisted created can roll back after both attach and exit writes fail.
+    // The pool owns whether there is an existing PTY to restart.
+    if (remote && !entryRef.current?.ptyAttached) {
       onPrepare?.();
       return;
     }
@@ -391,7 +393,7 @@ export function TerminalSessionBody({ state, ctx, active, shellVisible = true, r
     } finally {
       if (aliveRef.current) setRestarting(false);
     }
-  }, [restarting, tabId, workdir, patchState, state.created, remote, onPrepare]);
+  }, [restarting, tabId, workdir, patchState, remote, onPrepare]);
 
   const editConnection = useCallback(async () => {
     if (!onEditConnection || restarting) return;
