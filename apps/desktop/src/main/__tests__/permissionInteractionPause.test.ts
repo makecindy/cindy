@@ -15,7 +15,7 @@ const names = new Set([
   'schedulePendingPermissionTimeout',
   'resolvePendingInteraction', 'cancelPendingInteraction', 'defaultDecisionForPending',
   'cleanupPendingAgentInteractionsForSession', 'takePendingInteractionsForSession',
-  'bindSharedPermission',
+  'bindSharedPermission', 'broadcastToAllWindows',
 ]);
 const functions = ast.statements.filter((node) => ts.isFunctionDeclaration(node)
   && node.name && names.has(node.name.text)).map(node => node.getText(ast).replace(/^export /, ''));
@@ -43,7 +43,8 @@ const compiled = ts.transpileModule(`${functions.join('\n')}
 setSharedTaskInteractionReader(${interactionReaderSource});
 return { install: installDesktopInteractionListener,
   answer: resolvePendingInteraction, cleanup: cleanupPendingAgentInteractionsForSession,
-  take: takePendingInteractionsForSession, resolveFromIpc: ${resolveHandlerSource} };`, {
+  take: takePendingInteractionsForSession, broadcast: broadcastToAllWindows,
+  resolveFromIpc: ${resolveHandlerSource} };`, {
   compilerOptions: { target: ts.ScriptTarget.ES2022 },
 }).outputText;
 const MINUTE = 60_000;
@@ -60,6 +61,7 @@ function harness() {
   const listeners = new Map<string, InteractionResolver>();
   const entries = new Map();
   const dismiss = vi.fn();
+  const dismissInteractionNotifications = vi.fn();
   const deps = {
     maker: { getSession: () => ({ submitAsyncQuestionAnswer: vi.fn(async () => true) }) },
     createSharedPermission,
@@ -78,7 +80,13 @@ function harness() {
     shouldNotifyAgentIslandForSession: () => false,
     flushAssistantBlock: vi.fn(), onInteractionMessage: vi.fn(),
     redactToolInputForUntrustedBoundary: (_tool: string, input: unknown) => input,
-    broadcastToAllWindows: vi.fn(),
+    BrowserWindow: { getAllWindows: () => [] },
+    getActiveDataOwnerPushStamp: () => undefined,
+    isDataOwnerBroadcastScopeCurrent: () => true,
+    tapWindowBroadcast: vi.fn(),
+    invalidateWorkersByLeadSingleFlight: vi.fn(),
+    dismissSessionInteractionNotifications: dismissInteractionNotifications,
+    log: { warn: vi.fn() },
     MAKER_PUSH: { INTERACTION_REQUEST: 'request', INTERACTION_DISMISSED: 'dismissed' },
     handleAgentIslandInteractionAfterBroadcast: vi.fn(), handleAgentIslandInteractionDismissed: vi.fn(),
     dismissRendererInteraction: dismiss, persistInteractionDecision: vi.fn(),
@@ -90,7 +98,11 @@ function harness() {
     cleanup: (id: string, reason: string) => void;
     take: (id: string) => Array<{ resolve: (decision: InteractionDecision) => void; sharedPermission?: SharedPermission }>;
     resolveFromIpc: (event: unknown, id: string, decision: InteractionDecision) => Promise<{ accepted: boolean }>;
+    broadcast: (channel: string, payload: unknown) => void;
   };
+  dismiss.mockImplementation((entry, requestId, reason, resolvedAs) => runtime.broadcast('dismissed', {
+    sessionId: entry.sessionId, requestId, reason, resolvedAs,
+  }));
   const request = (id = 'permission', sessionId = 'task', kind: InteractionRequest['kind'] = 'permission', channel?: InteractionHandler, signal?: AbortSignal, isBlocking?: boolean, delivery?: 'async') => {
     const session: InteractionSession = { id: sessionId, setInteractionListener: handler => { if (handler) listeners.set(sessionId, handler); } };
     runtime.install(session);
@@ -105,7 +117,9 @@ function harness() {
     void promise.then(settled);
     return { promise, settled, lease };
   };
-  return { ...runtime, request, entries, dismiss, patch: deps.broadcastSessionPatched, setSharedTask: (peer?: SharedTaskPeerCapture) => { sharedTask = peer; } };
+  return { ...runtime, request, entries, dismiss, dismissInteractionNotifications, patch: deps.broadcastSessionPatched,
+    setPaused: (id: string, paused: boolean) => coordinator.setExecutionPaused(id, paused),
+    setSharedTask: (peer?: SharedTaskPeerCapture) => { sharedTask = peer; } };
 }
 
 beforeEach(() => { vi.useFakeTimers(); vi.setSystemTime(0); });
@@ -122,6 +136,24 @@ it('publishes the Worker list badge with Island disabled until its last question
   h.answer('b', answer);
   expect(h.patch).toHaveBeenLastCalledWith('worker', { orcaHasPendingQuestion: false });
   await Promise.all([a.promise, b.promise]);
+});
+
+// #9944 patch / unit: exercise the actual resolve IPC and main broadcast seam.
+// A displayed request or a paused/rejected choice must keep its OS reminder;
+// only a successfully handled choice retires it.
+it.each(['permission', 'ask_user_question', 'plan_review'] as const)('retires notifications after an accepted %s decision', async (kind) => {
+  const h = harness();
+  const pending = h.request('request', 'task', kind);
+  const decision: InteractionDecision = kind === 'ask_user_question'
+    ? { kind, answers: { choice: 'yes' } } : { kind, behavior: 'allow' };
+  expect(h.dismissInteractionNotifications).not.toHaveBeenCalled();
+  h.setPaused('task', true);
+  expect(h.answer('request', decision)).toBe(false);
+  expect(h.dismissInteractionNotifications).not.toHaveBeenCalled();
+  h.setPaused('task', false);
+  await expect(h.resolveFromIpc({}, 'request', decision)).resolves.toEqual({ accepted: true });
+  await expect(pending.promise).resolves.toEqual(decision);
+  expect(h.dismissInteractionNotifications).toHaveBeenCalledExactlyOnceWith('task');
 });
 
 it('does not consume the pending decision when membership is revoked after dispatch admission', async () => {
