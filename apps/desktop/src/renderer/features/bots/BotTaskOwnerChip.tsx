@@ -9,10 +9,9 @@ import { useSessionDelegatingBot } from './botFollowScopes';
 import { ensureBotProfilesLoaded } from './botStore';
 
 /**
- * A Bot's background task opens in the ordinary task view; this quiet chip in
- * its header says whose task it is and leads back to that Bot. Only a task the
- * Bot started itself (a delegation child) is its background task; an ordinary
- * task the Bot took over keeps the sidebar's follow mark and no chip.
+ * A task a teammate opened is an ordinary task; this quiet chip in its header
+ * says which teammate opened it and leads back to that teammate. A task the
+ * teammate only follows keeps the sidebar's follow mark and no chip.
  */
 export function BotTaskOwnerChip({ session }: { session: Session }) {
   const { t } = useTranslation();

@@ -67,6 +67,8 @@ export interface AgentSkillCommand {
   description?: string;
   /** Main-attested Cindy bundle identity; never inferred from user-authored metadata. */
   builtIn?: boolean;
+  /** Host-attested Cindy built-in or verified official plugin source. */
+  cindyOfficial?: boolean;
   /** Whether the skill came from a user-global or project-local directory. */
   source: SlashCommandSource;
   path?: string;

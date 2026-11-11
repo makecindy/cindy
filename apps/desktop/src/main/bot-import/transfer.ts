@@ -5,7 +5,7 @@ import type { RoutineInput } from '@cindy/maker-scheduler';
 import { createImportBudget, fingerprint, readImportFile, readImportTree, reserveSnapshotItems, type ImportReadBudget } from './files.js';
 import { CompanionImportError, importFailureCode, object, type ImportItem, type ImportSnapshot, type ImportSource } from './types.js';
 import { normalizeImportSkill, readImportSkillTree } from './skills.js';
-import { indexAutomationDependencies, normalizeAutomation } from './sourceAutomations.js';
+import { importedRuntimeRequired, indexAutomationDependencies, normalizeAutomation } from './sourceAutomations.js';
 import { memoryFileContent } from './memoryFiles.js';
 import { resolveImportEnvironmentDependencies, selectedImportEnvironment } from './environmentSelection.js';
 import type { ImportBotRecord } from './botTakeover.js';
@@ -31,6 +31,10 @@ export interface ImportReceipt {
   handoverMarkers?: true;
   /** Durable fence: a deleted companion's old preview/request must never recreate it. */
   cancelled?: boolean;
+  /**
+   * Imported automations by entry ID (stored name kept): `id` is the routine id their project
+   * automations derive from (`migratedAutomationId`).
+   */
   routines: Record<string, { id: string; phase: 'created' | 'verified' | 'pausing-source' | 'source-paused' | 'complete'; sourceRestored?: boolean }>;
   /** `bots` entries: source stop / companion connect progress, by entry ID. */
   bots?: Record<string, ImportBotRecord>;
@@ -50,12 +54,14 @@ export interface TransferDeps {
   saveEnvironment(botId: string, items: ImportItem[]): Promise<void>;
   saveCheckpoint(botId: string, items: ImportItem[]): Promise<void>;
   createConversation(botId: string): Promise<string | undefined>;
-  createRoutine(botId: string, input: RoutineInput, creationId: string, item: ImportItem): Promise<string>;
+  /** Write the job as paused automations of the teammate's project; idempotent per creationId. */
+  createAutomation(botId: string, input: RoutineInput, creationId: string, item: ImportItem): Promise<string>;
   /** Success requires actual read evidence from the target environment, not just presence of keys. */
   verifyAutomation(botId: string, item: ImportItem): Promise<{ verified: boolean; reason?: string }>;
   pauseSource(item: ImportItem, snapshot: ImportSnapshot, resumeInterruptedPause: boolean): Promise<void>;
   resumeSource(item: ImportItem, snapshot: ImportSnapshot): Promise<void>;
-  enableRoutine(botId: string, routineId: string, item: ImportItem): Promise<void>;
+  /** Resume that job's project automations once its source is paused. */
+  enableAutomation(botId: string, routineId: string, item: ImportItem): Promise<void>;
   /**
    * Turn an imported Telegram / Discord credential into the companion's own bot connection.
    * Resolves to an advisory issue code when it could not; the credential stays saved for delivery.
@@ -362,10 +368,10 @@ export async function transferCompanion(snapshot: ImportSnapshot, selection: Com
     let record = receipt.routines[item.view.id];
     if (!record) {
       try {
-        const id = await deps.createRoutine(botId, { ...automation.input!, enabled: false }, fingerprint([selection.requestId, item.view.id]), item);
+        const id = await deps.createAutomation(botId, { ...automation.input!, enabled: false }, fingerprint([selection.requestId, item.view.id]), item);
         deps.assertOwner();
         record = receipt.routines[item.view.id] = { id, phase: 'created' };
-        // createOnce is idempotent if this progress batch is interrupted.
+        // createAutomation is idempotent if this progress batch is interrupted.
       } catch (error) {
         deps.assertOwner();
         check(item.view.id, 'needs-attention', importFailureCode(error));
@@ -378,6 +384,23 @@ export async function transferCompanion(snapshot: ImportSnapshot, selection: Com
     }
     if (!item.view.enabled || !selection.takeover) {
       record.phase = 'complete'; check(item.view.id, 'paused'); await saveProgress(item.view.id); continue;
+    }
+    if (snapshot.source.kind !== 'cindy' && importedRuntimeRequired(snapshot.source.kind, automation.original)) {
+      // A checkpoint saved before imported jobs became project automations: its scripts, commands
+      // and monitors ran in a runtime that no longer exists, so the job stays at its source. A
+      // handover already under way gives the source back first.
+      try {
+        if (record.phase === 'pausing-source' || record.phase === 'source-paused') {
+          await deps.resumeSource(item, snapshot);
+          deps.assertOwner();
+          record.phase = 'verified';
+        }
+        check(item.view.id, 'needs-attention', 'AUTOMATION_CONTEXT_NEEDS_MAPPING');
+      } catch (error) {
+        deps.assertOwner();
+        check(item.view.id, 'needs-attention', error instanceof CompanionImportError ? error.code : 'AUTOMATION_HANDOVER_FAILED');
+      }
+      await save(); continue;
     }
     if (selection.deferSetup && !resumeSetup && record.phase === 'created') {
       check(item.view.id, 'needs-attention', 'IMPORT_SETUP_DEFERRED'); await saveProgress(item.view.id); continue;
@@ -406,7 +429,7 @@ export async function transferCompanion(snapshot: ImportSnapshot, selection: Com
         deps.assertOwner();
         record.phase = 'source-paused'; await save();
       }
-      await deps.enableRoutine(botId, record.id, item);
+      await deps.enableAutomation(botId, record.id, item);
       deps.assertOwner();
       record.phase = 'complete'; check(item.view.id, 'taken-over'); await save();
     } catch (error) {

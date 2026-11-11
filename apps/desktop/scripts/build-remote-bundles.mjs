@@ -28,6 +28,30 @@ const MONOREPO_ROOT = resolve(DESKTOP_ROOT, '..', '..');
 // expects to find it relative to apps/desktop/.
 const TARGETS = [
   {
+    pkgName: '@cindy/agent-net',
+    dependencyDirs: ['agent-net-protocol', 'agent-net-relay', 'agent-net-core', 'device-link-protocol'].map((name) => resolve(MONOREPO_ROOT, 'packages', name)),
+    pkgDir: resolve(MONOREPO_ROOT, 'packages', 'agent-net'),
+    bundleFile: 'dist/node-worker.mjs',
+    destDir: resolve(DESKTOP_ROOT, 'resources', 'agent-net'),
+    destFile: 'node-worker.mjs',
+  },
+  {
+    pkgName: '@cindy/agent-net-relay',
+    dependencyDirs: [resolve(MONOREPO_ROOT, 'packages', 'agent-net-protocol')],
+    pkgDir: resolve(MONOREPO_ROOT, 'packages', 'agent-net-relay'),
+    bundleFile: 'dist/relay.mjs',
+    destDir: resolve(DESKTOP_ROOT, 'resources', 'agent-net'),
+    destFile: 'relay.mjs',
+  },
+  {
+    pkgName: '@cindy/agent-net-core',
+    dependencyDirs: [resolve(MONOREPO_ROOT, 'packages', 'agent-net-core', 'wasm')],
+    pkgDir: resolve(MONOREPO_ROOT, 'packages', 'agent-net-core'),
+    bundleFile: 'dist/core.wasm',
+    destDir: resolve(DESKTOP_ROOT, 'resources', 'agent-net'),
+    destFile: 'core.wasm',
+  },
+  {
     pkgName: '@cindy/maker-cc-manager',
     pkgDir: resolve(MONOREPO_ROOT, 'packages', 'maker-cc-manager'),
     bundleFile: 'dist/cc-mgr.mjs',

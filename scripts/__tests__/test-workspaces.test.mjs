@@ -449,6 +449,7 @@ test("unit workspace concurrency reserves the full worker budget for heavy works
 		"**/*.e2e.test.ts",
 		"**/*.git-integration.test.ts",
 		"src/agents/shared/auto-review-remote-wiring.test.ts",
+		"src/agents/pi/__tests__/pi-extra-dirs-prompt.test.ts",
 	]);
 	assert.deepEqual(makerCore.tiers.unit.command, {
 		type: "packageBin",
@@ -488,9 +489,13 @@ test("real agent integration tests are explicit tiers outside unit", () => {
 	]);
 	assert.deepEqual(desktop.tiers.e2e.include, [
 		"src/main/maker-host/__tests__/*.e2e.test.ts",
+		"src/main/maker-host/__tests__/codexTerraProxy.integration.test.ts",
 		"src/main/remote-agent/__tests__/groupRelayClaudeFork.e2e.test.ts",
 		"src/main/remote-agent/__tests__/startupProbe.e2e.test.ts",
 	]);
+	const terraProxyTest = "apps/desktop/src/main/maker-host/__tests__/codexTerraProxy.integration.test.ts";
+	assert.deepEqual(selectFilesForTier(desktop, desktop.tiers.e2e, [terraProxyTest]), [terraProxyTest]);
+	assert.deepEqual(selectFilesForTier(desktop, desktop.tiers.unit, [terraProxyTest]), []);
 });
 
 test("Pi RPC lifecycle stays in unit while binary resource discovery stays in integration", () => {

@@ -1925,3 +1925,248 @@ describe('browser · backend capability gating (user browser via extension)', ()
     } finally { await h.cleanup(); }
   });
 });
+
+// Sequences in one call and the protocol escape hatch (2026-11-10). Unit tier, production MCP entry.
+// Rules protected: actions that need their own approval (recipe / upload / setBackend) cannot ride
+// inside a batch; a failed step never lets later steps run; cdp keeps cookies out of the model,
+// stays paused on secret pages and always ends its protocol session. No earlier test reached these
+// paths: batch and cdp did not exist, and list_tools returned one untailored rule body.
+describe('browser · batch, cdp and target-tailored rules', () => {
+  type Scripted = (request: Record<string, unknown>) => { ok?: boolean; data?: unknown; message?: string } | undefined;
+  async function scripted(respond: Scripted, extraDeps?: Partial<BrowserMcpDeps>) {
+    const calls: Array<Record<string, unknown>> = [];
+    const runtime: BrowserControlRuntime = {
+      async call(request) {
+        calls.push(request as unknown as Record<string, unknown>);
+        const reply = respond(request as unknown as Record<string, unknown>);
+        return { ok: reply?.ok ?? true, action: request.action, data: reply?.data ?? {}, ...(reply?.message ? { message: reply.message } : {}) };
+      },
+    };
+    const h = await makeHarness({ ...extraDeps, getRuntime: () => runtime });
+    const invoke = async (args: Record<string, unknown>) => {
+      const r = await h.client.callTool({ name: 'call_tool', arguments: { name: 'browser', args } });
+      return { isError: r.isError === true, body: JSON.parse((r.content as Array<{ text: string }>)[0].text) };
+    };
+    return { calls, invoke, client: h.client, cleanup: h.cleanup };
+  }
+
+  it('runs batch steps in order on the tab an earlier step opened and stops at the first failure', async () => {
+    const h = await scripted((request) => {
+      if (request.action === 'open') return { data: { targetId: 'tab-9', url: 'https://example.test/' } };
+      if (request.action === 'tabs') return { data: { tabs: [] } };
+      if ((request.request as { kind?: string } | undefined)?.kind === 'click') return { ok: false, message: 'element is not visible' };
+      return { data: { targetId: request.targetId } };
+    });
+    try {
+      const { isError, body } = await h.invoke({ action: 'batch', steps: [
+        { action: 'open', url: 'https://example.test/' },
+        { action: 'act', request: { kind: 'type', ref: 'e1', text: 'Ada' } },
+        { action: 'act', request: { kind: 'click', ref: 'e2' } },
+        { action: 'extract', extract: { fields: { title: 'h1' } } },
+      ] });
+      expect(isError).toBe(true);
+      expect(body).toMatchObject({ ok: false, action: 'batch', completed: 2, total: 4, failedStep: 2 });
+      expect(body.steps.map((step: { ok: boolean }) => step.ok)).toEqual([true, true, false]);
+      const acts = h.calls.filter((request) => request.action === 'act');
+      // Both acts ran on the opened tab; the read after the failure was never dispatched.
+      expect(acts.map((request) => [request.targetId, (request.request as { kind: string }).kind])).toEqual([['tab-9', 'type'], ['tab-9', 'click']]);
+    } finally { await h.cleanup(); }
+  });
+
+  it.each([
+    { action: 'recipe', recipeId: 'anything' },
+    { action: 'upload', paths: ['/tmp/x'] },
+    { action: 'setBackend', backend: 'user-browser' },
+    { action: 'batch', steps: [{ action: 'tabs' }] },
+    { action: 'navigate', url: 'https://example.test/', unknownField: true },
+    // Not available on the active browser (here: no screenshots): known before the first step runs.
+    { action: 'screenshot' },
+    // A protocol command the agent may not send is known up front too (seen live: it used to surface mid-batch).
+    { action: 'cdp', commands: [{ method: 'Network.getCookies' }] },
+    // Review on #9701 (Greptile P1, Codex P2): what the step's own handler would refuse, schema-valid as it is,
+    // must be refused before the first step runs. Last round only the schema and the backend were asked.
+    { action: 'cdp' },
+    { action: 'navigate', url: 'file:///tmp/x' },
+    { action: 'extract' },
+    { action: 'snapshot', afterSnapshot: {} },
+  ])('refuses the whole batch before dispatch when a step is %j', async (step) => {
+    const h = await scripted(() => undefined, { setBackend: async (backend) => backend, backendCapabilities: () => ({ screenshot: false }) });
+    try {
+      const { isError, body } = await h.invoke({ action: 'batch', steps: [{ action: 'navigate', url: 'https://example.test/' }, step] });
+      expect(isError).toBe(true);
+      expect(body.ok).toBe(false);
+      expect(h.calls).toEqual([]);
+    } finally { await h.cleanup(); }
+  });
+
+  // Review on #9701 (Greptile P2): only the first three images used to be returned and the rest vanished
+  // while their steps still reported success. Now a batch that could not return them is refused whole.
+  it('refuses a batch with more screenshot steps than it can return, before running any', async () => {
+    const h = await scripted(() => undefined);
+    try {
+      const { isError, body } = await h.invoke({ action: 'batch', targetId: 't1', steps: [
+        { action: 'navigate', url: 'https://example.test/' },
+        ...Array.from({ length: 4 }, () => ({ action: 'screenshot' })),
+      ] });
+      expect(isError).toBe(true);
+      expect(body.message).toContain('最多 3 个 screenshot');
+      expect(h.calls).toEqual([]);
+    } finally { await h.cleanup(); }
+  });
+
+  // Review on #9701 (Greptile P1): each step re-entered the handler and accepted whatever backend was
+  // current then, so a switch during a wait let later steps run on another browser with stale tabs and refs.
+  it('stops the rest of a batch when the backend is switched in the middle', async () => {
+    let scope = { lifecycle: {}, backend: {} };
+    const h = await scripted((request) => {
+      if (request.action === 'act') scope = { lifecycle: {}, backend: {} };
+      return undefined;
+    }, { getBackendScope: () => scope });
+    try {
+      const { isError, body } = await h.invoke({ action: 'batch', targetId: 't1', steps: [
+        { action: 'act', request: { kind: 'click', ref: 'e1' } },
+        { action: 'navigate', url: 'https://example.test/next' },
+        { action: 'act', request: { kind: 'click', ref: 'e2' } },
+      ] });
+      expect(isError).toBe(true);
+      expect(body).toMatchObject({ ok: false, completed: 1, total: 3, failedStep: 1 });
+      expect(body.steps[1].message).toContain('被切换');
+      expect(h.calls.map((request) => request.action)).toEqual(['act']);
+    } finally { await h.cleanup(); }
+  });
+
+  it('runs cdp helpers in one session on the resolved tab, stops at a failed command and always ends the session', async () => {
+    const h = await scripted((request) => {
+      const method = (request.recipeCommand as { method: string }).method;
+      if (method === 'Cindy.begin') return { data: { sessionId: 's1', targetId: 'resolved-tab' } };
+      if (method === 'Accessibility.getFullAXTree') return { data: { nodes: [
+        { nodeId: '1', role: { value: 'RootWebArea' }, name: { value: 'Vault' }, backendDOMNodeId: 1 },
+        { nodeId: '2', parentId: '1', role: { value: 'generic' }, name: { value: '' }, backendDOMNodeId: 7 },
+        { nodeId: '3', parentId: '2', role: { value: 'button' }, name: { value: 'Reveal code' }, backendDOMNodeId: 41,
+          properties: [{ name: 'focused', value: { value: true } }, { name: 'disabled', value: { value: false } }] },
+        { nodeId: '4', parentId: '3', role: { value: 'StaticText' }, name: { value: 'Reveal code' }, backendDOMNodeId: 42 },
+        { nodeId: '5', parentId: '2', ignored: true, role: { value: 'button' }, name: { value: 'Hidden' }, backendDOMNodeId: 43 },
+      ] } };
+      if (method === 'DOM.getContentQuads') return { data: { quads: [[10, 20, 110, 20, 110, 60, 10, 60]] } };
+      if (method === 'DOM.focus') return { ok: false, message: 'Element is not focusable' };
+      return { data: {} };
+    });
+    try {
+      const { isError, body } = await h.invoke({ action: 'cdp', targetId: 'checkout', commands: [
+        { method: 'nodes', params: { filter: 'button' } },
+        { method: 'click', params: { node: 41 } },
+        { method: 'DOM.focus', params: { backendNodeId: 41 } },
+        { method: 'Input.insertText', params: { text: 'never sent' } },
+      ] });
+      expect(isError).toBe(true);
+      expect(body.data.results.map((step: { ok: boolean }) => step.ok)).toEqual([true, true, false]);
+      // Only the named, visible button survives: the root does not match the filter, its repeated text and the ignored node are dropped.
+      expect(body.data.results[0].result).toEqual({ nodes: '[41] button "Reveal code" focused', count: 1 });
+      expect(body.data.results[1].result).toEqual({ clicked: 41, x: 60, y: 40 });
+      const sent = h.calls.map((request) => [request.targetId, (request.recipeCommand as { method: string }).method]);
+      expect(sent[0]).toEqual(['checkout', 'Cindy.begin']);
+      expect(sent.slice(1).every(([targetId]) => targetId === 'resolved-tab')).toBe(true);
+      expect(sent.map(([, method]) => method)).not.toContain('Input.insertText');
+      expect(sent.at(-1)).toEqual(['resolved-tab', 'Cindy.end']);
+    } finally { await h.cleanup(); }
+  });
+
+  // Seen live in the sidebar (2026-11-10): its pages sit in the background without focus, so inserted
+  // text went nowhere and the helper still reported success; the form was then submitted empty.
+  it.each([
+    { focused: true, editable: true, via: 'insertText' },
+    { focused: false, editable: true, via: 'value' },
+    { focused: false, editable: false, via: undefined },
+  ])('cdp type leaves the text in the field or says it did not: %j', async ({ focused, editable, via }) => {
+    let value = '';
+    const h = await scripted((request) => {
+      const command = request.recipeCommand as { method: string; params?: { text?: string; functionDeclaration?: string; arguments?: Array<{ value: string }> } };
+      if (command.method === 'Cindy.begin') return { data: { sessionId: 's1' } };
+      if (command.method === 'DOM.resolveNode') return { data: { object: { objectId: 'o1' } } };
+      if (command.method === 'Input.insertText') { if (focused) value = command.params!.text!; return { data: {} }; }
+      if (command.method !== 'Runtime.callFunctionOn') return { data: {} };
+      const fn = command.params!.functionDeclaration!;
+      if (fn.includes('dispatchEvent')) {
+        if (!editable) return { data: { result: {} } };
+        value = command.params!.arguments![0].value;
+      } else if (fn.includes('select')) return { data: { result: {} } };
+      return { data: { result: { value } } };
+    });
+    try {
+      const { isError, body } = await h.invoke({ action: 'cdp', targetId: 't1', commands: [{ method: 'type', params: { node: 21, text: 'E-46667' } }] });
+      expect(isError).toBe(via === undefined);
+      if (via) {
+        expect(body.data.results[0].result).toEqual({ typed: 21, via });
+        expect(value).toBe('E-46667');
+      } else expect(body.data.results[0].error).toContain('输入没有生效');
+    } finally { await h.cleanup(); }
+  });
+
+  // Codex review on #9701 (P1): a raw Runtime.callFunctionOn that throws in the page comes back as a
+  // successful protocol response carrying exceptionDetails. It used to be recorded as success, so the
+  // next command (a submit click) ran on unchanged data, and a batch around it went on too.
+  it('stops cdp and the batch around it when a raw page function throws', async () => {
+    const h = await scripted((request) => {
+      const command = request.recipeCommand as { method: string };
+      if (command.method === 'Cindy.begin') return { data: { sessionId: 's1' } };
+      if (command.method === 'Runtime.callFunctionOn') {
+        return { data: { result: { type: 'object' }, exceptionDetails: { text: 'Uncaught', exception: { description: 'TypeError: x is not a function' } } } };
+      }
+      return { data: {} };
+    });
+    try {
+      const { isError, body } = await h.invoke({ action: 'batch', targetId: 't1', steps: [
+        { action: 'cdp', commands: [
+          { method: 'Runtime.callFunctionOn', params: { objectId: 'o1', functionDeclaration: 'function(){ x() }' } },
+          { method: 'Input.dispatchMouseEvent', params: { type: 'mousePressed', x: 1, y: 1 } },
+        ] },
+        { action: 'navigate', url: 'https://example.test/next' },
+      ] });
+      expect(isError).toBe(true);
+      expect(body).toMatchObject({ ok: false, completed: 0, failedStep: 0 });
+      expect(body.steps[0].data.results).toEqual([{ method: 'Runtime.callFunctionOn', ok: false, error: 'TypeError: x is not a function' }]);
+      const sent = h.calls.map((request) => request.action === 'recipeCommand' ? (request.recipeCommand as { method: string }).method : request.action);
+      expect(sent).toEqual(['recipeCommand', 'recipeCommand', 'recipeCommand'].map((_, i) => ['Cindy.begin', 'Runtime.callFunctionOn', 'Cindy.end'][i]));
+    } finally { await h.cleanup(); }
+  });
+
+  it.each([
+    [{ commands: [{ method: 'nodes' }, { method: 'Network.getCookies' }] }, {}, 'Cookie'],
+    [{ commands: [{ method: 'nodes' }] }, { backendCapabilities: () => ({ rawProtocol: false }) }, '不要自行切换'],
+    [{ commands: [{ method: 'nodes' }] }, { pageReadsRestricted: async () => true }, 'password'],
+  ] as Array<[Record<string, unknown>, Partial<BrowserMcpDeps>, string]>)('refuses cdp without reaching the browser: %j', async (args, deps, reason) => {
+    const h = await scripted(() => undefined, deps);
+    try {
+      const { isError, body } = await h.invoke({ action: 'cdp', targetId: 't1', ...args });
+      expect(isError).toBe(true);
+      expect(body.message).toContain(reason);
+      expect(h.calls).toEqual([]);
+    } finally { await h.cleanup(); }
+  });
+
+  it('returns only the active target\'s rules and says so when the target changes afterwards', async () => {
+    let backend: 'external' | 'user-browser' | undefined;
+    const h = await scripted(() => ({ data: { backend } }), { getBackendKind: () => backend as 'external' });
+    const rules = async () => JSON.parse(((await h.client.callTool({ name: 'list_tools', arguments: { category: 'browser' } }))
+      .content as Array<{ text: string }>)[0].text).rules['browser-workflow'] as string;
+    try {
+      // Unknown target (older hosts): everything, as before.
+      const all = await rules();
+      expect(all).toContain('proxyAllowedHostnames');
+      expect(all).toContain('EVAL_BLOCKED_BY_PAGE');
+      expect(all).not.toContain('<!--');
+      backend = 'external';
+      const external = await rules();
+      expect(external).toContain('proxyAllowedHostnames');
+      expect(external).not.toContain('EVAL_BLOCKED_BY_PAGE');
+      expect(external).not.toContain('<!--');
+      expect((await h.invoke({ action: 'status' })).body.rulesHint).toBeUndefined();
+      backend = 'user-browser';
+      expect((await h.invoke({ action: 'status' })).body.rulesHint).toContain('list_tools');
+      const own = await rules();
+      expect(own).toContain('EVAL_BLOCKED_BY_PAGE');
+      expect(own).not.toContain('proxyAllowedHostnames');
+      expect((await h.invoke({ action: 'status' })).body.rulesHint).toBeUndefined();
+    } finally { await h.cleanup(); }
+  });
+});

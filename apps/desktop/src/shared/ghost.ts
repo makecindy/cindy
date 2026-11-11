@@ -744,6 +744,7 @@ export const GHOST_CONTROL_POINTS = {
     labelKey: 'subscribeScheduleRun',
     detailKey: 'subscribeScheduleRunDetail',
   },
+  // Teammate routines were removed: still parsed and approvable so older plugins install, never asked.
   'will-routine-run': {
     actions: ['allow', 'skip', 'block'],
     failureActions: ['allow', 'skip', 'block'],
@@ -1748,7 +1749,10 @@ export interface GhostManifest {
    * hooks 非空时 launch 必须为 'resident'(校验强制)。
    */
   subscribe?: GhostSubscribeNeeds;
-  /** Autonomous publishing of declared events into user-configured routines. */
+  /**
+   * Declared events for the removed teammate routines. Still parsed so older plugins install;
+   * the host answers their `routine-request` calls as a no-op (cindy-brain/routineSlot.ts).
+   */
   routineEvents?: GhostRoutineEvents;
   /** Models this plugin may add to the model picker; the list is published at runtime. */
   models?: GhostModelsNeeds;
@@ -8901,7 +8905,7 @@ export interface GhostScheduleRunPointData {
   firedAt: number;
 }
 
-/** 伙伴例行任务执行前(will-routine-run)交给插件的数据。 */
+/** 伙伴例行任务执行前(will-routine-run)交给插件的数据。例行任务已移除，宿主不再询问；类型保留给旧插件。 */
 export interface GhostRoutineRunPointData {
   routineId: string;
   runId: string;

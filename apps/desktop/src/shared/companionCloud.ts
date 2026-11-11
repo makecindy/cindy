@@ -50,7 +50,9 @@ export type CompanionCloudFailureCode =
   /** The home runs a Cindy that cannot be asked from another computer; change it there. */
   | 'HOME_OUTDATED'
   /** The companion (one of the copies, for a merge) is paused: resume it first. */
-  | 'PAUSED';
+  | 'PAUSED'
+  /** The chosen computer runs a Cindy too old for a V2 teammate (a project): update it first. */
+  | 'TARGET_OUTDATED';
 
 export type CompanionCloudActionResult =
   | { ok: true }
@@ -100,6 +102,8 @@ export interface CompanionTransferTarget {
   online: boolean;
   /** The computer asking (only in `CompanionHomeChoices`). */
   isSelf?: boolean;
+  /** Its Cindy cannot run a V2 teammate yet: shown, not selectable, until it is updated. */
+  outdated?: boolean;
 }
 
 /**

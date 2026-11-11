@@ -94,6 +94,8 @@ import {
   listBotImConnectionGroups,
   removeBotImConnection,
   setBotImConnectionGroupMode,
+  listBotImDiscordChannels,
+  setBotImDiscordChannelAccess,
   removeBotImConnectionsForBot,
   startBotImConnections,
   stopBotImConnections,
@@ -254,6 +256,19 @@ function fakeDiscord(prefix: string, opts: { connect: boolean }) {
       return () => handlers.delete(handler);
     },
     getOwnerUserId: () => h.secrets.get(`${prefix}discord-owner-user-id`) ?? '',
+    listGuilds: () => [
+      {
+        id: '200000000000000001',
+        name: 'Guild',
+        channels: [
+          {
+            id: '300000000000000001',
+            name: 'general',
+            permissions: { view: true, send: true, readHistory: true, embed: true, attachFiles: true, sendInThreads: true },
+          },
+        ],
+      },
+    ],
     setConfig: vi.fn(async (payload: { token: string; ownerUserId: string }) => {
       if (!opts.connect) {
         set({ kind: 'error', reason: 'Invalid token', code: 'auth' });
@@ -465,6 +480,54 @@ describe('bot im connection runtime', () => {
     const off = await setBotImConnectionGroupMode(id, '-1001', 'mention');
     expect(off.groups[0]?.activation).toBe('mention');
     expect(listBotImConnections()[0]?.groupActivation).toBeUndefined();
+  });
+
+  it('keeps each Discord connection\'s channel allowlist separate, closed by default, and only for Discord connections', async () => {
+    const guild = '200000000000000001';
+    const channel = '300000000000000001';
+    const mia = await addBotImConnection({ botId: 'bot-mia', channel: 'discord', token: 'MTAw.discord.token', ownerUserId: '123456789012345678' });
+    const zed = await addBotImConnection({ botId: 'bot-zed', channel: 'discord', token: 'MTAw.other.token', ownerUserId: '123456789012345679' });
+    const telegram = await addBotImConnection({
+      botId: 'bot-mia', channel: 'telegram', token: '123456:ABCDEFGHIJKLMNOPQRSTUVWXYZabcdef', ownerUserId: '42',
+    });
+
+    // 存量 / 新连接：没有字段 = 不开放任何频道。
+    expect(listBotImDiscordChannels(mia.connection.id)).toMatchObject({
+      connectionId: mia.connection.id, online: true, access: { channels: [] },
+      guilds: [{ id: guild, channels: [{ id: channel, permissions: { send: true } }] }],
+    });
+
+    const saved = await setBotImDiscordChannelAccess(mia.connection.id, {
+      channels: [{ guildId: guild, channelId: channel, allowMembers: true }, { guildId: 'junk', channelId: channel }],
+    });
+    expect(saved.access).toEqual({ channels: [{ guildId: guild, channelId: channel, allowMembers: true }] });
+    // 传输层的白名单 getter 读的是连接记录正本；运行中的实例记录同步更新，另一条连接不受影响。
+    expect(connectionStore.readBotImConnection(mia.connection.id)?.discordChannelAccess).toEqual(saved.access);
+    expect(__testing.instances.get(mia.connection.id)?.record.discordChannelAccess).toEqual(saved.access);
+    expect(listBotImDiscordChannels(zed.connection.id).access).toEqual({ channels: [] });
+
+    // 服务器级设置与白名单形状版本：旧电脑读不到 accessVersion，远程页据此拒绝编辑。
+    const guildLevel = await setBotImDiscordChannelAccess(mia.connection.id, {
+      channels: [],
+      guilds: [{ guildId: guild, enabled: true, mode: 'all', allowMembers: true }],
+    });
+    expect(guildLevel).toMatchObject({ accessVersion: 2, access: { guilds: [{ guildId: guild, mode: 'all', allowMembers: true }] } });
+
+    // 清空白名单后字段不落盘。
+    await setBotImDiscordChannelAccess(mia.connection.id, { channels: [] });
+    expect(connectionStore.readBotImConnection(mia.connection.id)?.discordChannelAccess).toBeUndefined();
+
+    // 其它渠道的连接、不存在的连接都不能写 / 读。
+    await expect(setBotImDiscordChannelAccess(telegram.connection.id, { channels: [{ guildId: guild, channelId: channel }] }))
+      .rejects.toThrow(/NOT_FOUND/);
+    expect(() => listBotImDiscordChannels(telegram.connection.id)).toThrow(/NOT_FOUND/);
+    expect(connectionStore.readBotImConnection(telegram.connection.id)?.discordChannelAccess).toBeUndefined();
+
+    // 删除连接后白名单随记录一起消失。
+    await setBotImDiscordChannelAccess(zed.connection.id, { channels: [{ guildId: guild, channelId: channel }] });
+    await removeBotImConnection(zed.connection.id);
+    expect(connectionStore.readBotImConnection(zed.connection.id)).toBeNull();
+    expect(() => listBotImDiscordChannels(zed.connection.id)).toThrow(/NOT_FOUND/);
   });
 
   // Runtime acceptance found both IPC and stored settings restricted to numeric Telegram IDs.

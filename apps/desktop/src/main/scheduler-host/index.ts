@@ -48,6 +48,10 @@ export interface SchedulerHostRuntime<Deps extends SchedulerHostStartDeps> {
   isPassive(): boolean;
   dialogueWorkspaceRoots(): string[];
   onStarted(scheduler: Scheduler, deps: Deps, passive: boolean): void;
+  /** Wraps the runner, e.g. to skip a teammate project's automations on a computer it was handed away from. */
+  wrapRunner?(runner: ScheduleRunner): ScheduleRunner;
+  /** A real teammate project of this account: its automation files sync without the import prompt. */
+  isOwnTeammateProject?(workingDir: string): Promise<boolean>;
   beforeReset(): Promise<void>;
 }
 
@@ -89,7 +93,7 @@ export function createSchedulerHost<Deps extends SchedulerHostStartDeps>(runtime
         id: ctx.runId, scheduleId: schedule.id, firedAt: ctx.firedAt, finishedAt: Date.now(), status: 'failed', errorMsg,
       }).catch(() => {});
     };
-    const runner: ScheduleRunner = {
+    const baseRunner: ScheduleRunner = {
       fire: (schedule, ctx) =>
         withScheduleLock(schedule.id, ctx.signal, async () => {
           // 所有定时任务(Agent / 脚本)的唯一入口：插件前置检查放在检查脚本、建任务之前。
@@ -102,6 +106,7 @@ export function createSchedulerHost<Deps extends SchedulerHostStartDeps>(runtime
             : promptRunner.fire(schedule, ctx);
         }),
     };
+    const runner = runtime.wrapRunner ? runtime.wrapRunner(baseRunner) : baseRunner;
 
     // 双开让位开关:同一台机器同时跑 dev + release(共用同一 userData/DB)时,
     // 给其中一个实例(通常 dev)设 XDT_SCHEDULER_PASSIVE=1 → 本实例不参与自动触发
@@ -172,6 +177,7 @@ export function createSchedulerHost<Deps extends SchedulerHostStartDeps>(runtime
       storage,
       getDb: deps.getDb,
       logger: deps.logger,
+      ...(runtime.isOwnTeammateProject ? { isOwnTeammateProject: runtime.isOwnTeammateProject } : {}),
     });
     // archived 兜底要 scheduler.pause/update，runner 反向持有 scheduler
     promptRunner.attachScheduler(scheduler);

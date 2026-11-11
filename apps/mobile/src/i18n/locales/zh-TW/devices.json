@@ -621,8 +621,6 @@
       "minutes": "{{n}} 分鐘",
       "hoursMinutes": "{{h}} 小時 {{m}} 分"
     },
-    "retrying": "還沒開始，正在重試…",
-    "stopTask": "停止任務",
     "actionFailed": "暫時無法讀取或完成操作",
     "messages": "訊息往來",
     "readOnly": "僅供檢視",
@@ -760,8 +758,6 @@
     "artifactsEmpty": "還沒有成果，可以讓夥伴創作一些內容。",
     "openSourceTask": "開啟來源任務",
     "modelFollowsDefault": "跟隨目前預設模型鏈",
-    "taskModel": "任務模型",
-    "taskInheritsPrimary": "繼承主模型",
     "modelOverride": "使用此夥伴的自訂模型鏈",
     "modelsUnavailable": "暫無可用模型，請在電腦上檢查此夥伴的模型設定後重新整理。",
     "artifactsRecovery": "請從訊息卡中開啟檔案，或在 {{deviceName}} 上瀏覽檔案。",
@@ -867,7 +863,6 @@
   },
   "glance": {
     "open": "{{name}}的近況",
-    "dueUnseen": "有待辦到期",
     "computers": "電腦",
     "runningHere": "正在這台上執行",
     "online": "線上",
@@ -875,37 +870,16 @@
     "current": "目前",
     "offlineCount_one": "離線 {{count}} 台",
     "offlineCount_other": "離線 {{count}} 台",
-    "todos": "待辦",
     "showMore": "顯示更多",
     "showLess": "收起",
     "doneCount_one": "已完成 {{count}}",
     "doneCount_other": "已完成 {{count}}",
-    "delete": "刪除",
-    "deleted": "已刪除，同一件事之後不再記錄",
-    "undo": "復原",
-    "undoFailed": "無法復原，請重試",
-    "deleteFailed": "無法刪除，請重試",
-    "check": "幫我查查",
     "checkMeta": "在已連接的郵件和訊息裡找新待辦",
-    "checkPrompt": "幫我查查已連接的信箱、訊息等來源裡，有沒有需要我處理的新事項，有就記成待辦。",
-    "dailyCheck": "每天幫我查一次",
-    "dailyCheckMeta": "工作日 9:00，沒有新待辦不打擾",
     "recentTasks": "近期任務",
     "unread": "未讀結果",
-    "stopDailyCheck": "停止每天檢查",
     "openFailed": "無法開啟連結",
-    "dailyCheckFailed": "沒能儲存，請重試",
-    "loadFailed": "無法讀取待辦",
     "outputs": "輸出內容",
-    "outputMeta": "{{time}} · {{task}}",
-    "source": {
-      "conversation": "你交代的",
-      "mail": "來自郵件",
-      "feishu": "來自飛書",
-      "github": "來自 GitHub",
-      "community": "來自社群",
-      "task": "來自任務"
-    }
+    "outputMeta": "{{time}} · {{task}}"
   },
   "cloudCompanion": {
     "homeOffline": "主力電腦「{{device}}」離線",
@@ -928,6 +902,8 @@
     "moveTo": "換到「{{device}}」",
     "moveTitle": "把 {{name}} 換到「{{device}}」執行？",
     "moveDescription": "從現在起 {{name}} 在「{{device}}」上執行，對話紀錄一起帶過去。工作目錄、連線和本機檔案留在原來的電腦上。",
+    "olderTarget": "舊版 Cindy",
+    "olderTargetNote": "「{{device}}」上是舊版 Cindy，{{name}} 在那裡按舊方式執行：對話記錄照常同步，專案規則和自動化在那裡不生效。",
     "moveAction": "換到「{{device}}」",
     "moving": "正在把 {{name}} 換到「{{device}}」…",
     "busyTitle": "{{name}} 還在回覆",
@@ -996,5 +972,8 @@
       "disk-full": "沒匯入成功：磁碟空間不足",
       "native-unloadable": "沒匯入成功：原始記錄無法載入"
     }
+  },
+  "liveActivity": {
+    "waitingForUpdate": "等待更新"
   }
 }
