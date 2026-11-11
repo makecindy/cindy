@@ -481,3 +481,146 @@ withAccountFreeOwnerCommit：主线 notify=false 只发 pending，分支补发�
 两个修改的单测文件单独运行分别为 1.18 秒（deepLink，93 项）及 0.812 秒
 （ccMgrUpgradeStore，3 项）。UI 批次和独立构建产物仍绑定前述构建版本，
 没有把同步后的定向检查写成重新执行了打包运行或全量桌面验收。
+
+
+## 下一阶段：共用发送与任务启动（2026-11-11）
+
+基线 `5bac2112a9`。本节是实施计划，不是功能已完成声明。保持普通桌面默认行为，
+同一功能一个 PR、按可复核提交分段；不预先拆成三个 PR。先完成发送/插话，再按依赖
+推进启动配置与后台生命周期，不为一次交付扩大伙伴、IM、远程执行或凭证边界。
+
+### 已核对的依赖与修正
+
+- 两端已共用 `AgentInputCoordinator`，差异在发送/插话端口；不要另造队列。
+- 发送事务原有 **66** 个依赖端口（不是 65）。本检查点新增语言、文体、MCP App 上下文
+  三个必需端口，共 69；桌面在原位置注入原实现，按调用时读取，不冻结模块加载时的值。
+- 除 `i18n.desktop` 外，`mcp-apps/runtime → sandboxProtocol → electron` 也是实际运行期
+  依赖。必须把 App 上下文读取交给启动器，不能只改语言 import 后声称可在 Node 使用。
+- Host gateway 已持有独立 `createMcpAppsRuntime`，将来使用它的 `modelContext`，不再建
+  registry。此上下文仍是外部应用数据，不等于用户授权。首批不注入 `readAutoReviewHistory`，
+  MCP App 消息继续按空历史恢复，不获得历史用户意图。
+- `main.ts` 尚未构造 `createSchedulerHost`；现有 `schedulerQueue()` 与 scheduler e2e
+  只是队列桥和隔离服务验证，不能称正式 Host 自动化已启动。
+
+### 端口对照（目标接法，尚未完成 Host 接线）
+
+「真实实现」指必须接到实际服务，**不是已经实现**；「不适用」可以不注入，但只在注明
+的能力范围内成立；「暂不支持」需要从当前 owner 的持久任务事实判断并明确拒绝，不能
+以空实现返回成功。落地前核对现有入口，新增拒绝若收窄已经支持的产品能力，先讨论。
+绝不能只检查客户端传入的 createOpts：composeInput 的字段白名单可能已丢掉任务类型。
+
+| 端口 | 合同 | Host 目标处理 | 依据/边界 |
+| --- | --- | --- | --- |
+| `getResolvedMainLocale` | 必需 | 真实实现 | 启动器语言读取；桌面动态读原值，Host 从自己的设置读，不加载 desktop 装配。 |
+| `getMainClassicalStyle` | 必需 | 真实实现 | 同上，保留当前经典文体偏好。 |
+| `readMcpAppModelContext` | 必需 | 真实实现 | 注入各启动器已有 App registry；Host 候选为 plugins.modelContext，不能新建第二份 registry 或借此恢复历史授权。 |
+| `getSession` | 必需 | 真实实现 | 现有 Maker.getSession，保留精确 runtime 身份。 |
+| `closeSession` | 必需 | 真实实现 | 现有 Maker.closeSession，加上 Host 监听与事件落库收尾。 |
+| `closeSessionIfCurrent` | 必需 | 真实实现 | 复用 runtime-refresh 关闭语义和 rehydrate 抑制，不能当作任务终止。 |
+| `preflightBotRuntimeResources` | 必需 | 暂不支持 | 先按持久任务来源判定伙伴任务；不得用空函数放行。 |
+| `getSessionMeta` | 必需 | 真实实现 | 现有 Maker.getSessionMeta。 |
+| `readAutoReviewHistory` | 可选 | 不适用 | Host 首批刻意不注入，MCP App 保持空历史恢复、不给历史授权；不是待补的默认回退。 |
+| `readScheduledPermissions` | 可选 | 真实实现 | 读当前持久 permissionMode / planModeEnabled，不沿用队列过期值。 |
+| `assertScheduledDispatchRoute` | 可选 | 真实实现 | 核对最终本机路由；非本机/供应商组执行明确拒绝，不静默改成本机。 |
+| `ensureRemoteReadyForSessionStart` | 必需 | 暂不支持 | 非空 remoteHostId 不能直接本机执行；入口准入和恢复快照都须核对。 |
+| `checkWorkDirExists` | 必需 | 真实实现 | 复用现有工作目录预检工厂；不能用 true 跳过路径检查。 |
+| `resolveRecoveredWorkingDir` | 可选 | 真实实现 | 复用工作目录恢复服务的已确认映射。 |
+| `isPersistedWorktreeFallback` | 可选 | 真实实现 | 识别 Host 自己的恢复根，不借桌面 profile。 |
+| `statDirectory` | 必需 | 真实实现 | 本机 fs.stat，仅用于已确认本机执行的任务。 |
+| `readSessionWorkingDirFromDb` | 必需 | 真实实现 | 当前 owner DB 的权威目录。 |
+| `readSessionWorkingDirState` | 可选 | 真实实现 | 区分缺行与显式空目录。 |
+| `isOrcaMcpHydrated` | 必需 | 暂不支持 | 首批不启动 Orca；拒绝后此分支不可达，不伪装为已注入。 |
+| `buildCreateOptsWithStderr` | 必需 | 真实实现 | 首批已有 Host 创建选项；原样返回前必须确认只缺日志装配，不缺权限/配置。第二批共用原闭包。 |
+| `synthesizeOrcaVendorOptionsFromDb` | 必需 | 暂不支持 | 同 Orca 准入；不能返回 false 后继续发送 Orca 任务。 |
+| `readSessionExtraDirsFromDb` | 必需 | 真实实现 | 复用既有目录读取服务；不丢只读授权。 |
+| `readSessionWritableDirsFromDb` | 可选 | 真实实现 | 读持久可写授权，禁止信任 wire 自报。 |
+| `withRehydrateCloseSuppressed` | 必需 | 真实实现 | 复用既有共享模块。 |
+| `bootstrapSession` | 必需 | 真实实现 | 首批 Host createSession + listen + 配置快照；需覆盖创建期间停止与 owner 变化，第二批抽取共用启动。 |
+| `markOrcaRoleIfNeeded` | 必需 | 暂不支持 | 非空角色拒绝；普通任务无角色时才允许无操作。 |
+| `broadcastSessionCreated` | 必需 | 真实实现 | 接 Host hub 原有事件，不重复创建 DB 行。 |
+| `prepareSendUserMessage` | 必需 | 真实实现 | 复用附件/引用标准化入口；首批不能把任意对象强转成 UserMessage。 |
+| `materializeDirectSendOssAttachments` | 可选 | 真实实现 | 复用原物化服务与失败清理；未接通的直发附件明确拒绝，不能跳过。 |
+| `createDbMessage` | 必需 | 真实实现 | 现有 persistMessage / durable write，完整透传 agentMeta、清空边界及广播条件。 |
+| `captureCindyLearnInvocation` | 可选 | 暂不支持 | 未接入原捕获器前不授予 /learn 的隐式能力；不伪造授权。 |
+| `rewindPersistedUserMessageAfterClear` | 可选 | 真实实现 | 复用消息回退持久服务，清空竞态不得残留已失效用户行。 |
+| `isClearBoundaryCurrent` | 可选 | 真实实现 | 同一 coordinator 的 clear token 与 generation。 |
+| `linkPiUserEntry` | 可选 | 真实实现 | 同一持久队列 patch agentMeta.piEntryId。 |
+| `readPiUserEntry` | 可选 | 真实实现 | 复用 Pi 已持久消息入口；无条目为 undefined，读取失败不能吞成空。 |
+| `beforeDispatchDirectUserTurn` | 可选 | 不适用 | Host 当前无 Git 保存点服务；本批不宣称支持文件回退，不能生成伪造保存点。 |
+| `prepareProductTurn` | 可选 | 不适用 | Cindy Make 升级产品生命周期不在 Host 首批，相关任务需准入核对。 |
+| `assertBeforeVendorDispatch` | 可选 | 真实实现 | owner、停止信号、clear、generation 最后同步闸门；不能在最后一个 await 之前检查完就放行。 |
+| `onUndispatchedDirectUserTurn` | 可选 | 不适用 | 与 Git 保存点成对；未装配就不产生该生命周期。 |
+| `ackInterruptedTurnDispatched` | 可选 | 真实实现 | 复用 markEnded 与 active-turn 持久链；不能把尚未受理的发送标完成。 |
+| `previewUserPrompt` | 可选 | 不适用 | 桌面提示预览 UI；不替代用户消息持久事件。 |
+| `dispatchUserPromptPreview` | 可选 | 不适用 | 同一桌面预览事务，无预览时省略。 |
+| `commitUserPromptPreview` | 可选 | 不适用 | 同上。 |
+| `rollbackUserPromptPreview` | 可选 | 不适用 | 同上。 |
+| `isSessionRunningError` | 必需 | 真实实现 | 抽取/复用原错误判据，保持 coordinator 的排队与拒绝语义。 |
+| `reconcileCreateOptsWithDb` | 可选 | 真实实现 | 第二批共用 DB 配置对账；首批不得用九字段快照覆盖其余配置。 |
+| `applyPendingAgentSwitch` | 可选 | 真实实现 | 先核对现有 Host 切引擎路径；沿用已选配置，不能丢交接或授权。 |
+| `onModelDispatched` | 可选 | 真实实现 | 复用实际派发模型落库，不能用界面选择值回填历史。 |
+| `prepareUnhealthySession` | 可选 | 真实实现 | 复用不健康 runtime 关闭与恢复；避免对旧 handle 发送。 |
+| `prepareExternalInput` | 可选 | 暂不支持 | 外部本机应用接管未接线，按任务来源拒绝；不是无操作接管。 |
+| `restoreArchivedSessionForSend` | 可选 | 真实实现 | 复用原归档恢复服务，不只改内存状态。 |
+| `peekPendingHandoff` | 可选 | 真实实现 | 同一 agentHandoff 注册表，失败不消费。 |
+| `consumePendingHandoff` | 可选 | 真实实现 | 只在已受理后消费。 |
+| `peekWorkingDirectoryRecoveryNote` | 可选 | 真实实现 | 读取工作目录恢复服务本轮说明。 |
+| `readWorkingDirectoryRecoveryCreateOpts` | 必需 | 真实实现 | 从 owner DB 生成完整恢复选项；storedSessionOptions 仅为现状，不能当作完整实现。 |
+| `consumeWorkingDirectoryRecoveryNote` | 可选 | 真实实现 | 只在受理后消费对应说明。 |
+| `peekPlanReconcileNote` | 可选 | 真实实现 | 复用计划对账服务，不能把缺端口当作无计划。 |
+| `consumeSealedPlanReconcileNote` | 可选 | 真实实现 | 沿用计划对账的一次性消费语义。 |
+| `peekGoalInactiveNote` | 可选 | 真实实现 | 复用目标状态服务；若任务类型尚不支持则入口拒绝，不虚报目标状态。 |
+| `isMobileClientInvoke` | 可选 | 真实实现 | 已有认证 invoke context 的体验分流；不用于授权。 |
+| `readHostDeviceIdentity` | 可选 | 真实实现 | Host 自己的设备身份，不取控制端/桌面身份。 |
+| `readTaskSource` | 可选 | 真实实现 | 从持久任务行读取 source，界面归属与模型说明同源。 |
+| `readReplyQuoteNote` | 可选 | 真实实现 | 复用原引用读取；先确认 Host 可达任务类型，禁止把任意引用当成可信原话。 |
+| `readBotThreadNote` | 可选 | 暂不支持 | 伙伴私聊话题首批不执行；须由任务来源准入保证不可达。 |
+| `readInputHandoffOwnerNote` | 可选 | 暂不支持 | Host 代输入未接通，不能伪造完成说明。 |
+| `inputHandoffOwnerNoteDelivered` | 可选 | 暂不支持 | 与代输入成对；没有真实交付不消费。 |
+| `planRepeatableWireNotes` | 可选 | 真实实现 | 同一 wireNoteMemory 供发送和插话使用；runtime 重建、clear、压缩时重置，受理后提交。 |
+| `log` | 必需 | 真实实现 | 注入现有 logger，保持 scope 与隐私白名单不变。 |
+| `workdirDiagnostics` | 可选 | 真实实现 | 注入既有工作目录诊断，不记录消息正文或凭证。 |
+
+### 提交顺序与第二批函数级拆分清单
+
+1. **纯依赖检查点**：语言/文体/App context 端口，桌面原装配接回；保留全部现有测试断言。
+   Node 真实加载成功只能证明依赖可用，不能证明 Host 已使用该事务。
+2. **发送与插话**：先实现表中已支持路径的真实端口，再切换 Host executor；保留事件监听、
+   终态落库和 owner 生命周期，删掉被替代的权限/来源说明。插话工厂单独提交，对照
+   `steerToAgentAccepted` 原函数体；业务判定和等待顺序不夹带改写。
+3. **启动准备**：`prepareUserMessageForAgent`（附件/引用标准化）、
+   `buildCreateOptsWithStderr`（stderr 路由）、`isSessionRunningError`（错误分类）、
+   `readSessionSource`（持久来源）先抽取最小完整闭包；只抽取，不复制成第二实现。
+4. **配置与启动事务**：`reconcileCreateOptsAgainstDb` 保留 DB 真值覆盖顺序、
+   `bootstrapSession` 保留目录授权、供应商/账号代次、监听绑定和失败清理；
+   `createUserMessageDurably` 保留持久队列、clear/generation 闸门。
+   每项先给出闭包依赖清单再搬动。`readAutoReviewHistory` 可供桌面复用，但 Host 不接线。
+   这一步完成前，不宣称九字段 `storedSessionOptions` 已被完整替代。
+5. **后台生命周期**：在同一 owner 创建/切换/退出服务图上装配调度器，停止先阻止新任务，
+   再排空持久写入与结束子进程。伙伴主力电脑和 IM 单实例归属继续独立核实，不能由
+   调度器接线顺便决定。无客户端连接时仍运行，从发行产物重复验证，不只测 fixture。
+
+### 验收门槛
+
+- 桌面发送、插话和协调器现有回归保持原断言通过，Desktop 类型检查；不跑整仓凑数量。
+- Host 测试、类型检查及真实 Node 加载；input-queue 既有 App 授权、停止、回调、来源
+  与 SQLite 恢复回归不削弱。新测试只覆盖新行为，例如 UUID 持久行、说明去重和失败不消费。
+- 先做隔离端到端：真实 Host/数据库/HTTP 和受控 Agent 进程，发送、插话、停止及重启。
+  真实模型/真实账号属于另外的证据；无法自动完成时标未验证，不借正式凭证测试。
+- SSH 路径不落本机 fs；本轮不新增 wire 通道，现有手机入口走同一共用事务；
+  不改设备共享连接重试、relay 或授权协议。失败只影响该任务/请求，不重建全设备连接。
+
+### 依赖检查点的实际结果（2026-11-11）
+
+仅完成发送工厂的三个启动器端口与桌面装配；Host executor 尚未切换，插话和启动闭包
+尚未抽取。所有现有业务断言保留，未改权限、队列、落库或供应商选择逻辑。
+
+- Desktop 类型检查通过；发送事务 298 项、协调器 680 项通过（同一次定向运行，16.29 秒）。
+- Host 类型检查及 186 项通过，包含新增的 Node 真实加载边界用例；该用例并入既有
+  `boundary.test.mjs`，保护架构约定 §5，弥补只扫描 Host 直接 import 看不到传递 Electron
+  依赖的缺口。该文件单独运行 0.72 秒，无 Electron mock、真实账号或网络。
+- 文档合同 11 项、测试规范检查通过。相关日志为本机 `/tmp/cindy-shared-send-*.log`。
+- `codexRouteTransaction.integration.test.ts` 的 36 项因未配置
+  `CINDY_TEST_CODEX_BINARY` 全部跳过，**不是通过**；没有自动寻找正式安装的运行时或凭证。
+- 尚未做本批 Host 实际发送/插话/停止、真实模型与打包运行。已有隔离验收属于上一批，
+  不可当作本次接线的证据。正式 Cindy 未重启、正式 profile 未使用。

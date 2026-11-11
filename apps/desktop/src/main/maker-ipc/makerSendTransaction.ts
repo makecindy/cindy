@@ -50,7 +50,8 @@ import {
 import { buildWireMessageSourceNote, readWireSourceDevice, readWireSourcePlugin } from './messageSourceNote.js';
 import { buildCindyMakeTaskNote } from '../cindy-make/taskNote.js';
 import { SIDE_CHAT_CONTEXT } from './sideChatContext.js';
-import { getMainClassicalStyle, getResolvedMainLocale } from '../i18n.desktop.js';
+import type { ClassicalReplyStyleId } from '@cindy/maker-shared/classical-reply';
+import type { SupportedLocale } from '../../shared/locale.js';
 import {
   buildUiLanguageErrorNote,
   turnClassicalStyleFromSendOpts,
@@ -69,7 +70,7 @@ import type { MakerSessionCreateOpts } from './sessionRequest.js';
 import { channelTurnSourceFor, withChannelTurnSource } from './channelTurnSignal.js';
 import type { CindyLearnInvocationGrant } from '../learn-host/invocationGrant.js';
 import { AUTO_REVIEW_DELEGATED_CONTINUATION, restoreAutoReviewUserIntent, type AutoReviewHistoryMessage } from './autoReviewUserIntent.js';
-import { mcpAppModelContext } from '../mcp-apps/runtime.js';
+import type { McpAppModelContext } from '../mcp-apps/host.js';
 import { MCP_APP_MESSAGE_GUARD, type McpAppMessageGuard } from '../mcp-apps/message.js';
 
 type CreateOpts = MakerSessionCreateOpts;
@@ -270,6 +271,11 @@ export interface MakerSendTransactionLog {
 }
 
 export interface MakerSendTransactionDeps {
+  /** Read launcher preferences at dispatch time, not at module initialization. */
+  getResolvedMainLocale(): SupportedLocale;
+  getMainClassicalStyle(): ClassicalReplyStyleId;
+  /** Use the launcher's existing App registry; never create a parallel registry. */
+  readMcpAppModelContext(sessionId: string): Promise<McpAppModelContext>;
   getSession(sessionId: string): MakerSendTransactionSession | undefined | null;
   closeSession(sessionId: string): Promise<void>;
   /** 资源漂移回收必须走 Maker 的 runtime-refresh 原因(直接 Session.close 会被
@@ -1508,8 +1514,8 @@ export function createMakerSendTransaction(deps: MakerSendTransactionDeps): Make
           ? buildCindyMakeTaskNote()
           : null;
       const uiLanguageNote = allowsEnvironmentNotes
-        ? buildUiLanguageErrorNote(turnUiLanguageFromSendOpts(so, getResolvedMainLocale()), {
-            classicalStyle: turnClassicalStyleFromSendOpts(so, getMainClassicalStyle()),
+        ? buildUiLanguageErrorNote(turnUiLanguageFromSendOpts(so, deps.getResolvedMainLocale()), {
+            classicalStyle: turnClassicalStyleFromSendOpts(so, deps.getMainClassicalStyle()),
           })
         : null;
       // 这三段是"环境说明":同一原生上下文里内容没变就不重复发(wireNoteMemory)。交接首条
@@ -1554,7 +1560,7 @@ export function createMakerSendTransaction(deps: MakerSendTransactionDeps): Make
         outgoing = prependNoteToWireUserMessage(outgoing as HandoffWireMessage, inputHandoffOwnerNote);
       }
       const appContext = shouldPrependMobileClientPromptNote(normalized, sess.agentKind)
-        ? await mcpAppModelContext(sessionId)
+        ? await deps.readMcpAppModelContext(sessionId)
         : undefined;
       if (appContext?.text) {
         outgoing = prependNoteToWireUserMessage(outgoing as HandoffWireMessage, appContext.text);

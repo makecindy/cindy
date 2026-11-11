@@ -18367,6 +18367,9 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
     prewarmSession: prewarmSessionRuntime,
     hydrateActiveOrcaSession,
   } = createMakerSendTransaction({
+    getResolvedMainLocale: () => getResolvedMainLocale(),
+    getMainClassicalStyle: () => getMainClassicalStyle(),
+    readMcpAppModelContext: sessionId => mcpAppModelContext(sessionId),
     prepareExternalInput: (sessionId) => takeOverLocalAgentVisibleSession(sessionId, true),
     restoreArchivedSessionForSend,
     prepareProductTurn: (sessionId) => {

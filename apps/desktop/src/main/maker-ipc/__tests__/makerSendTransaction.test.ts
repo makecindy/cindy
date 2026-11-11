@@ -41,7 +41,7 @@ import ts from 'typescript';
 import { createWorkingDirectoryRecovery } from '../workingDirectoryRecovery';
 import { createPreflightHarness, filesystemError } from './helpers/workingDirectoryPreflightHarness';
 import { buildCindyMakeTaskNote } from '../../cindy-make/taskNote';
-import { getResolvedMainLocale } from '../../i18n.desktop';
+import { getMainClassicalStyle, getResolvedMainLocale } from '../../i18n.desktop';
 import { buildMobileClientPromptNote } from '../mobileClientPromptNote';
 import { buildUiLanguageErrorNote } from '../uiLanguageErrorNote';
 import * as mcpApps from '../../mcp-apps/runtime.js';
@@ -321,6 +321,9 @@ function createSession(overrides: Partial<MakerSendTransactionSession> = {}): Ma
 function createDeps(overrides: Partial<MakerSendTransactionDeps> = {}) {
   const session = createSession();
   const deps: MakerSendTransactionDeps = {
+    getResolvedMainLocale: () => getResolvedMainLocale(),
+    getMainClassicalStyle: () => getMainClassicalStyle(),
+    readMcpAppModelContext: id => mcpApps.mcpAppModelContext(id),
     readScheduledPermissions: vi.fn(async () => ({ permissionMode: 'ask', planModeEnabled: false })),
     getSession: vi.fn((sessionId: string) => (sessionId === session.id ? session : undefined)),
     closeSession: vi.fn(async () => {}),
