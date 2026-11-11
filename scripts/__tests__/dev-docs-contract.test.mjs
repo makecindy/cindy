@@ -410,7 +410,7 @@ test("client CI runs Linux checks and complete unit shards in parallel behind st
 	const workflow = readText(".github/workflows/ci.yml");
 	// The SHA keeps every main commit in its own group: without it, even
 	// cancel-in-progress: false keeps one running and one pending run per group.
-	assert.match(workflow, /^concurrency:\n  group: client-ci-\$\{\{ github\.event\.pull_request\.number \|\| \(github\.event_name == 'push' && format\('main-\{0\}', github\.sha\)\) \|\| github\.ref \}\}\n  cancel-in-progress: true$/m);
+	assert.match(workflow, /^concurrency:\r?\n  group: client-ci-\$\{\{ github\.event\.pull_request\.number \|\| \(github\.event_name == 'push' && format\('main-\{0\}', github\.sha\)\) \|\| github\.ref \}\}\r?\n  cancel-in-progress: true\r?$/m);
 	for (const job of ["verify-checks", "linux-unit-shards", "host-changes", "host-regressions", "verify"]) {
 		assert.doesNotMatch(workflowJob(workflow, job), /^    concurrency:/m, `${job} must finish for every main commit`);
 	}
