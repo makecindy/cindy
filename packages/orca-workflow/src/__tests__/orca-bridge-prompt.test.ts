@@ -192,13 +192,18 @@ describe('renderOrcaLeadSystemPrompt', () => {
     expect(prompt).toContain(
       '2a. While an Orca team is active and an Orca Worker has a task in flight',
     );
-    expect(prompt).toContain('MUST be forwarded to that worker with send_to_worker');
-    expect(prompt).toContain('you may explicitly choose delivery=steer');
-    expect(prompt).toContain("Forward the user's original wording");
-    expect(prompt).toContain('end the turn right after forwarding (rule 5)');
+    expect(prompt).toContain("is the worker's to handle, not yours");
+    expect(prompt).toContain("in the user's original wording");
+    expect(prompt).toContain('delivered per the correction, interruption, and queue rules above');
+    expect(prompt).toContain('interrupt_worker only when the task must stop and be replaced');
+    expect(prompt).toContain('reconcile other_queued_messages before you end');
+    expect(prompt).toContain('then end the turn per rule 5');
     expect(prompt).toContain(
       'If you cannot uniquely tell which worker the message belongs to, ask the user',
     );
+    // review P1 回归钉：2a 不得自带“可选 steer 否则排队”的第二条修正通道（与既有修正纪律冲突）。
+    expect(prompt).not.toContain('you may explicitly choose delivery=steer');
+    expect(prompt).not.toContain('otherwise send it plainly and let it queue');
     // 姊妹条目：2a 落在 rule 2 与 rule 3 之间，rule 1–4 既有文本不动。
     expect(prompt).toContain('1. Discuss task breakdown with the user before dispatching.');
     expect(prompt).toContain('2. Before any dispatch, call get_workspace_info.');
@@ -285,6 +290,10 @@ describe('renderOrcaWorkerSystemPrompt', () => {
     expect(prompt).toContain(
       "When the lead forwards the user's original wording, treat it as the user speaking — it carries the same authority as a direct user instruction.",
     );
+    expect(prompt).toContain(
+      'When the forwarded message depends on recent Lead-side discussion',
+    );
+    expect(prompt).toContain('read that context with read_lead_history before acting.');
   });
 
   it('keeps the Worker rule concise without the unreachable fallback', () => {

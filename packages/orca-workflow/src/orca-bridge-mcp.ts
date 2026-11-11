@@ -1065,7 +1065,7 @@ export function createOrcaWorkerBridgeMcpProvider(deps: OrcaBridgeMcpDeps) {
 
       register(
         'read_lead_history',
-        'Read user/assistant transcript rows from your owning Lead without waking or modifying the Lead. Use only when an [Orca UI Assignment] depends on Lead context. You MUST pass your worker_id.',
+        'Read user/assistant transcript rows from your owning Lead without waking or modifying the Lead. Use when an [Orca UI Assignment] depends on Lead context, or when a message the lead forwarded from the user depends on recent Lead-side discussion. You MUST pass your worker_id.',
         {
           worker_id: z.string().min(1).describe('Required. Your assigned worker_id.'),
           from_ms: z

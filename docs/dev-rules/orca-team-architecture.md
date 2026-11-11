@@ -424,16 +424,19 @@ Git worktree，不改变供应商、模型与 Worker 创建权限偏好。
 
 4. **协同期间后续任务消息转派回 Worker（状态：不变量，prompt 级）**<br>
    active team 内某 Worker 有在跑任务时，用户发给 Lead 的后续消息凡涉及该任务（追加要求、
-   修正、催办、相关反馈），Lead 必须经 `send_to_worker` 转发给该 Worker，不得在 Lead
-   会话内自行分析或执行该任务。Worker 运行中时 Lead 可显式选择 `delivery=steer`
-   同轮插话（既有 steer 边界不变，见 1b），空闲时照常直发或排队。转发必须保留用户原话，
-   可附路由性背景，不得改写成 Lead 自己的任务计划或附带 Lead 自己的实现指令；转发后按
-   rule 5 收口本轮。归属无法唯一确定时必须先询问用户，不得静默自执行或擅自改派；
-   与在跑任务无关的问答、汇总仍由 Lead 直接回答。Worker 侧配套一句：Lead 转发的用户
-   原文等同用户直接指示。程序级按 Thread 归属的直通路由（宿主改道、不经 Lead turn）
-   属独立变更 `orca-followup-direct-routing`，不在本契约内。实现指针：
-   `packages/orca-workflow/src/orca-bridge-prompt.ts` 的 `renderOrcaLeadSystemPrompt`
-   （rule 2a）与 `renderOrcaWorkerSystemPrompt`（转发原文句）。
+   修正、催办、相关反馈），归该 Worker 处理，Lead 不得在会话内自行分析或执行，必须以用户
+   原话经 `send_to_worker` 转发（可附路由性背景，不改写成 Lead 自己的任务计划）。怎么发
+   defer 给既有纪律（2026-11-11 review P1 后收口）：修正/追加运行中的单按既有插话规则走
+   `delivery=steer` + supersedes 注记；任务必须停下换新指令时走 `interrupt_worker`；
+   目标空闲时普通发送；转发回执带 other_queued_messages 且新消息补充/替换旧单时，
+   先按既有队列规则对账再按 rule 5 收口本轮。归属无法唯一确定时必须先询问用户，
+   不得静默自执行或擅自改派；与在跑任务无关的问答、汇总仍由 Lead 直接回答。Worker 侧
+   配套：Lead 转发的用户原文等同用户直接指示；转发消息依赖 Lead 近期讨论时，经
+   `read_lead_history` 自取上下文（工具描述已同步放宽）。程序级按 Thread 归属的直通路由
+   （宿主改道、不经 Lead turn）属独立变更 `orca-followup-direct-routing`，不在本契约内。
+   实现指针：`packages/orca-workflow/src/orca-bridge-prompt.ts` 的
+   `renderOrcaLeadSystemPrompt`（rule 2a）、`renderOrcaWorkerSystemPrompt`（转发原文句）
+   与 `orca-bridge-mcp.ts` 的 `read_lead_history` 描述。
 
 #### 消息派发与 auto-bridge
 
