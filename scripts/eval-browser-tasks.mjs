@@ -258,6 +258,13 @@ const r=await fetch('/settings/save?${q}',{method:'POST',body:JSON.stringify(bod
       return send(page('Help center', `<p>Your support panel is embedded below.</p><iframe title="Support panel" src="http://localhost:${ports.frame}/panel?${q}" width="480" height="160"></iframe>`));
     case '/panel':
       return send(page('Support panel', `<p>Support code: <strong>${state.support}</strong></p>`));
+    // A cross-site iframe that runs a worker: what a reCAPTCHA widget leaves behind on a real page.
+    case '/desk':
+      return send(page('Service desk', `<p>The desk widget is embedded below.</p><iframe title="Desk widget" src="http://localhost:${ports.frame}/desk-panel?${q}" width="480" height="120"></iframe>`));
+    case '/desk-panel':
+      return send(page('Desk widget', `<p id="status">starting</p><script>const worker=new Worker('/desk-worker.js?${q}');worker.onmessage=()=>{document.getElementById('status').textContent='worker ready';};</script>`));
+    case '/desk-worker.js':
+      return send('postMessage(1);setInterval(()=>{},1000);', 'text/javascript');
     case '/directory':
       return send(page('Staff directory', `<label>Search by surname <input id="q" type="search" placeholder="Type at least 2 letters"></label><ul id="hits"></ul>
 <script>document.getElementById('q').addEventListener('input',async(e)=>{const v=e.target.value.trim();const list=document.getElementById('hits');
@@ -400,6 +407,22 @@ if (values.check) {
     ] });
     const navigated = readFileSync(trace, 'utf8').split('\n').slice(before - 1).some((line) => line.includes('"navigate"'));
     expect('batch stops at a failed step and runs nothing after it', stopped.ok === false && stopped.failedStep === 0 && stopped.completed === 0 && !navigated, stopped);
+
+    // navigate, after a cross-site iframe that runs a worker has gone away with the page before it. With
+    // playwright-core < 1.63 the navigation guard waits forever on that worker's session and the call never
+    // returns (packages/browser-control-runtime/upstream/MAINTAINING.md §4 #15).
+    const within = (call, ms) => Promise.race([call, new Promise((resolve) => setTimeout(() => resolve(null), ms))]);
+    const desk = await browser({ action: 'open', url: `${base}/desk?run=${state.id}` });
+    const widget = await browser({ action: 'batch', targetId: desk.data.targetId, steps: [
+      { action: 'act', request: { kind: 'wait', timeMs: 800 } }, { action: 'snapshot' },
+    ] });
+    expect('the embedded widget started its worker', widget.ok && JSON.stringify(widget.steps[1]).includes('worker ready'), widget);
+    const hops = [];
+    for (const name of ['report', 'desk', 'report', 'desk']) {
+      hops.push(await within(browser({ action: 'navigate', targetId: desk.data.targetId, url: `${base}/${name}?run=${state.id}` }), 15_000));
+      if (name === 'desk') await browser({ action: 'act', targetId: desk.data.targetId, request: { kind: 'wait', timeMs: 800 } });
+    }
+    expect('navigate returns after a cross-site iframe with a worker is gone', hops.every((hop) => hop?.ok === true), hops);
   } catch (error) {
     failures.push({ name: 'check crashed', detail: String(error?.stack ?? error) });
   } finally {
