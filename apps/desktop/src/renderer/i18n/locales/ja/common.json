@@ -14080,7 +14080,7 @@
       "errors": {
         "noPriorAssistantPreview": "AI の返信の後ろにある質問で rewind してください（この前に assistant の返信がありません）",
         "sessionRunning": "タスクの停止待ちがタイムアウトしました。もう一度巻き戻してください",
-        "noLiveQuery": "セッションが非アクティブです — 任意のメッセージ（\"ok\" でも可）を送信して SDK を起動してから rewind してください",
+        "noLiveQuery": "タスクの実行環境を復元できなかったため、巻き戻しは完了しませんでした。",
         "noPriorAssistantCommit": "AI の返信の後ろにある質問で rewind してください",
         "commitGeneric": "rewind に失敗しました。再試行してください",
         "remoteNotSupported": "リモート Claude Code セッションはまだ rewind に対応していません"

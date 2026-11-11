@@ -14071,7 +14071,7 @@
       "errors": {
         "noPriorAssistantPreview": "請於 AI 答覆之後所問處 rewind（此前無 assistant 之答）",
         "sessionRunning": "候差事止息逾時，請再回退",
-        "noLiveQuery": "Agent 會話未啟——請先遣一訊（縱一句\"ok\"亦可）令 SDK 起，再 rewind",
+        "noLiveQuery": "任務未能復啟，回退未成。",
         "noPriorAssistantCommit": "請於 AI 答覆之後所問處 rewind",
         "commitGeneric": "rewind 未成，請再試",
         "remoteNotSupported": "遠方 Claude Code 差事暫不支援 rewind"

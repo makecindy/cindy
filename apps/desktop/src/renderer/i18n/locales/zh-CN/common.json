@@ -14080,7 +14080,7 @@
       "errors": {
         "noPriorAssistantPreview": "请在 AI 回复之后的提问上 rewind（这条之前没有 assistant 回复）",
         "sessionRunning": "等待任务停止超时，请重新回退",
-        "noLiveQuery": "Agent 会话未激活——请先发送任意一条消息（哪怕一句\"ok\"）让 SDK 起来再 rewind",
+        "noLiveQuery": "未能恢复任务运行环境，回退未完成。",
         "noPriorAssistantCommit": "请在 AI 回复之后的提问上 rewind",
         "commitGeneric": "rewind 失败，请重试",
         "remoteNotSupported": "远端 Claude Code 会话暂不支持 rewind"
