@@ -17,6 +17,7 @@ export const PROJECT_DROP_CLASS =
   'data-[session-project-drop-active=true]:bg-sidebar-item-hover data-[session-project-drop-active=true]:ring-1 data-[session-project-drop-active=true]:ring-inset data-[session-project-drop-active=true]:ring-[var(--border-default)]';
 
 interface Options {
+  localPlatform?: string;
   getSession(id: string): Session | undefined;
   getProject(key: string): ProjectNode | undefined;
   expandProject(key: string): void;
@@ -60,7 +61,7 @@ export function useSessionProjectDrop(options: Options) {
             deviceId: dialogueDevice === 'source' ? undefined : dialogueDevice || null,
           }
         : null;
-    const move = target ? resolveSessionProjectDrop(session, target) : null;
+    const move = target ? resolveSessionProjectDrop(session, target, latest.current.localPlatform) : null;
     return move ? { element, session, move, project } : null;
   };
 

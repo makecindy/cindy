@@ -36,6 +36,31 @@ afterEach(() => {
 });
 
 describe('project drop destinations', () => {
+  // PR #5713 review: drag must honor the menu's teammate exclusions and the
+  // sidebar's platform-aware project identity. These pure destination checks
+  // exercise the production resolver; a rejected drop cannot request a cwd move.
+  it.each([null, 'owner-device'])('rejects teammate project destinations on %s', (deviceId) => {
+    const destination = '/data/owners/account/bots/teammate/workspace';
+    expect(resolveSessionProjectDrop(
+      { ...task, deviceLinkDeviceId: deviceId ?? undefined },
+      { kind: 'project', project: { ...project, workingDir: destination, deviceLinkDeviceId: deviceId } },
+    )).toBeNull();
+  });
+
+  it.each([
+    ['win32', null, true],
+    ['darwin', null, false],
+    ['win32', 'owner-device', false],
+  ] as const)('compares project identity for %s on %s', (platform, deviceId, sameProject) => {
+    const result = resolveSessionProjectDrop(
+      { ...task, projectDir: 'c:/repos/App', workingDir: 'C:/scratch/task', deviceLinkDeviceId: deviceId ?? undefined },
+      { kind: 'project', project: { ...project, workingDir: 'C:/Repos/App', deviceLinkDeviceId: deviceId } },
+      platform,
+    );
+    if (sameProject) expect(result).toBeNull();
+    else expect(result).toEqual({ kind: 'project', workingDir: 'C:/Repos/App' });
+  });
+
   it('moves within the owner computer and keeps dialogue separate from its execution directory', () => {
     expect(resolveSessionProjectDrop(task, { kind: 'project', project })).toEqual({
       kind: 'project',

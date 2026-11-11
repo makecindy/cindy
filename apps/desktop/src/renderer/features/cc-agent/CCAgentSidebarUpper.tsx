@@ -3191,6 +3191,7 @@ function ExpandedView({
   );
 
   const projectDrop = useSessionProjectDrop({
+    localPlatform,
     getSession: (id) => sessionsByIdRef.current.get(id),
     getProject: (key) => visibleProjectUniverse.find((project) => project.projectKey === key),
     expandProject: collapse.expand,

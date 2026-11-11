@@ -1,10 +1,11 @@
 import { isSharedTaskPeer } from '@cindy/device-link';
 import { sessionProjectDirectory } from '@cindy/maker-shared/worktree-paths';
+import { isTeammateProjectPath } from '@cindy/maker-shared/teammate-project';
 import type { Session } from '@/lib/ccAgent.types';
 import { isCindyMakeFamilySource } from '../../../../shared/cindyMakeMerge';
 import { isEmptyDraftSession } from '../lib/sessionDisplayTitle';
 import { isRemoteSessionWriteBlocked } from '../lib/remoteSessionWriteGuard';
-import { normalizeWorkingDir, type ProjectNode } from '../lib/projectGrouping';
+import { projectKeyComparisonKey, type ProjectNode } from '../lib/projectGrouping';
 import type { SessionMoveTarget } from './sessionMoveTarget';
 
 /** The menu and drag affordance share availability; the host remains the authority for moves. */
@@ -30,6 +31,7 @@ export type SessionProjectDropTarget =
 export function resolveSessionProjectDrop(
   session: Session,
   target: SessionProjectDropTarget,
+  localPlatform = '',
 ): SessionMoveTarget | null {
   if (!canOfferSessionProjectMove(session) || isRemoteSessionWriteBlocked(session)) return null;
   const sourceDevice = session.deviceLinkDeviceId ?? null;
@@ -39,11 +41,16 @@ export function resolveSessionProjectDrop(
     return { kind: 'dialogue' };
   }
   const project = target.project;
+  if (isTeammateProjectPath(project.workingDir)) return null;
   if (project.remoteHostId || project.deviceLinkConnectionStatus === 'disconnected') return null;
   if ((project.deviceLinkDeviceId ?? null) !== sourceDevice) return null;
+  // Match sidebar grouping on this computer. A remote owner's filesystem is
+  // unknown, so the controller's Windows casing rules must not fold its paths.
+  const comparisonPlatform = sourceDevice ? '' : localPlatform;
   if (
     session.workspaceKind !== 'dialogue' &&
-    normalizeWorkingDir(sessionProjectDirectory(session)) === normalizeWorkingDir(project.workingDir)
+    projectKeyComparisonKey(sessionProjectDirectory(session), comparisonPlatform) ===
+      projectKeyComparisonKey(project.workingDir, comparisonPlatform)
   )
     return null;
   return { kind: 'project', workingDir: project.workingDir };
