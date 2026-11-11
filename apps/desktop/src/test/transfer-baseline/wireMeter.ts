@@ -39,7 +39,7 @@ export interface TrafficCounts {
   decodedBytes: number;
   frames: number;
   messages: number;
-  /** Frames repeating an already delivered reliable message (retransmissions). */
+  /** Duplicate reliable frames, including segments repeated before reassembly finishes. */
   retransmitFrames: number;
   /** Results that used the Device Link gzip encoding (whole result or list delta patch) / the notModified short-circuit. */
   gzipMessages: number;
@@ -143,6 +143,7 @@ interface Partial {
   id?: string;
   wireBytes: number;
   frames: number;
+  retransmitFrames: number;
   segments: string[];
   received: number;
   total: number;
@@ -329,7 +330,7 @@ export class WireMeter {
     const total = meta.segment?.total ?? 1;
     let partial = state.partial.get(key);
     if (!partial) {
-      partial = { stage: this.stage, kind, id: env.id, wireBytes: 0, frames: 0, segments: new Array(total), received: 0, total };
+      partial = { stage: this.stage, kind, id: env.id, wireBytes: 0, frames: 0, retransmitFrames: 0, segments: new Array(total), received: 0, total };
       state.partial.set(key, partial);
     }
     const index = meta.segment?.index ?? 0;
@@ -339,9 +340,8 @@ export class WireMeter {
       partial.segments[index] = data;
       partial.received++;
     } else {
-      // Duplicate segment of a message still being reassembled.
-      const row = this.bucket(state.side, direction, kind, 'retransmit-in-flight', partial.stage);
-      row.retransmitFrames++;
+      // Keep all counters together until the logical channel is known.
+      partial.retransmitFrames++;
     }
     if (partial.received < partial.total) return;
     state.partial.delete(key);
@@ -353,6 +353,7 @@ export class WireMeter {
     const row = this.bucket(state.side, direction, kind, channel, partial.stage);
     row.wireBytes += partial.wireBytes;
     row.frames += partial.frames;
+    row.retransmitFrames += partial.retransmitFrames;
     row.messages++;
     const bodyReads = channel === 'local-db:messages:view' || channel === 'local-db:messages:list';
     const decoded = this.decode(row, kind, json, logical, channel === 'local-db:messages:work-details' || bodyReads);

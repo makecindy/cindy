@@ -5,10 +5,13 @@
  * TRANSFER_BASELINE_OUT (default: <os tmp>/cindy-transfer-baseline).
  */
 import { execFileSync } from 'node:child_process';
+import { EventEmitter } from 'node:events';
 import { mkdir, writeFile } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import { expect, it } from 'vitest';
+import type WebSocket from 'ws';
+import { encodeReliableFrames, MAX_TRANSPORT_CHUNK_BYTES, PROTOCOL_VERSION } from '@cindy/device-link';
 import { buildFixture, LARGE_SIDEBAR_SESSIONS } from './fixture';
 import { startBaselineHost } from './hostHarness';
 import { PROFILES } from './profiles';
@@ -18,7 +21,27 @@ import { EXTRA_STAGES, LIST_REPEAT_STAGES, LIST_SCALE_SUFFIX, STAGES, V4_STAGES,
 import type { ControllerProfile } from './profiles';
 import { applyCapabilitySwitches, readCapabilitySwitches, readHarnessSwitches } from './switches';
 import type { DeclaredCapabilities } from './wireMeter';
-import { WireMeter } from './wireMeter';
+import { webSocketFrameBytes, WireMeter } from './wireMeter';
+
+// PR #9937: the meter's public socket tap must attribute duplicate segments'
+// frames, bytes and retransmit counts to the same channel. The fixed-session
+// self-checks did not inject duplicates. Manual baseline tier, in-memory socket.
+it('wire meter attributes in-flight and completed retransmits to their actual channel', () => {
+  const meter = new WireMeter();
+  const socket = Object.assign(new EventEmitter(), { send: () => {} });
+  meter.tap(socket as unknown as WebSocket, 'controller');
+  meter.setStage('segmented');
+  const logical = { channel: 'maker:event', payload: { text: 'x'.repeat(MAX_TRANSPORT_CHUNK_BYTES + 1) } };
+  const frames = encodeReliableFrames({ v: PROTOCOL_VERSION, kind: 'push', payload: logical }, 'meter-stream', 1);
+  expect(frames.length).toBeGreaterThan(1);
+  const observed = [frames[0], frames[0], ...frames.slice(1), frames[0]];
+  for (const frame of observed) socket.emit('message', Buffer.from(JSON.stringify(frame)), false);
+  const rows = meter.finish().rows;
+  expect(rows).toHaveLength(1);
+  expect(rows[0]).toMatchObject({ channel: 'maker:event', kind: 'push', frames: observed.length,
+    retransmitFrames: 2, messages: 1, decodedBytes: Buffer.byteLength(JSON.stringify(logical)),
+    wireBytes: observed.reduce((sum, frame) => sum + webSocketFrameBytes(Buffer.byteLength(JSON.stringify(frame)), false), 0) });
+});
 
 const HOST_ID = 'baseline-host';
 

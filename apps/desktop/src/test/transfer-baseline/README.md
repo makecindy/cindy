@@ -18,6 +18,10 @@ TRANSFER_BASELINE_EXTRA_CAPS_PHONE=<能力名> TRANSFER_BASELINE_DROP_TRANSFER=d
 
 ## 自检
 
+分片完成前后的重复帧，字节数、帧数和重传次数都归到实际通道；重组中的重复计数随消息一起结算。
+只验证这个计数口径（内存套接字，不跑完整会话）：
+`pnpm --dir apps/desktop exec vitest run --config vitest.transfer-baseline.config.ts -t 'wire meter attributes'`。
+
 每次运行都先写出结果，再检查各阶段确实量到了它名字所说的东西，有一项失败命令就失败：
 每个阶段都有被控端发出的流量；展开工作组读到工作项详情；可见工具结果那一轮收到 6 个
 `tool_result_full` 事件；展开后的刷新、列表重读、不跳过的预读（5 页）、展开运行中工作组都发生了。

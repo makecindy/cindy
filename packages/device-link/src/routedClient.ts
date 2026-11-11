@@ -322,6 +322,11 @@ export class RoutedDeviceLinkClient extends DeviceLinkClient {
       connection => connection.onPeerTransportReset(change => { if (this.acceptsScopedEvent(connection, change.deviceId)) cb(change); }));
   }
 
+  override onInboundPeerReleased(cb: (peer: string) => void): () => void {
+    return this.both(super.onInboundPeerReleased(peer => { if (this.acceptsScopedEvent(this, peer)) cb(peer); }),
+      connection => connection.onInboundPeerReleased(peer => { if (this.acceptsScopedEvent(connection, peer)) cb(peer); }));
+  }
+
   override onReliableFrameBeforeLink(cb: (deviceId: string) => unknown): () => void {
     return this.both(super.onReliableFrameBeforeLink(peer => this.acceptsScopedEvent(this, peer) ? cb(peer) : undefined),
       connection => connection.onReliableFrameBeforeLink(peer => this.acceptsScopedEvent(connection, peer) ? cb(peer) : undefined));
