@@ -140,3 +140,34 @@ test('session cleanup stays with its executor across window replacement', async 
   assert.deepEqual(calls, [['old', 'input'], ['new', 'input'], ['new', 'cleanup']]);
   gate.close();
 });
+
+// A transport may settle after cancellation. Never accept that late success,
+// even if its executor ignored the abort signal; already sent work is not replayed.
+test('cancelled in-flight calls cannot return a late successful result', async () => {
+  const gate = createPlatformClientHandoff({ assertCurrent() {} });
+  const abort = new AbortController();
+  let finish;
+  gate.attach(client({ call: () => new Promise(resolve => { finish = resolve; }) }));
+  const pending = gate.call({}, { signal: abort.signal });
+  const rejected = assert.rejects(pending, /disposed/);
+  abort.abort(Error('disposed'));
+  finish('late success'); await rejected;
+  assert.equal(gate.status().inFlight, 0);
+  gate.close();
+});
+
+// Cancellation also wins when attach has already woken the waiter but its
+// continuation has not run. Neither event ordering may dispatch stale input.
+for (const wakeFirst of [false, true]) test(`abort wins queued dispatch (wake first: ${wakeFirst})`, async () => {
+  const gate = createPlatformClientHandoff({ assertCurrent() {} });
+  const abort = new AbortController();
+  let calls = 0;
+  const pending = gate.call({}, { signal: abort.signal });
+  const rejected = assert.rejects(pending, /disposed/);
+  if (wakeFirst) gate.attach(client({ call: async () => calls++ }));
+  abort.abort(Error('disposed'));
+  if (!wakeFirst) gate.attach(client({ call: async () => calls++ }));
+  await rejected;
+  assert.equal(calls, 0); assert.equal(gate.status().waiting, 0);
+  gate.close();
+});

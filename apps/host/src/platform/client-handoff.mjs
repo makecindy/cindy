@@ -47,7 +47,7 @@ export function createPlatformClientHandoff({ assertCurrent, maxWaiting = 128, i
       inFlight++;
       try {
         const result = await selected.call(operation, { signal });
-        check();
+        check(); signal?.throwIfAborted();
         if (client !== selected || lost) throw Error('PLATFORM_CLIENT_RESULT_UNCERTAIN');
         return result;
       } finally { inFlight--; }

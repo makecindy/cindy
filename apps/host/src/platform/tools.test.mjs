@@ -208,3 +208,31 @@ test('embedded backend disposal follows the executing window without waiting for
   assert.deepEqual(replacement, []);
   assert.equal(gate.status().waiting, 0);
 });
+
+// Same production gate for actions and probes: disposal must revoke every
+// pending generation before an attach/resume can wake it (old code replayed it).
+for (const frozen of [false, true]) for (const probe of [false, true]) {
+  test(`disposed browser generation cannot dispatch after ${frozen ? 'resume' : 'attach'} (${probe ? 'probe' : 'call'})`, { timeout: 5000 }, async t => {
+    const gate = createPlatformClientHandoff({ assertCurrent() {} });
+    t.after(() => gate.close());
+    let entered;
+    const started = new Promise(resolve => { entered = resolve; });
+    const call = gate.call;
+    gate.call = (...args) => { const pending = call(...args); entered(); return pending; };
+    let dispatched = 0;
+    const identity = { id: 'executor', pid: 42 };
+    const executor = { ...identity, canDetach: async () => true, resume: async () => true,
+      call: async () => { dispatched++; return { ok: true, tabs: [] }; } };
+    if (frozen) { gate.attach(executor); await gate.prepare(identity); }
+    const f = await fixture(t, 'rsb-webview', gate);
+    const client = await f.client('task');
+    const pending = probe ? f.tools.browserSettings.getHealth(undefined) : tabs(client);
+    await started;
+    assert.equal(gate.status().waiting, 1);
+    await f.tools.browserSettings.setKind(undefined, { kind: 'user-browser' });
+    await pending;
+    assert.equal(gate.status().waiting, 0);
+    if (frozen) await gate.cancel(identity); else gate.attach(executor);
+    assert.equal(dispatched, 0);
+  });
+}

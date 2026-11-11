@@ -55,10 +55,14 @@ export function createHostPlatformTools(options: {
     // Never silently substitute a different browser or reconstruct lost tabs.
     createEmbeddedBackend: options.createEmbeddedBackend ?? (options.client ? (() => {
       const executorKey = randomUUID();
+      const lifetime = new AbortController();
       return { kind: 'rsb-webview',
-        call: async request => options.client!.call({ method: 'browser.call', request }, { sessionId: executorKey }) as Promise<any>,
-        probeControl: async probe => { await options.client!.call({ method: 'browser.probe', probe }, { sessionId: executorKey }); },
-        dispose: async () => { await options.client!.cleanupSession(executorKey, { method: 'browser.dispose' }); },
+        call: async request => options.client!.call({ method: 'browser.call', request }, { sessionId: executorKey, signal: lifetime.signal }) as Promise<any>,
+        probeControl: async probe => { await options.client!.call({ method: 'browser.probe', probe }, { sessionId: executorKey, signal: lifetime.signal }); },
+        dispose: async () => {
+          lifetime.abort(new Error('HOST_BROWSER_BACKEND_DISPOSED'));
+          await options.client!.cleanupSession(executorKey, { method: 'browser.dispose' });
+        },
       }; }) : (() => ({ kind: 'rsb-webview',
       call: async request => ({ ok: false, action: request.action, errorCode: 'BROWSER_RUNTIME_ACTION_FAILED',
         message: 'The persistent embedded browser is not connected. The selected browser has not been changed.' }),
