@@ -3607,6 +3607,7 @@ export class MakerScheduleRunner implements ScheduleRunner {
               role: 'assistant',
               content: assistantText,
               agentMeta: {
+                turnCompleted: true,
                 origin: {
                   kind: 'scheduler',
                   scheduleId: schedule.id,

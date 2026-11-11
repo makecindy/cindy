@@ -3677,6 +3677,36 @@
           "invalid": "Pré-visualização indisponível; verifique a configuração ou selecione novamente o ficheiro",
           "skipped": "Ignorado; selecione novamente o ficheiro para importar esta entrada",
           "authorizationPending": "Ligação adicionada; conclua a autorização nas definições do fornecedor"
+        },
+        "local": {
+          "title": "Importar de aplicações locais",
+          "note": "Lê as configurações de API guardadas neste computador sem alterar as aplicações de origem. Claude Code: apenas settings.json do utilizador, incluindo CLAUDE_CONFIG_DIR. Não lê variáveis da shell nem configurações de projeto ou geridas.",
+          "review": "Rever e importar ({{count}})",
+          "scanning": "A ler configurações guardadas…",
+          "empty": "Não foram encontradas configurações de API guardadas.",
+          "failed": "Não foi possível concluir a leitura. Tente novamente.",
+          "edit": "Editar",
+          "editFailed": "Verifique o URL, o protocolo e a chave e tente novamente.",
+          "editNote": "Deixe a chave em branco para manter a credencial lida. Alterar o URL ou o protocolo requer uma nova chave.",
+          "name": "Nome de apresentação",
+          "baseUrl": "URL base",
+          "protocol": "Protocolo da API",
+          "chooseProtocol": "Escolher um protocolo",
+          "apiKey": "Chave da API",
+          "keepKey": "Deixe em branco para manter a chave lida",
+          "missingUrl": "URL obrigatório",
+          "status": {
+            "missing": "Configuração não encontrada",
+            "readFailed": "Não foi possível ler; verifique as permissões ou tente novamente",
+            "invalid": "Formato desconhecido; verifique ou edite a configuração",
+            "limit": "Limite atingido; esta origem não foi lida na íntegra",
+            "unsupported": "Esta configuração não pode ser importada automaticamente. Os comandos e apiKeyHelper não são executados; adicione a configuração de API manualmente.",
+            "needsInput": "É necessário completar a configuração",
+            "changed": "A origem mudou; volte a procurar",
+            "duplicate": "Já existe uma ligação idêntica"
+          },
+          "rescan": "Procurar novamente",
+          "sourceDisabled": "Desativado na aplicação de origem"
         }
       },
       "order": {
@@ -20056,7 +20086,12 @@
     "openDirectory": "Abrir pasta da conta",
     "openDirectoryFailed": "Não foi possível abrir a pasta da conta. Pode ter sido movida ou eliminada.",
     "loginAgain": "Iniciar sessão novamente",
-    "login": "Iniciar sessão"
+    "login": "Iniciar sessão",
+    "quotaAverage": "Média restante {{percent}}%",
+    "quotaUpdating": "Quota a aguardar atualização",
+    "quotaResetSoon": "Reposição em breve",
+    "quotaAverageHint": "Quota semanal · Peso igual por conta",
+    "quotaResetHint": "Ao ritmo atual, pode restar quota na reposição: amarelo até 24 horas, vermelho até 6 horas."
   },
   "sessionNotify": {
     "finished": "Esta tarefa concluiu a ronda. Resposta final:",

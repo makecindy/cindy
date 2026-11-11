@@ -3628,6 +3628,36 @@
           "invalid": "Preview unavailable; check the configuration or select the file again",
           "skipped": "Skipped; select the file again to import this entry",
           "authorizationPending": "Connection added; complete authorization in provider settings"
+        },
+        "local": {
+          "title": "Import from local apps",
+          "note": "Read saved API configurations on this computer without changing source apps. Claude Code: user settings.json only, including CLAUDE_CONFIG_DIR. Shell variables, project and managed settings are not read.",
+          "review": "Review and import ({{count}})",
+          "scanning": "Reading saved configurations…",
+          "empty": "No saved API configurations found.",
+          "failed": "Could not finish reading. Please retry.",
+          "edit": "Edit",
+          "editFailed": "Check the URL, protocol and key, then retry.",
+          "editNote": "Leave the key blank to keep the saved credential. A changed URL or protocol requires a new key.",
+          "name": "Display name",
+          "baseUrl": "Base URL",
+          "protocol": "API protocol",
+          "chooseProtocol": "Choose a protocol",
+          "apiKey": "API key",
+          "keepKey": "Leave blank to keep the saved key",
+          "missingUrl": "URL required",
+          "status": {
+            "missing": "No configuration found",
+            "readFailed": "Could not read; check permissions or retry",
+            "invalid": "Unrecognized format; check or edit the configuration",
+            "limit": "Limit reached; this source was not fully read",
+            "unsupported": "This configuration cannot be imported automatically. Commands and apiKeyHelper are not run; add the API configuration manually.",
+            "needsInput": "Configuration needs completion",
+            "changed": "Source changed; scan again",
+            "duplicate": "An identical connection already exists"
+          },
+          "rescan": "Scan again",
+          "sourceDisabled": "Turned off in the source app"
         }
       },
       "order": {
@@ -19869,7 +19899,12 @@
     "openDirectory": "Open account folder",
     "openDirectoryFailed": "Couldn’t open the account folder. It may have been moved or deleted.",
     "loginAgain": "Sign in again",
-    "login": "Sign in"
+    "login": "Sign in",
+    "quotaAverage": "Average remaining {{percent}}%",
+    "quotaUpdating": "Quota updating",
+    "quotaResetSoon": "Resets soon",
+    "quotaAverageHint": "Weekly quota · Equal weight per account",
+    "quotaResetHint": "At the current pace, quota may remain at reset: yellow within 24 hours, red within 6 hours."
   },
   "sessionNotify": {
     "finished": "This task finished its turn. Its final answer:",

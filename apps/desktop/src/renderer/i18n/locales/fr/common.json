@@ -3677,6 +3677,36 @@
           "invalid": "Aperçu indisponible ; vérifiez la configuration ou sélectionnez à nouveau le fichier",
           "skipped": "Ignoré ; sélectionnez à nouveau le fichier pour importer cette entrée",
           "authorizationPending": "Connexion ajoutée ; terminez l'autorisation dans les paramètres du fournisseur"
+        },
+        "local": {
+          "title": "Importer depuis des applications locales",
+          "note": "Lire les configurations API enregistrées sur cet ordinateur sans modifier les applications sources. Claude Code : uniquement le fichier settings.json utilisateur, y compris CLAUDE_CONFIG_DIR. Les variables du shell et les paramètres de projet ou administrés ne sont pas lus.",
+          "review": "Vérifier et importer ({{count}})",
+          "scanning": "Lecture des configurations enregistrées…",
+          "empty": "Aucune configuration API enregistrée trouvée.",
+          "failed": "Lecture incomplète. Veuillez réessayer.",
+          "edit": "Modifier",
+          "editFailed": "Vérifiez l’URL, le protocole et la clé, puis réessayez.",
+          "editNote": "Laissez la clé vide pour conserver les identifiants lus. Une nouvelle URL ou un nouveau protocole exige une nouvelle clé.",
+          "name": "Nom affiché",
+          "baseUrl": "URL de base",
+          "protocol": "Protocole API",
+          "chooseProtocol": "Choisir un protocole",
+          "apiKey": "Clé API",
+          "keepKey": "Laisser vide pour conserver la clé lue",
+          "missingUrl": "URL requise",
+          "status": {
+            "missing": "Aucune configuration trouvée",
+            "readFailed": "Lecture impossible ; vérifiez les autorisations ou réessayez",
+            "invalid": "Format non reconnu ; vérifiez ou modifiez la configuration",
+            "limit": "Limite atteinte ; cette source n’a pas été entièrement lue",
+            "unsupported": "Cette configuration ne peut pas être importée automatiquement. Les commandes et apiKeyHelper ne sont pas exécutés ; ajoutez la configuration API manuellement.",
+            "needsInput": "Configuration à compléter",
+            "changed": "La source a changé ; relancez la recherche",
+            "duplicate": "Une connexion identique existe déjà"
+          },
+          "rescan": "Relancer la recherche",
+          "sourceDisabled": "Désactivé dans l’application source"
         }
       },
       "order": {
@@ -20056,7 +20086,12 @@
     "openDirectory": "Ouvrir le dossier du compte",
     "openDirectoryFailed": "Impossible d’ouvrir le dossier du compte. Il a peut-être été déplacé ou supprimé.",
     "loginAgain": "Se reconnecter",
-    "login": "Se connecter"
+    "login": "Se connecter",
+    "quotaAverage": "Restant moyen {{percent}} %",
+    "quotaUpdating": "Quota en attente de mise à jour",
+    "quotaResetSoon": "Réinitialisation proche",
+    "quotaAverageHint": "Quota hebdomadaire · Poids égal par compte",
+    "quotaResetHint": "Au rythme actuel, du quota pourrait rester à la réinitialisation : jaune sous 24 heures, rouge sous 6 heures."
   },
   "sessionNotify": {
     "finished": "Cette tâche a terminé son tour. Sa réponse finale :",
