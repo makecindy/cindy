@@ -638,7 +638,15 @@ describe('createContextOverflowRollover', () => {
   it.each(['cc', 'pi'] as const)(
     'rebuilds %s native context before a pressured 500K → 272K model switch',
     async (agentKind) => {
+      // #9973, unit: exercise the real smaller-window entry with an early long
+      // request; the former two short rows never exercised lossy early history.
+      const initial = `${'background '.repeat(25)}Keep the production database read-only.${'context '.repeat(25)}`;
       const deps = makeDeps([
+        msg('user', initial, 'initial', 0),
+        ...Array.from({ length: 3 }, (_, i) => [
+          msg('user', `Progress ${i}`, `early-u${i}`, i + 1),
+          msg('assistant', 'Checking', `early-a${i}`, i + 1),
+        ]).flat(),
         msg('user', '先做 A', 'u1', 1),
         msg('assistant', '做完 A', 'a1', 2),
       ]);
@@ -676,6 +684,7 @@ describe('createContextOverflowRollover', () => {
       );
       const commitCalls = deps.commitRebuild.mock.calls as unknown as Array<[string, string]>;
       const handoff = String(commitCalls[0]?.[1] ?? '');
+      expect(handoff).toContain(initial);
       expect(handoff).toContain('switching to a model with a smaller context window');
       expect(handoff).not.toContain("exceeded the model's context window");
       expect(deps.setPendingHandoff).toHaveBeenCalled();

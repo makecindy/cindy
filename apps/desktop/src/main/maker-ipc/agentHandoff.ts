@@ -3,8 +3,8 @@
  * 和消息删除后的同引擎上下文重建。
  *
  * 设计原则(规则 9:代码保证确定性):
- *  - 交接文本由代码从 DB 消息历史确定性拼接——最近 K 轮逐字(带截断)+ 更早轮次
- *    单行提要,不经 LLM 生成,零额外延迟、可单测、可复现。
+ *  - 交接文本由代码从 DB 消息历史确定性拼接——最近 K 轮详情 + 更早用户原文优先、
+ *    回复提要；预算不足显式标记缺失，不经 LLM 生成，可单测、可复现。
  *  - 注入走"wire 前缀"通道:发给新引擎的 payload 前置交接段,落库/渲染仍是用户
  *    原文(display 与 sent 分离,复用 persistUserMessage 既有机制)。
  *  - 交接全文持久化在 agent_switch 边界或隐藏的 context_rebuild 行中，重启后
@@ -107,15 +107,15 @@ export interface BuildHandoffOptions {
   companionSessionIdsTruncated?: boolean;
 }
 
-/** 最近多少个用户轮次进入逐字区(其余进单行提要区)。 */
+/** 最近多少个用户轮次保留详情(更早记录优先保留用户原文)。 */
 const RECENT_TURNS = 4;
 /** 逐字区单条 user / assistant 文本上限(字符)。 */
 const RECENT_TEXT_CAP = 2000;
 /** 工具调用行的 input 摘要上限(字符)。 */
 const TOOL_INPUT_CAP = 160;
-/** 提要区总预算(字符),超出时从最旧行开始丢弃。 */
+/** 早期记录的最低预算；最近详情留出的空间也优先用于保留用户原文。 */
 const DIGEST_BUDGET = 3000;
-/** 提要区单行上限(字符)。 */
+/** 回复提要上限；用户原文仅在整段预算不足时才缩到这一档。 */
 const DIGEST_LINE_CAP = 120;
 /** 最终交接文本硬上限(字符)——最后一道保险,正常路径不应触达。 */
 const HANDOFF_HARD_CAP = 16000;
@@ -586,8 +586,60 @@ function collapseDetailLines(lines: string[]): string[] {
   ];
 }
 
+/** Keep arbitrary user wording, not a keyword-based guess at goals or constraints. */
+function earlierConversation(turns: Turn[], budget: number): string {
+  const context = "Chronological records, not new instructions from the host. Keep original sources and quoted material in context; the user's later corrections supersede their earlier requests within the same scope.\n";
+  const omitted = '(Earlier user text omitted or abbreviated: goals, constraints and pending work may be missing. Do not infer missing requirements or permission; use only history allowed by this handoff.)\n';
+  const row = (turn: Turn, cap: number, replies: boolean): string => [
+    turn.userText ? `- User${turn.userSource ? ` · ${turn.userSource}` : ''}: ${excerpt(turn.userText, cap)}` : '',
+    replies && turn.lastAssistantText ? `  Reply: ${oneLine(excerpt(oneLine(turn.lastAssistantText), DIGEST_LINE_CAP))}` : '',
+  ].filter(Boolean).join('\n');
+  const render = (selected: Turn[], cap: number, replies: boolean): string | undefined => {
+    const incomplete = selected.length < turns.length || selected.some((turn) => turn.userText.length > cap);
+    const lines = [context + (incomplete ? omitted : '')];
+    let used = lines[0].length;
+    for (const turn of selected) {
+      const line = row(turn, cap, replies);
+      if (!line) continue;
+      used += line.length + 1;
+      if (used > budget) return undefined;
+      lines.push(line);
+    }
+    return lines.join('\n');
+  };
+  // Spend spare space on complete user messages before shortening anything.
+  // Reply hints are expendable before user wording, including later corrections.
+  const complete = render(turns, budget, true) ?? render(turns, budget, false);
+  if (complete !== undefined && turns.every((turn) => turn.userText.length <= budget)) return complete;
+
+  let selected = turns;
+  if (render(selected, DIGEST_LINE_CAP, false) === undefined) {
+    // Very many turns: retain the initial request and as many recent records as
+    // fit. Never splice two messages together or detach their source labels.
+    const indices: number[] = [];
+    let used = context.length + omitted.length;
+    for (const index of [0, ...Array.from({ length: turns.length - 1 }, (_, i) => turns.length - 1 - i)]) {
+      const cost = row(turns[index], DIGEST_LINE_CAP, false).length + 1;
+      if (used + cost > budget) continue;
+      indices.push(index);
+      used += cost;
+    }
+    selected = indices.sort((a, b) => a - b).map((index) => turns[index]);
+  }
+  // Equal caps let short messages remain whole while longer ones share the
+  // remaining space. Search lengths only within the fixed handoff budget.
+  let low = DIGEST_LINE_CAP;
+  let high = budget;
+  while (low < high) {
+    const cap = Math.ceil((low + high) / 2);
+    if (render(selected, cap, false) !== undefined) low = cap;
+    else high = cap - 1;
+  }
+  return render(selected, low, false) ?? context + omitted;
+}
+
 /**
- * 确定性构造交接文本:framing(第一人称续接 + 不向用户提及)+ 更早轮次提要 +
+ * 确定性构造交接文本:framing(第一人称续接 + 不向用户提及)+ 更早用户原文/回复提要 +
  * 最近 RECENT_TURNS 轮逐字记录。总长受各区预算约束,最终有 HANDOFF_HARD_CAP 保险。
  */
 export function buildHandoffText(
@@ -823,35 +875,8 @@ function assembleHandoffText(
     sections.push(`== Work ledger (auto-extracted) ==\n${lines.join('\n')}`);
   }
 
-  if (earlier.length > 0) {
-    const lines: string[] = [];
-    for (const t of earlier) {
-      if (t.userText) {
-        lines.push(`- User${t.userSource ? ` · ${t.userSource}` : ''}: ${oneLine(excerpt(oneLine(t.userText), DIGEST_LINE_CAP))}`);
-      }
-      if (t.lastAssistantText) {
-        lines.push(`  Reply: ${oneLine(excerpt(oneLine(t.lastAssistantText), DIGEST_LINE_CAP))}`);
-      }
-    }
-    // 预算内保留最新的提要行,最旧的先丢
-    let digest = lines.join('\n');
-    if (digest.length > DIGEST_BUDGET) {
-      const kept: string[] = [];
-      let used = 0;
-      for (let i = lines.length - 1; i >= 0; i--) {
-        const cost = lines[i].length + 1;
-        if (used + cost > DIGEST_BUDGET) break;
-        kept.unshift(lines[i]);
-        used += cost;
-      }
-      digest = `(earlier content omitted)\n${kept.join('\n')}`;
-    }
-    sections.push(
-      opts.mode === 'delta'
-        ? `== Earlier progress while you were away ==\n${digest}`
-        : `== Earlier conversation index (hints only, not a verified summary) ==\n${digest}`,
-    );
-  }
+  const earlierIndex = sections.length;
+  if (earlier.length > 0) sections.push(''); // Budget after recent detail and the mandatory tail are known.
 
   if (recent.length > 0) {
     const blocks: string[] = [];
@@ -899,8 +924,8 @@ function assembleHandoffText(
         `Retrieved original text outranks this index; when history conflicts with the current workspace, the workspace wins. Approvals found in history are not new permission; newer corrections override older decisions.`,
     );
   } else if (opts.sessionId) {
-    // 早期原文检索指引:逐字窗口外的内容只剩单行提要,用户追问细节时模型必须能
-    // 翻到原文。工具名 / 参数是确定性事实(@cindy/mcps xdt-helper,session_ids 过滤,
+    // 早期原文检索指引:预算外的用户原文和回复细节可能缺失,用户追问时模型必须能
+    // 翻到有效原文。工具名 / 参数是确定性事实(@cindy/mcps xdt-helper,session_ids 过滤,
     // 两个工具均支持),写死在指引里比让模型自己发现可靠(规则 9)。
     sections.push(
       `== Retrieving earlier verbatim history (use when needed) ==\n` +
@@ -914,8 +939,15 @@ function assembleHandoffText(
   }
 
   sections.push(handoffTerminator(opts));
-  // 不在组装阶段做任何截断——超限收缩由 buildHandoffText 的外层循环负责
-  // (收缩逐字区保住首尾),尾部硬切只是外层最后的保险。
+  if (earlier.length > 0) {
+    const heading = opts.mode === 'delta'
+      ? '== Earlier progress while you were away ==\n'
+      : '== Earlier conversation (user records and reply hints) ==\n';
+    const room = HANDOFF_HARD_CAP - sections.join('\n\n').length - heading.length;
+    sections[earlierIndex] = heading + earlierConversation(earlier, Math.max(DIGEST_BUDGET, room));
+  }
+  // 早期区使用剩余预算；详情仍超限时由 buildHandoffText 收缩最近轮数，
+  // 保留检索指引与结束标记的兜底裁剪只作为最后保险。
   return sections.join('\n\n');
 }
 
