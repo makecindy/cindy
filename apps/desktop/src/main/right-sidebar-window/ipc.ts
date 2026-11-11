@@ -92,8 +92,25 @@ function parseContext(raw: unknown): RsbWindowContext {
   };
 }
 
+function parsePluginResource(r: Record<string, unknown>) {
+  if (typeof r.instanceId !== 'string' || !r.instanceId || r.instanceId.length > 256)
+    throwIpcError('INVALID_PARAMS', 'Invalid plugin instance');
+  if (r.resourceViewId !== undefined && (typeof r.resourceViewId !== 'string' || !/^[a-z][a-z0-9_-]{0,63}$/.test(r.resourceViewId)))
+    throwIpcError('INVALID_PARAMS', 'Invalid plugin resource view');
+  if (r.resourceInput !== undefined && (!r.resourceInput || typeof r.resourceInput !== 'object' || Array.isArray(r.resourceInput) ||
+    Buffer.byteLength(JSON.stringify(r.resourceInput), 'utf8') > MAX_STATE_JSON_BYTES)) throwIpcError('INVALID_PARAMS', 'Invalid plugin resource input');
+  return { instanceId: r.instanceId,
+    ...(r.resourceViewId === undefined ? {} : { resourceViewId: r.resourceViewId as string }),
+    ...(r.resourceInput === undefined ? {} : { resourceInput: r.resourceInput as Record<string, unknown> }) };
+}
+
 function parseCommand(raw: unknown): RsbWindowCommand {
   const r = requireObject(raw, 'command');
+  if (r.type === 'open-plugin-view') {
+    if (r.sessionId !== undefined || r.resourceViewId === undefined)
+      throwIpcError('INVALID_PARAMS', 'Global plugin views require a resource and no task');
+    return { type: 'open-plugin-view', ...parsePluginResource(r), resourceViewId: r.resourceViewId as string };
+  }
   if (
     typeof r.sessionId !== 'string' ||
     r.sessionId.length === 0 ||
@@ -152,10 +169,7 @@ function parseCommand(raw: unknown): RsbWindowCommand {
     return { type: 'close-orca-workers-tab', sessionId: r.sessionId };
   }
   if (r.type === 'open-plugin-task') {
-    if (typeof r.instanceId !== 'string' || !r.instanceId || r.instanceId.length > 256) {
-      throwIpcError('INVALID_PARAMS', 'Invalid plugin instance');
-    }
-    return { type: 'open-plugin-task', sessionId: r.sessionId, instanceId: r.instanceId };
+    return { type: 'open-plugin-task', sessionId: r.sessionId, ...parsePluginResource(r) };
   }
   if (r.type === 'open-background-tasks-tab') {
     const hasFocusTaskId =

@@ -1153,7 +1153,7 @@ export function MainLayout() {
   useEffect(() => {
     if (isSecondaryWindow()) return;
     return window.electronAPI.rightSidebarWindow.onCommand((command) => {
-      if (command.sessionId !== rightSidebarSessionIdRef.current) return;
+      if (command.type !== 'open-plugin-view' && command.sessionId !== rightSidebarSessionIdRef.current) return;
       void executeSidebarCommand(command).catch((err) => {
         applicationMenuLog.warn('execute attached sidebar command failed', err);
       });
@@ -1732,6 +1732,7 @@ export function MainLayout() {
       {!isSecondaryWindow() && <PerformanceTrace statusContainer={performanceTraceStatusHost} />}
       <div
         ref={rowRef}
+        data-plugin-ui-element="workspace"
         className={cn(
           'relative flex h-screen bg-content-area text-foreground',
           isDragging && 'select-none cursor-col-resize',
@@ -1742,7 +1743,7 @@ export function MainLayout() {
             flex + shrink-0 与 aside 原有的 flex child 行为一致,不改变布局;
             peek 期 aside 变 fixed 出流,wrapper 宽度自然等于流内 spacer 宽。 */}
         {!isSettingsRoute && (
-          <div ref={sidebarBlockRef} className="flex shrink-0">
+          <div ref={sidebarBlockRef} className="flex shrink-0" data-plugin-ui-element="sidebar">
             {/* pinning 冻结期的流内占位:抽屉保持 fixed 不动,由本 spacer 跑 0→W 的
                 250ms 宽度动画把主区推开;动画结束(peekState 回 idle)后同一帧内
                 spacer 卸载、aside 摘掉 fixed 落回流内 —— 两者矩形一致,交换无跳变。 */}
@@ -1990,6 +1991,7 @@ export function MainLayout() {
         {!isMac && (
           <div
             className="absolute right-0 top-0 z-50 flex h-[46px] items-center pr-2"
+            data-plugin-ui-element="windowControls"
             style={{ WebkitAppRegion: 'no-drag' } as React.CSSProperties}
           >
             <WindowControls />

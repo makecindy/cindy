@@ -21,6 +21,20 @@ Codex 原生未必自行发送 MCP 取消；服务仍须限制长操作，并区
 
 ## 插件的交互页面
 
+具名页面与 Cindy 原生位置的增量见随包作者手册
+[插件界面扩展](../apps/desktop/resources/system-skills/cindy-plugin-creator/references/plugin-host-ui.md)。
+`mcpApps.host` 引用同一个 MCP Apps 资源，复用原 Host/SDK/隔离/工具审批；
+支持真实全局/任务来源、原生入口、可选正文展示和按批准开放的宿主操作。
+这一增量尚未发布，不能套用下文历史 SDK 版本下限。新入口目前仅 Desktop 本机；原远程和手机卡片不变。
+
+原生控件沿既有插件管子和窗口 IPC 更新；窗口合并实际消费需求，先有消费者才构造、推送状态。
+`message.menu` 将已批准动作加入消息「更多」菜单；菜单关闭时不订阅这些菜单项，打开后才接状态，关闭释放。
+页面状态沿标准 host context，普通历史消息只查本地候选，不增加逐消息 SQL、IPC 或插件渲染调用。
+入口旁页面使用 `presentation:"popover"`，沿同一个 MCP App presenter，关闭或不可见即释放。
+草稿选区替换使用原编辑器与 revision；区域显隐使用原布局和面板停放机制，释放插件后恢复。
+外观资源与可写字段逐项批准，经原设置所有者应用；字体按资源缓存。
+实现回归见 `nativeState.test.ts`、`ghostNativeUi.test.ts`、`PluginUiContributions.test.tsx`、`MessageActionBar.test.tsx` 与 `hostUi.test.ts`。
+
 首个支持版本为 `0.1.122-beta`（`PLUGIN_UI_MIN_CINDY_VERSION`）。声明交互页面的包须填写
 不低于它的 `minCindyVersion`；`0.1.122-beta.1`、`0.1.122` 满足，`0.1.121`、`0.1.121-beta` 不满足。
 该下限用于打包校验和市场兼容版本投影，不新增客户端安装闸门。

@@ -8126,7 +8126,9 @@
         "mcpUi": "대화에 인터랙티브 페이지 표시",
         "mcpUiDomains": "페이지 연결 도메인: {{domains}}",
         "mcpAppOnly": "페이지 전용",
-        "uiPageAccess": "페이지: {{pages}}; 도메인: {{domains}}; 페이지에서 호출할 수 있는 도구: {{tools}}"
+        "uiPageAccess": "페이지: {{pages}}; 도메인: {{domains}}; 페이지에서 호출할 수 있는 도구: {{tools}}",
+        "uiHost": "Cindy에 인터페이스 및 호스트 작업 제공",
+        "uiHostAccess": "{{subject}}: {{access}}"
       },
       "connections": {
         "confirmTitle": "연결 주소 추가",
@@ -19387,6 +19389,12 @@
       "failed": "저장하지 못했습니다. 다시 시도하세요.",
       "restore": "기본값 복원"
     }
+  },
+  "pluginUi": {
+    "display": "표시 방식",
+    "original": "원본",
+    "menu": "플러그인 보기 및 명령",
+    "actionFailed": "플러그인 작업을 완료하지 못했습니다. 다시 시도해 주세요."
   },
   "mcpApps": {
     "sharedTaskReadOnly": "이 카드는 세션 소유자만 조작할 수 있습니다.",
