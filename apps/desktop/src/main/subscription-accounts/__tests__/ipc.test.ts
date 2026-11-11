@@ -175,12 +175,14 @@ describe('legacy Codex account upgrade', () => {
 describe('subscription management boundary', () => {
   // #9833, unit: new optional model query keeps old caller shape and the
   // owner-only boundary. An aggregate/guest reply cannot authorize recovery.
+  // PR #9837 review: local grants cannot authorize a remote cooldown recovery.
   it('supports model availability without changing old quota replies or admitting guests', async () => {
     const quota = h.handlers.get('maker:subscription-pool:quota')!;
     expect(await quota({}, 'anthropic')).toEqual({ providerId: 'anthropic', pooled: false, usage: null });
+    h.availability.mockImplementation(async (_provider, _model, options) => options?.remote !== true);
+    expect(await quota({}, 'openai', 'gpt-model')).toEqual({ providerId: 'openai', model: 'gpt-model', available: true });
     h.context = {};
-    expect(await quota({}, 'anthropic', 'sonnet')).toEqual({ providerId: 'anthropic', model: 'sonnet', available: true });
-    expect(h.availability).toHaveBeenCalledExactlyOnceWith('anthropic', 'sonnet');
+    expect(await quota({}, 'openai', 'gpt-model')).toEqual({ providerId: 'openai', model: 'gpt-model', available: false });
     for (const model of ['', ' ', 1, {}, 'x'.repeat(513)])
       await expect(quota({}, 'anthropic', model)).rejects.toThrow('INVALID_PARAMS');
     h.context = { sharedTask: {} };
@@ -188,7 +190,7 @@ describe('subscription management boundary', () => {
     h.context = null;
     h.trusted = false;
     await expect(quota({}, 'anthropic', 'sonnet')).rejects.toThrow('untrusted');
-    expect(h.availability).toHaveBeenCalledTimes(1);
+    expect(h.availability).toHaveBeenCalledTimes(2);
   });
 
   // #9517, unit: CLI provider-managed auth must survive the real handler and

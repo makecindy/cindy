@@ -179,9 +179,9 @@ function runtimeForActiveOwner(): OwnerRuntime {
   const applicationLoad = createLocalAgentLoadRegistry();
   const router = createProviderGroupRouter({
     directory,
-    readPoolModelAvailability: async (member, model) => {
+    readPoolModelAvailability: async (member, model, options) => {
       if (activeOwnerScopeKey() !== owner || !isSubscriptionProvider(member.providerId)) return null;
-      if (member.kind === 'local') return readSubscriptionPoolModelAvailability(member.providerId, model);
+      if (member.kind === 'local') return readSubscriptionPoolModelAvailability(member.providerId, model, options);
       if (member.kind !== 'device' || !member.agentDeviceId) return null;
       const result = await remoteBackgroundInvoke(member.agentDeviceId, 'maker:subscription-pool:quota', [member.providerId, model], {
         preSend: () => { if (activeOwnerScopeKey() !== owner) throw new Error('provider group account changed'); },

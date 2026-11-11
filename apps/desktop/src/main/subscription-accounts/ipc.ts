@@ -30,7 +30,9 @@ export function registerSubscriptionAccountsIpc(): void {
     if (model !== undefined) {
       if (typeof model !== 'string' || !model.trim() || model.length > 512)
         throwIpcError('INVALID_PARAMS', 'Invalid subscription model');
-      return { providerId, model, available: await readSubscriptionPoolModelAvailability(providerId, model) };
+      return { providerId, model, available: await readSubscriptionPoolModelAvailability(providerId, model, {
+        remote: !!context,
+      }) };
     }
     const usage = await readSubscriptionPoolUsage(providerId);
     return { providerId, pooled: usage !== undefined, usage: usage ?? null };

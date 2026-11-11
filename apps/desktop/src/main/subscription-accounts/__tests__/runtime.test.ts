@@ -183,6 +183,42 @@ describe('tasks using imported Codex connections', () => {
     remote?.release();
   });
 
+  // PR #9837 review / unit: a healthy imported account cannot clear a group's
+  // cooldown for a new route its original grants deny. Prior tests only gated
+  // allocation. Two accounts (exhausted default + healthy imported) reproduce it.
+  it.each([false, true])('checks imported-account grants before recovering pool cooling (remote=%s)', async (remote) => {
+    const model = 'chatgpt/gpt-6-astra';
+    h.pools.openai = {
+      strategy: 'order', accounts: [account('default'), account('imported')],
+      legacyCodexAccounts: { 'openai-old': 'imported' },
+    };
+    let grant = 'all';
+    h.accountAllowed.mockImplementation((_provider, target, options) =>
+      !options.newRoute || (target === model && (grant === 'all' || (grant === 'local' && !options.remote))));
+    h.usage.mockImplementation(async (_provider, dir) => {
+      if (dir.endsWith('imported')) grant = 'denied'; // Revoked while the first quota read is in flight.
+      return { codexUsage: {
+        appServerBuckets: { codex: { limitId: 'codex', updatedAt: Date.now(),
+          primary: { usedPercent: dir.endsWith('default') ? 100 : 10,
+            resetsAt: Date.now() / 1000 + 3600, windowMinutes: 300 }, secondary: null } },
+        webSnapshot: null, nativeAccountPool: true,
+      } };
+    });
+    const options = { remote };
+    expect(await readSubscriptionPoolModelAvailability('openai', model, options)).toBe(false);
+    await expect(acquireSubscriptionAccount('openai', model, [], false, options)).rejects.toThrow('No subscription account');
+    grant = 'local';
+    expect(await readSubscriptionPoolModelAvailability('openai', model, options)).toBe(!remote);
+    grant = 'all';
+    expect(await readSubscriptionPoolModelAvailability('openai', model, options)).toBe(true);
+    expect(h.bindings.size).toBe(0);
+    const lease = await acquireSubscriptionAccount('openai', model, [], false, options);
+    expect(lease?.account.configDir).toBe('openai/imported');
+    lease?.release();
+    grant = 'denied';
+    expect(await readSubscriptionPoolModelAvailability('openai', model, options)).toBe(false);
+  });
+
   it('pins an explicit old connection without task keys and does not persist a denied assignment', async () => {
     h.pools.openai = {
       strategy: 'least', accounts: [account('default'), account('imported')],

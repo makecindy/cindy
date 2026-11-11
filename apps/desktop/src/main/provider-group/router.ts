@@ -48,7 +48,7 @@ export interface ProviderGroupRouterDeps {
   /** 仅详情页按需读取；分配与普通状态查询不探测远端能力。 */
   readCaps?(member: ProviderGroupMember): Promise<RemoteAgentCaps>;
   /** Owner-only, model-specific confirmation from a configured multi-account pool. */
-  readPoolModelAvailability?(member: ProviderGroupMember, model: string): Promise<boolean | null>;
+  readPoolModelAvailability?(member: ProviderGroupMember, model: string, options: { remote: boolean }): Promise<boolean | null>;
   readGroup(providerId: string): ProviderGroupConfig | null;
   listBindings(): Record<string, ProviderGroupBinding>;
   /** 这个任务现在是否正在运行一轮。 */
@@ -168,16 +168,17 @@ export function createProviderGroupRouter(deps: ProviderGroupRouterDeps): Provid
   const provisional = new Map<string, { providerId: string; memberKey: string; until: number }>();
   const poolReads = new Map<string, { cooling: Record<string, number>; result: Promise<boolean | null> }>();
 
-  async function recoverPoolCooling(providerId: string, member: ProviderGroupMember, model: string): Promise<void> {
+  async function recoverPoolCooling(providerId: string, member: ProviderGroupMember, model: string, remote: boolean): Promise<void> {
     if (!deps.readPoolModelAvailability || member.kind === 'share') return;
     const key = coolKey(providerId, member.key);
     const remembered = cooling.get(key);
     const scope = coolingScope(model);
     if (!scope || !remembered || !(remembered[scope] > deps.now())) return;
-    const readKey = `${key}\u0000${model}`;
+    // Local-only account grants cannot serve as proof for a remote route.
+    const readKey = `${key}\u0000${model}\u0000${remote}`;
     let read = poolReads.get(readKey);
     if (!read) {
-      read = { cooling: remembered, result: deps.readPoolModelAvailability(member, model).catch(() => null) };
+      read = { cooling: remembered, result: deps.readPoolModelAvailability(member, model, { remote }).catch(() => null) };
       poolReads.set(readKey, read);
       void read.result.finally(() => { if (poolReads.get(readKey) === read) poolReads.delete(readKey); });
     }
@@ -286,7 +287,8 @@ export function createProviderGroupRouter(deps: ProviderGroupRouterDeps): Provid
       });
       await Promise.all(resolved.filter((r) => !r.pending && !r.providerContinuity?.stale
         && offersModel(r, input.agentKind, input.model) && !paused(r) && !input.exclude?.has(r.member.key))
-        .map((r) => recoverPoolCooling(input.providerId, r.member, input.model)));
+        .map((r) => recoverPoolCooling(input.providerId, r.member, input.model,
+          r.member.kind !== 'local' || input.localTask !== true)));
       const now = deps.now();
       const schedulable: SchedulableMember[] = resolved.map((r) => {
         const quota = providerGroupMemberUsageState(r, input.model, now, input.agentKind);

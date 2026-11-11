@@ -344,12 +344,16 @@ export async function readSubscriptionSessionUsage(provider: SubscriptionProvide
 export async function readSubscriptionPoolModelAvailability(
   provider: SubscriptionProvider,
   model: string,
+  options: { remote?: boolean } = {},
 ): Promise<boolean | null> {
   const pool = readPool(provider);
   if (!pool || pool.accounts.length < 2) return null;
   if (pool.disconnected) return false;
   const state = currentRuntime();
   const infos = await Promise.all(pool.accounts.map((a) => snapshot(state, provider, a.id)));
+  // Match new-account allocation without loading remote-access dependencies for
+  // unrelated providers. Check current grants after the asynchronous quota read.
+  const legacyAccess = provider === 'openai' ? await import('./legacyAccountAccess.js') : null;
   assertOwner(state);
   const latest = readPool(provider);
   if (!latest || latest.disconnected) return false;
@@ -359,6 +363,10 @@ export async function readSubscriptionPoolModelAvailability(
       || accountCooling(state, provider, account.id, model)
       || [...state.logins].some(([key, login]) => key.startsWith(provider + ':') && login.accountId === account.id)
       || (account.id === 'default' && !defaultAccountBound(provider))) return false;
+    const imported = provider === 'openai' ? readLegacyCodexProviderId(account.id) : undefined;
+    if (imported && !legacyAccess?.legacyCodexAccountCanRun(imported, model, {
+      remote: options.remote === true, newRoute: true,
+    })) return false;
     const usage = providerGroupMemberUsageState(info.usage ?? {},
       provider === 'openai' ? model.replace(/^chatgpt\//, '') : model,
       Date.now(), provider === 'openai' ? 'codex' : 'claude-code');

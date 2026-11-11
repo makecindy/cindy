@@ -126,6 +126,21 @@ function harness(readPoolModelAvailability?: ProviderGroupRouterDeps['readPoolMo
 }
 
 describe('provider-group quota routing', () => {
+  // PR #9837 review / unit: healthy local-only grants must not recover remote
+  // routes. Existing pool reads ignored the route's execution context.
+  it.each([
+    [0, true, 'member'], [0, undefined, 'unavailable'], [1, true, 'unavailable'],
+  ] as const)('uses the execution context for member %s with localTask=%s', async (index, localTask, kind) => {
+    const h = harness(async (_member, _model, options) => options?.remote !== true);
+    const member = h.config.members[index];
+    const exclude = new Set([h.config.members[1 - index].key]);
+    h.router.markCooling('anthropic', member.key, NOW + 100_000, OPUS);
+    expect(await h.router.pick({ providerId: 'anthropic', agentKind: 'claude-code', model: OPUS, localTask, exclude }))
+      .toMatchObject({ kind });
+    expect(h.router.coolingUntil('anthropic', member.key, OPUS))
+      .toBe(kind === 'member' ? null : NOW + 100_000);
+  });
+
   // #9833, unit: recovery must not erase newer failures or unrelated scopes.
   // Previous cooldown tests had no asynchronous pool confirmation in pick().
   it('recovers only the confirmed model and retains newer failures while sharing an in-flight read', async () => {
