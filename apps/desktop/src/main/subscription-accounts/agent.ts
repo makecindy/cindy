@@ -33,7 +33,7 @@ interface SubscriptionRouteOptions {
 }
 interface SubscriptionAccountRouting extends Pick<AuthAdapter, 'getState'> {
   /** Codex can use an OAuth host while routing an implicit model elsewhere. */
-  resolveDefaultProvider?(model?: string): string | null;
+  resolveDefaultProvider?(model?: string): string | null | Promise<string | null>;
 }
 
 async function providerFor(
@@ -55,7 +55,7 @@ async function providerFor(
     // An implicit route may use the native login or the gateway. Ask the same
     // adapter as startup; a same-name catalog model is not proof of its source.
     if (readPool(native) && !resolveAgentCredentialMode({ agentKind: agent.kind, model: options.model })) {
-      const source = agent.kind === 'codex' ? auth.resolveDefaultProvider?.(options.model) : null;
+      const source = agent.kind === 'codex' ? await auth.resolveDefaultProvider?.(options.model) : null;
       if (source && source !== native) return null;
       const state = await auth.getState({ model: options.model });
       if (state.authenticated && state.authSource === 'oauth') providerId = native;
@@ -299,7 +299,7 @@ export function withSubscriptionAccounts<T extends BaseAgent>(agent: T, auth?: S
                 [NATIVE_SUBSCRIPTION_ACCOUNT]: current.account,
               });
               await current.bind([...keys, `native:${handle.id}`]);
-              current.running(false);
+              // Startup owns its slot until the first turn completes or the runtime closes.
               return guardAccountSwitch(wrapHandle(handle, current, unregister, options.model), target, {
                 ...options,
                 // Keep the effective native source for later switch checks even if

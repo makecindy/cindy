@@ -194,7 +194,7 @@ import { ensureBotCanonicalSession } from './botCanonicalSessionEnsure.js';
 import { readCodexContextWindowInfo } from '../maker-host/codex-context-window.js';
 import { readSshCodexModelList, assertSshCodexModel, isVerifiedSshCodexResume } from '../remote-ssh/codex-model-list.js';
 import { prepareCodexCustomContextCatalog } from '../maker-host/codex-custom-context-catalog.js';
-import { inferProviderIdForModel } from '../maker-host/provider-route.js';
+import { resolveConnectedDefaultProviderIdForModel } from '../maker-host/provider-route.js';
 import { bindGroupFastPolicy } from '../provider-group/fastPolicyRuntime.js';
 import { resolveConfiguredContextWindow, contextWindowBudgetChangesEffectiveWindow, resolveDesktopModelContextProviderId, resolveSessionContextWindowBounds, readStoredSessionContextWindowBudget, applySessionContextWindowBudgetToCreateOpts } from '../maker-host/model-context-settings.js';
 import { isSessionContextWindowBudgetCustomized, readSessionContextWindowBudget } from '../maker-host/session-context-budget-store.js';
@@ -9346,7 +9346,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
     if (!agentOnOtherDevice && !o.providerId && !o.resumeSessionId) {
       const auth = o.agentKind === 'claude-code' ? desktopClaudeAuthAdapter : {
         getState: desktopCodexAuthAdapter.getState.bind(desktopCodexAuthAdapter),
-        resolveDefaultProvider: (model?: string) => model ? inferProviderIdForModel(model, 'codex') : null,
+        resolveDefaultProvider: (model?: string) => model ? resolveConnectedDefaultProviderIdForModel(model, 'codex') : null,
       };
       const provider = await resolveSubscriptionPoolProvider({ kind: o.agentKind }, o, auth);
       assertAccess?.();

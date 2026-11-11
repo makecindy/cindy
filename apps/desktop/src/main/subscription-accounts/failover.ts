@@ -119,7 +119,7 @@ export async function prepareSubscriptionAccountFailover(
   try {
     const assertCurrent = () => {
       assertOwner();
-      lease!.account.assertCurrent();
+      lease!.assertDispatchable();
       if (deps.isRunning(sessionId)) throw new Error('Cannot switch a running task subscription account');
       const current = readAccountBinding(`task:${sessionId}`, bound.provider)
         ?? (row!.sdkSessionId ? readAccountBinding(`native:${row!.sdkSessionId}`, bound.provider) : undefined);
@@ -130,6 +130,7 @@ export async function prepareSubscriptionAccountFailover(
     if (row!.sdkSessionId) await deps.rebuild(sessionId, assertCurrent);
     assertCurrent();
     await lease.bind([`task:${sessionId}`]);
+    lease.reserveForTask(sessionId);
     deps.log?.('subscription account failover: moved task before send', {
       sessionId, provider: bound.provider, from: bound.accountId, to: lease.accountId,
     });

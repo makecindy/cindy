@@ -18,8 +18,8 @@ import {
   PROVIDER_GROUP_COOLING_SCOPE_CAP,
   PROVIDER_GROUP_FAILURE_COOLDOWN_MS,
 } from '../provider-group/cooling.js';
-import { readSubscriptionAccountCooling, writeSubscriptionAccountCooling } from '../provider-group/coolingStore.js';
-import { PROVIDER_GROUP_DEFAULT_COOLDOWN_MS } from '../provider-group/router.js';
+import { clearSubscriptionAccountCooling, readSubscriptionAccountCooling, writeSubscriptionAccountCooling } from '../provider-group/coolingStore.js';
+import { PROVIDER_GROUP_DEFAULT_COOLDOWN_MS, PROVIDER_GROUP_LOCAL_PROVISIONAL_MS } from '../provider-group/router.js';
 import { decideProviderGroupFailure, providerGroupFailureSignals } from '../provider-group/failurePolicy.js';
 import { readTurnUsageResetAt } from '../goal-host/usageLimit.js';
 import { providerGroupCodexUsageFromReads } from '../provider-group/usage.js';
@@ -79,6 +79,8 @@ interface OwnerRuntime {
   cache: Map<string, AccountSnapshot>;
   flights: Map<string, Promise<AccountSnapshot>>;
   running: Map<string, Set<string>>;
+  /** Pending reassignments still require admission after an abandoned reservation expires. */
+  pendingStarts: Map<string, { accountId: string; token: string; until: number }>;
   lastPicked: Map<SubscriptionProvider, string>;
   logins: Map<string, { abort: AbortController; accountId: string }>;
   invalidated: Map<string, { token: string; reason: string }>;
@@ -113,15 +115,26 @@ function currentRuntime(): OwnerRuntime {
       cache: new Map(),
       flights: new Map(),
       running: new Map(),
+      pendingStarts: new Map(),
       lastPicked: new Map(),
       logins: new Map(),
       invalidated: new Map(),
       quotaCooling: loadCooling(),
     };
   }
+  expirePendingStarts(runtime);
   return runtime;
 }
 const keyOf = (provider: SubscriptionProvider, id: string) => `${provider}:${id}`;
+function expirePendingStarts(state: OwnerRuntime): void {
+  for (const [key, pending] of state.pendingStarts) {
+    if (pending.until > Date.now()) continue;
+    const provider = key.slice(0, key.indexOf(':')) as SubscriptionProvider;
+    if (state.running.get(keyOf(provider, pending.accountId))?.delete(pending.token)) changed(provider);
+    // Keep the task's admission marker until takeover: an expired reassignment
+    // must not use the ordinary existing-task exemption to exceed the limit.
+  }
+}
 /** Persisted like provider group cooling, so a restart does not first retry a failed account. */
 function loadCooling(): Map<string, Record<string, number>> {
   const loaded = new Map<string, Record<string, number>>();
@@ -750,6 +763,8 @@ export interface SubscriptionAccountLease {
   observeFailure(error: unknown, model: string | undefined, phase: 'start' | 'run'): boolean;
   changeModel(model: string, apply: () => Promise<void>): Promise<void>;
   bind(keys: string[]): Promise<void>;
+  /** Transfer this reservation to a task until its next runtime takes over. */
+  reserveForTask(taskId: string): void;
   running(active: boolean): void;
   release(): void;
 }
@@ -787,6 +802,9 @@ export async function acquireSubscriptionAccount(
   // Settings may change while the official CLI is answering.
   const latest = readPool(provider);
   if (!latest || latest.disconnected) throw new Error('Subscription accounts changed');
+  expirePendingStarts(state);
+  const pendingKey = !control ? keys.map(key => keyOf(provider, key)).find(key => state.pendingStarts.has(key)) : undefined;
+  const pending = pendingKey ? state.pendingStarts.get(pendingKey) : undefined;
   const members = latest.accounts.map((a) => {
     const imported = provider === 'openai' ? readLegacyCodexProviderId(a.id) : undefined;
     const index = pool.accounts.findIndex((p) => p.id === a.id);
@@ -827,6 +845,9 @@ export async function acquireSubscriptionAccount(
       ...(options.exclude ? { exclude: options.exclude } : {}),
     });
   const member = members.find((a) => a.id === selected);
+  const reserved = pending && pending.accountId === selected && state.running.get(keyOf(provider, pending.accountId))?.has(pending.token) ? 1 : 0;
+  if (pending && member && member.running - reserved >= member.limit)
+    throw new Error(SUBSCRIPTION_ACCOUNTS_FULL_ERROR);
   if (!selected && !pinned && providerGroupMembersFull(members, { exclude: options.exclude }))
     throw new Error(SUBSCRIPTION_ACCOUNTS_FULL_ERROR);
   if (!selected || !member || !member.usable || (!control && member.paused))
@@ -841,11 +862,16 @@ export async function acquireSubscriptionAccount(
   const active = state.running.get(key) ?? new Set<string>();
   state.running.set(key, active);
   if (!control) {
+    if (pending && pendingKey) {
+      state.running.get(keyOf(provider, pending.accountId))?.delete(pending.token);
+      state.pendingStarts.delete(pendingKey);
+    }
     active.add(token);
     state.lastPicked.set(provider, selected);
     changed(provider);
   }
   let released = false;
+  let handedOff = false;
   let currentModel = model;
   const assertCurrent = (targetModel = currentModel, modelSwitch = false) => {
     assertOwner(state);
@@ -962,6 +988,17 @@ export async function acquireSubscriptionAccount(
       await writeAccountBindings(ids, provider, selected);
       assertCurrent();
     },
+    reserveForTask: (taskId) => {
+      assertCurrent();
+      if (released || control || readAccountBinding(`task:${taskId}`, provider)?.accountId !== selected)
+        throw new Error('Cannot transfer the subscription account reservation');
+      const taskKey = keyOf(provider, `task:${taskId}`);
+      const previous = state.pendingStarts.get(taskKey);
+      if (previous) state.running.get(keyOf(provider, previous.accountId))?.delete(previous.token);
+      active.add(token);
+      state.pendingStarts.set(taskKey, { accountId: selected, token, until: Date.now() + PROVIDER_GROUP_LOCAL_PROVISIONAL_MS });
+      handedOff = true;
+    },
     running: (value) => {
       const wasActive = active.has(token);
       if (!released) {
@@ -974,7 +1011,7 @@ export async function acquireSubscriptionAccount(
     },
     release: () => {
       released = true;
-      if (active.delete(token)) changed(provider);
+      if (!handedOff && active.delete(token)) changed(provider);
     },
   };
 }
@@ -1026,6 +1063,7 @@ export async function runSubscriptionAccountCommand(
     }));
     state.cache.delete(keyOf(provider, command.accountId));
     state.quotaCooling.delete(keyOf(provider, command.accountId));
+    await clearSubscriptionAccountCooling(provider, command.accountId);
   } else {
     const initial = readPool(provider);
     const adding = command.action === 'add' || command.action === 'connect';
@@ -1123,6 +1161,8 @@ export async function runSubscriptionAccountCommand(
       state.cache.delete(keyOf(provider, accountId));
       state.invalidated.delete(keyOf(provider, accountId));
       state.quotaCooling.delete(keyOf(provider, accountId));
+      await clearSubscriptionAccountCooling(provider, accountId);
+      assertOwner(state);
       await snapshot(state, provider, accountId, true);
     } finally {
       state.logins.delete(key);

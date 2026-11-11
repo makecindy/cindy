@@ -112,8 +112,28 @@ export function writeProviderGroupCooling(cooling: ProviderGroupPersistedCooling
 
 /** 账号冷却的合并写入；失败只记日志，内存里的冷却照常生效。 */
 export function writeSubscriptionAccountCooling(cooling: ProviderGroupPersistedCooling): Promise<void> {
-  return accountStore.updateAtomic((current) => normalize({ cooling: mergeCooling(current.value.cooling, cooling) })).then(() => undefined).catch((error: unknown) => {
+  return updateAccountCooling(current => mergeCooling(current, cooling));
+}
+
+let accountWrites: Promise<void> = Promise.resolve();
+function updateAccountCooling(edit: (current: ProviderGroupPersistedCooling) => ProviderGroupPersistedCooling): Promise<void> {
+  const owner = activeOwnerScopeKey();
+  // Clear must follow all earlier writes, including background failure snapshots.
+  accountWrites = accountWrites.then(async () => {
+    if (owner !== activeOwnerScopeKey()) return;
+    await accountStore.updateAtomic(current => normalize({ cooling: edit(current.value.cooling) }));
+  }).catch((error: unknown) => {
     log.warn('subscription accounts: saving cooldowns failed', { error: error instanceof Error ? error.message : String(error) });
+  });
+  return accountWrites;
+}
+
+/** A successful login or removal clears only this account, preserving other cooldowns. */
+export function clearSubscriptionAccountCooling(providerId: string, accountId: string): Promise<void> {
+  return updateAccountCooling(current => {
+    const next = { ...current, [providerId]: { ...current[providerId] } };
+    delete next[providerId][accountId];
+    return next;
   });
 }
 
