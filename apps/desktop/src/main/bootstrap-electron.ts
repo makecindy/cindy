@@ -87,8 +87,13 @@ import {
   webContents,
 } from 'electron';
 import {
+  fitWindowsBackdropToWindow,
+  isWindowsTransparentWindow,
+  markWindowsTransparentWindow,
+  needsWindowsTransparentWindow,
   resolveVibrancyConfig,
   resolveWindowVibrancyConfig,
+  resolveWindowsWindowTransparent,
   setWindowDesktopBlur,
   setWindowWallpaperCovered,
 } from './vibrancyConfig';
@@ -99,6 +104,7 @@ import {
   parseWindowThemeVibrancyPayload,
   readWindowThemeSnapshot,
   writeWindowThemeSnapshot,
+  writeWindowTransparencyHint,
 } from './window-theme-mode-store';
 import {
   createWindowBackdropMaterialArgument,
@@ -4327,6 +4333,10 @@ const createWindow = () => {
     isDark,
     process.platform,
   );
+  // Windows: a transparent window flickers under a system backdrop (see vibrancyConfig).
+  const windowTransparent =
+    process.platform !== 'win32' ||
+    resolveWindowsWindowTransparent(winBackdropConfig, persistedTheme?.needsTransparentWindow);
 
   // Window state persistence (F-WST-1): remembers position / size / maximized
   // / fullscreen across launches. Falls back to the defaults below on first
@@ -4407,7 +4417,7 @@ const createWindow = () => {
     autoHideMenuBar: true,
     show: false,
     backgroundColor: bgColor,
-    transparent: true,
+    transparent: windowTransparent,
     ...(process.platform === 'win32' && winBackdropConfig.backgroundMaterial
       ? {
           backgroundMaterial: winBackdropConfig.backgroundMaterial,
@@ -4439,6 +4449,7 @@ const createWindow = () => {
     },
   });
   markAppContentWindow(mainWindow);
+  if (process.platform === 'win32' && windowTransparent) markWindowsTransparentWindow(mainWindow);
   installWindowsTransparentTitleBar(mainWindow, () => {
     mainWindowMaximizeRecoveryController?.notifyUserUnmaximizeIntent();
   });
@@ -5155,7 +5166,14 @@ const registerIpcHandlers = () => {
   function applyWindowVibrancy(familyId: string, isDark: boolean): void {
     const win = mainWindowRef;
     if (!win || win.isDestroyed()) return;
-    const config = resolveWindowVibrancyConfig(win, familyId, isDark, process.platform);
+    const requested = resolveWindowVibrancyConfig(win, familyId, isDark, process.platform);
+    const config =
+      process.platform === 'win32'
+        ? fitWindowsBackdropToWindow(requested, isWindowsTransparentWindow(win))
+        : requested;
+    if (process.platform === 'win32') {
+      writeWindowTransparencyHint(needsWindowsTransparentWindow(requested));
+    }
 
     if (process.platform === 'win32' && config.backgroundMaterial) {
       win.setBackgroundMaterial(config.backgroundMaterial);

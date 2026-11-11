@@ -56,6 +56,17 @@ arm64 清单不写清单缓存、不通知监听者，引擎安装继续按进�
 `.app`，换架构不残留旧文件。Agent 更新查询保持严格版本比较。新增版本闸门须复用 `appUpdateRelation`，
 不要另写同版本例外。
 
+## Linux 更新后的自动重启
+
+Linux 没有独立更新器，由 `updateScriptLinux.ts` 生成的脚本在旧进程退出后安装并拉起新版本。
+重启参数只保留两类：`--password-store`，以及用户启动器带的图形后端开关（`--ozone-platform`
+等，白名单见 `linuxRelaunchDisplayArgs`）。纯 Wayland 会话缺少 Ozone 开关时，Electron 在
+建窗口前就退出；链接、任务参数和调试端口仍不带过去。新进程的 stdout／stderr 写入日志目录的
+`cindy-relaunch.log`，每次拉起时清空；文件不可写时退回 `/dev/null`，不能挡住拉起。新进程要
+连续存活 `verifyStableSeconds` 秒才记为 `PROCESS VERIFIED`；提前退出时，脚本把退出码和
+输出末尾抄进 `cindy-update.log`。回归见 `updateScriptLinux.test.ts` 与
+`linuxInstallation.test.ts`。
+
 ## 引擎二进制的后台下载
 
 主程序的检查、下载、ready、自动重启、替换和回滚条件不依赖引擎下载。环境就绪后，
