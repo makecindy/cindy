@@ -211,6 +211,23 @@ describe('RipgrepSearcher fatal exit handling', () => {
     });
   }
 
+  // #10143, unit: verify the actual rg invocation includes newly previewable
+  // .NET text sources, while package archives stay outside the search scope.
+  it('includes .NET sources in the search glob protocol', async () => {
+    let args: readonly string[] = [];
+    spawnHandler = (_command, actualArgs) => {
+      args = actualArgs ?? [];
+      return createFakeChild(1);
+    };
+    const RipgrepSearcher = await importSearcher();
+    const searcher = new RipgrepSearcher({ rgPath: '/fake/rg', logger: makeLogger() });
+    const id = searcher.start({ query: 'needle', workdir: '/tmp/work', caseSensitive: false, maxMatches: 100 });
+    await waitForSearch(searcher, id);
+    const globs = args.filter((_arg, index) => index > 0 && args[index - 1] === '--glob');
+    expect(globs).toEqual(expect.arrayContaining(['*.props', '*.axaml', '*.csproj.user', '*.razor', '*.graphqls', '*.thrift']));
+    expect(globs).not.toContain('*.nupkg');
+  });
+
   it('emits type:error when rg exits with code 2', async () => {
     spawnHandler = () => createFakeChild(2);
 

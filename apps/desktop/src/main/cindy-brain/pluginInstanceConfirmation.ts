@@ -12,6 +12,7 @@ import {
   confirmInstanceNamespace,
   confirmUnconfirmedInstance,
   marketRowMatchesUnconfirmedInstance,
+  upsertInstance,
   type InstanceConfirmationEvidence,
   type InstanceConfirmationMarketRecord,
   type PluginInstanceRecord,
@@ -83,7 +84,7 @@ interface UnconfirmedConfirmationHost {
 }
 
 /** Confirm unconfirmed rows only when the caller supplies positive evidence. */
-export async function confirmUnconfirmedInstances(host: UnconfirmedConfirmationHost): Promise<{ unresolvedPending: number; mutationFailures: number }> {
+export async function confirmUnconfirmedInstances(host: UnconfirmedConfirmationHost, instanceKey?: string, replacementPluginId?: string): Promise<{ unresolvedPending: number; mutationFailures: number }> {
   const readEvidence = host.readEvidence;
   if (host.isBlocked()) return { unresolvedPending: 0, mutationFailures: 0 };
   const ownerContextKey = host.ownerContextKey();
@@ -91,13 +92,15 @@ export async function confirmUnconfirmedInstances(host: UnconfirmedConfirmationH
   if (host.isBlocked() || host.ownerContextKey() !== ownerContextKey) {
     return { unresolvedPending: 0, mutationFailures: 0 };
   }
-  const orphans = new Set(Object.values(registry.instances).filter((record) =>
+  const selected = instanceKey === undefined ? undefined : registry.instances[instanceKey];
+  const records = instanceKey === undefined ? Object.values(registry.instances) : selected ? [selected] : [];
+  const orphans = new Set(records.filter((record) =>
     record.active && record.namespaceState === 'pending' && registry.census !== null &&
     !registry.census.pendingRelIds.includes(record.contentRelId),
   ).map((record) => record.instanceKey));
   if (!readEvidence) return { unresolvedPending: orphans.size, mutationFailures: 0 };
   let mutationFailures = 0;
-  for (const record of Object.values(registry.instances)) {
+  for (const record of records) {
     if (host.ownerContextKey() !== ownerContextKey) return { unresolvedPending: 0, mutationFailures: 0 };
     const orphan = orphans.has(record.instanceKey);
     if (!record.active || (record.namespaceState !== 'unconfirmed' && !orphan)) continue;
@@ -107,8 +110,13 @@ export async function confirmUnconfirmedInstances(host: UnconfirmedConfirmationH
     if (!target) continue;
     // This is a candidate for evidence checking, not a persisted state change or
     // an expansion of the frozen upgrade allowlist. Receipt fields alone never confirm it.
-    const candidate: PluginInstanceRecord = orphan
+    let candidate: PluginInstanceRecord = orphan
       ? { ...record, namespace: target.namespace, namespaceState: 'unconfirmed' } : record;
+    // Main may bind a newly committed market route after explicit source replacement.
+    // The original record is still rechecked below; namespace/owner/package evidence is unchanged.
+    if (record.instanceKey === instanceKey && replacementPluginId !== undefined) {
+      candidate = { ...candidate, pluginId: replacementPluginId, source: 'market' };
+    }
     let evidence: InstanceConfirmationEvidence | null | undefined;
     try {
       evidence = readEvidence(candidate);
@@ -158,10 +166,14 @@ export async function confirmUnconfirmedInstances(host: UnconfirmedConfirmationH
         const live = current.instances[record.instanceKey];
         if (!live?.active || live.pluginId !== record.pluginId || live.namespaceState !== record.namespaceState || live.namespace !== record.namespace ||
             live.receiptRevision !== revision || live.packageSha256 !== packageSha256) return;
-        const confirmed = confirmInstanceNamespace(current, record.instanceKey, decision.namespace, {
+        let confirmed = confirmInstanceNamespace(current, record.instanceKey, decision.namespace, {
           revision, packageSha256,
         });
         if (confirmed === current) return;
+        if (candidate.pluginId !== record.pluginId) {
+          confirmed = upsertInstance(confirmed, { ...confirmed.instances[record.instanceKey]!,
+            pluginId: candidate.pluginId, source: candidate.source });
+        }
         host.writeRegistry(confirmed);
         orphans.delete(record.instanceKey);
       });

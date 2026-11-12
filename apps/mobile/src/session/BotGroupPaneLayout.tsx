@@ -9,7 +9,6 @@ import { sharedStatusRowTrailingReserve, sharedStatusRowDrawerTop } from '@/plat
 import { MessageHistoryOverlay } from './RecentMessageHistories';
 import { useSessionPaneLayout, useSessionSidebarWidthPreference } from './ResidentHomeList';
 import { SessionListDrawer } from './SessionListDrawer';
-import { SessionPaneDivider } from './SessionPaneDivider';
 import { useConversationTaskDrawer } from './useConversationTaskDrawer';
 import { buildWideSessionNavLayout } from './wideSessionNav';
 
@@ -55,9 +54,8 @@ export function BotGroupPaneLayout({ children }: { children: ReactNode }) {
         motion={drawer.sessionListDrawerMotion}
         resize={layout.resizeBounds ? { bounds: layout.resizeBounds, onResize: preference.setWidth } : undefined} />
     </MessageHistoryOverlay>
-    {persistent && paneLayout.resizeBounds ? <SessionPaneDivider width={paneLayout.sidebarWidth}
-      left={detail.x} top={geometry.insets.top} bottom={geometry.insets.bottom}
-      bounds={paneLayout.resizeBounds} onResize={preference.setWidth} /> : null}
+    {/* The side-by-side edge belongs to ResidentHomeListProvider, which also
+        holds this route: its drag band must cover both panes. */}
   </View>;
 }
 
