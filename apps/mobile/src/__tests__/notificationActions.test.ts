@@ -91,6 +91,15 @@ describe('performNotificationAction', () => {
     expect(resolved(m)).toHaveBeenCalledWith('req-1', { kind: 'permission', behavior: 'allow' });
   });
 
+  it('allows a plugin call when the alert named the plugin that is waiting', async () => {
+    const m = maker({ getPendingInteractions: vi.fn(async () => [
+      { request: { kind: 'permission', requestId: 'req-1', toolName: 'ghost_call', input: { ghost_id: 'mail', tool: 'send' } } },
+    ]) });
+    const press = { ...allow, shownBody: 'Allow using the plugin "mail"?\nmail \u00b7 send' };
+    await expect(performNotificationAction(press, m, { until: 10_000, ...clock() })).resolves.toBe('sent');
+    expect(resolved(m)).toHaveBeenCalledWith('req-1', { kind: 'permission', behavior: 'allow' });
+  });
+
   it('does not answer a request that is no longer the one waiting', async () => {
     const m = maker({ getPendingInteractions: vi.fn(async () => [{ request: { ...pendingCommand.request, requestId: 'req-2' } }]) });
     await expect(performNotificationAction(allow, m, { until: 10_000, ...clock() })).resolves.toBe('ended');
@@ -108,6 +117,14 @@ describe('performNotificationAction', () => {
     ['raw tool arguments',
       [{ request: { kind: 'permission', requestId: 'req-1', toolName: 'mcp__srv__tool', input: { a: 1 } } }], 'Allow?\ntool {"a":1}'],
     ['something else is waiting too', [pendingCommand, { request: { kind: 'ask_user_question', requestId: 'q-1' } }], shownBody],
+    // PR #10113 review: two plugins can offer the same tool with the same arguments, so the plugin is part of
+    // what the phone checks. The alert named "mail"; the request waiting on the computer is "calendar".
+    ['the alert named another plugin above the same tool',
+      [{ request: { kind: 'permission', requestId: 'req-1', toolName: 'ghost_call', input: { ghost_id: 'calendar', tool: 'send' } } }],
+      'Allow using the plugin "mail"?\nsend'],
+    ['the alert named another plugin in the operation itself',
+      [{ request: { kind: 'permission', requestId: 'req-1', toolName: 'ghost_call', input: { ghost_id: 'calendar', tool: 'send' } } }],
+      'Allow using the plugin "mail"?\nmail \u00b7 send'],
   ])('never allows when %s, but can still deny', async (_label, pending, shown) => {
     const m = maker({ getPendingInteractions: vi.fn(async () => pending) });
     const press = { ...allow, shownBody: shown };

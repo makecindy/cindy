@@ -206,7 +206,7 @@ describe('buildPermissionAlert', () => {
       body: 'Q:command\npnpm test\n# cwd: /repo',
     });
     expect(buildPermissionAlert(request('Edit', { file_path: '/repo/a.ts' }), question)?.body).toBe('Q:file-write\n/repo/a.ts');
-    expect(buildPermissionAlert(request('ghost_call', { ghost_id: 'mail', tool: 'send' }), question)?.body).toBe('Q:plugin:mail\nsend');
+    expect(buildPermissionAlert(request('ghost_call', { ghost_id: 'mail', tool: 'send' }), question)?.body).toBe('Q:plugin:mail\nmail \u00b7 send');
   });
 
   it.each([

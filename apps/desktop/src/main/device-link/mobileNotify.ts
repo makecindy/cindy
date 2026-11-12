@@ -17,6 +17,7 @@ import {
   askQuestionOptions,
   describePermissionAction,
   normalizeAskQuestions,
+  permissionAlertOperation,
   permissionInput,
   permissionRiskSummary,
   permissionToolName,
@@ -69,7 +70,7 @@ export function buildPermissionAlert(
   const action = describePermissionAction(permissionToolName(request), permissionInput(request));
   if (action.kind === 'tool' || action.kind === 'mcp') return undefined;
   if (action.kind === 'plugin' && !action.subject) return undefined;
-  const operation = action.preview.trim();
+  const operation = permissionAlertOperation(action);
   if (!operation) return undefined;
   const body = `${question(action.kind, action.subject)}\n${operation}`;
   return body.length <= NOTIFY_BODY_MAX_LENGTH ? { requestId, body } : undefined;

@@ -5,6 +5,7 @@ import {
   buildAskUserQuestionDecision,
   describePermissionAction,
   normalizeAskQuestions,
+  permissionAlertOperation,
   permissionInput,
   permissionRiskSummary,
   permissionToolName,
@@ -184,7 +185,10 @@ function allowableFromAlert(
   if (permissionRiskSummary(request)) return false;
   const action = describePermissionAction(permissionToolName(request), permissionInput(request));
   if (action.kind === 'tool' || action.kind === 'mcp') return false;
-  const operation = action.preview.trim();
+  if (action.kind === 'plugin' && !action.subject) return false;
+  // For a plugin call the operation names the plugin: an alert that showed another plugin's
+  // name above the same tool and arguments does not end with this request's line.
+  const operation = permissionAlertOperation(action);
   return operation.length > 0 && shownBody.endsWith(`\n${operation}`);
 }
 
