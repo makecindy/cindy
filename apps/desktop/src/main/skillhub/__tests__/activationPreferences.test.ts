@@ -15,6 +15,9 @@ beforeAll(async () => {
     fs.mkdirSync(path.join(bundledRoot, name), { recursive: true });
     fs.writeFileSync(path.join(bundledRoot, name, 'SKILL.md'), `# ${name}\n`);
   }
+  // The bundle version is counted from its record files; a bundle without one is refused.
+  fs.mkdirSync(path.join(bundledRoot, '_versions'));
+  fs.writeFileSync(path.join(bundledRoot, '_versions', 'fixture.md'), 'fixture bundle\n');
   const { prepareBuiltInSkills } = await import('../../maker-host/built-in-skills');
   const result = await prepareBuiltInSkills({
     userDataDir: root, appDataDir: root, homeDir: path.join(root, 'fixture-home'), bundledRoot,

@@ -862,6 +862,7 @@
       "runningCount_other": "{{count}} 件差事方行",
       "limitAria": "{{name}} 之并行上限",
       "limitOption_other": "并行 {{count}}",
+      "limitUnlimited": "不限",
       "weightAria": "{{name}} 之权重",
       "weightOption": "轻重 {{weight}}",
       "assignAria": "分差事予 {{name}}",
@@ -1813,7 +1814,8 @@
       "about": "关于",
       "imBot": "IM 机器人",
       "ghosts": "法器",
-      "cindyMake": "Cindy Make"
+      "cindyMake": "Cindy Make",
+      "modelGroups": "模型组"
     },
     "sections": {
       "user": "用者",
@@ -1857,6 +1859,15 @@
     },
     "remote": {
       "title": "远方之机",
+      "hostKeyError": {
+        "missing": "SSH 主机密钥校验尚未配置。连接已拒绝。",
+        "read": "Cindy 无法读取已信任的主机密钥：{{reason}}。连接已拒绝。",
+        "write": "Cindy 无法保存已信任的主机密钥：{{reason}}。连接已拒绝。",
+        "mismatch": "主机 {{host}} 的密钥已变化（{{fingerprint}}），和 Cindy 之前信任的指纹不一致。这可能是服务器重装，也可能是中间人攻击。连接已拒绝。",
+        "file": "主机密钥信任文件：\n{{filePath}}",
+        "repair": "Cindy 不读取 ~/.ssh/known_hosts。旧指纹在：\n{{filePath}}\n键名是 \"{{host}}\"。\n如果确认这次变化可信：先退出 Cindy，只删除这个键，保留文件和其他主机，再重新连接。新指纹会在首次连接时写入。不要删除整个文件。",
+        "verifyChange": "请先向服务器管理员核实密钥变化，再更新主机密钥信任记录。"
+      },
       "footnote": "初版仅支持 SSH 连接管理；于远程行 Agent 之能，将于后续版本增之。",
       "viaAuth": "经 {{label}} 认证",
       "readOnlyFromSshConfig": "连接信息出自 SSH 设置",
@@ -2278,7 +2289,7 @@
         "desktopVisibilityHint": "透见 Cindy 后之桌面与窗口，文字控件仍清晰。",
         "desktopBlurLabel": "桌面模糊",
         "desktopBlurHint": "模糊窗后桌面；0 则关闭，值愈大则愈朦胧。系统若不可调，仍用预设之效。",
-        "desktopBlurSwitchHint": "以 Windows 系统之效模糊窗后桌面；须 Windows 11 22H2 或更新之版。",
+        "desktopBlurSwitchHint": "以 Windows 系统之效模糊窗后桌面；须 Windows 11 22H2 或更新之版。关之，须重启应用方生效。",
         "blurLabel": "壁纸朦胧",
         "blurHint": "仅朦胧壁纸，0 为阖。动态壁纸启朦胧则增显卡之负。",
         "motionLabel": "展示之式",
@@ -9356,6 +9367,9 @@
     }
   },
   "quotaCard": {
+    "codexRefreshFailed": "ChatGPT 配额更新未成，请重读。其余用量仍存",
+    "retryQuota": "重读配额",
+    "retryingQuota": "正读配额…",
     "usageCritical": "耗用颇高",
     "usageWarning": "耗用偏高",
     "usageTitle": "耗用明细",
@@ -11662,6 +11676,8 @@
       "takeOverConflict": "{{name}} 已移至「{{device}}」续行",
       "takeOverOffline": "连不上服务器，暂不能于此机续之",
       "takeOverFailed": "未能于此机接手 {{name}}",
+      "localCindyConflict": "接手之机已有另一 Cindy。请于其设置中处置，或另择主力电脑",
+      "localCindyConflictAction": "查看本机 Cindy 设置",
       "notEnabled": "今之服务器不支持更换主机",
       "readOnlyNote": "此乃云端所存之言谈，仅可观览",
       "empty": "云端寂寂，尚无言谈",
@@ -14088,6 +14104,7 @@
       "botSentNamed": "同僚「{{name}}」所遣",
       "orcaFromLead": "Lead 之讯",
       "orcaFromWorker": "Worker 之讯",
+      "orcaFromWorkerBatch": "系统所报 Worker 结果凡 {{count}}",
       "orcaFromWorkerNamed": "Worker「{{role}}」之讯",
       "hookChannelFrom": "自 {{channel}} 来",
       "deviceSentMobileNamed": "自手机「{{name}}」所遣",
@@ -14236,6 +14253,8 @@
       "REMOTE_AGENT_SHARE_LEGACY_DISABLED": "此乃旧版分享，启「唯用 Agent-Net」时暂不可用。关此开关即可续之，亦可易他模型。",
       "REMOTE_AGENT_GROUP_USAGE_LIMIT": "此模型之可用名籍已达耗用上限。可改用他模型，或待限额重置后续之。",
       "REMOTE_AGENT_GROUP_UNAVAILABLE": "供方组中之机今皆不能行此差事：或皆脱机、已暂停分配、方冷却，或无此模型。可至此供方之「远程与分享」页察组内之机。",
+      "REMOTE_AGENT_GROUP_FULL": "可行此务之账号或电脑，并行皆已至上限。俟运行之务毕，或于供应商设置中增其上限。",
+      "SUBSCRIPTION_ACCOUNTS_FULL": "可行此务之账号或电脑，并行皆已至上限。俟运行之务毕，或于供应商设置中增其上限。",
       "REMOTE_AGENT_DEVICE_LIMIT": "此设备所留远程差事之数已达上限。可封存暂不用之差事，或请远方之机主于「远程与分享」中提高上限。",
       "REMOTE_AGENT_TOTAL_LIMIT": "远方之机所留差事总数已达上限。请彼机主人释暂不用之差事，或于「远程与分享」中提高上限。",
       "REMOTE_AGENT_RESUME_LOST": "前于彼机之言谈未能接续，Agent 将无前之上下文而续行。",
@@ -14433,6 +14452,14 @@
       "replied": "覆书",
       "toggle": "启闭「{{title}}」之覆书",
       "openTask": "启差事"
+    },
+    "subscriptionAccountError": {
+      "limited": "此差事所用订阅账号，用量已尽。可待用量重设后再试，或另选模型来源。此差事仍系原账号，不自动更换。",
+      "limitedUntil": "此差事所用订阅账号，用量已尽，预计 {{resetAt}} 重设。可待重设后再试，或另选模型来源。此差事仍系原账号，不自动更换。",
+      "loginRequired": "此差事所用订阅账号需要重新登录。请在执行差事的电脑上重新登录该账号，再重试。",
+      "signingIn": "此差事所用订阅账号正在登录，请完成登录后重试。",
+      "unavailable": "此差事所系订阅账号，无法用于本次请求。请于执行差事的电脑检查模型供方的账号设置，或另选模型来源。",
+      "legacy": "此差事所系订阅账号，暂不可用。请于执行差事的电脑检查登录与用量，或另选模型来源。此差事不自动更换账号。"
     }
   },
   "ccAgent": {
@@ -19831,12 +19858,6 @@
       "from": "迁自「{{name}}」",
       "closeChecklist": "阖清单"
     },
-    "suggestion": {
-      "title": "用迁移助理从「{{name}}」迁移？",
-      "description": "可以把那台电脑上的法器、技艺、设置和连接搬到这台电脑。需要在这台电脑上重新登录或授权的内容会列成清单。之后也可以在「设置 → 通用 → 迁移助理」中打开。",
-      "confirm": "打开迁移助理",
-      "later": "暂缓"
-    },
     "walkthrough": {
       "progress": "办理清单 {{current}} / {{total}}",
       "open": "打开",
@@ -19858,6 +19879,103 @@
         "allow": "允许",
         "deny": "拒绝"
       }
+    }
+  },
+  "firstRunGuide": {
+    "title": {
+      "new": "欢迎使用 Cindy",
+      "returning": "欢迎回来"
+    },
+    "stepsLabel": "引导步骤",
+    "close": "关闭引导",
+    "next": "次之",
+    "skip": "跳过",
+    "preparing": "正在准备…",
+    "steps": {
+      "legacy": "旧版数据",
+      "intro": "识 Cindy",
+      "migration": "自旧电脑迁移",
+      "models": "连模型",
+      "import": "纳已有之物",
+      "finish": "毕"
+    },
+    "legacy": {
+      "title": "旧版之数据已携至",
+      "body": "历史差事、媒体文件与 Agent 浏览器之登录状态已迁至新版，可续用。",
+      "note": "已授权之第三方密钥与凭证不随数据而迁，须于设置中重新授权或填写。"
+    },
+    "intro": {
+      "lead": "Cindy 乃助你心想事成之 AI 助手。",
+      "work": {
+        "title": "以事托之",
+        "body": "它于你的卷匣与应用中径直成事，非止答问。"
+      },
+      "connect": {
+        "title": "用你已有之模型与器具",
+        "body": "接上自己的订阅或 API Key，法器与技艺按需添加。"
+      },
+      "continue": {
+        "title": "何处皆可续做",
+        "body": "于手机上发起、查看并续做电脑上的差事。"
+      },
+      "start": "始",
+      "next": "其后"
+    },
+    "migration": {
+      "title": "将另一台电脑上的 Cindy 搬来",
+      "body": "你的帐号下有一台电脑已配置妥当。迁移助理会把它的法器、技艺、设置和连接拷贝到这台电脑；密钥只在你在那台电脑上点「允许」后拷贝。",
+      "manualBody": "若曾在另一台电脑上用过 Cindy，迁移助理可把它的法器、技艺、设置和连接拷贝到这台电脑。",
+      "done": "已自「{{name}}」迁移",
+      "from": "旧电脑",
+      "to": "这台电脑"
+    },
+    "models": {
+      "title": "为 Cindy 接上模型",
+      "body": "以下二法可并用。",
+      "cindy": {
+        "badge": "官方之役",
+        "body": "Cindy 官方所供之模型服务，登录即有，无须开通。新帐号有赠予之余资，可供试用；付费之后，几乎诸模型皆可用，不付费则可用模型之范围有限。",
+        "active": "已含于你的帐号，可径直使用",
+        "freeBalance": "赠予之资，欢迎试用"
+      },
+      "own": {
+        "title": "用你自己的订阅",
+        "badge": "更为实惠",
+        "body": "已有 Claude、ChatGPT 等订阅或 API Key？甚荐接入并用，如此体验最佳。",
+        "more": "其他供方与 API Key",
+        "connected": "已连"
+      }
+    },
+    "import": {
+      "title": "将此机已有之物携入",
+      "body": "以下乃此机其他 AI 器具中所得。唯读原录，不改其分毫。",
+      "empty": "此机未见可纳之物。",
+      "tasksHeading": "差事",
+      "tasksHint": "勾选器具，将其中差事接至 Cindy 续做。",
+      "pick": "逐一拣选",
+      "started": "已于后台开始纳入，可于「设置 → 差事导入」察其进度。",
+      "startFailed": "纳入未始。可于「设置 → 差事导入」重新纳入。",
+      "teammatesHeading": "同僚",
+      "teammatesHint": "将其他器具中的 Agent 连同记忆、技艺与自动化纳为同僚。",
+      "importTeammate": "纳为同僚"
+    },
+    "finish": {
+      "title": "诸事已备",
+      "legacy": "旧版之数据已迁至新版",
+      "modelReady": "模型已连",
+      "modelMissing": "尚未连模型。新建差事时可随时连之。",
+      "importStarted": "其他器具之差事正于后台纳入",
+      "native": "你在 Claude Code、Codex 中的技艺与 MCP 可径直使用，无须纳入。",
+      "start": "始第一件差事"
+    },
+    "resume": {
+      "label": "引导进行中 · {{step}}",
+      "back": "返引导"
+    },
+    "settings": {
+      "title": "起步引导",
+      "description": "重览识 Cindy、自旧电脑迁移、连模型与纳已有之物的引导。",
+      "open": "打开引导"
     }
   },
   "subscriptionAccounts": {
@@ -19891,6 +20009,10 @@
     "openDirectoryFailed": "账号目录未能启，或已移或已删。",
     "loginAgain": "重登",
     "login": "登录",
+    "quotaRecoverIn": "{{duration}}后复",
+    "quotaExhausted": "额度已尽",
+    "quotaFiveHourRemaining": "五小时余 {{percent}}%",
+    "quotaFiveHourExhausted": "五小时额度已尽",
     "quotaAverage": "平均余量 {{percent}}%",
     "quotaUpdating": "余量待新",
     "quotaResetSoon": "将重置",
@@ -19944,5 +20066,131 @@
     "failed": "此卷未能纳入，请再试",
     "themeInstalled": "主题已入列，请于外观规制中选用",
     "refreshFailed": "主题已装入，清单未能更新，请于外观规制中重新整理"
+  },
+  "modelGroups": {
+    "title": "模型组",
+    "description": "合模型供方已有之数源为一项。择模型时于「模型组」取之，此番用何源，由 Cindy 定夺。",
+    "routes": "路线",
+    "routesDescription": "一路线纳数源，新差事起时，依择法取其一。",
+    "sourceCount_other": "{{count}} 源",
+    "strategy": {
+      "expiring": {
+        "title": "将废者先用",
+        "hint": "订阅限额余多而将重设者先用，不使虚掷；限额不可读之源居后。"
+      },
+      "order": {
+        "title": "依序",
+        "hint": "居前者不可用，方用其次。"
+      },
+      "rotate": {
+        "title": "轮值",
+        "hint": "每一新差事易一源，均其劳。"
+      },
+      "cheapest": {
+        "title": "最省",
+        "hint": "订阅尚有限额者先用，不另费钱；余者依标价由低至高，无标价者居后。"
+      }
+    },
+    "picker": {
+      "empty": "尚无模型组。于设定合数源为一路线，即可于此择之。",
+      "manage": "理模型组"
+    },
+    "why": {
+      "expiringQuota": "限额尚余 {{left}}%，{{reset}} 重设，故先用之",
+      "expiring": "依限额居首",
+      "order": "居首之可用者",
+      "rotate": "此番轮至彼",
+      "only": "今唯彼可用",
+      "soonest": "诸源限额皆尽，彼最先复",
+      "soonestUntil": "诸源限额皆尽，彼最先复（{{reset}}）",
+      "standby": "此番未及",
+      "standbyQuota": "限额尚余 {{left}}%，{{reset}} 方重设，姑留之",
+      "off": "已于此路线停用",
+      "unavailable": "未连线，或此模型今不可择",
+      "limited": "限额已尽",
+      "limitedUntil": "限额已尽，{{reset}} 复",
+      "tight": "五小时限额将满，姑不用",
+      "cheapest": "标价最低",
+      "cheapestFree": "订阅尚有限额，不另费钱",
+      "noVision": "讯中有图，彼不能观图",
+      "exceptionImage": "讯中有图，唯于能观图之源中择",
+      "exceptionImageFallback": "讯中有图，然无能观图之源，照常择之",
+      "exceptionHours": "此时段改行「{{name}}」",
+      "separator": "；"
+    },
+    "settings": {
+      "newRoute": "立路线",
+      "newRouteName": "新路线",
+      "routesEmpty": "尚无路线。立其一，纳数源于中。",
+      "scopeNote": "模型组用于此机所起之新差事：起时定一源，差事行中不易。",
+      "back": "归模型组",
+      "name": "名",
+      "nameHint": "择模型时显此名。",
+      "routeShownAs": "择模型时见于「模型组」。",
+      "pick": "此番用何者",
+      "effort": "思之深浅",
+      "effortUnset": "不指定",
+      "effortHint": "所择模型不支此档时，依其常例而行。",
+      "sources": "可用之源",
+      "sourcesHint": "可纳不同模型；实用何者，书于差事之中。",
+      "sourcesEmpty": "尚无源。于下增已连线之模型。",
+      "sourcesFull": "一路线至多 {{count}} 源。",
+      "addSource": "增源",
+      "chooseModel": "择一模型",
+      "notConnected": "未连线",
+      "moveUp": "上移",
+      "moveDown": "下移",
+      "remove": "逐出此路线",
+      "useSource": "令此路线用 {{name}}",
+      "try": {
+        "title": "试之",
+        "hint": "观今起新差事将用何者。不遣讯，不耗限额。",
+        "run": "观其所择",
+        "picked": "用之",
+        "standby": "备用",
+        "skipped": "略过",
+        "unavailable": "此路线今无可用之源，新差事将用君原择之模型。"
+      },
+      "deleteRoute": "删此路线",
+      "deleteRouteConfirmTitle": "删「{{name}}」？",
+      "deleteRouteConfirmDescription": "他路线中改行此路之时段例外将一并删除。已起之差事不受影响。",
+      "delete": "删除",
+      "cancel": "罢",
+      "saveFailed": "未能存之，请再试。",
+      "exceptions": {
+        "title": "例外",
+        "hint": "依择法之前，先察此数事，自上而下。",
+        "empty": "尚无例外，每一新差事皆依上之择法。",
+        "imageRule": "讯中有图时，唯用能观图之源",
+        "hoursRule": "{{from}}–{{to}} 改行「{{name}}」",
+        "remove": "删此例外",
+        "add": "增例外",
+        "choose": "择一情形",
+        "kindImage": "讯中有图",
+        "kindHours": "某时段",
+        "from": "自",
+        "to": "至",
+        "useRoute": "改行",
+        "addHours": "增",
+        "sameHour": "起讫不可同时。",
+        "full": "至多 {{count}} 条例外。",
+        "needOtherRoute": "再立一路线，方可依时段改行之。"
+      }
+    },
+    "overview": {
+      "mapTitle": "今如何行",
+      "mapDescription": "自左而右：行何路线，终落何源。点路线可修之。",
+      "columnSources": "源",
+      "columnEmpty": "尚无",
+      "openRoute": "启路线「{{name}}」",
+      "recentTitle": "近日所择",
+      "recentEmpty": "尚无差事用过路线。",
+      "keptOriginal": "其中今无可用之模型，仍用原择之模型。",
+      "keptOriginalShort": "仍用原模型",
+      "latest": "近一差事所行之路"
+    },
+    "switchOffer": {
+      "action": "易用 {{model}} 续之"
+    }
   }
 }

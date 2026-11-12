@@ -1,14 +1,6 @@
-// 浏览器自动化 desktop host(L3)。维护者指南(架构 + 踩坑 + 上游同步):
-// packages/browser-control-runtime/upstream/MAINTAINING.md
-//
-// Keep this import FIRST (above @cindy/browser-control-runtime): it sets
-// XDT_BROWSER_RUNTIME_DIR before the runtime import below reads it into its eager
-// CONFIG_DIR const (see browser-runtime-env.ts). No import-order autofix is
-// configured, so this position is stable.
-import './browser-runtime-env.js';
+
 import fs from 'node:fs';
 import nodePath from 'node:path';
-import { app, ipcMain } from 'electron';
 import {
   createBrowserControlRuntime,
   browserUploadDirectory,
@@ -20,7 +12,6 @@ import {
 import type { BrowserMcpDeps } from '@cindy/mcps';
 
 import { createLogger } from '../logger.js';
-import { genericOAuthSecretIo } from '../secrets/providerSecretStore.js';
 import { createRecipeFileBroker } from './browser-backend/rsb-webview-upload-policy.js';
 import {
   userBrowserCapabilities,
@@ -30,32 +21,7 @@ import {
 } from './browser-backend/user-browser-backend.js';
 import { artifactSessionRoot } from './browser-backend/rsb-webview-artifacts.js';
 import { extractBrowserAvailability, type BrowserAvailability } from './browser-availability.js';
-import { loadUserBrowserRecipes, userRecipesDir, type UserRecipesResult } from '../browser-recipes/loader.js';
-import { writeUserRecipe, type WriteUserRecipeResult } from '../browser-recipes/writer.js';
 import { browserExperienceStore } from '../browser-recipes/experience.js';
-import {
-  BrowserBackendController,
-  resolveBackendProfile,
-  BrowserBackendHealthService,
-  ExternalChromeBackend,
-  RsbWebviewBackend,
-  type BackendKind,
-  type BrowserBackend,
-} from './browser-backend/index.js';
-import { getRsbBrowserBridge } from '../rsb-browser-bridge/index.js';
-import type { RsbBrowserBridgeTabOp } from '../../shared/rsbBrowserBridge.js';
-import {
-  readBrowserBackendSettings,
-  writeBrowserBackendKind,
-  writeBrowserUseRealProfile,
-  resetBrowserBackendSettings,
-  readBrowserBackendSettingsState,
-} from '../browser-backend-settings-store.js';
-import {
-  getActiveRsbSessionId,
-  setActiveRsbSessionId,
-} from '../rsb-browser-bridge/active-session.js';
-import { requireObject, optionalNullableString } from '../utils/ipcValidate.js';
 import {
   buildManagedConfig,
   MANAGED_CDP_PORT,
@@ -78,7 +44,6 @@ import {
   wrapRuntimeWithProfileLifecycleQueue,
   activeManagedProfileName,
 } from './browser-real-profile/index.js';
-import { assertTrustedAppRendererEvent } from '../security/trustedAppRenderer.js';
 import { createBrowserBackendIpcHandlers } from './browser-backend/settings-ipc.js';
 import { readCdpBrowserCommandLine, terminateManagedChromePortOwner } from './browser-backend/proxy-auth.js';
 import { openExtensionStoreInUserBrowser, startUserBrowser } from './browser-backend/open-extension-store.js';
@@ -93,6 +58,33 @@ import {
 } from '../../shared/browserBackend.js';
 
 export { extractBrowserAvailability, type BrowserAvailability } from './browser-availability.js';
+import { BrowserBackendController, resolveBackendProfile } from './browser-backend/controller.js';
+import { BrowserBackendHealthService } from './browser-backend/health-service.js';
+import { ExternalChromeBackend } from './browser-backend/external-chrome-backend.js';
+import type { BackendKind, BrowserBackend } from './browser-backend/types.js';
+import type { createBrowserBackendSettingsStore } from '../browser-backend-settings-store.js';
+import type { createUserRecipeLoader, UserRecipesResult } from '../browser-recipes/loader.js';
+import type { createUserRecipeWriter, WriteUserRecipeResult } from '../browser-recipes/writer.js';
+
+export interface BrowserRuntimePorts {
+  tempDir(): string;
+  /** Assembly-owned launch defaults; isolated hosts must not claim Desktop's port. */
+  managedLaunch?: Pick<ManagedBrowserConfigOptions, 'cdpPort' | 'executablePath' | 'headless' | 'useMockKeychain'>;
+  settings: ReturnType<typeof createBrowserBackendSettingsStore>;
+  recipes: ReturnType<typeof createUserRecipeLoader> & ReturnType<typeof createUserRecipeWriter>;
+  secretIo: { readStrict(key: string): string | null; write(key: string, value: string): boolean };
+  createEmbeddedBackend(resolveUploadRoots: (sessionId: string) => Promise<string[]>): BrowserBackend;
+}
+/** Own browser state in the execution host, never in a disposable UI attachment. */
+export function createBrowserRuntime(ports: BrowserRuntimePorts) {
+const app = { getPath: (_: 'temp') => ports.tempDir() };
+const genericOAuthSecretIo = ports.secretIo;
+const { readBrowserBackendSettings, readBrowserBackendSettingsState, writeBrowserBackendKind, writeBrowserUseRealProfile, resetBrowserBackendSettings } = ports.settings;
+const { loadUserBrowserRecipes, userRecipesDir, writeUserRecipe } = ports.recipes;
+const managedLaunch = ports.managedLaunch ?? {};
+const managedPort = managedLaunch.cdpPort ?? MANAGED_CDP_PORT;
+const createRsbBackend = () => ports.createEmbeddedBackend(id => resolveSessionUploadRoots(id));
+
 
 const logger = createLogger('mcp/cindy_browser');
 
@@ -147,14 +139,14 @@ let lastProxyLaunch: {
 /** Last applied profile identity, so the CDP guard follows Cindy-real / relocated ports. */
 let lastManagedIdentity = {
   useRealProfile: false,
-  cdpPort: MANAGED_CDP_PORT,
+  cdpPort: managedPort,
 };
 
 function rememberManagedIdentity(opts: ManagedBrowserConfigOptions): void {
   if (typeof opts.useRealProfile === 'boolean') {
     lastManagedIdentity.useRealProfile = opts.useRealProfile;
     if (!opts.useRealProfile && opts.cdpPort === undefined) {
-      lastManagedIdentity.cdpPort = MANAGED_CDP_PORT;
+      lastManagedIdentity.cdpPort = managedPort;
     }
   }
   if (typeof opts.cdpPort === 'number') {
@@ -181,7 +173,7 @@ function applyManagedConfig(opts: ManagedBrowserConfigOptions): void {
       proxyAllowedHostnames: opts.proxyAllowedHostnames,
     };
   }
-  const merged = { ...lastProxyLaunch, ...opts };
+  const merged = { ...managedLaunch, ...lastProxyLaunch, ...opts };
   rememberManagedIdentity(merged);
   setBrowserControlRuntimeConfig(buildManagedConfig(merged));
 }
@@ -200,6 +192,7 @@ function currentRealProfileLaunchOpts(): {
 
 function wrapManagedRuntime(inner: BrowserControlRuntime) {
   return wrapRuntimeWithRealProfile(inner, {
+    isolatedCdpPort: managedPort,
     isEnabled: () => readBrowserBackendSettings().useRealProfile,
     getRuntimeDir: realProfileRuntimeDir,
     applyConfig: (opts) => {
@@ -215,6 +208,7 @@ function createManagedRuntime(route: BrowserProxyRoute): BrowserControlRuntime {
     proxyAllowedHostnames: route.allowedHostnames,
   };
   const merged = {
+    ...managedLaunch,
     ...currentRealProfileLaunchOpts(),
     ...lastProxyLaunch,
   };
@@ -233,11 +227,12 @@ const rememberedCopiedLoginsCdpPort = initialUseRealProfile
   : null;
 lastManagedIdentity = {
   useRealProfile: initialUseRealProfile === true,
-  cdpPort: rememberedCopiedLoginsCdpPort ?? MANAGED_CDP_PORT,
+  cdpPort: rememberedCopiedLoginsCdpPort ?? managedPort,
 };
 
 const directBrowserRuntime = createBrowserControlRuntime({
   config: buildManagedConfig({
+    ...managedLaunch,
     proxyServer: undefined,
     useRealProfile: initialUseRealProfile,
     ...(rememberedCopiedLoginsCdpPort ? { cdpPort: rememberedCopiedLoginsCdpPort } : {}),
@@ -252,6 +247,10 @@ const externalChromeBackend = new ExternalChromeBackend(
     createRuntime: createManagedRuntime,
     cdpHttpUrl: () => currentGuardIdentity().cdpHttpUrl,
     managedUserDataDir: () => currentGuardIdentity().managedUserDataDir,
+    // The failed-stop teardown may only run for a request that targeted this
+    // browser: the MCP stop tool threads a resolved profile name, and a stale
+    // one 404s before dispatch — that error must never kill the active browser.
+    managedProfileName: () => activeManagedProfileName(readBrowserBackendSettings().useRealProfile),
     // The vendored stop can only signal a process it launched. On Windows the
     // spawned browser is a short-lived launcher, so once it exits the runtime
     // has no PID left while the real browser keeps the CDP port — every later
@@ -297,46 +296,8 @@ type SessionUploadRootResolver = (sessionId: string) => Promise<string[]>;
 
 let resolveSessionUploadRoots: SessionUploadRootResolver = async () => [];
 
-export function setBrowserSessionUploadRootResolver(resolver: SessionUploadRootResolver): void {
+function setBrowserSessionUploadRootResolver(resolver: SessionUploadRootResolver): void {
   resolveSessionUploadRoots = resolver;
-}
-
-/**
- * Create an RSB-webview backend instance (Phase 3+). The instance is terminal
- * after `dispose()`, so every activation/recovery must call this factory rather
- * than reusing a process-wide singleton.
- *
- * Lazily constructed because the
- * TabRegistry singleton must be available — which it is right after this
- * module evaluates, since `getRsbBrowserBridge()` is self-instantiating.
- */
-function createRsbBackend(): RsbWebviewBackend {
-  return new RsbWebviewBackend({
-    registry: getRsbBrowserBridge(),
-    getActiveSessionId: () => getActiveRsbSessionId(),
-    artifactRoot: () => nodePath.join(app.getPath('temp'), 'cindy-browser-artifacts'),
-    resolveUploadRoots: (sessionId) => resolveSessionUploadRoots(sessionId),
-    bridge: {
-      // Lazy main-window lookup. Phase 2 uses the same pattern; once the host
-      // window is available the dispatch lands cleanly, before that the request
-      // rejects with `host renderer not available`.
-      getHostWebContents: (op) => {
-        // bootstrap-electron owns mainWindowRef; we read it through the public
-        // helper to avoid a circular import. The op lets bootstrap route tab-ops
-        // for popped-out tabs to the window that actually hosts them.
-        const win = readMainWindowForBackend(op);
-        return win;
-      },
-      // detached 偏好开 + 侧边栏子窗口关着时,tab-op 前先把子窗口拉起来并等
-      // renderer ready 握手(否则没有任何 renderer 挂着 RSB store 可执行 op)。
-      ensureHost: (sessionId) => ensureHostForBackend(sessionId),
-      // detached 偏好信号:直连动作解析 miss 时,只有 detached 模式才值得等
-      // 子窗口 renderer 重注册 tab;内嵌模式主窗常驻,miss 即真失效,快速失败。
-      isDetached: () => isDetachedForBackend(),
-      logger,
-    },
-    logger,
-  });
 }
 
 /**
@@ -365,7 +326,7 @@ const initialKind = readBrowserBackendSettings().kind;
 let userBrowserPageControlProvider: () => UserBrowserPageControl | null = () => null;
 
 let userBrowserUnavailableReason: UserBrowserBackendOptions['getUnavailableReason'];
-export function setUserBrowserPageControlProvider(
+function setUserBrowserPageControlProvider(
   provider: () => UserBrowserPageControl | null,
   unavailableReason?: UserBrowserBackendOptions['getUnavailableReason'],
 ): void {
@@ -375,7 +336,7 @@ export function setUserBrowserPageControlProvider(
 
 let currentUserBrowserBackend: UserBrowserBackend | null = null;
 /** A task's turn ended: clear the activity marks it left in the user's browser. */
-export function clearUserBrowserMarksForSession(sessionId: string): void {
+function clearUserBrowserMarksForSession(sessionId: string): void {
   if (backendController.kind !== 'user-browser') return;
   void currentUserBrowserBackend?.clearSessionMarks(sessionId).catch(() => undefined);
 }
@@ -405,64 +366,11 @@ const backendController = new BrowserBackendController({
 const browserBackendHealthService = new BrowserBackendHealthService(backendController, logger);
 
 /**
- * Main-window webContents accessor — populated by bootstrap-electron via
- * `setMainWindowAccessorForBackend`. Without this the RsbWebviewBackend has
- * no way to reach the renderer for tab-op dispatch.
- */
-type HostWebContentsAccessor = (op?: RsbBrowserBridgeTabOp) => Electron.WebContents | null;
-
-let mainWindowAccessor: HostWebContentsAccessor = () => null;
-
-function readMainWindowForBackend(op?: RsbBrowserBridgeTabOp): Electron.WebContents | null {
-  return mainWindowAccessor(op);
-}
-
-/**
- * Bootstrap hook. Called from `bootstrap-electron.ts` once `mainWindowRef` is
- * known. Idempotent re-binds are safe.
- */
-export function setMainWindowAccessorForBackend(accessor: HostWebContentsAccessor): void {
-  mainWindowAccessor = accessor;
-}
-
-/**
- * Ensure-host hook — populated by bootstrap-electron with the RSB window
- * controller's `ensureOpenForAutomation`. Default no-op keeps the embedded
- * (non-detached) behavior: host is the always-alive main window.
- */
-let ensureHostForBackendImpl: (sessionId?: string) => Promise<void> = () => Promise.resolve();
-
-function ensureHostForBackend(sessionId?: string): Promise<void> {
-  return ensureHostForBackendImpl(sessionId);
-}
-
-/** Bootstrap hook, same pattern as `setMainWindowAccessorForBackend`. */
-export function setEnsureHostForBackend(impl: (sessionId?: string) => Promise<void>): void {
-  ensureHostForBackendImpl = impl;
-}
-
-/**
- * Detached-preference probe — populated by bootstrap-electron from the RSB
- * window settings. Default `false` keeps embedded semantics (fail fast on
- * tab-resolve miss, no re-attach polling).
- */
-let isDetachedForBackendImpl: () => boolean = () => false;
-
-function isDetachedForBackend(): boolean {
-  return isDetachedForBackendImpl();
-}
-
-/** Bootstrap hook, same pattern as `setEnsureHostForBackend`. */
-export function setIsDetachedForBackend(impl: () => boolean): void {
-  isDetachedForBackendImpl = impl;
-}
-
-/**
  * Switch the active backend. Shared by Settings and browser MCP mode changes.
  * Persists the new kind to disk and disposes the outgoing backend (per
  * lifecycle controller contract).
  */
-export async function setActiveBrowserBackendKind(kind: BackendKind): Promise<void> {
+async function setActiveBrowserBackendKind(kind: BackendKind): Promise<void> {
   // The controller performs the same-kind check inside its serialized queue.
   // Doing it here would race two Settings actions: a request for the current
   // kind could return early while an earlier queued request is about to switch
@@ -543,7 +451,7 @@ async function applyBrowserUseRealProfile(enabled: boolean): Promise<boolean> {
   return readBrowserBackendSettings().useRealProfile;
 }
 
-export function setBrowserUseRealProfile(enabled: boolean): Promise<boolean> {
+function setBrowserUseRealProfile(enabled: boolean): Promise<boolean> {
   return backendController.runLifecycle(() =>
     browserProfileLifecycleQueue.run(() => applyBrowserUseRealProfile(enabled)),
   );
@@ -561,7 +469,7 @@ function browserRecipeSecretId(key: string): string {
   return `browser-recipe-${key}`;
 }
 
-export function getBrowserMcpDeps(): {
+function getBrowserMcpDeps(): {
   experienceStore: NonNullable<BrowserMcpDeps['experienceStore']>;
   getRuntime(): BrowserControlRuntime;
   resolveProfile: NonNullable<BrowserMcpDeps['resolveProfile']>;
@@ -664,7 +572,7 @@ export function getBrowserMcpDeps(): {
  * Settings card lie ("未检测到 Chrome") whenever the user has the internal
  * backend selected, even on a machine with Chrome installed.
  */
-export async function getBrowserAvailability(): Promise<BrowserAvailability> {
+async function getBrowserAvailability(): Promise<BrowserAvailability> {
   const res = await externalBackend.call({ action: 'status' });
   return extractBrowserAvailability(res.data);
 }
@@ -673,7 +581,7 @@ export async function getBrowserAvailability(): Promise<BrowserAvailability> {
  * Read the currently-active backend kind. Reflects the Settings-driven toggle
  * (persisted override) merged over the system default, not a fixed value.
  */
-export function getActiveBrowserBackendKind(): BackendKind {
+function getActiveBrowserBackendKind(): BackendKind {
   return backendController.getCurrentBackendKind();
 }
 
@@ -683,36 +591,19 @@ export function getActiveBrowserBackendKind(): BackendKind {
  * reference immediately delegates to the fresh instance; no Agent-side cache
  * needs to be invalidated separately.
  */
-export function recoverActiveBrowserBackend() {
+function recoverActiveBrowserBackend() {
   return browserBackendHealthService.recover();
 }
 
 /** Probe once, then automatically replace a failed embedded backend. */
-export function getBrowserBackendHealth() {
+function getBrowserBackendHealth() {
   return browserBackendHealthService.getHealth();
 }
 
-/**
- * Register Phase 5 IPC handlers for the Settings UI:
- *   - `browser-backend:get-state` → current kind + override state
- *   - `browser-backend:set-kind`  → swap active backend + persist
- *   - `browser-backend:reset`     → clear user override, follow current default
- *   - `browser-backend:get-health` → probe + one automatic embedded recovery
- *   - `browser-backend:recover`    → force a fresh embedded backend + verify
- *   - `browser-backend:probe-source-read` → `{ readable }` only; skip FDA if true
- *   - `rsb-browser-bridge:set-active-session` → renderer pushes the focused
- *      sessionId; RsbWebviewBackend reads via getActiveRsbSessionId() at
- *      action time (Phase 3 dependency).
- *
- * Idempotent — repeat calls (HMR, tests) are no-op via the `registered` flag.
- */
-let backendIpcRegistered = false;
-export function registerBrowserBackendIpc(): void {
-  if (backendIpcRegistered) return;
-  backendIpcRegistered = true;
+function createBrowserSettingsHandlers<Event>(assertTrusted: (event: Event) => void) {
 
-  const handlers = createBrowserBackendIpcHandlers({
-    assertTrusted: assertTrustedAppRendererEvent,
+  return createBrowserBackendIpcHandlers<Event>({
+    assertTrusted,
     getState: () => {
       const state = readBrowserBackendSettingsState();
       return {
@@ -748,37 +639,15 @@ export function registerBrowserBackendIpc(): void {
     openExtensionStore: () =>
       openExtensionStoreInUserBrowser({ resolveBrowser: () => resolveSourceBrowserFromOs() }),
   });
-  ipcMain.handle('browser-backend:get-state', handlers.getState);
-  ipcMain.handle('browser-backend:set-kind', handlers.setKind);
-  ipcMain.handle('browser-backend:set-use-real-profile', handlers.setUseRealProfile);
-  ipcMain.handle('browser-backend:reset', handlers.reset);
-  ipcMain.handle('browser-backend:get-health', handlers.getHealth);
-  ipcMain.handle('browser-backend:recover', handlers.recover);
-  ipcMain.handle('browser-backend:probe-source-read', handlers.probeSourceRead);
-  ipcMain.handle('browser-backend:open-extension-store', handlers.openExtensionStore);
-
-  ipcMain.handle('rsb-browser-bridge:set-active-session', (_e, payload: unknown) => {
-    const obj = requireObject(payload, 'set-active-session payload');
-    // optionalNullableString accepts `null` explicitly + non-empty string +
-    // undefined/empty as "no value". Anything else (e.g. {sessionId: 42})
-    // collapses to null, which is the only reasonable fallback — we're not
-    // surfacing the rare malformed-payload path as a hard error since the
-    // semantic is "renderer no longer focused on any RSB session".
-    const raw = optionalNullableString(obj.sessionId);
-    const sessionId: string | null = raw === null ? null : (raw ?? null);
-    setActiveRsbSessionId(sessionId);
-    return { ok: true };
-  });
-
-  logger.info('browser-backend IPC handlers registered');
 }
+
 
 /**
  * Launch the (headed) automation browser so the user can log into the sites they
  * want the agent to operate. Drives the Settings →「自动操作」"打开 Agent 专用浏览器"
  * action. Logins persist in the managed profile's user-data-dir.
  */
-export async function openBrowserForLogin(): Promise<void> {
+async function openBrowserForLogin(): Promise<void> {
   // `start` launches the headed managed Chrome (idempotent: no-op if already running).
   // It already provides a window + new-tab page, so we NEVER open another tab here:
   // doing so raced with Chrome's own initial tab on a cold start and produced a
@@ -852,7 +721,7 @@ export async function openBrowserForLogin(): Promise<void> {
  * NOTE: updater force-quit (updateService.ts) bypasses `before-quit`, so this may
  * not run on the auto-update relaunch path; stale-lock recovery covers that case.
  */
-export function disposeBrowserRuntime(): Promise<void> {
+function disposeBrowserRuntime(): Promise<void> {
   // Always stop the external managed Chrome directly, NOT through the active controller.
   // The controller may currently point at RsbWebviewBackend, whose dispose only
   // releases control listeners and does not own the external Chrome process. If
@@ -867,5 +736,7 @@ export function disposeBrowserRuntime(): Promise<void> {
   // `externalBackend.dispose` runs under the profile lifecycle queue so quit
   // cannot interleave with an in-flight consent switch.
   externalChromeBackend.beginQuiescence();
-  return externalBackend.dispose();
+  return backendController.dispose().finally(() => externalBackend.dispose());
+}
+return { setBrowserSessionUploadRootResolver, setUserBrowserPageControlProvider, clearUserBrowserMarksForSession, setActiveBrowserBackendKind, setBrowserUseRealProfile, getBrowserMcpDeps, getBrowserAvailability, getActiveBrowserBackendKind, recoverActiveBrowserBackend, getBrowserBackendHealth, createBrowserSettingsHandlers, openBrowserForLogin, disposeBrowserRuntime };
 }

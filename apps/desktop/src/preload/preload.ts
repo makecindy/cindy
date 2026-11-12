@@ -1246,6 +1246,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
     apply: (request) => ipcRenderer.invoke(SETUP_MIGRATION_IPC.APPLY, request),
     state: () => ipcRenderer.invoke(SETUP_MIGRATION_IPC.STATE),
     dismiss: (request) => ipcRenderer.invoke(SETUP_MIGRATION_IPC.DISMISS, request),
+    firstRunGuide: () => ipcRenderer.invoke(SETUP_MIGRATION_IPC.FIRST_RUN_GUIDE),
     onProgress: (listener) => {
       const receive = (_event: Electron.IpcRendererEvent, progress: SetupMigrationProgress) =>
         listener(progress);
@@ -1464,6 +1465,26 @@ contextBridge.exposeInMainWorld('electronAPI', {
 
   // 意识仓库 (shared/ghost.ts)。listSync 走 sendSync:意识面板要与内置
   // 面板同帧注册进布局引擎(规则 7 无跳变);目录扫描极小,同步读不卡启动。
+  /** 模型组：路线与模式的配置，以及把选中的一项解析成现在能用的具体模型。 */
+  modelGroups: {
+    get: (): Promise<import('../shared/modelGroups').ModelGroupsConfig> => ipcRenderer.invoke('model-groups:get'),
+    set: (config: import('../shared/modelGroups').ModelGroupsConfig): Promise<import('../shared/modelGroups').ModelGroupsConfig> =>
+      ipcRenderer.invoke('model-groups:set', config),
+    resolve: (request: import('../shared/modelGroups').ModelGroupResolveRequest): Promise<import('../shared/modelGroups').ModelGroupResolveResult> =>
+      ipcRenderer.invoke('model-groups:resolve', request),
+    /** 最近几次新任务从路线或模式里选了谁，最新在前。 */
+    decisions: (): Promise<import('../shared/modelGroupDecisions').ModelGroupDecision[]> => ipcRenderer.invoke('model-groups:decisions'),
+    /** 记下这个任务是经哪条路线或模式建的、现在用着哪个候选。 */
+    bindSession: (request: {
+      sessionId: string;
+      selection: import('../shared/modelGroups').ModelGroupSelection;
+      route: Pick<import('../shared/modelGroups').ModelGroupResolvedRoute, 'agentKind' | 'providerId' | 'model'>;
+    }): Promise<void> => ipcRenderer.invoke('model-groups:bind-session', request),
+    /** 撞配额时同一条路线里还能接着用的下一个来源；没有为 null。 */
+    switchOffer: (request: { sessionId: string }): Promise<import('../shared/modelGroups').ModelGroupSwitchOffer | null> =>
+      ipcRenderer.invoke('model-groups:switch-offer', request),
+  },
+
   ghosts: {
     activateBrowser: (id: string): Promise<{ ok: boolean }> => ipcRenderer.invoke('ghosts:activate-browser', id),
     mailPreview: (sessionId: string, url: string, read: boolean, opened = false, providerId?: string) => ipcRenderer.invoke('ghosts:mail-preview', sessionId, url, read, opened, providerId),

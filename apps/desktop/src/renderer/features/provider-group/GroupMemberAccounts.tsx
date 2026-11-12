@@ -22,6 +22,7 @@ import {
 } from '@/contexts/dataOwnerGeneration';
 import { useDeviceLinkReconnectEpoch } from '@/features/device-link/useDeviceLinkReconnectEpoch';
 import { cn } from '@/lib/utils';
+import { isDeviceLinkRemotePushCurrent } from '@/lib/remoteDataOwnerPushFence';
 
 import {
   SUBSCRIPTION_ACCOUNTS_CHANNEL,
@@ -44,7 +45,7 @@ function listedAccounts(raw: unknown, providerId: SubscriptionProvider): GroupMe
   const view = raw as { providerId?: unknown; accounts?: unknown } | null | undefined;
   if (view?.providerId !== providerId || !Array.isArray(view.accounts)) return [];
   return (view.accounts as SubscriptionAccountView[]).flatMap((account, index) =>
-    isUnusedDefaultAccount(account) ? [] : [{ account, number: index + 1 }],
+    account.paused || isUnusedDefaultAccount(account) ? [] : [{ account, number: index + 1 }],
   );
 }
 
@@ -97,7 +98,11 @@ export function useGroupMemberAccounts(
     void refresh();
     const timer = window.setInterval(() => void refresh(), REFRESH_MS);
     const offChanged = deviceId
-      ? undefined
+      ? window.electronAPI.deviceLink.onRemotePush?.((push, stamp) => {
+          if (push.deviceId === deviceId && push.channel === 'subscription-accounts:changed' &&
+              (push.payload as { providerId?: unknown } | null)?.providerId === observed &&
+              isDeviceLinkRemotePushCurrent(push, stamp)) void refresh();
+        })
       : window.electronAPI.subscriptionAccounts.onChanged((event) => {
           if (event.providerId === observed) void refresh();
         });

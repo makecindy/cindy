@@ -19,16 +19,20 @@ import {
   builtInSkillPluginRoot,
   migrateBuiltInGlobalSkillLinks,
   activeCindyBuiltInAgentSkills,
-  BUILT_IN_SKILLS_BUNDLE_VERSION,
+  BUILT_IN_SKILLS_BUNDLE_VERSION_BASE,
+  BUILT_IN_SKILLS_VERSION_RECORDS_DIRECTORY,
   builtInSkillDescriptors,
   builtInSkillDescriptorsAsync,
   markCindyBuiltInAgentSkills,
   prepareBuiltInSkills,
+  readBuiltInSkillsBundleVersion,
   refreshBuiltInClaudeSkillLinks,
   resolveBundledSystemSkillsRoot,
 } from '../built-in-skills';
 
 const roots: string[] = [];
+/** The fixture bundle ships exactly one version record. */
+const BUILT_IN_SKILLS_BUNDLE_VERSION = BUILT_IN_SKILLS_BUNDLE_VERSION_BASE + 1;
 
 function fixture() {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'cindy-built-in-skills-'));
@@ -59,6 +63,9 @@ function fixture() {
     '---\nname: cindy-skill-creator\ndescription: Create Skills\n---\n\n# Creator\n',
   );
   fs.writeFileSync(path.join(source, 'scripts', 'validate.py'), 'print("ok")\n');
+  const versionRecords = path.join(bundledRoot, BUILT_IN_SKILLS_VERSION_RECORDS_DIRECTORY);
+  fs.mkdirSync(versionRecords, { recursive: true });
+  fs.writeFileSync(path.join(versionRecords, 'fixture.md'), 'fixture bundle\n');
   fs.writeFileSync(
     path.join(learnSource, 'SKILL.md'),
     '---\nname: learn\ndescription: Start Cindy Learn\n---\n\n# Learn\n',
@@ -124,7 +131,7 @@ describe('built-in Skills', () => {
 
   // Unit: older releases shipped three Skills. A missing new resource must not
   // make those authenticated, already-active Skills disappear during upgrade.
-  it.each([83, 97, 98, 99, 101, 102, 103].flatMap(bundleVersion => ['success', 'missing-source'].map(mode => ({ bundleVersion, mode }))))('upgrades the pre-theme bundle $bundleVersion without losing existing Skills ($mode)', async ({ bundleVersion, mode }) => {
+  it.each([83, 97, 98, 99, 101, 102, 103, 104, 105, 106, 107, 108, 109, 110].flatMap(bundleVersion => ['success', 'missing-source'].map(mode => ({ bundleVersion, mode }))))('upgrades the pre-theme bundle $bundleVersion without losing existing Skills ($mode)', async ({ bundleVersion, mode }) => {
     const input = fixture();
     const previous = await prepareBuiltInSkills({ ...input, bundleVersion });
     const theme = previous.descriptors.find((item) => item.name === 'cindy-theme-creator')!;
@@ -138,17 +145,50 @@ describe('built-in Skills', () => {
     expect(builtInSkillDescriptors(input.userDataDir, input.appDataDir)).toEqual(existing);
     if (mode === 'missing-source') fs.rmSync(path.join(input.bundledRoot, theme.name), { recursive: true });
 
-    const updated = await prepareBuiltInSkills(input);
+    const shipped = await readBuiltInSkillsBundleVersion(path.resolve(__dirname, '../../../../resources/system-skills'));
+    const updated = await prepareBuiltInSkills({ ...input, bundleVersion: shipped });
     expect(updated.projectionSafe).toBe(true);
     expect(updated.descriptors).toEqual(mode === 'success' ? previous.descriptors : existing);
     if (mode === 'success') expect(updated.warnings).toEqual([]);
     else expect(updated.warnings.length).toBeGreaterThan(0);
   });
 
-  it('stays above every bundle version pre-release builds of the /pr removal wrote', () => {
+  it('stays above every bundle version pre-release builds of the /pr removal wrote', async () => {
     // Builds that still shipped the built-in /pr reached 78. A lower number would make
     // prepareBuiltInSkills keep their newer bundle (and its pr/ folder) instead of replacing it.
-    expect(BUILT_IN_SKILLS_BUNDLE_VERSION).toBeGreaterThan(78);
+    const shipped = await readBuiltInSkillsBundleVersion(
+      path.resolve(__dirname, '../../../../resources/system-skills'),
+    );
+    expect(shipped).toBeGreaterThan(78);
+    // The hand-incremented number ended at the base; every shipped bundle since has a record.
+    expect(shipped).toBeGreaterThan(BUILT_IN_SKILLS_BUNDLE_VERSION_BASE);
+  });
+
+  // Unit: the version is no longer a constant two pull requests both edit; it is counted from
+  // record files in the bundle. Rule: docs/dev-rules/credentials-and-local-storage.md
+  // 「Cindy 托管的预装技能」. Minimal failing input: a bundle without its records directory
+  // must be refused rather than read as a low version, which would keep stale installed bytes.
+  it('counts one bundle version per record file and refuses a bundle without records', async () => {
+    const input = fixture();
+    const records = path.join(input.bundledRoot, BUILT_IN_SKILLS_VERSION_RECORDS_DIRECTORY);
+    expect(await readBuiltInSkillsBundleVersion(input.bundledRoot)).toBe(BUILT_IN_SKILLS_BUNDLE_VERSION_BASE + 1);
+
+    fs.writeFileSync(path.join(records, 'second.md'), 'second change\n');
+    fs.writeFileSync(path.join(records, 'notes.txt'), 'not a record\n');
+    fs.mkdirSync(path.join(records, 'nested.md'));
+    expect(await readBuiltInSkillsBundleVersion(input.bundledRoot)).toBe(BUILT_IN_SKILLS_BUNDLE_VERSION_BASE + 2);
+    const prepared = await prepareAndProjectBuiltInSkills(input);
+    expect(prepared.warnings).toEqual([]);
+    const manifest = JSON.parse(fs.readFileSync(
+      path.join(input.appDataDir, 'Cindy', 'shared-system-skills', '.cindy-system-skills.json'),
+      'utf8',
+    ));
+    expect(manifest.bundleVersion).toBe(BUILT_IN_SKILLS_BUNDLE_VERSION_BASE + 2);
+
+    fs.rmSync(records, { recursive: true });
+    await expect(prepareAndProjectBuiltInSkills(input)).rejects.toThrow(/version records are missing/);
+    fs.mkdirSync(records);
+    await expect(readBuiltInSkillsBundleVersion(input.bundledRoot)).rejects.toThrow(/version records are empty/);
   });
 
   // Unit: the new authoring Skill must survive real bundle materialization with

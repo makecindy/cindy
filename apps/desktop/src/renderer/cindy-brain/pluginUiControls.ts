@@ -1,6 +1,6 @@
 import { useCallback, useSyncExternalStore } from 'react';
 import { getDataOwnerGeneration } from '@/contexts/dataOwnerGeneration';
-import { pluginUiInterestKey, type PluginUiControlState, type PluginUiInterest, type PluginUiStateChange } from '../../shared/pluginUi';
+import { PLUGIN_UI_INTEREST_LIMIT, pluginUiInterestKey, type PluginUiControlState, type PluginUiInterest, type PluginUiStateChange } from '../../shared/pluginUi';
 
 type Consumer = { interest: PluginUiInterest; listeners: Set<() => void>; latest?: PluginUiStateChange };
 type Update = { epoch: string; updates: PluginUiStateChange[] };
@@ -66,7 +66,14 @@ export class PluginUiControls {
     this.dirty = false; this.sending = true;
     const owner = this.owner, epoch = this.epoch = String(++this.revision);
     try {
-      const result = await this.deps.replace(epoch, [...this.consumers.values()].map(consumer => consumer.interest));
+      // Only mounted, active controls register. Keep their stable registration order;
+      // overflow retains declared defaults and takes a slot when a consumer leaves.
+      const entries: PluginUiInterest[] = [];
+      for (const consumer of this.consumers.values()) {
+        if (entries.length === PLUGIN_UI_INTEREST_LIMIT) break;
+        entries.push(consumer.interest);
+      }
+      const result = await this.deps.replace(epoch, entries);
       if (owner === this.deps.owner()) this.apply({ epoch, updates: result.updates });
     } catch {
       // Passive enhancement keeps the declared control; no retry timer or global error banner.

@@ -2584,7 +2584,7 @@ export function GhostPluginCard({
           {item.retirement?.unread ? (
             <AttentionDot tone="awaiting" size={6} className="mt-px" />
           ) : unread ? (
-            <AttentionDot breathing size={6} className="mt-px" />
+            <AttentionDot size={6} className="mt-px" />
           ) : null}
         </span>
         <span

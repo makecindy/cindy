@@ -20,6 +20,15 @@ data-only theme packages with colors, brand images, fonts, wallpaper, reading
 styles, density and motion, applied by the shared Host appearance service. Its
 read-only checker and packager include v1 compatibility and verification guidance.
 
+## Bundle version records
+
+The bundle version is a fixed base plus the number of `*.md` files in `_versions/`. Whenever
+the bytes under this directory change, add one new record file there, named
+`YYYY-MM-DD-<topic>.md`, with one line saying what changed. Never edit, rename or delete an
+existing record, and never touch the base number: installed copies only move forward. Run
+`pnpm check:built-in-skills` to verify. Each change adds its own file, so two pull requests
+never edit the same line, and merging both yields a version newer than either.
+
 ## Rules for bundled Skills
 
 - A bundled Skill only describes workflows that apply to any git project. Repository-specific

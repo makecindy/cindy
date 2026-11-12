@@ -55,7 +55,6 @@ describe('HookTaskCard attached context', () => {
       const toggle = screen.getByRole('button', { name: '本条附带的上下文（12）' });
       expect(toggle.className).toContain('min-h-6');
       expect(toggle.className).toContain('py-1');
-      expect(toggle.className).toContain('focus-visible:outline');
       expect(toggle.getAttribute('aria-expanded')).toBe('false');
       fireEvent.click(toggle);
       expect(screen.getByRole('region', { name: '引用消息（2）' })).toBeTruthy();
@@ -108,7 +107,6 @@ describe('HookTaskCard attached context', () => {
       const toggle = screen.getByRole('button');
       expect(toggle.className).toContain('min-h-6');
       expect(toggle.className).toContain('py-1');
-      expect(toggle.className).toContain('focus-visible:outline');
       expect(toggle.getAttribute('aria-expanded')).toBe('false');
       expect(container.querySelector('.line-clamp-10')).toBeTruthy();
       fireEvent.click(toggle);

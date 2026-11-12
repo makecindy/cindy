@@ -1250,12 +1250,15 @@ export function UserMessage({
 
   const orcaWorkerRole =
     automationOrigin?.kind === 'session' ? automationOrigin.orcaSenderLabel : undefined;
+  const orcaBatchCount = automationOrigin?.kind === 'session' ? automationOrigin.orcaAutoBridgeBatchCount : undefined;
   const orcaCardTitle =
-    orcaCommunication?.orcaSource === 'lead'
-      ? t('chat.userMessage.orcaFromLead')
-      : orcaWorkerRole
-        ? t('chat.userMessage.orcaFromWorkerNamed', { role: orcaWorkerRole })
-        : t('chat.userMessage.orcaFromWorker');
+    orcaBatchCount
+      ? t('chat.userMessage.orcaFromWorkerBatch', { count: orcaBatchCount })
+      : orcaCommunication?.orcaSource === 'lead'
+        ? t('chat.userMessage.orcaFromLead')
+        : orcaWorkerRole
+          ? t('chat.userMessage.orcaFromWorkerNamed', { role: orcaWorkerRole })
+          : t('chat.userMessage.orcaFromWorker');
 
   // 伙伴对话：其他任务转来的消息不占主人在右侧的位置，收成左侧一行来信，点开看全文
   // （2026-11-10 主人裁决；普通任务页不变）。
@@ -1361,6 +1364,7 @@ export function UserMessage({
         'flex w-full',
         orcaCommunication || hookSource || botLetter ? 'justify-start' : 'justify-end',
         bubbleActions && 'group/message',
+        simplifiedBotConversation && 'chat-bubble-layout',
         // 与伙伴回复的气泡对齐：头像 28px + 间距 10px。
         botLetter && 'group/letter pl-[38px]',
       )}
