@@ -556,7 +556,7 @@ export async function readSubscriptionPoolModelAvailability(
  */
 export async function readSubscriptionSessionAccount(
   provider: SubscriptionProvider,
-  keys: { sessionId?: string; nativeSessionId?: string },
+  keys: { sessionId?: string; nativeSessionId?: string; model?: string },
 ): Promise<SubscriptionSessionAccountView> {
   const state = currentRuntime();
   assertOwner(state);
@@ -596,6 +596,11 @@ export async function readSubscriptionSessionAccount(
     Date.now(),
     provider === 'openai' ? 'codex' : 'claude-code',
   );
+  // The controller hands the task off only when a fresh start here would take another account
+  // (same judgment as the local pre-send failover). Merged legacy connections never move.
+  const blocked = keys.model !== undefined && !config.paused
+    && !(provider === 'openai' && readLegacyCodexProviderId(config.id))
+    && readSubscriptionAccountBlocked(provider, config.id, keys.model);
   return {
     providerId: provider,
     state: 'bound',
@@ -613,6 +618,7 @@ export async function readSubscriptionSessionAccount(
             ? 'limited'
             : 'ready',
       ...(info.auth.authenticated ? accountUsage(info.usage) : {}),
+      ...(blocked ? { blocked: true as const } : {}),
     },
   };
 }
@@ -811,38 +817,99 @@ export async function readSubscriptionPool(
 export const SUBSCRIPTION_ACCOUNTS_FULL_ERROR =
   '[SUBSCRIPTION_ACCOUNTS_FULL] every available subscription account has reached its concurrency limit';
 
-/** Pre-send probe only: preserve native history bindings until the host has durably
- * handed off the transcript and starts a fresh context. Never reserve a task here. */
-export async function needsSubscriptionAccountHandoff(sessionId: string, row: {
+export type RemoteSubscriptionInvoke = (
+  deviceId: string,
+  channel: string,
+  args: unknown[],
+  options: { preSend: () => void },
+) => Promise<{ ok: boolean; result?: unknown }>;
+
+interface RemoteTaskAccountRow {
   providerId?: string | null; agentKind: string; sdkSessionId?: string | null;
   agentDeviceId?: string | null; remoteHostId?: string | null; model?: string | null;
-}, invokeRemote?: (deviceId: string, channel: string, args: unknown[], options: { preSend: () => void }) => Promise<{ ok: boolean; result?: unknown }>): Promise<boolean> {
-  if (row.remoteHostId || (row.agentDeviceId && isProviderShareAgentDeviceId(row.agentDeviceId))) return false;
-  const provider = row.providerId === 'anthropic' && ['cc', 'claude-code'].includes(row.agentKind)
+}
+
+function taskSubscriptionProvider(row: RemoteTaskAccountRow): SubscriptionProvider | null {
+  return row.providerId === 'anthropic' && ['cc', 'claude-code'].includes(row.agentKind)
     ? 'anthropic' : row.providerId === 'openai' ? 'openai' : null;
+}
+
+/**
+ * Same-account remote Agent: the executing computer owns the task's account binding, quota and new
+ * route grants, so ask it through the existing owner-only reads. One `session` read per send (as
+ * before); the pool read only follows when the bound account is paused or blocked. Older hosts
+ * never report `blocked`, and a missing/old/failed reply never authorizes retiring native context.
+ */
+async function readRemoteTaskAccount(
+  provider: SubscriptionProvider,
+  row: RemoteTaskAccountRow & { agentDeviceId: string; sdkSessionId: string },
+  invokeRemote: RemoteSubscriptionInvoke,
+): Promise<{ number: number; paused: boolean; blocked: boolean; available: boolean } | null> {
+  const state = currentRuntime();
+  const preSend = () => assertOwner(state);
+  const reply = await invokeRemote(row.agentDeviceId, SUBSCRIPTION_ACCOUNTS_CHANNEL, [{
+    action: 'session', providerId: provider, nativeSessionId: row.sdkSessionId,
+    ...(row.model ? { model: row.model } : {}),
+  }], { preSend });
+  assertOwner(state);
+  const view = reply.ok ? parseSubscriptionSessionAccountView(reply.result, provider) : null;
+  // Older hosts lack the query. Do not guess another computer's account from local state.
+  if (view?.state !== 'bound') return null;
+  const { number, paused } = view.account;
+  const blocked = view.account.blocked === true;
+  if ((!paused && !blocked) || !row.model) return { number, paused, blocked, available: false };
+  const availableReply = await invokeRemote(row.agentDeviceId, 'maker:subscription-pool:quota',
+    [provider, row.model], { preSend });
+  assertOwner(state);
+  const available = availableReply.ok
+    ? availableReply.result as { providerId?: unknown; model?: unknown; available?: unknown } | null : null;
+  return {
+    number, paused, blocked,
+    available: available?.providerId === provider && available.model === row.model && available.available === true,
+  };
+}
+
+/**
+ * Account failover for a same-account remote Agent task (subscription-account-pools.md 账号间自动换号):
+ * a token for the executing computer's bound account when it cannot take the task model now and
+ * that computer's pool can serve the model with another account; otherwise null. Read-only.
+ */
+export async function readRemoteSubscriptionAccountSwitch(
+  row: RemoteTaskAccountRow,
+  invokeRemote: RemoteSubscriptionInvoke,
+): Promise<string | null> {
+  const provider = taskSubscriptionProvider(row);
+  if (!provider || row.remoteHostId || !row.agentDeviceId || isProviderShareAgentDeviceId(row.agentDeviceId)
+    || !row.sdkSessionId || !row.model) return null;
+  const remote = await readRemoteTaskAccount(provider,
+    { ...row, agentDeviceId: row.agentDeviceId, sdkSessionId: row.sdkSessionId }, invokeRemote);
+  return remote?.blocked && remote.available ? `${row.agentDeviceId}#${remote.number}` : null;
+}
+
+/** Pre-send probe only: preserve native history bindings until the host has durably
+ * handed off the transcript and starts a fresh context. Never reserve a task here. */
+export async function needsSubscriptionAccountHandoff(
+  sessionId: string,
+  row: RemoteTaskAccountRow,
+  invokeRemote?: RemoteSubscriptionInvoke,
+): Promise<boolean> {
+  if (row.remoteHostId || (row.agentDeviceId && isProviderShareAgentDeviceId(row.agentDeviceId))) return false;
+  const provider = taskSubscriptionProvider(row);
   if (!provider) return false;
   if (row.agentDeviceId) {
     if (!row.sdkSessionId) return false;
     if (!invokeRemote) throw new Error('Remote subscription account query is not configured');
-    const state = currentRuntime();
-    const preSend = () => assertOwner(state);
-    const reply = await invokeRemote(row.agentDeviceId, SUBSCRIPTION_ACCOUNTS_CHANNEL,
-      [{ action: 'session', providerId: provider, nativeSessionId: row.sdkSessionId }], { preSend });
-    assertOwner(state);
-    const view = reply.ok ? parseSubscriptionSessionAccountView(reply.result, provider) : null;
-    // Older hosts lack the query. Do not guess another computer's account from local state.
-    if (view?.state !== 'bound' || !view.account.paused) return false;
-    // The executing host owns both model quota and new-route permissions.
-    // A missing/old/failed reply cannot authorize retiring the native context.
-    if (!row.model) throw new Error('No subscription account is available');
-    const availableReply = await invokeRemote(row.agentDeviceId, 'maker:subscription-pool:quota',
-      [provider, row.model], { preSend });
-    assertOwner(state);
-    const available = availableReply.ok
-      ? availableReply.result as { providerId?: unknown; model?: unknown; available?: unknown } | null : null;
-    if (available?.providerId !== provider || available.model !== row.model || available.available !== true)
-      throw new Error('No subscription account is available');
-    return true;
+    const remote = await readRemoteTaskAccount(provider,
+      { ...row, agentDeviceId: row.agentDeviceId, sdkSessionId: row.sdkSessionId }, invokeRemote);
+    if (!remote) return false;
+    // A paused account must not take the next turn: no replacement fails the send.
+    if (remote.paused) {
+      if (!remote.available) throw new Error('No subscription account is available');
+      return true;
+    }
+    // A blocked account (usage limit, sign-in, overload) gives way only when that computer can
+    // continue with another account; otherwise the message goes to the original account as before.
+    return remote.blocked && remote.available;
   }
   const pool = readPool(provider);
   if (!pool || pool.disconnected) return false;
@@ -916,7 +983,16 @@ export async function acquireSubscriptionAccount(
   const pending = pendingKey ? state.pendingStarts.get(pendingKey) : undefined;
   const boundAccount = binding && latest.accounts.find(a => a.id === binding.accountId);
   const freshPausedBinding = options.resuming === false && boundAccount?.paused === true;
-  const members = latest.accounts.map((a) => {
+  // A fresh native session (handoff after a computer or account switch, a cleared task) carries no
+  // history on the bound account. When that account cannot take this model now (remembered
+  // failure, exhausted trusted quota or signed out), the pool policy picks another one, like a
+  // paused binding; with nowhere else to go the task keeps its account and admission. Resumes,
+  // explicit account routes and merged legacy connections never move here.
+  const freshBlockedBinding = options.resuming === false && !control && !freshPausedBinding
+    && !!boundAccount && !options.accountId
+    && !(provider === 'openai' && readLegacyCodexProviderId(boundAccount.id))
+    && readSubscriptionAccountBlocked(provider, boundAccount.id, model);
+  const buildMembers = (rebind: boolean) => latest.accounts.map((a) => {
     const imported = provider === 'openai' ? readLegacyCodexProviderId(a.id) : undefined;
     const index = pool.accounts.findIndex((p) => p.id === a.id);
     const info = snapshots[index];
@@ -938,9 +1014,9 @@ export async function acquireSubscriptionAccount(
       unavailable: info?.unavailable,
       usage,
       usable: !loggingIn && info?.auth.authenticated === true && (control || (!usage.limited
-        && ((Boolean(binding) && !freshPausedBinding) || latest.accounts.length < 2 || !accountCooling(state, provider, a.id, model))))
+        && ((Boolean(binding) && !rebind) || latest.accounts.length < 2 || !accountCooling(state, provider, a.id, model))))
         && (control || !imported || legacyAccess?.legacyCodexAccountCanRun(imported, model, {
-          remote: options.remote === true, newRoute: (!binding || freshPausedBinding) && !options.resuming,
+          remote: options.remote === true, newRoute: (!binding || rebind) && !options.resuming,
         }) === true),
       running: state.running.get(keyOf(provider, a.id))?.size ?? 0,
       // Control leases reserve no slot. Pinned tasks never re-pick, so the limit only gates new assignments.
@@ -952,13 +1028,24 @@ export async function acquireSubscriptionAccount(
   // Reopening an old task without a recorded binding must keep its original default home.
   if (binding && options.accountId && binding.accountId !== options.accountId)
     throw new Error('The task subscription account changed');
-  const pinned = (freshPausedBinding ? undefined : binding?.accountId) ?? options.accountId;
-  const selected =
+  let members = buildMembers(freshPausedBinding || freshBlockedBinding);
+  let pinned = (freshPausedBinding || freshBlockedBinding ? undefined : binding?.accountId) ?? options.accountId;
+  const exclude = freshBlockedBinding
+    ? new Set([...(options.exclude ?? []), boundAccount!.id])
+    : options.exclude;
+  let choice =
     pinned ??
     pickProviderGroupMember(members, latest.strategy, {
       lastPicked: state.lastPicked.get(provider),
-      ...(options.exclude ? { exclude: options.exclude } : {}),
+      ...(exclude ? { exclude } : {}),
     });
+  if (freshBlockedBinding && !choice) {
+    // Every other account is blocked, full or already tried: stay on the bound account.
+    members = buildMembers(false);
+    pinned = boundAccount!.id;
+    choice = pinned;
+  }
+  const selected = choice;
   const member = members.find((a) => a.id === selected);
   const reserved = pending && pending.accountId === selected && state.running.get(keyOf(provider, pending.accountId))?.has(pending.token) ? 1 : 0;
   if (pending && member && member.running - reserved >= member.limit)
