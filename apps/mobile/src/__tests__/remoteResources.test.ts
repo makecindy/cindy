@@ -8,6 +8,7 @@ import {
   listRemoteCollection,
   loadRemoteResourceManifest,
   discoverRemoteHomeCollections,
+  remoteResourceDiscoveryKey,
   remoteResourceDiscoveryTargets,
   isRemoteResourcesUnsupported,
   mergeRemoteCollectionHostShards,
@@ -84,6 +85,25 @@ describe('remote resource discovery', () => {
     expect(invoke).toHaveBeenCalledTimes(1);
     expect(invoke).toHaveBeenCalledWith('mac-1', 'maker:remote-resources:manifest', expect.any(Array));
     expect(collections).toEqual([{ ...previous[0], iconName: undefined, targets: [targets[1]] }]);
+  });
+
+  it('asks the same computers again only when the discovery targets can differ', () => {
+    // Regression 2026-11-12 (hot phone, about ten manifest requests a second in the debug log): Home
+    // reran discovery for every presence message, although busy state and last-seen time select nothing.
+    const previous = [{ id: 'teammates', title: 'Teammates', resourceKind: 'bot', placement: 'home-scope', targets }];
+    const ready = [
+      { deviceId: 'mac-1', name: 'Studio', canOpen: true, state: 'ready', statusDetail: 'now' },
+      { deviceId: 'mac-2', name: 'Laptop', canOpen: false, state: 'offline', statusDetail: '1 min' },
+    ];
+    const busyLater = [{ ...ready[0]!, state: 'busy', statusDetail: 'working' }, { ...ready[1]!, statusDetail: '2 min' }];
+    expect(remoteResourceDiscoveryKey(busyLater)).toBe(remoteResourceDiscoveryKey(ready));
+    expect(remoteResourceDiscoveryTargets(busyLater, previous)).toEqual(remoteResourceDiscoveryTargets(ready, previous));
+    for (const changed of [
+      [{ ...ready[0]!, canOpen: false, state: 'offline' }, ready[1]!],
+      [ready[0]!, { ...ready[1]!, canOpen: true, state: 'ready' }],
+      [{ ...ready[0]!, name: 'Renamed' }, ready[1]!],
+      [ready[0]!],
+    ]) expect(remoteResourceDiscoveryKey(changed)).not.toBe(remoteResourceDiscoveryKey(ready));
   });
 
   it('advertises only primitives implemented by the current mobile shell', () => {

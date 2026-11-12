@@ -146,6 +146,7 @@ import { isAccessRevokedError } from '@/device-link/accessRevoked';
 import { useDeviceLink } from '@/device-link/DeviceLinkContext';
 import {
   discoverRemoteHomeCollections,
+  remoteResourceDiscoveryKey,
   remoteResourceDiscoveryTargets,
   type RemoteHomeCollection,
 } from '@/device-link/remoteResources';
@@ -1987,10 +1988,16 @@ function HomeScreenContent({ active = true, width, newSessionInSystemBar = false
     });
     return () => { cancelled = true; };
   }, [accountGeneration, homeCacheUserId]);
+  // Busy state and last-seen time arrive with every presence message and do not change
+  // which computers are asked; rerun discovery only for what it actually reads.
+  const discoveryDevicesRef = useRef(deviceModels);
+  discoveryDevicesRef.current = deviceModels;
+  const discoveryDevicesKey = remoteResourceDiscoveryKey(deviceModels);
   useEffect(() => {
-    if (resourceCacheAccount !== accountGeneration || !homeListCacheHydrated || (deviceModels.length === 0 && lastSyncedAt === null)) return;
+    const discoveryDevices = discoveryDevicesRef.current;
+    if (resourceCacheAccount !== accountGeneration || !homeListCacheHydrated || (discoveryDevices.length === 0 && lastSyncedAt === null)) return;
     let cancelled = false;
-    const targets = remoteResourceDiscoveryTargets(deviceModels, remoteHomeCollectionsRef.current);
+    const targets = remoteResourceDiscoveryTargets(discoveryDevices, remoteHomeCollectionsRef.current);
     if (targets.length === 0) {
       remoteHomeCollectionsRef.current = [];
       setRemoteHomeCollections([]);
@@ -2027,7 +2034,7 @@ function HomeScreenContent({ active = true, width, newSessionInSystemBar = false
     lastSyncedAt,
     homeListCacheHydrated,
     homeCacheUserId,
-    deviceModels,
+    discoveryDevicesKey,
     i18nInstance.language,
     invoke,
   ]);

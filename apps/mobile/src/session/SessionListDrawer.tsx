@@ -462,11 +462,20 @@ export function SessionListDrawerSurface({ currentSessionId, persistent = false,
   }));
 
 
+  // Home reads both callbacks when a row is used, so their identity is not list
+  // content. Keep the element stable: opening, closing or an outer layout render
+  // must not render every row again just before the panel has to appear.
+  const homeHost = useRef({ onSelectSession, runNavigation });
+  homeHost.current = { onSelectSession, runNavigation };
+  const selectHomeSession = useCallback((item: RemoteSessionListItem) => homeHost.current.onSelectSession?.(item), []);
+  const runHomeNavigation = useCallback((action: () => void) => homeHost.current.runNavigation(action), []);
+  const selectsSession = !!onSelectSession;
+  const homeContent = useMemo(() => <MobileHome newSessionActionRef={newSessionActionRef} width={shownWidth} currentSessionId={currentSessionId}
+    newSessionInSystemBar={newSessionInSystemBar} newSessionInHeader={!persistent}
+    onSelectSession={selectsSession ? selectHomeSession : undefined} runNavigation={runHomeNavigation} />,
+  [newSessionActionRef, shownWidth, currentSessionId, newSessionInSystemBar, persistent, selectsSession, selectHomeSession, runHomeNavigation]);
   // Remove a collapsed column in this render, before Home receives width=0.
   // The layout effect still settles motion and suppresses modal-close callbacks.
-  const homeContent = <MobileHome newSessionActionRef={newSessionActionRef} width={shownWidth} currentSessionId={currentSessionId}
-    newSessionInSystemBar={newSessionInSystemBar} newSessionInHeader={!persistent}
-    onSelectSession={onSelectSession} runNavigation={runNavigation} />;
   // The existing native host keeps Fabric ownership while its plain content
   // container docks into the Modal. A local focus boundary pauses background
   // work without hiding/recreating every native view on the next reveal.

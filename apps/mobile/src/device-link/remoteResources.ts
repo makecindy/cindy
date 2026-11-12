@@ -91,6 +91,17 @@ export function remoteResourceDiscoveryTargets(
     }));
 }
 
+/**
+ * What `remoteResourceDiscoveryTargets` reads from the device list, as one comparable value.
+ * Presence also reports each computer's busy state and last-seen time; a caller that reruns
+ * discovery for those asks every computer for its manifest again on each presence message.
+ */
+export function remoteResourceDiscoveryKey(
+  devices: readonly { canOpen: boolean; state: string; deviceId: string; name: string }[],
+): string {
+  return JSON.stringify(devices.map((device) => [device.deviceId, device.name, device.canOpen, device.state === 'offline']));
+}
+
 function clientDescriptor(locale?: string): RemoteResourceClientDescriptor {
   return {
     protocolVersion: REMOTE_RESOURCE_PROTOCOL_VERSION,
