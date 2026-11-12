@@ -54,7 +54,8 @@ function AccountReuseControls({ ghostId, enabled }: { ghostId: string; enabled: 
       if (currentKey.current === key) setError({ key, message: 'settings.ghosts.detail.reuseAccountChangeFailed' });
     } finally { if (currentKey.current === key) setBusy(false); }
   };
-  const groups = snapshot?.key === key ? snapshot.groups : [];
+  const groups = snapshot?.key === key ? snapshot.groups.filter(group => group.options.length > 0 || group.accounts.length > 0) : [];
+  if (!groups.length) return null;
   return <SettingsSection className="mt-10" title={t('settings.ghosts.detail.reuseAccountTitle')}
     description={t('settings.ghosts.detail.reuseAccountDescription')}>
     {error?.key === key ? <SettingsNotice tone="error">{t(error.message)}</SettingsNotice> : null}
