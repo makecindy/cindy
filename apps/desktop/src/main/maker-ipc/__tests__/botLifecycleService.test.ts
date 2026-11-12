@@ -92,6 +92,13 @@ function createDatabase(): Database.Database {
     CREATE TABLE bot_delegations (id TEXT PRIMARY KEY, requesting_bot_id TEXT, target_bot_id TEXT);
     CREATE TABLE bot_direct_message_threads (id TEXT PRIMARY KEY, bot_a_id TEXT, bot_b_id TEXT);
     CREATE TABLE bot_direct_messages (id TEXT PRIMARY KEY, sender_bot_id TEXT, recipient_bot_id TEXT);
+    -- The deletion transaction clears saved interactive page state for deleted tasks.
+    CREATE TABLE mcp_app_view_states (
+      message_id TEXT PRIMARY KEY,
+      session_id TEXT NOT NULL,
+      server_id TEXT NOT NULL, server_revision TEXT NOT NULL, plugin_instance TEXT,
+      state_json TEXT NOT NULL, byte_length INTEGER NOT NULL
+    );
     INSERT INTO bot_profiles (
       id, display_name, description, avatar, avatar_color, status,
       current_version, canonical_session_id, created_at, updated_at
