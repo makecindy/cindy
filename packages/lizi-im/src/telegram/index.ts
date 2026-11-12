@@ -10,8 +10,8 @@
  *     显式 owner 模型 — Telegram bot 全网可搜, TOFU 抢注风险不可接受);
  *   - 群/topic: senderId = 群 lane id `g/{chatId}[/{threadId}]`, 编排层按
  *     (bot, laneId) 得到「每群每话题一个会话」; 出站按 lane id 解码回群聊。
- *     触发条件 = owner 在群里 @bot 或回复 bot 消息; 其余群消息只进本地
- *     群上下文窗口(onGroupWindowMessage), 不起 turn。
+ *     群准入强制开启：绑定用户自己邀请或批准后才接收其他成员消息；绑定用户本人除外。
+ *     已批准群的成员 @bot / 回复 bot 可触发，普通消息进群上下文窗口。
  *
  * 群窗口数据面: transport 把收到的每条群消息(含非触发消息与其他 bot 消息,
  * 取决于 BotFather privacy mode)与自己发出的群回复(回流条目)推给
@@ -60,6 +60,7 @@ import {
   normalizeMessage,
   type TelegramGroupWindowEntry,
 } from './inbound.js';
+import { TelegramGroupAdmission, TelegramGroupAdmissionStorageError } from './groupAdmission.js';
 import { markdownToTelegramHtml } from './markdown.js';
 import { TELEGRAM_PERSONAL_CAPABILITIES } from './presentationCapabilities.js';
 import {
@@ -77,6 +78,7 @@ import { startTelegramStreaming } from './streamingText.js';
 
 const TOKEN_SECRET_KEY = 'telegram-bot-token';
 const OWNER_USER_ID_SECRET_KEY = 'telegram-owner-user-id';
+const GROUP_ADMISSION_SECRET_KEY = 'telegram-group-admission-v1';
 
 /** 历史遗留 key(上下线播报机制已移除), disconnect 时顺手清掉。 */
 const LEGACY_RUNTIME_ACTIVE_SECRET_KEY = 'telegram-bot-runtime-active';
@@ -378,6 +380,28 @@ export class TelegramIM extends BaseIM implements ChannelIM {
   private botDisplayName = '';
   private ownerUserId = '';
   private configVersion = 0;
+  private groupAdmissionState?: { identity: string; admission: TelegramGroupAdmission };
+
+  private groupAdmission(): TelegramGroupAdmission {
+    const identity = `${this.botId}:${this.ownerUserId}`;
+    if (this.groupAdmissionState?.identity !== identity) {
+      this.groupAdmissionState = {
+        identity,
+        admission: new TelegramGroupAdmission(
+          this.host.secrets, this.secretKey(GROUP_ADMISSION_SECRET_KEY), identity, this.ownerUserId,
+        ),
+      };
+    }
+    return this.groupAdmissionState.admission;
+  }
+
+  private async requestGroupAdmission(chat: import('./api.js').TgChat): Promise<void> {
+    const generation = this.configVersion;
+    const api = this.api;
+    if (api) await this.groupAdmission().request(chat, api,
+      () => !this.disposing && generation === this.configVersion, this.outboundAbortSignal());
+  }
+
   private pollAbort: AbortController | null = null;
   /**
    * 实例级取消源(dispose 时 abort)。pollAbort 只覆盖"正在轮询"的时段, 而出站也
@@ -468,6 +492,7 @@ export class TelegramIM extends BaseIM implements ChannelIM {
   // ── lifecycle ──────────────────────────────────────────────────────────────
 
   async init(): Promise<void> {
+    this.groupAdmissionState = undefined;
     this.disposing = false;
     this.resetLifetimeAbort();
     const tokenResult = this.secretReadResult(this.secretKey(TOKEN_SECRET_KEY));
@@ -586,6 +611,7 @@ export class TelegramIM extends BaseIM implements ChannelIM {
 
   // 生命周期静默: dispose / 重连不向 owner 发任何播报(桌面端频繁重启会刷屏)。
   async dispose(): Promise<void> {
+    this.groupAdmissionState = undefined;
     this.disposing = true;
     // 在途的 429 退避等待就此收口 —— 否则一个最长一分钟的定时器会活过 dispose。
     this.lifetimeAbort.abort();
@@ -735,6 +761,12 @@ export class TelegramIM extends BaseIM implements ChannelIM {
         })
         .catch(() => {});
     }
+    // Unbinding cannot succeed while a persisted group grant could survive it.
+    if (!this.groupAdmission().clear()) {
+      await this.stopPolling();
+      this.setStatus({ kind: 'error', reason: SECRET_WRITE_FAILED_REASON, code: 'secret-unavailable' });
+      return { status: this.status };
+    }
     this.ownerUserId = '';
     await this.sendOwnerNoticeWithTimeout(
       disconnectedOwnerUserId,
@@ -744,6 +776,7 @@ export class TelegramIM extends BaseIM implements ChannelIM {
     );
     this.host.secrets.remove(this.secretKey(TOKEN_SECRET_KEY));
     this.host.secrets.remove(this.secretKey(OWNER_USER_ID_SECRET_KEY));
+    this.groupAdmissionState = undefined;
     this.host.secrets.remove(this.secretKey(LEGACY_RUNTIME_ACTIVE_SECRET_KEY));
     this.host.secrets.remove(this.secretKey(UPDATES_OFFSET_SECRET_KEY));
     // 解绑必须连下线标志一起清: 留着的话重新填 token 会连上、但重启即回
@@ -1187,12 +1220,17 @@ export class TelegramIM extends BaseIM implements ChannelIM {
    * 清单与上下文都知道这件事), 并私聊告知主人 —— 主人不在群里时也能知道 bot 去了哪。
    * 私聊里的拉黑 / 解除拉黑不处理(没有可见动作)。
    */
-  private async handleMyChatMember(change: TgChatMemberUpdated, updateId: number): Promise<void> {
+  private handleMyChatMember(change: TgChatMemberUpdated, updateId: number): void {
     const chat = change.chat;
     if (chat.type !== 'group' && chat.type !== 'supergroup') return;
     const wasIn = isChatMemberPresent(change.old_chat_member.status);
     const isIn = isChatMemberPresent(change.new_chat_member.status);
     if (wasIn === isIn) return;
+    const admission = this.groupAdmission();
+    admission.membership(
+      chat, isIn, String(change.from.id) === this.ownerUserId, updateId,
+      `${displayNameOf(change.from)} (${change.from.id})`,
+    );
     const title = chat.title ?? String(chat.id);
     const actor = displayNameOf(change.from);
     const text = isIn
@@ -1207,16 +1245,24 @@ export class TelegramIM extends BaseIM implements ChannelIM {
       text,
       sentAt: change.date * 1000,
     });
-    if (!this.ownerUserId || !this.api) return;
+    const api = this.api;
+    if (!this.ownerUserId || !api) return;
+    const generation = this.configVersion;
+    const signal = this.outboundAbortSignal();
     const notice = isIn
       ? `👥 我被「${actor}」加进了群「${title}」(chat_id: ${chat.id})。`
       : `👥 我被「${actor}」移出了群「${title}」(chat_id: ${chat.id})。`;
-    try {
-      await this.sendPlainChunked(this.ownerUserId, notice);
-    } catch (err) {
+    // Only the durable decision above belongs to the global polling barrier.
+    // Both admission requests and ordinary membership notices use the same bounded,
+    // cancellable transport, and neither holds up later chats or disconnect.
+    const notification = isIn && !admission.allows(chat.id)
+      ? admission.request(chat, api, () => !this.disposing && generation === this.configVersion, signal)
+      : admission.notifyMembership(api, notice, signal);
+    void notification.catch((err) => {
+      if (signal.aborted) return;
       const msg = err instanceof Error ? err.message : String(err);
       this.log.warn(`telegram membership notice failed: ${msg}`);
-    }
+    });
   }
 
   async reactToMessage(messageId: string, emoji: string): Promise<string | null> {
@@ -1418,12 +1464,14 @@ export class TelegramIM extends BaseIM implements ChannelIM {
           this.setStatus({ kind: 'connected', appId: String(this.botId) });
         }
         for (const update of updates) {
+          if (abort.signal.aborted || this.configVersion !== generation) return;
+          // Membership is an authorization barrier: commit its decision before the next
+          // getUpdates can acknowledge it. Other messages retain concurrent per-chat dispatch.
+          if (update.my_chat_member) await this.dispatchUpdate(update, generation);
+          else void this.dispatchUpdate(update, generation);
+          if (abort.signal.aborted || this.configVersion !== generation) return;
           offset = Math.max(offset, update.update_id + 1);
           this.lastSeenOffset = offset;
-          if (abort.signal.aborted || this.configVersion !== generation) return;
-          // 只分发不等待: 处理进 per-chat 串行链, 循环立即消费下一条 —
-          // 一个 chat 的相册下载/顺序门不会拖住其它 chat(#1098 review P1/P2)。
-          this.dispatchUpdate(update, generation);
         }
         // 持久化游标走低水位: 不越过任何在途(分发未收口)update 与缓冲中
         // 相册 — 各任务收口时在 finally 里自行补写(getUpdates 的内存 offset
@@ -1431,6 +1479,12 @@ export class TelegramIM extends BaseIM implements ChannelIM {
         if (updates.length > 0) this.persistOffsetCapped();
       } catch (err) {
         if (abort.signal.aborted || this.configVersion !== generation) return;
+        if (err instanceof TelegramGroupAdmissionStorageError) {
+          // Keep the last committed offset. Reconnecting replays this membership event.
+          this.setStatus({ kind: 'error', reason: SECRET_WRITE_FAILED_REASON, code: 'secret-unavailable' });
+          abort.abort();
+          return;
+        }
         if (err instanceof TelegramApiError && err.errorCode === 409) {
           this.setStatus({ kind: 'conflict', appId: String(this.botId) });
           await sleep(POLL_CONFLICT_RETRY_MS, abort.signal);
@@ -1472,7 +1526,7 @@ export class TelegramIM extends BaseIM implements ChannelIM {
    * 时移除在途 id 并补写低水位游标 — 进程在任何点退出, 重启都从"最早未
    * 完成的 update"续读, 不丢消息(at-least-once)。
    */
-  private dispatchUpdate(update: TgUpdate, generation: number): void {
+  private dispatchUpdate(update: TgUpdate, generation: number): Promise<void> {
     const chatId =
       update.message?.chat.id ??
       update.callback_query?.message?.chat.id ??
@@ -1488,6 +1542,7 @@ export class TelegramIM extends BaseIM implements ChannelIM {
         try {
           await this.handleUpdate(update);
         } catch (err) {
+          if (err instanceof TelegramGroupAdmissionStorageError) throw err;
           const msg = err instanceof Error ? err.message : String(err);
           this.log.warn(`telegram update handling failed: ${msg}`);
         }
@@ -1498,6 +1553,7 @@ export class TelegramIM extends BaseIM implements ChannelIM {
         if (!this.disposing && this.configVersion === generation) this.persistOffsetCapped();
       });
     this.chatQueues.set(key, next);
+    return next;
   }
 
   private async handleUpdate(update: TgUpdate): Promise<void> {
@@ -1507,12 +1563,21 @@ export class TelegramIM extends BaseIM implements ChannelIM {
       return;
     }
     if (update.my_chat_member) {
-      await this.handleMyChatMember(update.my_chat_member, update.update_id);
+      this.handleMyChatMember(update.my_chat_member, update.update_id);
       return;
     }
     const m = update.message;
     if (!m || !m.from) return;
     if (m.from.id === this.botId) return; // 自身消息(某些客户端场景)不处理
+
+    if (m.chat.type === 'group' || m.chat.type === 'supergroup') {
+      if (!this.groupAdmission().allows(m.chat.id)) {
+        const generation = this.configVersion;
+        await this.requestGroupAdmission(m.chat);
+        if (this.disposing || generation !== this.configVersion) return;
+        if (String(m.from.id) !== this.ownerUserId) return;
+      }
+    }
 
     // 相册成员先入群窗口(逐条, 幂等), turn 触发交给聚合器合并处理。
     if (m.media_group_id) {
@@ -1715,6 +1780,9 @@ export class TelegramIM extends BaseIM implements ChannelIM {
     opts: { skipGroupWindow?: boolean } = {},
   ): Promise<void> {
     if (!m.from) return;
+    // Recheck settled albums: membership can change while their media is buffered.
+    if ((m.chat.type === 'group' || m.chat.type === 'supergroup')
+      && String(m.from.id) !== this.ownerUserId && !this.groupAdmission().allows(m.chat.id)) return;
     const staleFor = this.staleMessageAgeMs(m);
     if (m.chat.type === 'private') {
       if (staleFor !== null) {
@@ -1828,7 +1896,9 @@ export class TelegramIM extends BaseIM implements ChannelIM {
         ...(this.host.media ? { media: this.host.media } : {}),
         ...(this.host.files ? { files: this.host.files } : {}),
       });
-      if (this.disposing || this.configVersion !== acceptedConfigVersion) {
+      if (this.disposing || this.configVersion !== acceptedConfigVersion
+        || ((m.chat.type === 'group' || m.chat.type === 'supergroup')
+          && String(m.from.id) !== this.ownerUserId && !this.groupAdmission().allows(m.chat.id))) {
         await this.discardStagedMedia(stagedDiscards);
         return;
       }
@@ -1851,6 +1921,10 @@ export class TelegramIM extends BaseIM implements ChannelIM {
   private async handleCallbackQuery(q: import('./api.js').TgCallbackQuery): Promise<void> {
     const api = this.api;
     if (!api) return;
+    const generation = this.configVersion;
+    if (await this.groupAdmission().handleCallback(q, api,
+      () => !this.disposing && generation === this.configVersion, this.outboundAbortSignal())) return;
+    if (this.disposing || generation !== this.configVersion) return;
     // 应答只有一次机会: 同一个 callback_query_id 二次 answer 会被 Telegram 拒掉。
     // 先无条件发一次空 answer 消 loading, 会把后面那条「已过期」alert 一起吞掉 ——
     // 分支决定这唯一一次应答带不带提示。
