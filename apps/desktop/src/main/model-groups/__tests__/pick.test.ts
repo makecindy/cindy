@@ -292,7 +292,7 @@ describe('createModelGroupResolver with sources on other computers', () => {
       scope: () => 'owner',
       now: () => NOW,
       locations: vi.fn(async () => ({ locations: [{ agentDeviceId: 'dev-2' }] })),
-      remoteViews: vi.fn(async () => [view('a', 'Studio 上的 ChatGPT')]),
+      remoteViews: vi.fn(async () => ({ views: [view('a', 'Studio 上的 ChatGPT')], stale: false })),
       ...overrides,
     };
     return { deps, resolver: createModelGroupResolver(deps) };
@@ -317,6 +317,8 @@ describe('createModelGroupResolver with sources on other computers', () => {
   it.each([
     ['the computer is not selectable now (offline or share revoked)', { locations: async () => ({ locations: [] }) }],
     ['reading its catalog fails', { remoteViews: async () => { throw new Error('NOT_CONNECTED'); } }],
+    // 读失败时底层可能给回上次的目录(stale)；那份目录不说明那台现在能用。
+    ['only a stale copy of its catalog comes back', { remoteViews: async () => ({ views: [view('a', 'Studio 上的 ChatGPT')], stale: true }) }],
   ] as const)('moves on when %s', async (_name, overrides) => {
     const { resolver } = make(groups('order', [REMOTE, { agentKind: 'codex', providerId: 'b', model: 'gpt' }]), overrides);
     const result = await resolver.resolve({ selection });
@@ -327,7 +329,7 @@ describe('createModelGroupResolver with sources on other computers', () => {
 
   it('does not wait past the time limit for a computer that never answers, and keeps the user\'s model when nothing else is left', async () => {
     vi.useFakeTimers();
-    const { resolver } = make(groups('order', [REMOTE]), { remoteViews: () => new Promise<ProviderView[]>(() => undefined) });
+    const { resolver } = make(groups('order', [REMOTE]), { remoteViews: () => new Promise<{ views: ProviderView[]; stale: boolean }>(() => undefined) });
     const pending = resolver.resolve({ selection });
     await vi.advanceTimersByTimeAsync(MODEL_GROUP_REMOTE_WAIT_MS);
     expect(await pending).toMatchObject({ outcome: 'unavailable', trace: [{ why: 'unavailable', agentDeviceId: 'dev-2' }] });

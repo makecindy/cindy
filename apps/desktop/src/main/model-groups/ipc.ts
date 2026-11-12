@@ -22,7 +22,7 @@ import { readWorkerAgentLocations } from '../maker-ipc/workerAgentLocations.js';
 import { getQuotaOverviewService } from '../quota-overview/service.js';
 import { getGatewayModelPricing } from '../usage/modelPricing.js';
 import { getReferenceModelPricing } from '../usage/referenceModelPricing.js';
-import { readDeviceProviderViews } from '../remote-agent/controller/deviceCatalog.js';
+import { readDeviceProviderCatalog } from '../remote-agent/controller/deviceCatalog.js';
 import { assertTrustedAppRendererEvent } from '../security/trustedAppRenderer.js';
 import { throwIpcError } from '../utils/ipcValidate.js';
 import { recordModelGroupDecision } from './decisionLog.js';
@@ -66,7 +66,8 @@ const resolver = createModelGroupResolver({
   quotaWindows,
   // 其他电脑与分享来的来源：与插件卡片里的远程模型同一份位置名单与同一条目录读取。
   locations: readWorkerAgentLocations,
-  remoteViews: (agentDeviceId) => readDeviceProviderViews(remoteBackgroundInvoke, agentDeviceId),
+  // 带上 stale：读不到时底层会给上次的目录，选路不能把它当成那台现在能用。
+  remoteViews: (agentDeviceId) => readDeviceProviderCatalog(remoteBackgroundInvoke, agentDeviceId),
   scope: activeOwnerScopeKey,
   now: Date.now,
   pricing: async () => ({ gateway: await getGatewayModelPricing(), reference: getReferenceModelPricing() }),

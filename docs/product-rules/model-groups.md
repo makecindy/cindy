@@ -59,7 +59,7 @@
   「最近的选择」都写「供应商 · 那台电脑」，与模型选择器里远程那几行同一写法。
 - 能不能用与插件卡片里的远程模型同一判断（`isGhostCardModelRouteAvailable`）：那个位置现在能选（同账号在线、开了
   远程控制的电脑，或未暂停的分享），模型也在那里允许远程调用的目录里；引擎是否就绪看那里的目录，不看本机装没装。
-  电脑离线、分享被撤销或暂停、读目录失败或超过 2 秒（与等额度同一上限）都算这个来源用不了，按选法换下一个；
+  电脑离线、分享被撤销或暂停、读目录失败（包括只拿到上次留下的旧目录）或超过 2 秒（与等额度同一上限）都算这个来源用不了，按选法换下一个；
   全都用不了沿用原来的模型。路线里没有这种来源时不去读别处。不借本机同名供应商顶替。
 - 配额：总览里有那台电脑这个连接的订阅窗口就用；那台此刻读不到只剩上次读数的、与本机是同一个账号而总览只列了本机那份的、
   以及分享来的来源，都按读不到额度处理，排在读得到的后面。
@@ -105,6 +105,7 @@
 
 - 只用于本机开的新任务（普通发送与新建目标）。草稿本身是远程控制别的电脑、SSH、协同模式时不提供。草稿此刻选着
   在另一台电脑运行的模型时照样提供：选了路线就由路线决定这次在哪台运行（§3.1），这一点与「让插件选」不同。
+  这时先选路再检查：那台电脑的模型目录没读好不挡住路线；只有路线里都用不了、沿用原模型时，才要求那台的目录已就绪。
 - 任务开始后模型组不会自己换来源；撞上配额时只**提议**换到同一条路线里的下一个来源，用户点了才换（见 §6.1）。
 - 伙伴、定时与自动化、子代理、辅助模型暂不经过模型组；要接入时先在这里补规则。
 - 配置按账号保存在本机（`model-groups.json`），只存用户建的内容；不随新电脑迁移（供应商连接 ID 各台不同）。
@@ -133,4 +134,4 @@
 `apps/desktop/src/renderer/features/model-groups/`、设置页 `ModelGroupsSection.tsx`、
 选择器 `ModelGroupsPickerSection.tsx`；撞配额时的提议见 `main/model-groups/switchOffer.ts`、`sessionBindings.ts`，
 横幅入口 `components/chat/ErrorBanner.tsx`；远程来源的位置与目录读取接在 `main/model-groups/ipc.ts`
-（`readWorkerAgentLocations`、`readDeviceProviderViews`）；回归见 `main/model-groups/__tests__/pick.test.ts`、`switchOffer.test.ts`。
+（`readWorkerAgentLocations`、`readDeviceProviderCatalog`；只拿到上次留下的旧目录时按读不到处理）；回归见 `main/model-groups/__tests__/pick.test.ts`、`switchOffer.test.ts`。

@@ -42,8 +42,11 @@ export interface ModelGroupResolverDeps {
    * 没提供时这些来源一律不可用。
    */
   locations?(): Promise<{ locations: readonly { agentDeviceId: string }[] }>;
-  /** 那个位置允许远程调用的供应商目录(只读，不触发发现或登录)。 */
-  remoteViews?(agentDeviceId: string): Promise<ProviderView[]>;
+  /**
+   * 那个位置允许远程调用的供应商目录(只读，不触发发现或登录)。stale = 这次没读到、给的是上次留下的目录：
+   * 不能据此判断现在能用，按读不到处理。
+   */
+  remoteViews?(agentDeviceId: string): Promise<{ views: ProviderView[]; stale: boolean }>;
   /** 读位置与远程目录最多等这么久；等不到按这些来源不可用。默认 MODEL_GROUP_REMOTE_WAIT_MS。 */
   remoteWaitMs?: number;
   /** 账号范围：换账号后不沿用上一个账号的轮流位置。 */
@@ -135,7 +138,9 @@ export function createModelGroupResolver(deps: ModelGroupResolverDeps) {
     const { locations, remoteViews } = deps;
     return {
       locations: read(locations ? () => locations() : null),
-      views: new Map(ids.map((id) => [id, read(remoteViews ? () => remoteViews(id) : null)] as const)),
+      views: new Map(ids.map((id) => [id, read(remoteViews
+        ? () => remoteViews(id).then((catalog) => (catalog.stale ? null : catalog.views))
+        : null)] as const)),
     };
   }
 

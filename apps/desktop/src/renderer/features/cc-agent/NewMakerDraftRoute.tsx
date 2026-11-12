@@ -3856,6 +3856,10 @@ export function NewMakerDraftRoute() {
         return false;
       }
       const shouldEnableCollab = effectiveCollab.enabled && collabPolicyEligible && policyEnabled;
+      // 插件模型：发送那一帧的选择为准；插件给出的真实模型只用于这次新建，不改草稿里的默认模型。
+      const pluginModelAtSend = shouldEnableCollab ? null : activePluginModel;
+      // 模型组同理：按它选出的具体模型只用于这次新建。
+      const modelGroupAtSend = shouldEnableCollab || pluginModelAtSend ? null : activeModelGroup;
       // device-link 切设备后,capabilities/providers hook 可能还没 re-render 到新设备快照;
       // 此时 effectiveFastMode / supportsFastMode / sendProviderId 仍基于旧设备。
       // remoteDraftState 必须一起看:换设备时我们会把它打回 loading(防上一台的默认值串台),
@@ -3863,7 +3867,8 @@ export function NewMakerDraftRoute() {
       // maker:get-new-maker-defaults 还没回来时放行,于是提交的是 deviceLinkInitial 的 capability
       // 兜底值(model / effort / permission / provider),而不是那台设备自己保存的草稿值;
       // 会话一旦建出来,晚到的响应也修不回去了。
-      if (usesDeviceCatalog && remoteModelListStatus !== 'ready') {
+      // 选了模型组时先选路：路线可能选到别处，只有沿用原模型时才要求草稿那台的目录就绪(见下方选路之后)。
+      if (usesDeviceCatalog && remoteModelListStatus !== 'ready' && !modelGroupAtSend) {
         if (remoteModelListStatus === 'error') {
           toast.error(t('newChat.modelSelector.remoteLoadFailed'));
         } else {
@@ -3952,10 +3957,6 @@ export function NewMakerDraftRoute() {
         dataOwnerAtSend.dataOwnerId === dataOwnerId &&
         isDataOwnerGenerationCurrent(dataOwnerAtSend);
 
-      // 插件模型：发送那一帧的选择为准；插件给出的真实模型只用于这次新建，不改草稿里的默认模型。
-      const pluginModelAtSend = shouldEnableCollab ? null : activePluginModel;
-      // 模型组同理：按它选出的具体模型只用于这次新建。
-      const modelGroupAtSend = shouldEnableCollab || pluginModelAtSend ? null : activeModelGroup;
       const sendBaseRoute = { persistedAgentKind, model, submittedEffort, providerId, effectiveFastMode };
       markSendInFlight(true);
       // 已登记乐观标题预览的会话 id。交接链路(rehomeDraftAttachments / setPending /
@@ -3991,6 +3992,12 @@ export function NewMakerDraftRoute() {
           const routedTo: GhostModelRoute | null = pluginRoute?.outcome === 'routed'
             ? pluginRoute.route
             : modelGroupRoute?.outcome === 'routed' ? modelGroupRoute.route : null;
+          // 模型组没选出来源、沿用原模型时，原模型所在那台的目录照样要就绪(与上面没选模型组时同一检查)。
+          if (modelGroupAtSend && !routedTo && usesDeviceCatalog && remoteModelListStatus !== 'ready') {
+            if (remoteModelListStatus === 'error') toast.error(t('newChat.modelSelector.remoteLoadFailed'));
+            else toast.warning(t('ccAgent.draft.deviceStillLoading'));
+            return;
+          }
           const routeAgentDeviceId = routedTo ? routedTo.agentDeviceId : effectiveAgentDeviceId;
           const persistedAgentKind = routedTo?.agentKind ?? sendBaseRoute.persistedAgentKind;
           const authVendor = persistedAgentKind;
@@ -5235,14 +5242,20 @@ export function NewMakerDraftRoute() {
           }
         }
         const shouldEnableCollab = effectiveCollab.enabled && collabPolicyEligible && policyEnabled;
+        const goalPluginModel = shouldEnableCollab ? null : activePluginModel;
+        const goalModelGroup = shouldEnableCollab || goalPluginModel ? null : activeModelGroup;
         // 同 handleSend:remoteDraftState 未就绪时不得放行,否则提交 capability 兜底值而非该设备的
         // 草稿值(缓存已热时另两个 loading 会立刻为 false,拦不住)。
-        if (usesDeviceCatalog && remoteModelListStatus === 'error') {
-          throw new Error(t('newChat.modelSelector.remoteLoadFailed'));
-        }
-        if (isAgentDeviceDraft && remoteModelListStatus !== 'ready') {
-          throw new Error(t('ccAgent.draft.deviceStillLoading'));
-        }
+        // 选了模型组时先选路，沿用原模型时才查草稿那台的目录(见选路之后)。
+        const assertDraftCatalogReady = () => {
+          if (usesDeviceCatalog && remoteModelListStatus === 'error') {
+            throw new Error(t('newChat.modelSelector.remoteLoadFailed'));
+          }
+          if (isAgentDeviceDraft && remoteModelListStatus !== 'ready') {
+            throw new Error(t('ccAgent.draft.deviceStillLoading'));
+          }
+        };
+        if (!goalModelGroup) assertDraftCatalogReady();
         if (isDeviceLinkDraft && remoteDraftState.status === 'error') {
           setRemoteDraftRetryEpoch((value) => value + 1);
           throw new Error(t('ccAgent.draft.remoteDefaultsLoadFailed'));
@@ -5254,7 +5267,6 @@ export function NewMakerDraftRoute() {
           throw new Error(t('ccAgent.draft.deviceStillLoading'));
         }
         // 插件模型：与 handleSend 同一流程，目标文本就是这个任务的第一条消息。
-        const goalPluginModel = shouldEnableCollab ? null : activePluginModel;
         const pluginRoute = goalPluginModel
           ? await askPluginModelRoute(goalPluginModel, objective, 0, {
               agentKind: goalBaseRoute.persistedAgentKind,
@@ -5265,12 +5277,12 @@ export function NewMakerDraftRoute() {
           : null;
         if (goalPluginModel && !isCurrentDataOwner()) return;
         // 模型组：与 handleSend 同一流程。
-        const goalModelGroup = shouldEnableCollab || goalPluginModel ? null : activeModelGroup;
         const modelGroupRoute = goalModelGroup ? await resolveModelGroup(goalModelGroup, { hasImages: false }) : null;
         if (goalModelGroup && !isCurrentDataOwner()) return;
         const routedTo: GhostModelRoute | null = pluginRoute?.outcome === 'routed'
           ? pluginRoute.route
           : modelGroupRoute?.outcome === 'routed' ? modelGroupRoute.route : null;
+        if (goalModelGroup && !routedTo) assertDraftCatalogReady();
         const routeAgentDeviceId = routedTo ? routedTo.agentDeviceId : effectiveAgentDeviceId;
         const persistedAgentKind = routedTo?.agentKind ?? goalBaseRoute.persistedAgentKind;
         const authVendor = persistedAgentKind;
