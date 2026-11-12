@@ -2073,16 +2073,10 @@ html:is([data-wallpaper-active='true'], [data-desktop-background='true']) :is(.l
 [data-theme='cindy-dark'] aside.bg-sidebar > .sidebar-frost {
   background: var(--surface-translucent-sidebar);
 }
-/* Windows Acrylic 的 BrowserWindow backing 已在创建期铺同一份 85% 侧栏染色，确保快速
-   扩窗时原生新区域先显示正确颜色。常规侧栏让 backing 直接透出，避免 CSS 再叠一遍导致
-   颜色变重；peek drawer 覆盖的是应用内容，仍保留下方独立的染色 + blur。
-   桌面背景模式的 backing 是全透明的（见 vibrancyConfig），侧栏自带语义染色，不在此清除。 */
-[data-platform='win32'][data-window-backdrop-material='acrylic'][data-theme='cindy-light']:not([data-desktop-background='true'])
-  aside.bg-sidebar:not([data-sidebar-peek-drawer]) > .sidebar-frost,
-[data-platform='win32'][data-window-backdrop-material='acrylic'][data-theme='cindy-dark']:not([data-desktop-background='true'])
-  aside.bg-sidebar:not([data-sidebar-peek-drawer]) > .sidebar-frost {
-  background: transparent;
-}
+/* Windows Acrylic 下侧栏同样只由上面这份 85% 语义染色着色，不依赖窗口原生 backing：
+   窗口还原、其它窗口显隐时系统合成可能短暂丢失 backing 或背后桌面，侧栏若只靠它就会闪
+   （#9623，2026-11-12 复核）。原生 backing 只保留同色 RGB、alpha 为 0（见 vibrancyConfig），
+   不再叠第二层；CSS 染色叠在 Acrylic 上，透出模糊桌面的效果不变。 */
 /* Sidebar peek 抽屉是 fixed overlay,它覆盖的是应用内容而不是窗外壁纸;这里需要
    单独 blur 被覆盖的应用 UI,避免 hover 预览时正文直接透出来。常规展开态仍交给
    原生 vibrancy,非 CINDY family 不命中。 */
