@@ -2,6 +2,8 @@ import { useEffect, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { Switch } from '@/components/ui/switch';
 import { toast } from '@/lib/toast';
+import { remoteControlSettings } from './RemoteControlSection.settings-search';
+import { useSettingDefinition } from './useSettingDefinition';
 
 /**
  * 「让我的其他电脑用本机模型」：默认关闭，用户在这里手动打开；这是唯一的开关。与供应商分享
@@ -9,6 +11,7 @@ import { toast } from '@/lib/toast';
  */
 export function OwnComputerModelAccessSetting() {
   const { t } = useTranslation();
+  const setting = useSettingDefinition(remoteControlSettings.ownModelAccess);
   const [enabled, setEnabled] = useState<boolean | null>(null);
   const [busy, setBusy] = useState(false);
   const revision = useRef(0);
@@ -29,18 +32,20 @@ export function OwnComputerModelAccessSetting() {
   }, []);
 
   if (enabled === null) return null;
-  const title = t('settings.devices.ownModelAccess.title');
+  const title = setting.title;
   return (
     <section
+      {...setting.anchorProps}
       aria-label={title}
       data-testid="own-computer-model-access"
       className="flex items-center justify-between gap-4 rounded-lg bg-[var(--settings-input-bg)] p-3"
     >
       <div className="flex min-w-0 flex-col gap-1">
         <p className="text-13 font-medium text-[var(--text-primary)]">{title}</p>
-        <p className="text-12 text-[var(--text-tertiary)]">{t('settings.devices.ownModelAccess.hint')}</p>
+        <p className="text-12 text-[var(--text-tertiary)]">{setting.description}</p>
       </div>
       <Switch
+        {...setting.controlProps}
         aria-label={title}
         disabled={busy}
         checked={enabled}
