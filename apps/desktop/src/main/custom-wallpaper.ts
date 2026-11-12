@@ -143,3 +143,9 @@ async function recycleUnusedWallpapers(): Promise<void> {
     log.warn('Unused client wallpaper cleanup deferred');
   }
 }
+
+/** Appearance changes release theme references through the same media owner. */
+export async function recycleAppearanceWallpapers(): Promise<void> {
+  try { await withClientWallpaperLock(recycleUnusedWallpapers); }
+  catch { log.warn('Unused client wallpaper cleanup deferred'); }
+}

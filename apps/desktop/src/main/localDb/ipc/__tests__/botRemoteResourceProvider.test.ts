@@ -153,7 +153,7 @@ it('reports a teammate this computer no longer has as not found, without failing
     .rejects.toMatchObject({ code: 'NOT_FOUND', message: 'remote resource does not exist' });
   await expect(remoteResourceRegistry.get(context, { client,
     ref: { collectionId: 'teammates', kind: 'bot', id: 'todos:gone' } }))
-    .rejects.toMatchObject({ code: 'NOT_FOUND', message: 'Teammate unavailable' });
+    .rejects.toMatchObject({ code: 'NOT_FOUND', message: "Buddy unavailable" });
 });
 
 // The phone and other Macs report what they showed; the host keeps the one position every device reads.
