@@ -26,6 +26,7 @@ import { createPiSubscriptionWebSocket } from '../../../desktop/src/main/maker-h
 import { chatgptAccountIdFromTokens } from '../../../desktop/src/main/maker-host/codexCredentialRead.js';
 import { createHostCodexCredentials } from './codex-credentials.js';
 import { invalidateHostCodexLogin } from './codex-invalidation.js';
+import { createHostCodexSystemLogin, resolveHostSystemCodexAuthPath } from './codex-system-login.js';
 import { createCodexAuthBoundary } from './codex-auth-boundary.js';
 import { createCodexProxyInbound } from './codex-proxy-inbound.js';
 import { createLogger } from '../../../desktop/src/main/logger.js';
@@ -70,6 +71,17 @@ export function createHostCodexRuntime(options: {
   const credential = () => { check(); return options.modelAccess.gateway.credential || null; };
   const endpoint = () => { check(); return options.modelAccess.gateway.endpoint; };
   const native = createHostCodexCredentials(options.profileDir, options.config.codexAccounts);
+  // The desktop Codex adapter's reconciliation with the system login: only when installed
+  // (codex-system-login.ts). One per runtime; an owner change builds a new runtime.
+  const systemAuthPath = resolveHostSystemCodexAuthPath();
+  const systemLogin = createHostCodexSystemLogin({
+    codexHome: path.join(options.profileDir, 'codex-home'), systemAuthPath,
+    loginActive: () => options.config.codexAccounts.isCodexAccountLoginActive('openai'),
+    // The desktop's onOAuthBindingClaimed: a claimed credential is an auth boundary for Pi.
+    onBindingClaimed: () => { if (current()) options.mcp.invalidatePiEnvironment(); },
+  });
+  // As the desktop's warmUp at startup: only an existing system login is reconciled.
+  void systemLogin.reconcile().catch(() => undefined);
   // The Host's Codex loopback proxies require inbound credentials (codex-proxy-inbound.ts).
   const inbound = createCodexProxyInbound(current);
   const proxy = createCodexProxyHost({
@@ -100,7 +112,12 @@ export function createHostCodexRuntime(options: {
     invalidateXaiBridgeAuth: (...args) => xai.invalidateXaiBridgeAuth(...args),
     chatgptAccountIdFromTokens: (...args) => chatgptAccountIdFromTokens(...args),
     desktopCodexAuthAdapter: {
-      getAccessToken: async providerId => { check(); return native.readAccessToken(providerId); },
+      // As the desktop adapter's getAccessToken: reconcile before reading the native token.
+      getAccessToken: async providerId => {
+        check();
+        if (!providerId || providerId === 'openai') await systemLogin.reconcile();
+        check(); return native.readAccessToken(providerId);
+      },
       // The bridge has just matched the rejected token against getAccessToken above.
       invalidate: reason => invalidateNative(reason),
       captureOAuthDispatchProof: (accessToken, accountId, providerId) => native.captureDispatchProof(accessToken, accountId, providerId),
@@ -130,7 +147,7 @@ export function createHostCodexRuntime(options: {
   });
   const invalidateNative = async (reason: string, context?: { providerId?: string; credentialGeneration?: string | null; credentialAttribution?: 'unproven'; failedAccessToken?: string }) => {
     check();
-    await invalidateHostCodexLogin({ codexHome: path.join(options.profileDir, 'codex-home'), reason, ...context,
+    await invalidateHostCodexLogin({ codexHome: path.join(options.profileDir, 'codex-home'), systemAuthPath, reason, ...context,
       loginInProgress: () => options.config.codexAccounts.isCodexAccountLoginActive('openai'),
       // The desktop's invalidation runs logout(), whose cleanup calls onLogoutSuccess.
       disposeLocalHost: () => authBoundary.afterLogout(),
@@ -188,7 +205,7 @@ export function createHostCodexRuntime(options: {
     },
   };
   return { deps, proxy, native, readRoute, modelContext, fastPolicies: policies, fastRequestPolicy: requestPolicy, closeSession: proxy.unregister,
-    invalidateNative, authBoundary,
+    invalidateNative, authBoundary, systemAuthPath, systemLogin,
     /** What this runtime's Codex processes carry to its proxies (tests; never logged). */
     inboundToken: () => inbound.token(),
     /** How this runtime retires the local Codex hosts (the agent graph's CodexAgent). */

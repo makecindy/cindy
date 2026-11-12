@@ -14,7 +14,8 @@ import type { AgentDeps, AgentKind, AuthAdapter, AuthAdapterOptions, AuthLoginOp
 import { hasClaudeNativeLogin } from '../../../desktop/src/main/maker-host/claude-native-auth.ts';
 import { createMakerLogger } from '../../../desktop/src/main/maker-host/logger-adapter.js';
 import { readCodexLocalAuthState } from '../../../desktop/src/main/maker-host/codex-local-auth-state.js';
-import { readHostCodexInvalidation } from './codex-invalidation.js';
+import { readHostCodexInvalidation, readHostCodexRecoveryRequirement } from './codex-invalidation.js';
+import { createHostCodexSystemLogin, detectHostCodexCredentialScope, resolveHostSystemCodexAuthPath } from './codex-system-login.js';
 import { isAnthropicWireModel } from '../../../desktop/src/main/maker-host/claude-gateway-config.js';
 import { createPiAuthAdapter } from '../../../desktop/src/main/maker-host/pi-auth.js';
 import { CLAUDE_ACCOUNT_RETIRED_REASON, subscriptionAccountKind } from '../../../desktop/src/main/maker-host/subscription-account-kind.js';
@@ -290,12 +291,18 @@ export function createCodexLocalCliAuth(gateway: HostGateway | null | undefined,
     /** The desktop adapter's onLoginSuccess and onLogoutSuccess (codex-auth-boundary.ts). */
     afterLogin?: () => Promise<void>;
     afterLogout?: () => Promise<void>;
+    /** The runtime's reconciliation with the system Codex login (codex-system-login.ts). */
+    systemLogin?: ReturnType<typeof createHostCodexSystemLogin>;
   }) {
   const invalidate = native?.invalidate;
   if (!codexHome || !path.isAbsolute(codexHome)) throw new Error('Codex requires an explicit isolated profile');
   const owner = activeOwnerScopeKey();
   const current = () => owner === activeOwnerScopeKey() && !isAppSessionBoundaryPending();
-  return bindAuthOwner({
+  // The desktop adapter's reconciliation with the system Codex login (codex-system-login.ts);
+  // without the Codex runtime there is none.
+  const systemLogin = native?.systemLogin ?? createHostCodexSystemLogin({ codexHome, systemAuthPath: null, loginActive: () => false });
+  const systemAuthPath = systemLogin.systemAuthPath;
+  const adapter = bindAuthOwner({
     // maker-core reports a server-rejected login here (codex/index.ts), as on the desktop.
     ...(invalidate ? { invalidate } : {}),
     async getState(opts?: AuthAdapterOptions) {
@@ -316,11 +323,24 @@ export function createCodexLocalCliAuth(gateway: HostGateway | null | undefined,
         : { authenticated: false, errorReason: 'no_key' };
       if (opts?.credentialMode === 'gateway-key' || (['xd', 'cindy'] as Array<string | null | undefined>).includes(opts?.providerId)) return gatewayState;
       // As the desktop's readState: a server-invalidated login reports why until it is replaced.
-      const invalidated = readHostCodexInvalidation(codexHome);
+      const invalidated = readHostCodexInvalidation(codexHome, systemAuthPath);
       if (invalidated) return { authenticated: false, errorReason: invalidated.reason, credentialScope: invalidated.credentialScope };
-      const native = isNativeProviderAuthBound('openai') ? await readCodexLocalAuthState(codexHome) : null;
-      if (native?.authenticated && native.authSource === 'oauth') return native;
+      // Then the reconciliation with the system login, as readState does before reading auth.json.
+      await systemLogin.reconcile();
+      const recovery = readHostCodexRecoveryRequirement(codexHome, systemAuthPath);
+      const local = await readCodexLocalAuthState(codexHome);
+      // The desktop reads the token through getAccessToken, which reconciles again before its
+      // binding check, so a claim the first pass abandoned is made for the current session.
+      if (local.authenticated && local.authSource === 'oauth') await systemLogin.reconcile();
+      const native = isNativeProviderAuthBound('openai') ? local : null;
+      if (native?.authenticated && native.authSource === 'oauth') {
+        const scoped = { ...native, credentialScope: detectHostCodexCredentialScope(codexHome, systemAuthPath) };
+        // The desktop's withCodexRecoveryRequirement.
+        return recovery ? { ...scoped, recoveryRequiredReason: recovery.reason, credentialScope: recovery.credentialScope } : scoped;
+      }
       if (opts?.providerId === 'openai' || opts?.credentialMode === 'oauth-bearer') {
+        // The desktop's codexRecoveryRequiredErrorState.
+        if (recovery) return { authenticated: false, errorReason: recovery.reason, credentialScope: recovery.credentialScope };
         if (opts?.credentialMode === 'oauth-bearer') {
           // As the desktop's oauth-bearer readState: the local file's own reason, else no_oauth.
           const local = native ?? await readCodexLocalAuthState(codexHome);
@@ -339,6 +359,8 @@ export function createCodexLocalCliAuth(gateway: HostGateway | null | undefined,
         if (!result.ok || !current()) return { authenticated: false, errorReason: result.reason ?? 'owner_changed' };
         try { bindNativeProviderAuth('openai', { instanceIsolated: true }); }
         catch (error) { result.rollbackCredentials?.(); throw error; }
+        // The desktop's reconcileWithSystemCodexAfterLogin.
+        if (current()) await systemLogin.reconcileAfterLogin();
         if (current()) await native?.afterLogin?.();
         return accounts.codexAccountState('openai');
       } finally { if (current()) native?.onAuthBoundary?.(); }
@@ -358,6 +380,11 @@ export function createCodexLocalCliAuth(gateway: HostGateway | null | undefined,
         return { CODEX_HOME: opts.nativeSubscriptionAccount.configDir };
       }
       await mkdir(codexHome, { recursive: true, mode: 0o700 });
+      // As the desktop's getAuthEnv: reconcile unless the login is invalidated, except for the
+      // gateway-key and provider-oauth spawns and independent accounts, which it never reconciles for.
+      const reconcileForSpawn = opts?.credentialMode !== 'gateway-key' && opts?.credentialMode !== 'provider-oauth'
+        && !(opts?.providerId && accounts?.isCodexAccountProvider(opts.providerId));
+      if (reconcileForSpawn && !readHostCodexInvalidation(codexHome, systemAuthPath)) await systemLogin.reconcile();
       if (opts?.providerId === 'openai' || opts?.credentialMode === 'oauth-bearer') return { CODEX_HOME: codexHome };
       if (opts?.providerId && !['xd', 'cindy', 'openai'].includes(opts.providerId)) {
         if (accounts?.isCodexAccountProvider(opts.providerId)) {
@@ -371,6 +398,7 @@ export function createCodexLocalCliAuth(gateway: HostGateway | null | undefined,
       return { CODEX_HOME: codexHome, ...(gateway?.credential ? { XDT_CODEX_API_KEY: gateway.credential } : {}) };
     },
   });
+  return adapter;
 }
 
 
@@ -382,6 +410,7 @@ export function createHostAgentGraph(options: HostAgentGraphOptions) {
       onAuthBoundary: () => options.codexRuntime!.subscriptions.bridge.clearChatgptBridgeCredentialCache(),
       afterLogin: () => options.codexRuntime!.authBoundary.afterLogin(),
       afterLogout: () => options.codexRuntime!.authBoundary.afterLogout(),
+      systemLogin: options.codexRuntime!.systemLogin,
     } : undefined);
   // The desktop retires every local Codex host at an auth boundary (maker-host/index.ts).
   options.codexRuntime?.setLocalHostRetirement(async reason => {

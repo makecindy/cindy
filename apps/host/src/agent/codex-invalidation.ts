@@ -10,18 +10,22 @@ import {
   writeUnprovenCodexAuthSuppressionMarker,
 } from '../../../desktop/src/main/maker-host/codex-auth-invalidation.js';
 import { currentCodexCredentialGeneration } from '../../../desktop/src/main/maker-host/codexCredentialRead.js';
-import { isNativeProviderAuthRevoked, unbindNativeProviderAuth } from '../../../desktop/src/main/maker-host/nativeProviderAuthBinding.js';
+import { isNativeProviderAuthBound, isNativeProviderAuthRevoked, unbindNativeProviderAuth } from '../../../desktop/src/main/maker-host/nativeProviderAuthBinding.js';
+import { getActiveAppSession } from '../../../desktop/src/main/appSessionState.js';
+import { detectHostCodexCredentialScope } from './codex-system-login.js';
 import { createLogger } from '../../../desktop/src/main/logger.js';
 
 const log = createLogger('host-codex-invalidation');
 
 /**
- * The Host's native OpenAI login lives only in the profile's codex-home and is never
- * shared with the system CLI. A path inside codex-home that never exists stands in for
- * the system login, so the marker is the isolated one the desktop writes when no system
- * login is present, and the system ~/.codex is never read.
+ * Where a runtime that never reconciles with the system login (a source run, see
+ * codex-system-login.ts) points the marker: a path inside codex-home that never exists, so
+ * the marker is the one the desktop writes when no system login is present.
  */
 const NO_SYSTEM_CODEX_AUTH = '.cindy-host-no-system-codex-auth.json';
+const markerSystemPath = (codexHome: string, systemAuthPath: string | null | undefined) =>
+  systemAuthPath ?? path.join(codexHome, NO_SYSTEM_CODEX_AUTH);
+type CredentialScope = 'instance-isolated' | 'system-shared' | 'unknown';
 
 export type HostCodexInvalidationResult = 'invalidated' | 'stale' | 'unproven' | 'not-native' | 'failed';
 
@@ -36,9 +40,18 @@ const errorText = (error: unknown) => error instanceof Error ? error.message : S
  * The invalidation the profile's marker still reports, as the desktop restores it on
  * startup: the rejected login is still in place (or gone) and nothing replaced it.
  */
-export function readHostCodexInvalidation(codexHome: string): { reason: string; credentialScope: 'instance-isolated' | 'system-shared' | 'unknown' } | null {
-  const restored = restoreInvalidationStateOnStartup(codexHome, path.join(codexHome, NO_SYSTEM_CODEX_AUTH), path.join(codexHome, 'auth.json'));
+export function readHostCodexInvalidation(codexHome: string, systemAuthPath?: string | null): { reason: string; credentialScope: CredentialScope } | null {
+  const restored = restoreInvalidationStateOnStartup(codexHome, markerSystemPath(codexHome, systemAuthPath), path.join(codexHome, 'auth.json'));
   return restored.invalidatedReason ? { reason: restored.invalidatedReason, credentialScope: restored.credentialScope ?? 'unknown' } : null;
+}
+
+/**
+ * The desktop's recovery requirement (oauthRecoveryRequiredReason): the invalidated login was
+ * replaced, but no account request has proven the replacement yet.
+ */
+export function readHostCodexRecoveryRequirement(codexHome: string, systemAuthPath?: string | null): { reason: string; credentialScope: CredentialScope } | null {
+  const restored = restoreInvalidationStateOnStartup(codexHome, markerSystemPath(codexHome, systemAuthPath), path.join(codexHome, 'auth.json'));
+  return restored.recoveryRequiredReason ? { reason: restored.recoveryRequiredReason, credentialScope: restored.credentialScope ?? 'unknown' } : null;
 }
 
 /**
@@ -51,6 +64,8 @@ export function readHostCodexInvalidation(codexHome: string): { reason: string; 
  */
 export async function invalidateHostCodexLogin(input: {
   codexHome: string;
+  /** The system login this runtime reconciles with (codex-system-login.ts); null when none. */
+  systemAuthPath?: string | null;
   reason: string;
   /** Independent accounts are invalidated through the account store, never here. */
   providerId?: string;
@@ -64,7 +79,7 @@ export async function invalidateHostCodexLogin(input: {
   /** The desktop's onLogoutSuccess: retire the local Codex host holding the old token. */
   disposeLocalHost?: () => Promise<void>;
   /** The desktop's onInvalidatedBroadcast, called last, after the marker write and cleanup. */
-  onInvalidated?: (credentialScope: 'instance-isolated' | 'unknown') => void | Promise<void>;
+  onInvalidated?: (credentialScope: CredentialScope) => void | Promise<void>;
 }): Promise<HostCodexInvalidationResult> {
   if (input.providerId && input.providerId !== 'openai') return 'not-native';
   const authPath = path.join(input.codexHome, 'auth.json');
@@ -88,10 +103,15 @@ export async function invalidateHostCodexLogin(input: {
     if (sha256 !== current.sha256) return 'stale';
   }
   log.warn('codex auth invalidated', { reason: input.reason });
-  const committed = writeInvalidatedSystemCodexAuthMarker(input.codexHome, path.join(input.codexHome, NO_SYSTEM_CODEX_AUTH),
-    input.reason, authPath, 'instance-isolated', undefined,
+  // As the desktop (auth-adapters.ts invalidate): the scope the credential has, and for a
+  // shared system login the owner a renewed system login is restored to.
+  const detectedScope = detectHostCodexCredentialScope(input.codexHome, input.systemAuthPath ?? null);
+  const activeOwnerId = getActiveAppSession().dataOwnerId;
+  const recoveryOwnerId = detectedScope === 'system-shared' && activeOwnerId && isNativeProviderAuthBound('openai') ? activeOwnerId : undefined;
+  const committed = writeInvalidatedSystemCodexAuthMarker(input.codexHome, markerSystemPath(input.codexHome, input.systemAuthPath),
+    input.reason, authPath, detectedScope, recoveryOwnerId,
     { dev: Number(current.dev), ino: Number(current.ino), size: current.size, mtimeMs: current.mtimeMs, sha256: current.sha256 });
-  let credentialScope: 'instance-isolated' | 'unknown' = 'instance-isolated';
+  let credentialScope: CredentialScope = detectedScope;
   let fallbackCommitted = false;
   if (!committed) {
     // As on the desktop: the provider revocation becomes the coarser cross-restart boundary
@@ -126,7 +146,7 @@ export async function invalidateHostCodexLogin(input: {
   return committed || fallbackCommitted ? 'invalidated' : 'failed';
 }
 
-async function announce(input: Parameters<typeof invalidateHostCodexLogin>[0], credentialScope: 'instance-isolated' | 'unknown') {
+async function announce(input: Parameters<typeof invalidateHostCodexLogin>[0], credentialScope: CredentialScope) {
   try { await input.onInvalidated?.(credentialScope); } catch (error) {
     log.warn('onInvalidatedBroadcast threw', { error: errorText(error) });
   }
@@ -149,9 +169,12 @@ async function invalidateUnattributed(input: Parameters<typeof invalidateHostCod
     log.info('ignoring unproven Codex invalidation while a tracked login is active', { reason: input.reason });
     return 'stale';
   }
-  const committed = writeUnprovenCodexAuthSuppressionMarker(input.codexHome, path.join(input.codexHome, NO_SYSTEM_CODEX_AUTH),
-    authPath, input.reason, 'instance-isolated');
-  let credentialScope: 'instance-isolated' | 'unknown' = 'instance-isolated';
+  const detectedScope = detectHostCodexCredentialScope(input.codexHome, input.systemAuthPath ?? null);
+  const activeOwnerId = getActiveAppSession().dataOwnerId;
+  const recoveryOwnerId = detectedScope === 'system-shared' && activeOwnerId && isNativeProviderAuthBound('openai') ? activeOwnerId : undefined;
+  const committed = writeUnprovenCodexAuthSuppressionMarker(input.codexHome, markerSystemPath(input.codexHome, input.systemAuthPath),
+    authPath, input.reason, detectedScope, recoveryOwnerId);
+  let credentialScope: CredentialScope = detectedScope;
   let fallbackCommitted = false;
   if (!committed) {
     log.error('failed to persist unproven Codex suppression marker; revoking provider claim', { reason: input.reason });
