@@ -5,7 +5,8 @@
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { feishuEvents } from '../events.js';
-import type { IMCardActionEvent } from '../../types.js';
+import type { IMCardActionEvent, IMMessageEvent, IMHost } from '../../types.js';
+import { createFeishuScope, runInScope } from '../moduleScope.js';
 
 type EventHandler = (data: unknown) => Promise<unknown> | unknown;
 
@@ -73,6 +74,7 @@ vi.doMock('../outbound.js', () => ({
   pushReplyAnchor: mocks.pushReplyAnchor,
   pushPatchableOpener: mocks.pushPatchableOpener,
   resolveCardLane: mocks.resolveCardLane,
+  sendCardRaw: async () => ({ messageId: 'om_business' }),
 }));
 
 vi.doMock('../ownerGuard.js', () => ({
@@ -84,6 +86,7 @@ vi.doMock('../ownerGuard.js', () => ({
 
 vi.doMock('../storage.js', () => ({
   readOwnerOpenId: mocks.readOwnerOpenId,
+  readAppId: () => credentials.appId,
 }));
 
 vi.doMock('../moduleScope.js', async (importOriginal) => ({
@@ -92,6 +95,7 @@ vi.doMock('../moduleScope.js', async (importOriginal) => ({
 }));
 
 let wsClient: typeof import('../wsClient.js');
+let sendManagedCard: typeof import('../managedCards.js')['sendManagedCard'];
 
 const credentials = {
   appId: 'cli_card_test',
@@ -154,6 +158,7 @@ afterEach(async () => {
 
 beforeAll(async () => {
   wsClient = await import('../wsClient.js');
+  ({ sendManagedCard } = await import('../managedCards.js'));
 });
 
 afterAll(() => {
@@ -165,6 +170,34 @@ afterAll(() => {
 });
 
 describe('feishu card action inbound', () => {
+  // #10050 integration: actual SDK-registered handler, no pending ask Promise.
+  // The old 3 tests only exercised built-in owner-only controls.
+  it('routes a registered member checker through message ingress, never through system controls', async () => {
+    let saved: string | null = null;
+    const scope = createFeishuScope({ guests: true, host: {
+      managedCards: { read: () => saved, write: (_key: string, next: string) => { saved = next; }, clear: () => { saved = null; } },
+    } as unknown as IMHost });
+    await runInScope(scope, async () => {
+      await connect();
+      await sendManagedCard('g/oc_chat1/omt_t1', { schema: '2.0', body: { elements: [] } }, 'request-1');
+      const messages: IMMessageEvent[] = [];
+      scope.events.on('message', event => messages.push(event));
+      const controls = collectCardActions();
+      const raw = { ...cardActionPayload({ operatorOpenId: 'ou_member', messageId: 'om_business' }),
+        token: 'fixture-callback', action: { tag: 'checker', checked: false, value: { __cindy_managed_card: true } } };
+      const receipt = await mocks.eventHandlers['card.action.trigger']!(raw);
+      await settleImmediate();
+      expect(receipt).toMatchObject({ toast: { type: 'success' } });
+      expect(messages).toHaveLength(1);
+      expect(messages[0]).toMatchObject({ senderId: 'g/oc_chat1/omt_t1', speaker: { id: 'ou_member', isOwner: false } });
+      expect(JSON.parse(messages[0]!.text).action).toEqual({ tag: 'checker', checked: false });
+      expect(controls).toHaveLength(0);
+      await mocks.eventHandlers['card.action.trigger']!(raw);
+      await settleImmediate();
+      expect(messages).toHaveLength(1);
+      await wsClient.stop({ announceOffline: false });
+    });
+  });
   it('normalizes group card senderId to the registered lane', async () => {
     mocks.resolveCardLane.mockReturnValue('g/oc_chat1/omt_t1');
     await connect();
