@@ -4419,11 +4419,24 @@ describe('Pi package executable-code boundary', () => {
       publishPeerRuntimeToken('before-replace');
       await waitForNotifications(1, 1_500);
 
-      await fs.rm(home, { recursive: true, force: true });
-      await fs.mkdir(home, { recursive: true });
-      // The first edge may arrive through events still queued on the old handle
-      // or through the fallback poll, depending on the platform.
-      publishPeerRuntimeToken('first-after-replace');
+      // On a loaded runner, token reads started by the old handle's events can
+      // finish after the directory is recreated and the next token is written,
+      // while the reattach attempt already failed on the missing directory.
+      // Hold those reads back so that ordering happens on every run.
+      const open = fs.open.bind(fs);
+      const slowTokenReads = vi.spyOn(fs, 'open').mockImplementation(async (...args: Parameters<typeof fs.open>) => {
+        if (String(args[0]).includes('change-token')) await new Promise((resolve) => setTimeout(resolve, 40));
+        return open(...args);
+      });
+      try {
+        await fs.rm(home, { recursive: true, force: true });
+        await fs.mkdir(home, { recursive: true });
+        // The first edge may arrive through events still queued on the old handle
+        // or through the fallback poll, depending on the platform.
+        publishPeerRuntimeToken('first-after-replace');
+      } finally {
+        slowTokenReads.mockRestore();
+      }
       await waitForNotifications(2, 5_000);
 
       // The watcher is reattached, so the next edge must not wait for the poll.

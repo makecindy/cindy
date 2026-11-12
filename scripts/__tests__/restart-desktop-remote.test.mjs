@@ -23,6 +23,7 @@ import {
 	isRepositoryDesktopDevProcess,
 	officialProductionUserDataDirs,
 	resolveRestartTargetUserDataDir,
+	retainHostClientTargetForIsolated,
 	sanitizeIsolationName,
 	canonicalizeUserDataDir,
 	formatDesktopStartupFailure,
@@ -1196,6 +1197,23 @@ test("devEnvPrefix passes harness envs through on Windows cmd with quote strippi
 		prefix,
 		'set "XDT_LOGIN_SCENARIO=providers:both" && set "VITE_SPLASH_PHASE_FIXTURE=updating" && set "CINDY_CUA_SMOKE=0" && ',
 	);
+});
+
+test("CINDY_HOST_API reaches the desktop only for an isolated restart", () => {
+	const target = "http://127.0.0.1:3456";
+	const isolated = { CINDY_HOST_API: target };
+	assert.equal(retainHostClientTargetForIsolated(isolated, true), "kept");
+	assert.ok(devEnvPrefix(isolated, "darwin").includes(`CINDY_HOST_API='${target}'`));
+	assert.ok(devEnvPrefix(isolated, "win32").includes(`set "CINDY_HOST_API=${target}"`));
+
+	// A shared/production restart drops it from every launch path: the spawned
+	// runner inherits process.env, and a reused macOS Terminal gets it unset.
+	const shared = { CINDY_HOST_API: target };
+	assert.equal(retainHostClientTargetForIsolated(shared, false), "dropped");
+	assert.equal(shared.CINDY_HOST_API, undefined);
+	assert.ok(!devEnvPrefix(shared, "darwin").includes("CINDY_HOST_API"));
+	assert.ok(darwinStaleDevEnvUnset(shared).includes("CINDY_HOST_API"));
+	assert.equal(retainHostClientTargetForIsolated({}, false), "absent");
 });
 
 test("devEnvPrefix forwards only the requested local relay override and unsets stale macOS values", () => {

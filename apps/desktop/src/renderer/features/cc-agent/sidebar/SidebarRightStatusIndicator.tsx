@@ -6,7 +6,7 @@ import type { SidebarRightStatusKind } from './sidebarRightStatus';
 
 /**
  * 会话行的右侧状态指示器。文字模式与列表模式共用这一份
- * 颜色、文案和选中反白规则，各宿主只决定定位。
+ * 颜色和文案；状态点保留语义色，不随选中前景反色，各宿主只决定定位。
  */
 export function SidebarRightStatusIndicator({
   kind,
@@ -58,11 +58,7 @@ export function SidebarRightStatusIndicator({
       aria-label={label}
       title={label}
     >
-      <span
-        className="size-2 rounded-full"
-        style={{ backgroundColor: isActive ? 'var(--sidebar-item-active-foreground)' : color }}
-        aria-hidden
-      />
+      <span className="size-2 rounded-full" style={{ backgroundColor: color }} aria-hidden />
     </span>
   );
 }

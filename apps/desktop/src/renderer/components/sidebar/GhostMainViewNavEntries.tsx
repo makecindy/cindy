@@ -203,7 +203,7 @@ export function GhostMainViewNavEntry({
           className={cn(
             'pointer-events-none mr-1.5 grid size-6 shrink-0 place-items-center rounded-full opacity-0 transition-[background-color,color,opacity] duration-150 focus-visible:pointer-events-auto focus-visible:opacity-100 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--focus-ring)] group-hover/main-view:pointer-events-auto group-hover/main-view:opacity-100 group-focus-within/main-view:pointer-events-auto group-focus-within/main-view:opacity-100',
             active
-              ? 'text-sidebar-item-active-foreground hover:bg-[var(--sidebar-item-active-border)] hover:text-sidebar-item-active-foreground'
+              ? 'text-sidebar-item-active-foreground hover:bg-[var(--surface-hover-soft)] hover:text-sidebar-item-active-foreground'
               : 'text-[var(--sidebar-nav-text)] hover:bg-[var(--surface-hover-soft)] hover:text-[var(--text-primary)]',
           )}
         >
