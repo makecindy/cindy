@@ -1,3 +1,4 @@
+import '@/styles/chatContentDirection.css';
 import { deviceDisplayName } from '@/lib/deviceName';
 import {
   useCallback,
@@ -2437,7 +2438,7 @@ export function ChatInput({
     editable: !composerEditorLocked,
     extensions: [
       Document,
-      Paragraph,
+      Paragraph.configure({ HTMLAttributes: { dir: 'auto' } }),
       Text,
       ComposerListItem,
       ComposerBulletList,
@@ -10029,17 +10030,20 @@ export function ChatInput({
                   dense={effectiveDenseToolbar}
                   visualVariant={isCreateAgentVariant ? 'create-agent' : 'default'}
                 />
-                <PermissionSelector
-                  footer={sessionId && !getSessionDeviceId(sessionId) && !deviceLinkDeviceId && !sharedGuest ? <PluginWriteAccessRecovery key={sessionId} sessionId={sessionId} onGranted={onPermissionModeDidChange} /> : undefined}
-                  permissionMode={activePermissionMode}
-                  onPermissionModeChange={handlePermissionModeChange}
-                  vendorKey={vendorKey}
-                  deviceId={deviceLinkDeviceId ?? undefined}
-                  disabled={composerEditorLocked || settingsLocked || sharedGuest}
-                  dense={effectiveDenseToolbar}
-                  iconOnly={useUltraCompactToolbar}
-                  visualVariant={isCreateAgentVariant ? 'create-agent' : 'default'}
-                />
+                {/* 裸图标没有外圈，任务内向加号靠近 4px 作视觉间距补偿。 */}
+                <div className={cn('min-w-0 shrink', sessionId && '-ml-1')}>
+                  <PermissionSelector
+                    footer={sessionId && !getSessionDeviceId(sessionId) && !deviceLinkDeviceId && !sharedGuest ? <PluginWriteAccessRecovery key={sessionId} sessionId={sessionId} onGranted={onPermissionModeDidChange} /> : undefined}
+                    permissionMode={activePermissionMode}
+                    onPermissionModeChange={handlePermissionModeChange}
+                    vendorKey={vendorKey}
+                    deviceId={deviceLinkDeviceId ?? undefined}
+                    disabled={composerEditorLocked || settingsLocked || sharedGuest}
+                    dense={effectiveDenseToolbar}
+                    iconOnly={Boolean(sessionId) || useUltraCompactToolbar}
+                    visualVariant={isCreateAgentVariant ? 'create-agent' : 'default'}
+                  />
+                </div>
                 {useNarrowToolbar && !useCompactMiddleToolbar && <>{middleToolbarSlot}</>}
               </div>
               {hasPluginToolbar && (
@@ -10805,7 +10809,7 @@ function VoiceInputButton({
           // (2026-07-22 用户定稿:裸态只用于 +/权限/模型;语音/发送常驻框,create-agent 不再分叉)。
           // 宽度由 inline style 驱动,标签溢出裁剪。
           'h-[30px] justify-start overflow-hidden p-0',
-          'bg-[var(--composer-pill-bg,#FCFCFC)] dark:bg-[var(--composer-pill-bg,#393838)] border border-[var(--border-default)] text-[var(--composer-pill-icon,#3C3F43)] dark:text-[var(--composer-pill-icon,#D9D9D9)]' /* spec 2026-07-17, token by 一哥 */,
+          'bg-[var(--composer-pill-bg)] border border-[var(--border-default)] text-[var(--composer-pill-icon)]' /* spec 2026-07-17, token by 一哥 */,
           'hover:bg-[var(--model-trigger-hover)]',
           // 录音态:与主题同极性的 chip 填充(light 亮灰 / dark 深灰),红点 + 计时承担状态信号
           (activeRecording || stopping) &&

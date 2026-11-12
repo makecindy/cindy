@@ -11137,7 +11137,8 @@
         "capability": {
           "GROUP_AUTHORIZATION_REQUIRED": "{{name}} 的工具呼叫未執行：群內授權已失效或不允許此操作。請由夥伴主人在目前群組重新發起。",
           "GROUP_AUTHORIZATION_UNAVAILABLE": "暫時無法核驗 {{name}} 的群聊授權，這次工具呼叫未執行。請在連線恢復後重試。",
-          "ATTACHMENTS_UNAVAILABLE": "部分附件未交給 {{name}}（下載失敗或數量限制）。請重新傳送這次需要的附件。"
+          "ATTACHMENTS_UNAVAILABLE": "部分附件未交給 {{name}}（下載失敗或數量限制）。請重新傳送這次需要的附件。",
+          "GROUP_ASSISTANT_UNAVAILABLE": "{{name}}，連接你的 Cindy 後才能讓 Cindy 替你工作（你的電腦上現在沒有在線的 Cindy）。"
         }
       },
       "settings": {
@@ -11262,6 +11263,38 @@
           "failed": "失敗了",
           "cancelled": "已取消",
           "timed-out": "已逾時"
+        },
+        "label": "任務",
+        "untitled": "未命名任務",
+        "askedBy": "{{requester}} 交辦的",
+        "pr": "PR #{{number}}",
+        "open": "開啟任務「{{title}}」",
+        "live": {
+          "running": "進行中",
+          "waiting": "等待回覆",
+          "idle": "閒置",
+          "failed": "出錯了"
+        },
+        "othersSaid": "話題裡其他人說的"
+      },
+      "assistant": {
+        "groupRecent": "群裡最近的訊息",
+        "groupNew": "群裡的新訊息",
+        "threadRecent": "話題裡最近的訊息",
+        "threadNew": "話題裡的新訊息",
+        "replyingTo": "回覆「{{name}}」：{{text}}",
+        "earlierOmitted": "（更早的訊息略去）",
+        "actingFor": "{{name}} · 替 {{person}}",
+        "checkout": {
+          "gitMissing": "（Cindy）這個群的專案 {{repo}} 還沒下載到這台電腦：這台電腦還沒有安裝 git。{{guide}}裝好後再 @Cindy，Cindy 會自動下載專案並在裡面工作。",
+          "signInOpened": "（Cindy）這個群的專案 {{repo}} 還沒下載到這台電腦：需要先連接你的 GitHub 帳號。Cindy 已在這台電腦上開啟 GitHub 登入，登入後再 @Cindy，Cindy 會自動下載專案。",
+          "signIn": "（Cindy）這個群的專案 {{repo}} 還沒下載到這台電腦：需要先連接你的 GitHub 帳號。請在這台電腦的 Cindy 裡登入 GitHub，然後再 @Cindy。",
+          "unavailable": "（Cindy）這個群的專案 {{repo}} 沒能下載到這台電腦：你的 GitHub 帳號可能沒有這個儲存庫的權限，或者網路不通。確認能在 GitHub 上開啟這個儲存庫後再 @Cindy。",
+          "installGit": {
+            "darwin": "在「終端機」裡執行 xcode-select --install，依提示安裝即可。",
+            "win32": "從 https://git-scm.com/download/win 下載 Git 安裝，全部使用預設選項即可。",
+            "linux": "用系統的套件管理工具安裝 git（例如 sudo apt install git）。"
+          }
         }
       },
       "files": {
@@ -11465,10 +11498,21 @@
           "accessTools": "可用工具與資料",
           "replies": "夥伴怎麼接話",
           "replyModeMentionedNote": "不 @ 人時，夥伴不會接話。",
+          "assistant": "群裡的 Cindy",
+          "assistantHint": "誰 @ 它，就在誰自己的電腦上做。",
+          "replyModeAssistant": "Cindy 回答",
+          "replyModeAssistantNote": "由群裡的 Cindy 回答。",
           "work": "分工",
           "ownFolder": "群組自己的資料夾",
-          "projectDirHint": "分工時，夥伴們在這裡工作。",
+          "projectDirHint": "只在這台電腦上生效。",
           "projectDirClearHint": "改用群組自己的資料夾",
+          "project": "專案",
+          "projectCaption": "夥伴在群裡回覆和分工都在這個專案裡做。儲存庫全群共用，資料夾只存在這台電腦上。",
+          "githubRepo": "GitHub 儲存庫",
+          "githubRepoHint": "填 owner/name。沒選資料夾的電腦會用本機的這個專案，沒有就自動下載一份。",
+          "githubRepoSaveFailed": "儲存庫沒有儲存，請檢查後再試。",
+          "projectFolder": "這台電腦上的資料夾",
+          "projectDirAutoHint": "依儲存庫自動找到的本機專案。",
           "organizerHint": "安排誰做哪一步；預設是第一位夥伴。",
           "autoContinueHint": "關閉時，每一步都等你點「繼續」。",
           "workCaption": "選了 git 專案時，每次分工都會開新分支，不動你手上的程式碼。專案資料夾和自動交接只在這台電腦上生效。",
@@ -14213,6 +14257,8 @@
       "sessionSentNamed": "由任務「{{name}}」傳送",
       "sessionViewSource": "檢視來源任務",
       "botSentNamed": "由夥伴「{{name}}」傳送",
+      "groupThreadSent": "由「{{name}}」在群聊「{{group}}」的話題裡傳送",
+      "groupRequestSent": "來自群「{{group}}」· {{name}}",
       "orcaFromLead": "來自 Lead 的訊息",
       "orcaFromWorker": "來自 Worker 的訊息",
       "orcaFromWorkerBatch": "系統回傳的 {{count}} 條 Worker 結果",
@@ -17634,6 +17680,7 @@
       "dingtalkBotDisconnectFailed": "釘釘機器人解綁失敗"
     },
     "errors": {
+      "piStartupCloudFile": "發現僅在雲端的指令檔案：{{path}}。它可能使 Pi 啟動等待。請在 Finder 中下載該檔案，確認已儲存在本機後重試；逾時也可能另有原因。",
       "openFileFailed": "無法在系統中開啟檔案",
       "emptyResponse": "模型沒有返回內容。請重試。上下文很長時，也可以換一個模型。",
       "turnFailed": "任務執行失敗（模型未返回錯誤詳情），請重試。",
