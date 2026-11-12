@@ -113,7 +113,8 @@ test('real engine stages, preserves edits, switches, rolls back and blocks parti
   git('worktree', 'add', '--detach', client, previous);
   put(path.join(bin, 'pnpm'), '#!/bin/sh\n[ "${CHECK_FAIL:-}" != 1 ]\n'); fs.chmodSync(path.join(bin, 'pnpm'), 0o755);
   const tools = path.resolve(here, '../personal-build');
-  const env = { ...process.env, PATH: `${bin}:${process.env.PATH}`, PERSONAL_STATE_DIR: state, PERSONAL_SOURCE_DIR: source, PERSONAL_CLIENT_DIR: client, PERSONAL_STAGING_DIR: path.join(root, 'stage'), PERSONAL_DATA_DIR: data, PERSONAL_PREVIOUS_REF: 'personal-build/fixture/previous', PERSONAL_TARGET: target, PERSONAL_MODE: 'shared', PERSONAL_TOOLS_DIR: tools };
+  // ZDOTDIR keeps the developer's ~/.zshenv from putting a real pnpm ahead of the stub.
+  const env = { ...process.env, ZDOTDIR: root, PATH: `${bin}:${process.env.PATH}`, PERSONAL_STATE_DIR: state, PERSONAL_SOURCE_DIR: source, PERSONAL_CLIENT_DIR: client, PERSONAL_STAGING_DIR: path.join(root, 'stage'), PERSONAL_DATA_DIR: data, PERSONAL_PREVIOUS_REF: 'personal-build/fixture/previous', PERSONAL_TARGET: target, PERSONAL_MODE: 'shared', PERSONAL_TOOLS_DIR: tools };
   const engine = (mode, extra = {}) => spawnSync('zsh', [path.join(tools, 'mac-engine.zsh'), mode], { env: { ...env, ...extra }, encoding: 'utf8' });
   let result = engine('stage'); assert.equal(result.status, 0, result.stdout + result.stderr);
   put(path.join(root, 'stage/file'), 'staging edit'); assert.notEqual(engine('stage').status, 0); assert.equal(fs.readFileSync(path.join(root, 'stage/file'), 'utf8'), 'staging edit');

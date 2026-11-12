@@ -76,6 +76,7 @@ const SubagentModelSection = lazy(() => import('./SubagentModelSection').then(mo
 const AuxiliaryModelSection = lazy(() => import('./AuxiliaryModelSection').then(module => ({ default: module.AuxiliaryModelSection })));
 const VisionBridgeSection = lazy(() => import('./VisionBridgeSection').then(module => ({ default: module.VisionBridgeSection })));
 const ProvidersSection = lazy(() => import('./ProvidersSection').then(module => ({ default: module.ProvidersSection })));
+const ModelGroupsSection = lazy(() => import('./ModelGroupsSection').then(module => ({ default: module.ModelGroupsSection })));
 const McpServersSection = lazy(() => import('./McpServersSection').then(module => ({ default: module.McpServersSection })));
 const RemoteControlSection = lazy(() => import('./RemoteControlSection').then(module => ({ default: module.RemoteControlSection })));
 const LocalAgentSection = lazy(() => import('./LocalAgentSection').then(module => ({ default: module.LocalAgentSection })));
@@ -678,6 +679,12 @@ function SettingsViewContent() {
               </div>
             )}
 
+            {activeTab === 'model-groups' && (
+              <div role="tabpanel" id="settings-panel-model-groups" aria-labelledby="settings-tab-model-groups">
+                <ModelGroupsSection />
+              </div>
+            )}
+
             {activeTab === 'providers' && (
               <div
                 role="tabpanel"
@@ -701,10 +708,11 @@ function SettingsViewContent() {
                 aria-labelledby="settings-tab-remote-control"
               >
                 <section aria-label={t(localAgentSettings.connections.sectionKey)}>
-                  {/* 远程连接的页面标题在 RemoteControlSection 里，本机应用连接是它下面的分区。 */}
+                  {/* 本机应用连接排在 SSH 之后，Agent-Net 设置卡片保持在整页最底部。 */}
                   <SettingsPageScope>
-                    <RemoteControlSection />
-                    <LocalAgentSection />
+                    <RemoteControlSection>
+                      <LocalAgentSection />
+                    </RemoteControlSection>
                   </SettingsPageScope>
                 </section>
               </div>

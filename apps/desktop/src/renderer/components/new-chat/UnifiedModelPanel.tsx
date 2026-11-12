@@ -128,6 +128,8 @@ export interface UnifiedModelPanelProps {
   pinnedTop?: ReactNode;
   /** pinnedTop 当前有内容：搜索只命中它时不显示空结果。 */
   pinnedTopHasRows?: boolean;
+  /** 左侧栏「模型组」一格及其内容(新任务草稿才传)；不传就没有这一格。 */
+  modelGroupsView?: ReactNode;
   providers: readonly ProviderView[];
   /**
    * 供应商分组的显示顺序(设置 → 模型供应商的拖动序);缺省 = 目录首见序。
@@ -387,6 +389,7 @@ export interface UnifiedModelPanelProps {
 export function UnifiedModelPanel({
   pinnedTop,
   pinnedTopHasRows = false,
+  modelGroupsView,
   providers,
   providerOrder,
   agents,
@@ -581,11 +584,11 @@ export function UnifiedModelPanel({
 
   const localRailItems = remoteSources?.localRailItems;
   const remoteGroups = remoteSources?.groups;
+  const hasModelGroupsView = modelGroupsView !== undefined;
   const railItems = useMemo<UnifiedRailItem[]>(() => {
-    if (!localRailItems) return buildUnifiedRail(entries, undefined, providerOrder);
     // 远程 Agent:本机格按本机目录派生(此刻 entries 可能是某台电脑的目录),
     // 其后每台电脑一段远程供应商格。
-    return [
+    const items: UnifiedRailItem[] = !localRailItems ? buildUnifiedRail(entries, undefined, providerOrder) : [
       ...localRailItems,
       ...(remoteGroups ?? []).flatMap((group) =>
         group.providerIds.map((providerId) => ({
@@ -595,7 +598,11 @@ export function UnifiedModelPanel({
         })),
       ),
     ];
-  }, [entries, providerOrder, localRailItems, remoteGroups]);
+    if (!hasModelGroupsView) return items;
+    // 「模型组」紧跟「全部」：它和「全部」一样跨供应商，排在各供应商格之前。
+    const all = items.findIndex((item) => item.kind === 'all');
+    return [...items.slice(0, all + 1), { kind: 'model-groups' }, ...items.slice(all + 1)];
+  }, [entries, providerOrder, localRailItems, remoteGroups, hasModelGroupsView]);
   // rail 上的筛选目标消失(供应商断开 / 收藏清空)时回落「全部」,避免停在空视图。
   useEffect(() => {
     if (rail.kind === 'all') return;
@@ -1498,7 +1505,9 @@ export function UnifiedModelPanel({
           )}
           {favoritesListDeviceId && remoteFavorites.error ? <div role="status" className="px-3 py-2 text-13 text-[var(--text-secondary)]">{t(favoritesSyncFailureI18nKey(remoteFavorites.errorCode))}</div> : null}
           {pinnedTop && effectiveRail.kind === 'all' ? pinnedTop : null}
-          {remoteListPending ? (
+          {effectiveRail.kind === 'model-groups' ? (
+            modelGroupsView ?? null
+          ) : remoteListPending ? (
             remoteSources?.failure ?? (
               <div
                 role="status"
