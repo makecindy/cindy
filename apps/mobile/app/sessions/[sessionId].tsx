@@ -120,7 +120,7 @@ import {
   type ViewStyle,
 } from 'react-native';
 import { Text, TextInput } from '@/components/AppText';
-import { usePendingQuestionScroll } from '@/session/usePendingQuestionScroll';
+import { PendingAnswerTrailingInsetContext, usePendingQuestionScroll } from '@/session/usePendingQuestionScroll';
 import Reanimated, { useAnimatedStyle } from 'react-native-reanimated';
 import { MobileAgentMark } from '@/components/MobileAgentMark';
 import { mobileInteractionStyles } from '@/components/mobileInteractionStyles';
@@ -11388,10 +11388,11 @@ function SessionScreenContent({ beforeSessionSwitchRef, newSessionActionRef }: S
                   nestedScrollEnabled
                   onFocus={pendingQuestionScroll.onFocus}
                   onBlur={pendingQuestionScroll.onBlur}
-                  onLayout={pendingQuestionScroll.reveal}
-                  onContentSizeChange={pendingQuestionScroll.reveal}
+                  onLayout={pendingQuestionScroll.onLayout}
+                  onContentSizeChange={pendingQuestionScroll.onContentSizeChange}
                   testID="interaction.bottomScroll"
                 >
+                <PendingAnswerTrailingInsetContext.Provider value={pendingQuestionScroll.setTrailingInset}>
                 <InteractionPanel
                   fileContext={chatFilePathContextValue}
                   companion={companionChat}
@@ -11407,6 +11408,7 @@ function SessionScreenContent({ beforeSessionSwitchRef, newSessionActionRef }: S
                   onPlanViewerStateChange={setPendingPlanViewerState}
                   onError={setError}
                 />
+                </PendingAnswerTrailingInsetContext.Provider>
                 </ScrollView>
               )}
             </View>

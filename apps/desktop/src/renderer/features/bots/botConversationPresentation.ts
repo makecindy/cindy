@@ -131,7 +131,7 @@ export function botProcessItems(
       && item.message.assistantPhase !== 'final_answer' && !item.message.explicitDelivery
       && !item.message.sourceGroup && !hasRichAnswer(item.message.content)
       && (item.message.assistantPhase === 'commentary' || (liveItems.has(item))),
-    isRecovery: item => item.type === 'message' && ['agent-switch', 'auto-resume', 'context-rebuild'].includes(item.message.systemCardType ?? ''),
+    isRecovery: item => item.type === 'message' && ['auto-resume', 'context-rebuild'].includes(item.message.systemCardType ?? ''),
     start: renderItemStartMs, end: renderItemEndMs,
     streaming: item => item.type === 'work_group' ? item.isStreaming === true
       : liveItems.has(item),

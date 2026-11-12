@@ -4,11 +4,6 @@ import { isRemoteAgentRouteLostReason, type InterruptedTurnErrorSignals } from '
 
 /** A failed provider may be replaced, even when retrying that provider is forbidden. */
 export function isBotCandidateUnavailable(signals: InterruptedTurnErrorSignals): boolean {
-  // Account/budget exhaustion is not a property of the failed candidate: every
-  // candidate on the same account fails the same way, so switching or resuming
-  // only hides the real cause. Reuse the shared deterministic signal that the
-  // Codex terminal retry, Cindy AI search and the error banner already honour.
-  if (matchesDeterministicUsageExhaustionText(signals.message ?? '')) return false;
   // The agent serving this route on another computer is gone; another candidate route can still run the
   // turn. An owner disconnect is `user-revoked`, not this.
   if (isRemoteAgentRouteLostReason(signals.reason)) return true;
@@ -19,6 +14,11 @@ export function isBotCandidateUnavailable(signals: InterruptedTurnErrorSignals):
     'provider_auth_or_access', 'provider_quota_limit', 'provider_rate_limit',
     'provider_server_error', 'model_unavailable', 'user_model_access_denied', 'agent-start-failed',
   ].includes(reason)) return false;
+  // Exhaustion forbids retrying this account, not trying the user's configured
+  // backups. The caller requires a successful route change before resuming.
+  if (signals.codexErrorInfo === 'sessionBudgetExceeded') return false;
+  if (signals.usageLimit === true || signals.codexErrorInfo === 'usageLimitExceeded'
+      || matchesDeterministicUsageExhaustionText(signals.message ?? '')) return true;
   if (reason && reason !== 'turn-failed') return true;
   const tag = signals.sdkError ?? '';
   if (['authentication_failed', 'authentication_error', 'rate_limit', 'server_error', 'billing_error',

@@ -6933,9 +6933,13 @@ export class AgentInputCoordinator {
     preferProviderGroup = true,
   ): AutoResumeInfo | null {
     if (!this.deps.onResumableTurnError) return null;
-    // 容量错误已经走到终态：组能接管时直接交接，不再叠加主进程的同机重试。
+    // 容量/额度错误到达终态时先交给供应商组；组异步拒绝后，
+    // resumeAfterProviderGroupDeclined 以 preferProviderGroup=false 回到原有恢复。
     // 其他中断仍先走自愈(如断线后在原电脑恢复)；不能交给组的输入也保持原有处理。
-    if (preferProviderGroup && this.getProviderGroupSwitchCandidate(sessionId, item, message, signals) === 'overload') return null;
+    if (preferProviderGroup) {
+      const cause = this.getProviderGroupSwitchCandidate(sessionId, item, message, signals);
+      if (cause === 'overload' || cause === 'usage-limit') return null;
+    }
     try {
       return (
         this.deps.onResumableTurnError(sessionId, { ...(signals ?? {}), message }, item) ?? null

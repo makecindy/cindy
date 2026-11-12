@@ -1,11 +1,11 @@
 // @vitest-environment jsdom
 
-import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { act, cleanup, renderHook, waitFor } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { ProviderView } from '@cindy/model-providers';
 import type { BotModelRoute } from '../../../../shared/botModelChain';
 import { getDataOwnerGeneration, setDataOwnerGeneration } from '@/contexts/dataOwnerGeneration';
-import { __resetAvailableAgentsCacheForTest } from '@/hooks/useAvailableAgents';
+import { __resetAvailableAgentsCacheForTest, useAvailableAgents } from '@/hooks/useAvailableAgents';
 
 vi.mock('react-i18next', () => ({ useTranslation: () => ({ t: (key: string) => key }) }));
 vi.mock('@/lib/localCatalogSnapshot', () => ({ refreshLocalCatalogSnapshot: vi.fn() }));
@@ -28,19 +28,6 @@ vi.mock('@/state/newMakerDraft', () => ({
 }));
 vi.mock('@/lib/modelDefinitions', () => ({
   getDefaultModelForVendor: () => ({ id: '', defaultEffort: 'medium' }),
-}));
-vi.mock('../BotModelChainEditor', () => ({
-  BotModelChainEditor: ({ value, onChange }: {
-    value: BotModelRoute[];
-    onChange: (value: BotModelRoute[]) => void;
-  }) => (
-    <div>
-      <output data-testid="chain">{JSON.stringify(value)}</output>
-      <button onClick={() => onChange(value.map((route) => ({ ...route, effort: 'high' })))}>
-        Change effort
-      </button>
-    </div>
-  ),
 }));
 
 const gateway: BotModelRoute = {
@@ -66,10 +53,6 @@ function providers(gatewayConnected: boolean, openaiConnected: boolean): Provide
       supportsFastMode: false, newSessionDefault: [route.harness], supportsImageInput: true,
     }] },
   })) as unknown as ProviderView[];
-}
-
-function shownChain(): BotModelRoute[] {
-  return JSON.parse(screen.getByTestId('chain').textContent ?? '[]');
 }
 
 const listeners = new Set<() => void>();
@@ -108,8 +91,9 @@ async function setup(options: { customized?: boolean; empty?: boolean; pending?:
   void store.ensureBotProfilesLoaded();
   await waitFor(() => expect(getModelChainSettings).toHaveBeenCalledOnce());
   if (!options.pending) await waitFor(() => expect(list).toHaveBeenCalledOnce());
-  const { BotsGlobalSettingsSection } = await import('../BotsGlobalSettingsSection');
-  render(<BotsGlobalSettingsSection />);
+  // The global editor is retired. Keep exercising the real roster hook used
+  // by teammate creation/settings and the retained default/override store.
+  renderHook(() => useAvailableAgents());
   await waitFor(() => expect(listAvailableAgents).toHaveBeenCalledOnce());
   const agents = await import('@/hooks/useAvailableAgents');
   await waitFor(() => expect(agents.getCachedAvailableVendors()).toEqual(new Set(['pi', 'codex'])));
@@ -132,13 +116,15 @@ afterEach(() => cleanup());
 
 describe('live derived Bot defaults', () => {
   beforeEach(() => { visibility.enabled = true; visibility.version = 0; Object.assign(selection, gateway); });
-  // unit regression: changing only the new-task selection must leave both
-  // the settings editor and newly created teammate model/tuning unchanged.
-  it('ignores new-task selections in the global editor and new teammate creation', async () => {
+  // Unit regression: removing the global editor must not drop coverage of
+  // defaults, saved overrides, or stale hydration after provider/roster changes.
+  // A provider connection change is the minimal input; assert the chain used
+  // by teammate creation/restoration through the production store.
+  it('ignores new-task selections in derived defaults and new teammate creation', async () => {
     const api = await setup();
     Object.assign(selection, { ...openai, effort: 'high', fastMode: true });
     api.publish(providers(true, false));
-    expect(shownChain()).toEqual([gateway]);
+    expect(api.store.getEffectiveBotModelChain()).toEqual([gateway]);
     let bot!: Awaited<ReturnType<typeof api.store.addBotProfileAndWait>>;
     await act(async () => { bot = await api.store.addBotProfileAndWait({ name: 'Independent', description: '' }); });
     expect(bot.capabilities.modelChain).toEqual([gateway]);
@@ -154,40 +140,42 @@ describe('live derived Bot defaults', () => {
     expect(api.setModelChainSettings).not.toHaveBeenCalled();
   });
 
-  it('updates the mounted global editor after a connection change and saves effort on the new route', async () => {
+  it('updates derived defaults after a connection change and preserves a saved override', async () => {
     const api = await setup();
-    expect(shownChain()).toEqual([gateway]);
+    expect(api.store.getEffectiveBotModelChain()).toEqual([gateway]);
     api.publish(providers(false, true));
-    expect(shownChain()).toEqual([openai]);
-    expect(api.store.getEffectiveBotModelChain()).toEqual([openai]); // Restore-default consumer.
+    expect(api.store.getEffectiveBotModelChain()).toEqual([openai]);
     expect(api.setModelChainSettings).not.toHaveBeenCalled();
-    fireEvent.click(screen.getByText('Change effort'));
+    await act(async () => {
+      await api.store.setBotGlobalModelChain(api.store.getEffectiveBotModelChain()
+        .map((route) => ({ ...route, effort: 'high' })));
+    });
     await waitFor(() => expect(api.setModelChainSettings).toHaveBeenCalledWith({
       modelChain: [{ ...openai, effort: 'high' }],
     }));
     api.publish(providers(true, false));
-    expect(shownChain()).toEqual([{ ...openai, effort: 'high' }]);
+    expect(api.store.getEffectiveBotModelChain()).toEqual([{ ...openai, effort: 'high' }]);
   });
 
   it('recovers a hydrated empty chain after connecting and returns to empty after disconnecting', async () => {
     const api = await setup({ empty: true });
-    expect(shownChain()).toEqual([]);
+    expect(api.store.getEffectiveBotModelChain()).toEqual([]);
     api.publish(providers(false, true));
-    expect(shownChain()).toEqual([openai]);
+    expect(api.store.getEffectiveBotModelChain()).toEqual([openai]);
     api.publish(providers(false, false));
-    expect(shownChain()).toEqual([]);
+    expect(api.store.getEffectiveBotModelChain()).toEqual([]);
   });
 
   it('recomputes defaults when engines are removed or installed without a provider update', async () => {
     const api = await setup();
     api.publish(providers(true, true));
-    expect(shownChain()).toEqual([openai]);
+    expect(api.store.getEffectiveBotModelChain()).toEqual([openai]);
     await api.changeAgents(['codex']);
-    expect(shownChain()).toEqual([openai]);
+    expect(api.store.getEffectiveBotModelChain()).toEqual([openai]);
     await api.changeAgents([]);
-    expect(shownChain()).toEqual([]);
+    expect(api.store.getEffectiveBotModelChain()).toEqual([]);
     await api.changeAgents(['pi', 'codex']);
-    expect(shownChain()).toEqual([openai]);
+    expect(api.store.getEffectiveBotModelChain()).toEqual([openai]);
   });
 
   it('preserves a hydrated explicit global override across provider and engine changes', async () => {
@@ -195,7 +183,6 @@ describe('live derived Bot defaults', () => {
     Object.assign(selection, openai);
     api.publish(providers(false, true));
     await api.changeAgents(['codex']);
-    expect(shownChain()).toEqual([gateway]);
     expect(api.store.getEffectiveBotModelChain()).toEqual([gateway]);
     expect(api.setModelChainSettings).not.toHaveBeenCalled();
   });
@@ -204,7 +191,6 @@ describe('live derived Bot defaults', () => {
     const api = await setup({ pending: true });
     api.publish(providers(false, true));
     await act(async () => api.resolveSettings({ modelChain: [gateway], isCustomized: false }));
-    expect(shownChain()).toEqual([openai]);
     expect(api.store.getEffectiveBotModelChain()).toEqual([openai]);
   });
 
@@ -220,10 +206,10 @@ describe('live derived Bot defaults', () => {
       finishReset({ modelChain: [gateway], isCustomized: false });
       await reset;
     });
-    expect(shownChain()).toEqual([openai]);
+    expect(api.store.getEffectiveBotModelChain()).toEqual([openai]);
     expect(api.store.isBotGlobalModelChainCustomized()).toBe(false);
     api.publish(providers(false, false));
-    expect(shownChain()).toEqual([]);
+    expect(api.store.getEffectiveBotModelChain()).toEqual([]);
     expect(api.setModelChainSettings).not.toHaveBeenCalled();
   });
 
@@ -233,6 +219,5 @@ describe('live derived Bot defaults', () => {
     expect(api.getModelChainSettings).toHaveBeenCalledTimes(2);
     api.publish(providers(false, true));
     expect(api.store.getEffectiveBotModelChain()).toEqual([openai]);
-    expect(shownChain()).toEqual([openai]);
   });
 });

@@ -192,6 +192,30 @@ describe('pending question input visibility', () => {
     controls.onFocus(event);
     expect(offset).toBe(600);
   });
+
+  // 2026-11-12: a free-text question opened the keyboard and scrolled to the
+  // end, leaving only an empty answer box on screen. Unit: the production hook
+  // must stop at the answer box, and fall back to the end once the card stops
+  // reporting what trails it (a card with options). No prior case passed sizes.
+  it('keeps a free-text question readable by stopping at the answer box', () => {
+    act(() => root.render(<QuestionHarness requestId="q1" />));
+    let offset = -1;
+    controls.scrollRef.current = {
+      scrollTo: ({ y }: { y: number }) => { offset = y; },
+      scrollToEnd: () => { offset = 126; },
+    } as unknown as NonNullable<typeof controls.scrollRef.current>;
+    controls.onLayout({ nativeEvent: { layout: { height: 244 } } } as Parameters<typeof controls.onLayout>[0]);
+    controls.onContentSizeChange(390, 370);
+    expect(offset).toBe(-1);
+    controls.setTrailingInset(72);
+    controls.onFocus({ target: { isFocused: () => true } } as unknown as Parameters<typeof controls.onFocus>[0]);
+    expect(offset).toBe(54);
+    // A short question fits above the keyboard: nothing is scrolled away.
+    controls.onContentSizeChange(390, 300);
+    expect(offset).toBe(0);
+    controls.setTrailingInset(0);
+    expect(offset).toBe(126);
+  });
 });
 
 beforeEach(() => {

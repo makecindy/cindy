@@ -10,7 +10,7 @@ import { InputHandoffCard } from '@/inputHandoff/InputHandoffCard';
 import { parseInputHandoffSnapshotLike } from '@/inputHandoff/inputHandoffNative';
 import { mobilePluginSetupActions } from '@/plugins/pluginSetupActions';
 import { usePaneViewport } from '@/platform/AdaptiveWindowContext';
-import { createContext, useContext, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
+import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import { useTranslation } from 'react-i18next';
 import { useGuardedPush } from '@/utils/useGuardedPush';
 import { isSharedTaskPeer } from '@cindy/device-link';
@@ -38,6 +38,7 @@ import {
   StyleSheet,
   View,
   useWindowDimensions,
+  type LayoutChangeEvent,
   type StyleProp,
   type ViewStyle,
 } from 'react-native';
@@ -49,6 +50,7 @@ import { formatRemoteError } from '@/device-link/remoteStatus';
 import { useMobileMakerTransport } from '@/device-link/useMobileMakerTransport';
 import { asyncQuestionNeedsSupplement, formatAsyncQuestionReplyDisplay, formatAsyncQuestionSupplement, withdrawnQuestionDraftText } from '@cindy/maker-shared/interaction';
 import { useAskCardVoice } from '@/session/useAskCardVoice';
+import { PendingAnswerTrailingInsetContext } from '@/session/usePendingQuestionScroll';
 import { buildQueuedTextMessage } from '@/session/inputProjection';
 import {
   answerKey,
@@ -1139,6 +1141,31 @@ function AskUserQuestionForm({
   }, mobilePresentationLocalizer), [currentIndex, i18nInstance.language, questions]);
   const current = presentation.current;
   const isWithdrawn = typeof item.request.withdrawalReason === 'string';
+  // A question whose only answer is free text keeps the question readable while
+  // typing: report what sits below the answer box inside this card so the page
+  // reveals the box, not the trailing Skip/Close row (2026-11-12, question
+  // scrolled out of view). The panel's bottom padding stays below the box, the
+  // same gap the end of the card gets, because it sits behind the keyboard.
+  const freeTextOnly = !!current && (isWithdrawn || askQuestionOptions(current).length === 0);
+  const reportTrailingInset = useContext(PendingAnswerTrailingInsetContext);
+  const answerLayoutRef = useRef({ cardHeight: 0, composerBottom: 0 });
+  const syncTrailingInset = useCallback(() => {
+    const { cardHeight, composerBottom } = answerLayoutRef.current;
+    if (cardHeight > 0 && composerBottom > 0) reportTrailingInset?.(Math.max(0, cardHeight - composerBottom));
+  }, [reportTrailingInset]);
+  const onCardLayout = (event: LayoutChangeEvent) => {
+    answerLayoutRef.current.cardHeight = event.nativeEvent.layout.height;
+    if (freeTextOnly) syncTrailingInset();
+  };
+  const onFreeTextComposerLayout = (event: LayoutChangeEvent) => {
+    const { y, height } = event.nativeEvent.layout;
+    answerLayoutRef.current.composerBottom = y + height;
+    syncTrailingInset();
+  };
+  useEffect(() => {
+    if (!freeTextOnly) reportTrailingInset?.(0);
+    return () => reportTrailingInset?.(0);
+  }, [freeTextOnly, reportTrailingInset]);
   const withdrawnDraftRef = useRef<string | null>(null);
   useEffect(() => {
     const key = `${requestId}:${currentIndex}`;
@@ -1309,7 +1336,7 @@ function AskUserQuestionForm({
   </View>;
 
   return (
-    <View style={cardStyle(styles, touchLayout, companion)} testID="interaction.ask.card">
+    <View onLayout={onCardLayout} style={cardStyle(styles, touchLayout, companion)} testID="interaction.ask.card">
       {/* 收起入口统一在队列头(PendingTaskHeader),卡内不再自持一份 collapsed state:
           两套状态时页面级那份被卡片 key 变化冲掉,收起会自己弹回来。 */}
       <View style={styles.compactCardHeader}>
@@ -1379,7 +1406,7 @@ function AskUserQuestionForm({
             );
           })}
           {!current.answerConstraints?.choices && (showCustomInput ? (
-            <View style={styles.answerComposer} testID="interaction.ask.composer">
+            <View style={styles.askAnswerComposer} testID="interaction.ask.composer">
               <TextInput
                 accessibilityLabel={t('interaction.panel.customAnswerInputAccessibility')}
                 autoFocus
@@ -1393,7 +1420,7 @@ function AskUserQuestionForm({
                 onSelectionChange={(event) => { if (!voice.busy) selectionRef.current = event.nativeEvent.selection; }}
                 placeholder={t('interaction.panel.customAnswerPlaceholder')}
                 placeholderTextColor={colors.textPlaceholder}
-                style={styles.answerComposerInput}
+                style={styles.askAnswerInput}
                 multiline
                 testID="interaction.ask.customInput"
                 value={customInput}
@@ -1430,10 +1457,10 @@ function AskUserQuestionForm({
           ))}
         </View>
       ) : (
-        <View style={styles.answerComposer} testID="interaction.ask.composer">
+        <View onLayout={onFreeTextComposerLayout} style={styles.askAnswerComposer} testID="interaction.ask.composer">
+          {/* No autoFocus: the keyboard would cover the question before it is read. */}
           <TextInput
             accessibilityLabel={t('interaction.panel.answerInput')}
-            autoFocus
             editable={!busy && !voiceLocked}
             onKeyPress={({ nativeEvent }) => { if (nativeEvent.key.length === 1) onStartAnswer(); }}
             onChangeText={(text) => {
@@ -1444,7 +1471,7 @@ function AskUserQuestionForm({
             onSelectionChange={(event) => { if (!voice.busy) selectionRef.current = event.nativeEvent.selection; }}
             placeholder={t('interaction.panel.answerInput')}
             placeholderTextColor={colors.textPlaceholder}
-            style={styles.answerComposerInput}
+            style={styles.askAnswerInput}
             testID="interaction.ask.textInput"
             multiline
             value={customInput}
@@ -2626,6 +2653,19 @@ const makeStyles = (colors: ThemeColors) => StyleSheet.create({
     fontWeight: fontWeight.regular, textAlignVertical: 'top',
   },
   answerComposerActions: { flexDirection: 'row', alignItems: 'center', justifyContent: 'flex-end', gap: spacing.sm },
+  // Question answers start as one line beside the mic and send buttons and grow
+  // with the text; the buttons stay on the last line (2026-11-12 user request).
+  askAnswerComposer: {
+    width: '100%', minWidth: 0, flexDirection: 'row', alignItems: 'flex-end', gap: spacing.xs,
+    borderWidth: StyleSheet.hairlineWidth, borderColor: colors.border, borderRadius: radius.control,
+    backgroundColor: colors.surface, paddingVertical: spacing.xs, paddingLeft: spacing.sm, paddingRight: spacing.xs,
+  },
+  askAnswerInput: {
+    flex: 1, minWidth: 0, minHeight: 44, maxHeight: 148,
+    paddingHorizontal: spacing.xs, paddingTop: (44 - lineHeight.body) / 2, paddingBottom: (44 - lineHeight.body) / 2,
+    color: colors.textPrimary, fontSize: typeScale.body, lineHeight: lineHeight.body,
+    fontWeight: fontWeight.regular, textAlignVertical: 'top',
+  },
   answerComposerSend: { width: 44, height: 44, minWidth: 44, paddingHorizontal: 0, flexGrow: 0, flexShrink: 0 },
   customInputRow: {
     alignItems: 'center',
