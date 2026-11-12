@@ -5,6 +5,7 @@ import { ImageLightbox } from '../../../src/renderer/components/chat/ImageLightb
 
 const ZIP = '/fixture/2026-11-03-八张信用卡发票与核对清单.zip';
 const MARKDOWN = '/fixture/2026-11-03-发票核对说明.md';
+const SOLIDITY = '/fixture/Counter.sol';
 
 const markdown = [
   '# 发票核对说明',
@@ -14,6 +15,20 @@ const markdown = [
   '| 卡片 | 发票数 | 状态 |\n| --- | --- | --- |\n| 尾号 1024 | 3 | 已核对 |\n| 尾号 2048 | 2 | 待补充 |\n| 尾号 4096 | 3 | 已核对 |',
   ...Array.from({ length: 8 }, (_, i) => `第 ${i + 1} 段：用于检查长文档在预览窗里的滚动与留白。`),
 ].join('\n\n');
+
+const solidity = [
+  '// SPDX-License-Identifier: MIT',
+  'pragma solidity ^0.8.20;',
+  '',
+  'contract Counter {',
+  '    string public message = "hello";',
+  '    uint256 public value;',
+  '',
+  '    function increment() external {',
+  '        value += 1;',
+  '    }',
+  '}',
+].join('\n');
 
 function sampleImage() {
   const canvas = document.createElement('canvas');
@@ -53,7 +68,7 @@ function Conversation() {
   );
 }
 
-function Fixture({ kind }: { kind: 'zip' | 'markdown' | 'image' }) {
+function Fixture({ kind }: { kind: 'zip' | 'markdown' | 'solidity' | 'image' }) {
   const [open, setOpen] = useState(true);
   const [image] = useState(sampleImage);
   return (
@@ -62,6 +77,9 @@ function Fixture({ kind }: { kind: 'zip' | 'markdown' | 'image' }) {
       {open && kind === 'zip' && <TextLightbox filePath={ZIP} onClose={() => setOpen(false)} />}
       {open && kind === 'markdown' && (
         <TextLightbox filePath={MARKDOWN} onClose={() => setOpen(false)} />
+      )}
+      {open && kind === 'solidity' && (
+        <TextLightbox filePath={SOLIDITY} onClose={() => setOpen(false)} />
       )}
       {open && kind === 'image' && (
         <ImageLightbox src={image} filename="示例图片.png" onClose={() => setOpen(false)} />
@@ -83,13 +101,24 @@ mountPage({
       }),
       onEvent: subscription('file-browser'),
     },
-    readTextFilePreview: async () => ({ success: true, data: markdown, size: markdown.length }),
+    readTextFilePreview: async ({ filePath }: { filePath: string }) => {
+      const data = filePath.endsWith('.sol') ? solidity : markdown;
+      return { success: true, data, size: data.length };
+    },
     showItemInFolder: async () => ({ success: true }),
     openPath: async () => '',
   }),
   render: (ctx) => (
     <Fixture
-      kind={ctx.case === 'markdown' ? 'markdown' : ctx.case === 'image' ? 'image' : 'zip'}
+      kind={
+        ctx.case === 'markdown'
+          ? 'markdown'
+          : ctx.case === 'solidity'
+            ? 'solidity'
+            : ctx.case === 'image'
+              ? 'image'
+              : 'zip'
+      }
     />
   ),
 });

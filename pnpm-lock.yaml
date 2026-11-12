@@ -338,6 +338,9 @@ importers:
       '@replit/codemirror-lang-csharp':
         specifier: ^6.2.0
         version: 6.2.0(@codemirror/autocomplete@6.20.3)(@codemirror/language@6.12.4)(@codemirror/state@6.7.1)(@codemirror/view@6.43.6)(@lezer/common@1.5.2)(@lezer/highlight@1.2.3)(@lezer/lr@1.4.10)
+      '@replit/codemirror-lang-solidity':
+        specifier: ^6.0.2
+        version: 6.0.2(@codemirror/language@6.12.4)
       '@tanstack/react-virtual':
         specifier: ^3.13.12
         version: 3.14.6(react-dom@19.2.3(react@19.2.3))(react@19.2.3)
@@ -434,6 +437,9 @@ importers:
       highlight.js:
         specifier: ^11.11.1
         version: 11.11.1
+      highlightjs-solidity:
+        specifier: ^2.0.6
+        version: 2.0.6
       html-to-image:
         specifier: ^1.11.13
         version: 1.11.13
@@ -5019,6 +5025,11 @@ packages:
       '@lezer/highlight': ^1.0.0
       '@lezer/lr': ^1.0.0
 
+  '@replit/codemirror-lang-solidity@6.0.2':
+    resolution: {integrity: sha512-/dpTVH338KFV6SaDYYSadkB4bI/0B0QRF/bkt1XS3t3QtyR49mn6+2k0OUQhvt2ZSO7kt10J+OPilRAtgbmX0w==}
+    peerDependencies:
+      '@codemirror/language': ^6.0.0
+
   '@rolldown/binding-android-arm-eabi@1.2.8':
     resolution: {integrity: sha512-tN5aztYkKCte4i5SIrrz5yK/HMjEuCqCSCJa418jOV8tZ1cBY3YF2otxB1ktPxzsLA1BeTqwapK0bfjxNvHJVw==}
     engines: {node: ^20.19.0 || >=22.12.0}
@@ -8387,6 +8398,9 @@ packages:
   highlight.js@11.11.1:
     resolution: {integrity: sha512-Xwwo44whKBVCYoliBQwaPvtd/2tYFkRQtXDWj1nackaV2JPXx3L0+Jvd8/qCJ2p+ML0/XVkJ2q+Mr+UVdpJK5w==}
     engines: {node: '>=12.0.0'}
+
+  highlightjs-solidity@2.0.6:
+    resolution: {integrity: sha512-DySXWfQghjm2l6a/flF+cteroJqD4gI8GSdL4PtvxZSsAHie8m3yVe2JFoRg03ROKT6hp2Lc/BxXkqerNmtQYg==}
 
   hono@4.12.30:
     resolution: {integrity: sha512-emn+JoJjrN9YTpRDS5it/UI2SO9BAE37T6I3d963RxcZ81G9A4pr2SZTEiiaiKbzx+NKRg5BZ89fCL7gCJCUog==}
@@ -15992,6 +16006,11 @@ snapshots:
       '@lezer/highlight': 1.2.3
       '@lezer/lr': 1.4.10
 
+  '@replit/codemirror-lang-solidity@6.0.2(@codemirror/language@6.12.4)':
+    dependencies:
+      '@codemirror/language': 6.12.4
+      '@lezer/highlight': 1.2.3
+
   '@rolldown/binding-android-arm-eabi@1.2.8':
     optional: true
 
@@ -19979,6 +19998,8 @@ snapshots:
       hermes-estree: 0.36.1
 
   highlight.js@11.11.1: {}
+
+  highlightjs-solidity@2.0.6: {}
 
   hono@4.12.30: {}
 

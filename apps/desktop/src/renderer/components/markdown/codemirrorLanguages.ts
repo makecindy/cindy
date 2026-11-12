@@ -38,6 +38,7 @@ import { sql } from '@codemirror/lang-sql';
 import { xml } from '@codemirror/lang-xml';
 import { php } from '@codemirror/lang-php';
 import { csharp as csharpLezer } from '@replit/codemirror-lang-csharp';
+import { solidity } from '@replit/codemirror-lang-solidity';
 
 import {
   kotlin as legacyKotlin,
@@ -131,6 +132,9 @@ export function getCodeMirrorLanguage(alias: string | undefined): Extension | nu
     case 'cs':
     case 'c#':
       return csharpLezer();
+    case 'solidity':
+    case 'sol':
+      return solidity;
 
     // ── Stream parsers (legacy-modes) ────────────────────────────────────
     case 'kotlin':

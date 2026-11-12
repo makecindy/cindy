@@ -9,8 +9,8 @@ const calls = vi.hoisted(() => ({ highlighted: 0 }));
 vi.mock('rehype-highlight', async (importOriginal) => {
   const original = await importOriginal<typeof import('rehype-highlight')>();
   return {
-    default: () => {
-      const transform = original.default();
+    default: (options?: Parameters<typeof original.default>[0]) => {
+      const transform = original.default(options);
       return (...args: Parameters<typeof transform>) => {
         const visit = (node: Root | Element) => {
           if (
@@ -46,6 +46,15 @@ describe('rehypeHighlightShared', () => {
     expect(render('```unknown-lang\nx\n```')).toContain(
       '<pre><code class="hljs language-unknown-lang">x',
     );
+  });
+
+  it('highlights registered Solidity fences', () => {
+    // Production entry: rehypeHighlightShared. Issue #9479 requires .sol
+    // previews to distinguish Solidity syntax; this renderer tier covers the
+    // read-only SkillHub path, which does not use the CodeMirror parser.
+    const html = render('```solidity\ncontract Example { string message = "hello"; }\n```');
+    expect(html).toContain('<span class="hljs-keyword">contract</span>');
+    expect(html).toContain('<span class="hljs-string">&quot;hello&quot;</span>');
   });
 
   // Unit: full-document streaming reparses stable code; the upstream highlighter
