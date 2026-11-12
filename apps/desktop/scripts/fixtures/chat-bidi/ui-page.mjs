@@ -21,6 +21,10 @@ async function aligned(locator, text, side) {
         const rects = Array.from(range.getClientRects()).filter(r => r.width > 0 && r.height > 0);
         const bounds = element.getBoundingClientRect();
         const style = getComputedStyle(element);
+        if (side === 'center') {
+          return Math.abs((Math.min(...rects.map(r => r.left)) + Math.max(...rects.map(r => r.right))) / 2
+            - (bounds.left + bounds.right) / 2);
+        }
         return side === 'right'
           ? Math.abs(Math.max(...rects.map(r => r.right)) - (bounds.right - parseFloat(style.paddingRight) - parseFloat(style.borderRightWidth)))
           : Math.abs(Math.min(...rects.map(r => r.left)) - (bounds.left + parseFloat(style.paddingLeft) + parseFloat(style.borderLeftWidth)));
@@ -49,9 +53,15 @@ export default {
     const user = page.locator('[data-testid="user"] [data-selection-quote-body]');
     await aligned(user, rtl, 'right');
     await aligned(user, english, 'left');
-    const rich = page.locator('[data-testid="rich"] .rich-answer-text');
+    const rich = page.locator('[data-testid="rich"] .rich-answer-text').filter({ hasText: rtl });
     await aligned(rich, rtl, 'right');
     await aligned(rich, english, 'left');
+    // Defaults must not override explicit Markdown or inherited container alignment.
+    await aligned(page.locator('[data-rich-node="centered-markdown"] h1'), 'Centered', 'center');
+    await aligned(page.locator('[data-rich-node="centered-markdown"] p'), 'English paragraph', 'center');
+    await aligned(page.locator('[data-rich-node="aligned-group"] .rich-answer-heading'), 'Container-aligned heading', 'right');
+    await aligned(page.locator('[data-rich-node="aligned-group"] .rich-answer-text'), 'Container-aligned English text.', 'right');
+    await aligned(page.locator('[data-rich-node="inherited-markdown"] p'), 'Container-aligned Markdown.', 'right');
     for (const text of ['مرحبا، الإصدار API 123 جاهز.', 'שלום, הקובץ index.html מוכן.']) {
       await aligned(page.locator('[data-testid="markdown"] p').filter({ hasText: text }), text, 'right');
       await aligned(user, text, 'right');

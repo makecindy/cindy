@@ -7,7 +7,8 @@
 .rich-answer :is(.rich-answer-text, .rich-answer-heading),
 [data-chat-input-root] .ProseMirror p {
   unicode-bidi: plaintext;
-  text-align: start;
+  /* RichAnswer exposes explicit node/container alignment as an inherited token. */
+  text-align: var(--rich-textAlign, start);
 }
 
 /* Technical runs remain isolated from the surrounding prose. Their contents
