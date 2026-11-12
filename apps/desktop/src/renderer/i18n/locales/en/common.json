@@ -17718,6 +17718,7 @@
       "dingtalkBotDisconnectFailed": "Failed to unbind DingTalk bot"
     },
     "errors": {
+      "piStartupCloudFile": "A cloud-only instruction file may be delaying Pi startup: {{path}}. Download this file in Finder, wait until it is available locally, then retry. The timeout may have another cause.",
       "openFileFailed": "Cannot open file in system",
       "emptyResponse": "The model returned no content. Try again. If the context is very long, switch models.",
       "turnFailed": "The task failed (the model returned no error detail) — please retry.",
