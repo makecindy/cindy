@@ -183,7 +183,7 @@ export function Sidebar({
               !isCollapsed && 'pr-px',
               !isDragging &&
                 !justLeftPeek &&
-                'transition-[width] duration-[250ms] ease-[cubic-bezier(0.4,0,0.2,1)] motion-reduce:duration-0',
+                'transition-[width] duration-[var(--motion-base)] ease-[var(--motion-ease-move)] motion-reduce:duration-0',
             ),
       )}
       style={{ width: visualWidth }}

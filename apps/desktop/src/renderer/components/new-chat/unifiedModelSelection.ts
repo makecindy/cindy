@@ -347,6 +347,8 @@ export type UnifiedRailItem =
   | { kind: 'favorites' }
   | { kind: 'engine'; agent: AgentKind }
   | { kind: 'all' }
+  /** 用户建的模式与路线(模型组)。只在新任务草稿出现，列表内容由调用方提供，不按目录筛选。 */
+  | { kind: 'model-groups' }
   | { kind: 'provider'; providerId: string }
   /**
    * 另一台电脑上的供应商(远程 Agent)。选它 = 列那台电脑这个供应商的模型；选中模型后

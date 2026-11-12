@@ -32,6 +32,7 @@ const view: SubscriptionPoolView = {
       id: 'cindy-owner-second',
       paused: false,
       limit: 4,
+      limitSet: true,
       weight: 1,
       directory: '/home/.claude-second',
       status: 'ready',
@@ -162,6 +163,11 @@ describe('SubscriptionAccountsSection usage', () => {
     render(<SubscriptionAccountsSection providerId="anthropic" />);
     expect(await screen.findByRole('radiogroup', { name: 'subscriptionAccounts.strategy' })).toBeTruthy();
     expect(screen.getAllByLabelText('providerGroup.member.weightAria')).toHaveLength(2);
+    // 2026-11-11: an unset (legacy default 4) limit reads as unlimited; a chosen limit shows its number.
+    const [first, second] = screen.getAllByTestId('subscription-account');
+    expect(within(first).getByText('providerGroup.member.limitUnlimited')).toBeTruthy();
+    expect(within(second).getByText('providerGroup.member.limitOption')).toBeTruthy();
+    expect(within(second).queryByText('providerGroup.member.limitUnlimited')).toBeNull();
   });
   // The folder path used to be an always-visible disclosure under every account; it is now a menu action.
   it('opens the account folder from the account menu and reports a failure', async () => {

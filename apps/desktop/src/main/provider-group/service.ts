@@ -414,7 +414,7 @@ function withTimeout<T>(promise: Promise<T>, ms: number): Promise<T | undefined>
 
 type SourcePick =
   | { kind: 'none' }
-  | { kind: 'unavailable'; usageLimit?: ProviderGroupUsageLimit }
+  | { kind: 'unavailable'; usageLimit?: ProviderGroupUsageLimit; full?: true }
   | { kind: 'member'; member: ProviderGroupMember; label: string; labelOf(memberKey: string): string | undefined };
 
 /** 任务进行中换号的目标：哪台、提示里怎么称呼、它此刻的配额窗口。 */

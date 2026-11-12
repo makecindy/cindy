@@ -870,6 +870,7 @@
       "limitAria": "Aufgabenlimit für {{name}}",
       "limitOption_one": "Bis {{count}}",
       "limitOption_other": "Bis {{count}}",
+      "limitUnlimited": "Kein Limit",
       "weightAria": "Gewichtung für {{name}}",
       "weightOption": "Gewichtung {{weight}}",
       "assignAria": "Aufgaben {{name}} zuweisen",
@@ -1843,7 +1844,8 @@
       "about": "Info",
       "imBot": "IM-Bots",
       "ghosts": "Plugins",
-      "cindyMake": "Cindy Make"
+      "cindyMake": "Cindy Make",
+      "modelGroups": "Modellgruppen"
     },
     "sections": {
       "user": "Benutzer",
@@ -1887,6 +1889,15 @@
     },
     "remote": {
       "title": "Remote-Rechner",
+      "hostKeyError": {
+        "missing": "Die Prüfung des SSH-Hostschlüssels ist nicht eingerichtet. Verbindung abgelehnt.",
+        "read": "Cindy konnte die vertrauenswürdigen Hostschlüssel nicht lesen: {{reason}}. Verbindung abgelehnt.",
+        "write": "Cindy konnte den vertrauenswürdigen Hostschlüssel nicht speichern: {{reason}}. Verbindung abgelehnt.",
+        "mismatch": "Der Hostschlüssel für {{host}} hat sich geändert ({{fingerprint}}) und stimmt nicht mehr mit dem Fingerabdruck überein, dem Cindy bisher vertraut hat. Möglicherweise wurde der Server neu installiert, oder es handelt sich um einen Man-in-the-Middle-Angriff. Verbindung abgelehnt.",
+        "file": "Datei mit vertrauenswürdigen Hostschlüsseln:\n{{filePath}}",
+        "repair": "Cindy liest ~/.ssh/known_hosts nicht. Der alte Fingerabdruck ist gespeichert in:\n{{filePath}}\nDer Schlüssel des Eintrags lautet \"{{host}}\".\nWenn du geprüft hast, dass diese Änderung vertrauenswürdig ist, beende Cindy, entferne nur diesen Eintrag, behalte die Datei und alle anderen Hosts und verbinde dich dann erneut. Der neue Fingerabdruck wird bei der ersten Verbindung gespeichert. Lösche nicht die gesamte Datei.",
+        "verifyChange": "Prüfe die Änderung mit dem Serveradministrator, bevor du die vertrauenswürdigen Hostschlüssel aktualisierst."
+      },
       "footnote": "Phase A: nur SSH-Verbindungsverwaltung. Das Ausführen von Agents auf dem Remote-Rechner folgt in einem späteren Update.",
       "viaAuth": "über {{label}}",
       "readOnlyFromSshConfig": "Verbindungsdetails stammen aus der SSH-Konfiguration",
@@ -2299,7 +2310,7 @@
         "desktopVisibilityHint": "Zeigt den Desktop und Fenster hinter Cindy. Text und Bedienelemente bleiben klar.",
         "desktopBlurLabel": "Desktop-Unschärfe",
         "desktopBlurHint": "Verwischt den Desktop hinter dem Fenster. 0 schaltet den Effekt aus, höhere Werte verstärken ihn. Systeme ohne einstellbare Stärke verwenden ihren Standardeffekt.",
-        "desktopBlurSwitchHint": "Verwischt den Desktop hinter dem Fenster mit dem Windows-Systemeffekt. Erfordert Windows 11 Version 22H2 oder neuer.",
+        "desktopBlurSwitchHint": "Verwischt den Desktop hinter dem Fenster mit dem Windows-Systemeffekt. Erfordert Windows 11 Version 22H2 oder neuer. Nach dem Ausschalten die App neu starten, damit die Änderung wirksam wird.",
         "blurLabel": "Unschärfe des Hintergrundbilds",
         "blurHint": "Nur das Hintergrundbild weichzeichnen. Zum Deaktivieren auf 0 setzen. Das Weichzeichnen animierter Hintergrundbilder erhöht die GPU-Auslastung.",
         "motionLabel": "Anzeige",
@@ -11701,6 +11712,8 @@
       "takeOverConflict": "{{name}} ist bereits auf „{{device}}“ umgezogen",
       "takeOverOffline": "Der Server ist nicht erreichbar, daher kann {{name}} hier gerade nicht fortfahren",
       "takeOverFailed": "{{name}} konnte auf diesem Computer nicht übernommen werden",
+      "localCindyConflict": "Auf dem übernehmenden Computer gibt es bereits eine andere Cindy. Verwalte sie in ihren Einstellungen oder wähle einen anderen Hauptcomputer",
+      "localCindyConflictAction": "Lokale Cindy-Einstellungen öffnen",
       "notEnabled": "Dieser Server unterstützt keinen Wechsel des Hauptcomputers",
       "readOnlyNote": "Dieses Gespräch ist in der Cloud gespeichert und schreibgeschützt",
       "empty": "Noch kein Gespräch in der Cloud",
@@ -14111,6 +14124,7 @@
       "botSentNamed": "Von Teammitglied „{{name}}“ gesendet",
       "orcaFromLead": "Nachricht vom Lead",
       "orcaFromWorker": "Nachricht vom Worker",
+      "orcaFromWorkerBatch": "Systemrückmeldung: {{count}} Worker-Ergebnisse",
       "orcaFromWorkerNamed": "Nachricht vom Worker „{{role}}“",
       "hookChannelFrom": "Aus {{channel}}",
       "deviceSentMobileNamed": "Vom Smartphone „{{name}}“ gesendet",
@@ -14259,6 +14273,8 @@
       "REMOTE_AGENT_SHARE_LEGACY_DISABLED": "Dies ist eine ältere Freigabe; sie ist nicht nutzbar, solange „Nur Agent-Net verwenden“ aktiviert ist. Schalte die Option aus, um fortzufahren, oder wechsle zu einem anderen Modell.",
       "REMOTE_AGENT_GROUP_USAGE_LIMIT": "Die verfügbaren Konten für dieses Modell haben ihr Nutzungslimit erreicht. Wechsle das Modell oder fahre fort, wenn das Kontingent zurückgesetzt wird.",
       "REMOTE_AGENT_GROUP_UNAVAILABLE": "Derzeit kann kein Computer in der Anbietergruppe diese Aufgabe ausführen. Sie sind möglicherweise offline, pausiert, in einer Abkühlphase oder haben dieses Modell nicht. Prüfe die Gruppe auf der Seite „Remote & Freigabe“ dieses Anbieters.",
+      "REMOTE_AGENT_GROUP_FULL": "Alle Konten bzw. Computer, die diese Aufgabe ausführen können, haben ihr Parallelitätslimit erreicht. Warte, bis eine laufende Aufgabe endet, oder erhöhe das Limit in den Anbietereinstellungen.",
+      "SUBSCRIPTION_ACCOUNTS_FULL": "Alle Konten bzw. Computer, die diese Aufgabe ausführen können, haben ihr Parallelitätslimit erreicht. Warte, bis eine laufende Aufgabe endet, oder erhöhe das Limit in den Anbietereinstellungen.",
       "REMOTE_AGENT_DEVICE_LIMIT": "Dieses Gerät hat sein Limit für Remote-Sitzungen erreicht. Archiviere ungenutzte Sitzungen oder bitte den Eigentümer des Anbieters, das Limit unter „Remote & Freigabe“ zu erhöhen.",
       "REMOTE_AGENT_TOTAL_LIMIT": "Der Anbietercomputer hat sein Gesamtlimit für Remote-Sitzungen erreicht. Bitte den Eigentümer, ungenutzte Sitzungen freizugeben oder das Limit unter „Remote & Freigabe“ zu erhöhen.",
       "REMOTE_AGENT_RESUME_LOST": "Die frühere Unterhaltung auf dem anderen Computer konnte nicht wieder verbunden werden. Der Agent fährt daher ohne diesen Kontext fort.",
@@ -14493,6 +14509,14 @@
       "replied": "hat geantwortet",
       "toggle": "Antwort von „{{title}}“ ein- oder ausblenden",
       "openTask": "Aufgabe öffnen"
+    },
+    "subscriptionAccountError": {
+      "limited": "Das Abonnementkonto dieser Aufgabe hat sein Nutzungslimit erreicht. Warte auf die Zurücksetzung oder wähle eine andere Modellquelle. Das Konto wird nicht automatisch gewechselt.",
+      "limitedUntil": "Das Abonnementkonto dieser Aufgabe hat sein Nutzungslimit erreicht. Voraussichtliche Zurücksetzung: {{resetAt}}. Warte bis dahin oder wähle eine andere Modellquelle. Das Konto wird nicht automatisch gewechselt.",
+      "loginRequired": "Das Abonnementkonto dieser Aufgabe erfordert eine erneute Anmeldung. Melde dich auf dem Computer, der die Aufgabe ausführt, erneut an und versuche es dann noch einmal.",
+      "signingIn": "Die Anmeldung für das Abonnementkonto dieser Aufgabe läuft. Versuche es nach Abschluss der Anmeldung erneut.",
+      "unavailable": "Das dieser Aufgabe zugewiesene Abonnementkonto kann für diese Anfrage nicht verwendet werden. Prüfe das Konto in den Modellanbieter-Einstellungen auf dem ausführenden Computer oder wähle eine andere Modellquelle.",
+      "legacy": "Das dieser Aufgabe zugewiesene Abonnementkonto ist nicht verfügbar. Prüfe Anmeldung und Nutzung auf dem ausführenden Computer oder wähle eine andere Modellquelle. Das Konto wird nicht automatisch gewechselt."
     }
   },
   "ccAgent": {
@@ -19770,12 +19794,6 @@
       "from": "Übernommen von „{{name}}“",
       "closeChecklist": "Liste schließen"
     },
-    "suggestion": {
-      "title": "Mit dem Migrationsassistenten von „{{name}}“ übernehmen?",
-      "description": "Du kannst diesen Computer mit den Plugins, Skills, Einstellungen und Verbindungen des anderen einrichten. Was hier eine neue Anmeldung oder Berechtigung braucht, wird für dich aufgelistet. Du kannst ihn auch später unter Einstellungen → Allgemein → Migrationsassistent öffnen.",
-      "confirm": "Migrationsassistent öffnen",
-      "later": "Nicht jetzt"
-    },
     "walkthrough": {
       "progress": "Einrichtungsliste {{current}} / {{total}}",
       "open": "Öffnen",
@@ -19797,6 +19815,103 @@
         "allow": "Erlauben",
         "deny": "Ablehnen"
       }
+    }
+  },
+  "firstRunGuide": {
+    "title": {
+      "new": "Willkommen bei Cindy",
+      "returning": "Willkommen zurück"
+    },
+    "stepsLabel": "Schritte der Einführung",
+    "close": "Einführung schließen",
+    "next": "Weiter",
+    "skip": "Überspringen",
+    "preparing": "Wird vorbereitet …",
+    "steps": {
+      "legacy": "Frühere Daten",
+      "intro": "Cindy kennenlernen",
+      "migration": "Migrieren",
+      "models": "Modell verbinden",
+      "import": "Vorhandenes übernehmen",
+      "finish": "Fertig"
+    },
+    "legacy": {
+      "title": "Deine Daten aus der vorherigen Version sind da",
+      "body": "Frühere Sitzungen, Mediendateien und die Anmeldungen des Agent-Browsers wurden in diese Version übernommen und sind einsatzbereit.",
+      "note": "Von dir autorisierte Schlüssel und Zugangsdaten von Drittanbietern werden nicht mit den Daten übernommen. Autorisiere sie in den Einstellungen erneut oder gib sie erneut ein."
+    },
+    "intro": {
+      "lead": "Cindy ist der KI-Assistent, der dir hilft, Wirklichkeit werden zu lassen, was du dir vornimmst.",
+      "work": {
+        "title": "Arbeit abgeben",
+        "body": "Cindy arbeitet direkt in deinen Ordnern und Apps, statt nur Fragen zu beantworten."
+      },
+      "connect": {
+        "title": "Vorhandene Modelle und Werkzeuge nutzen",
+        "body": "Verbinde dein eigenes Abo oder deinen API-Schlüssel und füge Plugins und Skills bei Bedarf hinzu."
+      },
+      "continue": {
+        "title": "Überall weitermachen",
+        "body": "Starte, prüfe und setze Sitzungen auf deinem Computer vom Smartphone aus fort."
+      },
+      "start": "Loslegen",
+      "next": "Als Nächstes"
+    },
+    "migration": {
+      "title": "Cindy von deinem anderen Computer übernehmen",
+      "body": "Ein anderer Computer in deinem Konto ist bereits eingerichtet. Der Migrationsassistent kopiert dessen Plugins, Skills, Einstellungen und Verbindungen auf diesen Computer; Schlüssel werden erst kopiert, nachdem du auf dem anderen Computer „Erlauben“ gewählt hast.",
+      "manualBody": "Wenn du Cindy auf einem anderen Computer verwendet hast, kann der Migrationsassistent dessen Plugins, Skills, Einstellungen und Verbindungen auf diesen Computer kopieren.",
+      "done": "Von „{{name}}“ migriert",
+      "from": "Alter Computer",
+      "to": "Dieser Computer"
+    },
+    "models": {
+      "title": "Cindy ein Modell geben",
+      "body": "Beide Möglichkeiten lassen sich zusammen nutzen.",
+      "cindy": {
+        "badge": "Offizieller Dienst",
+        "body": "Der von Cindy bereitgestellte Modelldienst. Er ist in deinem Konto enthalten und muss nicht aktiviert werden. Neue Konten erhalten ein kostenloses Guthaben zum Ausprobieren; nach der Bezahlung stehen fast alle Modelle zur Verfügung, ohne Bezahlung ist die Modellauswahl kleiner.",
+        "active": "In deinem Konto enthalten und sofort nutzbar",
+        "freeBalance": "Geschenkter Betrag – probier es gern aus"
+      },
+      "own": {
+        "title": "Eigenen Tarif nutzen",
+        "badge": "Günstiger",
+        "body": "Du hast bereits ein Claude- oder ChatGPT-Abo oder einen API-Schlüssel? Wir empfehlen dringend, es zu verbinden und zusammen mit Cindy AI zu nutzen – so ist das Erlebnis am besten.",
+        "more": "Weitere Anbieter und API-Schlüssel",
+        "connected": "Verbunden"
+      }
+    },
+    "import": {
+      "title": "Vorhandenes von diesem Computer übernehmen",
+      "body": "Das hat Cindy in anderen KI-Werkzeugen auf diesem Computer gefunden. Cindy liest die Originale nur und verändert sie nicht.",
+      "empty": "Auf diesem Computer wurde nichts zum Importieren gefunden.",
+      "tasksHeading": "Sitzungen",
+      "tasksHint": "Wähle Werkzeuge aus, um ihre Sitzungen in Cindy zu übernehmen und weiterzuarbeiten.",
+      "pick": "Einzeln auswählen",
+      "started": "Der Import läuft im Hintergrund. Den Fortschritt findest du unter Einstellungen → Sitzungsimport.",
+      "startFailed": "Der Import wurde nicht gestartet. Importiere erneut unter Einstellungen → Sitzungsimport.",
+      "teammatesHeading": "Teammitglieder",
+      "teammatesHint": "Importiere einen Agent aus einem anderen Werkzeug als Teammitglied, mit seinen Erinnerungen, Skills und Automatisierungen.",
+      "importTeammate": "Als Teammitglied importieren"
+    },
+    "finish": {
+      "title": "Alles bereit",
+      "legacy": "Die Daten aus der vorherigen Version wurden in diese Version übernommen",
+      "modelReady": "Ein Modell ist verbunden",
+      "modelMissing": "Es ist noch kein Modell verbunden. Du kannst jederzeit eines verbinden, wenn du eine Sitzung startest.",
+      "importStarted": "Sitzungen aus anderen Werkzeugen werden im Hintergrund importiert",
+      "native": "Deine Skills und MCP-Server aus Claude Code und Codex funktionieren hier direkt; es gibt nichts zu importieren.",
+      "start": "Erste Sitzung starten"
+    },
+    "resume": {
+      "label": "Einführung läuft · {{step}}",
+      "back": "Zurück zur Einführung"
+    },
+    "settings": {
+      "title": "Einführung",
+      "description": "Sieh dir noch einmal an, wie du Cindy kennenlernst, von einem anderen Computer migrierst, ein Modell verbindest und Vorhandenes übernimmst.",
+      "open": "Einführung öffnen"
     }
   },
   "forwardedRequest": {
@@ -19959,6 +20074,10 @@
     "openDirectoryFailed": "Der Kontoordner konnte nicht geöffnet werden. Er wurde möglicherweise verschoben oder gelöscht.",
     "loginAgain": "Erneut anmelden",
     "login": "Anmelden",
+    "quotaRecoverIn": "In {{duration}} wieder verfügbar",
+    "quotaExhausted": "Kontingent aufgebraucht",
+    "quotaFiveHourRemaining": "5-Stunden-Kontingent: {{percent}}% verbleibend",
+    "quotaFiveHourExhausted": "5-Stunden-Kontingent aufgebraucht",
     "quotaAverage": "Ø verbleibend {{percent}} %",
     "quotaUpdating": "Kontingent wird aktualisiert",
     "quotaResetSoon": "Bald zurückgesetzt",
@@ -20005,5 +20124,132 @@
     "detail": "Anfrage von {{device}}\nZweck: {{purpose}}\n\nGeräte Ihres Kontos können diesen Computer steuern, Aufgaben ausführen und auf Dateien zugreifen. Die Einstellung bleibt aktiv, bis Sie sie in den Einstellungen deaktivieren.",
     "decline": "Jetzt nicht",
     "enable": "Fernsteuerung aktivieren"
+  },
+  "modelGroups": {
+    "title": "Modellgruppen",
+    "description": "Fasse mehrere Quellen, die du unter Anbieter bereits hast, zu einer Auswahl zusammen. Wähle sie in der Modellauswahl unter „Modellgruppen“, und Cindy entscheidet, welche Quelle verwendet wird.",
+    "routes": "Routen",
+    "routesDescription": "Eine Route enthält mehrere Quellen. Jede neue Aufgabe wählt eine nach der Regel der Route.",
+    "sourceCount_one": "{{count}} Quelle",
+    "sourceCount_other": "{{count}} Quellen",
+    "strategy": {
+      "expiring": {
+        "title": "Bald Verfallendes zuerst",
+        "hint": "Nutzt zuerst das Abo-Kontingent, von dem viel übrig ist und das bald zurückgesetzt wird, damit nichts verfällt. Quellen ohne lesbares Kontingent kommen danach."
+      },
+      "order": {
+        "title": "Der Reihe nach",
+        "hint": "Wechselt erst zur nächsten Quelle, wenn die vorherige nicht nutzbar ist."
+      },
+      "rotate": {
+        "title": "Abwechselnd",
+        "hint": "Jede neue Aufgabe geht an die nächste Quelle und verteilt die Last gleichmäßig."
+      },
+      "cheapest": {
+        "title": "Am günstigsten",
+        "hint": "Nutzt zuerst Abos mit verbleibendem Kontingent, ohne Zusatzkosten; der Rest folgt vom niedrigsten zum höchsten Listenpreis, Quellen ohne Preis kommen zuletzt."
+      }
+    },
+    "picker": {
+      "empty": "Noch keine Modellgruppen. Fasse in den Einstellungen mehrere Quellen zu einer Route zusammen, um sie hier auszuwählen.",
+      "manage": "Modellgruppen verwalten"
+    },
+    "why": {
+      "expiringQuota": "Noch {{left}} % Kontingent, Zurücksetzung am {{reset}} – daher zuerst",
+      "expiring": "Nach Kontingent an erster Stelle",
+      "order": "Die erste verfügbare Quelle",
+      "rotate": "Diesmal an der Reihe",
+      "only": "Derzeit als einzige verfügbar",
+      "soonest": "Alle Quellen haben ihr Kontingent aufgebraucht; diese erholt sich zuerst",
+      "soonestUntil": "Alle Quellen haben ihr Kontingent aufgebraucht; diese erholt sich zuerst ({{reset}})",
+      "standby": "Diesmal nicht an der Reihe",
+      "standbyQuota": "Noch {{left}} % Kontingent, Zurücksetzung erst am {{reset}} – wird aufgespart",
+      "off": "In dieser Route deaktiviert",
+      "unavailable": "Nicht verbunden, oder dieses Modell ist gerade nicht wählbar",
+      "limited": "Kontingent aufgebraucht",
+      "limitedUntil": "Kontingent aufgebraucht bis {{reset}}",
+      "tight": "Das 5-Stunden-Kontingent ist fast voll und wird vorerst übersprungen",
+      "cheapest": "Niedrigster Listenpreis",
+      "cheapestFree": "Abo-Kontingent übrig, keine Zusatzkosten",
+      "noVision": "Die Nachricht enthält Bilder, und diese Quelle kann keine Bilder sehen",
+      "exceptionImage": "Die Nachricht enthält Bilder, daher wurden nur Quellen berücksichtigt, die Bilder sehen können",
+      "exceptionImageFallback": "Die Nachricht enthält Bilder, aber keine Quelle kann Bilder sehen – daher wie üblich gewählt",
+      "exceptionHours": "In diesem Zeitraum wird „{{name}}“ verwendet",
+      "separator": "; "
+    },
+    "settings": {
+      "newRoute": "Neue Route",
+      "newRouteName": "Neue Route",
+      "routesEmpty": "Noch keine Routen. Erstelle eine und füge mehrere Quellen hinzu.",
+      "scopeNote": "Modellgruppen gelten für neue Aufgaben, die auf diesem Computer gestartet werden. Die Quelle wird beim Start gewählt und ändert sich während der Aufgabe nicht.",
+      "back": "Zurück zu Modellgruppen",
+      "name": "Name",
+      "nameHint": "Wird in der Modellauswahl angezeigt.",
+      "routeShownAs": "Wird in der Modellauswahl unter „Modellgruppen“ angezeigt.",
+      "pick": "Welche verwendet wird",
+      "effort": "Denkintensität",
+      "effortUnset": "Nicht festgelegt",
+      "effortHint": "Unterstützt das gewählte Modell diese Stufe nicht, läuft es mit seinem Standard.",
+      "sources": "Nutzbare Quellen",
+      "sourcesHint": "Verschiedene Modelle können nebeneinander stehen. Die Aufgabe zeigt, welches verwendet wurde.",
+      "sourcesEmpty": "Noch keine Quellen. Füge unten ein verbundenes Modell hinzu.",
+      "sourcesFull": "Eine Route fasst bis zu {{count}} Quellen.",
+      "addSource": "Quelle hinzufügen",
+      "chooseModel": "Modell auswählen",
+      "notConnected": "Nicht verbunden",
+      "moveUp": "Nach oben",
+      "moveDown": "Nach unten",
+      "remove": "Aus dieser Route entfernen",
+      "useSource": "{{name}} in dieser Route verwenden",
+      "try": {
+        "title": "Ausprobieren",
+        "hint": "Sieh nach, welche Quelle eine neue Aufgabe jetzt verwenden würde. Es wird nichts gesendet und kein Kontingent verbraucht.",
+        "run": "Auswahl ansehen",
+        "picked": "Diese verwenden",
+        "standby": "Reserve",
+        "skipped": "Übersprungen",
+        "unavailable": "Keine Quelle dieser Route ist gerade nutzbar. Eine neue Aufgabe verwendet das Modell, das du ausgewählt hattest."
+      },
+      "deleteRoute": "Diese Route löschen",
+      "deleteRouteConfirmTitle": "„{{name}}“ löschen?",
+      "deleteRouteConfirmDescription": "Tageszeit-Ausnahmen anderer Routen, die zu ihr wechseln, werden ebenfalls gelöscht. Bereits gestartete Aufgaben sind nicht betroffen.",
+      "delete": "Löschen",
+      "cancel": "Abbrechen",
+      "saveFailed": "Speichern fehlgeschlagen. Versuche es erneut.",
+      "exceptions": {
+        "title": "Ausnahmen",
+        "hint": "Werden vor der Auswahlregel geprüft, von oben nach unten.",
+        "empty": "Noch keine Ausnahmen. Jede neue Aufgabe folgt der Auswahlregel oben.",
+        "imageRule": "Wenn die Nachricht Bilder enthält, nur Quellen verwenden, die Bilder sehen können",
+        "hoursRule": "{{from}}–{{to}}: „{{name}}“ verwenden",
+        "remove": "Diese Ausnahme entfernen",
+        "add": "Ausnahme hinzufügen",
+        "choose": "Situation auswählen",
+        "kindImage": "Die Nachricht enthält Bilder",
+        "kindHours": "Eine Tageszeit",
+        "from": "Von",
+        "to": "Bis",
+        "useRoute": "Stattdessen verwenden",
+        "addHours": "Hinzufügen",
+        "sameHour": "Beginn und Ende dürfen nicht gleich sein.",
+        "full": "Bis zu {{count}} Ausnahmen.",
+        "needOtherRoute": "Erstelle eine weitere Route, um nach Tageszeit dorthin zu wechseln."
+      }
+    },
+    "overview": {
+      "mapTitle": "So wählen neue Aufgaben ein Modell",
+      "mapDescription": "Von links nach rechts: die Route und die Quelle, bei der es landet. Klicke auf eine Route, um sie zu ändern.",
+      "columnSources": "Quellen",
+      "columnEmpty": "Noch keine",
+      "openRoute": "Route „{{name}}“ öffnen",
+      "recentTitle": "Letzte Auswahl",
+      "recentEmpty": "Noch keine Aufgabe hat eine Route verwendet.",
+      "keptOriginal": "Darin war kein Modell verfügbar, daher blieb die Aufgabe beim Modell, das du gewählt hattest.",
+      "keptOriginalShort": "Dein Modell wurde beibehalten",
+      "latest": "Der Weg der letzten Aufgabe"
+    },
+    "switchOffer": {
+      "action": "Mit {{model}} fortfahren"
+    }
   }
 }
