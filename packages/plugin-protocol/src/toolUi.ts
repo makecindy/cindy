@@ -1,6 +1,6 @@
 import { isSafeGhostRelativePath } from './internal/ghostPath.js';
 import { validateCspDomains } from './appCsp.js';
-import { parseGhostHostUi, type GhostHostUi } from './hostUi.js';
+import { parseGhostHostUi, parseStoredGhostHostUi, type GhostHostUi } from './hostUi.js';
 /** First release with plugin pages; authoring floor, never a client install gate. */
 export const PLUGIN_UI_MIN_CINDY_VERSION = '0.1.122-beta';
 export interface GhostUiResource {
@@ -77,7 +77,7 @@ export function getPluginHostUi(manifest: UiManifest): GhostHostUi | undefined {
   if ((manifest.schemaVersion !== undefined && manifest.schemaVersion !== 3) || !object(manifest.mcpApps)) return;
   const tools = manifest.tools ?? [];
   if (!Array.isArray(tools) || tools.some(tool => !object(tool) || typeof tool.name !== 'string')) return;
-  return parseGhostHostUi(manifest.mcpApps.host,
+  return parseStoredGhostHostUi(manifest.mcpApps.host,
     new Set(getPluginToolUi(manifest)?.resources.map(resource => resource.uri) ?? []),
     new Set(tools.map(tool => (tool as { name: string }).name))) ?? undefined;
 }

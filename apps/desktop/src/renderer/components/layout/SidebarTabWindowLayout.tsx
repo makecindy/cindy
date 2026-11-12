@@ -54,6 +54,7 @@ import {
 } from '@/features/right-sidebar/globalTabs';
 import { WindowControls } from '@/components/title-bar/WindowControls';
 import { ChromeIconButton } from '@/components/title-bar/ChromeIconButton';
+import { readPluginUiEntries, PluginUiSlotControls } from '@/cindy-brain/PluginUiContributions';
 import { useAppShortcut } from '@/hooks/useAppShortcut';
 import { useCloseShortcutShellOwner } from '@/hooks/useCloseWindowShortcut';
 import { useLocale } from '@/hooks/useLocale';
@@ -328,9 +329,12 @@ export function SidebarTabWindowLayout() {
   );
 
   const context = assignment?.context;
+  const pluginTitlebarEntries = readPluginUiEntries('window.titlebar');
   const topbarLeading = <div className={isMac ? 'w-[72px] shrink-0' : 'w-1 shrink-0'} />;
   const topbarTrailing = (
     <>
+      {pluginTitlebarEntries.length > 0 && <PluginUiSlotControls entries={pluginTitlebarEntries}
+        sessionId={sessionId} appearance="titlebar" />}
       {activeTabId && (
         <div
           className="flex h-full shrink-0 items-center gap-0.5"

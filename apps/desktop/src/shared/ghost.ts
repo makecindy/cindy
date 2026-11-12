@@ -2259,6 +2259,7 @@ export function getApprovedGhostHostUi(ghost: InstalledGhost): GhostHostUi | und
     contributions: (host.contributions ?? []).filter(item => has('contribution', item.id) && (!item.view || has('view', item.view))),
     commands: (host.commands ?? []).filter(command => has('command', command.id) && (!command.view || has('view', command.view))),
     capabilities: (host.capabilities ?? []).filter(capability => has('capability', capability)),
+    ...(host.settings ? { settings: host.settings.filter(field => has('setting', field.id)) } : {}),
     ...(host.appearance || host.capabilities?.includes('appearance') ? { appearance: {
       fields: (host.appearance?.fields ?? PLUGIN_APPEARANCE_FIELDS).filter(field => has('appearance', field)),
       resources: (host.appearance?.resources ?? []).filter(resource => has('appearance-resource', resource.id)),

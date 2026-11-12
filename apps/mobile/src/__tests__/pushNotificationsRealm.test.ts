@@ -3,6 +3,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 const store = vi.hoisted(() => new Map<string, string>());
 const envState = vi.hoisted(() => ({
   platform: 'ios',
+  badgeNative: false,
   activeRealm: 'cn' as 'cn' | 'global',
   buildRegion: 'cn' as 'cn' | 'global' | 'dev',
   endpointByRealm: {
@@ -21,6 +22,8 @@ const mocks = vi.hoisted(() => ({
   getDevicePushTokenAsync: vi.fn(),
   readIosPushEnvironment: vi.fn(),
   setNotificationHandler: vi.fn(),
+  setBadgeCountAsync: vi.fn(async (_count: number) => true),
+  dismissAllNotificationsAsync: vi.fn(async () => {}),
 }));
 
 vi.mock('@react-native-async-storage/async-storage', () => ({
@@ -36,6 +39,8 @@ vi.mock('@react-native-async-storage/async-storage', () => ({
 }));
 
 vi.mock('expo-notifications', () => ({
+  setBadgeCountAsync: mocks.setBadgeCountAsync,
+  dismissAllNotificationsAsync: mocks.dismissAllNotificationsAsync,
   setNotificationHandler: mocks.setNotificationHandler,
   getPermissionsAsync: mocks.getPermissionsAsync,
   requestPermissionsAsync: mocks.requestPermissionsAsync,
@@ -44,6 +49,13 @@ vi.mock('expo-notifications', () => ({
 
 vi.mock('react-native', () => ({
   Platform: { get OS() { return envState.platform; } },
+}));
+
+vi.mock('expo-modules-core', () => ({
+  requireOptionalNativeModule: () => ({
+    get setTaskBadgeIdentity() { return envState.badgeNative ? async () => {} : undefined; },
+    get applyTaskBadge() { return envState.badgeNative ? async () => true : undefined; },
+  }),
 }));
 
 vi.mock('@/notifications/nativePushEnvironment', () => ({ readIosPushEnvironment: mocks.readIosPushEnvironment }));
@@ -75,6 +87,8 @@ import {
   unregisterPushTokenBestEffort,
 } from '@/notifications/pushNotifications';
 import { setActiveSelfHostedRelay } from '@/device-link/selfHostedRelayRouting';
+import { clearNotificationBadge, isNotificationRouteVisible, createTaskBadgeSync } from '@/notifications/notificationBadge';
+import { createServerTaskBadgeSync, type TaskBadgeSnapshot } from '@/notifications/taskBadgeSync';
 import { readAndroidPushAvailability, setAndroidPushAvailability } from '../notifications/androidPushAvailability';
 
 import { setMobileAuthOwner } from '@/auth/authOwnerGeneration';
@@ -98,6 +112,138 @@ function readStoredRealms(key: string): string[] {
 }
 
 describe('push notification realm routing', () => {
+  const snapshot = (version: string, badgeCount: number): TaskBadgeSnapshot => ({ schemaVersion: 1,
+    accountId: 'account', version, waitingCount: badgeCount, unreadCount: 0, runningCount: 3, badgeCount, complete: true });
+  // Unit: a delayed REST/local refresh must not overwrite a newer account-wide
+  // push. Existing native-writer tests do not exercise revision reconciliation.
+  it('keeps a newer push while a shared foreground fetch returns an older count', async () => {
+    let resolve!: (value: TaskBadgeSnapshot) => void;
+    const fetch = vi.fn(() => new Promise<TaskBadgeSnapshot>(done => { resolve = done; }));
+    const sync = createServerTaskBadgeSync(fetch, () => true, 'account');
+    const first = sync.refresh();
+    const second = sync.refresh();
+    expect(fetch).toHaveBeenCalledOnce();
+    await sync.accept(snapshot('9007199254740993', 8));
+    resolve(snapshot('9007199254740992', 3));
+    await Promise.all([first, second]);
+    await sync.accept(snapshot('9007199254740993', 3));
+    expect(mocks.setBadgeCountAsync.mock.calls).toEqual([[8]]);
+    await sync.accept(snapshot('9007199254740994', 0));
+    expect(mocks.setBadgeCountAsync.mock.calls).toEqual([[8], [0]]);
+    sync.dispose();
+  });
+
+  // Unit regression for #9547: existing reconciliation tests finish native writes
+  // before the next revision. A pending v1/count6 must not suppress v3/count6;
+  // native needs even an incomplete v3 watermark to reject delayed background v2.
+  it.each([true, false])('delivers a newer same-count native revision while a write awaits (complete=%s)', async complete => {
+    let release!: () => void;
+    let started!: () => void;
+    const entered = new Promise<void>(resolve => { started = resolve; });
+    const blocked = new Promise<void>(resolve => { release = resolve; });
+    const write = vi.fn(async (value: TaskBadgeSnapshot) => {
+      if (value.version === '1') {
+        started();
+        await blocked;
+      }
+    });
+    const sync = createServerTaskBadgeSync(async () => undefined, () => true, 'account', write);
+    const first = sync.accept(snapshot('1', 6));
+    await entered;
+    await sync.accept({ ...snapshot('3', 6), complete });
+    release();
+    await first;
+    await sync.accept(snapshot('2', 2));
+    expect(write.mock.calls.map(([value]) => [value.version, value.badgeCount, value.complete]))
+      .toEqual([['1', 6, true], ['3', 6, complete]]);
+    sync.dispose();
+  });
+
+  it('preserves the native badge on unavailable data and discards late account responses', async () => {
+    let resolve!: (value: TaskBadgeSnapshot) => void;
+    const fetch = vi.fn<() => Promise<TaskBadgeSnapshot | undefined>>()
+      .mockResolvedValueOnce(undefined)
+      .mockRejectedValueOnce(new Error('offline'))
+      .mockImplementationOnce(() => new Promise(done => { resolve = done; }));
+    const sync = createServerTaskBadgeSync(fetch, () => true, 'account');
+    await sync.refresh();
+    await expect(sync.refresh()).rejects.toThrow('offline');
+    const pending = sync.refresh();
+    sync.dispose();
+    resolve(snapshot('22', 7));
+    await pending;
+    expect(mocks.setBadgeCountAsync).not.toHaveBeenCalled();
+  });
+
+  it('rejects other accounts and incomplete totals, including older complete responses', async () => {
+    const sync = createServerTaskBadgeSync(async () => undefined, () => true, 'account');
+    await sync.accept(snapshot('8', 6));
+    await sync.accept({ ...snapshot('9', 0), complete: false });
+    await sync.accept(snapshot('8', 0));
+    await sync.accept({ ...snapshot('10', 0), accountId: 'other' });
+    await sync.accept({ ...snapshot('10', 0), badgeCount: -1 });
+    expect(mocks.setBadgeCountAsync.mock.calls).toEqual([[6]]);
+    await sync.accept(snapshot('10', 0));
+    expect(mocks.setBadgeCountAsync.mock.calls).toEqual([[6], [0]]);
+    sync.dispose();
+  });
+
+  // Unit: fixed-1/notification counting could not represent real task counts.
+  // Registration tests do not cover native ordering, unknown state or read clears.
+  it('writes exact task counts, keeps unknown state and clears only a confirmed zero', async () => {
+    let count: number | undefined = 6;
+    const controller = createTaskBadgeSync(() => count, () => true);
+    await controller.sync();
+    await controller.sync();
+    count = undefined;
+    await controller.sync();
+    count = 2;
+    await controller.sync();
+    count = 0;
+    await controller.sync();
+    expect(mocks.setBadgeCountAsync.mock.calls).toEqual([[6], [2], [0]]);
+    controller.dispose();
+  });
+
+  it('does not restore an old account count after sign-out during a native write', async () => {
+    expect(isNotificationRouteVisible('/companions/groups/group?threadRootId=thread',
+      { pathname: '/companions/groups/group' })).toBe(false);
+    expect(isNotificationRouteVisible('/sessions/task?deviceId=two',
+      { pathname: '/sessions/task', deviceId: 'one' })).toBe(false);
+    let release!: (value: boolean) => void;
+    mocks.setBadgeCountAsync.mockImplementationOnce(() => new Promise(resolve => { release = resolve; }));
+    const controller = createTaskBadgeSync(() => 6, () => true);
+    const writing = controller.sync();
+    await vi.waitFor(() => expect(release).toBeTypeOf('function'), { interval: 1 });
+    controller.dispose();
+    const clear = clearNotificationBadge();
+    release(true);
+    await Promise.all([writing, clear]);
+    await controller.sync();
+    expect(mocks.dismissAllNotificationsAsync).toHaveBeenCalledOnce();
+    expect(mocks.setBadgeCountAsync.mock.calls).toEqual([[6], [0]]);
+  });
+
+  it('keeps a foreground task reminder in the tray without adding a banner', async () => {
+    store.set('cindy.push.enabled', '1');
+    configureForegroundNotificationBehavior();
+    const handler = mocks.setNotificationHandler.mock.calls.at(-1)![0];
+    expect(await handler.handleNotification({ request: { content: { data: { deepLink: '/sessions/task' } } } }))
+      .toEqual({ shouldShowBanner: false, shouldShowList: true, shouldPlaySound: false, shouldSetBadge: false });
+    expect(mocks.setBadgeCountAsync).not.toHaveBeenCalled();
+    store.set('cindy.push.enabled', '0');
+    mocks.setBadgeCountAsync.mockClear();
+    expect(await handler.handleNotification({ request: { content: { data: { deepLink: '/sessions/task' } } } }))
+      .toMatchObject({ shouldShowList: false, shouldSetBadge: false });
+    expect(mocks.setBadgeCountAsync).not.toHaveBeenCalled();
+  });
+
+  it('requests iOS badge permission along with alerts and sounds', async () => {
+    mocks.getPermissionsAsync.mockResolvedValueOnce({ status: 'undetermined', canAskAgain: true });
+    mocks.requestPermissionsAsync.mockResolvedValueOnce({ status: 'granted' });
+    await syncPushRegistration({ enabled: true, apiFetch: vi.fn().mockResolvedValue({}) });
+    expect(mocks.requestPermissionsAsync).toHaveBeenCalledWith({ ios: { allowAlert: true, allowSound: true, allowBadge: true } });
+  });
   // Real mutation module + native token event simulation: old code re-PUT after logout DELETE.
   // Also covers duplicate bootstrap events, which the separately mocked bridge test cannot prove.
   it('fences native token callbacks during logout and permits a new authenticated lifecycle', async () => {
@@ -225,11 +371,19 @@ describe('push notification realm routing', () => {
     expect(readAndroidPushAvailability()).toBe('unavailable');
     expect(readStoredRealms(REGISTERED_KEY)).toEqual(['global']);
   });
-  it('allows stopping the shared direct service only after both push registrations succeed', async () => {
+  // Unit merge regression: Android fallback tests previously had no badge-native
+  // boundary. Both old/new binaries register ordinary push; only new ones opt in
+  // to badge-only delivery, and that capability must never reach chat registration.
+  it.each([false, true])('allows cloud delivery with both registrations and scopes badge capability (native=%s)', async supported => {
     envState.platform = 'android';
+    envState.badgeNative = supported;
     setAndroidPushAvailability('unavailable');
-    await expect(syncPushRegistration({ enabled: true, apiFetch: vi.fn(async () => ({})) as any })).resolves.toBe('registered');
+    const apiFetch = vi.fn(async (_path: string, _opts: { body?: Record<string, unknown> }) => ({}));
+    await expect(syncPushRegistration({ enabled: true, apiFetch: apiFetch as any })).resolves.toBe('registered');
     expect(readAndroidPushAvailability()).toBe('available');
+    expect(apiFetch.mock.calls.find(([path]) => path === '/api/device-link/push-token')?.[1].body?.taskBadgeVersion)
+      .toBe(supported ? 1 : undefined);
+    expect(apiFetch.mock.calls.find(([path]) => path === '/v1/push-token')?.[1].body).not.toHaveProperty('taskBadgeVersion');
   });
   // Unit: a cached FCM token must not make first enable fail when cloud registration is offline.
   it('keeps Android opt-in usable through the direct channel when cloud registration fails', async () => {
@@ -258,6 +412,7 @@ describe('push notification realm routing', () => {
   });
   // Same group, another thread must still be noticeable while reading the main timeline.
   it('passes the thread route to the foreground visibility gate', async () => {
+    store.set('cindy.push.enabled', '1');
     const room = '00000000-0000-4000-8000-000000000001';
     const message = '00000000-0000-4000-8000-000000000002';
     const thread = '00000000-0000-4000-8000-000000000003';
@@ -276,6 +431,7 @@ describe('push notification realm routing', () => {
     vi.clearAllMocks();
     store.clear();
     envState.platform = 'ios';
+    envState.badgeNative = false;
     envState.activeRealm = 'cn';
     envState.buildRegion = 'cn';
     devEnvironmentState.active = 'dev';
@@ -297,7 +453,8 @@ describe('push notification realm routing', () => {
     vi.stubGlobal('__DEV__', false);
     const apiFetch = vi.fn().mockResolvedValue({ registered: true });
     await expect(syncPushRegistration({ enabled: true, apiFetch })).resolves.toBe('registered');
-    expect(apiFetch.mock.calls[0][1].body).toMatchObject({ apnsEnv: 'sandbox' });
+    expect(apiFetch.mock.calls.find(([path]) => path === '/api/device-link/push-token')?.[1].body).toMatchObject({ apnsEnv: 'sandbox', taskBadgeVersion: 1 });
+    expect(apiFetch.mock.calls.find(([path]) => path === '/v1/push-token')?.[1].body).not.toHaveProperty('taskBadgeVersion');
   });
 
   // Regression: iOS token reads emit another token event. A rotation callback

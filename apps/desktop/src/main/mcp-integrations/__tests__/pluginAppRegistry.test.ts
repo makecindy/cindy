@@ -94,6 +94,25 @@ function fixture() {
   };
 }
 
+// Registered native settings do not imply approval for an MCP App transport.
+// Minimal failure: a settings-approved plugin with UI approval absent (unit).
+it('projects settings without opening UI servers and revokes an old UI binding independently', () => {
+  const f = fixture();
+  f.ghost.manifest.mcpApps = { ui: getPluginToolUi(f.ghost.manifest), host: {
+    views: [{ id: 'view', title: 'View', resourceUri: 'ui://form' }],
+    settings: [{ id: 'enabled', title: 'Enabled', type: 'boolean', default: true }] } };
+  f.ghost.approvedHostUi = ghostHostUiApprovalTokens(f.ghost.manifest);
+  const instance = installedGhostStoragePart(f.ghost);
+  f.refresh();
+  const old = readPluginHostUi(instance)!;
+  f.setGhost({ ...f.ghost, uiCapabilityApproved: undefined });
+  expect(() => old.config.plugin!.assertCurrent()).toThrow();
+  f.refresh();
+  expect(readPluginHostUi(instance)?.host.settings).toHaveLength(1);
+  expect(readPluginHostUi(instance)?.host.views).toBeUndefined();
+  expect(state.configs.size).toBe(0);
+});
+
 // Stable binding identity is part of View lifecycle: list/localization updates
 // cannot reload a live resource, while actual approval changes must revoke it (unit).
 it('preserves Host UI bindings across unchanged directory refreshes and revokes changed approval', () => {

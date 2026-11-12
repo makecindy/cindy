@@ -38,6 +38,7 @@ import { mergeSidebarWindowBack } from '@/features/right-sidebar/lib/mergeSideba
 import { closeTab, getBucket, importTabSnapshot } from '@/features/right-sidebar/store';
 import { WindowControls } from '@/components/title-bar/WindowControls';
 import { ChromeIconButton } from '@/components/title-bar/ChromeIconButton';
+import { readPluginUiEntries, PluginUiSlotControls } from '@/cindy-brain/PluginUiContributions';
 import { useAppShortcut } from '@/hooks/useAppShortcut';
 import { useCloseShortcutShellOwner } from '@/hooks/useCloseWindowShortcut';
 import { useLocale } from '@/hooks/useLocale';
@@ -265,6 +266,7 @@ export function SidebarWindowLayout() {
     return true;
   });
 
+  const pluginTitlebarEntries = readPluginUiEntries('window.titlebar');
   return (
     <div className="flex h-screen flex-col bg-content-area text-foreground">
       {/* 46px 自绘 chrome(与主窗 ContentHeader 行高一致,红绿灯心 y=23 同轴):
@@ -287,6 +289,8 @@ export function SidebarWindowLayout() {
           style={{ WebkitAppRegion: 'no-drag' } as React.CSSProperties}
         >
           {/* 合并回主窗口:关偏好 + 关本窗,主窗恢复内嵌展开 */}
+          {pluginTitlebarEntries.length > 0 && <PluginUiSlotControls entries={pluginTitlebarEntries}
+            sessionId={interactiveSessionId} appearance="titlebar" />}
           <ChromeIconButton
             onClick={() => {
               void mergeSidebarWindowBack(interactiveSessionId).catch((err) => {

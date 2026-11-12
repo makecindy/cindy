@@ -9,9 +9,26 @@ vi.mock('@/hooks/useMacFullscreen', () => ({
 
 import { FeatureSidebarSlotProvider } from '@/features/feature-context';
 import { CHROME_ACTIONS_GEOMETRY } from '../chromeActionsGeometry';
-import { ContentHeader } from '../ContentHeader';
+import { ContentHeader, ContentHeaderSlot } from '../ContentHeader';
 
 describe('ContentHeader rail ChromeActions hit hole', () => {
+  // Unit: a contributed trailing action is visible on routes with no title;
+  // removing it restores the original hidden chrome. Old drag-hole cases have
+  // hidden=false and cannot exercise this empty-route lifecycle.
+  it('retains an otherwise empty header for trailing actions and hides it again after removal', () => {
+    const click = vi.fn();
+    const draw = (withAction: boolean) => <FeatureSidebarSlotProvider isCollapsed={false}>
+      <ContentHeaderSlot sidebarVisible showCollapsedActions={false} isSidebarRail={false} rightSidebarAvailable={false}
+        trailing={withAction ? <button onClick={click}>Plugin action</button> : undefined}>Original content</ContentHeaderSlot>
+    </FeatureSidebarSlotProvider>;
+    const view = render(draw(true));
+    screen.getByRole('button', { name: 'Plugin action' }).click();
+    expect(click).toHaveBeenCalledOnce();
+    view.rerender(draw(false));
+    expect(screen.queryByRole('button', { name: 'Plugin action' })).toBeNull();
+    expect(view.container.querySelector('header')).toBeNull();
+    expect(screen.getByText('Original content')).toBeTruthy();
+  });
   it('keeps the macOS rail-edge ChromeActions area outside the window drag region', () => {
     render(
       <FeatureSidebarSlotProvider isCollapsed>
