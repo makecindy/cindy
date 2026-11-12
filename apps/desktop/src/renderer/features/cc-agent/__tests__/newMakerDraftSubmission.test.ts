@@ -25,6 +25,7 @@ import { createIpcError } from '../../../../shared/ipc-errors';
 import { dbToMakerAgentKind } from '../../../../shared/agentKindConversion';
 import { askPluginModelRoute, writePluginModelRouteNote } from '../pluginModelRoute';
 import { recallAgentDeviceSelection } from '../agentDeviceDraftMemory';
+import { filterHealthyDraftProviders } from '../../../../shared/draftModelCalibration';
 import type { GhostStartTaskRouteResult } from '../../../../shared/ghost';
 
 vi.mock('@/lib/makerTransport', () => ({ makerApiFor: vi.fn() }));
@@ -304,12 +305,13 @@ async function submit(options: {
   // The route resolves the seeded pair and the effort of the final provider/model
   // in two steps; compose them the way the route does.
   const seeded = runInNewContext(executable('draftSeedSelection'), {
-    ...environment, targetSelectableProviders,
+    ...environment, targetSelectableProviders, filterHealthyDraftProviders,
   })();
   const selection = {
     model: seeded?.model ?? environment.calibratedDraftModel,
     effort: runInNewContext(executable('draftInitialEffort'), {
       ...environment, localDraftEffort, draftSeedSelection: seeded, targetSelectableProviders,
+      draftInitialModel: seeded?.model ?? environment.calibratedDraftModel,
       // 这份 harness 不演「被控端快照里记着档位」的场景;档位相关场景在
       // newMakerDraftTargetCatalog.test.ts 的 effortOf 里。
       deviceDraftDefaults: null,

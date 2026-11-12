@@ -563,8 +563,10 @@ describe('new task model falls back when the seeded model is empty', () => {
     targetEfforts?: Effort[];
     localEffort?: Effort | null;
     rememberedEffort?: Effort;
+    /** 覆盖默认的那一家来源(清单发现失败 / 多家档位表不同这类场景)。 */
+    providers?: ProviderView[];
   }): { model: string; effort: Effort | null } {
-    const agentCatalogProviders = [
+    const agentCatalogProviders = options.providers ?? [
       providerWithEfforts(
         'shared-source',
         ['shared-model', 'seeded-model'],
@@ -590,6 +592,7 @@ describe('new task model falls back when the seeded model is empty', () => {
         targetSelectableProviders,
         capabilityAgentKind: 'pi',
         chatEligibleSourcesForModel,
+        filterHealthyDraftProviders,
         deviceProvidersLoading: false,
         deviceProvidersUnsupported: false,
       },
@@ -606,6 +609,7 @@ describe('new task model falls back when the seeded model is empty', () => {
       {
         draftSeedSelection: seeded,
         usesDeviceCatalog: true,
+        draftInitialModel: seeded?.model ?? 'shared-model',
         calibratedDraftModel: 'shared-model',
         localDraftEffort: options.localEffort ?? 'medium',
         agentCatalogProviders,
@@ -637,8 +641,11 @@ describe('new task model falls back when the seeded model is empty', () => {
   }
 
   it('uses the seeded model when the catalog offers one', () => {
+    // 种子档位是**请求值**:它来自被控端 capabilities 的跨来源并集,最终路由落到的来源
+    // 只支持 medium —— 原样显示 high 会让 pill 与发送时 reconcile 出来的值不一致
+    // (Codex review #9369)。模型本身仍是播种那个。
     expect(initialModel({ deviceLinkInitial: { model: 'seeded-model', effort: 'high' } }))
-      .toEqual({ model: 'seeded-model', effort: 'high' });
+      .toEqual({ model: 'seeded-model', effort: 'medium' });
   });
 
   // Codex review #9369: the seed comes from the target's flat capabilities list (a union
@@ -653,6 +660,31 @@ describe('new task model falls back when the seeded model is empty', () => {
   it('uses the calibrated model when the seeded model is empty', () => {
     expect(initialModel({ deviceLinkInitial: { model: '', effort: null } }))
       .toEqual({ model: 'shared-model', effort: 'medium' });
+  });
+
+  // Codex review #9369:清单发现失败的来源(unauthorized / regionBlocked 这类确定性失败)
+  // 手里握的是**上次成功**的陈旧清单。播种型号只在它那儿还能路由时,旧口径把种子算成
+  // 可路由,于是种子盖过下面那份健康校准,首条消息对着一个发不出去的来源建任务 ——
+  // 同 remoteCatalogCalibration / 本机自动路径的口径:这种来源不当默认值送人。
+  it('drops a seeded model only a discovery-failed source still offers', () => {
+    const failed = providerWithEfforts('stale-source', ['seeded-model'], ['high']);
+    failed.modelDiscoveryFailure = { kind: 'unauthorized', at: '2026-11-12T00:00:00Z' };
+    const healthy = providerWithEfforts('healthy-source', ['shared-model'], ['medium']);
+    expect(initialModel({
+      deviceLinkInitial: { model: 'seeded-model', effort: 'high' },
+      providers: [failed, healthy],
+    })).toEqual({ model: 'shared-model', effort: 'medium' });
+  });
+
+  // 同上,但全部来源都在失败态:那时没有更好的选择,陈旧清单也好过一个都挑不出来 ——
+  // 种子照旧生效(档位仍按最终型号的档位表对一遍,high 在这张表里所以保留)。
+  it('keeps a seeded model when every source failed discovery', () => {
+    const failed = providerWithEfforts('stale-source', ['seeded-model'], ['high']);
+    failed.modelDiscoveryFailure = { kind: 'unauthorized', at: '2026-11-12T00:00:00Z' };
+    expect(initialModel({
+      deviceLinkInitial: { model: 'seeded-model', effort: 'high' },
+      providers: [failed],
+    })).toEqual({ model: 'seeded-model', effort: 'high' });
   });
 
   // Codex review #9369: the local effort pref is not validated against the target model —
@@ -785,15 +817,22 @@ describe('the effort follows the final provider and model', () => {
     agentCatalogProviders: ProviderView[];
     chatInitialProviderId: string | null;
     calibratedDraftModel?: string;
+    draftSeedSelection?: { model: string; effort: Effort | null } | null;
     localDraftEffort?: Effort | null;
     recallAgentDeviceSelection?: () => unknown;
     deviceDraftDefaults?: unknown;
     effectiveAgentDeviceId?: string | null;
   }): Effort | null {
+    const calibratedDraftModel = bindings.calibratedDraftModel ?? 'shared-model';
+    const draftSeedSelection = bindings.draftSeedSelection === undefined
+      ? null
+      : bindings.draftSeedSelection;
     return callback<() => Effort | null>('draftInitialEffort', {
-      draftSeedSelection: null,
+      draftSeedSelection,
       usesDeviceCatalog: true,
-      calibratedDraftModel: bindings.calibratedDraftModel ?? 'shared-model',
+      calibratedDraftModel,
+      // 路由里档位按**最终型号**解析;没有种子时最终型号就是校准型号。
+      draftInitialModel: draftSeedSelection?.model ?? calibratedDraftModel,
       localDraftEffort: bindings.localDraftEffort ?? 'medium',
       agentCatalogProviders: bindings.agentCatalogProviders,
       targetSelectableProviders: selectableProviders(bindings.agentCatalogProviders),
@@ -848,6 +887,53 @@ describe('the effort follows the final provider and model', () => {
         model: 'other-model',
         effort: 'low',
         providerModelMemory: { 'pi:chosen': { effortByModel: { 'shared-model': 'high' } } },
+      },
+      localDraftEffort: 'low',
+    });
+    expect(effort).toBe('high');
+  });
+
+  // Codex review #9369:种子档位来自被控端 capabilities 的跨来源并集(或种子来源自己的
+  // 档位表),最终路由却落在另一家 —— 原样返回会让 pill 显示一个最终型号不支持的档,
+  // 发送时被 reconcile 成别的值,显示的和建成的不是同一个。
+  it('reconciles the seeded effort against the final source effort table', () => {
+    const providers = [provider('seed-source', ['high']), provider('final-source', ['low', 'medium'])];
+    const effort = effortOf({
+      agentCatalogProviders: providers,
+      chatInitialProviderId: 'final-source',
+      draftSeedSelection: { model: 'shared-model', effort: 'high' },
+      localDraftEffort: 'low',
+    });
+    // high 不在最终来源的档位表里:落到该表自己的默认档,而不是继续显示 high。
+    expect(effort).toBe('medium');
+  });
+
+  it('keeps a seeded effort the final source supports', () => {
+    const providers = [provider('seed-source', ['high']), provider('final-source', ['low', 'high'])];
+    const effort = effortOf({
+      agentCatalogProviders: providers,
+      chatInitialProviderId: 'final-source',
+      draftSeedSelection: { model: 'shared-model', effort: 'high' },
+      localDraftEffort: 'low',
+    });
+    expect(effort).toBe('high');
+  });
+
+  // Codex review #9369:被控端 providerModelMemory 的权威槽是 `${agent}:*`(模型级全局
+  // 预设),来源槽只是旧 v2 兼容副本。现代被控端可能只在权威槽里为这个型号记过档 ——
+  // 只读来源槽会漏掉它、一路掉到控制端的 localDraftEffort,两边都支持时 reconcile 保留
+  // 控制端那个值,被控端为目标记着的档位就没了。读序同 main 侧 getNewMakerModelTuning。
+  it('reads the controlled-device global preset slot before the source copy', () => {
+    const providers = [provider('chosen', ['low', 'high'])];
+    const effort = effortOf({
+      agentCatalogProviders: providers,
+      chatInitialProviderId: 'chosen',
+      effectiveAgentDeviceId: null,
+      deviceDraftDefaults: {
+        model: 'other-model',
+        effort: 'low',
+        // 权威槽为这个型号记着 high,来源 B 的兼容槽是空的。
+        providerModelMemory: { 'pi:*': { effortByModel: { 'shared-model': 'high' } } },
       },
       localDraftEffort: 'low',
     });
