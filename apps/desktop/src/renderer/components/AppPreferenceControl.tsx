@@ -4,6 +4,7 @@ import { useEffect, useRef } from 'react';
 import { flushSync } from 'react-dom';
 import { isDataOwnerPushStampCurrent } from '@/contexts/dataOwnerGeneration';
 import { appPreferenceSchema, type AppPreferencePatch } from '../../shared/appPreferenceControl';
+import type { ThemeSelection } from '../../shared/appearanceDefinition';
 import { useTheme } from '@/hooks/useTheme';
 import { useLocale } from '@/hooks/useLocale';
 import { useNotificationSettings } from '@/hooks/useNotificationSettings';
@@ -18,8 +19,8 @@ import { getThemeFamilies, tryGetFamily } from '@/themes/families';
 import { refreshLocalThemes } from '@/themes/local-themes';
 
 /** Validate persistence separately from hook memory: legacy setters may swallow quota errors. */
-const persisted: Record<keyof AppPreferencePatch, { key: string; absent?: unknown }> = {
-  theme: { key: 'theme' }, themeFamily: { key: 'theme.familyId' }, language: { key: 'language' },
+const persisted: Record<Exclude<keyof AppPreferencePatch, 'theme' | 'themeFamily'>, { key: string; absent?: unknown }> = {
+  language: { key: 'language' },
   notifications: { key: 'notifications.enabled' }, sendShortcut: { key: 'chat.sendShortcutPreference', absent: 'enter' },
   webLinks: { key: 'chat.webLinkOpenPreference', absent: 'external' },
   localLinks: { key: 'chat.localLinkOpenPreference', absent: 'sidebar' },
@@ -42,13 +43,11 @@ export function AppPreferenceControl() {
     webLinks: web.preference, localLinks: local.preference, streamFade: fade.preference,
     messageNavigation: navigation.enabled, showIgnoredDirectories: files.showIgnoredDirs,
     homeUsageDashboard: home.enabled, promptRecommendations: recommendations.enabled };
-  const current = useRef<{ state: Required<AppPreferencePatch>; apply: (patch: AppPreferencePatch) => void }>({ state, apply: () => {} });
+  const current = useRef<{ state: Required<AppPreferencePatch>; apply: (patch: AppPreferencePatch) => Promise<ThemeSelection | undefined> | undefined }>({ state, apply: () => undefined });
   current.current = { state, apply: patch => {
     if (patch.themeFamily !== undefined && !tryGetFamily(patch.themeFamily)) throw new Error('UNKNOWN_THEME');
     // The shortcut setter can reject a voice-input conflict, before other fields change.
     if (patch.sendShortcut !== undefined && !shortcut.setPreference(patch.sendShortcut).ok) throw new Error('SHORTCUT_CONFLICT');
-    if (patch.theme !== undefined) theme.setTheme(patch.theme);
-    if (patch.themeFamily !== undefined) theme.setFamily(patch.themeFamily);
     if (patch.language !== undefined) locale.setLocale(patch.language);
     if (patch.notifications !== undefined) notifications.setEnabled(patch.notifications);
     if (patch.webLinks !== undefined) web.setPreference(patch.webLinks);
@@ -58,6 +57,10 @@ export function AppPreferenceControl() {
     if (patch.showIgnoredDirectories !== undefined) files.setShowIgnoredDirs(patch.showIgnoredDirectories);
     if (patch.homeUsageDashboard !== undefined) home.setEnabled(patch.homeUsageDashboard);
     if (patch.promptRecommendations !== undefined) recommendations.setEnabled(patch.promptRecommendations);
+    if (patch.theme !== undefined || patch.themeFamily !== undefined) return theme.setSelection({
+      ...(patch.theme !== undefined ? { mode: patch.theme } : {}),
+      ...(patch.themeFamily !== undefined ? { familyId: patch.themeFamily } : {}),
+    });
   } };
   useEffect(() => window.electronAPI?.appPreferenceControl?.onSettingsChanged(event => {
     if (event.section !== 'memory' || !isDataOwnerPushStampCurrent(event.ownerStamp)) return;
@@ -91,17 +94,28 @@ export function AppPreferenceControl() {
             customized: isModelVisibilityCustomized(target.agent, target.providerId, target.modelId) };
         }
         if (request.operation === 'reset') throw new Error('RESET_NOT_SUPPORTED');
+        let confirmedTheme: ThemeSelection | undefined;
         if (request.operation === 'update') {
           const patch = appPreferenceSchema.parse(request.patch);
-          flushSync(() => current.current.apply(patch));
+          let selection: Promise<ThemeSelection | undefined> | undefined;
+          flushSync(() => { selection = current.current.apply(patch); });
+          if (patch.theme !== undefined || patch.themeFamily !== undefined) {
+            confirmedTheme = await selection;
+            if (!confirmedTheme || (patch.theme !== undefined && confirmedTheme.mode !== patch.theme) ||
+              (patch.themeFamily !== undefined && confirmedTheme.familyId !== patch.themeFamily) ||
+              !isDataOwnerPushStampCurrent(request.ownerStamp) || Date.now() > request.expiresAt)
+              throw new Error('THEME_SELECTION_NOT_CONFIRMED');
+          }
           for (const [key, expected] of Object.entries(patch)) {
-            const storage = persisted[key as keyof AppPreferencePatch];
+            if (key === 'theme' || key === 'themeFamily') continue;
+            const storage = persisted[key as keyof typeof persisted];
             const raw = localStorage.getItem(storage.key);
             const actual = raw === null ? storage.absent : typeof expected === 'boolean' ? raw === 'true' : raw;
             if (actual !== expected) throw new Error('PERSISTENCE_NOT_CONFIRMED');
           }
         }
-        bridge.reply({ requestId: request.requestId, ok: true, state: current.current.state,
+        bridge.reply({ requestId: request.requestId, ok: true, state: { ...current.current.state,
+          ...(confirmedTheme ? { theme: confirmedTheme.mode, themeFamily: confirmedTheme.familyId } : {}) },
           themeFamilies: getThemeFamilies().map(family => family.id), ...(modelVisibility ? { modelVisibility } : {}) });
       } catch { bridge.reply({ requestId: request.requestId, ok: false }); }
     });

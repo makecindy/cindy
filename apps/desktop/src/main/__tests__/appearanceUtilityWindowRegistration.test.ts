@@ -15,6 +15,17 @@ function expectBefore(source: string, registration: string, load: string): void 
 }
 
 describe('utility window appearance bootstrap registration', () => {
+  // Electron security §3.1(6): detached sidebar/tab roots bypass main-entry.
+  // The terminal's real decode/measurement test cannot catch missing root wiring.
+  // Guard tier: both hosts enter this file before createRoot and release on HMR.
+  it('detached sidebar roots install the common appearance consumer before rendering', () => {
+    const source = readMainSource('../renderer/sidebar-window-entry.tsx');
+    expectBefore(source, 'const disposeAppearancePresenter = installAppearancePresenter(', 'createRoot(rootElement).render(');
+    expect(source).toContain('import.meta.hot?.dispose(disposeAppearancePresenter)');
+    expect(source).toContain('installAppearancePresenter(applyFontSettings, false, initialAppearance)');
+    expect(source).toContain('onAppearanceChange={presentAppearance}');
+  });
+
   it('权限引导的 backdrop 与 guide 在加载 renderer 前登记只读权限', () => {
     const source = readMainSource('computer-permission-guide/window.ts');
     expectBefore(

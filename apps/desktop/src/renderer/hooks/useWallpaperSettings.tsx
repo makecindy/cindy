@@ -93,9 +93,11 @@ function pickWallpaperSettings(settings: AppearanceSettings): WallpaperSettings 
 export function WallpaperSettingsProvider({
   children,
   desktopBackground = true,
+  onAppearanceChange,
 }: {
   children: ReactNode;
   desktopBackground?: boolean;
+  onAppearanceChange?: (settings: AppearanceSettings) => void;
 }) {
   const [settings, setSettings] = useState<WallpaperSettings>(getInitialWallpaperSettings);
   const [blurPreview, setBlurPreview] = useState<number | null>(null);
@@ -164,7 +166,9 @@ export function WallpaperSettingsProvider({
     let disposed = false;
     let revision = 0;
     const apply = (next: AppearanceSettings) => {
-      const confirmed = pickWallpaperSettings(normalizeAppearanceSettings(next));
+      const normalized = normalizeAppearanceSettings(next);
+      onAppearanceChange?.(normalized);
+      const confirmed = pickWallpaperSettings(normalized);
       confirmedRef.current = confirmed;
       const optimistic = pendingRef.current.reduce(
         (current, pending) => ({ ...current, ...pending.patch }),
@@ -199,7 +203,7 @@ export function WallpaperSettingsProvider({
       disposed = true;
       unsubscribe();
     };
-  }, []);
+  }, [onAppearanceChange]);
 
   const patch = useCallback((next: Partial<WallpaperSettings>, resetFields?: string[]) => {
     const merged = { ...settingsRef.current, ...next };

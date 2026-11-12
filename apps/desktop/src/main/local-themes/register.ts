@@ -15,7 +15,8 @@ import { refreshAppearanceTheme } from '../appearance-settings-ipc';
 const log = createLogger('local-themes/register');
 
 export async function broadcastLocalThemes(): Promise<void> {
-  await refreshAppearanceTheme();
+  try { await refreshAppearanceTheme(); }
+  catch (error) { log.warn('Selected theme appearance could not be restored:', error); }
   const payload = await loadLocalThemes();
   for (const window of BrowserWindow.getAllWindows()) {
     if (!isTrustedCindyRendererWindow(window)) continue;
@@ -48,7 +49,8 @@ export function registerLocalThemesIpc(): void {
   });
 
   ipcMain.handle('local-themes:list', async () => {
-    await refreshAppearanceTheme();
+    try { await refreshAppearanceTheme(); }
+    catch (error) { log.warn('Selected theme appearance could not be restored:', error); }
     return loadLocalThemes();
   });
   ipcMain.handle('local-themes:write', async (_event, req: LocalThemeWriteRequest) =>

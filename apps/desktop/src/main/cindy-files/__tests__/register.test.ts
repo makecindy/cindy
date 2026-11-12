@@ -7,14 +7,23 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 const state = vi.hoisted(() => ({
   home: '', generation: 1, pending: false,
   guard: vi.fn(),
+  refresh: vi.fn(), send: vi.fn(),
   handlers: new Map<string, (event: unknown, file: unknown) => Promise<unknown>>(),
 }));
-vi.mock('electron', () => ({ ipcMain: { handle: (name: string, handler: never) => state.handlers.set(name, handler) } }));
+vi.mock('electron', () => ({
+  ipcMain: { handle: (name: string, handler: never) => state.handlers.set(name, handler), on() {} },
+  BrowserWindow: { getAllWindows: () => [{ id: 1, webContents: { send: state.send } }] },
+}));
 vi.mock('node:os', async (original) => {
   const actual = await original<typeof import('node:os')>();
   return { ...actual, default: { ...actual, homedir: () => state.home } };
 });
-vi.mock('../../security/trustedAppRenderer.js', () => ({ assertTrustedAppRendererEvent: state.guard }));
+vi.mock('../../security/trustedAppRenderer.js', () => ({ assertTrustedAppRendererEvent: state.guard, isTrustedCindyRendererWindow: () => true }));
+vi.mock('../../appearance-settings-ipc', () => ({ refreshAppearanceTheme: state.refresh }));
+vi.mock('../../local-themes/omarchy', async (original) => ({
+  ...await original<typeof import('../../local-themes/omarchy')>(),
+  watchOmarchyTheme: () => null,
+}));
 vi.mock('../../logger', () => ({ createLogger: () => ({ warn() {}, info() {} }) }));
 vi.mock('../../appSessionState', () => ({
   activeOwnerScopeKey: () => `local:owner:${state.generation}`,
@@ -24,6 +33,7 @@ vi.mock('../../appSessionState', () => ({
 import * as reader from '../reader';
 import { registerCindyFileIpc } from '../register';
 import { loadLocalThemesSync } from '../../local-themes/loader';
+import { broadcastLocalThemes, registerLocalThemesIpc } from '../../local-themes/register';
 
 let root: string;
 const event = { sender: { id: 1 } };
@@ -34,6 +44,7 @@ beforeEach(() => {
   state.generation = 1;
   state.pending = false;
   state.guard.mockReset();
+  state.refresh.mockReset(); state.send.mockReset();
   registerCindyFileIpc();
 });
 afterEach(() => { vi.restoreAllMocks(); fs.rmSync(root, { recursive: true, force: true }); });
@@ -54,6 +65,25 @@ const themePackage = {
  * do not cover IPC authorization or stale-session publication. Minimal inputs:
  * a one-theme package and a session change while its inspection is pending. */
 describe('Cindy file IPC', () => {
+  // Unit, registered production IPC plus real installed ZIP metadata: a selected
+  // resource failing restore must not hide newly installed valid themes.
+  it.each(['list', 'broadcast'])('still returns installed theme metadata when selected appearance restore fails (%s)', async mode => {
+    expect(await invoke(await file(themePackage))).toEqual({ type: 'theme', names: ['Mist'] });
+    registerLocalThemesIpc();
+    state.refresh.mockRejectedValueOnce(new Error('Selected theme font is damaged'));
+    if (mode === 'list') {
+      expect(await state.handlers.get('local-themes:list')!(event, undefined)).toMatchObject({
+        success: true, themes: [expect.objectContaining({ id: 'mist-local' })],
+      });
+    } else {
+      await broadcastLocalThemes();
+      expect(state.send).toHaveBeenCalledWith('local-themes:changed', expect.objectContaining({
+        success: true, themes: [expect.objectContaining({ id: 'mist-local' })],
+      }));
+    }
+    expect(state.refresh).toHaveBeenCalledOnce();
+  });
+
   it('checks the trusted sender before reading paths and validates runtime payloads', async () => {
     state.guard.mockImplementationOnce(() => { throw new Error('Untrusted sender'); });
     await expect(invoke('/tmp/a.cindy')).rejects.toThrow('Untrusted sender');

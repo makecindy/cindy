@@ -87,6 +87,22 @@ describe('useTheme 跨窗口主题同步(D2-3)', () => {
     applyVibrancyMock.mockClear();
   });
 
+  // Unit: the Agent needs the confirmed selection from the existing Host write,
+  // even before any React projection or preload notification has caught up.
+  it('returns the committed selection only after the Host completes its write', async () => {
+    hostSnapshot = normalizeAppearanceSettings({ themeSelection: { mode: 'light', familyId: 'default' } });
+    let finish!: (settings: AppearanceSettings) => void;
+    selectThemeMock.mockReturnValueOnce(new Promise(resolve => { finish = resolve; }));
+    const hook = renderHook(() => useTheme(), { wrapper });
+    let pending!: Promise<unknown>;
+    act(() => { pending = hook.result.current.setSelection({ mode: 'dark', familyId: 'cindy' }); });
+    expect(selectThemeMock).toHaveBeenCalledExactlyOnceWith({ mode: 'dark', familyId: 'cindy' });
+    expect(hook.result.current.theme).toBe('light');
+    finish(normalizeAppearanceSettings({ themeSelection: { mode: 'dark', familyId: 'cindy' } }));
+    await expect(pending).resolves.toEqual({ mode: 'dark', familyId: 'cindy' });
+    hook.unmount();
+  });
+
   // Actual theme selection failure used to be logged without a user notice.
   // Unit: rejected Host preparation must keep the current family and explain it.
   it('keeps the current selection and notifies the user when theme assets cannot be applied', async () => {

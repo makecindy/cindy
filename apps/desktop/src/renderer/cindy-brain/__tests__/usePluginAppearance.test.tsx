@@ -24,6 +24,37 @@ function options() {
     current: () => true, applyFonts: applyFontSettings };
 }
 describe('plugin appearance renderer', () => {
+  // Unit, real shared consumer: one browser decode failure must not leave the
+  // previous theme's CSS or prevent another valid font role from loading.
+  it('falls back only the rejected theme font and still applies other roles and styles', async () => {
+    const h = options(), bad = `CindyTheme_${'b'.repeat(64)}`, good = `CindyTheme_${'c'.repeat(64)}`;
+    const fonts = { add: vi.fn(), delete: vi.fn() }, descriptor = Object.getOwnPropertyDescriptor(document, 'fonts');
+    Object.defineProperty(document, 'fonts', { configurable: true, value: fonts });
+    vi.stubGlobal('FontFace', class {
+      constructor(readonly family: string) {}
+      load = async () => { if (this.family === bad) throw new Error('Font decode failed'); return this; };
+    });
+    h.bridge.loadPluginFont = vi.fn(async role => ({ family: role === 'uiFont' ? bad : good, bytes: new ArrayBuffer(4) }));
+    const source = { themeId: 'theme', packageSha256: 'a'.repeat(64) };
+    const message = document.createElement('div'); message.dataset.pluginAppearanceRegion = 'message'; document.body.append(message);
+    h.style.textContent = ':root{--old-theme-style:1}';
+    try {
+      const settings = normalizeAppearanceSettings({ uiFamily: bad, terminalFamily: good, density: 0.9,
+        reading: { bodyLineHeight: 1.9 }, contentStyle: { messagePadding: 16 },
+        uiFontResource: { family: bad, hash: 'b'.repeat(64), reference: 'asset:ui', source },
+        terminalFontResource: { family: good, hash: 'c'.repeat(64), reference: 'asset:terminal', source } });
+      expect(await applyPluginAppearance(settings, h)).toBe('failed');
+      expect(h.faces.get('terminalFont')?.face.family).toBe(good);
+      expect(fonts.add).toHaveBeenCalledWith(h.faces.get('terminalFont')?.face);
+      expect(getComputedStyle(message).lineHeight).toBe('1.9');
+      expect(getComputedStyle(message).padding).toBe('16px');
+      expect(h.style.textContent).not.toContain('--old-theme-style');
+    } finally {
+      if (descriptor) Object.defineProperty(document, 'fonts', descriptor);
+      else Reflect.deleteProperty(document, 'fonts');
+    }
+  });
+
   // A structurally valid packaged font can still fail Chromium's final decode.
   // Real shared consumer: a failed replacement must release the old face so
   // the existing CSS fallback is reachable. Resource-read errors retain it. Unit.

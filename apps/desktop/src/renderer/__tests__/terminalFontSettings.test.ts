@@ -5,6 +5,7 @@ import { createElement, type ReactNode } from 'react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { applyFontSettings, FontSettingsProvider, useFontSettings } from '@/hooks/useFontSettings';
 import { installAppearancePresenter } from '@/appearance/AppearancePresenter';
+import { WallpaperSettingsProvider } from '@/hooks/useWallpaperSettings';
 import {
   DEFAULT_APPEARANCE_SETTINGS,
   type AppearanceSettings,
@@ -75,6 +76,14 @@ it('uses the existing single appearance subscription for default and plugin sett
   expect(bridge.onChanged).toHaveBeenCalledTimes(1);
   hook.unmount();
   expect(stop).toHaveBeenCalledTimes(1);
+  // Main also has a wallpaper reader. Only detached roots pass its appearance
+  // forwarding callback, so the existing two main subscriptions remain two.
+  const mainWrapper = ({ children }: { children: ReactNode }) => createElement(FontSettingsProvider, null,
+    createElement(WallpaperSettingsProvider, { desktopBackground: false, children }));
+  const main = renderHook(() => useFontSettings(), { wrapper: mainWrapper });
+  expect(bridge.onChanged).toHaveBeenCalledTimes(3); // One earlier mount plus two main readers.
+  main.unmount();
+  expect(stop).toHaveBeenCalledTimes(3);
   disposeStartup();
 });
 

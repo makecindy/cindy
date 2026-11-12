@@ -37,7 +37,7 @@ import { resolveThemeAppearance } from '../appearance/themes';
 
 describe('terminal appearance overrides', () => {
   beforeEach(() => {
-    fixture.userData = fs.mkdtempSync(path.join(os.tmpdir(), 'cindy-terminal-appearance-'));
+    fixture.userData = fs.realpathSync.native(fs.mkdtempSync(path.join(os.tmpdir(), 'cindy-terminal-appearance-')));
   });
   afterEach(() => fs.rmSync(fixture.userData, { recursive: true, force: true }));
 
@@ -152,7 +152,7 @@ describe('terminal appearance overrides', () => {
     const read = vi.spyOn(fs.promises, 'open');
     await migrateAppearanceThemeSelection({ mode: 'light', familyId: 'paper-local' });
     const packageDir = path.join(getLocalThemesDir(), '.packages', inspected.packageSha256);
-    expect(read.mock.calls.filter(([file]) => file === fs.realpathSync(path.join(packageDir, 'body.ttf')))).toHaveLength(1);
+    expect(read.mock.calls.filter(([file]) => file === fs.realpathSync.native(path.join(packageDir, 'body.ttf')))).toHaveLength(1);
     read.mockRestore();
     expect(appearanceService.read()).toMatchObject({ uiFamily: 'Inter', uiSize: 17, terminalFamily: 'Menlo', wallpaperId: 'cindy-night-glance', density: 0.9, motion: 0.5 });
     expect(Buffer.from((await readSelectedThemeFont('bodyFont'))!.bytes)).toEqual(font);

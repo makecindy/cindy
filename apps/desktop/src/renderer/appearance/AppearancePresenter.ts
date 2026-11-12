@@ -95,6 +95,7 @@ export async function applyAppearance(settings: AppearanceSettings, options: {
 }): Promise<'applied' | 'saved' | 'failed'> {
   const { faces, pending, bridge } = options;
   if (!options.current()) return 'saved';
+  let fontFailed = false;
   for (const role of ['uiFont', 'codeFont', 'bodyFont', 'terminalFont'] as const) {
     const resource = settings[`${role}Resource` as 'uiFontResource'];
     const existing = faces.get(role);
@@ -116,6 +117,7 @@ export async function applyAppearance(settings: AppearanceSettings, options: {
             const previous = faces.get(role);
             if (previous) { document.fonts.delete(previous.face); faces.delete(role); }
             notifyThemeAppearanceFailure(true);
+            return undefined;
           }
           throw error;
         }
@@ -129,12 +131,12 @@ export async function applyAppearance(settings: AppearanceSettings, options: {
     catch (error) {
       if (!options.current()) return 'saved';
       if (!('themeId' in resource.source)) throw error;
-      // UI/code/body stacks already include the default font; terminals keep
-      // their default until this face is ready. Never register a rejected face.
+      // A resource read failure retains the current appearance. Decoder failures
+      // are handled per role above, so the remaining theme can still apply.
       return 'failed';
     }
     if (!options.current()) return 'saved';
-    if (!face) return 'failed';
+    if (!face) { fontFailed = true; continue; }
     const previous = faces.get(role);
     if (previous?.face !== face) {
       if (previous) document.fonts.delete(previous.face);
@@ -145,7 +147,7 @@ export async function applyAppearance(settings: AppearanceSettings, options: {
   options.applyFonts(settings);
   const nextCss = css(settings, options.dark());
   if (options.style.textContent !== nextCss) options.style.textContent = nextCss;
-  return wallpaperApplicationStatus(settings, options.dark);
+  return fontFailed ? 'failed' : wallpaperApplicationStatus(settings, options.dark);
 }
 
 
@@ -154,6 +156,11 @@ export async function applyAppearanceInWindow(settings: AppearanceSettings) {
   const latest = window.electronAPI?.appearanceSettings?.getSync?.();
   if (latest && JSON.stringify(normalizeAppearanceSettings(latest)) !== JSON.stringify(normalizeAppearanceSettings(settings))) return { status: 'saved' as const };
   return { status: applyInWindow ? await applyInWindow(settings) : 'saved' as const };
+}
+
+/** Forward an existing settings subscription without installing a second one. */
+export function presentAppearance(settings: AppearanceSettings): void {
+  void applyInWindow?.(settings);
 }
 
 let disposePresenter: (() => void) | undefined;
@@ -257,5 +264,5 @@ export function installAppearancePresenter(applyFonts: (settings: AppearanceSett
 export function useAppearancePresenter(applyFonts: (settings: AppearanceSettings) => void, initial?: AppearanceSettings): (settings: AppearanceSettings) => void {
   const initialRef = useRef(initial);
   useEffect(() => installAppearancePresenter(applyFonts, false, initialRef.current), [applyFonts]);
-  return useCallback(settings => { void applyInWindow?.(settings); }, []);
+  return useCallback(presentAppearance, []);
 }

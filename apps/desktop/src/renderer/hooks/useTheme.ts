@@ -20,6 +20,7 @@ interface ThemeContextValue {
   setTheme: (theme: Theme) => void;
   familyId: string;
   setFamily: (familyId: string) => void;
+  setSelection: (patch: Partial<ThemeSelection>) => Promise<ThemeSelection | undefined>;
   /**
    * 当前家族在请求 type 下没变体, 已 fallback 到另一个 type 时, 这里
    * 返回 "请求的 type" (供 UI 显示 "无浅色 / 无深色" 提示)。否则 null。
@@ -277,15 +278,21 @@ export function ThemeProvider({
   }), []);
 
   const requestedSelection = useRef<ThemeSelection | undefined>(undefined);
-  const requestSelection = useCallback((patch: Partial<ThemeSelection>) => {
+  const requestSelection = useCallback(async (patch: Partial<ThemeSelection>) => {
     const bridge = window.electronAPI?.appearanceSettings;
     if (!bridge?.selectTheme) return;
     const next = { ...(requestedSelection.current ?? hostSelection() ?? readLegacySelectionOnce()), ...patch };
     requestedSelection.current = next;
-    void bridge.selectTheme(next).catch(() => {
+    try {
+      const settings = await bridge.selectTheme(next);
+      return parseThemeSelection(settings.themeSelection) ?? undefined;
+    } catch {
       window.electronAPI?.logToMain?.('warn', 'renderer/appearance', 'Theme selection write failed; saved selection retained');
       notifyThemeAppearanceFailure();
-    }).finally(() => { if (requestedSelection.current === next) requestedSelection.current = undefined; });
+      return undefined;
+    } finally {
+      if (requestedSelection.current === next) requestedSelection.current = undefined;
+    }
   }, []);
 
   const setTheme = useCallback((next: Theme) => requestSelection({ mode: next }), [requestSelection]);
@@ -381,8 +388,8 @@ export function ThemeProvider({
     return family[requestedType] === null ? requestedType : null;
   }, [familyId, theme, systemPrefersDark, localThemeRev]);
 
-  const value = useMemo(() => ({ theme, setTheme, familyId, setFamily, fallbackFromType }),
-    [theme, setTheme, familyId, setFamily, fallbackFromType]);
+  const value = useMemo(() => ({ theme, setTheme, familyId, setFamily, setSelection: requestSelection, fallbackFromType }),
+    [theme, setTheme, familyId, setFamily, requestSelection, fallbackFromType]);
   return createElement(
     AppearanceMotionContext.Provider,
     { value: appearanceReduced },

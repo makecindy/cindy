@@ -28,7 +28,7 @@ const dark = { ...light, id: 'mist-dark', type: 'dark', colors: { surface: '#181
 const icon = Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVQIHWP4z8DwHwAFgAI/ScLttAAAAABJRU5ErkJggg==', 'base64');
 
 beforeEach(() => {
-  root = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'cindy-theme-package-')));
+  root = fs.realpathSync.native(fs.mkdtempSync(path.join(os.tmpdir(), 'cindy-theme-package-')));
   home.value = path.join(root, 'home');
   resetLocalThemesMigrationForTest();
   task.owner = 'owner-a';
