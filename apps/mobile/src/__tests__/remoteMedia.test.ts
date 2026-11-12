@@ -13,6 +13,71 @@ import {
 } from "@/session/remoteMedia";
 
 describe("mobile remote media", () => {
+  it('plays a local file-channel stream without copying the whole video or presigning', async () => {
+    const { recordPeerMediaPlayback } = await import('@/device-link/peerFileRegistry');
+    const fetched = { ossKey: '', size: 2_000_000, mimeType: 'video/mp4' };
+    let available = true;
+    const close = vi.fn(async () => { available = false; });
+    recordPeerMediaPlayback(fetched, { url: 'http://127.0.0.1:10000/opaque', isOpen: () => available, close });
+    const retainLocalVideo = vi.fn(), presignGet = vi.fn(), fetchRemoteMedia = vi.fn(async () => fetched);
+    const result = await resolveMobileRemoteMedia({ kind: 'video', url: 'xdt-file://open?path=/movie.mp4' },
+      { fetchRemoteMedia, retainLocalVideo, presignGet });
+    expect(result.url).toBe('http://127.0.0.1:10000/opaque');
+    expect(fetchRemoteMedia).toHaveBeenCalledWith(expect.any(String), expect.objectContaining({ playback: true }));
+    expect(retainLocalVideo).not.toHaveBeenCalled(); expect(presignGet).not.toHaveBeenCalled();
+    expect(isResolvedRemoteMediaFresh(result)).toBe(true);
+    const releaseA = result.protectLocalFile!(), releaseB = result.protectLocalFile!();
+    releaseA(); releaseA(); expect(close).not.toHaveBeenCalled();
+    releaseB(); expect(close).toHaveBeenCalledOnce();
+    expect(isResolvedRemoteMediaFresh(result)).toBe(false);
+  });
+  // Unit regression: full-image viewing used stream=true and skipped LAN peer
+  // transfer. Keep staging bytes alive until copied; disk-full still shows the image.
+  it.each([false, true])('retains a peer original image, with URL fallback on copy failure (%s)', async (fails) => {
+    const { recordPeerMedia } = await import('@/device-link/peerFileRegistry');
+    const staged = { ossKey: '', mimeType: 'image/png', size: 100_000 };
+    const dispose = vi.fn();
+    recordPeerMedia(staged, 'file:///staging/original.png', dispose);
+    const fetchRemoteMedia = vi.fn(async (_url, opts) => opts?.stream === false
+      ? staged : { ...staged, ossKey: 'oss/original' });
+    const presignGet = vi.fn(async () => ({ getUrl: 'https://oss/original', expiresAt: '2099-01-01T00:00:00Z' }));
+    const retainLocalImage = vi.fn(async (media: import('@/session/remoteMedia').MobileResolvedRemoteMedia) => {
+      expect(dispose).not.toHaveBeenCalled();
+      if (fails) throw new Error('disk full');
+      return { ...media, url: 'file:///retained/original.png', expiresAt: REMOTE_MEDIA_NEVER_EXPIRES };
+    });
+    const result = await resolveMobileRemoteMedia({ kind: 'image', url: 'xdt-file://open?path=/original.png' }, {
+      fetchRemoteMedia, presignGet, retainLocalImage,
+    });
+    expect(result.url).toBe(fails ? 'https://oss/original' : 'file:///retained/original.png');
+    expect(fetchRemoteMedia).toHaveBeenNthCalledWith(1, expect.any(String), expect.objectContaining({ stream: false }));
+    expect(fetchRemoteMedia).toHaveBeenCalledTimes(fails ? 2 : 1);
+    expect(presignGet).toHaveBeenCalledTimes(fails ? 1 : 0);
+    expect(retainLocalImage).toHaveBeenCalledOnce();
+    expect(dispose).toHaveBeenCalledOnce();
+  });
+
+  it('keeps inline thumbnails and reuses an existing cloud URL if retaining its copy fails', async () => {
+    const { recordPeerMedia } = await import('@/device-link/peerFileRegistry');
+    const retainLocalImage = vi.fn(async () => { throw new Error('disk full'); });
+    const presignGet = vi.fn(async () => ({ getUrl: 'https://oss/original', expiresAt: '2099-01-01T00:00:00Z' }));
+    const media = { kind: 'image' as const, url: 'xdt-file://open?path=/original.png' };
+    const thumbnailFetch = vi.fn(async () => ({ ossKey: '', size: 3, mimeType: 'image/png', inlineBase64: 'YWJj' }));
+    const thumbnail = await resolveMobileRemoteMedia(media, { fetchRemoteMedia: thumbnailFetch, presignGet, retainLocalImage }, { thumbnail: true });
+    expect(thumbnail.url).toBe('data:image/png;base64,YWJj');
+    expect(thumbnailFetch).toHaveBeenCalledWith(media.url, { thumbnail: true });
+    expect(retainLocalImage).not.toHaveBeenCalled();
+    const staged = { ossKey: '', size: 100_000, mimeType: 'image/png' };
+    const dispose = vi.fn();
+    recordPeerMedia(staged, 'file:///staging/cloud.png', dispose);
+    const fetchRemoteMedia = vi.fn(async () => ({ ...staged, ossKey: 'oss/original', cacheDownload: async () => staged }));
+    const result = await resolveMobileRemoteMedia(media, { fetchRemoteMedia, presignGet, retainLocalImage });
+    expect(result).toMatchObject({ url: 'https://oss/original', ossKey: 'oss/original' });
+    expect(fetchRemoteMedia).toHaveBeenCalledOnce();
+    expect(presignGet).toHaveBeenCalledOnce();
+    expect(dispose).toHaveBeenCalledOnce();
+  });
+
   // V2 decryption returns an owned local file. A remote JSON response must not
   // gain the same local-file authority by copying its field values.
   it('accepts only native-owned local media receipts and preserves the file protection lease', async () => {

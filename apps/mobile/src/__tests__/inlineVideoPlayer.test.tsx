@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
-// Tier 1: video covers keep a play mark and open the shared gallery.
-// Exercise paused previews, resource leases and cancellation without inline playback.
+// Tier 1: tapping a resolved video used to force the gallery open.
+// Exercise the production row with one resolved clip; retain cancellation and lease coverage.
 import { act, createElement as el } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
 import { afterEach, beforeEach, expect, it, vi } from 'vitest';
@@ -33,18 +33,20 @@ async function click() { await act(async () => container.querySelector('button')
 beforeEach(() => { Object.assign(globalThis, { IS_REACT_ACT_ENVIRONMENT: true }); container = document.createElement('div'); root = createRoot(container); h.player = null; h.download = null; onOpen.mockClear(); });
 afterEach(() => act(() => root.unmount()));
 
-it('keeps a play affordance over the paused first frame and opens the gallery without inline download', async () => {
+it('starts playback in the message and offers export without opening the gallery', async () => {
   const resolve = vi.fn().mockResolvedValue(result);
   await act(async () => render(resolve));
   expect(container.querySelector('video')?.src).toBe(result.url);
   expect(container.querySelector('[data-testid="play-icon"]')).not.toBeNull();
   expect(h.player).toMatchObject({ autoPlay: false, nativeControls: false });
   await click();
-  expect(onOpen).toHaveBeenCalledOnce();
+  expect(onOpen).not.toHaveBeenCalled();
+  expect(h.player).toMatchObject({ autoPlay: true, nativeControls: true });
+  expect(container.querySelector('[data-testid="play-icon"]')).toBeNull();
   expect(resolve).toHaveBeenCalledOnce();
-  expect(h.download).toBeNull();
+  expect(h.download.source).toBe(result.url);
 });
-it('prepares managed media only while visible and delegates arbitrary paths to the viewer', async () => {
+it('prepares managed media while visible and resolves file paths only after a play tap', async () => {
   const resolve = vi.fn().mockResolvedValue(result);
   render(resolve, false);
   expect(resolve).not.toHaveBeenCalled();
@@ -54,9 +56,11 @@ it('prepares managed media only while visible and delegates arbitrary paths to t
   expect(h.player.visible).toBe(false);
   act(() => root.render(null));
   render(resolve, true, 'xdt-file://open?path=%2Foutside%2Fclip.mp4');
-  await click();
-  expect(onOpen).toHaveBeenCalledOnce();
   expect(resolve).toHaveBeenCalledOnce();
+  await click();
+  expect(onOpen).not.toHaveBeenCalled();
+  expect(resolve).toHaveBeenCalledTimes(2);
+  expect(h.player).toMatchObject({ autoPlay: true, nativeControls: true });
 });
 it('protects a resolved cover until its decoder fails or the row unmounts', async () => {
   const release = vi.fn();
@@ -94,11 +98,11 @@ it('keeps the gallery reachable after preview failure without an automatic retry
   expect(onOpen).toHaveBeenCalledOnce();
   expect(resolve).toHaveBeenCalledOnce();
 });
-it('opens the gallery while loading and cancels a hidden row without accepting late media', async () => {
+it('keeps playback inline while loading and cancels a hidden row without accepting late media', async () => {
   let finish!: (value: typeof result) => void;
   const resolve = vi.fn((_media: unknown, _options: { signal: AbortSignal }) => new Promise(r => { finish = r; }));
   render(resolve); await click();
-  expect(onOpen).toHaveBeenCalledOnce();
+  expect(onOpen).not.toHaveBeenCalled();
   render(resolve, false);
   expect(resolve.mock.calls[0][1].signal.aborted).toBe(true);
   await act(async () => finish(result));

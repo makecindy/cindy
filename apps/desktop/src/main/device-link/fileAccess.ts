@@ -11,6 +11,7 @@ import {
 import { promises as fs } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
+import { openRemotePeerMediaStream, type PeerStreamFileResult } from './peerMediaStream';
 import { tryPeerFile, copyReceivedFile } from './filePeer';
 import { activeOwnerScopeKey } from '../appSessionState';
 import { captureFilePeerScope } from './filePeerScope';
@@ -38,6 +39,7 @@ export function readRemoteDeviceFile(
     maxPeerBytes?: number;
     maxBytes?: number;
     stream?: boolean;
+    playback?: boolean;
     workdir?: string;
     relPath?: string;
     fallback?: () => Promise<DeviceFileResult>;
@@ -82,7 +84,7 @@ export function readRemoteDeviceFile(
   // media endpoint's task authorization and shared-task OSS scope instead.
   const fallback = !isSharedTaskPeer(device) && options.fallback
     ? options.fallback : () => fetch(false);
-  return readDeviceFile<LocalFileResult>({
+  return readDeviceFile<LocalFileResult | PeerStreamFileResult>({
     cacheFirst: options.skipCache || options.cacheFirst === false || isSharedTaskPeer(device) ? undefined : {
       read: async () => {
         const previous = latestFiles.get(cacheKey);
@@ -142,6 +144,8 @@ export function readRemoteDeviceFile(
       },
     },
     stream: options.stream,
+    peerStream: options.playback && !isSharedTaskPeer(device) ? metadata =>
+      openRemotePeerMediaStream(device, url, invoke, metadata, isCurrent, options.signal) : undefined,
     signal: options.signal,
     isCurrent,
     discard: async (result) => {

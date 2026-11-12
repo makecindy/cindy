@@ -6,12 +6,12 @@ import { Play } from 'lucide-react-native';
 import { Text } from '@/components/AppText';
 import { useTheme } from '@/theme';
 import { iconSize, iconStroke, lineHeight, radius, spacing, typeScale } from '@/theme/tokens';
+import { VideoDownloadButton } from './VideoDownloadButton';
 import { NativeVideoPlayer } from './NativeVideoPlayer';
 import { useMessageHistoryActive } from './messageHistoryActivity';
 import { isDirectPreviewableMediaUrl, type ResolveRemoteMediaFn } from './remoteMedia';
 
-/** Message cover only: prepare a paused first frame, keep a visible play mark,
- * and open the existing image/video gallery. Playback and export live there. */
+/** Prepare a paused first frame; an explicit tap starts playback in the message. */
 export function InlineVideoPlayer({ url, label, width, visible, resolve, onOpen }: {
   url: string;
   label: string;
@@ -27,6 +27,7 @@ export function InlineVideoPlayer({ url, label, width, visible, resolve, onOpen 
   const [foreground, setForeground] = useState(AppState.currentState === 'active');
   const [source, setSource] = useState<string | null>(null);
   const [videoSize, setVideoSize] = useState<{ width: number; height: number } | null>(null);
+  const [started, setStarted] = useState(false);
   const [loading, setLoading] = useState(false);
   const [failed, setFailed] = useState(false);
   const pending = useRef<AbortController | null>(null);
@@ -77,16 +78,22 @@ export function InlineVideoPlayer({ url, label, width, visible, resolve, onOpen 
   const previewWidth = Math.min(width, 480);
   const height = Math.min(previewWidth / ratio, previewWidth * 4 / 3);
   const frame = { width: Math.min(previewWidth, height * ratio), height, borderRadius: radius.container, overflow: 'hidden' as const };
-  return <Pressable accessibilityRole="button" accessibilityLabel={`${t('message.richAnswer.playVideo')} ${label}`}
-    onPress={onOpen} testID="message.inlineVideoPlay"
-    style={[frame, { alignSelf: 'flex-start', backgroundColor: colors.surface }]}>
-    {source ? <View pointerEvents="none" accessibilityElementsHidden importantForAccessibility="no-hide-descendants">
-      <NativeVideoPlayer key={source} url={source} visible={active} autoPlay={false} nativeControls={false}
+  return <View style={{ alignSelf: 'flex-start' }}>
+    <View style={[frame, { backgroundColor: colors.surface }]}>
+    {source ? <View pointerEvents={started ? 'auto' : 'none'} accessibilityElementsHidden={!started}
+      importantForAccessibility={started ? 'auto' : 'no-hide-descendants'}>
+      <NativeVideoPlayer key={source} url={source} visible={active} autoPlay={started} nativeControls={started}
         onVideoSize={setVideoSize}
         style={[frame, { flex: 0, backgroundColor: colors.surface }]} testID="message.inlineVideo"
         onError={() => { releaseSource.current?.(); releaseSource.current = undefined; setSource(null); setFailed(true); }} />
     </View> : null}
-    <View pointerEvents="none" style={[StyleSheet.absoluteFill, { alignItems: 'center', justifyContent: 'center', gap: spacing.sm }]}>
+    {!started || !source ? <Pressable accessibilityRole="button"
+      accessibilityLabel={`${t('message.richAnswer.playVideo')} ${label}`}
+      testID="message.inlineVideoPlay" onPress={() => {
+        if (failed) { onOpen?.(); return; }
+        setStarted(true);
+        if (!source) void prepare();
+      }} style={[StyleSheet.absoluteFill, { alignItems: 'center', justifyContent: 'center', gap: spacing.sm }]}>
       {/* Media-overlay contrast stays readable over either a light or dark frame. */}
       <View style={{ width: 56, height: 56, borderRadius: radius.pill, backgroundColor: colors.mediaPlayBackground, alignItems: 'center', justifyContent: 'center' }}>
         <Play size={iconSize.lg} strokeWidth={iconStroke.regular} color={colors.mediaPlayForeground} fill={colors.mediaPlayForeground} />
@@ -97,6 +104,8 @@ export function InlineVideoPlayer({ url, label, width, visible, resolve, onOpen 
           {t(loading ? 'message.renderer.loading' : 'message.richAnswer.playVideo')}
         </Text>
       </View> : null}
+    </Pressable> : null}
     </View>
-  </Pressable>;
+    {source ? <VideoDownloadButton source={source} active={active} /> : null}
+  </View>;
 }

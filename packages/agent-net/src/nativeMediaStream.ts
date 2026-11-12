@@ -9,7 +9,20 @@ export interface NativeMediaStream { url: string; size: number; isOpen(): boolea
  * this stream, never supplying unverified bytes or affecting other resources. */
 export async function openNativeMediaStream(api: NativeMediaApi | (() => NativeMediaApi), engine: NativeEnginePort,
   id: string, headerSha256: string, contentType: string, options: NativeMediaOptions = {}): Promise<NativeMediaStream> {
-  let reader: Awaited<ReturnType<typeof openNativeMediaReader>> | undefined;
+  return openNativeByteStream(engine, contentType,
+    current => openNativeMediaReader(api, engine, id, headerSha256, current), options);
+}
+
+export interface NativeByteReader {
+  size: number;
+  read(start: number, end: number, write: (bytes: Uint8Array, offset: number) => Promise<void>): Promise<unknown>;
+  close(): Promise<void>;
+}
+/** Existing loopback bridge, with upstream authorization owned by the supplied reader. */
+export async function openNativeByteStream(engine: NativeEnginePort, contentType: string,
+  openReader: (options: NativeMediaOptions) => Promise<NativeByteReader>,
+  options: NativeMediaOptions = {}): Promise<NativeMediaStream> {
+  let reader: NativeByteReader | undefined;
   let closed = false, timer: ReturnType<typeof setTimeout> | undefined, lastRequest = Date.now();
   const jobs = new Set<number>(), controller = new AbortController();
   const assertCurrent = () => {
@@ -25,7 +38,7 @@ export async function openNativeMediaStream(api: NativeMediaApi | (() => NativeM
   const abort = () => { void close(); };
   try {
     assertCurrent(); options.signal?.addEventListener('abort', abort, { once: true });
-    reader = await openNativeMediaReader(api, engine, id, headerSha256, { ...options, signal: controller.signal, assertCurrent });
+    reader = await openReader({ ...options, signal: controller.signal, assertCurrent });
     assertCurrent();
     // Container metadata identifies codecs; keep optional MIME parameters out
     // of the native HTTP header's deliberately small character set.
