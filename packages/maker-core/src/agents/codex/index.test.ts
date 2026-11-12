@@ -11805,6 +11805,35 @@ describe('CodexAgent MCP thread context hooks', () => {
         expect(host.request.mock.calls.filter(([m]) => m === Method.TurnStart)).toHaveLength(1);
       } finally { await handle.close(); }
     });
+    it('retains a recorded summary recovery when completion has no replacement error', async () => {
+      const { host, handle } = await start();
+      try {
+        compact(host);
+        const h = host.getThreadHandlers()!;
+        h.error!({ threadId: nativeId, turnId: 'turn-1', willRetry: false,
+          error: { message: '{"code":"400"}', codexErrorInfo: 'other' } });
+        h.turnCompleted!({ threadId: nativeId, turn: { id: 'turn-1', status: 'failed' } });
+        await waitForExpectation(() => expect(handle.getCurrentTurnId?.()).toBe('turn-2'));
+        expect(host.request.mock.calls.filter(([m]) => m === Method.ThreadFork)).toHaveLength(1);
+      } finally { await handle.close(); }
+    });
+    it.each([
+      { message: '{"code":"400","type":"insufficient_balance_error"}', codexErrorInfo: 'other' as const },
+      { message: '{"code":"400"}', codexErrorInfo: 'usageLimitExceeded' as const },
+    ])('rechecks a recorded summary recovery against the authoritative error: %j', async (error) => {
+      const { host, handle, events } = await start();
+      try {
+        compact(host);
+        const h = host.getThreadHandlers()!;
+        h.error!({ threadId: nativeId, turnId: 'turn-1', willRetry: false,
+          error: { message: '{"code":"400"}', codexErrorInfo: 'other' } });
+        h.turnCompleted!({ threadId: nativeId, turn: { id: 'turn-1', status: 'failed', error } });
+        await waitForExpectation(() => expect(events.some(e => e.type === 'error' && e.data.isTerminal)).toBe(true));
+        expect(handle.isTurnRunning?.()).toBe(false);
+        expect(host.request.mock.calls.filter(([m]) => m === Method.ThreadFork)).toHaveLength(0);
+        expect(host.request.mock.calls.filter(([m]) => m === Method.TurnStart)).toHaveLength(1);
+      } finally { await handle.close(); }
+    });
     it.skipIf(process.platform !== 'win32')('inherits Review read tools on a history fork without sending start-only parameters', async () => {
       const workingDir = await fs.mkdtemp(path.join(os.tmpdir(), 'codex-review-fork-'));
       await fs.writeFile(path.join(workingDir, 'evidence.md'), 'FORK_REVIEW_EVIDENCE');

@@ -11116,8 +11116,12 @@ assertRouteCurrent();
         recoveryState?.pendingAutomaticRecovery?.deadTurnId === turn.id
           ? recoveryState.pendingAutomaticRecovery
           : null;
-      if (recoveryState && pendingRecovery && isCodexModelUnavailableError(turn.error)) {
-        // An authoritative model rejection can arrive after a recovery intent.
+      const rejectedSummaryRecovery = pendingRecovery?.reason === SUMMARY_RECOVERY
+        && !!turn.error && !canRecoverRemoteCompaction(turn.id, turn.error);
+      if (recoveryState && pendingRecovery
+        && (isCodexModelUnavailableError(turn.error) || rejectedSummaryRecovery)) {
+        // The authoritative error can refine a preliminary rejection into an
+        // exhausted account or another failure that must not trigger a summary.
         recoveryState.pendingAutomaticRecovery = null;
         pendingRecovery = null;
       }
@@ -11125,7 +11129,7 @@ assertRouteCurrent();
         turn.status === 'failed'
         && (!terminalErroredTurnIds.has(turn.id) || pendingRecovery)
       ) {
-        if (!pendingRecovery && turn.error && recordAutomaticRecoveryIntent(turn.id, turn.error)) {
+        if (!pendingRecovery && !rejectedSummaryRecovery && turn.error && recordAutomaticRecoveryIntent(turn.id, turn.error)) {
           recoveryState = overloadRetry;
           pendingRecovery =
             recoveryState?.pendingAutomaticRecovery?.deadTurnId === turn.id
