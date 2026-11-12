@@ -115,7 +115,31 @@ describe('useAttachments inline rejections', () => {
     expect(result.current.attachments).toEqual([]);
     act(() => discardDraft('plugin-attachment'));
   });
-  it.each(['remove', 'revoke'] as const)('discards late output and releases staged files after %s', async kind => {
+  // Unit, #9987: addFiles must adopt a valid result across an unrelated roster
+  // broadcast. Removal/revocation coverage does not rebuild the provider entry;
+  // the minimal failure is a cloned roster while its tool call is pending.
+  it('applies the attachment result after an unrelated plugin refresh rebuilds the roster', async () => {
+    enableAttachmentProvider();
+    const key = 'plugin-unrelated-refresh';
+    const pending = deferred<unknown>();
+    plugins.call.mockReturnValue(pending.promise);
+    const { result } = renderHook(() => useAttachments(undefined, key));
+    await act(async () => { await result.current.addFiles(fileListOf([{ name: 'input.pdf', size: 5 }])); });
+    expect(plugins.call).toHaveBeenCalledTimes(1);
+    plugins.ghosts = [...structuredClone(plugins.ghosts), {
+      enabled: true, dir: '/ordinary', approval: { state: 'approved', revision: 'ordinary' },
+      manifest: { schemaVersion: 3, id: 'ordinary', name: 'Ordinary', kind: 'chip', version: '1', entry: 'main.js' },
+    }];
+    await act(async () => pending.resolve({ handled: true, text: 'Extracted after refresh', files: [
+      { name: 'output.txt', path: '/cache/output.txt.bin', size: 1, mimeType: 'text/plain' },
+    ] }));
+    expect(JSON.stringify(getDraft(key)?.text)).toContain('Extracted after refresh');
+    expect(result.current.attachments.map(file => file.name)).toEqual(['output.txt']);
+    expect(getDraft(key)?.attachments).toEqual(result.current.attachments);
+    expect(cleanupStaged).not.toHaveBeenCalledWith(['/cache/output.txt.bin']);
+    act(() => discardDraft(key));
+  });
+  it.each(['remove', 'revoke', 'disable', 'update'] as const)('discards late output and releases staged files after %s', async kind => {
     enableAttachmentProvider();
     const pending = deferred<unknown>();
     plugins.call.mockImplementation((_session, input) => input.op === 'plugin-action' ? pending.promise : Promise.resolve({}));
@@ -123,7 +147,12 @@ describe('useAttachments inline rejections', () => {
     const { result } = renderHook(() => useAttachments(undefined, key));
     await act(async () => { await result.current.addFiles(fileListOf([{ name: 'input.pdf', size: 5 }])); });
     if (kind === 'remove') act(() => result.current.removeFile(result.current.attachments[0].id));
-    else plugins.ghosts = [];
+    else {
+      plugins.ghosts = structuredClone(plugins.ghosts);
+      if (kind === 'revoke') plugins.ghosts[0].approvedHostUi = [];
+      else if (kind === 'disable') plugins.ghosts[0].enabled = false;
+      else plugins.ghosts[0].approval = { state: 'approved', revision: 'two' };
+    }
     await act(async () => pending.resolve({ handled: true, text: 'Late text', files: [
       { name: 'output.txt', path: '/cache/output.txt.bin', size: 1, mimeType: 'text/plain' },
     ] }));

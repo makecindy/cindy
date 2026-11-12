@@ -4,6 +4,7 @@ import { getStickySessionDeviceId } from '@/features/device-link/stickySessionOr
 import { makerChatStore } from '@/lib/makerChatStore';
 import { cleanupStagedChatAttachmentFiles } from '@/lib/chatAttachmentStageCleanup';
 import type { PluginUiAttachmentResult } from '../../shared/pluginUi';
+import { ghostInstallApprovalToken } from '../../shared/ghost';
 import { readPluginUiEntries } from './PluginUiContributions';
 
 /** Runs only from a user's add event; no subscription or input listener exists. */
@@ -20,7 +21,12 @@ export async function processPluginUiAttachment(file: AttachedFile, sessionId: s
       const uri = file.path.startsWith('clipboard:') ? file.url ?? `data:${file.mimeType};base64,${file.base64 ?? ''}` : file.path;
       const result = await window.electronAPI.maker.mcpApps(sessionId, { op: 'plugin-action', instanceId: entry.instanceId,
         id: entry.contribution.id, requestId, input: { attachment: { name: file.name, uri, size: file.size, mimeType: file.mimeType } } }) as PluginUiAttachmentResult;
-      if (signal.aborted || !readPluginUiEntries('composer.attachment').includes(entry)) {
+      // Roster broadcasts recreate entries without changing the approved provider.
+      if (signal.aborted || !readPluginUiEntries('composer.attachment').some(current =>
+        current.instanceId === entry.instanceId && current.contribution.id === entry.contribution.id &&
+        current.ghost.dir === entry.ghost.dir &&
+        ghostInstallApprovalToken(current.ghost.approval) === ghostInstallApprovalToken(entry.ghost.approval) &&
+        JSON.stringify(current.contribution) === JSON.stringify(entry.contribution))) {
         if (result?.files) cleanupStagedChatAttachmentFiles(result.files);
         return null;
       }
