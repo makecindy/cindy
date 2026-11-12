@@ -356,9 +356,18 @@ export async function checkAgentNetProviderExecutor(input: SharingExecutorInput,
   return null;
 }
 /** Close-only cleanup for an outgoing account. Credentials, endpoints and pins
- * are captured before the boundary; nothing refreshes into the next account. */
+ * are captured before the boundary; nothing refreshes into the next account.
+ *
+ * Runs inside account teardown, after the app-session boundary is already
+ * pending. `owner()` refuses every call in that window by design, so it must
+ * not be used here: reuse the outgoing owner's already-open session (its scope
+ * key cannot have advanced yet — the owner commit happens after teardown) and
+ * skip Agent-Net cleanup when there is none. Never throw: a throw here aborted
+ * every account switch after its services were already torn down. */
 export function captureAgentNetSharingBoundaryClose(token: string, authBase: string) {
-  const state = owner(), routes = state.vault.routes.filter(r => r.kind === 'shared-task' && !r.memberId);
+  const state = session?.key === activeOwnerScopeKey() ? session : null;
+  if (!state) return () => null;
+  const routes = state.vault.routes.filter(r => r.kind === 'shared-task' && !r.memberId);
   const identity = identityFromSeed('cindy-agent-net/sharing-business/2', state.vault.seed, getDeviceId());
   const captured = new Map(routes.map(route => [route.resourceId, { route, member: hostClient(route) }]));
   return (resourceId: string): Promise<unknown> | null => {

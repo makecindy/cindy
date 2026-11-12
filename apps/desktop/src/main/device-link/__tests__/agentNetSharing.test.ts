@@ -246,6 +246,19 @@ it('discards a late join after an account boundary without writing into the next
   expect(state.writes.every(file => file.startsWith('/unit-only-vault/owner-a/'))).toBe(true);
   expect([...state.files.keys()].some(file => file.includes('owner-b'))).toBe(false);
 });
+it('captures the outgoing close while the account boundary is already pending', async () => {
+  // Bug: account teardown runs with the boundary pending, and capture went
+  // through owner(), which refuses that window. The throw aborted every switch
+  // after the provider catalog, IM and scheduler had already been torn down.
+  const route = selectedAgentNetSharingRoute('shared-task')!; rememberAgentNetSharingService(route);
+  state.pending = true;
+  const close = captureAgentNetSharingBoundaryClose('unit-outgoing-access', 'https://auth.example.test');
+  expect(close('never-hosted-here')).toBeNull();
+  stopAgentNetSharing();
+  // No outgoing session to close through: skip Agent-Net, never throw.
+  expect(captureAgentNetSharingBoundaryClose('unit-outgoing-access', 'https://auth.example.test')('any')).toBeNull();
+  expect(state.http).not.toHaveBeenCalled();
+});
 it('observes an outgoing committed create and closes it with captured credentials after the account changes', async () => {
   const route = selectedAgentNetSharingRoute('shared-task')!; rememberAgentNetSharingService(route);
   const close = captureAgentNetSharingBoundaryClose('unit-outgoing-access', 'https://auth.example.test');
