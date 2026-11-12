@@ -11928,6 +11928,15 @@
     },
     "starterOptions": "Einstiegsoptionen",
     "channels": {
+      "edit": {
+        "button": "Bearbeiten",
+        "title": "iMessage-Verbindung bearbeiten",
+        "description": "Zum erneuten Verbinden speichern. Das Modell folgt den Einstellungen deines Begleiters.",
+        "keepPassword": "Leer lassen, um das gespeicherte Passwort beizubehalten",
+        "save": "Speichern und neu verbinden",
+        "loadFailed": "Die Verbindungseinstellungen konnten nicht geladen werden. Versuche es erneut.",
+        "failed": "Die Verbindung konnte nicht gespeichert werden. Prüfe die Einstellungen und versuche es erneut."
+      },
       "title": "Nachrichtenplattformen",
       "platform": {
         "telegram": "Telegram",

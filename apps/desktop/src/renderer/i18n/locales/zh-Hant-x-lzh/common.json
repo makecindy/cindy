@@ -11883,6 +11883,15 @@
     },
     "starterOptions": "起手之選",
     "channels": {
+      "edit": {
+        "button": "編輯",
+        "title": "編輯 iMessage 連線",
+        "description": "存之則重連，模型從伙伴之設定。",
+        "keepPassword": "留空則仍用原密鑰",
+        "save": "儲存並重連",
+        "loadFailed": "連線設定未能讀取，請重試。",
+        "failed": "連線未能儲存，請核其設定而重試。"
+      },
       "title": "傳訊之所",
       "platform": {
         "telegram": "Telegram",

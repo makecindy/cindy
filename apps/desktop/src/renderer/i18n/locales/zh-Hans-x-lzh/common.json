@@ -11883,6 +11883,15 @@
     },
     "starterOptions": "起手之选",
     "channels": {
+      "edit": {
+        "button": "编辑",
+        "title": "编辑 iMessage 连线",
+        "description": "存之则重连，模型从伙伴之设定。",
+        "keepPassword": "留空则仍用原密钥",
+        "save": "储存并重连",
+        "loadFailed": "连线设定未能读取，请重试。",
+        "failed": "连线未能储存，请核其设定而重试。"
+      },
       "title": "传讯之所",
       "platform": {
         "telegram": "Telegram",
