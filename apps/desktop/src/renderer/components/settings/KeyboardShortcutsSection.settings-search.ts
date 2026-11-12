@@ -34,8 +34,8 @@ export const appShortcutSettings = defineSettings(Object.fromEntries(
     titleKey: definition.labelKey,
     descriptionKey: definition.descriptionKey,
     sectionKey: 'settings.tabs.shortcuts',
-    isVisible: ({ platform }: { platform: string }) =>
-      isAppShortcutAvailableOnPlatform(definition.id, platform),
+    isVisible: ({ platform, osRelease }: { platform: string; osRelease?: string }) =>
+      isAppShortcutAvailableOnPlatform(definition.id, platform, osRelease),
   }]),
 ));
 

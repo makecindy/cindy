@@ -1,4 +1,5 @@
 import { execFile } from 'node:child_process';
+import { release } from 'node:os';
 import { promisify } from 'node:util';
 import { app, BrowserWindow, dialog, ipcMain, powerMonitor, powerSaveBlocker, screen } from 'electron';
 import { createLogger } from '../logger';
@@ -23,6 +24,7 @@ import {
   AWAY_GUARD_SET_DELAY_CHANNEL,
   AWAY_GUARD_SET_ENABLED_CHANNEL,
   isAwayGuardDelaySeconds,
+  isAwayGuardSupportedPlatform,
   type AwayGuardDelaySeconds,
   type AwayGuardPreviewResult,
   type AwayGuardState,
@@ -47,11 +49,7 @@ export interface AwayGuardServiceDeps {
 
 /** Same platform floor as the remote desktop privacy masks; the helper is macOS-only. */
 export function supportsAwayGuard(): boolean {
-  return (
-    process.platform === 'darwin' &&
-    typeof process.getSystemVersion === 'function' &&
-    Number(process.getSystemVersion().split('.')[0]) >= 14
-  );
+  return isAwayGuardSupportedPlatform(process.platform, release());
 }
 
 let controller: AwayGuardController | null = null;

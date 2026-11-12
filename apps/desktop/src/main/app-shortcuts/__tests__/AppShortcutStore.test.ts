@@ -62,6 +62,20 @@ describe('AppShortcutStore', () => {
     expect(makeStore('win32').getEffectiveMap().has('away-guard')).toBe(false);
   });
 
+  // PR #10218：macOS 13 上没有执行入口，既不能占键，也不能丢掉升级后可复用的 override。
+  it('gates away shortcuts by system release without deleting saved overrides', () => {
+    const pathOptions = { getFilePath: filePath, platform: 'darwin' };
+    const current = new AppShortcutStore({ ...pathOptions, ...{ osRelease: '23.0.0' } });
+    const custom = combo('KeyK', { ctrl: true, shift: true });
+    expect(current.setOverride('away-guard', custom)).toBeNull();
+    const older = new AppShortcutStore({ ...pathOptions, ...{ osRelease: '22.6.0' } });
+    expect(older.getEffectiveMap().has('away-guard')).toBe(false);
+    expect(older.getEffectiveCombos('away-guard')).toEqual([]);
+    expect(older.setOverride('away-guard', null)).toBe('platform-unavailable');
+    expect(older.getOverrides()['away-guard']).toEqual(custom);
+    expect(current.getEffectiveCombos('away-guard')).toEqual([custom]);
+  });
+
   it('returns registry defaults when no overrides exist', () => {
     const store = makeStore('darwin');
     expect(store.getEffectiveCombos('toggle-sidebar')).toEqual([
