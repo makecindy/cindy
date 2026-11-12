@@ -18,7 +18,7 @@ export function createDiscordContext(im: DiscordIM, connectionKey = 'personal') 
   const cursors = new Map<string, number>();
   let cacheOwner = '';
   return async (event: IMMessageEvent) => {
-    const tools = im.captureTools(event.senderId, undefined, event.speaker?.isOwner !== false);
+    const tools = im.captureTools(event.senderId, event.assertCurrent, event.speaker?.isOwner !== false);
     const nativeId = event.messageId.split('|').at(-1)!;
     const provider = `discord:${JSON.stringify([getActiveAppSession().dataOwnerId, connectionKey, event.contextId, im.getOwnerUserId()])}`;
     // Durable namespaces use the stable owner, while the hot cache also follows the live account generation.

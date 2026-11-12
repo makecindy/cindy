@@ -128,9 +128,9 @@ export function createDiscordOperations(deps: {
       const { client, lane, channel } = await target(laneId);
       if (!lane || lane.threadId || deps.boundLane) throw new DiscordOperationError('DISCORD_LANE_DENIED');
       const query = new URLSearchParams({ limit: '50', ...(before ? { before } : {}) });
-      const page = await client.rest.get(`/channels/${channel.id}/threads/archived/public`, { query }) as { threads: Array<{ id: string; parent_id: string; guild_id: string; name: string }>; has_more: boolean };
+      const page = await client.rest.get(`/channels/${channel.id}/threads/archived/public`, { query }) as { threads: Array<{ id: string; parent_id: string; guild_id: string; name: string; thread_metadata: { archive_timestamp: string } }>; has_more: boolean };
       assertLane(laneId);
-      return { threads: page.threads.filter(t => t.guild_id === lane.guildId && t.parent_id === lane.channelId).map(t => ({ laneId: encodeDiscordLaneUserId({ ...lane, threadId: t.id }), name: t.name })), hasMore: page.has_more, incomplete: true, note: 'Archived public threads; active/joined threads also appear in list_channels.' };
+      return { threads: page.threads.filter(t => t.guild_id === lane.guildId && t.parent_id === lane.channelId).map(t => ({ laneId: encodeDiscordLaneUserId({ ...lane, threadId: t.id }), name: t.name })), hasMore: page.has_more, nextBefore: page.has_more ? page.threads.at(-1)?.thread_metadata?.archive_timestamp ?? null : null, incomplete: true, note: 'Archived public threads; pass nextBefore as before to continue. Active/joined threads also appear in list_channels.' };
     },
     async history(laneId: string, options: { before?: string; limit?: number } = {}) {
       const { client, channel } = await target(laneId);

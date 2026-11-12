@@ -112,7 +112,7 @@ export function buildDiscordAdapter(
     }),
     channelToolScopeFor: event => {
       const requesterIsOwner = event.speaker ? event.speaker.isOwner : event.senderId === discordIm.getOwnerUserId();
-      const origin = discordIm.captureTools(event.senderId, undefined, requesterIsOwner);
+      const origin = discordIm.captureTools(event.senderId, event.assertCurrent, requesterIsOwner);
       return {
         channel: 'discord', im: discordIm, botId: event.contextId,
         laneUserId: event.senderId, chatId: event.chatId ?? event.senderId,

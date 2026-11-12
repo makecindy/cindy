@@ -12,7 +12,7 @@ const lane = z.string().min(1).max(128).optional().describe('Exact laneId from l
 const message = z.string().regex(/^\d{1,25}$/);
 const schemas = {
   list_channels: z.object({}),
-  list_threads: z.object({ lane, before: z.string().max(64).optional() }),
+  list_threads: z.object({ lane, before: z.string().max(64).optional().describe('Archive timestamp (ISO 8601); use nextBefore from the previous list_threads response.') }),
   history: z.object({ lane, before: message.optional(), limit: z.number().int().min(1).max(50).default(50) }),
   get_message: z.object({ lane, message_id: message }),
   search: z.object({ lane, query: z.string().min(1).max(1024), offset: z.number().int().min(0).max(9975).default(0) }),

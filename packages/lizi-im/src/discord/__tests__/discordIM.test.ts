@@ -4,7 +4,7 @@
  */
 import { describe, expect, it, vi } from 'vitest';
 
-import type { IMHost, IMStatus } from '../../types.js';
+import type { IMHost, IMMessageEvent, IMStatus } from '../../types.js';
 import { DiscordIM } from '../index.js';
 import type { DiscordGateway, DiscordGatewayEvents } from '../gateway.js';
 import type { DiscordFinalTextStorage } from '../finalTextOutbox.js';
@@ -132,8 +132,48 @@ describe('DiscordIM teammate instance', () => {
 // unit: true ingress -> terminal persistence -> restart. Streaming and pure ledger tests cannot verify
 // that the original inbound identity is retained or that completed gateway messages never re-enter the model.
 describe('Discord completed-input delivery identity', () => {
-  function terminalHarness() {
+  // #10002: the event must carry its original grant to the host, rather than capture a new one after an await.
+  it('keeps the original ingress grant on emitted channel messages', async () => {
+    const h = terminalHarness(); const im = h.create(); await im.init();
+    try {
+      const received = new Promise<IMMessageEvent>(resolve => im.onMessage(resolve));
+      h.trigger();
+      const event = await received;
+      expect(event.assertCurrent).toBeTypeOf('function');
+      event.assertCurrent?.();
+      h.revoke();
+      expect(() => event.assertCurrent!()).toThrow('DISCORD_AUTHORIZATION_CHANGED');
+    } finally { await im.dispose(); }
+  });
+
+  it('drops a revoked-then-regranted input that was still normalizing its attachments', async () => {
+    const fetch = vi.spyOn(globalThis, 'fetch').mockImplementation(async () => new Response(new Uint8Array([1, 2, 3])));
+    const entered = Promise.withResolvers<void>();
+    const release = Promise.withResolvers<void>();
+    const h = terminalHarness({
+      getCachedImage: async () => null,
+      cacheImage: async () => { entered.resolve(); await release.promise; return { absPath: '/unused/fixture.png', url: 'cindy-media://fixture.png' }; },
+      resolveMediaUrl: () => null,
+    });
+    const im = h.create(); const events: IMMessageEvent[] = [];
+    im.onMessage(event => { events.push(event); });
+    await im.init();
+    try {
+      h.trigger(true, '8', [{ id: 'file', name: 'fixture.png', url: 'https://offline.invalid/unused.png', size: 10, contentType: 'image/png' }]);
+      await entered.promise;
+      h.revoke();
+      const next = new Promise<void>(resolve => im.onMessage(() => resolve()));
+      h.trigger(true, '9');
+      release.resolve();
+      await next; // Same-lane queue: the second event is the completion barrier for normalization of the first.
+      expect(events.map(event => event.messageId)).toEqual(['30|9']);
+      expect(fetch).toHaveBeenCalledOnce();
+    } finally { release.resolve(); await im.dispose(); fetch.mockRestore(); }
+  });
+
+  function terminalHarness(media?: IMHost['media']) {
     const { host, secrets } = makeHost();
+    if (media) host.media = media;
     secrets.set('discord-bot-token', 'invalid-test-token'); secrets.set('discord-owner-user-id', '1'); secrets.set('discord-bot-lifecycle-announcement', 'false');
     let credentialRevision = 1;
     let failure: 'token-save' | 'owner-save' | 'login' | null = null;
@@ -156,7 +196,7 @@ describe('Discord completed-input delivery identity', () => {
         ev.onStatus({ kind: 'connected', appId: 'fake' });
       }, destroy: async () => {} } as unknown as DiscordGateway;
     } });
-    const trigger = (mention = true, id = '8') => events.onGuildMessage({ id, guildId: '10', channelId: '30', channel, author: { id: '1', username: 'Owner' }, content: '<@2> question', mentions: { has: () => mention } } as never);
+    const trigger = (mention = true, id = '8', attachments: unknown[] = []) => events.onGuildMessage({ id, guildId: '10', channelId: '30', channel, author: { id: '1', username: 'Owner' }, content: '<@2> question', mentions: { has: () => mention }, attachments } as never);
     return { create, trigger, post, secrets, fail: (value: typeof failure) => { failure = value; }, revoke: () => { grant = 'grant-2'; }, offline: () => events.onStatus({ kind: 'connecting' }), get json() { return contents ? JSON.parse(contents) : null; } };
   }
   // #10002: real ingress/terminal/config rollback must retain pending text and an in-flight final,

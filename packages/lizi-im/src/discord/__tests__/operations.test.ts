@@ -19,6 +19,19 @@ function harness(boundLane?: string) {
 const raw = (id: string, channel_id = '30', author = '3') => ({ id, channel_id, author: { id: author, username: 'someone' }, content: `body-${id}`, timestamp: '2026-11-10T01:00:00Z', attachments: [] });
 
 describe('Discord narrow operations', () => {
+  // #10002: callers need the archive timestamp to continue a partial public-thread page.
+  it('returns and accepts the continuation timestamp for archived public threads', async () => {
+    const h = harness();
+    const thread = (id: string, archived: string) => ({ id, guild_id: '10', parent_id: '20', name: `thread-${id}`, thread_metadata: { archive_timestamp: archived } });
+    const before = '2026-11-10T01:00:00.000Z';
+    h.rest.get.mockResolvedValueOnce({ threads: [thread('50', '2026-11-11T01:00:00.000Z'), thread('49', before)], has_more: true });
+    const first = await h.tools.listThreads('g/10/20');
+    expect(first).toMatchObject({ threads: [{ laneId: 'g/10/20/50' }, { laneId: 'g/10/20/49' }], hasMore: true, nextBefore: before });
+    h.rest.get.mockResolvedValueOnce({ threads: [thread('48', '2026-11-09T01:00:00.000Z')], has_more: false });
+    const second = await h.tools.listThreads('g/10/20', first.nextBefore!);
+    expect(h.rest.get.mock.calls.at(-1)?.[1]?.query.get('before')).toBe(before);
+    expect(second).toMatchObject({ threads: [{ laneId: 'g/10/20/48' }], hasMore: false, nextBefore: null });
+  });
   it('reads thread-only recent history; filters unrelated REST objects and marks empty content', async () => {
     const h = harness('g/10/20/30');
     h.rest.get.mockResolvedValue([raw('8'), raw('9', '20'), { ...raw('7'), content: '' }]);

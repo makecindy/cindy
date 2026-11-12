@@ -1123,10 +1123,11 @@ export class DiscordIM extends BaseIM implements ChannelIM {
     const acceptedContext = this.acceptedContext(ownerUserId);
     const laneUserId = encodeDiscordLaneUserId(lane);
     if (this.isCompletedInput(m, laneUserId)) return;
+    const ingress = this.captureTools(laneUserId, undefined, isOwner);
     return this.enqueueInbound(
       acceptedContext,
       laneUserId,
-      () => this.normalizeAndEmitGuildMessage(m, lane, laneUserId, botUserId, acceptedContext),
+      () => this.normalizeAndEmitGuildMessage(m, lane, laneUserId, botUserId, acceptedContext, ingress.assertCurrent),
     );
   }
 
@@ -1229,9 +1230,11 @@ export class DiscordIM extends BaseIM implements ChannelIM {
     laneUserId: string,
     botUserId: string,
     acceptedContext: AcceptedContext,
+    assertIngressCurrent: () => void,
   ): Promise<void> {
     const stagedDiscards: Array<() => Promise<void>> = [];
     try {
+      assertIngressCurrent();
       const isOwner = m.author.id === acceptedContext.ownerUserId;
       const channelName = lane.threadId ? m.channel?.parent?.name ?? m.channel?.name : m.channel?.name;
       const speakerName = m.member?.displayName ?? m.author.globalName ?? m.author.username ?? m.author.id;
@@ -1262,6 +1265,8 @@ export class DiscordIM extends BaseIM implements ChannelIM {
         },
       );
       if (!event) return;
+      assertIngressCurrent();
+      event.assertCurrent = assertIngressCurrent;
       // 附件下载可达数秒：配置换代、白名单被撤销或成员准入被收回，都丢弃这条并回滚暂存。
       if (
         !this.isAcceptedContextCurrent(acceptedContext) ||

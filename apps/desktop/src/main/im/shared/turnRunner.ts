@@ -477,6 +477,8 @@ type DefaultRouteTargetResolution =
   | { target: null; missingAuth: ImAuthRouteStatus & { agentKind: AgentKind; model: string } };
 
 export interface ImRunAgentTurnArgs {
+  /** Revalidate the ingress lease immediately before provider start, including internally queued sends. */
+  beforeProviderStart?: () => Promise<void>;
   sourceDescription?: string;
   /**
    * 本条消息的渠道来源事实。turnRunner 按 adapter 的展示渠道（飞书 / Lark …）

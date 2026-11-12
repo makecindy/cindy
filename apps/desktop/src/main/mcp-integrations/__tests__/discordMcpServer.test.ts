@@ -54,6 +54,7 @@ describe('Discord MCP host bridge', () => {
     try {
       expect((await h.call('list_tools')).body.data.map((t: { name: string }) => t.name)).toContain('search');
       expect((await h.call('list_tools', { name: 'history' })).body.data.inputSchema.properties.limit.maximum).toBe(50);
+      expect((await h.call('list_tools', { name: 'list_threads' })).body.data.inputSchema.properties.before.description).toContain('nextBefore');
       expect((await h.call('call_tool', { name: 'send_message', args: { lane: 'g/10/20/30', text: 'hello' } })).error).not.toBe(true);
       expect(h.rest.post).toHaveBeenCalledTimes(1);
       h.revokeAccount(); expect((await h.call('status')).error).toBe(true);
