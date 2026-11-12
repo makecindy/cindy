@@ -36,7 +36,7 @@ void mountPage({
           : forbid('appearance.setPatch'),
       },
     } : {}),
-    platform: ctx.data.tab === 'agent-island' ? 'darwin' : ctx.platform, osRelease: '24.0.0',
+    platform: ctx.data.tab === 'agent-island' ? 'darwin' : ctx.platform, osRelease: ctx.data.osRelease ?? '24.0.0',
     agentIsland: { getDisplayOptions: read([]) },
     appVersion: '0.0.0', appDisplayVersion: 'UI fixture', supportsBetaUpdateChannel: true,
     windowBehavior: { getWindowsCloseBehavior: read('minimize'), getLinuxCloseBehavior: read('minimize') },

@@ -1,5 +1,6 @@
 import { app, BrowserWindow, ipcMain } from 'electron';
 import path from 'node:path';
+import { release } from 'node:os';
 
 import { throwIpcError } from '../utils/ipcValidate.js';
 import type { AppShortcutId, AppShortcutOverrides } from '../../shared/appShortcuts.js';
@@ -76,6 +77,7 @@ export function getAppShortcutStore(): AppShortcutStore {
     storeSingleton = new AppShortcutStore({
       getFilePath: () => path.join(app.getPath('userData'), APP_SHORTCUTS_FILE_NAME),
       platform: process.platform,
+      osRelease: release(),
       onChanged: broadcastAppShortcutsChanged,
     });
   }

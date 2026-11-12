@@ -3,6 +3,7 @@ import type { ImBotIdentity } from './imBotVisibility';
 
 export interface SettingsSearchContext extends ImBotIdentity {
   platform: string;
+  osRelease?: string;
   /** Stored language choice, including system; matches LanguageSection mounting. */
   locale?: string;
   supportsBetaUpdateChannel?: boolean;

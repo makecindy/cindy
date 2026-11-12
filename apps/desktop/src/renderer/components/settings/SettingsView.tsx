@@ -347,6 +347,7 @@ function SettingsViewContent() {
     mode,
     membershipKind: user?.membershipKind ?? null,
     platform: window.electronAPI?.platform ?? '',
+    osRelease: window.electronAPI?.osRelease,
     supportsBetaUpdateChannel: window.electronAPI?.supportsBetaUpdateChannel,
     voiceRefinementEnabled,
     speakerFilter: speakerFilterStatus ? {

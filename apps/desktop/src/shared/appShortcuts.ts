@@ -15,6 +15,7 @@
  * 本 registry 随版本演进; getEffectiveAppShortcuts 负责合并。
  */
 
+import { isAwayGuardSupportedPlatform } from './awayGuard';
 import type { VoiceInputShortcut } from './voiceInputData';
 
 /** 规范化组合键: code 为 W3C KeyboardEvent.code, key 仅供显示兜底不参与匹配。 */
@@ -410,9 +411,11 @@ export function getAppShortcutDefinition(id: AppShortcutId): AppShortcutDefiniti
   return def;
 }
 
-export function isAppShortcutAvailableOnPlatform(id: AppShortcutId, platform: string): boolean {
+/** 运行时传入 Darwin 内核版本；省略版本的静态归一化保留升级后仍可用的覆盖。 */
+export function isAppShortcutAvailableOnPlatform(id: AppShortcutId, platform: string, osRelease?: string): boolean {
   const def = DEFINITION_MAP.get(id);
   if (!def) return false;
+  if (id === 'away-guard' && osRelease !== undefined && !isAwayGuardSupportedPlatform(platform, osRelease)) return false;
   if (!def.platforms) return true;
   return (def.platforms as readonly string[]).includes(platform);
 }
@@ -509,16 +512,17 @@ export function getEffectiveAppShortcuts(
   overrides: AppShortcutOverrides,
   platform: string,
   yieldToCombos: ReadonlyArray<AppShortcutCombo> = [],
+  osRelease?: string,
 ): Map<AppShortcutId, AppShortcutCombo[]> {
   const overrideEntries: Array<{ scope: AppShortcutScope; combo: AppShortcutCombo }> = [];
   for (const def of APP_SHORTCUT_DEFINITIONS) {
-    if (!isAppShortcutAvailableOnPlatform(def.id, platform)) continue;
+    if (!isAppShortcutAvailableOnPlatform(def.id, platform, osRelease)) continue;
     const override = overrides[def.id];
     if (override) overrideEntries.push({ scope: def.scope, combo: override });
   }
   const result = new Map<AppShortcutId, AppShortcutCombo[]>();
   for (const def of APP_SHORTCUT_DEFINITIONS) {
-    if (!isAppShortcutAvailableOnPlatform(def.id, platform)) continue;
+    if (!isAppShortcutAvailableOnPlatform(def.id, platform, osRelease)) continue;
     const override = overrides[def.id];
     if (override === null) {
       result.set(def.id, []);
@@ -842,10 +846,11 @@ export function findAppShortcutConflict(
   comboValue: AppShortcutCombo,
   overrides: AppShortcutOverrides,
   platform: string,
+  osRelease?: string,
 ): AppShortcutId | null {
   const selfDef = DEFINITION_MAP.get(id);
   if (!selfDef) return null;
-  const effective = getEffectiveAppShortcuts(overrides, platform);
+  const effective = getEffectiveAppShortcuts(overrides, platform, [], osRelease);
   for (const def of APP_SHORTCUT_DEFINITIONS) {
     if (def.id === id) continue;
     if (!appShortcutScopesOverlap(selfDef.scope, def.scope)) continue;
