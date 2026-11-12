@@ -16,6 +16,23 @@ export default {
     const menu = () => page.getByRole('menu');
     const action = async (key) =>
       page.getByRole('menuitem', { name: await ui.t(`newChat.pendingQueue.${key}`), exact: true });
+    // Worker messages must expose steering and both reorder directions, without editing.
+    await row('worker')
+      .getByRole('button', { name: await ui.t('newChat.pendingQueue.queued'), exact: true })
+      .click();
+    await menu().waitFor();
+    assert.equal(await (await action('editAction')).count(), 0);
+    await ui.capture('worker-menu');
+    await (await action('moveDown')).click();
+    await row('worker')
+      .getByRole('button', { name: await ui.t('newChat.pendingQueue.queued'), exact: true })
+      .click();
+    await (await action('moveUp')).click();
+    await row('worker')
+      .getByRole('button', { name: await ui.t('newChat.pendingQueue.queued'), exact: true })
+      .click();
+    await (await action('steerAction')).click();
+    assert.equal(await row('worker').count(), 0);
     await row('second')
       .getByRole('button', { name: await ui.t('newChat.pendingQueue.queued'), exact: true })
       .click();
