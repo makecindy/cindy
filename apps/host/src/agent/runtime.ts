@@ -4,7 +4,7 @@ import { CODEX_PROVIDER_OAUTH_PLACEHOLDER_KEY } from '../../../desktop/src/main/
  * Native login, settings and platform integrations are assembled by the owning runtime. */
 
 import path from 'node:path';
-import { mkdir } from 'node:fs/promises';
+import { mkdir, rm } from 'node:fs/promises';
 import { activeOwnerScopeKey, isAppSessionBoundaryPending } from '../../../desktop/src/main/appSessionState.js';
 import { ClaudeCodeAgent } from '@cindy/maker-core/agents/claude-code';
 import { CodexAgent } from '@cindy/maker-core/agents/codex';
@@ -14,7 +14,7 @@ import type { AgentDeps, AgentKind, AuthAdapter, AuthAdapterOptions, AuthLoginOp
 import { hasClaudeNativeLogin } from '../../../desktop/src/main/maker-host/claude-native-auth.ts';
 import { createMakerLogger } from '../../../desktop/src/main/maker-host/logger-adapter.js';
 import { readCodexLocalAuthState } from '../../../desktop/src/main/maker-host/codex-local-auth-state.js';
-import { readHostCodexInvalidation, readHostCodexRecoveryRequirement } from './codex-invalidation.js';
+import { commitHostCodexDisconnectBoundary, readHostCodexInvalidation, readHostCodexRecoveryRequirement } from './codex-invalidation.js';
 import { createHostCodexSystemLogin, detectHostCodexCredentialScope, resolveHostSystemCodexAuthPath } from './codex-system-login.js';
 import { isAnthropicWireModel } from '../../../desktop/src/main/maker-host/claude-gateway-config.js';
 import { createPiAuthAdapter } from '../../../desktop/src/main/maker-host/pi-auth.js';
@@ -310,6 +310,35 @@ export function createCodexLocalCliAuth(gateway: HostGateway | null | undefined,
   // without the Codex runtime there is none.
   const systemLogin = native?.systemLogin ?? createHostCodexSystemLogin({ codexHome, systemAuthPath: null, loginActive: () => false });
   const systemAuthPath = systemLogin.systemAuthPath;
+  // The desktop's explicit logout (auth-adapters.ts logout, runLogout, disconnectCodexOAuth), one
+  // operation at a time: a later logout joins the running one, and a login waits for it.
+  let logoutOperation: Promise<void> | null = null;
+  let logoutsStarted = 0;
+  const runLogout = async (accountService: NonNullable<typeof accounts>) => {
+    try {
+      // Stop the login in progress; it settles below, before the local host is retired.
+      accountService.cancelCodexAccountLogin('openai');
+      if (!current()) return;
+      // The durable disconnect marker over the current file. auth.json stays: an explicit
+      // disconnect only stops Cindy's use of it (a shared login's link stays in place too).
+      commitHostCodexDisconnectBoundary(codexHome, systemAuthPath);
+      // Waits for the cancelled login and retires the local Codex host (the account service).
+      await accountService.retireCodexAccount('openai');
+      if (!current()) return;
+      // The desktop's onLogoutSuccess.
+      await native?.afterLogout?.();
+      if (!current()) return;
+      // The account-less models cache goes with the login, as on the desktop.
+      try { await rm(path.join(codexHome, 'models_cache.json'), { force: true }); } catch (error) {
+        LOGGER.warn('remove stale Codex models_cache.json failed', { error: error instanceof Error ? error.message : String(error) });
+      }
+      if (!current()) return;
+      // Again at the end: an invalidation in between may have rewritten the marker.
+      commitHostCodexDisconnectBoundary(codexHome, systemAuthPath);
+      // Last, as on the desktop: the marker already disconnects if a step above fails.
+      unbindNativeProviderAuth('openai', { revoked: true });
+    } finally { if (current()) native?.onAuthBoundary?.(); }
+  };
   const adapter = bindAuthOwner({
     // maker-core reports a server-rejected login here (codex/index.ts), as on the desktop.
     ...(invalidate ? { invalidate } : {}),
@@ -360,11 +389,17 @@ export function createCodexLocalCliAuth(gateway: HostGateway | null | undefined,
     },
     async triggerLogin(options?: AuthLoginOptions) {
       if (!accounts) throw new Error('Codex account service is unavailable');
+      // As the desktop: a login started during a logout waits for it.
+      if (logoutOperation) await logoutOperation.catch(() => undefined);
+      const logoutsAtStart = logoutsStarted;
       try {
         const result = await accounts.loginCodexAccount('openai', current, undefined, {
           mode: options?.mode === 'device-code' ? 'device-code' : 'browser', onProgress: options?.onProgress,
         });
         if (!result.ok || !current()) return { authenticated: false, errorReason: result.reason ?? 'owner_changed' };
+        // As the desktop's late cancel: a logout that started during this login wins; its marker
+        // covers the file this login wrote.
+        if (logoutsStarted !== logoutsAtStart) return { authenticated: false, errorReason: 'login_cancelled' };
         try { bindNativeProviderAuth('openai', { instanceIsolated: true }); }
         catch (error) { result.rollbackCredentials?.(); throw error; }
         // The desktop's reconcileWithSystemCodexAfterLogin.
@@ -376,11 +411,12 @@ export function createCodexLocalCliAuth(gateway: HostGateway | null | undefined,
     cancelLogin() { accounts?.cancelCodexAccountLogin('openai'); },
     async logout() {
       if (!accounts) throw new Error('Codex account service is unavailable');
-      try {
-        unbindNativeProviderAuth('openai', { revoked: true });
-        await accounts.logoutCodexAccount('openai');
-        if (current()) await native?.afterLogout?.();
-      } finally { if (current()) native?.onAuthBoundary?.(); }
+      if (!logoutOperation) {
+        logoutsStarted += 1;
+        const operation = runLogout(accounts).finally(() => { if (logoutOperation === operation) logoutOperation = null; });
+        logoutOperation = operation;
+      }
+      return logoutOperation;
     },
     async getAuthEnv(opts?: AuthAdapterOptions) {
       if (opts?.nativeSubscriptionAccount) {

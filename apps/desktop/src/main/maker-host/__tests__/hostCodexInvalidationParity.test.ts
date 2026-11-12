@@ -60,8 +60,11 @@ type HostInvalidation = {
   }): Promise<string>;
 };
 type HostCodexAuth = { getState(opts?: Record<string, unknown>): Promise<AuthState> };
+type HostCodexAuthWithAccounts = HostCodexAuth & { logout(): Promise<void>; triggerLogin(): Promise<AuthState> };
 let host: HostInvalidation;
 let createHostCodexAuth: (codexHome: string) => HostCodexAuth;
+/** The Host's Codex adapter with its own account service (provider-config.ts), as Host main builds it. */
+let createHostCodexAuthWithAccounts: (codexHome: string, codexBinary?: string) => HostCodexAuthWithAccounts;
 
 beforeAll(async () => {
   // A non-literal specifier keeps the Host sources out of the desktop typecheck;
@@ -73,6 +76,14 @@ beforeAll(async () => {
     createCodexLocalCliAuth(gateway: null, route: undefined, codexHome: string): HostCodexAuth;
   };
   createHostCodexAuth = codexHome => runtime.createCodexLocalCliAuth(null, undefined, codexHome);
+  const providerConfigModule = '../../../../../host/src/agent/provider-config.ts';
+  const { createHostCodexAccounts } = (await import(/* @vite-ignore */ providerConfigModule)) as {
+    createHostCodexAccounts(options: { profileDir: string; getCodexBinary?(): string | null }, scope: { owner: string; check(): void; closed(): boolean }): unknown;
+  };
+  createHostCodexAuthWithAccounts = (codexHome, codexBinary) => (runtime.createCodexLocalCliAuth as unknown as (
+    gateway: null, route: undefined, codexHome: string, accounts: unknown) => HostCodexAuthWithAccounts)(null, undefined, codexHome,
+    createHostCodexAccounts({ profileDir: path.dirname(codexHome), getCodexBinary: () => codexBinary ?? null },
+      { owner: '', check: () => {}, closed: () => false }));
 }, 120_000);
 
 const roots: string[] = [];
@@ -452,3 +463,100 @@ describe('an invalidation superseded during its cleanup', () => {
     });
   }
 });
+
+/**
+ * The explicit disconnect (DesktopCodexAuthAdapter.logout; the Host's own adapter logout with its
+ * own account service): the durable disconnect marker, auth.json kept, no prompt left behind.
+ */
+describe('an explicit disconnect', () => {
+  const settled = (view: Awaited<ReturnType<typeof desktopView>>) => ({
+    authenticated: view.oauthBearer.authenticated, errorReason: view.oauthBearer.errorReason ?? null,
+    marker: view.marker && { reason: view.marker.reason, keys: view.marker.keys }, bound: view.bound, revoked: view.revoked,
+  });
+
+  it('after an invalidation: both read as not connected, without the old reason', async () => {
+    const byDesktop = profile();
+    const adapter = new DesktopCodexAuthAdapter();
+    await expect(adapter.getState({ credentialMode: 'oauth-bearer' })).resolves.toMatchObject({ authenticated: true });
+    await adapter.invalidate('token_revoked', { credentialGeneration: JSON.stringify(currentCodexCredentialGeneration(byDesktop.authPath)) });
+    await adapter.logout();
+    const afterDesktop = await desktopView(byDesktop);
+
+    const byHost = profile();
+    await host.invalidateHostCodexLogin({ codexHome: byHost.codexHome, reason: 'token_revoked',
+      credentialGeneration: JSON.stringify(currentCodexCredentialGeneration(byHost.authPath)) });
+    await createHostCodexAuthWithAccounts(byHost.codexHome).logout();
+    const afterHost = await desktopView(byHost);
+
+    expect(afterHost).toEqual(afterDesktop);
+    expect(settled(afterHost)).toMatchObject({ authenticated: false, marker: { reason: 'user_disconnected' }, bound: false, revoked: true });
+    expect(afterHost.oauthBearer.errorReason).not.toBe('token_revoked');
+  });
+
+  it('keeps auth.json and drops the models cache on both', async () => {
+    const byDesktop = profile();
+    await new DesktopCodexAuthAdapter().logout();
+    const afterDesktop = await desktopView(byDesktop);
+    const byHost = profile();
+    await createHostCodexAuthWithAccounts(byHost.codexHome).logout();
+    const afterHost = await desktopView(byHost);
+    expect(afterHost).toEqual(afterDesktop);
+    expect(afterHost).toMatchObject({ authFile: true, modelsCache: false, bound: false, revoked: true });
+  });
+
+  it('during an invalidation cleanup: the logout wins and nothing is announced on either side', async () => {
+    const byDesktop = profile();
+    const adapter = new DesktopCodexAuthAdapter();
+    await expect(adapter.getState({ credentialMode: 'oauth-bearer' })).resolves.toMatchObject({ authenticated: true });
+    const desktopAnnounced: string[] = [];
+    adapter.setOnInvalidatedBroadcast((_reason, scope) => { desktopAnnounced.push(scope); });
+    let desktopLogout: Promise<void> | null = null;
+    adapter.setOnLogoutSuccess(async () => { desktopLogout ??= adapter.logout(); });
+    await adapter.invalidate('token_revoked', { credentialGeneration: JSON.stringify(currentCodexCredentialGeneration(byDesktop.authPath)) });
+    await desktopLogout;
+    const afterDesktop = await desktopView(byDesktop);
+
+    const byHost = profile();
+    const hostAuth = createHostCodexAuthWithAccounts(byHost.codexHome);
+    const hostAnnounced: string[] = [];
+    let hostLogout: Promise<void> | null = null;
+    await host.invalidateHostCodexLogin({ codexHome: byHost.codexHome, reason: 'token_revoked',
+      credentialGeneration: JSON.stringify(currentCodexCredentialGeneration(byHost.authPath)),
+      onInvalidated: scope => { hostAnnounced.push(scope); },
+      disposeLocalHost: async () => { hostLogout ??= hostAuth.logout(); } });
+    await hostLogout;
+    const afterHost = await desktopView(byHost);
+
+    expect(hostAnnounced).toEqual(desktopAnnounced);
+    expect(hostAnnounced).toEqual([]);
+    expect(settled(afterHost)).toEqual(settled(afterDesktop));
+    expect(settled(afterHost)).toMatchObject({ authenticated: false, marker: { reason: 'user_disconnected' }, revoked: true });
+  });
+
+  it('then a new login in Cindy: both read the new login, the disconnect marker stays as the suppression sentinel', async () => {
+    const byDesktop = profile();
+    const adapter = new DesktopCodexAuthAdapter();
+    await adapter.logout();
+    byDesktop.write('fixture-token-2');
+    const finishSuccessfulCodexLogin = (adapter as unknown as { finishSuccessfulCodexLogin(): Promise<AuthState> })
+      .finishSuccessfulCodexLogin.bind(adapter);
+    await expect(finishSuccessfulCodexLogin()).resolves.toMatchObject({ authenticated: true });
+    const afterDesktop = await desktopView(byDesktop);
+
+    // The Host logs in through its account service, with a fake Codex CLI that writes a
+    // synthetic ChatGPT login into the staging CODEX_HOME it is given (no network).
+    const byHost = profile();
+    const claims = Buffer.from(JSON.stringify({ sub: 'fixture-subject', email: 'fixture@example.test' })).toString('base64url');
+    const login = JSON.stringify({ tokens: { access_token: 'fixture-token-2', id_token: `e30.${claims}.sig`, account_id: 'fixture-workspace' } });
+    const cli = path.join(byHost.root, 'fake-codex');
+    fs.writeFileSync(cli, `#!/bin/sh\ncat > "$CODEX_HOME/auth.json" <<'EOF'\n${login}\nEOF\nexit 0\n`, { mode: 0o755 });
+    const hostAuth = createHostCodexAuthWithAccounts(byHost.codexHome, cli);
+    await hostAuth.logout();
+    await expect(hostAuth.triggerLogin()).resolves.toMatchObject({ authenticated: true });
+    const afterHost = await desktopView(byHost);
+
+    expect(settled(afterHost)).toEqual(settled(afterDesktop));
+    expect(settled(afterHost)).toMatchObject({ authenticated: true, marker: { reason: 'user_disconnected' }, bound: true, revoked: false });
+  });
+});
+

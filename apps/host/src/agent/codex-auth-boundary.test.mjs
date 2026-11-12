@@ -68,7 +68,7 @@ test('the Host Codex adapter runs the hooks after its own login and logout, and 
   let loginOk = true;
   const accounts = {
     loginCodexAccount: async () => { steps.push('account login'); return loginOk ? { ok: true } : { ok: false, reason: 'login_failed' }; },
-    logoutCodexAccount: async () => { steps.push('account logout'); },
+    retireCodexAccount: async () => { steps.push('account retire'); },
     codexAccountState: () => ({ authenticated: true, authSource: 'oauth' }),
     cancelCodexAccountLogin: () => {},
   };
@@ -77,9 +77,10 @@ test('the Host Codex adapter runs the hooks after its own login and logout, and 
     afterLogout: async () => { steps.push('after logout'); },
     onAuthBoundary: () => steps.push('clear bridge cache'),
   };
+  fs.mkdirSync(path.join(profile, 'codex-home'), { recursive: true });
   const auth = createCodexLocalCliAuth(null, undefined, path.join(profile, 'codex-home'), accounts, undefined, native);
   await auth.logout();
-  assert.deepEqual(steps.splice(0), ['account logout', 'after logout', 'clear bridge cache']);
+  assert.deepEqual(steps.splice(0), ['account retire', 'after logout', 'clear bridge cache']);
   await auth.triggerLogin();
   assert.deepEqual(steps.splice(0), ['account login', 'after login', 'clear bridge cache']);
   loginOk = false;
@@ -88,5 +89,68 @@ test('the Host Codex adapter runs the hooks after its own login and logout, and 
   // The owner changed: this adapter's hooks no longer run.
   configureHostOwner({ userDataDir: profile, ownerId: 'boundary-owner-b' });
   await auth.logout().catch(() => {});
-  assert.deepEqual(steps.filter(step => step !== 'account logout'), []);
+  assert.deepEqual(steps, []);
+});
+
+// As the desktop's logout (runLogout, disconnectCodexOAuth): a login started before the logout and
+// finishing during it does not bind; a login started during it waits for it; and an invalidation
+// that rewrote the marker in between is overruled by the logout's last commit.
+test('the Host Codex logout wins over a login and an invalidation running alongside it', async t => {
+  const { createHostCodexAccounts } = await import('./provider-config.ts');
+  const { invalidateHostCodexLogin, readHostCodexInvalidation } = await import('./codex-invalidation.ts');
+  const { readInvalidatedSystemCodexAuthMarker } = await import('../../../desktop/src/main/maker-host/codex-auth-invalidation.ts');
+  const { currentCodexCredentialGeneration } = await import('../../../desktop/src/main/maker-host/codexCredentialRead.ts');
+  const { bindNativeProviderAuth, isNativeProviderAuthBound } = await import('../../../desktop/src/main/maker-host/nativeProviderAuthBinding.ts');
+  const profile = fs.mkdtempSync(path.join(os.tmpdir(), 'host-codex-logout-'));
+  t.after(() => { configureHostOwner({ userDataDir: profile, ownerId: null }); fs.rmSync(profile, { recursive: true, force: true }); });
+  configureHostOwner({ userDataDir: profile, ownerId: 'logout-owner' });
+  const codexHome = path.join(profile, 'codex-home');
+  fs.mkdirSync(codexHome, { recursive: true });
+  const authPath = path.join(codexHome, 'auth.json');
+  const write = token => fs.writeFileSync(authPath, JSON.stringify({ tokens: { access_token: token, account_id: 'fixture-workspace' } }), { mode: 0o600 });
+
+  // 1. A login in progress when the logout starts: it completes, but the logout wins.
+  write('fixture-token-1');
+  bindNativeProviderAuth('openai', { instanceIsolated: true });
+  let finishLogin;
+  const accounts = {
+    ...createHostCodexAccounts({ profileDir: profile }, { owner: '', check: () => {}, closed: () => false }),
+    loginCodexAccount: () => new Promise(resolve => { finishLogin = () => { write('fixture-token-2'); resolve({ ok: true }); }; }),
+  };
+  const auth = createCodexLocalCliAuth(null, undefined, codexHome, accounts);
+  const login = auth.triggerLogin();
+  await new Promise(resolve => setImmediate(resolve));
+  const logout = auth.logout();
+  finishLogin();
+  assert.deepEqual(await login, { authenticated: false, errorReason: 'login_cancelled' });
+  await logout;
+  assert.equal(isNativeProviderAuthBound('openai'), false);
+  assert.equal(readInvalidatedSystemCodexAuthMarker(codexHome)?.reason, 'user_disconnected');
+
+  // 2. A login started during a logout waits for it, then runs.
+  const order = [];
+  const waiting = { ...accounts, loginCodexAccount: async () => { order.push('login'); return { ok: false, reason: 'login_failed' }; },
+    retireCodexAccount: async () => { await new Promise(resolve => setTimeout(resolve, 20)); order.push('logout retired'); } };
+  const auth2 = createCodexLocalCliAuth(null, undefined, codexHome, waiting);
+  const logout2 = auth2.logout();
+  const login2 = auth2.triggerLogin();
+  await Promise.all([logout2, login2]);
+  assert.deepEqual(order, ['logout retired', 'login']);
+
+  // 3. Codex rewrote auth.json in place during the logout and its rejection came in: the
+  //    invalidation rewrote the marker, the logout's last commit restores the disconnect.
+  write('fixture-token-3');
+  bindNativeProviderAuth('openai', { instanceIsolated: true });
+  const native = { afterLogout: async () => {
+    const generation = JSON.stringify(currentCodexCredentialGeneration(authPath));
+    write('fixture-token-4');
+    await invalidateHostCodexLogin({ codexHome, reason: 'token_revoked', isCodexAccountProvider: () => false,
+      credentialGeneration: JSON.stringify(currentCodexCredentialGeneration(authPath)) });
+    assert.notEqual(generation, null);
+    assert.equal(readInvalidatedSystemCodexAuthMarker(codexHome)?.reason, 'token_revoked', 'the invalidation rewrote the marker');
+  } };
+  const auth3 = createCodexLocalCliAuth(null, undefined, codexHome, accounts, undefined, native);
+  await auth3.logout();
+  assert.equal(readInvalidatedSystemCodexAuthMarker(codexHome)?.reason, 'user_disconnected');
+  assert.equal(readHostCodexInvalidation(codexHome), null, 'no sign-in prompt is left after the explicit disconnect');
 });

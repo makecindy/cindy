@@ -2,6 +2,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import {
+  CODEX_USER_DISCONNECT_REASON,
   isDurableDisconnectMarker,
   readInvalidatedSystemCodexAuthMarker,
   restoreInvalidationStateOnStartup,
@@ -36,6 +37,18 @@ const errorText = (error: unknown) => error instanceof Error ? error.message : S
 const loginWindowOpen = (input: { loginInProgress?: () => boolean }) => {
   try { return input.loginInProgress?.() ?? false; } catch { return true; }
 };
+
+/**
+ * The desktop's commitExplicitCodexDisconnectBoundary for the profile's native login: the durable
+ * disconnect marker over the current file. It stops the reconciliation with the system login and
+ * suppresses that file until a new login replaces it; the file itself stays. Throws when the
+ * marker cannot be written, as the desktop's logout does.
+ */
+export function commitHostCodexDisconnectBoundary(codexHome: string, systemAuthPath?: string | null): void {
+  const persisted = writeInvalidatedSystemCodexAuthMarker(codexHome, markerSystemPath(codexHome, systemAuthPath),
+    CODEX_USER_DISCONNECT_REASON, path.join(codexHome, 'auth.json'));
+  if (!persisted) throw new Error('failed to persist Codex disconnect state');
+}
 
 /**
  * The invalidation the profile's marker still reports, as the desktop restores it on

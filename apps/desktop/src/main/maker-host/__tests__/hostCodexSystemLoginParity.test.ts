@@ -60,6 +60,9 @@ type HostInvalidation = {
   invalidateHostCodexLogin(input: Record<string, unknown>): Promise<string>;
 };
 let createHostAuth: (codexHome: string, systemAuthPath: string, loginActive?: () => boolean) => HostAuth;
+/** The Host's own account service for a profile (provider-config.ts createHostCodexAccounts). */
+let createHostAccounts: (profileDir: string) => { isCodexAccountLoginActive(providerId: string): boolean };
+let createHostAuthWithAccounts: (codexHome: string, systemAuthPath: string, accounts: unknown) => HostAuth & { logout(): Promise<void> };
 let hostInvalidation: HostInvalidation;
 
 beforeAll(async () => {
@@ -73,6 +76,17 @@ beforeAll(async () => {
   const systemLoginModule = '../../../../../host/src/agent/codex-system-login.ts';
   const { createHostCodexSystemLogin } = (await import(/* @vite-ignore */ systemLoginModule)) as {
     createHostCodexSystemLogin(options: { codexHome: string; systemAuthPath: string | null; loginActive(): boolean }): HostAuth['systemLogin'];
+  };
+  const providerConfigModule = '../../../../../host/src/agent/provider-config.ts';
+  const { createHostCodexAccounts } = (await import(/* @vite-ignore */ providerConfigModule)) as {
+    createHostCodexAccounts(options: { profileDir: string }, scope: { owner: string; check(): void; closed(): boolean }): { isCodexAccountLoginActive(providerId: string): boolean };
+  };
+  createHostAccounts = profileDir => createHostCodexAccounts({ profileDir }, { owner: '', check: () => {}, closed: () => false });
+  createHostAuthWithAccounts = (codexHome, systemAuthPath, accounts) => {
+    const typed = accounts as { isCodexAccountLoginActive(providerId: string): boolean };
+    const systemLogin = createHostCodexSystemLogin({ codexHome, systemAuthPath, loginActive: () => typed.isCodexAccountLoginActive('openai') });
+    return Object.assign(runtime.createCodexLocalCliAuth(null, undefined, codexHome, accounts, undefined, { systemLogin }), { systemLogin }) as
+      HostAuth & { logout(): Promise<void> };
   };
   // What the Host's Codex runtime builds (codex-runtime.ts), with the fake system login.
   createHostAuth = (codexHome, systemAuthPath, loginActive = () => false) => {
@@ -266,7 +280,7 @@ describe('the Host reconciles with the system Codex login as the installed deskt
   it('an explicit disconnect suppresses the system login until it is replaced', async () => {
     await both({ local: 'symlink', binding: 'shared' }, [
       { name: 'disconnect', desktop: async () => new DesktopCodexAuthAdapter().logout(),
-        host: async f => disconnectLikeDesktop(f) },
+        host: async f => hostLogout(f) },
       { name: 'restart after disconnect' },
       relogin,
       { name: 'after relogin following a disconnect' },
@@ -561,12 +575,8 @@ describe('the Host reconciles with the system Codex login as the installed deskt
   });
 });
 
-/**
- * The desktop's explicit disconnect (DesktopCodexAuthAdapter.logout) as its durable result:
- * the Host logs out through its account service, which these tests do not build, so the Host
- * copy receives the same durable state through the desktop adapter's own logout.
- */
-async function disconnectLikeDesktop(f: ReturnType<typeof fixture>) {
+/** The Host's own explicit disconnect: its Codex adapter's logout with its own account service. */
+async function hostLogout(f: ReturnType<typeof fixture>) {
   f.enter();
-  await new DesktopCodexAuthAdapter().logout();
+  await createHostAuthWithAccounts(f.codexHome, f.systemAuth, createHostAccounts(h.userDataDir)).logout();
 }
