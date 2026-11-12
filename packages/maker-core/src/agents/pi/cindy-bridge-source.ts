@@ -4634,9 +4634,6 @@ export default async function cindyBridge(piApi: any) {
   }
   const runtimeModelRouting = installRuntimeModelControl(pi);
   const runtimeRequestModel = runtimeModelRouting.requestModel;
-  // Tool-efficiency policy: direct parallel calls stay cheaper than a script for a few small
-  // results, so the split has to be stated where the model will read it. Only injected when
-  // codemode is actually active; guests and review sessions never reach this branch.
   // Tool-efficiency policy: the split has to be stated where the model will read it, in both
   // directions — with only the "don't script" half, codemode never gets picked. Only injected
   // when codemode is actually active; guests and review sessions never reach this branch.
@@ -4649,7 +4646,7 @@ export default async function cindyBridge(piApi: any) {
     if (!options || !Array.isArray(options.promptGuidelines)) return;
     options.promptGuidelines.push(
       'Put independent tool calls in the same message: Pi runs them in parallel and they cost one round trip.',
-      'A codemode script pays off when the calls are already known and their raw output needs filtering or cross-checking; when each result decides the next call, or for one or two small calls, issue the calls directly.',
+      'A codemode script pays off when the calls are already known and their raw output needs filtering or cross-checking; return only the fields you need, never the raw output; when each result decides the next call, or for one or two small calls, issue the calls directly.',
     );
   });
   installTextOnlyTurnPolicy(pi, runtimeModelRouting.prepare);
