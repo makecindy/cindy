@@ -1351,7 +1351,7 @@ Host 构造三个 agent 时一个都没传，也没有启动钩子，只有 Code
 
 | 依赖 | 桌面给 | Host | 说明 |
 | --- | --- | --- | --- |
-| `auth`、`runtimeConfig`、`binaryPath`、`logger`、`mcpProviders`、`makerMemory`、`getMcpToolApprovalPolicy` | 三个 | 已接 | `runtimeConfig` 与 `mcpProviders` 只是键已接：`runtimeConfig` 只有 endpoint 和记忆开关，见放行表第 23 行；内置工具服务只有 browser、computer、cindy_memory，见第 22 行 |
+| `auth`、`runtimeConfig`、`binaryPath`、`logger`、`mcpProviders`、`makerMemory`、`getMcpToolApprovalPolicy` | 三个 | 已接 | `runtimeConfig` 已于 m1-cp5c 与桌面同源（放行表第 23 行），endpoint 仍是账号网关（第 24 行）；`mcpProviders` 只是键已接：内置工具服务只有 browser、computer、cindy_memory，见第 22 行 |
 | Codex 凭证与路由：`resolveCodexLocalAuthPolicy`、`isCodexAccountProvider`、`isolateCodexAccountSessions`、`createCodexAuthTokenReader`、`onCodexLocalModelsListed`、`resolveCodexSubagentRoutingSignature`、`resolveCodexThreadContextWindow`、`disableCodexPluginRuntime` | Codex | 已接 | |
 | Codex 代理与 MCP：`prepareCodexExtraSpawnConfig`、`registerCodexSystemPromptForThread`、`registerCodexChildThreadForParent`、`getCodexSubagentIdentity`、`armCodexHttpRecovery`、`registerCodexTextOnlyPolicy`、`registerCodexMcpThreadContext`、`unregisterCodexMcpThreadContext`、`prepareCodexMcpToolCancellation`、`withCodexMcpDiscoveryContext` | Codex | 已接 | |
 | `resolvePiAgentHome`、`resolvePiNativeProviders` | Pi | 已接 | |

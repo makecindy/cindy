@@ -36,6 +36,8 @@ import { readDisabledSkillPaths } from '../../../desktop/src/main/skillhub/activ
 import { createHostStartOptions } from './start-options.js';
 import { captureKnownFileBefore, noteOpaqueTurnChange } from '../../../desktop/src/main/turn-change-set/store.js';
 import { readCodexHistoryHasProductPrompt, writeCodexHistoryHasProductPrompt } from '../../../desktop/src/main/maker-host/session-storage.js';
+import { buildPiRuntimeConfig, claudeUpstreamEndpoint, createAgentRuntimeConfigs } from '../../../desktop/src/main/maker-host/runtimeConfigsCore.js';
+import { hostRuntimeLayout } from '../runtime-layout.mjs';
 
 type HostProviderConfig = ReturnType<typeof createHostProviderConfig>;
 
@@ -66,6 +68,8 @@ export interface HostAgentGraphOptions {
   ensureProviderCatalog?: () => Promise<unknown>;
   /** The plugin roster section from the Host plugin gateway. */
   getGhostRosterPrompt?: AgentDeps['getGhostRosterPrompt'];
+  /** Directory holding the bundled harnesses, including `ripgrep-bin`. Defaults to the Host layout. */
+  harnessRoot?: string;
 }
 
 export const LOGGER = createMakerLogger('maker');
@@ -280,6 +284,16 @@ export function createHostAgentGraph(options: HostAgentGraphOptions) {
     getCatalog: modelContext.getSelectableCatalog, resolveContextProviderId: modelContext.resolveContextProviderId,
   });
   const codexBinaryPath = options.codexBinaryPath;
+  // The desktop runtime configs (runtimeConfigsCore.ts): product system prompt, answer
+  // delivery prompt, behavior flags, memory settings, compaction and subagent model.
+  const harnessRoot = options.harnessRoot ?? hostRuntimeLayout().harnessRoot;
+  const runtimeConfigs = createAgentRuntimeConfigs({
+    userDataPath: () => options.userDataDir,
+    ripgrepCandidates: key => [path.join(harnessRoot, 'ripgrep-bin', key)],
+    codexBinaryPath: () => codexBinaryPath,
+  });
+  // Without an account gateway the Host keeps the endpoint unset, as before.
+  const hostEndpoint = (() => options.gateway?.endpoint || undefined) as () => string;
   const codexModelResolvers = codexBinaryPath ? createCodexModelResolvers({
     getCatalog: modelContext.getSelectableCatalog, resolveContextProviderId: modelContext.resolveContextProviderId,
     getCodexHome: () => path.join(options.userDataDir, 'codex-home'), getCodexBinaryPath: () => codexBinaryPath,
@@ -288,11 +302,7 @@ export function createHostAgentGraph(options: HostAgentGraphOptions) {
   const piModelResolvers = createPiModelResolvers({ getCatalog: getActiveCatalog, resolveContextProviderId: resolveModelContextProviderId });
   const agent = options.binaryPath ? new ClaudeCodeAgent({
     auth: createClaudeGatewayAuth(options.gateway, options.resolveProviderRoute, config.claudeNative),
-    runtimeConfig: {
-      get endpoint() { return options.gateway?.endpoint || undefined; },
-      // The session flag gates whether cindy_memory is registered at all.
-      ...(options.makerMemory ? { makerMemoryEnabled: options.makerMemory.isEnabled() } : {}),
-    },
+    runtimeConfig: runtimeConfigs.buildClaudeRuntimeConfig(hostEndpoint),
     binaryPath: options.binaryPath,
     logger: LOGGER,
     getMcpToolApprovalPolicy: getDesktopMcpToolApprovalPolicy,
@@ -319,7 +329,7 @@ export function createHostAgentGraph(options: HostAgentGraphOptions) {
         resolveCapabilityRouting: codexCapabilityRouting.resolveCapabilityRouting,
         capabilityAdditions: availableModels('codex'),
         ...(options.getGhostRosterPrompt ? { getGhostRosterPrompt: options.getGhostRosterPrompt } : {}),
-        runtimeConfig: {},
+        runtimeConfig: runtimeConfigs.buildCodexRuntimeConfig(),
         binaryPath: options.codexBinaryPath,
         logger: LOGGER,
         getMcpToolApprovalPolicy: getDesktopMcpToolApprovalPolicy,
@@ -331,9 +341,12 @@ export function createHostAgentGraph(options: HostAgentGraphOptions) {
     ? new PiAgent({
         auth: piAuth,
         ...options.mcpRuntime.piDeps,
-        runtimeConfig: {
-          get endpoint() { return options.gateway?.endpoint || undefined; },
-        },
+        runtimeConfig: buildPiRuntimeConfig({
+          ripgrepPath: runtimeConfigs.getRipgrepBinaryPath(),
+          userDataPath: options.userDataDir,
+          endpoint: hostEndpoint,
+          remoteEndpoint: () => claudeUpstreamEndpoint(),
+        }),
         binaryPath: options.piBinaryPath,
         logger: LOGGER,
         getMcpToolApprovalPolicy: getDesktopMcpToolApprovalPolicy,

@@ -37,7 +37,7 @@
 | 8 | 工作树租约 | `worktree/runtimeLeases.ts` | 未做（第 7 步） | — | 无 |
 | 9 | Codex 产品提示标记 | `maker-host/session-storage.ts` | 已对齐（m1-cp5a） | Host `agent-graph.test.mjs`；`codex-runtime.e2e.mjs` 数据库往返 | 无 |
 | 10 | 读图钩子、电脑操作防护、Bash 并发闸门 | `claudeHooks` | 未做（第 6 步） | — | 无 |
-| 11 | Codex 任务的记忆 | `apps/host/src/agent/memory.mjs:70` TODO | 未做（第 7 步） | — | 无 |
+| 11 | Codex 任务的记忆 | `apps/host/src/agent/memory.mjs:70` TODO | 未做（第 7 步）。m1-cp5c 起 Codex 的 `makerMemoryEnabled` 按用户设置读取，与桌面相同；第 7 步核实 Codex 经 MCP 桥实际拿到记忆工具 | — | 无 |
 | 12 | 本机附件 | `normalizeAttachments.ts` | 部分：Codex 本机路径有自动证据；Claude、Pi 与输入框粘贴路径未验证（第 9 步） | `codex-runtime.e2e.mjs` | 无 |
 | 13 | 用量与花费记录 | `maker-ipc/session*TurnUsage.ts` 与四个广播模块 | 未做（2e，M1 最后）。Host 期间不记录用量，事后补不回来，必须在迁移前完成 | — | 无 |
 | 14 | 账号与供应商就绪、provider 冻结、model interface | 桌面启动钩子第 ③④⑤ 步 | 已对齐（m1-cp2b，就绪检查方式见第二节） | Host `start-options.test.mjs` | 无 |
@@ -49,7 +49,8 @@
 | 20 | 诊断：进程登记、cc-debug、出口路径事实 | maker-host 构造点 | 未做（第 7 步） | — | 无 |
 | 21 | 启动时清掉从终端继承的 Anthropic 凭据与端点变量 | `main/index.ts` `stripSensitiveAnthropicEnv` | 已对齐（m1-cp5b）：`main.ts` 第一个导入执行同一步，保留导入用的 Claude 配置目录 | Host `boot-env.test.mjs` | 无 |
 | 22 | Cindy 内置工具服务 | `mcp-integrations/mcp-providers.ts` `createLiziMcpProviders` | 未排期（待定归属）。Host 现在只有 browser、computer、cindy_memory 和插件网关；缺 cindy_helper、cindy_docs、cindy_lsp、cindy_ssh、cindy_scheduler、android、cindy_orca、飞书/微信/Slack/iMessage/Telegram 机器人和群聊记录。Host 任务看不到这些工具，但系统提示与能力路由仍会提到 cindy_helper | — | 无 |
-| 23 | 引擎运行时配置（`runtimeConfig`） | `maker-host/runtime-configs.ts`；`pi-host.ts` `buildDesktopPiRuntimeConfig` | 未做（提议排在 5b 之后）。Host 只传了 endpoint 和记忆开关；缺产品系统提示（Cindy 身份、业务归属、Skill 来源优先级、各引擎专属段）、回答呈现提示、`behaviorFlags`（Tool Search、工具链限核等）、代输入用的 `taskShellEnv`、压缩阈值、换模型时的上下文评估、子代理模型、记忆设置与 `userDataPath`、内置 ripgrep 路径。Host 任务因此不带 Cindy 的身份与回答格式说明 | — | 无 |
+| 23 | 引擎运行时配置（`runtimeConfig`） | `maker-host/runtime-configs.ts`；`pi-host.ts` `buildDesktopPiRuntimeConfig` → `runtimeConfigsCore.ts` | 已对齐（m1-cp5c）：产品系统提示、回答呈现提示、`behaviorFlags`、`taskShellEnv`、压缩阈值、换模型时的上下文评估、子代理模型、记忆设置（每次读取）、`userDataPath`、内置 ripgrep。Host 的 endpoint 仍是账号网关，见第 24 行；代输入的环境变量在 Host 上恒为空，见第二节 | Host `agent-graph.test.mjs`（系统提示按桌面拼法从源文件独立拼出比对）；desktop 相关 25 个测试文件 | 无 |
+| 24 | Claude 与 Pi 的本机兼容代理 | `maker-host/anthropic-compat-proxy-host.ts`（`getClaudeEndpoint`） | 未排期（待定归属）。Host 的 Claude 与 Pi 直连账号网关，相当于桌面代理没起来时的退路；代理负责的按模型路由与字段适配（给非 Claude 模型去掉 Anthropic 专有字段）在 Host 上没有 | — | 无 |
 
 ## 二、与桌面不同（已知差异）
 
@@ -63,6 +64,8 @@
 | 自动复核（第 4 步之前） | 模型复核 | 退回人工确认 | 打断更多，不会更不安全 |
 | Pi 思考开关记忆（M2 之前） | 读渲染层镜像 | 镜像为空 | 用模型默认值 |
 | 用量记录（2e 之前） | 记录 | 不记录 | Host 期间的用量丢失；Host 侧 e2e 的「三张用量表行数」核对不适用 |
+| 代输入（sudo、ssh、git 密码提示） | 任务的 shell 带代输入的 askpass 环境变量，提示转给用户 | 同一个 `taskShellEnv`，但 Host 不启动 askpass，返回空 | 这些提示在 Host 任务里照命令行默认行为失败，不会转给用户；随代输入一起补 |
+| 内置 ripgrep 的位置 | 打包版 `resources/tools/ripgrep`，开发时在检出目录 | `hostRuntimeLayout().harnessRoot/ripgrep-bin/<平台>`（发布版在 `resources/harnesses`） | 同一个 rg；找不到时同样报错 |
 
 ## 三、Host 会写到 profile 之外的位置
 
