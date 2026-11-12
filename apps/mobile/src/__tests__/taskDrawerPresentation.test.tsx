@@ -1,3 +1,4 @@
+vi.mock('@/platform/haptics', () => ({ playHaptic: vi.fn() }));
 // @vitest-environment jsdom
 // Unit integration: the public drawer coordinator must switch the right-hand
 // route before visual exit completion. Beta 37 only tested deferred dispatch.
