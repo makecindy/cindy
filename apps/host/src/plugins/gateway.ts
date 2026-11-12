@@ -144,6 +144,8 @@ export function createHostPluginGateway(options: GatewayOptions) {
     /** The plugin roster section the desktop gives each engine (ghost.ts getGhostRosterPrompt).
      * After an owner change it is empty instead of describing the previous owner's plugins. */
     rosterPrompt: (ctx: { workingDir?: string }) => (runtime.current() ? gateway.getGhostRosterPrompt(ctx) : ''),
+    /** Built-in and approved plugin Skills, the desktop's listCindyManagedSkills (maker-host/managed-skills.ts). */
+    managedSkills: () => runtime.listManagedSkills(),
     async prepareMcpProviders(providers: McpProvider[]) {
       runtime.assertCurrent();
       custom.registerCustomMcpArrays(providers);
