@@ -42,6 +42,7 @@ import { readCodexHistoryHasProductPrompt, writeCodexHistoryHasProductPrompt } f
 import { buildPiRuntimeConfig, claudeUpstreamEndpoint, createAgentRuntimeConfigs } from '../../../desktop/src/main/maker-host/runtimeConfigsCore.js';
 import { hostRuntimeLayout } from '../runtime-layout.mjs';
 import { createHostAutoReview } from './auto-review.js';
+import { createClaudeAutoPermissionFallbackCoordinator, setClaudeAutoClassifierUnavailableListener } from '../../../desktop/src/main/maker-host/claude-auto-permission-fallback.js';
 
 type HostProviderConfig = ReturnType<typeof createHostProviderConfig>;
 
@@ -548,6 +549,15 @@ export function createHostAgentGraph(options: HostAgentGraphOptions) {
     toolLoopReviewer: autoReview.toolLoopReviewer,
     ...(options.makerMemory ? { makerMemory: options.makerMemory } : {}),
   });
+  // As the desktop (register.ts): when the loopback proxy sees Claude's native Auto classifier
+  // fail, the task stays on Auto and its later approvals go to the Cindy reviewer above.
+  // The latest graph owns the process-wide listener.
+  const handleClassifierUnavailable = createClaudeAutoPermissionFallbackCoordinator({
+    getSession: sessionId => maker.getSession(sessionId),
+    getSessionMeta: sessionId => maker.getSessionMeta(sessionId),
+    logger: LOGGER,
+  });
+  setClaudeAutoClassifierUnavailableListener(signal => { void handleClassifierUnavailable(signal); });
   const owner = activeOwnerScopeKey();
   const hostSessions = (key: string) => maker.listActiveSessions().filter(session => session.agentKind === 'codex'
     && !session.remoteHostId && (session.codexHostKey ?? 'local') === key);

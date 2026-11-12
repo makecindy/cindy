@@ -211,3 +211,36 @@ test('an unavailable tool-loop review lets the task continue, as on the desktop'
   f.gateway.set(() => ({ status: 500 }));
   assert.equal(await f.review.toolLoopReviewer(loopRequest, { signal: new AbortController().signal }), 'continue');
 });
+
+// Release table row 4 (24a): the loopback proxy reports a failing native Auto classifier; the
+// Host graph sets the desktop's coordinator, which keeps the task on Auto and moves its later
+// approvals to the Cindy reviewer, only for a Claude task whose stored mode is Auto.
+test('a failing native Auto classifier moves an Auto Claude task to the Cindy reviewer', async t => {
+  const { notifyAutoPermissionClassifierUnavailable } = await import('../../../desktop/src/main/maker-host/claude-auto-permission-fallback.ts');
+  const profile = fs.mkdtempSync(path.join(os.tmpdir(), 'cindy-host-auto-review-classifier-'));
+  t.after(() => fs.rmSync(profile, { recursive: true, force: true }));
+  configureHostOwner({ userDataDir: profile, ownerId: 'auto-review-classifier' });
+  const mcp = createHostMcpRuntime({ appServerIds: () => [], getRemoteMcpBridgeToken: () => null });
+  t.after(() => mcp.close());
+  const graph = createHostAgentGraph({
+    userDataDir: profile, gateway: null, mcpRuntime: mcp, mcpProviders: [], storage: {},
+    providerConfig: {
+      grok: { hasGrokOAuthLogin: () => false, grokAccountIdentity: () => null },
+      list: async () => [], readKey: () => null,
+      oauth: { readCachedGenericOAuthAccessToken: () => null },
+      piNativeProviders: () => ({ providers: [], env: {} }),
+      codexAccounts: { setCodexAccountRetirement: () => {}, isCodexAccountProvider: () => false },
+    },
+  });
+  const switched = [];
+  const sessions = {
+    'auto-task': { agentKind: 'claude-code', mode: 'auto' },
+    'ask-task': { agentKind: 'claude-code', mode: 'ask' },
+    'pi-task': { agentKind: 'pi', mode: 'auto' },
+  };
+  graph.maker.getSession = id => sessions[id] && { agentKind: sessions[id].agentKind, async useCindyAutoReviewFallback() { switched.push(id); } };
+  graph.maker.getSessionMeta = async id => sessions[id] ? { permissionMode: sessions[id].mode } : null;
+  for (const sessionId of Object.keys(sessions)) notifyAutoPermissionClassifierUnavailable({ sessionId, agentKind: 'claude-code', status: 529 });
+  await new Promise(resolve => setTimeout(resolve, 20));
+  assert.deepEqual(switched, ['auto-task']);
+});
