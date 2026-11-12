@@ -256,6 +256,47 @@ test('the Codex runtime passes the account service predicate to the invalidation
   assert.ok(source.includes("isCodexAccountProvider: id => id !== 'openai' && options.config.codexAccounts.isCodexAccountProvider(id),"));
 });
 
+// As the desktop's disconnectCodexOAuth: when codex-home is itself a link to the system login's
+// directory, the invalidation removes nothing there; the system file keeps its bytes and inode.
+test('a codex-home that is a link to the system login directory keeps the system login file', async t => {
+  const p = profile(t);
+  const systemDir = fs.mkdtempSync(path.join(os.tmpdir(), 'host-codex-system-dir-'));
+  t.after(() => fs.rmSync(systemDir, { recursive: true, force: true }));
+  const systemAuth = path.join(systemDir, 'auth.json');
+  fs.writeFileSync(systemAuth, JSON.stringify({ tokens: { access_token: 'system-token', account_id: 'fixture-workspace' } }), { mode: 0o600 });
+  fs.rmSync(p.codexHome, { recursive: true, force: true });
+  fs.symlinkSync(systemDir, p.codexHome, 'dir');
+  const before = { bytes: fs.readFileSync(systemAuth, 'utf8'), stat: fs.statSync(systemAuth) };
+  const result = await invalidateHostCodexLogin({ codexHome: p.codexHome, systemAuthPath: systemAuth, reason: 'token_revoked',
+    credentialGeneration: JSON.stringify(currentCodexCredentialGeneration(systemAuth)), isCodexAccountProvider: () => false });
+  assert.equal(result, 'invalidated');
+  const after = fs.statSync(systemAuth);
+  assert.equal(fs.readFileSync(systemAuth, 'utf8'), before.bytes);
+  assert.equal(after.ino, before.stat.ino);
+  assert.equal(after.mtimeMs, before.stat.mtimeMs);
+  assert.equal(readInvalidatedSystemCodexAuthMarker(p.codexHome)?.reason, 'token_revoked');
+});
+
+// A source run has no system login path; as the desktop's getCodexCliAuthPath, the user's
+// ~/.codex/auth.json is still never removed through a codex-home that links to it.
+test('without a system login path, a codex-home linked to ~/.codex keeps ~/.codex/auth.json', async t => {
+  const p = profile(t);
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), 'host-codex-fake-home-'));
+  const savedHome = process.env.HOME;
+  process.env.HOME = home;
+  t.after(() => { process.env.HOME = savedHome; fs.rmSync(home, { recursive: true, force: true }); });
+  const systemDir = path.join(home, '.codex');
+  fs.mkdirSync(systemDir);
+  const systemAuth = path.join(systemDir, 'auth.json');
+  fs.writeFileSync(systemAuth, JSON.stringify({ tokens: { access_token: 'system-token', account_id: 'fixture-workspace' } }), { mode: 0o600 });
+  fs.rmSync(p.codexHome, { recursive: true, force: true });
+  fs.symlinkSync(systemDir, p.codexHome, 'dir');
+  const before = fs.readFileSync(systemAuth, 'utf8');
+  assert.equal(await invalidateHostCodexLogin({ codexHome: p.codexHome, systemAuthPath: null, reason: 'token_revoked',
+    isCodexAccountProvider: () => false }), 'invalidated');
+  assert.equal(fs.readFileSync(systemAuth, 'utf8'), before);
+});
+
 test('HOME stays empty: the system Codex login is never read or written', () => {
   assert.deepEqual(fs.readdirSync(emptyHome), []);
 });

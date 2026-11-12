@@ -1,4 +1,5 @@
 import fs from 'node:fs';
+import os from 'node:os';
 import path from 'node:path';
 import {
   isDurableDisconnectMarker,
@@ -12,6 +13,7 @@ import { currentCodexCredentialGeneration, parseCodexCredentialGeneration } from
 import { isNativeProviderAuthBound, isNativeProviderAuthRevoked, unbindNativeProviderAuth } from '../../../desktop/src/main/maker-host/nativeProviderAuthBinding.js';
 import { getActiveAppSession } from '../../../desktop/src/main/appSessionState.js';
 import { detectHostCodexCredentialScope } from './codex-system-login.js';
+import { codexAuthPathsShareEntry } from '../../../desktop/src/main/maker-host/codex-auth-link.js';
 import { createLogger } from '../../../desktop/src/main/logger.js';
 
 const log = createLogger('host-codex-invalidation');
@@ -144,7 +146,16 @@ export async function invalidateHostCodexLogin(input: {
   try { unbindNativeProviderAuth('openai'); } catch (error) {
     log.warn('early unbind after Codex invalidation failed', { error: errorText(error) });
   }
-  try { await fs.promises.rm(authPath, { force: true }); } catch (error) {
+  try {
+    // As the desktop's disconnectCodexOAuth: a server invalidation never removes auth.json when the
+    // profile's entry is the system login's own (codex-home is, or links to, ~/.codex). Checked
+    // against the system login this runtime uses and, as the desktop's getCodexCliAuthPath, the
+    // user's ~/.codex/auth.json. A failed check keeps the file.
+    const systemEntries = [input.systemAuthPath, path.join(os.homedir(), '.codex', 'auth.json')];
+    if (!systemEntries.some(entry => entry && codexAuthPathsShareEntry(authPath, entry))) {
+      await fs.promises.rm(authPath, { force: true });
+    }
+  } catch (error) {
     log.warn(committed || fallbackCommitted
       ? 'remove Codex auth.json after committed invalidation failed; credential remains suppressed'
       : 'remove Codex auth.json after uncommitted invalidation failed', { error: errorText(error) });

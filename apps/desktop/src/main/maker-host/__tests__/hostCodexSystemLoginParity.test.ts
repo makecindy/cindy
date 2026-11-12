@@ -509,6 +509,45 @@ describe('the Host reconciles with the system Codex login as the installed deskt
     expect(results[0]).toMatchObject({ shape: { scope: 'unknown', recoveryOwner: false, suppresses: 'current' } });
   });
 
+  // codex-home is itself a link to the system ~/.codex: the desktop never removes auth.json then
+  // (disconnectCodexOAuth, codexAuthPathsShareEntry), so the system login file stays byte for byte.
+  it('invalidating when codex-home is a link to the system ~/.codex keeps the system login file', async () => {
+    const results: unknown[] = [];
+    for (const side of ['desktop', 'host'] as const) {
+      const root = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'host-codex-home-link-')));
+      roots.push(root);
+      const home = path.join(root, 'home');
+      const systemDir = path.join(home, '.codex');
+      const systemAuth = path.join(systemDir, 'auth.json');
+      fs.mkdirSync(systemDir, { recursive: true });
+      fs.writeFileSync(systemAuth, authJson('system-token-1', 'workspace-a'), { mode: 0o600 });
+      vi.spyOn(os, 'homedir').mockReturnValue(home);
+      h.userDataDir = path.join(root, 'user-data');
+      h.dataOwnerId = scenarioOwner;
+      fs.mkdirSync(h.userDataDir, { recursive: true });
+      const codexHome = path.join(h.userDataDir, 'codex-home');
+      fs.symlinkSync(systemDir, codexHome, 'dir');
+      bindNativeProviderAuth('openai', { sharedSystem: true });
+      const before = { bytes: fs.readFileSync(systemAuth, 'utf8'), stat: fs.statSync(systemAuth) };
+      const generation = JSON.stringify(currentCodexCredentialGeneration(systemAuth));
+      if (side === 'desktop') await new DesktopCodexAuthAdapter().invalidate('token_revoked', { credentialGeneration: generation });
+      else await hostInvalidation.invalidateHostCodexLogin({ codexHome, systemAuthPath: systemAuth, reason: 'token_revoked',
+        credentialGeneration: generation, hostBound: true, isCodexAccountProvider: () => false });
+      const after = fs.existsSync(systemAuth) ? fs.statSync(systemAuth) : null;
+      const marker = readInvalidatedSystemCodexAuthMarker(codexHome);
+      results.push({
+        kept: after !== null,
+        bytes: after !== null && fs.readFileSync(systemAuth, 'utf8') === before.bytes,
+        inode: after?.ino === before.stat.ino,
+        mtime: after?.mtimeMs === before.stat.mtimeMs,
+        marker: marker && { reason: marker.reason, scope: marker.credentialScope ?? null },
+        bound: isNativeProviderAuthBound('openai'),
+      });
+    }
+    expect(results[1]).toEqual(results[0]);
+    expect(results[0]).toMatchObject({ kept: true, bytes: true, inode: true, mtime: true });
+  });
+
   // relinkSharedCodexAuth's failure results. On POSIX the swap is a single rename that never
   // removes the target first, so "recovered" and "lost" (myAuth gone after a failed swap) only
   // occur on Windows; the Host is not released on Windows in M1.
