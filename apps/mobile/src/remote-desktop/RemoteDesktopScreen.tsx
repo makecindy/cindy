@@ -2787,6 +2787,9 @@ export function RemoteDesktopSession({
     const alreadyAuthorized = Boolean(
       NativeRemoteDesktopView && pipPrepared.current && !restoration,
     );
+    // The retained flag belongs to the PiP being restored. A new entry must
+    // obtain its own authorization after that request, within its own deadline.
+    if (restoration) pipPrepared.current = false;
     const finishTransition = linkRef.current.beginBackgroundTransition?.();
     finishBackgroundTransition.current = finishTransition ?? null;
     presentationReturnedToActive.current = false;

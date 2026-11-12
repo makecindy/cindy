@@ -1785,8 +1785,12 @@ describe("remote desktop controls", () => {
       await nativePresentation("presentation", { active: true });
       expect(grants()).toBe(before);
       expect(requests().filter((r) => r.op === "stop")).toHaveLength(0);
-      if (outcome === "timeout")
+      if (outcome === "timeout") {
         await act(async () => vi.advanceTimersByTimeAsync(4100));
+        // A previous PiP grant cannot cancel this new entry's deadline while
+        // its foreground restoration is still pending.
+        expect(requests().filter((r) => r.op === "stop")).toHaveLength(1);
+      }
       await act(async () => finish({ controlling: true }));
       expect(grants()).toBe(before + (outcome === "grant" ? 1 : 0));
       await act(async () => vi.advanceTimersByTimeAsync(4100));
