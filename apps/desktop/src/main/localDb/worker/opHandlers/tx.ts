@@ -407,7 +407,7 @@ function botsUpdateProfile(db: Database.Database, args: unknown): { currentVersi
       throw Object.assign(new Error('Bot Profile 已被另一处更新，请刷新后重试'), { code: 'PRECONDITION_FAILED' });
     }
     if (p.expectedAvatar !== undefined && current.avatar !== expectString(p.expectedAvatar, 'expectedAvatar')) {
-      throw Object.assign(new Error('Teammate avatar changed during update'), { code: 'PRECONDITION_FAILED' });
+      throw Object.assign(new Error('Buddy avatar changed during update'), { code: 'PRECONDITION_FAILED' });
     }
     if (!allowDuplicateName && p.displayName !== undefined && normalizeBotName(expectString(p.displayName, 'displayName')) !== normalizeBotName(current.displayName)) {
       const name = normalizeBotName(expectString(p.displayName, 'displayName'));

@@ -781,6 +781,7 @@ describe('pulling the floating list out from the task', () => {
     pull.finalize!();
     expect(onCancel).toHaveBeenCalledTimes(2);
     expect(onSettle).toHaveBeenCalledTimes(4);
+    expect(onSettle.mock.calls).toEqual([[false], [true], [true], [false]]);
     await act(async () => probeRoot.unmount());
   });
 });

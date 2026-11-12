@@ -41,6 +41,7 @@ import { TaskMigrationDialog } from './TaskMigrationDialog';
 import { TaskRuntimePluginsDialog } from './TaskRuntimePluginsDialog';
 import { setSessionNotificationsMuted } from './sessionNotificationMute';
 import { MENU_ITEM_CLASS, MENU_ROW_CLASS } from './menuStyles';
+import { readPluginUiEntries, PluginUiSessionMenuItems } from '@/cindy-brain/PluginUiContributions';
 
 interface Props {
   session: Session;
@@ -211,6 +212,7 @@ function ActiveSessionTaskMenu({
     session.runtimePluginsSelected === true || readInstalledGhostsSnapshot().some(ghost =>
       declaredGhostControlPoints(ghost.manifest).some(isRuntimePluginPoint))
   );
+  const pluginActions = !guest && !session.deviceLinkDeviceId ? readPluginUiEntries('session.menu') : [];
   const item = (key: string, action: () => void, disabled = false) => (
     <DropdownMenuItem className={MENU_ITEM_CLASS} disabled={disabled} onSelect={action}>
       {t(`ccAgent.sidebar.sessionMenu.${key}`)}
@@ -332,6 +334,8 @@ function ActiveSessionTaskMenu({
                 {item('openInNewWindow', onOpenInNewWindow, ownerActionsBlocked)}
               </>
             )}
+            {pluginActions.length > 0 && <PluginUiSessionMenuItems sessionId={session.id}
+              disabled={ownerActionsBlocked || archived} className={MENU_ITEM_CLASS} />}
             {separator}
             {archived
               ? item('unarchive', onUnarchive, ownerActionsBlocked)

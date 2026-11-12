@@ -39,7 +39,7 @@ import { getCurrentDbClientSnapshot } from '../localDb/client/current.js';
 import { setSessionArchiveSyncRequester } from '../localDb/sessionArchiveSync.js';
 import { getActiveAppSession, activeOwnerScopeKey, isAppSessionBoundaryPending } from '../appSessionState.js';
 import { remoteCodexProvider } from './ssh-codex-models.js';
-import { getActiveAuthRealm } from '../authManager.js';
+import { getActiveAuthRealm, getAuthState } from '../authManager.js';
 import { getCustomProvider, updateCustomProviderIfUnchanged } from './custom-provider-store.js';
 import { refreshCustomProvidersIntoCatalog } from './createDesktopProviderService.js';
 import { hasCodexApiConnections, setCodexApiModelProbe } from './codex-api-model-capabilities.js';
@@ -2564,6 +2564,7 @@ export function getMaker(): Maker {
     });
 
     const buildBotRuntimeDeps = (skillLinksChanged = false): BotProfileRuntimeDeps => ({
+      getUserName: () => getAuthState().user?.name,
       listSkills: async ({ agentKind, workingDir, remoteHostId }) => {
         if (!_maker) throw new Error('Maker is not ready while hydrating Bot runtime');
         const result = await _maker.listAgentSkills(agentKind, {

@@ -33,7 +33,7 @@ vi.mock('@/theme', async () => {
   const tokens = await import('@/theme/tokens');
   return { ...tokens, useTheme: () => ({ colors: tokens.lightColors }), useThemedStyles: (fn: any) => fn(tokens.lightColors) };
 });
-vi.mock('lucide-react-native', () => ({ ChevronLeft: () => null, Settings2: () => null }));
+vi.mock('lucide-react-native', () => ({ ChevronLeft: () => null, Settings2: () => null, LayoutGrid: () => null }));
 vi.mock('@/session/HomeHeaderGlassButton', () => ({ HomeHeaderGlassButton: ({ onPress, testID, children, disabled }: any) =>
   createElement('button', { onClick: onPress, disabled, 'data-testid': testID }, children) }));
 vi.mock('@/session/CompanionPresenceRing', () => ({ CompanionPresenceRing: ({ active }: any) => active ? createElement('i', { 'data-testid': 'ring' }) : null }));
@@ -72,6 +72,10 @@ it('hosts the companion identity and actions in the system bar while keeping the
   expect(host.querySelector('[data-testid="companion.header"]')).toBeNull();
   await act(async () => button('companion.identity').click());
   expect(h.glance.visible).toBe(true);
+  await act(async () => h.glance.onClose());
+  await act(async () => button('companion.glance.open').click());
+  expect(h.glance.visible).toBe(true);
+  expect(h.profile.visible).toBe(false);
   await act(async () => button('companion.settings').click());
   expect(h.profile.visible).toBe(true);
   await act(async () => button('companion.back').click());
@@ -85,6 +89,11 @@ it('goes back from the chat instead of opening a drawer, opens 近况 from the a
   expect(h.dismiss).toHaveBeenCalledOnce();
   expect(onBack).toHaveBeenCalledOnce();
   await act(async () => button('companion.identity').click());
+  expect(h.glance).toMatchObject({ visible: true, botId: 'bot', deviceId: 'pc', sessionId: 's1' });
+  expect(h.profile.visible).toBe(false);
+  await act(async () => h.glance.onClose());
+  // Same production sheet from the explicit entry; it must not open Settings.
+  await act(async () => button('companion.glance.open').click());
   expect(h.glance).toMatchObject({ visible: true, botId: 'bot', deviceId: 'pc', sessionId: 's1' });
   expect(h.profile.visible).toBe(false);
   await act(async () => h.glance.onClose());
@@ -219,13 +228,15 @@ it('opens learning links in the existing profile sheet on the requested page', a
   expect(h.profile).toMatchObject({ visible: true, initialPage: 'capabilities' });
 });
 
-it('opens 近况 from the identity and routes its tasks on this computer', async () => {
+it('routes glance tasks to their original task on the selected computer', async () => {
   const props = { resource, deviceId: 'pc', deviceName: 'PC', online: true, sessionId: 's1', onBack: vi.fn(), onSearch: vi.fn() };
   await act(async () => root.render(<CompanionHeader {...props} />));
   await act(async () => button('companion.identity').click());
   expect(h.glance).toMatchObject({ visible: true });
   await act(async () => h.glance.onOpenTask('child-1'));
-  expect(h.push).toHaveBeenCalledWith({ pathname: '/sessions/[sessionId]', params: { sessionId: 'child-1', deviceId: 'pc' } });
+  expect(h.push).toHaveBeenLastCalledWith({ pathname: '/sessions/[sessionId]', params: { sessionId: 'child-1', deviceId: 'pc' } });
+  await act(async () => h.glance.onOpenTask('child-remote', 'other-pc'));
+  expect(h.push).toHaveBeenLastCalledWith({ pathname: '/sessions/[sessionId]', params: { sessionId: 'child-remote', deviceId: 'other-pc' } });
 });
 
 
