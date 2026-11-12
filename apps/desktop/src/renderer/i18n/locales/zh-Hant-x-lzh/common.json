@@ -4257,6 +4257,7 @@
           "ariaLabel": "許君之他機與君所分享之人呼叫此供方",
           "writeFailed": "遠端呼叫之設未能存，請再試"
         },
+        "ownComputersCanUse": "吾之他機可用",
         "moreActionsAria": "餘者",
         "runLocation": {
           "label": "運於何機",
@@ -6879,6 +6880,11 @@
       "description": "以同一飛書名籍登入之裝置可互相發現；開「許控此機」後，君之他裝置可遠端連線此機之 {{appName}}。",
       "allowControl": "許同名籍裝置控此機",
       "allowControlHint": "開啟之後，以同一名籍登入之他裝置無須逐次確認即可控此機；此機將顯遠端操控之示，可隨時斷開。慎之。",
+      "ownModelAccess": {
+        "title": "許吾他機用此機之模",
+        "hint": "開之，吾之他機可用此機之供方；Agent 運於此機，用此機之登入與配額。不與他人共之。",
+        "writeFailed": "設未能存，請再試"
+      },
       "keepAwake": "令機常醒",
       "keepAwakeHint": "開啟後此機不入休眠，後臺之 Agent 與定時差事可持續執行(仍可關顯示器 / 鎖屏)。",
       "linkStatus": {
@@ -15417,7 +15423,7 @@
       "REMOTE_AGENT_UNSUPPORTED": "此 Agent 於彼機不可用。請於彼機安裝或登門後再試，或易一 Agent。",
       "REMOTE_AGENT_INVALID": "與行 Agent 之機通訊有謬。請再試；若屢現，請將兩機之 Cindy 皆更新至最新版。",
       "REMOTE_AGENT_MEMBER_BUDGET_PAUSED": "此模型已達分享者所設之模型占比上限。請擇他可用之模型續之。",
-      "REMOTE_AGENT_PROVIDER_NOT_ALLOWED": "彼機未向君開放此供方或所擇模型。請令機主於「遠端與分享」中調其開放之範圍，或易一模型。",
+      "REMOTE_AGENT_PROVIDER_NOT_ALLOWED": "彼機未向君開放此供方或所擇模型。若為君之他機，於彼機「遠端連線」中開「許吾他機用此機之模」；若為他人所分享，請令機主於「遠端與分享」中調其開放之範圍。亦可易一模型。",
       "REMOTE_AGENT_FORK_FAILED": "行 Agent 之機未能自此開新差事。請再試，或易一訊再試。",
       "REMOTE_AGENT_SHARE_PAUSED": "對方已暫停對君之分享，未復之前不可用此諸模型。可易他模型續之。",
       "REMOTE_AGENT_SHARE_REMOVED": "此分享已不可用（對方已刪分享，或君已退出）。可易他模型續之。",

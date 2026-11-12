@@ -920,6 +920,31 @@ describe('被控端控制链路生命周期', () => {
     expect(denied).toMatchObject({ ok: true, result: { providers: [{ id: 'openai', remoteInvocationEnabled: false }] } });
   });
 
+  // 2026-11-12：「让我的其他电脑用本机模型」默认关闭；只有用户在「远程连接」里打开后，自己的电脑才看到
+  // 没单独打开的供应商，「用本机模型」被关掉的那台仍看不到。
+  it('own computers see providers not opened one by one only after the 远程连接 switch is on', async () => {
+    const { client, feed } = makeFakeClient();
+    wireInboundDispatch(client);
+    registry.register('maker:provider:list', () => ({
+      providers: [{ id: 'anthropic', name: 'Anthropic', remoteInvocationEnabled: false }],
+    }));
+    for (const src of ['ctrl-borrow', 'ctrl-no-models']) {
+      feed({ v: 1, kind: 'link-open', id: `open-${src}`, src, payload: { controllerName: src, protocolVersion: 1, appVersion: '2.0.0' } });
+    }
+    modelUseRevokedControllers = ['ctrl-no-models'];
+    let ownComputers = false;
+    setRemoteAgentHandler({ handle: vi.fn(), abortAll: vi.fn(), ownComputerModelUseEnabled: () => ownComputers });
+    try {
+      expect(await runInvoke('ctrl-borrow', { channel: 'maker:provider:list', args: [] }))
+        .toMatchObject({ ok: true, result: { providers: [{ id: 'anthropic', remoteInvocationEnabled: false }] } });
+      ownComputers = true;
+      expect(await runInvoke('ctrl-borrow', { channel: 'maker:provider:list', args: [] }))
+        .toMatchObject({ ok: true, result: { providers: [{ id: 'anthropic', remoteInvocationEnabled: true }] } });
+      expect(await runInvoke('ctrl-no-models', { channel: 'maker:provider:list', args: [] }))
+        .toMatchObject({ ok: true, result: { providers: [{ id: 'anthropic', remoteInvocationEnabled: false }] } });
+    } finally { setRemoteAgentHandler(null); }
+  });
+
   it('link-open capability controls whether provider projection includes new logo kinds', async () => {
     const { client, feed } = makeFakeClient();
     wireInboundDispatch(client);

@@ -231,6 +231,8 @@ export interface RemoteAgentHandler {
    * 主人是否同意过这个人显示(转分享)。
    */
   sharedGroupStatus?(providerId: string, guestController?: string): Promise<ProviderShareGroupState[] | null>;
+  /** 「远程连接」里的「让我的其他电脑用本机模型」(默认关闭)。 */
+  ownComputerModelUseEnabled?(): boolean;
 }
 
 /** 供应商组(docs/product-rules/provider-groups.md)：组摘要只服务同账号电脑。 */
@@ -4777,18 +4779,22 @@ async function runProviderShareInvoke(
 }
 
 /**
- * 「用本机模型」被单独关掉的同账号电脑：目录照常给(远程控制与手机仍要看全部供应商)，只是不再标成
- * 可远程调用，它的模型列表与「运行于」里就不出现这台电脑。
+ * 同账号电脑读本机目录时的「可远程调用」标记：
+ * - 「远程连接」里打开了「让我的其他电脑用本机模型」：全部供应商都标成可用；
+ * - 这台电脑的「用本机模型」被单独关掉：一律不标(目录照常给，远程控制与手机仍要看全部供应商)。
+ * 其余照「允许被远程调用」原值。分享来的受邀者另有投影，不经这里。
  */
-function withoutModelUseForRevokedController(src: string, result: unknown): unknown {
-  if (!(readDeviceLinkSettings().modelUseRevokedControllers ?? []).includes(src)) return result;
+function projectOwnComputerModelUse(src: string, result: unknown): unknown {
+  const revoked = (readDeviceLinkSettings().modelUseRevokedControllers ?? []).includes(src);
+  // 开关由远程 Agent 主机提供；主机没起来时本机也借不出模型，按关闭处理。
+  if (!revoked && remoteAgentHandler?.ownComputerModelUseEnabled?.() !== true) return result;
   if (!result || typeof result !== 'object' || Array.isArray(result)) return result;
   const value = result as { providers?: unknown };
   if (!Array.isArray(value.providers)) return result;
   return {
     ...value,
     providers: value.providers.map((provider) => provider && typeof provider === 'object' && !Array.isArray(provider)
-      ? { ...(provider as Record<string, unknown>), remoteInvocationEnabled: false }
+      ? { ...(provider as Record<string, unknown>), remoteInvocationEnabled: !revoked }
       : provider),
   };
 }
@@ -5302,7 +5308,7 @@ async function executeRemoteInvoke(src: string, payload: InvokePayload | undefin
       ? await providerGroupRemoteHandler.decorateProviderList(projected)
       : projected;
     const decorated = payload.channel === 'maker:provider:list' && isSameAccountController(src)
-      ? withoutModelUseForRevokedController(src, grouped)
+      ? projectOwnComputerModelUse(src, grouped)
       : grouped;
     if (!broadcastTap.isDataOwnerBroadcastScopeCurrent(invocationOwner)) throw new Error('[NOT_FOUND] Session does not exist');
     return { ok: true, result: decorated };
