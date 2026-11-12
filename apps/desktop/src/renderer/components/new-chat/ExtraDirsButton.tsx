@@ -76,13 +76,11 @@ export function ExtraDirsButton({
             data-composer-suggestion-trigger
             className={cn(
               'flex h-[30px] shrink-0 items-center rounded-full border border-transparent',
-              'bg-transparent text-[var(--composer-pill-icon,#3C3F43)]',
-              'transition-colors dark:text-[var(--composer-pill-icon,#D9D9D9)]',
-              'hover:border-[var(--border-default)] hover:bg-[var(--composer-pill-bg,#FCFCFC)]',
-              'dark:hover:bg-[var(--composer-pill-bg,#393838)]',
+              'bg-transparent text-[var(--composer-pill-icon)] transition-colors',
+              'hover:border-[var(--border-default)] hover:bg-[var(--composer-pill-bg)]',
               'disabled:cursor-not-allowed disabled:opacity-50',
               open &&
-                'border-[var(--border-default)] bg-[var(--composer-pill-bg,#FCFCFC)] dark:bg-[var(--composer-pill-bg,#393838)]',
+                'border-[var(--border-default)] bg-[var(--composer-pill-bg)]',
               count > 0 && hasReferenceDirs
                 ? 'min-w-max justify-center gap-1 px-2.5'
                 : 'w-[30px] justify-center p-0',
