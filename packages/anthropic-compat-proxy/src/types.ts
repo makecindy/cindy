@@ -209,9 +209,6 @@ export interface ProxyLogger {
   isDebugEnabled?: () => boolean;
 }
 
-/**
- * createAnthropicCompatProxy 入参。
- */
 /** What the inbound admission check sees: the request line and its flattened headers. */
 export interface InboundAdmissionCtx {
   method: string;
@@ -227,6 +224,9 @@ export interface InboundRejection {
   message: string;
 }
 
+/**
+ * createAnthropicCompatProxy 入参。
+ */
 export interface ProxyOptions {
   /**
    * 真正的 Anthropic-compatible 上游 (网关 endpoint,登录随凭据下发)。

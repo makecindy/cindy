@@ -431,6 +431,19 @@ function respondRoutingFailure(
   res.destroy(err instanceof Error ? err : new Error(String(err)));
 }
 
+/** Runs the optional inbound admission check; a throwing check rejects. */
+function admitInbound(
+  check: ProxyOptions['authorizeInbound'],
+  ctx: InboundAdmissionCtx,
+): InboundRejection | null {
+  if (!check) return null;
+  try {
+    return check(ctx);
+  } catch {
+    return { status: 401, code: 'inbound_admission_failed', message: 'The request could not be admitted.' };
+  }
+}
+
 /**
  * upgrade 阶段失败时写回一个明确的 HTTP 状态行再断开。
  *
@@ -446,19 +459,6 @@ function respondRoutingFailure(
  *  - 501: 本 proxy 不支持这种 upgrade(非 websocket 协议)。
  *  - 502 / 503 / 504: 上游或本地转发失败。
  */
-/** Runs the optional inbound admission check; a throwing check rejects. */
-function admitInbound(
-  check: ProxyOptions['authorizeInbound'],
-  ctx: InboundAdmissionCtx,
-): InboundRejection | null {
-  if (!check) return null;
-  try {
-    return check(ctx);
-  } catch {
-    return { status: 401, code: 'inbound_admission_failed', message: 'The request could not be admitted.' };
-  }
-}
-
 function writeUpgradeFailure(socket: Socket, status: number, message: string): void {
   // 这些失败有一部分发生在 upgrade handler 安装通用 socket error listener 之前。
   // end() 的写失败是异步 error 事件，try/catch 捕不到；客户端若恰好取消预热或退出，
@@ -2242,7 +2242,7 @@ export async function createAnthropicCompatProxy(opts: ProxyOptions): Promise<Pr
     const headers = flattenRequestHeaders(req.headers);
     const inboundRejection = admitInbound(opts.authorizeInbound, { method, url, headers });
     if (inboundRejection) {
-      logger.warn?.('inbound request rejected', { reqId, method, url, code: inboundRejection.code });
+      logger.warn?.('inbound request rejected', { reqId, method, path: url.split('?')[0], code: inboundRejection.code });
       req.resume();
       res.writeHead(inboundRejection.status, { 'content-type': 'application/json; charset=utf-8', 'cache-control': 'no-store' });
       res.end(JSON.stringify({ type: 'error', error: {
@@ -2839,7 +2839,7 @@ export async function createAnthropicCompatProxy(opts: ProxyOptions): Promise<Pr
     const url = req.url ?? '/';
     const inboundRejection = admitInbound(opts.authorizeInbound, { method: req.method ?? 'GET', url, headers });
     if (inboundRejection) {
-      logger.warn?.('inbound upgrade rejected', { reqId, url, code: inboundRejection.code });
+      logger.warn?.('inbound upgrade rejected', { reqId, path: url.split('?')[0], code: inboundRejection.code });
       writeUpgradeFailure(clientSocket, inboundRejection.status, inboundRejection.status === 401 ? 'Unauthorized' : 'Forbidden');
       return;
     }

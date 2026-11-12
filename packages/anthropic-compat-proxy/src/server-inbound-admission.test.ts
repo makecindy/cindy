@@ -81,7 +81,7 @@ describe('inbound admission', () => {
       transformRequest: [transform], resolveWebSocketUpstream: resolveWs,
     }, target.url);
 
-    for (const headers of [{}, { 'x-api-key': 'wrong' }]) {
+    for (const headers of [{}, { 'x-api-key': 'wrong' }] as Array<Record<string, string>>) {
       const res = await post(proxy, headers);
       expect(res.status).toBe(401);
       expect(await res.json()).toMatchObject({ error: { code: 'inbound_credentials_required' } });
