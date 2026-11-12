@@ -118,6 +118,39 @@ describe('capToolResultTextForPersist', () => {
     expect(extractPayloadToolResultFiles(JSON.stringify(payload))).toEqual([]);
   });
 
+  // 审查 P1（message 型失败）：`sharedTaskFileReferences.toolResultFailed` 在没有显式成功
+  // 信号时还会按 message 首行判失败；摘要丢掉 message 却留声明，等于把失败洗成交付授权。
+  it.each([
+    ['an unqualified error message', { message: 'Error: failed to open /out/secret.pdf' }],
+    ['a tool_use_error marker', { message: '<tool_use_error>operation stopped</tool_use_error>' }],
+    ['a Chinese failure sentence', { message: '读取失败：目录不存在' }],
+    ['an error record inside the message', { message: JSON.stringify({ ok: false, error: 'boom' }) }],
+    ['a nested unqualified error message', { ok: true, result: { message: 'request failed 500' } }],
+    ['a message failure next to a card id', { message: 'ENOENT: no such file', xdt_card_id: 'card_secret' }],
+  ])('drops declared files when the failure only shows as %s', (_label, failure) => {
+    const url = 'xdt-file:///out/secret.pdf';
+    const text = JSON.stringify({ ...failure, _xdt_model_files: [{ url }], body: 'p'.repeat(20000) });
+    const payload = JSON.parse(capToolResultTextForPersist(text));
+    expect(payload._xdt_model_files).toBeUndefined();
+    expect(payload.xdt_media_produced).toBeUndefined();
+    expect(payload.message).toBeUndefined();
+    // 摘要本身仍被判失败（与 toolResultFailed 同口径），回不到成功交付路径。
+    expect(payload.isError).toBe(true);
+    expect(extractPayloadToolResultFiles(JSON.stringify(payload))).toEqual([]);
+  });
+
+  // 对照：message 不是失败诊断，或已有显式成功信号时，不能误伤文件声明。
+  it.each([
+    ['a delivery message', { message: 'File written to /out/report.pdf' }],
+    ['a message that only mentions errors', { message: 'Report saved. error count: 0' }],
+    ['a success flag beside an error-shaped message', { ok: true, message: 'Error: 0 items skipped' }],
+    ['a completed status beside an error-shaped message', { status: 'completed', message: 'Failed to parse 0 lines' }],
+  ])('keeps declared files when %s', (_label, envelope) => {
+    const url = 'xdt-file:///out/report.pdf';
+    const text = JSON.stringify({ ...envelope, _xdt_model_files: [{ url }], body: 'm'.repeat(20000) });
+    expect(extractPayloadToolResultFiles(capToolResultTextForPersist(text)).map((file) => file.url)).toEqual([url]);
+  });
+
   it('keeps an error-free envelope delivering its declared files', () => {
     const url = 'xdt-file:///out/report.pdf';
     // 对照：成功结果与无 ok 字段的声明仍要保住卡片，否决不能误伤。

@@ -18,6 +18,7 @@
  */
 
 import { extractToolResultDiagnostics, type ToolResultDiagnostics } from '@cindy/maker-shared/tool-result-compaction';
+import { isMessageFailureLike } from '@cindy/maker-shared/message-presentation';
 
 export const TOOL_RESULT_PERSIST_CONTENT_LIMIT = 8 * 1024;
 
@@ -25,7 +26,8 @@ export const TOOL_RESULT_PERSIST_TRUNCATION_SUFFIX =
   '\n\n[tool result truncated: stored first 8KB]';
 
 /** Keep presentation references parseable; the full card lives in the card store.
- * Self-contained so the legacy inline DB worker can use the same implementation. */
+ * The inline DB worker reuses this function, so anything it calls must be injected there
+ * by `Function.prototype.toString()` too (`isMessageFailureLike` in WorkerThreadTransport). */
 export function compactToolCardResult(text: string, limit: number, diagnostics?: ToolResultDiagnostics): string | null {
   if (
     !text.includes('"xdt_card_id"')
@@ -55,11 +57,12 @@ export function compactToolCardResult(text: string, limit: number, diagnostics?:
     // a failed or hidden result must not gain file fields it never exposed, so keep the
     // denial signals and drop the declarations. The walk mirrors toolResultFailed: it
     // descends the documented ok===true result chain and treats a non-empty
-    // error/errors/exception key as failure, so a nested status or inner error can no
-    // longer be laundered into a delivery grant by the summary.
+    // error/errors/exception key or a failure-shaped message as failure, so a nested
+    // status, inner error or legacy message can no longer be laundered into a grant.
     const denial: Record<string, unknown> = {};
     if (source._xdt_render_image === false) denial._xdt_render_image = false;
     const failureStatuses = ['error', 'failed', 'failure', 'denied', 'declined'];
+    const successStatuses = ['success', 'completed', 'ok'];
     const noteFailure = (envelope: Record<string, unknown>) => {
       if (envelope.ok === false) denial.ok = false;
       if (envelope.success === false) denial.success = false;
@@ -80,6 +83,16 @@ export function compactToolCardResult(text: string, limit: number, diagnostics?:
           || (!!error && typeof error === 'object');
       });
       if (hasError) denial.isError = true;
+      // An unqualified legacy message can be the only failure diagnostic (`Error: ...`).
+      // The summary drops the text, so such a failure has to collapse into the error flag
+      // as well; an explicit success signal still wins, exactly as it does there.
+      const success = envelope.ok === true || envelope.success === true
+        || envelope.isError === false || envelope.is_error === false
+        || envelope.exitCode === 0 || envelope.exit_code === 0
+        || successStatuses.includes(status);
+      if (!success && typeof envelope.message === 'string' && isMessageFailureLike(envelope.message)) {
+        denial.isError = true;
+      }
     };
     for (let cursor: unknown = payload;;) {
       if (!cursor || typeof cursor !== 'object' || Array.isArray(cursor)) break;

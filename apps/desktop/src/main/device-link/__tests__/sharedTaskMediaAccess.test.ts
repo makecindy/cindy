@@ -9,6 +9,7 @@ vi.mock('../../cindy-media/blobStore.desktop.js', () => ({ parseBlobUrl: (url: s
 vi.mock('../../cindy-media/ledger.js', () => ({ sessionCanRead: deps.read }));
 vi.mock('../../localDb/ipc/sessions.js', () => ({ getSessionFsSnapshot: deps.session }));
 import { assertSharedTaskMedia } from '../sharedTaskMediaAccess.js';
+import { capToolResultTextForPersist } from '../../../shared/toolResultPersistCap.js';
 import type { SharedTaskPeerCapture } from '../sharedTaskDispatch.js';
 let current = true;
 // Markdown destinations use forward separators; native path assertions do not.
@@ -200,6 +201,32 @@ describe('shared task media access', () => {
       expect(deps.query.mock.calls[1][0]).toContain('rewind_at IS NULL AND tool_use_id = ? AND rowid < ?');
       expect(deps.query.mock.calls[1][1]).toEqual(['task', 'run-1', 2]);
     }
+  });
+  // 审查 P1（message 型失败）：落库摘要会丢掉 message 正文，只留下失败信号；
+  // 原文与截断后的摘要必须同样拒绝交付，否则超限失败结果会被洗成交付授权。
+  it.each([
+    { label: 'unqualified error message', message: (url: string) => `Error: failed to open ${url}` },
+    { label: 'tool_use_error marker', message: () => '<tool_use_error>generation stopped</tool_use_error>' },
+  ])('denies delivery for an oversized message-shaped failure: $label', async ({ message }) => {
+    const file = path.resolve('deliveries/private.pdf');
+    const url = 'xdt-file://local?path=' + encodeURIComponent(file);
+    const raw = JSON.stringify({ message: message(url), xdt_media_produced: [url], body: 'x'.repeat(20000) });
+    const capped = capToolResultTextForPersist(raw);
+    expect(capped).not.toBe(raw);
+    deps.query.mockReset().mockResolvedValue([]);
+    for (const content of [raw, capped]) {
+      deps.query.mockResolvedValueOnce([{ rowid: 2, role: 'tool_result', toolUseId: 'run-1', content }])
+        .mockResolvedValueOnce([{ content: JSON.stringify({ toolName: 'mcp:reports:generate', input: {} }) }]);
+      await expect(assertSharedTaskMedia(url, capture)).rejects.toThrow('PERMISSION_DENIED');
+    }
+  });
+  it('keeps delivery for an oversized successful message', async () => {
+    const file = path.resolve('deliveries/report.pdf');
+    const url = 'xdt-file://local?path=' + encodeURIComponent(file);
+    const raw = JSON.stringify({ message: `report saved to ${url}`, xdt_media_produced: [url], body: 'x'.repeat(20000) });
+    deps.query.mockResolvedValueOnce([{ rowid: 2, role: 'tool_result', toolUseId: 'run-1', content: capToolResultTextForPersist(raw) }])
+      .mockResolvedValueOnce([{ content: JSON.stringify({ toolName: 'mcp:reports:generate', input: {} }) }]);
+    await expect(assertSharedTaskMedia(url, capture)).resolves.toEqual({ file });
   });
   // Unit regression via assertSharedTaskMedia: a delivered error-report.pdf
   // must open, while actual failures still deny it. Earlier provenance tests
