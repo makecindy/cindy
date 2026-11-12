@@ -1,4 +1,3 @@
-import { getDesktopMcpToolApprovalPolicy } from '../../../desktop/src/main/maker-host/mcp-tool-approval-policy.js';
 import { CODEX_PROVIDER_OAUTH_PLACEHOLDER_KEY } from '../../../desktop/src/main/maker-host/codex-gateway-config.js';
 /** Node assembly of the shared Maker agents, provider configuration and MCP transports.
  * Native login, settings and platform integrations are assembled by the owning runtime. */
