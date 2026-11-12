@@ -23,6 +23,12 @@ import type { MenubarModelUsage, MenubarUsageScope, MenubarUsageScopeData } from
 import { dbToMakerAgentKind } from '../../shared/agentKindConversion.js';
 import { providerWeeklyQuotaSource } from '../../shared/providerQuotaSource.js';
 import { formatModelShort } from '../../shared/usageModelLabel.js';
+import {
+  isUnusedDefaultAccount,
+  type SubscriptionPoolView,
+  type SubscriptionAccountView,
+  type SubscriptionCodexUsageBucket,
+} from '../../shared/subscriptionAccounts.js';
 import type { CodexAccountUsagePayload, RateLimitSnapshot, RateLimitWindow } from '../usageBroadcaster.js';
 import type { UsageHistoryPayload } from '../usage/usageHistory.js';
 import { familyLogo, MENUBAR_CINDY_LOGO, providerLogo } from './logos.js';
@@ -79,6 +85,8 @@ export interface MenubarCollectDeps {
   readKimi?(providerId: string): Promise<ProviderAccountUsageResult>;
   readOpenCodeGo?(providerId: string): Promise<ProviderAccountUsageResult>;
   readCodex(providerId: string): Promise<CodexAccountUsagePayload | RateLimitSnapshot | null>;
+  /** Owner-local account snapshots; null means unavailable, not a legacy/default account. */
+  readCodexPool?(): Promise<SubscriptionPoolView | null>;
   readClaude(providerId: string): Promise<ClaudeSubscriptionUsageSnapshot | null>;
   readXai(providerId: string): Promise<XaiSubscriptionUsageSnapshot | null>;
   /** Codex resets left on a local account; absent in tests that do not cover them. */
@@ -122,10 +130,29 @@ export async function collectMenubarInputs(deps: MenubarCollectDeps): Promise<Me
 
   const modelNames = modelDisplayNames(providers);
   const sources: MenubarSourceInput[] = [];
+  const pooledIds = new Set<string>();
   if (balance) sources.push(balanceSource(balance));
-  const subscriptionReads = providers.map(async (provider): Promise<MenubarSourceInput | null> => {
+  const subscriptionReads = providers.map(async (provider): Promise<MenubarSourceInput | MenubarSourceInput[] | null> => {
     if (!provider.connected || provider.suspended || provider.removed) return null;
     const kind = providerWeeklyQuotaSource(provider);
+    if (provider.id === 'openai' && deps.readCodexPool && (kind === 'codex' || needsCodexReconnect(provider))) {
+      const pool = await safe('codex-pool', () => deps.readCodexPool!(), null);
+      if (!pool) {
+        // Unknown is not the default account: even the provider's cached identity may be stale.
+        return codexSource({ ...provider, openAiAccount: undefined, subscriptionAccount: undefined }, null, deps.nowMs);
+      }
+      if (pool.configured) {
+        return Promise.all(pool.accounts.filter(account => !isUnusedDefaultAccount(account)).map(async account => {
+          const source = pooledCodexSource(provider, account, deps.nowMs);
+          pooledIds.add(source.id);
+          const canRead = account.status === 'ready' || account.status === 'limited';
+          const resets = account.id === 'default' && canRead
+            ? await safe('codex-resets:openai', async () => (await deps.readCodexResets?.('openai')) ?? null, null)
+            : null;
+          return { ...source, resetCredits: resets };
+        }));
+      }
+    }
     // A Codex account waiting to be reconnected stays in the list without numbers instead
     // of falling into the hidden pay-as-you-go group.
     if (!kind && needsCodexReconnect(provider)) return codexSource(provider, null, deps.nowMs);
@@ -154,10 +181,9 @@ export async function collectMenubarInputs(deps: MenubarCollectDeps): Promise<Me
     }
     return paygSource(provider);
   });
-  for (const source of await Promise.all(subscriptionReads)) {
+  for (const source of (await Promise.all(subscriptionReads)).flat()) {
     if (source) sources.push(source);
   }
-  sources.push(...distinctRemoteSubscriptions(sources, remote));
 
   const today = (allUsage ?? localUsage)?.todayKey ?? localDayKey(deps.nowMs);
   const days = dayKeysEndingAt(today, MENUBAR_USAGE_DAYS);
@@ -172,16 +198,42 @@ export async function collectMenubarInputs(deps: MenubarCollectDeps): Promise<Me
   const tasks = await collectTasks(deps, localUsage, today, safe);
   const consuming = consumingSourceIds(tasks, providers);
   for (const source of sources) {
-    if (consuming.has(source.id)) source.consuming = true;
+    // Pool snapshots know the actual account; a provider-wide task must not animate the default.
+    if (!pooledIds.has(source.id) && consuming.has(source.id)) source.consuming = true;
   }
+  const distinctSources = distinctLocalCodexSources(sources, pooledIds);
+  distinctSources.push(...distinctRemoteSubscriptions(distinctSources, remote));
 
   let updatedAtMs: number | null = null;
-  for (const source of sources) {
+  for (const source of distinctSources) {
     const at = source.kind === 'subscription' ? source.updatedAtMs : source.kind === 'balance' ? source.observedAtMs : null;
     if (at !== null && (updatedAtMs === null || at > updatedAtMs)) updatedAtMs = at;
   }
 
-  return { sources, tasks, usage, updatedAtMs };
+  return { sources: distinctSources, tasks, usage, updatedAtMs };
+}
+
+/** Local duplicates need a confirmed identity, never just a workspace id or similar percentages. */
+function distinctLocalCodexSources(sources: MenubarSourceInput[], pooledIds: ReadonlySet<string>): MenubarSourceInput[] {
+  const kept: MenubarSourceInput[] = [];
+  for (const source of sources) {
+    if (source.kind !== 'subscription' || source.family !== 'codex') {
+      kept.push(source);
+      continue;
+    }
+    const identity = source.accountKeys?.find(key => key.startsWith('codex:identity:'));
+    const index = identity ? kept.findIndex(other => other.kind === 'subscription' &&
+      other.accountKeys?.includes(identity) && sameSubscriptionAccount(source, other)) : -1;
+    if (index < 0) {
+      kept.push(source);
+    } else {
+      const previous = kept[index];
+      // Keep the pool's coherent account snapshot instead of a duplicate provider cache.
+      const preferred = pooledIds.has(source.id) ? source : previous;
+      kept[index] = { ...preferred, consuming: Boolean(source.consuming || previous.consuming) };
+    }
+  }
+  return kept;
 }
 
 /** Nothing read: the inputs behind the sign-in gate. */
@@ -371,6 +423,25 @@ export function codexSource(
     prepaidUsd: null,
     updatedAtMs: bucket?.updatedAt ?? full?.updatedAt ?? null,
     accountKeys: identityKeys('codex', provider, ['id', (full as { accountId?: unknown } | null)?.accountId]),
+  };
+}
+
+function pooledCodexSource(provider: ProviderView, account: SubscriptionAccountView, nowMs: number): MenubarSubscriptionInput {
+  const available = account.status === 'ready' || account.status === 'limited';
+  const usage = available ? account.usage?.codex : undefined;
+  const identity = account.identity?.trim() || null;
+  const window = (value: SubscriptionCodexUsageBucket['primary']): RateLimitWindow | null =>
+    value && typeof value.usedPercent === 'number' ? { ...value, usedPercent: value.usedPercent } : null;
+  const buckets = usage ? Object.fromEntries(Object.entries(usage.buckets).map(([key, bucket]) => [
+    key, { ...bucket, primary: window(bucket.primary), secondary: window(bucket.secondary) },
+  ])) : undefined;
+  return {
+    ...codexSource(provider, { appServerBuckets: buckets, credits: usage?.credits, planType: account.plan }, nowMs),
+    // Retain the existing default source id so sorting/hiding settings keep working.
+    id: account.id === 'default' ? provider.id : `${provider.id}:account:${account.id}`,
+    account: identity,
+    accountKeys: identity ? [`codex:identity:${identity.toLowerCase()}`] : [],
+    consuming: account.running > 0,
   };
 }
 

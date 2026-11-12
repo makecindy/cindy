@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, expect, it, vi } from 'vitest';
 import { DEFAULT_MENUBAR_SETTINGS, type MenubarHelperMessage } from '../../../shared/menubarQuota';
-import { emptyMenubarInputs } from '../collect';
+import { emptyMenubarInputs, type MenubarCollectDeps } from '../collect';
+import type { SubscriptionProvider } from '../../../shared/subscriptionAccounts';
 import * as subscriptions from '../../device-link/subscriptions';
 import type { AgentIslandSessionSnapshot } from '../../../shared/agentIsland';
 const mocks = vi.hoisted(() => ({
@@ -9,6 +10,7 @@ const mocks = vi.hoisted(() => ({
   authListeners: new Set<(state: { isAuthenticated: boolean }) => void>(), boundaryPending: false,
   sharedRead: vi.fn(), sharedChanged: null as null | (() => void), sharedAccessEpoch: 0,
   revision: 0, listeners: new Set<() => void>(), refresh: vi.fn(), collect: vi.fn(),
+  poolListeners: new Set<(provider: SubscriptionProvider) => void>(), readPool: vi.fn(),
   quota: null as null | { spend: number; maxBudget: number; currency: string; fetchedAt: number; todaySpend: null },
   activities: [] as AgentIslandSessionSnapshot[], attentionListeners: new Set<() => void>(), publish: vi.fn(),
   openOverviewSession: vi.fn(), openLocalSession: vi.fn(),
@@ -57,6 +59,13 @@ vi.mock('../../maker-ipc/register.js', () => ({}));
 vi.mock('../../maker-ipc/usage.js', () => ({}));
 vi.mock('../../notificationService.js', () => ({}));
 vi.mock('../../serverApiClient.desktop.js', () => ({}));
+vi.mock('../../subscription-accounts/runtime.js', () => ({
+  readSubscriptionPool: (...args: unknown[]) => mocks.readPool(...args),
+  onSubscriptionAccountsChanged: (listener: (provider: SubscriptionProvider) => void) => {
+    mocks.poolListeners.add(listener);
+    return () => { mocks.poolListeners.delete(listener); };
+  },
+}));
 vi.mock('../../usage/claudeAccountUsage.js', () => ({ readClaudeAccountUsageRevision: () => mocks.revision, observeClaudeAccountUsage: (listener: () => void) => { mocks.listeners.add(listener); return () => { mocks.listeners.delete(listener); }; }, triggerClaudeAccountUsageRefresh: () => mocks.refresh(), readClaudeAccountUsageSnapshot: () => mocks.quota }));
 vi.mock('../../usage/ledgerCurrency.js', () => ({ currentLedgerCurrency: () => 'USD' }));
 vi.mock('../../usage/usageHistory.js', () => ({}));
@@ -76,6 +85,7 @@ beforeEach(() => {
   overview = new QuotaOverviewService();
   mocks.app.isPackaged = true;
   vi.useFakeTimers(); mocks.revision = 0; mocks.listeners.clear(); mocks.refresh.mockReset(); mocks.collect.mockReset();
+  mocks.poolListeners.clear(); mocks.readPool.mockReset();
   mocks.sharedRead.mockReset(); mocks.sharedChanged = null; mocks.sharedAccessEpoch = 0;
   mocks.authListeners.clear(); mocks.boundaryPending = false;
   mocks.auth.mode = 'cloud'; mocks.auth.dataOwnerId = 'owner'; mocks.auth.ownerGeneration = 1;
@@ -86,6 +96,53 @@ beforeEach(() => {
   mocks.quota = { spend: 2, maxBudget: 10, currency: 'CNY', fetchedAt: Date.now(), todaySpend: null };
 });
 afterEach(() => { vi.clearAllTimers(); vi.useRealTimers(); });
+
+// Unit #10110: the overview used provider-only readers and never observed pool changes. Exercise
+// the real service + collector with two accounts, then remove one during an unfinished build.
+it('wires owner-local pool snapshots and discards builds overtaken by account changes', async () => {
+  const { collectMenubarInputs } = await vi.importActual<typeof import('../collect')>('../collect');
+  const nowMs = Date.now();
+  const accounts = ['default', 'second'].map((id, i) => ({
+    id, identity: `${id}@example.com`, plan: 'plus', paused: false, limit: 4, weight: 1,
+    directory: '', status: 'ready', running: 0, usage: { codex: { credits: null, buckets: { codex: {
+      limitId: 'codex', limitName: null, updatedAt: nowMs, secondary: null,
+      primary: { usedPercent: 20 + i * 50, windowMinutes: 10080, resetsAt: nowMs / 1000 + 3600 },
+    } } } },
+  }));
+  mocks.readPool.mockResolvedValue({ providerId: 'openai', configured: true, strategy: 'least', accounts });
+  const collect = (deps: MenubarCollectDeps) => collectMenubarInputs({
+    ...deps,
+    listProviders: async () => [{ id: 'openai', connected: true, source: 'builtin', auth: { method: 'oauth' }, access: { kind: 'subscription' } } as never],
+    readBalance: async () => null, readUsage: async () => null, readRemoteSubscriptions: async () => [],
+    readCodexResets: async () => null, activities: () => [],
+  });
+  mocks.collect.mockImplementation(collect);
+  const release = overview.acquire();
+  try {
+    await vi.advanceTimersByTimeAsync(0);
+    expect(mocks.readPool).toHaveBeenCalledExactlyOnceWith('openai');
+    expect(overview.latest()?.input.sources.map(source => source.id)).toEqual(['openai', 'openai:account:second']);
+    const first = overview.latest();
+    let finish!: () => void;
+    mocks.collect.mockImplementationOnce(async (deps: MenubarCollectDeps) => {
+      const old = await collect(deps);
+      await new Promise<void>(resolve => { finish = resolve; });
+      return old;
+    });
+    overview.rebuildSoon();
+    await vi.advanceTimersByTimeAsync(0);
+    mocks.readPool.mockResolvedValue({ providerId: 'openai', configured: true, strategy: 'least', accounts: accounts.slice(1) });
+    for (const listener of mocks.poolListeners) listener('openai');
+    finish();
+    await vi.advanceTimersByTimeAsync(0);
+    expect(overview.latest()).toBe(first);
+    await vi.advanceTimersByTimeAsync(400);
+    expect(overview.latest()?.input.sources.map(source => source.id)).toEqual(['openai:account:second']);
+  } finally {
+    release();
+  }
+  expect(mocks.poolListeners.size).toBe(0);
+});
 
 // Unit: unread updates bypass slow usage collection, survive rebuilds and detach on stop.
 it('updates the native count immediately while a usage rebuild is still pending', async () => {

@@ -10,8 +10,9 @@
  * Rebuilds are debounced and coalesced. They run on usage broadcasts, running-task
  * transitions, settings and locale changes and a slow timer. A panel on screen
  * (`setInteractive`) shortens every cadence and asks each subscription reader to refresh.
- * Everything here reads caches Cindy already keeps; the only extra network calls are the
- * Cindy balance (at most once a minute), other computers and Codex reset credits.
+ * Account pools reuse the runtime's owner-local cache and coalesced CLI reads. The other
+ * readers use Cindy's existing caches, plus the Cindy balance (at most once a minute),
+ * other computers and Codex reset credits.
  */
 
 import { isSessionActivityRunning } from '@cindy/maker-shared/session-activity';
@@ -54,6 +55,7 @@ import {
   triggerXaiSubscriptionUsageRefresh,
 } from '../maker-ipc/usage.js';
 import { serverApiFetch } from '../serverApiClient.desktop.js';
+import { onSubscriptionAccountsChanged, readSubscriptionPool } from '../subscription-accounts/runtime.js';
 import { observeClaudeAccountUsage, readClaudeAccountUsageRevision, readClaudeAccountUsageSnapshot, triggerClaudeAccountUsageRefresh } from '../usage/claudeAccountUsage.js';
 import { currentLedgerCurrency } from '../usage/ledgerCurrency.js';
 import { readUsageHistory, type UsageHistoryPayload } from '../usage/usageHistory.js';
@@ -178,6 +180,7 @@ export class QuotaOverviewService {
   private rebuildQueued = false;
   private forceNext = false;
   private staleFollowUps = 0;
+  private codexPoolRevision = 0;
   private disposers: (() => void)[] = [];
 
   get settings(): MenubarSettings {
@@ -302,6 +305,11 @@ export class QuotaOverviewService {
     this.usageOwnerId = getActiveAppSession().dataOwnerId;
     this.disposers.push(
       observeUsageChanges(() => this.scheduleRebuild()),
+      onSubscriptionAccountsChanged((providerId) => {
+        if (providerId !== 'openai') return;
+        this.codexPoolRevision += 1;
+        this.scheduleRebuild();
+      }),
       observeClaudeAccountUsage(() => {
         if (!this.balanceAccountKey()?.startsWith('quota:')) return;
         this.balance = null;
@@ -414,6 +422,7 @@ export class QuotaOverviewService {
   private async collectAndPublish(nowMs: number, force: boolean, markStale: () => void): Promise<void> {
     const generation = getActiveAppSession().generation;
     const quotaRevision = readClaudeAccountUsageRevision();
+    const poolRevision = this.codexPoolRevision;
     let stale = false;
     const collected = await collectMenubarInputs({
       nowMs,
@@ -421,6 +430,7 @@ export class QuotaOverviewService {
       readKimi: (providerId) => readKimiCodingAccountUsage({ providerId, forceRefresh: force }),
       readOpenCodeGo: (providerId) => readOpenCodeGoAccountUsage({ providerId, forceRefresh: force }),
       readCodex: (providerId) => readCodexAccountUsageSnapshot(providerId),
+      readCodexPool: () => readSubscriptionPool('openai'),
       readClaude: (providerId) => readClaudeSubscriptionUsageSnapshotForDeviceLink(providerId),
       readXai: (providerId) => readXaiSubscriptionUsageSnapshotForDeviceLink(providerId),
       readCodexResets: (providerId) => this.readCodexResets(providerId, force, nowMs),
@@ -454,7 +464,7 @@ export class QuotaOverviewService {
     // An owner switch that started during the reads makes them the old owner's data.
     const after = getActiveAppSession();
     if (!this.started || isAppSessionBoundaryPending() || after.generation !== generation) return;
-    if (readClaudeAccountUsageRevision() !== quotaRevision) {
+    if (readClaudeAccountUsageRevision() !== quotaRevision || this.codexPoolRevision !== poolRevision) {
       this.scheduleRebuild(0);
       return;
     }

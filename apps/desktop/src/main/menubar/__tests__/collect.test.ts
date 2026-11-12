@@ -1,5 +1,6 @@
 import type { ProviderView } from '@cindy/model-providers';
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
+import type { SubscriptionAccountView, SubscriptionPoolView } from '../../../shared/subscriptionAccounts';
 
 import {
   kimiSource,
@@ -161,6 +162,97 @@ describe('collectMenubarInputs', () => {
     expect(errors).toEqual(['claude:anthropic']);
     const claude = collected.sources[1];
     expect(claude.kind === 'subscription' && claude.windows).toEqual([]);
+  });
+
+  // Unit regression #10110: the real collector only read the provider cache. A two-account
+  // pool lost B and paired the provider's identity with A's quota. Remote-only dedupe missed
+  // duplicate local connections. These fixtures exercise that production entry, not the mapper.
+  function poolAccount(id: string, identity: string, usedPercent: number, extra: Partial<SubscriptionAccountView> = {}): SubscriptionAccountView {
+    return {
+      id, identity, plan: 'plus', paused: false, limit: 4, weight: 1, directory: '', status: 'ready', running: 0,
+      usage: { codex: { buckets: { codex: { limitId: 'codex', limitName: null, updatedAt: NOW,
+        primary: { usedPercent, windowMinutes: 10_080, resetsAt: nowSec + 86_400 }, secondary: null,
+      } }, credits: { hasCredits: true, unlimited: false, balance: '12' } } },
+      ...extra,
+    };
+  }
+  const pool = (accounts: SubscriptionAccountView[]): SubscriptionPoolView =>
+    ({ providerId: 'openai', configured: true, strategy: 'least', accounts });
+
+  it('shows both pooled accounts with their own identity, plan, quota and activity', async () => {
+    const readCodex = vi.fn().mockResolvedValue({ planType: 'wrong', primary: { usedPercent: 99 } });
+    const readCodexResets = vi.fn().mockResolvedValue({ count: 2 });
+    const result = await collectMenubarInputs(deps({
+      listProviders: async () => [provider({ id: 'openai', openAiAccount: { identity: 'stale@example.com' } } as never)],
+      readCodex, readCodexResets,
+      readCodexPool: async () => pool([
+        poolAccount('default', 'a@example.com', 20),
+        poolAccount('second', 'b@example.com', 70, { plan: 'pro', running: 1 }),
+      ]),
+      activities: () => [{ sessionId: 'running', phase: 'running', startedAtMs: NOW - 1000 } as never],
+      sessionRow: async () => ({ title: 'B is running', model: 'gpt-5.5', agentKind: 'codex', providerId: 'openai' }),
+    }));
+    expect(result.sources).toEqual([
+      expect.objectContaining({ id: 'openai', providerId: 'openai', account: 'a@example.com', plan: 'Plus',
+        windows: [expect.objectContaining({ usedPercent: 20 })], credits: 12, consuming: false, resetCredits: { count: 2 } }),
+      expect.objectContaining({ id: 'openai:account:second', providerId: 'openai', account: 'b@example.com', plan: 'Pro',
+        windows: [expect.objectContaining({ usedPercent: 70 })], credits: 12, consuming: true, resetCredits: null }),
+    ]);
+    expect(readCodex).not.toHaveBeenCalled();
+    expect(readCodexResets).toHaveBeenCalledExactlyOnceWith('openai');
+  });
+
+  it('deduplicates confirmed local Codex identities but never two people sharing a workspace or anonymous windows', async () => {
+    const result = await collectMenubarInputs(deps({
+      listProviders: async () => ['a', 'a-copy', 'b', 'unknown', 'unknown-copy'].map((id) =>
+        provider({ id, auth: { method: 'oauth', native: 'codex' },
+          openAiAccount: { identity: id.startsWith('a') ? 'a@example.com' : id === 'b' ? 'b@example.com' : undefined },
+        } as never)),
+      readCodex: async () => ({ accountId: 'shared-workspace', primary: { usedPercent: 20, windowMinutes: 10_080, resetsAt: nowSec + 86_400 } }) as never,
+    }));
+    expect(result.sources.map(source => source.id)).toEqual(['a', 'b', 'unknown', 'unknown-copy']);
+  });
+
+  it('prefers the coherent pool snapshot over a duplicate legacy connection, regardless of provider order', async () => {
+    const result = await collectMenubarInputs(deps({
+      listProviders: async () => [
+        provider({ id: 'old-b', auth: { method: 'oauth', native: 'codex' }, openAiAccount: { identity: 'b@example.com' } } as never),
+        provider({ id: 'openai' }),
+      ],
+      readCodexPool: async () => pool([poolAccount('second', 'b@example.com', 70, { plan: 'pro' })]),
+    }));
+    expect(result.sources).toEqual([expect.objectContaining({ id: 'openai:account:second', account: 'b@example.com', plan: 'Pro', windows: [expect.objectContaining({ usedPercent: 70 })] })]);
+  });
+
+  it('uses the current pool on each read and keeps unavailable accounts unknown', async () => {
+    let accounts = [poolAccount('default', '', 20, { status: 'signed-out', usage: undefined }), poolAccount('second', 'b@example.com', 70)];
+    const input = deps({ listProviders: async () => [provider({ id: 'openai' })], readCodexPool: async () => pool(accounts) });
+    expect((await collectMenubarInputs(input)).sources.map(source => source.id)).toEqual(['openai:account:second']);
+    accounts = [poolAccount('third', 'c@example.com', 90, { status: 'unavailable' })];
+    expect((await collectMenubarInputs(input)).sources).toEqual([expect.objectContaining({
+      id: 'openai:account:third', account: 'c@example.com', windows: [], credits: null,
+    })]);
+    accounts = [];
+    expect((await collectMenubarInputs(input)).sources).toEqual([]);
+  });
+
+  it.each(['throws', 'unknown'])('does not borrow default-account numbers when the pool is %s', async (failure) => {
+    const readCodex = vi.fn();
+    const result = await collectMenubarInputs(deps({
+      listProviders: async () => [provider({ id: 'openai', openAiAccount: { identity: 'wrong@example.com' } } as never)],
+      readCodex,
+      readCodexPool: async () => { if (failure === 'throws') throw new Error('unavailable'); return null; },
+    }));
+    expect(result.sources).toEqual([expect.objectContaining({ id: 'openai', account: null, plan: null, windows: [] })]);
+    expect(readCodex).not.toHaveBeenCalled();
+  });
+
+  it('preserves the legacy single-account reader when no pool has been configured', async () => {
+    const result = await collectMenubarInputs(deps({
+      listProviders: async () => [provider({ id: 'openai' })],
+      readCodexPool: async () => ({ ...pool([]), configured: false }),
+    }));
+    expect(result.sources).toEqual([expect.objectContaining({ id: 'openai', windows: [expect.objectContaining({ usedPercent: 20 })] })]);
   });
 
   it('keeps a Codex account that needs reconnecting as a subscription without numbers', async () => {
