@@ -278,7 +278,7 @@
       "resetModules": 1
     },
     "apps/desktop/src/main/maker-host/__tests__/piBinaryDistribution.test.ts": {
-      "sourceReads": 8
+      "sourceReads": 6
     },
     "apps/desktop/src/main/maker-host/__tests__/piNativeAdapterRuntime.test.ts": {
       "realWaits": 1
@@ -467,9 +467,6 @@
       "resetModules": 1
     },
     "apps/desktop/src/preload/__tests__/appearanceSnapshot.test.ts": {
-      "resetModules": 1
-    },
-    "apps/desktop/src/preload/__tests__/browserCommentPreload.test.ts": {
       "resetModules": 1
     },
     "apps/desktop/src/preload/__tests__/ghostPanelMedia.test.ts": {

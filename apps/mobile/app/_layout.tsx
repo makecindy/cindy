@@ -53,6 +53,7 @@ import {
 import { PushNotificationsBridge } from '@/notifications/PushNotificationsBridge';
 import { NotificationActionBridge } from '@/notifications/NotificationActionBridge';
 import { useLockedLaunchGate } from '@/notifications/lockedLaunchGate';
+import { TaskBadgeBridge } from '@/notifications/TaskBadgeBridge';
 import { GestureHandlerRootView } from '@/platform/gestureHandler';
 import { OutsideTapProvider } from '@/platform/OutsideTap';
 // import 即同步完成 i18next init;必须先于任何 t() 消费方挂载。
@@ -428,6 +429,7 @@ function RootAfterUpdateChannel({ channel }: { channel: UpdateChannel }) {
       <DeviceLinkProvider>
         {/* 通知按钮(允许一次 / 拒绝 / 回复)在后台经这里取得设备连接(不渲染 UI) */}
         <NotificationActionBridge />
+        <TaskBadgeBridge />
         <PeerFileTransport />
         <PrecreatedWorktreeRecoveryBridge />
         <MobileOutboxBridge />

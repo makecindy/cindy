@@ -8,6 +8,7 @@ import { useMobileAgentNetPreferences } from '@/device-link/agentNetPreferences'
 import { mobileAgentNetPushScope, mobileAgentNetPushSelected, subscribeMobileAgentNetPushScope } from '@/device-link/agentNetPushRegistry';
 import Notifications from './nativeNotifications';
 import { ChatBackgroundBridge } from './ChatBackgroundBridge';
+import { isNotificationRouteVisible } from './notificationBadge';
 import { notificationRecoveryRoute, parseNotificationResponseDeepLink } from './pushRegistrationModel';
 import { handleNotificationActionResponse } from './notificationActionRunner';
 import {
@@ -38,9 +39,9 @@ export function PushNotificationsBridge() {
   const { i18n: { language } } = useTranslation();
   const router = useRouter();
   const pathname = usePathname();
-  const { threadRootId } = useGlobalSearchParams<{ threadRootId?: string }>();
-  const visibleChat = useRef({ pathname, threadRootId });
-  visibleChat.current = { pathname, threadRootId };
+  const { threadRootId, deviceId } = useGlobalSearchParams<{ threadRootId?: string; deviceId?: string }>();
+  const visibleChat = useRef({ pathname, threadRootId, deviceId });
+  visibleChat.current = { pathname, threadRootId, deviceId };
   const routerRef = useRef(router);
   routerRef.current = router;
   /** 冷启动点通知时 auth 可能未就绪,先存下待路由的深链。 */
@@ -63,10 +64,8 @@ export function PushNotificationsBridge() {
   useEffect(() => {
     if (!isPushSupported()) return;
     configureForegroundNotificationBehavior(route => {
-      const [path, query] = route.split('?');
-      const thread = new URLSearchParams(query).get('threadRootId') ?? undefined;
-      return visibleChat.current.pathname === path && visibleChat.current.threadRootId === thread;
-    });
+      return AppState.currentState === 'active' && isNotificationRouteVisible(route, visibleChat.current);
+    }, () => authStateRef.current.initialized && authStateRef.current.isAuthenticated);
   }, []);
 
   // 通知上的按钮(允许一次 / 拒绝 / 回复):按当前界面语言向系统登记,换语言后重新登记。
