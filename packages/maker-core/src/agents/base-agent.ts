@@ -807,6 +807,10 @@ export interface AgentDeps {
    * interaction surfaces, so maker-core never hard-codes one UI language.
    */
   getPiExtensionUiStrings?: () => PiExtensionUiStrings;
+  /** Localized recovery hint for a confirmed dataless context-file candidate.
+   * The supplied path is already redacted and escaped for display, not execution.
+   */
+  formatPiStartupCloudFileHint?: (displayPath: string) => string;
 
   /**
    * Pi-only: start a durable Subagent runner through a host-supported Node

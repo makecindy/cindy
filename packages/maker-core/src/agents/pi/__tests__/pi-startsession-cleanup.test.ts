@@ -26,8 +26,14 @@ import {
 import { createHash } from 'node:crypto';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
+import * as childProcess from 'node:child_process';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { AutoReviewRequest } from '../../shared/auto-review-decision.js';
+
+vi.mock('node:child_process', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('node:child_process')>();
+  return { ...actual, execFile: vi.fn(actual.execFile) };
+});
 
 // hoisted 控制旋钮:vi.mock 工厂被提升到 import 之上,不能闭包引用普通 let。
 const knobs = vi.hoisted(() => ({
@@ -37,6 +43,7 @@ const knobs = vi.hoisted(() => ({
   transportCloseRejects: false,
   transportCloseCount: 0,
   getStateRejects: false,
+  timeoutCommand: null as string | null,
   getStateSessionFile: null as string | null,
   switchSessionGate: null as Promise<void> | null,
   switchSessionRejects: false,
@@ -85,7 +92,8 @@ vi.mock('../transport.js', () => ({
   attachJsonlReader: () => {},
 }));
 
-vi.mock('../rpc-client.js', () => ({
+vi.mock('../rpc-client.js', async (importOriginal) => ({
+  ...await importOriginal<typeof import('../rpc-client.js')>(),
   PiRpcProcess: class {
     isClosed = false;
     constructor(opts: unknown) {
@@ -106,6 +114,10 @@ vi.mock('../rpc-client.js', () => ({
     ): Promise<{ success: boolean; data?: unknown; error?: string }> {
       knobs.requests.push(cmd.type);
       knobs.requestOptions.push({ commandType: cmd.type, timeoutMs: options?.timeoutMs });
+      if (cmd.type === knobs.timeoutCommand) {
+        const { PiRpcRequestTimeoutError } = await importOriginal<typeof import('../rpc-client.js')>();
+        throw new PiRpcRequestTimeoutError(cmd.type, 30_000);
+      }
       if (cmd.type === 'switch_session') {
         const gate = knobs.switchSessionGate;
         if (gate) await gate;
@@ -182,6 +194,7 @@ describe('PiAgent.startSession failure cleanup (mocked pi process)', () => {
     knobs.transportCloseRejects = false;
     knobs.transportCloseCount = 0;
     knobs.getStateRejects = false;
+    knobs.timeoutCommand = null;
     knobs.getStateSessionFile = null;
     knobs.switchSessionGate = null;
     knobs.switchSessionRejects = false;
@@ -631,6 +644,93 @@ describe('PiAgent.startSession failure cleanup (mocked pi process)', () => {
     expect(disposed).toBe(1);
     expect(proxyDisposed).toBe(2);
     expect(knobs.closeCount).toBe(1); // 已 spawn → 必须关掉,避免僵尸持有 ?session= 路由
+  });
+
+  // #9855: the startup error previously exposed only the RPC timeout. Exercise
+  // startSession, not a formatter; simulate SF_DATALESS metadata, not a real
+  // iCloud stall. Existing cases cover confirmed/unconfirmed cleanup separately.
+  it.each(['local', 'remote', 'context-disabled', 'cleanup-unconfirmed', 'non-timeout', 'localized', 'localization-failed'] as const)(
+    'adds cloud-file recovery guidance only to an eligible local startup timeout: %s', async (mode) => {
+    const platform = Object.getOwnPropertyDescriptor(process, 'platform')!;
+    Object.defineProperty(process, 'platform', { value: 'darwin' });
+    const originalExecFile = (await vi.importActual<typeof import('node:child_process')>('node:child_process')).execFile;
+    const cloudFile = path.join(path.dirname(cwd), 'AGENTS.md');
+    const stat = vi.spyOn(childProcess, 'execFile').mockImplementation(((...args: unknown[]) => {
+      if (args[0] !== '/usr/bin/stat') return Reflect.apply(originalExecFile, childProcess, args);
+      expect(knobs.closeCount).toBe(1);
+      const paths = args[1] as string[];
+      const callback = args.at(-1) as (error: Error | null, stdout: string, stderr: string) => void;
+      queueMicrotask(() => {
+        if (paths.at(-1) === cloudFile) callback(null, '1073741824:Regular File\n', '');
+        else callback(Object.assign(new Error('missing'), { code: 1 }), '', 'stat: No such file or directory\n');
+      });
+      return { kill: vi.fn() };
+    }) as typeof childProcess.execFile);
+    try {
+      knobs.timeoutCommand = 'set_auto_compaction';
+      knobs.closeRejects = mode === 'cleanup-unconfirmed';
+      if (mode === 'non-timeout') {
+        knobs.timeoutCommand = null;
+        knobs.getStateRejects = true;
+      }
+      const agent = new PiAgent(buildDeps({
+        ...(mode === 'remote' ? {
+          runtimeConfig: { endpoint: 'http://127.0.0.1:9', remoteEndpoint: 'https://gateway.invalid' },
+          resolveRemotePiBinaryPath: async () => '/remote/pi',
+          getRemotePiTransport: async () => ({
+            pid: undefined,
+            writeLine: async () => {}, onLine: () => () => {}, onClose: () => () => {},
+            close: async () => {}, isClosed: () => false,
+          }),
+          getRemotePiFileOps: () => ({
+            mkdirp: async () => {}, writeFile: async () => {}, rm: async () => {},
+            stat: async () => ({ isFile: true }), listDir: async () => [],
+            readFile: async () => { throw new Error('no existing remote fixture'); },
+            sha256File: async () => { throw new Error('no existing remote fixture'); },
+          }),
+        } : {}),
+        ...(mode === 'localized' ? { formatPiStartupCloudFileHint: (file) => `云端文件 ${file}，请在访达下载后重试` } : {}),
+        ...(mode === 'localization-failed' ? { formatPiStartupCloudFileHint: () => { throw new Error('localization unavailable'); } } : {}),
+      }));
+      const failure = await agent.startSession({ ...opts(),
+        ...(mode === 'remote' ? { remoteHostId: 'remote-1' } : {}),
+        ...(mode === 'context-disabled' ? { botRuntimeProfile: {
+          botId: 'bot', profileVersion: 1,
+          skillPolicy: { mode: 'allowlist' as const, configured: [], catalog: [] },
+          mcpPolicy: { mode: 'allowlist' as const, configured: [], catalog: [] },
+          toolsetPolicy: { mode: 'allowlist' as const, configured: [], catalog: [] },
+        } } : {}),
+      }).catch((error: unknown) => error);
+      if (mode === 'cleanup-unconfirmed') {
+        expect(failure).toBeInstanceOf(AgentStartupCleanupPendingError);
+        expect(stat).not.toHaveBeenCalled();
+        knobs.closeRejects = false;
+        await agent.dispose();
+        return;
+      }
+      expect(failure).toBeInstanceOf(AgentStartupStoppedError);
+      if (!(failure instanceof AgentStartupStoppedError)) throw new Error('missing exit evidence');
+      if (mode === 'remote' || mode === 'context-disabled' || mode === 'non-timeout') {
+        expect(failure.message).not.toContain('AGENTS.md');
+        expect(stat).not.toHaveBeenCalled();
+      } else {
+        expect(failure.message).toContain('pi rpc timeout after 30000ms: set_auto_compaction');
+        if (mode === 'localization-failed') {
+          expect(failure.message).toBe('pi rpc timeout after 30000ms: set_auto_compaction');
+        } else {
+          expect(failure.message).toMatch(/^\[PI_STARTUP_CLOUD_CONTEXT_FILE\] /);
+          expect(failure.message).toContain('AGENTS.md');
+          expect(failure.message).toContain(mode === 'localized' ? '访达' : 'Finder');
+          if (mode !== 'localized') expect(failure.message).toContain('may');
+          expect(failure.cause).toMatchObject({ cause: { code: 'PI_RPC_TIMEOUT' } });
+        }
+        expect(stat).toHaveBeenCalled();
+      }
+      expect(disposed).toBe(1);
+      expect(knobs.closeCount).toBe(1);
+    } finally {
+      Object.defineProperty(process, 'platform', platform);
+    }
   });
 
   it('quarantines a failed startup process until cleanup is confirmed', async () => {
