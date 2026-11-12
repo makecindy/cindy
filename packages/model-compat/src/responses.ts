@@ -96,7 +96,7 @@ export function prepareResponsesCompatibility(body: unknown, policy: ResponsesCo
   const displacement = displacedKinds.size > 0
     ? { bareCustomNames, displacedKinds }
     : undefined;
-  const schemas = policy.repairFunctionArguments ? collectFunctionCallRepairSchemas(body) : new Map();
+  const schemas = policy.repairFunctionArguments ? collectFunctionCallRepairSchemas(body, namespace.renamedWireNames) : new Map();
   const declared = collectDeclaredWireToolNames(body);
   const scrubAuthorization = collectSelfNamedNamespaceScrubAuthorization(body, new Set([...custom.names, ...custom.repairNames]), new Set(schemas.keys()));
   const restoreNamespace = (text: string) => restoreRoutedNamespaceCallsInJson(text, namespace.aliases);

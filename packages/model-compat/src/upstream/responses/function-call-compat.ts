@@ -48,7 +48,10 @@ function selectorAllows(
 }
 
 /** Caller supplies currentTurnWireToolCatalogBody BEFORE provider schema lowering. */
-export function collectFunctionCallRepairSchemas(body: unknown): Map<string, FunctionCallRepairSchema> {
+export function collectFunctionCallRepairSchemas(
+  body: unknown,
+  requestRenames?: ReadonlyMap<string, string>,
+): Map<string, FunctionCallRepairSchema> {
   const schemas = new Map<string, FunctionCallRepairSchema>();
   if (!isObject(body)) return schemas;
   const groups = collectResponsesToolGroups(body);
@@ -65,7 +68,10 @@ export function collectFunctionCallRepairSchemas(body: unknown): Map<string, Fun
   // A displaced child answers to the wire name the flattening pass allocated, not the preferred
   // name a bare declaration now owns. Without this the catalog keys both declarations to the same
   // name, marks it ambiguous, and neither tool gets its argument repair.
-  const renamedWireNames = loweredResult.renamedWireNames;
+  // The request's own allocation is authoritative: this local catalog view also folds in
+  // historical `tool_search_output` definitions, which must not change how the live request
+  // distributed wire names.
+  const renamedWireNames = requestRenames ?? loweredResult.renamedWireNames;
   const choice = body.tool_choice;
   const loweredChoice = isObject(lowered) ? lowered.tool_choice : undefined;
   const occupied = new Map<string, { kind: unknown; identity: FunctionCallRepairSchema } | null>();
@@ -82,13 +88,17 @@ export function collectFunctionCallRepairSchemas(body: unknown): Map<string, Fun
     const key = namespace ? (renamedWireNames.get(preferred) ?? preferred) : preferred;
     if (occupied.has(key)) {
       const previous = occupied.get(key);
+      if (!previous) return;
+      const same = previous.kind === tool.type
+        && previous.identity.namespace === namespace
+        && previous.identity.name === tool.name
+        && sameSchemaValue(previous.identity.parameters, identity.parameters);
+      if (same) return;
+      // With the request's allocation in hand the live catalog was registered first, so a
+      // historical definition claiming the same wire name is the one that steps aside.
+      if (requestRenames) return;
       // Conflicting duplicate declarations cannot choose a schema by insertion order.
-      if (!previous || previous.kind !== tool.type
-        || previous.identity.namespace !== namespace
-        || previous.identity.name !== tool.name
-        || !sameSchemaValue(previous.identity.parameters, identity.parameters)) {
-        occupied.set(key, null);
-      }
+      occupied.set(key, null);
     } else occupied.set(key, { kind: tool.type, identity });
   };
   for (const group of groups) {
