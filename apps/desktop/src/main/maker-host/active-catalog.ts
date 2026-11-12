@@ -1944,8 +1944,11 @@ function computeMerged(): Catalog {
           : undefined;
         const contextWindow = Math.min(model.contextWindow, declaredWindow ?? 272_000);
         if (contextWindow === model.contextWindow) return model;
+        // A working fallback is not evidence of physical capacity. Preserve a
+        // declared maximum, or retain the original window only when verified.
         return { ...model, contextWindow,
-          contextWindowMax: model.contextWindowMax ?? model.contextWindow };
+          ...(model.contextWindowMax === undefined && model.contextWindowVerified === true
+            ? { contextWindowMax: model.contextWindow } : {}) };
       }),
     ])),
   }));
