@@ -3748,6 +3748,7 @@ function _purgeSession(sessionId: string): void {
   clearWakeBridgeReconcileTimer(sessionId);
   cancelIdlePlanDiscovery(sessionId);
   sessions.delete(sessionId);
+  _locallyEngagedSessions.delete(sessionId);
   localSentUserMessageIds.delete(sessionId);
   pendingLocalRetryIntents.delete(sessionId);
   // 状态快照同步失效:该会话若有 running / pending / 待投递 transition 条目,
@@ -4185,6 +4186,11 @@ const REMOTE_TASK_SELF_HEAL_IDLE_MS = 5 * 60_000;
 const _lastViewedAt = new Map<string, number>();
 let _softEvictionTimerHandle: ReturnType<typeof setInterval> | null = null;
 
+// MEM-OPT-3：用户在本窗口亲手碰过的会话（发过消息 / 主动 Stop）。
+// 这类会话即使没挂 view，也留着完整消息 —— 用户还在盯着它的 tool 行，
+// 压掉会直接改变他看到的界面。纯后台会话不在这里。
+const _locallyEngagedSessions = new Set<string>();
+
 // MEM-OPT-2 active-view set: 哪些 session 当前被 mounted view 看着。
 // 软淘汰 / trim 跳过 set 内的 session。Set 取代了原 _activeViewSessionId 单例，
 // 因为 Orca 双栏会同时挂 lead + worker 两个 view，单例下后挂的会把先挂的
@@ -4416,6 +4422,77 @@ function leaveView(sessionId: string): void {
   _softEvictIdleSessions();
 }
 
+// ---------------------------------------------------------------------------
+// MEM-OPT-3: Cap the messages of sessions this window never opened.
+// ---------------------------------------------------------------------------
+
+/**
+ * 主进程把**每个**会话的消息行都广播给所有窗口（`local-db:messages:created`），
+ * 渲染器对没打开过的会话也会把行 materialize 进 chat state —— 而 tool 行带着完整的
+ * toolInput（Write 可能是一整个文件）。长跑 + 几十个后台任务时，这些从不显示的行会
+ * 把渲染器堆顶到几个 GiB（见 upstream #7569 / #7384）。
+ *
+ * 现有的两道闸都管不到它们：软淘汰（MEM-OPT-2）只回收「用户打开过」的会话，
+ * 逐会话裁剪（MEM-OPT-1）在 turn 结束才跑，而后台会话的 turn 可以很长 ——
+ * 峰值期间行数与字符数都不设上限。
+ *
+ * 打开过的会话走既有口径（分页游标、孤岛、翻页补齐都要保护）；从没打开过的会话没有
+ * 分页状态，它的行随时能从库里取回（打开时由 ensureInitialMessages 负责），所以只保留
+ * 最近的一小段。taskUpdates 等状态不动 —— 侧栏的运行中指示依赖它。
+ */
+const UNOPENED_SESSION_MESSAGE_CAP = 10;
+const UNOPENED_SESSION_CHARACTER_BUDGET = 128 * 1024;
+
+/** 这个窗口从没打开、也没亲手碰过的会话：纯后台，可以只留一小段。 */
+function _isBackgroundOnlySession(sessionId: string): boolean {
+  if (_activeViewSessions.has(sessionId)) return false;
+  if (_lastViewedAt.has(sessionId)) return false;
+  if (_locallyEngagedSessions.has(sessionId)) return false;
+  return true;
+}
+
+function _capUnopenedSessionMessages(sessionId: string, state: SessionChatState): void {
+  if (!_isBackgroundOnlySession(sessionId)) return;
+  // 历史已经取回过的会话走既有口径。
+  if (state.historyLoaded) return;
+  // 本地乐观行还没落库：库里取不回来，不能丢（与软淘汰同一条口径）。
+  if (state.messages.some((message) => message.isPendingPersist === true)) return;
+  let characters = 0;
+  const kept: ChatMessage[] = [];
+  for (let index = state.messages.length - 1; index >= 0; index -= 1) {
+    const message = state.messages[index];
+    if (!message) continue;
+    const size = _messageCharacters(message);
+    // 单行就超过预算：这一行正是内存大户（tool 行带完整 toolInput，Write 可能是一整个
+    // 文件），而内容随时能从库里取回 —— 跳过它。
+    if (size > UNOPENED_SESSION_CHARACTER_BUDGET) continue;
+    if (characters + size > UNOPENED_SESSION_CHARACTER_BUDGET) break;
+    characters += size;
+    kept.push(message);
+    if (kept.length >= UNOPENED_SESSION_MESSAGE_CAP) break;
+  }
+  if (kept.length >= state.messages.length) return;
+  cancelIdlePlanDiscovery(sessionId);
+  // 与逐会话裁剪（MEM-OPT-1）同一规矩：裁剪等于代际重置，必须 bump epoch
+  // 作废 in-flight 的翻页 / 跳转补齐。
+  bumpMessagesEpoch(sessionId);
+  const retained = kept.reverse();
+  setState(
+    sessionId,
+    (s) => (s === state ? {
+      ...s,
+      messages: retained,
+      hasMoreMessages: true,
+      oldestMessageId: null,
+      isLoadingMore: false,
+      historyWindowIslands: EMPTY_WINDOW_ISLANDS,
+    } : s),
+    // 后台会话的行每来一条就裁一次：通知必须跟着批走，否则退化成逐行 React fan-out
+    // （这正是 #7384 事故现场要防的东西）。
+    { deferNotification: true },
+  );
+}
+
 function _isSoftEvictionCandidate(sessionId: string, state: SessionChatState): boolean {
   return (
     _lastViewedAt.has(sessionId) &&
@@ -4491,6 +4568,12 @@ function retiredDurableToolPairs(messages: ChatMessage[], eligible: (row: ChatMe
 }
 
 function _softEvictIdleSessions(): void {
+  // 从没在这个窗口打开过的会话：先按 MEM-OPT-3 的口径把消息压到一小段，再走既有
+  // 的超预算软淘汰（它只认用户打开过的会话，没打开过的会话原来根本不在候选里，
+  // 于是这些行只进不出）。
+  for (const [sessionId, state] of [...sessions]) {
+    _capUnopenedSessionMessages(sessionId, state);
+  }
   for (const [sessionId, state] of sessions) {
     // Legacy raw-only readers require their contiguous window. A history view
     // refreshes on return; never-opened sessions will read history on first open.
@@ -9251,6 +9334,11 @@ function initGlobalListeners(options: GlobalListenerOptions = {}): void {
       },
       { deferNotification },
     );
+    // 这个窗口从没打开过的会话：只留最近一小段（MEM-OPT-3）。所有窗口都会收到
+    // 每个会话的消息广播，不压住的话几十个后台任务的 tool 行会把渲染器堆顶到几个 GiB。
+    // 放在合并之后：新行本身也要一起过预算（单行超预算的大 tool 行会被丢掉）。
+    const mergedState = sessions.get(sessionId);
+    if (mergedState) _capUnopenedSessionMessages(sessionId, mergedState);
   }
 
   // 消息本地删除推送:本机多窗口与 device-link 控制端共用同一 reducer。
@@ -15725,6 +15813,8 @@ function sendMessage(
   // Allow send if there is text OR files
   if ((!text.trim() && (!files || files.length === 0)) || !workingDir)
     return Promise.resolve(false);
+  // 用户在这个会话里发了消息：它是「用户亲手碰过」的会话，别按后台会话压行（MEM-OPT-3）。
+  _locallyEngagedSessions.add(sessionId);
   if (isRemoteDeletedSessionSendBlocked(sessionId)) return Promise.resolve(false);
   // 用户在任务里发了消息:已经待生效的合并后自动归档本次不再进行(卡片上的提示随之消失)。
   cancelPendingGhostCardTaskAutoArchive(sessionId);
@@ -16657,6 +16747,8 @@ function stopSession(
   },
 ): void {
   if (!sessionId) return;
+  // 用户主动 Stop：这个会话是他在盯的，行要留全（MEM-OPT-3 不按后台会话压它）。
+  _locallyEngagedSessions.add(sessionId);
   // Stop/abort 乐观终态：立即清掉该 session 的「正在识别图片中」toast，
   // 否则 duration:0 的 loading toast 会残留到下一次同 session 输出才消失。
   dismissVisionBridgeToast(sessionId);

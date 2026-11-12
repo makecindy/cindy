@@ -2612,6 +2612,71 @@ describe('makerChatStore text delta batching', () => {
     unsubscribe();
   });
 
+  // MEM-OPT-3: 这个窗口从没打开过的会话，渲染器只留最近一小段消息。
+  // 主进程把每个会话的行都广播给所有窗口，几十个后台任务的 tool 行
+  // （Write 的 toolInput 是整个文件）会把渲染器堆到几个 GiB（upstream #7384）。
+  describe('background session message cap', () => {
+    const backgroundSessions: string[] = [];
+
+    afterEach(() => {
+      for (const sessionId of backgroundSessions) makerChatStore.purgeSession(sessionId);
+      backgroundSessions.length = 0;
+    });
+
+    const backgroundSession = (label: string): string => {
+      const sessionId = `${SESSION_ID}-${label}-${Math.random().toString(36).slice(2, 8)}`;
+      backgroundSessions.push(sessionId);
+      return sessionId;
+    };
+
+    const broadcastRow = (sessionId: string, clientId: string, content: string, index: number) =>
+      emitDbMessageCreated({
+        clientId,
+        role: 'assistant',
+        content,
+        createdAt: new Date(Date.UTC(2026, 10, 12, 0, 0, index)).toISOString(),
+      }, sessionId);
+
+    it('keeps only a short tail for a session this window never opened', () => {
+      const sessionId = backgroundSession('background');
+
+      for (let index = 0; index < 30; index += 1) {
+        broadcastRow(sessionId, `bg-row-${index}`, `row-${index}`, index);
+      }
+
+      const rows = makerChatStore.getSnapshot(sessionId).messages;
+      expect(rows.length).toBeLessThanOrEqual(10);
+      // 最新的行必须留着：用户打开会话时要看到最近发生的事。
+      expect(rows[rows.length - 1]?.content).toBe('row-29');
+    });
+
+    it('drops an oversized broadcast row of a session this window never opened', () => {
+      const sessionId = backgroundSession('background-big');
+
+      // 一整份文件大小的行：单行就超过未打开会话的字符预算。
+      broadcastRow(sessionId, 'bg-huge', 'x'.repeat(300 * 1024), 1);
+      broadcastRow(sessionId, 'bg-small', 'small', 2);
+
+      const rows = makerChatStore.getSnapshot(sessionId).messages;
+      expect(rows.some((row) => typeof row.content === 'string' && row.content.length > 100 * 1024)).toBe(false);
+      expect(rows[rows.length - 1]?.content).toBe('small');
+    });
+
+    it('keeps every row of a session the user is looking at', () => {
+      const sessionId = backgroundSession('active');
+      const dispose = makerChatStore.enterView(sessionId);
+
+      try {
+        for (let index = 0; index < 30; index += 1) {
+          broadcastRow(sessionId, `bg-row-${index}`, `row-${index}`, index);
+        }
+        expect(makerChatStore.getSnapshot(sessionId).messages).toHaveLength(30);
+      } finally {
+        dispose();
+      }
+    });
+  });
+
   it('flushes a pending high-frequency batch immediately when terminal done arrives', () => {
     let notifyCount = 0;
     const unsubscribe = makerChatStore.subscribe(SESSION_ID, () => {
