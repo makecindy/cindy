@@ -59,6 +59,18 @@ describe('remote provider access after reverting the 11-10 default', () => {
     expect(store.isRemoteProviderInvocationAllowed('openai')).toBe(false);
   });
 
+  // PR #10150 review: a shared OpenAI pool is checked account by account, including accounts imported from
+  // old Codex connections, so the revert must keep those connections open alongside openai itself.
+  it('keeps the imported connections of a shared OpenAI pool open, unless the user turned them off', async () => {
+    fs.writeFileSync(prefsFile(), JSON.stringify({ defaultOpen: true, disabledProviders: { 'openai-old-b': true } }));
+    const legacy = { 'openai-old-a': 'cindy-x-1', 'openai-old-b': 'cindy-x-2' };
+    expect([...store.sharedProviderIdsForRevert([{ providerId: 'anthropic' }], () => legacy)]).toEqual(['anthropic']);
+    await store.keepSharedProvidersOpen(store.sharedProviderIdsForRevert([{ providerId: 'openai' }], () => legacy));
+    expect(store.isRemoteProviderInvocationAllowed('openai')).toBe(true);
+    expect(store.isRemoteProviderInvocationAllowed('openai-old-a')).toBe(true);
+    expect(store.isRemoteProviderInvocationAllowed('openai-old-b')).toBe(false);
+  });
+
   it('does not open anything for a file the 11-10 version never migrated', async () => {
     fs.writeFileSync(prefsFile(), JSON.stringify({ allowedProviders: { anthropic: true } }));
     await store.keepSharedProvidersOpen(new Set(['openai']));

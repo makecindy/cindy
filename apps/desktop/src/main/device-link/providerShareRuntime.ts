@@ -1,7 +1,7 @@
 import { flushStandbyUsage, importStandbyUsage } from './providerShareAvailabilityUsage.js';
 import { publishShareAvailability, refreshStandbyGuests } from './providerShareAvailability.js';
 import { onProviderGroupChanged } from '../provider-group/store.js';
-import { keepSharedProvidersOpen, onRemoteProviderAccessChanged } from '../maker-host/remote-provider-access-store.js';
+import { keepSharedProvidersOpen, onRemoteProviderAccessChanged, sharedProviderIdsForRevert } from '../maker-host/remote-provider-access-store.js';
 import { onDeviceLinkSettingChanged } from './settings-store.desktop.js';
 import { isProviderShareMemberBudget } from '../../shared/providerShareBudget.js';
 import { CONTROLLED_MODEL_CATALOG_CHANGED } from '../../shared/controlledModelCatalog.js';
@@ -369,11 +369,14 @@ export function startProviderShareRuntime(broadcast: Broadcast, options: { invok
   const stopAccess = onRemoteProviderAccessChanged(queueAvailabilityPublish);
   const stopSettings = onDeviceLinkSettingChanged(key => { if (key === 'remoteControlEnabled') queueAvailabilityPublish(); });
   // 撤回 11-10 的默认开放：等拿到本账号完整的分享快照，那段时间里用户建过分享的供应商补记为打开。
-  // 补记只做一次，有分享服务暂时读不到时不做，等下一次完整读取。
+  // 补记只做一次，有分享服务暂时读不到时不做，等下一次完整读取；读账号池失败也不做，下次再试。
   const migrateAccessDefault = () => {
     const loaded = getProviderShareHostCompleteSnapshot();
-    if (loaded) void keepSharedProvidersOpen(new Set(loaded.map((share) => share.providerId)))
-      .catch((error) => log.warn('remote provider access default revert failed', { error: String(error) }));
+    if (!loaded) return;
+    void (async () => {
+      const { readPool } = await import('../subscription-accounts/store.js');
+      await keepSharedProvidersOpen(sharedProviderIdsForRevert(loaded, () => readPool('openai')?.legacyCodexAccounts));
+    })().catch((error) => log.warn('remote provider access default revert failed', { error: String(error) }));
   };
   const stopAccessDefault = onProviderShareHostChanged(migrateAccessDefault);
   migrateAccessDefault();

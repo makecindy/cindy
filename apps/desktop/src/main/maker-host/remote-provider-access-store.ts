@@ -116,6 +116,19 @@ function notifyAll(): void {
  * 说明用户要让分享出去的人用，补记为打开。`sharedProviderIds` 来自已拉到的完整分享快照。
  * 只对跑过 11-10 迁移的文件做一次；其余供应商一律不动。
  */
+/**
+ * 撤回 11-10 默认开放时要补记的供应商：分享了的供应商，加上分享出去的 OpenAI 账号池里从旧 Codex 连接
+ * 导入的账号——受邀者用这个池时会逐个核对这些旧连接的「允许被远程调用」，只补 openai 本身会让分享失效。
+ */
+export function sharedProviderIdsForRevert(
+  shares: readonly { providerId: string }[],
+  readOpenAiLegacyAccounts: () => Readonly<Record<string, string>> | undefined,
+): Set<string> {
+  const ids = new Set(shares.map((share) => share.providerId));
+  if (ids.has('openai')) for (const legacyId of Object.keys(readOpenAiLegacyAccounts() ?? {})) ids.add(legacyId);
+  return ids;
+}
+
 export async function keepSharedProvidersOpen(sharedProviderIds: ReadonlySet<string>): Promise<void> {
   store.invalidateIfChanged();
   const before = store.read();
