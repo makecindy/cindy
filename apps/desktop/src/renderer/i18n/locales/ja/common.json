@@ -1312,6 +1312,8 @@
     "handoffWindow": "代理入力 · {{app}}"
   },
   "ipcError": {
+    "SUBSCRIPTION_CLAUDE_IDENTITY_UNKNOWN": "$t(subscriptionAccounts.loginIdentityUnknown)",
+    "SUBSCRIPTION_CLAUDE_ACCOUNT_MISMATCH": "$t(subscriptionAccounts.loginIdentityMismatch)",
     "SSH_HARNESS_SWITCH_UNSUPPORTED": "この SSH タスクでは Harness を切り替えられません。現在の Harness のモデルを選ぶか、必要な Harness で新しい SSH タスクを作成してください。",
     "MODEL_SELECTION_UNAVAILABLE": "選択したプロバイダーのモデルは利用できなくなりました。設定で接続を確認するか、利用可能なモデルを選び直してください。",
     "HARNESS_SWITCH_NOT_READY": "Harness の切り替えが完了していません。エラーの詳細を確認し、Harness の準備ができてから再試行してください。",
@@ -2144,7 +2146,16 @@
       },
       "sidebarAndPanels": "サイドバーとパネル",
       "themeLabel": "テーマ",
+      "createTheme": {
+        "label": "テーマを作成",
+        "hint": "スタイルや参考画像をもとに Cindy の外観を作成します",
+        "prompt": "共有できる Cindy テーマパッケージを、プレビューと検証付きで作成してください。希望するスタイル：",
+        "unavailable": "テーマ作成スキルを利用できません。スキルで有効になっているか確認してください",
+        "startFailed": "テーマ作成タスクを開けませんでした"
+      },
       "themeAriaLabel": "テーマの選択",
+      "themeApplyFailed": "このテーマを適用できませんでした。現在の外観は変更されていません。",
+      "themeFontFailed": "テーマのフォントを読み込めませんでした。既定のフォントを使用しています。",
       "localBadge": "(ローカル)",
       "localThemes": {
         "title": "ローカルテーマ",
@@ -6735,7 +6746,106 @@
           "deviceLink": "Device Link"
         },
         "onlyEncrypted": "Agent-Net のみ使用",
-        "onlyEncryptedHint": "有効にすると、旧バージョンの端末と旧接続を使用する共有は利用できなくなります。初期設定はオフです。"
+        "onlyEncryptedHint": "有効にすると、旧バージョンの端末と旧接続を使用する共有は利用できなくなります。初期設定はオフです。",
+        "peerSwitch": {
+          "row": {
+            "toAgentNet": "Agent-Net に切り替え中…",
+            "toDeviceLink": "Device Link に戻し中…"
+          },
+          "status": {
+            "toAgentNet": "Agent-Net に切り替え中",
+            "toDeviceLink": "Device Link に戻し中"
+          },
+          "reconnecting": "再接続中",
+          "toAgentNet": "Agent-Net に切り替え",
+          "toDeviceLink": "Device Link に戻す",
+          "retry": "再試行",
+          "hint": "切り替えると、この端末との接続はエンドツーエンド暗号化されます。60 秒以内に再接続できない場合は、自動で Device Link に戻ります。",
+          "steps": {
+            "request": {
+              "agentNet": "相手に Agent-Net をオンにするよう依頼",
+              "deviceLink": "相手に Agent-Net をオフにするよう依頼"
+            },
+            "reconnect": "相手が再接続中",
+            "confirm": {
+              "agentNet": "Agent-Net での再接続を待機中",
+              "deviceLink": "Device Link での再接続を待機中"
+            },
+            "revert": "60 秒以内に再接続できなかったため、Device Link に戻しています"
+          },
+          "closeHint": "このカードは閉じても大丈夫です。結果は別途お知らせします。",
+          "reverted": "切り替えできませんでした：60 秒以内に Agent-Net で再接続できなかったため、自動で Device Link に戻りました。",
+          "unsupported": "相手の Cindy が古いため、ここからは切り替えできません。その端末で Cindy を更新してから再試行してください。",
+          "done": {
+            "toAgentNet": "Agent-Net に切り替えました。接続はエンドツーエンド暗号化されています。",
+            "toDeviceLink": "Device Link に戻しました。"
+          },
+          "blocked": {
+            "mobile": "スマートフォンはリモート操作を受け付けません。スマートフォン側で Agent-Net をオンにしてください。",
+            "peer-control-off": "相手が「同じアカウントの端末からの操作を許可」をオンにしていません。その端末で切り替えてください。",
+            "control-off": "この端末で相手への操作をオフにしています。オンにするとここから切り替えられます。"
+          },
+          "toast": {
+            "toAgentNet": "「{{name}}」を Agent-Net に切り替えました",
+            "toDeviceLink": "「{{name}}」を Device Link に戻しました",
+            "reverted": "「{{name}}」は切り替えできず、自動で Device Link に戻りました",
+            "unsupported": "「{{name}}」の Cindy が古いため、リモートで切り替えできません",
+            "not-ready": "「{{name}}」は現在 Agent-Net をオンにできません",
+            "busy": "「{{name}}」は別の切り替えを処理中です。しばらくしてから再試行してください",
+            "failed": "「{{name}}」を切り替えられませんでした",
+            "encryption-required": "「{{name}}」で「Agent-Net のみ使用」を無効にしてから戻してください",
+            "controller-encryption-required": "「{{name}}」を戻す前に、この端末の「Agent-Net のみ使用」を無効にしてください",
+            "agent-net-only-relay": "「{{name}}」への接続は Agent-Net のみ対応のため、Device Link に戻せません"
+          },
+          "checking": "切り替えできるか確認中…",
+          "notReady": {
+            "not-signed-in": "相手が Cindy にサインインしていません。サインイン後に Agent-Net をオンにできます。",
+            "secure-storage": "相手の端末でセキュアストレージが使えないため、Agent-Net をオンにできません。その端末で対応してください。",
+            "relay-identity": "そのコンピュータでは、現在の中継での Agent-Net 接続が未設定です。先にそのコンピュータで設定してください。"
+          },
+          "batch": {
+            "toAgentNet": "すべて Agent-Net に切り替え",
+            "toDeviceLink": "すべて Device Link に戻す",
+            "confirmTitleAgentNet": "これらの端末を Agent-Net に切り替えますか？",
+            "confirmTitleDeviceLink": "これらの端末を Device Link に戻しますか？",
+            "ready": "切り替え可能",
+            "checking": "確認中",
+            "skipReason": {
+              "unsupported": "Cindy の更新が必要",
+              "not-ready": "現在 Agent-Net をオンにできません",
+              "unreachable": "現在応答なし",
+              "encryption-required": "Agent-Net のみ使用",
+              "controller-encryption-required": "この端末は Agent-Net のみ",
+              "agent-net-only-relay": "Agent-Net 専用ネットワーク"
+            },
+            "canaryNote": "まず 1 台を切り替え、再接続を確認してから残りを同時に切り替えます。60 秒以内に再接続できない端末は自動で戻ります。",
+            "rollbackNote": "戻すと接続のエンドツーエンド暗号化がなくなります。「Agent-Net のみ使用」が有効な端末は、先にその端末で設定を無効にしてください。",
+            "run": "{{count}} 台を切り替え",
+            "cancel": "キャンセル",
+            "close": "完了",
+            "state": {
+              "waiting": "待機中",
+              "running": "切り替え中",
+              "done": "切り替え済み",
+              "reverted": "自動で戻りました",
+              "skipped": "未切り替え",
+              "failed": "切り替えできず"
+            },
+            "stopped": "1 台目が切り替えできなかったため、残りは切り替えていません。",
+            "finished": "{{done}} 台を切り替えました",
+            "finishedWithRevert": "{{done}} 台を切り替え、{{reverted}} 台は切り替えできませんでした"
+          },
+          "changedBy": {
+            "on": "「{{name}}」が {{time}} にリモートでオン",
+            "off": "「{{name}}」が {{time}} にリモートでオフ"
+          },
+          "unreachable": "今回はその端末に問い合わせできませんでした。しばらくしてからもう一度カードを開いてください。",
+          "encryptionRequired": "この端末は「Agent-Net のみ使用」が有効です。Device Link に戻す前に、その端末でこの設定を無効にしてください。",
+          "disableBlocked": {
+            "controller-encryption-required": "この端末では「Agent-Net のみ使用」が有効です。相手を Device Link に戻す前に、この端末で無効にしてください。",
+            "agent-net-only-relay": "この接続のネットワークは Agent-Net のみに対応しています。Device Link に対応する接続経路に変更してから戻してください。"
+          }
+        }
       }
     },
     "tina": {
@@ -15296,6 +15406,16 @@
             "recheck": "接続を確認",
             "summary": "GitHub のリポジトリ、Issue、PR、Actions を管理。",
             "otherMethods": "その他の接続方法"
+          },
+          "app": {
+            "title": "リポジトリのイベント",
+            "description": "Cindy GitHub App を接続すると、レビューや CI の変更時に追跡中の PR が更新されます。",
+            "connected": "{{login}} として接続済み · {{count}} 件のリポジトリを追跡中",
+            "missing": "次のリポジトリの App インストールとアクセス権を確認してください：{{repositories}}",
+            "error": "接続を確認できませんでした。もう一度お試しください。",
+            "repositories": "リポジトリを選択",
+            "disconnect": "イベント接続を解除",
+            "connect": "GitHub App を接続"
           }
         },
         "unresolved": "未解決のレビューコメント: {{count}} 件",
@@ -16030,7 +16150,11 @@
             "payments": "支払い",
             "checkout": "チェックアウト",
             "invoices": "請求書",
-            "subscriptions": "サブスクリプション"
+            "subscriptions": "サブスクリプション",
+            "reviewComments": "レビューコメント",
+            "reviewThreads": "レビュースレッド",
+            "checkRuns": "チェック実行",
+            "commitStatus": "コミットの状態"
           },
           "actions": {
             "all": "すべての変更",
@@ -16052,7 +16176,12 @@
             "failed": "失敗",
             "paid": "支払済み"
           }
-        }
+        },
+        "repositoriesLabel": "リポジトリ",
+        "repositoriesHint": "owner/repository を1行に1つ入力します。この GitHub App に許可したリポジトリのみがタスクを開始できます。",
+        "repositoriesInvalid": "有効な owner/repository 形式のリポジトリ名を1～50件入力してください。",
+        "githubAppHint": "このタスクを実行するコンピュータで GitHub App に接続し、これらのリポジトリを許可してください。個別の Webhook URL やシークレットは不要です。",
+        "githubAppPaused": "このタスクは一時停止中です。イベントでは開始されません。"
       },
       "trigger": {
         "label": "トリガー方式",
@@ -16865,6 +16994,9 @@
       },
       "pluginCreator": {
         "description": "Cindy のプラグインを作成・編集・デバッグ・パッケージ化し、必要に応じて公開します。"
+      },
+      "themeCreator": {
+        "description": "Cindy の配色、画像素材、外観設定を作成・検証します。"
       }
     },
     "common": {
@@ -17983,7 +18115,7 @@
     "exit": "計画モードを終了"
   },
   "globalDrop": {
-    "cindyHint": "ドロップしてプラグインをインストール",
+    "cindyHint": "ドロップして Cindy ファイルをインポート",
     "cshareHint": "ドロップして共有セッションをインポート"
   },
   "sessionShare": {
@@ -20013,6 +20145,15 @@
     "lineNumbers": "行番号"
   },
   "subscriptionAccounts": {
+    "loginIdentityUnknown": "このアカウントの元の情報を確認できません。「アカウントを追加」から新しく接続してください。",
+    "loginExpiresInDays": "ログインは約 {{days}} 日後に期限切れ",
+    "loginExpiresSoon": "ログインの有効期限が近づいています",
+    "loginMayHaveExpired": "ログインの期限が切れた可能性があります",
+    "loginExpiryUnknown": "ログインの有効期限は不明",
+    "loginExpiryDetail": "有効期限の目安：{{date}}。Claude による推定のため、それより前に無効になる場合があります。",
+    "loginAccountAria": "{{name}} に再ログイン",
+    "loginIdentityMismatchStatus": "ログインアカウントが異なります",
+    "loginIdentityMismatch": "選択したアカウントとは別のアカウントにログインしました。もう一度ログインし、この行に表示されているアカウントを選択してください。",
     "unassigned": "アカウント未割り当て",
     "boundUnavailable": "アカウントを利用できません",
     "providerManagedAuth": "現在の Codex プロバイダーでは ChatGPT アカウント情報を取得できません。プロバイダーの追加時に「$t(subscriptionAccounts.signIn.anotherAccount)」を選ぶと、別のフォルダーを使用できます。",
@@ -20093,6 +20234,13 @@
     "detail": "要求元：{{device}}\n目的：{{purpose}}\n\n有効にすると、同じアカウントのデバイスからタスクの実行やファイルへのアクセスなど、このコンピューターを操作できます。設定で無効にするまで有効です。",
     "decline": "今はしない",
     "enable": "リモート操作を有効にする"
+  },
+  "cindyFiles": {
+    "unsupported": "このバージョンではこのファイルに対応していません。Cindy を更新して再試行してください",
+    "invalid": "この Cindy ファイルは無効か破損しています。ファイルを再取得してください",
+    "failed": "ファイルをインポートできませんでした。再試行してください",
+    "themeInstalled": "テーマを追加しました。外観設定で選択してください",
+    "refreshFailed": "テーマはインストールされましたが、一覧を更新できませんでした。外観設定で更新してください"
   },
   "modelGroups": {
     "title": "モデルグループ",

@@ -6,6 +6,7 @@ import { searchGhostRuntimeMemories } from '../cindy-brain/index.js';
 import { getPiKernelManager } from '../agent-binaries/index.js';
 import { PiKernelError } from '../agent-binaries/pi-kernel-manager.js';
 import { manageAppSettings } from '../app-settings/sections.js';
+import { importThemePackageFromTask } from '../local-themes/agent.js';
 import { manageAppModels } from '../app-settings/models.js';
 import { classifyOrigin } from '../input-handoff/originPolicy.js';
 import { inspectAppDefaultModel, changeAppDefaultModel } from '../maker-ipc/appDefaultModelControl.js';
@@ -118,7 +119,7 @@ import { createTaskToolCallAuthorizer } from '../maker-ipc/taskToolCallAuthorize
 import { createDesktopTaskActionAuthorizer } from '../maker-ipc/taskActionHost.js';
 import { authorizeGroupTool, reportGroupTaskCreated } from '../maker-ipc/botGroupToolAuthorization.js';
 import { createSharedTaskTools } from './sharedTaskTools.js';
-import { assertTaskActionCurrent } from '../maker-ipc/taskActionAuthorization.js';
+import { assertTaskActionCurrent, captureTaskActionSyncGuard } from '../maker-ipc/taskActionAuthorization.js';
 import {
   getSessionRowSnapshot,
   patchSessionMetaInDb,
@@ -1245,6 +1246,29 @@ export function createDesktopMcpProviders(deps: DesktopMcpProvidersDeps): LiziMc
             return { ok: false, errorCode: error instanceof PiKernelError ? error.reason : 'PI_RUNTIME_FAILED',
               message: 'Pi 操作未确认完成；请重新读取版本和状态。' };
           }
+        }),
+      },
+      themePackages: {
+        import: (context, filePath) => withAccountDataAccess(context.sessionId, async assertCurrent => {
+          const sessionId = context.sessionId;
+          if (!sessionId) throw new Error('Task caller unavailable');
+          const assertAction = captureTaskActionSyncGuard();
+          const assertCaller = async () => {
+            await assertCurrent();
+            await assertTaskActionCurrent();
+            if (!deps.isCurrentLocalSessionInstance?.(sessionId, context.sessionInstanceId)) throw new Error('Task instance changed');
+          };
+          return importThemePackageFromTask({ filePath, workingDir: context.workingDir ?? '' }, {
+            assertCurrent: assertCaller,
+            assertCurrentSync: () => {
+              assertAction?.();
+              if (!deps.isCurrentLocalSessionInstance?.(sessionId, context.sessionInstanceId)) throw new Error('Task instance changed');
+            },
+            authorizePath: absolutePath => authorizeDesktopSessionPath({
+              sessionId, sessionInstanceId: context.sessionInstanceId, workingDir: context.workingDir ?? '',
+              path: absolutePath, toolName: 'cindy_helper.import_theme_package', operation: 'read',
+            }, deps.getLiveSessionGrantState),
+          });
         }),
       },
       appSettings: {

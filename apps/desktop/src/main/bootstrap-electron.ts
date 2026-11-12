@@ -699,7 +699,7 @@ import { closeSharedTasksBeforeLogout } from './device-link/sharedTaskRuntime.js
 import { closeSharedTasksBeforeAccountHandover } from './device-link/sharedTaskAccountBoundary.js';
 import { registerSharedTaskIpc } from './device-link/sharedTaskIpc.js';
 import { registerProviderShareIpc } from './device-link/providerShareRuntime.js';
-import { registerSelfHostedRelayIpc } from './device-link/selfHostedRelayRuntime.js';
+import { agentNetSwitchRemoteHandler, registerSelfHostedRelayIpc } from './device-link/selfHostedRelayRuntime.js';
 import { registerProviderGroupIpc } from './provider-group/ipc.js';
 import { registerSubscriptionAccountsIpc } from './subscription-accounts/ipc.js';
 import { attachDefaultSubscriptionPool, disconnectSubscriptionPool } from './subscription-accounts/runtime.js';
@@ -712,6 +712,7 @@ import {
   setUsageWidgetSnapshotReader,
   pushSessionActivityToController,
   setSessionsSubscribedListener,
+  setAgentNetSwitchRemoteHandler,
 } from './device-link/dispatch.desktop';
 import {
   registerDeviceLinkIpc,
@@ -741,6 +742,7 @@ import { registerModelVisibilityOwnerClaimIpc } from './maker-host/model-visibil
 import { registerRemotePrecreatedWorktreeLedgerIpc } from './remotePrecreatedWorktreeLedger';
 import { registerTerminalHandlers } from './maker-ipc/terminal-handlers';
 import { registerLocalThemesIpc } from './local-themes/register';
+import { registerCindyFileIpc } from './cindy-files/register';
 import {
   registerRemoteSshIpc,
   disposeRemoteSshPool,
@@ -1231,7 +1233,6 @@ import {
   interruptGhostCallsForAccountBoundary,
   reconcileGhostOauthAccountsForActiveOwner,
   refreshGhostLocalization,
-  refreshPluginUsageBindings,
   registerGhostIpc,
   setRemotePluginManagementServices,
   runStableOwnerPostCommitTask,
@@ -3005,7 +3006,6 @@ authManager.setStableOwnerPostCommitTask(async ({ reason, scopeKey, dataOwnerId 
   // Market and OAuth are owner-private follow-ups and stay behind this gate.
   if (dataOwnerId === null) return needsRetry ? 'failed' : 'completed';
   if (activeOwnerScopeKey() !== scopeKey || isAppSessionBoundaryPending()) return 'deferred';
-  await refreshPluginUsageBindings();
   let deferred = false;
   const marketOutcome = await marketPostCommitStep.run(scopeKey, async () => {
     if (!isCurrent()) return 'deferred';
@@ -10188,16 +10188,6 @@ app.on('ready', async () => {
           });
         });
       }
-      // 插件使用绑定只是辅助元数据：插件目录不可读（如 Windows EPERM）时不能让
-      // onReady 抛错——否则 ownerEnsureCoordinator 会丢弃已就绪的本地库并报
-      // DB_INIT_FAILED（#6870）。失败只记日志，由后续 post-commit 重试补齐。
-      try {
-        await refreshPluginUsageBindings();
-      } catch (error) {
-        dbClientLog.warn('plugin usage bindings refresh failed (non-fatal)', {
-          error: error instanceof Error ? error.message : String(error),
-        });
-      }
       checkDatabaseSizeWarningAtStartup();
       void restoreOrcaRemoteWorkersForCurrentOwner();
       startReadyWorktreeMaintenance();
@@ -10542,6 +10532,7 @@ app.on('ready', async () => {
       mainWindowRef && !mainWindowRef.isDestroyed() ? mainWindowRef.webContents : null,
   });
   registerLocalThemesIpc();
+  registerCindyFileIpc();
   registerVoiceInputIpc();
   registerGlobalVoiceInputIpc({
     getMainWindow: () => mainWindowRef,
@@ -10667,6 +10658,8 @@ app.on('ready', async () => {
   registerProviderShareIpc();
   // 自建中转服务(docs/self-hosted-relay-plan.md):本机中转与加入别的中转。
   registerSelfHostedRelayIpc();
+  // 同账号电脑远程切换这台电脑的 Agent-Net(docs/product-rules/agent-net.md「远程切换其他电脑的连接方式」)。
+  setAgentNetSwitchRemoteHandler(agentNetSwitchRemoteHandler());
   registerProviderGroupIpc({ reshare: providerGroupReshare });
   registerSubscriptionAccountsIpc();
   registerProviderGroupRemoteHandler({ onGroupChanged: () => providerGroupReshare.kick('group') });

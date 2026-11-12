@@ -1312,6 +1312,8 @@
     "handoffWindow": "대리 입력 · {{app}}"
   },
   "ipcError": {
+    "SUBSCRIPTION_CLAUDE_IDENTITY_UNKNOWN": "$t(subscriptionAccounts.loginIdentityUnknown)",
+    "SUBSCRIPTION_CLAUDE_ACCOUNT_MISMATCH": "$t(subscriptionAccounts.loginIdentityMismatch)",
     "SSH_HARNESS_SWITCH_UNSUPPORTED": "이 SSH 작업에서는 Harness를 전환할 수 없습니다. 현재 Harness의 모델을 선택하거나 필요한 Harness로 새 SSH 작업을 만드세요.",
     "MODEL_SELECTION_UNAVAILABLE": "선택한 제공자의 모델을 더 이상 사용할 수 없습니다. 설정에서 연결을 확인하거나 사용 가능한 모델을 다시 선택하세요.",
     "HARNESS_SWITCH_NOT_READY": "Harness 전환이 완료되지 않았습니다. 오류 세부 정보를 확인하고 Harness가 준비되면 다시 시도하세요.",
@@ -2144,7 +2146,16 @@
       },
       "sidebarAndPanels": "사이드바 및 패널",
       "themeLabel": "테마",
+      "createTheme": {
+        "label": "테마 만들기",
+        "hint": "원하는 스타일이나 참고 이미지로 Cindy의 외관을 만듭니다",
+        "prompt": "공유할 수 있는 Cindy 테마 패키지를 미리 보기와 검증을 포함해 만들어 주세요. 원하는 스타일:",
+        "unavailable": "테마 제작 스킬을 사용할 수 없습니다. 스킬에서 활성화되어 있는지 확인하세요",
+        "startFailed": "테마 제작 작업을 열지 못했습니다"
+      },
       "themeAriaLabel": "테마 선택",
+      "themeApplyFailed": "테마를 적용하지 못했습니다. 현재 모양은 유지됩니다.",
+      "themeFontFailed": "테마 글꼴을 불러오지 못했습니다. 기본 글꼴을 사용합니다.",
       "localBadge": "(로컬)",
       "localThemes": {
         "title": "로컬 테마",
@@ -6735,7 +6746,106 @@
           "deviceLink": "Device Link"
         },
         "onlyEncrypted": "Agent-Net만 사용",
-        "onlyEncryptedHint": "켜면 이전 버전 기기와 이전 연결을 사용하는 공유를 사용할 수 없습니다. 기본값은 꺼짐입니다."
+        "onlyEncryptedHint": "켜면 이전 버전 기기와 이전 연결을 사용하는 공유를 사용할 수 없습니다. 기본값은 꺼짐입니다.",
+        "peerSwitch": {
+          "row": {
+            "toAgentNet": "Agent-Net으로 전환 중…",
+            "toDeviceLink": "Device Link로 되돌리는 중…"
+          },
+          "status": {
+            "toAgentNet": "Agent-Net으로 전환 중",
+            "toDeviceLink": "Device Link로 되돌리는 중"
+          },
+          "reconnecting": "다시 연결 중",
+          "toAgentNet": "Agent-Net으로 전환",
+          "toDeviceLink": "Device Link로 되돌리기",
+          "retry": "다시 시도",
+          "hint": "전환하면 이 기기와의 연결이 종단 간 암호화됩니다. 60초 안에 다시 연결되지 않으면 자동으로 Device Link로 돌아갑니다.",
+          "steps": {
+            "request": {
+              "agentNet": "상대에게 Agent-Net 켜기 요청",
+              "deviceLink": "상대에게 Agent-Net 끄기 요청"
+            },
+            "reconnect": "상대가 다시 연결 중",
+            "confirm": {
+              "agentNet": "Agent-Net으로 다시 연결되기를 기다리는 중",
+              "deviceLink": "Device Link로 다시 연결되기를 기다리는 중"
+            },
+            "revert": "60초 안에 다시 연결되지 않아 Device Link로 되돌리는 중"
+          },
+          "closeHint": "이 카드를 닫아도 됩니다. 결과는 따로 알려 드립니다.",
+          "reverted": "전환하지 못했습니다: 60초 안에 Agent-Net으로 다시 연결되지 않아 자동으로 Device Link로 돌아갔습니다.",
+          "unsupported": "상대의 Cindy 버전이 오래되어 여기서 전환할 수 없습니다. 그 컴퓨터에서 Cindy를 업데이트한 뒤 다시 시도하세요.",
+          "done": {
+            "toAgentNet": "Agent-Net으로 전환했습니다. 연결이 종단 간 암호화됩니다.",
+            "toDeviceLink": "Device Link로 되돌렸습니다."
+          },
+          "blocked": {
+            "mobile": "휴대폰은 원격 제어를 받지 않습니다. 휴대폰에서 직접 Agent-Net을 켜세요.",
+            "peer-control-off": "상대가 「같은 계정 기기의 이 기기 제어 허용」을 켜지 않았습니다. 그 컴퓨터에서 전환하세요.",
+            "control-off": "이 컴퓨터에서 해당 기기 제어를 꺼 두었습니다. 켜면 여기서 전환할 수 있습니다."
+          },
+          "toast": {
+            "toAgentNet": "「{{name}}」을(를) Agent-Net으로 전환했습니다",
+            "toDeviceLink": "「{{name}}」을(를) Device Link로 되돌렸습니다",
+            "reverted": "「{{name}}」을(를) 전환하지 못해 자동으로 Device Link로 돌아갔습니다",
+            "unsupported": "「{{name}}」의 Cindy 버전이 오래되어 원격으로 전환할 수 없습니다",
+            "not-ready": "「{{name}}」은(는) 지금 Agent-Net을 켤 수 없습니다",
+            "busy": "「{{name}}」이(가) 다른 전환을 처리 중입니다. 잠시 후 다시 시도하세요",
+            "failed": "「{{name}}」의 연결을 전환하지 못했습니다",
+            "encryption-required": "먼저 “{{name}}”에서 “Agent-Net만 사용”을 끈 뒤 되돌려 주세요",
+            "controller-encryption-required": "“{{name}}”을 되돌리려면 먼저 이 컴퓨터에서 “Agent-Net만 사용”을 꺼 주세요",
+            "agent-net-only-relay": "“{{name}}” 연결은 Agent-Net만 지원하므로 Device Link로 되돌릴 수 없습니다"
+          },
+          "checking": "전환할 수 있는지 확인하는 중…",
+          "notReady": {
+            "not-signed-in": "상대가 Cindy에 로그인하지 않았습니다. 로그인 후 Agent-Net을 켤 수 있습니다.",
+            "secure-storage": "상대 컴퓨터의 보안 저장소를 사용할 수 없어 Agent-Net을 켤 수 없습니다. 그 컴퓨터에서 해결해야 합니다.",
+            "relay-identity": "상대 컴퓨터에 현재 중계 서버의 Agent-Net 연결이 설정되어 있지 않습니다. 먼저 그 컴퓨터에서 설정하세요."
+          },
+          "batch": {
+            "toAgentNet": "모두 Agent-Net으로 전환",
+            "toDeviceLink": "모두 Device Link로 되돌리기",
+            "confirmTitleAgentNet": "이 컴퓨터들을 Agent-Net으로 전환할까요?",
+            "confirmTitleDeviceLink": "이 컴퓨터들을 Device Link로 되돌릴까요?",
+            "ready": "전환 가능",
+            "checking": "확인 중",
+            "skipReason": {
+              "unsupported": "Cindy 업데이트 필요",
+              "not-ready": "지금 Agent-Net을 켤 수 없음",
+              "unreachable": "지금 응답 없음",
+              "encryption-required": "Agent-Net만 사용",
+              "controller-encryption-required": "이 컴퓨터는 Agent-Net만 사용",
+              "agent-net-only-relay": "Agent-Net 전용 네트워크"
+            },
+            "canaryNote": "먼저 한 대를 전환하고 다시 연결되는 것을 확인한 뒤 나머지를 함께 전환합니다. 60초 안에 다시 연결되지 않는 컴퓨터는 스스로 돌아갑니다.",
+            "rollbackNote": "되돌리면 연결의 종단 간 암호화가 해제됩니다. “Agent-Net만 사용”이 켜진 컴퓨터는 먼저 해당 컴퓨터에서 이 설정을 꺼야 합니다.",
+            "run": "{{count}}대 전환",
+            "cancel": "취소",
+            "close": "완료",
+            "state": {
+              "waiting": "대기 중",
+              "running": "전환 중",
+              "done": "전환됨",
+              "reverted": "자동으로 돌아감",
+              "skipped": "전환 안 함",
+              "failed": "전환 못 함"
+            },
+            "stopped": "첫 번째 컴퓨터를 전환하지 못해 나머지는 그대로 두었습니다.",
+            "finished": "{{done}}대 전환됨",
+            "finishedWithRevert": "{{done}}대 전환됨, {{reverted}}대는 전환하지 못함"
+          },
+          "changedBy": {
+            "on": "「{{name}}」이(가) {{time}}에 원격으로 켬",
+            "off": "「{{name}}」이(가) {{time}}에 원격으로 끔"
+          },
+          "unreachable": "이번에는 그 컴퓨터에 확인하지 못했습니다. 잠시 후 카드를 다시 열어 보세요.",
+          "encryptionRequired": "이 컴퓨터는 “Agent-Net만 사용”이 켜져 있습니다. Device Link로 되돌리려면 먼저 해당 컴퓨터에서 이 설정을 꺼 주세요.",
+          "disableBlocked": {
+            "controller-encryption-required": "이 컴퓨터는 “Agent-Net만 사용”이 켜져 있습니다. 다른 컴퓨터를 Device Link로 되돌리려면 먼저 여기에서 이 설정을 꺼 주세요.",
+            "agent-net-only-relay": "이 연결의 네트워크는 Agent-Net만 지원합니다. 되돌리려면 먼저 Device Link를 지원하는 연결 경로로 바꿔 주세요."
+          }
+        }
       }
     },
     "tina": {
@@ -15296,6 +15406,16 @@
             "recheck": "연결 확인",
             "summary": "GitHub 저장소, 이슈, PR 및 Actions를 관리합니다.",
             "otherMethods": "다른 연결 방법"
+          },
+          "app": {
+            "title": "저장소 이벤트",
+            "description": "Cindy GitHub App을 연결하면 리뷰나 CI가 변경될 때 추적 중인 PR이 업데이트됩니다.",
+            "connected": "{{login}} 계정으로 연결됨 · 저장소 {{count}}개 추적 중",
+            "missing": "다음 저장소의 App 설치 및 접근 권한을 확인하세요: {{repositories}}",
+            "error": "연결을 확인하지 못했습니다. 다시 시도하세요.",
+            "repositories": "저장소 선택",
+            "disconnect": "이벤트 연결 해제",
+            "connect": "GitHub App 연결"
           }
         },
         "unresolved": "미해결 리뷰 코멘트: {{count}}건",
@@ -16030,7 +16150,11 @@
             "payments": "결제",
             "checkout": "체크아웃",
             "invoices": "청구서",
-            "subscriptions": "구독"
+            "subscriptions": "구독",
+            "reviewComments": "검토 댓글",
+            "reviewThreads": "검토 스레드",
+            "checkRuns": "검사 실행",
+            "commitStatus": "커밋 상태"
           },
           "actions": {
             "all": "모든 변경",
@@ -16052,7 +16176,12 @@
             "failed": "실패",
             "paid": "결제됨"
           }
-        }
+        },
+        "repositoriesLabel": "저장소",
+        "repositoriesHint": "한 줄에 owner/repository 하나를 입력하세요. 이 GitHub App에 승인한 저장소만 작업을 시작할 수 있습니다.",
+        "repositoriesInvalid": "owner/repository 형식의 유효한 저장소 이름을 1–50개 입력하세요.",
+        "githubAppHint": "이 작업을 실행하는 컴퓨터에서 GitHub App에 연결하고 해당 저장소를 승인하세요. 별도의 Webhook URL이나 비밀 키는 필요하지 않습니다.",
+        "githubAppPaused": "이 작업은 일시 중지되었습니다. 이벤트가 작업을 시작하지 않습니다."
       },
       "trigger": {
         "label": "트리거 방식",
@@ -16865,6 +16994,9 @@
       },
       "pluginCreator": {
         "description": "Cindy 플러그인을 생성, 수정, 디버깅, 패키징하고 요청에 따라 게시합니다."
+      },
+      "themeCreator": {
+        "description": "Cindy의 색상, 시각 자료, 외관 설정을 만들고 검증합니다."
       }
     },
     "common": {
@@ -17983,7 +18115,7 @@
     "exit": "계획 모드 종료"
   },
   "globalDrop": {
-    "cindyHint": "놓아서 플러그인 설치",
+    "cindyHint": "놓아서 Cindy 파일 가져오기",
     "cshareHint": "놓아서 공유 세션 가져오기"
   },
   "sessionShare": {
@@ -20013,6 +20145,15 @@
     "lineNumbers": "줄 번호"
   },
   "subscriptionAccounts": {
+    "loginIdentityUnknown": "이 계정의 기존 정보를 확인할 수 없습니다. 계정 추가를 통해 새로 연결하세요.",
+    "loginExpiresInDays": "약 {{days}}일 후 로그인 만료",
+    "loginExpiresSoon": "로그인이 곧 만료됩니다",
+    "loginMayHaveExpired": "로그인이 만료되었을 수 있습니다",
+    "loginExpiryUnknown": "로그인 만료일 알 수 없음",
+    "loginExpiryDetail": "예상 만료일: {{date}}. Claude가 제공한 추정치이며 더 일찍 만료될 수 있습니다.",
+    "loginAccountAria": "{{name}}에 다시 로그인",
+    "loginIdentityMismatchStatus": "로그인 계정 불일치",
+    "loginIdentityMismatch": "선택한 계정과 다른 계정으로 로그인했습니다. 다시 로그인하여 이 행에 표시된 계정을 선택하세요.",
     "unassigned": "계정 미배정",
     "boundUnavailable": "계정을 사용할 수 없음",
     "providerManagedAuth": "현재 Codex 제공자에서는 ChatGPT 계정 정보를 확인할 수 없습니다. 제공자를 추가할 때 ‘$t(subscriptionAccounts.signIn.anotherAccount)’를 선택하면 별도 폴더를 사용할 수 있습니다.",
@@ -20093,6 +20234,13 @@
     "detail": "요청 기기: {{device}}\n목적: {{purpose}}\n\n활성화하면 같은 계정의 기기에서 작업 실행 및 파일 접근을 포함하여 이 컴퓨터를 제어할 수 있습니다. 설정에서 끌 때까지 유지됩니다.",
     "decline": "나중에",
     "enable": "원격 제어 활성화"
+  },
+  "cindyFiles": {
+    "unsupported": "현재 버전에서는 이 파일을 지원하지 않습니다. Cindy를 업데이트한 후 다시 시도하세요",
+    "invalid": "이 Cindy 파일이 유효하지 않거나 손상되었습니다. 파일을 다시 받으세요",
+    "failed": "파일을 가져오지 못했습니다. 다시 시도하세요",
+    "themeInstalled": "테마가 추가되었습니다. 모양 설정에서 선택하세요",
+    "refreshFailed": "테마가 설치되었지만 목록을 새로 고치지 못했습니다. 모양 설정에서 새로 고치세요"
   },
   "modelGroups": {
     "title": "모델 그룹",

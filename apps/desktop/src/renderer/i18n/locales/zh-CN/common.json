@@ -1312,6 +1312,8 @@
     "handoffWindow": "代输入 · {{app}}"
   },
   "ipcError": {
+    "SUBSCRIPTION_CLAUDE_IDENTITY_UNKNOWN": "$t(subscriptionAccounts.loginIdentityUnknown)",
+    "SUBSCRIPTION_CLAUDE_ACCOUNT_MISMATCH": "$t(subscriptionAccounts.loginIdentityMismatch)",
     "SSH_HARNESS_SWITCH_UNSUPPORTED": "此 SSH 任务暂不支持切换 Harness。请选择当前 Harness 下的模型，或使用所需 Harness 新建 SSH 任务。",
     "MODEL_SELECTION_UNAVAILABLE": "所选模型在该供应商下已不可用。请在设置中检查连接，或重新选择可用模型。",
     "HARNESS_SWITCH_NOT_READY": "Harness 尚未完成切换。请查看错误详情，待 Harness 就绪后重试。",
@@ -2144,7 +2146,16 @@
       },
       "sidebarAndPanels": "侧边栏与面板",
       "themeLabel": "主题",
+      "createTheme": {
+        "label": "制作主题",
+        "hint": "描述风格或提供参考图，制作整套外观",
+        "prompt": "帮我制作一套可分享的 Cindy 主题包，预览并验证效果。我想要的风格是：",
+        "unavailable": "主题制作技能不可用，请在技能中检查是否启用",
+        "startFailed": "未能打开主题制作任务"
+      },
       "themeAriaLabel": "主题选择",
+      "themeApplyFailed": "无法应用此主题，当前外观已保留",
+      "themeFontFailed": "主题字体无法加载，已使用默认字体",
       "localBadge": "(本地)",
       "localThemes": {
         "title": "本地主题",
@@ -6735,7 +6746,106 @@
           "deviceLink": "Device Link"
         },
         "onlyEncrypted": "仅使用 Agent-Net",
-        "onlyEncryptedHint": "开启后，旧版设备和仍使用旧连接的分享将无法使用。默认关闭。"
+        "onlyEncryptedHint": "开启后，旧版设备和仍使用旧连接的分享将无法使用。默认关闭。",
+        "peerSwitch": {
+          "row": {
+            "toAgentNet": "正在切到 Agent-Net…",
+            "toDeviceLink": "正在切回 Device Link…"
+          },
+          "status": {
+            "toAgentNet": "正在切到 Agent-Net",
+            "toDeviceLink": "正在切回 Device Link"
+          },
+          "reconnecting": "重新连接中",
+          "toAgentNet": "切到 Agent-Net",
+          "toDeviceLink": "切回 Device Link",
+          "retry": "重试",
+          "hint": "切换后，和它之间的连接端到端加密。对方 60 秒内没连回来会自动退回 Device Link。",
+          "steps": {
+            "request": {
+              "agentNet": "请对方打开 Agent-Net",
+              "deviceLink": "请对方关闭 Agent-Net"
+            },
+            "reconnect": "对方重新连接",
+            "confirm": {
+              "agentNet": "等对方经 Agent-Net 连回来",
+              "deviceLink": "等对方经 Device Link 连回来"
+            },
+            "revert": "60 秒内没连回来，正在退回 Device Link"
+          },
+          "closeHint": "可以先关掉这张卡片，结果会另外提示。",
+          "reverted": "没切成：60 秒内没有经 Agent-Net 连回来，已自动退回 Device Link。",
+          "unsupported": "对方的 Cindy 版本较旧，还不能在这里切换。在那台电脑上更新 Cindy 后再试。",
+          "done": {
+            "toAgentNet": "已切到 Agent-Net，连接端到端加密。",
+            "toDeviceLink": "已切回 Device Link。"
+          },
+          "blocked": {
+            "mobile": "手机不接受远程控制，请在这台手机上打开 Agent-Net。",
+            "peer-control-off": "对方没有打开「允许同账号设备控制本机」，需要在那台电脑上切换。",
+            "control-off": "这台电脑关闭了对它的控制，打开后才能在这里切换。"
+          },
+          "toast": {
+            "toAgentNet": "「{{name}}」已切到 Agent-Net",
+            "toDeviceLink": "「{{name}}」已切回 Device Link",
+            "reverted": "「{{name}}」没切成，已自动退回 Device Link",
+            "unsupported": "「{{name}}」的 Cindy 版本较旧，还不能远程切换",
+            "not-ready": "「{{name}}」现在打不开 Agent-Net",
+            "busy": "「{{name}}」正在处理另一次切换，稍后再试",
+            "failed": "未能切换「{{name}}」的连接方式",
+            "encryption-required": "请先在「{{name}}」关闭「仅使用 Agent-Net」，再切回",
+            "controller-encryption-required": "请先关闭这台电脑的「仅使用 Agent-Net」，再把「{{name}}」切回",
+            "agent-net-only-relay": "「{{name}}」的连接只支持 Agent-Net，无法切回 Device Link"
+          },
+          "checking": "正在确认对方能不能切换…",
+          "notReady": {
+            "not-signed-in": "对方没有登录 Cindy，登录后才能打开 Agent-Net。",
+            "secure-storage": "对方电脑的系统安全存储不可用，打不开 Agent-Net。需要在那台电脑上处理。",
+            "relay-identity": "对方还未设置当前中转的 Agent-Net 连接，请先在那台电脑上设置。"
+          },
+          "batch": {
+            "toAgentNet": "全部切到 Agent-Net",
+            "toDeviceLink": "全部切回 Device Link",
+            "confirmTitleAgentNet": "把这些电脑切到 Agent-Net？",
+            "confirmTitleDeviceLink": "把这些电脑切回 Device Link？",
+            "ready": "可以切换",
+            "checking": "确认中",
+            "skipReason": {
+              "unsupported": "需要更新 Cindy",
+              "not-ready": "现在打不开 Agent-Net",
+              "unreachable": "暂时问不到",
+              "encryption-required": "仅使用 Agent-Net",
+              "controller-encryption-required": "本机仅使用 Agent-Net",
+              "agent-net-only-relay": "网络仅支持 Agent-Net"
+            },
+            "canaryNote": "先切第一台，确认能连回来再同时切其余的。每台 60 秒内没连回来都会自己退回。",
+            "rollbackNote": "切回后连接不再端到端加密。开启「仅使用 Agent-Net」的电脑，须先在那台电脑关闭此选项。",
+            "run": "切换 {{count}} 台",
+            "cancel": "取消",
+            "close": "完成",
+            "state": {
+              "waiting": "等待",
+              "running": "切换中",
+              "done": "已切换",
+              "reverted": "已自动退回",
+              "skipped": "未切换",
+              "failed": "未能切换"
+            },
+            "stopped": "第一台没切成，其余的没有切换。",
+            "finished": "已切换 {{done}} 台",
+            "finishedWithRevert": "已切换 {{done}} 台，{{reverted}} 台未切换"
+          },
+          "changedBy": {
+            "on": "由「{{name}}」在 {{time}} 远程打开",
+            "off": "由「{{name}}」在 {{time}} 远程关闭"
+          },
+          "unreachable": "这次没问到那台电脑，稍后再打开卡片试试。",
+          "encryptionRequired": "对方开启了「仅使用 Agent-Net」。请先在那台电脑关闭此选项，再切回 Device Link。",
+          "disableBlocked": {
+            "controller-encryption-required": "这台电脑开启了「仅使用 Agent-Net」。请先在这台电脑关闭此选项，才能把对方切回 Device Link。",
+            "agent-net-only-relay": "此连接使用仅支持 Agent-Net 的网络，无法切回 Device Link。请先改用支持 Device Link 的连接线路。"
+          }
+        }
       }
     },
     "tina": {
@@ -15296,6 +15406,16 @@
             "recheck": "检查连接",
             "summary": "管理 GitHub 仓库、Issues、PR 和 Actions。",
             "otherMethods": "其他连接方式"
+          },
+          "app": {
+            "title": "仓库事件",
+            "description": "连接 Cindy GitHub App，在评审或 CI 变化时更新正在跟进的 PR。",
+            "connected": "已连接 {{login}} · 正在关注 {{count}} 个仓库",
+            "missing": "请检查这些仓库的 App 安装与访问权限：{{repositories}}",
+            "error": "无法检查连接，请重试。",
+            "repositories": "选择仓库",
+            "disconnect": "断开事件连接",
+            "connect": "连接 GitHub App"
           }
         },
         "unresolved": "{{count}} 条未解决的 review 评论",
@@ -16030,7 +16150,11 @@
             "payments": "付款",
             "checkout": "结账",
             "invoices": "账单",
-            "subscriptions": "订阅"
+            "subscriptions": "订阅",
+            "reviewComments": "评审评论",
+            "reviewThreads": "评审讨论",
+            "checkRuns": "检查运行",
+            "commitStatus": "提交状态"
           },
           "actions": {
             "all": "全部变化",
@@ -16052,7 +16176,12 @@
             "failed": "失败",
             "paid": "已支付"
           }
-        }
+        },
+        "repositoriesLabel": "仓库",
+        "repositoriesHint": "每行填写一个 owner/repository。只有已授权给此 GitHub App 的仓库才能触发任务。",
+        "repositoriesInvalid": "请填写 1–50 个有效的 owner/repository 仓库名称。",
+        "githubAppHint": "请在运行此任务的电脑上连接 GitHub App，并授权这些仓库，无需另设 Webhook 地址或密钥。",
+        "githubAppPaused": "此任务已暂停，事件不会启动它。"
       },
       "trigger": {
         "label": "触发方式",
@@ -16865,6 +16994,9 @@
       },
       "pluginCreator": {
         "description": "创建、修改、调试和打包 Cindy 插件，也可按需发布。"
+      },
+      "themeCreator": {
+        "description": "制作并验证 Cindy 的配色、素材和外观设置。"
       }
     },
     "common": {
@@ -17983,7 +18115,7 @@
     "exit": "退出计划模式"
   },
   "globalDrop": {
-    "cindyHint": "松开安装插件",
+    "cindyHint": "松开导入 Cindy 文件",
     "cshareHint": "松开导入分享的任务"
   },
   "sessionShare": {
@@ -20013,6 +20145,15 @@
     "lineNumbers": "行号"
   },
   "subscriptionAccounts": {
+    "loginIdentityUnknown": "无法确认此账号的原身份，请通过「添加账号」重新连接",
+    "loginExpiresInDays": "登录预计 {{days}} 天后到期",
+    "loginExpiresSoon": "登录即将到期",
+    "loginMayHaveExpired": "登录可能已到期",
+    "loginExpiryUnknown": "登录到期时间未知",
+    "loginExpiryDetail": "预计到期：{{date}}。这是 Claude 提供的估计时间，登录可能提前失效。",
+    "loginAccountAria": "重新登录 {{name}}",
+    "loginIdentityMismatchStatus": "登录账号不符",
+    "loginIdentityMismatch": "登录的账号与所选账号不一致。请重新登录，选择列表中的这个账号。",
     "unassigned": "账号待分配",
     "boundUnavailable": "账号已不可用",
     "providerManagedAuth": "Codex 当前供应商未提供 ChatGPT 账号信息。请在添加供应商时选择「$t(subscriptionAccounts.signIn.anotherAccount)」，使用独立目录",
@@ -20093,6 +20234,13 @@
     "detail": "请求来自「{{device}}」\n用途：{{purpose}}\n\n开启后，同账号设备可以远程控制这台电脑，包括运行任务和访问文件。此设置持续有效，可随时在设置中关闭。",
     "decline": "暂不开启",
     "enable": "开启远程控制"
+  },
+  "cindyFiles": {
+    "unsupported": "当前版本不支持此文件，请更新 Cindy 后重试",
+    "invalid": "此 Cindy 文件无效或已损坏，请重新获取文件",
+    "failed": "未能导入此文件，请重试",
+    "themeInstalled": "主题已加入列表，请在外观设置中选择",
+    "refreshFailed": "主题已装入，但列表未能刷新，请在外观设置中刷新"
   },
   "modelGroups": {
     "title": "模型组",

@@ -178,7 +178,22 @@ export function RemoteControlSection() {
           <SettingsCard id={remoteControlSettings.v2.targetId}>
             <SettingsRow
               title={t(remoteControlSettings.v2.titleKey)}
-              hint={t(remoteControlSettings.v2.descriptionKey)}
+              hint={
+                v2.changedBy && v2.changedBy.enabled === v2.enabled ? (
+                  <>
+                    {t(remoteControlSettings.v2.descriptionKey)}
+                    {/* 原型:别的设备远程改了这个开关时，写明是谁、几点(agent-net.md「远程切换其他电脑的连接方式」) */}
+                    <span className="mt-1 block text-[var(--text-secondary)]">
+                      {t(v2.changedBy.enabled ? 'settings.remoteControl.v2.peerSwitch.changedBy.on' : 'settings.remoteControl.v2.peerSwitch.changedBy.off', {
+                        name: v2.changedBy.deviceName,
+                        time: new Date(v2.changedBy.at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
+                      })}
+                    </span>
+                  </>
+                ) : (
+                  t(remoteControlSettings.v2.descriptionKey)
+                )
+              }
               trailing={
                 <Switch
                   data-setting-id={remoteControlSettings.v2.id}

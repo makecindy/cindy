@@ -1312,6 +1312,8 @@
     "handoffWindow": "代書 · {{app}}"
   },
   "ipcError": {
+    "SUBSCRIPTION_CLAUDE_IDENTITY_UNKNOWN": "$t(subscriptionAccounts.loginIdentityUnknown)",
+    "SUBSCRIPTION_CLAUDE_ACCOUNT_MISMATCH": "$t(subscriptionAccounts.loginIdentityMismatch)",
     "SSH_HARNESS_SWITCH_UNSUPPORTED": "此 SSH 差事暫不支援易 Harness。請擇今 Harness 下之模型，或以所需 Harness 新立 SSH 差事。",
     "MODEL_SELECTION_UNAVAILABLE": "所擇模型於此供方下已不可用。請於規制中察連線，或另擇可用之模型。",
     "HARNESS_SWITCH_NOT_READY": "Harness 尚未易畢。請察錯誤詳情，俟 Harness 就緒而後再試。",
@@ -2144,7 +2146,16 @@
       },
       "sidebarAndPanels": "側欄與面板",
       "themeLabel": "格調",
+      "createTheme": {
+        "label": "製格調",
+        "hint": "述風格或附參考圖，以製整套外觀",
+        "prompt": "為我製可分享之 Cindy 格調包，預覽並驗其效。所欲風格為：",
+        "unavailable": "製作格調之技藝不可用，請於技藝中檢查是否啟用",
+        "startFailed": "未能開啟製作格調之差事"
+      },
       "themeAriaLabel": "擇主題",
+      "themeApplyFailed": "主題未能施用，原有外觀不改",
+      "themeFontFailed": "主題字體未能載入，仍用預設字體",
       "localBadge": "(此機)",
       "localThemes": {
         "title": "此機格調",
@@ -6735,7 +6746,106 @@
           "deviceLink": "Device Link"
         },
         "onlyEncrypted": "唯用 Agent-Net",
-        "onlyEncryptedHint": "啟之則舊版裝置及仍循舊路之分享不可用。預設關閉。"
+        "onlyEncryptedHint": "啟之則舊版裝置及仍循舊路之分享不可用。預設關閉。",
+        "peerSwitch": {
+          "row": {
+            "toAgentNet": "方轉 Agent-Net…",
+            "toDeviceLink": "方返 Device Link…"
+          },
+          "status": {
+            "toAgentNet": "方轉 Agent-Net",
+            "toDeviceLink": "方返 Device Link"
+          },
+          "reconnecting": "重連中",
+          "toAgentNet": "轉用 Agent-Net",
+          "toDeviceLink": "返用 Device Link",
+          "retry": "再試",
+          "hint": "轉之，則與彼之連接施端間加密。彼六十秒內未復連，則自返 Device Link。",
+          "steps": {
+            "request": {
+              "agentNet": "請彼啟 Agent-Net",
+              "deviceLink": "請彼閉 Agent-Net"
+            },
+            "reconnect": "彼重連",
+            "confirm": {
+              "agentNet": "候彼經 Agent-Net 復連",
+              "deviceLink": "候彼經 Device Link 復連"
+            },
+            "revert": "六十秒內未復連，方返 Device Link"
+          },
+          "closeHint": "可先閉此卡，成否另行告知。",
+          "reverted": "未成：六十秒內未經 Agent-Net 復連，已自返 Device Link。",
+          "unsupported": "彼之 Cindy 版舊，未能於此轉之。於彼機更新 Cindy 後再試。",
+          "done": {
+            "toAgentNet": "已轉 Agent-Net，連接施端間加密。",
+            "toDeviceLink": "已返 Device Link。"
+          },
+          "blocked": {
+            "mobile": "手機不受遠控，請於此手機自啟 Agent-Net。",
+            "peer-control-off": "彼未啟「許同帳號設備控制本機」，須於彼機轉之。",
+            "control-off": "此機已閉對彼之控制，啟之方可於此轉之。"
+          },
+          "toast": {
+            "toAgentNet": "「{{name}}」已轉 Agent-Net",
+            "toDeviceLink": "「{{name}}」已返 Device Link",
+            "reverted": "「{{name}}」未成，已自返 Device Link",
+            "unsupported": "「{{name}}」之 Cindy 版舊，未能遠轉",
+            "not-ready": "「{{name}}」今不能啟 Agent-Net",
+            "busy": "「{{name}}」方理他轉，稍後再試",
+            "failed": "「{{name}}」未能轉接",
+            "encryption-required": "須先於「{{name}}」解「唯用 Agent-Net」之限，乃可返",
+            "controller-encryption-required": "須先解本機「唯用 Agent-Net」之限，乃可使「{{name}}」返",
+            "agent-net-only-relay": "「{{name}}」之連線唯通 Agent-Net，不可返 Device Link"
+          },
+          "checking": "方詢彼能轉與否…",
+          "notReady": {
+            "not-signed-in": "彼未登 Cindy，登之方可啟 Agent-Net。",
+            "secure-storage": "彼機之系統安全存儲不可用，不能啟 Agent-Net。須於彼機處之。",
+            "relay-identity": "對方尚未設定此中轉之 Agent-Net 連線，須先於彼機設定。"
+          },
+          "batch": {
+            "toAgentNet": "盡轉 Agent-Net",
+            "toDeviceLink": "盡返 Device Link",
+            "confirmTitleAgentNet": "將此諸機轉用 Agent-Net 乎？",
+            "confirmTitleDeviceLink": "將此諸機返用 Device Link 乎？",
+            "ready": "可轉",
+            "checking": "詢問中",
+            "skipReason": {
+              "unsupported": "須更新 Cindy",
+              "not-ready": "今不能啟 Agent-Net",
+              "unreachable": "暫詢不至",
+              "encryption-required": "唯用 Agent-Net",
+              "controller-encryption-required": "本機唯用 Agent-Net",
+              "agent-net-only-relay": "網絡唯通 Agent-Net"
+            },
+            "canaryNote": "先轉首機，驗其復連，乃並轉其餘。各機六十秒內未復連者皆自返。",
+            "rollbackNote": "返後連線不復端到端加密。已選「唯用 Agent-Net」之機，須先於本機解此限。",
+            "run": "轉 {{count}} 機",
+            "cancel": "取消",
+            "close": "畢",
+            "state": {
+              "waiting": "候",
+              "running": "轉中",
+              "done": "已轉",
+              "reverted": "已自返",
+              "skipped": "未轉",
+              "failed": "未成"
+            },
+            "stopped": "首機未成，其餘未轉。",
+            "finished": "已轉 {{done}} 機",
+            "finishedWithRevert": "已轉 {{done}} 機，{{reverted}} 機未成"
+          },
+          "changedBy": {
+            "on": "「{{name}}」於 {{time}} 遠啟之",
+            "off": "「{{name}}」於 {{time}} 遠閉之"
+          },
+          "unreachable": "此次未詢至彼機，稍後再啟此卡試之。",
+          "encryptionRequired": "彼機已選「唯用 Agent-Net」。須先於彼機解此限，乃可返 Device Link。",
+          "disableBlocked": {
+            "controller-encryption-required": "本機已選「唯用 Agent-Net」。須先於本機解此限，乃可使彼機返 Device Link。",
+            "agent-net-only-relay": "此連線之網絡唯通 Agent-Net，不可返 Device Link。須先改用支援 Device Link 之線路。"
+          }
+        }
       }
     },
     "tina": {
@@ -15296,6 +15406,16 @@
             "recheck": "察連線",
             "summary": "掌 GitHub 儲存庫、Issues、PR 與 Actions。",
             "otherMethods": "他種連線之法"
+          },
+          "app": {
+            "title": "倉庫之變",
+            "description": "連 Cindy GitHub App，評審或 CI 有變，則更新所隨之 PR。",
+            "connected": "已連 {{login}} · 所察倉庫 {{count}} 個",
+            "missing": "請核此倉之 App 安裝及存取權限：{{repositories}}",
+            "error": "未能驗其連接，請重試。",
+            "repositories": "擇倉庫",
+            "disconnect": "斷事件之連",
+            "connect": "連 GitHub App"
           }
         },
         "unresolved": "{{count}} 條未決之 review 評論",
@@ -16030,7 +16150,11 @@
             "payments": "付款",
             "checkout": "結帳",
             "invoices": "帳單",
-            "subscriptions": "訂閱"
+            "subscriptions": "訂閱",
+            "reviewComments": "評審留言",
+            "reviewThreads": "評審議論",
+            "checkRuns": "檢查運行",
+            "commitStatus": "提交狀態"
           },
           "actions": {
             "all": "全部變化",
@@ -16052,7 +16176,12 @@
             "failed": "失敗",
             "paid": "已付款"
           }
-        }
+        },
+        "repositoriesLabel": "倉庫",
+        "repositoriesHint": "每行一 owner/repository。倉庫須授權予此 GitHub App，方能啟動任務。",
+        "repositoriesInvalid": "請填一至五十個有效之 owner/repository 倉庫名。",
+        "githubAppHint": "於執行此任務之電腦連接 GitHub App，授權所列倉庫，無須另設 Webhook 位址或金鑰。",
+        "githubAppPaused": "任務已暫停，事件不啟之。"
       },
       "trigger": {
         "label": "觸發方式",
@@ -16865,6 +16994,9 @@
       },
       "pluginCreator": {
         "description": "立、修、偵錯並打包 Cindy 法器，亦可依需發布。"
+      },
+      "themeCreator": {
+        "description": "為 Cindy 製配色、圖材與外觀設定，並驗之。"
       }
     },
     "common": {
@@ -17983,7 +18115,7 @@
     "exit": "出謀定模式"
   },
   "globalDrop": {
-    "cindyHint": "鬆手納法器",
+    "cindyHint": "鬆手納 Cindy 卷",
     "cshareHint": "鬆手納所分享之差事"
   },
   "sessionShare": {
@@ -20013,6 +20145,15 @@
     }
   },
   "subscriptionAccounts": {
+    "loginIdentityUnknown": "無法確認此帳號的原身分，請透過「新增帳號」重新連線",
+    "loginExpiresInDays": "登入約 {{days}} 日後期滿",
+    "loginExpiresSoon": "登入將屆期",
+    "loginMayHaveExpired": "登入或已期滿",
+    "loginExpiryUnknown": "登入期限未詳",
+    "loginExpiryDetail": "約於 {{date}} 期滿。此為 Claude 估期，亦或先失效。",
+    "loginAccountAria": "重登 {{name}}",
+    "loginIdentityMismatchStatus": "登入帳號不符",
+    "loginIdentityMismatch": "所登非所選帳號。請重登，選此列所示帳號。",
     "unassigned": "帳號待定",
     "boundUnavailable": "帳號已不可用",
     "providerManagedAuth": "Codex 目前供方未提供 ChatGPT 帳號資訊。請於新增供方時選「$t(subscriptionAccounts.signIn.anotherAccount)」，另用獨立目錄",
@@ -20093,6 +20234,13 @@
     "detail": "請求來自「{{device}}」\n所為：{{purpose}}\n\n啟用後，同帳號裝置可遠控此機，執行任務、存取檔案。此設長效，可隨時於設定中關閉。",
     "decline": "暫不開啟",
     "enable": "開啟遠端控制"
+  },
+  "cindyFiles": {
+    "unsupported": "此版本不支援此卷，請更新 Cindy 後再試",
+    "invalid": "此 Cindy 卷無效或已損壞，請重新取得",
+    "failed": "此卷未能納入，請再試",
+    "themeInstalled": "主題已入列，請於外觀規制中選用",
+    "refreshFailed": "主題已裝入，清單未能更新，請於外觀規制中重新整理"
   },
   "modelGroups": {
     "title": "模型組",

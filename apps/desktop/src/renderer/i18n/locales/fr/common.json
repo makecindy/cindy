@@ -1343,6 +1343,8 @@
     "idleMinutes_many": "{{count}} minutes"
   },
   "ipcError": {
+    "SUBSCRIPTION_CLAUDE_IDENTITY_UNKNOWN": "$t(subscriptionAccounts.loginIdentityUnknown)",
+    "SUBSCRIPTION_CLAUDE_ACCOUNT_MISMATCH": "$t(subscriptionAccounts.loginIdentityMismatch)",
     "SSH_HARNESS_SWITCH_UNSUPPORTED": "Cette tâche SSH ne peut pas changer de Harness. Choisissez un modèle dans son Harness actuel, ou créez une nouvelle tâche SSH avec le Harness souhaité.",
     "MODEL_SELECTION_UNAVAILABLE": "Le modèle sélectionné n'est plus disponible auprès de son fournisseur. Vérifiez la connexion dans les Paramètres ou choisissez un autre modèle disponible.",
     "HARNESS_SWITCH_NOT_READY": "Le changement de Harness n'est pas prêt. Consultez le détail de l'erreur et réessayez une fois le Harness prêt.",
@@ -2212,7 +2214,16 @@
       },
       "sidebarAndPanels": "Barre latérale et panneaux",
       "themeLabel": "Thème",
+      "createTheme": {
+        "label": "Créer un thème",
+        "hint": "Décrivez un style ou ajoutez une image de référence pour personnaliser l’apparence de Cindy.",
+        "prompt": "Aide-moi à créer un paquet de thème Cindy à partager, avec aperçu et vérification. Le style que je souhaite est :",
+        "unavailable": "Le skill de création de thèmes est indisponible. Vérifiez s’il est activé dans les skills.",
+        "startFailed": "Impossible d’ouvrir la tâche de création de thème"
+      },
       "themeAriaLabel": "Sélection du thème",
+      "themeApplyFailed": "Impossible d’appliquer ce thème. L’apparence actuelle est conservée.",
+      "themeFontFailed": "Impossible de charger la police du thème. La police par défaut est utilisée.",
       "localBadge": "(Local)",
       "localThemes": {
         "title": "Thèmes locaux",
@@ -6845,7 +6856,106 @@
           "deviceLink": "Device Link"
         },
         "onlyEncrypted": "Utiliser uniquement Agent-Net",
-        "onlyEncryptedHint": "Les anciens appareils et les partages utilisant encore l’ancienne connexion seront indisponibles. Désactivé par défaut."
+        "onlyEncryptedHint": "Les anciens appareils et les partages utilisant encore l’ancienne connexion seront indisponibles. Désactivé par défaut.",
+        "peerSwitch": {
+          "row": {
+            "toAgentNet": "Passage à Agent-Net…",
+            "toDeviceLink": "Retour à Device Link…"
+          },
+          "status": {
+            "toAgentNet": "Passage à Agent-Net",
+            "toDeviceLink": "Retour à Device Link"
+          },
+          "reconnecting": "Reconnexion",
+          "toAgentNet": "Passer à Agent-Net",
+          "toDeviceLink": "Revenir à Device Link",
+          "retry": "Réessayer",
+          "hint": "La connexion avec cet appareil devient chiffrée de bout en bout. S’il ne se reconnecte pas dans les 60 secondes, il revient à Device Link.",
+          "steps": {
+            "request": {
+              "agentNet": "Demande d’activation d’Agent-Net",
+              "deviceLink": "Demande de désactivation d’Agent-Net"
+            },
+            "reconnect": "Reconnexion de l’appareil",
+            "confirm": {
+              "agentNet": "En attente de reconnexion via Agent-Net",
+              "deviceLink": "En attente de reconnexion via Device Link"
+            },
+            "revert": "Pas de reconnexion en 60 secondes, retour à Device Link"
+          },
+          "closeHint": "Vous pouvez fermer cette carte ; le résultat vous sera indiqué.",
+          "reverted": "Échec du passage : pas de reconnexion via Agent-Net dans les 60 secondes, retour à Device Link.",
+          "unsupported": "Cet ordinateur utilise une ancienne version de Cindy qui ne peut pas être basculée d’ici. Mettez Cindy à jour sur cet ordinateur puis réessayez.",
+          "done": {
+            "toAgentNet": "Passé à Agent-Net. La connexion est chiffrée de bout en bout.",
+            "toDeviceLink": "Revenu à Device Link."
+          },
+          "blocked": {
+            "mobile": "Les téléphones ne peuvent pas être contrôlés à distance. Activez Agent-Net directement sur le téléphone.",
+            "peer-control-off": "Cet appareil n’autorise pas le contrôle par les appareils de votre compte. Basculez-le sur cet ordinateur.",
+            "control-off": "Vous avez désactivé son contrôle sur cet ordinateur. Réactivez-le pour basculer d’ici."
+          },
+          "toast": {
+            "toAgentNet": "« {{name}} » est passé à Agent-Net",
+            "toDeviceLink": "« {{name}} » est revenu à Device Link",
+            "reverted": "« {{name}} » n’a pas basculé et est revenu à Device Link",
+            "unsupported": "« {{name}} » utilise une ancienne version de Cindy et ne peut pas être basculé à distance",
+            "not-ready": "« {{name}} » ne peut pas activer Agent-Net pour le moment",
+            "busy": "« {{name}} » traite un autre changement. Réessayez dans un instant.",
+            "failed": "Impossible de basculer « {{name}} ».",
+            "encryption-required": "Désactivez « Utiliser uniquement Agent-Net » sur « {{name}} » avant de revenir",
+            "controller-encryption-required": "Désactivez « Utiliser uniquement Agent-Net » ici avant de remettre « {{name}} » sur Device Link",
+            "agent-net-only-relay": "La connexion à « {{name}} » prend uniquement en charge Agent-Net et ne peut pas revenir à Device Link"
+          },
+          "checking": "Vérification de la possibilité de basculer…",
+          "notReady": {
+            "not-signed-in": "Cet appareil n’est pas connecté à Cindy. Il pourra activer Agent-Net après connexion.",
+            "secure-storage": "Le stockage sécurisé est indisponible sur cet ordinateur, Agent-Net ne peut pas être activé. Corrigez-le sur cet ordinateur.",
+            "relay-identity": "Cet ordinateur n’a pas encore configuré Agent-Net pour son relais actuel. Configurez-le d’abord sur cet ordinateur."
+          },
+          "batch": {
+            "toAgentNet": "Tout passer à Agent-Net",
+            "toDeviceLink": "Tout revenir à Device Link",
+            "confirmTitleAgentNet": "Passer ces ordinateurs à Agent-Net ?",
+            "confirmTitleDeviceLink": "Revenir à Device Link sur ces ordinateurs ?",
+            "ready": "Prêt",
+            "checking": "Vérification",
+            "skipReason": {
+              "unsupported": "Mise à jour de Cindy requise",
+              "not-ready": "Agent-Net impossible pour le moment",
+              "unreachable": "Injoignable pour le moment",
+              "encryption-required": "Utiliser uniquement Agent-Net",
+              "controller-encryption-required": "Agent-Net uniquement ici",
+              "agent-net-only-relay": "Réseau Agent-Net uniquement"
+            },
+            "canaryNote": "Un premier ordinateur bascule d’abord ; les autres suivent une fois qu’il est reconnecté. Tout ordinateur qui ne se reconnecte pas dans les 60 secondes revient de lui-même.",
+            "rollbackNote": "Le retour supprime le chiffrement de bout en bout. Les ordinateurs qui utilisent uniquement Agent-Net doivent d’abord désactiver cette restriction localement.",
+            "run": "Basculer {{count}}",
+            "cancel": "Annuler",
+            "close": "Terminé",
+            "state": {
+              "waiting": "En attente",
+              "running": "En cours",
+              "done": "Basculé",
+              "reverted": "Revenu",
+              "skipped": "Non basculé",
+              "failed": "Non basculé"
+            },
+            "stopped": "Le premier ordinateur n’a pas basculé, les autres sont restés inchangés.",
+            "finished": "{{done}} basculé(s)",
+            "finishedWithRevert": "{{done}} basculé(s), {{reverted}} non basculé(s)"
+          },
+          "changedBy": {
+            "on": "Activé à distance par « {{name}} » à {{time}}",
+            "off": "Désactivé à distance par « {{name}} » à {{time}}"
+          },
+          "unreachable": "Impossible de joindre cet ordinateur cette fois. Rouvrez la carte plus tard.",
+          "encryptionRequired": "Cet ordinateur utilise uniquement Agent-Net. Désactivez « Utiliser uniquement Agent-Net » sur cet ordinateur avant de revenir à Device Link.",
+          "disableBlocked": {
+            "controller-encryption-required": "Cet ordinateur a activé « Utiliser uniquement Agent-Net ». Désactivez cette option ici avant de remettre l’autre ordinateur sur Device Link.",
+            "agent-net-only-relay": "Cette connexion utilise un réseau qui prend uniquement en charge Agent-Net. Choisissez un itinéraire compatible avec Device Link avant de revenir."
+          }
+        }
       }
     },
     "tina": {
@@ -15508,6 +15618,16 @@
             "recheck": "Vérifier la connexion",
             "summary": "Gérez les dépôts, issues, pull requests et Actions GitHub.",
             "otherMethods": "Autres méthodes de connexion"
+          },
+          "app": {
+            "title": "Événements des dépôts",
+            "description": "Connectez la GitHub App de Cindy pour actualiser les PR suivies lorsque les revues ou la CI changent.",
+            "connected": "Connecté en tant que {{login}} · Dépôts suivis : {{count}}",
+            "missing": "Vérifiez l’installation de l’App et les droits d’accès à : {{repositories}}",
+            "error": "Impossible de vérifier la connexion. Réessayez.",
+            "repositories": "Choisir les dépôts",
+            "disconnect": "Déconnecter les événements",
+            "connect": "Connecter GitHub App"
           }
         },
         "unresolved": "Fils de revue non résolus : {{count}}",
@@ -16245,7 +16365,11 @@
             "payments": "Paiements",
             "checkout": "Passage en caisse",
             "invoices": "Factures",
-            "subscriptions": "Abonnements"
+            "subscriptions": "Abonnements",
+            "reviewComments": "Commentaires de revue",
+            "reviewThreads": "Discussions de revue",
+            "checkRuns": "Exécutions de vérification",
+            "commitStatus": "État du commit"
           },
           "actions": {
             "all": "Tous les changements",
@@ -16267,7 +16391,12 @@
             "failed": "Échec",
             "paid": "Paiement effectué"
           }
-        }
+        },
+        "repositoriesLabel": "Dépôts",
+        "repositoriesHint": "Saisissez owner/repository, un par ligne. Seuls les dépôts autorisés pour cette GitHub App peuvent déclencher la tâche.",
+        "repositoriesInvalid": "Saisissez 1 à 50 noms de dépôts valides au format owner/repository.",
+        "githubAppHint": "Connectez GitHub App sur l’ordinateur qui exécute cette tâche et autorisez ces dépôts. Aucune URL Webhook ni clé secrète distincte n’est nécessaire.",
+        "githubAppPaused": "Cette tâche est en pause. Les événements ne la démarreront pas."
       },
       "trigger": {
         "label": "Mode de déclenchement",
@@ -17086,6 +17215,9 @@
       },
       "pluginCreator": {
         "description": "Créer, modifier, déboguer et empaqueter des plugins Cindy, ou les publier sur demande."
+      },
+      "themeCreator": {
+        "description": "Créer et vérifier les couleurs, les ressources visuelles et les réglages d’apparence de Cindy."
       }
     },
     "common": {
@@ -18218,7 +18350,7 @@
     "exit": "Quitter le mode plan"
   },
   "globalDrop": {
-    "cindyHint": "Déposer pour installer le plugin",
+    "cindyHint": "Déposer pour importer le fichier Cindy",
     "cshareHint": "Déposer pour importer la session partagée"
   },
   "sessionShare": {
@@ -20272,6 +20404,15 @@
     "lineNumbers": "Numéros de ligne"
   },
   "subscriptionAccounts": {
+    "loginIdentityUnknown": "L’identité d’origine de ce compte est inconnue. Utilisez Ajouter un compte pour connecter un nouveau compte.",
+    "loginExpiresInDays": "Connexion valable encore environ {{days}} jours",
+    "loginExpiresSoon": "La connexion expire bientôt",
+    "loginMayHaveExpired": "La connexion a peut-être expiré",
+    "loginExpiryUnknown": "Expiration de la connexion inconnue",
+    "loginExpiryDetail": "Expiration estimée : {{date}}. Cette estimation provient de Claude ; la connexion peut expirer plus tôt.",
+    "loginAccountAria": "Se reconnecter à {{name}}",
+    "loginIdentityMismatchStatus": "Le compte ne correspond pas",
+    "loginIdentityMismatch": "Vous avez utilisé un autre compte. Reconnectez-vous avec le compte affiché sur cette ligne.",
     "unassigned": "Compte non attribué",
     "boundUnavailable": "Compte indisponible",
     "providerManagedAuth": "Le fournisseur actuel de Codex ne permet pas de consulter le compte ChatGPT. Lors de l’ajout du fournisseur, choisissez « $t(subscriptionAccounts.signIn.anotherAccount) » pour utiliser un dossier séparé.",
@@ -20352,6 +20493,13 @@
     "detail": "Demande de {{device}}\nMotif : {{purpose}}\n\nLes appareils de votre compte pourront contrôler cet ordinateur, exécuter des tâches et accéder aux fichiers. Ce réglage reste actif jusqu’à sa désactivation dans les paramètres.",
     "decline": "Pas maintenant",
     "enable": "Activer le contrôle à distance"
+  },
+  "cindyFiles": {
+    "unsupported": "Cette version ne prend pas en charge ce fichier. Mets Cindy à jour et réessaie.",
+    "invalid": "Ce fichier Cindy est invalide ou endommagé. Obtiens une nouvelle copie.",
+    "failed": "Impossible d’importer ce fichier. Réessaie.",
+    "themeInstalled": "Thème ajouté. Sélectionne-le dans les paramètres d’apparence.",
+    "refreshFailed": "Le thème est installé, mais la liste n’a pas pu être actualisée. Actualise-la dans les paramètres d’apparence."
   },
   "modelGroups": {
     "title": "Groupes de modèles",
