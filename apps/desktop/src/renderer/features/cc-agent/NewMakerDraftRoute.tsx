@@ -4006,6 +4006,8 @@ export function NewMakerDraftRoute() {
             deviceId: routedTo
               ? modelCatalogKey(routeAgentDeviceId ?? effectiveDeviceLinkDeviceId, controlledModelRoute.catalogHostDeviceId)
               : catalogDeviceId,
+            // SSH 任务在远端主机运行;只有此时才带上主机,其余调用保持原参数。
+            ...(isRemoteProjectDraft && effectiveRemoteHostId ? { remoteHostId: effectiveRemoteHostId } : {}),
           });
           if (isDeviceLinkDraft && !isCurrentDataOwner()) return;
           if (!proceed) return;
@@ -5275,6 +5277,8 @@ export function NewMakerDraftRoute() {
           deviceId: routedTo
             ? modelCatalogKey(routeAgentDeviceId ?? effectiveDeviceLinkDeviceId, controlledModelRoute.catalogHostDeviceId)
             : catalogDeviceId,
+          // SSH 任务在远端主机运行;只有此时才带上主机,其余调用保持原参数。
+          ...(isRemoteProjectDraft && effectiveRemoteHostId ? { remoteHostId: effectiveRemoteHostId } : {}),
         });
         if (!proceed) return; // 用户取消授权:弹窗关闭即可,不算错误。
         if (isDeviceLinkDraft) {
