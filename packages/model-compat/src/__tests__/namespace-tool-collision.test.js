@@ -218,4 +218,33 @@ describe("namespace tool wire-name collisions", () => {
             input: "echo child",
         });
     });
+
+    // Function-argument repair indexes its catalog by wire name. A displaced child answers to the
+    // allocated name, so the catalog has to record it there; otherwise the ambiguous preferred name
+    // makes repair skip both declarations.
+    test("repairs function arguments for both the bare tool and the displaced child", () => {
+        const parameters = { type: "object", properties: { line: { type: "integer" } } };
+        const body = {
+            tools: [
+                { type: "function", name: "workspace__read", parameters },
+                { type: "namespace", name: "workspace", tools: [{ type: "function", name: "read", parameters }] },
+            ],
+        };
+        const prepared = prepareResponsesCompatibility(body, {
+            customTools: "functions",
+            namespaceTools: "functions",
+            repairFunctionArguments: true,
+        });
+        const child = JSON.stringify({ type: "response.completed", response: { status: "completed", output: [{ type: "function_call", name: "workspace__read_2", call_id: "call_child", arguments: '{"line":12.0}' }] } });
+        expect(JSON.parse(prepared.restoreJson(child)).response.output[0]).toMatchObject({
+            name: "read",
+            namespace: "workspace",
+            arguments: '{"line":12}',
+        });
+        const bare = JSON.stringify({ type: "response.completed", response: { status: "completed", output: [{ type: "function_call", name: "workspace__read", call_id: "call_bare", arguments: '{"line":3.0}' }] } });
+        expect(JSON.parse(prepared.restoreJson(bare)).response.output[0]).toMatchObject({
+            name: "workspace__read",
+            arguments: '{"line":3}',
+        });
+    });
 });

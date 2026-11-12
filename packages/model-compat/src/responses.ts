@@ -113,7 +113,7 @@ export function prepareResponsesCompatibility(body: unknown, policy: ResponsesCo
       if (policy.contentChannelReasoning) next = rewriteReasoningSummaryInJsonString(next);
       next = restoreRoutedCustomCallsInJson(next, custom.names, custom.repairNames, declared, displacement);
       next = restoreRoutedToolSearchCallsInJson(next, search.names);
-      next = repairFunctionCallsInJson(next, schemas);
+      next = repairFunctionCallsInJson(next, schemas, namespace.renamedWireNames);
       return policy.backfillResponseFields ? backfillResponsesFieldsJson(next) : next;
     },
     createStreamRewrite() {
@@ -123,7 +123,7 @@ export function prepareResponsesCompatibility(body: unknown, policy: ResponsesCo
         payloadRewriteAsBlockRewrite(restoreNamespace),
         createRoutedCustomToolRestoreBlockRewrite(custom.names, budget, custom.repairNames, declared, displacement),
         createRoutedToolSearchRestoreBlockRewrite(search.names, budget),
-        createResponsesFunctionToolRepairBlockRewrite(schemas, budget),
+        createResponsesFunctionToolRepairBlockRewrite(schemas, budget, namespace.renamedWireNames),
       ];
       // Transport/id reconstruction precedes tool completion; all stages share one budget.
       const before: SseBlockRewrite[] = [];
