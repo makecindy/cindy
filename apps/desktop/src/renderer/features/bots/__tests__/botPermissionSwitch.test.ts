@@ -37,7 +37,7 @@ function fixture() {
     log: { warn: vi.fn() }, toast: { error },
   };
   const change = new Function(...Object.keys(env), `${compiled}; return handle;`)(...Object.values(env)) as
-    (mode: string) => Promise<void>;
+    (mode: string, options?: { confirmFullAccess?: boolean }) => Promise<void>;
   return { runtime, persist, changed, confirm, error, change };
 }
 
@@ -85,12 +85,20 @@ describe('companion canonical task uses the standard live permission switch', ()
     },
   );
 
-  it('requires explicit confirmation before enabling full access', async () => {
+  it('selecting full access directly does not ask again', async () => {
+    const f = fixture();
+    await f.change('bypassPermissions');
+    expect(f.confirm).not.toHaveBeenCalled();
+    expect(f.runtime).toHaveBeenCalledWith('bot-canonical', 'bypassPermissions');
+    expect(f.changed).toHaveBeenCalledWith('bypassPermissions');
+  });
+
+  it('requires explicit confirmation before the keyboard shortcut enables full access', async () => {
     const f = fixture();
     f.confirm.mockResolvedValueOnce(false);
-    await f.change('bypassPermissions');
+    await f.change('bypassPermissions', { confirmFullAccess: true });
     expect(f.runtime).not.toHaveBeenCalled();
-    await f.change('bypassPermissions');
+    await f.change('bypassPermissions', { confirmFullAccess: true });
     expect(f.runtime).toHaveBeenCalledWith('bot-canonical', 'bypassPermissions');
     expect(f.changed).toHaveBeenCalledWith('bypassPermissions');
   });

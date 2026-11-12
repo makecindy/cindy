@@ -867,6 +867,7 @@
       "assignLocalAria": "允许 {{name}} 接收外部新任务",
       "moreAria": "{{name}} 的更多操作",
       "remove": "移出组",
+      "removeLocalBlocked": "组所在的电脑不能移出组",
       "status": {
         "checking": "正在检查…",
         "idle": "空闲",
@@ -12579,47 +12580,47 @@
         "claude-code": {
           "ask": {
             "label": "默认权限",
-            "description": "允许在工作区内读写；需要更高权限、联网或访问工作区外路径时再询问。"
+            "description": "操作按需由你审批。"
           },
           "acceptEdits": {
             "label": "允许编辑",
-            "description": "自动接受文件编辑请求，减少反复确认；涉及更高风险的命令或权限仍按底层权限策略处理。"
+            "description": "文件编辑直接允许，其他操作按需由你审批。"
           },
           "auto": {
             "label": "自动审批",
-            "description": "允许在工作区内读写，并自动审批提权请求；高风险操作可能被拒绝或要求确认。能减少打断，但存在误判风险。"
+            "description": "操作由 AI 模型审批，可能需要额外等待；必要时由你确认。"
           },
           "bypassPermissions": {
             "label": "完全访问",
-            "description": "允许修改任意文件并运行联网命令，无需再次确认。风险最高，只适合可信任务。"
+            "description": "常规操作直接允许，可访问工作区外文件和联网执行命令。"
           }
         },
         "codex": {
           "ask": {
             "label": "默认权限",
-            "description": "允许在工作区内读写；需要更高权限、联网或访问工作区外路径时再询问。"
+            "description": "操作按需由你审批。"
           },
           "auto": {
             "label": "自动审批",
-            "description": "在受保护的工作区沙箱内自动执行命令；需要越过沙箱边界的操作交给自动审查器判断，高风险操作可能被拒绝或要求确认。"
+            "description": "操作由 AI 模型审批，可能需要额外等待；必要时由你确认。"
           },
           "bypassPermissions": {
             "label": "完全访问",
-            "description": "允许修改任意文件并运行联网命令，无需再次确认。风险最高，只适合可信任务。"
+            "description": "常规操作直接允许，可访问工作区外文件和联网执行命令。"
           }
         },
         "pi": {
           "ask": {
             "label": "默认权限",
-            "description": "只读工具直接执行；写文件、跑命令和 MCP 工具每次都询问。"
+            "description": "操作按需由你审批。"
           },
           "auto": {
             "label": "自动审批",
-            "description": "工作区内写文件与安全命令自动执行；越界写、危险命令和 MCP 工具仍会询问。"
+            "description": "操作由 AI 模型审批，可能需要额外等待；必要时由你确认。"
           },
           "bypassPermissions": {
             "label": "完全访问",
-            "description": "允许修改任意文件并运行联网命令，无需再次确认。风险最高，只适合可信任务。"
+            "description": "常规操作直接允许，可访问工作区外文件和联网执行命令。"
           }
         }
       }
