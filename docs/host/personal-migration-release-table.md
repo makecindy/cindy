@@ -83,6 +83,7 @@
 | Git 保存点 | 用户仓库的 `refs/cindy/savepoints/<任务 id>` 及其对象，与桌面同名同位置 | 每个用户回合开始前与结束后 | m1-cp5e |
 | 空文件夹初始化为 Git 仓库 | 任务工作目录（`git init`），仅在用户开了「自动初始化项目 Git」时 | 每个用户回合开始前 | m1-cp5e |
 | Git 保存点对账删除 | 当前账号库里标记为已删除的任务在其仓库中的 `refs/cindy/savepoints/<任务 id>` | 账号库就绪后一次 | m1-cp5e |
+| Claude 托管 Skill 暂存目录 | 系统临时目录下的 `cindy-claude-skills-*`（maker-core `managed-skill-plugins.ts`）：每个插件一个目录，含 `plugin.json` 和指向批准来源的链接，不复制 Skill 内容 | 每次启动 Claude 任务且托管 Skill 清单非空时建；该次查询中止或启动失败时删除 | m1-cp6 |
 
 ## 四、移出 M1
 
@@ -104,6 +105,7 @@
 | e2e 用量计数开关（只在测试里生效） | 第 9 步 |
 | 通道清单重新生成（合并 main 后为 1466 个） | 在下一个确实需要的检查点提交，写明新增的 10 个通道及归类 |
 | 带界面的验证 | 用户已允许（隔离沙箱、复用 host-usage）；2e 之前客户端模式只做导航与读取 |
+| 负载下超时：`apps/desktop/src/main/maker-host/__tests__/authAdaptersImportPurity.test.ts` | main 上已有的测试，自带 20 秒超时。m1-cp6 把 cindy-brain、maker-host、plugin-market 三个目录一起跑时超时，单独跑 6 秒通过。不归本分支 |
 | 基线失败：`apps/desktop/src/main/maker-ipc/__tests__/botLifecycleService.test.ts` 10 项 | 报 `SqliteError: no such table: mcp_app_view_states`（`deleteDeletedSessionViewStates`）。对照方法：把本分支改过的桌面源码换回合并的 main 版本（7eaf7788de）、删掉新增模块后单跑该文件，同样 10 项失败，判为 main 上原有问题。合并 main 后若自行恢复，删掉这一行 |
 | 待定：随包插件在 Host 不标内置 | 桌面的 GhostManager 带 `isTrustedBundledId`（`resources/builtin-ghosts` 下 official、xd 两组种子的 id），根命名空间里的这些安装标 `builtin`；Host 的 `createHostGhostManager` 没有这个选项，任何安装都不标。后果：首方事实的内置官方分支在 Host 上不成立，随包插件按非内置判定（其 Skill 不标官方，依赖内置身份的首方特权被拒）。3c 之前就是这样；也因此 3c 的查找收紧在 Host 上实际只改变托管 Skill 清单。种子 id 从哪里来（Host 发布包不含 `builtin-ghosts`）需要方案，**迁移前必须有结论** |
 | 待确认：gray-matter 在 Host 发布包里的形态 | 外置：`apps/host/scripts/build.mjs` 把所有第三方包设为外部依赖，按导入方位置解析后整包拷进发布目录的 `node_modules`（解析到仓库根 `node_modules/gray-matter`）。3c 之前已有 5 个导入方在 Host 的加载范围里（maker-core 的 customization-scanner、pinned-skill-invocation、memory/storage，桌面 skillhub/frontmatterValidation、cindy-brain/skillSlot），3c 没有新增依赖。证据用构建脚本原样截取的依赖插件对 `apps/host/src/main.ts` 跑 esbuild 得出（完整构建缺本机 Chromium） |
