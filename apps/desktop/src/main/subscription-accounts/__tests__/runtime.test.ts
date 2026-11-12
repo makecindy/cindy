@@ -1324,6 +1324,47 @@ describe('native account assignment on the executing computer', () => {
       expect(await prepareSubscriptionAccountFailover('t', { ...deps, readSession: async () => ({ ...row, ...other }) })).toBe(false);
     }
   });
+  // Unit, shared-task login log: an executor may keep reporting a successful
+  // CLI snapshot. The remembered auth failure must still make the pool switch.
+  it('switches a Pi task after its selected-account login rejection', async () => {
+    const message = '[SUBSCRIPTION_ACCOUNT_LOGIN_REQUIRED] The task subscription account requires login';
+    h.pools.openai = { strategy: 'order', accounts: [account('default'), account('second')] };
+    const model = 'chatgpt/gpt-6.1-sol';
+    const lease = await acquireSubscriptionAccount('openai', model, []);
+    expect(lease!.accountId).toBe('default');
+    await lease!.bind(['task:pi-login', 'native:pi-old']);
+    expect(lease!.observeFailure({ message, sdkError: message }, model, 'run')).toBe(true);
+    lease!.release();
+    expect(h.writeCooling).toHaveBeenCalledWith(expect.objectContaining({ openai: {
+      default: { '': expect.any(Number) },
+    } }));
+    const row = { status: 'active', providerId: 'openai', agentKind: 'pi', model, sdkSessionId: 'pi-old' };
+    const rebuild = vi.fn(async () => undefined);
+    expect(await prepareSubscriptionAccountFailover('pi-login', { readSession: async () => row, isRunning: () => false, rebuild })).toBe(true);
+    expect(rebuild).toHaveBeenCalledOnce();
+    expect(h.bindings.get('task:pi-login')).toMatchObject({ accountId: 'second' });
+    expect(h.bindings.get('native:pi-old')).toMatchObject({ accountId: 'default' });
+  });
+
+  it('does not turn a request-time account read failure into a signed-out state', async () => {
+    vi.useFakeTimers();
+    let lease: Awaited<ReturnType<typeof acquireSubscriptionAccount>> = null;
+    try {
+      h.pools.openai = { strategy: 'order', accounts: [account('default')] };
+      lease = await acquireSubscriptionAccount('openai', 'chatgpt/gpt-6.1-sol', []);
+      h.read.mockRejectedValue(new Error('temporary CLI failure'));
+      await vi.advanceTimersByTimeAsync(30_001);
+      const failure = await lease!.account.readState().catch(error => error);
+      expect(failure).toBeInstanceOf(Error);
+      expect(failure.message).toBe('[SUBSCRIPTION_ACCOUNT_UNAVAILABLE] The task subscription account is unavailable');
+      expect(lease!.observeFailure(failure, 'chatgpt/gpt-6.1-sol', 'run')).toBe(true);
+      expect(h.writeCooling).not.toHaveBeenCalled();
+    } finally {
+      lease?.release();
+      vi.useRealTimers();
+    }
+  });
+
   it('moves a task off an account that remembers a real failure for its model', async () => {
     h.pools.anthropic!.accounts = [{ ...account('default'), limit: 4 }, { ...account('second'), limit: 4 }];
     const lease = await acquireSubscriptionAccount('anthropic', 'claude-sonnet', []);

@@ -1233,6 +1233,10 @@ export async function acquireSubscriptionAccount(
         assertCurrent();
         const result = await snapshot(state, provider, selected);
         assertCurrent();
+        // Preserve read failure evidence for request-time auth checks. A failed
+        // CLI read is not proof of logout and must not cool this account as auth.
+        if (result.unavailable)
+          throw new Error('[SUBSCRIPTION_ACCOUNT_UNAVAILABLE] The task subscription account is unavailable');
         return result.auth;
       },
       invalidateAuth: (reason, token) => {
