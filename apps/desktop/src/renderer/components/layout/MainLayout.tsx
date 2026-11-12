@@ -145,6 +145,7 @@ import { makeGenericNewMakerRouteState } from '@/features/cc-agent/lib/genericNe
 import { resolveSessionRoute } from '@/lib/orcaSessionIdentity';
 import { canonicalBotSessionId, ensureBotProfilesLoaded, getBotProfiles, useBotProfiles } from '@/features/bots/botStore';
 import { botRouteForOwnedSession, createSessionEntryNavigator, findBotProfileForSession, remoteBotRouteForSession, resolveBotRouteForSessionEntry } from '@/features/bots/botSessionOwners';
+import { createUserRevealMarker } from '@/layout/userRevealMarker';
 import { readRemoteBots } from '@/features/bots/useRemoteBots';
 import { useSessionEntryLocationCommits } from '@/features/bots/useSessionEntryLocationCommits';
 import { islandEntryRouteState, requestIslandEntryAlertDisposal } from '@/features/bots/islandEntryAlert';
@@ -362,7 +363,7 @@ export function MainLayout() {
   const rsbDetachedRef = useRef(rsbDetached);
   rsbDetachedRef.current = rsbDetached;
   // 跨任务的用户开栏手势：导航到目标任务后，那一次记忆恢复仍算用户触发。
-  const userRevealSessionRef = useRef<string | null>(null);
+  const userReveal = useMemo(() => createUserRevealMarker(), []);
   const navigateToSessionRef = useRef<(sessionId: string) => void>(() => undefined);
   const declareRightSidebarSessionId = useCallback(
     (sessionId: string | null, opts: RightSidebarSessionDeclarationOptions = {}) => {
@@ -378,7 +379,7 @@ export function MainLayout() {
       const nextCollapsed = hasInitialCollapsed
         ? opts.initialCollapsed === true
         : readCollapsedFor(sessionId);
-      setRightTabsUserToggle(userRevealSessionRef.current === sessionId);
+      setRightTabsUserToggle(userReveal.consume(sessionId));
       setIsRightSidebarCollapsed(nextCollapsed);
       setRightTabsRestored(true);
       if (hasInitialCollapsed && opts.writeInitialCollapsedRecord === true) {
@@ -1022,8 +1023,7 @@ export function MainLayout() {
   useLayoutEffect(() => {
     if (!rsbWindow.loaded || !rightSidebarSessionId || rsbDetached) return;
     // 跨任务用户开栏保留用户来源，其余切任务恢复都按导航处理；标记用完即清。
-    const reveal = userRevealSessionRef.current === rightSidebarSessionId;
-    if (reveal) userRevealSessionRef.current = null;
+    const reveal = userReveal.consume(rightSidebarSessionId);
     setRightTabsUserToggle(reveal);
     setIsRightSidebarCollapsed(readCollapsedFor(rightSidebarSessionId));
     setRightTabsRestored(true);
@@ -1090,7 +1090,7 @@ export function MainLayout() {
         // agent / 插件自动化(userInitiated:false)只落档,不抢当前输入焦点。
         writeCollapsedFor(targetSessionId, targetCollapsed);
         if (visibility === 'open' && opts.userInitiated !== false) {
-          userRevealSessionRef.current = targetSessionId;
+          userReveal.mark(targetSessionId);
           navigateToSessionRef.current?.(targetSessionId);
         }
       }

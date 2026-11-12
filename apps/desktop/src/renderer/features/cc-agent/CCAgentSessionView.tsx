@@ -3218,6 +3218,8 @@ function CCAgentSessionContent({
             focusWorkerSessionId,
             ...(workerSearchJump ? { searchJump: workerSearchJump } : {}),
             ...(shouldFirstFrameRevealOrcaWorkers ? { animate: false } : {}),
+            // 自动展示（首帧 / 异步补上身份）不是用户点开栏：只展开侧栏，不拉宽主窗口。
+            userInitiated: hasExplicitOrcaWorkersReveal,
           })
         : await ensureOrcaWorkersTab(sessionId).then(() => 'attached' as const);
       if (cancelled) return;
