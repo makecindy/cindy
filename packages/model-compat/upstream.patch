@@ -2050,7 +2050,7 @@
 +export type * from "./types/provider";
 --- a/src/responses/namespace-tool-compat.ts
 +++ b/src/responses/namespace-tool-compat.ts
-@@ -102,10 +102,57 @@
+@@ -102,10 +102,59 @@
    bareWireNames: Set<string>;
    identities: Map<string, string>;
    selectors: Map<string, string | null>;
@@ -2061,6 +2061,8 @@
 +   * that set would restore the bare tool's ordinary call as a custom-tool call.
 +   */
 +  renamedWireNames: Map<string, string>;
++  /** Displaced children with the declaration type the flattening pass actually saw. */
++  renamedChildren: { preferred: string; declaredType: unknown }[];
  };
  
  /** Two distinct logical tools would occupy one wire name; the caller maps this to a 400. */
@@ -2108,15 +2110,16 @@
  
  function buildRewritePlan(groups: readonly unknown[][]): NamespaceRewritePlan {
    const aliases = new Map<string, RoutedNamespaceToolIdentity>();
-@@ -113,6 +160,7 @@
+@@ -113,6 +162,8 @@
    const identities = new Map<string, string>();
    const selectors = new Map<string, string | null>();
    const wireOwners = new Map<string, string>();
 +  const renamedWireNames = new Map<string, string>();
++  const renamedChildren: { preferred: string; declaredType: unknown }[] = [];
  
    for (const group of groups) {
      for (const tool of group) {
-@@ -127,6 +175,10 @@
+@@ -127,6 +178,10 @@
      }
    }
  
@@ -2127,7 +2130,7 @@
    for (const group of groups) {
      for (const tool of group) {
        const parsed = parseNamespaceGroup(tool);
-@@ -134,29 +186,60 @@
+@@ -134,29 +189,61 @@
        for (const child of parsed.children) {
          const childName = child.name as string;
          const identity = loweredIdentity(parsed.namespace, childName);
@@ -2189,6 +2192,7 @@
 +    identities.set(entry.identity, allocated);
 +    wireOwners.set(allocated, entry.identity);
 +    renamedWireNames.set(entry.preferred, allocated);
++    renamedChildren.push({ preferred: entry.preferred, declaredType: entry.child.type });
 +  }
 +
 +  for (const entry of children) {
@@ -2203,27 +2207,36 @@
 +    aliases.set(wireName, { namespace: entry.namespace, name: entry.childName, kind });
 +  }
 +
-+  return { aliases, bareWireNames, identities, selectors, renamedWireNames };
++  return { aliases, bareWireNames, identities, selectors, renamedWireNames, renamedChildren };
  }
  
  /**
-@@ -344,11 +427,14 @@
+@@ -344,11 +431,23 @@
  export function rewriteRoutedNamespaceToolsForUpstream(
    body: unknown,
    convertedCustomToolNames?: ReadonlySet<string>,
 +  bareCustomNames?: ReadonlySet<string>,
++  namespaceCustomToolNames?: ReadonlySet<string>,
  ): {
    body: unknown;
    aliases: Map<string, RoutedNamespaceToolIdentity>;
 +  /** Preferred wire name -> allocated name, for children a bare declaration displaced. */
 +  renamedWireNames: Map<string, string>;
++  /**
++   * Preferred wire name -> declared kind for every displaced child. Derived from the whole rename
++   * set rather than the authorized aliases: `tool_choice` can narrow aliases down to the bare
++   * declaration, and the custom restore still has to know what the displaced child was.
++   */
++  renamedKinds: Map<string, "function" | "custom">;
  } {
 -  if (!isPlainObject(body)) return { body, aliases: new Map() };
-+  if (!isPlainObject(body)) return { body, aliases: new Map(), renamedWireNames: new Map() };
++  if (!isPlainObject(body)) {
++    return { body, aliases: new Map(), renamedWireNames: new Map(), renamedKinds: new Map() };
++  }
    const groups = collectResponsesToolGroups(body);
    const plan = buildRewritePlan(groups);
  
-@@ -379,10 +465,16 @@
+@@ -379,10 +478,30 @@
        && !ambiguousDotted.has(dotted) && !plan.bareWireNames.has(dotted)
        && !aliases.has(dotted)) aliases.set(dotted, identity);
    }
@@ -2232,23 +2245,38 @@
 -  for (const identity of aliases.values()) {
 -    if (convertedCustomToolNames?.has(namespacedToolName(identity.namespace, identity.name))) identity.kind = "custom";
 +  // The adapter lowers custom tools before namespaces, which rewrites a `custom` child declaration
-+  // into a `function` one. The declared kind is still recorded in `convertedCustomToolNames`, keyed
-+  // by wire name — and a bare custom tool of the same name is recorded there too, so that name only
-+  // describes this child when it is not a bare custom declaration.
++  // into a `function` one, so the declaration type left in the body no longer says what this child
++  // was. `namespaceCustomToolNames` carries that knowledge from before the lowering pass; it also
++  // keeps a custom child custom when a bare custom tool happens to share its wire name.
++  const renamedKinds = new Map<string, "function" | "custom">();
++  for (const entry of plan.renamedChildren) {
++    const custom = entry.declaredType === "custom"
++      || namespaceCustomToolNames?.has(entry.preferred) === true
++      || (
++        convertedCustomToolNames?.has(entry.preferred) === true
++        && bareCustomNames?.has(entry.preferred) !== true
++      );
++    renamedKinds.set(entry.preferred, custom ? "custom" : "function");
++  }
 +  for (const [wireName, identity] of aliases) {
 +    const preferred = namespacedToolName(identity.namespace, identity.name);
-+    const source = wireName === preferred ? wireName : preferred;
-+    if (!convertedCustomToolNames?.has(source)) continue;
-+    if (bareCustomNames?.has(source)) continue;
++    if (wireName !== preferred) {
++      const displacedKind = renamedKinds.get(preferred);
++      if (displacedKind) identity.kind = displacedKind;
++      continue;
++    }
++    if (!convertedCustomToolNames?.has(preferred)) continue;
++    if (bareCustomNames?.has(preferred)) continue;
 +    identity.kind = "custom";
    }
    return {
      body: {
-@@ -392,6 +484,7 @@
+@@ -392,6 +511,8 @@
        ...(toolChoice !== body.tool_choice ? { tool_choice: toolChoice } : {}),
      },
      aliases,
 +    renamedWireNames: plan.renamedWireNames,
++    renamedKinds,
    };
  }
  
@@ -2270,6 +2298,15 @@
  ): SseBlockRewrite {
    const itemNames = new Map<string, { name: string; aliased: boolean; namespace?: string }>();
    // Native helper aliases and genuine bare code-mode exec calls share completion repair.
+@@ -194,7 +196,7 @@
+     ) {
+       const upstreamItemId = typeof parsed.item.id === "string" ? parsed.item.id : undefined;
+       const wireName = routedCustomToolWireName(parsed.item);
+-      const targetName = routedCustomToolTargetName(parsed.item, names, declaredNames);
++      const targetName = routedCustomToolTargetName(parsed.item, names, declaredNames, displacement);
+       const aliased = targetName !== undefined && targetName !== wireName;
+       const codeModeExec = targetName === "exec" && parsed.item.name === "exec"
+         && parsed.item.namespace === undefined && declaresCodeModeExec(declaredNames);
 @@ -207,7 +209,7 @@
        const repairable = wireName !== undefined && repairNames.has(wireName);
        if (upstreamItemId && repairable) repairItemNames.set(upstreamItemId, parsed.item.name);
@@ -2279,6 +2316,15 @@
          : { value: parsed, changed: false };
        if (type === "response.output_item.done" && upstreamItemId) releaseCall(upstreamItemId);
        return restored.changed
+@@ -221,7 +223,7 @@
+       && typeof parsed.item.name === "string"
+     ) {
+       const upstreamItemId = typeof parsed.item.id === "string" ? parsed.item.id : undefined;
+-      const targetName = routedCustomToolTargetName(parsed.item, names, declaredNames);
++      const targetName = routedCustomToolTargetName(parsed.item, names, declaredNames, displacement);
+       const routed = targetName !== undefined;
+       const wireName = routedCustomToolWireName(parsed.item);
+       if (upstreamItemId) {
 @@ -247,7 +249,7 @@
        if (upstreamItemId && pending.length > 0 && !openCalls.has(upstreamItemId)) {
          openCalls.set(upstreamItemId, { argumentsText: "", emittedInput: "", retainedBytes: 0 });

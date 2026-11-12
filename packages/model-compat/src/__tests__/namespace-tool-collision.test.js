@@ -159,4 +159,63 @@ describe("namespace tool wire-name collisions", () => {
             namespace: "workspace",
         });
     });
+
+    // `tool_choice` narrows the response aliases down to the bare declaration. The custom restore
+    // still has to know what the displaced child was, so displacement metadata is derived from the
+    // whole rename set instead of the authorized aliases.
+    test("keeps displacement metadata when tool_choice only authorizes the bare declaration", () => {
+        const body = {
+            tools: [
+                { type: "function", name: "collaboration__run", parameters: {} },
+                { type: "namespace", name: "collaboration", tools: [{ type: "custom", name: "run", description: "Run raw input" }] },
+            ],
+            tool_choice: { type: "function", name: "collaboration__run" },
+        };
+        const prepared = prepareResponsesCompatibility(body, { customTools: "functions", namespaceTools: "functions" });
+        const bare = JSON.stringify({ output: [{ type: "function_call", name: "collaboration__run", call_id: "call_bare", arguments: '{"input":"echo bare"}' }] });
+        expect(prepared.restoreJson(bare)).toBe(bare);
+    });
+
+    // The streaming path classifies each item before it restores it; without the same displacement
+    // data an ordinary call keeps an `fc_` id while its argument events are renamed under `ctc_`.
+    test("classifies streamed calls with the same displacement", () => {
+        const body = {
+            tools: [
+                { type: "function", name: "collaboration__run", parameters: {} },
+                { type: "namespace", name: "collaboration", tools: [{ type: "custom", name: "run", description: "Run raw input" }] },
+            ],
+        };
+        const prepared = prepareResponsesCompatibility(body, { customTools: "functions", namespaceTools: "functions" });
+        const rewrite = prepared.createStreamRewrite();
+        const blocks = [
+            { type: "response.output_item.added", output_index: 0, item: { type: "function_call", id: "fc_1", call_id: "call_1", name: "collaboration__run", arguments: "" } },
+            { type: "response.function_call_arguments.delta", item_id: "fc_1", output_index: 0, delta: '{"input":"echo bare"}' },
+            { type: "response.function_call_arguments.done", item_id: "fc_1", output_index: 0, arguments: '{"input":"echo bare"}' },
+            { type: "response.output_item.done", output_index: 0, item: { type: "function_call", id: "fc_1", call_id: "call_1", name: "collaboration__run", arguments: '{"input":"echo bare"}' } },
+        ].map(payload => `data: ${JSON.stringify(payload)}`);
+        const out = blocks.map(block => rewrite(block).join("")).join("");
+        expect(out).not.toContain("custom_tool_call_input");
+        expect(out).not.toContain('"ctc_');
+        expect(out).toContain("response.function_call_arguments.delta");
+        expect(out).toContain('"type":"function_call"');
+    });
+
+    // Both declarations are custom here, so the shared name proves nothing about the child. The
+    // child keeps the kind it was declared with instead of being treated as an ordinary function.
+    test("keeps a custom child custom when the bare declaration is custom too", () => {
+        const body = {
+            tools: [
+                { type: "custom", name: "workspace__read", description: "Bare custom" },
+                { type: "namespace", name: "workspace", tools: [{ type: "custom", name: "read", description: "Child custom" }] },
+            ],
+        };
+        const prepared = prepareResponsesCompatibility(body, { customTools: "functions", namespaceTools: "functions" });
+        const rewritten = JSON.stringify({ output: [{ type: "function_call", name: "workspace__read_2", call_id: "call_child", arguments: '{"input":"echo child"}' }] });
+        expect(JSON.parse(prepared.restoreJson(rewritten)).output[0]).toMatchObject({
+            type: "custom_tool_call",
+            name: "read",
+            namespace: "workspace",
+            input: "echo child",
+        });
+    });
 });

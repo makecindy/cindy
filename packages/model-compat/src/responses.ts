@@ -8,6 +8,7 @@ import { Transform, type TransformCallback } from 'node:stream';
 import { StringDecoder } from 'node:string_decoder';
 import { rewriteRoutedCustomToolsForUpstream, restoreRoutedCustomCallsInJson } from './upstream/responses/custom-tool-compat';
 import { rewriteRoutedNamespaceToolsForUpstream, restoreRoutedNamespaceCallsInJson } from './upstream/responses/namespace-tool-compat';
+import { collectResponsesToolGroups } from './upstream/responses/tool-groups';
 import { rewriteRoutedToolSearchForUpstream, restoreRoutedToolSearchCallsInJson } from './upstream/responses/tool-search-compat';
 import { collectFunctionCallRepairSchemas, repairFunctionCallsInJson } from './upstream/responses/function-call-compat';
 import { createRoutedCustomToolRestoreBlockRewrite } from './upstream/server/responses-custom-tool-repair';
@@ -17,6 +18,27 @@ import { createResponsesFieldBackfillBlockRewrite, backfillResponsesFieldsJson }
 import { createTranslatorBudget } from './upstream/lib/translator-budget';
 import { collectDeclaredWireToolNames } from './upstream/server/responses-undeclared-tool-guard';
 import { composeSseBlockRewrites, payloadRewriteAsBlockRewrite, nextSseBlock, type SseBlockRewrite } from './upstream/server/sse-payload-rewrite';
+
+/** Wire names of custom declarations that live inside a namespace group, before lowering rewrites them. */
+function collectNamespaceCustomToolNames(body: unknown): Set<string> {
+  const names = new Set<string>();
+  if (!body || typeof body !== 'object' || Array.isArray(body)) return names;
+  for (const group of collectResponsesToolGroups(body)) {
+    if (!Array.isArray(group)) continue;
+    for (const tool of group) {
+      if (!tool || typeof tool !== 'object') continue;
+      const { type, name, tools } = tool as { type?: unknown; name?: unknown; tools?: unknown };
+      if (type !== 'namespace' || typeof name !== 'string' || !Array.isArray(tools)) continue;
+      for (const child of tools) {
+        if (!child || typeof child !== 'object') continue;
+        const { type: childType, name: childName } = child as { type?: unknown; name?: unknown };
+        if (childType !== 'custom' || typeof childName !== 'string') continue;
+        names.add(name === 'functions' ? childName : `${name}__${childName}`);
+      }
+    }
+  }
+  return names;
+}
 
 /** Bare custom declarations keep their own restore path even when a displaced child used the name. */
 function collectBareCustomToolNames(body: unknown): Set<string> {
@@ -64,17 +86,13 @@ export function prepareResponsesCompatibility(body: unknown, policy: ResponsesCo
     ? rewriteRoutedToolSearchForUpstream(custom.body)
     : { body: custom.body, names: new Set<string>() };
   const namespace = policy.namespaceTools === 'functions'
-    ? rewriteRoutedNamespaceToolsForUpstream(search.body, custom.names, bareCustomNames)
-    : { body: search.body, aliases: new Map(), renamedWireNames: new Map<string, string>() };
+    ? rewriteRoutedNamespaceToolsForUpstream(search.body, custom.names, bareCustomNames, collectNamespaceCustomToolNames(body))
+    : { body: search.body, aliases: new Map(), renamedWireNames: new Map<string, string>(), renamedKinds: new Map<string, 'function' | 'custom'>() };
   // A namespace child that a bare declaration displaced keeps its record in `custom.names`: after
   // namespace restoration the item carries `{namespace, name}` and resolves to that same preferred
   // wire name. What must not happen is the bare declaration itself claiming it, or an ordinary
   // function child coming back as a custom-tool call — the recorded kind decides which applies.
-  const displacedKinds = new Map<string, 'function' | 'custom'>();
-  for (const [preferred, allocated] of namespace.renamedWireNames) {
-    const kind = namespace.aliases.get(allocated)?.kind as 'function' | 'custom' | undefined;
-    if (kind) displacedKinds.set(preferred, kind);
-  }
+  const displacedKinds = namespace.renamedKinds;
   const displacement = displacedKinds.size > 0
     ? { bareCustomNames, displacedKinds }
     : undefined;

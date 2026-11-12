@@ -90,7 +90,7 @@
       "source": "src/responses/namespace-tool-compat.ts",
       "target": "src/upstream/responses/namespace-tool-compat.ts",
       "upstreamSha256": "29ab7614e0757cde8bf81ad86da407afc8cb6d05027da22375fcca9a95de63b0",
-      "portedSha256": "f800c45270f37d2222613a346fb8087c4bbb1519ca43d5372010fbd5d0a515fa"
+      "portedSha256": "3d8d67a4d0a5714cd24352b01520022bfb04c8cadf4c10ff39f9004a31fc9c71"
     },
     {
       "source": "src/responses/tool-groups.ts",
@@ -120,7 +120,7 @@
       "source": "src/server/responses-custom-tool-repair.ts",
       "target": "src/upstream/server/responses-custom-tool-repair.ts",
       "upstreamSha256": "9b29bc429d83cd5ab46b358eed46356514b88f9508716afa8080b93dca848f84",
-      "portedSha256": "8802e432008dc515e8deaf6fb1d72b13e36dc3fec9bb11063a8a9f640e3d9324"
+      "portedSha256": "99e0367d70f26b520aa0006eec79671da5ba28f55e55cdfbbabb45650d9c35b7"
     },
     {
       "source": "src/server/responses-function-tool-repair.ts",

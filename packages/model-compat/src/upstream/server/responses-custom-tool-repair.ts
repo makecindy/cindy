@@ -196,7 +196,7 @@ export function createRoutedCustomToolRestoreBlockRewrite(
     ) {
       const upstreamItemId = typeof parsed.item.id === "string" ? parsed.item.id : undefined;
       const wireName = routedCustomToolWireName(parsed.item);
-      const targetName = routedCustomToolTargetName(parsed.item, names, declaredNames);
+      const targetName = routedCustomToolTargetName(parsed.item, names, declaredNames, displacement);
       const aliased = targetName !== undefined && targetName !== wireName;
       const codeModeExec = targetName === "exec" && parsed.item.name === "exec"
         && parsed.item.namespace === undefined && declaresCodeModeExec(declaredNames);
@@ -223,7 +223,7 @@ export function createRoutedCustomToolRestoreBlockRewrite(
       && typeof parsed.item.name === "string"
     ) {
       const upstreamItemId = typeof parsed.item.id === "string" ? parsed.item.id : undefined;
-      const targetName = routedCustomToolTargetName(parsed.item, names, declaredNames);
+      const targetName = routedCustomToolTargetName(parsed.item, names, declaredNames, displacement);
       const routed = targetName !== undefined;
       const wireName = routedCustomToolWireName(parsed.item);
       if (upstreamItemId) {
