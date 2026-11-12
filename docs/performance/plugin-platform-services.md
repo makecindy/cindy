@@ -1,20 +1,24 @@
 # 插件平台能力的客户端性能自查
 
-2026-11-11，PR #9825。当前代码基线为 `2c0e66c8acb95d73f7a4818f5d9a0c94bf6e84f0`。
+2026-11-12，PR #9825。隔离性能基准以 `2c0e66c8acb95d73f7a4818f5d9a0c94bf6e84f0` 为基线，
+当前代码已预合 `209212431e`；下文不把旧基准当作预合后的整客户端实测。
 receipt 同步段去重已撤回，存储、终端、亲选目录与流式分片恢复每次校验重新读取；
 不增加 AsyncResource、async hook 或 ALS。下文 renderer A/B 保留旧基线数据并明确标注。
 本轮性能修正之后补齐了已保存 PAT／网络凭证引用；手机端建立引用和 Node Host
-生产 scheduler/browser/computer/ssh/docs 装配不在交付范围内。
+生产 scheduler/ssh/docs 装配不在交付范围内，未装配服务调用返回 `UNSUPPORTED_CAPABILITY`。
 预合 `209212431e` 后，Node Host 复用上游已装配的 browser/computer provider 对象接入插件入口；
 只把引用加入同一 provider 数组并使目录投影失效，不新增平台工厂、扫描或启动进程。
 下文启动与 renderer 数字仍为注明基线的历史样本，未重测此次上游平台装配。
 下表区分未使用时的路径、使用后的预算与尚未具备的能力，不把代码路径证据当作完整客户端实测。
+显式调用 `host_services` 属于能力发现的消费者：它会按需生成全部服务的工具元数据，
+包括尚未声明的组，供作者判断可用性；这不是普通调用热路径，也不会执行浏览器或电脑操作。
 
 | 热点 | 未使用时的开销 | 使用后的上限 | 证据 | 结论 |
 | --- | --- | --- | --- | --- |
 | Desktop 启动与服务登记 | 登记只保存 provider 引用；不构建 MCP runtime、不探测 enablement、不关闭异步 runtime。普通终端输出不进入新增 ring。 | 首次查询才生成目录；目录在 provider 更换时失效。 | `hostServiceCatalog.test.ts` 的 `does not construct or probe unused providers and caches metadata until replacement`；`ptyManager.test.ts` 的 `does not retain or measure UI output when no managed reader was requested`。 | 已修复两处未使用路径回退。存在静态模块求值和少量对象分配，未测完整 Desktop 冷启动时间。 |
 | Node Host 启动 | provider 工厂未被目录登记调用；装配后的新增活跃资源为 0，无 PTY 启动。 | 实际调用才生成 MCP server；终端按需 spawn。 | 隔离生产装配 0.78 ms；`resourcesBefore/After/AfterClose` 均 `[]`，见原始 JSON；`HostTerminalService` 构造函数仅建立 manager / sink / map。 | 无新增定时器、连接或子进程的代码路径与隔离资源证据；不代表完整 Host 启动耗时。 |
-| 每次 `host.call` | 没有调用时不执行 gateway；未声明的新服务组在工厂之前拒绝，未批准调用不创建输出目录。 | provider 查找是内存数组查找；computer runtime 按插件与安装 revision 缓存。批准事实每次校验实时读盘，不做同步段或跨调用缓存。 | `hostToolSlot.test.ts` 的 `rejects undeclared service groups before constructing their runtime`、`creates a private output directory only for an approved Desktop service execution`；下文 50 次调用基准。 | 已移除新增的提前 `mkdirSync`。保留重复读取开销，沿用公共授权链，不增加去重机制。 |
+| Node browser / computer 插件入口 | 复用上游为 Agent 创建的 provider，仅登记对象引用。未声明组的调用在第一个 `await` 和运行时工厂之前同步拒绝，不进行 provider 查找、enablement 探测、审批或确认；没有调用时不进入 gateway。 | 仅允许已声明且获批准的插件调用；沿用客户端、电脑开关、输入协调器与调用身份门禁。原生 worker 由上游 `beforeCall` 懒建，停用沿用原清理路径；不新建平台实现或资源预算。 | `apps/host/src/main.ts:655–665`；`hostServiceCatalog.ts:21–26`；`hostToolSlot.ts:47–58`；`hostToolCaller.ts:122–129`。`hostToolSlot.test.ts` 的 `rejects undeclared %s before constructing its runtime` 覆盖 browser/computer/docs，断言拒绝且工厂、审批、确认与执行均为 0；Node `tools.test.mjs` 的共享 provider 与 lazy worker 回归。 | 未声明时没有新增 provider 热路径工作；启动仍有两个引用登记与 dirty 标记，不宣称绝对零分配。平台工厂原由上游 Agent 装配，不在插件入口重复运行；完整启动/CPU 未重测。 |
+| 每次 `host.call` | 没有调用时不执行 gateway；未声明的新服务组在工厂之前拒绝，未批准调用不创建输出目录。 | provider 查找是内存数组查找；computer runtime 按插件与安装 revision 缓存。批准事实每次校验实时读盘，不做同步段或跨调用缓存。 | `hostToolSlot.test.ts` 的 `rejects undeclared %s before constructing its runtime`、`creates a private output directory only for an approved Desktop service execution`；下文 50 次调用基准。 | 已移除新增的提前 `mkdirSync`。保留重复读取开销，沿用公共授权链，不增加去重机制。 |
 | 已保存凭证复用 | 普通密钥仍只有原先一次读取；同步比较非密钥标记后直接沿原路径，不调用引用解析器。管理器按需构造，没有新定时器、订阅或后台同步。 | 使用引用时只按精确实例键复核来源／目标，直接读取现有 vault；不缓存批准、不在网络或流续读中枚举已装插件。只有用户打开或刷新凭证选择目录时枚举可选来源。 | `networkSlot.test.ts` 的 `rejects a marker without an approved reference and does no reference lookup for an ordinary key`；`ghostSavedCredentials.test.ts` 的 `stores only a reference, resolves the original value freshly, and stops on source removal` 同时断言注入与守卫未新增目录扫描。 | 未使用路径有同步短路的测试证据；未新增 renderer 结构或常驻资源。上述 renderer A/B 数字早于本次文案增量，不能当作当前提交的体积实测。 |
 | 文件监听 | `GhostFsSlot` 仅建立空 map；没有 `watch` 请求不订阅 watcher。 | 每插件最多 32 个 watcher、每 watcher 256 条事件；同一目录 / 调用复用；插件显式批量拉取，无新增逐事件 renderer IPC 或轮询。 | `fsSlot.ts:505,529`；`fsSlot.test.ts` 的 `workdir:监听通过游标续读，拒绝他插件，交卷立即释放宿主 watcher`、`workdir:监听缓冲缺口明确要求重读，且取消建订阅不会留下 watcher`。 | 有数量、缓冲与生命周期上限。复用现有 watcher-host 原生批事件通道。 |
 | 大目录列举 | 无请求时不枚举目录。 | 列举回复最多 2000 条；共享 core 在 `readdir` 完成后检查，超限返回 `DIRECTORY_TOO_LARGE`。 | `fsSlot.ts:543`，`packages/file-browser-core/src/scanner.ts:308`。该 `listDir` 在基线已存在，文件浏览界面也使用。 | **未分页**；完整枚举的时间 / 临时内存不受 2000 限制。本 PR 保留主干行为，不新增分页语义。 |
@@ -29,7 +33,7 @@ receipt 同步段去重已撤回，存储、终端、亲选目录与流式分片
 
 ## 已修复的回退
 
-下列修正已形成本地检查点，新增的生产入口回归与原有点名测试通过，未推送。
+下列修正已随本 PR 推送，新增的生产入口回归与原有点名测试通过。
 
 - `bb9a9150bd`：普通 UI PTY 的输出不再进入新增的字节统计 / ring。
 - `1f7838ca8b`：停用未用过终端服务的插件，不创建服务和账号监听。

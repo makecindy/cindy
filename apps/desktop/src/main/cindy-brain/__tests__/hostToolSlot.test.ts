@@ -81,13 +81,20 @@ describe('plugin Host tool entry', () => {
   // Unit performance regression: the new service admission constructed a runtime
   // for undeclared groups, and Desktop created directories before approval. The
   // existing policy cases asserted only the final error, missing these side effects.
-  it('rejects undeclared service groups before constructing their runtime', async () => {
+  // Include Node's shared browser/computer providers: an undeclared request must
+  // not probe a provider, ask for approval or reach a confirmation before returning.
+  it.each([
+    ['cindy_docs', 'read_sheet'], ['cindy_browser', 'browser'], ['cindy_computer', 'status'],
+  ])('rejects undeclared %s before constructing its runtime', async (server, tool) => {
     const f = fixture();
     const create = vi.spyOn(f.ports, 'createRuntime');
     expect(code(await handlePluginHostToolRequest('dashboard', {
-      type: 'host-tool-request', server: 'cindy_docs', tool: 'read_sheet', args: {},
+      type: 'host-tool-request', server, tool, args: {},
     }, () => true, f.ports))).toBe('PERMISSION_DENIED');
     expect(create).not.toHaveBeenCalled();
+    expect(f.ports.approveGroup).not.toHaveBeenCalled();
+    expect(f.ports.confirm).not.toHaveBeenCalled();
+    expect(f.invoke).not.toHaveBeenCalled();
   });
   it('creates a private output directory only for an approved Desktop service execution', async () => {
     const f = fixture(), mkdirSync = vi.fn(), mkdir = vi.fn(async () => {});
