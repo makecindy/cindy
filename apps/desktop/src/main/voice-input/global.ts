@@ -1,3 +1,4 @@
+import { notifyVoiceShortcutRegistrationChanged } from './shortcutRegistrationEvents';
 import {
   app,
   BrowserWindow,
@@ -1626,6 +1627,16 @@ async function startWindowsNativeListener(
 }
 
 async function setVoiceInputGlobalShortcut(
+  shortcut: VoiceInputShortcut | null,
+): Promise<VoiceInputGlobalResult> {
+  const previousAccelerator = registeredAccelerator;
+  const result = await applyVoiceInputGlobalShortcut(shortcut);
+  // owner 切换时，原来的全局组合可能在新 owner commit 后才释放。
+  if (result.ok && previousAccelerator !== registeredAccelerator) notifyVoiceShortcutRegistrationChanged();
+  return result;
+}
+
+async function applyVoiceInputGlobalShortcut(
   shortcut: VoiceInputShortcut | null,
 ): Promise<VoiceInputGlobalResult> {
   if (process.platform === 'linux' && shortcut) {

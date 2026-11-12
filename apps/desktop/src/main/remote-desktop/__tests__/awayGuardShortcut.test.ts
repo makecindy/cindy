@@ -11,6 +11,7 @@ const state = vi.hoisted(() => ({
   overrides: {} as AppShortcutOverrides,
   voice: null as VoiceInputShortcut | null,
   voiceChanged: () => {},
+  ownerCommitted: () => {},
   recording: false,
   changed: () => {},
   recordingChanged: () => {},
@@ -38,8 +39,12 @@ vi.mock('../../voice-input/VoiceInputDataStore', () => ({
     subscribeShortcut: (cb: () => void) => { state.voiceChanged = cb; return () => { state.voiceChanged = () => {}; }; },
   },
 }));
+vi.mock('../../appSessionState', () => ({
+  onAppSessionCommitted: (cb: () => void) => { state.ownerCommitted = cb; return () => { state.ownerCommitted = () => {}; }; },
+}));
 vi.mock('../../logger', () => ({ createLogger: () => ({ warn: vi.fn() }) }));
 import { installAwayGuardShortcut } from '../awayGuardShortcut';
+import { notifyVoiceShortcutRegistrationChanged } from '../../voice-input/shortcutRegistrationEvents';
 let dispose: (() => void) | undefined;
 afterEach(() => {
   dispose?.();
@@ -141,6 +146,43 @@ describe('away shortcut', () => {
     } else dispose();
     await Promise.resolve();
     expect(state.register).toHaveBeenCalledTimes(1);
+  });
+
+  // PR #10218 最新评论：owner 切换不写语音配置，不能等 subscribeShortcut。
+  it('re-arbitrates a newly committed owner without a settings write', async () => {
+    state.register.mockReturnValue(true);
+    dispose = installAwayGuardShortcut(async () => {});
+    const oldKey = state.register.mock.lastCall?.[0];
+    state.voice = { code: 'KeyL', key: 'l', modifiers: { meta: false, ctrl: true, shift: true, alt: false, fn: false } };
+    state.ownerCommitted();
+    await Promise.resolve();
+    expect(state.unregister).toHaveBeenCalledWith(oldKey);
+    expect(state.register).toHaveBeenCalledTimes(1);
+    state.voice = null;
+    state.ownerCommitted();
+    await Promise.resolve();
+    expect(state.register).toHaveBeenCalledTimes(2);
+  });
+
+  it('reclaims the key when the previous owner voice registration releases it later', async () => {
+    let voiceOwnsKey = true;
+    state.voice = { code: 'KeyL', key: 'l', modifiers: { meta: false, ctrl: true, shift: true, alt: false, fn: false } };
+    state.register.mockImplementation(() => !voiceOwnsKey);
+    dispose = installAwayGuardShortcut(async () => {});
+    state.voice = null;
+    state.ownerCommitted();
+    await Promise.resolve();
+    expect(state.report).toHaveBeenLastCalledWith(['away-guard'], 'away-guard');
+    voiceOwnsKey = false;
+    notifyVoiceShortcutRegistrationChanged();
+    await Promise.resolve();
+    expect(state.report).toHaveBeenLastCalledWith([], 'away-guard');
+    dispose();
+    const count = state.register.mock.calls.length;
+    state.ownerCommitted();
+    notifyVoiceShortcutRegistrationChanged();
+    await Promise.resolve();
+    expect(state.register).toHaveBeenCalledTimes(count);
   });
 
 });
