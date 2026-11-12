@@ -6891,12 +6891,13 @@
             "unsupported": "“{{name}}” usa uma versão antiga do Cindy e não pode ser alterado remotamente",
             "not-ready": "“{{name}}” não consegue ativar o Agent-Net agora",
             "busy": "“{{name}}” está processando outra mudança. Tente de novo em instantes.",
-            "failed": "Não foi possível contatar “{{name}}”. Tente de novo em instantes."
+            "failed": "Não foi possível mudar a conexão de “{{name}}”."
           },
           "checking": "Verificando se ele pode mudar…",
           "notReady": {
             "not-signed-in": "Ele não está conectado ao Cindy. Poderá ativar o Agent-Net após entrar.",
-            "secure-storage": "O armazenamento seguro não está disponível naquele computador, então o Agent-Net não pode ser ativado. Resolva naquele computador."
+            "secure-storage": "O armazenamento seguro não está disponível naquele computador, então o Agent-Net não pode ser ativado. Resolva naquele computador.",
+            "relay-identity": "Esse computador ainda não configurou o Agent-Net para o relay atual. Configure-o primeiro nesse computador."
           },
           "batch": {
             "toAgentNet": "Mudar todos para Agent-Net",
@@ -6921,11 +6922,11 @@
               "done": "Mudou",
               "reverted": "Voltou",
               "skipped": "Não mudou",
-              "failed": "Sem contato"
+              "failed": "Não mudou"
             },
             "stopped": "O primeiro computador não mudou, então os demais ficaram como estavam.",
             "finished": "{{done}} mudaram",
-            "finishedWithRevert": "{{done}} mudaram, {{reverted}} voltaram"
+            "finishedWithRevert": "{{done}} mudaram, {{reverted}} não mudaram"
           },
           "changedBy": {
             "on": "Ativado remotamente por “{{name}}” às {{time}}",

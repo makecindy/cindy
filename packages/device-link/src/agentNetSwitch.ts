@@ -29,7 +29,7 @@ export type AgentNetSwitchRequest =
   | { action: 'confirm'; switchId: string };
 
 /** Why the target cannot turn Agent-Net on right now (it can always turn it off). */
-export type AgentNetSwitchBlock = 'NOT_SIGNED_IN' | 'SECURE_STORAGE_UNAVAILABLE';
+export type AgentNetSwitchBlock = 'NOT_SIGNED_IN' | 'SECURE_STORAGE_UNAVAILABLE' | 'RELAY_IDENTITY_MISSING';
 
 export interface AgentNetSwitchStatus {
   version: number;
@@ -38,6 +38,8 @@ export interface AgentNetSwitchStatus {
   blocked: AgentNetSwitchBlock | null;
   /** A remote switch on this target is waiting for its confirmation. */
   pending: boolean;
+  /** 实际到请求电脑的链路；旧端可能不提供，不能从 enabled 推断。 */
+  encrypted?: boolean;
 }
 
 export interface AgentNetSwitchAccepted {
@@ -83,7 +85,7 @@ export function parseAgentNetSwitchRequest(value: unknown): AgentNetSwitchReques
 export function parseAgentNetSwitchStatus(value: unknown): AgentNetSwitchStatus | null {
   const root = record(value);
   if (!root || typeof root.enabled !== 'boolean') return null;
-  const blocked = root.blocked === 'NOT_SIGNED_IN' || root.blocked === 'SECURE_STORAGE_UNAVAILABLE'
+  const blocked = root.blocked === 'NOT_SIGNED_IN' || root.blocked === 'SECURE_STORAGE_UNAVAILABLE' || root.blocked === 'RELAY_IDENTITY_MISSING'
     ? root.blocked
     : root.blocked === null || root.blocked === undefined ? null : 'SECURE_STORAGE_UNAVAILABLE';
   return {
@@ -92,6 +94,7 @@ export function parseAgentNetSwitchStatus(value: unknown): AgentNetSwitchStatus 
     onlyEncrypted: root.onlyEncrypted === true,
     blocked,
     pending: root.pending === true,
+    ...(typeof root.encrypted === 'boolean' ? { encrypted: root.encrypted } : {}),
   };
 }
 

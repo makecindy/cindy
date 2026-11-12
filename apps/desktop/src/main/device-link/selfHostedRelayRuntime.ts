@@ -1860,7 +1860,11 @@ function installAgentNetRemoteSwitch(): void {
     writePending: (value) => writeDeviceLinkSetting('agentNetPendingSwitch', value),
     readiness: () => {
       const notReady = requireReady();
-      return notReady === null ? null : notReady === 'NOT_SIGNED_IN' ? 'NOT_SIGNED_IN' : 'SECURE_STORAGE_UNAVAILABLE';
+      if (notReady) return notReady === 'NOT_SIGNED_IN' ? 'NOT_SIGNED_IN' : 'SECURE_STORAGE_UNAVAILABLE';
+      const relay = activeSelfHostedRelay();
+      // 本机中转主人在启用时可以补身份；加入的/部署的中转必须先有该网络的身份。
+      const canBootstrapHere = relay?.role === 'owner' && activeRelayOrigin() === 'host' && readRelayConfig().host.enabled;
+      return relay && !readRelaySecrets(relay.relayId)?.agentNet && !canBootstrapHere ? 'RELAY_IDENTITY_MISSING' : null;
     },
     apply: async (enabled) => {
       try {
@@ -1915,9 +1919,9 @@ async function execute(command: SelfHostedRelayCommand): Promise<CommandResult> 
       return { state: getState() };
     }
     case 'set-agent-net': {
-      const result = await applyAgentNet(command.enabled);
       // 这台电脑上的人自己改了开关：以人为准，丢掉待确认的远程切换与「由谁打开」的说明。
-      if (!result.error) await remoteSwitch?.onLocalChange();
+      await remoteSwitch?.onLocalChange();
+      const result = await applyAgentNet(command.enabled);
       return { ...result, state: getState() };
     }
     case 'peer-agent-net':

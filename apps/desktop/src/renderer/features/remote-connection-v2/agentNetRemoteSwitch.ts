@@ -26,7 +26,7 @@ export type RemoteSwitchEntry =
   | { kind: 'done'; target: RemoteSwitchTarget };
 
 /** 对方的回答。unsupported:旧版 Cindy 没有这个入口；not-ready:有入口但现在打不开；unreachable:这次没问到。 */
-export type PeerNotReadyReason = 'not-signed-in' | 'secure-storage';
+export type PeerNotReadyReason = 'not-signed-in' | 'secure-storage' | 'relay-identity';
 export type PeerProbe =
   | { kind: 'checking' }
   | { kind: 'ready' }
@@ -106,6 +106,7 @@ function readProbe(reply: PeerAgentNetReply): PeerProbe {
   const status = reply.result && typeof reply.result === 'object' ? reply.result as Record<string, unknown> : null;
   if (!status || typeof status.enabled !== 'boolean') return { kind: 'unreachable' };
   if (status.blocked === 'NOT_SIGNED_IN') return { kind: 'not-ready', reason: 'not-signed-in' };
+  if (status.blocked === 'RELAY_IDENTITY_MISSING') return { kind: 'not-ready', reason: 'relay-identity' };
   if (typeof status.blocked === 'string') return { kind: 'not-ready', reason: 'secure-storage' };
   return { kind: 'ready' };
 }
@@ -135,7 +136,7 @@ export function probePeer(deviceId: string): Promise<PeerProbe> {
 export type RemoteSwitchResult = 'done' | 'reverted' | 'unsupported' | 'not-ready' | 'busy' | 'failed';
 
 const RETRY_MS = 1_000;
-/** 关闭后确认对方已回到 Device Link 的上限；问不到也算完成(开关已保存在对方那里)。 */
+/** 关闭后等待对方明确回答开关已关闭的上限；超时不能当成完成。 */
 const OFF_SETTLE_MS = 30_000;
 /** 期限前留一点余量：对方的退回计时从它回答时算起。 */
 const DEADLINE_MARGIN_MS = 1_500;
@@ -151,6 +152,15 @@ function newSwitchId(): string {
 }
 
 const running = new Map<string, Promise<RemoteSwitchResult>>();
+
+function readStatus(reply: PeerAgentNetReply): Record<string, unknown> | null {
+  return reply.ok && reply.result && typeof reply.result === 'object' ? reply.result as Record<string, unknown> : null;
+}
+
+function reachedState(reply: PeerAgentNetReply, enabled: boolean): boolean {
+  const status = readStatus(reply);
+  return status?.enabled === enabled && (!enabled || (status.encrypted === true && status.pending !== true));
+}
 
 export function startRemoteSwitch(deviceId: string, target: RemoteSwitchTarget): Promise<RemoteSwitchResult> {
   const existing = running.get(deviceId);
@@ -189,11 +199,18 @@ async function runSwitch(deviceId: string, target: RemoteSwitchTarget): Promise<
   if (!enabled || confirmWithinMs === null) {
     // 关闭(或本来就是这个状态)：不需要确认。问到对方已是这个状态即完成；它重连期间问不到就稍后再问。
     const until = startedAt + OFF_SETTLE_MS;
+    let reached = false;
     while (Date.now() < until) {
       const status = await ask(deviceId, { action: 'status' });
-      const result = status.ok && status.result && typeof status.result === 'object' ? status.result as Record<string, unknown> : null;
-      if (result?.enabled === enabled) break;
+      if (reachedState(status, enabled)) {
+        reached = true;
+        break;
+      }
       await sleep(RETRY_MS);
+    }
+    if (!reached) {
+      set(deviceId, null);
+      return 'failed';
     }
     set(deviceId, { kind: 'done', target });
     return 'done';
@@ -210,13 +227,30 @@ async function runSwitch(deviceId: string, target: RemoteSwitchTarget): Promise<
     }
     const code = switchErrorCode(confirmed);
     // 对方已经退回，或那台电脑上的人改了开关：不再等。
-    if (code === 'AGENT_NET_SWITCH_STALE') break;
+    if (code === 'AGENT_NET_SWITCH_STALE') {
+      // 确认已处理但回包丢失时，待确认记录已经清掉；以实际链路和最终状态核实结果。
+      if (reachedState(await ask(deviceId, { action: 'status' }), true)) {
+        set(deviceId, { kind: 'done', target });
+        return 'done';
+      }
+      break;
+    }
     // 已经联系上对方，只是这条连接还不是 Agent-Net。
     if (code === 'AGENT_NET_SWITCH_NOT_ON_AGENT_NET') set(deviceId, { kind: 'running', target, step: 'confirm' });
     await sleep(RETRY_MS);
   }
   set(deviceId, { kind: 'running', target, step: 'revert' });
   await sleep(1_500);
+  const finalStatus = await ask(deviceId, { action: 'status' });
+  if (reachedState(finalStatus, true)) {
+    set(deviceId, { kind: 'done', target });
+    return 'done';
+  }
+  const state = readStatus(finalStatus);
+  if (state?.enabled !== false || state.pending === true) {
+    set(deviceId, null);
+    return 'failed';
+  }
   set(deviceId, { kind: 'reverted', target });
   return 'reverted';
 }

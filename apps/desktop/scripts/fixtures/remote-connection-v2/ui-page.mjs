@@ -63,7 +63,7 @@ export default {
         await page.getByRole('button', { name: await t('toAgentNet'), exact: true }).click();
         await page.waitForTimeout(1200);
         await ui.capture('card-switching');
-        await page.waitForTimeout(4000);
+        await page.getByText(await t('reverted'), { exact: true }).waitFor();
         await ui.capture('card-reverted');
         await page.keyboard.press('Escape');
         return;
@@ -78,7 +78,7 @@ export default {
       await page.getByRole('dialog').getByRole('button').last().click();
       await page.waitForTimeout(1200);
       await ui.capture('batch-canary');
-      await page.waitForTimeout(8000);
+      await page.getByRole('dialog').locator('button:enabled').waitFor();
       await ui.capture('batch-done');
       await page.getByRole('button', { name: await t('batch.close'), exact: true }).click();
       await page.waitForTimeout(300);

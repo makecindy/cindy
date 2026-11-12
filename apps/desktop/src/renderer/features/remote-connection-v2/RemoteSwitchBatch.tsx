@@ -95,9 +95,9 @@ function BatchPanel({
     }));
     const all = [firstResult, ...results];
     const done = all.filter((r) => r === 'done').length;
-    const reverted = all.length - done;
+    const notSwitched = all.length - done;
     setRun((cur) => (cur ? { ...cur, phase: 'finished' } : cur));
-    if (reverted) toast.error(t('settings.remoteControl.v2.peerSwitch.batch.finishedWithRevert', { done, reverted }));
+    if (notSwitched) toast.error(t('settings.remoteControl.v2.peerSwitch.batch.finishedWithRevert', { done, reverted: notSwitched }));
     else toast.success(t('settings.remoteControl.v2.peerSwitch.batch.finished', { done }));
   };
 
@@ -192,11 +192,11 @@ export function RemoteSwitchBatch({ nodes, entries }: { nodes: readonly Topology
       </PopoverContent>
     </Popover>
   );
-  if (!toAgentNet && !toDeviceLink) return null;
+  if (!toAgentNet && !toDeviceLink && !open) return null;
   return (
     <span className="flex items-center gap-3">
-      {toAgentNet ? trigger('agent-net', t('settings.remoteControl.v2.peerSwitch.batch.toAgentNet')) : null}
-      {toDeviceLink ? trigger('device-link', t('settings.remoteControl.v2.peerSwitch.batch.toDeviceLink')) : null}
+      {toAgentNet || open === 'agent-net' ? trigger('agent-net', t('settings.remoteControl.v2.peerSwitch.batch.toAgentNet')) : null}
+      {toDeviceLink || open === 'device-link' ? trigger('device-link', t('settings.remoteControl.v2.peerSwitch.batch.toDeviceLink')) : null}
     </span>
   );
 }

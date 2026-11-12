@@ -135,15 +135,15 @@ function scenario(name: string): { devices: Device[]; links: Link[]; relayRttMs:
 const data = scenario(ctx.case);
 /**
  * 远程切换连接方式的模拟对端(remote-switch):代替那台电脑回答 `peer-agent-net`,并像真实切换一样
- * 让与它的连接先断开、再以新方式连回来。MacBook Air 是旧版 Cindy(不认识这个请求)，Spare PC 系统安全存储
- * 不可用；Agent-Net 不通的那台(单台场景 Home PC、批量场景 Lab Mac)连回来的仍是 Device Link，
+ * 让与它的连接先断开、再以新方式连回来。MacBook Air 是旧版 Cindy(不认识这个请求)，Spare PC 在当前中转上
+ * 没有 Agent-Net 身份；Agent-Net 不通的那台(单台场景 Home PC、批量场景 Lab Mac)连回来的仍是 Device Link，
  * 在它给出的期限后显示已退回。
  */
-const peerPlan: Record<string, { status?: 'unsupported' | 'NOT_SIGNED_IN' | 'SECURE_STORAGE_UNAVAILABLE'; agentNetFails?: boolean }> =
+const peerPlan: Record<string, { status?: 'unsupported' | 'NOT_SIGNED_IN' | 'SECURE_STORAGE_UNAVAILABLE' | 'RELAY_IDENTITY_MISSING'; agentNetFails?: boolean }> =
   ctx.case === 'remote-switch' || ctx.case === 'remote-switch-batch'
     ? {
         air: { status: 'unsupported' },
-        spare: { status: 'SECURE_STORAGE_UNAVAILABLE' },
+        spare: { status: 'RELAY_IDENTITY_MISSING' },
         // 单台：Home PC 退回；批量：第一台 Home PC 成功，Lab Mac 退回，Work PC 成功。
         [ctx.case === 'remote-switch' ? 'home' : 'lab']: { agentNetFails: true },
       }
@@ -157,7 +157,8 @@ async function simulatePeer(command: Extract<SelfHostedRelayCommand, { type: 'pe
   await wait(request.action === 'status' ? 800 : 300);
   if (plan.status === 'unsupported') return { ok: false, code: 'CHANNEL_NOT_ALLOWED', message: 'channel not allowed remotely' };
   if (request.action === 'status') {
-    return { ok: true, result: { version: 1, enabled: link?.encrypted === true, onlyEncrypted: false, blocked: plan.status ?? null, pending: false } };
+    return { ok: true, result: { version: 1, enabled: link?.encrypted === true, encrypted: link?.encrypted === true,
+      onlyEncrypted: false, blocked: plan.status ?? null, pending: (pendingDeadline.get(command.deviceId) ?? 0) > Date.now() } };
   }
   if (request.action === 'confirm') {
     // 像真实对方一样：重连期间联系不上；连回来但不是 Agent-Net 时不认；过了期限说明已经退回。
@@ -166,6 +167,7 @@ async function simulatePeer(command: Extract<SelfHostedRelayCommand, { type: 'pe
     }
     if (!link?.open) return { ok: false, code: 'NOT_CONNECTED', message: 'reconnecting' };
     if (link.encrypted !== true) return { ok: false, code: 'IPC_ERROR', message: '[AGENT_NET_SWITCH_NOT_ON_AGENT_NET] agent-net switch failed' };
+    pendingDeadline.delete(command.deviceId);
     return { ok: true, result: { version: 1, switchId: request.switchId, confirmed: true } };
   }
   if (request.enabled && plan.status) return { ok: false, code: 'IPC_ERROR', message: '[AGENT_NET_SWITCH_NOT_READY] agent-net switch failed' };

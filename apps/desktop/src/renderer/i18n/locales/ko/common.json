@@ -6781,12 +6781,13 @@
             "unsupported": "「{{name}}」의 Cindy 버전이 오래되어 원격으로 전환할 수 없습니다",
             "not-ready": "「{{name}}」은(는) 지금 Agent-Net을 켤 수 없습니다",
             "busy": "「{{name}}」이(가) 다른 전환을 처리 중입니다. 잠시 후 다시 시도하세요",
-            "failed": "「{{name}}」에 연결하지 못했습니다. 잠시 후 다시 시도하세요"
+            "failed": "「{{name}}」의 연결을 전환하지 못했습니다"
           },
           "checking": "전환할 수 있는지 확인하는 중…",
           "notReady": {
             "not-signed-in": "상대가 Cindy에 로그인하지 않았습니다. 로그인 후 Agent-Net을 켤 수 있습니다.",
-            "secure-storage": "상대 컴퓨터의 보안 저장소를 사용할 수 없어 Agent-Net을 켤 수 없습니다. 그 컴퓨터에서 해결해야 합니다."
+            "secure-storage": "상대 컴퓨터의 보안 저장소를 사용할 수 없어 Agent-Net을 켤 수 없습니다. 그 컴퓨터에서 해결해야 합니다.",
+            "relay-identity": "상대 컴퓨터에 현재 중계 서버의 Agent-Net 연결이 설정되어 있지 않습니다. 먼저 그 컴퓨터에서 설정하세요."
           },
           "batch": {
             "toAgentNet": "모두 Agent-Net으로 전환",
@@ -6811,11 +6812,11 @@
               "done": "전환됨",
               "reverted": "자동으로 돌아감",
               "skipped": "전환 안 함",
-              "failed": "연결 못 함"
+              "failed": "전환 못 함"
             },
             "stopped": "첫 번째 컴퓨터를 전환하지 못해 나머지는 그대로 두었습니다.",
             "finished": "{{done}}대 전환됨",
-            "finishedWithRevert": "{{done}}대 전환됨, {{reverted}}대는 전환하지 못해 자동으로 돌아감"
+            "finishedWithRevert": "{{done}}대 전환됨, {{reverted}}대는 전환하지 못함"
           },
           "changedBy": {
             "on": "「{{name}}」이(가) {{time}}에 원격으로 켬",

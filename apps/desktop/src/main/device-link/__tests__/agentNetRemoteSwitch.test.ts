@@ -18,7 +18,7 @@ import { APPLY_DELAY_MS, createAgentNetRemoteSwitch, type AgentNetPendingSwitch,
 const CONTROLLER = 'controller-device';
 const SWITCH = 'switch-0001';
 
-function setup(initial: { enabled?: boolean; pending?: AgentNetPendingSwitch } = {}) {
+function setup(initial: { enabled?: boolean; pending?: AgentNetPendingSwitch; pid?: number } = {}) {
   const settings: {
     agentNetEnabled: boolean;
     agentNetChangedBy: AgentNetRemoteChange | null;
@@ -27,20 +27,21 @@ function setup(initial: { enabled?: boolean; pending?: AgentNetPendingSwitch } =
   const agentNetLinks = new Set<string>();
   const alive = new Set<number>();
   let block: 'NOT_SIGNED_IN' | null = null;
+  const apply = vi.fn(async (enabled: boolean): Promise<string | null> => { settings.agentNetEnabled = enabled; return null; });
   const service = createAgentNetRemoteSwitch({
     readSettings: () => settings,
     writeChangedBy: async (value) => { settings.agentNetChangedBy = value; },
     writePending: async (value) => { settings.agentNetPendingSwitch = value; },
     readiness: () => block,
-    apply: async (enabled) => { settings.agentNetEnabled = enabled; return null; },
+    apply,
     linkIsAgentNet: (deviceId) => agentNetLinks.has(deviceId),
     now: () => Date.now(),
-    pid: 100,
+    pid: initial.pid ?? 100,
     isProcessAlive: (pid) => alive.has(pid),
     log: { info: () => undefined, warn: () => undefined },
   });
   const turnOn = () => service.handle({ action: 'set', enabled: true, switchId: SWITCH }, CONTROLLER, 'Studio Mac');
-  return { service, settings, agentNetLinks, alive, blockWith: (value: 'NOT_SIGNED_IN') => { block = value; }, turnOn };
+  return { service, settings, agentNetLinks, alive, apply, blockWith: (value: 'NOT_SIGNED_IN') => { block = value; }, turnOn };
 }
 
 beforeEach(() => { vi.useFakeTimers(); });
@@ -83,6 +84,14 @@ describe('remote Agent-Net switch on the switched computer', () => {
     expect(settings).toMatchObject({ agentNetEnabled: false, agentNetPendingSwitch: null, agentNetChangedBy: null });
   });
 
+  it('does not apply a delayed remote disable after the person at the computer keeps Agent-Net on', async () => {
+    const { service, settings } = setup({ enabled: true });
+    await service.handle({ action: 'set', enabled: false, switchId: SWITCH }, CONTROLLER, 'Studio Mac');
+    await service.onLocalChange();
+    await vi.advanceTimersByTimeAsync(APPLY_DELAY_MS);
+    expect(settings).toMatchObject({ agentNetEnabled: true, agentNetPendingSwitch: null, agentNetChangedBy: null });
+  });
+
   it('refuses to turn on when the computer cannot, and allows another computer only to turn it off', async () => {
     const blocked = setup();
     blocked.blockWith('NOT_SIGNED_IN');
@@ -96,6 +105,18 @@ describe('remote Agent-Net switch on the switched computer', () => {
     await expect(service.handle({ action: 'set', enabled: false, switchId: 'switch-0003' }, 'other', 'x')).resolves.toMatchObject({ confirmWithinMs: null });
     await vi.advanceTimersByTimeAsync(APPLY_DELAY_MS + AGENT_NET_SWITCH_CONFIRM_MS);
     expect(settings).toMatchObject({ agentNetEnabled: false, agentNetPendingSwitch: null, agentNetChangedBy: null });
+  });
+
+  it('keeps the pending record if restoring the original setting is interrupted, so the next process can recover', async () => {
+    const original = setup();
+    await original.turnOn();
+    await vi.advanceTimersByTimeAsync(APPLY_DELAY_MS);
+    original.apply.mockRejectedValueOnce(new Error('interrupted before the original setting was restored'));
+    await vi.advanceTimersByTimeAsync(AGENT_NET_SWITCH_CONFIRM_MS);
+    expect(original.settings.agentNetPendingSwitch).toMatchObject({ switchId: SWITCH, previous: false });
+    const restarted = setup({ enabled: true, pending: original.settings.agentNetPendingSwitch!, pid: 101 });
+    await restarted.service.recover();
+    expect(restarted.settings).toMatchObject({ agentNetEnabled: false, agentNetPendingSwitch: null });
   });
 
   it('goes back on start-up when the process that waited for confirmation is gone', async () => {

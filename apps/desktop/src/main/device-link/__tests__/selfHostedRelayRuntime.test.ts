@@ -85,6 +85,7 @@ vi.mock('../relayAccountPreferences.js', () => ({
 }));
 vi.mock('../index.js', () => ({
   broadcast: vi.fn(), getDeviceLinkConnectionIssue: () => null,
+  getDeviceLinkPeerLinks: () => ({ links: [] }),
   restartDeviceLinkForRelayChange: h.restart, setKeepAwakeEnabled: vi.fn(),
 }));
 vi.mock('@cindy/device-link-relay', () => ({
@@ -139,7 +140,7 @@ import {
 import { createTenantJoinRequest, generateIdentity } from '@cindy/agent-net-relay';
 import { generateKeyPairSync, randomUUID } from 'node:crypto';
 import { nodeRelayAuthCrypto } from '@cindy/device-link/node-relay-crypto';
-import { getState, notifyRelayAccountPreferenceChanged, registerSelfHostedRelayIpc } from '../selfHostedRelayRuntime';
+import { agentNetSwitchRemoteHandler, getState, notifyRelayAccountPreferenceChanged, registerSelfHostedRelayIpc } from '../selfHostedRelayRuntime';
 
 function emptyConfig(): RelayConfig {
   return { version: 2, active: null, host: { enabled: false, port: 47820, listenAll: false, externalUrl: null, relayId: null }, deployments: [] };
@@ -186,6 +187,19 @@ afterEach(() => { vi.useRealTimers(); vi.unstubAllGlobals(); });
 
 const deploymentOf = (owner = 'account-a', sshHostId = 'test-server') =>
   h.config.get(owner)!.deployments.find((deployment) => deployment.sshHostId === sshHostId);
+
+// #10095 discussion_r4546067871：旧链接加入的中转没有 V2 身份，不能宣称已具备切换前提。
+// 真实远程 handler；已有部署/配对测试没有运行其只读探测。最小输入：member 仅有 V1 凭证。tier:unit。
+it('reports missing Agent-Net identity on the selected self-hosted relay before accepting a switch', async () => {
+  h.config.get('account-a')!.active = {
+    relayId: 'legacy-relay', name: 'Legacy relay', baseUrl: 'https://relay.invalid', origin: 'join', role: 'member',
+    deviceId: 'test-device', ownerPublicKey: 'A'.repeat(43),
+  };
+  const handler = agentNetSwitchRemoteHandler()!;
+  await expect(handler.handle({ action: 'status' }, 'controller', 'Other computer')).resolves.toMatchObject({ blocked: 'RELAY_IDENTITY_MISSING' });
+  await expect(handler.handle({ action: 'set', enabled: true, switchId: 'switch-legacy' }, 'controller', 'Other computer')).rejects.toThrow('[AGENT_NET_SWITCH_NOT_READY]');
+  expect(h.restart).not.toHaveBeenCalled();
+});
 
 // Minimal privacy policy change must reach the host-owned preference and close compatibility routes.
 // Existing deployment tests did not exercise the new IPC command (unit tier, no network).

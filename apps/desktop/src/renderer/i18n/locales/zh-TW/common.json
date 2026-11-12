@@ -6781,12 +6781,13 @@
             "unsupported": "「{{name}}」的 Cindy 版本較舊，還不能遠端切換",
             "not-ready": "「{{name}}」現在無法開啟 Agent-Net",
             "busy": "「{{name}}」正在處理另一次切換，稍後再試",
-            "failed": "沒能聯絡上「{{name}}」，稍後再試"
+            "failed": "未能切換「{{name}}」的連線方式"
           },
           "checking": "正在確認對方能不能切換…",
           "notReady": {
             "not-signed-in": "對方沒有登入 Cindy，登入後才能開啟 Agent-Net。",
-            "secure-storage": "對方電腦的系統安全儲存無法使用，打不開 Agent-Net。需要在那台電腦上處理。"
+            "secure-storage": "對方電腦的系統安全儲存無法使用，打不開 Agent-Net。需要在那台電腦上處理。",
+            "relay-identity": "對方尚未設定目前中轉的 Agent-Net 連線，請先在那台電腦上設定。"
           },
           "batch": {
             "toAgentNet": "全部切到 Agent-Net",
@@ -6811,11 +6812,11 @@
               "done": "已切換",
               "reverted": "已自動退回",
               "skipped": "未切換",
-              "failed": "沒聯絡上"
+              "failed": "未能切換"
             },
             "stopped": "第一台沒切成，其餘的沒有切換。",
             "finished": "已切換 {{done}} 台",
-            "finishedWithRevert": "已切換 {{done}} 台，{{reverted}} 台沒切成已自動退回"
+            "finishedWithRevert": "已切換 {{done}} 台，{{reverted}} 台未切換"
           },
           "changedBy": {
             "on": "由「{{name}}」在 {{time}} 遠端開啟",

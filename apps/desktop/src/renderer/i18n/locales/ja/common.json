@@ -6781,12 +6781,13 @@
             "unsupported": "「{{name}}」の Cindy が古いため、リモートで切り替えできません",
             "not-ready": "「{{name}}」は現在 Agent-Net をオンにできません",
             "busy": "「{{name}}」は別の切り替えを処理中です。しばらくしてから再試行してください",
-            "failed": "「{{name}}」に接続できませんでした。しばらくしてから再試行してください"
+            "failed": "「{{name}}」を切り替えられませんでした"
           },
           "checking": "切り替えできるか確認中…",
           "notReady": {
             "not-signed-in": "相手が Cindy にサインインしていません。サインイン後に Agent-Net をオンにできます。",
-            "secure-storage": "相手の端末でセキュアストレージが使えないため、Agent-Net をオンにできません。その端末で対応してください。"
+            "secure-storage": "相手の端末でセキュアストレージが使えないため、Agent-Net をオンにできません。その端末で対応してください。",
+            "relay-identity": "そのコンピュータでは、現在の中継での Agent-Net 接続が未設定です。先にそのコンピュータで設定してください。"
           },
           "batch": {
             "toAgentNet": "すべて Agent-Net に切り替え",
@@ -6811,11 +6812,11 @@
               "done": "切り替え済み",
               "reverted": "自動で戻りました",
               "skipped": "未切り替え",
-              "failed": "接続できず"
+              "failed": "切り替えできず"
             },
             "stopped": "1 台目が切り替えできなかったため、残りは切り替えていません。",
             "finished": "{{done}} 台を切り替えました",
-            "finishedWithRevert": "{{done}} 台を切り替え、{{reverted}} 台は切り替えできず自動で戻りました"
+            "finishedWithRevert": "{{done}} 台を切り替え、{{reverted}} 台は切り替えできませんでした"
           },
           "changedBy": {
             "on": "「{{name}}」が {{time}} にリモートでオン",

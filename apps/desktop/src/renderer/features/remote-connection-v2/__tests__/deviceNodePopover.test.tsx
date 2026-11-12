@@ -9,7 +9,7 @@
  * tier:unit(jsdom 组件)。实测耗时:<2s。
  */
 
-import { cleanup, fireEvent, render, screen } from '@testing-library/react';
+import { act, cleanup, fireEvent, render, screen } from '@testing-library/react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
 vi.mock('react-i18next', () => ({
@@ -17,6 +17,7 @@ vi.mock('react-i18next', () => ({
 }));
 
 import { DeviceNodePopover, HubNodePopover } from '../DeviceNodePopover';
+import { RemoteSwitchBatch } from '../RemoteSwitchBatch';
 import type { TopologyModel, TopologyNode } from '../topologyModel';
 
 function node(partial: Partial<TopologyNode> = {}): TopologyNode {
@@ -44,7 +45,18 @@ function node(partial: Partial<TopologyNode> = {}): TopologyNode {
 
 const remoteDesktop = () => screen.queryByRole('button', { name: 'remoteDesktop.title' });
 
-afterEach(() => cleanup());
+afterEach(() => { cleanup(); vi.unstubAllGlobals(); });
+
+// #10095 discussion_r4546067865：最后一台候选进入切换状态后，已打开的进度浮层仍须保留。
+// 真实组件入口；现有设备卡片用例未覆盖批量浮层。最小输入：一台候选变成 running。tier:unit。
+it('keeps the open batch panel mounted when its last candidate starts switching', async () => {
+  const n = node({ id: 'batch-progress', encrypted: false });
+  const view = render(<RemoteSwitchBatch nodes={[n]} entries={new Map()} />);
+  await act(async () => fireEvent.click(screen.getByRole('button', { name: 'settings.remoteControl.v2.peerSwitch.batch.toAgentNet' })));
+  expect(screen.getByText('settings.remoteControl.v2.peerSwitch.batch.confirmTitleAgentNet')).toBeTruthy();
+  view.rerender(<RemoteSwitchBatch nodes={[n]} entries={new Map([[n.id, { kind: 'running', target: 'agent-net', step: 'request' }]])} />);
+  expect(screen.getByText('settings.remoteControl.v2.peerSwitch.batch.confirmTitleAgentNet')).toBeTruthy();
+});
 
 describe('DeviceNodePopover', () => {
   // The UI must distinguish certified V2, legacy relay exposure and an old host's unknown status.

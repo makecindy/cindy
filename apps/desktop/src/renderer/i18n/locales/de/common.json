@@ -6824,12 +6824,13 @@
             "unsupported": "„{{name}}“ nutzt eine ältere Cindy-Version und lässt sich nicht fernumschalten",
             "not-ready": "„{{name}}“ kann Agent-Net gerade nicht einschalten",
             "busy": "„{{name}}“ bearbeitet gerade einen anderen Wechsel. Versuche es gleich erneut.",
-            "failed": "„{{name}}“ nicht erreichbar. Versuche es gleich erneut."
+            "failed": "„{{name}}“ konnte nicht umgeschaltet werden."
           },
           "checking": "Prüfe, ob ein Wechsel möglich ist…",
           "notReady": {
             "not-signed-in": "Das Gerät ist nicht bei Cindy angemeldet. Nach der Anmeldung kann es Agent-Net einschalten.",
-            "secure-storage": "Der sichere Speicher ist auf diesem Computer nicht verfügbar, daher lässt sich Agent-Net nicht einschalten. Behebe das dort."
+            "secure-storage": "Der sichere Speicher ist auf diesem Computer nicht verfügbar, daher lässt sich Agent-Net nicht einschalten. Behebe das dort.",
+            "relay-identity": "Auf diesem Computer ist Agent-Net für den aktuellen Relay noch nicht eingerichtet. Richte es zuerst dort ein."
           },
           "batch": {
             "toAgentNet": "Alle zu Agent-Net",
@@ -6854,11 +6855,11 @@
               "done": "Gewechselt",
               "reverted": "Zurückgekehrt",
               "skipped": "Nicht gewechselt",
-              "failed": "Nicht erreicht"
+              "failed": "Nicht umgeschaltet"
             },
             "stopped": "Der erste Computer konnte nicht wechseln, die übrigen bleiben unverändert.",
             "finished": "{{done}} gewechselt",
-            "finishedWithRevert": "{{done}} gewechselt, {{reverted}} zurückgekehrt"
+            "finishedWithRevert": "{{done}} gewechselt, {{reverted}} nicht gewechselt"
           },
           "changedBy": {
             "on": "Per Fernzugriff eingeschaltet von „{{name}}“ um {{time}}",

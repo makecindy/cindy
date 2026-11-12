@@ -6781,12 +6781,13 @@
             "unsupported": "「{{name}}」之 Cindy 版旧，未能远转",
             "not-ready": "「{{name}}」今不能启 Agent-Net",
             "busy": "「{{name}}」方理他转，稍后再试",
-            "failed": "未能联络「{{name}}」，稍后再试"
+            "failed": "「{{name}}」未能转接"
           },
           "checking": "方询彼能转与否…",
           "notReady": {
             "not-signed-in": "彼未登 Cindy，登之方可启 Agent-Net。",
-            "secure-storage": "彼机之系统安全存储不可用，不能启 Agent-Net。须于彼机处之。"
+            "secure-storage": "彼机之系统安全存储不可用，不能启 Agent-Net。须于彼机处之。",
+            "relay-identity": "对方尚未设置此中转之 Agent-Net 连接，须先于彼机设置。"
           },
           "batch": {
             "toAgentNet": "尽转 Agent-Net",
@@ -6811,11 +6812,11 @@
               "done": "已转",
               "reverted": "已自返",
               "skipped": "未转",
-              "failed": "未联络"
+              "failed": "未成"
             },
             "stopped": "首机未成，其余未转。",
             "finished": "已转 {{done}} 机",
-            "finishedWithRevert": "已转 {{done}} 机，{{reverted}} 机未成已自返"
+            "finishedWithRevert": "已转 {{done}} 机，{{reverted}} 机未成"
           },
           "changedBy": {
             "on": "「{{name}}」于 {{time}} 远启之",

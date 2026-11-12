@@ -78,6 +78,8 @@ export function createAgentNetRemoteSwitch(ports: AgentNetRemoteSwitchPorts) {
   let deadlineTimer: ReturnType<typeof setTimeout> | null = null;
   /** 切换串行执行：退回不能和还没执行的切换交错。 */
   let applying: Promise<void> = Promise.resolve();
+  /** 本机操作取消两个方向上尚未执行的远程切换。 */
+  let localChangeEpoch = 0;
   const log = ports.log;
 
   const later = (fn: () => void, ms: number) => {
@@ -89,13 +91,14 @@ export function createAgentNetRemoteSwitch(ports: AgentNetRemoteSwitchPorts) {
     if (deadlineTimer) clearTimeout(deadlineTimer);
     deadlineTimer = null;
   };
-  const serially = (task: () => Promise<void>): Promise<void> => {
+  const enqueue = <T>(task: () => Promise<T>): Promise<T> => {
     const next = applying.then(task, task);
-    applying = next.catch((error: unknown) => { log.warn('remote agent-net switch step failed', { error: String(error) }); });
-    return applying;
+    applying = next.then(() => undefined, (error: unknown) => { log.warn('remote agent-net switch step failed', { error: String(error) }); });
+    return next;
   };
+  const serially = (task: () => Promise<void>): Promise<void> => enqueue(task).catch(() => undefined);
 
-  function status(): AgentNetSwitchStatus {
+  function status(controllerId?: string): AgentNetSwitchStatus {
     const settings = ports.readSettings();
     return {
       version: AGENT_NET_SWITCH_VERSION,
@@ -103,6 +106,7 @@ export function createAgentNetRemoteSwitch(ports: AgentNetRemoteSwitchPorts) {
       onlyEncrypted: settings.agentNetEnabled === true && settings.agentNetOnlyEncrypted === true,
       blocked: ports.readiness(),
       pending: !!settings.agentNetPendingSwitch,
+      ...(controllerId ? { encrypted: ports.linkIsAgentNet(controllerId) } : {}),
     };
   }
 
@@ -113,10 +117,14 @@ export function createAgentNetRemoteSwitch(ports: AgentNetRemoteSwitchPorts) {
       if (!pending || pending.switchId !== switchId) return;
       clearDeadline();
       log.warn('remote agent-net switch was not confirmed; going back', { reason, previous: pending.previous });
-      await ports.writePending(null);
-      await ports.writeChangedBy(null);
       const error = await ports.apply(pending.previous);
-      if (error) log.warn('going back after an unconfirmed remote agent-net switch failed', { error });
+      if (error) {
+        log.warn('going back after an unconfirmed remote agent-net switch failed', { error });
+        return;
+      }
+      // 恢复完成后再清记录；中途退出，下次启动仍能继续恢复。
+      await ports.writeChangedBy(null);
+      await ports.writePending(null);
     });
   }
 
@@ -126,6 +134,7 @@ export function createAgentNetRemoteSwitch(ports: AgentNetRemoteSwitchPorts) {
   }
 
   async function set(enabled: boolean, switchId: string, controllerId: string, controllerName: string): Promise<AgentNetSwitchAccepted> {
+    const epoch = localChangeEpoch;
     const pending = ports.readSettings().agentNetPendingSwitch;
     if (pending) {
       // 同一请求重发(回答在路上丢了)：照原样再答一次，不重复切换。
@@ -163,6 +172,7 @@ export function createAgentNetRemoteSwitch(ports: AgentNetRemoteSwitchPorts) {
     log.info('remote agent-net switch accepted', { enabled });
     later(() => void serially(async () => {
       // 回答发出后、真正切换前，这台电脑上的人可能已经自己改了开关：以人为准。
+      if (epoch !== localChangeEpoch) return;
       if (enabled && ports.readSettings().agentNetPendingSwitch?.switchId !== switchId) return;
       const error = await ports.apply(enabled);
       if (!error) return;
@@ -198,9 +208,15 @@ export function createAgentNetRemoteSwitch(ports: AgentNetRemoteSwitchPorts) {
     async handle(raw: unknown, controllerId: string, controllerName: string): Promise<AgentNetSwitchStatus | AgentNetSwitchAccepted | AgentNetSwitchConfirmed> {
       const request = parseAgentNetSwitchRequest(raw);
       if (!request) throw new AgentNetSwitchError('AGENT_NET_SWITCH_INVALID', 'invalid request');
-      if (request.action === 'status') return status();
-      if (request.action === 'set') return set(request.enabled, request.switchId, controllerId, controllerName);
-      return confirm(request.switchId, controllerId);
+      if (request.action === 'status') return status(controllerId);
+      if (request.action === 'set') {
+        const epoch = localChangeEpoch;
+        return enqueue(() => {
+          if (epoch !== localChangeEpoch) throw new AgentNetSwitchError('AGENT_NET_SWITCH_STALE', 'a local change took precedence');
+          return set(request.enabled, request.switchId, controllerId, controllerName);
+        });
+      }
+      return enqueue(() => confirm(request.switchId, controllerId));
     },
     /**
      * 启动时调用：记录切换的进程已经不在，就没人能确认了，直接退回；仍在运行的另一个实例留给它；
@@ -218,10 +234,13 @@ export function createAgentNetRemoteSwitch(ports: AgentNetRemoteSwitchPorts) {
     },
     /** 这台电脑上的人自己改了开关：丢掉待确认的远程切换与「由谁打开」的说明。 */
     async onLocalChange(): Promise<void> {
+      localChangeEpoch++;
       clearDeadline();
-      const settings = ports.readSettings();
-      if (settings.agentNetPendingSwitch) await ports.writePending(null);
-      if (settings.agentNetChangedBy) await ports.writeChangedBy(null);
+      await serially(async () => {
+        const settings = ports.readSettings();
+        if (settings.agentNetPendingSwitch) await ports.writePending(null);
+        if (settings.agentNetChangedBy) await ports.writeChangedBy(null);
+      });
     },
   };
 }

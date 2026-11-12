@@ -6891,12 +6891,13 @@
             "unsupported": "« {{name}} » utilise une ancienne version de Cindy et ne peut pas être basculé à distance",
             "not-ready": "« {{name}} » ne peut pas activer Agent-Net pour le moment",
             "busy": "« {{name}} » traite un autre changement. Réessayez dans un instant.",
-            "failed": "Impossible de joindre « {{name}} ». Réessayez dans un instant."
+            "failed": "Impossible de basculer « {{name}} »."
           },
           "checking": "Vérification de la possibilité de basculer…",
           "notReady": {
             "not-signed-in": "Cet appareil n’est pas connecté à Cindy. Il pourra activer Agent-Net après connexion.",
-            "secure-storage": "Le stockage sécurisé est indisponible sur cet ordinateur, Agent-Net ne peut pas être activé. Corrigez-le sur cet ordinateur."
+            "secure-storage": "Le stockage sécurisé est indisponible sur cet ordinateur, Agent-Net ne peut pas être activé. Corrigez-le sur cet ordinateur.",
+            "relay-identity": "Cet ordinateur n’a pas encore configuré Agent-Net pour son relais actuel. Configurez-le d’abord sur cet ordinateur."
           },
           "batch": {
             "toAgentNet": "Tout passer à Agent-Net",
@@ -6921,11 +6922,11 @@
               "done": "Basculé",
               "reverted": "Revenu",
               "skipped": "Non basculé",
-              "failed": "Injoignable"
+              "failed": "Non basculé"
             },
             "stopped": "Le premier ordinateur n’a pas basculé, les autres sont restés inchangés.",
             "finished": "{{done}} basculé(s)",
-            "finishedWithRevert": "{{done}} basculé(s), {{reverted}} revenu(s)"
+            "finishedWithRevert": "{{done}} basculé(s), {{reverted}} non basculé(s)"
           },
           "changedBy": {
             "on": "Activé à distance par « {{name}} » à {{time}}",
