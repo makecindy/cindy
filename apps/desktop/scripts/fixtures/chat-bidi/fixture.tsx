@@ -26,6 +26,18 @@ function Fixture() {
   </main>;
 }
 
+function SourceMessagesFixture() {
+  const hookText = Array(4).fill(UI_MOCK_BIDI_TEXT).join('\n');
+  return <main className="p-4 space-y-4" data-ui-page-subject>
+    <section data-testid="letter"><UserMessage pluginUi={EMPTY_PLUGIN_UI_MESSAGE_CANDIDATES}
+      content={UI_MOCK_BIDI_TEXT} workingDir="" simplifiedBotConversation
+      automationOrigin={{ kind: 'session', senderSessionTitle: 'BiDi source' }} /></section>
+    <section data-testid="hook"><UserMessage pluginUi={EMPTY_PLUGIN_UI_MESSAGE_CANDIDATES}
+      content={hookText} workingDir=""
+      hookSource={{ im: 'feishu', contentFormat: 'user-text', userText: hookText }} /></section>
+  </main>;
+}
+
 void mountPage({
   route: '/bots/fixture-bidi',
   host: {
@@ -46,5 +58,5 @@ void mountPage({
     deviceLink: { onRemotePush: subscription('remote-push') },
     ghosts: { listSync: () => ({ ghosts: [] }) },
   },
-  render: () => <Fixture />,
+  render: (ctx) => ctx.case === 'sources' ? <SourceMessagesFixture /> : <Fixture />,
 });

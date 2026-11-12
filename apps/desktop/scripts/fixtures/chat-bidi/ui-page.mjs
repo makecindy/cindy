@@ -44,10 +44,52 @@ export default {
     ...composer.stubs,
     'src/renderer/contexts/AuthContext': { partial: 'export const useAuth = () => ({ user: { id: "bidi-fixture" } });' },
   },
-  cases: { default: { about: '#10114: independent RTL/LTR paragraphs, code, stream and editable text' } },
+  cases: {
+    default: { about: '#10114: independent RTL/LTR paragraphs, code, stream and editable text' },
+    sources: { about: '#10188: expanded teammate letters and long IM message bodies retain paragraph direction and selection' },
+  },
   async check(page, ui) {
     const rtl = 'سلام، فایل index.html با API 123 آماده است.';
     const english = 'English paragraph: API 123 and https://example.com/docs.';
+    if (ui.case === 'sources') {
+      // These real UserMessage branches bypass the ordinary bubble. One mixed
+      // paragraph pair reproduces the missing direction; long IM text also
+      // exercises the collapse measurement mirror and selection after expansion.
+      const letter = page.getByTestId('letter');
+      const letterToggle = letter.getByRole('button', { expanded: false });
+      await letterToggle.click();
+      const body = letter.locator('.select-text.whitespace-pre-wrap');
+      await aligned(body, rtl, 'right');
+      await aligned(body, english, 'left');
+      const hook = page.getByTestId('hook');
+      const hookBody = hook.locator('[data-selection-quote-body]');
+      const expand = hook.getByRole('button', { name: await ui.t('chat.userMessage.expandLongMessage'), exact: true });
+      await expand.waitFor();
+      const collapsedHeight = (await hookBody.boundingBox()).height;
+      await aligned(hookBody, rtl, 'right');
+      await aligned(hookBody, english, 'left');
+      await aligned(hook.locator('div[aria-hidden="true"]').filter({ hasText: rtl }), rtl, 'right');
+      await ui.capture('collapsed');
+      await expand.click();
+      assert.ok((await hookBody.boundingBox()).height > collapsedHeight);
+      for (const text of ['مرحبا، الإصدار API 123 جاهز.', 'שלום, הקובץ index.html מוכן.']) {
+        await aligned(body, text, 'right');
+        await aligned(hookBody, text, 'right');
+      }
+      const selected = await hookBody.evaluate(element => {
+        const selection = window.getSelection(), range = document.createRange();
+        range.selectNodeContents(element); selection.removeAllRanges(); selection.addRange(range);
+        const text = selection.toString(); selection.removeAllRanges();
+        return { text, original: element.textContent };
+      });
+      assert.equal(selected.text, selected.original);
+      await ui.capture('expanded');
+      await hook.getByRole('button', { name: await ui.t('chat.userMessage.collapseLongMessage'), exact: true }).click();
+      assert.equal((await hookBody.boundingBox()).height, collapsedHeight);
+      await letter.getByRole('button', { expanded: true }).click();
+      await body.waitFor({ state: 'hidden' });
+      return;
+    }
     await aligned(page.locator('[data-testid="markdown"] p').filter({ hasText: rtl }), rtl, 'right');
     await aligned(page.locator('[data-testid="markdown"] p').filter({ hasText: english }), english, 'left');
     const user = page.locator('[data-testid="user"] [data-selection-quote-body]');

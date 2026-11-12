@@ -1460,7 +1460,7 @@ export function UserMessage({
             />
             {letterExpanded && (
               <div className="flex w-full flex-col items-start gap-1.5 border-l-2 border-[var(--border-default)] pl-3">
-                <div className="w-full select-text whitespace-pre-wrap text-13 leading-5 text-[var(--text-secondary)] [overflow-wrap:anywhere]">
+                <div className="chat-content-text w-full select-text whitespace-pre-wrap text-13 leading-5 text-[var(--text-secondary)] [overflow-wrap:anywhere]">
                   {displayContent}
                 </div>
                 <BotTaskLetterOpen
