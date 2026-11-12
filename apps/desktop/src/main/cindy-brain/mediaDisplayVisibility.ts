@@ -7,12 +7,13 @@ import { getModelVisibilityOverride } from '../maker-host/model-visibility-mirro
 export function isCatalogMediaModelVisible(
   providerId: string,
   modelId: string,
-  defaultEnabled?: boolean,
+  defaultEnabled: boolean | undefined,
+  kind: 'image' | 'video',
 ): boolean {
   try {
     const provider = getActiveCatalog().providers.find((item) => item.id === providerId);
-    const mediaModel = provider?.imageModels?.find((model) => model.id === modelId)
-      ?? provider?.videoModels?.find((model) => model.id === modelId);
+    const models = kind === 'image' ? provider?.imageModels : provider?.videoModels;
+    const mediaModel = models?.find((model) => model.id === modelId);
     const agent = mediaModel?.sourceAgent ?? provider?.agents[0] ?? 'claude-code';
     return isModelVisible(
       getModelVisibilityOverride(agent, providerId, modelId),
