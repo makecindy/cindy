@@ -11271,7 +11271,8 @@
         "capability": {
           "GROUP_AUTHORIZATION_REQUIRED": "{{name}} no pudo ejecutar la herramienta: la autorización del grupo ha caducado o no permite esta acción. La persona propietaria del amigo puede volver a solicitarla en este grupo.",
           "GROUP_AUTHORIZATION_UNAVAILABLE": "No se pudo verificar la autorización de grupo de {{name}}, por lo que la herramienta no se ejecutó. Vuelve a intentarlo cuando se restablezca la conexión.",
-          "ATTACHMENTS_UNAVAILABLE": "Algunos adjuntos no llegaron a {{name}} por un fallo de descarga o por el límite de adjuntos. Vuelve a enviar los archivos necesarios para esta solicitud."
+          "ATTACHMENTS_UNAVAILABLE": "Algunos adjuntos no llegaron a {{name}} por un fallo de descarga o por el límite de adjuntos. Vuelve a enviar los archivos necesarios para esta solicitud.",
+          "GROUP_ASSISTANT_UNAVAILABLE": "{{name}}, conecta tu Cindy para que Cindy pueda trabajar por ti (ahora no tienes ningún Cindy conectado)."
         }
       },
       "settings": {
@@ -11398,6 +11399,38 @@
           "failed": "Fallido",
           "cancelled": "Cancelado",
           "timed-out": "Tiempo agotado"
+        },
+        "label": "Tarea",
+        "untitled": "Tarea sin título",
+        "askedBy": "Pedida por {{requester}}",
+        "pr": "PR #{{number}}",
+        "open": "Abrir la tarea «{{title}}»",
+        "live": {
+          "running": "En curso",
+          "waiting": "Esperando respuesta",
+          "idle": "Inactivo",
+          "failed": "Con error"
+        },
+        "othersSaid": "Lo que dijeron otros en el hilo"
+      },
+      "assistant": {
+        "groupRecent": "Mensajes recientes del grupo",
+        "groupNew": "Mensajes nuevos del grupo",
+        "threadRecent": "Mensajes recientes del hilo",
+        "threadNew": "Mensajes nuevos del hilo",
+        "replyingTo": "En respuesta a \"{{name}}\": {{text}}",
+        "earlierOmitted": "(Mensajes anteriores omitidos)",
+        "actingFor": "{{name}} · por {{person}}",
+        "checkout": {
+          "gitMissing": "(Cindy) El proyecto {{repo}} del grupo todavía no está en este ordenador: git no está instalado. {{guide}} Cuando esté instalado, vuelve a mencionar a @Cindy y Cindy descargará el proyecto y trabajará en él.",
+          "signInOpened": "(Cindy) El proyecto {{repo}} del grupo todavía no está en este ordenador: primero conecta tu cuenta de GitHub. Cindy abrió el inicio de sesión de GitHub en este ordenador; cuando hayas iniciado sesión, vuelve a mencionar a @Cindy y descargará el proyecto.",
+          "signIn": "(Cindy) El proyecto {{repo}} del grupo todavía no está en este ordenador: primero conecta tu cuenta de GitHub. Inicia sesión en GitHub desde Cindy en este ordenador y vuelve a mencionar a @Cindy.",
+          "unavailable": "(Cindy) No se pudo descargar el proyecto {{repo}} del grupo en este ordenador: puede que tu cuenta de GitHub no tenga acceso o que no haya conexión. Comprueba que puedes abrir el repositorio en GitHub y vuelve a mencionar a @Cindy.",
+          "installGit": {
+            "darwin": "En Terminal, ejecuta xcode-select --install y sigue las indicaciones.",
+            "win32": "Descarga Git desde https://git-scm.com/download/win e instálalo con las opciones predeterminadas.",
+            "linux": "Instala git con el gestor de paquetes de tu sistema (por ejemplo, sudo apt install git)."
+          }
         }
       },
       "files": {
@@ -11594,10 +11627,21 @@
           "accessTools": "Puede usar herramientas e información",
           "replies": "Cómo responden los amigos",
           "replyModeMentionedNote": "Los amigos no responden a menos que alguien los mencione con @.",
+          "assistant": "Cindy del grupo",
+          "assistantHint": "Trabaja en el ordenador de quien la menciona con @.",
+          "replyModeAssistant": "Cindy responde",
+          "replyModeAssistantNote": "Responde la Cindy del grupo.",
           "work": "Repartos de trabajo",
           "ownFolder": "Carpeta propia del grupo",
-          "projectDirHint": "Dónde trabajan los amigos durante un reparto de trabajo.",
+          "projectDirHint": "Solo se aplica en este ordenador.",
           "projectDirClearHint": "Usar la carpeta propia del grupo en su lugar",
+          "project": "Proyecto",
+          "projectCaption": "Los amigos responden y hacen los repartos de trabajo en este proyecto. El repositorio se comparte con el grupo; la carpeta se queda en este ordenador.",
+          "githubRepo": "Repositorio de GitHub",
+          "githubRepoHint": "Escribe owner/name. Los ordenadores sin carpeta elegida usan su propia copia de este proyecto o descargan una.",
+          "githubRepoSaveFailed": "No se guardó el repositorio. Revísalo e inténtalo de nuevo.",
+          "projectFolder": "Carpeta en este ordenador",
+          "projectDirAutoHint": "Encontrada entre tus proyectos a partir del repositorio.",
           "organizerHint": "Decide quién realiza cada paso. De forma predeterminada, es el primer amigo.",
           "autoContinueHint": "Si se desactiva, cada paso espera a que decidas continuar.",
           "workCaption": "Con un proyecto git, cada reparto de trabajo tiene su propia rama para no modificar tu código. La carpeta del proyecto y la continuación automática entre amigos solo se aplican en esta computadora.",
@@ -11922,6 +11966,8 @@
       "takeOverConflict": "{{name}} ya se trasladó a “{{device}}”",
       "takeOverOffline": "No se puede conectar con el servidor, por lo que {{name}} no puede continuar aquí en este momento",
       "takeOverFailed": "No se pudo tomar el control de {{name}} en esta computadora",
+      "profileIdentityTooLong": "La personalidad en la nube supera los {{limit}} caracteres y no se puede restaurar. Acórtala, sincronízala y vuelve a intentarlo. Los datos existentes se conservan.",
+      "profileUserTooLong": "El contexto del usuario en la nube supera los {{limit}} caracteres y no se puede restaurar. Acórtalo, sincronízalo y vuelve a intentarlo. Los datos existentes se conservan.",
       "localCindyConflict": "La computadora que toma el relevo ya tiene otra Cindy. Adminístrala en sus ajustes o elige otra computadora principal",
       "localCindyConflictAction": "Abrir ajustes de la Cindy local",
       "notEnabled": "Este servidor no admite cambiar la computadora principal",
@@ -11988,7 +12034,20 @@
       "transferred": "{{name}} se movió a “{{device}}”",
       "transferConflict": "La computadora principal de {{name}} ya cambió, por lo que no fue movida",
       "transferOffline": "No se puede acceder al servidor. {{name}} sigue ejecutándose en esta computadora",
-      "transferFailed": "No se pudo mover a {{name}} a “{{device}}”"
+      "transferFailed": "No se pudo mover a {{name}} a “{{device}}”",
+      "repair": {
+        "action": "Editar perfil y reintentar",
+        "title": "Corregir perfil del compañero",
+        "description": "Al guardar, este compañero se restaurará en este ordenador. Primero se guardará aquí una copia del perfil original.",
+        "save": "Guardar y restaurar",
+        "count": "{{count}} / {{limit}} caracteres",
+        "over": "Sobran {{count}} caracteres. Acorta el texto antes de guardar.",
+        "changed": "El perfil o el ordenador principal ha cambiado. Recarga el perfil antes de editarlo.",
+        "loadFailed": "No se pudo leer el perfil. Inténtalo de nuevo.",
+        "backupFailed": "No se pudo guardar una copia del perfil original y no se aplicó la corrección. Comprueba el espacio libre y reintenta.",
+        "saveFailed": "El compañero aún no se ha restaurado. Tus cambios siguen aquí; inténtalo de nuevo.",
+        "reload": "Volver a cargar"
+      }
     },
     "market": {
       "heading": "Descubrir amigos",
@@ -14359,6 +14418,8 @@
       "sessionSentNamed": "Enviado por la sesión \"{{name}}\"",
       "sessionViewSource": "Ver sesión de origen",
       "botSentNamed": "Enviado por el amigo \"{{name}}\"",
+      "groupThreadSent": "Enviado por \"{{name}}\" en un hilo de \"{{group}}\"",
+      "groupRequestSent": "Del grupo \"{{group}}\" · {{name}}",
       "orcaFromLead": "Mensaje de Lead",
       "orcaFromWorker": "Mensaje de Worker",
       "orcaFromWorkerBatch": "Informe del sistema: {{count}} resultados de Worker",
@@ -17867,6 +17928,7 @@
       "dingtalkBotDisconnectFailed": "No se pudo desvincular el bot de DingTalk"
     },
     "errors": {
+      "piStartupCloudFile": "Un archivo de instrucciones que solo está en la nube podría estar retrasando el inicio de Pi: {{path}}. Descarga este archivo en Finder, espera a que esté disponible localmente y vuelve a intentarlo. El tiempo de espera agotado podría tener otra causa.",
       "openFileFailed": "No se puede abrir el archivo en el sistema",
       "emptyResponse": "El modelo no devolvió contenido. Inténtalo de nuevo. Si el contexto es muy largo, cambia de modelo.",
       "turnFailed": "La tarea falló (el modelo no devolvió detalles del error); inténtalo de nuevo.",

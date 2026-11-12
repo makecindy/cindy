@@ -239,7 +239,7 @@ vi.mock('../../../appSessionState.js', async (importOriginal) => {
     ...actual,
     activeOwnerScopeKey: () => h.ownerScopeKey,
     isAppSessionBoundaryPending: () => h.ownerBoundaryPending,
-    ownerScopedUserDataPath: () => join(h.userDataDir, createHash('sha256').update(h.ownerScopeKey).digest('hex')),
+    ownerScopedUserDataPath: (...parts: string[]) => join(h.userDataDir, createHash('sha256').update(h.ownerScopeKey).digest('hex'), ...parts),
   };
 });
 vi.mock('../../../assistantSamplingSettlement.js', async importOriginal => {
@@ -1100,6 +1100,135 @@ describe('Bot canonical Session lifecycle', () => {
   // name with a different companion already here; the two stay independent.
   describe('cloud take-over next to a same-named local companion', () => {
     const names = () => h.sqlite!.prepare("SELECT id FROM bot_profiles WHERE display_name = 'Release Bot' ORDER BY id").pluck().all();
+
+    // #10205 review, DB tier: the real host must use a source-only versioned update on
+    // the current home. Runtime fakes cannot prove local-file conflict detection or preservation.
+    it.each([
+      { field: 'identitySource', status: 'active' }, { field: 'userContextSource', status: 'active' },
+      { field: 'identitySource', status: 'paused' }, { field: 'userContextSource', status: 'paused' },
+    ] as const)('edits only the rejected local $field ($status) and refuses a stale source', async ({ field, status }) => {
+      const id = `repair-local-${field.toLowerCase()}`;
+      await invoke('local-db:bots:create', { id, name: 'Local name', description: 'Local description',
+        identitySource: 'Keep identity', userContextSource: 'Keep user context' });
+      if (status === 'paused') await invoke('local-db:bots:update', { id, enabled: false });
+      expect(await invoke('local-db:bots:get', id)).toMatchObject({ status });
+      const home = join(h.userDataDir, createHash('sha256').update(h.ownerScopeKey).digest('hex'), 'bots', id);
+      const file = join(home, field === 'identitySource' ? 'SOUL.md' : 'memories/USER.md');
+      const untouched = join(home, field === 'identitySource' ? 'memories/USER.md' : 'SOUL.md');
+      const kept = readFileSync(untouched, 'utf8');
+      const original = 'x'.repeat(12001);
+      writeFileSync(file, original);
+      const host = createCompanionCloudHost({ deliverToCanonical: async () => ({ ok: true }),
+        ensureCanonicalSession: async () => 'unused', rebuildContext: async () => 'rebuilt', listDevices: async () => [] });
+      const fields = [{ field, source: original, maxLength: 12000 }];
+      await host.repairProfileSources!(id, fields, { [field]: 'Owner correction' }, { assertCurrent() {} });
+      expect(readFileSync(file, 'utf8').trim()).toBe('Owner correction');
+      expect(readFileSync(untouched, 'utf8')).toBe(kept);
+      expect(await invoke('local-db:bots:get', id)).toMatchObject({ status, name: 'Local name', description: 'Local description' });
+      writeFileSync(file, 'New edit while the draft was open');
+      await expect(host.repairProfileSources!(id, fields, { [field]: 'Stale correction' }, { assertCurrent() {} }))
+        .rejects.toMatchObject({ reason: 'changed' });
+      expect(readFileSync(file, 'utf8')).toBe('New edit while the draft was open');
+    });
+
+    // #10205 review, DB tier: the normal profile writer logs folder failures. The recovery
+    // action must not acknowledge them, and the same draft must retry a partially saved pair.
+    it.each(['identitySource', 'userContextSource'] as const)('keeps the repair draft after a failed %s file write and retries it', async field => {
+      const id = `repair-write-${field.toLowerCase()}`;
+      await invoke('local-db:bots:create', { id, name: 'Local name', identitySource: 'Old identity', userContextSource: 'Old user' });
+      await invoke('local-db:bots:update', { id, enabled: false });
+      const home = join(h.userDataDir, createHash('sha256').update(h.ownerScopeKey).digest('hex'), 'bots', id);
+      const files = { identitySource: join(home, 'SOUL.md'), userContextSource: join(home, 'memories', 'USER.md') };
+      const source = 'x'.repeat(12001);
+      for (const file of Object.values(files)) writeFileSync(file, source);
+      const actor = { id: 'repair-write-actor', kind: 'bot', externalId: id, name: 'Cloud name', homeDeviceId: 'self' };
+      const { api } = fakeApi(route => route === '/preferences' ? [{ key: 'companion.profile.v1', revision: 1,
+        value: { name: 'Cloud name', description: '', soul: source, user: source, systemPrompt: '' } }] : {});
+      const { state } = memoryState();
+      const host = createCompanionCloudHost({ deliverToCanonical: async () => ({ ok: true }),
+        ensureCanonicalSession: async () => 'unused', rebuildContext: async () => 'rebuilt', listDevices: async () => [] });
+      host.openState = () => state;
+      const runtime = startCompanionCloud({ api, host, endpoint: 'https://synthetic.invalid', humanActorId: 'human',
+        selfDeviceId: 'self', current: () => true, bots: () => [], actors: () => [actor], initialKick: false });
+      const rename = fsPromises.rename.bind(fsPromises);
+      let blocked = true;
+      const failure = vi.spyOn(fsPromises, 'rename').mockImplementation(async (from, to) => {
+        if (blocked && String(to).replaceAll('\\', '/').endsWith(`/bots/${id}/${field === 'identitySource' ? 'SOUL.md' : 'memories/USER.md'}`))
+          throw Object.assign(new Error('ENOSPC'), { code: 'ENOSPC' });
+        return rename(from, to);
+      });
+      try {
+        runtime.reconcile([{ id, status: 'paused' }]);
+        const opened = await runtime.repairProfile(id, { action: 'read' });
+        if (!opened.ok || !opened.draft) throw new Error('Missing repair draft');
+        const request = { action: 'save' as const, token: opened.draft.token,
+          values: { identitySource: 'Corrected identity', userContextSource: 'Corrected user' } };
+        expect(runtime.installConfirmed(id)).toBe(true);
+        expect(await runtime.repairProfile(id, request)).toEqual({ ok: false, code: 'FAILED' });
+        expect(readFileSync(files[field], 'utf8')).toBe(source);
+        blocked = false;
+        expect(await runtime.repairProfile(id, request)).toEqual({ ok: true });
+        for (const key of ['identitySource', 'userContextSource'] as const) expect(readFileSync(files[key], 'utf8')).toBe(request.values[key]);
+        expect((await host.readValues(id)).find(row => row.key === 'companion.profile.v1')?.value)
+          .toMatchObject({ soul: 'Corrected identity', user: 'Corrected user' });
+        expect(await invoke('local-db:bots:get', id)).toMatchObject({ name: 'Local name', status: 'paused' });
+      } finally { failure.mockRestore(); runtime.dispose(); }
+    });
+
+    // #10112: fakeLocal never ran readText's 12000-character boundary. DB tier:
+    // real host creation/update and runtime recovery must agree, without losing text.
+    it.each(['identitySource', 'userContextSource'] as const)('preserves the real source boundary through take-over: %s', async field => {
+      const actor = { id: 'profile-actor', kind: 'bot', externalId: 'profile-limit', name: 'Profile limit', avatar: null, homeDeviceId: 'old-home' };
+      let source = 'x'.repeat(12001);
+      const { state } = memoryState();
+      const host = createCompanionCloudHost({ deliverToCanonical: async () => ({ ok: true }),
+        ensureCanonicalSession: async () => 'unused', rebuildContext: async () => 'rebuilt', listDevices: async () => [] });
+      host.openState = () => state;
+      const failure = { field, maxLength: 12000 };
+      const draft = () => ({ id: actor.externalId, name: actor.name, description: '', identitySource: '', userContextSource: '', avatar: null, [field]: source });
+      await expect(host.materializer!.createProfile(draft(), { assertCurrent() {} }))
+        .rejects.toMatchObject({ code: 'INVALID_PARAMS', failure });
+      const { api, calls } = fakeApi((route, method) => {
+        if (route === '/preferences') return method === 'GET' ? [{ key: 'companion.profile.v1', revision: 1, value: {
+          name: actor.name, description: '', soul: field === 'identitySource' ? source : '',
+          systemPrompt: '', user: field === 'userContextSource' ? source : '',
+        } }] : { revision: 1 };
+        if (route === '/conversations') return { id: '10000000-0000-4000-8000-000000000001' };
+        if (route.includes('/messages?')) return [];
+        return {};
+      });
+      const runtime = startCompanionCloud({ api, host, endpoint: 'https://synthetic.invalid', humanActorId: 'human', selfDeviceId: 'self',
+        current: () => true, bots: () => [], actors: () => [actor], initialKick: false });
+      try {
+        expect(await runtime.takeOver(actor.externalId)).toEqual({ ok: false, code: 'FAILED', profileFailure: failure });
+        expect(calls.every(call => call.method === 'GET')).toBe(true);
+        expect(actor.homeDeviceId).toBe('old-home');
+        expect(h.sqlite!.prepare('SELECT id FROM bot_profiles WHERE id = ?').get(actor.externalId)).toBeUndefined();
+        source = `  ${'x'.repeat(12000)}  `;
+        expect(await runtime.takeOver(actor.externalId)).toEqual({ ok: true });
+        const original = await invoke('local-db:bots:get', actor.externalId);
+        source = 'x'.repeat(12001);
+        await expect(host.materializer!.updateProfile(draft(), { assertCurrent() {} }))
+          .rejects.toMatchObject({ code: 'INVALID_PARAMS', failure });
+        expect(await invoke('local-db:bots:get', actor.externalId)).toEqual(original);
+        expect(await runtime.takeOver(actor.externalId)).toEqual({ ok: false, code: 'FAILED', profileFailure: failure });
+        // This case exercises re-materialization of a handed-over copy, not in-place home editing.
+        state.update(actor.externalId, actor.id, entry => { entry.demoted = true; });
+        const repair = await runtime.repairProfile(actor.externalId, { action: 'read' });
+        if (!repair.ok || !repair.draft) throw new Error('Missing recovery editor');
+        expect(repair.draft.fields[0]?.source).toBe(source);
+        expect(await runtime.repairProfile(actor.externalId, { action: 'save', token: repair.draft.token,
+          values: { [field]: 'y'.repeat(12000) } })).toEqual({ ok: true });
+        const backups = join(h.userDataDir, createHash('sha256').update(h.ownerScopeKey).digest('hex'), 'companion-cloud-backups');
+        const saved = await fsPromises.readdir(backups);
+        const originals = await Promise.all(saved.filter(name => name.startsWith('profile-repair-'))
+          .map(async name => JSON.parse(await fsPromises.readFile(join(backups, name, 'profile.json'), 'utf8'))));
+        expect(originals).toContainEqual(expect.objectContaining({ botId: actor.externalId,
+          profile: expect.objectContaining({ [field === 'identitySource' ? 'soul' : 'user']: source }) }));
+        expect(state.isDemoted(actor.externalId)).toBe(false);
+        expect(runtime.profileFailure(actor.externalId)).toBeUndefined();
+      } finally { runtime.dispose(); companionHomes.reset(); }
+    });
 
     // #9960: the runtime preflight and the real host/SQLite creation must agree. The old
     // materializer projection had no worker singleton, so relaxing only preflight was insufficient.
