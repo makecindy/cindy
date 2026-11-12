@@ -15,6 +15,8 @@
  * 本 registry 随版本演进; getEffectiveAppShortcuts 负责合并。
  */
 
+import type { VoiceInputShortcut } from './voiceInputData';
+
 /** 规范化组合键: code 为 W3C KeyboardEvent.code, key 仅供显示兜底不参与匹配。 */
 export interface AppShortcutCombo {
   code: string;
@@ -857,4 +859,24 @@ export function findAppShortcutConflict(
     if (combos?.some((c) => appShortcutCombosEqual(c, comboValue))) return def.id;
   }
   return null;
+}
+
+/**
+ * Convert a keyboard-based voice input shortcut into the same normalized combo
+ * shape used by app shortcuts. Modifier-only and Fn-backed shortcuts are handled
+ * by separate native paths, so they cannot collide with app shortcut listeners.
+ */
+export function voiceInputShortcutToAppShortcutCombo(
+  shortcut: VoiceInputShortcut,
+): AppShortcutCombo | null {
+  if (shortcut.trigger === 'modifier') return null;
+  if (shortcut.modifiers.fn) return null;
+  return {
+    code: shortcut.code,
+    key: shortcut.key,
+    meta: shortcut.modifiers.meta,
+    ctrl: shortcut.modifiers.ctrl,
+    alt: shortcut.modifiers.alt,
+    shift: shortcut.modifiers.shift,
+  };
 }
