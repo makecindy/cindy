@@ -1,4 +1,5 @@
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { setMainLocale } from '../../../i18n.desktop';
 
 const mocks = vi.hoisted(() => ({
   logger: { info: vi.fn(), warn: vi.fn(), error: vi.fn() },
@@ -54,7 +55,7 @@ import type { ChannelIM, TextChannelIM } from '@cindy/im';
 import { ui } from '../../feishu/uiText';
 import { ui as telegramUi } from '../../telegram/uiText';
 import { ui as wecomUi } from '../../wecom/uiText';
-import { COMPANION_MANAGED_COMMAND_FALLBACK } from '../botCommands';
+import { companionManagedCommandFallback } from '../botCommands';
 import { createSlashHandlers } from '../slashCommands';
 import type { ImCardBuilders } from '../cardBuilders';
 import type { ImSessionRepo, ImSessionRow } from '../sessionRepo';
@@ -153,6 +154,11 @@ function makeHarness(
   const handlers = createSlashHandlers(adapter, repo, cards, turnRunner);
   return { handlers, repo, turnRunner, cards };
 }
+
+
+// 这些用例断言中文控制文案：显式切到 zh-CN，结束后复位为 en。
+beforeEach(() => setMainLocale('zh-CN'));
+afterEach(() => setMainLocale('en'));
 
 describe('IM slash commands', () => {
   beforeEach(() => {
@@ -598,9 +604,11 @@ describe('IM slash commands', () => {
   // 回归(PR #6289 review): 拦截之前要求文案包定义了 companionManagedCommand, 企业微信 / Discord 没定义,
   // 伙伴连接上主人的 /permission 会直接改伙伴主任务的权限模式。
   it.each([
-    ['WeCom pack', wecomUi, wecomUi.slash.companionManagedCommand],
-    ['a pack without the hint', { ...wecomUi, slash: { ...wecomUi.slash, companionManagedCommand: undefined } }, COMPANION_MANAGED_COMMAND_FALLBACK],
-  ])('intercepts /permission on a WeCom companion lane (%s)', async (_label, packUi, expected) => {
+    // 文案按发送时的界面语言现取，期望值也在用例内（zh-CN 生效后）再取。
+    ['WeCom pack', wecomUi, () => wecomUi.slash.companionManagedCommand],
+    ['a pack without the hint', { ...wecomUi, slash: { ...wecomUi.slash, companionManagedCommand: undefined } }, () => companionManagedCommandFallback()],
+  ])('intercepts /permission on a WeCom companion lane (%s)', async (_label, packUi, expectedText) => {
+    const expected = expectedText();
     const textIm = { sendMarkdownText: mocks.sendMarkdownText } as unknown as TextChannelIM;
     const changePermissionMode = vi.fn();
     const turnRunner = makeTurnRunner({

@@ -441,12 +441,34 @@ struct AccessoryQuotaTube: View {
   }
 }
 
-@main
 struct CindyUsageWidgetsBundle: WidgetBundle {
   var body: some Widget {
     QuotaWidget()
     DailyUsageWidget()
     CindyAgentActivityWidget()
+  }
+}
+
+@available(iOS 18.0, *)
+struct CindyUsageWidgetsGlanceBundle: WidgetBundle {
+  var body: some Widget {
+    QuotaWidget()
+    DailyUsageWidget()
+    CindyAgentActivityGlanceWidget()
+  }
+}
+
+/// A widget bundle's body cannot branch on availability, and the small activity
+/// family only exists from iOS 18, so the entry point picks the bundle.
+@main
+enum CindyUsageWidgetsEntry {
+  @MainActor
+  static func main() {
+    if #available(iOS 18.0, *) {
+      CindyUsageWidgetsGlanceBundle.main()
+    } else {
+      CindyUsageWidgetsBundle.main()
+    }
   }
 }
 

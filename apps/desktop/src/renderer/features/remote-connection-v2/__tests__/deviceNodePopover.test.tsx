@@ -1,12 +1,11 @@
 // @vitest-environment jsdom
 /**
  * 拓扑卡片只展示连接信息(用户裁决 2026-11-07:拓扑图只管拓扑,改名、开关、删除留在「我的设备」)。
- * 规则:卡片上没有任何开关、删除或「管理设备…」(其它设备不列在「我的设备」里);这台电脑的卡片的「管理设备…」
- * 把本机交给页面去定位本机卡片;
+ * 规则:所有卡片都不放开关、删除或「管理设备…」;本机设置已在同一页上方。
  * 远程桌面只给在线、能被控、两边都允许控制的电脑;忙碌的状态字是心动橙。改坏了拓扑卡片会重新长出配置,
- * 或者「管理设备…」定位错设备。
- * 覆盖缺口:卡片此前没有组件测试。最小失败输入:见各用例。
- * tier:unit(jsdom 组件)。单文件命令实测 3.82s（14 例，Vitest 2.77s）。
+ * 或者重新长出同页重复的管理入口(用户反馈 2026-11-12)。
+ * 覆盖缺口:旧用例要求本机卡片提供管理按钮。最小失败输入:有本机连接信息的 HubNodePopover。
+ * tier:unit(jsdom 组件)。实测耗时见本 PR 验证记录。
  */
 
 import { act, cleanup, fireEvent, render, screen } from '@testing-library/react';
@@ -155,18 +154,11 @@ describe('HubNodePopover', () => {
     relay: { name: 'Cindy', selfHosted: false, rttMs: 20, flow: null },
   } as unknown as TopologyModel;
 
-  it('只展示与中转的连接、连接问题与待机说明;「管理设备…」交出本机', () => {
-    const onManage = vi.fn();
-    render(<HubNodePopover model={model} linkStatus="online" issue="连接已失效" standby selfDeviceId="self" onManage={onManage} />);
+  it('只展示与中转的连接、连接问题与待机说明,不重复提供同页管理入口', () => {
+    render(<HubNodePopover model={model} linkStatus="online" issue="连接已失效" standby />);
     expect(screen.queryAllByRole('switch')).toHaveLength(0);
     expect(screen.getByText('连接已失效')).toBeTruthy();
     expect(screen.getByText('settings.devices.standbyHint')).toBeTruthy();
-    fireEvent.click(screen.getByRole('button', { name: 'settings.remoteControl.v2.popover.manage' }));
-    expect(onManage).toHaveBeenCalledWith('self');
-  });
-
-  it('设备目录还没拉到(没有本机 id)时不给「管理设备…」', () => {
-    render(<HubNodePopover model={model} linkStatus="online" issue={null} standby={false} selfDeviceId={null} onManage={vi.fn()} />);
-    expect(screen.queryByRole('button', { name: 'settings.remoteControl.v2.popover.manage' })).toBeNull();
+    expect(screen.queryAllByRole('button')).toHaveLength(0);
   });
 });

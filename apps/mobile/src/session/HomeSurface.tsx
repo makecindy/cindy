@@ -1,3 +1,4 @@
+import { playHaptic } from '@/platform/haptics';
 import { taskListSessionTarget } from './sessionDrawerNavigation';
 import type { ViewInstance } from 'react-native';
 import { useTaskListNavigation } from './useTaskListNavigation';
@@ -1887,10 +1888,12 @@ function HomeScreenContent({ active = true, width, newSessionInSystemBar = false
   }, []);
 
   const openChromeMenu = useCallback(() => {
+    if (chromeMenuOpen) return;
+    playHaptic('commit');
     pendingMenuActionRef.current = null;
     setDeviceMenuOpen(false);
     setChromeMenuOpen(true);
-  }, []);
+  }, [chromeMenuOpen]);
 
   const onListScroll = useCallback((event: NativeSyntheticEvent<NativeScrollEvent>) => {
     homeScrollY.value = event.nativeEvent.contentOffset.y;

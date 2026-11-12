@@ -515,7 +515,16 @@ export function ErrorBanner({
   const subscriptionGuidance = localizeSubscriptionAccountError(error, t, i18n.resolvedLanguage ?? i18n.language);
   let displayError: string;
   let hasSpecialGuidance = true;
-  if (subscriptionGuidance) {
+  // #9855: an unknown legacy error code intentionally survives the generic
+  // decoder. Surface the host's localized metadata-based recovery hint while
+  // keeping the original RPC timeout in expandable details. Never infer this
+  // cause from an ordinary timeout or a filename mentioned in arbitrary prose.
+  const piCloudContextRecovery = agentKind === 'pi'
+    ? /(?:^|: Error: )(?:\[IPC_ERROR\]\s*)?(?:LAZY_CREATE_FAILED:\s*)?\[PI_STARTUP_CLOUD_CONTEXT_FILE\] ([^\r\n]+)\npi rpc timeout after \d+ms: [^\r\n]+$/.exec(error)?.[1]
+    : undefined;
+  if (piCloudContextRecovery) {
+    displayError = piCloudContextRecovery;
+  } else if (subscriptionGuidance) {
     displayError = subscriptionGuidance;
     hasSpecialGuidance = false;
   } else if (isResponsesLiteParallelToolCallsError(error)) {
@@ -655,6 +664,7 @@ export function ErrorBanner({
   const showUnwrappedRaw = !hasSpecialGuidance || isResponsesLiteParallelToolCallsError(error);
   if (sharedRecoveryReason) displayError = t(`sharedTaskRecovery.reason.${sharedRecoveryReason}`);
   const canShowErrorDetails =
+    piCloudContextRecovery ||
     isNetworkishError ||
     isOverloadError ||
     isStreamInterrupted ||

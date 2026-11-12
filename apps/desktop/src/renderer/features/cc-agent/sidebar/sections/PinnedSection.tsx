@@ -12,7 +12,7 @@
  * 段头为纯文字标题，与伙伴、全部任务保持相同的文字起点与颜色。
  * 右侧 hover 浮现的显示样式钮打开 ViewStyleMenu（文字 / 卡片 / 列表），
  * 与 Settings → 外观 的开关同源。
- * 置顶**不做"最多显示 N 条"折叠**——置顶是用户主动钉住的内容,三种模式都全部显示。
+ * 展开时三种模式全部显示；收起后只显示未读和待反馈条目，不限制提醒数量。
  *
  * 拖拽：文字 / list 模式通过 SortableList 整行可拖；card 模式由 CardMasonry 在多列时
  *   切到 DraggableCardColumns。落定后都通过父层注入的 `onReorder(newOrderIds)`
@@ -65,7 +65,12 @@ import {
   subscribeRemoteSessionActivity,
 } from '@/features/device-link/remoteSessionActivityStore';
 import { getSessionDeviceId } from '@/features/device-link/remoteProjectsStore';
+import { useAgentIslandActivityMap } from '@/state/agentIslandActivity';
+import { useSessionAttentionKinds } from '@/lib/sessionAttentionStore';
+import { remoteLampOf } from '../../lib/sessionLampAggregation';
+import { useRemoteSessionActivityRevision } from '@/features/device-link/remoteSessionActivityStore';
 import { absorbSessionStarting } from '@/lib/sessionStartingStore';
+import { hasPendingSessionInterruption } from '@cindy/maker-shared/session-activity';
 
 const HEADER_HOVER_ACTION_CLASS = cn(
   'pointer-events-none opacity-0 transition-opacity duration-150',
@@ -207,13 +212,25 @@ export function PinnedSection({
     persistPinnedSectionCollapsed(next);
   }, [collapsed]);
 
-  const visibleEntries = entries;
+  const activities = useAgentIslandActivityMap();
+  const attentionKinds = useSessionAttentionKinds();
+  useRemoteSessionActivityRevision();
+  const needsAttention = (session: Session) => hasPendingSessionInterruption(session)
+    || notifications.has(session.id)
+    || attentionKinds.has(session.id)
+    || activities.get(session.id)?.phase === 'needs-interaction'
+    || remoteLampOf(session.id, session.deviceLinkDeviceId)?.tone != null;
+  const visibleEntries: PinnedSidebarEntry[] = collapsed ? entries.flatMap((entry): PinnedSidebarEntry[] => {
+    if (entry.kind === 'session') return needsAttention(entry.session) ? [entry] : [];
+    const displaySessions = entry.displaySessions.filter(needsAttention);
+    return displaySessions.map(session => ({ kind: 'session' as const, id: session.id, session }));
+  }) : entries;
   const pinnedSessions = useMemo(
     () =>
-      visibleEntries.flatMap((entry) =>
+      entries.flatMap((entry) =>
         entry.kind === 'session' ? [entry.session] : entry.displaySessions,
       ),
-    [visibleEntries],
+    [entries],
   );
   // Pinned rows are absent from ProjectsSection's starting settlement.
   // Settle only the activity being pushed, never an old waiting phase on rerender.
@@ -329,12 +346,33 @@ export function PinnedSection({
     ],
   );
 
+  const renderText = (entry: PinnedSidebarEntry) =>
+    entry.kind === 'project' ? (
+      renderProject(entry.project, entry.displaySessions, collapsed, 'text')
+    ) : (
+      <SessionItem
+        session={entry.session}
+        isActive={entry.session.id === activeSessionId}
+        isRunning={runningSessionIds.has(entry.session.id)}
+        isAttached={attachedSessionIds.has(entry.session.id)}
+        hasAttentionNotification={notifications.has(entry.session.id)}
+        isSelected={selectedSessionIds?.has(entry.session.id) ?? false}
+        onClick={onSessionClick}
+        onAction={onAction}
+        onRename={onRename}
+        onTogglePin={onTogglePin}
+        onMoveSession={onMoveSession}
+        projectOptions={projectOptions}
+        sourceLabel={sourceLabelMap.get(entry.session.id)}
+      />
+    );
+
   const ToggleIcon = collapsed ? ChevronRight : ChevronDown;
   const toggleLabel = collapsed
     ? t('ccAgent.sidebar.pinnedToggleExpand')
     : t('ccAgent.sidebar.pinnedToggleCollapse');
 
-  if (visibleEntries.length === 0) return null;
+  if (entries.length === 0) return null;
 
   return (
     <div className="flex flex-col w-full">
@@ -404,7 +442,7 @@ export function PinnedSection({
           两侧视觉对称。卡片模式原先用 px-[11px],右侧在 gutter 之外又叠了 11px padding,
           导致右留白(~23px)明显宽于左(11px)——改为 pr-0 后两侧都≈12px 且更窄。 */}
       {/* 段级收起走 SectionCollapse 高度动画,播完卸载子树。 */}
-      <SectionCollapse collapsed={collapsed}>
+      <SectionCollapse collapsed={collapsed && visibleEntries.length === 0}>
         {/* 留白放进折叠内容，收起后不残留；列表和卡片按自身内边距补偿。 */}
         <div
           className={cn(
@@ -416,7 +454,13 @@ export function PinnedSection({
               - card:CardMasonry 响应式分栏(侧栏 ~258px 起 2 列、~424px 起 3 列,错落瀑布);
               - list:卡片视觉但**单列满宽**(不分栏、铺满左侧,类灵动岛),走单列 SortableList;
               - text:紧凑行 SessionItem。card/list 都整卡可拖,回写同一份 manualPinnedOrder。 */}
-          {mode === 'card' ? (
+          {collapsed ? (
+            <div className={mode === 'card' ? 'grid grid-cols-1 gap-2' : 'flex flex-col gap-0.5'}>
+              {slicedEntries.map((entry, index) => (
+                <div key={entry.id}>{mode === 'text' ? renderText(entry) : renderCard(entry, index)}</div>
+              ))}
+            </div>
+          ) : mode === 'card' ? (
             <CardMasonry
               items={slicedEntries}
               getId={getEntryId}
@@ -447,27 +491,7 @@ export function PinnedSection({
               reducedMotion={reducedMotion}
               forceFallback={false}
               className="flex flex-col gap-0.5"
-              renderItem={(entry) =>
-                entry.kind === 'project' ? (
-                  renderProject(entry.project, entry.displaySessions, collapsed, 'text')
-                ) : (
-                  <SessionItem
-                    session={entry.session}
-                    isActive={entry.session.id === activeSessionId}
-                    isRunning={runningSessionIds.has(entry.session.id)}
-                    isAttached={attachedSessionIds.has(entry.session.id)}
-                    hasAttentionNotification={notifications.has(entry.session.id)}
-                    isSelected={selectedSessionIds?.has(entry.session.id) ?? false}
-                    onClick={onSessionClick}
-                    onAction={onAction}
-                    onRename={onRename}
-                    onTogglePin={onTogglePin}
-                    onMoveSession={onMoveSession}
-                    projectOptions={projectOptions}
-                    sourceLabel={sourceLabelMap.get(entry.session.id)}
-                  />
-                )
-              }
+              renderItem={renderText}
             />
           )}
         </div>
