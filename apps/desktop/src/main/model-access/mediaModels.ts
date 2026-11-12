@@ -50,17 +50,12 @@ async function readPublicGuide(modelId: string, protocol: string) {
 export async function getMediaGuide(target: MediaGuideTarget, source: MediaGuideSource = 'auto') {
   const connectionScope = providerMediaGuideScope(target);
   if (!connectionScope) throw new Error('MEDIA_DECLARATION_REQUIRED');
-  return resolveMediaGuide(source, {
+  const protocol = providerMediaGuideProtocol(target) ?? 'gateway';
+  const resolved = await resolveMediaGuide(source, {
     readCustom: () => localMediaGuides.read(target, connectionScope)?.guide ?? null,
-    readOfficial: async () => {
-      const resolved = await readPublicGuide(target.modelId, 'http');
-      if (resolved) return resolved.guide;
-      // Previously explicit HTTP protocols remain reusable for private aliases.
-      // Synthetic legacy adapter input Guides are never treated as HTTP Guides.
-      const protocol = providerMediaGuideProtocol(target);
-      return protocol ? (await readPublicGuide(target.modelId, protocol))?.guide ?? null : null;
-    },
+    readOfficial: async () => (await readPublicGuide(target.modelId, protocol))?.guide ?? null,
   });
+  return resolved ? { ...resolved, protocol } : null;
 }
 
 export type MediaGuideCompatibilityErrorCode =

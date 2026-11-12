@@ -37,6 +37,23 @@ describe('media Guide settings operations', () => {
     } as unknown as Parameters<typeof configureModelSettingsActions>[0]);
   });
   afterEach(() => fs.rmSync(state.root, { force: true, recursive: true }));
+  // Public definitions are returned unchanged through the pre-existing endpoint;
+  // an incompatible path is for the agent to diagnose and override locally.
+  it('reads an existing public Guide without requesting a new protocol or rewriting paths', async () => {
+    const published = { ...guide, operations: [{ ...guide.operations[0], request: { ...guide.operations[0]!.request,
+      path: '/volcengine/api/v3/images/generations' } }] };
+    fetch.mockResolvedValueOnce({ modelId: target.modelId, guide: published });
+    expect(await manageAppModels({ ...request, change: { action: 'get' } }, async () => {}))
+      .toMatchObject({ source: 'official', guide: published });
+    expect(fetch).toHaveBeenCalledExactlyOnceWith('/api/model-access/invocation-guide?modelId=new-image&protocol=gateway', expect.any(Object));
+  });
+  it('retains the existing explicit image protocol without probing a new HTTP projection', async () => {
+    configureProviderMediaRuntime({ listModels: () => [], guideScope: () => 'route-1', guideProtocol: () => 'openai',
+      invoke: async () => { throw new Error('must not generate'); } });
+    fetch.mockResolvedValueOnce({ modelId: target.modelId, guide });
+    expect(await manageAppModels({ ...request, change: { action: 'get' } }, async () => {})).toMatchObject({ source: 'official', guide });
+    expect(fetch).toHaveBeenCalledExactlyOnceWith('/api/model-access/invocation-guide?modelId=new-image&protocol=openai', expect.any(Object));
+  });
   it('gets missing, validates and saves user evidence, then gets custom without a model call', async () => {
     const guard = vi.fn(async () => {});
     expect(await manageAppModels({ ...request, change: { action: 'get' } }, guard)).toMatchObject({ status: 'missing', customRevision: null });

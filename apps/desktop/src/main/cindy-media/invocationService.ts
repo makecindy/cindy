@@ -1,7 +1,7 @@
 import fs from 'node:fs/promises';
 import { randomUUID } from 'node:crypto';
 import { setTimeout as delay } from 'node:timers/promises';
-import type { AgentKind, MediaCapability } from '@cindy/model-providers';
+import { isProviderVideoApi, type AgentKind, type MediaCapability } from '@cindy/model-providers';
 import type { CindyMediaToolRequest } from 'cindy-tools';
 import type {
   MediaAsyncPollGuide,
@@ -76,7 +76,6 @@ interface MediaConnection {
   baseUrl: string;
   apiKey: string;
   pathPrefix?: string;
-  guideBasePath?: boolean;
   headers?: Record<string, string>;
   assertCurrent?(): void;
   beforeSubmit?(): void;
@@ -234,7 +233,7 @@ async function resolveInvocationConnection(invocation: StoredMediaInvocation): P
   assertCurrent();
   return {
     ...connection, apiKey: '', pathPrefix: new URL(connection.baseUrl).pathname.replace(/\/+$/, ''),
-    ...(binding.executor === 'provider-http' ? { guideBasePath: true } : {}), assertCurrent,
+    assertCurrent,
     beforeSubmit: () => {
       // Re-read executable membership after reference reads and the database claim.
       // Paid task polling/recovery remains independent of the model's enable switch.
@@ -438,20 +437,7 @@ async function dispatchRequest(input: {
   timeout.unref?.();
   const wirePath = input.path.replaceAll('{model}', encodeURIComponent(input.connection.requestModelId ?? input.modelId));
   const prefix = input.connection.pathPrefix ?? '';
-  let relative = wirePath;
-  if (input.connection.guideBasePath) {
-    // A saved base may already include the API version described by an official
-    // Guide. Join overlapping path segments once, without changing the origin.
-    const baseSegments = prefix.split('/').filter(Boolean);
-    const guideSegments = relative.split('/').filter(Boolean);
-    for (let count = Math.min(baseSegments.length, guideSegments.length); count > 0; count--) {
-      if (baseSegments.slice(-count).join('/') === guideSegments.slice(0, count).join('/')) {
-        relative = '/' + guideSegments.slice(count).join('/');
-        break;
-      }
-    }
-  }
-  const url = requestUrl(input.connection.baseUrl, `${prefix}${relative}`);
+  const url = requestUrl(input.connection.baseUrl, `${prefix}${wirePath}`);
   const startedAt = Date.now();
   const requestLog = {
     invocationId: input.invocationId,
@@ -1299,6 +1285,16 @@ async function prepareInvocation(
         { outcomeKnown: true, allowedActions: ['get_or_complete_media_guide'], target: { providerId: model.providerId, agent, modelId: resolvedModelId } });
       selectedGuide = { modelId: resolvedModelId, guide: resolved.value };
       binding = { providerId: model.providerId, executor: 'provider-http', connectionRevision: connection.revision, sourceAgent: agent, guideSource: resolved.source };
+      // Public adapter Guides keep their existing executor; local Guides describe HTTP directly.
+      if (resolved.source === 'official' && resolved.protocol === 'openai') {
+        binding = { providerId: model.providerId, executor: 'provider-image' };
+      } else if (resolved.source === 'official' && isProviderVideoApi(resolved.protocol)) {
+        const videoConnection = await resolveProviderVideoConnection(model.providerId, resolvedModelId);
+        assertAuthScope(scope);
+        if (!videoConnection) return failure('CONNECTION_UNAVAILABLE', '视频来源的接口或凭证未就绪');
+        binding = { providerId: model.providerId, executor: 'provider-video', connectionRevision: videoConnection.revision,
+          videoProtocol: resolved.protocol };
+      }
     } else if (capability === 'image.generate' || capability === 'image.edit') {
       protocol = providerModel.imageProtocol ?? 'provider-images';
       binding = { providerId: model.providerId, executor: 'provider-image' };

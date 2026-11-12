@@ -434,7 +434,8 @@ describe('Cindy Core media invocation state and security boundary', () => {
     const op = operation({ mode: 'sync', media: [{ path: ['image'], encoding: 'base64', kind: 'image' }] }, '/models/{model}:render');
     delete (op.request as Partial<typeof op.request>).bodyModelPath;
     delete (op as Partial<typeof op>).officialDocs;
-    const { model, connection } = setupGuideDriven(op);
+    const { model, connection, value } = setupGuideDriven(op);
+    mocks.resolvedGuide.mockResolvedValueOnce({ source: 'custom', protocol: 'openai', value });
     const p = await callCindyMedia({ action: 'prepare', providerId: model.providerId, sourceAgent: 'pi', modelId: model.id, capability: 'image.generate' });
     expect(p).toMatchObject({ ok: true, guide_source: 'custom', source_agent: 'pi', guide_revision: 'custom-1' });
     mocks.resolvedGuide.mockResolvedValue({ source: 'official', value: { guideId: 'changed' } });
@@ -467,6 +468,36 @@ describe('Cindy Core media invocation state and security boundary', () => {
       .toMatchObject({ ok: false, errorCode: 'CONNECTION_AMBIGUOUS', source_agents: ['codex', 'pi'] });
     expect(mocks.httpConnection).not.toHaveBeenCalled();
     expect(mocks.resolvedGuide).not.toHaveBeenCalled();
+  });
+  it('does not remove overlapping path segments from a public HTTP Guide', async () => {
+    const { model, value } = setupGuideDriven(operation({ mode: 'sync', media: [{ path: ['image'], encoding: 'base64', kind: 'image' }] }, '/v2/render'));
+    mocks.resolvedGuide.mockResolvedValueOnce({ source: 'official', protocol: 'gateway', value });
+    const p = await callCindyMedia({ action: 'prepare', providerId: model.providerId, modelId: model.id, capability: 'image.generate' });
+    mocks.outboundFetch.mockResolvedValueOnce(Response.json({ image: PNG.toString('base64') }));
+    expect(await callCindyMedia({ action: 'request', invocationId: String(p.invocation_id), body: { prompt: 'cat' } })).toMatchObject({ ok: true });
+    expect(mocks.outboundFetch.mock.calls[0]?.[0]).toBe('https://relay.example/proxy/v2/v2/render');
+  });
+  it('keeps an existing public image adapter Guide on its existing executor', async () => {
+    const { model } = setupGuideDriven();
+    const published = providerServerGuide(model.id, 'openai');
+    mocks.resolvedGuide.mockResolvedValueOnce({ source: 'official', protocol: 'openai', value: published.guide });
+    mocks.providerInvoke.mockResolvedValueOnce({ buffer: PNG, mimeType: 'image/png' });
+    const p = await callCindyMedia({ action: 'prepare', providerId: model.providerId, modelId: model.id, capability: 'image.generate' });
+    expect(await callCindyMedia({ action: 'request', invocationId: String(p.invocation_id), body: { prompt: 'cat' } })).toMatchObject({ ok: true });
+    expect(mocks.providerInvoke).toHaveBeenCalledTimes(1);
+    expect(mocks.outboundFetch).not.toHaveBeenCalled();
+  });
+  it.each(['xai-videos', 'minimax-videos', 'openai-videos'] as const)('keeps the existing %s public Guide on its original video connection', async protocol => {
+    const published = providerServerGuide('private/new-model', protocol);
+    const { model } = setupGuideDriven({ ...operation({ mode: 'async' }), capability: 'video.generate' });
+    const connection = { baseUrl: 'https://original-video.example', headers: {}, revision: 'legacy-video-1', assertCurrent: vi.fn() };
+    mocks.videoConnection.mockResolvedValueOnce(connection);
+    mocks.resolvedGuide.mockResolvedValueOnce({ source: 'official', protocol, value: published.guide });
+    const p = await callCindyMedia({ action: 'prepare', providerId: model.providerId, modelId: model.id, capability: 'video.generate' });
+    expect(p).toMatchObject({ ok: true });
+    expect(mocks.rows.get(String(p.invocation_id))?.guide).toMatchObject({ binding: {
+      executor: 'provider-video', connectionRevision: connection.revision, videoProtocol: protocol,
+    } });
   });
 
   // Unit: error interpretation belongs to the agent. Core returns execution

@@ -5890,7 +5890,9 @@ configureProviderMediaRuntime({
     const provider = getActiveCatalog().providers.find(provider => provider.id === target.providerId);
     const route = provider?.routing[target.agent];
     const mode = provider?.models[target.agent]?.find(model => model.id === target.modelId)?.mode;
-    return mode === 'image_generation' ? route?.imageApi ? 'http-images' : undefined : route?.videoApi;
+    const media = (mode === 'image_generation' ? provider?.imageModels : provider?.videoModels)?.find(model => model.id === target.modelId);
+    if (media?.sourceAgent !== target.agent) return undefined;
+    return mode === 'image_generation' ? route?.imageApi === 'openai-images' ? 'openai' : undefined : route?.videoApi;
   },
   resolveHttpConnection: (providerId, modelId, capability, agent) => {
     const kind = capability.startsWith('image.') ? 'image' : 'video';

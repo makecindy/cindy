@@ -253,13 +253,14 @@ Windows 使用 CF_HDROP，macOS 使用文件 URL 剪贴板，视频／GIF 均按
   `binding.connectionRevision` 表示本地连接摘要。地址、Key 或来源
   变化继续按原摘要校验，已付费任务的查询与下载不要求重新读取 Server Guide。
 - 升级时只解码旧快照的 `connection` 和旧视频 revision，不请求时重写历史记录，不改数据库
-  物理 schema。旧 Guide ID 仅用于解码既有记录，不参与新调用选择。Server 须先支持公开协议读取，
-  已发布客户端继续使用旧接口投影。
+  物理 schema。旧 Guide ID 仅用于解码既有记录，不参与新调用选择。复用 Server 已有的公开协议读取接口，
+  不新增服务端协议或要求配套发布。
 - 自定义 Guide 的唯一写入者是模型配置域，按账号及实际 provider/runtime/model 保存；
   保存需核对旧 revision 和当前任务权限，失败保留原定义。官方默认不复制进本地覆盖。
   Guide 可不注入 body model，URL 用 `{model}` 引用型号；没有官方 URL 的资料如实记录 evidence。
 - 原生 HTTP 执行复用现有提交、轮询、结果保存及下载入仓流程。请求 path 相对实际连接基址，
-  基址和 Guide 已共同包含的路径段只拼接一次；Guide 不能改 host 或凭证。
+  原样拼接，不自动删除前缀、去重路径或转换参数；不适配时由 Agent 根据资料补本地 Guide。
+  Guide 不能改 host 或凭证。
   公开来源只决定说明，不改变 provider、runtime、账号或计费。新说明只影响新的 prepare。
 - Core 返回 HTTP 状态、脱敏上游错误及提交/任务状态等事实；Agent 通过工具提示判断是否
   调整参数、处理连接、尝试官方或请用户补资料，不新增业务错误分类和自动后备重试。
