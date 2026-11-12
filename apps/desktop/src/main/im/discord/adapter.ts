@@ -11,6 +11,7 @@
 import path from 'node:path';
 import fs from 'node:fs';
 import { app } from 'electron';
+import { desktopMakerLogger } from '../../maker-host/logger-adapter';
 import { decodeDiscordLaneUserId, type DiscordIM, type DiscordLane } from '@cindy/im';
 
 import type { ImChannelAdapter, ImOrchestratorConfig } from '../shared/types';
@@ -67,7 +68,14 @@ export function buildDiscordAdapter(
       if (receipt.state !== 'delivered') return;
       // Text is durable; media keeps the existing best-effort lifecycle (no persistent pin).
       const media = discordIm.captureTools(result.userId, receipt.assertCurrent);
-      for (const file of result.mediaAbsPaths ?? []) await media.sendFile(result.userId, file);
+      for (const file of new Set([...(receipt.imageAbsPaths ?? []), ...(result.mediaAbsPaths ?? [])])) {
+        receipt.assertCurrent();
+        try { await media.sendFile(result.userId, file); }
+        catch {
+          receipt.assertCurrent();
+          desktopMakerLogger.warn('Discord final media upload failed');
+        }
+      }
       receipt.assertCurrent();
       if (result.progressMessageId) await discordIm.patchMarkdownCard(result.progressMessageId, '').catch(() => undefined);
     } },

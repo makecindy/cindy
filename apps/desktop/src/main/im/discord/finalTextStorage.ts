@@ -16,18 +16,22 @@ export function discordFinalTextStorage(connectionKey: string, personal: boolean
   const assertCurrent = () => {
     if (isAppSessionBoundaryPending() || owner !== activeOwnerScopeKey()) throw new Error('DISCORD_ACCOUNT_CHANGED');
   };
+  const credentialStamp = () => {
+    assertCurrent();
+    const prefix = personal ? '' : connectionKey;
+    return `${ownerScopedImSecretRevision(`${prefix}discord-bot-token`)}:${ownerScopedImSecretRevision(`${prefix}discord-owner-user-id`)}`;
+  };
   return {
     key: file,
     assertCurrent,
+    credentialStamp,
     read: () => { assertCurrent(); return readAtomicFileSync(file); },
     write: contents => { assertCurrent(); atomicWriteFileSync(file, contents); },
     authorizationStamp: lane => {
       assertCurrent();
-      const prefix = personal ? '' : connectionKey;
-      const credentials = `${ownerScopedImSecretRevision(`${prefix}discord-bot-token`)}:${ownerScopedImSecretRevision(`${prefix}discord-owner-user-id`)}`;
       const id = /^bot-im-([a-f0-9]{12})-$/.exec(connectionKey)?.[1];
       if (!personal && !id) throw new Error('DISCORD_CONNECTION_INVALID');
-      return `${credentials}:${personal ? personalDiscordFinalTextAuthorization(lane) : botDiscordFinalTextAuthorization(id!, lane)}`;
+      return `${credentialStamp()}:${personal ? personalDiscordFinalTextAuthorization(lane) : botDiscordFinalTextAuthorization(id!, lane)}`;
     },
   };
 }

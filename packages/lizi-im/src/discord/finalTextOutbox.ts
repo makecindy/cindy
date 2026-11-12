@@ -11,6 +11,8 @@ export interface DiscordFinalTextStorage {
   assertCurrent(): void;
   /** Non-secret configuration generation; changing authorization cancels old results. */
   authorizationStamp(lane: string): string;
+  /** Non-secret credential prefix, used only to preserve a confirmed configuration rollback. */
+  credentialStamp?(): string;
 }
 interface Segment { text: string; state: 'pending' | 'sending' | 'sent' | 'uncertain' }
 interface Entry {
@@ -29,6 +31,7 @@ export class DiscordFinalTextOutbox {
   private draining: Promise<void> | null = null;
   private drainRequested = false;
   private stopped = false;
+  private retryNotBefore = 0;
   private readonly activeSegments = new Set<string>();
   private readonly retry = new ConnectionRetry({ baseMs: 2000, maxMs: 30_000 });
   constructor(private readonly deps: {
@@ -77,6 +80,19 @@ export class DiscordFinalTextOutbox {
     if (!store) return;
     this.mutate(store, ledger => { for (const e of ledger.entries) { e.state = 'cancelled'; e.segments = []; } });
     this.retry.reset();
+    this.retryNotBefore = 0;
+  }
+  restoreCredentialStamp(previous: string): void {
+    const store = this.deps.storage();
+    const current = store?.credentialStamp?.();
+    if (!store || !current || current === previous) return;
+    this.mutate(store, ledger => {
+      for (const entry of ledger.entries) {
+        if (entry.identity !== this.deps.identity() || !entry.authorization.startsWith(`${previous}:`)) continue;
+        const restored = `${current}:${entry.authorization.slice(previous.length + 1)}`;
+        if (restored === store.authorizationStamp(entry.lane)) entry.authorization = restored;
+      }
+    });
   }
   summary(lane?: string) {
     const store = this.deps.storage();
@@ -93,7 +109,7 @@ export class DiscordFinalTextOutbox {
     const key = this.key(requestId, lane);
     this.mutate(store, ledger => {
       if (ledger.entries.some(e => e.key === key)) return;
-      const segments: Segment[] = chunkDiscordText(text).map(text => ({ text, state: 'pending' }));
+      const segments: Segment[] = text.trim() ? chunkDiscordText(text).map(text => ({ text, state: 'pending' })) : [];
       // Reclaim the oldest tombstone first; live pending/uncertain output is never evicted for new work.
       if (ledger.entries.length >= MAX_ENTRIES) {
         const oldest = ledger.entries.filter(e => !e.segments.length).sort((a, b) => a.createdAt - b.createdAt)[0];
@@ -125,7 +141,11 @@ export class DiscordFinalTextOutbox {
     this.mutate(store, () => undefined); // TTL cleanup and crash-to-uncertain transition.
     if (!this.deps.ready()) return;
     for (;;) {
-      if (this.stopped) return;
+      if (this.stopped || !this.deps.ready()) return;
+      if (this.now() < this.retryNotBefore) {
+        this.retry.schedule(() => { void this.drain(); }, { minimumDelayMs: this.retryNotBefore - this.now() });
+        return;
+      }
       store.assertCurrent();
       const entry = this.read(store).entries.find(e => e.state === 'pending');
       if (!entry) { this.retry.reset(); return; }
@@ -139,6 +159,7 @@ export class DiscordFinalTextOutbox {
       try {
         valid();
         target = await this.deps.prepare(entry.lane);
+        if (!this.deps.ready()) return;
         valid(); target.assertCurrent();
       } catch (error) {
         if (this.stopped || !this.deps.ready()) return;
@@ -181,9 +202,14 @@ export class DiscordFinalTextOutbox {
             if (failure.status && failure.status >= 400 && failure.status < 500) { current.state = 'cancelled'; current.segments = []; return; }
             current.state = 'uncertain'; current.segments[index].state = 'uncertain';
           });
-          if (failure.status === 429) this.retry.schedule(() => { void this.drain(); }, { minimumDelayMs: Math.max(1, failure.retry_after ?? 1) * 1000 });
-          else this.deps.warn(failure.status && failure.status < 500 ? 'DISCORD_DELIVERY_REJECTED' : 'DISCORD_DELIVERY_UNCERTAIN');
-          return;
+          if (failure.status === 429) {
+            this.retryNotBefore = this.now() + Math.max(1, failure.retry_after ?? 1) * 1000;
+            this.retry.reset();
+            this.retry.schedule(() => { void this.drain(); }, { minimumDelayMs: this.retryNotBefore - this.now() });
+            return;
+          }
+          this.deps.warn(failure.status && failure.status < 500 ? 'DISCORD_DELIVERY_REJECTED' : 'DISCORD_DELIVERY_UNCERTAIN');
+          continue;
         }
         this.mutate(store, ledger => {
           const current = ledger.entries.find(e => e.key === entry.key)!;

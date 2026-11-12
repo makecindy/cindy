@@ -11,14 +11,53 @@ function harness() {
   let identity = 'bot:owner';
   let ready = true;
   let now = 1000;
-  const send = vi.fn(async () => 'sent-1');
+  const startedAt = Date.now();
+  const send = vi.fn<(text: string, nonce: string) => Promise<string>>(async () => 'sent-1');
   const store: DiscordFinalTextStorage = { key: 'test', read: () => contents, write: value => { contents = value; }, assertCurrent: () => {}, authorizationStamp: () => authorization };
   const prepare = vi.fn(async () => ({ assertCurrent: () => {}, send }));
   const warn = vi.fn();
-  const create = () => new DiscordFinalTextOutbox({ storage: () => store, identity: () => identity, ready: () => ready, prepare, warn, now: () => now });
+  const create = () => new DiscordFinalTextOutbox({ storage: () => store, identity: () => identity, ready: () => ready, prepare, warn, now: () => now + Date.now() - startedAt });
   return { create, send, prepare, store, warn, get json() { return JSON.parse(contents!); }, set contents(v: string | null) { contents = v; }, get contents() { return contents; }, offline: () => { ready = false; }, online: () => { ready = true; }, revoke: () => { authorization = 'grant-2'; }, changeIdentity: () => { identity = 'other:owner'; }, advance: (ms: number) => { now += ms; } };
 }
 describe('Discord text-only outbox', () => {
+  // #10002 review: empty terminal text must permit immediate media delivery without a rejected empty POST.
+  it('delivers an empty terminal as zero segments without sending text', async () => {
+    const h = harness(); const outbox = h.create();
+    try {
+      expect(await outbox.complete('image-only', 'g/10/20', '')).toBe('delivered');
+      expect(h.send).not.toHaveBeenCalled();
+      expect(h.json.entries[0]).toMatchObject({ state: 'delivered', segments: [] });
+    } finally { outbox.stop(); }
+  });
+  // Recovery invokes drain directly; a held POST must not strand unrelated pending finals.
+  it('continues recovery after an uncertain POST while never resending that entry', async () => {
+    const h = harness(); h.offline(); const first = h.create();
+    await first.complete('first', 'g/10/20', 'unknown');
+    await first.complete('second', 'g/10/21', 'remaining'); first.stop();
+    h.send.mockRejectedValueOnce(new Error('lost receipt')); h.online();
+    const restarted = h.create();
+    try {
+      await restarted.drain();
+      expect(h.send.mock.calls.map(c => c[0])).toEqual(['unknown', 'remaining']);
+      expect(h.json.entries.map((e: { state: string }) => e.state)).toEqual(['uncertain', 'delivered']);
+    } finally { restarted.stop(); }
+  });
+  it('shares a 429 deadline across new completions and concurrent drain requests', async () => {
+    vi.useFakeTimers(); const h = harness(); const outbox = h.create();
+    const entered = Promise.withResolvers<void>(); const response = Promise.withResolvers<string>();
+    h.send.mockImplementationOnce(async () => { entered.resolve(); return response.promise; });
+    try {
+      const first = outbox.complete('first', 'g/10/20', 'limited'); await entered.promise;
+      const second = outbox.complete('second', 'g/10/21', 'later');
+      response.reject({ status: 429, retry_after: 10 }); await Promise.all([first, second]);
+      await vi.advanceTimersByTimeAsync(5000);
+      await outbox.complete('third', 'g/10/22', 'newer'); await outbox.drain();
+      expect(h.send).toHaveBeenCalledTimes(1);
+      await vi.advanceTimersByTimeAsync(4999); expect(h.send).toHaveBeenCalledTimes(1);
+      await vi.advanceTimersByTimeAsync(1);
+      expect(h.send.mock.calls.map(c => c[0])).toEqual(['limited', 'limited', 'later', 'newer']);
+    } finally { outbox.stop(); }
+  });
   it('persists final text before delivery, recovers offline completion after restart and leaves a completed-input tombstone', async () => {
     const h = harness(); h.offline(); const first = h.create();
     expect(await first.complete('trigger', 'g/10/20', 'finished')).toBe('pending'); first.stop();

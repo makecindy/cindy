@@ -159,14 +159,15 @@ export class DiscordIM extends BaseIM implements ChannelIM {
   private readonly finalTextOutbox: DiscordFinalTextOutbox;
   private deliveryBotId = '';
   private deliveryBindingGeneration = 0;
-  private readonly finalTextAnchors = new Map<string, { assertCurrent(): void }>();
+  private configUpdate: Promise<void> | null = null;
+  private readonly finalTextAnchors = new Map<string, { assertCurrent(): void; restoreCredentialStamp(previous: string, current: string): void }>();
 
   constructor(host: IMHost, private readonly opts: DiscordIMOptions = {}) {
     super('discord', host);
     this.finalTextOutbox = new DiscordFinalTextOutbox({
       storage: () => this.opts.finalTextStorage?.() ?? null,
       identity: () => `${this.deliveryBotId}:${this.ownerUserId}`,
-      ready: () => !this.disposing && this.status.kind === 'connected',
+      ready: () => !this.disposing && !this.configUpdate && this.status.kind === 'connected',
       prepare: lane => this.captureTools(lane).prepareSend(lane),
       warn: code => this.log.warn(code),
     });
@@ -250,14 +251,16 @@ export class DiscordIM extends BaseIM implements ChannelIM {
 
   /** Final text is durable before any terminal send; media is not pinned by this ledger. */
   async commitFinalText(requestId: string, laneId: string, markdown: string) {
+    while (this.configUpdate) await this.configUpdate;
     const anchor = this.finalTextAnchors.get(`${laneId}:${requestId}`);
     if (!anchor) throw new DiscordOperationError('DISCORD_REPLY_ANCHOR_UNAVAILABLE');
     anchor.assertCurrent();
-    const { text } = markdownToDiscord(markdown);
+    const { text, imageUrls } = markdownToDiscord(markdown);
     const state = await this.finalTextOutbox.complete(requestId, laneId, text);
+    while (this.configUpdate) await this.configUpdate;
     anchor.assertCurrent();
     this.finalTextAnchors.delete(`${laneId}:${requestId}`);
-    return { state, assertCurrent: anchor.assertCurrent };
+    return { state, assertCurrent: anchor.assertCurrent, imageAbsPaths: this.resolveImageFiles(imageUrls).map(file => file.attachment) };
   }
 
   /** A bounded bridge over this exact connection, with no token or arbitrary REST access. */
@@ -311,6 +314,21 @@ export class DiscordIM extends BaseIM implements ChannelIM {
    * 返回值里带 saveErrorStatus。
    */
   async setConfig(payload: unknown): Promise<DiscordConfigState> {
+    while (this.configUpdate) await this.configUpdate;
+    const update = Promise.withResolvers<void>();
+    this.configUpdate = update.promise;
+    try {
+      // Settle any already-started POST under the old binding before trying another one.
+      await this.finalTextOutbox.drain();
+      return await this.applyConfig(payload);
+    } finally {
+      this.configUpdate = null;
+      update.resolve();
+      void this.finalTextOutbox.drain();
+    }
+  }
+
+  private async applyConfig(payload: unknown): Promise<DiscordConfigState> {
     const configResult = (saveErrorStatus?: IMStatus) => this.getConfigState(saveErrorStatus);
     // IPC handlers are registered before init(). Sync the persisted preference
     // before any gateway status can queue a lifecycle notice or write its marker.
@@ -323,61 +341,72 @@ export class DiscordIM extends BaseIM implements ChannelIM {
       this.setStatus({ kind: 'error', reason: SECRET_WRITE_FAILED_REASON });
       return configResult();
     }
-    try { this.finalTextOutbox.invalidate(); } catch { this.log.warn('DISCORD_OUTBOX_INVALIDATION_FAILED'); }
-    this.deliveryBindingGeneration++;
-
     const previousToken = this.host.secrets.read(this.key(TOKEN_SECRET_KEY));
     const previousOwnerUserId = this.host.secrets.read(this.key(OWNER_USER_ID_SECRET_KEY));
     const previousRuntimeOwnerUserId = this.ownerUserId;
+    const previousDeliveryBotId = this.deliveryBotId;
+    const store = this.opts.finalTextStorage?.();
+    store?.assertCurrent();
+    const previousCredentialStamp = store?.credentialStamp?.();
+    const rollback = () => {
+      store?.assertCurrent();
+      const tokenRestored = this.restoreSecret(this.key(TOKEN_SECRET_KEY), previousToken);
+      const ownerRestored = this.restoreSecret(this.key(OWNER_USER_ID_SECRET_KEY), previousOwnerUserId);
+      this.ownerUserId = previousOwnerUserId?.trim() || previousRuntimeOwnerUserId;
+      this.deliveryBotId = previousDeliveryBotId;
+      if (tokenRestored && ownerRestored && previousCredentialStamp !== undefined) {
+        const current = store!.credentialStamp!();
+        this.finalTextOutbox.restoreCredentialStamp(previousCredentialStamp);
+        for (const anchor of this.finalTextAnchors.values()) anchor.restoreCredentialStamp(previousCredentialStamp, current);
+      }
+    };
 
-    const tokenSaved = token ? this.host.secrets.write(this.key(TOKEN_SECRET_KEY), token) : true;
-    const ownerUserIdSaved = ownerUserId
+    const tokenSaved = token && token !== previousToken ? this.host.secrets.write(this.key(TOKEN_SECRET_KEY), token) : true;
+    const ownerUserIdSaved = ownerUserId && ownerUserId !== previousOwnerUserId
       ? this.host.secrets.write(this.key(OWNER_USER_ID_SECRET_KEY), ownerUserId)
       : true;
     if (!tokenSaved || !ownerUserIdSaved) {
-      this.restoreSecret(this.key(TOKEN_SECRET_KEY), previousToken);
-      this.restoreSecret(this.key(OWNER_USER_ID_SECRET_KEY), previousOwnerUserId);
-      this.ownerUserId = previousOwnerUserId?.trim() || previousRuntimeOwnerUserId;
+      rollback();
       this.setStatus({ kind: 'error', reason: SECRET_WRITE_FAILED_REASON });
       return configResult();
     }
 
     const nextOwnerUserId = ownerUserId || this.ownerUserId;
+    let wasConnectedBeforeReconnect = false;
     if (token) {
       this.connectionRetry.reset();
       this.configVersion += 1;
-      const wasConnectedBeforeReconnect = this.status.kind === 'connected';
+      wasConnectedBeforeReconnect = this.status.kind === 'connected';
       await this.destroyGateway();
       this.ownerUserId = nextOwnerUserId;
       this.suppressNextOnlineNotice = true;
       try {
         await this.gateway.connect(token);
-        this.markRuntimeActive();
-        const linkedNoticeConfigVersion = this.configVersion;
-        await this.sendOwnerNoticeWithTimeout(
-          nextOwnerUserId,
-          'linked',
-          OWNER_NOTICE_TIMEOUT_MS,
-          () => this.isOwnerNoticeCurrent(linkedNoticeConfigVersion, nextOwnerUserId),
-        );
-        if (wasConnectedBeforeReconnect && this.status.kind === 'connected') {
-          this.suppressNextOnlineNotice = false;
-        }
+        store?.assertCurrent();
       } catch (err) {
         this.suppressNextOnlineNotice = false;
         const msg = err instanceof Error ? err.message : String(err);
         this.log.warn(`discord gateway connect failed from set-config: ${msg}`);
         const failedStatus = mapDiscordLoginErrorToStatus(err);
         this.setStatus(failedStatus);
-        this.restoreSecret(this.key(TOKEN_SECRET_KEY), previousToken);
-        this.restoreSecret(this.key(OWNER_USER_ID_SECRET_KEY), previousOwnerUserId);
-        this.ownerUserId = previousOwnerUserId?.trim() || previousRuntimeOwnerUserId;
+        rollback();
         await this.reconnectPreviousGateway(previousToken);
         return configResult(failedStatus);
       }
     } else if (nextOwnerUserId !== this.ownerUserId) {
       this.configVersion += 1;
       this.ownerUserId = nextOwnerUserId;
+    }
+    try { this.finalTextOutbox.invalidate(); } catch { this.log.warn('DISCORD_OUTBOX_INVALIDATION_FAILED'); }
+    this.deliveryBindingGeneration++;
+    if (token) {
+      this.markRuntimeActive();
+      const linkedNoticeConfigVersion = this.configVersion;
+      await this.sendOwnerNoticeWithTimeout(
+        nextOwnerUserId, 'linked', OWNER_NOTICE_TIMEOUT_MS,
+        () => this.isOwnerNoticeCurrent(linkedNoticeConfigVersion, nextOwnerUserId),
+      );
+      if (wasConnectedBeforeReconnect && this.status.kind === 'connected') this.suppressNextOnlineNotice = false;
     }
     return configResult();
   }
@@ -672,12 +701,13 @@ export class DiscordIM extends BaseIM implements ChannelIM {
     return this.gateway.appId;
   }
 
-  private restoreSecret(key: string, previousValue: string | null): void {
+  private restoreSecret(key: string, previousValue: string | null): boolean {
+    if (this.host.secrets.read(key) === previousValue) return true;
     if (previousValue === null) {
       this.host.secrets.remove(key);
-      return;
+      return this.host.secrets.read(key) === null;
     }
-    this.host.secrets.write(key, previousValue);
+    return this.host.secrets.write(key, previousValue) && this.host.secrets.read(key) === previousValue;
   }
 
   private readLifecycleAnnouncement(): boolean {
@@ -1140,7 +1170,7 @@ export class DiscordIM extends BaseIM implements ChannelIM {
   private emitInbound(event: IMMessageEvent): void {
     if (this.opts.finalTextStorage) {
       const store = this.opts.finalTextStorage();
-      const authorization = store.authorizationStamp(event.senderId);
+      let authorization = store.authorizationStamp(event.senderId);
       const identity = `${this.deliveryBotId}:${this.ownerUserId}`;
       const generation = this.deliveryBindingGeneration;
       const lane = decodeDiscordLaneUserId(event.senderId);
@@ -1151,6 +1181,10 @@ export class DiscordIM extends BaseIM implements ChannelIM {
             authorization !== store.authorizationStamp(event.senderId) || (lane && !isDiscordLaneAdmitted(this.readChannelAccess(), lane, requesterIsOwner))) {
           throw new DiscordOperationError('DISCORD_REPLY_ANCHOR_CHANGED');
         }
+      }, restoreCredentialStamp: (previous, current) => {
+        if (!authorization.startsWith(`${previous}:`)) return;
+        const restored = `${current}:${authorization.slice(previous.length + 1)}`;
+        if (restored === store.authorizationStamp(event.senderId)) authorization = restored;
       } });
       while (this.finalTextAnchors.size > 1000) this.finalTextAnchors.delete(this.finalTextAnchors.keys().next().value!);
     }

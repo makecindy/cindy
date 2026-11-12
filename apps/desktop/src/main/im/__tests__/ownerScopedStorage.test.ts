@@ -75,6 +75,35 @@ function writeLegacySecret(name: string, value: string): string {
 }
 
 describe('IM owner-scoped storage', () => {
+  // #10002: restored credential bytes have new file metadata; retain text only for an unchanged grant.
+  // Unit: real credential revisions + atomic outbox persistence + process recreation, without a network.
+  it.each([false, true])('restores rollback metadata across restart without restoring revoked grants (revoked=%s)', async revoked => {
+    setSession('local', 'local-v1');
+    const access = { channels: [{ guildId: '1', channelId: '20' }] };
+    discordChannelAccessStore.write(access);
+    ownerScopedImSecrets.write('discord-bot-token', 'invalid-old-test-token');
+    const storage = discordFinalTextStorage('personal', true);
+    let ready = false;
+    const send = vi.fn(async () => 'sent');
+    const create = () => new DiscordFinalTextOutbox({ storage: () => storage, identity: () => 'bot:owner', ready: () => ready,
+      prepare: async () => ({ assertCurrent() {}, send }), warn: vi.fn() });
+    const first = create();
+    try {
+      await first.complete('accepted', 'g/1/20', 'keep after rollback');
+      const previous = storage.credentialStamp!();
+      ownerScopedImSecrets.write('discord-bot-token', 'invalid-replacement-test-token');
+      if (revoked) { discordChannelAccessStore.write({ channels: [] }); discordChannelAccessStore.write(access); }
+      ownerScopedImSecrets.write('discord-bot-token', 'invalid-old-test-token');
+      expect(storage.credentialStamp!()).not.toBe(previous);
+      first.restoreCredentialStamp(previous);
+    } finally { first.stop(); }
+    ready = true; const restarted = create();
+    try {
+      await restarted.drain();
+      expect(send).toHaveBeenCalledTimes(revoked ? 0 : 1);
+      expect(JSON.parse(storage.read()!).entries[0].state).toBe(revoked ? 'cancelled' : 'delivered');
+    } finally { restarted.stop(); }
+  });
   // unit: actual access-store mutations and disk-backed outbox recovery. File-wide mtime invalidation
   // lost authorized output after an unrelated edit; target generations must preserve it and still revoke old output.
   it.each(['personal', 'companion'] as const)('preserves %s pending text across unrelated grants, but never across target revoke/regrant', async kind => {

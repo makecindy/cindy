@@ -41,6 +41,64 @@ const CONFIG = {
 // unit: a delivered text receipt must also protect best-effort media across an awaited
 // channel fetch. Existing transport tests did not exercise the adapter's terminal media loop.
 describe('discord terminal media lease', () => {
+  // #10002 review: adapter terminal sink -> real transport/outbox -> guarded SDK file send.
+  // Previous lease coverage used nonempty text and tool files, missing Markdown and image-only replies.
+  it.each(['text-and-image', 'image-only'] as const)('uploads and deduplicates Markdown media for %s finals', async kind => {
+    type Factory = NonNullable<DiscordIMOptions['gatewayFactory']>;
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'cindy-discord-final-image-'));
+    const file = path.join(root, 'image.png'); fs.writeFileSync(file, 'offline image fixture');
+    const secrets = new Map([['discord-bot-token', 'fake-not-a-token'], ['discord-owner-user-id', '1'], ['discord-bot-lifecycle-announcement', 'false']]);
+    let contents: string | null = null;
+    let events!: Parameters<Factory>[0];
+    const post = vi.fn(async (_route: string, options: { body: { content: string } }) => {
+      if (!options.body.content.trim()) throw Object.assign(new Error('empty Discord message'), { status: 400 });
+      return { id: '90' };
+    });
+    const send = vi.fn(async () => ({ id: '91' }));
+    const channel = { id: '30', guildId: '10', parentId: '20', parent: { id: '20', guildId: '10', type: 0 }, type: 11,
+      isTextBased: () => true, isSendable: () => true, messages: {}, permissionsFor: () => ({ has: () => true }), send };
+    const sdk = { user: { id: '2' }, rest: { post }, channels: { fetch: async () => channel } };
+    const host: IMHost = {
+      secrets: { read: key => secrets.get(key) ?? null, write: () => true, remove() {}, isAvailable: () => true },
+      ipc: { handle() {}, broadcast() {}, throwIpcError() { throw new Error('invalid'); } },
+      paths: { feishuMediaDir: root }, httpPostForm: async () => ({ status: 200, body: {} }),
+    };
+    const im = new DiscordIM(host, {
+      resolveImageUrl: () => file,
+      finalTextStorage: () => ({ key: 'test-images', read: () => contents, write: value => { contents = value; }, assertCurrent() {}, authorizationStamp: () => 'grant-1' }),
+      channelAccess: { read: () => ({ channels: [{ guildId: '10', channelId: '20' }] }) },
+      gatewayFactory: ev => {
+        events = ev;
+        return { appId: '2', botTag: 'fake', client: sdk, connect: async () => ev.onStatus({ kind: 'connected', appId: 'fake' }), destroy: async () => {} } as unknown as ReturnType<Factory>;
+      },
+    });
+    try {
+      await im.init();
+      const received = new Promise<void>(resolve => im.onMessage(() => resolve()));
+      events.onGuildMessage({ id: '8', guildId: '10', channelId: '30', channel, author: { id: '1', username: 'Owner' }, content: '<@2> image', mentions: { has: () => true } } as never);
+      await received;
+      const output = buildDiscordAdapter(im, CONFIG).output;
+      if (output.kind !== 'rich-card' || !output.commitFinal) throw new Error('missing terminal sink');
+      await output.commitFinal({ inputMessageId: '30|8', userId: 'g/10/20/30', text: `${kind === 'text-and-image' ? 'answer\n' : ''}![image](cindy-media://blobs/image.png)`, terminal: 'done', mediaAbsPaths: kind === 'image-only' ? [file, file] : [] });
+      expect(post).toHaveBeenCalledTimes(kind === 'text-and-image' ? 1 : 0);
+      expect(send).toHaveBeenCalledOnce();
+      expect(send).toHaveBeenCalledWith({ files: [{ attachment: file, name: undefined }], allowedMentions: { parse: [] } });
+      expect(JSON.parse(contents!).entries[0]).toMatchObject({ state: 'delivered', segments: [] });
+    } finally { await im.dispose(); fs.rmSync(root, { recursive: true, force: true }); }
+  });
+
+  it('continues best-effort media after one failed upload', async () => {
+    const sendFile = vi.fn().mockRejectedValueOnce(new Error('offline upload failure')).mockResolvedValue({ messageId: '91' });
+    const im = {
+      commitFinalText: async () => ({ state: 'delivered', assertCurrent() {}, imageAbsPaths: ['first.png', 'second.png'] }),
+      captureTools: () => ({ sendFile }),
+    } as unknown as DiscordIM;
+    const output = buildDiscordAdapter(im, CONFIG).output;
+    if (output.kind !== 'rich-card' || !output.commitFinal) throw new Error('missing terminal sink');
+    await output.commitFinal({ inputMessageId: '30|8', userId: 'g/10/20/30', text: 'answer', terminal: 'done', mediaAbsPaths: ['second.png'] });
+    expect(sendFile.mock.calls.map(call => call[1])).toEqual(['first.png', 'second.png']);
+  });
+
   it.each(['remove-member-access', 'revoke-and-regrant'] as const)('does not upload after %s during channel fetch', async change => {
     type Factory = NonNullable<DiscordIMOptions['gatewayFactory']>;
     const root = fs.mkdtempSync(path.join(os.tmpdir(), 'cindy-discord-final-media-'));

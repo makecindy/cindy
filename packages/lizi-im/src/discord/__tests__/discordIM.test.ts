@@ -135,19 +135,50 @@ describe('Discord completed-input delivery identity', () => {
   function terminalHarness() {
     const { host, secrets } = makeHost();
     secrets.set('discord-bot-token', 'invalid-test-token'); secrets.set('discord-owner-user-id', '1'); secrets.set('discord-bot-lifecycle-announcement', 'false');
+    let credentialRevision = 1;
+    let failure: 'token-save' | 'owner-save' | 'login' | null = null;
+    let grant = 'grant-1';
+    host.secrets.write = (key, value) => {
+      if ((failure === 'token-save' && key === 'discord-bot-token' && value === 'replacement-invalid-token') ||
+          (failure === 'owner-save' && key === 'discord-owner-user-id' && value === '3')) return false;
+      secrets.set(key, value); credentialRevision++; return true;
+    };
     let contents: string | null = null;
-    const storage: DiscordFinalTextStorage = { key: 'owner-test', read: () => contents, write: value => { contents = value; }, assertCurrent() {}, authorizationStamp: () => 'grant-1' };
-    const post = vi.fn(async (_route: string, _options: unknown) => ({ id: '90' }));
+    const storage: DiscordFinalTextStorage = { key: 'owner-test', read: () => contents, write: value => { contents = value; }, assertCurrent() {}, credentialStamp: () => `credentials-${credentialRevision}`, authorizationStamp: () => `credentials-${credentialRevision}:${grant}` };
+    const post = vi.fn<(route: string, options: unknown) => Promise<{ id: string }>>(async () => ({ id: '90' }));
     const channel = { id: '30', type: 11, guildId: '10', parentId: '20', parent: { id: '20', guildId: '10', type: 0 }, isTextBased: () => true, messages: {}, permissionsFor: () => ({ has: () => true }) };
     const sdk = { user: { id: '2' }, channels: { fetch: async () => channel }, rest: { post } };
     let events: DiscordGatewayEvents;
     const create = () => new DiscordIM(host, { finalTextStorage: () => storage, channelAccess: { read: () => ({ channels: [{ guildId: '10', channelId: '20' }] }) }, gatewayFactory: ev => {
       events = ev;
-      return { appId: '2', botTag: 'fake', client: sdk, connect: async () => ev.onStatus({ kind: 'connected', appId: 'fake' }), destroy: async () => {} } as unknown as DiscordGateway;
+      return { appId: '2', botTag: 'fake', client: sdk, connect: async (token: string) => {
+        if (failure === 'login' && token === 'replacement-invalid-token') throw Object.assign(new Error('invalid test replacement'), { code: 'TokenInvalid' });
+        ev.onStatus({ kind: 'connected', appId: 'fake' });
+      }, destroy: async () => {} } as unknown as DiscordGateway;
     } });
-    const trigger = (mention = true) => events.onGuildMessage({ id: '8', guildId: '10', channelId: '30', channel, author: { id: '1', username: 'Owner' }, content: '<@2> question', mentions: { has: () => mention } } as never);
-    return { create, trigger, post, offline: () => events.onStatus({ kind: 'connecting' }), get json() { return contents ? JSON.parse(contents) : null; } };
+    const trigger = (mention = true, id = '8') => events.onGuildMessage({ id, guildId: '10', channelId: '30', channel, author: { id: '1', username: 'Owner' }, content: '<@2> question', mentions: { has: () => mention } } as never);
+    return { create, trigger, post, secrets, fail: (value: typeof failure) => { failure = value; }, revoke: () => { grant = 'grant-2'; }, offline: () => events.onStatus({ kind: 'connecting' }), get json() { return contents ? JSON.parse(contents) : null; } };
   }
+  // #10002: real ingress/terminal/config rollback must retain pending text and an in-flight final,
+  // including metadata revisions from partial credential writes. Unit; fake gateway, no credentials/network.
+  it.each(['token-save', 'owner-save', 'login'] as const)('preserves pending and in-flight finals after failed %s', async failure => {
+    const h = terminalHarness(); const im = h.create(); await im.init();
+    try {
+      let received = new Promise<void>(resolve => im.onMessage(() => resolve())); h.trigger(); await received;
+      received = new Promise<void>(resolve => im.onMessage(() => resolve())); h.trigger(true, '9'); await received;
+      h.offline(); await im.commitFinalText('30|8', 'g/10/20/30', 'pending answer');
+      h.fail(failure);
+      const update = im.setConfig({ token: 'replacement-invalid-token', ownerUserId: '3' });
+      const final = im.commitFinalText('30|9', 'g/10/20/30', 'in-flight answer');
+      await update; await final;
+      expect(h.secrets.get('discord-bot-token')).toBe('invalid-test-token');
+      expect(h.secrets.get('discord-owner-user-id')).toBe('1');
+      await im.reconnect();
+      await vi.waitFor(() => expect(h.post).toHaveBeenCalledTimes(2));
+      expect(h.post.mock.calls.map(c => (c[1] as { body: { content: string } }).body.content)).toEqual(['pending answer', 'in-flight answer']);
+      expect(h.json.entries.map((e: { state: string }) => e.state)).toEqual(['delivered', 'delivered']);
+    } finally { await im.dispose(); }
+  });
   it('records completion before POST and suppresses a completed input on gateway redelivery', async () => {
     const h = terminalHarness(); const im = h.create(); const inbound = vi.fn(); im.onMessage(inbound); await im.init();
     try {
@@ -157,6 +188,24 @@ describe('Discord completed-input delivery identity', () => {
       expect((await im.commitFinalText('30|8', 'g/10/20/30', 'answer')).state).toBe('delivered');
       h.trigger(); for (let i = 0; i < 8; i++) await Promise.resolve(); expect(inbound).toHaveBeenCalledTimes(1); expect(h.post).toHaveBeenCalledTimes(1);
     } finally { await im.dispose(); }
+  });
+  it('retains an already-started POST receipt while a configuration replacement fails', async () => {
+    const h = terminalHarness(); const im = h.create(); await im.init();
+    const posted = Promise.withResolvers<void>(); const response = Promise.withResolvers<{ id: string }>();
+    try {
+      const received = new Promise<void>(resolve => im.onMessage(() => resolve())); h.trigger(); await received;
+      h.post.mockImplementationOnce(() => { posted.resolve(); return response.promise; });
+      const final = im.commitFinalText('30|8', 'g/10/20/30', 'already sending');
+      await posted.promise;
+      h.fail('login');
+      const update = im.setConfig({ token: 'replacement-invalid-token', ownerUserId: '3' });
+      response.resolve({ id: '90' });
+      await update;
+      expect((await final).state).toBe('delivered');
+      expect(h.json.entries[0]).toMatchObject({ state: 'delivered', receipts: ['90'] });
+      expect(h.post).toHaveBeenCalledTimes(1);
+      expect(h.secrets.get('discord-bot-token')).toBe('invalid-test-token');
+    } finally { response.resolve({ id: '90' }); await im.dispose(); }
   });
   it.each(['answer', '❌ 错误：terminal failure'])('recovers offline terminal text on a new process without replaying the input or model: %s', async text => {
     const h = terminalHarness(); const im = h.create(); await im.init();

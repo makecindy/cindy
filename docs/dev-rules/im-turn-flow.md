@@ -340,6 +340,8 @@ Dispatcher 只接受宿主解析的专线 ID 和精确工作目录，忽略入�
 - 待送正文最多 256 份 / 总账 4 MiB，创建后 24 小时只结束补送并清正文；完成输入墓碑独立于投递期限，最多 4096 份，容量不足时先回收最老的无正文墓碑，不挤掉仍待送的正文。送达后立即清正文，送达 ID 最多保留 1 小时。读路径和恢复路径清理过期正文与回执；容量不足、原子写失败明确记录错误，不绕过出箱发送。状态工具可查原 lane 的 pending / uncertain，不读其它公开 lane 的记录。
 - 发起轮的账号、bot/主人、连接绑定与授权代次随输入锚定，await 后再核对。凭证仅检查文件元数据、不读回 Token。解绑、换 bot/主人/伙伴绑定或撤销目标 grant 使旧结果失效。目标 grant 代次作为宿主私有元数据随原白名单/连接文档原子保存，不进远端协议；撤销再授权仍推进代次，修改其它连接、其它服务器或不影响目标的频道选择不取消本目标积压。凭证文件代次仍仅归当前连接。
 - POST 前持久记 sending；收到分段回执后记 sent。断线前已确认的分段不重复，明确 429 尊重等待时间；POST 回执丢失或崩溃遗留 sending 转 uncertain，留待主人通过历史核实，**不自动重发**。Discord enforce_nonce 只覆盖几分钟，不承诺 24 小时 exactly-once。附件沿用即时发送且没有持久 pin，发送使用原触发的 receipt 租约，在取频道的 await 后、发送前仍复核成员资格与目标 grant 代次；不能宣称附件必达，普通进程重启恢复仅承诺文本补送。并发打开同一账号资料的多个宿主尚未做出箱互斥验收。
+- 一条终稿变成 uncertain 不阻塞其余 pending；明确 429 的等待截止时间由所有 drain / complete 入口共用。空正文不发文字 POST，仍可即时上传正文托管图片；正文图与工具附件按路径去重，单张失败不阻塞其余附件。
+- setConfig 尝试期间暂停出箱并等待已开始的 POST 收口；只有配置成功才取消旧绑定的输出。凭证保存或连接失败并确认回滚后，仅刷新凭证元数据代次，保持原目标 grant 校验，保留 pending 与尚未提交的旧终稿；撤权后重新授权仍取消旧输出。
 
 实现与回归：`discord/context.ts`、`mcp-integrations/discordMcpServer.ts`、`discord/finalTextStorage.ts`、`packages/lizi-im/src/discord/{operations,finalTextOutbox}.ts` 及各自测试；共享终态接线由 `turnRunnerSendOutcome.test.ts` 验证。
 
