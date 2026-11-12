@@ -46,7 +46,7 @@
 | 15 | 订阅 Fast 策略、价格档 | 桌面启动钩子第 ⑥⑩ 步 | 已对齐（m1-cp2b） | Host `start-options.test.mjs` | 无 |
 | 16 | 可选目录（账号过滤、订阅池投影） | `getDesktopSelectableCatalog` | 已对齐（m1-cp2c） | desktop `subscriptionPoolCatalog.test.ts`；Host `model-context.test.mjs` | 无 |
 | 17 | 共享项目 Skill 链接 | 桌面启动钩子第 ⑬ 步与 `onBeforeStart` | 已对齐（m1-cp3b）；会写工作目录，见第三节 | Host `start-options.test.mjs` | 无 |
-| 18 | /learn 捕获 | `learn-host/captureInvocation.ts` | 未做（授权路径，单独提交）。排在 3c 之后：捕获只认 Cindy 内置的 learn Skill，Host 从 m1-cp6 起能列出它（第 2b 行）；授权的消费方 `start_skill_learning` 在 `cindy_helper` 里，见第 22 行。**依赖第 25 行**：Host 列出的 learn Skill 是桌面最后一次发布的那份，迁移后不再更新；Codex 部分还依赖 Skill 投影协议 | — | 无 |
+| 18 | /learn 捕获 | `learn-host/captureInvocation.ts`；`maker-ipc/register.ts` 的 `captureCindyLearnInvocation` | 部分（m1-cp10）：捕获已接；/learn 在 Host 上仍不可用，依赖第 22 行与第 27 行。Host 的回合执行本来就走共用的 `createMakerSendTransaction`，补上同一个 `createCindyLearnInvocationCapture`，依赖逐项照桌面（内置 Skill 读桌面最后一次发布的快照、Cindy 的 Skill 启用设置、机器人会话检查、按引擎列 Skill）。实测：Claude（`/cindy:learn`、`/learn`）与 Pi（`/skill:learn`、`/cindy:learn`）能捕获，引擎钉住已发布的内置 learn 文件，这条用户消息记下同一份快照；Codex 要等 Skill 投影（第 25 行）才列得出内置 learn，在那之前不捕获。快照只由 Host 自己写，客户端塞进输入的同名字段既进不了消息记录，也改变不了钉住的文件。消费方 `start_skill_learning`（cindy_helper，第 22 行）与 Learn 宿主（第 27 行）都还没有，所以 /learn 只是钉住了正确的文件，实际跑不起来。依赖第 25 行：迁移后内置 learn 不再更新。**迁移前必须完成** | Host `agent/learn-capture.test.mjs`（真实发布与 Host 引擎列 Skill；各引擎、各否定条件；列出的 Skill 路径全部在夹具目录内）、`agent/learn-send.test.mjs`（经输入队列与共用事务：钉住的文件与消息记录；伪造字段两层断言）；桌面 `learn-host/__tests__/hostLearnCaptureParity.test.ts`（桌面与 Host 的依赖在同一 profile 上逐场景给出同一份快照，列 Skill 的参数也相同） | 无 |
 | 19 | 引擎专有项（Claude、Codex、Pi 各一组） | maker-host 构造点 | 未做（第 8 步） | — | 无 |
 | 20 | 诊断：进程登记、cc-debug、出口路径事实 | maker-host 构造点 | 未做（第 7 步） | — | 无 |
 | 21 | 启动时清掉从终端继承的 Anthropic 凭据与端点变量 | `main/index.ts` `stripSensitiveAnthropicEnv` | 已对齐（m1-cp5b）：`main.ts` 第一个导入执行同一步，保留导入用的 Claude 配置目录 | Host `boot-env.test.mjs` | 无 |
@@ -55,6 +55,7 @@
 | 24 | Claude 与 Pi 的本机兼容代理与订阅桥 | `maker-host/anthropic-compat-proxy-host.ts` → `anthropicCompatProxyHostCore.ts`（`getClaudeEndpoint`）；`anthropic-responses-bridge-host.ts` → `anthropicResponsesBridgeHostCore.ts`；`pi-subscription-websocket.ts` → `piSubscriptionWebSocketCore.ts` | 已对齐（24a 代理，24b 订阅桥）。Host 的 Claude 与 Pi 经同一模块的回环代理（只监听 127.0.0.1），按模型路由、字段适配与恢复规则与桌面相同；自定义供应商由直连改为经代理；Pi 登记会话 token；任务的供应商与思考档位登记与桌面相同。24b：ChatGPT 与 SuperGrok 订阅（Claude 走 HTTP，Pi 走 HTTP 与 WebSocket）经与桌面同一份订阅桥，凭据来自 profile 自己的登录：ChatGPT 读 profile 的 codex-home 与独立账号目录，SuperGrok 读 Host 的 grok 登录；桥的凭据缓存在 Codex 登录、登出、作废时清空，与桌面相同；上游判定 ChatGPT 登录被撤销时按第 26 行作废，独立账号经账号服务作废，SuperGrok 经 grok 恢复流程。Codex 子代理读 OAuth 改为经同一个桥（桌面 `readSubagentOAuth`）。Claude 认证与桌面适配器逐个分支相同，订阅账号按桌面 `subscriptionAccountState`（SuperGrok 读自己的登录，独立 Claude 账号报已停用）。订阅桥属于 Codex 运行时，没有 Codex 运行时时见第二节。`maker:session-background-activity` 一族与 `maker:claude-session-route:get` 的状态已在 Host 上具备，见第六节。与 2e 的分工：代理按桌面的时机写路由登记、挂子代理用量与余量观察器；读登记写用量表、注入余量 listener 归 2e | Host `agent/claude-proxy-runtime.test.mjs`（入站门、占位常量、订阅交给桥、无 Codex 运行时时拒绝、关闭清理、字段剥离、分类器失败）、`agent/native-auth.test.mjs`、`agent/agent-graph.test.mjs`、`scripts/claude-proxy.e2e.mjs`（真实 Claude Code：网关、自定义供应商、ChatGPT 订阅经桥到本机模拟的 ChatGPT 后端并带 profile 的登录、上游撤销后作废且下一次请求不再外发）；桌面 `hostClaudeAuthAdapterParity.test.ts`（桌面与 Host 的 Claude 适配器在 来源 × 凭据模式 × 模型 × 登录事实 的 4096 格里状态与环境变量都相同，唯一差别是占位常量对运行时密钥）、`anthropicCompatProxyStartup.test.ts`、`anthropicCompatProxyInboundPort.test.ts`、`hostRuntimeConfigParity.test.ts`（例外清单为空）；包 `server-inbound-admission.test.ts` | 无 |
 | 25 | 全局 Skill 投影、内置 Skill 发布、Codex 账号 CODEX_HOME 准备 | `authBoundaryQuarantine.ts` 的 owner 提交协议；`auth-adapters.ts:555-572`（`ensureSharedGlobalSkills`、`prepareBuiltInSkills`）、`:1373`（`prepareCodexGlobalSkillsLinks`）、`:2494`（`prepareCodexAccountHome`） | 未做（M1，紧挨第 11 步，与 Host 的 owner 提交一起；动手前先交切断清单）。Host 的 owner 提交不写投影边界状态；Host 里没有 `ensureSharedGlobalSkills`、`prepareCodexGlobalSkillsLinks` 的引用；Codex 独立账号直接用 `nativeSubscriptionAccount.configDir`，没有托管 Skill 投影与规则拷贝。Codex 上的内置与插件 Skill、home 级 Skill 链接都等这一行。内置 Skill 发布：Host 只读桌面最后一次发布的快照（m1-cp6），自己不调 `prepareBuiltInSkills`；迁移后桌面不再运行，内置 Skill 必然不再更新，因此这一行要让 Host 按同一 owner 提交协议发布内置 Skill。**迁移前必须完成** | — | 无 |
 | 26 | Codex 原生登录被服务端作废 | `auth-adapters.ts` `DesktopCodexAuthAdapter.invalidate`（实例隔离分支）与 `maker-host/index.ts` 的 `setOnLogoutSuccess`、`setOnInvalidatedBroadcast` | 已对齐（24b；登录、登出收口 m1-cp9），迁移来的共享登录除外，见第二节，待用户决定。原为既有缺口，24b 补上：之前 Host 的 Codex 适配器没有 `invalidate`，服务端判定登录失效后不落标记、不清凭证。现在只处理 profile 自己 codex-home 里的登录，标记按实例隔离写，不直接读系统 `~/.codex` 路径；迁移来的 profile 里 codex-home/auth.json 若是指向系统登录的链接，Host 平常经这个链接读写系统那份登录（订阅桥刷新令牌、Codex 自己刷新都是），与桌面相同，作废只删 profile 里的链接，外面那份文件不变。能指明被拒凭证的失效（被拒 token 或凭证代次与当前 auth.json 一致才动手）：顺序与桌面相同，标记 → 解除授权 → 删 auth.json → 退役本机 Codex 进程与代理注入 → 删模型缓存 → 通知界面并让 Pi 的 MCP 桥失效。子进程没说明是哪一份凭证的失效（maker-core 目前都报这一种）：与桌面相同，凭证原样保留，写抑制标记，登录进行中或显式断开后不动；为此账号登录服务加了只读的 `isCodexAccountLoginActive`（共用模块，桌面不调用）。两种都与桌面同一份标记位置与格式，写不进时同桌面改写撤销标记兜底；读登录态时与桌面一样报出作废原因，直到重新登录。登录成功、登出、作废三处收口逐步对应桌面 `setOnLoginSuccess`、`setOnLogoutSuccess`、`setOnInvalidatedBroadcast`（m1-cp9 补上登录与登出：退役所有持本机登录的 Codex 进程、清代理注入、发路由变化、让 Pi 的 MCP 桥失效） | Host `agent/codex-invalidation.test.mjs`；桌面 `hostCodexInvalidationParity.test.ts`（双向：两种失效下 Host 作废后桌面读到的与桌面自己作废后相同；桌面作废并重新登录后 Host 先读到作废原因、再读到已登录；HOME 为空目录且跑完仍为空）；Host `agent/codex-auth-boundary.test.mjs`（三处收口逐步对照桌面）、`codex-invalidation.test.mjs` 的链接用例（指向 profile 外的硬链接、符号链接，两种作废，外面的文件内容、inode、修改时间不变） | 无 |
+| 27 | Learn 宿主 | `learn-host/`（`controller.ts`、`staging.ts`、`apply.ts`、`runStore.ts` 等，约 4200 行） | 未做，归属待定：到第 22 行交 cindy_helper 分组清单时与 `start_skill_learning` 一起定，届时说明哪些部分依赖 Electron 或窗口、apply 与 Skill 投影（第 25 行）的先后、它写到 profile 之外的位置。**迁移前必须有结论** | — | 无 |
 
 ## 二、与桌面不同（已知差异）
 
@@ -93,6 +94,17 @@
 | 空文件夹初始化为 Git 仓库 | 任务工作目录（`git init`），仅在用户开了「自动初始化项目 Git」时 | 每个用户回合开始前 | m1-cp5e |
 | Git 保存点对账删除 | 当前账号库里标记为已删除的任务在其仓库中的 `refs/cindy/savepoints/<任务 id>` | 账号库就绪后一次 | m1-cp5e |
 | Claude 托管 Skill 暂存目录 | 系统临时目录下的 `cindy-claude-skills-*`（maker-core `managed-skill-plugins.ts`）：每个插件一个目录，含 `plugin.json` 和指向批准来源的链接，不复制 Skill 内容 | 每次启动 Claude 任务且托管 Skill 清单非空时建；该次查询中止或启动失败时删除 | m1-cp6 |
+| 系统 Codex 登录（经链接） | 迁移来的 profile 里 codex-home/auth.json 若是指向 `~/.codex/auth.json` 的链接：订阅桥刷新令牌时原地写回（`anthropicResponsesBridgeHostCore.ts`），Host 拉起的 Codex 自己刷新时也写；作废只删 profile 里的链接，不改外面那份 | 令牌快过期时 | 24b |
+
+### Host 会读到的 profile 之外的位置
+
+同样是桌面已有的行为。
+
+| 读取 | 位置 | 何时 | 引入 |
+|---|---|---|---|
+| 官方 Codex Browser 插件的描述 | 系统 `~/.codex/config.toml` 的 `[plugins]`（共用启动配置里的 `prepareCodexBrowserCompanion`）；只读 config，不碰凭证 | 每次准备本机 Codex 进程的启动参数时 | M1 之前（Host 接入共用 Codex 启动配置时，m1-cp0 已有） |
+| 系统 Codex 登录（经链接） | 同上，迁移来的 profile 里经链接读系统那份登录 | 每次读 Codex 登录态与派发请求时 | 24b |
+| Claude Code 的配置与 Skill | `CLAUDE_CONFIG_DIR`，没设时 `~/.claude`（Claude 任务用 CLI 默认配置目录；/learn 捕获列 Skill 时也读这里） | 启动 Claude 任务、列 Skill 时 | m1-cp10 起用于 /learn 捕获 |
 
 ## 四、移出 M1
 
