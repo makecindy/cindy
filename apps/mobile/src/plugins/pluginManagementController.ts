@@ -63,7 +63,9 @@ export function createPluginManagementController(client: PluginManagementClient,
   async function readSnapshot(token: number) {
     const sequence = ++snapshotSequence;
     const snapshot = await client.snapshot();
-    if (current(token) && sequence === snapshotSequence) publish({ snapshot });
+    // Both display reads and full snapshots share this sequence. A current full
+    // read replaces the older hint; a later lightweight read can replace it again.
+    if (current(token) && sequence === snapshotSequence) publish({ snapshot, uiConsent: null });
     return snapshot;
   }
   async function acceptReceipt(receipt: PluginManagementReceipt, token: number) {

@@ -6,9 +6,11 @@ import { PluginUiEnablePrompt } from "@/plugins/PluginUiEnablePrompt";
 import { sharedTaskHostPeer, providerShareHostPeer } from "@cindy/device-link";
 import PluginsScreen from "@/plugins/PluginsScreen";
 import { usePluginManagement } from "@/plugins/usePluginManagement";
+import { createPluginPromptReads } from "@/plugins/pluginPromptReads";
 
 const fixture = vi.hoisted(() => ({
   props: new Map<string, any>(),
+  promptReads: null as ReturnType<typeof createPluginPromptReads> | null,
   realManagement: false,
   accountGeneration: 0,
   wire: vi.fn(),
@@ -41,10 +43,13 @@ vi.mock("@/plugins/usePluginManagement", async (importOriginal) => {
   return ({
   usePluginManagement: (...args: any[]) => {
     fixture.props.set("managementScope", args);
-    return fixture.realManagement ? actual.usePluginManagement(...args) : fixture.management;
+    const result = fixture.realManagement ? actual.usePluginManagement(...args) : fixture.management;
+    fixture.props.set("observedManagement", result);
+    return result;
   },
 });
 });
+vi.mock("@/plugins/PluginPromptReadsContext", () => ({ usePluginPromptReads: () => fixture.promptReads }));
 vi.mock("expo-crypto", () => ({ randomUUID: () => "screen-operation" }));
 vi.mock("@/plugins/PluginOriginalSettings", () => ({
   PluginOriginalSettings: (p: any) => { fixture.props.set("originalSettings", p); return null; },
@@ -233,6 +238,7 @@ let root: ReturnType<typeof createRoot>;
 beforeEach(() => {
   fixture.props.clear();
   fixture.realManagement = false;
+  fixture.promptReads = null;
   fixture.accountGeneration = 0;
   fixture.wire.mockReset();
   fixture.management = { state: null, controller: null };
@@ -1151,4 +1157,109 @@ it('refreshes task prompt suppression from the executing Host without storing a 
   fixture.props.delete('plugins.uiApproval');
   await act(async () => { fixture.resourceListeners.forEach((listener) => listener('mac', { collectionId: 'plugins' })); });
   expect(fixture.props.has('plugins.uiApproval')).toBe(false);
+});
+
+// PR #10206 P2, adapted from independent acceptance: real prompt → hook →
+// controller/client/shared reader, only wire and visual leaves are substituted.
+// Existing prompt tests used snapshots or an extra push, masking stale consent
+// after a successful mutation. Unit: fake timers, no notification after readback.
+function lightweightPromptHost(change: 'defer-ui' | 'approve-ui' | 'uninstall' | 'disable', delayed = false) {
+  const { plugin, snapshot } = realManagementHost();
+  Object.assign(plugin.manifest, { tools: [{ name: 'open' }], mcpApps: {
+    ui: { resources: [{ uri: 'ui://form', file: 'ui/form.html' }], tools: { open: { resourceUri: 'ui://form' } } },
+  } });
+  Object.assign(snapshot, { uiCapabilityApproval: true });
+  const item = { instanceKey: plugin.instanceKey, name: plugin.manifest.name,
+    approvalToken: 'approved:12345678-1234-4123-8123-123456789abc' };
+  let currentItem = item, snapshotReads = 0;
+  let release!: (value: unknown) => void;
+  const readback = new Promise(resolve => { release = resolve; });
+  fixture.wire.mockImplementation(async (_id, channel, args, opts) => {
+    opts?.preSend?.();
+    if (channel.endsWith(':manifest')) return { collections: [{ id: 'plugins', actions: [
+      { id: 'management:snapshot' }, { id: 'management:ui-consent' },
+    ] }] };
+    const request = args[0];
+    if (request.actionId === 'management:ui-consent') return { result: { version: 1, uiCapabilityApproval: true, item: currentItem } };
+    if (request.actionId === 'management:snapshot') {
+      if (++snapshotReads === 2 && delayed) return readback;
+      return { result: snapshot };
+    }
+    if (request.actionId === 'management:begin') {
+      expect(request.input.kind).toBe(change);
+      if (change === 'defer-ui') Object.assign(plugin, { uiPromptSuppressed: true });
+      if (change === 'approve-ui') Object.assign(plugin, { uiCapabilityApproved: true });
+      if (change === 'uninstall') snapshot.ghosts = [];
+      if (change === 'disable') plugin.enabled = false;
+      return { result: { operationId: request.input.operationId, phase: 'succeeded' } };
+    }
+    throw new Error('Unexpected ' + request.actionId);
+  });
+  fixture.promptReads = createPluginPromptReads(fixture.wire, () => true);
+  return { plugin, snapshot,
+    release: () => release({ result: snapshot }),
+    newerItem: () => { currentItem = { ...item, instanceKey: 'other-plugin', name: 'New pending plugin' }; return currentItem; },
+  };
+}
+it.each(['defer-ui', 'approve-ui', 'uninstall', 'disable'] as const)(
+  'fresh full readback hides an older lightweight prompt after %s without a push', async change => {
+    vi.useFakeTimers();
+    const h = lightweightPromptHost(change);
+    const container = document.createElement('div'); const localRoot = createRoot(container);
+    try {
+      await act(async () => localRoot.render(createElement(PluginUiEnablePrompt, {
+        deviceId: 'mac', deviceName: 'Mac', online: true, active: true,
+      })));
+      expect(container.textContent).toContain('plugins.uiApproval.title');
+      expect(fixture.wire.mock.calls.filter(c => c[2]?.[0]?.actionId === 'management:snapshot')).toHaveLength(0);
+      await act(async () => {
+        if (change === 'uninstall') await fixture.props.get('observedManagement').controller.uninstall(h.plugin);
+        else if (change === 'disable') await fixture.props.get('observedManagement').controller.setEnabled(h.plugin, false);
+        else fixture.props.get('plugins.uiApproval').actions[change === 'defer-ui' ? 1 : 0].onPress();
+        await vi.advanceTimersByTimeAsync(0);
+      });
+      expect(fixture.props.get('observedManagement').state.outcome).toBe('succeeded');
+      const actions = fixture.wire.mock.calls.map(c => c[2]?.[0]?.actionId);
+      expect(actions.filter(a => a === 'management:begin')).toHaveLength(1);
+      expect(actions.filter(a => a === 'management:snapshot')).toHaveLength(2);
+      expect(container.textContent).not.toContain('plugins.uiApproval.title');
+      // A later lightweight read must supersede the completed full readback.
+      const newer = h.newerItem();
+      await act(async () => {
+        fixture.resourceListeners.forEach(listener => listener('mac', { collectionId: 'plugins' }));
+        await vi.advanceTimersByTimeAsync(250);
+      });
+      expect(container.textContent).toContain('plugins.uiApproval.title');
+      expect(fixture.props.get('observedManagement').state.uiConsent?.item).toEqual(newer);
+      expect(fixture.wire.mock.calls.filter(c => c[2]?.[0]?.actionId === 'management:snapshot')).toHaveLength(2);
+    } finally {
+      act(() => localRoot.unmount()); fixture.promptReads = null; vi.useRealTimers();
+    }
+  },
+);
+it('a newer lightweight prompt wins over a late full readback response', async () => {
+  vi.useFakeTimers();
+  const h = lightweightPromptHost('defer-ui', true);
+  const container = document.createElement('div'); const localRoot = createRoot(container);
+  try {
+    await act(async () => localRoot.render(createElement(PluginUiEnablePrompt, {
+      deviceId: 'mac', deviceName: 'Mac', online: true, active: true,
+    })));
+    await act(async () => {
+      fixture.props.get('plugins.uiApproval').actions[1].onPress();
+      await vi.advanceTimersByTimeAsync(0);
+    });
+    expect(fixture.wire.mock.calls.filter(c => c[2]?.[0]?.actionId === 'management:snapshot')).toHaveLength(2);
+    const newer = h.newerItem();
+    await act(async () => {
+      fixture.resourceListeners.forEach(listener => listener('mac', { collectionId: 'plugins' }));
+      await vi.advanceTimersByTimeAsync(250);
+    });
+    expect(fixture.props.get('observedManagement').state.uiConsent?.item).toEqual(newer);
+    await act(async () => { h.release(); await vi.advanceTimersByTimeAsync(0); });
+    expect(container.textContent).toContain('plugins.uiApproval.title');
+    expect(fixture.props.get('observedManagement').state.uiConsent?.item).toEqual(newer);
+  } finally {
+    act(() => localRoot.unmount()); fixture.promptReads = null; vi.useRealTimers();
+  }
 });
