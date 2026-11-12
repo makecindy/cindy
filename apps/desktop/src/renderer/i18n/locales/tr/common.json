@@ -1842,6 +1842,15 @@
     },
     "remote": {
       "title": "Uzak makineler",
+      "hostKeyError": {
+        "missing": "SSH ana makine anahtarı doğrulaması yapılandırılmamış. Bağlantı reddedildi.",
+        "read": "Cindy güvenilen ana makine anahtarlarını okuyamadı: {{reason}}. Bağlantı reddedildi.",
+        "write": "Cindy güvenilen ana makine anahtarını kaydedemedi: {{reason}}. Bağlantı reddedildi.",
+        "mismatch": "{{host}} için ana makine anahtarı değişti ({{fingerprint}}) ve artık Cindy tarafından daha önce güvenilen parmak iziyle eşleşmiyor. Bu, sunucunun yeniden kurulduğu veya bir ortadaki adam (MITM) saldırısı olduğu anlamına gelebilir. Bağlantı reddedildi.",
+        "file": "Güvenilen ana makine anahtarları dosyası:\n{{filePath}}",
+        "repair": "Cindy ~/.ssh/known_hosts dosyasını okumaz. Eski parmak izi şurada saklanır:\n{{filePath}}\nGirdi anahtarı: \"{{host}}\".\nBu değişikliğin güvenilir olduğunu doğruladıysanız Cindy'den çıkın, yalnızca bu girdiyi kaldırın, dosyayı ve diğer tüm ana makineleri koruyun, ardından yeniden bağlanın. Yeni parmak izi ilk bağlantıda kaydedilecektir. Dosyanın tamamını silmeyin.",
+        "verifyChange": "Güvenilen ana makine anahtarı deposunu güncellemeden önce değişikliği sunucu yöneticisiyle doğrulayın."
+      },
       "footnote": "Aşama A: Yalnızca SSH bağlantı yönetimi. Uzak bilgisayarda Agent çalıştırma özelliği sonraki bir güncellemede gelecek.",
       "viaAuth": "{{label}} üzerinden",
       "readOnlyFromSshConfig": "Bağlantı ayrıntıları SSH yapılandırmasından alınır",
