@@ -239,7 +239,7 @@ vi.mock('../../../appSessionState.js', async (importOriginal) => {
     ...actual,
     activeOwnerScopeKey: () => h.ownerScopeKey,
     isAppSessionBoundaryPending: () => h.ownerBoundaryPending,
-    ownerScopedUserDataPath: () => join(h.userDataDir, createHash('sha256').update(h.ownerScopeKey).digest('hex')),
+    ownerScopedUserDataPath: (...parts: string[]) => join(h.userDataDir, createHash('sha256').update(h.ownerScopeKey).digest('hex'), ...parts),
   };
 });
 vi.mock('../../../assistantSamplingSettlement.js', async importOriginal => {
@@ -1138,8 +1138,17 @@ describe('Bot canonical Session lifecycle', () => {
           .rejects.toMatchObject({ code: 'INVALID_PARAMS', failure });
         expect(await invoke('local-db:bots:get', actor.externalId)).toEqual(original);
         expect(await runtime.takeOver(actor.externalId)).toEqual({ ok: false, code: 'FAILED', profileFailure: failure });
-        source = 'y'.repeat(12000);
-        expect(await runtime.takeOver(actor.externalId)).toEqual({ ok: true });
+        const repair = await runtime.repairProfile(actor.externalId, { action: 'read' });
+        if (!repair.ok || !repair.draft) throw new Error('Missing recovery editor');
+        expect(repair.draft.fields[0]?.source).toBe(source);
+        expect(await runtime.repairProfile(actor.externalId, { action: 'save', token: repair.draft.token,
+          values: { [field]: 'y'.repeat(12000) } })).toEqual({ ok: true });
+        const backups = join(h.userDataDir, createHash('sha256').update(h.ownerScopeKey).digest('hex'), 'companion-cloud-backups');
+        const saved = await fsPromises.readdir(backups);
+        const originals = await Promise.all(saved.filter(name => name.startsWith('profile-repair-'))
+          .map(async name => JSON.parse(await fsPromises.readFile(join(backups, name, 'profile.json'), 'utf8'))));
+        expect(originals).toContainEqual(expect.objectContaining({ botId: actor.externalId,
+          profile: expect.objectContaining({ [field === 'identitySource' ? 'soul' : 'user']: source }) }));
         expect(state.isDemoted(actor.externalId)).toBe(false);
         expect(runtime.profileFailure(actor.externalId)).toBeUndefined();
       } finally { runtime.dispose(); companionHomes.reset(); }

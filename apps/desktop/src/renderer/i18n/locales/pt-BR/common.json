@@ -11990,7 +11990,20 @@
       "transferred": "{{name}} foi transferido para “{{device}}”",
       "transferConflict": "O computador principal de {{name}} já mudou, por isso a transferência não foi feita",
       "transferOffline": "Não foi possível acessar o servidor. {{name}} continua funcionando neste computador",
-      "transferFailed": "Não foi possível transferir {{name}} para “{{device}}”"
+      "transferFailed": "Não foi possível transferir {{name}} para “{{device}}”",
+      "repair": {
+        "action": "Editar perfil e tentar novamente",
+        "title": "Corrigir perfil do companheiro",
+        "description": "Ao salvar, este companheiro será restaurado neste computador. Uma cópia do perfil original será salva aqui primeiro.",
+        "save": "Salvar e restaurar",
+        "count": "{{count}} / {{limit}} caracteres",
+        "over": "{{count}} caracteres acima do limite. Reduza o texto antes de salvar.",
+        "changed": "O perfil ou o computador principal mudou. Recarregue o perfil antes de editar.",
+        "loadFailed": "Não foi possível ler o perfil. Tente novamente.",
+        "backupFailed": "Não foi possível salvar uma cópia do perfil original. A correção não foi aplicada. Verifique o espaço livre e tente novamente.",
+        "saveFailed": "O companheiro ainda não foi restaurado. Suas alterações continuam aqui; tente novamente.",
+        "reload": "Recarregar"
+      }
     },
     "market": {
       "heading": "Descobrir amigos",

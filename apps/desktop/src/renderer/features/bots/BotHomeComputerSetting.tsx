@@ -11,6 +11,8 @@ import { useTranslation } from 'react-i18next';
 
 import { CompanionCindyConflictAction, useCompanionCindyConflictAction } from './CompanionCindyConflictAction';
 import { ConfirmDialog } from '@/components/ui/confirm-dialog';
+import { Button } from '@/components/ui/button';
+import { CompanionProfileRepairDialog } from './CompanionProfileRepairDialog';
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -94,6 +96,8 @@ export function useCompanionHomeSwitch(bot: CompanionHomeBot, failures: 'inline'
   const [busyTarget, setBusyTarget] = useState<CompanionTransferTarget | null>(null);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [repairOpen, setRepairOpen] = useState(false);
+  const [repairAvailable, setRepairAvailable] = useState(false);
   const inFlight = useRef(false);
   const report = (message: string, action?: ToastAction) => { if (failures === 'toast') toast.error(message, { action }); else setError(message); };
   const actor = cloud.enabled ? cloud.actors.find((candidate) => candidate.externalId === bot.id) : undefined;
@@ -126,6 +130,7 @@ export function useCompanionHomeSwitch(bot: CompanionHomeBot, failures: 'inline'
     inFlight.current = true;
     setBusy(true);
     setError(null);
+    setRepairAvailable(false);
     conflict.clear();
     const device = targetName(target);
     const owner = getDataOwnerGeneration();
@@ -142,8 +147,10 @@ export function useCompanionHomeSwitch(bot: CompanionHomeBot, failures: 'inline'
         return;
       }
       if (!result.ok) {
+        setRepairAvailable(!!result.profileFailure);
         report(result.profileFailure ? t(result.profileFailure.field === 'identitySource' ? 'bots.cloud.profileIdentityTooLong' : 'bots.cloud.profileUserTooLong', { limit: result.profileFailure.maxLength })
-          : t(SWITCH_ERROR_KEYS[result.code] ?? 'bots.cloud.switchFailed', { name: bot.name, device }), conflict.report(result));
+          : t(SWITCH_ERROR_KEYS[result.code] ?? 'bots.cloud.switchFailed', { name: bot.name, device }),
+          result.profileFailure ? { label: t('bots.cloud.repair.action'), onClick: () => setRepairOpen(true) } : conflict.report(result));
         refreshCompanionCloud();
         return;
       }
@@ -187,7 +194,7 @@ export function useCompanionHomeSwitch(bot: CompanionHomeBot, failures: 'inline'
     ? t('bots.cloud.thisComputer')
     : actor?.homeDevice?.name?.trim() || t('bots.cloud.unknownDevice');
   return { actor, home, homeHere, homeName, movable, choices, choicesFailed, pending, setPending, busyTarget, setBusyTarget, busy,
-    error, setError, inFlight, load, confirm, targetName, conflictAction: conflict.action };
+    error, setError, inFlight, load, confirm, targetName, conflictAction: conflict.action, repairOpen, setRepairOpen, repairAvailable };
 }
 
 export type HomeSwitch = ReturnType<typeof useCompanionHomeSwitch>;
@@ -233,6 +240,7 @@ export function HomeSwitchConfirm({ bot, state }: { bot: CompanionHomeBot; state
   const busyDevice = state.busyTarget ? state.targetName(state.busyTarget) : '';
   return (
     <>
+    <CompanionProfileRepairDialog botId={bot.id} open={state.repairOpen} onOpenChange={state.setRepairOpen} />
     <ConfirmDialog
       open={state.busyTarget !== null}
       presentation="standard"
@@ -296,6 +304,7 @@ export function BotHomeComputerSetting({ bot, className = 'mt-3' }: { bot: Compa
         <p role="alert" className="mt-2 px-1 text-12 text-[var(--text-danger)]">{state.error}</p>
       ) : null}
       {state.error ? <CompanionCindyConflictAction action={state.conflictAction} /> : null}
+      {state.repairAvailable && state.error && <Button variant="secondary" size="md" className="mt-2" onClick={() => state.setRepairOpen(true)}>{t('bots.cloud.repair.action')}</Button>}
       <HomeSwitchConfirm bot={bot} state={state} />
     </div>
   );

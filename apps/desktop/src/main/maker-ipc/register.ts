@@ -14088,6 +14088,17 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
     currentCompanionHomes();
     return activeCompanionCloud()?.takeOver(id) ?? companionNotEnabled;
   });
+  ipcMain.handle(MAKER_INVOKE.COMPANION_CLOUD_REPAIR_PROFILE, async (event, botId: unknown, request: unknown) => {
+    assertTrustedAppRendererEvent(event);
+    const id = companionBotId(botId);
+    if (!request || typeof request !== 'object' || !('action' in request)
+      || (request.action !== 'read' && request.action !== 'save')) throwIpcError('INVALID_PARAMS', 'profile repair action required');
+    const action = request as import('../../shared/companionCloud.js').CompanionProfileRepairRequest;
+    const mock = companionProfileUiMock();
+    if (mock?.botId === id) return mock.repairProfile(action);
+    currentCompanionHomes();
+    return activeCompanionCloud()?.repairProfile(id, action) ?? companionNotEnabled;
+  });
   ipcMain.handle(MAKER_INVOKE.COMPANION_CLOUD_SWITCH_HOME, async (event, botId: unknown, targetDeviceId: unknown, options: unknown) => {
     assertTrustedAppRendererEvent(event);
     const id = companionBotId(botId);

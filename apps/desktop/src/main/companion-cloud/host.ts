@@ -284,6 +284,14 @@ function createMaterializer(input: {
       fence.assertCurrent();
       await writeBotProfileFolder(root, botId, { systemPromptOverride: text });
     },
+    backupProfileSource: async (botId, value, fence) => {
+      const target = ownerScopedUserDataPath('companion-cloud-backups', `profile-repair-${randomUUID()}`);
+      fence.assertCurrent();
+      await fs.mkdir(target, { recursive: true, mode: 0o700 });
+      fence.assertCurrent();
+      await fs.writeFile(path.join(target, 'profile.json'), JSON.stringify({ botId, profile: value }), { flag: 'wx', mode: 0o600 });
+      fence.assertCurrent();
+    },
     backupHome: async (botId, fence) => {
       const source = botProfileDir(ownerScopedUserDataPath(), botId);
       const target = ownerScopedUserDataPath('companion-cloud-backups', `${path.basename(source)}-${new Date().toISOString().replace(/[:.]/g, '-')}`);

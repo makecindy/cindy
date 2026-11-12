@@ -85,6 +85,135 @@ describe('private report recovery', () => {
 });
 
 describe('take over', () => {
+  // #10112, unit tier: the public recovery action must preserve the original and restore
+  // only the rejected fields; neither the host writer nor the uploader was exercised by UI retry tests.
+  it('repairs the rejected source, backs up its original and uploads the owner edit after restoring', async () => {
+    vi.useFakeTimers();
+    try {
+      let profile = { ...MIA, soul: 'x'.repeat(12001), user: 'keep this context' };
+      let revision = 1;
+      const t = setup({ home: 'desk', handler: (route, method, data) => {
+        if (route === '/preferences') {
+          if (method === 'POST') { profile = (data as { value: typeof profile }).value; return { revision: ++revision }; }
+          return [{ key: 'companion.profile.v1', revision, value: profile }];
+        }
+        if (route === '/actors') return t.actors;
+        if (route === '/conversations') return { id: ROOM };
+        if (route.includes('/messages?')) return [];
+        return {};
+      } });
+      const backup = vi.fn(async () => undefined);
+      t.host.materializer!.backupProfileSource = backup;
+      t.host.readValues = async () => [{ key: 'companion.profile.v1', value: { ...profile,
+        soul: vi.mocked(t.local.host.createProfile).mock.calls[0]?.[0].identitySource ?? profile.soul } }];
+      expect(await t.runtime.takeOver('bot_mia')).toMatchObject({ ok: false, profileFailure: { field: 'identitySource' } });
+      const opened = await t.runtime.repairProfile('bot_mia', { action: 'read' });
+      expect(opened.ok && opened.draft?.fields).toEqual([{ field: 'identitySource', source: profile.soul, maxLength: 12000 }]);
+      if (!opened.ok || !opened.draft) throw new Error('missing repair draft');
+      expect(await t.runtime.repairProfile('bot_mia', { action: 'save', token: opened.draft.token, values: { identitySource: profile.soul } }))
+        .toMatchObject({ ok: false, profileFailure: { field: 'identitySource' } });
+      expect(t.calls.every(c => c.method === 'GET')).toBe(true);
+      expect(await t.runtime.repairProfile('bot_mia', { action: 'save', token: opened.draft.token, values: { identitySource: 'corrected by owner' } }))
+        .toEqual({ ok: true });
+      expect(backup).toHaveBeenCalledWith('bot_mia', expect.objectContaining({ soul: 'x'.repeat(12001), user: 'keep this context' }), expect.anything());
+      expect(t.local.host.createProfile).toHaveBeenCalledWith(expect.objectContaining({ identitySource: 'corrected by owner', userContextSource: 'keep this context' }), expect.anything());
+      expect(t.state.isDemoted('bot_mia')).toBe(false);
+      await t.runtime.syncNow();
+      expect(profile.soul).toBe('corrected by owner');
+      expect(profile.user).toBe('keep this context');
+    } finally { runtime?.dispose(); vi.useRealTimers(); }
+  });
+
+  it.each(['revision', 'home', 'account', 'backup', 'extra-field'] as const)('does not overwrite a recovery draft after %s changes', async change => {
+    vi.useFakeTimers();
+    try {
+      let revision = 1; let current = true;
+      const original = { ...MIA, soul: 'x'.repeat(12001) };
+      const t = setup({ home: 'desk', current: () => current, handler: (route, method) => {
+        if (route === '/preferences') return [{ key: 'companion.profile.v1', revision, value: original }];
+        if (route === '/conversations') return { id: ROOM };
+        if (route.includes('/messages?')) return [];
+        return {};
+      } });
+      t.host.materializer!.backupProfileSource = async () => { if (change === 'backup') throw new Error('disk full'); };
+      const opened = await t.runtime.repairProfile('bot_mia', { action: 'read' });
+      if (!opened.ok || !opened.draft) throw new Error('missing repair draft');
+      if (change === 'revision') revision++;
+      if (change === 'home') t.actors[0]!.homeDeviceId = 'other';
+      if (change === 'account') current = false;
+      const result = await t.runtime.repairProfile('bot_mia', { action: 'save', token: opened.draft.token,
+        values: { identitySource: 'corrected', ...(change === 'extra-field' ? { userContextSource: 'not rejected' } : {}) } });
+      expect(result.ok).toBe(false);
+      expect(t.local.host.createProfile).not.toHaveBeenCalled();
+      expect(t.local.host.updateProfile).not.toHaveBeenCalled();
+      expect(t.calls.filter(c => c.route === '/preferences' && c.method === 'POST')).toEqual([]);
+      if (change !== 'backup') expect(t.calls.every(c => c.method === 'GET')).toBe(true);
+    } finally { runtime?.dispose(); vi.useRealTimers(); }
+  });
+
+  it('serializes concurrent recovery submissions, including the asynchronous busy check', async () => {
+    vi.useFakeTimers();
+    try {
+      const t = setup({ home: 'desk', turnActive: () => false, handler: (route, method) => {
+        if (route === '/preferences') return [{ key: 'companion.profile.v1', revision: 1, value: { ...MIA, soul: 'x'.repeat(12001) } }];
+        if (route === '/conversations') return { id: ROOM };
+        if (route.includes('/messages?')) return [];
+        return {};
+      } });
+      t.host.materializer!.backupProfileSource = async () => undefined;
+      const [opened, overlappingRead] = await Promise.all([
+        t.runtime.repairProfile('bot_mia', { action: 'read' }),
+        t.runtime.repairProfile('bot_mia', { action: 'read' }),
+      ]);
+      expect(overlappingRead).toEqual({ ok: false, code: 'BUSY' });
+      if (!opened.ok || !opened.draft) throw new Error('missing draft');
+      const request = { action: 'save' as const, token: opened.draft.token, values: { identitySource: 'owner edit' } };
+      const results = await Promise.all([t.runtime.repairProfile('bot_mia', request), t.runtime.repairProfile('bot_mia', request)]);
+      expect(results).toEqual([{ ok: true }, { ok: false, code: 'BUSY' }]);
+      expect(t.local.host.createProfile).toHaveBeenCalledOnce();
+    } finally { runtime?.dispose(); vi.useRealTimers(); }
+  });
+
+  it('corrects the authoritative large store profile without replacing its other fields', async () => {
+    vi.useFakeTimers();
+    try {
+      const key = 'companion.profile.v1';
+      const profile = { ...MIA, soul: 'x'.repeat(70000), user: 'keep user context', systemPrompt: 'p'.repeat(70000) };
+      const stored = { key, revision: 2, cursor: '2', deleted: false, value: { companionStore: 1, prefRevision: 1, value: profile } };
+      const t = setup({ home: 'desk', store: { enabled: () => true }, handler: route => {
+        if (route === '/preferences') return [{ key, revision: 1, value: MIA }];
+        if (route.startsWith('/companion-store/entry?')) return stored;
+        if (route.startsWith('/companion-store/changes')) return { entries: [stored], cursor: '2', hasMore: false };
+        if (route === '/conversations') return { id: ROOM };
+        if (route.includes('/messages?')) return [];
+        return {};
+      } });
+      const backup = vi.fn(async () => undefined);
+      t.host.materializer!.backupProfileSource = backup;
+      const opened = await t.runtime.repairProfile('bot_mia', { action: 'read' });
+      if (!opened.ok || !opened.draft) throw new Error('missing draft');
+      expect(opened.draft.fields[0]?.source).toBe(profile.soul);
+      expect(await t.runtime.repairProfile('bot_mia', { action: 'save', token: opened.draft.token, values: { identitySource: 'owner edit' } })).toEqual({ ok: true });
+      expect(backup).toHaveBeenCalledWith('bot_mia', profile, expect.anything());
+      expect(t.local.host.createProfile).toHaveBeenCalledWith(expect.objectContaining({ identitySource: 'owner edit', userContextSource: profile.user }), expect.anything());
+    } finally { runtime?.dispose(); vi.useRealTimers(); }
+  });
+
+  it('keeps the original home when handing over a profile the target would reject', async () => {
+    const profile = { ...MIA, soul: 'x'.repeat(12001) };
+    const t = setup({ home: 'desk', devices: [device('laptop')], values: [{ key: 'companion.profile.v1', value: profile }],
+      handler: (route, method) => {
+        if (route === '/preferences') return method === 'GET' ? [{ key: 'companion.profile.v1', revision: 1, value: profile }] : { revision: 2 };
+        if (route === '/conversations') return { id: ROOM };
+        if (route.includes('/messages?')) return [];
+        return {};
+      } });
+    expect(await t.runtime.switchHome('bot_mia', 'laptop')).toMatchObject({ ok: false, profileFailure: { field: 'identitySource' } });
+    expect(t.actors[0]!.homeDeviceId).toBe('desk');
+    expect(t.state.isDemoted('bot_mia')).toBe(false);
+    expect(t.calls.some(c => c.method === 'PATCH')).toBe(false);
+  });
+
   // #10112: old preferences can remain while a larger profile lives in the store.
   // Unit tier: the real runtime must select the same revision as materialization.
   it.each([false, true])('uses the current store profile for validation (corrected: %s)', async corrected => {

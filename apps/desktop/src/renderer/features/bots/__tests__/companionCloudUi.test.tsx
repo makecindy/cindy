@@ -44,6 +44,7 @@ const maker = {
   getCompanionTranscript: vi.fn(),
   getCompanionAttachment: vi.fn(),
   takeOverCompanion: vi.fn(),
+  repairCompanionProfile: vi.fn(),
   getCompanionHomeChoices: vi.fn(),
   switchCompanionHome: vi.fn(),
 };
@@ -137,6 +138,55 @@ describe('presentation helpers', () => {
 });
 
 describe('CloudCompanionOfflineView', () => {
+  // #10112, integration tier: enter through the failed companion, edit the complete
+  // 12001-character source, retain edits on a failed save, then return to the recovered buddy.
+  it('corrects the rejected profile through its real form and preserves edits when saving fails', async () => {
+    maker.getCompanionTranscript.mockResolvedValue({ messages: [] });
+    const source = 'x'.repeat(12001);
+    maker.repairCompanionProfile.mockResolvedValueOnce({ ok: true, draft: { token: 'draft', fields: [
+      { field: 'identitySource', source, maxLength: 12000 },
+    ] } }).mockResolvedValueOnce({ ok: false, code: 'FAILED', profileRepairError: 'backup' }).mockResolvedValueOnce({ ok: true });
+    render(<CloudCompanionOfflineView botId="mia" deviceId="desk" name="Mia" deviceName="Desk"
+      profileFailure={{ field: 'identitySource', maxLength: 12000 }} />);
+    fireEvent.click(screen.getByRole('button', { name: 'bots.cloud.repair.action' }));
+    const field = await screen.findByRole('textbox', { name: 'bots.profile.personality' });
+    expect((field as HTMLTextAreaElement).value).toBe(source);
+    const save = screen.getByRole('button', { name: 'bots.cloud.repair.save' });
+    expect(save.hasAttribute('disabled')).toBe(true);
+    expect(field.getAttribute('aria-invalid')).toBe('true');
+    fireEvent.change(field, { target: { value: 'y'.repeat(12000) } });
+    expect(save.hasAttribute('disabled')).toBe(false);
+    fireEvent.click(save);
+    expect(await screen.findByText('bots.cloud.repair.backupFailed')).toBeTruthy();
+    expect((field as HTMLTextAreaElement).value).toBe('y'.repeat(12000));
+    expect(h.navigate).not.toHaveBeenCalled();
+    fireEvent.click(save);
+    await waitFor(() => expect(h.navigate).toHaveBeenCalledWith('/bots/mia'));
+    expect(maker.repairCompanionProfile).toHaveBeenLastCalledWith('mia', { action: 'save', token: 'draft', values: { identitySource: 'y'.repeat(12000) } });
+  });
+
+  it('requires a new draft after the home changes and ignores a load from a previous account', async () => {
+    maker.getCompanionTranscript.mockResolvedValue({ messages: [] });
+    maker.repairCompanionProfile.mockResolvedValueOnce({ ok: true, draft: { token: 'old', fields: [
+      { field: 'identitySource', source: 'x'.repeat(12001), maxLength: 12000 },
+    ] } }).mockResolvedValueOnce({ ok: false, code: 'HOME_CONFLICT' });
+    render(<CloudCompanionOfflineView botId="mia" deviceId="desk" name="Mia" deviceName="Desk"
+      profileFailure={{ field: 'identitySource', maxLength: 12000 }} />);
+    fireEvent.click(screen.getByRole('button', { name: 'bots.cloud.repair.action' }));
+    const field = await screen.findByRole('textbox');
+    fireEvent.change(field, { target: { value: 'my edit' } });
+    fireEvent.click(screen.getByRole('button', { name: 'bots.cloud.repair.save' }));
+    expect(await screen.findByText('bots.cloud.repair.changed')).toBeTruthy();
+    expect(screen.getByRole('button', { name: 'bots.cloud.repair.save' }).hasAttribute('disabled')).toBe(true);
+    let resolve!: (value: unknown) => void;
+    maker.repairCompanionProfile.mockImplementationOnce(() => new Promise(done => { resolve = done; }));
+    fireEvent.click(screen.getByRole('button', { name: 'bots.cloud.repair.reload' }));
+    h.owner = { dataOwnerId: 'other', generation: h.owner.generation + 1 };
+    await act(async () => resolve({ ok: true, draft: { token: 'obsolete', fields: [{ field: 'identitySource', source: 'private old account text', maxLength: 12000 }] } }));
+    expect(screen.queryByDisplayValue('private old account text')).toBeNull();
+    expect(h.navigate).not.toHaveBeenCalled();
+  });
+
   // #10112, integration tier: actual error UI and retry API; an unchanged source
   // stays visible, a corrected source returns to the local companion.
   it('shows the permanent source rejection and retries without losing the cloud conversation', async () => {

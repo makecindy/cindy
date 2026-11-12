@@ -11846,7 +11846,20 @@
       "transferred": "{{name}} 已交予「{{device}}」",
       "transferConflict": "{{name}} 之主机已变，此番未交",
       "transferOffline": "连不上服务器，{{name}} 仍行于此机",
-      "transferFailed": "未能将 {{name}} 交予「{{device}}」"
+      "transferFailed": "未能将 {{name}} 交予「{{device}}」",
+      "repair": {
+        "action": "改资料再试",
+        "title": "更正伙伴资料",
+        "description": "存后于此机恢复伙伴，原资料先备份于此。",
+        "save": "存并恢复",
+        "count": "{{count}} / {{limit}} 字",
+        "over": "超 {{count}} 字，请删简后存。",
+        "changed": "资料或主力电脑已变，请重读后更正。",
+        "loadFailed": "资料暂不可读，请再试。",
+        "backupFailed": "原资料备份未成，更正未用。请查磁盘余量后再试。",
+        "saveFailed": "伙伴未恢复，所改仍存于此，请稍后再试。",
+        "reload": "重新读取"
+      }
     },
     "market": {
       "heading": "访同伴",

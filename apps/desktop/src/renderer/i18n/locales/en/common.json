@@ -11891,7 +11891,20 @@
       "transferred": "{{name}} moved to “{{device}}”",
       "transferConflict": "{{name}}’s main computer has already changed, so it wasn’t moved",
       "transferOffline": "Can’t reach the server. {{name}} still runs on this computer",
-      "transferFailed": "Couldn’t move {{name}} to “{{device}}”"
+      "transferFailed": "Couldn’t move {{name}} to “{{device}}”",
+      "repair": {
+        "action": "Edit Profile and Retry",
+        "title": "Correct Buddy Profile",
+        "description": "Saving restores this buddy on this computer. The original profile will be backed up here first.",
+        "save": "Save and Restore",
+        "count": "{{count}} / {{limit}} characters",
+        "over": "{{count}} characters over the limit. Shorten the text before saving.",
+        "changed": "The profile or main computer has changed. Reload the profile before editing.",
+        "loadFailed": "Couldn’t read the profile. Please retry.",
+        "backupFailed": "Couldn’t back up the original profile; your correction has not been applied. Check available disk space and retry.",
+        "saveFailed": "The buddy has not been restored. Your edits are still here; please retry.",
+        "reload": "Reload Profile"
+      }
     },
     "market": {
       "heading": "Discover Buddies",

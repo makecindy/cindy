@@ -3,7 +3,11 @@
  * endpoint). Started only when the server announces companion homes; background
  * transient failures are retried; rejected profile sources are surfaced without replaying writes.
  */
+import { randomUUID } from 'node:crypto';
+import { correctedProfile, profileRepairFields, profileRepairVersion, CompanionProfileRepairError, type ProfileCorrection } from './profileRepair.js';
 import type {
+  CompanionProfileRepairRequest,
+  CompanionProfileRepairResult,
   CompanionCindyCopy,
   CompanionMergeResult,
   CompanionTranscriptMessage,
@@ -14,7 +18,7 @@ import type {
   CompanionTransferTarget,
 } from '../../shared/companionCloud.js';
 import type { DeviceLinkDeviceView } from '../../shared/deviceLinkIpc.js';
-import { BotProfileSourceTooLong, validateCompanionProfileSources, type BotProfileSourceFailure } from '../../shared/botProfileSources.js';
+import { BotProfileSourceTooLong, type BotProfileSourceFailure } from '../../shared/botProfileSources.js';
 import { isMobilePlatform } from '@cindy/maker-shared/device-list';
 import type { CompanionHomeRegistry } from './homes.js';
 import type { CompanionArrivalNotice } from './capabilities.js';
@@ -101,7 +105,8 @@ export interface CompanionCloudRuntime {
   syncNow: () => Promise<void>;
   /** Demote local copies homed elsewhere and materialize companions handed to this computer. */
   reconcile: (localProfiles: Array<{ id: string; status: string }>) => void;
-  takeOver: (botId: string) => Promise<CompanionCloudActionResult>;
+  takeOver: (botId: string, correction?: ProfileCorrection) => Promise<CompanionCloudActionResult>;
+  repairProfile: (botId: string, request: CompanionProfileRepairRequest) => Promise<CompanionProfileRepairResult>;
   transfer: (botId: string, targetDeviceId: string, options?: CompanionSwitchOptions) => Promise<CompanionCloudActionResult>;
   transferTargets: () => Promise<CompanionTransferTarget[]>;
   /** Where the companion can move, seen from this computer (any computer, not only its home). */
@@ -155,6 +160,7 @@ const union = (left: Only, right: Set<string> | null): Only =>
 export { isUnreachable };
 
 function actionFailure(error: unknown, fallback: 'FAILED' | 'OFFLINE' = 'FAILED'): CompanionCloudActionResult {
+  if (error instanceof CompanionProfileRepairError) return { ok: false, code: 'FAILED', profileRepairError: error.reason };
   if (error instanceof BotProfileSourceTooLong) return { ok: false, code: 'FAILED', profileFailure: error.failure };
   if (error instanceof CompanionIdentityConflict) return { ok: false, code: 'LOCAL_CINDY_CONFLICT' };
   const conflict = chatRejection(error, 409, 'HOME_DEVICE_CONFLICT');
@@ -441,6 +447,8 @@ export function startCompanionCloud(input: {
   const autoPending = new Set<string>();
   const identityConflicts = new Map<string, { actorId: string; conflictingBotId: string }>();
   const profileFailures = new Map<string, { actorId: string; failure: BotProfileSourceFailure }>();
+  const repairDrafts = new Map<string, { token: string; actorId: string; home: string | null; version: string }>();
+  const repairing = new Set<string>();
   function recordProfileFailure(actor: CompanionRuntimeActor, actorId: string, error: unknown): boolean {
     if (!(error instanceof BotProfileSourceTooLong)) return false;
     if (!live() || actorOf(actor.externalId)?.id !== actorId || actor.homeDeviceId !== input.selfDeviceId || !state.isDemoted(actor.externalId)) return true;
@@ -452,22 +460,21 @@ export function startCompanionCloud(input: {
     }
     return true;
   }
-  async function checkProfileSources(actor: CompanionRuntimeActor) {
+  async function checkProfileSources(actor: CompanionRuntimeActor, correction?: ProfileCorrection) {
     const actorId = actor.id;
     const profile = await readCompanionRestoreValue(input.api, store, actorId, COMPANION_PROFILE_KEY);
     fence.assertCurrent();
     if (actorOf(actor.externalId)?.id !== actorId) throw new Error('COMPANION_CHANGED');
     if (!profile || !isCompanionProfileSnapshot(profile.value)) throw new Error('PROFILE_SNAPSHOT_MISSING');
-    validateCompanionProfileSources(profile.value);
-    return profile.value;
+    return correctedProfile(profile, correction);
   }
-  function materialize(actor: CompanionRuntimeActor): Promise<CompanionMaterializeResult> {
+  function materialize(actor: CompanionRuntimeActor, correction?: ProfileCorrection): Promise<CompanionMaterializeResult> {
     const materializer = input.host.materializer;
     if (!materializer) return Promise.reject(new Error('MATERIALIZE_UNAVAILABLE'));
     const botId = actor.externalId;
     const pending = materializing.get(botId);
     if (pending) return pending;
-    const run = materializeCompanion({ api: input.api, store, state, log: input.log, fence, onDemoted: publish, host: { ...materializer, latestRows: input.host.latestRows },
+    const run = materializeCompanion({ api: input.api, store, state, log: input.log, fence, correction, onDemoted: publish, host: { ...materializer, latestRows: input.host.latestRows },
       ...(input.media ? { download: input.media.download } : {}),
       actor: { id: actor.id, externalId: botId, name: actor.name, avatar: actor.avatar ?? null },
       roomId: () => mirror.ensureRoom(botId, actor.id, actor.name) })
@@ -547,7 +554,7 @@ export function startCompanionCloud(input: {
   function scheduleAuto(actor: CompanionRuntimeActor) {
     const botId = actor.externalId;
     const actorId = actor.id;
-    if (autoPending.has(botId) || materializing.has(botId) || Date.now() < (autoRetryAt.get(botId) ?? 0)) return;
+    if (repairing.has(botId) || autoPending.has(botId) || materializing.has(botId) || Date.now() < (autoRetryAt.get(botId) ?? 0)) return;
     autoPending.add(botId);
     autoRetryAt.set(botId, Date.now() + AUTO_RETRY_MS);
     // Hidden first, through the home confirmation and the claim: the stale copy must not run or sync
@@ -741,10 +748,13 @@ export function startCompanionCloud(input: {
     if (await turnActive()) return { ok: false, code: 'BUSY' };
     // An older target reads only the preferences: what only the store holds would not arrive, so
     // such a value still refuses the move, as before the store existed.
-    try { await flush(actor.externalId, { preferencesOnly: !targetReadsStore }); }
+    try {
+      await flush(actor.externalId, { preferencesOnly: !targetReadsStore });
+      await checkProfileSources(actor);
+    }
     catch (error) {
       input.log?.warn('Companion hand-over stopped: sync did not finish', { actorId: actor.id, code: errorCode(error) });
-      return syncFailure(error);
+      return error instanceof BotProfileSourceTooLong ? actionFailure(error) : syncFailure(error);
     }
     // Checked again right before the move: a turn may have started during the flush.
     if (await turnActive()) return { ok: false, code: 'BUSY' };
@@ -823,7 +833,39 @@ export function startCompanionCloud(input: {
       }
     },
 
-    async takeOver(botId) {
+    async repairProfile(botId, request) {
+      if (!live() || !input.selfDeviceId || !input.host.materializer) return { ok: false, code: 'NOT_ENABLED' };
+      const actor = actorOf(botId);
+      if (!actor || actor.disabled) return { ok: false, code: 'FAILED', profileRepairError: 'changed' };
+      if (await input.host.isBotBusy?.(botId)) return { ok: false, code: 'BUSY' };
+      // Recheck after the asynchronous busy probe so simultaneous saves cannot both enter.
+      if (repairing.has(botId) || autoPending.has(botId) || materializing.has(botId)) return { ok: false, code: 'BUSY' };
+      // Reads also own this guard: an older pending read must not release a newer save's guard.
+      repairing.add(botId);
+      try {
+        fence.assertCurrent();
+        if (request?.action === 'read') {
+          const row = await readCompanionRestoreValue(input.api, store, actor.id, COMPANION_PROFILE_KEY);
+          fence.assertCurrent();
+          if (!row || actorOf(botId)?.id !== actor.id) throw new CompanionProfileRepairError('changed');
+          const fields = profileRepairFields(row);
+          if (!fields.length) throw new CompanionProfileRepairError('changed');
+          const token = randomUUID();
+          repairDrafts.set(botId, { token, actorId: actor.id, home: actor.homeDeviceId ?? null, version: profileRepairVersion(row) });
+          return { ok: true, draft: { token, fields } };
+        }
+        const draft = repairDrafts.get(botId);
+        if (request?.action !== 'save' || !draft || request.token !== draft.token || actor.id !== draft.actorId
+          || (actor.homeDeviceId ?? null) !== draft.home) throw new CompanionProfileRepairError('changed');
+        const result = await mirrors.exclusive(() => uploads.exclusive(() => runtime.takeOver(botId, { version: draft.version, values: request.values })));
+        if (result.ok) repairDrafts.delete(botId);
+        return result;
+      } catch (error) { return actionFailure(error); }
+      finally { repairing.delete(botId); }
+    },
+
+    async takeOver(botId, correction) {
+      if (repairing.has(botId) && !correction) return { ok: false, code: 'BUSY' };
       const self = input.selfDeviceId;
       if (!self || !live() || !input.host.materializer) return { ok: false, code: 'NOT_ENABLED' };
       let actor = actorOf(botId);
@@ -836,7 +878,7 @@ export function startCompanionCloud(input: {
       // Never move the home before the companion's profile snapshot is in the cloud: without it
       // this copy could not be built, and the old home would already be demoted.
       try {
-        const profile = await checkProfileSources(actor);
+        const profile = await checkProfileSources(actor, correction);
         await assertCompanionIdentity(input.host.materializer, actor.externalId,
           (profile as { templateId?: unknown }).templateId, fence);
         identityConflicts.delete(actor.externalId);
@@ -862,7 +904,7 @@ export function startCompanionCloud(input: {
         // Taking over from this installation also takes it from another install on the same device.
         demoteNow(actor);
         if (await claimInstall(actor, 'takeover', input.api) !== 'mine') return homeActionFailure('takeOver', botId, new Error('INSTALL_CLAIM_LOST'));
-        await materialize(actor);
+        await materialize(actor, correction);
         identityConflicts.delete(actor.externalId);
         profileFailures.delete(actor.externalId);
         autoRetryAt.delete(actor.externalId);
@@ -1084,6 +1126,7 @@ export function startCompanionCloud(input: {
       ...[...installs].flatMap(([botId, value]) => value.owner === 'other' ? [botId] : [])])].sort(),
 
     dispose() {
+      repairDrafts.clear();
       disposed = true;
       aborts.abort();
       uploads.dispose(); mirrors.dispose(); unsubscribe?.();

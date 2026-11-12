@@ -23,6 +23,7 @@ import { BotGroupMessageAttachments } from './BotGroupMessageAttachments';
 import { BotSessionContentHeaderRegistration, type BotChatIdentity } from './BotSessionContentHeader';
 import { ensureBotProfilesLoaded } from './botStore';
 import { companionCloudApi, refreshCompanionCloud } from './companionCloudStore';
+import { CompanionProfileRepairDialog } from './CompanionProfileRepairDialog';
 
 export interface CloudCompanionOfflineViewProps {
   botId: string;
@@ -64,6 +65,7 @@ function CloudCompanionOfflineContent({ botId, deviceId, name, avatar, avatarCol
   const [loading, setLoading] = useState(true);
   const [loadFailed, setLoadFailed] = useState(false);
   const [state, setState] = useState<TakeOverState>({ kind: 'idle' });
+  const [repairOpen, setRepairOpen] = useState(false);
   const scroller = useRef<HTMLDivElement>(null);
   const anchor = useRef<{ height: number; top: number } | null>(null);
   const stickToBottom = useRef(true);
@@ -175,6 +177,7 @@ function CloudCompanionOfflineContent({ botId, deviceId, name, avatar, avatarCol
   return (
     <main className="flex h-full min-h-0 flex-col bg-[var(--surface)]" data-testid="cloud-companion-offline">
       <BotSessionContentHeaderRegistration bot={identity} />
+      <CompanionProfileRepairDialog botId={botId} open={repairOpen} onOpenChange={setRepairOpen} />
       {sourceFailure ? <ErrorNotice
         role="alert"
         className="mx-4 mt-3"
@@ -184,7 +187,9 @@ function CloudCompanionOfflineContent({ botId, deviceId, name, avatar, avatarCol
           : state.kind === 'error' ? t(state.key, { name })
             : t(sourceFailure.field === 'identitySource' ? 'bots.cloud.profileIdentityTooLong' : 'bots.cloud.profileUserTooLong', { limit: sourceFailure.maxLength })}
         details={`INVALID_PARAMS: ${sourceFailure.field} > ${sourceFailure.maxLength}`}
-        actions={<><CompanionCindyConflictAction action={conflict.action} /><Button variant="primary" size="md" loading={state.kind === 'running'} disabled={state.kind === 'running'} onClick={() => void takeOver()}>{t('bots.retry')}</Button></>}
+        actions={<><CompanionCindyConflictAction action={conflict.action} />
+          {typeof companionCloudApi()?.repairCompanionProfile === 'function' && <Button variant="primary" size="md" disabled={state.kind === 'running'} onClick={() => setRepairOpen(true)}>{t('bots.cloud.repair.action')}</Button>}
+          <Button variant="secondary" size="md" loading={state.kind === 'running'} disabled={state.kind === 'running'} onClick={() => void takeOver()}>{t('bots.retry')}</Button></>}
       /> : <section
         role="status"
         className="mx-4 mt-3 flex flex-wrap items-center gap-3 rounded-xl border border-[var(--border-default)] bg-[var(--surface-elevated)] px-4 py-3"

@@ -11846,7 +11846,20 @@
       "transferred": "{{name}}을(를) '{{device}}'(으)로 옮겼습니다",
       "transferConflict": "{{name}}의 주 컴퓨터가 이미 바뀌어 옮기지 않았습니다",
       "transferOffline": "서버에 연결할 수 없습니다. {{name}}은(는) 계속 이 컴퓨터에서 실행됩니다",
-      "transferFailed": "{{name}}을(를) '{{device}}'(으)로 옮기지 못했습니다"
+      "transferFailed": "{{name}}을(를) '{{device}}'(으)로 옮기지 못했습니다",
+      "repair": {
+        "action": "자료 수정 후 다시 시도",
+        "title": "동료 자료 수정",
+        "description": "저장하면 이 컴퓨터에서 동료를 복원합니다. 원본 자료는 먼저 이 컴퓨터에 백업됩니다.",
+        "save": "저장하고 복원",
+        "count": "{{count}} / {{limit}}자",
+        "over": "{{count}}자 초과했습니다. 내용을 줄인 후 저장하세요.",
+        "changed": "자료 또는 주 컴퓨터가 변경되었습니다. 다시 읽은 후 수정하세요.",
+        "loadFailed": "자료를 읽지 못했습니다. 다시 시도하세요.",
+        "backupFailed": "원본 자료를 백업하지 못해 수정 사항을 적용하지 않았습니다. 디스크 여유 공간을 확인하고 다시 시도하세요.",
+        "saveFailed": "동료가 아직 복원되지 않았습니다. 수정 내용은 여기에 남아 있습니다. 다시 시도하세요.",
+        "reload": "다시 읽기"
+      }
     },
     "market": {
       "heading": "동반자 찾기",

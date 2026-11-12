@@ -11846,7 +11846,20 @@
       "transferred": "{{name}} 已交給「{{device}}」",
       "transferConflict": "{{name}} 的主力電腦已經變了，這次沒有交出",
       "transferOffline": "連不上伺服器，{{name}} 仍在這台電腦執行",
-      "transferFailed": "未能把 {{name}} 交給「{{device}}」"
+      "transferFailed": "未能把 {{name}} 交給「{{device}}」",
+      "repair": {
+        "action": "修改資料並重試",
+        "title": "更正夥伴資料",
+        "description": "儲存後將在這台電腦恢復夥伴。原始資料會先備份到這台電腦。",
+        "save": "儲存並恢復",
+        "count": "{{count}} / {{limit}} 字",
+        "over": "超出 {{count}} 字，請縮短後儲存。",
+        "changed": "資料或主力電腦已變更，請重新讀取後更正。",
+        "loadFailed": "暫時無法讀取資料，請重試。",
+        "backupFailed": "原始資料備份失敗，尚未套用更正。請檢查可用磁碟空間後重試。",
+        "saveFailed": "夥伴尚未恢復，你填寫的內容仍保留在這裡。請稍後重試。",
+        "reload": "重新讀取"
+      }
     },
     "market": {
       "heading": "發現夥伴",

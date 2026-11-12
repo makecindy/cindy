@@ -11891,7 +11891,20 @@
       "transferred": "{{name}} wurde auf „{{device}}“ verschoben",
       "transferConflict": "Der Hauptcomputer von {{name}} wurde bereits geändert, daher wurde nichts verschoben",
       "transferOffline": "Server nicht erreichbar. {{name}} läuft weiterhin auf diesem Computer",
-      "transferFailed": "{{name}} konnte nicht auf „{{device}}“ verschoben werden"
+      "transferFailed": "{{name}} konnte nicht auf „{{device}}“ verschoben werden",
+      "repair": {
+        "action": "Profil bearbeiten und erneut versuchen",
+        "title": "Begleiterprofil korrigieren",
+        "description": "Beim Speichern wird dieser Begleiter auf diesem Computer wiederhergestellt. Das ursprüngliche Profil wird zuerst hier gesichert.",
+        "save": "Speichern und wiederherstellen",
+        "count": "{{count}} / {{limit}} Zeichen",
+        "over": "{{count}} Zeichen zu viel. Kürzen Sie den Text vor dem Speichern.",
+        "changed": "Das Profil oder der Hauptcomputer hat sich geändert. Laden Sie das Profil vor dem Bearbeiten neu.",
+        "loadFailed": "Das Profil konnte nicht gelesen werden. Versuchen Sie es erneut.",
+        "backupFailed": "Das ursprüngliche Profil konnte nicht gesichert werden. Die Korrektur wurde nicht angewendet. Prüfen Sie den freien Speicherplatz und versuchen Sie es erneut.",
+        "saveFailed": "Der Begleiter wurde noch nicht wiederhergestellt. Ihre Änderungen bleiben hier erhalten. Versuchen Sie es erneut.",
+        "reload": "Neu laden"
+      }
     },
     "market": {
       "heading": "Freunde entdecken",
