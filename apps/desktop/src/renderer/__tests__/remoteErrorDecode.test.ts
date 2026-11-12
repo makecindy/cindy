@@ -96,6 +96,13 @@ describe('decodeRemoteErrorMessage', () => {
     expect(decodeRemoteErrorMessage(raw)).toBe(i18n.t('chat.remoteError.REMOTE_COMPAT_MODE_UNSUPPORTED'));
   });
 
+  // #9855, unit: keep the metadata diagnostic marker through the real store's
+  // decoder so ErrorBanner can show recovery before raw details are expanded.
+  it('preserves the Pi cloud-file startup diagnostic through lazy-create decoding', () => {
+    const raw = 'LAZY_CREATE_FAILED: [PI_STARTUP_CLOUD_CONTEXT_FILE] Download ~/Desktop/AGENTS.md in Finder.\npi rpc timeout after 30000ms: set_thinking_level';
+    expect(remoteErrorMessageForBanner(raw)).toBe(raw);
+  });
+
   it('maps a missing auto-review confirmation to i18n text, not a user rejection', () => {
     expect(
       decodeRemoteErrorMessage(

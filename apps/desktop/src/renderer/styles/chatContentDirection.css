@@ -1,0 +1,28 @@
+/* Let every displayed paragraph (including preserved newlines) choose its own
+   first-strong base. plaintext also makes text-align:start use that base in
+   Chromium; computed `direction` alone does not describe the rendered line.
+   Keep this on content leaves so application controls retain their layout. */
+.chat-content-text,
+.msg-markdown :is(p, li, th, td, blockquote, h1, h2, h3, h4, h5, h6),
+.rich-answer :is(.rich-answer-text, .rich-answer-heading, .rich-answer-caption),
+[data-chat-input-root] .ProseMirror p {
+  unicode-bidi: plaintext;
+  /* RichAnswer exposes explicit node/container alignment as an inherited token. */
+  text-align: var(--rich-textAlign, start);
+}
+
+/* Technical runs remain isolated from the surrounding prose. Their contents
+   are unchanged, so highlighting, selection, copying and streaming still use
+   the original text. */
+.msg-markdown :is(pre, code, .katex) {
+  direction: ltr;
+  unicode-bidi: isolate;
+}
+.msg-markdown pre {
+  text-align: start;
+}
+
+/* Reserve marker space on each item's own starting side, including mixed lists. */
+.msg-markdown li {
+  margin-inline-start: 1.5rem;
+}

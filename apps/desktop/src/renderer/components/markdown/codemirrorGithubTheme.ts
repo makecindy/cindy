@@ -173,7 +173,6 @@ function makeEditorTheme(c: typeof githubLightColors, isDark: boolean) {
         // 左侧 padding 为 0 —— 行号 gutter 自己控制 padding-left 30px,
         // 文字距离行号有 14px 间距(gutter padding-right + cm-content padding-left)。
         padding: '28px 30px 28px 14px',
-        caretColor: c.text,
       },
       '.cm-focused': { outline: 'none' },
       '.cm-line': {
@@ -270,7 +269,6 @@ function makePlainEditorTheme(isDark: boolean) {
         lineHeight: '1.6',
         // 等价之前 textarea 的 px-10 py-7。
         padding: '28px 40px',
-        caretColor: text,
       },
       '.cm-focused': { outline: 'none' },
       '.cm-line': {
@@ -318,7 +316,6 @@ function makeMarkdownEditorTheme(isDark: boolean) {
         fontFamily: PLAIN_FONT_STACK,
         lineHeight: '1.68',
         padding: '34px 72px 48px',
-        caretColor: text,
         maxWidth: '920px',
         margin: '0 auto',
         width: '100%',

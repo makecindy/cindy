@@ -10,9 +10,10 @@ import '../themes/colors';
  * keeps tests in the node vitest env and avoids dragging in jsdom +
  * react-dom for what are essentially structural / token contracts.
  *
- * Plus a unit test of the parseDiffText logic by re-deriving it from the
- * source — same regex, same prefixes, so a behavioural drift in the parser
- * would surface here.
+ * Parser regressions invoke the production parseDiffText entry. PR #10019
+ * routes patch fences here; a hunk with +++counter; / ---counter; must retain
+ * real add/del rows (DESIGN §2). The former copied parser missed this behavior.
+ * Minimum input: one unified hunk with these prefixed changes. Tier: unit.
  *
  * Contracts asserted:
  *   F1  Theme color registry pins GitHub-standard diff foreground/background
@@ -31,6 +32,7 @@ import '../themes/colors';
 import { describe, it, expect } from 'vitest';
 import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
+import { parseDiffText } from '../components/chat/MarkdownDiffBlock';
 
 const rendererPath = resolve(
   __dirname,
@@ -190,33 +192,13 @@ describe('F4 — inline code 分派判据', () => {
 });
 
 describe('F5 — parseDiffText classification', () => {
-  /**
-   * Re-implement the parser using the SAME prefix rules the source uses.
-   * This is a behavioural mirror — if someone ships a regression in the
-   * source parser, they must also update this test (which is the point).
-   *
-   * Mirrors apps/desktop/src/renderer/components/chat/MarkdownDiffBlock.tsx
-   * `parseDiffText`.
-   */
-  type Line = { type: 'add' | 'del' | 'ctx'; text: string; lineNum: number };
-  function parseDiffText(raw: string): Line[] {
-    const lines = raw.replace(/^\n+|\n+$/g, '').split('\n');
-    let lineNum = 1;
-    return lines.map((line) => {
-      let type: Line['type'] = 'ctx';
-      let text = line;
-      if (line.startsWith('+++') || line.startsWith('---') || line.startsWith('@@')) {
-        type = 'ctx';
-      } else if (line.startsWith('+')) {
-        type = 'add';
-        text = line.slice(1).replace(/^ /, '');
-      } else if (line.startsWith('-')) {
-        type = 'del';
-        text = line.slice(1).replace(/^ /, '');
-      }
-      return { type, text, lineNum: lineNum++ };
-    });
-  }
+  it.each(['---counter;', '----'])('keeps %s and +++counter; as real hunk changes', removed => {
+    const out = parseDiffText(['--- a/file', '+++ b/file', '@@ -1 +1 @@', removed, '+++counter;'].join('\n'));
+    expect(out.slice(3)).toEqual([
+      { type: 'del', text: removed.slice(1), lineNum: 4 },
+      { type: 'add', text: '++counter;', lineNum: 5 },
+    ]);
+  });
 
   it('classifies + / - / context lines correctly', () => {
     const out = parseDiffText('+ added\n- removed\n  ctx');

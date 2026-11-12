@@ -256,7 +256,7 @@ export function PermissionSelector({
                       ? 'h-[30px] w-[34px] min-w-[34px] justify-center px-0'
                       : 'h-[30px] min-w-[72px] max-w-full shrink px-2.5',
                     'border border-transparent bg-transparent text-[var(--text-primary)]',
-                    'hover:border-[var(--border-default)] hover:bg-[var(--composer-pill-bg,#FCFCFC)] dark:hover:bg-[var(--composer-pill-bg,#393838)]',
+                    'hover:border-[var(--border-default)] hover:bg-[var(--composer-pill-bg)]',
                   ),
               disabled && 'pointer-events-none opacity-50',
             )}

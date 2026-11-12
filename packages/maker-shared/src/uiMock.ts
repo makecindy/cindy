@@ -1,4 +1,5 @@
 import { UI_MOCK_SHOWCASE_PROJECTS, UI_MOCK_SHOWCASE_TASKS } from './uiMockShowcase';
+import { UI_MOCK_BIDI_TASK } from './uiMockBidi';
 export { UI_MOCK_SHOWCASE_PROJECTS };
 
 /**
@@ -129,6 +130,7 @@ const RICH_ANSWER = [
  */
 export const UI_MOCK_TASKS: readonly UiMockTask[] = [
   ...UI_MOCK_SHOWCASE_TASKS,
+  UI_MOCK_BIDI_TASK,
   {
     id: 'visual-issue-confirm',
     title: '反馈手机上的问题',

@@ -21,10 +21,11 @@ import { parseOpenCodeGoAccountUsageResult } from '../../shared/providerAccountU
 
 import type { DeviceLinkDeviceView } from '../../shared/deviceLinkIpc.js';
 import { providerWeeklyQuotaSource } from '../../shared/providerQuotaSource.js';
+import { DEFAULT_ACCOUNT_USAGE_SCOPE, SUBSCRIPTION_ACCOUNTS_CHANNEL, isSubscriptionProvider, type SubscriptionPoolView } from '../../shared/subscriptionAccounts.js';
 import { readDeviceProviderViews } from '../remote-agent/controller/deviceCatalog.js';
 import { mayServeBackgroundRead } from '../usage/peerUsageSync.js';
 import type { CodexAccountUsagePayload } from '../usageBroadcaster.js';
-import { claudeSource, codexSource, opencodeGoSource, xaiSource } from './collect.js';
+import { claudeSource, codexSource, opencodeGoSource, subscriptionPoolSources, xaiSource } from './collect.js';
 import type { MenubarRemoteDevice, MenubarSubscriptionInput } from './snapshot.js';
 
 const MOBILE_PLATFORMS = new Set(['ios', 'android']);
@@ -97,17 +98,36 @@ async function readAccount(
   deps: RemoteSubscriptionDeps,
   device: MenubarRemoteDevice,
   provider: ProviderView,
-): Promise<MenubarSubscriptionInput | null> {
+): Promise<MenubarSubscriptionInput[] | null> {
+  if (isSubscriptionProvider(provider.id)) {
+    const response = await deps.invoke(device.id, SUBSCRIPTION_ACCOUNTS_CHANNEL, [{ action: 'read', providerId: provider.id }]);
+    if (response.ok) {
+      const pool = response.result;
+      if (!isRecord(pool) || pool.providerId !== provider.id || typeof pool.configured !== 'boolean' ||
+          !Array.isArray(pool.accounts) || !pool.accounts.every(account =>
+            isRecord(account) && typeof account.id === 'string' && account.id.length > 0 &&
+            typeof account.paused === 'boolean' && typeof account.running === 'number' &&
+            ['ready', 'limited', 'signed-out', 'unavailable'].includes(String(account.status)))) {
+        throw new Error('Invalid subscription pool response');
+      }
+      if (pool.configured) return subscriptionPoolSources(provider, pool as unknown as SubscriptionPoolView, deps.nowMs)
+        .map(source => ({ ...source, id: `remote:${device.id}:${source.id}`, device, consuming: false }));
+    } else if (response.error.code !== 'CHANNEL_NOT_ALLOWED') {
+      throw Object.assign(new Error(response.error.message), { code: response.error.code });
+    }
+  }
   const kind = providerWeeklyQuotaSource(provider);
   let source: MenubarSubscriptionInput | null = null;
   if (kind === 'kimi') {
     const response = await deps.invoke(device.id, 'maker:usage:kimi-coding', [{ providerId: provider.id }]);
     if (response.ok && isRecord(response.result)) source = kimiSource(provider, parseKimiAccountUsageResult(response.result), deps.nowMs);
   } else if (kind === 'codex') {
-    const payload = await readUsage(deps, device.id, 'maker:usage:account', ['codex'], provider.id, 'openai');
+    const payload = await readUsage(deps, device.id, 'maker:usage:account', provider.id === 'openai'
+      ? ['codex', 'openai', DEFAULT_ACCOUNT_USAGE_SCOPE] : ['codex'], provider.id, 'openai');
     source = payload ? codexSource(provider, payload as unknown as CodexAccountUsagePayload, deps.nowMs) : null;
   } else if (kind === 'claude') {
-    const payload = await readUsage(deps, device.id, 'maker:usage:claude-subscription', [], provider.id, 'anthropic');
+    const payload = await readUsage(deps, device.id, 'maker:usage:claude-subscription', provider.id === 'anthropic'
+      ? ['anthropic', false, DEFAULT_ACCOUNT_USAGE_SCOPE] : [], provider.id, 'anthropic');
     source = payload ? claudeSource(provider, payload as unknown as ClaudeSubscriptionUsageSnapshot, deps.nowMs) : null;
   } else if (kind === 'xai') {
     const payload = await readUsage(deps, device.id, 'maker:usage:xai-subscription', [], provider.id, 'xai');
@@ -117,7 +137,7 @@ async function readAccount(
     if (response.ok && isRecord(response.result)) source = opencodeGoSource(provider, parseOpenCodeGoAccountUsageResult(response.result), deps.nowMs);
   }
   if (!source) return null;
-  return { ...source, id: `remote:${device.id}:${provider.id}`, device };
+  return [{ ...source, id: `remote:${device.id}:${provider.id}`, device }];
 }
 
 /** Null when the computer's account list could not be read. */
@@ -133,7 +153,8 @@ async function readDevice(
     deps.onError?.(`remote:${device.id}:providers`, error);
     return null;
   }
-  const accounts = providers.filter((provider) => provider.connected && !provider.suspended && providerWeeklyQuotaSource(provider));
+  const accounts = providers.filter((provider) => provider.connected && !provider.suspended && !provider.removed && !provider.subscriptionPoolAlias &&
+    (isSubscriptionProvider(provider.id) || providerWeeklyQuotaSource(provider)));
   const failed: string[] = [];
   const read = await Promise.all(
     accounts.map(async (provider) => {
@@ -150,7 +171,7 @@ async function readDevice(
       }
     }),
   );
-  return { sources: read.filter((source): source is MenubarSubscriptionInput => source !== null), failed };
+  return { sources: read.flatMap(source => source ?? []), failed };
 }
 
 export async function readRemoteSubscriptions(deps: RemoteSubscriptionDeps): Promise<RemoteSubscriptionRead> {
@@ -197,7 +218,8 @@ export function retainRemoteSubscriptions(
   for (const [id, entry] of previous) {
     if (seen.has(id) || nowMs - entry.seenAtMs >= REMOTE_RETAIN_MS) continue;
     const deviceId = entry.source.device?.id;
-    if (!(deviceId && read.unreachable.has(deviceId)) && !read.failed.has(id)) continue;
+    const poolFailed = entry.source.pooled && deviceId && read.failed.has(`remote:${deviceId}:${entry.source.providerId}`);
+    if (!(deviceId && read.unreachable.has(deviceId)) && !read.failed.has(id) && !poolFailed) continue;
     seen.set(id, entry);
     sources.push({
       ...entry.source,

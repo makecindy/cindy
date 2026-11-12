@@ -20,62 +20,6 @@
   "basis": "Existing approval above; DS-7 narrows it to the named colour role and exact approved values, no new palette approval."
  },
  {
-  "glob": "apps/desktop/src/renderer/components/ui/toast/Toast.tsx",
-  "reason": "E5D Toast 四色定稿 hardcode(docs/design-rules/cindy-design-system.md §2 sanctioned,info #417CDD/success #2AAE5B/warning #F3A115/error #D91F37;VARIANT_MAP 使用已批准的语义色)",
-  "owner": "E5D",
-  "matches": [
-   {
-    "value": "#417CDD",
-    "before": "color:\\s*['\\\"]",
-    "object": "VARIANT_MAP.info"
-   },
-   {
-    "value": "#2AAE5B",
-    "before": "color:\\s*['\\\"]",
-    "object": "VARIANT_MAP.success"
-   },
-   {
-    "value": "#F3A115",
-    "before": "color:\\s*['\\\"]",
-    "object": "VARIANT_MAP.warning"
-   },
-   {
-    "value": "#D91F37",
-    "before": "color:\\s*['\\\"]",
-    "object": "VARIANT_MAP.error"
-   }
-  ],
-  "reviewDate": "2027-04-30",
-  "maintenanceOwner": "kirozeng / DS-7 executor",
-  "basis": "Existing approval above; DS-7 narrows it to the named colour role and exact approved values, no new palette approval."
- },
- {
-  "glob": "apps/desktop/src/renderer/components/new-chat/*.tsx",
-  "reason": "composer-pill fallback var(--composer-pill-*,hex)(lead 裁决 a+fallback,token 已注册 b5d7310,集成收口删)",
-  "owner": "E3-fix",
-  "matches": [
-   {
-    "value": "#3C3F43",
-    "before": "var\\(--composer-pill-icon,\\s*"
-   },
-   {
-    "value": "#D9D9D9",
-    "before": "var\\(--composer-pill-icon,\\s*"
-   },
-   {
-    "value": "#FCFCFC",
-    "before": "var\\(--composer-pill-bg,\\s*"
-   },
-   {
-    "value": "#393838",
-    "before": "var\\(--composer-pill-bg,\\s*"
-   }
-  ],
-  "reviewDate": "2026-09-17",
-  "maintenanceOwner": "kirozeng / DS-7 executor",
-  "basis": "Existing approval above; DS-7 narrows it to the named colour role and exact approved values, no new palette approval."
- },
- {
   "glob": "apps/desktop/src/renderer/components/settings/AgentIslandSection.tsx",
   "reason": "灵动岛 mascot 预览的角色素材固有色(眼色):与原生 SpriteMascotConfig 一一对应的素材参数,不是界面语义色;改用 token 会与原生渲染脱钩",
   "owner": "agent-island",

@@ -1397,6 +1397,7 @@ export function buildPiAgent(opts: BuildPiAgentOpts): PiAgent | null {
         : undefined,
     ),
     onPiManagedPackageMutationSettled: opts.onPiManagedPackageMutationSettled,
+    formatPiStartupCloudFileHint: (file) => t('logic.errors.piStartupCloudFile').replace('{{path}}', () => file),
     getPiExtensionUiStrings: () => ({
       confirm: t('settings.piPackages.extensionDialogConfirm'),
       cancel: t('settings.piPackages.cancel'),

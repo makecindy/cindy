@@ -51,7 +51,7 @@ export function ImagePreview({ workdir, relPath, size, mtimeMs, sessionId }: Ima
           alt={name}
           className={cn(
             'min-h-0 min-w-0 max-h-full max-w-full rounded-lg object-contain',
-            'bg-[#ececea] dark:bg-[#2c2c2a]',
+            'bg-[var(--surface-chip-alt)]',
             'cursor-pointer transition-opacity hover:opacity-90',
           )}
           onClick={() => setLightboxOpen(true)}

@@ -3,6 +3,9 @@ import { DEFAULT_MENUBAR_SETTINGS, type MenubarHelperMessage } from '../../../sh
 import { emptyMenubarInputs } from '../collect';
 import * as subscriptions from '../../device-link/subscriptions';
 import type { AgentIslandSessionSnapshot } from '../../../shared/agentIsland';
+import type { SubscriptionPoolView } from '../../../shared/subscriptionAccounts';
+import type { MenubarCollectDeps } from '../collect';
+import { buildUsageWidgetSnapshot } from '../../quota-overview/widgetSnapshot';
 const mocks = vi.hoisted(() => ({
   app: { isPackaged: true },
   auth: { mode: 'cloud', dataOwnerId: 'owner' as string | null, ownerGeneration: 1, user: { id: 'member', membershipKind: 'org' } },
@@ -13,6 +16,8 @@ const mocks = vi.hoisted(() => ({
   activities: [] as AgentIslandSessionSnapshot[], attentionListeners: new Set<() => void>(), publish: vi.fn(),
   openOverviewSession: vi.fn(), openLocalSession: vi.fn(),
   openRemoteSettings: vi.fn(), onHelperMessage: null as null | ((message: MenubarHelperMessage) => void),
+  pool: null as SubscriptionPoolView | null, poolRead: vi.fn(), poolRefresh: vi.fn(),
+  poolListeners: new Set<() => void>(),
 }));
 vi.mock('electron', () => ({ app: mocks.app, Notification: class {} }));
 vi.mock('../../agent-island/service.js', () => ({ getAgentIslandService: () => ({
@@ -51,7 +56,13 @@ vi.mock('../../device-link/deviceName.js', () => ({ deviceName: () => 'Fixture' 
 vi.mock('../../i18n.desktop.js', () => ({ getResolvedMainLocale: () => 'en', mainStringKeysUnder: () => [], rawMainString: (key: string) => key }));
 vi.mock('../../localDb/ipc/sessions.js', () => ({}));
 vi.mock('../../logger.js', () => ({ createLogger: () => ({ warn: vi.fn(), info: vi.fn() }) }));
-vi.mock('../../maker-host/createDesktopProviderService.js', () => ({ getDesktopProviderService: () => ({ listProviders: async () => [] }) }));
+vi.mock('../../maker-host/createDesktopProviderService.js', () => ({ getDesktopProviderService: () => ({ listProviders: async () => mocks.pool ? [{ id: 'openai', connected: true, auth: { method: 'oauth' } }] : [] }) }));
+vi.mock('../../subscription-accounts/runtime.js', () => ({
+  readSubscriptionPool: () => mocks.poolRead(),
+  refreshSubscriptionPool: (...args: unknown[]) => mocks.poolRefresh(...args),
+  onSubscriptionAccountsChanged: (listener: () => void) => { mocks.poolListeners.add(listener); return () => mocks.poolListeners.delete(listener); },
+}));
+vi.mock('../../subscription-accounts/store.js', () => ({ readPool: () => mocks.pool }));
 vi.mock('../../maker-ipc/appDefaultModelControl.js', () => ({}));
 vi.mock('../../maker-ipc/register.js', () => ({}));
 vi.mock('../../maker-ipc/usage.js', () => ({}));
@@ -71,6 +82,7 @@ vi.mock('../collect.js', async (importOriginal) => ({ ...await importOriginal<ty
 import { MenubarService } from '../service';
 import { getQuotaOverviewService, QuotaOverviewService, readUsageWidgetSnapshot } from '../../quota-overview/service';
 import { beginAppSessionBoundary } from '../../appSessionState';
+const { collectMenubarInputs: collectActual } = await vi.importActual<typeof import('../collect')>('../collect');
 let overview: QuotaOverviewService;
 beforeEach(() => {
   overview = new QuotaOverviewService();
@@ -82,10 +94,82 @@ beforeEach(() => {
   mocks.activities = []; mocks.attentionListeners.clear(); mocks.publish.mockReset();
   mocks.openOverviewSession.mockReset(); mocks.openLocalSession.mockReset();
   mocks.openRemoteSettings.mockReset(); mocks.onHelperMessage = null;
+  mocks.pool = null; mocks.poolRead.mockReset(); mocks.poolRefresh.mockReset(); mocks.poolListeners.clear();
   subscriptions.__testing.reset();
   mocks.quota = { spend: 2, maxBudget: 10, currency: 'CNY', fetchedAt: Date.now(), todaySpend: null };
 });
 afterEach(() => { vi.clearAllTimers(); vi.useRealTimers(); });
+
+// #10110 review, unit: real native refresh message -> overview -> collector ->
+// panel/widget. A cached DTO alone never exercises the explicit-refresh path;
+// runtime.test.ts separately covers the real 30s/180s cache and native reads.
+it('refreshes the account pool through the native refresh button', async () => {
+  mocks.pool = { providerId: 'openai', configured: true, strategy: 'round', accounts: [{
+    id: 'extra', paused: false, limit: 4, weight: 1, directory: '/fixture/extra', running: 0,
+    identity: 'extra@example.com', status: 'ready', usage: { codex: { credits: null, buckets: { codex: {
+      limitId: 'codex', limitName: null, updatedAt: Date.now(), primary: null,
+      secondary: { usedPercent: 20, windowMinutes: 10_080, resetsAt: Date.now() / 1000 + 86_400 },
+    } } } },
+  }] };
+  const fresh = structuredClone(mocks.pool);
+  fresh.accounts[0].usage!.codex!.buckets.codex.secondary!.usedPercent = 70;
+  mocks.poolRead.mockImplementation(async () => mocks.pool);
+  mocks.poolRefresh.mockImplementation(async (_provider, force) => force ? fresh : mocks.pool);
+  mocks.collect.mockImplementation((deps: MenubarCollectDeps) => collectActual({ ...deps,
+    readUsage: async () => null, readBalance: async () => null, activities: () => [],
+  }));
+  const service = new MenubarService({ openNewTask() {}, overview });
+  service.init();
+  await vi.advanceTimersByTimeAsync(0);
+  expect(overview.latest()?.view.sources).toMatchObject([{ fill: 0.8 }]);
+  mocks.onHelperMessage?.({ type: 'refresh' });
+  await vi.advanceTimersByTimeAsync(400);
+  const view = overview.latest()!.view;
+  expect(view.sources).toMatchObject([{ fill: 0.3 }]);
+  expect(buildUsageWidgetSnapshot(view, Date.now(), () => null)?.sources).toMatchObject([{ fill: 0.3 }]);
+  service.stop();
+});
+
+// #10110, unit: the real overview -> collector -> panel/widget projection must react to
+// account changes. Earlier tests mocked the collector and only covered ledger invalidation.
+// Minimal input: one pooled account changes its quota, then is removed during a read.
+it('refreshes pooled quota in panel and widgets and rejects a read overtaken by account removal', async () => {
+  mocks.pool = { providerId: 'openai', configured: true, strategy: 'round', accounts: [{
+    id: 'extra', paused: false, limit: 4, weight: 1, directory: '/fixture/extra', running: 0,
+    identity: 'extra@example.com', plan: 'pro', status: 'ready', usage: { codex: { credits: null, buckets: {
+      codex: { limitId: 'codex', limitName: null, updatedAt: Date.now(), primary: null,
+        secondary: { usedPercent: 20, windowMinutes: 10_080, resetsAt: Date.now() / 1000 + 86_400 } },
+    } } },
+  }] };
+  mocks.poolRead.mockImplementation(async () => mocks.pool);
+  mocks.collect.mockImplementation((deps: MenubarCollectDeps) => collectActual({ ...deps,
+    readUsage: async () => null, readBalance: async () => null, activities: () => [],
+  }));
+  const stop = overview.acquire();
+  const published: number[] = [];
+  const unsubscribe = overview.subscribe(build => published.push(build.view.sources.length));
+  await vi.advanceTimersByTimeAsync(0);
+  expect(overview.latest()?.view.sources).toMatchObject([{ id: 'openai:account:extra', fill: 0.8 }]);
+  mocks.pool.accounts[0].usage!.codex!.buckets.codex.secondary!.usedPercent = 60;
+  for (const listener of mocks.poolListeners) listener();
+  await vi.advanceTimersByTimeAsync(400);
+  const view = overview.latest()!.view;
+  expect(view.sources).toMatchObject([{ fill: 0.4 }]);
+  expect(buildUsageWidgetSnapshot(view, Date.now(), () => null)?.sources).toMatchObject([{ id: 'openai:account:extra', fill: 0.4 }]);
+  let finish!: (pool: SubscriptionPoolView) => void;
+  const old = mocks.pool;
+  mocks.poolRead.mockImplementationOnce(() => new Promise(resolve => { finish = resolve; }));
+  overview.rebuildSoon();
+  await vi.advanceTimersByTimeAsync(0);
+  mocks.pool = { ...old, accounts: [] };
+  for (const listener of mocks.poolListeners) listener();
+  published.length = 0;
+  finish(old);
+  await vi.advanceTimersByTimeAsync(400);
+  expect(published).toEqual([0]);
+  unsubscribe(); stop();
+  expect(mocks.poolListeners.size).toBe(0);
+});
 
 // Unit: unread updates bypass slow usage collection, survive rebuilds and detach on stop.
 it('updates the native count immediately while a usage rebuild is still pending', async () => {

@@ -104,17 +104,13 @@ test('every old exempt Desktop consumer rejects an unapproved new colour', () =>
   }
 });
 
-test('old approved Toast, hljs, composer and asset values are narrow, not file bypasses', () => {
+test('old approved hljs and asset values are narrow, not file bypasses; retired Toast and composer values block', () => {
   const cases = [
-    ['components/ui/toast/Toast.tsx', "export const VARIANT_MAP = { info: { color: '#417CDD' } };", 'allowed'],
-    ['components/ui/toast/Toast.tsx', "const OTHER_MAP = { color: '#417CDD' };", 'block'],
-    ['components/ui/toast/Toast.tsx', "export const VARIANT_MAP = { error: { color: '#417CDD' } };", 'block'],
-    ['components/ui/toast/Toast.tsx', "backgroundColor: '#417CDD',", 'block'],
-    ['components/ui/toast/Toast.tsx', "background-color: '#417CDD';", 'block'],
-    ['components/ui/toast/Toast.tsx', "export const VARIANT_MAP = { info: { color: '#417CCE' } };", 'block'],
+    // The Toast exemption was withdrawn on 2026-11-11 (A-15): VARIANT_MAP consumes status tokens.
+    ['components/ui/toast/Toast.tsx', "export const VARIANT_MAP = { info: { color: '#417CDD' } };", 'block'],
     ['styles/globals.css', '[data-theme="cindy-dark"] .hljs-section { color: #2573ec; }', 'allowed'],
     ['styles/globals.css', '.new-control { color: #2573ec; }', 'block'],
-    // The composer fallback exemption expired on 2026-09-17 (“集成收口删”) and was not renewed.
+    // The composer fallback exemption expired on 2026-09-17 (“集成收口删”); the fallbacks were removed 2026-11-11 (A-07).
     ['components/new-chat/ChatInput.tsx', "'var(--composer-pill-bg, #FCFCFC)'", 'block'],
     ['components/new-chat/ChatInput.tsx', "'var(--composer-pill-bg, #123abc)'", 'block'],
     ['components/new-chat/ChatInput.tsx', "'var(--other-bg, #FCFCFC)'", 'block'],
@@ -126,7 +122,7 @@ test('old approved Toast, hljs, composer and asset values are narrow, not file b
   for (const [file, source, expected] of cases) assert.equal(inspect(renderer + file, source).find(f => f.rule === 'bare-color')?.disposition, expected, source);
   // The binding is structural: the same file's own object resolves to the
   // approved path, so the real sources stay allowed while lookalikes block.
-  const toast = fs.readFileSync(path.join(root, renderer, 'components/ui/toast/Toast.tsx'), 'utf8');
+  const toast = "export const VARIANT_MAP = { info: { color: '#417CDD' } };";
   assert.deepEqual(objectPathAt(toast, toast.indexOf("'#417CDD'")), ['VARIANT_MAP', 'info']);
   assert.deepEqual(objectPathAt("const OTHER_MAP = { color: '#417CDD' };", 28), ['OTHER_MAP']);
   const anonymous = 'registerColor("md-table-bg", { light: "#fff" });';
@@ -134,7 +130,7 @@ test('old approved Toast, hljs, composer and asset values are narrow, not file b
   const css = fs.readFileSync(path.join(root,renderer,'styles/globals.css'),'utf8');
   const approvedSelectors = inspect(renderer+'styles/globals.css',css).filter(f=>f.rule==='bare-color' && f.disposition==='allowed');
   assert.deepEqual(approvedSelectors.map(f=>f.value),['#2573ec','#c9d1d9']);
-  for (const file of ['components/ui/toast/Toast.tsx', 'components/settings/AgentIslandSection.tsx', 'components/settings/WorkLouderCodexKeyboardLayout.tsx']) {
+  for (const file of ['components/settings/AgentIslandSection.tsx', 'components/settings/WorkLouderCodexKeyboardLayout.tsx']) {
     const source = fs.readFileSync(path.join(root, renderer + file), 'utf8');
     const hits = inspect(renderer + file, source).filter(f => f.rule === 'bare-color');
     assert.ok(hits.length > 0);
