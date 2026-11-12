@@ -11004,10 +11004,15 @@ assertRouteCurrent();
       // The shared redaction helper deliberately extracts only auth/rate-limit
       // statuses. Parse Codex's explicit HTTP failure wording locally as well.
       const statusMatch = /\b(?:HTTP(?:\/\d(?:\.\d)?)?(?:\s+status)?|(?:unexpected|last)\s+status(?:\s+code)?)\s*:?\s*(\d{3})\b/i.exec(text);
+      // A status field describes the upstream result; the wrapper's code does
+      // not. Use the shared signal extractor's boundaries, without limiting
+      // contextual statuses to its auth/rate-limit subset.
+      const contextualStatusMatch = /(?:^|[\s,{;])["']?(?:status(?:[-_ ]?code)?|http(?:[-_ ]?status)?)["']?\s*(?:[:=]\s*)?["']?(\d{3})["']?(?=$|[\s,;:}\]])/i.exec(text);
+      const contextualStatus = contextualStatusMatch ? Number(contextualStatusMatch[1]) : undefined;
       // LiteLLM can carry the rejection only in its provider code or JSON code
       // field. Keep explicit HTTP/auth/rate-limit statuses authoritative.
       const liteLlmBadRequest = /\bcode\s*:\s*provider_invalid_request\s*\/\s*400\b|"code"\s*:\s*"400"/i.test(text);
-      const textStatus = statusMatch ? Number(statusMatch[1]) : signals.errorStatus ?? (liteLlmBadRequest ? 400 : undefined);
+      const textStatus = statusMatch ? Number(statusMatch[1]) : signals.errorStatus ?? contextualStatus ?? (liteLlmBadRequest ? 400 : undefined);
       const httpStatus = info && typeof info === 'object' && 'httpConnectionFailed' in info
         ? info.httpConnectionFailed.httpStatusCode ?? textStatus
         : textStatus;
@@ -11019,6 +11024,7 @@ assertRouteCurrent();
       // a forbidden upstream status must beat the wrapper's bad-request code.
       const forbiddenResponse = /(?:^|[\s,{;])["']?(?:status(?:[-_ ]?code)?|http(?:[-_ ]?status)?|code)["']?\s*(?:[:=]\s*)?["']?403["']?(?=$|[\s,;:}\]])|\brequest\s+rejected\s*\(\s*403\s*\)/i.test(text);
       const uncertainTransport = tag === 'responseStreamDisconnected' || tag === 'responseStreamConnectionFailed'
+        || [408, 504].includes(contextualStatus ?? httpStatus ?? 0)
         || /timeout|timed out|ECONNRESET|ECONNREFUSED|ENOTFOUND|connection reset|network error|stream disconnected/i.test(text);
       return !uncertainTransport
         && !isAuthRelatedErrorMessage(text)

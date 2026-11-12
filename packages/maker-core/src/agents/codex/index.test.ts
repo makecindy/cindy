@@ -11753,6 +11753,8 @@ describe('CodexAgent MCP thread context hooks', () => {
       { format: 'JSON code', message: 'Error running remote compact task: {"error":{"code":"400","message":"unsupported tool type"}}', partial: true, completedOnly: false },
       { format: 'non-status number', message: 'Error running remote compact task: {"code":"400","message":"unsupported input containing 402 tokens"}', partial: false, completedOnly: false },
       { format: 'non-status forbidden number', message: 'Error running remote compact task: {"code":"400","message":"unsupported input containing 403 tokens"}', partial: false, completedOnly: false },
+      { format: 'non-status timeout number', message: 'Error running remote compact task: {"code":"400","message":"unsupported input containing 504 tokens"}', partial: false, completedOnly: false },
+      { format: 'contextual allowed status', message: 'Error running remote compact task: {"code":"400","status_code":422}', partial: false, completedOnly: false },
       { format: 'additional details', message: 'Error running remote compact task', additionalDetails: '{"error":{"code":"400"}}', partial: false, completedOnly: false },
       { format: 'completion without error notification', message: 'Error running remote compact task: code: provider_invalid_request / 400', partial: false, completedOnly: true },
     ])('recovers LiteLLM 400 from $format without replaying completed work', async ({ partial, completedOnly, ...sample }) => {
@@ -11793,6 +11795,10 @@ describe('CodexAgent MCP thread context hooks', () => {
       { message: '{"code":"400","message":"upstream code: 402"}' },
       { message: '{"code":"400","status":403}' },
       { message: '{"code":"400","message":"upstream status_code=403"}' },
+      { message: '{"code":"400","status_code":504}' },
+      { message: '{"code":"400","message":"upstream status=504"}' },
+      { message: '{"code":"400","status":408}' },
+      { message: '{"code":"400","status":409}' },
       { message: '{"code":"400","type":"authentication_error"}' },
       { message: '{"code":"400"}', codexErrorInfo: { httpConnectionFailed: { httpStatusCode: 401 } } },
       { message: '{"code":"400"}', codexErrorInfo: { responseStreamDisconnected: {} } },
@@ -11827,6 +11833,7 @@ describe('CodexAgent MCP thread context hooks', () => {
       { message: '{"code":"400","type":"insufficient_balance_error"}', codexErrorInfo: 'other' as const },
       { message: '{"code":"400"}', codexErrorInfo: 'usageLimitExceeded' as const },
       { message: '{"code":"400","status":403}', codexErrorInfo: 'other' as const },
+      { message: '{"code":"400","status_code":504}', codexErrorInfo: 'other' as const },
     ])('rechecks a recorded summary recovery against the authoritative error: %j', async (error) => {
       const { host, handle, events } = await start();
       try {
