@@ -141,9 +141,10 @@ export function responseToolCallId(item: unknown, output: boolean): string | nul
 
 /**
  * Repair repeated Responses call IDs without changing valid histories. Calls and outputs are
- * paired by their order in `input`; unmatched duplicate outputs are removed because a call can
- * have only one result. This is activated after a provider rejects the history, then reused for
- * subsequent requests in that thread.
+ * paired by their order in `input`. When one call has several outputs (e.g. exec notify),
+ * combine their contents in wire order rather than guessing which one is the final result.
+ * Reused call IDs keep their ordered pairing. This is activated after a provider rejects the
+ * history, then reused for subsequent requests in that thread.
  */
 export function normalizeRepeatedResponseToolCallIds(
   body: Record<string, unknown>,
@@ -164,10 +165,27 @@ export function normalizeRepeatedResponseToolCallIds(
   const callIdByIndex = new Map<number, string>();
   const outputIdByIndex = new Map<number, string>();
   const removedOutputs = new Set<number>();
+  const mergedOutputByIndex = new Map<number, string | unknown[]>();
 
   for (const [callId, callIndexes] of callsById) {
     const outputIndexes = outputsById.get(callId) ?? [];
     if (callIndexes.length < 2 && outputIndexes.length < 2) continue;
+
+    if (callIndexes.length === 1 && outputIndexes.length > 1) {
+      const callIndex = callIndexes[0]!;
+      const call = input[callIndex] as Record<string, unknown>;
+      const expectedType = call.type === 'function_call' ? 'function_call_output' : 'custom_tool_call_output';
+      const outputs = outputIndexes.map(index => input[index] as Record<string, unknown>);
+      // Only merge a proven single exchange. Malformed or pre-call results must
+      // not be silently discarded or attached to another invocation.
+      if (outputIndexes.some(index => index <= callIndex) || outputs.some(item =>
+        item.type !== expectedType || (typeof item.output !== 'string' && !Array.isArray(item.output)),
+      )) return null;
+      const contents = outputs.map(item => item.output as string | unknown[]);
+      mergedOutputByIndex.set(outputIndexes[0]!, contents.every(output => typeof output === 'string')
+        ? contents.join('\n\n')
+        : contents.flatMap(output => typeof output === 'string' ? [{ type: 'input_text', text: output }] : output));
+    }
 
     const uniqueIds = callIndexes.map((_, occurrence) => {
       if (occurrence === 0) return callId;
@@ -206,7 +224,10 @@ export function normalizeRepeatedResponseToolCallIds(
     const callId = callIdByIndex.get(index);
     if (callId !== undefined) return [{ ...(item as Record<string, unknown>), call_id: callId }];
     const outputId = outputIdByIndex.get(index);
-    if (outputId !== undefined) return [{ ...(item as Record<string, unknown>), call_id: outputId }];
+    if (outputId !== undefined) return [{
+      ...(item as Record<string, unknown>), call_id: outputId,
+      ...(mergedOutputByIndex.has(index) ? { output: mergedOutputByIndex.get(index) } : {}),
+    }];
     return [item];
   });
   return { ...body, input: nextInput };
