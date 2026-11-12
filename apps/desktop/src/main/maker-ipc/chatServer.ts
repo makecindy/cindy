@@ -2473,35 +2473,34 @@ function createChatServer(local: BotGroupChatService, deps: BotGroupChatServiceD
     return run.sessionId && !run.inTask ? deps.abortLane(run.sessionId).catch(() => undefined) : Promise.resolve();
   }
   /**
-   * A person's words in the Thread under a live task card go into the card's task, as one message
-   * marked with who said them, when the task is on this computer and the speaker's access already
-   * lets this teammate open tasks for them (bot-group-chat.md §10). It is this execution's turn:
-   * the task's reply reaches the Thread the way a Thread reply does. Anything else keeps the
-   * Thread lane (returns false).
+   * The owner's own words in the Thread under a live task card go into the card's task, as one
+   * message marked with who said them, when the task is on this computer (bot-group-chat.md §10).
+   * It is this execution's turn: the task's reply reaches the Thread the way a Thread reply does.
+   * Other members' words keep the Thread lane (returns false): the task runs with the owner's
+   * logins, which other members do not get (2026-11-12). Anything else keeps the lane too.
    */
   async function runInCardTask(run: Running, s: Snapshot, sourceRead: Promise<Message | undefined> | undefined): Promise<boolean> {
     const { execution } = run;
     const bot = localBot(execution.bot_id);
     if (!bot || !sourceRead || run.context?.kind !== 'message' || execution.plan_id || execution.mask_owner_id
-      || execution.mask_kind === 'digest' || execution.access_mode === 'chat' || !deps.readGroupTaskStatus) return false;
+      || execution.mask_kind === 'digest' || execution.access_mode !== 'owner' || execution.requester_id !== selfId
+      || !deps.readGroupTaskStatus) return false;
     // A source that cannot be read fails on the lane path, as before.
     const source = await sourceRead.catch(() => undefined);
-    if (!source?.threadRootId || source.deleted || source.origin !== 'user' || source.author?.kind !== 'human' || source.maskAttribution) return false;
+    if (!source?.threadRootId || source.deleted || source.origin !== 'user' || source.author?.kind !== 'human'
+      || source.authorId !== selfId || source.maskAttribution) return false;
     const card = taskCards().read()[source.threadRootId];
     if (!card || card.roomId !== s.room.id || card.botId !== execution.bot_id
       || (card.deviceId && selfDeviceId && card.deviceId !== selfDeviceId)) return false;
     const words = source.content.filter(block => block.type === 'text').map(block => block.text ?? '').join('\n');
     if (!words.trim() || !await deps.readGroupTaskStatus(card.taskId).catch(() => null)) return false;
     // The owner's own words speak for the owner exactly as an owner-started group round does.
-    const ownerWords = execution.access_mode === 'owner' && execution.requester_id === selfId && source.authorId === selfId;
-    if (ownerWords) await validateExecutionAuthority(run); else await updateExecution(run, 'heartbeat');
+    await validateExecutionAuthority(run);
     if (!current() || running.get(execution.id) !== run) throw new Error('STALE_EXECUTOR');
     const speaker = s.members.find(m => m.id === source.authorId);
     run.sessionId = card.taskId; run.inTask = true;
     const dispatched = await deps.dispatch({ targetSessionId: card.taskId, clientId: run.clientId, message: words, persistedContent: words,
-      autoReviewUserText: ownerWords
-        ? { kind: 'agent-request', request: { sessionId: card.taskId, clientId: run.clientId, plainBody: true, delegatedText: words } }
-        : { kind: 'agent-request' },
+      autoReviewUserText: { kind: 'agent-request', request: { sessionId: card.taskId, clientId: run.clientId, plainBody: true, delegatedText: words } },
       origin: { kind: 'session', senderSessionId: '', displayText: words, senderBotId: bot.id, senderBotName: bot.displayName,
         groupThread: { groupId: s.room.id, groupName: s.room.name, speakerId: source.authorId,
           speakerName: speaker ? memberName(speaker, s.members) : source.author.name } },
@@ -2901,7 +2900,10 @@ function createChatServer(local: BotGroupChatService, deps: BotGroupChatServiceD
             const key = `${run.plan.id}:${execution.access_mode}:${execution.access_revision}`;
             run.workspace = settings.plans[key] ?? (execution.access_mode === 'owner' ? settings.plans[run.plan.id] : undefined);
             if (!run.workspace) {
-              const prepared = await deps.workDir?.prepare({ groupId: s.room.id, projectDir: (await groupProjectFolder(s.room)).dir });
+              // The folder found from the group's repository is for the owner's own requests (§7.5,
+              // 2026-11-12); other members' steps keep the folder chosen here, as before.
+              const projectDir = execution.access_mode === 'owner' ? (await groupProjectFolder(s.room)).dir : settings.projectDir;
+              const prepared = await deps.workDir?.prepare({ groupId: s.room.id, projectDir });
               if (!prepared?.ok) throw new Error('WORKDIR_UNAVAILABLE');
               run.workspace = prepared;
               if (!current()) throw new Error('OWNER_CHANGED');
@@ -2918,8 +2920,10 @@ function createChatServer(local: BotGroupChatService, deps: BotGroupChatServiceD
         if (source?.origin === 'system') throw new Error('INVALID_EXECUTION_TRIGGER');
         // Plan steps belong to the main group; a Thread request gets the Thread's own lane.
         const threadRootId = run.plan || digest ? undefined : source?.threadRootId ?? undefined;
-        // A reply with real access works in the group's project folder when this computer has one.
-        const folder = !run.plan && !digest && !execution.mask_owner_id && execution.access_mode !== 'chat'
+        // A reply to the owner's own request works in the group's project folder when this computer
+        // has one. Other members' requests (`tools`) keep the Home lane: the folder's work runs with
+        // the owner's logins, which other members do not get (2026-11-12, bot-group-chat.md §7.5).
+        const folder = !run.plan && !digest && !execution.mask_owner_id && execution.access_mode === 'owner'
           ? await groupProjectFolder(s.room) : null;
         const projectDir = folder?.dir && deps.validateProjectDir ? folder.dir : null;
         // A folder set for the group but gone or unreadable now fails this round, never Home (§7.5);

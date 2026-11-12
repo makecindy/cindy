@@ -330,8 +330,9 @@ export type EnsureBotGroupLaneResult =
  * lane, it talks in the group lane's place with its own context; no project folder.
  *
  * With `projectDir` (the group's project folder on this computer), a V2 teammate's group and
- * Thread lanes work in that folder instead of the Home workspace, like an ordinary task there
- * (bot-group-chat.md §7.5). A lane created for another folder is archived and replaced.
+ * Thread lanes answering its owner work in that folder instead of the Home workspace, like an
+ * ordinary task there (bot-group-chat.md §7.5). A lane created for another folder is archived and
+ * replaced.
  */
 export async function ensureBotGroupLaneSession(input: {
   botId: string;
@@ -367,13 +368,16 @@ export async function ensureBotGroupLaneSession(input: {
       eq(sessions.status, 'active'),
     ))
     .limit(1);
-  // Only a group or Thread lane with real access follows the group's project folder.
-  const followsProject = !input.plan && !input.talkPlanId && !input.personalDigest
-    && input.chatAccess && input.chatAccess.mode !== 'chat' && !input.chatAccess.maskOwnerId;
+  // A group or Thread lane with real access is one that may work in the group's project folder.
+  const replyLane = !input.plan && !input.talkPlanId && !input.personalDigest
+    && !!input.chatAccess && input.chatAccess.mode !== 'chat' && !input.chatAccess.maskOwnerId;
+  // Only the owner's own requests follow the folder: its work runs with the owner's logins, which
+  // other members (`tools`) do not get (2026-11-12). A `tools` lane left there moves back to Home.
+  const followsProject = replyLane && input.chatAccess?.mode === 'owner';
   const projectLane = (row: { workingDir: string | null; projectDir: string | null }) =>
     !!row.projectDir && row.workingDir === row.projectDir && isGroupProjectLaneDir(owner.userDataDir, input.botId, row.workingDir);
   const wantedProject = followsProject && input.projectDir && await readTeammateProjectMode(input.botId) ? input.projectDir : null;
-  const moves = !!existing && followsProject
+  const moves = !!existing && replyLane
     && (wantedProject ? existing.workingDir !== wantedProject : projectLane(existing));
   if (existing && !moves) {
     await syncBotLanePermission(existing.sessionId);

@@ -1348,9 +1348,10 @@ describe('Chat Server result delivery and refresh', () => {
     await vi.advanceTimersByTimeAsync(2000);
     expect(deps.dispatch).toHaveBeenCalledOnce();
   }
-  // bot-group-chat.md §7.5: with no folder chosen here, a reply with real access works in the one
-  // registered project whose origin is the group's repository; a chat-only reply never does.
-  it.each(['tools', 'chat'] as const)('runs a %s reply in the folder found from the group repository', async mode => {
+  // bot-group-chat.md §7.5: with no folder chosen here, a reply to the owner works in the one
+  // registered project whose origin is the group's repository. Another member's reply never does,
+  // even with `tools` access: the folder's work runs with the owner's logins (2026-11-12).
+  it.each(['owner', 'tools', 'chat'] as const)('runs only an owner reply in the folder found from the group repository (%s)', async mode => {
     deps.findProjectDirsForRepo = vi.fn(async () => ['/projects/cindy']);
     deps.validateProjectDir = vi.fn(async (dir: string) => ({ ok: true as const, dir }));
     const project = { kind: 'github', repo: 'makecindy/cindy' };
@@ -1362,8 +1363,8 @@ describe('Chat Server result delivery and refresh', () => {
     });
     await start();
     const lane = vi.mocked(deps.ensureLane).mock.calls[0][0];
-    if (mode === 'chat') expect(lane).not.toHaveProperty('projectDir');
-    else expect(lane).toMatchObject({ projectDir: '/projects/cindy' });
+    if (mode === 'owner') expect(lane).toMatchObject({ projectDir: '/projects/cindy' });
+    else expect(lane).not.toHaveProperty('projectDir');
     const shown = await service.getGroup(roomId);
     if (!shown.ok) throw new Error(shown.errorCode);
     expect(shown.group).toMatchObject({ projectDir: '/projects/cindy', projectDirAuto: true, supportsGroupProject: true, project });
@@ -1375,7 +1376,7 @@ describe('Chat Server result delivery and refresh', () => {
   it('finds a checkout registered after a miss within seconds and keeps a found folder for minutes', async () => {
     deps.findProjectDirsForRepo = vi.fn().mockResolvedValueOnce([]).mockResolvedValue(['/projects/cindy']);
     deps.validateProjectDir = vi.fn(async (dir: string) => ({ ok: true as const, dir }));
-    let next: Record<string, unknown> | null = { ...execution, access_mode: 'tools' };
+    let next: Record<string, unknown> | null = { ...execution, access_mode: 'owner' };
     fixture.handle.mockImplementation(route => {
       if (route === '/me') return { body: { actor: { id: selfId }, capabilities: { groupProject: 1 } } };
       if (route === '/executions/claim') { const claim = next; next = null; return { body: { execution: claim } }; }
@@ -1390,7 +1391,7 @@ describe('Chat Server result delivery and refresh', () => {
     await vi.advanceTimersByTimeAsync(25_000);
     expect(await shownDir()).toBe('/projects/cindy');
     expect(deps.findProjectDirsForRepo).toHaveBeenCalledTimes(2);
-    next = { ...execution, id: '40000000-0000-4000-8000-000000000002', access_mode: 'tools' };
+    next = { ...execution, id: '40000000-0000-4000-8000-000000000002', access_mode: 'owner' };
     await vi.advanceTimersByTimeAsync(4 * 60_000);
     expect(deps.dispatch).toHaveBeenCalledTimes(2);
     expect(vi.mocked(deps.ensureLane).mock.calls[1][0]).toMatchObject({ projectDir: '/projects/cindy' });
@@ -1407,7 +1408,7 @@ describe('Chat Server result delivery and refresh', () => {
     fixture.profiles = [{ id: 'local-bot', displayName: 'Bot', avatar: null, status: 'active' }];
     fixture.handle.mockImplementation(route => {
       if (route === '/me') return { body: { actor: { id: selfId }, capabilities: { groupProject: 1 } } };
-      if (route === '/executions/claim') { const next = claimed ? null : { ...execution, access_mode: 'tools' }; claimed = true; return { body: { execution: next } }; }
+      if (route === '/executions/claim') { const next = claimed ? null : { ...execution, access_mode: 'owner' }; claimed = true; return { body: { execution: next } }; }
       if (route.endsWith('/snapshot')) return { body: { room: { ...room(roomId), project: { kind: 'github', repo: 'makecindy/cindy' } }, members: [], messages: [], cursor: '1' } };
       return response(route);
     });
@@ -1418,6 +1419,25 @@ describe('Chat Server result delivery and refresh', () => {
     expect(failures.map(([, , body]) => body.detail)).toEqual(['cindy-runtime-error:RUNTIME_ERROR']);
     await service.getGroup(roomId);
     expect(deps.findProjectDirsForRepo).toHaveBeenCalledTimes(how === 'chosen here' ? 0 : 2);
+  });
+  // bot-group-chat.md §7.5 (2026-11-12): a 分工 step uses the folder found from the group repository
+  // only for the owner's request; another member's step keeps the folder chosen here (none), as before.
+  it.each(['owner', 'tools'] as const)('prepares a %s 分工 step in the repository folder only for the owner', async mode => {
+    deps.findProjectDirsForRepo = vi.fn(async () => ['/projects/cindy']);
+    deps.workDir = { prepare: vi.fn(), snapshot: vi.fn(), changedFiles: vi.fn(), trashGroupFolder: vi.fn() };
+    const planId = '80000000-0000-4000-8000-000000000001';
+    const plan = { id: planId, revision: 1, source_message_id: execution.source_message_id, request_text: 'Fix it', organizer_id: botId, creator_id: selfId,
+      status: 'running', current_step: 0, kind: 'work', steps: [{ position: 0, botId, botName: 'Bot', task: 'fix', status: 'running' }] };
+    fixture.profiles = [{ id: 'local-bot', displayName: 'Bot', avatar: null, status: 'active' }];
+    fixture.handle.mockImplementation(route => {
+      if (route === '/me') return { body: { actor: { id: selfId }, capabilities: { groupProject: 1 } } };
+      if (route === '/executions/claim') { const next = claimed ? null : { ...execution, access_mode: mode, plan_id: planId, plan_step: 0 }; claimed = true; return { body: { execution: next } }; }
+      if (route.includes('/plans?ids=')) return { body: [plan] };
+      if (route.endsWith('/snapshot')) return { body: { room: { ...room(roomId), project: { kind: 'github', repo: 'makecindy/cindy' } }, members: [], messages: [], cursor: '1' } };
+      return response(route);
+    });
+    await vi.advanceTimersByTimeAsync(2000);
+    expect(deps.workDir.prepare).toHaveBeenCalledWith({ groupId: roomId, projectDir: mode === 'owner' ? '/projects/cindy' : null });
   });
 
   // #9909: a group turn can end with nothing published. Each such ending now leaves a trace,
@@ -1853,15 +1873,16 @@ describe('Chat Server result delivery and refresh', () => {
     expect(deps.condenseTaskReply).toHaveBeenCalledOnce();
   });
 
-  // bot-group-chat.md §10 (2026-11-11 owner decision): words in the Thread under a task card go
-  // into the card's task as one message from that member, and the task's reply is the Thread reply.
-  // Only the owner's own words speak for the owner; chat-only access or a gone task keep the lane.
+  // bot-group-chat.md §10: the owner's words in the Thread under a task card go into the card's task
+  // as one message, and the task's reply is the Thread reply (2026-11-11). Other members' words keep
+  // the Thread lane even with `tools` access: the task runs with the owner's logins (2026-11-12).
+  // A gone task keeps the lane too.
   it.each([
     ['the owner', 'owner', selfId, true],
     ['a member with tools access', 'tools', '60000000-0000-4000-8000-000000000001', true],
     ['a chat-only member', 'chat', '60000000-0000-4000-8000-000000000001', true],
-    ['anyone, once the task is gone', 'tools', '60000000-0000-4000-8000-000000000001', false],
-  ] as const)('passes Thread words under a task card from %s into the task', async (_who, mode, speakerId, taskExists) => {
+    ['the owner, once the task is gone', 'owner', selfId, false],
+  ] as const)('passes Thread words under a task card into the task only from the owner (%s)', async (_who, mode, speakerId, taskExists) => {
     const rootId = '70000000-0000-4000-8000-000000000001';
     const words = 'Please also update the docs';
     taskCardStore.value = { [rootId]: { roomId, botId, threadRootId: null, taskId: 'task-1', deviceId: null, title: 'Fix login',
@@ -1883,7 +1904,7 @@ describe('Chat Server result delivery and refresh', () => {
     });
     await start();
     const input = vi.mocked(deps.dispatch).mock.calls[0][0];
-    if (mode === 'chat' || !taskExists) {
+    if (mode !== 'owner' || !taskExists) {
       expect(deps.ensureLane).toHaveBeenCalledWith(expect.objectContaining({ threadRootId: rootId }));
       expect(input.targetSessionId).toBe('lane');
       return;
@@ -1891,8 +1912,8 @@ describe('Chat Server result delivery and refresh', () => {
     expect(deps.ensureLane).not.toHaveBeenCalled();
     expect(input).toMatchObject({ targetSessionId: 'task-1', message: words, persistedContent: words,
       origin: { kind: 'session', senderSessionId: '', senderBotId: 'local-bot',
-        groupThread: { groupId: roomId, groupName: 'Room', speakerId, speakerName: mode === 'owner' ? 'Owner' : 'Ann' } } });
-    expect(verifiedOwnerRequestText(input.autoReviewUserText)).toBe(mode === 'owner' ? words : undefined);
+        groupThread: { groupId: roomId, groupName: 'Room', speakerId, speakerName: 'Owner' } } });
+    expect(verifiedOwnerRequestText(input.autoReviewUserText)).toBe(words);
     // The model's note and the bubble label read the same stamp.
     expect(buildMessageSourceNote(messageSourceSenderFromMeta({ origin: input.origin })))
       .toContain(`在群聊「Room」(group_id: ${roomId})的话题里发送`);
