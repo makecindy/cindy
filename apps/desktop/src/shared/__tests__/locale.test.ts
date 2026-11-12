@@ -30,6 +30,13 @@ describe('desktop locale resolution', () => {
     expect(resolvePreferredSystemLocale(['it-IT'])).toBe('en');
   });
 
+  it('drops the POSIX codeset and modifier after the first dot', () => {
+    expect(resolveSystemLocale('pt_BR.UTF-8')).toBe('pt-BR');
+    expect(resolveSystemLocale('zh_TW.Big5@stroke')).toBe('zh-TW');
+    expect(resolveSystemLocale(`ja.${'.'.repeat(50_000)}`)).toBe('ja');
+    expect(resolveSystemLocale('.UTF-8')).toBe('en');
+  });
+
   // #8142: each catalog must be reachable from real OS regional language tags.
   it.each([
     ['es-MX', 'es'], ['es-419', 'es'], ['fr-CA', 'fr'], ['de-AT', 'de'],

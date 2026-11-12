@@ -1844,7 +1844,8 @@
       "about": "Info",
       "imBot": "IM-Bots",
       "ghosts": "Plugins",
-      "cindyMake": "Cindy Make"
+      "cindyMake": "Cindy Make",
+      "modelGroups": "Modellgruppen"
     },
     "sections": {
       "user": "Benutzer",
@@ -20119,5 +20120,132 @@
     "detail": "Anfrage von {{device}}\nZweck: {{purpose}}\n\nGeräte Ihres Kontos können diesen Computer steuern, Aufgaben ausführen und auf Dateien zugreifen. Die Einstellung bleibt aktiv, bis Sie sie in den Einstellungen deaktivieren.",
     "decline": "Jetzt nicht",
     "enable": "Fernsteuerung aktivieren"
+  },
+  "modelGroups": {
+    "title": "Modellgruppen",
+    "description": "Fasse mehrere Quellen, die du unter Anbieter bereits hast, zu einer Auswahl zusammen. Wähle sie in der Modellauswahl unter „Modellgruppen“, und Cindy entscheidet, welche Quelle verwendet wird.",
+    "routes": "Routen",
+    "routesDescription": "Eine Route enthält mehrere Quellen. Jede neue Aufgabe wählt eine nach der Regel der Route.",
+    "sourceCount_one": "{{count}} Quelle",
+    "sourceCount_other": "{{count}} Quellen",
+    "strategy": {
+      "expiring": {
+        "title": "Bald Verfallendes zuerst",
+        "hint": "Nutzt zuerst das Abo-Kontingent, von dem viel übrig ist und das bald zurückgesetzt wird, damit nichts verfällt. Quellen ohne lesbares Kontingent kommen danach."
+      },
+      "order": {
+        "title": "Der Reihe nach",
+        "hint": "Wechselt erst zur nächsten Quelle, wenn die vorherige nicht nutzbar ist."
+      },
+      "rotate": {
+        "title": "Abwechselnd",
+        "hint": "Jede neue Aufgabe geht an die nächste Quelle und verteilt die Last gleichmäßig."
+      },
+      "cheapest": {
+        "title": "Am günstigsten",
+        "hint": "Nutzt zuerst Abos mit verbleibendem Kontingent, ohne Zusatzkosten; der Rest folgt vom niedrigsten zum höchsten Listenpreis, Quellen ohne Preis kommen zuletzt."
+      }
+    },
+    "picker": {
+      "empty": "Noch keine Modellgruppen. Fasse in den Einstellungen mehrere Quellen zu einer Route zusammen, um sie hier auszuwählen.",
+      "manage": "Modellgruppen verwalten"
+    },
+    "why": {
+      "expiringQuota": "Noch {{left}} % Kontingent, Zurücksetzung am {{reset}} – daher zuerst",
+      "expiring": "Nach Kontingent an erster Stelle",
+      "order": "Die erste verfügbare Quelle",
+      "rotate": "Diesmal an der Reihe",
+      "only": "Derzeit als einzige verfügbar",
+      "soonest": "Alle Quellen haben ihr Kontingent aufgebraucht; diese erholt sich zuerst",
+      "soonestUntil": "Alle Quellen haben ihr Kontingent aufgebraucht; diese erholt sich zuerst ({{reset}})",
+      "standby": "Diesmal nicht an der Reihe",
+      "standbyQuota": "Noch {{left}} % Kontingent, Zurücksetzung erst am {{reset}} – wird aufgespart",
+      "off": "In dieser Route deaktiviert",
+      "unavailable": "Nicht verbunden, oder dieses Modell ist gerade nicht wählbar",
+      "limited": "Kontingent aufgebraucht",
+      "limitedUntil": "Kontingent aufgebraucht bis {{reset}}",
+      "tight": "Das 5-Stunden-Kontingent ist fast voll und wird vorerst übersprungen",
+      "cheapest": "Niedrigster Listenpreis",
+      "cheapestFree": "Abo-Kontingent übrig, keine Zusatzkosten",
+      "noVision": "Die Nachricht enthält Bilder, und diese Quelle kann keine Bilder sehen",
+      "exceptionImage": "Die Nachricht enthält Bilder, daher wurden nur Quellen berücksichtigt, die Bilder sehen können",
+      "exceptionImageFallback": "Die Nachricht enthält Bilder, aber keine Quelle kann Bilder sehen – daher wie üblich gewählt",
+      "exceptionHours": "In diesem Zeitraum wird „{{name}}“ verwendet",
+      "separator": "; "
+    },
+    "settings": {
+      "newRoute": "Neue Route",
+      "newRouteName": "Neue Route",
+      "routesEmpty": "Noch keine Routen. Erstelle eine und füge mehrere Quellen hinzu.",
+      "scopeNote": "Modellgruppen gelten für neue Aufgaben, die auf diesem Computer gestartet werden. Die Quelle wird beim Start gewählt und ändert sich während der Aufgabe nicht.",
+      "back": "Zurück zu Modellgruppen",
+      "name": "Name",
+      "nameHint": "Wird in der Modellauswahl angezeigt.",
+      "routeShownAs": "Wird in der Modellauswahl unter „Modellgruppen“ angezeigt.",
+      "pick": "Welche verwendet wird",
+      "effort": "Denkintensität",
+      "effortUnset": "Nicht festgelegt",
+      "effortHint": "Unterstützt das gewählte Modell diese Stufe nicht, läuft es mit seinem Standard.",
+      "sources": "Nutzbare Quellen",
+      "sourcesHint": "Verschiedene Modelle können nebeneinander stehen. Die Aufgabe zeigt, welches verwendet wurde.",
+      "sourcesEmpty": "Noch keine Quellen. Füge unten ein verbundenes Modell hinzu.",
+      "sourcesFull": "Eine Route fasst bis zu {{count}} Quellen.",
+      "addSource": "Quelle hinzufügen",
+      "chooseModel": "Modell auswählen",
+      "notConnected": "Nicht verbunden",
+      "moveUp": "Nach oben",
+      "moveDown": "Nach unten",
+      "remove": "Aus dieser Route entfernen",
+      "useSource": "{{name}} in dieser Route verwenden",
+      "try": {
+        "title": "Ausprobieren",
+        "hint": "Sieh nach, welche Quelle eine neue Aufgabe jetzt verwenden würde. Es wird nichts gesendet und kein Kontingent verbraucht.",
+        "run": "Auswahl ansehen",
+        "picked": "Diese verwenden",
+        "standby": "Reserve",
+        "skipped": "Übersprungen",
+        "unavailable": "Keine Quelle dieser Route ist gerade nutzbar. Eine neue Aufgabe verwendet das Modell, das du ausgewählt hattest."
+      },
+      "deleteRoute": "Diese Route löschen",
+      "deleteRouteConfirmTitle": "„{{name}}“ löschen?",
+      "deleteRouteConfirmDescription": "Tageszeit-Ausnahmen anderer Routen, die zu ihr wechseln, werden ebenfalls gelöscht. Bereits gestartete Aufgaben sind nicht betroffen.",
+      "delete": "Löschen",
+      "cancel": "Abbrechen",
+      "saveFailed": "Speichern fehlgeschlagen. Versuche es erneut.",
+      "exceptions": {
+        "title": "Ausnahmen",
+        "hint": "Werden vor der Auswahlregel geprüft, von oben nach unten.",
+        "empty": "Noch keine Ausnahmen. Jede neue Aufgabe folgt der Auswahlregel oben.",
+        "imageRule": "Wenn die Nachricht Bilder enthält, nur Quellen verwenden, die Bilder sehen können",
+        "hoursRule": "{{from}}–{{to}}: „{{name}}“ verwenden",
+        "remove": "Diese Ausnahme entfernen",
+        "add": "Ausnahme hinzufügen",
+        "choose": "Situation auswählen",
+        "kindImage": "Die Nachricht enthält Bilder",
+        "kindHours": "Eine Tageszeit",
+        "from": "Von",
+        "to": "Bis",
+        "useRoute": "Stattdessen verwenden",
+        "addHours": "Hinzufügen",
+        "sameHour": "Beginn und Ende dürfen nicht gleich sein.",
+        "full": "Bis zu {{count}} Ausnahmen.",
+        "needOtherRoute": "Erstelle eine weitere Route, um nach Tageszeit dorthin zu wechseln."
+      }
+    },
+    "overview": {
+      "mapTitle": "So wählen neue Aufgaben ein Modell",
+      "mapDescription": "Von links nach rechts: die Route und die Quelle, bei der es landet. Klicke auf eine Route, um sie zu ändern.",
+      "columnSources": "Quellen",
+      "columnEmpty": "Noch keine",
+      "openRoute": "Route „{{name}}“ öffnen",
+      "recentTitle": "Letzte Auswahl",
+      "recentEmpty": "Noch keine Aufgabe hat eine Route verwendet.",
+      "keptOriginal": "Darin war kein Modell verfügbar, daher blieb die Aufgabe beim Modell, das du gewählt hattest.",
+      "keptOriginalShort": "Dein Modell wurde beibehalten",
+      "latest": "Der Weg der letzten Aufgabe"
+    },
+    "switchOffer": {
+      "action": "Mit {{model}} fortfahren"
+    }
   }
 }

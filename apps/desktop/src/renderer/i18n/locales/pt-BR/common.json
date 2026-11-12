@@ -1882,7 +1882,8 @@
       "about": "Sobre",
       "imBot": "Bots de mensagens",
       "ghosts": "Plugins",
-      "cindyMake": "Cindy Make"
+      "cindyMake": "Cindy Make",
+      "modelGroups": "Grupos de modelos"
     },
     "sections": {
       "user": "Usuário",
@@ -20306,5 +20307,133 @@
     "detail": "Solicitação de {{device}}\nFinalidade: {{purpose}}\n\nOs dispositivos da sua conta poderão controlar este computador, executar tarefas e acessar arquivos. A opção permanece ativa até você desativá-la nas configurações.",
     "decline": "Agora não",
     "enable": "Ativar controle remoto"
+  },
+  "modelGroups": {
+    "title": "Grupos de modelos",
+    "description": "Combine várias fontes que já tem em Provedores em uma única opção. Escolha-a em “Grupos de modelos” no seletor de modelos e a Cindy decide qual fonte usar.",
+    "routes": "Rotas",
+    "routesDescription": "Uma rota contém várias fontes. Cada nova tarefa escolhe uma segundo a regra da rota.",
+    "sourceCount_one": "{{count}} fonte",
+    "sourceCount_many": "{{count}} fontes",
+    "sourceCount_other": "{{count}} fontes",
+    "strategy": {
+      "expiring": {
+        "title": "Primeiro o que expira",
+        "hint": "Usa primeiro a cota de assinatura que mais sobra e que está prestes a ser redefinida, para não a desperdiçar. As fontes sem cota legível ficam para depois."
+      },
+      "order": {
+        "title": "Por ordem",
+        "hint": "Só passa à fonte seguinte quando a anterior não pode ser usada."
+      },
+      "rotate": {
+        "title": "Em rodízio",
+        "hint": "Cada nova tarefa passa à fonte seguinte e reparte a carga."
+      },
+      "cheapest": {
+        "title": "O mais barato",
+        "hint": "Usa primeiro as assinaturas com cota disponível, sem custo adicional; o restante segue do menor para o maior preço de tabela, e as fontes sem preço ficam por último."
+      }
+    },
+    "picker": {
+      "empty": "Ainda não há grupos de modelos. Combine várias fontes em uma rota nas Configurações para a escolher aqui.",
+      "manage": "Gerenciar grupos de modelos"
+    },
+    "why": {
+      "expiringQuota": "Restam {{left}}% da cota, redefinida a {{reset}}, por isso vai primeiro",
+      "expiring": "Primeira pela cota",
+      "order": "A primeira fonte disponível",
+      "rotate": "Desta vez é a vez dela",
+      "only": "A única disponível agora",
+      "soonest": "Todas as fontes esgotaram a cota; esta recupera primeiro",
+      "soonestUntil": "Todas as fontes esgotaram a cota; esta recupera primeiro ({{reset}})",
+      "standby": "Desta vez não é a vez dela",
+      "standbyQuota": "Restam {{left}}% da cota, redefinida só a {{reset}}, por isso fica reservada",
+      "off": "Desativada nesta rota",
+      "unavailable": "Sem conexão, ou este modelo não pode ser escolhido agora",
+      "limited": "Cota esgotada",
+      "limitedUntil": "Cota esgotada até {{reset}}",
+      "tight": "A cota de 5 horas está quase cheia, por isso é ignorada por agora",
+      "cheapest": "Menor preço de tabela",
+      "cheapestFree": "Ainda há cota de assinatura, sem custo adicional",
+      "noVision": "A mensagem tem imagens e esta fonte não consegue vê-las",
+      "exceptionImage": "A mensagem tem imagens, então só foram consideradas as fontes que conseguem vê-las",
+      "exceptionImageFallback": "A mensagem tem imagens, mas nenhuma fonte consegue vê-las, então escolheu como de costume",
+      "exceptionHours": "Neste horário usa “{{name}}”",
+      "separator": "; "
+    },
+    "settings": {
+      "newRoute": "Nova rota",
+      "newRouteName": "Nova rota",
+      "routesEmpty": "Ainda não há rotas. Crie uma e adicione várias fontes.",
+      "scopeNote": "Os grupos de modelos aplicam-se às novas tarefas iniciadas neste computador. A fonte é escolhida no início e não muda durante a tarefa.",
+      "back": "Voltar aos grupos de modelos",
+      "name": "Nome",
+      "nameHint": "Aparece no seletor de modelos.",
+      "routeShownAs": "Aparece em “Grupos de modelos” no seletor de modelos.",
+      "pick": "Qual usar",
+      "effort": "Esforço de raciocínio",
+      "effortUnset": "Não definido",
+      "effortHint": "Se o modelo escolhido não oferecer suporte a este nível, roda com o seu padrão.",
+      "sources": "Fontes que pode usar",
+      "sourcesHint": "Podem coexistir modelos diferentes. A tarefa indica qual foi usado.",
+      "sourcesEmpty": "Ainda não há fontes. Adicione abaixo um modelo conectado.",
+      "sourcesFull": "Uma rota aceita até {{count}} fontes.",
+      "addSource": "Adicionar fonte",
+      "chooseModel": "Escolher um modelo",
+      "notConnected": "Sem conexão",
+      "moveUp": "Mover para cima",
+      "moveDown": "Mover para baixo",
+      "remove": "Remover desta rota",
+      "useSource": "Permitir que esta rota use {{name}}",
+      "try": {
+        "title": "Experimentar",
+        "hint": "Veja qual fonte uma nova tarefa usaria agora. Nada é enviado e não se gasta cota.",
+        "run": "Ver a escolha",
+        "picked": "Usar esta",
+        "standby": "De reserva",
+        "skipped": "Ignorada",
+        "unavailable": "Nenhuma fonte desta rota pode ser usada agora. Uma nova tarefa usará o modelo que tinha selecionado."
+      },
+      "deleteRoute": "Excluir esta rota",
+      "deleteRouteConfirmTitle": "Excluir “{{name}}”?",
+      "deleteRouteConfirmDescription": "As exceções por horário de outras rotas que mudam para ela também são excluídas. As tarefas já iniciadas não são afetadas.",
+      "delete": "Excluir",
+      "cancel": "Cancelar",
+      "saveFailed": "Não foi possível salvar. Tente novamente.",
+      "exceptions": {
+        "title": "Exceções",
+        "hint": "Verificadas antes da regra de escolha, de cima para baixo.",
+        "empty": "Ainda não há exceções. Cada nova tarefa segue a regra de escolha acima.",
+        "imageRule": "Quando a mensagem tiver imagens, usar apenas fontes que consigam vê-las",
+        "hoursRule": "{{from}}–{{to}}: usar “{{name}}”",
+        "remove": "Remover esta exceção",
+        "add": "Adicionar uma exceção",
+        "choose": "Escolher uma situação",
+        "kindImage": "A mensagem tem imagens",
+        "kindHours": "Um horário",
+        "from": "De",
+        "to": "Até",
+        "useRoute": "Usar no lugar",
+        "addHours": "Adicionar",
+        "sameHour": "O início e o fim não podem ser a mesma hora.",
+        "full": "Até {{count}} exceções.",
+        "needOtherRoute": "Crie outra rota para poder mudar para ela por horário."
+      }
+    },
+    "overview": {
+      "mapTitle": "Como as novas tarefas escolhem um modelo",
+      "mapDescription": "Da esquerda para a direita: a rota que segue e a fonte em que termina. Clique em uma rota para alterá-la.",
+      "columnSources": "Fontes",
+      "columnEmpty": "Nenhum ainda",
+      "openRoute": "Abrir a rota “{{name}}”",
+      "recentTitle": "Escolhas recentes",
+      "recentEmpty": "Nenhuma tarefa usou uma rota ainda.",
+      "keptOriginal": "Não havia nenhum modelo disponível, então a tarefa manteve o modelo que você tinha escolhido.",
+      "keptOriginalShort": "Seu modelo foi mantido",
+      "latest": "O caminho que a última tarefa seguiu"
+    },
+    "switchOffer": {
+      "action": "Continuar com {{model}}"
+    }
   }
 }
