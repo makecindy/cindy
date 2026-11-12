@@ -105,6 +105,7 @@ export function createGroupProjectCheckouts(deps: GroupCheckoutDeps) {
         || githubRepositoryOfRemote(origin.stdout.trim())?.toLowerCase() !== repo.toLowerCase()) return { status: 'unavailable' };
       const gh = await deps.githubHelper();
       if (gh) await useSignIn(dir, gh);
+      if (!options.isCurrent()) throw new Error('OWNER_CHANGED');
       await deps.register(dir);
       return { status: 'ready', dir };
     }
@@ -132,6 +133,8 @@ export function createGroupProjectCheckouts(deps: GroupCheckoutDeps) {
     await deps.fs.rm(dir);
     await deps.fs.rename(staging, dir);
     if (gh) await useSignIn(dir, gh);
+    // The account may have changed during the clone: the folder is that account's, never registered for another.
+    if (!options.isCurrent()) throw new Error('OWNER_CHANGED');
     await deps.register(dir);
     return { status: 'ready', dir };
   }

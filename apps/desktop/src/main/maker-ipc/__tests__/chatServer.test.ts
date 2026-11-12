@@ -1762,8 +1762,9 @@ describe('Chat Server result delivery and refresh', () => {
   });
 
   // bot-group-chat.md §10 (#10009 review): the card is saved only once its POST returns, and a fast
-  // task's first turn could end before that; the turn's Thread reply and main-group result were lost.
-  // Unit: real service; the card POST is held until after the task's turn has ended.
+  // task's first turn could end before that; the turn's Thread reply was lost. #10163 review: a first
+  // POST that failed (a timeout, a 503) dropped the card for good. Unit: real service; the first card
+  // POST fails, the retry is held until after the task's turn has ended.
   it('posts the first turn of a task that ends before its card is saved', async () => {
     const cardId = '70000000-0000-4000-8000-000000000001';
     const posts: Array<{ operationId: string; threadRootId?: string; content: Array<{ text?: string }> }> = [];
@@ -1773,6 +1774,7 @@ describe('Chat Server result delivery and refresh', () => {
       if (route === '/executions/claim') { const next = claimed ? null : { ...execution, requester_id: selfId, access_mode: 'owner' }; claimed = true; return { body: { execution: next } }; }
       if (route === `/conversations/${roomId}/messages` && method === 'POST') {
         posts.push(body);
+        if (body.operationId.startsWith('task-card:') && posts.length === 1) return { status: 503, body: { error: { code: 'UNAVAILABLE' } } };
         return body.operationId.startsWith('task-card:')
           ? new Promise(resolve => { releaseCard = () => resolve({ body: { id: cardId, revision: 1 } }); })
           : { body: { id: '70000000-0000-4000-8000-000000000002', revision: 1 } };
@@ -1784,9 +1786,11 @@ describe('Chat Server result delivery and refresh', () => {
     reportGroupTaskCreated('lane', { taskId: 'task-1', deviceId: null, title: 'Fix login' });
     await vi.advanceTimersByTimeAsync(0);
     await service.settleLaneTurn({ ...terminal, sessionId: 'task-1', activeInputClientId: 'created-with', resultMessageClientId: 'reply-1', resultText: 'Done quickly' });
+    await vi.advanceTimersByTimeAsync(15_000);
+    expect(posts.map(post => post.operationId)).toEqual([posts[0]!.operationId, posts[0]!.operationId]);
     releaseCard();
     await vi.advanceTimersByTimeAsync(15_000);
-    expect(posts.slice(1).map(post => [post.operationId.split(':')[0], post.threadRootId ?? null, post.content.at(-1)?.text]))
+    expect(posts.slice(2).map(post => [post.operationId.split(':')[0], post.threadRootId ?? null, post.content.at(-1)?.text]))
       .toEqual([['task-reply', cardId, 'Done quickly']]);
     expect(taskCardStore.value[cardId]).toMatchObject({ summary: 'Done quickly', outbox: [] });
   });
@@ -1950,6 +1954,8 @@ describe('Chat Server result delivery and refresh', () => {
   describe('the group Cindy', () => {
     const cindyId = '20000000-0000-4000-8000-0000000000c1';
     const peerId = '30000000-0000-4000-8000-000000000002';
+    const teammateId = '20000000-0000-4000-8000-0000000000e1';
+    const luna = { id: teammateId, kind: 'bot', name: 'Luna', displayName: 'Luna', nickname: null, state: 'joined', ownerActorId: selfId, ownerName: 'Chris', role: 'member', guestAccess: 'none', accessRevision: 1, avatar: null };
     const cindyMembers = [
       { id: cindyId, kind: 'bot', assistant: true, name: 'Cindy', displayName: 'Cindy', nickname: null, state: 'joined', ownerActorId: null, ownerName: null, role: 'member', guestAccess: 'none', accessRevision: 1, avatar: null },
       { id: selfId, kind: 'human', name: 'Chris', displayName: 'Chris', nickname: null, state: 'joined', ownerActorId: selfId, ownerName: 'Chris', role: 'owner', guestAccess: 'none', accessRevision: 1, avatar: null },
@@ -1957,7 +1963,7 @@ describe('Chat Server result delivery and refresh', () => {
     ];
     const message = (n: number, authorId: string, text: string, extra: Record<string, unknown> = {}) => ({
       id: `50000000-0000-4000-8000-${String(n).padStart(12, '0')}`, seq: String(n), authorId,
-      author: { kind: authorId === cindyId ? 'bot' : 'human', name: cindyMembers.find(m => m.id === authorId)!.name },
+      author: { kind: [...cindyMembers, luna].find(m => m.id === authorId)!.kind, name: [...cindyMembers, luna].find(m => m.id === authorId)!.name },
       origin: 'user', deleted: false, threadRootId: null, content: [{ type: 'text', text }], createdAt: '2026-10-03T00:00:00Z', ...extra });
     const request = (n: number, requester = selfId) => ({ ...execution, id: `40000000-0000-4000-8000-${String(n).padStart(12, '0')}`,
       source_message_id: message(n, requester, '').id, bot_id: cindyId, requester_id: requester, access_mode: 'owner', context_seq: String(n) });
@@ -1965,17 +1971,19 @@ describe('Chat Server result delivery and refresh', () => {
     let history: Array<ReturnType<typeof message>>;
     let project: { kind: 'github'; repo: string } | null;
     let tasks: number;
+    let members: Array<Record<string, unknown>>;
     beforeEach(() => {
-      queue = []; history = []; project = null; tasks = 0; fixture.requests = [];
+      queue = []; history = []; project = null; tasks = 0; fixture.requests = []; members = cindyMembers;
       deps.ensureGroupAssistantSession = vi.fn(async ({ sessionId }: { sessionId?: string }) => ({ ok: true as const, sessionId: sessionId ?? `group-task-${++tasks}`, created: !sessionId }));
       fixture.handle.mockImplementation((route: string, method: string, body: Record<string, unknown>) => {
         if (route === '/me') return { body: { actor: { id: selfId }, capabilities: { groupAssistant: 1, groupProject: 1 }, groupAssistantActorId: cindyId } };
         if (route === '/executions/claim') return { body: { execution: queue.shift() ?? null } };
-        if (route.endsWith('/snapshot')) return { body: { room: { ...room(roomId), project }, members: cindyMembers, messages: [], cursor: '1' } };
+        if (route.endsWith('/snapshot')) return { body: { room: { ...room(roomId), project }, members, messages: [], cursor: '1' } };
         if (route.endsWith('/members')) return { body: cindyMembers };
-        if (route.startsWith(`/conversations/${roomId}/messages?all=true`)) {
+        // The main group's page holds main-group messages only (no `all=true`).
+        if (route.startsWith(`/conversations/${roomId}/messages?limit=`) && route.includes('before=')) {
           const before = BigInt(new URLSearchParams(route.split('?')[1]).get('before')!);
-          return { body: history.filter(m => BigInt(m.seq) < before) };
+          return { body: history.filter(m => BigInt(m.seq) < before && !m.threadRootId) };
         }
         const single = /\/messages\/([0-9a-f-]{36})$/.exec(route);
         if (single && method === 'GET') return { body: history.find(m => m.id === single[1]) ?? {} };
@@ -2016,6 +2024,22 @@ describe('Chat Server result delivery and refresh', () => {
       expect(deliveries()[0][2].content[0]).toEqual({ type: 'text', text: 'Fixed in #12' });
       expect(fixture.requests.filter(r => r.url.includes('/executions/') && r.url.endsWith(request(5).id)).every(r => r.actor === cindyId)).toBe(true);
       expect(deps.abortLane).not.toHaveBeenCalled();
+    });
+
+    // #10163 review (Greptile): a teammate's reply that names Cindy keeps the human who started the chain
+    // as requester, but its words are the teammate's. Only the owner's own message carries the owner's
+    // verified words; this one is labeled as the teammate and carries no owner stamp.
+    it("does not stamp a teammate's words as the owner's request", async () => {
+      members = [...cindyMembers, luna];
+      await ask(6, '@Cindy check the logs', teammateId);
+      queue.splice(0, queue.length);
+      vi.mocked(deps.dispatch).mockClear();
+      queue.push(request(6));
+      await vi.advanceTimersByTimeAsync(3000);
+      const input = dispatched().at(-1)!;
+      expect(input.message.startsWith('@Cindy check the logs')).toBe(true);
+      expect(input.autoReviewUserText).toBeUndefined();
+      expect(input.origin).toMatchObject({ groupRequest: { speakerId: teammateId, speakerName: expect.stringContaining('Luna') } });
     });
 
     // 2026-11-12: someone else's request would run with this computer's logins. The server should never

@@ -63,6 +63,18 @@ describe('group project checkout', () => {
     expect(checkouts.isManaged('/projects/cindy')).toBe(false);
   });
 
+  // #10163 review (Greptile): the account switched while the clone ran. The folder stays on the first
+  // account's disk; it is never registered as a project of the account now signed in.
+  it('does not register a clone for an account that switched away during it', async () => {
+    const { checkouts, deps, disk } = setup();
+    let current = true;
+    const git = deps.git;
+    deps.git = async (args, options) => { const result = await git(args, options); if (args.includes('clone')) current = false; return result; };
+    await expect(checkouts.ensure('makecindy/cindy', { signIn: true, isCurrent: () => current })).rejects.toThrow('OWNER_CHANGED');
+    expect(deps.register).not.toHaveBeenCalled();
+    expect(disk.has(path.join(dir, '.git'))).toBe(true);
+  });
+
   it.each([
     ['opens GitHub sign-in and clones once it is finished', true, true, { status: 'ready', dir }],
     ['says sign-in is needed when it is not finished in time', true, false, { status: 'sign-in-required', signInOpened: true }],

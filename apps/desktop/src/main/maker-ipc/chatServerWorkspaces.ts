@@ -65,6 +65,8 @@ const liveTaskCard = z.object({
    * not delivered to the task, its owner's next words from the Thread carry what came after this.
    */
   threadSeenSeq: z.string().regex(/^\d+$/).optional(),
+  /** Until when an edit of the card waits after the server refused one (a rate limit's own wait). */
+  editRetryAt: z.number().optional(),
 });
 export type ChatLiveTaskCardRecord = z.infer<typeof liveTaskCard>;
 /**

@@ -2247,13 +2247,13 @@ function createChatServer(local: BotGroupChatService, deps: BotGroupChatServiceD
     const member = (actorId?: string) => s.members.find(m => m.id === actorId);
     const name = (actorId?: string) => { const m = member(actorId); return m ? memberName(m, s.members) : ''; };
     const requester = member(execution.requester_id);
-    const source = await readMessage(execution.conversation_id, execution.source_message_id).catch(() => undefined);
+    const quote = readMessage(execution.conversation_id, execution.source_message_id).catch(() => undefined)
+      .then(source => source && !source.deleted && source.origin !== 'system' ? botGroupQuoteFromMessage({
+        ...messageView(source, s.members), content: quotedText(source), attachments: quotedAttachments(source) }) : undefined);
     await taskCards.post({ ...task, openerTaskId: run.sessionId, executionId: execution.id, roomId: execution.conversation_id, botId: execution.bot_id,
       threadRootId: threadRootId ?? null, requesterName: name(execution.requester_id),
       botName: name(execution.bot_id) || actors.find(actor => actor.id === execution.bot_id)?.name || '',
-      requesterId: requester?.kind === 'human' && requester.state === 'joined' ? requester.id : null,
-      ...(source && !source.deleted && source.origin !== 'system' ? { quote: botGroupQuoteFromMessage({
-        ...messageView(source, s.members), content: quotedText(source), attachments: quotedAttachments(source) }) } : {}) });
+      requesterId: requester?.kind === 'human' && requester.state === 'joined' ? requester.id : null, quote });
   }
   async function validateExecutionAuthority(run: Running): Promise<void> {
     const execution = run.execution;
@@ -2347,8 +2347,8 @@ function createChatServer(local: BotGroupChatService, deps: BotGroupChatServiceD
    * Group messages as background for a task: one shortened line each, oldest first, at most
    * `TASK_CONTEXT_MESSAGES` of the newest. Messages without text are left out.
    */
-  function contextLines(s: Snapshot, messages: readonly Message[]) {
-    const newest = [...messages].sort((a, b) => BigInt(a.seq) < BigInt(b.seq) ? -1 : BigInt(a.seq) > BigInt(b.seq) ? 1 : 0).slice(-TASK_CONTEXT_MESSAGES);
+  function contextLines(s: Snapshot, messages: readonly Message[], limit = TASK_CONTEXT_MESSAGES) {
+    const newest = [...messages].sort((a, b) => BigInt(a.seq) < BigInt(b.seq) ? -1 : BigInt(a.seq) > BigInt(b.seq) ? 1 : 0).slice(-limit);
     const lines = newest.flatMap(m => {
       const text = bodyText(m).replace(/\s+/g, ' ').trim();
       const member = s.members.find(candidate => candidate.id === m.authorId);
@@ -2397,6 +2397,8 @@ function createChatServer(local: BotGroupChatService, deps: BotGroupChatServiceD
       origin: { kind: 'session', senderSessionId: '', displayText: message, ...(bot ? { senderBotId: bot.id, senderBotName: bot.displayName } : {}),
         groupThread: { groupId: s.room.id, groupName: s.room.name, speakerId: source.authorId,
           speakerName: speaker ? memberName(speaker, s.members) : source.author.name } },
+      // A task started again after a restart keeps its own permission and plan mode.
+      resumeWithStoredPermissionMode: true,
       onAccepted: async () => {
         if (!current() || running.get(execution.id) !== run) throw new Error('STALE_EXECUTOR');
         run.accepted = true;
@@ -2718,19 +2720,18 @@ function createChatServer(local: BotGroupChatService, deps: BotGroupChatServiceD
    */
   async function assistantRequestBackground(s: Snapshot, source: Message, sessionId: string, delivered: string | undefined) {
     const threadRootId = source.threadRootId;
-    const page = await api<Message[]>(`/conversations/${s.room.id}/messages?${threadRootId ? `threadRootId=${id.parse(threadRootId)}` : 'all=true'}&limit=50&before=${BigInt(source.seq)}`);
+    const page = await api<Message[]>(`/conversations/${s.room.id}/messages?${threadRootId ? `threadRootId=${id.parse(threadRootId)}&` : ''}limit=50&before=${BigInt(source.seq)}`);
     const ownAnswer = (m: Message) => m.content.some(block => {
       const ref = readBotGroupProcessCard(block);
       return ref?.sessionId === sessionId && (!ref.deviceId || ref.deviceId === selfDeviceId);
     });
     const messages = page.filter(m => (threadRootId ? m.threadRootId === threadRootId : !m.threadRootId) && m.id !== source.id
       && !m.deleted && m.origin !== 'system' && (delivered === undefined || BigInt(m.seq) > BigInt(delivered)) && !ownAnswer(m));
-    // A Thread's first request starts from the post the Thread discusses.
-    if (threadRootId && delivered === undefined) {
-      const root = await readMessage(s.room.id, threadRootId);
-      if (root && !root.deleted && !messages.some(m => m.id === root.id)) messages.push(root);
-    }
-    const { lines, omitted } = contextLines(s, messages);
+    // A Thread's first request starts from the post the Thread discusses, kept ahead of its newest replies.
+    const root = threadRootId && delivered === undefined ? await readMessage(s.room.id, threadRootId) : undefined;
+    const rootLines = root && !root.deleted ? contextLines(s, [root]).lines : [];
+    const { lines: replyLines, omitted } = contextLines(s, messages, TASK_CONTEXT_MESSAGES - rootLines.length);
+    const lines = [...rootLines, ...replyLines];
     const quote = readBotGroupQuote(source.content);
     const first = delivered === undefined;
     return {
@@ -2794,12 +2795,15 @@ function createChatServer(local: BotGroupChatService, deps: BotGroupChatServiceD
       const words = bodyText(source).trim();
       const message = formatGroupRequest({ words, heading, background,
         ...(task.pending && s.room.project ? { note: checkoutNote(s.room.project.repo, task.pending) } : {}) });
-      const self = s.members.find(m => m.id === selfId);
+      // Only the owner's own message speaks for the owner; a teammate that named Cindy in its reply is labeled as itself.
+      const ownWords = source.origin === 'user' && source.author?.kind === 'human' && source.authorId === selfId && !source.maskAttribution;
+      const speaker = s.members.find(m => m.id === source.authorId);
       const dispatched = await deps.dispatch({ targetSessionId: sessionId, clientId: run.clientId, message, persistedContent: message,
         // The requester's own words are the request this turn speaks for; the group's messages are background.
-        autoReviewUserText: { kind: 'agent-request', request: { sessionId, clientId: run.clientId, plainBody: true, delegatedText: words } },
+        ...(ownWords ? { autoReviewUserText: { kind: 'agent-request' as const, request: { sessionId, clientId: run.clientId, plainBody: true, delegatedText: words } } } : {}),
         origin: { kind: 'session', senderSessionId: '', displayText: message,
-          groupRequest: { groupId: s.room.id, groupName: s.room.name, speakerId: selfId, speakerName: self ? memberName(self, s.members) : source.author.name } },
+          groupRequest: { groupId: s.room.id, groupName: s.room.name, speakerId: source.authorId,
+            speakerName: speaker ? memberName(speaker, s.members) : source.author.name } },
         ...(attachments.length ? { attachments } : {}),
         resumeWithStoredPermissionMode: true,
         onAccepted: async () => {

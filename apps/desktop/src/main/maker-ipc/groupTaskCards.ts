@@ -83,7 +83,8 @@ export function createGroupTaskCards(deps: GroupTaskCardsDeps) {
   async function post(card: {
     executionId: string; roomId: string; botId: string; threadRootId: string | null;
     taskId: string; openerTaskId: string; deviceId: string | null; title: string; requesterName: string; botName: string;
-    quote?: BotGroupQuoteView; requesterId: string | null;
+    /** The request it quotes, still being read: the card is reserved before, so a fast first turn is kept. */
+    quote: Promise<BotGroupQuoteView | undefined>; requesterId: string | null;
   }) {
     if (!deps.current()) return;
     const view: BotGroupLiveTaskView = { taskId: card.taskId, deviceId: card.deviceId ?? deps.deviceId() ?? null, title: card.title,
@@ -91,12 +92,24 @@ export function createGroupTaskCards(deps: GroupTaskCardsDeps) {
     const ended = posting.get(card.taskId) ?? [];
     posting.set(card.taskId, ended);
     try {
-      const posted = await deps.post(card.roomId, card.botId, { operationId: `task-card:${card.executionId}:${card.taskId}`.slice(0, 160),
-        content: [cardBlock(view)], mentions: [], ...(card.threadRootId ? { threadRootId: card.threadRootId } : {}) });
+      const quote = await card.quote.catch(() => undefined);
+      const body = { operationId: `task-card:${card.executionId}:${card.taskId}`.slice(0, 160),
+        content: [cardBlock(view)], mentions: [], ...(card.threadRootId ? { threadRootId: card.threadRootId } : {}) };
+      // A card that could not reach the group is retried as the same message, with backoff, until it is refused.
+      let posted: { id?: string; revision?: number } | undefined;
+      for (let attempt = 1; ; attempt++) {
+        try { posted = await deps.post(card.roomId, card.botId, body); break; } catch (error) {
+          const refusal = deps.refusal(error);
+          if (refusal.final || attempt >= POST_ATTEMPTS || !deps.current()) throw error;
+          const wait = Math.max(15_000 * 2 ** (attempt - 1), (refusal.retryAt ?? 0) - Date.now());
+          await new Promise(resolve => setTimeout(resolve, wait));
+          if (!deps.current()) return;
+        }
+      }
       if (!deps.current() || typeof posted?.id !== 'string') return;
       const cards = deps.store().read();
       cards[posted.id] = { ...view, roomId: card.roomId, botId: card.botId, threadRootId: card.threadRootId, requesterId: card.requesterId,
-        openerTaskId: card.openerTaskId, ...(card.quote ? { quote: card.quote } : {}), revision: posted.revision ?? 1, createdAt: Date.now() };
+        openerTaskId: card.openerTaskId, ...(quote ? { quote } : {}), revision: posted.revision ?? 1, createdAt: Date.now() };
       deps.store().save(cards);
       deps.changed(card.roomId);
     } catch (error) {
@@ -229,15 +242,19 @@ export function createGroupTaskCards(deps: GroupTaskCardsDeps) {
           // Where it stopped comes with a turn's end; a running or waiting task is inside a turn.
           ...((state === 'idle' || state === 'failed') && latest.lastLine ? { summary: latest.lastLine } : {}) };
         if (next.title === latest.title && next.state === latest.state && next.prUrl === latest.prUrl && next.summary === latest.summary) continue;
+        // A refused edit waits as long as the server asked before the card is edited again.
+        if (Date.now() < (latest.editRetryAt ?? 0)) continue;
         try {
           const edited = await deps.edit(latest.roomId, messageId, latest.botId,
             { operationId: `task-card:${messageId}:${latest.revision}`, expectedRevision: latest.revision, content: [cardBlock(next)] });
           update(messageId, fresh => ({ ...fresh, title: next.title, state: next.state, prUrl: next.prUrl, summary: next.summary,
-            revision: edited?.revision ?? latest.revision + 1 }));
+            revision: edited?.revision ?? latest.revision + 1, editRetryAt: undefined }));
           deps.changed(latest.roomId);
         } catch (error) {
           // A deleted card, a teammate that left or a card edited elsewhere is no longer ours to keep.
-          if (deps.refusal(error).gone) update(messageId, () => null);
+          const refusal = deps.refusal(error);
+          if (refusal.gone) update(messageId, () => null);
+          else update(messageId, fresh => ({ ...fresh, editRetryAt: Math.max(Date.now() + 15_000, refusal.retryAt ?? 0) }));
         }
       }
     } catch (error) {
