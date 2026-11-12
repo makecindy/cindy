@@ -48,6 +48,81 @@ const savedGateway = (): CustomProviderConfig => ({
 });
 
 describe('model source automatic revalidation', () => {
+  // Sub-agent review, #9882: a newly cooling sibling must not invalidate the
+  // shared discovery while CAS is pending. Unit, production entry + deferred save.
+  it('shares discovery through pending CAS when another runtime begins cooling', async () => {
+    let saved = savedGateway();
+    saved.runtimes.codex = structuredClone(saved.runtimes.pi!);
+    const original = saved;
+    let release!: () => void;
+    const gate = new Promise<void>(resolve => { release = resolve; });
+    const fetchModels = vi.fn(async (_config: CustomProviderConfig, agent: string) =>
+      agent === 'codex' ? { retryAt: 3_600_000 } : issue());
+    const save = vi.fn(async (_id: string, previous: CustomProviderConfig, next: CustomProviderConfig) => {
+      if (save.mock.calls.length === 1) await gate;
+      if (saved !== previous) return false;
+      saved = next; return true;
+    });
+    const revalidate = createModelSourceRevalidator({ fetchModels, save, now: () => 0,
+      credentialRevision: () => 0, isMutating: () => false });
+    const first = revalidate([original], 'scope', () => true);
+    await vi.waitFor(() => expect(save).toHaveBeenCalledOnce());
+    try { await revalidate([original], 'scope', () => true); } finally { release(); }
+    await first;
+    expect(fetchModels.mock.calls.map(call => call[1])).toEqual(['codex', 'pi']);
+    expect(saved.runtimes.pi!.models[0].discoveredSource?.providerId).toBe('A');
+    expect(saved.runtimes.codex!.models[0].discoveredSource?.providerId).toBe('Old account');
+  });
+
+  // #9882: the production revalidator must isolate independently configured
+  // runtime cooldowns. Earlier tests only combined failure with success. Unit:
+  // two failures, one 1h Retry-After and one transient failure, then 5m hint.
+  it.each([false, true])('recovers independent runtimes with generation repair %s', async repair => {
+    let saved = savedGateway();
+    saved.runtimes.codex = { ...structuredClone(saved.runtimes.pi!), baseUrl: 'https://other.example/v1' };
+    let now = 0;
+    const fetchModels = vi.fn(async (_config: CustomProviderConfig, agent: string) => {
+      if (agent === 'codex' && now < 3_600_000) return { retryAt: 3_600_000 };
+      return now ? issue() : null;
+    });
+    const revalidate = createModelSourceRevalidator({ fetchModels, now: () => now,
+      credentialRevision: () => 0, isMutating: () => false,
+      save: async (_id, _previous, next) => { saved = next; return true; },
+    });
+    expect(await revalidate([saved], 'generation-1', () => true, 'owner')).toBe(false);
+    now = 300_000;
+    expect(await revalidate([saved], repair ? 'generation-2' : 'generation-1', () => true, 'owner')).toBe(true);
+    expect(saved.runtimes.pi!.models[0].discoveredSource?.providerId).toBe('A');
+    expect(saved.runtimes.codex!.models[0].discoveredSource?.providerId).toBe('Old account');
+    expect(fetchModels.mock.calls.map(call => call[1])).toEqual(['codex', 'pi', 'pi']);
+    now = 3_600_000;
+    expect(await revalidate([saved], 'generation-3', () => true, 'owner')).toBe(true);
+    expect(saved.runtimes.codex!.models[0].discoveredSource?.providerId).toBe('A');
+    expect(fetchModels).toHaveBeenCalledTimes(4);
+  });
+
+  // Independent review: a completed Pi-only failure at 59m cannot hide the
+  // Codex runtime when its own deadline expires at 60m. No settled subset cache.
+  it('retries a newly eligible runtime while its sibling remains cooling', async () => {
+    let saved = savedGateway();
+    saved.runtimes.codex = structuredClone(saved.runtimes.pi!);
+    let now = 0;
+    const fetchModels = vi.fn(async (_config: CustomProviderConfig, agent: string) =>
+      agent === 'pi' ? null : now < 3_600_000 ? { retryAt: 3_600_000 } : issue());
+    const revalidate = createModelSourceRevalidator({ fetchModels, now: () => now,
+      credentialRevision: () => 0, isMutating: () => false,
+      save: async (_id, _previous, next) => { saved = next; return true; },
+    });
+    await revalidate([saved], 'scope', () => true);
+    now = 3_540_000;
+    await revalidate([saved], 'scope', () => true);
+    now = 3_600_000;
+    expect(await revalidate([saved], 'scope', () => true)).toBe(true);
+    expect(fetchModels.mock.calls.map(call => call[1])).toEqual(['codex', 'pi', 'pi', 'codex']);
+    expect(saved.runtimes.codex!.models[0].discoveredSource?.providerId).toBe('A');
+    expect(saved.runtimes.pi!.models[0].discoveredSource?.providerId).toBe('Old account');
+  });
+
   // #9882 late Retry-After, unit: previous coverage completed the HTTP response
   // before generation repair; this response arrives after the old scope expires.
   it('preserves a late server deadline after same-owner generation repair', async () => {
