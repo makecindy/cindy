@@ -2045,6 +2045,11 @@ export function ChatInput({
   const hostSupportsOrcaAgentRelocation =
     hostCcCaps.capabilities?.supportsOrcaAgentRelocation === true ||
     hostCodexCaps.capabilities?.supportsOrcaAgentRelocation === true;
+  // 运行设备 Worker(Lead 在另一台电脑)的任务就在它所在的那台：在那台本机打开时由本机这一版处理；
+  // 远程查看时要那台声明了此位才开放(更早的版本会拒绝)。
+  const hostSupportsOrcaRemoteWorkerAgentRelocation =
+    hostCcCaps.capabilities?.supportsOrcaRemoteWorkerAgentRelocation === true ||
+    hostCodexCaps.capabilities?.supportsOrcaRemoteWorkerAgentRelocation === true;
   // Orca Lead/Worker keeps its workflow identity in the session row and vendor
   // options; it can therefore use the same deferred handoff transaction as a
   // normal session. Remote sessions remain gated by their host capabilities.
@@ -7928,13 +7933,14 @@ export function ChatInput({
     [agentDeviceId, intentAgentDeviceId, deviceLinkDeviceId, deviceLinkDeviceName, relocationSourceAgent, confirmDialog, t],
   );
   const sessionRemoteAgentOptions = useMemo<RemoteAgentSelectorOptions | undefined>(() => {
-    // 本机或能力已确认的被控端任务可换电脑；SSH 与运行设备 Worker 不开放位置选择。协同的 Lead / Worker
-    // 任务在本机，换 Agent 位置与普通任务同一套(2026-10-16)；被控电脑上的协同任务要被控端声明
-    // supportsOrcaAgentRelocation 才开放(旧版被控端会拒绝)。
+    // 本机或能力已确认的被控端任务可换电脑；SSH 不开放位置选择。协同的 Lead / Worker 任务在本机，
+    // 换 Agent 位置与普通任务同一套(2026-10-16)；被控电脑上的协同任务要被控端声明
+    // supportsOrcaAgentRelocation 才开放(旧版被控端会拒绝)。运行设备 Worker 同样可换(2026-11-12)，
+    // 远程查看时要它所在的电脑声明 supportsOrcaRemoteWorkerAgentRelocation。
     if (!sessionId || !agentLocationAware || remoteHostId || !sessionEngineFilter ||
         sessionOrcaRole === undefined ||
         (sessionOrcaRole !== null && deviceLinkDeviceId && !hostSupportsOrcaAgentRelocation) ||
-        sessionOrcaRemoteWorker) return undefined;
+        (sessionOrcaRemoteWorker && deviceLinkDeviceId && !hostSupportsOrcaRemoteWorkerAgentRelocation)) return undefined;
     if (!remoteAgentDevices || (remoteAgentDevices.length === 0 && !effectiveAgentDeviceId)) {
       return undefined;
     }
@@ -7974,6 +7980,7 @@ export function ChatInput({
     sessionOrcaRole,
     sessionOrcaRemoteWorker,
     hostSupportsOrcaAgentRelocation,
+    hostSupportsOrcaRemoteWorkerAgentRelocation,
     remoteAgentDevices,
     catalogHostDeviceId,
     effectiveAgentDeviceId,
